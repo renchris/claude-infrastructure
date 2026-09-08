@@ -779,6 +779,7 @@ FLOOR_EXONERATED=()
 # longer always $LASTGREEN and the flake row + log line must name the control that was really used.
 # A row asserting the wrong floor is worse than none: it is the evidence a later reader re-derives from.
 FLOOR_USED=""
+CULPRIT_CONFIRM="${CC_POSTLAND_CULPRIT_CONFIRM:-on}"   # C32 kill switch: off ⇒ a non-tip culprit is named on the walk's single probe alone
 CONVICT_PENDING=0    # a ladder conviction seen in ONE window only: nothing proven yet ⇒ cut
 # ...and WHICH files those are, not merely that there were some. The flag alone decides the CUT
 # branch; the names are what a RED/HUNG verdict must NOT spend, since it adjudicated none of them.
@@ -2273,6 +2274,73 @@ corroborate_convictions() { # <tree> — rebuild FAILING, keeping only CROSS-WIN
 # runner's rc could never have decided it: 125 means "file absent" OR "bats errored", and those two
 # must not share a verdict. Otherwise, as with the tip, anything but a definite verdict — here rc 1
 # (the failure predates the window), 125, or our own 124 — is UNDECIDABLE.
+# ════ C32 · THE CULPRIT'S OWN TREE IS THE ONE TREE NOBODY RE-RAN (2026-09-08, item 32d4d093f78a) ══
+# THE MEASUREMENT. `git revert` is the only thing in this file that writes to trunk, and its premise
+# is exactly one sentence: THE FAILING TEST FAILS AT THE CULPRIT. Until this guard, that sentence was
+# measured once — by a single walk step — and never again. Every other end of the argument had
+# already been made re-measurable and was: the tip confirmation re-runs `bad` (937c6fc5), the floor
+# proof re-runs `good` (4348ddc2), the tip differential re-runs `bad^` (2026-09-04), and C29+C30 make
+# the CORPUS verdict itself survive two separated windows and a floor probe before it may be a RED.
+# The one measurement the revert actually stands on was the only one exempt.
+#
+# It is exempt on a documented argument — "an INTERIOR culprit was genuinely executed and returned
+# BAD while its parent returned GOOD, a real measured differential that needs nothing added" — and
+# that argument is C29's own premise inverted. C29 exists because one probe in one load window is one
+# experiment, not a verdict; a walk step is one probe in one load window. Both cannot be true.
+#
+# MEASURED ON THIS BOX, and it is not a corner: three AUTO-REVERTs in the four days to 2026-09-08 —
+# e39aa0be1546 (09-05), 7d72371caa2d (09-07), 39221545584e (09-08) — each named a culprit, each was
+# stopped ONLY by `git revert` hitting a merge conflict (rc 90, revert=none, nothing applied). A
+# culprit whose lines have not moved reverts cleanly and the land lane pushes it. Of the 8 reverts
+# that DID land, at least two are refuted by an explicit re-land: f323b427 (culprit e80c85aa, a
+# correct /sbin-PATH fix; re-landed by 12549d8b) and d1209750610a (culprit 2c6b8cdfa777; re-landed by
+# 1f5385f9b, whose subject says "re-land the cloud-return stratifiers the auto-revert took on a CUT").
+# The 09-08 walk logged its own regime: `bisect verdict=39221545584e steps=8 elapsed=260s load=20.49`.
+# tests/autonomy-sweep.bats, the file convicted at e39aa0be1546, passes 1..67 rc=0 at e7a10f4fa5a4 —
+# the exact tree stamped red — and on trunk, as do all three sibling suites convicted in that run.
+#
+# SCOPED TO `culprit != bad`, which is where the hole is and only there. When the walk lands on the
+# tip, the block above already re-runs it and this would buy a second identical bats run and no bit —
+# the same partition-not-overlap rule bisect_tip_differential_ok follows against bisect_floor_ok.
+#
+# FAILURE DIRECTION, the floor's and the tip's: anything but a DEFINITE red is undecidable. A green
+# here is a positive refutation and the strongest answer available; 124 (our own bound), 125 (absent
+# or errored), an unreachable culprit and a checkout that did not land are all statements about the
+# instrument, and none of them may convict. This guard can therefore only ever WITHHOLD a revert,
+# never cause one — which is why it is safe to run before every actuation.
+#
+# IT NEVER READS LOAD. It branches on a test RESULT at a commit, so the `if|while|until … (loadavg|
+# load1)` lever guard passes unchanged and R1 holds: nothing here needs the box to go quiet.
+bisect_culprit_confirm_ok() { # <culprit> <runner> <counter> <file> — 0 = culprit stands; 1 = abstain
+  local culprit="$1" runner="$2" counter="$3" file="$4" want got rc=0
+  [ "$CULPRIT_CONFIRM" = "off" ] && return 0
+  want="$(git -C "$WORKTREE" rev-parse --verify "$culprit^{commit}" 2>/dev/null || true)"
+  [ -n "$want" ] || {
+    log "bisect CULPRIT UNCONFIRMED: cannot resolve the named culprit $(sha12 "$culprit") in the cell — undecidable, no culprit named"
+    BISECT_WHY="culprit-unconfirmed"; return 1; }
+  : > "$counter"          # a confirmation is not a bisect STEP — leave the cap's budget alone
+  git -C "$WORKTREE" bisect reset >/dev/null 2>&1 || true      # ...so the checkout below can run
+  if ! bounded 120 git -C "$WORKTREE" checkout --detach --force "$want" >/dev/null 2>&1; then
+    log "bisect CULPRIT UNCONFIRMED: cannot check out the culprit $(sha12 "$culprit") to confirm it — undecidable, no culprit named"
+    BISECT_WHY="culprit-unconfirmed"; return 1
+  fi
+  # CONFIRM WHERE WE ARE, for the reason bisect_floor_ok states: this probe's entire meaning is the
+  # commit it ran at, and a checkout that silently did not take would have its answer read as the
+  # culprit's.
+  got="$(git -C "$WORKTREE" rev-parse --verify HEAD 2>/dev/null || true)"
+  [ "$want" = "$got" ] || {
+    log "bisect CULPRIT UNCONFIRMED: the cell did not land on the culprit $(sha12 "$culprit") — undecidable, no culprit named"
+    BISECT_WHY="culprit-unconfirmed"; return 1; }
+  bounded "$RETRY_TO" "$runner"; rc=$?      # the walk's own step, re-run — same script, same band
+  [ "$rc" -eq 1 ] && return 0
+  if [ "$rc" -eq 0 ]; then
+    log "bisect CULPRIT NOT RED AT ITS OWN TREE: the walk named $(sha12 "$culprit"), but $file is GREEN there when re-run — the walk step that convicted it was a flake, not a regression; undecidable, no culprit named"
+  else
+    log "bisect CULPRIT UNCONFIRMED: $file is neither definitely red nor definitely green at the culprit $(sha12 "$culprit") (runner rc=$rc) — nothing re-measured; undecidable, no culprit named"
+  fi
+  BISECT_WHY="culprit-unconfirmed"
+  return 1
+}
 bisect_floor_ok() { # <good> <culprit> <runner> <counter> <file> — 0 = floor green, or not load-bearing
   local good="$1" culprit="$2" runner="$3" counter="$4" file="$5" below want got rc=0
   below="$(git -C "$WORKTREE" rev-list --count "$good..$culprit" 2>/dev/null || true)"
@@ -2632,6 +2700,12 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
             bisect_tip_differential_ok "$good" "$bad" "$runner" "$counter" "$file" || culprit=""
           fi
         fi
+      fi
+      # ...and when the walk named something OTHER than the tip, nothing above re-ran it: C31 does
+      # (see bisect_culprit_confirm_ok). The two arms partition `culprit` exactly — tip or not-tip —
+      # so the culprit's own tree is now re-measured on every path, and never twice on any.
+      if [ -n "${culprit:-}" ] && [ "$culprit" != "$bad" ]; then
+        bisect_culprit_confirm_ok "$culprit" "$runner" "$counter" "$file" || culprit=""
       fi
       # ...and the FLOOR is the same class, in mirror image (see bisect_floor_ok). Both can fire on a
       # single-candidate range, and should: that is the walk with the least evidence of any, so it is
@@ -4684,6 +4758,7 @@ usage() {
   echo "usage: postland-verify.sh [--run-if-needed | --run <sha> | bisect <file> <good> <bad> | is-green <sha> | status | --falsify-red <suite> <sha> | --selftest]"
   echo "  --falsify-red: the STORED FALSIFIER on this script's own backlog items — 0 = a full-corpus green contains that commit AND covered that suite (premise gone) · 1 = still live · 2 = could not ask"
   echo "  kill switches: POSTLAND_VERIFY=off (inert) · POSTLAND_AUTOREVERT=off (verify+page, never push)"
+  echo "                 CC_POSTLAND_FLOOR_EXONERATE=off (C30) · CC_POSTLAND_CULPRIT_CONFIRM=off (C32)"
   echo "  revert retry : POSTLAND_REVERT_RETRY_MAX=$REVERT_RETRY_MAX · POSTLAND_REVERT_RETRY_DECAY_S=$REVERT_RETRY_DECAY_S (a revert that never landed re-arms; one that landed never does)"
   echo "  state: $STATE   ·   host partition: $MANIFEST_REL   ·   header comment = full design notes"
 }
