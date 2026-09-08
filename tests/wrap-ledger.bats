@@ -1695,8 +1695,13 @@ mk_timeout_shim() {                        # $1 = argv token to fail on ; $2 = m
 # point the ledger at the real cc-decide, whose store is this test's temp dir
 use_real_decide() { CC_DECIDE_BIN="$REPO/bin/cc-decide"; export CC_DECIDE_BIN; }
 
-# open a class-C decision owned by session $1, with prose $2. Echoes the packet id.
-open_blocking() { bash "$REPO/bin/cc-decide" open --class C --session-sid "$1" --what "$2"; }
+# open a class-C decision owned by session $1, with prose $2. Echoes the packet id. Carries THE
+# CONVICTION PROTOCOL's three things (2026-09-08) — the producer refuses a bare class-C open now, and
+# a packet WITHOUT them is not ⛔ but the filer's 🔧 (§ UNCONVICTED cases at the end of this file).
+open_blocking() {
+  bash "$REPO/bin/cc-decide" open --class C --session-sid "$1" --what "$2" \
+    --conviction 40 --receipt "probe => result" --option "a::outcome a" --option "b::outcome b"
+}
 
 # ── 1. a class-C decision filed by THIS session ⇒ ⛔, and it names the decision ──
 @test "open class-C decision from THIS session ⇒ RUNG=⛔, BLOCKED=1, named in one line" {
@@ -2576,4 +2581,141 @@ advance_trunk_adding_at() {
   [ "$status" -eq 0 ]
   [ "$(field "$output" LIVE_ADDS)" = "1" ]     # the narrowing must not make the rung inert
   [ "$(field "$output" RUNG)" = "🚀" ]
+}
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+# § UNCONVICTED (2026-09-08, THE CONVICTION PROTOCOL — docs/research/conviction-close-2026-09-08.md)
+# The incident close read "✅ … follow-on: ae75073ef319 (fseventsd saturation, your policy call)"
+# over a `needs-human` row with no conviction and no receipt, and every term here read it as clean:
+# FILED_MINE excuses a row carrying a why-not-now, YOURS counts only blocked rows (the add sat open),
+# BLOCKED counts only packets. These cases pin the third door shut in BOTH stores, and pin that the
+# convicted populations keep their rungs (a convicted row is 👤, a convicted packet is ⛔), that the
+# epoch grandfathers what was filed under the old rules, and that a mechanical producer's packet (a
+# gate refusing, not a session asking) keeps ⛔. cc-decide is the REAL binary over CC_DECISIONS_DIR;
+# hand-written packets stand in for legacy/foreign writers; cc-backlog is the stub, as in § 👤.
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+
+# THE EPOCH IS PINNED PER TEST and the post-epoch stamp is seeded RELATIVE to now: the gate's
+# wall-clock ratchet refuses an absolute future date in a fixture (it goes red on a calendar
+# boundary with no code change — 2026-07-27), and the DEFAULT epoch is the landing hour, so a
+# stamp of "now" would read as legacy until that hour passed. Legacy stamps are absolute PAST.
+conv_epoch() { export CC_CONVICTION_EPOCH="2026-09-01T00:00:00Z"; }
+post_epoch() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# a hand-written OPEN class-C packet for session $1, created $2, with NO conviction/receipt;
+# $3 (optional) stamps a producer. Echoes the id.
+mk_bare_packet() {
+  local sid="$1" created="$2" producer="${3:-}" id="bare${RANDOM}${RANDOM}"
+  mkdir -p "$CC_DECISIONS_DIR"
+  jq -n --arg id "$id" --arg sid "$sid" --arg created "$created" --arg producer "$producer" \
+    '{id:$id, created:$created, class:"C", session_sid:$sid, what_plain:"a question nobody researched",
+      options:[], status:"open", veto_deadline:""}
+     + (if $producer == "" then {} else {producer:$producer} end)' > "$CC_DECISIONS_DIR/$id.json"
+  printf '%s' "$id"
+}
+
+# one BLOCKED needs-human row filed by session $1 at $2; $3 = conviction (number or empty),
+# $4 = receipt (may be empty) — the shape `cc-backlog add --why-not-now "needs-human: …"` writes
+needs_human_json() {
+  local sid="$1" ts="$2" conv="${3:-}" rcpt="${4:-}"
+  jq -nc --arg sid "$sid" --arg ts "$ts" --arg rcpt "$rcpt" --argjson conv "${conv:-null}" \
+    '[{id:"NH-1", project:"claude-infrastructure", title:"fseventsd saturated by the fleet", status:"blocked",
+       needs:"the fleet-wide headless spawn rate is a policy call", session:$sid, filedBy:$sid,
+       whyNotNow:"needs-human: the fleet-wide headless spawn rate is a policy call", ts:$ts}
+      + (if $conv == null then {} else {conviction:$conv} end)
+      + (if $rcpt == "" then {} else {receipt:$rcpt} end)]'
+}
+
+@test "unconvicted PACKET (post-epoch, no producer, no fields) ⇒ RUNG=🔧, BLOCKED=0, UNCONVICTED_PKTS=1" {
+  ok_state; use_real_decide; export WRAP_SESSION_ID="$SID"; conv_epoch
+  mk_bare_packet "$SID" "$(post_epoch)" >/dev/null
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "🔧" ]
+  [ "$(field "$output" BLOCKED)" = "0" ]
+  [ "$(field "$output" UNCONVICTED_PKTS)" = "1" ]
+  [ "$(field "$output" UNCONVICTED_MINE)" = "1" ]
+  [ "$(field "$output" UNCONVICTED_SRC)" = "WRAP_SESSION_ID" ]
+  run bash "$LEDGER"
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ]
+  printf '%s' "$output" | grep -q 'no stated conviction and no research receipt'
+  printf '%s' "$output" | grep -q -- '--conviction N --receipt'
+}
+
+@test "LEGACY packet (created before the epoch) ⇒ ⛔ exactly as before (grandfathered)" {
+  ok_state; use_real_decide; export WRAP_SESSION_ID="$SID"; conv_epoch
+  mk_bare_packet "$SID" "2026-08-15T00:00:00Z" >/dev/null
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" RUNG)" = "⛔" ]
+  [ "$(field "$output" BLOCKED)" = "1" ]
+  [ "$(field "$output" UNCONVICTED_PKTS)" = "0" ]
+  # the epoch is the operator's knob, not a constant: move it earlier and the same packet demotes
+  CC_CONVICTION_EPOCH="2026-08-01T00:00:00Z" run bash "$LEDGER" --machine
+  [ "$(field "$output" RUNG)" = "🔧" ]
+  [ "$(field "$output" UNCONVICTED_PKTS)" = "1" ]
+}
+
+@test "a MECHANICAL producer's packet (ship-land) lacking the fields ⇒ ⛔ (a gate refusing is not a session asking)" {
+  ok_state; use_real_decide; export WRAP_SESSION_ID="$SID"; conv_epoch
+  mk_bare_packet "$SID" "$(post_epoch)" ship-land >/dev/null
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" RUNG)" = "⛔" ]
+  [ "$(field "$output" BLOCKED)" = "1" ]
+  [ "$(field "$output" UNCONVICTED_PKTS)" = "0" ]
+}
+
+@test "a CONVICTED packet (the real cc-decide open) ⇒ ⛔, and ⛔ still outranks an unconvicted sibling" {
+  ok_state; use_real_decide; export WRAP_SESSION_ID="$SID"; conv_epoch
+  open_blocking "$SID" "throttle the headless spawn rate" >/dev/null
+  mk_bare_packet "$SID" "$(post_epoch)" >/dev/null
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" RUNG)" = "⛔" ]
+  [ "$(field "$output" BLOCKED)" = "1" ]
+  [ "$(field "$output" UNCONVICTED_PKTS)" = "1" ]
+  run bash "$LEDGER"
+  printf '%s' "$output" | grep -q 'need your call: throttle the headless spawn rate'
+}
+
+@test "unconvicted ROW (post-epoch needs-human, no fields) ⇒ RUNG=🔧, YOURS=0, UNCONVICTED_ROWS=1 — the incident's shape" {
+  ok_state; export WRAP_SESSION_ID="$SID"; conv_epoch
+  CC_BACKLOG_BIN="$(mk_backlog_stub "$(needs_human_json "$SID" "$(post_epoch)")")"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" RUNG)" = "🔧" ]
+  [ "$(field "$output" YOURS)" = "0" ]
+  [ "$(field "$output" UNCONVICTED_ROWS)" = "1" ]
+  [ "$(field "$output" UNCONVICTED_MINE)" = "1" ]
+  ! printf '%s' "$output" | grep -q "^RUNG=👤" || false
+  # a number WITHOUT a receipt is still unconvicted — both fields, not either
+  CC_BACKLOG_BIN="$(mk_backlog_stub "$(needs_human_json "$SID" "$(post_epoch)" 60)")"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" RUNG)" = "🔧" ]
+  [ "$(field "$output" UNCONVICTED_ROWS)" = "1" ]
+}
+
+@test "a CONVICTED row (number + receipt) ⇒ 👤, YOURS=1, UNCONVICTED_ROWS=0 — it IS an operator step" {
+  ok_state; export WRAP_SESSION_ID="$SID"; conv_epoch
+  CC_BACKLOG_BIN="$(mk_backlog_stub "$(needs_human_json "$SID" "$(post_epoch)" 60 "log show => 250 add_client/h")")"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" RUNG)" = "👤" ]
+  [ "$(field "$output" YOURS)" = "1" ]
+  [ "$(field "$output" UNCONVICTED_ROWS)" = "0" ]
+}
+
+@test "a LEGACY row (filed before the epoch, no fields) ⇒ 👤 as before (grandfathered by the add's ts)" {
+  ok_state; export WRAP_SESSION_ID="$SID"; conv_epoch
+  CC_BACKLOG_BIN="$(mk_backlog_stub "$(needs_human_json "$SID" "2026-08-15T00:00:00Z")")"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" RUNG)" = "👤" ]
+  [ "$(field "$output" YOURS)" = "1" ]
+  [ "$(field "$output" UNCONVICTED_ROWS)" = "0" ]
+}
+
+@test "unconvicted is SESSION-SCOPED: another session's bare row and packet never touch my rung" {
+  ok_state; use_real_decide; export WRAP_SESSION_ID="$SID"; conv_epoch
+  mk_bare_packet "sess-someone-else" "$(post_epoch)" >/dev/null
+  CC_BACKLOG_BIN="$(mk_backlog_stub "$(needs_human_json "sess-someone-else" "$(post_epoch)")")"; export CC_BACKLOG_BIN
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" UNCONVICTED_MINE)" = "0" ]
+  [ "$(field "$output" RUNG)" = "✅" ]
 }

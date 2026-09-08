@@ -202,13 +202,16 @@ n_lines() { grep -c '' "$CC_BACKLOG_FILE"; }
 @test "re-running the same add WITH --why-not-now folds onto the live row as an update (the hand-off of a bare row)" {
   a=$(bash "$CB" add --project P --title "bare then handed" --source s)
   [ "$(fld "$a" whyNotNow)" = "" ]
-  b=$(bash "$CB" add --project P --title "bare then handed" --source s --why-not-now "needs-human: operator-only deploy")
+  # needs-human now carries the conviction protocol's two fields (2026-09-08) and is BORN BLOCKED —
+  # the row is an operator step, so it leaves the dispatch wave and lands in `list --blocked`.
+  b=$(bash "$CB" add --project P --title "bare then handed" --source s --why-not-now "needs-human: operator-only deploy" \
+        --conviction 60 --receipt "land-status.sh => production deploy bills Amplify")
   [ "$a" = "$b" ]
   [ "$(n_items)" -eq 1 ]
   [ "$(grep -c '"event":"add"' "$CC_BACKLOG_FILE")" -eq 1 ]
   [ "$(grep -c '"event":"update"' "$CC_BACKLOG_FILE")" -eq 1 ]
   [ "$(fld "$a" whyNotNow)" = "needs-human: operator-only deploy" ]
-  [ "$(fld "$a" status)" = "open" ]
+  [ "$(fld "$a" status)" = "blocked" ]
 }
 
 @test "CONTROL — the same add re-run with an UNCHANGED --why-not-now writes nothing" {
@@ -237,9 +240,12 @@ n_lines() { grep -c '' "$CC_BACKLOG_FILE"; }
   i=0
   for c in needs-credential needs-human not-yet-true no-capacity; do
     i=$((i+1))
-    run bash "$CB" add --project P --title "bare $c" --source s --why-not-now "$c"
+    # needs-human alone also wants the conviction protocol's two fields (its own cases below);
+    # the other three are unchanged, and that asymmetry is the point.
+    extra=(); [ "$c" = needs-human ] && extra=(--conviction 50 --receipt "probe => result")
+    run bash "$CB" add --project P --title "bare $c" --source s --why-not-now "$c" "${extra[@]}"
     [ "$status" -eq 0 ]
-    run bash "$CB" add --project P --title "tail $c" --source s --why-not-now "$c: because $i"
+    run bash "$CB" add --project P --title "tail $c" --source s --why-not-now "$c: because $i" "${extra[@]}"
     [ "$status" -eq 0 ]
   done
   [ "$(n_items)" -eq 8 ]
@@ -299,4 +305,119 @@ n_lines() { grep -c '' "$CC_BACKLOG_FILE"; }
   before=$(n_lines)
   bash "$CB" add --title "re-land feat/z" --project P --source needs --run "same cmd" >/dev/null
   [ "$(n_lines)" -eq "$before" ]
+}
+
+# ── THE CONVICTION PROTOCOL (2026-09-08, docs/research/conviction-close-2026-09-08.md) ──────────
+# The class gate above was cleared by a true sentence about the wrong object: on 2026-09-08 a session
+# filed `needs-human: the fleet's headless spawn rate is the operator's policy call` (ae75073ef319)
+# over a fully drivable investigation and closed ✅. The class was true of the eventual FIX; the work
+# in hand was the agent's. The operator's rule: "if conviction of a decision is not >90% then research
+# exhaustively, and then implement if now >90% or then ask the user if below." These cases pin the
+# mechanical form: a needs-human hand-off carries a NUMBER and a RECEIPT, refuses past the threshold,
+# and is BORN BLOCKED. The first case replays the incident's own filing and is red pre-fix (rc 0, row
+# minted, status open, invisible to every close-time term).
+
+@test "conviction: the incident's own needs-human filing, without a number or a receipt, is REFUSED (rc 2)" {
+  run bash "$CB" add --project P --title "fseventsd saturated by the fleet's watcher churn" --source s \
+        --why-not-now "needs-human: the fleet's headless spawn rate is the operator's policy call"
+  [ "$status" -eq 2 ]
+  printf '%s' "$output" | grep -q -- '--conviction'
+  printf '%s' "$output" | grep -q 'cc-backlog needs'
+  [ "$(n_items)" -eq 0 ]
+}
+
+@test "conviction: past the threshold is REFUSED — implement it, do not file it" {
+  run bash "$CB" add --project P --title "sure thing" --source s \
+        --why-not-now "needs-human: x" --conviction 95 --receipt "log show => 250 add_client/h"
+  [ "$status" -eq 2 ]
+  printf '%s' "$output" | grep -q 'past the 90% threshold'
+  [ "$(n_items)" -eq 0 ]
+  # exactly 90 is NOT past it (the rule is ">90 ⇒ implement")
+  run bash "$CB" add --project P --title "at the line" --source s \
+        --why-not-now "needs-human: x" --conviction 90 --receipt "log show => 250 add_client/h"
+  [ "$status" -eq 0 ]
+}
+
+@test "conviction: a malformed number or receipt is REFUSED on any add that passes one" {
+  run bash "$CB" add --project P --title "r1" --source s --why-not-now "needs-human: x" --conviction 60 --receipt "no-such-file-anywhere"
+  [ "$status" -eq 2 ]; printf '%s' "$output" | grep -q 'neither an existing file'
+  run bash "$CB" add --project P --title "r2" --source s --why-not-now "needs-human: x" --conviction 60 --receipt "just prose with no separator"
+  [ "$status" -eq 2 ]
+  run bash "$CB" add --project P --title "r3" --source s --why-not-now "needs-human: x" --conviction 60 --receipt " => output only"
+  [ "$status" -eq 2 ]
+  run bash "$CB" add --project P --title "c1" --source s --conviction 60.5 --receipt "a => b"
+  [ "$status" -eq 2 ]; printf '%s' "$output" | grep -q 'not an integer'
+  run bash "$CB" add --project P --title "c2" --source s --conviction abc --receipt "a => b"
+  [ "$status" -eq 2 ]
+  run bash "$CB" add --project P --title "c3" --source s --conviction 101 --receipt "a => b"
+  [ "$status" -eq 2 ]
+  [ "$(n_items)" -eq 0 ]
+}
+
+@test "conviction: a needs-human add with both fields is BORN BLOCKED, carries a NUMBER, and does not kick dispatch" {
+  # kick ON with the live dispatcher fixtured away, exactly as tests/cc-backlog-needs.bats does
+  export CC_BACKLOG_KICK=on CC_BACKLOG_KICK_BIN="$BATS_TEST_TMPDIR/no-such-dispatch"
+  id=$(bash "$CB" add --project P --title "fleet spawn rate" --source s --session sess-filer \
+        --why-not-now "needs-human: the fleet's headless spawn rate" \
+        --conviction 60 --receipt "log show --last 1h --predicate 'process == \"fseventsd\"' => ~250 add_client/h, all claude" \
+        --run "cc-await-ping --idle-scoped")
+  [[ "$id" =~ ^[0-9a-f]{12}$ ]] || false
+  [ "$(fld "$id" status)" = "blocked" ]
+  bash "$CB" list --blocked --json | jq -e --arg i "$id" '
+      .[] | select(.id==$i)
+      | .conviction == 60 and (.conviction|type) == "number"
+        and (.receipt | startswith("log show --last 1h"))
+        and .needs == "the fleet'"'"'s headless spawn rate"
+        and .whyNotNow == "needs-human: the fleet'"'"'s headless spawn rate"
+        and .session == "sess-filer" and .run == "cc-await-ping --idle-scoped"' >/dev/null
+  [ "$(grep -c '"event":"block"' "$CC_BACKLOG_FILE")" -eq 1 ]
+  [ ! -e "$CC_BACKLOG_KICK_MARKER" ]
+  # POSITIVE CONTROL for the kick assertion: a plain add on the same fixture DOES write the marker
+  bash "$CB" add --project P --title "ordinary open work" --source s >/dev/null
+  [ -e "$CC_BACKLOG_KICK_MARKER" ]
+}
+
+@test "conviction: a bare needs-human uses the title as the needs prose; an existing file is a valid receipt" {
+  touch "$BATS_TEST_TMPDIR/conviction-close-2026-09-08.md"
+  id=$(bash "$CB" add --project P --title "cut the headless spawn rate" --source s \
+        --why-not-now "needs-human" --conviction 45 --receipt "$BATS_TEST_TMPDIR/conviction-close-2026-09-08.md")
+  [ "$(fld "$id" status)" = "blocked" ]
+  [ "$(fld "$id" needs)" = "cut the headless spawn rate" ]
+  [ "$(fld "$id" conviction)" = "45" ]
+}
+
+@test "conviction: CONTROLS — the other three classes and a bare add are unchanged" {
+  c=$(bash "$CB" add --project P --title "cred" --source s --why-not-now "needs-credential: the prod key")
+  [ "$(fld "$c" status)" = "open" ]
+  [ "$(grep -c '"event":"block"' "$CC_BACKLOG_FILE")" -eq 0 ]
+  b=$(bash "$CB" add --project P --title "bare with fields" --source s --conviction 40 --receipt "x => y")
+  [ "$(fld "$b" status)" = "open" ]
+  [ "$(fld "$b" conviction)" = "40" ]
+  [ "$(fld "$b" receipt)" = "x => y" ]
+  # a row that never stated one carries NO conviction key in the projection (absent, not 0 or "")
+  bash "$CB" list --all --json | jq -e --arg i "$c" '.[]|select(.id==$i)|has("conviction")|not' >/dev/null
+}
+
+@test "conviction: re-running a bare row as needs-human writes ONE update with the fields and blocks it; a third run writes nothing" {
+  a=$(bash "$CB" add --project P --title "found mid-task" --source s)
+  [ "$(fld "$a" status)" = "open" ]
+  b=$(bash "$CB" add --project P --title "found mid-task" --source s --session sess-re \
+        --why-not-now "needs-human: whether to throttle" --conviction 55 --receipt "probe => result")
+  [ "$a" = "$b" ]
+  [ "$(grep -c '"event":"update"' "$CC_BACKLOG_FILE")" -eq 1 ]
+  grep '"event":"update"' "$CC_BACKLOG_FILE" | jq -e '.conviction == 55 and .receipt == "probe => result"' >/dev/null
+  [ "$(fld "$a" status)" = "blocked" ]
+  [ "$(fld "$a" needs)" = "whether to throttle" ]
+  bash "$CB" list --blocked --json | jq -e --arg i "$a" '.[]|select(.id==$i)|.session == "sess-re"' >/dev/null
+  n="$(n_lines)"
+  bash "$CB" add --project P --title "found mid-task" --source s --session sess-re \
+        --why-not-now "needs-human: whether to throttle" --conviction 55 --receipt "probe => result" >/dev/null
+  [ "$(n_lines)" -eq "$n" ]
+  [ "$(grep -c '"event":"block"' "$CC_BACKLOG_FILE")" -eq 1 ]
+}
+
+@test "conviction: CC_CONVICTION_ASK_MAX moves the threshold (the operator's number, env-overridable)" {
+  CC_CONVICTION_ASK_MAX=99 run bash "$CB" add --project P --title "t" --source s \
+        --why-not-now "needs-human: x" --conviction 95 --receipt "a => b"
+  [ "$status" -eq 0 ]
 }

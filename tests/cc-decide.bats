@@ -50,8 +50,13 @@ setup() {
   run jq -r '.default_if_no_veto' "$f";               [ "$output" = "continue cross-account on next2" ]
 }
 
+# A class-C open now carries THE CONVICTION PROTOCOL's three things (2026-09-08; its own cases are
+# at the end of this file). The fixture below is the minimal compliant packet every class-C case
+# here uses — a number under the threshold, a receipt in the measurement form, two options.
+C_OK=(--conviction 40 --receipt "probe => result" --option "a::outcome a" --option "b::outcome b")
+
 @test "open class-C with a staged artifact and NO default succeeds" {
-  run bash "$CD" open --class C --what "activate the reaper plist" \
+  run bash "$CD" open --class C --what "activate the reaper plist" "${C_OK[@]}" \
     --staged-artifact "/tmp/reaper-activate.sh"
   [ "$status" -eq 0 ]
   f="$CC_DECISIONS_DIR/$output.json"
@@ -71,8 +76,9 @@ setup() {
 }
 
 @test "REFUSE class-C WITH a default (C waits, never defaults) (exit 2)" {
-  run bash "$CD" open --class C --what "x" --default "auto-activate"
+  run bash "$CD" open --class C --what "x" "${C_OK[@]}" --default "auto-activate"
   [ "$status" -eq 2 ]
+  printf '%s' "$output" | grep -q 'must NOT carry a --default'
 }
 
 @test "REFUSE missing what_plain (exit 2)" {
@@ -131,7 +137,7 @@ setup() {
 }
 
 @test "expire-sweep NEVER fires a class-C default (C waits; it has no deadline)" {
-  id=$(bash "$CD" open --class C --what "waits forever" --staged-artifact /tmp/x.sh)
+  id=$(bash "$CD" open --class C --what "waits forever" "${C_OK[@]}" --staged-artifact /tmp/x.sh)
   run bash "$CD" expire-sweep
   [ "$status" -eq 0 ]
   ! echo "$output" | grep -q "$id" || false
@@ -320,9 +326,10 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 }
 
 @test "open REFUSES --default-effect on class-C (it has no default to describe)" {
-  run bash "$CD" open --class C --what "waits" --default-effect no-change
+  run bash "$CD" open --class C --what "waits" "${C_OK[@]}" --default-effect no-change
   [ "$status" -eq 2 ]
-  run bash "$CD" open --class C --what "waits"          # the same packet without it is fine
+  printf '%s' "$output" | grep -q 'must NOT carry a --default-effect'
+  run bash "$CD" open --class C --what "waits" "${C_OK[@]}"          # the same packet without it is fine
   [ "$status" -eq 0 ]
 }
 
@@ -530,4 +537,94 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
   done
   run bash "$CD" list --open
   echo "$output" | grep -q '^open .* | C | .* | c-item$'
+}
+
+# ── THE CONVICTION PROTOCOL (2026-09-08, docs/research/conviction-close-2026-09-08.md) ──────────
+# A class-C packet is the ⛔ rung: a question the operator must answer before the session may close.
+# Measured over the live store on 2026-09-08: 20 open B/C packets in 30 days, 5 with zero options,
+# 0 citing a research path, 0 stating how sure the filer was. The operator's rule: "if conviction of
+# a decision is not >90% then research exhaustively, and then implement if now >90% or then ask the
+# user if below." So a class-C open carries the NUMBER, the RECEIPT, and ≥2 measured OPTIONS — or it
+# is refused. The first case is red pre-fix (a bare class-C open wrote a packet at rc 0).
+
+@test "conviction: REFUSE a bare class-C open — no number, no receipt, no options (rc 2, no file)" {
+  run bash "$CD" open --class C --what "should the fleet's spawn rate be throttled"
+  [ "$status" -eq 2 ]
+  printf '%s' "$output" | grep -q -- '--conviction'
+  printf '%s' "$output" | grep -q -- '--receipt'
+  printf '%s' "$output" | grep -q -- '--option'
+  [ "$(find "$CC_DECISIONS_DIR" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" = "0" ]
+}
+
+@test "conviction: REFUSE class-C missing exactly one of the three, naming the missing one" {
+  run bash "$CD" open --class C --what "x" --receipt "a => b" --option "a::b" --option "c::d"
+  [ "$status" -eq 2 ]; printf '%s' "$output" | grep -q 'missing: --conviction'
+  run bash "$CD" open --class C --what "x" --conviction 40 --option "a::b" --option "c::d"
+  [ "$status" -eq 2 ]; printf '%s' "$output" | grep -q 'missing: --receipt'
+  run bash "$CD" open --class C --what "x" --conviction 40 --receipt "a => b" --option "a::b"
+  [ "$status" -eq 2 ]; printf '%s' "$output" | grep -q 'missing: --option ×2'
+}
+
+@test "conviction: past the threshold is REFUSED — implement it; exactly 90 is not past it" {
+  run bash "$CD" open --class C --what "x" --conviction 95 --receipt "a => b" --option "a::b" --option "c::d"
+  [ "$status" -eq 2 ]
+  printf '%s' "$output" | grep -q 'past the 90% threshold'
+  run bash "$CD" open --class C --what "x" --conviction 90 --receipt "a => b" --option "a::b" --option "c::d"
+  [ "$status" -eq 0 ]
+  CC_CONVICTION_ASK_MAX=99 run bash "$CD" open --class C --what "y" --conviction 95 --receipt "a => b" --option "a::b" --option "c::d"
+  [ "$status" -eq 0 ]
+}
+
+@test "conviction: a malformed number or receipt is REFUSED on any class that passes one" {
+  run bash "$CD" open --class A --what "a" --conviction abc
+  [ "$status" -eq 2 ]; printf '%s' "$output" | grep -q 'not an integer'
+  run bash "$CD" open --class A --what "a" --conviction 60.5
+  [ "$status" -eq 2 ]
+  run bash "$CD" open --class A --what "a" --conviction 101
+  [ "$status" -eq 2 ]
+  run bash "$CD" open --class A --what "a" --receipt "no such file and no separator"
+  [ "$status" -eq 2 ]; printf '%s' "$output" | grep -q 'neither an existing file'
+  run bash "$CD" open --class A --what "a" --receipt "cmd => "
+  [ "$status" -eq 2 ]
+  [ "$(find "$CC_DECISIONS_DIR" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" = "0" ]
+}
+
+@test "conviction: ACCEPT class-C with all three — the number is a NUMBER, the options are two" {
+  run bash "$CD" open --class C --what "throttle the headless spawn rate" --conviction 40 \
+        --receipt "log show --last 1h --predicate 'process == \"fseventsd\"' => ~250 add_client/h, all claude" \
+        --option "throttle::watcher churn drops; fewer concurrent fired sessions" \
+        --option "leave it::fseventsd stays at 100% of a core"
+  [ "$status" -eq 0 ]
+  f="$CC_DECISIONS_DIR/$output.json"
+  run jq -e '.conviction == 40 and (.conviction|type) == "number"
+             and (.receipt | startswith("log show")) and (.options|length) == 2' "$f"
+  [ "$status" -eq 0 ]
+  touch "$BATS_TEST_TMPDIR/conviction-close-2026-09-08.md"
+  run bash "$CD" open --class C --what "with a file receipt" --conviction 40 \
+        --receipt "$BATS_TEST_TMPDIR/conviction-close-2026-09-08.md" --option "a::b" --option "c::d"
+  [ "$status" -eq 0 ]
+}
+
+@test "conviction: class-A and class-B are unchanged — optional fields, both keys always present" {
+  a=$(bash "$CD" open --class A --what "did it")
+  run jq -e 'has("conviction") and has("receipt") and .conviction == null and .receipt == ""' "$CC_DECISIONS_DIR/$a.json"
+  [ "$status" -eq 0 ]
+  b=$(bash "$CD" open --class B --what "which account" --default d --deadline "2099-01-01T00:00:00Z" \
+        --conviction 60 --receipt "x => y")
+  run jq -e '.conviction == 60 and .receipt == "x => y" and (.options|length) == 0' "$CC_DECISIONS_DIR/$b.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "conviction: the two fields do NOT change the packet id" {
+  a=$(bash "$CD" open --class A --what "same decision")
+  rm -f "$CC_DECISIONS_DIR/$a.json"
+  b=$(bash "$CD" open --class A --what "same decision" --conviction 30 --receipt "x => y")
+  [ "$a" = "$b" ]
+}
+
+@test "conviction: list --json carries both fields for a consumer to read" {
+  bash "$CD" open --class C --what "q" --conviction 40 --receipt "a => b" --option "a::b" --option "c::d" >/dev/null
+  run bash "$CD" list --open --class C --json
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -e '.[0].conviction == 40 and .[0].receipt == "a => b"' >/dev/null
 }

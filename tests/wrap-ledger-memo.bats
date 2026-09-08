@@ -168,7 +168,7 @@ cached_n() {
 @test "a class-C packet flipped open→vetoed BETWEEN events is SEEN (5da21949's grave)" {
   export CC_DECIDE_BIN="$REPO/bin/cc-decide"
   export WRAP_SESSION_ID="$SID"
-  id="$(bash "$REPO/bin/cc-decide" open --class C --session-sid "$SID" --what "drop the legacy table")"
+  id="$(bash "$REPO/bin/cc-decide" open --class C --conviction 40 --receipt "probe => result" --option "a::outcome a" --option "b::outcome b" --session-sid "$SID" --what "drop the legacy table")"
   run bash "$LEDGER" --machine --transcript "$TP"
   [ "$status" -eq 0 ]
   [ "$(field "$output" RUNG)" = "⛔" ]

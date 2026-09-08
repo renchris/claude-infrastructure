@@ -133,6 +133,17 @@
 #                                                                  not an impossibility. A session-stamped
 #                                                                  add WITHOUT one is that session's own 🔧
 #                                                                  (wrap-ledger FILED_MINE).
+#           add … --why-not-now "needs-human: <value call>"      → REQUIRES --conviction N --receipt R
+#                 --conviction N --receipt R                       (THE CONVICTION PROTOCOL, 2026-09-08):
+#                                                                  N = integer 0..100, how sure the filer is
+#                                                                  of its own course; > CC_CONVICTION_ASK_MAX
+#                                                                  (90) is refused — implement it instead.
+#                                                                  R = an existing file (docs/research path)
+#                                                                  or "<cmd> => <output>". The row is BORN
+#                                                                  BLOCKED (a `block` with the detail as its
+#                                                                  needs prose, no dispatch kick). Optional
+#                                                                  and validated on every other add. Sudo /
+#                                                                  physical / GUI steps use `needs`, not this.
 #                                                                  BRAKED: a step already filed as a
 #                                                                  LIVE row (same prose, same subject
 #                                                                  modulo digits — key 4) re-files
@@ -1018,6 +1029,44 @@ valid_why_not_now() {
   return 1
 }
 
+# ── THE CONVICTION PROTOCOL (2026-09-08, docs/research/conviction-close-2026-09-08.md) ──────────
+# The class gate above asks WHICH impossibility; these ask HOW SURE and ON WHAT EVIDENCE. Both were
+# missing on 2026-09-08 when a session filed `needs-human: the fleet's headless spawn rate is the
+# operator's policy call` (ae75073ef319) over a fully drivable investigation and closed ✅ — the
+# class was true of the eventual FIX and false of the work in hand, and nothing asked for a number.
+# The operator's rule, verbatim: "if conviction of a decision is not >90% then research exhaustively,
+# and then implement if now >90% or then ask the user if below." Made mechanical:
+#   conviction  an integer 0..100 — how sure the filer is of its own recommended course. Above the
+#               threshold there is nothing to ask: the session implements. So > threshold REFUSES.
+#   receipt     the research that could not lift it past the threshold — an existing file (a
+#               docs/research path) or `<command> => <output>` (a measurement and what it said).
+#               Never RUN here: a receipt is evidence the filer already has, not a probe.
+#   threshold   CC_CONVICTION_ASK_MAX, default 90 — the operator's number, env-overridable for tests.
+# Shared byte-for-byte with bin/cc-decide (class-C packets) and read by scripts/wrap-ledger.sh, which
+# folds a needs-human row lacking either field into the filer's own 🔧 instead of the 👤 rung.
+valid_conviction() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; [ "$1" -le 100 ]; }
+conviction_ask_max() {
+  local m="${CC_CONVICTION_ASK_MAX:-90}"
+  case "$m" in ''|*[!0-9]*) m=90 ;; esac
+  printf '%s' "$m"
+}
+valid_receipt() {
+  local r="$1" l o
+  [ -n "$r" ] || return 1
+  [ -f "$r" ] && return 0
+  case "$r" in
+    *" => "*)
+      l="${r%% => *}"; o="${r#* => }"
+      l="${l#"${l%%[![:space:]]*}"}"; l="${l%"${l##*[![:space:]]}"}"
+      o="${o#"${o%%[![:space:]]*}"}"; o="${o%"${o##*[![:space:]]}"}"
+      [ -n "$l" ] && [ -n "$o" ] && return 0 ;;
+  esac
+  return 1
+}
+# is_needs_human <why-not-now> — the ONE class that names a value call (sudo/physical/GUI steps have
+# their own verb, `needs`), and therefore the one whose add must carry the two fields above.
+is_needs_human() { case "$1" in needs-human|needs-human:*) return 0 ;; esac; return 1; }
+
 ensure_file() {
   mkdir -p "$(dirname "$BACKLOG")" 2>/dev/null || true
   [ -f "$BACKLOG" ] || : > "$BACKLOG"
@@ -1273,6 +1322,12 @@ fold() { # [--strict] [--as-of <iso>] — handed to valid_records; pipefail carr
     | reduce .[] as $r ({};
       .[$r.id] = ((.[$r.id] // {}) as $p | {
         id:       $r.id,
+        # FIRST-WINS, unlike every sibling: the ts of the record that MINTED the row (the add), so a
+        # consumer can date a row without re-reading the raw store. Added 2026-09-08 for
+        # scripts/wrap-ledger.sh, which grandfathers needs-human rows filed before THE CONVICTION
+        # PROTOCOL landed by comparing this against CC_CONVICTION_EPOCH; last-wins would let any
+        # later claim or block re-date a legacy row past the epoch.
+        ts:       ($p.ts       // $r.ts       // ""),
         project:  ($r.project  // $p.project  // ""),
         title:    ($r.title    // $p.title    // ""),
         dodRef:   ($r.dodRef   // $p.dodRef   // ""),
@@ -1314,6 +1369,11 @@ fold() { # [--strict] [--as-of <iso>] — handed to valid_records; pipefail carr
         filedBy:       ($r.filedBy       // $p.filedBy       // ""),
         whyNotNow:     ($r.whyNotNow     // $p.whyNotNow     // ""),
         closedSession: ($r.closedSession // $p.closedSession // ""),
+        # conviction / receipt ride the `add` and an `update` (THE CONVICTION PROTOCOL, 2026-09-08).
+        # Whitelisted for the same reason every sibling is; conviction is carried as a NUMBER
+        # (null when never stated) so a reader can compare it, not parse it.
+        conviction:    ($r.conviction    // $p.conviction    // null),
+        receipt:       ($r.receipt       // $p.receipt       // ""),
         # VENUE — where the CURRENT holder runs, which decides which liveness oracles can see it
         # (see VENUE in the header). Note the shape: unlike every sibling above, a `claim` RESETS
         # it rather than carrying forward. `$r.venue // $p.venue` would be wrong in a way that
@@ -1626,11 +1686,17 @@ EOF
 
 cmd_add() {
   local project="" title="" dod="" source="" condition="" falsifier="" why_not_now="" session="" run=""
+  local conviction="" receipt="" born_blocked=0
   while [ $# -gt 0 ]; do
     local key="$1"; shift
     case "$key" in
       --project)   project="${1:-}";   [ $# -gt 0 ] && shift ;;
       --title)     title="${1:-}";     [ $# -gt 0 ] && shift ;;
+      # ── THE CONVICTION PROTOCOL (2026-09-08) — see valid_conviction / valid_receipt above ──────
+      # Optional on every add, REQUIRED when --why-not-now names `needs-human`. NOT part of the
+      # id hash, like the falsifier and why-not-now: they describe the hand-off, not WHICH item.
+      --conviction) conviction="${1:-}"; [ $# -gt 0 ] && shift ;;
+      --receipt)    receipt="${1:-}";    [ $# -gt 0 ] && shift ;;
       --dod-ref)   dod="${1:-}";       [ $# -gt 0 ] && shift ;;
       --source)    source="${1:-}";    [ $# -gt 0 ] && shift ;;
       --condition) condition="${1:-}"; [ $# -gt 0 ] && shift ;;
@@ -1692,6 +1758,63 @@ cmd_add() {
     } >&2
     return 2
   fi
+  # ── THE CONVICTION PROTOCOL (2026-09-08) — the NUMBER the class gate never asked for ───────────
+  # The class gate above was cleared on 2026-09-08 by a true sentence about the wrong object:
+  # `needs-human: the fleet's headless spawn rate is the operator's policy call` named the eventual
+  # FIX, while the work in hand — the investigation — was drivable, and the session closed ✅ over
+  # it. A class is a category; the operator's rule wants a number and the research behind it. Three
+  # arms, each rc 2 and nothing written:
+  #   · a malformed conviction or receipt, on ANY add that passes one (the fields are optional
+  #     elsewhere, but a stored lie is worse than an absent field);
+  #   · a conviction ABOVE the threshold — there is nothing to ask, so the add is refused with the
+  #     instruction to implement it;
+  #   · a `needs-human` hand-off missing either field. Sudo/physical/GUI steps are not decisions and
+  #     have their own verb (`needs`), so this class is left meaning exactly "a value call", and a
+  #     value call handed over carries how sure you are and what you measured.
+  # A needs-human add that passes is BORN BLOCKED (below): it IS an operator step, so it leaves the
+  # dispatch wave, lands in `list --blocked`, renders in the OPERATOR block, and counts in the 👤
+  # rung — instead of sitting `open` where a worker could be fired onto "the operator's call" and
+  # where no close-time term could see it at all.
+  local ask_max; ask_max="$(conviction_ask_max)"
+  if [ -n "$conviction" ] && ! valid_conviction "$conviction"; then
+    printf 'cc-backlog add: --conviction "%s" is not an integer 0..100 (a percent, e.g. 60).\n' "$conviction" >&2
+    return 2
+  fi
+  if [ -n "$conviction" ] && [ "$conviction" -gt "$ask_max" ]; then
+    { printf 'cc-backlog add: conviction %s is past the %s%% threshold — implement it, do not file it.\n' "$conviction" "$ask_max"
+      printf '  Above the threshold there is no decision to hand over: drive it in this session, or fire one\n'
+      printf '  (scripts/handoff-fire.sh). A row here would park work you are already sure about.\n'
+    } >&2
+    return 2
+  fi
+  if [ -n "$receipt" ] && ! valid_receipt "$receipt"; then
+    { printf 'cc-backlog add: --receipt "%s" is neither an existing file nor "<command> => <output>".\n' "$receipt"
+      printf '  A receipt is the research that could not lift conviction past %s%%: a docs/research path that\n' "$ask_max"
+      printf '  exists on disk, or the measurement you ran and what it printed, joined by " => ".\n'
+    } >&2
+    return 2
+  fi
+  if is_needs_human "$why_not_now"; then
+    if [ -z "$conviction" ] || [ -z "$receipt" ]; then
+      { printf 'cc-backlog add: --why-not-now "needs-human…" is a value call handed to the operator, and it carries\n'
+        printf '  a conviction number and a research receipt: --conviction N --receipt PATH|"<cmd> => <output>".\n'
+        printf '  The protocol (operator ruling 2026-09-08): if conviction of a decision is not >%s%%, research\n' "$ask_max"
+        printf '  exhaustively; if it then clears %s%%, IMPLEMENT it; only if it is still below, ask — with the\n' "$ask_max"
+        printf '  number, the receipt of that research, and the measured options in operator terms.\n'
+        printf '  A step that needs the operator'"'"'s HANDS (sudo · physical · GUI-only) is not a decision — file\n'
+        printf '  that with:  cc-backlog needs "<step>" [--run "<cmd>"]\n'
+        printf '  Cannot state a number or name the research? Then the investigation is still yours: drive it.\n'
+      } >&2
+      return 2
+    fi
+    born_blocked=1
+  fi
+  # FILING IS ATTRIBUTED (2026-09-05; the ladder is documented at the add-record write below).
+  # Resolved HERE, ahead of the re-run path, because a needs-human re-run also writes a `block`
+  # that must carry the same session the fresh-add path stamps.
+  [ -n "$session" ] || session="${CLAUDE_SESSION_ID:-}"
+  [ -n "$session" ] || session="${CLAUDE_CODE_SESSION_ID:-}"
+  [ -n "$session" ] || session="${CC_SESSION_ID:-}"
   # A malformed condition REFUSES the whole add rather than degrading to a title key. Falling back
   # would hand the caller the very per-event id it asked not to have, silently — and a caller that
   # passed --condition is one whose retry loop mints a fresh item every pass.
@@ -1906,17 +2029,33 @@ cmd_add() {
     # off: it folds onto the row as an update, and the ledger stops counting it as the filer's own.
     [ -n "$why_not_now" ] && [ "$why_not_now" != "$(printf '%s' "$ex" | jq -r '.whyNotNow // ""')" ] && up_why="$why_not_now"
     [ -n "$run" ]         && [ "$run"         != "$(printf '%s' "$ex" | jq -r '.run // ""')" ]       && up_run="$run"
-    if [ "$(printf '%s' "$ex" | jq -r '.status // ""' 2>/dev/null)" != "done" ] &&
-       { [ -n "$up_title" ] || [ -n "$up_dod" ] || [ -n "$up_source" ] || [ -n "$up_why" ] || [ -n "$up_run" ]; }; then
+    # conviction / receipt ride the update the way why-not-now does: a re-run that supplies them is
+    # how a bare row is handed off under the protocol. Compared as strings — the fold carries the
+    # number, `tostring` makes "60" == "60".
+    local up_conv="" up_rcpt=""
+    [ -n "$conviction" ] && [ "$conviction" != "$(printf '%s' "$ex" | jq -r '(.conviction // "") | tostring')" ] && up_conv="$conviction"
+    [ -n "$receipt" ]    && [ "$receipt"    != "$(printf '%s' "$ex" | jq -r '.receipt // ""')" ]                 && up_rcpt="$receipt"
+    local ex_status; ex_status="$(printf '%s' "$ex" | jq -r '.status // ""' 2>/dev/null)"
+    if [ "$ex_status" != "done" ] &&
+       { [ -n "$up_title" ] || [ -n "$up_dod" ] || [ -n "$up_source" ] || [ -n "$up_why" ] || [ -n "$up_run" ] \
+         || [ -n "$up_conv" ] || [ -n "$up_rcpt" ]; }; then
       jq -nc --arg id "$id" --arg ts "$(now_iso)" \
          --arg title "$up_title" --arg dod "$up_dod" --arg source "$up_source" --arg why "$up_why" --arg run "$up_run" \
+         --argjson conv "${up_conv:-null}" --arg rcpt "$up_rcpt" \
          '{id:$id, ts:$ts, event:"update"}
           + (if $title  == "" then {} else {title:$title}   end)
           + (if $dod    == "" then {} else {dodRef:$dod}    end)
           + (if $source == "" then {} else {source:$source} end)
           + (if $why    == "" then {} else {whyNotNow:$why} end)
-          + (if $run    == "" then {} else {run:$run}       end)' \
+          + (if $run    == "" then {} else {run:$run}       end)
+          + (if $conv   == null then {} else {conviction:$conv} end)
+          + (if $rcpt   == "" then {} else {receipt:$rcpt}  end)' \
          >> "$BACKLOG"
+    fi
+    # A needs-human re-run blocks the row exactly as a fresh needs-human add does — but ONLY an
+    # `open` row: a blocked one already is, and a done/claimed one is someone else's state.
+    if [ "$born_blocked" -eq 1 ] && [ "$ex_status" = "open" ]; then
+      born_blocked_transition "$id" "$why_not_now" "$title" "$run" "$session" || return $?
     fi
     echo "$id"; return 0
   fi
@@ -1926,20 +2065,44 @@ cmd_add() {
   # who CLOSED a row, but never which session filed agent work; and a per-session net (filed vs
   # closed) — the one number that would hold a filer to its own rows — was uncomputable. Same
   # resolution order and same monotone fail direction as cmd_needs: none set ⇒ "" ⇒ no field.
-  [ -n "$session" ] || session="${CLAUDE_SESSION_ID:-}"
-  [ -n "$session" ] || session="${CLAUDE_CODE_SESSION_ID:-}"
-  [ -n "$session" ] || session="${CC_SESSION_ID:-}"
+  # (The ladder itself now runs ABOVE the re-run path, so both paths stamp the same session.)
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg project "$project" \
      --arg title "$title" --arg dod "$dod" --arg source "$source" --arg condition "$condition" \
      --arg falsifier "$falsifier" --arg why "$why_not_now" --arg filedby "$session" --arg run "$run" \
+     --argjson conv "${conviction:-null}" --arg rcpt "$receipt" \
      '{id:$id, ts:$ts, event:"add", project:$project, title:$title, dodRef:$dod, source:$source}
       + (if $condition == "" then {} else {condition:$condition} end)
       + (if $falsifier == "" then {} else {falsifier:$falsifier} end)
       + (if $why       == "" then {} else {whyNotNow:$why}       end)
       + (if $filedby   == "" then {} else {filedBy:$filedby}     end)
-      + (if $run       == "" then {} else {run:$run}             end)' \
+      + (if $run       == "" then {} else {run:$run}             end)
+      + (if $conv      == null then {} else {conviction:$conv}   end)
+      + (if $rcpt      == "" then {} else {receipt:$rcpt}        end)' \
      >> "$BACKLOG"
+  if [ "$born_blocked" -eq 1 ]; then
+    born_blocked_transition "$id" "$why_not_now" "$title" "$run" "$session" || return $?
+  fi
   echo "$id"
+}
+
+# born_blocked_transition <id> <why-not-now> <title> <run> <session> — the `block` a needs-human add
+# composes, exactly as cmd_needs composes its own (one transition writer, never a third): the needs
+# prose is the detail after the class, or the title when the class is bare. Sets the global marker
+# the `add` dispatch arm reads to SKIP dispatch_kick — the row is born blocked, so a kick could only
+# fire a worker onto an operator step (the same reasoning as cmd_needs and the `needs)` arm).
+_ADD_BORN_BLOCKED=0
+born_blocked_transition() {
+  local id="$1" why="$2" title="$3" run="$4" session="$5" detail
+  detail="${why#needs-human}"; detail="${detail#:}"
+  detail="${detail#"${detail%%[![:space:]]*}"}"; detail="${detail%"${detail##*[![:space:]]}"}"
+  [ -n "$detail" ] || detail="$title"
+  local -a targs
+  targs=(block "$id" --needs "$detail")
+  [ -n "$run" ]     && targs=("${targs[@]}" --run "$run")
+  [ -n "$session" ] && targs=("${targs[@]}" --session "$session")
+  cmd_transition "${targs[@]}" >/dev/null || return $?
+  _ADD_BORN_BLOCKED=1
+  return 0
 }
 
 # ── CLOSE ATTRIBUTION (2026-08-23) ───────────────────────────────────────────────────────────────
@@ -4432,6 +4595,8 @@ cmd_list() {
            | (if (.filedBy // "") == "" then del(.filedBy) else . end)
            | (if (.whyNotNow // "") == "" then del(.whyNotNow) else . end)
            | (if (.closedSession // "") == "" then del(.closedSession) else . end)
+           | (if .conviction == null then del(.conviction) else . end)
+           | (if (.receipt // "") == "" then del(.receipt) else . end)
            | (if (.condition // "") == "" then del(.condition) else . end)
            # OMITTED WHEN EMPTY, and this one is not cosmetic like its siblings. The canonical
            # coverage question is `select(.falsifier)`, and in jq the EMPTY STRING IS TRUTHY — so a
@@ -6510,7 +6675,12 @@ command -v jq >/dev/null 2>&1 || { echo "cc-backlog: jq is required" >&2; exit 1
 
 case "${1:-}" in
   # rc is captured and re-exited so the kick can never become `add`'s verdict.
-  add)     shift; cmd_add "$@"; _add_rc=$?; [ "$_add_rc" -eq 0 ] && dispatch_kick; exit "$_add_rc" ;;
+  # NO dispatch_kick when the add was BORN BLOCKED (a needs-human hand-off): the row is already
+  # outside the wave, and a kick could only fire a worker onto an operator step — the `needs)` arm
+  # below makes the same call for the same reason.
+  add)     shift; cmd_add "$@"; _add_rc=$?
+           [ "$_add_rc" -eq 0 ] && [ "${_ADD_BORN_BLOCKED:-0}" -eq 0 ] && dispatch_kick
+           exit "$_add_rc" ;;
   list)    shift; cmd_list "$@" ;;
   # The mutex, not `cmd_transition`, is what makes one grant per item total across processes —
   # see CLAIM MUTEX above. Wrapped at the dispatch arm so every CLI claimer is covered and no
