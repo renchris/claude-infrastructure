@@ -243,6 +243,72 @@ same_file() {   # <a> <b> → 0 same · 1 differ · 2 NO VERDICT. Callers MUST h
   return 2
 }
 
+# ── WHICH SIDE IS AHEAD — the question "DIFFERS" does not answer, and the one the REMEDY needs ────
+# DEFINED HERE, BESIDE same_file(), AND NOT BESIDE ITS FIRST CALLER, because "are these the same"
+# and "which one is the original" are one predicate pair and every differ-verdict in this file needs
+# both. It first landed next to the copy-class leg (2026-08-24) and served that leg alone, which is
+# how three earlier `STALE` sites and the CLAUDE.md leg — all of them ABOVE that definition, so a
+# call there would have been an unbound function — kept prescribing a direction they had not
+# measured for another fortnight. A shell function's position is a real constraint on who may use
+# it; putting the discriminator where the DIFFERENCE is computed is what makes it reachable by all
+# of them.
+# MEASURED 2026-08-24. deploy-live reported "2 copy-class file(s) DIFFER from this checkout —
+# CLAUDE.md launchd/*.plist" as ONE condition with ONE remedy (run install.sh). Inspected, the two
+# drifted OPPOSITE ways: the plist's checkout was ahead and live stale (repair correct), while for
+# CLAUDE.md the LIVE file was ahead by an operator-authored rule that had never been tracked — and
+# install.sh copies repo→live unconditionally, so the prescribed repair would have SILENTLY DELETED
+# it. `diff` answers "are these the same", never "which one is the original", so every caller that
+# turned a difference into "repo edits are NOT live" was asserting a direction it had not measured.
+#
+# THE DISCRIMINATOR IS GIT, and it is the only thing on hand that knows what the file HAS been.
+# Hash the LIVE bytes and ask whether that blob appears anywhere in the tracked path's history:
+#   reachable   ⇒ live is a PAST revision of this file — genuinely BEHIND, and repair is safe.
+#   unreachable ⇒ repo→live would REGRESS the live layer, so it must not wear staleness's token.
+#
+# READ `ahead` EXACTLY: "these bytes are not in THIS CHECKOUT'S history", which is narrower than
+# "never tracked anywhere". It covers two states, and lumping them would repeat this row's own
+# mistake, so say both: (1) UNLANDED EDITS — someone edited the live copy and never landed it (the
+# CLAUDE.md case above); (2) A NEWER LANDED REVISION the checkout has not fetched — real on this
+# machine, because deploy-live deliberately runs from the newest GREEN commit while trunk moves on,
+# so the live layer can legitimately be ahead of the checkout asking the question. Verified both
+# 2026-08-24 against the live pair. They differ in remedy — land the edits vs. fetch the checkout —
+# but they agree on the only thing this token has to protect: do NOT copy repo→live over it.
+#
+# A file that is both behind AND locally edited also matches nothing, so it reports `ahead` — again
+# the safe direction, because the claim that matters is "do not blindly copy over this".
+#
+# THREE PROCESSES REGARDLESS OF HISTORY DEPTH: one `log` to name every commit that touched the path,
+# piped into ONE `cat-file --batch-check` to resolve them all. The naive shape (a `rev-parse` per
+# commit) forks once per commit and this runs on files with hundreds.
+#
+# `grep -c`, NEVER `grep -q`: this file is `set -o pipefail`, and an early-exiting consumer SIGPIPEs
+# `cat-file`, so the pipeline would report FAILURE on exactly the input it just matched.
+#
+# FAILS TO `unknown`, never to a direction. No git, an untracked path, an unreadable file — each
+# means we cannot say which side is original, and the caller must then warn rather than prescribe.
+copy_direction() {   # <repo src> <live dest> → behind | ahead | unknown. Never fails, never mutates.
+  local src="$1" dest="$2" rel h hits
+  case "$src" in "$REPO"/*) rel="${src#"$REPO"/}" ;; *) printf 'unknown'; return 0 ;; esac
+  command -v git >/dev/null 2>&1 || { printf 'unknown'; return 0; }
+  [ -r "$dest" ] || { printf 'unknown'; return 0; }
+  h="$(git -C "$REPO" hash-object -- "$dest" 2>/dev/null || true)"
+  case "$h" in ''|*[!0-9a-f]*) printf 'unknown'; return 0 ;; esac
+  git -C "$REPO" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1 || { printf 'unknown'; return 0; }
+  # NO COMMITS ⇒ UNKNOWN, never `ahead`. A path can be TRACKED (staged) yet have no history at all —
+  # a fresh checkout, a file added but not yet committed. Git then knows nothing about what this file
+  # HAS been, and "no past revision matches" would be an artefact of an empty search space rather
+  # than a finding. Reporting `ahead` there would fire the loud branch on every such file.
+  local commits
+  commits="$(git -C "$REPO" log --format="%H:$rel" -- "$rel" 2>/dev/null || true)"
+  [ -n "$commits" ] || { printf 'unknown'; return 0; }
+  hits="$(printf '%s\n' "$commits" \
+            | git -C "$REPO" cat-file --batch-check='%(objectname)' 2>/dev/null \
+            | grep -cxF "$h" 2>/dev/null || true)"
+  case "$hits" in ''|*[!0-9]*) hits=0 ;; esac
+  if [ "$hits" -gt 0 ]; then printf 'behind'; else printf 'ahead'; fi
+  return 0
+}
+
 for tool in $STRICT_TOOLS; do
   src="$REPO/bin/$tool"; dest="$BINDIR/$tool"
   if [ ! -f "$src" ]; then
@@ -260,7 +326,18 @@ for tool in $STRICT_TOOLS; do
       # Content matches today, but it is a COPY where a symlink is required: it will drift
       # again on the next repo edit. Actionable now, before the divergence appears.
       0) report "UNLINKED" "$tool" "copy matches but must be a symlink → run ./install.sh"; drift=1 ;;
-      1) report "STALE" "$tool" "copy DIFFERS from repo — repo edits are NOT live → run ./install.sh"
+      # "repo edits are NOT live" is a claim about DIRECTION, and diff cannot make it. install.sh
+      # replaces this copy with a symlink into the repo, so over a LIVE-AHEAD copy the prescription
+      # is not a stale-repair, it is a deletion — the same hazard COPYAHEAD was minted for on the
+      # copy classes, on a class whose remedy destroys even harder (a link keeps no bytes at all).
+      1) case "$(copy_direction "$src" "$dest")" in
+           behind)
+             report "STALE" "$tool" "copy DIFFERS from repo — repo edits are NOT live → run ./install.sh" ;;
+           ahead)
+             report "COPYAHEAD" "$tool" "the LIVE copy carries bytes NOT in this checkout's history (unlanded live edits, or a newer landed revision this checkout has not fetched) — install.sh would replace it with a symlink into the repo and LOSE them → land the live edits or fetch this checkout FIRST" ;;
+           *)
+             report "STALE" "$tool" "copy DIFFERS from repo, direction UNKNOWN (git could not answer) — verify which side is original BEFORE running ./install.sh" ;;
+         esac
          drift=1 ;;
       *) report "NOVERDICT" "$tool" "diff could not run (3 tries) — no claim either way"
          noverdict=1 ;;
@@ -278,7 +355,12 @@ for tool in $COPY_TOOLS; do
     same_file "$src" "$dest"
     case $? in
       0) report "OK" "$tool" "copy identical to repo" ;;
-      1) report "STALE" "$tool" "copy differs from repo → run ./install.sh"; drift=1 ;;
+      1) case "$(copy_direction "$src" "$dest")" in
+           behind) report "STALE" "$tool" "copy differs from repo → run ./install.sh" ;;
+           ahead)  report "COPYAHEAD" "$tool" "the LIVE copy carries bytes NOT in this checkout's history (unlanded live edits, or a newer landed revision this checkout has not fetched) — install.sh copies repo->live and would REGRESS it → land the live edits or fetch this checkout FIRST" ;;
+           *)      report "STALE" "$tool" "copy differs from repo, direction UNKNOWN (git could not answer) — verify which side is original BEFORE running ./install.sh" ;;
+         esac
+         drift=1 ;;
       *) report "NOVERDICT" "$tool" "diff could not run (3 tries) — no claim either way"
          noverdict=1 ;;
     esac
@@ -804,7 +886,19 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       case $? in
         0) report "UNLINKED" "$rel" "live copy matches but must be a symlink → run ./install.sh"
            cls_row "$cls" drift; drift=1 ;;
-        1) report "STALE" "$rel" "live copy DIFFERS from the repo SSOT — split-brain is ACTIVE → run ./install.sh"
+        # SPLIT-BRAIN IS SYMMETRIC AND THE REMEDY IS NOT. install.sh link_file()s this path, so the
+        # live real file is unlinked and replaced by a pointer at the repo — correct when the live
+        # bytes are a past revision, and an erasure when they are the only copy of an unlanded edit.
+        # The class's own comment above says a symlink CANNOT drift; that is exactly why the bytes
+        # standing where the link belongs have to be identified before they are overwritten.
+        1) case "$(copy_direction "$REPO/$rel" "$LIVE/$rel")" in
+             behind)
+               report "STALE" "$rel" "live copy DIFFERS from the repo SSOT — split-brain is ACTIVE → run ./install.sh" ;;
+             ahead)
+               report "COPYAHEAD" "$rel" "split-brain is ACTIVE and the LIVE side is the one carrying bytes NOT in this checkout's history — install.sh would replace it with a symlink into the repo and LOSE them → land the live edits or fetch this checkout FIRST" ;;
+             *)
+               report "STALE" "$rel" "live copy DIFFERS from the repo SSOT — split-brain is ACTIVE, direction UNKNOWN (git could not answer) — verify which side is original BEFORE running ./install.sh" ;;
+           esac
            cls_row "$cls" drift; drift=1 ;;
         *) report "NOVERDICT" "$rel" "diff could not run (3 tries) — no claim either way"
            cls_row "$cls" live; noverdict=1 ;;
@@ -969,63 +1063,6 @@ fi
 # deployment can turn off a class that does not apply to it rather than read a false miss):
 #   CC_PARITY_GITHOOKS — colon-separated hook dirs (default: the checkout's own + ~/.git-template)
 #   CC_PARITY_LAUNCHD  — LaunchAgents dir (default: ~/Library/LaunchAgents)
-# ── WHICH SIDE IS AHEAD — the question "DIFFERS" does not answer, and the one the REMEDY needs ────
-# MEASURED 2026-08-24. deploy-live reported "2 copy-class file(s) DIFFER from this checkout —
-# CLAUDE.md launchd/*.plist" as ONE condition with ONE remedy (run install.sh). Inspected, the two
-# drifted OPPOSITE ways: the plist's checkout was ahead and live stale (repair correct), while for
-# CLAUDE.md the LIVE file was ahead by an operator-authored rule that had never been tracked — and
-# install.sh copies repo→live unconditionally, so the prescribed repair would have SILENTLY DELETED
-# it. `diff` answers "are these the same", never "which one is the original", so every caller that
-# turned a difference into "repo edits are NOT live" was asserting a direction it had not measured.
-#
-# THE DISCRIMINATOR IS GIT, and it is the only thing on hand that knows what the file HAS been.
-# Hash the LIVE bytes and ask whether that blob appears anywhere in the tracked path's history:
-#   reachable   ⇒ live is a PAST revision of this file — genuinely BEHIND, and repair is safe.
-#   unreachable ⇒ repo→live would REGRESS the live layer, so it must not wear staleness's token.
-#
-# READ `ahead` EXACTLY: "these bytes are not in THIS CHECKOUT'S history", which is narrower than
-# "never tracked anywhere". It covers two states, and lumping them would repeat this row's own
-# mistake, so say both: (1) UNLANDED EDITS — someone edited the live copy and never landed it (the
-# CLAUDE.md case above); (2) A NEWER LANDED REVISION the checkout has not fetched — real on this
-# machine, because deploy-live deliberately runs from the newest GREEN commit while trunk moves on,
-# so the live layer can legitimately be ahead of the checkout asking the question. Verified both
-# 2026-08-24 against the live pair. They differ in remedy — land the edits vs. fetch the checkout —
-# but they agree on the only thing this token has to protect: do NOT copy repo→live over it.
-#
-# A file that is both behind AND locally edited also matches nothing, so it reports `ahead` — again
-# the safe direction, because the claim that matters is "do not blindly copy over this".
-#
-# THREE PROCESSES REGARDLESS OF HISTORY DEPTH: one `log` to name every commit that touched the path,
-# piped into ONE `cat-file --batch-check` to resolve them all. The naive shape (a `rev-parse` per
-# commit) forks once per commit and this runs on files with hundreds.
-#
-# `grep -c`, NEVER `grep -q`: this file is `set -o pipefail`, and an early-exiting consumer SIGPIPEs
-# `cat-file`, so the pipeline would report FAILURE on exactly the input it just matched.
-#
-# FAILS TO `unknown`, never to a direction. No git, an untracked path, an unreadable file — each
-# means we cannot say which side is original, and the caller must then warn rather than prescribe.
-copy_direction() {   # <repo src> <live dest> → behind | ahead | unknown. Never fails, never mutates.
-  local src="$1" dest="$2" rel h hits
-  case "$src" in "$REPO"/*) rel="${src#"$REPO"/}" ;; *) printf 'unknown'; return 0 ;; esac
-  command -v git >/dev/null 2>&1 || { printf 'unknown'; return 0; }
-  [ -r "$dest" ] || { printf 'unknown'; return 0; }
-  h="$(git -C "$REPO" hash-object -- "$dest" 2>/dev/null || true)"
-  case "$h" in ''|*[!0-9a-f]*) printf 'unknown'; return 0 ;; esac
-  git -C "$REPO" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1 || { printf 'unknown'; return 0; }
-  # NO COMMITS ⇒ UNKNOWN, never `ahead`. A path can be TRACKED (staged) yet have no history at all —
-  # a fresh checkout, a file added but not yet committed. Git then knows nothing about what this file
-  # HAS been, and "no past revision matches" would be an artefact of an empty search space rather
-  # than a finding. Reporting `ahead` there would fire the loud branch on every such file.
-  local commits
-  commits="$(git -C "$REPO" log --format="%H:$rel" -- "$rel" 2>/dev/null || true)"
-  [ -n "$commits" ] || { printf 'unknown'; return 0; }
-  hits="$(printf '%s\n' "$commits" \
-            | git -C "$REPO" cat-file --batch-check='%(objectname)' 2>/dev/null \
-            | grep -cxF "$h" 2>/dev/null || true)"
-  case "$hits" in ''|*[!0-9]*) hits=0 ;; esac
-  if [ "$hits" -gt 0 ]; then printf 'behind'; else printf 'ahead'; fi
-  return 0
-}
 
 copy_verdict() {   # <label> <src> <dest> — reports, sets drift/noverdict. Never emits an ln -sf line.
   local label="$1" src="$2" dest="$3"
@@ -1113,11 +1150,26 @@ fi
 # measured only because a session had hand-synced it 34 minutes earlier.
 #
 # DETECTION ONLY, by explicit decision (P6 brief). Copying it here is refused for a reason that is
-# not squeamishness: the DIRECTION is a judgment. The project's own rule is that a land in this repo
-# must be followed by hand-applying the same edits to the live file, so a divergence can equally
-# mean "the repo advanced" or "the live file holds an edit not yet committed", and a converger that
-# guessed would silently destroy operator work in the second case. That makes it genuinely
-# operator-owned, which is the only thing that licenses a `needs` row rather than just doing it.
+# not squeamishness: the project's own rule is that a land in this repo must be followed by
+# hand-applying the same edits to the live file, so a divergence can equally mean "the repo
+# advanced" or "the live file holds an edit not yet committed", and a converger that guessed would
+# silently destroy operator work in the second case. That makes it genuinely operator-owned, which
+# is the only thing that licenses a `needs` row rather than just doing it.
+#
+# WHAT IS NO LONGER TRUE, and it was the load-bearing half: this block used to say the DIRECTION
+# itself "is a judgment". It is not, and has not been since copy_direction() landed — git knows what
+# this file HAS been, so which side is original is MEASURED, and only the REPAIR stays a judgment.
+# Holding the two together is what kept the highest-consequence file in the deploy layer reporting
+# the same undifferentiated "DIVERGE" for both of them. The cost was not theoretical: the very
+# incident that produced copy_direction (2026-08-24, backlog 20aefaafb5c4) had CLAUDE.md LIVE-AHEAD
+# by an operator-authored rule that had never been tracked, and deploy-live's copy-drift page — which
+# greps CLAUDEMD into its file list but counts only COPYAHEAD as ahead — would still have folded it
+# into "all live-STALE (their live bytes are past revisions) … install.sh is their repair". A false
+# sentence about the file every session on this machine reads as its instructions.
+#
+# So: the direction is measured and SAID, the repair is still nobody's but the operator's, and a
+# live-ahead CLAUDE.md reports under COPYAHEAD — the token both consumers already treat as the loud
+# one — rather than under a word that means the opposite of what is true.
 if [ -f "$REPO/CLAUDE.md" ]; then
   if [ ! -e "$LIVE/CLAUDE.md" ]; then
     report "CLAUDEMD" "CLAUDE.md" "the live global instructions are ABSENT → run ./install.sh"
@@ -1132,12 +1184,28 @@ if [ -f "$REPO/CLAUDE.md" ]; then
     same_file "$REPO/CLAUDE.md" "$LIVE/CLAUDE.md"
     case $? in
       0) cls_row 'CLAUDE.md (copy)' live ;;
-      1) report "CLAUDEMD" "CLAUDE.md" "live global instructions DIVERGE from the repo — every session reads the live copy"
-         cls_row 'CLAUDE.md (copy)' miss; drift=1
-         # Deliberately no sha/count in the title: the trigger is a standing STATE, so the constant
-         # title is the condition key (see file_need). A count would mint a new row on every edit.
-         file_need "claude-md-diverged" \
-           "reconcile ~/.claude/CLAUDE.md with claude-infrastructure/CLAUDE.md — they diverge, and which side is authoritative is your call (diff them; the live copy is what every session actually reads)" ;;
+      # Deliberately no sha/count in either title: the trigger is a standing STATE, so the constant
+      # title is the condition key (see file_need). A count would mint a new row on every edit.
+      # TWO keys, not one, because these are two conditions with two remedies — a single key would
+      # let a live-ahead divergence inherit a row already filed for a stale one, and vice versa.
+      1) case "$(copy_direction "$REPO/CLAUDE.md" "$LIVE/CLAUDE.md")" in
+           ahead)
+             report "COPYAHEAD" "CLAUDE.md" "the LIVE global instructions carry bytes NOT in this checkout's history (unlanded operator edits, or a newer landed revision this checkout has not fetched) — this is UNLANDED WORK, not staleness; do NOT copy repo->live over it"
+             # shellcheck disable=SC2088
+             file_need "claude-md-live-ahead" \
+               "~/.claude/CLAUDE.md holds rules that are in NO tracked revision — every session is reading them and nothing else has a copy; land them into claude-infrastructure/CLAUDE.md (or fetch this checkout if they landed elsewhere) BEFORE any install.sh, which copies repo->live and would delete them" ;;
+           behind)
+             report "CLAUDEMD" "CLAUDE.md" "live global instructions DIVERGE from the repo — the live copy is a PAST revision, and every session reads the live copy"
+             # shellcheck disable=SC2088
+             file_need "claude-md-diverged" \
+               "reconcile ~/.claude/CLAUDE.md with claude-infrastructure/CLAUDE.md — they diverge and the live copy is a past revision, so the repo side is almost certainly the one to keep; the live copy is what every session actually reads" ;;
+           *)
+             report "CLAUDEMD" "CLAUDE.md" "live global instructions DIVERGE from the repo, direction UNKNOWN (git could not answer) — every session reads the live copy"
+             # shellcheck disable=SC2088
+             file_need "claude-md-diverged" \
+               "reconcile ~/.claude/CLAUDE.md with claude-infrastructure/CLAUDE.md — they diverge, and which side is authoritative is your call (diff them; the live copy is what every session actually reads)" ;;
+         esac
+         cls_row 'CLAUDE.md (copy)' miss; drift=1 ;;
       *) report "NOVERDICT" "CLAUDE.md" "diff could not run (3 tries) — no claim either way"
          cls_row 'CLAUDE.md (copy)' live; noverdict=1 ;;
     esac

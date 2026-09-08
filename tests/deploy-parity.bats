@@ -1311,6 +1311,154 @@ _commitfix() {   # give the fixture repo a real history for one copy-class path
   [[ "$output" == *"direction UNKNOWN"* ]] || { echo "expected an explicit UNKNOWN:"; echo "$output"; false; }
 }
 
+# ── THE OTHER FOUR SITES THAT CLAIMED A DIRECTION THEY NEVER MEASURED (2026-09-07) ────────────────
+# Same backlog row (20aefaafb5c4), same defect, four sites the 2026-08-24 fix did not reach —
+# because copy_direction() was defined BELOW every one of them, so a call there would have been an
+# unbound function. Each turned `diff` into a directional sentence, and three of them attached the
+# prescription that destroys the live side:
+#
+#   STRICT_TOOLS  "repo edits are NOT live → run ./install.sh" — and install.sh REPLACES this copy
+#                 with a symlink into the repo, so a live-ahead copy is not overwritten, it is
+#                 unlinked: the bytes survive nowhere at all.
+#   COPY_TOOLS    "copy differs from repo → run ./install.sh" — repo→live cp over the live bytes.
+#   root SSOT     "split-brain is ACTIVE → run ./install.sh" — link_file()s the path, same erasure.
+#   CLAUDE.md     "DIVERGE", no direction at all — and deploy-live's copy-drift page greps CLAUDEMD
+#                 into its file list while counting only COPYAHEAD as ahead, so a live-ahead
+#                 CLAUDE.md was reported as "all live-STALE (their live bytes are past revisions)".
+#                 That is the exact file, in the exact state, of the incident that opened the row.
+#
+# Every case here needs a real COMMIT (_commitfix): a path with no history is deliberately UNKNOWN,
+# and it is the `unknown` arm that all of these landed in before — which is why the suite stayed
+# green through the change and these cases had to be written to see it at all.
+
+@test "strict tool AHEAD: a live copy holding uncommitted bytes ⇒ COPYAHEAD, never STALE" {
+  _livefix
+  # _livefix LINKS toolA into the repo, and writing through a symlink edits its TARGET — the first
+  # draft of this case silently rewrote the repo file and scored LINKED, exit 0. Break the link.
+  rm -f "$CC_PARITY_BINDIR/toolA"
+  printf 'echo A LOCAL EDIT THAT WAS NEVER COMMITTED\n' > "$CC_PARITY_BINDIR/toolA"
+  _track; _commitfix
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"COPYAHEAD"* ]] || { echo "expected COPYAHEAD:"; echo "$output"; false; }
+  # THE LOAD-BEARING HALF: install.sh links this class, so the prescription does not merely overwrite
+  # these bytes, it leaves a pointer where the only copy of them used to be.
+  [[ "$(printf '%s\n' "$output" | grep toolA)" != *"run ./install.sh"* ]] \
+    || { echo "a live-ahead strict tool must not carry the install.sh prescription:"; echo "$output"; false; }
+}
+
+@test "strict tool BEHIND: a live copy that IS a past revision ⇒ STALE, and install.sh stays" {
+  # The control that makes the case above mean something: same class, same diff, opposite direction.
+  _livefix
+  rm -f "$CC_PARITY_BINDIR/toolA"                                # …which _livefix left as a symlink
+  cp "$CC_PARITY_REPO/bin/toolA" "$CC_PARITY_BINDIR/toolA"       # the committed bytes, as a copy
+  _track; _commitfix
+  printf 'echo A v3\n' > "$CC_PARITY_REPO/bin/toolA"             # repo moves on…
+  _track; _commitfix                                             # …live still holds the OLD revision
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"STALE"* ]] || { echo "expected STALE:"; echo "$output"; false; }
+  [[ "$output" != *"COPYAHEAD"* ]] || { echo "a PAST revision must not read as ahead:"; echo "$output"; false; }
+  [[ "$output" == *"run ./install.sh"* ]] || false
+}
+
+@test "copy tool AHEAD: a live bin copy holding uncommitted bytes ⇒ COPYAHEAD, never STALE" {
+  _livefix
+  printf 'echo B LOCAL EDIT THAT WAS NEVER COMMITTED\n' > "$CC_PARITY_BINDIR/toolB"
+  _track; _commitfix
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"COPYAHEAD"* ]] || { echo "expected COPYAHEAD:"; echo "$output"; false; }
+  [[ "$(printf '%s\n' "$output" | grep toolB)" != *"run ./install.sh"* ]] \
+    || { echo "a live-ahead copy tool must not carry the install.sh prescription:"; echo "$output"; false; }
+}
+
+@test "root SSOT AHEAD: the live side of a split-brain holds the only copy ⇒ COPYAHEAD" {
+  # The audit-02 split-brain is SYMMETRIC and its remedy is not: install.sh link_file()s this path,
+  # so whichever side is live is replaced by a pointer at the repo.
+  _livefix
+  printf 'opus_latest: claude-opus-5\n' > "$CC_PARITY_REPO/model-config.yaml"
+  _track; _commitfix
+  printf 'opus_latest: claude-opus-5\nfrontier: NEVER COMMITTED\n' > "$CC_PARITY_LIVE/model-config.yaml"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"COPYAHEAD"* ]] || { echo "expected COPYAHEAD:"; echo "$output"; false; }
+  [[ "$(printf '%s\n' "$output" | grep model-config)" != *"run ./install.sh"* ]] \
+    || { echo "a live-ahead SSOT must not carry the install.sh prescription:"; echo "$output"; false; }
+}
+
+@test "root SSOT BEHIND: a live file that IS a past revision ⇒ STALE split-brain, install.sh stays" {
+  _livefix
+  printf 'opus_latest: claude-opus-4-8\n' > "$CC_PARITY_REPO/model-config.yaml"
+  _track; _commitfix
+  cp "$CC_PARITY_REPO/model-config.yaml" "$CC_PARITY_LIVE/model-config.yaml"
+  printf 'opus_latest: claude-opus-5\n' > "$CC_PARITY_REPO/model-config.yaml"
+  _track; _commitfix
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"split-brain is ACTIVE"* ]] || { echo "expected the split-brain STALE:"; echo "$output"; false; }
+  [[ "$output" != *"COPYAHEAD"* ]] || { echo "a PAST revision must not read as ahead:"; echo "$output"; false; }
+}
+
+@test "CLAUDE.md AHEAD: live rules in NO tracked revision ⇒ COPYAHEAD, never CLAUDEMD/DIVERGE" {
+  # THE INCIDENT ITSELF, as a case. 2026-08-24: the live file carried an operator-authored rule that
+  # had never been tracked, and it was reported beside a plist drifting the other way, under one
+  # word, with one remedy that would have deleted it.
+  _mdfix
+  _commitfix
+  printf 'global rules v1\nAN OPERATOR RULE THAT WAS NEVER TRACKED\n' > "$CC_PARITY_LIVE/CLAUDE.md"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"COPYAHEAD"* ]] || { echo "expected COPYAHEAD:"; echo "$output"; false; }
+  [[ "$output" == *"UNLANDED WORK, not staleness"* ]] || { echo "the state must be NAMED, not implied:"; echo "$output"; false; }
+  # deploy-live counts ONLY COPYAHEAD as ahead while grepping CLAUDEMD into the same file list, so
+  # wearing the CLAUDEMD token here is what put this file inside the sentence "all live-STALE".
+  [[ "$(printf '%s\n' "$output" | grep 'CLAUDE.md')" != *"CLAUDEMD"* ]] \
+    || { echo "a live-ahead CLAUDE.md must not wear the token the page reads as stale:"; echo "$output"; false; }
+  [[ "$output" != *"MISSING: ln -sf"* ]] || false
+}
+
+@test "CLAUDE.md AHEAD: the filed row says LAND IT, not reconcile-your-call" {
+  # A `needs` row is read by an operator days later with none of this context. The two directions
+  # get two condition keys deliberately: one key would let whichever fired first stand for both.
+  _mdfix
+  _filefix
+  _commitfix
+  printf 'global rules v1\nAN OPERATOR RULE THAT WAS NEVER TRACKED\n' > "$CC_PARITY_LIVE/CLAUDE.md"
+  CC_PARITY_FILE=1 run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [ -f "$FILED_LOG" ]
+  grep -q 'NO tracked revision' "$FILED_LOG" || { echo "filed row did not name the condition:"; cat "$FILED_LOG"; false; }
+  [ -f "$CC_PARITY_FILED_DIR/claude-md-live-ahead" ]
+  [ ! -f "$CC_PARITY_FILED_DIR/claude-md-diverged" ]
+}
+
+@test "CLAUDE.md BEHIND: a live copy that IS a past revision ⇒ CLAUDEMD, named as past" {
+  _mdfix
+  _commitfix
+  cp "$CC_PARITY_REPO/CLAUDE.md" "$BATS_TEST_TMPDIR/md-v1"
+  printf 'global rules v2\n' > "$CC_PARITY_REPO/CLAUDE.md"
+  _track; _commitfix
+  cp "$BATS_TEST_TMPDIR/md-v1" "$CC_PARITY_LIVE/CLAUDE.md"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"CLAUDEMD"* ]] || { echo "expected CLAUDEMD:"; echo "$output"; false; }
+  [[ "$output" == *"PAST revision"* ]] || { echo "the measured direction must be SAID:"; echo "$output"; false; }
+  [[ "$output" != *"COPYAHEAD"* ]] || { echo "a PAST revision must not read as ahead:"; echo "$output"; false; }
+}
+
+@test "CLAUDE.md UNKNOWN: no history ⇒ DIVERGE with the direction stated as unknown" {
+  # _mdfix stages without committing. The pre-fix wording said only "DIVERGE", which reads as a
+  # measurement; an unanswerable direction has to say so, or the reader supplies the missing half.
+  _mdfix
+  printf 'global rules v1 \n' > "$CC_PARITY_LIVE/CLAUDE.md"
+  run "$ASSERT"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"CLAUDEMD"* ]] || false
+  [[ "$output" != *"COPYAHEAD"* ]] || { echo "no history ⇒ must not claim ahead:"; echo "$output"; false; }
+  [[ "$output" == *"direction UNKNOWN"* ]] || { echo "expected an explicit UNKNOWN:"; echo "$output"; false; }
+}
+
 # ── CLASS COVERAGE (2026-08-31) ────────────────────────────────────────────────────────────────
 # install.sh is the MAP OF RECORD and this script is one of its two auditors. A fix is scoped to
 # what broke; a walk's coverage is scoped to everything it was ever taught, and NOTHING reconciles
