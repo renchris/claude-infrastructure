@@ -212,7 +212,7 @@ mkact_confirm() {  # $1=name  $2=sentinel path
 @test "class-A and a well-formed class-B are excluded; class-C in the same store is not" {
   "$DECIDE" open --class C --conviction 40 --receipt "probe => result" --option "a::outcome a" --option "b::outcome b" --what "Ruling required here. Tail." >/dev/null
   "$DECIDE" open --class A --what "Auto-decided audit trail. Never operator-facing." >/dev/null
-  "$DECIDE" open --class B --what "Auto-fires unless vetoed. Tail." \
+  "$DECIDE" open --class B --what "Auto-fires unless vetoed. Tail." --conviction 60 --receipt "x => y" \
     --default "proceed" --deadline "2099-01-01T00:00:00Z" >/dev/null
   run "$DO" --list </dev/null
   [ "$status" -eq 0 ]

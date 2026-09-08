@@ -47,6 +47,8 @@ setup() {
   run env CC_UNATTENDED=1 "$HOOK" <<<"$ASK"
   [ "$status" -eq 2 ]
   [[ "$output" == *"cc-decide open --class B"* ]] || false
+  [[ "$output" == *"--conviction"* ]] || false                   # the class-B gate (2026-09-08): the recipe names both fields
+  [[ "$output" == *"--receipt"* ]] || false
   [[ "$output" == *"gate-classify.sh"* ]] || false
   [[ "$output" == *"--default"* ]] || false
   [[ "$output" == *"PROCEED"* ]]

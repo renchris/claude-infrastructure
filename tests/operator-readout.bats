@@ -294,7 +294,7 @@ _legacy_pkt() {  # $1=id  [$2=extra jq object]
 @test "a WELL-FORMED class-B (default+deadline) still does NOT render as an operator step" {
   # The control that keeps the fold narrow: a real class-B auto-fires at its deadline and is covered
   # by the ≤24h auto-fire line, not by the human-gated steps. Only the never-resolvable B folds in.
-  "$DECIDE" open --class B --what "Pick an account. Tail." \
+  "$DECIDE" open --class B --what "Pick an account. Tail." --conviction 60 --receipt "x => y" \
     --default "continue on next2" --deadline "2099-01-01T00:00:00Z" >/dev/null
   run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
   ! echo "$output" | grep -q '◆ \[decision B .*\] Pick an account' || false
@@ -352,9 +352,9 @@ EOS
 }
 
 @test "class-B is never itemized; ≤24h deadline appears only as the veto summary line" {
-  "$DECIDE" open --class B --what "Imminent default. Detail." \
+  "$DECIDE" open --class B --what "Imminent default. Detail." --conviction 60 --receipt "x => y" \
     --default "proceed" --deadline "2026-07-20T12:00:00Z" >/dev/null
-  "$DECIDE" open --class B --what "Far-future default. Detail." \
+  "$DECIDE" open --class B --what "Far-future default. Detail." --conviction 60 --receipt "x => y" \
     --default "proceed" --deadline "2099-01-01T00:00:00Z" >/dev/null
   printf '#!/bin/bash\n' > "$CC_ACTIVATION_DIR/13-x-activate.sh"   # ensure the block fires
   CC_OPREADOUT_NOW=1784894400 run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"                  # 2026-07-23T12:00:00Z epoch-ish

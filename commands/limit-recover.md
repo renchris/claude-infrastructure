@@ -228,6 +228,7 @@ C money-path. Then:
   ```
   cc-decide open --class B \
     --what "hit a 5h/weekly limit on <acct>; reset <ISO>. Wait for reset, or continue cross-account?" \
+    --conviction <N: 0..100, past 90 means implement it> --receipt "<docs/research path, or: <command> => <output>>" \
     --option "wait::idle until <ISO>, then resume on <acct>" \
     --option "switch::continue NOW on <other-acct> (quota-plane isolation)" \
     --recommendation "switch — cross-account continuation keeps the mission moving (operator decision #3)" \
@@ -258,6 +259,7 @@ C money-path. Then:
   ```
   cc-decide open --class B \
     --what "monthly spend cap reached on <acct> — no reset time" \
+    --conviction <N> --receipt "<docs/research path, or: <command> => <output>>" \
     --recommendation "park this account's remaining work to the backlog and continue other mission work on another account" \
     --default "cc-backlog add the parked unit, then continue other mission work cross-account" \
     --deadline "<now + CC_UNATTENDED_VETO_HOURS>"

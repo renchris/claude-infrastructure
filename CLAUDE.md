@@ -769,7 +769,7 @@ and the decision the predicate is a category, not an idea — Ch 7 p. 94; the an
 the decision).
 
 **Corollary — a decision you are holding IS the rung, and filing it is what makes it one.** Open it
-the moment you have it (`cc-decide open --class C --what <plain English, no codenames> --conviction N --receipt R --option "label::outcome" --option "label::outcome"` — the F2 number rule: a class-C open without the number, the receipt and two measured options is refused, and one filed without them is your own 🔧, not ⛔);
+the moment you have it (`cc-decide open --class C --what <plain English, no codenames> --conviction N --receipt R --option "label::outcome" --option "label::outcome"` — and a class-B packet, the unattended ask whose default fires at its deadline, carries the same `--conviction N --receipt R` (extended 2026-09-08 by packet aa19d7b7a693: 19 of 19 class-B packets in the prior 30 days carried neither, 11 defaults fired unruled) — the F2 number rule: a class-C open without the number, the receipt and two measured options is refused, and one filed without them is your own 🔧, not ⛔);
 `wrap-ledger.sh` then computes `⛔` from your own session's open class-C packets and it outranks
 everything. Unfiled, a decision has no git footprint, no backlog row and no matched phrase, so every
 sensor is blind to it and `✅ SAFE TO CLOSE — nothing of mine is open` renders underneath it —

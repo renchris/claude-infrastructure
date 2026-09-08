@@ -329,6 +329,8 @@ mk_spend_teammate_transcript() {
   grep -q 'open --class B' "$CCD_LOG"
   grep -q 'cross-account' "$CCD_LOG"
   grep -q -- '--session-sid aaaa000k-1111-2222-3333-444444444444' "$CCD_LOG"
+  grep -q -- '--conviction 85' "$CCD_LOG"                            # the class-B gate (2026-09-08): number + receipt stated by the producer
+  grep -q -- '--receipt lr-reset-poller monthly-spend detector => ' "$CCD_LOG"
   # the silent-park gap is CLOSED: a no-reset billing kill is surfaced, never parked and never dropped
   [ ! -e "$STATE/parked/aaaa000k-1111-2222-3333-444444444444.json" ]
   [ -f "$STATE/spend-packet/aaaa000k-1111-2222-3333-444444444444" ]  # idempotency marker

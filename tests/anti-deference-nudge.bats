@@ -286,7 +286,17 @@ fired()  { echo "$1" | grep -q '"decision":"block"'; }   # hook stdout ⇒ did i
   [ "$(jq -r '.status' "$f")" = open ]
   [ -n "$(jq -r '.default_if_no_veto' "$f")" ]                 # class-B carries a default …
   [ -n "$(jq -r '.veto_deadline' "$f")" ]                      # … and a veto deadline
+  [ "$(jq -r '.conviction' "$f")" = 0 ]                        # no number stated in the close ⇒ filed UNCONVICTED (0), not refused
+  [[ "$(jq -r '.receipt' "$f")" == "session pkt-sess close => "* ]] || false
   grep -q '"packet":' "$ANTIDEF_IDL"                           # the IDL records the opened packet
+}
+
+@test "T-P15-5: a stated conviction in the close is READ into the class-B packet (the gate's number)" {
+  run runhook "$(mkfix "Which account should I use — default to next2, conviction 60%. Want me to proceed?")" "pkt-conv"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  run bash -c "ls '$CC_DECISIONS_DIR'/*.json 2>/dev/null | head -1"
+  [ -n "$output" ]
+  [ "$(jq -r '.conviction' "$output")" = 60 ]
 }
 
 @test "T-P15-5: degrade-silent — cc-decide absent ⇒ hook exits 0 silent, no packet, no crash" {

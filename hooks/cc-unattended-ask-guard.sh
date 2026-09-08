@@ -62,6 +62,8 @@ answer it (the P15 idle-strand). Do NOT retry the elicitation. Route the ONE for
 durable decision packet + standing-value default instead, then keep moving:
   1. scripts/gate-classify.sh "<the fork text>"   (wait-vs-switch AND monthly-spend both → B)
   2. cc-decide open --class B --what "<the fork>" \\
+       --conviction <N: how sure you are of the default, 0..100 — past 90 means implement it, do not ask> \\
+       --receipt "<docs/research path, or: <command> => <output>>"   (the research behind that number) \\
        --recommendation "<the standing-value pick>" \\
        --default "<default-if-no-veto>" --deadline "<now + ${veto}h>" \\
        --project "<subject project basename>" --default-effect <change|no-change>

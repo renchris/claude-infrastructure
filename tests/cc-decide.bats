@@ -38,7 +38,7 @@ setup() {
 }
 
 @test "open class-B with default+deadline succeeds; options parsed as label/outcome pairs" {
-  run bash "$CD" open --class B --what "which account to continue on" \
+  run bash "$CD" open --class B --what "which account to continue on" --conviction 60 --receipt "x => y" \
     --option "next2::continue on next2 quota" --option "next3::continue on next3 quota" \
     --recommendation "next2 — most quota" --default "continue cross-account on next2" \
     --deadline "2099-01-01T00:00:00Z"
@@ -66,12 +66,12 @@ C_OK=(--conviction 40 --receipt "probe => result" --option "a::outcome a" --opti
 
 # ── open: fail-closed schema refusals ──────────────────────────────────────────
 @test "REFUSE class-B without default (exit 2)" {
-  run bash "$CD" open --class B --what "x" --deadline "2099-01-01T00:00:00Z"
+  run bash "$CD" open --class B --what "x" --conviction 60 --receipt "x => y" --deadline "2099-01-01T00:00:00Z"
   [ "$status" -eq 2 ]
 }
 
 @test "REFUSE class-B without deadline (exit 2)" {
-  run bash "$CD" open --class B --what "x" --default "do the thing"
+  run bash "$CD" open --class B --what "x" --conviction 60 --receipt "x => y" --default "do the thing"
   [ "$status" -eq 2 ]
 }
 
@@ -92,13 +92,13 @@ C_OK=(--conviction 40 --receipt "probe => result" --option "a::outcome a" --opti
 }
 
 @test "REFUSE class-B with empty deadline value treated as missing (exit 2)" {
-  run bash "$CD" open --class B --what "x" --default "d" --deadline ""
+  run bash "$CD" open --class B --what "x" --conviction 60 --receipt "x => y" --default "d" --deadline ""
   [ "$status" -eq 2 ]
 }
 
 # ── recycle-survival: the packet is durable on disk ────────────────────────────
 @test "recycle-survival: an opened packet persists and is readable by a fresh invocation" {
-  id=$(bash "$CD" open --class B --what "durable decision" --default "d" --deadline "2099-01-01T00:00:00Z")
+  id=$(bash "$CD" open --class B --what "durable decision" --conviction 60 --receipt "x => y" --default "d" --deadline "2099-01-01T00:00:00Z")
   # simulate a recycle: nothing in-process survives, but the file must
   [ -f "$CC_DECISIONS_DIR/$id.json" ]
   run bash "$CD" list --open
@@ -107,8 +107,8 @@ C_OK=(--conviction 40 --receipt "probe => result" --option "a::outcome a" --opti
 }
 
 @test "open is idempotent — same class+sid+what does NOT duplicate an open packet" {
-  a=$(bash "$CD" open --class B --what "same" --session-sid s1 --default "d" --deadline "2099-01-01T00:00:00Z")
-  b=$(bash "$CD" open --class B --what "same" --session-sid s1 --default "d" --deadline "2099-01-01T00:00:00Z")
+  a=$(bash "$CD" open --class B --what "same" --conviction 60 --receipt "x => y" --session-sid s1 --default "d" --deadline "2099-01-01T00:00:00Z")
+  b=$(bash "$CD" open --class B --what "same" --conviction 60 --receipt "x => y" --session-sid s1 --default "d" --deadline "2099-01-01T00:00:00Z")
   [ "$a" = "$b" ]
   n=$(ls "$CC_DECISIONS_DIR"/*.json | wc -l | tr -d ' ')
   [ "$n" -eq 1 ]
@@ -116,7 +116,7 @@ C_OK=(--conviction 40 --receipt "probe => result" --option "a::outcome a" --opti
 
 # ── expire-sweep: class-B past deadline fires the default (REPORTS, never executes) ─
 @test "expire-sweep transitions a past-deadline class-B to expired-actioned and REPORTS the default" {
-  id=$(bash "$CD" open --class B --what "fire me" --default "park to backlog + continue" \
+  id=$(bash "$CD" open --class B --what "fire me" --conviction 60 --receipt "x => y" --default "park to backlog + continue" \
         --deadline "2000-01-01T00:00:00Z")
   run bash "$CD" expire-sweep
   [ "$status" -eq 0 ]
@@ -128,7 +128,7 @@ C_OK=(--conviction 40 --receipt "probe => result" --option "a::outcome a" --opti
 }
 
 @test "expire-sweep leaves a NOT-yet-past class-B open (no premature fire)" {
-  id=$(bash "$CD" open --class B --what "future" --default "d" --deadline "2099-01-01T00:00:00Z")
+  id=$(bash "$CD" open --class B --what "future" --conviction 60 --receipt "x => y" --default "d" --deadline "2099-01-01T00:00:00Z")
   run bash "$CD" expire-sweep
   [ "$status" -eq 0 ]
   ! echo "$output" | grep -q "$id" || false
@@ -147,7 +147,7 @@ C_OK=(--conviction 40 --receipt "probe => result" --option "a::outcome a" --opti
 
 # ── inv7: no age-deletion of an OPEN packet ────────────────────────────────────
 @test "inv7: expire-sweep never DELETES a packet file — open packets remain on disk" {
-  idb=$(bash "$CD" open --class B --what "past" --default "d" --deadline "2000-01-01T00:00:00Z")
+  idb=$(bash "$CD" open --class B --what "past" --conviction 60 --receipt "x => y" --default "d" --deadline "2000-01-01T00:00:00Z")
   idc=$(bash "$CD" open --class C "${C_OK[@]}" --what "waits" --staged-artifact /tmp/y.sh)
   bash "$CD" expire-sweep >/dev/null
   [ -f "$CC_DECISIONS_DIR/$idb.json" ]   # transitioned, NOT deleted
@@ -259,7 +259,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 
 # ── veto / action transitions ──────────────────────────────────────────────────
 @test "veto transitions open→vetoed; the default then never fires on expire-sweep" {
-  id=$(bash "$CD" open --class B --what "vetoed one" --default "d" --deadline "2000-01-01T00:00:00Z")
+  id=$(bash "$CD" open --class B --what "vetoed one" --conviction 60 --receipt "x => y" --default "d" --deadline "2000-01-01T00:00:00Z")
   bash "$CD" veto "$id" --by operator >/dev/null
   run jq -r '.status' "$CC_DECISIONS_DIR/$id.json"; [ "$output" = "vetoed" ]
   run bash "$CD" expire-sweep
@@ -277,7 +277,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 # ── list filters ───────────────────────────────────────────────────────────────
 @test "list --class B shows only B packets" {
   bash "$CD" open --class A --what "a-item" >/dev/null
-  bash "$CD" open --class B --what "b-item" --default d --deadline 2099-01-01T00:00:00Z >/dev/null
+  bash "$CD" open --class B --what "b-item" --conviction 60 --receipt "x => y" --default d --deadline 2099-01-01T00:00:00Z >/dev/null
   run bash "$CD" list --class B
   echo "$output" | grep -q "b-item"
   ! echo "$output" | grep -q "a-item"
@@ -291,7 +291,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 # mid-STOP-ASK would turn a missing annotation into a lost packet.
 
 @test "open records subject_project and default_effect verbatim" {
-  id=$(bash "$CD" open --class B --what "annotated one" --default "hold" \
+  id=$(bash "$CD" open --class B --what "annotated one" --conviction 60 --receipt "x => y" --default "hold" \
         --deadline "2099-01-01T00:00:00Z" --project doc_classifier --default-effect no-change)
   run jq -r '.subject_project' "$CC_DECISIONS_DIR/$id.json"; [ "$output" = "doc_classifier" ]
   run jq -r '.default_effect'  "$CC_DECISIONS_DIR/$id.json"; [ "$output" = "no-change" ]
@@ -300,7 +300,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 @test "open WITHOUT the new flags still writes both keys, empty (fail-open, not absent)" {
   # Present-but-empty, never missing: a reader distinguishing "" from a real value needs the key to
   # exist. `has()` is the assertion — `// ""` would pass on a packet that omitted the key entirely.
-  id=$(bash "$CD" open --class B --what "unannotated one" --default d --deadline "2099-01-01T00:00:00Z")
+  id=$(bash "$CD" open --class B --what "unannotated one" --conviction 60 --receipt "x => y" --default d --deadline "2099-01-01T00:00:00Z")
   run jq -e 'has("subject_project") and has("default_effect")' "$CC_DECISIONS_DIR/$id.json"
   [ "$status" -eq 0 ]
   run jq -r '.subject_project + "|" + .default_effect' "$CC_DECISIONS_DIR/$id.json"; [ "$output" = "|" ]
@@ -309,9 +309,9 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 @test "the new fields do NOT change the packet id (annotating must not mint a second packet)" {
   # mk_id is class+sid+what ONLY. If either field entered the content key, re-opening the same fork
   # with an added annotation would fork the ledger into two packets for one decision.
-  a=$(bash "$CD" open --class B --what "same fork" --default d --deadline "2099-01-01T00:00:00Z")
+  a=$(bash "$CD" open --class B --what "same fork" --conviction 60 --receipt "x => y" --default d --deadline "2099-01-01T00:00:00Z")
   rm -f "$CC_DECISIONS_DIR/$a.json"
-  b=$(bash "$CD" open --class B --what "same fork" --default d --deadline "2099-01-01T00:00:00Z" \
+  b=$(bash "$CD" open --class B --what "same fork" --conviction 60 --receipt "x => y" --default d --deadline "2099-01-01T00:00:00Z" \
         --project proj-x --default-effect change)
   [ "$a" = "$b" ]
 }
@@ -319,7 +319,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 @test "open REFUSES an unrecognised --default-effect (closed value set)" {
   # Folding a typo silently to "change" would dispatch a worker on a no-change default while the
   # packet READ as annotated — the worst of both states.
-  run bash "$CD" open --class B --what "typo" --default d --deadline "2099-01-01T00:00:00Z" \
+  run bash "$CD" open --class B --what "typo" --conviction 60 --receipt "x => y" --default d --deadline "2099-01-01T00:00:00Z" \
     --default-effect nochange
   [ "$status" -eq 2 ]
   echo "$output" | grep -q "change|no-change"
@@ -335,7 +335,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 
 # ── expire-sweep REPORTS both fields, normalised, in a collapse-proof line ─────
 @test "expire-sweep reports project + effect: fired<TAB>id<TAB>project<TAB>effect<TAB>default" {
-  id=$(bash "$CD" open --class B --what "fires annotated" --default "park it" \
+  id=$(bash "$CD" open --class B --what "fires annotated" --conviction 60 --receipt "x => y" --default "park it" \
         --deadline "2000-01-01T00:00:00Z" --project voiceink --default-effect no-change)
   run bash "$CD" expire-sweep
   [ "$status" -eq 0 ]
@@ -351,7 +351,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
   # That would put the EFFECT where the actuator reads the project, and the DEFAULT where it reads
   # the effect, on exactly the un-annotated packets this feature exists to keep working. The pad is
   # the fix and this is its RED-provable control: drop `cell("-")` and f5 goes empty.
-  id=$(bash "$CD" open --class B --what "fires bare" --default "carry this out" \
+  id=$(bash "$CD" open --class B --what "fires bare" --conviction 60 --receipt "x => y" --default "carry this out" \
         --deadline "2000-01-01T00:00:00Z")
   run bash "$CD" expire-sweep
   line="$(echo "$output" | grep "$id")"
@@ -375,7 +375,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 @test "a TAB inside the default text cannot shift the structured fields" {
   # The structured cells precede the operator-written free text precisely so that nothing typed
   # into a default can move a field the actuator branches on.
-  id=$(bash "$CD" open --class B --what "tabby" --default "$(printf 'left\tright')" \
+  id=$(bash "$CD" open --class B --what "tabby" --conviction 60 --receipt "x => y" --default "$(printf 'left\tright')" \
         --deadline "2000-01-01T00:00:00Z" --project pj --default-effect no-change)
   run bash "$CD" expire-sweep
   line="$(echo "$output" | grep "$id")"
@@ -433,7 +433,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
   # lr-reset-poller.sh:565 files on another session's behalf; the flag must always win.
   export CLAUDE_CODE_SESSION_ID="SID-ENV"
   export CLAUDE_SESSION_ID="SID-ENV-2"
-  run bash "$CD" open --class B --what "filed on another session's behalf" \
+  run bash "$CD" open --class B --what "filed on another session's behalf" --conviction 60 --receipt "x => y" \
     --default "d" --deadline "2099-01-01T00:00:00Z" --session-sid "SID-EXPLICIT"
   [ "$status" -eq 0 ]
   run jq -r '.session_sid' "$CC_DECISIONS_DIR/$output.json"
@@ -503,7 +503,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
 }
 
 @test "list --json --expiring matches the table's expiring predicate exactly" {
-  idb=$(bash "$CD" open --class B --what "expires" --default d --deadline "2099-01-01T00:00:00Z")
+  idb=$(bash "$CD" open --class B --what "expires" --conviction 60 --receipt "x => y" --default d --deadline "2099-01-01T00:00:00Z")
   bash "$CD" open --class C "${C_OK[@]}" --what "waits forever" >/dev/null      # C has no deadline ⇒ never expiring
   run bash -c "bash '$CD' list --expiring --json | jq -r '.[].id'"
   [ "$output" = "$idb" ]
@@ -526,7 +526,7 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
   # The flag is additive. This is the control that keeps it so: every consumer of the table — and
   # operator-readout, cc-digest and the autonomy sweep all parse this shape — must be unaffected.
   bash "$CD" open --class C "${C_OK[@]}" --what "c-item" --session-sid SID-A >/dev/null
-  bash "$CD" open --class B --what "b-item" --default d --deadline "2099-01-01T00:00:00Z" >/dev/null
+  bash "$CD" open --class B --what "b-item" --conviction 60 --receipt "x => y" --default d --deadline "2099-01-01T00:00:00Z" >/dev/null
   _raw_pkt legacy-tbl C
   local mode
   for mode in --open --all --expiring; do
@@ -605,10 +605,20 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
   [ "$status" -eq 0 ]
 }
 
-@test "conviction: class-A and class-B are unchanged — optional fields, both keys always present" {
+@test "conviction: class-A is unchanged — optional fields, both keys always present" {
   a=$(bash "$CD" open --class A --what "did it")
   run jq -e 'has("conviction") and has("receipt") and .conviction == null and .receipt == ""' "$CC_DECISIONS_DIR/$a.json"
   [ "$status" -eq 0 ]
+}
+
+@test "conviction: class-B REQUIRES the number and the receipt (operator ruling 2026-09-08, packet aa19d7b7a693); options stay optional" {
+  run bash "$CD" open --class B --what "which account" --default d --deadline "2099-01-01T00:00:00Z"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"missing: --conviction --receipt"* ]] || false
+  run bash "$CD" open --class B --what "which account" --default d --deadline "2099-01-01T00:00:00Z" --conviction 60
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"missing: --receipt"* ]] || false
+  [ "$(find "$CC_DECISIONS_DIR" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" = "0" ]
   b=$(bash "$CD" open --class B --what "which account" --default d --deadline "2099-01-01T00:00:00Z" \
         --conviction 60 --receipt "x => y")
   run jq -e '.conviction == 60 and .receipt == "x => y" and (.options|length) == 0' "$CC_DECISIONS_DIR/$b.json"

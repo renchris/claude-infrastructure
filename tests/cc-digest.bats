@@ -76,10 +76,10 @@ chmod +x "$p"; echo "$p"; }
 }
 
 @test "Decisions: open packets and class-B defaults fired in the last 24h both appear" {
-  bash "$CC_DECIDE_BIN" open --class B --what "an open pending fork" \
+  bash "$CC_DECIDE_BIN" open --class B --what "an open pending fork" --conviction 60 --receipt "x => y" \
     --default "park + continue" --deadline "2099-01-01T00:00:00Z" >/dev/null
   # a class-B whose default already fired (expired-actioned) with a fresh resolved ts
-  idf=$(bash "$CC_DECIDE_BIN" open --class B --what "a fired fork" \
+  idf=$(bash "$CC_DECIDE_BIN" open --class B --what "a fired fork" --conviction 60 --receipt "x => y" \
         --default "continue cross-account" --deadline "2000-01-01T00:00:00Z")
   CC_NOW="2000-01-02T00:00:00Z" bash "$CC_DECIDE_BIN" expire-sweep >/dev/null
   # re-stamp resolved to now so the 24h window includes it (expire-sweep used CC_NOW in the past)
