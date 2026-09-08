@@ -210,7 +210,7 @@ drift     = sorted(n for n in want if n in have and have[n] != want[n])
 unmanaged = sorted(n for n in have if n not in want) if audit else []
 
 if not missing and not drift and not unmanaged:
-    print("OK all %d correct" % len(want))
+    print("OK all %d already correct" % len(want))
     sys.exit(0)
 if check_only:
     bits = []
