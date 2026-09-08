@@ -2481,6 +2481,36 @@ do_has() { sed -n 's/^do: *//p' "$CC_PAGES_DIR/postland-revert-$1.page" | head -
   [ "$(cells_n)" = "0" ]                                       # both cells torn down
 }
 
+@test "C37: a LANDED revert PAGES — the wrong-and-applied case must not be the quietest one" {
+  # C37. The failure arm pages; until 2026-09-08 the SUCCESS arm wrote no page at all, and its only
+  # other announcement was a notify to the LANDING SESSION's inbox — dead by the time an async
+  # corpus finishes, so it drains on a next turn that never comes. Measured on the live box: 8
+  # landed reverts, ZERO pages. That inverts the alarm — wrong-and-blocked loud, wrong-and-applied
+  # silent — and 3 of those 8 were false positives (the convicted suite passes at the culprit's own
+  # tree). This binds the page's EXISTENCE and the one thing it must carry: the A/B that decides
+  # guilt, which no other artifact asks (--falsify-red asks "is the red gone?", and a revert makes
+  # that true whether or not the culprit was guilty).
+  ship_stub
+  culprit="$(arv_red)"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  [ -s "$REC/ship.argv" ]                                      # control: the revert really LANDED
+  run grep -c '^land_exit=0$' "$CC_POSTLAND_DIR/reverts/$culprit"
+  [ "$output" = "1" ]                                          # ...by the marker's own account
+  pf="$CC_PAGES_DIR/postland-reverted-${culprit:0:12}.page"
+  [ -f "$pf" ]                                                 # THE ASSERTION: it paged
+  run grep -c 'removed from trunk unattended' "$pf"
+  [ "$output" = "1" ]                                          # ...saying what happened
+  run grep -c "^reverted: ${culprit:0:12}" "$pf"
+  [ "$output" = "1" ]                                          # ...naming the commit it took out
+  run grep -c '^check:' "$pf"
+  [ "$output" = "1" ]                                          # ...and carrying the guilt A/B
+  run grep -c 'FALSE POSITIVE' "$pf"
+  [ "$output" = "1" ]                                          # ...including the not-guilty branch
+  # NAMESPACE: it must NOT be conscripted into the FAILED page's glob, which a green retracts.
+  # A landed revert stays true after trunk goes green — trunk goes green BECAUSE of it.
+  [ "$(rev_pages_n)" = "0" ]
+}
+
 @test "C20: NEVER TWICE — a culprit with a marker is refused on every later encounter" {
   ship_stub
   culprit="$(arv_red)"

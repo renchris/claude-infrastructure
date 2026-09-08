@@ -2936,6 +2936,55 @@ auto_revert() { # <culprit> <failing-file> — 0 = attempted (marker written), 1
       printf 'env:     %s\n' "$ENV_FP"
     } > "$pf" 2>/dev/null || true
     notify "Claude post-land AUTO-REVERT FAILED" "$c12 — trunk still red, see $pf"
+  else
+    # C37 — A LANDED REVERT PAGES TOO (2026-09-08, backlog 32d4d093f78a).
+    #
+    # Until today this arm wrote NOTHING. The failure arm above pages loudly; the success arm had
+    # only the file_linked row (which renders as a COUNT in the standing pile, never named) and the
+    # author notify above — and that notify goes to the LANDING SESSION's inbox, which by the time
+    # an async corpus finishes ~3h later is usually dead, so it drains on a next turn that never
+    # comes. The result is the exact inversion of what the operator needs: a revert that is WRONG
+    # AND BLOCKED is loud, and a revert that is WRONG AND APPLIED is the quietest event in the
+    # system. Measured on this box's whole history — 8 landed reverts, ZERO pages written for any
+    # of them.
+    #
+    # AND IT IS WRONG OFTEN ENOUGH TO MATTER. Of those 8, three are FALSE POSITIVES proven by
+    # execution: the convicted suite passes at the culprit's OWN tree (autonomy-sweep 63/0 at
+    # 2c6b8cdfa777 — which this runner itself later recorded as "its revert LANDED and it is
+    # convicted again, the surviving red has another cause"; capacity-alarm-segments 10/0 at
+    # b3f728858a6f, a DOCS-ONLY commit that cannot break a bats suite; handoff-fire-kitty-daemon
+    # 30/0 at e80c85aa2e47). The other five are TRUE — green at the culprit's parent, red at the
+    # culprit — so this arm is ~62% precise and must NOT be disarmed; it is the SILENCE that is the
+    # defect, not the reverting. Full adjudication:
+    # docs/research/autorevert-precision-2026-09-08.md.
+    #
+    # NOT keyed into the `postland-revert-*.page` namespace, deliberately: that glob is the FAILED
+    # page's, it is what rev_pages_n counts, and a green RETRACTS it. This page states a fact that
+    # a later green does not make untrue — trunk goes green BECAUSE of the revert — so it lives in
+    # its own name and is acked by the sweep's ordinary seen-marker like any other page.
+    #
+    # THE PAGE'S ONE JOB is the A/B that decides guilt, because no other artifact asks it: the
+    # backlog row's --falsify-red asks "is the red gone?", which a revert makes true whether or not
+    # the culprit was guilty. Suite green at the parent + red at the culprit = guilty. Same verdict
+    # at both = the revert took an innocent commit off trunk, and the re-land is one line.
+    pf="$PAGES/postland-reverted-$c12.page"
+    { now_epoch
+      printf 'post-land AUTO-REVERT LANDED @ %s — a commit was removed from trunk unattended\n' "$(now_iso)"
+      printf 'reverted: %s  %s\n' "$c12" "$(bounded 15 git -C "$REPO" log -1 --format=%s "$c" 2>/dev/null | cut -c1-70)"
+      printf 'convicted by: %s\n' "$file"
+      printf 'revert:   %s — now on origin/main\n' "$(sha12 "${rev:-none}")"
+      printf 'THIS ARM IS ~62%% PRECISE: 3 of the 8 reverts it has landed on this box were FALSE\n'
+      printf 'POSITIVES (the convicted suite passes at the culprit'"'"'s own tree). Confirm before accepting.\n'
+      printf 'check:    git -C %s worktree add --detach %s/verify-%s %s && cd %s/verify-%s && bats %s\n' \
+        "$REPO" "$WT_ROOT" "$c12" "$c" "$WT_ROOT" "$c12" "$file"
+      printf 'then:     git checkout -q %s^ && bats %s\n' "$c" "$file"
+      printf '          parent GREEN + culprit RED => guilty, this revert was right, drop this page.\n'
+      printf '          SAME verdict at both     => FALSE POSITIVE, the revert took innocent work off trunk.\n'
+      printf 'if false: git -C %s revert %s   # re-lands the reverted work; land it with %s\n' \
+        "$REPO" "$(sha12 "${rev:-none}")" "$REPO_SHIP"
+      printf 'env:      %s\n' "$ENV_FP"
+    } > "$pf" 2>/dev/null || true
+    notify "Claude post-land AUTO-REVERT LANDED" "$c12 removed from trunk — confirm it was guilty, see $pf"
   fi
   log "AUTOREVERT verdict=$outcome culprit=$c12 attempt=$ATTEMPT_N/$REVERT_RETRY_MAX revert=$(sha12 "${rev:-none}") branch=$br step=$step rc=$rc"
   wt_remove "$wt"; WT_REVERT=""
