@@ -72,6 +72,9 @@
 #                                     layer converges — a standing postland RED blocks that today).
 #   drain-recycle-fire.sh --num <N+1> --prompt-file <pointer> [handoff-fire args...]
 #                                     fire a caller-supplied brief verbatim (tests, a hand lane)
+#   drain-recycle-fire.sh --num <N+1> ... [--allow-empty]
+#                                     fire even when the target project's queue is STRUCTURALLY
+#                                     empty (see the preflight below) — the deliberate override
 #   drain-recycle-fire.sh --num <N+1> [--lane L --project P --min M] --print-goal
 #                                     print the condition and exit — no side effect, and the way
 #                                     to read back what a fire WOULD arm
@@ -87,6 +90,9 @@
 #                       $HOME/Development/claude-infrastructure; passed through to drain-brief.sh)
 #   CC_DRAIN_FLOOR_LANE the `lane` a done record must carry to count (default local-drain)
 #   CC_DRAIN_FIRE_BIN   default $REPO/scripts/handoff-fire.sh — the fire path, injectable for tests
+#   CC_DRAIN_PICK_BIN   default $REPO/scripts/drain-pick.sh — the eligibility ARBITER the preflight
+#                       asks; never re-implemented here (memory `make-the-actuator-the-arbiter`)
+#   CC_DRAIN_ALLOW_EMPTY=1  same as --allow-empty
 #   CC_DRAIN_BRIEF_BIN  default $REPO/scripts/drain-brief.sh — the generator, injectable for tests
 set -uo pipefail
 
@@ -185,6 +191,9 @@ goal_condition() {
 # ── argv ────────────────────────────────────────────────────────────────────────────────────────
 NUM=""; PROMPT=""; MODE="fire"; SINCE=""; LANE="${CC_DRAIN_LANE:-infra}"; MIN="${CC_DRAIN_MIN_CLOSED:-3}"
 WORKTREE=""; FIRST=0; FORCE=0; PROJ_REPO=""; INFRA="${CC_DRAIN_INFRA:-${HOME:-}/Development/claude-infrastructure}"
+ALLOW_EMPTY="${CC_DRAIN_ALLOW_EMPTY:-0}"
+PICK_BIN="${CC_DRAIN_PICK_BIN:-$HERE/drain-pick.sh}"
+CB_BIN="${CC_BACKLOG_BIN:-$REPO/bin/cc-backlog}"
 PASS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -198,6 +207,7 @@ while [ $# -gt 0 ]; do
     --infra)            INFRA="${2:?--infra needs the claude-infrastructure checkout path}"; shift 2 ;;
     --first)            FIRST=1; shift ;;
     --force)            FORCE=1; shift ;;
+    --allow-empty)      ALLOW_EMPTY=1; shift ;;
     --print-goal)       MODE="print"; shift ;;
     --closure-report)   MODE="closure"; SINCE="${2:?--closure-report needs an ISO-8601 Z timestamp}"; shift 2 ;;
     --since)            SINCE="${2:?--since needs an ISO-8601 Z timestamp}"; shift 2 ;;
@@ -242,6 +252,97 @@ if [ "$FIRST" -eq 1 ] && [ ! -d "$WORKTREE" ]; then
   fi
   [ -d "$PROJ_REPO/.git" ] || [ -f "$PROJ_REPO/.git" ] || die "--first: --repo $PROJ_REPO is not a git checkout"
 fi
+
+# ── THE EMPTY-QUEUE PREFLIGHT (2026-09-07, backlog 7bfd0b4e6dec) ────────────────────────────────
+# THE DEFECT. A lane pointed at a project with no pickable rows recycles forever producing nothing.
+# Measured on lane `reso` at its recycle #105: ~110 links, each one burning a pane and reporting
+# floor=UNMET by construction, because `drain-pick --project reso-management-app` returns
+# eligible=0 — that project holds 0 open and 0 claimed rows (74 blocked, all operator-owned, so no
+# agent work exists behind the block either). The desk retired the chain by hand and the fix did not
+# stick and CANNOT: each link regenerates its brief from the template, so a peer message reaches ONE
+# link (memory `instruction-to-a-recycling-chain-dies-at-its-brief`). The only place a fix survives
+# a regeneration is the fire path itself, which is this file.
+#
+# STRUCTURAL vs TRANSIENT, and this split is the whole design. Retiring a lane whose queue is merely
+# empty AT THIS INSTANT would be worse than the loop: a queue refills, and a lane that cannot come
+# back is a capability silently deleted. So `eligible=0` alone never refuses. The refusal needs the
+# POOL to be empty, not the pick:
+#   ready       eligible > 0                                   → fire (the ordinary case)
+#   transient   eligible = 0 but thrash_held > 0 or claimed > 0 → FIRE, loudly. Both of those are
+#               rows that can return: a thrash-held row is an OPEN row above the claim ceiling (a
+#               link may raise --max-claims or adjudicate it), and a claimed row is in flight and
+#               reopens on release. The successor has something to reach.
+#   structural  eligible = 0 AND thrash_held = 0 AND claimed = 0 → REFUSE. There is no open row, none
+#               held back, and none in flight; whatever else the project holds is blocked or done,
+#               and a blocked row is by definition not agent-reachable. A successor here is a
+#               guaranteed floor=UNMET before it is even fired.
+#   unknown     the census could not be taken (no jq / no ledger / no drain-pick / a non-zero pick)
+#               → FIRE. A broken instrument must never retire the chain; the one failure mode this
+#               chain cannot survive is a link that ends with no successor, so every doubt fires.
+# ELIGIBILITY IS NOT RE-IMPLEMENTED HERE. drain-pick.sh is the ranker every link already reads, so
+# it is asked for the number rather than having its predicate copied (memory
+# `make-the-actuator-the-arbiter`) — a second implementation would drift and the two would disagree
+# about which rows exist. `open` is not read separately either: it IS eligible + thrash_held by that
+# script's own partition, so nothing here can disagree with it about openness.
+# THE REFUSAL IS LOUD AND IT IS NOT A RETIREMENT. It names the project, prints the census, lists the
+# projects that DO have open rows (the backlog row's own recommendation: re-point the lane), and
+# exits 3 — distinct from die()'s 2, so a caller can tell "this queue is empty" from "this argv is
+# wrong". `--allow-empty` fires anyway for a caller that means it.
+queue_census() {   # → "<verdict> <eligible> <thrash> <claimed> <blocked>"
+  local out elig thr claimed blocked
+  command -v jq >/dev/null 2>&1 || { printf 'unknown 0 0 0 0\n'; return 0; }
+  [ -r "$LEDGER" ]   || { printf 'unknown 0 0 0 0\n'; return 0; }
+  [ -r "$PICK_BIN" ] || { printf 'unknown 0 0 0 0\n'; return 0; }
+  [ -x "$CB_BIN" ] || [ -r "$CB_BIN" ] || { printf 'unknown 0 0 0 0\n'; return 0; }
+  out="$(CC_BACKLOG_FILE="$LEDGER" CC_BACKLOG_BIN="$CB_BIN" bash "$PICK_BIN" --project "$PROJECT" --top 1 2>/dev/null)" \
+    || { printf 'unknown 0 0 0 0\n'; return 0; }
+  # The footer is drain-pick's own contract line: `eligible=N shown=N thrash_held=N`. A build that
+  # stopped printing it yields empty fields and the census abstains rather than inventing a zero
+  # (memory `suppressed-stderr-turns-a-failed-command-into-a-zero`).
+  elig="$(printf '%s\n' "$out" | sed -n 's/^eligible=\([0-9][0-9]*\) .*$/\1/p' | tail -1)"
+  thr="$(printf '%s\n' "$out"  | sed -n 's/^eligible=[0-9][0-9]* shown=[0-9][0-9]* thrash_held=\([0-9][0-9]*\).*$/\1/p' | tail -1)"
+  case "${elig:-x}${thr:-x}" in *x*) printf 'unknown 0 0 0 0\n'; return 0 ;; esac
+  # claimed/blocked come from the SAME list surface drain-pick ranks from, folded by status, so the
+  # two readers cannot disagree about what a row's state is.
+  read -r claimed blocked <<<"$(CC_BACKLOG_FILE="$LEDGER" bash "$CB_BIN" list --json 2>/dev/null \
+    | jq -r --arg ps "$PROJECT" '
+        ($ps | split(",")) as $p
+        | [ .[] | select(($p | index("all")) != null or (.project as $x | $p | index($x)) != null) ] as $rows
+        | [ ([$rows[]|select(.status=="claimed")]|length), ([$rows[]|select(.status=="blocked")]|length) ]
+        | @tsv' 2>/dev/null | tr '\t' ' ')"
+  case "${claimed:-x}${blocked:-x}" in *x*) printf 'unknown %s %s 0 0\n' "$elig" "$thr"; return 0 ;; esac
+  if   [ "$elig" -gt 0 ];                            then printf 'ready %s %s %s %s\n'      "$elig" "$thr" "$claimed" "$blocked"
+  elif [ "$thr" -gt 0 ] || [ "$claimed" -gt 0 ];     then printf 'transient %s %s %s %s\n'  "$elig" "$thr" "$claimed" "$blocked"
+  else                                                    printf 'structural %s %s %s %s\n' "$elig" "$thr" "$claimed" "$blocked"
+  fi
+}
+
+read -r QV Q_ELIG Q_THR Q_CLAIMED Q_BLOCKED <<<"$(queue_census)"
+case "$QV" in
+  ready)
+    printf 'drain-recycle-fire: queue ok — project %s has %s eligible row(s) (thrash_held=%s claimed=%s blocked=%s)\n' \
+      "$PROJECT" "$Q_ELIG" "$Q_THR" "$Q_CLAIMED" "$Q_BLOCKED" >&2 ;;
+  transient)
+    printf 'drain-recycle-fire: ⚠ queue EMPTY RIGHT NOW but REFILLABLE — project %s has 0 eligible, %s thrash-held and %s claimed row(s) (blocked=%s). Firing: a held or in-flight row can return to the pick, so this is not a structurally empty lane. If every link keeps reading 0 eligible, raise drain-pick --max-claims or release the claims.\n' \
+      "$PROJECT" "$Q_THR" "$Q_CLAIMED" "$Q_BLOCKED" >&2 ;;
+  structural)
+    if [ "$ALLOW_EMPTY" != 1 ]; then
+      printf 'drain-recycle-fire: ⛔ REFUSING to fire recycle #%s — project %s is STRUCTURALLY EMPTY: eligible=0, thrash_held=0, claimed=0 (blocked=%s). Every row left is blocked or done, so a successor on this lane is a guaranteed floor=UNMET that closes nothing. This is NOT a retirement: nothing was fired and nothing was changed — re-point the lane at a project with open rows, or unblock rows here, and fire again.\n' \
+        "$NUM" "$PROJECT" "$Q_BLOCKED" >&2
+      if command -v jq >/dev/null 2>&1 && [ -r "$LEDGER" ]; then
+        printf '  projects WITH open rows: %s\n' \
+          "$(CC_BACKLOG_FILE="$LEDGER" bash "$CB_BIN" list --json 2>/dev/null \
+             | jq -r '[.[]|select(.status=="open")]|group_by(.project)|map("\(.[0].project)=\(length)")|sort|join(" ")' 2>/dev/null)" >&2
+      fi
+      printf '  override (fires anyway): --allow-empty · re-point: --project <label> --lane <name>\n' >&2
+      exit 3
+    fi
+    printf 'drain-recycle-fire: ⚠ project %s is STRUCTURALLY EMPTY (eligible=0 thrash_held=0 claimed=0 blocked=%s) — firing anyway on --allow-empty\n' \
+      "$PROJECT" "$Q_BLOCKED" >&2 ;;
+  *)
+    printf 'drain-recycle-fire: queue census UNAVAILABLE for project %s (no jq, no readable ledger, or drain-pick refused) — firing, because a broken instrument must never retire the chain\n' \
+      "$PROJECT" >&2 ;;
+esac
 
 # ── THE BRIEF IS GENERATED HERE, NOT INHERITED (2026-09-04) ─────────────────────────────────────
 # With no --prompt-file the wrapper regenerates the successor's brief and pointer from the

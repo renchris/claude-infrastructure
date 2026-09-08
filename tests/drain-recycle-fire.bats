@@ -83,6 +83,67 @@ armed_goal() { grep -A1 -x -- '--goal' "$ARGV" | tail -1; }
 
 # NEVER FIRE A LINK WITH NO BRIEF. The one failure the chain cannot survive is a successor that
 # comes up with nothing to do, so an unreadable pointer is refused BEFORE the fire, not after it.
+# ── the empty-queue preflight (backlog 7bfd0b4e6dec) ────────────────────────────────────────────
+#
+# THE MEASURED PRE-STATE: lane `reso` fired ~110 identical links against a project holding 0 open
+# and 0 claimed rows (74 blocked), each one a guaranteed floor=UNMET. The four cases below are the
+# whole verdict table, and the pair that matters is structural-vs-transient: a refusal that also
+# fired on a merely-empty-right-now queue would delete a lane that was going to refill, which is
+# strictly worse than the loop it replaces.
+
+@test "preflight: a STRUCTURALLY empty project refuses the fire (exit 3) and fires nothing" {
+  id=$(add "the only row this project ever had")
+  bash "$CB" "done" "$id" --evidence "landed abc1234" >/dev/null 2>&1     # 0 open, 0 claimed
+
+  run bash "$SUBJECT" --num 106 --project claude-infrastructure --lane reso --prompt-file "$POINTER"
+  [ "$status" -eq 3 ]                                    # distinct from die()'s 2: an empty queue
+  [ ! -f "$ARGV" ]                                       # …and NOTHING was handed to the fire path
+  echo "$output" | grep -q "STRUCTURALLY EMPTY"
+  echo "$output" | grep -q "claude-infrastructure"       # names the project, not just the verdict
+  echo "$output" | grep -q "NOT a retirement"            # the lane is re-pointable, and says so
+  echo "$output" | grep -q -- "--allow-empty"            # the override is printed WITH the refusal
+}
+
+@test "preflight: a queue empty RIGHT NOW but holding a CLAIMED row still fires, loudly" {
+  # THE FENCE ON THE REFUSAL ABOVE. A claimed row reopens when its claimer releases it, so the pool
+  # is not empty — only the pick is. Retiring here would delete a lane that was about to refill.
+  id=$(add "a row already in flight")
+  bash "$CB" claim "$id" --by "deadbeef-0000-0000-0000-000000000000" >/dev/null 2>&1
+
+  run bash "$SUBJECT" --num 106 --project claude-infrastructure --lane reso --prompt-file "$POINTER"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c -x -- '--recycle' "$ARGV")" -eq 1 ]       # it FIRED
+  echo "$output" | grep -q "EMPTY RIGHT NOW but REFILLABLE"
+  [ "$(echo "$output" | grep -c "REFUSING")" -eq 0 ]
+}
+
+@test "preflight: --allow-empty fires a structurally empty lane anyway" {
+  id=$(add "the only row this project ever had")
+  bash "$CB" "done" "$id" --evidence "landed abc1234" >/dev/null 2>&1
+
+  run bash "$SUBJECT" --num 106 --project claude-infrastructure --lane reso --allow-empty --prompt-file "$POINTER"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c -x -- '--recycle' "$ARGV")" -eq 1 ]
+  echo "$output" | grep -q "firing anyway on --allow-empty"
+}
+
+@test "preflight: an open row is READY, and an unmeasurable census FIRES rather than retiring" {
+  # Two halves of one property, in one case so they cannot drift apart: the ordinary lane is
+  # unaffected, and a census that cannot be taken never refuses. The second half is why every other
+  # fire-path test in this file still passes — they run with no ledger at all.
+  add "a live open row" >/dev/null
+  run bash "$SUBJECT" --num 300 --project claude-infrastructure --lane infra --prompt-file "$POINTER"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "queue ok"
+  [ "$(grep -c -x -- '--recycle' "$ARGV")" -eq 1 ]
+
+  rm -f "$ARGV" "$CC_BACKLOG_FILE"                       # no ledger ⇒ the census cannot be taken
+  run bash "$SUBJECT" --num 300 --project claude-infrastructure --lane infra --prompt-file "$POINTER"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "census UNAVAILABLE"
+  [ "$(grep -c -x -- '--recycle' "$ARGV")" -eq 1 ]       # a broken instrument never retires a chain
+}
+
 @test "an unreadable prompt-file refuses rather than firing a brief-less link" {
   run bash "$SUBJECT" --num 280 --prompt-file "$BATS_TEST_TMPDIR/no-such-pointer.txt"
   [ "$status" -eq 2 ]
