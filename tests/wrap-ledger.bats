@@ -1744,7 +1744,7 @@ open_blocking() {
   ok_state
   use_real_decide
   export WRAP_SESSION_ID="$SID"
-  bash "$REPO/bin/cc-decide" open --class B --session-sid "$SID" --what "which account to continue on" \
+  bash "$REPO/bin/cc-decide" open --class B --session-sid "$SID" --what "which account to continue on" --conviction 60 --receipt "x => y" \
     --default "continue on next2" --deadline "2099-01-01T00:00:00Z" >/dev/null
   run bash "$LEDGER" --machine
   [ "$status" -eq 0 ]

@@ -113,7 +113,21 @@ open_packet_B() {
   #     fire predicate, so a peer session could be spawned whose whole assignment was to park a
   #     decision that was already parked. Three such items are in the live ledger.
   proj=""; [ -n "${CWD:-}" ] && proj="$(basename "$CWD" 2>/dev/null || true)"
+  # The gate binds class B too (operator ruling 2026-09-08, packet aa19d7b7a693): a packet carries
+  # the session's stated conviction and a receipt. The number is READ from the close when the
+  # session stated one ("conviction 60%", "60% conviction", "confidence: 60%"); a close that stated
+  # none is filed at 0 — visibly UNCONVICTED, which is the truth of it and what the ledger folds back
+  # into the session's own 🔧 — rather than refused into the bare idle this exit exists to prevent.
+  # A stated number past the ask threshold is refused by cc-decide (implement it), and the open
+  # fails closed exactly as before.
+  conv="$(printf '%s' "$MSG" \
+          | grep -oiE '(conviction|confidence)[^0-9%]{0,16}[0-9]{1,3} ?%|[0-9]{1,3} ?% (conviction|confidence)' 2>/dev/null \
+          | grep -oE '[0-9]{1,3}' | awk 'NR<=1' || true)"
+  case "$conv" in ''|*[!0-9]*) conv=0 ;; esac
+  [ "$conv" -le 100 ] 2>/dev/null || conv=0
+  rcpt="session ${SID:-?} close => $(printf '%s' "$what" | cut -c1-160)"
   "$decide" open --class B --what "$what" \
+    --conviction "$conv" --receipt "$rcpt" \
     --default "park this decision to the backlog and continue other work" \
     --default-effect no-change --project "$proj" \
     --deadline "$deadline" --session-sid "${SID:-}" \

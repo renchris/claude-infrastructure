@@ -554,6 +554,8 @@ open_spend_packet() {
   fi
   id="$("$CC_DECIDE_BIN" open --class B \
         --what "$what" \
+        --conviction 85 \
+        --receipt "lr-reset-poller monthly-spend detector => $sid ($acct) hit the monthly spend cap with no reset time; default ratified as operator decision #3 (commands/limit-recover.md § Unattended mode)" \
         --option "cross-account::resume the work on another Max account (next/next2/next3/next4) with quota headroom — quota-plane isolation" \
         --option "cap-raise::operator raises the monthly spend cap (money-path — operator only)" \
         --option "kimi-hedge::engage the Kimi hedge key (operator key required)" \

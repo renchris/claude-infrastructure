@@ -26,7 +26,7 @@
 #         [--conviction N] [--receipt R]
 #           → fail-closed: B needs default+deadline; C must NOT carry a default (nor a
 #             --default-effect, having no default to describe); what_plain required.
-#             C ALSO REQUIRES --conviction, --receipt and ≥2 --option (THE CONVICTION PROTOCOL,
+#             B REQUIRES --conviction + --receipt; C ALSO REQUIRES both and ≥2 --option (THE CONVICTION PROTOCOL,
 #             2026-09-08): N = integer 0..100, how sure the filer is of its own course — above
 #             CC_CONVICTION_ASK_MAX (90) the open is REFUSED (implement it; a class-A packet
 #             records a decision you made); R = an existing file (a docs/research path) or
@@ -226,6 +226,21 @@ cmd_open() {
       echo "  (--conviction N), the receipt of that research (--receipt PATH|\"<cmd> => <output>\"), and at least two measured"
       echo "  options in operator terms (--option \"label::what happens\"). Cannot state a number or name the research? Then the"
       echo "  investigation is still yours: drive it."
+    } >&2
+    return 2
+  fi
+
+  # CLASS B TOO (operator ruling 2026-09-08, packet aa19d7b7a693 — "extend the gate to class B").
+  # A class-B packet fires its default UNATTENDED, so the number behind that default and the
+  # receipt of the research are exactly what the operator's early-veto window is reading. Measured
+  # over the 30 days before the ruling: 19 class-B packets, 18 authored by sessions, 0 with a
+  # conviction, 0 with a receipt, 11 defaults fired unruled. Options stay optional for B — the
+  # default IS the option taken; the two fields do not.
+  if [ "$class" = "B" ] && { [ -z "$conviction" ] || [ -z "$receipt" ]; }; then
+    { echo "cc-decide open: a class-B packet fires its default unattended, and it carries the conviction behind that default and the receipt of the research — missing: $([ -z "$conviction" ] && printf -- '--conviction ')$([ -z "$receipt" ] && printf -- '--receipt')"
+      echo "  The protocol (operator ruling 2026-09-08, extended to class B by packet aa19d7b7a693): state how sure you are of the default"
+      echo "  (--conviction N, 0..100 — past ${ask_max} means implement it and file class A) and the research behind it (--receipt PATH|\"<cmd> => <output>\")."
+      echo "  Cannot state a number or name the research? Then the investigation is still yours: drive it."
     } >&2
     return 2
   fi

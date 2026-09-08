@@ -297,7 +297,7 @@ mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900
 
 # ── fired class-B default → a backlog item is appended (never acted inline) ────
 @test "a past-deadline class-B default fires → cc-backlog item appended, packet expired-actioned" {
-  id=$(bash "$CC_DECIDE_BIN" open --class B --what "which account to continue on" \
+  id=$(bash "$CC_DECIDE_BIN" open --class B --what "which account to continue on" --conviction 60 --receipt "x => y" \
         --default "continue cross-account on next2" --deadline "2000-01-01T00:00:00Z")
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]
@@ -311,7 +311,7 @@ mk_marker() { # <file> <pane> <mode> [young]  — aged 1 h by default (> the 900
 
 # ── an open decision packet is surfaced in the summary (once) ──────────────────
 @test "an open (future-deadline) class-B packet surfaces once, then is deduped" {
-  bash "$CC_DECIDE_BIN" open --class B --what "a pending fork" \
+  bash "$CC_DECIDE_BIN" open --class B --what "a pending fork" --conviction 60 --receipt "x => y" \
     --default "park + continue" --deadline "2099-01-01T00:00:00Z" >/dev/null
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$(notify_count)" -eq 1 ]
@@ -450,7 +450,7 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
 # that must not be built (memory: fixture-vs-real-classifier-needs-a-producer).
 
 @test "a fired NO-CHANGE default is surfaced but NEVER queued as a dispatch candidate" {
-  id=$(bash "$CC_DECIDE_BIN" open --class B --what "rearchitect the program?" \
+  id=$(bash "$CC_DECIDE_BIN" open --class B --what "rearchitect the program?" --conviction 60 --receipt "x => y" \
         --default "hold (no change without ruling)" --deadline "2000-01-01T00:00:00Z" \
         --default-effect no-change)
   run "${SWEEP_TO[@]}" bash "$SWEEP"
@@ -469,9 +469,9 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
 
 @test "POSITIVE CONTROL: a fired CHANGE default in the same run IS still queued" {
   # Without this, a carve-out that suppressed EVERY fired default would pass the test above.
-  bash "$CC_DECIDE_BIN" open --class B --what "no-change one" --default "hold it" \
+  bash "$CC_DECIDE_BIN" open --class B --what "no-change one" --conviction 60 --receipt "x => y" --default "hold it" \
     --deadline "2000-01-01T00:00:00Z" --default-effect no-change >/dev/null
-  bash "$CC_DECIDE_BIN" open --class B --what "change one" --default "land the lossless fix" \
+  bash "$CC_DECIDE_BIN" open --class B --what "change one" --conviction 60 --receipt "x => y" --default "land the lossless fix" \
     --deadline "2000-01-01T00:00:00Z" --default-effect change >/dev/null
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]
@@ -483,7 +483,7 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
 @test "an UNANNOTATED fired default is still queued (fail-open: no silent drop)" {
   # Every legacy producer omits --default-effect. Absent must mean "change", or landing this fix
   # would silently stop draining the class-B queue.
-  bash "$CC_DECIDE_BIN" open --class B --what "legacy shape" --default "carry this out" \
+  bash "$CC_DECIDE_BIN" open --class B --what "legacy shape" --conviction 60 --receipt "x => y" --default "carry this out" \
     --deadline "2000-01-01T00:00:00Z" >/dev/null
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   run bash "$CC_BACKLOG_BIN" list --open
@@ -491,7 +491,7 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
 }
 
 @test "the item is filed against the packet's DECLARED subject project" {
-  bash "$CC_DECIDE_BIN" open --class B --what "whose project?" --default "do the thing" \
+  bash "$CC_DECIDE_BIN" open --class B --what "whose project?" --conviction 60 --receipt "x => y" --default "do the thing" \
     --deadline "2000-01-01T00:00:00Z" --project doc_classifier --default-effect change >/dev/null
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]
@@ -503,7 +503,7 @@ mk_young() { mkdir -p "$(dirname "$1")"; printf 'x\n' > "$1"; }
   # The consumer-side half of the TSV collapse control: an unpadded emitter would put the EFFECT in
   # the project slot (filing the item against project "change") and the DEFAULT in the effect slot
   # (so `no-change` would never match and the title would go empty).
-  bash "$CC_DECIDE_BIN" open --class B --what "no project" --default "carry this out" \
+  bash "$CC_DECIDE_BIN" open --class B --what "no project" --conviction 60 --receipt "x => y" --default "carry this out" \
     --deadline "2000-01-01T00:00:00Z" >/dev/null
   CC_SWEEP_PROJECT=host-proj run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]
@@ -723,7 +723,7 @@ SH
 }
 
 @test "the summary distinguishes queued fires from no-change fires" {
-  bash "$CC_DECIDE_BIN" open --class B --what "nc" --default "hold it" \
+  bash "$CC_DECIDE_BIN" open --class B --what "nc" --conviction 60 --receipt "x => y" --default "hold it" \
     --deadline "2000-01-01T00:00:00Z" --default-effect no-change >/dev/null
   run "${SWEEP_TO[@]}" bash "$SWEEP"
   [ "$status" -eq 0 ]
