@@ -103,6 +103,24 @@ mk_btx() { # $1=human-age-s → transcript path with one interactive turn
   jq -nc --arg t "quick question — status?" --arg ts "$(iso_at $(( $(date +%s) - $1 )))" \
     '{type:"user",isMeta:null,userType:"external",message:{role:"user",content:$t},timestamp:$ts}' > "$p"
   printf '%s' "$p"; }
+# A transcript recording an Edit tool_use of each path in $@ — what hooks/lib/session-writes.sh
+# attributes on. It also carries a Read and a Bash tool_use, neither of which is a write: an oracle
+# that counted them would attribute every read-only session's dirt to itself.
+mk_tx_writes() { # $1..=absolute paths this session wrote
+  local out="$BATS_TEST_TMPDIR/txw-${BATS_TEST_NUMBER}.jsonl"
+  python3 - "$out" "$@" <<'PYEOF'
+import json, sys
+out, paths = sys.argv[1], sys.argv[2:]
+rows = [{"type": "user", "message": {"content": "make the change"}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Read", "input": {"file_path": "/some/read/only.ts"}},
+            {"type": "tool_use", "name": "Bash", "input": {"command": "git log --oneline"}}]}}]
+for p in paths:
+    rows.append({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Edit", "input": {"file_path": p}}]}})
+open(out, "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+PYEOF
+  printf '%s' "$out"; }
 drive() { printf '{"session_id":"%s","transcript_path":"%s"}' "$1" "${2:-}" | bash "$HOOK"; }
 fired() { echo "$1" | grep -q '"decision":"block"'; }
 
@@ -132,12 +150,15 @@ fired() { echo "$1" | grep -q '"decision":"block"'; }
   run drive b4
   [ "$status" -eq 0 ]; [ -z "$output" ]
 }
+# NOTE (2026-09-08): drive() with no transcript_path is the UNATTRIBUTABLE case — session_dirty_mine
+# returns rc 2 (cannot tell), which keeps the old absolute veto. These three cases therefore still
+# assert silence, and now pin the reason that produced it.
 @test "safety unchanged when early: dirty tree abstains even with a hot forecast" {
   mk_btel b5 60; mk_bhist b5 50 60 300
   echo dirt >> "$WD/f.txt"
   run drive b5
   [ "$status" -eq 0 ]; [ -z "$output" ]
-  grep -q '"reason":"dirty-tree"' "$CC_IDL"
+  grep -q '"reason":"dirty-tree:unattributable"' "$CC_IDL"
 }
 # REVERSED 2026-08-11. This test used to assert `gate-not-green ⇒ abstain` under the heading "safety
 # unchanged". That was never safety: gate-green can only be advanced by the background postland-verify
@@ -181,7 +202,7 @@ fired() { echo "$1" | grep -q '"decision":"block"'; }
   mk_btel b6c 75
   run drive b6c
   [ "$status" -eq 0 ]; [ -z "$output" ]
-  grep -q '"reason":"dirty-tree"' "$CC_IDL"
+  grep -q '"reason":"dirty-tree:unattributable"' "$CC_IDL"
 }
 @test "safety unchanged: stale telemetry abstains" {
   mk_btel b7 75 "$(( $(date +%s) - 100000 ))"
@@ -350,7 +371,9 @@ mk_ps_rss() { # $1=rss_kb → `ps` stub (right-aligned, as real ps emits) for a 
   mk_btel s6 40
   run drive s6 "$(mk_tx_size 1)"
   [ "$status" -eq 0 ]; [ -z "$output" ]
-  grep -q '"reason":"dirty-tree"' "$CC_IDL"
+  # A pad of 'p' bytes is not parseable jsonl ⇒ the oracle answers rc 2, so this stays the absolute
+  # veto. The size axis bypassing an ATTRIBUTED dirty tree has its own case below.
+  grep -q '"reason":"dirty-tree:unattributable"' "$CC_IDL"
   git -C "$WD" checkout -- . 2>/dev/null; rm -f "$WD/dirty.txt"
   # Second half REVERSED with the gate-green demotion: a stale marker no longer suppresses the size
   # advisory. The dirty-tree half above is the gate that genuinely protects a handoff and still binds;
@@ -596,4 +619,67 @@ mk_btel_tok() { # $1=sid $2=used_pct $3=input_tokens — the fill and the occupa
   # Diagnosability, same contract as the size axis at 0: a disabled arm records the reading it
   # declined to act on, so "never fired" and "never measured" stay distinguishable.
   tail -1 "$CC_IDL" | jq -e 'select(.disposition=="abstained") | .tok_k==900 and .tok_k_t==0' >/dev/null
+}
+
+# ── THE DIRTY TERM IS ATTRIBUTED (2026-09-08, backlog 8945d8e750ba) ───────────────────────────────
+# `[ -z "$(git status --porcelain)" ] || abstain "dirty-tree"` vetoed on a fact about somebody else,
+# in a checkout that is shared by construction. Measured over the IDL: the occupancy arm voted to
+# fire on ALL 52 dirty-tree abstains, and session c25160c2 was vetoed 10 consecutive times from 744k
+# to 913k tokens over 3h58m by 22 untracked files 11 days older than the session — a tree
+# completion-assert exonerated two seconds later through the same `session_dirty_mine` oracle.
+# Three verdicts, three dispositions, and only the middle one changed.
+
+@test "dirty: dirt this session did NOT write no longer vetoes — it fires and REPORTS" {
+  echo "someone else's file" > "$WD/theirs.txt"          # untracked, and not in the transcript
+  mk_btel d1 75
+  run drive d1 "$(mk_tx_writes "$WD/f.txt")"             # this session wrote f.txt — which is CLEAN
+  [ "$status" -eq 0 ]
+  fired "$output"                                        # PRE-FIX: silent (abstain "dirty-tree")
+  echo "$output" | grep -q 'nothing in it was written by this session'
+  tail -1 "$CC_IDL" | jq -e 'select(.reason=="past-boundary") | .dirty=="not-mine"' >/dev/null
+}
+
+@test "dirty: work THIS session left uncommitted still vetoes — the protective half is intact" {
+  echo mine >> "$WD/f.txt"                               # dirty AND in the transcript
+  mk_btel d2 75
+  run drive d2 "$(mk_tx_writes "$WD/f.txt")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"dirty-tree:mine"' "$CC_IDL"
+}
+
+@test "dirty: an UNREADABLE transcript keeps the old absolute veto — a miss is not an absence" {
+  echo dirt > "$WD/theirs.txt"
+  mk_btel d3 75
+  run drive d3 "$BATS_TEST_TMPDIR/no-such-transcript.jsonl"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  grep -q '"reason":"dirty-tree:unattributable"' "$CC_IDL"
+}
+
+@test "dirty: a session that wrote NOTHING is never convicted of a sibling's dirt" {
+  echo dirt > "$WD/theirs.txt"
+  mk_btel d4 75
+  run drive d4 "$(mk_tx_writes)"                         # read-only session: rc 1, nothing is mine
+  [ "$status" -eq 0 ]; fired "$output"
+  tail -1 "$CC_IDL" | jq -e 'select(.reason=="past-boundary") | .dirty=="not-mine"' >/dev/null
+}
+
+@test "dirty: the report is silent on a CLEAN tree — a note at every fire carries no bits" {
+  mk_btel d5 75
+  run drive d5 "$(mk_tx_writes "$WD/f.txt")"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -qv 'written by this session'
+  tail -1 "$CC_IDL" | jq -e 'select(.reason=="past-boundary") | .dirty=="clean"' >/dev/null
+}
+
+@test "dirty: the SIZE axis fires over not-mine dirt too — one gate, not a per-axis copy" {
+  export CC_BOUNDARY_SIZE_MB=1
+  echo dirt > "$WD/theirs.txt"
+  local tx="$BATS_TEST_TMPDIR/txbig-attr.jsonl"
+  mk_tx_writes "$WD/f.txt" >/dev/null                    # a real, parseable transcript…
+  cat "$BATS_TEST_TMPDIR/txw-${BATS_TEST_NUMBER}.jsonl" > "$tx"
+  head -c 1048576 /dev/zero | tr '\0' ' ' >> "$tx"      # …padded past 1MiB with TRAILING blanks,
+  mk_btel s7 40                                          #    which jq's `inputs` skips
+  run drive s7 "$tx"
+  [ "$status" -eq 0 ]; fired "$output"
+  tail -1 "$CC_IDL" | jq -e 'select(.reason=="past-boundary") | .axis=="size" and .dirty=="not-mine"' >/dev/null
 }
