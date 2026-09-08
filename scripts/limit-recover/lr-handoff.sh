@@ -112,6 +112,36 @@ lrh_kitty() { # bounded `kitty @ …` — socket seam kept out of the call sites
   else lrh_bounded "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" @ "$@"; fi
 }
 
+# THE WINDOW IS NOT THE RESUME (measured 2026-09-08, on a real two-session limit recovery).
+# `kitty @ launch` exits 0 and prints the new id the moment the WINDOW exists — which is before the
+# launcher has run a single line. A launcher that then dies on its own gate leaves this file
+# announcing "fired split pane" / "fired new kitty window" over a window that closed a second later:
+# that day BOTH fires reported success, both windows were gone, neither resume ever started, and the
+# only trace was two consumed kitty ids. (The killer was capacity-admit refusing the resume with
+# exit 9 — a loaded machine is exactly the state a limit recovery runs in, so this is the common
+# case, not the exotic one.) The iTerm2 arms only ever claim a fire they VERIFIED via
+# osa_type_verified; the kitty arms claimed the launch instead. This closes that asymmetry.
+#
+# rc 0 = the window is alive, OR the listing cannot discriminate; rc 1 = a USABLE listing that does
+# not carry the id. Two indeterminate readings are deliberately treated as alive, matching the
+# census suite's property 1 (INDETERMINATE ≠ ZERO — a zero lets a caller act on a live fleet):
+# an unreadable/empty `kitty @ ls`, and a listing carrying no window ids at all (impossible for a
+# live kitty, therefore an instrument fault rather than evidence of death).
+# Seam: LRH_KITTY_SETTLE_S (seconds to wait before reading; 0 = read immediately, for tests).
+lrh_kitty_window_alive() {
+  local _id="$1" _ls _ids _seen
+  [ -n "$_id" ] || return 0
+  [ "${LRH_KITTY_SETTLE_S:-4}" = 0 ] || sleep "${LRH_KITTY_SETTLE_S:-4}"
+  _ls="$(lrh_kitty ls 2>/dev/null || true)"
+  [ -n "$_ls" ] || return 0
+  # grep -c, never -q: under `set -o pipefail` a -q exits on the first match, SIGPIPEs its producer,
+  # and the pipeline then reports FAILURE over the very input it matched.
+  _ids="$(printf '%s' "$_ls" | grep -Ec '"id"[[:space:]]*:[[:space:]]*[0-9]+' || true)"
+  [ "${_ids:-0}" -gt 0 ] || return 0
+  _seen="$(printf '%s' "$_ls" | grep -Ec "\"id\"[[:space:]]*:[[:space:]]*${_id}([^0-9]|\$)" || true)"
+  [ "${_seen:-0}" -gt 0 ]
+}
+
 
 LR="$HOME/.claude/scripts/limit-recover"
 TARGET="auto" MODEL="opus" EFFORT="" SID="${CLAUDE_CODE_SESSION_ID:-}" CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -457,7 +487,16 @@ if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
            # --close-source refuses instead of closing blind.
            KID="$(printf '%s' "$KID" | tr -d '[:space:]')"
            case "$KID" in ''|*[!0-9]*) ;; *) NEW_PANE="$KID" ;; esac
-           command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn split kitty "" "${PWD:-}" "lr-handoff vsplit anchor:$OWN_PANE"
+           # A window that did not survive its launcher is not a fire — see lrh_kitty_window_alive.
+           if [ -n "$NEW_PANE" ] && ! lrh_kitty_window_alive "$NEW_PANE"; then
+             echo "lr-handoff: the kitty split window ($NEW_PANE) did not survive the launch — the launcher exited before the resume engaged; not claiming a fire" >&2
+             FIRED=""; NEW_PANE=""
+           fi
+           # `|| true`: this is the LAST command of the arm, and under `set -e` a false && -list
+           # here would exit the script — which is now REACHABLE, because a demoted fire makes the
+           # first test false on purpose.
+           { [ -n "$FIRED" ] && command -v cc_log_pane_spawn >/dev/null 2>&1 \
+             && cc_log_pane_spawn split kitty "" "${PWD:-}" "lr-handoff vsplit anchor:$OWN_PANE"; } || true
          fi ;;
     esac
   elif [[ -n "${ITERM_SESSION_ID:-}" ]]; then
@@ -512,10 +551,18 @@ OSA
     if KID="$(lrh_kitty launch --type=os-window --cwd=current -- /bin/bash "$LAUNCHER" 2>/dev/null)"; then
       KID="$(printf '%s' "$KID" | tr -d '[:space:]')"
       case "$KID" in ''|*[!0-9]*) ;; *) NEW_PANE="$KID" ;; esac
+      # Same survival test as the split arm — and note the announcement below used to run
+      # UNCONDITIONALLY, so this arm printed "fired new kitty window" even on the line right after
+      # its own "kitty launch failed".
+      if lrh_kitty_window_alive "${NEW_PANE:-}"; then
+        echo "lr-handoff: no invoking pane / split failed — fired new kitty window on '$TARGET' (manual fallback: $_LRH_FB)" >&2
+      else
+        echo "lr-handoff: the new kitty window (${NEW_PANE:-?}) did not survive the launch — $_LRH_FB" >&2
+        NEW_PANE=""
+      fi
     else
       echo "lr-handoff: kitty launch failed — $_LRH_FB" >&2
     fi
-    echo "lr-handoff: no invoking pane / split failed — fired new kitty window on '$TARGET' (manual fallback: $_LRH_FB)" >&2
   else
     command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn window iterm2 "" "${PWD:-}" "lr-handoff fallback create-window"
     # CREATE ONLY, then type through osa_type_verified (same reason as the split arm above).
