@@ -82,6 +82,60 @@ worktree), goal re-armed from this file's frozen scope.
 - **Capacity:** 50 `claude` processes, load 15.9/21.4/22.7, 14 d uptime; `claude-accounts --rank general`
   routes to `next` (all four accounts at ~0 pressure).
 
+### Lead probes while W0 ran (2026-09-08, 22:05–22:20Z)
+
+- **Headless `-p` sessions DO get the Workflow tool** (measured: `claude -p 'list your tools'` on
+  `.claude-secondary` returned Agent, Bash, Edit, ListAgents, Read, ReportFindings, ScheduleWakeup, Skill,
+  ToolSearch, **Workflow**, Write). A dispatched research lane can therefore fan out with Dynamic
+  Workflows (A06's open question, answered). A model self-report is a weak instrument for *deferred*
+  tools — the same probe with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` did not list `TaskCreate`, while A03's
+  schema-level A/B did; trust the schema, not the answer.
+- **All five config dirs register the identical 12-hook Stop chain** (`~/.claude`, `-next`, `-secondary`,
+  `-tertiary`, `-quaternary`; none missing any of the seven enforcement hooks). Registration parity is
+  NOT the 901-vs-469 coverage gap.
+- **The coverage gap is per-session, and mostly the 2.1.220 survivors.** Today (14 h window): 66
+  sessions produced 738 closes; 17 sessions with 127 closes wrote **zero** anti-deference records, and
+  **104 of those 127 closes are on binary 2.1.220** (backlog `76c714390f4d` — 4 live `.claude-220`
+  processes, 4–13 days old). Per account: primary 176 closes / 169 records, secondary 136 / 32,
+  tertiary 200 / 127, quaternary 222 / 175. W0 A01 (f) owns the remainder.
+- **Side-defect found by the probe itself:** a headless `-p` child launched from a pane inherits
+  `KITTY_WINDOW_ID`/`ITERM_SESSION_ID`, so its SessionStart/SessionEnd hooks armed and then SIGTERM'd a
+  watcher keyed on the PARENT pane (615) and paged the desk with `WAKE-PATH-DOWN`. Probes should run with
+  `env -u KITTY_WINDOW_ID -u ITERM_SESSION_ID`; the hooks should refuse pane identity under `-p`.
+- **Shared-store concurrency is safe, and the flag works end-to-end headless** (measured 22:12Z): two
+  concurrent `claude -p` sessions with `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` and the same
+  `CLAUDE_CODE_TASK_LIST_ID` each created three tasks; the list ended with ids 1–6, six distinct
+  subjects (A got 2,5,6; B got 1,3,4), nothing lost or overwritten. A03's open question is closed:
+  the `<N>.json` allocator is atomic across processes. Backlog `ebe84950e98a`'s premise ("a --print
+  probe is blind to this axis") is refuted twice over.
+- **W0 at 9/12 — three verdicts that overturn the lead's own hypotheses (22:25Z):** (A01) Stop hooks ARE
+  killed at scale — 4,839 timeouts in 30 d, `operator-readout` on 24.2% of 11,871 closes,
+  `completion-assert` on 11.6% — but the kill rate is flat-to-declining in transcript size (zero above
+  32 MB), so the tail-read fix the lead planned would have moved none of them; the binding cost is
+  `scripts/wrap-ledger.sh` (14.3 s uncached in claude-infrastructure, 12.5–12.8 s in reso and
+  sevenrooms, 3 s in a leaf worktree), and inside it `hooks/lib/dod-path.sh::dod_lineage_ancestors`
+  re-reads `lineage.tsv` once per BFS level (5,352 read iterations over 445 rows, twice per call).
+  (A04) `/goal` is not a drive lever: 434 of 641 goals in 30 d (67.7%) were armed and never evaluated
+  once, unchanged across the binary bump; the median goal that reached `met` blocked zero stops; there
+  is no CLI/env arm, so auto-arming from the DoD is impossible; the 375 `goal-unreadable` abstains are a
+  labelling bug (grep-under-pipefail: 47 of 48 such sessions contain no `goal_status` at all).
+  `session-continue` is the primary drive lever and CLAUDE.md should say so. (A09, adversarial) the
+  largest idle channel is the permission freeze — 84.2 session-hours frozen in a 13.7 h window across
+  22 sessions, 15 of which never reached a Stop, so every Stop-keyed arm is blind by construction; a
+  detector exists (`cc-permission-beacon`) and no actuator; 0 of 339 allow rules can express a shell
+  operator, and 21 of 22 frozen commands were ordinary compound scripts. Second: the mechanical 🔧 arm
+  armed on 2 of 672 evaluations because `session-writes.sh` is blind to Bash-mediated edits, and 48% of
+  today's repo-writing sessions wrote ONLY through Bash (the auto-mode instruction tells them to).
+- **W0 mid-flight (6/12 axes journaled):** the six agree that ~83% of the idle-with-work leak is a
+  shape no phrase matcher sees (clean ledger, a stated finding, a named fix, then a stop — A02:
+  ~890 idle closes / 30 d leave drivable work, ~80% of that volume in dispatched/teammate sessions whose
+  findings never reach a store); the conviction gate landed today is unreachable over 219/220 blocked
+  rows because the `needs` door files rows already-blocked with no class (A06); the kill switch is fired
+  by MACHINE-authored briefs 26/29 times (A08) and by `and stop <more words>` 50% of the time (A07);
+  permission prompts hold ~6.3 sessions blocked at any moment and 43.7% of blocking commands are
+  unreachable by any allow rule (A05); the Task-tool flag works through `settings.json` `env` and the
+  `tasks/` store is already ONE directory for all five accounts (A03).
+
 ## W0 — the research decomposition (fired 2026-09-08T21:45Z as Workflow `wf_928fd862-9aa`)
 
 | # | axis | question in one line | delivery |
