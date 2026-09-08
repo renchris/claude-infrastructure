@@ -333,6 +333,38 @@ reap_abandoned_land_sandbox() {
   return 0
 }
 
+# reap_orphan_land_sandboxes <repo> [wtroot]
+#   The PROACTIVE half of the reaper above, and the reason it is a second entry point rather than a
+#   loop around the same call: reap_abandoned_land_sandbox is only ever REACHED through
+#   worktree_holding(), i.e. when a fetch is refused because a worktree still holds the branch. That
+#   population is `git worktree list`, and it misses the debris two ways at once.
+#
+#   MEASURED ON THE LIVE BOX 2026-09-07 (backlog de4f1c0135bb, filed at 6 and grown since): 22
+#   `/private/tmp/.desk-land-claude-fire-*` directories present, ALL 22 with a dead creator pid.
+#   Only 11 were still registered worktrees; the other 11 had lost their git admin entry (a `git
+#   worktree prune` anywhere reaps the entry, never the directory) and are therefore invisible to
+#   every path that walks the worktree list — a lookup over the wrong population, where a MISS reads
+#   as absence (memory: lookup-miss-is-not-absence). And of the 11 that WERE registered, only one
+#   holding a branch some later fetch happens to collide with is ever reached at all: a sandbox
+#   whose branch nobody re-fetches is never even asked about.
+#
+#   So the population here is the DIRECTORY glob, which is total by construction over the shape
+#   desk-land actually creates. The OWNERSHIP predicate is not re-implemented — every candidate is
+#   handed to reap_abandoned_land_sandbox, which owns the "name is ours / trailing pid parses / that
+#   pid is dead" rule and its deliberate abstentions. This function only widens WHO gets asked.
+#
+#   → echoes the number reaped (0 is the normal steady state)
+reap_orphan_land_sandboxes() {
+  local repo="$1" wtroot="${2:-${DESK_LAND_WTROOT:-/private/tmp}}" d n=0
+  [ -d "$wtroot" ] || { printf '0'; return 0; }
+  for d in "$wtroot"/.desk-land-*; do
+    [ -d "$d" ] || continue                # an unmatched glob expands to itself
+    reap_abandoned_land_sandbox "$repo" "$d" && n=$((n + 1))
+  done
+  printf '%s' "$n"
+  return 0
+}
+
 FETCH_DETAIL=""
 fetch_branch() {  # <repo> <branch> → 0 ok (FETCH_DETAIL non-empty ⇒ healed) · 1 refused · 2 cannot
   local repo="$1" b="$2" wt reaped
@@ -848,6 +880,14 @@ EOF
 # Smallest diff first — the repo's merge-back ordering rule (CLAUDE.md § Concurrent Sessions):
 # the cheapest land goes first so a big, conflict-prone one cannot hold the queue.
 ORDER="$(printf '%s' "$SIZED" | sed '/^$/d' | sort -n -k1,1)"
+
+# THE SWEEP RUNS BEFORE THE BRANCHES, not as a side effect of one colliding. Debris here does not
+# only waste disk: a registered sandbox holds its branch CHECKED OUT, which is what turned a
+# refused fetch into 34 rc-65 `land-refused` rows across 4 branches (see reap_abandoned_land_sandbox).
+# Clearing it up front means the loop below meets a tree with no ownerless holders in it.
+_orphans_reaped="$(reap_orphan_land_sandboxes "$REPO")"
+[ "${_orphans_reaped:-0}" = 0 ] \
+  || echo "→ cloud-reconcile: reaped $_orphans_reaped ownerless desk-land sandbox(es) (creator pid dead)." >&2
 
 LANDED_N=0
 while IFS= read -r row || [ -n "$row" ]; do
