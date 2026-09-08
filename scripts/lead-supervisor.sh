@@ -114,6 +114,25 @@ REGISTRY_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
 PERMPEND_DIR="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}"   # MUST match the hook's default + seam
 PERMPEND_NOTICE_S="${CC_PERMPEND_NOTICE_S:-120}"      # page a prompt pending ≥ this (auto-approved tools clear in ms ⇒ no false page)
 PERMPEND_HORIZON_S="${CC_PERMPEND_HORIZON_S:-86400}"  # reap an orphaned beacon past this (hard-kill w/o SessionEnd + no telemetry)
+# ── ESCALATION LADDER (item 6a5a218fd9a8) ────────────────────────────────────────────────────────
+# page_permpend damps to ONE notify per pending EPISODE, keyed on the beacon ts — and the beacon ts of
+# a single prompt NEVER CHANGES. So before this, a prompt pending 2 minutes and one pending 9 hours
+# produced the IDENTICAL operator-facing signal: one notify at the notice threshold, then silence until
+# the 24h horizon silently reaped it. Measured on this box 2026-09-07/08, one IDL epoch: three sessions
+# sat at a permission prompt for 9.0h, 8.8h and 8.0h, emitting 775 / 741 / 724 permission_pending IDL
+# records apiece — and exactly ONE composer notify each. The beacon was read, the row was written, the
+# board could render it, and nothing ever said it again. That is the "observable-in-principle,
+# silent-in-fact" class the filing named; the consumer was never missing, its LADDER was.
+#
+# The ladder DOUBLES rather than repeats: escalate at ESCALATE_S, then 2x, 4x, 8x of the pending age.
+# A fixed repeat over a 9h wedge is ~18 pages of the same fact (an alarm that always fires says as
+# little as one that cannot — memory alarm-polarity-and-attention-budget); a doubling ladder is ~5, and
+# each rung carries strictly more information than the last because the age it reports has doubled.
+# FIRED_DIR (the dispatched-ness store) is NOT redeclared here — it already exists below under
+# cc-reaper's seam name, whose own comment says never to fork the constant.
+PERMPEND_ESCALATE_S="${CC_PERMPEND_ESCALATE_S:-1800}"                    # DISPATCHED: first rung, then each doubling
+PERMPEND_ESCALATE_ATTENDED_S="${CC_PERMPEND_ESCALATE_ATTENDED_S:-7200}"  # not-provably-dispatched: same ladder, later first rung
+OI_LIB="${CC_ORIGIN_IDENTITY_LIB:-$HOME/.claude/hooks/lib/origin-identity.sh}"   # the dispatched-ness oracle
 # ── L2-c wait-contract watchdog (desk-audit G-P4-2, open since 2026-07-18) ──
 # `wait-contract-lint.sh --sweep` is the ONE organ that enforces a wait contract INDEPENDENT of the
 # waiter's own liveness — a DISK scan with {pid,start-time} identity, so a recycled pid cannot fake a
@@ -488,18 +507,82 @@ void_page(){ rm -f "$PAGEDIR/$1.page" 2>/dev/null || true; }
 # ── PERMISSION-PENDING page — a SEPARATE namespace (.permpend.*) from the telemetry-liveness pages so
 #    assess()'s clear_page (fired every sweep for a below-threshold session) can NEVER clobber it. A
 #    prompt-blocked session has stale telemetry, so assess would otherwise clear a permpend page. ──
-page_permpend(){ # $1=sid $2=cmd $3=beacon_ts $4=age_s
+# ── DISPATCHED-NESS, and why it may only ever move a THRESHOLD — never silence a rung ──
+# The filing asked for this keyed on DISPATCHED-ness rather than on the modal, and the reason is sound:
+# a modal is NORMAL for an operator-attended pane, so a 2-minute prompt there is not an incident
+# (memory alarm-polarity-and-attention-budget). But the ORACLE'S FAILURE MODE decides the design.
+# origin-identity.sh states it against itself: a stamp lookup MISSES on a renumbered pane, and reading a
+# miss as "never fired" is "the strongest possible wrong answer". Two live confirmations, both measured
+# on this box 2026-09-08: cc-fired/by-cwd can hold a DANGLING pointer (the .worktrees/drain/lane-infra
+# entry names pane 299, whose stamp file is already GC'd) and a long-lived dispatch lane outlives its
+# stamp by design. If dispatched-ness GATED escalation, every such miss would convert a wedged
+# dispatched session into permanent silence — manufacturing the exact loss this ladder ends (memory
+# gate-default-decides-failure-direction: the reader's default picks the failure direction).
+#
+# So the classification picks WHICH RUNG COMES FIRST and nothing else:
+#   dispatched (a fired-peer pointer resolves for this cwd) => first rung at PERMPEND_ESCALATE_S          (30m)
+#   unproven   (no pointer, no index, no jq, no cwd)        => first rung at PERMPEND_ESCALATE_ATTENDED_S (2h)
+# BOTH escalate, and both keep doubling. A dispatched session misclassified as unproven is DEGRADED by
+# 90 minutes, never silenced — the only direction in which this check is allowed to be wrong. That is
+# also why a stronger second oracle (a handoff marker read out of the session's own transcript) is
+# deliberately NOT added here: with escalation ungated it could only buy latency, and it would put an
+# unbounded per-sweep transcript read inside a 45s daemon loop. Named as the residual, not built.
+#
+# The oracle is SOURCED, not reimplemented: _fired_cwd_key's normalisation (resolve + sha256) is the
+# whole contract, and a second copy here would be a second answer to one question (memory
+# make-the-actuator-the-arbiter). Sourced at most once per process; the lib is pure function
+# definitions (verified: no top-level statements, no traps, no name collisions with this file), and an
+# unreadable lib simply leaves the function undefined so every caller answers `unproven` — the safe rung.
+_OI_SOURCED=0
+permpend_dispatched(){ # $1=cwd -> prints "dispatched" | "unproven"
+  local cwd="${1:-}" pane=""
+  [ -n "$cwd" ] || { printf 'unproven'; return 0; }
+  if [ "$_OI_SOURCED" = 0 ]; then
+    _OI_SOURCED=1
+    # shellcheck disable=SC1090
+    [ -r "$OI_LIB" ] && . "$OI_LIB" 2>/dev/null || true
+  fi
+  command -v read_fired_cwd_index >/dev/null 2>&1 || { printf 'unproven'; return 0; }
+  pane="$(read_fired_cwd_index "$FIRED_DIR" "$cwd" 2>/dev/null || true)"
+  [ -n "$pane" ] && printf 'dispatched' || printf 'unproven'
+}
+
+page_permpend(){ # $1=sid $2=cmd $3=beacon_ts $4=age_s $5=cwd
   _ensure
-  local sid="$1" cmd="$2" ts="$3" age="$4" nf="$PAGEDIR/$1.permpend.notified"
+  local sid="$1" cmd="$2" ts="$3" age="$4" cwd="${5:-}" nf="$PAGEDIR/$1.permpend.notified"
   idl permission_pending "\"sid\":\"$sid\",\"since\":$ts,\"age_s\":$age,\"cmd\":$(json_str "$cmd")"
-  # Composer damping: ONE notify per PENDING EPISODE (keyed by the beacon ts). A NEW prompt (new ts)
-  # re-notifies; the SAME prompt across sweeps stays quiet. clear_permpend resets on resolution.
-  local last; last="$(cat "$nf" 2>/dev/null || true)"
-  [ "$last" = "$ts" ] && return 0
-  # D7 fingerprint = the EPISODE (sid + beacon ts): a new prompt is a new ts ⇒ new fingerprint ⇒ sends.
-  # ${age} is excluded — it grows every sweep and would defeat damping while looking wired.
-  if send_page "⛔ PERMISSION-PENDING — session $sid blocked ${age}s on a permission prompt: ${cmd} (since $(fmt_since "$ts")). Nothing in-session can answer; operator/live-session must approve or deny." "permpend:$sid:$ts"; then
-    printf '%s\n' "$ts" > "$nf"                             # recorded only on a CONFIRMED enqueue (send_page rc 0)
+
+  # Marker format: "<ts> <next_rung_s>". A marker written by the PRE-LADDER build holds the bare ts and
+  # no rung — read as "notified, rung not yet armed", which ARMS the first rung below rather than
+  # replaying the notice. An in-flight upgrade therefore costs at most one extra sweep of latency,
+  # never a lost page and never a duplicate notice.
+  local last_ts="" next_rung="" first_rung cls
+  read -r last_ts next_rung < "$nf" 2>/dev/null || true
+  case "${next_rung:-}" in ''|*[!0-9]*) next_rung="" ;; esac
+
+  cls="$(permpend_dispatched "$cwd")"
+  if [ "$cls" = dispatched ]; then first_rung="$PERMPEND_ESCALATE_S"; else first_rung="$PERMPEND_ESCALATE_ATTENDED_S"; fi
+  case "$first_rung" in ''|*[!0-9]*) first_rung=1800 ;; esac
+
+  # ── NOTICE (rung 0) — first sighting of this episode. Behaviour unchanged from the pre-ladder build. ──
+  if [ "$last_ts" != "$ts" ]; then
+    # D7 fingerprint = the EPISODE (sid + beacon ts): a new prompt is a new ts ⇒ new fingerprint ⇒ sends.
+    # ${age} is excluded — it grows every sweep and would defeat damping while looking wired.
+    if send_page "⛔ PERMISSION-PENDING — session $sid blocked ${age}s on a permission prompt: ${cmd} (since $(fmt_since "$ts")). Nothing in-session can answer; operator/live-session must approve or deny." "permpend:$sid:$ts"; then
+      printf '%s %s\n' "$ts" "$first_rung" > "$nf"          # recorded only on a CONFIRMED enqueue (send_page rc 0)
+    fi
+    return 0
+  fi
+
+  # ── ESCALATION rungs — the SAME episode, still pending, now past its next rung. ──
+  [ -n "$next_rung" ] || { printf '%s %s\n' "$ts" "$first_rung" > "$nf" 2>/dev/null || true; return 0; }
+  [ "$age" -ge "$next_rung" ] 2>/dev/null || return 0
+  local advanced=$(( next_rung * 2 ))
+  idl permission_pending_escalate "\"sid\":\"$sid\",\"since\":$ts,\"age_s\":$age,\"rung_s\":$next_rung,\"class\":\"$cls\",\"next_rung_s\":$advanced,\"cmd\":$(json_str "$cmd")"
+  # The fingerprint carries the RUNG, so each rung is a DISTINCT state to the damper — the same episode
+  # can speak again without the notice-level fingerprint suppressing it.
+  if send_page "⛔ PERMISSION-PENDING ESCALATED — session $sid has been blocked $(( age / 60 ))m on a permission prompt (${cls}): ${cmd} (since $(fmt_since "$ts")). Nothing in-session can answer; this will not clear itself." "permpend-esc:$sid:$ts:$next_rung"; then
+    printf '%s %s\n' "$ts" "$advanced" > "$nf"
   fi
 }
 clear_permpend(){ rm -f "$PAGEDIR/$1.permpend.notified" 2>/dev/null || true; }
@@ -804,7 +887,7 @@ beacon_cmd(){ # $1=beacon-file → single-line, ≤160 chars
 #    supervisor CANNOT see, a permission prompt leaves a durable beacon it CAN read → a precise,
 #    command-attached page (minutes-latency) instead of a slow detail-free STALL?/MODAL. ──
 sweep_permission_pending(){ # prints the number of PERMISSION-PENDING pages produced this sweep
-  local dir="$PERMPEND_DIR" found=0 bf sid ts age tel pid cmd
+  local dir="$PERMPEND_DIR" found=0 bf sid ts age tel pid cmd bcwd
   [ -d "$dir" ] || { echo 0; return; }
   for bf in "$dir"/*.json; do
     [ -e "$bf" ] || continue
@@ -828,7 +911,8 @@ sweep_permission_pending(){ # prints the number of PERMISSION-PENDING pages prod
     # PAGE — genuinely pending past the notice threshold.
     if [ "$age" -ge "$PERMPEND_NOTICE_S" ]; then
       cmd="$(beacon_cmd "$bf")"
-      page_permpend "$sid" "$cmd" "$ts" "$age"
+      bcwd="$(jq -r '.cwd // empty' "$bf" 2>/dev/null || true)"   # the ladder's dispatched-ness key
+      page_permpend "$sid" "$cmd" "$ts" "$age" "$bcwd"
       found=$((found+1))
     fi
   done
