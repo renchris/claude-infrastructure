@@ -87,6 +87,75 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-08 — item `e3aed0f34f3e` (`tools/blender/clawd_bmo.py`): THE CURE IS LANDED, AND THE
+  CORRECTION THE ROW ASKED FOR ALREADY EXISTED HERE SINCE #153. closed 1 / filed 0 / landed 1
+  commit `9580d47ca`.** The row's own last sentence asked that its correction be appended to this
+  section under #100. **It was — on 2026-08-22 by recycle #153, seventeen days before I was
+  dispatched to write it.** #153 re-derived the census with three agreeing instruments and found the
+  file reachable from **eight** named branch refs, not zero, and explicitly kept the row OPEN because
+  the ask (*"cheap permanent fix: land the file"*) survived the refutation intact. So the deliverable
+  here was never the correction; it was the **unperformed cure**, which is now on trunk.
+
+  🚨 **THE ZSH FALSE ZERO REPRODUCED A THIRD TIME, IN MY HANDS, ON THE SAME FILE — and #153's own
+  write-up predicted it in advance.** My first census was an inline Bash-tool call (**which is zsh**)
+  and printed `branch refs: 2902 / carrying: 0 / control README.md: 2902` — a right-looking
+  denominator, a live control, and a false TARGET. The mechanism is exact and worth stating once
+  more because it explains why the control could not catch it: in `"$r:tools/blender/clawd_bmo.py"`
+  zsh applies the **`:t` (tail) modifier** to `$r` and leaves the literal `ools/...`, so every probe
+  asks for a path that cannot exist. **`README.md` is immune for a reason that has nothing to do with
+  being a control** — `:R` is not a zsh modifier, only lowercase `:r` is, so the control arm was
+  structurally incapable of failing the way the target arm did. That is the defect exactly: *a
+  control must share the property under test.* Re-run from a `#!/bin/bash` file with
+  `tools/banner/recycle.py` as a second control — a lowercase-`t` path that CAN be mangled — the same
+  loop reads **TARGET=8**, the same eight carriers #153 named, `CONTROL(tools/banner/recycle.py)=2145`,
+  `CONTROL(README.md)=2469`. **The two controls disagreeing by 324 is the finding**; a single
+  uppercase control agreeing with itself is not a measurement. (memory:
+  `verification-harness-vacuous-pass-traps`, `positive-control-the-denominator`,
+  `interactive-grep-is-ugrep-not-usr-bin-grep`.)
+
+  🚨 **THE NEW LINT — WHICH BYTES TO LAND WAS AN OPEN QUESTION NOBODY HAD ASKED, AND THE OBVIOUS
+  ANSWER (newest mtime) IS THE WRONG ONE.** #153 established *that* eight branches carry the path; it
+  did not establish *what* they carry. Two blobs exist anywhere in this repo, and the file on disk
+  with the latest mtime is the older content:
+
+  | blob | bytes | first seen in any ref | capability | branch refs carrying it | disk copies |
+  |---|---|---|---|---|---|
+  | `a4d7299bc36c` | 43,278 | 2026-07-31T21:50 | stills **and `--orbit`** | **8 of 8** | 15 |
+  | `52ddcc75bb57` | 39,129 | 2026-07-31T18:55 | stills only | **0 of 8** | 16 (newest mtime) |
+
+  **A worktree file's mtime is when it was COPIED INTO that worktree, not when its bytes were
+  written**, so 16 stale worktrees re-froze the pre-orbit version with an 2026-08-08 stamp while the
+  orbit version's copies still read 2026-08-01. Sorting the 31 disk copies by mtime therefore inverts
+  the real chronology and elects the loser. Three independent instruments agree against it: the
+  checkpoint-ref blob chronology (orbit ADDED at 21:50, three hours after 18:55), the branch census
+  (**8-0**), and the content itself (**115 deletions to 8 additions**, the deletions being the entire
+  orbit renderer — `orbit_angle`, `assert_orbit_loop_closes`, `place_orbit_camera`, `render_orbit`
+  and the `--orbit` flag; the 8 additions are only `_configure_render` being inlined back). **The
+  value argument is decisive on its own and needs no chronology at all:** trunk already carries
+  `assets/demo/clawd-bmo-orbit.mp4` (landed 2026-08-16, `1e040c79c`) and
+  `git grep -l -i orbit origin/main -- tools/ scripts/` returns **nothing**, so landing `52ddcc75`
+  would have left a landed asset with no producer while reading as a completed close. **Generalise
+  it: when two copies of an untracked file disagree, rank them by what a REF says, never by what the
+  filesystem says — and if the artifact has already-landed OUTPUTS, ask which candidate can
+  regenerate them.**
+
+  ⚠️ **What recycle #100 got right, restated so it stops being re-litigated.** #100 closed
+  `2228b5bf8477` partly on *"reachable from 8 named branches"*; the row `e3aed0f34f3e` called that
+  refuted by measurement. **#100's number was correct and the refutation was the artifact of a zsh
+  loop.** The row's independent value argument also stands: this is a scene SCRIPT, so loss costs a
+  re-write rather than a re-render — which is exactly why landing it is cheap and permanent, and why
+  it should not have waited eighteen days behind a census dispute.
+
+  **Landed:** `9580d47ca` — `tools/blender/clawd_bmo.py`, byte-identical to `a4d7299b` as it stands
+  on all 8 carriers; introduced by `9c744e774` (2026-07-31T21:50:09), reachable from 6 of them.
+  Extracted rather than cherry-picked because those commits carry unrelated work. **Gates:**
+  `py_compile` rc 0 · `ruff check` all checks passed · `gate-select.sh --direct origin/main..HEAD`
+  EMPTY, instrument control `--direct 492c51066~1..492c51066` = **37** lines (a live instrument; it
+  read 32 at #153, so the selector's standing consumer set has grown, not died). **Dispatcher
+  vintage: EQUAL** — `origin/main:bin/cc-dispatch` = `b4e8edb92e17`, the blob that composed my brief.
+  **No branch deleted** — the 8 carriers are now redundant with trunk, but deleting a ref is
+  destructive and stays the operator's call, same disposition as #150–#153.
+
 - **2026-09-08 — recycle #322 (lane infra):** closed 082867ad0f4a, 465331d6ca2a, 5ba77ac42d81,
   693ee60c0885, 7000e1a81125, bc971e0ea6a7 · blocked 32d4d093f78a, 42091c92b93e · released
   2d91af430c60 · landed e99dcdf82 (deploy-live repairs a curable core.bare instead of paging for it;
