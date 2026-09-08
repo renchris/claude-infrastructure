@@ -799,10 +799,31 @@ _sigrecord_arm
 # child survives to speak. It holds no descriptor of the harness's task pipe (</dev/null >/dev/null),
 # so it can never keep a `run_in_background` arm reading non-terminal after the watcher is gone.
 #
-# WE DO NOT EXPLAIN THE REAP, AND DO NOT NEED TO. 95fcadde830e records (C)'s MECHANISM as unknown and
-# whatever reaps the watcher as conditional. That is a separate row. Classifying (C) needs no
-# mechanism at all: sender beat frozen and its process gone ⇒ (B); sender still alive, or beating
-# after it killed you ⇒ (C). The notice's job is to say the correct thing, not to say why.
+# CLASSIFYING (C) NEEDS NO MECHANISM: sender beat frozen and its process gone ⇒ (B); sender still
+# alive, or beating after it killed you ⇒ (C). The notice's job is to say the correct thing, not to
+# say why. That separation still holds and this code is unchanged by what follows.
+#
+# THE MECHANISM IS NO LONGER UNKNOWN (2026-09-08, backlog 95fcadde830e — this text used to say "we do
+# not explain the reap" and cited that row as owning the unknown). It is a macOS `memoryPressure`
+# handler Claude Code installs PER BACKGROUND BASH TASK, inside the arming session's own process
+# (2.1.220 `VPd` @235581845; 2.1.260 `i7n` @164630427, where the kill now carries the literal reason
+# "memory_pressure"). It kills with `process.kill(-pid,"SIGTERM")` — hence sig=15 whose si_pid IS the
+# live arming session, which is the whole of population (C). Kill switch:
+# CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP.
+#
+# ALL THREE HYPOTHESES THE ROW NAMED ARE REFUTED, and a reader must not spend a wave re-deriving
+# them: there is no registry LIFETIME CAP on a main-session watcher (2.1.220's cap is
+# `WPd(agentId)`, which returns undefined when agentId is undefined, and a main-session watcher has
+# no agentId — the env var is named CLAUDE_SUBAGENT_BG_SHELL_MAX_MS for that reason; 2.1.260
+# removed the cap entirely); the Stop-hook DEFERRAL only removes and re-adds the goal hook, never a
+# task; and no TURN-BOUNDARY sweep touches a backgrounded task (`Kdt()` is guarded on
+# status==="running", which a backgrounded task is not).
+#
+# WHY THE ELAPSED BANDS NEVER OVERLAP: elapsed-at-death is just time-until-the-next-pressure-event,
+# so there is no number to find. 770s (this row) and 7516s (9046fbbdc74e) are one mechanism sampled
+# twice, and the handler's own guards are what kill ONE of several concurrent watchers while its
+# siblings run their full term. Full record, with an in-session reproduction and the
+# status:killed-vs-144 discriminator: docs/research/bg-shell-pressure-reap-2026-09-08.md.
 #
 # THE BINDING IS si_pid → A BEAT ROW'S `.pid`, DIRECTLY, AND ITS LIMIT IS NAMED RATHER THAN HIDDEN.
 # hooks/session-beat.sh records the CLAUDE-ANCESTOR pid, and the measured (C) case resolved si_pid to
@@ -867,7 +888,11 @@ _wake_class_line() {   # <sender pid> <key> — TWO reads CLASS_DELAY_S apart, t
   case "$t1" in ''|*[!0-9]*) t1=0 ;; esac; case "$t2" in ''|*[!0-9]*) t2=0 ;; esac
   case "$s1" in ''|*[!0-9]*) s1=0 ;; esac; case "$s2" in ''|*[!0-9]*) s2=0 ;; esac
 
-  local act=" Re-arm before you go idle — UNLESS a /goal is live in this session, in which case do NOT (branch (b) of the line above states why)."
+  # The CAUSE clause rides the act, not the verdict: it changes what a reader DOES (re-arm, and stop
+  # hunting) without touching the verdict tokens the suites pin. Naming it is the point — the three
+  # hypotheses this row was opened on (a lifetime cap, a Stop-hook teardown, turn-boundary reaping)
+  # are all refuted, and a notice that says only "you are deaf" sends the next reader back to them.
+  local act=" Re-arm before you go idle — UNLESS a /goal is live in this session, in which case do NOT (branch (b) of the line above states why). WHY IT DIED, so you do not go hunting: Claude Code installs a macOS memoryPressure handler per background Bash task INSIDE this session's own process, and it kills with process.kill(-pid,SIGTERM) — so the sender being alive is the mechanism working as written, not a second defect. It is conditional on a pressure event, so a re-arm is not expected to die the same way; there is no lifetime cap to work around. Kill switch CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP; full record docs/research/bg-shell-pressure-reap-2026-09-08.md."
   if [ -z "$sid" ]; then
     v="UNDETERMINED"; why="sender-binds-to-no-session-beat"
     says="pid $pid matches no cc-beats row, so it cannot be told from a recycle teardown. ASSUME YOU ARE DEAF: nothing is known to be coming to re-arm for you."

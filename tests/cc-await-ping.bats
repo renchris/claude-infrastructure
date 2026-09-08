@@ -1626,6 +1626,30 @@ await_gone() { # <pid> → 0 once the pid is gone; 1 after ~15s
   kill "$s" 2>/dev/null || true
 }
 
+# RED-PROOF for backlog 95fcadde830e. Pre-fix the (C) act said only "you are deaf, re-arm", which is
+# TRUE and still sends the reader hunting: the row was opened on three hypotheses (a lifetime cap, a
+# Stop-hook teardown, turn-boundary reaping) and all three are refuted
+# (docs/research/bg-shell-pressure-reap-2026-09-08.md). A notice that names the verdict but not the
+# cause is what makes the next session re-derive it. This test fails on that pre-fix text.
+@test "W2b: a (C) DEAF notice NAMES the mechanism, so the reader stops hunting a cap" {
+  local u="CLASS-W2B-$$" cap="$BATS_TEST_TMPDIR/w2b.out" v s box="$CC_MAILBOX_DIR/CLASS-W2B-$$.md"
+  export CC_AWAIT_CLASS_DELAY_S=5
+  v="$(spawn_isolated "$u" "$cap")" || false
+  assert_victim "$v"
+  s="$(sender_spawn "$v" 12)" || false
+  beat_for_pid "sidW2B" "$s" 3
+  sender_fire
+  await_class "$box" || { echo "no class line landed"; cat "$cap"; false; }
+  # Anchored on the VERDICT too: a cause clause that rode a B-BENIGN line would be the opposite bug.
+  class_body "$box" | grep -qF 'verdict=C-DEAF' \
+    || { echo "wrong verdict:"; class_body "$box"; false; }
+  class_body "$box" | grep -qF 'memoryPressure' \
+    || { echo "the (C) notice does not name the mechanism:"; class_body "$box"; false; }
+  # …and it must say the re-arm is not expected to die the same way, or "re-arm" reads as futile.
+  class_body "$box" | grep -qF 'conditional on a pressure event' || false
+  kill "$s" 2>/dev/null || true
+}
+
 @test "W3: a sender that EXITED with a frozen beat is (B) BENIGN — and demands no act" {
   local u="CLASS-W3-$$" cap="$BATS_TEST_TMPDIR/w3.out" v s box="$CC_MAILBOX_DIR/CLASS-W3-$$.md"
   export CC_AWAIT_CLASS_DELAY_S=5
