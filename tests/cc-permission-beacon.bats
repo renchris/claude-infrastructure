@@ -385,6 +385,83 @@ arch_rows() { cat "$CC_PERMARCHIVE_DIR"/*.jsonl 2>/dev/null; }
   [ "$sb" = "$(printf '%s' "$row" | jq -r '.cleared_tool_sig')" ]
 }
 
+# ── THE APPEND MUTEX MUST BE ABLE TO RECOVER FROM ITS OWN ORPHAN ─────────────────────────────────
+# WHY: `mkdir` is atomic, but a process killed between the mkdir and the rmdir leaves the lock dir
+# standing with no owner and no age bound, and from that instant every later resolution loses the
+# lock and takes the sidecar fallback. That is not hypothetical — it happened. Measured on the live
+# archive 2026-09-07: `.append.lock` was an EMPTY directory dated 2026-08-07 17:35, the first
+# sidecar appeared 22 minutes later, and the split since was 546 rows in the month files against
+# 3,223 rows across 3,221 sidecars, with no `2026-09.jsonl` in existence. Nothing was lost, which
+# is precisely why nobody saw it: the fallback hid that the mechanism it falls back FROM was dead.
+lockdir() { printf '%s/.append.lock' "$CC_PERMARCHIVE_DIR"; }
+month_file() { printf '%s/%s.jsonl' "$CC_PERMARCHIVE_DIR" "$(date +%Y-%m)"; }
+# Count the per-process fallback files. GLOB, never `ls | grep` (SC2010): a sidecar is
+# `<month>.<sid>.<pid>.jsonl` — three literal dots — while a month file is `<month>.jsonl` with
+# one, so the pattern separates them without parsing ls output.
+sidecars() {
+  local n=0 f
+  for f in "$CC_PERMARCHIVE_DIR"/*.*.*.jsonl; do [ -e "$f" ] && n=$(( n + 1 )); done
+  printf '%s' "$n"
+}
+
+@test "LOCK: an ORPHANED append lock is broken, and the row lands in the MONTH file" {
+  mkdir -p "$CC_PERMARCHIVE_DIR"
+  mkdir "$(lockdir)"                                  # the orphan: empty, no owner
+  touch -t 202601010000 "$(lockdir)"                  # …and far older than the staleness bound
+  printf '%s' "$(payload s-lk1 'git push --force')" | "$H" write
+  printf '%s' "$(payload s-lk1 'git push --force')" | "$H" clear
+  [ -f "$(month_file)" ]
+  [ "$(grep -c s-lk1 "$(month_file)")" -eq 1 ]
+  [ "$(sidecars)" -eq 0 ]                             # nothing took the failure path
+  [ ! -d "$(lockdir)" ]                               # …and the lock was released, not left behind
+}
+
+@test "LOCK: a lock held by a LIVE owner is NOT broken — the row takes the sidecar instead" {
+  # The safety direction, and the one that matters: breaking a lock someone is holding re-admits
+  # the torn line the mutex exists to prevent. Green against the pre-fix handler too (it never
+  # breaks anything) — this arm guards the FIX, not the bug.
+  mkdir -p "$CC_PERMARCHIVE_DIR"
+  mkdir "$(lockdir)"
+  printf '%s' "$$" > "$(lockdir)/owner"               # this very bats process: provably alive
+  touch -t 202601010000 "$(lockdir)"                  # old enough that ONLY liveness can save it
+  printf '%s' "$(payload s-lk2 x)" | "$H" write
+  printf '%s' "$(payload s-lk2 x)" | "$H" clear
+  [ -d "$(lockdir)" ]                                 # the live holder kept it
+  [ "$(sidecars)" -eq 1 ]
+  ! grep -q s-lk2 "$(month_file)" 2>/dev/null
+}
+
+@test "LOCK (green both ways BY DESIGN): a FRESH ownerless lock is NOT broken — the age bound" {
+  # Between `mkdir` and the owner file being written, a legitimate holder has no owner recorded.
+  # Without an age bound a racing breaker would delete a lock taken microseconds ago. Like the
+  # live-owner arm above, this cannot go red against the pre-fix handler, which never breaks
+  # anything — it guards the FIX from becoming over-eager, and is not part of the red-proof set.
+  mkdir -p "$CC_PERMARCHIVE_DIR"
+  mkdir "$(lockdir)"                                  # ownerless, but brand new
+  printf '%s' "$(payload s-lk3 x)" | "$H" write
+  printf '%s' "$(payload s-lk3 x)" | "$H" clear
+  [ -d "$(lockdir)" ]
+  [ "$(sidecars)" -eq 1 ]
+}
+
+@test "LOCK (green both ways BY DESIGN): the release removes the owner file, not just the dir" {
+  # `rmdir` refuses a non-empty directory. A release that only rmdir'd would leave the lock
+  # standing forever — re-creating by hand the exact orphan this whole group cures. Green against
+  # the pre-fix handler because it writes no owner file to begin with; this arm exists so the
+  # owner file the FIX introduces can never become the next orphan.
+  mkdir -p "$CC_PERMARCHIVE_DIR"
+  printf '%s' "$(payload s-lk4 x)" | "$H" write
+  printf '%s' "$(payload s-lk4 x)" | "$H" clear
+  [ ! -d "$(lockdir)" ]
+  [ "$(sidecars)" -eq 0 ]
+  [ "$(grep -c s-lk4 "$(month_file)")" -eq 1 ]
+  # and a SECOND resolution still lands in the month file, which is what proves the release worked
+  printf '%s' "$(payload s-lk5 x)" | "$H" write
+  printf '%s' "$(payload s-lk5 x)" | "$H" clear
+  [ "$(grep -c s-lk5 "$(month_file)")" -eq 1 ]
+  [ "$(sidecars)" -eq 0 ]
+}
+
 @test "D5: the archive gets its own heartbeat, so dir-exists means the archiver RAN" {
   # Without this, ARCHDIR was created only by an append, so a running archiver with nothing to
   # record left no evidence and the consumer's three-state split was mapped the wrong way round.
