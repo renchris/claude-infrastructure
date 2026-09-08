@@ -1197,6 +1197,10 @@ dlp() { env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
 copydrift() { # <token> <subject> — one copy-class verdict line, exactly as report() emits it
   printf '  %-9s %-22s %s\n' "$1" "$2" "copy differs from repo → run ./install.sh" >> "$PARITY_OUT"
 }
+copydrift_unknown() { # <token> <subject> — a verdict the producer explicitly declined to direct
+  printf '  %-9s %-22s %s\n' "$1" "$2" \
+    "copy differs from repo, direction UNKNOWN (git could not answer) — verify which side is original BEFORE running ./install.sh" >> "$PARITY_OUT"
+}
 
 @test "copy-class drift is REPORTED and PAGED with an EMPTY missing list (the steady-state return)" {
   seed_parity 1
@@ -1252,6 +1256,39 @@ copydrift() { # <token> <subject> — one copy-class verdict line, exactly as re
   [ "$status" -eq 0 ]
   echo "$output" | grep -q "all live-STALE"
   [[ "$output" != *"LIVE-AHEAD"* ]] || { echo "loud branch fired with no COPYAHEAD present"; false; }
+}
+
+@test "UNKNOWN direction is not laundered into staleness (2026-09-07)" {
+  # copy_direction() has THREE answers and the producer spells the third out rather than guessing.
+  # The stale branch asserts, as fact, that the live bytes ARE past revisions — so folding an
+  # unanswerable file into it re-commits the very defect this row opened on, one layer up: a
+  # direction stated by a consumer that nobody measured.
+  seed_parity 1
+  copydrift_unknown COPYSTALE statusline.sh
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "could not be direction-checked"
+  [[ "$output" != *"all live-STALE"* ]] \
+    || { echo "an unanswerable direction was reported as measured staleness:"; echo "$output"; false; }
+  # "LIVE-AHEAD" is the loud branch's SENTINEL — two cases above key on it — so the quiet branch
+  # must not spell it even to deny it. That is what the first draft of this case caught.
+  [[ "$output" != *"LIVE-AHEAD"* ]] \
+    || { echo "unknown is not ahead either — the loud branch must stay the exception"; false; }
+  # The page emphasises with caps ("LIVE-AHEAD", "DIRECTION-CHECKED") while the log line does not;
+  # asserted as the literal each surface emits, never case-insensitively, so a wording drift on
+  # either one is a red rather than something a -i quietly absorbs.
+  grep -q "DIRECTION-CHECKED" "$PAGES/deploy-copy-drift.page"
+}
+
+@test "CONTROL: a directed stale verdict keeps the plain all-stale wording (unknown branch is the exception)" {
+  seed_parity 1
+  copydrift COPYSTALE statusline.sh
+  stamp HEAD
+  run dlp
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "all live-STALE"
+  [[ "$output" != *"could not be direction-checked"* ]] || false
 }
 
 @test "copy drift is REPORTED, never REPAIRED — no copy-class file is ever linked" {

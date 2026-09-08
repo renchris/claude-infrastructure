@@ -1221,14 +1221,14 @@ PARITY_ASSERT="${CC_DEPLOY_PARITY_ASSERT-$DEPLOY_REPO/scripts/deploy-parity-asse
 # ACT NEVER, REPORT ALWAYS. Repairing here would re-create the githooks-as-symlinks bug the block
 # above exists to prevent, so this only ever prints. The needle is the PRODUCER's own shape, not a
 # copied literal: deploy-parity-assert.sh's report() is `printf '  %-9s %-22s %s\n'`, one site, and
-# the copy verdicts are its STALE · COPYMISS · COPYSTALE · CLAUDEMD tokens.
+# the copy verdicts are its STALE · COPYMISS · COPYSTALE · COPYAHEAD · CLAUDEMD tokens.
 #
 # Damped on a DEDICATED marker, deliberately NOT damp_ok(): that helper keeps ONE key in one shared
 # file, so a persistent condition parked in it would suppress the dirty-tree and untracked-collision
 # pages that share the slot. Signature-keyed, so a CHANGE in the drift set re-pages immediately.
 COPYDRIFT_TTL_S="${CC_DEPLOY_COPYDRIFT_TTL_S:-86400}"
 copy_drift_notice() { # <assert stdout> — never fails, never mutates the live layer
-  local out="$1" n names sig marker prev now=0 ahead_n ahead_names
+  local out="$1" n names sig marker prev now=0 ahead_n ahead_names unk_n
   n="$(printf '%s\n' "$out" | grep -cE '^  (STALE|COPYMISS|COPYSTALE|COPYAHEAD|CLAUDEMD) ' 2>/dev/null || true)"
   case "$n" in ''|*[!0-9]*) n=0 ;; esac
   [ "$n" -gt 0 ] || return 0
@@ -1243,7 +1243,16 @@ copy_drift_notice() { # <assert stdout> — never fails, never mutates the live 
   ahead_names="$(printf '%s\n' "$out" | grep -E '^  COPYAHEAD ' \
                    | awk '{print $2}' | sort -u | tr '\n' ' ' 2>/dev/null || true)"
   ahead_names="${ahead_names% }"
-  sig="$n:$names:ahead=$ahead_names"
+  # THE THIRD ANSWER IS NOT THE SECOND ONE. copy_direction() returns behind · ahead · UNKNOWN, and
+  # the producer spells the third out ("direction UNKNOWN (git could not answer)") rather than
+  # guessing. Folding it into the stale branch would re-commit this row's own defect one layer up:
+  # the else-branch below states, as fact, that the live bytes ARE past revisions — a direction
+  # nobody measured. Counted, and in the signature, so a file that merely becomes answerable
+  # re-pages instead of staying damped under an identical name list.
+  unk_n="$(printf '%s\n' "$out" | grep -E '^  (STALE|COPYMISS|COPYSTALE|COPYAHEAD|CLAUDEMD) ' \
+             | grep -c 'direction UNKNOWN' 2>/dev/null || true)"
+  case "$unk_n" in ''|*[!0-9]*) unk_n=0 ;; esac
+  sig="$n:$names:ahead=$ahead_names:unk=$unk_n"
   marker="$POSTLAND_DIR/deploy-copydrift.sig"
   prev="$(cat "$marker" 2>/dev/null || true)"
   now="$(date +%s 2>/dev/null || echo 0)"
@@ -1259,6 +1268,8 @@ copy_drift_notice() { # <assert stdout> — never fails, never mutates the live 
   fi
   if [ "$ahead_n" -gt 0 ]; then
     say "copy-drift: $n copy-class file(s) DIFFER from this checkout — $names — and $ahead_n of them are LIVE-AHEAD ($ahead_names): the live bytes are in NO tracked revision, so install.sh would DESTROY them. Land those first; the rest are ordinary live-stale drift and install.sh is their (operator-cadence) repair."
+  elif [ "$unk_n" -gt 0 ]; then
+    say "copy-drift: $n copy-class file(s) DIFFER from this checkout — $names — none of them came back ahead of this checkout, but $unk_n could not be direction-checked at all (git could not answer), so 'stale' is unproven for those: verify which side is original BEFORE running install.sh, which is the sole repairer here (link_refresh owns symlink classes only) and refuses from a behind-trunk checkout"
   else
     say "copy-drift: $n copy-class file(s) DIFFER from this checkout — $names — all live-STALE (their live bytes are past revisions), and NOTHING on this path can repair them (link_refresh owns symlink classes only; install.sh is the sole repairer and refuses from a behind-trunk checkout)"
   fi
@@ -1275,6 +1286,11 @@ copy_drift_notice() { # <assert stdout> — never fails, never mutates the live 
       printf '   (Measured 2026-08-24: CLAUDE.md sat in exactly this state, carrying an\n'
       printf '   operator-authored rule that had never been tracked, and was reported as "live-stale"\n'
       printf '   alongside a plist whose drift ran the other way.)\n\n'
+    fi
+    if [ "$unk_n" -gt 0 ]; then
+      printf '\n?? %s of these could not be DIRECTION-CHECKED (git could not answer for them).\n' "$unk_n"
+      printf '   They differ, and which side is the original is UNKNOWN — not "stale". Diff them by\n'
+      printf '   hand before install.sh touches them; it copies repo->live either way.\n\n'
     fi
     printf 'the remaining files are live-STALE: the live layer is NOT running this checkout for them,\n'
     printf 'and no automatic path repairs them. link_refresh repairs SYMLINK classes only;\n'
