@@ -158,7 +158,17 @@ com.claude.nightly-regression     | staged | 0    | auto | 1  | 18-fleet-activat
 # forever (capacity-alarm: "evidence 29h old; bound 30m") while both were running perfectly and
 # appending to their real artifact every 600s. A liveness proxy must not be the one stream the
 # subject is deliberately told not to write. cc-fleet now REFUSES this combination outright.
-com.claude.capacity-alarm         | run    | 600  | ~/.claude/logs/capacity-alarm.jsonl | 13 | 19-capacity-alarm-activate.sh
+# ok_exits 0,1,2: this job's four verdicts ARE its exit codes (scripts/capacity-alarm.sh lines 30-34)
+# — OK=0, WARN=1, ALARM=2, NO-DATA=3 — and WARN/ALARM are the alarm WORKING, not the alarm broken.
+# It surfaces pressure through its own per-rung `capacity-alarm-<rung>.page` files on transition
+# (script header D3), so the exit code is a verdict channel, never a health channel. Keying S4 on
+# `exit != 0` therefore convicted a healthy job on every WARN or ALARM tick: measured 2026-09-08,
+# `cc-blockers` read `FAILING com.claude.capacity-alarm last exit code 1 after 9330 runs` while its
+# JSONL showed alternating WARN/ALARM every ~2 min. A permanently-firing row carries zero bits
+# (plan §5 F20; deploy-live's exit 1 and relogin's exit 5 are the same shape). Exit 3 (NO-DATA,
+# vm_stat unreadable) is deliberately NOT ok — "cannot measure capacity" must row, exactly as
+# com.claude.relogin's exit 3 (DETECTION-UNAVAILABLE) does.
+com.claude.capacity-alarm         | run    | 600  | ~/.claude/logs/capacity-alarm.jsonl | 13 | 19-capacity-alarm-activate.sh | 0,1,2
 # ── com.claude.compressor-sentinel (2026-08-05, panic-compressor-2026-08-05.md §7.1) ───────────────
 # The un-starvable guard for the axis that panicked the box 3x in 6 days. KeepAlive internal-loop
 # daemon (no StartInterval — interval_s below is its INTERNAL tick), evidence = its own JSONL, which
