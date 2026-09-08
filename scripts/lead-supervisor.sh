@@ -807,6 +807,28 @@ gc_stale(){ # → prints the count of horizon-stale live-owner rows dropped
   echo "$g"
 }
 
+# ── PERMISSION-PENDING is a NAMED state, not an unexplained stall (item 56e82c56fb07). ──
+# A session parked at a permission prompt CANNOT emit telemetry or a transcript line — nothing in-session
+# runs until the prompt is answered. Staleness is therefore the DEFINING SYMPTOM of the blocked state, so
+# the STALL? predicate below fires on every permission-blocked session BY CONSTRUCTION, and a page that
+# fires by construction on an already-named state carries zero bits. It is also a strictly WORSE
+# description: sweep_permission_pending() pages the same sid out of this same dir with the blocked COMMAND
+# and a recovery attached, and bin/cc-blockers renders that identical row ("permission-pend BLOCKED-1h …
+# RECOVER: it2 session focus <pane>"). Both read $PERMPEND_DIR — this is not an enumerator disagreement,
+# the store is shared and the STALL? branch simply never consulted it. Measured 2026-09-08 01:38:30: one
+# session carried the precise permpend row and the vague STALL? page in the same second.
+# LIVE means what sweep_permission_pending() itself would still act on: present AND inside the orphan
+# horizon. Past PERMPEND_HORIZON_S that sweep REAPS the beacon (REAP 2) rather than paging it, and a
+# malformed ts=0 reads as horizon-old — so a stale or garbage beacon can never mute a genuine stall. REAP 1
+# (owning session pid gone) needs no mirror: the STALL? branch is reachable only while pid_alive_owner is
+# TRUE, so a beacon whose owner is dead cannot reach this guard at all.
+permpend_live(){ # $1=sid → 0 iff a beacon exists for this sid that the permpend sweep would still PAGE
+  local bf="$PERMPEND_DIR/$1.json" ts
+  [ -f "$bf" ] || return 1
+  ts="$(jq -r '.ts // 0' "$bf" 2>/dev/null)"; ts="${ts%.*}"; case "$ts" in ''|*[!0-9]*) ts=0;; esac
+  [ "$(( $(now) - ts ))" -lt "$PERMPEND_HORIZON_S" ]
+}
+
 # ── classify one telemetry row and route to a PAGE (never an action) ──
 assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
   local f="$1" sid used ts cwd cfg pid age
@@ -844,6 +866,28 @@ assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
   if pid_alive_owner "$pid" && [ "$age" -ge "$STALL_S" ] && ! is_registered_desk "$sid"; then
     local tage; tage="$(transcript_age "$cwd" "$cfg" "$sid")"
     if [ "$tage" -ge "$STALL_S" ]; then
+      # PERMISSION-PENDING EXEMPTION (item 56e82c56fb07) — rationale at permpend_live() above.
+      #
+      # PLACEMENT IS LOAD-BEARING, and it is settled by TWO facts about this file, not by taste.
+      # (1) ESCALATED needs no separate guard. escalate_page() is reachable ONLY from resolve_page(),
+      #     which is called ONLY on the `[ "$had_page" = 1 ] && resolve_page` line below — so a branch
+      #     that never pages also never escalates. A guard placed EARLIER (before the STALL? condition)
+      #     would buy nothing and would skip the transcript read this exemption should be measured against.
+      # (2) …but it MUST NOT `return` on its own. ESCALATED is STICKY in page(): a `.notified` holding
+      #     ESCALATED suppresses every later STALL? notify until the marker is cleared, and only
+      #     clear_page_recovered() clears it. An already-escalated sid — the live case, paged 01:38 and
+      #     escalated at its next deadline — would then be PINNED: the page file and the ESCALATED marker
+      #     would sit on disk untouched forever, and when the operator finally answered the prompt a
+      #     genuinely-stale session would re-page into a marker that swallows the notify. That is a mute
+      #     button, which is precisely what direction (iii) forbids.
+      # So this suppresses the page and routes the sid to the SAME recovery path every other cleared
+      # condition uses: the standing page is retracted now, and the notify alarm re-arms after the usual
+      # sustained-OK RECOVERY_S dwell (hysteretic, never a one-sweep flap re-arm — T33). A stall that
+      # OUTLIVES the prompt therefore pages AND notifies on the next sweep.
+      if permpend_live "$sid"; then
+        idl stall_suppressed_permpend "\"sid\":\"$sid\",\"tel_age\":$age,\"transcript_age\":$tage,\"why\":\"a LIVE permission beacon in $PERMPEND_DIR already names this session's state precisely — sweep_permission_pending pages the blocked COMMAND and cc-blockers renders the same row. Telemetry+transcript staleness is the DEFINING symptom of a prompt-blocked session, so a STALL? page here is a duplicate with a worse description. Standing page retracted and the notify alarm re-armed on the usual sustained-OK dwell, so a stall that outlives the prompt still pages.\""
+        clear_page_recovered "$sid"; echo 0; return
+      fi
       # SAME-SWEEP GUARD (2026-07-25 flaky-gate incident): resolve only a PRE-EXISTING page. page()
       # stamps paged_at in integer seconds, so a page created at X.99s read by resolve_page at
       # X+1.00s computes deadline-elapsed=1 — with a 1s deadline the page "expires" inside its own
@@ -937,6 +981,15 @@ sweep_permission_pending(){ # prints the number of PERMISSION-PENDING pages prod
 # so omitting it would undercount live panes and desensitize this detector in both directions. The clause
 # is duplicated across ~10 files in this tree with no lint holding them together; consolidating that is
 # named as follow-on work, NOT done here — a silent 11th copy with no note would be the worse option.
+#
+# ⚠️ AND THAT LOCKSTEP CLAIM IS ALREADY FALSE — recorded rather than repeated (item 56e82c56fb07(b)).
+# cc-reaper:1006-1024 has since grown a refinement this copy never inherited: a `hasif` scan for
+# `--input-format`, which is what separates a RESIDENT headless agent (carries -p, IS a session) from a
+# one-shot `claude -p "hi"` (must stay uncounted), plus the note that the marker lands at argv field 8 —
+# past this copy's narrow `i<=7` window. So the two "identical" clauses disagree today, and a reader who
+# trusts the paragraph above will not go look. Not ported here: no process on this box currently carries
+# -p beyond slot 7 (measured 2026-09-08, 0 of 26 matches), so porting it would be an unmeasured semantic
+# change riding a fix for a different, measured defect, and this file makes no other claim about it.
 live_pane_count(){
   ps -wwEo command= 2>/dev/null | awk '
     { t0=$1
