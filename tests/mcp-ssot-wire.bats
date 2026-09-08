@@ -104,11 +104,11 @@ PY
 
 @test "idempotent: a second run reports already-correct and changes nothing" {
   run bash "$WIRE"; [ "$status" -eq 0 ]
-  before="$(md5 -q "$HOME/.claude-tertiary/.claude.json" 2>/dev/null || md5sum "$HOME/.claude-tertiary/.claude.json" | cut -d' ' -f1)"
+  before="$(python3 -c "import sys;sys.stdout.write(open('$HOME/.claude-tertiary/.claude.json').read())")"
   run bash "$WIRE" --check
   [ "$status" -eq 0 ]
   [[ "$output" == *"correct"* ]] || false
-  after="$(md5 -q "$HOME/.claude-tertiary/.claude.json" 2>/dev/null || md5sum "$HOME/.claude-tertiary/.claude.json" | cut -d' ' -f1)"
+  after="$(python3 -c "import sys;sys.stdout.write(open('$HOME/.claude-tertiary/.claude.json').read())")"
   [ "$before" = "$after" ]
 }
 
