@@ -87,6 +87,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-08 — recycle #320 (lane infra):** closed `b3a3f5b694e6` `90edf1c1a39a` `14a04b3c6989`
+  `6da4339bd9d0` `f06533be5eb8` `0ee5454e7d7d` `bd1dd8a2c30f` `d17f04043596` (eight auto-filed
+  post-land REDs, each named bats case green 3/3 on trunk `3d55a6508`), `0831275cb96d`, `658aa829e265`
+  · blocked `02e67ee88123` on the new c10 migration `0021-fleet-hook-parity.sh` (11 hook divergences
+  → GREEN) · released `ed54373d639b` `99dbf659930c` `2d91af430c60` `ac13c22fe291` `4adbece80a5f`
+  `c4383f1c9172` `329dd6350eb3` `fe740e799fd5` `5860b7cca244` `925d843f6665` `9d1c8dadf1f8`
+  `465331d6ca2a` `84394a44f133` `5ba77ac42d81` `c0a5a968c79d` · landed `3851e64a8` · `closed=10
+  closed_pre=10 closed_other=0 filed=0 net=10 blocked=3 min=3 lane=local-drain project=claude-infrastructure floor=MET`.
+
 - **2026-09-07 — recycle #319 (lane infra):** closed `5207d553dce2` (cc-backlog's claim lease was
   non-atomic — two claimers inside one second both won; now a per-item mutex over the fold→append
   section, refusing rc 4 `verdict=claim-contended`), `1f323187c1e9` · `6f203a844f53` ·
