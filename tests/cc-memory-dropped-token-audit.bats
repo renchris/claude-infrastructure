@@ -1,5 +1,10 @@
 #!/usr/bin/env bats
-# THE NON-LOSSINESS PROOF FOR /compact-memory — scripts/memory-dropped-token-audit.py.
+# THE NON-LOSSINESS PROOF FOR /compact-memory — bin/cc-memory-dropped-token-audit.
+#
+# IT LIVES IN bin/ BECAUSE THAT IS THE ONLY SURFACE THAT DEPLOYS. install.sh:662 globs
+# `scripts/*.sh` — a `.py` at scripts/ top level is never symlinked into ~/.claude, so a
+# /compact-memory run in ANY other project could not invoke it and the gate would be prose. bin/cc-*
+# (install.sh:916) is on PATH everywhere. A gate that cannot be invoked is not wired.
 #
 # THE DEFECT THIS AUDIT CLOSES. /compact-memory's prescribed audit re-runs over the lines that
 # SURVIVE a pass. That direction cannot see a fact the rewrite DELETED: a token that appears in no
@@ -36,7 +41,7 @@
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  AUDIT="$REPO/scripts/memory-dropped-token-audit.py"
+  AUDIT="$REPO/bin/cc-memory-dropped-token-audit"
   MEM="$BATS_TEST_TMPDIR/memory"; mkdir -p "$MEM"
   OLD="$BATS_TEST_TMPDIR/old.md"
   NEW="$MEM/MEMORY.md"
@@ -47,7 +52,7 @@ topic() { local f="$MEM/$1"; shift; printf '%s\n' "$@" > "$f"; }
 # idx <file> <line...> — an index surface.
 idx() { local f="$1"; shift; { printf '# Memory\n'; printf '%s\n' "$@"; } > "$f"; }
 
-run_audit() { run python3 "$AUDIT" --old "$OLD" --new "$NEW" "$@"; }
+run_audit() { run "$AUDIT" --old "$OLD" --new "$NEW" "$@"; }
 
 # $output assertions as ordinary commands: bash exempts `[[ ]]` from errexit, so a non-final
 # `[[ "$output" == *x* ]]` is evaluated and DISCARDED and the test passes on a false assertion
@@ -176,7 +181,7 @@ lacks_out() { ! printf '%s\n' "$output" | grep -qF -- "$1"; }
 @test "11 NON-VERDICT b: a missing input file exits 2 rather than exonerating the tree" {
   topic t.md "kept"
   idx "$NEW" '- [T](t.md) — kept'
-  run python3 "$AUDIT" --old "$BATS_TEST_TMPDIR/nope.md" --new "$NEW"
+  run "$AUDIT" --old "$BATS_TEST_TMPDIR/nope.md" --new "$NEW"
   [ "$status" -eq 2 ]
   has_out 'verdict=non-verdict'
 }
@@ -194,7 +199,7 @@ lacks_out() { ! printf '%s\n' "$output" | grep -qF -- "$1"; }
   R="/Users/chrisren/.claude/projects/-Users-chrisren-Development-reso-management-app/memory"
   [ -f "$R/archive/MEMORY_INDEX_PRE-COMPACT_2026-08-07.md" ] || \
     skip "the 2026-08-07 reso artifact is machine-local and untracked; absent on this box"
-  run python3 "$AUDIT" --old "$R/archive/MEMORY_INDEX_PRE-COMPACT_2026-08-07.md" --new "$R/MEMORY.md"
+  run "$AUDIT" --old "$R/archive/MEMORY_INDEX_PRE-COMPACT_2026-08-07.md" --new "$R/MEMORY.md"
   [ "$status" -eq 0 ]
   has_out 'verdict=clean'
 }

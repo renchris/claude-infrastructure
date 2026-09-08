@@ -10,8 +10,12 @@ This is the other direction. It diffs each entry's ORIGINAL hook against its NEW
 hard tokens the original carried and the new one does not, and checks every one against the linked
 topic file. A token absent there existed ONLY on the index surface and has now been destroyed.
 
-  memory-dropped-token-audit.py --old <pre-compaction index> --new <post-compaction index>
+  cc-memory-dropped-token-audit --old <pre-compaction index> --new <post-compaction index>
                                 [--memory-dir DIR] [--pointer-scan FILE ...] [--json]
+
+IT LIVES IN bin/, NOT scripts/, AND THAT IS LOAD-BEARING: install.sh:662 globs `scripts/*.sh`, so a
+`.py` at scripts/ top level is never symlinked into ~/.claude and a /compact-memory run in any other
+project could not invoke it. bin/cc-* (install.sh:916) is on PATH everywhere.
 
   exit 0  clean          — every dropped hard fact still lives in its topic file
   exit 1  findings       — at least one blocking finding (see BLOCKING below)
@@ -65,7 +69,7 @@ BULLET = re.compile(r"^- \*{0,2}\[")
 # and drops the line from the harvest entirely. RESIDUAL, stated because it is trunk's rule and not
 # a defect this audit may quietly diverge from: a hook carrying a literal `](x.md)` markdown link
 # would take THAT target. It fails loudly — the stolen target resolves to no topic file and the run
-# blocks as `dangling` — never silently, and tests/…bats arm 9b holds it there.
+# blocks as `dangling` — never silently, and tests/cc-memory-dropped-token-audit.bats arm 9c holds it there.
 ENTRY = re.compile(r"^- \*{0,2}\[(.*)\]\(([^()]*\.md)\)(.*)$")
 
 
