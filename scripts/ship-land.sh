@@ -3778,6 +3778,64 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── LOADED-BUT-UNTRACKED ratchet (a file the harness auto-loads that git does not track) ────────
+  # THE SCAR (backlog b7e127506fda, 2026-09-08). `.claude/rules/agent-operating-lessons.md` — 8,165
+  # bytes of always-loaded policy, 5 active rules and 19 pointers, maintained the week it was found —
+  # was injected into EVERY interactive session in this repo under the harness's own label "project
+  # instructions, checked into the codebase", and was checked into nothing: `git ls-tree -r
+  # origin/main -- .claude/rules` listed ZERO files and `git check-ignore` returned rc 1. Not
+  # tracked, not ignored: one `git clean -f -d` from gone, with no diff and no trace. `.claude/` was
+  # ALREADY a tracked directory (CLAUDE.md, settings.json, commands/ship.md) with exactly one
+  # unprotected child, which is the shape that keeps this invisible — the directory looks cared for.
+  #
+  # WHY IT IS HERE AND NOT IN A SUITE. A lint only its own suite runs is DETECTION, not enforcement
+  # (memory: enforcement-must-live-at-the-chokepoint). The event that IS the act is the land, so the
+  # gate is where the rule has to live. This arm is also the CURE's own doorman: the commit that
+  # tracks the file is the commit that turns this arm green.
+  #
+  # WHY IT IS NOT DIFF-SCOPED. A file that was never `git add`ed appears in NO diff, so every
+  # own-scope set this gate builds is structurally blind to it (memory:
+  # gate-scope-from-git-diff-is-blind-to-untracked). It is a whole-tree predicate and cheap enough to
+  # be one: a single `git ls-files`, no file reads. `git ls-files --others` is PER-WORKTREE, so a
+  # sibling session's untracked file in the shared checkout cannot reach an isolated lander.
+  #
+  # WHY IT CANNOT BECOME A STANDING RED. The scope is "loaded AND not ignored AND not tracked", and
+  # both cures are one line in the author's own commit: `git add` it, or ignore it explicitly. The
+  # repo's baseline is ZERO offenders as of the commit that adds this arm.
+  # Release valve, auditable in land.log: SHIP_LAND_LOADED_LINT=/nonexistent skips the block whole.
+  LOADED_LINT="${SHIP_LAND_LOADED_LINT:-scripts/loaded-untracked-lint.sh}"
+  if [[ -x "$LOADED_LINT" ]]; then
+    echo "→ gate: loaded-but-untracked ratchet (harness-loaded paths git neither tracks nor ignores)" >&2
+    # gate_bounded: EVENT-ON-FIRST-LAND, SELF-CLEARING-IN-THIS-COMMIT — the budget is one land, not a
+    # clock, because neither refusal can survive the commit that triggers it. This one fires only for
+    # the author who just broke the lint's own discrimination (the selftest is green on trunk by the
+    # ratchet above), and the cure is in the same edit. Expiry: if it ever fires for someone who did
+    # not touch the lint, that is a lint rotting rather than a tree failing — delete the arm via
+    # SHIP_LAND_LOADED_LINT=/nonexistent, which is attested in land.log, and fix the lint as its own
+    # commit rather than letting a standing refusal accumulate silent lands behind it.
+    if ! "$LOADED_LINT" --selftest >/dev/null 2>&1; then
+      echo "✗ gate: loaded-untracked-lint --selftest FAILED — the lint no longer discriminates, so" >&2
+      echo "  its clean verdict would mean nothing. Fix the lint before landing." >&2
+      gate_red loaded-untracked-selftest
+      return 1
+    fi
+    "$LOADED_LINT" >&2; _arm_rc=$?
+    if (( _arm_rc == 2 )); then arm_nonverdict "loaded-untracked-lint"; return 1; fi
+    # gate_bounded: EVENT-ON-FIRST-LAND, ONE-git-add-CLEARABLE — same one-land budget. The corpus
+    # baseline is ZERO offenders at the commit that adds this arm, so the only tree this can refuse
+    # is one whose author just created the offending path, and both cures (`git add` it, or ignore it
+    # explicitly) land in that same commit. Expiry: a refusal that outlives its author's commit means
+    # the loaded-scope set has grown past what the repo tracks — widen .gitignore or shrink
+    # CC_LOADED_SCOPES in one commit rather than sitting on the refusal.
+    if (( _arm_rc != 0 )); then
+      echo "✗ gate: loaded-but-untracked RED — the path(s) above are read into every session in this" >&2
+      echo "  repo and git protects none of them. The cure is printed above and is one line in THIS" >&2
+      echo "  commit: git add them, or ignore them explicitly if they are genuinely scratch." >&2
+      gate_red loaded-untracked
+      return 1
+    fi
+  fi
+
   # ── off-box ADMISSION ratchet — the LAST arm, because it is the only expensive one ────────────
   # THE GENERATOR IT CLOSES. `scripts/offbox-partition.sh` makes the hermetic partition a SET
   # DIFFERENCE, so a suite joins it BY EXISTING rather than by being proven off-box-clean. One
