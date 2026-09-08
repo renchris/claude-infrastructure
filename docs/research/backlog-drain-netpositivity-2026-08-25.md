@@ -157,6 +157,35 @@ claimable locally — the only venue a store write can run in — and the refusa
 desk's own verbs. **The generalisable form: a cloud worker's terminal finding is only as durable as
 the arm that reads it, so state it where a LIVE reader is, not where the correct one would be.**
 
+**The fourth dispatch RAN the command, and that is the fourth finding: the refutation is no longer a
+derivation, it is a measurement.** The park did what it was built to do — it refused the cloud venue,
+the `2026-09-01T09:23:43Z` venue event flipped `venuePlan` to `local`, and the row was claimed by a
+local session on 2026-09-08, which is the one venue its remaining step can run in. Three dispatches
+had read the code and predicted the outcome; none had executed it. This one executed it, in full, at
+the item's own command shape:
+
+```sh
+cc-premise sweep --record --close-falsified 20     # on the live store, 2026-09-08
+```
+
+| the item projected | the run delivered |
+|---|---|
+| retire **54–89** rows | **0** — the `falsified` bucket is empty |
+| convert **~400** rows to known freshness | **10** (validated 25 → 35) |
+
+The census behind it: **36 `probe_capable` of 356 live rows, 321 `unprobed`** — so the reachable
+population is an order of magnitude below the item's 457, and the earlier `~47` estimate in this
+section is superseded by the measured `36`. (Two consecutive censuses read 38/37 and 36/35 because
+the store is live and siblings write it mid-sweep; treat the figure as ~36–38, not a constant.) The
+`0` is the load-bearing half and it is not an artifact of the flag — `--close-falsified` was passed,
+the cap was 20, and `_close_falsified` had nothing to consume because `assess` never returned the
+verdict for any row. **The projection was not merely unreachable in principle; it is empirically
+zero.**
+
+What this closes is the re-derivation loop itself. Every future reader of this section can now cite a
+run instead of re-reading `bin/cc-premise`, which is what the previous three dispatches each spent a
+worker slot doing.
+
 ### What refutes the strong form
 
 The ticket usually still points at a real artifact. All 20 sampled files from the >72 h population
