@@ -108,16 +108,44 @@ itself reports as degraded. Internal depth has no DOLLAR cost to lead, but
 it does have a QUALITY cost when synthesis happens past the cliff. Optimize
 for signal density, not raw token spend.
 
-## Permission to Recurse (CURRENTLY INACTIVE — May 2026)
+## Permission to Recurse (INACTIVE — and WE are the ones holding it off)
 
-⚠️ **Recursion is not operational in stock Claude Code as of May 2026.**
+⚠️ **Recursion is off for you. The cause is a line in our own launcher, not a
+missing product capability** — corrected 2026-09-08 (audit
+`docs/research/cc-version-audit-2026-09-08.md`; backlog `b69b1d957cec`).
 
-The `tools:` frontmatter line in this file declares `Agent`, but the stock
-Claude Code harness silently does not expose the Agent tool to subagents
-regardless of declaration (documented in GitHub anthropics/claude-code
-#4182, #19077, #31977, #46424, #30703). Empirically verified 2026-05-24:
-ToolSearch's deferred-tool inventory in a subagent context does NOT include
-`Agent`; calls would fail at the tool-availability check.
+`~/.zshrc:484` exports **`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`**, which
+2.1.219's changelog documents in exactly these terms: *"Subagents can now spawn
+nested subagents up to depth 3 by default (was 1); set
+`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1` to disable nesting."* Measured against
+the running 2.1.260 binary, the Agent tool's spawn path is
+`if (de >= be) throw … subagent_depth_cap` with a 0-based root, so a level-1
+subagent evaluates `1 >= 1` and is refused. That is sufficient on its own, and it
+is ours.
+
+**This is a deliberate, still-valid decision — do not "fix" it.** `~/.zshrc:480-483`
+gives the reason: 2.1.219 reversed 2.1.217's containment of the still-open GH
+#68619 runaway (4M tok / 5 min) on a shared 4-account binary whose job is N=10-12
+waves, and 2.1.224 then removed the 200-subagent-per-session cap entirely, leaving
+depth as the **only** remaining runaway bound on a box with four memory-storm
+kernel panics on record. The cap is load-bearing.
+
+**What the previous text got wrong, and why it is worth recording.** It read:
+*"the stock Claude Code harness silently does not expose the Agent tool to
+subagents regardless of declaration"* — citing anthropics/claude-code #4182,
+#19077, #31977, #46424, #30703, empirically verified 2026-05-24. The
+*observation* was true and still is; the *cause* was attributed to the product.
+Note the date: in May 2026 depth 1 was the **product default**, so the check could
+not distinguish "the harness cannot" from "the harness is configured not to" — and
+once 2.1.219 flipped the default to 3 and our launcher pinned it back, the local
+cause became the operative one while the doc still named the upstream one. A
+reader would go chase five upstream issues, or wait for an "upstream fix that
+lands", for a switch we hold. (Memory: `wrong-cause-corroborated-by-true-metric` —
+a wrong cause standing beside a true observation reads as diagnosed.)
+
+**To re-test the cause rather than the symptom**, run one subagent with the
+variable raised and read whether `Agent` appears in its deferred-tool inventory;
+do not infer capability from its absence under our own cap.
 
 **Implication for you**: assume you are running at depth-1. Do not attempt
 nested fan-out via the Agent tool. If your sub-question is genuinely too
@@ -125,8 +153,9 @@ broad for direct tool calls, RETURN to lead with a structured summary
 identifying the sub-axes that warrant their own subagents; lead will spawn
 a follow-up wave from root context.
 
-**When upstream fix lands**: this section will be re-enabled with the
-following operational rules:
+**If the cap is ever deliberately raised** (an operator decision about the
+#68619 runaway and the missing per-session ceiling — *not* an upstream fix to
+wait for; nothing upstream is holding this): re-enable with these rules:
 - Recursion cap: depth 2 only (lead → you → 2-4 sub-subagents).
 - Sub-subagents use `general-purpose` type.
 - Each sub-subagent gets a focused brief at 200-400K depth (not the full
