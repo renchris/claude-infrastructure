@@ -1061,8 +1061,26 @@ death_page_line() {
   case "$cause" in
     retired-by-desk) recover="Its pane was closed by that retirement and its work was landed before the kill — there is NOTHING to recover here and it must NOT be resumed." ;;
   esac
-  printf 'SESSION DEATH — %s %s. Lost: /goal=%s, in-flight workflow dir(s)=%s. %s Evidence: ~/.claude/logs/claude-crashes.jsonl (pid %s) + ~/.claude/logs/close-records/%s-*.json\n' \
-    "$sid" "$what" "$goal" "$wf" "$recover" "$pid" "$pid"
+  # THE EVIDENCE CLAUSE IS CONDITIONAL, because the close-record it names is frequently ABSENT and
+  # naming it unconditionally sends the reader to an empty path. Measured 2026-09-08 09:24 (backlog
+  # 501824eda094): four sessions died abrupt-unknown in 72 seconds (pids 67534, 1143, 28582, 64734)
+  # and the page cited a close-record for each; the store was healthy — 1,870 records, newest minutes
+  # old — and held ZERO records for all four. A reader who follows the path finds nothing and cannot
+  # tell an absent record from a wrong path, which are opposite diagnoses. The absence is itself the
+  # finding: no record means the process died before its launcher wrapper could write one, which
+  # CONFIRMS an abrupt death rather than leaving it unexplained. So the page states which of the two
+  # it is, and when a record DOES exist it names the resolved file rather than a glob. Both
+  # paths are ABSOLUTE ($HOME-expanded): a tilde does not expand inside quotes (SC2088), and an
+  # absolute path is what the reader can paste — which is the whole point of the clause.
+  local crec ev
+  crec=$(find_close_record "$pid" 2>/dev/null || true)
+  if [[ -n "$crec" && -f "$crec" ]]; then
+    ev="$HOME/.claude/logs/claude-crashes.jsonl (pid $pid) + $crec"
+  else
+    ev="$HOME/.claude/logs/claude-crashes.jsonl (pid $pid). NO close record was written for pid $pid — the process died before its launcher wrapper could record one; that absence is the finding, not a bad path."
+  fi
+  printf 'SESSION DEATH — %s %s. Lost: /goal=%s, in-flight workflow dir(s)=%s. %s Evidence: %s\n' \
+    "$sid" "$what" "$goal" "$wf" "$recover" "$ev"
 }
 
 # ── surface_death <sid> <pid> <class> <cause> [transcript] ──────────────────────────────────────

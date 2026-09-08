@@ -215,3 +215,60 @@ surface_with() { # $1=hook-path $2=sid $3=pid $4=class $5=cause $6=exit $7=sig $
   [ "$status" -eq 0 ]
   [ ! -s "$PAGED" ] || { echo "a retirement was paged: $(cat "$PAGED")"; false; }
 }
+
+# ── THE EVIDENCE CLAUSE — backlog 501824eda094 ───────────────────────────────────────────────────
+# The page cited ~/.claude/logs/close-records/<pid>-*.json unconditionally. Measured 2026-09-08
+# 09:24: four sessions died abrupt-unknown in 72 seconds and the store — healthy, 1,870 records,
+# newest minutes old — held ZERO records for all four pids. A reader who follows the path finds
+# nothing and cannot distinguish "no record was written" from "the page names the wrong path",
+# which are opposite diagnoses. The absence is the finding, so the page must SAY it.
+
+@test "no close record: the page NAMES the absence instead of citing a path that holds nothing" {
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"
+  mkdir -p "$CC_CLOSE_RECORDS_DIR"   # store present and HEALTHY — just no record for this pid
+  printf '{"pid":9999,"exit_code":0}\n' > "$CC_CLOSE_RECORDS_DIR/9999-100.json"
+  tx="$(mk_tx s_norec live)"
+  run surface_with "$HOOK" s_norec 67534 CRASH abrupt-unknown "" "" "$tx"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'NO close record was written for pid 67534'
+  echo "$output" | grep -q 'died before its launcher wrapper could record one'
+  # and it must NOT hand the reader a glob that resolves to nothing
+  ! echo "$output" | grep -q '67534-\*\.json' || false
+}
+
+@test "close record present: the page names the RESOLVED file, not a glob" {
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"
+  mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  printf '{"pid":50399,"exit_code":143,"signal":"15"}\n' > "$CC_CLOSE_RECORDS_DIR/50399-1788000000.json"
+  tx="$(mk_tx s_rec live)"
+  run surface_with "$HOOK" s_rec 50399 CRASH external-sigterm 143 15 "$tx"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "$CC_CLOSE_RECORDS_DIR/50399-1788000000.json"
+  ! echo "$output" | grep -q 'NO close record was written' || false
+  ! echo "$output" | grep -q '50399-\*\.json' || false
+  # the crash log stays cited either way — this fix removes nothing
+  echo "$output" | grep -q 'claude-crashes.jsonl (pid 50399)'
+}
+
+@test "RED-PROOF control: the pre-fix hook cited the glob and never named the absence" {
+  # Executes the bytes as they stood at the parent commit. A control that cannot fail certifies
+  # nothing (MEMORY.md verification-harness-vacuous-pass-traps), and the claim of this pair of tests
+  # is that the behaviour CHANGED — unfalsifiable without running the old file.
+  # The ref is a LITERAL sha (2fb7f3981 = the parent of the fix commit), never HEAD: a moving ref
+  # advances past the fix the moment it lands and the control then compares the fix to itself —
+  # it either reddens permanently or passes vacuously, and the vacuous half is the worse one.
+  local pre="$BATS_TEST_TMPDIR/prefix-hook.sh"
+  git -C "$REPO" show 2fb7f3981:hooks/lead-crash-watchdog.sh > "$pre" 2>/dev/null || skip "no pre-fix blob"
+  # MARKER: two identifiers the fix INTRODUCED must be absent from the replayed bytes. Without this
+  # the pin alone re-goes-vacuous if the sha is ever re-pointed at a post-fix commit.
+  ! grep -q 'crec' "$pre" || { echo "pinned blob already carries the fix — control is vacuous"; false; }
+  ! grep -q 'NO close record was written' "$pre" || false
+  export CC_CLOSE_RECORDS_DIR="$BATS_TEST_TMPDIR/close-records"
+  mkdir -p "$CC_CLOSE_RECORDS_DIR"
+  tx="$(mk_tx s_pre live)"
+  run surface_with "$pre" s_pre 67534 CRASH abrupt-unknown "" "" "$tx"
+  [ "$status" -eq 0 ]
+  # the defect, pinned: an unconditional glob and no statement of absence
+  echo "$output" | grep -q 'close-records/67534-\*\.json'
+  ! echo "$output" | grep -q 'NO close record was written' || false
+}
