@@ -979,3 +979,68 @@ dead_pid() {
     LAND_STUB_FAIL2="claude/fire-b2" LAND_STUB_RC2=5 CONFIRM=1 run cr --all
   [ "$status" -eq 70 ]
 }
+
+# ── the ownerless-sandbox sweep (backlog de4f1c0135bb) ────────────────────────────────────────────
+#
+# reap_abandoned_land_sandbox is REACHED only through worktree_holding(), i.e. when a fetch collides
+# with a worktree still holding the branch. That population is `git worktree list`, and it misses the
+# debris twice: a sandbox whose branch nobody re-fetches is never asked about at all, and one whose
+# git admin entry has been pruned is not in the list to begin with. Measured on the live box
+# 2026-09-07: 22 `.desk-land-claude-fire-*` directories, all 22 with a dead creator pid, only 11
+# still registered — so 11 were reachable by NO path (memory: lookup-miss-is-not-absence).
+#
+# The function under test is extracted rather than driven through a full --all run, for the reason
+# ship-land.bats extracts gate_bats: sourcing the script would run the pipeline. The extraction is
+# guarded so a rename cannot leave an empty probe that passes every assertion vacuously.
+@test "reap_orphan_land_sandboxes reaps an UNREGISTERED ownerless sandbox, and only that" {
+  probe="$BATS_TEST_TMPDIR/reap-probe.sh"
+  {
+    echo 'GIT_BIN=git'
+    sed -n '/^reap_abandoned_land_sandbox() {/,/^}/p'  "$CR"
+    sed -n '/^reap_orphan_land_sandboxes() {/,/^}/p'   "$CR"
+  } > "$probe"
+  # positive control on the EXTRACTION: both functions must actually be in the probe.
+  grep -q '^reap_abandoned_land_sandbox() {' "$probe" || false
+  grep -q '^reap_orphan_land_sandboxes() {'  "$probe" || false
+
+  WT="$BATS_TEST_TMPDIR/wtroot"; mkdir -p "$WT"
+  # a genuinely dead pid — spawned and reaped here, so `kill -0` on it is a fact, not an assumption
+  ( exit 0 ) & dead=$!; wait "$dead" 2>/dev/null || true
+
+  mkdir -p "$WT/.desk-land-feat-orphan-$dead"      # ORPHAN: our shape, dead owner, no git entry
+  mkdir -p "$WT/.desk-land-feat-live-$$"           # owner ALIVE  ⇒ a land in flight, never touched
+  mkdir -p "$WT/.desk-land-feat-nopid-xyz"         # unreadable owner ⇒ abstain rather than guess
+  mkdir -p "$WT/somebody-elses-worktree"           # not our shape ⇒ never ours to remove
+
+  echo 'printf "%s\n" "$(reap_orphan_land_sandboxes "$1" "$2")"' >> "$probe"
+  run bash "$probe" "$BATS_TEST_TMPDIR" "$WT"
+  [ "$status" -eq 0 ]
+  # exactly ONE reaped — a sweep that answered 3 would be rm -rf wearing a predicate's clothes
+  [ "$output" = "1" ] || { echo "expected 1 reaped, got: $output"; false; }
+
+  [ ! -d "$WT/.desk-land-feat-orphan-$dead" ] \
+    || { echo "the ownerless ORPHAN survived — the sweep never reached it"; false; }
+  [ -d "$WT/.desk-land-feat-live-$$" ]        || { echo "reaped a LIVE land's sandbox"; false; }
+  [ -d "$WT/.desk-land-feat-nopid-xyz" ]      || { echo "reaped an unreadable owner"; false; }
+  [ -d "$WT/somebody-elses-worktree" ]        || { echo "reaped a directory that is not ours"; false; }
+}
+
+@test "reap_orphan_land_sandboxes is silent and harmless on a wtroot with no sandboxes" {
+  # The steady state. An unmatched glob expands to itself in sh, so a sweep that did not guard for
+  # that would hand reap_abandoned_land_sandbox a literal `.desk-land-*` path every single run.
+  probe="$BATS_TEST_TMPDIR/reap-probe2.sh"
+  {
+    echo 'GIT_BIN=git'
+    sed -n '/^reap_abandoned_land_sandbox() {/,/^}/p'  "$CR"
+    sed -n '/^reap_orphan_land_sandboxes() {/,/^}/p'   "$CR"
+    echo 'printf "%s\n" "$(reap_orphan_land_sandboxes "$1" "$2")"'
+  } > "$probe"
+  EMPTY="$BATS_TEST_TMPDIR/empty-wtroot"; mkdir -p "$EMPTY"
+  run bash "$probe" "$BATS_TEST_TMPDIR" "$EMPTY"
+  [ "$status" -eq 0 ]
+  [ "$output" = "0" ] || { echo "expected 0, got: $output"; false; }
+  # and a wtroot that does not exist at all is a 0, never an error
+  run bash "$probe" "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR/no-such-dir"
+  [ "$status" -eq 0 ]
+  [ "$output" = "0" ]
+}
