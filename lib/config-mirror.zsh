@@ -184,10 +184,31 @@ _cc_sync_config_mirror() {
   if [[ ! -f "$dst/.claude.json" && -z "$keep[.credentials.json]" ]]; then
     cp "$src/.claude.json" "$dst/.claude.json" 2>/dev/null
   fi
-  # Guard: the SHARED settings.json must never carry an account-pinning auth key (it would override
-  # the per-dir Keychain token for BOTH accounts). Such keys belong in a per-dir settings.local.json.
-  grep -qE '"(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|apiKeyHelper|forceLoginMethod|forceLoginOrgUUID)"' "$src/settings.json" 2>/dev/null \
-    && print -u2 "⚠️  config-mirror: shared settings.json has an account-pinning auth key — move it to a per-dir settings.local.json"
+  # Guard: settings.json must never carry an account-pinning auth key (it would override the
+  # per-dir Keychain token). Such keys belong in a per-dir settings.local.json.
+  #
+  # THE FILE TO INSPECT IS THE ONE THE DIR ACTUALLY LOADS, and for a year this grepped only
+  # "$src/settings.json" on the premise — stated in its own former wording, "the SHARED
+  # settings.json" — that every account dir reaches that file through a symlink. It does not.
+  # `settings.json` appears in no isolate list, so the share loop treats it as shareable, finds a
+  # real file already sitting there, and outside --convert refuses to overwrite it: the FORK is the
+  # steady state, not an anomaly. MEASURED 2026-09-08 across the live fleet — .claude-next,
+  # .claude-secondary, .claude-tertiary and .claude-quaternary each hold a REAL settings.json
+  # (120 / 77 / 59 / 78 diff lines against ~/.claude/settings.json), and not one of them is a
+  # symlink. An account-pinning key added to any of those four was therefore invisible here, while
+  # the guard went on reporting cleanly about a file that account never reads.
+  # $src stays checked because the per-dir loop never visits ~/.claude itself, which account 1 does
+  # load; the -ef skip keeps a genuinely shared dst (a symlink to $src) from warning twice over one
+  # file. The message names the PATH rather than saying "shared", so the warning cannot again
+  # assert a sharing relationship it did not verify.
+  local _cm_authkey='"(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|apiKeyHelper|forceLoginMethod|forceLoginOrgUUID)"'
+  local _cm_f
+  for _cm_f in "$src/settings.json" "$dst/settings.json"; do
+    [[ -e "$_cm_f" ]] || continue
+    [[ "$_cm_f" != "$src/settings.json" && "$_cm_f" -ef "$src/settings.json" ]] && continue
+    grep -qE "$_cm_authkey" "$_cm_f" 2>/dev/null \
+      && print -u2 "⚠️  config-mirror: $_cm_f has an account-pinning auth key — move it to a per-dir settings.local.json"
+  done
   return 0
 }
 
