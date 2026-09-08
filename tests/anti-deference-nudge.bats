@@ -67,6 +67,16 @@ runhook() {
   printf '{"session_id":"%s","transcript_path":"%s","cwd":"/tmp/adf"}' "$sid" "$tx" | bash "$HOOK"
 }
 
+# Same drive, but with EVERY locale variable stripped — the shape launchd hands an unattended job
+# (its plists set no LANG), and therefore the shape postland-verify runs the corpus under. Kept as
+# a separate helper rather than a flag on runhook: the ambient locale is what made the C-locale
+# defect invisible to every other assertion in this file, so the pinned cases must say so by name.
+runhook_nolocale() {
+  local tx="$1" sid="${2:-sid-$RANDOM}"
+  printf '{"session_id":"%s","transcript_path":"%s","cwd":"/tmp/adf"}' "$sid" "$tx" \
+    | env -u LANG -u LC_ALL -u LC_CTYPE bash "$HOOK"
+}
+
 fired()  { echo "$1" | grep -q '"decision":"block"'; }   # hook stdout ⇒ did it block?
 
 # ── Fires on EVERY listed deference tell (each in its own session so cap/latch don't interfere) ──
@@ -407,6 +417,37 @@ fired()  { echo "$1" | grep -q '"decision":"block"'; }   # hook stdout ⇒ did i
     [ "$status" -eq 0 ]
     if fired "$output"; then echo "FIRED (should be silent): $m" >&2; false; fi
   done
+}
+
+@test "opaque-identifier: the gloss is still a gloss with NO locale set (launchd/postland shape)" {
+  # Post-land RED d6a4896406aa. The gloss regex spelled its dash alternatives as a bracket
+  # expression, which is a set of CHARACTERS only under a UTF-8 locale; with no LANG it is a set
+  # of BYTES, the em dash matched only its \xE2 lead byte, and the hook FIRED on the exact
+  # id-then-em-dash-then-explanation shape its own corrective recommends. Every other assertion
+  # here inherits the operator's en_CA.UTF-8 and so was structurally blind to it, which is why
+  # this case pins the environment instead of trusting the one it happens to run in.
+  local msgs=(
+    "Your queue is 0aa3febf3143 (the store-version timing) and b1614375d051."
+    "May the sync endpoint read permissions inside the transaction it guards? (b1614375d051) And the store version (0aa3febf3143)?"
+    "Two calls: 0aa3febf3143 — when to ship the store version; and b1614375d051."
+    "Two calls: 0aa3febf3143 – when to ship the store version; and b1614375d051."
+    "Two calls: 0aa3febf3143: when to ship the store version; and b1614375d051."
+  )
+  for m in "${msgs[@]}"; do
+    local tx; tx="$(mkfix "$m")"
+    run runhook_nolocale "$tx"
+    [ "$status" -eq 0 ]
+    if fired "$output"; then echo "FIRED with no locale (should be silent): $m" >&2; false; fi
+  done
+}
+
+@test "opaque-identifier: still FIRES on two bare ids with NO locale set" {
+  # The other half of the pinned pair: the C-locale fix must not have bought silence by making the
+  # gloss match everything. A control that only asserted silence would pass on a dead detector.
+  local tx; tx="$(mkfix "Nothing is open on my side. Your queue is 0aa3febf3143 and b1614375d051.")"
+  run runhook_nolocale "$tx"
+  [ "$status" -eq 0 ]
+  fired "$output"
 }
 
 @test "opaque-identifier: SILENT on commit shas and on a single id" {
