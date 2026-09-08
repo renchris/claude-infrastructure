@@ -387,7 +387,15 @@ fire() { jq -nc --arg cwd "$1" '{session_id:"s1",cwd:$cwd,tool_name:"Bash",tool_
   run fire "$proj"
   ( cd "$memd" && printf -- '- [Last](e1.md) — tiny\n' >>MEMORY.md )
   # A line cap this fixture is already past, so the whole-index arm has to fire.
-  run env MEMORY_INDEX_LINE_LIMIT=20 MEMORY_ROTATE_AT_LINES=12 MEMORY_ROTATE_TARGET_LINES=8 \
+  # PIN THE ROTOR BUDGET. This case runs the REAL rotor and asserts it REACHED a verdict, so with
+  # MID_DEADLINE_S left at its 7s default the assertion silently becomes "was the box quiet enough",
+  # not "did the whole-index arm actuate in this turn". Measured 2026-09-08: three consecutive runs
+  # on an unmodified tree gave ok / not ok / ok, and three ship-land gates in a row were blocked by
+  # it — including its double-run exoneration, which cannot clear a ~1-in-3 flake. Cases 21 and 22
+  # already pin this seam (MID_DEADLINE_S=2 / =3) precisely because THEY test the cut; this one
+  # tests the opposite outcome and has to pin it the other way for the same reason.
+  run env MID_DEADLINE_S=120 \
+      MEMORY_INDEX_LINE_LIMIT=20 MEMORY_ROTATE_AT_LINES=12 MEMORY_ROTATE_TARGET_LINES=8 \
       MEMORY_ROTATE_TAIL_GUARD=3 MEMORY_ROTATE_MIN_AGE_DAYS=0 MEMORY_ROTATE_MIN_KEEP=0 \
       bash -c 'jq -nc --arg cwd "$1" "{session_id:\"s1\",cwd:\$cwd,tool_name:\"Bash\",tool_input:{command:\"true\"},tool_response:{exitCode:0}}" | bash "$2"' _ "$proj" "$HOOK"
   [ "$status" -eq 0 ]
