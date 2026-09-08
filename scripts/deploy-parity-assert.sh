@@ -805,6 +805,26 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       statusline.sh)             want=0 ;;
       bin/it2-wrapper)           want=0 ;;
       bin/claude-accounts|bin/dia-cdp-launch.sh) want=0 ;;
+      #   templates/model-classification.json
+      #                          install.sh:609 LINKS it, and it is TRACKED — so unlike accounts.json
+      #                          this walk CAN enumerate it, and it reached the reasonless default the
+      #                          day the link landed (42d611d38, 2026-09-08). Caught by the LITERAL
+      #                          INSTALL COVERAGE arm on the next land that touched bin/, i.e. by a
+      #                          session whose diff merely REACHED the suite; the ninth literal
+      #                          install the arm above was built to catch, doing exactly its job.
+      #
+      #                          want=0 AND NOT want=1, and this is the measured part rather than a
+      #                          judgement: the destination is NOT $CFG/<rel>. install.sh renames it
+      #                          on the way down — $REPO_DIR/templates/model-classification.json →
+      #                          $CONFIG_DIR/model-classification.json, dropping the templates/
+      #                          segment. Measured 2026-09-08: ~/.claude/model-classification.json is
+      #                          a live symlink into the checkout, and ~/.claude/templates/ does not
+      #                          exist at all. So the per-file existence leg, which addresses
+      #                          $CFG/<rel>, would look for a path that is correct nowhere and score
+      #                          a PERMANENT false MISSING — wrong rather than merely noisy, the same
+      #                          reason the kitty.conf and bin/it2-wrapper arms give. link_refresh()
+      #                          could not restore it either: its `ln -sf` shape carries no rename.
+      templates/model-classification.json) want=0 ;;
       # ── RAW INSTALLS ── install.sh's THIRD deploy mechanism: a bare `run ln` / `run cp` that
       # calls NEITHER link_file NOR copy_file.
       # MEASURED 2026-09-01 by method 247 pointed at the remedy method 246 had just landed. That
