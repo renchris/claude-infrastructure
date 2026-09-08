@@ -380,6 +380,23 @@ LR_RE_READY="$(lr_wrap_re 'for shortcuts')|$(lr_wrap_re 'auto mode on')|$(lr_wra
 export LR_RE_READY
 export LR_ASIS="$(( SUMMARY == 0 ? 1 : 0 ))"
 export LR_CFG="$cfg" LR_BIN="$BIN" LR_MODEL="$model" LR_EFFORT="$effort" LR_SID="$SID" LR_PROMPT="$PROMPT"
+# ── CLOSE-ATTRIBUTION WRAPPER ────────────────────────────────────────────────────────────────────
+# A RESUMED SESSION USED TO DIE UNATTRIBUTABLY. Every other launch path interposes
+# bin/cc-close-attrib (see ~/.zshrc's claude-next* launchers); the spawn below did not, so a session
+# recovered here could produce no close-record however it died — and the crash watchdog's whole
+# ladder is built on that record. Measured 2026-09-08: of 20 live leads, 15 were wrapped and 5 were
+# not, and ALL FIVE unwrapped ones were spawns from this line. Meanwhile 151 of September's 151
+# `abrupt-unknown` crashes carry no record at all
+# (docs/research/death-attribution-coverage-2026-09-08.md).
+#
+# FAIL-OPEN, and that is why the spawn has two branches rather than an interpolated prefix. An
+# unresolvable wrapper must cost the RECORD, never the RECOVERY — this is the limit-recovery path,
+# and a session that does not come back is a strictly worse outcome than one that comes back
+# unattributed. An empty prefix cannot be spliced into the existing spawn line either: expect would
+# hand `env` an empty argument to exec. So LR_WRAP is empty ⇒ the original line runs unchanged.
+LR_WRAP="$HOME/.claude/bin/cc-close-attrib"
+[[ -x "$LR_WRAP" ]] || LR_WRAP=""
+export LR_WRAP
 # shellcheck disable=SC2016  # single quotes are REQUIRED: the body below is an expect(1) program,
 #   and its $env(...)/$bin references must reach expect uninterpreted. Bash expansion here would
 #   corrupt the script — the values are passed in via the LR_* environment exported above.
@@ -407,7 +424,16 @@ exec expect -c '
   # transcript stayed byte-identical at 3521401b across both (cc-backlog c6089dc2efe6). `-u` UNSETS
   # rather than blanking: an empty string is a value, and a consumer testing presence rather than
   # truthiness would still read it as set.
-  spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode auto --model $model --effort $effort --resume $sid
+  #
+  # The two branches differ ONLY by the cc-close-attrib prefix (see the LR_WRAP block in the bash
+  # above for why an empty prefix cannot simply be interpolated). The wrapper execs the binary in
+  # place, so the spawned pty, the process group and every pattern below are unchanged by it.
+  set wrap $env(LR_WRAP)
+  if {$wrap ne ""} {
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode auto --model $model --effort $effort --resume $sid
+  } else {
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode auto --model $model --effort $effort --resume $sid
+  }
 
   # Move the selector to option $steps+1 and CONFIRM it landed there before committing. Returns 1
   # when confirmed and the CR was sent, 0 when it could not be confirmed — in which case NOTHING is

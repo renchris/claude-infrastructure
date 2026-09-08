@@ -112,7 +112,7 @@ reachable call site today. What survives is the comment recording the measuremen
 it. The arm that pins the behaviour (`a LEGACY record missing the new keys still classifies`) is
 labelled in the suite as a regression pin, not a control, because it is green on both sides.
 
-## The other coverage hole — named, measured, NOT fixed here
+## The other coverage hole — fixed too
 
 **Resumed sessions are never wrapped.** `scripts/limit-recover/lr-fire-resume.sh:410` spawns the
 binary directly under `expect`:
@@ -126,17 +126,29 @@ There is no `cc-close-attrib` in that line, so those sessions can produce no clo
 they die — and the start-record above cannot help them. Live census, 2026-09-08: of **20** running
 leads, **15** are wrapped and **5** are not; all five unwrapped ones are `lr-fire-resume` spawns.
 
-This is a real second cause and it is drivable — the change is inserting the wrapper into that
-`spawn` line — but it sits on the limit-recovery path, under a pty, ahead of the resume-dialog
-automation, and it is not verifiable without exercising that path. It is scoped out of this diff so
-that a bounded, tested change can land; it needs its own arm proving the wrapper survives an
-`expect`-driven pty spawn.
+The spawn now has two branches differing only by the wrapper prefix. **Fail-open is the whole reason
+it is a branch and not an interpolated prefix:** on the limit-recovery path a session that does not
+come back is strictly worse than one that comes back unattributed, so an unresolvable wrapper costs
+the *record*, never the *recovery* — and an empty prefix could not simply be spliced in, because
+expect would hand `env` an empty argument to exec.
+
+**The doubt worth naming is not the wiring, it is the pty.** `cc-close-attrib` background-execs its
+child, routes fd2 through a FIFO into a `tee`, and traps INT/TERM/HUP — and under `spawn` all of
+that runs as the process expect owns the terminal through. A `grep` for the wrapper's name in the
+file would say nothing about it. So `tests/lr-fire-resume-close-attrib.bats` extracts the expect
+program **verbatim from the subject** and runs it against a stub binary, with the real wrapper; the
+verdict is the close-record, a file that exists only if the wrapper was interposed *and* survived to
+its exit path. Three arms: the record appears with the stub's real exit status; an empty `LR_WRAP`
+still recovers the session and writes no record; and both streams still reach the pty, which is what
+every menu pattern in that program is matched against.
 
 ## What this does and does not raise
 
-It converts, into an attributed cause, every future death **of a wrapped session whose wrapper was
-destroyed with it**. It does **not** convert deaths of unwrapped sessions — those still read
-`abrupt-unknown`, correctly, because after this change the absence of *any* record means the launch
-was never instrumented, which is a different problem with a different fix (above).
+It converts, into an attributed cause, every future death **of a session whose wrapper was destroyed
+with it**, and it brings resumed sessions inside that instrument for the first time — 5 of the 20
+leads running when this was written.
 
-The historical rows cannot be recovered: the evidence was never written.
+It converts nothing retroactively. The historical rows cannot be recovered: the evidence was never
+written. And it names no cause it cannot support — a death with no record at all still reads
+`abrupt-unknown`, which after this change means the launch was not instrumented, a third and
+narrower problem than the one this started as.
