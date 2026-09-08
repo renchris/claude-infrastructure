@@ -731,3 +731,87 @@ un-run flagged at session start. Same loss-exposure class as `4a8b2b51`; needs i
 | `8f79bfaf` | LANDED | 99% | fix(tests): flake root-fixes — unguarded kill, e2e hoist, IDL pin, /tmp seam, stam |
 | `df32e338` | LANDED | 99% | feat(gate-batching): T-P7-7 C1..C10 manifest + auto-stamp trailer + /ship backstop |
 
+
+---
+
+## 9. The sweep item `35de32d78364` is REFUTED, and the census is now a script (2026-09-08)
+
+§4's sweep plan was dispatched 43 days after it was written. Every load-bearing fact it rests
+on had changed, and one was never true. **No branch was landed and none should be.** What the
+item asked for is recorded below against what is actually on trunk today, and the measurement
+it was built on now lives in `scripts/stranded-exposure.sh` instead of in this prose.
+
+### 9.1 The four refutations
+
+| § | The item's claim | Measured 2026-09-08 |
+|---|---|---|
+| precondition | "every gate is exposed to the **machine-wide** `pkill -f` at `scripts/reaper-e2e.sh:24`" | **NEVER TRUE.** That line is `pkill -f "$LABEL"` and `LABEL="ccreaper_e2e_$$"` — a per-PID token. Verified identical at `edad4b0` (the sha §2 was written against), at `995dd96` (§8.6's re-check) and on trunk today, where it is line 48. §2 and §8.6 both call it machine-wide; both are wrong at the line they cite. |
+| precondition | "(B) admission control — ABSENT" / "(A) signal-kill third state — ABSENT" | **BOTH LANDED.** `CC_GATE_MAX_LOAD` + `CC_GATE_MAX_LOAD_PER_CORE` with *shed = SKIP, never WAIT* at `ship-land.sh:1536`; `CUT` is a first-class third state throughout `postland-verify.sh`. Demonstrated live: this session's own first `bats` run was **refused by that admission control** ("3 concurrent bats execution root(s) … load/core at or above 2.0"). The precondition is discharged. |
+| Step 1 | delete 11 "fully-redundant" branches, "every patch already carried by another branch" | **FALSE for all 11.** They are not redundant now: `tm/gates` carries 14 stranded patch-ids of its 38 commits, `tm/hooks` 9 of 23, `tm/closure-a` 6 of 13. The rest of each branch landed by rebase — which is why the *ahead* counts are unchanged while the redundancy claim died. |
+| Step 3 | 9 dirty worktrees need a commit or discard | **8 of 9 are GONE**, reaped since. Only `permission-beacon` survives (2 dirty files). The dirty trees the step names no longer exist to act on. |
+
+### 9.2 Step 2 is forbidden by this repo's own shipped ruling
+
+`scripts/stranded-sweep.sh` prints, on every run, the operator ruling that settles this:
+
+> Peer WIP is expected on a multi-session box and is NOT yours to recover — never
+> cherry-pick it onto main. That is why no recipe is printed here.
+
+Step 2 is "land the 25-branch covering set" — 25 other sessions' branches. §8.5 of this same
+document already said it in the narrow case (*"Recover by cherry-pick, never by landing the
+branch"*), and §2/§8.6 each declined to land a single 2-commit branch for exactly this reason.
+The sweep item asks for the thing its own evidence base refuses 25 times over.
+
+### 9.3 The number, re-derived — and why every prior form of it was wrong
+
+`scripts/stranded-exposure.sh --machine`, run 2026-09-08:
+
+```
+ahead_shas=4755  distinct_pids=2367  landed_pids=1251  stranded_pids=1116
+stranded_branches=1887  design_pids=748  design_only_pids=448
+worktree_pids=48  named_pids=634  drop_pids=53  drop_shas=77
+```
+
+The item's headline (164 distinct across 36 branches) is not 164 today; it is **1,116 across
+1,887 branches**. But the figure was never the point, because three of the four readings
+mislead:
+
+- **1,251 of 2,367** distinct ahead patch-ids are *already on trunk verbatim* — landed under a
+  rewritten SHA. The repo lands by rebase, so a fully-landed branch reads "ahead" forever.
+  Seven branches here read **455-456 ahead** and are essentially all landed. Any census built
+  on `rev-list --count` (the 290 and 342 figures) counts landed work as exposure.
+- **448 of the 1,116** stranded patch-ids exist on **no branch outside** `ship/backup-*`,
+  `superseded/*`, `park/*` — the pre-rebase snapshots `ship-land` writes by design. Their
+  patch-ids differ from the landed form *because the land rebased them*. 40% of the headline
+  is the shadow of work that landed.
+- **53 distinct patch-ids / 77 commits** are the only reading that means content LOSS: every
+  changed path absent from the trunk tree. The shipped `stranded-sweep.sh`, run the same hour
+  and built independently, reports **76 commits on 43 branches** — two instruments agreeing
+  to within one commit (it scans local refs only; the census includes remotes).
+
+### 9.4 The disposition-changing finding: this is a GENERATOR, not a backlog
+
+DROP patches by month: **20 (Jul) · 17 (Aug) · 16 (Sep 1-8)**. Per-day the rate roughly
+**tripled** across the window in which the backlog was nominally being swept. A one-time sweep
+of a generator is bailing.
+
+Reading the 53: they are overwhelmingly (a) deliberately disposable probe artifacts
+(`tools/cost-ab-probe/`, `tools/b2v-probe/`, `.github/workflows/probe-*.yml`), and (b) **the
+verdict and park documents of dispatched premise-check sessions whose branch never landed** —
+`docs/research/*-verdict-*.md`, `docs/parks/*.md`, dated 09-01 through **09-08**, on
+`claude/fire-*` branches. **25 of the 426 `origin/claude/fire-*` branches carry content that
+never reached trunk.** That class is the live defect: a fired session adjudicates a backlog
+row, writes the verdict, and the verdict dies with the branch — so the next session re-derives
+it. It is filed separately rather than swept, because sweeping it would not stop it.
+
+### 9.5 What replaced the prose
+
+`scripts/stranded-exposure.sh` (+ `tests/stranded-exposure.bats`, 8 cases) is the census:
+cross-branch union, patch-id dedupe against trunk, the BY-DESIGN/WORKTREE/NAMED stratum, the
+DROP class, and the per-month regeneration rate. It prints **no covering set and no
+cherry-pick recipe**, by the §9.2 ruling. It is complementary to `stranded-sweep.sh`, which
+remains the per-branch verdict and the only own-drop attribution (`--mine`).
+
+Red-proof, per site: an ahead-count census reddens the rebase-landed case; dropping the
+absent-path check reddens the drop-vs-divergence case; collapsing the branch classes reddens
+the BY-DESIGN case. The figure in §1 and §8.1 should not be quoted again — run the script.
