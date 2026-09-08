@@ -25,7 +25,11 @@
 #   --pane <value>  → used VERBATIM (a caller passing an explicit target owns its shape; the role
 #                     file legitimately holds a uuid, a session id, or a pane name).
 #   $SESSION_ID     → used verbatim.
-#   $ITERM_SESSION_ID ("w2t0p3:<UUID>") → the part after the last colon, SHAPE-CHECKED as a UUID.
+#   $ITERM_SESSION_ID ("w2t0p3:<UUID>") → the part after the last colon, SHAPE-CHECKED against the
+#                     id space of the terminal we are actually in: an iTerm2 pane UUID, or — inside
+#                     kitty, where the login shim synthesises "w0t0p0:$KITTY_WINDOW_ID" — that same
+#                     integer window id, accepted only when cc-in-kitty confirms the ancestry AND the
+#                     value equals $KITTY_WINDOW_ID.
 # The shape check exists because `${VAR##*:}` on an unset/malformed variable silently yields garbage
 # rather than empty — and a garbage role file breaks every consumer above SILENTLY (pings route to
 # nowhere, the reaper pages a pane that does not exist, cc-classify stops protecting the real desk).
@@ -48,11 +52,12 @@
 #
 # Env overrides (tests):
 #   CC_ROLES_DIR   (default ~/.claude/cc-roles) · CC_MAILBOX_DIR (the forward pointer's dir)
+#   CC_IN_KITTY_BIN (default `cc-in-kitty`) — the ancestry predicate for the kitty id space
 set -uo pipefail
 
 ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"
 
-usage() { sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; }
 
 ROLE="desk" PANE="" QUIET=0 PRINT=0 FORCE=0
 while [ $# -gt 0 ]; do
@@ -92,16 +97,57 @@ if [ -z "$PANE" ]; then
 fi
 [ -n "$PANE" ] || { echo "desk-register: resolved an EMPTY pane id — refusing to write a role file that routes nowhere." >&2; exit 1; }
 
+# ── THE SHAPE CHECK HAS TWO ID SPACES, NOT ONE (backlog 9002948eb52c, 2026-09-08) ───────────────
+# This check shipped knowing only iTerm2's, and its refusal message says so: "Expected the iTerm2
+# form 'w0t0p0:<UUID>'". Under kitty that sentence is false, and it made the primitive INOPERATIVE
+# on the only terminal this fleet runs: scripts/kitty-setup.sh:290 exports a SYNTHETIC
+# ITERM_SESSION_ID="w0t0p0:$KITTY_WINDOW_ID", so `${itsid##*:}` yields a bare integer, the UUID case
+# never matches, and every hand-started desk was refused with rc 1. Measured 2026-09-08 —
+# `ITERM_SESSION_ID=w0t0p0:618 desk-register` → "did not yield a pane UUID (got '618')", nothing
+# written. The live cc-roles/ files disagreed with this check the whole time: desk=330,
+# docs-lead=450, drain-lead=7, all written by handoff-fire's write_role via self_pane_id
+# (handoff-fire.sh:1632), which returns $KITTY_WINDOW_ID verbatim under kitty. So the WRITER already
+# spoke both id spaces and only this VALIDATOR did not — an inconsistency invisible from either side
+# alone. scripts/limit-recover/lr-handoff.sh:402 states the rule this now mirrors: "in a kitty fleet
+# a 'session uuid' IS the integer kitty window id."
+#
+# WHY IT IS NOT SIMPLY "ALSO ACCEPT DIGITS". The check's whole purpose is that a garbage role file
+# breaks ping routing, the reaper's page target and cc-classify's never-reap SILENTLY, so a wider
+# accept set must not widen the garbage that gets through. KITTY_WINDOW_ID and ITERM_SESSION_ID are
+# both ordinary env vars that inherit transitively and permanently across terminal boundaries
+# (bin/cc-in-kitty's header measures both directions), so a bare integer arriving here has three
+# possible origins and only one of them is us. Two independent terms separate them:
+#   1. bin/cc-in-kitty — ancestry, not environment. Fail-closed by construction (exit 2, "KITTY_*
+#      present but UNVERIFIABLE", counts as no), so an iTerm2 pane carrying a polluted KITTY_* env
+#      is refused here exactly as it is refused everywhere else in the tree.
+#   2. PAIR AGREEMENT — the derived id must equal $KITTY_WINDOW_ID, the same assertion
+#      scripts/kitty-setup.sh:468 makes ("want=w0t0p0:$KITTY_WINDOW_ID"). This is what catches a
+#      STALE ITERM_SESSION_ID inherited from an iTerm2 ancestor INSIDE a genuine kitty window, which
+#      term 1 alone cannot see. kitty reuses small window ids across restarts, so that collision is
+#      structural rather than unlucky (handoff-fire.sh:1656).
+# Both must hold. --pane/$SESSION_ID (explicit) and --force are unchanged: they were never checked.
+CC_IN_KITTY_BIN="${CC_IN_KITTY_BIN:-cc-in-kitty}"
+derived_is_kitty_window() { # → 0 iff $PANE is THIS kitty window's id, by ancestry AND pair agreement
+  case "$PANE" in ''|*[!0-9]*) return 1 ;; esac
+  [ -n "${KITTY_WINDOW_ID:-}" ] && [ "$PANE" = "$KITTY_WINDOW_ID" ] || return 1
+  command -v "$CC_IN_KITTY_BIN" >/dev/null 2>&1 || return 1
+  "$CC_IN_KITTY_BIN" >/dev/null 2>&1
+}
+
 # Shape-check ONLY the derived-from-$ITERM_SESSION_ID path (see header). An explicit --pane/$SESSION_ID
 # is the caller's own contract and may legitimately be a session id or a pane name.
 if [ "$explicit" = 0 ] && [ "$FORCE" = 0 ]; then
   case "$PANE" in
     [0-9A-Fa-f]*-[0-9A-Fa-f]*-[0-9A-Fa-f]*-[0-9A-Fa-f]*-[0-9A-Fa-f]*) : ;;
     *)
-      echo "desk-register: \$ITERM_SESSION_ID='${CC_PANE_ID:-${ITERM_SESSION_ID:-}}' did not yield a pane UUID (got '$PANE')." >&2
-      echo "   Expected the iTerm2 form 'w0t0p0:<UUID>'. A malformed role file breaks ping routing, the" >&2
-      echo "   reaper page target and cc-classify's desk never-reap SILENTLY — refusing. Use --pane/--force." >&2
-      exit 1 ;;
+      if derived_is_kitty_window; then : ; else
+      echo "desk-register: \$ITERM_SESSION_ID='${CC_PANE_ID:-${ITERM_SESSION_ID:-}}' did not yield a pane id for THIS terminal (got '$PANE')." >&2
+      echo "   Expected the iTerm2 form 'w0t0p0:<UUID>', or — inside kitty — 'w0t0p0:<KITTY_WINDOW_ID>'" >&2
+      echo "   matching \$KITTY_WINDOW_ID='${KITTY_WINDOW_ID:-unset}' with $CC_IN_KITTY_BIN confirming the ancestry." >&2
+      echo "   A malformed role file breaks ping routing, the reaper page target and cc-classify's" >&2
+      echo "   desk never-reap SILENTLY — refusing. Use --pane/--force." >&2
+      exit 1
+      fi ;;
   esac
 fi
 
