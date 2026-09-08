@@ -1493,6 +1493,44 @@ printf '1..1\nok 1 p\n'")"
   grep -q 'failing: tests/::boom' "$CC_PAGES_DIR"/postland-red-*.page
 }
 
+# C13d asserts the page and the durable title AGREE on a single-failure tree, where the scalar and
+# the per-entry name are trivially the same string. They come apart the moment C29 prunes, and that
+# is a shape no single-failure fixture can reach — hence the two-suite, two-window fixture below.
+@test "C13d2: the page names the failing test OF the suite it names, not a pruned entry's" {
+  # Backlog d6a4896406aa. FAILTEST is the first name the ladder saw and is never overwritten;
+  # corroborate_convictions then prunes FAILING/FAILNAME but cannot reach the scalar. So the page
+  # and the peer ping rendered `FAILING[0]::FAILTEST` — a surviving FILE beside a PRUNED file's
+  # TEST. Live instance, 2026-09-08 04:16: the page read
+  # `tests/compressor-sentinel.bats::opaque-identifier: SILENT once ONE id is glossed`, naming a
+  # test that exists only in tests/anti-deference-nudge.bats, which that same run had demoted to
+  # PENDING one line earlier in runner.log. A worker dispatched on it opens the wrong file.
+  #
+  # The fixture builds exactly that: `aaa-pending` is convicted in window 2 ONLY (so it sets the
+  # scalar, sorts first, and is then pruned), while `zzz-corroborated` fails in both windows and is
+  # the single entry that survives. The names are chosen so a cross-attribution cannot read as a
+  # near-miss — nothing about "aaa-pending" belongs to the zzz suite.
+  c="$BATS_TEST_TMPDIR/pending-counter"
+  # n<=1 is window 1's single corpus invocation ⇒ PASS there; every later call (window 2's corpus
+  # plus its two ladder retries) FAILS, which is what makes it a one-window candidate.
+  add_stateful_test aaa-pending "$(printf '#!/bin/bash\nC="%s"\nn=$(cat "$C" 2>/dev/null || echo 0)\nn=$((n+1))\necho "$n" > "$C"\n[ "$n" -le 1 ] && exit 0\nexit 1\n' "$c")"
+  printf '@test "zzz-corroborated-name" { false; }\n' > "$R/tests/zzz-corroborated.bats"
+  push_commit "one suite convicted in both windows, one in the second only"
+  run bash "$SUT" --run-if-needed        # window 1: aaa passes, zzz convicted (candidate only)
+  second_window                          # window 2: aaa convicted (candidate), zzz CORROBORATED
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$(origin_tree).json"
+  [ "$output" = "red" ]                  # the fixture must actually reach red_actions
+  p="$(find "$CC_PAGES_DIR" -name 'postland-red-*.page' | head -1)"
+  [ -n "$p" ]
+  # zzz is the only corroborated entry, so it is the file the page names...
+  grep -q '^failing: tests/zzz-corroborated.bats::' "$p"
+  # ...and the test beside it must be ITS test. This is the assertion that was false.
+  grep -q '^failing: tests/zzz-corroborated.bats::zzz-corroborated-name' "$p"
+  # The pruned candidate must not appear on that line at all — a page that names a demoted suite's
+  # test is claiming a failure this run explicitly declined to assert.
+  run grep -c 'aaa-pending' "$p"
+  [ "$output" = "0" ]
+}
+
 # ── C13e–C13g: EVERY reproducible failure is filed, ONCE (backlog fa58a8151140) ──────────────────
 # C13d above pinned that the ONE item carries a NAME. It could not see the two defects around it,
 # because a single-failure fixture cannot distinguish "files the failures" from "files the FIRST

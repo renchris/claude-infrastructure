@@ -2765,7 +2765,20 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
   # is appended to — mapping it to a space keeps the token boundary readable. The 120 cap is BYTES
   # under the C locale launchd hands this job, exactly as `cut -c` would be: not a multibyte fix,
   # just a cheaper one, sized so no single test name dominates the backlog listing.
-  ftest="${FAILTEST:-?}"; ftest="${ftest//[$'\n\r']/ }"; ftest="${ftest:0:120}"
+  # ── READ THE PER-ENTRY NAME, NOT THE SCALAR (2026-09-08, backlog d6a4896406aa) ────────────────
+  # FAILTEST is the FIRST name the run saw and is never overwritten (`[ -n "$FAILTEST" ] ||` at
+  # both ladder sites), whereas `$file` is FAILING[0] — and C29's corroborate_convictions PRUNES
+  # FAILING/FAILNAME in step AFTER the ladder has already set FAILTEST. So a suite convicted in one
+  # window only sets the scalar and is then pruned out, leaving the page and the peer ping naming a
+  # SURVIVING file beside a PRUNED file's test. Measured on the 04:16 page of 2026-09-08:
+  # `failing: tests/compressor-sentinel.bats::opaque-identifier: SILENT once ONE id is glossed` —
+  # a test that exists only in tests/anti-deference-nudge.bats, which that run had just demoted to
+  # PENDING. Same cross-attribution class the per-entry loop below already fixed for the durable
+  # title (C13e's FAILNAME) and for the sha (8740c03e428c); this was the third field, on the two
+  # artifacts a human actually reads. FAILNAME is index-aligned with FAILING through the prune, so
+  # FAILNAME[0] is the name OF `$file` on every path that reaches here; the scalar stays as the
+  # fallback for the branch-(b) shape, where it is what FAILNAME was built from anyway.
+  ftest="${FAILNAME[0]:-${FAILTEST:-?}}"; ftest="${ftest//[$'\n\r']/ }"; ftest="${ftest:0:120}"
   [ -n "$ftest" ] || ftest='?'
   good="$(cat "$LASTGREEN" 2>/dev/null || true)"
   do_bisect "$file" "$good" "$sha" 2>/dev/null || true      # NOT `$( )` — see BISECT_CULPRIT
