@@ -310,6 +310,19 @@ INFLIGHT_BELT="${CC_REAPER_INFLIGHT_BELT:-1}"          # operator kill-switch fo
 # population is UNMEASURED (that population was empty when it was written), so the operator must be
 # able to retire exactly this leg without also disarming the in-flight-subagent one.
 GOAL_BELT="${CC_REAPER_GOAL_BELT:-1}"                  # operator kill-switch for leg 4 alone
+# Leg 5's silence cap, and it is SIZED ON ITS OWN DISTRIBUTION rather than borrowed from leg 3's —
+# the two bound different phenomena, and a bound sized in the wrong band is a permanent non-verdict
+# (memory: bound-must-fit-the-band-not-the-bench). Measured 2026-09-08 over all five account
+# transcript roots: 8,418 `<task-notification>` enqueues across 2,244 transcripts, of which 8,246
+# were consumed by a later record. Consumption latency p50 = 1s, p90 = 23s, p99 = 601s. 900s
+# therefore sits ~1.5x above p99 and covers 99.05% of every consumption that genuinely happened;
+# past it the population is corpse-dominated (of the 165 transcripts whose FINAL record is an
+# unconsumed enqueue, the median age is 14.6 DAYS and only one is under 15 minutes). Like leg 3's,
+# this cap can only ever make the leg ABSTAIN — it under-refuses, never over-refuses.
+WAKE_MAX_SILENCE_S="${CC_REAPER_WAKE_MAX_SILENCE_S:-900}"
+# Leg 5's own kill-switch, separate for the same reason leg 4's is separate from leg 3's: an
+# operator must be able to retire exactly one leg without disarming the others.
+WAKE_BELT="${CC_REAPER_WAKE_BELT:-1}"                  # operator kill-switch for leg 5 alone
 PANE_DELTA_TOL="${CC_REAPER_PANE_DELTA_TOL:-0}"                         # live−enumerated > tol ⇒ blind-spot surface
 SELFCHECK_MIN_PERSIST="${CC_REAPER_SELFCHECK_MIN_PERSIST:-2}"          # delta must persist N sweeps (kills a race)
 # R5e (2026-08-25, recycle #226): the registry is read ONLY to ATTRIBUTE the blind-spot delta, never
@@ -1396,8 +1409,10 @@ session_subagent_inflight() { # <sid> → 0 in-flight · 1 definitely none · 2 
 # those 69, the same 2. So "`--goal` is part of the fire recipe" is true of the FIRE and false of
 # the RECORD — a goal_status attachment only exists once the evaluator has run, and a dispatched
 # peer that self-retires quickly never produces one. This leg is correct and cheap and it closes the
-# sub-case it names; it is NOT the remedy for the row's falsifier at large, and the residual — a
-# fired peer with no commits, no back-channel, no subagent AND no goal record — is still unbelted.
+# sub-case it names; it is NOT the remedy for the row's falsifier at large. THAT residual — a fired
+# peer with no commits, no back-channel, no subagent AND no goal record — is what LEG 5 below
+# reaches, on the one channel the forensics recorded and nothing read: the victim's transcript ends
+# on an unconsumed background-task notification.
 #
 # THE CHANNEL IS THE GOAL, AND IT IS POSITIVE EVIDENCE, NOT SILENCE. Since 2026-08-09 `--goal` is
 # part of the fire recipe rather than an option, so a dispatched peer carries a machine-readable
@@ -1443,6 +1458,80 @@ session_goal_inflight() { # <sid> → 0 in-flight (a /goal is LIVE and UNMET) ·
   [ -n "$tj" ] && [ -r "$tj" ] || return 2
   goal_live_condition "$tj" >/dev/null 2>&1 && return 0
   return 1
+}
+
+# ── THE FIFTH CHANNEL: A COMPLETED BACKGROUND TASK THE SESSION HAS NOT WOKEN FOR (7c22e9b43956) ──
+# THE RESIDUAL THIS CLOSES, stated as the earlier legs state theirs. Leg 2 can speak only where a
+# --notify-back was armed, leg 3 only where an Agent-tool subagent exists, leg 4 only where a goal
+# record exists (~1% of the no-notifyBack hole, re-measured at 2 of 344). A fired peer with none of
+# the three — 0 commits, no back-channel, no subagent, no goal record — fell straight through to
+# REAP on ahead=0-by-silence. Measured 2026-09-08: 512 of 623 fired stamps carry no notifyBack, so
+# that residual is the large majority of the fired population.
+#
+# THE CHANNEL IS THE VICTIM'S OWN DEATH RECORD, AND IT WAS SITTING IN THE FORENSICS UNREAD.
+# docs/research/reaped-uncommitted-peer-2026-08-19.md records that pane B2D1CE68's transcript ends
+# with a `queue-operation` ENQUEUING a `<task-notification>` for background Bash task `bn8c8kjam` —
+# "the session was blocked waiting on its own background task when it was killed", in the same
+# minute as the reap. That enqueue is the harness telling the session its background work FINISHED
+# and it is about to be woken to consume the output. Reaping in that window destroys the wake: the
+# task ran, its output file sits in a reboot-ephemeral /tmp store, and the session that asked for it
+# never reads a byte.
+#
+# 🚨 THIS IS NOT THE INHERITED `CC_TASKS_ROOT` REMEDY, WHICH THE FORENSICS ITSELF REJECTED, AND THE
+# DIFFERENCE IS THE STORE. That remedy proposed reading /private/tmp/claude-501/<slug>/<sid>/tasks/
+# *.output, and the document's own "what this leg does not cover" paragraph rules it out in one
+# line: that store "is reboot-ephemeral and records no started/finished status, so it cannot answer
+# the question". Both halves are true and neither applies here. The TRANSCRIPT is durable, it is
+# already resolved by find_transcript for legs 3 and 4, and it DOES carry the status — the enqueue
+# is the completion event and the matching `remove` is the consumption event. No new seam, no new
+# store, no new env root: one `tail -1` on a file this belt already opens.
+#
+# WHY THIS DOES NOT COLLIDE WITH THE SETTLE WINDOW, which is the fact that makes the leg reachable
+# at all. cc-classify computes idle_s from the last ASSISTANT record and says so at its own head
+# ("NEVER file mtime alone"), so a queue-operation enqueue does NOT reset idle. The two clocks are
+# independent: a peer can be idle past SETTLE_S on the assistant clock while its transcript's final
+# write — the enqueue — is seconds old. That is exactly the victim's log, which reads `idle 473s <
+# settle 600s` one sweep and REAP the next, with its final transcript write in the reap's own minute.
+#
+# IT READS BOTH WAYS, WHICH IS WHAT KEEPS IT A SIGNAL INSTEAD OF A TAX. Measured 2026-09-08 over all
+# five account transcript roots (2,272 transcripts): 165 have an unconsumed enqueue as their FINAL
+# record — 7.3%, and ALL 165 are task-notifications, so the predicate's subject is clean. Of the
+# 8,418 task-notification enqueues in that corpus, 8,246 were consumed. With the cap applied the
+# firing population collapses to the live wake window: exactly ONE of the 2,272 qualified at the
+# moment of measurement, and it was a real dispatched peer (`wt-95fcadde830e`) holding an
+# unconsumed notification for background task `b8j9w74aw`. So this leg CAN fire on the live fleet
+# and does not fire on 82% of it — the bound the row's own note demands.
+#
+# THE COMMON CASE IS A DEFINITE NEGATIVE, deliberately. A transcript whose last record is anything
+# else — an assistant turn, an attachment, a `remove` — returns 1, not 2. 2,107 of 2,272 transcripts
+# answer that way. A leg whose common case abstained would be indistinguishable from one that was
+# never wired (memory: alarm-polarity-and-attention-budget).
+#
+# A LATER UNTIMESTAMPED APPEND FAILS TOWARD REAP, ON PURPOSE. Reading the LAST LINE rather than "the
+# last enqueue with no successor" means a record appended after the enqueue makes this return 1 even
+# when the wake is still pending. Measured, that is 7 cases (172 by successor-scan vs 165 by
+# tail -1). Under-refusing costs the status quo; over-refusing costs a pane that can never be reaped.
+session_task_wake_pending() { # <sid> → 0 a wake is pending · 1 definitely none · 2 cannot tell
+  local sid="${1:-}" tj last now m
+  [ -n "$sid" ] || return 2
+  tj="$(find_transcript "$sid" 2>/dev/null)" || return 2
+  [ -n "$tj" ] && [ -r "$tj" ] || return 2
+  last="$(tail -1 "$tj" 2>/dev/null)" || return 2
+  [ -n "$last" ] || return 2            # an empty transcript answers nothing; it is not a negative
+  # Substring tests, not jq: this must survive PATH=/usr/bin:/bin under launchd, for the same reason
+  # session_subagent_inflight is jq-free (memory: hermetic-in-stubs-not-in-interpreter). The harness
+  # writes these three tokens without spaces, verified across all 8,418 enqueues in the corpus.
+  case "$last" in *'"type":"queue-operation"'*) ;; *) return 1 ;; esac
+  case "$last" in *'"operation":"enqueue"'*)     ;; *) return 1 ;; esac
+  case "$last" in *'<task-notification>'*)       ;; *) return 1 ;; esac
+  m="$(file_mtime_r "$tj")" || return 2
+  case "$m" in ''|*[!0-9]*) return 2 ;; esac
+  now="$(reaper_now)"
+  case "$now" in ''|*[!0-9]*) return 2 ;; esac
+  # The cap. A stale wake retires to the SAME negative an absent one does — both mean "proceed" —
+  # and the call site's log line names both readings so a capped pass is still findable.
+  [ "$(( now - m ))" -le "$WAKE_MAX_SILENCE_S" ] 2>/dev/null || return 1
+  return 0
 }
 
 checkpoint_first() { # <cwd> <name> <sid> — snapshot WIP to refs/wip/<name>/LAST (proven plumbing)
@@ -2114,7 +2203,33 @@ sweep() {
               surfaced_keys="$surfaced_keys$ibkey "
               handle_surface "$reap" "$ibkey" "$name" "$cause" "$pane" "never committed in this worktree AND an Agent-tool subagent is still running — auto-reap refused; closing this pane kills it mid-run. Confirm-close if truly done"
               continue ;;
-            2) log "inflight-belt abstain $name pane=$pane: cannot resolve this session's transcript for sid=${ub_sid:-none} — proceeding to the back-channel leg" ;;
+            2) log "inflight-belt abstain $name pane=$pane: cannot resolve this session's transcript for sid=${ub_sid:-none} — proceeding to the pending-wake leg" ;;
+          esac
+        fi
+        # ── LEG 5: a background task FINISHED and this session has not woken for it ─────────────
+        # POSITIVE evidence, like legs 3 and 4, and it applies whether or not a back-channel was
+        # ever armed — which is the point: this is the leg that reaches the residual none of the
+        # other three can speak for (0 commits, no notifyBack, no subagent, no goal record). Placed
+        # immediately after leg 3 because the two are the same kind of claim about the same kind of
+        # object — this session's own in-flight machinery — and ABOVE leg 4 because a pending wake
+        # names a concrete destroyed artifact (a completed task's output, in a reboot-ephemeral
+        # store, that nothing else will ever read) where an unmet goal names an unfinished
+        # intention. When both are true the operator should be handed the more concrete one.
+        if [ "$WAKE_BELT" = 1 ]; then
+          local ub_w=0
+          [ -n "${ub_sid:-}" ] || ub_sid="$(printf '%s' "$o" | jq -r '.session_id // .sessionId // ""' 2>/dev/null)"
+          session_task_wake_pending "$ub_sid" || ub_w=$?
+          case "$ub_w" in
+            0)
+              say "  keep   $name [$cause] — NEVER COMMITTED here and a background task has FINISHED whose notification it has not consumed: a reap would destroy the wake → auto-reap refused (pending-wake belt)"
+              log "wake-belt refuse $name [$cause] pane=$pane cwd=$cwd sid=${ub_sid:-none}: 0 commits in this worktree's reflog AND its transcript ends on an unconsumed <task-notification> enqueue younger than ${WAKE_MAX_SILENCE_S}s — the session is waiting to be woken for work it already ran"
+              surfaced=$((surfaced+1))
+              local wbkey; wbkey="$(sanitize_key "${pane:-$name}")"
+              surfaced_keys="$surfaced_keys$wbkey "
+              handle_surface "$reap" "$wbkey" "$name" "$cause" "$pane" "never committed in this worktree AND a finished background task is still waiting to wake it — auto-reap refused; closing this pane discards that output unread. Confirm-close if truly done"
+              continue ;;
+            1) log "wake-belt pass $name pane=$pane: 0 commits and no pending wake (its transcript does not end on a task-notification enqueue, or that enqueue is older than ${WAKE_MAX_SILENCE_S}s) — not evidence of in-flight work, proceeding to the goal leg" ;;
+            2) log "wake-belt abstain $name pane=$pane: cannot read a final record for sid=${ub_sid:-none} (transcript unresolvable/unreadable/empty) — NOT treating an unresolved read as a negative, proceeding to the goal leg" ;;
           esac
         fi
         # ── LEG 4: the peer's OWN contract is still UNMET (backlog 7c22e9b43956) ────────────────

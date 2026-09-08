@@ -2927,6 +2927,253 @@ EOF
   [ "$status" -ne 0 ] || false
 }
 
+# ── LEG 5: A COMPLETED BACKGROUND TASK THE SESSION HAS NOT WOKEN FOR (backlog 7c22e9b43956) ─────
+# THE POPULATION NONE OF LEGS 2-4 CAN SPEAK FOR, which is the row's actual residual: 0 commits, no
+# --notify-back armed (leg 2 correctly silent — no ping was ever owed), no subagents/ dir (leg 3
+# passes), no goal record (leg 4 passes, and G5 pins that a never-armed goal is a DEFINITE negative).
+# Measured 2026-09-08: 512 of 623 fired stamps carry no notifyBack, so leg 2 is structurally silent
+# over the large majority of fired peers, and leg 4 reaches ~1% of that hole.
+#
+# THE FIXTURE IS THE INCIDENT'S OWN SHAPE, not a new invention. The forensics
+# (docs/research/reaped-uncommitted-peer-2026-08-19.md) records that pane B2D1CE68's transcript ends
+# with a `queue-operation` enqueuing a `<task-notification>` for background task `bn8c8kjam`, in the
+# same minute as the reap. W1 rebuilds exactly that: the residual, plus an unconsumed wake.
+#
+# WHY THE FIXTURE CARRIES A SIGNAL AT ALL, since the row's falsifier is worded as the bare residual.
+# The row's own bound forbids the bare reading: "a leg that fires on the whole 82% would re-create
+# the confirm-close pile-up T-P3-4 promotion exists to drain". A leg that refuses every 0-commit /
+# no-ping / no-subagent / no-goal peer IS that blanket. So the falsifier is satisfied on the session
+# the DoD document is actually about — the one whose work was in flight — and W3/W4/W5 are the
+# discriminators that stop it degrading into the blanket.
+#
+# PRE-FIX SPLIT — RUN, not predicted (`git show origin/main:bin/cc-reaper` as the subject):
+#   RED   — W1, W2, W3, W6, W9
+#   GREEN — W4, W5, W7, W8
+# The prediction before running was `RED W1,W2,W6 / GREEN W3,W4,W5,W7` and it was wrong on two,
+# recorded here because a prediction that is never executed is a claim:
+#   • W3 reds pre-fix — it is not the pure preservation the prediction assumed. Its last assertion
+#     greps the log for `wake-belt pass`, a line only leg 5 emits, so half of W3 is a new-unit red.
+#     It is a stronger case than predicted; the prediction was the thing that was wrong. (Exactly
+#     the correction G5 already carries, arrived at independently and the same way: by running it.)
+#   • W9 reds pre-fix for the same reason — `wake_refused` names a message that does not exist in a
+#     build with no leg 5, so its ordering claim rides on a new-unit assertion.
+# The falsifier's stated PRE-FIX SIGNATURE was verified directly rather than inferred from W1's
+# failure: W1's exact fixture, run against origin/main's reaper, prints `1 reaped` and INVOKES
+# cc-teardown. That is the death, reproduced on the residual population.
+WPROJ_SID="7c7c7c7c-1111-4222-8333-444455556666"
+
+mk_wake() { # <sid> <pending|consumed> <seconds-ago> — the harness's own queue-operation records
+            # appended to the session's transcript, in the byte shape session_task_wake_pending greps.
+  local f="$D/proj-c/slug/$1.jsonl"
+  printf '{"type":"queue-operation","operation":"enqueue","timestamp":"2026-09-08T00:00:00.000Z","sessionId":"%s","content":"<task-notification>\\n<task-id>bn8c8kjam</task-id>\\n"}\n' "$1" >> "$f"
+  if [ "$2" = consumed ]; then
+    printf '{"type":"queue-operation","operation":"remove","timestamp":"2026-09-08T00:00:05.000Z","sessionId":"%s"}\n' "$1" >> "$f"
+  fi
+  touch_ago "$f" "$3"                                  # appending moved the mtime; restore the age
+}
+
+# ANTI-VACUITY for the W-series, and it is load-bearing for the same reason assert_goal_fixture is:
+# leg 5 answers off the LAST LINE, so a fixture whose final record drifted (a stray trailing append,
+# a shape change) would read as a DEFINITE negative and every preservation case below would pass
+# without the fixture ever carrying a pending wake at all. Assert the disk state the case intends,
+# before asserting anything about the verdict.
+assert_wake_fixture() { # <sid> <pending|consumed>
+  local f="$D/proj-c/slug/$1.jsonl" last
+  [ -f "$f" ] || false
+  last="$(tail -1 "$f")"
+  case "$2" in
+    pending)  case "$last" in *'"operation":"enqueue"'*'<task-notification>'*) ;; *) false ;; esac ;;
+    consumed) case "$last" in *'"operation":"remove"'*) ;; *) false ;; esac ;;
+  esac
+}
+
+wake_refused() { echo "$output" | grep -q 'pending-wake belt'; }
+
+@test "W1 FALSIFIER: 0-commit peer, NO back-channel, NO subagent, NO goal, PENDING wake is NOT reaped" {
+  # The residual, entire. Pre-fix this reads `1 reaped` and cc-teardown is invoked — the death this
+  # whole row is about, on the population the other three legs are structurally unable to reach.
+  mkworktree "$D/wmain1" "$D/.worktrees/wt-w1"
+  assert_never_committed "$D/.worktrees/wt-w1"
+  mark_fired                                           # stamp WITHOUT notifyBack ⇒ leg 2 is quiet
+  mk_sess_transcript "$WPROJ_SID" 60                   # no subagents/ dir ⇒ leg 3 is quiet
+  mk_wake "$WPROJ_SID" pending 60                      # no goal record  ⇒ leg 4 is quiet
+  assert_wake_fixture "$WPROJ_SID" pending
+  assert_goal_fixture "$WPROJ_SID" not
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-w1" 999 yes "$WPANE" "$WPROJ_SID"
+  run "$R" sweep --reap
+  [ "$status" -eq 0 ]
+  wake_refused || false
+  run td_called
+  [ "$status" -ne 0 ] || false                         # the pane SURVIVES — this is the whole item
+  [ -d "$D/.worktrees/wt-w1" ] || false                # and so does its worktree
+}
+
+@test "W2 leg 5's refusal names its reason in the durable log, not only on stdout" {
+  mkworktree "$D/wmain2" "$D/.worktrees/wt-w2"
+  mark_fired
+  mk_sess_transcript "$WPROJ_SID" 60
+  mk_wake "$WPROJ_SID" pending 60
+  assert_wake_fixture "$WPROJ_SID" pending
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-w2" 999 yes "$WPANE" "$WPROJ_SID"
+  run "$R" sweep --reap
+  grep -q 'wake-belt refuse' "$D/reaper.log" || false
+  grep -q 'unconsumed <task-notification> enqueue' "$D/reaper.log" || false
+}
+
+@test "W3 a CONSUMED notification is not a pending wake ⇒ belt quiet ⇒ reaped" {
+  # Half preservation, half new-unit (see the split above). Its MUTANT WAS RUN, not argued: reading
+  # the whole file instead of the last line (`cat` for `tail -1`) reds THIS CASE ALONE, 8/9 of the
+  # W-series staying green — which is what attributes the coverage to this site. This is the half that keeps leg 5
+  # from being a permanent-refusal generator: the channel must read BOTH ways, and measured it does
+  # — 8,246 of 8,418 task-notification enqueues in the corpus were consumed by a later record.
+  mkworktree "$D/wmain3" "$D/.worktrees/wt-w3"
+  mark_fired
+  mk_sess_transcript "$WPROJ_SID" 60
+  mk_wake "$WPROJ_SID" consumed 60
+  assert_wake_fixture "$WPROJ_SID" consumed
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-w3" 999 yes "$WPANE" "$WPROJ_SID"
+  run "$R" sweep --reap
+  run wake_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+  grep -q 'wake-belt pass' "$D/reaper.log" || false    # and it recorded that it LOOKED
+}
+
+@test "W4 a wake older than the cap is retired, not believed forever ⇒ reaped" {
+  # GREEN PRE-FIX BY CONSTRUCTION. MUTANT RUN: deleting the cap line reds THIS CASE ALONE. Without it leg 5 is a
+  # permanent-refusal generator over corpses: of the 165 transcripts in the live corpus whose FINAL
+  # record is an unconsumed enqueue, the MEDIAN age is 14.6 days and only one is under 15 minutes.
+  # An uncapped leg would refuse all 165 forever.
+  mkworktree "$D/wmain4" "$D/.worktrees/wt-w4"
+  mark_fired
+  mk_sess_transcript "$WPROJ_SID" 60
+  mk_wake "$WPROJ_SID" pending 4000                    # > the 900s default cap
+  assert_wake_fixture "$WPROJ_SID" pending             # the wake IS pending — only its AGE differs
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-w4" 999 yes "$WPANE" "$WPROJ_SID"
+  run "$R" sweep --reap
+  run wake_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+}
+
+@test "W5 a peer that DID commit is reaped even with a pending wake (leg 5 stays in its population)" {
+  # GREEN PRE-FIX BY CONSTRUCTION. MUTANT RUN: widening the shared `ub_c = 1` precondition to admit
+  # `ub_c = 0` reds THIS CASE ALONE. Without that precondition leg 5 would exempt every session on the box that is
+  # mid-wake, which is the pile-up harm work_landed's 2026-07-20 relaxation exists to undo.
+  mkworktree "$D/wmain5" "$D/.worktrees/wt-w5"
+  git -C "$D/.worktrees/wt-w5" commit -q --allow-empty -m "real work"
+  git -C "$D/.worktrees/wt-w5" push -q origin HEAD:main 2>/dev/null || true
+  mark_fired
+  mk_sess_transcript "$WPROJ_SID" 60
+  mk_wake "$WPROJ_SID" pending 60
+  assert_wake_fixture "$WPROJ_SID" pending
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-w5" 999 yes "$WPANE" "$WPROJ_SID"
+  run "$R" sweep --reap
+  run wake_refused
+  [ "$status" -ne 0 ] || false
+}
+
+@test "W6 session_task_wake_pending is THREE-valued: pending=0 none=1 cannot-tell=2" {
+  # Reds pre-fix only because the function does not exist — a new-unit red, NOT evidence about the
+  # defect. Extracted and run directly so the ABSTAIN path is positively OBSERVED rather than
+  # inferred from "well, it still reaped". Conflating an unresolved read with "no wake" is exactly
+  # how a belt silently stops protecting anyone.
+  mk_sess_transcript "$WPROJ_SID" 60
+  mk_wake "$WPROJ_SID" pending 60
+  local ex="$D/wake-fn.sh"
+  {
+    sed -n '/^find_transcript(){/,/^}/p'              "$R"
+    sed -n '/^file_mtime_r(/,/^}/p'                   "$R"
+    sed -n '/^reaper_now(/,/^}/p'                     "$R"
+    sed -n '/^session_task_wake_pending() {/,/^}/p'   "$R"
+  } > "$ex"
+  # ANTI-VACUITY: a `sed` range whose start marker has drifted selects NOTHING, or everything to
+  # EOF, and the extract would then "pass" over an empty file (memory: absent-range-endpoint-
+  # selects-everything). Assert the extract carries every function AND parses, before running a case.
+  grep -q 'session_task_wake_pending()' "$ex" || false
+  grep -q 'find_transcript()' "$ex" || false
+  grep -q 'file_mtime_r' "$ex" || false
+  bash -n "$ex" || false
+
+  cat > "$D/run-wake.sh" <<EOF
+#!/bin/bash
+PROJECT_ROOTS="\$CC_REAPER_PROJECT_ROOTS"
+WAKE_MAX_SILENCE_S="\${WAKE_MAX_SILENCE_S:-900}"
+. "$ex"
+session_task_wake_pending "\$1"; echo "rc=\$?"
+EOF
+  chmod +x "$D/run-wake.sh"
+
+  run bash "$D/run-wake.sh" "$WPROJ_SID"               # a pending wake inside the cap
+  [ "$output" = "rc=0" ] || false
+  run bash "$D/run-wake.sh" "no-such-session-id"       # transcript unresolvable ⇒ cannot tell
+  [ "$output" = "rc=2" ] || false
+  # a transcript that resolves and ends on something else = a DEFINITE negative, never an abstain
+  mk_sess_transcript "b2b2b2b2-1111-4222-8333-444455556666" 60
+  run bash "$D/run-wake.sh" "b2b2b2b2-1111-4222-8333-444455556666"
+  [ "$output" = "rc=1" ] || false
+  # an EMPTY transcript answers nothing — it is not a negative
+  : > "$D/proj-c/slug/b2b2b2b2-1111-4222-8333-444455556666.jsonl"
+  run bash "$D/run-wake.sh" "b2b2b2b2-1111-4222-8333-444455556666"
+  [ "$output" = "rc=2" ] || false
+}
+
+@test "W7 kill-switch CC_REAPER_WAKE_BELT=0 reaps W1's exact fixture (discriminator pair)" {
+  # GREEN PRE-FIX BY CONSTRUCTION. Pairs with W1 on ONE fixture: this is what proves W1's survival
+  # is leg 5's doing and not an unrelated refusal upstream.
+  mkworktree "$D/wmain7" "$D/.worktrees/wt-w7"
+  mark_fired
+  mk_sess_transcript "$WPROJ_SID" 60
+  mk_wake "$WPROJ_SID" pending 60
+  assert_wake_fixture "$WPROJ_SID" pending
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-w7" 999 yes "$WPANE" "$WPROJ_SID"
+  CC_REAPER_WAKE_BELT=0 run "$R" sweep --reap
+  run wake_refused
+  [ "$status" -ne 0 ] || false
+  td_called
+}
+
+@test "W8 leg 3 OUTRANKS leg 5: with BOTH true the message names the subagent, not the wake" {
+  # An ORDERING pin, green pre-fix by construction (with no leg 5 in the build leg 3 refuses alone
+  # and no wake message exists). Its discriminating mutant is an ordering one, and it WAS RUN —
+  # swapping leg 5's block above leg 3's reds THIS CASE ALONE. Leg 3's refusal is the more concrete destruction: a reap SIGKILLs a process that
+  # is executing right now, where a pending wake names output already safely written to disk.
+  mkworktree "$D/wmain8" "$D/.worktrees/wt-w8"
+  mark_fired
+  mk_sess_transcript "$WPROJ_SID" 60
+  mk_wake "$WPROJ_SID" pending 60
+  mk_subagent "$WPROJ_SID" w8 inflight 10
+  assert_inflight_fixture "$WPROJ_SID" w8 yes
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-w8" 999 yes "$WPANE" "$WPROJ_SID"
+  run "$R" sweep --reap
+  inflight_refused || false
+  run wake_refused
+  [ "$status" -ne 0 ] || false
+  run td_called
+  [ "$status" -ne 0 ] || false
+}
+
+@test "W9 leg 5 OUTRANKS leg 4: with BOTH true the message names the wake, not the goal" {
+  # The other half of the ordering, and it needs its own case: a pending wake names a concrete
+  # destroyed artifact (a finished task's output that nothing else will read) where an unmet goal
+  # names an unfinished intention. MUTANT RUN: swapping leg 4's block above leg 5's reds THIS CASE
+  # ALONE.
+  mkworktree "$D/wmain9" "$D/.worktrees/wt-w9"
+  mark_fired
+  mk_sess_transcript "$WPROJ_SID" 60
+  mk_goal "$WPROJ_SID" live 60
+  mk_wake "$WPROJ_SID" pending 60                      # appended AFTER the goal ⇒ it is the last line
+  assert_wake_fixture "$WPROJ_SID" pending
+  assert_goal_fixture "$WPROJ_SID" live
+  mock_classify_sid finished-teammate "$D/.worktrees/wt-w9" 999 yes "$WPANE" "$WPROJ_SID"
+  run "$R" sweep --reap
+  wake_refused || false
+  run goal_refused
+  [ "$status" -ne 0 ] || false
+  run td_called
+  [ "$status" -ne 0 ] || false
+}
+
 # ── THE WAKE PATH'S WRAPPER WAS UNPROTECTED WHILE ITS WATCHER WAS (2026-08-21). `wl` carried
 # `cc-await-ping` but not `mailbox-wake-arm`, and those are the two halves of ONE mechanism: the hook
 # wrapper blocks synchronously on the watcher (hooks/mailbox-wake-arm.sh:204 is a plain `$( )`, no
