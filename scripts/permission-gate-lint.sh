@@ -143,9 +143,17 @@ EMBEDDED_SET="install.sh scripts/deploy-* scripts/*land* scripts/ship-* scripts/
 # run exited 6 "GATE RED — not pushing"; after, it exits 9 "NOT a red and NOT evidence about your
 # tree". Lowering this line is the DOWNWARD half again — leaving 15 would be a permanent six-gate
 # allowance nobody could account for.
+#
+# deploy-live.sh 9 -> 8 (2026-09-08, backlog b0ee53b5f737): the install.sh failure arm stopped being
+# an inline `"$DEPLOY_REPO/install.sh" >/dev/null 2>&1 || die "…"` — a bare refusal with nothing
+# declaring its bound — and became an rc capture whose refusals sit inside `if [ "$INSTALL_RC" -ne 0
+# ]`, i.e. the guard-refusal shape this detector already recognises. The arm gained refusals (one
+# became three: behind-trunk, level, and git-could-not-answer) and still LOST an undeclared gate,
+# which is the whole point of the shape. Lowering the line is the DOWNWARD half: leaving 9 would be
+# a permanent one-gate allowance created by an improvement.
 EMBEDDED_RATCHET="$(cat <<'RATCHET'
 install.sh 1
-scripts/deploy-live.sh 9
+scripts/deploy-live.sh 8
 scripts/deploy-parity-assert.sh 1
 scripts/desk-land.sh 7
 scripts/land-verify.sh 1
