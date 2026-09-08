@@ -920,6 +920,43 @@ STUB
   cp "$1" "$HOMEDIR/.claude/bin/it2"
 }
 
+# The THIRD modal class (backlog 8ea3acef7d64), delivered through the same mechanism. Deliberately a
+# SEPARATE stub rather than a parameter on the one above: the point of this pair is that two
+# different screens both reach rc 4, and a shared screen-builder would let one matcher carry both.
+#
+# NO APOSTROPHE ANYWHERE IN THIS SCREEN, and that is a constraint rather than a style choice — the
+# heredoc body is re-quoted through a generated stub, and the dialog's other option ("Yes, and don't
+# ask again for ... commands") would die on its first apostrophe and fail OPEN into a healthy-looking
+# rung (memory: fixture-stub-cannot-carry-an-apostrophe). The refusal option is the one the lib
+# matches, so nothing is lost by omitting the other.
+perm_wedged_it2_stub() { # $1=path
+  cat > "$1" <<STUB
+#!/bin/bash
+LAST="$BATS_TEST_TMPDIR/it2-last-send2"
+DELIVERED="$BATS_TEST_TMPDIR/cmd-delivered"
+case "\$1 \$2" in
+  "session send"|"session run")
+    txt="\${!#}"
+    if [ "\$txt" = \$'\r' ]; then : > "\$DELIVERED"; else printf '%s' "\$txt" > "\$LAST"; fi ;;
+esac
+case "\$*" in
+  *"session split"*) echo "Created new pane: $PANE" ;;
+  *"session read"*)
+    if [ -f "\$DELIVERED" ]; then
+      printf 'Hook PreToolUse:Bash requires confirmation for this command [settings]\n'
+      printf 'settings.json to update hooks\n'
+      printf 'Do you want to proceed?\n'
+      printf '1. Yes\n'
+      printf '2. No, and tell Claude what to do differently (esc)\n'
+    fi
+    cat "\$LAST" 2>/dev/null ;;
+  *) : ;;
+esac
+STUB
+  chmod +x "$1"
+  cp "$1" "$HOMEDIR/.claude/bin/it2"
+}
+
 # rc 0 — ENGAGED. The unchanged case, and the corpus's positive control: without it, a mutation that
 # simply stopped opening custody everywhere would still pass every other case in this block.
 @test "CONSEQUENCE rc0 (engaged): custody OPENED and the goal ARMED" {
@@ -993,6 +1030,39 @@ STUB
   CC_CUSTODY_DIR="$HOMEDIR/.claude/autonomy/custody" "$REPO/bin/cc-custody" list --open --json \
     | jq -e 'map(select(.provenance == "unproven-rc4")) | length >= 1' >/dev/null
   printf '%s\n' "$output" | grep -q 'provenance=engagement-unproven-rc4'
+}
+
+# rc 4 THROUGH THE THIRD CLASS — the end-to-end form of backlog 8ea3acef7d64, and the case that
+# actually proves the row's harm is gone. The classifier arms live in tests/pane-modal.bats; this one
+# asserts the CONSEQUENCE, which is the half the row was filed about: unenumerated, this screen fell
+# past the WEDGED gate to the INC-4 recovery, which pastes the whole brief into a pane whose dialog
+# consumes those bytes as single-key answers — the duplicate session in the same worktree. The
+# resend's own stderr line is therefore the mutant: it must NOT appear.
+@test "CONSEQUENCE rc4 via the TOOL-PERMISSION dialog: no INC-4 resend, custody OPENED, goal ARMED" {
+  local BIN2="$BATS_TEST_TMPDIR/binq4p"; mkdir -p "$BIN2"
+  perm_wedged_it2_stub "$BIN2/it2"
+  # shellcheck disable=SC2046  # cq_env() emits one env pair per line and the SPLIT is the point — quoting it would hand `env` a single argument.
+  run env -u CC_PANE_CMD $(cq_env) IT2_BIN="$BIN2/it2" FIRE_NOCORRECT=0 FIRE_ARGV_LAUNCH=0 \
+    FIRE_ENGAGE_MARKER=NEVER-SEEN-MARKER \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --split-right \
+      --session-id FIRING-0000 --cwd "$BATS_TEST_TMPDIR" --no-self-retire \
+      --notify-back DEADBEEF-0000-0000-0000-000000000002 --goal 'consequence probe — one line'
+  [ "$status" -ne 0 ]
+  printf '%s\n' "$output" | grep -q 'pane WEDGED, session alive but INERT'
+  # THE ROW'S DEFECT, asserted as an absence. This line is printed immediately before the resend.
+  #
+  # `|| false` IS LOAD-BEARING, not decoration: a bare `! cmd` mid-test is errexit-EXEMPT, so this
+  # assertion — the only one that tests the row's actual harm — would have passed unconditionally
+  # (memory: negated-assertion-dead-unless-final). The land gate's dead-assertion ratchet caught it
+  # and scripts/bats-assert-liveness-fix.py revived it. VERIFIED IN BOTH DIRECTIONS, as that gate's
+  # own message demands: swapping the pattern for one the output DOES contain ('pane WEDGED') turns
+  # this case red, so it can fail.
+  ! printf '%s\n' "$output" | grep -q 'INC-4 recovery' || false
+  # The remedy must name OUR fix site. The row was filed as upstream-and-operator-owned, so this is
+  # where that refutation reaches the operator.
+  printf '%s\n' "$output" | grep -q 'validate-bash.sh'
+  [ "$(cq_custody_open)" -ge 1 ]
+  cq_goal_armed
 }
 
 # rc 5 — THE NON-VERDICT, and the code both live false negatives landed on. The transcript holds the
