@@ -2184,13 +2184,21 @@ r7_famine() { # stamps dir exists, nothing green anywhere, commits stranded abov
   # whose PATH has no homebrew. It went green here anyway, on a homebrew awk this suite happened to
   # resolve. Unpinned, this test asserts a property of whoever's PATH ran it
   # (memory: hermetic-in-stubs-not-in-interpreter).
+  #
+  # THE FIXTURE WAS RE-CUT 2026-09-07 AND THAT IS PART OF THE CONTROL. It used to be `stamp HEAD`,
+  # i.e. a green sitting exactly ON the live layer — which is NOT the state this culprit names.
+  # Widening the scan there reveals "already deployed", never a deploy: the green is an ancestor
+  # (non-strictly), and the gate's own test is STRICT descendancy. The fixture passed only because
+  # the code never asked (memory: control-fixture-must-reach-the-bug's-regime). The green now sits
+  # ABOVE the live layer and outside the window, which is the one shape where the prescribed
+  # CC_DEPLOY_SCAN raise actually ends in an advance.
   r7_setup
-  advance_origin b c d
-  stamp HEAD                                         # green at depth 4 of origin/main…
+  advance_origin b c d e                             # live layer stays on `a`, four commits below trunk
+  stamp origin/main~2                                # green at depth 3, a STRICT descendant of live HEAD
   R7_SCAN=2 R7_PATH=/usr/bin:/bin                    # …and the ladder only ever looks 2 deep
   run dlr; run dlr; run dlr
   [[ "$output" == *"culprit=scan-window-blind"* ]] || false
-  [[ "$output" == *"green_depth=4"* ]] || false
+  [[ "$output" == *"green_depth=3"* ]] || false
   [[ "$output" == *"scan_n=2"* ]] || false
   grep -q "OUTSIDE the scan window" "$CC_BACKLOG_LOG" || false
   # the page says WHY raising the scan is not loosening the gate — the operator's first objection
@@ -2208,6 +2216,140 @@ r7_famine() { # stamps dir exists, nothing green anywhere, commits stranded abov
   [[ "$output" == *"green_depth=-"* ]] || false
   [[ "$output" != *"scan-window-blind"* ]] || false
   grep -q "verifier famine" "$CC_BACKLOG_LOG" || false
+}
+
+# ── R7-D · THE TWO NO-GREEN STATES, WHICH DEMAND OPPOSITE ACTIONS (2026-09-07) ───────────────────
+# `no-green` collapsed two worlds, and the escalation reported both as the one whose remedy it knew.
+# MEASURED ON THE LIVE HOST, six repeats deep: live HEAD 269b04a80825 sixteen commits behind trunk,
+# newest green 24c598bac1c7 at depth 278, SCAN_N=200. The page named `scan-window-blind`, stated three
+# individually TRUE facts (a green exists at 278 · the ladder looks 200 deep · it therefore cannot see
+# it), and concluded the operator should run `CC_DEPLOY_SCAN=328 … --dry-run --offline`. Run, verbatim:
+#   deploy-live: waiting — no GREEN tree is a DESCENDANT of live HEAD 269b04a80825 (the newest one,
+#   24c598bac1c7, is BEHIND it — deploying that would report a deploy that never happened)
+# The window was never the binding predicate. DESCENDANCY is, and a wider window can only ever surface
+# more ancestors (memory: wrong-cause-corroborated-by-true-metric).
+# dlr WITHOUT --auto. `asay` is silent under --auto by design, so the benign wait's WORDING can only
+# be read on a hand-run — and the wording is half of what this fix delivers. Same knobs otherwise, so
+# the pair differs in exactly one flag.
+dlrq() {
+  env DEPLOY_REPO="$SHARED" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" CC_PAGES_DIR="$PAGES" \
+      CC_DEPLOY_BATS_BIN="$SPY" CC_BACKLOG_BIN="$BLSPY" CC_DEPLOY_TIMEOUT_BIN= \
+      CC_DEPLOY_MAX_LAG_COMMITS="${R7_LAGC:-999}" CC_DEPLOY_MAX_LAG_HOURS="${R7_LAGH:-999}" \
+      CC_DEPLOY_SCAN="${R7_SCAN:-200}" CC_DEPLOY_BLIND_SCAN="${R7_BLIND:-2000}" \
+      CC_DEPLOY_DEGRADE="${R7_DEGRADE:-on}" PATH="${R7_PATH:-$PATH}" \
+      /bin/bash "$DL" "$@"
+}
+
+r7_ancestral_green() { # the live layer ABOVE the only green — widening the scan is a no-op
+  stamp HEAD                                  # green on `a`…
+  commit_push b; git -C "$SHARED" push -q origin main   # …and the live layer moves ABOVE it, to `b`
+  advance_origin c d                          # trunk runs two further ahead; depths: d1 c2 b3 a4
+}
+
+@test "R7 THE DEFECT: greens that are all ANCESTORS are not a blind scan — and get no scan command" {
+  # PRE-FIX THIS IS RED, on every assertion: the culprit reads scan-window-blind, the backlog row
+  # carries --run CC_DEPLOY_SCAN=54 …, and the page prescribes it. That command widens the scan, the
+  # gate then SEES the green, and it refuses for the identical reason — the state cannot be reached
+  # from here at all. A command that cannot change the state costs an investigation and returns the
+  # same refusal, which is strictly worse than handing over nothing.
+  r7_setup
+  r7_ancestral_green
+  R7_SCAN=2                                          # the ladder sees d,c — no green — while one EXISTS at 4
+  R7_DEGRADE=off                                     # the strict green-only gate: this state refuses
+  run dlr; run dlr; run dlr
+  [[ "$output" == *"class=no-green"* ]] || false
+  [[ "$output" == *"culprit=no-green-descendant"* ]] || false
+  [[ "$output" != *"scan-window-blind"* ]] || false
+  [[ "$output" == *"green_depth=4"* ]] || false      # the green IS seen by the wider probe…
+  # …and the remedy is NOT the scan. No next: line at all, and no scan command anywhere on the page.
+  ! grep -q '^next:' "$PAGES/deploy-refusal-escalation-no-green-descendant.page" || false
+  ! grep -q 'CC_DEPLOY_SCAN' "$PAGES/deploy-refusal-escalation-no-green-descendant.page" || false
+  grep -q "WIDENING THE SCAN CANNOT HELP" "$PAGES/deploy-refusal-escalation-no-green-descendant.page" || false
+  # the store the operator block renders gets the same verdict, and no runnable that cannot run
+  grep -q "BEHIND the live layer" "$CC_BACKLOG_LOG" || false
+  ! grep -q '\-\-run' "$CC_BACKLOG_LOG" || false
+}
+
+@test "R7 CONTROL: one variable moved — a green ABOVE the layer is still SCAN-WINDOW-BLIND" {
+  # The discriminator, proven in the other direction on the SAME shape: identical tick sequence,
+  # identical knobs, the green moved from below the live layer to above it. Without this arm a
+  # regression to "never blame the window" would pass the test above and delete a true culprit.
+  r7_setup
+  advance_origin b c d e                             # live layer on `a`; green above it at depth 3
+  stamp origin/main~2
+  R7_SCAN=2
+  R7_DEGRADE=off
+  run dlr; run dlr; run dlr
+  [[ "$output" == *"culprit=scan-window-blind"* ]] || false
+  [[ "$output" != *"no-green-descendant"* ]] || false
+  grep -q '^next: CC_DEPLOY_SCAN=' "$PAGES/deploy-refusal-escalation-scan-window-blind.page" || false
+}
+
+@test "R7 POLARITY: inside the degrade budget this state is a WAIT — it does not escalate at all" {
+  # An escalation means the machine needs a human. This lane's OWN verdict on the same world one env
+  # var away was "inside the degrade budget (25 / 6h) — no advance, and none is due yet", and it paged
+  # anyway, six times (memory: alarm-polarity-and-attention-budget). The discriminator for the benign
+  # wait used to be $GREEN_SHA, which T1's walk sets — so it was window-scoped, and the same world
+  # produced a silent wait or a FROZEN page depending on CC_DEPLOY_SCAN.
+  #
+  # PRE-FIX THIS IS RED: status 1, a deploy-blocked page reading FROZEN, and an ESCALATED token.
+  r7_setup
+  r7_ancestral_green
+  R7_SCAN=2                                          # …and the budget is the default 999/999: INSIDE
+  # The verdict itself, read on a hand-run because --auto silences `asay`.
+  run dlrq; [ "$status" -eq 0 ] || false
+  [[ "$output" == *"none is due yet"* ]] || false
+  [[ "$output" == *"ANCESTOR of live HEAD"* ]] || false
+  # …and the unattended lane, 144x/day, is silent about it and pages nobody.
+  run dlr; [ "$status" -eq 0 ] || false
+  [ -z "$output" ] || false
+  run dlr; run dlr; run dlr; run dlr
+  [[ "$output" != *"ESCALATED"* ]] || false
+  [ -z "$(find "$PAGES" -name 'deploy-refusal-escalation-*' 2>/dev/null)" ] || false
+  [ -z "$(find "$PAGES" -name 'deploy-blocked-*' 2>/dev/null)" ] || false
+  [ ! -f "$CC_BACKLOG_LOG" ] || ! grep -q "deploy lane refusing on repeat" "$CC_BACKLOG_LOG" || false
+  # THE WAIT NEVER BECAME AN ADVANCE — the whole point is that the gate is untouched.
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$(git -C "$SHARED" rev-parse origin/main~2)" ] || false
+}
+
+@test "R7 the third face: a green that IS the live layer, outside the window, says so in words" {
+  # The sub-state the prose has to get right rather than merely classify. `merge-base --is-ancestor
+  # X X` is TRUE, so a green sitting exactly ON the layer is an ancestor and lands in the same
+  # culprit — but calling it "an ANCESTOR of live HEAD" would be a sentence that reads like history
+  # about the very commit the layer is running. Same verdict, different fact, different words.
+  r7_setup
+  advance_origin b c d
+  stamp HEAD                                         # green ON the live layer, at depth 4
+  R7_SCAN=2
+  R7_DEGRADE=off
+  run dlr; run dlr; run dlr
+  [[ "$output" == *"culprit=no-green-descendant"* ]] || false
+  grep -q "IS live HEAD" "$PAGES/deploy-refusal-escalation-no-green-descendant.page" || false
+  ! grep -q "is an ANCESTOR" "$PAGES/deploy-refusal-escalation-no-green-descendant.page" || false
+  ! grep -q '^next:' "$PAGES/deploy-refusal-escalation-no-green-descendant.page" || false
+}
+
+@test "R7 CONTROL: the in-budget wait does NOT extend to a green the window HID from the gate" {
+  # The carve-out that keeps the new quiet path from swallowing the culprit above it. Same budget,
+  # same knobs, the green ABOVE the layer: that is a green this ladder was BLIND to, not one it is
+  # waiting for, so it must stay loud and keep its scan-window-blind escalation.
+  r7_setup
+  advance_origin b c d e
+  stamp origin/main~2
+  R7_SCAN=2
+  run dlr; [ "$status" -eq 1 ] || false
+  run dlr; run dlr
+  [[ "$output" == *"culprit=scan-window-blind"* ]] || false
+}
+
+@test "R7 CONTROL: with NO green anywhere the in-budget wait stays the ALARM, not a wait" {
+  # The other half of the same carve-out, and the one the original comment argued for at length: no
+  # green in the WIDER window either means the net may simply be dead, and that is not a wait.
+  r7_setup; r7_famine
+  R7_SCAN=2
+  run dlr; [ "$status" -eq 1 ] || false
+  run dlr; run dlr
+  [[ "$output" == *"culprit=verifier-famine"* ]] || false
 }
 
 @test "R7 a green the ladder SAW but cannot deploy is verifier-LAG, never famine" {
@@ -2256,7 +2398,7 @@ r7_famine() { # stamps dir exists, nothing green anywhere, commits stranded abov
 # the code accepted the probe's SILENCE as that agreement. Silence is not agreement: the probe is
 # also silent when it never ran. The contrast is ten lines away in the same file — last_advance_hours
 # prints the literal "unknown" and says in its comment why (memory: lookup-miss-is-not-absence) —
-# so the file already knew the shape and blind_green_depth had no way to express it.
+# so the file already knew the shape and blind_green_depth (today blind_green_probe) could not express it.
 #
 # The stub keys on `-lE`, which is the green scan's spelling and NOTHING else's in this script (the
 # is_green/is_red/is_offbox_green readers all use -qE). That is a source-text anchor and it WILL rot
@@ -2281,8 +2423,8 @@ r7_probe_fired() { [ -s "${R7_WIT:-/nonexistent}" ]; }
   # the newest 2000 commits" is not a mislabel, it is a positive falsehood — and its prescribed
   # remedy is a dry-run that cannot fix it, in place of the CC_DEPLOY_SCAN raise that can.
   r7_setup
-  advance_origin b c
-  stamp HEAD                                         # a green at depth 3 of origin/main…
+  advance_origin b c d                               # a green at depth 3 of origin/main, ABOVE the layer…
+  stamp origin/main~2
   R7_SCAN=2                                          # …outside the scan window ⇒ scan-window-blind
   r7_stub_grep die
   run dlr; run dlr; run dlr
@@ -2299,8 +2441,8 @@ r7_probe_fired() { [ -s "${R7_WIT:-/nonexistent}" ]; }
   # variable moved (whether it dies). Without this, "always blame the probe" would pass the test
   # above and nothing would notice.
   r7_setup
-  advance_origin b c
-  stamp HEAD
+  advance_origin b c d
+  stamp origin/main~2
   R7_SCAN=2
   r7_stub_grep pass
   run dlr; run dlr; run dlr
@@ -2367,8 +2509,10 @@ r7_probe_fired() { [ -s "${R7_WIT:-/nonexistent}" ]; }
   [ "$(git -C "$SHARED" rev-list --count HEAD)" -ge 1698 ] \
     || { echo "INSTRUMENT FAULT: fast-import produced $(git -C "$SHARED" rev-list --count HEAD) commits"; false; }
   git -C "$SHARED" push -q origin main
-  stamp HEAD                                          # the green…
-  advance_origin b c                                  # …now at depth 3 of a 1700-commit trunk
+  advance_origin b c d                                # …the live layer three commits below trunk…
+  stamp origin/main~2                                 # …and the green at depth 3, ABOVE it (see the
+                                                      # blindness test: a green AT the layer is not
+                                                      # this culprit's state at all)
   # PRECONDITION, measured here with an independent instrument: the producer must still be running
   # when awk exits, or this test asserts nothing about the inversion.
   # PIPEFAIL IS PART OF THE INSTRUMENT. bats does not set it, and without it a pipeline's rc is the
@@ -2376,7 +2520,7 @@ r7_probe_fired() { [ -s "${R7_WIT:-/nonexistent}" ]; }
   # forever, on a fixture that DOES reach the regime. The subject sets `-o pipefail` at its top, so
   # the check has to be taken under the same flags the subject runs under.
   local tgt prc
-  tgt="$(git -C "$SHARED" rev-parse 'origin/main^{tree}')"
+  tgt="$(git -C "$SHARED" rev-parse 'origin/main~2^{tree}')"
   # `|| prc=$?` and not a bare subshell: bats runs bodies under errexit, so a subshell that returns
   # 141 aborts the test before the assignment and reports the PRECEDING line as the failure.
   prc=0
