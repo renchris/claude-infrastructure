@@ -148,10 +148,37 @@ $out
 EOF
 done
 
+# EVERY VERDICT NAMES THE CLASS IT SCREENED, and the clean one most of all.
+#
+# The header above already says this check is pattern A and only pattern A. The OUTPUT did not, and
+# the output is the only part anyone reads. Measured twice (backlog e07dc5e09f83): recycle #222 ran
+# it over scripts/idl-abstain-alarm.sh and recycle #224 over a scratch bin/cc-reaper whose R5c
+# live-pane guard was hand-flipped from `[ "$live_now" -gt 0 ]` to `[ "$live_now" -le 0 ]`. Both got
+#
+#     clean — 1 file(s) scanned; 0 explained suppression(s), 0 inverted alarm predicates
+#
+# and both read it as "no inverted alarm predicate here" when it only ever meant "no PATTERN A here".
+# A flipped comparison operator is not pattern A, so not firing was CORRECT — and indistinguishable
+# from a detector that is blind, which is what made the row conclude "this is the detector and not
+# the fixture". That is the fail-safe-default-mimics-the-healthy-state shape, one layer up: a
+# NON-VERDICT wearing a pass's clothes, in a lint whose entire subject is predicates that cannot fire.
+#
+# THE FIX IS THE SCOPE LINE, NOT A WIDER PATTERN. The row says so explicitly and it is right
+# (memory: denylist-enumerates-spellings-not-the-class) — widening to "any flipped comparison" fires
+# on correct code, and a lint that fires on correct code gets suppressed everywhere it is installed.
+# What was actually missing is that the verdict never declared its own population.
+SCOPE_NOTE='alarm-polarity-lint: SCOPE — screens PATTERN A ONLY (a counter incremented only under an
+  equality test against a named failure, then tested for EQUALITY against a window counter). This is
+  NOT a general polarity all-clear: a hand-flipped comparison operator and the success-history shape
+  (this file header, WHAT IT DELIBERATELY DOES NOT DETECT) are OUT OF SCOPE BY DESIGN and read clean
+  here. They are review rules, not lint findings — judge them by reading, never by this exit code.'
+
 if [ "$FINDINGS" -gt 0 ]; then
   printf 'alarm-polarity-lint: %s finding(s) across %s file(s).\n' "$FINDINGS" "$SCANNED"
+  printf '%s\n' "$SCOPE_NOTE"
   exit 1
 fi
 printf 'alarm-polarity-lint: clean — %s file(s) scanned; %s explained suppression(s), 0 inverted alarm predicates.\n' \
   "$SCANNED" "$SUPPRESSED"
+printf '%s\n' "$SCOPE_NOTE"
 exit 0

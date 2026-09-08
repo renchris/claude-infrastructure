@@ -157,3 +157,34 @@ EOS
   n="$(echo "$output" | sed -n 's/.*clean — \([0-9]*\) file.*/\1/p')"
   [ "$n" -le 8 ]
 }
+
+# ── SCOPE DECLARATION (backlog e07dc5e09f83) ────────────────────────────────────────────────────
+# Both arms are UNCONDITIONAL — no `skip`, no history lookup, no vendored artifact. The row this
+# closes exists because the suite's strongest arm could skip, so a green suite and a blind detector
+# were indistinguishable; an arm added to cure that must not reintroduce the property.
+@test "SCOPE: every verdict names the class it screened — a scope-blind clean is a NON-VERDICT" {
+  run bash "$L"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'SCOPE — screens PATTERN A ONLY' || false
+  echo "$output" | grep -q 'NOT a general polarity all-clear' || false
+}
+
+@test "OUT-OF-SCOPE MUTANT: a hand-flipped comparison reads clean, and the output SAYS it is out of scope" {
+  # The row's own reproduction, pinned: recycle #224 flipped cc-reaper's R5c live-pane guard from
+  # `-gt 0` to `-le 0` in a scratch copy and got a bare "clean". Not firing is CORRECT — that shape
+  # is not pattern A — so what this arm holds is the SECOND half: the tool must not let that verdict
+  # be read as "no inverted predicate here". If someone ever widens the pattern instead, the first
+  # assertion fails and they are sent back to the header rather than shipping a lint that fires on
+  # correct code.
+  cat > "$D/flipped.sh" <<'EOS'
+#!/bin/bash
+live_now="$(count_live_panes)"
+if [ "$live_now" -le 0 ]; then
+  echo "ALARM: no live panes"
+fi
+EOS
+  run bash "$L" "$D/flipped.sh"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '0 inverted alarm predicates' || false
+  echo "$output" | grep -q 'OUT OF SCOPE BY DESIGN' || false
+}
