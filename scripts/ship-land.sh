@@ -1912,6 +1912,25 @@ gate_bats() {  # run bats with the operator's lander tuning scrubbed; args pass 
   # (memory: enforcement-must-live-at-the-chokepoint). SHIP_LAND_T0 rides along: it carries the
   # end-to-end clock, so an inherited one makes a fixture's `total_s` the outer land's age.
   #
+  # CC_BATS_MAX_ROOTS=0 — THE ADMISSION EXEMPTION, and the reason it is not a guess. bin/cc-bats
+  # gates admission on CC_BATS_MAX_ROOTS (default 2) and refuses with ADMIT_RC=75 EX_TEMPFAIL, i.e.
+  # "nothing ran, nothing was verified". run_scoped_suite classifies that as a CUT (zero `not ok`),
+  # so it is NOT laundered into a pass — verified before this change, and that half of backlog
+  # 55063c2fee84's fork needed no repair. What it DOES cost is the whole land: the gate burns its
+  # one exoneration re-run on an invocation that is deterministically refused again, then reports
+  # GATE-KILLED for a reason that says nothing about the tree. MEASURED in
+  # ~/.claude/autonomy/postland/flakes.jsonl on 2026-09-07: 1,045 rows of
+  # phase=land-gate signal='exit 75 / notok=0' outcome=cut-not-red — 56% of all 1,866 flake rows —
+  # still arriving (112 on 09-04, 17 on 09-07), so C31 did not dissolve it.
+  #
+  # THE ROW ASKED FOR A DECISION AND NAMED THE RISK: exempting "risks pile-ups". It cannot here.
+  # scripts/land-lock.sh is a MACHINE-WIDE mutex keyed on the SHARED git dir
+  # (`--git-common-dir`, deliberately not `--show-toplevel`), and the gate runs INSIDE it, so at
+  # most ONE land gate per repo runs at a time across every worktree on this box. The exemption's
+  # concurrency is therefore bounded by construction — by the lock, not by the ceiling — which is
+  # the same bound scripts/postland-verify.sh:225 already takes for the same reason. It is also
+  # what this very line already decided once: CC_GATE_MAX_LOAD=0 is ship-land opting its gate out
+  # of load shedding, because a land gate that does not run is not a safer land, it is no land.
   # 🚨 NOTHING MAY COME BETWEEN THE `\` BELOW AND `env` — NOT EVEN A COMMENT. A comment line after a
   # line-continuation ENDS the continuation: `${pre[@]+…}` then runs as its own command and `env …
   # bats` as another, so the timeout/nice prefix silently stops wrapping the suite. Measured while
@@ -1926,7 +1945,7 @@ gate_bats() {  # run bats with the operator's lander tuning scrubbed; args pass 
       -u SHIP_LAND_SMOKE_PER_SUITE_S -u SHIP_LAND_SMOKE_BUDGET_CAP_S \
       -u SHIP_LAND_T0 -u SHIP_LAND_MEAS_ROUNDS -u SHIP_LAND_MEAS_GATE_S \
       -u SHIP_LAND_MEAS_ARMS_S -u SHIP_LAND_MEAS_STATICS_S \
-      CC_GATE_MAX_LOAD=0 ${homeenv[@]+"${homeenv[@]}"} bats "$@" </dev/null
+      CC_GATE_MAX_LOAD=0 CC_BATS_MAX_ROOTS=0 ${homeenv[@]+"${homeenv[@]}"} bats "$@" </dev/null
 }
 
 run_corpus() {  # $1=newline-list of DIRECT suites — the WHOLE corpus, one process per suite.
