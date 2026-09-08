@@ -448,16 +448,69 @@ case "$ROOT_TTL" in ''|*[!0-9]*) ROOT_TTL=21600 ;; esac
 
 # ── why this invocation may not even be a candidate ────────────────────────────────────────────
 ADMIT_SKIP=""
-case "$MAX_ROOTS" in ''|0|off|*[!0-9]*) ADMIT_SKIP="disabled" ;; esac
-[ -n "$ADMIT_SKIP" ] || [ -n "$ROOTS_DIR" ] || ADMIT_SKIP="disabled"
 # Invocations that EXECUTE NOTHING are not the population. `--count`/`-c` only parses (the verifier
 # calls it once per suite while building its corpus), and `--version`/`--help` fork nothing at all;
 # counting them would let a metadata call consume a slot a real run then loses.
+# ORDER (2026-09-08, backlog a0d1c69368af): this test now runs BEFORE the disabled verdict below,
+# where it used to run after. Both orders produce the same ADMIT_SKIP for the same invocation — a
+# non-executing call is skipped either way — but only this one can tell "the ceiling was WAIVED for
+# a real run" from "a metadata call was never in the population", which is exactly the distinction
+# the waiver record has to make. Without it every `cc-bats --version` under a kill switch would log
+# a waiver, and a log that fires on nothing is the alarm-polarity failure this repo keeps meeting.
+[ "$#" -eq 0 ] && ADMIT_SKIP="no-args"
 if [ -z "$ADMIT_SKIP" ]; then
-  [ "$#" -eq 0 ] && ADMIT_SKIP="no-args"
   for _a in "$@"; do
     case "$_a" in --version|-v|--help|-h|--count|-c) ADMIT_SKIP="non-executing"; break ;; esac
   done
+fi
+[ -z "$ADMIT_SKIP" ] && [ -n "${BATS_TEST_NAME:-}" ] && ADMIT_SKIP="in-test"
+
+# ── the WAIVER, recorded (backlog a0d1c69368af) ────────────────────────────────────────────────
+# The ceiling below is machine-wide by construction — ROOTS_DIR is one registry every session on
+# this box shares — but the SWITCH THAT DISABLES IT was per-invocation and silent, so a limit that
+# exists to stagger every participant could be individually opted out of by each of them. Measured
+# 2026-09-08: 20 concurrent real ship-land runs drove a 10-core box to load 323/243/154, one pane
+# confirmed it had taken the override twice, and nothing anywhere recorded that it had happened.
+# A limit each participant can quietly disable is not a limit.
+#
+# The switch STAYS — the header above states why an escape hatch that does not fully escape is
+# worse than none, and the nesting path genuinely needs it. What changes is that taking it now
+# COSTS something: one append to a machine-wide log, attributed to a pid, a cwd and a stated
+# reason, plus a notice that CC_BATS_QUIET cannot suppress. That is the same principle already
+# applied one screen down to the ps(1)-unavailable path and to the QoS-not-applied notice — a
+# mechanism that looks applied and is not is the whole defect class this file exists to close.
+#
+# It fails OPEN like every other arm here: an unwritable log NEVER refuses a run. The record is
+# there to make the waiver auditable and attributable, not to become a new way to block work.
+WAIVER_LOG="${CC_BATS_WAIVER_LOG:-$HOME/.claude/state/bats-waivers.jsonl}"
+WAIVER_ARGV1="${1:-}"   # captured OUT here: inside the function $1 is the function's own argument
+_record_waiver() { # $1=switch  $2=detail
+  local _r="${CC_BATS_WAIVER_REASON:-}" _ts _d
+  [ -n "$_r" ] || _r="UNSTATED"
+  # Absolute-first, and resolved HERE rather than reusing $DATE_BIN: that variable is filled by
+  # resolve_admission_tools(), which only ever runs on the ADMITTED path, so on this path it is
+  # still empty. A stamp of "unknown" on every waiver would make the log unorderable — the one
+  # property an audit trail of "who disabled the ceiling, when" cannot do without.
+  _d=/bin/date; [ -x "$_d" ] || _d="$(command -v date 2>/dev/null || true)"
+  _ts="$([ -n "$_d" ] && "$_d" -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+  # Non-quietable, for the reason stated above: a waiver nobody is told about is the defect.
+  echo "cc-bats: WAIVER — the admission ceiling is DISABLED for this run via $1 ($2). Reason: $_r." >&2
+  [ "$_r" = "UNSTATED" ] && echo "cc-bats: state one next time — CC_BATS_WAIVER_REASON='<why>' — it is recorded machine-wide, not asked for twice." >&2
+  mkdir -p "${WAIVER_LOG%/*}" 2>/dev/null || true
+  printf '{"ts":"%s","pid":%s,"switch":"%s","detail":"%s","reason":"%s","cwd":"%s","argv1":"%s"}\n' \
+    "$_ts" "$$" "$1" "$2" "$(printf '%s' "$_r" | tr -d '\042\134' | tr '\n' ' ')" \
+    "$(printf '%s' "$PWD" | tr -d '\042\134')" "$(printf '%s' "$WAIVER_ARGV1" | tr -d '\042\134')" \
+    >> "$WAIVER_LOG" 2>/dev/null || true
+}
+
+if [ -z "$ADMIT_SKIP" ]; then
+  case "$MAX_ROOTS" in
+    '')            ADMIT_SKIP="disabled"; _record_waiver CC_BATS_MAX_ROOTS "set but empty" ;;
+    0|off)         ADMIT_SKIP="disabled"; _record_waiver CC_BATS_MAX_ROOTS "$MAX_ROOTS" ;;
+    *[!0-9]*)      ADMIT_SKIP="disabled"; _record_waiver CC_BATS_MAX_ROOTS "malformed: $MAX_ROOTS" ;;
+  esac
+  # An unusable registry is not a waiver — nobody chose it — so it is skipped without a record.
+  [ -n "$ADMIT_SKIP" ] || [ -n "$ROOTS_DIR" ] || ADMIT_SKIP="disabled"
 fi
 # INSIDE a bats test ⇒ a fixture run, never an independent root. This is the SECOND of three
 # nesting guards, and they are layered because each one's blind spot is the next one's job:
@@ -468,8 +521,8 @@ fi
 #      guard 1 while being unable to scrub BATS_TEST_NAME without breaking bats itself.
 #   3. ancestor_registered() on the refusal path — the backstop for a run that lost BOTH.
 # Load-bearing, not defensive: a refusal raised inside the corpus surfaces as a failing test, and
-# red here reaches auto_revert.
-[ -z "$ADMIT_SKIP" ] && [ -n "${BATS_TEST_NAME:-}" ] && ADMIT_SKIP="in-test"
+# red here reaches auto_revert. (The assignment itself now sits above, with the other
+# not-in-the-population tests, so the waiver record can tell a waived run from a skipped one.)
 
 # ── the instruments, absolute-first (hooks and launchd jobs run with a PATH that has neither
 #    /usr/sbin nor Homebrew — the lesson postland-verify.sh records for its own sysctl, and memory
@@ -589,7 +642,12 @@ if [ -z "$ADMIT_SKIP" ]; then
         [ -e "$_e" ] || continue
         echo "cc-bats:   pid ${_e##*/}  $(head -1 "$_e" 2>/dev/null)" >&2
       done
-      echo "cc-bats: override for this run: CC_BATS_MAX_ROOTS=0 $_cmd" >&2
+      # The override is still here — the nesting path needs it — but it is no longer offered as a
+      # peer of the deferral above. It is RECORDED, machine-wide and attributed, and it asks for a
+      # reason: the measured failure was 20 concurrent runs each individually opting out with
+      # nothing anywhere saying so (backlog a0d1c69368af).
+      echo "cc-bats: if you must run anyway, the waiver is recorded to $WAIVER_LOG — say why:" >&2
+      echo "cc-bats:   CC_BATS_WAIVER_REASON='<why this cannot wait>' CC_BATS_MAX_ROOTS=0 $_cmd" >&2
       exit "$ADMIT_RC"
     fi
     # ADMIT — mint the slot as $$, which `exec` below carries into the bats process itself.
