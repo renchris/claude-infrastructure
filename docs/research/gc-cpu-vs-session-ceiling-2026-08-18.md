@@ -525,7 +525,18 @@ qualifies on ~2026-08-24** under this repo's own 2.1.220 precedent if no success
   by `scripts/capacity-marginal-run.sh`, one resumable command that also makes §6's stop rule
   mechanical, since only an *instrument* term (`C1:swing` / `C2:corr` / `C2:constant`) is that
   paragraph's finding and a quiet box (`C2:neff` / `C3:flat`) is not (§6b). **Until it exists, none
-  of the four may be quoted.** ✅ **The ban is now enforced in code (2026-08-26, §6a of that doc):**
+  of the four may be quoted.**
+  ✅ **IT EXISTS (2026-09-08, §6e of that doc): `2.390 load units per ACTIVE session, ± 0.533`**
+  (1 s.e.), n=85, span 5202 s, load1 14.97–154.89, all three controls PASS — raw window committed at
+  `docs/research/data/capacity-marginal-2026-09-08.tsv`. Quote it **only** with that standard error
+  and window, and read it as an UPPER bound (the active census is a proven lower bound): right for
+  sizing a ceiling, wrong for a "+N sessions" projection. The four old values stay unquotable — the
+  same window's naive pooled fit returned **5.994**, 2.5× the attributed coefficient, which is the
+  identification failure that produced them, now measured rather than argued. **This changes no
+  threshold**, including the per-core literal this section is about: see §6e's consistency note, which
+  records that `8 × 2.390 ≈ 1.9/core` lands near the underived 2.0 literal and explains why that is
+  *not* a derivation — the survived population still contains the fatal value, so this axis has no
+  measured failure point for any coefficient to supply. ✅ **The ban is now enforced in code (2026-08-26, §6a of that doc):**
   the citation sites were struck and labelled REFUTED, with **no value substituted**. There were
   **three**, not the two named here — `scripts/lib/capacity-admit.sh`,
   `hooks/agent-teams-enforce.sh` (a runtime deny message, not a comment) and

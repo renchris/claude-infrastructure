@@ -2,11 +2,20 @@
 
 **Date:** 2026-08-19 · **Item:** backlog `193ae8ddce72`
 **DoD ref:** [`gc-cpu-vs-session-ceiling-2026-08-18.md`](gc-cpu-vs-session-ceiling-2026-08-18.md) §5
-**Ships:** `scripts/capacity-marginal.sh` · `tests/capacity-marginal.bats` (15 rows)
+**Ships:** `scripts/capacity-marginal.sh` · `tests/capacity-marginal.bats` (15 rows) ·
+`scripts/capacity-marginal-run.sh` · `tests/capacity-marginal-run.bats` (§6b) ·
+`data/capacity-marginal-2026-09-08.tsv` — the measured window (§6e)
 
 ---
 
 ## 1 · Verdict
+
+> ✅ **MEASURED 2026-09-08 — see [§6e](#-6e--the-run-happened--the-number-exists-and-the-controls-that-could-have-killed-it-did-not-2026-09-08).
+> `2.390 load units per ACTIVE session, ± 0.533 (1 s.e.)`**, n=85, span 5202 s, all three controls
+> PASS. The section below is preserved as written on 2026-08-19 — its adjudication of the four
+> published values is unchanged and still governs — but **its "still unmeasured" framing is
+> discharged**, and bullet 1 in particular is now history rather than an instruction. Read §6e for
+> the number, and quote it only with its standard error and its window.
 
 **The number is still unmeasured, and this is the wave that says why the archive cannot supply it.**
 The four published values are not four estimates of one quantity that could be averaged, reconciled
@@ -18,7 +27,8 @@ control the DoD named, **proven able to fail**.
 
 1. **No coefficient is asserted here.** The measurement needs the live 10-core Darwin fleet; it was
    built and verified off-box. §6 is the run, and it is ~30 minutes of wall clock on the box with no
-   operator judgment in it.
+   operator judgment in it. *(DISCHARGED 2026-09-08: the run happened and §6e asserts the
+   coefficient. The estimate was accurate — one window, ~87 min of wall clock including a resume.)*
 2. **The naive fit is not merely noisy, it is unidentified.** B3 attributed 87.3% of the load
    numerator to things that are not Claude, moving across load1 **8.35 → 46.39 in one day**; A8 ran
    the whole-box Δload probe and watched the load *fall* while a unit was added. A regression of
@@ -366,12 +376,90 @@ exempt), RED-proved both ways.
 is the blocker, put the refusal in the predicate the dispatcher consults, not in the document the
 dispatcher's worker reads after it has already been fired.
 
+### ✅ 6e · THE RUN HAPPENED — the number exists, and the controls that could have killed it did not (2026-09-08)
+
+**`2.390 load units per ACTIVE session, ± 0.533 (1 s.e.)`** — measured on the 10-core Darwin box,
+first window, all three controls PASS:
+
+```
+CAPACITY-MARGINAL  n=85  n_eff=85.0  span=5202s  unit=proc  load1 14.97..154.89 (10.35x)
+  C1 LEVEL      PASS  tertile ratios 1.155 / 1.021 / 1.209 swing 1.18x
+  C2 DYNAMICS   PASS  corr(load1, census) = 0.835 over n_eff 85.0
+  C3 IDENTIFY   PASS  active spans 5..11 over 7 levels, 85 rows
+VERDICT: MARGINAL 2.390 load units per ACTIVE session  (+/- 0.533, 1 s.e.; ratio 1.158 load/runnable-proc)
+  for contrast, the pooled load1~active fit this replaces: 5.994  [UNIDENTIFIED — 87% of the numerator is not Claude]
+```
+
+**The contrast line is the wave's whole thesis, finally measured on real data rather than on a
+fixture.** §1 predicted that a pooled `load1 ~ active` fit would return *something* from an ambient
+that owns 87% of the numerator. It returned **5.994** — 2.5× the attributed coefficient, on the same
+85 rows, in the same window. That is where `0.172` and `0.566` came from, and it is why the naive fit
+is printed beside the real one and labelled `UNIDENTIFIED` rather than suppressed: the two are
+visibly different quantities, so they can never again be mistaken for one.
+
+**Raw window committed at [`data/capacity-marginal-2026-09-08.tsv`](data/capacity-marginal-2026-09-08.tsv)**
+— 85 rows, with the verdict reproduced in its header. Re-run
+`bash scripts/capacity-marginal.sh analyze --in docs/research/data/capacity-marginal-2026-09-08.tsv`
+and it prints the block above byte-identically; that re-analysis was run as a *separate invocation*
+from the driver's, so the number has been reproduced by a second call over committed bytes rather
+than merely reported once by the process that produced it.
+
+**Conditions, stated so the window can be judged rather than trusted.** The box was doing ordinary
+work — a sibling verification suite under `taskpolicy -c background`, plus the dispatch wave this
+session belongs to. That is exactly §6's prescription (*run the window across a wave, do not
+synthesise levels by pausing the box*), and it is what made all three controls decidable in ONE
+window where every previous attempt had been undecidable:
+
+| control | floor | measured | margin |
+|---|---|---|---|
+| C1 load spread | ≥ 1.5× | **10.35×** | the ambient did the work |
+| C1 tertile swing | ≤ 1.35× | **1.18×** | the census reproduced the load at all three levels |
+| C2 correlation | ≥ 0.30 | **0.835** | — |
+| C2 `n_eff` | ≥ 20 | **85.0** | 60 s spacing, so every row is an independent read of a 60 s average |
+| C3 active levels | ≥ 3 | **7** (5..11) | the wave moved the regressor on its own |
+
+**The Darwin arm of `read_load1` executed for the first time here.** §6c fixed a branch no test could
+enter, because `/proc/loadavg` always won the `if` off-box — and its failure mode was silent (field 1
+takes the brace, the numeric guard drops *every* row, and the driver exits 3 after burning an hour).
+Smoke-run before committing to the full window: `{ 16.83 17.20 18.11 }` parsed to field 2 correctly,
+4/4 rows recorded. **The fix was right, and it had never been executed until today.**
+
+**What this does NOT change: `CC_ADMIT_ACTIVE_CEILING=8`.** §6a's sequencing holds exactly as written
+— the ceiling stands on the 127/127 refusal band, a count over refusals that never divided by a
+per-session coefficient, so a coefficient cannot move it. The three sites were updated to quote the
+measured value in place of "UNMEASURED"; **none of them changed a threshold.** Moving that literal is
+a gate-threshold decision needing its own evidence, not an arithmetic consequence of 2.390.
+
+⚠️ **A consistency note that is NOT a derivation, recorded here so it is not "discovered" later.**
+8 actives × 2.390 ≈ 19.1 load units ≈ 1.9/core on this box, which lands within 5% of the
+`CC_HW_DEFAULT_MAX_LOAD_PER_CORE = 2.0` literal that `gc-cpu-vs-session-ceiling-2026-08-18.md` §3
+records as never derived from anything. **This does not derive it, and must not be cited as doing
+so.** That section's disproof is untouched and still governs: load-per-core cannot separate fatal
+from survived — fatal at 2.53/core against 13 survived samples spanning 2.92–5.98/core — so there is
+no measured failure point on that axis for any coefficient to supply. Two numbers agreeing is not a
+derivation when one of them provably cannot be derived on its own axis; §3 paid nineteen commits for
+that distinction and this paragraph exists to keep the twentieth from being written.
+
+**Direction, per §7.4, and it is the one way to misuse this number:** `cc_sp_active` is a proven
+lower bound, so 2.390 is an **upper** bound on cost per active session. Correct for sizing a ceiling;
+wrong for a "+N sessions" projection. Do not invert it.
+
+**What the item closes on.** Every leg is now discharged: the instrument (2026-08-19), its controls
+proven able to fail (15 rows), the driver and its adjudication (§6b), the quote-ban at all three live
+sites (§6a) plus the cloud-venue refusal that stopped the re-dispatch loop (§6d), the Darwin reader
+(§6c), and — today — the measurement itself. The 30× span is closed: not by reconciling four values,
+but by replacing all four with one that carries a standard error, a window, and three controls that
+were watched failing before they were believed.
+
 ---
 
 ## 7 · What this does not do
 
-1. **It measures no number today.** Off-box: no Darwin, no fleet. Everything above is the
-   instrument and its controls, verified against fixtures.
+1. ~~**It measures no number today.** Off-box: no Darwin, no fleet. Everything above is the
+   instrument and its controls, verified against fixtures.~~ **SUPERSEDED 2026-09-08 — §6e.** The
+   run happened on the box and the coefficient is asserted: `2.390 ± 0.533` (1 s.e.), n=85. Every
+   other limitation in this section still stands, and items 2–6 below are the ones that survive the
+   measurement rather than being answered by it.
 2. **It is observational, not experimental.** The slope is a within-window association between the
    attributed census and the active count, not a randomised effect of adding a session. It is
    strictly weaker than the DoD's "fire ONE session at a held-constant baseline" arm — and strictly

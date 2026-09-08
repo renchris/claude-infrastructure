@@ -255,8 +255,15 @@ cc_sp_load_beat() { # → 0 when cb_* is available, 1 otherwise. Idempotent.
 # from it. 2.5-5 is an aggregate/N — a RATIO, not a marginal — and the very pair it cites yields
 # 1.89. All four published values (0.172 / 0.566 / 1.89 / 2.5-5) are adjudicated unrepairable and
 # unquotable in docs/research/marginal-load-per-active-session-2026-08-19.md §2 (backlog
-# 193ae8ddce72); the marginal is UNMEASURED until scripts/capacity-marginal.sh clears its controls
-# on the box (§6). The ~4-8 band survives on its own footing — 127/127 historic gate refusals land
+# 193ae8ddce72).
+#
+# ✅ THE MARGINAL IS NOW MEASURED (2026-09-08, §6e), on this box, by the census defined below:
+# 2.390 load units per ACTIVE session, +/- 0.533 (1 s.e.) — n=85, n_eff=85.0, span 5202s, proc
+# unit, load1 14.97..154.89 (10.35x), all three controls PASS (C1 swing 1.18x, C2 corr 0.835,
+# C3 active 5..11 over 7 levels). Raw window: docs/research/data/capacity-marginal-2026-09-08.tsv.
+# Quote it ONLY with its s.e. and its window. Because cc_sp_active is a proven LOWER bound, 2.390
+# is an UPPER bound on per-active-session cost — right for a ceiling, wrong for a "+N sessions"
+# projection. The ~4-8 band survives on its own footing — 127/127 historic gate refusals land
 # there, a count over refusals rather than a division — and says nothing at all about the other 140.
 # A ceiling
 # charged on residency cannot express that; and charging it on loadavg instead re-commits the proxy
