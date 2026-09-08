@@ -717,6 +717,10 @@ FAILNAME=()
 # prelints, the C13b sentinel) never enter it and are never delayed: they reproduce by construction,
 # so a second window cannot tell them anything.
 LADDER_FAILING=()
+FLOOR_MODE="${CC_POSTLAND_FLOOR_EXONERATE:-on}"   # C30 kill switch: off ⇒ C29's verdict stands alone
+FLOOR_BUDGET="${CC_POSTLAND_FLOOR_BUDGET:-6}"    # max floor probes per run; past it a conviction stands UNPROBED
+FLOOR_SPENT=0
+FLOOR_EXONERATED=()
 CONVICT_PENDING=0    # a ladder conviction seen in ONE window only: nothing proven yet ⇒ cut
 # ...and WHICH files those are, not merely that there were some. The flag alone decides the CUT
 # branch; the names are what a RED/HUNG verdict must NOT spend, since it adjudicated none of them.
@@ -1868,6 +1872,142 @@ conviction_observe() { # <file> <tree> <sha> → 0 when a PRIOR, time-SEPARATED 
   printf '%s\t%s\t%s\t%s\t%s\n' "$now" "$f" "$tree" "$sha" "${load:-}" >> "$CONVICTIONS" 2>/dev/null || true
   [ "${prior:-0}" -ge 1 ]
 }
+# ════ C30 · A CONVICTION MUST BE DIFFERENTIAL, AND C29 CANNOT ASK THAT ═══════════════════════════
+# C29 asks "did this file fail in TWO load windows"; it never asks "does it fail on a tree we already
+# PROVED green". Those come apart exactly where it matters, because C29's ledger is keyed on the FILE
+# alone (conviction_observe's awk matches `$2==f` — no tree, no sha), so a window opened against tree
+# A corroborates a window against tree B. For a CHRONIC load-flake that is not two experiments, it is
+# the same experiment twice, and the verdict it produces is about the box.
+#
+# MEASURED on this machine 2026-09-07/08, from runner.log's own C29 lines — a PERIOD-2 OSCILLATOR:
+#   11:22  handoff-fire CORROBORATED (RED)          · idle-slope PENDING
+#   14:44  backlog-pipeline, cc-pane, cc-reaper, goal-inert, idle-slope CORROBORATED (RED)
+#   17:54  backlog-pipeline PENDING                 → CUT
+#   21:03  compressor, handoff-fire CORROBORATED (RED) · cc-reaper, goal-inert, idle-slope PENDING
+#   00:28  cc-reaper, idle-slope CORROBORATED (RED)  · compressor, handoff-fire PENDING
+# Each sweep corroborates precisely what the previous one pended. conviction_clear spends the
+# convicted rows and PRESERVES the pended ones, so the pended set is always in-TTL for the next
+# sweep, and sweeps land ~3.2h apart against a 24h TTL. With ~8 chronically load-flaky suites in a
+# 593-suite corpus at least one is corroborated every single time: 20 consecutive sweeps, 18 RED,
+# 2 CUT, 0 GREEN, last green 2026-09-03. deploy-live then reports `no GREEN stamp among the newest
+# 200 commits` — not because trunk is broken, but because the green it needs scrolled off SCAN_N.
+#
+# THE CONTROL WAS ALREADY ON DISK AND ALREADY READ — by the BISECTOR, 19 minutes too late. The same
+# 00:28 run logged, after stamping RED:
+#   bisect FLOOR NOT GREEN: … tests/cc-reaper.bats is not green at 24c598bac1c7 either (runner rc=1)
+# 24c598bac1c7 is $LASTGREEN — the commit whose tree this verifier itself stamped GREEN, i.e. a tree
+# on which EVERY suite passed. A suite that fails there NOW is proven non-deterministic by our own
+# prior verdict, and its failure on any other tree carries no information about that tree. bisect
+# knew; it just called the result `undecidable, no culprit named` and threw it away, because it runs
+# after write_stamp and its only job is to name a culprit. This asks the same question one step
+# earlier, where the answer can still change the verdict.
+#
+# STRICTLY WEAKENING IN ONE DIRECTION ONLY, and that is the whole safety argument:
+#   floor rc=1  the failure PREDATES the window ⇒ not differential ⇒ drop it (a flake, recorded)
+#   floor rc=0  the floor really is green ⇒ the conviction is differential ⇒ RED stands, unchanged
+#   anything else (our bound, a signal, 126/127, an unresolvable or unreachable floor, a filter that
+#   matched nothing because the test was renamed, a cell we could not restore) ⇒ NO VERDICT ⇒ RED
+#   stands, unchanged. Absence of evidence never exonerates; only a positive reproduction does.
+# So a genuine regression — fails at HEAD, passes at the floor — is convicted exactly as it is today.
+# This removes a machine artefact from the evidence; it does not lower the bar for the tree. That is
+# the same trade the retry ladder already made for signal-kills, applied to the one input C29 lacked.
+#
+# BOUNDED, and the budget is the safety valve as well as the cost control: FLOOR_BUDGET probes per
+# run, each under FILE_TO in the retry band (the ladder's own measurement for these suites is 3.56s
+# against a 300s bound). Files past the budget keep their conviction UNPROBED — fail-closed — so a
+# run where the whole corpus is flaking cannot exonerate its way to an unearned green.
+floor_exonerates() { # <file> <test> → 0 = the SAME failure REPRODUCES at the last-green floor
+  local f="$1" t="$2" good want got rc=0 td out filt cur restored=0
+  [ "$FLOOR_MODE" != "off" ] || return 1
+  [ -n "${CUR_SHA:-}" ] || return 1
+  if [ "$FLOOR_SPENT" -ge "$FLOOR_BUDGET" ]; then
+    log "C30 BUDGET SPENT ($FLOOR_BUDGET) — $f keeps its conviction UNPROBED; a run this broad may not exonerate its way to a green"
+    return 1
+  fi
+  [ -s "$LASTGREEN" ] || { log "C30 no floor: $LASTGREEN is absent or empty — nothing to compare $f against; conviction stands"; return 1; }
+  read -r good < "$LASTGREEN" 2>/dev/null || return 1
+  [ -n "$good" ] || return 1
+  # Resolve BOTH endpoints before anything is moved: `cat-file -e` fails identically for an absent
+  # PATH and an unresolvable REV, and only the first of those is allowed to mean anything.
+  want="$(git -C "$WORKTREE" rev-parse --verify "$good^{commit}" 2>/dev/null || true)"
+  cur="$(git -C "$WORKTREE" rev-parse --verify "${CUR_SHA}^{commit}" 2>/dev/null || true)"
+  [ -n "$want" ] && [ -n "$cur" ] || { log "C30 floor UNPROVEN for $f: cannot resolve the last-green $(sha12 "$good") in the cell; conviction stands"; return 1; }
+  [ "$want" != "$cur" ] || { log "C30 floor N/A for $f: the last-green IS the tree under test; a control identical to the subject proves nothing; conviction stands"; return 1; }
+  git -C "$WORKTREE" cat-file -e "$want:$f" 2>/dev/null || {
+    log "C30 floor N/A for $f: the file does not exist at the last-green $(sha12 "$good"), so it cannot have failed there — the conviction is differential by construction; stands"
+    return 1; }
+  FLOOR_SPENT=$(( FLOOR_SPENT + 1 ))
+  git -C "$WORKTREE" bisect reset >/dev/null 2>&1 || true       # ...so the checkout below can run
+  bounded 120 git -C "$WORKTREE" checkout --detach --force "$want" >/dev/null 2>&1 || {
+    log "C30 floor UNPROVEN for $f: cannot check out the last-green $(sha12 "$good"); conviction stands"
+    return 1; }
+  # CONFIRM WHERE WE ARE. This probe's entire meaning is the commit it ran at, and a checkout that
+  # silently did not take would have us reading the TARGET tree's own failure back as the floor's —
+  # i.e. exonerating every conviction unconditionally. Same belt-and-braces as bisect_floor_ok, and
+  # here it guards the weakening direction, so it is load-bearing rather than merely careful.
+  got="$(git -C "$WORKTREE" rev-parse --verify HEAD 2>/dev/null || true)"
+  if [ "$want" = "$got" ]; then
+    td="$(mktemp -d "$RUN_TMP/floor.XXXXXX" 2>/dev/null)" || td=""
+    if [ -n "$td" ]; then
+      out="$td/tap"
+      # Same GRANULARITY and the same band as retry_once, deliberately: the floor probe and the
+      # ladder that convicted must differ in the COMMIT and in nothing else, or the comparison is
+      # between two experiments rather than two trees.
+      if [ -n "$t" ]; then
+        filt="$(printf '%s' "$t" | sed 's/[][\\.^$*+?(){}|\/]/\\&/g')"
+        ( cd "$WORKTREE" && TMPDIR="$td" bounded "$FILE_TO" "${RETRY_QOS[@]}" \
+            "$BATS_BIN" -f "^${filt}\$" "$f" ) </dev/null > "$out" 2>&1 || rc=$?
+        # A filter that matched NOTHING exits 0 with `1..0`. At the floor that is the RENAMED-test
+        # case, and it is a NON-VERDICT — never the free exoneration a bare rc would read it as.
+        [ "$(tap_plan "$out")" -gt 0 ] || rc=126
+      else
+        ( cd "$WORKTREE" && TMPDIR="$td" bounded "$FILE_TO" "${RETRY_QOS[@]}" \
+            "$BATS_BIN" "$f" ) </dev/null >/dev/null 2>&1 || rc=$?
+      fi
+      rm -rf "$td"
+    else
+      rc=126
+    fi
+  else
+    log "C30 floor UNPROVEN for $f: the cell did not land on the last-green $(sha12 "$good"); conviction stands"
+    rc=126
+  fi
+  # RESTORE UNCONDITIONALLY, and verify it — every path below this point depends on the cell being
+  # back at the tree under test, and a silent failure here would hand do_bisect and red_actions a
+  # checkout four days stale. A cell we could not restore also refuses to exonerate: a decision that
+  # WEAKENS a verdict may not be taken out of a state we could not put back.
+  if bounded 120 git -C "$WORKTREE" checkout --detach --force "$cur" >/dev/null 2>&1; then
+    got="$(git -C "$WORKTREE" rev-parse --verify HEAD 2>/dev/null || true)"
+    [ "$got" = "$cur" ] && restored=1
+  fi
+  [ "$restored" = 1 ] || {
+    log "C30 CELL NOT RESTORED after the floor probe of $f — wanted $(sha12 "$cur"), the cell is elsewhere; refusing to exonerate on a state we could not put back"
+    return 1; }
+  case "$rc" in
+    1) return 0 ;;                    # reproduced at the floor ⇒ NOT differential
+    0) log "C30 floor GREEN for $f at $(sha12 "$good") — the conviction IS differential: RED stands"; return 1 ;;
+    124) log "C30 floor UNPROVEN for $f: our own ${FILE_TO}s bound fired at $(sha12 "$good") — nothing proven; conviction stands"; return 1 ;;
+    *)  if [ "$rc" -gt 128 ]; then
+          log "C30 floor UNPROVEN for $f: the floor probe was KILLED by signal $(( rc - 128 )) — a fact about the machine, not a verdict; conviction stands"
+        else
+          log "C30 floor UNPROVEN for $f: the floor probe exited $rc (bats says 0=pass, 1=fail) — nothing proven; conviction stands"
+        fi
+        return 1 ;;
+  esac
+}
+# A NON-DIFFERENTIAL FAILURE IS A FLAKE, AND IT GOES IN THE FLAKE LEDGER — not silently dropped.
+# Its own outcome token, never record_flake's hardcoded `1-of-3`: that one means "the ladder cleared
+# it", and this means "the ladder convicted it and the FLOOR refuted the conviction". Conflating them
+# would erase the only evidence that a suite is chronically broken rather than occasionally unlucky.
+# NFLAKE is bumped through the same counter, so a green stamped over these carries flakes=N and is
+# auditable as such rather than reading like a clean sweep.
+record_nondifferential() { # <file> <test> <floor>
+  local load
+  load="$(load1)"
+  printf '{"ts":"%s","file":"%s","test":"%s","sha":"%s","phase":"postland","outcome":"floor-not-differential","floor":"%s","signal":"exit:1","loadavg":"%s"}\n' \
+    "$(now_iso)" "$1" "$2" "${CUR_SHA:-}" "$3" "${load:-?}" >> "$FLAKES" 2>/dev/null || true
+  NFLAKE=$((NFLAKE+1))
+}
 corroborate_convictions() { # <tree> — rebuild FAILING, keeping only CROSS-WINDOW-corroborated reds
   # The C29 filter. Runs AFTER classify_failures, so the in-run ladder is untouched and still costs
   # what it always did; this only decides what its verdict is worth. A file the ladder convicted in
@@ -1875,7 +2015,7 @@ corroborate_convictions() { # <tree> — rebuild FAILING, keeping only CROSS-WIN
   # convicted (one window is one experiment) — which is precisely the abstention C23 already
   # established: FAILING empty + a pending flag ⇒ cut ⇒ the same tree is re-run next sweep, and THAT
   # sweep is the second window. No new run is scheduled to get it; the retry was already happening.
-  local tree="${1:-}" f i n=0
+  local tree="${1:-}" f i n=0 _fgood=""
   local -a keep keepname
   keep=(); keepname=()
   [ "$CONVICT_MODE" != "off" ] || return 0
@@ -1893,6 +2033,15 @@ corroborate_convictions() { # <tree> — rebuild FAILING, keeping only CROSS-WIN
       *) keep+=("$f"); keepname+=("${FAILNAME[$i]:-}"); continue ;;   # deterministic: never delayed
     esac
     if conviction_observe "$f" "$tree" "${CUR_SHA:-}"; then
+      # C30 — two windows is necessary and not sufficient. Ask the last-green floor whether this
+      # failure is differential BEFORE it becomes a RED; only a positive reproduction there drops it.
+      if floor_exonerates "$f" "${FAILNAME[$i]:-}"; then
+        read -r _fgood < "$LASTGREEN" 2>/dev/null || _fgood=""
+        FLOOR_EXONERATED+=("$f")
+        record_nondifferential "$f" "${FAILNAME[$i]:-}" "${_fgood:-}"
+        log "C30 NOT DIFFERENTIAL $f — the SAME failure reproduces at the last-green $(sha12 "${_fgood:-}"), a tree this verifier stamped GREEN, so it says nothing about $(sha12 "$tree"): dropped to a flake, NOT a red"
+        continue
+      fi
       keep+=("$f"); keepname+=("${FAILNAME[$i]:-}")
       CONVICT_CORROBORATED+=("$f")
       log "C29 CORROBORATED $f — convicted again in a SECOND window (>=${CONVICT_SPREAD}s apart): RED"
@@ -3019,6 +3168,7 @@ run_target() { # <sha> — the whole check-set + verdict for ONE sha
   RUN_TMP="$(mktemp -d "$TMPBASE/$RUN_TMPL")" || return 1   # do_bisect probes under this very string
   FAILING=(); FAILNAME=(); FAILTEST=""; RETRIES=0; NFLAKE=0; CUT=0; LADDER_UNPROVEN=0; CORPUS_N=0   # reset per requeue pass
   LADDER_FAILING=(); CONVICT_PENDING=0; CONVICT_PENDED=()                  # C29, same reset scope
+  FLOOR_SPENT=0; FLOOR_EXONERATED=()                                       # C30, same reset scope
   CUT_WHY='zero not-ok in a non-zero run - truncated'
   DEATH_SIG=""; WEDGE_AT=""; SUSPECT=""; REPRODUCED=false
   syntax_check
@@ -3684,7 +3834,7 @@ okp()  { printf '  ok   %-52s\n' "$1"; PASS=$((PASS+1)); }
 badp() { printf '  FAIL %-52s\n' "$1"; FAIL=$((FAIL+1)); }
 # shellcheck disable=SC2317
 selftest() {
-  local d rc tree green_sha red_sha pl pl_f pl_missing esc_bad esc_f esc_why
+  local d rc tree green_sha red_sha floor_sha pl pl_f pl_missing esc_bad esc_f esc_why
   d="$(mktemp -d "$TMPBASE/postland-selftest.XXXXXX")" || { echo mktemp failed; exit 1; }
   # shellcheck disable=SC2064
   trap "rm -rf '$d'" EXIT
@@ -3831,6 +3981,63 @@ selftest() {
   grep -q '"verdict":"green"' "$d/state/stamps/$tree.json" 2>/dev/null \
     && okp "partition: a manifest suite is excluded from the tree verdict" \
     || badp "partition: manifest suite still counted in the verdict"
+
+  # ── C30: A CONVICTION THAT REPRODUCES AT THE LAST-GREEN FLOOR IS NOT DIFFERENTIAL ───────────────
+  # The live wedge this reproduces (runner.log 2026-09-07/08): C29's ledger is keyed on the FILE
+  # alone, so a chronically load-flaky suite corroborates itself across two DIFFERENT trees and reds
+  # every sweep forever — 20 sweeps, 18 RED, 2 CUT, 0 GREEN, while the bisector was separately
+  # logging `tests/cc-reaper.bats is not green at 24c598bac1c7 either`, i.e. at the very tree this
+  # verifier had stamped GREEN. This fixture is that shape, minimally: a suite that PASSES at the
+  # floor when the floor is verified and fails everywhere afterwards.
+  #
+  # The trigger is a file OUTSIDE the tree, which is what makes the suite non-deterministic with the
+  # tree held constant — exactly the property a floor probe is able to detect and a same-tree retry
+  # ladder is not. Baked in as an absolute literal at fixture-build time: the fixture tree carries no
+  # scripts/*lint*.sh, so no hermeticity prelint judges it (a tree cannot be judged by a check it
+  # does not carry), and the path is known before the commit is made.
+  printf '#!/usr/bin/env bats\n@test "nondifferential" { [ ! -f "%s/flake-trigger" ]; }\n' "$d" \
+    > "$d/src/tests/flaky.bats"
+  fixture_land "add a suite that is green at this commit"
+  run_fixture --run-if-needed >/dev/null 2>&1
+  tree="$(git -C "$d/src" rev-parse 'origin/main^{tree}')"
+  floor_sha="$(git -C "$d/src" rev-parse HEAD)"
+  # THE CONTROL FOR THE WHOLE BLOCK: the floor must really be green, and last-green must really point
+  # at it. Without this the exoneration below could pass vacuously against a floor that was never
+  # verified — the probe would fail there for the ordinary reason and prove nothing.
+  grep -q '"verdict":"green"' "$d/state/stamps/$tree.json" 2>/dev/null \
+    && okp "C30 floor: the suite is GREEN at the commit that becomes last-green" \
+    || badp "C30 floor: the fixture floor is not green — every assertion below is vacuous"
+  [ "$(cat "$d/state/last-green" 2>/dev/null)" = "$floor_sha" ] \
+    && okp "C30 floor: last-green points at that commit" || badp "C30 floor: last-green did not advance"
+
+  touch "$d/flake-trigger"          # ...and now the SAME suite fails at the floor too
+  printf '#!/bin/bash\necho unrelated\n' > "$d/src/unrelated.sh"
+  fixture_land "an unrelated commit above the floor"
+  tree="$(git -C "$d/src" rev-parse 'origin/main^{tree}')"
+  CC_POSTLAND_CONVICT_SPREAD_S=0 run_fixture --run-if-needed >/dev/null 2>&1   # window 1 ⇒ cut
+  CC_POSTLAND_CONVICT_SPREAD_S=0 run_fixture --run-if-needed >/dev/null 2>&1   # window 2 ⇒ C29 would RED
+  grep -q '"verdict":"green"' "$d/state/stamps/$tree.json" 2>/dev/null \
+    && okp "C30: a failure that reproduces at the floor does not red the tree" \
+    || badp "C30: a NON-DIFFERENTIAL failure still red the tree (the live wedge)"
+  grep -q '"outcome":"floor-not-differential"' "$d/state/flakes.jsonl" 2>/dev/null \
+    && okp "C30: the exoneration is recorded in the flake ledger" \
+    || badp "C30: exonerated silently — nothing recorded in the flake ledger"
+
+  # ── RED-PROOF, run as a CONTROL rather than asserted in a comment ───────────────────────────────
+  # The identical situation with C30 disabled is the PRE-FIX behaviour, and it must still red. This
+  # is what proves the green above was bought by the floor probe and not by the fixture quietly
+  # failing to convict anything (a suite that never goes red would satisfy the assertion above for
+  # free — the vacuous-pass trap this repo has been bitten by before).
+  printf '#!/bin/bash\necho unrelated2\n' > "$d/src/unrelated2.sh"
+  fixture_land "a second unrelated commit, for the kill-switch control"
+  tree="$(git -C "$d/src" rev-parse 'origin/main^{tree}')"
+  CC_POSTLAND_FLOOR_EXONERATE=off CC_POSTLAND_CONVICT_SPREAD_S=0 run_fixture --run-if-needed >/dev/null 2>&1
+  CC_POSTLAND_FLOOR_EXONERATE=off CC_POSTLAND_CONVICT_SPREAD_S=0 run_fixture --run-if-needed >/dev/null 2>&1
+  grep -q '"verdict":"red"' "$d/state/stamps/$tree.json" 2>/dev/null \
+    && okp "C30 kill switch: =off reproduces the pre-fix RED (the control)" \
+    || badp "C30 kill switch: =off did NOT red — the green above proves nothing"
+  rm -f "$d/flake-trigger" "$d/src/tests/flaky.bats"
+  fixture_land "retire the non-differential suite"
   # ── PRE-CORPUS WHOLE-TREE META-LINTS: verdict-affecting, standalone, and they SKIP the corpus ───
   # Exercises the DEFAULT prelint list (scripts/test-walltime-lint.sh), not an injected one, and the
   # absent-second-lint skip in the same pass. The tree is GREEN at this point (the partition block
