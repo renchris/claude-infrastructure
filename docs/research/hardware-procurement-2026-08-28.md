@@ -150,8 +150,15 @@ where 512GB is the SSD and 36GB the RAM, which scans as a 64GB+ hit.
   measurement: that coefficient (backlog `193ae8ddce72`) denominates `CC_ADMIT_ACTIVE_CEILING`, a
   per-**active-session** population, not this per-**core** literal — and its own §6a records that even
   the active ceiling is *"not blocked on §6"*. Running it would not have discharged this row.
-- **Still genuinely open (a different constant):** `scripts/capacity-marginal.sh` returned
+- ~~**Still genuinely open (a different constant):**~~ **CLOSED 2026-09-08.**
+  `scripts/capacity-marginal.sh` returned
   **NO-ATTRIBUTION** on a 27.6-minute quiet-box window — C1 LEVEL and C2 DYNAMICS both failed, and it
   correctly withheld the 0.846 fit that would otherwise have become a fifth value in the 30×-span
   family. That is the `CC_ADMIT_ACTIVE_CEILING` axis (`193ae8ddce72`), and it is unaffected by the
-  paragraph above.
+  paragraph above. **That refusal was the quiet box, not the instrument, and it has now been
+  answered:** run across a live dispatch wave instead, the same sampler PASSED all three controls in
+  one window — `2.390 load units per ACTIVE session, ± 0.533` (1 s.e.), n=85, span 5202 s, load1
+  spanning 10.35× (`marginal-load-per-active-session-2026-08-19.md` §6e; raw window at
+  `data/capacity-marginal-2026-09-08.tsv`). The withheld `0.846` stays withheld and unquotable — it
+  was never certified. **This closes the coefficient, not the per-core constant**, which remains
+  underivable on its own axis for the reasons `gc-cpu-vs-session-ceiling-2026-08-18.md` §3 records.

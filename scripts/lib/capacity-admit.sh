@@ -728,6 +728,16 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # adjudicates all four published values (0.172 / 0.566 / 1.89 / 2.5-5) as unrepairable and bans
   # quoting any of them until scripts/capacity-marginal.sh clears its three controls on the box (§6).
   #
+  # ✅ MEASURED 2026-09-08 (§6e) — the ban's condition is discharged, and this is the ONLY quotable
+  # value: 2.390 load units per ACTIVE session, +/- 0.533 (1 s.e.). Window: n=85, n_eff=85.0,
+  # span 5202s, proc unit, load1 14.97..154.89 (10.35x); C1 swing 1.18x, C2 corr 0.835, C3 active
+  # 5..11 over 7 levels. Raw window committed at docs/research/data/capacity-marginal-2026-09-08.tsv
+  # — re-run `capacity-marginal.sh analyze --in` on it to reproduce this line exactly.
+  # QUOTE IT ONLY WITH THE S.E. AND THE WINDOW; a bare 2.390 is how the last four values got loose.
+  # It is an UPPER bound on cost per active session, because cc_sp_active is a proven LOWER bound.
+  # That is the correct direction for a ceiling and the WRONG one for a "+N sessions" projection —
+  # do not invert it.
+  #
   # WHAT STILL HOLDS, and why the ceiling is not blocked on that measurement: ~4-8 concurrent actives
   # is what all 127/127 historic gate refusals correspond to. That is a COUNT OVER REFUSALS, derived
   # without dividing by any per-session coefficient, so the adjudication does not touch it — it is
@@ -735,8 +745,16 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # it must bind where the evidence is unambiguous, and the load and segment terms above already
   # cover the middle of the band from their own directions.
   #
-  # DO NOT substitute another number here. §6 of that doc says update this site to the MEASURED value
-  # once the on-box window has been run — never to one of the other three.
+  # DO NOT substitute another number here. §6 of that doc said to update this site to the MEASURED
+  # value once the on-box window had been run — never to one of the other three. THAT RUN HAPPENED
+  # (2026-09-08) and its value is quoted above, so this is a discharged instruction, not an open
+  # one: there is nothing left to go and measure on this axis, and a session that reads this
+  # paragraph as an errand is re-deriving a landed result.
+  #
+  # THE CEILING 8 IS UNCHANGED BY THAT MEASUREMENT, deliberately. It stands on the 127/127 refusal
+  # band above — a count over refusals — and was never derived by dividing by a per-session
+  # coefficient, so a coefficient cannot move it. Changing this literal is a gate-threshold change
+  # and needs its own evidence and its own decision, not an arithmetic consequence of 2.390.
   #
   # THE CENSUS IS A PROVEN LOWER BOUND (scripts/lib/spawn-presence.sh § THE ACTIVE POPULATION), so
   # this term under-refuses rather than refusing on unproven activity — the same direction rule the
