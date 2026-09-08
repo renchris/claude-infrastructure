@@ -311,3 +311,44 @@ set_transcript() { # <corrupt|missing|quiet> — rewrite the adopted fixture's t
   [[ "$output" == RECYCLE* ]] || false
   [[ "$output" == *deliberate-teardown* ]]
 }
+
+@test "marker: TEARDOWN also writes the PID-keyed marker (the reader's own join column)" {
+  # 2026-09-08, backlog 6f4573454230. The reader's most precise arm joins on the PID — the
+  # close-record it reads is <pid>-<epoch>.json — and for the KILL leg below that record says exit
+  # 137, which by signal number alone is an OOM kill. Neither key above is in that arm's reach, so a
+  # collected, landed, custody-returned retirement paged as `killed-oom-or-force` and prescribed a
+  # resume over work already on trunk. The pid we are about to signal is always in hand, so it is
+  # written as a third key with `pid` as an explicit field.
+  adopted_fixture
+  run "$T" U-AD --done-evidence "looks done" --force-adopted
+  [ "$status" -eq 0 ]
+  [ -f "$CC_TEARDOWN_DIR/4000000.json" ]                     # keyed by the TARGET's pid
+  run cat "$CC_TEARDOWN_DIR/4000000.json"
+  [[ "$output" == *'"key_kind":"pid"'* ]] || false
+  [[ "$output" == *'"pid":"4000000"'* ]] || false
+  [[ "$output" == *'"sid":"sidAD"'* ]] || false              # what makes the pid key safe against reuse
+  [[ "$output" == *'"mode":"teardown"'* ]] || false
+  run python3 -c "import json,sys; json.loads(open(sys.argv[1]).read().strip())" "$CC_TEARDOWN_DIR/4000000.json"
+  [ "$status" -eq 0 ]
+}
+
+@test "marker contract: the REAL watchdog reads a SIGKILLed teardown as RECYCLE/retired-by-desk" {
+  # The live cross-file contract for the incident's actual shape: cc-teardown's KILL leg leaves exit
+  # 137 in the close-record, and ONLY the pid-keyed marker is on disk. Both halves are the real
+  # binaries; a hand-written marker fixture could pass while either side drifted.
+  adopted_fixture
+  W="$REPO/hooks/lead-crash-watchdog.sh"
+  D="$BATS_TEST_TMPDIR"
+  mkdir -p "$D/wdbase/projects/slug" "$D/reg" "$D/nojetsam" "$D/closerec"
+  cp "$D/proj/slug/sidAD.jsonl" "$D/wdbase/projects/slug/sidAD.jsonl"
+  printf '{"pid":4000000,"exit_code":137,"signal":"9","stderr_tail":"","version":"2.1.260"}\n' \
+    > "$D/closerec/4000000-100.json"
+  run "$T" U-AD --done-evidence "looks done" --force-adopted
+  [ "$status" -eq 0 ]
+  rm -f "$CC_TEARDOWN_DIR/sidAD.json" "$CC_TEARDOWN_DIR/U-AD.json"   # leave ONLY the pid key
+  CC_ACCOUNT_BASES="$D/wdbase" CC_REGISTRY_DIR="$D/reg" CC_JETSAM_DIRS="$D/nojetsam" \
+    CC_CLOSE_RECORDS_DIR="$D/closerec" run "$W" --classify sidAD 4000000
+  [ "$status" -eq 0 ]
+  [[ "$output" == RECYCLE* ]] || false
+  [[ "$output" == *retired-by-desk* ]] || false
+}

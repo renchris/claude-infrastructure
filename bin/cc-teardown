@@ -254,10 +254,10 @@ record() { # <decision> <reason_kind> <reason> <both_legs_verified 0|1> [exit_co
 # own date, no iso() helper) so tests can source it VERBATIM and assert its literal emission.
 # FULLY GUARDED — a marker write can NEVER block or fail a close. Writers never delete markers; the
 # reader GCs them.
-write_teardown_marker() { # $1=target pane-uuid  $2=target sid  $3=mode
-  local _tm_pane="${1:-}" _tm_sid="${2:-}" _tm_mode="${3:-teardown}" _tm_dir _tm_ts
+write_teardown_marker() { # $1=target pane-uuid  $2=target sid  $3=mode  $4=target pid
+  local _tm_pane="${1:-}" _tm_sid="${2:-}" _tm_mode="${3:-teardown}" _tm_pid="${4:-}" _tm_dir _tm_ts
   _tm_dir="${CC_TEARDOWN_DIR:-$HOME/.claude/watchdog/teardown}"
-  { [ -n "$_tm_sid" ] || [ -n "$_tm_pane" ]; } || return 0
+  { [ -n "$_tm_sid" ] || [ -n "$_tm_pane" ] || [ -n "$_tm_pid" ]; } || return 0
   mkdir -p "$_tm_dir" 2>/dev/null || true
   _tm_ts="$(date -u +%FT%TZ)"
   if [ -n "$_tm_sid" ]; then
@@ -267,6 +267,20 @@ write_teardown_marker() { # $1=target pane-uuid  $2=target sid  $3=mode
   if [ -n "$_tm_pane" ]; then
     printf '{"key_kind":"pane","pane":"%s","sid":"%s","mode":"%s","ts":"%s"}\n' \
       "$_tm_pane" "$_tm_sid" "$_tm_mode" "$_tm_ts" > "$_tm_dir/$_tm_pane.json" 2>/dev/null || true
+  fi
+  # THIRD KEY — THE PID (2026-09-08, backlog 6f4573454230). The reader's most precise arm joins on
+  # the PID: hooks/lead-crash-watchdog.sh reads the close-record at <pid>-<epoch>.json, and the exit
+  # code it finds there for the KILL leg below is 137 — indistinguishable, by signal number alone,
+  # from an OOM kill. That arm returns before either key above is consulted, so a collected,
+  # landed, custody-returned retirement paged as `killed-oom-or-force` and prescribed
+  # `cc-husk-sweep --resume` over work already on trunk. Writing the pid we are ABOUT to signal
+  # puts the intent in the reader's own key space, so it reads a declared FACT instead of inferring
+  # from a signal number. `pid` is a new FIELD as well as a new key: it is the join column, and the
+  # existing two files carry no such column. Same guarded, best-effort emission — a marker write can
+  # never block or fail a close.
+  if [ -n "$_tm_pid" ]; then
+    printf '{"key_kind":"pid","pane":"%s","sid":"%s","pid":"%s","mode":"%s","ts":"%s"}\n' \
+      "$_tm_pane" "$_tm_sid" "$_tm_pid" "$_tm_mode" "$_tm_ts" > "$_tm_dir/$_tm_pid.json" 2>/dev/null || true
   fi
   return 0
 }
@@ -872,7 +886,7 @@ main() {
   # moment the close becomes inevitable: EVERY gate has passed and the first kill is the next statement.
   # Deliberately NOT written earlier: a REFUSE/DEFER leaves the target ALIVE, and a stale marker would
   # mask a genuine crash of that live session for the reader's whole 30-min freshness window.
-  write_teardown_marker "$paneUUID" "$sess_id" teardown
+  write_teardown_marker "$paneUUID" "$sess_id" teardown "$pid"
 
   # ── 3. ACT both legs ───────────────────────────────────────────────────────────────────────────────
   local lstart_before; lstart_before="$(pid_lstart "$pid")"
