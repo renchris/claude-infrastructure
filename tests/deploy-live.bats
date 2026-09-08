@@ -217,6 +217,60 @@ advance_origin() { # <name...>
   echo "$output" | grep -q "git fetch origin main FAILED"
 }
 
+@test "core.bare=true on a checkout WITH a work tree is REPAIRED, and the advance completes" {
+  # Backlog 693ee60c0885. `git worktree add|remove` against the shared checkout can leave
+  # core.bare=true on it (2026-09-04, fleet-wide live-layer freeze): every working-tree git op then
+  # answers "fatal: this operation must be run in a work tree", so the ff dies of a cause no
+  # pre-flight models. The condition was already DETECTED and its repair PRINTED — and still waited
+  # on a person. This pins that the lane performs it.
+  advance_origin b
+  stamp origin/main
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  git -C "$SHARED" config core.bare true               # the flip, exactly as a worktree op leaves it
+  run dl
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q "REPAIRED core.bare=true" || false
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ] || false          # …and the advance HAPPENED
+  [ "$(git -C "$SHARED" config --bool --get core.bare 2>/dev/null || echo unset)" = unset ] || false
+
+  # ARM 2 — the MUTANT. Deleting the layout discriminator's other half is not the pre-fix state;
+  # removing the repair IS, so the mutant neuters the unset and must lose both the advance and the
+  # message on this same fixture.
+  [ "$(grep -c '^    g config --unset core.bare' "$DL")" -eq 1 ]
+  MUT="$BATS_TEST_TMPDIR/dl-mut-nobarerepair.sh"
+  sed 's@^    g config --unset core.bare.*@    : # MUTANT — repair removed@' "$DL" > "$MUT"
+  [ "$(grep -c '^    g config --unset core.bare' "$MUT")" -eq 0 ]
+  [ "$(grep -c 'MUTANT — repair removed' "$MUT")" -eq 1 ]
+  git -C "$SHARED" reset -q --hard HEAD~1                              # back below the tip…
+  git -C "$SHARED" config core.bare true                               # …and flipped again
+  run dlm "$MUT"
+  [ "$status" -ne 0 ] || false
+  [[ "$output" != *"REPAIRED core.bare=true"* ]] || false
+  [ "$(git -C "$SHARED" config --bool --get core.bare)" = true ] || false
+}
+
+@test "a GENUINELY bare repo is never un-bared — the discriminator is the layout, not the flag" {
+  # The control that keeps the repair from becoming "unset core.bare wherever you find it". A real
+  # bare repository has no .git entry, so the arm must not fire on $ORIGIN: it stays bare, and the
+  # refusal below is whatever the lane already said about it.
+  run env DEPLOY_REPO="$ORIGIN" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
+      CC_PAGES_DIR="$PAGES" bash "$DL"
+  [ "$status" -ne 0 ] || false
+  [[ "$output" != *"REPAIRED core.bare=true"* ]] || false
+  [ "$(git -C "$ORIGIN" config --bool --get core.bare)" = true ] || false
+}
+
+@test "--dry-run reports the core.bare repair and mutates nothing" {
+  advance_origin b
+  stamp origin/main
+  before="$(git -C "$SHARED" rev-parse HEAD)"
+  git -C "$SHARED" config core.bare true
+  run dl --dry-run
+  echo "$output" | grep -q "WOULD unset it" || false
+  [ "$(git -C "$SHARED" config --bool --get core.bare)" = true ] || false   # untouched
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$before" ] || false
+}
+
 @test "non-repo DEPLOY_REPO refuses" {
   run env DEPLOY_REPO="$BATS_TEST_TMPDIR/nope" CC_POSTLAND_DIR="$BATS_TEST_TMPDIR/postland" \
       CC_PAGES_DIR="$PAGES" bash "$DL"
@@ -2155,6 +2209,7 @@ dlr() { # deploy-live --auto with the R7 knobs pinned and every side channel spi
       CC_DEPLOY_REFUSE_MAX="${R7_MAX:-3}" CC_DEPLOY_REFUSE_COOLOFF="${R7_COOL:-21600}" \
       CC_DEPLOY_SCAN="${R7_SCAN:-200}" CC_DEPLOY_BLIND_SCAN="${R7_BLIND:-2000}" \
       CC_DEPLOY_DEGRADE="${R7_DEGRADE:-on}" PATH="${R7_PATH:-$PATH}" \
+      CC_DEPLOY_BARE_REPAIR="${R7_BARE_REPAIR:-on}" \
       /bin/bash "$DL" --auto "$@"
 }
 
@@ -2934,9 +2989,15 @@ orphan() { # <live-relative> — a DANGLING link into the fixture repo; returns 
 # new-enum-member-falls-into-fail-closed-default). The culprit must name the checkout, and its
 # `run` must be the repair.
 r7_ffblocked() { # a deployable green above the live layer, and a checkout that cannot take it
+  # THE REPAIR IS DISABLED HERE ON PURPOSE, and that is not a weakened fixture. deploy-live now
+  # UNSETS a core.bare it can cure (backlog 693ee60c0885), so the cured state no longer reaches the
+  # ff — while the arm under test is the escalation for a cause the lane cannot cure, of which an
+  # UNCURABLE bare checkout is one instance and the repair's own fall-through says so. Pinning the
+  # kill switch is what keeps this fixture measuring the arm rather than the repair.
   advance_origin b
   stamp origin/main
   git -C "$SHARED" config core.bare true
+  R7_BARE_REPAIR=off
 }
 
 @test "R7 THE DEFECT: the ff refusal COUNTS — a checkout that cannot advance escalates as itself" {
@@ -2971,6 +3032,7 @@ r7_ffblocked() { # a deployable green above the live layer, and a checkout that 
         CC_DEPLOY_BATS_BIN="$SPY" CC_BACKLOG_BIN="$BLSPY" CC_DEPLOY_TIMEOUT_BIN= \
         CC_DEPLOY_MAX_LAG_COMMITS=999 CC_DEPLOY_MAX_LAG_HOURS=999 \
         CC_DEPLOY_REFUSE_MAX=3 CC_DEPLOY_REFUSE_COOLOFF=21600 \
+        CC_DEPLOY_BARE_REPAIR="${R7_BARE_REPAIR:-on}" \
         /bin/bash "$m" --auto
     [ "$status" -eq 1 ]
     [[ "$output" != *"ESCALATED"* ]] || false
@@ -2992,6 +3054,7 @@ r7_ffblocked() { # a deployable green above the live layer, and a checkout that 
         CC_DEPLOY_BATS_BIN="$SPY" CC_BACKLOG_BIN="$BLSPY" CC_DEPLOY_TIMEOUT_BIN= \
         CC_DEPLOY_MAX_LAG_COMMITS=999 CC_DEPLOY_MAX_LAG_HOURS=999 \
         CC_DEPLOY_REFUSE_MAX=3 CC_DEPLOY_REFUSE_COOLOFF=21600 \
+        CC_DEPLOY_BARE_REPAIR="${R7_BARE_REPAIR:-on}" \
         /bin/bash "$m" --auto
     [ "$status" -eq 1 ]
   done
