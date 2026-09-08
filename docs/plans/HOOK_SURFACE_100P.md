@@ -593,6 +593,41 @@ the binary and invocation mode that produced the verdict. Commands: § 3a, keyed
    resolution order was **not** settled, because settling it empirically means registering a second
    observer on a live provider — which is the prohibition itself. Read it from source, never by
    experiment on `WorktreeCreate`.
+
+   🚨 **SETTLED FOR THE `watchPaths` PROVIDERS (`CwdChanged` / `FileChanged`) — 2026-09-07, read from
+   the 220 binary exactly as this item instructed, with no second observer registered anywhere.**
+   The answer is neither first-wins nor last-wins: it is a **`flatMap` UNION over every registered
+   hook, in registration order**, and the union then REPLACES the list wholesale.
+
+       async function Zop(e,t){ let r = await vL({hookInput:e,timeoutMs:t});
+                                let n = r.flatMap((i) => i.watchPaths ?? []);   // ← UNION
+                                return {results:r, watchPaths:n, systemMessages:o} }
+       function Ttn(e,t,r){ ... hook_event_name:"CwdChanged" ...; return Zop(n,r) }   // 237754921+
+       // consumer, Sx_().g() — the wipe-and-rebuild this section already cites:
+       let A = await Ttn(y,T)...;  r = A.watchPaths;                            // 232532309+
+
+   Three supporting facts, each read rather than inferred. **(a)** `vL` runs ALL matching hooks
+   (`c.map(async …, b)`) and resolves them as an ordered array, so "resolution order" is registration
+   order and nothing is discarded. **(b)** The per-hook extraction is **event-agnostic** — the
+   command-type branch is
+   `O.hookSpecificOutput && "watchPaths" in O.hookSpecificOutput ? O.hookSpecificOutput.watchPaths :
+   void 0` (237815300+), with the identical shape on the `mcp_tool` branch — so it is not gated on a
+   `case "CwdChanged"`. That matters, because the *streaming* parser's `hookSpecificOutput` switch
+   (237776512+) has cases only through `MessageDisplay` and assigns `watchPaths` **only** under
+   `case "SessionStart"`; reading that switch alone would have produced the confident wrong answer
+   that a `CwdChanged` hook's `watchPaths` is never consumed at all. **(c)** The zod schema declares
+   `CwdChanged {watchPaths}` and `FileChanged {watchPaths}` as first-class members of the
+   `hookSpecificOutput` union (230268081+), so the payload is validated, not tolerated. Duplicates
+   across hooks are harmless: `u()` de-dupes at watcher-construction (`Co([...C,...r])`).
+
+   **Consequence for wiring.** Registering a SECOND `watchPaths` emitter on `CwdChanged` is
+   *mechanically safe* — it cannot make the list depend on an unknown, and it cannot drop a path.
+   It is still the wrong wiring, for a reason that survives this measurement: two emitters reading
+   ONE watchlist contribute an identical array (`tests/cwd-changed.bats`'s agreement arm proves it
+   byte-for-byte), so the second adds zero paths, doubles the fork cost at every `cd`, and gives one
+   list two writers for nothing. `migrations/0021-cwdchanged-slot-replace.sh` therefore REPLACES.
+   ⚠️ Measured on the **220** bundle, which is the build this section's other citations read; § 5's
+   wording-drift trap applies to any attempt to carry this verdict to 114 by absence.
 3. **Does anything here reproduce on 2.1.114? — RESOLVED: YES.** Everything tested on both binaries
    agreed: the 7-event core census, `PostToolUseFailure`, `Setup`, `StopFailure`, `FileChanged`,
    `CwdChanged`, `ConfigChange`, `PostCompact`, `InstructionsLoaded`, and the prompt-hook gate.
@@ -763,7 +798,7 @@ decided; none of them can change a disposition:
 | `TaskCreated`/`TaskCompleted` on **114** | **there is no `TaskCreate` tool on 2.1.114** — the session fell back to `TodoWrite`, a different mechanism | The events are in 114's enum but the tool that raises them does not ship there. Do not record NOT-APPLICABLE without finding another route |
 | `PermissionRequest` on **114**, and `PermissionDenied` on **114** | not probed | 220 verdicts are firm; 114 needs its own run per § 5's wording-drift trap |
 | `MessageDisplay` TUI rate on a SECOND sample | n=1 interactive message | The disposition is DROP on redundancy, so the rate no longer gates anything |
-| Provider N-hook resolution order | settling it means registering a second observer on a live provider | That is the prohibition itself — read it from source |
+| Provider N-hook resolution order | ~~settling it means registering a second observer on a live provider~~ **SETTLED 2026-09-07 for the `watchPaths` providers, from source, no observer registered** — it is a `flatMap` UNION in registration order, then a wholesale replace (§ 3b item 2 carries the extract) | Was: that is the prohibition itself — read it from source. It was read from source. Still owed for the NON-`watchPaths` providers (`WorktreeCreate`, `Elicitation`), whose arms are per-provider |
 
 ## 3e. 🚨 `FileChanged` + `CwdChanged` are ONE wiring, and the obvious prescription is BACKWARDS
 
