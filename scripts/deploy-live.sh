@@ -2485,8 +2485,65 @@ if [ "$TIER" = T2 ]; then
   } > "$PAGES_DIR/deploy-degraded-$(printf '%.12s' "$TARGET").page" 2>/dev/null || true
 fi
 
+# WHY THE FAILURE ARM IS CLASSIFIED RATHER THAN RETRIED (2026-09-08, backlog b0ee53b5f737).
+# What stood here was `>/dev/null 2>&1 || die "… re-run install.sh by hand"`, and BOTH halves were
+# wrong in the one state that actually produces the failure:
+#
+#   1. `2>&1` to /dev/null DISCARDED install.sh's own diagnosis, which is self-describing and names
+#      its cause. The operator was handed a verdict with the evidence deleted, so the only route to
+#      "why" was to re-run the failing thing by hand — which is what the prescription then said.
+#   2. "re-run by hand" NAMES AN ACTION GUARANTEED TO FAIL. This path merges the newest GREEN commit,
+#      never trunk tip (that is the whole green gate), so on any lag the deploy repo is BEHIND
+#      origin/main BY CONSTRUCTION — and behind-trunk is the exact state install.sh's 2026-08-01
+#      silent-stale-deploy guard refuses a global install from. A by-hand re-run re-enters the
+#      identical refusal. Measured live 2026-08-24: advanced 841169ed00b1 → b2ecb6fc886d, then
+#      "REFUSED — … re-run install.sh by hand", and a dry-run of install.sh gave "REFUSING a global
+#      install from a STALE checkout … behind: 20 commit(s)".
+#
+# The two guards are each correct and JOINTLY DEADLOCK — copy_drift_notice() above already documents
+# that standoff in prose. Reconciling them is a G2 deploy-path decision (backlog 590fedde86cc, still
+# blocked); it is NOT taken here. What is fixed here is only the message, which is what the row
+# called the immediate defect.
+#
+# THE CLASSIFIER IS STRUCTURAL, NOT TEXTUAL. It re-reads the same containment fact install.sh reads
+# (is origin/main an ancestor of HEAD) rather than grepping install.sh's wording, so a reword there
+# cannot silently reclassify a structural refusal as an unexplained fault. install.sh's stderr is
+# surfaced VERBATIM on both arms regardless — it is the producer's own account and this caller has
+# no business paraphrasing it.
 if [ -x "$DEPLOY_REPO/install.sh" ]; then
-  "$DEPLOY_REPO/install.sh" >/dev/null 2>&1 || die "merged ${TARGET:0:12} but install.sh FAILED — re-run $DEPLOY_REPO/install.sh by hand"
+  INSTALL_ERR="$("$DEPLOY_REPO/install.sh" 2>&1 >/dev/null)" && INSTALL_RC=0 || INSTALL_RC=$?
+  if [ "$INSTALL_RC" -ne 0 ]; then
+    INSTALL_SAID="install.sh said: ${INSTALL_ERR:-<it printed nothing to stderr>}"
+    BEHIND_TRUNK="$(g rev-list --count HEAD..origin/main 2>/dev/null || echo '?')"
+    if [ "$BEHIND_TRUNK" != 0 ] && [ "$BEHIND_TRUNK" != '?' ]; then
+      die "merged ${TARGET:0:12} but install.sh REFUSED — and this is STRUCTURAL, not a fault to retry.
+    This path deploys the newest GREEN commit (${TARGET:0:12}), never trunk tip, so $DEPLOY_REPO is
+    $BEHIND_TRUNK commit(s) behind origin/main BY DESIGN — the exact state install.sh refuses a global
+    install from (its 2026-08-01 silent-stale-deploy guard).
+    DO NOT re-run install.sh by hand: it hits the IDENTICAL refusal. DO NOT 'git pull --rebase' in
+    that checkout either — install.sh's own remedy line is written for a human at a normal checkout,
+    and here it would drag the live layer past the newest green commit, defeating the gate this path
+    exists to enforce.
+    ALREADY REPAIRED THIS RUN: every SYMLINK class, by link_refresh, unconditionally and earlier.
+    STILL DEFERRED: install.sh's COPY classes only (copy_drift_notice above reports which files).
+    DID NOT RUN, because this exit: the post-advance migrations_converge and host_checks.
+    Deliberate override — defensible ONLY because this path already established ${TARGET:0:12} is
+    green-stamped, and it disarms the guard for the incident class it was built for:
+        CC_INSTALL_ALLOW_STALE=1 $DEPLOY_REPO/install.sh
+    $INSTALL_SAID"
+    fi
+    if [ "$BEHIND_TRUNK" = '?' ]; then
+      # CANNOT TELL is a third state, never folded into the healthy one: reporting "level with
+      # origin/main" here would assert the staleness guard is exonerated on evidence we do not have.
+      die "merged ${TARGET:0:12} but install.sh FAILED (rc $INSTALL_RC), and git could NOT answer how
+    far $DEPLOY_REPO is behind origin/main — so whether the 2026-08-01 staleness guard is the cause is
+    UNKNOWN, not ruled out. Read what install.sh said before retrying anything.
+    $INSTALL_SAID"
+    fi
+    die "merged ${TARGET:0:12} but install.sh FAILED (rc $INSTALL_RC) and $DEPLOY_REPO is level with
+    origin/main, so the staleness guard is NOT the cause — this is an unexplained install failure.
+    $INSTALL_SAID"
+  fi
   # install.sh re-globs every per-file-symlink class on EVERY run and link_file ln -sf's whatever is
   # missing, so a brand-new tracked file IS linked by this call.
   #

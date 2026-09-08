@@ -208,6 +208,125 @@ advance_origin() { # <name...>
   echo "$output" | grep -q "install.sh ok"
 }
 
+# ── install.sh's FAILURE arm (backlog b0ee53b5f737) ──────────────────────────────────────────────
+# The arm used to be `>/dev/null 2>&1 || die "… re-run install.sh by hand"`. On the one state that
+# actually produces the failure — the deploy repo BEHIND trunk, which this path creates by design
+# because it targets the newest GREEN commit and never the tip — install.sh's staleness guard
+# refuses, and the prescribed by-hand re-run re-enters the IDENTICAL refusal. These cases pin the
+# two properties that makes the message true: the producer's own words survive, and the deadlock is
+# classified from the CONTAINMENT FACT rather than from install.sh's wording.
+#
+# RED-PROOF, stated so the reader can check it: 4 of the 5 cases below are red against the pre-fix
+# subject (replayed from git, not from a branch name) and green after. The fifth — the rc-0 chatter
+# case — is green on BOTH sides by construction: it is a NON-REGRESSION guard on the new stderr
+# capture, not a red-proof case, and calling it one would be a false claim about coverage.
+# ONE SITE IS NOT CASE-COVERED, deliberately and named rather than papered over: the third arm, where
+# git cannot answer how far behind the tree is. Reaching it needs origin/main to be unresolvable, and
+# this harness cannot produce that state — deploy-live must resolve origin/main much earlier to pick
+# a target at all. The arm exists so that CANNOT-TELL is never folded into the healthy "level with
+# trunk" verdict; it is reviewed, not tested.
+
+fail_install() { # <stderr text> — an install.sh stub that records its run, says <text>, exits 1
+  cat > "$SHARED/install.sh" <<STUB
+#!/bin/bash
+echo ran >> "$INSTALL_LOG"
+cat >&2 <<'MSG'
+$1
+MSG
+exit 1
+STUB
+  chmod +x "$SHARED/install.sh"
+}
+
+@test "a behind-trunk install.sh refusal is STRUCTURAL and never prescribes the by-hand re-run" {
+  # the stub is written FIRST: advance_origin's `git add -A` sweeps it into the very commits this
+  # deploy will merge, so a stub installed afterwards would be a dirty tracked path at merge time.
+  fail_install "✗ install.sh: REFUSING a global install from a STALE checkout."
+  advance_origin b c                    # origin is 2 ahead; the clone stays put
+  stamp "origin/main~1"                 # newest GREEN is b — NOT the tip, so the advance lands behind
+  run dl
+  [ "$status" -ne 0 ] || false
+  [ -f "$INSTALL_LOG" ] || false                                    # it really was invoked
+  [[ "$output" == *"STRUCTURAL"* ]] || false
+  [[ "$output" == *"DO NOT re-run install.sh by hand"* ]] || false
+  [[ "$output" == *"1 commit(s) behind origin/main"* ]] || false
+  [[ "$output" == *"CC_INSTALL_ALLOW_STALE=1 $SHARED/install.sh"* ]] || false
+  # THE DEFECT ITSELF: the old prescription named an action guaranteed to fail here.
+  [[ "$output" != *"re-run $SHARED/install.sh by hand"* ]] || false
+  # and it must not claim the two post-advance steps ran, because this exit skips them
+  [[ "$output" == *"DID NOT RUN"* ]] || false
+
+  # ARM 2 — the MUTANT. Inverting the containment test is the pre-fix classification: the deadlock
+  # then falls through to the unexplained-failure arm, which asserts the guard is exonerated.
+  [ "$(grep -c "BEHIND_TRUNK\" != 0" "$DL")" -eq 1 ] || false
+  MUT="$BATS_TEST_TMPDIR/dl-mut-behind-inverted.sh"
+  sed 's@BEHIND_TRUNK" != 0@BEHIND_TRUNK" = 0@' "$DL" > "$MUT"
+  [ "$(grep -c "BEHIND_TRUNK\" != 0" "$MUT")" -eq 0 ] || false
+  git -C "$SHARED" reset -q --hard HEAD~1        # arm 1 already advanced; re-arm the same fixture
+  run dlm "$MUT"
+  [ "$status" -ne 0 ] || false
+  [[ "$output" != *"DO NOT re-run install.sh by hand"* ]] || false
+  [[ "$output" == *"staleness guard is NOT the cause"* ]] || false   # the mutant's wrong verdict
+}
+
+@test "install.sh's own diagnosis is surfaced verbatim, not discarded into /dev/null" {
+  fail_install "REFUSING a global install from a STALE checkout — behind: 20 commit(s)"
+  advance_origin b c
+  stamp "origin/main~1"
+  run dl
+  [ "$status" -ne 0 ] || false
+  [[ "$output" == *"install.sh said:"* ]] || false
+  [[ "$output" == *"behind: 20 commit(s)"* ]] || false               # the producer's own words
+
+  # ARM 2 — the MUTANT: restore the discard. The verdict survives; the EVIDENCE does not, which is
+  # exactly why the old message could only send the operator back to re-run the failing thing.
+  [ "$(grep -c '2>&1 >/dev/null)" && INSTALL_RC=0' "$DL")" -eq 1 ] || false
+  MUT="$BATS_TEST_TMPDIR/dl-mut-stderr-discarded.sh"
+  sed 's@2>&1 >/dev/null)" \&\& INSTALL_RC=0@>/dev/null 2>\&1)" \&\& INSTALL_RC=0@' "$DL" > "$MUT"
+  [ "$(grep -c '2>&1 >/dev/null)" && INSTALL_RC=0' "$MUT")" -eq 0 ] || false
+  git -C "$SHARED" reset -q --hard HEAD~1        # arm 1 already advanced; re-arm the same fixture
+  run dlm "$MUT"
+  [ "$status" -ne 0 ] || false
+  [[ "$output" != *"behind: 20 commit(s)"* ]] || false
+}
+
+@test "the classification reads the containment fact, NOT install.sh's wording" {
+  # A refusal that says nothing recognizable at all is still the deadlock, because the deadlock is a
+  # property of where the tree sits — not of a string a future edit to install.sh could reword away.
+  fail_install "boom"
+  advance_origin b c
+  stamp "origin/main~1"
+  run dl
+  [ "$status" -ne 0 ] || false
+  [[ "$output" == *"STRUCTURAL"* ]] || false
+  [[ "$output" == *"install.sh said: boom"* ]] || false
+}
+
+@test "an install.sh failure with the tree LEVEL on trunk is not laundered as the deadlock" {
+  fail_install "some unrelated failure"
+  advance_origin b
+  stamp origin/main                     # the newest green IS the tip ⇒ nothing behind
+  run dl
+  [ "$status" -ne 0 ] || false
+  [[ "$output" == *"staleness guard is NOT the cause"* ]] || false
+  [[ "$output" != *"STRUCTURAL"* ]] || false
+  [[ "$output" == *"install.sh said: some unrelated failure"* ]] || false
+}
+
+@test "install.sh chatter on stderr with rc 0 stays a clean success" {
+  # NON-REGRESSION guard (green pre- and post-fix, by design — see the block above): the new capture
+  # reads stderr, and it must not turn a warning-and-succeed install into a failure.
+  printf '#!/bin/bash\necho ran >> "%s"\necho "  ⚠ installing from a linked worktree" >&2\nexit 0\n' \
+    "$INSTALL_LOG" > "$SHARED/install.sh"
+  chmod +x "$SHARED/install.sh"
+  advance_origin b
+  stamp origin/main
+  run dl
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"install.sh ok"* ]] || false
+  [[ "$output" != *"install.sh said:"* ]] || false
+}
+
 @test "fetch failure is loud and fatal (bad remote)" {
   advance_origin b
   stamp origin/main
