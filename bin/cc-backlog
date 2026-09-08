@@ -1065,6 +1065,100 @@ _bl_compact_unlock() {
   return 0
 }
 
+
+# ── CLAIM MUTEX — one item, one grant, even inside one second ──────────────────────────────────
+# THE DEFECT (5207d553dce2, MEASURED 2026-08-07 on item 149789b69fc4): pids 67287 (pane 658) and
+# 82639 (pane 657) both emitted a `claim` record at 22:57:45Z, both were still live 4+ minutes
+# later, both carried the byte-identical brief, and both were writing the SAME shared worktree.
+# The ledger fold names only 82639, so 67287 received NO refusal and had no way to learn it had
+# been displaced. The lease guard is HEALTHY on the slow path — a third claimer ~3 min later was
+# correctly REFUSED rc 4 "incumbent live" — so this is not a missing guard, it is a NON-ATOMIC
+# one: `cmd_transition` folds the trail (the lease read, ~"lall=$(fold)") and appends the claim,
+# and those are two steps. A peer landing between them is invisible to both reads.
+#
+# WHY A LOCK HERE AND NOT ON THE APPENDERS. The store's appenders stay deliberately lock-free —
+# bare O_APPEND of a sub-PIPE_BUF line is atomic, and that is what lets ~14 writers share this
+# ledger with no coordination (see the compact lock above, which says so). What is serialized here
+# is exactly the `claim` verb's fold→append CRITICAL SECTION, and it is keyed PER ITEM: two
+# claimers of one id cannot interleave, while two claimers of different ids never contend at all.
+# Nothing else in the store changes, and no other verb takes this lock.
+#
+# FAIL-CLOSED, in the direction this file already argues for everywhere else: a claim that cannot
+# take the mutex REFUSES (rc 4, `verdict=claim-contended` on LINE 1, where cc-dispatch's
+# head-biased `claim_excerpt` can see it) and appends NOTHING. Abstaining leaves the incumbent
+# alone and costs one retry; granting on an unproven read is what mints the second worker.
+#
+# A DEAD holder is reclaimed at once (owner-token, `kill -0`) for the same reason the compact lock
+# does it: a claim that `exit`s inside the section must not wedge the item, and reaping on age
+# alone would let a slow live holder be robbed. An untokened dir — a holder mid-acquire, or
+# pre-fix debris — is aged out instead, so a peer milliseconds from writing its token is safe.
+# Env (tests): CC_BACKLOG_CLAIM_LOCK_DIR · CC_BACKLOG_CLAIM_LOCK_WAIT_S · CC_BACKLOG_CLAIM_LOCK_STALE_S.
+_bl_claim_lock_dir() { printf '%s/%s' "${CC_BACKLOG_CLAIM_LOCK_DIR:-$BACKLOG.claim.lock.d}" "$1"; }
+
+# _bl_claim_take <dir> → rc 0 iff THIS process now holds it
+_bl_claim_take() {
+  mkdir "$1" 2>/dev/null || return 1
+  printf '%s\n' "$$" > "$1/owner" 2>/dev/null || true
+  return 0
+}
+
+# _bl_claim_lock <id> → rc 0 held · rc 1 contended (caller must refuse, never proceed)
+_bl_claim_lock() {
+  local ld tok="" age waited=0
+  local stale="${CC_BACKLOG_CLAIM_LOCK_STALE_S:-120}"
+  local budget="${CC_BACKLOG_CLAIM_LOCK_WAIT_S:-5}"
+  ld="$(_bl_claim_lock_dir "$1")"
+  mkdir -p "${ld%/*}" 2>/dev/null || true
+  while :; do
+    _bl_claim_take "$ld" && return 0
+    tok=""; [ -f "$ld/owner" ] && { read -r tok < "$ld/owner" 2>/dev/null || tok=""; }
+    case "$tok" in
+      ''|*[!0-9]*)
+        age=$(( $(date +%s) - $(stat -f %m "$ld" 2>/dev/null || stat -c %Y "$ld" 2>/dev/null || echo 0) ))
+        if [ "$age" -ge "$stale" ]; then
+          rm -rf "$ld" 2>/dev/null || true
+          _bl_claim_take "$ld" && return 0
+        fi ;;
+      *) if ! kill -0 "$tok" 2>/dev/null; then      # dead holder → reclaim now
+           rm -rf "$ld" 2>/dev/null || true
+           _bl_claim_take "$ld" && return 0
+         fi ;;
+    esac
+    [ "$waited" -ge "$budget" ] && return 1
+    sleep 1; waited=$(( waited + 1 ))
+  done
+}
+
+_bl_claim_unlock() {
+  local ld tok=""
+  ld="$(_bl_claim_lock_dir "$1")"
+  [ -f "$ld/owner" ] && { read -r tok < "$ld/owner" 2>/dev/null || tok=""; }
+  if [ -z "$tok" ] || [ "$tok" = "$$" ]; then
+    rm -rf "$ld" 2>/dev/null || true
+  fi
+  return 0
+}
+
+# The `claim` dispatch arm, mutex-wrapped. A missing or flag-shaped id is passed straight through
+# so `cmd_transition` keeps owning every usage error verbatim — the mutex must not become a second
+# argument parser.
+_bl_claim_guarded() {
+  local id="${1:-}" rc
+  case "$id" in ''|-*) cmd_transition claim "$@"; return $? ;; esac
+  if ! _bl_claim_lock "$id"; then
+    { printf 'cc-backlog claim: REFUSED verdict=claim-contended — %s is inside another process claim right now\n' "$id"
+      printf '  The claim verb folds the trail and appends as two steps. A peer inside that window\n'
+      printf '  takes the same item and NEITHER is refused: measured 2026-08-07, pids 67287 and 82639\n'
+      printf '  both claimed 149789b69fc4 at 22:57:45Z and both ran, on one shared worktree.\n'
+      printf '  This claim appended NOTHING and the item is untouched. Re-run to retry.\n'
+    } >&2
+    return 4
+  fi
+  cmd_transition claim "$@"; rc=$?
+  _bl_claim_unlock "$id"
+  return "$rc"
+}
+
 # ── TSV field-collapse guard — docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md ──────────────────
 # Tab is IFS-*whitespace*, so `IFS=$'\t' read` collapses a RUN of tabs: ANY empty cell shifts every
 # later field one position LEFT, silently and with a zero exit status. Here `.needs` is "" on every
@@ -6418,7 +6512,10 @@ case "${1:-}" in
   # rc is captured and re-exited so the kick can never become `add`'s verdict.
   add)     shift; cmd_add "$@"; _add_rc=$?; [ "$_add_rc" -eq 0 ] && dispatch_kick; exit "$_add_rc" ;;
   list)    shift; cmd_list "$@" ;;
-  claim)   shift; cmd_transition claim "$@" ;;
+  # The mutex, not `cmd_transition`, is what makes one grant per item total across processes —
+  # see CLAIM MUTEX above. Wrapped at the dispatch arm so every CLI claimer is covered and no
+  # internal caller of cmd_transition changes behaviour.
+  claim)   shift; _bl_claim_guarded "$@" ;;
   reclaim) shift; cmd_reclaim "$@" ;;
   # NO dispatch_kick on either. `link` writes no status, so it cannot make an item newly
   # dispatchable — and a kick would in fact be backwards here: the whole point of a link is to make
