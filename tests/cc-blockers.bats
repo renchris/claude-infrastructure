@@ -917,6 +917,72 @@ mkdeploy() { # <dir> <commits trunk is ahead> <age of the LIVE HEAD commit, eg 4
   [ "$(kinds)" = "deploy-stale deploy-wedged " ]
 }
 
+# ── AN UNASKABLE ANCESTRY QUESTION IS NOT A "NO" (2026-09-08) ────────────────────────────────────
+# `merge-base --is-ancestor` has THREE answers — 0 yes, 1 no, 128 "that is not a commit / I do not
+# have that object" — and this row consumed it through `if ! … 2>/dev/null`, which makes 128 and 1
+# the same byte. $gcommit comes from a stamp's `.commit`, and BOTH unaskable shapes are reachable in
+# the live store: 13 stamps from 2026-07-30..08-01 certify pre-rebase BRANCH shas that are prunable,
+# and the store is TREE-KEYED (the FILENAME is a tree — deploy-live.sh:11), so a reader who mistakes
+# the key for the commit hands a tree to a commit-only test. On 2026-09-08 a diagnosis did exactly
+# that, read 128 as "off-trunk" 20 times out of 20, and spent four days on a P0 that did not exist.
+#
+# These are the arms that would have caught it. W6/W7 are RED against pre-fix bin/cc-blockers, which
+# emits a wedged row for both; W8 pins the git behaviour the fix's three-way split depends on, so a
+# future git that collapsed 128 into 1 reds here rather than silently restoring the bug.
+@test "deploy-wedged ABSTAINS when the green cursor names an object this repo does not have (W6)" {
+  # The invented-blocker arm, and it is this file's own stated law applied to a site that broke it:
+  # "alarms fail OPEN: an unreadable/absent sensor yields NO row, never an invented blocker." A green
+  # stamp whose commit was pruned asks a question git cannot answer; answering it "not above live
+  # HEAD" is a fabricated verdict, not a degraded one.
+  mkdeploy dr 1 1H
+  printf '{"tree":"x","commit":"%s","verdict":"green"}\n' deadbeefdeadbeefdeadbeefdeadbeefdeadbeef \
+    > "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  run ccb --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r '[.[]|select(.kind=="deploy-wedged")]|length')" = 0 ]
+}
+
+@test "deploy-wedged ABSTAINS when the green cursor holds a TREE, and invents no magnitude (W7)" {
+  # THE MUTANT THIS FIX WAS BUILT FROM, replayed as the real artifact rather than a synthetic one:
+  # the value is a tree sha out of the fixture's own object store, which is what the tree-keyed stamp
+  # store hands a careless reader. Pre-fix this did not merely fire — it fired with a NUMBER, because
+  # `rev-list --count <tree>..<head>` counts the whole history instead of failing, so the board showed
+  # `green 4b825dc642cb sits 2 behind live HEAD`. A confident, quantified, false wedge is strictly
+  # worse than silence, so the magnitude is asserted absent too and not just the row.
+  mkdeploy dr 1 1H
+  local tree; tree="$(git -C "$DEPLOY_REPO" rev-parse 'HEAD^{tree}')"
+  [ -n "$tree" ] || false
+  printf '{"tree":"x","commit":"%s","verdict":"green"}\n' "$tree" > "$CC_POSTLAND_DIR/stamps/g.json"
+  touch -t "$(date -v-4H +%Y%m%d%H%M)" "$CC_POSTLAND_DIR/stamps/g.json"
+  run ccb --json
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r '[.[]|select(.kind=="deploy-wedged")]|length')" = 0 ]
+  # Captured then matched, never `| grep -q`: under pipefail a matching grep can exit before its
+  # producer and invert the verdict (this file's own W1 comment says so).
+  local seen; seen="$output"
+  [ "${seen#*behind live HEAD}" = "$seen" ] || false                      # no fabricated magnitude
+}
+
+@test "a TREE and a real non-ancestor are DIFFERENT exit codes — the split the fix rests on (W8)" {
+  # The schema pin, and the assertion whose absence cost the four days. It asserts two things the fix
+  # treats as distinct and a suppressed `if !` cannot: a genuine "no" is rc 1, and a non-commit
+  # operand is rc 128. It also pins the store's KEY SHAPE — the stamp filename is a TREE, so it is
+  # never a valid input to a commit-only test. No cc-blockers here on purpose: this is the ground
+  # truth the row's three-way branch is derived from, so it must fail on its own terms if git changes.
+  mkdeploy dr 1 1H
+  local tree; tree="$(git -C "$DEPLOY_REPO" rev-parse 'HEAD^{tree}')"
+  run git -C "$DEPLOY_REPO" merge-base --is-ancestor "$LIVE" "$PRIOR"     # live is NOT under prior
+  [ "$status" -eq 1 ] || false                                           # a real "no"
+  run git -C "$DEPLOY_REPO" merge-base --is-ancestor "$LIVE" "$tree"
+  [ "$status" -eq 128 ] || false                                         # "could not ask" — NOT a "no"
+  run git -C "$DEPLOY_REPO" merge-base --is-ancestor "$LIVE" deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+  [ "$status" -eq 128 ] || false
+  # ...and the live store really is keyed the way this test assumes: a stamp NAME is a tree object.
+  run git -C "$DEPLOY_REPO" cat-file -t "$tree"
+  [ "$output" = tree ] || false
+}
+
 @test "deploy-wedged RENDERS in the LAND-PIPELINE table, not only in --json" {
   # W5. Emit and registration are two separate ways to ship nothing (the L5 law): a kind missing from
   # LAND_SEL rides the --json array and vanishes from the only surface the operator reads.

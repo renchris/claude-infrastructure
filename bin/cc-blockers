@@ -332,7 +332,7 @@ alarm_rows() { # → one JSON object per line (possibly none)
   # life/life_g — LIFETIME denominators (§4 F3). `seen` is capped at REDRUN_N, so the board used to
   #             say "5 verdicts, 0 green EVER" against a real history of 33 — understating its own
   #             evidence 6.6x in the one cell the operator reads to size the problem.
-  local notgreen=0 life=0 life_g=0 behind="" behind_g="" astate fcount dtl
+  local notgreen=0 life=0 life_g=0 behind="" behind_g="" astate fcount dtl anc_rc=0
   now="$(date +%s 2>/dev/null || true)"
   case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac                    # no clock ⇒ no alarms
 
@@ -597,7 +597,36 @@ EOF
   # state TRANSITIONS, 52 clear intervals and a longest clear run of 6.06h. A high duty cycle, not a
   # constant — so not zero bits. The 87.3% is recorded here because it is the number a future owner
   # will want, and because this seam has now been re-analysed three times.
-  if ! git -C "$DEPLOY_REPO" merge-base --is-ancestor "$head_sha" "$gcommit" >/dev/null 2>&1; then
+  # ── AN ANCESTRY TEST HAS THREE ANSWERS, AND THIS SITE USED TO HAVE TWO (2026-09-08) ────────────
+  # `merge-base --is-ancestor` exits 0 for "yes", 1 for "no", and 128 for "I CANNOT ANSWER THAT" —
+  # the operand is not a commit, or the object is not in this repo at all. With stderr suppressed
+  # and the result consumed by `if !`, 128 and 1 are the same byte, so an UNASKABLE question was
+  # answered "not an ancestor" and this row fired. That is not a degraded verdict, it is an INVENTED
+  # one, and it contradicts the law this file's own suite already states: "alarms fail OPEN: an
+  # unreadable/absent sensor yields NO row, never an invented blocker."
+  #
+  # $gcommit is read from a stamp's `.commit`, so both unaskable shapes are REACHABLE, not theoretical:
+  #   · the object is genuinely gone — a stamp certifies a pre-rebase BRANCH sha, and the live store
+  #     holds 13 such from 2026-07-30..08-01 whose commits are prunable; and
+  #   · the field holds a TREE. The stamp store is TREE-KEYED by design (the FILENAME is a tree sha,
+  #     deploy-live.sh:11 "so a rebase/cherry-pick that preserves the tree keeps its verdict"), so a
+  #     reader who takes the key for the commit hands a tree to a commit-only test.
+  #
+  # THAT SECOND SHAPE IS NOT HYPOTHETICAL EITHER — it is what this fix was built from. On 2026-09-08 a
+  # diagnosis fed stamp FILENAMES to `--is-ancestor` with stderr suppressed, read 128 as "off-trunk"
+  # for 20 of 20 stamps, and concluded the verifier was certifying shas that no longer existed. It was
+  # not: measured on `.commit`, 568 of 581 stamps are ancestors of trunk and the newest 20 are 20/20.
+  # Four days of a P0 hung on the difference between rc 1 and rc 128. Replayed through THIS row before
+  # the fix, a tree in `.commit` emitted `green 4b825dc642cb sits 2 behind live HEAD` — the blocker AND
+  # its magnitude both fabricated, because `rev-list --count <tree>..<head>` had counted the whole
+  # history rather than failing. A confident, quantified, false wedge is worse than silence.
+  #
+  # Abstaining here opens no blind spot: green-starved (age) and never-green (existence) are emitted
+  # ABOVE this point and are not gated on it, so a store that genuinely holds no usable green still
+  # speaks — through the arms whose question can actually be answered.
+  git -C "$DEPLOY_REPO" merge-base --is-ancestor "$head_sha" "$gcommit" >/dev/null 2>&1; anc_rc=$?
+  [ "$anc_rc" -le 1 ] || return 0          # 128 &c = COULD NOT ASK ⇒ fail OPEN, never an invented row
+  if [ "$anc_rc" -eq 1 ]; then
     behind_g="$(git -C "$DEPLOY_REPO" rev-list --count "$gcommit..$head_sha" 2>/dev/null || true)"
     case "${behind_g:-}" in ''|*[!0-9]*|0) behind_g="" ;; esac
     if [ -n "$behind_g" ]; then
