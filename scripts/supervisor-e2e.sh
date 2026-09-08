@@ -805,6 +805,94 @@ lsweep
 [ "$(nesc)" -eq 0 ] && ok "…and does not escalate on the very sweep that arms the rung" || no "armed and escalated in one sweep"
 lsweep
 [ "$(nesc)" -eq 1 ] && ok "…then escalates normally on the next sweep (the ladder survives the upgrade)" || no "a pre-ladder episode stayed silent forever after the upgrade (esc=$(nesc))"
+echo "T39 PERMISSION-PENDING EXEMPTION — a live beacon SUPPRESSES the STALL?/ESCALATED duplicate (item 56e82c56fb07)"
+# THE DEFECT, measured 2026-09-08 01:38:30 on the live box: session e7693813-… sat blocked on a permission
+# prompt from 00:21. Its beacon was on disk the whole time and cc-blockers rendered it exactly right
+# ("permission-pend BLOCKED-1h … RECOVER: it2 session focus 299"), while the supervisor paged the SAME sid
+# in the SAME second as "STALL?: pid alive but telemetry 4624s + transcript 1839s stale". Same machine,
+# same store — lead-supervisor.sh:114 and cc-blockers:234 both default to /tmp/cc-permission-pending — the
+# STALL? branch simply never consulted it. And a blocked session CANNOT emit telemetry or a transcript
+# line, so staleness is the DEFINING symptom: the STALL? predicate fires on every permission-blocked
+# session by construction, which makes that page zero-bit duplication with a worse description.
+# The three directions the brief demands are checks 1-2 (i), 3 (ii), 8 (iii); check 6 is the placement
+# proof and check 7 is the over-suppression guard.
+reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json "$SBX/notify.log"
+rm -f "$CC_SUPERVISOR_PAGEDIR"/pp.* "$CC_SUPERVISOR_PAGEDIR"/nopp.* 2>/dev/null
+rm -rf "$CC_SUPERVISOR_PAGEDIR/damp"
+# CC_PAGE_DAMP_TTL_S=0 for T33's reason: the send-side TTL is an INDEPENDENT layer whose own contract
+# lives in tests/page-damp.bats. Left armed it would suppress the post-clear page for half an hour and
+# read as "page LOST" here — a cost gate must be strictly weaker than the predicate it fronts.
+ppsweep(){ CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_PAGE_DAMP_TTL_S=0 \
+           CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1; }
+pn(){ local n=0; [ -f "$SBX/notify.log" ] && { n=$(wc -l < "$SBX/notify.log" 2>/dev/null) || n=0; }; printf '%s' "$(( ${n:-0} + 0 ))"; }
+mktel pp 40 100 "$ALIVE" "$REPO"                                  # live pid, telemetry stale, no transcript ⇒ cold
+
+# sweep 1 — NO beacon yet: the ordinary STALL? page, which must still work (this is the control).
+: > "$CC_IDL"; ppsweep
+idl_has '"sid":"pp","state":"STALL?"' && ok "control: no beacon ⇒ STALL? pages (the signal exists to be suppressed)" \
+                                      || no "control failed — STALL? never fired, so T34 would be vacuous"
+
+# sweep 2 — drive it all the way to ESCALATED, so the fixture reproduces the LIVE state: a
+# permission-blocked session that has ALREADY escalated. This is what makes check 6 non-trivial.
+: > "$CC_IDL"; printf '%s' "$(( $(date +%s) - 3 ))" > "$CC_SUPERVISOR_PAGEDIR/pp.page"
+ppsweep
+{ idl_has '"kind":"page_escalate","sid":"pp"' && [ "$(cat "$CC_SUPERVISOR_PAGEDIR/pp.notified" 2>/dev/null)" = ESCALATED ]; } \
+  && ok "control: effects-dark past deadline ⇒ ESCALATED, marker sticky (the live state reproduced)" \
+  || no "could not reach ESCALATED — check 6 would prove nothing"
+
+# sweep 3 — the beacon appears. DIRECTION (i): no STALL?, no ESCALATED, permpend page STILL emitted.
+# DIRECTION (ii) rides the same sweep on a SECOND sid with no beacon, so the guard is proven sid-scoped
+# rather than a blanket disable (the shape T25 uses for the registered-desk exemption).
+mkbeacon pp 300 Bash '{"command":"cd /private/tmp/claude-501/-Users-chrisren && ls"}'
+mktel nopp 40 100 "$ALIVE" "$REPO"
+: > "$CC_IDL"; ppsweep
+idl_has '"sid":"pp","state":"STALL?"' && no "(i) STALL? still paged over a live beacon — the duplicate survives" \
+                                      || ok "(i) live beacon ⇒ NO STALL? page for that sid"
+idl_has '"kind":"page_escalate","sid":"pp"' && no "(i) ESCALATED still fired over a live beacon" \
+                                            || ok "(i) …and no ESCALATED either (escalate_page is reachable only via this branch)"
+idl_has '"kind":"stall_suppressed_permpend".*"sid":"pp"' \
+  && ok "(i) the suppression is RECORDED, not silent (S-4: a mute with no ledger row is unauditable)" \
+  || no "(i) suppression left no IDL record"
+idl_has '"kind":"permission_pending","sid":"pp"' \
+  && ok "(i) the PRECISE permpend page is still emitted (suppressed the duplicate, not the signal)" \
+  || no "(i) suppressing STALL? also killed the permpend page — the state is now unreported"
+paged pp && no "(i) the standing STALL? page file survived the suppression" \
+          || ok "(i) the standing page is RETRACTED, not left on disk"
+idl_has '"sid":"nopp","state":"STALL?"' \
+  && ok "(ii) a stale sid with NO beacon still pages STALL? in the same sweep (sid-scoped, not a blanket mute)" \
+  || no "(ii) the guard suppressed a session that has no beacon — over-suppression"
+
+# check 6 — PLACEMENT PROOF. ESCALATED is sticky in page(): a `.notified` holding ESCALATED swallows every
+# later STALL? notify until something CLEARS it, and only clear_page_recovered() does. A guard that merely
+# `return`s here would leave this marker pinned forever, and direction (iii) below could then page into a
+# marker that eats the notify — a mute button wearing a fix's clothes. Routing to clear_page_recovered
+# re-arms it on the ordinary sustained-OK dwell (hysteretic — never a one-sweep flap re-arm, T33).
+CC_SUP_RECOVERY_S=1 ppsweep; sleep 2; CC_SUP_RECOVERY_S=1 ppsweep
+[ -f "$CC_SUPERVISOR_PAGEDIR/pp.notified" ] \
+  && no "check 6: the ESCALATED marker is PINNED — a later real stall would be swallowed (guard returns too early)" \
+  || ok "check 6: sustained suppression RE-ARMS the sticky ESCALATED marker (placement proven, not merely muted)"
+
+# check 7 — OVER-SUPPRESSION GUARD. A beacon past PERMPEND_HORIZON_S is an ORPHAN: sweep_permission_pending
+# REAPS it (REAP 2) rather than paging it, so it names nothing and must not mute a genuine stall. assess()
+# runs BEFORE that sweep, so without the horizon clause in permpend_live() the orphan would suppress.
+permreset; rm -f "$CC_SUPERVISOR_PAGEDIR"/pp.notified "$CC_SUPERVISOR_PAGEDIR"/pp.ok
+mkbeacon pp 999999 Bash '{"command":"an orphaned beacon nothing will ever answer"}'   # ≫ CC_PERMPEND_HORIZON_S
+: > "$CC_IDL"; ppsweep
+idl_has '"sid":"pp","state":"STALL?"' \
+  && ok "check 7: an ORPHANED beacon (past the reap horizon) does NOT suppress — garbage cannot mute a stall" \
+  || no "check 7: a horizon-dead beacon muted a genuine stall (permpend_live is not mirroring REAP 2)"
+
+# sweep 8 — DIRECTION (iii): the prompt is ANSWERED (beacon gone) while the session stays stale. STALL? must
+# come back AND actually NOTIFY. Asserting the IDL alone would pass over a pinned marker, so the notify
+# COUNT is the load-bearing half: this is what separates a suppression from a mute.
+permreset; reset; rm -f "$CC_SUPERVISOR_PAGEDIR"/pp.notified "$CC_SUPERVISOR_PAGEDIR"/pp.ok
+before_n="$(pn)"
+mktel pp 40 100 "$ALIVE" "$REPO"
+: > "$CC_IDL"; ppsweep
+{ idl_has '"sid":"pp","state":"STALL?"' && [ "$(pn)" -eq $(( before_n + 1 )) ]; } \
+  && ok "(iii) beacon REMOVED + still stale ⇒ STALL? returns AND notifies exactly once (a suppression, not a mute)" \
+  || no "(iii) the page did not come back with a real notify (idl=$(idl_has '"sid":"pp","state":"STALL?"' && echo yes || echo no) sends=$before_n→$(pn))"
+permreset; rm -f "$CC_TELEMETRY_DIR"/*.json "$CC_SUPERVISOR_PAGEDIR"/pp.* "$CC_SUPERVISOR_PAGEDIR"/nopp.* 2>/dev/null
 
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"
