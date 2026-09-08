@@ -30,6 +30,8 @@ setup() {
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-such-claude-accounts"
   export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-lock-"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # The fixtured HOME cannot hold a durable local MCP binary; installing one would reach the network.
+  export CC_MCP_WIRE_NO_INSTALL=1
   # …and terminal identity: handoff-fire is terminal-aware, so an inherited KITTY_WINDOW_ID from the
   # developer's own pane would decide which arm runs. Same pin as tests/boot-resume-launch.bats.
   unset KITTY_WINDOW_ID
@@ -158,11 +160,11 @@ JSON
   [ "$output" -ge 2 ]
 }
 
-@test "ms365 is wired into every account config dir, and the wiring is idempotent" {
+@test "the SSOT servers are wired into every account config dir, and the wiring is idempotent" {
   # The other half of the fix: the allowlist only matters if the server is actually IN each
   # account's user-scope config. Runs against the fixtured $HOME, so it asserts the merge semantics
   # — adds one key, preserves everything else — without touching the real account dirs.
-  WIRE="$REPO/scripts/ms365-mcp-wire.sh"
+  WIRE="$REPO/scripts/mcp-ssot-wire.sh"
   [ -x "$WIRE" ]
 
   mkdir -p "$HOME/.claude" "$HOME/.claude-tertiary"
@@ -171,8 +173,10 @@ JSON
              {"name":"next3","config_dir":"~/.claude-tertiary","launcher":"claude3"}]}
 JSON
   # .claude-secondary already carries state that MUST survive the merge; .claude-tertiary is bare.
+  # The exemplar is deliberately NOT one of the SSOT's own servers: the renderer owns those, so it
+  # would overwrite the fixture and this would assert the renderer's output, not merge-preservation.
   cat > "$HOME/.claude-secondary/.claude.json" <<'JSON'
-{"numStartups": 42, "mcpServers": {"motion": {"type": "http", "url": "https://example.invalid/a"}}}
+{"numStartups": 42, "mcpServers": {"unrelated-server": {"type": "http", "url": "https://example.invalid/a"}}}
 JSON
   echo '{}' > "$HOME/.claude-tertiary/.claude.json"
   echo '{}' > "$HOME/.claude/.claude.json"
@@ -186,7 +190,7 @@ JSON
   run jq -r '.mcpServers.ms365.type' "$HOME/.claude-tertiary/.claude.json"
   [ "$output" = "stdio" ]
   # …the pre-existing server and the unrelated per-account counter both survive (merge, not write)…
-  run jq -r '.mcpServers.motion.url' "$HOME/.claude-secondary/.claude.json"
+  run jq -r '.mcpServers."unrelated-server".url' "$HOME/.claude-secondary/.claude.json"
   [ "$output" = "https://example.invalid/a" ]
   run jq -r '.numStartups' "$HOME/.claude-secondary/.claude.json"
   [ "$output" = "42" ]
