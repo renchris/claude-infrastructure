@@ -44,7 +44,15 @@ setup() {
   export CC_DECIDE_BIN="$D/absent-cc-decide"
   export CC_DECISIONS_DIR="$D/decisions"
   export CC_IDL="$D/idl.jsonl"
-  unset WRAP_SESSION_ID CLAUDE_SESSION_ID WRAP_TRANSCRIPT WRAP_CACHE
+  # CLAUDE_CODE_SESSION_ID belongs in this list and its absence made the suite a function of WHO RAN
+  # IT. The ledger resolves a session id from the environment when `--session` is not passed, and
+  # CLAUDE_CODE_SESSION_ID is the variable an ordinary Claude Code tool-call shell actually carries —
+  # the sibling suite unsets all three and names that variable in a test of its own
+  # ("session id: $CLAUDE_CODE_SESSION_ID … resolves when the others are unset"). Unset under launchd
+  # and set interactively, so `no session ⇒ YOURS_SRC=none` in case 10 below held for the post-land
+  # verifier and FAILED for every human or agent shell — a pre-existing trunk red that blocks any land
+  # whose diff reaches wrap-ledger.sh, while the corpus that certifies trunk never sees it.
+  unset WRAP_SESSION_ID CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID WRAP_TRANSCRIPT WRAP_CACHE
   SID="sess-11111111-2222-3333-4444-555555555555"
   ORIGIN="$D/origin.git"; WORK="$D/work"
   git init -q --bare "$ORIGIN"
