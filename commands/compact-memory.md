@@ -265,9 +265,13 @@ exists, which makes skipping it invisible.
 index — a whole-pass, after-the-fact check that cannot be skipped per line:
 
 ```
-scripts/memory-dropped-token-audit.py \
+cc-memory-dropped-token-audit \
   --old <memory>/archive/MEMORY_INDEX_PRE-COMPACT_<date>.md --new <memory>/MEMORY.md
 ```
+
+(A `bin/cc-*` tool, on PATH in every project, deliberately: `install.sh:662` globs `scripts/*.sh`,
+so the same file under `scripts/` would never reach `~/.claude` and this gate would have been prose
+everywhere except this checkout.)
 
 It diffs each entry's ORIGINAL hook against its NEW one and checks every hard token the rewrite
 removed against the linked topic file. **`verdict=clean` is the report; a `verdict=lossy` names the
@@ -284,7 +288,7 @@ cleared by the pointer `cc-memory-rotate` now leaves** (65edba440), so it does n
 rotation — measured live on reso, the prototype alarms on 35 rotor-demoted entries that this one
 correctly clears against `MEMORY-ARCHIVE.md`. The harvest anchors are copied from the `809d308eb`
 fix above rather than re-invented, and the harvest is reconciled against the bullet count before
-any verdict is believed. Suite: `tests/memory-dropped-token-audit.bats` (15 arms, each red-proved
+any verdict is believed. Suite: `tests/cc-memory-dropped-token-audit.bats` (15 arms, each red-proved
 by mutation).
 
 **Use TWO overlapping detectors, and a case-insensitive second pass.** Token-matching alone both
