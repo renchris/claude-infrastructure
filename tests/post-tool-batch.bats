@@ -76,12 +76,25 @@ JSON
 }
 
 # same shape, N and the tool mix varied — the census's two load-bearing fields
+#
+# 🚨 THE SUBSTITUTION IS BOUND TO A VARIABLE FIRST, AND THAT IS NOT STYLE. This helper used to
+# inline `"$(printf … | sed …)"` directly as printf's argument, and bash 3.2 — which is what
+# /bin/bash IS on macOS, and what bats runs when /bin wins the PATH — mis-parses the double quotes
+# NESTED inside a double-quoted command substitution. The substitution then reached printf as THREE
+# words instead of one, printf reused its format once per word, and the helper emitted three
+# separate JSON documents each holding one transposed field:
+#     …"tool_calls":["tool_name":"Bash","tool_name":"Bash","tool_name":"Bash"]}{…"tool_input":{}…
+# The hook did exactly the right thing with that — abstained `malformed-json` — so the census was
+# empty and `jq -r '.n'` read `null`, failing as `[: null: integer expression expected`, i.e. as a
+# harness error rather than as a wrong value. Under bash 5 the identical file is GREEN, so this
+# suite's verdict depended on which bash won the PATH, which is the one thing a test may not do.
+# Binding to a local first is enough: measured, 3.2 yields the correct single-word value that way.
 batch_payload() { # <tool_name>...
-  local names=""
+  local names="" calls
   for t in "$@"; do names="$names\"$t\","; done
+  calls="$(printf '%s' "${names%,}" | sed 's/"\([^"]*\)"/{"tool_name":"\1","tool_input":{},"tool_response":"r"}/g')"
   printf '{"session_id":"sid-mix","prompt_id":"pid-mix","permission_mode":"acceptEdits",
-           "effort":{"level":"high"},"hook_event_name":"PostToolBatch","tool_calls":[%s]}' \
-    "$(printf '%s' "${names%,}" | sed 's/"\([^"]*\)"/{"tool_name":"\1","tool_input":{},"tool_response":"r"}/g')"
+           "effort":{"level":"high"},"hook_event_name":"PostToolBatch","tool_calls":[%s]}' "$calls"
 }
 
 # always prints an integer: a missing log is ZERO rows, and `grep -c` on a missing file prints
