@@ -1827,6 +1827,58 @@ EOF
   [ ! -s "$KLOG" ]
 }
 
+# ── THE KILL SWITCH HAS NO OWNER (b83f4a2ba219). The four cases below are ONE closed world around a
+# suppression that outlives its cause. MEASURED, not hypothetical: the stuck-wrapper defect that
+# motivated `launchctl setenv CC_REAPER_GARBAGE 0` was fixed on 2026-09-02 and went live the same
+# day, yet the switch still read 0 on 2026-09-08 — 4d13h and 221 sweeps of a collector that
+# collected nothing, logging "disabled" each time into a file nobody reads.
+#
+# WHICH OF THESE ACTUALLY RED-PROVE, STATED HONESTLY (measured against the pre-fix subject, never
+# assumed): the first three are RED pre-fix — no marker is written, no page is ever sent, and
+# nothing distinguishes hour 1 from day 5. The FOURTH IS GREEN PRE-FIX AND SAYS SO: a DRY-RUN wrote
+# no marker before this change because no marker existed at all. It is a contract-preservation
+# guard on the arm's standing "a DRY-RUN writes nothing" promise — the promise this change is most
+# able to break — and it is kept beside the other three rather than counted with them.
+@test "garbage switch: a FRESH suppression is aged silently — marker written, desk NOT paged" {
+  mk_garbage_fixtures; set_desk
+  CC_REAPER_GARBAGE=0 CC_REAPER_GARBAGE_SWITCH_STATE="$D/gswitch" run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  [ -s "$D/gswitch" ]                                        # the off-stretch is now being aged
+  [ ! -f "$D/notify-calls" ]                                 # …and hour one is not news
+  [ ! -s "$KLOG" ]
+}
+
+@test "garbage switch: a STALE suppression pages the desk and names the revert" {
+  mk_garbage_fixtures; set_desk
+  printf '%s %s\n' "$(( $(date +%s) - 500000 ))" 0 > "$D/gswitch"   # off ~5.8 days, never paged
+  CC_REAPER_GARBAGE=0 CC_REAPER_GARBAGE_SWITCH_STATE="$D/gswitch" run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  grep -q 'launchctl unsetenv CC_REAPER_GARBAGE' "$D/notify-calls"   # the page carries the CURE, not a complaint
+  grep -q 'has been OFF' "$D/notify-calls"
+  [ ! -s "$KLOG" ]                                           # the arm still collects nothing — it only speaks
+  # …and it re-arms: the same sweep run again inside the page window stays quiet.
+  cp "$D/notify-calls" "$D/notify-calls.1"
+  CC_REAPER_GARBAGE=0 CC_REAPER_GARBAGE_SWITCH_STATE="$D/gswitch" run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  diff "$D/notify-calls" "$D/notify-calls.1"                 # no second page — no storm over a days-long state
+}
+
+@test "garbage switch: re-ENABLING clears the marker, so a toggle never accumulates" {
+  mk_garbage_fixtures
+  printf '%s %s\n' "$(( $(date +%s) - 500000 ))" 0 > "$D/gswitch"
+  CC_REAPER_GARBAGE_SWITCH_STATE="$D/gswitch" run "$R" garbage --reap   # switch ON (default)
+  [ "$status" -eq 0 ]
+  [ ! -f "$D/gswitch" ]                                      # the stale window died with the suppression
+}
+
+@test "garbage switch: a DRY-RUN writes no marker and pages nobody" {
+  mk_garbage_fixtures; set_desk
+  CC_REAPER_GARBAGE=0 CC_REAPER_GARBAGE_SWITCH_STATE="$D/gswitch" run "$R" garbage
+  [ "$status" -eq 0 ]
+  [ ! -f "$D/gswitch" ]                                      # the arm's standing contract: DRY-RUN writes nothing
+  [ ! -f "$D/notify-calls" ]
+}
+
 @test "garbage: unavailable snapshot fails OPEN (arm skipped, rc 0, nothing killed)" {
   mk_garbage_fixtures
   rm -f "$GA" "$GB"
