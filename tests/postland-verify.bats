@@ -10,7 +10,7 @@
 #               is-green <sha> (0 stamped-green / 1 not) | status | --selftest
 #   C2 killsw   POSTLAND_VERIFY=off  =>  immediate exit 0
 #   C3 state    $CC_POSTLAND_DIR/{stamps/<tree-sha>.json,last-green,queue,
-#               run.lock.d/,flakes.jsonl,runner.log}   (the SUT owns creation)
+#               run.lock.d/,flakes.jsonl,runner.log,tap/<tree-sha>.tap}  (the SUT owns creation)
 #   C4 stamp    {tree,commit,verdict:"green"|"red",failing[],ts,run_s,retries,
 #               suites,checks,shellcheck_advisory}
 #   C4b denom   `suites` is the COUNT handed to bats — the denominator of the population the
@@ -133,6 +133,17 @@
 #               unreadable INSTRUMENT, not a mismatch, and is honoured TTL-bounded — the fail
 #               direction here is asymmetric: `stranger ⇒ reap` is the only branch that can mint a
 #               second verifier, so an unverifiable identity must make the reader MORE patient.
+#   C37 tap     on a NON-GREEN verdict (red|cut|hung) the corpus TAP is retained at
+#               $CC_POSTLAND_DIR/tap/<tree-sha>.tap BEFORE $RUN_TMP is removed, and the page
+#               for that verdict quotes the path on a `tap:` line. It is the ONLY artifact
+#               naming WHICH tests failed and at which line: the stamp records FILES, and the
+#               page records ONE test per file (classify_failures dedupes its (file,test) pairs
+#               by file). NOT under stamps/ — ship-land's net-liveness clock scans that dir with
+#               `find -type f` and greps CONTENT for "verdict":"green", and a TAP quoting stamp
+#               JSON would date a dead verifier as live. GREEN drops that tree's TAP (a red TAP
+#               beside a green stamp for the same tree is a contradiction) and an EMPTY TAP is
+#               kept as nothing (the prelint fail-fast path skips the corpus). Bounded to the
+#               newest $CC_POSTLAND_TAP_KEEP files.
 #
 # ISOLATION: scratch bare origin + clone under $BATS_TEST_TMPDIR, fresh $HOME, and
 # argv-recording stubs for cc-backlog/osascript/cc-notify on PATH. No real repo, no
@@ -241,6 +252,7 @@ idl_last()    { tail -n1 "$CC_IDL" | jq -r "$1"; }
 pages_n()     { find "$CC_PAGES_DIR" -name 'postland-red-*.page' 2>/dev/null | wc -l | tr -d ' '; }
 cells_n()     { find "$CC_POSTLAND_WT_ROOT" -maxdepth 1 -name 'wt-*' 2>/dev/null | wc -l | tr -d ' '; }
 cut_pages_n() { find "$CC_PAGES_DIR" -name 'postland-cut-*.page' 2>/dev/null | wc -l | tr -d ' '; }
+taps_n()      { find "$CC_POSTLAND_DIR/tap" -name '*.tap' -type f 2>/dev/null | wc -l | tr -d ' '; }
 rev_pages_n() { find "$CC_PAGES_DIR" -name 'postland-revert-*.page' 2>/dev/null | wc -l | tr -d ' '; }
 
 # Collapse duplicate slashes into $PWD's normal form; result in $NORM (a GLOBAL, deliberately: a
@@ -1469,6 +1481,115 @@ printf '1..1\nok 1 p\n'")"
   [ "$(pages_n)" = "1" ]                              # C10 — it PAGES (the swallow paged nothing)
   # and the page is actionable: TAP named the test, so the page must not say "(unattributed)".
   grep -q 'boom' "$CC_PAGES_DIR"/postland-red-*.page || false
+}
+
+# ── C37 the corpus TAP SURVIVES a non-green verdict ─────────────────────────────
+# $RUN_TMP is rm -rf'd on every exit path (release_lock, and the tail of run_target), so the TAP —
+# the only artifact naming WHICH tests failed and at which line — died with the run it diagnosed.
+# What survived named strictly less. Root-causing the six consecutive reds on THIS file needed the
+# TAP and it was recoverable only by LUCK: a leaked /var/folders/*/postland-run.*/bats.tap from a
+# run whose trap never fired, showing THREE failures where the page named one. These lock the copy
+# in, and each one is RED-provable against the pre-fix SUT (which retained nothing at all).
+
+@test "C37: a RED keeps the TAP — the page names ONE failure per file, the TAP names them all" {
+  # The fixture IS the recovered evidence: ONE file, THREE failures, at lines 164/267/923.
+  # classify_failures dedupes its (file,test) pairs by file (`!seen[$1]++`), so the page's
+  # `failing:` line can only ever name the FIRST — which is exactly why the TAP has to survive.
+  b="$(stub_bats multi "printf '1..3\nnot ok 1 alpha\n# (in test file tests/ok.bats, line 164)\nnot ok 2 beta\n# (in test file tests/ok.bats, line 267)\nnot ok 3 gamma\n# (in test file tests/ok.bats, line 923)\n'; exit 1")"
+  tree="$(origin_tree)"
+  CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed   # window 1 — C29: a candidate, stamped cut
+  CC_POSTLAND_BATS="$b" second_window                     # window 2 re-convicts the same file => RED
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"; [ "$output" = "red" ]
+  t="$CC_POSTLAND_DIR/tap/$tree.tap"                        # C37 — tap/<tree-sha>.tap
+  [ -f "$t" ]                                               # ...and it outlived $RUN_TMP's removal
+  run grep -c '^not ok' "$t"; [ "$output" = "3" ]           # all three survived
+  grep -q 'line 923' "$t"                                   # ...with their file:line diagnostics
+  page="$(find "$CC_PAGES_DIR" -name 'postland-red-*.page' | head -1)"
+  [ -n "$page" ]
+  grep -q 'alpha' "$page"                                   # the page names the FIRST...
+  run grep -c 'gamma' "$page"; [ "$output" = "0" ]          # ...and structurally cannot name the third
+  grep -q '^tap:' "$page"                                   # C37 — so it points AT the TAP...
+  grep -qF "$t" "$page"                                     # ...by its exact path
+}
+
+@test "C37: a CUT keeps its TAP too — the 'zero not ok' claim becomes checkable, not trusted" {
+  # A cut asserts a NEGATIVE ("no test said no"). Discarding the evidence made that unfalsifiable.
+  b="$(stub_bats cuttap "printf '1..3\nok 1 a\n'; exit 137")"   # plan 3, 1 emitted, 0 not-ok, SIGKILL
+  tree="$(origin_tree)"
+  CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"; [ "$output" = "cut" ]
+  t="$CC_POSTLAND_DIR/tap/$tree.tap"
+  [ -f "$t" ]
+  run grep -c '^not ok' "$t"; [ "$output" = "0" ]           # the cut CLAIM, now a read
+  grep -q '^ok 1 a' "$t"                                    # and how far it got before it stopped
+}
+
+@test "C37: an EMPTY TAP is kept as NOTHING — absence stays loud" {
+  # RETENTION IS PROVED LIVE ON THIS SAME SHAPE FIRST. Without it "no TAP below" is satisfied just
+  # as well by a SUT that retains nothing at all, so the control could not tell the [ -s ] guard
+  # firing from the whole mechanism being absent — it would pass vacuously against the pre-fix SUT.
+  b="$(stub_bats loud "printf '1..3\nok 1 a\n'; exit 137")"
+  CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed
+  [ "$(taps_n)" = "1" ]                                     # the mechanism IS live on a cut
+  printf '@test "q" { true; }\n' > "$R/tests/second.bats"; push_commit "a second tree"
+  # Now the empty case. A run that emits ZERO output leaves the zero-byte file run_target created;
+  # retaining THAT hands the operator an artifact reading "no test failed" for a convicted tree.
+  q="$(stub_bats silent "exit 1")"                          # rc 1, ZERO output
+  tree="$(origin_tree)"
+  CC_POSTLAND_BATS="$q" run bash "$SUT" --run-if-needed
+  [ ! -f "$CC_POSTLAND_DIR/tap/$tree.tap" ]                 # the EMPTY one was kept as nothing...
+  [ "$(taps_n)" = "1" ]                                     # ...and the live one is untouched
+}
+
+@test "C37: a GREEN drops that tree's TAP — a red TAP beside a green stamp for it is a lie" {
+  b="$(stub_bats cutfirst "printf '1..3\nok 1 a\n'; exit 137")"
+  tree="$(origin_tree)"
+  CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed      # cut => TAP retained
+  [ -f "$CC_POSTLAND_DIR/tap/$tree.tap" ]
+  # C13: a cut is a DIAGNOSTIC, never a verdict, so the SAME tree is re-run — now by real bats.
+  run bash "$SUT" --run-if-needed
+  [ "$status" -eq 0 ]
+  run jq -r '.verdict' "$CC_POSTLAND_DIR/stamps/$tree.json"; [ "$output" = "green" ]
+  [ ! -f "$CC_POSTLAND_DIR/tap/$tree.tap" ]                 # C37 — dropped with the stale verdict
+  [ "$(taps_n)" = "0" ]
+}
+
+@test "C37: the TAP dir is BOUNDED — a retained TAP is not an archive" {
+  # ~160KB a run against ~43 lands/day: unbounded, this is the one piece of state that grows with
+  # trunk VELOCITY rather than with tree count.
+  b="$(stub_bats bound "printf '1..3\nok 1 a\n'; exit 137")"
+  CC_POSTLAND_TAP_KEEP=1 CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed
+  [ "$(taps_n)" = "1" ]
+  printf '@test "q" { true; }\n' > "$R/tests/second.bats"; push_commit "a second tree"
+  CC_POSTLAND_TAP_KEEP=1 CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed
+  [ "$(taps_n)" = "1" ]      # two trees cut, one TAP kept. WHICH survives a same-second mtime tie
+}                            # is not a contract and is deliberately not asserted; the BOUND is.
+
+@test "C37: the sweep takes the OLDEST — a bound that dropped the NEWEST would be worse than none" {
+  # The test above cannot assert WHICH file survives: both TAPs are written by back-to-back runs
+  # and `stat -f %m` is second-resolution, so their order is a coin flip. A decoy stamped years ago
+  # removes the tie, which is what makes the ORDERING (not just the count) checkable — an inverted
+  # sort keeps the count correct while sweeping exactly the evidence the operator came for.
+  mkdir -p "$CC_POSTLAND_DIR/tap"
+  d="$CC_POSTLAND_DIR/tap/deadbeefdeadbeef.tap"; printf 'a stale verdict\n' > "$d"
+  touch -t 202001010000 "$d"
+  b="$(stub_bats sweep "printf '1..3\nok 1 a\n'; exit 137")"
+  tree="$(origin_tree)"
+  CC_POSTLAND_TAP_KEEP=1 CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed
+  [ -f "$CC_POSTLAND_DIR/tap/$tree.tap" ]   # THIS run's TAP survived...
+  [ ! -f "$d" ]                             # ...and the years-old one is the one that went
+  [ "$(taps_n)" = "1" ]
+}
+
+@test "C37: the TAP never lands in stamps/ — ship-land dates net liveness by CONTENT there" {
+  # postland_net_live (ship-land.sh) walks `find <stamps> -type f` — every file, not '*.json' —
+  # and greps each one for "verdict":"green" to date the newest green stamp. A TAP is test OUTPUT,
+  # and THIS suite's output quotes stamp JSON (bats prints $output on a failed assertion), so a TAP
+  # parked in stamps/ could read as the newest green stamp and date a DEAD verifier as live.
+  b="$(stub_bats instamps "printf '1..1\nnot ok 1 x\n# (in test file tests/ok.bats, line 2)\n'; exit 1")"
+  CC_POSTLAND_BATS="$b" run bash "$SUT" --run-if-needed
+  [ "$(taps_n)" = "1" ]                                     # it WAS kept...
+  [ "$(find "$CC_POSTLAND_DIR/stamps" -name '*.tap' | wc -l | tr -d ' ')" = "0" ]   # ...but not there
 }
 
 # C13c above retires the case where OUR OWN bound cut the run (rc 124) — that is never a RED now.
