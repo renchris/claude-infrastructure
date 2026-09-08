@@ -13,7 +13,8 @@
 #   ${CC_CUSTODY_DIR:-~/.claude/autonomy/custody}/<cwd-key>.jsonl
 # cwd-key = _fired_cwd_key from hooks/lib/origin-identity.sh — the SAME normalisation the
 # fired-peer store uses, so the two stores cannot disagree about what a cwd is. Rows:
-#   {ts, kind:open|return|abandon, cwd, originatorPane, targetPane, marker, slug, notifyBack, why}
+#   {ts, kind:open|return|abandon, cwd, originatorPane, targetPane, marker, slug, notifyBack, why,
+#    provenance}   ← provenance is open-only: what the OPENER knew (proven | unproven-rc<N>)
 # An OPEN row is discharged by a later return/abandon row matching its MARKER (unique per fire —
 # the engagement marker), falling back to slug+targetPane for marker-less fires. Append-only means
 # a crashed writer can never corrupt an existing verdict; the open-set is derived at read time.
@@ -83,16 +84,23 @@ done
 
 _now() { date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true; }
 
-_row() { # kind cwd originatorPane targetPane marker slug notifyBack why → one compact json line
+# PROVENANCE (2026-09-07) — WHAT THE OPENER ACTUALLY KNEW. A row opened because engagement was
+# PROVEN and a row opened because the engagement verifier returned a NON-VERDICT are both real
+# debts, and both must block the originator's close — but they are not the same fact, and a reader
+# that cannot tell them apart cannot triage. Absent on rows written before this field existed and
+# on every non-open kind, which reads as "unrecorded", never as "proven"
+# (memory: lookup-miss-is-not-absence; an unmeasured field reads ABSENT, never false).
+_row() { # kind cwd originatorPane targetPane marker slug notifyBack why provenance → one json line
   jq -nc --arg ts "$(_now)" --arg kind "$1" --arg cwd "$2" --arg op "$3" --arg tp "$4" \
-         --arg marker "$5" --arg slug "$6" --arg nb "$7" --arg why "$8" \
+         --arg marker "$5" --arg slug "$6" --arg nb "$7" --arg why "$8" --arg prov "${9:-}" \
     '{ts:$ts, kind:$kind, cwd:$cwd}
      + (if $op     == "" then {} else {originatorPane:$op} end)
      + (if $tp     == "" then {} else {targetPane:$tp}     end)
      + (if $marker == "" then {} else {marker:$marker}     end)
      + (if $slug   == "" then {} else {slug:$slug}         end)
      + (if $nb     == "" then {} else {notifyBack:$nb}     end)
-     + (if $why    == "" then {} else {why:$why}           end)'
+     + (if $why    == "" then {} else {why:$why}           end)
+     + (if $prov   == "" then {} else {provenance:$prov}   end)'
 }
 
 # jq program deriving the OPEN set from one-or-more jsonl streams. Key = marker when present,
@@ -131,7 +139,7 @@ _files_for() { # $1=cwd-or-empty → prints the file list (existing only)
 }
 
 cmd="${1:-}"; shift 2>/dev/null || true
-CWD="" TARGET="" MARKER="" SLUG="" NB="" OP="" WHY="" WANT_OPEN=0 WANT_JSON=0 TOKEN=""
+CWD="" TARGET="" MARKER="" SLUG="" NB="" OP="" WHY="" WANT_OPEN=0 WANT_JSON=0 TOKEN="" PROV=""
 WANT_STALE=0 WANT_FRESH=0
 # A flag where the token should be is a MALFORMED call, not a token (review #5: `return --cwd X`
 # used to adopt "--cwd" as the token and rc-0 "no OPEN row matches" — a silent non-discharge).
@@ -148,6 +156,9 @@ while [ $# -gt 0 ]; do
     --notify-back) shift; NB="${1:-}" ;;
     --originator-pane) shift; OP="${1:-}" ;;
     --why) shift; WHY="${1:-}" ;;
+    # open only — see the PROVENANCE note on _row. Accepted (and ignored) on the other verbs
+    # rather than refused, so a caller that passes it uniformly cannot be killed by _die.
+    --provenance) shift; PROV="${1:-}" ;;
     --open) WANT_OPEN=1 ;;
     --json) WANT_JSON=1 ;;
     # stale/fresh are age CLASSES of the open set — each implies --open (a discharged row has no
@@ -165,7 +176,7 @@ case "$cmd" in
     [ -n "$CWD" ] && [ -n "$TARGET" ] || _die "open needs --cwd and --target"
     key="$(_fired_cwd_key "$CWD")"; [ -n "$key" ] || _die "cwd does not resolve: $CWD"
     mkdir -p "$CUSTODY_DIR" 2>/dev/null || _die "cannot create $CUSTODY_DIR" 3
-    _row open "$CWD" "$OP" "$TARGET" "$MARKER" "$SLUG" "$NB" "" >> "$CUSTODY_DIR/$key.jsonl" \
+    _row open "$CWD" "$OP" "$TARGET" "$MARKER" "$SLUG" "$NB" "" "$PROV" >> "$CUSTODY_DIR/$key.jsonl" \
       || _die "append failed" 3
     ;;
   return|abandon)
@@ -234,6 +245,7 @@ EOF
     if [ "$WANT_JSON" -eq 1 ]; then printf '%s\n' "$out"
     else printf '%s' "$out" | jq -r '.[] | [.ts, .kind, (.slug // "-"), (.targetPane // "-"), (.marker // "-")]
                                         + (if has("ageHours") then [(if .ageHours == null then "age?" else ((.ageHours|tostring) + "h") end), (if .stale then "STALE" else "fresh" end)] else [] end)
+                                        + [(.provenance // "prov?")]
                                         | @tsv' 2>/dev/null || true
     fi
     ;;
@@ -251,7 +263,7 @@ EOF
       cat $files 2>/dev/null | jq -nc "$_OPEN_JQ"' | length' 2>/dev/null || _die "store unreadable" 3
     fi
     ;;
-  *) _die "usage: cc-custody open --cwd <dir> --target <pane> [--marker M] [--slug S] [--notify-back NB] [--originator-pane P]
+  *) _die "usage: cc-custody open --cwd <dir> --target <pane> [--marker M] [--slug S] [--notify-back NB] [--originator-pane P] [--provenance proven|unproven-rc<N>]
        cc-custody return|abandon <marker-or-slug> [--cwd <dir>] [--why <text>]
        cc-custody abandon --stale --why <text> [--cwd <dir>]   (bulk: every STALE open row)
        cc-custody list [--open [--stale|--fresh]] [--cwd <dir>] [--json]
