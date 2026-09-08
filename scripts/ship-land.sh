@@ -2464,8 +2464,32 @@ run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites
       echo "✗ gate: bats RED: $f — $notok2 failing test(s) on the re-run (the first run was cut)" >&2
       return 1
     fi
-    if [[ "$notok1" -gt 0 || "$notok2" -gt 0 ]]; then
-      rm -f "$log"; echo "✗ gate: bats RED: $f (failed twice)" >&2; return 1
+    # WHICH TWICE. The verdict is identical in both arms below — a run that NAMED a failure is a
+    # RED and stays one — but the MESSAGE is the only place the caller learns whether the second
+    # run corroborated the first or produced no verdict at all. Collapsing them into one
+    # "failed twice" is what the capture note above forbids, and it is the ambiguity that made the
+    # 2026-09-07 fleet-wide trunk-red unreadable for a day: the 09:32 refusal on
+    # tests/autonomy-sweep.bats printed "failed twice" when run 1 named 2 failures and the re-run
+    # emitted nothing but a discarded bats-gather-tests artifact (leg A), and that same suite
+    # measured 67/67 GREEN standalone minutes later. A reader who can see "the re-run was CUT"
+    # knows the corroboration never happened; a reader told "failed twice" does not.
+    # DELIBERATELY NOT A VERDICT CHANGE: both arms return 1. A suite that named real failures in
+    # run 1 must still refuse the land — softening an unexonerated red into "retry when quieter"
+    # is the one direction this split must never fail in.
+    if [[ "$notok1" -gt 0 && "$notok2" -gt 0 ]]; then
+      rm -f "$log"
+      echo "✗ gate: bats RED: $f (failed twice — $notok1 then $notok2 failing test(s), BOTH runs named real failures)" >&2
+      return 1
+    fi
+    # SPELLED WITH BOTH OPERANDS ON PURPOSE. A bare one-operand test on notok1 is the anchor
+    # tests/ship-land.bats greps to LOCATE the DIRECT carve-out further down — it takes the LAST
+    # occurrence — so a third bare copy here would silently re-point that anchor at this block, and
+    # the carve-out's own tests would then be asserting about the wrong lines (memory
+    # `assertion-span-must-equal-its-subject`). Naming notok2 also states the case outright.
+    if [[ "$notok1" -gt 0 && "$notok2" -eq 0 ]]; then
+      rm -f "$log"
+      echo "✗ gate: bats RED: $f — failed once ($notok1 failing test(s)), and the exoneration re-run was CUT (exit $rc2, ZERO 'not ok' — NO verdict). The re-run neither corroborated nor cleared run 1, so run 1 stands unexonerated: this is a RED, but only ONE run ever judged your tree." >&2
+      return 1
     fi
     record_gate_cut "$rc2" "$log" "$f"
     rm -f "$log"
