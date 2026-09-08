@@ -87,6 +87,17 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-07 — recycle #318 (lane infra):** closed 64d2592ada06 (wrap-ledger already filters
+  custody on `originatorPane`, landed under sibling a9ede190ee3b) 3ba9f281b364 (cloud authorship
+  DECIDED+shipped: `reauthor_branch` at cloud-reconcile.sh:504/787/835, 129 landed cloud commits all
+  operator-authored; residual, not this row: 88 trunk commits since 08-19 are noreply@anthropic.com
+  with ZERO provenance trailers, so a second path bypasses the harvest) · blocked none · released
+  8fd1919f7769 23255fbb8792 2d91af430c60 (its proof (1) RE-VERIFIED NEGATIVE: 17 premise beats
+  today, every one `not-due` or rc 124 `bound-exceeded`, none `rc:0 note:ok validated>0`) · landed
+  2fd076fa3 · `closed=4 closed_pre=2 filed=0 net=… floor=UNMET` — 4 further commits are PARKED:
+  three lands were refused by GATE RED on bats-kill-guard-lint, then pipefail-sigpipe-lint case 7,
+  each green locally through the gate's OWN runner (`gate_bats`, 35/35 and 1/1) at loadavg 24-33.
+
 - **2026-09-07 — recycle #317 (lane infra):** closed fb9476ab945c 700005171b41 8e0a3eb2c4a4 ·
   blocked none · released 99dbf659930c ed54373d639b 23255fbb8792 (no executing bare `t@t` identity
   write survives in `tests/`; every `bin/` selftest is already `${var:?}`-guarded, so its named
