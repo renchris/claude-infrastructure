@@ -71,6 +71,28 @@ mk_stub() { # $1=path  $2...=body lines
 # newest close-record in the sandbox
 rec() { ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null | head -1; }
 
+# The RECORD's own barrier, and the reason it has to exist. await_log is the WRONG barrier for a
+# test that then hard-kills the wrapper: bin/cc-close-attrib LINKS the durable log before it
+# pre-registers the open record, so "the log exists" does not imply "the record exists" and a kill
+# fired on the log's arrival can land in that gap. Measured 2026-09-08 by INTERLEAVED A/B on one
+# variable (a sequential A-then-B read the box's load instead and pointed at the wrong file): the
+# hard-kill test below failed 1 of 6 runs with an unrelated diff applied AND 1 of 6 with it
+# reverted — the barrier, not any change. It reddened a land gate that way.
+# Waiting for BOTH artifacts removes no content: every assertion after the kill is about what the
+# kill did NOT do (record_state stays open, exit_code stays null, ended_at stays empty, the
+# evidence survives in the log). Against a wrapper with no pre-registration this loop times out and
+# the test goes red — executed as the control, on 5bba43279^, which is what keeps it a test.
+await_record() { # → newest close-record path, once one exists
+  local i=0 f=""
+  while [ "$i" -lt 100 ]; do
+    # shellcheck disable=SC2012  # our own fixed pattern in a sandboxed dir
+    f=$(ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null | head -1 || true)
+    [ -n "$f" ] && [ -s "$f" ] && { printf '%s' "$f"; return 0; }
+    sleep 0.1; i=$((i + 1))
+  done
+  return 1
+}
+
 # ── (i) passthrough ───────────────────────────────────────────────────────────────────────
 @test "wrapper passes the exit code and argv through to the stub" {
   local stub="$BATS_TEST_TMPDIR/stub"
@@ -318,6 +340,8 @@ rec() { ls -1t "$CC_CLOSE_RECORDS_DIR"/*.json 2>/dev/null | head -1; }
 
   local sterr; sterr=$(await_log "$SD")
   [ -n "$sterr" ]
+  local pre; pre=$(await_record)                  # …and the record's OWN barrier — see await_record
+  [ -n "$pre" ]
   kill -9 "$wpid" 2>/dev/null || true             # wrapper FIRST — it must not get to record
   pkill -9 -P "$wpid" 2>/dev/null || true         # then its child + tee (precise: -P, not -f)
   wait "$wpid" 2>/dev/null || true
