@@ -195,7 +195,19 @@ OPAQUE_ID_RE='(^|[^0-9a-f])[0-9a-f]{12}([^0-9a-f]|$)'
 # ("abc123abc123 — the store-version timing"), and (b) the explanation THEN the id in brackets
 # ("may the endpoint read permissions inside its transaction? (abc123abc123)").
 _bt="$(printf '\140')"   # backtick, built not literal: a literal one trips SC2016 here
-OPAQUE_GLOSS_RE="([0-9a-f]{12}${_bt}?[[:space:]]*[(:—–-][[:space:]]*[${_bt}\"'(a-z]|[([]${_bt}?[0-9a-f]{12})"
+# ── THE DASHES ARE AN ALTERNATION, NEVER A BRACKET EXPRESSION (post-land RED d6a4896406aa) ──────
+# A POSIX bracket expression is a set of CHARACTERS only under a locale that knows the encoding.
+# With no LANG — which is exactly what launchd hands an unattended job, and what postland-verify
+# therefore runs the corpus under — grep degrades to the C locale and `[…—–-]` becomes a set of
+# BYTES: the em dash contributes \xE2 \x80 \x94 separately. The class then consumes ONE byte
+# (\xE2), and `[[:space:]]*` followed by `[…a-z]` has to match \x80, which it cannot. Result: the
+# gloss went unrecognised and the hook FIRED on `0aa3febf3143 — when to ship the store version`,
+# i.e. on the compliance its own corrective text prescribes, in every LANG-less environment.
+# An alternation matches the dash's byte sequence whole, so it is locale-independent by
+# construction. The sibling dash classes in TELLS/DONE_TELLS/CATEGORY_TELLS survive the C locale
+# only because each is `+`-quantified or negated and so happens to consume all three bytes — a
+# property of their quantifier, not of their spelling. Do not copy the bracket form back here.
+OPAQUE_GLOSS_RE="([0-9a-f]{12}${_bt}?[[:space:]]*([(:-]|—|–)[[:space:]]*[${_bt}\"'(a-z]|[([]${_bt}?[0-9a-f]{12})"
 n_ids=$(printf '%s' "$MSG" | grep -oE "$OPAQUE_ID_RE" 2>/dev/null | tr -cd '0-9a-f\n' | sort -u | grep -c . || true)
 n_gloss=$(printf '%s' "$MSG" | grep -coE "$OPAQUE_GLOSS_RE" 2>/dev/null || true)
 case "$n_ids"   in ''|*[!0-9]*) n_ids=0 ;;   esac
