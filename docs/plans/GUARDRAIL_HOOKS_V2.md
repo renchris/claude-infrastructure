@@ -207,8 +207,9 @@ is `status: OPEN`.
 
 | AC | Read | Passes when | Today |
 |---|---|---|---|
-| **AC1** parity | `bash scripts/settings-drift-assert.sh; echo $?` | `0` | **FAILS** — rc 1, 7 divergences |
-| **AC2** the checker is not inert | `grep -l settings-drift-assert ~/.claude*/settings.json ~/Library/LaunchAgents/*.plist \| wc -l` | `≥1` | **FAILS** — 0 |
+| **AC1** parity | `bash scripts/settings-drift-assert.sh; echo $?` | `0` | **FAILS** — rc 1, 11 divergences (2026-09-08; was 7) |
+| **AC2** the checker is not inert | ~~`grep -l settings-drift-assert ~/.claude*/settings.json ~/Library/LaunchAgents/*.plist \| wc -l`~~ → the read below | `≥1` | **FAILS — for a DIFFERENT reason than this row assumed; see AC2′** |
+| **AC2′** the caller is REACHED | `python3` over `~/.claude/autonomy/idl.jsonl*` for `settings_drift_rc` in the last 24 h | `≥1` emission | **FAILS** — last emission `2026-09-07T21:13:57Z`, none in the 24 h to 21:30Z 2026-09-08 |
 | **AC3** no unregistered hook | enumerate `hooks/*.sh` minus the union of scripts registered across the five dirs | empty, or every member explicitly declared non-dispatch | **FAILS** — `subagent-stop.sh` is the known member; the full set is unmeasured |
 | **AC4** `.claude-next` is not a fork | `[ -L ~/.claude-next/hooks ]` | true | **FAILS** — real dir, 53 vs 78 entries; cure landed (`0013`), operator-gated, un-run |
 | **AC5** ungated advance is denied | `bats tests/validate-bash-ff-gate.bats` | green | **MET** — landed `17ecae6c6` |
@@ -240,6 +241,37 @@ Named remainders, in the order a successor should take them:
 - **R-1 (the row's whole point).** F1+F2: make hook registration atomic across the five dirs and
   give `settings-drift-assert.sh` a caller. Everything else in §3 is downstream. Note the hazard
   block — never edit a live `settings.json` as an experiment; copy a config dir and exercise there.
+- **R-1′ (2026-09-08, MEASURED — this supersedes half of R-1 and replaces AC2's remedy).** *"Give
+  `settings-drift-assert.sh` a caller"* is **DONE and has been since before this doc was written.**
+  `scripts/autonomy-sweep.sh:1452-1455` calls it (`--file`, rc captured, block `2c-config-dir-
+  guardrail-parity`), and that sweep runs under `com.chrisren.autonomy-sweep`, which `launchctl
+  list` shows LOADED (pid 30612). AC2's read could not see this because it greps `settings.json`
+  and the LaunchAgents plists for the checker's own name, and the wiring is a **caller of a
+  caller** — the plist names `autonomy-sweep.sh`, not the checker. An absence read that only looks
+  one hop deep returns 0 over a live wiring.
+
+  **But the property AC2 was asserting is still false, for a new reason: the block is never
+  REACHED.** `sweep_yield` ends the tick when elapsed exceeds `SWEEP_SELF_BOUND_S`, and over the
+  28 self-bound events in `~/.claude/autonomy/idl.jsonl*` for the 23 h window
+  `2026-09-07T22:14:02Z .. 2026-09-08T21:27:36Z`, `stopped_before` was
+  `1-collect-pages-alarms` **24 times** and `0b-author-death-join` **4 times**, `bound_s=400` in
+  every one. Phase `2c` is below both, so it ran **zero** times: the last `settings_drift_rc`
+  emission anywhere in the IDL is `2026-09-07T21:13:57Z`, while §0a's `cloud_return_rc` (hoisted
+  to the top for exactly this reason) was still emitting at `2026-09-08T21:33:15Z`. This is
+  precisely the condition `sweep_yield`'s own note names — *"If `stopped_before` is ALWAYS the
+  same phase, the arms above it now cost more than the bound: re-measure those, do not raise this
+  past 600 minus `CC_SWEEP_BOUND_S`."*
+
+  **So the successor's work here is NOT wiring, it is COVERAGE**, and it is one of: re-measure the
+  arms above `1-collect-pages-alarms` and cut what has grown; or hoist `2c` the way §0a was
+  hoisted; or move the checker off the yielding tick entirely. Do not re-add a caller — a second
+  one would be a second source of truth over a wiring that already exists.
+
+  *Generalisable, and the reason this is written at plan level:* an inertness acceptance criterion
+  that reads the REGISTRATION cannot see a mechanism that is registered and starved. Registration
+  and reach are two facts, and only the second one is the property anybody wanted. AC2′ above is
+  the read for the second.
+
 - **R-2 (row 10's R-2, second half, inherited).** No alarm covers a hook's own wiring. First half
   (`operator-readout` in 4/5) is now MET; the alarm half is R-1's AC2.
 - **R-3 (new, from `DAEMON_FLEET_V2` F21).** Agents are denied `launchctl enable` but permitted
