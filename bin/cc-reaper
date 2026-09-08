@@ -614,8 +614,72 @@ _gs_verify_kill() { # <pid> <ucomm-ere> <TERM|KILL> [<argv-signature>] — re-ve
   fi
   kill "-$sig" "$pid" 2>/dev/null
 }
+# ── THE KILL SWITCH HAS NO OWNER (2026-09-08, backlog b83f4a2ba219). CC_REAPER_GARBAGE=0 is set by
+# HAND — `launchctl setenv CC_REAPER_GARBAGE 0` — by a session mitigating a live defect in this arm,
+# and NOTHING re-checks it afterwards. The switch outlives its cause in silence: the arm logs
+# "garbage: disabled" once per sweep into a file nobody reads, which is the fail-loud-into-a-dead-log
+# shape exactly (repo memory: fail-loud-into-a-log-nobody-reads-is-silent).
+#
+# MEASURED, THIS BOX, AND IT IS WHY THIS ROW EXISTED FOR 14 DAYS AFTER ITS CURE. The stuck-wrapper
+# defect the mitigation covered was fixed by 9f9a64bb4 on 2026-09-02 and went live the same day
+# (~/.claude/bin/cc-reaper is a per-file symlink into the shared checkout, so a land IS the deploy).
+# The switch was nevertheless set to 0 on 2026-09-03T21:55Z and still read 0 on 2026-09-08T10:33Z:
+# 4d13h, 221 consecutive sweeps, each one logging "disabled" and collecting nothing, with 63
+# launchd-parented orphan shells accumulated by the end of it. The whole garbage collector was off
+# for five days because a cure landed and nothing connected it back to the mitigation.
+#
+# THIS ARM IS THE FALSIFIER THE MITIGATION NEVER GOT. A hand-set suppression is legitimate; a
+# PERMANENT one is not, and the sweep is the only party positioned to notice its own absence. Off
+# longer than GARBAGE_STALE_S ⇒ page the desk, at most once per GARBAGE_STALE_PAGE_S, naming the
+# exact revert command. The window measures the CURRENT off-stretch, never a lifetime: the enabled
+# path deletes the marker, so a switch flipped off and back on never accumulates toward the
+# threshold, and the page can only ever describe a suppression that is still in force.
+#
+# FAIL-OPEN EVERYWHERE, AND --reap ONLY: a DRY-RUN sweep writes nothing (this arm's standing
+# contract), and an unreadable or unwritable marker just skips the check. It can never suppress a
+# collection and never cause one — it only speaks.
+GARBAGE_STALE_S="${CC_REAPER_GARBAGE_STALE_S:-86400}"              # off this long ⇒ the switch is stale
+GARBAGE_STALE_PAGE_S="${CC_REAPER_GARBAGE_STALE_PAGE_S:-86400}"    # …and page at most this often
+GARBAGE_SWITCH_STATE="${CC_REAPER_GARBAGE_SWITCH_STATE:-$PAGEDIR/garbage-disabled.state}"
+
+_gs_switch_off_watch() { # <reap:0|1> — the switch is OFF: age this off-stretch, page once it is stale
+  local reap="${1:-0}" now since last age
+  [ "$reap" = 1 ] || return 0                          # a DRY-RUN sweep writes nothing
+  now="$(date +%s 2>/dev/null || echo 0)"
+  case "$now" in ''|*[!0-9]*) return 0 ;; esac
+  mkdir -p "$(dirname "$GARBAGE_SWITCH_STATE")" 2>/dev/null || return 0
+  since=""; last=""
+  [ -f "$GARBAGE_SWITCH_STATE" ] && { read -r since last < "$GARBAGE_SWITCH_STATE" 2>/dev/null || true; }
+  case "${since:-}" in ''|*[!0-9]*) since="" ;; esac
+  case "${last:-}"  in ''|*[!0-9]*) last=0 ;; esac
+  if [ -z "$since" ]; then                             # first disabled sweep of this off-stretch
+    printf '%s %s\n' "$now" 0 > "$GARBAGE_SWITCH_STATE" 2>/dev/null || true
+    return 0
+  fi
+  age=$(( now - since ))
+  [ "$age" -ge "$GARBAGE_STALE_S" ] || return 0
+  [ $(( now - last )) -ge "$GARBAGE_STALE_PAGE_S" ] || return 0
+  notify_desk "cc-reaper: the garbage collector has been OFF for $(( age / 3600 ))h (CC_REAPER_GARBAGE=0, set by hand). Nothing re-checks a hand-set kill switch — if the defect it covered is fixed, revert it: launchctl unsetenv CC_REAPER_GARBAGE" "garbage-switch-stale" || true
+  log "garbage: kill switch STALE — off ${age}s (>= ${GARBAGE_STALE_S}s), desk paged (outcome=${NOTIFY_OUTCOME:-none})"
+  # Stamp unless the page was DAMPED — a damped page was never sent, so re-arming the 24h gate over
+  # it would swallow the one that should have gone. Every other outcome (reached / recorded /
+  # refused / no-channel) has nothing better to do than wait for the next window.
+  [ "${NOTIFY_OUTCOME:-}" = damped ] || printf '%s %s\n' "$since" "$now" > "$GARBAGE_SWITCH_STATE" 2>/dev/null || true
+}
+
+_gs_switch_on_clear() { # <reap:0|1> — the switch is ON: whatever off-stretch was being aged is over
+  [ "${1:-0}" = 1 ] || return 0
+  [ -f "$GARBAGE_SWITCH_STATE" ] || return 0
+  rm -f "$GARBAGE_SWITCH_STATE" 2>/dev/null || true
+}
+
 garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block comment above
-  [ "${CC_REAPER_GARBAGE:-1}" = 1 ] || { log "garbage: disabled (CC_REAPER_GARBAGE=0)"; return 0; }
+  if [ "${CC_REAPER_GARBAGE:-1}" != 1 ]; then
+    log "garbage: disabled (CC_REAPER_GARBAGE=0)"
+    _gs_switch_off_watch "${1:-0}"
+    return 0
+  fi
+  _gs_switch_on_clear "${1:-0}"
   local reap="${1:-0}" snapA snapB list cls pid re age argsig desc
   local nA=0 nkill=0
   _GS_T_PID=(); _GS_T_RE=(); _GS_T_SIG=()
