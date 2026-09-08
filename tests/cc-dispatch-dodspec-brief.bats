@@ -122,6 +122,15 @@ dodline() { sed -n 's/^DoD ref: \(.*\)\. Scope (frozen).*$/\1/p' "$C/brief-$1.tx
 
 run_once() { fresh; CC_DISPATCH_CEILING=9 "$1" --once >/dev/null 2>&1 || true; }
 
+# path_without <name> — $PATH minus every directory that carries an executable <name>. The ABSENCE
+# of a binary is not expressible by unsetting one variable; it has to be built, and this is one of
+# the three fallbacks that has to be closed to build it (see the fail-open arm below).
+path_without() {
+  local out='' d; local IFS=:
+  for d in $PATH; do [ -x "$d/$1" ] || out="${out:+$out:}$d"; done
+  printf '%s' "$out"
+}
+
 @test "an ABSOLUTE dodRef into the shared checkout is briefed as a TRUNK PATHSPEC" {
   mk_repo "$C/repos/proj"
   items "$(jq -nc --arg d "$C/repos/proj/docs/plans/PLAN.md" \
@@ -164,15 +173,61 @@ run_once() { fresh; CC_DISPATCH_CEILING=9 "$1" --once >/dev/null 2>&1 || true; }
   # THE FAIL-OPEN ARM. cc-venue reaches the composer through a resolved path and a subprocess, and
   # both can be absent on a box mid-deploy. This must degrade to today's behaviour silently, never
   # to an empty DoD line or a refused fire — the brief is on the hot path of every dispatch.
+  #
+  # THE FIXTURE HAS TO BUILD THE ABSENCE, and pointing CC_DISPATCH_VENUE_BIN at a file that does not
+  # exist does not build it. That was this arm's first form and it was a post-land RED within the
+  # hour (backlog 0fc69d08957c, 2026-09-08): `resolve_bin` deliberately DROPS a non-executable
+  # override and falls through to PATH, then $HOME/.claude/bin, then the SIBLING of the running
+  # script — and the subject runs out of $REPO/bin, where cc-venue always sits. Measured: the
+  # sibling arm rescued it even at PATH=/usr/bin:/bin with HOME stubbed, so the arm ran against a
+  # fully LIVE resolver and compared the fixed rendering to the pre-fix one on every box, always.
+  #
+  # THE FALLBACKS ARE CLOSED HERE AND NOT IN cc-dispatch. Honouring a set-but-broken override would
+  # change production behaviour at all three of its call sites (`ready_paths`, `ready_relabel`, this
+  # composer) and make a live dispatch LESS resilient to a mid-deploy gap, to make one fixture
+  # convenient — the resolution chain IS the documented contract (§ CC_DISPATCH_VENUE_BIN: "default:
+  # co-versioned sibling cc-venue, else PATH / ~/.claude/bin"). So the test reaches the regime it
+  # names instead (memory: control-fixture-must-reach-the-bugs-regime).
   mk_repo "$C/repos/proj"
   items "$(jq -nc --arg d "$C/repos/proj/docs/plans/PLAN.md" \
     '[{id:"a4",project:"proj",status:"open",title:"t",dodRef:$d}]')"
 
-  CC_DISPATCH_VENUE_BIN="$C/stubs/absent-venue" run_once "$DISP"
-  [ -s "$C/brief-a4.txt" ] || { echo "the fire was lost when the resolver was absent"; false; }
-  local got; got="$(dodline a4)"
+  # The control is taken FIRST and held: `fresh` deletes the briefs, so a control read after the
+  # degraded run reads whichever run happened to write last.
   run_once "$PRISTINE"
-  [ "$got" = "$(dodline a4)" ] || { echo "degraded=$got control=$(dodline a4)"; false; }
+  local control; control="$(dodline a4)"
+  [ -n "$control" ] || { echo "the control composed no DoD line at all"; false; }
+
+  # (1) THE BINARY CANNOT BE FOUND. Override absent + no cc-venue on PATH + HOME already stubbed +
+  #     the subject copied somewhere with no cc-venue beside it, which is what closes the arm that
+  #     actually fired.
+  mkdir -p "$C/isolated"; cp "$DISP" "$C/isolated/cc-dispatch"; chmod +x "$C/isolated/cc-dispatch"
+  local saved_path="$PATH" blind_path
+  blind_path="$(path_without cc-venue)"
+  export CC_DISPATCH_VENUE_BIN="$C/stubs/absent-venue" PATH="$blind_path"
+  run_once "$C/isolated/cc-dispatch"
+  export PATH="$saved_path" CC_DISPATCH_VENUE_BIN="$REPO/bin/cc-venue"
+  [ -s "$C/brief-a4.txt" ] || { echo "the fire was lost when the resolver was missing"; false; }
+  [ "$(dodline a4)" = "$control" ] || { echo "missing: got=$(dodline a4) control=$control"; false; }
+
+  # (2) THE SUBPROCESS FAILS. The other half of "a resolved path AND a subprocess": the binary is
+  #     right there, `[ -x ]` passes so no fallback runs, and it answers non-zero. This reaches the
+  #     same fail-open branch from the side no amount of PATH surgery can reach.
+  #     The stub PRINTS a plausible answer and THEN exits 4, deliberately: a stub that exited
+  #     silently would also be caught by the composer's `[ -n "$dspec" ]` guard, so it could not
+  #     tell a dropped exit code from a dropped empty string. Only a talkative failure pins the
+  #     rc check, which is the half that decides whether "could not ask" (exit 4) is honoured.
+  cat > "$C/stubs/broken-venue" <<'STUB'
+#!/bin/bash
+echo origin/main:NOT_THE_ANSWER.md
+exit 4
+STUB
+  chmod +x "$C/stubs/broken-venue"
+  export CC_DISPATCH_VENUE_BIN="$C/stubs/broken-venue"
+  run_once "$DISP"
+  export CC_DISPATCH_VENUE_BIN="$REPO/bin/cc-venue"
+  [ -s "$C/brief-a4.txt" ] || { echo "the fire was lost when the resolver failed"; false; }
+  [ "$(dodline a4)" = "$control" ] || { echo "failing: got=$(dodline a4) control=$control"; false; }
 }
 
 @test "a row with NO dodRef still briefs 'none' — the resolver never empties the clause" {
