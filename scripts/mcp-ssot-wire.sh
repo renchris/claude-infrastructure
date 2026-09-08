@@ -147,8 +147,16 @@ for name in sorted(servers):
     # Only a resolve'd server with an ABSOLUTE command is a candidate for install/fallback; a bare
     # name like "npx" is resolved by PATH at spawn time and is not this script's business.
     if r and isinstance(cmd, str) and cmd.startswith("/") and not os.access(cmd, os.X_OK):
-        notes.append("NEEDS_INSTALL\t%s\t%s\t%s\t%s" % (
-            name, cmd, r.get("npm_package", ""), r.get("npm_version", "")))
+        # PAD EVERY CELL. Tab is IFS-WHITESPACE, so an empty cell does not read back empty — it
+        # shifts every later column LEFT, silently, exit 0. `npm_package`/`npm_version` are both
+        # optional in the SSOT, so this producer really can emit one. The read side cannot repair
+        # it; the placeholder is stripped there.
+        def _cell(v, ph="\x1e"):
+            v = "" if v is None else str(v)
+            v = v.replace("\t", " ").replace("\r", " ").replace("\n", " ")
+            return v if v != "" else ph
+        notes.append("\t".join(_cell(x) for x in (
+            "NEEDS_INSTALL", name, cmd, r.get("npm_package", ""), r.get("npm_version", ""))))
     out[name] = spec
 print(json.dumps({"servers": out, "notes": notes}))
 PY
@@ -156,8 +164,13 @@ PY
   [[ $rc_res -eq 0 && -n "$resolved" ]] || { echo "  ⚠ mcp-servers.json unreadable" >&2; return 1; }
 
   # Any server whose binary is missing: try to install it, else swap in its fallback.
+  # Every cell is padded by the emitter above (tab is IFS-whitespace, so an empty cell would shift
+  # the later columns left). Strip the placeholder back to empty here — this is the only reader.
   while IFS=$'\t' read -r tag name cmd pkg ver; do
     [[ "$tag" == "NEEDS_INSTALL" ]] || continue
+    for _v in name cmd pkg ver; do
+      [[ "${!_v}" == $'\x1e' ]] && printf -v "$_v" '%s' ""
+    done
     if ! _ensure_installed "$cmd" "$pkg" "$ver"; then
       if $CHECK_ONLY; then
         echo "  ⚠ $name: $pkg not installed at the durable path — config will use the fallback"
