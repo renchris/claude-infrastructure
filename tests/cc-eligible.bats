@@ -84,6 +84,35 @@ verdict() { "$CE" check "$1" 2>&1 | head -1; }
   [[ "$output" == *"wt-slug"* ]] || { echo "named the class but not the spelling: $output"; false; }
 }
 
+@test "BRANCH BANKING: the never-pushed REF namespace, named without any worktree word" {
+  # Regression for backlog `bc971e0ea6a7`. Item `d88c1640550f` spells `ship/backup-<sha>`,
+  # `branches` and `fire branch` — none of the pre-fix spellings — so it classified `eligible` and
+  # burned a cloud slot on refs no VM can hold: nothing ever pushes ship/backup-* or
+  # refs/checkpoints/*, so the corpus is this disk and only this disk.
+  local id; id="$(add bank "recover the fire branches banked at ship/backup-4e56bd03b before they age out")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=ineligible-branch-banking"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"local-ref-namespace"* ]] || { echo "named the class but not the spelling: $output"; false; }
+}
+
+@test "BRANCH BANKING: refs/checkpoints is the same class under the other spelling" {
+  local id; id="$(add bank "prune the dead members under refs/checkpoints/wave-3 and report what is left")"
+  run "$CE" check "$id"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"local-ref-namespace"* ]] || { echo "$output"; false; }
+}
+
+@test "CONTROL: prose about a backup or a checkpoint is NOT a local ref — the shape is required" {
+  # The paired lookalike. `backup` and `checkpoint` are ordinary words here; only the ref SHAPE
+  # (a sha-suffixed ship/backup, or the refs/checkpoints path) names the local-only corpus, and a
+  # pattern keyed on the bare words would refuse this and every assertion above would still pass.
+  local id; id="$(add ctl "add a backup of the config and a checkpoint to the long import, then document both")"
+  run "$CE" check "$id"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=eligible"* ]] || { echo "$output"; false; }
+}
+
 @test "CONTROL: a lookalike prefix is NOT a worktree — word boundaries hold leftward" {
   # The paired lookalike every refusal arm in this suite carries. A pattern anchored on a substring
   # rather than a word boundary would refuse these and every assertion above would still pass.

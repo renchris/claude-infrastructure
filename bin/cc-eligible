@@ -375,6 +375,25 @@ BANKING = [
     # construction. One burned worker slot per dispatch. Respell the same title with the word
     # `worktree` and the pre-existing list already refuses it; that near-miss is the whole defect.
     ("wt-slug", r"\bwt-[a-z0-9][a-z0-9-]*\b"),
+    # THE REF NAMESPACE THAT IS NEVER PUSHED, which is the same near-miss one layer down. `wt-slug`
+    # catches the worktree a title names; this catches the REFS a title names when the worktree is
+    # not mentioned at all. `ship/backup-<sha>` (scripts/ship-land.sh's rollback point) and
+    # `refs/checkpoints/*` exist only on this disk BY CONSTRUCTION — nothing ever pushes them
+    # (CLOUD_OBSERVABILITY.md:123) — so a VM that clones the repo holds zero of the population the
+    # item is about, whatever else the title spells.
+    #
+    # THE MISS THIS CLOSES: backlog `d88c1640550f` spells `ship/backup-<sha>`, `branches` and
+    # `fire branch` — none of the words above — so it classified `eligible` and burned a cloud slot
+    # on refs the VM cannot see. Filed as `bc971e0ea6a7`, verified against origin/main 2026-08-20:
+    # `ship/backup` appeared 0 times in this file.
+    #
+    # MEASURED, per this list's own rule against widening on a hunch: over every docs/**/*.md line
+    # in this repo the pattern matches 66 times across 30 distinct tokens, and all 30 are ref names
+    # (`refs/checkpoints` 33x, then one `ship/backup-<sha>` each). There is no second meaning for
+    # either spelling in the corpus. The sha suffix is REQUIRED on the backup form so that prose
+    # about backups in general cannot match; `refs/checkpoints` needs no suffix because the bare
+    # namespace is itself the local-only object.
+    ("local-ref-namespace", r"\bship/backup-[0-9a-f]{7,40}\b|\brefs/checkpoints(?:/[A-Za-z0-9._/-]+)?\b"),
 ]
 
 EXTERNAL_DEPLOY = [
