@@ -612,3 +612,90 @@ decision_file() { spawn_argv | tr ' ' '\n' | sed -n 's/^--settings=//p'; }
   [ "$(jq -r --arg d "$rwt" '.projects[$d].hasTrustDialogAccepted' "$cfg/.claude.json")" = "true" ] \
     || { echo "the control did not trust the dir"; false; }
 }
+
+# ── 9. THE DIRECTORY SURVIVED; THE WORKTREE DID NOT ─────────────────────────────────────────────
+#
+# The branch was proved on the recreate path and nowhere else, so a worktree whose DIRECTORY still
+# exists was resumed into with no identity check at all. On this box `~/Development/.worktrees/
+# wt-pool-N` is a slot that is returned and re-let, so the directory outlives the row that named it.
+# Measured on the 2026-08-25 recovery batch (cc-backlog 80ed5e7a1e7e) fourteen days later: wt-pool-2,
+# wt-pool-3 and wt-pool-8 were all present and all on different branches than the batch recorded.
+#
+# The mutant is the guard's own predicate inverted (`"$wt_branch" == "$br"`), which reddens case 1
+# and passes the rest — the drift case is the only one that carries the defect.
+
+mk_live_worktree() { # <repo-name> <branch> <wtpath>   — a REAL worktree, left in place
+  local r="$BATS_TEST_TMPDIR/dev/$1"
+  mkdir -p "$r"
+  git init -q "$r"
+  git -C "$r" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  git -C "$r" branch "$2" 2>/dev/null || true
+  git -C "$r" worktree add -q "$3" "$2"
+}
+
+@test "DRIFT — a pooled worktree re-let to another branch is REFUSED, not resumed into" {
+  local wt="$BATS_TEST_TMPDIR/wts/pool-2"
+  mk_live_worktree pool cc-202858-38809 "$wt"
+  # The row is the stale one: it still names the branch this slot held two weeks ago.
+  run env timeout 60 "$RRO" next "$wt" SID-DRIFT cc-222358-33352
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"no longer the worktree this row named"* ]] || false
+  [[ "$output" == *"cc-222358-33352"* && "$output" == *"cc-202858-38809"* ]] \
+    || { echo "the refusal must name BOTH branches, or nobody can tell which row rotted"; false; }
+  # And it must refuse BEFORE spawning anything — a refusal after the session is live is not one.
+  [ -z "$(spawn_argv)" ] || { echo "a session was spawned despite the refusal"; false; }
+}
+
+@test "DRIFT — the same worktree still on its own branch resumes exactly as before" {
+  # The control. Without it the case above is satisfied by a guard that refuses everything.
+  local wt="$BATS_TEST_TMPDIR/wts/pool-ok"
+  mk_live_worktree poolok cc-015614-55555 "$wt"
+  run env CC_RR_STUB_COLS=80 timeout 60 "$RRO" next "$wt" SID-SAME cc-015614-55555
+  [ "$status" -eq 0 ]
+  [[ "$(spawn_argv)" == *"--resume SID-SAME"* ]]
+}
+
+@test "DRIFT — a detached HEAD is UNKNOWN, so it is resumed with a NOTE, never refused" {
+  # Fail-open on unknown: stranding a real recovery is worse than the bug this guards
+  # (tests/lr-resume-tombstone-guard.bats states the same asymmetry).
+  local wt="$BATS_TEST_TMPDIR/wts/pool-det"
+  mk_live_worktree pooldet cc-detach-1 "$wt"
+  git -C "$wt" checkout -q --detach
+  run env CC_RR_STUB_COLS=80 timeout 60 "$RRO" next "$wt" SID-DET cc-detach-1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no branch identity"* ]] || false
+  [[ "$(spawn_argv)" == *"--resume SID-DET"* ]]
+}
+
+@test "DRIFT — a plain directory inside some other repo is NOT convicted by that repo's branch" {
+  # The harness trap: a guard keyed on `rev-parse --abbrev-ref HEAD` alone is answered for by
+  # whatever repository the path happens to sit under, so every plain-dir fixture in this file
+  # would be convicted on a branch it does not own (memory: guard-refusal-fires-on-its-own-harness).
+  local outer="$BATS_TEST_TMPDIR/dev/outer"
+  mkdir -p "$outer/sub"
+  git init -q "$outer"
+  git -C "$outer" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+  git -C "$outer" checkout -q -b outer-branch
+  run env CC_RR_STUB_COLS=80 timeout 60 "$RRO" next "$outer/sub" SID-SUB some-other-branch
+  [ "$status" -eq 0 ]
+  [[ "$(spawn_argv)" == *"--resume SID-SUB"* ]]
+}
+
+@test "DRIFT — with no branch in the row there is nothing to compare, and behaviour is unchanged" {
+  local wt="$BATS_TEST_TMPDIR/wts/pool-nobr"
+  mk_live_worktree poolnobr cc-nobr-1 "$wt"
+  run env CC_RR_STUB_COLS=80 timeout 60 "$RRO" next "$wt" SID-NOBR
+  [ "$status" -eq 0 ]
+  [[ "$(spawn_argv)" == *"--resume SID-NOBR"* ]]
+}
+
+@test "DRIFT — CC_RESUME_ALLOW_BRANCH_DRIFT=1 is a real override, and the control proves it" {
+  local wt="$BATS_TEST_TMPDIR/wts/pool-ovr"
+  mk_live_worktree poolovr cc-ovr-now "$wt"
+  run env CC_RESUME_ALLOW_BRANCH_DRIFT=1 CC_RR_STUB_COLS=80 timeout 60 "$RRO" next "$wt" SID-OVR cc-ovr-then
+  [ "$status" -eq 0 ]
+  [[ "$(spawn_argv)" == *"--resume SID-OVR"* ]] || false
+  # CONTROL — the identical run without the knob must refuse, or the knob is turning nothing off.
+  run env CC_RR_STUB_COLS=80 timeout 60 "$RRO" next "$wt" SID-OVR-CTL cc-ovr-then
+  [ "$status" -eq 3 ]
+}
