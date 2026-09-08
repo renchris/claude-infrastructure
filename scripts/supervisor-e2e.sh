@@ -35,6 +35,13 @@ export CC_SUP_OWNER_PAT=sleep     # the live-session fixtures below are `sleep` 
 # and never take its verdict from it either.
 export CC_WAIT_CONTRACTS_DIR="$SBX/wait-contracts"; mkdir -p "$CC_WAIT_CONTRACTS_DIR"
 export CC_FIRED_DIR="$SBX/cc-fired";                mkdir -p "$CC_FIRED_DIR"
+# The permpend ladder's dispatched-ness oracle. Seamed at the REPO's copy, never $HOME/.claude's: the
+# live layer is reached by per-file symlinks and can lag trunk, so an unseamed test would grade this
+# diff against a DEPLOYED predecessor of the very lib it is testing (memory
+# unfixtured-sensor-executes-the-deployed-subject).
+export CC_ORIGIN_IDENTITY_LIB="$PWD/hooks/lib/origin-identity.sh"
+export CC_PERMPEND_ESCALATE_S=100                 # dispatched first rung (prod default 1800)
+export CC_PERMPEND_ESCALATE_ATTENDED_S=400        # unproven  first rung (prod default 7200)
 # V3 self-check OFF by default here (T31 opts back in, like CC_PAGE_TO/T9). It compares REAL live claude
 # panes against the SANDBOX's telemetry dir, and this box legitimately runs ~30 panes against 1-2
 # fixtures — a permanent artificial blind spot whose page would land in notify.log and corrupt every
@@ -73,6 +80,14 @@ mkbeacon(){ # $1=sid $2=age_s $3=tool_name $4=tool_input_json — a harness-auth
     '{ts:$ts,tool_name:$tn,tool_input:$ti,cwd:$cwd}' > "$CC_PERMPEND_DIR/$1.json"; }
 beacon_exists(){ [ -f "$CC_PERMPEND_DIR/$1.json" ]; }
 permreset(){ rm -f "$CC_PERMPEND_DIR"/*.json "$CC_SUPERVISOR_PAGEDIR"/*.permpend.notified 2>/dev/null; }
+# Marks a cwd as a fired peer through the ORACLE'S OWN INDEX WRITER — the key derivation (resolve +
+# sha256) is the entire contract, and a hand-rolled fixture copy of it would be a second answer that
+# passes here while production misses (memory make-the-actuator-the-arbiter).
+mkfired(){ # $1=pane $2=cwd
+  # shellcheck disable=SC1090  # the lib path is a TEST SEAM by design (CC_ORIGIN_IDENTITY_LIB)
+  ( . "$CC_ORIGIN_IDENTITY_LIB" 2>/dev/null || exit 0
+    write_fired_cwd_index "$CC_FIRED_DIR" "$1" "$2" ); }
+firedreset(){ rm -rf "${CC_FIRED_DIR:?}/by-cwd" 2>/dev/null; mkdir -p "$CC_FIRED_DIR"; }
 
 echo "T1 DEAD — pid gone ⇒ checkpoint-preserve + PAGE (never auto-respawn)"
 reset; rm -f "$CC_TELEMETRY_DIR"/*.json; mktel dead 40 2 999999 "$REPO"
@@ -719,6 +734,77 @@ touch -t 202001010000 "$FTR"; mktel flap 40 100 "$ALIVE" "$REPO" "$FCFG"
 CC_SUP_RECOVERY_S=1 flapsweep
 [ "$(nlog)" -eq 2 ] && ok "…and a genuine LATER stall pages again after that re-arm" \
                     || no "a real stall after a real recovery was swallowed (lines=$(nlog)) — page LOST"
+
+echo "T34 PERMPEND LADDER — a still-pending prompt ESCALATES past its rung instead of one notify then silence (item 6a5a218fd9a8)"
+# THE DEFECT PINNED HERE. page_permpend damped on the beacon ts, and ONE prompt's ts never changes, so
+# one notify was the entire operator-facing signal for the whole life of the prompt. Measured on the
+# live box (one IDL epoch, 2026-09-07/08): sessions pending 9.0h / 8.8h / 8.0h, 775 / 741 / 724
+# permission_pending IDL rows apiece, one notify each. The consumer was never missing — its LADDER was.
+#
+# THE FIXTURE HOLDS THE BEACON ts FIXED and lets the SWEEPS advance, because the ts IS the episode key:
+# re-writing it to fake an older prompt mints a NEW episode and resets the ladder, which is a test of
+# nothing (it read green against a build that could only ever re-send the notice). One beacon aged 500s
+# against rungs 100/200/400 therefore walks the whole ladder across successive sweeps.
+reset; permreset; firedreset; rm -f "$CC_TELEMETRY_DIR"/*.json; : > "$SBX/ladder.log"
+lsweep(){ CC_NOTIFY_CAPTURE="$SBX/ladder.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" bash "$SUP" --once >/dev/null 2>&1; }
+llog(){ wc -l < "$SBX/ladder.log" | tr -d ' '; }
+nesc(){ grep -c '"kind":"permission_pending_escalate"' "$CC_IDL" 2>/dev/null || true; }
+
+mkfired 4242 "$REPO"                                  # $REPO is now a provably DISPATCHED cwd
+mkbeacon permlad 500 Bash '{"command":"rm -rf /x"}'   # ONE episode, fixed ts, already 500s old
+lsweep                                                # sweep 1 ⇒ NOTICE only (the rung arms here)
+[ "$(llog)" -eq 1 ] && ok "the notice rung still fires exactly once (unchanged)" || no "notice rung changed (lines=$(llog))"
+[ "$(nesc)" -eq 0 ] && ok "the notice sweep does not also escalate (one rung per sweep)" || no "notice and escalation fired in the same sweep"
+
+lsweep                                                # sweep 2 ⇒ 500 ≥ rung 100 ⇒ ESCALATE
+[ "$(nesc)" -eq 1 ] && ok "a DISPATCHED prompt past its rung ESCALATES (the silence this ends)" || no "no escalation past the rung — one-notify-then-silence survives"
+[ "$(llog)" -eq 2 ] && ok "…and the escalation REACHES the composer (a second notify)" || no "escalation recorded in the IDL but never sent (silent-in-fact) lines=$(llog)"
+idl_has '"class":"dispatched"' && ok "the escalation names its DISPATCHED classification" || no "escalation did not carry its class"
+
+echo "T35 LADDER DOUBLES then STOPS — a 9h wedge costs ~5 pages, not ~18 repeats of one fact"
+lsweep; [ "$(nesc)" -eq 2 ] && ok "the DOUBLED rung (200) fires too" || no "the ladder stalled at its first rung (esc=$(nesc))"
+lsweep; [ "$(nesc)" -eq 3 ] && ok "…and the next doubling (400) fires"  || no "the ladder stalled at rung 200 (esc=$(nesc))"
+lsweep; [ "$(nesc)" -eq 3 ] && ok "…and then it STOPS: age 500 < the next rung 800 (a ladder, not a storm)" || no "escalated past the doubled rung — this is a repeat, not a ladder (esc=$(nesc))"
+[ "$(llog)" -eq 4 ] && ok "a 500s wedge cost 4 pages total (1 notice + 3 rungs), not one per sweep" || no "page volume is not ladder-bounded (lines=$(llog))"
+
+echo "T36 DISPATCHED-NESS moves a THRESHOLD, never silences a rung (memory gate-default-decides-failure-direction)"
+# An UNPROVEN session — no fired-peer pointer, a GC'd stamp, a renumbered pane, no jq — must STILL
+# escalate, just later. Gating escalation ON dispatched-ness would turn every oracle MISS into the
+# permanent silence this item is about, and the misses are real: cc-fired/by-cwd holds dangling
+# pointers, and a long-lived dispatch lane outlives its stamp by design.
+reset; permreset; firedreset; : > "$SBX/ladder.log"   # ⇒ $REPO is no longer provably dispatched
+mkbeacon permunp 150 Bash '{"command":"unproven"}'    # past the DISPATCHED rung (100), short of attended (400)
+lsweep; lsweep
+[ "$(nesc)" -eq 0 ] && ok "an unproven session does not escalate at the DISPATCHED rung (classification honoured)" || no "an UNPROVEN session escalated at the dispatched rung"
+
+reset; permreset; : > "$SBX/ladder.log"
+mkbeacon permunp2 450 Bash '{"command":"unproven older"}'   # past the ATTENDED rung (400)
+lsweep; lsweep
+[ "$(nesc)" -ge 1 ] && ok "an UNPROVEN session STILL escalates at its later rung (never silent)" || no "an unproven session went permanently silent — the loss this item exists to end"
+idl_has '"class":"unproven"' && ok "the escalation names its UNPROVEN classification honestly" || no "unproven escalation did not carry its class"
+
+echo "T37 ORACLE UNREADABLE ⇒ still escalates (a broken oracle may degrade the rung, never mute the alarm)"
+reset; permreset; firedreset; : > "$SBX/ladder.log"
+mkbeacon permnolib 450 Bash '{"command":"no oracle"}'
+CC_ORIGIN_IDENTITY_LIB="$SBX/does-not-exist.sh" lsweep
+CC_ORIGIN_IDENTITY_LIB="$SBX/does-not-exist.sh" lsweep
+[ "$(nesc)" -ge 1 ] && ok "an unreadable oracle still escalates (fail-open)" || no "an unreadable oracle MUTED the alarm (fail-closed — the wrong direction)"
+
+echo "T38 IN-FLIGHT UPGRADE — a marker written by the PRE-LADDER build arms the ladder, never replays the notice"
+# Not hypothetical: the daemon is long-running, so at the moment this lands every pending episode on the
+# box carries a bare-ts marker written by the previous build. Two ways that could go wrong and both are
+# pinned here — re-sending the NOTICE (a duplicate page for an episode already announced), or reading the
+# missing rung as "no ladder" (the silence this item ends, preserved across the upgrade for those episodes).
+reset; permreset; firedreset; : > "$SBX/ladder.log"
+mkfired 4243 "$REPO"
+mkbeacon permlegacy 500 Bash '{"command":"pre-ladder episode"}'
+printf '%s\n' "$(jq -r '.ts' "$CC_PERMPEND_DIR/permlegacy.json")" \
+  > "$CC_SUPERVISOR_PAGEDIR/permlegacy.permpend.notified"     # the OLD format: bare ts, no rung
+lsweep
+[ "$(llog)" -eq 0 ] && ok "a legacy marker does NOT replay the notice (no duplicate page on upgrade)" || no "the upgrade re-sent the notice for an already-announced episode (lines=$(llog))"
+[ "$(nesc)" -eq 0 ] && ok "…and does not escalate on the very sweep that arms the rung" || no "armed and escalated in one sweep"
+lsweep
+[ "$(nesc)" -eq 1 ] && ok "…then escalates normally on the next sweep (the ladder survives the upgrade)" || no "a pre-ladder episode stayed silent forever after the upgrade (esc=$(nesc))"
 
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"

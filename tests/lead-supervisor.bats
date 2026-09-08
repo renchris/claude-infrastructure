@@ -38,8 +38,9 @@ setup() {
   # T30's 9 checks need a real timeout(1); where the box has none it SKIPs wholesale, so the floor drops
   # by exactly those 9 for that case only. Deriving the floor from the skip line (rather than pinning the
   # lower number everywhere) keeps the ratchet at full strength on every box that can actually run them.
-  floor=104
-  if echo "$output" | grep -q 'SKIP T30'; then floor=95; fi
+  # 104 → 120 (T34-T38 permpend escalation ladder, item 6a5a218fd9a8): 17 new checks.
+  floor=120
+  if echo "$output" | grep -q 'SKIP T30'; then floor=111; fi
   n_pass="$(echo "$output" | sed -nE 's/.*supervisor-e2e: ([0-9]+) passed.*/\1/p')"
   [ "${n_pass:-0}" -ge "$floor" ]
 }
@@ -49,6 +50,19 @@ setup() {
   echo "$output" | grep -q 'T11 CLEAN COMPLETION'
   echo "$output" | grep -q 'T12 STRANDED (dirty)'
   echo "$output" | grep -q 'T13 STRANDED (unlanded)'
+}
+
+@test "permpend escalation ladder — a wedged prompt escalates, doubles, and stops (item 6a5a218fd9a8)" {
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'T34 PERMPEND LADDER'
+  # the three properties that make this a ladder rather than either silence or a storm
+  echo "$output" | grep -q 'ESCALATES (the silence this ends)'
+  echo "$output" | grep -q 'a ladder, not a storm'
+  # and the fail-open law: a classification may move a rung, never mute one
+  echo "$output" | grep -q 'STILL escalates at its later rung'
+  echo "$output" | grep -q 'unreadable oracle still escalates'
+  # the daemon is long-running, so every pending episode crosses this upgrade with a bare-ts marker
+  echo "$output" | grep -q 'the ladder survives the upgrade'
 }
 
 @test "flap re-arm — a one-sweep OK does not re-arm the notify alarm (2026-09-07 wake-noise storm)" {
