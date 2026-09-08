@@ -607,25 +607,45 @@ if $IS_GLOBAL; then
   echo "Provider registry → $CONFIG_DIR/providers.json"
   link_file "$REPO_DIR/providers.json" "$CONFIG_DIR/providers.json"
 
-  # MS365 / Microsoft Graph MCP server → every account's user-scope config.
-  # NOT a symlink like the three above, and NOT the knowledge-layer mirror: `mcpServers` lives in
-  # `.claude.json`, which is in the isolate-set of all four account dirs (lib/config-mirror.zsh)
-  # because it races between concurrent Claude Code processes. So it can only be an idempotent
-  # per-dir MERGE — and that merge has to re-run on every install, because a hand-copy is exactly
-  # how ms365 came to exist in 1 account dir of 4. Diagnosis: docs/plans/MS365_MCP_ALL_ACCOUNTS.md.
+  # MCP SSOT — the ONE authored server list. Symlinked for the same reason as providers.json above:
+  # tracked, holds no secrets (a future one rides ${VAR} indirection, which the CLI expands — see
+  # the plan's Wave 1 finding), and its edits must land in the repo rather than drift out of version
+  # control. The renderer prefers $REPO_DIR/mcp-servers.json and falls back to this link, so a
+  # standalone `scripts/mcp-ssot-wire.sh` run works from a checkout that has moved.
+  echo "MCP SSOT → $CONFIG_DIR/mcp-servers.json"
+  link_file "$REPO_DIR/mcp-servers.json" "$CONFIG_DIR/mcp-servers.json"
+
+  # MCP servers → every user-scope config a session can actually read, rendered from the ONE
+  # authored list at mcp-servers.json. NOT a symlink like the three above, and NOT the
+  # knowledge-layer mirror: `mcpServers` lives in `.claude.json`, which is in the isolate-set of all
+  # four account dirs (lib/config-mirror.zsh) because it races between concurrent Claude Code
+  # processes. So it can only be an idempotent per-file MERGE — and that merge has to re-run on
+  # every install, because a hand-copy is exactly how ms365 came to exist in 1 account dir of 4.
+  #
+  # It is a RENDER and not `--mcp-config` pointing at the SSOT because `claude mcp list` is
+  # structurally blind to that flag (measured on 2.1.260), and it is the command both MCP sensors
+  # read — hooks/session-start.sh and lib/cc-upgrade-gate/check13_mcp.sh would report 0 servers
+  # forever. Plan + evidence: docs/plans/MCP_CONFIG_SSOT.md § Wave 1 — research findings.
+  #
+  # `--check`, never `--audit`: the audit also flags a server present in a config dir but absent
+  # from the SSOT, which is the right guard for a test (DoD #7) and the wrong one for an installer —
+  # one deliberately-unmanaged server must not wedge every install.
   echo ""
-  echo "MS365 MCP server → all account config dirs"
-  if [[ ! -x "$REPO_DIR/scripts/ms365-mcp-wire.sh" ]]; then
-    echo "  ⚠ scripts/ms365-mcp-wire.sh missing or not executable"
+  echo "MCP servers → all user-scope configs (from mcp-servers.json)"
+  if [[ ! -x "$REPO_DIR/scripts/mcp-ssot-wire.sh" ]]; then
+    echo "  ⚠ scripts/mcp-ssot-wire.sh missing or not executable"
+    warnings=$((warnings + 1))
+  elif [[ ! -f "$REPO_DIR/mcp-servers.json" ]]; then
+    echo "  ⚠ mcp-servers.json missing — nothing to render"
     warnings=$((warnings + 1))
   elif $DRY_RUN; then
-    # Read-only preview: --check reports per-dir state and wires nothing. (`run` is not usable —
+    # Read-only preview: --check reports per-file state and wires nothing. (`run` is not usable —
     # it would echo the command but execute nothing, losing the preview's actual value, which is
     # reporting what is currently unwired. Same reasoning as the kitty step below.)
-    echo "  [dry-run] would run scripts/ms365-mcp-wire.sh — current state:"
-    "$REPO_DIR/scripts/ms365-mcp-wire.sh" --check 2>&1 | sed 's/^/  /' || true
-  elif ! "$REPO_DIR/scripts/ms365-mcp-wire.sh"; then
-    echo "  ⚠ ms365 not fully wired — re-run: scripts/ms365-mcp-wire.sh --check"
+    echo "  [dry-run] would run scripts/mcp-ssot-wire.sh — current state:"
+    "$REPO_DIR/scripts/mcp-ssot-wire.sh" --check 2>&1 | sed 's/^/  /' || true
+  elif ! "$REPO_DIR/scripts/mcp-ssot-wire.sh"; then
+    echo "  ⚠ MCP servers not fully rendered — re-run: scripts/mcp-ssot-wire.sh --check"
     warnings=$((warnings + 1))
   fi
 fi

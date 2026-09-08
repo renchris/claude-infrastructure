@@ -1,0 +1,58 @@
+{
+  "_comment": [
+    "SSOT for MCP server definitions. THE ONE AUTHORED PLACE — docs/plans/MCP_CONFIG_SSOT.md.",
+    "Rendered into every account's user-scope .claude.json by scripts/mcp-ssot-wire.sh, which",
+    "install.sh re-asserts on every run. Do NOT hand-edit a .claude.json to add a server: that is",
+    "the failure this file exists to kill (six copies, silent divergence, a missed dir nobody sees).",
+    "",
+    "WHY RENDERED COPIES AND NOT `--mcp-config` POINTING AT THIS FILE. Measured on 2.1.260:",
+    "`claude mcp list` is structurally blind to --mcp-config — with both scopes empty it prints",
+    "'No MCP servers configured' while the same invocation demonstrably STARTS the server. Both of",
+    "this machine's MCP sensors read exactly that command (hooks/session-start.sh:270 and",
+    "lib/cc-upgrade-gate/check13_mcp.sh:14), so injecting by flag would make the session banner",
+    "report 0 servers forever and make upgrade-gate check #13 unpassable. Full evidence and the",
+    "rejected alternatives: the plan's § Wave 1 — research findings.",
+    "",
+    "`command` may use ~ or ${HOME}; the renderer expands them so the written config carries a",
+    "literal absolute path. `resolve` is optional per server — see the renderer's header."
+  ],
+
+  "mcpServers": {
+    "motion": {
+      "type": "http",
+      "url": "https://mcp.motion.dev"
+    },
+    "motion-plus": {
+      "type": "http",
+      "url": "https://mcp.motion.dev/plus"
+    },
+    "ms365": {
+      "type": "stdio",
+      "command": "~/Library/Application Support/fnm/aliases/default/bin/ms-365-mcp-server",
+      "args": [],
+      "env": {}
+    }
+  },
+
+  "resolve": {
+    "ms365": {
+      "_why": [
+        "The direct binary drops the `npm exec` wrapper process: ~255 MB -> ~139 MB per session",
+        "(-45%) and removes a registry round-trip on every session start (6.0 s cold / 2.1 s warm).",
+        "The fnm `aliases/default` path is used and not the versioned one because the versioned path",
+        "silently disappears the day node is upgraded, taking the server with it and giving no error",
+        "anyone would see; fnm repoints `aliases/default` on `fnm default <ver>`, so it survives.",
+        "FAIL-OPEN: if the binary cannot be resolved or installed, the fallback is written instead.",
+        "A slower, heavier server that works beats a tidy path that does not."
+      ],
+      "npm_package": "@softeria/ms-365-mcp-server",
+      "npm_version": "0.143.0",
+      "fallback": {
+        "type": "stdio",
+        "command": "npx",
+        "args": ["-y", "@softeria/ms-365-mcp-server@0.143.0"],
+        "env": {}
+      }
+    }
+  }
+}
