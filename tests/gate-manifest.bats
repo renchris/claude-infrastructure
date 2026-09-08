@@ -20,6 +20,31 @@ setup() {
   export CC_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   # Deterministic clock for every expiry comparison. ISO-8601-Z sorts lexi == chrono.
   export CC_NOW="2026-07-19T12:00:00Z"
+
+  # mk_fixture_repo <dir> — a throwaway repo whose IDENTITY WRITE CANNOT ESCAPE INTO THE CORPUS.
+  #
+  # This exists because it did escape. On 2026-09-04 ~17:20Z the shared checkout's .git/config came
+  # back carrying this file's own literals as a [user] section, while a corpus run was executing,
+  # and the pre-commit identity gate then blocked a real commit twice (backlog 23255fbb8792). The
+  # three fixtures below used to read `cd "$repo" || return 1` followed by a bare repo-local
+  # identity write, and that `||` guard is not the protection it looks like: it covers only a
+  # FAILED cd. Let the cd succeed and `git init` not leave a repository behind — for any reason at
+  # all — and the bare write performs ORDINARY UPWARD DISCOVERY from that cwd, finds the enclosing
+  # corpus worktree and writes THERE. A postland wt-run worktree makes that maximally bad: a linked
+  # worktree's config IS the shared .git/config, so one fixture's write re-authors every session
+  # using that checkout.
+  #
+  # --git-dir is the fix rather than -C, and the difference is the whole point: -C only changes
+  # where discovery STARTS, so it still walks up, while an explicit --git-dir DISABLES discovery —
+  # a missing "$dir/.git" becomes an ERROR instead of a silent write one directory up. The write is
+  # then addressed at a path this function just created, and no failure mode can redirect it.
+  mk_fixture_repo() {
+    local dir="${1:?mk_fixture_repo needs a directory}"
+    mkdir -p "$dir"
+    git init -q "$dir"
+    git --git-dir="$dir/.git" config user.email t@t
+    git --git-dir="$dir/.git" config user.name t
+  }
 }
 
 # helper: sign a normal in-class wave that is valid for an hour past CC_NOW
@@ -223,9 +248,7 @@ sign_ok() { bash "$GM" sign --wave "${1:-W1}" --classes "${2:-C1,C3,C7}" --expir
 
 # ── P6 backstop — surfaces auto-stamped ratifications in a range, never blocks ──
 @test "backstop surfaces a commit carrying a stamped 'pre-signed class' trailer" {
-  # a failed cd would leave the `git config user.email t@t` below running in the REPO ROOT
-  repo="$BATS_TEST_TMPDIR/repo"; mkdir -p "$repo"; cd "$repo" || return 1
-  git init -q; git config user.email t@t; git config user.name t
+  repo="$BATS_TEST_TMPDIR/repo"; mk_fixture_repo "$repo"; cd "$repo" || return 1
   git commit -q --allow-empty -m "base"
   base="$(git rev-parse HEAD)"
   # a real auto-stamp trailer, produced by the tool itself, on a committed ruling
@@ -240,8 +263,7 @@ sign_ok() { bash "$GM" sign --wave "${1:-W1}" --classes "${2:-C1,C3,C7}" --expir
 }
 
 @test "backstop is silent (but still exit 0) when the range has no stamped rulings" {
-  repo="$BATS_TEST_TMPDIR/repo2"; mkdir -p "$repo"; cd "$repo" || return 1
-  git init -q; git config user.email t@t; git config user.name t
+  repo="$BATS_TEST_TMPDIR/repo2"; mk_fixture_repo "$repo"; cd "$repo" || return 1
   git commit -q --allow-empty -m "base"
   base="$(git rev-parse HEAD)"
   git commit -q --allow-empty -m "chore: nothing ratified here"
@@ -257,8 +279,7 @@ sign_ok() { bash "$GM" sign --wave "${1:-W1}" --classes "${2:-C1,C3,C7}" --expir
 }
 
 @test "backstop ignores a PROSE mention of 'pre-signed class' with no class digit (trailer-precise)" {
-  repo="$BATS_TEST_TMPDIR/repo3"; mkdir -p "$repo"; cd "$repo" || return 1
-  git init -q; git config user.email t@t; git config user.name t
+  repo="$BATS_TEST_TMPDIR/repo3"; mk_fixture_repo "$repo"; cd "$repo" || return 1
   git commit -q --allow-empty -m "base"
   base="$(git rev-parse HEAD)"
   # a commit that MENTIONS the phrase in prose (no 'C<n>' trailer) must NOT be surfaced as a ratification
@@ -280,4 +301,40 @@ sign_ok() { bash "$GM" sign --wave "${1:-W1}" --classes "${2:-C1,C3,C7}" --expir
 @test "usage: -h exits 0; a bogus verb exits 2" {
   run bash "$GM" -h;        [ "$status" -eq 0 ]
   run bash "$GM" frobnicate; [ "$status" -eq 2 ]
+}
+
+# ── the fixture-escape control (backlog 23255fbb8792) ─────────────────────────
+# The three fixtures above write a git identity. This proves the write is addressed at THEIR repo
+# and cannot land in the enclosing one, by running both shapes inside a stand-in "corpus" repo with
+# the `git init` step REMOVED — the state the `|| return 1` guard does not cover, because the cd
+# succeeded. It is a control in both directions: the pre-fix shape must escape (or this test is
+# passing on nothing), and the shipped helper must not.
+@test "ESCAPE CONTROL: the identity write cannot reach the enclosing repository" {
+  outer="$BATS_TEST_TMPDIR/outer"
+  git init -q "$outer"
+  # --local, never a bare --get: a bare read falls through to the operator's GLOBAL identity,
+  # which is always set, so the cleanliness precondition below would fail on a clean fixture.
+  before="$(git --git-dir="$outer/.git" config --local --get user.email || true)"
+  [ -z "$before" ] || { echo "fixture is not clean: outer already has an identity"; false; }
+
+  # (1) THE PRE-FIX SHAPE, replayed verbatim: cd into a dir that is NOT a repo, then write bare.
+  #     `git init` is omitted rather than sabotaged — the incident needs only that no repository is
+  #     there, and omitting it cannot be accused of arranging a failure git would not really have.
+  fx="$outer/sub"; mkdir -p "$fx"
+  ( cd "$fx" || exit 1; git config user.email t@t; git config user.name t ) >/dev/null 2>&1 || true
+  leaked="$(git --git-dir="$outer/.git" config --local --get user.email || true)"
+  [ "$leaked" = "t@t" ] || {
+    echo "CONTROL INERT: the pre-fix shape did not escape here, so the assertion below proves nothing"
+    false; }
+  git --git-dir="$outer/.git" config --unset-all user.email || true
+  git --git-dir="$outer/.git" config --unset-all user.name  || true
+
+  # (2) THE SHIPPED HELPER, same cwd, same enclosing repo.
+  mk_fixture_repo "$outer/sub2"
+  ( cd "$outer/sub2" || exit 1; : ) 
+  after="$(git --git-dir="$outer/.git" config --local --get user.email || true)"
+  [ -z "$after" ] || {
+    echo "ESCAPED: mk_fixture_repo wrote the enclosing repo's config ($after)"; false; }
+  # and it did write the place it was supposed to
+  [ "$(git --git-dir="$outer/sub2/.git" config --local --get user.email)" = "t@t" ]
 }
