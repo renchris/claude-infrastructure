@@ -303,6 +303,7 @@ resolve_repo() { # <worktree> <branch> → repo root on stdout, or 1
   printf '%s\n' "${matches[0]}"
 }
 
+wt_existed=0; [[ -d "$wt" ]] && wt_existed=1
 if [[ ! -d "$wt" ]]; then
   if [[ -z "$br" ]]; then
     printf '%s\n' "reso-resume-one: worktree $wt missing and no branch given to recreate it" >&2; exit 1
@@ -321,6 +322,58 @@ if [[ ! -d "$wt" ]]; then
   git -C "$REPO" worktree add "$wt" "$br" || {
     printf '%s\n' "reso-resume-one: worktree add failed ($REPO → $wt @ $br)" >&2; exit 1
   }
+fi
+
+# ── THE DIRECTORY MAY SURVIVE WHILE THE WORKTREE IT NAMED DOES NOT ──────────────────────────────
+# The branch was validated on exactly ONE of the two paths above. When the worktree had been reaped
+# we prove the branch exists and check it out; when the directory is still there we used to `cd`
+# into it and resume, asserting nothing at all — and the 4th positional was carried purely as a
+# label, forwarded to the pane title and dropped.
+#
+# That asymmetry is wrong for the pooled worktrees on this box. `~/Development/.worktrees/wt-pool-N`
+# is a SLOT, not a session's property: it is returned to the pool and re-let to another branch. The
+# directory therefore outlives the row that named it, and its continued existence is not evidence
+# that it is still the same tree.
+#
+# MEASURED, on the 2026-08-25 post-restart recovery batch (cc-backlog 80ed5e7a1e7e). That row asked
+# for a 9-session batch TSV to be re-run "when the mid-turn count is low", with no expiry on the
+# instruction. Fourteen days later every one of its rows had rotted, and the three failure shapes
+# were not alike:
+#     wt-pool-2   cc-222358-33352 → now cc-202858-38809   directory present, DIFFERENT tree
+#     wt-pool-3   cc-145907-94063 → now cc-001001-11506   directory present, DIFFERENT tree
+#     wt-pool-8   cc-030311-15391 → now pool/slot-8       returned to the pool
+#     wt-cc-180319-84744, ccbacklog-session-ladder        reaped, and their branches deleted too
+# The last two are already safe: the recreate path above proves the branch and exits 1 when it is
+# gone. The first three are the hole — the directory exists, so nothing above it runs, and the
+# session would have been resumed into a tree another session now owns.
+#
+# FAIL-OPEN ON UNKNOWN, FAIL-CLOSED ON A PROVEN MISMATCH. Stranding a real recovery is worse than
+# the bug (tests/lr-resume-tombstone-guard.bats states the same asymmetry), and only a branch name
+# that reads cleanly and differs is proof. A detached HEAD, a path that is not a git worktree, or a
+# git that will not answer is UNKNOWN: say so and continue. No branch given ⇒ nothing to compare,
+# which is the pre-2026-09-08 behaviour and stays exactly that.
+if [[ "$wt_existed" -eq 1 && -n "$br" && "${CC_RESUME_ALLOW_BRANCH_DRIFT:-0}" != 1 ]]; then
+  # Compare only when $wt is ITSELF a worktree root. A plain directory that merely SITS INSIDE some
+  # repository would otherwise be answered for by that enclosing repo's branch, and a guard that
+  # convicts on a branch its subject does not own is a guard that fires on innocents — including on
+  # this file's own bats harness, whose fixtures are plain dirs under a tmpdir (memory:
+  # guard-refusal-fires-on-its-own-harness). Physical paths on both sides: /tmp is a symlink here.
+  wt_top=$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null) || wt_top=""
+  wt_phys=$(cd "$wt" 2>/dev/null && pwd -P) || wt_phys=""
+  if [[ -n "$wt_top" && -n "$wt_phys" && "$wt_top" == "$wt_phys" ]]; then
+    wt_branch=$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null) || wt_branch=""
+  else
+    wt_branch=""
+  fi
+  if [[ -z "$wt_branch" || "$wt_branch" == HEAD ]]; then
+    printf '%s\n' "reso-resume-one: NOTE — no branch identity for $wt (detached HEAD, or not a worktree root); resuming without the identity check." >&2
+  elif [[ "$wt_branch" != "$br" ]]; then
+    printf '%s\n' "reso-resume-one: REFUSING — $wt is no longer the worktree this row named." >&2
+    printf '%s\n' "  row says branch '$br'; the directory is on '$wt_branch'." >&2
+    printf '%s\n' "  A pooled worktree is re-let to another branch, so resuming $sid here would work in a tree another session owns." >&2
+    printf '%s\n' "  If that is genuinely intended:  CC_RESUME_ALLOW_BRANCH_DRIFT=1 reso-resume-one $*" >&2
+    exit 3
+  fi
 fi
 cd "$wt" || exit 1
 
