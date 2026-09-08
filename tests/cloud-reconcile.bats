@@ -1012,7 +1012,9 @@ dead_pid() {
   mkdir -p "$WT/.desk-land-feat-nopid-xyz"         # unreadable owner ⇒ abstain rather than guess
   mkdir -p "$WT/somebody-elses-worktree"           # not our shape ⇒ never ours to remove
 
-  echo 'printf "%s\n" "$(reap_orphan_land_sandboxes "$1" "$2")"' >> "$probe"
+  # printf, not echo: the payload carries a literal \n for the PROBE to interpret, and echo is
+  # allowed to expand it (SC2028). printf's %s never format-interprets its argument.
+  printf '%s\n' 'printf "%s\n" "$(reap_orphan_land_sandboxes "$1" "$2")"' >> "$probe"
   run bash "$probe" "$BATS_TEST_TMPDIR" "$WT"
   [ "$status" -eq 0 ]
   # exactly ONE reaped — a sweep that answered 3 would be rm -rf wearing a predicate's clothes
@@ -1033,7 +1035,7 @@ dead_pid() {
     echo 'GIT_BIN=git'
     sed -n '/^reap_abandoned_land_sandbox() {/,/^}/p'  "$CR"
     sed -n '/^reap_orphan_land_sandboxes() {/,/^}/p'   "$CR"
-    echo 'printf "%s\n" "$(reap_orphan_land_sandboxes "$1" "$2")"'
+    printf '%s\n' 'printf "%s\n" "$(reap_orphan_land_sandboxes "$1" "$2")"'
   } > "$probe"
   EMPTY="$BATS_TEST_TMPDIR/empty-wtroot"; mkdir -p "$EMPTY"
   run bash "$probe" "$BATS_TEST_TMPDIR" "$EMPTY"
