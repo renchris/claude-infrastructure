@@ -2225,6 +2225,7 @@ printf 'ROUNDS=[%s] RETRIES=[%s] SCOPE=[%s] LOCKWAIT=[%s] LOCKTTL=[%s] MAXLOAD=[
   "${SHIP_LAND_GATE_SCOPE-unset}" "${LAND_LOCK_WAIT-unset}" "${LAND_LOCK_TTL-unset}" \
   "${CC_GATE_MAX_LOAD-unset}" "${SHIP_LAND_LANE-unset}" "${SHIP_LAND_SMOKE_BUDGET_S-unset}" \
   "${SHIP_LAND_TIMEOUT_BIN-unset}" "$*"
+printf 'MAXROOTS=[%s]\n' "${CC_BATS_MAX_ROOTS-unset}"
 printf 'T0=[%s] MROUNDS=[%s] MGATE=[%s] MARMS=[%s] MSTAT=[%s]\n' \
   "${SHIP_LAND_T0-unset}" "${SHIP_LAND_MEAS_ROUNDS-unset}" "${SHIP_LAND_MEAS_GATE_S-unset}" \
   "${SHIP_LAND_MEAS_ARMS_S-unset}" "${SHIP_LAND_MEAS_STATICS_S-unset}"
@@ -2242,6 +2243,7 @@ STUB
       SHIP_LAND_GATE_ROUNDS=0 SHIP_LAND_VERIFY_RETRIES=9 SHIP_LAND_GATE_SCOPE=full \
       LAND_LOCK_WAIT=10800 LAND_LOCK_TTL=99 CC_GATE_MAX_LOAD=31 \
       SHIP_LAND_LANE=v1 SHIP_LAND_SMOKE_BUDGET_S=1 SHIP_LAND_TIMEOUT_BIN= \
+      CC_BATS_MAX_ROOTS=2 \
       SHIP_LAND_T0=1 SHIP_LAND_MEAS_ROUNDS=1 SHIP_LAND_MEAS_GATE_S=99 \
       SHIP_LAND_MEAS_ARMS_S=99 SHIP_LAND_MEAS_STATICS_S=99 \
       bash "$BATS_TEST_TMPDIR/probe.sh"
@@ -2265,6 +2267,15 @@ STUB
   # always runs. Inherited, whether a nested pipeline smoked at all would depend on the ambient
   # load of the box the suite happens to run on — a test verdict decided by `uptime`.
   echo "$output" | grep -q 'MAXLOAD=\[0\]'      || false
+  # FORCED to 0 for the same reason, on the OTHER admission gate — backlog 55063c2fee84. bin/cc-bats
+  # refuses a bats invocation when >= CC_BATS_MAX_ROOTS (default 2) other roots are live, with
+  # ADMIT_RC=75 EX_TEMPFAIL: nothing ran and nothing was verified. run_scoped_suite reads that as a
+  # CUT rather than a pass — so it never forged a green — but it spends the one exoneration re-run
+  # on an invocation that is deterministically refused again and then reports GATE-KILLED, i.e. a
+  # land blocked by a fact about the BOX. Measured 2026-09-07: 1,045 such rows in
+  # ~/.claude/autonomy/postland/flakes.jsonl, 56% of all flake rows, still arriving. Ambient 2 above
+  # is the live default, so this assertion reads [2] and FAILS without the export.
+  echo "$output" | grep -q 'MAXROOTS=\[0\]'     || false
   # THE P0 MEASUREMENT CARRIERS — sharper than any knob above, because they are not tuning at all
   # but the outer land's accumulated STATE, handed to its locked re-exec by meas_export(). Once a
   # land takes the in-lock path, every suite it smokes would start counting from the outer's total:
