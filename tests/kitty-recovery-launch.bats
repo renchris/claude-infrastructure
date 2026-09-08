@@ -176,6 +176,60 @@ fire() { # $1=sid, rest=extra args — the REAL --launch path, with every extern
   echo "$output" | grep -q 'fired split pane'
 }
 
+# ── The window is not the resume (2026-09-08) ────────────────────────────────────────────────────
+# `kitty @ launch` returns 0 and prints the id when the WINDOW exists, not when the launcher has run.
+# On a real two-session limit recovery both fires printed "fired split pane", both windows were gone
+# a second later (their launcher hit capacity-admit's exit 9), no resume ever started, and the only
+# evidence was two consumed kitty ids. These three pin the discriminator and BOTH indeterminate
+# readings, because a survival check that guesses "dead" would strand recoveries that are fine.
+
+@test "lr-handoff: a kitty split window that did NOT survive its launcher is never announced as fired" {
+  mk_handoff_fixture
+  in_kitty 31
+  # A USABLE listing (it carries window ids) that does not carry the one the launch just returned:
+  # the stub's launch answers 99, and 98 is another live window, so this is the real dead case.
+  export ITERM_SESSION_ID="w0t0p0:31" LRH_KITTY_SETTLE_S=0 \
+         KITTY_LS_JSON='[{"tabs":[{"windows":[{"id": 98,"title":"x"}]}]}]'
+  run fire "khan0006-0000-0000-0000-000000000006"
+  [ "$status" -eq 0 ]
+  grep -q -- '--location=vsplit' "$KITTY_LOG"          # it really did try the split
+  echo "$output" | grep -q 'did not survive the launch'
+  gone_out 'fired split pane'
+  # the os-window fallback it falls through to answers with the same absent id, so THAT claim is
+  # withheld too — the operator is left with the manual fallback, which is the truth.
+  gone_out 'fired new kitty window'
+  echo "$output" | grep -q "run it as a NEW pane's own command"
+}
+
+@test "lr-handoff: CONTROL — the same check PASSES when the window is in the listing" {
+  mk_handoff_fixture
+  in_kitty 31
+  export ITERM_SESSION_ID="w0t0p0:31" LRH_KITTY_SETTLE_S=0 \
+         KITTY_LS_JSON='[{"tabs":[{"windows":[{"id": 99,"title":"x"},{"id": 98,"title":"y"}]}]}]'
+  run fire "khan0007-0000-0000-0000-000000000007"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'fired split pane'
+  gone_out 'did not survive'
+}
+
+@test "lr-handoff: an INDETERMINATE kitty listing keeps the claim — it never reads as a dead window" {
+  # Two ways the instrument can fail to discriminate, both of which must behave as "alive":
+  # a listing with no window ids at all (impossible for a live kitty ⇒ instrument fault), and an
+  # unreadable one. The census suite's property 1 in this file's own terms: INDETERMINATE ≠ ZERO.
+  mk_handoff_fixture
+  in_kitty 31
+  export ITERM_SESSION_ID="w0t0p0:31" LRH_KITTY_SETTLE_S=0 KITTY_LS_JSON='[]'
+  run fire "khan0008-0000-0000-0000-000000000008"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'fired split pane'
+
+  : > "$KITTY_LOG"
+  export KITTY_LS_JSON=''
+  run fire "khan0009-0000-0000-0000-000000000009"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'fired split pane'
+}
+
 @test "lr-handoff: a failed kitty split falls back to a kitty OS-WINDOW, never to iTerm2" {
   mk_handoff_fixture
   in_kitty 31
