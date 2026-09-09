@@ -263,3 +263,33 @@ once this lands (the poller can never create them again).
   seconds after the session had already moved.
   `Scope (grown): +the live-parser preflight — a recovery must refuse before it moves a session when
   the layer it will execute cannot run what it is about to write.`
+- 2026-09-09T06:4xZ · **E2E RE-RUN AFTER CONVERGENCE — VERIFIED.** The live layer advanced (live
+  checkout `9c9687fcf`; both ADDED files linked under `~/.claude`; the live `lr-fire-resume.sh` now
+  carries the `--permission-mode)` arm — checked BY CONTENT, not by the lag counter, which read 25
+  then 4 without either file appearing in between: memory `convergence-counter-measures-distance-not-delivery`).
+  A second throwaway session was launched in a fresh kitty OS-window (pane **695**,
+  next4/`.claude-quaternary`, pid 16191, sid `f62a9f70`), took one real turn, and was recovered with
+  `lr-handoff.sh --launch --in-place --source-pane 695 --target next3`. Result:
+      → recycle VERIFIED: relaunched + ENGAGEMENT CONFIRMED in 695 (a real assistant turn, not just a process)
+  | measurement | before | after |
+  |---|---|---|
+  | kitty window id | 695 | **695** (same window, `kitty @ ls`) |
+  | registry account | claude-quaternary | **claude-tertiary** |
+  | registry pid | 16191 | **70964** |
+  | registry sid | f62a9f70 | **f62a9f70** (unchanged) |
+  | assistant turns in the TARGET store | 1 (source copy) | **6**, newest 06:42:42Z — after the move |
+  Total kitty windows unchanged by the recovery: nothing new appeared, nothing was left over. This
+  is §2's target behaviour, measured: *the pane IS the continuation.*
+  `tests/handoff-recycle-remote-resume.bats`: **30/30, 0 failures.** Full 18-suite gate: **326/326.**
+- 2026-09-09T06:5xZ · **The live mess, resolved as far as the sanctioned rails allow.**
+  · `52e35019` — `--duplicates --mark … --live 77720` wrote the SUPERSEDED tombstone, so the stale
+    pane 616 can no longer take a turn: **the split brain is contained.** The pane RETIREMENT
+    refused, correctly: `self-close` verifies a live claude on the successor pane's OWN tty, and
+    647's claude is tmux-NESTED (ttys045 vs the pane's ttys049), so the check cannot see it. Not
+    "fixed" — that check is one of the protections this wave is forbidden to weaken, and the
+    tmux-nested successor is a CLOSING population (the poller can no longer spawn one). Filed
+    `653e8214d505` with the exact close command.
+  · `0edc7e64` — self-resolved: pane 630's pid is DEAD, so its registry row is stale and there is no
+    duplicate. Only the tmux copy in tab 648 remains, and it is the live one.
+  · the four sole-copy orphans — filed one row each (above), all idle for days with 0 unlanded
+    commits.
