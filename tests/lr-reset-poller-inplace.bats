@@ -150,7 +150,7 @@ STUB
   [ "$status" -eq 0 ] || { echo "$output"; cat "$STATE/poller.log"; false; }
   grep -q -- '@ --to unix:/tmp/fake-kitty-1 launch --type=os-window' "$KITTY_LOG" || { cat "$KITTY_LOG"; false; }
   grep -q -- 'CC_PANE_CMD=bash .*lr-poller-launch-52e35019-' "$KITTY_LOG"
-  ! grep -q -- '-- /bin/bash' "$KITTY_LOG"
+  ! grep -q -- '-- /bin/bash' "$KITTY_LOG" || false
   [ ! -s "$TMUX_LOG" ]
   grep -qE "RESUMED $SID on next4 \(autofire, gui\)" "$STATE/poller.log"
 }
@@ -158,12 +158,14 @@ STUB
 @test "D3: the minted launcher carries the transcript's tier (--model/--effort)" {
   mk_parked "$SID" claude-fable-5-1 xhigh
   LR_POLLER_SPAWN=tmux LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  # shellcheck disable=SC2012  # a single mktemp-minted launcher in a fixture dir — find(1) buys nothing here
   l="$(ls "$LR_POLLER_LAUNCH_DIR"/lr-poller-launch-52e35019-*.sh | head -1)"
   grep -q -- '--model claude-fable-5-1 --effort xhigh --prompt /limit-recover' "$l" || { cat "$l"; false; }
 }
 @test "D3 CONTROL: no tier on disk ⇒ no flags, the old launcher byte-for-byte" {
   mk_parked "$SID"
   LR_POLLER_SPAWN=tmux LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  # shellcheck disable=SC2012  # a single mktemp-minted launcher in a fixture dir — find(1) buys nothing here
   l="$(ls "$LR_POLLER_LAUNCH_DIR"/lr-poller-launch-52e35019-*.sh | head -1)"
   grep -q -- "$SID --prompt /limit-recover" "$l" || { cat "$l"; false; }
   ! grep -q -- '--model' "$l"

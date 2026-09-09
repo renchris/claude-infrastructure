@@ -305,7 +305,6 @@ load_spawn_gui() {
   # shellcheck disable=SC2034  # read by the eval-extracted lrp_bounded below
   LRP_TIMEOUT_S=5
   eval "$(sed -n '/^lrp_bounded() {/,/^}/p' "$POLLER")"
-  eval "$(sed -n '/^lrp_kitty() {/,/^}/p' "$POLLER")"
   # 2026-09-09 (LIMIT_RECOVER_100P): spawn_gui's kitty arm now lives on lr-lib.sh (lr_kitty_spawn /
   # lr_kitty_socket — the launchd-safe, runner-rooted spawn); the extracted unit needs the library.
   export LR_LIB_DIR="$REPO/scripts/limit-recover"

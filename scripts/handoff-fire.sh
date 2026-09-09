@@ -10796,7 +10796,9 @@ recycle_await_verdict() { # $1=watcher log → 0 engaged / 1 dead-or-failed / 3 
     fi
     if grep -qE 'RECYCLE FAILED|VANISHED|never reached a CONFIRMED shell|relaunch write failed|no claude process appeared|PROCESS-ALIVE' "$log" 2>/dev/null; then
       echo "!! recycle did NOT verify — watcher verdict:" >&2
-      grep -E '^!!|PROCESS-ALIVE' "$log" 2>/dev/null | head -5 >&2
+      # `| head -5` would SIGPIPE grep and, under pipefail, make this line's status the failure —
+      # awk drains instead (pipefail-sigpipe ratchet).
+      grep -E '^!!|PROCESS-ALIVE' "$log" 2>/dev/null | awk 'NR<=5' >&2
       return 1
     fi
     sleep "${HF_RECYCLE_AWAIT_IVL:-5}"; t=$((t + ${HF_RECYCLE_AWAIT_IVL:-5}))

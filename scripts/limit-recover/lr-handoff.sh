@@ -190,6 +190,7 @@ LR_LIB_DIR="$(cd "$(dirname "$LRH_LIB")" && pwd)"; export LR_LIB_DIR
 # shellcheck disable=SC1091
 . "$LRH_LIB"
 lrh_tier_from_transcript() { lr_tier_from_transcript "$@"; }
+# shellcheck disable=SC2153  # LR_LAUNCH_TAIL / LR_SPAWN_SHAPE are lr-lib.sh's outputs, not LRH_ typos
 lrh_launch_tail() { lr_launch_tail "$LAUNCHER"; LRH_LAUNCH_TAIL=("${LR_LAUNCH_TAIL[@]}"); LRH_SPAWN_SHAPE="$LR_SPAWN_SHAPE"; }
 LRH_LAUNCH_TAIL=()
 LRH_SPAWN_SHAPE=""
@@ -355,9 +356,9 @@ elif [[ -n "${CLAUDE_CODE_SESSION_ID:-}" && "${CLAUDE_CODE_SESSION_ID}" == "$SID
 fi
 if [[ -n "$SRC_PID" ]] && kill -0 "$SRC_PID" 2>/dev/null; then
   SRC_ARGV="$(ps -Eww -o command= -p "$SRC_PID" 2>/dev/null || true)"
-  _tl="$(printf '%s' "$SRC_ARGV" | tr ' ' '\n' | sed -n 's/^CLAUDE_CODE_TASK_LIST_ID=//p' | head -1)"
+  _tl="$(printf '%s' "$SRC_ARGV" | tr ' ' '\n' | sed -n 's/^CLAUDE_CODE_TASK_LIST_ID=//p' | awk 'NR<=1')"
   [[ -n "$_tl" ]] && SRC_TASK_LIST="$_tl"
-  SRC_PERM="$(printf '%s' "$SRC_ARGV" | sed -n 's/.*--permission-mode \([A-Za-z]*\).*/\1/p' | head -1)"
+  SRC_PERM="$(printf '%s' "$SRC_ARGV" | sed -n 's/.*--permission-mode \([A-Za-z]*\).*/\1/p' | awk 'NR<=1')"
 fi
 if _rt="$(lrh_tier_from_transcript "$CFG" "$SID")"; then
   RT_MODEL="${_rt%% *}"; RT_EFFORT="${_rt#* }"; [[ "$RT_EFFORT" == "$_rt" ]] && RT_EFFORT=""
