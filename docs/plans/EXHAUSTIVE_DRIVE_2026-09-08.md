@@ -348,6 +348,21 @@ alive but every recent verdict is non-green (129 h since the last green). Verdic
 |---|---|---|---|
 | **W3-B17** IDL write splice | `48c6d64a2` · `d8bf3da9a` · `1e33fce5d` | **(1)** the `backlog-health` `note:` was a 6,953-byte CONSTANT — 86 % of the record, next-largest emitter 663 B. Moved verbatim into a comment above the emit (preserved, not deleted); record **6,679 B → 972 B (−85.4 %)**, 4.2× headroom under the 4,096 B splice boundary. **(2)** `idl_guarded_append` in the shared writer refuses a record over **4,000 B** and writes a short valid `idl-oversize` record naming hook · kind · byte count — it NEVER truncates, because a truncated JSON line IS the defect and would be minted deliberately. ONE contract, TWO builders: the sweep keeps its own envelope (seven ambient counters) and sources the lib for the assertion only. **(3)** the tolerant-reader arm needed no conversion — `cc-audit`, `idl-abstain-alarm.sh`, `measure-close-vs-idl.py` and `measure-terminations.py` were already tolerant and counting; the gap was ENFORCEMENT, so a chokepoint lint now fails any reader that slurps the LIVE IDL with stderr suppressed | bats 6/6. Red-proofed against the PRISTINE artifact (`git archive HEAD`), never a hand-edited approximation: cases 1-2 red at 7,843 B pre-fix, cases 3-5 red pre-fix on the absent contract, and the lint is POSITIVE-CONTROLLED — a synthetic offender turns it red and its removal returns green (a lint green on day one is indistinguishable from a broken one). 13 consumer suites re-run because the shared lib feeds 9 hooks |
 
+**A defect the change itself introduced, found by running the consumer suites BEFORE the land.**
+The first version of the sweep's ladder asserted the FILE (`[ -f ]`) and claimed FAIL LOUD. The live
+layer converges by PER-FILE symlink, so `scripts/autonomy-sweep.sh` can land ahead of
+`hooks/lib/idl-log.sh`; the source then succeeds against the OLDER deployed file and defines no
+`idl_guarded_append`. Measured on a scripts-only tree with `CLAUDE_CONFIG_DIR` pointing at an
+unconverged config dir: **rc 0, `command not found` on every emit, and ZERO records written** — not a
+degraded store but an empty one, with a clean exit code. A guard that can silently take the store to
+zero is worse than the splice it prevents, and it is exactly
+`registration-precondition-must-assert-version-not-executability`. Fixed in `2504bf182`: the ladder
+stops at the first rung that DEFINES the function, and if none does it degrades **loudly, never
+fatally** — an inline fallback carrying the same threshold plus one `idl-guard-degraded` record naming
+every rung tried, so the degradation is a thing someone can count rather than an absence nobody sees.
+Two cases pin it and the second is the CONTROL for the first (with the lib present the marker count
+must be ZERO — without that arm a fallback that fired ALWAYS would pass).
+
 **Two stale claims retired in the same pass.** `hooks/lib/idl-log.sh` and `hooks/session-continue.sh`
 both asserted in the PRESENT TENSE that one malformed line "aborts cc-audit's `jq -rs` slurp" and
 silently flips the un-gameable detector green. True when written, false since cc-audit was made
