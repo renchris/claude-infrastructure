@@ -123,3 +123,40 @@ emit() { # <json-stdin> <kind>
   [ ! -e "$BATS_TEST_TMPDIR/escape.json" ]
   [ ! -e "$CC_BEAT_DIR/../../escape.json" ]
 }
+
+# ══ TZ PIN — the (pid,lstart) identity must not carry the writer's zone ══════════════════════════
+#
+# `ps -o lstart=` renders in the AMBIENT zone. Until 2026-09-08 both the writer here and the reader in
+# scripts/lib/spawn-presence.sh sampled it unpinned, so the identity only ever matched when the two
+# zones happened to agree — measured over 51 live beats, 0 matched a `TZ=UTC` reader and 22 matched an
+# ambient one — and at the next DST change EVERY row would have re-rendered and read as a different
+# process while the sessions were still alive (memory
+# process-start-time-renders-in-ambient-timezone). `bin/cc-await-ping`'s `_pid_ident` already pins
+# both of its own samples; this is that idiom applied to the stored field.
+
+@test "TZ PIN: lstart is UTC-rendered, so two ambient zones write ONE identity" {
+  # RED pre-fix: Chicago and Tokyo are 14h apart, so the two beats disagree on the same process.
+  printf '%s' '{"session_id":"tzA","cwd":"/tmp","prompt":"hi"}' \
+    | env TZ=America/Chicago /bin/bash "$BEAT" prompt
+  printf '%s' '{"session_id":"tzB","cwd":"/tmp","prompt":"hi"}' \
+    | env TZ=Asia/Tokyo /bin/bash "$BEAT" prompt
+  a="$(jq -r '.lstart' "$CC_BEAT_DIR/tzA.json")"
+  b="$(jq -r '.lstart' "$CC_BEAT_DIR/tzB.json")"
+  [ -n "$a" ]
+  [ "$a" = "$b" ]
+}
+
+@test "TZ PIN: the stored lstart IS the UTC rendering of the recorded pid, not a matching ambient pair" {
+  # The case above is satisfiable by any zone-independent string; this one names the zone. Skipped
+  # only where the ambient zone IS UTC, because there the two renderings are identical by
+  # construction and the assertion could not discriminate (it would pass on the broken writer too).
+  printf '%s' '{"session_id":"tzC","cwd":"/tmp","prompt":"hi"}' \
+    | env TZ=America/Chicago /bin/bash "$BEAT" prompt
+  pid="$(jq -r '.pid' "$CC_BEAT_DIR/tzC.json")"
+  got="$(jq -r '.lstart' "$CC_BEAT_DIR/tzC.json")"
+  utc="$(TZ=UTC ps -o lstart= -p "$pid" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  amb="$(TZ=America/Chicago ps -o lstart= -p "$pid" | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$utc" ]
+  [ "$got" = "$utc" ]
+  if [ "$utc" != "$amb" ]; then [ "$got" != "$amb" ]; fi
+}

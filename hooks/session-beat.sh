@@ -71,6 +71,17 @@ beat() {
 
   # Durable claude-ancestor PID + its lstart — identity is (pid,lstart), never pid alone: a
   # RECYCLED pid must not masquerade as this session (the reaper's a17 S-4 pin, now the beat's too).
+  #
+  # TZ=UTC IS PART OF THE IDENTITY, NOT A FORMATTING PREFERENCE. `ps -o lstart=` renders in the
+  # AMBIENT zone, so the stored string is only comparable to a reader that happened to be running in
+  # the same zone — and it stops being comparable to its own past self at the next DST flip, which
+  # makes every beat on disk read as a DIFFERENT process while the sessions are still alive (memory
+  # process-start-time-renders-in-ambient-timezone). Measured 2026-09-08 on 51 live beats: 0 matched
+  # a `TZ=UTC` reader and 22 matched an ambient one, i.e. the census was already keyed on a
+  # coincidence between two unpinned renderings. Pinning HERE is what makes the field mean the same
+  # thing to every reader, in every zone, on both sides of a DST boundary; the reader
+  # (scripts/lib/spawn-presence.sh) pins its own sample the same way. `bin/cc-await-ping`'s
+  # _pid_ident is the idiom being copied.
   walk="$PPID"; cpid=""; i=0
   while [ -n "$walk" ] && [ "$walk" -gt 1 ] 2>/dev/null && [ "$i" -lt 12 ]; do
     c=$(ps -o comm= -p "$walk" 2>/dev/null); c="${c##*/}"
@@ -79,7 +90,7 @@ beat() {
     i=$((i + 1))
   done
   [ -z "$cpid" ] && cpid="$PPID"
-  lstart=$(ps -o lstart= -p "$cpid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')
+  lstart=$(TZ=UTC ps -o lstart= -p "$cpid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')
 
   dir="${CC_BEAT_DIR:-$HOME/.claude/cc-beats}"
   mkdir -p "$dir" 2>/dev/null || return 0
