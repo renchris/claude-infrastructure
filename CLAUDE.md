@@ -182,8 +182,26 @@ documented by Anthropic (<https://code.claude.com/docs/en/goal>) and its conditi
 is a separate TOOL-LESS model that re-judges after every turn and sees only what the session has
 surfaced — assistant prose or a `tool_result`, so a command the session RUNS counts, but state it
 never surfaces at all is unreachable and the goal can never clear. A condition naming an activity
-rather than an end state never terminates. A goal also dies with its session, so a recycle must
-re-arm it. Template + the four narrow exceptions → `commands/handoff.md` § Autonomous fire item 1.
+rather than an end state never terminates. Template + the four narrow exceptions →
+`commands/handoff.md` § Autonomous fire item 1.
+
+🚨 **The measured goal lifecycle — and why `/goal` states a wave's DoD but is not what DRIVES it**
+(2026-09-08; this replaces *"a goal also dies with its session, so a recycle must re-arm it"*, which
+was half wrong in the direction that costs a wave). A goal dies with the **process**, not with the
+work: `handoff-fire.sh --recycle` **INHERITS** the predecessor's live condition and re-arms it on the
+successor (`inherit_recycle_goal`, `scripts/handoff-fire.sh:4676-4684`; `CC_RECYCLE_GOAL_INHERIT`
+defaults to 1, and an inherited condition re-runs the same pre-arm validation — a refusal is printed,
+never silent), and `--resume` **restores** it (`tengu_goal_restored_on_resume`, `origin:"restored"`).
+Claude Code itself **auto-clears** the goal on the context wall (`prompt_too_long`) and on
+auth/billing death (`blocking_limit`, `rapid_refill_breaker`) — so § Context Stewardship's "nothing
+rescues you at the ceiling" includes the goal: hitting it disarms the thing that was driving you.
+**And the goal can only act at a Stop.** Measured over 641 goal runs / 30 days, **434 (67.7%) were
+armed and never evaluated even once** — not because the evaluator failed but because their sessions
+never reached a Stop: 414 of the 434 (95%) died mid-turn, and **238 (55%) retired themselves inside a
+tool call** (`self-close` 155, `--recycle` 83). A fired session's terminal self-close is therefore the
+one moment `--goal` provably cannot check anything. Read that as the division of labour: **`/goal`
+states the wave's end state and blocks premature intermediate stops; `~/.claude/hooks/session-continue.sh
+set "<next step>"` is the lever that actually drives the next turn**, and it is the goal-safe one.
 
 Teammates remain correct **inside** such a session (that session is then the lead of its own team),
 and on the lead itself only when a wave's members must be synthesised against each other immediately
@@ -245,6 +263,28 @@ the **research-subagents** skill for the pre-spawn artifact, the
 task-category gate (multi-agent for breadth-first; single-agent for
 depth-coordination), banned-phrase table, OASIS stop criterion, adversarial
 sampling at 15-20%, partial-failure protocol, and synthesis bottleneck rules.
+
+---
+
+## Shared Task List (All Projects)
+
+⚠️ **Two or more open work items in one session are TRACKED, never remembered.** A todo set that
+lives only in a context window dies with it — and a successor inherits nothing, because the list is
+session-scoped state no `/handoff` bridge carries. The tools are `TaskCreate` / `TaskUpdate` /
+`TaskList`; the store is `$CLAUDE_CONFIG_DIR/tasks/<CLAUDE_CODE_TASK_LIST_ID>/`, and it is **one
+directory for all four accounts** (`~/.claude-next`, `-tertiary`, `-quaternary` each symlink
+`tasks/` into `~/.claude/tasks`), so a list is visible across accounts by construction. The list id
+is exported by the launcher via `bin/cc-tlid`. The supporting wiring is already registered and
+running: `setup-task-symlinks.sh` (SessionStart), `task-mutation-index.sh` (PostToolUse), and
+`task-quality-gate.sh` (TaskCompleted — it runs typecheck in the teammate's worktree and REJECTS the
+task on failure).
+
+🚨 **The tools are gated behind `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`** (measured A/B on 2026-09-08: with
+the env var set, `TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate` appear; unset in all five config dirs
+today, and the remote flag is absent from every GrowthBook cache, so the env var is the only lever).
+The flip is staged as migration `0022` (wave W1f) and is the operator's to run. **Until it lands, the
+plan document's own task table IS the list** — and their absence is never licence to hold the set in
+your head. Do not touch `CLAUDE_CODE_ENABLE_TASKS`: that one is a kill switch, not an enable.
 
 ---
 
@@ -359,7 +399,12 @@ as stuck; and **whole-file rewrites for small edits**, which makes § File Updat
   "double-check before responding" or "spawn a subagent to verify" step *compounds* with that and
   burns tokens for no quality gain. Verify because the task's risk earns it — never as ceremony.
   (Distinct from a fresh-context reviewer of a *teammate's* output, which is a real second pair of
-  eyes, not self-recheck.)
+  eyes, not self-recheck.) 🚨 **This bans CEREMONY, never RESEARCH.** A fan-out fired to move
+  conviction under the Follow-On Gate's **F2** is the task's risk earning it, not a re-check of work
+  already done: the ban is on re-verifying what you just did, while F2's *"research exhaustively"* is
+  about what you have NOT yet decided. Below 90% conviction the research is MANDATORY and this bullet
+  does not reach it — read literally, it otherwise licenses filing a row instead of doing the work,
+  which is the exact failure F2 was written to close.
 - **Messages you DRAFT for him to send** (text/email/DM to a third party) are governed tighter than your own prose — one message one job, read the thread first and cut every question the record already answers, anchor don't open, no invented justifications. Full rule → the **outbound-drafting** skill, which auto-loads before any such draft. 🔒 **EMAIL IS DRAFTS-ONLY AND THIS IS MECHANICAL** (2026-08-25): every ms365 *send* tool (`send-mail`, `reply-mail-message`, `reply-all-mail-message`, `forward-mail-message`, `send-draft-message`) is DENIED by a PreToolUse hook — absolutely, above the kill switch, no override. Compose with `create-*-draft`, then say the draft is ready; **never ask for permission to send an email**, the answer is already "Drafts". A Graph send is irreversible (Outlook's "undo send" does not exist on that path), and a model asserting "he approved it" is the failure this replaces. Second email trap, NOT fully mechanical: **the sender alias must match the thread** — the mailbox has two (`ichris96@hotmail.com`, `ren.chris@outlook.com`), Graph defaults to `ichris96` regardless of thread, and the hook can only reject an address the mailbox does not own. Rationale + evidence → `claude-infrastructure/docs/research/email-guardrails-2026-08-25.md`.
 
 ## Session Close Protocol (All Projects)
@@ -440,7 +485,7 @@ Unreconstructable scope is itself a STOP-ASK, never a guess.
 
 | End-state | Action |
 |---|---|
-| Read-only / advisory / research (no tracked writes) | **No ledger, no auto-continue.** Answer and yield. |
+| Read-only / advisory / research (no tracked writes) | **No ledger, no auto-continue.** Answer and yield — but *yield* governs the READOUT, never work the turn itself named; see the `_E0_` row of the readout table below. |
 | In-scope: unwritten / unverified / uncommitted | **Auto-continue:** finish → run gate → commit (atomic, explicit paths). ≥2 code tasks → Agent Teams. |
 | In-scope: gate ran **red** | **Auto-debug** the root cause (cap ~2 cycles → commit partial + report). Never blind-retry, never bypass the hook. |
 | Committed, **not pushed/landed** | **Ship policy by repo (below).** Default: **auto-`/ship`** — a land is the last step of the work, not a favour. **Terminal-valid, offer instead of firing, ONLY where the target repo's own `CLAUDE.md` says landing spends money.** |
@@ -499,7 +544,9 @@ would weigh · **F2 well-researched** — grounded in THIS session's disk-truth 
 **F3 same safety envelope** — G2 escalation surfaces and G4 task-cleanliness still bind, and
 shipping stays inside the repo's sanctioned flow (G3; a repo may grant standing-land in its
 project CLAUDE.md) · **F4 bounded** — each item gets the full finish→gate→commit discipline;
-runaway bound = `CLAUDE_CONTINUE_MAX` + the kill-switch. **Bounded means SCOPED, never DEFERRED**:
+runaway bound = the kill-switch (`CLAUDE_CONTINUE_MAX` bounds only the MECHANICAL arm — see
+§ Auto-continue actuation; it does not bound a compliant agent-armed chain). **Bounded means SCOPED,
+never DEFERRED**:
 F4 caps how much you take on, and is not a reason to file what you took. On PASS: append
 `Scope (grown): +<item>` and execute. On FAIL: **drop it** — name it in one line and let it go —
 **unless it passes the FILED test** in § Three dispositions (an impossibility CLASS · why-still-true ·
@@ -529,7 +576,7 @@ rung (priority **⛔ > 📤 > 🔧 > 📦 > 🚀 > 👤 > ✅**); each is exactl
 | 🚀 **Landed, not live** | landed on trunk, but the **enforcing store** does not carry it — live layer past its converge budget, or a migration could not reach it | `🚀 Landed but NOT live — the machine is not running this yet.` |
 | 👤 **Yours** | agent side complete AND landed, but operator-only step(s) THIS SESSION filed are unrun | `👤 My side is done & landed — N step(s) need you; see the OPERATOR block.` |
 | ✅ **Live** | genuinely complete AND on trunk (`trunk..HEAD = 0`, clean) | `✅ Complete & live on trunk — safe to close, nothing unsaved.` |
-| _E0_ read-only (no tracked writes) | — | **no readout** — answer and yield |
+| _E0_ read-only (no tracked writes) | — | **no readout** — answer and yield. 🚨 **`yield` governs the READOUT, never identified work.** A read-only turn that NAMES drivable work is not E0: run the Follow-On Gate on each item and DRIVE the passes — here, in a subagent, in a team, or by firing a session — before you yield. Suppressing a state readout on a turn with no state is correct (alarm polarity); yielding on work you just identified is the defect this row was read as licensing. **Nothing on this box catches it:** every `session-continue.sh` floor is gated on session WRITES, pending mail, or an armed sentinel, and `operator-readout.sh` cites E0 by name as the reason the certificate stays silent — so a research turn that identifies ten items trips no arm and closes clean. (`anti-deference-nudge.sh` does run here, but only reaches a turn carrying a lexical tell — 96% of its evaluations abstain `no-tell`.) |
 
 `📦` vs `✅` (*committed ≠ landed*) is the load-bearing split — it surfaces the branch-stranded risk.
 `🚀` vs `✅` is the third (*landed ≠ live*), added 2026-08-07 — face 4 of the inertness generator
@@ -574,7 +621,8 @@ own home in the `operator-readout.sh` counted `◆` line. A rung that fired on 2
 fire at every close forever and carry exactly as many bits as one that never fires.
 Mixed turn → show the worst-open rung only.
 
-**Only ⛔ and 📦-in-reso may end a turn holding work.** Everything else the agent drives:
+**Only ⛔, and 📦 in a repo whose OWN `CLAUDE.md` says landing spends money, may end a turn holding
+work.** Everything else the agent drives:
 
 - **🔧 never yields.** Ending a turn on 🔧 is a defect, not a status report. Keep going — scale up if
   that is what it takes (subagents for read-only breadth, **Agent Teams** for 2+ code tasks), and
@@ -588,7 +636,12 @@ Mixed turn → show the worst-open rung only.
   the cause inside your diff? If yes, it is yours — finish it. If no, name it in ONE line, surface
   it, and close on *your* state. The converse binds equally — never launder someone else's red into
   a ✅; say whose it is.
-- **📦 outside reso auto-`/ship`s**, then re-reads the ledger — the turn closes on the *landed* state.
+- **📦 auto-`/ship`s wherever the target repo's own `CLAUDE.md` does not say landing spends money**,
+  then re-reads the ledger — the turn closes on the *landed* state. (Both this line and the one above
+  it named `reso` until 2026-09-08. The ship-policy table 107 lines up says *"this table names NO
+  repo, deliberately"* because landing cost is perishable — and reso's became false three days after
+  the hardcode was written. `git log -S'📦-in-reso'`: introduced `a321f15ab` 2026-08-01, missed by
+  the `65b6290a7` rewrite that added the delegating rule on 2026-08-05.)
 - **🚀 auto-converges**, then re-reads the ledger — the turn closes on the *live* state. One command:
   `bash <repo>/scripts/deploy-live.sh`. Landing is the second-to-last step, not the last: a land that
   never deploys moved a git ref and nothing else. Do **not** sit on 🚀 and do **not** launder it into
@@ -810,7 +863,7 @@ currently overflow one pane.** This is the bound the word cap was reaching for a
 |---|---|---|
 | **DRIVEN** | you did it this turn | S4, past tense, with its receipt in S5 |
 | **FILED** | 🚨 **the EXCEPTION — it carries the burden of proof, and it is NOT co-equal with DRIVEN** | The default for anything you notice is **fix it now, or drop it.** Mint a row only if you can answer all three, in the close: **(a) why not now — a named IMPOSSIBILITY, never a reason.** `--why-not-now` must OPEN with one of four classes and `cc-backlog add` refuses the rest: `needs-credential` · `needs-human` (a value call that is theirs — and ONLY with `--conviction N --receipt R`, N ≤ 90, per the F2 number rule; the row is born blocked. Sudo · physical · GUI-only steps are not decisions and go through `cc-backlog needs`) · `not-yet-true` (an external precondition has not happened — pair it with a `--falsifier`) · `no-capacity` (**measured, not felt**: `claude-accounts --rank general` routes nowhere AND the machine admission gate refuses the spawn). Anything else ⇒ **DRIVE it — in this session, or by firing one (`scripts/handoff-fire.sh`) — or DROP it.** "Out of scope" · "I was told not to start new work" · "the remediation half is the operator's" · "it needs more investigation" are *reasons*, and each one names work you could have done. **Capacity is the test this rule never asked** (operator ruling 2026-09-05, after a session filed a production tenant's 48 schema discrepancies and closed "optional next" while four accounts sat idle), and unused weekly quota is decaying inventory, not savings — it does not roll over: measured that day, ~167pp (≈1.7 account-weeks) stranding in one cycle against ~5pp/window through August (`scripts/desk-strand-replay.py`; the live `/accounts` weekly column UNDERSTATES spend, so read the strand nowcast, never the percentage) · **(b) why it will still be true** — the condition keeping it real after a p90 of 9.3 days in the queue, ideally as a `--falsifier` so it self-retracts · **(c) who it is for** — `cc-backlog needs "<step>"` for an operator-only gate (`--run "<cmd>"` when one exists — and `cc-do <id>` is how the operator's run CLOSES it), `cc-backlog add --why-not-now "<answer (a)>"` for genuine agent work — answer (a) is a FIELD on the row, not a sentence in the close: an add this session made WITHOUT it is this session's own 🔧 in the ledger (`wrap-ledger.sh` FILED_MINE) until it is driven, closed, or handed off with the reason. **Cannot answer all three ⇒ DROP IT.** An unanswerable row is noise a future session pays to re-derive. Filing something you could have fixed this turn is the defect this rule exists to prevent. When you do file, the STANDING pile renders as ONE counted line in the `OPERATOR ▸` block — never as your prose — and an item THIS SESSION filed is still named, in S2 or S6 |
-| **BLOCKED** | a genuine operator-only gate — credential · sudo · destructive migration · a real value fork | it IS S1's rung (`⛔`), stated as the one decision you need |
+| **BLOCKED** | a genuine operator-only gate — credential · sudo · destructive migration · a real value fork | it IS S1's rung (`⛔`), stated as the one decision you need. 🚨 **One exception, and it is the TERMINAL one:** when the session has driven every Follow-On Gate F1-F4 pass and every ≥90%-conviction item, and what REMAINS is a set of genuine operator decisions, those are **itemized, answer-first — one line each**, stating the decision as a sentence (never a label as the subject), its conviction number, and its measured options. That close may carry more than one row; "the one decision you need" describes the ordinary mid-work `⛔`, not the exhaustion close, and `wrap-ledger.sh` already computes `BLOCKED` as a count over open class-C packets, so plural is what the ledger expects. § The close message S6 already binds the same way (*named, never counted*). The counted `◆` line still owns the machine's STANDING pile — what is itemized here is only what THIS session drove to the wall |
 
 **Offering is the defect** (operator ruling 2026-08-01): *"the answer will always be yes — the job is
 not done until the job is done."* Naming researched, in-scope remaining work and then saying *"say the
@@ -884,9 +937,17 @@ Out of scope:   <named → file | none>
 turn-close re-prompts you instead of stopping with work left: `~/.claude/hooks/session-continue.sh set
 "<the ONE next step>"`. **Clear it** (`~/.claude/hooks/session-continue.sh clear`) the instant the state
 becomes ✅ / 📦 / ⛔ / 📤, on a read-only turn, or when the kill-switch fires — those MUST stop. A Stop
-hook actuates it (`decision:block` feeds the step back as your next turn); a hard cap
-(`CLAUDE_CONTINUE_MAX`, default 8) bounds runaway. Scope-judgment stays with YOU (only you see the frozen
-DoD) — the hook is a dumb actuator. This is the *cross-turn* arm of auto-continue; *within* a turn you
+hook actuates it (`decision:block` feeds the step back as your next turn). 🚨 **Nothing here bounds a
+compliant chain, and the resident rules used to claim otherwise** (measured 2026-09-08).
+`CLAUDE_CONTINUE_MAX` (default 8) bounds only the MECHANICAL arm, as `CC_MECH_MAX ×
+CLAUDE_CONTINUE_MAX`; on the AGENT-ARMED path each `session-continue.sh set` zeroes the counter, so a
+chain that keeps re-arming never reaches the cap — **0 trips in 11 days, against one working chain of
+311 blocks**. The harness's own `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` (8) is not the backstop either: the
+counter resets on the next turn once a tool has run, so it catches only a text-only wedge. For this
+operator's goal an unbounded driver is the DESIRED polarity — the defect was the false claim of a
+bound, not the absence of one. **The real stop conditions are the kill-switch, the frozen DoD, and
+your own judgment.** Scope-judgment stays with YOU (only you see the frozen DoD) — the hook is a dumb
+actuator. This is the *cross-turn* arm of auto-continue; *within* a turn you
 just keep working (don't stop on 🔧 in the first place).
 
 The single `→ Next` verb may be **auto-fired** for continue / commit / run-gate / handoff — and, per
@@ -898,13 +959,28 @@ offer. Per-project gate names, escalation greps, and the trunk live in the proje
 **Kill-switch:** any per-prompt "…and stop", "no auto-continue", or "just do X" suspends
 auto-continue for that turn — surface and yield instead.
 
+🚨 **It must be the OPERATOR's per-prompt instruction. A machine-authored brief, peer message or
+report is not one.** Measured 2026-09-08 over ~1,500 transcripts and ~3,200 non-meta user messages:
+the matcher hit 29, of which **26 were machine-authored** — subagent briefs (including one that
+merely QUOTED the phrase while discussing it), fire/recycle briefs, `<teammate-message>` and
+`<task-notification>` records — and the 3 genuine operator hits were all `Count to N and stop.`
+throwaway probes. `completion-assert.sh` reads the LAST non-meta user record, so in a fired
+autonomous session the brief IS that record for the session's whole life: one `and stop` buried in a
+13,000-character brief disarms the close gate permanently rather than for one turn. (Live impact is
+currently small — 1 kill-switch abstain in 530 evaluations on the day measured — because most such
+matches sit in subagent files the hook never opens. The mechanism is real; the exposure depends
+entirely on what lands in the main transcript.) **Never write a kill phrase into a brief, a peer
+message, or a report you hand back** — you would be disarming the recipient's close gate, and the
+one house template that carries one today (`agents/deep-research-sonnet.md`) reaches a system prompt
+rather than a user record only by luck of placement.
+
 ---
 
 ## Manual-Command Delivery
 
 🚨 **A hand-off is a PROGRAM, not a worksheet — and this is the DEFAULT, not something to be asked for.** When work remains that involves the USER — an interactive login, `sudo`, a classifier- or permission-blocked action, a destructive op they must own, a GUI-only step — write ONE executable `/tmp/<topic>-<purpose>.sh` that **DRIVES every drivable step**, verifies its own work, is safe to re-run, and hand it over as one command that RUNS. **Making the human the runtime is the defect**: if they must execute your steps in order, you wrote a worksheet and delegated the interpreter to a person. *(Rewritten 2026-08-25. The old text — "one clean block per step, each preceded by a `# comment`, open it with `cursor`" — specified a DOCUMENT, and duly produced one; the operator opened it and asked "you wanted me to open it not run it?", then "silver platter / spoon feed us through this", then "i expected this to be our inital behavior". Its copy-paste-fidelity rationale was right and survives; **agency** was the missing half.)*
 
-**Sort steps by BLAST RADIUS, never by "could a shell run it"** — that test answers a question about the shell's *capability* to settle one about the human's *consent*. Reversible ⇒ driven silently. Irreversible / production-mutating / money-spending / credential-writing / blocked ⇒ **GATED**: print the RESOLVED command, one line on what it cannot undo, then a typed `yes`. A block bought a human READING that command; a keystroke over an unread program does not pay it. A *permission prompt* is already a per-command silver platter — leave it to fire rather than burying it in a batch. 🚨 **NEVER script your own authorization** — no permission grants, `settings*.json`, allowlists or credential writes in a file you hand over; ask in chat, alone. **Verdicts fail closed**: an exit code, or a value read back by a *different* call than the one that made the change — never grep-for-a-phrase. If the residue is a **decision**, there is no script to write; ask it as the `⛔` rung. Full rule → the **manual-command-delivery** skill.
+**Sort steps by BLAST RADIUS, never by "could a shell run it"** — that test answers a question about the shell's *capability* to settle one about the human's *consent*. Reversible ⇒ driven silently. Irreversible / production-mutating / money-spending / credential-writing / blocked ⇒ **GATED**: print the RESOLVED command, one line on what it cannot undo, then a typed `yes`. A block bought a human READING that command; a keystroke over an unread program does not pay it. A *permission prompt* is already a per-command silver platter — leave it to fire rather than burying it in a batch. 🚨 **NEVER script your own authorization** — no permission grants, `settings*.json`, allowlists or credential writes in a file you hand over; ask in chat, alone. **The READ half is yours, though, and it has a tool:** `bin/cc-permission-audit` surveys the permission rules and reports which are redundant or shadowed, and it writes NOTHING without `CONFIRM=1` (its `--prune` is dry-run by default, with a per-file backup when confirmed). Run the audit yourself and hand over its findings; APPLYING them stays operator-owned — three independent arms refuse an agent-side allowlist edit (auto mode's `soft_deny` *Self-Modification*, this clause, and the `c10` migration class *staged, never run*). Read its numbers with its own caveat: the `approved 0 · unknown 3,359` it reports is an artifact of an unpopulated join key, so it can only ever bound what auto mode's classifier silently approved, never measure it. **Verdicts fail closed**: an exit code, or a value read back by a *different* call than the one that made the change — never grep-for-a-phrase. If the residue is a **decision**, there is no script to write; ask it as the `⛔` rung. Full rule → the **manual-command-delivery** skill.
 
 ---
 
