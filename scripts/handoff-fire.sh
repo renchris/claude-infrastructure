@@ -5147,6 +5147,48 @@ capacity_gate() {
   # behind claiming it did. `CC_FIRE_BLIND` accumulates the enabled-but-unreadable ones.
   local load_note head_note seg_note act_note
   local seg_row seg_pct seg_segs seg_lim seg_ceiling act act_ceiling
+  # ── LOAD THE PRESENCE LIBRARY INTO *THIS* SHELL, BEFORE ANY TERM READS IT ─────────────────────
+  # 🚨 THIS BLOCK IS THE ACTIVE TERM'S ONLY SOURCING SITE, AND IT MUST STAY OUT OF A SUBSHELL.
+  # Until 2026-09-08 the only site that sourced spawn-presence.sh on this path was the resolver
+  # loop inside _cc_fire_presence(), which is invoked as `$(_cc_fire_presence)` on the next line.
+  # A command substitution is a SUBSHELL: the `.` succeeded, cc_sp_operator_state answered, its
+  # output was captured — and every function it defined died with the subshell. The presence field
+  # therefore looked healthy while the ACTIVE term below, which reads cc_sp_active in the PARENT
+  # shell, found no such command and took its `act=""` branch on every single fire.
+  #
+  # MEASURED (docs/research/exhaustive-drive-2026-09-08/A11-capacity-and-venue.md §4, re-measured by
+  # its skeptic): 48 of 48 production capacity admits in ~/.claude/logs/handoffs.jsonl carried
+  # `blind: active`, against 219 test-harness admits reading `none` — the suites pin
+  # CC_FIRE_ACTIVE_OVERRIDE (setup line ~84), which takes the branch ABOVE the `command -v`, so the
+  # live branch had never once been executed by a test. 0 of 48 production fires were refused by
+  # this gate all day while the box ran 9-16 sessions mid-turn against a ceiling of 8.
+  #
+  # FAIL DIRECTION: unchanged and still OPEN. A library that genuinely cannot be resolved leaves
+  # cc_sp_active undefined, the term notes itself blind, and the fire is admitted exactly as before
+  # — this makes the instrument READABLE, it does not make a missing instrument fatal.
+  #
+  # `_cc_admit_load_presence` is the sibling resolver in scripts/lib/capacity-admit.sh (sourced at
+  # top level above, :4889-4892), and it is preferred over re-walking the paths here so both gates
+  # on this box load one library by one code path. It is guarded rather than assumed because
+  # tests/spawn-presence.bats runs capacity_gate() by EXTRACTING it into a bare shell; the
+  # script-relative fallback below is what makes this block work there and under a fixtured $HOME.
+  if ! command -v cc_sp_active >/dev/null 2>&1; then
+    if command -v _cc_admit_load_presence >/dev/null 2>&1; then
+      _cc_admit_load_presence >/dev/null 2>&1 || true
+    fi
+  fi
+  if ! command -v cc_sp_active >/dev/null 2>&1; then
+    local sp_d
+    for sp_d in "$(dirname "$_CC_KS")/lib/spawn-presence.sh" \
+                "$(dirname "$0")/lib/spawn-presence.sh" \
+                "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/spawn-presence.sh" \
+                "${HOME:-}/.claude/scripts/lib/spawn-presence.sh"; do
+      [ -f "$sp_d" ] || continue
+      # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+      . "$sp_d" 2>/dev/null || true
+      command -v cc_sp_active >/dev/null 2>&1 && break
+    done
+  fi
   # ONE presence reading for this whole evaluation (§W3 item 1) — taken before any term, so the
   # refusal and the admit can never record two different worlds for one decision.
   CC_FIRE_PRESENCE="$(_cc_fire_presence)"
