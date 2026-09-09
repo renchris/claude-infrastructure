@@ -122,6 +122,21 @@ run_leg() {
     # 0 and the stub never ran at all. That is the THIRD instance of this one shape here; the two
     # earlier ones are recorded in the own_run and gate_red comments directly above and below.
     sed -n '/^lint_own_scope() {/,/^}/p' "$REPO/scripts/ship-land.sh"
+    # selftest_ok is EXTRACTED for the same reason, and it is the FOURTH instance of this one shape
+    # (see own_run, lint_own_scope and gate_red above and below). The leg's `--selftest` preamble was
+    # re-routed through it on 2026-09-09 so an unchanged lint's detector proof can be CARRIED rather
+    # than re-run every round; undefined here it is a command-not-found, which under `set -u` with no
+    # `-e` returns 127 into `if ! selftest_ok …` and reds case 22's clean CONTROL while never running
+    # the stub at all. Extracted, not re-implemented: case 23 asserts the leg BLOCKS when --selftest
+    # fails, and that assertion now passes through this helper's rc handling.
+    sed -n '/^selftest_ok() {/,/^}/p' "$REPO/scripts/ship-land.sh"
+    printf '%s\n' 'SELFTEST_MEMO_HITS=0' 'SELFTEST_MEMO_RUNS=0'
+    # The memo lookups are STUBBED to their MISS values — which is not an invention: it is exactly
+    # ship-land's own degrade-to-the-old-gate path when scripts/lib/gate-memo.sh is absent
+    # (ship-land.sh, "DEGRADE-TO-THE-OLD-GATE STUBS"). A harness that let the real memo arm would
+    # make case 23 depend on whether some earlier run had already earned a green for the stub's blob,
+    # i.e. on state outside the test.
+    printf '%s\n' 'memo_file_hit() { return 1; }' 'memo_file_record() { return 0; }'
     # arm_nonverdict is STUBBED rather than extracted: the real one only narrates and sets
     # GATE_KILLED, which this harness does not model, but it must EXIST — an undefined one is the
     # very command-not-found being cured, and it must be OBSERVABLE, because a leg that reached the
@@ -466,8 +481,17 @@ fi'
   # file (memory: enforcement-must-live-at-the-chokepoint).
   grep -q 'permission-gate-lint.sh' "$REPO/scripts/ship-land.sh" \
     || { echo "ship-land.sh does not reference the lint — it is detection, not a gate"; false; }
-  grep -q 'PERMGATE_LINT.*--selftest' "$REPO/scripts/ship-land.sh" \
+  # THE SPELLING MOVED, THE WIRING DID NOT — and the pair below is STRONGER than the single grep it
+  # replaces. The eleven arms' `--selftest` preambles were re-routed through run_gate's selftest_ok()
+  # helper (2026-09-09, Tier 0 of the ratchet-arm memo rollout): the gate still proves the detector
+  # discriminates on every land, it just carries an EARNED green keyed on the lint's own blob rather
+  # than re-running it on a byte-identical file every round. So the assertion is now in two parts —
+  # this arm goes through the helper, AND the helper is the thing that runs `--selftest` — because
+  # grepping only for the call would no longer pin that a selftest happens at all.
+  grep -q 'selftest_ok "$PERMGATE_LINT"' "$REPO/scripts/ship-land.sh" \
     || { echo "the gate runs the lint without its --selftest — an unverified detector's clean verdict means nothing"; false; }
+  grep -q -- '"$lint" --selftest' "$REPO/scripts/ship-land.sh" \
+    || { echo "selftest_ok no longer runs --selftest at all — the helper stopped being a selftest"; false; }
   # Keyed on the VARIABLE NAME, not the assignment spelling — this read `CC_PERMGATE_OWN=` until the
   # P2 own-scope work routed all thirteen arms through own_run(), which passes the name as an
   # ARGUMENT, and it correctly went red on a change that kept the wiring and moved only its shape.

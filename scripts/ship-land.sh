@@ -2768,6 +2768,64 @@ arm_nonverdict() {  # $1=lint label · $2=optional extra hint line · $3=optiona
   GATE_KILLED=1
 }
 
+# ── THE --selftest MEMO (Tier 0 of the ratchet-arm memo rollout) ──────────────────────────────────
+# Eleven arms below open with an unconditional `<lint> --selftest`, and every one of them re-runs on
+# EVERY round of EVERY land — including the rounds a sibling's land invalidates (exit 42) before
+# they can produce a land at all. Measured 2026-09-09 over 294 land.log rows: the arms are 240,249s
+# (71.5%) of all gate time at a median 623s per round, against the ~112s of record in gate-memo.sh's
+# header; 149 of the 294 rounds (50.6%) were exit-42 re-rounds that burned 34.1h of arms for ZERO
+# lands. The selftest preambles were ~24s of that ~112s at the 2026-08-10 corpus, and the corpus has
+# TRIPLED since (218 suites 2026-07-30 → 626 today). Full measurement + the four rejected designs:
+# ~/.claude/autonomy/briefs/land-gate-concurrency-RESEARCH-2026-09-09.md.
+#
+# WHY A --selftest IS THE SOUNDEST KEY IN THE WHOLE GATE, and why this tier needs no per-lint
+# file-locality proof. A `--selftest` runs the lint against its OWN EMBEDDED FIXTURES, written into
+# a mktemp sandbox. It reads no repo file and judges no tree, so its verdict is a pure function of
+# the lint script's own blob plus the interpreters already in gate-memo's salt. That is what makes
+# this tier independent of the per-file work inside each lint's scan loop, and landable first.
+#
+# THE INVARIANT IS UNWIDENED — this changes RECOMPUTATION, never a verdict. memo_file_record is
+# reached only on rc 0, so a FAILING selftest is never cached and always re-runs and re-prints its
+# own findings; the lint's exact rc is returned unchanged, so bats-shellcheck's rc-2 ("shellcheck
+# not installed", a NON-VERDICT) stays a non-verdict instead of collapsing into a red; and
+# memo_init's refusals (dirty tree, unresolvable git dir, hasher that will not hash) leave MEMO_OK=0,
+# which makes every lookup a miss — i.e. exactly today's behaviour. There is no path here that turns
+# "I don't know" into "green" (gate-memo.sh's ONE INVARIANT, unchanged).
+#
+# EXTRA READ SET. A lint whose selftest reads a file OTHER than itself is keyed on that file too, BY
+# VALUE — the HERM_READSET / GITID_CHECKER shape. One does: pane-spawn-coverage-lint sources
+# scripts/lib/gate-memo.sh from its own SELF_ROOT (pane-spawn-coverage-lint.sh:188,362), so a change
+# to that library must convict its carried proof. If an extra file cannot be hashed the memo DISARMS
+# for that call and the selftest RUNS — an unobtainable key is a miss, never a green.
+#
+# ONE LINT IS DELIBERATELY EXCLUDED, and it is the largest. unattended-path-lint's selftest verdict
+# is a function of the INVOKER'S ENVIRONMENT and not only of its blob: installed_anywhere() probes
+# `${PATH}:…:$HOME/.claude/bin:$HOME/.local/bin:$HOME/bin` (unattended-path-lint.sh:999), and that
+# file's own header records the measured incident — `--selftest` FAILING 2/23 for a caller without
+# /sbin and passing 23/23 for one with it, "a detector whose verdict came from the invoker's
+# environment instead of from the tree". A key over its blob alone would carry a green earned under
+# one environment into another, which is precisely the stale-verdict generator the invariant above
+# forbids. Excluded rather than keyed loosely; Tier 1 owns that lint, with settings.json in its key.
+SELFTEST_MEMO_HITS=0
+SELFTEST_MEMO_RUNS=0
+selftest_ok() {  # $1=lint path · $2…=extra files its selftest READS → the lint's OWN rc, unchanged
+  local lint="$1"; shift
+  local ck="selftest:${lint##*/}" extra blob rc=0 armed=1
+  for extra in "$@"; do
+    blob="$(git hash-object -- "$extra" 2>/dev/null)" || blob=""
+    if [ -z "$blob" ]; then armed=0; break; fi
+    ck="$ck reads=$blob"
+  done
+  if [ "$armed" = "1" ] && memo_file_hit "$ck" "$lint"; then
+    SELFTEST_MEMO_HITS=$(( SELFTEST_MEMO_HITS + 1 ))
+    return 0
+  fi
+  SELFTEST_MEMO_RUNS=$(( SELFTEST_MEMO_RUNS + 1 ))
+  "$lint" --selftest >/dev/null 2>&1 || rc=$?
+  if [ "$rc" = "0" ] && [ "$armed" = "1" ]; then memo_file_record "$ck" "$lint"; fi
+  return "$rc"
+}
+
 run_gate() {  # $1=range → 0 green / 1 red
   local range="$1" p rc=0 HERM_LINT SELFPATH_LINT _arm_rc=0
   # GATE_EFFECTIVE_FULL is pinned at 0: a land makes no full-suite claim in EITHER lane, so
@@ -2782,6 +2840,7 @@ run_gate() {  # $1=range → 0 green / 1 red
   # loop gates again inside the lock. `gate_rounds` must count what actually RAN, so it counts
   # entries to this function and carries across the locked re-exec like SMOKE_* does.
   GATE_T0="$(date +%s)"; GATE_T_STATICS_END=""; GATE_T_ARMS_END=""
+  SELFTEST_MEMO_HITS=0; SELFTEST_MEMO_RUNS=0   # per ROUND, like every other measurement here
   MEAS_ROUNDS=$(( MEAS_ROUNDS + 1 ))
   # THE DEFAULT SMOKE CAUSE IS "the gate never got there", and it must be set at the TOP. Fifteen
   # ratchet arms `return 1` before the smoke phase, and every one of them used to attest the same
@@ -3151,7 +3210,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       [[ -n "$uown" ]] && echo "→ gate: utc-stamp own-scope — blocking on $(printf '%s\n' "$uown" | grep -c .) file(s) in this land's diff; others advisory." >&2
     fi
     echo "→ gate: UTC timestamp-contract ratchet (a Z suffix from a non-UTC clock)" >&2
-    if ! "$UTC_LINT" --selftest >/dev/null 2>&1; then
+    if ! selftest_ok "$UTC_LINT"; then
       echo "✗ gate: utc-stamp-lint --selftest FAILED — the detector no longer discriminates, so its" >&2
       echo "  clean verdict would mean nothing. Fix the lint before landing." >&2
       gate_red utc-stamp-selftest
@@ -3208,7 +3267,7 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
     echo "→ gate: pipefail/SIGPIPE ratchet (an early-exit pipe consumer that reads FALSE on a match)" >&2
     local pf_self=0
-    "$PF_LINT" --selftest >/dev/null 2>&1 || pf_self=$?
+    selftest_ok "$PF_LINT" || pf_self=$?
     if (( pf_self != 0 )); then
       echo "✗ gate: pipefail-sigpipe-lint --selftest FAILED — the detector no longer discriminates," >&2
       echo "  so its clean verdict would mean nothing. Fix the lint before landing." >&2
@@ -3364,7 +3423,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       [[ -n "$spown" ]] && echo "→ gate: self-path own-scope — blocking on $(printf '%s\n' "$spown" | grep -c .) file(s) in this land's diff; others advisory." >&2
     fi
     echo "→ gate: script-dir resolution ratchet (a repo root derived from an unresolved \$0)" >&2
-    if ! "$SELFPATH_LINT" --selftest >/dev/null 2>&1; then
+    if ! selftest_ok "$SELFPATH_LINT"; then
       echo "✗ gate: self-path-lint --selftest FAILED — the detector no longer discriminates, so its" >&2
       echo "  clean verdict would mean nothing. Fix the lint before landing." >&2
       gate_red self-path-selftest
@@ -3411,12 +3470,31 @@ run_gate() {  # $1=range → 0 green / 1 red
       [[ -n "$psown" ]] && echo "→ gate: pane-spawn own-scope — blocking on $(printf '%s\n' "$psown" | grep -c .) file(s) in this land's diff; others advisory." >&2
     fi
     echo "→ gate: pane-spawn coverage ratchet (a spawn site that leaves no row)" >&2
+    # THE EXTRA READ SET (selftest_ok, above the arms): this lint's selftest sources
+    # scripts/lib/gate-memo.sh from its own SELF_ROOT — deliberately, so the memo is armed from
+    # where the LINT lives and not from the synthetic corpus it scans (pane-spawn-coverage-lint.sh:
+    # 188,362). So a change to that library can change this selftest's verdict without moving one
+    # byte of the lint, and it is keyed BY VALUE alongside the lint's blob. SELF_ROOT is rebuilt
+    # here exactly as the lint builds it — symlink-resolved, then dirname/.. — rather than assumed
+    # to be the repo root, so an overridden SHIP_LAND_PSPAWN_LINT keys on the library it will
+    # actually source. An unhashable path disarms the memo for this call and the selftest runs.
+    #
+    # IT SITS ABOVE THE `gate_bounded:` BLOCK, NOT INSIDE IT, AND THAT POSITION IS LOAD-BEARING.
+    # permission-gate-lint accepts the marker on the comment block DIRECTLY ABOVE the refusal, so
+    # three lines of code wedged between the block and its `if` silently UN-DECLARE the gate: the
+    # arm's `return 1` becomes the tree's tenth undeclared guard-refusal against a ratchet of nine,
+    # and the land reds on an arm whose own text never changed. Measured on this diff's first land
+    # attempt (2026-09-09): 30/30 selftest green with origin/main's ship-land.sh, "the embedded
+    # ratchet is stale" with the wedged form — same lint, one variable.
+    local _ps_self _ps_readset
+    _ps_self="$(readlink -f "$PSPAWN_LINT" 2>/dev/null || printf '%s' "$PSPAWN_LINT")"
+    _ps_readset="$(cd "$(dirname "$_ps_self")/.." 2>/dev/null && pwd)/scripts/lib/gate-memo.sh"
     # gate_bounded: THE AUTHOR'S OWN DIFF — own-scope above means this can only refuse over a file
     # THIS land changes, so the refusal cannot outlive the diff that caused it and there is always
     # a named party who can clear it in one line. That is the budget: it expires when the diff does.
     # Set SHIP_LAND_PSPAWN_OWN_SCOPE=off and it reverts to the unbounded form, which is why the
     # scope is the declaration rather than a comment about intent.
-    if ! "$PSPAWN_LINT" --selftest >/dev/null 2>&1; then
+    if ! selftest_ok "$PSPAWN_LINT" "$_ps_readset"; then
       echo "✗ gate: pane-spawn-coverage-lint --selftest FAILED — the detector no longer" >&2
       echo "  discriminates, so its clean verdict would mean nothing. Fix the lint before landing." >&2
       gate_red pane-spawn-selftest
@@ -3476,6 +3554,13 @@ run_gate() {  # $1=range → 0 green / 1 red
       [[ -n "$upown" ]] && echo "→ gate: unattended-path own-scope — blocking on $(printf '%s\n' "$upown" | grep -c .) file(s) in this land's diff; others advisory." >&2
     fi
     echo "→ gate: bare-name binaries on unattended paths (launchd jobs + hooks + the bats corpus)" >&2
+    # NOT memoized by selftest_ok, and the omission is DELIBERATE — see its header. This lint's
+    # selftest verdict is a function of the INVOKER'S ENVIRONMENT as well as its own blob:
+    # installed_anywhere() probes `${PATH}:…:$HOME/.claude/bin:$HOME/.local/bin:$HOME/bin`
+    # (unattended-path-lint.sh:999), and its own header records the measurement — 2/23 FAILING for a
+    # caller without /sbin, 23/23 passing for one with it. A blob-only key would carry a green
+    # earned under one environment into another. It is the most expensive selftest of the eleven and
+    # it is excluded anyway: an unsound memo on a detector-validity proof is worse than the seconds.
     if ! "$UNATTENDED_LINT" --selftest >/dev/null 2>&1; then
       echo "✗ gate: unattended-path-lint --selftest FAILED — the detector no longer discriminates, so" >&2
       echo "  its clean verdict would mean nothing. Fix the lint before landing." >&2
@@ -3535,7 +3620,7 @@ run_gate() {  # $1=range → 0 green / 1 red
       [[ -n "$pgown" ]] && echo "→ gate: permission-gate own-scope — blocking on $(printf '%s\n' "$pgown" | grep -c .) file(s) in this land's diff; others advisory." >&2
     fi
     echo "→ gate: unbounded permission gates on the actuation paths (install · deploy · land)" >&2
-    if ! "$PERMGATE_LINT" --selftest >/dev/null 2>&1; then
+    if ! selftest_ok "$PERMGATE_LINT"; then
       echo "✗ gate: permission-gate-lint --selftest FAILED — the detector no longer discriminates, so" >&2
       echo "  its clean verdict would mean nothing. Fix the lint before landing." >&2
       gate_red permission-gate-selftest
@@ -3582,7 +3667,7 @@ run_gate() {  # $1=range → 0 green / 1 red
         return 1; }
     fi
     echo "→ gate: chromium-bundle ratchet (a headless screenshot path launching the full app bundle)" >&2
-    if ! "$CHROMIUM_LINT" --selftest >/dev/null 2>&1; then
+    if ! selftest_ok "$CHROMIUM_LINT"; then
       echo "✗ gate: chromium-bundle-lint --selftest FAILED — the detector no longer discriminates," >&2
       echo "  so its clean verdict would mean nothing. Fix the lint before landing." >&2
       gate_red chromium-bundle-selftest
@@ -3721,7 +3806,7 @@ run_gate() {  # $1=range → 0 green / 1 red
     # at all, so it keeps working on a host without the tool and an unresolvable range keeps
     # meaning "I wrote no line", exactly as before.
     local scrc=0
-    "$SC_BATS_LINT" --selftest >/dev/null 2>&1 || scrc=$?
+    selftest_ok "$SC_BATS_LINT" || scrc=$?
     if [[ $scrc -eq 2 ]]; then bats_sc_nonverdict; return 1; fi
     if [[ $scrc -ne 0 ]]; then
       echo "✗ gate: bats-shellcheck-lint --selftest FAILED — the lint no longer discriminates, so its" >&2
@@ -3773,7 +3858,7 @@ run_gate() {  # $1=range → 0 green / 1 red
     # --selftest alongside the scan, for the reason the UTC ratchet documents: a ratchet whose own
     # discrimination is unverified is not a gate. Its controls replay the real flaking lines from
     # f676d2f6/e90476e6 byte-for-byte, and both exemptions are proven narrow in both directions.
-    if ! "$KILL_GUARD_LINT" --selftest >/dev/null 2>&1; then
+    if ! selftest_ok "$KILL_GUARD_LINT"; then
       echo "✗ gate: bats-kill-guard-lint --selftest FAILED — the lint no longer discriminates, so its" >&2
       echo "  clean verdict would mean nothing. Fix the lint before landing." >&2
       gate_red kill-guard-selftest
@@ -3815,7 +3900,7 @@ run_gate() {  # $1=range → 0 green / 1 red
   # SHIP_LAND_TESTNAME_LINT=/nonexistent skips this block whole via the -x test.
   if [[ -d tests ]] && ls tests/*.bats >/dev/null 2>&1 && [[ -x "$TESTNAME_LINT" ]]; then
     echo "→ gate: @test-name eval ratchet (a name whose word is deleted by shell expansion)" >&2
-    if ! "$TESTNAME_LINT" --selftest >/dev/null 2>&1; then
+    if ! selftest_ok "$TESTNAME_LINT"; then
       echo "✗ gate: bats-testname-eval-lint --selftest FAILED — the lint no longer discriminates, so" >&2
       echo "  its clean verdict would mean nothing. Fix the lint before landing." >&2
       gate_red testname-eval-selftest
@@ -3866,7 +3951,7 @@ run_gate() {  # $1=range → 0 green / 1 red
     # not touch the lint, that is a lint rotting rather than a tree failing — delete the arm via
     # SHIP_LAND_LOADED_LINT=/nonexistent, which is attested in land.log, and fix the lint as its own
     # commit rather than letting a standing refusal accumulate silent lands behind it.
-    if ! "$LOADED_LINT" --selftest >/dev/null 2>&1; then
+    if ! selftest_ok "$LOADED_LINT"; then
       echo "✗ gate: loaded-untracked-lint --selftest FAILED — the lint no longer discriminates, so" >&2
       echo "  its clean verdict would mean nothing. Fix the lint before landing." >&2
       gate_red loaded-untracked-selftest
@@ -3940,6 +4025,9 @@ run_gate() {  # $1=range → 0 green / 1 red
   # the lint error AND the failing test in ONE cycle. Same reasoning as run_corpus's no-fail-fast —
   # ≤120s on an already-doomed run buys every finding named at once instead of one per round-trip.
   local rbase direct
+  if (( SELFTEST_MEMO_HITS + SELFTEST_MEMO_RUNS > 0 )); then
+    echo "→ gate: selftest memo — ${SELFTEST_MEMO_HITS} detector proof(s) carried, ${SELFTEST_MEMO_RUNS} proven fresh." >&2
+  fi
   GATE_T_ARMS_END="$(date +%s)"   # P0 phase boundary: the arms are done, the test phase begins
   # UNION SCOPE: FIRST_BASE..<this range's base> is the trunk delta siblings landed since our
   # FIRST gate — empty on round 1, non-empty on every stale-gate re-round / post-drop re-gate.
