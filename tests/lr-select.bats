@@ -297,3 +297,31 @@ run_sel() { run python3 "$SEL" "$@" --quiet; }
   run_sel
   [ "$status" -eq 2 ]
 }
+
+@test "a session whose REGISTRY row names a LIVE pid is already-running even with no --resume in any argv" {
+  # THE 2026-09-09 DEFECT: liveness was pgrep over `resume <sid>` alone — blind to every session
+  # launched WITHOUT --resume (a fresh launch), so the poller resumed 52e35019 into tmux while pane
+  # 616 still held the original process, and one transcript had two writers on one account.
+  local wt="$BATS_TEST_TMPDIR/wt/a"
+  mk .claude-next fresh "$wt" "2026-07-21T09:00:00Z" 5
+  mk .claude-next idle "$wt" "2026-07-21T01:00:00Z" 5
+  mkdir -p "$LR_SELECT_HOME/.claude/cc-registry"
+  printf '{"paneUUID":"616","session_id":"fresh","pid":%d,"account":"claude-secondary"}\n' "$$" \
+    > "$LR_SELECT_HOME/.claude/cc-registry/616.json"
+  : > "$LR_SELECT_PGREP_BIN.running"          # the argv census sees NOTHING — the row alone must convict
+  run python3 "$SEL" --scan --recency-min 0 2>&1
+  [[ "$output" == *"already-running"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"▶ RESUME  idle"* ]] || { echo "$output"; false; }
+}
+
+@test "CONTROL: a registry row whose pid is DEAD does not convict — a stale row is not a live session" {
+  local wt="$BATS_TEST_TMPDIR/wt/a"
+  mk .claude-next stale "$wt" "2026-07-21T09:00:00Z" 5
+  mkdir -p "$LR_SELECT_HOME/.claude/cc-registry"
+  printf '{"paneUUID":"616","session_id":"stale","pid":4194001,"account":"claude-secondary"}\n' \
+    > "$LR_SELECT_HOME/.claude/cc-registry/616.json"
+  : > "$LR_SELECT_PGREP_BIN.running"
+  run python3 "$SEL" --scan --recency-min 0 2>&1
+  [[ "$output" != *"already-running"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"▶ RESUME  stale"* ]] || { echo "$output"; false; }
+}

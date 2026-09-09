@@ -152,8 +152,53 @@ def read_transcript(path: Path) -> dict:
     }
 
 
+def _pid_alive(pid) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (ProcessLookupError, ValueError, TypeError):
+        return False
+    except PermissionError:
+        return True
+
+
+def registry_live_pids(sid: str) -> list:
+    """Live processes holding this sid per the session registry (~/.claude/cc-registry/<pane>.json,
+    written by each session's own SessionStart hook). THE 2026-09-09 DEFECT: liveness was pgrep
+    over `resume <sid>`, which is blind to every session launched WITHOUT --resume — i.e. every
+    fresh launch. The poller resumed 52e35019 into tmux while pane 616 still held the original
+    process (argv without --resume), and the transcript was then written by two processes on one
+    account. The registry row is the store the argv census cannot replace: it is keyed by pane,
+    names the sid, and carries the pid — memory argv-is-sampling-cwd-is-durable."""
+    home = os.environ.get("LR_SELECT_HOME") or os.path.expanduser("~")
+    regdir = os.environ.get("CC_REGISTRY_DIR") or os.path.join(home, ".claude", "cc-registry")
+    out = []
+    try:
+        names = os.listdir(regdir)
+    except Exception:
+        return out
+    for n in names:
+        if not n.endswith(".json") or n.startswith("."):
+            continue
+        try:
+            with open(os.path.join(regdir, n), encoding="utf-8") as fh:
+                row = json.load(fh)
+        except Exception:
+            continue
+        if not isinstance(row, dict) or (row.get("session_id") or row.get("sessionId")) != sid:
+            continue
+        pid = row.get("pid")
+        if _pid_alive(pid):
+            out.append({"pane": row.get("paneUUID") or n[:-5], "pid": pid, "account": row.get("account")})
+    return out
+
+
 def is_running(sid: str) -> bool:
-    """A resume already live for this sid — never re-fire over it."""
+    """A process already live for this sid — never re-fire over it. Two independent censuses, either
+    of which convicts: the registry (any live pid whose row names the sid — covers fresh launches)
+    and the argv census (`pgrep -f "resume <sid>"` — covers resumes that never registered)."""
+    if registry_live_pids(sid):
+        return True
     pgrep = os.environ.get("LR_SELECT_PGREP_BIN", "pgrep")
     try:
         r = subprocess.run(
