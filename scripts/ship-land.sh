@@ -1006,10 +1006,34 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   #
   # land_root is the durable checkout resolved in main_outer, so this label is the same string on
   # every attempt however many sandboxes observe the failure. A leading dot can only be a sandbox
-  # (`.desk-land-…`) and never a project, so it is refused rather than filed — falling through to
-  # the old cwd-derived default, which is exactly today's behaviour and not a worse one. The label
-  # is checked against scripts/dispatch-projects.conf at the chokepoint (WARN, never refuse), so a
-  # repo with no conf row still files; see EXPLICIT --project VALIDATION in cc-backlog.
+  # (`.desk-land-…`) and never a project, so it is refused rather than filed. The label is checked
+  # against scripts/dispatch-projects.conf at the chokepoint (WARN, never refuse), so a repo with no
+  # conf row still files; see EXPLICIT --project VALIDATION in cc-backlog.
+  #
+  # ⚠ THE REFUSAL IS ONLY HALF A GUARD, AND THIS COMMENT USED TO SAY OTHERWISE (corrected
+  # 2026-09-09). It read "falling through to the old cwd-derived default, which is exactly today's
+  # behaviour and not a worse one" — true as a comparison against the pre-fix state, and false as
+  # the reassurance it reads like. cc-backlog's `project_default` resolves the CWD, and on the one
+  # path that can produce a dot label the cwd IS that sandbox, so refusing the explicit label and
+  # then defaulting derives THE SAME VOLATILE STRING one layer down. Measured on this producer's own
+  # bytes (tests/land-reland-row-identity.bats' fixture, LAND_MAIN_ROOT forced empty): two attempts,
+  # two rows, projects `.desk-land-feat-stuck-1111` / `-2222` — the pre-fix defect exactly, through
+  # the guard. What stops it is never the guard: it is that land_root is resolved EARLY, and three
+  # independent arms hold that. (1) desk-land.sh — the only caller that creates a dot-named sandbox
+  # — exports SHIP_LAND_LAND_ROOT (grep it in scripts/desk-land.sh), which resolve_main_root returns
+  # before it consults git at all. (2) main_outer assigns LAND_MAIN_ROOT before it calls inflight_claim (line
+  # numbers deliberately omitted — they shift; the ORDER is what the test asserts, by name),
+  # and the inbox files only past that claim, so the resolution always happens while the worktree is
+  # still alive. (3) `--path-format=absolute` needs git >= 2.31 (2.54 here). Live confirmation: 194
+  # distinct rows of this class across 194 distinct branches since 2026-08-20, zero duplicates, all
+  # under `claude-infrastructure`.
+  #
+  # SO IT IS LATENT, NOT LIVE, AND IT IS LEFT ALONE ON PURPOSE. Every remedy costs more than the
+  # residual: the degraded path has no durable label to reach for — git is what failed — so a fix
+  # can only invent a sentinel, i.e. mint a NEW undispatchable label class beside the 250 pre-fix
+  # rows, for a path guarded three ways. The ordering in (2) is the load-bearing arm and is pinned
+  # as a test rather than left to this comment; a refactor that claims the marker first re-opens
+  # this, and that is what goes red.
   land_proj="$(basename "$land_root" 2>/dev/null || true)"
   local -a nargs
   # 🚨 THIS ROW IS AGENT WORK, SO IT IS FILED OPEN — `add`, NOT `needs` (2026-09-06, BACKLOG_ZERO §6).
