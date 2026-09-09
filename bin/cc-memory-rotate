@@ -419,7 +419,7 @@ ENTRY_RX='^- \[[^]]*\]\(([A-Za-z0-9][A-Za-z0-9._-]*\.md)\)'
 # this on the hot surface" and the destination IS a hot surface. See the header for why the tail
 # guard in particular could not bind here without making the mode a permanent no-op.
 route_veto() {
-  local ln="$1" f="$2" nm t
+  local ln="$1" f="$2" nm t d
   if [ -z "$f" ]; then echo unparseable; return 0; fi
   if [ ! -f "$DIR/$f" ]; then echo dangling; return 0; fi
   case "$ln" in *PINNED*) echo pinned; return 0 ;; esac
@@ -427,6 +427,25 @@ route_veto() {
   case "$nm" in feedback-*|reference-*|user-*) echo type; return 0 ;; esac
   t=$(awk 'NR<=12 && /^[[:space:]]*type:[[:space:]]*/ {sub(/^[[:space:]]*type:[[:space:]]*/,""); print $1; exit}' "$DIR/$f" 2>/dev/null || true)
   case "$t" in user|feedback|reference) echo type; return 0 ;; esac
+  # ALREADY CITED. The destination is an ALWAYS-LOADED file, so a second citation of the same
+  # topic body is not redundancy on a cold surface — it is context spent by every session that
+  # loads the file, forever, to say a thing the reader has already read.
+  #
+  # Measured 2026-09-09: this rotor routed `screen-oracle-is-only-true-at-its-measured-geometry.md`
+  # off MEMORY.md into a rules file that ALREADY cited that same body — leaving two bullets
+  # pointing at one topic file with different wording, the richer of the two being the incumbent.
+  # The move was otherwise correct (the index was over its loader cap and the line had to leave),
+  # which is why this is a veto on the DESTINATION rather than a bug in the eviction predicate:
+  # the right answer there is "the index may drop this line, because it is already reachable".
+  #
+  # Keyed on the topic filename inside a markdown link TARGET — `](<file>)` — which is the one
+  # form a citation must take to be followable. A `](.)`-form entry names no file, cites nothing
+  # a reader can open, and so can never collide here. grep -F: a topic filename is a literal,
+  # and `.` in `foo.md` would otherwise match any character.
+  d="$(route_dest_for "$f")"
+  if [ -n "$d" ] && [ -f "$d" ] && grep -qF "]($f)" "$d" 2>/dev/null; then
+    echo already-cited; return 0
+  fi
   return 0
 }
 

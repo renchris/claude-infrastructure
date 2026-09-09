@@ -758,6 +758,50 @@ mkbreach() {
   [ "$(eff "$d/MEMORY.md")" -ge 3000 ]
 }
 
+# ── the destination is ALWAYS-LOADED, so a second citation of one body is pure context cost ────
+# Measured 2026-09-09: this rotor routed screen-oracle-is-only-true-at-its-measured-geometry.md
+# off MEMORY.md into a rules file that already cited that same body, leaving two bullets pointing
+# at one topic file with different wording. The eviction was right — the index was over its loader
+# cap — so the veto belongs on the DESTINATION, not on the eviction predicate.
+
+@test "route: an entry the destination ALREADY cites is not routed a second time" {
+  d="$(mkmem dup1)"; mkbulk "$d"
+  rules="$BATS_TEST_TMPDIR/rulesdup/agent-operating-lessons.md"
+  mkdir -p "$(dirname "$rules")"
+  # the incumbent citation — a DIFFERENT wording of the same body, which is exactly the live shape
+  printf '# Always-loaded project rules\n\n- [a01 said better](a01.md) — the incumbent wording\n' >"$rules"
+  run "$SCRIPT" --rules-file "$rules" "$d/MEMORY.md"
+  [ "$status" -eq 0 ]
+  has "$output" 'verdict=rotated'
+  # exactly ONE line in the destination points at a01.md — the incumbent, untouched
+  [ "$(grep -cF -- '](a01.md)' "$rules")" -eq 1 ]
+  grep -qF -- '[a01 said better](a01.md)' "$rules"
+  # CONTROL, same run, one variable: a sibling the destination does NOT cite still routes.
+  [ "$(grep -cF -- '](a02.md)' "$rules")" -eq 1 ]
+}
+
+@test "route CONTROL: with an EMPTY destination both entries route — the veto is the citation" {
+  d="$(mkmem dup2)"; mkbulk "$d"
+  rules="$BATS_TEST_TMPDIR/rulesdup2/agent-operating-lessons.md"
+  run "$SCRIPT" --rules-file "$rules" "$d/MEMORY.md"
+  [ "$status" -eq 0 ]
+  has "$output" 'verdict=rotated'
+  [ "$(grep -cF -- '](a01.md)' "$rules")" -eq 1 ]
+  [ "$(grep -cF -- '](a02.md)' "$rules")" -eq 1 ]
+}
+
+@test "route: a '](.)'-form incumbent names no file and cannot veto anything" {
+  d="$(mkmem dup3)"; mkbulk "$d"
+  rules="$BATS_TEST_TMPDIR/rulesdup3/agent-operating-lessons.md"
+  mkdir -p "$(dirname "$rules")"
+  # the unindexed form used all over the live file: it cites no followable file, so a routed
+  # entry must not be suppressed by it.
+  printf '# rules\n\n- [something](.) — a self-contained lesson citing no topic file\n' >"$rules"
+  run "$SCRIPT" --rules-file "$rules" "$d/MEMORY.md"
+  [ "$status" -eq 0 ]
+  [ "$(grep -cF -- '](a01.md)' "$rules")" -eq 1 ]
+}
+
 @test "citation on demotion: the rules file gains a pointer naming each demoted topic file" {
   d="$(mkmem cite1)"; mkbreach "$d"
   rules="$BATS_TEST_TMPDIR/rules/agent-operating-lessons.md"
