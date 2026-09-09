@@ -128,6 +128,18 @@ this shape must read the **content of the `dodRef`**, not the item's fields — 
 §3 of the research doc proposed. Full measurement, the two-step stopgap that *does* park it, and the
 re-measured refusal grounds → `docs/research/venue-foreign-master-redispatch-2026-08-17.md` §9.
 
+🚨 **CORRECTION 2026-09-09 (seventh fire, the first LOCAL one) — everything above is about the CLOUD
+venue, and the clause it hands forward is false for the LOCAL one.** The park's `needs:` says *"no
+claude-infrastructure worker, cloud or local, can reach those two checkouts"*; the `or local` half
+was never measured and is wrong. On the operator's box both trees are present as full clones (reso
+5,396 commits, doc_classifier 1,071), `git worktree add` + write into reso succeeds, reso ships a
+`/ship` rail, and **both repos already have `repo=` rows in `scripts/dispatch-projects.conf`** — so
+the member rows do not merely *route* correctly, they are dispatchable to a worker that holds the
+tree, which is the fix this section spent four entries asking for. What remains true is the narrower
+statement this section opened with: **the master row is a coordination header, not a unit of work.**
+Disproof `aebd58a8d03c`; see the 2026-09-09 status-log entry for what re-measuring the waves then
+found (R1 refuted in full, R2 decayed, R4 live).
+
 | Wave | Execution locus | Deliverable | Depends on |
 |---|---|---|---|
 | **R1 · reso: unblock the gate** | **S** (reso worktree) | `pnpm lint` green on `origin/main`; a fresh worktree can pass `ship-land` | — |
@@ -149,12 +161,28 @@ point:** between R2 and R3.
 
 ## Sub-waves
 
-### R1 · reso: the gate is red on trunk, so nothing can land
-`pnpm lint` is RED on `origin/main` — 122 `import-x/extensions` errors on `styled-system/{css,jsx,recipes}`
-imports — and it is *unusable* in a fresh worktree for the same reason. `next-env.d.ts` is gitignored,
-generated, and absent, so a fresh worktree cannot pass `ship-land`'s typecheck gate. `tsconfig.json`
-excludes `scripts/bottle-gen*.ts`, so typecheck is blind to the whole image-generation surface.
-Provisioner scripts have ZERO eslint coverage (`eslint.config` globally ignores `scripts/**`).
+### R1 · reso: the gate is red on trunk, so nothing can land — DONE (all four claims REFUTED 2026-09-09)
+
+🚨 **REFUTED IN FULL, and three of the four fixes predate this wave's own filing date.** Measured
+2026-09-09 by the seventh dispatch of `8f59467c92b0` — the first one fired LOCALLY, where the reso
+tree is actually reachable. Run in a disposable worktree off `origin/main` (`dec92dd1b4`, 7,202
+commits, newest 2026-09-08), `pnpm install --frozen-lockfile` then the repo's own gates:
+
+| Claim as filed | Verdict | Cure |
+|---|---|---|
+| `pnpm lint` RED — 122 `import-x/extensions` errors on `styled-system/{css,jsx,recipes}` | **REFUTED** — `pnpm run lint` exits 0, zero `import-x/extensions` hits (5 unrelated warnings) | `7f1259b31`, 2026-08-11 — **1 day BEFORE filing** |
+| a fresh worktree cannot pass typecheck (`next-env.d.ts` gitignored/absent) | **REFUTED** — `pnpm install` auto-writes it via `ensure_next_env()` in `scripts/prepare-cached.sh`; `pnpm run typecheck` exits 0 | `62d3515fb`, 2026-09-04 |
+| `tsconfig.json` excludes `scripts/bottle-gen*.ts`, so typecheck is blind there | **REFUTED** — no bottle-gen entry in `exclude`; typecheck covers it | `8ae804895`, 2026-08-12 — **same day as filing** |
+| provisioner scripts have ZERO eslint coverage (`eslint.config` globally ignores `scripts/**`) | **REFUTED** — the blanket ignore is gone; `!scripts/lib` and `!scripts/setup` un-ignores carry a comment naming this exact defect | `4ce09ec55`, 2026-08-07 — **5 days BEFORE filing** |
+
+**The generalizable lesson, and it is why this wave burned seven dispatches:** a wave's premise is a
+claim made on its filing day and nothing re-reads it. Three of these four were *already false when
+written* — the wave was authored from a survey taken earlier than its own filing — and the fourth
+went false 5 days later. Every fire since has treated R1 as the live dependency root of R2. **R1
+blocks nothing; reso's gate is green and its `/ship` rail is live** (`scripts/land-status.sh` this
+session: Amplify auto-build OFF, Path F watches `refs/heads/release`, verifier green, deploy at
+trunk tip). Per reso's own `CLAUDE.md`, *"`/ship` is FREE and agent-driven; `/deploy` is the
+operator's explicit call."*
 
 ### R2 · reso: the landing queue
 Four branches hold unlanded value: heat-v2 / walk-in rebuild (39 commits on `cc-225947-27025`,
@@ -162,6 +190,29 @@ worktree `wt-pool-1`), platform-page (25 commits), bottle-service VT choreograph
 bottle-service menu. Several are blocked on `design:gate` red **from machine saturation, not from the
 diff** — so retry on a quiet machine before touching the code (memory:
 `bound-must-fit-the-band-not-the-bench`). Settle `wt-pool-1` BEFORE any main history rewrite.
+
+🚨 **RE-MEASURED 2026-09-09 — the queue has DECAYED past "land it", and the framing must change.**
+`R1` is refuted above, so this wave is no longer blocked on it; what blocks it now is arithmetic.
+Measured against `origin/main` = `dec92dd1b` (2026-09-08):
+
+| Branch | ahead | **behind** | last commit | vs `origin/main` |
+|---|---|---|---|---|
+| `origin/cc-225947-27025` (heat-v2 / walk-in) | 39 | **1,671** | 2026-08-03 | 2,808 files, +375,372 / **−884,268** |
+| `origin/cc-135842-3950` (bottle-service VT) | 11 | **1,792** | 2026-08-01 | 2,747 files, +333,085 / **−918,338** |
+| BALLAST `efb3f4c6b` | — | — | 2026-08-02 | not an ancestor of trunk; lives on `cc-025105-23721` |
+
+**Read the deletion column, not the ahead column.** These branches are ~1,700 commits behind a trunk
+that has moved on; a merge lands ~900K deletions and would revert most of a month of trunk. "Land the
+4 branches (87+ commits)" is no longer the right verb for any of them — the live question per branch
+is *which specific content is still absent from trunk and worth cherry-picking*, which is a
+content-diff question, not a landing one. The plan's count of four is also wrong in both directions:
+measured, **~40 refs sit ahead of `origin/main`**, and reso's own `land-status.sh` separately reports
+7 stranded local-only branches.
+
+Each of these already has its own correctly-projected `reso-management-app` backlog row
+(`420af2f142dd`, `1684440567db`, `6367e1eba8fb`, `fc06e9597fa7`), all currently `blocked` — and
+three of those four carry a `REASON CORRECTED` note saying the cost premise that blocked them is
+itself false. Those rows, not this wave, are the handles.
 
 ### R3 · reso: production split-brain
 Amplify Oregon frozen ~7 h / 24 commits with `autoBuild=False` on `main` and no `release` branch
@@ -177,12 +228,87 @@ mints a fresh `PyJWKClient` per token (pre-auth JWKS fetch amplification, PoC-pr
 toolchain wheel is fetched with no `--require-hashes` and no `--index-url`. Three gate-green branches
 are waiting to merge. **These are the security members of this group — work them first.**
 
+🚨 **RE-MEASURED 2026-09-09 — this is the ONE wave whose premise HELD, and it is still live on
+`origin/main` a month later.** Read against `doc_classifier` `origin/main` = `31dc8809`
+(2026-08-22), which has not moved in 18 days:
+
+- **Defect 1 + 2 CONFIRMED PRESENT.** `reviewapp/api/routers/run.py` defines exactly six routes —
+  `@_run.get("/progress")` `:881`, `/latest` `:911`, **`@_run.post("/start")` `:928`**, `/results`
+  `:972`, `/report` `:1045`, and `@router.get("/api/capabilities")` `:1078`. Every one takes
+  `Depends(get_run_monitor_root)` **and nothing else**. `require_role` *exists*
+  (`reviewapp/api/auth.py:152`) and is applied to none of them, so the guard is present in the
+  codebase and absent from the routes. `/start` reaches `subprocess.Popen` at `:402`.
+- **Defect 3 CONFIRMED PRESENT.** `auth.py:73` still constructs
+  `jwt.PyJWKClient(settings.jwks_url, cache_keys=True)` **inline per call** — `cache_keys=True`
+  caches inside an instance that is discarded each token, so the cache cannot span tokens and the
+  pre-auth JWKS fetch amplification stands as filed.
+- **Defect 4 NOT VERIFIED either way** — searched `origin/main` for a hash-pinned uv wheel fetch and
+  found only prose references in `scripts/setup.sh` (`:19`, `:248`, `:369`). Recorded as unverified
+  rather than asserted in either direction.
+
+**The cure is already written and is 3 commits.** Branch `wt-35cae65a8d2d` = `e601a10e` *"the run
+plane answers — and starts runs for — only a loopback caller"* + `ed16f861` (Azure status) +
+`0e9215b3` (corpus census), adding `dependencies=[Depends(require_loopback_client)]` at the router
+(`:103`) plus tests in `test_run_control.py` (+143), `test_corpus_scan.py`, `test_azure_status.py`,
+`test_auth.py`. It is **3 ahead / 2 behind** trunk — a trivial rebase, unlike R2's branches.
+Siblings `wt-90eed49dd55c` (2 ahead/2 behind) and `wt-b45a6b831506` (1 ahead/2 behind) are the same
+shape.
+
+**Why it has not landed, and it is NOT a stale premise.** `doc_classifier` has **no ship rail and no
+`CLAUDE.md`** — no `scripts/ship*`, no `.claude/commands/`, only a `settings.local.json`. The
+standing rail is *land only via the project-local `/ship`, never a bare push*, so there is no
+sanctioned agent landing path in this repo at all. This is the genuine operator gate behind
+`35cae65a8d2d` / `e3d8a8cf90a4` / `8c7f7ae4ee4d`, and it is a **live unauthenticated
+process-spawn route on a product's trunk**, not a filing artifact. Closing it needs either the
+operator's merge, or a `/ship` rail built for this repo — the latter being ordinary agent work that
+nobody has been asked for.
+
 ## Definition of done
 Both product trees can land: their gates are green on trunk and in a fresh worktree, the unlanded
 branch queue is empty or explicitly abandoned with reasons, the production deploy path is
 single-brained and audited, and doc_classifier's authorization holes are closed with tests.
 
 ## Status log
+- **2026-09-09 — SEVENTH fire, the FIRST one fired LOCALLY, and it refutes the sentence all six
+  priors were built on.** Every previous entry ends by citing the park's `needs:` clause verbatim:
+  *"re-file R1-R4 as per-repo plans inside the reso-management-app and doc_classifier trees — **no
+  claude-infrastructure worker, cloud or local, can reach those two checkouts**."* The cloud half is
+  true and six VM fires prove it. **The `or local` half is FALSE, and it was never once measured.**
+  Measured here, on the operator's box: `~/Development/reso-management-app` is present at **5,396**
+  commits (`shallow=false`) and `~/Development/doc_classifier` at **1,071**; `git worktree add` into
+  reso succeeded and a write into it succeeded; reso ships a full rail
+  (`.claude/commands/ship.md`, `scripts/land-lock.sh`, `scripts/ship-reconcile.sh`); and **both
+  repos are already rows in `scripts/dispatch-projects.conf` with `repo=` paths**, i.e. the routing
+  fix the 08-15 entry called for as one of four candidate mechanisms *already shipped* for the
+  members. Disproof filed as `aebd58a8d03c`, naming this id.
+  **(1) What that changes, and it is the whole disposition.** The recorded operator step rests on a
+  false premise, and the six-fire narrative — *"the venue is refuted"* — does not extend to fire 7.
+  Nothing was unreachable here. The waves were re-measured directly, and the finding is that **the
+  plan itself had gone stale in three of its four waves while every fire was busy litigating the
+  venue**:
+  **R1 — REFUTED IN FULL**, and 3 of its 4 claims were *already false on its own filing day*
+  (`4ce09ec55` 08-07, `7f1259b31` 08-11, `8ae804895` 08-12, `62d3515fb` 09-04). reso's gate is
+  green, `/ship` is live and free. R1 is marked DONE above. **Six fires treated R1 as the live
+  dependency root of R2; it had never been one.**
+  **R2 — DECAYED**, not blocked: the branches are 1,671-1,792 commits BEHIND trunk and diff at
+  ~900K deletions, so "land the queue" is the wrong verb; see the table in R2.
+  **R4 — HELD, and it is the live one.** The three security defects reproduce on `doc_classifier`
+  `origin/main` today; the cure is 3 commits on `wt-35cae65a8d2d`, 3 ahead / 2 behind. Its blocker
+  is genuine and unchanged: that repo has **no ship rail and no `CLAUDE.md`**, so no sanctioned
+  agent landing path exists.
+  **(2) 🚨 The generalizable defect, which is bigger than this row: a plan is not a queue, and a
+  wave's premise is never re-read.** `cc-discover` mints `advance <title>` from a plan HEADING and
+  `plan-phase-scan.sh` reports a section PENDING until its heading says otherwise — neither reads
+  whether the section's *claims are still true*. So a wave authored from an already-stale survey
+  stays dispatchable forever, and each fire re-derives the venue question rather than the premise
+  question. Seven workers were spent before anyone ran `pnpm lint`. **The falsifier probe attached
+  to this row cannot catch it either** — it asks the plan whether sections are marked DONE, which is
+  a question about markup, not about the world.
+  **(3) Disposition: BLOCKED on the one gate that is genuinely the operator's** — the
+  `doc_classifier` landing rail — with the false `needs:` clause replaced by a true one. NOT parked
+  as unreachable, NOT reopened (that re-cycles it), and NOT closed `done`: R3 and R4 hold real work.
+  The master row stays a coordination header; its members already route correctly and are the
+  handles.
 - **2026-09-02T08:20Z — SIXTH fire, and it is the one that NARROWS the cause from three candidates
   to one.** `8f59467c92b0` reached a sixth cloud VM of the identical shape (`$HOME` `/root`,
   `~/Development` absent, `/home/user` holding `claude-infrastructure` alone, clone 50 commits with
