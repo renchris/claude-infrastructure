@@ -60,6 +60,20 @@ setup() {
   # (~50 live rows on this box). Empty fixture dir = no peer = the strict disposition these tests
   # were written against.
   export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  # HERMETIC #5 — THE OTHER HOOK'S STORES. The double-block arm at the bottom drives the REAL
+  # hooks/session-continue.sh (deliberately: a stubbed writer is how two hooks drift apart about a
+  # file format). That hook does NOT read COMPLETION_IDL — its seams are CONTINUE_IDL /
+  # CONTINUE_LOG (session-continue.sh:79-80), and CC_IDL, which belongs to hooks/lib/idl-log.sh.
+  # `dbl_setup` did export the first two, but it was invoked from a command substitution, so every
+  # export in it died with the subshell (MEMORY.md
+  # assignment-inside-command-substitution-never-escapes) and the isolation never bound. Measured
+  # 2026-09-08: 312 rows carrying sid `dbl-1`/`dbl-3`/`dbl-4` — 156 of the 605 `fired continue`
+  # records — plus 318 log lines, in the OPERATOR's live pair. A suite that writes into the store
+  # the fleet is measured from is not a test, it is a data source.
+  # Pinned HERE, where an export actually survives; `dbl_setup` still overrides per tag.
+  export CONTINUE_IDL="$BATS_TEST_TMPDIR/continue-idl.jsonl"
+  export CONTINUE_LOG="$BATS_TEST_TMPDIR/continue.log"
+  export CC_IDL="$BATS_TEST_TMPDIR/cc-idl.jsonl"
 }
 
 # Reap the fake peers the LIVE-PEER-OWNED tests spawn. Reading the pid list from a FILE, not a
@@ -1777,16 +1791,21 @@ mkfix_user() { # <assistant-close> <last-user-msg> → transcript path
 # hooks must agree on a path AND a file format, which is exactly the pair that drifts when a test
 # stubs one side (MEMORY.md sibling-auditors-must-share-the-state-model). Both resolve it through
 # hooks/lib/continue-sentinel.sh, so CLAUDE_CONFIG_DIR is the only thing the fixture has to share.
-dbl_setup() { # <tag> → echoes the repo cwd, with both hooks pointed at one fixture config dir
+# CALLED DIRECTLY, NEVER FROM A COMMAND SUBSTITUTION, AND IT PUBLISHES THROUGH $DBL_W. Every
+# export below is the point of this helper, and calling it inside `$( )` discarded all four with
+# the subshell — so both hooks used the OPERATOR's real config dir, mailbox, IDL and log instead of
+# one fixture (MEMORY.md assignment-inside-command-substitution-never-escapes; the leak that caused
+# is measured in setup() above).
+dbl_setup() { # <tag> → sets $DBL_W to the repo cwd, both hooks pointed at one fixture config dir
   export CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/dblcfg-$1"; mkdir -p "$CLAUDE_CONFIG_DIR/state"
   export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/dblmbox-$1"; mkdir -p "$CC_MAILBOX_DIR"
   export CONTINUE_IDL="$BATS_TEST_TMPDIR/dblidl-$1.jsonl"
   export CONTINUE_LOG="$BATS_TEST_TMPDIR/dbllog-$1"
-  mkrepo_unlanded "$1"
+  DBL_W="$(mkrepo_unlanded "$1")"
 }
 
 @test "double-block E2E: session-continue blocks ⇒ this hook YIELDS its ledger arm (one message)" {
-  local w; w="$(dbl_setup dbl1)"
+  local w; dbl_setup dbl1; w="$DBL_W"
   # the REAL writer: arm the continuation, then run its Stop from that cwd — it blocks and, in doing
   # so, writes the per-Stop marker this hook reads.
   ( cd "$w" && CLAUDE_CODE_SESSION_ID=dbl-1 bash "$REPO/hooks/session-continue.sh" set "finish it" ) >/dev/null
@@ -1800,7 +1819,7 @@ dbl_setup() { # <tag> → echoes the repo cwd, with both hooks pointed at one fi
 }
 
 @test "double-block CONTROL: with session-continue SILENT, the ledger arm still fires" {
-  local w; w="$(dbl_setup dbl2)"
+  local w; dbl_setup dbl2; w="$DBL_W"
   # No sentinel armed and the floors off ⇒ session-continue emits nothing and writes no marker.
   printf '{"cwd":"%s","session_id":"dbl-2","transcript_path":""}' "$w" \
     | CC_WAKE_FLOOR=0 CC_SHIP_FLOOR=0 bash "$REPO/hooks/session-continue.sh" >/dev/null 2>&1
@@ -1812,7 +1831,7 @@ dbl_setup() { # <tag> → echoes the repo cwd, with both hooks pointed at one fi
   # Over-suppression is the failure mode a sentinel- or sidecar-keyed guard would have had: both
   # persist, so they would silence this hook for every later Stop. session-continue clears the
   # marker at the top of each Stop, so the yield lasts exactly one.
-  local w; w="$(dbl_setup dbl3)"
+  local w; dbl_setup dbl3; w="$DBL_W"
   ( cd "$w" && CLAUDE_CODE_SESSION_ID=dbl-3 bash "$REPO/hooks/session-continue.sh" set "finish it" ) >/dev/null
   printf '{"cwd":"%s","session_id":"dbl-3","transcript_path":""}' "$w" \
     | bash "$REPO/hooks/session-continue.sh" >/dev/null 2>&1          # STOP 1 — blocks, marks
@@ -1823,9 +1842,30 @@ dbl_setup() { # <tag> → echoes the repo cwd, with both hooks pointed at one fi
   [ "$status" -eq 0 ]; fired "$output"
 }
 
+@test "double-block HERMETICITY: driving session-continue writes NOTHING to the live IDL/log" {
+  # THE LEAK THIS SUITE WAS (A07-sk2 M2, 2026-09-08). The arm above drives the real
+  # session-continue.sh 16 times, and that hook writes its dispositions to CONTINUE_IDL /
+  # CONTINUE_LOG — seams this suite pinned only inside `dbl_setup`, which ran in a subshell. So
+  # every run appended to the operator's `~/.claude/autonomy/idl.jsonl`: 312 fixture rows, 156 of
+  # the 605 `fired continue` records the fleet is measured from. The census read its own test
+  # harness back as production behaviour.
+  # THE ASSERTION IS ON THE DEFAULT PATH, not on the pinned one — pointing $HOME at a fixture makes
+  # the hook's UNPINNED destination land somewhere observable. Pre-fix these two files appear;
+  # post-fix nothing is written outside $BATS_TEST_TMPDIR.
+  local h="$BATS_TEST_TMPDIR/leakhome"; mkdir -p "$h"
+  local w; dbl_setup dbl5; w="$DBL_W"
+  ( cd "$w" && HOME="$h" CLAUDE_CODE_SESSION_ID=dbl-5 bash "$REPO/hooks/session-continue.sh" set "finish it" ) >/dev/null 2>&1
+  printf '{"cwd":"%s","session_id":"dbl-5","transcript_path":""}' "$w" \
+    | HOME="$h" bash "$REPO/hooks/session-continue.sh" >/dev/null 2>&1
+  [ ! -e "$h/.claude/autonomy/idl.jsonl" ]
+  [ ! -e "$h/.claude/logs/session-continue.log" ]
+  # …and the pinned pair DID receive it, so this is isolation, not a hook that stopped logging.
+  [ -s "$CONTINUE_IDL" ]
+}
+
 @test "double-block SEAM: CC_DOUBLE_BLOCK_GUARD=0 restores the old double-block" {
   # The kill switch is what attributes the yield to THIS code rather than to the fixture.
-  local w; w="$(dbl_setup dbl4)"
+  local w; dbl_setup dbl4; w="$DBL_W"
   ( cd "$w" && CLAUDE_CODE_SESSION_ID=dbl-4 bash "$REPO/hooks/session-continue.sh" set "finish it" ) >/dev/null
   printf '{"cwd":"%s","session_id":"dbl-4","transcript_path":""}' "$w" \
     | bash "$REPO/hooks/session-continue.sh" >/dev/null 2>&1
