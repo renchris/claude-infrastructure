@@ -32,3 +32,36 @@
 # Union is right for an append-only occurrence log, not for prose that argues with itself.
 # Add a file here only after checking it has that same shape.
 docs/research/venue-foreign-repo-recurrence-2026-08-17.md merge=union
+
+# ---------------------------------------------------------------------------
+# Second entry, 2026-09-09. Same shape, same reason, different file.
+#
+# THE MEASUREMENT. `.claude/rules/agent-operating-lessons.md` is written by EVERY session's
+# memory rotor — `bin/cc-memory-rotate:502` routes demotion pointers there precisely because
+# that file has no 25,000-char cap. Each session appends in its own worktree and then
+# rebase-lands, so every branch collides on the same end-of-file hunk. Pane 629 measured it on
+# 2026-09-09: FIVE consecutive rebase conflicts on this one file, and it gave up and DROPPED a
+# rotor commit of 26 demotion-pointer stubs — "every session's rotor appends to its tail faster
+# than a 20-min gate can close". The rotor already holds a local lock, so this is NOT an
+# unlocked-write race: the contention is at the GIT layer, between independently committed
+# branches, where no in-process lock can reach.
+#
+# WHY UNION IS CORRECT HERE AND NOT A SHORTCUT — checked against the rule the block above sets
+# ("add a file here only after checking it has that same shape"), not assumed. Over the file's
+# ENTIRE history: 58 lines added, ZERO deleted. Every line is either a `- ` pointer bullet or a
+# rotor `<!-- routed ... -->` comment, and every write is a `>>` append at EOF
+# (cc-memory-rotate:592). Nothing in it ever argues with itself, so concatenating both sides is
+# what a human resolving it by hand would do every time — which is exactly what three separate
+# briefs written the same night each said by hand, in prose, to their readers.
+#
+# PROVEN, NOT ASSUMED, AND ON REBASE SPECIFICALLY — the observed failure is a rebase, and a
+# driver that fires on `git merge` while missing rebase would silently restore the conflict
+# everyone believes is fixed. tests/gitattributes-union-merge.bats asserts BOTH halves in a
+# throwaway scratch repo: WITHOUT this line the rebase of two divergent appends exits 1 with
+# conflict markers; WITH it the same rebase exits 0 carrying both lines. The control fails, so
+# the test can fail.
+#
+# KNOWN RESIDUAL, ACCEPTED. Union concatenates, so two sessions appending a BYTE-IDENTICAL line
+# yield it twice. On an append-only lessons file that is benign and visible; dedupe is
+# deliberately not built.
+.claude/rules/agent-operating-lessons.md merge=union
