@@ -111,20 +111,54 @@ def scan_file(path):
                     for m in RUNG_BLOCK.finditer(t):
                         seg = t[m.start():m.start() + 4000]
                         f = {k: v for k, v in re.findall(r"(?m)^([A-Z_]+)=(.*)$", seg)}
+                        # THE LAST FIELD OF THE BLOCK CARRIES A JSON TAIL. `_texts` re-dumps the
+                        # toolUseResult dict and un-escapes its newlines, so the final line of the
+                        # emitted block ends `…"}` rather than at a newline — e.g. `UNLANDED=3"}`,
+                        # which `int()` rejects and every numeric reader then silently scores 0.
+                        # Harmless while UNLANDED/REMAINDER sit mid-block (they do in a full
+                        # emit_machine run) and NOT harmless the moment a block is truncated at one
+                        # of them; found by the --as-built control, which reads exactly those two
+                        # fields and read a `RUNG=📦 UNLANDED=3` fixture as PASS. Trim to the
+                        # leading numeric run for the numeric fields, leaving text fields alone.
+                        for _k in ("UNLANDED", "REMAINDER", "AHEAD", "CHERRY", "BLOCKED",
+                                   "FILED_MINE", "DIRTY", "DIRTY_N"):
+                            if _k in f:
+                                _m = re.match(r"\s*(\d+)", f[_k])
+                                if _m:
+                                    f[_k] = _m.group(1)
                         frozen = {"ts": ts, "rung": m.group(1), "fields": f}
     if results.get(last["id"]) or [a for a in after if a != "queue-operation"]:
         return None
     return {"file": path, "sid": last["sid"], "cwd": last["cwd"], "ts": last["ts"], "frozen": frozen}
 
 
-def verdict(row, rung_mode=False):
-    """-> 'REFUSE' | 'PASS' | 'UNRESOLVABLE'."""
+def verdict(row, rung_mode=False, as_built=False):
+    """-> 'REFUSE' | 'PASS' | 'UNRESOLVABLE'.
+
+    THREE READINGS, and the point of the script is that they disagree.
+      rung_mode  RUNG in {📦,⛔,🔧}                      — the naive reading, 5/44
+      default    the rule AS SPECIFIED, incl. ⛔/BLOCKED — 3/44
+      as_built   what W3-B1 actually SHIPPED             — UNLANDED>0 ∨ REMAINDER≠0, ⛔ exempt
+
+    `as_built` is the mode that measures the gate a session will really meet
+    (hf_selfclose_ledger_refusal in scripts/handoff-fire.sh), so it is the one whose number belongs
+    in a close. It consults NO rung: the shipped predicate reads four parsed fields and nothing else,
+    and mirroring it any other way would measure a different program.
+    """
     fr = row.get("frozen")
     if not fr:
         return "UNRESOLVABLE"
     if rung_mode:
         return "REFUSE" if fr["rung"] in (REFUSE_RUNGS | {"🔧"}) else "PASS"
     f = fr["fields"]
+
+    if as_built:
+        def m(k):
+            try:
+                return int(f.get(k, "0") or 0)
+            except ValueError:
+                return 0
+        return "REFUSE" if (m("UNLANDED") or m("REMAINDER")) else "PASS"
 
     def n(k):
         try:
@@ -185,7 +219,7 @@ def selftest():
                               "name": "Bash", "input": {"command": "handoff-fire.sh self-close --terminal"}}]})], "PASS"),
         # 📦 -> REFUSE
         "parked": ([rec(type="user", timestamp="2026-01-01T00:00:00Z",
-                        toolUseResult={"stdout": "RUNG=📦\nREADOUT=📦 branch only\nUNLANDED=3"}),
+                        toolUseResult={"stdout": "RUNG=📦\nREADOUT=📦 branch only\nUNLANDED=3\nREMAINDER=0\nGOAL_SRC=none"}),
                     rec(type="assistant", timestamp="2026-01-01T00:01:00Z", cwd="/tmp/x",
                         sessionId="s4", message={"content": [{"type": "tool_use", "id": "t1",
                         "name": "Bash", "input": {"command": "handoff-fire.sh self-close --terminal"}}]})], "REFUSE"),
@@ -210,6 +244,14 @@ def selftest():
         good = got == "REFUSE"
         ok &= good
         print(f"  {'ok  ' if good else 'FAIL'} wrench_filed under --rung-mode: want REFUSE, got {got}")
+        # AS-BUILT controls — the three fixtures whose verdict the shipped gate CHANGES, pinned so
+        # a later edit to hf_selfclose_ledger_refusal cannot silently drift from this instrument.
+        for name, want in (("blocked", "PASS"), ("wrench_filed", "PASS"), ("parked", "REFUSE")):
+            row = scan_file(os.path.join(d, name + ".jsonl"))
+            got = verdict(row, as_built=True)
+            good = got == want
+            ok &= good
+            print(f"  {'ok  ' if good else 'FAIL'} {name} under --as-built: want {want}, got {got}")
         # a self-close that RETURNED (tool_result present) is an attempt, never a retire
         p = os.path.join(d, "refused.jsonl")
         open(p, "w").write("\n".join([
@@ -231,6 +273,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=54, help="newest N retirements (0 = all found)")
     ap.add_argument("--rung-mode", action="store_true", help="refuse on RUNG∈{📦,⛔,🔧} (the naive reading)")
+    ap.add_argument("--as-built", action="store_true",
+                    help="the SHIPPED gate: UNLANDED>0 ∨ REMAINDER≠0, ⛔ exempt, rung never read")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
@@ -238,7 +282,7 @@ def main():
         return selftest()
     rows = collect(ROOTS, a.limit)
     for r in rows:
-        r["verdict"] = verdict(r, a.rung_mode)
+        r["verdict"] = verdict(r, a.rung_mode, a.as_built)
         r["rung"] = (r["frozen"] or {}).get("rung")
     if a.json:
         json.dump(rows, sys.stdout, ensure_ascii=False, indent=1)
@@ -249,8 +293,21 @@ def main():
     for r in rows:
         print(f"{r['verdict']:13} {r['rung'] or '?'} {r['ts']} {os.path.basename(r['cwd'] or '?')}")
     pct = (100.0 * ref / res) if res else float("nan")
-    print(f"\nREFUSED={ref} RESOLVABLE={res} UNRESOLVABLE={unr} PCT={pct:.1f} "
-          f"MODE={'rung' if a.rung_mode else 'fields'}")
+    mode = "rung" if a.rung_mode else ("as-built" if a.as_built else "fields")
+    print(f"\nREFUSED={ref} RESOLVABLE={res} UNRESOLVABLE={unr} PCT={pct:.1f} MODE={mode}")
+    if a.as_built:
+        # THE BLIND SPOT, STATED RATHER THAN ASSUMED AWAY. --as-built reads FIELDS only, exactly as
+        # the shipped gate does, so a frozen block that emitted a refusable RUNG but no corresponding
+        # numeric field reads PASS here. That is faithful to the gate (its stamp would carry the same
+        # gap and it warn-and-proceeds), but it means this count is a LOWER bound on the live gate's
+        # refusals — so the size of the gap is printed instead of being left to the reader to assume.
+        gap = sum(1 for r in rows
+                  if (r["frozen"] or {}).get("rung") in REFUSE_RUNGS
+                  and not (r["frozen"] or {"fields": {}})["fields"].get("UNLANDED")
+                  and not (r["frozen"] or {"fields": {}})["fields"].get("REMAINDER"))
+        print(f"FIELDLESS_REFUSABLE_RUNG={gap} "
+              f"(rows whose block named 📦/⛔ but carried no UNLANDED/REMAINDER field; "
+              f"a field-keyed gate cannot see these, so REFUSED is a LOWER bound)")
     print("VERDICT=" + ("CROSSES-90 (< 10 %)" if pct < 10 else "STAYS-ANNOTATE (>= 10 %)"))
     return 0
 
