@@ -87,6 +87,14 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-09 — recycle #332 (lane infra):** closed 77fbb8be90b0 (lead-supervisor self-check now
+  JOINS cc-sessions to $TEL_DIR/<session_id>.json and names the uncovered; the old ps-vs-file-count Δ was
+  two denominators — e2e 135/0 vs 128/7 pre-fix), af096c5107b6 (cc-do's non-TTY refusals hand over
+  `cc-do --run` / `CC_DO_ASSUME_YES=1 cc-do <id>` on their own line), 6293bf3bbbf1 (validate-bash resolves a
+  CHAINED scratchpad variable; one fewer grep on the hottest path, sites.tsv re-pinned), aed065be8720
+  (MOOT — a sibling landed reg_sid_matches) · blocked none · released c9d5053a92c0 (the 5 RECOVER-PENDING
+  branches are ONE reconciliation of tests/autonomy-sweep.bats, not four cherry-picks) · landed 43f20ca8d
+  0bad1ca0e 88b1a1a76 · closed=4 closed_pre=4 filed=0 blocked=0 min=3 lane=local-drain floor=MET.
 - **2026-09-09 — `2d91af430c60` CLOSED: both §4 production proofs RE-VERIFY GREEN on the converged
   live layer, and the sibling claim that one of them was unreachable is REFUTED by the store.**
   Precondition first: `27e055e41` is an ancestor of the live checkout HEAD (`9c9687fcf`) and both
