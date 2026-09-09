@@ -279,7 +279,7 @@ margin-5 driver then fired nothing in an hour at load 108–119 (the fleet holds
 the ceiling of 8), so the remainder runs as ONE driver at margin 6 (`w1h b2 b4 b5 b6 w3b17 w3b1`, 3 h
 per item, halts on the first rc 9; log `/tmp/fire-ed-w2-slice4.log`).
 
-### W2 returns (six of eight by 08:30Z — each content-verified on origin/main)
+### W2 returns (seven of eight by 09:10Z — each content-verified on origin/main)
 
 | Item | landed | the number | verdict → W3 |
 |---|---|---|---|
@@ -289,6 +289,7 @@ per item, halts on the first rc 9; log `/tmp/fire-ed-w2-slice4.log`).
 | B1 self-close refusal | `739a18337` (`scripts/measure-selfclose-rung.py`) | over 54 self-closes / 28 h (44 resolvable, 10 unresolvable): a refusal on **📦 fires 0/44**, on **REMAINDER≠0 fires 0/44**, on **⛔ fires 3/44 and all three were legitimate** (fired peers whose deliverable was the filed packet); reading the RUNG instead gives 5/44 = 11.4 % and the opposite verdict | **📦 + REMAINDER arms CROSS 90 (93); the ⛔ arm is REFUTED (90)** → `W3-B1`: refuse `self-close --terminal` on the stamp's UNLANDED / REMAINDER **fields**, never on RUNG, annotate-only for ⛔, FILED_MINE-only 🔧, `--recycle`, absent stamp. Brief `/tmp/fire-ed-w2-w3b1.txt` |
 | B6 permission prefixes | `bccf99f0f` | **0** prefixes recur across ≥3 **distinct** approval sets. The 22 `settings.local.json` files are not 22 populations: 14 carry an empty `allow` and 3 are byte-identical copies of one 95-entry set, so 302 raw entries collapse to **111 distinct across 6 sets** (63.2 % are copy duplicates). Every candidate that reached "≥3 files" — `claude-accounts` (8), `awk`, `curl`, `rm`, `pnpm design:gate`, covering 20/64 = 31.2 % of exact approvals — reached it via the copy trio. Residual that IS real and is NOT a permissions finding: **27 of 64 exact Bash approvals (42.2 %) are read-only by construction** (`sysctl` ×5, `vm_stat`, `mdls`, the `claude-accounts` read flags ×8, the `git -C … status/log` reads) — the admission gate prompting on a read, already covered by decision packet `1df4081249d2` | **REFUTED (94)** — no W3 item, no settings diff, no operator read. Two classifier defects fixed before the count: dedupe by allow-set fingerprint, and `Bash(git *)` ends in `" *"` not `":*"` so a prefix-form classifier scores 10 wildcards as literals |
 | B4 harvest latency | `2a196c1e2` (`scripts/measure-harvest-latency.py`, selftest 7/7) | permanent loss **38.3 %** (74/193) on the most generous reading, **78.8 %** once same-second self-commits are excluded. The median latency of **0.07 d** is itself the finding: 78 of 119 apparent harvests land inside 0.5 d — the closing session's own trailing commit, not a later reader — so only **41/193 = 21.2 %** reach a later reader. Hand-read precision **7/20 = 35 %**, and every matcher error is a false POSITIVE harvest | **CROSSES 90 (95)** → a peer-findings drain producer is worth building. No error direction rescues REFUTED. Does NOT license "recovers 78.8 %": the rate says the CHANNEL is lossy, it does not price the cargo. Adverse exclusion named: 302 of 820 transcripts had no turn-final close at all (died mid-turn) — the population most likely to lose findings |
+| B5 write attribution | `ed4e2054b` | the proposed extraction runs at **5.6 %** false conviction (12/214 in-repo hits) and NO subset meets the rule: the tightest under 2 % (`{>/>>, sed -i}`, 1.0 %) covers **17.9 %** of the write population against 80 %, and any subset reaching 80 % must include `heredoc` at 9.3 %. But all 12 share ONE cause and it is not the idioms — the extractor resolves a relative target against the session's LAUNCH cwd while the command has already `cd`'d; 11 of 12 land in a path that exists in the session's own tree, and 11 of 41 wrong-repo resolutions land in the SHARED CHECKOUT, the #105 venue. Track the `cd` and the rate is **0 of 214** (95 % upper bound 1.43 %) with `heredoc` kept | **STAYS BELOW as proposed (35); CROSSES 90 (88) for the corrected variant** → three idioms (drop `tee`), target resolved against an effective dir that tracks in-command `cd`, `rc 2` when that dir is unknown (`cd -`, `cd "$VAR"`). Two inversions named: the mechanical proxy's 75.7 % "not-authored" measures the COVERAGE GAP not the error (18 of 20 hand-read are the session's own write), and `-uall` means untracked files convict too — scoping to `git ls-files` would have dropped 87/214 |
 
 Both W2 panes that carried a goal or a custody row (677, 678) retired clean; 673 and 675 (no rows, per
 the never-engaged strip W1h fixes) also retired. **Standing, not this programme's:** `deploy-live`
@@ -340,6 +341,26 @@ defect) and entered its degradation search — no GREEN stamp in the newest 200 
 green at depth 407 and already an ancestor of live HEAD; `ship-land` says the post-land verifier is
 alive but every recent verdict is non-green (129 h since the last green). Verdict pending in
 `/tmp/deploy-live-ed.log`; a refusal is filed as `cc-backlog needs`, never laundered into ✅.
+
+### W3 returns
+
+| Item | landed | what changed | proof |
+|---|---|---|---|
+| **W3-B17** IDL write splice | `48c6d64a2` · `d8bf3da9a` · `1e33fce5d` | **(1)** the `backlog-health` `note:` was a 6,953-byte CONSTANT — 86 % of the record, next-largest emitter 663 B. Moved verbatim into a comment above the emit (preserved, not deleted); record **6,679 B → 972 B (−85.4 %)**, 4.2× headroom under the 4,096 B splice boundary. **(2)** `idl_guarded_append` in the shared writer refuses a record over **4,000 B** and writes a short valid `idl-oversize` record naming hook · kind · byte count — it NEVER truncates, because a truncated JSON line IS the defect and would be minted deliberately. ONE contract, TWO builders: the sweep keeps its own envelope (seven ambient counters) and sources the lib for the assertion only. **(3)** the tolerant-reader arm needed no conversion — `cc-audit`, `idl-abstain-alarm.sh`, `measure-close-vs-idl.py` and `measure-terminations.py` were already tolerant and counting; the gap was ENFORCEMENT, so a chokepoint lint now fails any reader that slurps the LIVE IDL with stderr suppressed | bats 6/6. Red-proofed against the PRISTINE artifact (`git archive HEAD`), never a hand-edited approximation: cases 1-2 red at 7,843 B pre-fix, cases 3-5 red pre-fix on the absent contract, and the lint is POSITIVE-CONTROLLED — a synthetic offender turns it red and its removal returns green (a lint green on day one is indistinguishable from a broken one). 13 consumer suites re-run because the shared lib feeds 9 hooks |
+
+**Two stale claims retired in the same pass.** `hooks/lib/idl-log.sh` and `hooks/session-continue.sh`
+both asserted in the PRESENT TENSE that one malformed line "aborts cc-audit's `jq -rs` slurp" and
+silently flips the un-gameable detector green. True when written, false since cc-audit was made
+tolerant — and exactly the shape a future session believes and acts on. The RATIONALE is kept (it is
+why the encoding invariant exists); the CONSEQUENCE is dated, corrected, and pointed at the two
+readers rather than at the paragraph.
+
+**A scoping error worth recording, because the rule that would have caught it is already written
+down.** The B5 report was swept into the W3-B17 assertion commit: the subagent had staged it, and
+`git commit` commits the INDEX, not the paths just added. § Git Commit Workflow rule 5 says run
+`git diff --name-only` and confirm every file belongs before staging — the miss was not checking
+`--cached` after a concurrent writer touched the index. Nothing was landed, so it was repaired by
+soft-reset and three correctly-scoped rebuilds; the resulting tree is byte-identical.
 
 ### Operator decisions — filed as class-C packets (conviction · receipt = SYNTHESIS.md · two options each)
 
