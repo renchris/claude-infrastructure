@@ -334,7 +334,12 @@ case "$SWEEP_T0" in ''|*[!0-9]*) SWEEP_T0=0 ;; esac
 # can only over-accuse) but it is not silent: `cumulative_s` is read straight off SWEEP_T0, so a
 # row whose elapsed_s exceeds its own cumulative_s delta across consecutive rows is the tell.
 SWEEP_CP_LAST="$SWEEP_T0"
-SWEEP_CP_PHASE="${CC_SWEEP_CP_PHASE0:-0a-cloud-return}"
+# The first segment holds §0a-i (the ~4 s config-parity read, hoisted 2026-09-09) AND §0a, because
+# the first checkpoint is `sweep_yield 0b-author-death-join`. The label names both rather than
+# only the second, so ~4 s is not silently attributed to the cloud-return pass — a per-phase
+# meter whose first bucket is mislabelled would misdirect exactly the re-measurement this meter
+# exists to inform (the arms above the first checkpoint are what the self-bound keeps hitting).
+SWEEP_CP_PHASE="${CC_SWEEP_CP_PHASE0:-0a-i-config-parity+0a-cloud-return}"
 SWEEP_PHASE_LOG_MIN_S="${CC_SWEEP_PHASE_LOG_MIN_S:-5}"
 case "$SWEEP_PHASE_LOG_MIN_S" in ''|*[!0-9]*) SWEEP_PHASE_LOG_MIN_S=5 ;; esac
 
@@ -369,8 +374,83 @@ sweep_yield() { # <label of the phase that would run next> — exits 0 rather th
 }
 
 
-# ── 0a. CLOUD RETURN — FIRST, because a block this sweep never REACHES does nothing ──────────────
-# 🚨 WHY THIS IS THE FIRST THING THE SWEEP DOES, AND IT IS A MEASUREMENT, NOT A PREFERENCE.
+# ── 0a-i. CONFIG-DIR GUARDRAIL PARITY — hoisted above §0a, for the reason §0a itself records ──────
+# 🚨 THIS BLOCK MOVED ON 2026-09-09, AND THE MOVE IS A MEASUREMENT. It sat at §2c — below §0a, §0b,
+# the collect, the expire-sweep and the whole backlog-health family — and from 2026-09-08 it ran
+# ZERO times a day. Counted from `~/.claude/autonomy/idl.jsonl*`, `tool=="autonomy-sweep"`, by day:
+#
+#     day        join  backlog-health  config-parity  custody  unfired  self-bound
+#     09-04        20              19             19       19       19           0
+#     09-05        20              20             20       20       20           0
+#     09-06        10              10             10       10       10           0
+#     09-07        20              18             19       19       19           2
+#     09-08        23               0              0        0        0          29   ← the flip
+#     09-09        10               0              0        0        0          18
+#
+# The flip is dated and attributable: `a7e5a609e` (2026-09-07) added the self-bound, and the last
+# `config-parity` row anywhere is 2026-09-07T21:13:57Z. The self-bound is CORRECT and stays — the
+# reaper is this job's only watchdog and a tick that ends itself leaves no TERM row. What it also
+# did was convert a sweep that reached its lower half ~20x/day into one that reaches it never:
+# across 49 self-bound rows, `stopped_before` is `1-collect-pages-alarms` 35 times and
+# `0b-author-death-join` 14 times — the two EARLIEST checkpoints, and nothing else, ever. That is
+# verbatim the condition sweep_yield's own note names ("If stopped_before is ALWAYS the same phase,
+# the arms above it now cost more than the bound").
+#
+# THE ARMS ABOVE COST MORE THAN THE BOUND BY CONSTRUCTION, so re-measuring them cannot fix this one.
+# §0a's pass is bounded at 900 s and that bound is correct (a smaller one convicts a healthy land —
+# see the 240 s incident in its own header). The tick's self-bound is 400 s and may not go past
+# 600 - CC_SWEEP_BOUND_S. An arm allowed 900 s inside a tick that ends at 400 s can consume the
+# whole tick on its own, and the elapsed at yield says it does: min 422 s, MEDIAN 1009 s, max 4883 s.
+# No amount of trimming §0a reconciles 900 with 400; only ORDER does.
+#
+# So this check runs FIRST, on the same argument §0a used to hoist itself past this very block, and
+# it is the cheap half of that trade: 3.77 s foreground (3 runs, ±0.05 s), `_bounded` at 180 s worst
+# case, no land, no network, no write outside the row it files. §0a is delayed by ~4 s of its 900 s.
+# The property this buys is the one GUARDRAIL_HOOKS_V2 AC2' asserts and could not previously get:
+# the parity checker is REACHED, on every tick, including a maximally-truncated one.
+#
+# ⚠️ WHAT THIS DOES NOT FIX, stated here because the numbers above are the evidence for it and a
+# reader will otherwise take this hoist for a cure: §2, §2b, §2b-i..vi, §2e, §2f and §3 are STILL
+# starved — including §3, the summary + desk notify, whose last `fired` row is 2026-09-07T21:14:23Z.
+# Hoisting one block cures one block; the general repair is not row 6's surface and is filed.
+#
+# ── the original §2c rationale, unchanged and still true ──────────────────────────────────────────
+# scripts/settings-drift-assert.sh has compared the 5 config dirs correctly since the day it landed
+# and had ZERO callers for its entire life (measured 2026-08-11, backlog 4ce34a4f703c): absent from
+# all five settings.json, and its only named invocation sat in docs/activation/wiring-all.sh, a
+# bundle that was never run. Meanwhile the drift it names was real — .claude-next was missing the
+# unattended-ask PERMISSION RAIL plus four other hooks. A correct detector nobody calls is
+# indistinguishable from no detector, which is the third instance of that exact shape wired in from
+# this one block.
+#
+# WHY HERE AND NOT IN nightly-regression: that job's plist is NOT loaded (`launchctl list` shows no
+# com.claude.nightly-regression; its activation script is still in the rotting queue), so wiring the
+# checker there would have moved it from one inert home to another while reading like a fix.
+# autonomy-sweep runs every 300s under com.chrisren.autonomy-sweep, which IS loaded.
+#
+# ABOVE THE nothing-new EARLY EXIT, for the reason the block above states: config drift produces no
+# pages and no alarms while it accumulates, so a quiet fleet is exactly when it must be measured.
+#
+# `--file`, not `--assert`: the verdict has to land in a store something already reads. That row is
+# condition-keyed and carries its own falsifier, so repeated drifting sweeps update ONE item and it
+# closes itself once the dirs agree — this block cannot become a per-sweep item generator.
+#
+# The rc is captured, never `|| true`: rc 1 (drift, filed) and rc 3 (could not compare) are different
+# facts, and collapsing them would let a broken checker journal exactly like a clean fleet.
+_drift="$_SWEEP_DIR/settings-drift-assert.sh"
+_drift_rc="skipped"
+if [ -x "$_drift" ]; then _bounded bash "$_drift" --file >/dev/null 2>&1; _drift_rc=$?; fi
+log_idl config-parity "$(jq -cn --arg d "$_drift_rc" \
+  '{settings_drift_rc:$d,
+    note:"rc 0 = the 5 config dirs agree; 1 = drift, ONE condition-keyed item filed; 3 = could not compare (NOT clean); skipped = tool absent"}')"
+
+# ── 0a. CLOUD RETURN — FIRST OF THE SUBSTANTIVE ARMS, because a block this sweep never REACHES
+#        does nothing ─────────────────────────────────────────────────────────────────────────
+# 🚨 WHY THIS IS THE FIRST SUBSTANTIVE THING THE SWEEP DOES, AND IT IS A MEASUREMENT, NOT A
+# PREFERENCE. (Amended 2026-09-09: §0a-i, the ~4 s config-parity read, now precedes it, on this
+# block's own argument and against this block's own 900 s bound — see the table in that header.
+# Nothing else may be inserted above §0a on a weaker case than that one: an arm here is paid for
+# by every tick, and §0a's whole point is that ORDER is the scarce resource, not intent.)
 # This block was §2d — after the D4 join, the page/alarm collection, the expire-sweep actuator, the
 # backlog-health probes and the config-parity check. Every one of those comments argues, correctly,
 # for being ABOVE the nothing-new early exit. None of them noticed that being above that exit is
@@ -1467,38 +1547,6 @@ log_idl backlog-health "$(jq -cn --arg t "$_trig_rc" --arg r "$_rat_rc" \
     venue_routed_cloud:($vcl|tonumber), venue_routed_local:($vlo|tonumber),
     venue_write_failed:($vwf|tonumber),
     note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean). consolidation_trigger_rc and ratchet_rc 2 = COULD NOT MEASURE, the engine (jq) is absent — those two guards were fail-OPEN until backlog 2366f99e04a7, the same defect the grouping sweep carried for its whole deployed life, and for the ratchet the fail-open was worse than a misreport: its --assert is the stored falsifier of the row it files at :803, and cc-premise reads exit 0 as THE CONDITION IS GONE, so an absent engine RETRACTED the coverage alarm rather than failing to measure it. The rc-1 consumer below is an exact match on 1 and so cannot launder a 2 into a coverage regression; the trigger files its own condition-keyed, send-damped row (backlog-consolidation-engine-absent) from --file, while the ratchet deliberately files nothing because its scheduled mode IS a probe. drain_chain_rc is the BACKLOG_DRAIN_24_7 §6 liveness check and its rc says only whether the CHECK ran (0 = it answered and filed if dead; skipped = no drain-chain-assert.sh on this box) — the VERDICT is never inferred from it, because the check is fail-open by construction and reports alive on an unreadable store, on zero live rows (the success state), and on any live lease. Read the verdict from `drain-chain-assert.sh --json` or from whether row condition=local-drain-chain-dead is open. backlog_flow_* is BACKLOG_DRAIN_24_7 §6 fourth invariant, the WEEKLY ADDS-vs-CLOSES report, and unlike drain_chain_rc its VERDICT is carried here rather than inferred: backlog_flow_rc says only whether the check ran, while backlog_flow_verdict is one of draining (closed >= added over the window, the healthy direction), net-positive (added > closed, and §6 answers that by fixing the INFLOW list C1-C4 rather than by adding drain horsepower — a condition-keyed row backlog-inflow-net-positive is filed on this verdict alone), unknown (an ABSTENTION and never a conviction: no store, unreadable store, a store younger than the window whose first week is net-positive by construction, or more unreadable timestamps than the margin the verdict rests on), no-verdict (the probe did not answer this sweep — never that the flow is fine), skipped (no backlog-flow-assert.sh on this box). backlog_flow_added counts distinct rows FILED in the window and backlog_flow_closed counts done RECORDS, so a row closed twice is two closings: this is a FLOW reading and deliberately not the STOCK one bin/cc-value tasks_closed takes for its own question. ratchet_filed is the ratchet rc CONSUMER: a red assert now files ONE condition-keyed, self-falsifying row instead of only being written down here. The fold APPLIES, gated on its own dry verdict: fold_applied is skipped unless fold_conservation read ok this same sweep, so a FAILED or unknown key disarms the writer without anyone remembering to. grouping_sweep_rc 0 = under the ungrouped floor or filed; 2 = COULD NOT MEASURE, the engine (python3 / scripts/backlog-consolidation/group.py) is absent — that guard was fail-OPEN until backlog 70cc9f44040f, so this field read 0 on every tick of the entire deployed life of that mechanism while it folded nothing, and the sweep now files its own condition-keyed row (backlog-grouping-engine-absent, send-damped) rather than leaving the evidence in an rc nobody screens. A non-zero here has never aborted this sweep: no set -e, and the rc is captured rather than propagated. backfill_* is the CONDITION-LEASE family key (cc-backlog backfill), and it is a DRY RUN on purpose: it proposes joins a scorer found over a living corpus, and a wrong join feeds claim guard (6) and REFUSES a live worker onto work that is not duplicated. backfill_proposed is the depth of that review queue, backfill_ambiguous the rows that matched two groups and were deliberately not joined, and backfill_note no-verdict means the probe did not answer this sweep — never that the store is clean. Flip to --apply when proposed is small and stable across a run of sweeps and its named proposals were spot-checked. premise_pass_* is the CURRENCY pass and runs on its OWN cadence (CC_PREMISE_PASS_EVERY_S, default 6h) because it costs 265.81 s measured at utility over 141 probes (2026-08-16) while this sweep fires every 300 s: note not-due = the interval gate held it, bound-exceeded = rc 124 and the 1500 s bound needs re-measuring in the band, read-failed:<why> = the pass aborted fail-open on an unreadable store and SAID SO rather than exiting 0 with an unparseable body, ok = every live row carries a probe verdict against premise_pass sha. premise_rows_closed retires rows a probe just proved dead, which before had no exit at all: falsified refuses every claim and nothing closed them. premise_rows_deferred/premise_shard_pending are the SHARD (--limit, default 150): deferred is what this pass held back and shard_pending what the cycle still owes after it, so a pending count that never reaches 0 means the cycle is longer than the store\u0027s churn and the LIMIT wants raising — not the bound. Deferred rows are deliberately NOT folded into the sweep\u0027s unprobed count, which stays the coverage ratchet\u0027s input and means only \u0027no arm can speak for this row\u0027. venue_pass_* is the VENUE RE-DERIVATION (cc-venue run --apply) and it exists because a venue label could outlive the rule that made it: 460211b83 landed the cross-repo eligibility arm on 2026-08-23T21:30Z and the six oldest venuePlan=cloud rows had been labelled 08-11..08-21, so they held all six cloud slots against a gate that refuses them and the seven genuinely eligible rows were admitted ZERO times in a day. W1 wired cc-venue\u0027s WRITE-PATH and ADMISSION-REPAIR callers, both keyed on a row being NEW or NEXT; nothing re-decided a settled label until this arm, and `cc-venue run` had zero callers of any kind (grep over scripts/ hooks/ LaunchAgents, 2026-08-24). It APPLIES unattended, unlike the backfill arm beside it, because the producer already fails CLOSED in the expensive direction: a wrong `local` costs nothing (the item claims locally, untouched) while a `cloud` label may only be written from a positive certification cc-venue itself refuses to issue without an ok history horizon, so a second gate here could only disagree with the first. It runs on the currency pass\u0027s cadence (CC_VENUE_PASS_EVERY_S, default 6h) because decide() re-runs cc-premise per item: 21 s measured for the dry decision over 318 open rows on 2026-08-24, with the per-row `cc-backlog venue` writes dominating beyond that. venue_pass_note bound-exceeded = rc 124, which is SAFE and NOT a failure -- every row is decided and written independently, so a truncated pass leaves a prefix re-derived and the next pass finishes what it did not reach; no-verdict = the body did not parse, which is never the same as a clean store; write-failed = at least one label could not be written, and venue_write_failed carries the count."}')"
-
-sweep_yield 2c-config-dir-guardrail-parity
-
-# ── 2c. CONFIG-DIR GUARDRAIL PARITY — same placement, same reason, a third inert tool ─────────────
-# scripts/settings-drift-assert.sh has compared the 5 config dirs correctly since the day it landed
-# and had ZERO callers for its entire life (measured 2026-08-11, backlog 4ce34a4f703c): absent from
-# all five settings.json, and its only named invocation sat in docs/activation/wiring-all.sh, a
-# bundle that was never run. Meanwhile the drift it names was real — .claude-next was missing the
-# unattended-ask PERMISSION RAIL plus four other hooks. A correct detector nobody calls is
-# indistinguishable from no detector, which is the third instance of that exact shape wired in from
-# this one block.
-#
-# WHY HERE AND NOT IN nightly-regression: that job's plist is NOT loaded (`launchctl list` shows no
-# com.claude.nightly-regression; its activation script is still in the rotting queue), so wiring the
-# checker there would have moved it from one inert home to another while reading like a fix.
-# autonomy-sweep runs every 300s under com.chrisren.autonomy-sweep, which IS loaded.
-#
-# ABOVE THE nothing-new EARLY EXIT, for the reason the block above states: config drift produces no
-# pages and no alarms while it accumulates, so a quiet fleet is exactly when it must be measured.
-#
-# `--file`, not `--assert`: the verdict has to land in a store something already reads. That row is
-# condition-keyed and carries its own falsifier, so repeated drifting sweeps update ONE item and it
-# closes itself once the dirs agree — this block cannot become a per-sweep item generator.
-#
-# The rc is captured, never `|| true`: rc 1 (drift, filed) and rc 3 (could not compare) are different
-# facts, and collapsing them would let a broken checker journal exactly like a clean fleet.
-_drift="$_SWEEP_DIR/settings-drift-assert.sh"
-_drift_rc="skipped"
-if [ -x "$_drift" ]; then _bounded bash "$_drift" --file >/dev/null 2>&1; _drift_rc=$?; fi
-log_idl config-parity "$(jq -cn --arg d "$_drift_rc" \
-  '{settings_drift_rc:$d,
-    note:"rc 0 = the 5 config dirs agree; 1 = drift, ONE condition-keyed item filed; 3 = could not compare (NOT clean); skipped = tool absent"}')"
 
 sweep_yield 2e-custody-deathwatch
 

@@ -207,11 +207,11 @@ is `status: OPEN`.
 
 | AC | Read | Passes when | Today |
 |---|---|---|---|
-| **AC1** parity | `bash scripts/settings-drift-assert.sh; echo $?` | `0` | **FAILS** — rc 1, 11 divergences (2026-09-08; was 7) |
+| **AC1** parity | `bash scripts/settings-drift-assert.sh; echo $?` | `0` | **FAILS** — rc 1, **11** divergences (2026-09-09; 11 on 09-08, 7 on 08-17) — and the PARTITION INVERTED, see §5a |
 | **AC2** the checker is not inert | ~~`grep -l settings-drift-assert ~/.claude*/settings.json ~/Library/LaunchAgents/*.plist \| wc -l`~~ → the read below | `≥1` | **FAILS — for a DIFFERENT reason than this row assumed; see AC2′** |
-| **AC2′** the caller is REACHED | `python3` over `~/.claude/autonomy/idl.jsonl*` for `settings_drift_rc` in the last 24 h | `≥1` emission | **FAILS** — last emission `2026-09-07T21:13:57Z`, none in the 24 h to 21:30Z 2026-09-08 |
-| **AC3** no unregistered hook | enumerate `hooks/*.sh` minus the union of scripts registered across the five dirs | empty, or every member explicitly declared non-dispatch | **FAILS** — `subagent-stop.sh` is the known member; the full set is unmeasured |
-| **AC4** `.claude-next` is not a fork | `[ -L ~/.claude-next/hooks ]` | true | **FAILS** — real dir, 53 vs 78 entries; cure landed (`0013`), operator-gated, un-run |
+| **AC2′** the caller is REACHED | `python3` over `~/.claude/autonomy/idl.jsonl*` for `settings_drift_rc` in the last 24 h | `≥1` emission | **CURED 2026-09-09, awaiting one converged tick to read MET.** Cause found and fixed: the check is now §0a-i, above every `sweep_yield` checkpoint. Red-proof `tests/autonomy-sweep.bats` 0a-i ×3. See §5a |
+| **AC3** no unregistered hook | enumerate `hooks/*.sh` minus the union of scripts registered across the five dirs | empty, or every member explicitly declared non-dispatch | **FAILS — and the set is now MEASURED at 10** (2026-09-09), not 1. See §5a |
+| **AC4** `.claude-next` is not a fork | `[ -L ~/.claude-next/hooks ]` | true | **MET 2026-09-09** — symlink, in `-next`/`-secondary`/`-tertiary`/`-quaternary` (`.claude` is the source dir, correctly a real dir). Migration `0013` has RUN. **`0014` has NOT** — `SubagentStop` is absent from all five, so F3 is untouched |
 | **AC5** ungated advance is denied | `bats tests/validate-bash-ff-gate.bats` | green | **MET** — landed `17ecae6c6` |
 | **AC6** permission-rail parity | `python3 -c` deny/ask counts across five dirs | all equal | **MET** — 41/6 everywhere |
 
@@ -221,6 +221,90 @@ someone on this campaign: use `git ls-tree "$b" -- "$p"`, never `"$b:$p"` interp
 positive control sharing the first path segment's initial letter (used here: `hooks/dod-persist.sh`
 and `tests/no-such.bats`); never read an exit code through a pipe, and reconcile the `1..N` header —
 a missing verdict is a third state, not a pass.
+
+---
+
+## §5a Re-read of every AC against live disk, 2026-09-09 — three cells moved, and one cause is cured
+
+Nothing below is carried from §1/§2. Each is a fresh run, and the two that changed changed for
+reasons the doc did not predict.
+
+**AC2′ — CURED, and the cause was ORDER, not wiring.** R-1′ (2026-09-08) found the checker's caller
+(`scripts/autonomy-sweep.sh`, under the LOADED `com.chrisren.autonomy-sweep`) and correctly said the
+remaining work was COVERAGE. This session measured why coverage was zero and fixed it. Counted from
+`~/.claude/autonomy/idl.jsonl*`, `tool=="autonomy-sweep"`, by day:
+
+| day | join | backlog-health | config-parity | custody | unfired | self-bound |
+|---|---|---|---|---|---|---|
+| 09-04 | 20 | 19 | 19 | 19 | 19 | 0 |
+| 09-05 | 20 | 20 | 20 | 20 | 20 | 0 |
+| 09-06 | 10 | 10 | 10 | 10 | 10 | 0 |
+| 09-07 | 20 | 18 | 19 | 19 | 19 | 2 |
+| **09-08** | 23 | **0** | **0** | **0** | **0** | **29** |
+| **09-09** | 10 | **0** | **0** | **0** | **0** | **18** |
+
+The flip is dated and attributable: `a7e5a609e` (2026-09-07) added the sweep's self-bound. Across 49
+self-bound rows `stopped_before` is `1-collect-pages-alarms` 35× and `0b-author-death-join` 14× —
+the two earliest checkpoints, and nothing else, ever. Elapsed at yield: min 422 s, **median 1009 s**,
+max 4883 s.
+
+**The bound arithmetic makes this unfixable by trimming.** §0a's cloud-return pass is bounded at
+900 s and that bound is correct (a smaller one convicts a healthy land — its own header records the
+240 s incident). The tick's self-bound is 400 s and may not exceed `600 − CC_SWEEP_BOUND_S`. An arm
+allowed 900 s inside a tick that ends at 400 s can consume the whole tick alone, so **only order
+reconciles them.** The parity check is now **§0a-i**, above every `sweep_yield` — 3.77 s foreground
+(3 runs, ±0.05 s), `_bounded` at 180 s worst case, no land, no network. §0a is delayed ~4 s of 900.
+
+Red-proof: `tests/autonomy-sweep.bats` cases `0a-i ×3`. The case fails against the REAL pre-fix blob
+(`9e5ba7cf4f72`, via the suite's `CC_TEST_SWEEP` seam) at exactly the property line, and the mutant
+control is built by MOVING the block back below the checkpoints rather than deleting it, so it
+replays the pre-fix ORDER and not merely the block's absence. A third control proves an UNBOUNDED
+tick journals the row under both orders — without it the pair would pass against a subject that
+always logs, or one that never does.
+
+⚠️ **AC2′ reads CURED, not MET, and the distinction is this row's own subject matter.** The fix is
+`scripts/autonomy-sweep.sh`, which the live layer reaches by per-file symlink: the landed edit rides
+its link and the `🚀` rung applies until `scripts/deploy-live.sh` converges. AC2′ flips to MET on the
+first tick after that — read it, do not assume it.
+
+**AC4 — MET. Migration `0013` has RUN; `0014` has NOT.** `~/.claude-next/hooks`, and `-secondary`,
+`-tertiary`, `-quaternary`, are all symlinks (`.claude` is the source dir, correctly a real dir).
+R-4 is therefore HALF discharged. The other half is untouched and F3 with it: `SubagentStop` is
+absent from all five `settings.json`, so `hooks/subagent-stop.sh` is still a built, deployed,
+tested hook wired nowhere — 41 days now, not 18.
+
+**AC1 — still FAILS, and the PARTITION INVERTED, which is new evidence FOR F1.** 11 divergences.
+§2 recorded a clean partition — *four dirs agree, `.claude-next` is behind on seven* — and read the
+generator as "registration writes four files and skips the fifth". That reading is now falsified by
+its own successor state:
+
+| missing in | count | what it means |
+|---|---|---|
+| `-next -secondary -tertiary -quaternary` | **5** | present ONLY in `.claude` — the newest registrations wrote the SOURCE dir and skipped all four others |
+| `.claude-next` | 5 | the July/August residue §2 named |
+| `-next -secondary -quaternary` | 1 | a third, partial write |
+
+Two of §2's seven healed (both `session-beat` slots); six new ones appeared, five of them in the
+new `.claude`-only direction. **The count is flat and the population turned over again** — the same
+shape §2 warned about, now with the arrow reversed. F1's structural answer (one actuator that writes
+all five or none) is unchanged and is strengthened: a per-dir hand edit can skip *any* subset, and
+which subset it skips is not a stable fact to design against.
+
+**AC3 — now MEASURED at 10, not 1.** Enumerating `hooks/*.sh` + `hooks/*.py` (87 files) minus the
+union of registered script basenames across the five dirs (78) leaves **10**:
+
+```
+accounts-board.sh          hook-chain.sh              model-permission-decider.py
+curl-gate.py               migrate-plans-index.sh     reset-hard-shadow-allow.sh
+session-index-sweep.sh     subagent-stop.sh           task-completed-index.sh
+task-created-attrib.sh
+```
+
+This is the W2 input, and it is a MEASUREMENT, not yet a verdict: AC3 passes when the set is empty
+**or every member is explicitly declared non-dispatch**, and several of these are plainly libraries
+or callee-of-a-hook rather than dispatch entries (`hook-chain.sh` is the broker itself). W2's work is
+to partition the 10 into *declared non-dispatch* and *defect*, and to make the residue an alarm row —
+not to register all ten.
 
 ---
 
@@ -272,6 +356,23 @@ Named remainders, in the order a successor should take them:
   and reach are two facts, and only the second one is the property anybody wanted. AC2′ above is
   the read for the second.
 
+- **R-1″ (2026-09-09) — R-1′ is DISCHARGED, by the third of its three options, and the choice was
+  forced by arithmetic rather than preferred.** R-1′ offered: re-measure the arms above
+  `1-collect-pages-alarms` and cut what has grown; hoist `2c` as §0a was hoisted; or move the checker
+  off the yielding tick. **Cutting cannot work** — §0a's 900 s bound is correct and exceeds the
+  tick's whole 400 s self-bound, so no trimming of a 900 s arm leaves room inside a 400 s tick.
+  **Moving off the tick is worse** — §2c's own header already rejected `nightly-regression` (plist
+  not loaded), and a NEW plist is a c10 migration, i.e. F4's exact trap: a landed cure nobody runs.
+  **Hoisting is order-only, costs §0a ~4 s of 900, and takes effect on the next converged tick.**
+  Done; §5a carries the measurement and the red-proof.
+
+  🚨 **What the hoist does NOT fix, named here so no successor reads it as a cure.** §2, §2b,
+  §2b-i..vi, §2e, §2f and **§3** are still starved — including §3, the sweep's summary and desk
+  notify, whose last `fired` row is `2026-09-07T21:14:23Z`. Four other plans own those arms
+  (`BACKLOG_DRAIN_24_7`, the custody lane, the unfired-brief lane, the cloud-return lane), each with
+  its own measured placement header, so the general repair is not row 6's surface to decide and is
+  **filed rather than driven** — see the close. Row 6 hoisted the one arm that is row 6's.
+
 - **R-2 (row 10's R-2, second half, inherited).** No alarm covers a hook's own wiring. First half
   (`operator-readout` in 4/5) is now MET; the alarm half is R-1's AC2.
 - **R-3 (new, from `DAEMON_FLEET_V2` F21).** Agents are denied `launchctl enable` but permitted
@@ -280,6 +381,11 @@ Named remainders, in the order a successor should take them:
 - **R-4 (operator-gated, not agent work).** Migrations `0013` and `0014` are landed, correct, and
   un-run. Until `0013` runs, `.claude-next` keeps re-minting F1 drift; until `0014` runs,
   `hooks/subagent-stop.sh` stays a hook that exists and does nothing.
+  **HALF DISCHARGED 2026-09-09:** `0013` HAS run — `~/.claude-next/hooks` is a symlink (AC4 MET), as
+  are `-secondary`/`-tertiary`/`-quaternary`. `0014` has NOT: `SubagentStop` is absent from all five
+  `settings.json`, so F3's instance is 41 days old now rather than 18. Note what the discharged half
+  did **not** buy — AC1 still fails at 11, and §5a shows the drift partition has since INVERTED, so
+  unforking the hooks dir was never the drift cure; `settings.json` is, and it does not converge.
 - **R-5.** The map's row-6 cell still carries the falsified `69 hook entries` figure and the "no
   design doc" status. Correcting it needs `GROUND_UP_REBUILD_MAP.md`, which is a shared file — a
   separate, single-owner edit.
