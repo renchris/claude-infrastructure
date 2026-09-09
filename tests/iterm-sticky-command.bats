@@ -69,14 +69,19 @@ setup() {
   # this the type step has nowhere to go and the site would have to fold back into the banned form.
   run grep -q 'return id of newPane' "$REPO/scripts/limit-recover/lr-handoff.sh"
   [ "$status" -eq 0 ]
-  run grep -qF 'osa_type_verified "$NEWPANE" "exec /bin/bash $LAUNCHER"' "$REPO/scripts/limit-recover/lr-handoff.sh"
+  # `bash $LAUNCHER`, NOT `exec /bin/bash $LAUNCHER` — re-pointed 2026-09-09 (LIMIT_RECOVER_100P).
+  # The wave dropped the `exec` on purpose: the launcher is run as a CHILD so the pane's shell
+  # survives it, which is what makes the pane recyclable next time (a pane whose root argv was
+  # replaced by the launcher is the shape that left panes 625/632 un-recyclable). The subject of
+  # this case is unchanged — bare surface first, launcher typed through osa_type_verified second.
+  run grep -qF 'osa_type_verified "$NEWPANE" "bash $LAUNCHER"' "$REPO/scripts/limit-recover/lr-handoff.sh"
   [ "$status" -eq 0 ]
 }
 
 @test "lr-handoff window fallback creates a BARE window, then types the launcher verified" {
   run grep -q 'set newWin to (create window with default profile)' "$REPO/scripts/limit-recover/lr-handoff.sh"
   [ "$status" -eq 0 ]
-  run grep -qF 'osa_type_verified "$WINPANE" "exec /bin/bash $LAUNCHER"' "$REPO/scripts/limit-recover/lr-handoff.sh"
+  run grep -qF 'osa_type_verified "$WINPANE" "bash $LAUNCHER"' "$REPO/scripts/limit-recover/lr-handoff.sh"
   [ "$status" -eq 0 ]
 }
 
