@@ -271,6 +271,31 @@ before each fire it waits on the gate's own instrument (`cc_sp_active` ≤ 7, po
 cap per item, measured 12 mid-turn at 03:40Z) and stops on the first rc 9 — a second consecutive
 refusal is the paged admission, which is not a state to march into. Log `/tmp/fire-ed-w2-slice2.log`.
 
+**Slice 2 (03:49–04:00Z):** B21 → pane 677 (`next4`, goal ARMED+VERIFIED); B1 → pane 678 (`next3`, goal
+paste abstained, brief ingested); W1h refused on a path of my own making (the driver reads
+`/tmp/fire-ed-w2-<id>.txt`, the brief sat at `/tmp/fire-ed-w1h.txt` — re-staged); B2 refused rc 9 with
+the headroom read at 7 one second earlier — the sample-then-act race the actuator memory warns of. A
+margin-5 driver then fired nothing in an hour at load 108–119 (the fleet holds 9–16 mid-turn against
+the ceiling of 8), so the remainder runs as ONE driver at margin 6 (`w1h b2 b4 b5 b6 w3b17 w3b1`, 3 h
+per item, halts on the first rc 9; log `/tmp/fire-ed-w2-slice4.log`).
+
+### W2 returns (four of eight by 05:07Z — each content-verified on origin/main)
+
+| Item | landed | the number | verdict → W3 |
+|---|---|---|---|
+| B17 jq-fatal record | `1550268e6` | ONE fatal record across live IDL + 8 archives: a 6,679 B `backlog-health` record from `scripts/autonomy-sweep.sh:1400` (72 emissions / 11 d, 100 % > 4,096 B, producer live) spliced at byte 4,096 by a concurrent `waiting-recycle` append — an **interleaved concurrent append** (> 4 KiB ⇒ ≥ 2 `write()`s on the shared O_APPEND fd), none of the brief's five classes; every `jq` census that redirects stderr silently drops **12.33 %** of the store (jq rc 5) | **CROSSES 90 (96)** → `W3-B17`: strip the 5,763 B constant `note:` (record → 845 B), a size assertion in the writer, tolerant readers in every census. Brief `/tmp/fire-ed-w2-w3b17.txt` |
+| 14 termination census | `ea2b0c0aa` (`scripts/measure-terminations.py` + the denominator line in `idl-abstain-alarm.sh`) | 123 dead main-chain sessions / 24 h: **self-close 42.3 %** · Stop 29.3 % · killed 13.0 % · drain-recycle 7.3 % · recycle 6.5 % · api-error 0.8 % · frozen 0.8 %; Stop-chain coverage **32.5 %**, not CRITIC §0's 24 % (4 sessions/day end on a Stop-hook BLOCK the end_turn ladder filed as no-Stop); freezing is a **mid-life overlay on 26 %** of sessions, terminal for 0.8 % — a close-side freeze remedy would aim at 3 % of its phenomenon. Instrument defect fixed on the reader side first: a strict `lstart` compare pinned TZ but not LOCALE and read every live session as dead (134/0 vs 115/19) | **CROSSES 90 (94)**; the instrument IS the deliverable. Re-aims W3 at the self-close path (B1) and confirms the permission question is the operator's (decision 1) |
+| B21 closes vs evaluations | `d5d924341` + `e73f71f8a` (`scripts/measure-close-vs-idl.py`) | unexplained deficit **0.0 %** for five of six Stop hooks on every binary version over 1,854 closes / 3 d; the two residuals (dispatch-assert 1.8 %, session-continue 41.1 % on 2.1.260) fully attributed | **C5 RESOLVED (96)** — no W3 item; the critic's "14 % deficit" is closed. Custody row returned by the lead (the pane retired without pinging 643) |
+| B1 self-close refusal | `739a18337` (`scripts/measure-selfclose-rung.py`) | over 54 self-closes / 28 h (44 resolvable, 10 unresolvable): a refusal on **📦 fires 0/44**, on **REMAINDER≠0 fires 0/44**, on **⛔ fires 3/44 and all three were legitimate** (fired peers whose deliverable was the filed packet); reading the RUNG instead gives 5/44 = 11.4 % and the opposite verdict | **📦 + REMAINDER arms CROSS 90 (93); the ⛔ arm is REFUTED (90)** → `W3-B1`: refuse `self-close --terminal` on the stamp's UNLANDED / REMAINDER **fields**, never on RUNG, annotate-only for ⛔, FILED_MINE-only 🔧, `--recycle`, absent stamp. Brief `/tmp/fire-ed-w2-w3b1.txt` |
+
+Both W2 panes that carried a goal or a custody row (677, 678) retired clean; 673 and 675 (no rows, per
+the never-engaged strip W1h fixes) also retired. **Standing, not this programme's:** `deploy-live`
+refuses to advance (no GREEN stamp in the newest 200 trunk commits; green 419–435 commits behind live
+HEAD, 131 h old) — filed already as `f36bc0986c43` / `5511ea906e2e`; the live layer still moved to
+`23b631901` (8 behind) through another actuator, inside the 25-commit budget. Also observed by B17:
+`cc-blockers` labels the autonomy sweep STALLED on a 530 h log-age proxy while its own IDL rows show
+163 runs in 14 h (memory `liveness-proxy-cannot-be-output-age`).
+
 **Live layer:** `deploy-live.sh` run detached at 01:51Z from the shared checkout (live HEAD `f2b1cdff4`,
 which already carries W1a). It reported the `lead-supervisor` daemon on STALE bytes (W1g's exact
 defect) and entered its degradation search — no GREEN stamp in the newest 200 trunk commits, newest
