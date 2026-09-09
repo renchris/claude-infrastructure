@@ -212,6 +212,7 @@
 # Subcommand:
 #   self-close (--successor UUID | --terminal) [--session-id UUID] [--no-notify]
 #              [--dirty-owner successor] [--successor-assume-engaged] [--allow-dirty] [--dry-run]
+#              [--allow-unlanded]
 #              [--allow-live-subagents]
 #              [--transplanted-source] [--source-pane UUID --source-session UUID]
 #                       Close the CURRENT session end-to-end once its work is done — the Agent
@@ -239,6 +240,13 @@
 #                       assistant-turn check (retains the liveness checks) for a successor whose
 #                       transcript is unreadable from this account. --terminal declares
 #                       end-of-line (nothing continues). Bare self-close exits 2.
+#                       EXIT 8 — a --terminal close REFUSED on the at-retire ledger stamp's own
+#                       fields: UNLANDED>0 (commits on this machine only) or REMAINDER≠0 (the frozen
+#                       DoD is unmet). Keyed on the FIELDS, never on RUNG — see hf_selfclose_ledger_
+#                       refusal for why the two readings give opposite verdicts, and why ⛔ is
+#                       annotate-only. Cure with /ship or --successor; --allow-unlanded (or
+#                       CC_CLOSE_LEDGER_GUARD=0) is the deliberate-park escape. Never fires on
+#                       --successor, on --recycle, or when the stamp did not answer.
 #                       EXIT 3 vs EXIT 7 (item 87a515ed087e): exit 3 is a VERDICT ABOUT THE
 #                       SUCCESSOR — resolved and not there, or resolved and not alive; the fix is
 #                       to correct the uuid, re-fire, or --terminal. Exit 7 is NO VERDICT AT ALL:
@@ -3571,8 +3579,14 @@ _hf_custody() {
 # pane is a worse failure than an unannotated one (the same argument sc_announce_before_retire makes
 # below, for the same reason — a peer that cannot satisfy a gate holds a pane and a worktree
 # forever). Every failure path here is a warn-and-proceed and every return is 0, so a stamp that
-# cannot be taken costs a line of stderr and nothing else. A REFUSAL on 📦/⛔ is a separate, later
-# decision gated on a measurement that has not been made — do not build it here.
+# cannot be taken costs a line of stderr and nothing else.
+#
+# ⚠ CORRECTED IN PLACE 2026-09-09 (W3-B1). This paragraph ended "A REFUSAL on 📦/⛔ is a separate,
+# later decision gated on a measurement that has not been made — do not build it here." The first
+# clause still holds and the second is discharged: W2-B1 took the measurement, and the refusal is
+# built — in hf_selfclose_ledger_refusal below, a DIFFERENT function on a DIFFERENT gate, reading
+# this stamp's fields through its optional $3. Nothing in hf_ledger_stamp itself refuses, then or
+# now. The ⛔ half of that sentence was refuted outright: ⛔ stays annotate-only, permanently.
 #
 # WARN-AND-PROCEED ON AN UNRESOLVABLE SID, stated as its own case because it is the common one and
 # because silence would make it indistinguishable from a clean ledger. A retiring pane's CC session
@@ -3583,9 +3597,24 @@ _hf_custody() {
 # BOUNDED. wrap-ledger.sh forks ~19 git subprocesses plus the operator stores; it bounds its own
 # store reads, but nothing bounds the whole. This runs on a close path, so it gets a wall clock and
 # a timeout is treated exactly like any other unreadable instrument.
-hf_ledger_stamp() { # $1=retiring CC session id (may be empty) $2=cwd (empty ⇒ $PWD) → one line, always 0
-  local sid="${1:-}" dir="${2:-}" wl="" d out line k v
+hf_ledger_stamp() { # $1=sid (may be empty) $2=cwd (empty ⇒ $PWD) $3=fields-out path (optional) → one line, always 0
+  local sid="${1:-}" dir="${2:-}" fout="${3:-}" wl="" d out line k v
   local rung="" remainder="" unlanded="" goal_src="" goal_last="" tr=""
+  # $3 IS THE ONLY WAY A DECIDER CAN SEE THESE FIELDS (W3-B1). Every caller runs this function inside
+  # a command substitution, and a variable assigned in a subshell never escapes it (memory:
+  # assignment-inside-command-substitution-never-escapes) — so the refusal below cannot read `$rung`
+  # or `$unlanded` however the call is written. A file crosses; nothing else does. Absent $3 the
+  # behaviour is byte-identical to before, which is what keeps the --recycle consumer untouched.
+  # STAMP_READ is written FIRST and on every path, including the three UNREAD returns: a decider must
+  # be able to tell "the ledger said clean" from "nobody looked", and an absent file from an empty one.
+  _hf_stamp_fields() { # $1 = 1 when the ledger actually answered, 0 for every UNREAD path
+    [ -n "$fout" ] || return 0
+    { printf 'STAMP_READ=%s\n' "$1"
+      printf 'RUNG=%s\n'       "${rung:-}"
+      printf 'REMAINDER=%s\n'  "${remainder:-}"
+      printf 'UNLANDED=%s\n'   "${unlanded:-}"
+    } > "$fout" 2>/dev/null || true
+  }
   for d in "$(dirname "$_CC_KS")/wrap-ledger.sh" \
            "$(dirname "$0")/wrap-ledger.sh" \
            "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/wrap-ledger.sh" \
@@ -3593,10 +3622,12 @@ hf_ledger_stamp() { # $1=retiring CC session id (may be empty) $2=cwd (empty ⇒
     [ -x "$d" ] && { wl="$d"; break; }
   done
   if [ -z "$wl" ]; then
+    _hf_stamp_fields 0
     printf 'LEDGER AT RETIREMENT: UNREAD — scripts/wrap-ledger.sh is unreachable from this pane; nobody looked, so this is NOT a clean-state claim.'
     return 0
   fi
   if [ -z "$sid" ]; then
+    _hf_stamp_fields 0
     printf 'LEDGER AT RETIREMENT: UNREAD — the retiring pane'"'"'s CC session id could not be resolved (a provisional cc-registry row carries none), so the ledger could not be scoped to it; nobody looked, and this is NOT a clean-state claim.'
     return 0
   fi
@@ -3607,6 +3638,7 @@ hf_ledger_stamp() { # $1=retiring CC session id (may be empty) $2=cwd (empty ⇒
           && WRAP_TRANSCRIPT="$tr" hf_bounded_s "${CC_STAMP_TIMEOUT_S:-20}" \
                "$wl" --machine --session "$sid" 2>/dev/null )" || out=""
   if [ -z "$out" ]; then
+    _hf_stamp_fields 0
     printf 'LEDGER AT RETIREMENT: UNREAD — wrap-ledger.sh returned nothing for session %s within %ss (killed, or it refused); nobody looked, so this is NOT a clean-state claim.' \
       "$sid" "${CC_STAMP_TIMEOUT_S:-20}"
     return 0
@@ -3627,10 +3659,73 @@ hf_ledger_stamp() { # $1=retiring CC session id (may be empty) $2=cwd (empty ⇒
 $out
 STAMP
   [ -n "$rung" ] || rung="?"
+  _hf_stamp_fields 1
   printf 'LEDGER AT RETIREMENT (wrap-ledger.sh --machine, session %s): %s · frozen-DoD remainder %s · %s commit(s) NOT landed on the trunk · goal %s' \
     "$sid" "$rung" "${remainder:-?}" "${unlanded:-?}" "${goal_src:-none}"
   [ -n "$goal_last" ] && [ "$goal_last" != none ] && printf ' (last verdict %s)' "$goal_last"
   return 0
+}
+
+# ── W3-B1: THE --terminal REFUSAL — KEYED ON THE STAMP'S FIELDS, NEVER ON ITS RUNG ───────────────
+# The stamp above annotates and may never refuse; this is the separate, later decision its own
+# comment deferred — "gated on a measurement that has not been made". The measurement is now made:
+# W2-B1 (docs/research/exhaustive-drive-2026-09-08/W2-B1-selfclose-refusal.md, instrument
+# scripts/measure-selfclose-rung.py) replayed 54 self-closes in 28 h — 44 carrying a frozen at-retire
+# ledger — and priced each candidate arm against them:
+#
+#   UNLANDED>0   fires 0 / 44   → costs nothing, and guards the measured TOP loss class
+#   REMAINDER≠0  fires 0 / 44   → costs nothing
+#   ⛔           fires 3 / 44   → and all THREE were legitimate retires
+#
+# 🚨 SO ⛔ IS ANNOTATE-ONLY, AND THE POLARITY IS STRUCTURAL, NOT BAD LUCK. `BLOCKED` counts open
+# class-C packets THIS SESSION FILED. On an ORIGIN session that is a loose end; on a FIRED PEER —
+# and 54 of 54 retires in the window were fired peers — filing the operator's decision IS the
+# deliverable the brief asked for. Each of the three landed its commits, filed its packet and
+# retired correctly. Refusing those strands a pane on a question nobody on the box can answer,
+# because the operator is away; that premise is the whole exhaustive-drive programme.
+#
+# 🚨 AND IT KEYS ON FIELDS, NOT ON `RUNG` — the two readings give OPPOSITE verdicts. Reading the rung
+# fires 5/44 = 11.4 % and refutes the item; reading the fields fires 3/44 = 6.8 % and (with ⛔
+# exempt) 0/44. `🔧` is a COMPOUND — dirty ∨ gate-stale ∨ REMAINDER>0 ∨ FILED_MINE>0 ∨ DRAIN_SCOPE ∨
+# custody — and BOTH 🔧 retires in the window were raised by terms this rule never names
+# (FILED_MINE=1 with DIRTY=0 AHEAD=0; and CLOSED_MINE=0 via the drain-scope arm), neither by
+# REMAINDER. A rung-keyed implementation refuses both and is wrong twice. Case 3 in
+# tests/handoff-fire-selfclose-refusal.bats is that exact fixture and exists to catch it.
+#
+# WARN-AND-PROCEED WHEN THE STAMP DID NOT ANSWER. STAMP_READ=0 (no wrap-ledger, unresolvable sid,
+# bounded-out run) is a NON-ANSWER, and a refusal on a non-answer strands a pane on the instrument
+# rather than on the work — the two-verdicts trap (A11-skeptic; memory
+# discriminator-scoped-to-a-window-yields-two-verdicts). 10 of the 54 retires had no frozen ledger at
+# all, so this is the common path, not an exotic one. Non-numeric or empty fields take the same
+# branch: this may only ever refuse on a POSITIVE disproof.
+#
+# THE CURE IS NAMED, AND SO IS THE OVERRIDE. An unretireable pane is a worse failure than an
+# unannotated one (the argument sc_announce_before_retire makes below), so every refusal prints the
+# one command that clears it AND the deliberate-park escape. Without an escape a genuine park has no
+# exit and this becomes the pile-up the --untracked-files=no fix already had to undo once.
+hf_selfclose_ledger_refusal() { # $1=fields file → 0 = PASS, 1 = REFUSE (reason on stdout)
+  local ff="${1:-}" line k v read_ok="" rung="" remainder="" unlanded="" why=""
+  [ -n "$ff" ] && [ -r "$ff" ] || return 0          # no fields ⇒ no verdict ⇒ pass
+  while IFS= read -r line; do
+    k="${line%%=*}"; v="${line#*=}"
+    case "$k" in
+      STAMP_READ) read_ok="$v" ;;
+      RUNG)       rung="$v" ;;
+      REMAINDER)  remainder="$v" ;;
+      UNLANDED)   unlanded="$v" ;;
+    esac
+  done < "$ff"
+  [ "$read_ok" = 1 ] || return 0                    # nobody looked ⇒ pass (the caller warns)
+  case "$unlanded" in ''|*[!0-9]*) unlanded=0 ;; esac
+  case "$remainder" in ''|*[!0-9]*) remainder=0 ;; esac
+  [ "$unlanded" -gt 0 ]  && why="UNLANDED=$unlanded — commits that exist on this machine and nowhere else"
+  if [ "$remainder" -gt 0 ]; then
+    [ -n "$why" ] && why="$why; "
+    why="${why}REMAINDER=$remainder — the frozen DoD is not met"
+  fi
+  [ -n "$why" ] || return 0
+  printf '%s\n' "$why"
+  return 1
 }
 
 # sc_announce_before_retire — the F-1 actuator. Kept a FUNCTION rather than inline in the self-close
@@ -6666,7 +6761,7 @@ fi
 # self-close — arm the detached watcher that retires this session once the calling turn ends.
 if [ "${1:-}" = "self-close" ]; then
   shift
-  SC_SID="" SC_ALLOW_DIRTY=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0 SC_ALLOW_LIVE_TM=0 SC_ALLOW_LIVE_SA=0 SC_ALLOW_ORIGIN_CLOSE=0 SC_ORPHANED_ASSIGNEE=0 SC_SID_EXPLICIT=0 SC_TRANSPLANTED_SOURCE=0
+  SC_SID="" SC_ALLOW_DIRTY=0 SC_ALLOW_UNLANDED=0 SC_DRY=0 SC_SUCCESSOR="" SC_TERMINAL=0 SC_NO_NOTIFY=0 SC_DIRTY_OWNER="" SC_ASSUME_ENGAGED=0 SC_ALLOW_LIVE_TM=0 SC_ALLOW_LIVE_SA=0 SC_ALLOW_ORIGIN_CLOSE=0 SC_ORPHANED_ASSIGNEE=0 SC_SID_EXPLICIT=0 SC_TRANSPLANTED_SOURCE=0
   SC_SOURCE_PANE="" SC_SOURCE_SESSION="" SC_REMOTE_SOURCE=0 SC_SUBJ_CWD=""
   while [ $# -gt 0 ]; do case "$1" in
     --session-id)  SC_SID="${2:?--session-id needs a value}"; SC_SID_EXPLICIT=1; shift 2 ;;
@@ -6676,6 +6771,7 @@ if [ "${1:-}" = "self-close" ]; then
     --no-notify)   SC_NO_NOTIFY=1; shift ;;
     --dirty-owner) SC_DIRTY_OWNER="${2:?--dirty-owner needs a value (successor)}"; shift 2 ;;
     --allow-dirty) SC_ALLOW_DIRTY=1; shift ;;
+    --allow-unlanded) SC_ALLOW_UNLANDED=1; shift ;;
     --allow-live-teammates) SC_ALLOW_LIVE_TM=1; shift ;;
     --allow-live-subagents) SC_ALLOW_LIVE_SA=1; shift ;;
     --allow-origin-close) SC_ALLOW_ORIGIN_CLOSE=1; shift ;;
@@ -7352,8 +7448,45 @@ MSG
   # asked about until now; this adds the other six rungs, read from the one renderer that owns them
   # rather than re-derived here (consume, do not re-implement — the same rule capacity_gate follows
   # for cc_hw_*). Its cost is one bounded wrap-ledger run on a path that is about to destroy a pane.
-  SC_LEDGER_STAMP="$(hf_ledger_stamp "$(cc_sid_for_pane "$SC_SID")" "${SC_SUBJ_CWD:-}")"
+  SC_STAMP_FIELDS="${TMPDIR:-/tmp}/handoff-selfclose-fields-$$-$(date +%s)"
+  SC_LEDGER_STAMP="$(hf_ledger_stamp "$(cc_sid_for_pane "$SC_SID")" "${SC_SUBJ_CWD:-}" "$SC_STAMP_FIELDS")"
   echo "→ $SC_LEDGER_STAMP" >&2
+  # ── W3-B1: THE REFUSAL. Everything above this line annotates; this is the one arm that declines.
+  # Placed HERE — after the stamp, BEFORE the custody discharge — because a close that does not
+  # happen must not discharge the originator's debt: that row is the only thing keeping the wave
+  # visible to the lead, and discharging it over a refused close would strand the work silently,
+  # which is the exact loss class this refusal exists to prevent.
+  # TERMINAL ONLY. --successor and --recycle both carry the work FORWARD (the successor inherits the
+  # branch and the recycle brief carries the stamp into the same worktree), so an unlanded commit is
+  # not stranded on either path and refusing there would only block a legitimate succession.
+  if [ "$SC_TERMINAL" = 1 ] && [ -z "$SC_SUCCESSOR" ] \
+     && [ "$SC_ALLOW_UNLANDED" = 0 ] && [ "${CC_CLOSE_LEDGER_GUARD:-1}" != 0 ]; then
+    if ! SC_REFUSE_WHY="$(hf_selfclose_ledger_refusal "$SC_STAMP_FIELDS")"; then
+      rm -f "$SC_STAMP_FIELDS" 2>/dev/null || true
+      {
+        echo "!! self-close REFUSED (--terminal): the ledger this pane is retiring on says work is still open."
+        echo "!!   stamp read: $SC_LEDGER_STAMP"
+        echo "!!   refusing on: $SC_REFUSE_WHY"
+        echo "!!"
+        echo "!! A --terminal close asserts that NOTHING continues this session's work. Over 44 measured"
+        echo "!! retires this never fired once on a legitimate one, and the state it does catch — commits"
+        echo "!! on a branch nobody revisits — is the top measured loss class (62 stranded commits, 21"
+        echo "!! branches). The pane stays OPEN and nothing was discharged. Clear it, do not bypass it:"
+        echo "!!"
+        echo "!!   /ship                                  land the commits, then close (the usual cure)"
+        echo "!!   handoff-fire.sh self-close --successor UUID   hand the branch on instead of ending here"
+        echo "!!   cc-custody abandon <token> --why '…'   the wave is superseded and the branch is dead"
+        echo "!!   handoff-fire.sh self-close --terminal --allow-unlanded   DELIBERATE park — name it in"
+        echo "!!                                          your ping so the originator collects the branch"
+        echo "!!   CC_CLOSE_LEDGER_GUARD=0                 blunt kill-switch (recorded LOUD, same effect)"
+        echo "!!"
+        echo "!! ⛔ is NOT a refusal here and never will be: on a fired peer, filing the operator's"
+        echo "!! class-C packet is the deliverable, not a loose end (W2-B1: 3/3 such refusals wrong)."
+      } >&2
+      exit 8
+    fi
+  fi
+  rm -f "$SC_STAMP_FIELDS" 2>/dev/null || true
   # The custody row is the ORIGINATOR's copy — it is what `cc-custody list` shows a lead that fired
   # this peer, and `--why` is an existing field on the return verb (bin/cc-custody:212-227), so this
   # needs no change there. A marker-less stamp still reached stderr above.

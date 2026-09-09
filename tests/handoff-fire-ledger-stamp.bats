@@ -8,10 +8,21 @@
 # custody row inherited any record of it. Committed-but-unlanded wave members are the measured top
 # loss class in this repo (62 content-stranded commits over 21 branches).
 #
-# 🚨 ANNOTATE, NEVER REFUSE. The stamp may not change any exit path, and cases 3 and 4 are the two
-# controls that hold that from both sides. The REFUSE variant (self-close declining on 📦/⛔) is a
-# separate, later decision gated on a measurement nobody has taken — it is deliberately not built,
-# and nothing here asserts it.
+# 🚨 ANNOTATE, NEVER REFUSE — TRUE OF THE STAMP, AND STILL TRUE. The stamp itself may not change any
+# exit path, and cases 3 and 4 are the two controls that hold that from both sides.
+#
+# ⚠ CORRECTED IN PLACE 2026-09-09 (wave W3-B1). The paragraph that stood here also said the REFUSE
+# variant "is a separate, later decision gated on a measurement nobody has taken — it is deliberately
+# not built, and nothing here asserts it". The first half was right and the deferral was discharged:
+# W2-B1 took the measurement (54 self-closes, 44 with a frozen at-retire ledger) and a --terminal
+# close now REFUSES (exit 8) on the stamp's UNLANDED>0 or REMAINDER≠0 fields — never on its RUNG, and
+# never on ⛔, which fired 3/44 and was wrong all three times. That refusal is a DIFFERENT gate with
+# its own suite (tests/handoff-fire-selfclose-refusal.bats); this one still owns the stamp.
+#
+# CONSEQUENCE FOR THIS FIXTURE, and it is the reason three cases below carry --allow-unlanded: this
+# suite's subject tree is deliberately 📦, which is now exactly the state the new gate declines. The
+# flag is the deliberate-park escape, and it clears the REFUSAL without silencing the STAMP — so
+# these cases still assert what they always asserted, over the same tree, one gate further down.
 #
 # THE FIXTURE IS A REAL GIT REPO WITH A REAL UNLANDED COMMIT, driven through the REAL
 # scripts/wrap-ledger.sh. A stubbed ledger would only prove this suite can read its own stub; the
@@ -90,7 +101,7 @@ custody_why() {
 
 @test "1 a self-close over an UNLANDED commit stamps 📦 onto the custody row the originator reads" {
   command -v jq >/dev/null 2>&1 || skip "the custody store is jsonl"
-  run bash "$HF" self-close --terminal --session-id "$PANE" --dry-run
+  run bash "$HF" self-close --terminal --session-id "$PANE" --allow-unlanded --dry-run
   [ "$status" -eq 0 ]
   why="$(custody_why)"
   [ -n "$why" ] || { echo "the custody return row carries NO why — the stamp never reached the originator's store"; false; }
@@ -104,7 +115,7 @@ custody_why() {
 }
 
 @test "2 the stamp is on the close's own output too — a marker-less fire still surfaces it" {
-  run bash "$HF" self-close --terminal --session-id "$PANE" --dry-run
+  run bash "$HF" self-close --terminal --session-id "$PANE" --allow-unlanded --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"LEDGER AT RETIREMENT"* ]] || { echo "no stamp on the close output"; false; }
   [[ "$output" == *"📦"* ]] || { echo "the close output does not name the rung: $output"; false; }
@@ -150,11 +161,14 @@ custody_why() {
   # The end-to-end half of case 3, and the common case rather than an exotic one: a provisional
   # cc-registry row carries no session_id (measured 10 of 19 live rows). Removing the row IS that
   # state. The close must reach the same exit it reaches with a healthy ledger.
-  run bash "$HF" self-close --terminal --session-id "$PANE" --dry-run
+  # BOTH runs carry --allow-unlanded so the comparison is apples-to-apples: the W3-B1 refusal is a
+  # separate gate over this same 📦 fixture, and letting it fire on one arm only would make this case
+  # measure THAT gate's asymmetry instead of the stamp's exit-neutrality, which is its whole subject.
+  run bash "$HF" self-close --terminal --session-id "$PANE" --allow-unlanded --dry-run
   [ "$status" -eq 0 ]
   stamped_status="$status"
   rm -f "$CC_REGISTRY_DIR/$PANE.json"
-  run bash "$HF" self-close --terminal --session-id "$PANE" --dry-run
+  run bash "$HF" self-close --terminal --session-id "$PANE" --allow-unlanded --dry-run
   [ "$status" -eq "$stamped_status" ] \
     || { echo "an unstampable close CHANGED the exit path ($status vs $stamped_status) — the stamp is refusing, which it may never do"; false; }
   [[ "$output" == *"LEDGER AT RETIREMENT: UNREAD"* ]] \
