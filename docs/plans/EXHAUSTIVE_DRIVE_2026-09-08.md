@@ -157,9 +157,62 @@ Each axis is followed by one refute-by-default skeptic (Fable tier, per the adve
 completeness critic writes `CRITIC.md`; the synthesis writes `SYNTHESIS.md` with the ranked,
 conviction-adjusted change list, the itemized operator decisions (answer-first), and the wave plan.
 
-## Waves — filled from SYNTHESIS.md
+## Waves — filled from SYNTHESIS.md (2026-09-09T00:05Z; source of every rank: `docs/research/exhaustive-drive-2026-09-08/SYNTHESIS.md`)
 
-_(pending W0)_
+**The synthesis verdict.** The wave aimed at the Stop, and the Stop is where ≤24% of sessions end: of
+108 dead main-chain sessions today, 26 reached a clean Stop while 61 (56%) retired themselves inside a
+`handoff-fire.sh self-close` / `--recycle` Bash call that checks a dirty tree and nothing else — the
+terminal close of 56% of sessions is audited by nothing (CRITIC §0). Where drivable work is actually
+left, by measured count: permission freezes (1,172 session-hours / 30 d; 99.3% eventually granted),
+then the self-close path, then the un-drained findings of dispatched peers (A02), then the phrase
+matchers' blind shape. Every rank below is conviction-adjusted by its skeptic.
+
+**Execution locus per wave** (S = dispatched session via `handoff-fire.sh --prompt-file --worktree
+--notify-back 625 --account auto --split-right --goal …`; briefs at `/tmp/fire-ed-*.txt`; each wave owns
+disjoint files and lands its own commits via the project-local `/ship`):
+
+| Wave | Locus | Ranks | Files | Depends on |
+|---|---|---|---|---|
+| W0 CLAUDE.md corrections | **S** (was L; moved off the lead to protect its context — no other wave touches CLAUDE.md) | 3 (A08 E1/E2/E3/E4/E5/E6/E8 + A04 R6 + A07 R6) | `CLAUDE.md`, then sync `~/.claude/CLAUDE.md` (real file) | — |
+| W1a goal-state | S | 1 (A04 R1+R5) | `hooks/lib/goal-state.sh`, `hooks/goal-inert-watch.sh`, `scripts/idl-abstain-alarm.sh`, tests | — |
+| W1b handoff-fire | S | 7 then 5 (A11 R3; CRITIC C-R1 annotate) | `scripts/handoff-fire.sh`, its bats | — |
+| W1c Stop-hook instrumentation | S | 2, 10, 4, 8 (A07 R5/R4, A07-sk2 M2, A01-sk) | `hooks/session-continue.sh`, `hooks/completion-assert.sh`, `hooks/anti-deference-nudge.sh`, `scripts/wrap-ledger.sh` (`_bounded`), tests | — |
+| W1d dispatch/backlog hygiene | S | 11, 12, 15 (A11-sk2, A12 R6) | `bin/cc-dispatch`, `bin/cc-backlog`, one backlog row | — |
+| W1e beat identity | S | 9 (A10-sk1 R1) | `hooks/session-beat.sh`, `scripts/lib/spawn-presence.sh`, tests | — |
+| W1f Shared Task List | S | 6 (A03 R1+R3, CRITIC C-R4) | `migrations/0022-*.sh` (c10), `hooks/task-created-attrib.sh`, tests, one `cc-backlog needs --run` | — |
+| W1g permission escalation ladder | S | 13 (A05-sk, CRITIC C9) | `scripts/lead-supervisor.sh`, one `cc-backlog needs --run` | — |
+| W2 measurements | S (read-only, one number each) + one writer | 14, B1, B2, B4, B5, B6, B17, B21 | `scripts/measure-terminations.py`, `scripts/idl-abstain-alarm.sh`, research dir | W1a, W1c |
+| W3 | S, one per item | whichever of B1–B12 crosses 90 on W2's numbers | disjoint per item | W2 |
+
+**Lead budget + succession:** the lead (Fable 5.1 @ max) was at ~57% after the transplant and the
+synthesis harvest; it fires W0 + W1a–g, commits this plan, lands the docs branch, then
+`handoff-fire.sh --recycle` in this pane; the successor collects the eight pings (custody rows), lands
+nothing itself, fires W2 when W1a and W1c have landed, and holds ≥50% of its window.
+
+### Operator decisions — filed as class-C packets (conviction · receipt = SYNTHESIS.md · two options each)
+
+1. **Who answers a permission prompt while you are asleep?** Recommendation (60%): the decider in shadow
+   for 7 days, then enforce only for the compound test-fixture class. Below 90 because auto-granting
+   removes the human from the loop by design and hook-allow vs deny precedence is unmeasured on 2.1.260.
+2. **Pushover credentials** so a prompt reaches a human (80%: provide them). A credential is yours.
+3. **Ratify the C10 rescope split** — env/hook migrations land with a revert, permissions and shell
+   profiles stay operator-run (70%: ratify). The consent boundary is yours to move.
+4. **Research-subagent default count**, 10 vs 12 across four surfaces (75%: align CLAUDE.md to 10).
+5. **Who owns an orphaned class-C packet** — 96% of the 29 open ones can never render ⛔ again (65%:
+   re-attach by pane uuid, else project).
+6. **Dynamic Workflows as the step-3 research default** — 1.7× the quota of a dispatched session,
+   quality unmeasured (75%: keep the measured-cheaper venue until B20 measures quality).
+
+### Findings the lead's own notes got wrong (CRITIC, kept for the record)
+
+- "104 of 127 hook-less closes ran on 2.1.220" — not reproduced by the critic (2.1.220 produced 17
+  closes / 16 rows today); the 14% closes-vs-evaluations deficit is real and unexplained (B21).
+- "ENABLE_STOP_REVIEW is dead" — it is the security-guidance plugin's Stop-review gate (installed,
+  not in `enabledPlugins`, so inert today and load-bearing the moment the plugin is enabled).
+- "The Stop chain is identical in all five config dirs" — true for the Stop event only; whole hook
+  sets measure 100/94/95/94 across accounts.
+- The IDL has eight gz archives from 2026-08-29; the "13-hour IDL" premise was wrong and six axes
+  inherited it.
 
 ## Session events
 

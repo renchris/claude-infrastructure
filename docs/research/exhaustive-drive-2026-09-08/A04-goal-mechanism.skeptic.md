@@ -106,3 +106,97 @@ exactly as `goal-inert-watch.sh`'s header describes.
   counter with command hooks (CLAUDE.md already states this). **No branch skips the prompt-hook
   evaluator on `stop_hook_active`** — so session-continue's blocks do not starve the goal by that route.
   MISSED item 4 in the body is thereby narrowed, not closed: the two mechanisms compete only for the cap.
+
+---
+
+## SECOND SKEPTIC PASS (2026-09-08 23:30–23:55Z) — the Stop-occasion decomposition
+
+Independent re-measurement; the first pass above was found only after this one had run, and the two
+agree on the pipefail bug, the `goalstop.py` PostToolUse inflation, the lead's check-ins and
+`ProposeGoal` (independently confirmed: `grep -a -c -F` on the binary → `ProposeGoal` 13 ·
+`tengu_propose_goal` 2 · `modelProposedGoals` 6). What this pass ADDS is the denominator the axis's
+headline lacks: **did the goal ever get a Stop to evaluate at?**
+
+### The headline "67.7% armed and never evaluated" conflates two populations
+
+`skep/goalturns.py` + `goalafter.py` + `goalsr.py` + `goalcond.py` (scratchpad
+`b418b97a-…/scratchpad/skep/`), over the axis's re-run `goalsess.json` (census re-run this pass:
+6,214 transcripts · 811 with the string · 626 with an attachment · 642 runs · 434 dead-never-evaluated
+· median iterations 1 · 2.1.260 n=40 / 72.5% — all of the axis's numbers reproduce).
+
+Counting assistant records with `"stop_reason":"end_turn"` AFTER the arm record (the transcript's
+turn-end marker; validated on the lead — 10 end_turn in file vs 27 distinct-second Stop-hook IDL
+instants from 7 hooks; stop_reason vocabulary across all 434 dead sessions is `tool_use` 84,299 ·
+`end_turn` 935 · `stop_sequence` 69 · **null/absent 0**, so the proxy has no blind stratum):
+
+| population | n | note |
+|---|---:|---|
+| dead never-evaluated goal sessions (axis's 434) | 434 | |
+| … with **ZERO** end_turn after arming | **371 (85.5%)** | the session never completed a turn after `/goal`; 364 of 371 have ONLY `tool_use` stop_reasons after the arm; median 147 assistant records after arm — **active, then dead mid-turn** |
+| … with ≥1 end_turn and 0 evaluations | 63 (14.5%) | median 7 end_turns; 56 carry `Stop hook feedback` — the TRUE "a Stop happened and the goal stayed silent" population |
+| … carrying a 2.1.260 check-in | 6 | |
+
+Over all 640 runs with a locatable arm (`goalcond.py`):
+
+| stratum | n | ≥1 evaluation |
+|---|---:|---:|
+| ALL | 640 | 28.4% |
+| no end_turn after arm (no Stop occasion) | 376 | **0.0%** (by construction) |
+| **≥1 end_turn after arm (had a Stop)** | **264** | **68.9%** |
+| ≥3 end_turn after arm | 148 | 54.7% |
+
+So: **given an occasion, the evaluator ran 69% of the time.** The 31% residual (82 runs = 12.8% of all
+runs) is the deferral/silent-branch population; the other 59% of all runs are goals on sessions that
+died inside the turn the goal was armed into. The axis read a *no-occasion* number as an
+*evaluator-failure* number.
+
+**Fail direction of this correction:** it errs toward EXONERATING `/goal`. Whether "died mid-turn"
+is itself a defect (a dispatched session that `--recycle`s itself from inside a turn never Stops, so
+a Stop-time lever cannot act on it — the same holds for `session-continue`) is inferred, not
+measured: I did not read WHY those 371 turns never ended (recycle chain · limit · crash · kill).
+
+### R4 is REFUTED, not "an experiment"
+
+The template/freehand gap is entirely session-type. `goalcond.py`:
+
+| stratum | n | ≥1 evaluation |
+|---|---:|---:|
+| had a Stop · template ("proven by") | 164 | **69.5%** |
+| had a Stop · freehand | 100 | **68.0%** |
+| had a Stop · freehand ≤200 chars | 29 | 79.3% (n=29; 3 goals of difference) |
+| ≥3 Stops · template / freehand | 82 / 66 | 56.1% / 53.0% |
+| share of runs with ZERO Stop occasion — template / freehand | | **68.4% / 17.4%** |
+
+Template goals evaluate exactly as often as freehand ones once the session reaches a Stop. Shortening
+the condition would change nothing measurable; the axis's own named confound IS the whole effect.
+(The first pass's `NSt=500` cap observation is about `ProposeGoal`'s proposal text, not evidence that
+short conditions evaluate more.)
+
+### Other re-checks this pass
+
+- **R1** reproduced on synthetic fixtures (`nogoal` rc=1 under pipefail, rc=0 `absent` without;
+  `corrupt` rc=1 either way, so the "grep succeeded / jq failed" rc survives the fix). Live IDL now
+  449 goal-unreadable / 593 goal-inert-watch rows over **57** sids; **54 of 56** resolvable
+  transcripts contain zero `goal_status` (axis: 47/48). HOLDS.
+- **"median iterations = 1"** confirmed WITHOUT trusting the field: **136 of 152 met goals (89%)
+  have exactly one evaluation record**; mean 2.85. The terminator finding stands.
+- **goal-arm telemetry "all time"** = 14 rows, ALL from 2026-09-08 05:08Z–23:26Z (5 set · 7
+  unverified · 2 unreachable). The emitter is <1 day old; "all time" is 18 hours.
+- **Check-in adoption**: 25 transcript files now carry the text (axis 11, first pass 15) — includes
+  `agent-*` subagent transcripts, so the count is not "sessions". Lead check-ins at 22:17:53Z and
+  23:17:53Z (`Goal check-in: background work no longer running`), i.e. 30 min → ×2 backoff, as read
+  from the binary.
+- **2.1.260 n=40**: 29/40 never-evaluated has a 95% CI of roughly 56–85%; "70.8 vs 72.5,
+  unchanged" is directionally right and numerically over-precise.
+- **R2 reason (3)** (~901 evaluator calls/day) is inferred, and given 59% of goals never reach a
+  Stop it also overstates. Reasons (1)+(2) carry R2; (1) is qualified by `ProposeGoal` (first pass)
+  and by two channels neither pass tested: `claude "/goal …"` as initial-prompt argv, and a
+  settings-declared `type:"prompt"` Stop hook (every registered hook is `command` type — 0 `prompt`
+  hooks in `~/.claude/settings.json`), which would be a per-fleet static goal NOT subject to the `d2n`
+  deferral (the gate finds only the activeGoal's own hook by `prompt === Ze.condition`). Fail
+  direction of that untested lever: one tool-less LLM call at EVERY Stop of EVERY session.
+- **R3**: session-continue counts reproduce (239 continue · 28 wake-floor · 429 cli-set). But "primary
+  drive lever" rests on fire COUNTS, not on any measured outcome of a forced turn (closure-count ≠
+  value); and both levers are Stop-time, so neither reaches the 59% of goal sessions that never Stop.
+  The `--goal`-is-a-terminator reframing is supported (89% single-evaluation); the "primary lever"
+  claim is not measured.
