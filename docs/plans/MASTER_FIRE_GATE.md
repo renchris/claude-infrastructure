@@ -219,6 +219,21 @@ demonstrated by one full local round trip and one full cloud round trip carrying
     fits 180 s; (2) **branch prune (`:556-581`) returns `rc=124` on 52/52 ticks**, burning p50 242 s
     — 60 % of the entire budget — and completing nothing.
 
+    🚨 **CORRECTION, same session: cause (1) is MIS-ATTRIBUTED, and the right row already existed.**
+    The join figure came from INTER-ROW DELTAS, which measure the span between two unrelated IDL
+    rows and therefore cannot attribute a cost to a phase at all — the subagent that produced it
+    said so, and this entry used it anyway. `36ce331197ce` (filed earlier, `blocked`) names the
+    mechanism with DIRECT evidence instead: **§0a's cloud-return arm is bounded at 900 s inside a
+    tick that ends itself at 400 s**, so one arm can consume the entire budget and measurably does
+    — *elapsed at yield: median 1009 s, max 4883 s*. An arm over-bounded relative to its own
+    container beats any hypothesis about a loop further down. It is correctly blocked on an operator
+    design fork (A: move the 900 s land arm to its own launchd job — a `c10` migration; B: hoist the
+    remaining cheap read-only arms above §0a), and three other plans depend on the placement
+    headers either candidate would contradict. Three cheaper hypotheses were also refuted here:
+    `close-attrib.jsonl` is 145 KB / 672 lines so `join_closed`'s per-marker grep is ~2 ms,
+    `join_world_probe` already caches its `it2 session list` for the whole tick, and the join loop
+    already caps at `JOIN_MAX_PER_TICK=100`.
+
     🚨 **The blast radius is far larger than "the venue label is stale": 14 of the 22 arms below the
     cut are WRITERS**, including the class-B default actuator, six event-dir reapers,
     `cc-premise sweep --record --close-falsified`, the custody deathwatch, and **§3 the desk notify —
@@ -230,8 +245,13 @@ demonstrated by one full local round trip and one full cloud round trip carrying
     proof (11 checkpoints exist, 70/70 bats green) where the claim was BEHAVIOURAL (does the lower
     half now run?). Downstream, `2d91af430c60`'s acceptance criterion (`premise_pass_rc:0 note:ok`)
     is **structurally unreachable** while this holds, and two workers have already burned claims
-    against it. Filed as **`6de092171021`** with a self-retracting falsifier (venue stamp younger
-    than 12 h). `41d05eae511c` is a genuine AGGRAVATOR and stays operator-blocked — its plist FILE
+    against it. **Not a new row: `36ce331197ce` already owns this** — `6de092171021` and its
+    re-filing `ebd907a9666f` were minted here before that row was found and are both closed as
+    duplicates pointing at it. What this session added to it is landed `f0f57ea85`: per-phase
+    elapsed at every `sweep_yield` checkpoint (bats 75/75, red-proved 2-of-3 against `origin/main`
+    with the CONTROL green). That is not decoration — `36ce331197ce`'s own numbers are *elapsed at
+    yield*, i.e. CUMULATIVE, so nothing on this box could cost an INDIVIDUAL arm, and its A-vs-B
+    fork is precisely a question about per-arm cost. `41d05eae511c` is a genuine AGGRAVATOR and stays operator-blocked — its plist FILE
     dropped `ProcessType Background` on 09-06 but the LOADED job still reports `nice = 5` /
     `spawn type = background (5)`, so a `launchctl bootout+bootstrap` is still owed; the measured
     blast radius above was added to that row rather than duplicated into a new one. Evidence:
