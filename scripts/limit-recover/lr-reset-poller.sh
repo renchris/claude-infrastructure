@@ -465,10 +465,10 @@ done
 # the spawned window silently re-ran the launcher (concurrent duplicate `claude --resume` of one
 # transcript) where the operator expected a plain shell. Create a bare window, then `write text` the
 # launcher; `exec` keeps the old lifecycle. Repair pre-fix panes: scripts/iterm-clear-sticky-command.sh
-lrp_kitty() { # bounded `kitty @ …` — socket seam kept out of the call site
-  if [ -n "${CC_TERM_KITTY_TO:-}" ]; then lrp_bounded "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" @ --to "$CC_TERM_KITTY_TO" "$@"
-  else lrp_bounded "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" @ "$@"; fi
-}
+# (lrp_kitty lived here until 2026-09-09. spawn_gui's kitty arm moved to lr-lib.sh's
+# lr_kitty_spawn — the launchd-safe, socket-resolved, runner-rooted spawn — and left it with no
+# caller in this file or any other. Deleted rather than kept: a helper whose only remaining reader
+# was a test's `eval "$(sed -n '/^lrp_kitty() {/,/^}/p')"` extraction is dead code with a witness.)
 spawn_gui() {
   # ── kitty first, when this IS kitty (2026-07-31) ──────────────────────────────────────────────
   # The AppleScript below now refuses correctly inside a kitty fleet (`is running` short-circuit),
@@ -494,7 +494,7 @@ spawn_gui() {
       command -v "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" >/dev/null 2>&1 || return 1
       _id="$(CC_TERM_KITTY_TO="${_sock:-${CC_TERM_KITTY_TO:-}}" CC_TERM_KITTY="${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" \
              lr_kitty_spawn "$1" "${3:-${PWD:-}}" "${2:-}" "${4:-}")" || return 1
-      command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn os-window kitty "$_id" "${3:-${PWD:-}}" "lr-reset-poller spawn_gui runner-rooted launcher:$(basename -- "$1")"
+      # (no cc_log_pane_spawn row here: lr_kitty_spawn writes it at the primitive, 2026-09-09.)
       return 0
     fi
   fi

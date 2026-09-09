@@ -127,7 +127,11 @@ lr_registry_live_rows() { # $1=sid → rows on stdout; rc 0 when at least one is
     pane="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"; [ -n "$pane" ] || pane="$(basename "$f" .json)"
     acct="$(jq -r '.account // empty' "$f" 2>/dev/null)"
     cwd="$(jq -r '.cwd // empty' "$f" 2>/dev/null)"
-    printf '%s\t%s\t%s\t%s\n' "$pane" "$pid" "$acct" "$cwd"; n=$((n + 1))
+    # PAD AT THE EMITTER. Tab is IFS-whitespace, so an empty cell does not read back empty — it
+    # shifts every later column LEFT, silently, exit 0. `account` is the one non-last cell that can
+    # be absent from a registry row (`.account // empty`); `pane` falls back to the filename and
+    # `pid` is digit-validated above, so both are non-empty by construction, and `cwd` is LAST.
+    printf '%s\t%s\t%s\t%s\n' "$pane" "$pid" "${acct:--}" "$cwd"; n=$((n + 1))
   done
   [ "$n" -gt 0 ]
 }
@@ -219,6 +223,10 @@ lr_runner_bin() { # → bin/cc-pane-runner, or rc 1
 # un-recyclable; it survives only as the fallback when no runner is installed.
 # shellcheck disable=SC2034  # this lib's OUTPUT contract, read by lr-handoff.sh / the poller (a directive binds to the NEXT construct only, hence one line)
 LR_LAUNCH_TAIL=(); LR_SPAWN_SHAPE=""
+# SC2034: LR_LAUNCH_TAIL/LR_SPAWN_SHAPE are this lib's OUTPUT contract, read by lr-handoff.sh and
+# the poller — the directive above the declarations binds to that ONE construct, never into here.
+# SC2016: the single quotes are the point — $CC_PANE_RUNNER must expand in the SPAWNED shell.
+# shellcheck disable=SC2034,SC2016
 lr_launch_tail() { # $1=launcher path → fills LR_LAUNCH_TAIL[] and LR_SPAWN_SHAPE (runner|argv)
   local r
   if r="$(lr_runner_bin)"; then
@@ -247,14 +255,21 @@ lr_kitty_spawn() { # $1=launcher $2=cwd $3=sid $4=target account [$5=anchor pane
   lr_launch_tail "$launcher"
   local to=(); [ -n "$sock" ] && to=(--to "$sock")
   local common=(--var "lr_continuation_of=$sid" --var "lr_source_pane=${anchor:-}" --var "lr_target_account=$acct")
+  local surface=os-window
   case "$anchor" in
     ''|*[!0-9]*)
       id="$("$kb" @ ${to[@]+"${to[@]}"} launch --type=os-window --cwd="$cwd" "${common[@]}" "${LR_LAUNCH_TAIL[@]}" 2>/dev/null)" || return 1 ;;
     *)
+      surface=window
       id="$("$kb" @ ${to[@]+"${to[@]}"} launch --type=window --location=vsplit --match "window_id:$anchor" --next-to "id:$anchor" \
             --source-window "id:$anchor" --cwd=current --dont-take-focus "${common[@]}" "${LR_LAUNCH_TAIL[@]}" 2>/dev/null)" || return 1 ;;
   esac
   id="$(printf '%s' "$id" | tr -d '[:space:]')"
   case "$id" in ''|*[!0-9]*) return 1 ;; esac
+  # The row belongs HERE, where the surface is actually created — not in each caller. The log's
+  # whole inference is "no row ⇒ this tree did not spawn it", and a primitive whose only rows are
+  # written by whoever remembered to call afterwards cannot support it (pane-spawn coverage ratchet).
+  command -v cc_log_pane_spawn >/dev/null 2>&1 && \
+    cc_log_pane_spawn "$surface" kitty "$id" "$cwd" "lr_kitty_spawn ${LR_SPAWN_SHAPE:-?}-rooted continuation_of:${sid:0:8} target:$acct${anchor:+ anchor:$anchor}"
   printf '%s' "$id"
 }

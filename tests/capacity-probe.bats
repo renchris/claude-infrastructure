@@ -32,6 +32,7 @@ EOF
 case "$*" in *hw.ncpu*) echo 10 ;; *vm.loadavg*) echo "{ 1.00 1.00 1.00 }" ;; *) echo 0 ;; esac
 EOF
   chmod +x "$CC_ADMIT_SYSCTL"
+  # shellcheck disable=SC1090  # the subject under test, resolved from $REPO at run time
   . "$LIB"
 }
 

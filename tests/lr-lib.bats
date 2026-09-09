@@ -11,10 +11,20 @@ setup() {
   export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
   export LR_STATE_DIR="$BATS_TEST_TMPDIR/state"; mkdir -p "$LR_STATE_DIR/locks"
   export LR_LIB_DIR="$REPO/scripts/limit-recover"
+  # Ambient-state pins (test-hermeticity ratchet). This suite exercises handoff-fire, whose
+  # capacity_gate() refuses a net-new fire above 2.0/core — on this box that is red-by-load, not by
+  # subject — and three seams whose defaults do not resolve under $HOME: two absolute /tmp paths and
+  # one BARE NAME the subject would execute off the operator's PATH. An ABSENT path is the right
+  # value for all three: these sensors fail open on one.
+  export CC_FIRE_CAPACITY_GATE=off
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/handoff-account-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
   CFG="$BATS_TEST_TMPDIR/cfg-a"; OTHER="$BATS_TEST_TMPDIR/cfg-b"
   SLUG="-Users-x-thing"; mkdir -p "$CFG/projects/$SLUG" "$OTHER/projects/$SLUG"
   SID="aaaa1111-0000-4000-8000-000000000001"
   TX="$CFG/projects/$SLUG/$SID.jsonl"
+  # shellcheck disable=SC1090  # the subject under test, resolved from $REPO at run time
   . "$LIB"
 }
 turn() { # $1=file $2=ts $3=model $4=effort [$5=text]
@@ -103,7 +113,7 @@ limit() { printf '{"type":"assistant","timestamp":"%s","isApiErrorMessage":true,
   printf '%s\n' "$joined" | grep -qx 'exec "$CC_PANE_RUNNER"'
   ! printf '%s\n' "$joined" | grep -q 'exec bash'
 }
-@test "launch tail CONTROL: with no runner anywhere the argv fallback is `-- /bin/bash <launcher>`" {
+@test "launch tail CONTROL: with no runner anywhere the argv fallback is \`-- /bin/bash <launcher>\`" {
   export LR_LIB_DIR="$BATS_TEST_TMPDIR/nowhere" CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/nowhere" CC_PANE_RUNNER_BIN="$BATS_TEST_TMPDIR/absent"
   lr_launch_tail /tmp/lr-launch-x.sh
   [ "$LR_SPAWN_SHAPE" = argv ]

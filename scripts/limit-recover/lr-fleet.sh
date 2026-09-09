@@ -109,7 +109,7 @@ for l in sys.stdin:
     last=bool(d.get("isApiErrorMessage"))
 sys.exit(0 if last else 1)' || continue
       acct="$(lf_acct_of_cfg "$cfg")"
-      if head -c 8000 "$tx" 2>/dev/null | grep -q '"agentName"'; then disp=TEAMMATE; pane="-"; pid="-"; cwd="-"; tier="-"
+      if head -c 8000 "$tx" 2>/dev/null | grep '"agentName"' >/dev/null; then disp=TEAMMATE; pane="-"; pid="-"; cwd="-"; tier="-"
       else
         pane="-"; pid="-"; cwd="-"; tier="$(lr_tier_from_transcript "$cfg" "$sid" 2>/dev/null | tr ' ' '/' || true)"; [ -n "$tier" ] || tier="-"
         if rows="$(lr_registry_live_rows "$sid")"; then
@@ -196,7 +196,7 @@ lf_row() { # sid pane_before pane_after acct_before acct_after mechanism/verdict
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$(lf_now)" >> "$FLEET_DIR/$RUN/results.tsv"
 }
 lf_report() { # $1=run dir
-  local d="$1" f="$1/results.tsv" sid pb pa ab aa mv note ts n=0 inplace=0 newp=0 gaps=0
+  local d="$1" f="$1/results.tsv" sid pb pa ab aa mv note n=0 inplace=0 newp=0 gaps=0
   [ -f "$f" ] || { echo "lr-fleet: no results in $d"; return 1; }
   echo "FLEET RECOVERY — $(basename "$d")"
   printf '%-9s %-8s %-8s %-7s %-7s %-26s %s\n' SID "PANE→" "PANE←" "ACCT→" "ACCT←" MECHANISM/VERDICT NOTE
@@ -315,7 +315,7 @@ EOF
       nrows="$(printf '%s\n' "$rows" | grep -c .)"; nprocs="$(printf '%s' "$procs" | grep -c . || true)"
       # a registry pid that IS a --resume process counts once
       total=$((nrows + nprocs))
-      while IFS=$'\t' read -r pane pid _ _; do printf '%s\n' "$procs" | grep -qx "$pid" && total=$((total-1)); done <<EOF
+      while IFS=$'\t' read -r pane pid _ _; do printf '%s\n' "$procs" | grep -x "$pid" >/dev/null && total=$((total-1)); done <<EOF
 $rows
 EOF
       [ "$total" -gt 1 ] || continue
