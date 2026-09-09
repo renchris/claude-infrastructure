@@ -2719,3 +2719,52 @@ needs_human_json() {
   [ "$(field "$output" UNCONVICTED_MINE)" = "0" ]
   [ "$(field "$output" RUNG)" = "✅" ]
 }
+
+# ── _bounded: the fork bound must not depend on PATH (A01-skeptic + CRITIC M6, 2026-09-08) ────────
+# `_bounded` gated on `command -v timeout`. GNU coreutils' `timeout` has no macOS system copy — on
+# this box it exists only under /opt/homebrew/bin — and 7 of 25 live claude processes (kitty- and
+# aftman-launched, the wave lead among them) run with a PATH that never contained it. On those, all
+# 17 `_bounded` call sites here degraded to unbounded forks on the Stop path of every close, and no
+# surface this script emits could tell a bounded run from an unbounded one.
+off_path_timeout() { # → echoes an off-PATH bounder, or nothing
+  local c
+  for c in /opt/homebrew/bin/timeout /opt/homebrew/bin/gtimeout \
+           /usr/local/bin/timeout /usr/local/bin/gtimeout; do
+    [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 0
+}
+
+@test "_bounded: with PATH=/usr/bin:/bin the store read is STILL bounded (a wedged store is killed)" {
+  local bin; bin="$(off_path_timeout)"
+  [ -n "$bin" ] || skip "no off-PATH timeout on this box — the degraded PATH cannot be simulated"
+  ok_state; export WRAP_SESSION_ID="$SID"
+  # A store that never answers. Bounded ⇒ killed ⇒ YOURS_SRC=error (the documented fail-open).
+  # Unbounded ⇒ it answers `[]` after the sleep and YOURS_SRC names the sid source instead.
+  local stub="$BATS_TEST_TMPDIR/wedged-backlog"
+  printf '%s\n' '#!/usr/bin/env bash' 'sleep 6' 'printf "[]"' > "$stub"; chmod +x "$stub"
+  export CC_BACKLOG_BIN="$stub" WRAP_BACKLOG_TIMEOUT_S=1
+  run env PATH=/usr/bin:/bin bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" YOURS_SRC)" = "error" ]
+  [ "$(field "$output" BOUND_SRC)" = "$bin" ]
+}
+
+@test "_bounded: an explicit WRAP_TIMEOUT_BIN is used and NAMED in the machine output" {
+  local bin; bin="$(off_path_timeout)"
+  [ -n "$bin" ] || skip "no coreutils timeout on this box"
+  export WRAP_TIMEOUT_BIN="$bin"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" BOUND_SRC)" = "$bin" ]
+}
+
+@test "_bounded: no bounder anywhere ⇒ BOUND_SRC=none — the fail-open is VISIBLE, not silent" {
+  # The fallback is deliberate (a read we cannot bound beats a signal we cannot get), but a
+  # fail-safe default that renders identically to the healthy state is unfalsifiable by its own
+  # output — MEMORY.md fail-safe-default-mimics-the-healthy-state. It has to say so.
+  export WRAP_TIMEOUT_BIN="$BATS_TEST_TMPDIR/no-such-timeout"
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" BOUND_SRC)" = "none" ]
+}

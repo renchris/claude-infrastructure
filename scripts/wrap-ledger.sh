@@ -709,9 +709,44 @@ _resolve_backlog_bin() {
 }
 
 # Bound the fork: this runs from a Stop hook on every turn close, and a wedged backlog read must
-# never hold the close open. No `timeout` on PATH ⇒ run unbounded rather than lose the signal.
+# never hold the close open. No bounder anywhere ⇒ run unbounded rather than lose the signal.
+#
+# `command -v timeout` WAS THE WRONG QUESTION (A01-skeptic + CRITIC M6, 2026-09-08). GNU coreutils'
+# `timeout` has no macOS system copy — on this box it exists only at /opt/homebrew/bin/timeout (and
+# as gtimeout; /usr/local/bin on Intel) — and 7 of 25 live claude processes, INCLUDING the wave
+# lead, run with a PATH carrying no /opt/homebrew/bin at all (kitty- and aftman-launched panes
+# inherit a login PATH nothing extended). For those sessions EVERY `_bounded` call here silently
+# degraded to an unbounded fork: 17 call sites, each a store read or a git call, on the Stop path
+# of every close — which is exactly the class of wedge the 5 s budgets exist to survive. The
+# unbounded fallback stays (a read we cannot bound still beats a signal we cannot get), but it is
+# now the LAST resort rather than the first thing a missing PATH entry reaches.
+#
+# Resolved ONCE — the probe is a handful of `[ -x ]` tests — and REPORTED as BOUND_SRC, because a
+# fail-open default that mimics the healthy state is unfalsifiable by its own output (MEMORY.md
+# fail-safe-default-mimics-the-healthy-state): before this, a bounded run and an unbounded one were
+# byte-identical in every surface this script emits, which is why the degradation ran unseen.
+# Seam: WRAP_TIMEOUT_BIN — an explicit path, and a NON-executable value pins "no bounder", which is
+# what makes the unbounded fallback testable at all.
+_WRAP_BOUND_BIN=""; _WRAP_BOUND_SRC="none"
+_resolve_bound_bin() {
+  local c
+  if [ -n "${WRAP_TIMEOUT_BIN:-}" ]; then
+    if [ -x "$WRAP_TIMEOUT_BIN" ]; then _WRAP_BOUND_BIN="$WRAP_TIMEOUT_BIN"; _WRAP_BOUND_SRC="$WRAP_TIMEOUT_BIN"; fi
+    return 0
+  fi
+  # PATH first (it is the operator's own answer where it has one), then the two locations a macOS
+  # coreutils install actually uses, under both names.
+  for c in "$(command -v timeout 2>/dev/null || true)" \
+           "$(command -v gtimeout 2>/dev/null || true)" \
+           /opt/homebrew/bin/timeout /opt/homebrew/bin/gtimeout \
+           /usr/local/bin/timeout /usr/local/bin/gtimeout; do
+    if [ -n "$c" ] && [ -x "$c" ]; then _WRAP_BOUND_BIN="$c"; _WRAP_BOUND_SRC="$c"; return 0; fi
+  done
+  return 0
+}
+_resolve_bound_bin
 _bounded() { local s="$1"; shift
-  if command -v timeout >/dev/null 2>&1; then timeout "$s" "$@"; else "$@"; fi
+  if [ -n "$_WRAP_BOUND_BIN" ]; then "$_WRAP_BOUND_BIN" "$s" "$@"; else "$@"; fi
 }
 
 # YOURS = blocked backlog items whose .session == $SID. ANY failure (no binary, non-zero exit,
@@ -1894,6 +1929,9 @@ emit_machine() {
   printf 'GOAL_LAST_T=%s\n' "$GOAL_LAST_T"
   printf 'GOAL_AGE_MIN=%s\n' "$GOAL_AGE_MIN"
   printf 'GOAL_LINE=%s\n' "$GOAL_LINE"
+  # WHICH bounder every _bounded fork above actually used — `none` means the reads in this run were
+  # UNBOUNDED. Emitted so the degradation has a surface at all (§ _bounded).
+  printf 'BOUND_SRC=%s\n' "$_WRAP_BOUND_SRC"
   printf 'TRUNK=%s\n' "${TRUNK:-none}"
   printf 'SHAS=%s\n' "$SHAS"
 }
