@@ -246,13 +246,30 @@ close. Recorded here because a successor reading only the disk would otherwise r
 | W0 claude-md | `2c882c549` | 01:53Z |
 | W1b handoff-fire · W1c stop-hooks (4 commits) · W1d dispatch-hygiene · W1g supervisor-restart | in their land queues at 02:20Z (load **112** on 10 cores — seven `ship-land`s contending for one lock; each waits 15–45 min) | — |
 
-**W2 is staged, not fired.** Eight briefs at `/tmp/fire-ed-w2-{14,b1,b2,b4,b5,b6,b17,b21}.txt` (each ≤16
-lines + the common contract), goals at `/tmp/fire-ed-w2-goals.tsv`, driver `/tmp/fire-ed-w2.sh [id …]`
-(fires from this worktree with `--notify-back 643`). Gate: W1c on trunk (rank 8 must land before any
-`wrap-ledger` timing) **and** load < 20 (the 2.0/core fire rule) — a background waiter
-(`/tmp/ed-w2-gate-wait.sh`) wakes the lead. Once W1b's rank 7 lands, `handoff-fire` refuses at > 8
-sessions mid-turn, so W2 fires in slices sized to that ceiling (`/tmp/fire-ed-w2.sh 14 b17 b21`, then
-the rest), the intended behaviour.
+**W2 fires (from pane 643, `--notify-back 643`; briefs `/tmp/fire-ed-w2-{14,b1,b2,b4,b5,b6,b17,b21}.txt`,
+goals `/tmp/fire-ed-w2-goals.tsv`, driver `/tmp/fire-ed-w2.sh [id …]`).** W1 was complete on trunk at
+03:01Z (W1b `295c1da82` `889102f7e` · W1c `a910384b7` `61059cbc9` `6d5b9b892` `223369d30` — rank 8 verified
+by content at `wrap-ledger.sh:740` · W1g `23d5994da` · W1d `32b64cfef` `026e653e3`), every W1 pane retired,
+and 625 had returned every custody row, so the W1c half of the gate was open; slice 1 went at load 24–34.
+
+| W2 item | pane | fired | dispatcher verdict | peer state (transcript size · mtime · worktree) |
+|---|---|---|---|---|
+| 14 termination census (writer) | 673 (`next`) | 03:19Z, window 391 s + one INC-4 resend | **FIRE FAILED — never engaged** (rc 1: no custody row, no goal, "retire that pane first") | **working** — 1.38 MB at 03:29Z; `scripts/measure-terminations.py` created, `idl-abstain-alarm.sh` modified |
+| B17 jq-fatal record | 675 (`next`) | 03:28Z, same window | same verdict | **working** — 1.14 MB at 03:35Z |
+| B21 closes-vs-evaluations | — | 03:35Z | **capacity gate rc 9**: 9 sessions mid-turn + 1 > active ceiling 8 (rank 7's gate, as designed; "refusal 1 of 1 — the next fire past the budget ADMITS and pages") | not fired — re-queued at the head of slice 2 |
+
+**Four of four "never engaged" verdicts today were false** (W1c, W0, W2-14, B17: each pane ingested
+the brief 2–6 min after its window and worked). The verdict is a statement about the dispatcher's
+window, and its consequence — `engage_rc_consequence 1:custody → no row` — leaves a live worker
+with no custody debt and no goal while its printed remedy invites a colliding re-fire. The file's
+own comment names the asymmetry the row contradicts. **Filed as wave W1h** (brief
+`/tmp/fire-ed-w1h.txt`, worktree `ed-w1h-late-engage`, goal row in the same tsv): 1:custody → open
+the row (late provenance), the never-engaged message prints the transcript-mtime + worktree-dirt
+check instead of "retire first", the goal half and the window untouched, red-proofed in the
+existing capacity/custody bats. Slice 2 (`b21 w1h b1 b2 b4 b5 b6`) runs as one self-pacing job:
+before each fire it waits on the gate's own instrument (`cc_sp_active` ≤ 7, polled every 60 s, 1 h
+cap per item, measured 12 mid-turn at 03:40Z) and stops on the first rc 9 — a second consecutive
+refusal is the paged admission, which is not a state to march into. Log `/tmp/fire-ed-w2-slice2.log`.
 
 **Live layer:** `deploy-live.sh` run detached at 01:51Z from the shared checkout (live HEAD `f2b1cdff4`,
 which already carries W1a). It reported the `lead-supervisor` daemon on STALE bytes (W1g's exact
