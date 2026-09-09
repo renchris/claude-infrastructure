@@ -115,3 +115,44 @@ unmeasured here, and the `⛔` exemption argued above is explicitly scoped to a 
 retired on `📦` the answer would be 13/54 = 24 % and the whole item would be refuted. Nothing
 suggests that — `📦` is 0 in 44 observed retires and 4 of the 10 self-report a clean landed close in
 their own final message — but the bound is honest and the stratum is never folded into "would pass".
+
+---
+
+## W3-B1 outcome — what shipped, 2026-09-09
+
+**Both halves of the verdict above were implemented as written.** `handoff-fire.sh self-close
+--terminal` now REFUSES with **exit 8** on the at-retire stamp's `UNLANDED>0` or `REMAINDER≠0`, and
+`⛔` is annotate-only permanently. The predicate is `hf_selfclose_ledger_refusal` — a pure function of
+four parsed fields that never reads `RUNG`, which is the distinction this report exists to defend.
+The stamp reaches it through a new optional `$3` fields-out path: every caller runs `hf_ledger_stamp`
+inside a command substitution, so a variable set there cannot escape and a file is the only channel.
+
+**Re-measured with the SHIPPED predicate, not the specified one.** The instrument gained
+`--as-built` for exactly this — re-running the old mode would have certified a different program:
+
+| reading | refused / resolvable | 2026-09-09 re-collection |
+|---|---|---|
+| `--rung-mode` | 3 / 41 = 7.3 % | the naive reading |
+| default (`fields`, incl. `BLOCKED`) | 2 / 41 = 4.9 % | the rule AS SPECIFIED |
+| **`--as-built`** | **0 / 41 = 0.0 %** | **what a session actually meets** |
+
+The window has rolled ~10 h since the measurement above, so the denominator is 41 resolvable / 13
+unresolvable rather than 44 / 10. Direction unchanged; the shipped gate's cost on the legitimate set
+is zero. `--as-built` also prints `FIELDLESS_REFUSABLE_RUNG` (currently 1): rows whose block named
+📦/⛔ but carried no numeric field. A field-keyed gate cannot see those, so `REFUSED=0` is a **lower
+bound** and says so rather than leaving a reader to assume it exact.
+
+**The ordering argument in fail-direction (a) was NOT satisfied and did not need to be.** That
+paragraph asked for the rank-5 stamp to land before any refusal so the re-measurement could read a
+purpose-built field. It had already landed (`889102f7e`), but only into the STAMP — the custody row
+still carries no ledger field (`bin/cc-custody:16-17` unchanged), so this re-measurement still scrapes
+hook output out of transcripts. `bin/cc-custody` was left untouched deliberately: the refusal reads
+the stamp in-process, at the instant it is taken, and needs no store at all.
+
+**Not covered, and stated rather than assumed away:** fail-direction (d) still stands — the population
+is 100 % fired peers, so the gate's cost on an **ORIGIN** `--terminal` self-close is unmeasured, and
+the ⛔ exemption is argued only for a fired peer. On an origin session an open class-C packet plausibly
+IS a loose end, which would argue for refusing there; nothing here measures it.
+
+Landed: see `git log -S hf_selfclose_ledger_refusal`. Red-proof:
+`tests/handoff-fire-selfclose-refusal.bats` (8 cases, 7 red against `origin/main`).
