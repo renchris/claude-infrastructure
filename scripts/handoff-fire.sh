@@ -3312,6 +3312,79 @@ _hf_custody() {
   return 0
 }
 
+# ── THE LEDGER STAMP AT RETIREMENT — ONE COPY FOR BOTH ACTUATORS (self-close and --recycle) ──────
+# 56% of this fleet's sessions end inside this script, and until now the only thing either actuator
+# asked about the state it was retiring was "is the tree dirty". Dirtiness is one rung of seven. A
+# session holding three unlanded commits, a non-zero frozen-DoD remainder and an armed goal that
+# never evaluated retires exactly as quietly as a ✅ one, and the successor — or the originator
+# reading the custody row — inherits a pane with no record that any of that was true.
+#
+# 🚨 THIS ANNOTATES AND MAY NEVER REFUSE. That is the whole design, not a caution: an unretireable
+# pane is a worse failure than an unannotated one (the same argument sc_announce_before_retire makes
+# below, for the same reason — a peer that cannot satisfy a gate holds a pane and a worktree
+# forever). Every failure path here is a warn-and-proceed and every return is 0, so a stamp that
+# cannot be taken costs a line of stderr and nothing else. A REFUSAL on 📦/⛔ is a separate, later
+# decision gated on a measurement that has not been made — do not build it here.
+#
+# WARN-AND-PROCEED ON AN UNRESOLVABLE SID, stated as its own case because it is the common one and
+# because silence would make it indistinguishable from a clean ledger. A retiring pane's CC session
+# id comes from a registry row that is legitimately absent (a provisional row carries no session_id
+# — measured 10 of 19 live rows) and the pane may be another account's. No sid ⇒ no ledger ⇒ SAY SO,
+# in the stamp itself, so a reader can tell "nothing was open" from "nobody looked".
+#
+# BOUNDED. wrap-ledger.sh forks ~19 git subprocesses plus the operator stores; it bounds its own
+# store reads, but nothing bounds the whole. This runs on a close path, so it gets a wall clock and
+# a timeout is treated exactly like any other unreadable instrument.
+hf_ledger_stamp() { # $1=retiring CC session id (may be empty) $2=cwd (empty ⇒ $PWD) → one line, always 0
+  local sid="${1:-}" dir="${2:-}" wl="" d out line k v
+  local rung="" remainder="" unlanded="" goal_src="" goal_last="" tr=""
+  for d in "$(dirname "$_CC_KS")/wrap-ledger.sh" \
+           "$(dirname "$0")/wrap-ledger.sh" \
+           "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/wrap-ledger.sh" \
+           "${HOME:-}/.claude/scripts/wrap-ledger.sh"; do
+    [ -x "$d" ] && { wl="$d"; break; }
+  done
+  if [ -z "$wl" ]; then
+    printf 'LEDGER AT RETIREMENT: UNREAD — scripts/wrap-ledger.sh is unreachable from this pane; nobody looked, so this is NOT a clean-state claim.'
+    return 0
+  fi
+  if [ -z "$sid" ]; then
+    printf 'LEDGER AT RETIREMENT: UNREAD — the retiring pane'"'"'s CC session id could not be resolved (a provisional cc-registry row carries none), so the ledger could not be scoped to it; nobody looked, and this is NOT a clean-state claim.'
+    return 0
+  fi
+  # The transcript is wrap-ledger's memo key AND its goal-liveness input. Best-effort: without it the
+  # ledger still answers, it just re-derives instead of reading the per-event cache.
+  tr="$(transcript_for_sid "$sid" 2>/dev/null || true)"
+  out="$( cd "${dir:-$PWD}" 2>/dev/null \
+          && WRAP_TRANSCRIPT="$tr" hf_bounded_s "${CC_STAMP_TIMEOUT_S:-20}" \
+               "$wl" --machine --session "$sid" 2>/dev/null )" || out=""
+  if [ -z "$out" ]; then
+    printf 'LEDGER AT RETIREMENT: UNREAD — wrap-ledger.sh returned nothing for session %s within %ss (killed, or it refused); nobody looked, so this is NOT a clean-state claim.' \
+      "$sid" "${CC_STAMP_TIMEOUT_S:-20}"
+    return 0
+  fi
+  # Parse ONLY the keys this stamp names. READOUT and GOAL_LINE carry `=` and spaces, so a blanket
+  # eval or a `source` of this block would be a shell injection from a ledger; the case arm below
+  # cannot execute anything it reads.
+  while IFS= read -r line; do
+    k="${line%%=*}"; v="${line#*=}"
+    case "$k" in
+      RUNG)      rung="$v" ;;
+      REMAINDER) remainder="$v" ;;
+      UNLANDED)  unlanded="$v" ;;
+      GOAL_SRC)  goal_src="$v" ;;
+      GOAL_LAST) goal_last="$v" ;;
+    esac
+  done <<STAMP
+$out
+STAMP
+  [ -n "$rung" ] || rung="?"
+  printf 'LEDGER AT RETIREMENT (wrap-ledger.sh --machine, session %s): %s · frozen-DoD remainder %s · %s commit(s) NOT landed on the trunk · goal %s' \
+    "$sid" "$rung" "${remainder:-?}" "${unlanded:-?}" "${goal_src:-none}"
+  [ -n "$goal_last" ] && [ "$goal_last" != none ] && printf ' (last verdict %s)' "$goal_last"
+  return 0
+}
+
 # sc_announce_before_retire — the F-1 actuator. Kept a FUNCTION rather than inline in the self-close
 # preflight so it is drivable on its own: the self-close path ahead of it resolves pane identity,
 # teammate liveness and the origin class, none of which this decision depends on, and a test that had
@@ -7111,7 +7184,19 @@ MSG
   # stamp is the join key (the same one adoption proves identity by). Best-effort; a close never
   # dies on its bookkeeping, and a marker-less schema-1 stamp simply discharges nothing.
   _sc_cmk="$(jq -r '.marker // ""' "$FIRED_DIR/$SC_SID.json" 2>/dev/null || true)"
-  [ -n "$_sc_cmk" ] && _hf_custody return "$_sc_cmk"
+  # ── THE LEDGER STAMP (rank 5) — ANNOTATE, NEVER REFUSE ────────────────────────────────────────
+  # Taken HERE: after every gate that can still abort this close, so the stamp is never written for
+  # a retirement that did not happen, and before the custody discharge below, which is the store
+  # that carries it to the originator. The dirty-tree guard above is the ONLY state either actuator
+  # asked about until now; this adds the other six rungs, read from the one renderer that owns them
+  # rather than re-derived here (consume, do not re-implement — the same rule capacity_gate follows
+  # for cc_hw_*). Its cost is one bounded wrap-ledger run on a path that is about to destroy a pane.
+  SC_LEDGER_STAMP="$(hf_ledger_stamp "$(cc_sid_for_pane "$SC_SID")" "${SC_SUBJ_CWD:-}")"
+  echo "→ $SC_LEDGER_STAMP" >&2
+  # The custody row is the ORIGINATOR's copy — it is what `cc-custody list` shows a lead that fired
+  # this peer, and `--why` is an existing field on the return verb (bin/cc-custody:212-227), so this
+  # needs no change there. A marker-less stamp still reached stderr above.
+  [ -n "$_sc_cmk" ] && _hf_custody return "$_sc_cmk" --why "$SC_LEDGER_STAMP"
   SC_LOG="/tmp/handoff-selfclose-$SC_SID-$(date +%s).log"
   if [ "$SC_DRY" = 1 ]; then
     echo "── dry run (self-close) ─────────────────────────"
@@ -8855,6 +8940,22 @@ if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 
         printf -- '- **%s** — `%s`\n  partial transcript: `%s`\n' "$_sa_d" "$_sa_i" "$_sa_p"
       done
       printf '\n(predecessor session: %s)\n' "${RCY_SUBAGENT_SID:-unknown}"
+    } >> "$PF_NB"
+  fi
+  # ---- THE LEDGER STAMP IN THE SUCCESSOR BRIEF (rank 5) — ANNOTATE, NEVER REFUSE ---------------
+  # A recycle destroys the predecessor's context BY DESIGN, and the successor's whole picture of the
+  # state it inherits is this file. Until now that file said nothing about whether the predecessor
+  # was retiring on 📦 (commits nobody but this machine can see), on a non-zero frozen-DoD remainder,
+  # or under a goal that had stopped evaluating — so a successor could open on a clean-looking brief
+  # over three unlanded commits and never learn it. Same actuator-shared reader as self-close.
+  # RECYCLE ONLY: an ordinary fire's successor is a NEW session with no predecessor state to inherit,
+  # and stamping the retiring-session ledger onto it would assert a fact about the wrong session.
+  if [ "$RECYCLE" = 1 ]; then
+    { printf '\n## STATE YOU ARE INHERITING (read before you plan)\n'
+      printf '%s\n' "$(hf_ledger_stamp "${RCY_SUBAGENT_SID:-}" "")"
+      printf 'This is your predecessor'"'"'s ledger at the instant it recycled, not yours. A rung other\n'
+      printf 'than ✅ is work that survived the recycle and is now YOURS: collect it before starting\n'
+      printf 'anything new. UNREAD means nobody looked — it is not a clean-state claim.\n'
     } >> "$PF_NB"
   fi
   # THE AUTHOR'S PAYLOAD, kept for the payload gates. They exist to judge what a HUMAN/AGENT WROTE;
