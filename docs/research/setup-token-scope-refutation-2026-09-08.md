@@ -12,8 +12,12 @@ it stands degrades that account **permanently and on every launch**, not only wh
 credential has died. The item's central cost claim, *"at zero cost to quota/routing"*, is true of
 the **quota spine** and false of the **session**.
 
-Two facts the item filed as UNKNOWN are now settled from the binary, and both were settleable
-without minting anything — which is why this cost 36 days of queue time and no experiment.
+Two facts the item filed as UNKNOWN are now settled from the binary, without minting anything.
+
+**But "nobody ran the experiment" would be the wrong lesson, and it is the one I reached for
+first.** The experiment WAS run, thirty-six days earlier and properly — see § How this survived a
+correction below. The finding was not missing; it had been buried by a correction that was itself
+correct.
 
 ## Fact 1 — the grant is narrowed server-side, and no env var can widen it
 
@@ -88,6 +92,42 @@ The item guessed `user:mcp_servers` was "probably not a loss" because motion-plu
 own OAuth. **That guess holds** — it is now verified rather than assumed. It is the only one of the
 item's three guesses that survived.
 
+## How this survived a correction — the re-mint's actual root cause
+
+This idea has cycled three times, and the loop is more instructive than the finding.
+
+1. **`9737a84c`** ran the gating experiment against a real minted token, *with a positive control*:
+   `setup-token` (inference-only) → **HTTP 403** at `/api/oauth/usage`; keychain (five scopes) →
+   **200**. Textbook — the control makes the failure attributable rather than bare. It concluded
+   "Method A is dead", because a 403 there would blind `/accounts` and the router.
+2. **`dd02f7df`** refuted that conclusion, and was **right to**: `bin/claude-accounts` bearers the
+   credential it read from the Keychain, never the env var, so the quota spine cannot be blinded.
+3. But it then published the claim this item inherited — *"ADDITIVE … at no cost to quota or
+   routing"*, which the backlog row compressed to **"at zero cost"**.
+
+**Refuting one objection to a claim does not establish the claim.** Step 2 disposed of the
+*quota-blinding* objection and nothing else. The 403 from step 1 was never an argument about quota
+in the first place — it was direct evidence that **the token is scope-narrowed at the server**, and
+that fact survived the correction completely intact. It was demoted to a footnote about one
+untested scope (`user:file_upload`) because the objection it had been *attached to* had fallen.
+Nobody asked what the other three scopes cost, or whether the env token displaces the Keychain
+*inside* a session.
+
+That last question is the one the framing made unaskable. Both prior sessions modelled the two
+stores as *"separate stores that never touch"* — true of the **external reader** (`claude-accounts`
+does read the Keychain directly) and simply assumed of every other consumer. Inside a session the
+resolver returns on the env var first, so the stores touch in the only place that matters.
+
+The generalisable form of each, since both are cheap to repeat:
+
+- **A correction inherits the burden of the claim it rescues.** Refuting objection *O* to claim *C*
+  establishes ¬*O*, never *C* — and any measurement taken in service of *O* outlives it. Re-file the
+  surviving measurement under its own heading before closing the correction. (Sibling rule, opposite
+  direction: *cause refuted ≠ effect discharged*.)
+- **A credential source that takes precedence is not a fallback.** Before calling a supplementary
+  token "insurance", read the resolver's *return order*. Insurance engages when the primary fails;
+  this one engages always, and the primary becomes unreachable.
+
 ## What was fixed instead
 
 The loader landed by `29911f226` is correct on the hazard it was built for (cross-account
@@ -105,13 +145,29 @@ Red-proof: `tests/config-mirror-oauth-token.bats` cases 13 and 14 fail against t
 and pass after; cases 15 and 16 are guards and are labelled as such in the file rather than
 implied to be evidence.
 
-## Residual — the one thing a mint would still settle
+## RULED: dropped — do not re-open without new evidence
 
-Whether the API honours an image upload on an inference-only bearer. It is a narrow question
-sitting underneath a decided one: even a clean answer would not make **unconditional** wiring
-net-positive, because Fact 2 makes the cost permanent while the benefit is occasional. The design
-that would be worth building is a loader that exports the token **only when the Keychain
-credential is actually unusable** — insurance without the daily tax. That is a real design call
-with real failure modes (what "unusable" means, measured in a launcher hot path, and whether a
-silently-degraded session beats a clean "logged out, re-login"), and it is filed rather than
-guessed at.
+Put to the operator as decision packet `a90e1ac2597e` (drop entirely vs. build a loader that
+exports the token only when the Keychain credential has actually died), at conviction 65 with a
+recommendation to drop. **Operator ruled: drop, 2026-09-08.** No token files are to be created;
+the automated re-login path stays the only cure for a lapsed login.
+
+The three arguments, recorded so the fourth re-mint has to beat them rather than rediscover them:
+
+1. **The gap is already covered.** `cc-relogin` drives the monthly cliff unattended — headless
+   refresh grant, then unattended OAuth in the account's own auth-browser profile. A long-lived
+   token only earns its keep when *both* legs fail.
+2. **It trades a loud failure for a quiet one, and the quiet one is worse.** A lapsed account stops
+   cleanly and drops out of the routing pool, which fails closed on absent quota. A token-bearing
+   account keeps running at one scope with every loss silent. Over an unattended wave, "stopped at
+   02:00" is recoverable; "ran six hours subtly wrong" is not.
+3. **The conditional version adds a new trigger for exactly that risk.** Judging credential death
+   in the launcher hot path on every launch means a wrong "dead" verdict silently downgrades a
+   *healthy* account — failure 2, now reachable by a bug rather than by policy.
+
+**What would legitimately re-open this** (either one, not a re-argument):
+- the residual measured — whether the API honours an image upload on an inference-only bearer —
+  **and** a decision that a session should never stop even at the price of running degraded; or
+- a measured failure rate for the unattended browser re-login leg. Argument 1 rests on that leg
+  working, and nothing on disk counts it. If it fails often, the token becomes real insurance.
+  Counting it is the one measurement that would move this above 90% either way.
