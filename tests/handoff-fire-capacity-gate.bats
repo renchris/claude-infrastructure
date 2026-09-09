@@ -1140,3 +1140,47 @@ fire_e() {
   run bash -c "jq -r 'select(.class==\"admitted\")|.basis' '$LOG' | tail -1"
   [ "$output" = "budget-expired" ] || { echo "the release filed basis '$output', not budget-expired"; false; }
 }
+
+# ── E9/E10 — THE LIVE ACTIVE BRANCH (rank 7, 2026-09-08) ────────────────────────────────────────
+# 🚨 READ THIS BEFORE TOUCHING setup(): setup() exports CC_FIRE_ACTIVE_OVERRIDE=0, and that override
+# is tested BEFORE the `command -v cc_sp_active` branch. So every case in this file above these two
+# takes the override arm, and the arm that production actually takes — the live census read — had
+# never once been executed by a test. It was broken for exactly as long as it existed: measured
+# 2026-09-08, 48 of 48 production capacity admits in ~/.claude/logs/handoffs.jsonl carried
+# `blind: active` while 219 harness admits read `none`
+# (docs/research/exhaustive-drive-2026-09-08/A11-capacity-and-venue.md §4). The cause was scope, not
+# arithmetic: the only site sourcing spawn-presence.sh was inside `$(_cc_fire_presence)`, a subshell,
+# so every function it defined died before the term below could call one.
+#
+# These two cases therefore UNSET the override. `CC_SP_ACTIVE_OVERRIDE` is the LIBRARY's own seam
+# (spawn-presence.sh cc_sp_active:298-301) and it is what keeps them hermetic: the count is an input,
+# but reaching it still requires cc_sp_active to be a defined command in the gate's own shell, which
+# is the whole property under test.
+
+@test "E9 the ACTIVE term is not blind on a production fire — the live branch, no CC_FIRE_ACTIVE_OVERRIDE" {
+  command -v jq >/dev/null 2>&1 || skip "emit_fire_event writes rows only when jq is present"
+  LOG="$HOME/.claude/logs/handoffs.jsonl"
+  run env -u CC_FIRE_ACTIVE_OVERRIDE -u CC_FIRE_LOAD_TERM \
+      STUB_NCPU=10 STUB_LOAD=1.00 CC_SP_ACTIVE_OVERRIDE=0 \
+      bash "$HF" --prompt-file "$PAYLOAD" --dry-run
+  [ "$status" -ne 9 ]
+  run bash -c "jq -r 'select(.class==\"admitted\")|.detail' '$LOG' | tail -1"
+  # (a) the blindness is GONE. This half alone is not enough — a term switched off is also not blind.
+  [[ "$output" != *"blind: active"* ]] \
+    || { echo "the active term is STILL blind on a production fire — spawn-presence.sh died in a subshell: $output"; false; }
+  # (b) ...and the term actually EVALUATED, which is what separates un-blinded from disabled.
+  [[ "$output" == *"0 sessions mid-turn"* ]] \
+    || { echo "the active term did not evaluate — the row names no census: $output"; false; }
+}
+
+@test "E10 the live ACTIVE branch is a real TERM end to end — it refuses over the ceiling" {
+  # The positive control for E9. Un-blinding an instrument that could never bind would be a cosmetic
+  # fix: the same fire, over the same seam, must REFUSE when the census clears the ceiling — and that
+  # refusal is only reachable if cc_sp_active resolved in the gate's own shell.
+  run env -u CC_FIRE_ACTIVE_OVERRIDE -u CC_FIRE_LOAD_TERM \
+      STUB_NCPU=10 STUB_LOAD=1.00 CC_SP_ACTIVE_OVERRIDE=8 \
+      bash "$HF" --prompt-file "$PAYLOAD" --dry-run
+  [ "$status" -eq 9 ]
+  [[ "$output" == *"8 sessions mid-turn + 1 > active ceiling 8"* ]] \
+    || { echo "the live census did not reach the refusal arm: $output"; false; }
+}
