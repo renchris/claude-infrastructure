@@ -457,6 +457,13 @@ EOF
   [ -z "$output" ]
   jq -r '.reason' "$GOAL_INERT_IDL" | tail -1 | grep -q '^below-turn-threshold:0$'
   # …and that token is NOT one the alarm treats as blind
-  ! grep -qw "$(jq -r '.reason' "$GOAL_INERT_IDL" | tail -1 | cut -d: -f1)" \
-      <<<'no-jq no-session-id no-stdin no-telemetry stale-telemetry no-transcript-path transcript-missing not-a-repo no-cwd no-assistant-text' || false
+  # READ FROM THE ALARM, never from a copy of its list: the hardcoded literal this replaces was
+  # already stale the day `goal-unreadable` was enrolled, and a control that carries its own copy of
+  # the population it checks against can only ever certify the world it was written in
+  # (MEMORY.md control-must-replay-the-real-artifact).
+  run sed -n '/^_default_blind=(/,/)$/p' "$REPO/scripts/idl-abstain-alarm.sh"
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
+  printf '%s' "$output" | grep -q 'transcript-missing'     # positive control: we really read the set
+  ! printf '%s' "$output" | grep -qw 'below-turn-threshold' || false
 }
