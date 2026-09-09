@@ -185,3 +185,76 @@ setup() {
   ret_line=$(awk -v s="$fn_start" 'NR>s && !/^[[:space:]]*#/ && /return 1/ {print NR; exit}' "$MIRROR")
   [ -n "$tok_line" ] && [ -n "$ret_line" ] && [ "$tok_line" -lt "$ret_line" ]
 }
+
+# --- the SCOPE WARNING: an export that arms SILENTLY is the defect ---------------------------
+#
+# Added 2026-09-08 after the binary was read (docs/research/setup-token-scope-refutation-
+# 2026-09-08.md). Exporting this token narrows the session to user:inference and bypasses the
+# Keychain credential outright, and EVERY downstream consumer degrades quietly rather than
+# erroring — Claude in Chrome silently disabled, claude.ai org connectors silently skipped, org
+# UUID deterministically unresolved. Silence is the whole defect, so loudness is the whole fix.
+#
+# Red-proof status, stated honestly rather than implied: the first two cases FAIL against the
+# pre-fix loader (which emitted nothing at all) and pass after. The last two are GUARDS — they
+# also pass pre-fix, and exist to stop the warning being narrowed or switched off later. They are
+# not evidence the fix works; the first two are.
+
+@test "EFFECT: exporting a minted token WARNS that the session is inference-only (red-proof)" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  mktok next 'TOK-NEXT'
+  run run_loader "$HOME/.claude-next"
+  [ "$status" -eq 0 ]
+  # The token must still be exported — a warning that cost the export would be a worse bug.
+  echo "$output" | grep -qx 'tok=TOK-NEXT' || { echo "export lost: $output" >&2; return 1; }
+  echo "$output" | grep -q 'user:inference ONLY' || {
+    echo "SILENT ARM: no scope warning on export — got: $output" >&2; return 1; }
+  echo "$output" | grep -q 'next' || { echo "warning does not name the account: $output" >&2; return 1; }
+}
+
+@test "EFFECT: the warning names the CURE, not just the symptom (red-proof)" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  mktok next4 'TOK-NEXT4'
+  run run_loader "$HOME/.claude-quaternary"
+  [ "$status" -eq 0 ]
+  # Naming the exact file to delete is what makes this actionable rather than merely alarming.
+  echo "$output" | grep -q "rm .*oauth-tokens/next4.token" || {
+    echo "no actionable cure in the warning — got: $output" >&2; return 1; }
+}
+
+@test "GUARD: the UNSET arm is SILENT — the warning must not fire when no token is borne" {
+  command -v zsh >/dev/null 2>&1 || skip "zsh unavailable"
+  mktok next3 'TOK-NEXT3'                    # account 3 wired…
+  run run_loader "$HOME/.claude-secondary"   # …account 2 launched: clears, bears nothing
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qx 'tok=<UNSET>' || { echo "got: $output" >&2; return 1; }
+  # A warning that fired on every launch would carry as little information as one that never did.
+  if echo "$output" | grep -q '\[oauth-token\]'; then
+    echo "warning fired on the UNSET arm — got: $output" >&2; return 1
+  fi
+}
+
+@test "GUARD: the scope warning has no opt-out variable" {
+  # A warning each participant can silently switch off is not a warning — the same defect
+  # 0fd5dc64f fixed in cc-bats. Keyed on the loader body so a future suppression flag reddens
+  # here rather than shipping quietly.
+  #
+  # STRIP COMMENTS FIRST. The first cut of this guard matched the word "suppression" inside the
+  # loader's OWN comment explaining why there is no suppression switch — it convicted the
+  # documentation of being the defect it documents. A guard that reads prose is matching
+  # spellings, not the class; delete the prose, then match CODE.
+  local body code
+  body="$(sed -n '/^_cc_oauth_token_env()/,/^}/p' "$MIRROR")"
+  [ -n "$body" ]
+  echo "$body" | grep -q 'print -ru2' || {
+    echo "the warning is gone from the loader entirely" >&2; return 1; }
+  code="$(echo "$body" | sed -e 's/[[:space:]]*#.*$//')"
+  # An opt-out can only work by BRANCHING on something before the print, so look for a guarded
+  # print or an early return — the shapes a switch must take — not for suggestive words.
+  if echo "$code" | grep -qE '(\[\[|\[|if|&&|\|\|)[^|]*(QUIET|SILENT|SUPPRESS|NO_WARN|WARN=|VERBOSE)'; then
+    echo "an opt-out switch appeared in the loader CODE — got: $code" >&2; return 1
+  fi
+  # And the print must not be conditional on anything at all: exactly the two unguarded lines.
+  local n
+  n="$(echo "$code" | grep -c 'print -ru2')"
+  [ "$n" -eq 2 ] || { echo "expected 2 unguarded warning lines, found $n" >&2; return 1; }
+}
