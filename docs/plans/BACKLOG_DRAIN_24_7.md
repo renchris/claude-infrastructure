@@ -92,11 +92,12 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   `sig_reached_wrapper`), 3f4cffe03b40 (its prescribed "say it was your own session" IS refuted
   discriminator #1, and si_pid==the live arming session is the whole of the DANGEROUS class (C)),
   9046fbbdc74e (the bg-shell memoryPressure reap explains its 1-of-4 control, by id, at
-  cc-await-ping:823) · blocked none · filed none · released a6843865a2ec (the load-sensitive half of
-  the certification red is unmoved; its deterministic half is cured) · landed ead25a96b
-  (alarm-polarity-lint) + this entry; my deploy-parity fix rebase-conflicted with the identical
+  cc-await-ping:823), e07dc5e09f83 (a lint whose clean never named its population; SCOPE_NOTE added,
+  pattern deliberately NOT widened) · blocked none · filed none · released a6843865a2ec (the
+  load-sensitive half of the certification red is unmoved; its deterministic half is cured) · landed
+  ead25a96b (alarm-polarity-lint, discharging e07dc5e09f83) + this entry; my deploy-parity fix rebase-conflicted with the identical
   sibling arm already on trunk as **2a54f1416**, so it was SKIPPED, not lost — that red is cured by
-  content. `closed=3 closed_pre=3 closed_other=1 filed=2 net=1 blocked=2 min=3 lane=local-drain project=claude-infrastructure floor=MET` (the `filed=2`/`blocked=2` are concurrent siblings and `cc-backlog-reap`, verified not mine by `filedBy`).
+  content. `closed=4 closed_pre=4 closed_other=3 filed=2 net=2 blocked=2 min=3 lane=local-drain project=claude-infrastructure floor=MET` (the `filed=2`/`blocked=2` are concurrent siblings and `cc-backlog-reap`, verified not mine by `filedBy`).
 
 - **2026-09-08 — recycle #327 (lane infra):** closed 7cdf4ea8f10e, ce5e5310c457, 8fd1919f7769,
   b11fb41134fc, 8910aa0636c3, 3b95e3e8ec9e · blocked none · released 763522029afd, a6843865a2ec,
