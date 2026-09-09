@@ -283,6 +283,114 @@ mkbulk() {
   hasnt "$(cat "$d/MEMORY.md")" '](a01.md)'
 }
 
+# ── THE SCAN ENGINE (_ccmr_name_scan), 2026-09-08 ────────────────────────────────────────────
+# The hub scan and the citation scan both stopped being `grep -F` and became one anchored awk
+# pass (BSD grep is linear in pattern count: 1 pattern 0.16s, 163 patterns 45.0s over this
+# repo's 556 executable files). `grep -F` matches a SUBSTRING anywhere; the obvious fast
+# rewrites do not, and none of the tests above can tell the difference because every fixture
+# name in them sits on a token boundary. These four pin the substring semantics directly, so a
+# future "just split on non-filename characters and compare tokens" rewrite goes RED here
+# instead of silently un-protecting a memory.
+
+@test "hub scan: a citation INSIDE a longer token still counts, exactly as grep -F did" {
+  d="$(mkmem hubsub)"; mkbulk "$d"
+  # `xa01.md` CONTAINS `a01.md`. The shipped `grep -lF -- "$f" "$_c"` counted it, so the
+  # replacement must too — a token-boundary matcher would score a01 at inb=0 and demote it.
+  local i
+  for i in c1 c2 c3 c4; do
+    printf -- '---\nname: %s\ndescription: d\nmetadata:\n  type: project\n---\nsee xa01.md here\n' "$i" >"$d/$i.md"
+    touch -t "$OLD" "$d/$i.md"
+  done
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  grep -qF '](a01.md)' "$d/MEMORY.md"
+}
+
+@test "hub scan: two names ending at the SAME citation are both counted" {
+  d="$(mkmem hublen)"; mkbulk "$d"
+  # One occurrence of `xa01.md` ends the anchor `.md` at one position and satisfies BOTH `a01.md`
+  # and a longer sibling name that also ends there. The engine tests every distinct pattern
+  # LENGTH at each anchor, so an implementation that stops at the first length-group hit loses
+  # one of them. Give a01 four such citations and require it to survive.
+  addentry "$d" "xa01.md" project old "$(pad 140)"
+  local i
+  for i in c1 c2 c3 c4; do
+    printf -- '---\nname: %s\ndescription: d\nmetadata:\n  type: project\n---\nboth: xa01.md\n' "$i" >"$d/$i.md"
+    touch -t "$OLD" "$d/$i.md"
+  done
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  grep -qF '](a01.md)' "$d/MEMORY.md"
+  grep -qF '](xa01.md)' "$d/MEMORY.md"
+}
+
+@test "hub scan: a wikilink followed by another bracket still counts (overlapping anchors)" {
+  d="$(mkmem hubovl)"; mkbulk "$d"
+  # `[[a01]]]` contains the anchor `]]` twice, overlapping. The engine enumerates anchor
+  # occurrences by START so both are seen; advancing by the anchor's LENGTH would skip the
+  # second, and a citation written inside a nested bracket would stop protecting its target.
+  local i
+  for i in c1 c2 c3 c4; do
+    printf -- '---\nname: %s\ndescription: d\nmetadata:\n  type: project\n---\n[a [[a01]]] ok\n' "$i" >"$d/$i.md"
+    touch -t "$OLD" "$d/$i.md"
+  done
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  grep -qF '](a01.md)' "$d/MEMORY.md"
+}
+
+@test "mutation control: the pre-fix grep scan is blinded by a NUL and demotes the cited rule" {
+  # `grep -o` reports `Binary file <path> matches` INSTEAD of the matches the moment it sees a NUL
+  # ANYWHERE in the file, so a citation on line 1 of a file with a NUL on line 2 was LOST — the
+  # rule ranked 1 and, being the oldest, was demoted FIRST. The anchored awk pass reads the lines
+  # before the NUL. Anchor the mutation site exactly once so the mutant is the intended one.
+  [ "$(grep -c "CITED_LIST=\$(_ccmr_name_scan" "$SCRIPT")" -eq 1 ]
+  mut="$BATS_TEST_TMPDIR/mut-cite"
+  sed 's|CITED_LIST=$(_ccmr_name_scan .*|CITED_LIST=$(cut -f1 "$pat" >"$pat.mut"; grep -rhoF -f "$pat.mut" $dirs 2>/dev/null \| sort -u \|\| true)|' \
+      "$SCRIPT" >"$mut"
+  chmod +x "$mut"
+  bash -n "$mut"                                 # a malformed mutant proves nothing
+  fx() {                                         # fx <name> → memdir with cited-rule.md OLDEST
+    local d; d="$(mkmem "$1")"
+    addentry "$d" cited-rule.md project old "$(pad 140)"
+    mkbulk "$d"
+    touch -t 202512011200 "$d/cited-rule.md"
+    printf '%s' "$d"
+  }
+  proj="$BATS_TEST_TMPDIR/nul-proj"; mkdir -p "$proj/bin"
+  printf 'see cited-rule.md\ntrailing\000nul\n' >"$proj/bin/tool.sh"
+  export CLAUDE_PROJECT_DIR="$proj"
+  d="$(fx citenul)"
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  hasnt "$output" 'Binary file'
+  grep -qF '](cited-rule.md)' "$d/MEMORY.md"     # real rotor: the citation is seen ⇒ demoted LAST
+  # The mutant shares nothing with the run above but the fixture RECIPE: the rotor WRITES demotion
+  # pointers into the project's rules file, so a shared project dir would feed run 2 citations run
+  # 1 minted. Each arm gets its own.
+  proj2="$BATS_TEST_TMPDIR/nul-proj2"; mkdir -p "$proj2/bin"
+  printf 'see cited-rule.md\ntrailing\000nul\n' >"$proj2/bin/tool.sh"
+  export CLAUDE_PROJECT_DIR="$proj2"
+  d2="$(fx citenul2)"
+  run "$mut" "$d2/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  if grep -qF '](cited-rule.md)' "$d2/MEMORY.md"; then return 1; fi   # mutant eats it
+}
+
+@test "the scan leaves no .rotate.cited.* scratch behind on the normal path" {
+  d="$(mkmem citeclean)"; mkbulk "$d"
+  proj="$BATS_TEST_TMPDIR/citeclean-proj"; mkdir -p "$proj/bin"
+  printf 'see a01.md\n' >"$proj/bin/tool.sh"
+  export CLAUDE_PROJECT_DIR="$proj"
+  run "$SCRIPT" "$d/MEMORY.md"
+  has "$output" 'verdict=rotated'
+  # The engine opens four MORE scratch files than the citation pattern file the trap was written
+  # for. Allocating them through `x=$(_ccmr_tmp)` would register them in a SUBSHELL and strand
+  # every one — the `.rotate.cited.*` litter of 2026-09-05, re-created.
+  run bash -c "ls '$d'/.rotate.cited.* 2>/dev/null | wc -l | tr -d ' '"
+  [ "$output" = "0" ]
+}
+
 @test "a fresh lock refuses; a stale lock is reclaimed" {
   d="$(mkmem lock)"; mkbulk "$d"
   mkdir "$d/.rotate.lock.d"
