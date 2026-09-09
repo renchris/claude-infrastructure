@@ -23,11 +23,20 @@ distinctive tokens lifted from that close appear within N in {1,3,7} days in
   (c) ~/.claude/autonomy/decisions/*.json packets.
 
 FAIL DIRECTION, NAMED IN THE OUTPUT. A token that is a common word matches
-everything and INFLATES the harvested count. Two defences: tokens are scored by
-document frequency ACROSS THE CLOSES THEMSELVES and anything appearing in more
-than --df-max of them is dropped as non-distinctive; and --sample prints n
-matched pairs for a hand read, which is the only way the precision number gets
-into the report.
+everything and INFLATES the harvested count. THE FIRST VERSION OF THIS
+INSTRUMENT SCREENED AGAINST THE WRONG CORPUS: it dropped a token appearing in
+more than --df-max of the CLOSES, but the inflation comes from tokens common in
+the HAYSTACK (hand read of 20 pairs: 13 spurious, carried by `claude`, `master`,
+`handoff-fire.sh`, `MEMORY.md`, `ship-land`, `slop-lint.sh` -- every one of them
+rare among closes and ubiquitous among commits). So the primary filter is now
+BACKGROUND document frequency measured in the haystack STRICTLY BEFORE the close
+(--bg-days lookback, --bg-max documents allowed): a token that was already part
+of the repo's commit vocabulary before the close cannot discriminate a harvest
+from background chatter. Measuring it PRE-close is what makes it safe -- a real
+harvest lands after the close by construction, so this filter can never delete a
+true positive. The old close-frequency filter is kept as a cheap secondary.
+--sample still prints n matched pairs for the hand read, which is the only way a
+precision number gets into the report.
 
     python3 scripts/measure-harvest-latency.py --days 14
     python3 scripts/measure-harvest-latency.py --selftest
@@ -164,6 +173,27 @@ def iso_epoch(s):
         return 0
 
 
+def background_df(tok, corpus, ckey, t0, bg_days, _cache):
+    """How many corpus documents STRICTLY BEFORE the close, within bg_days,
+    contain this token?
+
+    Measured pre-close on purpose. A real harvest is by construction AFTER the
+    close, so no true positive can be inside this count -- the filter can only
+    ever delete background vocabulary, never signal. That is the property the
+    old close-frequency filter did not have."""
+    key = (ckey, tok.lower(), int(t0 // 86400), bg_days)
+    if key in _cache:
+        return _cache[key]
+    lo = t0 - bg_days * 86400
+    t = tok.lower()
+    n = 0
+    for e, hay in corpus:
+        if lo <= e < t0 and t in hay:
+            n += 1
+    _cache[key] = n
+    return n
+
+
 def first_hit(toks, corpus, t0, horizon_days):
     """Earliest (days, haystack) within the horizon, else None."""
     best = None
@@ -194,7 +224,7 @@ def cwd_of(path):
     return None
 
 
-def run(days, df_max, sample, horizons):
+def run(days, df_max, sample, horizons, bg_days, bg_max):
     mc = load_mc()
     files, _ = mc.iter_transcripts(days)
     last_closes = []
@@ -223,21 +253,31 @@ def run(days, df_max, sample, horizons):
     n = max(1, len(named))
     cutoff = df_max * n
 
-    gitcache, storecorp = {}, None
-    rows, no_tokens = [], 0
+    # The corpora reach BACK further than the horizon so every close has a full
+    # --bg-days of pre-close haystack to be scored against. Widening backwards
+    # can add no hits: first_hit only counts documents strictly after t0.
+    lookback = (days + 8 + bg_days) * 86400
+    storecorp = store_corpus(time.time() - lookback)
+    gitcache, bgcache = {}, {}
+    rows, no_tokens, no_tokens_bg = [], 0, 0
     for p, r, c in named:
-        toks = [t for t in tokmap[p] if df[t.lower()] <= cutoff][:3]
-        if not toks:
+        cand = [t for t in tokmap[p] if df[t.lower()] <= cutoff]
+        if not cand:
             no_tokens += 1
             continue
         t0 = iso_epoch(c.get("ts")) or c["mtime"]
-        if storecorp is None:
-            storecorp = store_corpus(t0 - 86400)
         cwd = cwd_of(p)
         top = repo_toplevel(cwd) if cwd and os.path.isdir(cwd) else None
         if top and top not in gitcache:
-            gitcache[top] = git_corpus(top, time.time() - (days + 8) * 86400)
+            gitcache[top] = git_corpus(top, time.time() - lookback)
         corpus = (gitcache.get(top) or []) + storecorp
+        ckey = top or "<store-only>"
+        # THE FIX (W3-B4): screen against the HAYSTACK, not against the closes.
+        toks = [t for t in cand
+                if background_df(t, corpus, ckey, t0, bg_days, bgcache) <= bg_max][:3]
+        if not toks:
+            no_tokens_bg += 1
+            continue
         hit = first_hit(toks, corpus, t0, max(horizons))
         rows.append({"file": p, "t0": t0, "toks": toks, "top": top,
                      "hit_days": hit[0] if hit else None,
@@ -245,8 +285,11 @@ def run(days, df_max, sample, horizons):
                      "hit_tok": hit[2] if hit else ""})
 
     tot = len(rows)
-    print("closes with >=1 distinctive token (the measured population): %d "
-          "(dropped %d with none after the df filter)" % (tot, no_tokens))
+    print("closes with >=1 distinctive token (the measured population): %d" % tot)
+    print("  dropped %d with no token surviving the close-frequency filter" % no_tokens)
+    print("  dropped %d more with no token surviving the BACKGROUND filter "
+          "(>%d pre-close haystack doc(s) in %d d) — unmeasurable, NOT harvested"
+          % (no_tokens_bg, bg_max, bg_days))
     if not tot:
         return
     for N in horizons:
@@ -307,7 +350,23 @@ def selftest():
     got = tokens_of("the fix is in `hooks/lib/dod-path.sh` and row 1031594b6327")
     if "hooks/lib/dod-path.sh" not in got or "1031594b6327" not in got:
         print("FAIL: token extraction missed a path or an id: %s" % got); ok = False
-    print("SELFTEST: %s" % ("green — 7/7" if ok else "RED"))
+
+    # ── the background filter: polarity control, both directions ──────────────
+    # A token ubiquitous in the haystack BEFORE the close is background; the one
+    # the finding coined is not. This is the W3-B4 fix and it is what the old
+    # close-frequency filter could not see, so it gets a control on both arms.
+    bgc = {}
+    bg_corpus = [(t0 - 3 * 86400, "chore: ship-land tidy"),
+                 (t0 - 2 * 86400, "fix: ship-land retries"),
+                 (t0 + 1 * 86400, "feat: offbox-core-cure lands ship-land")]
+    if background_df("ship-land", bg_corpus, "k", t0, 14, bgc) != 2:
+        print("FAIL: background df did not count the 2 pre-close appearances"); ok = False
+    if background_df("offbox-core-cure", bg_corpus, "k", t0, 14, bgc) != 0:
+        print("FAIL: background df counted a POST-close hit as background — the "
+              "filter would delete true positives"); ok = False
+    if background_df("ship-land", bg_corpus, "k", t0, 1, bgc) != 0:
+        print("FAIL: background df reached outside its bg_days lookback"); ok = False
+    print("SELFTEST: %s" % ("green — 10/10" if ok else "RED"))
     return 0 if ok else 1
 
 
@@ -316,9 +375,16 @@ if __name__ == "__main__":
     ap.add_argument("--days", type=int, default=14)
     ap.add_argument("--df-max", type=float, default=0.05,
                     help="drop a token appearing in more than this FRACTION of closes")
+    ap.add_argument("--bg-days", type=int, default=14,
+                    help="pre-close lookback over which haystack document "
+                         "frequency is measured")
+    ap.add_argument("--bg-max", type=int, default=0,
+                    help="a token appearing in MORE than this many pre-close "
+                         "haystack documents is background vocabulary, not "
+                         "evidence; 0 = any pre-close appearance disqualifies")
     ap.add_argument("--sample", type=int, default=0)
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
         sys.exit(selftest())
-    run(a.days, a.df_max, a.sample, [1, 3, 7])
+    run(a.days, a.df_max, a.sample, [1, 3, 7], a.bg_days, a.bg_max)
