@@ -87,6 +87,17 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-09 — recycle #329 (lane infra):** closed 7722923c0ea9 (its argv word-split reproduces
+  only in zsh; under bash, which cc-backlog runs, hop1 reads b1=[claude], and lane coverage is
+  715/3104 not 0), bca46a0b9e09 (a child-marked session on 2.1.260 DID persist a 408 KB transcript),
+  54d7aff8ed8d (.nojekyll is on trunk; 0 failures across the 31 Pages runs since 2026-08-18),
+  cd80e11b96b5 (35-auth-timeseries is .superseded and out of the queue, now 2), 4adbece80a5f
+  (BSD-only `date -j -f` / `stat -f` in cc-reaper's fired-peer tenancy parse; GNU arms behind a
+  dialect probe, P1/P2 red pre-fix, 216/216 + all 7 gate suites green) · blocked a4eec664b579
+  (deploy-link-parity's three-way fork — it runs rc=1 on 4 inherited STRAY, so wiring it blocking
+  would red lands; conviction ~85%) · released 93019ed4b7f7, 494468ee3c4a · landed 7a67223a5 ·
+  `closed=5 closed_pre=5 closed_other=6 filed=4 net=1 blocked=4 min=3 lane=local-drain project=claude-infrastructure floor=MET`.
+
 - **2026-09-08 — recycle #328 (lane infra):** closed 28b39195b4af (si_pid in cc-close-attrib's bash
   trap — NOT implementable; trunk refutes it by row id and landed the recoverable substitute
   `sig_reached_wrapper`), 3f4cffe03b40 (its prescribed "say it was your own session" IS refuted
