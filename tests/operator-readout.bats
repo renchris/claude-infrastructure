@@ -250,6 +250,54 @@ mkrepo_unlanded() {
   ! echo "$output" | grep -q 'audit trail entry'
 }
 
+# ── D5: the ◆ label carries the packet AGE ─────────────────────────────────────────────────────
+# `.created` is already this leg`s sort key, so the board was ordered by age while showing none of
+# it. RED before the fix: the label rendered `[decision C <id>]` with no age. The clock is pinned
+# through CC_OPREADOUT_NOW_EPOCH — the SAME seam the blocked-backlog leg uses — so these assert a
+# number, never "some digits".
+
+@test "D5: an open class-C decision renders its AGE in days in the ◆ label" {
+  "$DECIDE" open --class C --conviction 40 --receipt "probe => result" --option "a::outcome a" --option "b::outcome b" --what "Choose the reboot posture." >/dev/null
+  local created now
+  local -a pkts; pkts=( "$CC_DECISIONS_DIR"/*.json )
+  [ "${#pkts[@]}" -eq 1 ] || { echo "expected exactly 1 packet, got ${#pkts[@]}" >&2; return 1; }
+  local f="${pkts[0]}"
+  created=2026-08-06T00:00:00Z
+  jq --arg c "$created" '.created = $c' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  # 34 days after `created`, to the second — the floor must read 34, never 33 or 35.
+  now=$(( $(date -u -j -f %Y-%m-%dT%H:%M:%SZ "$created" +%s 2>/dev/null \
+            || date -u -d "$created" +%s) + 34*86400 ))
+  CC_OPREADOUT_NOW_EPOCH="$now" run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q '◆ \[decision C .* · 34d\] Choose the reboot posture'
+}
+
+@test "D5 CONTROL: a packet with NO .created renders the label with NO age, and never crashes" {
+  # the legacy hand-written shape — no `.created` at all. -1 is unmeasurable, and unmeasurable
+  # must render nothing: a "0d" here would read as "filed today", the one wrong answer.
+  _legacy_pkt shipland-esc-nocreated
+  CC_OPREADOUT_NOW_EPOCH=1788000000 run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '◆ \[decision B shipland-esc-nocreated\] ship-land refused to auto-land'
+  ! echo "$output" | grep -q 'shipland-esc-nocreated · ' || false
+}
+
+@test "D5 CONTROL: an UNPARSEABLE .created renders no age rather than a bogus one" {
+  _legacy_pkt shipland-esc-badcreated '{created:"not-a-timestamp"}'
+  CC_OPREADOUT_NOW_EPOCH=1788000000 run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q '◆ \[decision B shipland-esc-badcreated\]'
+  ! echo "$output" | grep -q 'shipland-esc-badcreated · ' || false
+}
+
+@test "D5 CONTROL: the ▶ arm is untouched — an age never contaminates a pasteable command" {
+  "$DECIDE" open --class C --conviction 40 --receipt "probe => result" --option "a::outcome a" --option "b::outcome b" --what "Wire the widget. Full detail here." \
+    --staged-artifact "$BATS_TEST_TMPDIR/staged-fix.sh" >/dev/null
+  CC_OPREADOUT_NOW_EPOCH=1788000000 run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  echo "$output" | grep -q "▶ bash $BATS_TEST_TMPDIR/staged-fix.sh   \[decision C "
+  # the ▶ label ends at the id + colon; no ` · Nd` may appear on a command row
+  ! echo "$output" | grep -E '▶ bash .* · [0-9]+d' || false
+}
+
 # ── a hard block wearing the wrong label still reaches the board ───────────────────────────────
 # scripts/ship-land.sh writes its park packet directly rather than through `cc-decide open`, and the
 # legacy shape was class B with NO status, NO default and NO deadline. `cc-decide open` REFUSES that
