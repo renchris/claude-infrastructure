@@ -258,10 +258,25 @@ shape.
 `CLAUDE.md`** — no `scripts/ship*`, no `.claude/commands/`, only a `settings.local.json`. The
 standing rail is *land only via the project-local `/ship`, never a bare push*, so there is no
 sanctioned agent landing path in this repo at all. This is the genuine operator gate behind
-`35cae65a8d2d` / `e3d8a8cf90a4` / `8c7f7ae4ee4d`, and it is a **live unauthenticated
-process-spawn route on a product's trunk**, not a filing artifact. Closing it needs either the
-operator's merge, or a `/ship` rail built for this repo — the latter being ordinary agent work that
-nobody has been asked for.
+`35cae65a8d2d` / `e3d8a8cf90a4` / `8c7f7ae4ee4d`. Closing it needs either the operator's merge, or a
+`/ship` rail built for this repo — the latter being ordinary agent work that nobody has been asked
+for.
+
+🚨 **SEVERITY, CORRECTED — the first draft of this entry (`835c6a858`) overstated it, and the
+correction is the more useful finding.** That draft called this *"a live unauthenticated
+process-spawn route on a product's trunk."* **It is not live in the deployed configuration.** The
+five `_run.*` routes are INERT unless a run-monitor root is wired, and it is not: `get_run_monitor_root`
+returns `None` by default (`deps.py:89-98`, whose own docstring calls `None` *"the deployed Gate-2
+default"*), `main.py:162` comments `None ⇒ /api/run/progress 503`, and the only writer of
+`REVIEWAPP_RUN_ROOT` anywhere on trunk is the **local** `pipeline launch` CLI (`cli.py:119`, `:366`).
+No deploy or infra file sets it. So in production these routes answer 503 and `/start` cannot spawn.
+**That is also why the written cure is `require_loopback_client` and not `require_role`** — its
+author had already modelled this as a loopback-only surface, which is the corroboration the first
+draft missed by reading the routes without reading their wiring. The missing guard is real and worth
+closing; it is **hygiene on an opt-in local surface, not an incident**, and it must not be escalated
+to the operator as one. *(Lesson, and it is the same shape as R1's: a route's authorization is a
+property of the route AND its wiring. Reading `run.py` alone gives a true sentence about the
+decorator and a false one about the exposure.)*
 
 ## Definition of done
 Both product trees can land: their gates are green on trunk and in a fresh worktree, the unlanded
@@ -292,10 +307,12 @@ single-brained and audited, and doc_classifier's authorization holes are closed 
   dependency root of R2; it had never been one.**
   **R2 — DECAYED**, not blocked: the branches are 1,671-1,792 commits BEHIND trunk and diff at
   ~900K deletions, so "land the queue" is the wrong verb; see the table in R2.
-  **R4 — HELD, and it is the live one.** The three security defects reproduce on `doc_classifier`
-  `origin/main` today; the cure is 3 commits on `wt-35cae65a8d2d`, 3 ahead / 2 behind. Its blocker
-  is genuine and unchanged: that repo has **no ship rail and no `CLAUDE.md`**, so no sanctioned
-  agent landing path exists.
+  **R4 — HELD, and it is the only wave with real remaining work.** The three defects reproduce on
+  `doc_classifier` `origin/main` today; the cure is 3 commits on `wt-35cae65a8d2d`, 3 ahead / 2
+  behind. Its blocker is genuine and unchanged: that repo has **no ship rail and no `CLAUDE.md`**,
+  so no sanctioned agent landing path exists. ⚠️ **But the routes are INERT as deployed** — see the
+  SEVERITY, CORRECTED block in R4, which retracts this entry's own first-draft framing of them as a
+  live exposure. Hygiene, not an incident.
   **(2) 🚨 The generalizable defect, which is bigger than this row: a plan is not a queue, and a
   wave's premise is never re-read.** `cc-discover` mints `advance <title>` from a plan HEADING and
   `plan-phase-scan.sh` reports a section PENDING until its heading says otherwise — neither reads
