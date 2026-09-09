@@ -88,14 +88,58 @@ if [ ! -f "$LEDGER" ]; then
   exit 0
 fi
 
+# 🚨 PARSE PER LINE, NEVER SLURP — ONE BAD ROW USED TO DISARM THIS ENTIRE SWEEP (2026-09-09).
+# Both reads below were `jq -rs`, which is SLURP: jq consumes the ledger as ONE document, so a
+# single malformed line aborts the whole parse. With `2>/dev/null || true` underneath, EPOCH came
+# back EMPTY and this script answered `not-armed — no ledger row carries prompt_file yet` over a
+# fully armed ledger — measured end-to-end, a `swept` verdict became `not-armed` on appending one
+# row. That is the state this file's own header refuses at the top ("a detector whose finding set
+# is silently, permanently empty reports all-clear forever and is indistinguishable from a machine
+# with nothing wrong"), and the producer that emitted such rows is fixed in the same series
+# (handoff-fire.sh's jq-less fallback interpolated a filesystem path into JSON unescaped).
+#
+# THE PRODUCER FIX IS NOT ENOUGH, WHICH IS WHY THIS ARM EXISTS. `not-armed` is ALSO the correct
+# answer for a young, pre-primitive ledger, so the two are indistinguishable to every consumer —
+# fail-safe-default-mimics-the-healthy-state. This ledger has several writers and a truncated
+# concurrent append or a full disk can malform a row with no bug anywhere; an alarm must not go
+# quiet on input it cannot read. `fromjson? // empty` skips exactly the unreadable rows and keeps
+# every readable one, and the count of what was skipped is SURFACED rather than swallowed: a
+# malformed row may be a real fire, whose brief then appears in no row and is reported as a lost
+# succession, so the number bounds this sweep's own false-positive rate for the reader.
+#
+# Read ONCE into a variable, preserving the original's cost note — a per-brief jq over a 1200-row
+# file would fork the sweep's cost into the alarm's own overhead. ~250 B/row at the 1200-row
+# retention bound is ~300 KB, which is a variable, not a problem.
+ROWS="$(jq -R -c 'fromjson? // empty' "$LEDGER" 2>/dev/null || true)"
+N_TOTAL="$(wc -l < "$LEDGER" 2>/dev/null | tr -d ' ')"; N_TOTAL="${N_TOTAL:-0}"
+N_PARSED="$(printf '%s' "$ROWS" | grep -c '' 2>/dev/null || true)"; N_PARSED="${N_PARSED:-0}"
+N_BAD=$(( N_TOTAL - N_PARSED )); [ "$N_BAD" -ge 0 ] || N_BAD=0
+
 # EPOCH — the earliest row that carries the field at all. `select(.prompt_file != null)` also
 # excludes rows where the key is ABSENT, which is the pre-primitive population by construction.
-EPOCH="$(jq -rs '[.[] | select(.prompt_file != null) | .ts] | sort | first // empty' "$LEDGER" 2>/dev/null || true)"
-OLDEST="$(head -1 "$LEDGER" 2>/dev/null | jq -r '.ts // empty' 2>/dev/null || true)"
+EPOCH="$(printf '%s\n' "$ROWS" | jq -rs '[.[] | select(.prompt_file != null) | .ts] | sort | first // empty' 2>/dev/null || true)"
+# The oldest READABLE row, not literally line 1: with `head -1 | jq` a malformed first line made
+# OLDEST empty and silently dropped the later of the two blindness floors.
+OLDEST="$(printf '%s\n' "$ROWS" | jq -rs '[.[] | .ts // empty] | first // empty' 2>/dev/null || true)"
 
 if [ -z "$EPOCH" ]; then
+  # THE TWO REASONS ARE DIFFERENT FACTS AND GET DIFFERENT VERDICTS. `not-armed` says the primitive
+  # is young — true, benign, self-clearing on the next fire. `ledger-unparseable` says the evidence
+  # exists and could not be read — an event with a culprit, which nothing downstream could ever see
+  # while both rendered the same string.
+  if [ "$N_BAD" -gt 0 ]; then
+    if [ "$JSON" = 1 ]; then
+      printf '{"verdict":"ledger-unparseable","reason":"%s of %s ledger rows are not valid JSON and no readable row carries prompt_file","counts":{"malformed_rows":%s,"ledger_rows":%s},"findings":[]}\n' \
+        "$N_BAD" "$N_TOTAL" "$N_BAD" "$N_TOTAL"
+    else
+      printf 'unfired-brief-sweep: LEDGER UNPARSEABLE — %s of %s rows are not valid JSON.\n' "$N_BAD" "$N_TOTAL"
+      printf '  No READABLE row carries prompt_file, so this is not the young-ledger case: the\n'
+      printf '  evidence may exist and cannot be read. 0 reported; fix %s, then re-run.\n' "$LEDGER"
+    fi
+    exit 0
+  fi
   if [ "$JSON" = 1 ]; then
-    printf '{"verdict":"not-armed","reason":"no ledger row carries prompt_file yet","findings":[]}\n'
+    printf '{"verdict":"not-armed","reason":"no ledger row carries prompt_file yet","counts":{"malformed_rows":0,"ledger_rows":%s},"findings":[]}\n' "$N_TOTAL"
   else
     printf 'unfired-brief-sweep: NOT ARMED — no ledger row carries prompt_file yet.\n'
     printf '  The linking primitive is landed but no fire has exercised it, so absence is blindness.\n'
@@ -121,7 +165,7 @@ CUTOFF_S=$(( NOW_S - GRACE ))
 
 # Every prompt_file the ledger has ever recorded, one per line. Read ONCE — a per-brief jq over a
 # 1200-row file would fork the sweep's cost into the alarm's own overhead.
-FIRED="$(jq -rs '[.[] | .prompt_file // empty] | unique | .[]' "$LEDGER" 2>/dev/null || true)"
+FIRED="$(printf '%s\n' "$ROWS" | jq -rs '[.[] | .prompt_file // empty] | unique | .[]' 2>/dev/null || true)"
 
 n_clean=0 n_unfired=0 n_unknowable=0 n_held=0
 findings=""
@@ -156,11 +200,22 @@ EOF
 if [ "$JSON" = 1 ]; then
   printf '%s' "$findings" | jq -Rs --arg fl "$FLOOR" --arg ep "$EPOCH" \
     --argjson c "$n_clean" --argjson u "$n_unfired" --argjson k "$n_unknowable" --argjson h "$n_held" \
+    --argjson mb "$N_BAD" --argjson lr "$N_TOTAL" \
     '{verdict:"swept", epoch:$ep, floor:$fl,
-      counts:{clean:$c, unfired:$u, unknowable_pre_floor:$k, held_in_grace:$h},
+      counts:{clean:$c, unfired:$u, unknowable_pre_floor:$k, held_in_grace:$h,
+              malformed_rows:$mb, ledger_rows:$lr},
       findings:(split("\n")|map(select(length>0)))}'
 else
   printf 'unfired-brief-sweep: floor=%s (epoch=%s)\n' "$FLOOR" "$EPOCH"
+  # A PARTIALLY unreadable ledger still sweeps — every readable row counts — but the skipped rows
+  # bound this run's own false-positive rate, because a malformed row may be a real fire whose
+  # brief then appears in no row and is reported below as a lost succession. Printed only when
+  # non-zero: a line that renders "0 malformed" on every healthy run is one more row to scan for
+  # no bits (alarm-polarity-and-attention-budget).
+  if [ "$N_BAD" -gt 0 ]; then
+    printf '  ⚠ %s of %s ledger rows are not valid JSON and were SKIPPED — any fire recorded in\n' "$N_BAD" "$N_TOTAL"
+    printf '    one of them cannot be seen, so up to %s finding(s) below may be false.\n' "$N_BAD"
+  fi
   # EVERY STRATUM IS NAMED. A bare "0 unfired" over a population where most rows were excluded reads
   # as all-clear (memory zero-claim-must-name-its-excluded-strata).
   printf '  %d clean · %d UNFIRED · %d unknowable (pre-floor) · %d held (younger than %ss grace)\n' \

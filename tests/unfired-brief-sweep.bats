@@ -194,3 +194,69 @@ _iso_ago() { date -u -v-"$1"S +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "-$1
   [ -n "$exit_line" ] || { echo "the nothing-new early exit anchor no longer matches — this case is blind" >&2; return 1; }
   [ "$call_line" -lt "$exit_line" ]
 }
+
+# ── ONE MALFORMED ROW MUST NOT DISARM THE SWEEP (2026-09-09) ───────────────────────────────────
+#
+# The THIRD way an absence test can be worthless, and it is a variant of TOO QUIET that the two
+# floors above cannot catch, because it arrives through the sweep's INPUT rather than its logic.
+# Both ledger reads were `jq -rs` — SLURP, the whole file as one document — so a single unparseable
+# line aborted the parse, EPOCH came back empty under `|| true`, and this sweep answered
+#
+#     not-armed — no ledger row carries prompt_file yet
+#
+# over a fully armed ledger. Measured end-to-end before the fix: a `swept` verdict became
+# `not-armed` on appending one row.
+#
+# 🚨 WHY THE PRODUCER FIX IN THE SAME SERIES IS NOT SUFFICIENT ON ITS OWN. `not-armed` is ALSO the
+# correct answer for a young pre-primitive ledger, so a disarmed detector and a healthy young one
+# render the identical string and no consumer can separate them — the fail-safe-default-mimics-the-
+# healthy-state class. This ledger has several writers; a truncated concurrent append or a full
+# disk malforms a row with no bug anywhere in the tree. An alarm may not go quiet on input it
+# cannot read, and the count of what it skipped bounds its own false-positive rate: a malformed row
+# may be a REAL fire, whose brief then appears in no row and is reported as a lost succession.
+#
+# The three cases are one A/B: same fixture, three ledgers, and pre-fix all THREE returned
+# `not-armed`. They are red-proved against a pristine origin/main worktree individually.
+
+# A row that is not valid JSON, in the exact shape the pre-fix producer emitted: an unescaped `"`
+# and `\` from a brief path interpolated raw into the jq-less fallback's printf.
+_bad_row() { printf '{"ts":"%s","class":"handoff","prompt_file":"/tmp/fire-a"b\\c.txt"}\n' "$(_iso_ago 60)" >> "$LEDGER"; }
+
+@test "a malformed row does not disarm a ledger that IS armed — the sweep still sweeps" {
+  b="$(_brief fire-never.txt 7200)"
+  _row "$(_iso_ago 7800)" "$BRIEFS/fire-fired.txt"
+  _bad_row
+  run bash "$SWEEP" --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .verdict <<<"$output")" = "swept" ]
+  # The skipped row is SURFACED, not swallowed: it bounds this run's own false-positive count.
+  [ "$(jq -r .counts.malformed_rows <<<"$output")" -eq 1 ]
+  [ "$(jq -r .counts.unfired <<<"$output")" -eq 1 ]
+  [ "$(jq -r '.findings[0]' <<<"$output")" = "$b" ]
+}
+
+@test "an unreadable ledger reports a culprit, NOT the young-ledger verdict" {
+  _bad_row
+  run bash "$SWEEP" --json
+  [ "$status" -eq 0 ]
+  # The whole point: `not-armed` here would say "benign, self-clearing on the next fire" about a
+  # ledger whose evidence exists and could not be read.
+  [ "$(jq -r .verdict <<<"$output")" = "ledger-unparseable" ]
+  [ "$(jq -r .counts.malformed_rows <<<"$output")" -eq 1 ]
+}
+
+@test "CONTROL: a genuinely young ledger still reads not-armed, so the new verdict is not a catch-all" {
+  # 🚨 GREEN IN BOTH DIRECTIONS, AND IT ASSERTS THE VERDICT ONLY — DELIBERATELY. Its whole job is
+  # to fail a fix that turned EVERY empty EPOCH into `ledger-unparseable`, which would pass the two
+  # cases above while destroying the TOO-LOUD floor the head of this suite exists to defend. A
+  # control can only do that if it passes pre-fix. The first draft also asserted
+  # `.counts.malformed_rows -eq 0` and went RED against pristine trunk — not because the young-
+  # ledger behaviour had changed, but because the pre-fix not-armed object carries no `counts` key
+  # at all, so jq returned null. That is a claim about the NEW field, i.e. part of the fix, and it
+  # is asserted in the two cases above where it belongs; smuggled in here it silently converted the
+  # regression control into one more forward assertion and left the regression unguarded.
+  _row "$(_iso_ago 7800)" ""      # the pre-primitive shape: the key is ABSENT, and the row is valid
+  run bash "$SWEEP" --json
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .verdict <<<"$output")" = "not-armed" ]
+}
