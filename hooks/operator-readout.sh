@@ -584,6 +584,14 @@ render_block() {
 
   # 3 · open class-C decisions (human-gated), oldest first. Prefer an exact command; degrade
   #     honestly to the packet's first sentence (◆ = judgment, no single command exists).
+  #
+  #     AGE is rendered in the ◆ label (D5, 2026-09-09). A packet's `.created` is already this
+  #     leg's SORT key, so the board has always been ordered by age while showing none of it —
+  #     and 0 of 98 class-C packets carry a veto_deadline, so nothing else on the row says how
+  #     long the operator has been sitting on it. Same clock seam as the blocked-backlog leg at
+  #     :497 (CC_OPREADOUT_NOW_EPOCH), so one pin fixes both surfaces in a test.
+  local DEC_NOW="${CC_OPREADOUT_NOW_EPOCH:--1}"
+  case "$DEC_NOW" in ''|*[!0-9]*) DEC_NOW=-1 ;; esac
   if [ -d "$DEC_DIR" ]; then
     for f in "$DEC_DIR"/*.json; do
       [ -e "$f" ] || continue
@@ -597,7 +605,8 @@ render_block() {
       # left them visible to `cc-decide list --open` yet absent from the numbered steps, which is
       # the surface the operator actually reads. Class A is deliberately NOT folded: it also lacks
       # a default/deadline, but it is a post-hoc audit trail with nothing for the operator to do.
-      jq -r --arg ph "$CC_PLACEHOLDER_RE" --arg con "$C_ON" --arg coff "$C_OFF" "$CC_PH_JQ"'
+      jq -r --arg ph "$CC_PLACEHOLDER_RE" --arg con "$C_ON" --arg coff "$C_OFF" \
+        --argjson nowarg "$DEC_NOW" "$CC_PH_JQ"'
         select((.status // "" | if . == "" then "open" else . end) == "open"
                and ((.class // "") == "C"
                     or ((.class // "") == "B"
@@ -617,6 +626,18 @@ render_block() {
         # the packet is EVIDENCE — label the row with the class it actually carries, never the class
         # this leg folded it in as, so the id still reconciles with `cc-decide list --all`
         | (.class // "?") as $cls
+        # AGE in whole days since `.created`, the same field this leg already sorts on. Mirrors
+        # the idiom the blocked-backlog leg uses verbatim (:680, :693): -1 means UNMEASURABLE
+        # (no `.created`, or one jq cannot parse) and renders NOTHING — a packet whose age we
+        # cannot read must not be labelled "0d", which would read as "filed today" and is the
+        # one wrong answer this row can give. Legacy hand-written `shipland-esc-*` packets carry
+        # no `.created` at all, so that arm is load-bearing, not defensive.
+        # (No apostrophe may appear in this comment: it sits inside the single-quoted jq program
+        # and would close the shell string — MEMORY.md fixture-stub-cannot-carry-an-apostrophe.)
+        | (if $nowarg < 0 then now else $nowarg end) as $nowt
+        | (if (.created // "") == "" then -1
+           else (try ((($nowt - (.created | fromdateiso8601)) / 86400) | floor) catch -1) end) as $age
+        | (if $age >= 0 then " · \($age)d" else "" end) as $agelbl
         # Field 4 = the id, so the COLLAPSE line can name the packets it counts. `cc-decide veto`
         # resolves an EXACT id, so a counted line that dropped the ids would leave the operator
         # nothing to paste — the same round-trip defect the 8-char slice caused.
@@ -628,7 +649,7 @@ render_block() {
              "decision\t✎\t\($con)SUPPLY \($run | ph_toks($ph))\($coff) — \($sent | .[0:70])   [decision \($cls) \($id8)]\t\($id8)"
            elif $run != ""   then "decision\t▶\t\($run)   [decision \($cls) \($id8): \($sent | .[0:60])]\t\($id8)"
            elif $staged != "" then "decision\t▶\tbash \($staged)   [decision \($cls) \($id8): \($sent | .[0:60])]\t\($id8)"
-           else "decision\t◆\t[decision \($cls) \($id8)] \($sent)\t\($id8)" end) as $line
+           else "decision\t◆\t[decision \($cls) \($id8)\($agelbl)] \($sent)\t\($id8)" end) as $line
         | "\(.created // "?")\t\($line)"' "$f" 2>/dev/null
     done | sort | cut -f2- >> "$steps_file"
   fi
