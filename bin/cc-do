@@ -52,6 +52,10 @@
 # prints the board, says plainly that NOTHING RAN, and exits 3. It never blocks a scripted caller on
 # a `read` that can never answer — and never reports a no-op as success: an empty board still exits
 # 0, so 0 means "nothing outstanding" and 3 means "steps outstanding, no channel to confirm them".
+# That refusal also HANDS OVER the way through, on its own line, executable as typed: `cc-do --run`
+# for the board, `CC_DO_ASSUME_YES=1 cc-do <id>` for a single row. Claude Code's `!` bash-input line is
+# the surface most closes direct the operator to and it runs with stdin closed, so a refusal that names
+# no command ends there (row af096c5107b6, measured 2026-09-08).
 #
 # Env seams (tests): CC_ACTIVATION_DIR · CC_DECISIONS_DIR · CC_BACKLOG_FILE · CC_BACKLOG_BIN ·
 #   CC_SHARED_CHECKOUT · CC_DEPLOY_SCRIPT · CC_DO_ASSUME_YES
@@ -113,6 +117,10 @@ PAD='-'
 usage() { sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; }
 tildify() { printf '%s' "${1/#$HOME/~}"; }   # display+paste-safe: the shell re-expands ~
 
+# How to SPELL this program in a hand-over line. The operator pastes what we print, so it must resolve
+# in THEIR shell, not ours: the bare name only when it is genuinely on PATH, else the path we were
+# invoked by. (Rule: a handed-over payload must be EXECUTABLE AS TYPED — row af096c5107b6.)
+CC_DO_INVOKE="$0"; command -v cc-do >/dev/null 2>&1 && CC_DO_INVOKE="cc-do"
 MODE=default; STEM=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -426,7 +434,17 @@ run_backlog_row() { # $1=id → 0 ran+closed · 1 ran and FAILED (row untouched)
   printf '    %s\n' "$cmd"
   if [ "${CC_DO_ASSUME_YES:-0}" != 1 ]; then
     if [ ! -t 0 ]; then
+      # NON-TTY HAND-OFF (row af096c5107b6). The surface every close directs the operator to is Claude
+      # Code's `!` bash-input line, which runs with stdin closed — so the confirm can never be asked
+      # there, and until 2026-09-09 this branch printed a refusal with no command in it. Measured
+      # 2026-09-08 23:15: the operator ran `cc-do ee88798f94cd` from that line, nothing executed, and
+      # the row stayed open. A refusal that names no command makes the human the runtime — they must
+      # work out what to type next. So print the ONE line that does exactly what the confirm would have
+      # authorised (run it, then close the row), on its own row, executable as typed.
       printf 'cc-do: NOTHING RAN — stdin is not a terminal, so the typed confirm cannot be asked.\n' >&2
+      printf 'cc-do:   %s is still blocked; the command above is what would run.\n' "$id" >&2
+      printf 'cc-do:   run it and close the row by pasting this line:\n' >&2
+      printf '\n    CC_DO_ASSUME_YES=1 %s %s\n\n' "$CC_DO_INVOKE" "$id" >&2
       return 3
     fi
     printf 'Run it and close %s? type yes: ' "$id"
@@ -517,7 +535,8 @@ if [ "$MODE" = run ] || [ "${CC_DO_ASSUME_YES:-0}" = 1 ]; then run_steps; exit $
 if [ ! -t 0 ]; then
   printf 'cc-do: NOTHING RAN — stdin is not a terminal, so the confirm prompt cannot be asked.\n' >&2
   printf 'cc-do:   %d runnable step(s) are still pending, exactly as listed above.\n' "$NRUN" >&2
-  printf 'cc-do:   Run them from a terminal with "cc-do", or non-interactively with "cc-do --run".\n' >&2
+  printf 'cc-do:   run them from a terminal with "%s", or paste this line on any surface:\n' "$CC_DO_INVOKE" >&2
+  printf '\n    %s --run\n\n' "$CC_DO_INVOKE" >&2
   exit 3
 fi
 

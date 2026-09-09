@@ -596,6 +596,36 @@ row_status() { bash "$BACKLOG" list --all --json | jq -r --arg i "$1" '.[]|selec
   [ "$(row_status "$id")" = "blocked" ]
 }
 
+# Row af096c5107b6. The refusal above is CORRECT — nothing may run un-confirmed — but until 2026-09-09
+# it named no command, and the surface it fires on is the one every close directs the operator to:
+# Claude Code's `!` bash-input line, which runs with stdin closed. Measured 2026-09-08 23:15 the
+# operator ran `cc-do ee88798f94cd` there, nothing executed, the row stayed open and the frozen session
+# stayed frozen. A refusal with no command in it delegates the interpreter to a person.
+@test "a non-TTY refusal HANDS OVER the command that would have run, and it WORKS (row af096c5107b6)" {
+  id=$(mkrow "touch '$SENT'")
+  run "$DO" "$id" </dev/null
+  [ "$status" -eq 3 ]
+  [ ! -e "$SENT" ]                                  # the confirm is not faked — still nothing ran
+  [ "$(row_status "$id")" = "blocked" ]
+  # ON ITS OWN LINE: a command welded into a prose sentence cannot be drag-copied, which is the whole
+  # defect (global CLAUDE.md, Manual-Command Delivery). Anchored to the line, not merely present.
+  echo "$output" | grep -qE "^ *CC_DO_ASSUME_YES=1 [^ ]*cc-do $id\$" || false
+  # ...and the handed-over line must actually run on that SAME closed-stdin surface. A paste line that
+  # only works somewhere else is the same dead end wearing a command's clothes.
+  run env CC_DO_ASSUME_YES=1 "$DO" "$id" </dev/null
+  [ "$status" -eq 0 ]
+  [ -e "$SENT" ]
+  [ "$(row_status "$id")" = "done" ]
+}
+
+@test "the board's non-TTY refusal puts its way-out on its OWN line, not inside a sentence (row af096c5107b6)" {
+  mkact 05-alpha "$SENT"
+  run "$DO" </dev/null
+  [ "$status" -eq 3 ]
+  echo "$output" | grep -qE '^ *[^ ]*cc-do --run$' || false
+  [ ! -e "$SENT" ]
+}
+
 @test "a placeholder-carrying command and a slash command are REFUSED (exit 2), never run" {
   id=$(mkrow "cc-relogin <your-account>")
   CC_DO_ASSUME_YES=1 run "$DO" "$id" </dev/null
