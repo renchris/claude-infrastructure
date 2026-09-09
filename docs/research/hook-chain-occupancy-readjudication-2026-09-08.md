@@ -35,7 +35,11 @@ strictly more occupancy per unit of work than serial — and only its **magnitud
 (§4.2). The old gate could not say this, because it never asked whether the interval excluded the
 null; it only asked whether the range was wide, and answered "wide" to both arms alike.
 
-The magnitude run remains **unrun**, for a reason recorded in §5 rather than waved at.
+**The magnitude run has since been made** (§5.1, 2026-09-09): parallel dispatch costs a median
+**5.98×** the occupancy per dispatch, 96% CI **3.45..8.35**, against a null control that certified
+under the same ambient at 0.96× (94% CI 0.74..1.20). Sign *and* size are now on the record. This
+paragraph read *"the magnitude run remains unrun, for a reason recorded in §5 rather than waved
+at"* until that run; §5 is kept intact and the reason it gave was sound for exactly one day.
 
 ## 2. Defect 1 — the bench's acceptance gate was anti-monotone in evidence
 
@@ -172,6 +176,10 @@ capacity sum needs the magnitude, not the sign. That is the run §5 defers.
 
 ## 5. What is NOT measured here, and why that is a refusal rather than an omission
 
+> **Superseded 2026-09-09 by §5.1** — the run happened; the ceiling this section measures moved
+> from a median load1 of 32.0 to 19.90 and the sweep caught a window. This section is kept intact as
+> the record of why it was a refusal rather than an omission, and its reasoning is unchanged.
+
 What §4.2 cannot supply is the magnitude, and that needs a quieter box. The certified run needs
 `load1 < 14` (the bench's own start floor: *"a second-order effect is not
 resolvable above it"*). Sampled every 10 s for the whole session — **139 readings, load1 24.4 to 48.5,
@@ -201,14 +209,89 @@ write the result into this file under the literal heading `CERTIFIED OCCUPANCY V
 is what the falsifier greps for on trunk, and a verdict recorded under any other wording leaves the row
 open forever.
 
+## 5.1 CERTIFIED OCCUPANCY VERDICT — run 2026-09-09, box quiet enough at last
+
+**Parallel dispatch costs a median 5.98× the attributable occupancy per dispatch that serial dispatch
+does, 96% CI 3.45..8.35 — and the null control certified under the same ambient, at median 0.96×
+(truth is 1.00), 94% CI 0.74..1.20.** The live interval's lower bound, 3.45, clears the control band's
+upper bound, 1.20, by a factor of ~2.9. The collapse's benefit on the occupancy axis is real and its
+magnitude is now an interval rather than a direction.
+
+**It replicates the 2026-08-09 run, which is the one thing neither run could supply alone.** §1's
+re-read of that five-cycle data gives a 94% CI of **2.10..6.43**; this twenty-cycle run gives 96% **3.45..8.35**. The intervals overlap over 3.45..6.43 and both exclude 1.00, a month apart, on
+different ambient, through a gate that was rewritten in between. A single run of a rig whose own
+acceptance criterion had just been replaced is exactly the result one should not quote bare.
+
+Backlog `2c563601bdd4` is discharged by this section. §5's refusal stood for exactly one day: the
+premise it was filed under (`not-yet-true` — *"the box has never been quiet enough"*) was still true
+when this run began, and the item was driven by **waiting for the box**, not by relaxing the floor.
+150 ambient samples at 10 s over the wait window: min 13.39, p25 17.19, **median 19.90**, p75 28.48,
+max 43.12 — only **2 of 150** readings at or under the bench's 14 start floor. Both arms were fired
+into those windows by a poller that re-tries on the bench's own `exit 4`; the floor was never
+overridden and `CC_HDB_MAX_START_LOAD` was never set. Contrast §5's filing-day sample: 139 readings,
+median 32.0, never within 10 of the floor. The ceiling moved; it was not lowered.
+
+| | control (null: serial vs serial) | live (parallel vs serial) |
+|---|---|---|
+| cycles requested / yielding a ratio | 20 / 19 | 20 / 15 |
+| load1 at start → end | 13.93 → 20.91 | 14.00 → 33.90 |
+| peak parallel processes | 24 | 24 |
+| mean attributable occupancy, serial | 0.06914 | 0.02886 |
+| mean attributable occupancy, arm B | 0.05869 (serial-b) | 0.26559 (parallel) |
+| **median per-cycle ratio** | **0.96×** | **5.98×** |
+| sign-test CI on the median | 0.74..1.20 (94%, k=6 of 19) | 3.45..8.35 (96%, k=4 of 15) |
+| sample range of the per-cycle ratios | −1.19..162.28 | 0.32..16.15 |
+
+**The bottom row is the whole of §2's argument, arriving as data rather than as simulation.** The
+control's per-cycle ratios span −1.19..162.28 — a `max/min` of about −136, and 65× on the positive
+part alone. Under the gate this rig carried until 2026-09-08 that control fails, catastrophically and
+at any threshold, so the live 5.98× beside it would have been unquotable. Under the sign-test interval
+the same 19 draws certify at 0.74..1.20, because 17 of the 19 sit inside 0.37..1.86 and the median
+moves by at most one rank for each contaminated cycle. §2 predicted P(certify) ≈ 95.7% at m=20 for an
+unbiased control and 2.1% under the old gate; this control certified. The estimator was always able to
+see the effect — only the gate could not report it.
+
+### Three caveats, none of which withdraw the verdict
+
+1. **Both runs carry the bench's own `⚠ AMBIENT MOVED >2x BETWEEN CYCLES`.** Ambient ran 9.875..30.625
+   (control) and 8.500..23.708 (live) runnable threads. The bench prints this to mean *treat the ratio
+   as indicative*. What licenses quoting it anyway is not that the warning is minor but that **the
+   control was run under that same ambient and passed**: the null arm is the empirical answer to *"can
+   this rig resolve a ratio here?"*, and it answered — outside 0.74..1.20 — before the live arm was
+   fired. That is the ordering the two-arm design exists to produce, and it is why a proxy warning does
+   not overrule a measured one.
+2. **The ratio filter is one-sided, and it drops more cycles when the box is noisier.** `verdict()`
+   keeps a cycle only when serial's attributable occupancy is `> 1e-7`, so cycles where a burst pushed
+   ambient above the serial arm are discarded — 1 of 20 in control, **5 of 20** in live. Retained
+   near-zero denominators inflate their ratio, so the surviving set is biased *upward* at the tail.
+   The median is the defence (one contaminated cycle moves it one rank), and the CI is computed on the
+   retained m, so both are honest about the smaller sample; the 5-cycle loss is why live's k=4 of 15
+   buys a *wider* 96% band than control's k=6 of 19 buys at 94%.
+3. **Per-dispatch is the axis; throughput moves the other way.** Over the live run the parallel arm
+   completed 77,238 dispatches against serial's 5,036 — 15.3×. §4.1's correction is what reconciles
+   these: the collapse removes *concurrency*, not forks, so serial is not doing the same work more
+   cheaply, it is doing less work at a lower cost each. Nothing here says the collapse is free; it says
+   its occupancy benefit per dispatch is ~6×, which is the number §4.2 could establish the sign of and
+   not the size.
+
+Raw results, re-readable with `scripts/hook-dispatch-bench.sh --analyse <tsv>`: `/tmp/hdb-control.tsv`
+and `/tmp/hdb-live.tsv` (session copies under the running session's scratchpad). Commands were §5's
+verbatim, at `--cycles 20 --sessions 3 --members 8`.
+
 ## 6. Falsifiable predictions
 
 1. Run at `--members 1`, the bench must report a CI containing 1.00 whatever the box is doing: with
    one member, parallel and serial dispatch are the same operation. Anything else indicts the rig.
    (Inherited from `active-session-occupancy-2026-08-09.md` §7.3, still unrun.)
-2. The control's 90% CI at 20 cycles must be **narrower** than at 5 on the same box. If it is not, the
-   per-cycle ratios are not independent draws and the sign-test interval is the wrong instrument —
-   which would be a finding about the bench's cycling, not about the subject.
+2. ~~The control's 90% CI at 20 cycles must be **narrower** than at 5 on the same box.~~ **CONFIRMED
+   2026-09-09, and on the strongest available design — the same box, the same run, nested
+   prefixes of one control TSV rather than two runs on different days.** Re-analysing the first
+   5, 10 and 20 cycles of §5.1's control gives CI widths **2.39 → 1.14 → 0.46**, monotone
+   decreasing, while the statistic the old gate used moved the other way over the identical
+   draws: the sample range went **−1.19..1.20 → −1.19..162.28**, a 135× widening. One dataset,
+   two dispersion statistics, opposite signs of the derivative in evidence. The per-cycle ratios
+   behave as independent draws and the sign-test interval is the right instrument.
+   Reproduce: `awk -F'\t' '$1<=5' hdb-control.tsv > c5.tsv && scripts/hook-dispatch-bench.sh --control --analyse c5.tsv`
 3. The repaired drift guard must go **red** the next time a Bash hook is added to settings.json
    without a registry edit. A guard that stays green through such a change has regressed to §3.
 
