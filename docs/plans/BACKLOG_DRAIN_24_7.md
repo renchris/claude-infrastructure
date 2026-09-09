@@ -87,6 +87,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-09 — recycle #331 (lane infra):** closed 8cb412119579 (deploy-live.sh:1607-1630 repairs core.bare, e99dcdf82),
+  04aeb03e7888 (activation-marker.sh `.superseded`; queue 11->2), 1d73c2fd875c (successor 2ee30f87c370 retracts its load
+  hypothesis), 2b0888bc8832 (cloud-return-lane.sh:158-160; live row elapsed_s=3253 load1=29.68), e1862d1732da (migration
+  0017 IS run, all 4 config dirs), d1d51881cca1 (curl-gate redirect_hardening e5c9c46fa), 54d37a05d48e (landed 55f950618:
+  `--once` was never a flag cc-deathwatch-kqueue parsed, so ROUND-TRIP was a timeout-kill passing VACUOUSLY every run —
+  still 124 at a 240s bound, so never load-sized; now `--timeout 2` + rc-124 guard, 9/9 in 4.15s at load1 90.37) · blocked
+  none · released 93019ed4b7f7 ad37b0296a56 4b0095d1ee73 · repaired 2c563601bdd4's falsifier (it matched its own doc's
+  INSTRUCTION to write the heading) · `closed=7 closed_pre=7 closed_other=10 filed=17 net=-10 blocked=14 min=3 lane=local-drain project=claude-infrastructure floor=MET`
+
 - **2026-09-09 — recycle #330 (lane infra):** closed f4dab9fbcb55 (target 9002948eb52c already closed
   REFUTED, disproof 7f4139417 on trunk), fef07efcdd0d (own falsifier: grep -c surface_death in the live
   lead-crash-watchdog.sh => 5), 0c8b39b67665 (56ca98a43 landed the cloud absence contract), 3e8473494af4
