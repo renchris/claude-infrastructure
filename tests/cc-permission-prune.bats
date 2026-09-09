@@ -24,9 +24,21 @@ setup() {
   AUDIT="$REPO/bin/cc-permission-audit"
   [ -f "$AUDIT" ] || skip "cc-permission-audit missing"
   FIX="$BATS_TEST_TMPDIR/fixture.settings.local.json"
-  # 2 entries are provably dead: `git -C … status` (shadowed by Bash(git:*)) and the second
-  # `npm run build` (a byte-identical duplicate). Everything else must survive, each for a
-  # DIFFERENT reason — see the arms below.
+  # 3 entries are provably dead: `git -C … status` (shadowed by Bash(git:*)), the second
+  # `npm run build` (a byte-identical duplicate), and — since 2026-09-09 — `npm run test`, whose
+  # literal EQUALS the base of `Bash(npm run test:*)` in this same file. Everything else must
+  # survive, each for a DIFFERENT reason — see the arms below.
+  #
+  # ⚠ THE THIRD ONE USED TO SURVIVE, and this suite asserted that it must. The justification, kept
+  # here because it is the instructive part, was "whether Bash(npm run test:*) also matches the bare
+  # `npm run test` is the matcher's business, so it is not used as proof". The matcher had already
+  # answered: `rule_matches_leaf`'s prefix arm is `c == g or c.startswith(g + " ")`
+  # (hooks/lib/permission_matcher.py), so equality and the longer form are ONE line of matcher, not
+  # two opinions — and the deferral quietly created a second, more conservative opinion about the
+  # same population, which is exactly the divergence the shared-lib design exists to prevent. The
+  # cost was measurable elsewhere: `{X, X <args>}` is the commonest acceptance cluster on this box,
+  # so the harvester minted `Bash(X:*)`, retired `X <args>`, left `Bash(X)` behind, and delivered a
+  # WIDER grant for an allow list of unchanged length — 3 of 7 prefixes on the real 30-day proposal.
   cat > "$FIX" <<'JSON'
 {
   "permissions": {
@@ -71,26 +83,33 @@ backups() { # count of backups made for the fixture
   [[ "$output" == *"Bash(git -C /tmp/wt-gone status)"* ]] || false
   [[ "$output" == *"shadowed by Bash(git:*)"* ]] || false
   [[ "$output" == *"duplicate of an earlier entry"* ]] || false
-  [[ "$output" == *"2 provably-dead entr(ies) of 10 approved patterns"* ]] || false
+  [[ "$output" == *"shadowed by Bash(npm run test:*)"* ]] || false
+  [[ "$output" == *"3 provably-dead entr(ies) of 10 approved patterns"* ]] || false
   [[ "$output" == *"DRY RUN"* ]] || false
   # …and the file is byte-identical, with no backup taken.
   [ "$(shasum -a 256 "$FIX" | awk '{print $1}')" = "$ORIG_SHA" ]
   [ "$(backups)" -eq 0 ]
 }
 
-@test "CONFIRM=1 removes the provably-dead entries — and ONLY those two" {
+@test "CONFIRM=1 removes the provably-dead entries — and ONLY those three" {
   run env CONFIRM=1 python3 "$AUDIT" --prune "$FIX"
   [ "$status" -eq 0 ]
-  # The exact count is the failure-distinct quantity: 10 means the prune no-op'd, <8 means it
+  # The exact count is the failure-distinct quantity: 10 means the prune no-op'd, <7 means it
   # took something it could not prove dead.
-  [ "$(allow_n "$FIX")" -eq 8 ]
+  [ "$(allow_n "$FIX")" -eq 7 ]
   run has_rule "$FIX" "Bash(git -C /tmp/wt-gone status)"
   [ "$status" -ne 0 ]
+  # the equality case: the literal that IS the prefix rule's base. Its only matchable string is
+  # itself, and the surviving `Bash(npm run test:*)` matches it, so removing it is
+  # semantics-preserving in every mode — the same proof the longer form has always had.
+  run has_rule "$FIX" "Bash(npm run test)"
+  [ "$status" -ne 0 ]
+  has_rule "$FIX" "Bash(npm run test:*)"
   # the duplicate collapses to exactly one surviving copy
   [ "$(jq '[.permissions.allow[] | select(. == "Bash(npm run build)")] | length' "$FIX")" -eq 1 ]
 }
 
-@test "an entry that COULD match again is left alone — four ways of could" {
+@test "an entry that COULD match again is left alone — three ways of could" {
   run env CONFIRM=1 python3 "$AUDIT" --prune "$FIX"
   [ "$status" -eq 0 ]
   # no prefix rule covers it at all
@@ -98,9 +117,6 @@ backups() { # count of backups made for the fixture
   # one-shot-LOOKING (a temp dir + a pid) but nothing proves it unrepeatable — the row's own
   # requested class, deliberately NOT pruned rather than pruned by spelling
   has_rule "$FIX" "Bash(rm -f /tmp/one-shot-3f9a1c/pid-8842.lock)"
-  # the equality case: whether Bash(npm run test:*) also matches the bare `npm run test` is the
-  # matcher's business, so it is not used as proof
-  has_rule "$FIX" "Bash(npm run test)"
   # a wildcard-bearing rule is never a prune candidate (its match set is not a single literal)
   has_rule "$FIX" "Bash(gh repo *)"
 }

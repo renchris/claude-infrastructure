@@ -1,0 +1,12 @@
+{
+  "note": "Each entry is ONE anchored record: line 0 carries the `[ISO Z] [sid] ` anchor, the rest are continuation lines with no anchor. `sid` and `days` are substituted at generation time. The multi-line record exists to separate a RECORD count from a LINE count: 4 of its continuation lines start with `gh pr view`, so a line-based widening counter reports 5 where the true answer is 1.",
+  "live": [
+    {"sid":"s-alpha","days":1,"lines":["gh pr view 3 --json state"]},
+    {"sid":"s-alpha","days":1,"lines":["cat <<EOF","gh pr view 99","gh pr view 100","gh pr view 101","gh pr view 102","EOF"]},
+    {"sid":"s-bravo","days":1,"lines":["gh pr list --limit 20"]}
+  ],
+  "rotated": [
+    {"sid":"s-charlie","days":20,"lines":["ls -la /tmp"]},
+    {"sid":"s-charlie","days":20,"lines":["gh pr list --state open"]}
+  ]
+}

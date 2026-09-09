@@ -1,0 +1,7 @@
+{
+  "note": "curl-gate.py's AUDIT_LOG shape (hooks/curl-gate.py:171-192). Each row is joined to ONE archive row by `match_cmd` and is written `offset_s` after THAT row's own timestamp, so the join is exercised at +5 s inside the +/-15 s window without attributing anything else that session did. Only the api.example.test rows are joined — the cdn.example.test curl rows are deliberately left unattributed so a curl candidate still survives the hook_raised partition and reaches its gate.",
+  "rows": [
+    {"sid":"s-delta","match_cmd":"curl -sS https://api.example.test/v1/status","offset_s":5,"decision":"ask","reason":"unlisted host","host":"api.example.test","method":"GET","cmd_redacted":"curl -sS https://api.example.test/v1/status"},
+    {"sid":"s-alpha","match_cmd":"curl -sS https://api.example.test/v1/health","offset_s":5,"decision":"ask","reason":"unlisted host","host":"api.example.test","method":"GET","cmd_redacted":"curl -sS https://api.example.test/v1/health"}
+  ]
+}

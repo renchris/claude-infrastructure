@@ -1,0 +1,10 @@
+[
+  {"tag":"every leaf covered by a fleet rule — the steady state the plan calls first-class, not a failure",
+   "sid":"s-alpha","days":1,"proj":"B","cmd":"pnpm test --filter web","by":"PostToolUse","approved":true,"waited":5},
+  {"tag":"covered, second session",
+   "sid":"s-bravo","days":8,"proj":"B","cmd":"pnpm test -r","by":"PostToolUse","approved":true,"waited":5},
+  {"tag":"covered by the fleet lint prefix",
+   "sid":"s-alpha","days":1,"proj":"B","cmd":"zzfmt check --fix","by":"PostToolUse","approved":true,"waited":6},
+  {"tag":"covered, and a compound whose every leaf is covered",
+   "sid":"s-bravo","days":8,"proj":"B","cmd":"cd /x && pnpm test && ls -la","by":"PostToolUse","approved":true,"waited":7}
+]

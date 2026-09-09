@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh pr view 12 --json state)",
+      "Bash(gh pr view 7 --json title)",
+      "Bash(ssh -i @@HOME@@/.ssh/id_fx root@host-a uptime)",
+      "Bash(ssh -i @@HOME@@/.ssh/id_fx root@host-b uptime)",
+      "Bash(ssh -i @@HOME@@/.ssh/id_fx root@host-c uptime)",
+      "Bash(./scripts/zzlocal.sh run --dry)",
+      "Bash(./scripts/zzlocal.sh run --fix)",
+      "Bash(zzfmt check:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

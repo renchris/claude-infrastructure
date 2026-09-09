@@ -612,7 +612,11 @@ those by `bashMissKind` / error text. Only `no-rule-match` is addressable by a p
    The audit **reports and never removes**, not even under `CONFIRM=1`: a dropped rule is
    restored the moment a session leaves auto mode, so it is dead *weight*, not a dead *entry*,
    and deleting it is a real semantic change under `default`/`acceptEdits`. Rewrite each hit
-   narrower per DO #1–#2 instead.
+   narrower per DO #1–#2 instead. That rewrite is now a tool — `cc-permission-harvest` (skill
+   `permission-harvest`, weekly `com.claude.permission-harvest`) derives `Bash(<head>:*)` prefixes
+   from the beacon archive and consolidates the exact acceptances in project `settings.local.json`,
+   refusing every candidate this drop list, §2's structural gates or a deny/ask collision would make
+   inert, and only the operator's `cc-do` step ever writes one.
 
 ### DON'T
 

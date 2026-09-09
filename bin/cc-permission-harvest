@@ -1,0 +1,2408 @@
+#!/usr/bin/env python3
+"""permission-harvest — turn the archive of prompts that ACTUALLY happened into a few composable
+`Bash(<head>:*)` allow rules, refute every candidate before proposing it, and consolidate the
+operator's own exact acceptances into the prefixes that shadow them.
+
+WHY THIS TOOL EXISTS. `docs/research/permission-prompts-2026-08-23.md` §3: nine of nine allowlist
+proposals derived from `bash-commands.log` by string matching were refuted by an adversarial
+verifier — counts inflated 2x-174x, two would have granted arbitrary code execution. Every error
+was one of three confusions, and this tool is built so none of them can recur:
+
+  1. COUNTING THE WRONG POPULATION. Prompts are counted from the beacon archive (the oracle of
+     prompts that happened), never from the command log, which is a post-hook pass-through record
+     and is used for exactly one thing — the WIDENING RECEIPT: what a candidate would newly admit.
+  2. PROPOSING A RULE THAT CLEARS NOTHING. `$( )`, backticks, subshells, `{ }`, `&`, redirection to
+     a file, heredocs, multi-`cd`, `cd`+`git` are hard-gated in the harness before any rule is read
+     (matcher-truth §2) — 45% of real prompts. A hook `ask` (`curl-gate.py`, the `rm` guard) runs
+     BEFORE rules — 80% of what looked like a rule gap. Both are partitioned OUT first, so every
+     count downstream is a count over prompts a rule could have cleared.
+  3. PROPOSING A RULE THAT IS A GRANT. Eleven deterministic gates (PERMISSION_HARVEST.md §3.2) —
+     ACE_CLASS · ARG_EXEC · FLAG_HEAD · SHELL_KEYWORD · HOOK_OWNED · AUTO_MODE_DROP ·
+     ASK_DENY_COLLISION · REFUSED_PROMPT_COLLISION · MIN_EVIDENCE · PATH_BOUND · TOKEN_CAP — each a
+     pure function whose verdict rides every candidate, proposed or refused, so a refusal's cost is
+     visible and a pass is auditable.
+
+The matcher is IMPORTED from hooks/lib/permission_matcher.py, never re-implemented: two tools with
+two matchers over one population disagree about it invisibly (memory:
+sibling-auditors-must-share-the-state-model). A missing lib is exit 3, named — never a fallback.
+
+WHAT IT NEVER DOES. Write permission config from an agent session. `--apply` is operator-run through
+`cc-do`; consent is `CONFIRM=1`; an agent-session marker in the environment is a courtesy refusal
+(exit 4), and the hard stop is the `hooks/validate-bash.sh` deny arm on this tool's `--apply` argv.
+There is no override variable.
+
+Usage:
+  cc-permission-harvest [DAYS] [--json] [--out DIR] [--settings PATH…] [--mode auto|default]
+        [--min-prompts N=2] [--min-sessions N=2] [--min-weeks N=2] [--min-cluster N=2]
+        [--max-tokens 3] [--no-consolidate] [--corpus-days N=30] [--hook-logs PATH[:name]…]
+        [--transcripts ROOT…] [--explain RULE]
+  cc-permission-harvest --check [PROPOSAL]                    read-only preview; exit 0 iff ≥1 rule would apply
+  cc-permission-harvest --falsify [PROPOSAL]                  the QUEUE PROBE; exit 0 iff NOTHING is left to apply
+  CONFIRM=1 cc-permission-harvest --apply [PROPOSAL] [--only RULE…] [--skip RULE…] [--target fleet|PATH…]
+
+🚨 `--check` AND `--falsify` HAVE OPPOSITE POLARITY, DELIBERATELY, AND ONLY `--falsify` MAY BE
+STORED AS A BACKLOG ROW'S `--falsifier`. `--check` is a human preview and answers "is there work?"
+(exit 0 = yes, §3.3). `cc-premise run_falsifier` asks the opposite question and reads exit 0 as
+"the condition this row was filed for is GONE — close it" (`bin/cc-premise:1370`, and
+`sweep --record --close-falsified` runs every 6 h). Wiring `--check` there therefore auto-closed
+the operator's apply step WHILE the apply was still pending, and kept a decayed row open forever —
+both arms backwards. `--falsify` is the probe built for that contract: exit 0 only when nothing is
+left to write. It is also CHEAP by construction (it reads the proposal and the settings files and
+nothing else — no archive, no corpus, no transcripts) because `FALSIFIER_TIMEOUT_S` is 20 s
+(`bin/cc-premise:241`) and this tool's full pipeline was measured at 1,045 s on the live stores.
+
+Exit codes: 0 ok (a null result is `proposed=0` WITH its denominator, never the error channel) ·
+1 `--check`: nothing would apply / `--falsify`: something is STILL outstanding, or the probe could
+not tell (fail-closed — a probe that cannot answer must never retire an operator's step) · 2 usage
+· 3 BLIND (archive absent / unreadable / partly unreadable / ORACLE-DARK — a dead beacon must never
+read as a healthy `proposed=0`) · 4 apply refused (a gate failed at apply time, a refused target, an
+agent session) · 5 write failure (every touched file restored) · 6 DEADLINE — the read-only
+pipeline exceeded CC_PERMHARVEST_MAX_S (default 3600 s) and was cut before it could emit a PARTIAL
+proposal. The weekly wrapper maps every undesigned rc to `verdict=error`, so 6 lands on cc-fleet's
+S4 rather than reading as a quiet week.
+
+Seams (env): CC_PERMARCHIVE_DIR · CC_PERMHARVEST_SETTINGS_GLOB · CC_PERMHARVEST_DEV_ROOT ·
+CC_PERMHARVEST_CORPUS · CC_PERMHARVEST_HOOK_LOGS · CC_PERMHARVEST_TRANSCRIPTS · CC_PERMHARVEST_OUT ·
+CC_PERMHARVEST_ORACLE_MAX_AGE_S · CC_PERMHARVEST_MAX_S.
+"""
+
+from __future__ import annotations
+
+import argparse
+import calendar
+import collections
+import difflib
+import glob as _glob
+import hashlib
+import importlib.util
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+TOOL = "cc-permission-harvest"
+
+
+# ── THE SHARED MATCHER ─────────────────────────────────────────────────────────────────────────
+def _load_matcher():
+    here = os.path.dirname(os.path.realpath(__file__))     # realpath: this file is a symlink live
+    cands = [
+        os.path.join(os.path.dirname(here), "hooks", "lib"),
+        os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
+                     "hooks", "lib"),
+        os.path.expanduser("~/.claude/hooks/lib"),
+    ]
+    for d in cands:
+        path = os.path.join(d, "permission_matcher.py")
+        if os.path.isfile(path):
+            spec = importlib.util.spec_from_file_location("permission_matcher", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    sys.stderr.write("%s: shared matcher missing — expected %s\n"
+                     % (TOOL, os.path.join(cands[0], "permission_matcher.py")))
+    sys.exit(3)
+
+
+pm = _load_matcher()
+
+# ── constants ──────────────────────────────────────────────────────────────────────────────────
+GATE_ORDER = ("ACE_CLASS", "ARG_EXEC", "FLAG_HEAD", "SHELL_KEYWORD", "HOOK_OWNED", "AUTO_MODE_DROP",
+              "ASK_DENY_COLLISION", "REFUSED_PROMPT_COLLISION", "MIN_EVIDENCE", "PATH_BOUND",
+              "TOKEN_CAP")
+# The order a RESIDUE cluster names its reason in. `code` on an archive candidate is the FIRST
+# failing gate in §3.2 order (the table's order is the contract). A cluster that can never be
+# retired is a different question — "what CLASS of head is this" — and FLAG_HEAD answers it worst
+# (the flag is a disguise; the verdict belongs to the verb), the mode drop and ACE best. This is
+# what makes `ssh -i` read AUTO_MODE_DROP and `perl -ne` read ACE_CLASS, as §3.1 step 8 names them.
+RESIDUE_PRIORITY = ("ACE_CLASS", "AUTO_MODE_DROP", "ARG_EXEC", "HOOK_OWNED", "SHELL_KEYWORD",
+                    "ASK_DENY_COLLISION", "REFUSED_PROMPT_COLLISION", "PATH_BOUND", "TOKEN_CAP",
+                    "FLAG_HEAD", "MIN_EVIDENCE")
+BUCKETS = ("structural", "hook_raised", "ask_hit", "deny_hit", "truncated", "hook_or_classifier",
+           "rule_gap", "gap_unrecoverable")
+RESOLUTIONS = ("approved", "refused", "denied", "abandoned", "collateral", "unknown")
+# Tree-sitter nodes `MT` does not recurse into, seen in A1 (94 / 50 rows) and NOT probed against the
+# binary. Reported beside the headline, never counted into it.
+UNVERIFIED_KINDS = ("function_def", "case")
+_FUNCTION_DEF_RE = re.compile(r"(^|\n|;)\s*(function\s+[A-Za-z_][\w-]*|[A-Za-z_][\w-]*\s*\(\s*\))\s*\{?", re.S)
+_CASE_RE = re.compile(r"(^|\n|;|&&|\|\|)\s*case\s+\S+\s+in\b", re.S)
+HOOK_JOIN_S = 15
+CORPUS_SCOPE = ("validate-bash pass-through, pre-rewrite — bash-commands.log is written after "
+                "every deny/warn has exited; a WIDENING receipt, never a prompt count")
+# The verbs §3.1 step 8 never mints a consolidation prefix for from path-bound literals: the
+# prefix would generalise a destination the operator accepted once, by name.
+DESTRUCTIVE_VERBS = frozenset(("rm", "mv", "cp", "chmod", "chown", "chflags", "ln", "dd",
+                               "truncate", "install"))
+_SUBVERB_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_+.-]*$")
+_ENV_HEAD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_HEX_RE = re.compile(r"^(?=.*[0-9])[0-9a-f]{7,}$")
+_TMP_RE = re.compile(r"(^|[/._-])tmp([/._-]|$)")
+_DIGITS_RE = re.compile(r"^[0-9]+$")
+_BACKUP_MARKERS = (".bak", "pre-", "permharvest-bak", "permprune-bak")
+AGENT_ENV = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_ENTRYPOINT")
+EVIDENCE_CAP = 12
+_GIT = "/usr/bin/git"
+_GREP = "/usr/bin/grep"
+
+
+def _now_utc():
+    return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+
+
+def _iso(ts):
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(ts)))
+    except (TypeError, ValueError, OverflowError):
+        return "?"
+
+
+def _week(ts):
+    return time.strftime("%G-%V", time.gmtime(float(ts)))
+
+
+def _num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _parse_ts(v):
+    """epoch float from an epoch number or an ISO `…Z` string; None when neither."""
+    if _num(v):
+        return float(v)
+    if isinstance(v, str):
+        s = v.strip()
+        try:
+            return float(s)
+        except ValueError:
+            pass
+        m = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?Z$", s)
+        if m:
+            try:
+                return float(calendar.timegm(time.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S")))
+            except ValueError:
+                return None
+    return None
+
+
+def _days_arg(v):
+    """`7`, `7d`, `7 days` → 7 — the audit's spelling. Unparseable is a usage error (exit 2)."""
+    m = re.match(r"^\s*(\d+)\s*(?:d|day|days)?\s*$", str(v), re.I)
+    if not m:
+        sys.stderr.write("%s: unparseable day count %r\n" % (TOOL, v))
+        sys.exit(2)
+    return int(m.group(1))
+
+
+def _tool_sha():
+    try:
+        with open(os.path.realpath(__file__), "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()[:12]
+    except OSError:
+        return "unknown"
+
+
+def _fmt_int(n):
+    return "{:,}".format(n)
+
+
+def _pct(n, d):
+    return "%.1f%%" % (100.0 * n / d) if d else "n/a"
+
+
+def _rule_of(head):
+    return "Bash(%s:*)" % head
+
+
+def _head_of_rule(rule):
+    r = pm.parse_rule(rule)
+    if r is None or r.tool != "Bash":
+        return None
+    return r.head
+
+
+# ── seams ──────────────────────────────────────────────────────────────────────────────────────
+class Seams(object):
+    """Every path this tool reads, resolved ONCE from env + argv. HOME redirection (the suites) is
+    honoured because every default goes through expanduser; nothing here caches across HOMEs."""
+
+    def __init__(self, args):
+        env = os.environ
+        self.archive_dir = env.get("CC_PERMARCHIVE_DIR") or os.path.expanduser(
+            "~/.claude/autonomy/permission-archive")
+        self.settings_glob = env.get("CC_PERMHARVEST_SETTINGS_GLOB") or "~/.claude*/settings.json"
+        self.dev_root = os.path.abspath(os.path.expanduser(
+            env.get("CC_PERMHARVEST_DEV_ROOT") or "~/Development"))
+        self.corpus = os.path.expanduser(env.get("CC_PERMHARVEST_CORPUS")
+                                         or "~/.claude/logs/bash-commands.log")
+        self.out_dir = os.path.expanduser(args.out or env.get("CC_PERMHARVEST_OUT")
+                                          or "~/.claude/autonomy/permission-harvest")
+        self.oracle_max_age_s = float(env.get("CC_PERMHARVEST_ORACLE_MAX_AGE_S") or 259200)
+        # hook decision logs: `path[:name]`, comma-separated in the env, repeated on the CLI.
+        raw = args.hook_logs if args.hook_logs else [
+            s for s in (env.get("CC_PERMHARVEST_HOOK_LOGS")
+                        or "~/.reso/curl-audit.jsonl:curl-gate,"
+                           "~/.claude/logs/validate-bash-decisions.jsonl:validate-bash").split(",")
+            if s.strip()]
+        self.hook_logs = []
+        for spec in raw:
+            spec = spec.strip()
+            if ":" in spec and not spec.endswith(":"):
+                path, name = spec.rsplit(":", 1)
+            else:
+                path, name = spec.rstrip(":"), None
+            path = os.path.expanduser(path)
+            if not name:
+                name = re.sub(r"\.(jsonl|json|log)$", "", os.path.basename(path))
+            self.hook_logs.append((path, name))
+        # transcript roots for the denial oracle. An EMPTY seam means "no oracle" and the report
+        # says so — it is the one honest way to run without a 3 GiB scan.
+        if args.transcripts:
+            roots = args.transcripts
+        elif "CC_PERMHARVEST_TRANSCRIPTS" in env:
+            roots = [s for s in env["CC_PERMHARVEST_TRANSCRIPTS"].split(",") if s.strip()]
+        else:
+            roots = ["~/.claude*/projects"]
+        self.transcripts = []
+        for r in roots:
+            for p in sorted(_glob.glob(os.path.expanduser(r.strip()))):
+                if os.path.isdir(p):
+                    self.transcripts.append(p)
+        self.transcripts_requested = bool(roots)
+
+
+def _is_backup_name(path):
+    """A backup COPY, by name — the file's own name OR the config directory holding it.
+
+    THE DIRECTORY HALF IS WHAT MAKES THIS GUARD REACHABLE AT ALL (added 2026-09-09). Fleet files
+    arrive through the glob `~/.claude*/settings.json`, and the walk half of `discover()` matches on
+    exact `SETTINGS_NAMES`; EVERY hit in either population therefore has basename `settings.json` or
+    `settings.local.json`, so a basename-only test could not fire on the population it was written
+    to guard — deleting it changed no behaviour and no test. What the glob DOES reach is a backup
+    FORK: `~/.claude.bak/settings.json` and `~/.claude-pre-cutover/settings.json` both match it,
+    both classify `fleet` (`_settings_scope`: any `~/.claude*` directory), and `--apply` writes the
+    fleet as a set — so the operator's snapshot of a config dir would be silently rewritten by the
+    very tool they took it before running. The operator's live naming habit is exactly this shape
+    (`accounts.json.pre-router.20260811T083246Z` sits in the shared checkout today).
+
+    Only the IMMEDIATE parent is consulted: a project at `~/Development/pre-release/.claude/…` has
+    parent `.claude` and is a real target, not a backup.
+    """
+    base = os.path.basename(path)
+    parent = os.path.basename(os.path.dirname(path))
+    return any(m in base or m in parent for m in _BACKUP_MARKERS)
+
+
+def discover(seams, explicit):
+    """[(path, scope)] — fleet from the settings glob, project/worktree from the bounded walk under
+    the dev root. Explicit `--settings` replaces discovery entirely and is scoped by the lib."""
+    if explicit:
+        return [(os.path.abspath(os.path.expanduser(p)), s)
+                for p, s in pm.discover_settings(explicit=[os.path.expanduser(p) for p in explicit])]
+    out = []
+    for p in sorted(_glob.glob(os.path.expanduser(seams.settings_glob))):
+        if os.path.isfile(p) and not _is_backup_name(p):
+            out.append((os.path.abspath(p), "fleet"))
+    if os.path.isdir(seams.dev_root):
+        for p, scope in pm.discover_settings(roots=(seams.dev_root,)):
+            if _is_backup_name(p):
+                continue
+            if scope == "fleet":
+                continue                       # already in the glob half; never double-count
+            out.append((os.path.abspath(p), scope))
+    seen, uniq = set(), []
+    for p, s in out:
+        if p not in seen:
+            seen.add(p)
+            uniq.append((p, s))
+    return uniq
+
+
+def _fleet_mode(fleet_paths):
+    """`permissions.defaultMode` as the fleet files state it — only user-scope settings may grant
+    auto (matcher-truth §3), so only the fleet files are asked. Disagreement resolves to `auto`:
+    crediting a rule the mode drops is the over-count B2-3 measured (17.3% of gap rows)."""
+    modes = set()
+    for p in fleet_paths:
+        try:
+            with open(p, encoding="utf-8") as fh:
+                o = json.load(fh)
+            m = ((o.get("permissions") or {}).get("defaultMode")) if isinstance(o, dict) else None
+        except Exception:
+            m = None
+        if isinstance(m, str):
+            modes.add(m)
+    if modes == {"default"} or modes == {"acceptEdits"}:
+        return "default", "fleet defaultMode"
+    if "auto" in modes:
+        return "auto", "fleet defaultMode"
+    return "auto", "assumed (no fleet file states a defaultMode)"
+
+
+# ── the oracle ─────────────────────────────────────────────────────────────────────────────────
+class Blind(Exception):
+    """The archive cannot answer. Carries the reasons; the caller prints BLIND and exits 3."""
+
+    def __init__(self, reasons):
+        Exception.__init__(self, "; ".join(reasons))
+        self.reasons = reasons
+
+
+class Deadline(BaseException):
+    """The read-only pipeline ran past CC_PERMHARVEST_MAX_S. Printed like BLIND, exits 6.
+
+    ⚠ BaseException, NOT Exception, AND THAT IS THE LOAD-BEARING WORD. The pipeline is built out of
+    per-item `except Exception: continue` handlers — an unreadable archive file, a settings file
+    that is not JSON, a transcript that vanished mid-scan — because one bad row must not kill a
+    3,231-file read. A SIGALRM raised as an `Exception` lands inside whichever of those handlers
+    happens to be on the stack and is SWALLOWED, so the run continues and the deadline silently
+    does nothing. Measured while building this: at a 0.01 s bound the cut fired in 1 of 3 runs and
+    the other two completed normally — non-determinism that reads exactly like a flaky timer and is
+    not. `BaseException` cannot be caught by `except Exception`, the same reason KeyboardInterrupt
+    and SystemExit are not Exceptions; every `finally` still runs, so nothing leaks.
+
+    WHY A DEADLINE EXISTS AT ALL, AND WHY IT LIVES HERE. `scripts/permission-harvest-run.sh` runs
+    this tool from launchd with NO bound of its own, and `timeout(1)` is not on the stock macOS
+    floor that scripts/unattended-path-lint.sh ratchets — so the only place a bound can be honest is
+    inside the interpreter that is already a hard dependency. It is not hypothetical: measured
+    2026-09-09 on the live stores under /usr/bin/python3, `cc-permission-harvest 30 --json` took
+    **1,045 s** (real 1045.06 / user 110.64 / sys 10.90) — ~920 s of it I/O wait across 3,231
+    archive files, 286,466 corpus records, a depth-5 walk of ~/Development (229 s for
+    discover_settings alone, 222 worktree entries) and ~6,281 transcript .jsonl files / 8.5 GB. An
+    unbounded run holds the wrapper's mkdir lock, and every later contender then takes the
+    live-holder branch and writes NO evidence row — so a single hang silences the weekly job until
+    cc-fleet's 21-day S5 staleness bound notices.
+
+    WHY IT IS NOT rc 3. BLIND is a measured fact about the ORACLE ("the beacon is dark"); a deadline
+    is a fact about US. Giving it its own code lets the wrapper's fail-closed rc map turn it into
+    `verdict=error` (cc-fleet S4) without teaching the wrapper a new success arm, and keeps a
+    timeout from being read back as a dark beacon.
+
+    WHY IT IS ARMED INSIDE `pipeline()` AND DISARMED ON THE WAY OUT: everything slow is in there.
+    Arming it around `--apply` would let SIGALRM land between the staged write and the re-read,
+    which is the one window this tool must never be interrupted in.
+    """
+
+
+def read_oracle(seams, days):
+    """(rows_all, rows_window, files, heartbeat_age_s, bad, warn_lines) or raise Blind.
+
+    Absence is FIVE states, never two (the audit's four plus oracle-dark): no directory (the
+    archiver never ran), an unreadable directory, a readable directory holding unreadable files
+    (a FLOOR is not an all-clear), a directory the archiver has left no evidence in, and an
+    archiver that has STOPPED — a stale or missing heartbeat, or a window with zero rows while
+    files exist. Every one is BLIND; only rows in a window under a live heartbeat is a measurement.
+    """
+    d = seams.archive_dir
+    if not os.path.isdir(d):
+        raise Blind(["archive ABSENT (%s) — the beacon has never archived a resolution" % d])
+    if not os.access(d, os.R_OK | os.X_OK):
+        raise Blind(["archive UNREADABLE (%s) — permission denied; rows may exist and cannot be "
+                     "counted" % d])
+    rows_all, bad, unreadable, files, age = pm.read_archive(d, 0)
+    if unreadable:
+        raise Blind(["archive UNREADABLE in part (%d of %d file(s)) — %s" % (unreadable, len(files), d)])
+    if not files and age is None:
+        raise Blind(["archive dir present but the archiver has left NO evidence (%s)" % d])
+    cutoff = time.time() - days * 86400 if days else 0
+    rows_window = [r for r in rows_all
+                   if not cutoff or (_num(r.get("resolved_ts")) and r["resolved_ts"] >= cutoff)]
+    reasons = []
+    if files and age is None:
+        reasons.append("ORACLE-DARK: %d archive file(s) but no .archive-alive heartbeat — the "
+                       "beacon that wrote them is not the one running" % len(files))
+    elif age is not None and age > seams.oracle_max_age_s:
+        reasons.append("ORACLE-DARK: .archive-alive is %.1f h old (bound %.1f h) — the beacon has "
+                       "stopped; a null window over a dead oracle is not a measurement"
+                       % (age / 3600.0, seams.oracle_max_age_s / 3600.0))
+    if files and not rows_window:
+        reasons.append("ORACLE-DARK: 0 rows in the %s window while %d file(s) exist"
+                       % ("%d-day" % days if days else "all-history", len(files)))
+    if reasons:
+        raise Blind(reasons)
+    warn = []
+    if bad:
+        warn.append("%d unparseable archive row(s) skipped — every count below is a FLOOR" % bad)
+    return rows_all, rows_window, files, age, bad, warn
+
+
+# ── hook decision logs (step 3b) ───────────────────────────────────────────────────────────────
+def load_hook_logs(specs):
+    """(index: sid -> [(ts, hook, decision, reason)], present: {hook: path|None}).
+
+    Only `ask`/`warn` decisions are joinable: a hook `deny` blocks the call before any prompt, so a
+    deny inside the ±15 s window belongs to a DIFFERENT invocation, and an `allow` raised nothing.
+    """
+    idx = collections.defaultdict(list)
+    present = collections.OrderedDict()
+    for path, name in specs:
+        if not os.path.isfile(path):
+            present[name] = None
+            continue
+        present[name] = path
+        try:
+            fh = open(path, encoding="utf-8-sig", errors="ignore")
+        except OSError:
+            present[name] = None
+            continue
+        with fh:
+            for ln in fh:
+                ln = ln.strip()
+                if not ln:
+                    continue
+                try:
+                    o = json.loads(ln)
+                except Exception:
+                    continue
+                if not isinstance(o, dict):
+                    continue
+                dec = o.get("decision")
+                if dec not in ("ask", "warn"):
+                    continue
+                ts = _parse_ts(o.get("ts"))
+                sid = o.get("session_id") or o.get("sid")
+                if ts is None or not sid:
+                    continue
+                idx[sid].append((ts, name, dec, str(o.get("reason") or "")[:200],
+                                 str(o.get("cmd_redacted") or o.get("cmd") or "")[:2000]))
+    for sid in idx:
+        idx[sid].sort()
+    return idx, present
+
+
+# Verbs too common to witness anything: a `cd` shared between the hook's redacted command and the
+# archived one says the two ran in the same directory, not that they are the same call.
+_WITNESS_NOISE = frozenset(("cd", "set", "export", "echo", "printf", "true", "false", "test", "[",
+                            "[[", "pwd", "ls", "cat"))
+
+
+def _leaf_verbs(cmd):
+    out = []
+    for leaf in pm.split_leaves(cmd).leaves:
+        toks = pm.normalize_leaf(leaf).split()
+        if toks:
+            v = toks[0]
+            out.append(os.path.basename(v) if "/" in v else v)
+    return out
+
+
+def hook_for(idx, sid, ts, cmd):
+    """The nearest hook ask within HOOK_JOIN_S of the prompt WITH a command witness, or None.
+
+    Session + ±15 s alone over-attributes: two prompts a session raised in the same second are
+    one hook ask and one rule gap, and the time join cannot tell them apart (measured on the
+    fixture — five rows joined to two hook asks, and the deny-hit row vanished). So the archived
+    command must carry a leaf the hook plausibly decided on: a leaf whose `hook_owner` names this
+    hook (curl/wget → curl-gate; rm → validate-bash), a leaf verb the hook's reason text names
+    (`git reset --hard …`), or a non-trivial leaf verb shared with the hook's redacted command.
+    Unwitnessed neighbours are counted (`hook_raised.unwitnessed`), never attributed.
+    """
+    if ts is None or not sid:
+        return None
+    near = [(abs(hts - ts), name, dec, reason, redacted)
+            for hts, name, dec, reason, redacted in idx.get(sid, ()) if abs(hts - ts) <= HOOK_JOIN_S]
+    if not near:
+        return None
+    verbs = [v for v in _leaf_verbs(cmd)]
+    best = None
+    for gap, name, dec, reason, redacted in sorted(near):
+        reason_words = set(re.findall(r"[A-Za-z_][\w.-]*", reason))
+        red_verbs = set(_leaf_verbs(redacted)) - _WITNESS_NOISE if redacted else set()
+        for v in verbs:
+            owner = pm.hook_owner([v]) or ""
+            if name in owner or v in reason_words or (v in red_verbs and v not in _WITNESS_NOISE):
+                if best is None or gap < best[0]:
+                    best = (gap, name, reason)
+                break
+    if best is None:
+        return ("unwitnessed", near[0][1])
+    return best
+
+
+# ── the denial oracle, bounded ─────────────────────────────────────────────────────────────────
+def _transcript_index(roots, sids):
+    """sid -> [files], built with ONE scandir pass per root instead of two globs per session.
+
+    Measured on the real tree: the lib's per-session glob over 431 sessions × 5 roots took 25 s
+    before reading a byte, and the files it would then read total 3.2 GiB. The index costs one
+    directory walk; the marker pre-filter below (`grep -l`, absolute path) then hands the lib only
+    the sessions whose transcripts carry a rejection at all — the lib's join logic runs unchanged
+    on that subset.
+    """
+    want = set(sids)
+    out = collections.defaultdict(list)
+    for root in roots:
+        try:
+            slugs = [e.path for e in os.scandir(root) if e.is_dir(follow_symlinks=False)]
+        except OSError:
+            continue
+        for slug in slugs:
+            try:
+                entries = list(os.scandir(slug))
+            except OSError:
+                continue
+            for e in entries:
+                name = e.name
+                if e.is_file(follow_symlinks=False) and name.endswith(".jsonl") and name[:-6] in want:
+                    out[name[:-6]].append(e.path)
+                elif e.is_dir(follow_symlinks=False) and name in want:
+                    for dp, _dn, fns in os.walk(e.path):
+                        for fn in fns:
+                            if fn.endswith(".jsonl"):
+                                out[name].append(os.path.join(dp, fn))
+    return out
+
+
+_MARKER_TIMEOUT_S = float(os.environ.get("CC_PERMHARVEST_MARKER_TIMEOUT_S", "120"))
+_MARKER_STATE = {"timed_out": 0, "batches": 0}
+
+
+def _files_with_marker(files):
+    """Subset of `files` containing a rejection marker, via grep -l in batches; on a missing grep
+    every file is returned (the lib then does the full read — slower, never less correct).
+
+    EVERY BATCH IS BOUNDED, and the bound is not decoration. This is the only call in the tool that
+    walks gigabytes (its own index docstring measures 431 sessions x 5 roots at 3.2 GiB), and it
+    shipped without a `timeout=` while both `git` calls beside it carried one. A bounded amount of
+    WORK is not a bounded WAIT: one stalled network mount or sleeping disk parks the weekly job
+    forever, and since scripts/permission-harvest-run.sh writes its evidence line only when this
+    returns, cc-fleet would then read the jsonl mtime as stale and render a healthy job as broken.
+
+    A TIMEOUT IS `UNKNOWN`, NEVER AN ACQUITTAL. On expiry the batch's files are returned as
+    candidates — the same fail-open the missing-grep and odd-returncode arms already take — so the
+    lib reads them in full and a denial is still findable. Returning [] instead would quietly
+    weaken REFUSED_PROMPT_COLLISION into "no denials exist", which is the false all-clear this
+    file's BLIND states exist to prevent.
+    """
+    if not files:
+        return []
+    if not os.access(_GREP, os.X_OK):
+        return list(files)
+    hits = []
+    batch = 200
+    for i in range(0, len(files), batch):
+        chunk = files[i:i + batch]
+        cmd = [_GREP, "-l", "-a", "-F"]
+        for mk in pm.DENIAL_MARKERS:
+            cmd += ["-e", mk]
+        cmd += ["--"] + chunk
+        _MARKER_STATE["batches"] += 1
+        try:
+            p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               timeout=_MARKER_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            _MARKER_STATE["timed_out"] += 1
+            hits += chunk          # UNKNOWN ⇒ read them all; never "no denial here"
+            continue
+        except OSError:
+            return list(files)
+        if p.returncode not in (0, 1):
+            return list(files)
+        hits += [ln for ln in p.stdout.decode("utf-8", "replace").split("\n") if ln]
+    return hits
+
+
+def denial_oracle_bounded(rows, roots):
+    """{row_key: 'denied'} via the lib, over only the sessions whose transcripts carry a marker."""
+    if not roots or not rows:
+        return {}
+    sids = {r.get("session_id") for r in rows if r.get("session_id")}
+    index = _transcript_index(roots, sids)
+    files = sorted({p for ps in index.values() for p in ps})
+    marked = set(_files_with_marker(files))
+    if not marked:
+        return {}
+    keep_sids = {sid for sid, ps in index.items() if any(p in marked for p in ps)}
+    subset = [r for r in rows if r.get("session_id") in keep_sids]
+    return pm.denial_oracle(subset, roots)
+
+
+# ── rows → buckets ─────────────────────────────────────────────────────────────────────────────
+class Ctx(object):
+    """Everything the pipeline computed once and every later stage reads."""
+
+    def __init__(self):
+        self.rs_cache = {}
+        self.noexact_cache = {}
+        self.project_cache = {}
+        self.cover_cache = {}
+
+
+def _noexact(ctx, rs):
+    """The same RuleSet with EXACT allow rules removed — the F19 correction.
+
+    A row is in the archive because a prompt HAPPENED. The one rule that matches its leaf byte-for-
+    byte is, overwhelmingly, the rule that prompt's own "yes, don't ask again" wrote (F19 saves up
+    to five such literals per compound). Reading it as coverage reads the answer to the prompt as
+    the reason the prompt could not have happened — so for the GAP question exact allow rules are
+    set aside, and the row's coverage is judged on prefix/wildcard/bare rules only. Deny and ask
+    rules are untouched: those are operator decisions, and F19 writes none.
+    """
+    key = id(rs)
+    hit = ctx.noexact_cache.get(key)
+    if hit is None:
+        hit = pm.RuleSet([r for r in rs.allow if r.kind != "exact"], rs.deny, rs.ask, rs.by_file,
+                         rs.dropped)
+        ctx.noexact_cache[key] = (rs, hit)          # keep `rs` alive so id() stays unique
+        return hit
+    return hit[1]
+
+
+def rules_for(ctx, fleet_rs, local_union, cwd, seams, mode):
+    """(RuleSet, status) for one row's cwd, cached per cwd."""
+    key = cwd or ""
+    hit = ctx.rs_cache.get(key)
+    if hit is None:
+        hit = pm.rules_in_force_for_cwd(fleet_rs, cwd, stop_at=seams.dev_root,
+                                        fallback=local_union, mode=mode)
+        ctx.rs_cache[key] = hit
+    return hit
+
+
+def project_of(ctx, cwd, seams):
+    """The project a cwd belongs to — the git main checkout when one exists (a linked worktree maps
+    to its common dir's parent, so a worktree and its repo are ONE project), else the first path
+    component under the dev root. `distinct_projects` and the apply target key on this."""
+    if not cwd:
+        return ""
+    hit = ctx.project_cache.get(cwd)
+    if hit is not None:
+        return hit
+    proj = None
+    if os.path.isdir(cwd) and os.access(_GIT, os.X_OK):
+        try:
+            p = subprocess.run([_GIT, "-C", cwd, "rev-parse", "--show-toplevel", "--git-common-dir"],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+            if p.returncode == 0:
+                lines = p.stdout.decode("utf-8", "replace").split("\n")
+                top = lines[0].strip() if lines else ""
+                common = lines[1].strip() if len(lines) > 1 else ""
+                if common:
+                    common = os.path.realpath(os.path.join(cwd, common) if not os.path.isabs(common)
+                                              else common)
+                    if os.path.basename(common) == ".git":
+                        proj = os.path.dirname(common)
+                if not proj and top:
+                    proj = os.path.realpath(top)
+        except (OSError, subprocess.SubprocessError):
+            proj = None
+    if not proj:
+        real = os.path.abspath(cwd)
+        root = seams.dev_root.rstrip("/") + "/"
+        if real.startswith(root):
+            parts = real[len(root):].split("/")
+            if parts and parts[0] == ".worktrees" and len(parts) > 1:
+                proj = os.path.join(seams.dev_root, parts[0], parts[1])
+            elif parts and parts[0]:
+                proj = os.path.join(seams.dev_root, parts[0])
+        proj = proj or real
+    ctx.project_cache[cwd] = proj
+    return proj
+
+
+def _is_truncated(r):
+    if r.get("tool_input_truncated") is True:
+        return True
+    ti = r.get("tool_input")
+    return not isinstance(ti, dict) and bool(r.get("tool_input_summary"))
+
+
+def analyse(rows_window, fleet_rs, local_union, seams, mode, hook_idx, denied_keys, ctx, warn):
+    """One pass over the Bash rows: resolution, decomposition, rules in force, bucket."""
+    infos = []
+    buckets = collections.Counter()
+    resolution = collections.Counter()
+    by_kind = collections.Counter()
+    kind_verbs = collections.defaultdict(collections.Counter)
+    top_verbs = collections.Counter()
+    unverified = collections.Counter()
+    hook_by = collections.Counter()
+    hook_unwitnessed = collections.Counter()
+    bash_c_rows = 0
+    f19_rows = 0
+    refused_leaves = []
+    waited_total = 0.0
+    waited_struct = 0.0
+    n_non_bash = 0
+    for i, r in enumerate(rows_window):
+        if (r.get("tool_name") or "") != "Bash":
+            n_non_bash += 1
+            continue
+        cls = pm.classify_row(r)
+        if cls not in ("approved", "refused", "abandoned") and pm.row_key(r) in denied_keys:
+            cls = "denied"
+        resolution[cls] += 1
+        ts = r.get("ts") if _num(r.get("ts")) else (
+            r["resolved_ts"] - (r.get("waited_s") or 0) if _num(r.get("resolved_ts")) else None)
+        waited = float(r.get("waited_s")) if _num(r.get("waited_s")) else 0.0
+        waited_total += waited
+        cwd = r.get("cwd") if isinstance(r.get("cwd"), str) else ""
+        cmd = pm.command_of(r)
+        info = {"i": i, "row": r, "cls": cls, "ts": ts, "waited": waited, "cwd": cwd, "cmd": cmd,
+                "sid": r.get("session_id") or "", "leaves": [], "uncovered": [], "structural": [],
+                "local": None, "bucket": None, "hook": None, "project": project_of(ctx, cwd, seams)}
+        infos.append(info)
+        # TRUNCATED is decided first: the beacon cut the text, so a structural or ask verdict over
+        # what remains would be a verdict over a fragment. (The brief lists it beside ask/deny; the
+        # A1 profile the plan's numbers cite already kept it apart. Named in the return.)
+        if _is_truncated(r) or not cmd:
+            info["bucket"] = "truncated"
+            buckets["truncated"] += 1
+            continue
+        dec = pm.split_leaves(cmd)
+        info["leaves"] = list(dec.leaves)
+        # B2-6: `bash -c` is refused for the INTERPRETER, not for shell grammar — its head dies on
+        # ACE_CLASS like every other `bash`. It is therefore not a structural kind here; a row
+        # whose only structural kind was bash_c is judged on its leaves.
+        struct = [k for k in dec.structural if k != "bash_c"]
+        if "bash_c" in dec.structural:
+            bash_c_rows += 1
+        info["structural"] = struct
+        if cls in ("refused", "denied"):
+            refused_leaves.extend(info["leaves"])
+        if struct:
+            info["bucket"] = "structural"
+            buckets["structural"] += 1
+            waited_struct += waited
+            verbs = [pm.normalize_leaf(lf).split()[0] for lf in dec.leaves if pm.normalize_leaf(lf)]
+            for k in struct:
+                by_kind[k] += 1
+                for v in verbs:
+                    kind_verbs[k][v] += 1
+            for v in verbs:
+                top_verbs[v] += 1
+            if _FUNCTION_DEF_RE.search(cmd):
+                unverified["function_def"] += 1
+            if _CASE_RE.search(cmd):
+                unverified["case"] += 1
+            continue
+        hook = hook_for(hook_idx, info["sid"], ts, cmd)
+        if hook is not None and hook[0] == "unwitnessed":
+            hook_unwitnessed[hook[1]] += 1
+            hook = None
+        if hook is not None:
+            info["bucket"] = "hook_raised"
+            info["hook"] = hook[1]
+            buckets["hook_raised"] += 1
+            hook_by[hook[1]] += 1
+            continue
+        rs, status = rules_for(ctx, fleet_rs, local_union, cwd, seams, mode)
+        info["local"] = status
+        outcomes = []
+        uncovered = []
+        f19 = False
+        noexact = _noexact(ctx, rs)
+        for leaf in dec.leaves:
+            outcome, rule = pm.leaf_verdict(leaf, rs)
+            if outcome == "allow" and rule is not None and rule.kind == "exact":
+                o2, _r2 = pm.leaf_verdict(leaf, noexact)
+                if o2 != "allow":
+                    outcome, f19 = "none", True
+            outcomes.append(outcome)
+            if outcome == "none":
+                uncovered.append(leaf)
+        info["uncovered"] = uncovered
+        if f19:
+            f19_rows += 1
+        if "deny" in outcomes:
+            info["bucket"] = "deny_hit"
+        elif "ask" in outcomes:
+            info["bucket"] = "ask_hit"
+        elif not uncovered:
+            info["bucket"] = "hook_or_classifier"
+        elif status == "recovered":
+            info["bucket"] = "rule_gap"
+        else:
+            info["bucket"] = "gap_unrecoverable"
+        buckets[info["bucket"]] += 1
+    n_rows = len(infos)
+    if sum(buckets.values()) != n_rows:
+        # The tool asserts MECE itself: a headline whose parts do not add up is the number people
+        # quote without checking, and a crash here is better than a report that lies quietly.
+        sys.stderr.write("%s: INTERNAL — buckets sum to %d over %d rows\n"
+                         % (TOOL, sum(buckets.values()), n_rows))
+        sys.exit(1)
+    return {
+        "infos": infos, "buckets": buckets, "resolution": resolution, "by_kind": by_kind,
+        "kind_verbs": kind_verbs, "top_verbs": top_verbs, "unverified": unverified,
+        "hook_by": hook_by, "hook_unwitnessed": hook_unwitnessed,
+        "bash_c_rows": bash_c_rows, "f19_rows": f19_rows,
+        "refused_leaves": refused_leaves, "waited_total": waited_total,
+        "waited_struct": waited_struct, "n_rows": n_rows, "n_non_bash": n_non_bash,
+    }
+
+
+# ── the eleven gates ───────────────────────────────────────────────────────────────────────────
+class GateCtx(object):
+    """What a gate may consult besides the head: the collision set, the refused leaves, the
+    candidate's evidence (archive) or its cluster size (consolidation), the target scope."""
+
+    def __init__(self, collision, refused_leaves, scope="fleet", evidence=None, cluster=None,
+                 max_tokens=3, min_prompts=2, min_sessions=2, min_weeks=2, min_cluster=2,
+                 cluster_literals=None):
+        self.collision = collision
+        self.refused_leaves = refused_leaves
+        self.scope = scope
+        self.evidence = evidence
+        self.cluster = cluster
+        self.cluster_literals = cluster_literals or []
+        self.max_tokens = max_tokens
+        self.min_prompts = min_prompts
+        self.min_sessions = min_sessions
+        self.min_weeks = min_weeks
+        self.min_cluster = min_cluster
+        self.carve_outs = []
+        self.refused_hits = []
+
+
+def _is_prefix(a, b):
+    return len(a) <= len(b) and b[:len(a)] == a
+
+
+def gate_ace(toks, gctx):
+    if toks and _ENV_HEAD_RE.match(toks[0]):
+        return ("`%s` is an environment assignment — the rule would approve whatever command "
+                "follows it (F6/F12: `env` is on the ACE list for the same reason)" % toks[0])
+    return pm.ace_reason(toks)
+
+
+def gate_arg_exec(toks, gctx):
+    return pm.arg_exec_reason(toks)
+
+
+def gate_flag_head(toks, gctx):
+    if pm.flag_head(toks):
+        return ("`%s` ends in a flag — the bare verb in disguise; it inherits every verdict of "
+                "`%s` while looking narrower" % (" ".join(toks), toks[0]))
+    return None
+
+
+def gate_shell_keyword(toks, gctx):
+    if pm.shell_keyword(toks):
+        return "`%s` is shell grammar, not a command (F19 saved it as a leaf)" % toks[0]
+    return None
+
+
+def gate_hook_owned(toks, gctx):
+    hook = pm.hook_owner(toks)
+    if hook:
+        return ("%s owns this decision and runs BEFORE rules — an allow rule cannot clear a "
+                "hook-raised prompt" % hook)
+    return None
+
+
+def gate_auto_mode_drop(toks, gctx):
+    why = pm.auto_mode_dropped(_rule_of(" ".join(toks)))
+    if why:
+        return "inert in auto mode: %s" % why
+    return None
+
+
+def gate_ask_deny_collision(toks, gctx):
+    """Bidirectional for 1-token heads and flag heads; one-directional (a deny/ask content that is
+    a prefix OF the candidate refuses; the candidate being a prefix of a deny/ask content passes
+    with the carve-out named) only for ≥2-token heads ending in a sub-verb. §3.2, B1-2."""
+    head = " ".join(toks)
+    one_directional = (len(toks) >= 2 and not pm.flag_head(toks)
+                       and _SUBVERB_RE.match(toks[-1]) is not None)
+    for behavior, rule in gctx.collision:
+        if rule.tool != "Bash":
+            continue
+        ct = rule.head.split()
+        if not ct:
+            continue
+        if _is_prefix(ct, toks) or pm.rule_matches_leaf(rule, head, behavior):
+            return ("%s %s governs this head — deny → ask → allow, at every scope"
+                    % (behavior, rule.raw))
+        if _is_prefix(toks, ct):
+            if one_directional:
+                gctx.carve_outs.append("%s %s" % (behavior, rule.raw))
+            else:
+                return ("`%s` is a prefix of %s %s — a %s head reaches it (bidirectional at 1 token "
+                        "and for flag heads)" % (head, behavior, rule.raw,
+                                                 "1-token" if len(toks) == 1 else "flag"))
+    return None
+
+
+def gate_refused_prompt_collision(toks, gctx):
+    rule = pm.parse_rule(_rule_of(" ".join(toks)))
+    if rule is None:
+        return None
+    for leaf in gctx.refused_leaves:
+        if pm.rule_matches_leaf(rule, leaf, "allow"):
+            gctx.refused_hits.append(leaf)
+    if gctx.refused_hits:
+        return ("the operator refused a prompt carrying this head (%d leaf/leaves, e.g. `%s`) — "
+                "auto-approving it inverts a recorded human decision"
+                % (len(gctx.refused_hits), gctx.refused_hits[0][:80]))
+    return None
+
+
+def gate_min_evidence(toks, gctx):
+    if gctx.cluster is not None:
+        if gctx.cluster < gctx.min_cluster:
+            return "%d exact entr(ies) share this head (< %d)" % (gctx.cluster, gctx.min_cluster)
+        return None
+    ev = gctx.evidence or {}
+    rows, sess, weeks = ev.get("rows", 0), ev.get("sessions", 0), ev.get("weeks", 0)
+    lacks = []
+    if rows < gctx.min_prompts:
+        lacks.append("rows %d < %d" % (rows, gctx.min_prompts))
+    if sess < gctx.min_sessions:
+        lacks.append("sessions %d < %d" % (sess, gctx.min_sessions))
+    if weeks < gctx.min_weeks:
+        lacks.append("weeks %d < %d" % (weeks, gctx.min_weeks))
+    if lacks:
+        return ("%s (recovered rows only; no escape for approved) — a one-shot acceptance wearing "
+                "a prefix" % ", ".join(lacks))
+    return None
+
+
+def _relative_script(tok):
+    if tok.startswith(("/", "~")) or "$" in tok or ".." in tok.split("/"):
+        return False
+    first = tok.split("/")[0]
+    return first not in ("tmp", "private") and "/" in tok
+
+
+def gate_path_bound(toks, gctx):
+    for i, t in enumerate(toks):
+        if "~" in t:
+            return "`%s` — `~` names a home-relative location" % t
+        if "$" in t:
+            return "`%s` — a variable, resolved at run time" % t
+        if _TMP_RE.search(t):
+            return "`%s` — a tmp path is one-shot by construction" % t
+        if _DIGITS_RE.match(t):
+            return "`%s` — an all-digit token is an id or a count, not a program" % t
+        if _HEX_RE.match(t):
+            return "`%s` — a 7+ hex token is a sha or an id" % t
+        if "/" in t:
+            if gctx.scope == "project" and i == 0 and _relative_script(t):
+                continue
+            if i == 0 and _relative_script(t):
+                return ("`%s` is a repo-relative path — at fleet scope it grants whatever sits at "
+                        "that path in ANY cwd; it may pass only into the project file its "
+                        "acceptances came from" % t)
+            return "`%s` — a `/` names a location, not a program" % t
+    if gctx.cluster is not None and toks:
+        verb = os.path.basename(toks[0]) if "/" in toks[0] else toks[0]
+        if verb in DESTRUCTIVE_VERBS and any(_path_bound_literal(x) for x in gctx.cluster_literals):
+            return ("`%s` over path-bound literals — the prefix would generalise destinations the "
+                    "operator accepted one at a time" % verb)
+    return None
+
+
+def _path_bound_literal(rule):
+    head = _head_of_rule(rule) or ""
+    return any(ch in head for ch in "/~$") or _TMP_RE.search(head) is not None
+
+
+def gate_token_cap(toks, gctx):
+    head = " ".join(toks)
+    cap = gctx.max_tokens
+    if len(toks) > cap:
+        return "%d tokens > %d — prefix form only" % (len(toks), cap)
+    if gctx.cluster is not None and len(toks) > 2 and not _SUBVERB_RE.match(toks[-1]):
+        # THE PLAN CONTRADICTS ITSELF HERE AND THIS IS THE READING THAT SATISFIES EVERY EXAMPLE IT
+        # GIVES. §3.2's TOKEN_CAP row caps a CONSOLIDATION head at 2 tokens, while §3.1 step 8's
+        # worked example, the §3.4 JSON body and the §8 acceptance all name `Bash(gh pr view:*)` —
+        # three tokens. Both hold under "at most 2 SUB-VERBS past the verb": a third token that is a
+        # bare word names the command (`gh pr view`, `npm run lint`), while a flag, a path or a
+        # quoted argument names an ARGUMENT — so `ssh -i <key>`, `perl -ne '…'` and `git -C <path>`
+        # still cap at 2 and still surface as the residues §3.1 step 8 names, and the one shape A2
+        # measured a 3-token head rescuing is the one that gets through. A deeper head is also the
+        # NARROWER grant. The gate carries the rule as well as the clusterer, so a head handed in
+        # by `--explain` cannot pass what a cluster could not.
+        return ("%d-token consolidation head whose last token `%s` is not a sub-verb — a "
+                "consolidation prefix may name at most 2 sub-verbs past the verb"
+                % (len(toks), toks[-1]))
+    if any(ch in head for ch in "*?["):
+        return "a glob character inside the head — never a wildcard mid-rule (F1/F7)"
+    if any(ch in head for ch in "'\""):
+        return "a quote character inside the head — the head cuts through a quoted argument"
+    return None
+
+
+GATES = collections.OrderedDict((
+    ("ACE_CLASS", gate_ace), ("ARG_EXEC", gate_arg_exec), ("FLAG_HEAD", gate_flag_head),
+    ("SHELL_KEYWORD", gate_shell_keyword), ("HOOK_OWNED", gate_hook_owned),
+    ("AUTO_MODE_DROP", gate_auto_mode_drop), ("ASK_DENY_COLLISION", gate_ask_deny_collision),
+    ("REFUSED_PROMPT_COLLISION", gate_refused_prompt_collision),
+    ("MIN_EVIDENCE", gate_min_evidence), ("PATH_BOUND", gate_path_bound),
+    ("TOKEN_CAP", gate_token_cap),
+))
+assert tuple(GATES) == GATE_ORDER
+
+
+def run_gates(head, gctx):
+    """(gates: {code: 'pass'|'refuse'}, reasons: {code: text}, first_code|None)."""
+    toks = head.split()
+    gates, reasons, first = collections.OrderedDict(), collections.OrderedDict(), None
+    for code, fn in GATES.items():
+        why = fn(toks, gctx)
+        gates[code] = "refuse" if why else "pass"
+        if why:
+            reasons[code] = why
+            if first is None:
+                first = code
+    return gates, reasons, first
+
+
+def residue_reason(reasons):
+    for code in RESIDUE_PRIORITY:
+        if code in reasons:
+            return code
+    return None
+
+
+# ── candidates and the greedy set cover ────────────────────────────────────────────────────────
+def covers(ctx, head, leaf):
+    key = (head, leaf)
+    hit = ctx.cover_cache.get(key)
+    if hit is None:
+        rule = pm.parse_rule(_rule_of(head))
+        hit = bool(rule and pm.rule_matches_leaf(rule, leaf, "allow"))
+        ctx.cover_cache[key] = hit
+    return hit
+
+
+def _heads_of_leaf(leaf, max_tokens):
+    """{head: is_git_c_skip} — the 1..N-token heads of a normalised leaf, plus the `-C`-skipped
+    form for `git -C <path> <verb>` (§3.1 step 5), flagged so the receipt can say the rule will
+    NOT cover the `-C` form (`iae` does not skip `-C`)."""
+    toks = pm.normalize_leaf(leaf).split()
+    out = collections.OrderedDict()
+    if not toks:
+        return out
+    for k in range(1, min(max_tokens, len(toks)) + 1):
+        out[" ".join(toks[:k])] = False
+    if os.path.basename(toks[0]) == "git" and len(toks) >= 3 and toks[1] == "-C":
+        skipped = [toks[0]] + toks[3:]
+        for k in range(2, min(max_tokens, len(skipped)) + 1):
+            h = " ".join(skipped[:k])
+            if h not in out:
+                out[h] = True
+    return out
+
+
+def set_cover(analysis, ctx, collision, args, mode_scope="fleet"):
+    """Greedy cover ranked by distinct sessions then rows (Σwaited reported, never ranked);
+    every pick refuted through the gates; stop when the best fails MIN_EVIDENCE on rows or
+    sessions (everything remaining is then recorded refused MIN_EVIDENCE, since the ranking
+    guarantees it fails too). Returns (proposed, refused)."""
+    infos = analysis["infos"]
+    gap = [x for x in infos if x["bucket"] in ("rule_gap", "gap_unrecoverable")]
+    cand = collections.defaultdict(lambda: {"rows": collections.defaultdict(set), "gitc": 0})
+    row_uncov = {}
+    for info in gap:
+        row_uncov[info["i"]] = set(info["uncovered"])
+        for leaf in info["uncovered"]:
+            for head, is_skip in _heads_of_leaf(leaf, args.max_tokens).items():
+                if is_skip:
+                    cand[head]["gitc"] += 1
+                if covers(ctx, head, leaf):
+                    cand[head]["rows"][info["i"]].add(leaf)
+    by_i = {x["i"]: x for x in gap}
+    covered = collections.defaultdict(set)          # row -> leaves covered by picks so far
+    cleared = set()
+    remaining = set(h for h, c in cand.items() if c["rows"])
+    proposed, refused = [], []
+
+    def would_clear(head):
+        out = []
+        for i, leaves in cand[head]["rows"].items():
+            if i in cleared:
+                continue
+            if row_uncov[i] <= (covered[i] | leaves):
+                out.append(i)
+        return out
+
+    def evidence_of(rows_i):
+        rec = [by_i[i] for i in rows_i if by_i[i]["local"] == "recovered"]
+        return {
+            "rows": len(rec),
+            "sessions": len({x["sid"] for x in rec}),
+            "weeks": len({_week(x["ts"]) for x in rec if x["ts"] is not None}),
+            "projects": len({x["project"] for x in rec if x["project"]}),
+        }
+
+    while remaining:
+        scored = []
+        for head in remaining:
+            wc = would_clear(head)
+            if not wc:
+                continue
+            ev = evidence_of(wc)
+            scored.append((ev["sessions"], ev["rows"], len(wc), len(head.split()), head, wc, ev))
+        if not scored:
+            break
+        # Ranked by distinct sessions, then rows, then rows incl. unrecoverable; on a full tie the
+        # FEWER-token head wins — it is the composable form and passes the same gates, and the
+        # widening receipt is what shows the reader what the wider head newly admits.
+        scored.sort(key=lambda t: (-t[0], -t[1], -t[2], t[3], t[4]))
+        best = scored[0]
+        _s, _r, _n, _k, head, wc, ev = best
+        if ev["rows"] < args.min_prompts or ev["sessions"] < args.min_sessions:
+            # The ranking is by (sessions, rows): if the best fails on either, so does every
+            # candidate below it. Record them all — a refusal nobody can see is one nobody can
+            # audit — and stop.
+            for t in scored:
+                _rec_refused(refused, t[4], t[5], t[6], collision, analysis, args, ctx, cand)
+            break
+        gctx = GateCtx(collision, analysis["refused_leaves"], scope=mode_scope, evidence=ev,
+                       max_tokens=args.max_tokens, min_prompts=args.min_prompts,
+                       min_sessions=args.min_sessions, min_weeks=args.min_weeks)
+        gates, reasons, first = run_gates(head, gctx)
+        remaining.discard(head)
+        if first is not None:
+            refused.append(_refused_entry(head, wc, ev, gates, reasons, first, by_i, cand))
+            continue
+        for i in wc:
+            cleared.add(i)
+            covered[i] |= cand[head]["rows"][i]
+        proposed.append(_proposed_entry(head, wc, ev, gates, reasons, gctx, by_i, cand, args, ctx))
+    return proposed, refused
+
+
+def _rec_refused(refused, head, wc, ev, collision, analysis, args, ctx, cand):
+    gctx = GateCtx(collision, analysis["refused_leaves"], scope="fleet", evidence=ev,
+                   max_tokens=args.max_tokens, min_prompts=args.min_prompts,
+                   min_sessions=args.min_sessions, min_weeks=args.min_weeks)
+    gates, reasons, first = run_gates(head, gctx)
+    by_i = {x["i"]: x for x in analysis["infos"]}
+    refused.append(_refused_entry(head, wc, ev, gates, reasons, first or "MIN_EVIDENCE", by_i, cand))
+
+
+def _refused_entry(head, wc, ev, gates, reasons, code, by_i, cand):
+    return collections.OrderedDict((
+        ("rule", _rule_of(head)), ("head", head), ("would_clear", len(wc)),
+        ("code", code), ("reason", reasons.get(code, "")),
+        ("sessions", ev["sessions"]), ("weeks_present", ev["weeks"]),
+        ("gates", gates), ("reasons", reasons),
+        ("git_c_forms_not_covered", cand[head]["gitc"] if head in cand else 0),
+    ))
+
+
+def _proposed_entry(head, wc, ev, gates, reasons, gctx, by_i, cand, args, ctx):
+    rows = [by_i[i] for i in wc]
+    cleared = collections.Counter(x["cls"] for x in rows)
+    pc = collections.OrderedDict((k, cleared.get(k, 0)) for k in RESOLUTIONS)
+    pc["total"] = len(rows)
+    rec = [x for x in rows if x["local"] == "recovered"]
+    projects = sorted({x["project"] for x in rec if x["project"]})
+    if len(projects) >= 2:
+        target = "fleet"
+    elif projects:
+        target = os.path.join(projects[0], ".claude", "settings.local.json")
+    else:
+        target = "fleet"
+    evidence = []
+    for x in sorted(rows, key=lambda x: -(x["ts"] or 0))[:EVIDENCE_CAP]:
+        evidence.append(collections.OrderedDict((
+            ("ts", x["ts"]), ("cwd", x["cwd"]), ("command", x["cmd"][:300]),
+            ("resolution", x["cls"]), ("local_rules", x["local"]),
+        )))
+    return collections.OrderedDict((
+        ("rule", _rule_of(head)), ("head", head), ("target", target),
+        ("distinct_projects", len(projects)), ("projects", projects),
+        ("prompts_cleared", pc), ("sessions", ev["sessions"]), ("weeks_present", ev["weeks"]),
+        ("waited_s", round(sum(x["waited"] for x in rows), 1)),
+        ("local_rules", collections.OrderedDict((
+            ("recovered", len(rec)), ("unrecoverable", len(rows) - len(rec))))),
+        ("evidence", evidence), ("evidence_truncated", len(rows) > EVIDENCE_CAP),
+        ("widening", collections.OrderedDict((("count", 0), ("next_tokens", []), ("samples", []),
+                                              ("corpus_scope", CORPUS_SCOPE)))),
+        ("shadows", []), ("carve_outs", list(gctx.carve_outs)),
+        ("git_c_forms_not_covered", cand[head]["gitc"]),
+        ("gates", gates), ("reasons", reasons),
+    ))
+
+
+# ── consolidation (step 8) ─────────────────────────────────────────────────────────────────────
+def _min_retire(args):
+    """How many exact entries a cluster prefix must RETIRE before it may be proposed.
+
+    MIN_EVIDENCE gates on CLUSTER SIZE (`gate_min_evidence`), which is a count of what the operator
+    ACCEPTED — not a count of what the prefix REMOVES. Those differ, and the difference is the whole
+    value of a consolidation: a prefix that retires fewer entries than the one it adds leaves the
+    allow list no shorter and the grant strictly WIDER. Measured on the real 30-day proposal before
+    the `literal == base` fix landed in `dead_entries`: 3 of 7 prefixes retired exactly 1 for a net
+    of ZERO, while the report headline read "7 prefix(es) retiring 15 exact entr(ies)" against a
+    true net of 8. `dead_entries` now sees those, so this gate is the belt to that braces — it makes
+    "never widen for no shrink" a property of the code rather than an arithmetic coincidence.
+
+    Floored at 1 so `--min-cluster 0` cannot re-admit a prefix that shadows nothing at all (the
+    condition the old `not shadows` guard carried)."""
+    return max(1, args.min_cluster)
+
+
+def _newly_dead(allow, prefix):
+    """Exact entries `prefix` shadows in THIS file that nothing shadowed before — the per-file proof
+    `dead_entries` gives, minus what `--prune` already owns."""
+    if prefix in allow:
+        _s, dead_now = pm.dead_entries(allow)
+        return [r for _i, r, why in dead_now if why == "shadowed by %s" % prefix and r != prefix]
+    _s0, dead0 = pm.dead_entries(allow)
+    _s1, dead1 = pm.dead_entries(allow + [prefix])
+    before = {(i, r) for i, r, _w in dead0}
+    return [r for i, r, _w in dead1 if (i, r) not in before and r != prefix]
+
+
+def consolidate(settings, all_rs, proposed, analysis, collision, args, gctx_kw):
+    """[(consolidation entries), (unretirable entries)] — PROJECT-LOCAL, per file."""
+    cons, unret = [], []
+    if args.no_consolidate:
+        return cons, unret
+    for path, scope in settings:
+        if scope != "project":
+            continue                               # worktree files are evidence, never targets
+        entry = all_rs.by_file.get(path)
+        if not entry:
+            continue
+        allow = list(entry.get("allow") or [])
+        exact = [r for r in allow
+                 if (lambda pr: pr is not None and pr.tool == "Bash" and pr.kind == "exact")(pm.parse_rule(r))]
+        if not exact:
+            continue
+        survivors, dead0 = pm.dead_entries(allow)
+        pool = [r for r in exact if r in survivors]
+        retired = set()
+        # Archive-derived prefixes first: a proposed rule that shadows exact entries HERE is a
+        # consolidation into this file too (the proof is per-file, so the prefix is written here).
+        for p in proposed:
+            shadows = [r for r in _newly_dead(allow, p["rule"]) if r in pool]
+            if not shadows:
+                continue
+            if len(shadows) < _min_retire(args):
+                # 🚨 THIS BRANCH USED TO TEST ONLY `not shadows` (fixed 2026-09-09). One shadow was
+                # enough, so an archive-derived prefix wrote +1 rule into a project file to remove
+                # exactly 1 — the net-zero WIDENING `_min_retire` exists to prevent, reached by the
+                # one consolidation producer that never consulted it while its two siblings did.
+                # MEASURED on the shipped fixture: `archive Bash(gh pr view:*) entries=1 shadows=1
+                # NET=0` was PROPOSED into proj-a/.claude/settings.local.json. The entry is now
+                # residue, in the same shape the 2-token branch files, so the report can still say
+                # what it costs. (The fleet write of the same rule is untouched — this is only
+                # about ALSO adding it to a project file.)
+                unret.append(collections.OrderedDict((
+                    ("file", path), ("head", p["head"]), ("entries", len(shadows)),
+                    ("reason", "NET_ZERO"),
+                    ("detail", "the archive-derived prefix %s would retire only %d exact entr(ies) "
+                               "here; adding 1 rule to remove %d is a wider grant for no shrink"
+                               % (p["rule"], len(shadows), len(shadows))),
+                    ("gates", p["gates"]), ("samples", shadows[:3]),
+                )))
+                continue
+            retired.update(shadows)
+            cons.append(collections.OrderedDict((
+                ("file", path), ("prefix", p["rule"]), ("head", p["head"]), ("source", "archive"),
+                ("entries", len(shadows)), ("shadows", shadows), ("present", p["rule"] in allow),
+                ("gates", p["gates"]), ("reasons", p["reasons"]),
+            )))
+        # DEPTH 3 FIRST, and ONLY for the sub-verb shape — see gate_token_cap for why the plan
+        # demands both. A depth-3 cluster that FAILS a gate is left alone rather than reported: its
+        # residue belongs to the 2-token pass below, which is where §3.1 step 8 names it (`ssh -i`
+        # ×181, `perl -ne` ×82, `git -C <path>` ×82 are all 2-token heads). So this pass can only
+        # ever ADD a narrower prefix; it can never move a residue or suppress one.
+        deep = collections.OrderedDict()
+        for r in pool:
+            if r in retired:
+                continue
+            toks3 = pm.head_of(pm.parse_rule(r).content, 3).split()
+            if len(toks3) < 3 or not _SUBVERB_RE.match(toks3[2]):
+                continue
+            deep.setdefault(" ".join(toks3), []).append(r)
+        for head, members in deep.items():
+            if len(members) < args.min_cluster:
+                continue
+            gctx = GateCtx(collision, analysis["refused_leaves"], scope="project",
+                           cluster=len(members), cluster_literals=members, **gctx_kw)
+            gates, reasons, first = run_gates(head, gctx)
+            prefix = _rule_of(head)
+            shadows = [r for r in _newly_dead(allow, prefix) if r in members]
+            if first is not None or len(shadows) < _min_retire(args):
+                continue                          # see _min_retire: a net-zero prefix is a WIDENING
+            retired.update(members)
+            cons.append(collections.OrderedDict((
+                ("file", path), ("prefix", prefix), ("head", head), ("source", "cluster"),
+                ("entries", len(members)), ("shadows", shadows), ("present", prefix in allow),
+                ("carve_outs", list(gctx.carve_outs)), ("gates", gates), ("reasons", reasons),
+            )))
+
+        clusters = collections.OrderedDict()
+        for r in pool:
+            if r in retired:
+                continue
+            head = pm.head_of(pm.parse_rule(r).content, 2)
+            if not head:
+                continue
+            clusters.setdefault(head, []).append(r)
+        for head, members in clusters.items():
+            if len(members) < args.min_cluster:
+                continue
+            gctx = GateCtx(collision, analysis["refused_leaves"], scope="project",
+                           cluster=len(members), cluster_literals=members, **gctx_kw)
+            gates, reasons, first = run_gates(head, gctx)
+            prefix = _rule_of(head)
+            shadows = [r for r in _newly_dead(allow, prefix) if r in members]
+            if first is None and shadows and len(shadows) < _min_retire(args):
+                # GATE-PASSING BUT NET-NEGATIVE — reported as residue, never proposed. See
+                # _min_retire. This branch is why the report can say "net −N" honestly.
+                unret.append(collections.OrderedDict((
+                    ("file", path), ("head", head), ("entries", len(members)),
+                    ("reason", "NET_ZERO"),
+                    ("detail", "the prefix passes every gate but retires only %d of %d exact "
+                               "entr(ies); adding 1 rule to remove %d is a wider grant for no "
+                               "shrink" % (len(shadows), len(members), len(shadows))),
+                    ("gates", gates), ("samples", members[:3]),
+                )))
+                continue
+            if first is None and shadows:
+                cons.append(collections.OrderedDict((
+                    ("file", path), ("prefix", prefix), ("head", head), ("source", "cluster"),
+                    ("entries", len(members)), ("shadows", shadows), ("present", prefix in allow),
+                    ("carve_outs", list(gctx.carve_outs)), ("gates", gates), ("reasons", reasons),
+                )))
+                continue
+            code = residue_reason(reasons) if reasons else None
+            detail = reasons.get(code, "") if code else "the prefix would shadow none of them"
+            if head.split()[:2] == ["git", "-C"]:
+                detail = ("`git -C <path> <verb>` is un-normalisable — `iae` does not skip `-C`, so "
+                          "no prefix head reaches the verb; " + detail)
+            unret.append(collections.OrderedDict((
+                ("file", path), ("head", head), ("entries", len(members)),
+                ("reason", code or "NO_SHADOW"), ("detail", detail), ("gates", gates),
+                ("samples", members[:3]),
+            )))
+    return cons, unret
+
+
+def shadows_everywhere(settings, all_rs, rule):
+    """Exact entries in every discovered PROJECT file this rule would shadow — informational."""
+    out = []
+    for path, scope in settings:
+        if scope == "worktree":
+            continue
+        entry = all_rs.by_file.get(path)
+        if not entry:
+            continue
+        out += _newly_dead(list(entry.get("allow") or []), rule)
+    return out
+
+
+# ── widening receipt (the corpus) ──────────────────────────────────────────────────────────────
+def corpus_paths(seams):
+    base = seams.corpus
+    paths = []
+    if os.path.isfile(base):
+        paths.append(base)
+    for p in sorted(_glob.glob(base + ".*")):
+        if p != base and os.path.isfile(p):
+            paths.append(p)
+    return paths
+
+
+def widening(seams, rules, corpus_days):
+    """(records_total, {rule: receipt}) — records are ANCHORED (`read_corpus`), never lines."""
+    paths = corpus_paths(seams)
+    since = time.time() - corpus_days * 86400 if corpus_days else 0
+    parsed = []
+    for rule in rules:
+        pr = pm.parse_rule(rule)
+        if pr is not None and pr.head:
+            parsed.append((rule, pr, pr.head.split()[0], len(pr.head.split())))
+    receipts = {rule: {"count": 0, "next": collections.Counter(), "samples": []} for rule in rules}
+    n = 0
+    for _ts, _sid, cmd in pm.read_corpus(paths, since):
+        n += 1
+        if not parsed or not any(ft in cmd for _r, _p, ft, _k in parsed):
+            continue
+        dec = pm.split_leaves(cmd)
+        hit = set()
+        for leaf in dec.leaves:
+            for rule, pr, _ft, k in parsed:
+                if rule in hit:
+                    continue
+                if pm.rule_matches_leaf(pr, leaf, "allow"):
+                    hit.add(rule)
+                    rec = receipts[rule]
+                    toks = pm.normalize_leaf(leaf).split()
+                    rec["next"][toks[k] if len(toks) > k else "<end>"] += 1
+                    if len(rec["samples"]) < 3:
+                        rec["samples"].append(leaf[:120])
+        for rule in hit:
+            receipts[rule]["count"] += 1
+    out = {}
+    for rule, rec in receipts.items():
+        out[rule] = collections.OrderedDict((
+            ("count", rec["count"]),
+            ("next_tokens", [[t, c] for t, c in rec["next"].most_common(10)]),
+            ("samples", rec["samples"]), ("corpus_scope", CORPUS_SCOPE),
+        ))
+    return n, len(paths), out
+
+
+# ── the pipeline ───────────────────────────────────────────────────────────────────────────────
+def _deadline_s():
+    """Seconds before the read-only pipeline is cut. 0 disables the bound; unparseable → the default.
+
+    WHY 3600 AND NOT 900. The bound exists to stop a HANG holding the wrapper's mkdir lock, not to
+    make the job fast: while the lock is held every later contender takes the live-holder branch and
+    writes NO evidence row, so one wedged run silences the weekly job until cc-fleet's 21-day
+    staleness bound notices. A bound BELOW the measured runtime is not a bound, it is a scheduled
+    failure — and the honest measurement here is 1,045 s clean (real 1045.06 under /usr/bin/python3
+    on the live stores) and 1,128 s observed under three-way I/O contention. 3600 s is ~3.4x the
+    clean figure, still leaves 167 h of the weekly period, and turns "wedged forever" into one loud
+    rc 6. Narrow the READ (CC_PERMHARVEST_DEV_ROOT, CC_PERMHARVEST_TRANSCRIPTS="") if you want the
+    run faster; do not shrink this to make it look faster.
+
+    FLOAT, and delivered by `setitimer`, not `alarm(int)` — so the bound is EXERCISABLE. A deadline
+    whose only test is "wait 900 s" is a deadline nobody tests; at 0.001 s the suite can prove the
+    cut fires mid-pipeline, prints the named block, and returns 6, in milliseconds.
+    """
+    raw = os.environ.get("CC_PERMHARVEST_MAX_S")
+    if raw is None or raw == "":
+        return 3600.0
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return 3600.0
+    return v if v > 0 else 0.0
+
+
+def pipeline(args, seams, days):
+    """The whole read-only computation → (doc, extras). Raises Blind, or Deadline (see the class).
+
+    The alarm is armed here and cancelled in the `finally`, so no caller can be cut mid-write:
+    `--apply`'s staging/replace/re-read loop runs strictly after this function has returned.
+    """
+    limit = _deadline_s()
+    armed = False
+    if limit and hasattr(signal, "SIGALRM") and hasattr(signal, "setitimer"):
+        def _fire(_sig, _frm):
+            raise Deadline(limit)
+        try:
+            signal.signal(signal.SIGALRM, _fire)
+            signal.setitimer(signal.ITIMER_REAL, limit)
+            armed = True
+        except (ValueError, OSError):
+            armed = False                       # not the main thread: run unbounded rather than not
+    try:
+        return _pipeline(args, seams, days)
+    finally:
+        if armed:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+
+
+def _pipeline(args, seams, days):
+    ctx = Ctx()
+    warn = []
+    settings = discover(seams, args.settings)
+    fleet_paths = [p for p, s in settings if s == "fleet"]
+    local_paths = [p for p, s in settings if s != "fleet"]
+    if args.mode:
+        mode, mode_src = args.mode, "--mode"
+    else:
+        mode, mode_src = _fleet_mode(fleet_paths)
+    fleet_rs = pm.load_rulesets(fleet_paths, mode=mode)
+    local_union = pm.load_rulesets(local_paths, mode=mode) if local_paths else None
+    all_rs = pm.load_rulesets([p for p, _s in settings], mode=mode)
+    for p, _s in settings:
+        if p not in all_rs.by_file:
+            warn.append("settings file unreadable or not JSON — skipped: %s" % p)
+    shell_off = pm.files_with_classify_all_shell(all_rs)
+    if shell_off and mode == "auto":
+        warn.append("autoMode.classifyAllShell is set in %s — EVERY Bash allow rule is inert in auto "
+                    "mode; every uncovered leaf below is a classifier question, not a rule gap"
+                    % ", ".join(shell_off))
+    collision = [("deny", r) for r in all_rs.deny] + [("ask", r) for r in all_rs.ask]
+
+    rows_all, rows_window, files, age, bad, w2 = read_oracle(seams, days)
+    warn += w2
+    hook_idx, hook_present = load_hook_logs(seams.hook_logs)
+    for name, path in hook_present.items():
+        if path is None:
+            warn.append("hook decision log for %s is ABSENT — prompts that hook raised will read "
+                        "as rule gaps (attribution BLIND for this hook)" % name)
+    bash_rows = [r for r in rows_window if (r.get("tool_name") or "") == "Bash"]
+    oracle_rows = [r for r in bash_rows
+                   if pm.classify_row(r) not in ("approved", "refused", "abandoned")]
+    if seams.transcripts:
+        denied_keys = denial_oracle_bounded(oracle_rows, seams.transcripts)
+    else:
+        denied_keys = {}
+        if seams.transcripts_requested:
+            warn.append("no transcript root exists — `denied` is UNVERIFIED (0 by construction)")
+        else:
+            warn.append("transcript oracle disabled by seam — `denied` is UNVERIFIED (0 by construction)")
+
+    analysis = analyse(rows_window, fleet_rs, local_union, seams, mode, hook_idx, denied_keys,
+                       ctx, warn)
+    proposed, refused = set_cover(analysis, ctx, collision, args)
+    gctx_kw = {"max_tokens": args.max_tokens, "min_prompts": args.min_prompts,
+               "min_sessions": args.min_sessions, "min_weeks": args.min_weeks,
+               "min_cluster": args.min_cluster}
+    cons, unret = consolidate(settings, all_rs, proposed, analysis, collision, args, gctx_kw)
+    for p in proposed:
+        p["shadows"] = shadows_everywhere(settings, all_rs, p["rule"])
+    rules_for_receipt = [p["rule"] for p in proposed] + [c["prefix"] for c in cons
+                                                          if c["source"] == "cluster"]
+    n_records, n_corpus_files, receipts = widening(seams, sorted(set(rules_for_receipt)),
+                                                   args.corpus_days)
+    for p in proposed:
+        p["widening"] = receipts.get(p["rule"], p["widening"])
+    for c in cons:
+        if c["prefix"] in receipts:
+            c["widening"] = receipts[c["prefix"]]
+
+    sessions_in_window = len({r.get("session_id") for r in rows_window if r.get("session_id")})
+    settings_files = []
+    for p, s in settings:
+        e = all_rs.by_file.get(p) or {}
+        settings_files.append(collections.OrderedDict((
+            ("path", p), ("scope", s), ("allow", len(e.get("allow") or [])),
+            ("deny", len(e.get("deny") or [])), ("ask", len(e.get("ask") or [])),
+            ("classify_all_shell", bool(e.get("classify_all_shell"))),
+        )))
+    by_kind = collections.OrderedDict()
+    for k in pm.STRUCTURAL_KINDS:
+        if k == "bash_c":
+            continue
+        by_kind[k] = analysis["by_kind"].get(k, 0)
+    doc = collections.OrderedDict((
+        ("schema", 1),
+        ("generated_utc", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())),
+        ("tool", collections.OrderedDict((("sha", _tool_sha()), ("name", TOOL)))),
+        ("rules_snapshot", "today"),
+        ("inputs", collections.OrderedDict((
+            ("archive_dir", seams.archive_dir),
+            ("rows", analysis["n_rows"]),
+            ("rows_in_window", len(rows_window)),
+            ("rows_total", len(rows_all)),
+            ("rows_non_bash", analysis["n_non_bash"]),
+            ("sessions_in_window", sessions_in_window),
+            ("oracle_age_s", round(age, 1) if age is not None else None),
+            ("window_days", days),
+            ("archive_files", len(files)),
+            ("bad_rows", bad),
+            ("settings_files", settings_files),
+            ("collision_set", collections.OrderedDict((("deny", len(all_rs.deny)), ("ask", len(all_rs.ask))))),
+            ("hook_logs", collections.OrderedDict((k, v) for k, v in hook_present.items())),
+            ("transcript_roots", list(seams.transcripts)),
+            ("corpus_records", n_records),
+            ("corpus_files", n_corpus_files),
+            ("corpus_days", args.corpus_days),
+            ("corpus_scope", CORPUS_SCOPE),
+            ("blind", []),
+            ("warnings", warn),
+        ))),
+        ("mode", mode),
+        ("mode_source", mode_src),
+        ("buckets", collections.OrderedDict((b, analysis["buckets"].get(b, 0)) for b in BUCKETS)),
+        ("resolution", collections.OrderedDict((k, analysis["resolution"].get(k, 0)) for k in RESOLUTIONS)),
+        ("structural", collections.OrderedDict((
+            ("by_kind", by_kind),
+            ("unverified_kinds", list(UNVERIFIED_KINDS)),
+            ("unverified_counts", collections.OrderedDict((k, analysis["unverified"].get(k, 0))
+                                                          for k in UNVERIFIED_KINDS)),
+            ("top_verbs", [[v, n] for v, n in analysis["top_verbs"].most_common(15)]),
+            ("by_kind_verbs", collections.OrderedDict(
+                (k, [[v, n] for v, n in analysis["kind_verbs"][k].most_common(5)])
+                for k in by_kind if analysis["kind_verbs"].get(k))),
+            ("bash_c_rows", analysis["bash_c_rows"]),
+            ("waited_s", round(analysis["waited_struct"], 1)),
+        ))),
+        ("hook_raised", collections.OrderedDict((
+            ("by_hook", collections.OrderedDict((name, analysis["hook_by"].get(name, 0))
+                                                for name in hook_present)),
+            ("join", "session_id + |ts - hook_ts| <= %d s + a command witness" % HOOK_JOIN_S),
+            ("unwitnessed", collections.OrderedDict((name, analysis["hook_unwitnessed"].get(name, 0))
+                                                    for name in hook_present)),
+        ))),
+        ("f19_self_covered_rows", analysis["f19_rows"]),
+        ("waited_s_total", round(analysis["waited_total"], 1)),
+        ("proposed", proposed),
+        ("refused", refused),
+        ("consolidation", cons),
+        ("unretirable", unret),
+        ("apply_hint", "CONFIRM=1 %s --apply" % TOOL),
+    ))
+    extras = {"analysis": analysis, "collision": collision, "settings": settings, "all_rs": all_rs,
+              "fleet_paths": fleet_paths, "ctx": ctx, "gctx_kw": gctx_kw, "mode": mode}
+    return doc, extras
+
+
+# ── the report ─────────────────────────────────────────────────────────────────────────────────
+def _hours(s):
+    return "%.1f h" % (s / 3600.0)
+
+
+def render_report(doc, days):
+    out = []
+    w = out.append
+    inp, b, res, st = doc["inputs"], doc["buckets"], doc["resolution"], doc["structural"]
+    n = inp["rows"]
+    w("── %s · window %s · mode %s (%s) · rules as of %s ──"
+      % (TOOL, ("%d d" % days) if days else "all history", doc["mode"], doc["mode_source"],
+         doc["rules_snapshot"]))
+    w("  oracle: %s — %d file(s) · %s row(s) in window (%s Bash, %d other) · %d session(s) · "
+      "heartbeat %s"
+      % (inp["archive_dir"], inp["archive_files"], _fmt_int(inp["rows_in_window"]), _fmt_int(n),
+         inp["rows_non_bash"], inp["sessions_in_window"],
+         ("%.0f s old" % inp["oracle_age_s"]) if inp["oracle_age_s"] is not None else "ABSENT"))
+    scopes = collections.Counter(f["scope"] for f in inp["settings_files"])
+    w("  rules: fleet %d file(s) · project %d · worktree %d (evidence only) · collision set %d deny "
+      "+ %d ask (every discovered file)"
+      % (scopes.get("fleet", 0), scopes.get("project", 0), scopes.get("worktree", 0),
+         inp["collision_set"]["deny"], inp["collision_set"]["ask"]))
+    w("  corpus: %s record(s) in %d file(s), last %d d — %s"
+      % (_fmt_int(inp["corpus_records"]), inp["corpus_files"], inp["corpus_days"],
+         inp["corpus_scope"]))
+    for line in inp["warnings"]:
+        w("  ⚠ %s" % line)
+
+    w("")
+    w("── ATTRIBUTION (MECE — the eight buckets sum to %s Bash row(s)) ──" % _fmt_int(n))
+    label = collections.OrderedDict((
+        ("structural", "no allow rule of any form clears these (matcher-truth §2)"),
+        ("hook_raised", "one of our PreToolUse hooks asked — never a rule gap (%s)"
+                        % " · ".join("%s %d" % (k, v) for k, v in doc["hook_raised"]["by_hook"].items())),
+        ("ask_hit", "an operator `ask` rule fired — a deliberate prompt"),
+        ("deny_hit", "a `deny` rule fired"),
+        ("truncated", "the beacon cut the payload; the text is unjudgeable"),
+        ("hook_or_classifier", "every leaf covered — the prompt came from a hook or the classifier"),
+        ("rule_gap", "≥1 uncovered leaf, local rules recovered  ← the ONLY rule-fixable bucket"),
+        ("gap_unrecoverable", "≥1 uncovered leaf, cwd gone — judged against the union of every "
+                              "project rule; excluded from evidence"),
+    ))
+    for k, text in label.items():
+        w("  %-20s %7s  %6s   %s" % (k.upper(), _fmt_int(b[k]), _pct(b[k], n), text))
+    unw = sum(doc["hook_raised"]["unwitnessed"].values())
+    if unw:
+        w("  hook asks within ±%d s that no leaf witnessed: %d — counted, never attributed (%s)"
+          % (HOOK_JOIN_S, unw, " · ".join("%s %d" % (k, v) for k, v in doc["hook_raised"]["unwitnessed"].items() if v)))
+    w("  resolution: " + " · ".join("%s %s" % (k, _fmt_int(v)) for k, v in res.items())
+      + "   (a grant is PROVEN by signature; `unknown` is the honest default)")
+    kinds = " · ".join("%s %d" % (k, v) for k, v in st["by_kind"].items() if v)
+    w("  STRUCTURAL by kind: %s" % (kinds or "none"))
+    if st["bash_c_rows"]:
+        w("  `bash -c` rows: %d — judged on their leaves (the head dies on ACE_CLASS), not charged "
+          "as structural (B2-6)" % st["bash_c_rows"])
+    if st["top_verbs"]:
+        w("  verbs inside structural rows: " + " · ".join("%s %d" % (v, c) for v, c in st["top_verbs"][:10]))
+    w("  UNVERIFIED kinds (not probed against the binary; reported apart, never counted): "
+      + " · ".join("%s %d" % (k, v) for k, v in st["unverified_counts"].items()))
+    w("  Σ waited: %s total · %s inside STRUCTURAL (%s)"
+      % (_hours(doc["waited_s_total"]), _hours(st["waited_s"]),
+         _pct(st["waited_s"], doc["waited_s_total"]) if doc["waited_s_total"] else "n/a"))
+    if doc["f19_self_covered_rows"]:
+        w("  F19: %d row(s) were covered ONLY by an exact rule equal to their own leaf — read as gaps "
+          "(the rule is the answer to that prompt, not its prevention)" % doc["f19_self_covered_rows"])
+
+    w("")
+    props = doc["proposed"]
+    w("── PROPOSED (%d rule(s) from the archive) ──" % len(props))
+    if not props:
+        w("  proposed=0 rows_in_window=%d sessions_in_window=%d oracle_age_s=%s"
+          % (inp["rows_in_window"], inp["sessions_in_window"],
+             inp["oracle_age_s"] if inp["oracle_age_s"] is not None else "null"))
+        w("  ⇒ nothing the gates admit clears ≥2 prompts in ≥2 sessions over ≥2 weeks. The steady "
+          "state on this fleet (§10): the operator's rules were already right.")
+    for p in props:
+        pc = p["prompts_cleared"]
+        w("  %s  → %s" % (p["rule"], p["target"]))
+        w("     clears %d prompt(s) (%s) · %d session(s) · %d week(s) · %d project(s) · Σ waited %s"
+          % (pc["total"], " · ".join("%s %d" % (k, v) for k, v in pc.items() if k != "total" and v),
+             p["sessions"], p["weeks_present"], p["distinct_projects"], _hours(p["waited_s"])))
+        if p["local_rules"]["unrecoverable"]:
+            w("     local rules: %d recovered · %d unrecoverable (counted in `clears`, never in evidence)"
+              % (p["local_rules"]["recovered"], p["local_rules"]["unrecoverable"]))
+        wd = p["widening"]
+        w("     widening: %d corpus record(s) — next token: %s"
+          % (wd["count"], " · ".join("%s ×%d" % (t, c) for t, c in wd["next_tokens"][:5]) or "—"))
+        if p["carve_outs"]:
+            w("     carve-outs (deny → ask → allow still governs): %s" % ", ".join(p["carve_outs"]))
+        if p["shadows"]:
+            w("     shadows %d exact entr(ies) in project files (prunable once applied)" % len(p["shadows"]))
+        if p["git_c_forms_not_covered"]:
+            w("     NOT covered: %d `git -C <path> …` form(s) — `iae` does not skip `-C`"
+              % p["git_c_forms_not_covered"])
+        for e in p["evidence"][:3]:
+            w("     · %s  %s  %s  [%s]" % (_iso(e["ts"]), e["cwd"], e["command"][:70].replace("\n", "⏎"),
+                                           e["resolution"]))
+
+    w("")
+    refs = doc["refused"]
+    w("── REFUSED (%d candidate(s); ranked by the prompts each would have cleared) ──" % len(refs))
+    shown = sorted(refs, key=lambda r: (-r["would_clear"], r["rule"]))
+    hard = [r for r in shown if r["code"] != "MIN_EVIDENCE"]
+    soft = [r for r in shown if r["code"] == "MIN_EVIDENCE"]
+    for r in hard[:25]:
+        w("  %-40s %-24s would clear %4d   %s" % (r["rule"][:40], r["code"], r["would_clear"],
+                                                 r["reason"][:90]))
+    if len(hard) > 25:
+        w("  … +%d more refused on a hard gate (in the JSON)" % (len(hard) - 25))
+    if soft:
+        w("  %d candidate(s) refused on MIN_EVIDENCE alone (rows<%s ∨ sessions ∨ weeks) — top: %s"
+          % (len(soft), "2", ", ".join(r["rule"] for r in soft[:6])))
+
+    w("")
+    cons, unret = doc["consolidation"], doc["unretirable"]
+    retires = sum(len(c["shadows"]) for c in cons)
+    # NET, beside the gross. A prefix that is not already `present` COSTS one allow entry, so the
+    # number that answers "did this shrink the list?" is retires − prefixes-added, and it is the one
+    # a reader would otherwise compute wrong: the gross alone once read "7 retiring 15" over a real
+    # net of 8.
+    adds = len([c for c in cons if not c.get("present")])
+    w("── CONSOLIDATION (project-local; %d prefix(es) retiring %d exact entr(ies); net %+d allow "
+      "entr(ies)) ──" % (len(cons), retires, adds - retires))
+    if not cons:
+        w("  no cluster of ≥2 exact entries passes every gate into its own file")
+    by_file = collections.OrderedDict()
+    for c in cons:
+        by_file.setdefault(c["file"], []).append(c)
+    for f, cs in by_file.items():
+        w("  %s" % f)
+        for c in cs:
+            w("     + %-40s retires %d%s%s"
+              % (c["prefix"], len(c["shadows"]),
+                 "  (from the archive proposal)" if c["source"] == "archive" else "",
+                 "  ALREADY PRESENT" if c.get("present") else ""))
+    if unret:
+        w("  UNRETIRABLE (clusters no gate-passing prefix can retire — residue, not absence)")
+        by_file = collections.OrderedDict()
+        for u in unret:
+            by_file.setdefault(u["file"], []).append(u)
+        for f, us in by_file.items():
+            w("  %s" % f)
+            for u in sorted(us, key=lambda u: -u["entries"]):
+                w("     %-28s ×%-4d %-24s %s" % (u["head"][:28], u["entries"], u["reason"],
+                                                 u["detail"][:80]))
+
+    w("")
+    w("── NEXT ──")
+    actionable = len(props) + len([c for c in cons if not c.get("present")])
+    if actionable:
+        w("  preview (read-only, any session):  %s --check" % TOOL)
+        w("  apply (OPERATOR, via cc-do; never in-session):  %s" % doc["apply_hint"])
+        w("  apply re-runs this whole pipeline live and writes proposed ∩ fresh — a decayed rule is a "
+          "named drop, a tampered one is exit 4.")
+    else:
+        w("  nothing to apply. The STRUCTURAL and HOOK_RAISED shares above are hook-layer levers "
+          "(hooks/lib/smart-bash-allowlist.py), not rule levers.")
+    return "\n".join(out) + "\n"
+
+
+def emit_json(doc, out_dir):
+    os.makedirs(out_dir, exist_ok=True)
+    stamp = _now_utc()
+    path = os.path.join(out_dir, "proposal-%s.json" % stamp)
+    n = 0
+    while os.path.exists(path):
+        n += 1
+        path = os.path.join(out_dir, "proposal-%s.%d.json" % (stamp, n))
+    text = json.dumps(doc, indent=1, ensure_ascii=False) + "\n"
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.replace(tmp, path)
+    latest = os.path.join(out_dir, "latest.json")
+    tmp = latest + ".tmp"
+    shutil.copyfile(path, tmp)                      # a COPY, byte-identical
+    os.replace(tmp, latest)
+    return path
+
+
+def print_deadline(limit):
+    # No window in the header, deliberately: this is raised out of the pipeline and re-raised at the
+    # entry point, which does not hold the parsed window — and printing "all history" there would
+    # state a window the run did not use.
+    print("── %s · DEADLINE ──" % TOOL)
+    print("  DEADLINE — the read-only pipeline ran past %s s and was cut. This is NOT an all-clear "
+          "and NOT proposed=0:" % ("%g" % limit))
+    print("  ⛔ nothing is proposed, no proposal file is written, and NO PARTIAL result is emitted — "
+          "a partial cover would understate every count downstream.")
+    print("  ⇒ exit 6. Raise the bound with CC_PERMHARVEST_MAX_S=<seconds>, or narrow the read: "
+          "CC_PERMHARVEST_TRANSCRIPTS=\"\" drops the denial oracle (the report says so), and "
+          "CC_PERMHARVEST_DEV_ROOT=<dir> bounds the project walk.")
+
+
+def print_blind(reasons, days):
+    print("── %s · window %s ──" % (TOOL, ("%d d" % days) if days else "all history"))
+    print("  BLIND — the oracle cannot answer; this is NOT an all-clear and NOT proposed=0:")
+    for r in reasons:
+        print("  ⛔ %s" % r)
+    print("  ⇒ exit 3. Nothing was measured, nothing is proposed, no proposal file is written.")
+
+
+# ── --explain ──────────────────────────────────────────────────────────────────────────────────
+def explain(args, seams, days):
+    try:
+        doc, ex = pipeline(args, seams, days)
+    except Blind as b:
+        print_blind(b.reasons, days)
+        return 3
+    rule = args.explain if args.explain.startswith("Bash(") else _rule_of(args.explain)
+    head = _head_of_rule(rule)
+    if head is None:
+        sys.stderr.write("%s: --explain wants a Bash rule or a bare head, got %r\n" % (TOOL, args.explain))
+        return 2
+    print("── explain %s ──" % rule)
+    for scope in ("fleet", "project"):
+        gctx = GateCtx(ex["collision"], ex["analysis"]["refused_leaves"], scope=scope,
+                       evidence={"rows": 99, "sessions": 99, "weeks": 99}, **ex["gctx_kw"])
+        gates, reasons, first = run_gates(head, gctx)
+        print("  scope %s: %s" % (scope, "PASS every gate" if first is None else "REFUSED on %s" % first))
+        for code, v in gates.items():
+            print("     %-26s %s%s" % (code, v, ("  — " + reasons[code]) if code in reasons else ""))
+        if gctx.carve_outs:
+            print("     carve-outs: %s" % ", ".join(gctx.carve_outs))
+    hits = [x for x in ex["analysis"]["infos"] if x["bucket"] in ("rule_gap", "gap_unrecoverable")
+            and any(covers(ex["ctx"], head, lf) for lf in x["uncovered"])]
+    print("  archive: %d gap row(s) carry a leaf this rule covers (%d session(s), %d project(s))"
+          % (len(hits), len({x["sid"] for x in hits}), len({x["project"] for x in hits})))
+    for x in hits[:5]:
+        print("     · %s %s [%s] %s" % (_iso(x["ts"]), x["bucket"], x["cls"], x["cmd"][:80].replace("\n", "⏎")))
+    for p in doc["proposed"]:
+        if p["rule"] == rule:
+            print("  status: PROPOSED → %s" % p["target"])
+    for r in doc["refused"]:
+        if r["rule"] == rule:
+            print("  status: REFUSED %s — %s" % (r["code"], r["reason"]))
+    n, _f, rec = widening(seams, [rule], args.corpus_days)
+    print("  widening: %d of %d corpus record(s) carry a matching leaf — %s"
+          % (rec[rule]["count"], n, CORPUS_SCOPE))
+    return 0
+
+
+# ── --check / --apply ──────────────────────────────────────────────────────────────────────────
+def _load_proposal(path):
+    with open(path, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    if not isinstance(doc, dict) or doc.get("schema") != 1:
+        raise ValueError("not a schema-1 proposal")
+    return doc
+
+
+def _allow_of(path):
+    """`permissions.allow` as a list, or None when the file cannot be read as one."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            obj = json.load(fh)
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    perms = obj.get("permissions")
+    if not isinstance(perms, dict):
+        return []
+    allow = perms.get("allow")
+    return list(allow) if isinstance(allow, list) else []
+
+
+def falsify(args, seams):
+    """THE QUEUE PROBE. exit 0 ⇔ nothing is left to apply; 1 ⇔ something is, or we could not tell.
+
+    THIS IS THE INVERSE OF `--check`, ON PURPOSE, AND IT IS THE ONLY FORM THAT MAY BE STORED AS A
+    BACKLOG ROW'S `--falsifier`. `cc-premise.run_falsifier` reads exit 0 as "the condition this row
+    was filed for is GONE" and `sweep --record --close-falsified` (every 6 h,
+    `scripts/autonomy-sweep.sh`) then closes the row. The weekly wrapper used to store `--check`,
+    whose exit 0 means the OPPOSITE ("≥1 rule would apply"), so the operator's apply step was
+    auto-retired while the apply was still pending, and a decayed proposal's dead row stayed open
+    forever. Both arms backwards; measured end-to-end against the real cc-premise on 2026-09-09.
+
+    WHY IT READS SETTINGS AND NOTHING ELSE. `FALSIFIER_TIMEOUT_S` is 20 s (`bin/cc-premise:241`) and
+    a probe that times out fails OPEN (returns None) — i.e. an expensive probe is not a strict
+    probe, it is NO probe, silently. The full pipeline measured 1,045 s here, so re-running it would
+    make the self-retraction §5 promises unreachable in principle. Presence in the target file is
+    the whole question this row asks ("apply the N harvested rules"), and it is answered by ~6 file
+    reads.
+
+    WHY IT RESOLVES `latest.json` BY DEFAULT (never the row's own stamped proposal). That is what
+    keeps the DECAY arm alive: the weekly run rewrites `latest.json` every Sunday, so a week whose
+    fresh proposal is empty — the rules aged out of the window, or a gate now refuses them — leaves
+    nothing outstanding here and the stale row closes itself, exactly as §5/B3-1 promises, at the
+    cost of a stat rather than a 17-minute scan.
+
+    FAIL-CLOSED IN EVERY UNCERTAIN DIRECTION. Missing proposal, unreadable proposal, unreadable
+    target: exit 1, "still live". Only a positive, read "there is nothing left to write" returns 0.
+    A probe whose exit 0 CLOSES an operator's step must never guess in the closing direction.
+    """
+    flag = args.falsify
+    ppath = flag if isinstance(flag, str) else os.path.join(seams.out_dir, "latest.json")
+    print("── %s --falsify · %s ──" % (TOOL, ppath))
+    if not os.path.isfile(ppath):
+        print("  no proposal there — CANNOT TELL, so the row stays live (exit 1). A missing "
+              "latest.json means the weekly run is not writing, which is not a reason to retire "
+              "the operator's step.")
+        return 1
+    try:
+        prop = _load_proposal(ppath)
+    except Exception as e:
+        print("  proposal unreadable (%s) — CANNOT TELL, row stays live (exit 1)." % e)
+        return 1
+
+    if args.settings:
+        fleet_paths = [p for p, sc in discover(seams, args.settings) if sc == "fleet"]
+    else:
+        # The glob half of discover() only: the dev-root walk is the 229 s half and it can only
+        # produce project/worktree scopes, which a proposal names by absolute path anyway.
+        fleet_paths = [os.path.abspath(p)
+                       for p in sorted(_glob.glob(os.path.expanduser(seams.settings_glob)))
+                       if os.path.isfile(p) and not _is_backup_name(p)]
+
+    wanted = []
+    for e in prop.get("proposed") or []:
+        if isinstance(e, dict) and e.get("rule"):
+            tgt = e.get("target") or "fleet"
+            wanted.extend((e["rule"], t) for t in (fleet_paths if tgt == "fleet" else [tgt]))
+    for c in prop.get("consolidation") or []:
+        if isinstance(c, dict) and c.get("prefix") and c.get("file") and not c.get("present"):
+            wanted.append((c["prefix"], c["file"]))
+
+    outstanding, unreadable = [], []
+    cache = {}
+    for rule, target in wanted:
+        real = os.path.realpath(os.path.expanduser(target))
+        if real not in cache:
+            cache[real] = _allow_of(real)
+        allow = cache[real]
+        if allow is None:
+            unreadable.append((rule, real))
+        elif rule not in allow:
+            outstanding.append((rule, real))
+
+    if unreadable:
+        for rule, real in unreadable[:5]:
+            print("  ? %-40s target unreadable: %s" % (rule, real))
+        print("  CANNOT TELL — row stays live (exit 1).")
+        return 1
+    if outstanding:
+        for rule, real in outstanding[:8]:
+            print("  · %-40s NOT YET in %s" % (rule, real))
+        print("  %d rule/file pair(s) still outstanding — the row's work is real. exit 1." % len(outstanding))
+        return 1
+    print("  nothing outstanding: every rule this proposal names is already present in its target "
+          "file (or the proposal now names none). The row's condition is GONE. exit 0.")
+    return 0
+
+
+def _match_rule_filter(rule, names):
+    head = _head_of_rule(rule)
+    for nm in names:
+        if nm == rule or (head is not None and nm == head) or _rule_of(nm) == rule:
+            return True
+    return False
+
+
+def _inside_git_worktree(real):
+    """A linked worktree marks itself with a `.git` FILE (a main checkout's `.git` is a dir); the
+    `.worktrees` path convention is the second witness."""
+    if os.sep + ".worktrees" + os.sep in real:
+        return True
+    here = os.path.dirname(real)
+    while True:
+        g = os.path.join(here, ".git")
+        if os.path.isfile(g):
+            return True
+        parent = os.path.dirname(here)
+        if parent == here:
+            return False
+        here = parent
+
+
+def _gitignored(path):
+    d = os.path.dirname(path)
+    if not os.access(_GIT, os.X_OK):
+        return False, "git not executable at %s" % _GIT
+    try:
+        p = subprocess.run([_GIT, "-C", d, "check-ignore", "-q", "--", path],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, str(e)
+    if p.returncode == 0:
+        return True, ""
+    if p.returncode == 1:
+        return False, "tracked or unignored"
+    return False, "not inside a git repository (rc %d)" % p.returncode
+
+
+def _detect_indent(text):
+    m = re.search(r"\n([ \t]+)\"", text)
+    if m:
+        return m.group(1)
+    return "  "
+
+
+def _rewrite_text(text, allow_new):
+    """The file's JSON with `permissions.allow` replaced, indent and trailing newline preserved."""
+    obj = json.loads(text)
+    obj.setdefault("permissions", {})
+    if not isinstance(obj["permissions"], dict):
+        raise ValueError("permissions is not an object")
+    obj["permissions"]["allow"] = allow_new
+    indent = _detect_indent(text)
+    new = json.dumps(obj, indent=indent if "\t" not in indent else 1, ensure_ascii=False)
+    if "\t" in indent:
+        new = new.replace("\n ", "\n\t")
+    if text.endswith("\n"):
+        new += "\n"
+    return new
+
+
+def check_apply(args, seams, apply_mode):
+    """Both flags share one code path: re-run the pipeline live, intersect with the proposal, print
+    keep/drop + every per-target diff; --apply then writes only under CONFIRM=1."""
+    if apply_mode:
+        marker = [k for k in AGENT_ENV if os.environ.get(k)]
+        if marker:
+            print("── %s --apply · REFUSED (exit 4) ──" % TOOL)
+            print("  this is an agent session (%s set). Permission config is AUTHORIZATION; an agent "
+                  "widening its own allowlist is the one thing the guardrails cannot police "
+                  "afterwards." % ", ".join(marker))
+            print("  The apply is the OPERATOR's, via the queue the weekly run files: `cc-do --list`, "
+                  "find 'Apply the N harvested allow rules …', hand over its id.")
+            print("  Everything else is yours: `%s 30` reports, `--check` previews exactly what apply "
+                  "would write. There is no override variable; the hard stop is validate-bash.sh." % TOOL)
+            return 4
+    flag = args.apply if apply_mode else args.check
+    ppath = flag if isinstance(flag, str) else os.path.join(seams.out_dir, "latest.json")
+    if not os.path.isfile(ppath):
+        print("── %s %s ──" % (TOOL, "--apply" if apply_mode else "--check"))
+        print("  no proposal at %s — nothing would apply" % ppath)
+        return 2 if apply_mode else 1
+    try:
+        prop = _load_proposal(ppath)
+    except Exception as e:
+        print("  proposal unreadable: %s: %s" % (ppath, e))
+        return 2 if apply_mode else 1
+    days = _days_arg(args.days) if args.days is not None else int((prop.get("inputs") or {}).get("window_days") or 0)
+    confirm = os.environ.get("CONFIRM", "0") == "1"
+    verb = "--apply" if apply_mode else "--check"
+    print("── %s %s · proposal %s (generated %s) · re-running the pipeline live over %s ──"
+          % (TOOL, verb, ppath, prop.get("generated_utc", "?"), ("%d d" % days) if days else "all history"))
+    if apply_mode and not confirm:
+        print("  CONFIRM=1 not set — behaving as --check; nothing will be written.")
+    psha = (prop.get("tool") or {}).get("sha")
+    if psha and psha != _tool_sha():
+        print("  ⚠ tool.sha mismatch: proposal %s, running %s — the gates below are today's, which is "
+              "the point" % (psha, _tool_sha()))
+    try:
+        doc, ex = pipeline(args, seams, days)
+    except Blind as b:
+        print_blind(b.reasons, days)
+        return 3
+    fresh_prop = {p["rule"]: p for p in doc["proposed"]}
+    fresh_cons = {(c["file"], c["prefix"]): c for c in doc["consolidation"]}
+    fleet_paths = ex["fleet_paths"]
+    # The proposal's actionable set: archive rules (target fleet|path) + consolidation prefixes.
+    wanted = []
+    for p in prop.get("proposed") or []:
+        if isinstance(p, dict) and p.get("rule"):
+            wanted.append(("archive", p["rule"], p.get("target") or "fleet", None))
+    for c in prop.get("consolidation") or []:
+        if isinstance(c, dict) and c.get("prefix") and c.get("file") and not c.get("present"):
+            wanted.append(("cons", c["prefix"], c["file"], c))
+    if args.only:
+        wanted = [w for w in wanted if _match_rule_filter(w[1], args.only)]
+    if args.skip:
+        wanted = [w for w in wanted if not _match_rule_filter(w[1], args.skip)]
+    keep, drops, hard_fail = [], [], []
+    for kind, rule, target, centry in wanted:
+        head = _head_of_rule(rule)
+        if head is None:
+            drops.append((rule, "not a Bash rule"))
+            continue
+        # Gates are pure functions over today's collision/refused sets: run them on EVERY rule the
+        # proposal names, whether or not the fresh cover reproduced it. A rule injected into the
+        # file cannot ride past ACE on the strength of a JSON edit.
+        scope = "project" if kind == "cons" else "fleet"
+        ev = {"rows": 99, "sessions": 99, "weeks": 99}
+        # 🚨 `cluster_literals` MUST be carried or PATH_BOUND's destructive arm cannot fire here
+        # (fixed 2026-09-09). That arm reads `any(_path_bound_literal(x) for x in
+        # gctx.cluster_literals)`, and the default is `[]`, so `any([])` is permanently False and
+        # §3.1 step 8's "never mint a consolidation prefix for rm mv cp chmod … from path-bound
+        # literals" was STRUCTURALLY UNREACHABLE on the re-run §3.2 calls the safety net. MEASURED:
+        # head `mv` with the clusterer's kwargs refuses on PATH_BOUND; with check_apply's kwargs it
+        # passed every gate — same head, same gate, opposite verdicts. The proposal's own `shadows`
+        # list IS the literal set the clusterer saw, so the re-run now asks the same question.
+        gctx = GateCtx(ex["collision"], ex["analysis"]["refused_leaves"], scope=scope, evidence=ev,
+                       cluster=(99 if kind == "cons" else None),
+                       cluster_literals=((centry or {}).get("shadows") or []) if kind == "cons" else None,
+                       **ex["gctx_kw"])
+        gates, reasons, first = run_gates(head, gctx)
+        # 🚨 THE EXEMPTION IS "MIN_EVIDENCE IS THE ONLY FAILURE", NOT "MIN_EVIDENCE FAILS FIRST"
+        # (fixed 2026-09-09). MIN_EVIDENCE is exempt on purpose — the evidence above is fabricated
+        # 99/99/99 so the gate cannot mean anything here — but the test was `first != "MIN_EVIDENCE"`
+        # and `first` is the FIRST failure in GATE_ORDER, where PATH_BOUND and TOKEN_CAP sit at
+        # positions 10 and 11, AFTER MIN_EVIDENCE at 9. So a head failing MIN_EVIDENCE *and*
+        # PATH_BOUND was waved through. MEASURED: head `/tmp/evil.sh` with evidence 1/1/1 returns
+        # `first=MIN_EVIDENCE` while PATH_BOUND=refuse. Latent today (the 99s make MIN_EVIDENCE
+        # unreachable) and live the moment anyone reorders GATE_ORDER or adds a gate after it.
+        hard = [c for c in GATE_ORDER if c != "MIN_EVIDENCE" and gates.get(c, "pass") != "pass"]
+        if hard:
+            hard_fail.append((rule, hard[0], reasons[hard[0]]))
+            continue
+        if kind == "archive":
+            fp = fresh_prop.get(rule)
+            if fp is None:
+                r = next((r for r in doc["refused"] if r["rule"] == rule), None)
+                drops.append((rule, "DECAYED — %s" % (("fresh run refuses it on %s: %s" % (r["code"], r["reason"]))
+                                                      if r else "the fresh run generates no such candidate")))
+                continue
+            if any(v != "pass" for v in fp["gates"].values()):
+                hard_fail.append((rule, next(k for k, v in fp["gates"].items() if v != "pass"), "fresh gate"))
+                continue
+            targets = list(fleet_paths) if fp["target"] == "fleet" else [fp["target"]]
+            keep.append((rule, fp["target"], targets, fp, kind))
+        else:
+            fc = fresh_cons.get((target, rule))
+            if fc is None:
+                drops.append((rule, "DECAYED — the fresh run no longer proposes it into %s" % target))
+                continue
+            if any(v != "pass" for v in fc["gates"].values()):
+                hard_fail.append((rule, next(k for k, v in fc["gates"].items() if v != "pass"), "fresh gate"))
+                continue
+            keep.append((rule, target, [target], fc, kind))
+    print("")
+    for rule, code, why in hard_fail:
+        print("  ✗ %-40s REFUSED at apply time: %s — %s" % (rule, code, why[:100]))
+    for rule, why in drops:
+        print("  – %-40s DROPPED: %s" % (rule, why[:120]))
+    for rule, target, targets, entry, kind in keep:
+        print("  ✓ %-40s KEEP → %s" % (rule, target))
+        if kind == "archive":
+            pc = entry["prompts_cleared"]
+            print("       clears %d prompt(s) · %d session(s) · %d week(s) · %d project(s)"
+                  % (pc["total"], entry["sessions"], entry["weeks_present"], entry["distinct_projects"]))
+            for e in entry["evidence"][:3]:
+                print("       · %s %s %s" % (_iso(e["ts"]), e["cwd"], e["command"][:60].replace("\n", "⏎")))
+        else:
+            print("       retires %d exact entr(ies): %s" % (len(entry["shadows"]),
+                                                          ", ".join(s[:50] for s in entry["shadows"][:3])))
+    if hard_fail and apply_mode:
+        print("\n  exit 4 — a rule failed a gate at apply time; NOTHING written.")
+        return 4
+    # Per-target plan: additions and the exact entries the additions newly shadow.
+    plans = collections.OrderedDict()
+    refused_targets = []
+    named = set()
+    for t in args.target:
+        if t == "fleet":
+            named.update(os.path.realpath(p) for p in fleet_paths)
+        else:
+            named.add(os.path.realpath(os.path.expanduser(t)))
+    for rule, target, targets, entry, kind in keep:
+        for t in targets:
+            real = os.path.realpath(t)
+            if named and real not in named:
+                continue
+            if real not in plans:
+                if kind == "archive" and target == "fleet":
+                    if _inside_git_worktree(real) and real not in named:
+                        refused_targets.append((t, "realpath %s is inside a git worktree — name it "
+                                                    "with --target to write it" % real))
+                else:
+                    if not os.path.isfile(real):
+                        refused_targets.append((t, "target does not exist"))
+                    elif real not in named:
+                        if os.path.basename(real) != "settings.local.json":
+                            refused_targets.append((t, "a tracked `.claude/settings.json` needs an "
+                                                        "explicit --target"))
+                        else:
+                            ok, why = _gitignored(real)
+                            if not ok:
+                                refused_targets.append((t, "not gitignored (%s) — name it with "
+                                                            "--target to write it" % why))
+                plans[real] = {"add": [], "display": t}
+            plans[real]["add"].append(rule)
+    if refused_targets:
+        print("")
+        for t, why in refused_targets:
+            print("  ✗ target refused: %s — %s" % (t, why))
+        if apply_mode:
+            print("  exit 4 — a target is refused; NOTHING written (all-or-nothing per run).")
+            return 4
+    # Build every new text first; diff; then (apply) write all-or-nothing.
+    staged = []
+    changes = 0
+    for real, plan in plans.items():
+        if any(real == os.path.realpath(t) for t, _w in refused_targets):
+            continue
+        try:
+            with open(real, encoding="utf-8") as fh:
+                text = fh.read()
+            obj = json.loads(text)
+        except Exception as e:
+            print("  ✗ %s unreadable: %s" % (real, e))
+            if apply_mode:
+                return 4
+            continue
+        allow = list(((obj.get("permissions") or {}).get("allow")) or []) if isinstance(obj, dict) else []
+        adds = [r for r in plan["add"] if r not in allow]
+        if not adds:
+            print("  = %s — every rule already present (idempotent no-op)" % real)
+            continue
+        new_allow = allow + adds
+        _s0, dead0 = pm.dead_entries(allow)
+        _s1, dead1 = pm.dead_entries(new_allow)
+        before = {(i, r) for i, r, _w in dead0}
+        pruned = [r for i, r, _w in dead1 if (i, r) not in before]
+        new_allow = [r for r in new_allow if r not in pruned]
+        try:
+            new_text = _rewrite_text(text, new_allow)
+        except Exception as e:
+            print("  ✗ %s cannot be rewritten: %s" % (real, e))
+            if apply_mode:
+                return 4
+            continue
+        changes += 1
+        staged.append((real, text, new_text, adds, pruned))
+        print("")
+        print("  %s  (+%d rule(s), −%d newly shadowed exact entr(ies))" % (real, len(adds), len(pruned)))
+        for ln in difflib.unified_diff(text.splitlines(), new_text.splitlines(),
+                                       fromfile=real, tofile=real + " (after)", lineterm="", n=1):
+            print("    " + ln)
+    if not apply_mode or not confirm:
+        print("")
+        if changes:
+            print("  %d file(s) would change. %s" % (changes, ("Re-run as: CONFIRM=1 %s --apply" % TOOL)
+                                                     if not apply_mode else "Nothing written (CONFIRM=1 not set)."))
+            return 0
+        print("  nothing would apply — exit 1")
+        return 1
+    if not changes:
+        print("\n  nothing to write — every rule is already present. exit 0")
+        return 0
+    # ── the write: backup → stage → validate → replace → re-read; restore ALL on any failure ──
+    stamp = _now_utc()
+    backups, replaced = [], []
+    try:
+        for real, text, new_text, adds, pruned in staged:
+            bak = "%s.permharvest-bak-%s" % (real, stamp)
+            n = 0
+            while os.path.exists(bak):
+                n += 1
+                bak = "%s.permharvest-bak-%s.%d" % (real, stamp, n)
+            with open(real, "rb") as src, open(bak, "wb") as out:
+                out.write(src.read())
+            backups.append((real, bak))
+        for real, text, new_text, adds, pruned in staged:
+            tmp = real + ".permharvest-tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(new_text)
+            obj = json.load(open(tmp, encoding="utf-8"))
+            got = ((obj.get("permissions") or {}).get("allow")) or []
+            missing = [r for r in adds if r not in got]
+            if missing:
+                raise RuntimeError("staged %s lacks %s" % (tmp, missing))
+            os.replace(tmp, real)
+            replaced.append(real)
+            back = json.load(open(real, encoding="utf-8"))
+            if any(r not in (((back.get("permissions") or {}).get("allow")) or []) for r in adds):
+                raise RuntimeError("re-read of %s lacks a written rule" % real)
+            print("  ✔ %s written (+%d, −%d; backup %s)"
+                  % (real, len(adds), len(pruned), dict(backups)[real]))
+    except Exception as e:
+        print("  ✗ WRITE FAILED: %s — restoring every touched file" % e)
+        for real, bak in backups:
+            try:
+                with open(bak, "rb") as src, open(real + ".permharvest-restore", "wb") as out:
+                    out.write(src.read())
+                os.replace(real + ".permharvest-restore", real)
+            except Exception as e2:
+                print("    ✗ restore of %s FAILED: %s (backup at %s)" % (real, e2, bak))
+        for real, _t, _n, _a, _p in staged:
+            tmp = real + ".permharvest-tmp"
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+        print("  exit 5")
+        return 5
+    print("\n  %d file(s) written. Re-run `%s --check` to confirm nothing remains (exit 1 = applied)."
+          % (len(replaced), TOOL))
+    return 0
+
+
+# ── main ───────────────────────────────────────────────────────────────────────────────────────
+def build_parser():
+    p = argparse.ArgumentParser(prog=TOOL, allow_abbrev=False, add_help=True,
+                                description=__doc__.split("\n\n")[0])
+    p.add_argument("days", nargs="?", default=None, help="window in days (0/absent = all history)")
+    p.add_argument("--json", action="store_true", help="also write proposal-<UTC>.json + latest.json")
+    p.add_argument("--out", help="proposal dir (default CC_PERMHARVEST_OUT or ~/.claude/autonomy/permission-harvest)")
+    p.add_argument("--settings", nargs="+", help="explicit settings files (replaces discovery)")
+    p.add_argument("--mode", choices=("auto", "default"))
+    p.add_argument("--min-prompts", type=int, default=2)
+    p.add_argument("--min-sessions", type=int, default=2)
+    p.add_argument("--min-weeks", type=int, default=2)
+    p.add_argument("--min-cluster", type=int, default=2)
+    p.add_argument("--max-tokens", type=int, default=3)
+    p.add_argument("--no-consolidate", action="store_true")
+    p.add_argument("--corpus-days", type=int, default=30)
+    p.add_argument("--hook-logs", nargs="+", metavar="PATH[:name]")
+    p.add_argument("--transcripts", nargs="+", metavar="ROOT")
+    p.add_argument("--explain", metavar="RULE")
+    p.add_argument("--check", nargs="?", const=True, default=None, metavar="PROPOSAL")
+    p.add_argument("--falsify", nargs="?", const=True, default=None, metavar="PROPOSAL")
+    p.add_argument("--apply", nargs="?", const=True, default=None, metavar="PROPOSAL")
+    p.add_argument("--only", nargs="+", default=[], metavar="RULE")
+    p.add_argument("--skip", nargs="+", default=[], metavar="RULE")
+    p.add_argument("--target", nargs="+", default=[], metavar="fleet|PATH")
+    return p
+
+
+def main(argv):
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except Exception:
+        pass
+    args = build_parser().parse_args(argv)
+    # `--check 30` / `--apply 30`: a bare number is the DAYS positional, not a proposal path.
+    for flag in ("check", "apply", "falsify"):
+        v = getattr(args, flag)
+        if isinstance(v, str) and re.match(r"^\d+(d|days?)?$", v) and args.days is None:
+            args.days, v = v, True
+            setattr(args, flag, v)
+    if len([f for f in (args.check, args.apply, args.falsify) if f is not None]) > 1:
+        sys.stderr.write("%s: --check, --apply and --falsify are exclusive\n" % TOOL)
+        return 2
+    for n in ("min_prompts", "min_sessions", "min_weeks", "min_cluster", "max_tokens", "corpus_days"):
+        if getattr(args, n) < 0:
+            sys.stderr.write("%s: --%s must be ≥ 0\n" % (TOOL, n.replace("_", "-")))
+            return 2
+    if args.max_tokens < 1:
+        sys.stderr.write("%s: --max-tokens must be ≥ 1\n" % TOOL)
+        return 2
+    seams = Seams(args)
+    if args.falsify is not None:
+        return falsify(args, seams)
+    if args.apply is not None:
+        return check_apply(args, seams, apply_mode=True)
+    if args.check is not None:
+        return check_apply(args, seams, apply_mode=False)
+    days = _days_arg(args.days) if args.days is not None else 0
+    if args.explain:
+        return explain(args, seams, days)
+    try:
+        doc, _ex = pipeline(args, seams, days)
+    except Blind as b:
+        print_blind(b.reasons, days)
+        return 3
+    sys.stdout.write(render_report(doc, days))
+    if args.json:
+        path = emit_json(doc, seams.out_dir)
+        print("proposal: %s  (latest.json is a byte-identical copy)" % path)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Deadline as _d:
+        print_deadline(_d.args[0] if _d.args else _deadline_s())
+        sys.exit(6)

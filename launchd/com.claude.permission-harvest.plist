@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.permission-harvest — the WEEKLY cron for bin/cc-permission-harvest.
+
+  The harvester is a read-only reporter over the permission archive, the validate-bash corpus and
+  the settings fleet. Nothing scheduled it, so nothing ever asked those stores what they held:
+  3,728 Bash permission prompts and 1,622 h of waiting accrued unexamined. This plist is the
+  missing cron and nothing else — every gate and refusal code stays in the tool, and the APPLY is
+  never a launchd side effect (the job files one cc-do-able operator step; hooks/validate-bash.sh
+  denies `--apply` from inside a session at the chokepoint).
+
+  Sunday 04:17, not on the hour and not at 04:15. 04:15 belongs to com.claude.worktree-gc-infra
+  and 03:15 to reso's reaper; both walk the same filesystem this one reads. Two minutes of offset
+  costs nothing and keeps a weekly reporter out of a nightly deleter's window.
+
+  RunAtLoad FALSE — corrected 2026-09-09, and the sentence it replaces is worth keeping as the
+  lesson. It read: "This one removes nothing: it reads three stores and appends one JSON line, so
+  seeding the evidence at bootstrap is pure gain." The cost claim was false by three orders of
+  magnitude. MEASURED under the interpreter this job actually uses (/usr/bin/python3, 30-day
+  window, live stores): `real 1045.06` — 17m25s, ~920 s of it I/O wait across 3,231 archive files,
+  286,466 corpus records, a depth-5 walk of ~/Development (229 s in discover_settings alone, 222
+  worktree entries) and ~6,281 transcript .jsonl files / 8.5 GB. That is not "pure gain" at a
+  login; it is a multi-GB scan fired every time the agent bootstraps, holding the wrapper's mkdir
+  lock while it runs — and a contender that finds the lock held writes NO evidence row, so a slow
+  bootstrap run also blanks the sensor cc-fleet reads.
+
+  The cost of RunAtLoad false is that a freshly-installed job reads NEVER-RAN (cc-fleet S3: runs=0
+  AND no evidence file) until the first Sunday 04:17. That is an honest state and a bounded one;
+  a silently-stalled weekly job is neither. `launchctl kickstart -k gui/$(id -u)/<label>` seeds it
+  on demand if a reader wants the row sooner. The tool itself is now bounded too
+  (CC_PERMHARVEST_MAX_S, default 3600 s — ~3.4x the 1,045 s measurement, because a bound BELOW the
+  real runtime is a scheduled failure rather than a bound ⇒ exit 6 ⇒ the wrapper's `verdict=error`),
+  so a hang can no longer sit on the lock indefinitely.
+
+  `bash -c` (not a bare ProgramArguments path) because launchd expands neither ~ nor $HOME inside
+  ProgramArguments. Standard*Path cannot take $HOME at all, hence the literals. The script hardens
+  its own PATH on line 1 and resolves its interpreter absolutely (/usr/bin/python3 — launchd's PATH
+  and the interactive PATH disagree about which python3 `python3` means).
+
+  NO ProcessType AND NO Nice. `ProcessType Background` applies Darwin's darwinbg TASK ROLE, a
+  one-way floor: every descendant sits at PRI 4, E-core confined, and `taskpolicy -c utility` from
+  inside cannot climb back out (migrations/0016; tests/postland-band-floor.bats iii). The WRAPPER
+  re-execs itself through /usr/sbin/taskpolicy -c utility instead — below interactive, still
+  P-core eligible — and fails open when taskpolicy(8) is absent.
+
+  Activation is the manifest's generic arm, not a bespoke script: install.sh's LaunchAgents block
+  copies every launchd/*.plist into ~/Library/LaunchAgents and `bootstrap`s any label the landed
+  fleet.manifest declares `run`, on every deploy-live converge. 18-fleet-activate.sh is the
+  recovery arm for the NOT-INSTALLED / DISABLED states.
+
+  Kill switch (no unload needed): CC_PERMHARVEST_BIN=/nonexistent, or retire the manifest row.
+  Full stop: launchctl bootout gui/$(id -u)/com.claude.permission-harvest
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.permission-harvest</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>exec "$HOME/.claude/scripts/permission-harvest-run.sh"</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>17</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/chrisren/.claude/logs/permission-harvest.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/chrisren/.claude/logs/permission-harvest.err.log</string>
+</dict>
+</plist>
