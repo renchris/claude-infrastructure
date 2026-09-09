@@ -1304,6 +1304,78 @@ BOOTSTAMP="$(date -r "$BOOTS" '+%Y%m%d%H%M')"
   [ "$(grep -c . "$D/fz.jsonl")" -eq 2 ] || false
 }
 
+# ── the incident COUNT, which is not the row count ────────────────────────────────────────────────
+# The ledger is append-only over a jittering key, so one freeze can hold two rows — the live store
+# does, and always will, because the ±5 s dedupe prevents the next duplicate without retracting the
+# one already written. Everything anyone asks this ledger ("has it recurred?", "do we have the second
+# data point the ring buffer waits on?") is a question about INCIDENTS, and a row count answers it
+# 2x high on exactly the sample size where that flips the decision.
+#
+# THE CONTROL IS THE LOAD-BEARING CASE. A counter hard-wired to print 1 passes the duplicate case
+# perfectly; only the distinct-boots case can tell "clusters correctly" from "always says one", and
+# without it this falsifier could never fire and the row it guards would be immortal.
+fzc() { CC_PANIC_LEDGER="$1" bash "$S" --freeze-incidents; }
+
+# The two boots are the REAL pair from this box's ledger, one second apart — the jitter that made
+# freeze_boot_already tolerant in the first place.
+mkfreezerow() { # <file> <boot_epoch>
+  printf '{"ts":"2026-08-14T06:48:44Z","kind":"freeze","boot":%s,"signature":"force_off"}\n' "$2" >> "$1"
+}
+
+@test "freeze count: one incident recorded TWICE over jittered boottime counts ONCE" {
+  mkfreezerow "$D/count.jsonl" 1786686149
+  mkfreezerow "$D/count.jsonl" 1786686150
+  [ "$(grep -c '"kind":"freeze"' "$D/count.jsonl")" -eq 2 ] || false   # the naive answer, pinned
+  run fzc "$D/count.jsonl"
+  [ "$status" -eq 0 ] || false
+  [ "$output" = "1" ] || false
+}
+
+@test "freeze count: two genuinely distinct boots count as TWO (the control)" {
+  mkfreezerow "$D/count.jsonl" 1786686149
+  mkfreezerow "$D/count.jsonl" 1787642176
+  run fzc "$D/count.jsonl"
+  [ "$output" = "2" ] || false
+}
+
+# Arrival order is not boot order once anything is backfilled; an unsorted cluster walk splits one
+# boot in two the moment the pair lands out of sequence.
+@test "freeze count: rows arriving OUT of boot order still cluster as one incident" {
+  mkfreezerow "$D/count.jsonl" 1786686150
+  mkfreezerow "$D/count.jsonl" 1786686149
+  run fzc "$D/count.jsonl"
+  [ "$output" = "1" ] || false
+}
+
+@test "freeze count: an absent ledger is 0 incidents, not an error" {
+  run fzc "$D/nosuch.jsonl"
+  [ "$status" -eq 0 ] || false
+  [ "$output" = "0" ] || false
+}
+
+# A panic row is a different class and must not be counted as a freeze — the ledger holds both.
+# The falsifier on backlog row dabe706c9d79 IS this count, so an empty answer under the kill switch
+# would silently make that row un-retractable again — the failure the count was built to end. The
+# switch stops the actuator; a read-only query actuates nothing. Paired with a control proving the
+# switch still stops the daemon, so this exemption cannot quietly become a hole in it.
+@test "freeze count: the CC_SENTINEL kill switch does not silence the read-only count" {
+  mkfreezerow "$D/count.jsonl" 1786686149
+  CC_SENTINEL=off CC_PANIC_LEDGER="$D/count.jsonl" run bash "$S" --freeze-incidents
+  [ "$status" -eq 0 ] || false
+  [ "$output" = "1" ] || false
+  # CONTROL: the switch still stops the daemon itself.
+  CC_SENTINEL=off run bash "$S" --once
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"disabled (CC_SENTINEL=off)"* ]] || false
+}
+
+@test "freeze count: panic rows in the same ledger are not counted" {
+  printf '{"ts":"x","kind":"panic","boot":1786686149}\n' > "$D/count.jsonl"
+  mkfreezerow "$D/count.jsonl" 1787642176
+  run fzc "$D/count.jsonl"
+  [ "$output" = "1" ] || false
+}
+
 # A forced power-off that ALSO left a report is not this class: the box died, wrote its panic, and
 # the button was only how it got back.
 @test "freeze reader: force_off WITH a fresh panic report defers to the panic reader" {

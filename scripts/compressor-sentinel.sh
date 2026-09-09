@@ -275,6 +275,7 @@ FREEZE_TAIL_ROWS="${CC_FREEZE_TAIL_ROWS:-400}"
 # 22:43:17), so the match window opens before boottime rather than at it.
 FREEZE_RESET_SLACK_S="${CC_FREEZE_RESET_SLACK_S:-120}"
 TICKS_FREEZE_ONLY=0
+TICKS_FREEZE_COUNT=0
 
 while [ $# -gt 0 ]; do
   if   [ "$1" = "--ticks" ]; then
@@ -284,6 +285,7 @@ while [ $# -gt 0 ]; do
   elif [ "$1" = "--once" ];  then TICKS=1
   elif [ "$1" = "--panic-scan" ]; then TICKS_PANIC_ONLY=1
   elif [ "$1" = "--freeze-scan" ]; then TICKS_FREEZE_ONLY=1
+  elif [ "$1" = "--freeze-incidents" ]; then TICKS_FREEZE_COUNT=1
   elif [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     sed -n '2,/^set -uo/p' "$0" | sed 's/^# \{0,1\}//; /^set -uo/d'; exit 0
   else echo "compressor-sentinel.sh: unknown arg '$1'" >&2; exit 64
@@ -291,7 +293,12 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-if [ "${CC_SENTINEL:-on}" = "off" ]; then
+# The kill switch stops the ACTUATOR, and --freeze-incidents actuates nothing: it reads a ledger and
+# prints an integer. Letting it fall in here would make the count unanswerable exactly when the
+# daemon is disabled — and the falsifier on backlog row dabe706c9d79 is that count, so a silent
+# empty answer there restores the immortal-row failure the count exists to end. Read-only queries
+# answer regardless of whether the sensor is armed.
+if [ "${CC_SENTINEL:-on}" = "off" ] && [ "$TICKS_FREEZE_COUNT" != "1" ]; then
   echo "compressor-sentinel: disabled (CC_SENTINEL=off)" >&2
   exit 0
 fi
@@ -1092,6 +1099,32 @@ freeze_boot_already() { # <boot_epoch>
     | awk -v b="$1" 'BEGIN{hit=1} { d = $1 - b; if (d < 0) d = -d; if (d <= 5) hit=0 } END{exit hit}'
 }
 
+# HOW MANY DISTINCT FREEZES THIS BOX HAS ON RECORD — which is NOT the number of rows, and the
+# difference is the whole reason this reader exists. The ledger is append-only and keyed on a boot
+# epoch that JITTERS (freeze_boot_already's header records the live proof: boot 1786686149 came back
+# eight days later as 1786686150). Before that tolerance landed, one incident wrote two rows. Those
+# two rows are still in the live ledger and always will be — an append-only store is not rewritten,
+# and the ±5 s fix prevents the NEXT duplicate without retracting the one already written.
+#
+# So `grep -c '"kind":"freeze"'` answers 2 for a machine that has frozen ONCE, and every question
+# worth asking of this ledger is a question about incidents: has the class recurred, do we have the
+# second data point the pre-freeze ring buffer is waiting on, is this freeze new. A count that is
+# 2x the truth answers "yes, design it" on a sample of one.
+#
+# CLUSTERS WITH THE SAME ±5 s RULE freeze_boot_already dedupes on, deliberately reusing that
+# predicate rather than restating it: two spellings of "is this the same boot" that could drift
+# apart is the defect this repo has already paid for twice. Rows are sorted first because append
+# order is arrival order, and a cluster rule that walks unsorted input splits one boot into two the
+# moment a row is backfilled out of sequence.
+freeze_incident_count() {
+  [ -f "$PANIC_LEDGER" ] || { printf '0\n'; return 0; }
+  grep '"kind":"freeze"' "$PANIC_LEDGER" 2>/dev/null | jq -r '.boot // empty' 2>/dev/null \
+    | awk 'NF && $1 ~ /^[0-9]+$/' | sort -n \
+    | awk 'BEGIN{n=0; have=0}
+           { if (!have || ($1 - prev) > 5) { n++ } ; prev=$1; have=1 }
+           END{ print n }'
+}
+
 freeze_shutdown_reason() {
   local v
   v="$(sysctl -n kern.shutdownreason 2>/dev/null)" || return 1
@@ -1256,6 +1289,9 @@ if [ "$TICKS_PANIC_ONLY" = "1" ]; then
 fi
 if [ "$TICKS_FREEZE_ONLY" = "1" ]; then
   freeze_scan; exit $?
+fi
+if [ "$TICKS_FREEZE_COUNT" = "1" ]; then
+  freeze_incident_count; exit 0
 fi
 # NEVER let the post-mortem stop the sensor from starting: a reader for the LAST death must not
 # cost the evidence for the NEXT one.
