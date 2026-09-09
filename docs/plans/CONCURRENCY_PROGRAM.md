@@ -1254,7 +1254,7 @@ Every number here was measured on this box today. **S5's premise is superseded**
 |---|---|---|---|
 | **A** — idle sessions free (poller consolidation) — **CLOSED 2026-08-09, see §S6.3-MEASURED** | **S** — dispatched handoff session | Implementation wave; its audit + design + tests must not land in the lead's window. Largest lever, everything downstream is quoted against its slope. **Outcome: measured, not built** — idle sessions already cost 0.0031 vs a 0.02 target, the poller census was argv contamination, and the consolidation was declined as a 1.6%-of-budget payoff against the wake path. | **instruments only** — `scripts/occupancy-probe.sh`, `scripts/idle-slope-sweep.sh`, `tests/{occupancy-probe,idle-slope-sweep}.bats`. It did **not** touch any poller call-site, hook, or session tooling ⇒ that surface stays free for B. |
 | **C** — bound toolchain ignition ✅ **LANDED 2026-08-09** (§S6.5-DONE) | **S** — dispatched handoff session | Independent subsystem (toolchain admission), disjoint from A's files ⇒ safe to run CONCURRENTLY with A. Ran concurrently with A as planned; touched none of A's files. | cold-compile admission path + worker-pool cap |
-| **B** — cut active occupancy (serialise hooks, cache git) — **MEASURED 2026-08-09, no runtime change** (§S6.4-MEASURED) | **S** | B edits the same hook/session tooling A restructures. Same-hunk conflict is near-certain; worktrees do not prevent it. Single owner per shared file ⇒ B waits. | hook dispatch + git-state cache  **Outcome: evidence + instruments landed, NO runtime change.** Hooks ARE dispatched concurrently (newly measured, closes HOOK_CHAIN_COST §8) but serialisation is a second-order queueing win only — `hook-chain.sh` is RE-OPENED, not reversed, since its wall-clock verdict is silent on occupancy. The git lever was pointed at the wrong event: PreToolUse/Bash forks ZERO git on its hot path; Stop forks ~72-82 because `wrap-ledger.sh` is called 6x. Memoising that chokepoint measured 60 -> 27 per Stop and was WITHDRAWN — it staled the ⛔ rung and no cheap fingerprint covers the stores; the working design is recorded, not built. Bench: parallel dispatch = **3.46x** serial occupancy for identical work (directional — the null control is unbiased but underpowered). |
+| **B** — cut active occupancy (serialise hooks, cache git) — **MEASURED 2026-08-09, no runtime change** (§S6.4-MEASURED) | **S** | B edits the same hook/session tooling A restructures. Same-hunk conflict is near-certain; worktrees do not prevent it. Single owner per shared file ⇒ B waits. | hook dispatch + git-state cache  **Outcome: evidence + instruments landed, NO runtime change.** Hooks ARE dispatched concurrently (newly measured, closes HOOK_CHAIN_COST §8) but serialisation is a second-order queueing win only — `hook-chain.sh` is RE-OPENED, not reversed, since its wall-clock verdict is silent on occupancy. The git lever was pointed at the wrong event: PreToolUse/Bash forks ZERO git on its hot path; Stop forks ~72-82 because `wrap-ledger.sh` is called 6x. Memoising that chokepoint measured 60 -> 27 per Stop and was WITHDRAWN — it staled the ⛔ rung and no cheap fingerprint covers the stores; the working design is recorded, not built. Bench: parallel dispatch = **3.46x** serial occupancy for identical work (directional — the null control is unbiased but underpowered). 🚨 **"NO runtime change" EXPIRED ON 2026-08-11 — this cell understates the wave and read as undone for a month.** The memo was rebuilt on a sound key (the EVENT, not store content) and **SHIPPED**: backlog `9414dfb87233`, re-measured **133 git per close -> 19 cold -> 0 warm**, `tests/wrap-ledger.bats` 66/66 + `tests/wrap-ledger-memo.bats` 23/23. It is not merely landed but LIVE — 209 memo entries under `${TMPDIR}/cc-wrap-ledger.${UID}` written by the running fleet, verified 2026-09-09. So B's chokepoint fix IS in the enforcing store; what stayed unbuilt is only hook serialisation, which is blocked on a certified bench (`2c563601bdd4`). Wave B is **CLOSED** — see the STATUS block in §S6.4-MEASURED. |
 | **D** — gate terms | **OPERATOR** | Adds a REFUSING term to the box-wide spawn path (G2 escalation). Also needs A+B's measured slopes to set thresholds — dispatching it before them would invent numbers. | — |
 | **E** — headless / render — **precondition MEASURED 2026-08-09, see §S6.7-MEASURED; substrate NOT built** | **S**, parallel | Disjoint from A/B/C. Precondition: confirm headless retains hooks + `cc-notify`. **Outcome: precondition PASSES (no pty, all six hooks fire, mail reaches the model) — and the pty wall it was re-justified on is at ~509 panes, not 150: the census carried a constant +16 from static legacy `/dev/ttys[0-9a-f]` nodes. Render (140 panes) binds 3.6× sooner and is E's original rationale. Substrate declined pending two named comms gaps.** | **instruments + one additive gauge row** — `scripts/pty-census.sh`, `scripts/headless-precondition-probe.sh`, `tests/{pty-census,headless-precondition-probe}.bats`, and a non-verdict `ptys` row in `scripts/render-census.sh`. It did **not** touch `handoff-fire.sh`, any spawn/fire/close path, or `capacity-admit.sh`. |
 | **F** — off-box create | **S**, parallel | S5's blocker, unchanged. | `cc-cloud` create |
@@ -1539,6 +1539,29 @@ magnitude defensible, **specific figures not quotable**.
   is a behaviour change inside the continuation actuator and this wave's diff already sits under the
   close protocol.
 - Re-adjudicating `hook-chain.sh` on the occupancy axis with the landed bench, then staging it `c10`.
+
+**STATUS OF THOSE TWO, re-read 2026-09-09 (backlog `73b8c28f6aae`) — one is MOOT, one is FILED:**
+
+- **The `session-continue.sh` reorder is MOOT, and the memo is what killed it.** Its valuation —
+  *"worth one whole `wrap-ledger` run per Stop on the non-🔧 path"* — was priced against the
+  pre-memo baseline where each of the seven call sites paid its **own** ~10 git subprocesses. That
+  baseline no longer exists: the shipped memo is **file-backed and cross-process** (`WL_DIR` =
+  `${TMPDIR}/cc-wrap-ledger.${UID}`, `wrap-ledger.sh:393`) with a bounded single-flight `mkdir`
+  lock, so the seven callers of one Stop event share **one** cold computation and the rest serve
+  warm. Reordering therefore **relocates which caller pays that one cold run; it does not remove
+  it.** The saving survives only in the degenerate case where `session-continue.sh` is the *sole*
+  caller on that event — not the normal close. Live-store receipt, 2026-09-09: 209 memo entries
+  under that path written by the running fleet. The current code already caches within the hook too
+  (`SC_LED_CACHE`, `session-continue.sh:189`), shared mechanical-arm → ship-floor. ⇒ **Do not build
+  the reorder.**
+- **The `hook-chain.sh` re-adjudication is FILED and is DOWNSTREAM of a run that has never been
+  possible.** It needs the certified bench, and that is backlog `2c563601bdd4` (*"run the CERTIFIED
+  occupancy sweep — the rig is repaired but the box has never been quiet enough"*) with
+  `34b35fc074d7` on the same certification. Note the bench's **gate** was separately repaired
+  (`f229870cc`) — re-read under the sign-test interval, the run withdrawn here as *"directional, not
+  certified"* gives a 94% CI of **2.10..6.43 excluding 1.00** against a control CI of 0.29..1.51
+  **containing** it, so the SIGN was established all along and only the gate could not report it.
+  `hook-chain.sh` remains deliberately unwired.
 
 ### S6.5 · Phase C — bound toolchain ignition  ⟵ *this is the crash fix, and it is non-optional*
 
@@ -1904,6 +1927,18 @@ S6.2 already said this; S6.3 nonetheless spent the residency budget on it. With 
 **Wave B is the sole remaining load lever**, and it is **UNBLOCKED**: Wave A touched no hook, no
 poller and no session tooling, so the single-owner-per-shared-file gate in S6-Phase 0 has nothing to
 hold B behind. B is unowned — dispatch it.
+
+🚨 **"B is unowned — dispatch it" is STALE, and leaving it unmarked re-dispatched B thirty days
+later** (2026-09-09, backlog `73b8c28f6aae`). B ran the SAME DAY this paragraph was written
+(`d92a0e305`, 2026-08-09) and its outcome is **§S6.4-MEASURED, 470 lines ABOVE this line**. The
+S6-Phase 0 table row for B was updated to *"MEASURED 2026-08-09"*; this paragraph was not, and it is
+the only sentence in the plan that reads as an instruction to dispatch. A dispatcher scoped on the
+row's cited file therefore found a live imperative and no forward pointer, and fired a worker whose
+whole brief was already answered. **This is the same defect `17f42b5e3` fixed one section over** —
+*"the wave-F confound was settled 600 lines below and the paragraph never said so"* — so it is a
+recurring shape in this document, not a one-off: **when a wave closes, the sentence that TOLD someone
+to start it must be amended in the same commit as the status table.** ⇒ **Wave B is CLOSED. Read
+§S6.4-MEASURED before acting on anything in this section.**
 
 ⚠️ **Instrument note for B:** Wave A reports ~1.5 of the 1.6 is fork churn its ΔCPU method **cannot
 see**. Use `occupancy-probe.sh`'s **1 Hz R-state sampler**, not ΔCPU, or B will measure its own
