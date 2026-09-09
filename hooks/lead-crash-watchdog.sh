@@ -1099,6 +1099,15 @@ surface_death() {
     return 2
   fi
   lcw_bounded "${CC_DEATH_PAGE_TIMEOUT_S:-10}" "$CC_DEATH_PAGER" --role "$CC_DEATH_PAGE_ROLE" "$line" >/dev/null 2>&1 || rc=$?
+  # THE VICTIM MAY BE THE PAGE'S ONLY RECIPIENT (2026-09-08, desk 88e2c2b1). role=desk resolves to a
+  # PANE, and when the dead session is that pane, cc-notify appends the page to a dead inbox and
+  # returns 0 — "DELIVERED", to nobody. The supervisor then records it as "no live desk" and folds it
+  # into a one-word digest. So a desk death also goes to the liveness-free channel, naming the one
+  # command that puts a desk back. Seam: CC_DEATH_OSA_BIN stands in for osascript.
+  if pane_is_desk "$LEAD_PANE"; then
+    lcw_osa "${CC_DEATH_OSA_BIN:-osascript}" -e "display notification \"The DESK itself died — session ${sid:0:8} in pane ${LEAD_PANE} (${cause}). Nothing pages a dead desk. Restore it: cc-husk-sweep --resume --pane ${LEAD_PANE}\" with title \"Claude DESK DOWN\" sound name \"Basso\"" >/dev/null 2>&1 || true
+    log "[watchdog $sid] death page was addressed to role=$CC_DEATH_PAGE_ROLE, but the VICTIM IS THE DESK (pane $LEAD_PANE) — it sits in a dead inbox; escalated to Notification Center with the restore command"
+  fi
   if [[ "$rc" -eq 0 ]]; then
     log "[watchdog $sid] death page DELIVERED to role=$CC_DEATH_PAGE_ROLE: $line"
     return 0
@@ -1107,11 +1116,189 @@ surface_death() {
   return 2
 }
 
+# ── THE PANE VERDICT — painted where the operator actually looks (2026-09-08, desk 88e2c2b1) ──────
+# WHAT FAILED. The desk (pane 330, sid 88e2c2b1) was SIGTERMed from outside at 22:47:36Z while idle.
+# This watchdog classified it correctly 30 s later (class=CRASH cause=external-sigterm), built the
+# death page — and addressed it to role=desk, i.e. to the victim (see surface_death). The only
+# surface the operator looked at was the pane, and the pane showed Claude Code's ordinary `Resume
+# this session with:` line over a live shell prompt — byte-identical to a clean /exit, to a
+# self-close whose pane close failed, and to a recycle that never relaunched. Three hours later the
+# operator had to ask which one it was.
+#
+# THE RULE. A dead session's verdict is painted INTO THE PANE, after the shell prompt has come back,
+# addressed to no role at all. The pane's tty is a character device this daemon can write by path
+# (crw--w---- chrisren tty) with no terminal API, no kitty socket and no iTerm2 cookie — so the
+# launchd-context blindness that let cc-reaper kill a session but never close its pane (41d08635a)
+# cannot reach a write(2) to /dev/ttysNNN. Writing to the OUTPUT side of a tty types nothing into
+# the shell; the OSC-2 title escape rides along so the tab is labelled until the next prompt.
+#
+# WHAT IT SAYS, by class:
+#   CRASH (external-sigterm / jetsam / killed-before-report / …): "NOT A CLEAN EXIT — KILLED", the
+#     cause, the work state of its cwd, and ONE resume line with the PINNED launcher — the bare
+#     `claude --resume` line Claude printed uses the default account and cannot see a transcript
+#     that lives under another account's store (cc-husk-sweep's header records that incident).
+#   RECYCLE/clean-exit whose pane SURVIVED with nothing relaunched (a /exit, or a self-close
+#     --terminal whose it2 close failed): "CLOSED CLEANLY … safe to close this pane" — the other
+#     half of the ambiguity, so a finished session's leftover pane is never read as a kill.
+#   retired-by-desk whose pane survived: "RETIRED … safe to close, do NOT resume".
+#   A recycle/resume that DID relaunch, or a pane that closed: NOTHING — the pane already says it.
+#
+# WHEN. Only after the pane has SETTLED: a recycle types /exit and the relaunch line within seconds
+# of each other, and a self-close closes the pane right after the exit. The verdict waits up to
+# CC_PANE_VERDICT_SETTLE_S (45 s) for either, and paints only over a tty whose remaining processes
+# are all shells — never over a new claude, never over a running command.
+#
+# Seams: CC_PANE_VERDICT=0 (kill switch) · CC_PANE_VERDICT_DEV (stands in for /dev) ·
+# CC_PANE_VERDICT_TTY_PROCS (a file standing in for `ps -t <tty> -o command=`) ·
+# CC_PANE_VERDICT_SETTLE_S · CC_SESSIONS_LOG · CC_ROLES_DIR · CC_DEATH_OSA_BIN (stands in for
+# osascript) · CC_PANE_VERDICT_{TTY,PANE,CFG,CWD} — the registration-time facts, for the
+# --pane-verdict entrypoint and a one-off repaint of a pane whose daemon predates this arm.
+PANE_VERDICT_SETTLE_S="${CC_PANE_VERDICT_SETTLE_S:-45}"
+PANE_VERDICT_DEV="${CC_PANE_VERDICT_DEV:-/dev}"
+LEAD_TTY="${CC_PANE_VERDICT_TTY:-}"      # overwritten at registration from `ps -o tty= -p <lead>`
+LEAD_PANE="${CC_PANE_VERDICT_PANE:-}"    # …from CC_PANE_ID / KITTY_WINDOW_ID / ITERM_SESSION_ID
+LEAD_CFG="${CC_PANE_VERDICT_CFG:-}"      # …from CLAUDE_CONFIG_DIR (names the pinned launcher)
+LEAD_CWD="${CC_PANE_VERDICT_CWD:-}"      # …from the hook's $PWD (the session's working dir)
+
+pane_launcher_for_cfg() { # $1=config dir → the launcher pinned to that account's store
+  case "${1##*/}" in
+    .claude-secondary)  printf 'claude2' ;;
+    .claude-tertiary)   printf 'claude3' ;;
+    .claude-quaternary) printf 'claude4' ;;
+    *)                  printf 'claude' ;;
+  esac
+}
+pane_is_desk() { # $1=pane → 0 iff the desk role pointer names this pane
+  local d
+  d=$(head -1 "${CC_ROLES_DIR:-$HOME/.claude/cc-roles}/desk" 2>/dev/null | tr -d ' \n\r')
+  [[ -n "${1:-}" && -n "$d" && "$d" == "$1" ]]
+}
+pane_tty_procs() { # $1=tty → the command lines still attached to that tty (one per line)
+  if [[ -n "${CC_PANE_VERDICT_TTY_PROCS:-}" ]]; then cat "$CC_PANE_VERDICT_TTY_PROCS" 2>/dev/null; return 0; fi
+  lcw_bounded "${LCW_PROBE_TIMEOUT_S:-5}" /bin/ps -t "$1" -o command= 2>/dev/null || true
+}
+pane_procs_are_shells() { # stdin = command lines → 0 iff every line is a shell or login (a bare prompt)
+  awk '{ c=$1; sub(/^-/, "", c); n=split(c, p, "/"); c=p[n]
+         if (c !~ /^(zsh|bash|sh|fish|login)$/) bad=1 }
+       END { exit bad ? 1 : 0 }'
+}
+pane_verdict_settle() { # $1=tty → closed | relaunched | shell | unknown  (waits for the pane to settle)
+  local tty="$1" waited=0 procs
+  while :; do
+    [[ -e "$PANE_VERDICT_DEV/$tty" ]] || { printf 'closed'; return 0; }
+    procs=$(pane_tty_procs "$tty")
+    if [[ "$procs" =~ node_modules/\.bin/claude ]] || [[ "$procs" =~ (^|/|[[:space:]])claude(\.exe)?([[:space:]]|$) ]]; then
+      printf 'relaunched'; return 0
+    fi
+    (( waited >= PANE_VERDICT_SETTLE_S )) && break
+    sleep 5; waited=$(( waited + 5 ))
+  done
+  [[ -e "$PANE_VERDICT_DEV/$tty" ]] || { printf 'closed'; return 0; }
+  procs=$(pane_tty_procs "$tty")
+  [[ -n "$procs" ]] || { printf 'unknown'; return 0; }
+  if printf '%s\n' "$procs" | pane_procs_are_shells; then printf 'shell'; else printf 'unknown'; fi
+}
+pane_work_state() { # $1=cwd → clean | dirty:N | unlanded:N | -   (git facts, never the session's word)
+  local cwd="$1" dirty ahead
+  { [[ -n "$cwd" && -d "$cwd" ]] && git -C "$cwd" rev-parse --git-dir >/dev/null 2>&1; } || { printf -- '-'; return 0; }
+  dirty=$(git -C "$cwd" status --porcelain 2>/dev/null | wc -l | tr -d ' ' || true)
+  [[ "$dirty" == 0 ]] || { printf 'dirty:%s' "$dirty"; return 0; }
+  ahead=$(git -C "$cwd" rev-list --count origin/main..HEAD 2>/dev/null || echo "")
+  case "$ahead" in ''|*[!0-9]*|0) printf 'clean' ;; *) printf 'unlanded:%s' "$ahead" ;; esac
+}
+pane_last_close() { # $1=transcript → yes | no | -   (the last "Good to close:" the session wrote)
+  local c
+  [[ -n "${1:-}" && -f "$1" ]] || { printf -- '-'; return 0; }
+  c=$(LC_ALL=C grep -ao 'Good to close: [a-z]*' "$1" 2>/dev/null | tail -1 | awk '{print $4}' || true)   # a transcript with no close phrase is "-", not a fault
+  printf '%s' "${c:--}"
+}
+pane_end_reason() { # $1=sid → the SessionEnd reason session-end.sh logged, or -
+  local f="${CC_SESSIONS_LOG:-$HOME/.claude/logs/sessions.log}" r
+  [[ -f "$f" ]] || { printf -- '-'; return 0; }
+  r=$(LC_ALL=C grep -a "Session ended sid=$1 " "$f" 2>/dev/null | tail -1 | sed -n 's/.*reason=\([A-Za-z0-9._-]*\).*/\1/p' || true)
+  printf '%s' "${r:--}"
+}
+pane_verdict_text() { # $1=sid $2=class $3=cause $4=exit $5=sig $6=tpath → line 1: headline<TAB>title; then a blank line and the block
+  local sid="$1" class="$2" cause="$3" ec="${4:-}" sig="${5:-}" tpath="${6:-}"
+  local launcher work close reason when role="" rule headline title body resume
+  launcher=$(pane_launcher_for_cfg "$LEAD_CFG")
+  work=$(pane_work_state "$LEAD_CWD"); close=$(pane_last_close "$tpath"); reason=$(pane_end_reason "$sid")
+  when=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  pane_is_desk "$LEAD_PANE" && role=" — the DESK"
+  resume="nocorrect CC_ACCOUNT_PINNED=1 $launcher --resume $sid"
+  rule='────────────────────────────────────────────────────────────────────────────────'
+  case "$class:$cause" in
+    RECYCLE:retired-by-desk)
+      headline="✅ RETIRED — Claude session ${sid:0:8}${role} was retired by the desk after its work was collected"
+      title="✅ retired ${sid:0:8}"
+      body="$headline (verdict painted $when).
+   The pane close that should have followed did not happen. This pane holds nothing: safe to close
+   (Ctrl-D). Do NOT resume it — its work was landed before the retirement." ;;
+    RECYCLE:*)
+      headline="✅ CLOSED CLEANLY — Claude session ${sid:0:8}${role} exited on its own (reason: $reason); nothing relaunched here"
+      title="✅ closed ${sid:0:8}"
+      body="$headline (verdict painted $when).
+   work in ${LEAD_CWD:-?}: $work · its last close verdict: $close"
+      case "$work" in
+        dirty:*|unlanded:*) body="$body
+   ⚠ Its working dir still holds uncommitted or unlanded work — look at that before closing this pane.
+▶ Reopen it here:   $resume" ;;
+        *) body="$body
+   This pane holds nothing: safe to close (Ctrl-D). To reopen the session instead:
+▶ $resume" ;;
+      esac ;;
+    *)
+      headline="⛔ NOT A CLEAN EXIT — Claude session ${sid:0:8}${role} was KILLED here"
+      title="⛔ KILLED ${sid:0:8}"
+      body="$headline (verdict painted $when).
+   cause: ${cause}${ec:+ (exit $ec}${sig:+, signal $sig}${ec:+)}. It did not exit and nothing closed it. The
+   \"Resume this session with: claude --resume …\" line above is Claude Code's ordinary exit text, and
+   its bare \`claude\` is the WRONG launcher for this account's transcript store.
+   work in ${LEAD_CWD:-?}: $work · its last close verdict: $close
+▶ Resume it here:   $resume
+▶ Or triage first:  cc-husk-sweep --pane ${LEAD_PANE:-<pane>}" ;;
+  esac
+  printf '%s\t%s\n\n%s\n%s\n%s\n' "$headline" "$title" "$rule" "$body" "$rule"
+}
+paint_pane_verdict() { # $1=sid $2=pid $3=class $4=cause $5=exit $6=sig $7=tpath — ALWAYS returns 0
+  local sid="$1" class="${3:-}" cause="${4:-}" ec="${5:-}" sig="${6:-}" tpath="${7:-}" tty state out headline title block
+  [[ "${CC_PANE_VERDICT:-1}" == "1" ]] || { log "[watchdog $sid] pane verdict SUPPRESSED (CC_PANE_VERDICT=0)"; return 0; }
+  tty="$LEAD_TTY"
+  [[ -n "$tty" ]] || { log "[watchdog $sid] pane verdict SKIPPED — no tty was recorded at registration (headless lead, or a daemon that predates this arm)"; return 0; }
+  state=$(pane_verdict_settle "$tty")
+  case "$state" in
+    closed)     log "[watchdog $sid] pane verdict NOT PAINTED — the pane closed ($tty is gone), which already says it"; return 0 ;;
+    relaunched) log "[watchdog $sid] pane verdict NOT PAINTED — a new claude took $tty (recycle or resume); nothing to add"; return 0 ;;
+    unknown)    log "[watchdog $sid] pane verdict NOT PAINTED — $tty is not at a bare shell prompt (something else is running there); refusing to write over it"; return 0 ;;
+  esac
+  out=$(pane_verdict_text "$sid" "$class" "$cause" "$ec" "$sig" "$tpath")
+  # first line = headline<TAB>title; the block follows a blank line. Parameter expansion, not
+  # `| head -1`: this file runs under pipefail, and a producer cut off by head reads as a failure.
+  local first; first="${out%%$'\n'*}"; headline="${first%%$'\t'*}"; title="${first#*$'\t'}"
+  block="${out#*$'\n'}"; block="${block#$'\n'}"
+  if { printf '\n%s\n' "$block"; printf '\033]2;%s\007' "$title"; } > "$PANE_VERDICT_DEV/$tty" 2>/dev/null; then
+    log "[watchdog $sid] pane verdict PAINTED on $tty (pane ${LEAD_PANE:-?}): $headline"
+  else
+    log "[watchdog $sid] pane verdict WRITE FAILED on $tty (pane ${LEAD_PANE:-?}): $headline"
+  fi
+  return 0
+}
+
 # Debug/test entrypoint: build + deliver a death page. Prints the page line on stdout so a test can
 # assert CONTENT without a live transport, and still runs the delivery so the transport is covered.
 if [[ "${1:-}" == "--surface-death" ]]; then
   death_page_line "${2:-}" "${3:-}" "${5:-}" "${6:-}" "${7:-}" "${8:-}"
   surface_death "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${8:-}" "${6:-}" "${7:-}" >/dev/null 2>&1 || true
+  exit 0
+fi
+# Debug/test/repaint entrypoint: the pane verdict for a death, with the pane facts taken from
+# CC_PANE_VERDICT_{TTY,PANE,CFG,CWD}. Prints the verdict block on stdout so a test can assert
+# CONTENT, then paints it (through the CC_PANE_VERDICT_DEV seam, or for real). Also the one-off
+# repaint for a pane whose daemon predates this arm — the incident pane itself was repainted with it.
+#   --pane-verdict <sid> <pid> <class> <cause> <exit> <sig> <transcript>
+if [[ "${1:-}" == "--pane-verdict" ]]; then
+  pane_verdict_text "${2:-}" "${4:-}" "${5:-}" "${6:-}" "${7:-}" "${8:-}" | tail -n +2
+  paint_pane_verdict "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}" "${7:-}" "${8:-}"
   exit 0
 fi
 
@@ -1188,7 +1375,17 @@ fi
 # Record session→PID mapping for orphan-reaper to consult
 echo "$LEAD_PID" > "$WATCHDOG_DIR/$SESSION_ID.pid"
 echo "$SESSION_ID" > "$WATCHDOG_DIR/$SESSION_ID.id"
-log "registered session=$SESSION_ID pid=$LEAD_PID"
+# The lead's TTY, pane, config dir and cwd — captured NOW, by value, for the pane verdict (see
+# paint_pane_verdict). The daemon inherits them; nothing can re-derive them after the death: the
+# registry row is gone by then (session-end.sh deletes it) and `ps` cannot answer for a dead pid.
+# A seam already set (a test, or a one-off repaint) wins over the live reading.
+LEAD_TTY="${CC_PANE_VERDICT_TTY:-$(ps -o tty= -p "$LEAD_PID" 2>/dev/null | tr -d ' ')}"
+case "$LEAD_TTY" in ttys[0-9]*) ;; *) LEAD_TTY="" ;; esac
+_lcw_isid="${ITERM_SESSION_ID:-}"
+LEAD_PANE="${CC_PANE_VERDICT_PANE:-${CC_PANE_ID:-${KITTY_WINDOW_ID:-${_lcw_isid##*:}}}}"
+LEAD_CFG="${CC_PANE_VERDICT_CFG:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
+LEAD_CWD="${CC_PANE_VERDICT_CWD:-$PWD}"
+log "registered session=$SESSION_ID pid=$LEAD_PID tty=${LEAD_TTY:-none} pane=${LEAD_PANE:-none}"
 
 # The lead's start-time, read BEFORE the daemon is spawned and handed to it BY VALUE. It must not be
 # re-derived from disk later: $SESSION_ID.pid records only the pid, and a later SessionStart
@@ -1432,6 +1629,10 @@ trap '' HUP
     if [[ "$class" == "CRASH" ]]; then
       lcw_osa osascript -e "display notification \"Session ${sid:0:8} crashed — ${cause}. See claude-crashes.jsonl\" with title \"Claude Crash\" sound name \"Basso\"" 2>/dev/null || true
     fi
+    # The pane verdict, for EVERY class — a clean exit whose pane survived is exactly the other half
+    # of the ambiguity (see paint_pane_verdict). Backgrounded: it waits up to 45 s for the pane to
+    # settle, and the team legs below must not wait behind it. It logs its own outcome.
+    ( paint_pane_verdict "$sid" "$pid" "$class" "$cause" "${cr_exit:-}" "${cr_sig:-}" "$tpath" ) </dev/null >/dev/null 2>&1 &
 
     # THE DEATH PAGE — deliberately placed HERE, above the team scan, not inside it. This is the
     # whole fix: the incident's session reached the `no teams affected` early-return below and
