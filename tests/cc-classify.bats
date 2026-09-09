@@ -45,7 +45,28 @@ EOF
   export CC_FIRED_DIR="$D/fired"
   export CC_CLASSIFY_INTERACTIVE_HOLD_S=21600
   export CC_CLASSIFY_FIRE_PROMPT_SLACK_S=300
+  # ── permission BEACON store: hermetic, NEVER the real /tmp/cc-permission-pending ──────────────
+  # Unpinned, every case below would read the live box's beacon dir and its verdict would depend on
+  # whether some OTHER pane happened to be sitting on a modal. Default shape = the hook's own
+  # TRUSTED ALL-CLEAR: dir present, heartbeat stamped AT NOW (i.e. at/after every fixture's last
+  # activity), no <sid>.json. That is what makes the existing cases mean what they meant before —
+  # an empty dir with no heartbeat is BLIND, and blind fails closed to owned-wait by design.
+  export CC_PERMPEND_DIR="$D/permpend"
+  export CC_PERMPEND_HORIZON_S=86400
+  mkdir -p "$CC_PERMPEND_DIR"; hb_at 0
 }
+
+# stamp the beacon heartbeat <ago> seconds before NOW (mtime IS the timestamp, as the hook writes it)
+hb_at() { local ago="${1:-0}"; : > "$CC_PERMPEND_DIR/.beacon-alive"
+          TZ=UTC touch -t "$(TZ=UTC date -j -f %s "$((NOW-ago))" +%Y%m%d%H%M.%S)" "$CC_PERMPEND_DIR/.beacon-alive"; }
+# a harness-authored PermissionRequest beacon for <sid>, pending <ago> seconds; args: sid ago [cmd]
+# The default payload is deliberately INERT text. An earlier draft used an rm-shaped literal and
+# the box's own permission classifier fired on the TOOL CALL THAT WROTE THIS FILE — a fixture must
+# never be a live command, even as a string.
+beacon() { local sid="$1" ago="$2" cmd="${3:-git push --force}"
+           jq -nc --argjson ts "$((NOW-ago))" --arg c "$cmd" \
+             '{ts:$ts, tool_name:"Bash", tool_input:{command:$c}, cwd:"/tmp/wt", tool_use_id:""}' \
+             > "$CC_PERMPEND_DIR/$sid.json"; }
 # fired_peer refuses non-UUID panes as path fragments, so stamped tests need a UUID-shaped pane.
 UP="4EC4DA5D-0000-4000-8000-000000000001"
 # a second UUID for a firedBy-stamped SUCCESSOR pane (change 4 positive-handoff link).
@@ -1026,4 +1047,113 @@ mk_ps_big() { local out="$1" live="${2:-}"
   cens="$(CC_PIPEFAIL_ROOT="$REPO" bash "$REPO/scripts/pipefail-sigpipe-lint.sh" --census 2>/dev/null)"
   [ "$(printf '%s\n' "$cens" | grep -c .)" -ge 50 ]
   [ "$(printf '%s\n' "$cens" | grep -c '^bin/cc-classify:')" -eq 0 ]
+}
+
+# ══ blocked-on-permission (2026-09-09) ═══════════════════════════════════════════════════════════
+# THE INCIDENT, verbatim: pane 690 (sid d62ed983) sat on an unanswered `rm -rf $SC` permission modal
+# WITH ITS BEACON PRESENT in the dir, and cc-classify called it `finished-teammate` — one of the four
+# REAP-ELIGIBLE causes. Only work-landed=no stopped the reap. A frozen session emits nothing, so
+# idleness is the DEFINING symptom of the blocked state and every idleness-derived cause below reads
+# it as something else. The RED half of this arm is that the fixture is EXACTLY the passing
+# "finished-teammate — an idle SPAWNER-STAMPED worktree worker" case plus a beacon: against the
+# pre-fix binary it returns finished-teammate.
+
+@test "blocked-on-permission — a live beacon BEATS finished-teammate (the pane-690 shape)" {
+  reg "$UP" "$LIVE" /tmp/wt-feature-x sidP; tx sidP 9000; stamp "$UP"; beacon sidP 900
+  [ "$(cause "$UP")" = blocked-on-permission ]
+}
+
+@test "blocked-on-permission is NEVER-REAP — it is absent from cc-reaper's own REAPABLE_RE" {
+  # Asserted against the ACTUATOR's live regex, not against a belief about it: if a later change adds
+  # this cause to the reapable set, this arm goes red instead of the fleet quietly reaping a session
+  # that is waiting on a human (memory: make-the-actuator-the-arbiter).
+  re="$(grep -m1 '^REAPABLE_RE=' "$REPO/bin/cc-reaper" | cut -d"'" -f2)"
+  [ -n "$re" ]
+  [[ "finished-teammate" =~ $re ]] || false        # POS control: the regex really matches something
+  ! [[ "blocked-on-permission" =~ $re ]]
+}
+
+@test "blocked-on-permission BEATS rate-limited — the pane-616 shape (stale cap error + a live modal)" {
+  reg "$UP" "$LIVE" /repo sidQ; tx sidQ 9000
+  printf '{"type":"assistant","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 6pm"}]}}\n' >> "$D/proj/slug/sidQ.jsonl"
+  [ "$(cause "$UP")" = rate-limited ]              # POS control: without a beacon this IS rate-limited
+  beacon sidQ 900
+  [ "$(cause "$UP")" = blocked-on-permission ]
+}
+
+@test "blocked-on-permission carries the BLOCKED COMMAND in its detail" {
+  reg "$UP" "$LIVE" /tmp/wt-feature-x sidP; tx sidP 9000; stamp "$UP"; beacon sidP 900 "git push --force"
+  printf '%s' "$("$C" "$UP" --json 2>/dev/null | jq -r '.detail')" | grep -q -- 'git push --force'
+}
+
+@test "a STALE beacon past the orphan horizon does NOT create a permanent never-reap" {
+  # The supervisor REAPS a beacon past PERMPEND_HORIZON_S (sweep_permission_pending REAP 2) and stops
+  # paging it; a beacon that outlives its prompt must not buy permanent immunity here either.
+  reg "$UP" "$LIVE" /tmp/wt-feature-x sidS; tx sidS 9000; stamp "$UP"; beacon sidS 200000
+  [ "$(cause "$UP")" = finished-teammate ]
+}
+
+@test "a MALFORMED beacon (ts absent ⇒ 0) reads as horizon-old, never as blocked" {
+  reg "$UP" "$LIVE" /tmp/wt-feature-x sidM; tx sidM 9000; stamp "$UP"
+  printf '{"tool_name":"Bash"}\n' > "$CC_PERMPEND_DIR/sidM.json"
+  [ "$(cause "$UP")" != blocked-on-permission ]
+}
+
+@test "a beacon whose owning process is DEAD stays crashed — the prompt died with the session" {
+  # DELIBERATE: the check sits AFTER the pid gate, mirroring the supervisor's REAP 1 (pid gone ⇒ reap
+  # the beacon, never page it). Calling a dead session "blocked on a human" would strand it forever
+  # behind a prompt nobody can answer; `crashed` is itself never-auto-reap, so nothing is lost.
+  reg PANE-A "$DEAD" /repo sidD; tx sidD 9000; beacon sidD 900
+  [ "$(cause PANE-A)" = crashed ]
+}
+
+@test "the CC_PERMPEND_DIR seam is honoured — the path is not hardcoded" {
+  # Three consumers share this store (the hook writes, lead-supervisor pages, this classifier reads).
+  # A hardcoded path in the third is how they drift, and a drifted classifier reads an empty dir as
+  # an all-clear. Proven by MOVING the store: same fixture, beacon only in the new dir.
+  reg "$UP" "$LIVE" /tmp/wt-feature-x sidE; tx sidE 9000; stamp "$UP"
+  mkdir -p "$D/elsewhere"
+  export CC_PERMPEND_DIR="$D/elsewhere"; hb_at 0; beacon sidE 900
+  [ "$(cause "$UP")" = blocked-on-permission ]
+}
+
+# ── the BLIND third state: absence is only an all-clear when the observer was demonstrably running ──
+
+@test "BLIND (dir absent) ⇒ a would-be finished-teammate falls closed to owned-wait" {
+  reg "$UP" "$LIVE" /tmp/wt-feature-x sidB; tx sidB 9000; stamp "$UP"
+  export CC_PERMPEND_DIR="$D/never-created"
+  c="$(cause "$UP")"
+  [ "$c" != finished-teammate ]
+  [ "$c" = owned-wait ]
+}
+
+@test "BLIND (heartbeat PREDATES the session's last activity) ⇒ falls closed to owned-wait" {
+  # The hook stamps the heartbeat on EVERY invocation, write AND clear, and clear runs on every
+  # PostToolUse — so a heartbeat older than this session's last turn means the observer was not
+  # running at the moment a prompt could have fired. Absence then proves nothing.
+  reg "$UP" "$LIVE" /tmp/wt-feature-x sidH; tx sidH 9000; stamp "$UP"; hb_at 20000
+  [ "$(cause "$UP")" = owned-wait ]
+}
+
+@test "the TRUSTED all-clear still reaps: heartbeat at/after last activity, no beacon ⇒ finished-teammate" {
+  # The over-blinding control. A fail-closed that fired on every session would disable the reaper and
+  # carry exactly as many bits as one that never fires (memory: alarm-polarity-and-attention-budget).
+  reg "$UP" "$LIVE" /tmp/wt-feature-x sidA2; tx sidA2 9000; stamp "$UP"; hb_at 8000
+  [ "$(cause "$UP")" = finished-teammate ]
+}
+
+@test "the blind downgrade NARROWS only: its reapable set is the actuator's REAPABLE_RE verbatim" {
+  # Two copies of one regex with no lint holding them together. A drift where cc-reaper GROWS a cause
+  # this list misses is merely unprotected (safe); the reverse would be a claim of protection that is
+  # not there. Pin them equal so the drift is a red test, not a silent hole.
+  a="$(grep -m1 '^PERMPEND_REAPABLE_RE=' "$C" | cut -d"'" -f2)"
+  b="$(grep -m1 '^REAPABLE_RE=' "$REPO/bin/cc-reaper" | cut -d"'" -f2)"
+  [ -n "$a" ]; [ -n "$b" ]; [ "$a" = "$b" ]
+}
+
+@test "the blind downgrade has a kill switch (CC_CLASSIFY_PERMPEND_BLIND_DISABLE=1 restores pre-fix)" {
+  reg "$UP" "$LIVE" /tmp/wt-feature-x sidK; tx sidK 9000; stamp "$UP"
+  export CC_PERMPEND_DIR="$D/never-created"
+  run env CC_CLASSIFY_PERMPEND_BLIND_DISABLE=1 "$C" "$UP" --json
+  [ "$(printf '%s' "$output" | jq -r '.cause')" = finished-teammate ]
 }
