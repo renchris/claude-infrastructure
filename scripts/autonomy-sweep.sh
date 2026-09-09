@@ -1521,6 +1521,89 @@ if [ -x "$_flow" ]; then
   [ "$_flow_verdict" = "net-positive" ] && _bounded bash "$_flow" --file >/dev/null 2>&1
 fi
 
+# FIELD SEMANTICS FOR THE backlog-health RECORD BELOW.
+#
+# This prose used to be emitted INSIDE the record as a constant `note:` string. It is unchanged
+# below -- only its location moved (W3-B17, on W2-B17's number: report
+# docs/research/exhaustive-drive-2026-09-08/W2-B17-jq-fatal-idl-record.md, landed 1550268e6).
+#
+# WHY IT MOVED. The literal was 6953 bytes, 86% of a 6,679-byte record, against a next-largest
+# emitter of 663 B. A record over the writer's stdio buffer (4,096 B here) is appended as >=2
+# write() calls, so O_APPEND stops making it atomic and a concurrent producer on the shared fd can
+# land BETWEEN the pieces. One such record was spliced at byte 4096 by a waiting-recycle append;
+# jq then exits 5 at that line, and every census that redirects stderr silently dropped 12.33% of
+# the store (24.3% of hook records) while reporting a smaller, internally consistent number with no
+# tell. 72 oversized emissions in 11 days, 100% over 4,096 B, from this one site. A constant string
+# carries no per-tick information, so emitting it 72 times bought nothing and cost the store.
+#
+# rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean).
+# consolidation_trigger_rc and ratchet_rc 2 = COULD NOT MEASURE, the engine (jq) is absent — those two
+# guards were fail-OPEN until backlog 2366f99e04a7, the same defect the grouping sweep carried for its
+# whole deployed life, and for the ratchet the fail-open was worse than a misreport: its --assert is the
+# stored falsifier of the row it files at :803, and cc-premise reads exit 0 as THE CONDITION IS GONE, so
+# an absent engine RETRACTED the coverage alarm rather than failing to measure it. The rc-1 consumer below
+# is an exact match on 1 and so cannot launder a 2 into a coverage regression; the trigger files its own
+# condition-keyed, send-damped row (backlog-consolidation-engine-absent) from --file, while the ratchet
+# deliberately files nothing because its scheduled mode IS a probe. drain_chain_rc is the
+# BACKLOG_DRAIN_24_7 §6 liveness check and its rc says only whether the CHECK ran (0 = it answered and
+# filed if dead; skipped = no drain-chain-assert.sh on this box) — the VERDICT is never inferred from it,
+# because the check is fail-open by construction and reports alive on an unreadable store, on zero live
+# rows (the success state), and on any live lease. Read the verdict from `drain-chain-assert.sh --json` or
+# from whether row condition=local-drain-chain-dead is open. backlog_flow_* is BACKLOG_DRAIN_24_7 §6
+# fourth invariant, the WEEKLY ADDS-vs-CLOSES report, and unlike drain_chain_rc its VERDICT is carried
+# here rather than inferred: backlog_flow_rc says only whether the check ran, while backlog_flow_verdict
+# is one of draining (closed >= added over the window, the healthy direction), net-positive (added >
+# closed, and §6 answers that by fixing the INFLOW list C1-C4 rather than by adding drain horsepower — a
+# condition-keyed row backlog-inflow-net-positive is filed on this verdict alone), unknown (an ABSTENTION
+# and never a conviction: no store, unreadable store, a store younger than the window whose first week is
+# net-positive by construction, or more unreadable timestamps than the margin the verdict rests on),
+# no-verdict (the probe did not answer this sweep — never that the flow is fine), skipped (no
+# backlog-flow-assert.sh on this box). backlog_flow_added counts distinct rows FILED in the window and
+# backlog_flow_closed counts done RECORDS, so a row closed twice is two closings: this is a FLOW reading
+# and deliberately not the STOCK one bin/cc-value tasks_closed takes for its own question. ratchet_filed
+# is the ratchet rc CONSUMER: a red assert now files ONE condition-keyed, self-falsifying row instead of
+# only being written down here. The fold APPLIES, gated on its own dry verdict: fold_applied is skipped
+# unless fold_conservation read ok this same sweep, so a FAILED or unknown key disarms the writer without
+# anyone remembering to. grouping_sweep_rc 0 = under the ungrouped floor or filed; 2 = COULD NOT MEASURE,
+# the engine (python3 / scripts/backlog-consolidation/group.py) is absent — that guard was fail-OPEN until
+# backlog 70cc9f44040f, so this field read 0 on every tick of the entire deployed life of that mechanism
+# while it folded nothing, and the sweep now files its own condition-keyed row
+# (backlog-grouping-engine-absent, send-damped) rather than leaving the evidence in an rc nobody screens.
+# A non-zero here has never aborted this sweep: no set -e, and the rc is captured rather than propagated.
+# backfill_* is the CONDITION-LEASE family key (cc-backlog backfill), and it is a DRY RUN on purpose: it
+# proposes joins a scorer found over a living corpus, and a wrong join feeds claim guard (6) and REFUSES a
+# live worker onto work that is not duplicated. backfill_proposed is the depth of that review queue,
+# backfill_ambiguous the rows that matched two groups and were deliberately not joined, and backfill_note
+# no-verdict means the probe did not answer this sweep — never that the store is clean. Flip to --apply
+# when proposed is small and stable across a run of sweeps and its named proposals were spot-checked.
+# premise_pass_* is the CURRENCY pass and runs on its OWN cadence (CC_PREMISE_PASS_EVERY_S, default 6h)
+# because it costs 265.81 s measured at utility over 141 probes (2026-08-16) while this sweep fires every
+# 300 s: note not-due = the interval gate held it, bound-exceeded = rc 124 and the 1500 s bound needs
+# re-measuring in the band, read-failed:<why> = the pass aborted fail-open on an unreadable store and SAID
+# SO rather than exiting 0 with an unparseable body, ok = every live row carries a probe verdict against
+# premise_pass sha. premise_rows_closed retires rows a probe just proved dead, which before had no exit at
+# all: falsified refuses every claim and nothing closed them. premise_rows_deferred/premise_shard_pending
+# are the SHARD (--limit, default 150): deferred is what this pass held back and shard_pending what the
+# cycle still owes after it, so a pending count that never reaches 0 means the cycle is longer than the
+# store's churn and the LIMIT wants raising — not the bound. Deferred rows are deliberately NOT folded
+# into the sweep's unprobed count, which stays the coverage ratchet's input and means only 'no arm can
+# speak for this row'. venue_pass_* is the VENUE RE-DERIVATION (cc-venue run --apply) and it exists
+# because a venue label could outlive the rule that made it: 460211b83 landed the cross-repo eligibility
+# arm on 2026-08-23T21:30Z and the six oldest venuePlan=cloud rows had been labelled 08-11..08-21, so they
+# held all six cloud slots against a gate that refuses them and the seven genuinely eligible rows were
+# admitted ZERO times in a day. W1 wired cc-venue's WRITE-PATH and ADMISSION-REPAIR callers, both keyed on
+# a row being NEW or NEXT; nothing re-decided a settled label until this arm, and `cc-venue run` had zero
+# callers of any kind (grep over scripts/ hooks/ LaunchAgents, 2026-08-24). It APPLIES unattended, unlike
+# the backfill arm beside it, because the producer already fails CLOSED in the expensive direction: a
+# wrong `local` costs nothing (the item claims locally, untouched) while a `cloud` label may only be
+# written from a positive certification cc-venue itself refuses to issue without an ok history horizon, so
+# a second gate here could only disagree with the first. It runs on the currency pass's cadence
+# (CC_VENUE_PASS_EVERY_S, default 6h) because decide() re-runs cc-premise per item: 21 s measured for the
+# dry decision over 318 open rows on 2026-08-24, with the per-row `cc-backlog venue` writes dominating
+# beyond that. venue_pass_note bound-exceeded = rc 124, which is SAFE and NOT a failure -- every row is
+# decided and written independently, so a truncated pass leaves a prefix re-derived and the next pass
+# finishes what it did not reach; no-verdict = the body did not parse, which is never the same as a clean
+# store; write-failed = at least one label could not be written, and venue_write_failed carries the count.
 log_idl backlog-health "$(jq -cn --arg t "$_trig_rc" --arg r "$_rat_rc" \
   --arg flr "$_flow_rc" --arg flv "$_flow_verdict" --arg fla "$_flow_added" \
   --arg flc "$_flow_closed" --arg fln "$_flow_net" \
@@ -1546,7 +1629,7 @@ log_idl backlog-health "$(jq -cn --arg t "$_trig_rc" --arg r "$_rat_rc" \
     venue_pass_rc:$vr, venue_pass_note:$vn, venue_rows_considered:($vc|tonumber),
     venue_routed_cloud:($vcl|tonumber), venue_routed_local:($vlo|tonumber),
     venue_write_failed:($vwf|tonumber),
-    note:"rc 0 = healthy or filed; 1 = ratchet saw coverage FALL; skipped = tool absent (not clean). consolidation_trigger_rc and ratchet_rc 2 = COULD NOT MEASURE, the engine (jq) is absent — those two guards were fail-OPEN until backlog 2366f99e04a7, the same defect the grouping sweep carried for its whole deployed life, and for the ratchet the fail-open was worse than a misreport: its --assert is the stored falsifier of the row it files at :803, and cc-premise reads exit 0 as THE CONDITION IS GONE, so an absent engine RETRACTED the coverage alarm rather than failing to measure it. The rc-1 consumer below is an exact match on 1 and so cannot launder a 2 into a coverage regression; the trigger files its own condition-keyed, send-damped row (backlog-consolidation-engine-absent) from --file, while the ratchet deliberately files nothing because its scheduled mode IS a probe. drain_chain_rc is the BACKLOG_DRAIN_24_7 §6 liveness check and its rc says only whether the CHECK ran (0 = it answered and filed if dead; skipped = no drain-chain-assert.sh on this box) — the VERDICT is never inferred from it, because the check is fail-open by construction and reports alive on an unreadable store, on zero live rows (the success state), and on any live lease. Read the verdict from `drain-chain-assert.sh --json` or from whether row condition=local-drain-chain-dead is open. backlog_flow_* is BACKLOG_DRAIN_24_7 §6 fourth invariant, the WEEKLY ADDS-vs-CLOSES report, and unlike drain_chain_rc its VERDICT is carried here rather than inferred: backlog_flow_rc says only whether the check ran, while backlog_flow_verdict is one of draining (closed >= added over the window, the healthy direction), net-positive (added > closed, and §6 answers that by fixing the INFLOW list C1-C4 rather than by adding drain horsepower — a condition-keyed row backlog-inflow-net-positive is filed on this verdict alone), unknown (an ABSTENTION and never a conviction: no store, unreadable store, a store younger than the window whose first week is net-positive by construction, or more unreadable timestamps than the margin the verdict rests on), no-verdict (the probe did not answer this sweep — never that the flow is fine), skipped (no backlog-flow-assert.sh on this box). backlog_flow_added counts distinct rows FILED in the window and backlog_flow_closed counts done RECORDS, so a row closed twice is two closings: this is a FLOW reading and deliberately not the STOCK one bin/cc-value tasks_closed takes for its own question. ratchet_filed is the ratchet rc CONSUMER: a red assert now files ONE condition-keyed, self-falsifying row instead of only being written down here. The fold APPLIES, gated on its own dry verdict: fold_applied is skipped unless fold_conservation read ok this same sweep, so a FAILED or unknown key disarms the writer without anyone remembering to. grouping_sweep_rc 0 = under the ungrouped floor or filed; 2 = COULD NOT MEASURE, the engine (python3 / scripts/backlog-consolidation/group.py) is absent — that guard was fail-OPEN until backlog 70cc9f44040f, so this field read 0 on every tick of the entire deployed life of that mechanism while it folded nothing, and the sweep now files its own condition-keyed row (backlog-grouping-engine-absent, send-damped) rather than leaving the evidence in an rc nobody screens. A non-zero here has never aborted this sweep: no set -e, and the rc is captured rather than propagated. backfill_* is the CONDITION-LEASE family key (cc-backlog backfill), and it is a DRY RUN on purpose: it proposes joins a scorer found over a living corpus, and a wrong join feeds claim guard (6) and REFUSES a live worker onto work that is not duplicated. backfill_proposed is the depth of that review queue, backfill_ambiguous the rows that matched two groups and were deliberately not joined, and backfill_note no-verdict means the probe did not answer this sweep — never that the store is clean. Flip to --apply when proposed is small and stable across a run of sweeps and its named proposals were spot-checked. premise_pass_* is the CURRENCY pass and runs on its OWN cadence (CC_PREMISE_PASS_EVERY_S, default 6h) because it costs 265.81 s measured at utility over 141 probes (2026-08-16) while this sweep fires every 300 s: note not-due = the interval gate held it, bound-exceeded = rc 124 and the 1500 s bound needs re-measuring in the band, read-failed:<why> = the pass aborted fail-open on an unreadable store and SAID SO rather than exiting 0 with an unparseable body, ok = every live row carries a probe verdict against premise_pass sha. premise_rows_closed retires rows a probe just proved dead, which before had no exit at all: falsified refuses every claim and nothing closed them. premise_rows_deferred/premise_shard_pending are the SHARD (--limit, default 150): deferred is what this pass held back and shard_pending what the cycle still owes after it, so a pending count that never reaches 0 means the cycle is longer than the store\u0027s churn and the LIMIT wants raising — not the bound. Deferred rows are deliberately NOT folded into the sweep\u0027s unprobed count, which stays the coverage ratchet\u0027s input and means only \u0027no arm can speak for this row\u0027. venue_pass_* is the VENUE RE-DERIVATION (cc-venue run --apply) and it exists because a venue label could outlive the rule that made it: 460211b83 landed the cross-repo eligibility arm on 2026-08-23T21:30Z and the six oldest venuePlan=cloud rows had been labelled 08-11..08-21, so they held all six cloud slots against a gate that refuses them and the seven genuinely eligible rows were admitted ZERO times in a day. W1 wired cc-venue\u0027s WRITE-PATH and ADMISSION-REPAIR callers, both keyed on a row being NEW or NEXT; nothing re-decided a settled label until this arm, and `cc-venue run` had zero callers of any kind (grep over scripts/ hooks/ LaunchAgents, 2026-08-24). It APPLIES unattended, unlike the backfill arm beside it, because the producer already fails CLOSED in the expensive direction: a wrong `local` costs nothing (the item claims locally, untouched) while a `cloud` label may only be written from a positive certification cc-venue itself refuses to issue without an ok history horizon, so a second gate here could only disagree with the first. It runs on the currency pass\u0027s cadence (CC_VENUE_PASS_EVERY_S, default 6h) because decide() re-runs cc-premise per item: 21 s measured for the dry decision over 318 open rows on 2026-08-24, with the per-row `cc-backlog venue` writes dominating beyond that. venue_pass_note bound-exceeded = rc 124, which is SAFE and NOT a failure -- every row is decided and written independently, so a truncated pass leaves a prefix re-derived and the next pass finishes what it did not reach; no-verdict = the body did not parse, which is never the same as a clean store; write-failed = at least one label could not be written, and venue_write_failed carries the count."}')"
+    note:"semantics: the comment above this emit (W3-B17)"}')"
 
 sweep_yield 2e-custody-deathwatch
 
