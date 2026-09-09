@@ -173,6 +173,24 @@ fired()  { echo "$1" | grep -q '"decision":"block"'; }   # hook stdout ⇒ did i
   [ "$status" -eq 0 ]; [ -z "$output" ]   # 3rd distinct defer → capped → silent
 }
 
+# ── A SPENT CAP MUST LEAVE A READABLE ROW (A07 R4, 2026-09-08) ────────────────────────────────────
+# A cap trip suppresses a REAL demand, and the record named only the spent counter — so 106 trips
+# across 19 sids in 11 days said nothing about which arm was silenced, over what rung, on what text.
+# Those are the three fields the FIRED record already carries; a suppressed one needs them more,
+# because `capped:2>=2` is not reconstructable into any of them.
+@test "cap: the capped record names the SUPPRESSED arm, the rung and the tell" {
+  export ANTIDEF_MAX=2
+  run runhook "$(mkfix "Want me to run the tests?")"      "cap-rec"; fired "$output"
+  run runhook "$(mkfix "Shall I proceed with the wire?")" "cap-rec"; fired "$output"
+  run runhook "$(mkfix "Should I go ahead and commit?")"  "cap-rec"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  local row; row="$(grep -F '"reason":"capped:2>=2"' "$ANTIDEF_IDL" | tail -1)"
+  [ -n "$row" ]
+  [ "$(printf '%s' "$row" | jq -r '.suppressed_arm')" = "deference" ]
+  printf '%s' "$row" | jq -e '.tell | length > 0' >/dev/null
+  printf '%s' "$row" | jq -e 'has("rung") and (.facts | has("dirty") and has("unlanded") and has("remainder"))' >/dev/null
+}
+
 # ── FAIL-SAFE: every degenerate input exits 0 silent (a block must never come from an error) ──
 @test "fail-safe: missing transcript_path → silent exit 0" {
   run bash -c 'printf "{\"session_id\":\"x\",\"cwd\":\"/tmp\"}" | bash "$1"' _ "$HOOK"

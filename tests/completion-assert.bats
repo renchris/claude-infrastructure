@@ -1107,6 +1107,27 @@ CA_BLOCKED_LEDGER=(DIRTY=0 DIRTY_N=0 UNLANDED=0 AHEAD=0 REMAINDER=0 TRUNK=origin
   /usr/bin/grep -q '"reason":"capped:1>=1"' "$COMPLETION_IDL"
 }
 
+# ── A SPENT CAP MUST LEAVE A READABLE ROW (A07 R4, 2026-09-08) ────────────────────────────────────
+# A cap trip SUPPRESSES a real demand, and the record named only the counter that was spent — so
+# 106 trips across 19 sids in 11 days could not say which arm was silenced, over what rung, on what
+# facts. The three fields are the same ones the FIRED record already carries; the suppressed record
+# needs them more, because nothing downstream can reconstruct them from `capped:1>=1`.
+@test "⛔ CAP: the capped record names the SUPPRESSED arm, the rung and the facts" {
+  export COMPLETION_MAX=1
+  WRAP_LEDGER_BIN="$(mkledger blk8 "${CA_BLOCKED_LEDGER[@]}")"; export WRAP_LEDGER_BIN
+  run run_ca "$(mkfix "✅ Complete & live on trunk — landed, all green, nothing unsaved.")" \
+             "$BATS_TEST_TMPDIR" "blk-capx"
+  [ "$status" -eq 0 ]; fired "$output"
+  run run_ca "$(mkfix "All complete — nothing to do.")" "$BATS_TEST_TMPDIR" "blk-capx"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  local row; row="$(/usr/bin/grep -F '"reason":"capped:1>=1"' "$COMPLETION_IDL" | tail -1)"
+  [ -n "$row" ]
+  printf '%s' "$row" | jq -e '.suppressed_arm | test("ledger")' >/dev/null
+  [ "$(printf '%s' "$row" | jq -r '.rung')" = "⛔" ]
+  [ "$(printf '%s' "$row" | jq -r '.class')" = "assert" ]
+  printf '%s' "$row" | jq -e '.facts | length > 0' >/dev/null
+}
+
 # ── D6 — the ORIGIN Pyramid-close contract (CLOSE_INTEGRITY W1) ─────────────────────────────────
 # The one close every other arm waves through: ledger ✅, real written work, a close-shaped
 # message — and the operator's two standing questions (Complication/Solution/Outcome + an explicit

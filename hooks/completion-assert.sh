@@ -1061,6 +1061,25 @@ FIRED="$STATE_DIR/$SKEY.fired"
 # demand governs, and its budget stays exactly the budget it has always drawn on. So no existing
 # firing case changes class, count or reason string — D7 can only add a new class to messages that
 # would otherwise not have fired at all, or add one sentence to a fire that already happened.
+# WHICH arm wants to fire, legible after the fact: ledger | hedge | handoff | offer | fence, in
+# that fixed order (so a combination is one canonical string, not five orderings of the same set).
+# COMPUTED HERE, ABOVE THE CAP, rather than at the fire site (A07 R4, 2026-09-08): a cap trip
+# suppresses a demand and the record said only which counter was spent — 106 trips over 19 sids in
+# 11 days named neither the arm that was silenced, the rung it was silenced over, nor the facts it
+# would have carried. The same three fields are what makes a FIRED record readable; a SUPPRESSED
+# one needs them more, because nothing downstream can reconstruct them. One assignment, one code
+# path, both records.
+facts="${facts%; }"
+arm=""
+[ "$contra" -eq 1 ] && arm="ledger"
+[ "$d3" -eq 1 ] && arm="${arm:+$arm+}hedge"
+[ "$d1" -eq 1 ] && arm="${arm:+$arm+}handoff"
+[ "$d4" -eq 1 ] && arm="${arm:+$arm+}offer"
+[ "$d2" -eq 1 ] && arm="${arm:+$arm+}fence"
+[ "$d5" -eq 1 ] && arm="${arm:+$arm+}placeholder"
+[ "$d6" -eq 1 ] && arm="${arm:+$arm+}shape"
+[ "$d7" -eq 1 ] && arm="${arm:+$arm+}act"
+
 CLASS=assert; CLASS_MAX="$MAX"
 if [ "$d6" -eq 1 ]; then CLASS=shape; CLASS_MAX="${COMPLETION_SHAPE_MAX:-2}"
 elif [ "$d7" -eq 1 ] && [ "$contra_shape" -eq 0 ] \
@@ -1075,26 +1094,20 @@ case "$N" in ''|*[!0-9]*) N=0 ;; esac
 if [ "$N" -ge "$CLASS_MAX" ]; then
   # The assert-class reason is byte-identical to the pre-split one (its consumers, and the RED
   # proof of the cap itself, key on that exact string); a shape cap names its own class.
+  # `abstain` takes no extra object (hooks/lib/idl-log.sh is a shared SSOT and not this hook's to
+  # widen), so the writer is called directly and its exit-0 contract is reproduced on the next line.
+  ca_cap_extra="$(jq -cn --arg arm "$arm" --arg rung "$RUNG" --arg facts "$facts" \
+                        --arg class "$CLASS" --argjson count "$N" --argjson max "$CLASS_MAX" \
+    '{suppressed_arm:$arm,rung:$rung,facts:$facts,class:$class,count:$count,max:$max}' 2>/dev/null)"
   case "$CLASS" in
-    assert) abstain "capped:${N}>=${CLASS_MAX}" ;;
-    *)      abstain "capped:${CLASS}:${N}>=${CLASS_MAX}" ;;
+    assert) log_idl abstained "capped:${N}>=${CLASS_MAX}" "$ca_cap_extra" ;;
+    *)      log_idl abstained "capped:${CLASS}:${N}>=${CLASS_MAX}" "$ca_cap_extra" ;;
   esac
+  exit 0
 fi
 
 # ── FIRE: record hash + class, log, block with the contradicting FACTS. ──
 printf '%s %s\n' "$HASH" "$CLASS" >> "$FIRED" 2>/dev/null || true
-facts="${facts%; }"
-# WHICH arm fired, legible after the fact: ledger | hedge | handoff | offer | fence, `+`-joined in
-# that fixed order (so a combination is one canonical string, not five orderings of the same set).
-arm=""
-[ "$contra" -eq 1 ] && arm="ledger"
-[ "$d3" -eq 1 ] && arm="${arm:+$arm+}hedge"
-[ "$d1" -eq 1 ] && arm="${arm:+$arm+}handoff"
-[ "$d4" -eq 1 ] && arm="${arm:+$arm+}offer"
-[ "$d2" -eq 1 ] && arm="${arm:+$arm+}fence"
-[ "$d5" -eq 1 ] && arm="${arm:+$arm+}placeholder"
-[ "$d6" -eq 1 ] && arm="${arm:+$arm+}shape"
-[ "$d7" -eq 1 ] && arm="${arm:+$arm+}act"
 log_idl fired "false-done" \
   "$(jq -cn --arg facts "$facts" --arg rung "$RUNG" --arg arm "$arm" --arg class "$CLASS" \
             --argjson count "$((N+1))" --argjson max "$CLASS_MAX" \
