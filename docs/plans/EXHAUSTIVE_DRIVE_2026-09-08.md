@@ -279,7 +279,7 @@ margin-5 driver then fired nothing in an hour at load 108–119 (the fleet holds
 the ceiling of 8), so the remainder runs as ONE driver at margin 6 (`w1h b2 b4 b5 b6 w3b17 w3b1`, 3 h
 per item, halts on the first rc 9; log `/tmp/fire-ed-w2-slice4.log`).
 
-### W2 returns (four of eight by 05:07Z — each content-verified on origin/main)
+### W2 returns (six of eight by 08:30Z — each content-verified on origin/main)
 
 | Item | landed | the number | verdict → W3 |
 |---|---|---|---|
@@ -287,6 +287,8 @@ per item, halts on the first rc 9; log `/tmp/fire-ed-w2-slice4.log`).
 | 14 termination census | `ea2b0c0aa` (`scripts/measure-terminations.py` + the denominator line in `idl-abstain-alarm.sh`) | 123 dead main-chain sessions / 24 h: **self-close 42.3 %** · Stop 29.3 % · killed 13.0 % · drain-recycle 7.3 % · recycle 6.5 % · api-error 0.8 % · frozen 0.8 %; Stop-chain coverage **32.5 %**, not CRITIC §0's 24 % (4 sessions/day end on a Stop-hook BLOCK the end_turn ladder filed as no-Stop); freezing is a **mid-life overlay on 26 %** of sessions, terminal for 0.8 % — a close-side freeze remedy would aim at 3 % of its phenomenon. Instrument defect fixed on the reader side first: a strict `lstart` compare pinned TZ but not LOCALE and read every live session as dead (134/0 vs 115/19) | **CROSSES 90 (94)**; the instrument IS the deliverable. Re-aims W3 at the self-close path (B1) and confirms the permission question is the operator's (decision 1) |
 | B21 closes vs evaluations | `d5d924341` + `e73f71f8a` (`scripts/measure-close-vs-idl.py`) | unexplained deficit **0.0 %** for five of six Stop hooks on every binary version over 1,854 closes / 3 d; the two residuals (dispatch-assert 1.8 %, session-continue 41.1 % on 2.1.260) fully attributed | **C5 RESOLVED (96)** — no W3 item; the critic's "14 % deficit" is closed. Custody row returned by the lead (the pane retired without pinging 643) |
 | B1 self-close refusal | `739a18337` (`scripts/measure-selfclose-rung.py`) | over 54 self-closes / 28 h (44 resolvable, 10 unresolvable): a refusal on **📦 fires 0/44**, on **REMAINDER≠0 fires 0/44**, on **⛔ fires 3/44 and all three were legitimate** (fired peers whose deliverable was the filed packet); reading the RUNG instead gives 5/44 = 11.4 % and the opposite verdict | **📦 + REMAINDER arms CROSS 90 (93); the ⛔ arm is REFUTED (90)** → `W3-B1`: refuse `self-close --terminal` on the stamp's UNLANDED / REMAINDER **fields**, never on RUNG, annotate-only for ⛔, FILED_MINE-only 🔧, `--recycle`, absent stamp. Brief `/tmp/fire-ed-w2-w3b1.txt` |
+| B6 permission prefixes | `bccf99f0f` | **0** prefixes recur across ≥3 **distinct** approval sets. The 22 `settings.local.json` files are not 22 populations: 14 carry an empty `allow` and 3 are byte-identical copies of one 95-entry set, so 302 raw entries collapse to **111 distinct across 6 sets** (63.2 % are copy duplicates). Every candidate that reached "≥3 files" — `claude-accounts` (8), `awk`, `curl`, `rm`, `pnpm design:gate`, covering 20/64 = 31.2 % of exact approvals — reached it via the copy trio. Residual that IS real and is NOT a permissions finding: **27 of 64 exact Bash approvals (42.2 %) are read-only by construction** (`sysctl` ×5, `vm_stat`, `mdls`, the `claude-accounts` read flags ×8, the `git -C … status/log` reads) — the admission gate prompting on a read, already covered by decision packet `1df4081249d2` | **REFUTED (94)** — no W3 item, no settings diff, no operator read. Two classifier defects fixed before the count: dedupe by allow-set fingerprint, and `Bash(git *)` ends in `" *"` not `":*"` so a prefix-form classifier scores 10 wildcards as literals |
+| B4 harvest latency | `2a196c1e2` (`scripts/measure-harvest-latency.py`, selftest 7/7) | permanent loss **38.3 %** (74/193) on the most generous reading, **78.8 %** once same-second self-commits are excluded. The median latency of **0.07 d** is itself the finding: 78 of 119 apparent harvests land inside 0.5 d — the closing session's own trailing commit, not a later reader — so only **41/193 = 21.2 %** reach a later reader. Hand-read precision **7/20 = 35 %**, and every matcher error is a false POSITIVE harvest | **CROSSES 90 (95)** → a peer-findings drain producer is worth building. No error direction rescues REFUTED. Does NOT license "recovers 78.8 %": the rate says the CHANNEL is lossy, it does not price the cargo. Adverse exclusion named: 302 of 820 transcripts had no turn-final close at all (died mid-turn) — the population most likely to lose findings |
 
 Both W2 panes that carried a goal or a custody row (677, 678) retired clean; 673 and 675 (no rows, per
 the never-engaged strip W1h fixes) also retired. **Standing, not this programme's:** `deploy-live`
@@ -320,6 +322,17 @@ since six pages for six fires would spend the relief valve as a routine. The dri
 gate's OWN threshold (`cc_sp_active` ≤ 7, polled every 60 s, 6 h per item) for `b2 b4 b5 b6 w3b17 w3b1`
 (log `/tmp/fire-ed-w2-slice5.log`) and fires the moment the fleet drains — the remaining three W2
 measurements, the permission census, and both W3 implementations.
+
+**Locus change, 07:20–08:30Z (successor lead, pane 643) — the capacity block was half stale.** At
+re-measure `claude-accounts --rank general` DID route (`acct=next`, four accounts scored), so only the
+machine admission gate still refused; the house's `no-capacity` class needs BOTH halves, so these rows
+were no longer FILED-eligible. The gate governs **subagent spawns too** — of three fired at once, B5
+admitted and B6/B4 were refused with `13 sessions mid-turn + 1 > active ceiling 8` — and its refusal text
+names the remedy this wave then took: *"Run this work SERIALLY on the lead if it cannot wait."* So the
+locus split by what each item actually needs: **W3-B17, W3-B1 and B2 stay dispatched** (implementation +
+bats red-proof + land, and B2 is a benchmark that wants a quiet box), **B5 runs as an in-session
+subagent**, and **B6 and B4 were driven inline on the lead**. The paged-admission path was not used and
+`CC_FIRE_ACTIVE_CEILING` was not retried — the classifier's earlier refusal of that lever stands.
 
 **Live layer:** `deploy-live.sh` run detached at 01:51Z from the shared checkout (live HEAD `f2b1cdff4`,
 which already carries W1a). It reported the `lead-supervisor` daemon on STALE bytes (W1g's exact
