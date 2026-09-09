@@ -309,13 +309,57 @@ SWEEP_T0="${CC_SWEEP_T0:-$(date +%s 2>/dev/null || printf 0)}"
 SWEEP_SELF_BOUND_S="${CC_SWEEP_SELF_BOUND_S:-400}"
 case "$SWEEP_SELF_BOUND_S" in ''|*[!0-9]*) SWEEP_SELF_BOUND_S=400 ;; esac
 case "$SWEEP_T0" in ''|*[!0-9]*) SWEEP_T0=0 ;; esac
+# ── PER-PHASE ELAPSED (backlog 6de092171021) ──────────────────────────────────────────────────────
+# WHY THIS EXISTS: this sweep could not be diagnosed, only guessed at. Measured 2026-09-09, the
+# lower half had not run for ~36 h — 52 ticks in 24 h, 26 self-bounded and 26 SIGTERM'd by
+# cc-reaper, ZERO reaching below `1-collect-pages-alarms` — and NOTHING recorded what any phase
+# COST. Every attribution therefore had to be inferred from the gaps between unrelated IDL rows,
+# which is a lower bound on a span, not a cost for a phase: it cannot tell "the join is slow" from
+# "something between the join's row and the next row is slow", and two analyses duly blamed
+# different phases. `sweep_yield` is already called at every phase boundary and already knows the
+# clock, so the measurement is free — the only thing missing was writing it down.
+#
+# IT IS EMITTED PER CHECKPOINT, NEVER ACCUMULATED INTO AN END-OF-TICK ROW, and that is the whole
+# design point: the ticks worth measuring are the ones that DIE, and a tick killed at t≈970 s never
+# reaches an end-of-tick emitter. A summary row would be written by exactly the healthy ticks that
+# need no explaining (memory: alarm-polarity-and-attention-budget).
+#
+# THRESHOLDED so it cannot become noise: a phase costing less than CC_SWEEP_PHASE_LOG_MIN_S (5 s)
+# is not news at a 300 s cadence, and logging all 11 checkpoints on every tick would add ~570
+# rows/day to an IDL that cc-audit slurps whole.
+#
+# ⚠️ HONEST LIMIT: `SWEEP_CP_LAST` is shell state, so a checkpoint that ever runs inside a SUBSHELL
+# updates a copy and the next phase's cost is then measured from the last checkpoint that ran in
+# THIS shell — over-reporting that phase, never under-reporting it. That degradation is safe (it
+# can only over-accuse) but it is not silent: `cumulative_s` is read straight off SWEEP_T0, so a
+# row whose elapsed_s exceeds its own cumulative_s delta across consecutive rows is the tell.
+SWEEP_CP_LAST="$SWEEP_T0"
+SWEEP_CP_PHASE="${CC_SWEEP_CP_PHASE0:-0a-cloud-return}"
+SWEEP_PHASE_LOG_MIN_S="${CC_SWEEP_PHASE_LOG_MIN_S:-5}"
+case "$SWEEP_PHASE_LOG_MIN_S" in ''|*[!0-9]*) SWEEP_PHASE_LOG_MIN_S=5 ;; esac
+
 sweep_yield() { # <label of the phase that would run next> — exits 0 rather than starting it
-  local now el
-  [ "$SWEEP_SELF_BOUND_S" -gt 0 ] || return 0
+  local now el pel
+  # THE T0/clock guards come FIRST now, and the self-bound comparison moved BELOW the accounting.
+  # The exit predicate is unchanged — still (bound > 0 AND T0 > 0 AND elapsed >= bound) — but the
+  # measurement must not be gated on the bound being ARMED, or a run with the bound disabled (the
+  # corpus's own seam) would silently record nothing.
   [ "$SWEEP_T0" -gt 0 ] || return 0
   now="$(date +%s 2>/dev/null || printf 0)"
   case "$now" in ''|*[!0-9]*) return 0 ;; esac
   [ "$now" -gt 0 ] || return 0
+
+  pel=$(( now - SWEEP_CP_LAST ))
+  if [ "$pel" -ge "$SWEEP_PHASE_LOG_MIN_S" ]; then
+    log_idl phase "$(jq -cn --arg ph "$SWEEP_CP_PHASE" --arg nx "$1" \
+      --argjson el "$pel" --argjson cum "$(( now - SWEEP_T0 ))" \
+      --argjson min "$SWEEP_PHASE_LOG_MIN_S" \
+      '{phase:$ph, next:$nx, elapsed_s:$el, cumulative_s:$cum, threshold_s:$min,
+        note:"COST OF THE PHASE NAMED IN `phase`, measured between two adjacent sweep_yield checkpoints — not a span between unrelated rows. `next` is the phase that was about to start. Phases cheaper than threshold_s are deliberately not emitted, so an ABSENT phase is a cheap one, never an unreached one: unreached is what the self-bound row and the reaper log say. Sum the elapsed_s of one tick to see where a 400s budget went."}')"
+  fi
+  SWEEP_CP_LAST="$now"; SWEEP_CP_PHASE="$1"
+
+  [ "$SWEEP_SELF_BOUND_S" -gt 0 ] || return 0
   el=$(( now - SWEEP_T0 ))
   [ "$el" -ge "$SWEEP_SELF_BOUND_S" ] || return 0
   log_idl self-bound "$(jq -cn --arg p "$1" --argjson el "$el" --argjson b "$SWEEP_SELF_BOUND_S" \
