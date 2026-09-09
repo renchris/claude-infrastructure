@@ -192,3 +192,60 @@ setup() {
   done
   [ "$found" -gt 0 ] || { echo "no migrations found under $MIGS — the mechanism has zero instances"; false; }
 }
+
+@test "10: 0023 is c10, and its verify oracle DISCRIMINATES on a real config dir" {
+  # Tests 3 and 9 are population-wide and structural: they assert every migration DECLARES a class
+  # and a non-tautological verify STRING. Neither can tell whether a particular oracle actually
+  # separates the applied state from the unapplied one — a verifier can be perfectly well-spelled
+  # and still be green before its own migration runs (memory: fail-safe-default-mimics-the-healthy-
+  # state). 0023 is the first migration to write TWO different kinds of state into settings.json —
+  # an `env` key and two hook registrations — so its oracle has three independent ways to be
+  # half-blind, and the only proof it is not is to run it on both sides of the edit.
+  M="$MIGS/0023-todo-tools-and-task-hooks.sh"
+  [ -f "$M" ] || { echo "0023 is absent"; false; }
+
+  class="$(sed -n 's/^# *migration-class: *//p' "$M" | head -1)"
+  [ "$class" = "c10" ] \
+    || { echo "0023 declares '$class' — it edits settings.json, which is C10 until the rescope is ratified"; false; }
+
+  # A fleet-shaped config dir, pre-fix: no env key, no TaskCreated, StopFailure holding only its
+  # existing consumer (the shape the live fleet is in today, measured 5/5).
+  export HOME="$BATS_TEST_TMPDIR/h10"
+  mkdir -p "$HOME/.claude/hooks"
+  for h in task-created-attrib.sh session-beat.sh; do
+    printf '#!/bin/bash\nexit 0\n' > "$HOME/.claude/hooks/$h"; chmod +x "$HOME/.claude/hooks/$h"
+  done
+  jq -n '{env:{MCP_TIMEOUT:"30000"},
+          hooks:{Stop:[{hooks:[{type:"command",command:"~/.claude/hooks/session-beat.sh stop",timeout:5}]}],
+                 PreToolUse:[{matcher:"Bash",hooks:[{type:"command",command:"~/.claude/hooks/validate-bash.sh"}]}],
+                 StopFailure:[{hooks:[{type:"command",command:"~/.claude/hooks/stop-failure-marker.sh"}]}]}}' \
+    > "$HOME/.claude/settings.json"
+
+  run env CC_CLAUDE_DIR="$HOME/.claude" bash "$M" --verify
+  [ "$status" -ne 0 ] || { echo "the oracle passed BEFORE the migration ran — it certifies nothing"; false; }
+
+  run bash "$M"
+  [ "$status" -eq 0 ] || { echo "0023 failed on a fleet-shaped fixture: $output"; false; }
+
+  run env CC_CLAUDE_DIR="$HOME/.claude" bash "$M" --verify
+  [ "$status" -eq 0 ] || { echo "the oracle failed AFTER its own migration ran: $output"; false; }
+
+  # The append must not have displaced the consumer StopFailure already carried in all five dirs.
+  jq -e '[.hooks.StopFailure[]?.hooks[]?.command]
+         | any(. == "~/.claude/hooks/stop-failure-marker.sh")
+           and any(. == "~/.claude/hooks/session-beat.sh stop")' "$HOME/.claude/settings.json" >/dev/null \
+    || { echo "the StopFailure append clobbered a consumer it did not write"; jq -c '.hooks.StopFailure' "$HOME/.claude/settings.json"; false; }
+
+  # Idempotent by its OWN construction, not by the ledger (README rule 1): a second run is a no-op
+  # and takes no second backup.
+  run bash "$M"
+  [ "$status" -eq 0 ] || { echo "second run failed: $output"; false; }
+  n=0; for b in "$HOME"/.claude/settings.json.bak-0023-*; do [ -f "$b" ] && n=$(( n + 1 )); done
+  [ "$n" -eq 1 ] || { echo "expected exactly 1 backup after two runs, found $n"; false; }
+
+  # 🚨 CLAUDE_CODE_ENABLE_TASKS is a KILL switch (binary @159792244), not the enable. Writing it
+  # would swap the disk-backed Task family for in-memory TodoWrite — a tracker no Stop hook can
+  # read, i.e. the exact defect 0023 exists to end.
+  ! jq -e 'has("env") and (.env | has("CLAUDE_CODE_ENABLE_TASKS"))' "$HOME/.claude/settings.json" >/dev/null \
+    || { echo "0023 wrote CLAUDE_CODE_ENABLE_TASKS — that is the kill switch"; false; }
+}
