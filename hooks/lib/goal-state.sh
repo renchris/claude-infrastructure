@@ -29,13 +29,41 @@
 # merely restores the old behaviour; a false "goal live" would silence a wake-path nag a goal-less
 # session needs. So every failure — no path, no file, no jq, unparseable line — returns rc 1.
 
+# ── THE GREP LEG, AS ITS OWN FUNCTION — because a bare `grep` in a pipeline is a THIRD outcome ────
+#
+# THE BUG THIS REMOVES (A04 § 3, exhaustive-drive 2026-09-08; 375 of 469 goal-inert-watch
+# evaluations in one day, and 47 of 48 sampled sids had ZERO goal_status lines). Both readers below
+# were written as `grep … | jq …` and both consumers run `set -o pipefail`. grep's NO-MATCH exit is
+# 1, so under pipefail the pipeline's status is 1 no matter how well jq did, `|| return 1` fires,
+# and the commonest state on this box — a session that never armed a goal — was reported as
+# UNREADABLE. That is precisely the laundering this file's header forbids, in the other direction:
+# `absent` is a POSITIVE finding and a failure must not wear it, but neither may the positive
+# finding be dressed up as a failure. `goal-inert-watch.sh` logged `goal-unreadable` 375× for a
+# transcript it had read perfectly.
+#
+# THREE OUTCOMES, NOT TWO, and that is why `|| true` on the whole pipeline is the wrong fix:
+#   grep matched (rc 0)      → hand jq the hits                     → jq decides
+#   grep did not match (rc 1)→ hand jq NOTHING; `--slurp` makes []  → the readers report `absent`
+#   grep ERRORED   (rc ≥ 2)  → unreadable, and it must stay rc 1 at the caller
+# A bare `|| true` collapses the third into the second and would report a file grep could not even
+# open as "this session never armed a goal". So the helper neutralises ONLY the no-match status.
+# jq's own failure (a corrupt record among the hits) still fails the pipeline under pipefail and
+# still returns 1 — the "grep succeeded but jq failed" rc the fix is required to preserve.
+_goal_grep() { # $1 = transcript path → matching lines on stdout; rc 0 = grep RAN, 1 = grep ERRORED
+  local _gg_rc
+  grep -a 'goal_status' "$1" 2>/dev/null
+  _gg_rc=$?
+  [ "$_gg_rc" -le 1 ] && return 0
+  return 1
+}
+
 goal_live_condition() { # $1 = transcript path → prints the condition; rc 0 iff a /goal is LIVE
   local tp="$1" rec
   [ -n "$tp" ] || return 1
   case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
   [ -f "$tp" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
-  rec="$(grep -a 'goal_status' "$tp" 2>/dev/null | jq -rc --slurp '
+  rec="$(_goal_grep "$tp" | jq -rc --slurp '
     [ .[] | select(.type == "attachment")
           | .attachment | select(.type == "goal_status") ] | last // empty' 2>/dev/null)" || return 1
   [ -n "$rec" ] || return 1
@@ -81,7 +109,7 @@ goal_liveness() { # $1 = transcript path → TSV: state \t evals \t last \t epoc
   command -v jq >/dev/null 2>&1 || return 1
   # grep first for the same reason as above (keep the slurp off multi-MB transcripts); one jq for
   # all five fields, because this runs on a close path and a field-per-fork would cost five.
-  out="$(grep -a 'goal_status' "$tp" 2>/dev/null | jq -rc --slurp '
+  out="$(_goal_grep "$tp" | jq -rc --slurp '
     [ .[] | select(.type == "attachment")
           | select((.attachment.type // "") == "goal_status")
           | { sentinel: (.attachment.sentinel // false),
