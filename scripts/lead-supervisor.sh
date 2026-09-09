@@ -28,7 +28,8 @@
 #            CC_SUP_PAGE_DEADLINE_S · CC_SUP_TRUNK · CC_SUP_GC_S · CC_SUP_OWNER_PAT · CC_PAGE_TO_FILE ·
 #            CC_REGISTRY_DIR · SUPERVISOR_SWEEP_MAX_S · SUPERVISOR_SWEEP · CC_SUP_TIMEOUT_BIN ·
 #            CC_SUP_GIT_TIMEOUT_S · CC_SUP_FIND_TIMEOUT_S · CC_SUP_CKPT_TIMEOUT_S · CC_SUP_NOTIFY_TIMEOUT_S ·
-#            CC_SUP_PANE_DELTA_TOL · CC_SUP_SELFCHECK_MIN_PERSIST · CC_SUP_OS_CHANNEL
+#            CC_SUP_PANE_DELTA_TOL · CC_SUP_SELFCHECK_MIN_PERSIST · CC_SUP_OS_CHANNEL ·
+#            CC_SUP_SHA_BIN
 set -uo pipefail
 
 # ── BOUNDED EXTERNALS: one hung fork must never end all supervision (audit 2026-07-22 root cause 4, S1) ──
@@ -86,6 +87,50 @@ sup_git(){  sup_bounded "$SUP_GIT_TIMEOUT_S"  git "$@"; }
 SUPERVISOR_SWEEP_MAX_S="${SUPERVISOR_SWEEP_MAX_S:-600}"
 SWEEP="${SUPERVISOR_SWEEP:-30}"
 [ "$SWEEP" -le "$SUPERVISOR_SWEEP_MAX_S" ] 2>/dev/null || SWEEP="$SUPERVISOR_SWEEP_MAX_S"
+
+# ── VERSION-ASSERTING SELF-RESTART: a landed fix must actually reach this process ──────────────────
+# This daemon runs for DAYS and bash holds the script's INODE open, while a land/`git checkout` REPLACES
+# the file (write-new + rename). So the running process keeps executing the OLD bytes indefinitely, and
+# nothing anywhere says so. Measured 2026-09-08: commit 10348ff6a landed the permission-pending
+# ESCALATION LADDER at 14:45Z; this daemon (pid 31716) had started at 15:17Z — before the shared checkout
+# advanced — so it produced 0 `permission_pending_escalate` records across 5,155 IDL rows while 11
+# sessions sat 5.7-7.9 h each at a permission prompt with exactly ONE notice apiece, and 114/114
+# `.permpend.notified` markers carried the pre-ladder bare-ts format. The ladder was on trunk, correct,
+# gate-green and INERT (memory: conclusion-must-reach-the-enforcing-store · registration-precondition-
+# must-assert-version-not-executability — a `-x` on a symlink proves executability, never VERSION).
+# So: capture the file's sha256 AT START, re-read it each tick, and on a mismatch log one line and exit 0.
+# launchd `KeepAlive` (unconditional in com.claude.lead-supervisor.plist) respawns on the new bytes; the
+# whole cost is the one sweep in flight, and the next sweep is SWEEP seconds away regardless.
+# FAIL DIRECTION — ABSTAIN, never restart. No hasher, an unreadable file, or an empty digest on either
+# side leaves the daemon RUNNING: a restart loop over a file this process cannot read would take the only
+# out-of-session watchdog off the box entirely, which is strictly worse than running stale bytes.
+# The hasher is resolved by ABSOLUTE PATH as well as PATH for exactly the reason timeout(1) is above —
+# launchd hands this daemon a minimal PATH that excludes Homebrew. It is deliberately NOT wrapped in
+# sup_bounded: hashing one ~60 KB local file is the jq/stat/date scalar-read class, not a blocking fork.
+# Seam: CC_SUP_SHA_BIN (set-but-EMPTY disables the assertion verbatim, per the `${VAR+set}` idiom above).
+SUP_SELF="${BASH_SOURCE[0]:-$0}"
+case "$SUP_SELF" in
+  /*) ;;
+  *)  SUP_SELF="$(cd "$(dirname "$SUP_SELF")" 2>/dev/null && pwd)/$(basename "$SUP_SELF")" ;;
+esac
+if [ -n "${CC_SUP_SHA_BIN+set}" ]; then
+  SUP_SHA_BIN="$CC_SUP_SHA_BIN"
+else
+  SUP_SHA_BIN=""
+  for _c in "$(command -v shasum 2>/dev/null || true)" "$(command -v sha256sum 2>/dev/null || true)" \
+            /usr/bin/shasum /usr/bin/sha256sum /opt/homebrew/bin/sha256sum /usr/local/bin/sha256sum; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { SUP_SHA_BIN="$_c"; break; }
+  done
+fi
+sup_self_sha(){ # prints the on-disk script's sha256, or NOTHING when it cannot be computed (⇒ abstain)
+  [ -n "$SUP_SHA_BIN" ] && [ -x "$SUP_SHA_BIN" ] || return 0
+  [ -f "$SUP_SELF" ] && [ -r "$SUP_SELF" ] || return 0
+  case "${SUP_SHA_BIN##*/}" in
+    sha256sum) "$SUP_SHA_BIN" "$SUP_SELF" 2>/dev/null ;;
+    *)         "$SUP_SHA_BIN" -a 256 "$SUP_SELF" 2>/dev/null ;;
+  esac | awk 'NR==1{print $1}'
+}
+SUP_SELF_SHA0="$(sup_self_sha)"
 
 T="${CC_SUP_T:-73}"                                    # past-threshold (used_pct) — the B-1 boundary
 STALL_S="${CC_SUP_STALL_S:-1800}"                      # telemetry age past which a live pid is a STALL? candidate
@@ -1117,6 +1162,23 @@ sweep_fired_dark(){ # prints the number of dark fired peers found this sweep
   echo "$n"
 }
 
+# ── one TICK of the version assertion declared at the top of this file ──
+# Returns 0 to keep running, or EXITS 0 for launchd KeepAlive to respawn on the new bytes. It must be
+# called PLAINLY (never in a command substitution or a pipeline) or the exit lands in a subshell and the
+# stale daemon sails on — the whole defect this closes, reproduced one layer down.
+self_restart_if_stale(){
+  local disk
+  [ -n "$SUP_SELF_SHA0" ] || return 0             # no digest at start ⇒ no comparison exists to make
+  disk="$(sup_self_sha)"
+  [ -n "$disk" ] || return 0                      # unreadable NOW (mid-rename, perms) ⇒ ABSTAIN
+  [ "$disk" != "$SUP_SELF_SHA0" ] || return 0     # unchanged ⇒ the running bytes ARE the on-disk bytes
+  idl supervisor_self_restart "\"path\":$(json_str "$SUP_SELF"),\"running_sha\":$(json_str "$SUP_SELF_SHA0"),\"disk_sha\":$(json_str "$disk"),\"why\":\"the on-disk script changed under a daemon that holds the old inode — exiting 0 so launchd KeepAlive restarts on the new bytes. Without this a landed fix never reaches this process and is silent: 10348ff6a landed the permpend escalation ladder at 14:45Z, pid 31716 started 15:17Z, and 0 of 5,155 IDL records were an escalation.\""
+  _ensure
+  printf '%s  self-restart: on-disk sha256 changed (%s -> %s) — exiting 0 for launchd KeepAlive to respawn on the new bytes\n' \
+         "$(utc)" "${SUP_SELF_SHA0:0:12}" "${disk:0:12}" >> "$SUPLOG" 2>/dev/null || true
+  exit 0
+}
+
 sweep(){
   local n=0 found=0 gc r pp wc fd
   gc="$(gc_stale)"                 # GC horizon-stale live-owner zombies FIRST — they are resolved, not a per-sweep finding
@@ -1149,6 +1211,11 @@ sweep(){
 case "${1:-}" in
   --selftest)   exec bash "$(dirname "$0")/supervisor-e2e.sh" ;;
   --once)       sweep ;;
-  --daemon|"")  while :; do sweep; sleep "$SWEEP"; done ;;
+  --daemon|"")
+    # An INERT assertion must declare itself: a fail-safe default that renders like the healthy state is
+    # unfalsifiable by its own output (memory: fail-safe-default-mimics-the-healthy-state). One record,
+    # written only when the assertion cannot run at all.
+    [ -n "$SUP_SELF_SHA0" ] || idl supervisor_self_sha_unavailable "\"path\":$(json_str "$SUP_SELF"),\"sha_bin\":$(json_str "$SUP_SHA_BIN"),\"why\":\"no usable sha256 binary resolved (or the script is unreadable), so the version assertion is INERT for this daemon's whole lifetime — a landed fix will not reach this process until something restarts it by hand\""
+    while :; do self_restart_if_stale; sweep; sleep "$SWEEP"; done ;;
   *)            echo "usage: lead-supervisor.sh [--once|--daemon|--selftest]" >&2; exit 2 ;;
 esac
