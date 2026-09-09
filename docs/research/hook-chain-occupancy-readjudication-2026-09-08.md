@@ -211,6 +211,11 @@ open forever.
 
 ## 5.1 CERTIFIED OCCUPANCY VERDICT — run 2026-09-09, box quiet enough at last
 
+> ⚠ **Read §5.2 before quoting `5.98×`.** An independent run of the same commands, on the same box at
+> strictly lower ambient, reads 2.90× (90% CI 2.45..5.32). The two agree where their ambient overlaps;
+> the ratio this rig reports rises monotonically with ambient, and the cause is measured there. The
+> **sign** below is unaffected and is now replicated three times.
+
 **Parallel dispatch costs a median 5.98× the attributable occupancy per dispatch that serial dispatch
 does, 96% CI 3.45..8.35 — and the null control certified under the same ambient, at median 0.96×
 (truth is 1.00), 94% CI 0.74..1.20.** The live interval's lower bound, 3.45, clears the control band's
@@ -277,6 +282,103 @@ see the effect — only the gate could not report it.
 Raw results, re-readable with `scripts/hook-dispatch-bench.sh --analyse <tsv>`: `/tmp/hdb-control.tsv`
 and `/tmp/hdb-live.tsv` (session copies under the running session's scratchpad). Commands were §5's
 verbatim, at `--cycles 20 --sessions 3 --members 8`.
+
+## 5.2 The certified ratio is a FUNCTION of ambient, and §5.1's 5.98× is its noisy-box end
+
+**An independent run of §5's verbatim commands — taken on the same box two hours EARLIER, at strictly
+lower ambient — reads a median 2.90×, 90% CI 2.45..5.32. It does not contradict §5.1.** Over the
+ambient band the two runs share, they agree to within noise: **3.41× against 3.53×**. What differs is
+which stretch of the ambient axis each run sampled, and the ratio this rig reports is a **monotone
+increasing function of that axis**. So `5.98×` is not *the* occupancy cost of parallel dispatch; it is
+the reading at the ambient that run's box happened to hold, and it is the highest of the three
+readings taken to date.
+
+This run is also the only one of the three whose **both** arms clear the bench's own
+`⚠ AMBIENT MOVED >2x BETWEEN CYCLES` — control span 1.92×, live span 1.82×. §5.1's caveat 1 argues
+correctly that a passing control licenses quoting a ratio despite that warning; what it could not know
+is that the warning's *subject* moves the estimate, so clearing it is not a formality.
+
+| | §5.1 control | §5.1 live | **this control** | **this live** |
+|---|---|---|---|---|
+| load1 start → end | 13.93 → 20.91 | 14.00 → 33.90 | 13.27 → 15.94 | 12.64 → 30.24 |
+| ambient (idle arm), runnable | 9.875..30.625 | 8.500..23.708 | **8.125..15.625** | **7.125..13.000** |
+| ambient span | 3.10× | 2.79× | **1.92×** | **1.82×** |
+| `⚠ AMBIENT MOVED >2x` | fired | fired | **silent** | **silent** |
+| cycles yielding a ratio | 19 / 20 | 15 / 20 | 19 / 20 | **18 / 20** |
+| median per-cycle ratio | 0.96× | 5.98× | 0.92× | **2.90×** |
+| sign-test CI | 0.74..1.20 (94%) | 3.45..8.35 (96%) | 0.73..1.42 (94%) | **2.45..5.32 (90%)** |
+
+**The two nulls replicate; only the live magnitude moves.** 0.92× against 0.96×, CIs 0.73..1.42
+against 0.74..1.20, on ambient differing by 1.6×. The rig's null is reproducible, so the live gap is
+not the rig being unrepeatable — it is the live estimate tracking something the null cannot see,
+because a null's two arms share a denominator scale and the live comparison does not.
+
+### Why it moves — the denominator, not the physics
+
+Both explanations predict the same positive ambient→ratio correlation, so it needs a discriminating
+arm rather than a plausible story. §3's thesis says cost-per-fork is `O(load)`, so the *real*
+queueing penalty should grow with ambient. The competing account is §5.1's own caveat 2, extended:
+the estimator divides by **serial's** attributable occupancy, which is the small quantity, so ambient
+noise is a large *relative* error on the denominator and a small one on the numerator.
+
+They differ in where the movement shows up. Pooled over both live runs, 33 retained cycles:
+
+```
+Spearman(ambient, SERIAL attributable/dispatch)   = -0.566     ← denominator collapses
+Spearman(ambient, PARALLEL attributable/dispatch) = +0.273     ← numerator barely moves
+Spearman(ambient, ratio)                          = +0.553
+
+tercile          ambient        serialAttrib   parallelAttrib   ratio    serial disp   parallel disp
+low           7.12..10.12          0.09529          0.25000     2.67×          243            735
+mid          10.33..12.42          0.03098          0.17770     5.32×          243            745
+high         12.46..19.29          0.04166          0.29418     6.38×          249            724
+```
+
+**The last two columns are the control that settles it: throughput is FLAT across terciles.** Both
+arms complete the same work at every ambient level — serial 243/243/249 dispatches, parallel
+735/745/724 — so serial's attributable occupancy falling by two thirds is not serial doing less. It is
+the per-cycle idle subtraction eating a signal that was only ~0.8–3 runnable threads wide to begin
+with. Under the O(load) account the numerator had to carry the rise; it does not.
+
+The same relationship holds *within* each run separately, which removes any cross-run confound:
+Spearman(ambient, ratio) = **+0.478** over this run's 18 cycles and **+0.518** over §5.1's 15. Split
+each run at its own median ambient: 2.45× / 4.52× here, 3.97× / 6.38× there.
+
+### What this changes, and what it does not
+
+**The sign is untouched and now replicated three times** — 2026-08-09 (2.10..6.43), §5.1
+(3.45..8.35) and this run (2.45..5.32) all exclude 1.00, against nulls at 0.92–0.96×. Parallel
+dispatch costs strictly more occupancy per dispatch. That was §4.2's claim and it stands.
+
+**The magnitude does change.** The best estimate for a box that is actually quiet is **2.90×
+(2.45..5.32)**, and the lowest-ambient tercile across both runs reads **2.67×**. Because the residual
+bias runs *upward* with ambient, these remain upper-ish readings rather than a floor. `5.98×` should
+not be carried downstream as the occupancy cost; quote the interval and say which ambient it was
+taken at.
+
+**And the bench's remaining acceptance statistic is a range.** §2 removed `max/min` from the gate
+because the range of a sample is non-decreasing in `n`; the `⚠ AMBIENT MOVED >2x` check is `max/min`
+over the idle arm, the same shape, and it is the one an operator must now reason past to quote a
+number. The correlation above is the property-of-the-estimate replacement: it asks whether the ratio
+is *moving with* ambient, which is the thing that biases it, and it does not inflate merely by
+collecting more cycles.
+
+### Method notes
+
+1. **Two workers on one box silently overwrite each other's raw results.** §5's commands hardcode
+   `/tmp/hdb-control.tsv` and `/tmp/hdb-live.tsv`, and §5.1's run re-wrote both two hours after this
+   one, so `--analyse` on those paths returned §5.1's numbers under this run's filename with no
+   error and no tell — a plausible, different, wrong verdict for the earlier run. This run's live TSV
+   was reconstructed from its own stdout table and re-analysed to byte-identical figures before use;
+   it is committed at `docs/research/data/hdb-live-quiet-2026-09-09.tsv` rather than left in `/tmp`.
+   This run's control survives only as its printed verdict and its 19 ratios: `-0.75 0.34 0.39 0.51
+   0.55 0.73 0.75 0.83 0.88 0.92 1.24 1.28 1.34 1.42 1.52 1.58 1.71 2.29 2.55`.
+2. **§6 prediction 2 is confirmed, within a single run.** Re-analysing this run's control over its own
+   first 5 cycles gives 88% CI 0.39..2.29 against 94% CI 0.73..1.42 at 20 — narrower at *higher*
+   coverage, same box, same ambient, nested subsample. The per-cycle ratios do behave as independent
+   draws and the sign-test interval is the right instrument.
+3. The floor was never overridden here either: `CC_HDB_MAX_START_LOAD` was never set, and both arms
+   were fired by a poller that waited for `load1 < 13.5` against the bench's own 14.
 
 ## 6. Falsifiable predictions
 
