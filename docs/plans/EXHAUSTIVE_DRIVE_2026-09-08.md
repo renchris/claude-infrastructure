@@ -217,8 +217,8 @@ the pane the way the launcher does (`ITERM_SESSION_ID=w0t0p0:625 CC_PANE_ID=625`
 | W1e beat-tz | 637 | next4 | NOT armed (arming paste abstained — backlog `2ee30f87c370`) | engaged, working |
 | W1g supervisor-restart | 638 | next4 | NOT armed (same) | engaged, working |
 | W1f shared-task-list | ~640 | next2 | NOT armed (composer unreadable 30 s) | engaged, working |
-| W1c stop-hooks | 639 | — | unreachable | **FIRE FAILED — never engaged**: the brief paste did not submit inside the 305 s engagement window; pane live but TASK-LESS, worktree `ed-w1c-stop-hooks` kept |
-| W0 claude-md | 641 | — | unreachable | **FIRE FAILED — never engaged** (same); worktree `ed-w0-claude-md` kept |
+| W1c stop-hooks | 639 | next | none (stripped by the FIRE FAILED verdict) | **engaged LATE, working** — the fire verdict read "never engaged" because the brief paste submitted after the 305 s window; at 01:43Z its transcript (`24f08168`) was 1.56 MB and growing with 8 dirty files, and by 02:20Z it had 4 commits in its own land queue. The verdict was about the DISPATCHER's window, not the peer (memory `dispatcher-verdict-is-not-the-fired-sessions-state`); no custody row, no goal — harvested from trunk |
+| W0 claude-md | 641 | next | none (same) | **engaged LATE, working** (same shape: transcript `1d7c5baa` 1.36 MB at 01:42Z) → **LANDED** `2c882c549` at 01:53Z, "docs(claude-md): nine resident-rule corrections from the exhaustive-drive audit" |
 
 Custody rows exist for the six engaged fires (`--notify-back 625`). Three of six engaged sessions run
 WITHOUT a Stop-hook goal — the goal-arm abstention rows are real and load-correlated; their briefs
@@ -229,6 +229,37 @@ completion is read from trunk, not from mail — `git log origin/main --since=20
 ed-w` (a removed worktree = the session self-closed). A defect in its own right: a transplanted or
 resumed session loses its pane identity, so `--notify-back` needs the SID form — record whether the
 sid-form fires (W1d/e/g) actually deliver.
+
+### Harvest (successor lead — session `093e40f3`, pane 643, `.claude-secondary`, from 01:40Z)
+
+**Labor split with the origin pane** (625 cannot retire — it is an ORIGIN session — and stays live):
+625 harvests the W1a–W1g pings (content-verify + `cc-custody return` + task list); **643 owns** the docs
+land, this plan (sole editor), the W2 briefs + fires, W3, `deploy-live` convergence, and the operator
+close. Recorded here because a successor reading only the disk would otherwise re-harvest what 625 owns.
+
+| Wave | landed (content-verified `git ls-tree origin/main`) | at |
+|---|---|---|
+| docs branch (plan · LEAD-NOTES · 12 axes + skeptics · SYNTHESIS + CRITIC · fire record) | `1f0bb2e84` `bbb3547ec` `b94ecb90e` `024ab8be4` `7cbef6a07` — 32 paths | 02:19Z (the predecessor's detached `ship-land` never died: 47 min, most of it queued on the land-lock behind W1e; a second `ship-land` from the same worktree was correctly REFUSED by the in-flight guard) |
+| W1a goal-state | `6ebb17d7c` `1de88352c` `40d4317fe` | 01:22Z; custody returned 01:34Z; pane 635 self-closed |
+| W1f shared-task-list | `55896d1e7` — migration is **0023**, not the plan's 0022 (0022 was taken between the synthesis and the fire) | 01:39Z |
+| W1e beat-tz | `86a21bb57` `eb3f5a2c8` | 01:46Z |
+| W0 claude-md | `2c882c549` | 01:53Z |
+| W1b handoff-fire · W1c stop-hooks (4 commits) · W1d dispatch-hygiene · W1g supervisor-restart | in their land queues at 02:20Z (load **112** on 10 cores — seven `ship-land`s contending for one lock; each waits 15–45 min) | — |
+
+**W2 is staged, not fired.** Eight briefs at `/tmp/fire-ed-w2-{14,b1,b2,b4,b5,b6,b17,b21}.txt` (each ≤16
+lines + the common contract), goals at `/tmp/fire-ed-w2-goals.tsv`, driver `/tmp/fire-ed-w2.sh [id …]`
+(fires from this worktree with `--notify-back 643`). Gate: W1c on trunk (rank 8 must land before any
+`wrap-ledger` timing) **and** load < 20 (the 2.0/core fire rule) — a background waiter
+(`/tmp/ed-w2-gate-wait.sh`) wakes the lead. Once W1b's rank 7 lands, `handoff-fire` refuses at > 8
+sessions mid-turn, so W2 fires in slices sized to that ceiling (`/tmp/fire-ed-w2.sh 14 b17 b21`, then
+the rest), the intended behaviour.
+
+**Live layer:** `deploy-live.sh` run detached at 01:51Z from the shared checkout (live HEAD `f2b1cdff4`,
+which already carries W1a). It reported the `lead-supervisor` daemon on STALE bytes (W1g's exact
+defect) and entered its degradation search — no GREEN stamp in the newest 200 trunk commits, newest
+green at depth 407 and already an ancestor of live HEAD; `ship-land` says the post-land verifier is
+alive but every recent verdict is non-green (129 h since the last green). Verdict pending in
+`/tmp/deploy-live-ed.log`; a refusal is filed as `cc-backlog needs`, never laundered into ✅.
 
 ### Operator decisions — filed as class-C packets (conviction · receipt = SYNTHESIS.md · two options each)
 
@@ -271,6 +302,16 @@ sid-form fires (W1d/e/g) actually deliver.
   transcript-reading goal predicate (`goal-state.sh`) reports the `/goal` as LIVE while the binary's
   in-memory registry may not hold it — a transplant/resume makes "is a goal live?" unanswerable from
   the transcript alone (relevant to W0 A04's finding that `/goal` cannot be the drive lever).
+- 2026-09-09T01:40Z — succession: lead `b418b97a` (pane 625) fired `fire-ed-recycle` → session
+  `093e40f3` in pane 643, same worktree, `.claude-secondary`, Fable 5.1. The origin pane could not
+  retire into it (an ORIGIN session may not self-close into a successor), so the two split the labor
+  by file (§ Harvest). Two things the successor found that the fire record got wrong: (1) the
+  "detached land was SIGTERM'd" reading was false — the `setsid nohup` run was alive at ppid 1 the
+  whole time, merely queued; `ps … | grep ship-land` had missed it and `pgrep -f` matched the
+  successor's own Bash wrapper (memory `pgrep-f-matches-agent-briefs`) — the in-flight guard's
+  refusal was the reliable reading; (2) both "never engaged" waves were working (§ Fires). Lesson
+  for the fire path: an engagement verdict measured inside a 305 s window under load 25 is a verdict
+  about the window; before any re-fire, read the peer's transcript mtime and its worktree's dirt.
 
 ## Decisions log
 
