@@ -4,19 +4,34 @@ enforce-email-formatting.py — PreToolUse hook for SAFE, readable outbound emai
 
 Fires on the ms365 mail send/draft tools. Three independent guard families:
 
-  R1  DRAFTS ONLY (2026-08-25). Every programmatic SEND is denied outright. A Graph
-      send is immediate and irreversible — there is no unsend window on this path
+  R1  NO COMPOSE-AND-SEND (2026-08-25; narrowed 2026-09-08). The four tools that
+      compose and transmit in ONE call — send-mail, reply-mail-message,
+      reply-all-mail-message, forward-mail-message — are denied outright. A Graph
+      send is immediate and irreversible; there is no unsend window on this path
       (Outlook's "undo send" is a client-side delay that does not exist over Graph).
-      The agent composes into Drafts; the OPERATOR presses send. Cost: 2026-08-24,
-      three sends in one evening, only the first authorized, the third a legally
-      operative Cal. Civ. Code §1950.5(f) notice in a live deposit dispute.
+      Cost: 2026-08-24, three sends in one evening, only the first authorized, the
+      third a legally operative Cal. Civ. Code §1950.5(f) notice in a live dispute.
 
-      R1 IS ABSOLUTE — it is checked BEFORE the kill switch and has no override.
+      R1 IS ABSOLUTE for those four — checked BEFORE the kill switch, no override.
       An escape hatch conditioned on "the user said to send it" would be worthless,
       because a model asserting that consent IS the failure that already happened.
-      The break-glass is the operator pressing Send in Outlook, which costs one tap.
-      The fail-open handler at the bottom also re-denies sends: a crash must never
-      resurrect the one class of call that cannot be undone.
+      The fail-open handler at the bottom re-denies anything that TRANSMITS: a crash
+      must never resurrect a call that cannot be undone.
+
+  R1b ONE TURN MAY COMPOSE OR SEND, NEVER BOTH (2026-09-08). send-draft-message is
+      no longer denied outright — the operator ruled that sending an already-composed
+      draft should be possible: "block sending emails from being written, but we
+      should be able to send it from drafts." The residual hazard is create-draft
+      followed by send-draft inside one turn, which is send-mail with extra steps and
+      an operator who never saw the draft. So the send is refused whenever this same
+      turn composed, where the turn boundary is a GENUINE HUMAN PROMPT read from the
+      transcript. It fails CLOSED on missing or unreadable evidence, which is exactly
+      the behaviour that preceded the rule and therefore can never be a regression.
+
+      Why the turn predicate is the strict one: hooks/lib/session-writes.sh counts
+      isMeta records as boundaries and Stop-hook feedback arrives that way, so reusing
+      it would let a compose → Stop-hook-block → send sequence read as two turns and
+      pass. R1b uses hooks/lib/cc-interactive.sh's predicate instead.
 
   R2  ALIAS CONTINUITY (2026-08-25). This mailbox has two aliases —
       ichris96@hotmail.com and ren.chris@outlook.com. An outgoing message must use
@@ -119,11 +134,49 @@ SEND_TOOLS = {
     "mcp__ms365__reply-mail-message": "create-reply-draft",
     "mcp__ms365__reply-all-mail-message": "create-reply-all-draft",
     "mcp__ms365__forward-mail-message": "create-forward-draft",
-    # send-draft-message transmits an ALREADY-composed draft, so there is nothing to
-    # re-route to: the draft it would send is exactly what the operator should press
-    # Send on themselves. None -> the deny text says that instead of naming a tool.
-    "mcp__ms365__send-draft-message": None,
+    # send-draft-message is NOT in this set any more (operator ruling 2026-09-08): "block
+    # sending emails from being written, but we should be able to send it from drafts."
+    # The four tools above COMPOSE AND TRANSMIT IN ONE CALL — that is the irreversible step
+    # a model can take on its own say-so. send-draft-message transmits a draft that already
+    # exists and that the operator can open and read first. R1b below gates it instead.
 }
+
+# --- R1b: one turn may COMPOSE mail or SEND mail, never both --------------
+# The hazard R1 used to cover by denying outright: create-draft-email followed by
+# send-draft-message is send-mail with extra steps, and the operator never saw the draft.
+# So the new permission is real but bounded — a send is refused when this same TURN composed.
+#
+# WHAT COUNTS AS COMPOSITION: the four draft-creating tools, plus update-mail-message when its
+# input carries a body or recipients. Revising a draft IS composing it; flagging one or marking
+# it read is not, and must not trip the gate.
+COMPOSE_TOOLS = {
+    "mcp__ms365__create-draft-email",
+    "mcp__ms365__create-reply-draft",
+    "mcp__ms365__create-reply-all-draft",
+    "mcp__ms365__create-forward-draft",
+}
+COMPOSE_IF_BODY_TOOL = "mcp__ms365__update-mail-message"
+COMPOSE_BODY_KEYS = ("body", "toRecipients", "ccRecipients", "bccRecipients", "subject")
+
+# Every tool that puts mail on the wire — the four denied outright PLUS the one R1b gates.
+# The crash handler keys on THIS, never on SEND_TOOLS: "does this payload transmit" is a wider
+# question than "is this denied outright", and conflating them is how send-draft-message would
+# have started failing open the moment it moved into R1b.
+TRANSMITTING_TOOLS = set(SEND_TOOLS) | {"mcp__ms365__send-draft-message"}
+
+# WHAT COUNTS AS A TURN BOUNDARY — and why the OBVIOUS predicate is the WRONG one here.
+# hooks/lib/session-writes.sh treats any main-chain `user` record without a tool_result as a
+# boundary, and deliberately counts `isMeta` records, which include Stop-hook `decision:block`
+# feedback. Reused here that is a HOLE: compose a draft, get blocked by a Stop hook, and the
+# auto-drive re-prompt would read as "a new turn" and clear the gate on a draft no human ever
+# saw. This gate therefore uses the STRICTER predicate from hooks/lib/cc-interactive.sh — a
+# GENUINE HUMAN PROMPT: type=="user", isMeta != true, content a string (or a tool_result-free
+# array with text or an image), and the text not matching the auto-traffic regex. "The operator
+# typed something" is the only event that may open a send window.
+AUTO_TRAFFIC_RX = re.compile(
+    r"^<task-notification>|^<local-command-stdout>|^<teammate-message"
+    r"|^Stop hook feedback:|^\[Request interrupted|^⟳|^⚑|^⚠"
+)
 
 # --- R4: pre-write freshness ----------------------------------------------
 # Reading the thread when you START composing is not reading it when you FINISH. On
@@ -291,13 +344,21 @@ def has_quoted_chain(content: str) -> bool:
 # Full provenance: memory feedback_email_formatting.
 RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
 
-0. NEVER SEND. You compose into DRAFTS; the operator presses Send. A Graph send is
-   immediate and irreversible — there is no unsend on this path. send-mail,
-   reply-mail-message, reply-all-mail-message, forward-mail-message and
-   send-draft-message are DENIED and have no override; do not look for one, and do
-   not ask for permission to send. Use create-draft-email / create-reply-draft /
-   create-reply-all-draft / create-forward-draft, then tell the operator the draft is
-   in Drafts and ready. update-mail-message still works for revising a draft in place.
+0. NEVER COMPOSE-AND-SEND. A Graph send is immediate and irreversible — there is no
+   unsend on this path. send-mail, reply-mail-message, reply-all-mail-message and
+   forward-mail-message are DENIED and have no override; do not look for one. Compose
+   with create-draft-email / create-reply-draft / create-reply-all-draft /
+   create-forward-draft, then tell the operator the draft is in Drafts and ready.
+   update-mail-message revises a draft in place.
+
+0b. SENDING A DRAFT is allowed, but NEVER IN THE TURN THAT WROTE IT. If you composed
+   or revised a draft since the operator last spoke, send-draft-message is refused —
+   they have not had a chance to read what you wrote, and re-wording it does not help
+   because revising is composing. Say the draft is ready and stop. If they then tell
+   you to send it, that message starts a new turn and the gate opens by itself. Send
+   only the draft they actually named, and never as the second half of your own
+   compose. Do not ask for permission to send in the same turn: the answer is "it is
+   in Drafts and ready", and the gate will refuse you anyway.
 
 1. THREADING. To continue a chain, reply on the ORIGINAL message: create-reply-all-draft /
    reply-all-mail-message with its messageId. NEVER send-mail or create-draft-email with a
@@ -427,6 +488,103 @@ def _recipe_once() -> str:
     except OSError:
         return ""  # can't track it — stay quiet rather than spam
     return RECIPE
+
+
+def _is_human_prompt(rec) -> bool:
+    """True when this transcript record is a GENUINE operator prompt.
+
+    Mirrors hooks/lib/cc-interactive.sh's predicate, which is ground-truthed against
+    production transcripts. Deliberately STRICTER than session-writes.sh's turn boundary:
+    isMeta records — slash-command bodies and Stop-hook feedback — are NOT human prompts,
+    because an auto-drive re-prompt must never clear the compose gate (see R1b).
+    """
+    if rec.get("type") != "user" or rec.get("isMeta") is True:
+        return False
+    if rec.get("isSidechain") is True:
+        return False  # a subagent's prompt is not a main-turn boundary
+    content = (rec.get("message") or {}).get("content")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        # A tool_result anywhere means this is the harness feeding output back INSIDE the
+        # turn — tool traffic, never an operator prompt.
+        if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+            return False
+        text = "\n".join(
+            b.get("text", "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+        has_image = any(
+            isinstance(b, dict) and b.get("type") == "image" for b in content
+        )
+        if not text and has_image:
+            return True  # an image-only paste is operator PRESENCE
+    else:
+        return False
+    if not text:
+        return False
+    return not AUTO_TRAFFIC_RX.search(text)
+
+
+def _is_compose(rec) -> bool:
+    """True when this assistant record calls a tool that COMPOSES mail."""
+    if rec.get("type") != "assistant":
+        return False
+    for block in (rec.get("message") or {}).get("content") or []:
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            continue
+        name = block.get("name", "")
+        if name in COMPOSE_TOOLS:
+            return True
+        if name == COMPOSE_IF_BODY_TOOL:
+            body = (block.get("input") or {}).get("body")
+            if isinstance(body, dict) and any(k in body for k in COMPOSE_BODY_KEYS):
+                return True
+    return False
+
+
+def composed_this_turn(transcript_path):
+    """Did this turn COMPOSE mail before trying to send it?
+
+    THREE-VALUED, and the third value is the whole point:
+      True  — composed since the last genuine human prompt. The send is R1b-denied.
+      False — the operator has spoken since anything was composed. The send may proceed.
+      None  — CANNOT TELL (no path, unreadable, unparseable). The caller DENIES on None.
+
+    Fail-closed is not a stylistic choice: before this rule, send-draft-message was denied
+    unconditionally, so treating "cannot tell" as deny is exactly the prior behaviour and can
+    never be a regression. A gate that opened whenever its evidence went missing would be
+    strictly worse than the deny it replaced.
+
+    Single streaming pass, same reduce shape as session-writes.sh: a human prompt CLEARS the
+    flag, a compose SETS it, and whatever the last one was is the answer.
+    """
+    if not transcript_path:
+        return None
+    path = str(transcript_path)
+    if path.startswith("~"):
+        path = os.path.expanduser(path)
+    try:
+        composed = False
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue  # one partial line must not abort the scan
+                if not isinstance(rec, dict):
+                    continue
+                if _is_human_prompt(rec):
+                    composed = False
+                elif _is_compose(rec):
+                    composed = True
+        return composed
+    except (OSError, UnicodeError):
+        return None
 
 
 def allow(note: str = ""):
@@ -601,6 +759,43 @@ def main():
             f"failure this prevents (2026-08-24: three sends in one evening, one "
             f"authorized, one a legally operative §1950.5(f) notice in a live dispute). "
             f"Do not retry this call in another shape and do not ask to send."
+        )
+
+    # ── R1b: A TURN MAY COMPOSE OR SEND, NEVER BOTH ───────────────────────────────
+    # Sits immediately after R1, above the kill switch and above GATED_TOOLS scoping, for
+    # the same reason R1 does: the call it guards cannot be undone. Sending a draft is
+    # PERMITTED (operator ruling 2026-09-08) — but not one this same turn composed, because
+    # create-draft + send-draft inside one turn is send-mail with extra steps and the
+    # operator never had a chance to read it. The evidence is the transcript, not a marker
+    # file: /tmp is wiped, a marker can go stale, and the transcript is the record.
+    if tool_name == "mcp__ms365__send-draft-message":
+        composed = composed_this_turn(data.get("transcript_path"))
+        if composed is None:
+            deny(
+                "BLOCKED (R1b, cannot verify): send-draft-message TRANSMITS and cannot be "
+                "recalled. This gate allows it only when the transcript shows the operator "
+                "has spoken since anything was composed — and the transcript could not be "
+                "read (no transcript_path, or unreadable), so that cannot be established. "
+                "Fail-closed is deliberate: this call was denied unconditionally before the "
+                "rule existed, so refusing on missing evidence is the prior behaviour, never "
+                "a regression. Tell the operator the draft is in Drafts and ready to send."
+            )
+        if composed:
+            deny(
+                "BLOCKED (R1b, compose-then-send in one turn): you COMPOSED mail in this "
+                "same turn, so sending now is send-mail with extra steps — the operator has "
+                "not had a chance to read what you wrote, and a Graph send cannot be "
+                "recalled. Sending an existing draft is permitted; sending your own "
+                "just-written one is not. Tell the operator the draft is ready and let them "
+                "look. If they then ask you to send it, their message starts a new turn and "
+                "this gate opens on its own. Do not re-word the draft to get around this — "
+                "revising it is composing it, and the gate will still hold."
+            )
+        allow(
+            "R1b — sending an EXISTING draft (permitted; compose-and-send is still denied, "
+            "and this turn composed nothing). This TRANSMITS and cannot be recalled: "
+            "Outlook's 'undo send' does not exist on the Graph path. Send only the draft the "
+            "operator actually named."
         )
 
     tool_input = data.get("tool_input")
@@ -843,7 +1038,11 @@ if __name__ == "__main__":
         # a parse failure, and a send must stay denied even when the JSON is unreadable.
         # Scoping it to the send-tool names keeps a malformed READ payload failing open,
         # so a hook bug can never take the whole mail surface down.
-        if any(t in (_RAW_PAYLOAD or "") for t in SEND_TOOLS):
+        # TRANSMITTING_TOOLS, not SEND_TOOLS. When send-draft-message moved out of SEND_TOOLS
+        # into R1b (2026-09-08) this line silently began failing OPEN for it: a crash during a
+        # send-draft-message call would have transmitted. The crash path must key on "does this
+        # payload transmit", which is a strictly wider question than "is this denied outright".
+        if any(t in (_RAW_PAYLOAD or "") for t in TRANSMITTING_TOOLS):
             print(
                 json.dumps(
                     {

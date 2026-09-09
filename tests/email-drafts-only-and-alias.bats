@@ -132,11 +132,134 @@ print(json.dumps({"body": {"message": {
   [ "$output" = "deny" ]
 }
 
-@test "send-draft-message is refused even with an empty tool_input" {
+@test "send-draft-message is refused when the transcript cannot be read (R1b fails closed)" {
   # It carries no body at all — the composition already happened. A guard that only inspects bodies
   # would wave this straight through, and it is the single call that turns a reviewed draft into an
   # unrecallable send.
+  #
+  # Since 2026-09-08 this is R1b rather than R1: the send is permitted when the transcript proves the
+  # operator has spoken since anything was composed. This payload carries NO transcript_path, so that
+  # cannot be established and the gate must refuse. Fail-closed is the whole safety argument for
+  # loosening R1 at all — if missing evidence opened the send, the new rule would be weaker than the
+  # deny it replaced.
   run decision "$GATE" mcp__ms365__send-draft-message "$EMPTY"
+  [ "$output" = "deny" ]
+}
+
+# ── R1b: A TURN MAY COMPOSE OR SEND, NEVER BOTH ────────────────────────────────────────────────────
+#
+# WHY THIS SECTION EXISTS (2026-09-08). R1 denied send-draft-message outright. The operator ruled
+# that sending an already-composed draft should be possible — "block sending emails from being
+# written, but we should be able to send it from drafts" — leaving one hazard: create-draft-email
+# followed by send-draft-message in the SAME turn is send-mail with extra steps, and the operator
+# never saw the draft. R1b refuses exactly that case and nothing else.
+#
+# NON-VACUITY. Without `compose_then_human_prompt_allows_the_send` the whole rule is satisfied by
+# "deny everything", which is just R1 again wearing a new name. Without the deny cases it is
+# satisfied by "allow everything". Both directions are asserted here, on the same fixture shape.
+#
+# THE CASE THAT DECIDES THE PREDICATE is `stop_hook_feedback_does_not_open_the_gate`. There are two
+# turn-boundary predicates in this repo and picking the obvious one silently reopens the hazard:
+# hooks/lib/session-writes.sh counts `isMeta` records as boundaries, and Stop-hook feedback arrives
+# that way — so under that predicate a compose, a Stop-hook block, and a send would read as two
+# turns and pass. R1b uses hooks/lib/cc-interactive.sh's stricter "genuine human prompt" instead.
+
+# tp_decision <tool_name> <tool_input-json> <transcript-file> -> prints allow | deny.
+# Identical to `decision` except it carries the transcript_path R1b reads. Kept separate so the
+# existing fixtures keep proving the no-transcript (fail-closed) path.
+tp_decision() {
+  GATE_UT="$GATE" TOOL="$1" TIN="$2" TP="$3" python3 -c '
+import json, os, subprocess, sys
+pay = json.dumps({"session_id": "bats", "hook_event_name": "PreToolUse",
+                  "transcript_path": os.environ["TP"],
+                  "tool_name": os.environ["TOOL"],
+                  "tool_input": json.loads(os.environ["TIN"])})
+p = subprocess.run([sys.executable, os.environ["GATE_UT"]], input=pay, capture_output=True, text=True)
+out = p.stdout.strip()
+if not out:
+    print("allow"); sys.exit(0)
+print(json.loads(out)["hookSpecificOutput"]["permissionDecision"])
+'
+}
+
+# Transcript record builders. Real PreToolUse transcripts are JSONL of these shapes.
+human() { printf '{"type":"user","message":{"content":%s}}\n' "$(printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"; }
+compose() { printf '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__ms365__create-draft-email","input":{"body":{"subject":"x"}}}]}}\n'; }
+toolresult() { printf '{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}\n'; }
+meta() { printf '{"type":"user","isMeta":true,"message":{"content":"Stop hook feedback:\\n- blah"}}\n'; }
+stopfeedback() { printf '{"type":"user","message":{"content":"Stop hook feedback:\\n- drive the remainder"}}\n'; }
+
+@test "compose_then_send_in_one_turn_is_refused: the hazard R1b exists for" {
+  T="$BATS_TEST_TMPDIR/t1.jsonl"; { human "send the letters"; compose; } > "$T"
+  run tp_decision mcp__ms365__send-draft-message "$EMPTY" "$T"
+  [ "$output" = "deny" ]
+}
+
+@test "compose_then_human_prompt_allows_the_send: the control that stops R1b being 'deny everything'" {
+  # The operator spoke AFTER the draft was composed — they had the chance to read it. This is the
+  # single case the operator asked to unblock, and if it ever denies the ruling has been undone.
+  T="$BATS_TEST_TMPDIR/t2.jsonl"; { human "draft the letters"; compose; human "send them"; } > "$T"
+  run tp_decision mcp__ms365__send-draft-message "$EMPTY" "$T"
+  [ "$output" = "allow" ]
+}
+
+@test "stop_hook_feedback_does_not_open_the_gate: an auto-drive re-prompt is not a human turn" {
+  # THE case that decides the predicate. Under session-writes.sh's boundary this would read as a new
+  # turn and ALLOW, sending a draft no human ever saw.
+  T="$BATS_TEST_TMPDIR/t3.jsonl"; { human "draft it"; compose; stopfeedback; } > "$T"
+  run tp_decision mcp__ms365__send-draft-message "$EMPTY" "$T"
+  [ "$output" = "deny" ]
+}
+
+@test "an isMeta record does not open the gate either" {
+  T="$BATS_TEST_TMPDIR/t4.jsonl"; { human "draft it"; compose; meta; } > "$T"
+  run tp_decision mcp__ms365__send-draft-message "$EMPTY" "$T"
+  [ "$output" = "deny" ]
+}
+
+@test "a tool_result does not open the gate: it is the harness talking, not the operator" {
+  T="$BATS_TEST_TMPDIR/t5.jsonl"; { human "draft it"; compose; toolresult; } > "$T"
+  run tp_decision mcp__ms365__send-draft-message "$EMPTY" "$T"
+  [ "$output" = "deny" ]
+}
+
+@test "a clean turn with no composition at all is allowed" {
+  T="$BATS_TEST_TMPDIR/t6.jsonl"; human "send the draft we made yesterday" > "$T"
+  run tp_decision mcp__ms365__send-draft-message "$EMPTY" "$T"
+  [ "$output" = "allow" ]
+}
+
+@test "revising a draft body counts as composing it, so the send is still refused" {
+  # Re-wording the draft must not be a way around R1b — the operator has not seen the new words.
+  T="$BATS_TEST_TMPDIR/t7.jsonl"
+  { human "draft it"
+    printf '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__ms365__update-mail-message","input":{"body":{"body":{"content":"new text"}}}}]}}\n'
+  } > "$T"
+  run tp_decision mcp__ms365__send-draft-message "$EMPTY" "$T"
+  [ "$output" = "deny" ]
+}
+
+@test "flagging or marking a draft read is NOT composing, and must not block the send" {
+  # The precision control for the update-mail-message arm. If this denies, R1b has over-reached into
+  # ordinary mailbox bookkeeping.
+  T="$BATS_TEST_TMPDIR/t8.jsonl"
+  { human "send it"
+    printf '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__ms365__update-mail-message","input":{"body":{"isRead":true}}}]}}\n'
+  } > "$T"
+  run tp_decision mcp__ms365__send-draft-message "$EMPTY" "$T"
+  [ "$output" = "allow" ]
+}
+
+@test "an unreadable transcript path fails closed" {
+  run tp_decision mcp__ms365__send-draft-message "$EMPTY" "$BATS_TEST_TMPDIR/does-not-exist.jsonl"
+  [ "$output" = "deny" ]
+}
+
+@test "the other four send tools are still denied outright, transcript or not" {
+  # R1b loosened exactly ONE tool. If a clean transcript now opens send-mail, the compose-and-transmit
+  # path has been reopened and the whole guard is gone.
+  T="$BATS_TEST_TMPDIR/t9.jsonl"; human "send it" > "$T"
+  run tp_decision mcp__ms365__send-mail "$QUOTED_BODY" "$T"
   [ "$output" = "deny" ]
 }
 
@@ -198,6 +321,15 @@ print(json.dumps({"body": {"message": {
   # Genuinely exercises the except branch: json.loads raises inside main(). The formatting gate fails
   # OPEN by design, but a crash must not become consent for the one call that cannot be undone.
   run raw_decision '{"tool_name": "mcp__ms365__send-mail", "tool_input": {NOT VALID JSON'
+  [ "$output" = "deny" ]
+}
+
+@test "crash_denies_a_send_draft: the R1b tool is on the crash path too" {
+  # REGRESSION GUARD (2026-09-08). The crash handler used to key on SEND_TOOLS, and moving
+  # send-draft-message out of that set into R1b silently made this case fail OPEN — a crash during a
+  # send would have transmitted. It keys on TRANSMITTING_TOOLS now. "Denied outright" and "puts mail
+  # on the wire" are different questions and this test is what keeps them apart.
+  run raw_decision '{"tool_name": "mcp__ms365__send-draft-message", "tool_input": {NOT VALID JSON'
   [ "$output" = "deny" ]
 }
 
