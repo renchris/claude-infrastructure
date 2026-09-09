@@ -169,10 +169,22 @@ def main():
         nonverdict(f"--new: {new_bullets} link-shaped bullet(s) but {len(new)} harvested link(s)")
 
     # Surfaces a rotor demotion/routing pointer can live on (65edba440).
+    #
+    # BOTH the memory dir AND its archive/ subdir (2026-09-09). The compact-memory skill's
+    # § HOT/COLD prescribes the cold tier as `archive/MEMORY_ARCHIVE_<Y>-H<h>-COLD.md` -- i.e.
+    # one level DOWN -- while this scan was top-level only, so a demotion performed exactly as
+    # prescribed was reported `verdict=lossy` by the gate that is supposed to bless it. Measured:
+    # four entries moved to archive/MEMORY_ARCHIVE_2026-H2-COLD.md came back as 4 blocking
+    # `entry-removed` rows, cleared only by naming the file with --pointer-scan by hand. A gate
+    # whose false alarm is fixed by a flag the caller must already suspect is a gate that gets
+    # switched off, which is the failure mode this tool's own header warns about for word flags.
     surfaces = [read(a.new)]
-    for fn in sorted(os.listdir(mem)):
-        if fn.endswith(".md") and re.match(r"MEMORY[-_]ARCHIVE", fn, re.I):
-            surfaces.append(read(os.path.join(mem, fn)))
+    for d in (mem, os.path.join(mem, "archive")):
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(os.listdir(d)):
+            if fn.endswith(".md") and re.match(r"MEMORY[-_]ARCHIVE", fn, re.I):
+                surfaces.append(read(os.path.join(d, fn)))
     for p in a.pointer_scan:
         if not os.path.isfile(p):
             nonverdict(f"--pointer-scan path does not exist: {p}")
