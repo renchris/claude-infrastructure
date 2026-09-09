@@ -92,7 +92,9 @@
 # Env seams (tests + tuning): CC_IDL · CC_ABSTAIN_LOG · CC_ABSTAIN_NMIN (10) ·
 #        CC_ABSTAIN_LOOKBACK_DAYS (14) · CC_ABSTAIN_BLIND_PCT (100) ·
 #        CC_ABSTAIN_BLIND_REASONS (space/newline list — REPLACES the default blind set) ·
-#        CC_ABSTAIN_NOW (epoch — deterministic "now" for tests).
+#        CC_ABSTAIN_NOW (epoch — deterministic "now" for tests) ·
+#        CC_ABSTAIN_CENSUS (0 to suppress the termination-census denominator line) ·
+#        CC_ABSTAIN_CENSUS_CMD (path to scripts/measure-terminations.py, for tests).
 set -uo pipefail
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -137,6 +139,41 @@ BLIND_JSON="$(printf '%s\n' "${BLIND[@]}" | jq -Rsc 'split("\n")|map(select(leng
 
 now_epoch() { echo "${CC_ABSTAIN_NOW:-$(date +%s)}"; }
 now_iso()   { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# ── THE STOP-CHAIN DENOMINATOR (synthesis rank 14 / CRITIC C-R7) ─────────────────────────────────
+# WHY THIS LINE EXISTS, and it is not decoration. Every row of the per-hook table below counts
+# EVALUATIONS of a hook, and the hooks enrolled here are Stop hooks: a row's `total` can only ever
+# count sessions that REACHED a Stop. Measured 2026-09-08 by scripts/measure-terminations.py, that
+# is 33% of dead main-chain sessions on the day and 39% over 30 days — the other 61-67% retire
+# inside a tool call (`handoff-fire.sh self-close` / `--recycle`), where no Stop hook runs at all.
+# So a reader of `total=2868 abst=2864` reads a rate over sessions and gets a rate over a minority
+# stratum this table cannot name. Printing the denominator BESIDE the table is the whole fix: the
+# numbers are unchanged, what they are a fraction OF is now stated.
+#
+# FAIL-OPEN, ALWAYS. This is an annotation on someone else's verdict; it must never be able to
+# change or take down the sweep. Any failure — no python3, script absent, census abstains because
+# the process table is unreadable — prints an explicit UNKNOWN line rather than nothing, because a
+# MISSING denominator line and a denominator of 100% are the same observation to a reader and only
+# one of them is true (memory: fail-safe-default-mimics-the-healthy-state). `--days 1` keeps it at
+# ~2 s over ~150 transcripts; the census reads only transcripts, the beat store and the permission
+# archive, and writes nothing.
+census_denominator() {
+  [ "${CC_ABSTAIN_CENSUS:-1}" = "0" ] && return 0
+  local script out
+  script="${CC_ABSTAIN_CENSUS_CMD:-$(dirname "$SELF")/measure-terminations.py}"
+  if ! command -v python3 >/dev/null 2>&1 || [ ! -f "$script" ]; then
+    printf '  denominator: UNKNOWN — termination census unavailable (%s); the rows below count\n' \
+      "$( command -v python3 >/dev/null 2>&1 && echo "no $script" || echo "no python3" )"
+    printf '  Stop-hook EVALUATIONS, so their population is the sessions that reached a Stop.\n'
+    return 0
+  fi
+  out="$(python3 "$script" --days 1 --denominator 2>/dev/null || true)"
+  case "$out" in
+    termination-census*) printf '  %s\n' "$out" ;;
+    *) printf '  denominator: UNKNOWN — the termination census abstained; the rows below count\n'
+       printf '  Stop-hook EVALUATIONS over the sessions that reached a Stop, not over sessions.\n' ;;
+  esac
+}
 
 # ── the sweep: aggregate the IDL per hook, classify, report, and set the exit code ──
 # $1 = mode: "run" (exit reflects inert) | "report" (always 0)
@@ -267,6 +304,10 @@ sweep() {
     | .[]
     | [ (.hook | cell), .total, .abstained, .productive, .failed, .blind ] | @tsv
   ' "$IDL" 2>/dev/null || true)"
+
+  # Every `total=`/`abst=` printed by the loop below is a count of Stop-hook EVALUATIONS. State
+  # what that is a fraction of BEFORE the rows, so no row can be read as a rate over sessions.
+  census_denominator
 
   local -a inert=() dormant100=()
   local nhooks=0 healthy=0
@@ -577,6 +618,21 @@ selftest() {
   : > "$d/cc-backlog-empty"
   out="$("$SELF" --vocab-lint "$d/cc-backlog-empty" 2>&1)"; rc=$?
   [ "$rc" -ne 0 ]                                  && okp "V vocab-lint on 0 call sites → RED (not vacuous)" || badp "V blind extractor reported all-clear"
+
+  # ── W: the Stop-chain denominator line, both branches ────────────────────────────────────────
+  # The line is an ANNOTATION on someone else's verdict, so the only two things that matter are
+  # that it appears and that it can never take the sweep down. Both are proved here, and the
+  # UNKNOWN branch is proved by pointing the census at a path that does not exist — a MISSING
+  # denominator line and a denominator of 100% read the same to a human, and only one is true.
+  printf '{"ts":"%s","hook":"h-w","disposition":"fired","reason":"x"}\n' "$FIXTS" > "$d/idl-w"
+  out="$(env CC_IDL="$d/idl-w" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$d/log-w" \
+             CC_ABSTAIN_CENSUS_CMD="$d/no-such-census.py" "$SELF" --report 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ]                                  && okp "W census absent → sweep still exits 0 (fail-open)" || badp "W a missing census took the sweep down"
+  printf '%s' "$out" | grep -q 'denominator: UNKNOWN' && okp "W census absent → explicit UNKNOWN, not silence" || badp "W missing census printed nothing at all"
+  printf '%s' "$out" | grep -q 'h-w'               && okp "W the per-hook table still renders under it" || badp "W the hook table vanished"
+  out="$(env CC_IDL="$d/idl-w" CC_ABSTAIN_NOW="$NOW" CC_ABSTAIN_LOG="$d/log-w" \
+             CC_ABSTAIN_CENSUS=0 "$SELF" --report 2>&1)"
+  printf '%s' "$out" | grep -q 'denominator' && badp "W CC_ABSTAIN_CENSUS=0 did not suppress the line" || okp "W CC_ABSTAIN_CENSUS=0 suppresses the line"
 
   echo "idl-abstain-alarm --selftest: $PASS passed, $FAIL failed"
   [ "$FAIL" -eq 0 ] || exit 1
