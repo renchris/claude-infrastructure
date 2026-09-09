@@ -198,3 +198,66 @@ pre-fix RED on the identical fixture (`--selftest`, 66 passed / 0 failed).
 that is chronically load-flaky is still chronically load-flaky, now recorded as
 `"outcome":"floor-not-differential"` in `flakes.jsonl` instead of blocking every deploy. That ledger
 is the queue for fixing them.
+
+## Addendum 2026-09-09 — the floor C30 probes against ROTS, and only a green can refresh it (C31)
+
+The table above ends four of its rows in **RED stands, unchanged**: *file absent at floor*, *renamed
+test*, *unresolvable*, *unreachable*. Those are correct as fail-closed outcomes and they are also a
+**rate**, and nothing until now measured which way that rate moves. It moves the wrong way: `$LASTGREEN`
+advances on exactly one event — a GREEN verdict — so during an outage the control drifts further from
+trunk every sweep while the share of convictions it cannot reach rises. The exonerator's power is a
+function of the outcome it exists to make reachable. A bootstrap circle
+(memory `deployed-layer-bootstrap-circle`), and the reason it is not merely theoretical is that this
+box has been inside it since 2026-09-03.
+
+**Measured 2026-09-09**, live `$LASTGREEN` = `24c598bac1c7` (2026-09-03, **428 commits** down), against
+the suites carrying the recent convictions — the count in brackets is appearances in the newest 60
+stamps' `failing[]`:
+
+| suite | at the floor | consequence for a C30 probe |
+|---|---|---|
+| `tests/drain-brief.bats` (5) | **does not exist** | `floor N/A … differential by construction` — a *false* label: a new file is UNMEASURED at the floor, not proven regressive |
+| `tests/cc-reaper.bats` (10) | +22 test names since | the `-f` filter can match nothing ⇒ `tap_plan 0` ⇒ rc 126 ⇒ conviction stands |
+| `tests/goal-inert-watch.bats` (7) | +14 test names since | as above |
+| `tests/autonomy-sweep.bats` (5) | +10 test names since | as above |
+| `tests/deploy-parity.bats` (2) | +9 test names since | as above |
+
+Those five are precisely the chronic flakes C30 was built to exonerate. Verdict mix over the same
+window: **29 red · 22 cut · 9 green**, and every one of the 9 greens is dated 2026-09-01…03 — none
+since. Median load barely moved across the regime change (15–17 → 16–23), which is the second reason
+this is not a load story.
+
+### C31 — a PER-FILE floor, written by the sweeps that are already happening
+
+A whole-tree green is a **stronger** claim than the probe uses. The probe asks one question about ONE
+file — *was this suite ever observed to pass at a commit below the one under test?* — and every
+plan-complete corpus run already answers it for the ~590 suites that did not fail, **red runs
+included**. `passes_record` writes that complement to `$STATE/passes` (`<file>\t<epoch>\t<sha>`), and
+`floor_exonerates` prefers the file's own row over `$LASTGREEN`, falling back when there is none. The
+floor for a chronic flake becomes ~3.2 h old (the sweep period) instead of six days, and it refreshes
+on the reds — which is the property that breaks the circle.
+
+Nothing about the probe's meaning changes; only the control does, from *"a tree on which every suite
+passed"* to *"a commit at which THIS suite was observed to pass"*. Because the per-file floor is
+NEARER, the differential window it spans is SMALLER, so a genuine regression is convicted at least as
+readily as today. Four guards make the write side the conservative one — a row is written only from a
+run bats reported no shortfall for, that exited 0 or 1, that completed exactly the tests it planned,
+and in which every `not ok` was attributable to a file; a file with ANY not-ok is excluded even when
+the ladder later cleared it, so *passed* means passed outright, never passed-on-retry. One extra
+ancestry check the whole-tree floor gets for free: a per-file floor must be an ancestor of the tree
+under test, or it is not a floor.
+
+**The bug worth recording**, because it makes the clause an elaborate no-op wearing C30's behaviour
+and it survived a first implementation: dropping every CORPUS file's row and re-adding the passers is
+not equivalent to dropping only the passers' rows. A chronic flake fails in the very sweep that
+convicts it, so its prior floor is erased seconds before `floor_exonerates` reads it, and the probe
+falls back to `$LASTGREEN` every single time. A file that failed KEEPS its last observed pass.
+
+**Red-proof, run as controls rather than asserted** — `tests/postland-verify-passfloor.bats`:
+`CC_POSTLAND_PASS_FLOOR=off` reproduces the pre-fix RED on the identical fixture, and a suite that
+PASSES at its own per-file floor and fails at the tip still REDs. Kill switch `CC_POSTLAND_PASS_FLOOR`;
+`CC_POSTLAND_PASS_TTL_S` (7 d) bounds staleness, `CC_POSTLAND_PASS_KEEP` bounds the store.
+
+**Still open, and unchanged by this:** `56b39811eddc` still owns the population question. C31 makes the
+gate reach a verdict about the tree in the presence of chronically load-flaky suites; it does not make
+them less flaky, and `flakes.jsonl` remains the queue for fixing them.

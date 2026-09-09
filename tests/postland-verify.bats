@@ -10,7 +10,10 @@
 #               is-green <sha> (0 stamped-green / 1 not) | status | --selftest
 #   C2 killsw   POSTLAND_VERIFY=off  =>  immediate exit 0
 #   C3 state    $CC_POSTLAND_DIR/{stamps/<tree-sha>.json,last-green,queue,
-#               run.lock.d/,flakes.jsonl,runner.log,tap/<tree-sha>.tap}  (the SUT owns creation)
+#               run.lock.d/,flakes.jsonl,runner.log,tap/<tree-sha>.tap,convictions,cuts,
+#               passes}  (the SUT owns creation). `passes` is C31's per-file floor ledger,
+#               TSV "<file>\t<epoch>\t<sha>", one row per suite, rewritten in place each run —
+#               so it is bounded by the CORPUS, not by the number of sweeps.
 #   C4 stamp    {tree,commit,verdict:"green"|"red",failing[],ts,run_s,retries,
 #               suites,checks,shellcheck_advisory}
 #   C4b denom   `suites` is the COUNT handed to bats — the denominator of the population the
@@ -36,6 +39,20 @@
 #               (prelints, bash -n, the C13b sentinel) are exempt and never delayed. The gate is
 #               separation in TIME, never a lower load: the box has no quiet window, and waiting
 #               for one is gate_admit again (C19/R1).
+#   C31 floor   the control a conviction is probed against is THIS FILE's newest observed pass, not
+#               only $LASTGREEN. $LASTGREEN advances on a green verdict alone, so during an outage it
+#               drifts from trunk every sweep while the share of convictions it cannot reach RISES —
+#               the exonerator's power is a function of the outcome it exists to make reachable.
+#               Measured 2026-09-09 at the live floor (428 commits down): drain-brief does not exist
+#               there at all, and cc-reaper/goal-inert-watch/autonomy-sweep/deploy-parity have grown
+#               22/14/10/9 test names its -f filter cannot match — all five are guaranteed
+#               non-verdicts, and all five are the chronic flakes C30 exists to exonerate. Every
+#               plan-complete corpus run already proves the per-suite pass for the ~590 that did not
+#               fail, RED runs included; $STATE/passes records it. Probe semantics are unchanged in
+#               every direction, and the nearer floor spans a SMALLER differential window, so a real
+#               regression is convicted at least as readily. Own suite:
+#               tests/postland-verify-passfloor.bats, whose kill-switch and passes-at-its-own-floor
+#               arms are the red-proof.
 #   C5 target   origin/main of $CC_POSTLAND_REPO; ABSTAIN (exit 0) when that
 #               TREE already has a stamp
 #   C6 mutex    run.lock.d mkdir+{pid,lstart} — a second LIVE instance exits 0 quietly;
