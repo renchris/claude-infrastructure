@@ -822,7 +822,14 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
   command -v jq >/dev/null 2>&1 || return 1
   # The operator asked to stop → never manufacture a continuation. Checked HERE as well as in the
   # armed path so a kill-switch turn does not churn a sentinel into existence just to delete it.
-  kill_switch_active && return 1
+  # LOGGED, not silent (A07 R5, 2026-09-08): both sibling floors record their own kill-switch
+  # release (ship_floor :969, wake_floor :732-736) and this one did not, so a kill-switch turn on a
+  # session with its own uncommitted writes released here leaving only the SHIP floor's row — and
+  # "the mechanical arm stood down because the operator said stop" was byte-identical to "the
+  # mechanical arm never ran". That is the B-3 ambiguity this hook's own header (:64-79) puts
+  # kill-switch on the LOGGED side of, and it is why the harm of a kill-switch on a WRITER cannot
+  # be measured today. The predicate is already computed; the row is free.
+  kill_switch_active && { log_idl cleared "mechanical-kill-switch"; return 1; }
   # ── PEER EXEMPTION (2026-09-02) ────────────────────────────────────────────────────────────────
   # Both sibling floors stand down for a peer: ship_floor at :865-869, wake_floor at :587-608. This
   # arm checked NEITHER, so one hook gave three different answers about the same class of session —
@@ -843,7 +850,14 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
   if _ma_aid="$(agent_assignee_argv)" && [ -n "$_ma_aid" ]; then
     agent_team_member_confirms "$_ma_aid"; _ma_c=$?
     if [ "$_ma_c" -eq 0 ] || [ "$_ma_c" -eq 2 ]; then
-      log_idl cleared "mechanical-assignee"
+      # Record WHICH rc exempted (A07 R5, 2026-09-08). The arm exempts on rc 2 (*cannot tell*) as
+      # well as rc 0 (*confirmed*), and the reason string alone cannot separate them — so a release
+      # over a genuine assignee reads exactly like a release over an unreadable process table, and
+      # 47 releases in 11 days are unattributable. The sibling at :974 already logs
+      # {assignee,confirm_rc}; this is the same two fields under the same names, so one query
+      # answers the question for both floors.
+      log_idl cleared "mechanical-assignee" "$(jq -cn --arg a "$_ma_aid" --argjson c "$_ma_c" \
+        '{assignee:$a,confirm_rc:$c}' 2>/dev/null)"
       return 1
     fi
   fi

@@ -427,3 +427,79 @@ mkuser_tx_meta() { # <typed-msg> <injected-line1> … → transcript path
   echo "$output" | grep -q 'nothing to clear'
   ! echo "$output" | grep -qF "$a" || false
 }
+
+# ── THE MECHANICAL ARM'S OWN DISPOSITIONS (A07 R5, 2026-09-08) ────────────────────────────────────
+# The arm has two silent releases the sibling floors both record: the operator kill-switch (:825)
+# and the peer exemption (:846). Silence there is the B-3 ambiguity this hook's header (:64-79)
+# exists to remove — "stood down" was byte-identical to "never ran", so 47 releases in 11 days
+# could be attributed to neither the switch nor the exemption, and the exemption's rc 0
+# (*confirmed assignee*) could not be told from its rc 2 (*cannot read the process table*).
+# Fixture technique is tests/mechanical-arm-exemption.bats' — a ledger stub on 🔧, an attribution
+# stub that says the dirt is mine, and an assignee oracle driven by env — so ONLY the disposition
+# under test can stop the block.
+ma_fixture() { # arm the mechanical path: 🔧 ledger + own dirty files + ship floor off
+  export CC_SHIP_FLOOR=0
+  local wrap="$BATS_TEST_TMPDIR/ma-wrap"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'printf "RUNG=🔧\nDIRTY=1\nUNLANDED=0\nREMAINDER=0\nTRUNK=origin/main\nAHEAD=0\n"' > "$wrap"
+  chmod +x "$wrap"; export WRAP_LEDGER_BIN="$wrap"
+  local sw="$BATS_TEST_TMPDIR/ma-sw.sh"
+  printf '%s\n' 'session_dirty_mine() { printf "a.txt\n"; return 0; }' \
+                'session_writes_paths() { return 0; }' \
+                'session_writes_paths_turn() { return 0; }' \
+                'session_wrote_here_this_turn() { return 0; }' \
+                'session_unlanded_mine() { return 1; }' > "$sw"
+  export SESSION_WRITES_LIB="$sw"
+}
+ma_ai_stub() { # $1 = rc echoed by agent_team_member_confirms; AI_ID empty ⇒ "not an assignee"
+  local p="$BATS_TEST_TMPDIR/ma-ai.sh"
+  printf '%s\n' "agent_assignee_argv() { [ -n \"\${AI_ID:-}\" ] && printf '%s' \"\$AI_ID\" && return 0; return 1; }" \
+                "agent_team_member_confirms() { return $1; }" > "$p"
+  export AGENT_IDENTITY_LIB="$p"
+}
+ma_actuate() { printf '{"cwd":"%s","session_id":"%s","transcript_path":"%s"}' "$CWD" "$1" "${2:-}" | bash "$HOOK" 2>/dev/null; }
+# the disposition row this arm wrote, if any (reason is exact — a substring would also match
+# `ship-floor-kill-switch`, which is a DIFFERENT floor's row and is not what is under test)
+ma_row() { grep -F "\"reason\":\"$1\"" "$CONTINUE_IDL" 2>/dev/null | tail -1; }
+
+@test "mechanical arm: CONTROL — the fixture really reaches the arm (it blocks)" {
+  ma_fixture; ma_ai_stub 1; unset AI_ID
+  run ma_actuate sid-ma-ctl ""
+  [ "$status" -eq 0 ]; fired "$output"
+}
+
+@test "mechanical arm: an operator kill-switch release is LOGGED, not silent" {
+  ma_fixture; ma_ai_stub 1; unset AI_ID
+  local tx; tx="$(mkuser_tx "just fix the typo and stop")"
+  run ma_actuate sid-ma-ks "$tx"
+  [ "$status" -eq 0 ]; [ -z "$output" ]              # released — the operator asked to stop
+  [ -n "$(ma_row mechanical-kill-switch)" ]          # …and said so, attributably
+}
+
+@test "mechanical arm: CONTROL — no kill phrase ⇒ no kill-switch row (the row is caused, not constant)" {
+  ma_fixture; ma_ai_stub 1; unset AI_ID
+  run ma_actuate sid-ma-nok "$(mkuser_tx "please keep going")"
+  [ "$status" -eq 0 ]; fired "$output"
+  [ -z "$(ma_row mechanical-kill-switch)" ]
+}
+
+@test "mechanical arm: a CONFIRMED assignee release records assignee + confirm_rc=0" {
+  ma_fixture; ma_ai_stub 0; export AI_ID="member-x"
+  run ma_actuate sid-ma-c0 ""
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  local row; row="$(ma_row mechanical-assignee)"
+  [ -n "$row" ]
+  [ "$(printf '%s' "$row" | jq -r '.assignee')" = "member-x" ]
+  [ "$(printf '%s' "$row" | jq -r '.confirm_rc')" = "0" ]
+}
+
+@test "mechanical arm: a CANNOT-TELL release is distinguishable — confirm_rc=2, not 0" {
+  # The whole point of the field: rc 2 means the process table was unreadable, so the release is
+  # evidence of ignorance rather than of a real assignee. Pre-fix both wrote the identical row.
+  ma_fixture; ma_ai_stub 2; export AI_ID="member-y"
+  run ma_actuate sid-ma-c2 ""
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  local row; row="$(ma_row mechanical-assignee)"
+  [ -n "$row" ]
+  [ "$(printf '%s' "$row" | jq -r '.confirm_rc')" = "2" ]
+}
