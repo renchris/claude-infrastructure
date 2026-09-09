@@ -189,6 +189,47 @@ synthesis harvest; it fires W0 + W1a–g, commits this plan, lands the docs bran
 `handoff-fire.sh --recycle` in this pane; the successor collects the eight pings (custody rows), lands
 nothing itself, fires W2 when W1a and W1c have landed, and holds ≥50% of its window.
 
+### Fires (2026-09-09T00:15–00:25Z, from the lead in pane 625 / `next3`)
+
+| Wave | worktree branch | brief | back-channel |
+|---|---|---|---|
+| W1b | `ed-w1b-handoff-fire` | `/tmp/fire-ed-w1b.txt` | SKIPPED — pane `625` is not uuid-shaped (transplanted kitty pane, no `ITERM_SESSION_ID`); no custody row |
+| W1a | `ed-w1a-goal-state` | `/tmp/fire-ed-w1a.txt` | SKIPPED (same) |
+| W1c | `ed-w1c-stop-hooks` | `/tmp/fire-ed-w1c.txt` | SKIPPED (same) |
+| W1f | `ed-w1f-shared-task-list` | `/tmp/fire-ed-w1f.txt` | SKIPPED (same) |
+| W0 | `ed-w0-claude-md` | `/tmp/fire-ed-w0.txt` | SKIPPED (same) |
+| W1d | `ed-w1d-dispatch-hygiene` | `/tmp/fire-ed-w1d.txt` | `--notify-back <sid>` (sid-form test) |
+| W1e | `ed-w1e-beat-tz` | `/tmp/fire-ed-w1e.txt` | `--notify-back <sid>` |
+| W1g | `ed-w1g-supervisor-restart` | `/tmp/fire-ed-w1g.txt` | `--notify-back <sid>` |
+
+**Outcome of that first attempt: all eight ABORTED at handoff-fire's F3 back-channel gate** — a
+transplanted session has no `ITERM_SESSION_ID`, so its pane is not uuid-shaped and is not in
+`~/.claude/cc-registry/`; the sid form and the kitty id were both refused. Fix applied 00:55Z: register
+the pane the way the launcher does (`ITERM_SESSION_ID=w0t0p0:625 CC_PANE_ID=625` +
+`hooks/session-register.sh` with a SessionStart payload), then fire with that env and
+`--notify-back 625`. **Second attempt (01:00–01:25Z, load 15→25 on 10 cores):**
+
+| Wave | pane | account | goal | state |
+|---|---|---|---|---|
+| W1b handoff-fire | 634 | next3 | ARMED+VERIFIED | engaged, working |
+| W1a goal-state | 635 | next3 | ARMED+VERIFIED | engaged, working |
+| W1d dispatch-hygiene | 636 | next | (unrecorded) | engaged, working |
+| W1e beat-tz | 637 | next4 | NOT armed (arming paste abstained — backlog `2ee30f87c370`) | engaged, working |
+| W1g supervisor-restart | 638 | next4 | NOT armed (same) | engaged, working |
+| W1f shared-task-list | ~640 | next2 | NOT armed (composer unreadable 30 s) | engaged, working |
+| W1c stop-hooks | 639 | — | unreachable | **FIRE FAILED — never engaged**: the brief paste did not submit inside the 305 s engagement window; pane live but TASK-LESS, worktree `ed-w1c-stop-hooks` kept |
+| W0 claude-md | 641 | — | unreachable | **FIRE FAILED — never engaged** (same); worktree `ed-w0-claude-md` kept |
+
+Custody rows exist for the six engaged fires (`--notify-back 625`). Three of six engaged sessions run
+WITHOUT a Stop-hook goal — the goal-arm abstention rows are real and load-correlated; their briefs
+carry the DoD so they work, and their closes are harvested from trunk like any other. **Harvest rule
+for the successor:** the first five have no back-channel, so their
+completion is read from trunk, not from mail — `git log origin/main --since=2026-09-09T00:00Z
+--grep='goal-state\|handoff-fire\|completion-assert\|0022\|CLAUDE.md'` and `git worktree list | grep
+ed-w` (a removed worktree = the session self-closed). A defect in its own right: a transplanted or
+resumed session loses its pane identity, so `--notify-back` needs the SID form — record whether the
+sid-form fires (W1d/e/g) actually deliver.
+
 ### Operator decisions — filed as class-C packets (conviction · receipt = SYNTHESIS.md · two options each)
 
 1. **Who answers a permission prompt while you are asleep?** Recommendation (60%): the decider in shadow
