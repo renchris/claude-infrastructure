@@ -79,6 +79,20 @@ has_claude_under() {  # <pid> → 0 iff a claude runs somewhere under this pid (
   return 1
 }
 slug() { printf '%s' "$1" | LC_ALL=C sed 's/[^a-zA-Z0-9]/-/g'; }
+# A LIVE session's id is never a husk's identity (2026-09-09). The transcript fallback picks the
+# NEWEST *.jsonl for the pane's cwd, and on a shared checkout the newest transcript belongs to
+# whichever LIVE session last wrote there — measured: pane 658 (a kitty window holding a bare shell)
+# resolved to the sid of the session running in pane 646, verdict RESUME, so `--resume --all` would
+# have typed that live session's resume line into an unrelated shell. The same holds for the
+# scrollback path: a session resumed in ANOTHER pane leaves its old pane's "claude --resume <sid>"
+# line behind. Every fallback therefore excludes any sid with a live claude behind it. Seam:
+# CC_HUSK_LIVE_SIDS (a file, one sid per line) stands in for cc-sessions.
+live_sids() {
+  if [ -n "${CC_HUSK_LIVE_SIDS:-}" ]; then cat "$CC_HUSK_LIVE_SIDS" 2>/dev/null; return 0; fi
+  "${CC_HUSK_SESSIONS:-$HOME/.claude/bin/cc-sessions}" --json 2>/dev/null | jq -r '.[].session_id // empty' 2>/dev/null
+}
+LIVE_SIDS="$(live_sids)"
+is_live_sid() { [ -n "${1:-}" ] && printf '%s\n' "$LIVE_SIDS" | LC_ALL=C /usr/bin/grep -qxF -- "$1"; }
 
 resolve() {  # <pane> <cwd> → sets R_SID R_LAUNCHER R_CWD R_SRC (empty sid = unresolved)
   local pane="$1" cwd="$2" row sb store d f
@@ -104,6 +118,9 @@ resolve() {  # <pane> <cwd> → sets R_SID R_LAUNCHER R_CWD R_SRC (empty sid = u
     if [ -n "$ri" ] && [ "${ri:-0}" -gt "${li:-0}" ]; then
       R_SID="$(printf '%s\n' "$sb" | LC_ALL=C sed -n 's/.*claude --resume \([0-9a-f-]\{36\}\).*/\1/p' | tail -1)"
     fi
+    if [ -n "$R_SID" ] && is_live_sid "$R_SID"; then
+      R_SID=""; R_SRC=live-elsewhere; return 1     # resumed in another pane: this one is just an empty shell
+    fi
     if [ -n "$R_SID" ]; then
       R_LAUNCHER="$(printf '%s\n' "$sb" | LC_ALL=C sed -n 's/.*[[:space:]]\(claude[0-9]\{0,1\}\) --strict-mcp-config.*/\1/p' | tail -1)"
       [ -n "$R_LAUNCHER" ] || R_LAUNCHER=claude
@@ -116,6 +133,7 @@ resolve() {  # <pane> <cwd> → sets R_SID R_LAUNCHER R_CWD R_SRC (empty sid = u
     d="$store/projects/$(slug "$cwd")"; [ -d "$d" ] || continue
     for f in "$d"/*.jsonl; do
       [ -f "$f" ] || continue
+      is_live_sid "$(basename "$f" .jsonl)" && continue
       m="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)"
       if [ "$m" -gt "$bestm" ]; then bestm="$m"; best="$f"; fi
     done
