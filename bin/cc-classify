@@ -10,6 +10,7 @@
 # CAUSES (exactly one per session):
 #   active            recent *assistant* turn (< idle threshold), pid alive        → NEVER reap
 #   livelocked        turning, but only restating itself across turns (a loop)      → NEVER reap (surface)
+#   blocked-on-permission  the HARNESS wrote a live PermissionRequest beacon for this sid → NEVER reap
 #   rate-limited      a structured usage-cap API error in the transcript tail       → NEVER reap
 #   owned-wait        pid alive, idle, a legitimate wait (live teammates / user)    → NEVER reap
 #   coordination-hang pid alive, idle, had REAL teammates but none alive / no prog  → NEVER reap (surface)
@@ -56,6 +57,18 @@ FIRED_BOOT_MAX_S="${CC_FIRED_BOOT_MAX_S:-1800}"             # stamp tenancy: a f
 INTERACTIVE_HOLD_S="${CC_CLASSIFY_INTERACTIVE_HOLD_S:-21600}"  # operator prompt within this ⇒ ADOPTED pane, never-reap (2026-07-24)
 INTERACTIVE_HOLD_DISABLE="${CC_CLASSIFY_INTERACTIVE_HOLD_DISABLE:-0}"  # tests-only: 1 turns the operator-adoption hold OFF deliberately
 FIRE_PROMPT_SLACK_S="${CC_CLASSIFY_FIRE_PROMPT_SLACK_S:-300}"  # prompts within this of firedAt = the spawn brief, not adoption
+# ── the PERMISSION BEACON seam (blocked-on-permission) ─────────────────────────────────────────
+# ONE store, THREE readers: hooks/cc-permission-beacon.sh WRITES it, scripts/lead-supervisor.sh
+# pages off it, and this classifier now reads it too. The variable name and default are the hook's
+# and the supervisor's, deliberately — a third consumer with a HARDCODED path is exactly how the
+# three drift apart, and a drifted classifier reads an empty dir as an all-clear.
+PERMPEND_DIR="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}"
+# The supervisor REAPS a beacon past this horizon (sweep_permission_pending REAP 2) and stops paging
+# it. Same seam, same default: past it a beacon is stale garbage here too, so a beacon that outlives
+# its prompt can never manufacture a PERMANENT never-reap.
+PERMPEND_HORIZON_S="${CC_PERMPEND_HORIZON_S:-86400}"
+PERMPEND_HEARTBEAT_NAME="${CC_PERMPEND_HEARTBEAT_NAME:-.beacon-alive}"   # the hook's liveness stamp
+PERMPEND_BLIND_DISABLE="${CC_CLASSIFY_PERMPEND_BLIND_DISABLE:-0}"        # 1 ⇒ do NOT fail closed when the beacon subsystem is unobservable
 # CC_CLASSIFY_INTERACTIVE_TAIL_BYTES (tail window, default 2000000; recency needs the tail only) is read
 # DIRECTLY by hooks/lib/cc-interactive.sh — no shell var here, since last_interactive_epoch just wraps the lib.
 # ── safeguard-blocked detection (2026-07-25) — a model CONTENT-safeguard refusal that is the tail's
@@ -652,6 +665,87 @@ work_landed() { # <cwd> → 0 if clean AND the branch's content is on trunk (P0-
   return 1
 }
 
+# ── the PERMISSION BEACON: the one signal that separates FROZEN from IDLE ──────────────────────
+# A session sitting on an unanswered permission modal cannot emit a single thing — no assistant
+# turn, no telemetry, no transcript line. From outside it is byte-for-byte an idle session, which
+# is why lead-supervisor.sh calls itself "STRUCTURALLY blind to modal/permission dialogs" (S-3) and
+# why the harness-authored beacon exists at all. This classifier was the one consumer that never
+# read it: measured 2026-09-09, pane 690 (sid d62ed983) sat on an unanswered `rm -rf $SC` modal
+# WITH ITS BEACON PRESENT and classified `finished-teammate` — a REAP-ELIGIBLE cause. Only
+# work-landed=no stopped the reap. Had that worker landed its branch first, a session waiting on a
+# HUMAN would have been killed as done. Pane 616 read `rate-limited` off a stale tail error on the
+# same afternoon, and pane 625 read `task-less`. The beacon said "blocked" in every case.
+#
+# THREE STATES, not two — the hook's own header is explicit that absence alone is ambiguous:
+#   dir ABSENT / heartbeat older than this session's last activity ⇒ BLIND (the observer was not
+#       demonstrably running when this session could have prompted; absence proves nothing)
+#   heartbeat observed at/after last activity, no <sid>.json          ⇒ CLEAR (the trusted all-clear)
+#   <sid>.json present and inside the orphan horizon                  ⇒ BLOCKED
+# The heartbeat is stamped on EVERY invocation of the hook, write AND clear, and `clear` runs on
+# every PostToolUse — so on any box where the hook is registered it is seconds old (measured 0s,
+# 2026-09-09). A heartbeat that PREDATES this session's last activity therefore means the observer
+# was not running at the moment a prompt could have fired, which is a real blind spot, not noise.
+PERM_STATE=blind      # blocked | clear | blind — set by permpend_state
+PERM_CMD=""           # the blocked invocation, one line, bounded
+PERM_AGE=0            # seconds the prompt has been pending
+permpend_state() { # <sid> <last-activity-epoch|""> → sets PERM_STATE / PERM_CMD / PERM_AGE
+  PERM_STATE=blind; PERM_CMD=""; PERM_AGE=0
+  local sid="${1:-}" lat="${2:-}" bf ts age hb hbm
+  [ -n "$sid" ] || { PERM_STATE=clear; return 0; }        # no sid ⇒ nothing to key on; do not invent blindness
+  case "$sid" in *[!A-Za-z0-9._-]*|.|..) PERM_STATE=clear; return 0 ;; esac   # same basename guard the hook applies
+  [ -d "$PERMPEND_DIR" ] || return 0                      # dir absent ⇒ the hook has never run ⇒ BLIND
+
+  bf="$PERMPEND_DIR/$sid.json"
+  if [ -f "$bf" ]; then
+    ts="$(jq -r '.ts // 0' "$bf" 2>/dev/null)"; ts="${ts%.*}"; case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
+    age=$(( NOW - ts ))
+    # A ts=0 / malformed beacon has age≈now ≥ horizon ⇒ NOT blocked, exactly as the supervisor reads
+    # it. Garbage must never buy a session permanent immunity from the reaper.
+    if [ "$age" -lt "$PERMPEND_HORIZON_S" ] 2>/dev/null; then
+      PERM_STATE=blocked; PERM_AGE=$age; PERM_CMD="$(permpend_cmd "$bf")"; return 0
+    fi
+  fi
+
+  # Not blocked. Is the ALL-CLEAR trustworthy? Only if the observer was running at/after the moment
+  # this session last did anything. With no last-activity epoch the tree cannot reach a reapable
+  # cause at all (they all require a computed idle), so there is nothing to fail closed FOR.
+  hb="$PERMPEND_DIR/$PERMPEND_HEARTBEAT_NAME"
+  [ -f "$hb" ] || return 0                                # no heartbeat ⇒ BLIND
+  [ -n "$lat" ] || { PERM_STATE=clear; return 0; }
+  hbm="$(stat -f %m "$hb" 2>/dev/null || stat -c %Y "$hb" 2>/dev/null || true)"
+  case "$hbm" in ''|*[!0-9]*) return 0 ;; esac            # cannot date the heartbeat ⇒ BLIND
+  [ "$hbm" -ge "$lat" ] 2>/dev/null && PERM_STATE=clear
+  return 0
+}
+
+permpend_cmd() { # <beacon-file> → the blocked invocation, single line, ≤120 chars
+  # Sibling of lead-supervisor.sh beacon_cmd (:962) — same fields, tighter bound because this string
+  # rides in a classifier DETAIL, not a page body.
+  local f="$1" c
+  c="$(jq -r '.tool_input.command // .tool_input.file_path // .tool_input.path
+              // ((.tool_name // "tool") + " " + ((.tool_input // {}) | tostring))' "$f" 2>/dev/null)"
+  [ -n "$c" ] && [ "$c" != null ] || c="$(jq -r '.tool_name // "?"' "$f" 2>/dev/null)"
+  c="$(printf '%s' "$c" | tr '\n\t' '  ' | sed 's/  */ /g')"
+  [ "${#c}" -gt 120 ] && c="${c:0:117}..."
+  printf '%s' "${c:-?}"
+}
+
+# The BLIND downgrade. A blind read cannot claim `blocked-on-permission` — there is no positive
+# evidence — but it must not let an idleness-derived REAPABLE cause stand either, because the whole
+# point is that a frozen session and a finished one look identical from out here. So the four
+# reapable causes fall back to owned-wait (never-reap) and say why. This can only ever NARROW what
+# is reaped; a cause cc-reaper adds and this list misses is simply unprotected, never newly killed.
+# Mirror of cc-reaper:135 REAPABLE_RE — the two are not linted together, so this names it explicitly.
+PERMPEND_REAPABLE_RE='^(handed-off-lead|finished-teammate|finished|coordination-abandoned)$'
+permpend_blind_downgrade() { # reads PERM_STATE + CAUSE; may rewrite CAUSE/DETAIL
+  [ "$PERMPEND_BLIND_DISABLE" = 1 ] && return 0
+  [ "$PERM_STATE" = blind ] || return 0
+  [[ "$CAUSE" =~ $PERMPEND_REAPABLE_RE ]] || return 0
+  DETAIL="would be $CAUSE, but the permission beacon subsystem is not observably running ($PERMPEND_DIR absent, or its heartbeat predates this session's last activity) — an absent beacon cannot be read as an all-clear, so a modal-frozen session is indistinguishable from a finished one; fail closed (never-reap). $DETAIL"
+  CAUSE=owned-wait
+  return 0
+}
+
 # ── the decision tree ─────────────────────────────────────────────────────────────────────────
 # sets: CAUSE, IDLE (seconds or -1), LANDED (yes/no/na), SUCCESSOR (uuid|""), DETAIL
 classify_entry() { # <entry-json> <all-sessions-json>
@@ -663,7 +757,7 @@ classify_entry() { # <entry-json> <all-sessions-json>
   pane="$(printf '%s' "$e" | jq -r '.paneUUID // ""')"
   name="$(printf '%s' "$e" | jq -r '.name // ""')"
   started="$(printf '%s' "$e" | jq -r '.startedAt // ""')"   # epoch-MS; stamp-tenancy input (rule 2)
-  CAUSE=""; IDLE=-1; LANDED=na; SUCCESSOR=""; DETAIL=""; SG_MODEL=""; SG_TEXT=""
+  CAUSE=""; IDLE=-1; LANDED=na; SUCCESSOR=""; DETAIL=""; SG_MODEL=""; SG_TEXT=""; PERM_STATE=blind
 
   # 1. owning process dead → crashed (idle-linger targets are ALIVE; a dead pid is a separate cleanup)
   if ! alive "$pid"; then CAUSE=crashed; DETAIL="pid ${pid:-?} not alive"; return 0; fi
@@ -672,6 +766,21 @@ classify_entry() { # <entry-json> <all-sessions-json>
   tj="$(find_transcript "$sid" 2>/dev/null || true)"
   lat="$(last_assistant_ts "$tj" 2>/dev/null || true)"
   [ -n "$lat" ] && IDLE=$(( NOW - lat ))
+
+  # 1.5 BLOCKED-ON-PERMISSION — checked before EVERY idleness-derived cause, because idleness is the
+  #     defining SYMPTOM of the blocked state and every cause below reads it as something else. It
+  #     sits AFTER the pid check on purpose: a beacon whose owning process is gone is stale by
+  #     construction (the prompt died with the session), and the supervisor already reaps exactly
+  #     that beacon (sweep_permission_pending REAP 1, pid gone). Reporting a dead session as blocked
+  #     on a human would strand it forever behind a prompt nobody can answer, so `crashed` — itself a
+  #     never-reap surface cause — stays the right answer and this branch is simply unreachable for it.
+  permpend_state "$sid" "$lat"
+  if [ "$PERM_STATE" = blocked ]; then
+    IDLE="$PERM_AGE"
+    CAUSE=blocked-on-permission
+    DETAIL="a LIVE harness permission beacon names this session — blocked on a human ${PERM_AGE}s: ${PERM_CMD} (never-reap; lead-supervisor pages it with the command attached)"
+    return 0
+  fi
 
   # 2. structured usage-cap in the transcript tail → rate-limited (resumes on reset; never reap)
   if [ -n "$tj" ] && recent_api_limit "$tj"; then CAUSE=rate-limited; DETAIL="structured usage-cap api error"; return 0; fi
@@ -950,6 +1059,9 @@ classify_entry() { # <entry-json> <all-sessions-json>
 
 emit_one() { # <entry-json> <all-json> <json?>
   classify_entry "$1" "$2"
+  # classify_entry returns from ~15 places, so the blind downgrade cannot live inside it without
+  # being repeated 15 times. emit_one is its ONLY call site — keep it that way, or move this call.
+  permpend_blind_downgrade
   if [ "${3:-}" = "--json" ]; then
     # emit pid + classify-time lstart so cc-reaper can pin session identity across classify→act (a17 S-4).
     local _pid _lstart
