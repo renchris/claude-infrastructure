@@ -204,3 +204,95 @@ t_met_rec()   { printf '{"type":"attachment","timestamp":"%s","attachment":{"typ
   [ "$(tsv_field "$output" 1)" = "live" ]
   [ "$(tsv_field "$output" 5)" = "a b c" ]             # field 5 stays field 5
 }
+
+# ══ THE PIPEFAIL INVERSION (W1a · A04 § 3, exhaustive-drive 2026-09-08) ═══════════════════════════
+#
+# THE DEFECT. Both readers were `grep … | jq …`, and BOTH consumers run `set -o pipefail`
+# (`goal-inert-watch.sh:90`, `wrap-ledger.sh`). grep's NO-MATCH status is 1, so under pipefail the
+# pipeline's status was 1 however well jq did, `|| return 1` fired, and a transcript that simply
+# never armed a goal — the commonest state on this box — was reported UNREADABLE. Measured on
+# 2026-09-08: 375 of 469 goal-inert-watch evaluations logged `goal-unreadable`, and 47 of 48 sampled
+# sids had ZERO `goal_status` lines. The oracle's own header calls this out in the other direction
+# ("a failure must never wear `absent`"); the inverse is just as wrong, and it is what shipped.
+#
+# WHY EVERY CASE ABOVE WAS BLIND TO IT, and it is the HARNESS, not the assertions. `live_probe`
+# runs `bash -c ". LIB; goal_liveness …"` with NO pipefail, so the pipeline took jq's status and the
+# bug could not appear — and the one goal-less fixture in this suite (`prose`) contains the literal
+# token `goal_status`, so grep MATCHED and returned 0 even under pipefail. A fixture that is
+# goal-less in the way production is goal-less — the token appears NOWHERE — plus the consumer's own
+# shell options, is what makes this observable at all.
+#
+# THE FIX MUST KEEP THREE OUTCOMES, NOT TWO. A bare `|| true` on the pipeline would satisfy the
+# ABSENT case and re-create the laundering the header forbids, so the corrupt case below is not a
+# nicety: it is the half of the red-proof that pins the distinct "grep succeeded, jq failed" rc.
+
+pf_probe() { # <transcript-path> → runs the oracle under the CONSUMERS' shell options
+  run bash -c "set -uo pipefail; . '$LIB'; goal_liveness '$1'"
+}
+
+# goal-less the way a real transcript is: the token `goal_status` appears on no line at all.
+no_goal_at_all() {
+  printf '{"type":"user","message":{"role":"user","content":"land the migration"}}\n'
+  printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}\n'
+}
+
+@test "PIPEFAIL: a transcript with ZERO goal_status lines is ABSENT, never UNREADABLE" {
+  no_goal_at_all > "$D/t.jsonl"
+  [ "$(grep -c 'goal_status' "$D/t.jsonl" || true)" -eq 0 ]   # fixture integrity: grep finds nothing
+  pf_probe "$D/t.jsonl"
+  [ "$status" -eq 0 ]                       # ← RED pre-fix: grep's no-match 1 became the pipeline's
+  [ "$(tsv_field "$output" 1)" = "absent" ]
+  [ "$(tsv_field "$output" 2)" = "0" ]
+  [ "$(tsv_field "$output" 3)" = "none" ]
+}
+
+@test "PIPEFAIL: a CORRUPT record still returns rc 1 — 'absent' is never worn by a failure" {
+  # The other half of the proof. Pre-fix these two fixtures are INDISTINGUISHABLE (both rc 1);
+  # post-fix they must separate, and this is the one that must NOT move.
+  { arm_rec "finish"; printf '{"type":"attachment","attachment":{"type":"goal_status"\n'; } > "$D/c.jsonl"
+  pf_probe "$D/c.jsonl"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+@test "PIPEFAIL: a LIVE goal still reads live — the fix does not disturb the matched path" {
+  { prose; t_arm_rec "land it" "2026-08-15T12:31:04.123Z"; } > "$D/t.jsonl"
+  pf_probe "$D/t.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(tsv_field "$output" 1)" = "live" ]
+  [ "$(tsv_field "$output" 5)" = "land it" ]
+}
+
+@test "PIPEFAIL: goal_live_condition takes the same leg — goal-less is 'not live', not an error" {
+  # The predicate's rc is 1 either way (no goal ⇒ not live), so this case cannot go red on its own.
+  # It is here because the two functions share one pipeline shape and must not drift again: a
+  # future maintainer fixing only the oracle would leave the predicate inverted with no test
+  # anywhere that could tell. The MUTATION below is what actually gives this file teeth.
+  no_goal_at_all > "$D/t.jsonl"
+  run bash -c "set -uo pipefail; . '$LIB'; goal_live_condition '$D/t.jsonl'"
+  [ "$status" -eq 1 ]
+  { prose; arm_rec "still live"; } > "$D/l.jsonl"
+  run bash -c "set -uo pipefail; . '$LIB'; goal_live_condition '$D/l.jsonl'"
+  [ "$status" -eq 0 ]
+  [ "$output" = "still live" ]
+}
+
+@test "MUTATION: restoring the bare grep leg re-inverts ABSENT into UNREADABLE" {
+  # Neuters exactly the fix — `_goal_grep` becomes the bare `grep` it replaced — and asserts the
+  # ABSENT case flips back. Without this, the three cases above would pass on any implementation
+  # that happens to be correct today, including one that swallows grep's ERROR status too.
+  m="$D/mutant.sh"
+  sed 's/^  \[ "\$_gg_rc" -le 1 \] && return 0$/  [ "$_gg_rc" -eq 0 ] \&\& return 0/' "$LIB" > "$m"
+  # THE `|| false` IS LOAD-BEARING, and so is the fact that it is not `&& false`. A bare
+  # `! cmp -s …` on its own line is EXEMPT from errexit under bats and asserts nothing
+  # (MEMORY.md negated-assertion-dead-unless-final); `cmp -s … && false` is dead the other way,
+  # because errexit does not reach the LHS of an `&&` either — scripts/bats-assert-liveness-lint
+  # names that class `and-absorbed` and it caught this very line in the ship gate. Only making
+  # `false` the LAST command of an OR-list actually fails the test.
+  ! cmp -s "$LIB" "$m" || false              # the mutation really applied
+  grep -q '\-eq 0 \] && return 0' "$m"       # …and applied to the LINE the fix added
+  no_goal_at_all > "$D/t.jsonl"
+  run bash -c "set -uo pipefail; . '$m'; goal_liveness '$D/t.jsonl'"
+  [ "$status" -eq 1 ]                        # ← flipped: the pre-fix defect, reproduced on demand
+  [ -z "$output" ]
+}
