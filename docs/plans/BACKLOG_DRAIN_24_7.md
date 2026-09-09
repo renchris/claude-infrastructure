@@ -87,6 +87,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-09 — recycle #330 (lane infra):** closed f4dab9fbcb55 (target 9002948eb52c already closed
+  REFUTED, disproof 7f4139417 on trunk), fef07efcdd0d (own falsifier: grep -c surface_death in the live
+  lead-crash-watchdog.sh => 5), 0c8b39b67665 (56ca98a43 landed the cloud absence contract), 3e8473494af4
+  (434a9c85c; CLASSIFY_ENUM_SELFREPORT 9 on trunk vs 0 pre-fix), e7d646a6687a + 53a84321b11a (briefs at
+  $CLAUDE_CONFIG_DIR/autonomy; drain-brief.sh:173 refuses a pointer >=400 B — this link: pointer 227 B,
+  brief 8290 B), 96f9f9bbe9cd (watchdog:475/514 falls back to $pane.json) · blocked none · released
+  a6843865a2ec, 2c563601bdd4, 2d91af430c60 (load1 133/10 cores — bats and the bench both refused, so no
+  code row was gate-able) · closed=7 closed_pre=7 closed_other=0 filed=0 net=7 blocked=0 floor=MET.
+
 - **2026-09-09 — recycle #329 (lane infra):** closed 7722923c0ea9 (its argv word-split reproduces
   only in zsh; under bash, which cc-backlog runs, hop1 reads b1=[claude], and lane coverage is
   715/3104 not 0), bca46a0b9e09 (a child-marked session on 2.1.260 DID persist a 408 KB transcript),
