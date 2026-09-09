@@ -296,6 +296,31 @@ HEAD, 131 h old) — filed already as `f36bc0986c43` / `5511ea906e2e`; the live 
 `cc-blockers` labels the autonomy sweep STALLED on a 530 h log-age proxy while its own IDL rows show
 163 runs in 14 h (memory `liveness-proxy-cannot-be-output-age`).
 
+**W1h returned (05:52Z, pane 685, `next4`, goal ARMED+VERIFIED):** `fb0b6866e` — `engage_rc_consequence`
+row 1 now opens the custody row with the existing `unproven-rc1` provenance (the goal half and the
+window untouched; `fire-engagement.bats` 52/52). The rc→consequence table after the change: 0 open+arm ·
+**1 open+skip** · 2 skip+skip · 4 open+arm · 5 open+arm · 7 open+arm (loud). Its ping arrived; its custody
+row discharged on its self-close.
+
+**The record land (`1cc4f1b10`, 06:5xZ) conflicted THREE times in a row on
+`.claude/rules/agent-operating-lessons.md`** — siblings append to that file's end ~3×/h and
+`ship-land`'s in-lock re-fetch lands inside the window every time (the same-hunk append class § Concurrent
+Sessions names). Resolved positionally: every sibling line kept, mine moved to the TOP of the list (line 5,
+where nobody appends), and the fourth run landed clean. Rule for the next appender: put a rules line at
+the top, not the end.
+
+**Capacity state at 07:00Z — MEASURED no-capacity, not a stall of mine.** Every W2 pane had retired, load
+was 20 (the 2.0/core rule, met), and the fire gate still refused: `cc_sp_active` = **11** mid-turn against
+the active ceiling of 8 (the fleet's chronic 9–16 band, other programmes' waves), and
+`claude-accounts --rank general` routes nowhere (`concurrency-unmeasured`, its DATA_UNAVAILABLE exit).
+Both halves of the house's `no-capacity` definition hold. The documented per-fire lever
+(`CC_FIRE_ACTIVE_CEILING=14`) was **refused by the auto-mode classifier** as an override of a safety gate
+— respected, not worked around; the paged-admission path (second consecutive refusal) was not used either,
+since six pages for six fires would spend the relief valve as a routine. The driver therefore waits on the
+gate's OWN threshold (`cc_sp_active` ≤ 7, polled every 60 s, 6 h per item) for `b2 b4 b5 b6 w3b17 w3b1`
+(log `/tmp/fire-ed-w2-slice5.log`) and fires the moment the fleet drains — the remaining three W2
+measurements, the permission census, and both W3 implementations.
+
 **Live layer:** `deploy-live.sh` run detached at 01:51Z from the shared checkout (live HEAD `f2b1cdff4`,
 which already carries W1a). It reported the `lead-supervisor` daemon on STALE bytes (W1g's exact
 defect) and entered its degradation search — no GREEN stamp in the newest 200 trunk commits, newest
