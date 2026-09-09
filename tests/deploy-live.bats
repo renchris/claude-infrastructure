@@ -355,10 +355,10 @@ STUB
   # ARM 2 — the MUTANT. Deleting the layout discriminator's other half is not the pre-fix state;
   # removing the repair IS, so the mutant neuters the unset and must lose both the advance and the
   # message on this same fixture.
-  [ "$(grep -c '^    g config --unset core.bare' "$DL")" -eq 1 ]
+  [ "$(grep -c 'g config --unset core.bare' "$DL")" -eq 1 ]
   MUT="$BATS_TEST_TMPDIR/dl-mut-nobarerepair.sh"
-  sed 's@^    g config --unset core.bare.*@    : # MUTANT — repair removed@' "$DL" > "$MUT"
-  [ "$(grep -c '^    g config --unset core.bare' "$MUT")" -eq 0 ]
+  sed 's@^ *bare_err="$(g config --unset core.bare.*@      bare_err= bare_rc=1 # MUTANT — repair removed@' "$DL" > "$MUT"
+  [ "$(grep -c 'g config --unset core.bare' "$MUT")" -eq 0 ]
   [ "$(grep -c 'MUTANT — repair removed' "$MUT")" -eq 1 ]
   git -C "$SHARED" reset -q --hard HEAD~1                              # back below the tip…
   git -C "$SHARED" config core.bare true                               # …and flipped again
@@ -366,6 +366,62 @@ STUB
   [ "$status" -ne 0 ] || false
   [[ "$output" != *"REPAIRED core.bare=true"* ]] || false
   [ "$(git -C "$SHARED" config --bool --get core.bare)" = true ] || false
+}
+
+@test "a LOCKED-OUT unset is retried, and a conceded repair carries git's own reason" {
+  # 2026-09-08, ~/.claude/autonomy/postland/deploy.log:5138. The repair fired, conceded, and the
+  # shared checkout stayed core.bare=true for ~4h — 27 commits off the live layer against a budget
+  # of 25 — until the IDENTICAL command was run by hand and succeeded on the first try. The two
+  # facts that would have named it were thrown away by `2>/dev/null || true`: git exits 255 with
+  # "could not lock config file .git/config: File exists" when it loses $DEPLOY_REPO/.git/config.lock
+  # — which is held by `git worktree add|remove`, i.e. by the very operation that sets core.bare. So
+  # the flip and the repair race on ONE lock, and the loser conceded as if the checkout were
+  # uncurable. Both halves are pinned here: the concede must be triageable, and a lock that clears
+  # must be survived rather than conceded to.
+
+  # ARM 1 — a lock held for the whole run. The lane still concedes to the ff arm (correct: it could
+  # not cure it), but the concede now names the rc and git's own words instead of saying nothing.
+  advance_origin b
+  stamp origin/main
+  git -C "$SHARED" config core.bare true
+  : > "$SHARED/.git/config.lock"
+  run dl
+  [ "$status" -ne 0 ] || false
+  echo "$output" | grep -q "did NOT restore a working tree" || false
+  echo "$output" | grep -q "git exited 255" || false
+  echo "$output" | grep -q "GIT SAID: error: could not lock config file" || false
+  [ "$(git -C "$SHARED" config --bool --get core.bare)" = true ] || false
+  rm -f "$SHARED/.git/config.lock"
+
+  # ARM 2 — a lock that CLEARS mid-repair is survived. Attempt 1 loses it; the loop sleeps and wins.
+  want="$(git -C "$SHARED" rev-parse origin/main)"
+  git -C "$SHARED" config core.bare true
+  : > "$SHARED/.git/config.lock"
+  ( sleep 1; rm -f "$SHARED/.git/config.lock" ) &
+  unlocker=$!
+  run dl
+  wait "$unlocker" 2>/dev/null || true
+  [ "$status" -eq 0 ] || false
+  echo "$output" | grep -q "REPAIRED core.bare=true" || false
+  [ "$(git -C "$SHARED" rev-parse HEAD)" = "$want" ] || false
+  [ "$(git -C "$SHARED" config --bool --get core.bare 2>/dev/null || echo unset)" = unset ] || false
+
+  # ARM 3 — the MUTANT: collapse the retry to the single attempt this arm had before the fix. On the
+  # SAME clearing-lock fixture it must lose the repair AND the advance, so ARM 2 measures the retry
+  # and not merely the lock's own timing.
+  [ "$(grep -c '^    for _try in 1 2 3; do' "$DL")" -eq 1 ]
+  MUT="$BATS_TEST_TMPDIR/dl-mut-noretry.sh"
+  sed 's@^    for _try in 1 2 3; do@    for _try in 1; do  # MUTANT — retry removed@' "$DL" > "$MUT"
+  [ "$(grep -c 'MUTANT — retry removed' "$MUT")" -eq 1 ]
+  git -C "$SHARED" reset -q --hard HEAD~1
+  git -C "$SHARED" config core.bare true
+  : > "$SHARED/.git/config.lock"
+  ( sleep 1; rm -f "$SHARED/.git/config.lock" ) &
+  unlocker=$!
+  run dlm "$MUT"
+  wait "$unlocker" 2>/dev/null || true
+  [ "$status" -ne 0 ] || false
+  [[ "$output" != *"REPAIRED core.bare=true"* ]] || false
 }
 
 @test "a GENUINELY bare repo is never un-bared — the discriminator is the layout, not the flag" {

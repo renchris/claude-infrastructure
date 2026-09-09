@@ -1608,11 +1608,28 @@ if [ "${CC_DEPLOY_BARE_REPAIR:-on}" != off ] \
   if [ "$DRY_RUN" -eq 1 ]; then
     say "core.bare=true on $DEPLOY_REPO, which HAS a working tree — WOULD unset it; nothing mutated"
   else
-    g config --unset core.bare 2>/dev/null || true
+    # THE UNSET CAN FAIL TRANSIENTLY, AND THE FAILURE SHARES ONE CAUSE WITH THE FLIP. `git worktree
+    # add|remove` is what sets core.bare, and it holds $DEPLOY_REPO/.git/config.lock while it does;
+    # a repair landing inside that window loses the lock and exits non-zero. `2>/dev/null || true`
+    # then discarded the only two facts that name it — the rc and git's own message — so the concede
+    # line below read as an UNCURABLE checkout, which is a different and much worse fault than the
+    # retryable one that actually occurred (repo memory: suppressed-stderr-turns-a-failed-command-
+    # into-a-zero). Measured 2026-09-08: this arm conceded exactly once
+    # (~/.claude/autonomy/postland/deploy.log:5138), the ff escalation behind it was damped as an
+    # unchanged state, and the shared checkout stayed bare for ~4h — 27 commits off the live layer,
+    # past a budget of 25 — until the IDENTICAL command was run by hand and succeeded on the first
+    # try. A lock is retryable by construction, so retry before conceding, and when we do concede,
+    # say why: a concede that carries git's own words is triageable, and a bare one is not.
+    bare_rc=0 bare_err=
+    for _try in 1 2 3; do
+      bare_err="$(g config --unset core.bare 2>&1)"; bare_rc=$?
+      [ "$bare_rc" -eq 0 ] && break
+      [ "$_try" -lt "${CC_DEPLOY_BARE_TRIES:-3}" ] && sleep 1
+    done
     if [ "$(g rev-parse --is-inside-work-tree 2>/dev/null)" = true ]; then
       say "REPAIRED core.bare=true on $DEPLOY_REPO (a worktree add/remove flips it; every working-tree git op was failing) — advance continues"
     else
-      say "core.bare=true on $DEPLOY_REPO and the unset did NOT restore a working tree — leaving it to the ff arm, which counts and escalates it"
+      say "core.bare=true on $DEPLOY_REPO and the unset did NOT restore a working tree (git exited $bare_rc${bare_err:+ — GIT SAID: $bare_err}) — leaving it to the ff arm, which counts and escalates it"
     fi
   fi
 fi
