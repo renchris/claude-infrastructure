@@ -69,7 +69,9 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   blocked_tx "$SEC" "$SID"
   printf '{"type":"assistant","timestamp":"2026-09-09T01:00:00.000Z","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"back"}]}}\n' >> "$SEC/projects/$SLUG/$SID.jsonl"
   run bash "$FLEET" --locate
-  [[ "$output" == *"(no limit-blocked session anywhere)"* ]] || { echo "$output"; false; }
+  # the empty-census line was reworded when the census stopped being limit-only (2026-09-09):
+  # it now covers caps AND network/stall deaths, so it can no longer say "limit-blocked".
+  [[ "$output" == *"(no blocked session anywhere"* ]] || { echo "$output"; false; }
 }
 @test "locate: no live process holding it is NO-PANE; a teammate transcript is TEAMMATE" {
   blocked_tx "$SEC" "$SID"
