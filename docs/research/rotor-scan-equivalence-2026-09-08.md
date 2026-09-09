@@ -119,9 +119,41 @@ a citation found is a memory **protected** from demotion — the safe direction 
 predicate. On this repo's corpus the real-name sets are identical (9 = 9); the only delta was one
 bogus `Binary file …` token from a `__pycache__/*.pyc`, which no topic filename can equal.
 
+## The residue, and the cache whose obvious spelling was worse than the problem
+
+Fixing the scans left 4.7 s — still over `memory-nudge`'s 3 s bound, so that hook went on reporting
+`verdict=deferred`. An ablation put the whole remainder in two reads that look free and are not,
+because each is a **fork per candidate** and macOS `fork`+`exec` is ~5 ms: the frontmatter `type:`
+probe (~2.6 s) and `fmtime` (~2.2 s — called twice per candidate, once in `protect_reason` and
+again in the selection loop). One bulk `stat` over the whole directory is 0.066 s against 0.81 s
+for 163 individual ones.
+
+🚨 **The obvious cache made it six times worse.** bash 3.2 has no associative arrays, so the
+natural shape is a `name<TAB>value` string probed with `${table#*"$NL$name$TAB"}` — which is what
+`HUB_TABLE` does safely, because it holds only the handful of names with any inbound link at all.
+Over a table of *every* entry it is **quadratic**: bash matches a leading `*` by retrying at every
+prefix length. Measured, that spelling took the same index from 4.7 s to **28.9 s**, with 22.9 s
+burned inside the shell. The entries already carry an ordinal — `protect_reason` takes it as `$1`
+and stage 2 replays the recorded one — so both tables became plain indexed arrays, filled in
+ordinal order and read in O(1) with no fork at all.
+
+That buys **one new way to be wrong, and no fixture in the suite could see it**: every entry in
+them parses, while an UNPARSEABLE line contributes an *empty field* to the entry list, so a table
+built by dropping blanks shifts every later entry by one and reads another memory's stamp and age.
+Building the mutation control for it took two corrections worth recording — the shift moves the
+MTIME too, so a directive that merely stops being the oldest is not demoted; and the value a shift
+steals must itself be non-protective, or the mutant keeps the directive for a different reason and
+the control passes vacuously.
+
 ## Result
 
-118 s → **4.7 s** on the live-shaped index, byte-identical stdout, stderr and tree. Still over
-`memory-nudge`'s 3 s bound, so that hook continues to report `verdict=deferred`; the remaining
-cost is per-candidate forks, ~2.6 s in the `type:` frontmatter `awk` and ~2.2 s in `fmtime`'s
-`stat`, both precomputable by the same table shape used here.
+**118 s → 2.9 s**, measured under a load average of 69–93 with an interleaved three-round A/B (the
+scans-only commit measured 5.0 s against the same load). Byte-identical stdout, stderr and tree
+throughout. The rotor now fits inside `memory-nudge`'s 3 s budget as well as
+`memory-index-drain`'s 8 s one, so an in-hook rotation of a breached index **completes** instead of
+reporting `deferred` — which is what the parent fix (`a72bfd477`) explicitly left undone.
+
+Equivalence composes rather than being re-derived: the scans commit is byte-equivalent to trunk
+over 8 matrix cases, and the ordinal-cache commit is proved against *it* over 9 (both arms fast, so
+that matrix runs in minutes instead of an hour), including `--drain-oversized` and two cases that
+really rotate.
