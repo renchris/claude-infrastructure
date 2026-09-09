@@ -161,3 +161,52 @@ Prototypes live in this session's scratchpad (`b2-decide-proto.sh`, `b2-decide-p
   the transcript's `(mtime, size)` (`:374` feeds `_wl_stat_ms "$WL_TRANSCRIPT"` into `WL_KEY`), and
   the transcript grows every turn — so the memo is COLD on every Stop by construction and warm only
   for the second consumer within one Stop event.
+
+## 6. W3 outcome, and the SECOND SITE measured rather than assumed (2026-09-09)
+
+**The fix shipped.** `bin/cc-decide cmd_list --json` now runs ONE `jq` pass over every packet file,
+with a per-file fallback on a non-zero `jq` exit that reports its parse-failure count. Measured on
+the live store after the change: **0.053 s against 0.813 s, 15.3x**, byte-identical (29 rows,
+`cmp` clean). Three-arm proof in `tests/cc-decide.bats`:
+
+| arm | mid-glob tolerance | failure reported | clean store | empty store |
+|---|---|---|---|---|
+| pre-fix (`HEAD`) | ok | **not ok** | ok | ok |
+| post-fix | ok | ok | ok | ok |
+| naive one-pass (mutant, fallback deleted) | **not ok** | **not ok** | ok | ok |
+
+The mid-glob case is green in both real arms **by design** — the old per-file loop already tolerated
+a bad packet — so it is an EQUIVALENCE guard, and the mutant arm is what proves it can still fail.
+Without that arm the suite would have looked like a red-proof while testing nothing about the one
+decision that mattered.
+
+**The second site was measured, and parity was the wrong guess.** `hooks/operator-readout.sh` §3
+carries the identical `for f in "$DEC_DIR"/*.json; do jq … "$f"; done` shape. Timed on the Stop
+path (default mode, hook JSON on stdin, as `settings.json:856` registers it): **13.224 s cold**,
+then 0.363 / 0.393 s. Attribution over 3 traced runs (41.59 s traced):
+
+| share | term |
+|---|---|
+| **53.0%** | `deploy-live.sh --dry-run --offline` — a subprocess, not this defect class |
+| 10.7% | the decision-leg per-file `jq` loop |
+| 10.6% | nested `wrap-ledger --machine` (itself 56% `cc-decide`) |
+| 7.9% + 7.4% | a SECOND `for f in "$DEC_DIR"/*.json` loop |
+| 6.3% | `cc-backlog list` |
+
+**And its cost is BUDGETED, which inverts the priority.** `TTL="${CC_OPREADOUT_TTL_S:-900}"`
+(`:316`) latches the readout (`:1406-1415`, `:1503-1510`), so the full 13.2 s runs at most **once
+per 15 minutes** per session; every other Stop abstains at ~0.37 s. Against that:
+
+- `cc-decide` cost **1.265 s on EVERY Stop** — `wrap-ledger`'s memo is keyed on the transcript's
+  `(mtime, size)`, which grows every turn, so it is cold at every close.
+- `operator-readout`'s fork loops cost ~3.6 s **once per quarter hour**.
+
+⇒ W3 fixed `cc-decide` first and by a wide margin, and that is the whole of this unit. The
+`operator-readout` loops are a real but distant second. **Do not quote "operator-readout costs 13 s
+a Stop" — it costs 13 s a quarter hour.** The 53% `deploy-live --dry-run` fork inside it is a
+separate and larger question that nobody has costed; it is not this defect class at all.
+
+**Provenance:** the shipped implementation is the work of the dispatched W3-B2 session (pane 739),
+adopted rather than rewritten. Its version is better than this report's original prototype: it
+tallies parse failures through a temp file, dodging the command-substitution subshell that made the
+prototype's counter always read 0 (MEMORY.md `assignment-inside-command-substitution-never-escapes`).
