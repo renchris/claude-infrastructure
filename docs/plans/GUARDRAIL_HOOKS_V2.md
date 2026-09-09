@@ -308,6 +308,138 @@ not to register all ten.
 
 ---
 
+**AC1, sharpened — §2's ONE stable constant is now stale in both halves, and the drift decomposes.**
+§2 recorded *"Hook **events** per config dir: **12**, identical in all five"* and called it the figure
+that was "still exactly right". Measured 2026-09-09:
+
+| dir | events | entries |
+|---|---|---|
+| `.claude` | **21** | 100 |
+| `.claude-secondary` | 20 | 94 |
+| `.claude-tertiary` | 20 | 95 |
+| `.claude-quaternary` | 20 | 94 |
+| `.claude-next` | 20 | 89 |
+
+So the event count nearly doubled (12 → 21) **and** the dirs no longer agree on it. Exactly one event
+is responsible: **`PostToolUseFailure` exists only in `.claude`.** That single fact accounts for 3 of
+the 11 divergences (`cc-permission-beacon.sh clear`, `log-bash.sh`, `mailbox-drain.sh post-tool`), and
+the 11 decompose cleanly:
+
+| group | n | shape |
+|---|---|---|
+| a whole new EVENT wired in one dir | 3 | `PostToolUseFailure`, `.claude` only |
+| new pairs wired in `.claude` only | 2 | `PreToolUse\|pr-gate.sh`, `SessionStart\|escalation-watch.sh` |
+| new pair wired in 2 of 5 | 1 | `PreToolUse\|web-entrypoint-ladder.sh` (`.claude` + `-tertiary`) |
+| the July/August `.claude-next` residue | 5 | §2's original set, minus the two `session-beat` slots that healed |
+
+**Six of eleven are NEW work wired into `.claude` alone** — the dir the live layer symlinks from — so
+the generator is not "writes four, skips the fifth" as §2 read it, nor even a stable inversion of
+that: it is *whoever wires a rail writes the dir they are standing in.* Three of the six arrived as
+an entire new EVENT, which no per-pair reasoning would have predicted.
+
+⚠️ **Corollary for §2 itself: delete the number, keep the read.** §2's own headline lesson (A1) is
+that *"a constant quoted without its instrument is a liability"*, and §2 then quoted 12 as the one
+exception because it had been stable. It was stable until it wasn't. The table above is dated for the
+same reason and is not to be carried either — re-run the two `python3` one-liners in §2's "How"
+column, or read `scripts/settings-drift-assert.sh`, which now reports the event-level gap too.
+
+**AC3 — the 10 are now PARTITIONED, and four of them are F4's shape, not F3's.** A count was the wrong
+deliverable: AC3 passes on an empty set *or* every member explicitly declared non-dispatch, so the
+work is the partition. Callers traced across `hooks/ scripts/ bin/ migrations/ tests/ docs/`:
+
+| member | class | evidence |
+|---|---|---|
+| `hook-chain.sh` | **the broker, registered in ZERO of the five `settings.json`** | 0 hits for `hook-chain` in all five; it dispatches `curl-gate.py` + `validate-bash.sh` (the latter is also wired DIRECTLY, which is why nothing noticed) |
+| `curl-gate.py` | **F3 nested two deep** — its only non-test caller is that unregistered broker | so the payload's "graveyard landed" verdict (A7) bought a file on trunk that no dispatch path reaches |
+| `subagent-stop.sh` | **F4** — migration `0014` landed, effect ABSENT | no `SubagentStop` event in any dir |
+| `model-permission-decider.py` | **F4** — migration `0022-mitl-decider-shadow.sh` landed, effect ABSENT | unregistered everywhere |
+| `task-created-attrib.sh` | **F4** — migration `0023-todo-tools-and-task-hooks.sh` landed, effect ABSENT | unregistered everywhere |
+| `accounts-board.sh` | **declared non-dispatch** — a library of `bin/claude-accounts` | real caller; migration `0011` wired it as a CLI component, never as a hook |
+| `migrate-plans-index.sh` · `reset-hard-shadow-allow.sh` · `session-index-sweep.sh` · `task-completed-index.sh` | **no caller anywhere but tests and docs** | and `TaskCompleted` is wired to `task-quality-gate.sh`, so `task-completed-index.sh` reads as superseded rather than missing |
+
+So the W2 deliverable is not "register the ten". It is: **declare 1, delete-or-declare 4, and treat 3
+as R-4 rather than AC3** — because a hook whose registration is gated behind an unrun c10 migration is
+already counted on the operator surface, and counting it twice would double-book the same defect.
+The genuinely new finding is `hook-chain.sh`: **a dispatch BROKER that is itself registered nowhere**,
+which is F3 applied to the mechanism that was supposed to answer F3.
+
+**F2's two prescribed homes are still unbuilt, and one of them may NOT be built yet (2026-09-09).**
+§3 F2 prescribes *"a `SessionStart` term (cheap, advisory) plus a blocking slot in the land gate"*.
+Measured: **0** of the five `settings.json` name the checker, and neither `scripts/ship-land.sh` nor
+`scripts/postland-verify.sh` references it. Its only live callers anywhere in `scripts/ hooks/ bin/
+launchd/` are `scripts/autonomy-sweep.sh` (the one this session un-starved) and
+`scripts/effort-parity-assert.sh`. So the sweep caller is not one of the two homes F2 names — it is a
+third, and it is currently the only one.
+
+🚨 **The land-gate slot is ORDER-CONSTRAINED and the plan did not say so.** A blocking gate term keyed
+on `settings-drift-assert` rc 0 would refuse **every land on this machine** for as long as AC1 fails,
+and AC1 fails at 11 today with no cure landed. Wiring it before F1 would not surface the drift; it
+would wedge the fleet and be reverted within the hour — the `prescribed-remedy-worse-than-the-bug`
+shape. It is admissible only *after* AC1 reads 0 and only with a documented kill switch.
+
+The `SessionStart` term has the opposite problem and is the one to build first: it is advisory, cheap
+(3.77 s, and it would want a cadence gate rather than firing on every session start across ~30
+sessions — F9), and it fails open. But note it is also five `settings.json` writes, i.e. F1's surface
+again: **every remedy F2 prescribes is gated behind F1**, which is why R-1 was always the row's whole
+point and why W1 precedes W2 in Phase 0.
+
+**How AC2′ gets OBSERVED, and why "within 5 minutes" would have been wrong.** The plist
+(`com.chrisren.autonomy-sweep`, LOADED, pid 11053) execs `~/.claude/scripts/autonomy-sweep.sh`, a
+symlink into the shared checkout — so the fix is an EDIT riding an existing link and
+`scripts/deploy-live.sh` is the whole converge step (no new symlink is needed; the `LIVE_ADDS`
+breach case does not apply here).
+
+But `StartInterval 300` is a REQUEST, not a delivered rate: launchd does not stack a second instance
+of a running job and a sweep runs tens of minutes, so the DELIVERED cadence measured from the IDL is
+**11 sweeps on 09-08 and 10 on 09-09 — one per ~131-144 min**, not one per 5. The first live
+`config-parity` row therefore arrives up to ~2.5 h after converge, not immediately (memory:
+*requested rate ≠ delivered rate* — a cadence in a config file is a request every projection
+downstream silently inherits).
+
+So the property is proven MECHANICALLY by `tests/autonomy-sweep.bats` 0a-i (a maximally-truncated
+tick journals the row; the real pre-fix blob does not), and the live IDL row is corroboration on the
+next delivered sweep. The read:
+
+    jq -e --arg c "$(date -u -v-3H +%FT%TZ)" -n \
+      '[inputs|select(.tool=="autonomy-sweep" and .disposition=="config-parity" and .ts>$c)]|length>0' \
+      ~/.claude/autonomy/idl.jsonl
+
+**And the converge is itself budget-gated, which lengthens the wait again.** Pre-flighted with
+`scripts/deploy-live.sh --dry-run` (NOT `--offline` — that decides against an already-fetched
+origin/main and can only err toward "nothing to do"): the converger is in its **waiting** state —
+*"no GREEN stamp among the newest 200 commits of origin/main … lag 1 commit / 0h26m, inside the
+degrade budget (25 / 6h) — no advance, and none is due yet."* That is the DESIGNED behaviour, not a
+refusal, and per the readout rules a lag inside the budget is a normal ✅ carrying a note rather than
+a `🚀`.
+
+So the chain from "landed" to "AC2′ observed MET" is: land → the live layer advances when a GREEN
+stamp lands or the 6 h / 25-commit degrade path fires → the next DELIVERED sweep (~131-144 min apart,
+not the 300 s the plist requests) journals `config-parity`. None of that is this session's to watch,
+and none of it is blocked on anything: the property is already proven mechanically by the corpus.
+
+Unrelated residency fact the same dry-run surfaced, filed here rather than acted on because it is not
+row 6's: `com.claude.lead-supervisor` is an executing resident daemon running STALE bytes (install.sh
+reloads a resident daemon only on an advance, and only with `CC_INSTALL_RESIDENT_RELOAD=1`).
+
+**One honest side effect of the hoist, checked rather than assumed.** The deployed-copy guard in this
+sweep is PER-BLOCK, not a global gate — §0a carries its own and §2f carries "its OWN deployed-copy
+guard keyed the same way". §2c never had one, before or after the move, so the hoist removed no
+protection and is order-only as claimed.
+
+But §2c is not a pure read: it calls the checker with `--file`, which appends a condition-keyed row
+to `~/.claude/autonomy/backlog.jsonl`. That exposure existed before; what changed is that the block
+is now REACHED in contexts where the self-bound previously cut the tick first — a verifier worktree
+or a human running the whole sweep by hand now files where before it usually did not. The blast
+radius is bounded by the block's own design (condition-keyed ⇒ repeated filings update ONE item, and
+it self-closes when the dirs agree, which is why its header says it "cannot become a per-sweep item
+generator"), and the corpus is hermetic (`CC_DRIFT_DIRS` + `CC_BACKLOG_FILE` are fixtured).
+
+Deliberately NOT fixed in this diff: adding a deployed-copy guard to §0a-i would be a behaviour
+change on top of an order-only one, mid-land, to close an exposure that is bounded and pre-existing.
+It is the right follow-on if anyone sees a stray filing — the guard shape to copy is §0a's.
+
+---
+
 ## §6 What this doc does NOT do — the remainder the successor inherits
 
 **This session landed the reconciliation and this design. It did not build anything.** The payload's
@@ -378,6 +510,32 @@ Named remainders, in the order a successor should take them:
 - **R-3 (new, from `DAEMON_FLEET_V2` F21).** Agents are denied `launchctl enable` but permitted
   `bootout`/`disable` — an inverted deny list that darked 13 labels once. Not filed as a backlog row
   anywhere; it is a `permissions.deny` fix and therefore row 6's.
+
+  **R-3 — the effect is live, and this row's restatement of its CAUSE is wrong (2026-09-09).** Measured:
+  there is **no `launchctl` deny term in any of the five `settings.json`**. The only `launchctl` term
+  that exists anywhere in the five is a single narrow ALLOW —
+  `Bash(launchctl load …com.chrisren.cc-reaper.plist:*)` — identical in all five, and no hook gates the
+  verb either (`grep -rn launchctl hooks/` returns four files, none of which deny, block or classify).
+  
+  So there is no inverted deny list to invert. The source says so: `DAEMON_FLEET_V2` F21 attributes the
+  asymmetry to **the classifier boundary** — auto mode's product-side judgement — and §3 F10 plus R-3
+  re-attributed it to `permissions.deny`, which is a surface we own and that one is not. A remedy aimed
+  at the wrong file is the `work-item-citation-refutes-its-own-remedy` shape, and it matters here
+  because it changes what the fix IS: not *correct an inverted rail*, but **add the missing
+  destructive-verb deny beside a classifier we do not control** — `launchctl bootout` / `disable`,
+  which today are governed by nothing of ours.
+  
+  Two consequences the plan should carry:
+  
+  1. **The effect is undischarged.** Nothing on this box prevents a repeat of 2026-07-26 (an agent
+     darking 13 labels). Refuting the cause did not touch it (memory: *cause refuted ≠ effect
+     discharged*), and F21's own conclusion — that the fleet can be darkened at any moment, so
+     reconciliation must be CONTINUOUS rather than one-shot — survives this correction intact.
+  2. **R-3 is BLOCKED ON F1, not merely downstream of it.** The fix is five `settings.json` writes,
+     which is precisely the act F1 says is not atomic — and §5a's inverted partition shows a per-dir
+     write today can skip *any* subset. Adding a destructive-verb deny to four dirs and missing the
+     fifth would leave one account able to dark the fleet, i.e. the F6 defect wearing a fix's clothes.
+     Phase 0 already sequences W2 after W1 for this reason; only the prose was wrong.
 - **R-4 (operator-gated, not agent work).** Migrations `0013` and `0014` are landed, correct, and
   un-run. Until `0013` runs, `.claude-next` keeps re-minting F1 drift; until `0014` runs,
   `hooks/subagent-stop.sh` stays a hook that exists and does nothing.
