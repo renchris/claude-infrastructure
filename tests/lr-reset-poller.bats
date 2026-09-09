@@ -348,15 +348,23 @@ mk_spend_teammate_transcript() {
   [ "$(grep -c 'SPEND aaaa000l' "$STATE/poller.log")" -eq 1 ]
 }
 
-@test "LR-m: LR_POLLER_SPAWN=auto with no GUI (osascript fails) → falls back to tmux, never silent-fails a resume" {
+@test "LR-m: LR_POLLER_SPAWN=auto with no GUI (osascript fails) → NOT spawned and LOUD; tmux is never a silent fallback" {
+  # INVERTED 2026-09-09 (LIMIT_RECOVER_100P). This case used to pin "GUI unavailable → tmux rather
+  # than stranding the resume". Measured that day: a tmux resume is not merely invisible, it is
+  # UNANSWERABLE — lr-resume-52e35019 sat frozen on a PreToolUse permission prompt nobody could see,
+  # and five siblings from Aug 29 / Sep 5 were still alive there unattended. The honest outcome with
+  # no reachable GUI is NOT SPAWNED, said loudly, retried next tick; tmux stays as an EXPLICIT
+  # LR_POLLER_SPAWN=tmux choice (LR-j). The old assertion would have guarded the bug.
   mk_parked "aaaa000m-1111-2222-3333-444444444444" "$(past_iso)"
+  export CC_KITTY_SOCKET_BIN="$BATS_TEST_TMPDIR/no-kitty-socket"       # no live kitty either
   OSA_FAIL=1 LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once          # default LR_POLLER_SPAWN=auto
   [ "$status" -eq 0 ]
   grep -q 'create window' "$OSA_LOG"                                 # GUI attempted first...
-  grep -q 'new-session' "$TMUX_LOG"                                  # ...then tmux carried it headlessly
-  grep -q "lr-poller-launch-aaaa000m-" "$TMUX_LOG"
-  [ -f "$STATE/resumed/aaaa000m-1111-2222-3333-444444444444.json" ]
-  grep -qE 'RESUMED aaaa000m.*tmux' "$STATE/poller.log"
+  [ ! -s "$TMUX_LOG" ]                                               # ...and tmux was NOT reached for
+  [ ! -f "$STATE/resumed/aaaa000m-1111-2222-3333-444444444444.json" ]
+  [ -f "$STATE/parked/aaaa000m-1111-2222-3333-444444444444.json" ]   # still parked: retried next tick
+  grep -qE 'NO-GUI +aaaa000m.*NOT spawned' "$STATE/poller.log"
+  grep -qE 'ERROR +aaaa000m.*resume spawn failed' "$STATE/poller.log"
   rm -f "$LR_POLLER_LAUNCH_DIR"/lr-poller-launch-aaaa000m-*.sh
 }
 

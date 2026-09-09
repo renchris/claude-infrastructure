@@ -128,6 +128,22 @@ CLAIMS="$STATE/fire-claims"
 ENGAGE_NOTED="$STATE/engage-noted"
 FIRE_FAIL="$STATE/fire-fail"
 mkdir -p "$PARKED" "$RESUMED" "$CLAIMS"
+# ── lr-lib.sh — the shared predicates (LIMIT_RECOVER_100P, 2026-09-09) ─────────────────────────
+# Liveness by REGISTRY (not argv), the transplant read, the transcript tier and the engagement oracle
+# all live there, shared with lr-handoff.sh and lr-fleet.sh. FAIL CLOSED for the arms that need it:
+# a poller that cannot tell whether the original pane is alive must not spawn (that is the 2026-09-09
+# same-account duplicate), so a missing lib disables the RESUME arm and says so.
+LRP_LIB=""
+for _lrp_lib in "$(dirname "$_LRP_SELF")/lr-lib.sh" "$LR/lr-lib.sh" "${HOME:-}/.claude/scripts/limit-recover/lr-lib.sh"; do
+  [[ -f "$_lrp_lib" ]] && { LRP_LIB="$_lrp_lib"; break; }
+done
+if [[ -n "$LRP_LIB" ]]; then
+  LR_LIB_DIR="$(cd "$(dirname "$LRP_LIB")" && pwd)"; export LR_LIB_DIR
+  # shellcheck source=lr-lib.sh
+  # shellcheck disable=SC1091
+  . "$LRP_LIB"
+fi
+REQUESTS="$STATE/requests"; RESULTS="$STATE/results"; mkdir -p "$REQUESTS" "$RESULTS"
 # Parse EVERY argument, not just $1. Until 2026-07-30 this read `[[ "${1:-}" == "--dry-run" ]] && DRY=1`,
 # so `--once --dry-run` silently ran FOR REAL and spawned live sessions — a preview flag that is
 # silently ignored is worse than no preview flag at all, because the operator has already decided it is
@@ -465,11 +481,22 @@ spawn_gui() {
   # The launcher is passed as ARGV to `launch`, not typed into a shell, so none of the iTerm2 arm's
   # write-text quoting applies; and kitty has no profile-override concept, so the 2026-07-25
   # sticky-command incident below has no kitty analogue to re-create.
-  if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then
-    command -v "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" >/dev/null 2>&1 || return 1
-    lrp_kitty launch --type=os-window -- /bin/bash "$1" >/dev/null 2>&1 || return 1
-    command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn os-window kitty "" "${PWD:-}" "lr-reset-poller spawn_gui launcher:$(basename -- "$1")"
-    return 0
+  # DAEMON-CONTEXT DISPATCH (LIMIT_RECOVER_100P, 2026-09-09). A launchd job has no $KITTY_WINDOW_ID,
+  # so this arm never fired for the fleet's own terminal and `auto` fell through to tmux — seven
+  # invisible lr-resume-* sessions, one frozen on a permission prompt nobody could see. bin/cc-kitty-
+  # socket proves a LIVE kitty from any context (the same seam lr-handoff.sh took on 2026-08-07), and
+  # lr_kitty_spawn launches the window RUNNER-ROOTED (bin/cc-pane-runner: the launcher rides in
+  # CC_PANE_CMD, the window survives a refusal with the message on screen, the pane is recyclable).
+  if [ -z "${IT2_WRAPPER_NO_KITTY:-}" ] && command -v lr_kitty_spawn >/dev/null 2>&1; then
+    local _sock="" _id=""
+    _sock="$(lr_kitty_socket 2>/dev/null || true)"
+    if [ -n "${KITTY_WINDOW_ID:-}" ] || [ -n "$_sock" ]; then
+      command -v "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" >/dev/null 2>&1 || return 1
+      _id="$(CC_TERM_KITTY_TO="${_sock:-${CC_TERM_KITTY_TO:-}}" CC_TERM_KITTY="${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" \
+             lr_kitty_spawn "$1" "${3:-${PWD:-}}" "${2:-}" "${4:-}")" || return 1
+      command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn os-window kitty "$_id" "${3:-${PWD:-}}" "lr-reset-poller spawn_gui runner-rooted launcher:$(basename -- "$1")"
+      return 0
+    fi
   fi
   command -v osascript >/dev/null 2>&1 || return 1
   # No verified-typing helper ⇒ REFUSE the GUI path rather than fall back to a blind send. Under
@@ -512,12 +539,19 @@ spawn_tmux() {
 }
 # spawn_resume <launcher> <sid> — echo the mechanism used (gui|tmux) on success; non-zero on failure.
 spawn_resume() {
-  local launcher="$1" sid="$2"
+  local launcher="$1" sid="$2" cwd="${3:-}" acct="${4:-}"
   case "$SPAWN_MECH" in
-    gui)  spawn_gui  "$launcher"        && { echo gui;  return 0; }; return 1 ;;
+    gui)  spawn_gui  "$launcher" "$sid" "$cwd" "$acct" && { echo gui;  return 0; }; return 1 ;;
     tmux) spawn_tmux "$launcher" "$sid" && { echo tmux; return 0; }; return 1 ;;
-    *)    spawn_gui  "$launcher"        && { echo gui;  return 0; }   # auto: GUI first…
-          spawn_tmux "$launcher" "$sid" && { echo tmux; return 0; }   # …then headless tmux
+    *)    spawn_gui  "$launcher" "$sid" "$cwd" "$acct" && { echo gui;  return 0; }
+          # NO SILENT tmux FALLBACK (LIMIT_RECOVER_100P, 2026-09-09). A resume in a detached tmux
+          # pane is not merely invisible — it is UNANSWERABLE: on 2026-09-09 lr-resume-52e35019 sat
+          # frozen on a PreToolUse permission prompt with no human able to see it, and five sessions
+          # from Aug 29 / Sep 5 were still alive there, unattended, for up to ten days. A session the
+          # operator cannot see is a session that can strand forever; the honest outcome when no GUI
+          # is reachable is NOT SPAWNED, loudly, and a retry next tick. tmux stays available only as
+          # an EXPLICIT choice: LR_POLLER_SPAWN=tmux.
+          log "NO-GUI  $sid — no reachable kitty/iTerm2; NOT spawned (tmux is never a silent fallback: a permission prompt there is unanswerable — 52e35019 froze on one 2026-09-09). Set LR_POLLER_SPAWN=tmux to opt in."
           return 1 ;;
   esac
 }
@@ -571,6 +605,54 @@ open_spend_packet() {
 }
 
 fired=0
+# ── nudge_in_place — the recovery for a session whose ORIGINAL pane is still alive ────────────────
+# Types the recovery prompt into that pane over the it2 shim (kitty via the resolved socket) and
+# proves engagement by a fresh non-error assistant turn in THIS store's copy — the one thing a
+# blocked husk can never produce. Never spawns. rc 0 engaged / 1 not (the caller counts a failure
+# and retries next tick; it never falls back to a spawn, because the pane is LIVE).
+nudge_in_place() { # $1=sid $2=cfg $3=registry rows ("pane<TAB>pid<TAB>acct<TAB>cwd", first wins) → 0/1
+  local sid="$1" cfg="$2" rows="$3" pane pid acct cwd it2 t0 waited=0 max ivl sock
+  IFS=$'\t' read -r pane pid acct cwd <<<"$(printf '%s\n' "$rows" | head -1)"
+  it2="${LR_IT2_BIN:-$HOME/.claude/bin/it2}"
+  [[ -x "$it2" ]] || { log "NUDGE-SKIP $sid — no it2 shim at $it2 (pane $pane, pid $pid stays parked)"; return 1; }
+  sock="$(lr_kitty_socket 2>/dev/null || true)"
+  t0="$(date -u +%FT%T)"
+  if ! CC_TERM_KITTY_TO="${sock:-${CC_TERM_KITTY_TO:-}}" lrp_bounded "$it2" session run -s "$pane" "/limit-recover" >/dev/null 2>&1; then
+    log "NUDGE-FAILED $sid — could not type into pane $pane (pid $pid, $acct)"; return 1
+  fi
+  max="${LR_NUDGE_ENGAGE_S:-120}"; ivl="${LR_NUDGE_IVL:-5}"
+  while (( waited < max )); do
+    if lr_engaged_after "$cfg" "$sid" "$t0"; then
+      log "NUDGED $sid in pane $pane (in place on $acct, pid $pid) — engaged after ${waited}s"; return 0
+    fi
+    sleep "$ivl"; waited=$((waited + ivl))
+  done
+  log "NUDGE-FAILED $sid — typed into pane $pane but no assistant turn within ${max}s"; return 1
+}
+
+# ── 0. REQUESTS — a driver's hand-off to this daemon (LIMIT_RECOVER_100P) ────────────────────────
+# `/limit-recover fleet` (scripts/limit-recover/lr-fleet.sh) may run the recovery itself; when a
+# session's own tool is refused (the auto-mode classifier denies acting on a live pane from inside a
+# session) it writes a request here and kickstarts this job. A LaunchAgent runs outside every session
+# and every classifier, so this is the locus that cannot be refused. Executed under the same overlap
+# lock as everything below; one request at a time; the result is a file the driver can read back.
+FLEET="${LR_FLEET_BIN:-$LR/lr-fleet.sh}"
+for _rq in "$REQUESTS"/*.json; do
+  [[ -e "$_rq" ]] || continue
+  if [[ $DRY -eq 1 ]]; then log "DRY   request $(basename "$_rq") would be executed via $FLEET"; continue; fi
+  _rq_sid="$(jq -r '.sid // empty' "$_rq" 2>/dev/null || true)"
+  if [[ -z "$_rq_sid" ]]; then log "REQUEST-SKIP $(basename "$_rq") — no sid; parked as malformed"; mv "$_rq" "$RESULTS/$(basename "$_rq" .json).malformed.json" 2>/dev/null || true; continue; fi
+  if [[ ! -x "$FLEET" ]]; then log "REQUEST-SKIP $_rq_sid — lr-fleet.sh not executable at $FLEET (request left in place)"; continue; fi
+  _rq_target="$(jq -r '.target // "auto"' "$_rq")"; _rq_pane="$(jq -r '.source_pane // empty' "$_rq")"; _rq_by="$(jq -r '.requested_by // "?"' "$_rq")"
+  log "REQUEST $_rq_sid — executing the in-place recovery (target $_rq_target${_rq_pane:+, pane $_rq_pane}) for $_rq_by"
+  _rq_rc=0
+  "$FLEET" --one "$_rq_sid" --target "$_rq_target" ${_rq_pane:+--source-pane "$_rq_pane"} --from-daemon > "$RESULTS/$_rq_sid.log" 2>&1 || _rq_rc=$?
+  jq -n --arg sid "$_rq_sid" --arg rc "$_rq_rc" --arg ts "$(date -u +%FT%TZ)" --arg log "$RESULTS/$_rq_sid.log" --arg by "$_rq_by" \
+    '{sid:$sid, rc:($rc|tonumber), ts:$ts, log:$log, requested_by:$by}' > "$RESULTS/$_rq_sid.json" 2>/dev/null || true
+  rm -f "$_rq"
+  log "REQUEST $_rq_sid — done rc=$_rq_rc (result $RESULTS/$_rq_sid.json)"
+done
+
 # ── 1. DETECT + LEDGER parked sessions ────────────────────────────────────────────────
 for cfg in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertiary "$HOME"/.claude-quaternary; do
   [[ -d "$cfg/projects" ]] || continue
@@ -798,6 +880,14 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   reset_epoch=$(python3 -c "import sys,calendar,time; from datetime import datetime; print(int(calendar.timegm(datetime.fromisoformat(sys.argv[1].replace('Z','+00:00')).utctimetuple())))" "$reset_at_utc" 2>/dev/null || echo 0)
   (( now < reset_epoch )) && continue                        # reset not reached yet
   { pgrep -f "resume $sid" >/dev/null 2>&1 || sid_claimed "$sid"; } && { mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; continue; }
+  # ── TRANSPLANTED elsewhere (LIMIT_RECOVER_100P): /limit-recover moved this session to another
+  # account and its successor is on disk, so THIS store's copy is retired. Re-firing it here would be
+  # refused by lr-fire-resume's tombstone verdict every tick until the fire latch tripped — a loop
+  # that reads as an outage. Retire the record instead, once, and say where the session went.
+  if command -v lr_transplanted_to >/dev/null 2>&1 && _lrp_to="$(lr_transplanted_to "$sid" "$cfg")"; then
+    log "TRANSPLANTED $sid ($acct) → $_lrp_to; parked record retired (the successor carries it)"
+    mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; continue
+  fi
   # LATCHED — leave it PARKED and say nothing. Silence per tick is deliberate: the one LATCHED line
   # at the crossing and the UNLATCHED line at expiry are the whole story, and this daemon has
   # already proved what a per-tick line costs. It must come BEFORE the winner check below, or the
@@ -830,6 +920,26 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   fi
   if ! account_has_headroom "$acct"; then log "WAIT  $sid — $acct still capped, retry next tick"; continue; fi
   (( fired >= MAX_PER_RUN )) && { log "CAP   per-run resume cap ($MAX_PER_RUN) reached; deferring rest"; break; }
+  # ── THE ORIGINAL PANE IS ALIVE: NUDGE IN PLACE, NEVER SPAWN (LIMIT_RECOVER_100P) ───────────────
+  # THE 2026-09-09 DEFECT: liveness above is `pgrep -f "resume $sid"`, which is blind to a session
+  # launched WITHOUT --resume — every fresh launch. The poller resumed 52e35019 into tmux while pane
+  # 616 still held the original process, and one transcript had two writers on one account. The
+  # registry row (hooks/session-register.sh) is the store the argv census cannot replace: keyed by
+  # pane, names the sid, carries the pid. A live row means the session is sitting at its limit error
+  # in a pane the operator can see — the recovery is to TYPE the recovery prompt into THAT pane and
+  # prove a fresh assistant turn, not to mint a second process.
+  if command -v lr_registry_live_rows >/dev/null 2>&1 && _lrp_rows="$(lr_registry_live_rows "$sid")"; then
+    if [[ $DRY -eq 1 || "$AUTOFIRE" != "1" ]]; then
+      log "LIVE  $sid — original pane $(printf '%s' "$_lrp_rows" | head -1 | cut -f1) is alive (pid $(printf '%s' "$_lrp_rows" | head -1 | cut -f2)); would NUDGE in place, never spawn ($([[ $DRY -eq 1 ]] && echo dry-run || echo notify-only))"
+      continue
+    fi
+    if nudge_in_place "$sid" "$cfg" "$_lrp_rows"; then
+      mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; fired=$((fired+1)); continue
+    fi
+    fire_fail_note "$sid" nudge-failed
+    log "ERROR  $sid — nudge into the live pane failed; NOT spawning a duplicate over a live process (retry next tick)"
+    continue
+  fi
   if [[ "$AUTOFIRE" == "1" && $DRY -eq 0 ]]; then
     # MINT THE UNIQUE NAME FIRST, ADD THE SUFFIX AFTER — the same idiom (and for the same reason)
     # as handoff-fire.sh's WT_DEPS. BSD mktemp substitutes only a TRAILING `XXXXXX`; given
@@ -851,12 +961,23 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
     # launcher ran. %q emits a form that re-reads as the original word, so no field can leave
     # its argv slot. (`$LR` is script-derived, not record-derived, but takes %q too — a bare
     # %s there would break on any space in the install path.)
-    { echo '#!/bin/bash'; printf 'exec %q %q %q %q --prompt %q\n' \
-        "$LR/lr-fire-resume.sh" "$acct" "$cwd" "$sid" "/limit-recover"; } > "$launcher"; chmod +x "$launcher"
+    # THE TIER RIDES WITH THE RESUME (LIMIT_RECOVER_100P). This launcher used to carry no --model or
+    # --effort, so lr-fire-resume fell back to the SSOT default and every unattended recovery of a
+    # Fable session silently landed on Opus/max (measured 2026-09-09 on 52e35019: transcript said
+    # claude-fable-5-1/xhigh). The transcript is the source of truth; nothing on disk ⇒ no flags,
+    # exactly the old behaviour.
+    _lrp_tier=""; command -v lr_tier_from_transcript >/dev/null 2>&1 && _lrp_tier="$(lr_tier_from_transcript "$cfg" "$sid" 2>/dev/null || true)"
+    _lrp_tm="${_lrp_tier%% *}"; _lrp_te="${_lrp_tier#* }"; [[ "$_lrp_te" == "$_lrp_tier" ]] && _lrp_te=""
+    { echo '#!/bin/bash'
+      printf 'exec %q %q %q %q' "$LR/lr-fire-resume.sh" "$acct" "$cwd" "$sid"
+      [[ -n "$_lrp_tm" ]] && printf ' --model %q' "$_lrp_tm"
+      [[ -n "$_lrp_te" ]] && printf ' --effort %q' "$_lrp_te"
+      printf ' --prompt %q\n' "/limit-recover"
+    } > "$launcher"; chmod +x "$launcher"
     # Claim BEFORE spawning: the claude child does not carry `--resume <sid>` until the
     # launcher→expect→claude chain completes, and until then pgrep cannot see it.
     claim_sid "$sid"
-    if mech=$(spawn_resume "$launcher" "$sid"); then
+    if mech=$(spawn_resume "$launcher" "$sid" "$cwd" "$acct"); then
       log "RESUMED $sid on $acct (autofire, $mech) — pane opened"
       mv "$pf" "$RESUMED/$(basename "$pf")"; rm -f "$PARKED/$sid.notified"; fired=$((fired+1))
     else
