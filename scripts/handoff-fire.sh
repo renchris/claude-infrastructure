@@ -155,6 +155,23 @@
 #                       fresh worktree off origin/main — which previously had to become a 📤 Handoff
 #                       (new pane) purely because recycle could not express it, stranding the
 #                       predecessor as an idle orphan that an ORIGIN session cannot even self-close.
+#   --source-pane P --source-session S --transplanted-source   (with --recycle) REMOTE IN-PLACE
+#                       RESUME (LIMIT_RECOVER_100P, 2026-09-09): recycle a pane the caller does NOT
+#                       own. The self-identity gate is REPLACED — never skipped — by the evidence
+#                       self-close's remote form already uses: the registry row for P must name S,
+#                       S must carry a transplant tombstone (handed_off_to ≠ P's config dir) with
+#                       its split-brain lock still held, and the row's process must be alive with
+#                       P's tty in its ancestry. Needs --resume-launcher; refuses a brief, --account,
+#                       --cwd/--worktree and --session-id. Implies --allow-live-subagents (ingest
+#                       re-audits them).
+#   --resume-launcher F --resume-cfg DIR [--resume-cwd D]   (with --recycle) RESUME MODE: the
+#                       relaunch typed into the surviving shell is `bash F` (the lr-launch-*.sh
+#                       lr-handoff minted: lr-fire-resume of the SAME uuid on the TARGET account,
+#                       ingest prompt inside), NOT exec'd, so the shell outlives the session and the
+#                       pane stays recyclable. Engagement = a new non-error assistant turn in DIR's
+#                       copy of the transcript after the /exit. Goal inheritance is off (an unmet
+#                       goal rides --resume). --await (remote form) blocks for the watcher's verdict
+#                       and exits 0 engaged / 1 dead / 3 no verdict inside the window.
 #   --session-id UUID   Recycle/self-close target pane. Default = this pane's own id: on iTerm2
 #                       $ITERM_SESSION_ID's UUID, and on a kitty pane whose ancestry cc-in-kitty
 #                       CONFIRMS, $KITTY_WINDOW_ID (self-close only — see self_pane_id).
@@ -433,6 +450,16 @@ WITH_MCP=0                                       # --with-mcp: opt back INTO pro
 RECYCLE_RELOC=0                                  # --recycle + --worktree/--cwd: same pane, NEW dir
 ALLOW_LIVE_SA=0                                  # L1-b: 1 = recycle over IN-FLIGHT Agent-tool subagents
 RCY_SUBAGENT_SID=""                              # L1-b: the PREDECESSOR's sid, for the brief trailer
+# ── REMOTE IN-PLACE RESUME (LIMIT_RECOVER_100P, 2026-09-09) ─────────────────────────────────────
+# --recycle --source-pane P --source-session S --transplanted-source: recycle a pane the caller does
+# NOT own — the self-identity gate is REPLACED by the registry binding + transplant evidence, exactly
+# the way self-close's remote form already does it. --resume-launcher/--resume-cfg turn the relaunch
+# into `bash <launcher>` (lr-fire-resume of the SAME uuid on the TARGET account) and the engagement
+# oracle into "a new assistant turn in the target's copy" — same window id, same uuid, new account.
+RCY_SOURCE_PANE="" RCY_SOURCE_SESSION="" RCY_TRANSPLANTED_SOURCE=0 RCY_REMOTE=0
+RESUME_LAUNCHER="" RESUME_CFG="" RESUME_CWD="" RECYCLE_AWAIT=0 RCY_CWD="" RCY_T0=""
+HF_REMOTE_ROW_SID="" HF_REMOTE_CWD="" HF_REMOTE_ROW_PID=""
+HF_TS_TOMBSTONE="" HF_TS_TO="" HF_TS_LOCK="" HF_TS_CFG=""
 # G5 — the fire's VENUE. 0 = this box (every incumbent caller); 1 = off-box (--cloud). It selects
 # WHICH TERMS capacity_gate() evaluates, so it is a gate input and must be parsed before the gate.
 CLOUD=0
@@ -1863,6 +1890,162 @@ USAGE
 # The probe still goes over the REAL transport, unchanged in that respect: `session list` takes the
 # same shim the close/relaunch write will take, so it cannot be right about a route the write
 # resolves differently. Only the PARSE of its answer changed.
+
+# ── REMOTE SOURCE EVIDENCE — ONE COPY FOR self-close AND --recycle (LIMIT_RECOVER_100P) ─────────
+# Two actuators may act on a pane the caller does not own, and both admit it on the SAME facts: the
+# registry row binds the pane to the session (hf_remote_source_bind), the session carries a transplant
+# tombstone whose split-brain lock is still held (hf_transplant_evidence), and — for the actuator that
+# TYPES into the pane — the row's process is alive on that pane's tty (hf_remote_source_pin). Two
+# spellings of one predicate is how sibling auditors end up disagreeing about one population (memory:
+# sibling-auditors-must-share-the-state-model); these were lifted verbatim out of self-close, which
+# now calls them. Every refusal text is the one tests/handoff-selfclose-transplanted-source.bats pins.
+hf_remote_source_bind() { # $1=pane $2=session $3=mode label → 0 bound / 2 refused · sets HF_REMOTE_ROW_SID HF_REMOTE_CWD HF_REMOTE_ROW_PID
+  local pane="${1:-}" sess="${2:-}" mode="${3:-self-close}" row
+  HF_REMOTE_ROW_SID="" HF_REMOTE_CWD="" HF_REMOTE_ROW_PID=""
+  if [ -z "$pane" ] || [ -z "$sess" ]; then
+    { echo "!! $mode REFUSED: --source-pane and --source-session are a PAIR; got only one."
+      echo "!!   The pane id alone would let the registry supply the session it names, which is not"
+      echo "!!   a check — it is the caller believing whatever that pane happens to hold. The"
+      echo "!!   session id alone names no pane to close. Both, cross-checked, is the evidence."
+    } >&2
+    return 2
+  fi
+  row="$REG_DIR/$pane.json"
+  if [ ! -f "$row" ]; then
+    { echo "!! $mode REFUSED: no session-registry row for pane $pane ($row)."
+      echo "!!   That row is the ONLY thing tying a named pane to the session it holds. Without it"
+      echo "!!   this would be acting on the caller's word about someone else's pane."
+    } >&2
+    return 2
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "!! $mode REFUSED: --source-pane needs jq to read the registry row, and jq is not on PATH. Unreadable evidence is not evidence." >&2
+    return 2
+  fi
+  HF_REMOTE_ROW_SID="$(jq -r '.session_id // empty' "$row" 2>/dev/null || true)"
+  if [ -z "$HF_REMOTE_ROW_SID" ]; then
+    { echo "!! $mode REFUSED: the registry row for pane $pane names no .session_id."
+      echo "!!   row: $row"
+      echo "!!   A row without one records that a pane exists, not which session lives in it — so"
+      echo "!!   it cannot support the pairing this turns on. (successor_pin refuses the same row"
+      echo "!!   for the same reason, one gate later.)"
+    } >&2
+    return 2
+  fi
+  if [ "$HF_REMOTE_ROW_SID" != "$sess" ]; then
+    { echo "!! $mode REFUSED: pane $pane does NOT hold session ${sess:0:8}."
+      echo "!!   the registry says that pane holds ${HF_REMOTE_ROW_SID:0:8} (row $row)"
+      echo "!!   This is the whole point of the check: a caller naming the wrong pane — a stale id,"
+      echo "!!   a typo, a pane recycled since the transplant — would otherwise retire a live"
+      echo "!!   session that merely got named. Nothing was typed and nothing was closed."
+    } >&2
+    return 2
+  fi
+  HF_REMOTE_CWD="$(jq -r '.cwd // empty' "$row" 2>/dev/null || true)"
+  [ -d "$HF_REMOTE_CWD" ] || HF_REMOTE_CWD=""
+  HF_REMOTE_ROW_PID="$(jq -r '.pid // empty' "$row" 2>/dev/null || true)"
+  return 0
+}
+
+hf_remote_source_pin() { # $1=pane $2=row pid $3=mode → 0 the row's process is alive with that pane's tty in its ancestry / 2 refused
+  # A CLOSE may act on the row alone; a RECYCLE types into the pane, so the row must be pinned to a
+  # process that is provably THERE. Kitty reuses window ids across restarts (:1660), so "the row for
+  # pane P names session S" can be true of a window that no longer exists while P is somebody else.
+  # Ancestry, not equality: a resumed session runs claude on expect's NESTED pty (:1669), so the
+  # pane's real tty belongs to an ancestor of the recorded pid, exactly as pane_ownership reads it.
+  local pane="${1:-}" pid="${2:-}" mode="${3:-self-close}" ptty p t n=0
+  case "$pid" in ''|*[!0-9]*)
+    echo "!! $mode REFUSED: the registry row for pane $pane carries no usable pid — a row that cannot be pinned to a live process cannot admit typing into that pane." >&2; return 2 ;;
+  esac
+  if ! kill -0 "$pid" 2>/dev/null; then
+    echo "!! $mode REFUSED: the registry row for pane $pane names pid $pid, which is DEAD. The row is stale (the session ended, or kitty reused the window id after a restart); whatever is in that pane now is not the session the row describes. Nothing was typed." >&2; return 2
+  fi
+  ptty="$(as_tty "$pane")" || ptty=""
+  if [ -z "$ptty" ]; then
+    echo "!! $mode REFUSED: pane $pane resolved to no tty — the terminal does not enumerate it, so nothing can be typed into it." >&2; return 2
+  fi
+  p="$pid"
+  while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ] && [ "$n" -lt 12 ]; do
+    t="$(ps -o tty= -p "$p" 2>/dev/null | tr -d '[:space:]' || true)"
+    [ "${t##*/}" = "${ptty##*/}" ] && return 0
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d '[:space:]' || true)"; n=$((n + 1))
+  done
+  echo "!! $mode REFUSED: pid $pid (registry row for pane $pane) has no ancestor on tty ${ptty##*/}. The row is STALE — kitty reuses window ids across restarts, so pane $pane now belongs to a different session than the one the row records. Nothing was typed." >&2
+  return 2
+}
+
+hf_transplant_evidence() { # $1=sid $2=roots (projects dirs, space-separated) $3=mode label $4=local cfg ("" ⇒ the tombstone's own dir is the source) → 0 / 2 · sets HF_TS_TOMBSTONE HF_TS_TO HF_TS_LOCK HF_TS_CFG
+  local sid="${1:-}" roots="${2:-}" mode="${3:-self-close}" cfg="${4:-}" pd ts dupes=0
+  HF_TS_TOMBSTONE="" HF_TS_TO="" HF_TS_LOCK="" HF_TS_CFG="$cfg"
+  if [ -z "$sid" ]; then
+    { echo "!! $mode REFUSED: --transplanted-source, but \$CLAUDE_CODE_SESSION_ID is unset."
+      echo "!!   The tombstone is keyed on the SESSION uuid, not the pane id — without it there is"
+      echo "!!   nothing to look up, and a pane id would answer a different question."
+    } >&2
+    return 2
+  fi
+  for pd in $roots; do
+    for ts in "$pd"/*/"$sid".HANDOFF.json; do
+      [ -f "$ts" ] || continue
+      [ -z "$HF_TS_TOMBSTONE" ] || dupes=1
+      HF_TS_TOMBSTONE="$ts"
+    done
+  done
+  if [ -z "$cfg" ] && [ -n "$HF_TS_TOMBSTONE" ]; then HF_TS_CFG="${HF_TS_TOMBSTONE%/projects/*}"; fi
+  if [ "$dupes" = 1 ]; then
+    echo "!! $mode REFUSED: more than one transplant tombstone for session ${sid:0:8} under: $roots — disambiguate by hand." >&2
+    return 2
+  fi
+  if [ -z "$HF_TS_TOMBSTONE" ]; then
+    { echo "!! $mode REFUSED: --transplanted-source, but session ${sid:0:8} has NO transplant tombstone."
+      for pd in $roots; do echo "!!   looked for: $pd/*/$sid.HANDOFF.json"; done
+      echo "!!   lr-transplant.sh writes that file only after the copy verified sha-identical. No"
+      echo "!!   tombstone means no completed transplant, so this pane is not a husk — it is an"
+      echo "!!   ORIGIN session, and it stays up. This flag names a CATEGORY; it cannot confer one."
+    } >&2
+    return 2
+  fi
+  if ! jq -e . "$HF_TS_TOMBSTONE" >/dev/null 2>&1; then
+    echo "!! $mode REFUSED: transplant tombstone $HF_TS_TOMBSTONE is not valid JSON — an unreadable record is not evidence." >&2
+    return 2
+  fi
+  HF_TS_TO="$(jq -r '.handed_off_to // empty' "$HF_TS_TOMBSTONE" 2>/dev/null || true)"
+  if [ -z "$HF_TS_TO" ]; then
+    echo "!! $mode REFUSED: transplant tombstone $HF_TS_TOMBSTONE has no .handed_off_to — it does not say where the session went." >&2
+    return 2
+  fi
+  if [ "${HF_TS_TO%/}" = "${HF_TS_CFG%/}" ]; then
+    # SAME-ACCOUNT SUPERSESSION (LIMIT_RECOVER_100P, 2026-09-09): a duplicate on the same account has
+    # no transplant — the tombstone names the LIVE copy by process (`superseded_by_pid`, written by
+    # lr-fleet.sh --duplicates --mark). The class then holds iff that process is alive: something IS
+    # carrying the session, on this very account, and the caller's --successor must be its pane
+    # (successor_pin proves the pane holds the same sid). A dead successor is the plain same-dir
+    # refusal below — nothing else carries it, so closing here would retire it outright.
+    HF_TS_SUP_PID="$(jq -r '.superseded_by_pid // empty' "$HF_TS_TOMBSTONE" 2>/dev/null || true)"
+    case "$HF_TS_SUP_PID" in ''|*[!0-9]*) HF_TS_SUP_PID="" ;; esac
+    if [ -n "$HF_TS_SUP_PID" ] && kill -0 "$HF_TS_SUP_PID" 2>/dev/null; then
+      HF_TS_LOCK=""
+      echo "→ SUPERSEDED same-account tombstone: session ${sid:0:8} is carried by pid $HF_TS_SUP_PID on this account (the lock requirement is replaced by that live pid)" >&2
+      return 0
+    fi
+    { echo "!! $mode REFUSED: the tombstone hands this session off to THIS SAME config dir ($HF_TS_CFG)."
+      echo "!!   That is not a transplant, so nothing else is carrying the session and closing here"
+      echo "!!   would retire it outright."
+    } >&2
+    return 2
+  fi
+  HF_TS_LOCK="$(jq -r '.lock // empty' "$HF_TS_TOMBSTONE" 2>/dev/null || true)"
+  if [ -z "$HF_TS_LOCK" ] || [ ! -f "$HF_TS_LOCK" ]; then
+    { echo "!! $mode REFUSED: the transplant's split-brain lock is gone (${HF_TS_LOCK:-<none named in the tombstone>})."
+      echo "!!   That lock is what makes 'one transplant owner per session uuid' true. Without it the"
+      echo "!!   move has been released or superseded, and this pane's claim to be a husk over it no"
+      echo "!!   longer holds. Re-establish the transplant, or close this pane by hand."
+    } >&2
+    return 2
+  fi
+  return 0
+}
+
 pane_proof() { # $1=it2 shim  $2=pane id  $3=label → 0 reachable, 1 unreachable (both logged)
   local it2="$1" pane="$2" label="$3" out="" ids="" shape="" rc=0 n=0 err="" t0=0 dt=0
   if [ ! -x "$it2" ]; then
@@ -3182,6 +3365,43 @@ EOF
 # launch-time copy and never echoed, but the caller of a recycle IS the session being recycled, so if
 # the token ever reached its own stream the check would pass on the predecessor's turns — the exact
 # false-positive this function exists to prevent. Cheap belt, no cost when the leak never happens.
+resume_engaged() { # $1=target cfg  $2=sid  $3=baseline (UTC, %FT%T) → 0 a content-bearing, NON-ERROR assistant turn newer than the baseline exists in the TARGET's copy / 1 not
+  # The resume-mode oracle (LIMIT_RECOVER_100P). recycle_engaged's two signals do not apply here: the
+  # sid does not change (same uuid), and no marker rides the payload (the launcher carries the ingest
+  # prompt). What proves engagement is the one thing a husk can never produce — a fresh, non-error
+  # assistant turn in the config dir the session was transplanted TO. An `isApiErrorMessage` turn is
+  # the limit hitting AGAIN on the target, and the synthetic "No response requested." a resume
+  # inserts is not a turn either; both are excluded so this cannot read a dead relaunch as alive.
+  local cfg="${1:-}" sid="${2:-}" t0="${3:-}" f
+  { [ -n "$cfg" ] && [ -n "$sid" ]; } || return 1
+  for f in "$cfg"/projects/*/"$sid".jsonl; do
+    [ -f "$f" ] || continue
+    /usr/bin/python3 - "$f" "$t0" <<'PY' && return 0
+import json, sys
+f, t0 = sys.argv[1], sys.argv[2]
+for line in open(f, errors="replace"):
+    if '"assistant"' not in line:
+        continue
+    try:
+        d = json.loads(line)
+    except Exception:
+        continue
+    if d.get("type") != "assistant" or d.get("isApiErrorMessage"):
+        continue
+    if (d.get("timestamp") or "") <= t0:
+        continue
+    m = d.get("message") if isinstance(d.get("message"), dict) else {}
+    c = m.get("content")
+    txt = c if isinstance(c, str) else (json.dumps(c) if c else "")
+    if not txt.strip() or txt.strip() == "No response requested.":
+        continue
+    sys.exit(0)
+sys.exit(1)
+PY
+  done
+  return 1
+}
+
 recycle_engaged() { # $1=pane $2=pre-recycle-sid $3=marker → 0 engaged / 1 not
   local pane="${1:-}" oldsid="${2:-}" marker="${3:-}" pdir newsid hit scan_win=""
   # Same mtime scoping as engagement_seen, and this path needed it MORE: it sweeps every entry of
@@ -5816,6 +6036,9 @@ if [ "${1:-}" = "__recycle" ]; then
   # that consumes it fires from inside the wait loop — above that line. Optional: an older watcher
   # (deployed-copy skew mid-land) is handed 8 args and simply reports the brief as unrecorded.
   RCY_PROMPT_FILE="${9:-}"
+  # Resume mode (LIMIT_RECOVER_100P): $10-$12 are the TARGET config dir, the sid being resumed and
+  # the engagement baseline. Positional-last + optional, like every argument above them.
+  RCY_RESUME_CFG="${10:-}"; RCY_RESUME_SID="${11:-}"; RCY_T0="${12:-}"
   IT2="$HOME/.claude/bin/it2"
   echo "→ armed: __recycle pid=$$ pgid=$(ps -o pgid= -p $$ | tr -d ' ') sid=$RSID tty=$TTY_PATH"
   pane_proof "$IT2" "$RSID" __recycle || exit 1
@@ -5932,6 +6155,22 @@ if [ "${1:-}" = "__recycle" ]; then
     exit 1
   fi
   echo "→ pane $RSID CONFIRMED at a shell prompt after ${waited}s — typing relaunch"
+  # RESUME MODE — fold a re-created source stub (LIMIT_RECOVER_100P, ordering A). The transplant ran
+  # BEFORE the /exit (the tombstone is the carve-out's admission evidence), and lr-transplant renamed
+  # the source transcript to .handed-off; a live CC appends by PATH, so anything it wrote between the
+  # rename and its exit re-created a small `<sid>.jsonl` in the retired store (the 2026-08-16
+  # mechanism, seconds wide here). Now that the process is provably gone (the shell is back), fold
+  # that stub INTO the .handed-off record and remove it, so no census ever reads it as a live session.
+  # $13 = the source transcript path the caller resolved from the tombstone; empty ⇒ nothing to fold.
+  RCY_SRC_TX="${13:-}"
+  if [ -n "$RCY_SRC_TX" ] && [ -f "$RCY_SRC_TX" ] && [ -f "$RCY_SRC_TX.handed-off" ]; then
+    if cat "$RCY_SRC_TX" >> "$RCY_SRC_TX.handed-off" 2>/dev/null; then
+      rm -f "$RCY_SRC_TX" 2>/dev/null || true
+      echo "→ folded a re-created source stub ($(basename "$RCY_SRC_TX")) into its .handed-off record — the retired store holds no live-looking copy"
+    else
+      echo "⚠ could not fold the re-created source stub $RCY_SRC_TX into its .handed-off record — left in place beside its tombstone (the guard still blocks it)"
+    fi
+  fi
   # THE 2026-07-29 STRAND, made self-diagnosing. A session-owned worktree is reaped BY the exit this
   # watcher just observed, so the relaunch's cd target can disappear between arming and typing. The
   # command already carries a fallback (see the RECYCLE_FALLBACK chain), so this is pure evidence —
@@ -5989,7 +6228,7 @@ if [ "${1:-}" = "__recycle" ]; then
     # standing in for. So the two compose rather than compete — the disclaimer is retained VERBATIM
     # as the DEGRADED branch, which is now exactly the case it describes (nothing to verify against),
     # and its event vocabulary rides every non-engaged outcome.
-    if [ -z "$RCY_MARKER" ] && [ -z "$RCY_OLD_SID" ]; then
+    if [ -z "$RCY_MARKER" ] && [ -z "$RCY_OLD_SID" ] && [ -z "$RCY_RESUME_SID" ]; then
       # Nothing to verify AGAINST: an older arming side (a deployed-copy skew mid-land) handed over
       # neither the marker nor the baseline sid. An overclaimed verdict is worse than a modest one,
       # because it stops anyone looking (memory claimed-outcome-vs-checked-outcome).
@@ -6007,7 +6246,8 @@ if [ "${1:-}" = "__recycle" ]; then
     echo "→ relaunch process up in $RSID (claude on tty) — verifying ENGAGEMENT"
     rcy_t=0
     while [ "$rcy_t" -lt "$RCY_ENGAGE_TIMEOUT" ]; do
-      if recycle_engaged "$RSID" "$RCY_OLD_SID" "$RCY_MARKER"; then
+      if { [ -n "$RCY_RESUME_SID" ] && resume_engaged "$RCY_RESUME_CFG" "$RCY_RESUME_SID" "$RCY_T0"; } \
+         || { [ -z "$RCY_RESUME_SID" ] && recycle_engaged "$RSID" "$RCY_OLD_SID" "$RCY_MARKER"; }; then
         echo "→ relaunched + ENGAGEMENT CONFIRMED in $RSID (a real assistant turn, not just a process)"
         # MESSAGE 2, re-armed. A recycle mints a NEW session id, and a goal is a SESSION-SCOPED Stop
         # hook — measured 2026-08-08: the successor's transcript carries zero goal_status, and the
@@ -6468,14 +6708,10 @@ if [ "${1:-}" = "self-close" ]; then
   # session's own tombstone rather than the driver's), and the default env-lookup path reaches
   # verify_self_pane byte-for-byte as before.
   if [ -n "$SC_SOURCE_PANE" ] || [ -n "$SC_SOURCE_SESSION" ]; then
-    if [ -z "$SC_SOURCE_PANE" ] || [ -z "$SC_SOURCE_SESSION" ]; then
-      { echo "!! self-close REFUSED: --source-pane and --source-session are a PAIR; got only one."
-        echo "!!   The pane id alone would let the registry supply the session it names, which is not"
-        echo "!!   a check — it is the caller believing whatever that pane happens to hold. The"
-        echo "!!   session id alone names no pane to close. Both, cross-checked, is the evidence."
-      } >&2
-      exit 2
-    fi
+    # The evidence is ONE function shared with --recycle's remote form (hf_remote_source_bind): the
+    # pair, then the registry row binding pane→session. Its refusal texts are the ones this block
+    # carried inline until LIMIT_RECOVER_100P (2026-09-09) and that the suite pins.
+    hf_remote_source_bind "$SC_SOURCE_PANE" "$SC_SOURCE_SESSION" self-close || exit 2
     if [ "$SC_TRANSPLANTED_SOURCE" != 1 ]; then
       { echo "!! self-close REFUSED: --source-pane is admissible ONLY with --transplanted-source."
         echo "!!   Closing a pane that is not the caller's is justified by exactly one fact: that pane"
@@ -6491,43 +6727,9 @@ if [ "${1:-}" = "self-close" ]; then
       exit 2
     fi
     SC_SRC_ROW="$REG_DIR/$SC_SOURCE_PANE.json"
-    if [ ! -f "$SC_SRC_ROW" ]; then
-      { echo "!! self-close REFUSED: no session-registry row for pane $SC_SOURCE_PANE ($SC_SRC_ROW)."
-        echo "!!   That row is the ONLY thing tying a named pane to the session it holds. Without it"
-        echo "!!   this close would be acting on the caller's word about someone else's pane."
-      } >&2
-      exit 2
-    fi
-    if ! command -v jq >/dev/null 2>&1; then
-      echo "!! self-close REFUSED: --source-pane needs jq to read the registry row, and jq is not on PATH. Unreadable evidence is not evidence." >&2
-      exit 2
-    fi
-    SC_SRC_ROW_SID="$(jq -r '.session_id // empty' "$SC_SRC_ROW" 2>/dev/null || true)"
-    if [ -z "$SC_SRC_ROW_SID" ]; then
-      { echo "!! self-close REFUSED: the registry row for pane $SC_SOURCE_PANE names no .session_id."
-        echo "!!   row: $SC_SRC_ROW"
-        echo "!!   A row without one records that a pane exists, not which session lives in it — so"
-        echo "!!   it cannot support the pairing this close turns on. (successor_pin refuses the same"
-        echo "!!   row for the same reason, one gate later.)"
-      } >&2
-      exit 2
-    fi
-    if [ "$SC_SRC_ROW_SID" != "$SC_SOURCE_SESSION" ]; then
-      { echo "!! self-close REFUSED: pane $SC_SOURCE_PANE does NOT hold session ${SC_SOURCE_SESSION:0:8}."
-        echo "!!   the registry says that pane holds ${SC_SRC_ROW_SID:0:8} (row $SC_SRC_ROW)"
-        echo "!!   This is the whole point of the check: a caller naming the wrong pane — a stale id,"
-        echo "!!   a typo, a pane recycled since the transplant — would otherwise retire a live"
-        echo "!!   session that merely got named. Nothing was typed and nothing was closed."
-      } >&2
-      exit 2
-    fi
     SC_SID="$SC_SOURCE_PANE"
     SC_REMOTE_SOURCE=1
-    # The SUBJECT of every cwd-scoped guard below is the pane being CLOSED, not the driver running
-    # this. The registry row carries it; empty (an older row) leaves those guards exactly as they
-    # are, reading the caller's cwd — degraded to today's behaviour, never silently skipped.
-    SC_SUBJ_CWD="$(jq -r '.cwd // empty' "$SC_SRC_ROW" 2>/dev/null || true)"
-    [ -d "$SC_SUBJ_CWD" ] || SC_SUBJ_CWD=""
+    SC_SUBJ_CWD="$HF_REMOTE_CWD"
     # LEGIBILITY (R10): a close that swaps its own identity proof says which proof it used.
     echo "→ remote transplanted-source close: pane $SC_SOURCE_PANE is PROVEN to hold session ${SC_SOURCE_SESSION:0:8} by its registry row $SC_SRC_ROW — the self-identity gate is REPLACED by that binding, not skipped" >&2
     if [ -n "$SC_SUBJ_CWD" ]; then
@@ -6712,82 +6914,12 @@ USAGE
     # driver itself mid-transplant, it would admit the close on the WRONG session's evidence. The
     # sid used is the one the registry row above proved that pane holds.
     if [ "$SC_REMOTE_SOURCE" = 1 ]; then SC_TS_SID="$SC_SOURCE_SESSION"; else SC_TS_SID="${CLAUDE_CODE_SESSION_ID:-}"; fi
-    if [ -z "$SC_TS_SID" ]; then
-      { echo "!! self-close REFUSED: --transplanted-source, but \$CLAUDE_CODE_SESSION_ID is unset."
-        echo "!!   The tombstone is keyed on the SESSION uuid, not the pane id — without it there is"
-        echo "!!   nothing to look up, and a pane id would answer a different question."
-      } >&2
-      exit 2
-    fi
-    SC_TS_CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-    # GLOB the project dirs rather than re-deriving the slug from $PWD. lr-transplant.sh does not
-    # encode a path either — it finds the transcript by globbing projects/*/<sid>.jsonl and takes the
-    # slug from what it found (lr-transplant.sh:41-51). Re-implementing the encoding here would be a
-    # SECOND oracle for the producer's own key, free to drift from it; and the sid is a globally
-    # unique uuid, so the glob is exact. More than one hit is pathological, and refused rather than
-    # picked from — the same call lr-transplant makes on a duplicated transcript.
-    # REMOTE: the source session lives on ANOTHER ACCOUNT by definition — that is what made it a
-    # transplant — so its tombstone is not under the driver's config dir. Search every account's
-    # projects dir, which is the SAME move (and the same list) self-close already makes to resolve a
-    # SUCCESSOR's transcript for the engagement gate (:313): the account is unknown here and the sid
-    # is a globally-unique UUID, so the glob is exact wherever it lands. $SC_TS_CFG is then DERIVED
-    # from where it was found, which is what keeps precondition (4) honest below.
-    if [ "$SC_REMOTE_SOURCE" = 1 ]; then SC_TS_ROOTS="$CC_PROJECTS_DIRS"; else SC_TS_ROOTS="$SC_TS_CFG/projects"; fi
-    SC_TOMBSTONE="" SC_TS_DUPES=0
-    # shellcheck disable=SC2086  # deliberate word-split: CC_PROJECTS_DIRS is a space-separated list
-    for _sc_pd in $SC_TS_ROOTS; do
-      for _sc_ts in "$_sc_pd"/*/"$SC_TS_SID".HANDOFF.json; do
-        [ -f "$_sc_ts" ] || continue
-        [ -z "$SC_TOMBSTONE" ] || SC_TS_DUPES=1
-        SC_TOMBSTONE="$_sc_ts"
-      done
-    done
-    unset _sc_ts _sc_pd
-    # The config dir the tombstone was found under IS the source account's own — pure string
-    # arithmetic on the path the glob matched, never a re-derivation of the account map. Only in
-    # remote mode: locally $SC_TS_CFG is this pane's config dir and must stay exactly that.
-    if [ "$SC_REMOTE_SOURCE" = 1 ] && [ -n "$SC_TOMBSTONE" ]; then SC_TS_CFG="${SC_TOMBSTONE%/projects/*}"; fi
-    if [ "$SC_TS_DUPES" = 1 ]; then
-      echo "!! self-close REFUSED: more than one transplant tombstone for session ${SC_TS_SID:0:8} under: $SC_TS_ROOTS — disambiguate by hand." >&2
-      exit 2
-    fi
-    if [ -z "$SC_TOMBSTONE" ]; then
-      { echo "!! self-close REFUSED: --transplanted-source, but session ${SC_TS_SID:0:8} has NO transplant tombstone."
-        # shellcheck disable=SC2086  # deliberate word-split: space-separated list of projects dirs
-        for _sc_pd in $SC_TS_ROOTS; do echo "!!   looked for: $_sc_pd/*/$SC_TS_SID.HANDOFF.json"; done; unset _sc_pd
-        echo "!!   lr-transplant.sh writes that file only after the copy verified sha-identical. No"
-        echo "!!   tombstone means no completed transplant, so this pane is not a husk — it is an"
-        echo "!!   ORIGIN session, and it stays up. This flag names a CATEGORY; it cannot confer one."
-      } >&2
-      exit 2
-    fi
-    if ! jq -e . "$SC_TOMBSTONE" >/dev/null 2>&1; then
-      echo "!! self-close REFUSED: transplant tombstone $SC_TOMBSTONE is not valid JSON — an unreadable record is not evidence." >&2
-      exit 2
-    fi
-    SC_TS_TO="$(jq -r '.handed_off_to // empty' "$SC_TOMBSTONE" 2>/dev/null || true)"
-    if [ -z "$SC_TS_TO" ]; then
-      echo "!! self-close REFUSED: transplant tombstone $SC_TOMBSTONE has no .handed_off_to — it does not say where the session went." >&2
-      exit 2
-    fi
-    # (4) it really moved OFF this account.
-    if [ "${SC_TS_TO%/}" = "${SC_TS_CFG%/}" ]; then
-      { echo "!! self-close REFUSED: the tombstone hands this session off to THIS SAME config dir ($SC_TS_CFG)."
-        echo "!!   That is not a transplant, so nothing else is carrying the session and closing here"
-        echo "!!   would retire it outright."
-      } >&2
-      exit 2
-    fi
-    # (5) the split-brain lock still held.
-    SC_TS_LOCK="$(jq -r '.lock // empty' "$SC_TOMBSTONE" 2>/dev/null || true)"
-    if [ -z "$SC_TS_LOCK" ] || [ ! -f "$SC_TS_LOCK" ]; then
-      { echo "!! self-close REFUSED: the transplant's split-brain lock is gone (${SC_TS_LOCK:-<none named in the tombstone>})."
-        echo "!!   That lock is what makes 'one transplant owner per session uuid' true. Without it the"
-        echo "!!   move has been released or superseded, and this pane's claim to be a husk over it no"
-        echo "!!   longer holds. Re-establish the transplant, or close this pane by hand."
-      } >&2
-      exit 2
-    fi
+    # The evidence itself is ONE function shared with --recycle's remote form (hf_transplant_evidence):
+    # tombstone unique + parseable, .handed_off_to ≠ this pane's config dir, split-brain lock held.
+    # Local form: the source config dir is THIS session's; remote form: the dir the tombstone sits in.
+    if [ "$SC_REMOTE_SOURCE" = 1 ]; then SC_TS_ROOTS="$CC_PROJECTS_DIRS"; _sc_local_cfg=""; else SC_TS_ROOTS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"; _sc_local_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; fi
+    hf_transplant_evidence "$SC_TS_SID" "$SC_TS_ROOTS" self-close "$_sc_local_cfg" || exit 2
+    SC_TS_TO="$HF_TS_TO"; SC_TS_LOCK="$HF_TS_LOCK"
     SC_ORIGIN_CLASS="transplanted-source"
     # LEGIBILITY (R10), the same standard the orphaned-assignee row holds itself to: a pane that
     # changes its own authorisation says so, to stderr AND the close log, never only in-pane.
@@ -7421,6 +7553,13 @@ while [ $# -gt 0 ]; do case "$1" in
   --probe)       PROBE=1; shift ;;
   --cloud)       CLOUD=1; shift ;;
   --recycle)     RECYCLE=1; shift ;;
+  --source-pane)    RCY_SOURCE_PANE="${2:?--source-pane needs a pane id}"; shift 2 ;;
+  --source-session) RCY_SOURCE_SESSION="${2:?--source-session needs a session uuid}"; shift 2 ;;
+  --transplanted-source) RCY_TRANSPLANTED_SOURCE=1; shift ;;
+  --resume-launcher) RESUME_LAUNCHER="${2:?--resume-launcher needs a path}"; shift 2 ;;
+  --resume-cfg)      RESUME_CFG="${2:?--resume-cfg needs a config dir}"; shift 2 ;;
+  --resume-cwd)      RESUME_CWD="${2:?--resume-cwd needs a directory}"; shift 2 ;;
+  --await)           RECYCLE_AWAIT=1; shift ;;
   --allow-live-subagents) ALLOW_LIVE_SA=1; shift ;;
   --session-id)  SESSION_ID="${2:?--session-id needs a value}"; shift 2 ;;
   --notify-back) NOTIFY_BACK="${2:-}"; NOTIFY_BACK_EXPLICIT=1; case "$NOTIFY_BACK" in ""|--*) NOTIFY_BACK="__self__"; shift ;; *) shift 2 ;; esac ;;
@@ -7458,6 +7597,25 @@ if [ "$CLOUD" = 1 ] && [ "$CLOUD_OPTIN" != on ]; then
   emit_fire_refusal cloud-optin "--cloud passed with CC_FIRE_CLOUD='${CLOUD_OPTIN}' (needs 'on') — off-box venue not enabled on this box"
   exit 2
 fi
+# RESUME MODE (LIMIT_RECOVER_100P): the payload is the launcher lr-handoff minted, not a brief — the
+# relaunch is `bash <launcher>`, and the ingest prompt travels inside it. Every recycle-only flag is
+# validated here, before any side effect, so a mis-composed call costs a message and never a /exit.
+if [ -n "$RCY_SOURCE_PANE" ] || [ -n "$RCY_SOURCE_SESSION" ] || [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] \
+   || [ -n "$RESUME_LAUNCHER" ] || [ -n "$RESUME_CFG" ] || [ -n "$RESUME_CWD" ] || [ "$RECYCLE_AWAIT" = 1 ]; then
+  [ "$RECYCLE" = 1 ] || { echo "!! --source-pane/--source-session/--transplanted-source/--resume-launcher/--resume-cfg/--resume-cwd/--await are --recycle flags" >&2; exit 2; }
+fi
+if { [ -n "$RCY_SOURCE_PANE" ] || [ -n "$RCY_SOURCE_SESSION" ] || [ "$RCY_TRANSPLANTED_SOURCE" = 1 ]; } && [ -z "$RESUME_LAUNCHER" ] && [ -z "$RESUME_CFG" ]; then
+  echo "!! --recycle REFUSED: the remote form needs --resume-launcher/--resume-cfg — the only thing a transplanted source may be relaunched INTO is its own uuid on the transplant target." >&2; exit 2
+fi
+if [ -n "$RESUME_LAUNCHER" ] || [ -n "$RESUME_CFG" ]; then
+  { [ -n "$RESUME_LAUNCHER" ] && [ -n "$RESUME_CFG" ]; } || { echo "!! --resume-launcher and --resume-cfg are a PAIR: the launcher says what to run, the config dir says whose copy of the session must take the next turn" >&2; exit 2; }
+  { [ -f "$RESUME_LAUNCHER" ] && [ -s "$RESUME_LAUNCHER" ]; } || { echo "!! --resume-launcher: missing or empty: $RESUME_LAUNCHER" >&2; exit 1; }
+  [ -d "$RESUME_CFG" ] || { echo "!! --resume-cfg: not a directory: $RESUME_CFG" >&2; exit 1; }
+  [ -z "$SESSION_ID" ] || { echo "!! --session-id and the remote resume form both name the pane; pass --source-pane only" >&2; exit 2; }
+  [ -z "$PROMPT_FILE" ] || { echo "!! --prompt-file is not used in resume mode (the launcher carries the ingest prompt) — drop it" >&2; exit 2; }
+  { [ -z "$WORKTREE" ] && [ -z "$CWD" ]; } || { echo "!! --worktree/--cwd do not compose with resume mode — the session resumes in its own worktree (pass --resume-cwd to override the registry's cwd)" >&2; exit 2; }
+fi
+if [ -z "$RESUME_LAUNCHER" ]; then
 [ -n "$PROMPT_FILE" ] || { echo "!! --prompt-file is required" >&2; usage 1; }
 [ -f "$PROMPT_FILE" ] || { echo "!! missing prompt file: $PROMPT_FILE" >&2; exit 1; }
 # FM-D (Fable panel 2026-07-19): an EMPTY prompt file passed the [ -f ] check and fired `claude ""` →
@@ -7468,6 +7626,7 @@ fi
 # P0-16: reject an over-cap /goal payload BEFORE any side effect (covers every fire mode).
 check_goal_length "$PROMPT_FILE" || exit 1
 check_slash_head  "$PROMPT_FILE" || exit 1
+fi   # end of the non-resume payload checks (resume mode carries no brief)
 # …and validate --goal (MESSAGE 2) here too, so a malformed condition costs a refusal rather than a
 # pane that fired, engaged, and then could not be armed.
 check_goal_arm || exit 1
@@ -7986,16 +8145,40 @@ if [ "$RECYCLE" = 1 ]; then
   # synthetic one kitty-setup.sh:255 exports. There is no input for which this targets a pane the old
   # code targeted differently — only inputs for which the old code targeted nothing at all.
   pin_term_verdict_for_watcher
-  SID="${SESSION_ID:-$(self_pane_id)}"
-  [ -n "$SID" ] || { echo "!! --recycle needs \$ITERM_SESSION_ID, \$KITTY_WINDOW_ID (in a genuine kitty pane) or --session-id" >&2; exit 1; }
+  if [ -n "$RCY_SOURCE_PANE" ] || [ -n "$RCY_SOURCE_SESSION" ]; then
+    # REMOTE FORM (LIMIT_RECOVER_100P) — the pane is somebody else's. The same evidence as
+    # self-close's remote class (the pair, the class flag, the registry row binding pane→session),
+    # plus two things a CLOSE never needs but a RECYCLE does, because a recycle TYPES into the pane:
+    # the row's process must be alive with that pane's tty in its ancestry (a kitty id reused after a
+    # restart names a different window while the row still says the old session), and the transplant
+    # evidence must ALREADY exist — the tombstone is what makes the session PROVABLY retired at this
+    # pane, and it is written before the /exit, never after (plan §3 Q3, operator requirement
+    # 2026-09-09). The self-identity gate is REPLACED by that binding, not skipped.
+    [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] || { echo "!! --recycle REFUSED: --source-pane is admissible ONLY with --transplanted-source — recycling a pane that is not the caller's is justified by exactly one fact: its session MOVED, and the transplant tombstone proves it." >&2; exit 2; }
+    [ -n "$RESUME_LAUNCHER" ] || { echo "!! --recycle REFUSED: the remote form needs --resume-launcher/--resume-cfg — the only thing a transplanted source may be relaunched INTO is its own uuid on the transplant target." >&2; exit 2; }
+    hf_remote_source_bind "$RCY_SOURCE_PANE" "$RCY_SOURCE_SESSION" --recycle || exit 2
+    hf_remote_source_pin  "$RCY_SOURCE_PANE" "$HF_REMOTE_ROW_PID" --recycle || exit 2
+    hf_transplant_evidence "$RCY_SOURCE_SESSION" "$CC_PROJECTS_DIRS" --recycle "" || exit 2
+    if [ "${HF_TS_TO%/}" != "${RESUME_CFG%/}" ]; then
+      echo "!! --recycle REFUSED: the tombstone hands session ${RCY_SOURCE_SESSION:0:8} to $HF_TS_TO but --resume-cfg names $RESUME_CFG — a relaunch anywhere but the transplant target is a second live copy (lr-fire-resume would refuse it too). Nothing was typed." >&2
+      exit 2
+    fi
+    SID="$RCY_SOURCE_PANE"; RCY_REMOTE=1
+    echo "→ remote in-place resume: pane $SID is PROVEN to hold session ${RCY_SOURCE_SESSION:0:8} by its registry row (pid $HF_REMOTE_ROW_PID on its tty), and that session was transplanted to $HF_TS_TO (lock $HF_TS_LOCK held) — the self-identity gate is REPLACED by that binding, not skipped" >&2
+  else
+    SID="${SESSION_ID:-$(self_pane_id)}"
+    [ -n "$SID" ] || { echo "!! --recycle needs \$ITERM_SESSION_ID, \$KITTY_WINDOW_ID (in a genuine kitty pane) or --session-id" >&2; exit 1; }
+  fi
   # SAME SELF-IDENTITY GATE AS self-close, and needed MORE here (item 71909cbeee08). Recycle does not
   # merely close the pane it names: it types /exit AND a launcher command into it. A stale id
   # therefore kills a stranger's turn and relaunches a CC in their pane against THIS session's
   # worktree and brief — strictly worse than the wrong-pane close the item was filed for, through
   # the identical self_pane_id read. `unknown` proceeds exactly as before; only a positive disproof
   # refuses. (Scope grown under Follow-On Gate F1-F4: same defect, same helper, same envelope.)
-  verify_self_pane "$SID" "$([ -n "$SESSION_ID" ] && echo 1 || echo 0)" --recycle || exit 2
-  SID="$HF_VERIFIED_PANE"
+  if [ "$RCY_REMOTE" = 0 ]; then
+    verify_self_pane "$SID" "$([ -n "$SESSION_ID" ] && echo 1 || echo 0)" --recycle || exit 2
+    SID="$HF_VERIFIED_PANE"
+  fi
   # ---- L1-b — IN-FLIGHT SUBAGENT GATE (blocking) ------------------------------------------------
   # HERE, and not one line later: this is the original FOREGROUND process, $SID is verified, and
   # nothing has side-effected yet. The point of no return is the `as_write "$SID" "/exit"` inside
@@ -8004,12 +8187,25 @@ if [ "$RECYCLE" = 1 ]; then
   # to has already been SIGKILLed. RCY_SUBAGENT_SID is kept for the successor-brief trailer below,
   # which needs the PREDECESSOR's sid after $SID has been reused by the new session.
   RCY_SUBAGENT_SID="$(cc_sid_for_pane "$SID")"
+  if [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] && [ "$ALLOW_LIVE_SA" = 0 ]; then
+    # A limit-blocked lead's subagents died with it — their transcripts have no terminus, so the
+    # gate would read them as IN FLIGHT and refuse the one recovery that re-audits exactly those
+    # units (/limit-recover ingest, iron rules 1-5). The class states the abandonment the gate asks
+    # to be stated; the ingest audit, not this gate, is where their partial results are judged.
+    ALLOW_LIVE_SA=1
+    echo "→ transplanted-source: in-flight subagents of ${RCY_SUBAGENT_SID:0:8} (if any) are re-audited by the ingest, not protected here" >&2
+  fi
   subagent_gate "$RCY_SUBAGENT_SID" "$ALLOW_LIVE_SA" recycle || exit $?
   # Same-dir recycle only: relaunch stays in this pane's dir by definition, so CLAUDE_ISOLATION_SKIP=1
   # must stop the repo-root launcher auto-routing into a fresh worktree. A relocating recycle is
   # landing in an explicit dir and takes the ordinary --worktree/--cwd path (see RECYCLE_RELOC above).
   [ "$RECYCLE_RELOC" = 0 ] && IN_PLACE=1
-  if [ -z "$LAUNCHER" ] && [ "$ACCOUNT" = "auto" ]; then
+  if [ -n "$RESUME_LAUNCHER" ]; then
+    # Resume mode composes no launcher of its own: the relaunch is `bash <launcher>` and the account
+    # is whatever lr-fire-resume was handed inside it. LAUNCHER is set so the resolution block below
+    # takes its explicit arm (no ranking, no probe, no --assign) — the FILE, not a name, gets typed.
+    LAUNCHER="bash"; EXPLICIT_LAUNCHER=1; ACCOUNT="(resume)"
+  elif [ -z "$LAUNCHER" ] && [ "$ACCOUNT" = "auto" ]; then
     ACCOUNT="$(env_account)" \
       || { echo "!! --recycle: can't derive this session's account from CLAUDE_CONFIG_DIR='${CLAUDE_CONFIG_DIR:-}' — pass --account or --launcher" >&2; exit 1; }
     # W2-A: this pane's own account is the DEFAULT, not the verdict. An EXPLICIT --account or
@@ -8786,7 +8982,7 @@ fi
 # the same reason ENGAGE_VERIFY is: a dry run fires nothing, so it makes no copy, which keeps the
 # "--recycle: original used as-is" assertion in notify-back.bats meaningful rather than merely passing.
 RECYCLE_VERIFY=0 RECYCLE_MARKER=""
-[ "$RECYCLE" = 1 ] && [ "$DRY" = 0 ] && RECYCLE_VERIFY=1
+[ "$RECYCLE" = 1 ] && [ "$DRY" = 0 ] && [ -z "$RESUME_LAUNCHER" ] && RECYCLE_VERIFY=1   # resume mode verifies by transcript, not marker
 if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 1 ] || [ "$RECYCLE_VERIFY" = 1 ]; then
   [ -f "$PROMPT_FILE" ] || { echo "!! prompt trailer: prompt file not found: $PROMPT_FILE" >&2; exit 1; }
   PF_NB="$(mktemp "${TMPDIR:-/tmp}/handoff-prompt-nb-XXXXXX")" || { echo "!! prompt trailer: mktemp failed" >&2; exit 1; }
@@ -9086,7 +9282,16 @@ QP="$(printf %q "$PROMPT_FILE")"
 # worktree/cwd arms below: the whole point is that the relaunch cd's somewhere NEW, so none of the
 # same-dir reasoning in this first arm applies. It keeps the recycle EXECUTION path (one pane,
 # exit-then-relaunch via recycle_fire) — only the cd target differs.
-if [ "$RECYCLE" = 1 ] && [ "$RECYCLE_RELOC" = 0 ]; then
+if [ -n "$RESUME_LAUNCHER" ]; then
+  # RESUME MODE: the relaunch is the launcher lr-handoff minted — NOT exec'd. `bash <launcher>` runs
+  # as a child of the pane's shell (the launcher itself execs lr-fire-resume → expect → claude), so
+  # the zsh stays the pane's root and a prompt comes back when the session ends: the pane remains
+  # recyclable next time, which an exec'd launcher (panes 625/632 on 2026-09-08) never is.
+  # `nocorrect` guards the command word against `setopt CORRECT` (scripts/lib/cc-type-verified.sh).
+  RCY_CWD="${RESUME_CWD:-$HF_REMOTE_CWD}"
+  { [ -n "$RCY_CWD" ] && [ -d "$RCY_CWD" ]; } || RCY_CWD="$PWD"
+  CMD="cd $(printf %q "$RCY_CWD") && ${NC}bash $(printf %q "$RESUME_LAUNCHER")"
+elif [ "$RECYCLE" = 1 ] && [ "$RECYCLE_RELOC" = 0 ]; then
   # Same pane, same dir: $PWD is the session's working dir (the harness re-pins the Bash tool
   # cwd to it). PREFIX carries CLAUDE_ISOLATION_SKIP=1 (IN_PLACE forced in the pre-pass) so a
   # repo-root relaunch can't auto-create a fresh worktree out from under the continuation.
@@ -9299,7 +9504,8 @@ hf_argv_launch
 # needs no pre-trust and is excluded from the spawn path.
 # A RELOCATING recycle lands in a dir this run just provisioned, so — unlike a same-dir recycle —
 # it DOES need the pre-trust below, and falls through to the $WT / $CWD arms to get it.
-if   [ "$RECYCLE" = 1 ] && [ "$RECYCLE_RELOC" = 0 ]; then LAUNCH_DIR="$PWD"
+if   [ -n "$RESUME_LAUNCHER" ]; then LAUNCH_DIR="${RCY_CWD:-$PWD}"
+elif [ "$RECYCLE" = 1 ] && [ "$RECYCLE_RELOC" = 0 ]; then LAUNCH_DIR="$PWD"
 elif [ -n "$WORKTREE" ]; then LAUNCH_DIR="$WT"
 elif [ -n "$CWD" ];      then LAUNCH_DIR="$CWD"
 else                          LAUNCH_DIR="$REPO"
@@ -10493,7 +10699,14 @@ recycle_fire() {
   # inherited condition re-runs the same pre-arm validation as a passed one — a condition the paste
   # path cannot carry (multi-line: the CR submits at the first line) is refused HERE, loudly, not
   # armed corrupt.
-  inherit_recycle_goal "$rcy_old_sid"
+  if [ -n "$RESUME_LAUNCHER" ]; then
+    # A same-uuid --resume carries an UNMET goal with it (recycle-100p §2.3, measured on 2.1.220);
+    # inheriting it here would arm the same condition twice in one session.
+    FIRE_GOAL=""
+  else
+    inherit_recycle_goal "$rcy_old_sid"
+  fi
+  RCY_T0="$(date -u +%FT%T)"   # resume-mode engagement baseline: an assistant turn newer than this, in the TARGET's copy
   pin_term_verdict_for_watcher
   # $LAUNCH_DIR, not $PWD: the evidence that matters is the dir the relaunch will cd INTO. For a
   # same-dir recycle LAUNCH_DIR *is* $PWD (byte-identical), but for a relocating recycle $PWD is the
@@ -10504,7 +10717,13 @@ recycle_fire() {
   # watcher runs in a re-exec where _resolved_prompt_file is null by construction, so without this
   # the alarm could only say `<none recorded>`. `${PROMPT_FILE_ORIG:-$PROMPT_FILE}` is the path the
   # lead actually wrote (PROMPT_FILE is rewritten to a back-channel copy at :8543).
-  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}")"
+  # $13: the SOURCE transcript path (from the tombstone's dir) so the watcher can fold a re-created
+  # stub once the process is gone — resume mode only, empty otherwise.
+  RCY_SRC_TX=""
+  if [ -n "$RESUME_LAUNCHER" ] && [ -n "$HF_TS_TOMBSTONE" ]; then
+    RCY_SRC_TX="${HF_TS_TOMBSTONE%.HANDOFF.json}.jsonl"
+  fi
+  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" "$RESUME_CFG" "${RESUME_LAUNCHER:+${RCY_SOURCE_SESSION:-$rcy_old_sid}}" "$RCY_T0" "$RCY_SRC_TX")"
   if ! await_armed "$log"; then
     kill "$WATCHER_PID" 2>/dev/null || true
     echo "!! recycle ABORTED: watcher heartbeat never appeared ($log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
@@ -10554,6 +10773,36 @@ recycle_fire() {
   # nudges (@60/150/300s) cover a stranded /exit either way.
   osascript -e 'delay 1.5' >/dev/null 2>&1
   as_write "$SID" "" 2>/dev/null || true
+  # --await (remote form only): the /exit went into ANOTHER pane, so this process survives it and
+  # can carry the watcher's verdict back to its caller — the fleet driver and lr-handoff need a real
+  # exit status, not a "watcher armed" line. Bounded by the watcher's own two windows plus slack.
+  if [ "$RECYCLE_AWAIT" = 1 ]; then
+    if [ "$RCY_REMOTE" = 0 ]; then
+      echo "⚠ --await ignored: this is the pane being recycled, so the /exit ends this process before any verdict exists" >&2
+      return 0
+    fi
+    recycle_await_verdict "$log"
+    return $?
+  fi
+}
+
+recycle_await_verdict() { # $1=watcher log → 0 engaged / 1 dead-or-failed / 3 no verdict inside the window
+  local log="$1" t=0 max
+  max=$(( ${HF_RECYCLE_SHELL_WAIT_S:-600} + ${RCY_ENGAGE_TIMEOUT:-180} + 120 ))
+  while [ "$t" -lt "$max" ]; do
+    if grep -q 'ENGAGEMENT CONFIRMED' "$log" 2>/dev/null; then
+      echo "→ recycle VERIFIED: $(grep -m1 'ENGAGEMENT CONFIRMED' "$log")"
+      return 0
+    fi
+    if grep -qE 'RECYCLE FAILED|VANISHED|never reached a CONFIRMED shell|relaunch write failed|no claude process appeared|PROCESS-ALIVE' "$log" 2>/dev/null; then
+      echo "!! recycle did NOT verify — watcher verdict:" >&2
+      grep -E '^!!|PROCESS-ALIVE' "$log" 2>/dev/null | head -5 >&2
+      return 1
+    fi
+    sleep "${HF_RECYCLE_AWAIT_IVL:-5}"; t=$((t + ${HF_RECYCLE_AWAIT_IVL:-5}))
+  done
+  echo "!! recycle: no watcher verdict inside ${max}s (log: $log) — the pane may still be exiting; read the log before acting" >&2
+  return 3
 }
 
 # Split-right (⌘D) is the STANDING operator preference for handoffs. --tab/--window override it and
@@ -10571,6 +10820,10 @@ if [ "$DRY" = 1 ]; then
   echo "mcp:      ${MCP_REASON:-(undecided)}"
   if [ "$RECYCLE" = 1 ]; then
     echo "surface:  (recycle — this pane: $SID)"
+    if [ -n "$RESUME_LAUNCHER" ]; then
+      echo "resume:   IN-PLACE RESUME of session ${RCY_SOURCE_SESSION:-<this pane} on $(basename "$RESUME_CFG") — relaunch = bash $RESUME_LAUNCHER (non-exec: the shell survives); engagement = a new assistant turn in $RESUME_CFG's copy; no goal inheritance (an unmet goal rides --resume)"
+      [ "$RCY_REMOTE" = 1 ] && echo "remote:   pane $SID bound to ${RCY_SOURCE_SESSION:0:8} by its registry row (pid $HF_REMOTE_ROW_PID on its tty); tombstone → $HF_TS_TO; lock $HF_TS_LOCK"
+    fi
     # L1-b: a dry run that stays silent about a gate the real run enforces "describes a different
     # decision than the real run". Reaching this line already means the gate ADMITTED (a refusal
     # exits at the pre-pass, dry or not), so the only two truthful readings are clear or overridden.
@@ -10674,7 +10927,7 @@ if [ "$DRY" = 1 ]; then
   # Printed for a recycle too since 2026-08-15 — the recycle path now pre-trusts unconditionally
   # (see the block below), and a dry run that stayed silent about it would understate what the real
   # run writes.
-  echo "pre-trust: $LAUNCH_DIR → $(basename "$(config_dir_for_launcher "$LAUNCHER")") (fired session skips the workspace-trust dialog)"
+  echo "pre-trust: $LAUNCH_DIR → $(basename "${RESUME_CFG:-$(config_dir_for_launcher "$LAUNCHER")}") (fired session skips the workspace-trust dialog)"
   echo "command:  $CMD"
 elif [ "$RECYCLE" = 1 ]; then
   # P0-15: the recycled pane IS the continuation (same UUID) — keep any role naming it current,
@@ -10706,7 +10959,12 @@ elif [ "$RECYCLE" = 1 ]; then
   # written. Trusting unconditionally costs one idempotent no-op on the common path (pre_trust
   # returns early when the dir is already trusted) and removes the premise entirely.
   # Evidence: docs/research/mcp-modal-fire-stall-2026-08-15.md § The root-cause chain.
-  pre_trust "$LAUNCH_DIR" "$(config_dir_for_launcher "$LAUNCHER")"
+  # Resume mode pre-trusts under the TARGET config dir (the launcher is `bash`, which maps to no
+  # account); every other recycle keeps the launcher-derived dir. The `pre_trust "$LAUNCH_DIR"` line
+  # itself is what tests/handoff-recycle-repick.bats pins — keep it a line of its own.
+  RCY_TRUST_CFG="$(config_dir_for_launcher "$LAUNCHER" 2>/dev/null || true)"
+  [ -n "$RESUME_LAUNCHER" ] && RCY_TRUST_CFG="$RESUME_CFG"
+  pre_trust "$LAUNCH_DIR" "$RCY_TRUST_CFG"
   recycle_fire
 else
   # T-P2-5 (F3): gate the MATERIALIZED payload's back-channel before a successor fires (the W5 root).

@@ -679,3 +679,26 @@ successor_is_live() {
   [ "$status" -eq 1 ]
   [[ "$output" == *"refusing self-close: dirty git tree in $SRC_WT"* ]] || { echo "$output"; false; }
 }
+
+# ── SAME-ACCOUNT SUPERSESSION (LIMIT_RECOVER_100P, 2026-09-09) ─────────────────────────────────
+# A duplicate on the SAME account has no transplant. lr-fleet.sh --duplicates --mark writes a
+# tombstone whose handed_off_to is this very config dir plus `superseded_by_pid`, the process that
+# carries the session. The class then holds iff that pid is alive — the lock requirement is replaced
+# by the live pid, and the caller's --successor must be that process's pane (successor_pin proves it
+# holds the same sid, one gate later). Dead pid ⇒ the plain same-dir refusal, unchanged.
+mk_superseded() { # $1=live pid
+  printf '{"handed_off_to":"%s","superseded_by_pid":%d,"superseded_by_pane":"%s","ts":"2026-09-09T00:00:00Z"}\n' \
+    "$CLAUDE_CONFIG_DIR" "$1" "$SUCCESSOR" > "$TOMB"
+}
+@test "SUPERSEDED same-account tombstone with a LIVE successor pid: the class is ADMITTED" {
+  mk_superseded "$$"
+  close --successor "$SUCCESSOR" --transplanted-source
+  [[ "$output" == *"SUPERSEDED same-account tombstone"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"transplanted-source close AUTHORIZED"* ]] || { echo "$output"; false; }
+}
+@test "SUPERSEDED CONTROL: a DEAD successor pid falls back to the same-config-dir refusal" {
+  mk_superseded 4194104
+  close --successor "$SUCCESSOR" --transplanted-source
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"THIS SAME config dir"* ]] || { echo "$output"; false; }
+}
