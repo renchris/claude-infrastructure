@@ -17,7 +17,15 @@ setup() {
   unset CC_HANDED_OFF_GUARD_DISABLED
   CFG="$BATS_TEST_TMPDIR/cfg-secondary"; export CLAUDE_CONFIG_DIR="$CFG"
   SLUG="-Users-x-Development-thing"; PROJ="$CFG/projects/$SLUG"; mkdir -p "$PROJ"
-  SID="52e35019-17e8-40f6-a54f-3a04de70d2e6"
+  # The incident sid, with a ZEROED tail. The full 2026-09-09 uuid is LIVE on this box (a tmux
+# `claude --resume <that uuid>` has been running since 00:51Z), and both liveness censuses under
+# test — lr-select's `pgrep -f "resume <sid>"` and lr-lib's `ps -axo command=` / `--resume <sid>`
+# — read the REAL process table, so the fixture's own registry row stopped being the only voice:
+# --locate said DUPLICATE where the case pins RECOVERABLE, and the poller retired the record before
+# it could nudge. A fixture may never name an identifier that can exist outside it (memory:
+# hermetic-in-stubs-not-in-interpreter). The `52e35019` prefix is kept — it is what the display
+# assertions match on, and it is how this suite stays legible against the incident it was written from.
+  SID="52e35019-17e8-40f6-a54f-000000000000"
   TX="$PROJ/$SID.jsonl"; : > "$TX"
   TOMB="$PROJ/$SID.HANDOFF.json"
   INPUT="$(printf '{"session_id":"%s","transcript_path":"%s","hook_event_name":"UserPromptSubmit"}' "$SID" "$TX")"

@@ -68,7 +68,15 @@ mk_parked() { # $1=sid [$2=model $3=effort]
     "$sid" "$HOME/.claude-quaternary" "$CWD" > "$STATE/parked/$sid.json"
 }
 row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-quaternary","cwd":"%s"}\n' "$1" "$2" "${3:-$$}" "$CWD" > "$CC_REGISTRY_DIR/$1.json"; }
-SID="52e35019-17e8-40f6-a54f-3a04de70d2e6"
+# The incident sid, with a ZEROED tail. The full 2026-09-09 uuid is LIVE on this box (a tmux
+# `claude --resume <that uuid>` has been running since 00:51Z), and both liveness censuses under
+# test — lr-select's `pgrep -f "resume <sid>"` and lr-lib's `ps -axo command=` / `--resume <sid>`
+# — read the REAL process table, so the fixture's own registry row stopped being the only voice:
+# --locate said DUPLICATE where the case pins RECOVERABLE, and the poller retired the record before
+# it could nudge. A fixture may never name an identifier that can exist outside it (memory:
+# hermetic-in-stubs-not-in-interpreter). The `52e35019` prefix is kept — it is what the display
+# assertions match on, and it is how this suite stays legible against the incident it was written from.
+  SID="52e35019-17e8-40f6-a54f-000000000000"
 
 @test "D1: the original pane is ALIVE → the poller NUDGES it in place; nothing is spawned; the record retires as handled" {
   mk_parked "$SID"; row 616 "$SID"
