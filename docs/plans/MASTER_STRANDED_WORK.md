@@ -712,3 +712,114 @@ the same file unexamined.*
 awaiting that peer is the legitimate non-close state for this pane. `ff0b5cf4528b` is newly filed.
 The four operator-gated rows (`8f4eae55a0c7`, `1dca461d4b90`, `475b43aacbf2`, `216f429128a2`) were
 re-verified 2026-08-12 and are unchanged; none was faked closed.
+
+---
+
+## LOCAL DRAIN, 2026-09-09 — the last open agent row closed, and the stranded branch's value was ONE case its landed sibling never wrote
+
+Live membership at intake, measured (never the header's count): **111 done · 1 open · 4 blocked.**
+The single open agent row was `6484a07b7221`, `re-land claude/fire-20260818T031629Z-40497-1`. It is
+now closed, and the four blocked rows are operator-gated and stay parked. Every `S1`–`S5` sub-wave
+above is settled.
+
+### The row was correctly un-re-landable, and stopping there would have thrown the value away
+
+The branch holds two commits over three files and is **1348 behind trunk**. Applying the plan's own
+arbiter (`git rev-parse <ref>:<path>` vs `origin/main:<path>`, per path) plus the supersession
+discriminator this file added at § the content oracle (`git rev-list --count <ref>..origin/main --
+<path>`):
+
+| path | ref-only lines | trunk commits on the path after the ref | reading |
+|---|---|---|---|
+| `docs/plans/BACKLOG_DRAIN_24_7.md` | 87 | 397 | superseded |
+| `scripts/handoff-fire.sh` | 392 | 38 | superseded |
+| `tests/handoff-prompt-file-join.bats` | 201 | **0** | absent from trunk |
+
+The feature itself — a `prompt_file` join key on every fire row — **landed as `11095ea02` hours
+earlier from a sibling**, with its own 7-case suite `tests/handoff-brief-provenance.bats`. So the
+branch was a genuine duplicate, its 21 failed land attempts were the filer retrying a merge that
+could never be right, and `docs/research/branch-prune-manifest-2026-08-19.tsv`'s 2026-09-08
+re-triage verdict **ABANDON-suite-red** was correct: *"Recovering it needs a change inside
+scripts/handoff-fire.sh, not a recovery."*
+
+🚨 **That last clause names agent work and was read as a disposition.** The row stayed open for 21
+days on it. A branch whose diff cannot be applied is not the same claim as a branch holding no
+value — and the discriminating question is not "does the patch merge" but **"is there a case here
+the landed sibling never wrote?"** Comparing the two suites case-by-case answered it in minutes:
+7 of the branch's 9 cases were covered, 2 tested a mechanism trunk **deliberately declined** (the
+8th positional threaded through the detached `__recycle` re-exec — a documented decision, and
+landing its red-proof would have convicted a deliberate deferral, the `ff0b5cf4528b` shape this
+file already records), and exactly **one** named something real.
+
+### The one surviving case named a live defect on trunk, and its blast radius was the whole detector
+
+The branch's commit body: *"an unescaped quote there does not lose one key, it breaks the whole file
+for every reader."* Measured on trunk, it was right and understated.
+
+`emit_handoff_telemetry`'s jq-less fallback spelled the brief path `printf '"%s"'`. Every other
+`%s` on that line is a constrained token (ISO stamp, pane uuid, account name, class); `prompt_file`
+is a filesystem **path the caller chose**, and on POSIX every byte but `/` and NUL is legal in one.
+Red-proved individually against a pristine `origin/main` worktree (`1300d95a5`): a quote+backslash
+path emitted invalid JSON, a tab did, and **a newline emitted TWO ledger rows** — a split record.
+
+The cost is not one lost key. `scripts/unfired-brief-sweep.sh` reads the ledger with `jq -rs` —
+**SLURP**, the whole file as a single document — so ONE malformed line aborts the parse, `EPOCH`
+returns empty under `|| true`, and the sweep answers
+
+```
+not-armed — no ledger row carries prompt_file yet
+```
+
+over a fully armed ledger. Measured end-to-end: appending one such row turned a `swept` verdict into
+`not-armed`. **And `not-armed` is also what a correct, young, pre-primitive ledger says**, so no
+consumer can tell a disarmed detector from a new one. That is
+`fail-safe-default-mimics-the-healthy-state` reaching the sweep **through its producer** rather than
+through any line of its own code — and the sweep's own header refuses exactly this shape at the top
+of the file (*"a detector whose finding set is silently, permanently empty reports all-clear forever
+and is indistinguishable from a machine with nothing wrong"*).
+
+**Both halves are fixed**, because the producer fix alone leaves the class open — this ledger has
+several writers, and a truncated concurrent append or a full disk malforms a row with no bug
+anywhere in the tree:
+
+| | commit | what changed |
+|---|---|---|
+| producer | `64ad8fa35` | the fallback hand-escapes `\`, `"`, CR, LF, TAB — backslash FIRST, or the backslashes it introduces get escaped again. Residual (other C0 controls) stated in the code, not hidden. `tests/handoff-brief-provenance.bats` 7 → 11 cases |
+| consumer | (this series) | `fromjson? // empty` per line instead of slurp; malformed rows are **counted and surfaced**, not swallowed; a ledger with no readable `prompt_file` row and ≥1 bad row reports **`ledger-unparseable`**, a verdict with a culprit, instead of borrowing the benign one. `tests/unfired-brief-sweep.bats` 9 → 12 cases |
+
+The A/B that justifies the second row — same fixture, three ledgers, pre-fix all three collapse to
+one verdict:
+
+| ledger | trunk | fixed |
+|---|---|---|
+| healthy | `swept` | `swept` |
+| healthy + 1 malformed row | **`not-armed`** | `swept`, `malformed_rows:1` |
+| genuinely young (key absent, rows valid) | `not-armed` | `not-armed` |
+| only a malformed row | **`not-armed`** | `ledger-unparseable` |
+
+### Two red-proof defects found in this session's OWN tests, fixed rather than excused
+
+Recorded because both are shapes that pass while measuring nothing, and both were caught only by
+running the new cases against pristine trunk instead of trusting them:
+
+- **A vacuous case on the axis it names.** The newline case built its path as
+  `"/tmp/fire-x$(printf '\n')y.txt"` and **passed against pristine trunk**. Command substitution
+  strips trailing newlines, so `$(printf '\n')` is the empty string and the path under test held no
+  newline at all. Rewritten with `$'...'` ANSI-C quoting, which embeds the byte without a subshell;
+  the tab case was rewritten the same way even though its substitution happened to survive.
+- **A "control" that was not one.** The young-ledger control also asserted
+  `.counts.malformed_rows -eq 0` and went RED pre-fix — not because young-ledger behaviour had
+  changed, but because the pre-fix `not-armed` object carries no `counts` key at all. That is an
+  assertion about the NEW field, i.e. part of the fix; smuggled into the control it silently
+  converted the one regression guard into a third forward assertion and left the regression
+  unguarded. **A control can only do its job if it passes pre-fix**, so it asserts the verdict alone.
+
+### What remains, and it is not agent work
+
+Four rows, all operator-gated, all re-verified in the 2026-08-13 pass above and unchanged in kind:
+`8f4eae55a0c7` (GitHub ruleset) · `1dca461d4b90` (Claude GitHub App — state UNKNOWN, not absent;
+settling it positively needs a cloud create) · `475b43aacbf2` (worktree sprawl, a destructive `rm`
+over dirs holding running processes) · `216f429128a2` (reso eslintcache — a reso change the semantic
+grouper joined here). None was faked closed. **With the last agent row closed, this plan's remaining
+membership is entirely the operator's**, and the DoD's second clause — *"or carries a named reason it
+cannot be landed"* — is met for all four.
