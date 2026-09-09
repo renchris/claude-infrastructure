@@ -32,6 +32,42 @@ a discovered `settings.json` requires naming that path explicitly — see prune_
 """
 
 import json, glob, re, sys, collections, os, time
+import importlib.util
+
+
+# ── THE SHARED MATCHER ─────────────────────────────────────────────────────────────────────────
+# The rule algebra, the archive reader, the resolution classifier, the auto-mode drop predicate and
+# the dead-entry predicate live in hooks/lib/permission_matcher.py and are IMPORTED, not copied.
+# Two tools with two matchers over one population disagree about that population, and each stays
+# internally consistent, so the disagreement is invisible until someone diffs the outputs by hand
+# (memory: sibling-auditors-must-share-the-state-model). bin/cc-permission-harvest is the second
+# tool; this file's three bats suites are the regression guard for the move.
+#
+# A MISSING LIB IS EXIT 3, NAMED — never a private fallback. Degrading would restore the second
+# state model silently, which is the exact defect the move removes, and a report computed by an
+# unknown matcher is worse than no report at all.
+def _load_matcher():
+    here = os.path.dirname(os.path.realpath(__file__))     # realpath: this file is a symlink live
+    cands = [
+        os.path.join(os.path.dirname(here), "hooks", "lib"),
+        os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
+                     "hooks", "lib"),
+        os.path.expanduser("~/.claude/hooks/lib"),
+    ]
+    for d in cands:
+        path = os.path.join(d, "permission_matcher.py")
+        if os.path.isfile(path):
+            spec = importlib.util.spec_from_file_location("permission_matcher", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    sys.stderr.write(
+        "cc-permission-audit: shared matcher missing — expected %s\n"
+        % os.path.join(cands[0], "permission_matcher.py"))
+    sys.exit(3)
+
+
+pm = _load_matcher()
 
 SETTINGS = os.path.expanduser("~/.claude/settings.json")
 ARCHDIR = os.environ.get(
@@ -64,137 +100,12 @@ DAYS = _days_arg(_POS[0]) if _POS else 0  # 0 = all history
 # parsing every line's timestamp across ~1,000 transcripts, which is why it was not done here.
 
 
-def load_rules():
-    o = json.load(open(SETTINGS))
-    p = o.get("permissions", {})
-
-    def bash_rules(key):
-        out = []
-        for r in p.get(key, []):
-            m = re.match(r"^Bash\((.*)\)$", r)
-            if m:
-                pat = m.group(1)
-                out.append(pat[:-2] if pat.endswith(":*") else pat)
-        return out
-
-    return bash_rules("allow"), bash_rules("deny"), bash_rules("ask")
-
-
-def norm(cmd):
-    """Collapse a command to the comparable prefix a rule would match."""
-    c = " ".join(cmd.strip().split())
-    # strip leading env assignments and cd-chains — they are not the decided verb
-    while True:
-        m = re.match(r"^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)(.*)$", c)
-        if not m:
-            break
-        c = m.group(1)
-    return c
-
-
-def head(cmd, n=2):
-    parts = norm(cmd).split()
-    return " ".join(parts[:n]) if parts else ""
-
-
-def matches(cmd, rules):
-    c = norm(cmd)
-    for r in rules:
-        if c == r or c.startswith(r + " ") or c.startswith(r):
-            return r
-    return None
-
-
-def cmd_of(row):
-    """The command text of an archived row, including the truncated-payload fallback so an
-    over-long prompt still contributes its identity instead of vanishing from the ranking."""
-    ti = row.get("tool_input")
-    if isinstance(ti, dict):
-        return (ti.get("command") or ti.get("file_path")
-                or ti.get("description") or row.get("tool_input_summary") or "")
-    return row.get("tool_input_summary") or ""
-
-
-def _read_rows(cutoff):
-    """Every archive row in range, plus an explicit READ-ERROR count.
-
-    Two failure modes are handled per-ROW rather than per-file. The first cut wrapped the
-    whole file loop in `except Exception: continue`, so a single type-corrupt field (a
-    string `resolved_ts` meeting a numeric comparison) aborted every REMAINING row in that
-    file — five ten-minute blocks reported as "nothing has actually blocked". A row is a
-    row; one bad one may cost itself and nothing else.
-    """
-    rows, bad, unreadable = [], 0, 0
-    files = sorted(glob.glob(os.path.join(ARCHDIR, "*.jsonl")))
-    for f in files:
-        try:
-            fh = open(f, encoding="utf-8-sig", errors="ignore")   # utf-8-sig strips a BOM
-        except OSError:
-            unreadable += 1                                       # never silently an all-clear
-            continue
-        with fh:
-            while True:
-                try:
-                    ln = fh.readline()
-                except OSError:
-                    unreadable += 1
-                    break
-                if not ln:
-                    break
-                ln = ln.strip()
-                if not ln:
-                    continue
-                try:
-                    o = json.loads(ln)
-                    if not isinstance(o, dict):
-                        raise ValueError("not an object")
-                    rts = o.get("resolved_ts")
-                    if cutoff:
-                        if not isinstance(rts, (int, float)) or rts < cutoff:
-                            continue
-                    rows.append(o)
-                except Exception:
-                    bad += 1                                      # counted, never guessed at
-    return rows, bad, unreadable, files
-
-
-def _classify(r):
-    """approved | refused | collateral | unknown — and a grant is PROVEN, never inferred.
-
-    The only evidence that a prompt was GRANTED is that the very invocation it gated is the one
-    whose PostToolUse cleared it. Matching tool NAMES was the first rule and it is a guess that
-    fails in the unsafe direction — this tool's traffic is overwhelmingly Bash, so a DENIED
-    `git push --force` followed by any other Bash command in the same turn gave
-    cleared_tool == tool_name == "Bash" and the refusal was counted as an approval.
-
-    Identifying the invocation by `tool_use_id` was the second rule, and it could never fire:
-    PermissionRequest ships that field as the empty string in 0 of 3,641 archived records and in
-    the live payload (HOOK_SURFACE_100P.md § 3a row 16), so `tid and cid` was never true and every
-    row fell through to the tool-NAME branch this docstring rejects. The measured result was
-    `approved 0 · unknown 3359` over 3,763 real prompts — a zero produced by the instrument.
-
-    The rule that actually decides is the INVOCATION SIGNATURE the beacon now records: a digest
-    over the canonical {tool_name, tool_input} of the prompted call (`tool_sig`) and of the call
-    that cleared it (`cleared_tool_sig`). Both events carry those fields, and the prompt-side
-    input is byte-identical to the transcript's own `tool_use.input`. The id rule is kept ABOVE
-    it, unchanged, so a binary that starts populating the field silently upgrades this to proof by
-    id. Without either, the honest answer is still `unknown`.
-    """
-    ev = r.get("resolved_by") or "unknown"
-    if ev in ("Stop", "SessionEnd"):
-        return "refused"
-    if ev != "PostToolUse":
-        return "unknown"
-    tid, cid = r.get("tool_use_id") or "", r.get("cleared_tool_use_id") or ""
-    if tid and cid:
-        return "approved" if tid == cid else "collateral"
-    sig, csig = r.get("tool_sig") or "", r.get("cleared_tool_sig") or ""
-    if sig and csig:
-        return "approved" if sig == csig else "collateral"
-    ct, tn = r.get("cleared_tool") or "", r.get("tool_name") or ""
-    if ct and tn and ct != tn:
-        return "collateral"          # provably a different tool ⇒ provably not this grant
-    return "unknown"                 # same name, or no ids/signatures: not evidence of anything
+# `load_rules` / `norm` / `head` / `matches` moved to the shared lib as `legacy_*`, marked there as
+# NOT the real matcher: they strip EVERY leading env assignment where an allow rule sees past only
+# the 39 names in ENV_ALLOWLIST, and their prefix test has no space boundary. That looseness is what
+# this report's own suite pins ("leading env assignments are stripped before matching"), so it is
+# preserved verbatim rather than silently upgraded — changing the ranking is a behaviour change with
+# its own evidence to gather, not something a refactor may do on the way past.
 
 
 def archive_report():
@@ -219,9 +130,9 @@ def archive_report():
         print("  ⇒ BLIND. This is NOT an all-clear: rows may exist and cannot be counted.")
         return
 
-    alive = os.path.exists(os.path.join(ARCHDIR, ".archive-alive"))
     cutoff = time.time() - DAYS * 86400 if DAYS else 0
-    rows, bad, unreadable, files = _read_rows(cutoff)
+    rows, bad, unreadable, files, heartbeat_age_s = pm.read_archive(ARCHDIR, cutoff)
+    alive = heartbeat_age_s is not None      # `.archive-alive`, stamped by the beacon on every clear
 
     if unreadable:
         print(f"  ⚠ {unreadable} archive file(s) could not be read — counts below are a FLOOR.")
@@ -248,9 +159,13 @@ def archive_report():
             print("  ⇒ the archiver is wired and running; nothing has actually blocked in range.")
         return
 
-    buckets = collections.Counter(_classify(r) for r in rows)
+    buckets = collections.Counter(pm.classify_row(r) for r in rows)
     approved = buckets["approved"]
-    refused = buckets["refused"]
+    # `classify_row` splits Stop (refused — the operator interrupted) from SessionEnd (abandoned —
+    # nobody answered), because the harvester's REFUSED_PROMPT_COLLISION gate must not fire on a
+    # prompt no human ever decided. This report has always shown them as ONE column and its suite
+    # pins that arithmetic, so they are re-joined HERE, at the display, not in the shared classifier.
+    refused = buckets["refused"] + buckets["abandoned"]
     collateral = buckets["collateral"]
     unknown = buckets["unknown"]
     span = ""
@@ -268,7 +183,7 @@ def archive_report():
         print("  NOTE: no grant could be PROVEN (a grant needs the clearing invocation to match")
         print("        the prompted one, by id or by signature). Rows archived before the beacon")
         print("        recorded signatures carry neither and stay 'unknown' forever — that is a")
-        print("        gap in the RECORD, not a denial. See _classify().")
+        print("        gap in the RECORD, not a denial. See permission_matcher.classify_row().")
 
     waits = sorted(r.get("waited_s") for r in rows
                    if isinstance(r.get("waited_s"), (int, float)))
@@ -279,12 +194,12 @@ def archive_report():
                     if isinstance(r.get("waited_s"), (int, float)) else 0)
         print(f"  median block {med:.0f}s  ·  longest "
               f"{(worst.get('waited_s') or 0) / 3600:.1f}h  "
-              f"({cmd_of(worst)[:60]})")
+              f"({pm.command_of(worst)[:60]})")
 
     # Bash only: this section feeds hooks/smart-bash-allowlist.sh, and a Write or Edit prompt
     # ranked into a Bash allow-list is an action item that cannot be actioned.
-    seen = collections.Counter(head(cmd_of(r)) for r in rows
-                               if (r.get("tool_name") or "") == "Bash" and cmd_of(r))
+    seen = collections.Counter(pm.legacy_head(pm.command_of(r)) for r in rows
+                               if (r.get("tool_name") or "") == "Bash" and pm.command_of(r))
     if seen:
         print("\n  ── Bash commands that ACTUALLY blocked (rank these first) ──")
         for h, n in seen.most_common(15):
@@ -298,222 +213,16 @@ def archive_report():
 
 # ─────────────────────────────── --prune ────────────────────────────────────
 #
-# THE DEAD-ENTRY PREDICATE — REDUNDANCY, proven inside the one file being rewritten.
+# BOTH deadness predicates and settings DISCOVERY now live in hooks/lib/permission_matcher.py —
+# `dead_entries` (REDUNDANCY: a duplicate, or a wildcard-free rule its own file already shadows with
+# a `:*` prefix — semantics-preserving in any mode, so it is the only axis --prune ever removes),
+# `auto_mode_dropped` (the AUTO-MODE axis: report-only, because the drop is undone the moment you
+# leave auto mode) and `discover_settings`. Their rationale travelled with them; read it there.
 #
-# An approved entry is DEAD iff removing it cannot change what any command resolves to,
-# proven from that same file's own `permissions.allow` list:
-#
-#   (a) DUPLICATE — a byte-identical earlier entry survives. Semantics-preserving under ANY
-#       matcher, because the surviving twin IS the same rule.
-#   (b) SHADOWED  — it is a wildcard-free rule `Tool(literal)` and the same list holds a
-#       prefix rule `Tool(base:*)` where `literal.startswith(base + " ")`. Under the
-#       documented prefix semantics the only command string the exact rule can match — the
-#       literal itself — starts with `base ` and is therefore still matched by the surviving
-#       prefix rule. Removal shrinks the file and widens nothing.
-#
-# This is a rule-ALGEBRA test, never a denylist of spellings: no command text is inspected
-# for "looks like a temp path / a sha / a pid".
-#
-# DELIBERATELY NOT PRUNED, though backlog row a78f0fa4223a asked for it: the "one-shot
-# exact-match" class — an entry naming a literal that looks unrepeatable. Nothing on disk
-# proves the operator will not type it again (`mkdir -p /tmp/advV/x` is one-shot-LOOKING and
-# perfectly repeatable), and the two errors are not symmetric: a false prune re-prompts the
-# operator forever, a missed prune costs a line of JSON. Measured 2026-08-17: 63.2% of the
-# fleet's 1748 Bash patterns are exact matches, but only 10.2% of all 2399 patterns are
-# provably redundant — exactness is not deadness, which is why that 48% figure is not the
-# prune population.
-#
-# ALSO NOT USED AS PROOF:
-#   · `literal == base` (does `Tool(x:*)` match the bare command `x`?). That is the matcher's
-#     business and is not asserted here; 3 fleet-wide entries turn on it and they stay.
-#   · a shadower living in a DIFFERENT settings file. Precedence-merged files are edited
-#     independently, so the proof has to live in the file that is being rewritten.
-
-WILDCARD = re.compile(r"[*?\[\]]")
-RULE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.-]*)\((.*)\)$", re.S)
-# Discovery is a bounded walk, not `**` — a recursive glob of $HOME does not terminate in
-# usable time. Explicit paths on the command line skip it entirely (that is what tests use).
-WALK_SKIP = {
-    "node_modules", "Library", "Applications", ".Trash", ".git", ".venv", "venv",
-    "site-packages", "Movies", "Music", "Pictures", "Downloads", ".npm", ".cache",
-    "dist", "build", ".next",
-}
-WALK_MAXDEPTH = 5
-# Both filenames carry `permissions.allow`, and until 2026-08-28 discovery found only the
-# `.local` one — so the population this tool's own backlog row names (the ~339 entries in the
-# five `~/.claude*/settings.json`) was unreachable by the command that row names. Reporting now
-# covers both; REWRITING a non-`.local` file still requires naming it explicitly (see
-# prune_report), because `settings.json` is the operator's primary file and a settings watcher
-# reloads it live.
-SETTINGS_NAMES = ("settings.json", "settings.local.json")
-
-
-def _settings_files():
-    if PRUNE_PATHS:
-        return PRUNE_PATHS
-    root = os.path.expanduser("~")
-    base = root.rstrip("/").count("/")
-    out = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        if dirpath.count("/") - base >= WALK_MAXDEPTH:
-            dirnames[:] = []
-        else:
-            dirnames[:] = [d for d in dirnames if d not in WALK_SKIP]
-        if not os.path.basename(dirpath).startswith(".claude"):
-            continue
-        for name in SETTINGS_NAMES:
-            if name in filenames:
-                out.append(os.path.join(dirpath, name))
-    return sorted(out)
-
-
-# ────────────────────── THE AUTO-MODE DROP PREDICATE ──────────────────────
-#
-# A SECOND, INDEPENDENT deadness axis, and it is REPORT-ONLY — never removed, not even under
-# CONFIRM=1. The predicate above asks "is this rule redundant?"; this one asks "does the mode we
-# actually run even LOAD this rule?".
-#
-# Every session on this box runs `--permission-mode auto`, and auto mode DISCARDS broad allow
-# rules before matching: `pme()` skips each allow rule for which `qNt(tool, content)` is true.
-# Such an entry is inert in the mode it lives in — dead weight that reads as coverage.
-#
-# 🚨 WHY REPORT-ONLY, both halves load-bearing:
-#   (a) The drop is restored when you LEAVE auto mode. Deleting the entry is therefore a real
-#       semantic change under `default`/`acceptEdits`, unlike the redundancy predicate, which is
-#       semantics-preserving under any matcher and in any mode. Two different kinds of dead.
-#   (b) The predicate is code-and-doc verified but NOT probe-verified — the source
-#       (docs/research/permission-matcher-truth-2026-08-20.md §"Auto mode drops broad allow
-#       rules") flags it as the one load-bearing claim resting on two non-probe sources, because
-#       no observable distinguishes "allowed by rule" from "allowed by classifier" in auto mode.
-#       A false prune costs the operator a prompt forever; a report costs a line of output.
-#
-# Transcribed from that doc's `gsn`/`_sn`/`iSd`/`nSd`/`PHs` reading. It is a claim about a
-# specific decompiled build (CC 2.1.220) and can go stale in a way the redundancy predicate
-# cannot — which is why it is a separate section with its own reason strings.
-
-# `iSd` — the dangerous-command list, verbatim from the doc.
-DROP_CMDS = (
-    "python", "python3", "python2", "node", "deno", "tsx", "ruby", "perl", "php", "lua",
-    "npx", "bunx", "npm run", "yarn run", "pnpm run", "bun run",
-    "bash", "sh", "ssh", "zsh", "fish", "eval", "exec", "env", "xargs", "sudo",
-)
-# `nSd` — the network/cloud subset, which gets extra conditions on top of the bare forms.
-DROP_NET = ("curl", "wget", "kubectl", "aws", "gcloud", "gsutil")
-# The kubectl verbs that drop even with a positional arg present.
-KUBECTL_VERBS = {
-    "exec", "apply", "create", "delete", "run", "cp", "port-forward", "proxy", "patch",
-    "edit", "replace", "attach", "debug", "scale", "rollout", "drain", "cordon", "taint",
-}
-# The rule-syntax suffix a verb token carries when the rule is written in the `:*` form. A rule
-# names a PREFIX, so `Bash(kubectl apply:*)` and `Bash(kubectl apply *)` are the same rule — and
-# `_tail_after` already treats `:` and ` ` as the same separator at the COMMAND boundary. This
-# strips the same suffix at the VERB boundary, which is the only place that equivalence was not
-# being honoured. Trailing `*` first, then `:` — `apply:*` → `apply:` → `apply`, `port-forward:*`
-# → `port-forward`. It cannot manufacture a verb: `applyfoo:*` → `applyfoo`, still not in the set.
-_VERB_SUFFIX = "*:"
-# The one documented survivor inside the flag-tail branch: `Bash(python -m pkg.module *)`.
-DASH_M_SURVIVES = re.compile(r"^-m\s+\w+\.[\w.]+(\s*:|\s+)")
-ALL_STARS = re.compile(r"^[\s*]+$")
-
-
-def _tail_after(content, cmd):
-    """The part of `content` after the leading `cmd` token(s), or None if `cmd` does not lead."""
-    if content == cmd:
-        return ""
-    for sep in (":", " "):
-        if content.startswith(cmd + sep):
-            return content[len(cmd) + len(sep):].strip()
-    if content.startswith(cmd) and content[len(cmd):].startswith("*"):
-        return content[len(cmd):].strip()
-    return None
-
-
-def auto_mode_dropped(rule):
-    """Reason string if auto mode discards this allow rule, else None. See the block above."""
-    m = RULE_RE.match(rule)
-    if not m:
-        # No parens at all: a bare tool name. `PHs` drops every Agent rule; `gsn`'s
-        # undefined-content branch drops bare `Bash`.
-        bare = rule.strip()
-        if bare == "Agent":
-            return "Agent rule — auto mode drops every Agent allow rule"
-        if bare == "Bash":
-            return "bare `Bash` — auto mode drops the empty-content form"
-        return None
-    tool, content = m.group(1), m.group(2)
-    if tool == "Agent":
-        return "Agent rule — auto mode drops every Agent allow rule, whatever its specifier"
-    if tool != "Bash":
-        return None                      # gsn returns false for every non-Bash tool
-    c = content.strip().lower()
-    if c == "" or ALL_STARS.match(c):
-        return "matches everything — auto mode drops the bare/wildcard Bash form"
-
-    for cmd in DROP_CMDS + DROP_NET:
-        tail = _tail_after(c, cmd)
-        if tail is None:
-            continue
-        # Bare forms: `<cmd>`, `<cmd>:*`, `<cmd> *`, `<cmd>*`.
-        if tail in ("", "*"):
-            return f"`{cmd}` in bare/`:*` form — on auto mode's dangerous-command list"
-        # `<cmd> …*` whose tail starts with a flag, minus the documented `-m pkg.module` case.
-        if tail.startswith("-") and not DASH_M_SURVIVES.match(tail):
-            return f"`{cmd}` with a flag tail (`{tail[:24]}`) — auto mode drops the flag form"
-        if cmd in DROP_NET:
-            if "$" in tail or "`" in tail:
-                return f"`{cmd}` tail contains a substitution — auto mode drops it"
-            if cmd == "kubectl":
-                first = next((t for t in tail.split() if not t.startswith("-")), "")
-                first = first.rstrip(_VERB_SUFFIX)
-                if first in KUBECTL_VERBS:
-                    return f"`kubectl {first}` — on auto mode's dropped-verb list"
-            if not any(not t.startswith("-") for t in tail.split()):
-                if cmd in ("curl", "wget") and "://" in tail:
-                    break               # documented exception: a URL counts as the positional
-                return f"`{cmd}` with no positional argument — auto mode drops it"
-        break                            # first matching command decides; no second opinion
-    return None
-
-
-def classify_all_shell(obj):
-    """True iff this file sets `autoMode.classifyAllShell` — which drops EVERY Bash allow rule.
-
-    Reported because it makes the per-entry drop list moot rather than merely longer: with it on
-    in ANY settings source, no Bash allow rule survives auto mode at all.
-    """
-    am = obj.get("autoMode") if isinstance(obj, dict) else None
-    return bool(isinstance(am, dict) and am.get("classifyAllShell") is True)
-
-
-def dead_entries(allow):
-    """(survivors, [(index, rule, reason)]) for one `permissions.allow` list.
-
-    See THE DEAD-ENTRY PREDICATE above. Order of survivors is preserved exactly.
-    """
-    prefixes = collections.defaultdict(list)
-    for rule in allow:
-        m = RULE_RE.match(rule)
-        if not m:
-            continue
-        tool, arg = m.group(1), m.group(2)
-        if arg.endswith(":*") and not WILDCARD.search(arg[:-2]):
-            prefixes[tool].append(arg[:-2])
-
-    survivors, dead, seen = [], [], set()
-    for i, rule in enumerate(allow):
-        if rule in seen:
-            dead.append((i, rule, "duplicate of an earlier entry"))
-            continue
-        m = RULE_RE.match(rule)
-        if m and not WILDCARD.search(m.group(2)):
-            tool, arg = m.group(1), m.group(2)
-            hit = next((b for b in prefixes[tool] if arg.startswith(b + " ")), None)
-            if hit is not None:
-                dead.append((i, rule, f"shadowed by {tool}({hit}:*)"))
-                continue
-        seen.add(rule)
-        survivors.append(rule)
-    return survivors, dead
+# What stays here is the POLICY this tool applies over those predicates, which is not the lib's
+# business: a DISCOVERED (not explicitly named) non-`.local` file is reported and never rewritten,
+# because `settings.json` is the operator's primary file and a settings watcher reloads it live.
+# Naming the path on the command line is the deliberate act that authorises the write.
 
 
 def _backup(path):
@@ -531,7 +240,15 @@ def _backup(path):
 def prune_report():
     """Dry-run by default; writes only under CONFIRM=1 (this repo's dominant confirm idiom)."""
     apply = os.environ.get("CONFIRM", "0") == "1"
-    files = _settings_files()
+    # roots=("~",) + walk=True keeps the PRE-LIB discovery population: a bounded walk of the whole
+    # home directory for any `.claude*` dir. The lib's own default is narrower (`~/.claude*` plus
+    # `~/Development`) and now traverses by fixed-offset GLOB, which is right for the harvester and
+    # would silently change what --prune scans here. `walk=True` is what asks for the old traversal.
+    # ONE population change survives, deliberately: `.worktrees` joined WALK_SKIP (2026-09-09),
+    # because descending 222 full checkouts cost 229.6 s to find files that are disposable copies —
+    # a settings file in a worktree is EVIDENCE, never a prune target (`_settings_scope`).
+    files = [path for path, _scope in
+             pm.discover_settings(explicit=PRUNE_PATHS or None, roots=("~",), walk=True)]
     print(f"── PRUNE {'(APPLY)' if apply else '(DRY RUN — nothing will be written)'} ──")
     print(f"  scope: {len(files)} settings file(s)")
     total = dead_total = written = failed = 0
@@ -550,15 +267,15 @@ def prune_report():
         if not isinstance(allow, list):
             continue
         total += len(allow)
-        if classify_all_shell(obj):
+        if pm.classify_all_shell(obj):
             shell_off.append(path)
         # The auto-mode axis is computed for every file and reported separately below — it never
         # feeds `survivors`, so nothing here can remove an entry on account of it.
-        drops = [(r, why) for r in allow for why in (auto_mode_dropped(r),) if why]
+        drops = [(r, why) for r in allow for why in (pm.auto_mode_dropped(r),) if why]
         if drops:
             dropped_total += len(drops)
             dropped_by_file.append((path, len(allow), drops))
-        survivors, dead = dead_entries(allow)
+        survivors, dead = pm.dead_entries(allow)
         if not dead:
             continue
         dead_total += len(dead)
@@ -626,10 +343,10 @@ def _dropped_report(total, dropped_total, dropped_by_file, shell_off):
 
 def main():
     if PRUNE:
-        # Before load_rules(): a prune must not depend on ~/.claude/settings.json existing,
+        # Before legacy_load_rules(): a prune must not depend on ~/.claude/settings.json existing,
         # and must not spend a minute scanning the transcript corpus it does not read.
         sys.exit(prune_report())
-    allow, deny, ask = load_rules()
+    allow, deny, ask = pm.legacy_load_rules(SETTINGS)
     files = glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl"))
     files += glob.glob(os.path.expanduser("~/.claude-next/projects/*/*.jsonl"))
     if DAYS:
@@ -669,18 +386,18 @@ def main():
                     if not cmd:
                         continue
                     total += 1
-                    if matches(cmd, ask):
-                        hit_ask[head(cmd)] += 1
+                    if pm.legacy_matches(cmd, ask):
+                        hit_ask[pm.legacy_head(cmd)] += 1
                         continue
-                    if matches(cmd, deny):
-                        hit_deny[head(cmd)] += 1
+                    if pm.legacy_matches(cmd, deny):
+                        hit_deny[pm.legacy_head(cmd)] += 1
                         continue
-                    if matches(cmd, allow):
+                    if pm.legacy_matches(cmd, allow):
                         matched += 1
                     else:
-                        h = head(cmd)
+                        h = pm.legacy_head(cmd)
                         unmatched[h] += 1
-                        examples.setdefault(h, norm(cmd)[:110])
+                        examples.setdefault(h, pm.legacy_norm(cmd)[:110])
         except Exception:
             continue
 

@@ -18,8 +18,12 @@
 #                          resolved by an agent guessing an alarm (noise) or a silence (the
 #                          failure this whole file exists to end).
 #                 retired  deliberately not running. NEVER a row — retired is not broken (R8).
-#   interval_s  the DECLARED cadence in seconds. `0` for calendar-scheduled jobs (StartCalendar-
-#               Interval / RunAtLoad-only), whose staleness bound is 86400 x CC_FLEET_STALE_FACTOR.
+#   interval_s  the DECLARED cadence in seconds. `0` means DAILY: it is the sentinel for a
+#               calendar-scheduled job (StartCalendarInterval / RunAtLoad-only), whose staleness
+#               bound is then 86400 x CC_FLEET_STALE_FACTOR. It does NOT mean "no cadence" — a
+#               WEEKLY calendar job declares its real period, 604800, or that 72 h bound reads a
+#               perfectly healthy job STALLED four days out of every seven (measured on
+#               com.chrisren.watch-claude-code-2118-hold).
 #   evidence    the durable product that proves execution (R4). One of:
 #                 auto     read StandardOutPath out of the LIVE plist. PREFER THIS — it is
 #                          self-maintaining: change the plist and the sensor follows.
@@ -365,6 +369,30 @@ com.chrisren.screenshot-clipboard  | run    | 0    | auto | 12 | 18-fleet-activa
 com.chrisren.verify-2114-archive   | run    | 0    | auto | 12 | 18-fleet-activate.sh
 com.chrisren.watch-claude-code-2118-hold | run | 0 | auto | 7 | 18-fleet-activate.sh
 com.claude.accounts-keepwarm        | staged | 180  | ~/.claude/logs/accounts-keepwarm.out.log | -  | 36-start-latency-router-activate.sh
+# ── com.claude.permission-harvest (2026-09-08, docs/plans/PERMISSION_HARVEST.md §5) ────────────────
+# THE ONLY WEEKLY ROW IN THIS FILE, and the reason interval_s above now says what `0` means. `0` is
+# the DAILY sentinel (86400 x 3 = 72 h), so declaring it here would report a job that ran on Sunday
+# as STALLED from Wednesday on — a permanent, unfixable red on a healthy reporter, which is the
+# alarm-fatigue polarity this file's F20 note exists to prevent. 604800 x 3 = 21 d is the honest
+# bound: it catches a job that has missed three consecutive Sundays and nothing sooner.
+#
+# evidence is an EXPLICIT PATH, not `auto`: `auto` resolves to the plist's StandardOutPath, and the
+# wrapper writes its human log elsewhere and its stdout only on failure — so `auto` would name a
+# file that stays size 0 on every healthy run and could only ever report STALLED (the same trap the
+# capacity-alarm and relogin rows above document). The JSONL is written once per run by
+# construction and is ALSO the 8-week trend store the permission-harvest skill reads.
+#
+# NO `ok_exits` COLUMN, deliberately. The wrapper exits 3 for BLIND — the permission-archive oracle
+# is dark — and that MUST land on S4 FAILING. A blind harvester reports `proposed=0` forever, which
+# is byte-identical to a healthy quiet week (§10 B3-3); the exit code is the only channel that can
+# tell those two apart, so declaring 3 healthy would delete the distinction the arm exists for.
+#
+# owner_row 6 — the guardrail/hook layer (what a session may do), not 12 (the fleet itself).
+# activate = the generic arm: install.sh's LaunchAgents block already copies this plist and
+# `bootstrap`s it on every converge because the row below declares it `run`, so there is no bespoke
+# activation script and no migration (§10 B3-4); 18-fleet-activate.sh is the NOT-INSTALLED /
+# DISABLED recovery arm the other 20 rows use.
+com.claude.permission-harvest      | run    | 604800 | ~/.claude/logs/permission-harvest.jsonl | 6  | 18-fleet-activate.sh
 
 # ── A THIRD LABEL FAMILY: a brew-managed dependency this box's work depends on ───────────────────
 # 2026-09-05, backlog fa2aa0f5e535. postgresql@14 was silently DOWN 2026-08-05 -> 2026-08-13: eight

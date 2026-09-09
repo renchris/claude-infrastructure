@@ -20,10 +20,18 @@
 # REMOVED rather than that the list was always this short.
 #
 # WHY THEY WERE REMOVED (2026-08-12). Both auto-approved a command the operator had independently
-# placed behind an `ask` rule in ~/.claude/settings.json (`Bash(git push:*)`, and deletion via the
-# global rm guard). A PreToolUse hook emitting "allow" BYPASSES the permission system, so wiring
-# this hook would have silently revoked those gates as a side effect of a prompt-reduction change
-# — the operator would keep the rule and lose the guard, with nothing in either file recording it.
+# placed behind a gate (`ask Bash(git push:*)` in ~/.claude/settings.json, and deletion behind the
+# global rm guard). A PreToolUse hook emitting "allow" does NOT bypass the permission system: the
+# harness re-checks deny and ask RULES after a hook allow (docs /permissions:442; `Mfr` in the
+# binary; docs/research/permission-matcher-truth-2026-08-20.md §3), so rule 4 could never have
+# revoked the `ask` — every push it allowed would have prompted anyway, which makes the rule inert
+# rather than dangerous. The rm guard is a sibling HOOK, so rule 2 is a hook-versus-hook question
+# (line 10 above), not a rules one. What a hook allow DOES short-circuit is everything BELOW the
+# deny/ask fence — the allow-rule lookup, the auto-mode classifier and the prompt — and that is
+# the widening the 2026-08-20 note below measures. Two rules that are inert where a gate stands and
+# a silent grant beside it are still a prompt-reduction change with nothing in either file
+# recording the difference. (Corrected 2026-09-08 — this paragraph used to claim a hook allow
+# "BYPASSES the permission system" and would have "silently revoked those gates".)
 #
 # Rule 4 was also DEAD, and mis-specified underneath the deadness — measured, not read:
 #   • Its extraction regex `[[:alnum:]_.\-/]+` is an INVALID CHARACTER RANGE. /usr/bin/grep exits 2
@@ -51,13 +59,19 @@
 #   * Rules 3/5/6 are whole-command-anchored (`[^;&|]+$`), so on a compound command they
 #     cannot fire AT ALL. `cd /tmp && sed -n 1,20p f` got no decision.
 #   * Rule 1 was anchored only at the START, so it fired on ANY command beginning with
-#     `git commit` — carrying whatever followed. Since a PreToolUse `allow` BYPASSES the
-#     permission system entirely, `git commit -m x && <anything>` auto-approved across
-#     EIGHT of the operator's own 36 Bash fence rules, including the hard `deny` entries
-#     `git push --force` and `rm -rf .git`, plus `git clean -xdf`, `wget`, `fly deploy`,
-#     `git reset --hard`, `git restore` and `git push`. Wired in 5 of 5 config dirs.
+#     `git commit` — carrying whatever followed. A PreToolUse `allow` does NOT bypass the
+#     deny/ask fence — the harness re-checks both after a hook allow (docs /permissions:442;
+#     `Mfr`) — so the EIGHT of the operator's 36 Bash fence rules a trailing command could
+#     reach (the hard `deny` entries `git push --force` and `rm -rf .git`, plus `git clean
+#     -xdf`, `wget`, `fly deploy`, `git reset --hard`, `git restore` and `git push`) would
+#     still have fired. Everything the fence does NOT name is what the allow short-circuits:
+#     the allow-rule lookup, the auto-mode classifier and the prompt. So
+#     `git commit -m x && <anything>` auto-approved the unbounded remainder of `<anything>`,
+#     unclassified and unprompted. Wired in 5 of 5 config dirs.
 # So the safe rules were inert on the corpus that generates the prompts, and the one
-# unsafe rule was a universal bypass. Measured: 90.4% of the 1,693 blocking commands in
+# unsafe rule was a universal bypass of the classifier and the prompt — everything below the
+# fence, though not the fence itself (corrected 2026-09-08; it read "BYPASSES the permission
+# system entirely"). Measured: 90.4% of the 1,693 blocking commands in
 # ~/.claude/autonomy/permission-archive are compound (mean 11.9 segments, 59.1% multi-line).
 #
 # The suite that guarded this file could not see it: every case it tried was a SINGLE

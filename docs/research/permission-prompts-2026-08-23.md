@@ -187,3 +187,45 @@ all three shipped hooks over a corpus; `:18` pins the duplicated token list agai
 - `pgrep -f ship-land.sh` matched a **sibling session's watcher** whose command line merely contained
   the string, and skipped a land that should have fired. Anchor on argv position, per
   MEMORY.md `pgrep-f-matches-agent-briefs`.
+
+## 6. 2026-09-08 — the loop is now a tool, and the ceiling is measured
+
+The lever this doc found by hand — count from the prompt oracle, never the command log; partition the
+structural share first; refute every candidate before proposing it — is now `bin/cc-permission-harvest`
+(skill `skills/permission-harvest/SKILL.md`; weekly launchd job `com.claude.permission-harvest`, Sunday
+04:17, via `scripts/permission-harvest-run.sh`). §3's refutation is mechanical: `ACE_CLASS` refuses
+`Bash(bash:*)` / `Bash(python3:*)` by construction, eleven deterministic gates carry every candidate's
+verdict, and the apply is the operator's own `cc-do` step — `hooks/validate-bash.sh` denies `--apply`
+inside any session, and nothing in the loop writes `settings*.json` from an agent. Design and the
+wave-B critique that shaped it: `docs/plans/PERMISSION_HARVEST.md`.
+
+**The ceiling, re-measured 2026-09-08 on 3,728 archived Bash prompts**
+(`docs/research/permission-harvest-profile-2026-09-08.md`, wave A1): STRUCTURAL **45.4 %** — no allow
+rule of any form clears it, and it holds 65.7 % of the 1,622 h agents spent waiting · "rule gap"
+46.0 %, of which **1,367 of 1,368 curl-only rows were `curl-gate.py` asks** (joined by session and
+±15 s) — hook-raised, not a rule gap · ASK_HIT 6.0 % · TRUNCATED 2.3 %. After the gates, the greedy
+set cover clears **13–21 prompts ever — 0.35 %–0.56 % of all Bash prompts — and 0 in the last 7
+days**; it terminates at 4–5 rules because nothing else reaches two rows in two sessions. §3's
+"approximately nothing" is now a number, and it is trending to zero.
+
+**Where the material is** (`docs/research/permission-harvest-acceptances-2026-09-08.md`, wave A2):
+the five fleet `settings.json` hold 1,272 Bash allows, all already `:*` prefixes, **0 exact and 0
+dead**, forked by exactly one entry; **975 exact "yes, don't ask again" acceptances live in project
+`.claude/settings.local.json`** (67 % path-bound). The consolidation ceiling at `--min-cluster 2` is
+**58 prefixes retiring 254 entries**, and **~60 % can never be retired** by any gate-passing prefix —
+`ssh -i` ×181 (auto mode drops `ssh`), `perl -ne` ×82 (an interpreter; ACE), `git -C <path>` ×82
+(the matcher does not skip `-C`). So the weekly product is, in order, the consolidation, the
+structural / hook-raised / rule-gap trend, and 0–5 archive rules; `proposed=0` is the expected steady
+state, not a failure.
+
+**Where the weekly evidence lives.** One JSON line per run in `~/.claude/logs/permission-harvest.jsonl`
+(`verdict proposed|nothing|blind|error`, `rc`, the bucket shares, `consolidation_prefixes`,
+`consolidation_retires`, `proposal_path`, `sha`) — the fleet-board evidence path and the only store
+that holds the shares over time. Proposals sit in `~/.claude/autonomy/permission-harvest/proposal-<UTC>.json`
+(+ `latest.json`, pruned at 90 d). Hook attribution joins `~/.reso/curl-audit.jsonl` and the new
+`~/.claude/logs/validate-bash-decisions.jsonl` — `deny()` and `warn()` now log one line each, because
+the `bash-commands.log` corpus §0 warns about is written only AFTER those paths exit and so can never
+carry what a hook refused. The five-fork footgun in §4 is why `--apply` writes all five fleet files
+all-or-nothing, with a backup each. BLIND — the archive absent, or the beacon heartbeat older than
+3 days — exits 3 and lands on the fleet board as FAILING, so a dead oracle can never read as a quiet
+week.

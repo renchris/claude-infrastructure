@@ -176,7 +176,27 @@ line, never a gate.
 - `--check [PROPOSAL]` re-runs the FULL pipeline live and prints, per proposed rule, keep/drop with
   the gate code, the per-target diff apply would make, and the receipt (rows, sessions, weeks,
   projects, widening distribution). Read-only; exit 0 when ≥1 rule would apply, **exit 1 when nothing
-  would** — it doubles as the backlog row's `--falsifier` (§5): exit 0 ⇔ the row still stands.
+  would**. It is the HUMAN preview, and its exit sense is right for that reader.
+- 🚨 **`--check` IS NOT THE BACKLOG ROW'S `--falsifier`, and the clause that said it was is struck**
+  (2026-09-09). This bullet used to end "it doubles as the backlog row's `--falsifier` (§5): exit 0 ⇔
+  the row still stands", which contradicted this plan's OWN measured wiring fact three hundred lines
+  below (§10 wave-A3: "probe exit 0 ⇒ row CLOSED; non-zero ⇒ live", read from
+  `scripts/autonomy-sweep.sh:1162-1176` and `bin/cc-premise:1370`). The design prose lost to the
+  measurement, as it must. Wiring `--check` there is INVERTED ON BOTH ARMS: rules still to apply ⇒
+  probe exits 0 ⇒ the 6-hourly sweep auto-closes the operator's apply step with evidence reading
+  "falsifier passed" (reproduced end-to-end against the real `bin/cc-premise`: 1 row CLOSED, nothing
+  applied); proposal decayed to nothing ⇒ probe exits 1 ⇒ "still live" ⇒ the dead row stays open
+  forever.
+- `--falsify [PROPOSAL]` is the probe built for cc-premise's contract: **exit 0 iff NOTHING is left
+  to apply**, 1 if anything is outstanding OR the probe could not tell (fail-closed in every
+  uncertain direction — missing proposal, unreadable proposal, unreadable target). It is
+  SETTINGS-ONLY on purpose: `FALSIFIER_TIMEOUT_S` is 20 s (`bin/cc-premise:241`) and a timed-out
+  probe fails OPEN, i.e. an expensive probe is not a strict probe but NO probe, silently — and the
+  full pipeline measured **1,045 s** on the live stores. It answers presence in the target file,
+  which is the whole question the row asks. It resolves `latest.json` by default, never the row's
+  own stamped file, and that is what keeps §5's decay self-retraction: the weekly run rewrites
+  `latest.json`, so a week whose fresh proposal is empty leaves nothing outstanding and the stale
+  row closes itself, at the cost of a stat rather than a 17-minute scan.
 - `--apply [PROPOSAL]` (default `latest.json` under the out dir — the queue row carries NO path or
   rule text, §10 B1-5c) writes `proposed ∩ fresh`. Consent is `CONFIRM=1`, given by the operator's
   typed `yes` at the `cc-do` layer (cc-do runs `bash -c` with stdin `</dev/null`, so the tool must
@@ -290,16 +310,24 @@ through `python3 -c` against the lib, one `@test` per row so a divergence names 
   consolidation_retires, proposal_path, sha}`. Prunes proposal files > 90 d.
 - **Operator step — the KEY-4 brake recipe** (`needs` accepts no `--condition`; §9 Q1): iff
   `proposed + consolidation_prefixes > 0`, file
-  `cc-backlog needs "Apply the N harvested allow rules in proposal-<UTC>.json (proposed <YYYY-MM-DD>)" --project claude-infrastructure --run "$HOME/.claude/bin/cc-permission-harvest --apply" --falsifier "$HOME/.claude/bin/cc-permission-harvest --check"`.
+  `cc-backlog needs "Apply the N harvested allow rules in proposal-<UTC>.json (proposed <YYYY-MM-DD>)" --project claude-infrastructure --run "CONFIRM=1 $HOME/.claude/bin/cc-permission-harvest --apply" --falsifier "$HOME/.claude/bin/cc-permission-harvest --falsify"`.
   The title varies ONLY in digits, so the brake folds a live row and updates its `run`/`needs`
   in place (one open row at any time); after the operator's `cc-do <id>` marks it `done`, the next
   week's row has a new event key. The `--run` payload carries no path and no rule text (the tool
   resolves `latest.json` itself — nothing attacker-controllable rides the queue). The autonomy
-  sweep's currency pass runs the `--falsifier`: `--check` exits 0 only while something would still
-  apply, so a proposal that decays closes its own row. `proposed = 0` ⇒ `verdict=nothing`, exit 0,
+  sweep's currency pass runs the `--falsifier`: `--falsify` exits 0 only when NOTHING is left to
+  apply, which is exactly cc-premise's close-on-0 contract (§10 wave-A3), so both the applied row
+  and the decayed one close themselves and a live one never does. (This read `--check` until
+  2026-09-09 and was inverted on both arms — see §3.3.) **ACTIONABLE excludes consolidation entries
+  already `present` in their target file**, mirroring the tool's own two readers; counting the gross
+  list queued an apply that was a certified no-op. `actionable = 0` ⇒ `verdict=nothing`, exit 0,
   no row. BLIND ⇒ exit 3 (S4 FAILING on the fleet board — no `ok_exits` column, deliberately).
 - `launchd/com.claude.permission-harvest.plist`: `StartCalendarInterval` Weekday 0 · Hour 4 ·
-  Minute 17; **`RunAtLoad` true** (a read-only reporter seeds its evidence at bootstrap; the lock
+  Minute 17; **`RunAtLoad` false** — corrected 2026-09-09. It was `true` on the claim that this job
+  "reads three stores and appends one JSON line", which measurement falsified by three orders of
+  magnitude (1,045 s / ~8.5 GB read), so every bootstrap fired a multi-GB scan that held the
+  wrapper's lock. The cost is NEVER-RAN on the fleet board until the first Sunday, which is honest
+  and bounded. Original rationale, preserved: (a read-only reporter seeds its evidence at bootstrap; the lock
   makes login re-runs idempotent); `/bin/bash -c 'exec "$HOME/.claude/scripts/permission-harvest-run.sh"'`
   (launchd expands neither `~` nor `$HOME` in ProgramArguments; Standard*Path are literal
   `/Users/chrisren/.claude/logs/permission-harvest.{out,err}.log`); the wrapper execs itself through
@@ -378,7 +406,11 @@ the live layer per-file; a NEW file is absent live until `scripts/deploy-live.sh
   a consolidation cluster of 2 exact `gh pr view …` entries in a project-local fixture proposes
   `Bash(gh pr view:*)` INTO that file and lists both as shadows; `./scripts/x.sh` heads pass into a
   project-local target and are refused for a fleet target; `ssh -i` ×3 lands in `unretirable`.
-- **Apply / check**: `--check` exits 0 with ≥1 applicable rule and 1 with none; `--apply` without
+- **Apply / check / falsify**: `--check` exits 0 with ≥1 applicable rule and 1 with none;
+  `--falsify` is its inverse and fails closed (0 only when nothing is outstanding; 1 on a missing or
+  unreadable proposal); the read-only pipeline is bounded by `CC_PERMHARVEST_MAX_S` (default 3600 s, sized ~3.4x the
+  1,045 s measured runtime — a bound below the real cost is a scheduled failure, not a bound) ⇒
+  exit 6, with no partial proposal written; `--apply` without
   `CONFIRM=1` writes nothing (md5 before/after); `CONFIRM=1` writes all five fixture copies atomically
   with backups and re-run is a no-op; a rule injected into `proposed[]` that the fresh run does not
   produce is DROPPED by name, not applied; a tampered ACE rule exits 4 and md5s are unchanged; a
@@ -391,7 +423,10 @@ the live layer per-file; a NEW file is absent live until `scripts/deploy-live.sh
 - **Wiring**: plist `plutil -lint`; manifest row parses with `interval_s 604800` and the header
   carries the weekly sentence; wrapper: 0-proposed → jsonl line `verdict=nothing` + exit 0 + no
   backlog call; N-proposed → exactly one `cc-backlog needs` call whose `--run` is argument-free and
-  whose `--falsifier` is `--check`, and a second run with a changed N folds (stub records argv);
+  whose `--falsifier` is `--falsify` (and an arm EXECUTES that recorded string against both of its
+  exit senses — a string comparison cannot tell `--check` from its inverse, which is how the
+  inverted polarity passed 295 green tests), and a second run with a changed N folds (stub records
+  argv); a consolidation entry already `present` yields `verdict=nothing` and NO backlog call;
   harvester rc 3 → `verdict=blind`, exit 3; the wrapper invokes `/usr/bin/python3` explicitly;
   `validate-bash.sh`: a leaf `cc-permission-harvest --apply` is DENIED and its mutant (`--check`) is
   not; `deny()`/`warn()` append one parseable decision line; `cc-permission-beacon.bats` still green
@@ -526,7 +561,16 @@ rules. `proposed=0` is the expected steady state and must be first-class, not a 
   built (bounded). Adopted, 85 %.
 - B3-1 **needs-row recipe** — `needs` takes no `--condition`; KEY-4 brake folds titles differing only
   in digits; `--falsifier "--check"` self-closes decayed rows via the sweep's currency pass. Adopted, 90 %.
+  🚨 **SUPERSEDED 2026-09-09 on its second clause, and the 10 % was where the defect lived.**
+  `--check` exits 0 when work REMAINS and cc-premise closes a row on exit 0, so the stored probe
+  was inverted on both arms: the sweep retired the operator's apply step within 6 h of filing it
+  (reproduced against the real `bin/cc-premise` — 1 row CLOSED, evidence "falsifier passed",
+  nothing applied) and a decayed row stayed open forever. The rest of the recipe stands; the probe
+  is now `--falsify`. See §3.3.
 - B3-2 **manifest `interval_s 604800`, `RunAtLoad true`**, header sentence. Adopted, 95 %.
+  ⚠ **`RunAtLoad` SUPERSEDED 2026-09-09 → false.** Its cost premise ("reads three stores and
+  appends one JSON line") was falsified by three orders of magnitude: 1,045 s / ~8.5 GB measured
+  on the live stores under /usr/bin/python3. `interval_s 604800` and the header sentence stand.
 - B3-3 **oracle-dark BLIND arm** — a dead beacon otherwise reads `proposed=0` forever. Adopted, 95 %.
 - B3-4 **drop migration 0022 + activation 44** — `install.sh:1051-1122` bootstraps a manifest-`run`
   plist at converge; a c10 for it is born dead. `activate = 18-fleet-activate.sh`. Adopted, 85 %

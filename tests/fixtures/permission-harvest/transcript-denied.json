@@ -1,0 +1,10 @@
+{
+  "note": "A session transcript carrying the harness rejection text, joined to its archive row by EXACT COMMAND inside the same session_id. Lives in a file rather than a printf stub because the rejection text contains an apostrophe — memory rule fixture-stub-cannot-carry-an-apostrophe: inside a single-quoted stub it makes the generated script unparseable and the fail-open consumer then reports the healthy state.",
+  "sid": "s-delta",
+  "command": "launchctl list",
+  "lines": [
+    {"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_zzDENY1","name":"Bash","input":{"command":"launchctl list"}}]}},
+    {"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_zzDENY1","is_error":true,"content":"The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed."}]}},
+    {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Understood - not running that."}]}}
+  ]
+}

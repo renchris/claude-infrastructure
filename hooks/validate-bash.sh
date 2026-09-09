@@ -98,7 +98,51 @@ json_escape() {  # <string> → a safe JSON string BODY (no surrounding quotes)
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\000-\037'
 }
 
+# log_decision <deny|ask> <reason> — ONE JSONL line per decision this hook actually makes.
+#
+# WHY. `bash-commands.log` at the tail of this file is written AFTER every deny()/warn() has
+# already exited, so the audit corpus contains, by construction, nothing this hook ever refused
+# (PERMISSION_HARVEST §10 B1-3: a positive control found 0 `sudo rm` records in 194,535). The
+# permission archive therefore records a prompt with no way to attribute it, and 80% of what read
+# as a missing allow RULE was a HOOK raising an ask (§10 B2-1). Without this join key every count
+# in the harvester's "rule gap" bucket re-inflates by that share. curl-gate.py's AUDIT_LOG is the
+# shape being mirrored — one JSON object per line, decision + reason + session.
+#
+# NO FORK ON THE MODAL PATH. This runs only from deny()/warn(), i.e. only when a decision has
+# already been made, which the fork census measured as the rare path; the modal Bash call reaches
+# neither helper and pays nothing. The one `date` fork lives here rather than hoisted for exactly
+# that reason — hoisting it would move the cost onto every call (bash 3.2 has no `%(%s)T`).
+#
+# FAIL-OPEN, ALWAYS. The decision below is the hook's whole job; an unwritable log may cost a
+# journal line and may never cost a refusal, so every step is guarded and the function cannot
+# return non-zero.
+# THE 200 IS A BYTE BOUND, AND THE TRIM BELOW IS WHY THAT IS SAFE. `${x:0:200}` slices CHARACTERS
+# under a UTF-8 LANG and BYTES under C, so the slice is taken in an LC_ALL=C subshell — same answer
+# either way (MEMORY.md c-locale-turns-character-ops-into-byte-ops). Every reason is written in this
+# repo's house style and carries em-dashes, so the cut lands mid-sequence roughly one time in
+# three — and a lone continuation byte inside a JSON string makes the LINE unparseable, which for
+# a journal read by `jq` per line is not a truncated label, it is a DELETED record whose loss is
+# silent (parse-failures-are-verdicts-not-noise). `iconv -f UTF-8 -t UTF-8` is the validity oracle;
+# it exits 0 on the first try in the common case, and the loop can never run more than 3 times
+# because a UTF-8 sequence is at most 4 bytes.
+log_decision() { # <decision> <reason>
+  local _f="${CC_VB_DECISION_LOG:-$HOME/.claude/logs/validate-bash-decisions.jsonl}"
+  local _d="${_f%/*}"
+  [ "$_d" != "$_f" ] || _d=.
+  [ -d "$_d" ] || mkdir -p "$_d" 2>/dev/null || return 0
+  local _r _n=0; _r="$(LC_ALL=C; _s="$2"; printf '%s' "${_s:0:200}")"
+  while [ -n "$_r" ] && [ "$_n" -lt 4 ] && ! printf '%s' "$_r" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; do
+    _r="${_r%?}"; _n=$((_n + 1))
+  done
+  printf '{"ts":%s,"sid":"%s","decision":"%s","reason":"%s"}\n' \
+    "$(date -u +%s 2>/dev/null || echo 0)" \
+    "$(json_escape "${_P_SID:--}")" "$1" "$(json_escape "$_r")" \
+    >> "$_f" 2>/dev/null || true
+  return 0
+}
+
 deny() {
+  log_decision deny "$1"
   cat <<EOF
 {
   "hookSpecificOutput": {
@@ -112,6 +156,7 @@ EOF
 }
 
 warn() {
+  log_decision ask "$1"
   cat <<EOF
 {
   "hookSpecificOutput": {
@@ -1124,6 +1169,232 @@ while IFS= read -r ffg_clause; do
 done <<<"$FFG_CLAUSES"
 fi
 # ── FF-GATE END ─────────────────────────────────────────────────────────────────────────────────
+
+# ── PERMHARVEST-APPLY BEGIN ─────────────────────────────────────────────────────────────────────
+# `cc-permission-harvest --apply` WRITES THE PERMISSION ALLOWLIST, and an agent must never run it.
+#
+# WHY THIS IS A HOOK AND NOT THE TOOL'S OWN ENV CHECK. The tool does carry one (CLAUDECODE /
+# CLAUDE_CODE_SESSION_ID), and it is a courtesy message, not a guard: an agent can unset the very
+# variables it reads, in the same command line, so the check is an honour system administered by
+# the party it constrains. A PreToolUse hook precedes rules and the classifier and cannot be unset
+# from inside a session, so THIS is the chokepoint (§10 B1-4; the CC_PERMHARVEST_ALLOW_IN_SESSION
+# override the first design carried was deleted for the same reason — an override is the guard
+# handing back the key).
+#
+# WHY THE PREDICATE IS ARGV MEMBERSHIP AND NOT A REGEX ON THE COMMAND. `grep 'cc-permission-harvest
+# --apply'` is a claim about SPELLING, and every spelling is one space, one `$VAR`, one absolute
+# path or one interpreter prefix away from false: `python3 ~/.claude/bin/cc-permission-harvest
+# --apply`, `CONFIRM=1 cc-permission-harvest  --apply`, `cc-permission-harvest --apply --only X`.
+# So the command is tokenized (shlex, the same parser rm_argv_scan and git_add_force_scan use) and
+# the question is asked of each CLAUSE's argv: does any token's BASENAME equal the tool, and does a
+# token in the SAME clause spell --apply. Both halves must live in one clause —
+# `cc-permission-harvest --check && echo --apply` is two invocations and is not this rule. A
+# quoted string is ONE token, so `git commit -m "deny cc-permission-harvest --apply"` is not this
+# rule either: the rm guard's first cut blocked its own fix from being committed, and that lesson
+# is not re-learned here. Heredoc bodies are stripped first (the lib's awk, no fork), so a doc
+# written through `cat <<EOF` is text too.
+#
+# THE REACH, stated so nobody has to re-derive it. Beyond the one-clause argv rule, four bounded
+# extensions, every one keyed on the HEAD of the clause and every one over-blocking only in the
+# safe direction: a string handed to `bash -c` / `sh -c` / `eval` IS argv one level down and is
+# re-read as such (two levels, the deepest spelling anyone types); an interpreter one-liner
+# (`python3 -c`, `perl -e`, …) whose string carries both literals is read as the invocation it is;
+# `xargs cc-permission-harvest` fed by any clause that spells --apply is the same invocation
+# assembled from stdin; and a heredoc BODY feeding a shell or interpreter head is code, so that
+# shape is refused on the presence gate alone. A script written to disk and then run is out of
+# reach of any argv gate and is not pretended otherwise.
+#
+# INERT HEADS ARE SKIPPED (echo/printf/cat/tee/:/true) because a clause whose head only PRINTS is
+# not an argv for the tool at all — writing about the command in a session is not running it.
+#
+# UNCLEAR FAILS SAFE. python3 absent or shlex refusing the string (an unbalanced quote) drops to a
+# whitespace split of each leaf, which over-blocks a quoted body — the safe direction, and the
+# message says how to phrase a quotation. The presence gate is builtin and fork-free: this hook runs
+# on EVERY Bash tool call in the fleet, and only a command carrying both literals pays the fork.
+#
+# 🚨 THE PRESENCE GATE IS ASKED OF A QUOTE-STRIPPED COPY, AND THAT IS THE WHOLE ARM (fixed
+# 2026-09-09). Everything above argues that a SPELLING test is the wrong predicate — and then the
+# arm was ENTERED by exactly such a test, `[[ "$CMD" == *cc-permission-harvest* && *--apply* ]]`
+# over the RAW command. Bash removes quotes before exec; this hook never did. So any quoting that
+# split either literal in the raw text skipped the tokenizer, the fail-safe fallback and the deny,
+# and the documented "hard stop" was two characters away from open. MEASURED, all eight reaching
+# `decision=none` while a PATH stub proved bash still ran the tool with `--apply` in argv:
+#   cc-permission-har''vest --apply     cc-permission-har""vest --apply
+#   cc-permission-harve\st --apply      cc-permission-harvest --ap"p"ly
+#   cc-permission-harvest --app'l'y     X=--apply; cc-permission-harvest $X
+#   $'cc-permission-harvest' --apply    cc-permission-harvest $"--apply"
+# and the composed `env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_ENTRYPOINT CONFIRM=1
+# cc-permission-har''vest --apply`, which also strips the tool's own courtesy env check — with the
+# hook skipped there was nothing left at all.
+# PHA_PROBE deletes `'`, `"`, `\` and `$` from a COPY (builtin substitution, still fork-free) so
+# every spelling above folds back onto the two literals. It is a PRE-FILTER only: it may over-admit
+# (`--ap$ply` folds too), and over-admitting costs one fork and then a PASS from the tokenizer.
+# RESIDUE, stated rather than discovered later: literals assembled from two variables
+# (`A=--ap; B=ply; … $A$B`) survive it, as does a script written to disk and then run. No argv gate
+# reaches either. `--check`/`--falsify`/`--json` runs are untouched: none spells `--apply`.
+# One substitution per character, not a bracket class: `[\'\"\\$]` inside double quotes does not
+# survive bash's own quote removal (it dies at "unexpected EOF looking for matching `\"'"). A
+# FUNCTION, not a `$(...)`, so the gate stays fork-free on every Bash call in the fleet.
+pha_flatten() {
+  PHA_FLAT="$1"
+  PHA_FLAT="${PHA_FLAT//\'/}"
+  PHA_FLAT="${PHA_FLAT//\"/}"
+  PHA_FLAT="${PHA_FLAT//\\/}"
+  PHA_FLAT="${PHA_FLAT//\$/}"
+}
+pha_flatten "$CMD"
+PHA_PROBE="$PHA_FLAT"
+if [[ "$PHA_PROBE" == *cc-permission-harvest* && "$PHA_PROBE" == *--apply* ]]; then
+  PHA_SRC="$CMD"
+  if [[ "$HAVE_IS_TRUE_FLAG" == "1" ]] && declare -F strip_heredoc_bodies >/dev/null 2>&1; then
+    PHA_SRC="$(strip_heredoc_bodies "$CMD")"
+  fi
+  PHA_VERDICT="UNCLEAR"
+  if command -v python3 >/dev/null 2>&1; then
+    PHA_VERDICT="$(CMD="$PHA_SRC" python3 - <<'PY' 2>/dev/null
+import os
+import shlex
+
+TOOL = "cc-permission-harvest"
+SENTINEL = "HEREDOC_INPUT_SENTINEL"          # what strip_heredoc_bodies leaves where `<<EOF` was
+INERT = {"echo", "printf", "cat", "tee", "true", ":"}
+SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "eval"}
+INTERPS = {"python", "python2", "python3", "perl", "ruby", "node", "php", "osascript", "expect"}
+# Newline is PUNCTUATION here, not whitespace: to bash it ends a command, and a tokenizer that
+# swallowed it would let `echo x<newline>cc-permission-harvest --apply` inherit the inertness of echo.
+# `#` is never a comment: to bash `a#b` is one word, and a comment rule would hide what follows.
+PUNCT = "();<>|&\n"
+
+
+def tokens(src):
+    lex = shlex.shlex(src, posix=True, punctuation_chars=PUNCT)
+    lex.whitespace = " \t\r"
+    lex.whitespace_split = True
+    lex.commenters = ""
+    return list(lex)
+
+
+def is_sep(t):
+    return t in ("|", "||", "&&", ";", ";;", "&", "(", ")") or ("\n" in t and t.strip(PUNCT) == "")
+
+
+def clauses(toks):
+    out = [[]]
+    for t in toks:
+        if is_sep(t):
+            out.append([])
+        else:
+            out[-1].append(t)
+    return [c for c in out if c]
+
+
+def strip_env(argv):
+    i = 0
+    while i < len(argv) and "=" in argv[i] and not argv[i].startswith("-"):
+        name = argv[i].split("=", 1)[0]
+        if name and (name[0].isalpha() or name[0] == "_") and all(ch.isalnum() or ch == "_" for ch in name):
+            i += 1
+        else:
+            break
+    return argv[i:]
+
+
+def unsigil(t):
+    # A LEADING DOLLAR IS BASH QUOTING SHLEX DOES NOT KNOW. posix shlex strips the quotes of the
+    # bash forms dollar-single-quote and dollar-double-quote but KEEPS the sigil, so
+    # dollar-quoted cc-permission-harvest tokenizes to a token whose basename is
+    # "$cc-permission-harvest" and no comparison here matches it. Bash removes the sigil before
+    # exec, so every comparison below is asked of the token bash would actually hand the kernel.
+    return t[1:] if t[:1] == "$" else t
+
+
+def is_apply(src, depth=0):
+    """True iff some clause of `src` is an invocation of the tool carrying --apply."""
+    for argv in clauses(tokens(src)):
+        argv = strip_env(argv)
+        if not argv:
+            continue
+        flat = [unsigil(t) for t in argv]
+        head = os.path.basename(flat[0])
+        if head in INERT:
+            continue
+        # AN UNRESOLVED DOLLAR IN A CLAUSE THAT NAMES THE TOOL IS NOT A PASS. shlex is not bash and
+        # cannot know what a variable becomes: the spelling X=--apply then the tool then dollar-X
+        # tokenizes to an argv with NO --apply in it, and was MEASURED reaching decision=none while
+        # bash ran the tool with --apply in argv. The presence gate has ALREADY established that
+        # both literals appear somewhere in this command, so the only open question is which token
+        # carries them, and a token this parser cannot resolve is refused rather than guessed.
+        # SCOPED to a clause that mentions the tool as a substring (an interpreter path counts) or
+        # whose HEAD is itself a variable: a dollar anywhere else belongs to somebody elses command
+        # and stays a PASS, so a grep of a variable path beside a --check run is not collateral.
+        # Inert heads are skipped above, so quoting the command inside an echo still passes.
+        if any("$" in t for t in argv) and (any(TOOL in t for t in flat) or "$" in argv[0]):
+            return True
+        tool = any(os.path.basename(t) == TOOL for t in flat)
+        if tool and any(t == "--apply" or t.startswith("--apply=") for t in flat):
+            return True
+        if head == "xargs" and tool and "--apply" in src:
+            return True
+        if head in SHELLS and depth < 2:
+            for t in flat[1:]:
+                if TOOL in t and "--apply" in t and is_apply(t, depth + 1):
+                    return True
+        if head in INTERPS and any(TOOL in t and "--apply" in t for t in flat[1:]):
+            return True
+        if (head in INTERPS or head in SHELLS) and any(SENTINEL in t for t in flat):
+            return True
+    return False
+
+
+try:
+    print("DENY" if is_apply(os.environ.get("CMD", "")) else "PASS")
+except ValueError:
+    print("UNCLEAR")
+PY
+)"
+  fi
+  PHA_DENY=0
+  case "$PHA_VERDICT" in
+    PASS) ;;
+    DENY) PHA_DENY=1 ;;
+    *)
+      # No argv available. Leaves on `;`/`|`/`&`/newline (builtin substitution, fork-free), each
+      # whitespace-split with IFS pinned and globbing off, quotes peeled off the ends of tokens.
+      PHA_LEAVES="${PHA_SRC//;/$'\n'}"
+      PHA_LEAVES="${PHA_LEAVES//|/$'\n'}"
+      PHA_LEAVES="${PHA_LEAVES//&/$'\n'}"
+      while IFS= read -r pha_leaf; do
+        # The leaf test folds quoting the same way the presence gate does — a fallback that only
+        # matched un-split literals would re-open exactly the hole the gate just closed.
+        pha_flatten "$pha_leaf"
+        case "$PHA_FLAT" in *cc-permission-harvest*) ;; *) continue ;; esac
+        pha_tool=0; pha_apply=0; pha_head=""; pha_dollar=0
+        pha_words=()
+        set -f
+        IFS=$' \t\n' read -r -a pha_words <<<"$pha_leaf"
+        set +f
+        for pha_tok in "${pha_words[@]}"; do
+          case "$pha_tok" in *'$'*) pha_dollar=1 ;; esac
+          pha_flatten "$pha_tok"; pha_tok="$PHA_FLAT"
+          if [ -z "$pha_head" ]; then
+            case "$pha_tok" in *=*) ;; *) pha_head="${pha_tok##*/}" ;; esac
+          fi
+          case "${pha_tok##*/}" in cc-permission-harvest) pha_tool=1 ;; esac
+          case "$pha_tok" in --apply|--apply=*) pha_apply=1 ;; esac
+        done
+        case "$pha_head" in echo|printf|cat|tee|true|:) continue ;; esac
+        if [ "$pha_tool" = 1 ] && [ "$pha_apply" = 1 ]; then PHA_DENY=1; fi
+        # Same rule as the tokenizer's: a `$` in a leaf that names the tool is unresolvable here,
+        # and the presence gate already proved both literals are in this command.
+        if [ "$pha_tool" = 1 ] && [ "$pha_dollar" = 1 ]; then PHA_DENY=1; fi
+      done <<<"$PHA_LEAVES"
+      ;;
+  esac
+  if [ "$PHA_DENY" = 1 ]; then
+    deny "cc-permission-harvest --apply blocked — permission config is AUTHORIZATION, and an agent widening its own allowlist is the one thing this fleet's guardrails cannot police afterwards. The apply is the OPERATOR's, through the queue the weekly run already files: cc-do prints every rule, its evidence and the per-file diff, takes a typed 'yes', and only then writes. Run 'cc-do --list', find the row titled 'Apply the N harvested allow rules ...', and hand the operator its id. EVERYTHING ELSE ABOUT THIS TOOL IS YOURS: 'cc-permission-harvest 30' reports, '--json --out <dir>' writes a proposal, and '--check' previews EXACTLY what apply would write, rule by rule, read-only — if you wanted to know what would happen, that is the flag. This refusal reads your argv, not your text: an absolute path, an interpreter prefix, CONFIRM=1 or a bash -c wrapper change nothing, and there is no override variable. If you are only QUOTING the command, quote it as one string or leave --apply off that line."
+  fi
+fi
+# ── PERMHARVEST-APPLY END ───────────────────────────────────────────────────────────────────────
 
 # ── Warn (ask): destructive but sometimes intentional ────────────────
 

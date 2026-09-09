@@ -13,6 +13,12 @@ setup() {
   # test would append synthetic rows to the operator's REAL permission archive — poisoning the very
   # dataset the archive exists to provide. (It did, once, before this line existed.)
   export CC_PERMARCHIVE_DIR="$BATS_TEST_TMPDIR/permarchive"
+  # The three size-bound tests below (8,000-y row · SIG over-cap · D2a bytes-not-chars) were written
+  # against the 3500 B cap and test the MECHANISM — bounded, recorded, attribution kept, bytes not
+  # characters — not the number. The shipped default moved to 12000 (PERMISSION_HARVEST §5: the 4 KiB
+  # atomic-append premise it was sized to was measured false by D2b and replaced by the mkdir lock),
+  # so the regime is pinned here; tests/permission-harvest-wiring.bats pins the new default itself.
+  export CC_PERMARCHIVE_MAXLEN=3500
   unset CC_PERMISSION_BEACON_DISABLED
 }
 

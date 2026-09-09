@@ -56,7 +56,10 @@ DIR="${CC_PERMPEND_DIR:-/tmp/cc-permission-pending}"
 # supervisor went blind to a real pending prompt. An archive convenience must never be able to
 # take down the beacon it is a side-car to (regression caught in adversarial review, 2026-07-31).
 ARCHDIR="${CC_PERMARCHIVE_DIR:-${HOME:-/tmp}/.claude/autonomy/permission-archive}"
-ARCH_MAXLEN="${CC_PERMARCHIVE_MAXLEN:-3500}"
+# 12000, was 3500 — sized for a 4 KiB atomic-append regime that D2b measured FALSE (10/720 lines tore
+# at 1.2 KB), so the mkdir lock below is what serializes appends and the cap only decides how much
+# evidence survives: at 3500, 84 rows/126 h reached the harvester unclassifiable (`truncated`, B2-6).
+ARCH_MAXLEN="${CC_PERMARCHIVE_MAXLEN:-12000}"
 
 # Read the harness payload once (fail-open on empty/malformed — never block the prompt).
 INPUT="$(cat 2>/dev/null || true)"
@@ -131,9 +134,9 @@ arch_beat() {
 # anywhere else after the fact.
 #
 # ATOMICITY: many sessions append to one file concurrently. A single small write(2) under O_APPEND
-# does not interleave, so the record is length-BOUNDED (ARCH_MAXLEN, default 3500 B — comfortably
-# inside the 4 KiB atomic-append regime) and over-long payloads degrade to a truncated summary
-# rather than risking a torn line. Truncation is RECORDED (`tool_input_truncated`), never silent.
+# does not interleave — so this paragraph believed; the record is length-BOUNDED (ARCH_MAXLEN,
+# default 12000 B, see its definition for why the 4 KiB premise died) and over-long payloads degrade
+# to a truncated summary. Truncation is RECORDED (`tool_input_truncated`), never silent.
 #
 # THE INVOCATION, not the tool NAME, is what can prove a grant. Name-matching was the first cut and
 # it is a guess that fails in the unsafe direction: the dominant traffic here is Bash→Bash, so a

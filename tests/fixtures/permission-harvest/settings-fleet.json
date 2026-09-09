@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm test:*)",
+      "Bash(python3:*)",
+      "Bash(cd:*)",
+      "Bash(ls:*)",
+      "Bash(echo:*)"
+    ],
+    "deny": [
+      "Bash(git push --force:*)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(git stash drop:*)",
+      "Bash(zzsvc restart:*)"
+    ],
+    "defaultMode": "auto"
+  },
+  "enabledMcpjsonServers": [
+    "ms365"
+  ]
+}
