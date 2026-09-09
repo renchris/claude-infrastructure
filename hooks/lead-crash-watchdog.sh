@@ -1381,7 +1381,12 @@ echo "$SESSION_ID" > "$WATCHDOG_DIR/$SESSION_ID.id"
 # A seam already set (a test, or a one-off repaint) wins over the live reading.
 LEAD_TTY="${CC_PANE_VERDICT_TTY:-$(ps -o tty= -p "$LEAD_PID" 2>/dev/null | tr -d ' ')}"
 case "$LEAD_TTY" in ttys[0-9]*) ;; *) LEAD_TTY="" ;; esac
-_lcw_isid="${ITERM_SESSION_ID:-}"
+# CC_PANE_ID WINS (see LEAD_PANE below), so the compat id is consulted only when it is unset.
+# The guard is on THIS line deliberately: it makes the precedence structural rather than a
+# `cc-pane-id-lint:allow` exemption, so tests/cc-pane.bats keeps watching this line for a
+# genuine bare read added later. The hoist itself is unavoidable — bash cannot apply `##*:`
+# to a defaulted expansion inline.
+_lcw_isid=""; [ -n "${CC_PANE_ID:-}" ] || _lcw_isid="${ITERM_SESSION_ID:-}"
 LEAD_PANE="${CC_PANE_VERDICT_PANE:-${CC_PANE_ID:-${KITTY_WINDOW_ID:-${_lcw_isid##*:}}}}"
 LEAD_CFG="${CC_PANE_VERDICT_CFG:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"
 LEAD_CWD="${CC_PANE_VERDICT_CWD:-$PWD}"
