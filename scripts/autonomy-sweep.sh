@@ -113,6 +113,24 @@ if ! . "$_ccl" 2>/dev/null; then
   echo "autonomy-sweep: FATAL — cannot source $_ccl (resolve_bin unavailable)" >&2
   exit 1
 fi
+# THE IDL SIZE ASSERTION IS SHARED, NOT COPIED (W3-B17). hooks/lib/idl-log.sh is the SSOT writer for
+# the nine hooks; this sweep keeps its own envelope builder (a different record shape: seven ambient
+# counters on every record), so what is shared is the ASSERTION, not the builder -- one contract for
+# "what may be appended to this store", two builders for "what this producer records". Sourcing it is
+# safe by that file's own stated contract: pure definitions, no side effects on source, set -u clean.
+# Same beside-script -> CFG -> ~/.claude ladder as cc-common.sh above, and the same FAIL LOUD: a
+# launchd job that silently loses its size guard is the silent degradation these scripts exist to
+# avoid, and an unguarded append is what put a spliced record in the store in the first place.
+_idll="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/hooks/lib/idl-log.sh"
+[ -f "$_idll" ] || _idll="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/idl-log.sh"
+[ -f "$_idll" ] || _idll="$HOME/.claude/hooks/lib/idl-log.sh"
+# shellcheck source=../hooks/lib/idl-log.sh
+# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+if ! . "$_idll" 2>/dev/null; then
+  echo "autonomy-sweep: FATAL — cannot source $_idll (idl_guarded_append unavailable)" >&2
+  exit 1
+fi
+
 NOTIFY="$(resolve_bin "${CC_NOTIFY_BIN:-}"  cc-notify)"
 DECIDE="$(resolve_bin "${CC_DECIDE_BIN:-}"  cc-decide)"
 BACKLOG="$(resolve_bin "${CC_BACKLOG_BIN:-}" cc-backlog)"
@@ -196,14 +214,18 @@ log_idl() { # <disposition> <extra JSON OBJECT (optional, jq-built {…}; defaul
   # jq-encode EVERY field (numerics via --argjson, strings via --arg): a value carrying a " /
   # backslash / newline then can NEVER emit a malformed IDL line — one malformed line aborts the
   # cc-audit four-zeros `jq -rs` slurp (reads as "no records" ⇒ silent D9/alarm false-GREEN).
-  jq -cn --arg ts "$(now_iso)" --arg disp "$1" \
+  local rec
+  rec="$(jq -cn --arg ts "$(now_iso)" --arg disp "$1" \
     --argjson np "$new_pages" --argjson na "$new_alarms" --argjson npf "$new_pushfailed" \
     --argjson od "$open_decisions" --argjson fd "$fired_defaults" \
     --argjson fnc "$fired_nochange" --argjson nha "$new_handoff_alarms" --argjson extra "$extra" \
     '{ts:$ts,tool:"autonomy-sweep",disposition:$disp,new_pages:$np,new_alarms:$na,
       new_pushfailed:$npf,open_decisions:$od,fired_defaults:$fd,
-      fired_nochange:$fnc,new_handoff_alarms:$nha} + $extra' \
-    >> "$IDL" 2>/dev/null || true
+      fired_nochange:$fnc,new_handoff_alarms:$nha} + $extra' 2>/dev/null)"
+  [ -n "$rec" ] || return 0
+  # The shared assertion, not a second copy of it: rc 1 means the record was refused and an
+  # idl-oversize record naming the kind and the byte count went to the store in its place.
+  idl_guarded_append "$IDL" "autonomy-sweep" "$1" "$rec" || true
 }
 
 # Read one STRING field out of a single-line JSON record WITHOUT jq. The producers of these records
