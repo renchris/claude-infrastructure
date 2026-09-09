@@ -310,6 +310,42 @@ PY
 # This does NOT touch, and cannot blind, the quota spine. The Keychain credential is a SEPARATE
 # store — bin/claude-accounts bearers creds['accessToken'] read from the Keychain, never this env
 # var — so minting year tokens leaves /accounts, cc-wave-plan, cc-value and cc-board intact.
+#
+# 🚨 BUT IT IS NOT FREE, AND THE ITEM THIS LOADER WAS BUILT FROM SAID IT WAS. Measured out of the
+# 2.1.260 binary on 2026-09-08 (docs/research/setup-token-scope-refutation-2026-09-08.md), two
+# facts that were filed as UNKNOWN are now settled, and both cut against unconditional wiring:
+#
+#   1. THE GRANT IS INFERENCE-ONLY BY SERVER-SIDE CONSTRUCTION — not a client-side display
+#      default that a second env var could widen. `setup-token` calls startOAuthFlow with
+#      `inferenceOnly: true`, and the authorize-URL builder resolves the requested scope set as
+#      `M ? M.scopes : f ? [ry] : d0n` — with `f` (inferenceOnly) true it asks the server for
+#      exactly ["user:inference"], where an interactive /login asks for all five. The token comes
+#      back minted at one scope. Setting CLAUDE_CODE_OAUTH_SCOPES does NOT cure this: that var
+#      only overrides the CLIENT's local belief about its own scopes, so it converts a clean
+#      client-side "feature disabled" into a server 401. Do not reach for it.
+#
+#   2. THE ENV TOKEN SHADOWS THE KEYCHAIN UNCONDITIONALLY — it is not a fallback that engages
+#      when the Keychain credential dies. The credential resolver opens
+#      `if (CLAUDE_CODE_OAUTH_TOKEN) return {…, scopes: $B()}` and RETURNS THERE; the Keychain
+#      read further down is unreachable while this var is set. So a wired account pays the scope
+#      loss on EVERY launch, permanently, to insure against a roughly monthly event.
+#
+# What that costs, by name — each one degrades QUIETLY, which is why the warning below exists:
+#   · Claude in Chrome — hard off. Server-validated at /api/oauth/validate, which needs
+#     user:profile / user:office / user:ccr_inference; the binary's own message names
+#     "env-var and setup-token sessions" as the population that fails it.
+#   · claude.ai org connectors — off (`[claudeai-mcp] Missing user:mcp_servers scope`). NOT a
+#     loss for this fleet: locally-configured MCP in .mcp.json / .claude.json / managed-mcp.json
+#     is explicitly exempted from that check, and motion-plus / ms365 authenticate on their own
+#     OAuth. This is the one place the filing item's guess held up.
+#   · org / profile resolution — off. /api/oauth/profile yields no org UUID, and the GitHub-app
+#     installation check degrades to a DETERMINISTIC "assuming app not installed".
+#   · image upload — no client-side gate exists on user:file_upload (0 call sites), so nothing
+#     blocks it locally; whether the server honours an upload on an inference-only bearer is the
+#     one residual unknown, and it can only be settled by minting.
+#
+# CONSEQUENCE FOR THIS LOADER: it stays exactly as written — set-or-unset, fail-closed — because
+# the cross-wiring hazard it guards is real and unchanged. What it must NOT do is arm silently.
 typeset -gA _CC_OAUTH_TOKEN_ACCT
 _CC_OAUTH_TOKEN_ACCT[$HOME/.claude-next]='next'
 _CC_OAUTH_TOKEN_ACCT[$HOME/.claude-secondary]='next2'
@@ -330,6 +366,15 @@ _cc_oauth_token_env() {
       tok="${tok%"${tok##*[![:space:]]}"}"
       if [[ -n "$tok" ]]; then
         export CLAUDE_CODE_OAUTH_TOKEN="$tok"
+        # LOUD, on every launch, with no opt-out. Per the scope block above this export drops the
+        # session from five scopes to one and bypasses the Keychain credential outright, and every
+        # consumer degrades QUIETLY — a skipped connector, an unresolved org, a disabled extension.
+        # A session running degraded has to SAY so, or the next person debugs the symptom instead
+        # of reading the cause. Deliberately NO suppression variable: a warning each participant
+        # can switch off is not a warning (cf. 0fd5dc64f, the same defect in cc-bats). stderr, so
+        # nothing parsing a launcher's stdout is disturbed.
+        print -ru2 -- "[oauth-token] $acct: bearing the minted setup-token — this session is user:inference ONLY."
+        print -ru2 -- "[oauth-token] Keychain credential BYPASSED; Claude in Chrome, claude.ai org connectors and org/profile resolution are OFF. Cure: rm $tokf"
         return 0
       fi
     fi
