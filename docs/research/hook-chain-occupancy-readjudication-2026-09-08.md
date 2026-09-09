@@ -174,8 +174,9 @@ capacity sum needs the magnitude, not the sign. That is the run §5 defers.
 
 What §4.2 cannot supply is the magnitude, and that needs a quieter box. The certified run needs
 `load1 < 14` (the bench's own start floor: *"a second-order effect is not
-resolvable above it"*). Measured throughout this session, this box ran **24.4 → 34.7 and rising**, on
-10 cores, with **67 live `claude` processes**. The machine's own admission gate agrees and is stricter:
+resolvable above it"*). Sampled every 10 s for the whole session — **139 readings, load1 24.4 to 48.5,
+median 32.0** — on 10 cores, with **65-67 live `claude` processes** throughout. It never came within
+10 of the floor, in either direction. The machine's own admission gate agrees and is stricter:
 `cc-bats` refused to run any suite at `CC_BATS_MAX_LOAD_PER_CORE=2.0` against a load/core of ~3.2.
 
 The bench's parallel arm holds `sessions × members` processes by construction — that is the quantity
