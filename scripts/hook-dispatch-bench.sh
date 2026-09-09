@@ -178,20 +178,79 @@ awk -F'\t' -v ctrl="$CONTROL" -v armb="$ARM_B" -v ls="$2" -v le="$3" '
       printf "\n    MEDIAN RATIO = %.2fx   (spread %.2f..%.2f over %d cycles)\n", med, R[1], R[m], m
     }
 
+    # ── THE INTERVAL ────────────────────────────────────────────────────────────────────────
+    # ⚠ THE DISPERSION STATISTIC IS A CONFIDENCE INTERVAL ON THE MEDIAN, NOT THE SAMPLE RANGE.
+    # It was max/min until 2026-09-08, and that gate was ANTI-MONOTONE IN EVIDENCE. The range of a
+    # sample is non-decreasing in the sample size, so every extra cycle could only ever widen it,
+    # while the median it guards converges. The bench then printed "re-run ... with more cycles" as
+    # the remedy for a spread failure — advice that mechanically made its own gate HARDER to pass,
+    # and the same remedy docs/research/active-session-occupancy-2026-08-09.md §3.1 prescribes for
+    # certifying the one live result this rig has ever produced.
+    #
+    # Measured, 2,000 replicates per point, ratios drawn from one unbiased distribution at the noise
+    # this rig actually showed on 2026-08-09 (its control spanned 0.29..1.51 over 5 cycles):
+    #     cycles      3      5     10     20     40     80
+    #     P(certify)  51.7%  42.1%  19.2%   2.1%   0.0%   0.0%
+    #     median err  0.244  0.200  0.138  0.103  0.071  0.051   (|log2| of the median ratio)
+    # The estimator was converging and the gate was diverging. Certification was unreachable BY
+    # COLLECTING DATA, which is the only lever the operator of this bench has.
+    #
+    # Replaced by the two-sided DISTRIBUTION-FREE sign-test interval on the median: with the m
+    # per-cycle ratios sorted, [R[k], R[m+1-k]] covers the population median with probability
+    # 1 - 2*P(Bin(m,1/2) <= k-1). No distributional assumption, exact at every m, and its width
+    # SHRINKS as cycles are added, so more evidence now buys more power. k is the tightest one
+    # reaching 90% coverage. Below m=5 no such k exists, so the interval degenerates to the full
+    # range and this gate is byte-identical to the one it replaces at the 3-cycle default — that
+    # degeneracy is the honest reading of three points, not a fallback.
+    ci_lo = (m>0) ? R[1] : 0; ci_hi = (m>0) ? R[m] : 0; ci_k = 1; ci_cov = 0
+    if (m >= 2 && m <= 1000) {
+      pow = 1; for (i=0;i<m;i++) pow *= 2
+      # C(m,i) is built iteratively rather than from factorials, which overflow a double by m=171.
+      c = 1; cum = 0; best_k = 0; best_p = 1
+      for (i = 0; i <= int((m-1)/2); i++) {
+        p = (cum + c)/pow            # = P(X <= i) = the tail excluded on each side by k=i+1
+        if (p > 0.05) break
+        best_k = i+1; best_p = p
+        cum += c; c = c*(m-i)/(i+1)
+      }
+      if (best_k >= 1) { ci_k = best_k; ci_cov = 1 - 2*best_p }
+      else             { ci_k = 1;      ci_cov = 1 - 2*(1/pow) }
+      ci_lo = R[ci_k]; ci_hi = R[m+1-ci_k]
+    } else if (m > 1000) {
+      # 2^m is +inf in a double from m=1024, and C(m,m/2) overflows with it, so the exact branch
+      # computes inf/inf. MEASURED at m=1100: it selects k=m/2 = 550 — the NARROWEST interval the
+      # order statistics admit, i.e. no confidence at all — and labels it `nan%`. Worse than the
+      # garbage token: `nan < 0.895` is FALSE, so the "below the 90% target" caveat is suppressed
+      # too, and a genuinely noisy run reads as decisively resolved with no coverage figure to
+      # contradict it. Above 1000 the normal approximation is used instead (k = m/2 - 1.6449*sqrt(m)/2),
+      # which is accurate to well under a percentage point there.
+      ci_k = int(m/2 - 1.6449*sqrt(m)/2); if (ci_k < 1) ci_k = 1
+      ci_cov = 0.90; ci_approx = 1
+      ci_lo = R[ci_k]; ci_hi = R[m+1-ci_k]
+    }
+    ci_w   = (ci_lo > 0.0000001) ? ci_hi/ci_lo : 999
+    excl_1 = (m >= 2 && (ci_lo > 1.0 || ci_hi < 1.0))
+    if (m >= 2)
+      printf "    %.0f%% CI on the median = %.2f..%.2f  (sign-test, k=%d of %d cycles)%s\n", \
+        ci_cov*100, ci_lo, ci_hi, ci_k, m, (ci_cov < 0.895 ? "  — below the 90% target: too few cycles for any tighter interval" : (ci_approx ? "  — normal approximation, m>1000" : ""))
+
     # ── ACCEPTANCE ──────────────────────────────────────────────────────────────────────────
     # The rig certifies itself or it does not. A control that reports a ratio it cannot justify
-    # must SAY so; a live run whose control was never seen is not evidence.
-    spread_bad = (m >= 2 && R[1] > 0.0000001 && R[m]/R[1] > 2.5)
+    # must SAY so; a live run whose control was never seen is not evidence. BIAS is now a test
+    # rather than a fixed band on the point estimate: a null is refuted when the interval EXCLUDES
+    # 1.00, which is the same question the old [0.80,1.25] band was asking without the sample size.
     if (ctrl) {
       printf "\n  NULL CONTROL: both arms dispatch SERIALLY; only the results key differs.\n"
-      if (med < 0.80 || med > 1.25)
-        printf "  ⛔ CONTROL FAILED — median %.2fx, and a null must sit at 1.00x. The rig is BIASED,\n     not merely noisy: one arm is being measured differently from the other. Do NOT quote\n     a live run taken under this ambient.\n", med
-      else if (spread_bad)
-        printf "  ⛔ CONTROL FAILED ON SPREAD — the median is %.2fx (correct), but the per-cycle ratios\n     run %.2f..%.2f, so the noise floor here is wider than most effects worth finding.\n     It is UNBIASED and UNDERPOWERED. A live median is quotable only if its own spread\n     clears this band; say so explicitly rather than quoting the number bare.\n", med, R[1], R[m]
+      if (excl_1)
+        printf "  ⛔ CONTROL FAILED — median %.2fx and the %.0f%% CI %.2f..%.2f EXCLUDES 1.00, where a null\n     must sit. The rig is BIASED, not merely noisy: one arm is being measured differently\n     from the other. Do NOT quote a live run taken under this ambient.\n", med, ci_cov*100, ci_lo, ci_hi
+      else if (m < 2 || ci_w > 2.5)
+        printf "  ⛔ CONTROL FAILED ON SPREAD — the median is %.2fx (correct), but the %.0f%% CI runs\n     %.2f..%.2f, so the noise floor here is wider than most effects worth finding.\n     It is UNBIASED and UNDERPOWERED. ADD CYCLES: this interval narrows as they are added\n     (the max/min gate it replaced could only widen). A live median is quotable only if its\n     own interval clears this band; say so explicitly rather than quoting the number bare.\n", med, ci_cov*100, ci_lo, ci_hi
       else
-        printf "  ✅ CONTROL PASSED — median %.2fx, spread %.2f..%.2f. A live run under this ambient\n     is quotable.\n", med, R[1], R[m]
-    } else if (spread_bad) {
-      printf "\n  ⚠ SPREAD %.2f..%.2f exceeds 2.5x — the median is a point estimate with little power\n    here. Re-run quieter, or with more cycles, before quoting it.\n", R[1], R[m]
+        printf "  ✅ CONTROL PASSED — median %.2fx, %.0f%% CI %.2f..%.2f. A live run under this ambient is\n     quotable, and this rig resolves ratios outside %.2f..%.2f.\n", med, ci_cov*100, ci_lo, ci_hi, ci_lo, ci_hi
+    } else if (m >= 2 && !excl_1) {
+      printf "\n  ⚠ THE %.0f%% CI %.2f..%.2f CONTAINS 1.00 — this run does not establish an effect at all,\n    whatever the median reads. Add cycles (the interval narrows with them) or re-run quieter.\n", ci_cov*100, ci_lo, ci_hi
+    } else if (ci_w > 2.5) {
+      printf "\n  ⚠ THE %.0f%% CI %.2f..%.2f spans more than 2.5x — the sign of the effect is established\n    but its magnitude is not. Add cycles before quoting the median as a number.\n", ci_cov*100, ci_lo, ci_hi
     }
 
     # AMBIENT drift is the idle arm across cycles — NOT load1 start-vs-end, which this bench

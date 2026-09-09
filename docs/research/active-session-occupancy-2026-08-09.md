@@ -142,6 +142,27 @@ attempts.
 **To certify it:** re-run both arms on a box whose ambient is stable within 2×, per §7's prediction 2.
 The instrument is landed and the run is a single command.
 
+> ⚠ **CORRECTION 2026-09-08 — that remedy was half unreachable, and the bench's own printed version of
+> it (*"re-run quieter, or with more cycles"*) was self-defeating.** The acceptance gate was
+> `max/min > 2.5` over the per-cycle ratios, and the range of a sample is non-decreasing in the sample
+> size: every added cycle could only widen it while the median converged. Measured over 2,000
+> replicates per point at the very noise the control above showed, P(control certifies) ran 51.7% at
+> 3 cycles → 19.2% at 10 → **0.0% at 40**, while the median error fell 0.244 → 0.071 in log2. The
+> gate is now a distribution-free sign-test interval on the median, whose width shrinks with cycles;
+> the 3-cycle default is byte-identical to the old behaviour, so nothing above re-reads differently.
+> "Quieter" was and remains the right half. See
+> `docs/research/hook-chain-occupancy-readjudication-2026-09-08.md` §2.
+>
+> 🚨 **And the repair promotes THIS RUN, on its own published numbers — no re-measurement.** Under the
+> sign-test interval, the five live ratios above give a **94% CI of 2.10..6.43, which EXCLUDES 1.00**,
+> while the control's is **0.29..1.51 and contains it**; the two do not overlap. The comparison this
+> section makes in prose — *"the live effect's floor (2.10) sits above the control's ceiling (1.51)"* —
+> is therefore the instrument's own verdict at a stated confidence, not an eyeballed reading, and
+> **the SIGN of the queueing effect is established**. What stays unquotable is the magnitude: a
+> 2.10..6.43 span is a factor of three, so `3.46×` is still not a number to carry downstream. The old
+> gate could not report any of this, because it asked only whether the range was wide and answered
+> "wide" to both arms alike.
+
 **The consequence for `hook-chain.sh` is a re-opening, not a reversal.** Its shelving verdict
 ("REAL 6-guard chain, serial 174 ms · dispatcher exec ~180 ms") is a *wall-clock* result and remains
 true. Wall-clock is the quantity that does *not* move under serialisation — the dispatcher trades
@@ -324,6 +345,14 @@ Each is cheap and re-runnable with the landed instruments:
   is silent on occupancy. It is already written, heavily tested, and inert; re-adjudication needs the
   bench, and wiring it would be a `c10` migration (it edits `settings.json`), never a direct
   registration.
+  **2026-09-08 addendum:** re-adjudicated under `05c79abca813`, and the wiring is blocked ahead of the
+  measurement. `config/hook-chains.d/` had drifted four members behind settings.json on
+  PreToolUse:Bash (six named, ten registered) and one on PostToolUse:Bash, and the parity suite's own
+  drift guard compared the registry to a literal array in its `setup()` rather than to settings.json,
+  so it was green throughout. Wiring in that state would have run five registered guards zero times.
+  Registries reconciled and the guard re-pointed at settings.json; the occupancy run itself is still
+  unrun (this box held load 24→41 on 10 cores with 67 live sessions, against the bench's floor of 14).
+  `docs/research/hook-chain-occupancy-readjudication-2026-09-08.md`.
 - **Phase D's gate terms inherit a second correction.** Wave A established the residency term is
   ~0.003. This wave adds that the *active* term is dominated by a small number of amplifying call
   sites, not by hook count — so a gate that admits on hook count or session count is measuring

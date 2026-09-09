@@ -1,3 +1,7 @@
-# PostToolUse / matcher:Bash — collapsed from 2 settings.json entries (§8.5.4, §12.5).
+# PostToolUse / matcher:Bash — collapsed from the settings.json entries (§8.5.4, §12.5).
+# ORDER IS THE SETTINGS.JSON ORDER; the drift guard in tests/hook-chain-live-parity.bats reads
+# settings.json for its expectation. RECONCILED 2026-09-08: relay-verbatim.sh was registered live
+# and absent here.
 log-bash.sh
 waiting-recycle.sh
+relay-verbatim.sh
