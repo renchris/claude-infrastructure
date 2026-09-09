@@ -513,7 +513,24 @@ _cc_admit_state_file() { # $1=caller → path, or empty when the caller id is un
   printf '%s/%s.refusals' "$dir" "$1"
 }
 
-_cc_admit_reset() { local f; f="$(_cc_admit_state_file "$1")"; [ -n "$f" ] && : > "$f" 2>/dev/null; return 0; }
+_cc_admit_reset() { local f; [ "${_CC_ADMIT_PROBE:-0}" = 1 ] && return 0; f="$(_cc_admit_state_file "$1")"; [ -n "$f" ] && : > "$f" 2>/dev/null; return 0; }
+
+# ── THE NON-CHARGING PROBE (LIMIT_RECOVER_100P, 2026-09-09) ─────────────────────────────────────
+# A fleet recovery must never type /exit into a pane it cannot relaunch, so it asks the box BEFORE
+# the irreversible keystroke — and asking must not SPEND the refusal budget that protects the box,
+# or three probes in a loop would force the fourth spawn in (the "never spend the third refusal"
+# constraint in docs/plans/LIMIT_RECOVER_100P.md §4). cc_capacity_probe evaluates the identical
+# terms, in the identical order, with the identical thresholds — it is cc_capacity_admit with the
+# budget file, the page and the reset all inert — and reports its verdict on the IDL under
+# basis `probe` so a wait-then-park sequence is auditable. Same 0/9 contract; CC_ADMIT_REASON set.
+cc_capacity_probe() { # $1=caller $2=what → 0 would-admit / 9 would-refuse · charges NOTHING
+  local rc=0
+  _CC_ADMIT_PROBE=1
+  cc_capacity_admit "$1" "$2" || rc=$?
+  _CC_ADMIT_PROBE=0
+  return "$rc"
+}
+_CC_ADMIT_PROBE=0
 
 # ── the page: a refusal that nobody sees is a silent drop ──────────────────────────────────────
 _cc_admit_page() { # $1=text
@@ -903,6 +920,12 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
 # can never stand as a permanent refusal — the §12.2 outage, made structurally unreachable.
 _cc_admit_spend() { # $1=caller $2=what $3=budget $4=detail $5=term → 0 admit / 9 refuse
   local caller="$1" what="$2" budget="$3" detail="$4" term="$5" sf n rc
+  if [ "${_CC_ADMIT_PROBE:-0}" = 1 ]; then
+    # A probe refusal is a MEASUREMENT, not a spend: no budget file touched, no page, no release.
+    CC_ADMIT_REASON="capacity-admit: PROBE would REFUSE ${what} — ${detail} (nothing charged; the caller waits or parks)"
+    _cc_admit_emit refuse probe "$caller" "$what" "${detail} (probe — budget untouched)" "$term"
+    return 9
+  fi
   sf="$(_cc_admit_state_file "$caller")"
   if [ -z "$sf" ]; then
     # An unusable caller id means the bound cannot be tracked, and an UNTRACKED bound is an
