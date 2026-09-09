@@ -193,8 +193,28 @@ $SHOULD_SNAPSHOT || exit 0
 # caused by its breadth — it was caused by (1). Bound the store, keep the coverage. Also measured
 # and NOT acted on: `:status --porcelain | grep -q .` is the pipefail early-exit shape, but it does
 # not invert here (0/40 false-cleans at 5, 200 and 1,500 dirty files — porcelain output stays under
-# the 64 KB pipe buffer, so git never blocks and is never SIGPIPEd), and no ref in the live store is
-# older than 30 days, so a hard ceiling above the newest-N floor would collect nothing today.
+# the 64 KB pipe buffer, so git never blocks and is never SIGPIPEd).
+#
+# THE HARD CEILING — still NOT built, but its OLD reason has EXPIRED, so do not reuse it. This block
+# used to close with "no ref in the live store is older than 30 days, so a hard ceiling above the
+# newest-N floor would collect nothing today". True on 2026-08-06; FALSE by 2026-09-09, when the
+# oldest checkpoint ref was 2026-07-11 (59.7 d) and a 30-day ceiling would have collected 1,426 of
+# 3,189 refs. Neither that sentence nor this paragraph is a standing fact — both are readings of a
+# store that moves, so RE-MEASURE before concluding anything about the residual:
+#
+#     git for-each-ref refs/checkpoints/ --format='%(refname) %(committerdate:unix)'
+#
+# What is DURABLE is the criterion, and it is COST, never size. The uncollected residual is the
+# GC_FLOOR refs of members that have gone quiet, and it is self-limiting per member: measured
+# 2026-09-09 (cc-backlog ac13c22fe291) 848 of 963 members were dead (newest ref >14 d) holding 2,097
+# refs — 65.7% of the store, but NO dead member held more than GC_FLOOR (150 at 1, 147 at 2, 551 at
+# 3, none above), which is positive proof the age rule reaches everything the floor does not protect.
+# What it costs at that share is nothing: a full `for-each-ref` over all 8,715 refs in this repo ran
+# 0.01-0.02 s and `git status --porcelain` 0.02-0.03 s, so the ":157" claim of "a measurable git cost
+# on every ref walk" did not reproduce. A ceiling only yields at ~30 d, where it deletes the LAST
+# snapshot of every member dormant that long — trading a real recovery guarantee (and reap-guard.sh's
+# `refs/checkpoints/$member/**` products oracle) for latency measured at zero. Build it when a
+# re-measurement shows a cost, not when the count looks large.
 #
 # Damped to at most once/day at ONE fork on the common path: `find` tests existence AND age in a
 # single process, so an already-swept stamp (<1 day) prints its own path and we skip immediately.
