@@ -84,8 +84,27 @@ lf_now() { date -u +%FT%TZ; }
 # · NO-PANE (no live process holds it: the poller's spawn-at-reset domain, or --recover spawns a
 # visible pane for it) · TEAMMATE (lead-owned recovery) · DUPLICATE (more than one live process).
 LIMIT_RE="You've hit your (session|weekly|fast|monthly spend)? ?limit"
+# A session can be dead-in-turn for reasons that are NOT a cap, and the census used to be blind to
+# every one of them (2026-09-09, operator report: six panes killed by one DNS outage, `--locate` said
+# "(no limit-blocked session anywhere)"). Measured on the real records: the ENOTFOUND death carries
+# the SAME structural envelope as a cap -- type:assistant, isApiErrorMessage:true, error:"server_error",
+# model:"<synthetic>" -- so only the TEXT predicate excluded it, never the shape. Keeping the envelope
+# gate is what makes this safe to widen: a session merely DISCUSSING "ENOTFOUND" in prose (this repo
+# does, constantly) is not a synthetic api-error record and can never match.
+NET_RE="(Can't reach the API server|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|socket hang up)"
+BLOCK_RE="($LIMIT_RE|$NET_RE)"
+# Which class a row is decides WHICH RECOVERY IS EVEN LEGAL, so it is a column, not a footnote:
+#   limit   -> the account is out of quota; the fix is a transplant to another account (--recover).
+#   network -> the account is FINE and the pane is usually still alive; transplanting would spend an
+#              account move to fix a problem that no longer exists. The fix is `/limit-recover resume`
+#              IN PLACE. --recover therefore refuses these by default rather than "helpfully" moving them.
+lf_kind_of() { # $1=tail -> limit|network
+  printf '%s' "$1" | grep -E "$LIMIT_RE" | grep -q '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true' \
+    && { echo limit; return; }
+  echo network
+}
 lf_locate() { # → TSV rows on stdout
-  local cfg tx sid tail rows pane pid acct cwd tier disp n
+  local cfg tx sid tail rows pane pid acct cwd tier disp n kind
   while IFS= read -r cfg; do
     [ -n "$cfg" ] || continue
     for tx in "$cfg"/projects/*/*.jsonl; do
@@ -93,7 +112,8 @@ lf_locate() { # → TSV rows on stdout
       sid="$(basename "$tx" .jsonl)"
       case "$sid" in agent-*|wf_*) continue ;; esac
       tail="$(tail -c 20000 "$tx" 2>/dev/null || true)"
-      printf '%s' "$tail" | grep -E "$LIMIT_RE" | grep -q '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true' || continue
+      printf '%s' "$tail" | grep -E "$BLOCK_RE" | grep -q '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true' || continue
+      kind="$(lf_kind_of "$tail")"
       # the limit must be the LAST assistant word — a session that took a real turn since is not blocked
       printf '%s' "$tail" | /usr/bin/python3 -c '
 import json,sys
@@ -121,20 +141,33 @@ sys.exit(0 if last else 1)' || continue
         fi
         if _to="$(lr_transplanted_to "$sid" "$cfg")"; then disp="TRANSPLANTED→$(lf_acct_of_cfg "$_to")"; fi
       fi
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$sid" "$cfg" "$acct" "$pane" "$pid" "$cwd" "$tier" "$disp"
+      # A network-blocked session with a live pane is RESUME-IN-PLACE, not RECOVERABLE: the distinction
+      # is the whole point of the kind column, and collapsing it is what would send a transplant at it.
+      [ "$kind" = network ] && [ "$disp" = RECOVERABLE ] && disp=RESUME-IN-PLACE
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$sid" "$cfg" "$acct" "$pane" "$pid" "$cwd" "$tier" "$disp" "$kind"
     done
   done <<EOF
 $(lr_config_dirs)
 EOF
 }
+# `~/.claude` and `~/.claude-next` are ONE account behind a mirror, so a live `next` session is
+# enumerated TWICE and the census double-counts the exact rows an operator is about to act on
+# (measured 2026-09-09: 3 of 6 network-blocked live panes appeared twice, once as acct `.claude`).
+# The resume-sessions skill has always stated the rule -- "a session in BOTH = one next session" --
+# and this census never applied it. Keep the row whose account is NOT the bare mirror.
+lf_dedup_mirror() { awk -F'\t' '
+  { sid=$1; acct=$3
+    if (!(sid in seen)) { ord[++k]=sid; seen[sid]=$0; sacct[sid]=acct }
+    else if (sacct[sid]==".claude" && acct!=".claude") { seen[sid]=$0; sacct[sid]=acct } }
+  END { for (i=1;i<=k;i++) print seen[ord[i]] }' ; }
 lf_print_census() { # stdin: TSV rows
   local sid cfg acct pane pid cwd tier disp n=0
-  printf '%-9s %-6s %-6s %-7s %-22s %-14s %s\n' SID ACCT PANE PID TIER DISPOSITION CWD
-  while IFS=$'\t' read -r sid _cfg acct pane pid cwd tier disp; do
+  printf '%-9s %-6s %-6s %-7s %-22s %-16s %-8s %s\n' SID ACCT PANE PID TIER DISPOSITION KIND CWD
+  while IFS=$'\t' read -r sid _cfg acct pane pid cwd tier disp kind; do
     [ -n "$sid" ] || continue; n=$((n+1))
-    printf '%-9s %-6s %-6s %-7s %-22s %-14s %s\n' "${sid:0:8}" "$acct" "$pane" "$pid" "$tier" "$disp" "$cwd"
+    printf '%-9s %-6s %-6s %-7s %-22s %-16s %-8s %s\n' "${sid:0:8}" "$acct" "$pane" "$pid" "$tier" "$disp" "${kind:--}" "$cwd"
   done
-  [ "$n" -gt 0 ] || echo "(no limit-blocked session anywhere)"
+  [ "$n" -gt 0 ] || echo "(no blocked session anywhere — no cap, no network/stall death)"
 }
 
 # ── CAPACITY: wait on the NON-charging probe, never spend the budget ─────────────────────────────
@@ -216,7 +249,7 @@ lf_report() { # $1=run dir
 
 case "$MODE" in
   locate)
-    rows="$(lf_locate)"
+    rows="$(lf_locate | lf_dedup_mirror)"
     if [ "$JSON" = 1 ]; then
       printf '%s\n' "$rows" | /usr/bin/python3 -c '
 import sys,json
@@ -230,13 +263,14 @@ print(json.dumps(out,indent=1))'
     exit 0 ;;
   recover)
     RUN="$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$FLEET_DIR/$RUN"; : > "$FLEET_DIR/$RUN/results.tsv"
-    rows="$(lf_locate)"; printf '%s\n' "$rows" > "$FLEET_DIR/$RUN/census.tsv"
+    rows="$(lf_locate | lf_dedup_mirror)"; printf '%s\n' "$rows" > "$FLEET_DIR/$RUN/census.tsv"
     printf '%s\n' "$rows" | lf_print_census >&2
     n=0; worst=0
-    while IFS=$'\t' read -r sid cfg acct pane pid cwd tier disp; do
+    while IFS=$'\t' read -r sid cfg acct pane pid cwd tier disp kind; do
       [ -n "$sid" ] || continue
       case "$disp" in
         RECOVERABLE) : ;;
+        RESUME-IN-PLACE) lf_row "$sid" "$pane" "$pane" "$acct" "-" "skipped" "network/stall death, NOT a cap — this account is fine; resume IN PLACE: type '/limit-recover resume' in pane $pane"; continue ;;
         NO-PANE) pane="-" ;;
         DUPLICATE) lf_row "$sid" "$pane" "$pane" "$acct" "-" "parked" "DUPLICATE — more than one live process; resolve with --duplicates first"; worst=1; continue ;;
         *) lf_row "$sid" "$pane" "$pane" "$acct" "-" "skipped" "$disp"; continue ;;
@@ -252,7 +286,7 @@ EOF
     exit "$worst" ;;
   one)
     RUN="${LR_FLEET_RUN:-one-$(date -u +%Y%m%dT%H%M%SZ)}"; mkdir -p "$FLEET_DIR/$RUN"; : > "$FLEET_DIR/$RUN/results.tsv"
-    row="$(lf_locate | awk -F'\t' -v s="$SID" '$1 == s { print; exit }')"
+    row="$(lf_locate | lf_dedup_mirror | awk -F'\t' -v s="$SID" '$1 == s { print; exit }')"
     if [ -z "$row" ]; then
       # not limit-blocked per the census — the caller may still know better (a request from a driver
       # that audited it); fall back to the registry for the pane and the store for the cfg.
@@ -262,7 +296,7 @@ EOF
       [ -n "$cfg" ] || { echo "lr-fleet: --one $SID — no transcript in any store" >&2; exit 2; }
       acct="$(lf_acct_of_cfg "$cfg")"; pane="${SOURCE_PANE:--}"; cwd="$(grep -o '"cwd":"[^"]*"' "$cfg"/projects/*/"$SID".jsonl 2>/dev/null | tail -1 | cut -d'"' -f4)"; tier="$(lr_tier_from_transcript "$cfg" "$SID" 2>/dev/null | tr ' ' '/' || true)"
     else
-      IFS=$'\t' read -r _ cfg acct pane pid cwd tier disp <<<"$row"
+      IFS=$'\t' read -r _ cfg acct pane pid cwd tier disp kind <<<"$row"
       [ -n "$SOURCE_PANE" ] && pane="$SOURCE_PANE"
       case "$disp" in TRANSPLANTED*) echo "lr-fleet: --one $SID — already $disp; nothing to do" >&2; exit 0 ;; esac
     fi
@@ -273,14 +307,16 @@ EOF
   enqueue)
     mkdir -p "$STATE/requests"
     n=0
-    while IFS=$'\t' read -r sid cfg acct pane pid cwd tier disp; do
+    while IFS=$'\t' read -r sid cfg acct pane pid cwd tier disp kind; do
       [ -n "$sid" ] || continue
+      # enqueue hands the poller a TRANSPLANT request; only a real cap earns one.
       case "$disp" in RECOVERABLE|NO-PANE) : ;; *) continue ;; esac
+      [ "$kind" = limit ] || continue
       jq -n --arg sid "$sid" --arg target "$TARGET" --arg pane "$([ "$pane" != "-" ] && printf '%s' "$pane")" --arg by "${CLAUDE_CODE_SESSION_ID:-lr-fleet}" --arg ts "$(lf_now)" \
         '{sid:$sid, target:$target, source_pane:$pane, requested_by:$by, ts:$ts}' > "$STATE/requests/$sid.json"
       echo "lr-fleet: enqueued ${sid:0:8} (pane ${pane}, $acct → $TARGET) for the reset poller: $STATE/requests/$sid.json"; n=$((n+1))
     done <<EOF
-$(lf_locate)
+$(lf_locate | lf_dedup_mirror)
 EOF
     if [ "$n" -gt 0 ]; then
       echo "lr-fleet: $n request(s) written. The poller drains them on its next tick (≤10 min); to run it now:"
