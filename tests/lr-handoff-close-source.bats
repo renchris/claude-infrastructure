@@ -37,6 +37,11 @@ setup() {
   # --close-source drives handoff-fire, whose capacity_gate refuses a net-new fire above 2.0/core.
   # Unpinned, this suite would go red-by-LOAD on a busy box rather than by its subject.
   export CC_FIRE_CAPACITY_GATE=off
+  # This suite's lr-fire-resume stub is a bare argv printer, so it carries no parser arms — and the
+  # live-parser preflight (lr-handoff refuses to mint a launcher the LIVE lr-fire-resume cannot
+  # parse) would refuse every case here on a subject this suite does not test. Its own cases live
+  # beside the guard.
+  export LRH_LIVE_PARSER_CHECK=off
   export CC_FIRE_HEADROOM_GATE=off
   STUB="$BATS_TEST_TMPDIR/bin"; mkdir -p "$STUB"
   export KITTY_LOG="$BATS_TEST_TMPDIR/kitty.log"; : > "$KITTY_LOG"

@@ -40,6 +40,9 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HANDOFF="$REPO/scripts/limit-recover/lr-handoff.sh"
+  # See the note in tests/lr-handoff-close-source.bats: the lr-fire-resume stub here is a bare argv
+  # printer with no parser arms, and the live-parser preflight is not this suite's subject.
+  export LRH_LIVE_PARSER_CHECK=off
 
   # Fixture $HOME itself, not merely a $H we remember to pass through: lr-handoff derives
   # $LR, the account config dirs and the bundle root from $HOME, so anything reached without
@@ -322,4 +325,38 @@ EOF
   run gen "lrhq0012-0000-0000-0000-000000000012" "$BATS_TEST_TMPDIR/repo" --model opus5
   [ "$status" -eq 2 ]
   [[ "$output" == *"--model must be"* ]]
+}
+
+# ── the LIVE-PARSER preflight ────────────────────────────────────────────────────────────────────
+# Measured 2026-09-09 on an E2E of --in-place: the driver ran from a worktree whose lr-fire-resume.sh
+# parses --permission-mode and minted a launcher that execs $HOME/.claude/... — the LIVE symlink into
+# a shared checkout 25 commits behind trunk. The live copy printed `unknown arg --permission-mode`
+# and exited; the recycle watcher then waited 90s for a claude process that could never appear, and
+# the run ended with the pane a tombstoned husk whose session had ALREADY been transplanted. Code
+# that is correct and landed but not live (the 🚀 rung) produced the exact outcome this wave exists
+# to prevent. These two cases pin the refusal and its POSITION — before the first irreversible step.
+parser_stub() { # $@ = the flags the fake live parser accepts
+  { echo '#!/bin/bash'; echo 'case "$1" in'
+    for f in "$@"; do echo "  $f) ;;"; done
+    echo 'esac'; } > "$HOME/.claude/scripts/limit-recover/lr-fire-resume.sh"
+  chmod +x "$HOME/.claude/scripts/limit-recover/lr-fire-resume.sh"
+}
+@test "live-parser preflight: a live lr-fire-resume missing a flag REFUSES, before any transplant" {
+  unset LRH_LIVE_PARSER_CHECK
+  parser_stub --branch --model --effort --prompt          # no --permission-mode: the measured case
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  run gen "lrhq0013-0000-0000-0000-000000000013" "$BATS_TEST_TMPDIR/repo"
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"does not parse: --permission-mode"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"deploy-live.sh"* ]] || { echo "$output"; false; }
+  # POSITION is the property: the transplant must not have run.
+  [ "$(grep -c 'transplant ok' <<<"$output")" = 0 ]
+}
+@test "live-parser preflight CONTROL: a live parser that knows every flag does not refuse" {
+  unset LRH_LIVE_PARSER_CHECK
+  parser_stub --branch --model --effort --permission-mode --prompt
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  run gen "lrhq0014-0000-0000-0000-000000000014" "$BATS_TEST_TMPDIR/repo"
+  [ "$status" -ne 5 ]
+  [ "$(grep -c 'does not parse' <<<"$output")" = 0 ]
 }
