@@ -292,8 +292,9 @@ cc_sp_load_beat() { # → 0 when cb_* is available, 1 otherwise. Idempotent.
 # lstart cannot be proven either way and is NOT counted — same direction rule.
 #
 # COST: one jq slurp (ONE process over the whole dir, not one per file — the hard requirement stated
-# at cc_sp_operator_state) plus at most one `ps`, and the `ps` is skipped entirely when no beat is
-# mid-turn. Measured on a 1,527-file fixture: the slurp is ~13 ms.
+# at cc_sp_operator_state) plus at most two `ps` (the TZ-pinned sample and the rollout-grace ambient
+# one described at the query below), and both are skipped entirely when no beat is mid-turn. Measured
+# on a 1,527-file fixture: the slurp is ~13 ms.
 cc_sp_active() { # → live MID-TURN session count | empty + rc 1 when unmeasurable
   if [ -n "${CC_SP_ACTIVE_OVERRIDE:-}" ]; then
     cc_sp_is_int "$CC_SP_ACTIVE_OVERRIDE" || return 1
@@ -360,17 +361,38 @@ EOF
   # after the SAME normalisation hooks/session-beat.sh applies when it writes the field (squeeze
   # runs of whitespace, trim both ends), so the two strings are comparable by construction.
   #
+  # TZ=UTC ON THE SAMPLE, AND AN AMBIENT SAMPLE BESIDE IT FOR ONE RELEASE. `ps -o lstart=` renders in
+  # the ambient zone on BOTH sides of this comparison, so until 2026-09-08 the census was keyed on
+  # the writer's zone and the reader's zone happening to agree — 0 of 51 live beats matched a
+  # `TZ=UTC` reader, and every row would have flipped to "dead" at the next DST change while the
+  # sessions were still alive (memory process-start-time-renders-in-ambient-timezone). The writer now
+  # pins TZ=UTC (hooks/session-beat.sh:82), so the UTC sample is the authoritative one and the only
+  # one the positive control is taken from.
+  #
+  # The AMBIENT sample is a ROLLOUT GRACE, not a second identity rule: every beat already on disk at
+  # deploy time carries an ambient rendering and would mismatch a UTC-only reader until that session
+  # took its next turn — an undercount of the ACTIVE term, i.e. the gate erring OPEN for minutes.
+  # Accepting either rendering costs one extra `ps` fork per call (the expensive term here is the jq
+  # slurp, not this) and cannot manufacture a false ACTIVE: an ambient hit is still this pid's own
+  # start time, read live, just written in another zone. DELETE the ambient section once no beat
+  # predating the TZ pin can be live — a `.t` older than the deploy is the falsifier.
+  #
   # COUNTED AS DISTINCT PIDS, NOT AS BEAT LINES, and this is the same correction cc_sp_trees already
   # carries one function above (it counts TREES, skipping any process whose parent is in-family).
   # Two beats can resolve to ONE claude ancestor — session-beat.sh walks up to the nearest
   # claude/claude.exe process, and subagents share their lead's — so counting rows would report two
   # ACTIVE units for one session tree. It would also be the wrong DIRECTION for this term: the whole
   # census is a proven lower bound, and a duplicate is not evidence of a second concurrent turn.
-  n="$(printf '%s\n@@\n%s' "$(ps -o pid=,lstart= -p "$$${pids}" 2>/dev/null)" "$pairs" | awk -v self="$$" '
+  n="$(printf '%s\n@@\n%s\n@@\n%s' \
+        "$(TZ=UTC ps -o pid=,lstart= -p "$$${pids}" 2>/dev/null)" \
+        "$(ps -o pid=,lstart= -p "$$${pids}" 2>/dev/null)" \
+        "$pairs" | awk -v self="$$" '
     function norm(s) { gsub(/[ \t]+/, " ", s); sub(/^ /, "", s); sub(/ $/, "", s); return s }
-    /^@@$/ { sec = 1; next }
-    sec == 0 { p = $1; $1 = ""; live[p] = norm($0); seen[p] = 1; next }
-    { p = $1; $1 = ""; if ((p in seen) && live[p] == norm($0)) hit[p] = 1 }
+    /^@@$/ { sec++; next }
+    sec == 0 { p = $1; $1 = ""; utc[p] = norm($0); seen[p] = 1; next }
+    sec == 1 { p = $1; $1 = ""; amb[p] = norm($0); next }
+    { p = $1; $1 = ""; v = norm($0)
+      if ((p in seen) && (utc[p] == v || ((p in amb) && amb[p] == v))) hit[p] = 1 }
     END { if (!(self in seen)) exit 1; n = 0; for (p in hit) n++; printf "%d", n }' 2>/dev/null)" || return 1
   cc_sp_is_int "$n" || return 1
   printf '%s' "$n"

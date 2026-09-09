@@ -506,6 +506,48 @@ EOF
   [ "$output" = s-auto ]
 }
 
+# ══ TZ PIN — the (pid,lstart) identity must not carry either side's zone ═════════════════════════
+#
+# Case 32 RUNS ON TRUNK and fails there for exactly one defect: `ps -o lstart=` renders in the AMBIENT
+# zone, and until 2026-09-08 the writer (hooks/session-beat.sh:82) and this reader both sampled it
+# unpinned — so the census only worked while the two zones agreed. Measured over 51 live beats: 0
+# matched a `TZ=UTC` reader, 22 matched an ambient one, and at the next DST change every row would
+# have read as a different process while the sessions were still alive (memory
+# process-start-time-renders-in-ambient-timezone).
+
+@test "32 TZ PIN (runs on trunk) — a beat written in one zone is ACTIVE for a census read in another" {
+  # The REAL producer, under Chicago; then the REAL census, under UTC and under Tokyo. All three
+  # zones must agree on one live mid-turn session. On trunk the beat carries Chicago text and both
+  # readers sample their own zone, so both censuses report 0 — the ACTIVE term deleted by a clock.
+  printf '%s' '{"session_id":"tzr","cwd":"/tmp","prompt":"hello"}' \
+    | env TZ=America/Chicago CC_BEAT_DIR="$CC_BEAT_DIR" /bin/bash "$REPO/hooks/session-beat.sh" prompt
+  [ "$(jq -r '.kind' "$CC_BEAT_DIR/tzr.json")" = prompt ]
+  [ -n "$(jq -r '.lstart' "$CC_BEAT_DIR/tzr.json")" ]
+  run env -u CC_SP_ACTIVE_OVERRIDE TZ=UTC bash -c '. "$1"; cc_sp_active' _ "$SP"
+  [ "$status" -eq 0 ]
+  [ "$output" = 1 ]
+  run env -u CC_SP_ACTIVE_OVERRIDE TZ=Asia/Tokyo bash -c '. "$1"; cc_sp_active' _ "$SP"
+  [ "$status" -eq 0 ]
+  [ "$output" = 1 ]
+}
+
+@test "33 ROLLOUT GRACE — a pre-pin AMBIENT beat still counts, and a WRONG lstart still does not" {
+  # The pin's own fail direction, guarded. Every beat already on disk when the writer changed carries
+  # an ambient rendering; a UTC-only reader would mismatch all of them until each session's next turn
+  # and undercount the ACTIVE term for minutes (the gate erring OPEN). The grace accepts either
+  # rendering of a LIVE pid — never a third string, which is what the `recy` row here pins: the
+  # recycled-pid case a liveness check on pid alone cannot see must still not count.
+  local ls; ls="$(ps -o lstart= -p $$ | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$ls" ]
+  printf '{"sid":"old","t":999990,"kind":"prompt","pid":%s,"lstart":"%s","who":"operator","seq":1}\n' \
+    "$$" "$ls" > "$CC_BEAT_DIR/old.json"
+  printf '{"sid":"recy","t":999989,"kind":"prompt","pid":%s,"lstart":"Mon Jan  1 00:00:00 2001","who":"operator","seq":1}\n' \
+    "$$" > "$CC_BEAT_DIR/recy.json"
+  run env -u CC_SP_ACTIVE_OVERRIDE bash -c '. "$1"; cc_sp_active' _ "$SP"
+  [ "$status" -eq 0 ]
+  [ "$output" = 1 ]
+}
+
 # ══ RED-PROOF (recorded — a control that cannot fail proves nothing) ═════════════════════════════
 #
 # Run against PRISTINE origin/main (the tree BEFORE this wave), reproduce with:
