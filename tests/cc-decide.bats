@@ -638,3 +638,56 @@ _raw_pkt() {  # $1=id $2=class [$3=extra jq object merged in]
   [ "$status" -eq 0 ]
   printf '%s' "$output" | jq -e '.[0].conviction == 40 and .[0].receipt == "a => b"' >/dev/null
 }
+
+# ── W3-B2: ONE jq pass for `list --json`, with the tolerance the loop had ──────────────────────
+# The old shape forked one jq PER PACKET FILE — 198 files, 199 forks, measured 1.265 s and 56% of
+# an uncached wrap-ledger --machine, on a path two Stop-path consumers call at every close
+# (docs/research/exhaustive-drive-2026-09-08/W2-B2-stop-path-hot-term.md).
+#
+# THE WHOLE RISK IS IN THE FAILURE MODE, so the fixture is built around it: jq stops at the FIRST
+# unparseable input, so a bare one-pass drops every packet AFTER a bad one. The bad file must sit
+# in the MIDDLE of glob order — a bad file LAST passes under the broken version and proves nothing.
+
+_pkt() {  # $1=id  [$2=raw body override]
+  if [ -n "${2:-}" ]; then printf '%s' "$2" > "$CC_DECISIONS_DIR/$1.json"; return 0; fi
+  jq -n --arg id "$1" '{id:$id, class:"C", status:"open", what_plain:("packet " + $id),
+                        created:"2026-09-01T00:00:00Z", conviction:40, receipt:"probe => r"}' \
+    > "$CC_DECISIONS_DIR/$1.json"
+}
+
+@test "W3-B2: a malformed packet in the MIDDLE of glob order does NOT drop the ones after it" {
+  mkdir -p "$CC_DECISIONS_DIR"
+  _pkt a1; _pkt a2; _pkt a3 '{"id":"a3","class":"C","status":"open"'; _pkt a4     # a3 truncated
+  # STDOUT ONLY. `run` merges stderr into $output, and the fallback deliberately WARNS there, so
+  # feeding $output to jq parses the warning line and dies (exit 5) — the instrument, not the data.
+  bash "$CD" list --open --class C --json > "$BATS_TEST_TMPDIR/out.json" 2>"$BATS_TEST_TMPDIR/out.err"
+  # a4 is the assertion that matters: it comes AFTER the bad file and the bare one-pass loses it.
+  ids="$(jq -r '[.[].id] | sort | join(",")' "$BATS_TEST_TMPDIR/out.json")"
+  [ "$ids" = "a1,a2,a4" ]
+}
+
+@test "W3-B2: the parse failure is REPORTED, never swallowed — the pre-fix binary had no tell" {
+  mkdir -p "$CC_DECISIONS_DIR"
+  _pkt b1; _pkt b2 '{"id":"b2" bad'; _pkt b3
+  run bash "$CD" list --open --class C --json
+  [ "$status" -eq 0 ]
+  # bats merges stderr into $output; the count must be the real 1, not the 0 a subshell counter
+  # would report (MEMORY.md assignment-inside-command-substitution-never-escapes).
+  echo "$output" | grep -qF '1 unparseable packet file(s)'
+}
+
+@test "W3-B2 CONTROL: a clean store reports NOTHING on stderr and takes the fast path" {
+  mkdir -p "$CC_DECISIONS_DIR"
+  _pkt c1; _pkt c2; _pkt c3
+  run bash "$CD" list --open --class C --json
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '[.[].id] | sort | join(",")')" = "c1,c2,c3" ]
+  ! echo "$output" | grep -q 'unparseable' || false
+}
+
+@test "W3-B2 CONTROL: an EMPTY store still emits [] — read-fine-zero-rows, not silence" {
+  mkdir -p "$CC_DECISIONS_DIR"
+  run bash "$CD" list --open --class C --json
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -c '.')" = "[]" ]
+}

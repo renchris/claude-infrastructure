@@ -385,16 +385,51 @@ cmd_list() {
   # is a legacy `shipland-esc-*` packet the SFOLD prelude already resolves to "open", and shipping
   # a view in which that field reads null would hand every consumer the exact `select` bug the fold
   # exists to fix. The file on disk is untouched — inv7 governs the PACKET, not the view of it.
+  #
+  # ── ONE jq PASS, WITH A TOLERANT FALLBACK (W2-B2) ────────────────────────────────────────────
+  # This leg used to fork one `jq` PER PACKET FILE — 198 files, 199 forks — and measured 1.265 s,
+  # 56% of an uncached `wrap-ledger.sh --machine` (2.251 s), which two Stop-path consumers call
+  # on every Stop (docs/research/exhaustive-drive-2026-09-08/W2-B2-stop-path-hot-term.md). `jq`
+  # takes many file arguments, so the whole board is one fork: measured 0.065 s, 19.5x.
+  #
+  # 🚨 THE ONE-PASS ALONE IS WRONG, AND SILENTLY. `jq` stops at the FIRST unparseable input, so
+  # ONE malformed packet drops EVERY packet after it in glob order — measured on a 4-packet
+  # fixture with the 3rd truncated: the per-file loop returns pkt1,pkt2,pkt4 and the bare one-pass
+  # returns pkt1,pkt2. That is a silent UNDER-COUNT of the open class-C packets that decide the
+  # `⛔` rung, i.e. the failure mode where a close is certified over a decision nobody answered.
+  # So a NON-ZERO jq exit here means "this pass is INCOMPLETE", never "zero rows" (MEMORY.md
+  # parse-failures-are-verdicts-not-noise · suppressed-stderr-turns-a-failed-command-into-a-zero):
+  # fall back to the per-file loop, which reproduces the old tolerance EXACTLY, and REPORT the
+  # parse-failure count on stderr. That report is strictly better than the pre-fix binary, which
+  # drops a malformed packet with no tell at all. Tolerant path measured 0.095 s, 13.3x.
+  #
+  # The failure COUNT is tallied through a temp file, not `bad=$((bad+1))` inside the loop: the
+  # loop runs inside `$( )`, so any variable it assigns dies with that subshell and the count would
+  # always report 0 (MEMORY.md assignment-inside-command-substitution-never-escapes — the first
+  # prototype had exactly that bug).
   if [ "$as_json" -eq 1 ]; then
-    local rows
+    local rows="" fast badf bad=0
     if [ -d "$DECISIONS_DIR" ]; then
-      rows="$(
-        for f in "$DECISIONS_DIR"/*.json; do
-          [ -e "$f" ] || continue
-          jq -c --arg mode "$mode" --arg classf "$classf" "$CELL$SFOLD$LIST_SELECT"'
-            | .status = sopen' "$f" 2>/dev/null
-        done | jq -s '.' 2>/dev/null
-      )"
+      set -- "$DECISIONS_DIR"/*.json
+      if [ -e "$1" ]; then
+        if fast="$(jq -c --arg mode "$mode" --arg classf "$classf" "$CELL$SFOLD$LIST_SELECT"'
+              | .status = sopen' "$@" 2>/dev/null)"; then
+          rows="$(printf '%s\n' "$fast" | jq -s '.' 2>/dev/null)"
+        else
+          badf="$(mktemp "${TMPDIR:-/tmp}/ccdecide-bad.XXXXXX")" || badf=""
+          rows="$(
+            for f in "$@"; do
+              [ -e "$f" ] || continue
+              jq -c --arg mode "$mode" --arg classf "$classf" "$CELL$SFOLD$LIST_SELECT"'
+                | .status = sopen' "$f" 2>/dev/null \
+                || { [ -n "$badf" ] && printf '%s\n' "$f" >> "$badf"; }
+            done | jq -s '.' 2>/dev/null
+          )"
+          if [ -n "$badf" ]; then bad="$(wc -l < "$badf" | tr -d ' ')"; rm -f "$badf"; fi
+          printf 'cc-decide: %s unparseable packet file(s) — served the per-file fallback\n' \
+            "${bad:-0}" >&2
+        fi
+      fi
     fi
     [ -n "${rows:-}" ] || rows="[]"
     printf '%s\n' "$rows"
