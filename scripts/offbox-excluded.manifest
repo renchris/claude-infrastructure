@@ -287,6 +287,23 @@ tests/postland-verify-bisect-bound.bats
 # NOT a red — it named zero failing tests. It is here because a suite measured in TENS OF MINUTES
 # cannot be part of a per-commit second opinion, which is a statement about cost, not correctness.
 tests/postland-verify.bats
+# 2026-09-09, measured through this producer's own runner at the land that introduced the suite:
+#   scripts/offbox-run.sh suites tests/postland-verify-passfloor.bats
+#   => cut  ok=1  notok=0  rc=124  secs=300
+# CUT at the 300s bound with ZERO failing tests — a non-verdict on COST, exactly like
+# postland-verify.bats above, and it is in this section for the same reason: the suite's subject IS
+# the on-box verdict producer, so the off-box second opinion is the cheapest coverage in the file to
+# forgo. On-box, the four tests measured 137s / 315s / 667s / 286s (the spread is box load, 20-112),
+# and the cost is structural rather than incidental: each test drives 4 full postland sweeps, and a
+# sweep mints a detached worktree, runs the prelints and runs a nested bats corpus.
+# THE CHEAP FIX WAS CONSIDERED AND REFUSED. Getting under 300s means keeping roughly one test, and
+# the three that would go are the CONTROLS — the wedge control, the kill-switch red-proof, and the
+# "a suite that passes at its own floor still REDs" non-weakening proof. A suite that fits the bound
+# by deleting its own red-proofs is worth less than no off-box signal at all. It still runs in full
+# in the on-box corpus, in /ship's smoke, and in every gate, unchanged.
+# RE-ADMISSION CONDITION, per this file's own rule: delete this entry when the SUITE gets faster —
+# not when the bound moves.
+tests/postland-verify-passfloor.bats
 
 # ── 2026-09-05: FIFTH SEEDING — and the triage says the LIST IS NOT THE BLOCKER ──────────────────
 # backlog 8fd1919f7769 ("T1H can never fire … triage per suite: machine-coupled vs genuinely

@@ -724,10 +724,61 @@ FAILNAME=()
 # prelints, the C13b sentinel) never enter it and are never delayed: they reproduce by construction,
 # so a second window cannot tell them anything.
 LADDER_FAILING=()
+# ── C31 · THE FLOOR ROTS, AND ONLY THE THING IT IS UNBLOCKING CAN REFRESH IT ─────────────────────
+# C30's control is $LASTGREEN, and $LASTGREEN advances on ONE event: a GREEN verdict. So the
+# exonerator's reach is a function of the very outcome it exists to make reachable — no green ⇒ a
+# floor that drifts further from trunk every sweep ⇒ a weaker probe ⇒ no green. A bootstrap circle
+# (memory: deployed-layer-bootstrap-circle), and it is not a projection. MEASURED 2026-09-09 against
+# the live $LASTGREEN 24c598bac1c7 (2026-09-03, 428 commits down) over the nine suites that carry the
+# recent convictions:
+#     tests/drain-brief.bats          ABSENT at the floor          (5 of the last 60 stamps)
+#     tests/cc-reaper.bats            +22 test names since         (10)
+#     tests/goal-inert-watch.bats     +14 test names since         (7)
+#     tests/autonomy-sweep.bats       +10 test names since         (5)
+#     tests/deploy-parity.bats        +9  test names since         (2)
+# Every one of those is, by floor_exonerates' own code, a guaranteed NON-VERDICT: an absent file
+# takes the `floor N/A … differential by construction` branch, and a test name that does not exist at
+# the floor makes the `-f` filter match nothing, which the `tap_plan > 0` guard correctly converts to
+# rc 126 ⇒ `conviction stands`. Fail-closed is right; what is wrong is that the abstention rate RISES
+# with the length of the outage. The four suites carrying the most new test names are precisely the
+# chronic flakes C30 was built to exonerate.
+#
+# THE EVIDENCE C30 NEEDS IS ALREADY BEING PRODUCED AND THROWN AWAY. A whole-tree green is a STRONGER
+# claim than the probe uses: the probe asks one question about ONE file — "was this suite ever
+# observed to pass at a commit below the one under test?" — and every full-plan corpus run answers it
+# for the ~590 suites that did not fail, red run or not. Recording that complement gives each file a
+# floor ~3.2h old (the sweep period) that REFRESHES on red sweeps, instead of one that can only be
+# refreshed by the green this whole mechanism is trying to earn.
+#
+# STRICTLY THE SAME WEAKENING DIRECTION AS C30, AND A NARROWER ONE. The probe's meaning is unchanged:
+# floor rc=1 ⇒ the failure predates the window ⇒ flake; rc=0 ⇒ RED stands; anything else ⇒ RED
+# stands. Only the CONTROL changes, from "a tree on which every suite passed" to "a commit at which
+# THIS suite was observed to pass in a plan-complete run" — which is the weaker premise the argument
+# actually rests on. And because the per-file floor is NEARER, the differential window it spans is
+# SMALLER, so a genuine regression is convicted at least as readily as it is today: a suite that
+# passes at its own floor and fails at the tip still reds, and tests/postland-verify-passfloor.bats
+# runs exactly that as a control.
+#
+# CONSERVATIVE ON THE WRITE SIDE, which is where an unearned green would have to come from. A row is
+# written ONLY from a run that (i) bats reported no shortfall for, (ii) exited 0 or 1 — the only two
+# codes that speak about the tree — and (iii) completed exactly the tests it planned. A file with ANY
+# not-ok in the corpus TAP is excluded even when the ladder later cleared it as a flake: "passed" here
+# means passed outright, not passed-on-retry.
+PASSES="$STATE/passes"                             # TSV "<file>\t<epoch>\t<sha>" — last row per file wins
+PASS_MODE="${CC_POSTLAND_PASS_FLOOR:-on}"          # C31 kill switch: off ⇒ C30 reads only $LASTGREEN
+PASS_TTL="${CC_POSTLAND_PASS_TTL_S:-604800}"       # a pass observation older than this is not a floor.
+# 7 days, and it is a STALENESS bound rather than a correctness one: an older observation is still
+# true, but a floor that far back re-acquires the very rot this clause exists to remove.
+PASS_KEEP="${CC_POSTLAND_PASS_KEEP:-4000}"         # rows retained — a BOUND, not an archive (~6 runs
+# of a 593-suite corpus). The ledger is rewritten in place each run, so this is its whole growth story.
 FLOOR_MODE="${CC_POSTLAND_FLOOR_EXONERATE:-on}"   # C30 kill switch: off ⇒ C29's verdict stands alone
 FLOOR_BUDGET="${CC_POSTLAND_FLOOR_BUDGET:-6}"    # max floor probes per run; past it a conviction stands UNPROBED
 FLOOR_SPENT=0
 FLOOR_EXONERATED=()
+# WHICH commit the last probe actually ran at — an out-parameter, because with C31 the floor is no
+# longer always $LASTGREEN and the flake row + log line must name the control that was really used.
+# A row asserting the wrong floor is worse than none: it is the evidence a later reader re-derives from.
+FLOOR_USED=""
 CONVICT_PENDING=0    # a ladder conviction seen in ONE window only: nothing proven yet ⇒ cut
 # ...and WHICH files those are, not merely that there were some. The flag alone decides the CUT
 # branch; the names are what a RED/HUNG verdict must NOT spend, since it adjudicated none of them.
@@ -1412,6 +1463,23 @@ tap_notok() { # <tap> → completed tests that FAILED. Same grammar as tap_done,
   # count a SUBSET of what tap_done counts — that implication is the whole point (C30).
   int_or_zero "$(grep -acE "$TAP_NOTOK_RE" "$1" 2>/dev/null | head -1 | tr -d '\n')"
 }
+# C31: the FILES carrying a not-ok, one per line, deduped — the same `not ok` → `# (in test file …)`
+# pairing classify_failures does, asking only for the left-hand side. It is spelled here rather than
+# reused from there because classify_failures needs the file→TESTNAME pairs and returns them through
+# a local, and because the ONE-GRAMMAR rule above is about the ARMING pattern: both readers arm on
+# $TAP_NOTOK_RE and neither re-spells it, which is the property that mattered when three spellings
+# disagreed about whether a tree was red.
+#
+# ITS CONSUMER USES IT AS A COMPLEMENT, so an under-count here would be the dangerous direction — a
+# missed file would be recorded as having PASSED. The `not ok` shapes that carry no `# (in test file)`
+# diagnostic are exactly the ones classify_failures' branch (b) cannot attribute either; the caller
+# therefore refuses to record ANYTHING from a run whose attributable count and whose raw not-ok count
+# disagree, rather than trusting this function to have seen them all.
+tap_failfiles() { # <tap> → newline-separated tests/*.bats paths that carry a not-ok
+  awk -v re="$TAP_NOTOK_RE" '$0 ~ re {p=1; next}
+      /^#/ && p { if (match($0, /[A-Za-z0-9_.\/-]+\.bats/)) { print substr($0,RSTART,RLENGTH); p=0 } }' "$1" 2>/dev/null \
+    | awk '!seen[$0]++'
+}
 # ── THE HARNESS'S OWN SHORTFALL — the one state bats reports and nothing here read (C36) ─────────
 # bats VALIDATES its own run: lib/bats-core/validator.bash:30 counts the `ok`/`not ok` lines it
 # forwarded, compares them against the `1..N` header it forwarded first, and on a mismatch prints
@@ -1879,6 +1947,102 @@ conviction_observe() { # <file> <tree> <sha> → 0 when a PRIOR, time-SEPARATED 
   printf '%s\t%s\t%s\t%s\t%s\n' "$now" "$f" "$tree" "$sha" "${load:-}" >> "$CONVICTIONS" 2>/dev/null || true
   [ "${prior:-0}" -ge 1 ]
 }
+# ════ C31 · THE PER-FILE PASS LEDGER — the floor C30 reads, refreshed by RED sweeps ══════════════
+# See the C31 block beside $PASSES for the measurement and the safety argument. These three functions
+# are the whole mechanism: one writer, one reader, one bound.
+passes_record() { # <tapfile> <rc> — upsert "<file> passed at $CUR_SHA" for every corpus file with no not-ok
+  local rc="${2:-1}" plan done_n nf attributable tmp now f pass_list nl
+  [ "$PASS_MODE" != "off" ] || return 0
+  [ -n "${CUR_SHA:-}" ] && [ -n "${CORPUS_LIST:-}" ] || return 0
+  [ -s "${1:-}" ] || return 0
+  # (ii) THE ONLY TWO CODES THAT SPEAK ABOUT THE TREE. Same predicate as C13c/C23 — 124 is our own
+  # bound, >128 a machine signal, 126/127 could-not-execute, and none of them licenses the claim
+  # "these 590 suites passed here".
+  case "$rc" in 0|1) ;; *) return 0 ;; esac
+  # (i) + (iii) THE RUN MUST HAVE COVERED ITS PLAN. tap_shortfall is bats' own count and is the
+  # authoritative reader; the plan/done comparison catches the case bats does not warn about (a run
+  # killed after the last line it forwarded). A truncated run's SILENCE about a suite is not a pass —
+  # it is the suite never having been reached, which is the false-green this guard exists to refuse.
+  [ -z "$(tap_shortfall "$1")" ] || return 0
+  plan="$(tap_plan "$1")"; done_n="$(tap_done "$1")"
+  [ "$plan" -gt 0 ] && [ "$done_n" -eq "$plan" ] || return 0
+  # THE COMPLEMENT IS ONLY SAFE WHEN EVERY FAILURE WAS ATTRIBUTED. An unattributable not-ok (branch
+  # (b) of classify_failures — a `not ok` with no `# (in test file …)` diagnostic) belongs to SOME
+  # file and we cannot say which, so subtracting the attributable set would record that file as
+  # having passed. Refuse the whole run instead: rare, and the next sweep records it.
+  nf="$(tap_notok "$1")"
+  attributable="$(tap_failfiles "$1")"
+  if [ "$nf" -gt 0 ]; then
+    [ -n "$attributable" ] || {
+      log "C31 ledger SKIPPED: $nf not-ok line(s) and none attributable to a file — the complement would record the guilty suite as passing"
+      return 0; }
+  fi
+  # THE PASSING SET FIRST, and the drop-set is built FROM IT — never from the corpus. Dropping every
+  # corpus file's row and re-adding only the passers looks equivalent and is the bug that makes this
+  # whole clause INERT: a chronic flake FAILS in the very sweep that convicts it, so its prior floor
+  # would be erased seconds before floor_exonerates reads it, the probe would fall back to $LASTGREEN
+  # every single time, and C31 would be an elaborate no-op wearing C30's behaviour. A file that
+  # failed KEEPS its last observed pass. "The newest sha at which this file was seen to pass" is the
+  # whole contract, and a later failure is not evidence about that earlier commit.
+  pass_list="$(mktemp "$STATE/passes.list.XXXXXX" 2>/dev/null)" || return 0
+  nl="$(printf '\nx')"; nl="${nl%x}"            # a literal newline, safe under $( ) stripping
+  printf '%s\n' "$CORPUS_LIST" | awk 'NF' | while IFS= read -r f; do
+    # NO PIPE, and NOT `grep -q`. `printf … | grep -qxF` is the pipefail/SIGPIPE inversion this file
+    # already carries two notes about (:44 sets `-o pipefail`): grep -q exits at the FIRST match, the
+    # producer takes SIGPIPE, pipefail promotes that to 141, and the condition reads FALSE on the
+    # input it MATCHED (memory grep-q-under-pipefail-inverts-the-verdict). Here that error runs in the
+    # single direction this complement may never err in — a FAILING suite recorded as having PASSED,
+    # which is a false floor and therefore an unearned exoneration later.
+    #
+    # The case glob is exact where a bare substring test is not: both needle and haystack are wrapped
+    # in newlines, so it is a whole-LINE match and tests/cc-reaper.bats cannot mask
+    # tests/cc-reaper-extra.bats. It also forks nothing, once per corpus file.
+    case "$nl$attributable$nl" in
+      *"$nl$f$nl"*) continue ;;
+    esac
+    printf '%s\n' "$f"
+  done > "$pass_list" 2>/dev/null
+  if [ ! -s "$pass_list" ]; then rm -f "$pass_list"; return 0; fi
+  tmp="$(mktemp "$STATE/passes.XXXXXX" 2>/dev/null)" || { rm -f "$pass_list"; return 0; }
+  now="$(now_epoch)"
+  # Rewritten in place rather than appended-and-deduped-on-read, so the store's size tracks the
+  # CORPUS (bounded) and not the number of sweeps (unbounded).
+  {
+    if [ -s "$PASSES" ]; then
+      awk -F'\t' 'NR==FNR { drop[$0]=1; next } NF>=3 && !($1 in drop) { print }' \
+        "$pass_list" "$PASSES" 2>/dev/null || true
+    fi
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      printf '%s\t%s\t%s\n' "$f" "$now" "$CUR_SHA"
+    done < "$pass_list"
+  } > "$tmp" 2>/dev/null
+  rm -f "$pass_list"
+  # BOUND, newest-last: the file is written oldest-first above, so the tail is the newest slice.
+  if [ "$(wc -l < "$tmp" | tr -d ' ')" -gt "$PASS_KEEP" ]; then
+    tail -n "$PASS_KEEP" "$tmp" > "$tmp.b" 2>/dev/null && mv -f "$tmp.b" "$tmp" 2>/dev/null || true
+  fi
+  mv -f "$tmp" "$PASSES" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  return 0
+}
+pass_floor() { # <file> → the newest in-TTL sha at which THIS file was observed to pass, else ""
+  local f="$1" row age now sha ts
+  [ "$PASS_MODE" != "off" ] || return 0
+  [ -s "$PASSES" ] || return 0
+  # SPACE-separated on the way out, never the ledger's own tab: a literal tab inside a ${var%%…}
+  # pattern is invisible in a diff and the first reformat that touches this line silently turns the
+  # split into a no-op. Neither field can contain a space (an epoch and a sha), so `set --` is exact.
+  row="$(awk -F'\t' -v f="$f" 'NF>=3 && $1==f { ts=$2; sha=$3 } END { if (sha!="") print ts, sha }' "$PASSES" 2>/dev/null)"
+  [ -n "$row" ] || return 0
+  # shellcheck disable=SC2086
+  set -- $row
+  ts="${1:-}"; sha="${2:-}"
+  [ -n "$sha" ] || return 0
+  now="$(now_epoch)"; age=$(( now - ${ts:-0} ))
+  [ "$age" -ge 0 ] && [ "$age" -le "$PASS_TTL" ] || return 0
+  printf '%s\n' "$sha"
+}
+
 # ════ C30 · A CONVICTION MUST BE DIFFERENTIAL, AND C29 CANNOT ASK THAT ═══════════════════════════
 # C29 asks "did this file fail in TWO load windows"; it never asks "does it fail on a tree we already
 # PROVED green". Those come apart exactly where it matters, because C29's ledger is keyed on the FILE
@@ -1923,16 +2087,30 @@ conviction_observe() { # <file> <tree> <sha> → 0 when a PRIOR, time-SEPARATED 
 # run, each under FILE_TO in the retry band (the ladder's own measurement for these suites is 3.56s
 # against a 300s bound). Files past the budget keep their conviction UNPROBED — fail-closed — so a
 # run where the whole corpus is flaking cannot exonerate its way to an unearned green.
-floor_exonerates() { # <file> <test> → 0 = the SAME failure REPRODUCES at the last-green floor
-  local f="$1" t="$2" good want got rc=0 td out filt cur restored=0
+floor_exonerates() { # <file> <test> → 0 = the SAME failure REPRODUCES at the floor for that file
+  local f="$1" t="$2" good want got rc=0 td out filt cur restored=0 pf="" src=""
+  FLOOR_USED=""
   [ "$FLOOR_MODE" != "off" ] || return 1
   [ -n "${CUR_SHA:-}" ] || return 1
   if [ "$FLOOR_SPENT" -ge "$FLOOR_BUDGET" ]; then
     log "C30 BUDGET SPENT ($FLOOR_BUDGET) — $f keeps its conviction UNPROBED; a run this broad may not exonerate its way to a green"
     return 1
   fi
-  [ -s "$LASTGREEN" ] || { log "C30 no floor: $LASTGREEN is absent or empty — nothing to compare $f against; conviction stands"; return 1; }
-  read -r good < "$LASTGREEN" 2>/dev/null || return 1
+  # C31: PREFER THIS FILE'S OWN LAST OBSERVED PASS, fall back to the whole-tree last-green. ONE probe
+  # either way — the budget is unchanged and no second attempt is made if the first is a non-verdict.
+  # The per-file floor additionally has to be an ANCESTOR of the tree under test, a check $LASTGREEN
+  # gets for free by construction and this ledger does not: a requeued older sha could otherwise be
+  # "exonerated" against a commit ABOVE it, which is not a floor at all. Failing that check falls back
+  # to $LASTGREEN rather than abstaining, so C31 can only ever add reach, never remove C30's.
+  pf="$(pass_floor "$f")"
+  if [ -n "$pf" ] && git -C "$WORKTREE" merge-base --is-ancestor "$pf" "$CUR_SHA" 2>/dev/null; then
+    good="$pf"; src="C31 per-file pass floor"
+  else
+    [ -z "$pf" ] || log "C31 pass floor for $f ($(sha12 "$pf")) is not an ancestor of $(sha12 "$CUR_SHA") — falling back to last-green"
+    [ -s "$LASTGREEN" ] || { log "C30 no floor: $LASTGREEN is absent or empty — nothing to compare $f against; conviction stands"; return 1; }
+    read -r good < "$LASTGREEN" 2>/dev/null || return 1
+    src="C30 last-green floor"
+  fi
   [ -n "$good" ] || return 1
   # Resolve BOTH endpoints before anything is moved: `cat-file -e` fails identically for an absent
   # PATH and an unresolvable REV, and only the first of those is allowed to mean anything.
@@ -1991,8 +2169,8 @@ floor_exonerates() { # <file> <test> → 0 = the SAME failure REPRODUCES at the 
     log "C30 CELL NOT RESTORED after the floor probe of $f — wanted $(sha12 "$cur"), the cell is elsewhere; refusing to exonerate on a state we could not put back"
     return 1; }
   case "$rc" in
-    1) return 0 ;;                    # reproduced at the floor ⇒ NOT differential
-    0) log "C30 floor GREEN for $f at $(sha12 "$good") — the conviction IS differential: RED stands"; return 1 ;;
+    1) FLOOR_USED="$good"; return 0 ;;   # reproduced at the floor ⇒ NOT differential
+    0) log "floor GREEN for $f at $(sha12 "$good") [$src] — the conviction IS differential: RED stands"; return 1 ;;
     124) log "C30 floor UNPROVEN for $f: our own ${FILE_TO}s bound fired at $(sha12 "$good") — nothing proven; conviction stands"; return 1 ;;
     *)  if [ "$rc" -gt 128 ]; then
           log "C30 floor UNPROVEN for $f: the floor probe was KILLED by signal $(( rc - 128 )) — a fact about the machine, not a verdict; conviction stands"
@@ -2043,10 +2221,11 @@ corroborate_convictions() { # <tree> — rebuild FAILING, keeping only CROSS-WIN
       # C30 — two windows is necessary and not sufficient. Ask the last-green floor whether this
       # failure is differential BEFORE it becomes a RED; only a positive reproduction there drops it.
       if floor_exonerates "$f" "${FAILNAME[$i]:-}"; then
-        read -r _fgood < "$LASTGREEN" 2>/dev/null || _fgood=""
+        _fgood="${FLOOR_USED:-}"
+        [ -n "$_fgood" ] || read -r _fgood < "$LASTGREEN" 2>/dev/null || _fgood=""
         FLOOR_EXONERATED+=("$f")
         record_nondifferential "$f" "${FAILNAME[$i]:-}" "${_fgood:-}"
-        log "C30 NOT DIFFERENTIAL $f — the SAME failure reproduces at the last-green $(sha12 "${_fgood:-}"), a tree this verifier stamped GREEN, so it says nothing about $(sha12 "$tree"): dropped to a flake, NOT a red"
+        log "NOT DIFFERENTIAL $f — the SAME failure reproduces at $(sha12 "${_fgood:-}"), a commit at which this verifier observed $f PASS, so it says nothing about $(sha12 "$tree"): dropped to a flake, NOT a red"
         continue
       fi
       keep+=("$f"); keepname+=("${FAILNAME[$i]:-}")
@@ -3407,6 +3586,13 @@ EOF
   else
     [ "$rc" -eq 0 ] || classify_failures "$tap" "$rc"
   fi
+  # C31 — record this run's per-file passes BEFORE corroborate_convictions, so a floor observed on an
+  # EARLIER sweep is the one this run's probe reads and the current sha never becomes its own floor
+  # (a file under conviction carries a not-ok and is excluded here anyway; floor_exonerates' own
+  # `want != cur` guard is the belt to this braces). Deliberately OUTSIDE the shortfall branch's else:
+  # passes_record re-reads the shortfall itself and refuses on it, so the one gate lives in one place
+  # rather than being re-expressed by its caller.
+  passes_record "$tap" "$rc"
   # C29 — BEFORE the SYNTAX_BAD splice, for two reasons: those findings are DETERMINISTIC and must
   # never be delayed by a corroboration round they cannot fail, and this is the last point at which
   # FAILING and FAILNAME are still index-aligned 1:1 (the splice pads no names, by design).
