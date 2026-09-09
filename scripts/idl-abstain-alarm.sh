@@ -114,8 +114,18 @@ _reap_keep_dormant=(claimer-live owned-wait)
 # (boundary-handoff / anti-deference-nudge / completion-assert / waiting-recycle), plus the
 # reap keep-reasons above. Everything NOT listed is treated as DORMANT (condition-not-met) —
 # conservative against false pages.
+# `goal-unreadable` (hooks/goal-inert-watch.sh) joined this list on 2026-09-08, at the same time
+# as the fix that made it RARE — and the ordering is the whole point. Until then the token was the
+# hook's dominant reason (375 of 469 evaluations in one day) because a `grep|jq` pipeline under
+# pipefail reported every goal-LESS transcript as unreadable (hooks/lib/goal-state.sh :: _goal_grep).
+# Enrolling it while it was firing 80% of the time would have paged INERT permanently; leaving it
+# out AFTER the fix is the opposite failure and the one that matters — the hook would then read
+# every genuinely unreadable transcript as a reached-guard, land on the green DORMANT-100, and a
+# real breakage of the one lib four surfaces share would page nothing at all. It is unambiguously
+# a could-not-observe: the transcript exists and the hook could not parse it.
 _default_blind=(no-jq no-session-id no-stdin no-telemetry stale-telemetry \
                 no-transcript-path transcript-missing not-a-repo no-cwd no-assistant-text \
+                goal-unreadable \
                 "${_reap_keep_blind[@]}")
 if [ -n "${CC_ABSTAIN_BLIND_REASONS:-}" ]; then
   # shellcheck disable=SC2206  # intentional word-split of the override list
