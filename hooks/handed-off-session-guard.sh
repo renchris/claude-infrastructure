@@ -79,6 +79,65 @@ else
 fi
 [ -n "$TARGET" ] || exit 0
 
+# ── SAME-ACCOUNT SUPERSESSION (LIMIT_RECOVER_100P, 2026-09-09) ──────────────────────────────────
+# A duplicate on the SAME account has no transplant: on 2026-09-09 the reset poller resumed 52e35019
+# into tmux while pane 616 still held the original process, and both appended to one transcript. The
+# account test below cannot separate them — they ARE one account — so a SUPERSEDED tombstone names
+# the live copy by PROCESS: `superseded_by_pid` (+ `superseded_by_pane` for the message). This hook
+# runs as a descendant of the claude process it guards, so identity is its own ancestry: the copy
+# whose claude pid IS the named successor is acquitted; every other process holding this session id
+# is the stale copy and its prompts are blocked. A dead successor pid fails OPEN (nothing is carrying
+# the session any more), exactly like the cross-account verdict in lr_tombstone_verdict.
+SUP_PID=""
+if [ -n "$HOG_PY" ]; then
+  SUP_PID=$("$HOG_PY" -c '
+import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: sys.exit(0)
+v=d.get("superseded_by_pid")
+print(v if isinstance(v,int) else "")
+' "$TOMB" 2>/dev/null)
+else
+  SUP_PID=$(sed -n 's/.*[{,[:space:]]"superseded_by_pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$TOMB" | head -1)
+fi
+if [ -n "$SUP_PID" ]; then
+  if ! kill -0 "$SUP_PID" 2>/dev/null; then exit 0; fi        # successor gone ⇒ nothing else carries it
+  _p="$PPID"; _n=0; _mine="${CC_HOG_SELF_PID:-}"     # CC_HOG_SELF_PID: test seam naming this hook's claude pid
+  [ -n "$_mine" ] && _p=""
+  while [ -n "$_p" ] && [ "$_p" != 0 ] && [ "$_p" != 1 ] && [ "$_n" -lt 16 ]; do
+    _c="$(ps -o comm= -p "$_p" 2>/dev/null || true)"
+    case "${_c##*/}" in claude*|node*) _mine="$_p"; break ;; esac
+    _p="$(ps -o ppid= -p "$_p" 2>/dev/null | tr -d ' ' || true)"; _n=$((_n + 1))
+  done
+  [ -n "$_mine" ] || exit 0                                     # cannot tell who I am ⇒ fail open
+  [ "$_mine" = "$SUP_PID" ] && exit 0                           # I AM the live copy
+  SUP_PANE=""
+  if [ -n "$HOG_PY" ]; then
+    SUP_PANE=$("$HOG_PY" -c '
+import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: sys.exit(0)
+print(d.get("superseded_by_pane") or "")
+' "$TOMB" 2>/dev/null)
+  fi
+  cat >&2 <<EOF
+⛔ THIS PANE IS A STALE COPY — your prompt was NOT delivered.
+
+Session ${SID:0:8} is being carried by ANOTHER process on this same account (pid $SUP_PID${SUP_PANE:+, pane $SUP_PANE}).
+This process (claude pid $_mine) still holds an older view of the conversation, so anything you say
+here forks the session: two writers on one transcript, neither able to see the other's turns — the
+same-account split-brain the SUPERSEDED tombstone was written to prevent: $TOMB.
+
+  · Say it in pane ${SUP_PANE:-<the live copy>} instead (it has the whole conversation).
+  · Nothing here is lost: the transcript is one file and the live copy appends to it.
+  · Genuinely reviving THIS side (the live copy is dead)? Delete the tombstone, or re-run with
+    CC_HANDED_OFF_GUARD_DISABLED=1.
+
+Then close this pane.
+EOF
+  exit 2
+fi
+
 # ── Am I the TARGET or the SOURCE? ──────────────────────────────────────────────────────────────
 # The successor carries the SAME session id, so identity is the whole question. Two independent
 # answers, either of which acquits:

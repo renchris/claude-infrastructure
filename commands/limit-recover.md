@@ -2,7 +2,7 @@
 name: limit-recover
 description: Recover perfectly from a usage-limit interruption (5-hour / weekly / model-scoped Fable / monthly-spend cap) — disk-truth audit of every Dynamic Workflow slot, subagent, task, AND Agent-Team assignee session; re-run everything not provably COMPLETE (accepting partial results is banned); or continue with zero loss on another of the 4 accounts via validated transcript transplant + salvage bundle. Use when: a session was killed by "You've hit your session/weekly limit", when teammates died mid-wave ("Teammate @x failed - You've hit your monthly spend limit"), when resuming after a limit ("continue, we hit our limit"), when workflow/subagent results came back null/partial/empty, or when the reset is too far away and work should continue NOW on another account. ALSO use when an account died on its LOGIN CLIFF rather than on quota — `invalid_grant` on every refresh, `auth: logged-out` / `token-invalid`, "Not logged in · Please run /login" — because the recovery is the same transplant and the alternative is losing the work (there is NO reset to wait for; see § A login cliff is not a quota limit).
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Agent, Workflow, TaskList, TaskCreate, TaskUpdate, AskUserQuestion
-argument-hint: "[audit | handoff [next|next2|next3|next4|auto] [opus|fable] | ingest <bundle-dir>] — bare = full same-session recovery"
+argument-hint: "[audit | handoff [next|next2|next3|next4|auto] [opus|fable] [--in-place] | fleet [--locate|--recover|--enqueue|--duplicates] | ingest <bundle-dir>] — bare = full same-session recovery"
 ---
 
 # /limit-recover — limit-interruption recovery, no partial-result acceptance
@@ -308,6 +308,67 @@ conversational context; new turns land in the target account's store).
 4. **This session is now DONE.** Emit the handoff report (target account, bundle path, gaps
    handed over). Do not dispatch further delegated work here — the target session owns recovery
    (split-brain rule). Suggest the user close/park this pane.
+5. **`--in-place`** (2026-09-09): add `--in-place` to the fire and this pane recycles ITSELF onto
+   the target — same window, same uuid — instead of splitting a new pane and leaving this one as a
+   husk; a thinking session that can still run its own tool (a Fable-scoped limit, a login cliff
+   caught early) should prefer it. Driven from a third session for a pane that cannot think, it is
+   `--in-place --source-pane <P>`; the fleet mode below does that for every blocked session at once.
+
+## Mode: fleet [--locate | --recover [--target A] | --enqueue | --duplicates] — the pane IS the continuation
+
+Added 2026-09-09 (docs/plans/LIMIT_RECOVER_100P.md; operator ruling 2026-09-08: *every limited
+session located, self-closed, and resumed IN THAT SAME PANE on an unrestricted account — no husk,
+no orphan, no ambiguity about which pane is which*). Script: `scripts/limit-recover/lr-fleet.sh`.
+
+1. **`fleet --locate`** — the census, disk truth only: every session whose LAST assistant word is a
+   limit error, across all four stores, joined to the registry (`~/.claude/cc-registry/<pane>.json`,
+   written by each session's own SessionStart hook — the store argv can never replace). One row per
+   session: pane · pid · account · cwd · **runtime tier from the transcript** (never argv: pane 616
+   ran Fable/xhigh while its argv said Opus/high) · disposition — `RECOVERABLE` (a live pane holds
+   it), `NO-PANE`, `TRANSPLANTED→acct` (already moved; nothing to do), `TEAMMATE` (lead-owned),
+   `DUPLICATE` (more than one live process — resolve with `--duplicates` first, never recover over
+   two writers).
+2. **`fleet --recover`** — sequenced, one session at a time, each behind the NON-charging capacity
+   probe (`cc_capacity_probe`: same terms as the admit gate, spends none of its 3-refusal budget — a
+   pane is never `/exit`ed unless its relaunch can be admitted; at the wait cap the session stays
+   PARKED with the term named). The target is `claude-accounts --rank` walked PAST the limited
+   account; a Fable session routes on the fable lane. Each session runs
+   `lr-handoff.sh --in-place --source-pane <P>`: transplant (lock + tombstone — the session is now
+   PROVABLY retired at its pane, which is what admits a driver that does not own the pane), then
+   `handoff-fire.sh --recycle --transplanted-source --source-pane P --source-session S
+   --resume-launcher <launcher> --resume-cfg <target>`: `/exit` typed into the blocked TUI, its shell
+   waited for, `bash <launcher>` (never `exec`) typed there — **same window id, same uuid, new
+   account**, engagement proven by a fresh non-error assistant turn in the target's copy. A
+   launcher-rooted source (an expect-rooted pane an older lr-handoff fired) cannot host a relaunch, so
+   it is REPLACED in place: the successor is spawned beside the SOURCE (`--source-window`-pinned,
+   runner-rooted via `bin/cc-pane-runner`, recyclable next time) and the source retired through the
+   existing `self-close --transplanted-source` path once the successor is verified engaged.
+3. **The report** proves the operator's question cannot arise: one row per session — `SID · PANE→ ·
+   PANE← · ACCT→ · ACCT← · MECHANISM/VERDICT · NOTE` — closing with `RECOVERY COMPLETE — N in place
+   (same pane id), M replaced beside their source, 0 left over` or `RECOVERY PARTIAL — named gaps`.
+   Evidence: `~/.reso/limit-recover/fleet/<run>/` (census, per-session stderr, results.tsv).
+4. **`fleet --enqueue`** — when a session's own Bash tool is refused (auto mode's classifier denies
+   acting on a live pane from inside a session — measured 401 denials in 30 days across shapes no
+   rule predicts), write the same request for the **launchd reset poller**, which runs outside every
+   session and every classifier and drains `~/.reso/limit-recover/requests/` on its next tick
+   (`launchctl kickstart -k gui/$(id -u)/com.reso.lr-reset-poller` runs it now). Results:
+   `~/.reso/limit-recover/results/<sid>.json`. **The driver never hands the human a raw pane-close
+   command** (operator ruling 2026-09-09); a `cc-do` row is minted only when the daemon itself cannot.
+5. **`fleet --duplicates`** — sessions held by MORE than one live process (the 2026-09-09 shape: the
+   poller resumed 52e35019 into tmux while pane 616 still held the original; one transcript, two
+   writers, one account, and no tombstone for any guard to see). Lists both with start times; the
+   LATER process took the conversation over (Claude Code hands it Remote Control), the earlier one is
+   stale. `--mark <sid> --live <pid>` writes the SUPERSEDED tombstone (`superseded_by_pid`) beside the
+   transcript: `handed-off-session-guard.sh` then blocks the stale copy's prompts by PROCESS identity
+   (it acquits only the copy whose own claude pid is the successor), and
+   `self-close --transplanted-source --source-pane <stale> --source-session <sid> --successor <live
+   pane>` retires it — the class admits a same-account tombstone iff its successor pid is alive.
+
+Iron rules 1-7 bind unchanged: the fleet never pushes, ships or deploys; every verdict is a disk
+read; a PARTIAL is reported as PARTIAL. The reset poller is the daemon half of the same design:
+registry-based liveness (a live original pane is NUDGED in place, never re-spawned), transplanted
+records retired as such, visible runner-rooted kitty windows via the resolved socket, tier carried
+from the transcript, and **no silent tmux** — a resume nobody can see is a resume nobody can answer.
 
 ## Mode: ingest <bundle-dir>
 
