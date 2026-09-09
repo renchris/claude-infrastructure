@@ -994,16 +994,30 @@ sanitize_key(){ printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }   # marker-filena
 # only if that session BOOTED within CC_FIRED_BOOT_MAX_S of the fire; a startedAt beyond firedAt+boot-max
 # is a different tenant → stale stamp (GC'd in the sweep). Unknown startedAt ⇒ INVALID (surface, not reap).
 iso_to_epoch_r(){ # <iso8601> → epoch seconds (empty on parse fail). Mirrors cc-classify iso_to_epoch.
-  local s="${1%%.*}"; s="${s%Z}"
+  # PORTABLE BY FALLBACK, never by dialect ASSUMPTION. `date -j -f` is BSD-only: under GNU date it
+  # exits non-zero, this returned empty, firedAt read unparseable, and fired_stamp_state answered
+  # `invalid` — which SURFACES rather than reaps, so the off-macOS failure is a refusal and not a
+  # destructive act, but it still redded the whole td_called family wherever this suite runs on Linux.
+  # The GNU arm is reached only after the BSD one declines AND `date --version` answers (BSD date has
+  # no --version, and its `-d` means "set the kernel DST flag", so probing first is what keeps a bad
+  # input on macOS returning empty instead of today's date). The macOS path is unchanged.
+  local s ep; s="${1%%.*}"; s="${s%Z}"
   [ -z "$s" ] && return 0
-  TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$s" +%s 2>/dev/null || true
+  ep="$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$s" +%s 2>/dev/null)" || ep=""
+  if [ -z "$ep" ] && date --version >/dev/null 2>&1; then
+    ep="$(date -u -d "${s}Z" +%s 2>/dev/null)" || ep=""
+  fi
+  printf '%s' "$ep"
 }
 fired_at_epoch_r(){ # <paneUUID> → fire epoch (marker firedAt; fallback: marker file mtime)
   local f="$FIRED_DIR/${1:-}.json" iso ep
   [ -f "$f" ] || return 1
   iso="$(jq -r '.firedAt // ""' "$f" 2>/dev/null)"
   ep="$(iso_to_epoch_r "$iso")"
-  [ -n "$ep" ] || ep="$(stat -f %m "$f" 2>/dev/null)"
+  # Same two-dialect shape this file already uses at the LOCKDIR mtime read below: BSD `stat -f`, then
+  # GNU `stat -c`. Without the second arm the mtime fallback is itself unavailable off macOS, so the
+  # firedAt repair above would have handed the failure straight back to this line.
+  [ -n "$ep" ] || ep="$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null)"
   [ -n "$ep" ] || return 1
   printf '%s' "$ep"
 }
