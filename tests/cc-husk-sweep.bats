@@ -111,3 +111,17 @@ transcript() { # <store> <cwd> <sid> <last-close: yes|no|none>
   [ "$status" -eq 3 ]
   [ ! -s "$CC_HUSK_IT2_LOG" ]
 }
+
+@test "a LIVE session's id is never a husk's identity — the newest transcript in a shared cwd may belong to a session running elsewhere" {
+  # pane 10 (bare shell) and a live session that last wrote the newest transcript for that cwd
+  transcript "$T/.claude-secondary" "$CWD_A" "dddddddd-0000-0000-0000-000000000010" no
+  sleep 1
+  transcript "$T/.claude-tertiary" "$CWD_A" "eeeeeeee-0000-0000-0000-000000000011" no   # newest, but LIVE
+  export CC_HUSK_LIVE_SIDS="$T/live.txt"; printf 'eeeeeeee-0000-0000-0000-000000000011\n' > "$CC_HUSK_LIVE_SIDS"
+  run "$SWEEP" --json --pane 10
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'eeeeeeee-0000-0000-0000-000000000011'* ]] || { echo "resolved to a LIVE sid: $output"; false; }
+  [[ "$output" == *'"sid":"dddddddd-0000-0000-0000-000000000010"'* ]] || false
+  run "$SWEEP" --resume --yes --pane 10
+  if grep -q 'eeeeeeee-0000-0000-0000-000000000011' "$CC_HUSK_IT2_LOG"; then echo "typed a live session's resume line"; false; fi
+}
