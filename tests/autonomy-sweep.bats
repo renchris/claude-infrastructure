@@ -1817,3 +1817,72 @@ STUB
   # and the tick genuinely ran to the bottom — otherwise "silent" would be proving the wrong thing
   grep -q '"disposition":"fired"' "$CC_IDL"
 }
+
+
+# ── §0a-i · THE PARITY CHECK MUST BE *REACHED*, NOT MERELY WIRED (GUARDRAIL_HOOKS_V2 AC2') ────────
+# The row-6 design doc asserted AC2 as "the checker has a caller", found the caller, and still could
+# not make the property true: `scripts/autonomy-sweep.sh` calls settings-drift-assert.sh under a
+# LOADED launchd job, and the block was nevertheless journalling ZERO rows a day from 2026-09-08
+# (last `config-parity` anywhere: 2026-09-07T21:13:57Z) because the self-bound landed on 09-07 and
+# every tick since has yielded at `1-collect-pages-alarms` or `0b-author-death-join` — the two
+# earliest checkpoints. REGISTRATION AND REACH ARE TWO FACTS, and only the second is the property
+# anybody wanted; no test in this file asserted the second until these two.
+#
+# The clock is the only variable between the case and its CONTROL, and the mutant is built by
+# MOVING the block back to where it was rather than by deleting it, so the control replays the
+# pre-fix ORDER and not merely the block's absence (memory: control-must-replay-the-real-artifact).
+
+@test "0a-i · a maximally-truncated tick STILL journals config-parity" {
+  # An alarm §3 would notify on: it proves the tick was genuinely CUT, not merely quiet.
+  echo '{"kind":"alarm","detail":"never-stuck gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run env CC_SWEEP_T0=$(( $(date +%s) - 5000 )) CC_SWEEP_SELF_BOUND_S=400 "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  # the tick really did end at its FIRST checkpoint — the live failure mode, not a milder one
+  grep -q '"disposition":"self-bound"' "$CC_IDL"
+  [ "$(jq -r 'select(.disposition=="self-bound")|.stopped_before' "$CC_IDL" | tail -1)" = "0b-author-death-join" ]
+  # …and §3 never ran, so nothing below the first checkpoint could have produced the row below
+  [ "$(notify_count)" -eq 0 ]
+  ! grep -q '"disposition":"fired"' "$CC_IDL" || false
+  # THE PROPERTY: the parity check was REACHED anyway, and journalled a verdict rather than nothing
+  grep -q '"disposition":"config-parity"' "$CC_IDL"
+  [ -n "$(jq -r 'select(.disposition=="config-parity")|.settings_drift_rc // .detail.settings_drift_rc // "x"' "$CC_IDL" | tail -1)" ]
+}
+
+@test "0a-i CONTROL: the pre-fix ORDER (block below the checkpoints) journals NO config-parity" {
+  local mutant="$BATS_TEST_TMPDIR/sweep-preorder.sh"
+  # rung 1 of the lib ladder, exactly as the real script resolves it — a copy in BATS_TEST_TMPDIR
+  # otherwise falls through to $HOME/.claude and dies before the property is ever exercised.
+  ln -sfn "$REPO/scripts/lib" "$BATS_TEST_TMPDIR/lib"
+  SRC="$SWEEP" DST="$mutant" python3 - <<'PY'
+import os
+src, dst = os.environ['SRC'], os.environ['DST']
+L = open(src).read().split('\n')
+i = next(n for n,l in enumerate(L) if l.startswith('_drift="$_SWEEP_DIR/settings-drift-assert.sh"'))
+j = next(n for n,l in enumerate(L) if n > i and 'note:"rc 0 = the 5 config dirs agree' in l)
+blk = L[i:j+1]
+del L[i:j+1]
+k = next(n for n,l in enumerate(L) if l.strip() == 'sweep_yield 2e-custody-deathwatch')
+L[k:k] = blk + ['']
+open(dst,'w').write('\n'.join(L))
+PY
+  # the mutation is present AND the fixed shape is gone — never merely "the files differ"
+  grep -q '^_drift="\$_SWEEP_DIR/settings-drift-assert.sh"$' "$mutant"
+  [ "$(grep -n '^_drift=' "$mutant" | cut -d: -f1)" -gt "$(grep -n '^sweep_yield 0b-author-death-join$' "$mutant" | cut -d: -f1)" ]
+  echo '{"kind":"alarm","detail":"never-stuck gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run env CC_SWEEP_T0=$(( $(date +%s) - 5000 )) CC_SWEEP_SELF_BOUND_S=400 "${SWEEP_TO[@]}" bash "$mutant"
+  [ "$status" -eq 0 ]
+  grep -q '"disposition":"self-bound"' "$CC_IDL"
+  # the pre-fix order is silent on the very tick the fixed order speaks — this is the whole delta
+  ! grep -q '"disposition":"config-parity"' "$CC_IDL" || false
+}
+
+@test "0a-i CONTROL: an UNBOUNDED tick journals config-parity under BOTH orders" {
+  # Without this, the case above would also pass against a subject that simply always logs the row,
+  # and the control above would also pass against one that never logs it at all. Same fixture, no
+  # cut: both orders reach the block, so the pair above is a property of ORDER and not of the block.
+  echo '{"kind":"alarm","detail":"never-stuck gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  ! grep -q '"disposition":"self-bound"' "$CC_IDL" || false
+  grep -q '"disposition":"config-parity"' "$CC_IDL"
+}
