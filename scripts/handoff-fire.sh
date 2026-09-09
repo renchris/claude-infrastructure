@@ -7885,6 +7885,194 @@ hf_occupancy_gate() {
   return 0
 }
 
+# ---- IN-FLIGHT FIRE CLAIM: the occupancy sensor cannot see a fire that has not booted yet -------
+# hf_inflight_key <dir>              → a stable key for a directory that need not exist yet
+# hf_inflight_gate <dir> <mode>      → 0 proceed (and CLAIM it) · 1 REFUSE (caller exits 1)
+# hf_inflight_release                → drop only the claims THIS process wrote; always 0
+#
+# THE DEFECT THIS CLOSES (cc-backlog 9d1c8dadf1f8). Panes 275 and 276 were fired four minutes apart
+# with an IDENTICAL brief, into the SAME cwd on the SAME branch (fix/cloud-branch-debris), and they
+# clobbered each other: cherry-picks at 19:39:38 were reset away at 19:40:25 and 19:40:38. The
+# occupancy gate above is the right refusal and it could not fire, because its ONLY sensor is
+# `cc-notify --list` → $HOME/.claude/cc-registry, and a registry row is written by the FIRED
+# session's own SessionStart hook. So the sensor reads a store the incumbent has not written yet.
+#
+# THE WINDOW IS NOT SHORT, WHICH IS WHY FOUR MINUTES WAS NOT ENOUGH. Between the moment a fire is
+# decided and the moment ANY store records its target directory:
+#   · a cold worktree installs dependencies under CC_DEPS_TIMEOUT, default 180s, before the
+#     launcher is even reached;
+#   · verify_engagement then polls for a LOAD-SCALED window — fire_engage_window, base 120s, cap
+#     480s — and only its success branch calls ensure_registration and mark_fired_peer;
+#   · mark_fired_peer is the sole fire-time writer of a cwd (write_fired_cwd_index → cc-fired/by-cwd)
+#     and it is not reached until after that window (the ENGAGE_RC=0 branch, ~line 11277).
+# Up to roughly eleven minutes, therefore, every store that could answer "is a fire already going
+# into this directory" is EMPTY — and an empty store reads as "free", never as "I cannot tell yet".
+# That is store-silence-is-evidence-only-if-it-has-a-writer, in the fire path: nothing WRITES on the
+# path being sensed, so the silence carried no information at all.
+#
+# THE CLAIM IS THE MISSING WRITER, and the one process that can write it is the firing handoff-fire
+# itself, BEFORE the spawn. Three properties make it cheap:
+#   · ITS OWNER IS A LOCAL PROCESS. Liveness is {pid,lstart} — the same oracle bin/cc-sessions
+#     applies to a registry row, TZ- and locale-pinned (a bare lstart compare convicts every row on
+#     a DST flip). No sweeper, no cron, no TTL guess: a claim is live exactly while its fire is.
+#   · IT RELEASES ON THE FIRE'S OWN EXIT. The trap runs on success and on every failure path, so the
+#     common case needs no expiry at all. CC_FIRE_INFLIGHT_MAX_S is a BELT for the one residue the
+#     pid cannot cover — a SIGKILL'd fire whose pid is later reused by a process whose start time
+#     happens to match — and is deliberately far above the ~11 min a real fire can take.
+#   · IT KEYS ON A DIRECTORY THAT NEED NOT EXIST. A cold `--worktree` claims the path it is ABOUT to
+#     create, which is the half the occupancy gate structurally cannot cover (it is only called for
+#     `existing|pool`, because a cold tree is unoccupied by construction — true of SESSIONS, false
+#     of FIRES). The incident's first fire was that cold one.
+#
+# MODE, the same split hf_occupancy_gate and hf_freshness_gate make, with one addition that is the
+# incident itself. `worktree` REFUSES: a second session in a tree this tool provisions is never
+# right. `cwd` may only WARN, because --cwd is also the warm re-fire of a peer into a live worktree
+# — EXCEPT when the two briefs are byte-identical, which no warm re-fire ever is and which is
+# precisely what panes 275/276 were. The mission digest is taken over the ORIGINAL prompt file
+# (${PROMPT_FILE_ORIG:-$PROMPT_FILE}), never the launch-time copy: that copy carries a per-fire
+# HANDOFF-ENGAGE marker, so hashing it would make every fire look unique and the arm could never
+# fire. An unreadable digest on EITHER side degrades to the warning — it can add a refusal, never
+# remove the existing one.
+#
+# FAIL-OPEN ON EVERY UNREADABLE PROBE, exactly like the gate above and for the same reason: no jq,
+# an unresolvable path, an lstart that will not render all PROCEED. Starving the fire queue on a
+# blind sensor is the worse error. The SHARED CHECKOUT is exempt by construction (many sessions sit
+# in it legitimately), and a DRY RUN claims nothing — it fires nothing, so it owns nothing.
+# Kill switch: CC_FIRE_INFLIGHT=off restores the pre-claim behaviour exactly.
+HF_INFLIGHT_DIR="${CC_FIRE_INFLIGHT_DIR:-$FIRED_DIR/in-flight}"
+HF_INFLIGHT_CLAIMED=""
+
+# The deepest EXISTING ancestor is resolved and the missing tail appended, so a cold worktree's
+# claim and the `existing` scan that later reads it produce the SAME key for one directory. Plain
+# `cd "$d" && pwd -P` (what _fired_cwd_key does) cannot: it returns nothing for a path not yet
+# created, which is every cold fire. macOS's /tmp → /private/tmp is why resolution is needed at all.
+hf_inflight_key() { # $1=dir → echoes a stable filesystem-safe key, or nothing
+  local d="${1:-}" head tail base
+  if [ -z "$d" ]; then return 0; fi
+  case "$d" in /*) ;; *) d="$PWD/$d" ;; esac
+  head="$d"; tail=""
+  while [ -n "$head" ] && [ ! -d "$head" ]; do
+    base="$(basename "$head")"; tail="/$base$tail"
+    head="$(dirname "$head")"
+    if [ "$head" = "/" ]; then break; fi
+  done
+  if [ ! -d "$head" ]; then return 0; fi
+  head="$(cd "$head" 2>/dev/null && pwd -P)" || return 0
+  if [ -z "$head" ]; then return 0; fi
+  printf '%s' "${head%/}$tail" | shasum -a 256 2>/dev/null | cut -c1-32 | tr -d '[:space:]'
+}
+
+# TZ + locale PINNED ON BOTH SIDES. `ps -o lstart=` renders through LC_TIME and TZ independently, so
+# an unpinned compare reads two spellings of one instant as two processes — and convicts every row
+# on a DST flip (memory: process-start-time-renders-in-ambient-timezone).
+hf_inflight_lstart() { # $1=pid → echoes the normalized start time, or nothing
+  if [ -z "${1:-}" ]; then return 0; fi
+  TZ=UTC LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//'
+}
+
+# 0 = the claim's owner is still firing · 1 = it is not (or cannot be established).
+# ABSENCE OF PROOF IS NOT PROOF: an unreadable claim returns 1, which PROCEEDS. That is the same
+# polarity every other sensor in this file carries, and it is the safe one — a stale claim that is
+# ignored costs the duplicate this closes only in the case where the sensor was already blind.
+hf_inflight_live() { # $1=claim file → 0 live / 1 not
+  local f="${1:-}" pid rec now age at
+  if [ ! -s "$f" ]; then return 1; fi
+  if ! command -v jq >/dev/null 2>&1; then return 1; fi
+  pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)" || return 1
+  if [ -z "$pid" ]; then return 1; fi
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  if [ "$pid" = "$$" ]; then return 1; fi             # our own claim never blocks us
+  if ! kill -0 "$pid" 2>/dev/null; then return 1; fi
+  # PID REUSE. `kill -0` answers "does SOME process hold this number", never "is it the one that
+  # wrote this". The start time is the discriminator, and an lstart the claim never recorded (or
+  # that will not render now) is UNPROVABLE — which returns 1, not a guess.
+  rec="$(jq -r '.lstart // empty' "$f" 2>/dev/null)" || return 1
+  if [ -z "$rec" ]; then return 1; fi
+  if [ "$rec" != "$(hf_inflight_lstart "$pid")" ]; then return 1; fi
+  # The BELT, not the primary (see the header): bounds a claim whose owner was SIGKILL'd before its
+  # trap and whose pid was later reused by a process with a colliding start time.
+  at="$(jq -r '.firedAtEpoch // empty' "$f" 2>/dev/null)"
+  case "$at" in ''|*[!0-9]*) return 0 ;; esac         # no usable stamp ⇒ the pid pair already decided
+  now="$(date +%s 2>/dev/null)" || return 0
+  age=$(( now - at ))
+  if [ "$age" -gt "${CC_FIRE_INFLIGHT_MAX_S:-1800}" ]; then return 1; fi
+  return 0
+}
+
+# The digest of the MISSION, over the caller's own brief rather than the launch-time copy.
+hf_mission_digest() { # → echoes a digest, or nothing
+  local p="${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}"
+  if [ -z "$p" ] || [ ! -s "$p" ]; then return 0; fi
+  shasum -a 256 "$p" 2>/dev/null | cut -c1-32 | tr -d '[:space:]'
+}
+
+hf_inflight_gate() { # $1=dir $2=mode(worktree|cwd) → 0 proceed (claim taken) · 1 REFUSE
+  local d="${1:-}" mode="${2:-worktree}" key f mine theirs pid at tmp
+  HF_INFLIGHT_HOLDER=""
+  if [ "${CC_FIRE_INFLIGHT:-on}" = off ]; then return 0; fi
+  if [ "${CC_FIRE_OCCUPANCY:-on}" = off ]; then return 0; fi   # one switch disarms the whole occupancy idea
+  if [ -z "$d" ]; then return 0; fi
+  if ! command -v jq >/dev/null 2>&1; then return 0; fi
+  if hf_is_shared_checkout "$d"; then return 0; fi
+  key="$(hf_inflight_key "$d")"
+  if [ -z "$key" ]; then return 0; fi
+  f="$HF_INFLIGHT_DIR/$key.json"
+  mine="$(hf_mission_digest)"
+  if hf_inflight_live "$f"; then
+    pid="$(jq -r '.pid // "?"' "$f" 2>/dev/null)"
+    at="$(jq -r '.firedAt // "?"' "$f" 2>/dev/null)"
+    theirs="$(jq -r '.mission // ""' "$f" 2>/dev/null)"
+    HF_INFLIGHT_HOLDER="pid $pid since $at"
+    echo "⚠ in-flight: another fire is ALREADY launching into $d — $HF_INFLIGHT_HOLDER (claim $f)" >&2
+    if [ "$mode" = worktree ]; then
+      echo "!! Refusing to fire a SECOND session into a directory a live fire is already claiming. cc-notify --list cannot see this one yet: a registry row is written by the fired session's own SessionStart, and a cold fire spends up to CC_DEPS_TIMEOUT (${CC_DEPS_TIMEOUT:-180}s) installing plus a load-scaled engagement window capped at 480s before it registers (cc-backlog 9d1c8dadf1f8: panes 275/276, four minutes apart, reset each other's cherry-picks)." >&2
+      echo "   Remedy: wait for that fire to land its pane and re-read \`cc-notify --list\`, or retire it. Override for one fire: CC_FIRE_INFLIGHT=off" >&2
+      return 1
+    fi
+    if [ -n "$mine" ] && [ "$mine" = "$theirs" ]; then
+      echo "!! Refusing: the in-flight fire carries the BYTE-IDENTICAL brief (mission $mine). --cwd only warns because it is also the warm re-fire of a peer into a live worktree — but a warm re-fire carries a DIFFERENT brief, and this one does not. That is the duplicate, not a re-fire." >&2
+      echo "   Remedy: wait for it, or fire a different brief. Override for one fire: CC_FIRE_INFLIGHT=off" >&2
+      return 1
+    fi
+    echo "   Firing anyway — --cwd is also the warm re-fire of a peer into a live worktree, and this brief differs from the in-flight one. If a second session there was not your intent, stop." >&2
+  fi
+  # CLAIM. A dry run owns nothing, so it writes nothing — the SCAN above still runs for it, which is
+  # what makes the refusal observable without a real spawn.
+  if [ "${DRY:-0}" != 0 ]; then return 0; fi
+  if ! mkdir -p "$HF_INFLIGHT_DIR" 2>/dev/null; then return 0; fi
+  tmp="$HF_INFLIGHT_DIR/.$key.$$"
+  if jq -n --arg cwd "$d" --arg pid "$$" --arg lstart "$(hf_inflight_lstart "$$")" \
+        --arg mission "$mine" --arg at "$(_iso_now 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg ep "$(date +%s)" \
+        '{cwd:$cwd, pid:($pid|tonumber), lstart:$lstart, mission:$mission,
+          firedAt:$at, firedAtEpoch:($ep|tonumber)}' > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+    if mv -f "$tmp" "$f" 2>/dev/null; then
+      if [ -n "$HF_INFLIGHT_CLAIMED" ]; then HF_INFLIGHT_CLAIMED="$HF_INFLIGHT_CLAIMED"$'\n'"$f"; else HF_INFLIGHT_CLAIMED="$f"; fi
+    else
+      rm -f "$tmp" 2>/dev/null
+    fi
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+
+# ONLY what this process wrote. A claim is a shared-store row, and deleting one on someone else's
+# behalf is how a release turns into the very duplicate it exists to prevent — so the pid is
+# re-read from the file and compared, never assumed from the fact that we hold the path.
+hf_inflight_release() { # → best-effort, always 0
+  local f pid
+  if [ -z "${HF_INFLIGHT_CLAIMED:-}" ]; then return 0; fi
+  if ! command -v jq >/dev/null 2>&1; then return 0; fi
+  while IFS= read -r f; do
+    if [ -z "$f" ] || [ ! -s "$f" ]; then continue; fi
+    pid="$(jq -r '.pid // empty' "$f" 2>/dev/null || true)"
+    if [ "$pid" = "$$" ]; then rm -f "$f" 2>/dev/null || true; fi
+  done <<< "$HF_INFLIGHT_CLAIMED"
+  HF_INFLIGHT_CLAIMED=""
+  return 0
+}
+
 # $REPO is the repo a fire TARGETS: the `git worktree add` for a cold --worktree, the .env.local it
 # copies in, the worktree pool it may claim a slot from, and the dir a self-routing fire lands in.
 # It was hardcoded to $DEFAULT_REPO (reso) unless --repo was passed, so EVERY --worktree fire from
@@ -9302,7 +9490,11 @@ fire_cleanup() {
   fi
   return 0
 }
-trap fire_cleanup EXIT
+# BOTH, and hf_inflight_release must not live INSIDE fire_cleanup: that function returns early once
+# FIRE_CLEAN_DONE=1, which the SUCCESS path sets before the summary — so a claim released only there
+# would leak on exactly the fires that worked. Release is idempotent and drops only rows this pid
+# wrote, so running it on every exit is safe.
+trap 'fire_cleanup; hf_inflight_release' EXIT
 
 # Paths are typed into an interactive zsh line — %q-quote them so spaces/metachars can't split
 # or execute (conventional slugs pass through unchanged).
@@ -9439,6 +9631,12 @@ elif [ -n "$WORKTREE" ]; then
   case "$WT_SETUP" in
     existing|pool) hf_occupancy_gate "$WT" worktree || exit 1 ;;
   esac
+  # IN-FLIGHT (9d1c8dadf1f8). EVERY setup, including `cold` — and that is the whole difference from
+  # the two gates above. Their population is right for a SESSION ("only a REUSED tree can already
+  # hold someone") and wrong for a FIRE: a cold tree is unoccupied by construction, but the path it
+  # is about to be created at can already be claimed by another fire still installing dependencies.
+  # The incident's first fire was that cold one, and it is why this call sits outside the `case`.
+  hf_inflight_gate "$WT" worktree || exit 1
   if [ "$WT_SETUP" = "cold" ] && [ "$DRY" = 0 ]; then
     git -C "$REPO" fetch origin -q || echo "⚠ fetch failed — basing off last-fetched $BASE" >&2
     ( cd "$REPO" && git worktree add "$WT" -b "$WORKTREE" "$BASE" >/dev/null )
@@ -9513,6 +9711,9 @@ elif [ -n "$CWD" ]; then
   # re-fire of a peer into its OWN live worktree, which is divergent and dirty on purpose.
   hf_freshness_gate "$CWD" cwd || true
   hf_occupancy_gate "$CWD" cwd || true
+  # …and this one CAN refuse, on the one discriminator the registry does not carry: a byte-identical
+  # brief. A warm re-fire never carries one; a duplicate is nothing else (9d1c8dadf1f8).
+  hf_inflight_gate "$CWD" cwd || exit 1
   CMD="cd $(printf %q "$CWD") && ${NC}${PREFIX}${LAUNCHER}${ARGS} \"\$(cat $QP)\""
 else
   # Land in the repo root and let the launcher self-route (_cc_route_check auto-creates a fresh
