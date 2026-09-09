@@ -25,7 +25,7 @@ had become the work.
 | Wave | Locus | Deliverable | Depends on |
 |---|---|---|---|
 | **W0 · unwedge** ✅ DONE | **L** (lead-inline) | the dispatcher fires again; a terminal cloud session releases its slot | — |
-| **W1 · freshness** ✅ DONE | **S** (dispatched, local) | every open row carries a currency verdict against today's HEAD, on a schedule, with a `lastValidated` fact — **delivered: never-validated 536→387, 18 falsified rows retired, `cf0f11a4b`** | W0 |
+| **W1 · freshness** ✅ DONE | **S** (dispatched, local) | every open row carries a currency verdict against today's HEAD, on a schedule, with a `lastValidated` fact — **delivered: never-validated 536→387, 18 falsified rows retired, `044a3ebb`** (was `cf0f11a4b`, the pre-land branch sha — not on trunk; see the Status-log correction of 2026-08-15) | W0 |
 | **W2 · grouping-for-execution** ✅ DONE | **S** (dispatched, local) | the ungrouped remainder is folded into wave-sized `master-*` conditions; the applying scripts become tracked machinery — **delivered: ungrouped 424→7, ten master efforts, `1b044624d`** | W0 |
 | **W3 · capacity symmetry** ✅ DONE | **S** (dispatched, local) | no unattended spawner can outbid the operator; the presence beat is consulted at SPAWN, not only at teardown — **delivered: `scripts/lib/spawn-presence.sh` + three consumers, 31/31 RED-proved, `8576c0190`** | — (parallel with W1/W2) |
 | **W4 · drain** | **S ×N** (one long-running wave session per master effort) | the grouped efforts worked to done | W1, W2, W3 |
@@ -211,6 +211,51 @@ ratchet's queue (master M2 wires generators to emit `--falsifier`), not this wav
 **DoD:** every live row carries a currency verdict no older than one sweep, and the count of
 never-validated rows is reportable and falling.
 
+#### The stranded `wave-w1-freshness` branch was never ported, and must not be (closed 2026-09-09, row `5860b7cca244`)
+
+W1's dispatched session died mid-build on 2026-08-12 leaving 421 uncommitted lines in a reapable
+worktree; a passing session rescued them onto `wave-w1-freshness` (`eb2700fd2`) and filed a row to
+port them properly, deliberately NOT landing a 421-line blind apply off a 50-commit-stale base. That
+rescue was right. **The port is now refused on the merits: every capability those lines carried is on
+trunk under a different name, and the trunk form is strictly stronger on each one.**
+
+Reconciled by content against `origin/main` at `6110cd68a`. The branch's own vocabulary —
+`revalidate`, `--budget-s`, `CC_REVALIDATE_BUDGET_S`, the `backlog-validation.jsonl` sidecar,
+`CC_VALIDATION_MAX_LINES`, `CC_CURRENCY_MAX_AGE_S` — appears **0 times** in `bin/cc-premise`,
+`bin/cc-backlog` and `scripts/autonomy-sweep.sh`. That zero is what the row was filed on. It is a
+fact about SPELLING, and reading it as a fact about capability is the trap:
+
+| The branch's 421 lines | On trunk today | Why the trunk form wins |
+|---|---|---|
+| `revalidate` verb — re-ask non-done rows, stalest-first | `cc-premise sweep --record` + `--limit N` with a persisted cursor (`55e473a8f`) | a cursor guarantees every capable row is asked **exactly once per cycle**; stalest-first only makes truncation *resumable*, never *complete* |
+| wall-clock `--budget-s 240`, checked between rows | `--limit 150` shard, under the caller's 1500 s `_bounded` | caps the count of PROBES, so per-pass cost stops needing a re-measurement every time the store grows (fixed overhead is 3.3 s of 265 s) |
+| record a probe ran → append to a JSONL sidecar beside the store | `cc-backlog validated --batch --sha [--merge]` → `backlog-validated.json` (`044a3ebbe`) | ONE writer, whole-or-nothing snapshot, and it **refuses an empty batch** — an empty pipe would otherwise report the store as never-validated |
+| `--close-falsified` (boolean, scoped to `stored` probes) | `sweep --close-falsified N` (`_close_falsified`) | four bounds vs one: re-asks against a freshly folded store immediately before acting, skips CLAIMED rows, CAPS per pass and reports when the cap binds, and cites probe + sha so every close is reversible |
+| `currency` verb — never/stale/current + commits-since-filing percentiles | `cc-backlog freshness` (+ `tests/backlog-freshness.bats`) | a superset: it also carries **`commits_since_validation`**, which the branch never computed |
+| no caller at all | `scripts/autonomy-sweep.sh:1244` — `sweep --json --record --limit 150 --close-falsified 25`, own 6 h cadence (`CC_PREMISE_PASS_EVERY_S`), reported as `premise_pass_*` in the beat | the branch's headline defect was that the pass had zero callers; the ported form would have had zero too |
+
+The one capability trunk dropped is the branch's 24-hour wall-clock `stale_validated` bucket, and
+dropping it was correct **by the branch's own argument** — its `cmd_currency` docstring says days is
+the store's clock and commits is the tree's, and that at ~156 commits/day they disagree by two orders
+of magnitude on the same population. Trunk kept the clock that docstring called the honest one.
+
+**Verified live, not merely read.** `bin/cc-backlog freshness` runs clean today: 339 live rows, 312
+never validated, 27 validated, `commits_since_filing` p50 1005 / max 4102, `commits_since_validation`
+p50 110 / max 110 — the last figure being 27 rows stamped in ONE pass at `fcdeb46c1` on
+2026-09-08T20:50Z, i.e. the scheduled pass firing and recording exactly as designed.
+
+⚠️ **312-of-339 never-validated is NOT this wave regressing, and the arithmetic that proves it is the
+same one the section above already made for 387.** `cc-premise coverage` reads **22 covered of 93
+probeable** (stored 21 · derived-plan 0 · derived-postland 1), so the pass stamped 27 against a
+population of ~22 — it is reaching everything that can be asked. Never-validated is bounded by
+COVERAGE, which is a property of the FILING and belongs to the ratchet's queue (master M2 wires
+generators to emit `--falsifier`). Anyone reading the raw 312 as a dead currency pass will re-open
+this wave and find nothing wrong with it.
+
+**Disposition.** Row `5860b7cca244` closed as superseded, evidence `044a3ebbe` + `55e473a8f` (both
+`merge-base --is-ancestor origin/main` rc 0). The branch `wave-w1-freshness` is KEPT: it is the
+evidence trail for this reconcile, and deleting it would leave this section's claims unfalsifiable.
+
 ### W2 · Grouping-for-execution — ~407 ungrouped rows into wave-sized efforts ✅ DONE (`1b044624d`)
 
 **Outcome: ungrouped 424 → 7, ten master efforts, 418 links, 0 refusals.** All five items landed and
@@ -316,7 +361,7 @@ reducing the sessions needed to work it.
 | Wave | Sha | Filed row | Content-verified on trunk by |
 |---|---|---|---|
 | W0 · unwedge | `a984691f6` | — | — (heading already carried it) |
-| W1 · freshness | `cf0f11a4b` | `b585e86ea4e4` | `lastValidated` + `commits-since-filing` in `bin/cc-backlog`; `cc-premise` now has a caller in `scripts/autonomy-sweep.sh` (it had none) |
+| W1 · freshness | `044a3ebb` (not `cf0f11a4b` — pre-land branch sha, never on trunk) | `b585e86ea4e4` | `lastValidated` + `commits-since-filing` in `bin/cc-backlog`; `cc-premise` now has a caller in `scripts/autonomy-sweep.sh` (it had none) |
 | W2 · grouping | `1b044624d` | `ce1e9d1adab8` (the untracked `link.py`/`prune.py`) | ungrouped 424→7, ten master efforts |
 | W3 · capacity | `8576c0190` | `8ae4b508f274` | `scripts/lib/spawn-presence.sh` present; consumed by `capacity-admit.sh` ×5, `handoff-fire.sh` ×4, `agent-teams-enforce.sh` ×1 |
 
