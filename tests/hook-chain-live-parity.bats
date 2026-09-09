@@ -22,12 +22,21 @@
 # while the tree is ahead). $HOME is a fixture, so both sides see the same environment and parity
 # stays a valid assertion even where a guard's verdict is environment-dependent.
 
+# The operator's REAL settings.json is the drift guard's expectation, so its path must be taken
+# HERE — setup() replaces $HOME with a fixture, and a guard that read the fixture would compare
+# the registry against an empty set and pass over any drift at all.
+ORIG_HOME="$HOME"
+
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME/.claude"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   S="$REPO/hooks/hook-chain.sh"
   export CC_HOOK_CHAIN_DIR="$BATS_TEST_TMPDIR/chains"; mkdir -p "$CC_HOOK_CHAIN_DIR"
   export CC_HOOK_CHAIN_MEMBER_DIR="$REPO/hooks"
+  # The parity FIXTURE chain, deliberately not the production registry: P1-P3 are properties
+  # of any member set, and pinning them to a six-guard corpus keeps the suite fast and its
+  # triggers hand-checked. Using this array as the DRIFT expectation is what made that guard
+  # blind — see the drift test at the foot of this file.
   MEMBERS=( curl-gate.py validate-bash.sh git-worktree-guard.sh keychain-guard.sh
             rm-safe-allowlist.sh ship-rail-push-allow.sh )
   printf '%s\n' "${MEMBERS[@]}" > "$CC_HOOK_CHAIN_DIR/live"
@@ -198,12 +207,69 @@ corpus() {
   done
 }
 
+# ── THE DRIFT GUARD ────────────────────────────────────────────────────────────────────────────
+# ⚠ ITS EXPECTATION COMES FROM settings.json, NOT FROM AN ARRAY IN THIS FILE. It compared the
+# registry to $MEMBERS until 2026-09-08, and $MEMBERS is a constant in this checker — so the guard
+# could only ever detect a change to the registry, never a change to the thing the registry exists
+# to MIRROR. Both were frozen at the six guards of 2026-07-31 while settings.json grew to ten, and
+# the guard stayed green across the whole drift (MEMORY.md `checker-population-rests-on-an-untested-
+# belief`: when a checker enumerates WHERE to look, falsify the sentence that justifies the
+# enumeration, and distrust a checker that has never once gone red).
+#
+# WHAT THE DRIFT COSTS, and why it is a safety matter on an INERT component: wiring the dispatcher
+# means replacing those settings.json entries with one entry naming this registry. A guard present
+# in settings.json and absent from the registry then runs ZERO times, silently — hook-chain.sh's
+# LOUD INERTNESS law refuses on a member missing from DISK, which is a different failure and cannot
+# see this one. At the drift measured on 2026-09-08 that was five guards: smart-bash-allowlist.sh,
+# qos-rewrite.sh, coldcompile-admit.sh, pr-gate.sh and (PostToolUse) relay-verbatim.sh.
+# THE COMPARISON IS A FUNCTION, and both the guard and its mutation control call THIS one — never a
+# second copy, and never by re-entering `bats` (which on this box is the admission-gated cc-bats
+# wrapper: a nested run would be REFUSED under load and the mutation control would then "fail" for a
+# reason that has nothing to do with drift — a rig whose red is unattributable).
+_drift_check() { # <settings.json> <event> <registry>  → prints the mismatch, non-zero on drift
+  local settings="$1" ev="$2" reg="$3" listed expect
+  [ -f "$reg" ] || { echo "no registry at $reg"; return 1; }
+  listed="$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$reg" | tr -d ' ')"
+  expect="$(jq -r --arg ev "$ev" '.hooks[$ev][] | select(.matcher=="Bash") | .hooks[].command' \
+            "$settings" 2>/dev/null | awk '{print $1}' | sed 's#.*/##')"
+  # An empty read is the INSTRUMENT failing, never a clean bill of health.
+  [ -n "$expect" ] || { echo "drift guard read NO $ev:Bash hooks from $settings — the instrument, not the subject"; return 1; }
+  [ "$listed" = "$expect" ] && return 0
+  echo "registry drift in $reg:"; echo "$listed"; echo "--- settings.json registers ---"; echo "$expect"
+  return 1
+}
+
 @test "registry membership matches the settings.json set it replaces (drift guard)" {
-  # The registry and the settings.json entry it replaces must not drift apart: a member added here
-  # but not removed there would RUN TWICE; removed here but still there would run zero times.
-  local reg="$REPO/config/hook-chains.d/pretooluse-bash"
-  [ -f "$reg" ]
-  local listed; listed="$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$reg" | tr -d ' ')"
-  local expect; expect="$(printf '%s\n' "${MEMBERS[@]}")"
-  [ "$listed" = "$expect" ] || { echo "registry drift:"$'\n'"$listed"$'\n'"--- expected ---"$'\n'"$expect" >&2; false; }
+  local settings="${CC_LIVE_SETTINGS:-$ORIG_HOME/.claude/settings.json}"
+  # A missing settings.json is an ABSENT instrument, never a clean bill of health.
+  [ -r "$settings" ] || skip "no live settings.json at $settings — the drift guard has no expectation to read"
+
+  run _drift_check "$settings" PreToolUse  "$REPO/config/hook-chains.d/pretooluse-bash"
+  [ "$status" -eq 0 ] || { echo "$output" >&2; false; }
+  run _drift_check "$settings" PostToolUse "$REPO/config/hook-chains.d/posttooluse-bash"
+  [ "$status" -eq 0 ] || { echo "$output" >&2; false; }
+}
+
+@test "MUTATION — the drift guard fires when settings.json gains a hook the registry lacks" {
+  # RED-PROOF for the guard above, aimed at the exact defect it was blind to: the subject is a COPY
+  # of the live settings.json with one extra Bash hook appended, which is what every real drift here
+  # has looked like. Under the OLD expectation — the literal $MEMBERS array in setup() — this
+  # fixture changes nothing at all and the guard stays green, which is precisely how four members
+  # went missing for 39 days.
+  local settings="${CC_LIVE_SETTINGS:-$ORIG_HOME/.claude/settings.json}"
+  [ -r "$settings" ] || skip "no live settings.json to mutate"
+  local mutated="$BATS_TEST_TMPDIR/settings-drifted.json"
+  jq '.hooks.PreToolUse |= map(if .matcher=="Bash" then .hooks += [{"type":"command","command":"~/.claude/hooks/not-in-the-registry.sh"}] else . end)' \
+     "$settings" > "$mutated"
+  grep -q 'not-in-the-registry.sh' "$mutated"
+
+  # The UNMUTATED settings must pass on the same call, or this control proves nothing about the
+  # mutation — it would only be re-reporting a registry that was already adrift.
+  run _drift_check "$settings" PreToolUse "$REPO/config/hook-chains.d/pretooluse-bash"
+  [ "$status" -eq 0 ] || { echo "control arm already red before the mutation:"$'\n'"$output" >&2; false; }
+
+  run _drift_check "$mutated" PreToolUse "$REPO/config/hook-chains.d/pretooluse-bash"
+  [ "$status" -ne 0 ]
+  printf '%s' "$output" | grep -q 'registry drift'
+  printf '%s' "$output" | grep -q 'not-in-the-registry.sh'
 }

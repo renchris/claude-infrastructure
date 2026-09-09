@@ -116,8 +116,13 @@ setup() {
   # The spiked cycle is ratio 25.0; a mean would report ~7.4. The median holds at 1.50.
   printf '%s' "$output" | grep -q 'MEDIAN RATIO = 1.50x'
   printf '%s' "$output" | grep -q 'spread 1.50..25.00'
-  # ...and the spread must be called out, because a median over that range has no power.
-  printf '%s' "$output" | grep -q 'SPREAD 1.50..25.00 exceeds 2.5x'
+  # ...and the dispersion must be called out, because a median over that range has no power.
+  # The wording moved with the statistic on 2026-09-08 (max/min range -> sign-test interval on the
+  # median); at m=4 no k reaches 90% coverage, so the interval still degenerates to the full range
+  # and the SAME two failure-distinct endpoints appear. What is new beside them is the coverage
+  # figure, which is what makes "no power" a claim rather than an adjective.
+  printf '%s' "$output" | grep -q 'CI 1.50..25.00 spans more than 2.5x'
+  printf '%s' "$output" | grep -q '88% CI on the median = 1.50..25.00'
 }
 
 # ══ §C — THE NULL CONTROL CERTIFIES OR REFUSES ══
@@ -227,4 +232,116 @@ setup() {
     false
   fi
   printf '%s' "$output" | grep -q 'MEDIAN RATIO = 7.38x'
+}
+
+# ══ §E — THE ACCEPTANCE INTERVAL MUST NARROW AS EVIDENCE IS ADDED ══
+#
+# The gate these cover replaced a max/min range test on 2026-09-08. A range is non-decreasing in
+# the sample size, so that gate could only ever get harder to pass as cycles were added — while the
+# median it guarded converged. The bench printed "re-run ... with more cycles" as the remedy for a
+# spread failure, and active-session-occupancy-2026-08-09.md §3.1 prescribes the same remedy for
+# certifying the one live result this rig has produced. Both were self-defeating: measured over
+# 2,000 replicates at the noise that run actually showed, P(certify) fell 51.7% -> 0.0% between 3
+# and 40 cycles. E1 is the must-change fixture; E3 is the must-NOT-change one.
+
+_ratio_rows() { # <cycle> <ratio>   — idle 4.0, serial occ 0.16, equal work both arms, so ratio = $2
+  printf '%s\tidle\t4.000\tbash\t4\t0\n' "$1"
+  printf '%s\tserial\t8.000\tgit\t4\t100\n' "$1"
+  awk -v c="$1" -v r="$2" 'BEGIN{ printf "%s\tparallel\t%.4f\tgit\t4\t100\n", c, 4.0 + 4.0*r }'
+}
+
+@test "E1: the interval NARROWS as cycles are added, even as the sample RANGE widens" {
+  # Five cycles at ratios 1..5. m=5 admits no k above 1, so the interval degenerates to the range.
+  { for r in 1 2 3 4 5; do _ratio_rows "$r" "$r"; done; } > "$D/narrow-5.tsv"
+  # Twenty-one cycles: the same five ratios four times over, plus ONE outlier at 100x. The range
+  # explodes 5 -> 100; a converging statistic must go the other way.
+  { c=0
+    for _rep in 1 2 3 4; do : "$_rep"; for r in 1 2 3 4 5; do c=$((c+1)); _ratio_rows "$c" "$r"; done; done
+    c=$((c+1)); _ratio_rows "$c" 100; } > "$D/narrow-21.tsv"
+
+  run bash "$S" --analyse "$D/narrow-5.tsv"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'CI on the median = 1.00..5.00'
+  printf '%s' "$output" | grep -q 'spread 1.00..5.00'
+
+  run bash "$S" --analyse "$D/narrow-21.tsv"
+  [ "$status" -eq 0 ]
+  # RANGE widened 5x -> 100x ...
+  printf '%s' "$output" | grep -q 'spread 1.00..100.00'
+  # ... while the interval narrowed from 1.00..5.00 to 2.00..4.00. Keyed on the exact order
+  # statistics -- P(Bin(21,1/2) <= 6) = 82160/2097152 = 0.0392 is the last tail at or under 0.05, so
+  # the sign test selects k=7 and the interval is R[7]..R[15]. A rig that merely printed a
+  # narrower-looking number cannot pass: those are the two values it selects and nothing else.
+  printf '%s' "$output" | grep -q 'CI on the median = 2.00..4.00'
+  printf '%s' "$output" | grep -q 'k=7 of 21 cycles'
+}
+
+@test "E2: the interval is the SIGN-TEST interval — exact order statistics, not a guess" {
+  # m=20 at ratios 1..20. P(Bin(20,1/2) <= 5) = 21700/1048576 = 0.0207, so k=6 is the tightest
+  # index reaching 90% coverage and the interval is R[6]..R[15] = 6.00..15.00 at 96%. Every one of
+  # those three numbers is failure-distinct: k=5 would read 5.00..16.00, k=7 would read 7.00..14.00.
+  { for r in $(seq 1 20); do _ratio_rows "$r" "$r"; done; } > "$D/signtest-20.tsv"
+  run bash "$S" --analyse "$D/signtest-20.tsv"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '96% CI on the median = 6.00..15.00'
+  printf '%s' "$output" | grep -q 'k=6 of 20 cycles'
+}
+
+@test "E3: at the 3-cycle default the interval IS the range — the replacement changes no verdict there" {
+  # MUST-NOT-CHANGE. Below m=5 no k reaches 90% coverage, so the interval degenerates to the full
+  # range and this gate is byte-identical to the max/min one it replaced. C1/C2/C2b all run at three
+  # cycles and keep their verdicts for exactly this reason; that degeneracy is the honest reading of
+  # three points, and it must be LABELLED rather than dressed up as a 90% result.
+  { for r in 1 2 3; do _ratio_rows "$r" "$r"; done; } > "$D/three.tsv"
+  run bash "$S" --analyse "$D/three.tsv"
+  printf '%s' "$output" | grep -q '75% CI on the median = 1.00..3.00'
+  printf '%s' "$output" | grep -q 'below the 90% target'
+}
+
+@test "D4: MUTATION — restoring the max/min range as the gate makes E1 unpassable again" {
+  # The defect being fixed, reinstated in one line: if the interval endpoints are the sample
+  # extremes, then adding cycles can only widen it. E1's 21-cycle fixture is the discriminator — it
+  # was built so that the range and the interval move in OPPOSITE directions on the same data.
+  m="$D/mut4.sh"
+  sed 's|      ci_lo = R\[ci_k\]; ci_hi = R\[m+1-ci_k\]|      ci_lo = R[1]; ci_hi = R[m]|' "$S" > "$m"
+  grep -q 'ci_lo = R\[1\]; ci_hi = R\[m\]' "$m"
+
+  { c=0
+    for _rep in 1 2 3 4; do : "$_rep"; for r in 1 2 3 4 5; do c=$((c+1)); _ratio_rows "$c" "$r"; done; done
+    c=$((c+1)); _ratio_rows "$c" 100; } > "$D/mut-21.tsv"
+  run bash "$m" --analyse "$D/mut-21.tsv"
+  if printf '%s' "$output" | grep -q 'CI on the median = 2.00..4.00'; then
+    echo "MUTATION SURVIVED: interval endpoints replaced by the sample extremes, yet it still narrowed" >&2
+    false
+  fi
+  printf '%s' "$output" | grep -q 'CI on the median = 1.00..100.00'
+}
+
+@test "E4: past m=1000 the exact binomial computes inf/inf — the approximation guard stops it" {
+  # 2^m is +inf in a double from m=1024 and C(m,m/2) overflows with it, so the exact branch divides
+  # inf by inf. Measured at m=1100 it selects k=550 — exactly m/2, the NARROWEST interval the order
+  # statistics admit, which is no confidence at all — and labels it `nan%`. The caveat cannot save
+  # it either: `nan < 0.895` is false, so the "below the 90% target" label is suppressed and a noisy
+  # run reads as decisively resolved with no coverage figure to contradict it. Keyed on both the
+  # coverage token AND k, which differ between the two branches (522 vs 550).
+  { for c in $(seq 1 1100); do
+      printf '%s\tidle\t4.000\tx\t4\t100\n' "$c"
+      printf '%s\tserial\t8.000\tx\t4\t100\n' "$c"
+      awk -v c="$c" 'BEGIN{ printf "%s\tparallel\t%.4f\tx\t4\t100\n", c, 4.0 + 4.0*(1.0 + (c%7)*0.1) }'
+    done; } > "$D/huge.tsv"
+
+  run bash "$S" --analyse "$D/huge.tsv"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '90% CI on the median = '
+  printf '%s' "$output" | grep -q 'normal approximation, m>1000'
+  printf '%s' "$output" | grep -q 'k=522 of 1100 cycles'
+  ! printf '%s' "$output" | grep -q 'nan' || false
+
+  # MUTATION: drop the bound and the exact branch takes an infinite denominator.
+  m="$D/mut5.sh"
+  sed 's|if (m >= 2 \&\& m <= 1000) {|if (m >= 2) {|' "$S" > "$m"
+  ! grep -q 'm >= 2 && m <= 1000' "$m" || false
+  run bash "$m" --analyse "$D/huge.tsv"
+  printf '%s' "$output" | grep -q 'nan% CI on the median'
+  printf '%s' "$output" | grep -q 'k=550 of 1100 cycles'
 }

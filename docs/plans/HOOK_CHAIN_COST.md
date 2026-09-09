@@ -163,6 +163,17 @@ bounded fallback collapse the PreToolUse/Bash hooks into one process and the Sto
 **Both target the 19% term, not the 81% term.** A broker or a collapse removes registered-hook
 `fork`+`exec`s; neither, by itself, removes a single external exec *inside* a hook.
 
+> ⚠ **CORRECTION 2026-09-08 — the collapse removes no `fork`+`exec` at all in its default mode.**
+> `hook-chain.sh` defaults to `exec` mode, where the harness forks the dispatcher (1) and the
+> dispatcher then forks and execs every member (10): the process count goes **up by one** against
+> today's ten registered entries, and only the peak CONCURRENCY falls, 10 → 2. `source` mode does
+> remove nine execs, and it is the mode whose largest member measured 48 ms worse. So the sentence
+> above is right about the broker and wrong about the collapse — what the collapse trades is duration
+> for concurrency at roughly constant product, which is the trade `session-capacity-ceiling` §12 says
+> is the one that matters (fork *rate* is not a capacity variable; fork *concurrency* is). This is
+> also why the wall-clock A/B in §3 was always going to read flat.
+> `docs/research/hook-chain-occupancy-readjudication-2026-09-08.md` §4.1.
+
 **Broker — rejected, on four grounds:**
 
 1. **Yield vs stakes.** It addresses at most 19% of a chain measured at 0.054–0.149 cores. The
@@ -216,6 +227,16 @@ no-op that can never decide anything"), documented it, and left it — M1 is tha
 scales with cost-per-fork, which is O(load), **so a collapse pays only in the regime it exists to
 prevent and cannot be validated at normal load.** Any future attempt must therefore be measured under
 *sustained, controlled* high load, not at the ambient load either of us had.
+
+**2026-09-08 — the occupancy re-adjudication this paragraph asks for has been attempted, and it
+stopped one step short of the number.** `05c79abca813` fixed the two instruments it depends on (the
+bench's acceptance gate was anti-monotone in evidence; the parity suite's drift guard took its
+expectation from a literal array in its own `setup()`) and found the collapse **not wirable
+regardless of the occupancy result**: the registry had drifted five members behind settings.json
+across the two Bash chains, so wiring it would have silently retired
+`smart-bash-allowlist.sh`, `qos-rewrite.sh`, `coldcompile-admit.sh`, `pr-gate.sh` and
+`relay-verbatim.sh`. Registries reconciled; the certified run remains unrun on a measured load
+ceiling. `docs/research/hook-chain-occupancy-readjudication-2026-09-08.md`.
 
 **What the measurement supports instead:** attack the abstain class (§2.5). It needs no new process
 model, no daemon, and no change to any hook's decisions — only to what a hook spends before
