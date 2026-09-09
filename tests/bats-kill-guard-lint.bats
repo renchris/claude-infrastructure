@@ -316,7 +316,15 @@ EOF
   run grep -c 'bats-kill-guard-lint.sh' "$REPO/scripts/ship-land.sh"
   [ "$status" -eq 0 ]
   [ "$output" -ge 1 ]
-  grep -q 'KILL_GUARD_LINT" --selftest' "$REPO/scripts/ship-land.sh" || false
+  # THE SPELLING MOVED, THE WIRING DID NOT — and the pair below is STRONGER than the single grep it
+  # replaces. The eleven arms' `--selftest` preambles were re-routed through run_gate's selftest_ok()
+  # helper (2026-09-09, Tier 0 of the ratchet-arm memo rollout): the gate still proves the detector
+  # discriminates on every land, it just carries an EARNED green keyed on the lint's own blob rather
+  # than re-running it on a byte-identical file every round. So the assertion is now in two parts —
+  # this arm goes through the helper, AND the helper is the thing that runs `--selftest` — because
+  # grepping only for the call would no longer pin that a selftest happens at all.
+  grep -q 'selftest_ok "$KILL_GUARD_LINT"' "$REPO/scripts/ship-land.sh" || false
+  grep -q -- '"$lint" --selftest' "$REPO/scripts/ship-land.sh" || false
   grep -q 'gate_red kill-guard' "$REPO/scripts/ship-land.sh" || false
 }
 

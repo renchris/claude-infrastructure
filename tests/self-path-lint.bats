@@ -217,8 +217,17 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"'
   # (memory: enforcement-must-live-at-the-chokepoint).
   grep -q 'self-path-lint.sh' "$REPO/scripts/ship-land.sh" \
     || { echo "ship-land.sh does not reference the lint — it is detection, not a gate"; false; }
-  grep -q 'SELFPATH_LINT.*--selftest' "$REPO/scripts/ship-land.sh" \
+  # THE SPELLING MOVED, THE WIRING DID NOT — and the pair below is STRONGER than the single grep it
+  # replaces. The eleven arms' `--selftest` preambles were re-routed through run_gate's selftest_ok()
+  # helper (2026-09-09, Tier 0 of the ratchet-arm memo rollout): the gate still proves the detector
+  # discriminates on every land, it just carries an EARNED green keyed on the lint's own blob rather
+  # than re-running it on a byte-identical file every round. So the assertion is now in two parts —
+  # this arm goes through the helper, AND the helper is the thing that runs `--selftest` — because
+  # grepping only for the call would no longer pin that a selftest happens at all.
+  grep -q 'selftest_ok "$SELFPATH_LINT"' "$REPO/scripts/ship-land.sh" \
     || { echo "the gate runs the lint without its --selftest — an unverified detector's clean verdict means nothing"; false; }
+  grep -q -- '"$lint" --selftest' "$REPO/scripts/ship-land.sh" \
+    || { echo "selftest_ok no longer runs --selftest at all — the helper stopped being a selftest"; false; }
   # Anchored on the own_run ROUTING, not on the assignment spelling — see the note in
   # tests/test-hermeticity-lint.bats. `CC_SELFPATH_OWN=` was true until the P2 own-scope work made
   # own_run() the single reader of the kill switch and the variable name an ARGUMENT.
