@@ -575,3 +575,52 @@ single-brained and audited, and doc_classifier's authorization holes are closed 
   `group.py`: 44 `reso-management-app`, 15 `doc_classifier`, plus `reso`, `reso-qa-runner`,
   `lakehouse-lecture` and `agent-build-hackathon` singletons. The 2026-08-09 triage deliberately left
   these unmapped ("they belong to OTHER repos and have their own masters"); this is that master.
+
+---
+
+## ✅ RESOLVED 2026-09-09 — R1 and R3 are DISCHARGED; the headline was never true
+
+Measured this session from clean trunk worktrees, not re-derived from this plan.
+Full record with every receipt → `docs/research/w4-product-repos-premise-2026-09-09.md`.
+
+**This plan opens on a number that is false.** *"reso took 0 commits in 7 days"* — reso's trunk took
+**328 commits** in the 7 days before item `79e7c3cb7357` was filed, and **140** in the 7 days before
+this read. The longest gap between consecutive trunk commits since 2026-06-01 is **6.24 days**, so
+there has been no 7-day zero window at all. The sentence *"the infrastructure had become the work"*
+is the premise this whole master rests on, and it does not survive measurement.
+
+| Wave | Status 2026-09-09 | Receipt |
+|---|---|---|
+| **R1 · reso: unblock the gate** | ✅ **DISCHARGED** | `pnpm lint` on `origin/main` = exit 0, **0 errors**, 5 warnings, **zero `import-x`**. Cured by `7f1259b31` *"fix(lint): 122 errors across 96 files were one unresolved Panda alias"* — committed **2026-08-12T03:20:18Z**, i.e. **8 h 39 min BEFORE** the item was filed, with 18 further commits already on trunk between the two. The wave was stale at birth. |
+| **R2 · reso: land the queue** | ⚠️ **LIVE, but understated and correctly parked** | `cc-135842-3950` = 11 ahead / **1792 behind**; `cc-225947-27025` = 39 ahead / **1671 behind**. Not a tail — a rebase over ~27 days of drift, one branch carrying a `halted mid-flight` WIP commit. The member rows' `needs` were re-measured 2026-09-07 and already name the real blockers (a `docs/research/` `BANNED_PATH_PREFIXES` rule, a superseded choreography, a landing-range escalation). |
+| **R3 · reso: prod split-brain** | ✅ **DISCHARGED** | `scripts/land-status.sh`, run live this turn: *"Amplify auto-build on main is OFF — landing bills nothing"* · *"Path F watches refs/heads/release — landing ships no Fly release"* · *"production is at the trunk tip"*. Decoupled, not split. **Landing in reso bills nothing today.** |
+| **R4 · doc_classifier** | ⚠️ **LIVE — and its remedy had rotted** | `git show origin/main:reviewapp/api/routers/run.py \| grep -c require_loopback_client` prints **0**: an unauthenticated remote caller still gets 200 + a `subprocess.Popen` run-all spawn from `POST /api/run/start`. Driven as far as an agent can — see below. |
+
+**Membership:** 41 of 59 members are already `done`. Of the 19 that are not, **18 are `blocked`** —
+parked on an operator step, not on agent work.
+
+### R4 — the remedy had rotted, which is why a live hole sat 32 days
+
+Four rows publish an operator command marked *"Do not vary it"* that opens with
+`git merge --ff-only wt-35cae65a8d2d`. Trunk moved `cc6a30a6 → 31dc8809` after those rows were
+written, so all five fix branches are 2 behind and git now refuses: *"Diverging branches can't be
+fast-forwarded"*. **The symptom was alive and the remedy was dead**, so the row kept demanding an
+action that could not work. The rows' own history shows this was the **4th** occurrence — each
+previous correction froze a new sha, and the next trunk move killed it.
+
+Driven this session: all 9 commits (3 run-plane loopback + 6 untrusted-input) rebased onto trunk as
+**`w4-runplane-security-rebased`**, zero conflicts, peer branches not rewritten; `make ci` **exit 0,
+4655 passed, 95.20% coverage** on that exact tree; **pushed to origin** (ahead=9, behind=0, strict
+ff). Rows `35cae65a8d2d` / `e3d8a8cf90a4` / `8c7f7ae4ee4d` re-armed with a runnable `--run`.
+
+🚨 **The rule this yields, and the reason there is no 5th re-point.** *A handover that names a frozen
+sha rots every time trunk moves; one that names the invariant plus the command that recomputes it does
+not.* The replacement (`~/Development/doc_classifier/.local/land-runplane.sh`) rebases if trunk has
+moved, gates on the tree that will actually land, and verifies by reading `origin/main` back. Same
+shape as this repo's ship-policy table refusing to name a repo, for the same reason.
+
+⚠️ **Two cautions for the next reader.** (1) `39d8431abae5` reads `done` while the DoD it names still
+prints 0 on trunk — a false-done of exactly the class that row was filed to flag. (2) A first read of
+the reso *working checkout* reported `scripts/land-status.sh` absent; that checkout is **1816 commits
+behind trunk** and the file exists on `origin/main`. A stale checkout answers "absent" for a file that
+exists, and it errs in one direction only — read what an item cites on TRUNK.
