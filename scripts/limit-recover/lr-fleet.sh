@@ -256,8 +256,12 @@ import sys,json
 out=[]
 for l in sys.stdin:
     p=l.rstrip("\n").split("\t")
-    if len(p)!=8: continue
-    out.append(dict(zip(["sid","cfg","account","pane","pid","cwd","tier","disposition"],p)))
+    # 9 fields since the KIND column landed. A hard count gate here is a SILENT data-loss bug:
+    # a stale width made the skip drop EVERY row and --json returned a valid empty list at exit 0,
+    # which any consumer reads as "no blocked sessions". Keep it exact, and keep it in step with
+    # the printf in lf_locate and every tab-split read of a locate row.
+    if len(p)!=9: continue
+    out.append(dict(zip(["sid","cfg","account","pane","pid","cwd","tier","disposition","kind"],p)))
 print(json.dumps(out,indent=1))'
     else printf '%s\n' "$rows" | lf_print_census; fi
     exit 0 ;;
