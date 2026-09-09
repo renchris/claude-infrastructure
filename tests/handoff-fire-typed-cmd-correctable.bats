@@ -168,11 +168,20 @@ setup() {
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     n=$((n + 1))
+    # TWO legitimate shielded forms, because the invariant is about the COMMAND WORD, not about
+    # the launcher being one. Five shapes put the launcher itself in command position, so the
+    # shield must sit immediately before it. The RESUME shape (68cc0a772) does not: it runs
+    # `${NC}bash <printf %q launcher>`, where the command word is `bash` — shielded — and the
+    # launcher is a QUOTED ARGUMENT that CORRECT never inspects. `nocorrect` is a zsh reserved
+    # word covering the whole command, so that form is shielded at least as strongly.
+    # Requiring form (a) of form (b) is what made this guard RED on trunk for every land whose
+    # diff reached handoff-fire.sh: the shape was correct and the predicate was not.
     grep -q '${NC}${PREFIX}${LAUNCHER}' <<<"$line" \
+      || grep -qE '\$\{NC\}bash \$\(printf %q ' <<<"$line" \
       || { echo "unshielded typed shape: $line"; false; }
   done <<<"$shapes"
-  # All six known shapes: 2x --recycle, cold + existing --worktree, --cwd, bare.
-  [ "$n" -eq 6 ] || { echo "expected 6 typed launch shapes, found $n — a shape was added or lost"; false; }
+  # All seven known shapes: resume, 2x --recycle, cold + existing --worktree, --cwd, bare.
+  [ "$n" -eq 7 ] || { echo "expected 7 typed launch shapes, found $n — a shape was added or lost"; false; }
 }
 
 @test "NC is exactly the zsh reserved word, with its separating space" {
