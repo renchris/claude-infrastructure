@@ -42,11 +42,14 @@ export CC_FIRED_DIR="$SBX/cc-fired";                mkdir -p "$CC_FIRED_DIR"
 export CC_ORIGIN_IDENTITY_LIB="$PWD/hooks/lib/origin-identity.sh"
 export CC_PERMPEND_ESCALATE_S=100                 # dispatched first rung (prod default 1800)
 export CC_PERMPEND_ESCALATE_ATTENDED_S=400        # unproven  first rung (prod default 7200)
-# V3 self-check OFF by default here (T31 opts back in, like CC_PAGE_TO/T9). It compares REAL live claude
-# panes against the SANDBOX's telemetry dir, and this box legitimately runs ~30 panes against 1-2
-# fixtures — a permanent artificial blind spot whose page would land in notify.log and corrupt every
-# test that asserts on notify VOLUME (T9/T10/T18 caught exactly that). An unreachable tolerance is the
-# off switch; T31 stubs `ps` so it can assert on an exact, fabricated delta instead.
+# V3 self-check OFF by default here (T31 opts back in, like CC_PAGE_TO/T9). Since 2026-09-09 it joins the
+# LIVE-SESSION roster (`cc-sessions --json` in production) against the SANDBOX's telemetry dir, and this
+# box legitimately runs ~30 real sessions against 1-2 fixtures — a permanent artificial blind spot whose
+# page would land in notify.log and corrupt every test that asserts on notify VOLUME (T9/T10/T18 caught
+# exactly that). The off switch is now a roster command that cannot be read, which reaches the ABSTAIN
+# path: no sweep outside T31 shells out to the real cc-sessions at all. The unreachable tolerance stays
+# as a second, independent brake. T31 fixtures both so it can assert on an exact, named blind spot.
+export CC_SUP_SESSIONS_CMD="false"
 export CC_SUP_PANE_DELTA_TOL=1000000
 
 ALIVE=; cleanup(){ [ -n "$ALIVE" ] && kill "$ALIVE" 2>/dev/null; rm -rf "$SBX"; }
@@ -511,68 +514,101 @@ else
                           || no "work_landed could not prove landed without timeout(1)"
 fi
 
-echo "T31 V3 SELF-CHECK — live panes OUTSIDE the telemetry world-view must page, damped (audit V3)"
+echo "T31 V3 SELF-CHECK — LIVE SESSIONS with no telemetry row must page, NAMED and damped (audit V3; row 77fbb8be90b0)"
 # The blind spot: every pager path here iterates $TEL_DIR, whose only writer is the statusline (it stops
 # emitting on a backgrounded/long-turn pane) and which lives in reboot-cleared /tmp. So the world can be
 # EMPTY while sessions are live, and an empty world emits a CLEAN all-clear heartbeat — identical to a
-# genuinely quiet fleet. `ps` is stubbed to report a fixed number of interactive claude panes, so the
-# delta is exact and the assertions do not depend on what is really running on this box.
+# genuinely quiet fleet.
+# WHAT CHANGED (2026-09-09): the trigger used to be `live_pane_count` (a ps argv scan) MINUS the number
+# of telemetry files — two different populations, so it paged on the denominators. The fixture is now the
+# ROSTER (CC_SUP_SESSIONS_CMD, production `cc-sessions --json`) joined to $TEL_DIR/<session_id>.json, and
+# the last case below keeps a stubbed `ps` on purpose: it is the RED PROOF that a box full of claude
+# processes that are not sessions no longer manufactures a page.
 reset; permreset; rm -f "$CC_TELEMETRY_DIR"/*.json "$SBX/notify.log" "$CC_SUPERVISOR_PAGEDIR"/selfcheck.state
 rm -rf "$CC_SUPERVISOR_PAGEDIR/damp"
+ROSTER="$SBX/roster.json"
+mkroster(){ # $1.. = session ids the roster reports as LIVE; each gets name "pane-<sid>"
+  jq -nc '[$ARGS.positional[] | {paneUUID:., name:("pane-"+.), session_id:.}]' --args "$@" > "$ROSTER"; }
 PSBIN="$SBX/psbin"; mkdir -p "$PSBIN"
-mkps(){ # $1=how many interactive claude panes `ps` should report
+mkps(){ # $1 = how many interactive claude PROCESSES `ps` should report (not sessions — that is the point)
   { echo '#!/bin/bash'
-    echo 'case " $* " in *" -wwEo "*) : ;; *) exec /bin/ps "$@" ;; esac'   # only the self-check form is faked
+    echo 'case " $* " in *" -wwEo "*) : ;; *) exec /bin/ps "$@" ;; esac'   # only the argv-scan form is faked
     echo "for i in \$(seq 1 $1); do echo '/Users/x/.claude-versions/2.1.219/claude --model opus'; done"
   } > "$PSBIN/ps"; chmod +x "$PSBIN/ps"; }
 selfsweep(){ CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" \
-             CC_NOTIFY_BIN="$SBX/bin/cc-notify" CC_SUP_PANE_DELTA_TOL=0 PATH="$PSBIN:$PATH" \
+             CC_NOTIFY_BIN="$SBX/bin/cc-notify" CC_SUP_PANE_DELTA_TOL=0 \
+             CC_SUP_SESSIONS_CMD="cat $ROSTER" PATH="$PSBIN:$PATH" \
              bash "$SUP" --once >/dev/null 2>&1; }
 # Count SENDS, not message text: the shared cc-notify stub captures the resolved TARGET only (one line
-# per attempt), which is what T9/T10/T18/T29 already assert on — so a content grep here could never
-# match, and widening that fixture for this one test would touch four others. Attribution comes from the
-# fixture instead: these sweeps run against an EMPTY telemetry dir, so no DEAD/STALL?/PAST-THRESHOLD page
-# is reachable and every captured line IS a self-check page. The `"kind":"selfcheck_page"` IDL assertions
-# below pin the identity independently.
-# The `-f` guard is load-bearing: `< missing-file` fails in the SHELL before wc runs, so `2>/dev/null`
-# on wc cannot suppress it — the redirect error would print on every no-sends assertion.
+# per attempt), which is what T9/T10/T18/T29 already assert on — so a content grep there could never
+# match. The NAMES are asserted on the IDL instead, which is this page's own durable record.
 scap(){ local n=0
   [ -f "$SBX/notify.log" ] && { n=$(wc -l < "$SBX/notify.log" 2>/dev/null) || n=0; }
   printf '%s' "$(( ${n:-0} + 0 ))"; }
 
-mkps 3                                                            # 3 live panes, 0 telemetry rows ⇒ Δ3, fully blind
+mkroster sc-a sc-b sc-c                                           # 3 live sessions, 0 telemetry ⇒ 3 uncovered
 selfsweep                                                         # sweep 1 — must NOT page yet (persistence gate)
-[ "$(scap)" -eq 0 ] && ok "Δ does not page on its FIRST sweep (a pane spawned mid-sweep is not a blind spot)" \
+[ "$(scap)" -eq 0 ] && ok "an uncovered session does not page on its FIRST sweep (a spawn mid-sweep is not a blind spot)" \
                     || no "self-check paged on sweep 1 (persistence gate missing — races will page)"
 selfsweep                                                         # sweep 2 — persisted ⇒ page
-[ "$(scap)" -eq 1 ] && ok "a PERSISTED blind spot pages exactly once (Δ3 live vs 0 enumerated)" \
+[ "$(scap)" -eq 1 ] && ok "a PERSISTED blind spot pages exactly once (3 roster sessions, 0 enumerated)" \
                     || no "persisted blind spot did not page once (sends=$(scap))"
 idl_has '"kind":"selfcheck_page"' && ok "self-check page is IDL-recorded (S-4 auditable)" \
                                   || no "self-check page left no IDL record"
-selfsweep                                                         # sweep 3 — SAME delta ⇒ damped
+# RED PROOF (row 77fbb8be90b0): the page must NAME the uncovered sessions. A bare count is what made the
+# pre-fix alarm unactionable — the operator could not tell WHICH session had no pager without re-deriving
+# the join by hand, and the count itself was an artifact of the mismatched denominators.
+idl_has '"sessions":"pane-sc-a' && ok "the page NAMES the uncovered sessions (not a bare count)" \
+                                || no "self-check page carried no session NAMES — a count is not actionable"
+selfsweep                                                         # sweep 3 — SAME set ⇒ damped
 [ "$(scap)" -eq 1 ] && ok "an unchanged blind spot stays DAMPED (no per-sweep composer storm)" \
                     || no "standing blind spot re-paged every sweep (sends=$(scap) — the 07-19 storm)"
-mkps 5; selfsweep                                                 # WORSENED (Δ3→Δ5) ⇒ breaks through
-[ "$(scap)" -eq 2 ] && ok "a WORSENING blind spot breaks through the damping (Δ3→Δ5)" \
+mkroster sc-a sc-b sc-c sc-d sc-e; selfsweep                      # WORSENED (3→5 uncovered) ⇒ breaks through
+[ "$(scap)" -eq 2 ] && ok "a WORSENING blind spot breaks through the damping (3→5 uncovered)" \
                     || no "worsening delta stayed damped (sends=$(scap)) — damping hides escalation"
-# RECOVERY: the statusline resumes / telemetry repopulates ⇒ enumerated catches up ⇒ silence + re-arm.
+# RECOVERY: the statusline resumes / telemetry repopulates ⇒ every roster session is covered ⇒ silence.
 reset; rm -f "$CC_TELEMETRY_DIR"/*.json
-mkps 2; mktel sc1 40 2 "$ALIVE" "$REPO"; mktel sc2 40 2 "$ALIVE" "$REPO"   # 2 live, 2 enumerated ⇒ Δ0
+mkroster sc1 sc2; mktel sc1 40 2 "$ALIVE" "$REPO"; mktel sc2 40 2 "$ALIVE" "$REPO"
 selfsweep
-[ "$(scap)" -eq 2 ] && ok "Δ0 does not page (a fully-visible fleet is silent)" \
+[ "$(scap)" -eq 2 ] && ok "full coverage does not page (every roster session has its telemetry row)" \
                     || no "self-check paged with no blind spot (sends=$(scap) — false alarm)"
-idl_has '"kind":"selfcheck_page"' && no "Δ0 emitted a selfcheck_page (false alarm in the ledger)" \
-                                  || ok "no selfcheck_page in the IDL for a visible fleet"
-# ABSTAIN, never a phantom Δ: an unreadable `ps` yields no count, so there is no verdict to page on.
-# (`enum` is real here, so treating an empty count as 0 would compute a NEGATIVE delta and, worse, a
-# broken `ps` on a busy box would read as "everything is visible" — a silent detector failure.)
+idl_has '"kind":"selfcheck_page"' && no "a covered fleet emitted a selfcheck_page (false alarm in the ledger)" \
+                                  || ok "no selfcheck_page in the IDL for a covered fleet"
+# RED PROOF (the defect that filed the row): a box running many claude PROCESSES that are not sessions,
+# with every ROSTER session covered, is NOT a blind spot. Pre-fix this computed live(7) − enum(2) = Δ5 and
+# paged forever on a difference between denominators; measured 2026-09-08 the real join said the opposite
+# (31 telemetry files vs 25 sessions, ONE genuinely uncovered) while the reported Δ grew 2→3.
+# ATTRIBUTION BY IDENTITY, NOT BY VOLUME. Everything above counts SENDS, which is sound only while the
+# fixture keeps the telemetry dir empty — no DEAD/STALL?/PAST-THRESHOLD page is reachable, so every line
+# IS a self-check page. These two cases deliberately put rows in that dir, so a send count would fold in
+# pages this test is not about (measured: 1 run in 3 caught an unrelated page and reddened the stray
+# case). The IDL kind is the self-check's own record and cannot be confused with another finding's.
+reset; rm -f "$CC_SUPERVISOR_PAGEDIR"/selfcheck.state; rm -rf "$CC_SUPERVISOR_PAGEDIR/damp"
+# The damping state is cleared too, deliberately: a case that inherits a `paged` high-water mark can
+# read silent for the WRONG reason and would exonerate the very defect it is here to catch.
+mkps 7; selfsweep; selfsweep                                      # two sweeps: past the persistence gate
+idl_has '"kind":"selfcheck_page"' && no "a process/telemetry count difference paged with full session coverage" \
+                                  || ok "claude PROCESSES that are not sessions never manufacture a Δ (the 77fbb8be90b0 artifact)"
+# STRAY telemetry — files for sessions the roster does not name (a reaped pane's leftovers) — is the same
+# mismatch in the other direction, and must not page either. It cannot even be expressed as a Δ now.
+reset; rm -f "$CC_SUPERVISOR_PAGEDIR"/selfcheck.state; rm -rf "$CC_SUPERVISOR_PAGEDIR/damp"
+mktel sc-ghost1 40 2 "$ALIVE" "$REPO"; mktel sc-ghost2 40 2 "$ALIVE" "$REPO"; selfsweep; selfsweep
+idl_has '"kind":"selfcheck_page"' && no "stray telemetry produced a self-check page" \
+                                  || ok "telemetry files with no roster session are silent (coverage is a JOIN, not a count)"
+# ABSTAIN, never a phantom Δ: an unreadable roster yields no verdict. Treating it as an empty fleet would
+# make a broken/absent cc-sessions read as "everything is visible" — a silent detector failure.
 reset; rm -f "$CC_TELEMETRY_DIR"/*.json "$SBX/notify.log"
-printf '#!/bin/bash\nexit 1\n' > "$PSBIN/ps"; chmod +x "$PSBIN/ps"
-selfsweep
-[ "$(scap)" -eq 0 ] && ok "an unreadable ps ABSTAINS (no count ⇒ no verdict, never a phantom page)" \
-                    || no "broken ps produced a self-check page (a non-observation was treated as data)"
-idl_has '"kind":"heartbeat"' && ok "the sweep still completes and heartbeats with ps unreadable" \
-                             || no "a broken ps broke the sweep"
+CC_NOTIFY_CAPTURE="$SBX/notify.log" CC_PAGE_TO_FILE="$SBX/desk-role" CC_NOTIFY_BIN="$SBX/bin/cc-notify" \
+  CC_SUP_PANE_DELTA_TOL=0 CC_SUP_SESSIONS_CMD="false" bash "$SUP" --once >/dev/null 2>&1
+[ "$(scap)" -eq 0 ] && ok "an unreadable roster ABSTAINS (no join ⇒ no verdict, never a phantom page)" \
+                    || no "a broken roster produced a self-check page (a non-observation was treated as data)"
+idl_has '"kind":"heartbeat"' && ok "the sweep still completes and heartbeats with the roster unreadable" \
+                             || no "a broken roster broke the sweep"
+# An EMPTY array is the same non-observation as a broken one: a roster that names nobody on a box that is
+# obviously running this very sweep is an instrument failure, not a fleet of zero.
+reset; printf '[]\n' > "$ROSTER"; selfsweep; selfsweep
+[ "$(scap)" -eq 0 ] && ok "an EMPTY roster ABSTAINS (nobody named is an instrument failure, not a quiet fleet)" \
+                    || no "an empty roster produced a self-check page (sends=$(scap))"
 rm -rf "$PSBIN"                                                   # never leave the stub on PATH for later tests
 
 echo "T32 DESK-LESS DELIVERY — no desk registered is a SUPPORTED configuration, not a permanent failure"
