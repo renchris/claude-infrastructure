@@ -36,6 +36,11 @@
 # anywhere but a body's last line.
 
 setup() {
+  # lr-handoff's live-parser preflight refuses to mint a launcher the LIVE lr-fire-resume.sh cannot
+  # parse (2026-09-09). This suite's subject is the SPAWN SHAPE, and its lr-fire-resume stub carries
+  # no parser arms, so the preflight would refuse every case on a subject it does not test. Its own
+  # cases, both directions, live in tests/lr-handoff-launcher-quoting.bats.
+  export LRH_LIVE_PARSER_CHECK=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd -P)"
   HANDOFF="$REPO/scripts/limit-recover/lr-handoff.sh"
   POLLER="$REPO/scripts/limit-recover/lr-reset-poller.sh"
