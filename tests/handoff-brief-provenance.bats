@@ -170,3 +170,70 @@ _last() { tail -1 "$LOG"; }
   line="$(_last)"
   [[ "$line" == *'"prompt_file":null'* ]]
 }
+
+# ── 8-10. the fallback's ONE free-form field is escaped, so it cannot poison the ledger ────────
+#
+# WHY THESE EXIST (2026-09-09, recovering the value of stranded branch
+# claude/fire-20260818T031629Z-40497-1, whose own suite could not be re-landed against this
+# implementation). Every other %s on the fallback's printf line is a constrained token — an ISO
+# stamp, a pane uuid, an account name, a class. `prompt_file` is a filesystem PATH the caller
+# chose, and on POSIX every byte but `/` and NUL is legal in one. Interpolated raw it emitted
+# INVALID JSON, and the blast radius is not one lost key: scripts/unfired-brief-sweep.sh reads this
+# ledger with `jq -rs` — SLURP, the whole file as one document — so ONE malformed line empties
+# EPOCH and the sweep answers `not-armed — no ledger row carries prompt_file yet` over a fully
+# armed ledger. Measured end-to-end before the fix: a `swept` verdict became `not-armed`.
+#
+# That verdict is ALSO what a correct pre-primitive ledger says, so no consumer can tell a
+# disarmed detector from a young one — the fail-safe-default-mimics-the-healthy-state class,
+# reaching the sweep through its PRODUCER rather than through any line of its own code. The three
+# cases below are each a distinct way the raw interpolation broke, and each was red-proved
+# individually against the pre-fix emitter: quote/backslash INVALID, tab INVALID, and newline
+# INVALID *and split into two ledger rows*, which poisons the slurp even harder than a bad quote.
+#
+# Asserted by ROUND-TRIP (jq parses the line AND gives the path back byte-identical), not by
+# substring: an escaper that merely produces parseable JSON while mangling the path would satisfy
+# a text match and still miss every join, which is the failure mode `prompt_file` exists to close.
+
+_fallback_roundtrip() { # $1=brief path → echoes the path jq reads back, or nothing
+  run env PATH="/usr/bin:/bin" HOME="$HOME" bash -c '
+    . "$1"
+    PROMPT_FILE_ORIG="$2"; SPAWNED_PANE=pane-9; WANT_SELF_RETIRE=0
+    FIRING_SID=sid-under-test; CHOSEN=next; FIRE_GOAL=""
+    jq() { return 127; }        # force the fallback without removing the real binary from the box
+    emit_handoff_telemetry 1
+  ' _ "$BATS_TEST_TMPDIR/units.sh" "$1"
+  [ "$status" -eq 0 ]
+  # ONE row, always. A raw newline in the path splits the record, and a suite that only read the
+  # LAST line would see a well-formed fragment and pass over a ledger it had just corrupted.
+  [ "$(wc -l < "$LOG" | tr -d ' ')" -eq 1 ]
+  jq -r '.prompt_file' < "$LOG"
+}
+
+@test "a brief path holding a quote and a backslash still writes ONE parseable row" {
+  got="$(_fallback_roundtrip '/tmp/fire-a"b\c.txt')"
+  [ "$got" = '/tmp/fire-a"b\c.txt' ]
+}
+
+# 🚨 THE LITERALS BELOW ARE $'...' AND MUST STAY THAT WAY. The first draft of the newline case
+# built its path as "/tmp/fire-x$(printf '\n')y.txt" and PASSED against pristine trunk — command
+# substitution strips trailing newlines, so `$(printf '\n')` is the EMPTY STRING and the path under
+# test held no newline at all. The case was green because it was vacuous, on the very axis it
+# names. ANSI-C quoting embeds the byte without a subshell; the tab case is rewritten the same way
+# for the same reason even though its own substitution happened to survive.
+@test "a brief path holding a tab still writes ONE parseable row" {
+  got="$(_fallback_roundtrip $'/tmp/fire-a\tb.txt')"
+  [ "$got" = $'/tmp/fire-a\tb.txt' ]
+}
+
+@test "a brief path holding a newline is escaped, not split across two ledger rows" {
+  got="$(_fallback_roundtrip $'/tmp/fire-x\ny.txt')"
+  [ "$got" = $'/tmp/fire-x\ny.txt' ]
+}
+
+# ── 11. CONTROL: the ordinary path is untouched by the escaper ─────────────────────────────────
+# The escaper runs on EVERY fallback row, so its no-op case is the one that would break every
+# existing join if the substitution order were wrong (backslash after quote double-escapes).
+@test "CONTROL: an ordinary brief path is passed through the escaper byte-identically" {
+  got="$(_fallback_roundtrip "$BRIEF")"
+  [ "$got" = "$BRIEF" ]
+}

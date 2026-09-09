@@ -11333,11 +11333,38 @@ else
       # written down this path would be reported as a lost succession, i.e. the field's own failure
       # mode is to manufacture the exact alarm it exists to make trustworthy. `%s` on an unset value
       # yields an empty string rather than jq's null, so the emptiness is spelled explicitly here.
+      #
+      # 🚨 AND IT IS HAND-ESCAPED, BECAUSE THIS FIELD IS THE ONLY FREE-FORM ONE ON THE LINE.
+      # Every other %s here is a constrained token (a pane uuid, an account name, a class, an ISO
+      # stamp); prompt_file is a filesystem path the caller chose, and on POSIX every byte except
+      # `/` and NUL is legal in one. Interpolating it raw emitted INVALID JSON for a brief whose
+      # path held a `"` or a `\` — and the cost is not one lost key. `scripts/unfired-brief-sweep.sh`
+      # reads this ledger with `jq -rs` (SLURP: the whole file is one document), so a single
+      # malformed line makes EPOCH come back empty and the sweep reports
+      # `not-armed — no ledger row carries prompt_file yet` over a fully armed ledger. Measured
+      # end-to-end: one such row flipped a `swept` verdict to `not-armed`. That is the exact shape
+      # the sweep's own header refuses ("a detector whose finding set is silently, permanently empty
+      # reports all-clear forever") arriving through its producer instead of its own code, and it is
+      # the fail-safe-default-mimics-the-healthy-state class: `not-armed` is also what a correct,
+      # pre-primitive ledger says, so nothing downstream can tell the two apart.
+      # ORDER IS LOAD-BEARING: backslash first, or the backslashes this step introduces get escaped
+      # again by the quote step. CR/LF/TAB are escaped too — not pedantry, since a raw newline in a
+      # path does not merely break one line's JSON, it SPLITS the row and poisons the slurp exactly
+      # as a bare quote does. Residual, stated rather than hidden: other C0 controls (0x00-0x08,
+      # 0x0B-0x1F) are still emitted raw and jq still rejects them; they cannot be produced by any
+      # brief path this tree writes, and the jq arm above is the one that runs in production.
       printf '{"ts":"%s","firing_sid":"%s","class":"%s","engaged":%s,"target_pane":"%s","account":"%s","firing_rss_kb":%s,"goal_requested":%s,"prompt_file":%s}\n' \
         "$_hf_ts" "${FIRING_SID:-?}" "$_hf_class" "${1:-0}" "${SPAWNED_PANE:-}" "${CHOSEN:-?}" "${_hf_rss:-0}" \
         "$([ -n "${FIRE_GOAL:-}" ] && echo true || echo false)" \
         "$(_hf_pf="$(_resolved_prompt_file 2>/dev/null || true)"
-           if [ -n "$_hf_pf" ]; then printf '"%s"' "$_hf_pf"; else printf null; fi)" \
+           if [ -n "$_hf_pf" ]; then
+             _hf_pf="${_hf_pf//\\/\\\\}"
+             _hf_pf="${_hf_pf//\"/\\\"}"
+             _hf_pf="${_hf_pf//$'\r'/\\r}"
+             _hf_pf="${_hf_pf//$'\n'/\\n}"
+             _hf_pf="${_hf_pf//$'\t'/\\t}"
+             printf '"%s"' "$_hf_pf"
+           else printf null; fi)" \
         >> "$_hf_log" 2>/dev/null || true
     fi
     # RETENTION IS THE DENOMINATOR'S WINDOW. Bounds raised 600/500 → 1200/1000 the day the capacity
