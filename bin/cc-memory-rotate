@@ -354,9 +354,33 @@ fi
 # non-interactive bash killed by a signal does not otherwise run its EXIT trap; each re-raises
 # the conventional 128+n so callers still see "killed", not a clean exit.
 CITE_TMP=""
+# The scan engine below opens two more scratch files per pass, so the trap tracks a LIST rather
+# than the one citation pattern file it was written for. Same reason, same failure: a hook killed
+# mid-scan must not strand them in the live memory dir.
+CCMR_TMPS=""
+# 🚨 TAKES A VARIABLE NAME AND ASSIGNS IT — it does NOT print the path for `x=$(_ccmr_tmp)`.
+# That spelling is the bug this shape exists to prevent: a command substitution runs in a
+# SUBSHELL, so the registration below would be discarded and every scratch file would survive
+# as the very `.rotate.cited.*` litter the trap was added to stop (measured: 4 stranded per run
+# before this was inverted). MEMORY.md assignment-inside-command-substitution-never-escapes.
+_ccmr_tmp() {
+  local _t
+  _t=$(mktemp "$DIR/.rotate.cited.XXXXXX") || return 1
+  CCMR_TMPS="$CCMR_TMPS$_t
+"
+  eval "$1=\$_t"
+}
 _ccmr_cleanup() {
+  local _t
   rmdir "$LOCK" 2>/dev/null || true
   [ -n "$CITE_TMP" ] && rm -f "$CITE_TMP" 2>/dev/null
+  if [ -n "$CCMR_TMPS" ]; then
+    while IFS= read -r _t; do
+      [ -n "$_t" ] && rm -f "$_t" 2>/dev/null
+    done <<EOF
+$CCMR_TMPS
+EOF
+  fi
   return 0
 }
 trap '_ccmr_cleanup' EXIT
@@ -365,6 +389,10 @@ trap '_ccmr_cleanup; exit 130' INT
 trap '_ccmr_cleanup; exit 129' HUP
 
 TAB=$(printf '\t')
+# A literal, NOT $(printf '\n'): command substitution strips trailing newlines, so that spelling
+# yields the empty string and every HUB_TABLE lookup below would match at offset 0.
+NLCH='
+'
 NOW=$(date +%s)
 MIN_AGE_S=$(( MIN_AGE_DAYS * 86400 ))
 
@@ -717,6 +745,94 @@ EOF
   exit 0
 fi
 
+# ── THE NAME SCANNER, AND WHY IT IS NOT `grep -F -f` ─────────────────────────────────────────
+#
+# Both scans below ask ONE question — "which of these N names occur in which of these M files" —
+# and both used to ask it the way that looks obviously right and is quadratic on this platform.
+#
+# 🚨 BSD grep's `-F -f` IS LINEAR IN PATTERN COUNT, not Aho-Corasick. Measured 2026-09-08 on this
+# repo's executable corpus (556 files), `/usr/bin/grep -rlF -f`: ONE pattern 0.16s, 163 patterns
+# 45.0s — a 274x cost for 163x the patterns, i.e. flat per-pattern with no shared automaton. The
+# `-o` flag is not the cost (45.0s without it, 49.5s with) and neither is I/O (`cat` of the whole
+# corpus: 0.06s). A single `-E` alternation of the same 163 names is NOT the cure either: 28.6s,
+# because BSD's ERE engine walks the alternation the same way. The comment that used to sit on
+# build_cited_set asserting Aho-Corasick was a belief about the tool, never a measurement of it.
+#
+# The hub scan paid the same bill in a different currency: one `grep` FORK per topic file per
+# candidate. 429 files x 18 candidates that reach the scan = 5.08s PER CANDIDATE, 91s of a 115s
+# run. Batching that into one grep per candidate is 0.023s — but at breach pressure stage 2
+# re-judges the whole type-kept pool, so the candidate count goes from 18 to ~122 and even the
+# batched form costs seconds inside a 3s hook budget.
+#
+# So: ONE awk pass over the corpus for the WHOLE name set, anchored.
+#
+# THE ANCHOR IS WHAT MAKES IT EXACT AND FAST. Every pattern in a given call ends with the same
+# literal (`.md` for a filename, `]]` for a wikilink). An occurrence of pattern P ending at line
+# position e therefore REQUIRES the anchor to end at e — so enumerate the anchor's occurrences
+# (few) instead of the patterns (many), and at each one test only the distinct pattern LENGTHS,
+# comparing the full candidate substring. That compares whole strings, so it can neither miss an
+# occurrence (every occurrence ends where its anchor ends) nor invent one (the substring must
+# equal the pattern byte for byte). It is `grep -F`, not a regex approximation of it.
+#
+# Anchor occurrences are enumerated by START, not by END, so self-overlapping anchors (`]]]`)
+# are all seen; advancing by the anchor's length would skip the second one.
+#
+# A pattern that does NOT end with the anchor falls into a per-line `index()` list, so the
+# function is total rather than correct-only-for-its-callers. Both current callers pass names
+# matched by ENTRY_RX, which requires a `.md` suffix, so that list is empty in practice.
+#
+# TWO DELIBERATE DIVERGENCES FROM THE grep IT REPLACES, both strictly narrower:
+#   1. BINARY FILES, and the divergence runs in the PROTECTIVE direction. `grep -o` prints
+#      `Binary file <path> matches` INSTEAD of the matches the moment it sees a NUL ANYWHERE in
+#      the file, so build_cited_set both (a) fed that sentence into CITED_LIST as if it were a
+#      topic filename and (b) lost every real citation in that file — including ones on lines
+#      BEFORE the NUL. awk is not immune (macOS awk truncates a record at its first NUL, so a
+#      citation after one is invisible to both), but it does read the lines that precede it.
+#      Net: the new scan finds a SUPERSET of the citations, and a citation found is a memory
+#      PROTECTED from demotion — the safe direction for a change to this predicate. Measured on
+#      this repo's corpus the real-name sets are identical (9 = 9); the only delta was the bogus
+#      `Binary file …` token, which no topic filename can equal, from one `__pycache__/*.pyc`.
+#   2. It reads each file once for all patterns instead of once per pattern. No semantic effect.
+#
+# Usage: _ccmr_name_scan <anchor> <patfile> <listfile>
+#   patfile   key<TAB>pattern per line   listfile  one path per line
+#   stdout    key<TAB>path, one line per distinct (key, file) hit, unordered
+_ccmr_name_scan() {
+  awk -v ANCHOR="$1" -v PATFILE="$2" -v LISTFILE="$3" '
+    BEGIN {
+      a = length(ANCHOR); ns = 0
+      while ((getline pl < PATFILE) > 0) {
+        t = index(pl, "\t"); if (t < 2) continue
+        k = substr(pl, 1, t - 1); p = substr(pl, t + 1)
+        if (p == "") continue
+        n = length(p)
+        if (n >= a && substr(p, n - a + 1, a) == ANCHOR) { key[p] = k; LEN[n] = 1 }
+        else { ns++; sp[ns] = p; sk[ns] = k }
+      }
+      close(PATFILE)
+      while ((getline f < LISTFILE) > 0) {
+        if (f == "") continue
+        while ((getline line < f) > 0) {
+          p = 0
+          while ((q = index(substr(line, p + 1), ANCHOR)) > 0) {
+            p = p + q                       # 1-based START of this anchor occurrence
+            e = p + a - 1                   # ... and its END
+            for (n in LEN) {
+              st = e - n + 1
+              if (st < 1) continue
+              s = substr(line, st, n)
+              if (s in key) hit[key[s] SUBSEP f] = 1
+            }
+          }
+          for (i = 1; i <= ns; i++) if (index(line, sp[i]) > 0) hit[sk[i] SUBSEP f] = 1
+        }
+        close(f)
+      }
+      close(LISTFILE)
+      for (h in hit) { split(h, z, SUBSEP); print z[1] "\t" z[2] }
+    }' </dev/null
+}
+
 # protect_reason <ordinal> <line> <topicfile-or-empty> [stage] → echoes a reason, or nothing
 #
 # TWO-STAGE PRESSURE MODEL for the type protection. The operator-approved rule protects
@@ -731,7 +847,7 @@ fi
 # unprefixed stamp yield. The name convention, user type, PINNED, markers, hubs, young, tail
 # and the floor never yield at any stage.
 protect_reason() {
-  local j="$1" ln="$2" f="$3" stage="${4:-1}" nm t inb mt
+  local j="$1" ln="$2" f="$3" stage="${4:-1}" nm t inb mt _hk _ht
   if [ "$j" -ge "$TAIL_FROM" ]; then echo tail; return 0; fi
   if [ -z "$f" ]; then echo unparseable; return 0; fi
   if [ ! -f "$DIR/$f" ]; then echo dangling; return 0; fi
@@ -762,30 +878,75 @@ protect_reason() {
   # `](name.md)` link for EVERY entry by construction. Counting them would put almost the whole
   # index at inb>=3 in one step, converting a targeted protection into a universal keep and this
   # actuator into a permanent no-op — the exact failure mode it was built to end.
-  # Built at function level, NOT inside the command substitution: a `case … continue` nested in
-  # `$( { … } | … )` is a parse error on bash 3.2 (`syntax error near unexpected token ';;'`).
-  _hits=$(grep -lF -- "[[${nm}]]" "$DIR"/*.md 2>/dev/null || true)
-  for _c in "$DIR"/*.md; do
-    [ -f "$_c" ] || continue
-    case "${_c##*/}" in MEMORY.md|MEMORY-ARCHIVE.md|MEMORY_ARCHIVE_*|MEMORY_INDEX_*) continue ;; esac
-    if grep -lF -- "$f" "$_c" >/dev/null 2>&1; then
-      _hits="$_hits
-$_c"
-    fi
-  done
-  if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -d "$CLAUDE_PROJECT_DIR/.claude/rules" ]; then
-    _r=$(grep -lF -- "$f" "$CLAUDE_PROJECT_DIR"/.claude/rules/*.md 2>/dev/null || true)
-    if [ -n "$_r" ]; then
-      _hits="$_hits
-$_r"
-    fi
-  fi
+  # THE COUNT IS PRECOMPUTED, ONCE PER ATTEMPT (build_hub_table). It used to be computed HERE,
+  # with one `grep` fork per topic file per candidate: 429 files x 18 candidates that reach this
+  # line was 91s of a 115s run, and at breach pressure stage 2 re-judges the whole type-kept pool,
+  # so the candidate count rises to ~122 and the same loop would cost minutes inside a 3s hook
+  # budget. Nothing about WHICH files count moved — see build_hub_table, which spells the same
+  # three arms and the same self-exclusion regex.
   inb=0
-  if [ -n "$_hits" ]; then
-    inb=$(printf '%s\n' "$_hits" | grep -v "/${f}\$" | sort -u | grep -c . || true)
-  fi
+  _hk="$NLCH$f$TAB"
+  _ht="${HUB_TABLE#*"$_hk"}"
+  if [ "$_ht" != "$HUB_TABLE" ]; then inb="${_ht%%"$NLCH"*}"; fi
   case "$inb" in ''|*[!0-9]*) inb=0 ;; esac
   if [ "$inb" -ge 4 ]; then echo hub; return 0; fi
+  return 0
+}
+
+# build_hub_table <newline-separated topic filenames> → sets HUB_TABLE, the inbound-link count
+# for every candidate, as `name<TAB>count` lines wrapped in newlines for a fork-free lookup.
+#
+# THIS IS THE SAME PREDICATE protect_reason USED TO COMPUTE INLINE, spelled once for the whole
+# candidate set instead of once per candidate. The three arms and their file sets are unchanged:
+#
+#   A  literal `[[stem]]` over EVERY `$DIR/*.md` — the index and the demotion records included,
+#      exactly as before: a wikilink is a deliberate citation wherever it is written.
+#   B  the literal filename over `$DIR/*.md` MINUS MEMORY.md, MEMORY-ARCHIVE.md and every
+#      MEMORY_ARCHIVE_* / MEMORY_INDEX_* record. 🚨 That exclusion is load-bearing and is the
+#      reason A and B cannot be merged into one pass: those files carry a `](name.md)` link for
+#      EVERY entry by construction, so counting them would put almost the whole index at inb>=4
+#      and turn a targeted protection into a universal keep — this actuator's known death.
+#   C  the literal filename over `$CLAUDE_PROJECT_DIR/.claude/rules/*.md`, which loads unprompted
+#      and is where the routing phase MOVES consumers, so a rule routed out of the memory dir
+#      does not become hub=0 by construction.
+#
+# Self-citation is dropped with the SAME dynamic regex the shipped `grep -v "/${f}\$"` applied —
+# `.` still matches any character there, so the count is identical rather than merely intended.
+HUB_TABLE=""
+build_hub_table() {
+  local names="$1" pat1 pat2 lst1 lst2 _c nm
+  HUB_TABLE=""
+  [ -n "$names" ] || return 0
+  _ccmr_tmp pat1 || return 0
+  _ccmr_tmp pat2 || return 0
+  _ccmr_tmp lst1 || return 0
+  _ccmr_tmp lst2 || return 0
+  printf '%s\n' "$names" | grep -v '^[[:space:]]*$' | LC_ALL=C sort -u \
+    | awk -v OFS="$TAB" '{ st=$0; sub(/\.md$/,"",st); print $0, "[[" st "]]" }' >"$pat1" 2>/dev/null || true
+  printf '%s\n' "$names" | grep -v '^[[:space:]]*$' | LC_ALL=C sort -u \
+    | awk -v OFS="$TAB" '{ print $0, $0 }' >"$pat2" 2>/dev/null || true
+  if [ ! -s "$pat1" ]; then rm -f "$pat1" "$pat2" "$lst1" "$lst2" 2>/dev/null || true; return 0; fi
+  for _c in "$DIR"/*.md; do
+    [ -f "$_c" ] || continue
+    printf '%s\n' "$_c" >>"$lst1"
+    case "${_c##*/}" in MEMORY.md|MEMORY-ARCHIVE.md|MEMORY_ARCHIVE_*|MEMORY_INDEX_*) continue ;; esac
+    printf '%s\n' "$_c" >>"$lst2"
+  done
+  if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -d "$CLAUDE_PROJECT_DIR/.claude/rules" ]; then
+    for _c in "$CLAUDE_PROJECT_DIR"/.claude/rules/*.md; do
+      [ -f "$_c" ] || continue
+      printf '%s\n' "$_c" >>"$lst2"
+    done
+  fi
+  HUB_TABLE=$( { [ -s "$lst1" ] && _ccmr_name_scan ']]'  "$pat1" "$lst1"
+                 [ -s "$lst2" ] && _ccmr_name_scan '.md' "$pat2" "$lst2"
+                 : ; } 2>/dev/null \
+    | awk -F"$TAB" -v OFS="$TAB" '
+        NF == 2 && $2 !~ "/" $1 "$" { seen[$1 SUBSEP $2] = 1 }
+        END { for (h in seen) { split(h, y, SUBSEP); c[y[1]]++ }
+              for (k in c) print k, c[k] }' 2>/dev/null || true)
+  HUB_TABLE="$NLCH$HUB_TABLE$NLCH"
+  rm -f "$pat1" "$pat2" "$lst1" "$lst2" 2>/dev/null || true
   return 0
 }
 
@@ -793,9 +954,14 @@ $_r"
 #
 # build_cited_set <newline-separated topic filenames> → sets CITED_LIST and CITE_SCAN.
 #
-# ONE grep pass for the whole candidate set, not one per entry: `grep -F -f` is Aho-Corasick, so
-# 143 names over this repo's 504 executable files costs the same as one name. Per-entry scanning
-# would have been O(entries x corpus) inside a hook that fires on every prompt fleet-wide.
+# ONE pass for the whole candidate set, not one per entry — per-entry scanning would have been
+# O(entries x corpus) inside a hook that fires on every prompt fleet-wide.
+#
+# 🚨 THAT PASS IS NO LONGER `grep -F -f`, AND THE SENTENCE THAT USED TO STAND HERE — "`grep -F -f`
+# is Aho-Corasick, so 143 names over this repo's 504 executable files costs the same as one name"
+# — WAS FALSE ON THIS PLATFORM. It was a belief about the tool, never a measurement of it. BSD
+# grep is linear in pattern count: measured 2026-09-08 over 556 files, ONE pattern 0.16s and 163
+# patterns 45.0s. The scan it justified cost 35-50s of a 115s run. See _ccmr_name_scan.
 #
 # WHAT COUNTS AS A CONSUMER, AND WHAT DOES NOT. The question this rank asks is "does executable
 # code depend on this rule", so the scan covers the surfaces that EXECUTE (bin, hooks, scripts,
@@ -813,7 +979,7 @@ $_r"
 CITED_LIST=""
 CITE_SCAN=unavailable
 build_cited_set() {
-  local names="$1" root d dirs pat
+  local names="$1" root d dirs pat lst
   CITED_LIST=""; CITE_SCAN=unavailable
   root="${CLAUDE_PROJECT_DIR:-}"
   [ -n "$root" ] || return 0
@@ -825,14 +991,19 @@ build_cited_set() {
   [ -n "$dirs" ] || return 0
   # An EMPTY pattern line matches every line, so a blank in this file would mark the whole index
   # cited and silently disable the rank. Strip blanks, then refuse an empty file outright.
-  pat=$(mktemp "$DIR/.rotate.cited.XXXXXX") || return 0
+  _ccmr_tmp pat || return 0
   CITE_TMP="$pat"
-  printf '%s\n' "$names" | grep -v '^[[:space:]]*$' >"$pat" 2>/dev/null || true
+  # key<TAB>pattern; the key IS the name here, so the scan's output is the set of names that occur.
+  printf '%s\n' "$names" | grep -v '^[[:space:]]*$' | LC_ALL=C sort -u \
+    | awk -v OFS="$TAB" '{ print $0, $0 }' >"$pat" 2>/dev/null || true
   if [ ! -s "$pat" ]; then rm -f "$pat"; CITE_TMP=""; return 0; fi
-  # -o prints each MATCH, so the output is the set of names that occur, never the matching lines.
+  _ccmr_tmp lst || { rm -f "$pat"; CITE_TMP=""; return 0; }
+  # `find -L`, not `find`: BSD grep -r FOLLOWS symlinks (unlike GNU's -r), and this replaces a
+  # `grep -r`. There are none in this corpus today; the point is that the file set is the same one.
   # shellcheck disable=SC2086  # $dirs is a deliberately word-split list of directories
-  CITED_LIST=$(grep -rhoF -f "$pat" $dirs 2>/dev/null | sort -u || true)
-  rm -f "$pat"; CITE_TMP=""
+  find -L $dirs -type f >"$lst" 2>/dev/null || true
+  CITED_LIST=$(_ccmr_name_scan '.md' "$pat" "$lst" 2>/dev/null | cut -f1 | LC_ALL=C sort -u || true)
+  rm -f "$pat" "$lst"; CITE_TMP=""
   CITE_SCAN=ok
   return 0
 }
@@ -925,6 +1096,11 @@ while :; do
   # because stage 2 re-judges entries this loop classified as kept and must rank them by the same
   # measurement rather than a second, later one.
   build_cited_set "$(printf '%s' "$ENTRY_FILES" | tr "$TAB" '\n')"
+  # Same cadence and the same reason: the hub count is read by protect_reason for the stage-1
+  # sweep AND again for the stage-2 re-judgment, so it is measured once per ATTEMPT — a retry
+  # (a sibling appended between our read and our write) re-reads the corpus rather than reusing
+  # a table taken before that append.
+  build_hub_table "$(printf '%s' "$ENTRY_FILES" | tr "$TAB" '\n')"
 
   # Does the header already point at the cold tier? (PROTECTED section of compact-memory.md:
   # archived topics must stay discoverable from the auto-loaded surface.)
