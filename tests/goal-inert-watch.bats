@@ -467,3 +467,111 @@ EOF
   printf '%s' "$output" | grep -q 'transcript-missing'     # positive control: we really read the set
   ! printf '%s' "$output" | grep -qw 'below-turn-threshold' || false
 }
+
+# ══ W1a — THE PIPEFAIL INVERSION, AT THE CONSUMER ════════════════════════════════════════════════
+#
+# This hook sets `set -uo pipefail` (`:90`) and `hooks/lib/goal-state.sh` read the transcript with a
+# bare `grep … | jq …`. grep's NO-MATCH status is 1, so a transcript that never armed a goal — the
+# commonest state on this box — failed the pipeline and landed on `_gi_abstain "goal-unreadable"`.
+# Measured 2026-09-08: 375 of 469 evaluations that day logged `goal-unreadable`, and 47 of 48
+# sampled sids had ZERO `goal_status` lines. The hook was reporting itself BLIND over transcripts it
+# had read perfectly, which is the reason token the alarm keys INERT on.
+#
+# THE SUITE COULD NOT SEE IT because its only goal-less fixture, `mk_prose_only`, contains the
+# literal token `goal_status` (it is M2's decoy, and it must). grep MATCHED, so the pipeline was
+# fine. Production transcripts do not mention the token at all.
+
+# goal-less the way a real transcript is: the token appears on NO line. Distinct from
+# `mk_prose_only`, which exists to carry the token without an attachment.
+mk_no_goal_token() {
+  cat > "$D/t.jsonl" <<'EOF'
+{"type":"user","message":{"role":"user","content":"land the migration"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"landed"}]}}
+EOF
+  printf '%s' "$D/t.jsonl"
+}
+
+@test "W1a: a transcript with NO goal at all abstains as no-goal:absent, NOT goal-unreadable" {
+  export GOAL_INERT_IDL="$D/gi-w1a.jsonl"
+  t="$(mk_no_goal_token)"
+  [ "$(grep -c 'goal_status' "$t" || true)" -eq 0 ]     # fixture integrity
+  run bash -c "printf '%s' '$(payload "$t" "$SHELL_TASK" "w1a-absent")' | '$H'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]                                       # correct either way: no goal ⇒ no page
+  # ← THE RED. Pre-fix this reads `goal-unreadable`; the hook claimed blindness over a file it read.
+  [ "$(jq -r '.reason' "$GOAL_INERT_IDL" | tail -1)" = "no-goal:absent" ]
+}
+
+@test "W1a: a GENUINELY corrupt transcript still abstains as goal-unreadable" {
+  # The other half. `absent` is a positive finding ("this session never armed one") and a failure
+  # must never wear it — so the fix had to keep a distinct rc for "grep matched, jq failed". Pre-fix
+  # these two fixtures are INDISTINGUISHABLE; this is the one that must not move.
+  export GOAL_INERT_IDL="$D/gi-w1a2.jsonl"
+  printf '{"type":"attachment","attachment":{"type":"goal_status"\n' > "$D/c.jsonl"
+  run bash -c "printf '%s' '$(payload "$D/c.jsonl" "$SHELL_TASK" "w1a-corrupt")' | '$H'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ "$(jq -r '.reason' "$GOAL_INERT_IDL" | tail -1)" = "goal-unreadable" ]
+}
+
+# ══ W1a — ARM 3b READS CC'S OWN DEFERRAL CHECK-IN (2.1.260) ══════════════════════════════════════
+#
+# Arm 3b could never name the culprit (trap (c)), so its cause paragraph hedged. 2.1.260 injects an
+# isMeta user message after 30 min of continuous deferral whose first clause is fixed text — CC's
+# own admission that it deferred. Counting it turns the paragraph from one hedge into two states.
+
+# The check-in as CC writes it: an isMeta user turn, so the turn counter must still ignore it.
+checkin_rec() {
+  printf '{"type":"user","message":{"role":"user","content":"«%s» is still active, and evaluation has been deferred for 30 min because background work is still running:\\n  · b1 · shell · slow.sh"},"isMeta":true}\n' \
+    "land every leg of the migration"
+}
+
+@test "W1a: with a deferral check-in present, arm 3b says CC CONFIRMED it — not 'likeliest culprit'" {
+  t="$(mk_armed_stale 2)"
+  checkin_rec >> "$t"
+  run bash -c "printf '%s' '$(payload "$t" '[]' "w1a-checkin")' | '$H'"
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
+  m="$(printf '%s' "$output" | jq -r '.systemMessage')"
+  printf '%s' "$m" | grep -q "NOT BEING EVALUATED"
+  printf '%s' "$m" | grep -q "CC ITSELF SAID SO"
+  printf '%s' "$m" | grep -q "1 deferral check-in"
+  printf '%s' "$m" | grep -q "CONFIRMED, not"
+  ! printf '%s' "$m" | grep -q "NOTHING IS NAMEABLE HERE" || false
+}
+
+@test "W1a: with NO check-in, arm 3b keeps the hedge and SAYS the check-in is absent too" {
+  t="$(mk_armed_stale 2)"
+  run bash -c "printf '%s' '$(payload "$t" '[]' "w1a-nocheckin")' | '$H'"
+  [ -n "$output" ]
+  m="$(printf '%s' "$output" | jq -r '.systemMessage')"
+  printf '%s' "$m" | grep -q "NOTHING IS NAMEABLE HERE"
+  printf '%s' "$m" | grep -q "FOREGROUND bash"
+  printf '%s' "$m" | grep -q "no deferral check-in"
+  ! printf '%s' "$m" | grep -q "CC ITSELF SAID SO" || false
+}
+
+@test "W1a: a check-in is an isMeta turn and must NOT count toward the 2-turn threshold" {
+  # If the check-in were counted as a real turn, ONE elapsed turn plus a check-in would fire — and
+  # the interrupt guard (`:35-38`) that ≥2 exists for would be gone.
+  export GOAL_INERT_IDL="$D/gi-w1a3.jsonl"
+  t="$(mk_armed_stale 1)"
+  checkin_rec >> "$t"
+  run bash -c "printf '%s' '$(payload "$t" '[]' "w1a-meta")' | '$H'"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  jq -r '.reason' "$GOAL_INERT_IDL" | tail -1 | grep -q '^below-turn-threshold:1$'
+}
+
+@test "W1a: check-ins are counted SINCE the last goal record, never over the file" {
+  # A re-armed goal must not inherit the previous goal's check-ins — the same rule goal_liveness
+  # applies to evaluations, for the same reason: a stale count describes a goal that is gone.
+  t="$(mk_armed_stale 2)"
+  ck="$D/pre.jsonl"; checkin_rec > "$ck"
+  { cat "$ck"; cat "$t"; } > "$D/t2.jsonl"          # a check-in BEFORE the arm sentinel
+  run bash -c "printf '%s' '$(payload "$D/t2.jsonl" '[]' "w1a-since")' | '$H'"
+  [ -n "$output" ]
+  m="$(printf '%s' "$output" | jq -r '.systemMessage')"
+  printf '%s' "$m" | grep -q "NOTHING IS NAMEABLE HERE"    # the pre-arm check-in is not this goal's
+  ! printf '%s' "$m" | grep -q "CC ITSELF SAID SO" || false
+}

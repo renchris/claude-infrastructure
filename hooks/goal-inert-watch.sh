@@ -1,13 +1,42 @@
 #!/usr/bin/env bash
 # goal-inert-watch.sh — Stop hook: say so when an armed `/goal` is being SKIPPED by Claude Code.
 #
-# THE DEFECT (measured 2026-08-09, docs/research/goal-in-handoff-2026-08-08.md § RESOLVED).
+# THE DEFECT (measured 2026-08-09, docs/research/goal-in-handoff-2026-08-08.md § RESOLVED;
+# RE-ANCHORED TO 2.1.260 on 2026-09-08, A04 § 1.3-1.4 of docs/research/exhaustive-drive-2026-09-08/).
 # `/goal <condition>` registers a `type:"prompt"` Stop hook. The FIRST thing CC's Stop handler does
-# is delete that hook again whenever the task registry holds non-terminal background work:
+# is delete that hook again whenever the task registry holds non-terminal background work. The gate
+# is NO LONGER the `_We(B)||Tio(B)` / `kFe||vKo` pair this header used to quote — 2.1.260 replaced
+# it (@164279140) with ONE predicate over the whole registry:
 #
-#     if(_We(B)||Tio(B)){ … i.sessionHooksRegistry.remove(kt(),"Stop",y),
-#                         w("[goal] evaluation deferred — background work still running") }
-#     … finally{ if(y) i.sessionHooksRegistry.add(kt(),"Stop","",y) }
+#     let Mt = d2n(f.taskRegistry.all());
+#     if (Mt.length > 0) { … sessionHooksRegistry.remove(K(),"Stop",de);
+#                          t("[goal] evaluation deferred — background work still running");
+#                          let vn = IWn(Ze, Mt, Date.now()); … }   // NEW: the check-in planner
+#     … finally{ … add it back … }
+#
+# `d2n` (@164287510) keeps every non-terminal `local_agent` / `remote_agent` / `in_process_teammate`
+# / `local_workflow` (minus the idle-teammate and long-running-cloud carve-outs) PLUS, via `eWt`,
+# every non-terminal `local_bash` — and `eWt` STILL has no `isBackgrounded` test, so trap (c) below
+# holds unchanged. The rename changes nothing this hook does; it changes what a reader who greps
+# the binary for `vKo` will find, which is nothing.
+#
+# TWO 2.1.260 BEHAVIOURS THIS HOOK NOW ACCOUNTS FOR:
+#   · A DEFERRAL CHECK-IN. After `CLAUDE_CODE_GOAL_CHECKIN_MINUTES` (default 30, backing off
+#     30→60→120) of CONTINUOUS deferral, CC injects an `isMeta` user message beginning
+#     `«<condition>» is still active, and evaluation has been deferred for N min because background
+#     work is still running:`. That string is a FREE, EXACT signal that CC itself said it deferred,
+#     and arm 3b now counts it (see CHECKINS below) instead of guessing.
+#   · AUTO-CLEAR ON AN UNRECOVERABLE TURN DEATH. `xKo` clears the goal — writing the
+#     `sentinel:true, met:true` marker `goal_liveness` reads as `cleared` — on `prompt_too_long`,
+#     `blocking_limit` and `rapid_refill_breaker` (as `context_limit`), on auth failures
+#     (`authentication_failed`, `oauth_org_not_allowed`, `account_on_hold`), on `billing_error` and
+#     on `model_not_found`. Everything else (max_turns, hook_stopped, rate_limit, overloaded, …)
+#     leaves the goal ARMED. Operationally: the goal dies exactly at the context wall. A
+#     `handoff-fire.sh --recycle` INHERITS a live goal onto the successor and re-arms it after
+#     engagement (`inherit_recycle_goal`, scripts/handoff-fire.sh:4671-4688; opt out with
+#     `CC_RECYCLE_GOAL_INHERIT=0`), and a `--resume` keeps it outright
+#     (`tengu_goal_restored_on_resume`) — so "a goal dies with its session" is now true only of a
+#     death this hook cannot see, never of the two succession paths we drive.
 #
 # The `finally` puts it back, so the registry reads CORRECT before the Stop and CORRECT after it,
 # and is wrong only DURING — the one moment nothing can observe. `Tio` fires on any non-terminal
@@ -57,7 +86,10 @@
 #       ||vKo(Y)){…remove the goal hook…}`, and `vKo` (the doc's `Tio`) @290802207 is
 #           function vKo(e){ for(let t of Object.values(e))
 #                            if(t.type==="local_bash" && !HH(t.status)) return !0; return !1 }
-#       — no `isBackgrounded` test anywhere in it. Every ORDINARY Bash tool call registers a
+#       — no `isBackgrounded` test anywhere in it. RE-VERIFIED ON 2.1.260, where the same test is
+#       `eWt` (@164287510): `e.type==="local_bash" && !vs(e.status)` — still no `isBackgrounded`.
+#       The trap survived a gate rewrite, which is the reason to keep asserting it rather than
+#       trusting the version it was found in. Every ORDINARY Bash tool call registers a
 #       `local_bash` task with `isBackgrounded:!1` (@284278600), and nothing sweeps foreground
 #       tasks at turn end: `k6e` ("background them all") is reachable only from the ctrl-b
 #       keybinding and the SDK `background_tasks` control request. So a foreground bash that is
@@ -204,6 +236,7 @@ case "$GI_EVALS" in ''|*[!0-9]*) GI_EVALS=0 ;; esac
 GI_ARM=named
 [ -n "$DEFERRERS" ] || GI_ARM=blind
 TURNS=0
+CHECKINS=0
 if [ "$GI_ARM" = "blind" ] || [ "$GI_LAST" != "arm" ]; then
   GOAL_LN="$(grep -an 'goal_status' "$TP" 2>/dev/null | jq -Rrn '
     [ inputs
@@ -219,6 +252,28 @@ if [ "$GI_ARM" = "blind" ] || [ "$GI_LAST" != "arm" ]; then
       | select((.isMeta // .message.isMeta // false) | not)
       | select((.message.content? | type) == "string") ] | length' 2>/dev/null || echo 0)"
   case "$TURNS" in ''|*[!0-9]*) TURNS=0 ;; esac
+  # ── WHAT CC ITSELF SAID (2.1.260) ───────────────────────────────────────────────────────────────
+  # Arm 3b's whole difficulty is that the payload cannot name the deferrer (trap (c)), so its cause
+  # paragraph has always been a hedge: "the likeliest culprit is a foreground bash". 2.1.260 hands us
+  # a witness for free. After 30 min of CONTINUOUS deferral (`CLAUDE_CODE_GOAL_CHECKIN_MINUTES`,
+  # backing off 30→60→120) CC injects a user message whose first clause is fixed text — `«…» is still
+  # active, and evaluation has been deferred for N min because background work is still running:`.
+  # It is CC's OWN admission, in the transcript, with no API call and no guess.
+  #
+  # So the paragraph becomes TWO STATES instead of one hedge: CC said deferred N times (a fact, and
+  # the deferral explanation is CONFIRMED) · CC said nothing (the hedge, unchanged and honestly
+  # labelled). It does NOT change the fire predicate — a check-in means the goal is deferred, which
+  # is exactly what this hook fires on, and R5's own fail-direction note says to prefer keeping the
+  # fire and changing the WORDING over minting a new abstain. An operator already told twice is
+  # still an operator whose goal is inert.
+  #
+  # COUNTED FROM GOAL_LN, never over the file, for goal_liveness's reason: a re-armed goal must not
+  # inherit the previous goal's check-ins. `-F` because the text carries « » and regex-active
+  # punctuation; the count is guarded because `grep -c` exits 1 on no match and this file runs
+  # under pipefail — the exact inversion W1a fixed one file over (hooks/lib/goal-state.sh).
+  CHECKINS="$(tail -n +"$((GOAL_LN + 1))" "$TP" 2>/dev/null \
+    | { grep -c -F 'evaluation has been deferred for' || true; } | tr -dc '0-9' || true)"
+  case "$CHECKINS" in ''|*[!0-9]*) CHECKINS=0 ;; esac
   [ "$TURNS" -ge 2 ] || _gi_abstain "below-turn-threshold:${TURNS}" \
     "$(jq -cn --argjson t "$TURNS" --argjson e "$GI_EVALS" --arg a "$GI_ARM" --arg l "$GI_LAST" \
       '{turns:$t,evals:$e,arm:$a,last:$l}' 2>/dev/null)"
@@ -264,15 +319,30 @@ if [ "$GI_ARM" = "named" ]; then
 "" \
 "   A 4-hour cc-await-ping watcher never settles, so the goal stays inert for as long as it runs.")"
 else
+  # The second half is TWO-STATE (2.1.260): CC's own deferral check-in, when it has fired, replaces
+  # the hedge with a confirmation. When it has not, the hedge stands exactly as before.
+  if [ "$CHECKINS" -gt 0 ]; then
+    WITNESS="$(printf '%s\n' \
+"   CC ITSELF SAID SO — ${CHECKINS} deferral check-in(s) are in this transcript (\"evaluation has been" \
+"   deferred for N min because background work is still running\"). The deferral is CONFIRMED, not" \
+"   inferred; what the check-in cannot tell you is WHICH task, because the hook payload lists only" \
+"   BACKGROUNDED tasks (CC filters \`isBackgrounded === false\` out of it) while the deferral gate" \
+"   reads the raw task registry. Check the background work you have running and stop what is done.")"
+  else
+    WITNESS="$(printf '%s\n' \
+"   NOTHING IS NAMEABLE HERE — and that is itself the finding. CC has logged no deferral check-in" \
+"   either (it injects one after 30 min of CONTINUOUS deferral), so this is not the ordinary" \
+"   deferral it announces. The hook payload lists only BACKGROUNDED tasks (CC filters" \
+"   \`isBackgrounded === false\` out of it), while the deferral gate reads the raw task registry and" \
+"   counts ANY non-terminal local_bash. So the likeliest culprit is a FOREGROUND bash still" \
+"   registered as running — invisible here by construction.")"
+  fi
   CAUSE="$(printf '%s\n' \
 "   CC deletes the goal's Stop hook whenever background work is live, then silently restores it," \
 "   so the registry always LOOKS healthy. ${TURNS} of your turns have gone by since it was armed" \
 "   with no evaluation recorded, so at least one Stop skipped it." \
 "" \
-"   NOTHING IS NAMEABLE HERE — and that is itself the finding. The hook payload lists only" \
-"   BACKGROUNDED tasks (CC filters \`isBackgrounded === false\` out of it), while the deferral gate" \
-"   reads the raw task registry and counts ANY non-terminal local_bash. So the likeliest culprit is" \
-"   a FOREGROUND bash still registered as running — invisible here by construction.")"
+"$WITNESS")"
 fi
 
 # The goal line states the EVALUATION COUNT, because the two findings this hook can now make are
@@ -297,7 +367,7 @@ MSG="$(printf '%s\n' \
 "     §§ RESOLVED 2026-08-09 · The foreground blind spot 2026-08-14")"
 
 log_idl fired "goal-inert:${GI_ARM}" "$(jq -cn --arg a "$GI_ARM" --arg l "$GI_LAST" \
-  --argjson e "$GI_EVALS" --argjson t "$TURNS" --argjson n "$N" \
-  '{arm:$a,last:$l,evals:$e,turns:$t,deferrers:$n}' 2>/dev/null)"
+  --argjson e "$GI_EVALS" --argjson t "$TURNS" --argjson n "$N" --argjson c "$CHECKINS" \
+  '{arm:$a,last:$l,evals:$e,turns:$t,deferrers:$n,checkins:$c}' 2>/dev/null)"
 jq -nc --arg m "$MSG" '{systemMessage:$m}' 2>/dev/null || true
 exit 0
