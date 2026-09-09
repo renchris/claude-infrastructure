@@ -44,6 +44,13 @@ setup() {
   printf 'echo B v1\n' > "$CC_PARITY_REPO/bin/toolB"
   # PATH must resolve the strict tool to our fake bindir, never the operator's real one.
   export PATH="$CC_PARITY_BINDIR:$PATH"
+  # SEAM 5b: the fixtures below NAME bin/desk-register (as a file inside the fake repo, for the
+  # bin/desk-* install glob), and desk-register carries CC_IN_KITTY_BIN defaulting to the BARE NAME
+  # `cc-in-kitty`, which it resolves on PATH and EXECUTES. Fixturing $HOME does not redirect that,
+  # so scripts/test-hermeticity-lint.sh rule 5 requires it pinned here. Pinned to an ABSENT path:
+  # the predicate fails closed on a missing binary, and no case here reaches desk-register at all,
+  # so this can only ever remove a dependence on which terminal the box happens to be running.
+  export CC_IN_KITTY_BIN="$BATS_TEST_TMPDIR/no-such-cc-in-kitty"
 }
 
 @test "strict tool symlinked into the repo ⇒ LINKED, exit 0" {
