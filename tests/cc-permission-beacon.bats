@@ -203,16 +203,26 @@ arch_rows() { cat "$CC_PERMARCHIVE_DIR"/*.jsonl 2>/dev/null; }
   # PostToolUse fires for every tool, not only the prompted one. After a DENIAL the turn can
   # continue and run some other tool whose PostToolUse clears this beacon — without cleared_tool
   # that denial is indistinguishable from an approval, and would be archived as one.
+  #
+  # RESHAPED 2026-09-09 with THE LIVE COLLATERAL-CLEAR GATE, and the reshape IS the contract change:
+  # a mismatched PostToolUse no longer clears at all, so it can no longer reach the archive to be
+  # attributed. The resolver here is therefore SessionEnd, which still clears unconditionally and
+  # still carries a tool — the archive's attribution machinery is retained as defence-in-depth for
+  # the resolvers that clear without checking. The live half (a collateral PostToolUse leaves the
+  # beacon standing) is pinned in the LIVE GATE group below.
   jq -nc '{session_id:"s-coll",tool_name:"Bash",tool_input:{command:"rm -rf /"},cwd:"/w"}' | "$H" write
-  jq -nc '{session_id:"s-coll",tool_name:"Read",hook_event_name:"PostToolUse"}' | "$H" clear
+  jq -nc '{session_id:"s-coll",tool_name:"Read",hook_event_name:"SessionEnd"}' | "$H" clear
   row="$(arch_rows | jq -r 'select(.session_id=="s-coll")')"
   [ "$(printf '%s' "$row" | jq -r '.tool_name')"    = Bash ]        # what was PROMPTED for
   [ "$(printf '%s' "$row" | jq -r '.cleared_tool')" = Read ]        # what CLEARED it
 }
 
 @test "a genuine grant records the SAME tool in both fields" {
+  # The clearing payload now carries the SAME tool_input as the prompt: since the live gate landed,
+  # a PostToolUse only clears the invocation it is the PostToolUse OF, and a genuine grant is
+  # exactly that case. Bare tool_name would be a COLLATERAL clear and is now refused.
   jq -nc '{session_id:"s-gr",tool_name:"Bash",tool_input:{command:"ls"},cwd:"/w"}' | "$H" write
-  jq -nc '{session_id:"s-gr",tool_name:"Bash",hook_event_name:"PostToolUse"}' | "$H" clear
+  jq -nc '{session_id:"s-gr",tool_name:"Bash",tool_input:{command:"ls"},hook_event_name:"PostToolUse"}' | "$H" clear
   row="$(arch_rows | jq -r 'select(.session_id=="s-gr")')"
   [ "$(printf '%s' "$row" | jq -r '.tool_name')" = "$(printf '%s' "$row" | jq -r '.cleared_tool')" ]
 }
@@ -306,7 +316,8 @@ arch_rows() { cat "$CC_PERMARCHIVE_DIR"/*.jsonl 2>/dev/null; }
 @test "D1: tool_use_id is captured from BOTH the prompt and the clear" {
   # The only evidence that distinguishes a real grant from a same-named collateral clear.
   jq -nc '{session_id:"s-id",tool_name:"Bash",tool_input:{command:"ls"},cwd:"/w",tool_use_id:"toolu_P"}' | "$H" write
-  jq -nc '{session_id:"s-id",hook_event_name:"PostToolUse",tool_name:"Bash",tool_use_id:"toolu_C"}' | "$H" clear
+  # tool_input added to the clearing side when the live gate landed — see the note on s-gr above.
+  jq -nc '{session_id:"s-id",hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"ls"},tool_use_id:"toolu_C"}' | "$H" clear
   row="$(arch_rows | jq -r 'select(.session_id=="s-id")')"
   [ "$(printf '%s' "$row" | jq -r '.tool_use_id')"         = toolu_P ]
   [ "$(printf '%s' "$row" | jq -r '.cleared_tool_use_id')" = toolu_C ]
@@ -334,9 +345,14 @@ arch_rows() { cat "$CC_PERMARCHIVE_DIR"/*.jsonl 2>/dev/null; }
 
 @test "SIG: a COLLATERAL clear by the same tool with a different command does NOT match" {
   # The exact unsafe case: Bash→Bash is ~all this fleet's traffic, so tool NAMES agree here and
-  # only the invocation separates a denied `git push --force` from a later `git status`.
+  # only the invocation separates a denied `git push --force` from a later `git status`. Measured
+  # 2026-09-09: 19 of the 27 real mismatches in the archive are exactly this Bash > Bash shape.
+  #
+  # The resolver is SessionEnd since the live gate landed — a mismatched PostToolUse no longer
+  # clears, so it can no longer produce a row to inspect. What this arm still pins is that the
+  # SIGNATURE machinery separates the two invocations for the unconditional resolvers.
   jq -nc '{session_id:"s-sig2",tool_name:"Bash",tool_input:{command:"git push --force"},cwd:"/w",tool_use_id:""}' | "$H" write
-  jq -nc '{session_id:"s-sig2",hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"git status"},tool_use_id:"toolu_C"}' | "$H" clear
+  jq -nc '{session_id:"s-sig2",hook_event_name:"SessionEnd",tool_name:"Bash",tool_input:{command:"git status"},tool_use_id:"toolu_C"}' | "$H" clear
   row="$(arch_rows | jq -c 'select(.session_id=="s-sig2")')"
   [ "$(printf '%s' "$row" | jq -r '.tool_name')" = "$(printf '%s' "$row" | jq -r '.cleared_tool')" ]
   sb="$(printf '%s' "$row" | jq -r '.tool_sig')"
@@ -364,8 +380,10 @@ arch_rows() { cat "$CC_PERMARCHIVE_DIR"/*.jsonl 2>/dev/null; }
   # The trap in the naive form: `printf '' | shasum` yields a perfectly good digest of the empty
   # string, so a payload the hook could not parse would match another payload it could not parse
   # and manufacture an approval. A canonical form is emitted only when tool_name is non-empty.
+  # Resolved by Stop since the live gate landed: an unsignable beacon can no longer be cleared by
+  # PostToolUse at all (that arm is in the LIVE GATE group), and Stop is what drains it in the wild.
   jq -nc '{session_id:"s-sig4",tool_input:{command:"x"},cwd:"/w"}' | "$H" write      # no tool_name
-  jq -nc '{session_id:"s-sig4",hook_event_name:"PostToolUse"}' | "$H" clear           # no tool_name
+  jq -nc '{session_id:"s-sig4",hook_event_name:"Stop"}' | "$H" clear                 # no tool_name
   row="$(arch_rows | jq -c 'select(.session_id=="s-sig4")')"
   [ -n "$row" ]                                            # the row is still archived, not dropped
   [ "$(printf '%s' "$row" | jq -r '.tool_sig')" = "" ]
@@ -383,6 +401,88 @@ arch_rows() { cat "$CC_PERMARCHIVE_DIR"/*.jsonl 2>/dev/null; }
   sb="$(printf '%s' "$row" | jq -r '.tool_sig')"
   [ -n "$sb" ] && [ "$sb" != null ] || false
   [ "$sb" = "$(printf '%s' "$row" | jq -r '.cleared_tool_sig')" ]
+}
+
+# ── THE LIVE COLLATERAL-CLEAR GATE — a mismatched PostToolUse must not blind the board ──────────
+# WHY: the SIG group above pins that a collateral clear is DETECTABLE after the fact. It is, and the
+# archive is correct. But the same collateral clear also DELETED the live beacon, so the supervisor
+# went blind to a prompt still on screen — the header's "dir present, no <sid>.json ⇒ genuinely
+# nothing pending" was false for that population. Measured 2026-09-09: 27 of 110 signed archive rows
+# (24%) were cleared by a different invocation, every one of them resolved_by PostToolUse (0 Stop,
+# 0 SessionEnd); pane 616 sat on an unanswered `rm -r` across two screen samples with no beacon at
+# all. The first arm below is the RED-proof — it FAILS against the pre-fix handler, which deletes
+# the beacon here. The vector (background task vs. a second foreground tool in the same turn) is
+# UNMEASURED and deliberately not named: the gate keys on signature equality either way.
+#
+# WHICH ARMS ARE THE RED-PROOF, stated so the group cannot be mistaken for one. Run against the
+# pre-fix hook (git HEAD before this commit) in a shape-identical scratch tree, with the SAME .bats
+# file: the three unlabelled arms go RED (the beacon was deleted, so it is gone before Stop can
+# drain it and no Stop-resolved row is ever written); the three labelled "green both ways BY DESIGN"
+# pass on both sides, because they guard the fix from OVER-reaching — a gate that also blocked Stop,
+# SessionEnd, or the heartbeats would leak a beacon forever or invert the existence-evidence split.
+@test "LIVE GATE: a MISMATCHED PostToolUse does NOT clear — the beacon SURVIVES for the board" {
+  jq -nc '{session_id:"s-live1",tool_name:"Bash",tool_input:{command:"rm -r $CH"},cwd:"/w",tool_use_id:""}' | "$H" write
+  [ -f "$(beacon s-live1)" ]
+  run bash -c 'printf "%s" "$1" | "$2" clear' _ \
+    "$(jq -nc '{session_id:"s-live1",hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"git status"},tool_use_id:"toolu_C"}')" "$H"
+  [ "$status" -eq 0 ]                                   # still fail-quiet: it refuses, it never errors
+  [ -f "$(beacon s-live1)" ]                            # ← RED pre-fix: the beacon was deleted here
+  # and it is still READABLE as the original prompt, not a husk — this is what the board renders
+  [ "$(jq -r '.tool_input.command' "$(beacon s-live1)")" = 'rm -r $CH' ]
+  # no phantom row either: an unresolved prompt has not been resolved, so nothing is archived yet
+  [ -z "$(arch_rows | jq -r 'select(.session_id=="s-live1")')" ]
+}
+
+@test "LIVE GATE (green both ways BY DESIGN): the MATCHING PostToolUse still clears — the GRANT path" {
+  jq -nc '{session_id:"s-live2",tool_name:"Bash",tool_input:{command:"rm -r $CH"},cwd:"/w",tool_use_id:""}' | "$H" write
+  jq -nc '{session_id:"s-live2",hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"rm -r $CH"},tool_use_id:"toolu_C"}' | "$H" clear
+  [ ! -f "$(beacon s-live2)" ]                          # the gated tool ran ⇒ the fast clear survives
+  row="$(arch_rows | jq -c 'select(.session_id=="s-live2")')"
+  [ -n "$row" ]
+  [ "$(printf '%s' "$row" | jq -r '.resolved_by')" = PostToolUse ]
+  # by construction of the gate, a PostToolUse-resolved row can now only ever carry matching sigs
+  [ "$(printf '%s' "$row" | jq -r '.tool_sig')" = "$(printf '%s' "$row" | jq -r '.cleared_tool_sig')" ]
+}
+
+@test "LIVE GATE: Stop clears a MISMATCHED invocation unconditionally — the DENY path still drains" {
+  # The property the gate must not break. A DENIED prompt fires no matching PostToolUse EVER, so if
+  # Stop were gated too the beacon would leak forever and the board would page a phantom. The turn
+  # cannot Stop until the human answers, so Stop remains the universal clearer.
+  jq -nc '{session_id:"s-live3",tool_name:"Bash",tool_input:{command:"git push --force"},cwd:"/w",tool_use_id:""}' | "$H" write
+  jq -nc '{session_id:"s-live3",hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"git status"},tool_use_id:""}' | "$H" clear
+  [ -f "$(beacon s-live3)" ]                            # the collateral PostToolUse was refused…
+  jq -nc '{session_id:"s-live3",hook_event_name:"Stop"}' | "$H" clear
+  [ ! -f "$(beacon s-live3)" ]                          # …and the turn's Stop drained it
+  [ "$(arch_rows | jq -r 'select(.session_id=="s-live3") | .resolved_by')" = Stop ]
+}
+
+@test "LIVE GATE (green both ways BY DESIGN): SessionEnd clears unconditionally — the no-Stop backstop" {
+  jq -nc '{session_id:"s-live4",tool_name:"Bash",tool_input:{command:"a"},cwd:"/w",tool_use_id:""}' | "$H" write
+  jq -nc '{session_id:"s-live4",hook_event_name:"SessionEnd",tool_name:"Bash",tool_input:{command:"b"}}' | "$H" clear
+  [ ! -f "$(beacon s-live4)" ]
+  [ "$(arch_rows | jq -r 'select(.session_id=="s-live4") | .resolved_by')" = SessionEnd ]
+}
+
+@test "LIVE GATE: an UNSIGNABLE beacon is never cleared by PostToolUse (no clear out of two errors)" {
+  # The same trap CANON's guard exists for, one layer up: "" == "" must not read as proof the gated
+  # tool ran, or two unparseable payloads would manufacture a clear and blind the board. Leaving it
+  # for Stop is the safe direction and leaks nothing.
+  jq -nc '{session_id:"s-live5",tool_input:{command:"x"},cwd:"/w"}' | "$H" write      # no tool_name
+  jq -nc '{session_id:"s-live5",hook_event_name:"PostToolUse"}' | "$H" clear          # no tool_name
+  [ -f "$(beacon s-live5)" ]
+  jq -nc '{session_id:"s-live5",hook_event_name:"Stop"}' | "$H" clear
+  [ ! -f "$(beacon s-live5)" ]
+}
+
+@test "LIVE GATE (green both ways BY DESIGN): the refused clear still stamps BOTH heartbeats" {
+  # The refusal returns early. If it returned before beat/arch_beat, a session whose only traffic
+  # was collateral clears would look INERT — the three-state split inverted by the fix meant to
+  # protect it.
+  jq -nc '{session_id:"s-live6",tool_name:"Bash",tool_input:{command:"a"},cwd:"/w"}' | "$H" write
+  rm -f "$CC_PERMPEND_DIR/.beacon-alive" "$CC_PERMARCHIVE_DIR/.archive-alive"
+  jq -nc '{session_id:"s-live6",hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"b"}}' | "$H" clear
+  [ -f "$CC_PERMPEND_DIR/.beacon-alive" ]
+  [ -f "$CC_PERMARCHIVE_DIR/.archive-alive" ]
 }
 
 # ── THE APPEND MUTEX MUST BE ABLE TO RECOVER FROM ITS OWN ORPHAN ─────────────────────────────────
