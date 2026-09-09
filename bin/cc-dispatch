@@ -3505,6 +3505,18 @@ STUB
          CC_DISPATCH_IDL="$tmp/idl.jsonl" CC_DISPATCH_PROJECT="/repo/a" CC_DISPATCH_MAX_SPAWN=2 \
          CC_DISPATCH_SID="selftest"         CC_DISPATCH_LOCK_DIR="$tmp/dispatch.lock" CC_DISPATCH_CEILING=6 CC_DISPATCH_LANE=v2 \
          CC_DISPATCH_DECIDE_ONLY=off
+  # 🚨 THE FIRE LOG IS A SEAM TOO, and leaving it unpinned put FIXTURES IN THE PRODUCTION CENSUS.
+  # fire_log_keep (:681) defaults to $HOME/.claude/logs/dispatch-fires.log, and the spawn stub above
+  # writes `handoff-fire: no pane anchor resolved` on stderr, which cc-dispatch captures and keeps on
+  # both the failure and the success arm. So every selftest run APPENDED its stub narration to the
+  # operator's live log, indistinguishable from a real fire: measured 2026-09-08, 36 of that day's 91
+  # fire headers were six fixture ids x six 3-hourly runs, and ALL 12 `rc=7 no pane anchor resolved`
+  # rows — the evidence an axis report used to diagnose the dominant fire failure as a pane-anchor
+  # problem — were STUB_SPAWN_RC=7 stubs (:3865,:3886). None of the six ids exists in backlog.jsonl.
+  # The real dominant failure that day was the INC-4 cold-worktree autosubmit race, 13 of 20.
+  # A census is only as good as its provenance split: pin the log, so a fixture can never be counted
+  # as production (same law as CC_DISPATCH_IDL above, and handoffs.jsonl's `under_test` field).
+  export CC_DISPATCH_FIRE_LOG="$tmp/dispatch-fires.log"
   # 🚨 THE DECLARATION STORE IS FIXTURED, and its absence was caught by this suite the hour the
   # cloud admission gate landed: unpinned it defaults through CC_CLOUD_STATE to the operator's LIVE
   # ~/.claude/autonomy/cloud, where 520 unlanded declarations sit against a cap of 50 — so every
