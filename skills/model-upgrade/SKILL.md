@@ -183,9 +183,13 @@ for another, so the *next* bump in that family does not re-create the whole prob
    - `~/.claude/model-config.yaml` — roles/comments
    - project `.claude/commands/project-pass.md`, `docs/research/CONTEXT_EXHAUSTION_GUARDRAILS.md`
      (reso — a SECOND repo with its own gate and land cycle; scope that deliberately)
-   - ~~`~/.claude/rules/research-subagents.md`~~ — **GONE.** `~/.claude/rules/` does not load on
-     this machine and the file no longer exists; `model-classification.json` still lists it in
-     `review`, which is a dead path a walk will silently find nothing in.
+   - ~~`~/.claude/rules/research-subagents.md`~~ — **GONE.** That FILE no longer exists;
+     `model-classification.json` still lists it in `review`, which is a dead path a walk will
+     silently find nothing in. (The DIRECTORY is a different question and this entry used to
+     overstate it: `~/.claude/rules/` loads fine in an interactive session — it still holds
+     `agent-operating-lessons.md`, which the harness injects verbatim — and does NOT load under
+     `claude -p`, which is the only mode the original probe ever ran. The dead path is the one
+     that matters here and is unaffected.)
    🚨 **Name the SSOT KEY, not the model.** Write "`versions.frontier_latest`, currently Fable 5"
    rather than "Fable 5". Measured 2026-09-03: this footnote had accumulated THREE false claims
    (a window that ended two windows earlier, an `AND on the claude-next eval track` conjunct no
@@ -235,9 +239,12 @@ strings -a "$BIN" | grep -c -- claude-opus-5     # positive control; 0 here mean
 
 ⚠️ Two corrections to what this block used to say (2026-09-03). It ran `claude-next --version` —
 that launcher was deleted by consolidation v2 and the command silently does nothing. And it grepped
-`~/.claude/rules`, which **does not load on this machine and no longer exists** (probe-verified on
-2.1.114 and 2.1.220; the content moved to reso's `.claude/rules/`). A verification step that greps
-an absent directory returns clean and proves nothing — swap the paths, keep the intent.
+`~/.claude/rules`, which **no longer holds the file that step was looking for** (the content moved
+to reso's `.claude/rules/`). A verification step that greps for an absent file returns clean and
+proves nothing — swap the paths, keep the intent. ⚠️ The scope claim here used to read "does not
+load on this machine and no longer exists", and both halves were too strong: the directory exists
+and holds `agent-operating-lessons.md`, and it LOADS interactively — the 2.1.114/2.1.220 probes
+that produced the original verdict were all run under `claude -p`, the one mode where it does not.
 **Update `.claude-220` above to whatever the launcher pin currently is** — see the Appendix census;
 that path is itself one of the pins that goes stale.
 
