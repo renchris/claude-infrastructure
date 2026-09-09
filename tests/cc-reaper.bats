@@ -3772,3 +3772,50 @@ EOF
   grep -q 'CC_TERM_KITTY_TO=unix:/tmp/kitty-operator-chose' "$D/td-env"
   [ ! -f "$D/ksock-calls" ]
 }
+
+# ── PORTABILITY: the fired-peer TENANCY parse off macOS ───────────────────────────────────────────
+# This suite guards the box's most destructive unattended actuator, and 22 of its cases went red on
+# Linux against an UNMODIFIED trunk because the tenancy check parsed firedAt with BSD-only
+# `date -j -f`: the parse failed, the stamp read INVALID, and the reap was refused. Both cases run
+# the REAL extracted function against a stubbed GNU-dialect tool, so they are red pre-fix on macOS
+# too — the dialect is fixtured, never inherited from whatever box happens to run them.
+
+@test "P1 iso_to_epoch_r resolves under GNU date, where -j does not exist" {
+  local fn="$D/isoep.sh"
+  sed -n '/^iso_to_epoch_r(){/,/^}/p' "$R" > "$fn"
+  grep -q '%Y-%m-%dT%H:%M:%S' "$fn" || false        # anti-vacuity: the extract IS the parser
+  mkdir -p "$D/gnubin"
+  cat > "$D/gnubin/date" <<'EOS'
+#!/bin/sh
+# A GNU-dialect date. -j is not a flag it has; --version answers; -u -d parses an ISO instant.
+for a in "$@"; do [ "$a" = "-j" ] && exit 1; done
+[ "$1" = "--version" ] && { echo "date (GNU coreutils) 9.4"; exit 0; }
+[ "$1" = "-u" ] && [ "$2" = "-d" ] && [ "$3" = "2026-08-19T13:05:08Z" ] && { echo 9999999999; exit 0; }
+exit 1
+EOS
+  chmod +x "$D/gnubin/date"
+  { printf 'PATH="%s:$PATH"\n' "$D/gnubin"; cat "$fn"; } > "$fn.run"
+  echo 'printf "[%s]" "$(iso_to_epoch_r "$1")"' >> "$fn.run"
+  run bash "$fn.run" "2026-08-19T13:05:08.449Z"
+  [ "$output" = "[9999999999]" ] || false          # pre-fix: "[]" — the BSD arm is the only arm
+}
+
+@test "P2 fired_at_epoch_r mtime fallback resolves under GNU stat, where -f does not exist" {
+  local fn="$D/faep.sh"
+  { sed -n '/^iso_to_epoch_r(){/,/^}/p' "$R"; sed -n '/^fired_at_epoch_r(){/,/^}/p' "$R"; } > "$fn"
+  grep -q 'FIRED_DIR' "$fn" || false                # anti-vacuity: the extract IS the reader
+  mkdir -p "$D/gnubin2" "$D/fired2"
+  cat > "$D/gnubin2/stat" <<'EOS'
+#!/bin/sh
+# A GNU-dialect stat: -f is not a format flag it has, -c is.
+[ "$1" = "-f" ] && exit 1
+[ "$1" = "-c" ] && { echo 4242; exit 0; }
+exit 1
+EOS
+  chmod +x "$D/gnubin2/stat"
+  printf '{"paneUUID":"P","cwd":"x"}\n' > "$D/fired2/P.json"   # no firedAt ⇒ must reach mtime
+  { printf 'PATH="%s:$PATH"\nFIRED_DIR="%s"\n' "$D/gnubin2" "$D/fired2"; cat "$fn"; } > "$fn.run"
+  echo 'fired_at_epoch_r P; echo " rc=$?"' >> "$fn.run"
+  run bash "$fn.run"
+  [ "$output" = "4242 rc=0" ] || false              # pre-fix: " rc=1" — no mtime arm off macOS
+}
