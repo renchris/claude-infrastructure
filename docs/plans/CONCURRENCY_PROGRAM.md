@@ -604,6 +604,27 @@ attempts`) reads as a transport flake. **Both readings fit every observation**, 
 would be a wrong cause corroborated by a true metric. Next measurement should hold `env` fixed and
 re-run the same invocation several times, before anything is concluded about the environment.
 
+🚨 **RESOLVED 2026-08-09 by §S5.3 below; the cure landed 2026-08-10. The paragraph above is kept as
+the record of what was believed on 2026-08-08 — do NOT re-run its prescription.** The measurement it
+asks for was made: §S5.3's interleaved A/B held `env` fixed and fired **11 creates on one account**
+(`wt` 2 created / 2 refused, `main` 3 created / 1 refused). **Failures cluster by ROUND, not by cwd
+and not by `CLAUDE_CONFIG_DIR`** — the environment correlation above is REFUTED at n=11, and the real
+cause is a ~95 MiB bundle riding at 95% of a 100 MiB cap with 3 retries, marginal by construction.
+The cure is not a retry but the REMOVAL of the bundle step: `scripts/cloud-create-api.py` supplies the
+git remote explicitly, so `buildGitSessionContext`'s bail to `sources:[]` — the bundle path — is
+unreachable (`a0bb74c5d`, 2026-08-10). `bin/cc-offload:510` defaults `via=api`; `bin/cc-dispatch:2746`
+records the CLI create as DEPRECATED.
+
+**Effect discharged, measured independently 2026-09-09** (a refuted cause does not by itself
+discharge an effect): **669 cloud sessions created 2026-08-10 → 2026-09-08**, and the live
+bundle detector `~/.claude/autonomy/cloud/github-app.observed` — written `absent` the instant any
+create bundles (`bin/cc-offload:629`), retracted only by a create that did not — **does not exist**.
+That store has a writer on this exact path, so its silence is evidence rather than absence. The only
+two files on the box naming `Bundle upload failed` are this incident's own probe ledgers
+(`bundle-probe.jsonl`, `ceiling-probe.jsonl`, both 2026-08-08/09). cc-backlog `329dd6350eb3` closed
+on this. This paragraph carried the open confound for a month after it was settled 600 lines below —
+the same within-one-document staleness §S5.2's post-mortem names two paragraphs down.
+
 **Two refuted hypotheses, recorded so they are not re-run:**
 
 | Hypothesis | Test | Result |
