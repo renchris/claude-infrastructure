@@ -1,6 +1,12 @@
 ---
-status: open
+status: complete
 ---
+
+<!-- CLOSED 2026-09-09. The wave condition was adjudicated discharged on 2026-09-07
+     (docs/research/w4-fire-gate-adjudication-2026-09-07.md) and independently re-verified clause by
+     clause on 2026-09-09; see the Status log's final entry for the measurements and for where each
+     residual now lives. `status: complete` is load-bearing: it is what retracts the derived
+     plan-open falsifier, so this document stops minting a dispatch row every pass. -->
 
 # MASTER: fire gate — what spawns, where it runs, and what refuses it
 
@@ -45,7 +51,7 @@ F2 — the cloud round trip is a long observation window and deserves its own co
 
 ## Sub-waves
 
-### F1 · Venue labelling (the prerequisite W2 named)
+### F1 · Venue labelling (the prerequisite W2 named) — DONE (refuted 2026-09-07; residual DROPPED 2026-09-09, harm measured)
 **248 live rows carry no venue label at all**, because `cc-venue run` is open-only and new rows wait
 for the next producer pass; the dispatcher is journalling `ready:false, state:"void",
 reason:"venue-unlabelled"` right now (advisory, so not yet blocking).
@@ -55,7 +61,7 @@ eligible, so that parks 489 rows indefinitely — and because the claim path is 
 re-validation in the system, it also silently switches currency-checking off for 86% of the store. The
 venue lever steers; it does not scale.
 
-### F2 · The cloud round trip
+### F2 · The cloud round trip — DONE (refuted 2026-09-07; residual REFUTED 2026-09-09 — its remedy is a trap)
 `cc-cloud retire` is FORWARD-ONLY: 41 declarations carry **0 `.retired` markers**. W0 wired the
 terminal path to retire, but the release path has been DEPLOYED and never EXERCISED — its coverage is
 structural and the behavioural proof is one live round trip. Also here: cloud create is intermittent
@@ -63,19 +69,19 @@ structural and the behavioural proof is one live round trip. Also here: cloud cr
 on a LOCAL worktree freshness gate the VM never touches (2 of 3 lost), and two lands can run
 concurrently on one cloud branch because the single-flight lock is per-PASS.
 
-### F3 · Claim coverage
+### F3 · Claim coverage — DONE (mitigated 2026-09-07; owning row closed 2026-08-21)
 **Four spawn paths** fire a session into a dispatch worktree without ever calling `cc-backlog claim`,
 so the lease governs a population that does not include them — and 20 live sessions were once measured
 sharing one item's worktree. The lease is the whole economics of the grouping this wave inherits; a
 spawn path outside it is a hole in the mechanism, not a missing nicety.
 
-### F4 · The stale brief, by construction
+### F4 · The stale brief, by construction — DONE (fixed at the consumer 2026-09-07; proven at runtime 2026-09-09)
 `cc-dispatch` composes its prompt from the row's title and `dodRef` — and **every `dodRef` in the
 store is an absolute path into the SHARED CHECKOUT, which trails trunk.** So a worker reads a DoD from
 bytes older than the fix it is being asked to build on. The `master-*` rows created by W2 write
 `origin/main:docs/plans/<FILE>.md` instead; make that the rule for every producer.
 
-### F5 · Admission terms (Wave D)
+### F5 · Admission terms (Wave D) — DONE (landed `61e39ef3`, verified BY CONTENT 2026-09-09)
 The measured bind is `load >= 2.0/core` and it is asymmetric: unbounded for `handoff-fire` (**the
 operator's own path**), budget-released after 3 refusals for unattended callers, and off entirely for
 the Agent tool. W3 of the parent plan owns the symmetry; this wave owns the *terms* — admit on ACTIVE
@@ -148,3 +154,96 @@ demonstrated by one full local round trip and one full cloud round trip carrying
   dependency on F1 turned out to be nominal: F5 is a *machine*-capacity term and never reads a
   venue label, so it did not wait. The DoD's "admitted on a term that binds" clause is now met;
   the other four clauses are unchanged.
+
+- **2026-09-09 — CLOSED. All five DoD clauses re-verified independently against trunk, and this
+  session is itself the local round trip the DoD asks for.** The 2026-09-07 adjudication ruled the
+  wave condition discharged but left the plan `status: open`, so `find-plan.sh --list-open` kept
+  returning it and `cc-discover`'s C2 critic kept minting a dispatch row from its H1 — the
+  `a50e6ab779e8` shape the derived falsifier exists to catch (a row read "advance README hero
+  banner" for twelve days after that banner landed). Closing the frontmatter is therefore not
+  bookkeeping: it is the only thing that retracts the claim. Verified from a worktree at
+  `HEAD == origin/main` (0 behind) with the firing dispatcher's blob equal to
+  `origin/main:bin/cc-dispatch`, so nothing below is read through a stale tree.
+
+  | DoD clause | Verdict | Evidence, measured 2026-09-09 |
+  |---|---|---|
+  | labelled for a venue | MET | 80 of 89 open rows labelled; the 9 unlabelled route LOCAL and self-repair (below) |
+  | admitted on a term that binds | MET | `scripts/lib/capacity-admit.sh` carries `segments`+`cc_sp_active` on trunk; `tests/capacity-admit-active.bats` present; the gate REFUSED two of this session's own subagent spawns at `13 sessions mid-turn > ceiling 8` — a term that binds, observed binding |
+  | claimed by the worker that runs it | MET | row `6464f9d641ff` reads `status: claimed` while this session holds it |
+  | briefed from a trunk ref | MET | see the runtime proof below |
+  | returned with its slot released | MET | 676 `.retired` / 80 `.returned` under `~/.claude/autonomy/cloud`, newest `2026-09-09T02:04Z` — up from the adjudication's 666/79, so the round trip is live, not historical |
+
+  **F4 is proven at RUNTIME by this session, which is stronger than the structural proof the
+  adjudication had.** Row `6464f9d641ff` stores `dodRef:
+  /Users/chrisren/Development/claude-infrastructure/docs/plans/MASTER_FIRE_GATE.md` — an absolute
+  path into the shared checkout, F4's exact defect, still there because the store deliberately was
+  not changed. The brief this worker actually received carried
+  `DoD ref: origin/main:docs/plans/MASTER_FIRE_GATE.md`. That is `cc-venue dodspec`
+  (`bin/cc-venue:625`, consumed at `bin/cc-dispatch:2981`) rendering the trunk pathspec at compose
+  time while the filesystem arms keep the spelling they need — the consumer-side fix working on a
+  live fire, not in a test.
+
+  ⚠️ **`61e39ef3` is NOT an ancestor of `origin/main`** — `git merge-base --is-ancestor` exits 1.
+  The land rebased it and rewrote the object. F5 was therefore verified BY CONTENT
+  (`git show origin/main:scripts/lib/capacity-admit.sh`, `git ls-tree origin/main`), never by the
+  cited sha. Memory: `cited-sha-may-not-survive-the-land`.
+
+  **Residual dispositions — each one moved to a store that is read, or refuted here so nobody
+  builds it.** The adjudication wrote that the residuals "belong to their own rows"; measured today,
+  *no row was ever created for any of them*, and this document was about to become `complete`, which
+  removes it from every producer's view. A residual recorded only in a closed plan is deleted, not
+  deferred (memory: `a-plan-is-not-a-queue`).
+
+  - **F1's residual — DROPPED, with the harm measured rather than assumed.** It has GROWN, 4 → 9
+    open rows carrying no `venuePlan` (created 2026-09-04..09), so re-measuring mattered. It is
+    still not a defect: every gating reader in `bin/cc-dispatch` tests `venuePlan == "cloud"`
+    (`:2087`, `:2103`, `:2119`, `:2123`, `:2742`), so an empty label is read as *not cloud* and the
+    row routes LOCAL — the safe default — and the admission-time repair inside `ready_state()`
+    (`:1519`) relabels it in the same call that consumes it. `CC_DISPATCH_VENUE_ONLY` is unset, so
+    the one filter that could park an unlabelled row is not armed. Consequence: none. Not filed.
+  - **F1's residual has a CAUSE that is not the venue producer, and it is already filed and
+    operator-blocked.** `cc-venue run --apply` has exactly one automatic caller,
+    `scripts/autonomy-sweep.sh` §2b-ii, on a 6 h cadence. Both `~/.claude/autonomy/venue-pass.stamp`
+    and `premise-pass.stamp` have mtime **2026-09-07 ~12:00 — ~40 h stale against a 6 h cadence**.
+    The stamp is claimed BEFORE the pass runs, so a stale stamp proves the block was never REACHED,
+    not that it ran and did nothing. Corroborated from the other side: 27 `self-bound` records in
+    `~/.claude/autonomy/idl.jsonl`, `stopped_before` only ever `0b-author-death-join` (11) or
+    `1-collect-pages-alarms` (16), `elapsed_s` 430–1095 against `bound_s` 400 — i.e. the arms ABOVE
+    the stop now cost more than the entire budget, which is the condition `sweep_yield()`'s own
+    header (`:321-323`) names as the signal to re-measure them. The whole lower half of the sweep —
+    venue re-derivation, the currency pass, the grouping sweep — has not run for ~40 h. **Root cause
+    already filed: `41d05eae511c`** ("the autonomy sweep's launchd job still carries ProcessType
+    Background, which pins it … at PRI 4"), correctly BLOCKED on an operator `launchctl
+    bootout+bootstrap`. Not re-filed; the measured blast radius was added to that row instead.
+    Requested cadence is not delivered cadence (memory: `init-state-is-not-runtime-state`).
+  - **F2's residual — REFUTED, and its prescribed remedy is a trap.** "No per-BRANCH interlock"
+    reads as a hole; it is the opposite. `scripts/land-lock.sh:13-20` keys the mutex on the SHARED
+    git dir (`--git-common-dir`), explicitly *not* the per-worktree toplevel, so at most one land
+    runs per REPO across every worktree — strictly stronger than per-branch, and the fix for
+    G-P9-1. The wait it costs is real and was measured (last 200 lands: mean 123.5 s, 28 % over
+    60 s, max 1700 s), but every one of those lands targets one trunk, so serialising them is
+    required, not a granularity defect: re-keying the lock per branch would restore exactly the
+    rebase race the repo key was introduced to remove. Conviction that per-branch keying is the
+    wrong remedy: ~93 %. Deliberately NOT filed, so that no later session implements it as written.
+  - **F5's residual (a) — REFUTED. The operator's path is already wired.** This plan records that
+    `scripts/handoff-fire.sh`'s `capacity_gate()` "still carries only load+headroom … only the
+    policy is not wired", and that it was left so because a refusing term on the human's path is a
+    value call. That was true when written and is false today: `capacity_gate()` carries a live
+    `segments` term (`CC_FIRE_SEGMENT_TERM`, default `on`, ceiling `CC_FIRE_MAX_SEGMENT_PCT` →
+    `CC_ADMIT_MAX_SEGMENT_PCT` → 50) reading `cc_hw_compressor_segment_pct`, and a live `active`
+    term (`CC_FIRE_ACTIVE_TERM`, default `on`, ceiling 8) reading `cc_sp_active` — each with its own
+    REFUSE branch, `emit_fire_refusal` and bounded-budget release, not a comment. The value call was
+    made and shipped; no row is owed. Nothing was filed, deliberately: filing a `needs-human`
+    decision that the code has already answered would have handed the operator a settled question.
+  - **F5's residual (b) / F3's second half — wake-side damping — PARTIAL, and the open half is
+    filed.** Per-TARGET damping does exist (`bin/cc-wake-headless` `CC_WAKE_MIN_S`, exit 2 =
+    damped; `bin/cc-notify` reports a damped wake), so a single session cannot be hammered. What
+    the plan actually named is different and still missing: a *herd* — many existing residents
+    woken at once — which per-target damping cannot see, because each individual wake is its first.
+    Filed as an ordinary open row; it is drivable agent work, not an operator gate, and it needs its
+    own effort rather than a closed wave's footnote.
+  - **F4's producer-side change** (`bin/cc-discover:273` still writes absolute paths;
+    `bin/cc-discover:329` writes a worse `$HOME/.claude/…` deployed-layer path) stays deliberately
+    untaken — it must move `cc-eligible._dod_path` and `cc-premise._plan_dodref` in the same diff or
+    it silently deletes the derived plan-open falsifier. Filed as its own row carrying that
+    constraint, because the constraint is the whole reason it was not done.
