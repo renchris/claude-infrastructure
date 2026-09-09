@@ -299,6 +299,7 @@ ship_hold=0
 #    drivable = clean ∧ own commits ahead (push/land is the desk's job); contradiction = the FM1
 #    remainder (dirty ∨ unlanded ∨ DoD-remainder). Any read failure → drivable/contradiction stay 0. ──
 drivable=0; contradiction=0
+ld_dirty=0; ld_unl=0; ld_rem=0; ld_rung="?"   # defaults: the ledger branch below may not run
 if [ "$ship_hold" -eq 1 ] || [ "$has_done" -eq 1 ]; then
   WRAP="${WRAP_LEDGER_BIN:-}"
   if [ -z "$WRAP" ]; then
@@ -310,6 +311,10 @@ if [ "$ship_hold" -eq 1 ] || [ "$has_done" -eq 1 ]; then
     LED="$( cd "$CWD" 2>/dev/null && bash "$WRAP" --machine 2>/dev/null || true )"
     lf() { printf '%s' "$LED" | grep -E "^$1=" | head -1 | cut -d= -f2- || true; }
     ld_dirty="$(lf DIRTY)"; ld_unl="$(lf UNLANDED)"; ld_rem="$(lf REMAINDER)"
+    # The rung is read but not USED for the fire decision — this hook is deliberately
+    # ledger-independent on two of its four arms. It is captured so a record (fired or CAPPED) can
+    # say WHAT STATE the demand was made, or suppressed, over. See the cap site below.
+    ld_rung="$(lf RUNG)"; [ -n "$ld_rung" ] || ld_rung="?"
     case "$ld_dirty" in ''|*[!0-9]*) ld_dirty=0 ;; esac
     case "$ld_unl"   in ''|*[!0-9]*) ld_unl=0 ;; esac
     case "$ld_rem"   in ''|*[!0-9]*) ld_rem=0 ;; esac
@@ -344,6 +349,21 @@ elif [ "$has_done" -eq 1 ]; then
 fi
 [ -n "$FIRE_KIND" ] || abstain "no-fire"
 
+# WHICH text triggered the demand. COMPUTED HERE, ABOVE THE CAP (A07 R4, 2026-09-08): a cap trip
+# suppresses a real demand and the record named only the spent counter, so 106 trips over 19 sids in
+# 11 days said nothing about WHICH arm was silenced, over WHAT rung, on WHAT text. Those are the
+# same three fields that make a FIRED record readable, and a suppressed one needs them more —
+# nothing downstream can reconstruct them from a reason string. One computation, both records.
+if [ "$FIRE_KIND" = "false-done" ]; then
+  TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$DONE_TELLS" 2>/dev/null | head -1 | tr -d '\n')"
+elif [ "$FIRE_KIND" = "category-not-idea" ]; then
+  TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$CATEGORY_TELLS" 2>/dev/null | head -1 | tr -d '\n')"
+elif [ "$FIRE_KIND" = "opaque-identifier" ]; then
+  TRIGGER="$(printf '%s' "$MSG" | grep -oE "$OPAQUE_ID_RE" 2>/dev/null | tr -cd '0-9a-f\n' | sort -u | head -2 | tr '\n' ' ' | sed 's/ $//')"
+else
+  TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$TELLS" 2>/dev/null | head -1 | tr -d '\n')"
+fi
+
 # ── Latch-set + hard cap (RED-proofed L + C). ──
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 # GC stale per-session .fired latch-sets — SKEY embeds SID, so each is per-session and otherwise
@@ -361,19 +381,21 @@ if [ -f "$FIRED" ] && grep -qxF "$HASH" "$FIRED" 2>/dev/null; then
 fi
 # C: the set's size is the session fire-count; at the cap, go silent (never wedge).
 N="$(grep -c . "$FIRED" 2>/dev/null || echo 0)"; case "$N" in ''|*[!0-9]*) N=0 ;; esac
-[ "$N" -ge "$MAX" ] && abstain "capped:${N}>=${MAX}"
+if [ "$N" -ge "$MAX" ]; then
+  # Reason string is byte-identical to the pre-enrichment one — its consumers, and the RED proof of
+  # the cap itself, key on that exact text; only the record's payload grows.
+  log_idl abstained "capped:${N}>=${MAX}" \
+    "$(jq -cn --arg arm "$FIRE_KIND" --arg rung "$ld_rung" --arg tell "$TRIGGER" \
+              --argjson dirty "${ld_dirty:-0}" --argjson unlanded "${ld_unl:-0}" \
+              --argjson remainder "${ld_rem:-0}" --argjson count "$N" --argjson max "$MAX" \
+        '{suppressed_arm:$arm,rung:$rung,tell:$tell,
+          facts:{dirty:$dirty,unlanded:$unlanded,remainder:$remainder},
+          count:$count,max:$max}' 2>/dev/null)"
+  exit 0
+fi
 
 # ── FIRE: record the hash (re-arm baseline + cap increment), log, block with the corrective. ──
 printf '%s\n' "$HASH" >> "$FIRED" 2>/dev/null || true
-if [ "$FIRE_KIND" = "false-done" ]; then
-  TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$DONE_TELLS" 2>/dev/null | head -1 | tr -d '\n')"
-elif [ "$FIRE_KIND" = "category-not-idea" ]; then
-  TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$CATEGORY_TELLS" 2>/dev/null | head -1 | tr -d '\n')"
-elif [ "$FIRE_KIND" = "opaque-identifier" ]; then
-  TRIGGER="$(printf '%s' "$MSG" | grep -oE "$OPAQUE_ID_RE" 2>/dev/null | tr -cd '0-9a-f\n' | sort -u | head -2 | tr '\n' ' ' | sed 's/ $//')"
-else
-  TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$TELLS" 2>/dev/null | head -1 | tr -d '\n')"
-fi
 log_idl fired "$FIRE_KIND" \
   "$(jq -cn --arg tell "$TRIGGER" --argjson count "$((N+1))" --argjson max "$MAX" \
       '{tell:$tell,count:$count,max:$max}')"
