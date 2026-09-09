@@ -250,9 +250,21 @@ ROWS
 EOF
   chmod +x "$BATS_TEST_TMPDIR/ps"
   mine="$(env -u CC_SP_TREES_OVERRIDE PATH="$BATS_TEST_TMPDIR:$PATH" bash -c '. "$1"; cc_sp_trees' _ "$SP")"
-  # capacity-alarm's census() verbatim, extracted by line range so a drift in ITS copy shows up here.
+  # capacity-alarm's census(), extracted so a drift in ITS copy shows up here.
+  #
+  # THE SECOND COPY IS GONE, AND THAT CHANGED WHAT THIS CASE GUARDS (c9e7ba640, "one census, two
+  # consumers"). capacity-alarm's census() no longer carries its own awk — it resolves
+  # `lib/spawn-presence.sh` RELATIVE TO ${BASH_SOURCE[0]} and delegates to cc_sp_census. Extracting
+  # the function to the tmpdir moves that anchor, so the lib became unreadable, census() correctly
+  # returned rc 1, and `theirs` came back EMPTY — a case failing on its own harness rather than on
+  # its subject (memory guard-refusal-fires-on-its-own-harness). The property worth pinning after
+  # the refactor is the DELEGATION: satisfy the relative path with a SYMLINK to the real library
+  # (never a copy — a control that replays a copy proves nothing about the subject, memory
+  # control-must-replay-the-real-artifact), and the two numbers must still agree.
   extract_fn "$REPO/scripts/capacity-alarm.sh" census > "$BATS_TEST_TMPDIR/theirs.sh"
   [ -s "$BATS_TEST_TMPDIR/theirs.sh" ]
+  mkdir -p "$BATS_TEST_TMPDIR/lib"
+  ln -sf "$SP" "$BATS_TEST_TMPDIR/lib/spawn-presence.sh"
   theirs="$(PATH="$BATS_TEST_TMPDIR:$PATH" bash -c '. "$1"; census' _ "$BATS_TEST_TMPDIR/theirs.sh" | awk '{print $1}')"
   [ -n "$mine" ]
   [ -n "$theirs" ]
