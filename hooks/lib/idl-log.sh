@@ -11,6 +11,16 @@
 #     then reads as "no records" and silently flips D9 / the abstain alarm GREEN, defeating the
 #     un-gameable detector.
 #
+# ⚠️ THE SECOND SENTENCE OF THAT INVARIANT IS NOW HISTORY, AND IS KEPT BECAUSE IT IS THE RATIONALE,
+# NOT BECAUSE IT IS STILL THE CONSEQUENCE (W3-B17, 2026-09-09). Both named consumers were since made
+# tolerant and neither can abort any more: bin/cc-audit reads `[inputs | fromjson?]` per record and
+# `warn_malformed()` REPORTS the skipped count, and scripts/idl-abstain-alarm.sh reads
+# `fromjson? // empty` and prints raw-vs-parsed. The encoding invariant above is unchanged and still
+# binds every field — what changed is that a breach now degrades a census by a counted stratum
+# instead of silently zeroing it. tests/idl-record-size.bats holds the chokepoint lint that stops a
+# NEW silent slurp from being introduced. Do not act on the old consequence without re-reading those
+# two readers (memory: resident-policy-must-not-restate-perishable-facts).
+#
 # An invariant that must hold identically in five places is exactly what a lib is for: before
 # this file, fixing one copy left four wrong. Behaviour is PRESERVED — the emitted record is
 # byte-identical to what each copy produced. This is a pure extraction, not a redesign.
