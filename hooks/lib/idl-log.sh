@@ -63,6 +63,47 @@ idl_disable() { _IDL_OFF=1; }
 
 # Append ONE disposition record. $1=disposition $2=reason $3=extra JSON OBJECT (jq-built, default {}).
 # Never fails the caller: every failure path is swallowed — telemetry must not be able to break a hook.
+# ── THE SIZE ASSERTION (W3-B17, on W2-B17's number) ──────────────────────────────────────────────
+# O_APPEND makes a write atomic only while the record fits the writer's stdio buffer (4,096 B here).
+# Above it the line goes out as >=2 write() calls and a concurrent producer on the shared fd can land
+# BETWEEN them, splicing both records. W2-B17 measured exactly that: a 6,679-byte backlog-health
+# record cut at byte 4096 by a waiting-recycle append, after which jq exits 5 at that line and every
+# census redirecting stderr silently drops 12.33% of the store.
+#
+# THE REFUSAL NEVER TRUNCATES. A truncated JSON line IS the defect this guards -- it would be
+# indistinguishable from the splice, and unlike the splice it would be minted deliberately. An
+# oversized record is DROPPED and replaced by a short, valid `idl-oversize` record naming the hook,
+# the kind and the byte count, so the store carries the evidence that something tried.
+#
+# The threshold is 4,000 rather than 4,096: a guard sitting exactly on the boundary it protects has
+# no headroom for the envelope a caller adds after the check.
+idl_max_bytes() {
+  local max="${CC_IDL_MAX_BYTES:-4000}"
+  case "$max" in ''|*[!0-9]*) max=4000 ;; esac
+  printf '%s' "$max"
+}
+
+# Append ONE already-built record line, refusing the size class that cannot be appended atomically.
+# rc 0 = appended, rc 1 = refused (and an idl-oversize record was written in its place).
+# Never fails the caller in a way that could break a hook: every I/O path is swallowed.
+idl_guarded_append() { # <idl-path> <hook> <kind> <record-json>
+  local path="$1" hook="$2" kind="$3" rec="$4" max n ts
+  max="$(idl_max_bytes)"
+  n="$(printf '%s' "$rec" | wc -c | tr -d ' ')"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  if [ "$n" -le "$max" ]; then
+    printf '%s\n' "$rec" >> "$path" 2>/dev/null || true
+    return 0
+  fi
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
+  jq -cn --arg ts "$ts" --arg hook "$hook" --arg kind "$kind" \
+         --argjson bytes "$n" --argjson max "$max" \
+    '{ts:$ts,hook:$hook,disposition:"idl-oversize",
+      reason:"record refused: an append this size is not atomic on the shared fd",
+      kind:$kind,bytes:$bytes,max:$max}' >> "$path" 2>/dev/null || true
+  return 1
+}
+
 log_idl() {
   [ "$_IDL_OFF" = 1 ] && return 0
   mkdir -p "$(dirname "$_IDL_PATH")" 2>/dev/null || true
@@ -73,10 +114,12 @@ log_idl() {
   merge='{}'
   if [ -n "$_IDL_MERGE_VAR" ]; then merge="${!_IDL_MERGE_VAR:-}"; [ -n "$merge" ] || merge='{}'; fi
   # $merge BEFORE $extra: a call site can still override a merged field.
-  jq -cn --arg ts "$ts" --arg hook "$_IDL_HOOK" --arg sid "$sidval" \
+  local _rec
+  _rec="$(jq -cn --arg ts "$ts" --arg hook "$_IDL_HOOK" --arg sid "$sidval" \
          --arg disp "$1" --arg reason "$2" --argjson merge "$merge" --argjson extra "$extra" \
-    '{ts:$ts,hook:$hook,sid:$sid,disposition:$disp,reason:$reason} + $merge + $extra' \
-    >> "$_IDL_PATH" 2>/dev/null || true
+    '{ts:$ts,hook:$hook,sid:$sid,disposition:$disp,reason:$reason} + $merge + $extra' 2>/dev/null)"
+  [ -n "$_rec" ] || return 0
+  idl_guarded_append "$_IDL_PATH" "$_IDL_HOOK" "$1" "$_rec" || true
 }
 
 # abstained = evaluated but did not fire (LOGGED, never silent). "didn't fire" must never be

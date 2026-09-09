@@ -72,3 +72,50 @@ PY
     [ "$output" -lt 4000 ]
   done
 }
+
+# ── THE WRITER'S OWN REFUSAL ─────────────────────────────────────────────────────────────────────
+# The cases above pin ONE producer. These pin the CONTRACT: whatever a caller builds, the writer
+# refuses the size class rather than appending a line that cannot go out in one write().
+
+lib() { echo "${CC_TEST_IDLLIB:-$REPO/hooks/lib/idl-log.sh}"; }
+
+@test "the writer appends a record at the threshold" {
+  run bash -c '
+    . "$1" || exit 9
+    rec="$(jq -cn --arg p "$(printf "a%.0s" $(seq 1 3900))" "{ts:\"t\",k:\$p}")"
+    idl_guarded_append "$2" testhook testkind "$rec"' _ "$(lib)" "$BATS_TEST_TMPDIR/idl.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/idl.jsonl")" -eq 1 ]
+  run jq -r '.disposition // "none"' "$BATS_TEST_TMPDIR/idl.jsonl"
+  [ "$output" = "none" ]
+}
+
+@test "the writer REFUSES a record over the threshold, and never truncates it" {
+  run bash -c '
+    . "$1" || exit 9
+    rec="$(jq -cn --arg p "$(printf "a%.0s" $(seq 1 5000))" "{ts:\"t\",k:\$p}")"
+    idl_guarded_append "$2" testhook testkind "$rec"' _ "$(lib)" "$BATS_TEST_TMPDIR/idl.jsonl"
+  [ "$status" -eq 1 ]
+  # Exactly one line, and it is the SHORT oversize record -- not a truncated fragment of the
+  # original. A truncated JSON line IS the defect this guards; minting one deliberately would be
+  # indistinguishable from the splice it exists to prevent.
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/idl.jsonl")" -eq 1 ]
+  run jq -r '.disposition' "$BATS_TEST_TMPDIR/idl.jsonl"
+  [ "$output" = "idl-oversize" ]
+  run jq -r '.kind' "$BATS_TEST_TMPDIR/idl.jsonl"
+  [ "$output" = "testkind" ]
+  # every byte of the store still parses -- the refusal cannot itself be the thing that breaks jq
+  run jq -e . "$BATS_TEST_TMPDIR/idl.jsonl"
+  [ "$status" -eq 0 ]
+  n="$(wc -c < "$BATS_TEST_TMPDIR/idl.jsonl" | tr -d ' ')"
+  [ "$n" -lt 400 ]
+}
+
+@test "the oversize record names the byte count that was refused" {
+  bash -c '
+    . "$1" || exit 9
+    rec="$(jq -cn --arg p "$(printf "a%.0s" $(seq 1 5000))" "{ts:\"t\",k:\$p}")"
+    idl_guarded_append "$2" testhook testkind "$rec"' _ "$(lib)" "$BATS_TEST_TMPDIR/idl.jsonl" || true
+  run jq -r '.bytes > 4000' "$BATS_TEST_TMPDIR/idl.jsonl"
+  [ "$output" = "true" ]
+}
