@@ -50,7 +50,7 @@
 #       → land-lock'd child (serialized machine-wide per repo via land-lock.sh): last-moment
 #         fetch → CAS: origin/<trunk> still == GATE_BASE AND HEAD still == GATE_HEAD? NO ⇒
 #         release the lock, exit 42 (INTERNAL stale-gate signal) and the outer loop re-rebases
-#         + re-gates UNLOCKED (statics+smoke — seconds, not a second corpus). YES ⇒ the gated
+#         + re-gates UNLOCKED (NOT seconds — see the cost note below). YES ⇒ the gated
 #         tree IS the pushed tree → `git push HEAD:<trunk>` (non-ff ⇒ exit 7) → land-verify.sh
 #         (content-verify, IN the lock, after the push) → on a content-drop, BOUNDED AUTO-RETRY
 #         + ROLLBACK (T-P9-7) up to SHIP_LAND_VERIFY_RETRIES times; a retry rebase-conflict
@@ -68,13 +68,35 @@
 #     (this fallback and the content-drop recovery re-gate) are covered structurally: run_gate
 #     refuses to start any suite while IN_LAND_LOCK=1, so the ban cannot be forgotten at a call site.
 #
-# THE OPTIMISTIC ROUNDS SURVIVE v2, but only because a re-gate now costs SECONDS. Their v1
-# economics were indefensible on the measurements: 26.4h of accumulated lock-WAIT bought 79s of
-# actual work, and ~30% of rounds were invalidated by a sibling landing mid-gate — each
-# invalidation paying for a whole second corpus, unlocked but still 20-53 min of machine. The
-# rounds were never a throughput trick; they exist so the LOCK covers only the CAS race window.
-# With statics+smoke behind them a stale-gate re-round is seconds, so that 30% re-round rate stops
-# being the dominant cost and becomes a rounding error. Keep the rounds; they are now cheap.
+# THE OPTIMISTIC ROUNDS SURVIVE v2, and the LOCK half of their case is settled: measured over
+# 1,981 acquisitions in ~/.claude/land.log the lock waits 0s at p50/p90 and is HELD 3s at p50, 4s
+# at p90 — 0.89% of a median 337s land. v1's economics really were indefensible (26.4h of
+# accumulated lock-WAIT bought 79s of actual work) and moving the heavy work out really did fix
+# THAT. Keep the rounds; the lock is not what they cost.
+#
+# 🚨 BUT "a re-gate now costs SECONDS" IS REFUTED, AND IT FAILS BY NAMING THE WRONG TERMS
+# (measured 2026-09-09, n=2,696 ship-land rows). This paragraph used to conclude that a stale-gate
+# re-round "is seconds, so that 30% re-round rate ... becomes a rounding error". Both terms it
+# named are genuinely cheap and both readings were right about them — gate_statics_s p50 0s /
+# p90 3s, smoke_s p50 0s / p90 125s. The round's actual cost is a THIRD term the sentence never
+# mentions: gate_arms_s, p50 137s / p90 783s / p99 2842s. So every clause audited true and the
+# total was wrong by three orders of magnitude, which is exactly why nobody re-opened it.
+#
+# The marginal p50 cost of each extra round, by gate_rounds:
+#     1 round  n=2122   367s          3 rounds n=142   2228s  (+1097s)
+#     2 rounds n=354   1131s (+764s)  4 rounds n=78    3161s  (+933s)
+# A four-round land is 8.6x a clean one. The re-round rate did fall (30% -> 17.7%, 611 of 3,443),
+# so the rounds are better than v1 — but at ~13-18 min each an invalidation is the DOMINANT cost
+# of a contended land, not a rounding error.
+#
+# Lived instance, and the reason this note exists: the land of THIS correction's own parent commit
+# (session bfe42820, branch wt-09f8bb68dbf3, 2026-09-09) exhausted ALL THREE optimistic rounds to
+# exit 42 — cumulative total_s 1480 -> 2779 -> 4161 — and only landed on the rounds-exhausted
+# in-lock statics-only fallback, 82 minutes end to end. Every one of those three rounds logged
+# wait_s=0 AND hold_s=0; mid-land, `land-lock.sh --status` read "holder: (free) / waiters: 0" at
+# the 62-minute mark. The landing release itself was wait_s=0 hold_s=397. So on the slowest land
+# in this log's recent history, lock CONTENTION contributed exactly zero. Whoever next tries to
+# make a land faster: the lock is dead ground, and gate_arms_s under invalidation is the term.
 #
 # SMOKE — the land's only test work, and the highest-value seconds in the pipeline. The
 # `gate-select.sh --direct` suites of THIS diff MINUS the HOST suites named in
