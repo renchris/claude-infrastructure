@@ -25,11 +25,16 @@ set -euo pipefail
 ACCT="${1:?account}"; WT="${2:?worktree}"; SID="${3:?session-id}"; shift 3
 BR="" MODEL="" EFFORT="" PROMPT="" REPO="${LR_REPO:-$HOME/Development/reso-management-app}"
 SUMMARY=0 FORCE_SPLIT=0
+# --permission-mode: carried from the SOURCE session's argv (LIMIT_RECOVER_100P, 2026-09-09). This
+# used to be hardcoded `auto` in the spawn below, so a `plan` session silently came back as `auto`
+# — the same launch-vs-runtime confusion as the tier, one axis over. The default stays `auto`.
+PERM_MODE="${LR_PERMISSION_MODE:-auto}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --branch) BR="$2"; shift 2 ;;
     --model) MODEL="$2"; shift 2 ;;
     --effort) EFFORT="$2"; shift 2 ;;
+    --permission-mode) PERM_MODE="$2"; shift 2 ;;
     --prompt) PROMPT="$2"; shift 2 ;;
     --repo) REPO="$2"; shift 2 ;;
     --summary) SUMMARY=1; shift ;;
@@ -379,7 +384,11 @@ export LR_RE_MENU LR_RE_ASIS_STRONG LR_RE_ASIS LR_RE_TRUST LR_RE_TRUST_RB LR_RE_
 LR_RE_READY="$(lr_wrap_re 'for shortcuts')|$(lr_wrap_re 'auto mode on')|$(lr_wrap_re 'shift+tab to cycle')"
 export LR_RE_READY
 export LR_ASIS="$(( SUMMARY == 0 ? 1 : 0 ))"
-export LR_CFG="$cfg" LR_BIN="$BIN" LR_MODEL="$model" LR_EFFORT="$effort" LR_SID="$SID" LR_PROMPT="$PROMPT"
+case "$PERM_MODE" in
+  auto|default|plan|acceptEdits|bypassPermissions|dontAsk) ;;
+  *) echo "lr-fire-resume: --permission-mode must be auto|default|plan|acceptEdits|bypassPermissions|dontAsk (got '$PERM_MODE')" >&2; exit 2 ;;
+esac
+export LR_CFG="$cfg" LR_BIN="$BIN" LR_MODEL="$model" LR_EFFORT="$effort" LR_SID="$SID" LR_PROMPT="$PROMPT" LR_PERM="$PERM_MODE"
 # ── CLOSE-ATTRIBUTION WRAPPER ────────────────────────────────────────────────────────────────────
 # A RESUMED SESSION USED TO DIE UNATTRIBUTABLY. Every other launch path interposes
 # bin/cc-close-attrib (see ~/.zshrc's claude-next* launchers); the spawn below did not, so a session
@@ -406,6 +415,7 @@ exec expect -c '
   set bin    $env(LR_BIN)
   set model  $env(LR_MODEL)
   set effort $env(LR_EFFORT)
+  set perm   [expr {[info exists env(LR_PERM)] ? $env(LR_PERM) : "auto"}]
   set sid    $env(LR_SID)
   set prompt $env(LR_PROMPT)
   set injected 0
@@ -430,9 +440,9 @@ exec expect -c '
   # place, so the spawned pty, the process group and every pattern below are unchanged by it.
   set wrap $env(LR_WRAP)
   if {$wrap ne ""} {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode auto --model $model --effort $effort --resume $sid
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid
   } else {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode auto --model $model --effort $effort --resume $sid
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid
   }
 
   # Move the selector to option $steps+1 and CONFIRM it landed there before committing. Returns 1

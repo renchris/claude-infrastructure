@@ -1,0 +1,244 @@
+#!/usr/bin/env bash
+# lr-lib.sh — the ONE home for the limit-recover predicates that more than one caller needs
+# (LIMIT_RECOVER_100P, 2026-09-09). Source, don't execute. Pure functions; no side effects at load.
+#
+# Callers: scripts/limit-recover/lr-handoff.sh (the per-session front end), lr-reset-poller.sh (the
+# launchd daemon), lr-fleet.sh (the fleet driver). Two spellings of one predicate is how sibling
+# auditors end up disagreeing about one population (memory: sibling-auditors-must-share-the-state-
+# model) — the tier read, the liveness census, the transplant read and the engagement oracle all
+# used to be re-derived per caller, and each divergence was an incident:
+#   · tier: the poller minted tier-less launchers, so every unattended Fable recovery landed on Opus
+#     (measured 2026-09-09 on 52e35019: transcript said claude-fable-5-1/xhigh, argv said opus/high);
+#   · liveness: `pgrep -f "resume <sid>"` is blind to a fresh launch's argv, so the poller resumed a
+#     session whose original pane was alive — two writers, one transcript, one account.
+# shellcheck shell=bash
+
+[ -n "${LR_LIB_LOADED:-}" ] && return 0 2>/dev/null
+LR_LIB_LOADED=1
+
+# ── the four account stores ──────────────────────────────────────────────────────────────────────
+lr_config_dirs() { # → one config dir per line; ~/.claude and ~/.claude-next are ONE account (mirror)
+  if [ -n "${LR_CONFIG_DIRS:-}" ]; then printf '%s\n' "$LR_CONFIG_DIRS" | tr ':' '\n'; return 0; fi
+  local h
+  for h in "$HOME/.claude" "$HOME/.claude-next" "$HOME/.claude-secondary" "$HOME/.claude-tertiary" "$HOME/.claude-quaternary"; do
+    [ -d "$h/projects" ] && printf '%s\n' "$h"
+  done
+  return 0
+}
+
+# ── TIER: what the session was ACTUALLY running when it hit the limit ────────────────────────────
+# The transcript carries (message.model, effort) per assistant turn; argv carries only the LAUNCH
+# tier and the registry row carries neither. The tail of a transcript may belong to a rescuer (a
+# same-account duplicate appending by path), so the pick is the last NON-ERROR turn BEFORE the last
+# limit error, and only when there is no limit error at all the last turn overall.
+lr_tier_from_transcript() { # $1=cfg $2=sid → "model effort" on stdout / rc 1 when nothing on disk
+  local f
+  for f in "$1"/projects/*/"$2".jsonl "$1"/projects/*/"$2".jsonl.handed-off; do
+    [ -f "$f" ] || continue
+    /usr/bin/python3 - "$f" <<'PY' && return 0
+import json, sys
+last_limit = None; turns = []
+for line in open(sys.argv[1], errors="replace"):
+    if '"assistant"' not in line:
+        continue
+    try:
+        d = json.loads(line)
+    except Exception:
+        continue
+    if d.get("type") != "assistant":
+        continue
+    ts = d.get("timestamp") or ""
+    m = d.get("message") if isinstance(d.get("message"), dict) else {}
+    if d.get("isApiErrorMessage"):
+        c = m.get("content")
+        txt = c if isinstance(c, str) else " ".join(x.get("text", "") for x in (c or []) if isinstance(x, dict))
+        if "hit your" in txt:
+            last_limit = ts
+        continue
+    model = m.get("model") or ""
+    if not model or model.startswith("<synthetic"):
+        continue
+    turns.append((ts, model, d.get("effort") or ""))
+if not turns:
+    sys.exit(1)
+pick = None
+if last_limit:
+    before = [t for t in turns if t[0] < last_limit]
+    pick = before[-1] if before else None
+if pick is None:
+    pick = turns[-1]
+print(pick[1], pick[2])
+PY
+  done
+  return 1
+}
+
+# ── ENGAGEMENT after a baseline: the one thing a husk can never produce ──────────────────────────
+# A content-bearing, NON-ERROR assistant turn newer than the baseline, in the named store's copy.
+# `isApiErrorMessage` is the limit hitting again; "No response requested." is the synthetic entry a
+# resume inserts; neither is a turn. Byte-identical core to handoff-fire.sh's resume_engaged (the
+# parity test in tests/lr-lib.bats pins that).
+lr_engaged_after() { # $1=cfg $2=sid $3=baseline (UTC, %FT%T) → 0 engaged / 1 not
+  local cfg="${1:-}" sid="${2:-}" t0="${3:-}" f
+  { [ -n "$cfg" ] && [ -n "$sid" ]; } || return 1
+  for f in "$cfg"/projects/*/"$sid".jsonl; do
+    [ -f "$f" ] || continue
+    /usr/bin/python3 - "$f" "$t0" <<'PY' && return 0
+import json, sys
+f, t0 = sys.argv[1], sys.argv[2]
+for line in open(f, errors="replace"):
+    if '"assistant"' not in line:
+        continue
+    try:
+        d = json.loads(line)
+    except Exception:
+        continue
+    if d.get("type") != "assistant" or d.get("isApiErrorMessage"):
+        continue
+    if (d.get("timestamp") or "") <= t0:
+        continue
+    m = d.get("message") if isinstance(d.get("message"), dict) else {}
+    c = m.get("content")
+    txt = c if isinstance(c, str) else (json.dumps(c) if c else "")
+    if not txt.strip() or txt.strip() == "No response requested.":
+        continue
+    sys.exit(0)
+sys.exit(1)
+PY
+  done
+  return 1
+}
+
+# ── LIVENESS: the registry, not argv ─────────────────────────────────────────────────────────────
+# One line per LIVE process holding the sid: "<pane>\t<pid>\t<account>\t<cwd>". A row whose pid is
+# dead is a stale row and is skipped; a row is written by the session's own SessionStart hook
+# (hooks/session-register.sh) and is the only store keyed by pane that names the sid.
+lr_registry_live_rows() { # $1=sid → rows on stdout; rc 0 when at least one is live, 1 when none
+  local sid="${1:-}" regdir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}" f pid pane acct cwd n=0
+  [ -n "$sid" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  for f in "$regdir"/*.json; do
+    [ -f "$f" ] || continue
+    case "$(basename "$f")" in .*) continue ;; esac
+    [ "$(jq -r '.session_id // .sessionId // empty' "$f" 2>/dev/null)" = "$sid" ] || continue
+    pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$pid" 2>/dev/null || continue
+    pane="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"; [ -n "$pane" ] || pane="$(basename "$f" .json)"
+    acct="$(jq -r '.account // empty' "$f" 2>/dev/null)"
+    cwd="$(jq -r '.cwd // empty' "$f" 2>/dev/null)"
+    printf '%s\t%s\t%s\t%s\n' "$pane" "$pid" "$acct" "$cwd"; n=$((n + 1))
+  done
+  [ "$n" -gt 0 ]
+}
+
+lr_resume_procs() { # $1=sid → pids of `--resume <sid>` processes (the argv census), one per line; rc 0 when any
+  local sid="${1:-}" out
+  [ -n "$sid" ] || return 1
+  out="$(ps -axo pid=,command= 2>/dev/null | awk -v s="--resume $sid" 'index($0, s) { print $1 }' || true)"
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out"
+}
+
+# ── TRANSPLANT: where did this session go? ───────────────────────────────────────────────────────
+# Reads the split-brain lock lr-transplant.sh writes. Prints the target config dir when the lock
+# names a target OTHER than $2 and that target still holds the transcript (the successor exists);
+# rc 1 otherwise (never transplanted, or transplanted and the successor is gone — both mean "this
+# store's copy is the one to act on").
+lr_transplanted_to() { # $1=sid $2=this cfg → target cfg on stdout / rc 1
+  local sid="${1:-}" here="${2:-}" state="${LR_STATE_DIR:-$HOME/.reso/limit-recover}" lock to to_real here_real
+  lock="$state/locks/$sid.lock"
+  [ -f "$lock" ] || return 1
+  to="$(sed -n '/"to":"/{s/.*"to":"\([^"]*\)".*/\1/p;q;}' "$lock")"
+  [ -n "$to" ] || return 1
+  to_real="$(cd "$to" 2>/dev/null && pwd -P || printf '%s' "$to")"
+  here_real="$(cd "$here" 2>/dev/null && pwd -P || printf '%s' "$here")"
+  [ "$to_real" != "$here_real" ] || return 1
+  ls "$to"/projects/*/"$sid".jsonl >/dev/null 2>&1 || return 1
+  printf '%s' "$to"
+}
+
+# ── KITTY from ANY context (launchd has no $KITTY_WINDOW_ID) ─────────────────────────────────────
+lr_kitty_socket() { # → unix:/tmp/kitty-<pid> of a LIVE kitty, via bin/cc-kitty-socket; rc 1 when none
+  [ -n "${CC_TERM_KITTY_TO:-}" ] && { printf '%s' "$CC_TERM_KITTY_TO"; return 0; }
+  local c out
+  # CC_KITTY_SOCKET_BIN is THE resolver when set (a test pins "no kitty" by pointing it at nothing);
+  # it never falls through to the installed one.
+  if [ -n "${CC_KITTY_SOCKET_BIN:-}" ]; then
+    [ -x "$CC_KITTY_SOCKET_BIN" ] || return 1
+    out="$("$CC_KITTY_SOCKET_BIN" 2>/dev/null)" && [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+    return 1
+  fi
+  for c in "${LR_LIB_DIR:-}/../../bin/cc-kitty-socket" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/cc-kitty-socket" "$HOME/.claude/bin/cc-kitty-socket"; do
+    [ -n "$c" ] && [ -x "$c" ] || continue
+    if out="$("$c" 2>/dev/null)" && [ -n "$out" ]; then printf '%s' "$out"; return 0; fi
+  done
+  return 1
+}
+lr_kitty_bin() {
+  local c
+  for c in "${CC_TERM_KITTY:-}" "${LR_LIB_DIR:-}/../../bin/cc-kitty-bin" "$HOME/.claude/bin/cc-kitty-bin"; do
+    [ -n "$c" ] || continue
+    if [ -x "$c" ] && [ "$(basename "$c")" = cc-kitty-bin ]; then out="$("$c" 2>/dev/null)" && [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+    elif command -v "$c" >/dev/null 2>&1; then printf '%s' "$c"; return 0; fi
+  done
+  command -v kitty >/dev/null 2>&1 && { printf 'kitty'; return 0; }
+  return 1
+}
+lr_runner_bin() { # → bin/cc-pane-runner, or rc 1
+  local c
+  for c in "${CC_PANE_RUNNER_BIN:-}" "${LR_LIB_DIR:-}/../../bin/cc-pane-runner" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/bin/cc-pane-runner" "$HOME/.claude/bin/cc-pane-runner"; do
+    [ -n "$c" ] && [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+
+# ── THE PANE ARGV every recovered window is launched with ────────────────────────────────────────
+# RUNNER-ROOTED (MEASURED, docs/research/lr100p-2026-09-09/q-survivability-spawn.md § PA): the window
+# runs `$SHELL -l -i -c 'exec "$CC_PANE_RUNNER"'`; bin/cc-pane-runner runs `bash <launcher>` under an
+# interactive login shell and then execs a shell. The command arrives by ARGV (no typing race), the
+# window SURVIVES a launcher refusal with the message on screen, ~/.zshrc synthesises ITERM_SESSION_ID
+# (the registry row is written), and pane_shell_root reads `yes` — the pane is recyclable next time.
+# `-- /bin/bash <launcher>` (today's shape) dies with the launcher and is what left panes 625/632
+# un-recyclable; it survives only as the fallback when no runner is installed.
+# shellcheck disable=SC2034  # this lib's OUTPUT contract, read by lr-handoff.sh / the poller (a directive binds to the NEXT construct only, hence one line)
+LR_LAUNCH_TAIL=(); LR_SPAWN_SHAPE=""
+lr_launch_tail() { # $1=launcher path → fills LR_LAUNCH_TAIL[] and LR_SPAWN_SHAPE (runner|argv)
+  local r
+  if r="$(lr_runner_bin)"; then
+    LR_LAUNCH_TAIL=(--env "CC_PANE_CMD=bash $1" --env "CC_PANE_CMD_INTERACTIVE=1" --env "CC_PANE_RUNNER=$r"
+                    -- "${SHELL:-/bin/zsh}" -l -i -c 'exec "$CC_PANE_RUNNER"')
+    LR_SPAWN_SHAPE="runner"
+  else
+    LR_LAUNCH_TAIL=(-- /bin/bash "$1")
+    LR_SPAWN_SHAPE="argv"
+  fi
+}
+
+# ── A VISIBLE kitty window for a recovery, from any context ──────────────────────────────────────
+# os-window when there is no anchor; a vsplit BESIDE the anchor pane (never beside the caller) when
+# one is given — --source-window pins `current` to the anchor (without it kitty resolves against the
+# operator's ACTIVE window: the 2026-08-07 pane-theft class, re-measured 2026-09-09). No --title (it
+# is sticky and would freeze the ✳/◐ liveness glyph); provenance rides in --var, which kitty @ ls
+# exposes as user_vars and no child can forge. Prints the new window id; rc 1 when nothing launched.
+lr_kitty_spawn() { # $1=launcher $2=cwd $3=sid $4=target account [$5=anchor pane id]
+  local launcher="$1" cwd="$2" sid="$3" acct="$4" anchor="${5:-}" sock="" kb id
+  # A socket addresses a kitty from ANY context (launchd); inside a kitty pane kitty resolves its own
+  # listener from the environment, so a missing socket is not a refusal there.
+  sock="$(lr_kitty_socket 2>/dev/null || true)"
+  { [ -n "$sock" ] || [ -n "${KITTY_WINDOW_ID:-}" ]; } || return 1
+  kb="$(lr_kitty_bin)" || return 1
+  lr_launch_tail "$launcher"
+  local to=(); [ -n "$sock" ] && to=(--to "$sock")
+  local common=(--var "lr_continuation_of=$sid" --var "lr_source_pane=${anchor:-}" --var "lr_target_account=$acct")
+  case "$anchor" in
+    ''|*[!0-9]*)
+      id="$("$kb" @ ${to[@]+"${to[@]}"} launch --type=os-window --cwd="$cwd" "${common[@]}" "${LR_LAUNCH_TAIL[@]}" 2>/dev/null)" || return 1 ;;
+    *)
+      id="$("$kb" @ ${to[@]+"${to[@]}"} launch --type=window --location=vsplit --match "window_id:$anchor" --next-to "id:$anchor" \
+            --source-window "id:$anchor" --cwd=current --dont-take-focus "${common[@]}" "${LR_LAUNCH_TAIL[@]}" 2>/dev/null)" || return 1 ;;
+  esac
+  id="$(printf '%s' "$id" | tr -d '[:space:]')"
+  case "$id" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$id"
+}

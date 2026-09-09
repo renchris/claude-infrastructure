@@ -171,7 +171,15 @@ fire() { # $1=sid, rest=extra args — the REAL --launch path, with every extern
   # both anchors, or kitty silently drops --next-to and the pane lands in the active tab
   grep -q -- '--match window_id:31' "$KITTY_LOG"
   grep -q -- '--next-to id:31' "$KITTY_LOG"
-  grep -q -- '/bin/bash .*lr-launch-' "$KITTY_LOG"
+  # 2026-09-09 (LIMIT_RECOVER_100P): the launcher no longer rides as the window's argv. It reaches
+  # kitty as `--env CC_PANE_CMD=bash <launcher>` for bin/cc-pane-runner, under `$SHELL -l -i`, so the
+  # window SURVIVES a launcher refusal and pane_shell_root reads yes — the recovered pane is itself
+  # recyclable (docs/research/lr100p-2026-09-09/q-survivability-spawn.md § PA). `-- /bin/bash
+  # <launcher>` was the shape that left panes 625/632 permanently un-recyclable.
+  grep -q -- 'CC_PANE_CMD=bash .*lr-launch-' "$KITTY_LOG"
+  gone '-- /bin/bash .*lr-launch-' "$KITTY_LOG"
+  grep -q -- '--source-window id:31' "$KITTY_LOG"   # `--cwd=current` pinned to the anchor, never the ACTIVE window
+  gone '--title' "$KITTY_LOG"                        # a sticky title would freeze the ✳/◐ liveness glyph
   [ ! -s "$OSA_LOG" ]                       # the AppleScript surface was never touched
   echo "$output" | grep -q 'fired split pane'
 }
@@ -198,7 +206,7 @@ fire() { # $1=sid, rest=extra args — the REAL --launch path, with every extern
   # the os-window fallback it falls through to answers with the same absent id, so THAT claim is
   # withheld too — the operator is left with the manual fallback, which is the truth.
   gone_out 'fired new kitty window'
-  echo "$output" | grep -q "run it as a NEW pane's own command"
+  echo "$output" | grep -q "run it as a NEW pane's own typed command"
 }
 
 @test "lr-handoff: CONTROL — the same check PASSES when the window is in the listing" {
@@ -298,6 +306,11 @@ load_spawn_gui() {
   LRP_TIMEOUT_S=5
   eval "$(sed -n '/^lrp_bounded() {/,/^}/p' "$POLLER")"
   eval "$(sed -n '/^lrp_kitty() {/,/^}/p' "$POLLER")"
+  # 2026-09-09 (LIMIT_RECOVER_100P): spawn_gui's kitty arm now lives on lr-lib.sh (lr_kitty_spawn /
+  # lr_kitty_socket — the launchd-safe, runner-rooted spawn); the extracted unit needs the library.
+  export LR_LIB_DIR="$REPO/scripts/limit-recover"
+  # shellcheck disable=SC1091
+  . "$REPO/scripts/limit-recover/lr-lib.sh"
   eval "$(sed -n '/^spawn_gui() {/,/^}/p' "$POLLER")"
   # Extracting ONE function drops the top-level preamble with it, and since 5fff9df6 the iTerm2 arm
   # depends on two pieces of that preamble: the sourced osa_type_verified, and the LRP_TYPE_VERIFIED
@@ -318,11 +331,16 @@ load_spawn_gui() {
   load_spawn_gui
   run spawn_gui "/tmp/lr-launch-fixture.sh"
   [ "$status" -eq 0 ]
-  grep -q -- 'launch --type=os-window -- /bin/bash /tmp/lr-launch-fixture.sh' "$KITTY_LOG"
+  # 2026-09-09: the window is RUNNER-rooted — the launcher rides in CC_PANE_CMD (bin/cc-pane-runner
+  # under `$SHELL -l -i`), never as the window's argv, so a refusal stays on screen and the pane is
+  # recyclable. `-- /bin/bash <launcher>` is the shape that left panes 625/632 un-recyclable.
+  grep -q -- 'launch --type=os-window' "$KITTY_LOG"
+  grep -q -- 'CC_PANE_CMD=bash /tmp/lr-launch-fixture.sh' "$KITTY_LOG"
+  gone -- '-- /bin/bash /tmp/lr-launch-fixture.sh' "$KITTY_LOG"
   [ ! -s "$OSA_LOG" ]
 }
 
-@test "lr-reset-poller: a kitty spawn failure returns 1 so \`auto\` still falls through to tmux (LR-m)" {
+@test "lr-reset-poller: a kitty spawn failure returns 1 — \`auto\` then reports NO-GUI, never a silent tmux (LR-m, inverted 2026-09-09)" {
   in_kitty 31
   export KITTY_FAIL=1
   load_spawn_gui
