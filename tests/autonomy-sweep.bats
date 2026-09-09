@@ -1768,3 +1768,52 @@ STUB
   [ "$status" -eq 0 ]
   grep -q '"disposition":"self-bound"' "$CC_IDL"
 }
+
+# ── PER-PHASE ELAPSED (backlog 6de092171021) ──────────────────────────────────────────────────────
+# These three go RED against origin/main's sweep, where the `phase` disposition does not exist at
+# all. The value they defend is diagnosability: without them the sweep's cost profile can only be
+# inferred from gaps between unrelated IDL rows, which is a span, not a phase cost.
+
+@test "phase-elapsed: a tick that DIES on the self-bound still records what the phase cost" {
+  # The load-bearing case. The ticks worth measuring are the ones that never finish, so the
+  # measurement must be written per checkpoint — an end-of-tick emitter is reached only by the
+  # healthy ticks that need no explaining.
+  echo '{"kind":"alarm","detail":"never-stuck gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run env CC_SWEEP_T0=$(( $(date +%s) - 5000 )) CC_SWEEP_SELF_BOUND_S=400 \
+      CC_SWEEP_PHASE_LOG_MIN_S=0 "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  # the tick did die on the bound …
+  grep -q '"disposition":"self-bound"' "$CC_IDL"
+  # … and it STILL carries a phase-cost row, which is the whole point
+  grep -q '"disposition":"phase"' "$CC_IDL"
+  # the row names the phase that COMPLETED, not only the one that was next
+  [ -n "$(jq -r 'select(.disposition=="phase")|.phase' "$CC_IDL" | head -1)" ]
+  [ -n "$(jq -r 'select(.disposition=="phase")|.next'  "$CC_IDL" | head -1)" ]
+  # elapsed_s is a NUMBER, so a consumer can sum a tick rather than parse prose
+  jq -e 'select(.disposition=="phase")|.elapsed_s|type=="number"' "$CC_IDL" >/dev/null
+}
+
+@test "phase-elapsed: the measurement is NOT gated on the self-bound being armed" {
+  # The reordering guard. The bound is a POLICY and the clock is a MEASUREMENT; gating the second on
+  # the first would make every run with the bound disabled silently unmeasurable — including the
+  # corpus's own seam.
+  echo '{"kind":"alarm","detail":"never-stuck gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run env CC_SWEEP_T0=$(( $(date +%s) - 5000 )) CC_SWEEP_SELF_BOUND_S=0 \
+      CC_SWEEP_PHASE_LOG_MIN_S=0 "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  # bound off ⇒ the tick runs to the end (unchanged behaviour, re-asserted here)
+  ! grep -q '"disposition":"self-bound"' "$CC_IDL" || false
+  # … and the phases were still costed
+  grep -q '"disposition":"phase"' "$CC_IDL"
+}
+
+@test "phase-elapsed CONTROL: a cheap phase is SILENT, so an absent row means cheap not unreached" {
+  # Alarm polarity. At the default 5 s threshold a fast fixture must emit nothing; if this went
+  # green only because rows always appear, the case above would carry no information.
+  echo '{"kind":"alarm","detail":"never-stuck gate red"}' > "$CC_ANNOUNCE_ALARM_DIR/a1.json"
+  run "${SWEEP_TO[@]}" bash "$SWEEP"
+  [ "$status" -eq 0 ]
+  ! grep -q '"disposition":"phase"' "$CC_IDL" || false
+  # and the tick genuinely ran to the bottom — otherwise "silent" would be proving the wrong thing
+  grep -q '"disposition":"fired"' "$CC_IDL"
+}
