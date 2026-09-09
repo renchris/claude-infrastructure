@@ -288,7 +288,7 @@ registry_load() {
   # session on the wake path in one tool and off it in the other; keeping the expression identical is
   # what stops that drift (fleet memory: sibling-auditors-must-share-the-state-model).
   if out="$(jq -s -r '.[] | select(type=="object")
-                    | [(.name // "-"), (.pid // "-"), (.paneUUID // "-"), (.lstart // "-"), (.surface // "pane")] | @tsv' \
+                    | [(.name // "-"), (.pid // "-"), (.paneUUID // "-"), (.lstart // "-"), (.surface // "pane"), (.session_id // "-")] | @tsv' \
               "$REG_DIR"/*.json 2>/dev/null)"; then
     REG_ROWS="$out"; REG_RC=0; return 0
   fi
@@ -297,7 +297,7 @@ registry_load() {
     [ -e "$f" ] || continue
     local row
     row="$(jq -r 'select(type=="object")
-                | [(.name // "-"), (.pid // "-"), (.paneUUID // "-"), (.lstart // "-"), (.surface // "pane")] | @tsv' "$f" 2>/dev/null)" || continue
+                | [(.name // "-"), (.pid // "-"), (.paneUUID // "-"), (.lstart // "-"), (.surface // "pane"), (.session_id // "-")] | @tsv' "$f" 2>/dev/null)" || continue
     [ -n "$row" ] && out="${out}${row}
 "
   done
@@ -1213,6 +1213,17 @@ fi
 # not-live (closed/recycled pane, dead pid) → enqueued but no drain will run → "mailbox only" (the
 #   cc-announce alarm path; a dead inbox is not a delivery).
 # unknown (no liveness oracle available) → degrade to "mailbox only", never a false "delivered".
+# A registry row's SESSION uuid vs the address we were handed. Separate from the plain `=` used for
+# the pane key because the two spaces have different conventions: pane ids are numeric, while uuids
+# are compared case-insensitively everywhere else in this file (see registry_prefix_to_uuid, and the
+# "registry uuids are upper-case" test). "-" is registry_load's absent-value sentinel and must never
+# match a real address — including the literal target "-".
+reg_sid_matches() { # <row session_id> <target>
+  local sid="${1:-}" want="${2:-}"
+  [ -n "$sid" ] && [ "$sid" != "-" ] && [ -n "$want" ] || return 1
+  [ "$sid" = "$want" ] && return 0
+  [ "$(printf '%s' "$sid" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$want" | tr '[:upper:]' '[:lower:]')" ]
+}
 target_live() {
   local u="$1"
   # self is always live (it is us)
@@ -1225,10 +1236,14 @@ target_live() {
   # live pid whose start time still matches → live. The one behaviour change is a pid that outlives its pane
   #   (a transient window at close): formerly not-live via it2, now live — and the verdict below still
   #   says "NO watcher armed → drains on its NEXT turn", so nothing claims a wake that will not happen.
-  local n p ruuid rlst rsfc
+  # SIXTH column `rsid` is the SESSION uuid, and naming it is mandatory rather than cosmetic: with
+  # five variables reading six tab-separated fields, `read` folds the remainder into the LAST one, so
+  # `rsfc` would become "pane<TAB><session>" and TARGET_SURFACE would silently stop being a surface.
+  # That is the same field-shift registry_load's own 🚨 note describes, arriving from the read side.
+  local n p ruuid rlst rsfc rsid
   if registry_load; then
-    while IFS="$(printf '\t')" read -r n p ruuid rlst rsfc; do
-      if [ -n "$ruuid" ] && [ "$ruuid" = "$u" ]; then
+    while IFS="$(printf '\t')" read -r n p ruuid rlst rsfc rsid; do
+      if [ -n "$ruuid" ] && { [ "$ruuid" = "$u" ] || reg_sid_matches "$rsid" "$u"; }; then
         # Record the SURFACE of the row we matched, for the wake-path decision below. Set only on a
         # registry HIT: an unregistered pane resolved via the it2 list has no row and therefore no
         # surface fact, and "pane" is the right default there — an it2-enumerable address IS a pane.

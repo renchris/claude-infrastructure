@@ -1360,12 +1360,16 @@ PY
   # mode is silent. This asserts the locator found what it expected BEFORE asserting anything about
   # it, so a refactor that hides the readers reds here rather than passing over nothing.
   #
-  # SURFACE is now the 5th column, so this census covers it too — and the `emit` anchor moved from
-  # `(.lstart // "")]` to `(.surface // "pane")]` because lstart is no longer the LAST field. That
-  # migration is the whole point: the old anchor would have read 0 and reddened here the moment a
-  # column was appended, which is exactly the alarm this case is for.
-  emit="$(grep -c '^[^#]*(.surface // "pane")\] | @tsv' "$NOTIFY" || true)"
-  [ "${emit:-0}" -eq 2 ] || { echo "TSV CENSUS: producer arms emitting surface = ${emit:-0}, expected 2 (fast path + per-file fallback)"; false; }
+  # SESSION_ID is now the 6th and LAST column, and the `emit` anchor moved again — from
+  # `(.lstart // "")]` to `(.surface // "pane")]` to `(.session_id // "-")]` — because the anchor
+  # must always name the field that is CURRENTLY last. That migration IS the alarm working: on
+  # 2026-09-08 appending session_id drove the surface-anchored census to 0 and reddened this case,
+  # exactly as the previous comment predicted it would. Each demoted column keeps its own sentinel
+  # census below, so a mid-row field can never silently revert to an empty emission.
+  emit="$(grep -c '^[^#]*(.session_id // "-")\] | @tsv' "$NOTIFY" || true)"
+  [ "${emit:-0}" -eq 2 ] || { echo "TSV CENSUS: producer arms emitting session_id = ${emit:-0}, expected 2 (fast path + per-file fallback)"; false; }
+  sfc_emit="$(grep -c '^[^#]*(.surface // "pane"),' "$NOTIFY" || true)"
+  [ "${sfc_emit:-0}" -eq 2 ] || { echo "TSV CENSUS: producer arms emitting the surface DEFAULT mid-row = ${sfc_emit:-0}, expected 2"; false; }
   lst_emit="$(grep -c '^[^#]*(.lstart // "-"),' "$NOTIFY" || true)"
   [ "${lst_emit:-0}" -eq 2 ] || { echo "TSV CENSUS: producer arms emitting the lstart SENTINEL = ${lst_emit:-0}, expected 2"; false; }
   # No column may be emitted as "" — tab is IFS whitespace, so an empty field is COLLAPSED and every
@@ -1381,6 +1385,12 @@ PY
   [ "${fifth:-0}" -eq 3 ] || { echo "TSV CENSUS: readers taking the surface column = ${fifth:-0}, expected 3 — a short reader folds surface into lstart"; false; }
   short="$(grep -cE '^[^#]*read -r n p (u|ruuid);' "$NOTIFY" || true)"
   [ "${short:-0}" -eq 0 ] || { echo "TSV CENSUS: ${short} reader(s) still take only 3 fields — lstart is landing in the uuid variable"; false; }
+  # And a SIXTH target, for the same reason one level out: target_live() names every field, so with
+  # five variables reading six it would bind rsfc to "pane<TAB><session>" and TARGET_SURFACE would
+  # stop being a surface. The two `_` readers absorb it; target_live() binds it as `rsid` because it
+  # is the consumer — it is what makes a SESSION uuid resolvable at all.
+  sixth="$(grep -cE '^[^#]*read -r n p (u lst _|ruuid rlst rsfc rsid)' "$NOTIFY" || true)"
+  [ "${sixth:-0}" -eq 3 ] || { echo "TSV CENSUS: readers taking the session_id column = ${sixth:-0}, expected 3 — a short reader folds session_id into surface"; false; }
 }
 
 # ── THE HEADLESS WAKE (E7/F5 of 03-headless-substrate.md) ────────────────────────────────────────
@@ -1588,4 +1598,71 @@ _fixture_site_b() {
     || { echo "the honesty gate became a blanket mute — an ARMED daemon lost its true sentence: $output"; false; }
   [[ "$output" != *"NO replacement is coming"* ]] || { echo "$output"; false; }
   [[ "$output" != *"UNVERIFIABLE"* ]] || { echo "$output"; false; }
+}
+
+# ── SESSION-UUID ADDRESSING (desk-672, measured 2026-09-08) ──────────────────────────────────────
+# THE REGIME THIS FILE NEVER REACHED. Every fixture above gives the registry row a UUID-SHAPED
+# `paneUUID` ("AAAAAAAA-1111-…"), so the pane key and a session uuid are indistinguishable and the
+# resolver's identifier space is never put under strain. In PRODUCTION they are disjoint: all 69 rows
+# in ~/.claude/cc-registry/*.json carry a NUMERIC paneUUID (69, 167, 314…), `it2 session list --json`
+# returns those same numeric ids, and the 36-char SESSION uuid — the address the inbox banner tells
+# every peer to reply to, and the key `hooks/mailbox-drain.sh` reads its box under — appears in
+# NEITHER of the two places `target_live()` looks. So a live peer addressed by its session uuid was
+# classified `reason=target-not-live` ("closed/recycled pane"), its wake-path decision suppressed,
+# and a duplicate rerouted to the desk.
+#
+# MEASURED, same pane, same minute, one variable — the address form:
+#   session 423c183d-… (pane 678) by session uuid → "mailbox-only reason=target-not-live"
+#   the same pane by name "ed-w2-b1-selfclose-678" → "verdict=delivered … (live session)"
+# Two more live false negatives that hour: pane 677 (pid alive, replied 90s later) and pane 483
+# (pid alive) — the latter carried the desk's order to withdraw a forbidden bare `git push` in the
+# shared checkout, and was declared undeliverable.
+#
+# NOT a delivery bug: mailbox-drain.sh's coverage fold migrates <pane>.md into the session box at
+# every boundary, so the line still arrives. This is the VERDICT and WAKE side only.
+setup_numeric_pane_fixture() {   # <pane> <session-uuid> <pid>
+  NPANE="$1"; NSESS="$2"; NPID="$3"
+  printf '{"paneUUID":"%s","name":"numpeer","cwd":"/tmp","account":"next","pid":%s,"startedAt":1,"session_id":"%s"}' \
+    "$NPANE" "$NPID" "$NSESS" > "$CC_REGISTRY_DIR/$NPANE.json"
+  NSTUB="$BATS_TEST_TMPDIR/it2-numeric"
+  cat > "$NSTUB" <<SH
+#!/bin/bash
+if [ "\$1" = "session" ] && [ "\$2" = "list" ]; then
+  printf '[{"id":"%s"}]\n' "$NPANE"; exit 0
+fi
+exit 0
+SH
+  chmod +x "$NSTUB"
+  export IT2_BIN="$NSTUB"
+}
+
+@test "production shape: a LIVE peer addressed by its SESSION uuid classifies LIVE, not target-not-live" {
+  rm -f "$CC_REGISTRY_DIR"/*.json
+  setup_numeric_pane_fixture "9001" "BBBBBBBB-1111-2222-3333-555555555555" "$$"
+  run "$NOTIFY" "BBBBBBBB-1111-2222-3333-555555555555" "hello"
+  [ "$status" -eq 0 ] || false
+  # The defect: this reads verdict=mailbox-only reason=target-not-live for a pid that is alive.
+  [[ "$output" != *"reason=target-not-live"* ]] || false
+  [[ "$output" == *"verdict=delivered"* ]] || false
+}
+
+@test "production shape: the same pane addressed by its NUMERIC pane id is LIVE (positive control)" {
+  rm -f "$CC_REGISTRY_DIR"/*.json
+  setup_numeric_pane_fixture "9001" "BBBBBBBB-1111-2222-3333-555555555555" "$$"
+  run "$NOTIFY" "9001" "hello"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"verdict=delivered"* ]] || false
+}
+
+@test "production shape: a DEAD pid stays NOT-live addressed BOTH ways (the fix must not weaken the oracle)" {
+  rm -f "$CC_REGISTRY_DIR"/*.json
+  # A pid that is reliably not running: claim one, then reap it.
+  DEADPID="$(bash -c 'echo $$')"
+  setup_numeric_pane_fixture "9002" "CCCCCCCC-1111-2222-3333-666666666666" "$DEADPID"
+  # NOTE: the it2 stub deliberately still LISTS pane 9002, so the only thing that can convict it is
+  # the pid check. Without this the test would pass for the wrong reason (absent from the it2 list).
+  run "$NOTIFY" "9002" "x"
+  [[ "$output" == *"reason=target-not-live"* ]] || false
+  run "$NOTIFY" "CCCCCCCC-1111-2222-3333-666666666666" "x"
+  [[ "$output" == *"reason=target-not-live"* ]] || false
 }
