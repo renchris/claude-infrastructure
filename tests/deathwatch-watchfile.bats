@@ -96,8 +96,20 @@ reg() { # <paneUUID> <pid> [name] [cwd]
   spawn; local p="$SPAWNED"
   reg 601 "$p" rt-601
   run bash "$PROD"; [ "$status" -eq 0 ]
-  # --once: arm, guard, report, exit — no watch loop, so this cannot hang the suite.
-  run timeout 20 python3 "$KQ" --once "$CC_DEATHWATCH_WATCHFILE"
+  # THE FLAG MUST BE ONE THE HELPER IMPLEMENTS. This read `--once`, which bin/cc-deathwatch-kqueue
+  # has never parsed: its arg loop (:82-87) treats any unrecognised token as the WATCH-FILE, so
+  # `--once` was assigned to watch_file and then OVERWRITTEN by the real path — silently swallowed,
+  # leaving timeout=None. With a LIVE matching pid the guard arms it and `while armed` blocks on
+  # kq.control(None, n, None) FOREVER (:128-137). So the outer `timeout` was the only thing ending
+  # this case, at ANY load: it always died at the bound with EMPTY output, and an empty string
+  # contains no "recycled", so the assertion below passed VACUOUSLY every single run.
+  # `--timeout 2` is the bound the helper actually honours — it arms, waits, breaks, exits 0 with a
+  # real report — so the case now asserts something and its cost does not scale with box load.
+  run timeout "${KQ_ONCE_TIMEOUT_S:-60}" python3 "$KQ" --timeout 2 "$CC_DEATHWATCH_WATCHFILE"
+  # rc 124 = OUR bound fired, not a verdict. `timeout` kills the watcher and $output is EMPTY, and an
+  # empty string contains no "recycled" — so the assertion below would pass VACUOUSLY on a bound
+  # breach. An abstention must be laundered into neither direction (corpus idiom, 6+ sibling suites).
+  [ "$status" -ne 124 ] || { echo "TIMED OUT — the helper did not honour its own --timeout 2: no verdict, NOT a pass"; false; }
   # The guard convicts on mismatch by emitting DEATH … recycled. A live process must NEVER be that.
   ! echo "$output" | grep -q "recycled" || false
 }
@@ -132,7 +144,10 @@ reg() { # <paneUUID> <pid> [name] [cwd]
     > "$CC_DEATHWATCH_WATCHFILE.mangled"
   # Non-vacuity: the mangle must actually have changed something, or "convicted" means nothing.
   ! cmp -s "$CC_DEATHWATCH_WATCHFILE" "$CC_DEATHWATCH_WATCHFILE.mangled" || false
-  run timeout 20 python3 "$KQ" --once "$CC_DEATHWATCH_WATCHFILE.mangled"
+  run timeout "${KQ_ONCE_TIMEOUT_S:-60}" python3 "$KQ" --timeout 2 "$CC_DEATHWATCH_WATCHFILE.mangled"
+  # Same abstention, opposite laundering: a bound breach leaves $output empty, and the grep below
+  # then reads "the guard failed to convict" — a substantive red manufactured out of a timeout.
+  [ "$status" -ne 124 ] || { echo "TIMED OUT — the helper did not honour its own --timeout 2: no verdict, NOT a missing conviction"; false; }
   echo "$output" | grep -q "recycled"
 }
 
