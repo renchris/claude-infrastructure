@@ -87,6 +87,52 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-09 — `2d91af430c60` CLOSED: both §4 production proofs RE-VERIFY GREEN on the converged
+  live layer, and the sibling claim that one of them was unreachable is REFUTED by the store.**
+  Precondition first: `27e055e41` is an ancestor of the live checkout HEAD (`9c9687fcf`) and both
+  files it touched — `bin/cc-premise`, `scripts/autonomy-sweep.sh` — hash-match `origin/main`
+  through their per-file symlinks, so the live layer genuinely carries the fix and the 23-commit
+  lag of the shared checkout does not touch this proof.
+  - **Proof 1 (premise beat `premise_pass_rc:0 note:ok premise_rows_validated>0`) — MET, twice, and
+    the cycle completed both times.** `2026-09-03T23:59:24Z` rc=0 note=ok validated=**43** closed=5
+    deferred=47 `shard_pending:0`; `2026-09-05T08:12:28Z` rc=0 note=ok validated=**4** closed=0
+    deferred=80 `shard_pending:0`. Both post-fix and post-converge, and both carry the exact
+    signature `27e055e41` was landed to produce: the pre-fix defect was `_die_open` exiting 0 with
+    an unparseable body, journalling `premise_pass_rc:"0"` beside `note:"unparsed"`, so `note:ok`
+    with a non-zero validated count is the discriminating value, not merely a zero rc.
+  - **The "STRUCTURALLY UNREACHABLE" clause in open row `6de092171021` is false as written, and its
+    error is a window, not a mechanism.** That row reads "every backlog-health beat reads
+    `premise_pass_rc` skipped/not-due (16) or 124/bound-exceeded (2)" — 18 beats, which is exactly
+    the population of ONE rotated IDL archive (`idl.jsonl.20260908T082141Z.gz`, covering
+    09-07T05:56Z → 09-08T08:21Z). Over the full retained history the same field reads **72 beats,
+    of which 2 are `rc=0 note=ok`**. The IDL rotates roughly daily, so a census taken inside one
+    window generalised a true local reading into a false global one — the shape memory already
+    names in *discriminator-scoped-to-a-window-yields-two-verdicts* and *zero-claim-must-name-its-
+    excluded-strata*. **Row `6de092171021` stays OPEN**: its payload — the sweep's lower half has
+    emitted ZERO beats since 09-08T08:22Z, independently confirmed here — is live and unaffected;
+    only the clause about this row's reachability is refuted (*cause refuted ≠ effect discharged*,
+    read in the other direction: the effect stands, one stated consequence does not).
+  - **Proof 2 (two dispatcher ticks with zero claim→release on the 3 wedged ids) — MET by 22 days,
+    with a control.** Folding the whole 18,962-line backlog store (0 unparseable) for
+    claim→reopen-by-the-SAME-sid within 30 min: the three ids carry **138 such events, the last at
+    `2026-08-18T14:51:20Z`**. Against a pre-fix rate of 1-5/day/id that is hundreds of ticks with
+    zero reclaim, not two. The class is not extinct fleet-wide (10-50/day in September), so the
+    silence is a property of these rows and not of a dead writer — and the wedge SIGNATURE separates
+    cleanly: id-days carrying ≥3 churn events run **103 before 2026-08-19 and 8 after**, and in 7 of
+    those 8 `distinct_sids == n`, i.e. three different workers each claiming once and reopening on a
+    blocker, which is the healthy dispatch path rather than one dispatcher looping.
+  - **Read the terminal states honestly:** `ce7651b02a17` is done (09-05), `62599dd76a60` done
+    (09-08), `ee1ac85c6ff6` blocked — so part of that 22-day window is terminal-state silence, which
+    proves nothing on its own. The load-bearing sub-window is `ce7651b02a17` **open** from 08-18 to
+    09-05: it was claimed three times on 08-23 and released each time by `cc-backlog-reap` hours
+    later (a lease LAPSE, a different mechanism) and self-released never. That is the live-population
+    evidence the proof actually needs.
+  - **One instrument note, reported as a count rather than swallowed:** 1 of the 72 premise-beat
+    lines in the archives is unparseable (1.4%, matching the interleave rate in the append-atomicity
+    rule). It does not touch this verdict — the two passing beats were found by raw grep, not by a
+    `jq -rs` slurp that one bad line would have aborted — but a census here that redirected stderr
+    would silently under-report.
+
 - **2026-09-09 — recycle #331 (lane infra):** closed 8cb412119579 (deploy-live.sh:1607-1630 repairs core.bare, e99dcdf82),
   04aeb03e7888 (activation-marker.sh `.superseded`; queue 11->2), 1d73c2fd875c (successor 2ee30f87c370 retracts its load
   hypothesis), 2b0888bc8832 (cloud-return-lane.sh:158-160; live row elapsed_s=3253 load1=29.68), e1862d1732da (migration
