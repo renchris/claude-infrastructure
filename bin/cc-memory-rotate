@@ -854,7 +854,7 @@ protect_reason() {
   case "$ln" in *PINNED*) echo pinned; return 0 ;; esac
   nm="${f%.md}"
   case "$nm" in feedback-*|reference-*|user-*) echo type; return 0 ;; esac
-  t=$(awk 'NR<=12 && /^[[:space:]]*type:[[:space:]]*/ {sub(/^[[:space:]]*type:[[:space:]]*/,""); print $1; exit}' "$DIR/$f" 2>/dev/null || true)
+  t="${E_TYPE[$j]-}"
   case "$t" in
     user) echo type; return 0 ;;
     feedback|reference) if [ "$stage" -eq 1 ]; then echo type; return 0; fi ;;
@@ -864,7 +864,7 @@ protect_reason() {
   if printf '%s' "$ln" | grep -iE 'DEFERRED|NOT pushed|pending|gated on|BLOCKED|backlog|(^|[^[:alnum:]])open([^[:alnum:]]|$)' >/dev/null; then
     echo marker; return 0
   fi
-  mt=$(fmtime "$DIR/$f"); [ -n "$mt" ] || mt=$NOW
+  mt="${E_MTIME[$j]-}"; [ -n "$mt" ] || mt=$NOW
   if [ $(( NOW - mt )) -lt "$MIN_AGE_S" ]; then echo young; return 0; fi
   # HUB SCAN, WIDENED 2026-09-03. Two blind spots, and routing makes both worse:
   #   (1) it counted ONLY `[[wikilink]]` syntax. Measured on reso's always-loaded project rules
@@ -890,6 +890,73 @@ protect_reason() {
   if [ "$_ht" != "$HUB_TABLE" ]; then inb="${_ht%%"$NLCH"*}"; fi
   case "$inb" in ''|*[!0-9]*) inb=0 ;; esac
   if [ "$inb" -ge 4 ]; then echo hub; return 0; fi
+  return 0
+}
+
+# ── THE OTHER TWO PER-CANDIDATE READS, MEASURED ONCE ─────────────────────────────────────────
+#
+# With the scans fixed, an ablation on the live 163-entry index put the whole remaining cost in two
+# places that look free and are not, because each is a FORK per candidate and macOS fork+exec is
+# ~5 ms: the frontmatter `type:` probe (~2.6 s) and `fmtime` (~2.2 s — called twice per candidate,
+# once in protect_reason and again in the selection loop). One bulk `stat` over the whole directory
+# is 0.066 s against 0.81 s for 163 individual ones.
+#
+# 🚨 KEYED BY ORDINAL, NOT BY NAME, AND THAT IS THE WHOLE DESIGN. bash 3.2 has no associative
+# arrays, so the obvious cache is a `name<TAB>value` string probed with `${table#*"$NL$name$TAB"}`
+# — which is what HUB_TABLE does, safely, because it holds only the handful of names with any
+# inbound link at all. Over a table of every entry it is QUADRATIC: bash matches a leading `*` by
+# retrying at every prefix length, so a 26 KB table costs O(n^2) per probe. Measured: the same
+# index went from 4.7 s to 28.9 s, with 22.9 s of it burned in the shell. The entries already carry
+# an ordinal — protect_reason takes it as `$1` and stage 2 replays the recorded one — so both
+# tables are plain indexed arrays filled in ordinal order and read in O(1) with no fork at all.
+#
+# NO FALLBACK IS NEEDED, and its absence is checked rather than assumed: a row is emitted for every
+# ordinal, and an unreadable or absent file yields the empty string — which is exactly what the
+# per-file `awk`/`fmtime` it replaces produced for the same file (`|| true`, and fmtime's own empty
+# return). The callers already spell what empty means: `[ -n "$mt" ] || mt=$NOW`.
+#
+# Cadence is the attempt, like the two scans: a retry re-reads the corpus rather than reusing a
+# table taken before the sibling append that forced the retry.
+E_TYPE=(); E_MTIME=()
+build_entry_tables() {
+  local names="$1" ord statout j v
+  E_TYPE=(); E_MTIME=()
+  [ -n "$names" ] || return 0
+  _ccmr_tmp ord || return 0
+  _ccmr_tmp statout || return 0
+  printf '%s\n' "$names" >"$ord" 2>/dev/null || true
+  # Same 12-line window, same regex, same `sub`-then-first-field as the per-file probe it caches.
+  # `sub` re-splits $0 in awk, so `$1` is the first token of the REMAINDER, which split() reproduces.
+  # ONE LINE OUT PER LINE IN, so the reader below can index positionally instead of looking up.
+  j=0
+  while IFS= read -r v; do E_TYPE[j]="$v"; j=$(( j + 1 )); done < <(
+    awk -v DIR="$DIR" '
+      {
+        nm = $0; v = ""
+        if (nm != "") {
+          path = DIR "/" nm
+          for (i = 1; i <= 12; i++) {
+            if ((getline line < path) <= 0) break
+            if (line ~ /^[[:space:]]*type:[[:space:]]*/) {
+              sub(/^[[:space:]]*type:[[:space:]]*/, "", line)
+              n = split(line, fld, /[ \t]+/)
+              v = (n >= 1 ? fld[1] : "")
+              break
+            }
+          }
+          close(path)
+        }
+        print v
+      }' "$ord" 2>/dev/null)
+  # BSD first, GNU second, exactly as fstat/fmtime do it — and every line is VALIDATED rather than
+  # trusted, because GNU `stat -f` reads as --file-system and prints a block to STDOUT before
+  # failing, which is what made the old fmtime return multiline junk (see fstat).
+  { stat -f '%m %N' -- "$DIR"/*.md 2>/dev/null || stat -c '%Y %n' -- "$DIR"/*.md 2>/dev/null; } >"$statout" 2>/dev/null || true
+  j=0
+  while IFS= read -r v; do E_MTIME[j]="$v"; j=$(( j + 1 )); done < <(
+    awk 'FNR==NR { if ($1 ~ /^[0-9]+$/ && NF >= 2) { p = $0; sub(/^[0-9]+[ \t]+/, "", p); n = split(p, z, "/"); m[z[n]] = $1 } ; next }
+         { print ($0 in m ? m[$0] : "") }' "$statout" "$ord" 2>/dev/null)
+  rm -f "$ord" "$statout" 2>/dev/null || true
   return 0
 }
 
@@ -1101,6 +1168,7 @@ while :; do
   # (a sibling appended between our read and our write) re-reads the corpus rather than reusing
   # a table taken before that append.
   build_hub_table "$(printf '%s' "$ENTRY_FILES" | tr "$TAB" '\n')"
+  build_entry_tables "$(printf '%s' "$ENTRY_FILES" | tr "$TAB" '\n')"
 
   # Does the header already point at the cold tier? (PROTECTED section of compact-memory.md:
   # archived topics must stay discoverable from the auto-loaded surface.)
@@ -1132,7 +1200,7 @@ while :; do
         tail) K_TAIL=$((K_TAIL+1));; unparseable) K_PARSE=$((K_PARSE+1));;
         dangling) K_DANGLING=$((K_DANGLING+1));; pinned) K_PIN=$((K_PIN+1));;
         type) K_TYPE=$((K_TYPE+1))
-              mt=$(fmtime "$DIR/$f"); [ -n "$mt" ] || mt=$NOW
+              mt="${E_MTIME[$j]-}"; [ -n "$mt" ] || mt=$NOW
               TYPEKEPT="$TYPEKEPT$(durability_rank "$f")$TAB$mt$TAB$j$TAB$li$TAB$f
 ";;
         marker) K_MARK=$((K_MARK+1));;
@@ -1140,7 +1208,7 @@ while :; do
       esac
       vlog "keep [$r] ${f:-<line $li>}"
     else
-      mt=$(fmtime "$DIR/$f"); [ -n "$mt" ] || mt=$NOW
+      mt="${E_MTIME[$j]-}"; [ -n "$mt" ] || mt=$NOW
       ELIG="$ELIG$(durability_rank "$f")$TAB$mt$TAB${#LINES[$li]}$TAB$li$TAB$f
 "
     fi

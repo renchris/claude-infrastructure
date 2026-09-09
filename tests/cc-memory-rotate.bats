@@ -391,6 +391,65 @@ mkbulk() {
   [ "$output" = "0" ]
 }
 
+# ── THE ORDINAL-KEYED TABLES (E_TYPE / E_MTIME), 2026-09-08 ─────────────────────────────────
+# The `type:` stamp and the topic mtime are now read for the whole entry set in one pass and
+# indexed by ORDINAL, because a name-keyed string table is quadratic in bash (`${t#*"$NL$k$TAB"}`
+# retries at every prefix length: 4.7s -> 28.9s on the live index). Indexing by ordinal buys O(1)
+# and creates exactly one new way to be wrong — MISALIGNMENT — and the fixture that exposes it is
+# not any of the ones above, because every entry in them parses. An UNPARSEABLE line contributes
+# an EMPTY field to the entry list, so a table built by dropping blanks shifts every later entry
+# by one and reads another memory's stamp and age.
+
+# ordfx <name> → an index with TWO unparseable lines at ordinals 1 and 2, so every entry after
+# them sits behind two empty fields. `filler2` (ordinal 5) is deliberately project+old because it
+# is exactly what ops-call reads under a two-line shift: had it been typed or young, the mutant
+# would keep the directive for a DIFFERENT protection and the control would pass for the wrong
+# reason. That is the trap this fixture was rebuilt to avoid, twice.
+ordfx() {
+  local d; d="$(mkmem "$1")"
+  addentry "$d" lead.md project old "$(pad 140)"               # ordinal 0
+  printf -- '- [no link here at all\n' >>"$d/MEMORY.md"        # ordinal 1 — unparseable
+  printf -- '- [broken](\n' >>"$d/MEMORY.md"                   # ordinal 2 — unparseable
+  addentry "$d" ops-call.md feedback old "an operator directive $(pad 100)"   # ordinal 3
+  addentry "$d" filler1.md project old "$(pad 140)"            # ordinal 4
+  addentry "$d" filler2.md project old "$(pad 140)"            # ordinal 5 — what a 2-shift steals
+  addentry "$d" fresh.md project young "$(pad 140)"            # ordinal 6
+  mkbulk "$d"
+  # ops-call AND the entry a shift makes it read are both the oldest in the fixture, so the mutant
+  # inherits an mtime that still sorts FIRST. Ageing only ops-call is not enough: the shift takes
+  # its neighbour's mtime too, and a directive that merely stops being the oldest is not demoted.
+  touch -t 202501011200 "$d/ops-call.md" "$d/filler2.md"
+  printf '%s' "$d"
+}
+
+@test "ordinal alignment: unparseable lines mid-index do not shift the type and age tables" {
+  d="$(ordfx ordal)"
+  run "$SCRIPT" "$d/MEMORY.md" --verbose
+  has "$output" 'verdict=rotated'
+  has "$output" 'keep [unparseable]'
+  has "$output" 'keep [type] ops-call.md'         # TYPE read at ops-call's OWN ordinal
+  has "$output" 'keep [young] fresh.md'           # MTIME read at fresh's OWN ordinal
+  grep -qF -- '(ops-call.md)' "$d/MEMORY.md"
+  grep -qF -- '(fresh.md)' "$d/MEMORY.md"
+}
+
+@test "mutation control: dropping the empty fields shifts the tables and demotes the directive" {
+  # Anchor the mutation site exactly once. Filtering blanks out of the ordered name list is the
+  # natural "tidy-up" here, it is silent, and it is precisely what breaks alignment.
+  [ "$(grep -cF '"$names" >"$ord"' "$SCRIPT")" -eq 1 ]
+  mut="$BATS_TEST_TMPDIR/mut-ord"
+  sed 's|"[$]names" >"[$]ord".*|"$names" \| grep -v '"'"'^$'"'"' >"$ord" 2>/dev/null \|\| true|' \
+      "$SCRIPT" >"$mut"
+  chmod +x "$mut"
+  bash -n "$mut"                                  # a malformed mutant proves nothing
+  [ "$(grep -c "grep -v '\^\\\$'" "$mut")" -ge 1 ]
+  d2="$(ordfx ordal2)"
+  run "$mut" "$d2/MEMORY.md" --verbose
+  has "$output" 'verdict=rotated'
+  hasnt "$output" 'keep [type] ops-call.md'       # it read filler.md's stamp instead
+  if grep -qF -- '(ops-call.md)' "$d2/MEMORY.md"; then return 1; fi
+}
+
 @test "a fresh lock refuses; a stale lock is reclaimed" {
   d="$(mkmem lock)"; mkbulk "$d"
   mkdir "$d/.rotate.lock.d"
