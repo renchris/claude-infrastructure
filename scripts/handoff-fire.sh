@@ -3047,10 +3047,36 @@ engage_rc_consequence() { # $1=rc $2=custody|goal → 0 = DO IT, 1 = do not
   case "${1:-}:${2:-}" in
     # 0 ENGAGED — proven by the session's own transcript. The original behaviour, unchanged.
     0:custody|0:goal)  return 0 ;;
-    # 1 NEVER INGESTED — a DEFINITE negative: every read succeeded and found nothing, so no session
-    #   ever took the brief. The printed remedy is retire-then-re-fire, i.e. this pane is about to
-    #   be destroyed; a debt keyed on it would be owed by a pane that no longer exists.
-    1:custody|1:goal)  return 1 ;;
+    # 1 NEVER INGESTED — a DEFINITE negative about the WINDOW, and the two consequences split on it.
+    #
+    #   THE ROW THAT USED TO SAY `1:custody|1:goal) return 1`, AND WHY THE CUSTODY HALF WAS WRONG.
+    #   Its stated ground was "the printed remedy is retire-then-re-fire, i.e. this pane is about to
+    #   be destroyed; a debt keyed on it would be owed by a pane that no longer exists." That
+    #   premise is FALSE ON BOTH HALVES. fire_cleanup does not destroy the pane or its worktree on
+    #   this branch — it KEEPS them, saying so in its own words: "worktree … KEPT — the pane is live
+    #   in it and may engage late" (:9064). And the destruction it inferred was never observed:
+    #   measured 2026-09-09 at load 25-33 on this 10-core box, THREE OF THREE fires that took this
+    #   branch — panes 639 (W1c, window 305s), 641 (W0, 305s) and 673 (W2-14, 391s + one INC-4
+    #   resend) — ingested the brief 2-6 MINUTES AFTER the window, worked, and landed. Each was left
+    #   with no custody row, so its originator's ledger could not see it, the ✅ certificate was
+    #   reachable over a live strand, and the printed remedy invited a colliding re-fire into a
+    #   worktree that already held a working session.
+    #
+    #   So this code is a statement about a DEADLINE, not about a pane: "no session was born within
+    #   T" is time-relative by construction, and on a loaded box T expires under a cold boot that is
+    #   merely slow. The asymmetry in the header governs unchanged — the debt is one appended line
+    #   and `cc-custody abandon <marker> --why never-engaged` is the cheap, routine reversal, while
+    #   a live unreturned wave is a silent strand with no owner and no alarm. Open the row, with the
+    #   provenance the opener already computes for every non-zero code (`unproven-rc1`, the existing
+    #   unproven-rc<N> member — no new state), so the debt exists the moment the pane does. It is
+    #   discharged by the peer's own self-close like any other row.
+    1:custody)         return 0 ;;
+    #   THE GOAL HALF STAYS FAIL-CLOSED, and the asymmetry does NOT carry over to it. A goal is
+    #   pasted into the pane's composer; on this branch the brief was never ingested, so a paste
+    #   would land in a session that has not yet taken its own task and would be read BEFORE the
+    #   brief — arming a condition against work the session has not been told to do. That is not a
+    #   reversible line in a ledger, it is a wrong first instruction. Unchanged, deliberately.
+    1:goal)            return 1 ;;
     # 2 PANE PARKED — the launcher never ran, so there is no session AT ALL, only a shell. Nothing
     #   can hold a brief, answer a goal, or ping a custody return. Definite, and about the pane.
     2:custody|2:goal)  return 1 ;;
@@ -11302,10 +11328,15 @@ else
       engage_apply_consequences 5 engagement-unproven
       exit 6
     else
-      # THE RECOVERY MUST RETIRE THE PANE FIRST (cc-backlog 87626e1593c3). This branch is reached
-      # only after pane_parked_reason AND pane_wedge_reason both came back empty — the pane is
-      # neither a bare shell nor a modal, so a claude session IS running there, idle at an empty
-      # composer. The old text prescribed a bare warm re-fire, which adds a SECOND session to that
+      # THE RECOVERY MUST NOT BE A BARE RE-FIRE (cc-backlog 87626e1593c3). ⚠ This block's original
+      # heading read "MUST RETIRE THE PANE FIRST" and is SUPERSEDED IN PART by the W1h block below,
+      # which keeps its ORDER conclusion and replaces its prescription: the pane may be engaging
+      # late, so the qualifying step is a CHECK and retirement is only what that check can license.
+      # Its reasoning about the duplicate is untouched and is why a bare re-fire stays forbidden.
+      # This branch is reached only after pane_parked_reason AND pane_wedge_reason both came back
+      # empty — the pane is neither a bare shell nor a modal, so a claude session IS running there
+      # (what it is DOING is exactly what this branch cannot see, and what the W1h reads settle).
+      # The old text prescribed a bare warm re-fire, which adds a SECOND session to that
       # worktree and leaves the first alive: exactly the outcome the rc=5 branch above documents as
       # "two sessions in one worktree, a duplicated paid model grid and one clobbered index.json",
       # and the same hazard docs/research/infra-reliability-audit-2026-07-22/raw/a1.md:10 filed a
@@ -11319,7 +11350,20 @@ else
       # an empty item before any claim is consulted), so in a worktree named anything else — a desk
       # wave dir, an operator checkout — two live sessions coexist unrefused. That premise is pinned
       # by its own case in tests/fire-engagement.bats, so this comment cannot rot silently.
-      echo "!! FIRE FAILED — never engaged: $LAUNCHER at ${SPAWNED_PANE:-<pane?>} did not ingest the brief within the engagement window (re-sent once). The pane is live but TASK-LESS — a claude session IS running there, idle at an empty composer. RETIRE THAT PANE FIRST (clear it), then re-fire warm (--cwd <existing-worktree>): re-firing while it is alive puts a SECOND session in that worktree, and nothing downstream refuses that. Do NOT trust this as a working session (INC-4 / cold-worktree-fire-autosubmit-race)." >&2
+      # THE REMEDY IS A CHECK, NOT A RETIREMENT (W1h, 2026-09-09). The line below used to open with
+      # "The pane is live but TASK-LESS … RETIRE THAT PANE FIRST (clear it)", which asserted the
+      # pane's INTERNAL state from a deadline that had merely expired. Measured the same day at load
+      # 25-33 on this 10-core box, three of three fires taking this branch — panes 639, 641, 673 —
+      # ingested the brief 2-6 min later, worked, and landed: the assertion was wrong every time it
+      # was tested, and acting on it would have destroyed a working session. The ORDER property the
+      # retirement carried is kept and is what the bats matcher pins — something must qualify the
+      # re-fire — but the qualifier is now the two reads that can actually DISCRIMINATE late
+      # engagement from death, and retirement is what their answer may then license.
+      echo "!! FIRE FAILED — never engaged: $LAUNCHER at ${SPAWNED_PANE:-<pane?>} did not ingest the brief within the engagement window (re-sent once). That is a WINDOW EXPIRY, not a proof of death: on a loaded box a cold boot ingests late (measured 2026-09-09 — three of three fires on this branch engaged 2-6 min after the window and landed). CHECK FOR LATE ENGAGEMENT BEFORE ANY re-fire — re-firing while it is alive puts a SECOND session in that worktree, and nothing downstream refuses that (INC-4 / cold-worktree-fire-autosubmit-race)." >&2
+      echo "   The two reads that discriminate it — run BOTH, then again ~60s later:" >&2
+      echo "     ls -lat ${PROJ_DIR:-<projects-dir>}/*/*.jsonl | head -3      # transcript growing in size or mtime ⇒ it IS working" >&2
+      echo "     git -C ${LAUNCH_DIR:-<worktree>} status --porcelain | wc -l  # non-zero ⇒ it has already written" >&2
+      echo "   EITHER read moving ⇒ do NOT re-fire and do NOT clear the pane: it engaged late, and the custody row opened below is its real debt. BOTH static across both samples ⇒ retire the pane, then re-fire warm (--cwd ${LAUNCH_DIR:-<existing-worktree>}) and discharge that row." >&2
       # Record the FAILED engagement (symmetry with the engaged=1 path) so "did this handoff engage"
       # is answerable in one grep. Guarded so a telemetry hiccup can never preempt the exit 1.
       emit_handoff_telemetry 0 || true

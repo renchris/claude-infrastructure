@@ -608,20 +608,29 @@ _ve_returned() {     # $1=path to handoff-fire.sh → codes the BODY actually re
 # holds no session at all — already says "Clear the pane, then re-fire". The branch that needed the
 # retirement step most was the only one omitting it.
 
-# 0 = a retire/clear verb precedes the re-fire this line prescribes · 1 = it does not · 2 = the line
+# 0 = a qualifying step precedes the re-fire this line prescribes · 1 = it does not · 2 = the line
 # prescribes no re-fire at all (not applicable). Three states, because collapsing "not applicable"
 # into "unsafe" would convict every ordinary line in the file (memory:
-# abstain-rule-can-retire-the-common-case). Keyed on ORDER, not on a spelling: any retirement verb
+# abstain-rule-can-retire-the-common-case). Keyed on ORDER, not on a spelling: any qualifying verb
 # will do, but it has to come before the re-fire it is qualifying.
-_retire_precedes_refire() { # $1=line → 0/1/2
+#
+# THE QUALIFIER SET WIDENED FROM retire|clear TO retire|clear|check (W1h, 2026-09-09), and the
+# rename records that the ORDER is the property and retirement was only ever one instrument for it.
+# Three of three fires that took the never-engaged branch that day (panes 639, 641, 673) ingested
+# the brief 2-6 min later and landed, so "retire it first" was the wrong instruction on the modal
+# case: what must precede the re-fire is the CHECK that discriminates late engagement from death,
+# and retirement is what its answer may then license. The mutant control below is untouched and
+# still fails, so the widening did not make this matcher unfalsifiable — and the case that owns the
+# new line asserts the two concrete probes by name, so `check` cannot be satisfied by the word.
+_qualifier_precedes_refire() { # $1=line → 0/1/2
   local head
   case "$1" in *re-fire*) ;; *) return 2 ;; esac
   head="${1%%re-fire*}"
-  printf '%s' "$head" | grep -Eqi '(retire|clear)' && return 0
+  printf '%s' "$head" | grep -Eqi '(retire|clear|check)' && return 0
   return 1
 }
 
-@test "never-engaged verdict prescribes retiring the live pane BEFORE the re-fire [RED-PROOF]" {
+@test "never-engaged verdict qualifies the re-fire with the late-engagement CHECK [RED-PROOF]" {
   run env HOME="$HOMEDIR" IT2_BIN="$BIN/it2" TMPDIR="$BATS_TEST_TMPDIR" \
     FIRE_ENGAGE_TIMEOUT=1 FIRE_ENGAGE_RETRY=1 FIRE_ENGAGE_INTERVAL=1 FIRE_REG_TIMEOUT=0 \
     FIRE_ENGAGE_MARKER=NEVER-SEEN-MARKER \
@@ -632,31 +641,50 @@ _retire_precedes_refire() { # $1=line → 0/1/2
   # "fix" that renamed the verdict rather than fixing its remedy still goes red somewhere.
   printf '%s\n' "$output" | grep -q 'FIRE FAILED — never engaged'
   line="$(printf '%s\n' "$output" | grep -F 'FIRE FAILED — never engaged' | head -1)"
-  _retire_precedes_refire "$line"
+  _qualifier_precedes_refire "$line"
   # …and it says WHY, so the operator can tell this from the rc=5 "do not re-fire" verdict.
   printf '%s' "$line" | grep -q 'SECOND session'
+  # THE QUALIFIER IS THE TWO CONCRETE READS, not the word "check". Both are named, both are
+  # executable as typed, and each measures a DIFFERENT organ — the transcript is what the session
+  # ingests into, the worktree is what it writes to — so a pane that engaged late moves one of them
+  # even if the other is momentarily still. Without this, widening the matcher's verb set would let
+  # any sentence containing "check" pass (memory: gate-on-presence-is-cleared-by-any-string).
+  printf '%s\n' "$output" | grep -qF '.jsonl'
+  printf '%s\n' "$output" | grep -qF 'status --porcelain'
+  # …and it must NOT assert the pane's internal state, which is the claim that was wrong 3/3.
+  ! printf '%s' "$line" | grep -q 'TASK-LESS' || false
 }
 
-@test "the retire-before-re-fire matcher flags the PRE-FIX line and clears the PARKED sibling" {
+@test "the qualifier-before-re-fire matcher flags BOTH pre-fix lines and clears the PARKED sibling" {
   # SUBJECT — the real line in the shipped script (static arm; the E2E above is the process arm).
   subj="$(grep -F 'FIRE FAILED — never engaged: $LAUNCHER' "$HF" | head -1)"
   [ -n "$subj" ]
-  _retire_precedes_refire "$subj"
+  _qualifier_precedes_refire "$subj"
 
-  # MUTANT CONTROL — the verbatim pre-fix remedy. It MUST be flagged, or the subject arm above is
-  # a matcher that cannot fail (memory: control-must-replay-the-real-artifact).
-  run _retire_precedes_refire 'The pane is live but TASK-LESS — recover with a WARM re-fire (--cwd <existing-worktree>); do NOT trust this as a working session.'
+  # MUTANT CONTROL 1 — the ORIGINAL pre-fix remedy (bare warm re-fire, nothing before it). It MUST
+  # be flagged, or the subject arm above is a matcher that cannot fail (memory:
+  # control-must-replay-the-real-artifact).
+  run _qualifier_precedes_refire 'The pane is live but TASK-LESS — recover with a WARM re-fire (--cwd <existing-worktree>); do NOT trust this as a working session.'
   [ "$status" -eq 1 ]
+
+  # MUTANT CONTROL 2 — the W1h-pre-fix line: the RETIRE-FIRST remedy this wave replaced. It still
+  # passes the ORDER matcher, and that is the point — the matcher was never the thing that caught
+  # it. What convicts it is the pane-state assertion the E2E arm above now forbids, so the two
+  # arms have to be read together (memory: stale-assertion-becomes-an-inverted-guard).
+  prev='The pane is live but TASK-LESS — a claude session IS running there, idle at an empty composer. RETIRE THAT PANE FIRST (clear it), then re-fire warm (--cwd <existing-worktree>).'
+  _qualifier_precedes_refire "$prev"
+  printf '%s' "$prev" | grep -q 'TASK-LESS'
+  ! printf '%s' "$subj" | grep -q 'TASK-LESS' || false
 
   # COMPLIANT CONTROL — the PARKED branch's own remedy, read from the script, in nobody's new
   # wording. It must pass the SAME matcher, so the assertion cannot be satisfied only by the exact
-  # phrasing this diff introduced.
+  # phrasing this diff introduced — and it is the reason `retire|clear` stays in the verb set.
   parked="$(grep -F 'Clear the pane, then re-fire' "$HF" | head -1)"
   [ -n "$parked" ]
-  _retire_precedes_refire "$parked"
+  _qualifier_precedes_refire "$parked"
 
   # NOT-APPLICABLE CONTROL — an ordinary line prescribing nothing abstains (2) rather than failing.
-  run _retire_precedes_refire 'the session is LIVE — answer the dialog, then re-check engagement.'
+  run _qualifier_precedes_refire 'the session is LIVE — answer the dialog, then re-check engagement.'
   [ "$status" -eq 2 ]
 }
 
@@ -885,6 +913,10 @@ cq_custody_open() { # → the number of OPEN custody rows this fire left
   n="$(CC_CUSTODY_DIR="$HOMEDIR/.claude/autonomy/custody" "$REPO/bin/cc-custody" count --open 2>/dev/null || printf 0)"
   printf '%s' "${n:-0}"
 }
+cq_custody_prov() { # → the provenance stamp of every OPEN custody row this fire left, one per line
+  CC_CUSTODY_DIR="$HOMEDIR/.claude/autonomy/custody" "$REPO/bin/cc-custody" list --open --json 2>/dev/null \
+    | jq -r '.[] | .provenance // "prov?"' 2>/dev/null || true
+}
 cq_goal_verdicts() { # → every goal-arm verdict this fire emitted, one per line
   jq -r 'select(.class == "goal-arm") | .verdict' "$HOMEDIR/.claude/logs/handoffs.jsonl" 2>/dev/null || true
 }
@@ -976,17 +1008,50 @@ STUB
   ! printf '%s\n' "$output" | grep -q 'provenance=engagement-unproven' || false
 }
 
-# rc 1 — NEVER INGESTED. A definite negative whose own remedy is "retire that pane, then re-fire":
-# a debt keyed on a pane about to be destroyed is owed by nothing. Stays closed, deliberately.
-@test "CONSEQUENCE rc1 (never engaged): NO custody row and NO goal arm" {
+# rc 1 — NEVER INGESTED, AND THE TWO CONSEQUENCES SPLIT ON IT (W1h, 2026-09-09) --------------------
+#
+# THE DEFECT. This row used to read `1:custody|1:goal) return 1`, on the stated ground that "the
+# printed remedy is retire-then-re-fire, i.e. this pane is about to be destroyed". Both halves of
+# that premise were false. fire_cleanup KEEPS the pane and its worktree on this branch, in its own
+# words ("the pane is live in it and may engage late"), and the destruction was never observed:
+# measured 2026-09-09 at load 25-33 on this 10-core box, THREE OF THREE fires taking this branch —
+# panes 639 (W1c, window 305s), 641 (W0, 305s), 673 (W2-14, 391s + one INC-4 resend) — ingested the
+# brief 2-6 min AFTER the window, worked, and landed. Each was left with no custody row, so the
+# originator's ledger could not see it and its ✅ certificate was reachable over a live strand.
+#
+# rc 1 is a statement about a DEADLINE, not about a pane. The header's asymmetry therefore governs
+# the custody half exactly as it governs 4 and 5: a debt is one appended line and `cc-custody
+# abandon` is the routine reversal, while an unreturned live wave has no owner and no alarm.
+@test "CONSEQUENCE rc1 (never engaged): custody OPENED with unproven provenance [RED-PROOF]" {
+  # shellcheck disable=SC2046  # cq_env() emits one env pair per line and the SPLIT is the point — quoting it would hand `env` a single argument.
+  run env $(cq_env) IT2_BIN="$BIN/it2" FIRE_ENGAGE_MARKER=NEVER-SEEN-MARKER \
+    bash "$HF" --prompt-file "$PF" --launcher claude-test --split-right \
+      --session-id FIRING-0000 --cwd "$BATS_TEST_TMPDIR" --no-self-retire \
+      --notify-back DEADBEEF-0000-0000-0000-000000000002 --goal 'consequence probe — one line'
+  # The VERDICT is unchanged — this is a fail-open on the consequence, never a relaxation of the
+  # report, so a "fix" that made the fire succeed instead goes red right here.
+  [ "$status" -ne 0 ]
+  printf '%s\n' "$output" | grep -q 'FIRE FAILED — never engaged'
+  # THE ROW EXISTS, and carries what the OPENER actually knew — the existing unproven-rc<N> member,
+  # not a new state. A row stamped `proven` here would be a worse bug than no row at all.
+  [ "$(cq_custody_open)" -ge 1 ]
+  printf '%s\n' "$(cq_custody_prov)" | grep -qx 'unproven-rc1'
+  # …and the operator is TOLD, in the verdict that reads as a failure, that the row was opened
+  # anyway — silence would make the fail-open invisible exactly where it contradicts the message.
+  printf '%s\n' "$output" | grep -q 'custody debt OPENED anyway (provenance=unproven-rc1)'
+}
+
+# THE HALF THAT DID NOT CHANGE, asserted separately so the fail-open cannot creep across the pair.
+# A goal is PASTED INTO THE COMPOSER; on this branch the brief was never ingested, so an arm would
+# land before the brief and state a condition over work the session has not been told to do. That
+# is not a reversible ledger line, it is a wrong first instruction — so 1:goal stays fail-closed.
+@test "CONSEQUENCE rc1 (never engaged): the GOAL is still NOT armed (fail-closed half)" {
   # shellcheck disable=SC2046  # cq_env() emits one env pair per line and the SPLIT is the point — quoting it would hand `env` a single argument.
   run env $(cq_env) IT2_BIN="$BIN/it2" FIRE_ENGAGE_MARKER=NEVER-SEEN-MARKER \
     bash "$HF" --prompt-file "$PF" --launcher claude-test --split-right \
       --session-id FIRING-0000 --cwd "$BATS_TEST_TMPDIR" --no-self-retire \
       --notify-back DEADBEEF-0000-0000-0000-000000000002 --goal 'consequence probe — one line'
   [ "$status" -ne 0 ]
-  printf '%s\n' "$output" | grep -q 'FIRE FAILED — never engaged'
-  [ "$(cq_custody_open)" -eq 0 ]
   ! cq_goal_armed || false
   printf '%s\n' "$(cq_goal_verdicts)" | grep -qx 'unreachable'
 }
@@ -1092,13 +1157,21 @@ STUB
 # it is what makes a NEW member's row a deliberate act rather than an inherited default.
 @test "CONSEQUENCE TABLE: engage_rc_consequence answers per code, and an UNKNOWN code fails OPEN loudly" {
   eval "$(sed -n '/^engage_rc_consequence() {/,/^}/p' "$HF")"
+  # The codes whose two consequences agree. rc 1 is deliberately NOT in this loop — it is the one
+  # member where they diverge, and folding it back in here is exactly the mutation that would
+  # re-close the custody half (or open the goal one) without a single case going red.
   for what in custody goal; do
     run engage_rc_consequence 0 "$what"; [ "$status" -eq 0 ]
-    run engage_rc_consequence 1 "$what"; [ "$status" -eq 1 ]
     run engage_rc_consequence 2 "$what"; [ "$status" -eq 1 ]
     run engage_rc_consequence 4 "$what"; [ "$status" -eq 0 ]
     run engage_rc_consequence 5 "$what"; [ "$status" -eq 0 ]
   done
+  # rc 1 — THE SPLIT ROW [RED-PROOF]. A ledger debt is reversible in one appended line, so it
+  # follows the header's asymmetry and fails OPEN; a goal is a paste into a composer that has not
+  # yet taken its brief, so it stays fail-CLOSED. Asserted as a pair: either one alone would be
+  # satisfied by collapsing both back to a single answer.
+  run engage_rc_consequence 1 custody; [ "$status" -eq 0 ]
+  run engage_rc_consequence 1 goal;    [ "$status" -eq 1 ]
   # A member nobody taught this table: admitted (the asymmetry says a reversible debt beats a silent
   # strand) but never SILENTLY — the silence is what let the last new member ride an unread default.
   run engage_rc_consequence 7 custody
