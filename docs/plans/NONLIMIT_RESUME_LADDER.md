@@ -38,7 +38,7 @@ Nothing here may be held in a context window.
 | T4 | Measure the live blast radius | **DONE** | W0 | 29 network vs 35 limit; 6 live panes |
 | T5 | Fable 5.1 discovery pass on 100th-pct design | **DONE** | W1 | § W1 — six answers, design D1–D7, rejected R1–R8, W2 table, § W1.4 |
 | T6 | Implement the design via Agent Teams | **OPEN** | W2 | Unblocked by T5. Task table + fixtures in § W1.3; W2-0 proof gates D4 |
-| T7 | Investigate the ladder as CLAUDE.md default | **OPEN** | W3 | Separate session, § W3 brief |
+| T7 | Investigate the ladder as CLAUDE.md default | **DONE** | W3 | § W3 — six answers, proposed diff, R1-R4 |
 | T8 | Resume the 6 live network-blocked panes | **DONE (by the operator, by hand)** | operator | All six re-engaged 17:36–17:37Z by the typed paragraph — § W1.0. The manual act IS the defect W2 removes |
 
 ---
@@ -451,3 +451,324 @@ anyway); whether `resumeFromRunId` accepts a run whose json reads `status: faile
 worktree, uncommitted work under pid 49875) was forwarded into this session on 2026-09-09; the
 worktree exists, pid 49875 is dead, the orchestrator role file is empty. No action; recorded here so
 the next reader does not re-forward it.
+
+---
+
+## W3 — the ladder as a default
+
+**T7, session `624e04a1`, Opus 5 @ high, 2026-09-09.** Read-only research plus this section; no
+CLAUDE.md file was edited (the diff below is a PROPOSAL, per the brief's hard constraint).
+
+**The finding that reorganises every other answer:** the policy this section was asked to amend is
+**already false in both directions, and has been for a month.** It says the frontier tier is opt-in
+via three commands and that the lead never runs on it. Measured over all 4,117 transcripts in the
+four config dirs:
+
+| Claim in § Frontier Tier Routing | Measured | Command |
+|---|---|---|
+| escalate via `/frontier-run` | **1 invocation, ever** | `grep -rhao '"content":"/frontier-[a-z]*'` over `.claude*/projects` ⇒ `1 frontier-run` |
+| panels are the frontier product | **2 `frontier-derivation` panelists** ran on Fable | cross of the fable-model list with `grep -l frontier-derivation` |
+| "the lead itself never runs on it" | **52 Fable LEAD sessions**, 30 of them ≥20 turns (median 72, max 899) | `grep -rl '"model":"claude-fable'` minus `/subagents/`; verified per-file with `jq 'select(.type=="assistant").message.model'` |
+| the tier is bounded by a spawn cap | **the session path is uncapped** — `frontier-spawn-gate.sh` is registered only as `PreToolUse` `matcher:"Agent"` (`~/.claude/settings.json:490-503`), so a `handoff-fire --model fable` spends the meter with no gate; `handoff-fire.sh` only prints a cost warning | `sed -n '490,503p' ~/.claude/settings.json` |
+
+Fable lead sessions by month: **25 in 2026-08, 27 in 2026-09** (9 days). Fable *subagent* runs: 140
+(99 Aug, 41 Sep) — of which **2** came from the ceremony. So ~99% of frontier spend already bypasses
+the machinery the policy names, and the one sentence that would have stopped it (`the lead itself
+never runs on it`) has been contradicted 52 times without ever refusing anything.
+
+This is the repo's own *"a resident rule restating a perishable fact cannot learn it changed"* and
+*"enforcement must live at the chokepoint"* in one place: the rule is prose, the chokepoint covers a
+path nobody uses, and practice went around both.
+
+### 1 — The trigger predicate
+
+**The predicate already exists, is already resident, is already mechanical, and is already
+evaluated by every session on itself without asking: it is Follow-On Gate F2's conviction number.**
+
+F2 (`~/.claude/CLAUDE.md:542`) says, verbatim:
+
+> *"If conviction of a decision is not >90% then research exhaustively, and then implement if now
+> >90% or then ask the user if below."*
+
+That sentence has exactly **two** outcomes below 90 after exhaustive research: implement anyway, or
+**hand it to the human**. The ladder is the missing third — *escalate the MODEL before escalating to
+the OPERATOR* — and it is the branch this operator's standing values were already asking for
+(§ Session Close Protocol: *"Offering is the defect"*; *"the answer will always be yes"*).
+
+So the trigger is a conjunction of three self-evaluable facts, no operator involved:
+
+- **T-a — conviction < 90% after this session's exhaustive research, on a FRAMING question.** Not a
+  missing fact (that is more research at the default tier); an unresolved *framing*, where the
+  session cannot name the measurement that would settle it. F2 already forces the number and
+  `cc-decide open --class C` already refuses without it.
+- **T-b — there is a stage 3.** The deliverable must be a design that something later implements.
+  With nothing to implement, this is a research pass, not a ladder — and paying 2× for a document
+  nobody builds from is the tax case.
+- **T-c — the Fable meter admits it.** `claude-accounts` carries a **separate weekly-Fable column**
+  per account; measured 2026-09-09 16:51: `next 17% · next4 20% · next3 30% · next2 68%`, with the
+  router already publishing `➤ fable → next4`. A ladder fire reads that row; no headroom ⇒ no
+  stage 2, and stage 1's document is the deliverable.
+
+**Why this fires rarely by construction, which is the whole design point.** Most work clears 90%
+after ordinary research — that is what the F2 number is for. The predicate cannot fire on routine
+work because routine work *is the >90% case*. It fires precisely where today's policy dead-ends into
+a round-trip with the operator, which is the state the operator has said repeatedly he does not
+want. It is therefore **not** a ladder that fires on everything; it is a ladder that fires exactly
+where the alternative is a question.
+
+**Cost, corrected.** The resident sentence "Fable is 2× the price ($10/$50 vs $5/$25)" is
+**base-rate only, and the SSOT says so in terms**: `model-config.yaml:538-539` — *"⚠️ That verdict is
+BASE-RATE-ONLY; re-check it against Fable 5.1's 0.025× cache reads before reusing it."* On the line
+that dominates a long session, **Fable 5.1 cache reads are $0.25/MTok against Opus 5's $0.50**
+(`model-config.yaml:530-531`, `:539`) — *half*, not double. The 2× figure is true of new input
+tokens and false of the dominant term. Fable 5.1 also bills the plan's Fable-scoped weekly meter,
+not credits (`model-config.yaml:266-274`, measured by an A/B on the meter itself).
+
+### 2 — The conflict with existing policy, resolved rather than glossed
+
+Three sentences must change. All three are in one paragraph, `~/.claude/CLAUDE.md:293` (the repo copy
+at `CLAUDE.md:293` is **byte-identical** — `diff -q` reports no difference, so the diff lands in both).
+
+**S1, quoted:** *"The frontier tier (currently Fable 5) is **opt-in only** — its value is exclusively
+the *delta above the default* (unknown-unknowns the default is blind to), NEVER routine/identified
+work; the lead itself never runs on it."*
+
+**S2, quoted:** *"…so escalate on a *named* Fable strength rather than by default — the routing
+economics are open work…"*
+
+**S3, quoted:** *"Because the human never model-switches or starts frontier sessions, the agent
+**escalates autonomously but BOUNDED** (hook-enforced per-session spawn cap; a blocked spawn = PARK,
+never retry)…"*
+
+Also `~/.claude/skills/frontier-routing/SKILL.md:35` — *"the lead itself never runs on the frontier
+model"* — and `frontier-run/SKILL.md:46` — *"**The lead session NEVER changes its own model.**"*
+
+**Why the change is not simply a loosening, stated precisely.** Three reasons, in increasing force:
+
+1. **The loosening already happened, silently.** The tier is *not* bounded on the path that is
+   actually used: 52 Fable lead sessions passed no gate, because the only gate is `PreToolUse
+   matcher:"Agent"`. S3 asserts a bound over a path with no bound. The proposal REPLACES an
+   unenforced prohibition with an enforced admission — strictly tighter than the status quo on the
+   axis that spends money.
+2. **S1's stated reason does not survive its own mechanism.** `frontier-run/SKILL.md:53-55` grounds
+   "the lead never changes its own model" in prompt-cache re-processing cost. A `--recycle` is
+   exit-then-relaunch — a *new process* — so there is no cache to re-process; the rule's premise is
+   about a transition the recycle path does not perform. (This is the repo's *"published figure
+   decays with its source"* shape: the reason outlived the thing it reasoned about.)
+3. **S2 tells you to escalate on a named strength, and this names one.** The strength is not "Fable
+   is smarter". It is: *a model that did not produce the framing is not invested in it.* The one
+   trial's nine refutations (§ W1.4) are nine attacks on the FRAMING, not nine better facts — items
+   1, 2, 8 and 9 each say the Opus pass measured the wrong object. That is a named, testable
+   strength, and it is the one S2 asks for. **It is also the item most confounded** — see §6.
+
+**The honest residue:** the change genuinely does loosen one thing. Today an escalation requires an
+agent to judge a wall qualifying; tomorrow it follows mechanically from a number. That is a real
+transfer of discretion from judgment to arithmetic, and arithmetic cannot see a case where the
+below-90 is *boring*. The bound in §6 is what pays for it.
+
+### 3 — What already exists (composition, not new machinery)
+
+**~85% composes.** `frontier-campaign` **already encodes stage 3 verbatim** —
+`skills/frontier-campaign/SKILL.md:3`, *"Fable 5 as bounded **ARCHITECT/JUDGE** over default-tier
+implementer teammates"*, with `:49-61` naming the Opus lead, default-tier implementers and
+`set-teammate-effort.sh`. Stage 3 is that minus the Fable judge — a deletion, not an addition.
+
+Genuinely missing, four items, only one of which is code:
+
+- **(a) A bound on the SESSION path** — the real gap, and the one that makes the current state worse
+  than either policy. `frontier-spawn-gate.sh` cannot see a `handoff-fire --model fable`.
+- **(b) A ladder state object.** Holes have a status enum, campaigns have one, a ladder run has
+  none. `frontier-campaign/SKILL.md:46-47` already states the principle: *"the per-session spawn cap
+  cannot see a multi-session campaign; the ledger can."*
+- **(c) Stage 2 is ANCHORED, and every frontier surface forbids that.**
+  `frontier-run/SKILL.md:94-96` — *"never paste known findings, worklists, or prior reports into
+  discovery briefs"*; `agents/frontier-derivation.md:31-36` calls leaked findings *"contamination"*.
+  The ladder's stage 2 reads stage 1's exhaustive research **on purpose**. This is not a missing
+  script, it is a **different product**, and the trial is one data point *against* the anti-anchoring
+  doctrine for this use — recorded here as a tension, not resolved.
+- **(d) The policy amendment** in §2.
+
+Nothing in the frontier stack fires on its own: `frontier-status.sh` prints one SessionStart line
+and exits 0; `frontier-spawn-gate.sh` can only refuse. Every trigger reads *"invoke YOURSELF"*.
+
+### 4 — The self-recycle mechanics (measured, and the brief's premise is wrong)
+
+**The brief says model is launch-time identity so an Opus→Fable transition "cannot be a --recycle of
+the same process". That is right about processes and wrong about `--recycle`.** A recycle is
+exit-then-relaunch in the same pane — a NEW process — so launch-time identity is honoured, not
+violated. Measured, this session, dry-run:
+
+```
+$ CC_RECYCLE_SUBAGENT_GATE=off bash scripts/handoff-fire.sh --recycle \
+    --model claude-fable-5-1 --effort xhigh --prompt-file <brief> --dry-run
+⚠️  Fable 5 is the frontier tier — ~2× the default model's cost ($10/$50 per Mtok vs $5/$25).
+account:  next4
+launcher: claude4
+command:  … claude4 --effort xhigh … --model claude-fable-5-1 "$(cat <brief>)"
+```
+
+Parser arms: `--model` `scripts/handoff-fire.sh:7569`, `--effort` `:7570`, `--recycle` `:7584`;
+argv append `:9055-9066`; recycle CMD composition `:9551`. `--recycle` also relocates worktrees
+(`:8325-8348`) and re-picks the account under pressure (`:8303`). **The three transitions:**
+
+1. **stage 1 → 2:** `--recycle --model claude-fable-5-1 --effort xhigh --prompt-file <stage-1 doc>`.
+   Same pane, new process, fresh context, brief on disk. **Expressible today.**
+2. **stage 2 → 3:** `--recycle --model claude-opus-5 --effort high --prompt-file <stage-2 doc>`,
+   then Agent Teams *inside* that session. **Expressible today.**
+3. **stage 3 assignees:** teammate PANES (not subagents) plus
+   `scripts/set-teammate-effort.sh <worktree> high|xhigh` at worktree setup.
+   **Expressible today** — with the caveat in §5.
+
+**The goal-arm failure, which happened TWICE and once was to this very session.** The brief cites the
+W1 fire. It recurred at 13:55 today on `624e04a1` — the pane was on a blocking modal, and
+`handoff-fire.sh:5056` fired its abstain path. Three corrections to the brief's model of it:
+
+- **It is not silent.** The abstain arm notifies the fired session **in-band via `cc-notify`**
+  (`:5056`), and the message names the cause and the exact `/goal` line to submit. I received it.
+  Two sibling arms exist for `composer-occupied` (`:5045`) and `readback-mismatch` (`:5050`).
+- **But it is addressed to the victim** — the same shape as this repo's *"a verdict goes WHERE THE
+  OPERATOR LOOKS"* rule. A session told "you have no backstop" is being told by the thing that was
+  supposed to be its backstop.
+- **The real gap:** none of the three abstain arms arms a fallback driver. Grepped: `0` occurrences
+  of `session-continue` in `:5041-5060`. **A goal-safe fallback already exists and is free** —
+  `~/.claude/hooks/session-continue.sh set "<next step>"` writes a file, needs no composer, and is
+  the lever the resident rules already name as *"the lever that actually drives the next turn"*.
+  On goal-arm abstain the fire should set it. That single line converts a silent no-backstop into a
+  driven one, and it is the minimum an unattended ladder needs.
+
+Also relevant and already true: `--recycle` **inherits** a live goal from the predecessor
+(`inherit_recycle_goal`, `:4994-5009`) and re-validates it, printing a refusal rather than dropping
+it silently — so a ladder that arms one goal at stage 1 carries it across both recycles.
+
+### 5 — The stepped-down assignee effort
+
+**Verdict: UNTESTED for Opus 5 — and the only measurement this repo has points the OTHER WAY for the
+subclass implementation actually falls in. Do not encode it.**
+
+- **Mechanism: available, with one hard limit.** Per-teammate effort is settable for *panes*
+  (`skills/agent-teams/SKILL.md:200-212`) via `set-teammate-effort.sh`, because panes re-resolve
+  `<worktree>/.claude/settings.local.json`. It is **inert for in-process subagents** —
+  `SKILL.md:243-244`: *"an assignee gets `--effort <lead's value>` on argv … inherited, never
+  per-call. There is no effort field on the Agent tool in either version."* And `max` is
+  **settings-inexpressible** (schema caps at `xhigh`), so "lead at max, assignees stepped down"
+  can only mean lead-at-max-via-argv and assignees at ≤xhigh. Usage today: **3 of 21** worktree
+  `settings.local.json` files carry an `effortLevel` at all.
+- **Evidence: one certification, on the wrong model, pointing the wrong way.**
+  `model-config.yaml:769-783` records T1 (`wf_771c1e9f-644`, blind judge panels over real briefs):
+  xhigh did **not** tie max on grounding-heavy classes — *"mechanical-search (xhigh HALLUCINATED a
+  fabricated diff against a non-existent file + misclassified an internal alias)"*, and
+  `:791-793`: *"mechanical work that must SEARCH for the site … stays at default max — xhigh
+  hallucinated a fabricated edit there. xhigh is safe only when the targets are given."* An
+  implementation assignee working from a design doc is *search-heavy by definition*.
+- **And that certification does not even transfer.** Same file, `:781-783`: *"That certification is
+  MODEL-SCOPED and does not transfer to Opus 5 — Anthropic: 'run a fresh effort sweep on your evals
+  rather than reusing' a setting tuned for an earlier model."* The current
+  `effort_defaults.default: high` is described in its own comment as *"the guide's STARTING POINT,
+  not a measured optimum — a real per-class sweep is still owed"* (`:763-771`, pointing at
+  `docs/research/opus5-adaptation-2026-08-01.md` §D3).
+
+So: the operator's assertion is **an untested belief on this model**, and the nearest evidence is a
+same-repo measurement contradicting it for search-heavy work. Encoding it as policy would be exactly
+the defect the resident rules name.
+
+**The probe that would settle it** (falsifiable, two arms, one variable):
+
+- **Corpus:** ≥8 already-solved implementation tasks from `docs/plans/*` — each with a design
+  section fixed *before* implementation and a landed commit, so ground truth exists.
+- **Arms:** teammate panes at `high` vs at `xhigh` via `set-teammate-effort.sh`, identical briefs,
+  identical worktree shape, same lead, tasks randomised across arms.
+- **Metric:** blind judge (per `verify_judge: xhigh`, the one certified free win) scoring against the
+  landed commit, plus mechanical arms that need no judge — gate-green on first run, count of
+  edits to files not named in the brief, and a hallucinated-target count (edits to paths that do
+  not exist), which is the specific T1 failure.
+- **What makes it FALSE:** if `high` shows a higher hallucinated-target or off-brief-edit count than
+  `xhigh` at any n where the difference clears its interval, stepping down is refuted for this
+  class. **Guard the gate itself** against this repo's *"acceptance gate must be monotone in
+  evidence"* rule — score on an interval, never on a sample extremum, or collecting more data will
+  make certification *less* likely.
+
+Until that runs, stage 3 should use the SSOT defaults unchanged and say so.
+
+### 6 — The honest case against, and the kill-switch
+
+**One trial, and it has no control arm.** In the W1 run, the Fable pass had (i) a different model,
+(ii) a completely fresh context, and (iii) a written, distilled brief instead of accumulated
+session state. **Nobody ran the cheap arm** — recycle into a fresh *Opus 5* session with the same
+brief — so the nine refutations cannot be attributed to the model. This repo has a rule for exactly
+this, cited against itself: *"one-armed adjudication only convicts"* — a sibling running the same
+population with the control arm reached the opposite conclusion. Two of the nine items (#5 the
+task-notification substrate, #6 `turn_duration`) are *disk facts a fresh reader finds*, not model
+insight. **Conservatively, the fresh-context arm explains an unknown but non-trivial share, and the
+measurement to separate them costs one Opus recycle.**
+
+Failure modes of a default:
+
+- **It fires on a boring below-90.** T-b (a stage 3 must exist) is the only thing stopping this, and
+  it is a judgment. A below-90 on a dull question buys a 2×-input-priced pass for nothing.
+- **Stage 2 unavailable** — Fable meter at cap, account logged out, or the router routes nowhere.
+  Then the ladder must degrade to "stage 1's doc is the deliverable" *without* the session treating
+  the missing stage as a blocker. A ladder that stalls on a closed meter is worse than no ladder.
+- **Stage 2 arms no goal.** Observed 2 for 2 in the fires this plan touched. Without §4's
+  `session-continue` fallback, an unattended stage 2 has nothing driving it, and the measured
+  outcome is drift onto whatever is in the inbox.
+- **Fable 5.1's own documented failure modes hit stage 3 hardest** (`model-config.yaml` § FABLE 5.1,
+  relayed in the resident rules): *fewer progress updates at higher effort* (our stall detectors read
+  quiet as stuck — and note that **two of this session's own subagents were killed by exactly that
+  watchdog at 600s today**), and *whole-file rewrites for small edits*, which is a direct hazard to
+  the INTEGRATE-never-overwrite rule. Both argue for keeping Fable at stage 2 (a document) and never
+  at stage 3 (edits) — which is what §3 recommends anyway.
+- **Operator-time cost of a false positive** exceeds the token cost: a wrong stage-2 fire produces a
+  confident, differently-framed document that a later session must adjudicate against stage 1.
+
+**The kill-switch — and it must be mechanical, not prose.** Opus 5 *"will rationalise a prose rule …
+but it cannot rationalise a chokepoint"* (`docs/research/opus5-adaptation-2026-08-01.md`, closing
+principle). So:
+
+1. **`CC_LADDER=off`** — one env var, read by the fire path, refusing the stage-1→2 recycle. The
+   operator's single lever.
+2. **Extend `frontier-spawn-gate.sh` to the SESSION path**, so `handoff-fire --model fable` is
+   counted and capped like an Agent spawn. This is item (a) of §3 and it is the load-bearing one:
+   *without it, this proposal has no bound at all* — and neither does the status quo.
+3. **Meter-gated by construction:** no Fable weekly headroom ⇒ no stage 2, reported as a degrade,
+   never as a block.
+
+**Absence of (2) is what would make this a mistake.** A default that escalates automatically, over a
+path with no counter, on the strength of one uncontrolled trial, is three unbounded things at once.
+
+### The proposed CLAUDE.md diff
+
+Lands in **both** `~/.claude/CLAUDE.md` and the repo `CLAUDE.md` (byte-identical today, `diff -q`
+clean). Single paragraph at line 293; INTEGRATE — the surrounding section is untouched.
+
+**BEFORE** (`~/.claude/CLAUDE.md:293`, the two clauses that change, quoted exactly):
+
+> The frontier tier (currently Fable 5) is **opt-in only** — its value is exclusively the *delta above the default* (unknown-unknowns the default is blind to), NEVER routine/identified work; the lead itself never runs on it.
+
+> Because the human never model-switches or starts frontier sessions, the agent **escalates autonomously but BOUNDED** (hook-enforced per-session spawn cap; a blocked spawn = PARK, never retry): capture holes with `/frontier-hole`, escalate with `/frontier-run` (inline ≤2 panelists on a blocking wall; batch at wrap-up when OPEN holes ≥ 2 and the window is active), long-horizon generator-class problems via `/frontier-campaign`.
+
+**AFTER:**
+
+> The frontier tier (currently Fable 5.1) is **not opt-in and not a default — it is the third branch of Follow-On Gate F2.** Its value is exclusively the *delta above the default*, NEVER routine/identified work. F2 leaves a below-90%-conviction decision two outcomes, implement or ask the operator; **the third is to escalate the MODEL before escalating to the HUMAN**, and that is this tier's standing job. Fire the ladder when all three hold, self-evaluated, no operator ask: **(T-a)** conviction is still <90% after this session's exhaustive research AND the residue is a *framing* question, not a missing fact; **(T-b)** there is an implementation for the answer to feed — no stage 3 ⇒ this is a research pass, not a ladder; **(T-c)** `claude-accounts` shows weekly-Fable headroom on a routable account — no headroom ⇒ stage 1's document IS the deliverable, degrade and say so, never block. The ladder is three same-pane recycles, each a NEW process, so launch-time model identity is honoured: `handoff-fire.sh --recycle --model claude-fable-5-1 --effort xhigh --prompt-file <stage-1 doc>` → back to `--model claude-opus-5` → Agent Teams there. **Fable writes DOCUMENTS, never edits** (5.1 rewrites whole files for small edits — § File Update Rule). **The lead MAY run on it, for stage 2 only** — that sentence's premise was prompt-cache cost, which a fresh process does not pay; it had also been contradicted 52 times before it was changed.
+
+> Because the human never model-switches or starts frontier sessions, the agent **escalates autonomously but BOUNDED — and the bound is a chokepoint, never this paragraph.** `hooks/frontier-spawn-gate.sh` counts Agent-tool spawns; **it does not yet see the SESSION path**, so a `--model fable` fire is currently uncounted — until it does, treat `frontier_discovery_budget` as advisory and say so in the close. A blocked spawn = PARK, never retry. Kill-switch: `CC_LADDER=off`. Surfaces: capture holes with `/frontier-hole`, escalate with `/frontier-run` (inline ≤2 panelists on a blocking wall; batch at wrap-up when OPEN holes ≥ 2), long-horizon generator-class problems via `/frontier-campaign` — measured 2026-09-09, these have been invoked **once between them across 4,117 transcripts** while Fable ran 52 lead sessions and 140 subagent runs, so a rule written only about them describes ~1% of the spend.
+
+Companion edits, same land: `skills/frontier-routing/SKILL.md:35` and `frontier-run/SKILL.md:46`
+(the two *"the lead never runs on it"* sentences) get the stage-2 carve-out and a pointer here.
+
+**NOT proposed:** any policy sentence about stepped-down assignee effort. See §5 — untested on
+Opus 5, and the nearest measurement contradicts it.
+
+### Recommendation and conviction
+
+Split, because the parts have very different evidence:
+
+| | Recommendation | Conviction | Why |
+|---|---|---|---|
+| **R1** | Land the CLAUDE.md diff above (reconcile the policy with measured practice; state the trigger as F2's third branch; name the missing chokepoint honestly) | **92%** | The three sentences are *measurably false* — 52 lead sessions, 1 command invocation, an uncapped path. Leaving text that describes ~1% of the spend is worse than any candidate replacement, and the diff adds a bound where there is none. |
+| **R2** | Extend `frontier-spawn-gate.sh` to the session/fire path | **93%** | Pure safety gap; the only real bound. Not built here (outside this brief's scope) — **filed**. |
+| **R3** | Make the ladder fire **automatically** on every T-a∧T-b∧T-c | **72%** | One trial, **no control arm**. The cheap refuting experiment — same brief into a fresh *Opus 5* recycle — was never run, and 2 of the 9 refutations are plainly fresh-context effects. Per F2 this is the operator's, WITH the number. |
+| **R4** | Encode stepped-down assignee effort | **REJECT** | Untested on Opus 5; the one same-repo certification points the other way for search-heavy work. Probe designed in §5. |
+
+**What I would do:** land R1, file R2, run the §6 control arm before R3. R3 is the one genuine
+operator decision, and it is a small one: *does the ladder fire on its own, or does it stay a
+recipe a session chooses?* R1 makes the recipe correct and available either way.
