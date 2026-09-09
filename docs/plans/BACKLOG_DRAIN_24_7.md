@@ -93,10 +93,12 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   54d7aff8ed8d (.nojekyll is on trunk; 0 failures across the 31 Pages runs since 2026-08-18),
   cd80e11b96b5 (35-auth-timeseries is .superseded and out of the queue, now 2), 4adbece80a5f
   (BSD-only `date -j -f` / `stat -f` in cc-reaper's fired-peer tenancy parse; GNU arms behind a
-  dialect probe, P1/P2 red pre-fix, 216/216 + all 7 gate suites green) · blocked a4eec664b579
-  (deploy-link-parity's three-way fork — it runs rc=1 on 4 inherited STRAY, so wiring it blocking
-  would red lands; conviction ~85%) · released 93019ed4b7f7, 494468ee3c4a · landed 7a67223a5 ·
-  `closed=5 closed_pre=5 closed_other=6 filed=4 net=1 blocked=4 min=3 lane=local-drain project=claude-infrastructure floor=MET`.
+  dialect probe, P1/P2 red pre-fix, 216/216 + all 7 gate suites green), 1ef7d3af694b (model-upgrade
+  said `~/.claude/rules/` does not load; every probe behind that ran under `claude -p`, the one mode
+  where it is true) · blocked a4eec664b579 (deploy-link-parity's three-way fork — it runs rc=1 on 4
+  inherited STRAY, so wiring it blocking would red lands; conviction ~85%) · released 93019ed4b7f7,
+  494468ee3c4a · landed 7a67223a5, 5c4647dce ·
+  `closed=6 closed_pre=6 closed_other=7 filed=8(none mine) net=-2 blocked=7 min=3 lane=local-drain project=claude-infrastructure floor=MET`.
 
 - **2026-09-08 — recycle #328 (lane infra):** closed 28b39195b4af (si_pid in cc-close-attrib's bash
   trap — NOT implementable; trunk refutes it by row id and landed the recoverable substitute
