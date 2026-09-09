@@ -1008,7 +1008,7 @@ sweep_permission_pending(){ # prints the number of PERMISSION-PENDING pages prod
   echo "$found"
 }
 
-# ── V3: telemetry↔LIVE-PANE delta self-check — "is my world-view even populated?" (audit 2026-07-22) ──
+# ── V3: telemetry↔LIVE-SESSION coverage self-check — "is my world-view even populated?" (audit 2026-07-22) ──
 # EVERY pager path in this file starts from `$TEL_DIR/*.json`. That dir is a SINGLE, FRAGILE world-view:
 # it lives in /tmp (reboot-cleared), and its only writer is the statusline, which stops emitting the
 # moment a pane is not actively rendering (statusline.sh:48). So the supervisor's world can be EMPTY
@@ -1019,39 +1019,63 @@ sweep_permission_pending(){ # prints the number of PERMISSION-PENDING pages prod
 # cc-reaper already answers this for itself (P0-12b, cc-reaper:528-556) with an INDEPENDENT count that
 # deliberately does not read the same source it is checking. This is that check, for this daemon.
 #
-# LOCKSTEP: the process-identity clause below is the same one cc-reaper live_pane_count and cc-reconcile
-# live_claude_pids carry, and it must not drift from them — argv0 is the claude binary (or its cli.js),
-# excluding headless one-shots (-p/--print/--version) and env-inherited node/MCP children. `claude.exe` is
-# the eval-track install's own binary name and a FIRST-CLASS interactive session (session-register.sh:63),
-# so omitting it would undercount live panes and desensitize this detector in both directions. The clause
-# is duplicated across ~10 files in this tree with no lint holding them together; consolidating that is
-# named as follow-on work, NOT done here — a silent 11th copy with no note would be the worse option.
+# ⚠️ 2026-09-09 — THE TRIGGER WAS AN ARTIFACT OF TWO DENOMINATORS, AND IS NOW AN IDENTITY JOIN (row
+# 77fbb8be90b0). Until today this compared `live_pane_count` — a `ps` argv scan over claude processes —
+# against the number of telemetry FILES, and paged on the difference. Those are two different
+# populations, so the Δ measured the denominators rather than coverage, and it can only page forever.
+# Measured 2026-09-08 22:51 the direct join said the OPPOSITE of the page: 31 telemetry files against
+# 25 cc-sessions rows (MORE telemetry than sessions), with exactly ONE session genuinely uncovered —
+# while the reported Δ grew 2→3 across two pages on unchanged real coverage. The trigger is now the
+# question the alarm was always trying to ask: for each LIVE session the roster names, does
+# `$TEL_DIR/<session_id>.json` exist? The page NAMES the uncovered sessions instead of reporting a
+# count, so an operator can act on it without re-deriving the join. (Re-measured after this fix on the
+# same box: 20 roster sessions, 1 uncovered — `wt-cc-234937-35030-69`, the long-idle operator pane.)
 #
-# ⚠️ AND THAT LOCKSTEP CLAIM IS ALREADY FALSE — recorded rather than repeated (item 56e82c56fb07(b)).
-# cc-reaper:1006-1024 has since grown a refinement this copy never inherited: a `hasif` scan for
-# `--input-format`, which is what separates a RESIDENT headless agent (carries -p, IS a session) from a
-# one-shot `claude -p "hi"` (must stay uncounted), plus the note that the marker lands at argv field 8 —
-# past this copy's narrow `i<=7` window. So the two "identical" clauses disagree today, and a reader who
-# trusts the paragraph above will not go look. Not ported here: no process on this box currently carries
-# -p beyond slot 7 (measured 2026-09-08, 0 of 26 matches), so porting it would be an unmeasured semantic
-# change riding a fix for a different, measured defect, and this file makes no other claim about it.
-live_pane_count(){
-  ps -wwEo command= 2>/dev/null | awk '
-    { t0=$1
-      if (t0!="claude" && t0!="claude.exe" && t0 !~ /\/claude$/ && t0 !~ /\/claude\.exe$/ && t0 !~ /cli\.js/) next
-      for (i=2; i<=7 && i<=NF; i++) if ($i=="-p" || $i=="--print" || $i=="--version") next
-      c++ }
-    END { print c+0 }'
+# GONE WITH IT: this file's private copy of the `ps` process-identity clause, and the LOCKSTEP note that
+# tied it to cc-reaper's live_pane_count / cc-reconcile live_claude_pids — including the already-false
+# lockstep claim recorded as item 56e82c56fb07(b) (cc-reaper had grown an `--input-format` refinement
+# this copy never inherited). Session identity now comes from `cc-sessions`, one owner, so this copy can
+# no longer drift from the other ten. cc-reaper's own live_pane_count is untouched and remains its own
+# independent signal — that is the point of it being independent.
+#
+# The roster command is an INJECTION POINT (CC_SUP_SESSIONS_CMD) purely so the e2e can fixture it
+# hermetically; production reads `cc-sessions --json`. It is BOUNDED like every other external here:
+# rc 124 (a cut) reaches the same ABSTAIN path as an unreadable roster, never a phantom Δ.
+SESSIONS_CMD="${CC_SUP_SESSIONS_CMD:-cc-sessions --json}"
+SUP_ROSTER_TIMEOUT_S="${CC_SUP_ROSTER_TIMEOUT_S:-15}"
+uncovered_sessions(){ # prints "<name> (<sid8>)" per live session with NO telemetry file; rc 1 ⇒ ABSTAIN
+  local js
+  # shellcheck disable=SC2086  # SESSIONS_CMD is a command+args seam, deliberately word-split
+  js="$(sup_bounded "$SUP_ROSTER_TIMEOUT_S" $SESSIONS_CMD 2>/dev/null)" || return 1
+  [ -n "$js" ] || return 1
+  # A roster that is not a non-empty ARRAY is an unreadable instrument, not an empty fleet: a missing
+  # cc-sessions, a jq-less box or a parse failure must abstain, never read as "everything is visible".
+  printf '%s' "$js" | jq -e 'type=="array" and length>0' >/dev/null 2>&1 || return 1
+  # PADDED AT THE EMITTER, because the read side cannot be repaired: tab is IFS-whitespace, so an empty
+  # cell does not read back empty — it shifts every later column LEFT, silently, exit 0. `//` is not
+  # enough: it substitutes for null/false and never for a present-but-EMPTY string, which is exactly
+  # the case a registry row with `"name": ""` produces. (scripts/tsv-pad-lint.sh enforces this and
+  # blocked the land that introduced this reader.)
+  printf '%s' "$js" \
+    | jq -r 'def cell(ph): (if . == null then "" else . end) | tostring
+                           | gsub("[\\t\\r\\n]"; " ") | if . == "" then ph else . end;
+             .[] | select((.session_id // "") != "")
+                 | [ (.session_id | cell("-")), ((.name // .paneUUID) | cell("?")) ] | @tsv' \
+    | while IFS=$'\t' read -r sid nm; do
+        [ -f "$TEL_DIR/$sid.json" ] || printf '%s (%.8s)\n' "${nm:-?}" "$sid"
+      done
 }
-PANE_DELTA_TOL="${CC_SUP_PANE_DELTA_TOL:-0}"                 # live−enumerated > tol ⇒ blind spot (mirrors cc-reaper's default)
+# Kept its old env name (CC_SUP_PANE_DELTA_TOL) so an existing prod/e2e override keeps working: it is
+# now a tolerance on UNCOVERED SESSIONS, and 0 remains the only value that means "any blind spot pages".
+PANE_DELTA_TOL="${CC_SUP_PANE_DELTA_TOL:-0}"                 # uncovered sessions > tol ⇒ blind spot
 SELFCHECK_MIN_PERSIST="${CC_SUP_SELFCHECK_MIN_PERSIST:-2}"   # delta must persist N sweeps — a spawn mid-sweep is not a blind spot
 # PAGE-ONLY and DAMPED, like every other act here: page once per delta, and again only on a genuine
 # WORSENING. An undamped per-sweep re-page of a standing condition is the 2026-07-19 composer storm.
-self_check(){ # $1=enumerated-count
-  local enum="$1" live delta sf consec paged
-  live="$(live_pane_count)"
-  case "$live" in ''|*[!0-9]*) return 0 ;; esac      # unreadable ps ⇒ ABSTAIN (no verdict), never a phantom Δ
-  delta=$(( live - enum ))
+self_check(){ # $1=enumerated-count (telemetry files swept — page CONTEXT now, no longer the trigger)
+  local enum="$1" names delta sf consec paged list
+  names="$(uncovered_sessions)" || return 0         # unreadable/cut roster ⇒ ABSTAIN (no verdict)
+  delta="$(printf '%s\n' "$names" | grep -c '[^[:space:]]' || true)"
+  case "$delta" in ''|*[!0-9]*) return 0 ;; esac    # unparseable count ⇒ ABSTAIN, never a phantom Δ
   sf="$PAGEDIR/selfcheck.state"
   if [ "$delta" -le "$PANE_DELTA_TOL" ]; then
     _ensure; printf '0 0\n' > "$sf" 2>/dev/null || true   # re-arm on recovery
@@ -1061,11 +1085,12 @@ self_check(){ # $1=enumerated-count
   read -r consec paged < <(cat "$sf" 2>/dev/null || echo "0 0"); consec="${consec:-0}"; paged="${paged:-0}"
   consec=$(( consec + 1 ))
   if [ "$consec" -ge "$SELFCHECK_MIN_PERSIST" ] && { [ "$paged" = 0 ] || [ "$delta" -gt "$paged" ]; }; then
-    idl selfcheck_page "\"live\":$live,\"enumerated\":$enum,\"delta\":$delta,\"persisted_sweeps\":$consec,\"why\":\"$delta live Claude pane(s) are absent from the supervisor's telemetry world-view — they have NO pager coverage on any path (DEAD/STALL?/PAST-THRESHOLD/permission-beacon all iterate that dir)\""
+    list="$(printf '%s' "$names" | tr '\n' ';' | sed 's/;$//')"
+    idl selfcheck_page "\"uncovered\":$delta,\"delta\":$delta,\"enumerated\":$enum,\"sessions\":$(jq -Rn --arg s "$list" '$s'),\"persisted_sweeps\":$consec,\"why\":\"$delta live session(s) named by the roster have no $TEL_DIR/<session_id>.json — they have NO pager coverage on any path (DEAD/STALL?/PAST-THRESHOLD/permission-beacon all iterate that dir)\""
     # D7 fingerprint = the DELTA, so a worsening blind spot breaks through while a standing one stays quiet.
-    send_page "⚠️ SUPERVISOR SELF-CHECK — ${live} live Claude pane(s) but only ${enum} in telemetry (Δ${delta} unseen). Those sessions have NO supervisor coverage: every pager path reads ${TEL_DIR}, so a stall/death there pages NOBODY. Likely the statusline is not emitting (backgrounded/long-turn panes) or ${TEL_DIR} was reboot-cleared. Compare \`ls ${TEL_DIR}\` against the live interactive-claude procs." \
+    send_page "⚠️ SUPERVISOR SELF-CHECK — ${delta} live session(s) have NO telemetry in ${TEL_DIR} (${enum} file(s) enumerated this sweep): ${list}. Those sessions have NO supervisor coverage: every pager path reads ${TEL_DIR}, so a stall/death there pages NOBODY. Likely the statusline is not emitting (backgrounded/long-turn panes) or ${TEL_DIR} was reboot-cleared. Each name above is a \`cc-sessions\` row whose session_id has no file there." \
               "selfcheck:blind:delta$delta" && paged="$delta"
-    printf '%s  self-check BLIND live=%s enum=%s delta=%s\n' "$(utc)" "$live" "$enum" "$delta" >> "$SUPLOG" 2>/dev/null || true
+    printf '%s  self-check BLIND uncovered=%s enum=%s sessions=%s\n' "$(utc)" "$delta" "$enum" "$list" >> "$SUPLOG" 2>/dev/null || true
   fi
   printf '%s %s\n' "$consec" "$paged" > "$sf" 2>/dev/null || true
 }

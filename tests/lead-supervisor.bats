@@ -140,18 +140,24 @@ setup() {
   echo "$output" | grep -q 'run UNBOUNDED, not broken'
 }
 
-@test "T31: live panes outside the telemetry world-view page once, damped, and never on a non-observation (V3)" {
+@test "T31: LIVE SESSIONS outside the telemetry world-view page once, damped, and never on a non-observation (V3)" {
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'T31 V3 SELF-CHECK'
   # the alarm itself: a PERSISTED blind spot pages, and it is auditable
   echo "$output" | grep -q 'a PERSISTED blind spot pages exactly once'
   echo "$output" | grep -q 'self-check page is IDL-recorded'
-  # anti-storm: first-sweep races do not page, a standing delta stays damped, a WORSENING one breaks through
+  # anti-storm: first-sweep races do not page, a standing set stays damped, a WORSENING one breaks through
   echo "$output" | grep -q 'does not page on its FIRST sweep'
   echo "$output" | grep -q 'stays DAMPED'
   echo "$output" | grep -q 'WORSENING blind spot breaks through'
-  # anti-false-alarm: a fully-visible fleet is silent, and an unreadable ps ABSTAINS rather than
+  # anti-false-alarm: a covered fleet is silent, and an unreadable ROSTER ABSTAINS rather than
   # computing a phantom delta (a broken detector must not read as "everything is visible")
-  echo "$output" | grep -q 'does not page (a fully-visible fleet is silent)'
-  echo "$output" | grep -q 'unreadable ps ABSTAINS'
+  echo "$output" | grep -q 'full coverage does not page'
+  echo "$output" | grep -q 'unreadable roster ABSTAINS'
+  # row 77fbb8be90b0: the trigger is an identity JOIN, so the page NAMES who is uncovered, and neither
+  # side of the old count difference — claude processes that are not sessions, telemetry with no
+  # session — can manufacture one. These three are what stop the artifact alarm coming back.
+  echo "$output" | grep -q 'NAMES the uncovered sessions'
+  echo "$output" | grep -q 'never manufacture a'
+  echo "$output" | grep -q 'coverage is a JOIN, not a count'
 }
