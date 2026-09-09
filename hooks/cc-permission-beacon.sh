@@ -23,7 +23,12 @@
 #     turn's Stop fires after EVERY resolution, GRANT or DENY, guaranteeing a clear even on the deny
 #     path (which never runs PostToolUse). Stop is the universal clearer.
 #   • PostToolUse is the FASTER clear on the grant path (fires the instant the tool runs, before the
-#     turn ends), narrowing the stale window.
+#     turn ends), narrowing the stale window — but ONLY for the invocation it is the PostToolUse OF.
+#     A PostToolUse whose invocation signature differs from the beacon's clears NOTHING and exits 0,
+#     because it is some other tool's completion and the gated prompt is still on screen. Stop and
+#     SessionEnd remain unconditional, so a DENY (which fires no matching PostToolUse, ever) is
+#     still cleared by the turn's Stop and nothing leaks. See THE LIVE COLLATERAL-CLEAR GATE in
+#     `clear` for the measurement — 27 of 110 signed rows, 24%, all of them PostToolUse.
 #   • SessionEnd is the backstop for a session that closes without a Stop.
 #   • A hard-killed session (kill -9 / OOM, no SessionEnd) cannot strand a forever-pending beacon:
 #     the supervisor independently REAPS a beacon whose owning session is provably dead (pid gone via
@@ -76,6 +81,9 @@ BEACON="$DIR/$SID.json"
 # nothing is ever pending. Consumers then read a THREE-state world instead of a two-state one:
 #   dir ABSENT                      ⇒ the hook has never run (INERT — wired wrong, or not at all)
 #   dir present, no <sid>.json      ⇒ genuinely nothing pending  (the all-clear that can be trusted)
+#                                     — a claim that was FALSE until 2026-09-09, because any
+#                                     PostToolUse deleted the beacon out from under a still-pending
+#                                     prompt; the gate in `clear` is what makes this line true.
 #   dir present, <sid>.json present ⇒ a real pending prompt
 # cc-blockers' `beacon-inert` alarm renders exactly that split; the wiring half (registered in no
 # settings.json) it reads statically, because an unregistered hook cannot heartbeat either.
@@ -179,6 +187,14 @@ sig_of() { # $1 = a canonical line (possibly empty) → 16 hex chars, or nothing
   [[ "$h" =~ ^[0-9a-f]{64}$ ]] || return 0        # a truncated/failed digest is NOT a signature
   printf '%s' "${h:0:16}"
 }
+
+# Is THIS clear the PostToolUse of the very invocation that was gated?
+# $1 = the beacon's signature (prompt side), $2 = the clearing invocation's signature.
+# NON-EMPTY IS LOAD-BEARING, for the same reason CANON's guard is: an unparseable payload yields NO
+# canonical form and therefore NO signature, and "" == "" must never read as proof that the gated
+# tool ran. An unsignable beacon is simply left for Stop, which is the safe direction and leaks
+# nothing — Stop fires after every resolution, grant or deny.
+gated_invocation_ran() { [[ -n "$1" && "$1" == "$2" ]]; }
 
 # Break an ORPHANED append lock — see the long note at the lock itself for why this exists.
 # Returns 0 only when it actually removed a lock it proved stale. Deliberately conservative: every
@@ -339,6 +355,61 @@ case "$MODE" in
     # so the winner archives and the loser silently finds nothing, which is the correct outcome for
     # a beacon that is already resolved. The claim file is dot-prefixed and suffix-less so the
     # supervisor's "$dir"/*.json glob can never read it as a pending prompt.
+    # ── THE LIVE COLLATERAL-CLEAR GATE (2026-09-09) ──────────────────────────────────────────────
+    # WHY: everything above this line treats a collateral clear as an ARCHIVAL attribution problem
+    # — record `tool_sig`/`cleared_tool_sig` and let the consumer call a mismatch UNKNOWN. That is
+    # correct and it stays. What it does not touch is the LIVE consequence, which is the worse one:
+    # the same collateral PostToolUse also DELETES the beacon from CC_PERMPEND_DIR, so the prompt
+    # that is still on screen stops being visible to lead-supervisor.sh / cc-blockers. The header's
+    # own trust claim — "dir present, no <sid>.json ⇒ genuinely nothing pending (the all-clear that
+    # can be trusted)" — was false for exactly this population.
+    #
+    # MEASURED 2026-09-09 on the live archive: of 110 rows carrying both signatures, 27 (24%) are
+    # MISMATCHED, and every single one has resolved_by == "PostToolUse" (0 Stop, 0 SessionEnd).
+    # 19 of the 27 are Bash > Bash — a Bash prompt cleared by a DIFFERENT Bash invocation, exactly
+    # the case the block above predicts ("the dominant traffic here is Bash→Bash"). The other 8
+    # carry an EMPTY cleared_tool while still labelled PostToolUse, which is unexplained and left
+    # that way rather than guessed at. Median waited_s 18, max 26081 (7.2h).
+    # Live proof the same hour: pane 616 (sid 52e35019-…) sat on an unanswered `rm -r` prompt across
+    # two screen samples two minutes apart, had NO beacon, and appeared on no board — its last
+    # archived clear was resolved_by "PostToolUse" at waited_s 11 with tool_sig 295306e6e1355832
+    # against cleared_tool_sig 56bdfe2bd1735581.
+    #
+    # ⚠ THE VECTOR IS OPEN, AND IS DELIBERATELY NOT NAMED HERE. The first draft of this fix said
+    # "a BACKGROUND task's PostToolUse fires while a FOREGROUND prompt is pending". That mechanism
+    # is plausible — 616 did have background tasks completing — but it was never measured, and a
+    # second FOREGROUND tool in the same turn produces byte-identical evidence. Nothing below
+    # depends on the answer: the gate keys on SIGNATURE EQUALITY, so it is correct whichever
+    # invocation did the clearing, and naming a cause we cannot show would be the durable half of
+    # this comment lying about the measured half.
+    #
+    # THE RULE: a PostToolUse may clear ONLY the invocation it is the PostToolUse OF. Stop and
+    # SessionEnd keep clearing UNCONDITIONALLY, which is what preserves every property the header
+    # claims — and the deny path in particular:
+    #   GRANT      → the gated tool runs; its PostToolUse signature matches → fast clear, unchanged.
+    #   DENY       → no matching PostToolUse ever fires, and the turn cannot Stop until the human
+    #                answers, so the turn's Stop clears it. Stop is still the universal clearer.
+    #   COLLATERAL → some OTHER invocation's PostToolUse mismatches → the beacon SURVIVES → the
+    #                board keeps seeing the prompt that is genuinely still pending. This is the fix.
+    #
+    # FORK-FREE HOT PATH, PRESERVED. `clear` runs on every PostToolUse fleet-wide, so the ordering
+    # below is load-bearing: this builtin `[[ -f ]]` sits exactly where the old `mv … || exit 0`
+    # sat and exits before any fork when nothing is pending. A beacon exists only while a prompt is
+    # genuinely on screen (~3.8k resolutions in five weeks), so the jq/shasum work is paid on that
+    # rare path and never on ordinary tool traffic. It is NOT a replacement for the atomic claim:
+    # the `mv` below is still the arbiter between two racing clears.
+    [[ -f "$BEACON" ]] || exit 0
+    if [[ "$(printf '%s' "$INPUT" | jq -r '.hook_event_name // ""' 2>/dev/null || true)" == "PostToolUse" ]]; then
+      # Same canonicaliser and same helper the archive uses — one signature rule, no second copy
+      # to drift. Deliberately computed from "$BEACON" BEFORE the claim: a mismatched clear must
+      # leave the beacon exactly where the supervisor can still read it, so the `mv` may not run
+      # until the decision is made. archive() recomputes its own sig_b from the CLAIMED file rather
+      # than reusing this one, so its row stays self-consistent even if a re-prompt overwrote the
+      # beacon in between; that costs two forks on a real resolution and buys row integrity.
+      gated_invocation_ran \
+        "$(sig_of "$(jq -Sc "$CANON" "$BEACON" 2>/dev/null || true)")" \
+        "$(sig_of "$(printf '%s' "$INPUT" | jq -Sc "$CANON" 2>/dev/null || true)")" || exit 0
+    fi
     CLAIM="$DIR/.claimed-$SID.$$"
     mv "$BEACON" "$CLAIM" 2>/dev/null || exit 0
     # Keep the claim when archiving FAILED — deleting it would destroy the record. It is
