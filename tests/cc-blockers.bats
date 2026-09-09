@@ -59,6 +59,19 @@ setup() {
   # "siblings unaffected (109 green)" was measured. The land created it, and the suite went red with
   # nothing committed — no bisect can find this, because the state change was not in git.
   export CC_REAP_ALARM_SH="$D/absent-reap-alarm.sh"
+  # The same law a FIFTH time (janitor-stale, bin/cc-blockers:237). WTGC_ASSERT_SH defaults to
+  # $HOME/.claude/scripts/worktree-gc-infra-run.sh — the DEPLOYED janitor — so unfixtured this suite
+  # does not read a file, it EXECUTES the operator's live worktree janitor once per test and adopts
+  # its rc-3 breach as a row. Measured 2026-09-09 with every OTHER sensor here pinned: the real $HOME
+  # yielded `[{"kind":"janitor-stale",...}]` and a void $HOME `[]` — one phantom row in every test,
+  # the same signature as the reap family above and for the same reason (the all-clear path never
+  # runs when a row exists). Two seams were tested first and REFUTED, so do not re-test them:
+  # CC_BLOCKERS_LAUNCHAGENTS_DIR (reachable only from the separate `--plist-parity` leg, never from
+  # the `--json` board this control reads) and CC_BLOCKERS_LAUNCHCTL_BIN (absolute, not $HOME-rooted).
+  # The cost was not confined to this file: a red suite reaches every land in the repo by the gate's
+  # UNION SCOPE, so this one unfixtured sensor refused unrelated lands. Absent path ⇒ `[ -x ]` is
+  # false ⇒ no premise ⇒ silence, exactly as the other four sensors here are pinned.
+  export CC_WTGC_ASSERT_SH="$D/absent-wtgc-assert.sh"
   sg() { # <ts> <pane> <name> <model> <refusal> <recover_cmd> — append a safeguard-blocked row
     jq -nc --arg ts "$1" --arg p "$2" --arg n "$3" --arg m "$4" --arg r "$5" --arg cmd "$6" \
       '{ts:$ts,actor:"cc-reaper",kind:"safeguard-blocked",pane:$p,name:$n,account:"claude-quaternary",blocked_model:$m,refusal:$r,firedBy:"ORIG",recover_cmd:$cmd}' >> "$BOARD"; }
