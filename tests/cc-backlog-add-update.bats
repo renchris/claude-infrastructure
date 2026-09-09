@@ -24,6 +24,18 @@ setup() {
   export CC_BACKLOG_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
   export CC_BACKLOG_KICK=off
   export CC_BACKLOG_KICK_MARKER="$BATS_TEST_TMPDIR/dispatch-kick"
+  # 🚨 THE ROUTER IS A FIXTURE HERE. `no-capacity` is the one impossibility class cc-backlog
+  # MEASURES rather than spell-checks: it asks `claude-accounts --rank general` and accepts only a
+  # POLICY refusal (exit 2 + `none`), never an exit-3 DATA_UNAVAILABLE and never an exit 0. Left
+  # unpinned, every no-capacity case below would grade the LIVE fleet's occupancy — which changes
+  # minute to minute, and did: measured 2026-09-09, tests 17 and 19 passed at 01:0xZ (fleet walled,
+  # rc 2) and FAILED at 01:5xZ (an account routed, rc 0), on identical code. This suite's subject is
+  # the class VOCABULARY; tests/cc-backlog-no-capacity-measured.bats owns the measurement, in both
+  # directions, with its own stubs. (Memory: control-population-must-be-stable.)
+  ACCOUNTS_STUB="$BATS_TEST_TMPDIR/claude-accounts"
+  printf '#!/bin/bash\necho none\nexit 2\n' > "$ACCOUNTS_STUB"
+  chmod +x "$ACCOUNTS_STUB"
+  export CC_BACKLOG_ACCOUNTS_BIN="$ACCOUNTS_STUB"
   # Verbatim shapes from the live row this arm was built for: one condition, two measurements.
   T1="backlog consolidation: 3 cluster(s) at/above threshold 5 — 14 rows in the largest"
   T2="backlog consolidation: 1 cluster(s) at/above threshold 5 — 6 rows in the largest"

@@ -1029,6 +1029,87 @@ valid_why_not_now() {
   return 1
 }
 
+# ── `no-capacity` MUST NOT BE MINTABLE ON INSTRUMENT BLINDNESS (2026-09-08) ────────────────────
+#
+# The class gate above is a spelling check. `no-capacity` is the one of the four whose truth this
+# box can MEASURE, and its definition in cmd_add's refusal text already says MEASURED: the router
+# routes nowhere AND the machine admission gate refuses. Nothing enforced the first conjunct, and
+# "routes nowhere" was read literally — which is exactly the reading that fails in the wrong
+# direction. `claude-accounts --rank general` prints the literal `none` for TWO different worlds
+# (bin/claude-accounts:5429-5437) and separates them ONLY by exit code:
+#
+#   exit 2  every row was excluded by POLICY, on data it could read      → a real, measured wall
+#   exit 3  DATA_UNAVAILABLE — `ps` AND the transcript walk both failed  → the INSTRUMENT is blind
+#   exit 0  an account routed; stdout is `acct score` lines, never `none` → there IS capacity
+#
+# `concurrency-unmeasured` is in DATA_UNAVAILABLE (:3355-3361) deliberately, and it arrives under
+# exactly the load that produces spawn refusals — so the blind reading and the real wall are
+# CORRELATED, and a stdout-only check mints an impossibility precisely when the box is busiest.
+# That is fail-safe-default-mimics-the-healthy-state pointed at the refuse direction: a measurement
+# failure wearing a measurement's clothes. This gate reads the exit code instead, and every non-2
+# answer — 0, 3, a timeout's 124, an unresolvable binary's 127 — REFUSES the class. Refusing errs
+# toward DRIVE, which is the house's preferred polarity for a filing gate (the row was never open
+# work lost: a refused add prints what to do instead, and there were ZERO no-capacity rows in the
+# whole backlog when this landed, so the blast radius of the strict direction is nil).
+#
+# 🚨 THE BRIEF THAT COMMISSIONED THIS ASKED FOR "rc 0 AND the literal `none`". That predicate is
+# UNSATISFIABLE by construction — rc 0 is the arm on which candidates were FOUND, so its stdout is
+# ranked `acct score` lines and never `none`. Implementing it literally would not tighten the class,
+# it would DELETE it. Measured here 2026-09-08 22:5xZ: `--rank general` → rc 2, stdout `none`,
+# stderr all four accounts `kmax-concurrency` (a genuine policy wall). The commissioning finding's
+# INTENT — blindness must not mint an impossibility — is what is implemented, and its stated
+# red-proof (a stub exiting 3 must refuse) holds verbatim.
+#
+# Seam CC_BACKLOG_ACCOUNTS_BIN, honored even when set EMPTY (that disables resolution, and an
+# unresolvable router refuses — see LSOF_BIN for the same `+set` idiom and its reason).
+accounts_bin() {
+  local self sib
+  if [ -n "${CC_BACKLOG_ACCOUNTS_BIN+set}" ]; then printf '%s' "$CC_BACKLOG_ACCOUNTS_BIN"; return 0; fi
+  self="$(self_path)"
+  sib="$(cd "$(dirname "$self")" 2>/dev/null && pwd)/claude-accounts"
+  [ -x "$sib" ] && { printf '%s' "$sib"; return 0; }
+  command -v claude-accounts 2>/dev/null || printf ''
+}
+
+# no_capacity_measured — rc 0 iff the router MEASURED a fleet with nothing routable. On refusal it
+# prints ONE clause naming what actually happened, which cmd_add embeds in its message: an operator
+# reading "routes nowhere was not measured" needs to know whether the fleet had room or the
+# instrument went blind, and those are opposite next actions.
+no_capacity_measured() {
+  local bin to out rc
+  bin="$(accounts_bin)"
+  if [ -z "$bin" ] || [ ! -x "$bin" ]; then
+    printf 'the router (claude-accounts) is not resolvable on this box, so nothing measured capacity'
+    return 1
+  fi
+  to="$(timeout_bin)"
+  if [ -n "$to" ]; then
+    out="$("$to" "${CC_BACKLOG_ACCOUNTS_TIMEOUT:-120}" "$bin" --rank general 2>/dev/null)"; rc=$?
+  else
+    out="$("$bin" --rank general 2>/dev/null)"; rc=$?
+  fi
+  case "$rc" in
+    2) : ;;
+    0) printf 'the router routed an account (exit 0) — the fleet has capacity right now'
+       return 1 ;;
+    3) printf 'the router could not MEASURE the fleet (exit 3 = data unavailable, e.g. concurrency-unmeasured) — that is a blind instrument, not a wall'
+       return 1 ;;
+    124|137) printf 'the router did not answer within %ss — a timeout is not a measurement' "${CC_BACKLOG_ACCOUNTS_TIMEOUT:-120}"
+       return 1 ;;
+    *) printf 'the router exited %s, which is neither a route nor a policy refusal' "$rc"
+       return 1 ;;
+  esac
+  # Exit 2 is the policy arm, and its stdout contract for an empty candidate set is the literal
+  # `none` on the first line. Checked as well as the code so a future exit-2 path that means
+  # something else cannot silently satisfy the class.
+  case "$out" in
+    none|none$'\n'*) return 0 ;;
+  esac
+  printf 'the router refused by policy but did not print the empty-set marker (stdout was %s)' \
+    "$(printf '%s' "$out" | head -1 | cut -c1-60)"
+  return 1
+}
+
 # ── THE CONVICTION PROTOCOL (2026-09-08, docs/research/conviction-close-2026-09-08.md) ──────────
 # The class gate above asks WHICH impossibility; these ask HOW SURE and ON WHAT EVIDENCE. Both were
 # missing on 2026-09-08 when a session filed `needs-human: the fleet's headless spawn rate is the
@@ -1758,6 +1839,30 @@ cmd_add() {
     } >&2
     return 2
   fi
+  # THE ONE CLASS THIS BOX CAN CHECK. The four classes are claims, and three of them are only
+  # assertable. `no-capacity` names a measurement, and the message above SAYS "MEASURED" — so it is
+  # measured here rather than taken on the filer's word. See no_capacity_measured's header for why
+  # the exit code, not the `none` on stdout, is the discriminator.
+  # shellcheck disable=SC2016  # the backticks below are MARKDOWN code spans in an operator-facing
+  #                              message, not command substitutions — same reason as the class
+  #                              gate's own directive above, and drain-brief.sh:86.
+  case "$why_not_now" in
+    no-capacity|no-capacity:*)
+      local nc_why
+      if ! nc_why="$(no_capacity_measured)"; then
+        { printf 'cc-backlog add: --why-not-now "no-capacity" is a MEASUREMENT, and it did not hold.\n'
+          printf '  Asked `claude-accounts --rank general` just now: %s.\n' "$nc_why"
+          printf '  The class is accepted only when the router refuses BY POLICY (exit 2, stdout `none`),\n'
+          printf '  i.e. it could read the fleet and every account was excluded. An exit 3 is the router\n'
+          printf '  saying its OWN instrument went blind (`concurrency-unmeasured`) — and it goes blind\n'
+          printf '  under exactly the load that produces spawn refusals, so accepting it would mint an\n'
+          printf '  impossibility out of a measurement failure.\n'
+          printf '  Drive it, or drop it. If the fleet really is walled, re-run the router and file then.\n'
+        } >&2
+        return 2
+      fi
+      ;;
+  esac
   # ── THE CONVICTION PROTOCOL (2026-09-08) — the NUMBER the class gate never asked for ───────────
   # The class gate above was cleared on 2026-09-08 by a true sentence about the wrong object:
   # `needs-human: the fleet's headless spawn rate is the operator's policy call` named the eventual
