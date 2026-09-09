@@ -470,6 +470,36 @@ jq -n \
     source_pane:$src_pane, in_place:($in_place=="1")}' \
   > "$BUNDLE/MANIFEST.json"
 
+# ── PREFLIGHT: THE LAUNCHER RUNS THE **LIVE** COPY, WHICH MAY PREDATE THE FLAGS WE PASS ──────────
+# $LR is $HOME/.claude/scripts/limit-recover ON PURPOSE (see its assignment above): the launcher
+# outlives this worktree, so it must name a durable path. The consequence, measured 2026-09-09 on an
+# E2E of this very feature: the recovery ran from a worktree whose lr-fire-resume.sh parses
+# --permission-mode, execed the live symlink into a shared checkout 25 commits behind trunk, and got
+# `lr-fire-resume: unknown arg --permission-mode` — twice, 90s apart, while the watcher waited for a
+# claude process that could never appear. It ended with the pane a tombstoned husk and the transplant
+# already done: the WORST outcome this wave exists to prevent, produced by code that is correct and
+# landed but NOT LIVE (the 🚀 rung — a landed EDIT rides its symlink and merely runs older bytes).
+# So assert it HERE, before the transplant, over the fixed set of flags this script can emit — the
+# check has to precede the first irreversible step, not the launcher mint, or the refusal arrives
+# after the session has already moved. Loud, in the driver's own output, naming the convergence step.
+# R8 kill switch, and the one legitimate user of it: a suite whose lr-fire-resume stub is a bare
+# argv printer is pinning argv COMPOSITION, which is a different subject from whether the live
+# parser accepts it — that subject has its own cases below this file's own tests.
+_lrh_missing=""
+[[ "${LRH_LIVE_PARSER_CHECK:-on}" == off ]] && _lrh_skip_parser=1 || _lrh_skip_parser=0
+for _lrh_f in --branch --model --effort --permission-mode --prompt; do
+  [[ $_lrh_skip_parser -eq 1 ]] && break
+  grep -q -- "$_lrh_f)" "$LR/lr-fire-resume.sh" 2>/dev/null || _lrh_missing="$_lrh_missing $_lrh_f"
+done
+if [[ -n "$_lrh_missing" ]]; then
+  echo "lr-handoff: REFUSING — the LIVE $LR/lr-fire-resume.sh does not parse:$_lrh_missing" >&2
+  echo "lr-handoff: the launcher must name a durable path, so a recovery always runs the LIVE layer —" >&2
+  echo "lr-handoff: and this one is behind the trunk the recovery was built from. Nothing has been" >&2
+  echo "lr-handoff: transplanted or typed; this refusal is before the first irreversible step." >&2
+  echo "lr-handoff: converge, then re-run:  bash \$HOME/Development/claude-infrastructure/scripts/deploy-live.sh" >&2
+  exit 5
+fi
+
 # --- transplant ------------------------------------------------------------
 if [[ $NO_TRANSPLANT -ne 1 ]]; then
   TARGS=(--sid "$SID" --from "$CFG" --to "$TCFG")

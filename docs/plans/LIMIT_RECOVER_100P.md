@@ -233,3 +233,33 @@ once this lands (the poller can never create them again).
   `45424ff78f85`): killing a live session from a session is classifier-blocked, and the poller can
   no longer create these. `--duplicates` after fix 2 above shows exactly one genuine duplicate,
   52e35019 (pane 616 pid 80874 started 21:20 vs the tmux resume pid 77720 started 00:51).
+- 2026-09-09T06:xxZ · **E2E on a throwaway pane — it FAILED, and the failure is the plan's own §5
+  finding with teeth.** A real claude session was launched in a fresh kitty OS-window (pane **687**,
+  next4/`.claude-quaternary`, sid `d10a5ab1`), took one real turn, then was recovered with
+  `lr-handoff.sh --launch --in-place --source-pane 687 --target next3` from this worktree. The
+  transplant succeeded, the remote in-place recycle armed and typed correctly, the watcher confirmed
+  the pane at a shell prompt in 3s — and then:
+      lr-fire-resume: unknown arg --permission-mode
+  twice, 90s apart, while the watcher waited for a claude process that could never appear. Outcome:
+  **pane 687 a tombstoned husk whose session had already moved** — the exact composition failure §1
+  was written from, reproduced by us.
+  **Cause, exactly.** `lr-handoff.sh` sets `LR="$HOME/.claude/scripts/limit-recover"` deliberately —
+  the launcher outlives the worktree, so it must name a durable path — so the launcher execs the
+  **live** `lr-fire-resume.sh`, and the live layer is 25 commits behind trunk. Measured on the two
+  copies: `--permission-mode)` parser arms — live **0**, worktree **1**; all four other flags 1-2 in
+  both. So this feature CANNOT work until `deploy-live` advances, and that is the `🚀` rung's whole
+  point: a landed EDIT rides its symlink and merely runs older bytes, which here means a flag the
+  older bytes reject. `deploy-live` refuses today (no GREEN stamp within 200 commits — the standing
+  `trunk-red`/`deploy-wedged` pair; T2's degrade budget at 25/25 commits, 1h49m/6h, not yet
+  breached). Filed as an operator step, `24f84b0c0c5e`.
+  **Fix taken (Follow-On Gate F1-F4 PASS, conviction ~92%).** `lr-handoff.sh` now PREFLIGHTS the live
+  parser: before the transplant — i.e. before the first irreversible step, which is the property that
+  matters — it asserts `$LR/lr-fire-resume.sh` carries a parser arm for every flag this script can
+  emit, and refuses with exit 5 naming the missing flags and the convergence command. Kill switch
+  `LRH_LIVE_PARSER_CHECK=off` for the two suites whose lr-fire-resume stub is a bare argv printer
+  (they pin argv COMPOSITION, a different subject). Cases both ways in
+  `tests/lr-handoff-launcher-quoting.bats` (13 refuses and asserts no transplant ran; 14 is the
+  control). Without this, the driver's only signal was a line inside a detached watcher log, 90
+  seconds after the session had already moved.
+  `Scope (grown): +the live-parser preflight — a recovery must refuse before it moves a session when
+  the layer it will execute cannot run what it is about to write.`
