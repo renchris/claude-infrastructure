@@ -155,3 +155,40 @@ lib() { echo "${CC_TEST_IDLLIB:-$REPO/hooks/lib/idl-log.sh}"; }
   fi
   [ -z "$offenders" ]
 }
+
+# ── THE STALE-LIB ARM ────────────────────────────────────────────────────────────────────────────
+# The live layer converges by PER-FILE symlink, so scripts/autonomy-sweep.sh can land ahead of
+# hooks/lib/idl-log.sh. A `[ -f ]` ladder then SUCCEEDS against the older file and defines no
+# idl_guarded_append -- measured while building this: rc still 0, `command not found` on every emit,
+# and the sweep wrote ZERO records. A guard that can silently take the store to zero is worse than
+# the splice it prevents (memory: registration-precondition-must-assert-version-not-executability).
+
+@test "a stale idl-log.sh does not silence the sweep: it degrades loudly and still emits" {
+  pris="$BATS_TEST_TMPDIR/pris"
+  mkdir -p "$pris/scripts/lib" "$pris/cfg/hooks/lib" "$BATS_TEST_TMPDIR/h/.claude/autonomy"
+  cp "$REPO/scripts/autonomy-sweep.sh" "$pris/scripts/"
+  cp "$REPO/scripts/lib/cc-common.sh"  "$pris/scripts/lib/"
+  # the STALE copy: a real file that parses and defines nothing
+  echo '# stale deployed copy: no idl_guarded_append' > "$pris/cfg/hooks/lib/idl-log.sh"
+  idl="$BATS_TEST_TMPDIR/h/.claude/autonomy/idl.jsonl"
+
+  run env HOME="$BATS_TEST_TMPDIR/h" CLAUDE_CONFIG_DIR="$pris/cfg" CC_IDL="$idl" \
+      bash "$pris/scripts/autonomy-sweep.sh"
+  [ "$status" -eq 0 ]                    # never FATAL: a launchd job must not die for a convergence window
+  [ -s "$idl" ]                          # and never silent: the records are still written
+  run jq -e . "$idl"; [ "$status" -eq 0 ] # every line still parses
+  # the degradation ANNOUNCES itself exactly once, so it is a record someone can count
+  run bash -c "jq -rs '[.[]|select(.disposition==\"idl-guard-degraded\")]|length' '$idl'"
+  [ "$output" -eq 1 ]
+}
+
+@test "with the lib present the sweep does NOT take the fallback" {
+  mkdir -p "$BATS_TEST_TMPDIR/h2/.claude/autonomy"
+  idl="$BATS_TEST_TMPDIR/h2/.claude/autonomy/idl.jsonl"
+  run env HOME="$BATS_TEST_TMPDIR/h2" CC_IDL="$idl" bash "$REPO/scripts/autonomy-sweep.sh"
+  [ "$status" -eq 0 ]
+  [ -s "$idl" ]
+  # THE CONTROL for the case above: without it, a fallback that fired ALWAYS would pass that test.
+  run bash -c "jq -rs '[.[]|select(.disposition==\"idl-guard-degraded\")]|length' '$idl'"
+  [ "$output" -eq 0 ]
+}

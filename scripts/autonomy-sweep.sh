@@ -121,14 +121,62 @@ fi
 # Same beside-script -> CFG -> ~/.claude ladder as cc-common.sh above, and the same FAIL LOUD: a
 # launchd job that silently loses its size guard is the silent degradation these scripts exist to
 # avoid, and an unguarded append is what put a spliced record in the store in the first place.
-_idll="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/hooks/lib/idl-log.sh"
-[ -f "$_idll" ] || _idll="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/idl-log.sh"
-[ -f "$_idll" ] || _idll="$HOME/.claude/hooks/lib/idl-log.sh"
-# shellcheck source=../hooks/lib/idl-log.sh
-# shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
-if ! . "$_idll" 2>/dev/null; then
-  echo "autonomy-sweep: FATAL — cannot source $_idll (idl_guarded_append unavailable)" >&2
-  exit 1
+# THE LADDER ASSERTS THE CONTRACT, NOT THE FILE (memory:
+# registration-precondition-must-assert-version-not-executability). A `[ -f ]` guard passes on a
+# STALE deployed copy: the live layer converges by PER-FILE symlink, so this script can land ahead
+# of hooks/lib/idl-log.sh, and sourcing the older file then succeeds while defining no
+# idl_guarded_append. Measured while building this: from a scripts-only tree with
+# CLAUDE_CONFIG_DIR pointing at an unconverged config dir, the source returned 0 and every emit
+# died on `idl_guarded_append: command not found` -- rc still 0, and the sweep wrote NO telemetry
+# at all. A guard that can silently take the store to zero is worse than the splice it prevents.
+#
+# So: walk the rungs and stop at the first that actually DEFINES the function.
+_idll_tried=""
+for _idll in \
+  "$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/hooks/lib/idl-log.sh" \
+  "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/idl-log.sh" \
+  "$HOME/.claude/hooks/lib/idl-log.sh"; do
+  _idll_tried="$_idll_tried $_idll"
+  [ -f "$_idll" ] || continue
+  # shellcheck source=../hooks/lib/idl-log.sh
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  . "$_idll" 2>/dev/null || true
+  command -v idl_guarded_append >/dev/null 2>&1 && break
+done
+
+# DEGRADE LOUDLY, NEVER FATALLY, AND NEVER SILENTLY. A FATAL here would stop a launchd job outright
+# for the length of a convergence window; a silent fallback would re-create the drift the shared lib
+# exists to prevent. So the fallback carries the SAME threshold, and it ANNOUNCES itself into the
+# store on the very first emit, so "the sweep is running unguarded-by-the-SSOT" is a record someone
+# can count rather than an absence nobody can see.
+if ! command -v idl_guarded_append >/dev/null 2>&1; then
+  _IDL_GUARD_DEGRADED=1
+  idl_guarded_append() { # <idl-path> <hook> <kind> <record-json>  — fallback, contract-identical
+    local path="$1" hook="$2" kind="$3" rec="$4" max n ts
+    max="${CC_IDL_MAX_BYTES:-4000}"
+    case "$max" in ''|*[!0-9]*) max=4000 ;; esac
+    n="$(printf '%s' "$rec" | wc -c | tr -d ' ')"
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')"
+    if [ "${_IDL_GUARD_DEGRADED:-0}" = 1 ]; then
+      _IDL_GUARD_DEGRADED=2
+      jq -cn --arg ts "$ts" --arg tried "$_idll_tried" \
+        '{ts:$ts,tool:"autonomy-sweep",disposition:"idl-guard-degraded",
+          reason:"hooks/lib/idl-log.sh defined no idl_guarded_append on any rung; using the inline fallback",
+          rungs:$tried}' >> "$path" 2>/dev/null || true
+    fi
+    if [ "$n" -le "$max" ]; then
+      printf '%s\n' "$rec" >> "$path" 2>/dev/null || true
+      return 0
+    fi
+    jq -cn --arg ts "$ts" --arg hook "$hook" --arg kind "$kind" \
+           --argjson bytes "$n" --argjson max "$max" \
+      '{ts:$ts,hook:$hook,disposition:"idl-oversize",
+        reason:"record refused: an append this size is not atomic on the shared fd",
+        kind:$kind,bytes:$bytes,max:$max}' >> "$path" 2>/dev/null || true
+    return 1
+  }
+  echo "autonomy-sweep: WARNING — idl-log.sh provided no idl_guarded_append (tried:$_idll_tried); using the inline fallback" >&2
 fi
 
 NOTIFY="$(resolve_bin "${CC_NOTIFY_BIN:-}"  cc-notify)"
