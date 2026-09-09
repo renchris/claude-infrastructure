@@ -345,3 +345,147 @@ _ratio_rows() { # <cycle> <ratio>   — idle 4.0, serial occ 0.16, equal work bo
   printf '%s' "$output" | grep -q 'nan% CI on the median'
   printf '%s' "$output" | grep -q 'k=550 of 1100 cycles'
 }
+
+# ══ §F — AMBIENT SENSITIVITY OF THE RATIO ══
+#
+# Added 2026-09-09 after two runs of §5 verbatim commands read 2.90x and 5.98x on the same box and
+# agreed at their shared ambient (readjudication doc §5.2). The pre-existing check on ambient is
+# `max/min > 2.0` over the idle arm — a RANGE, the same shape §2 removed from the acceptance gate —
+# and BOTH those runs tripped it and were quoted past it anyway. These cases pin the replacement:
+# a correlation between ambient and the per-cycle ratio, which is a property of the ESTIMATE.
+#
+# L4 pairing is the point here. F1 and F2 differ in ONE thing: whether the ratio moves with ambient.
+# Both swing ambient by more than 2x, so both trip the old range warning; only F2 may fire the new
+# one. A diagnostic that fired on both would carry exactly as much information as the range did.
+
+_fx_ambient() { # <path> <mode: flat|tracking>  — 20 cycles, ambient rising 8.5..18.0
+  local p="$1" mode="$2" c I r S P
+  : > "$p"
+  for c in $(seq 20); do
+    I="$(awk -v c="$c" 'BEGIN{printf "%.3f", 8.0+c*0.5}')"
+    if [ "$mode" = tracking ]; then
+      r="$(awk -v i="$I" 'BEGIN{printf "%.4f", 1.5+0.45*(i-8.0)}')"
+    else
+      # jitter that is deliberately NOT monotone in the cycle index, so ranks vary without
+      # tracking ambient; an all-ties ratio would make the correlation vacuously zero.
+      r="$(awk -v c="$c" 'BEGIN{split("1.05 0.97 1.02 0.94 1.00 1.06 0.96 1.03 0.93 1.01",j," "); printf "%.4f", 3.0*j[(c*7)%10+1]}')"
+    fi
+    S="$(awk -v i="$I" 'BEGIN{printf "%.3f", i+0.06*240/6}')"
+    P="$(awk -v i="$I" -v r="$r" 'BEGIN{printf "%.3f", i+0.06*r*720/6}')"
+    {
+      printf '%s\tidle\t%s\tbash\t6\t0\n'       "$c" "$I"
+      printf '%s\tserial\t%s\tgit\t6\t240\n'    "$c" "$S"
+      printf '%s\tparallel\t%s\tbash\t6\t720\n' "$c" "$P"
+    } >> "$p"
+  done
+}
+
+@test "F1: ambient swinging >2x with a FLAT ratio trips the range check but NOT the correlation" {
+  _fx_ambient "$D/amb-flat.tsv" flat
+  run bash "$S" --analyse "$D/amb-flat.tsv"
+  [ "$status" -eq 0 ]
+  # the control arm of the pair: the old range statistic DOES fire here, so silence below is
+  # discrimination and not a dead code path.
+  printf '%s' "$output" | grep -q 'AMBIENT MOVED >2x'
+  printf '%s' "$output" | grep -q 'ambient-sensitivity: Spearman'
+  ! printf '%s' "$output" | grep -q 'THE RATIO IS TRACKING AMBIENT'
+}
+
+@test "F2: the SAME ambient swing with a ratio that tracks it fires the correlation warning" {
+  _fx_ambient "$D/amb-track.tsv" tracking
+  run bash "$S" --analyse "$D/amb-track.tsv"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'THE RATIO IS TRACKING AMBIENT'
+  # and it must report the actionable split, not merely complain
+  printf '%s' "$output" | grep -q 'Quietest 10 cycles median'
+}
+
+@test "F3: the warning reports the quiet half BELOW the noisy half, which is the reason to quote it" {
+  _fx_ambient "$D/amb-track.tsv" tracking
+  run bash "$S" --analyse "$D/amb-track.tsv"
+  [ "$status" -eq 0 ]
+  local q n
+  q="$(printf '%s' "$output" | sed -n 's/.*Quietest 10 cycles median \([0-9.]*\)x.*/\1/p')"
+  n="$(printf '%s' "$output" | sed -n 's/.*noisiest 10 median \([0-9.]*\)x.*/\1/p')"
+  [ -n "$q" ] && [ -n "$n" ] || false
+  awk -v a="$q" -v b="$n" 'BEGIN{exit !(a < b)}'
+}
+
+@test "F4: MUTATION — correlating the ratio with ITSELF fires on the flat fixture too" {
+  # Attribution, not merely liveness: the diagnostic must be keyed on AMBIENT specifically. Swap the
+  # ambient vector for the ratio vector and the correlation becomes 1.00 by construction, so F1 —
+  # whose whole point is that a flat ratio must stay silent under a >2x ambient swing — now fires.
+  # A test that only checked "the warning can appear" would pass this mutant.
+  _fx_ambient "$D/amb-flat.tsv" flat
+  local M="$D/mutant-self.sh"
+  sed 's|rho = spearman(RI, RU, m)|rho = spearman(RU, RU, m)|' "$S" > "$M"
+  ! cmp -s "$S" "$M" || false
+  run bash "$S" --analyse "$D/amb-flat.tsv"
+  [ "$status" -eq 0 ]
+  ! printf '%s' "$output" | grep -q 'THE RATIO IS TRACKING AMBIENT' || false # subject: correctly silent
+  run bash "$M" --analyse "$D/amb-flat.tsv"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'THE RATIO IS TRACKING AMBIENT'      # mutant: wrongly fires
+}
+
+@test "F5: below 5 retained cycles the correlation is not computed at all" {
+  # 3 cycles is the bench default and 3 points cannot support a rank correlation; asserting a
+  # dependence there would be the same overreach §2 removed from the gate.
+  run bash "$S" --analyse "$FIX"
+  [ "$status" -eq 0 ]
+  ! printf '%s' "$output" | grep -q 'ambient-sensitivity'
+}
+
+# ══ §G — RAW RESULTS ARE NOT CLOBBERED ══
+#
+# §5 publishes commands with hardcoded /tmp paths, so two workers on one box overwrite each other.
+# That happened on 2026-09-09 and the loss was silent: --analyse then returns the OTHER run numbers
+# under the earlier run name. rotate_out is a function so this is testable without a live bench.
+
+_load_rotate() { eval "$(sed -n '/^rotate_out() {/,/^}/p' "$S")"; }
+
+@test "G1: rotate_out preserves an existing file under a timestamped name" {
+  _load_rotate
+  local out="$D/results.tsv"
+  printf 'PRIOR\tRUN\tDATA\n' > "$out"
+  run rotate_out "$out"
+  [ "$status" -eq 0 ]
+  [ ! -e "$out" ]                               # moved aside, so the caller may now write freshly
+  local -a kept=( "$D"/results.tsv.* )
+  [ "${#kept[@]}" -eq 1 ] && [ -f "${kept[0]}" ] || false
+  grep -q 'PRIOR' "${kept[0]}"                        # the prior run data survives, read back by path
+  printf '%s' "$output" | grep -q 'rather than overwritten'
+}
+
+@test "G2: rotate_out is a no-op when there is nothing to lose" {
+  _load_rotate
+  local out="$D/fresh.tsv"
+  run rotate_out "$out"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]                               # silent: a first run must not narrate a non-event
+  [ ! -e "$out" ]
+}
+
+@test "G3: two rotations in the same second do not collide" {
+  # Same-second reruns are the realistic case for a fast --analyse loop, and the stamp has 1s
+  # resolution, so the first rotation must not be overwritten by the second.
+  _load_rotate
+  local out="$D/twice.tsv"
+  printf 'FIRST\n'  > "$out"; rotate_out "$out" >/dev/null
+  printf 'SECOND\n' > "$out"; rotate_out "$out" >/dev/null
+  local -a rots=( "$D"/twice.tsv.* )
+  [ "${#rots[@]}" -eq 2 ]                        # both preserved, neither name reused
+  grep -rq 'FIRST'  "$D"
+  grep -rq 'SECOND' "$D"
+}
+
+@test "G4: MUTATION — a plain overwrite loses the prior run with no error" {
+  # The pre-2026-09-09 behaviour, as a control: it exits 0 and says nothing, which is exactly why
+  # the loss went unnoticed for two hours.
+  local out="$D/mut.tsv"
+  printf 'PRIOR\n' > "$out"
+  run bash -c "cp /dev/null '$out'"
+  [ "$status" -eq 0 ]
+  ! grep -q 'PRIOR' "$out" || false
+  [ -z "$output" ]
+}

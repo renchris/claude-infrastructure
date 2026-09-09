@@ -137,8 +137,63 @@ case "$PROFILE" in git|cached|noop) ;; *) die64 "--profile must be git|cached|no
 #
 # Separated from the run so it can be re-read later (--analyse) and, more importantly, so its
 # arithmetic is testable without a live box. An unrunnable verdict is an unverifiable one.
+# ── NEVER CLOBBER A PRIOR RUN SILENTLY ─────────────────────────────────────────────────────────
+# The commands published in docs/research/hook-chain-occupancy-readjudication-2026-09-08.md §5
+# hardcode /tmp/hdb-control.tsv and /tmp/hdb-live.tsv, so two workers on one box overwrite each
+# other by construction — which happened on 2026-09-09, two hours apart. The loss is silent and
+# worse than a missing file: `--analyse /tmp/hdb-live.tsv` then returns the OTHER run numbers under
+# the earlier run name, with no error and no tell, and the earlier raw data is simply gone. Rotate
+# rather than refuse, so the published one-line commands stay re-runnable. rc 1 = do not write.
+rotate_out() { # <path>
+  local out="$1" stamp
+  [ -e "$out" ] || return 0
+  stamp="$(date -r "$out" -u +%Y%m%dT%H%M%SZ 2>/dev/null || date -u +%Y%m%dT%H%M%SZ)"
+  while [ -e "$out.$stamp" ]; do stamp="$stamp+"; done
+  if mv "$out" "$out.$stamp" 2>/dev/null; then
+    printf '  NOTE: %s existed — kept as %s.%s rather than overwritten.\n' "$out" "$out" "$stamp"
+    return 0
+  fi
+  printf '  WARNING: %s exists and could not be rotated; refusing to overwrite it.\n' "$out" >&2
+  return 1
+}
+
 verdict() { # <results-tsv> <load-start> <load-end>
+# NOTE: the awk program below is single-quoted, so it must contain NO apostrophe. Possessives are
+# written around ("the serial arm denominator", not "serial:s"). A stray one ends the quote and the
+# shell then parses awk source as bash, which is how this reads as a syntax error 150 lines later.
 awk -F'\t' -v ctrl="$CONTROL" -v armb="$ARM_B" -v ls="$2" -v le="$3" '
+  # ── AMBIENT SENSITIVITY OF THE RATIO ────────────────────────────────────────────────────
+  # Spearman rank correlation and its one-sided p under the usual z = rho*sqrt(m-1) normal
+  # approximation. Ranks are averaged over ties. O(m^2), and m is at most a few hundred here.
+  function rankarr(src, n, out,   i, j, r, eq) {
+    for (i=1;i<=n;i++) {
+      r=1; eq=0
+      for (j=1;j<=n;j++) { if (src[j]<src[i]) r++; else if (src[j]==src[i] && j!=i) eq++ }
+      out[i] = r + eq/2
+    }
+  }
+  function spearman(x, y, n,   rx, ry, i, mx, my, num, dx, dy) {
+    if (n < 3) return 0
+    rankarr(x, n, rx); rankarr(y, n, ry)
+    mx=0; my=0
+    for (i=1;i<=n;i++) { mx+=rx[i]; my+=ry[i] }
+    mx/=n; my/=n
+    num=0; dx=0; dy=0
+    for (i=1;i<=n;i++) { num += (rx[i]-mx)*(ry[i]-my); dx += (rx[i]-mx)^2; dy += (ry[i]-my)^2 }
+    if (dx<=0 || dy<=0) return 0
+    return num/sqrt(dx*dy)
+  }
+  function phi(z,   t, y) {   # standard normal CDF, A and S 26.2.17
+    if (z < 0) return 1 - phi(-z)
+    t = 1/(1+0.2316419*z)
+    y = t*(0.319381530+t*(-0.356563782+t*(1.781477937+t*(-1.821255978+t*1.330274429))))
+    return 1 - y*0.3989422804014327*exp(-z*z/2)
+  }
+  function medof(a, lo, hi,   i, j, t, b, n) {
+    n=0; for (i=lo;i<=hi;i++) { n++; b[n]=a[i] }
+    for (i=1;i<=n;i++) for (j=i+1;j<=n;j++) if (b[j]<b[i]) { t=b[i]; b[i]=b[j]; b[j]=t }
+    return (n==0) ? 0 : ((n%2) ? b[int((n+1)/2)] : (b[n/2]+b[n/2+1])/2)
+  }
   { meanR[$1"/"$2]=$3; bucket[$1"/"$2]=$4; wall[$1"/"$2]=$5; disp[$1"/"$2]=$6; cyc[$1]=1 }
   END {
     n=0
@@ -162,7 +217,7 @@ awk -F'\t' -v ctrl="$CONTROL" -v armb="$ARM_B" -v ls="$2" -v le="$3" '
     lo=hi=idle[1]; m=0
     for (i=1;i<=n;i++) {
       if (idle[i]<lo) lo=idle[i]; if (idle[i]>hi) hi=idle[i]
-      if (S[i] > 0.0000001) { m++; R[m]=B[i]/S[i] }
+      if (S[i] > 0.0000001) { m++; R[m]=B[i]/S[i]; RU[m]=R[m]; RI[m]=idle[i] }
       ms += S[i]; mb += B[i]
     }
     ms/=n; mb/=n
@@ -257,7 +312,42 @@ awk -F'\t' -v ctrl="$CONTROL" -v armb="$ARM_B" -v ls="$2" -v le="$3" '
     # moves by construction (it is the load). Checking the latter would fire on every healthy run.
     printf "\n  ambient (idle arm) %.3f..%.3f runnable over %d cycles", lo, hi, n
     if (lo > 0.0000001 && hi/lo > 2.0)
-      printf "\n  ⚠ AMBIENT MOVED >2x BETWEEN CYCLES — the per-cycle subtraction handles drift between\n    cycles but not within one. Treat the ratio as indicative and re-run when the box is quieter."
+      printf "\n  ⚠ AMBIENT MOVED >2x BETWEEN CYCLES — a RANGE, so it only ever widens with cycles. Read it\n    beside the correlation below, which is a property of the ESTIMATE and does not."
+
+    # ── IS THE RATIO TRACKING AMBIENT? ──────────────────────────────────────────────────────
+    # The range check above says the box MOVED. It cannot say whether the moving mattered, and on
+    # 2026-09-09 two runs of this bench were quoted past it on the strength of a passing control
+    # (docs/research/hook-chain-occupancy-readjudication-2026-09-08.md §5.1 caveat 1). It did matter:
+    # the same commands read 2.90x and 5.98x, agreeing at their shared ambient and differing only in
+    # which stretch of the ambient axis each sampled (§5.2).
+    #
+    # The mechanism is the DENOMINATOR. This ratio divides by the SERIAL arm attributable occupancy,
+    # which is the small quantity — a signal ~0.8-3 runnable threads wide against a parallel numerator
+    # near 30 — so a shared error in the per-cycle idle estimate is a large RELATIVE error below the
+    # line and a small one above it. Measured over 33 retained cycles pooled from both runs:
+    #     Spearman(ambient, serial attributable)   = -0.566     the denominator collapses
+    #     Spearman(ambient, parallel attributable) = +0.273     the numerator barely moves
+    # while completed dispatches stayed FLAT across ambient terciles (serial 243/243/249, parallel
+    # 735/745/724), so both arms were doing identical work throughout. Under the O(load) account of
+    # §3 the numerator had to carry the rise. It does not.
+    #
+    # Polarity, deliberately: more cycles make this diagnostic MORE able to see a real dependence,
+    # while its false-positive rate under a true null stays at the stated 5% whatever m is. That is
+    # the opposite of the max/min gate §2 removed, which more evidence could only make harder to pass.
+    if (m >= 5) {
+      rho = spearman(RI, RU, m)
+      z   = rho*sqrt(m-1)
+      pv  = 1 - phi(z)                       # one-sided: only upward inflation is the hazard here
+      for (i=1;i<=m;i++) { SI[i]=RI[i]; SR[i]=RU[i] }
+      for (i=1;i<=m;i++) for (j=i+1;j<=m;j++) if (SI[j]<SI[i]) {
+        tt=SI[i]; SI[i]=SI[j]; SI[j]=tt; tt=SR[i]; SR[i]=SR[j]; SR[j]=tt
+      }
+      h = int(m/2)
+      printf "\n  ambient-sensitivity: Spearman(ambient, ratio) = %+.3f  (m=%d, one-sided p=%.3f)", rho, m, pv
+      if (rho > 0 && pv < 0.05)
+        printf "\n  ⚠ THE RATIO IS TRACKING AMBIENT — this reading is inflated by the box, not only by the\n    effect. Quietest %d cycles median %.2fx, noisiest %d median %.2fx. The denominator is the small\n    quantity, so ambient noise pushes the ratio UP. Quote the low-ambient figure, say what ambient it\n    was taken at, and prefer a quieter box over more cycles.", \
+          h, medof(SR, 1, h), m-h, medof(SR, h+1, m)
+    }
     printf "\n  load1 %s -> %s (this bench generates the delta; not a drift signal)\n", ls, le
   }
 ' "$1"
@@ -411,6 +501,9 @@ for c in $(seq "$CYCLES"); do
 done
 
 LOAD_END="$(load_now)"
+if [ -n "$OUT" ]; then
+  rotate_out "$OUT" || OUT=""
+fi
 if [ -n "$OUT" ]; then
   cp "$RESULTS" "$OUT" 2>/dev/null \
     && printf '  results: %s   (re-read with --analyse %s)\n' "$OUT" "$OUT" \

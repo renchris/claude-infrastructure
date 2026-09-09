@@ -361,7 +361,11 @@ because the range of a sample is non-decreasing in `n`; the `⚠ AMBIENT MOVED >
 over the idle arm, the same shape, and it is the one an operator must now reason past to quote a
 number. The correlation above is the property-of-the-estimate replacement: it asks whether the ratio
 is *moving with* ambient, which is the thing that biases it, and it does not inflate merely by
-collecting more cycles.
+collecting more cycles. **It is now in the bench** (`ambient-sensitivity: Spearman(ambient, ratio)`,
+warning at one-sided p < 0.05, with the quiet-half/noisy-half medians so the actionable figure is
+printed rather than merely demanded). Both runs above fire it; a fixture whose ambient swings 2.1×
+with a flat ratio trips the old range check and leaves the new one silent, which is the whole of the
+difference between the two statistics.
 
 ### Method notes
 
