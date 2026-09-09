@@ -218,6 +218,64 @@ cc_sid_for_pane() { printf '%s' "${STUB_SID:-}"; }
   [ "$output" = "unverified" ]
 }
 
+# ── 3b · AN ABSTAIN MUST BE AS LEGIBLE AS ITS TWO SIBLINGS (item 2ee30f87c370, 2026-09-09) ─────
+#
+# rc 3 (held) and rc 4 (mangled) each record WHAT THE SCREEN SHOWED and each cc-notify the fired
+# session with the exact /goal to submit. rc 2 (abstained) did NEITHER: it wrote a bare stderr line
+# and a ledger row that could not say why, so a wave shipped without its Stop-hook backstop and the
+# only surface carrying that fact was a stream the firing session usually discards. The filed item
+# read that silence as non-determinism and proposed retrying the paste harder; the MEASUREMENT says
+# the opposite (8/8 abstain-shaped panes were sitting on a blocking permission modal, deterministic
+# across all 7 samples of the 30 s pre-wait), so the abstain is CORRECT and the defect is purely
+# that nobody was told. These pin the telling, never the polarity.
+
+@test "an abstained arm records WHAT it saw in the ledger row (not a bare rc)" {
+  command -v jq >/dev/null 2>&1 || skip "verdict rows need jq"
+  it2_paste_submit_verified() { FIRE_PASTE_LAST_READBACK="<unreadable>"; return 2; }
+  STUB_SID=s5b run arm_goal /bin/true 900 'finish the brief'
+  [ "$status" -eq 0 ]
+  run jq -r '.detail' "$LOG"
+  [[ "$output" == *"saw: <unreadable>"* ]] || false
+}
+
+@test "an abstained arm TELLS THE FIRED SESSION it is running with no goal backstop" {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat > "$BATS_TEST_TMPDIR/bin/cc-notify" <<'STUB'
+#!/bin/bash
+printf '%s\n' "NOTIFY-PANE=$1" >> "$CC_NOTIFY_SPY"
+printf '%s\n' "NOTIFY-BODY=$2" >> "$CC_NOTIFY_SPY"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/cc-notify"
+  export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+  export CC_NOTIFY_SPY="$BATS_TEST_TMPDIR/notify.log"; : > "$CC_NOTIFY_SPY"
+  it2_paste_submit_verified() { FIRE_PASTE_LAST_READBACK="<unreadable>"; return 2; }
+  STUB_SID=s5c run arm_goal /bin/true 900 'finish the brief'
+  [ "$status" -eq 0 ]
+  run cat "$CC_NOTIFY_SPY"
+  [[ "$output" == *"NOTIFY-PANE=900"* ]] || false
+  [[ "$output" == *"/goal finish the brief"* ]] || false
+  # It must say the backstop is GONE — that is the fact the session cannot get anywhere else.
+  [[ "$output" == *"WITHOUT the goal backstop"* ]] || false
+}
+
+@test "control — a SET arm notifies nobody (the notify is a failure path, not chatter)" {
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat > "$BATS_TEST_TMPDIR/bin/cc-notify" <<'STUB'
+#!/bin/bash
+printf '%s\n' "NOTIFIED" >> "$CC_NOTIFY_SPY"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/bin/cc-notify"
+  export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+  export CC_NOTIFY_SPY="$BATS_TEST_TMPDIR/notify.log"; : > "$CC_NOTIFY_SPY"
+  printf '%s\n' '{"type":"attachment","attachment":{"type":"goal_status","met":false,"condition":"finish the brief"}}' > "$PDIR/s5d.jsonl"
+  it2_paste_submit_verified() { return 0; }
+  STUB_SID=s5d run arm_goal /bin/true 900 'finish the brief'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=set"* ]] || false
+  run cat "$CC_NOTIFY_SPY"
+  [ -z "$output" ]
+}
+
 @test "verdict=abstained when there is no pane to paste into at all" {
   it2_paste_submit_verified() { echo "SHOULD NOT PASTE" >&2; return 0; }
   run arm_goal /bin/true '' 'finish the brief'

@@ -2516,6 +2516,7 @@ it2_paste_submit_verified() { # $1=it2-bin $2=pane-uuid $3=text [$4=max-pre-wait
   local tries="${FIRE_PASTE_READBACK_TRIES:-8}" n=0
   FIRE_PASTE_LAST_READBACK=""
   if [ "${CC_FIRE_COMPOSER_GATE:-on}" != off ] && ! composer_owned "$id"; then
+    FIRE_PASTE_LAST_READBACK="<not-owned>"
     echo "⚠ verified paste ABSTAINED — no proof a live CC session owns pane $id" >&2
     return 2
   fi
@@ -2528,7 +2529,8 @@ it2_paste_submit_verified() { # $1=it2-bin $2=pane-uuid $3=text [$4=max-pre-wait
         echo "⚠ verified paste HELD ${wait}s — composer occupied: '$(printf '%.80s' "$c")' (an unsubmitted draft; pasting would append to it and a CR would submit the hybrid)" >&2
         return 3
       fi
-      echo "⚠ verified paste ABSTAINED — composer unreadable for ${wait}s (torn frame / no input box on screen); typing needs the affirmative" >&2
+      FIRE_PASTE_LAST_READBACK="<unreadable>"
+      echo "⚠ verified paste ABSTAINED — composer unreadable for ${wait}s (no input box on screen); typing needs the affirmative. MEASURED DOMINANT CAUSE (2026-09-09, item 2ee30f87c370): the pane is sitting on a BLOCKING MODAL — a tool-permission / trust dialog renders no composer box at all, so this read cannot succeed until a human answers it. That is a correct abstain, not a flake: a bracketed paste into a single-key prompt is consumed as ANSWERS." >&2
       return 2
     fi
     /bin/sleep "$ivl"; t=$((t + ivl))
@@ -5050,7 +5052,8 @@ arm_goal() { # $1=it2-bin $2=pane $3=condition [$4=provenance] → always 0; pri
       return 0 ;;
     *)
       echo "⚠ goal NOT armed — the arming paste abstained or failed to send. The session HAS its brief and is working; only the Stop-hook goal is missing. Re-arm by typing '/goal $cond' into pane $pane. goal-arm verdict=abstained reason=paste-refused${psfx}" >&2
-      emit_goal_event abstained "${ppfx}arming paste refused/abstained for pane $pane (rc=$arm_rc)" || true
+      emit_goal_event abstained "${ppfx}arming paste refused/abstained for pane $pane (rc=$arm_rc); saw: ${FIRE_PASTE_LAST_READBACK:-<unrecorded>}" || true
+      command -v cc-notify >/dev/null 2>&1 && cc-notify "$pane" "GOAL-ARM ABSTAINED (nothing was typed): the Stop-hook goal was NOT armed for this session, because your pane could not be proven to be an empty composer (${FIRE_PASTE_LAST_READBACK:-<unrecorded>}) — most often a blocking permission/trust dialog, which renders no composer box. You are running WITHOUT the goal backstop: nothing will re-prompt you at a Stop, so drive the brief to its stated end state yourself. To arm it, clear any dialog and submit exactly: /goal $cond" >/dev/null 2>&1 || true
       return 0 ;;
   esac
   while [ "$t" -lt "$timeout" ]; do
