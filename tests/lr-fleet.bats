@@ -15,7 +15,15 @@ setup() {
   SLUG="-Users-x-thing"; mkdir -p "$SEC/projects/$SLUG" "$TER/projects/$SLUG"
   export LR_CONFIG_DIRS="$SEC:$TER"
   CWD="$BATS_TEST_TMPDIR/wt"; mkdir -p "$CWD"
-  SID="52e35019-17e8-40f6-a54f-3a04de70d2e6"
+  # The incident sid, with a ZEROED tail. The full 2026-09-09 uuid is LIVE on this box (a tmux
+# `claude --resume <that uuid>` has been running since 00:51Z), and both liveness censuses under
+# test — lr-select's `pgrep -f "resume <sid>"` and lr-lib's `ps -axo command=` / `--resume <sid>`
+# — read the REAL process table, so the fixture's own registry row stopped being the only voice:
+# --locate said DUPLICATE where the case pins RECOVERABLE, and the poller retired the record before
+# it could nudge. A fixture may never name an identifier that can exist outside it (memory:
+# hermetic-in-stubs-not-in-interpreter). The `52e35019` prefix is kept — it is what the display
+# assertions match on, and it is how this suite stays legible against the incident it was written from.
+  SID="52e35019-17e8-40f6-a54f-000000000000"
   # lr-handoff stub: records argv, exits per LRH_RC, prints the announcements the fleet parses
   export LR_HANDOFF_BIN="$BATS_TEST_TMPDIR/lr-handoff"
   cat > "$LR_HANDOFF_BIN" <<'SH'
@@ -48,7 +56,12 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
   run bash "$FLEET" --locate
   [ "$status" -eq 0 ]
-  [[ "$output" == *"52e35019 .claude-secondary 616"* ]] || { echo "$output"; false; }
+  # ACCT is the account NAME, not the config-dir basename: lr-fleet resolves it through the repo's
+  # own lib/account-map.generated.sh (CC_ACCOUNT_MAP is only the first candidate, and pinning it at
+  # an absent path falls through to that in-repo map rather than to the basename).
+  # The census is COLUMN-PADDED, so the row is matched on a whitespace-squeezed copy — pinning the
+  # literal single-space spelling asserts the column widths, which is not what this case is about.
+  [[ "$(printf '%s' "$output" | tr -s ' ')" == *"52e35019 next2 616"* ]] || { echo "$output"; false; }
   [[ "$output" == *"claude-fable-5-1/xhigh"* ]] || { echo "$output"; false; }
   [[ "$output" == *"RECOVERABLE"* ]] || { echo "$output"; false; }
 }
@@ -93,9 +106,9 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
 }
 @test "recover: the ranked winner is skipped when it IS the limited account (its 5h window just closed)" {
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
-  # the stub ranks next2 first, and .claude-secondary IS next2 in the real map; with no map the account
-  # is the dir basename, so pin the rank to make the source win first
-  printf '#!/bin/bash\ncase "$*" in *--rank*) printf ".claude-secondary 0.9\\nnext4 0.5\\n" ;; esac\n' > "$CC_ACCOUNTS_BIN"
+  # .claude-secondary IS next2 in the repo's account map, which lr-fleet resolves even with
+  # CC_ACCOUNT_MAP pinned at an absent path — so rank next2 first and it must be passed over.
+  printf '#!/bin/bash\ncase "$*" in *--rank*) printf "next2 0.9\\nnext4 0.5\\n" ;; esac\n' > "$CC_ACCOUNTS_BIN"
   run bash "$FLEET" --recover
   grep -q -- "--target next4" "$LRH_LOG" || { cat "$LRH_LOG"; false; }
 }

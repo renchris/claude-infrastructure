@@ -135,7 +135,23 @@ lr_registry_live_rows() { # $1=sid → rows on stdout; rc 0 when at least one is
 lr_resume_procs() { # $1=sid → pids of `--resume <sid>` processes (the argv census), one per line; rc 0 when any
   local sid="${1:-}" out
   [ -n "$sid" ] || return 1
-  out="$(ps -axo pid=,command= 2>/dev/null | awk -v s="--resume $sid" 'index($0, s) { print $1 }' || true)"
+  # THE PATTERN MUST NOT RIDE IN ARGV. `awk -v s="--resume $sid"` puts the very string being searched
+  # for into the awk process's OWN command line, and `ps -axo command=` — started concurrently in the
+  # same pipeline — prints it, so `index($0, s)` matched AWK ITSELF and this census answered YES for
+  # every sid ever asked about. Measured 2026-09-09: `lr-fleet --locate` called a session with one
+  # registry pane DUPLICATE and a session with none RESUMING, and the poller retired parked records
+  # as already-running. pgrep excludes itself; a hand-rolled `ps | awk` does not (memory:
+  # pgrep-excludes-the-callers-ancestors — a census is in its own population unless it says otherwise).
+  # The sid travels in the ENVIRONMENT, which ps does not print.
+  out="$(ps -axo pid=,ppid=,command= 2>/dev/null | LR_RP_SID="$sid" awk 'index($0, "--resume " ENVIRON["LR_RP_SID"]) { print $1"\t"$2 }' || true)"
+  [ -n "$out" ] || return 1
+  # ONE SESSION IS ONE PROCESS, NOT A CHAIN. A resume is launched through bin/cc-close-attrib, which
+  # stays alive as the PARENT of the real `claude` and carries the whole command line in its own
+  # argv — so this census saw TWO processes for ONE session. Measured 2026-09-09: `lr-fleet
+  # --duplicates` called b418b97a a split brain over pids 16125 (the wrapper) and 16212 (its child),
+  # one pane, one session — and its prescription was to retire a LIVE pane. Keep only the leaves:
+  # a pid that is the PARENT of another pid in this set is the wrapper, not the session.
+  out="$(printf '%s\n' "$out" | awk -F'\t' '{ pid[NR]=$1; par[$2]=1 } END { for (i=1;i<=NR;i++) if (!(pid[i] in par)) print pid[i] }')"
   [ -n "$out" ] || return 1
   printf '%s\n' "$out"
 }

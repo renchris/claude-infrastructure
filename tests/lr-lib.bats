@@ -137,3 +137,37 @@ limit() { printf '{"type":"assistant","timestamp":"%s","isApiErrorMessage":true,
   run lr_kitty_spawn /tmp/lr-launch-x.sh /tmp/wt "$SID" next3
   [ "$status" -eq 1 ]
 }
+
+# ── the argv census (lr_resume_procs) ────────────────────────────────────────────────────────────
+# Both cases below were LIVE defects on 2026-09-09, and both made the same false claim — that a
+# session had more than one process — which is the claim `--duplicates` acts on by telling the
+# operator to retire a pane.
+ps_stub() { # $@ = literal `pid ppid command` lines the fake ps prints
+  STUB="$BATS_TEST_TMPDIR/psstub"; mkdir -p "$STUB"
+  { echo '#!/bin/bash'; echo 'cat <<"EOF"'; printf '%s\n' "$@"; echo 'EOF'; } > "$STUB/ps"
+  chmod +x "$STUB/ps"; export PATH="$STUB:$PATH"
+}
+@test "argv census: the cc-close-attrib WRAPPER and its child are ONE session, not two" {
+  ps_stub \
+    "16125 15577 bash /Users/x/.claude/bin/cc-close-attrib /Users/x/claude --resume $SID" \
+    "16212 16125 /Users/x/claude --resume $SID"
+  run lr_resume_procs "$SID"
+  [ "$status" -eq 0 ]
+  [ "$output" = "16212" ]                      # the LEAF is the session; the parent is the launcher
+}
+@test "argv census: two genuinely unrelated processes on one sid are still BOTH reported" {
+  ps_stub "500 1 /Users/x/claude --resume $SID" "900 1 /Users/x/claude --resume $SID"
+  run lr_resume_procs "$SID"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" = 2 ]
+}
+@test "argv census: the QUERENT is not in its own population — a sid no process holds returns rc 1" {
+  # NO ps stub here deliberately: this case is about what the REAL process table shows. The pattern
+  # used to ride in argv (`awk -v s="--resume $sid"`), so the concurrently-started `ps` printed the
+  # awk process itself and index($0,s) matched it — this census answered YES for every sid ever
+  # asked about, and `--locate` duly called a one-pane session DUPLICATE and a no-pane session
+  # RESUMING. The sid travels in the environment now, so a sid nothing holds must come back empty.
+  run lr_resume_procs "ffffffff-0000-4000-8000-ffffffffffff"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}

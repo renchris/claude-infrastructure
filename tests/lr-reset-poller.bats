@@ -382,6 +382,14 @@ mk_spend_teammate_transcript() {
 # THE HARNESS MUST THEREFORE DROP THE STUB DIR FROM PATH — that is the whole point of the case, and
 # it is the one axis every sibling case pins the other way. `LR_POLLER_TMUX_CANDIDATES` stands in
 # for the absolute Homebrew locations a test cannot create.
+#
+# RE-POINTED 2026-09-09 (LIMIT_RECOVER_100P): this case fires tmux EXPLICITLY (LR_POLLER_SPAWN=tmux)
+# rather than by reaching it through a failed GUI. What it measures — the LRP_TMUX_BIN ladder, i.e.
+# tmux resolving by absolute path on the launchd PATH where `command -v` cannot answer — is unchanged
+# and is still the only case that measures it. What changed underneath is the ROUTE: LR-m now forbids
+# a silent tmux fallback outright (a detached tmux resume is unanswerable — 52e35019 froze on a
+# permission prompt nobody could see), so "GUI fails ⇒ tmux" is the behaviour this wave deleted on
+# purpose. Reaching the ladder through that route would re-pin the very defect LR-m inverted.
 
 @test "LR-o: tmux resolves ABSOLUTELY when PATH cannot see it — the launchd floor, not the dev shell" {
   mk_parked "aaaa000o-1111-2222-3333-444444444444" "$(past_iso)"
@@ -389,7 +397,7 @@ mk_spend_teammate_transcript() {
   run env PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
       HOME="$HOME" TMUX_LOG="$TMUX_LOG" OSA_LOG="$OSA_LOG" CCD_LOG="$CCD_LOG" \
       LR_POLLER_LAUNCH_DIR="$LR_POLLER_LAUNCH_DIR" IT2_WRAPPER_NO_KITTY=1 \
-      OSA_FAIL=1 LR_POLLER_AUTOFIRE=1 \
+      OSA_FAIL=1 LR_POLLER_AUTOFIRE=1 LR_POLLER_SPAWN=tmux \
       LR_POLLER_TMUX_CANDIDATES="$BATS_TEST_TMPDIR/stubs/tmux" \
       bash "$POLLER" --once
   [ "$status" -eq 0 ]

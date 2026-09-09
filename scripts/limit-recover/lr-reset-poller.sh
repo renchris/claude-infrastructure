@@ -835,6 +835,11 @@ if [[ -n "$sel_input" ]]; then
     [[ -n "$_c" ]] || continue
     _csid="${_c#*:}"; _csid="${_csid%%:*}"
     fire_latched "$_csid" && continue
+    # A sid whose ORIGINAL pane is alive is a NUDGE candidate, never a spawn candidate — it must not
+    # take the per-worktree winner slot (MAX_PER_WT=1) from a session that genuinely needs a process,
+    # for the same reason a latched sid must not. The contest below bounds RESURRECTIONS (the 8.8 GB
+    # incident); nudging a pane that is already open creates no process and is not one.
+    command -v lr_registry_live_rows >/dev/null 2>&1 && lr_registry_live_rows "$_csid" >/dev/null 2>&1 && continue
     _kept+="$_c"$'\n'
   done <<< "$sel_input"
   sel_input="${_kept%$'\n'}"
@@ -894,6 +899,34 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   # sid — filtered out of candidacy above — would fall through to `sel_reason`'s empty answer and be
   # retired as "not selected", which is both a misattribution and a permanent one.
   fire_latched "$sid" && continue
+  # ── THE ORIGINAL PANE IS ALIVE: NUDGE IN PLACE, NEVER SPAWN (LIMIT_RECOVER_100P) ───────────────
+  # THE 2026-09-09 DEFECT: liveness above is `pgrep -f "resume $sid"`, which is blind to a session
+  # launched WITHOUT --resume — every fresh launch. The poller resumed 52e35019 into tmux while pane
+  # 616 still held the original process, and one transcript had two writers on one account. The
+  # registry row (hooks/session-register.sh) is the store the argv census cannot replace: keyed by
+  # pane, names the sid, carries the pid. A live row means the session is sitting at its limit error
+  # in a pane the operator can see — the recovery is to TYPE the recovery prompt into THAT pane and
+  # prove a fresh assistant turn, not to mint a second process.
+  # IT SITS ABOVE THE WINNER CONTEST DELIBERATELY (2026-09-09). It used to sit below, and could
+  # therefore never run: lr-select's own liveness census counts a live REGISTRY row as "already
+  # running", so the one sid this arm exists for was filtered out of candidacy and retired as
+  # `LISTED … already-running` before the nudge was ever reached — the arm was unreachable code and
+  # its whole suite red. A live original pane is not a reason to skip the session; it is the reason
+  # to type into it. The contest below still bounds every SPAWN.
+  if command -v lr_registry_live_rows >/dev/null 2>&1 && _lrp_rows="$(lr_registry_live_rows "$sid")"; then
+    if [[ $DRY -eq 1 || "$AUTOFIRE" != "1" ]]; then
+      log "LIVE  $sid — original pane $(printf '%s' "$_lrp_rows" | head -1 | cut -f1) is alive (pid $(printf '%s' "$_lrp_rows" | head -1 | cut -f2)); would NUDGE in place, never spawn ($([[ $DRY -eq 1 ]] && echo dry-run || echo notify-only))"
+      continue
+    fi
+    if ! account_has_headroom "$acct"; then log "WAIT  $sid — $acct still capped, retry next tick"; continue; fi
+    (( fired >= MAX_PER_RUN )) && { log "CAP   per-run resume cap ($MAX_PER_RUN) reached; deferring rest"; break; }
+    if nudge_in_place "$sid" "$cfg" "$_lrp_rows"; then
+      mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; fired=$((fired+1)); continue
+    fi
+    fire_fail_note "$sid" nudge-failed
+    log "ERROR  $sid — nudge into the live pane failed; NOT spawning a duplicate over a live process (retry next tick)"
+    continue
+  fi
   # Not the winner for its worktree → LIST it and retire THIS limit event. Leaving it parked
   # would just re-elect it next tick once the winner is running (already-running filters the
   # winner out) — sprawl at 10-minute cadence. The session is not lost: resume it explicitly by
@@ -920,26 +953,6 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   fi
   if ! account_has_headroom "$acct"; then log "WAIT  $sid — $acct still capped, retry next tick"; continue; fi
   (( fired >= MAX_PER_RUN )) && { log "CAP   per-run resume cap ($MAX_PER_RUN) reached; deferring rest"; break; }
-  # ── THE ORIGINAL PANE IS ALIVE: NUDGE IN PLACE, NEVER SPAWN (LIMIT_RECOVER_100P) ───────────────
-  # THE 2026-09-09 DEFECT: liveness above is `pgrep -f "resume $sid"`, which is blind to a session
-  # launched WITHOUT --resume — every fresh launch. The poller resumed 52e35019 into tmux while pane
-  # 616 still held the original process, and one transcript had two writers on one account. The
-  # registry row (hooks/session-register.sh) is the store the argv census cannot replace: keyed by
-  # pane, names the sid, carries the pid. A live row means the session is sitting at its limit error
-  # in a pane the operator can see — the recovery is to TYPE the recovery prompt into THAT pane and
-  # prove a fresh assistant turn, not to mint a second process.
-  if command -v lr_registry_live_rows >/dev/null 2>&1 && _lrp_rows="$(lr_registry_live_rows "$sid")"; then
-    if [[ $DRY -eq 1 || "$AUTOFIRE" != "1" ]]; then
-      log "LIVE  $sid — original pane $(printf '%s' "$_lrp_rows" | head -1 | cut -f1) is alive (pid $(printf '%s' "$_lrp_rows" | head -1 | cut -f2)); would NUDGE in place, never spawn ($([[ $DRY -eq 1 ]] && echo dry-run || echo notify-only))"
-      continue
-    fi
-    if nudge_in_place "$sid" "$cfg" "$_lrp_rows"; then
-      mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; fired=$((fired+1)); continue
-    fi
-    fire_fail_note "$sid" nudge-failed
-    log "ERROR  $sid — nudge into the live pane failed; NOT spawning a duplicate over a live process (retry next tick)"
-    continue
-  fi
   if [[ "$AUTOFIRE" == "1" && $DRY -eq 0 ]]; then
     # MINT THE UNIQUE NAME FIRST, ADD THE SUFFIX AFTER — the same idiom (and for the same reason)
     # as handoff-fire.sh's WT_DEPS. BSD mktemp substitutes only a TRAILING `XXXXXX`; given

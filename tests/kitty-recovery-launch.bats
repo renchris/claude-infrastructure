@@ -336,7 +336,10 @@ load_spawn_gui() {
   # recyclable. `-- /bin/bash <launcher>` is the shape that left panes 625/632 un-recyclable.
   grep -q -- 'launch --type=os-window' "$KITTY_LOG"
   grep -q -- 'CC_PANE_CMD=bash /tmp/lr-launch-fixture.sh' "$KITTY_LOG"
-  gone -- '-- /bin/bash /tmp/lr-launch-fixture.sh' "$KITTY_LOG"
+  # `gone` takes (pattern, file) and already passes `--` to grep itself; a `--` written HERE lands
+  # in $1 as the pattern and the pattern lands in $2 as a filename that does not exist, so the
+  # assertion could only ever fail — it was never testing the runner shape at all.
+  gone '-- /bin/bash /tmp/lr-launch-fixture.sh' "$KITTY_LOG"
   [ ! -s "$OSA_LOG" ]
 }
 
