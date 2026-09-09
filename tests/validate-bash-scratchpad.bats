@@ -250,3 +250,60 @@ prefix_hook() {
   probe "rm -rf \"\$UNSET_ANYWHERE/x\""
   refused "$output" || { echo "an unassigned variable was PERMITTED"; false; }
 }
+
+# ── CHAINED VARIABLES (row 6293bf3bbbf1, measured 2026-09-08) ───────────────────────────────────
+# The resolver above refused ANY value holding a `$`, which put a reference to an already-resolved
+# literal in the same bucket as `$(mktemp -d)`. So the commonest agent spelling of this sanctioned
+# category — a root assigned once and a child derived from it — could never match, and every such rm
+# drew an `ask`, which is TERMINAL for a dispatched session: pane 314 frozen ~20 min, pane 616 three
+# times in 25 min.
+#
+# Same two-sided law as everything above. Each PERMIT below is paired with the refusal one lever away:
+#   (19) permit  S=<own scratchpad> ; CH=$S/x ; rm -rf "$CH"
+#        ↔ (21) refuse the same chain when the ROOT is another session's — resolution never widens
+#        ↔ (22) refuse a link whose value is a command substitution — undecidable, at any depth
+#        ↔ (23) refuse a single-quoted '$S/x' — literal to the shell, so resolving it invents a path
+#        ↔ (24) refuse non-plain references ($((…)), ${A:-b}, $1) — not a decidable name
+
+@test "(19) PERMITS a two-link chain: a root assigned once, a child derived from it" {
+  probe "S=$SP && CH=\$S/prefix-bin && rm -rf \"\$CH\""
+  [ "$status" -eq 0 ]
+  permitted "$output" || { echo "decision was: $(decision "$output")"; false; }
+}
+
+@test "(20) PERMITS the braced spelling in the chain, and a THIRD link" {
+  probe "S=$SP && CH=\${S}/prefix-bin && rm -rf \"\$CH\""
+  permitted "$output" || { echo "braced chain: $(decision "$output")"; false; }
+  probe "S=$SP && M=\$S/prefix-bin && CH=\$M/deep && rm -rf \"\$CH\""
+  permitted "$output" || { echo "three links: $(decision "$output")"; false; }
+}
+
+@test "(21) REFUSES a chain whose ROOT is another session's scratchpad — resolution never widens" {
+  probe "S=$OTHER_SP && CH=\$S/prefix-bin && rm -rf \"\$CH\""
+  refused "$output" || { echo "another session's scratchpad was PERMITTED through a chain"; false; }
+  probe "S=$D/repo && CH=\$S/src && rm -rf \"\$CH\""
+  refused "$output" || { echo "a repo tree was PERMITTED through a chain"; false; }
+}
+
+@test "(22) REFUSES a chain with an undecidable LINK, at either end" {
+  probe "S=\$(mktemp -d) && CH=\$S/x && rm -rf \"\$CH\""
+  refused "$output" || { echo "a command-substitution ROOT was PERMITTED"; false; }
+  probe "S=$SP && CH=\$(echo \$S/x) && rm -rf \"\$CH\""
+  refused "$output" || { echo "a command-substitution CHILD was PERMITTED"; false; }
+  probe "S=$SP; S=$D/repo; CH=\$S/x; rm -rf \"\$CH\""
+  refused "$output" || { echo "a REASSIGNED root was PERMITTED through a chain"; false; }
+}
+
+@test "(23) REFUSES a SINGLE-QUOTED value carrying \$ — literal to the shell, so resolving it invents a path" {
+  probe "S=$SP && CH='\$S/prefix-bin' && rm -rf \"\$CH\""
+  refused "$output" || { echo "a single-quoted reference was expanded — the hook read a path the shell would not"; false; }
+}
+
+@test "(24) REFUSES references that are not a PLAIN name — arithmetic, defaults, positionals" {
+  probe "S=$SP && CH=\$S/\$((1+1)) && rm -rf \"\$CH\""
+  refused "$output" || { echo "arithmetic expansion was resolved"; false; }
+  probe "S=$SP && CH=\${S:-/tmp}/x && rm -rf \"\$CH\""
+  refused "$output" || { echo "a \${A:-b} default was resolved"; false; }
+  probe "S=$SP && CH=\$S/\$1 && rm -rf \"\$CH\""
+  refused "$output" || { echo "a positional parameter was resolved"; false; }
+}

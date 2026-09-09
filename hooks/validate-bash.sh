@@ -1239,18 +1239,52 @@ is_own_scratchpad_target() {  # <argv-token> → 0 iff it RESOLVES strictly unde
 # A token that does not fully resolve keeps its `$` and is refused exactly as before.
 #
 # AND IT REFUSES AMBIGUITY RATHER THAN PICKING. A name assigned more than once, or assigned from a
-# command substitution / another variable / a glob (`D=$(mktemp -d)`), has no decidable value at
-# hook time, so it is not resolved at all. That is what stops `D=<scratchpad>; D=$(…); rm -rf "$D"`
-# being read as its first assignment.
-_rm_literal_assignment() {  # <NAME> → its value iff assigned EXACTLY ONCE, LITERALLY, in this command
-  local name="$1" all
+# command substitution / a glob (`D=$(mktemp -d)`), has no decidable value at hook time, so it is not
+# resolved at all. That is what stops `D=<scratchpad>; D=$(…); rm -rf "$D"` being read as its first
+# assignment.
+#
+# ⚠️ 2026-09-09 — A CHAIN IS NOT AN AMBIGUITY (row 6293bf3bbbf1). Until today this refused any value
+# holding a `$` AT ALL, which put a reference to an already-resolved literal in the same bucket as a
+# command substitution. So the commonest agent spelling of the sanctioned category could never match:
+#
+#     S=/private/tmp/claude-501/<slug>/<sid>/scratchpad && CH=$S/probe && rm -rf "$CH"
+#
+# `CH` refused ⇒ the token keeps its `$` ⇒ `_sp_resolve` refuses it ⇒ an `ask`, which is TERMINAL for
+# a dispatched session. Measured 2026-09-08: pane 314 frozen ~20 min, pane 616 three times in 25 min.
+# A value may now carry PLAIN variable references (`$NAME` / `${NAME}`); `_rm_expand_token`'s existing
+# 4-iteration bound is what resolves the chain, and a link that does not resolve simply leaves a `$`
+# in the token, which is refused exactly as before. Everything genuinely undecidable is still refused,
+# and the list is now explicit rather than a single `$` catch-all:
+#   · command substitution `$(…)` or backticks, and globs `*` `?`   — no value at hook time
+#   · arithmetic `$((…))`, `${A:-b}`, `$1`, `$@`                    — not a plain reference
+#   · a SINGLE-QUOTED value carrying `$`                            — literal to the shell, so
+#     resolving it would name a path the shell never would
+# The safety argument above is unchanged and is what makes this narrow: resolution runs BEFORE the
+# predicates and cannot widen them, so a wrong expansion can only ever permit something by landing
+# STRICTLY inside this session's own scratchpad — the safe case, by construction.
+_rm_literal_assignment() {  # <NAME> → its value iff assigned EXACTLY ONCE, DECIDABLY, in this command
+  local name="$1" all one val probe
   all=$(printf '%s\n' "$CMD" \
         | grep -oE "(^|[[:space:];&|(])${name}=[^[:space:];&|]*" \
         | sed -E "s|^[[:space:];&|(]*${name}=||")
   [[ -n "$all" ]] || return 1
-  printf '%s\n' "$all" | grep -qE '[$`*?]' && return 1              # non-literal ⇒ undecidable
   [[ "$(printf '%s\n' "$all" | sort -u | wc -l | tr -d ' ')" == "1" ]] || return 1   # reassigned
-  printf '%s\n' "$all" | head -1 | sed -E 's|^"||; s|"$||; s|^'"'"'||; s|'"'"'$||'
+  one=$(printf '%s\n' "$all" | head -1)
+  # A single-quoted value is LITERAL to the shell: a `$` in it is not a reference.
+  case "$one" in "'"*"'") case "$one" in *'$'*) return 1 ;; esac ;; esac
+  val=$(printf '%s\n' "$one" | sed -E 's|^"||; s|"$||; s|^'"'"'||; s|'"'"'$||')
+  # Two cases, not one: the command-substitution literal is spelled "\$(" rather than '$(' because
+  # SC2016 reads a `$` inside single quotes as a mistake and reds the land — and a blanket disable
+  # would suppress that warning on every pattern in the arm, not just this one. (A comment whose
+  # FIRST word is the linter's own name parses as a directive, which is its own error: SC1072/SC1073.)
+  case "$val" in *'`'*|*'*'*|*'?'*) return 1 ;; esac               # backtick / glob — undecidable
+  case "$val" in *"\$("*) return 1 ;; esac                         # command substitution — likewise
+  # Every surviving `$` must be a PLAIN reference. Delete the two decidable spellings and refuse if
+  # anything is left — a denylist of the bad forms would enumerate spellings, not the class
+  # (fleet memory: denylist-enumerates-spellings-not-the-class).
+  probe=$(printf '%s' "$val" | sed -E 's/\$\{[A-Za-z_][A-Za-z0-9_]*\}//g; s/\$[A-Za-z_][A-Za-z0-9_]*//g')
+  case "$probe" in *'$'*) return 1 ;; esac
+  printf '%s\n' "$val"
 }
 
 _rm_expand_token() {  # <token> → the token with resolvable same-command variables expanded

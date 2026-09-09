@@ -1,4 +1,12 @@
 # Pattern-matching sites in hooks/validate-bash.sh — the population the backlog row 8942f3b1506d
+#
+# 2026-09-09 (row 6293bf3bbbf1) — POPULATION CHANGE, recorded rather than absorbed. S32
+#   (`grep -qE '[$`*?]'` in _rm_literal_assignment) is GONE: that single blanket refusal is what made
+#   the scratchpad rm-allowlist unreachable for a chained variable path, and it is replaced by `case`
+#   patterns, which are not grep sites. It was pinned EQUIVALENT, so no DIVERGENT counterexample was
+#   lost and the non-vacuity floor is untouched. S31/S28/S29/S30 only MOVED (1248->1268, 1289->1323,
+#   1304->1338, 1307->1341); their patterns and pinned verdicts are unchanged. Net: the hook has one
+#   fewer grep on the hottest path in the fleet, which is the direction row 8942f3b1506d wanted.
 # proposes converting from `grep -qE` to bash-native `[[ =~ ]]`.
 #
 # Columns (TAB separated):
@@ -49,8 +57,7 @@ S24	936	qE	raw	clause	lit	EQUIVALENT	[[:space:]]-(l|e)([[:space:]]|$)
 S25	938	qE	raw	clause	lit	DIVERGENT	\buser\.(email|name)[[:space:]]+[^[:space:]]
 S26	1107	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+reset[[:space:]]+--hard\b
 S27	1113	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*[xX]
-S28	1289	qE	raw	token	syn	EQUIVALENT	^(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)(/|$)
-S29	1304	oE	nl	whole	lit	DIVERGENT	rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*[^[:space:];&|-][^[:space:];&|]*
-S30	1307	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
-S31	1248	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=[^[:space:];&|]*
-S32	1251	qE	nl	whole	lit	EQUIVALENT	[$`*?]
+S28	1323	qE	raw	token	syn	EQUIVALENT	^(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)(/|$)
+S29	1338	oE	nl	whole	lit	DIVERGENT	rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*[^[:space:];&|-][^[:space:];&|]*
+S30	1341	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
+S31	1268	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=[^[:space:];&|]*
