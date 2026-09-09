@@ -49,6 +49,9 @@
 # hooks/completion-assert.sh:39-49 — a step string carrying a quote/newline must never emit a
 # malformed IDL line, because one malformed line aborts cc-audit's `jq -rs` slurp and that reads
 # as "no records" (silently flipping the un-gameable detector green).
+# ⚠️ That CONSEQUENCE is history as of W3-B17 (2026-09-09) and the rule is not: cc-audit now reads
+# `[inputs | fromjson?]` per record and warn_malformed() reports the skipped count, so a breach
+# degrades the census by a counted stratum instead of zeroing it. Encode every field regardless.
 #
 # Deliberately NOT logged: the disarmed steady state (actuation with no sentinel). That is the
 # common case on EVERY Stop of EVERY session, and the sentinel's absence is itself the record —

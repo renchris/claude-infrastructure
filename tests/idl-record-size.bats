@@ -119,3 +119,39 @@ lib() { echo "${CC_TEST_IDLLIB:-$REPO/hooks/lib/idl-log.sh}"; }
   run jq -r '.bytes > 4000' "$BATS_TEST_TMPDIR/idl.jsonl"
   [ "$output" = "true" ]
 }
+
+# ── THE TOLERANT-READER RULE, ENFORCED AT THE CHOKEPOINT ─────────────────────────────────────────
+# W2-B17's third arm. A SLURP (`jq -s` / `-rs` / `--slurp`) over the IDL fails WHOLESALE on one bad
+# record: jq exits 5, and with stderr redirected the caller sees an empty result it cannot
+# distinguish from an empty store. That is how 12.33% of the store went missing from every census
+# that did it, reporting a smaller, internally consistent number with no tell.
+#
+# The production readers are ALREADY tolerant and this case does not re-fix them -- bin/cc-audit
+# reads `[inputs | fromjson?]` per record and warn_malformed() reports the skipped count,
+# scripts/idl-abstain-alarm.sh reads `fromjson? // empty` and reports raw-vs-parsed, and
+# scripts/measure-close-vs-idl.py counts idl_parse_failures. What nothing on this box had is
+# anything stopping the NEXT one from being written (memory: enforcement-must-live-at-the-
+# chokepoint -- a correct reader is detection; the gate is what makes it stick).
+
+@test "no reader slurps the LIVE IDL with jq while suppressing its stderr" {
+  cd "$REPO"
+  # Candidate lines: a jq slurp flag and an idl path on the same line.
+  # Fixture stores are exempt by construction -- a selftest builds its own small IDL and a torn
+  # record there would be the test's own doing, not the shared 20-producer append race.
+  offenders=""
+  while IFS= read -r hit; do
+    line="${hit#*:}"; line="${line#*:}"
+    case "$line" in
+      *'$d/'*|*'$tmp/'*|*'BATS_TEST_TMPDIR'*|*'$TMP'*|*'seed.jsonl'*) continue ;;
+    esac
+    case "$line" in *'2>/dev/null'*) offenders="$offenders$hit"$'\n' ;; esac
+  done < <(grep -rn -e 'jq -rs' -e 'jq -sr' -e 'jq -s ' -e 'jq --slurp' \
+             --include='*.sh' --include='cc-*' bin scripts hooks 2>/dev/null \
+           | grep -i 'idl' || true)
+  if [ -n "$offenders" ]; then
+    echo "a slurp over the live IDL with stderr suppressed reads a fatal record as an EMPTY STORE:" >&3
+    echo "$offenders" >&3
+    echo "use a per-record read instead: jq -Rrn '[inputs | fromjson?]' and REPORT the skipped count" >&3
+  fi
+  [ -z "$offenders" ]
+}
