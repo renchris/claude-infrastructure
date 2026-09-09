@@ -188,3 +188,48 @@ once this lands (the poller can never create them again).
   harness pins being re-pointed at the runner shape); commit + land + deploy-live + E2E on a
   throwaway pane pending — the lead recycled at ~74% context per the desk page; successor continues
   from § 8 and the suite list above.
+- 2026-09-09T05:xxZ · successor (session 2c24bdb5, worktree lr100p) ran the 18-suite gate as ONE
+  bats root. 22 red, and the "3 harness pins" above turned out to be **four defects, three of them
+  in shipped code** (commit `68302d9e1`). They are recorded here because each is a rule, not an
+  incident:
+  1. **`lr_resume_procs` was in its own population.** `ps -axo command= | awk -v s="--resume $sid"`
+     puts the search string into awk's OWN argv, and the concurrently-started `ps` prints it, so
+     `index($0,s)` matched awk itself — the census answered YES for **every sid ever asked about**.
+     `--locate` called a one-pane session DUPLICATE and a no-pane session RESUMING; lr-select
+     retired parked records as `already-running`. The sid rides in the environment now. Red-proof:
+     the old form returns the awk pid for a sid nothing holds; the new one returns nothing.
+     (Generalises memory `pgrep-excludes-the-callers-ancestors` — pgrep excludes itself, a
+     hand-rolled `ps | awk` does not, and nothing in this repo said so.)
+  2. **One session, counted twice.** A resume runs under `bin/cc-close-attrib`, which stays alive as
+     the PARENT of the real `claude` and carries the whole command line in its argv. Measured live:
+     `--duplicates` called `b418b97a` a split brain over pids 16125 (wrapper) and 16212 (child) —
+     one pane, one session — and its printed prescription was to retire a LIVE pane. The census
+     keeps only leaves: a pid that is the parent of another matched pid is the launcher.
+  3. **The NUDGE arm was unreachable code.** It sat BELOW the winner contest, and lr-select's
+     liveness census counts a live registry row as already-running — so the one sid the arm exists
+     for was filtered out of candidacy and retired as `LISTED … already-running` before the nudge
+     was reached. This is why `lr-reset-poller-inplace` was red as a whole suite rather than in one
+     case. The arm now runs ABOVE the contest (with its own headroom + per-run guards) and a
+     registry-live sid is dropped from the SPAWN pool so it cannot take a winner slot from a session
+     that needs a process. The contest still bounds every spawn — it bounds resurrections, and
+     typing into a pane that is already open is not one.
+  4. `gone -- '<pat>' "$log"` passed `--` as the pattern and the pattern as a nonexistent filename,
+     so that assertion could only ever FAIL — it never tested the runner shape at all.
+  Harness, same run: three fixtures were keyed on the incident's **live** sid (a tmux
+  `claude --resume 52e35019-…` has run since 00:51Z), so the real process table answered questions
+  the fixture's own registry row was meant to answer — tails zeroed, the `52e35019` prefix kept for
+  legibility. lr-fleet's ACCT pins asserted the config-dir basename where the repo's own
+  `lib/account-map.generated.sh` resolves `next2`. LR-o reaches the `LRP_TMUX_BIN` ladder through an
+  explicit `LR_POLLER_SPAWN=tmux` now — reaching it through a failed GUI re-pins the silent fallback
+  LR-m deleted this wave.
+  **Gate: 326/326 across the 18 suites, 0 failures** (`/tmp/lr100p-gate-5.log`), plus 3 new
+  argv-census cases in `tests/lr-lib.bats`.
+- 2026-09-09T05:xxZ · live mess, audited: the seven tmux orphans are now **six** (94d58849 is gone).
+  Two are the contained pair (52e35019 → tab 647, 0edc7e64 → tab 648). Four are sole copies, each
+  idle for days and each with **0 unlanded commits** in its worktree — 1bd8904c
+  (sevenrooms-bridge, last turn 2026-09-05), 3c4bdc06 (claude-infrastructure, 2026-09-06), 609597db
+  (claude-infrastructure, 2026-08-30), 9e3074fc (personal, 2026-08-29). Filed one operator row each
+  with the exact `tmux kill-session` command (`fae2b2d87a4d`, `09d6dff0e45f`, `2322c93da80e`,
+  `45424ff78f85`): killing a live session from a session is classifier-blocked, and the poller can
+  no longer create these. `--duplicates` after fix 2 above shows exactly one genuine duplicate,
+  52e35019 (pane 616 pid 80874 started 21:20 vs the tmux resume pid 77720 started 00:51).
