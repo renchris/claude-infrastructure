@@ -201,21 +201,42 @@ demonstrated by one full local round trip and one full cloud round trip carrying
     row routes LOCAL — the safe default — and the admission-time repair inside `ready_state()`
     (`:1519`) relabels it in the same call that consumes it. `CC_DISPATCH_VENUE_ONLY` is unset, so
     the one filter that could park an unlabelled row is not armed. Consequence: none. Not filed.
-  - **F1's residual has a CAUSE that is not the venue producer, and it is already filed and
-    operator-blocked.** `cc-venue run --apply` has exactly one automatic caller,
+  - **F1's residual has a CAUSE that is not the venue producer, and the cause is NOT the row this
+    close first blamed.** `cc-venue run --apply` has exactly one automatic caller,
     `scripts/autonomy-sweep.sh` §2b-ii, on a 6 h cadence. Both `~/.claude/autonomy/venue-pass.stamp`
-    and `premise-pass.stamp` have mtime **2026-09-07 ~12:00 — ~40 h stale against a 6 h cadence**.
-    The stamp is claimed BEFORE the pass runs, so a stale stamp proves the block was never REACHED,
-    not that it ran and did nothing. Corroborated from the other side: 27 `self-bound` records in
-    `~/.claude/autonomy/idl.jsonl`, `stopped_before` only ever `0b-author-death-join` (11) or
-    `1-collect-pages-alarms` (16), `elapsed_s` 430–1095 against `bound_s` 400 — i.e. the arms ABOVE
-    the stop now cost more than the entire budget, which is the condition `sweep_yield()`'s own
-    header (`:321-323`) names as the signal to re-measure them. The whole lower half of the sweep —
-    venue re-derivation, the currency pass, the grouping sweep — has not run for ~40 h. **Root cause
-    already filed: `41d05eae511c`** ("the autonomy sweep's launchd job still carries ProcessType
-    Background, which pins it … at PRI 4"), correctly BLOCKED on an operator `launchctl
-    bootout+bootstrap`. Not re-filed; the measured blast radius was added to that row instead.
-    Requested cadence is not delivered cadence (memory: `init-state-is-not-runtime-state`).
+    and `premise-pass.stamp` have mtime **2026-09-07 ~12:00 — ~40 h stale**. The stamp is claimed
+    BEFORE the pass runs, so a stale stamp proves the block was never REACHED, not that it ran and
+    found nothing. Requested cadence is not delivered cadence (memory:
+    `init-state-is-not-runtime-state`): the delivered tick rate is **2.2/h against a requested 12/h**.
+
+    ⚠️ **The self-bound is only half the mechanism, and the first draft of this entry got it wrong.**
+    Over 24 h, **52 ticks started: 26 self-bounded and 26 were SIGTERM'd by `cc-reaper`'s 600 s
+    orphan-bash floor**, and ZERO reached below `1-collect-pages-alarms` — the other nine
+    `sweep_yield` checkpoints have never fired in 7 d. Two drivable causes, neither of them the
+    launchd plist: (1) the **D4 author-death join (`:646-762`) is UNBOUNDED** — p50 582 s, max
+    1,459 s — so a tick entering it at t≈390 s reaches ≈970 s and is reaped, defeating the 400 s
+    self-bound whose whole arithmetic (`400 + CC_SWEEP_BOUND_S 180 = 580 < 600`) assumes every phase
+    fits 180 s; (2) **branch prune (`:556-581`) returns `rc=124` on 52/52 ticks**, burning p50 242 s
+    — 60 % of the entire budget — and completing nothing.
+
+    🚨 **The blast radius is far larger than "the venue label is stale": 14 of the 22 arms below the
+    cut are WRITERS**, including the class-B default actuator, six event-dir reapers,
+    `cc-premise sweep --record --close-falsified`, the custody deathwatch, and **§3 the desk notify —
+    the only channel by which any of this reaches the operator.** Measured on disk: **154 new pages
+    and 57 new announce-alarms written since the cut, none collected, summarised or delivered.**
+
+    **This is a fix that landed and whose symptom survived.** Row `8e0a3eb2c4a4` is `done`, and its
+    evidence cites precisely the arithmetic that is refuted above — it was closed on a STRUCTURAL
+    proof (11 checkpoints exist, 70/70 bats green) where the claim was BEHAVIOURAL (does the lower
+    half now run?). Downstream, `2d91af430c60`'s acceptance criterion (`premise_pass_rc:0 note:ok`)
+    is **structurally unreachable** while this holds, and two workers have already burned claims
+    against it. Filed as **`6de092171021`** with a self-retracting falsifier (venue stamp younger
+    than 12 h). `41d05eae511c` is a genuine AGGRAVATOR and stays operator-blocked — its plist FILE
+    dropped `ProcessType Background` on 09-06 but the LOADED job still reports `nice = 5` /
+    `spawn type = background (5)`, so a `launchctl bootout+bootstrap` is still owed; the measured
+    blast radius above was added to that row rather than duplicated into a new one. Evidence:
+    `/tmp/sweep-reach-2026-09-09.md`; predecessor analysis `docs/plans/DRAIN_CIRCUIT_2026-09-01.md`
+    §3b, which prescribed the self-bound that proved insufficient.
   - **F2's residual — REFUTED, and its prescribed remedy is a trap.** "No per-BRANCH interlock"
     reads as a hole; it is the opposite. `scripts/land-lock.sh:13-20` keys the mutex on the SHARED
     git dir (`--git-common-dir`), explicitly *not* the per-worktree toplevel, so at most one land
