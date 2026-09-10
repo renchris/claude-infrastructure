@@ -8,14 +8,22 @@
 # session-continue's wake floor, operator-readout). That design has exactly two blind spots, and both
 # were measured, not theorised:
 #
-#   1. NOBODY IS HOME. `cc-offload` opens with `--cwd "$PWD"` and
-#      `${ITERM_SESSION_ID:+--originator-pane …}`. Cloud fires come from the launchd dispatcher, whose
-#      cwd is `/` and which has no ITERM_SESSION_ID — so all 175 open cloud rows carry cwd `/`, NO
-#      originatorPane and NO notifyBack. `scripts/cloud-return.sh` faithfully detects the outcome and
-#      then has no address to send it to: **1055 of its 1116 wake attempts recorded "the declaration
-#      names no notify-back target — nothing to wake"** (61 real wakes, 94.5% discarded). The news is
-#      produced and thrown away. And because no interactive session's cwd is ever `/`, no `--cwd .`
-#      consumer has ever rendered those rows either.
+#   1. NOBODY IS HOME. `cc-offload` opens with `--cwd "$PWD"` and, as of 2026-09-10, an originator
+#      pane resolved `${CC_PANE_ID:-${ITERM_SESSION_ID:-}}`. Cloud fires come from the launchd
+#      dispatcher, whose cwd is `/`, so no interactive session's `--cwd .` consumer ever renders
+#      those rows and this pass is their only reader. AS MEASURED 2026-08-23 the rows also carried
+#      NO originatorPane and NO notifyBack: all 175 open cloud rows were unaddressable, and
+#      `scripts/cloud-return.sh` recorded **1055 of 1116 wake attempts** as "the declaration names
+#      no notify-back target — nothing to wake" (61 real wakes, 94.5% discarded).
+#
+#      ⚠ THE UNADDRESSABLE HALF OF THAT EXPIRED ON 2026-08-25, AND THE NUMBER ABOVE IS KEPT AS A
+#      DATED RECORD, NOT A STANDING QUANTITY. Re-measured 2026-09-10: every cloud row opened since
+#      that cutover — 347 of 347 — carries `notifyBack`, and the 19 still-open rows carrying neither
+#      field are all dated 2026-08-23..25, a dead cohort that stopped growing. What was still true
+#      on 2026-09-10 is narrower and is what ADDRESS 1 below now fixes: 347 of 347 carried notifyBack
+#      and ZERO carried originatorPane, and this file addressed only the latter. Do not quote either
+#      figure — RE-MEASURE, one command:
+#        cat ~/.claude/autonomy/custody/*.jsonl | jq -rs '"'"'[.[]|select(.kind=="open")]|group_by(.ts[0:10])[]|"\(.[0].ts[0:10]) n=\(length) nb=\([.[]|select(.notifyBack)]|length) op=\([.[]|select(.originatorPane)]|length)"'"'"' 
 #
 #   2. THE PEER CANNOT REPORT ITS OWN SIGKILL. The local lane discharges from
 #      `handoff-fire.sh sc_announce_before_retire` (an in-process step) or from a HANDOFF-PING the
@@ -73,8 +81,13 @@
 #   2. otherwise ⇒ ONE aggregated `cc-backlog needs` row, which `operator-readout.sh` renders into
 #      the counted OPERATOR ▸ block at every close. This is the cloud lane's fix: it replaces an
 #      address that does not exist with a store that is read by construction.
-# A peer whose originator is gone is the common case, not the exotic one — 175 of 179 open rows have
-# no originator at all — so path 2 is the load-bearing one.
+# WHICH PATH IS LOAD-BEARING IS A MEASUREMENT WITH A DATE, and it has already flipped once. On
+# 2026-08-23, 175 of 179 open rows named no originator at all, so path 2 carried everything and the
+# header said so flatly. On 2026-09-10 the same store says the cloud lane names its originator in
+# `notifyBack` on every row, so path 1 — once it reads that field, which it now does — is reachable
+# for the whole population path 2 was built to absorb. Path 2 remains the floor and must stay
+# unconditional: it is what survives an originator that is genuinely dead, and the aggregation is
+# what keeps this alarm off the always-firing kind.
 #
 # Env seams (tests): CC_CUSTODY_DIR · CC_CUSTODY_TTL_HOURS · CC_DEATHWATCH_STATE ·
 #   CC_DEATHWATCH_CUSTODY_BIN · CC_DEATHWATCH_NOTIFY_BIN · CC_DEATHWATCH_BACKLOG_BIN ·
@@ -297,7 +310,7 @@ DIRECT=0                # peers whose originator pane was reachable
 # `@sh` emits shell-quoted `name=value` assignments, so an empty value stays an empty value.
 while IFS= read -r _asn; do
   [ -n "$_asn" ] || continue
-  marker="" slug="" target="" cwd="" opane="" age="" stale=""
+  marker="" slug="" target="" cwd="" opane="" nb="" age="" stale=""
   eval "$_asn"
   [ -n "$marker$slug" ] || continue
   key="${marker:-$slug}"
@@ -315,14 +328,35 @@ while IFS= read -r _asn; do
   if already_reported "$key"; then n_latched=$((n_latched+1)); continue; fi
 
   # ADDRESS 1 — a live originator pane. The originator LEARNS, through the inbox it already reads.
+  #
+  # TWO SPELLINGS OF ONE OWNERSHIP, and this file read only the first. `notifyBack` is not a weaker
+  # signal than `originatorPane`: scripts/wrap-ledger.sh:1020 and hooks/session-continue.sh:655 both
+  # define `known` as the DISJUNCTION of the two and `mine` as a match on EITHER. This loop asked
+  # only `originatorPane`, so a row naming its originator in the other field was demoted to the
+  # aggregated ADDRESS-2 path with the pane alive, named, and reachable.
+  #
+  # HOW BIG: measured 2026-09-10, of the 347 cloud custody rows opened since the 2026-08-25 cutover,
+  # 347 carry `notifyBack` (pane 5, 341x; pane 330, 6x) and ZERO carried `originatorPane` — the
+  # whole cloud lane, on the fallback path, for want of reading one more field. bin/cc-offload now
+  # writes `originatorPane` too, but that reaches only rows opened from here on; this reaches the
+  # ones already open, and keeps the arm working for any producer that arms a wake target alone.
+  #
+  # FAIL-SAFE BY CONSTRUCTION, which is why the fallback needs no validation of its own. `notifyBack`
+  # may hold a `<worktree>-<pane>` form ("wt-pool-2-415") that is not a bare pane id, and
+  # peer_disposition's local-pane branch answers on EXACT membership of `cc-pane list` — so a
+  # non-pane value reads GONE, never ALIVE, and the row falls through to ADDRESS 2. The degrade is
+  # exactly today's behaviour, so the worst case of this change is the status quo.
   delivered=0
-  if [ -n "$opane" ] && [ "$opane" != "-" ] && [ -n "$NOTIFY_BIN" ]; then
-    if [ "$(peer_disposition "$opane")" = ALIVE ]; then
-      msg="CUSTODY-DEATHWATCH: the peer you fired (${slug:-$marker}, target ${target:-?}) is ${disp} and has NOT returned — its custody debt has been open ${age}h. Collect+land its work, then \`cc-custody return ${key}\`; if it is superseded, \`cc-custody abandon ${key} --why …\`."
-      if [ "$DRY" -eq 1 ]; then say "  would notify pane $opane about $key"; delivered=1
-      elif "$NOTIFY_BIN" "$opane" "$msg" >/dev/null 2>&1; then delivered=1; DIRECT=$((DIRECT+1)); fi
-    fi
-  fi
+  for cand in "$opane" "$nb"; do
+    [ -n "$cand" ] && [ "$cand" != "-" ] && [ -n "$NOTIFY_BIN" ] || continue
+    [ "$(peer_disposition "$cand")" = ALIVE ] || continue
+    msg="CUSTODY-DEATHWATCH: the peer you fired (${slug:-$marker}, target ${target:-?}) is ${disp} and has NOT returned — its custody debt has been open ${age}h. Collect+land its work, then \`cc-custody return ${key}\`; if it is superseded, \`cc-custody abandon ${key} --why …\`."
+    if [ "$DRY" -eq 1 ]; then say "  would notify pane $cand about $key"; delivered=1
+    elif "$NOTIFY_BIN" "$cand" "$msg" >/dev/null 2>&1; then delivered=1; DIRECT=$((DIRECT+1)); fi
+    # Record WHICH address carried it — the latch and the ledger below both name `$opane`, and a
+    # delivery credited to a field that was empty is a receipt for the wrong thing.
+    [ "$delivered" -eq 1 ] && { opane="$cand"; break; }
+  done
 
   if [ "$delivered" -eq 1 ]; then
     [ "$DRY" -eq 0 ] && mark_reported "$key" "notified:$opane"
@@ -334,7 +368,7 @@ while IFS= read -r _asn; do
     ORPHANS="${ORPHANS}${key}"$'\037'"${disp}"$'\037'"${age}h"$'\037'"${slug:--}"$'\037'"${target:--}"$'\037'"${cwd:--}"$'\n'
   fi
 done <<EOF
-$(printf '%s' "$OPEN_JSON" | jq -r '.[] | @sh "marker=\(.marker//"") slug=\(.slug//"") target=\(.targetPane//"") cwd=\(.cwd//"") opane=\(.originatorPane//"") age=\((.ageHours|tostring)//"?") stale=\(.stale|tostring)"')
+$(printf '%s' "$OPEN_JSON" | jq -r '.[] | @sh "marker=\(.marker//"") slug=\(.slug//"") target=\(.targetPane//"") cwd=\(.cwd//"") opane=\(.originatorPane//"") nb=\(.notifyBack//"") age=\((.ageHours|tostring)//"?") stale=\(.stale|tostring)"')
 EOF
 
 n_orphan="$(printf '%s' "$ORPHANS" | awk 'NF{n++} END{print n+0}')"

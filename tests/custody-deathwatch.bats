@@ -182,6 +182,47 @@ backdate() {
   [ "$(grep -c . "$FILED")" -eq 1 ]
 }
 
+@test "notifyBack addresses the direct notify when originatorPane is absent — the cloud lane's whole population" {
+  # RED-PROOF. This pass read ONLY `originatorPane`, while scripts/wrap-ledger.sh:1020 and
+  # hooks/session-continue.sh:655 both treat `notifyBack` as an equal spelling of the same
+  # ownership. Measured 2026-09-10: 347 of 347 cloud custody rows opened since the 2026-08-25
+  # cutover carry notifyBack and ZERO carried originatorPane — so the ENTIRE cloud lane took the
+  # aggregated ADDRESS-2 path while the pane that fired it was named in the row and alive.
+  pane_oracle 100 200
+  "$CUSTODY" open --cwd "$WT" --target 999 --marker M-NB --slug fire-nb --notify-back 200
+  run bash "$SUBJ"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c . "$NOTIFIED")" -eq 1 ]
+  grep -q '^200	' "$NOTIFIED" || false
+  [ "$(grep -c . "$FILED")" -eq 0 ]            # it was DELIVERED, so nothing aggregates
+}
+
+@test "originatorPane still WINS over notifyBack when both name a live pane" {
+  # EQUIVALENCE GUARD: the fallback must not reorder the incumbent. Green in both arms, so its power
+  # is the mutant — swap the loop's candidate order and this dies while the arm above stays green.
+  pane_oracle 100 200
+  "$CUSTODY" open --cwd "$WT" --target 999 --marker M-BOTH --slug fire-both \
+    --originator-pane 100 --notify-back 200
+  run bash "$SUBJ"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c . "$NOTIFIED")" -eq 1 ]
+  grep -q '^100	' "$NOTIFIED" || false
+}
+
+@test "a notifyBack that is not a pane id degrades to the operator row, never a bogus notify" {
+  # NEGATIVE CONTROL, and the reason the fallback needs no validator of its own. handoff-fire arms
+  # notifyBack as either a bare pane ("415") or a "<worktree>-<pane>" slug ("wt-pool-2-415"); the
+  # latter is not in `cc-pane list`, peer_disposition's EXACT-membership branch calls it GONE, and
+  # the row falls to ADDRESS 2 — precisely the pre-change behaviour. Without this arm the fallback
+  # could be shipping cc-notify calls at addresses that name nothing.
+  pane_oracle 100
+  "$CUSTODY" open --cwd "$WT" --target 999 --marker M-SLUG --slug fire-slug --notify-back wt-pool-2-415
+  run bash "$SUBJ"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c . "$NOTIFIED")" -eq 0 ]
+  [ "$(grep -c . "$FILED")" -eq 1 ]
+}
+
 @test "the deployed-copy guard: a checkout copy is INERT and says so" {
   pane_oracle 100
   "$CUSTODY" open --cwd "$WT" --target 999 --marker M-GUARD --slug fire-killed --originator-pane 100
@@ -228,6 +269,14 @@ backdate() {
   pane_oracle 602
   "$CUSTODY" open --cwd "$WT" --target 602 --slug fire-no-marker --originator-pane 102   # NO --marker
 
+  # THE MUTANT MUST MODEL THE CURRENT SUBJECT, NOT A FROZEN SNAPSHOT OF IT. This reconstruction
+  # hard-codes the positional field LIST, so every field the real loop gains has to be added here
+  # too — the loop body it splices in is the subject's own, and a field it reads but the @tsv feed
+  # never supplies is an `unbound variable` under `set -u`, i.e. a red that indicts the diff rather
+  # than the reader. `notifyBack` was added 2026-09-10 for the ADDRESS-1 fallback and appears here
+  # in the SAME position the subject's own @sh line uses; the regression under test — tab is IFS
+  # whitespace, so a NULL leading field shifts every column left — is unchanged by the arity.
+  #
   # arm 2 — the pre-fix subject, reconstructed as an ANCHOR-CHECKED mutant. The swap is an exact
   # whole-line replacement (python, not sed): the jq program carries `|`, `\(`, `"` and `//`, and a
   # sed expression escaping all four is unreadable AND silently no-ops when one escape rots — which
@@ -240,12 +289,12 @@ out, dropped, swapped_loop, swapped_feed = [], 0, 0, 0
 for line in open(src):
     s = line.rstrip('\n')
     if s == 'while IFS= read -r _asn; do':
-        out.append("while IFS=$'\\t' read -r marker slug target cwd opane age stale; do"); swapped_loop += 1; continue
+        out.append("while IFS=$'\\t' read -r marker slug target cwd opane nb age stale; do"); swapped_loop += 1; continue
     if s.startswith('  marker="" slug=') or s == '  eval "$_asn"' or s == '  [ -n "$_asn" ] || continue':
         dropped += 1; continue
     if '@sh "marker=' in s:
         out.append("""$(printf '%s' "$OPEN_JSON" | jq -r '.[] | [(.marker//""),(.slug//""),(.targetPane//""),"""
-                   """(.cwd//""),(.originatorPane//""),((.ageHours|tostring)//"?"),((.stale|tostring))] | @tsv')""")
+                   """(.cwd//""),(.originatorPane//""),(.notifyBack//""),((.ageHours|tostring)//"?"),((.stale|tostring))] | @tsv')""")
         swapped_feed += 1; continue
     out.append(s)
 assert swapped_loop == 1 and swapped_feed == 1 and dropped == 3, (swapped_loop, swapped_feed, dropped)
