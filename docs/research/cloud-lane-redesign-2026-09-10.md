@@ -131,8 +131,9 @@ since 09-08 pushed with `paths=` empty**, which `cloud-reconcile.sh:171` returns
 ### 3.3 The return arm as a throughput system (`B3-return-arm-throughput.md`)
 
 **Capacity-starved, not input-starved.** Thirteen branches sit RETURN-READY right now, all thirteen
-`git merge-tree` clean, while **25 of 25 land invocations since 09-08 terminate `exit:143 verify:"killed"`**
-— cut by the lane's own 5,400 s bound. Delivered: **0.5 lands/day over 09-01..09-10, 0.0 over the last
+`git merge-tree` clean, while **25 of 25 completed land invocations since 09-08 terminate `exit:143
+verify:"killed"`** — cut by the lane's own 5,400 s bound (`land.log` holds 36 rows on `claude/*` in the
+window: 25 × 143, 10 × 42 STALE-GATE rounds that are not separate invocations, 1 × −1). Delivered: **0.5 lands/day over 09-01..09-10, 0.0 over the last
 three days**; the only post-09-08 `Cloud-session:` commit on trunk (`140c2889b`) was landed by a local
 session adopting the branch, not by the arm. Two instrument corrections: `returned` rows are paperwork
 for already-landed content, not a land count (35 in September against 5 completed `ship-land`
@@ -277,9 +278,19 @@ browser) widens an unreviewed remote author's reach.
 
 **RETIRE — stop firing cloud sessions; harvest what is landable; keep nothing that only the lane
 needs.** Measured outcome: no loss of drain throughput today (the agent stratum is 32 rows, the local
-lane closes ~100/day and converts 89% of claims); ten units of landable work collected once; the 27
-blocked and 5 open rows about the lane become moot; 20K lines and ~26 commits/week of maintenance stop;
-the trust boundary closes; the land lock stops carrying cloud returns. Cost: forgo a pane-free venue and
+lane closes ~100/day and converts 89% of claims); ten units of landable work collected once; the 31
+blocked rows about the lane's machinery become moot; 20K lines and ~26 commits/week of maintenance stop;
+the trust boundary closes; the land lock stops carrying cloud returns. **It must be sequenced, or it
+strands work** (`W2-red-team.md`): the dispatcher's already-declared gate (`bin/cc-dispatch:2103-2127`)
+drops every cloud-planned item that holds an unlanded declaration *before* its local fallback
+(`:2759-2762`) and has no TTL, so if the retire/return passes stop first, the six open/claimed rows
+currently held by the 14 unretired declarations (`1f6208064577`, `badb132df232`, `c18e7ea9e6b1`,
+`9f8a985115a9`, `64c150ba2a8e`, `1dd6fbb6766c`) never fire in either lane. Order: settle the 14
+declarations (retire or return) and disable the six-hourly `cc-venue` relabel pass
+(`autonomy-sweep.sh:1311-1328`), then remove `CC_FIRE_CLOUD=on` from the two plist argv by a staged
+migration (the opt-in is not agent-editable; four cloud sessions fired today under it), then abandon
+the 133 open cloud custody debts with a reason, and keep `bin/cc-cloud` plus the declaration store
+read-only so `is-offbox` consumers and the one `live-cloud-worker` block (`2a65b9bf722d`) still resolve. Cost: forgo a pane-free venue and
 a ~10–20% per-session token saving on the rows it would take; forgo the option value when quota has
 headroom and the local lane cannot fire — a conjunction that WAS observed (09-05/06: the dispatcher fired
 zero and three accounts then reset at 21–49%, ≈2–2.5 account-weeks stranded; 09-08/09: 50 pane-anchor
@@ -319,14 +330,51 @@ the return arm; the strongest case for REDESIGN is the VM's one structural edge,
 the local lane's binding wiring defect. Three dimensions the brief omitted — demand, contention on the
 box's serialized land resource, and the trust boundary — all cut toward RETIRE and are folded in above.
 
-**Devil's advocate and red team against this memo's conclusion** — [wave 2, pending at draft time;
-filled in below].
+**Devil's advocate, frontier tier, against the RETIRE draft** (`W2-devils-advocate.md`): three
+accounting corrections, all accepted and folded in — the 10% maintenance figure was one-sided (genuine
+lane-machinery rows are 89 = 2.9%; maintenance commits 110 against 131 landed, half in the build-out),
+"two rows a day" was the classifier's admit rate rather than repair's capacity (4/day at the pre-gate
+offer rate, ~10/day with the denylist corrected and no scope widening — an option the draft never
+priced), and quota headroom with a dark local lane was observed at the last resets (202–253 pp stranded,
+09-05/06). Its verdict: 80 → 70, not below, because the lane fired nothing on those days either — the
+stranding indicts the dispatcher, which follow-on 2 addresses without a VM. The packet carries
+REPAIR-narrow as it recommended.
+
+**Red team, frontier tier, hunting where RETIRE fails** (`W2-red-team.md`): one HIGH-severity,
+unmitigated failure the draft did not name — the already-declared gate strands six open rows if the
+retire pass stops before the declarations are settled — now the sequencing in §6; five lower ones
+(cc-venue relabelling, the opt-in living in plist argv, the `live-cloud-worker` block needing the cloud
+oracle, 133 open custody debts, `is-offbox` liveness consumers), each with its mitigation named there.
+Two factual corrections applied: the rows the draft called "moot" were 31 blocked + 4 open, and the 4
+open are work *held by* the lane, not work about it; "25 of 25" holds only with STALE-GATE rounds
+excluded. No other repo depends on the lane (0 files, 0 `claude/*` heads on their remotes).
+
+**Negative space, lead inline** — three dimensions not explored and why: (1) cloud VMs as hosts for
+research *waves* (the `active ≤ 8` term refused 163 Agent-tool spawns in ten days) — not a redesign of
+this lane, because a subagent's report must return to a lead's context on this box; a different product;
+(2) the outcome value of the 55% code landings — asserted by zero reverts, not measured, because no
+store records what a landed fix was later worth; (3) the operator's own preference for keeping a venue
+they asked about — a value, not a measurement, and the reason the number is 70 and not 90.
 
 ---
 
 ## 8 · Decision
 
-[filled in after wave 2: the class-C packet id, its options, and the conviction line's final number]
+Conviction is **70% for RETIRE**, below the 90% bar at which this session would implement, and the
+research is exhausted — every remaining uncertainty (§10) is either structurally unmeasurable from this
+window or a value the operator holds. Filed as class-C decision packet **`663522aa67b1`** ("retire,
+repair, or redesign the 24/7 cloud backlog lane"), conviction 70, receipt this memo, recommendation
+`retire`, with three priced options: **retire** (the sequenced shutdown in §6 — settle 14
+declarations, disable the relabel pass, plist migration, harvest, abandon custody, keep the store
+read-only), **repair-narrow** (R1–R4 + trailer stripper + stale predicate + `paths=` fill + the
+denylist correction, no scope widening; 4–10 landed rows/day at $5–6), and **redesign-split** (refuted
+on cost and on the cheap-satisfaction failure mode; not recommended). `cc-decide list --open` shows
+it; the operator rules with `cc-decide action 663522aa67b1 --evidence <ref>` or `cc-decide veto`.
+
+Nothing in this memo was actuated: no cloud session fired, no row claimed, closed or unblocked, no
+plist touched. The harvest in follow-on 1 is agent work under this repo's standing-land authorization
+and is the one thing that should happen before the ruling, because the ten units are landable now and
+decay at the rate §3.1 measures (69% at one day, 28% at seven).
 
 ### The three follow-ons that stand whatever the operator rules
 
@@ -364,7 +412,8 @@ Reports (this campaign, landed beside this file under `docs/research/cloud-lane-
 `A1-reach-stratum.md` · `A2-reach-flow.md` · `A3-config-pricing.md` · `B1-stranded-branches.md` ·
 `B2-refusal-autopsy.md` · `B3-return-arm-throughput.md` · `C1-quota-pool.md` ·
 `C2-cost-per-landed-row.md` · `C3-local-refusals.md` · `D1-hostile-reviewer.md` · `D2-what-landed.md` ·
-`D3-gate-split.md` · `LEAD-notes.md`. The four inputs the campaign was given, unchanged:
+`D3-gate-split.md` · `W2-devils-advocate.md` · `W2-red-team.md` · `LEAD-notes.md`. The four inputs the
+campaign was given, unchanged:
 `~/.reso/research/cloud-lane-2026-09-10/{A-drain-rates,B-local-pipeline,C-cloud-pipeline,D-backlog-floor}.md`.
 
 Commands behind the load-bearing numbers (all read-only):
