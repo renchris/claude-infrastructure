@@ -38,6 +38,11 @@
 #                                    never REGRESSES them. For a reader that must not be starvable by
 #                                    another consumer's cursor write (bin/cc-await-ping — F-3).
 #   mailbox_promote_acked  <uuid>    LOCKED: acked=seen (the Stop-fold lag: last cycle's emitted is now consumed)
+#   EMIT-THEN-COMMIT, for HOOK callers whose stdout is discarded when they are reaped (6a178497df5f):
+#   mailbox_drain_claim / mailbox_drain_release <uuid>   non-waiting per-box drain claim
+#   mailbox_window_end <uuid> <from> [max]               echo the end cursor of (from, …] capped at max
+#   mailbox_peek_range <uuid> <from> <end>               print (from, end], advance nothing
+#   mailbox_commit_seen <uuid> <end>                     LOCKED seen=max(seen,end) — AFTER the emit
 #
 # ── FORWARD CHAINS (v3 D1 — succession must not strand an inbox) ──────────────────────────────────
 # The mailbox is PANE-UUID-keyed, so a recycle/succession orphans the predecessor's box: live forensics
@@ -166,8 +171,8 @@ _mbx_mtime() { # <path> → epoch seconds, 0 when unknowable
 # So: stamp an owner token on acquire and verify it on release. That closes the chain without
 # touching the dup-over-hang policy. It also lets the reap convict faster than the TTL when the
 # holder is provably dead, while still never stealing from a live one before its TTL.
-_mbx_lock() { # <uuid> → 0 acquired, 1 gave up (caller proceeds lock-free: dup-risk, never a hang)
-  local u="$1" ld waited=0 step=50 max="${CC_MBX_LOCK_WAIT_MS:-2000}" stale="${CC_MBX_LOCK_STALE_S:-10}"
+_mbx_lock() { # <uuid> [max_wait_ms] → 0 acquired, 1 gave up (caller proceeds lock-free: dup-risk, never a hang)
+  local u="$1" ld waited=0 step=50 max="${2:-${CC_MBX_LOCK_WAIT_MS:-2000}}" stale="${CC_MBX_LOCK_STALE_S:-10}"
   mkdir -p "$(_mbx_dir)" 2>/dev/null || return 1
   ld="$(_mbx_dir)/.$u.lock"
   while ! mkdir "$ld" 2>/dev/null; do
@@ -338,6 +343,16 @@ mailbox_wake_idle_scoped() { # <uuid> → 0 iff the LIVE watcher declares idle-s
 # guard's acked cursor is what makes a post-print emit-failure loud, so advancing seen inside the lock is
 # safe (F1 atomicity) without needing emit-before-advance for the reliable path. Returns 1 if the seen
 # write FAILED (F9): the caller must escalate, not re-loop on the same mail.
+#
+# ⚠ REFUTED 2026-09-10 (backlog 6a178497df5f) — kept, not deleted, because it is the record of what the
+# drain was built on. "The guard's acked cursor makes a post-print emit-failure loud" holds only until the
+# next Stop: session-continue.sh runs mailbox_promote_acked (acked=seen) unconditionally, so a body taken
+# here and never emitted — the hook reaped at its 5 s timeout between this take and its JSON write — is
+# promoted to CONSUMED one turn later and no reader surfaces it again. Measured: 322 `hook_cancelled`
+# records for hooks/mailbox-drain.sh in 30 days, most of them SessionStart at ~5.03 s, where the drain
+# took its own mail FIRST and then ran slow adoption. Hook callers now use EMIT-THEN-COMMIT below
+# (mailbox_drain_claim → mailbox_peek_range → emit → mailbox_commit_seen); this primitive stays for
+# callers whose print IS the delivery and for the lib-skew fallback.
 mailbox_take() { # <uuid> [ack_now]  (ack_now=1 ⇒ reliable channel: advance acked too)
   mailbox_take_n "${1:-}" "${2:-0}" 0
 }
@@ -469,6 +484,77 @@ mailbox_peek_from() { # <uuid> <from>   — NON-CONSUMING: prints (from, EOF], t
   printf '%s' "$body"
   _mbx_unlock "$u"
   return 0
+}
+
+# ── EMIT-THEN-COMMIT (backlog 6a178497df5f, 2026-09-10) ──────────────────────────────────────────
+# A HOOK's emit is its delivery only if the harness READS its stdout, and a hook reaped at its timeout
+# has its stdout discarded. `mailbox_take_n` advances `.seen` before its caller has emitted anything,
+# so a reap anywhere between the take and the JSON write leaves the window in (acked, seen] — and the
+# next Stop's mailbox_promote_acked (acked=seen) turns that into CONSUMED. Nothing reads it again.
+#
+# So a hook caller splits the take into its two claims and orders them the safe way round:
+#   1. mailbox_drain_claim   — one drain per box at a time (what the locked take gave for free: two
+#                              concurrent PostToolUse drains must not both show one window)
+#   2. mailbox_window_end + mailbox_peek_range — read the window, advance NOTHING
+#   3. emit the JSON; only if that write succeeded:
+#   4. mailbox_commit_seen   — advance `.seen` to exactly the window's end, never regressing
+# A reap before 4 leaves the window pending, so the next boundary delivers it; a reap between 3 and 4
+# is a duplicate. That is the lib's declared bias: a dup is cheap, a silent drop is not.
+#
+# The claim is a mkdir lock that does not wait (a held claim means another drain is delivering this
+# window right now). A reaped holder's pid is dead, so the next claimant takes it over at once; the
+# lock's mtime TTL covers a holder whose pid was reused.
+mailbox_drain_claim() { # <uuid> → 0 claimed · 1 another LIVE drain holds it (deliver nothing now)
+  _mbx_valid_uuid "${1:-}" || return 1
+  _mbx_lock "${1}.drain" 0
+}
+mailbox_drain_release() { # <uuid> — releases only a claim this process owns
+  _mbx_valid_uuid "${1:-}" || return 0
+  _mbx_unlock "${1}.drain"
+}
+
+# Echo the cursor a window (from, …] of at most <max> lines ends at (max 0/absent ⇒ to EOF).
+# Exit 1 (echoing <from>) when the window is empty.
+mailbox_window_end() { # <uuid> <from> [max]
+  local u="${1:-}" from max="${3:-0}" cur
+  from="$(_mbx_int "${2:-0}")"
+  case "$max" in ''|*[!0-9]*) max=0 ;; esac
+  cur="$(mailbox_lines "$u")"
+  if [ "$cur" -le "$from" ]; then echo "$from"; return 1; fi
+  if [ "$max" -gt 0 ] && [ $(( cur - from )) -gt "$max" ]; then cur=$(( from + max )); fi
+  echo "$cur"
+}
+
+# NON-CONSUMING: print lines (from, end], touch no cursor. Locked for the same torn-read reason as
+# mailbox_peek_from. Exit 1 = empty window.
+mailbox_peek_range() { # <uuid> <from> <end>
+  local u="${1:-}" from end f body
+  _mbx_valid_uuid "$u" || return 1
+  from="$(_mbx_int "${2:-0}")"; end="$(_mbx_int "${3:-0}")"
+  [ "$end" -gt "$from" ] || return 1
+  f="$(mailbox_file "$u")"; [ -f "$f" ] || return 1
+  _mbx_lock "$u" || true
+  body="$(tail -n +"$((from + 1))" "$f" 2>/dev/null | head -n "$(( end - from ))")"
+  _mbx_unlock "$u"
+  [ -n "$body" ] || return 1
+  printf '%s' "$body"
+  return 0
+}
+
+# LOCKED: advance `.seen` to <end>, NEVER regressing it (another consumer may already be past us, and
+# writing our smaller end over it would un-deliver its mail). Exit 0 = committed or already past ·
+# 2 = the write FAILED (the window will surface again: a dup, never a loss).
+mailbox_commit_seen() { # <uuid> <end>
+  local u="${1:-}" end seen rc=0
+  _mbx_valid_uuid "$u" || return 2
+  end="$(_mbx_int "${2:-0}")"
+  _mbx_lock "$u" || true
+  seen="$(mailbox_seen "$u")"
+  if [ "$seen" -lt "$end" ]; then
+    _mbx_write_int "$(_mbx_dir)/$u.seen" "$end" || rc=2
+  fi
+  _mbx_unlock "$u"
+  return "$rc"
 }
 
 mailbox_promote_acked() { # <uuid> — the Stop-fold lag: everything emitted last cycle is now consumed (a turn ran)
