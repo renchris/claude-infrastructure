@@ -203,6 +203,85 @@ EOF
   [ "$output" = "unknown" ]
 }
 
+# ── 3b. THE TWO FALSE YESES (LIMIT_RECOVER_100P, docs/research/lr100p-2026-09-09/
+#        q-survivability-spawn.md § P5). Both measured on kitty 0.48.2 / macOS: the gate said `yes`
+#        and the window VANISHED when its child exited. Each case below was red on the pre-fix tree.
+
+fixture_p5_login_sleep() {  # P5, verbatim census: kitty wraps any SHELL argv in /usr/bin/login, and
+                            # `-c 'exec sleep 6'` leaves login as the only root, waiting on sleep.
+  cat > "$PSTABLE" <<'EOF'
+1427	1	1427	-1	??	/Applications/kitty.app/Contents/MacOS/kitty	/Applications/kitty.app/Contents/MacOS/kitty
+71679	1427	71679	71725	ttys057	/usr/bin/login	/usr/bin/login -f -l -p chrisren kitten run-shell --shell /bin/zsh -l -i -c exec sleep 6
+71725	71679	71725	71725	ttys057	sleep	sleep 6
+EOF
+}
+
+fixture_634_runner() {      # pane 634, the handoff-fire standard (20 of 34 windows): the SAME login
+                            # wrapper, but its child is `bash cc-pane-runner`, which survives.
+  cat > "$PSTABLE" <<'EOF'
+1427	1	1427	-1	??	/Applications/kitty.app/Contents/MacOS/kitty	/Applications/kitty.app/Contents/MacOS/kitty
+50100	1427	50100	50300	ttys049	/usr/bin/login	/usr/bin/login -f -l -p chrisren kitten run-shell --shell /bin/zsh -l -i -c exec "$CC_PANE_RUNNER"
+50101	50100	50101	50300	ttys049	bash	bash /Users/chrisren/Development/claude-infrastructure/bin/cc-pane-runner
+50200	50101	50200	50300	ttys049	/bin/zsh	/bin/zsh -l -i
+50300	50200	50300	50300	ttys049	bash	bash /Users/chrisren/.claude/bin/cc-close-attrib claude
+50301	50300	50300	50300	ttys049	/Users/chrisren/.claude-220/node_modules/.bin/claude	claude --effort high
+EOF
+}
+
+fixture_expect_plus_detritus() {  # P5 secondary: an expect root (pane 32's shape) on a tty that ALSO
+                                  # carries the operator's p10k/gitstatus `-zsh` detritus, reparented
+                                  # to launchd. By the ROOT definition those are roots, and shells.
+  cat > "$PSTABLE" <<'EOF'
+1427	1	1427	-1	??	/Applications/kitty.app/Contents/MacOS/kitty	/Applications/kitty.app/Contents/MacOS/kitty
+9568	1427	9568	9568	ttys021	expect	expect -c set timeout 240 spawn -noecho env claude --resume 30614274
+3492	1	3490	9568	ttys021	/bin/zsh	-zsh
+3495	1	3490	9568	ttys021	/bin/zsh	/bin/zsh
+EOF
+}
+
+@test "P5: a login wrapper whose child is NOT a shell says no — login waits and exits with it" {
+  fixture_p5_login_sleep
+  run pane_shell_root /dev/ttys057
+  [ "$output" = "no" ]
+}
+
+@test "P5 CONTROL: the same login wrapper over cc-pane-runner still says yes" {
+  # Without this the fix is indistinguishable from deleting `login` from the allowlist, which would
+  # refuse every runner-rooted pane — i.e. every pane handoff-fire and lr-handoff now spawn.
+  fixture_634_runner
+  run pane_shell_root /dev/ttys049
+  [ "$output" = "yes" ]
+  fixture_normal_pane                          # …and a bare zsh root (pane 616's shape) is untouched
+  run pane_shell_root /dev/ttys000
+  [ "$output" = "yes" ]
+}
+
+@test "P5 secondary: ppid-1 shell detritus cannot carry an expect root to yes" {
+  fixture_expect_plus_detritus
+  run pane_shell_root /dev/ttys021
+  [ "$output" = "no" ]
+}
+
+@test "detritus ALONE is unknown, never no — skipping a root may not manufacture a refusal" {
+  # Refusal needs roots READ and none a shell. A tty holding only launchd-reparented shells has no
+  # root this predicate can judge, so it must abstain, exactly as an empty tty does.
+  cat > "$PSTABLE" <<'EOF'
+3492	1	3490	3490	ttys030	/bin/zsh	-zsh
+3495	1	3490	3490	ttys030	/bin/zsh	/bin/zsh
+EOF
+  run pane_shell_root /dev/ttys030
+  [ "$output" = "unknown" ]
+}
+
+@test "a login with no child on the tty is unknown, never no" {
+  # login between fork and exec, or its child already gone: nothing to descend to, so no evidence.
+  cat > "$PSTABLE" <<'EOF'
+71679	1427	71679	71679	ttys058	/usr/bin/login	/usr/bin/login -f -l -p chrisren
+EOF
+  run pane_shell_root /dev/ttys058
+  [ "$output" = "unknown" ]
+}
+
 # ── 4. THE ACTUATOR — the branch that types, and its kill-switch control ─────────────────────────
 
 setup_recycle() {

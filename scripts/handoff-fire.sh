@@ -3548,8 +3548,21 @@ EOF
 # which tests/handoff-recycle-expect-probe.bats §B already names as just as broken as one that
 # always types. The destructive case here is POSITIVELY detectable, so it does not need the
 # fail-closed default that a "safe to type" question does.
+#
+# TWO ROOTS ARE NOT WHAT THEY LOOK LIKE (LIMIT_RECOVER_100P, q-survivability-spawn.md § P5 —
+# MEASURED on kitty 0.48.2 / macOS, both times the gate said `yes` and the window vanished):
+#   · `login` is not a shell. kitty wraps every SHELL argv in /usr/bin/login, which forks, waits
+#     and exits with its child — so `-c 'exec sleep 6'` left login as the only root and read `yes`.
+#     A login root is judged by its CHILD on this tty (bash cc-pane-runner or zsh → yes; sleep,
+#     expect, a bare binary → no). One generation deep by design: a launcher spelled
+#     `zsh -c 'exec bash -c "exec expect …"'` still passes — the runner-rooted spawn and its argv
+#     assertions are the guard, this is the backstop.
+#   · ppid-1 shells are the operator's p10k/gitstatus detritus, reparented to launchd. They are
+#     roots by the definition above and they are shells, so they held an expect root at `yes`.
+#     They are skipped rather than counted as non-shells: a tty holding ONLY detritus has no root
+#     this can judge, and must abstain like an empty one — never manufacture a `no`.
 pane_shell_root() { # $1=pane tty (path or basename) → prints yes|no|unknown · ALWAYS exits 0
-  local ptty="${1:-}" rows onttys shells=0 seen=0 pid ppid comm
+  local ptty="${1:-}" rows onttys shells=0 seen=0 pid ppid comm kids
   [ -n "$ptty" ] || { printf 'unknown'; return 0; }
   ptty="${ptty##*/}"
   rows="$(ps -o pid=,ppid=,comm= -t "$ptty" 2>/dev/null || true)"
@@ -3561,10 +3574,20 @@ pane_shell_root() { # $1=pane tty (path or basename) → prints yes|no|unknown �
     [ -n "$pid" ] && [ -n "$comm" ] || continue
     # A ROOT is a process whose parent is not itself on this tty.
     case " $onttys " in *" $ppid "*) continue ;; esac
-    seen=$((seen + 1))
+    [ "$ppid" = 1 ] && continue                   # launchd-reparented detritus — not the pane's argv
     comm="${comm##*/}"; comm="${comm#-}"          # /bin/zsh and -zsh are both zsh
+    if [ "$comm" = login ]; then
+      kids="$(printf '%s\n' "$rows" | awk -v p="$pid" '$2 == p { c = $3; sub(/.*\//, "", c); sub(/^-/, "", c); print c }' | tr '\n' ' ')"
+      [ -n "${kids// /}" ] || continue            # no child to judge — no evidence either way
+      seen=$((seen + 1))
+      case " $kids " in
+        *" zsh "*|*" bash "*|*" sh "*|*" dash "*|*" ksh "*|*" fish "*|*" tcsh "*|*" csh "*) shells=$((shells + 1)) ;;
+      esac
+      continue
+    fi
+    seen=$((seen + 1))
     case "$comm" in
-      zsh|bash|sh|dash|ksh|fish|tcsh|csh|login) shells=$((shells + 1)) ;;
+      zsh|bash|sh|dash|ksh|fish|tcsh|csh) shells=$((shells + 1)) ;;
     esac
   done <<EOF
 $(printf '%s\n' "$rows")
