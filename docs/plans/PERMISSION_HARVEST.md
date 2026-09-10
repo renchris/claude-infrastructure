@@ -605,3 +605,43 @@ env-only in-session guard with an override variable (replaced, B1-4).
   `cc-permission-audit`'s existing suites guard the move.
 - **Prefix form only, ≤3 tokens.** The only form that is whitespace-tolerant, survives the
   auto-mode drop, and composes across compounds (matcher doc DO #1–#3).
+
+## 12. The hook-layer ceiling — §3.5's "hook-layer levers" priced (2026-09-10)
+
+**Record:** `docs/research/permission-harvest-hook-ceiling-2026-09-10.md`; instrument shipped at
+`docs/research/permission-harvest-hook-ceiling-2026-09-10/hook-ceiling.py`. Closes cc-backlog
+`5a629c6465d1` (condition `permission-harvest-structural-levers`, filed by B3-6).
+
+**§3.5 of wave A named STRUCTURAL the "authoring-habit / hook-layer levers" and never priced
+them. Priced, the premise is REFUTED:** of 1,752 structural rows the hook layer's ceiling — no
+danger, no operator fence, no ACE dispatcher, no verb-from-substitution, decomposable — is 444
+(25.3%), and the greedy cover's first three picks are **`rm` → `git` → `curl`**, carrying 181 of
+them. All three are owned by guards that already exist (`rm` delegated to
+`hooks/rm-safe-allowlist.sh`, `git` behind the operator's own fence, `curl` hook-raised at
+1,367/1,368 per §10). Excluding them leaves **33 rows = 1.9% of structural**, whose own cover
+dies after `cat` (9) into a tail of single-session ad-hoc scripts no whitelist can name. So both
+layers now agree and `proposed=0` is the right steady state at each: **≤0.6% from allow rules,
+≤1.9% from hook levers.** §10's recommendation — structural breakdown and curl attribution as the
+headline, value sized on consolidation — stands and is strengthened.
+
+**Landed anyway, as a MEASUREMENT-FIDELITY fix and not a lever** (`hooks/lib/smart-bash-allowlist.py`,
+`tests/smart-bash-allowlist-inert.bats`, `tests/sba-mutate.py`): four shapes that cannot execute
+anything were each deferring a whole command — `$(( … ))` arithmetic (87 rows), a `#` comment line
+(162 occurrences / 114 rows), `[` (133/102) and `:` (50/39), the last two being exact synonyms of
+`test` and `true`, which were in `READ_ONLY` all along. Measured A/B over all 3,771 archived Bash
+rows: **allow 162 before, 162 after — 0 prompts cleared, 0 regressions.** The reason to land it is
+that `decide()` returns on its FIRST refusal, so the arithmetic blanket-refusal MASKED every other
+cause in those rows: 111 rows presented as single-cause "cannot decompose" — which reads as the
+largest single-lever win in the corpus — and every one carried other blockers underneath. 46 rows
+now decompose that could not, so the weekly headline attributes them to their real verbs. ⚠️ **A
+first-cause histogram over this population is a MASK, not a distribution**; `hook-ceiling.py`
+labels it so and reports full cause SETS.
+
+**Two instrument defects, both about the arm rather than the subject, recorded because each
+produced a confident wrong answer:** (a) the core resolves `_RM_HOOK` from its own `__file__`, so a
+patched flat copy loses the sibling hook, refuses every `rm` segment, and the first A/B reported
+**three regressions that were pure artifact** — arms are now mirrored `hooks/` trees with the
+precondition ASSERTED, not hoped; (b) `local name="$1" d="$TMP/$name"` expands `$name` to EMPTY in
+one statement, so both test arms resolved to the tmpdir root and the pre-fix tree silently
+OVERWROTE the fixed one, making the control compare a file against itself — caught only by the
+positive control ON the control (a grep into a directory that had never been created).

@@ -1790,8 +1790,14 @@ def render_report(doc, days):
         w("  apply re-runs this whole pipeline live and writes proposed ∩ fresh — a decayed rule is a "
           "named drop, a tampered one is exit 4.")
     else:
+        # The "hook-layer levers" half of this line was PRICED on 2026-09-10 and came back ≤1.9%
+        # of structural rows: the ceiling's top three verbs (rm, git, curl) are each already owned
+        # by an existing guard, so levering them overrules a standing decision rather than closing
+        # a gap. Saying "these are hook-layer levers" without the price reads as an open lead, and
+        # this line is the operator's weekly report — so it now names where the number lives.
         w("  nothing to apply. The STRUCTURAL and HOOK_RAISED shares above are hook-layer levers "
-          "(hooks/lib/smart-bash-allowlist.py), not rule levers.")
+          "(hooks/lib/smart-bash-allowlist.py), not rule levers — but PRICED at ≤1.9% of "
+          "structural rows: docs/research/permission-harvest-hook-ceiling-2026-09-10.md.")
     return "\n".join(out) + "\n"
 
 
