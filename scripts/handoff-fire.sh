@@ -2004,10 +2004,21 @@ hf_transplant_evidence() { # $1=sid $2=roots (projects dirs, space-separated) $3
     } >&2
     return 2
   fi
+  # `~/.claude-next/projects` is a SYMLINK onto `~/.claude/projects` — the two are ONE account
+  # behind a mirror (lr-fleet's lf_dedup_mirror carries the same note for the census). Counting
+  # PATHS therefore reads a single physical tombstone as two and refuses every legitimate
+  # transplanted-source close on the `next` account: measured 2026-09-10, one 334-byte
+  # .HANDOFF.json enumerated under both roots aborted the retirement of a verified successor.
+  # Compare RESOLVED paths, so only a genuinely distinct file counts as a duplicate.
+  local _hf_ts_seen="" _hf_ts_rp
   for pd in $roots; do
     for ts in "$pd"/*/"$sid".HANDOFF.json; do
       [ -f "$ts" ] || continue
-      [ -z "$HF_TS_TOMBSTONE" ] || dupes=1
+      _hf_ts_rp="$(readlink -f "$ts" 2>/dev/null || printf '%s' "$ts")"
+      case " $_hf_ts_seen " in *" $_hf_ts_rp "*) continue ;; esac
+      [ -z "$_hf_ts_seen" ] && [ -n "$HF_TS_TOMBSTONE" ] && dupes=1
+      [ -z "$_hf_ts_seen" ] || dupes=1
+      _hf_ts_seen="$_hf_ts_seen $_hf_ts_rp"
       HF_TS_TOMBSTONE="$ts"
     done
   done
