@@ -48,6 +48,11 @@ setup() {
   unset CC_TERM
   export CC_FIRE_CAPACITY_GATE=off
   export CC_FIRE_HEADROOM_GATE=off
+  # capacity-admit reads LIVE load, reclaimable memory and a `ps` census of session trees, so an
+  # unclosed gate makes this suite a function of the desk rather than of its subject (it goes
+  # red-by-desk on a busy box — backlog 5ef0dcb22aec). The admit gate is not the subject of any
+  # case here; every one of them is a source-level or fixtured-`ps` assertion.
+  export CC_ADMIT_GATE=off
 
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
@@ -386,4 +391,70 @@ SHIM
   [ "$output" != "0" ]
   run grep -c '\[ ! -t 0 \]' "$RR"
   [ "$output" = "1" ]
+}
+
+# ── 7. THE LAST MEMBER OF THE CLASS: lr-fire-resume.sh (2026-09-10) ─────────────────────────────
+#
+# docs/research/recycle-pane-survivability-2026-08-26.md states the rule for the fleet — "*any* pane
+# an agent may later be asked to recycle must end its command with a shell, and only cc-pane-runner
+# and now reso-resume-one state that" — and calls the survivability gate above "a guard rather than a
+# guarantee". scripts/limit-recover/lr-fire-resume.sh is a DERIVATIVE of bin/reso-resume-one (":4")
+# that did not take c67bda626's cure: it `exec expect`'d as its last statement, and lr-handoff.sh:690
+# hands it to kitty in the pane's ROOT argv slot — including the `--type=os-window` fallback, where
+# the window destroyed by the session's own exit is a whole OS window.
+#
+# tests/kitty-recovery-launch.bats:483 already describes this exact file without naming it: its
+# SURVIVABILITY CONTROL fixture is "the pre-fix shape of bin/reso-resume-one, and of every launcher
+# argv that has not adopted the invariant".
+
+@test "lr-fire-resume no longer makes expect the pane's TERMINAL process" {
+  LR="$REPO/scripts/limit-recover/lr-fire-resume.sh"
+  [ -f "$LR" ] || { echo "subject missing: $LR" >&2; return 1; }
+  run grep -c '^exec expect -c' "$LR"
+  [ "$output" = "0" ]
+  run grep -c '^expect -c' "$LR"
+  [ "$output" = "1" ]
+  run grep -c '^exec "\${SHELL:-/bin/zsh}" -l -i' "$LR"
+  [ "$output" = "1" ]
+}
+
+@test "lr-fire-resume: errexit must not swallow the fall-through" {
+  # THE ONE PLACE THIS DIFFERS FROM THE SIBLING, and a verbatim copy of the cure is wrong here.
+  # bin/reso-resume-one runs `set -uo pipefail`, so a bare `expect …` followed by `rr_rc=$?` is safe.
+  # This file runs `set -euo pipefail`, so an expect that returns non-zero would abort the script
+  # under errexit and NEVER reach the shell — i.e. the pane would still die on exactly the exits this
+  # change exists to survive, while the source read as cured. A command on the left of `||` is exempt
+  # from errexit, so `|| lr_rc=$?` is what makes the rc readable AND the fall-through reachable.
+  LR="$REPO/scripts/limit-recover/lr-fire-resume.sh"
+  run grep -c '^set -euo pipefail' "$LR"
+  [ "$output" = "1" ]                       # the premise this case exists for
+  # -F, not a regex: `?` is a QUANTIFIER in this box's grep even in BRE (it is ugrep), and the
+  # dialect under bats need not be the one measured at the prompt — a fixed string is dialect-proof.
+  run grep -cF "' || lr_rc=\$?" "$LR"
+  [ "$output" = "1" ]
+  # and the rc must be initialised before the call, or `set -u` kills it on the success path
+  run grep -c '^lr_rc=0' "$LR"
+  [ "$output" = "1" ]
+}
+
+@test "lr-fire-resume: a non-tty caller must NOT be handed an interactive shell" {
+  # lr-handoff.sh:813 names this shape: running the launcher from a Bash TOOL call "kills the resumed
+  # session the moment expect's interact reads EOF on a non-tty stdin". Exec'ing `zsh -i` there would
+  # sit reading EOF in a loop. The guard is an AFFIRMATIVE check on stdin being a tty.
+  LR="$REPO/scripts/limit-recover/lr-fire-resume.sh"
+  run grep -c '\[ ! -t 0 \]' "$LR"
+  [ "$output" = "1" ]
+}
+
+@test "lr-fire-resume SURVIVABILITY CONTROL — the same greps FAIL on the pre-fix shape" {
+  # Without this the three cases above could pass over predicates that cannot fail. The fixture IS
+  # the subject's own pre-fix tail, so a green here would mean the assertions credit nothing.
+  pre="$BATS_TEST_TMPDIR/pre-fix"
+  printf '#!/bin/bash\nset -euo pipefail\nexec expect -c %s\n  interact\n%s\n' "'" "'" > "$pre"
+  run grep -c '^exec expect -c' "$pre"
+  [ "$output" = "1" ]                                   # the defect is present in the fixture
+  run grep -c '^exec "\${SHELL:-/bin/zsh}" -l -i' "$pre"
+  [ "$output" = "0" ]                                   # and the cure is absent
+  run grep -cF "' || lr_rc=\$?" "$pre"
+  [ "$output" = "0" ]
 }

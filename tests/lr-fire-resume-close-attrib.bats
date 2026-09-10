@@ -31,9 +31,13 @@ setup() {
 
   command -v expect >/dev/null || skip "expect(1) not installed"
 
-  # The expect program, verbatim between `exec expect -c '` and its closing quote.
+  # The expect program, verbatim between `expect -c '` and its closing quote.
   EXP="$BATS_TEST_TMPDIR/resume.exp"
-  sed -n "/^exec expect -c '\$/,/^'\$/p" "$FIRE" | sed '1d;$d' > "$EXP"
+  # The end anchor is `^' ||`, not a bare `^'`: the subject no longer EXECs expect (it captures the
+  # rc and falls through to a login shell so the pane outlives the session), so its closing quote
+  # line is now `' || lr_rc=$?`. A range whose START never matches emits NOTHING, so a stale anchor
+  # here fails LOUD on the `-s` check below rather than silently extracting the wrong span.
+  sed -n "/^expect -c '\$/,/^' ||/p" "$FIRE" | sed '1d;$d' > "$EXP"
   [ -s "$EXP" ] || { echo "extraction of the expect body from $FIRE failed" >&2; return 1; }
   grep -q 'spawn -noecho env' "$EXP"      # extraction sanity only — the arms below do the work
 

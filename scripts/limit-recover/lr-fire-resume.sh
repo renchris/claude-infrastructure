@@ -406,10 +406,30 @@ export LR_CFG="$cfg" LR_BIN="$BIN" LR_MODEL="$model" LR_EFFORT="$effort" LR_SID=
 LR_WRAP="$HOME/.claude/bin/cc-close-attrib"
 [[ -x "$LR_WRAP" ]] || LR_WRAP=""
 export LR_WRAP
+# ── THE PANE MUST OUTLIVE THE SESSION IN IT ──────────────────────────────────────────────────────
+# This used to be `exec expect`, which made expect(1) this pane's TERMINAL process: nothing under
+# it, nothing after it. Every way a resumed CC can end — a crash, a usage limit, and above all the
+# `/exit` that `handoff-fire.sh --recycle` types — therefore ended the PANE too, because kitty
+# closes a window whose only child has exited, and lr-handoff hands this script to kitty in the
+# pane's ROOT argv slot (`launch … -- /bin/bash "$LAUNCHER"`, lr-handoff.sh:690) including the
+# `--type=os-window` fallback, where the window that dies is a whole OS window.
+#
+# bin/reso-resume-one — the file this one is a derivative of — took this cure in c67bda626 after
+# pane 32 was destroyed by its own /exit on 2026-08-26. This script is the last member of that
+# class to adopt it; docs/research/recycle-pane-survivability-2026-08-26.md states the rule for
+# the fleet: *any* pane an agent may later be asked to recycle must end its command with a shell,
+# and calls the survivability gate "a guard rather than a guarantee".
+#
+# 🚨 `lr_rc=0` + `|| lr_rc=$?` are LOAD-BEARING, and are the one place this differs from the
+# sibling. reso-resume-one runs `set -uo pipefail`; THIS file runs `set -euo pipefail` (:23), so a
+# bare `expect …` returning non-zero would abort the script under errexit and never reach the
+# fall-through — the pane would still die on exactly the exits this change exists to survive.
+# A command on the left of `||` is exempt from errexit, which is what makes the rc readable.
+lr_rc=0
 # shellcheck disable=SC2016  # single quotes are REQUIRED: the body below is an expect(1) program,
 #   and its $env(...)/$bin references must reach expect uninterpreted. Bash expansion here would
 #   corrupt the script — the values are passed in via the LR_* environment exported above.
-exec expect -c '
+expect -c '
   set timeout 300
   set cfg    $env(LR_CFG)
   set bin    $env(LR_BIN)
@@ -562,4 +582,25 @@ exec expect -c '
     set timeout 300
   }
   interact
-'
+' || lr_rc=$?
+# ── FALL THROUGH TO A SHELL, so the pane outlives the session (see the block above the expect) ────
+# ONE caller must NOT get a shell, and it is identified by an AFFIRMATIVE fact rather than by the
+# absence of one:
+#   · stdin is not a tty — no controlling terminal, so there is no pane to keep alive and `zsh -i`
+#     would sit reading EOF in a loop. This is the shape lr-handoff.sh:813 warns about by name
+#     ("running it from a Bash TOOL call ... kills the resumed session the moment expect's interact
+#     reads EOF on a non-tty stdin"), and the tests never reach here at all: they extract the expect
+#     program and run it standalone (tests/lr-fire-resume-close-attrib.bats).
+# The sibling's second guard (CC_RR_NO_INTERACT) has NO analogue here on purpose — that knob exists
+# because reso-resume-one's expect program can skip `interact`; this one always interacts, so a tty
+# on stdin is exactly the "this is a real pane" fact, and a real pane must survive.
+# The exit code is preserved on the non-shell path so a caller that reads it still reads expect's.
+if [ ! -t 0 ]; then
+  exit "$lr_rc"
+fi
+printf '\n[lr-fire-resume] session ended (rc %s) — this pane is now an ordinary shell.\n' "$lr_rc" >&2
+# `-l -i` is load-bearing, not cosmetic, for the reason bin/cc-pane-runner:69 records: ~/.zprofile
+# puts ~/.claude/shims on PATH and ~/.zshrc synthesizes ITERM_SESSION_ID from KITTY_WINDOW_ID, so a
+# non-login non-interactive shell yields a pane that is alive and UNADDRESSABLE — and the launcher
+# names a recycle relaunches with are zsh FUNCTIONS defined only in the interactive rc.
+exec "${SHELL:-/bin/zsh}" -l -i
