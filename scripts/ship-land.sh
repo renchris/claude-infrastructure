@@ -1046,9 +1046,37 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   # before it consults git at all. (2) main_outer assigns LAND_MAIN_ROOT before it calls inflight_claim (line
   # numbers deliberately omitted — they shift; the ORDER is what the test asserts, by name),
   # and the inbox files only past that claim, so the resolution always happens while the worktree is
-  # still alive. (3) `--path-format=absolute` needs git >= 2.31 (2.54 here). Live confirmation: 194
-  # distinct rows of this class across 194 distinct branches since 2026-08-20, zero duplicates, all
-  # under `claude-infrastructure`.
+  # still alive. (3) `--path-format=absolute` needs git >= 2.31 (2.54 here).
+  #
+  # LIVE CONFIRMATION IS A CRITERION HERE, NOT A FIGURE (2026-09-10). This used to read "194
+  # distinct rows of this class across 194 distinct branches since 2026-08-20, zero duplicates" —
+  # true when written 2026-09-09, and 254/254/0 the next day, then 255/255/0 twenty minutes after
+  # that in the same session. The COUNT decays every time a land fails anywhere; what holds the
+  # argument up is that NO post-fix branch ever owns two rows. So the number is replaced by the
+  # command that re-measures it, for the same reason the ship-policy table names no repo:
+  #
+  #   python3 - <<'EOF'
+  #   import json, collections, os
+  #   t, f, bad = {}, {}, 0
+  #   for line in open(os.path.expanduser(os.environ.get("CC_BACKLOG_FILE", "~/.claude/autonomy/backlog.jsonl"))):
+  #       if not line.strip(): continue
+  #       try: r = json.loads(line)
+  #       except Exception: bad += 1; continue
+  #       i = r.get("id")
+  #       if not i: continue
+  #       if r.get("title"): t.setdefault(i, r["title"])
+  #       f.setdefault(i, r.get("ts", ""))
+  #   b = collections.Counter(t[i].split("re-land ", 1)[1].split(":", 1)[0]
+  #                           for i in t if t[i].startswith("re-land ") and f[i] >= "2026-08-20")
+  #   print("rows=%d branches=%d duplicated=%d unparseable=%d"
+  #         % (sum(b.values()), len(b), sum(1 for v in b.values() if v > 1), bad))
+  #   EOF
+  #
+  # `duplicated=0` is the invariant; any other value re-opens this whole block. Read the title from
+  # the row's FIRST record, never from the fold — `claim`/`done`/`venue` records carry no `title`,
+  # so folding-then-filtering silently reports a handful of rows out of hundreds. `unparseable` is
+  # printed rather than swallowed: a >4 KiB record can be spliced by a concurrent appender, and a
+  # census that drops those reports a smaller, internally consistent, WRONG number with no tell.
   #
   # SO IT IS LATENT, NOT LIVE, AND IT IS LEFT ALONE ON PURPOSE. Every remedy costs more than the
   # residual: the degraded path has no durable label to reach for — git is what failed — so a fix
