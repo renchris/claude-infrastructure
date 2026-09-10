@@ -562,7 +562,7 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
   if [ -n "${CC_PANE_ID:-}" ] && [ -z "${ITERM_SESSION_ID:-}" ]; then
     printf 'session-continue: wake floor ABSTAINS (pane-less session — its wake is the spawner stdin write, not a watcher).\n' >&2
     if [ "$pend" -gt 0 ]; then
-      jq -nc --arg m "ℹ Wake floor stood down (pane-less session — a watcher is not its wake path), but ${pend} message(s) are unread in this session's inbox. A headless session has no next turn to drain on: something must call cc-wake-headless ${_ouid} to give it one." \
+      jq -nc --arg m "ℹ Wake floor stood down: this pane-less session is woken by a write to its stdin, not by a watcher. ${pend} message(s) are unread. Something must run \`cc-wake-headless ${_ouid}\` to give it a turn." \
         '{systemMessage:$m}' 2>/dev/null || true
     fi
     log_idl abstained "wake-floor-headless" "$(jq -cn --argjson p "$pend" '{pend:$p}' 2>/dev/null)"
@@ -973,7 +973,7 @@ mechanical_arm() {   # rc 0 = armed (fall through to the armed path) · rc 1 = d
   fi
   printf '%s %s' "${cur_sid:-?}" "$(( mcnt + 1 ))" > "$mfile" 2>/dev/null || true
 
-  printf '%s' "You are about to go idle with ${n_files} file(s) you edited THIS TURN still uncommitted: ${shown}. Finish the in-scope work, run the repo's gate, and commit with explicit paths (then land per the repo's ship policy). If this dirt is deliberately parked, or is not yours to commit, run \`~/.claude/hooks/session-continue.sh clear\` and say so in your close." > "$f" 2>/dev/null || return 1
+  printf '%s' "Commit the ${n_files} file(s) you edited this turn that are still uncommitted: ${shown}. Run the repo's gate, commit with explicit paths, then land per the repo's ship policy. Deliberately parked, or not yours? Run \`~/.claude/hooks/session-continue.sh clear\` and say so in your close." > "$f" 2>/dev/null || return 1
   [ -n "$cur_sid" ] && printf '%s' "$cur_sid" > "${f}.sid" 2>/dev/null
   # Same cwd-stamp the CLI `set` writes. A MECHANICALLY armed sentinel is the one most likely to be
   # cleared from the wrong directory — the model never chose where it was armed — so it needs the
@@ -1090,7 +1090,13 @@ ship_floor() { # → echoes JSON to BLOCK (rc 1); rc 0 otherwise (never emits on
   if [ "$rung" = "📦" ]; then
     reason="📦 SHIP FLOOR — you are going idle on committed-but-unlanded work YOU wrote (${ahead:-?} commit(s): ${shas:-?}). Committed ≠ landed: a branch only this machine can see is one crash or forgotten worktree from lost — the measured top loss class (62 stranded commits across 21 abandoned-wave branches). Apply the ship policy NOW: /ship it (auto-fire by default; where THIS repo's own CLAUDE.md says landing spends money, offer it and park instead). If this park is DELIBERATE, say so in your close — this floor is already spent for the current commit and re-fires at most once per NEW commit (≤${maxs}/session). (ship floor $(( pcnt + 1 ))/${maxs})"
   else
-    reason="🚀 SHIP FLOOR — your landed work is NOT live: the enforcing store has breached its converge budget, so the machine still runs the old bytes. Run the converger NOW — \`bash \$(git rev-parse --show-toplevel)/scripts/deploy-live.sh\` — then re-read the ledger (\`/wrap\`). If the converger refuses, file it (\`cc-backlog needs\`) and close on 👤 — never sit on 🚀 and never call it ✅. (ship floor $(( pcnt + 1 ))/${maxs})"
+    reason="🚀 SHIP FLOOR — your landed work is not live: the enforcing store has breached its converge budget, so this machine still runs the old bytes.
+
+Converge it now:
+
+  bash \$(git rev-parse --show-toplevel)/scripts/deploy-live.sh
+
+Then re-read the ledger with \`/wrap\`. If the converger refuses, file it (\`cc-backlog needs\`) and close on 👤 — never call it ✅. (ship floor $(( pcnt + 1 ))/${maxs})"
   fi
   log_idl fired "ship-floor" "$(jq -cn --arg r "$rung" --arg a "${ahead:-?}" --argjson n "$(( pcnt + 1 ))" --argjson m "$maxs" \
     '{rung:$r,ahead:$a,count:$n,max:$m}' 2>/dev/null)"

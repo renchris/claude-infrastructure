@@ -3,8 +3,12 @@
 **Source:** workflow `wf_ed0162bc-930`, 11 agents, 2026-08-23. Produced while applying the recap prompt
 extracted in `docs/research/recap-prompt-extraction-2026-08-23.md` (landed `b8124fe6a`) to the Stop hooks.
 
-**Status:** §2's applied set landed as `2dda2fe1b` (7 hunks, 313 bats ok / 0 not ok). Everything in §3 is
-OPEN and is the real work — backlog `1031594b6327`.
+**Status:** **§2 is now fully applied.** Tiers 0-2 landed as `2dda2fe1b` (7 hunks, 313 bats ok / 0 not
+ok); Tier 3 — hunks H, I, J, the three `session-continue` emissions the first pass deferred as
+"APPLY-ELIGIBLE, not verifier-blessed" — landed 2026-09-10 (425 bats ok / 0 not ok across the full §2
+post-apply gate plus `tests/why-tier.bats`). The `--why <topic>` tier that blocked §3 was built and landed
+as `21b48b267`; backlog `1031594b6327` is DONE. Everything in §3 is still OPEN and is the real work —
+read §5.3 first: building the tier discharged the *destination* objection and nothing else.
 
 **The one-line finding:** these messages cannot be shortened until there is somewhere for their mechanism
 knowledge to go. Three emitters routed ~1,100 words to a `--why <topic>` flag that none of them wrote, so
@@ -170,7 +174,26 @@ them.** `tests/operator-readout.bats:1230` and `:1304` grep the string *includin
 The other five (`:1245, :1252, :1272, :1280, :1295`) grep only `◆ N escalation record(s) unseen` and are
 untouched. The **growth gate** the proposal wanted on this line is REJECTED — see §4.
 
-### Tier 3 — `session-continue` (3 of 9; APPLY-ELIGIBLE, not verifier-blessed)
+### Tier 3 — `session-continue` (3 of 9; APPLY-ELIGIBLE, not verifier-blessed) — ✅ APPLIED 2026-09-10
+
+> **Applied on the permissive reading, as the tier's own text licenses.** The first pass took the strict
+> option ("apply Tiers 0-2 and move these to §4") but never moved them, so H/I/J sat in the apply list
+> unapplied and unheld for 18 days — neither done nor rejected, which is the state this plan exists to
+> prevent. Each was re-verified against its own named assertions before applying: `uncommitted` and
+> `${shown}` survive in H (`tests/self-certifying-close.bats` greps `.reason` for `uncommitted` at
+> `:140,:147,:155,:171,:184,:207,:226`); `deploy-live.sh` and `SHIP FLOOR` survive in I
+> (`tests/ship-floor.bats:59,:100`); `N message(s)` and `cc-wake-headless $HDL` survive in J
+> (`tests/wake-floor.bats:639,:640`). The multi-line `reason` in I is safe because `:1097` emits it through
+> `jq -nc --arg r "$reason"`, which JSON-escapes the newlines.
+>
+> Gate run at apply time — all eight suites, plan line present on each, zero `not ok`:
+> `self-certifying-close 23 · wake-floor 49 · ship-floor 10 · session-continue 37 · completion-assert 131 ·
+> operator-readout 110 · boundary-handoff 49 · why-tier 16` = **425 ok / 0 not ok**.
+>
+> No `--why` pointer was added to any of the three. Deliberate: §4 rows 5-7 already establish that what
+> each hunk drops is reachable without one (H's opener is restated by the wrapping header at `:1028`, I's
+> dropped half is a duplicate of the clause beside it, J's substrate detail is in the source comment and
+> the research doc). Adding a pointer would have spent words to reach a home the reader does not need.
 
 ⚠️ **Read this qualifier before applying.** The verifier returned `safe_to_apply: false` for the whole file.
 Its four losses and four regressions name: both custody emissions (`:684`, `:687`), the `/goal` tier
