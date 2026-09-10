@@ -209,3 +209,78 @@ pane_modal_remedy() {
       printf 'answer the prompt in that pane' ;;
   esac
 }
+
+# ── THE EXIT-TIME DIALOG, AND WHY IT IS ENUMERATED HERE BUT NOT IN pane_modal_reason ────────────
+# Everything above answers "is this pane stopped on a dialog that MUST reach a human?". This class
+# is its exact opposite and shares only the matching machinery: the background-work dialog is
+# raised BY a /exit that one of our own rails typed, it is not a consent boundary (every option it
+# offers exits), and the operator is the last party who should be woken for it. Folding it into
+# pane_modal_reason would hand both WEDGED consumers a verdict whose remedy is "answer it
+# yourself" — the opposite of what that verdict means everywhere else — so it gets its own two
+# predicates and the enumeration stays in one file, which is the whole reason this file exists.
+#
+# REPORTER-ONLY IS UNCHANGED HERE. Nothing below sends a keystroke; pane_bgwork_choice only reads
+# the menu and says which index the caller would press. The actuation lives at the ONE call site
+# that is entitled to it — the recycle watcher in scripts/handoff-fire.sh, which typed the /exit
+# that raised this dialog — and the sweeper that was built and reverted on this file's doctrine
+# stays reverted.
+#
+# MEASURED 2026-09-10 on 2.1.260 under a PTY (docs/research/exit-bgwork-dialog-2026-09-10/), three
+# arms, the two negative ones present so the reading can be wrong: no background work ⇒ NO dialog
+# and /exit exits; a live `run_in_background` shell ⇒ dialog and /exit does NOT exit; the same with
+# the keep-work index sent as a single byte ⇒ exits. Rendered verbatim:
+#
+#     Background work is running
+#     The following will stop when you exit:
+#
+#     shell · sleep 600
+#
+#     ❯ 1. Exit and stop tasks
+#       2. Move to background and exit
+#       3. Stay
+#
+# THE INDEX IS READ, NEVER ASSUMED. `2` is what that menu rendered on 2026-09-10 and is exactly the
+# kind of fact this repo keeps being bitten by: a reordering upstream would silently turn a
+# hardcoded `2` into "Exit and stop tasks", which KILLS a land that a recycle is usually running.
+# So the caller is handed the index parsed off the screen it is about to answer, and an unindexed
+# menu (`hideIndexes` is in the binary's own dialog vocabulary) yields rc 1 — no guess.
+CC_MODAL_BGWORK_HEADER="${CC_MODAL_BGWORK_HEADER:-Background work is running}"
+CC_MODAL_BGWORK_OPTION="${CC_MODAL_BGWORK_OPTION:-Exit and stop tasks|Move to background and exit}"
+# The option a rail may choose for itself: it exits (which is all a recycle needs) and does NOT
+# stop the tasks (which on this box is usually a land in flight). Not a pattern — an exact label.
+CC_MODAL_BGWORK_KEEP="${CC_MODAL_BGWORK_KEEP:-Move to background and exit}"
+
+# pane_bgwork_dialog — stdin = a pane's plain screen text; 0 iff the exit-time dialog is on screen.
+# Same header-AND-option conjunction, same column-0-modulo-chrome anchor, same reason: a pane that
+# merely DISPLAYS this text (this file, its tests, a commit message) is not a pane sitting at it.
+pane_bgwork_dialog() {
+  local txt
+  txt="$(cat)"
+  [ -n "$txt" ] || return 1
+  _pane_modal_both "$txt" "$CC_MODAL_BGWORK_HEADER" "$CC_MODAL_BGWORK_OPTION"
+}
+
+# pane_bgwork_choice — stdin = the same screen → stdout: the rendered menu index of the KEEP option.
+#   rc 0  exactly one line renders that label as a menu row, and it carries an index
+#   rc 1  the header is absent, the label is absent, it is unindexed, or two rows claim it
+# LC_ALL=C on purpose: the chrome it must eat (`❯`, box rules) is multibyte, and a byte-wise
+# character class is what makes `[^[:alnum:]]*` skip it instead of stalling on a partial rune.
+pane_bgwork_choice() {
+  local txt idx
+  txt="$(cat)"
+  [ -n "$txt" ] || return 1
+  printf '%s\n' "$txt" | grep -qE -- "$(_pane_modal_anchor "$CC_MODAL_BGWORK_HEADER")" || return 1
+  idx="$(printf '%s\n' "$txt" | LC_ALL=C awk -v want="$CC_MODAL_BGWORK_KEEP" '
+    {
+      p = index($0, want)
+      if (p == 0) next
+      pre = substr($0, 1, p - 1)
+      # Everything before the label must be chrome, then the index, then blanks — the anchor rule
+      # written as a prefix test. Prose that mentions the label mid-sentence has words in `pre`.
+      if (pre !~ /^[^[:alnum:]]*[0-9]+\.[[:space:]]*$/) next
+      if (match(pre, /[0-9]+/)) print substr(pre, RSTART, RLENGTH)
+    }' | sort -u)"
+  [ -n "$idx" ] || return 1
+  [ "$(printf '%s\n' "$idx" | wc -l | tr -d ' ')" = 1 ] || return 1   # ambiguous ⇒ no guess
+  printf '%s' "$idx"
+}
