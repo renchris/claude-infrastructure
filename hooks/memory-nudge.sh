@@ -157,16 +157,24 @@ HEADROOM_TARGET="${MEMORY_HEADROOM_TARGET:-2500}"  # compact-memory's "done" = ~
 #   overage/mean-line: a real index is not uniform and its TAIL is exactly where an average is
 #   least true (measured 2026-08-08, the averaged form announced 6 where the exact count was 4).
 _mn_stats() {
-  jq -nr --rawfile c "$1" --argjson lim "$LIMIT" "$MIM_JQ_DEFS"'
+  jq -nr --rawfile c "$1" --argjson lim "$LIMIT" --argjson llim "$LINE_LIMIT" "$MIM_JQ_DEFS"'
     def u: mim_units;
     ($c | mim_effective) as $e
     | ($e | split("\n")) as $L
     | [$L[] | select(startswith("- ["))] as $E
     | ([$E[] | (u + 1)] | add // 0) as $entry
     | ([$E[] | sub("^(?<p>- \\[[^]]*\\]\\([^)]*\\) — ).*$"; "\(.p)") | (u + 1)] | add // 0) as $pfx
-    | (reduce $L[] as $l ({off:0, n:0};
-         {off: (.off + ($l | u) + 1),
-          n:   (.n + (if ($l | startswith("- [")) and (.off >= $lim) then 1 else 0 end))}) | .n) as $dropped
+    # DROPPED IS THE UNION OF BOTH CAPS, because the loader truncates on EITHER (units > $lim OR
+    # lines > $llim) and the two cut at different places. Counting only the byte offset reported
+    # 0 dropped on an index cut by the LINE cap — the newest entries invisible and the sensor
+    # announcing nothing — and under-reported a dual breach by every entry sitting between the
+    # line cut and the char cut. $i is 0-based over the effective lines, so the loader keeps line
+    # numbers 1..$llim and an entry at $i+1 > $llim is gone whatever its offset says.
+    | (reduce range(0; ($L | length)) as $i ({off:0, n:0};
+         ($L[$i]) as $l
+         | {off: (.off + ($l | u) + 1),
+            n:   (.n + (if ($l | startswith("- [")) and ((.off >= $lim) or (($i + 1) > $llim))
+                        then 1 else 0 end))}) | .n) as $dropped
     | "\($e | u) \($e | mim_lines) \($E | length) \($entry) \($pfx) \($dropped)"
   ' 2>/dev/null
 }
@@ -331,6 +339,11 @@ if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
       fi
     fi
     FILING="FILING: if you file this as work it is ONE standing condition, not a new item per measurement — \`cc-backlog add --condition memory-index-over-budget --project <project> --title \"<the live size>\"\`. The size belongs in the title; putting it in the key is what minted 21 items for this one condition."
+    # Hoisted above the breach arms because BOTH of them need it: the count is the UNION over the
+    # two caps (see _mn_stats), and it used to be read inside the char arm only — so the LINE arm,
+    # the one case where the char offset says nothing, announced a silent tail with no count of it.
+    DROPPED_U=$(printf '%s' "$STATS" | cut -d' ' -f6)
+    case "$DROPPED_U" in ''|*[!0-9]*) DROPPED_U=0 ;; esac
     if [ "$TOTAL" -ge "$LIMIT" ]; then
       OVER=$(( TOTAL - LIMIT ))
       # EXACT, not averaged. The old form (OVER / mean-line-cost) reads the index as
@@ -342,7 +355,7 @@ if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
       # EFFECTIVE content in the loader's unit, because an offset walked in raw
       # bytes over the raw file names a different entry than the one the loader
       # actually cuts (frontmatter and comments shift every offset after them).
-      DROPPED=$(printf '%s' "$STATS" | cut -d' ' -f6)
+      DROPPED="$DROPPED_U"
       # Over the limit means at least the final entry is cut, even when the overage
       # falls INSIDE that entry and no start offset is past the limit.
       case "$DROPPED" in ''|*[!0-9]*|0) DROPPED=1 ;; esac
@@ -371,21 +384,49 @@ if [ "$MEASURE_OK" -eq 1 ] && [ -n "$MEM" ] && [ -f "$MEM" ]; then
       [ "$DERIVED" -gt "$EFF_TARGET" ] 2>/dev/null && EFF_TARGET="$DERIVED"
       RECOVER=0
       [ "$HOOK_AVG" -gt "$EFF_TARGET" ] && RECOVER=$(( N * (HOOK_AVG - EFF_TARGET) ))
+      LEVER_KIND=cardinality
       if [ "$RECOVER" -ge "$OVER" ]; then
+        LEVER_KIND=shorten
         LEVER="hook LENGTH is the binding lever: hooks average ${HOOK_AVG} chars against the ${EFF_TARGET} char allowance this index actually affords, so shortening the $N existing hooks recovers ~${RECOVER} chars — more than the ${OVER} needed, and it deletes no rules."
       elif [ "$RECOVER" -gt 0 ]; then
+        LEVER_KIND=shorten
         LEVER="BOTH levers are needed: shortening all $N hooks from ${HOOK_AVG} to the ${EFF_TARGET} char allowance recovers only ~${RECOVER} of the ${OVER} chars needed, so archive under the DURABILITY criterion for the remainder (ceiling is ~${MAXN} entries; the index holds $N)."
       else
         LEVER="hooks are already at ${HOOK_AVG} chars (at/under the ${EFF_TARGET} char allowance this index affords), so shortening CANNOT reach the limit — this is CARDINALITY: the index holds $N entries against a ceiling of ~${MAXN}. Archiving under the DURABILITY criterion is the only non-lossy lever."
       fi
-      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS READ LIMIT — ${TOTAL} chars vs the ${LIMIT} char loader limit (over by ${OVER}).${ROTATE_NOTE} The loader drops the TAIL silently: the NEWEST ${DROPPED} entries begin past the limit, so they did not load this session and no reader can tell. Anything you append now is written into the invisible tail. ${LEVER} BEFORE appending anything new: archive or shorten to get under ${LIMIT} chars (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${UNIT_NOTE} ${FILING}"
+      # 🚨 A DUAL BREACH IS NOT A CHAR BREACH. This arm used to be a bare `if TOTAL >= LIMIT` with
+      # the line cap as its `elif`, so an index over BOTH caps got a char-only headline and the
+      # line breach was never mentioned at all. Worse, the LEVER above could then read "hook LENGTH
+      # is the binding lever … shortening recovers ~N — more than needed" — a lever that provably
+      # cannot free a LINE, handed to the reader on the one branch where they most need the true
+      # one. Shortening moves the char figure and nothing else, so once the line cap is also
+      # breached the only honest lever is cardinality, whatever the char arithmetic says.
+      DUAL_NOTE=""
+      if [ -n "$LINES" ] && [ -n "$LINE_LIMIT" ] && [ "$LINES" -gt "$LINE_LIMIT" ] 2>/dev/null; then
+        DUAL_NOTE=" IT IS OVER BOTH CAPS — also ${LINES} lines vs the ${LINE_LIMIT}-line cap (over by $(( LINES - LINE_LIMIT ))), and the loader cuts at whichever comes FIRST."
+        # ONLY the two levers that CLAIM SHORTENING SUFFICES are overridden. The third arm above
+        # already selected cardinality on its own arithmetic and is not wrong here — replacing it
+        # too would make the char arm's own cardinality branch UNREACHABLE for any index dense
+        # enough to breach both caps, i.e. exactly the population it was written for, and the
+        # suite would lose that coverage silently while still reading green.
+        if [ "$LEVER_KIND" = shorten ]; then
+          LEVER="BOTH caps are breached, so this is CARDINALITY: shortening hooks moves the char figure and cannot free a LINE. Removing entries is the only lever that reaches both — archive under the DURABILITY criterion (the index holds $N entries against a ceiling of ~${MAXN})."
+        fi
+      fi
+      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS READ LIMIT — ${TOTAL} chars vs the ${LIMIT} char loader limit (over by ${OVER}).${DUAL_NOTE}${ROTATE_NOTE} The loader drops the TAIL silently: the NEWEST ${DROPPED} entries begin past the limit, so they did not load this session and no reader can tell. Anything you append now is written into the invisible tail. ${LEVER} BEFORE appending anything new: archive or shorten to get under ${LIMIT} chars (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${UNIT_NOTE} ${FILING}"
     elif [ "$LINES" -gt "$LINE_LIMIT" ]; then
       # THE OTHER CAP. The loader truncates on (chars > LIMIT) OR (lines > LINE_LIMIT), and on an
       # index of one-line entries the LINE cap binds FIRST — an index can sit comfortably inside
       # its char budget with its newest entries already invisible. Nothing here measured this
       # before 2026-08-15, so this breach had no sensor at all. Only removing a LINE clears it;
       # shortening hooks moves the char figure and nothing else.
-      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS LINE LIMIT — ${LINES} lines vs the ${LINE_LIMIT}-line loader limit (over by $(( LINES - LINE_LIMIT ))).${ROTATE_NOTE} The loader drops the TAIL silently: everything after line ${LINE_LIMIT} did not load this session and no reader can tell, and anything you append now is written into that invisible tail. This is the CARDINALITY cap, not the size one — the index is ${TOTAL}/${LIMIT} chars, so shortening hooks cannot reach it; only removing a line can. BEFORE appending anything new: archive under the DURABILITY criterion (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${UNIT_NOTE} ${FILING}"
+      # The count is the UNION one, so on THIS arm it is the line-cut half — the char offset says
+      # nothing here by construction. Stated only when it is non-zero: an index can be over the
+      # line cap on non-entry lines alone, and asserting "1 entry" there would be a fact we do not
+      # have (the char arm's floor-to-1 is sound for ITS cut and is not transferable to this one).
+      DROP_NOTE=""
+      [ "$DROPPED_U" -gt 0 ] && DROP_NOTE=" The NEWEST ${DROPPED_U} entries begin past that line."
+      BUDGET_CTX="🚨 MEMORY INDEX OVER ITS LINE LIMIT — ${LINES} lines vs the ${LINE_LIMIT}-line loader limit (over by $(( LINES - LINE_LIMIT ))).${ROTATE_NOTE} The loader drops the TAIL silently: everything after line ${LINE_LIMIT} did not load this session and no reader can tell,${DROP_NOTE} and anything you append now is written into that invisible tail. This is the CARDINALITY cap, not the size one — the index is ${TOTAL}/${LIMIT} chars, so shortening hooks cannot reach it; only removing a line can. BEFORE appending anything new: archive under the DURABILITY criterion (run /compact-memory; its lossy half is PROPOSE-ONLY — show diffs, get approval). If you must record something now, apply ONE-IN-ONE-OUT: archive an entry in the same edit that adds one. ${UNIT_NOTE} ${FILING}"
     else
       HEADROOM=$(( LIMIT - TOTAL ))
       # THE ADVERTISED BUDGET MAY NEVER EXCEED WHAT THE GATE WILL GRANT. HEADROOM answers "how much

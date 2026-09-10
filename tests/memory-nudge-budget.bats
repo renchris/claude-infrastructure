@@ -358,14 +358,19 @@ mkskewed() {
   # different entry (every offset past a multibyte char is shifted), which is the 2026-08-15
   # correction. In python, not awk: this box's awk is mawk, whose length() is bytes whatever
   # the locale says, so an awk control would silently re-introduce the bug it is checking for.
+  # THE CONTROL IS THE UNION OVER BOTH CAPS, corrected 2026-09-09 while recovering stranded
+  # commit 649ecc23b. It was `off >= lim` alone — the byte-only count, which is precisely the
+  # under-report that branch names: this fixture is 206 entries, so it breaches the 200-LINE cap
+  # too, and six entries the loader really does cut were invisible to the old control. The
+  # subject of THIS test is still exact-vs-averaged; only the denominator of "exact" is fixed.
   read -r exact entry_b <<<"$(mim_effective_file "$idx" | python3 -c '
 import sys
 def u(s): return sum(2 if ord(c) > 0xFFFF else 1 for c in s)
 lines = sys.stdin.read().split("\n")
-lim, off, dropped, entry = '"$LIMIT"', 0, 0, 0
-for l in lines:
+lim, llim, off, dropped, entry = '"$LIMIT"', '"$LINE_LIMIT"', 0, 0, 0
+for i, l in enumerate(lines):
     if l.startswith("- ["):
-        if off >= lim: dropped += 1
+        if off >= lim or (i + 1) > llim: dropped += 1
         entry += u(l) + 1
     off += u(l) + 1
 print(dropped, entry)')"
@@ -639,4 +644,57 @@ rotate_env() {  # small, hand-countable budgets for the actuation tests
   ctxout="$(printf '%s' "$out" | ctx)"
   has "$ctxout" 'LOADER UNIT'                           # legend present
   hasnt "$ctxout" 'PHANTOM-BREACH WINDOW'               # escalation absent
+}
+
+# ── the two caps are INDEPENDENT, and the char arm may not mask the line one ───────────────────────
+# Recovered from stranded commit 649ecc23b (2026-08-15). Its structural half landed independently as
+# 1fc55c9c5 (a superset — it also corrected bytes → UTF-16 units), which is why a substring instrument
+# read only 79 of its 220 lines present and called the whole branch stranded. These two properties did
+# NOT land, and both are live defects in the advisory the operator sizes a compaction pass from.
+
+@test "a LINE-only breach names how many entries the cut swallowed" {
+  # 210 one-line entries at a short hook: over the 200-line cap, comfortably under the char cap.
+  # This is the density the char-only sensor is blind to by construction — every entry's start
+  # offset is under the char limit, so a byte-keyed dropped count reports 0 on a cut tail.
+  idx="$(mkindex 210 40)"
+  [ "$(eff "$idx")" -lt "$LIMIT" ]                       # char cap NOT breached — the whole point
+  # NOT `lines`: bats OWNS that name — `run` populates it as an array — so assigning a string to
+  # it here would clobber the harness variable for the rest of the test (SC2178/SC2128).
+  nlines="$(mim_measure_file "$idx")"; nlines="${nlines##* }"
+  [ "$nlines" -gt "$LINE_LIMIT" ]                         # line cap IS breached
+  out=""; for _ in $(seq 1 12); do out="$(fire s-lineonly "$idx" || true)"; done
+  ctxout="$(printf '%s' "$out" | ctx)"
+  has "$ctxout" '🚨 MEMORY INDEX OVER ITS LINE LIMIT'
+  # PRE-FIX this arm printed no count at all: _mn_stats counted only `off >= lim`, which is 0 here.
+  has "$ctxout" 'The NEWEST 10 entries begin past that line.'
+}
+
+@test "a DUAL breach names BOTH caps and refuses to offer a lever that cannot free a line" {
+  # 260 entries at a long hook: over the char cap AND over the line cap at once. Pre-fix this fell
+  # into the char arm's bare `if`, so the line breach was never mentioned and the LEVER could read
+  # "hook LENGTH is the binding lever … more than needed" — provably false of a line cut.
+  idx="$(mkindex 260 120)"
+  [ "$(eff "$idx")" -ge "$LIMIT" ]
+  nlines="$(mim_measure_file "$idx")"; nlines="${nlines##* }"
+  [ "$nlines" -gt "$LINE_LIMIT" ]
+  out=""; for _ in $(seq 1 12); do out="$(fire s-dual "$idx" || true)"; done
+  ctxout="$(printf '%s' "$out" | ctx)"
+  has "$ctxout" 'IT IS OVER BOTH CAPS'
+  has "$ctxout" 'BOTH caps are breached, so this is CARDINALITY'
+  # The false lever must be gone, not merely accompanied.
+  hasnt "$ctxout" 'hook LENGTH is the binding lever'
+}
+
+@test "polarity: a char-only breach still gets the char diagnosis, with no line clause" {
+  # Control for both cases above — without this, a fix that unconditionally printed the dual
+  # clause would pass them and destroy the single-cap diagnosis, and nothing would say so.
+  idx="$(mkindex 100 250)"
+  [ "$(eff "$idx")" -ge "$LIMIT" ]
+  nlines="$(mim_measure_file "$idx")"; nlines="${nlines##* }"
+  [ "$nlines" -le "$LINE_LIMIT" ]                         # line cap NOT breached
+  out=""; for _ in $(seq 1 12); do out="$(fire s-charonly "$idx" || true)"; done
+  ctxout="$(printf '%s' "$out" | ctx)"
+  has "$ctxout" '🚨 MEMORY INDEX OVER ITS READ LIMIT'
+  hasnt "$ctxout" 'IT IS OVER BOTH CAPS'
+  hasnt "$ctxout" '🚨 MEMORY INDEX OVER ITS LINE LIMIT'
 }
