@@ -14,6 +14,7 @@ git/gate/DoD reads itself, so the rung reports ground truth.
 - Default (one-line readout): !`scripts/wrap-ledger.sh 2>&1 || true`
 - Goal liveness (◎ — prints NOTHING unless a `/goal` is live): !`scripts/wrap-ledger.sh --goal 2>&1 || true`
 - Full ledger (with `--full`): !`[ "$ARGUMENTS" = "--full" ] && scripts/wrap-ledger.sh --full 2>&1 || true`
+- Working or idling (⏳ — the operator's FIRST axis): !`scripts/wrap-ledger.sh --busy 2>&1 || true`
 - Operator steps (silver-platter block): !`hooks/operator-readout.sh --render 2>&1 || true`
 
 (If the repo root differs, the launcher resolves the script under the repo — `scripts/wrap-ledger.sh`.)
@@ -39,6 +40,29 @@ paraphrase the commands into prose (the silver-platter rule).
 thing to paste — `cc-do` runs the runnable set after one confirm (`cc-do --list` to look first,
 `cc-do <stem>` for exactly one). Per CLAUDE.md §Session Close, the close itself is capped at the
 governing line + ≤3 supporting facts + that one command block.
+
+## The three axes, from one code path
+
+The operator's recurring question has three axes — *what are our current tasks and decisions · are
+we working or are we idling · are we 100% good to close with no loose ends*. This command answers
+all three, and **every one is rendered by the code the Stop hooks use**, never re-implemented here:
+
+| axis | rendered by | why it is not obvious |
+|---|---|---|
+| tasks & decisions | `hooks/operator-readout.sh --render` | filed rows only; a decision nobody filed is in no store — file it (`cc-decide open`) and it becomes the `⛔` rung |
+| **working vs idling** | `scripts/wrap-ledger.sh --busy` → `hooks/lib/session-busy.sh` | **nothing measured this until 2026-09-10.** A backgrounded job is invisible to you, so `🔧 Unchanged.` read identically to a 20-minute gate and to a stuck poll loop |
+| good to close | the rung below, + the `✅` certificate | the certificate fires only on a `✅` **write-turn** close — by design, so it carries information |
+
+`--busy` reports one of **BUSY · IDLE-ARMED · IDLE-DEAF · GONE · UNKNOWN**, and the middle two are
+never collapsed: *idle with a wake path armed* resumes by itself, *idle with none* sits there
+forever, and they read identically from outside. It **always names its evidence** — a beat age, or
+the sample argv of the job it found — because the sensor deliberately fails toward BUSY, and a
+false BUSY is only self-correcting when you can see that its sample says `caffeinate`. `UNKNOWN` is
+an instrument gap, never an idle verdict.
+
+The same sensor is what the Stop hook renders **where it is otherwise silent** — a wedged pane, a
+pending permission prompt, or an idle session with no wake path — edge-triggered on its own latch,
+so it re-asserts at most once per TTL rather than becoming wallpaper.
 
 ## Read the rung, then act on it
 

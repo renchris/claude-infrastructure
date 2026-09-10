@@ -1720,3 +1720,61 @@ CC_READOUT_RANK_PREFIX_SHA="${CC_READOUT_RANK_PREFIX_SHA:-ebf071b2a}"
     || { echo "control ALREADY names the high-impact row — the arm proves nothing: $output"; false; }
   ! echo "$output" | grep -q 'premise unverified' || false
 }
+
+# ── ⏳ WORKING vs IDLING — the arm that speaks WHERE THIS HOOK IS SILENT (D8 / A10 §6.3) ──────────
+# The operator's question has three axes and this hook answered two. The third had no producer at
+# all, and it is the one they name first. These cases pin the three properties that make the new arm
+# worth having rather than wallpaper: it fires only into SILENCE, it is EDGE-triggered, and it never
+# preempts the ✅ certificate.
+
+# A beat store that is demonstrably ALIVE but holds no beat for THIS session. Both halves matter: an
+# empty store means the PRODUCER is not deployed (a beat-less WORLD), which the sensor must report
+# as UNKNOWN rather than idle — the absence-alarm trap hooks/lib/cc-beat.sh exists to prevent.
+busy_env() {
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats"; mkdir -p "$CC_BEAT_DIR"
+  jq -nc --argjson t "$(date +%s)" \
+    '{sid:"someone-else",pane:"1",cwd:"/x",pid:1,lstart:"x",t:$t,kind:"stop",who:"auto",operatorT:$t,seq:1}' \
+    > "$CC_BEAT_DIR/someone-else.json"
+  export CC_PERMPEND_DIR="$BATS_TEST_TMPDIR/perm"; mkdir -p "$CC_PERMPEND_DIR"
+}
+
+@test "busy: 🔧 with no steps — silent today — now says IDLE with no wake path armed" {
+  busy_env
+  w="$(mkrepo_landed busy1)"; : > "$w/untracked.txt"     # dirty ⇒ 🔧, and 🔧 renders no steps
+  run hookrun "$w"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"⏳"* ]] || false
+  [[ "$output" == *"no wake path armed"* ]] || false
+  # It must name the rung it is speaking under — a bare "idle" is the category, not the idea.
+  [[ "$output" == *"🔧"* ]]
+}
+
+@test "busy: EDGE, not level — the same line inside TTL is damped, not repeated" {
+  # Working↔idle varies turn to turn, so a level-triggered line is wallpaper inside a day. This is
+  # the copy_drift_notice treatment D8 asked for, on its OWN latch key so it cannot suppress the
+  # block renderer's re-assert.
+  busy_env
+  w="$(mkrepo_landed busy2)"; : > "$w/untracked.txt"
+  run hookrun "$w"
+  [[ "$output" == *"⏳"* ]] || false            # first turn: the EDGE — it must actually fire
+  run hookrun "$w"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"⏳"* ]]
+}
+
+@test "busy: the ✅ close certificate still owns a landed-clean close — the arm never preempts it" {
+  # Arm 3 excludes ✅ by construction so the two can never contradict each other on one turn.
+  busy_env
+  w="$(mkrepo_landed busy3)"
+  run hookrun "$w"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"no wake path armed"* ]]
+}
+
+@test "busy: CC_BUSY_NOTICE=0 is a real kill switch, and it restores the pre-existing silence" {
+  busy_env
+  w="$(mkrepo_landed busy4)"; : > "$w/untracked.txt"
+  CC_BUSY_NOTICE=0 run hookrun "$w"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"⏳"* ]]
+}

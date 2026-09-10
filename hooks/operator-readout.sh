@@ -799,6 +799,14 @@ render_block() {
   if [ -n "$led" ]; then
     lf() { printf '%s' "$led" | grep -E "^$1=" | head -1 | cut -d= -f2-; }
     RUNG="$(lf RUNG)"; [ -n "$RUNG" ] || RUNG="?"
+    # ⏳ working-vs-idling (D8 / A10 §6.3), published as globals from the ledger read that ALREADY
+    # happens here — the same trick RUNG/TOTAL use, and the reason this costs zero extra forks.
+    # Deliberately NOT rendered into the block: busy-ness is orthogonal to the rung ladder, so it
+    # speaks only where this renderer is silent today (the arm below the block).
+    OR_BUSY_STATE="$(lf BUSY_STATE)"; OR_BUSY_SUSPECT="$(lf BUSY_SUSPECT)"
+    OR_BUSY_AGE="$(lf BUSY_AGE)";     OR_BUSY_SAMPLE="$(lf BUSY_SAMPLE)"
+    OR_BUSY_SRC="$(lf BUSY_SRC)"
+    OR_PERMPEND="$(lf PERMPEND)";     OR_PERMPEND_AGE="$(lf PERMPEND_AGE)"
     branch="$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
     case "$RUNG" in
       "📦")
@@ -1470,6 +1478,59 @@ BLOCK="$(cat "$TMPB" 2>/dev/null || true)"; rm -f "$TMPB"
 # the renderer had nothing to say.
 # Seams: CC_CLOSE_CERT (0 disables) · SESSION_WRITES_LIB
 if [ -z "$BLOCK" ]; then
+  # ── ⏳ WORKING vs IDLING — THE INVERSE OF THIS HOOK'S GATE (D8; A10-idle-visibility §6.3) ────────
+  # The operator's question has three axes and this hook answered two. The third — "are we working
+  # or idling" — was measured by nothing at all, and it is the one they name FIRST and the one they
+  # cannot obtain for themselves: a backgrounded job is invisible to them, so `🔧 Unchanged.` reads
+  # identically to a 20-minute gate and to a stuck poll loop.
+  #
+  # It renders EXACTLY WHERE THIS HOOK IS SILENT TODAY, which is the whole point: the fire predicate
+  # above is steps>0 ∨ 📦 ∨ queue>0, and both times the operator asked, none of those was true and
+  # no close was happening. Every close-side improvement was off-target by construction. The
+  # certificate is untouched — it still owns the ✅ write-turn case, and arm 3 below excludes ✅ so
+  # the two can never contradict each other.
+  #
+  # EDGE, NOT LEVEL, on its OWN latch key (the copy_drift_notice treatment D8 asked for). Working
+  # ↔ idle genuinely varies turn to turn, so a level-triggered line would be wallpaper inside a day
+  # (MEMORY: alarm-polarity-and-attention-budget). A separate key from the block's, deliberately:
+  # one shared key would let a persistent notice suppress the block's own re-assert.
+  #
+  # Arm 1 (BUSY-SUSPECT) and arm 2 (a live permission beacon) fire even at ✅, because a pane that
+  # is wedged is news whatever the git facts say — that is the 48-minute wedge whose every liveness
+  # surface read healthy. Arm 3 fires only where the rung is NOT ✅: idle, with no wake path armed,
+  # is the state that will sit there forever.
+  # The SENTENCE is composed by hooks/lib/session-busy.sh, not here — one composer for the push
+  # (this hook) and pull (`/wrap`) surfaces, so the automatic line and the typed fallback cannot
+  # drift. always=0: this surface prints only what is NEWS.
+  _bz_line=""
+  _bz_lib="${SESSION_BUSY_LIB:-$SCRIPT_DIR/lib/session-busy.sh}"
+  [ -f "$_bz_lib" ] || _bz_lib="$CFG/hooks/lib/session-busy.sh"
+  [ -f "$_bz_lib" ] || _bz_lib="$HOME/.claude/hooks/lib/session-busy.sh"
+  if [ -f "$_bz_lib" ] && [ -n "${OR_BUSY_STATE:-}" ]; then
+    # shellcheck disable=SC1090
+    _bz_line="$( . "$_bz_lib" 2>/dev/null && sb_render_line "${OR_BUSY_STATE:-UNKNOWN}" \
+        "${OR_BUSY_SUSPECT:-0}" "${OR_BUSY_AGE:-0}" "${OR_BUSY_SRC:-none}" \
+        "${OR_PERMPEND:-0}" "${OR_PERMPEND_AGE:-0}" "${RUNG:-?}" 0 "${OR_BUSY_SAMPLE:-}" 2>/dev/null || true )"
+  fi
+  if [ -n "$_bz_line" ] && [ "${CC_BUSY_NOTICE:-1}" != "0" ]; then
+    _bz_hash="$(printf '%s' "$_bz_line" | shasum 2>/dev/null | cut -c1-16)"
+    _bz_latch="$STATE_DIR/busy-${SKEY:-none}"
+    _bz_fire=1
+    if [ -n "$_bz_hash" ] && [ -f "$_bz_latch" ]; then
+      read -r _bz_ph _bz_pt _ < "$_bz_latch" 2>/dev/null || { _bz_ph=""; _bz_pt=0; }
+      case "$_bz_pt" in ''|*[!0-9]*) _bz_pt=0 ;; esac
+      [ "$_bz_ph" = "$_bz_hash" ] && [ $(( NOW - _bz_pt )) -lt "$TTL" ] && _bz_fire=0
+    fi
+    if [ "$_bz_fire" = "1" ]; then
+      [ -n "$_bz_hash" ] && printf '%s %s\n' "$_bz_hash" "$NOW" > "$_bz_latch" 2>/dev/null || true
+      log_idl fired "busy-notice" \
+        "$(jq -cn --arg st "${OR_BUSY_STATE:-?}" --arg src "${OR_BUSY_SRC:-?}" --arg rung "${RUNG:-?}" \
+            '{busy_state:$st,busy_src:$src,rung:$rung}' 2>/dev/null || echo '{}')"
+      jq -nc --arg m "$_bz_line" '{systemMessage:$m}' 2>/dev/null || true
+      exit 0
+    fi
+  fi
+
   [ "${CC_CLOSE_CERT:-1}" = "0" ] && abstain "nothing-to-surface"
   [ "$RUNG" = "✅" ] || abstain "nothing-to-surface"
 

@@ -10,6 +10,10 @@
 # ── OUTPUT MODES ──
 #   wrap-ledger.sh            → one-line human readout (the worst-open rung sentence)   [default]
 #   wrap-ledger.sh --machine  → KEY=value lines for hooks (RUNG=… DIRTY=… UNLANDED=… …)
+#   wrap-ledger.sh --busy     → ONE line answering "are we working or idling?" (D8 / A10 §6.4).
+#                               The PULL surface for the operator's first axis. Composed by
+#                               hooks/lib/session-busy.sh — the same function the Stop hook uses,
+#                               so the typed fallback and the automatic notice cannot drift.
 #   wrap-ledger.sh --full     → the dense SESSION LEDGER block (per CLAUDE.md §Session Close)
 #   wrap-ledger.sh --goal     → the ◎ goal-liveness line ALONE, or nothing (see § GOAL)
 #
@@ -189,6 +193,7 @@ TRANSCRIPT_FLAG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --machine) MODE="machine" ;;
+    --busy) MODE="busy" ;;
     --full)    MODE="full" ;;
     --goal)    MODE="goal" ;;
     --readout|"") MODE="readout" ;;
@@ -196,7 +201,7 @@ while [ $# -gt 0 ]; do
     --session=*) SESSION_FLAG="${1#--session=}" ;;
     --transcript) shift; TRANSCRIPT_FLAG="${1:-}" ;;
     --transcript=*) TRANSCRIPT_FLAG="${1#--transcript=}" ;;
-    -h|--help) printf 'usage: wrap-ledger.sh [--machine|--full|--readout|--goal] [--session <sid>] [--transcript <path>]\n'; exit 0 ;;
+    -h|--help) printf 'usage: wrap-ledger.sh [--machine|--full|--readout|--goal|--busy] [--session <sid>] [--transcript <path>]\n'; exit 0 ;;
     *) printf 'wrap-ledger: unknown arg: %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -1875,6 +1880,53 @@ else
   fi   # closes the CUSTODY_OPEN branch (its 🔧 arm above short-circuits this whole chain)
 fi
 
+# ── ⏳ WORKING vs IDLING — the operator's FIRST axis, and the one nothing measured ───────────────
+# CLOSE_SCANNABILITY_2026-08-23 D8 + A10-idle-visibility §6.2. Until now 0 of this file's machine
+# fields and 0 `ps`/`pgrep` in either renderer could tell a 20-minute gate from a stuck poll loop,
+# so `🔧 Unchanged.` carried no information about whether anything was running. These are REPORTED
+# FIELDS, NEVER A RUNG: busy-ness is orthogonal to the ⛔>📤>🔧>📦>🚀>👤>✅ ladder (a session can be
+# BUSY at any rung), and a "working" rung would fire on every turn of every session forever — the
+# alarm-polarity failure. Computed AFTER the ladder for exactly that reason, and so the custody arm
+# below sees its final value.
+#
+# ONE READER FOR THE PREDICATE, shared with every consumer — the same rule LANDING is built on.
+# Fail-open like YOURS/BLOCKED: any failure ⇒ BUSY_SRC=error and BUSY_STATE=UNKNOWN, never a
+# manufactured state. "IDLE" asserted by a blind instrument is the one answer that misleads.
+BUSY=0; BUSY_STATE="UNKNOWN"; BUSY_SRC="none"; BUSY_AGE=0; BUSY_SAMPLE=""; BUSY_SUSPECT=0
+PERMPEND=0; PERMPEND_AGE=0
+_wl_sbl="${WRAP_SESSION_BUSY_LIB:-$(dirname "$0")/../hooks/lib/session-busy.sh}"
+[ -f "$_wl_sbl" ] || _wl_sbl="$HOME/.claude/hooks/lib/session-busy.sh"
+if [ "${WRAP_BUSY:-on}" != "off" ] && [ -f "$_wl_sbl" ]; then
+  # shellcheck source=../hooks/lib/session-busy.sh
+  # shellcheck disable=SC1091
+  if . "$_wl_sbl" 2>/dev/null && command -v session_busy_live >/dev/null 2>&1; then
+    # shellcheck disable=SC2016   # single quotes deliberate: this is the CHILD shell's script,
+    # and $1..$4 are its positional parameters, passed after the `_` argv0 placeholder below.
+    _wl_sbo="$(CC_BUSY_CUSTODY_OPEN="${CUSTODY_OPEN:-0}" \
+               _bounded "${WRAP_BUSY_TIMEOUT_S:-8}" bash -c '. "$1"; session_busy_live "$2" "$3" "$4"' \
+               _ "$_wl_sbl" "${SID:-}" "$PWD" "${GOAL_TP:-}" 2>/dev/null || true)"
+    if [ -n "$_wl_sbo" ]; then
+      BUSY_STATE="$(printf '%s' "$_wl_sbo" | awk '{print $1}')"
+      BUSY_SUSPECT="$(printf '%s' "$_wl_sbo" | awk '{print $2}')"
+      BUSY_AGE="$(printf '%s' "$_wl_sbo" | awk '{print $3}')"
+      BUSY_SRC="$(printf '%s' "$_wl_sbo" | awk '{print $4}')"
+      BUSY_SAMPLE="$(printf '%s' "$_wl_sbo" | cut -d' ' -f5- | tr -d '\n')"
+      [ "$BUSY_STATE" = "BUSY" ] && BUSY=1
+      case "$BUSY_SUSPECT" in ''|*[!0-9]*) BUSY_SUSPECT=0 ;; esac
+      case "$BUSY_AGE"     in ''|*[!0-9]*) BUSY_AGE=0     ;; esac
+    else
+      BUSY_STATE="UNKNOWN"; BUSY_SRC="error"
+    fi
+    _wl_pp="$(sb_permpend "${SID:-}" 2>/dev/null || true)"
+    if [ -n "$_wl_pp" ]; then PERMPEND=1; PERMPEND_AGE="${_wl_pp%% *}"
+      case "$PERMPEND_AGE" in ''|*[!0-9]*) PERMPEND_AGE=0 ;; esac
+    fi
+  else
+    BUSY_STATE="UNKNOWN"; BUSY_SRC="error"
+  fi
+fi
+
+
 emit_machine() {
   printf 'RUNG=%s\n' "$RUNG"
   printf 'READOUT=%s\n' "$READOUT"
@@ -1885,6 +1937,15 @@ emit_machine() {
   printf 'UNLANDED=%s\n' "$UNLANDED"
   printf 'LANDING=%s\n' "$LANDING"
   printf 'LANDING_PID=%s\n' "$LANDING_PID"
+  # ── ⏳ working-vs-idling (D8 / A10 §6.2). Reported fields, never a rung — see the block above.
+  printf 'BUSY=%s\n' "$BUSY"
+  printf 'BUSY_STATE=%s\n' "$BUSY_STATE"
+  printf 'BUSY_SRC=%s\n' "$BUSY_SRC"
+  printf 'BUSY_AGE=%s\n' "$BUSY_AGE"
+  printf 'BUSY_SUSPECT=%s\n' "$BUSY_SUSPECT"
+  printf 'BUSY_SAMPLE=%s\n' "$BUSY_SAMPLE"
+  printf 'PERMPEND=%s\n' "$PERMPEND"
+  printf 'PERMPEND_AGE=%s\n' "$PERMPEND_AGE"
   printf 'LIVE=%s\n' "$LIVE"
   printf 'LIVE_SRC=%s\n' "$LIVE_SRC"
   printf 'LIVE_SHA=%s\n' "$LIVE_SHA"
@@ -2105,6 +2166,16 @@ rung_next() {
 }
 
 case "$MODE" in
+  busy)
+    # always=1: the operator ASKED, so "working, normally" is a real answer here and silence would
+    # be indistinguishable from a broken reader — the opposite of the push surface's rule.
+    if command -v sb_render_line >/dev/null 2>&1; then
+      sb_render_line "$BUSY_STATE" "$BUSY_SUSPECT" "$BUSY_AGE" "$BUSY_SRC" \
+                     "$PERMPEND" "$PERMPEND_AGE" "$RUNG" 1 "$BUSY_SAMPLE"
+    else
+      printf '⏳ UNKNOWN — hooks/lib/session-busy.sh is not readable from here; this is an instrument gap, not an idle verdict.\n'
+    fi
+    ;;
   machine)
     if [ -n "$WL_KEY" ]; then
       # Build once, print once, store once. The store is best-effort and NEVER gates the answer:
