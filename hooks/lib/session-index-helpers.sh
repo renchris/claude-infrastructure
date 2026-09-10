@@ -998,6 +998,75 @@ $(find "$r" -maxdepth 3 -type f -name '*.jsonl' 2>/dev/null \
         return 0
     fi
 
+    # ── History-derived rows are EXEMPT from the transcript test ──────────────────────────
+    # THE TRANSCRIPT TEST IS NOT A TEST OF EXISTENCE, IT IS A TEST OF ONE KIND OF EVIDENCE, and
+    # `session_index_history_gapfill` (above) indexes exactly the sessions that have NO transcript
+    # this box can still read — that is its entire purpose. Measured 2026-09-10 on the live index:
+    # 2,900 of 2,902 source='history' rows and 358 of 358 source='history-legacy' rows are absent
+    # from the on-disk universe, i.e. BY CONSTRUCTION, so the unexempted predicate deletes the
+    # whole gap-fill. The two passes share this sweep: retention is weekly, the gap-fill hourly, so
+    # the net effect was churn plus a weekly window of up to 60 min in which ~3,000 sessions are
+    # unsearchable, and the "removed N with no transcript" line became an alarm that fires every
+    # week at roughly the same N whether or not anything is actually rotten.
+    #
+    # A history row's evidence is its PROMPT RECORD, so that is what is tested. Retaining it iff
+    # its session id still appears in $CLAUDE_HISTORY keeps the exemption BOUNDED and
+    # self-cleaning: the row outlives the transcript but not the prompt log it was derived from.
+    # source='history-legacy' (phase 3 of session-index-backfill.sh) is retained unconditionally —
+    # its ids are synthetic `legacy-<sha16>` hashes of display+timestamp, keyed on nothing this
+    # function can look up, and the set is frozen at 358 by a producer whose launchd path has
+    # exited 1 since before this was written.
+    #
+    # FAILS CLOSED, AND SAYS SO. An unreadable or empty evidence set retains every history-derived
+    # row and logs a NAMED line, rather than silently reproducing the bug this block exists to fix
+    # — the same polarity as the 0-transcripts refusal above, and deliberately not the same text,
+    # so the two incidents can never be read as one.
+    local hist_rows n_hist hist_evidence exempt n_exempt
+    hist_rows=$(session_index_sql \
+        "SELECT session_id FROM sessions WHERE source IN ('history','history-legacy');" \
+        2>/dev/null | sort -u | grep . || true)
+    n_hist=$(printf '%s\n' "$hist_rows" | grep -c . || true)
+    exempt=""
+    if [ "${n_hist:-0}" -gt 0 ]; then
+        hist_evidence=$(CLAUDE_HISTORY="$CLAUDE_HISTORY" python3 <<'HISTEV_PY' 2>/dev/null | sort -u | grep . || true
+import json, os, sys
+path = os.environ.get("CLAUDE_HISTORY", "")
+if not os.path.isfile(path):
+    sys.exit(0)
+seen = set()
+with open(path, encoding="utf-8", errors="replace") as fh:
+    for line in fh:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict):
+            sid = rec.get("sessionId")
+            if sid:
+                seen.add(sid)
+for sid in seen:
+    print(sid)
+HISTEV_PY
+)
+        if [ -z "$hist_evidence" ]; then
+            exempt="$hist_rows"
+            session_index_log \
+                "Retention: history evidence UNREADABLE (0 session ids from [$CLAUDE_HISTORY]) — retaining all $n_hist history-derived row(s)"
+        else
+            # Legacy ids are keyed on a synthetic hash, so they are retained without a lookup;
+            # source='history' ids are retained only while their prompt record survives.
+            exempt=$(printf '%s\n' \
+                "$(session_index_sql "SELECT session_id FROM sessions WHERE source='history-legacy';" 2>/dev/null)" \
+                "$(comm -12 \
+                    <(session_index_sql "SELECT session_id FROM sessions WHERE source='history';" 2>/dev/null | sort -u | grep . || true) \
+                    <(printf '%s\n' "$hist_evidence"))" | sort -u | grep . || true)
+        fi
+    fi
+    n_exempt=$(printf '%s\n' "$exempt" | grep -c . || true)
+
     # Victims = indexed sessions absent from the on-disk universe (P2), plus tracked files
     # whose path is gone (P1). `comm` needs both sides sorted.
     local indexed victims dead
@@ -1011,6 +1080,11 @@ $sid"
     done < <(session_index_sql \
         "SELECT session_id || char(9) || file_path FROM file_tracking;" 2>/dev/null || true)
     victims=$(printf '%s\n' "$victims" | grep . | sort -u)
+    # Subtract AFTER both arms (P2 above and P1's file_tracking walk), so a history-derived row
+    # cannot be re-condemned by a stray tracked-file row either.
+    if [ "${n_exempt:-0}" -gt 0 ]; then
+        victims=$(comm -23 <(printf '%s\n' "$victims" | grep . || true) <(printf '%s\n' "$exempt"))
+    fi
     dead=$(printf '%s\n' "$victims" | grep -c . || true)
 
     if [ "$apply" -eq 1 ] && [ "${dead:-0}" -gt 0 ]; then
@@ -1044,7 +1118,7 @@ COMMIT;" >/dev/null 2>&1 || failed=$((failed + 1))
             session_index_log "Retention: $failed delete batch(es) FAILED — index partially pruned"
         fi
         session_index_sql "VACUUM;" >/dev/null 2>&1 || true
-        session_index_log "Retention: removed $dead session(s) with no transcript on disk; VACUUM done"
+        session_index_log "Retention: removed $dead session(s) whose evidence is gone; retained $n_exempt history-derived row(s); VACUUM done"
     fi
 
     local after
