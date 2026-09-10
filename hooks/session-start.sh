@@ -229,9 +229,16 @@ _resolve_claude_bin() {
   return 1
 }
 
+# RESOLVED ABSOLUTELY, not by bare name (2026-09-09). `command -v` already prints the full path,
+# and storing "$_t" instead threw it away — so every consumer re-resolved the name against whatever
+# PATH the hook happened to inherit. A hook's PATH is not the operator's: scripts/unattended-path-lint.sh
+# exists for exactly this class, `timeout` is not on the stock macOS PATH at all (it is coreutils,
+# via Homebrew), and the consumers here all swallow failure, so an unreachable binary degrades
+# SILENTLY rather than erroring. Same value when PATH is rich; reachable when it is not.
 _TIMEOUT_BIN=""
 for _t in timeout gtimeout; do
-  if command -v "$_t" >/dev/null 2>&1; then _TIMEOUT_BIN="$_t"; break; fi
+  if _TIMEOUT_BIN="$(command -v "$_t" 2>/dev/null)" && [ -n "$_TIMEOUT_BIN" ]; then break; fi
+  _TIMEOUT_BIN=""
 done
 
 # The probe itself, unchanged in behaviour and now reachable from two entry points: the inline
