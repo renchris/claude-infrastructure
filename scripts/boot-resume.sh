@@ -16,8 +16,26 @@
 #        resume — invoke the resume launcher per ghost (config-dir basename → reso-resume-one account
 #                 alias, mapped) + start keepalive once, then page a summary. Operator opts in.
 #   3. ACT + LOG: always emit ONE {fired|abstained|failed} IDL record (abstention-logged, B-3). A
-#      delta with no reachable desk role FAILS LOUD and does NOT mark the boot processed, so a re-run
-#      retries (a17 S-7: never let a wake drain to nobody).
+#      delta with no reachable desk role does not drain to nobody (a17 S-7) — it falls back to a
+#      channel that needs NO address: the full page is written to <state>/undelivered-<boot>.page and
+#      filed as an operator-blocked `cc-backlog needs` row, and ONLY THEN is the boot marked. If that
+#      durable filing also fails, the original fail-loud stands: do NOT mark, exit 4, retry.
+#      WHY THE FALLBACK EXISTS (backlog cae796cb1bfb, measured at the 2026-08-25 00:16 reboot): the
+#      no-role branch used to fail loud and never mark, which is the right POLARITY over the wrong
+#      CHANNEL — its loudness is a stderr line under launchd that no human reads, so an unbounded
+#      retry is a SILENT one. Five identical `failed / no-desk-role` records in 21 min (07:45→08:06),
+#      each computing n_open=8 correctly, none delivered, and nothing surfaced until a human happened
+#      to look. The delta was right every time; only the address was missing. The class is that
+#      cc-roles/desk has exactly ONE writer (bin/desk-register / `cc-roles claim`, both MANUAL) and a
+#      DELETER (autonomy-sweep expires it as stale), so after a sweep or a reboot nothing re-creates
+#      it. Not cured by having desk-brief-inject claim the role at SessionStart: desk is singular and
+#      every session runs that hook, so the wrong pane would claim it.
+#      WHY `cc-backlog needs` AND NOT THE .page CHANNEL (the item proposed either; they are not
+#      equivalent today): autonomy-sweep drains $CC_PAGES_DIR in phase `1-collect-pages-alarms`,
+#      which its own in-tree measurement records as STARVED — `stopped_before` names that phase 35 of
+#      49 self-bound ticks (scripts/autonomy-sweep.sh § 0a-i). A page stamp is a channel that mostly
+#      does not land. A `needs` row is born blocked, kicks no dispatch (so it cannot spawn into the
+#      boot storm this script already guards against), and is rendered at every session close.
 #
 # C10: this is machinery the OPERATOR loads via launchd (launchd/com.claude.boot-resume.plist,
 # RunAtLoad, shipped UNLOADED). The agent never loads launchd. Activation + rollback + the posture
@@ -25,7 +43,8 @@
 #
 # Env (config + tests): CC_REGISTRY_DIR · CC_ROLES_DIR · CC_IDL · CC_BOOT_RESUME_STATE_DIR ·
 #   CC_BOOT_RESUME_MODE (page|resume; else <state>/mode; else page) · CC_BOOTTIME_OVERRIDE (sec) ·
-#   CC_NOTIFY_BIN · CC_RESUME_LAUNCH_BIN · CC_KEEPALIVE_BIN · CC_LAUNCHCTL_BIN · CC_KEEPALIVE_INTERVAL.
+#   CC_NOTIFY_BIN · CC_RESUME_LAUNCH_BIN · CC_KEEPALIVE_BIN · CC_LAUNCHCTL_BIN · CC_KEEPALIVE_INTERVAL ·
+#   CC_BACKLOG_BIN (the no-role durable fallback; a test MUST stub it or it writes the live ledger).
 # BSD+GNU portable, no eval, fail-loud. bash 3.2-safe.
 set -uo pipefail
 
@@ -56,6 +75,10 @@ if ! . "$_ccl" 2>/dev/null; then
   exit 1
 fi
 NOTIFY="$(resolve_bin "${CC_NOTIFY_BIN:-}" cc-notify)"
+# The addressless fallback for a delta with no desk role (see step 3 in the header). Resolved
+# here rather than at the use site so an unresolvable cc-backlog is a KNOWN-empty string on the
+# one path that reads it, never a bare name hitting the launchd PATH (/usr/bin:/bin).
+BACKLOG="$(resolve_bin "${CC_BACKLOG_BIN:-}" cc-backlog)"
 LAUNCH="$(resolve_bin "${CC_RESUME_LAUNCH_BIN:-}" boot-resume-launch.sh boot-resume-launch.sh)"
 
 # ── machine-capacity admission (MACHINE_CAPACITY_V2 §12.1 / §12.4) lives in the LAUNCHER. ──────
@@ -364,8 +387,45 @@ if [ -n "$DESK_TARGET" ] && [ -n "$NOTIFY" ]; then
   log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"notified\":\"$DESK_TARGET\",\"delivered\":true"
   exit 0
 else
-  # a wake with nobody to wake: keep the delta LIVE (do NOT mark) so a re-run re-attempts it.
-  log_idl failed ",\"n_open\":$n_open,\"resumed\":$resumed,\"delivered\":false,\"reason\":\"no-desk-role\""
-  echo "boot-resume: ${n_open} session(s) open at last boot but no desk role at $ROLES_DIR/desk — undelivered, will retry" >&2
+  # ── a wake with nobody to WAKE is not a wake with nobody to TELL. ────────────────────────────────
+  # Two distinct causes reach this branch and the record must say which: the role is absent, or
+  # cc-notify itself did not resolve. The old record called both "no-desk-role", which sends the next
+  # reader at the roles dir for a fault that may be in resolve_bin's ladder.
+  why=no-desk-role
+  [ -n "$DESK_TARGET" ] && why=no-notify-bin
+
+  # The page itself, verbatim, on disk beside this script's own state — the one store that needs no
+  # address, no daemon and no drain. It is what the backlog row POINTS AT, so the row stays one line.
+  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  undeliv="$STATE_DIR/undelivered-$BOOT.page"
+  printf '%s\n' "$msg" > "$undeliv" 2>/dev/null || true
+
+  # The step text carries the whole decision: how many, when, where the full text is, what to run,
+  # and the cure for the CLASS (claim the role) so the next boot does not come back here.
+  step="boot-resume could not page the desk ($why): ${n_open} session(s) were open before the ${boot_h} reboot and nothing was told. Full delta: ${undeliv} — recover with /resume-sessions in any Claude session, then run \`cc-roles claim desk\` from the desk pane so the next boot pages directly."
+  # No --run: the recovery is a slash command inside a Claude session, not a shell command, and
+  # `cc-roles claim desk` would bind the role to cc-do's throwaway shell rather than to the desk pane.
+  # cmd_needs' own header says an absent falsifier is honest and a fabricated one lies; same here.
+  bid=""
+  if [ -n "$BACKLOG" ]; then
+    bid="$("$BACKLOG" needs "$step" --project claude-infrastructure 2>/dev/null | tail -1 | tr -d '[:space:]')"
+    # An id is hex. Anything else — a warning line, an empty write, a usage error — is NOT a filing,
+    # and treating it as one is how a fallback reports delivery it never made.
+    case "$bid" in ''|*[!0-9a-f]*) bid="" ;; esac
+  fi
+
+  if [ -n "$bid" ]; then
+    # DELIVERED, durably, to a lane that is read. Marking here is what converts an unbounded silent
+    # retry into one surfaced item — the whole point of the fallback.
+    mark_processed
+    log_idl fired ",\"n_open\":$n_open,\"resumed\":$resumed,\"resume_failed\":$resume_fail,\"resume_shed\":$resume_shed,\"desk_jobs_up\":$dj_up,\"desk_jobs_total\":$dj_total,\"delivered\":true,\"channel\":\"backlog-needs\",\"backlog_id\":\"$bid\",\"reason\":\"$why\""
+    echo "boot-resume: no desk role — the ${n_open}-session boot delta was filed as operator-blocked backlog item $bid (full text: $undeliv)" >&2
+    exit 0
+  fi
+
+  # The addressless channel failed TOO. Now the original polarity is the right one: a17 S-7 stands —
+  # do NOT mark, so a re-run re-attempts both legs.
+  log_idl failed ",\"n_open\":$n_open,\"resumed\":$resumed,\"delivered\":false,\"reason\":\"$why\",\"fallback\":\"backlog-unavailable\""
+  echo "boot-resume: ${n_open} session(s) open at last boot, no desk role at $ROLES_DIR/desk AND cc-backlog unavailable — undelivered, will retry (full text: $undeliv)" >&2
   exit 4
 fi
