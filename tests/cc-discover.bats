@@ -171,6 +171,89 @@ EOF
   [ "$(count_src plan-open)" -eq 1 ]
 }
 
+# ── C2 the STORED probe's exit code (recovered from stranded 71658d676, 2026-08-20) ──────────
+# The pre-mint screen above and the probe STORED on the row are two different jobs. The screen may
+# fail open on anything that is not the affirmative token — an absent scanner must not delete the
+# critic. The stored probe is read by cc-premise at CLAIM time, and cc-premise has a could-not-ask
+# band (_FALSIFIER_UNASKABLE_RCS = {2,124,126,127}, bin/cc-premise:266) whose whole purpose is to
+# say "the probe did not answer" instead of "this premise is current — the opposite claim, not a
+# weaker one" (bin/cc-premise:1435). A probe of the shape `[ "$(cmd)" = FALSIFIED ]` yields ONLY 0
+# or 1, so that band was structurally unreachable for every plan-open row ever minted, and every
+# unaskable state rendered as a confident "NOT REFUTED (exit 1) … output: (silent)".
+#
+# These cases execute the MINTED STRING ITSELF — not a copy of it written here, which would pass
+# whatever the tool actually stores. The four inner states are driven by pointing HOME at a fixture,
+# because the stored probe hardcodes $HOME/.claude/scripts/plan-phase-scan.sh by design (it must
+# resolve on the box that CLAIMS the row, which is not this one).
+_c2_minted_probe() {  # → the falsifier string cc-discover stored on the plan-open row
+  jq -rs '[.[]|select(.event=="add" and .source=="plan-open")]|last|.falsifier' "$CC_BACKLOG_FILE"
+}
+
+_c2_mint_live_row() {  # mint one plan-open row whose body still has work
+  _c2_plan "$C/probe.md" ""
+  cat > "$C/findplan" <<EOF
+#!/bin/bash
+[ "\$1" = "--list-open" ] || exit 0
+printf '%s\n' "OPEN | batscase | $C/probe.md | Ship the widget"
+EOF
+  chmod +x "$C/findplan"
+  export CC_DISCOVER_FINDPLAN="$C/findplan"
+  run "$CD" --once
+  [ "$status" -eq 0 ]
+  [ "$(count_src plan-open)" -eq 1 ]
+}
+
+_c2_scanner() {  # <home> <body…> — install a fixture plan-phase-scan.sh under a fixture HOME
+  mkdir -p "$1/.claude/scripts"
+  cat > "$1/.claude/scripts/plan-phase-scan.sh"
+  chmod +x "$1/.claude/scripts/plan-phase-scan.sh"
+}
+
+@test "C2 stored probe: a MISSING scanner exits 127, not a flat 1 — cc-premise's band is reachable" {
+  _c2_mint_live_row
+  probe="$(_c2_minted_probe)"
+  HOME="$C/no-such-home" run -127 /bin/sh -c "$probe"
+  # 127 is command-not-found. Before the fix this was 1, i.e. "asked, answered no".
+  [ "$status" -eq 127 ]
+}
+
+@test "C2 stored probe: a NON-EXECUTABLE scanner exits 126, not a flat 1" {
+  _c2_mint_live_row
+  probe="$(_c2_minted_probe)"
+  H="$C/h126"; printf '#!/bin/sh\necho FALSIFIED\n' | _c2_scanner "$H"
+  chmod -x "$H/.claude/scripts/plan-phase-scan.sh"
+  HOME="$H" run /bin/sh -c "$probe"
+  [ "$status" -eq 126 ]
+}
+
+@test "C2 stored probe: the affirmative token still exits 0 — the falsification path is unchanged" {
+  _c2_mint_live_row
+  probe="$(_c2_minted_probe)"
+  H="$C/h0"; printf '#!/bin/sh\necho FALSIFIED\nexit 0\n' | _c2_scanner "$H"
+  HOME="$H" run /bin/sh -c "$probe"
+  [ "$status" -eq 0 ]
+}
+
+@test "C2 stored probe: a live plan exits 1 — a real 'asked, answered no' is NOT in the band" {
+  _c2_mint_live_row
+  probe="$(_c2_minted_probe)"
+  H="$C/h1"; printf '#!/bin/sh\necho LIVE\nexit 1\n' | _c2_scanner "$H"
+  HOME="$H" run /bin/sh -c "$probe"
+  [ "$status" -eq 1 ]
+}
+
+@test "C2 stored probe: NEGATIVE CONTROL — a version-skewed scanner dumping JSON at rc 0 still exits 1" {
+  # scripts/plan-phase-scan.sh:78-85 documents the skew: an older DEPLOYED copy ignores the verb,
+  # prints JSON and exits 0. Reading that rc would falsify every open plan on a box whose symlink
+  # lagged a land. Exit 0 therefore still requires the TOKEN, and this case is what proves the fix
+  # did not trade one silent failure for a louder one.
+  _c2_mint_live_row
+  probe="$(_c2_minted_probe)"
+  H="$C/hskew"; printf '#!/bin/sh\necho {\\"sections\\":[]}\nexit 0\n' | _c2_scanner "$H"
+  HOME="$H" run /bin/sh -c "$probe"
+  [ "$status" -eq 1 ]
+}
+
 # ── C3 wiring-inert (CLI-level) ──────────────────────────────────────────────
 # Every seed carries .ts, as every real IDL record does — the recency horizon reads it. A hook is
 # INERT only when its every in-horizon abstention is BLIND (could-not-observe); see blind-check law

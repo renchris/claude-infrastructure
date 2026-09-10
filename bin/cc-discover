@@ -270,8 +270,26 @@ critic_plan_open() {
       idl_log plan-open skipped "falsified at mint: $path"
       continue
     fi
+    # 🚨 THE STORED PROBE MUST NOT COLLAPSE THE INNER EXIT CODE, and the screen above must
+    # (2026-09-09; recovered from stranded cloud commit 71658d676, 2026-08-20, which measured this
+    # and never landed). The two sites want the same DIRECTION and different LEGIBILITY, so they no
+    # longer share a shape. `[ "$(cmd)" = FALSIFIED ]` yields only 0 or 1, so 127 command-not-found,
+    # 126 not-executable, 124 timeout(1) cut and 2 all reach cc-premise as a flat 1 — and
+    # cc-premise's could-not-ask band (_FALSIFIER_UNASKABLE_RCS, bin/cc-premise:266, built for
+    # exactly this after backlog f401935c0bd4) was therefore UNREACHABLE for every plan-open item
+    # ever minted. Every unaskable state rendered as "NOT REFUTED (exit 1) … output: (silent)",
+    # which is not a weaker claim than the truth but the opposite one — the words cc-premise:1435
+    # uses about the defect it thought it had closed. Measured: a completed plan was dispatched as
+    # live work (83f44615f0eb against HANDOFF_HIGH_VALUE_CAPTURE.md, one day after cf7a5490 closed
+    # it) while the stored falsifier exits 0 = FALSIFIED against a current scanner.
+    # Exit 0 STILL REQUIRES THE TOKEN, so plan-phase-scan.sh:78-85's version-skew hole is untouched:
+    # an older deployed copy that ignores the verb and dumps JSON at rc 0 prints no token and lands
+    # on `exit 1`, exactly as before. Only the four unaskable codes are newly distinguishable.
+    # The PRE-MINT screen above keeps the collapsed shape deliberately — there, fail-open on
+    # anything-but-the-token is the correct polarity and an exit code it could act on would let a
+    # lagging symlink delete this critic.
     add_candidate "advance $title" "$proj" "$path" "plan-open" \
-      "[ \"\$(\"\$HOME/.claude/scripts/plan-phase-scan.sh\" $(sq "$path") --falsify 2>/dev/null)\" = FALSIFIED ]"; rc=$?
+      "out=\$(\"\$HOME/.claude/scripts/plan-phase-scan.sh\" $(sq "$path") --falsify 2>/dev/null); rc=\$?; [ \"\$out\" = FALSIFIED ] && exit 0; case \$rc in 2|124|126|127) exit \$rc;; esac; exit 1"; rc=$?
     cands=$((cands + 1)); [ "$rc" -eq 0 ] && added=$((added + 1))
   done < <("$bin" --list-open 2>/dev/null)
   emit_critic_result plan-open "$added" "$cands"
