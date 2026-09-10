@@ -6772,7 +6772,26 @@ dispatch_kick() {
   : > "$marker" 2>/dev/null || true
   bin="$(kick_bin)"
   [ -x "$bin" ] || return 0
-  ( "$bin" --decide >/dev/null 2>&1 </dev/null & ) >/dev/null 2>&1 || true
+  # 🚨 `3>&-` IS LOAD-BEARING, AND IT IS WHY THIS SPAWN ONLY *LOOKS* DETACHED. 0/1/2 are redirected
+  # and fd 3 was not, so the grandchild INHERITED it — and under bats fd 3 is the TAP channel, which
+  # bats itself reads to EOF. A reader does not get EOF while any process still holds the write end,
+  # so bats blocked until the whole dispatch pass exited: measured on tests/autonomy-sweep.bats,
+  # 150 s and 9 real dispatch passes fired at the operator's live store versus 29 s and 0 with the
+  # kick switched off (stranded commit 44de2d805, 2026-08-13). postland-verify runs a file alone
+  # under POSTLAND_FILE_TIMEOUT_S, so on a box where a dispatch pass is not a stub that is a HUNG
+  # with no verdict, naming a FILE — a class whose resolution costs a session to localise.
+  #
+  # THE SWITCH IS NOT THE SEAM. `CC_BACKLOG_KICK=off` above closes this for the 44 suites that set
+  # it and for nothing else: 82 suites in tests/ reach cc-backlog WITHOUT it, and the spawn's output
+  # already goes to /dev/null, so a suite that starts wedging gives no tell pointing here. Closing
+  # the fd at the spawn closes the CLASS for every caller, present and future, and needs no suite to
+  # remember anything (memory: enforcement-must-live-at-the-chokepoint).
+  #
+  # Two-arm control, this exact form: a 3 s grandchild under `$( ... 3>&1 )` returns in 3 s without
+  # the close and 0 s with it. Closing an fd that was never open is a no-op in bash, so this is safe
+  # in every non-bats caller. NEVER pkill the spawned peers instead — that reaps the operator's REAL
+  # dispatch workers, a strictly worse bug than the hang it would hide.
+  ( "$bin" --decide >/dev/null 2>&1 </dev/null 3>&- & ) >/dev/null 2>&1 || true
   return 0
 }
 

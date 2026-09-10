@@ -2644,3 +2644,39 @@ SEED
   [ "$output" = "dropped=0" ]
   true
 }
+
+# ── dispatch_kick may not hold fd 3 ────────────────────────────────────────────────────────────────
+# RED-PROOF for the `3>&-` on bin/cc-backlog's dispatch_kick spawn. The spawn redirects 0/1/2 and so
+# LOOKS detached; fd 3 it did not, and under bats fd 3 is the TAP channel, which bats reads to EOF.
+# A reader gets no EOF while any process holds the write end, so bats blocked until the whole
+# dispatch pass exited — measured at 150 s on tests/autonomy-sweep.bats, and a HUNG (not a red) under
+# postland-verify's per-file bound. Recovered from stranded commit 44de2d805 (2026-08-13) as a fix at
+# the SEAM rather than as that commit's per-suite stub: `CC_BACKLOG_KICK=off` closes this for the 44
+# suites that set it and for none of the 82 that do not.
+#
+# `$( ... 3>&1 )` reproduces bats' own channel shape exactly: fd 3 becomes a pipe whose read end the
+# substitution drains to EOF. The marker assertion is what keeps this from passing vacuously — it is
+# written by dispatch_kick immediately BEFORE the spawn, so its presence proves the spawn was
+# reached rather than short-circuited by the kill switch, a missing clock or the debounce.
+@test "dispatch_kick: the spawned pass cannot hold fd 3 open (bats' TAP channel)" {
+  local stub="$BATS_TEST_TMPDIR/slow-dispatch" marker="$BATS_TEST_TMPDIR/kick-marker" t0 elapsed ctl
+  printf '#!/bin/bash\nsleep 5\n' > "$stub"; chmod +x "$stub"
+
+  # INSTRUMENT POSITIVE CONTROL — the same shape WITHOUT the close must be seen to block, else a
+  # green below would only mean the harness cannot detect a leak on this box (e.g. no usable clock).
+  t0=$(date +%s)
+  ctl=$( { ( "$stub" >/dev/null 2>&1 </dev/null & ) >/dev/null 2>&1 || true; } 3>&1 )
+  [ "$(( $(date +%s) - t0 ))" -ge 3 ] || { echo "instrument is blind: a leaking spawn did not block"; false; }
+
+  # ORDER MATTERS: fd 3 must land on the SUBSTITUTION'S PIPE, so it is duplicated from fd 1 while
+  # fd 1 still IS that pipe. Redirecting stdout to /dev/null first and then saying `3>&1` points
+  # fd 3 at /dev/null — a channel with no reader, which can never block and would make this green
+  # unconditionally. stdout rides the pipe with it; only stderr is discarded.
+  t0=$(date +%s)
+  ctl=$( CC_BACKLOG_KICK_BIN="$stub" CC_BACKLOG_KICK_MARKER="$marker" CC_BACKLOG_KICK=on \
+           "$CB" add --project fixture --title "fd3 red-proof" --source t 3>&1 2>/dev/null )
+  elapsed=$(( $(date +%s) - t0 ))
+
+  [ -f "$marker" ] || { echo "vacuous: dispatch_kick never reached its spawn"; false; }
+  [ "$elapsed" -lt 3 ] || { echo "add returned in ${elapsed}s — the spawned pass held fd 3 open"; false; }
+}
