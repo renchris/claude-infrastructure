@@ -162,7 +162,11 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 #                             per-session LITTER, never supervisor evidence: fully-acked dead
 #                             mailbox boxes (MBX_DAYS, 7 d = 604,800 s, 100× the 6,000 s floor),
 #                             watchdog .pid/.id pairs behind an identity pin (WD_AGE_S, 2 d =
-#                             172,800 s, 28× the floor), and abandoned mkbox lock dirs. Its two
+#                             172,800 s, 28× the floor), abandoned mkbox lock dirs, and — since
+#                             2026-09-10 (backlog 7a40d116d06c) — orphan cursors, stale
+#                             .watching/.posttool/.wakefloor sidecars and dead-pid .watchers
+#                             claims past the same MBX_DAYS, each removed only where its readers
+#                             already treat a days-old file as absent. Its two
 #                             evidence-bearing cases deliberately do NOT delete — a dead box with
 #                             UNACKED lines is ARCHIVED to mailbox/archive/ at MBX_STRAND_DAYS
 #                             (30 d), because unacked mail in a dead box is the proof the comms
@@ -224,6 +228,7 @@ EVIDENCE_GREP='cc-telemetry|cc-registry|CC_TELEMETRY_DIR|CC_REGISTRY_DIR'
 # @anchor hooks/lead-crash-watchdog.sh sid\.daemon
 # @anchor scripts/cc-gc.sh MBX_STRAND_DAYS
 # @anchor scripts/cc-gc.sh MBX_DIR/archive
+# @anchor scripts/cc-gc.sh mv -n
 # @anchor scripts/cc-gc.sh WD_AGE_S
 # @anchor scripts/cc-gc.sh ^APPLY=0
 # @anchor hooks/lib/peer-owned.sh po-porc\.XXXXXX

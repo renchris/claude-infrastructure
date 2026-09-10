@@ -173,6 +173,115 @@ mkbox() { # <key> <lines> <acked>
   [ -d "$CC_MAILBOX_DIR/.new.lock" ]
 }
 
+# ── mailbox: numeric pane keys, recurring keys, and everything a box leaves beside it ─────────
+# (backlog 7a40d116d06c — the lane governed *.md UUID boxes only, so 8,083 files grew around 964)
+
+# Sets DEADPID: a pid that provably existed and is provably gone.
+dead_pid() { sleep 300 >/dev/null 2>&1 & DEADPID=$!; kill "$DEADPID" 2>/dev/null; wait "$DEADPID" 2>/dev/null || true; }
+
+@test "mailbox: a NUMERIC pane-keyed box is reapable, a name-keyed twin is not" {
+  mkbox 4242 3 3;  age_days "$CC_MAILBOX_DIR/4242.md" 30
+  mkbox deskC 3 3; age_days "$CC_MAILBOX_DIR/deskC.md" 30
+  run bash "$GC" --store mailbox --apply
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_MAILBOX_DIR/4242.md" ]
+  [ ! -f "$CC_MAILBOX_DIR/4242.acked" ]
+  [ -f "$CC_MAILBOX_DIR/deskC.md" ]
+}
+
+@test "mailbox: a LIVE numeric pane box is KEPT — the registry's paneUUID IS the pane id" {
+  spawn; live_row 4243 sid-num "$SPAWNED"
+  mkbox 4243 3 3; age_days "$CC_MAILBOX_DIR/4243.md" 30
+  mkbox 4242 3 3; age_days "$CC_MAILBOX_DIR/4242.md" 30
+  run bash "$GC" --store mailbox --apply
+  [ "$status" -eq 0 ]
+  [ -f "$CC_MAILBOX_DIR/4243.md" ]
+  [ ! -f "$CC_MAILBOX_DIR/4242.md" ]
+}
+
+@test "mailbox: re-archiving a RECURRING key never overwrites the earlier archive" {
+  mkbox "$U_DEAD" 5 2; age_days "$CC_MAILBOX_DIR/$U_DEAD.md" 40
+  run bash "$GC" --store mailbox --apply
+  [ -f "$CC_MAILBOX_DIR/archive/$U_DEAD.md" ]
+  mkbox "$U_DEAD" 2 0; age_days "$CC_MAILBOX_DIR/$U_DEAD.md" 40   # the key recurs, unacked again
+  run bash "$GC" --store mailbox --apply
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_MAILBOX_DIR/$U_DEAD.md" ]
+  grep -q "msg5" "$CC_MAILBOX_DIR/archive/$U_DEAD.md"             # the first archive is intact …
+  [ "$(find "$CC_MAILBOX_DIR/archive" -name "$U_DEAD*.md" | wc -l | tr -d ' ')" -eq 2 ]
+  [ "$(find "$CC_MAILBOX_DIR/archive" -name "$U_DEAD~*.acked" | wc -l | tr -d ' ')" -eq 1 ]  # … and the triple pairs up
+}
+
+@test "mailbox: an ORPHAN cursor of a dead key is reaped once aged; a young one is kept" {
+  local U2=cccccccc-1111-2222-3333-444444444444
+  echo 0 > "$CC_MAILBOX_DIR/$U_DEAD.acked"; age_days "$CC_MAILBOX_DIR/$U_DEAD.acked" 10
+  echo 0 > "$CC_MAILBOX_DIR/$U2.acked"
+  echo 0 > "$CC_MAILBOX_DIR/4242.seen";     age_days "$CC_MAILBOX_DIR/4242.seen" 10
+  run bash "$GC" --store mailbox --apply
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_MAILBOX_DIR/$U_DEAD.acked" ]
+  [ ! -f "$CC_MAILBOX_DIR/4242.seen" ]
+  [ -f "$CC_MAILBOX_DIR/$U2.acked" ]
+  echo "$output" | grep -q "cursors=2"
+}
+
+@test "mailbox: a cursor BESIDE a kept box belongs to the box, not the orphan pass" {
+  mkbox "$U_DEAD" 5 2                                     # unacked, inside the strand horizon → kept
+  age_days "$CC_MAILBOX_DIR/$U_DEAD.md" 10; age_days "$CC_MAILBOX_DIR/$U_DEAD.acked" 10
+  run bash "$GC" --store mailbox --apply
+  [ -f "$CC_MAILBOX_DIR/$U_DEAD.md" ]
+  [ -f "$CC_MAILBOX_DIR/$U_DEAD.acked" ]
+  echo "$output" | grep -q "cursors=0"
+}
+
+@test "mailbox: orphan cursors of a LIVE key and a NAME key, and a .forward, all survive the pass" {
+  spawn; live_row "$U_LIVE" sid-live "$SPAWNED"
+  echo 3 > "$CC_MAILBOX_DIR/$U_LIVE.acked";       age_days "$CC_MAILBOX_DIR/$U_LIVE.acked" 30
+  echo 3 > "$CC_MAILBOX_DIR/deskC.acked";         age_days "$CC_MAILBOX_DIR/deskC.acked" 30
+  echo "$U_LIVE" > "$CC_MAILBOX_DIR/$U_DEAD.forward"; age_days "$CC_MAILBOX_DIR/$U_DEAD.forward" 30
+  echo 0 > "$CC_MAILBOX_DIR/$U_DEAD.acked";       age_days "$CC_MAILBOX_DIR/$U_DEAD.acked" 30   # control
+  run bash "$GC" --store mailbox --apply
+  [ "$status" -eq 0 ]
+  [ -f "$CC_MAILBOX_DIR/$U_LIVE.acked" ]
+  [ -f "$CC_MAILBOX_DIR/deskC.acked" ]
+  [ -f "$CC_MAILBOX_DIR/$U_DEAD.forward" ]
+  [ ! -f "$CC_MAILBOX_DIR/$U_DEAD.acked" ]
+}
+
+@test "mailbox: stale .watching/.posttool/.wakefloor of a dead key are reaped; a fresh .watching is kept" {
+  printf 'pid=1\n' > "$CC_MAILBOX_DIR/$U_DEAD.watching";    age_days "$CC_MAILBOX_DIR/$U_DEAD.watching" 10
+  : > "$CC_MAILBOX_DIR/$U_DEAD.posttool";                   age_days "$CC_MAILBOX_DIR/$U_DEAD.posttool" 10
+  printf 'count=3\n' > "$CC_MAILBOX_DIR/$U_DEAD.wakefloor"; age_days "$CC_MAILBOX_DIR/$U_DEAD.wakefloor" 10
+  printf 'pid=1\n' > "$CC_MAILBOX_DIR/4244.watching"
+  run bash "$GC" --store mailbox --apply
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_MAILBOX_DIR/$U_DEAD.watching" ]
+  [ ! -f "$CC_MAILBOX_DIR/$U_DEAD.posttool" ]
+  [ ! -f "$CC_MAILBOX_DIR/$U_DEAD.wakefloor" ]
+  [ -f "$CC_MAILBOX_DIR/4244.watching" ]
+  echo "$output" | grep -q "cursors=3"
+}
+
+@test "mailbox: an aged watcher claim naming a DEAD pid is reaped; one naming a LIVE pid is kept" {
+  mkdir -p "$CC_MAILBOX_DIR/.watchers"
+  dead_pid; spawn
+  : > "$CC_MAILBOX_DIR/.watchers/$U_DEAD.$DEADPID"; age_days "$CC_MAILBOX_DIR/.watchers/$U_DEAD.$DEADPID" 10
+  : > "$CC_MAILBOX_DIR/.watchers/$U_DEAD.$SPAWNED"; age_days "$CC_MAILBOX_DIR/.watchers/$U_DEAD.$SPAWNED" 10
+  run bash "$GC" --store mailbox --apply
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_MAILBOX_DIR/.watchers/$U_DEAD.$DEADPID" ]
+  [ -f "$CC_MAILBOX_DIR/.watchers/$U_DEAD.$SPAWNED" ]
+  echo "$output" | grep -q "claims=1"
+}
+
+@test "mailbox: the sidecar pass is counted in a dry-run and deletes nothing" {
+  echo 0 > "$CC_MAILBOX_DIR/$U_DEAD.acked"; age_days "$CC_MAILBOX_DIR/$U_DEAD.acked" 10
+  run bash "$GC" --store mailbox
+  [ "$status" -eq 0 ]
+  [ -f "$CC_MAILBOX_DIR/$U_DEAD.acked" ]
+  echo "$output" | grep -q "cursors=1"
+}
+
 # ── watchdog adapter — the identity pin ───────────────────────────────────────────────────────
 
 @test "watchdog: a dead pid's pair is reaped once aged" {
