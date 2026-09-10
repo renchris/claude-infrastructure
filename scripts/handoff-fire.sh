@@ -626,7 +626,19 @@ _under_test() { # → "true" when a bats harness is present in this process, els
 # is a 127 that kills the FIRE. Empty ⇒ the field emits JSON null (R9: an unmeasured field reads
 # ABSENT, never a fabricated empty string).
 _resolved_prompt_file() { # → absolute caller-named brief path, or nothing
-  local _p="${PROMPT_FILE_ORIG:-${PROMPT_FILE:-}}" _d
+  # RCY_PROMPT_FILE is the THIRD fallback and it is the one that makes the field non-null in the
+  # detached `__recycle` watcher, which re-execs this script (:6241) and so has neither
+  # PROMPT_FILE_ORIG nor PROMPT_FILE in scope — only $9, parsed to RCY_PROMPT_FILE at :6248. All
+  # SEVEN of the watcher's emit_recycle_event sites (:6319 :6329 :6340 :6409 :6452 :6469 :6486)
+  # therefore emitted prompt_file:null, measured 19 of 19 `recycle-engaged` rows in
+  # ~/.claude/logs/handoffs.jsonl against 28 of 30 for the FOREGROUND `recycle-intent` (:11062) —
+  # a split that falls exactly on the watcher boundary, i.e. a successful in-place recycle joined
+  # to no brief at all, which is the one question this field exists to answer. The watcher already
+  # treats that path as load-bearing: its pane-VANISHED alarm prints it (:6330).
+  # LAST in the chain on purpose — an author-named brief still wins
+  # (tests/handoff-prompt-file-join.bats case 7 pins that), so this can only ever turn a null into
+  # a real path and never change a value already resolved.
+  local _p="${PROMPT_FILE_ORIG:-${PROMPT_FILE:-${RCY_PROMPT_FILE:-}}}" _d
   [ -n "$_p" ] || return 0
   case "$_p" in
     /*) printf '%s' "$_p" ;;
