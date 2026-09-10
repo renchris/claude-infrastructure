@@ -1,6 +1,6 @@
 ---
 name: limit-recover
-description: Recover perfectly from a usage-limit interruption (5-hour / weekly / model-scoped Fable / monthly-spend cap) — disk-truth audit of every Dynamic Workflow slot, subagent, task, AND Agent-Team assignee session; re-run everything not provably COMPLETE (accepting partial results is banned); or continue with zero loss on another of the 4 accounts via validated transcript transplant + salvage bundle. Use when: a session was killed by "You've hit your session/weekly limit", when teammates died mid-wave ("Teammate @x failed - You've hit your monthly spend limit"), when resuming after a limit ("continue, we hit our limit"), when workflow/subagent results came back null/partial/empty, or when the reset is too far away and work should continue NOW on another account. ALSO use when an account died on its LOGIN CLIFF rather than on quota — `invalid_grant` on every refresh, `auth: logged-out` / `token-invalid`, "Not logged in · Please run /login" — because the recovery is the same transplant and the alternative is losing the work (there is NO reset to wait for; see § A login cliff is not a quota limit).
+description: Recover perfectly from ANY interruption to delegated work — disk-truth audit of every Dynamic Workflow slot, subagent, task, AND Agent-Team assignee session; re-run everything not provably COMPLETE (accepting partial results is banned); or continue with zero loss on another of the 4 accounts via validated transcript transplant + salvage bundle. Use when a session was killed by "You've hit your session/weekly limit", when teammates died mid-wave ("Teammate @x failed - You've hit your monthly spend limit"), when resuming after a limit ("continue, we hit our limit"), when workflow/subagent results came back null/partial/empty, or when the reset is too far away and work should continue NOW on another account. ALSO use when an account died on its LOGIN CLIFF rather than on quota — `invalid_grant` on every refresh, `auth: logged-out` / `token-invalid`, "Not logged in · Please run /login" — because the recovery is the same transplant and the alternative is losing the work (there is NO reset to wait for; see § A login cliff is not a quota limit). AND USE IT FOR EVERY NON-QUOTA INTERRUPTION TOO, because the audit engine was never limit-specific — only this description was: a network drop or reconnect ("reconnected to the internet, continue", "wifi came back", "API Error: Can't reach the API server", ENOTFOUND/ECONNRESET/socket hang up), a stalled workflow or agent ("agent stalled on all N attempts", "no progress for 180000ms", "stream watchdog did not recover"), a background task that came back failed/killed/stopped, a session that was RESUMED after a crash/reboot//exit and needs to know what its delegations were doing when the process died. Those select a different recovery MODE (resume-in-place or stall, never a transplant — the account is fine), not a different engine; see /recover for the class-named front door.
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Agent, Workflow, TaskList, TaskCreate, TaskUpdate, AskUserQuestion
 argument-hint: "[audit | handoff [next|next2|next3|next4|auto] [opus|fable] [--in-place] | fleet [--locate|--recover|--enqueue|--duplicates] | ingest <bundle-dir>] — bare = full same-session recovery"
 ---
@@ -117,20 +117,56 @@ see in context MUST appear in the audit; anything in one source but not the othe
 finding (say so). The audit also lists limit events with kind, absolute reset time (UTC), and the
 model that was interrupted.
 
+**Two lines of the audit gate everything below. Read them BEFORE the ledger.**
+
+1. **`lead process: DEAD | IN-FLIGHT | IDLE | UNKNOWN`.** This is a measured pid, not an
+   assumption, and every in-process verdict inherits it. A quota kill ends the session; **a network
+   drop usually does not** — measured 2026-09-09, the whole fleet produced nothing from 14:40Z to
+   17:20Z while every process stayed alive, and the first api-error record landed 107 minutes after
+   the silence began. So disk silence is not death, and the state decides which actions are even
+   legal (next table).
+2. **`No genuine QUOTA limit events…`** is the quota SUBSET and is **empty on every network death,
+   crash and stall** — `limit_events: []` sits beside a fully correct gap ledger. Reading that
+   emptiness as "nothing was interrupted" is the trap this command exists to remove. The general
+   death record is `last_api_error` (any `error` value), and the delegation population line names
+   the strata so a zero cannot read like a clean session.
+
 ## Verdict → action (from the audit's gap ledger — execute, don't re-judge)
 
 | Verdict | Meaning | Action |
 |---|---|---|
 | COMPLETE | journaled result / clean final turn, above floors | consume freely |
 | SUPERSEDED | slot re-issued + completed under another agentId | none |
-| COMPLETE_UNDELIVERED | finished on disk; result never reached the lead (lead died first) | **READ from disk — zero re-spend**: workflow → run-summary `.result`; subagent → final message in its jsonl |
+| COMPLETE_UNDELIVERED | finished on disk; result never reached the lead (no tool_result AND no task-notification) | **READ from disk — zero re-spend**: workflow → run-summary `.result`; subagent → final message in its jsonl |
 | COMPLETE_SALVAGED | StructuredOutput validated in agent jsonl, never journaled | use the payload; cite provenance `(salvaged)` |
 | VACUOUS_SUSPECT | mechanically complete, below signal floors | READ output vs its brief. Adversarial/refuter briefs must cite what they examined — a bare "no issues" is vacuous. Vacuous → re-run |
 | NULL | killed at/near spawn (limit / 529 / api error) | re-run |
 | PARTIAL | substantive work, no result | re-run; salvage text is seed-context only, never a substitute |
-| INTERRUPTED | TaskStop / user interrupt | re-run unless salvaged payload exists |
+| INTERRUPTED | a genuine TaskStop / user interrupt — one attempt, no terminal run error | re-run unless salvaged payload exists |
+| **STALLED** | N attempts under ONE journal key, no result, and the run json carries a terminal error. The harness already exhausted its OWN retries. The `[Request interrupted by user]` marker in each dead attempt is the WATCHDOG's, byte-identical to a human Ctrl-C — only the run error separates them, so this is never "the user did this" | **AT MOST ONE re-fire, and only under a green control** (§ Stall policy). A second stall under a green control convicts the REQUEST, not the network: change the request (split it, shrink the prompt, remove the blocking tool), never a third fire |
+| **PENDING** | lead IDLE (alive, turn ended) and this unit has no terminal record | **WAIT-FOR-NOTIFICATION — never re-run.** The harness owns the promise and will settle it with a `<task-notification>`; that notification re-enters this audit on arrival, so waiting is the ACTION, not idling |
+| **UNSETTLED-INFLIGHT** | lead IN-FLIGHT (alive, mid-turn) | **NONE. Do not touch.** Disk stays silent for as long as the retry ladder runs — 93–101 min measured on three units of one outage. Re-running here doubles a live unit |
+| **RUNNING** (teammate) | the member's OWN pid is alive | **NONE — never respawn over a live member.** To hand it work, WAKE it. Keyed on the member's pid + turn end, not on a stamp: any outage past five minutes used to turn a live member into PARTIAL, whose action is respawn |
 | TAINTED_COMPLETE (run) | run "completed" over gap slots (e.g. all-null 529 storm still returns) | final result is CONTAMINATED until its gap slots resolve |
-| UNVERIFIABLE | artifacts missing/contradictory | surface as a named gap — never infer |
+| UNVERIFIABLE | artifacts missing/contradictory — **including a lead whose liveness could not be determined** | surface as a named gap — never infer. UNKNOWN liveness is deliberately NOT folded into DEAD: DEAD authorises a re-run |
+
+**The three wait verdicts are not gaps and not COMPLETE.** The audit reports them in their own
+**Wait ledger** and `counts.waiting`, and exits 0 — nothing is owed by *you*. Never restate that as
+"all delegated work is complete": something is still moving, and the two are different states.
+
+### Stall policy (what separates a stall that will clear from a deterministic one)
+
+Never the stall's own text — a control:
+
+1. **The fleet arm.** Any real-model assistant record from ANY session in the stall window proves
+   the API path was live, which convicts the request rather than the network.
+2. **A connectivity probe independent of the request** — DNS+TCP+TLS only, no quota, and **two
+   greens 30 s apart** (recovery needs hysteresis; one green is a coin flip).
+3. **The re-fire itself, as the last discriminator.** One re-fire under a green control. A second
+   stall under a green control is the request.
+
+Receipt for why a blind re-fire is not free: on the measured run the harness re-issued one journal
+key five times into a live outage — 85 minutes, six attempts, nothing produced.
 
 ## Mode: recover (default, no args)
 
@@ -160,11 +196,23 @@ model that was interrupted.
    or the user raises the cap at claude.ai/settings/usage (their call — surface both).
 2. **Zero-spend first**: consume every COMPLETE_UNDELIVERED / COMPLETE_SALVAGED unit from disk.
    Then VACUOUS_SUSPECT reviews. Only then paid re-runs.
-3. **Workflow re-runs**: ledger-append, then `Workflow({scriptPath: <audit's scriptPath>,
-   resumeFromRunId: <runId>, args: <original args from audit's lead.workflow_calls>})`. Journaled
-   results replay free; dangling slots re-run (validated: nulls are never cached). If the original
-   deaths were a same-second 529 burst across many slots, EDIT the script first to stagger stage-1
-   launches (90s base + 20-30s/index — memory `reference-workflow-burst-529-stagger-launches`).
+3. **Workflow re-runs — GATED ON THE LEAD STATE, and the gate is not advisory.**
+   - **`UNSETTLED-INFLIGHT` or `PENDING` slots: fire nothing.** They are held by a live process.
+     Report them from the Wait ledger and move to the next unit.
+   - **`STALLED` slots: run the § Stall policy control FIRST** (two probe greens 30 s apart). The
+     audit's run-level action for such a run reads `GATED RESUME`, not a bare resume, precisely so
+     this step cannot be skipped by reading the run row instead of the slot row.
+   - **`resumeFromRunId` is same-session only.** The tool schema caches completed `agent()` calls
+     with unchanged `(prompt, opts)` and re-runs only the failed ones — but only *inside the same
+     process*. So it is available when the lead is **IDLE (this very session)** and
+     **unavailable once the process boundary has been crossed**: a `DEAD` lead means a fresh run
+     from the salvage, not a resume, however inviting the `INCOMPLETE` action's wording is. Under
+     `UNKNOWN` liveness, fire nothing and surface it.
+   - Then: ledger-append, `Workflow({scriptPath: <audit's scriptPath>, resumeFromRunId: <runId>,
+     args: <original args from audit's lead.workflow_calls>})`. Journaled results replay free;
+     dangling slots re-run (validated: nulls are never cached). If the original deaths were a
+     same-second 529 burst across many slots, EDIT the script first to stagger stage-1 launches
+     (90s base + 20-30s/index — memory `reference-workflow-burst-529-stagger-launches`).
 4. **Bare-subagent re-runs**: re-spawn with the ORIGINAL prompt from
    `salvage/subagents/<agentId>.json` (verbatim — do not paraphrase from memory).
 5. **Re-audit** (rule 5). A slot STILL dangling after a resume means the script did not re-issue
