@@ -194,9 +194,20 @@ EOF
   # real stub or this test asserts the WRONG exit-3.
   printf '#!/bin/bash\nexit 0\n' > "$BATS_TEST_TMPDIR/rro"; chmod +x "$BATS_TEST_TMPDIR/rro"
   export CC_RESUME_ONE_BIN="$BATS_TEST_TMPDIR/rro"
-  # the capacity gate sits ahead of the terminal arms — pin it ADMIT so this test reaches the
-  # arm under any host load (it runs on the very box the load-781 incident melted)
+  # The capacity gate sits ahead of the terminal arms — pin it ADMIT so this test reaches the arm
+  # under any host load (it runs on the very box the load-781 incident melted).
+  #
+  # 🚨 ALL FOUR TERMS, not the two this line used to carry. cc_capacity_admit evaluates
+  # load · headroom · segments · active (scripts/lib/capacity-admit.sh:79-81, 557-558) and ANY ONE of
+  # them refusing exits 9 — before the terminal arm this case is about. Pinning half of them states
+  # an intent ("under any host load") the code does not implement, and the gap is invisible on a
+  # quiet box: measured 2026-09-09, this case passed 5/5 standalone and failed BOTH runs inside a
+  # full ship gate, whose own parallel suites are what move `segments` and `active`. Reproduced
+  # directly — same invocation, segments alone saturated: `rc=9 … compressor segments 99% of limit >
+  # ceiling 50%` against rc=3 with all four pinned. The refusal BUDGET (3, then it admits and pages)
+  # is why it read as a flake rather than a wall.
   export CC_ADMIT_LOADAVG_OVERRIDE=1 CC_ADMIT_HEADROOM_OVERRIDE=64
+  export CC_ADMIT_SEGMENT_OVERRIDE=0 CC_SP_ACTIVE_OVERRIDE=0
   # osascript stub: the is-running probe answers NOTHING (iTerm2 down); every invocation is
   # recorded — reaching the window-creating payload would BE the defect being pinned.
   cat > "$BATS_TEST_TMPDIR/osa" <<EOF
@@ -212,4 +223,26 @@ EOF
   [ -f "$BATS_TEST_TMPDIR/osa.calls" ]
   [ "$(wc -l < "$BATS_TEST_TMPDIR/osa.calls" | tr -d ' ')" -eq 1 ]   # the probe, and ONLY the probe
   grep -q 'is running' "$BATS_TEST_TMPDIR/osa.calls"                 # ...and it WAS the probe
+}
+
+# ── the precedence the case above depends on, asserted rather than assumed ─────────────────────────
+# A pin that is silently insufficient is only detectable if something FAILS when a term is missing.
+# This case is that something: it saturates ONE unpinned term and requires the capacity refusal to
+# win over the terminal arm. If a future edit reorders the gate below the terminal checks, this goes
+# red and the case above stops being load-sensitive for a reason nobody would otherwise look for.
+@test "an unpinned capacity term saturating exits 9 (capacity) BEFORE the terminal arm's rc 3" {
+  unset IT2_WRAPPER_NO_KITTY KITTY_WINDOW_ID CC_TERM_KITTY_TO KITTY_LISTEN_ON
+  mkdir -p "$BATS_TEST_TMPDIR/empty2"
+  export CC_KITTY_SOCKET_DIR="$BATS_TEST_TMPDIR/empty2"
+  printf '#!/bin/bash\nexit 0\n' > "$BATS_TEST_TMPDIR/rro2"; chmod +x "$BATS_TEST_TMPDIR/rro2"
+  export CC_RESUME_ONE_BIN="$BATS_TEST_TMPDIR/rro2"
+  printf '#!/bin/bash\nexit 0\n' > "$BATS_TEST_TMPDIR/osa2"; chmod +x "$BATS_TEST_TMPDIR/osa2"
+  export CC_OSASCRIPT_BIN="$BATS_TEST_TMPDIR/osa2"
+  # three of four pinned ADMIT; `segments` saturated — exactly the shape a loaded box produces.
+  export CC_ADMIT_LOADAVG_OVERRIDE=1 CC_ADMIT_HEADROOM_OVERRIDE=64 CC_SP_ACTIVE_OVERRIDE=0
+  export CC_ADMIT_SEGMENT_OVERRIDE=99
+  run bash "$LAUNCH" next4 /tmp sid-dc3
+  [ "$status" -eq 9 ]                                    # capacity, NOT the terminal arm's 3
+  echo "$output" | grep -q 'segments'                    # ...and segments is why
+  echo "$output" | grep -q 'DEFERRED, not lost'          # a shed is not a failure
 }
