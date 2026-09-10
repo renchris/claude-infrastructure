@@ -1639,3 +1639,46 @@ and the lane exited before its own row) — it now writes `cloud_return_rc: "4"`
 
 **Still the operator's, and still the ×30-80:** `41d05eae511c` — the sweep (and so the lane it
 spawns) runs at PRI 4 until `43-autonomy-sweep-band-activate.sh` reloads the job.
+
+---
+
+# THE INBOX GOT AN ANSWERER (2026-09-10)
+
+- **2026-09-10 — the inbox got an ANSWERER (cc-backlog `cd561ed37e8e`), and it files rather than
+  executes.** `cloud-inbox.py` landed the READER and stopped at a line it wrote down: "an actuator,
+  if one is ever built, needs its own review, its own allowlist, and its own consent gate — not a
+  flag here." `scripts/cloud-answer.py` is that actuator, in its own file.
+
+  **The population was re-measured first, because the item's title is a count.** The 2026-08-27
+  cohort is gone — 677 of 688 declarations retired. The gap is not: 6 of 11 active sessions were
+  blocked on a question, ALL SIX declared for one item (`1f6208064577`), all pushed and quiet for
+  five days. That item cycled `claim → block → unblock` **eight times** between 09-01 and 09-05,
+  burning a fresh cloud session each time onto work earlier sessions had already finished. An
+  unread question is not a silent cost; it is a re-dispatch loop.
+
+  **Why the return lane had not collected them.** All six are inside `cloud-return.sh --sweep`'s
+  population and meet its RETURN-READY conjunction. One land legitimately costs 700-3,900 s inside
+  the lane's 5,400 s bound, so **31 of 39 return passes ended `rc=137` cut by the bound** against 8
+  that completed. The lane is degraded, not dead (7 sessions returned on 09-07, 1 on 09-09) — but
+  these six sat regardless. `--id` is the single-session path that does not queue behind the sweep.
+
+  **The security line is the design, not a caveat.** 13 of the original 222 asks parse as runnable
+  shell, composed by a remote VM. No byte of one reaches a command: the ask selects an INTENT from
+  a closed set, and the command is composed from local data (the declaration's own filename,
+  re-validated) plus a local path. The remote's words are printed, quoted and labelled untrusted,
+  and written to no store — a remote-authored string on the operator's board is a prescription a
+  later session reads as an instruction (`307fe7ab1e91`). Verified after filing: none of the real
+  asks' fragments appears in any filed row. The gate is `cc-do <id>` — already reviewed, already
+  the operator's rail — so no second executor was invented and there is no `--execute`.
+
+  Wired as a THIRD lane pass after retire, bounded at 300 s, because that position is *measured*
+  reachable: the retire pass completes (rc=0, 32-89 s) on the very ticks whose return pass was
+  killed. Coverage `tests/cloud-answer.bats` 14 · `tests/cloud-return-lane.bats` 7 → 10, every
+  load-bearing site carrying a killed mutant.
+
+  **Two dead-assertion classes were found in one suite, and only the first by hand.** `! grep -q`
+  is unreachable under errexit (POSIX ignores it for a `!`-pipeline), and the first faithful mutant
+  — splicing the remote's ask into the emitted command — SURVIVED a green red-proof. After that was
+  fixed, the land's own ratchet found **12 more**, all bare `[[ "$output" == *X* ]]`. Every mutant
+  was re-run with all assertions live. Finding one such class by hand is not evidence there is only
+  one.
