@@ -119,6 +119,36 @@ print('\n'.join(rt.render_article(art)))"
   [[ "$output" == *"Fig 1"* ]] || false
 }
 
+@test "article_images finds the cover AND the body figures — neither is in media[]" {
+  # The defect this pins: --images keyed only on posts[].media, so an X Article
+  # post (media == []) downloaded NOTHING and said nothing was missing. The
+  # cover hangs off cover_media; the figures need the two-hop entityMap join.
+  run py "
+art={'title':'T',
+ 'cover_media':{'media_info':{'original_img_url':'https://pbs/cover.jpg'}},
+ 'content':{'blocks':[{'type':'atomic','text':'','entityRanges':[{'key':4}]}],
+  'entityMap':[{'key':'4','value':{'type':'MEDIA','data':{'caption':'Fig 1','mediaItems':[{'mediaId':'m1'}]}}}]},
+ 'media_entities':[{'media_id':'m1','media_info':{'original_img_url':'https://pbs/fig.jpg'}}]}
+ims=rt.article_images(art)
+print(len(ims), ims[0]['url'], ims[0]['caption'], ims[1]['url'])"
+  [[ "$output" == "2 https://pbs/cover.jpg cover https://pbs/fig.jpg" ]] || false
+}
+
+@test "article_images is empty, not exploded, on a post with no article" {
+  run py "print(len(rt.article_images({})))"
+  [ "$status" -eq 0 ]
+  [ "$output" = "0" ]
+}
+
+@test "an article post renders its cover, which lives outside the body blocks" {
+  run py "
+art={'title':'T','cover_media':{'media_info':{'original_img_url':'https://pbs/cover.jpg'}},
+ 'content':{'blocks':[{'type':'unstyled','text':'body'}],'entityMap':[]}}
+print('\n'.join(rt.render_article(art)))"
+  [[ "$output" == *"cover"* ]] || false
+  [[ "$output" == *"https://pbs/cover.jpg"* ]]
+}
+
 @test "--help exits clean" {
   run "$TOOL" --help
   [ "$status" -eq 0 ]
