@@ -559,6 +559,61 @@ EOF
   grep -q 'cc-custody open .*--marker session_apitest' "$CALLS" || false
 }
 
+@test "the originator pane resolves CC_PANE_ID first — a headless dispatcher IS attributable" {
+  # RED-PROOF, and the one arm that fails pre-fix. 1311ff038 gave the WAKE TARGET the resolution
+  # order `${CC_PANE_ID:-${ITERM_SESSION_ID:-}}` and left the ORIGINATOR-PANE site three logical
+  # lines away still reading `${ITERM_SESSION_ID:+…}` alone. bin/cc-pane-headless:218 exports
+  # CC_PANE_ID and UNSETS ITERM_SESSION_ID, so the launchd cloud dispatcher — the producer of every
+  # cloud custody row on this box — hit exactly that gap: measured 2026-09-10, 347 of 347 rows
+  # opened since the 2026-08-25 cutover carry notifyBack and ZERO carry originatorPane.
+  #
+  # This is not bookkeeping. scripts/custody-deathwatch.sh addresses its DIRECT notify (ADDRESS 1)
+  # off `originatorPane` and nothing else, so an absent field silently demotes a nameable, living,
+  # reachable originator to the aggregated backlog path.
+  _api_fixture
+  unset ITERM_SESSION_ID
+  CC_PANE_ID="5" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  grep -q 'cc-custody open .*--originator-pane 5' "$CALLS" || false
+}
+
+@test "the originator pane still resolves from iTerm alone, and CC_PANE_ID WINS when both are set" {
+  # EQUIVALENCE GUARD, green in both arms by construction — it asserts the rewrite did not LOSE the
+  # incumbent iTerm path, which no pre/post arm can exercise. Its power comes from a mutant, not
+  # from this run: delete the `${CC_PANE_ID:-…}` fallback and keep only CC_PANE_ID and the first
+  # half dies; keep only ITERM_SESSION_ID and the second half dies. Both halves green together is
+  # the only shape that says the precedence is real rather than accidental.
+  #
+  # The precedence must MATCH the wake target's, or one row would name two different panes for one
+  # fire — CC_PANE_ID is a superset of $ITERM_SESSION_ID (bin/cc-pane:78), so it cannot change an
+  # iTerm caller's answer, only supply one where iTerm gives none.
+  _api_fixture
+  unset CC_PANE_ID
+  ITERM_SESSION_ID="w0t0p9:PANE-UUID" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  grep -q 'cc-custody open .*--originator-pane PANE-UUID' "$CALLS" || false
+
+  : >"$CALLS"
+  CC_PANE_ID="w0t0p9:SUPERSET" ITERM_SESSION_ID="w0t0p9:PANE-UUID" \
+    run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  grep -q 'cc-custody open .*--originator-pane SUPERSET' "$CALLS" || false
+  ! grep -q 'cc-custody open .*--originator-pane PANE-UUID' "$CALLS" || false
+}
+
+@test "with NO pane identity at all the flag is ABSENT, never present-and-empty" {
+  # NEGATIVE CONTROL for the two arms above — without it they only prove the flag can appear, not
+  # that it appears for a REASON. A bare `--originator-pane` with an empty operand would make
+  # cc-custody record `originatorPane: ""`, which every consumer's `(.originatorPane // "") != ""`
+  # reads as absent anyway — i.e. the defect would survive the fix while the test went green.
+  _api_fixture
+  unset ITERM_SESSION_ID CC_PANE_ID
+  run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3
+  [ "$status" -eq 0 ]
+  grep -q 'cc-custody open ' "$CALLS" || false          # the row is still opened …
+  ! grep -q -- '--originator-pane' "$CALLS" || false      # … carrying no originator claim at all
+}
+
 @test "up arms the wake target and the goal ON THE DECLARATION, where the return path can read them" {
   _api_fixture
   ITERM_SESSION_ID="w0t0p9:PANE-UUID" run "$SUT" up --task "$BATS_TEST_TMPDIR/t.txt" --account next3 \
