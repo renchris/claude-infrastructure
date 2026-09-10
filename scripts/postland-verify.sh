@@ -3228,6 +3228,41 @@ auto_revert() { # <culprit> <failing-file> — 0 = attempted (marker written), 1
       printf 'step:    %s (exit %s%s)\n' "$step" "$rc" \
         "$( [ "$rc" -eq 124 ] && printf ' — OUR %ss bound fired' "$SHIP_TO" || true )"
       printf 'trunk is STILL RED; deploy stays pinned to the last green stamp.\n'
+      # C38 — CONFIRM GUILT BEFORE THE OPERATOR REVERTS BY HAND (2026-09-10, item 26369888842a).
+      #
+      # The three revert pages ask three different amounts of their reader, and until now they asked
+      # the LEAST where the most was at stake. The LANDED page (C37) ships the full guilt A/B and
+      # states the arm's measured precision. The INERT page opens with "is $ftest still red on
+      # trunk? a green there makes this moot". THIS page — the only one that asks the operator for
+      # irreversible HAND-WORK, resolving a conflict and landing a revert — asked neither, and went
+      # straight to `do: git revert <culprit>`.
+      #
+      # The conviction is produced by the SAME bisect in all three arms, so it is drawn from the
+      # distribution C37 already measured: ~62% precise, 3 of 8 landed reverts took innocent work
+      # off trunk. A FAILED revert has removed nothing yet, which makes this page the one place the
+      # check is still FREE — and the only one whose reader can still act on the answer.
+      #
+      # Measured on the item that forced this. postland-revert-97758a6323ee stood from 02:26Z
+      # prescribing `git revert 97758a6323ee`, a commit whose convicted case (memory-index-drain::10
+      # "the destination append is idempotent") PASSES at that tree: the red was a load-flaky
+      # sibling (::19, since pinned by 18ed810a7), the real regression arrived four commits later at
+      # 5972228d5, and it was cured FORWARD by 8460f5ac9. Reverting as prescribed would have taken a
+      # good commit off trunk and re-introduced the unbounded rotor it fixed. The bisect predicate
+      # that mis-attributed it is fixed (e32360c2c) — but a page ALREADY WRITTEN is retracted only
+      # by a full-corpus green, so the harmful prescription outlives the fix that stops it recurring.
+      # These lines are what make a standing page self-refuting instead.
+      #
+      # ORDER IS THE PROPERTY, not presence: a check printed BELOW the instruction it qualifies is
+      # not a check. It is emitted before both `do:` arms for that reason, and the tests pin the
+      # line ordering rather than the text.
+      printf 'first:   CONFIRM GUILT BEFORE REVERTING. This bisect is ~62%% precise — 3 of the 8 reverts it\n'
+      printf '         landed on this box took INNOCENT work off trunk. Nothing has been removed yet, so\n'
+      printf '         this is the last point where the check is free.\n'
+      printf 'confirm: git -C %s worktree add --detach %s/verify-%s %s && cd %s/verify-%s && bats %s\n' \
+        "$REPO" "$WT_ROOT" "$c12" "$c" "$WT_ROOT" "$c12" "$file"
+      printf '         next, at its parent:  git checkout -q %s^ && bats %s\n' "$c" "$file"
+      printf '         culprit RED + parent GREEN => guilty, and the do: line below is right.\n'
+      printf '         SAME verdict at both       => INNOCENT: do NOT revert; the red has another cause.\n'
       # The cell is `manual-revert-*`, NOT `wt-revert-manual`. reap_stale_worktrees deletes anything
       # under $WT_ROOT matching `wt-run-*` or `wt-revert-*` older than WT_STALE_S (8h) — and it is
       # deliberately blind to whose cell it is, "never by is-it-mine, which is exactly the cell a

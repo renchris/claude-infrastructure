@@ -2671,6 +2671,68 @@ do_has() { sed -n 's/^do: *//p' "$CC_PAGES_DIR/postland-revert-$1.page" | head -
   [ "$output" = "1" ]
 }
 
+# ── C38 the FAILED page must CONFIRM GUILT before it prescribes a hand-revert (item 26369888842a) ─
+# The three revert pages ask three different amounts of their reader, and they asked the LEAST where
+# the most was at stake. C37's LANDED page ships the guilt A/B and its own precision; the INERT page
+# opens with "is $ftest still red on trunk?". The FAILED page — the only one asking the operator for
+# irreversible HAND-WORK — asked neither and opened on `do: git revert <culprit>`.
+#
+# The item that forced this is the proof the arm needs one: postland-revert-97758a6323ee stood
+# prescribing a revert of a commit whose convicted case PASSES at that tree (the red was a
+# load-flaky sibling, ::19, since pinned by 18ed810a7; the real regression came four commits later
+# and was cured forward by 8460f5ac9). e32360c2c stops the mis-attribution recurring, but a page
+# already written is retracted only by a full-corpus green — so the prescription outlives the fix.
+#
+# ORDER IS THE CLAIM, NOT PRESENCE. A check printed below the instruction it qualifies is not a
+# check, and presence alone is satisfiable by appending the text anywhere in the page — which is the
+# mutation these two cases exist to kill. Both arms are asserted because the two `do:` remedies are
+# emitted from different branches of one `if`, so a fix threaded into only one leaves the other bare.
+page_line() { # <c12> <fixed-string> → 1-based line number of its FIRST occurrence, or 0
+  sed -n "/$(printf '%s' "$2" | sed 's/[][\\.*^$\/]/\\\\&/g')/=" \
+    "$CC_PAGES_DIR/postland-revert-$1.page" 2>/dev/null | head -1 | grep -E '^[0-9]+$' || echo 0
+}
+
+@test "C38: the rc-90 page confirms guilt ABOVE the hand-revert it prescribes" {
+  ship_stub
+  culprit="$(arv_red_unrevertable)"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  # PRECONDITIONS from the REAL producer — this must be the conflicted arm, or the claims are vacuous.
+  [ "$(mk_get "$culprit" land_exit)" = "90" ]
+  [ "$(mk_get "$culprit" revert)" = "none" ]
+  [ "$(rev_pages_n)" = "1" ]
+  # ...and the page really does still prescribe the hand-revert, so ordering has something to order.
+  run do_has "${culprit:0:12}" "git revert $culprit"
+  [ "$output" = "1" ]
+  # CLAIM 1: the A/B that decides guilt is on the page, naming the culprit's OWN tree and its parent.
+  c12="${culprit:0:12}"
+  [ "$(page_line "$c12" 'confirm:')" != "0" ]
+  run grep -cF -- "git checkout -q $culprit^" "$CC_PAGES_DIR/postland-revert-$c12.page"
+  [ "$output" = "1" ]
+  # CLAIM 2 — THE LOAD-BEARING ONE: it sits ABOVE the `do:` line, so it is read before it is acted on.
+  [ "$(page_line "$c12" 'confirm:')" -lt "$(page_line "$c12" 'do:')" ]
+  [ "$(page_line "$c12" 'first:')" -lt "$(page_line "$c12" 'do:')" ]
+  # CLAIM 3: it states the arm is fallible, which is what makes the check worth running.
+  run grep -cF -- 'INNOCENT' "$CC_PAGES_DIR/postland-revert-$c12.page"
+  [ "$output" -ge 1 ]
+}
+
+@test "C38: the step=land page confirms guilt too, so the other do: arm is not left bare" {
+  ship_stub_fail
+  culprit="$(arv_red)"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  # PRECONDITIONS: the revert COMMITTED and the land lane refused — the arm C27's control pins.
+  [ "$(mk_get "$culprit" step)" = "land" ]
+  [ "$(mk_get "$culprit" revert)" != "none" ]
+  [ "$(rev_pages_n)" = "1" ]
+  c12="${culprit:0:12}"
+  # This arm's remedy is to hand-LAND the existing revert branch — equally irreversible, so it is
+  # gated by the same check, above the same `do:`.
+  run do_has "$c12" "$STUB/ship-land"
+  [ "$output" = "1" ]
+  [ "$(page_line "$c12" 'confirm:')" != "0" ]
+  [ "$(page_line "$c12" 'confirm:')" -lt "$(page_line "$c12" 'do:')" ]
+}
+
 # ── C31 the culprit must be IN the trunk the revert is taken from (item a31d1fe3de3d) ───────────
 # A $BATS_BIN wrapper that fires the LAND-LANE RACE exactly once, mid-sweep, then delegates to the
 # real bats. The timing is the whole fixture: --run-if-needed captures target=origin/main at entry
