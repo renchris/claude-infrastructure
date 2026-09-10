@@ -1816,11 +1816,58 @@ EOF
   bash -c 'sleep 300; true' & VICTIM=$!
   printf '%s 1 45:00 bash\n' "$VICTIM" > "$GA"
   printf '%s %s\n' "$VICTIM" "$(/bin/ps -p "$VICTIM" -o args= | sed 's/^ *//')" > "$GB"
+  # The snapshot clock sits 45 min ahead so the recorded age (45:00) agrees with the victim's true
+  # birth a moment ago. Until 2026-09-10 this fixture recorded a 45-minute age for a process born a
+  # moment earlier and EXPECTED it to die: it asserted the very tautology the start pin removes.
+  export CC_REAPER_GARBAGE_PS_EPOCH=$(( $(date +%s) + 2700 ))
   run "$R" garbage --reap
   [ "$status" -eq 0 ]
   # give the TERM a moment to be delivered before asking. `alive` is assigned through `||` rather
   # than from `$?`: under bats a bare failing command IS the test failure, so `kill -0` on the
   # corpse this test wants would abort before the assertion it exists to make.
+  sleep 1
+  alive=0; kill -0 "$VICTIM" 2>/dev/null || alive=1
+  kill -9 "$VICTIM" 2>/dev/null || true
+  [ "$alive" -eq 1 ]                      # it DIED — so the refusal above is a real discrimination
+}
+
+# ── THE ARGV EVERY WRAPPER SHARES (2026-09-10, backlog 8c9d4b897594). The pair above discriminates
+# only because its two argvs DIFFER. stuck-wrapper selects cc-close-attrib by position, and every
+# wrapper on this box carries the same first 120 chars (measured: 19 live, 1 distinct), so a pid
+# handed to a NEW session's wrapper passes the argv check untouched. The start pin is what separates
+# them. One live victim, the real actuator, the argv IDENTICAL in both cases: the ONLY difference is
+# whether the snapshot clock says the classified wrapper was already 40 min old when this one was born.
+mk_wrapper_victim() {
+  printf 'sleep 300; true\n' > "$D/cc-close-attrib"
+  bash "$D/cc-close-attrib" --model m & VICTIM=$!
+  printf '%s 555 40:00 bash\n' "$VICTIM" > "$GA"
+  printf '%s %s\n' "$VICTIM" "$(/bin/ps -p "$VICTIM" -o args= | sed 's/^ *//')" > "$GB"
+}
+
+@test "stuck-wrapper: a pid now held by a YOUNGER wrapper with byte-identical argv is REFUSED" {
+  mk_garbage_fixtures
+  unset CC_REAPER_GARBAGE_KILL
+  : > "$CC_REAPER_LOG"
+  mk_wrapper_victim
+  CC_REAPER_GARBAGE_PS_EPOCH="$(date +%s)"          # the snapshot saw a 40-min-old wrapper at this pid NOW
+  export CC_REAPER_GARBAGE_PS_EPOCH
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  alive=0; kill -0 "$VICTIM" 2>/dev/null || alive=1
+  kill -9 "$VICTIM" 2>/dev/null || true
+  grep -q "TERM stuck-wrapper pid=$VICTIM " "$CC_REAPER_LOG" || {
+    echo "the victim was never classified stuck-wrapper — the fixture proves nothing"; return 1; }
+  [ "$alive" -eq 0 ]                      # RED before the fix: the argv matched, the live wrapper died
+  grep -q "REFUSED TERM $VICTIM — the pid changed hands" "$CC_REAPER_LOG"
+}
+
+@test "stuck-wrapper: …and the wrapper the snapshot really saw is still signalled (control)" {
+  mk_garbage_fixtures
+  unset CC_REAPER_GARBAGE_KILL
+  mk_wrapper_victim
+  export CC_REAPER_GARBAGE_PS_EPOCH=$(( $(date +%s) + 2400 ))   # 40:00 now agrees with its true birth
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
   sleep 1
   alive=0; kill -0 "$VICTIM" 2>/dev/null || alive=1
   kill -9 "$VICTIM" 2>/dev/null || true
