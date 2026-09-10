@@ -111,14 +111,21 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
   grep -qE 'log_idl fired.*resume_shed' "$REPO/scripts/boot-resume.sh"
 }
 
-@test "23 lr-fire-resume.sh is GATED before its exec" {
+@test "23 lr-fire-resume.sh is GATED before it launches the session" {
   calls_gate "$REPO/scripts/limit-recover/lr-fire-resume.sh"
-  # BEFORE `exec expect` — a gate after the exec is unreachable by construction, which is exactly
-  # the kind of inert wiring that reads as coverage and is not.
+  # BEFORE the expect that spawns the session — a gate after it is unreachable by construction,
+  # which is exactly the kind of inert wiring that reads as coverage and is not.
+  #
+  # The anchor is `^expect -c`, not `^exec expect`: the subject no longer EXECs expect (it runs it
+  # as a child and falls through to a login shell, so the pane outlives the session — see
+  # tests/handoff-recycle-pane-survives.bats §7). The INVARIANT is unchanged and is about the
+  # LAUNCH, never about the `exec` keyword; only the spelling of the launch moved. The
+  # `[ -n … ] || false` below is what keeps a future rename FAILING rather than vacuously passing
+  # on an empty line number.
   gateline="$(awk '/cc_capacity_admit lr-fire-resume/{print NR; exit}' "$REPO/scripts/limit-recover/lr-fire-resume.sh")"
-  execline="$(awk '/^exec expect/{print NR; exit}' "$REPO/scripts/limit-recover/lr-fire-resume.sh")"
-  [ -n "$gateline" ] && [ -n "$execline" ] || false
-  [ "$gateline" -lt "$execline" ]
+  launchline="$(awk '/^expect -c/{print NR; exit}' "$REPO/scripts/limit-recover/lr-fire-resume.sh")"
+  [ -n "$gateline" ] && [ -n "$launchline" ] || false
+  [ "$gateline" -lt "$launchline" ]
 }
 
 @test "24 the Agent tool is GATED — in a hook ALREADY in settings.json, not a new one" {
