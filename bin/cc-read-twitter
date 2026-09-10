@@ -288,7 +288,38 @@ SOURCES = [("fxtwitter", src_fxtwitter), ("syndication", src_syndication), ("jin
 # article bodies (draft.js) — fxtwitter only
 # --------------------------------------------------------------------------
 
-def render_article(art: dict) -> list[str]:
+def article_images(art: dict) -> list[dict]:
+    """Every downloadable image in an X Article, in reading order.
+
+    Article images are NOT in `media` — the cover hangs off `cover_media` and the
+    body figures need a two-hop join (atomic block -> entityMap MEDIA entity ->
+    media_entities). A downloader keying only on `media` silently gets none of
+    them and reports nothing missing.
+    """
+    out: list[dict] = []
+    cover = ((art.get("cover_media") or {}).get("media_info") or {}).get("original_img_url")
+    if cover:
+        out.append({"url": cover, "caption": "cover", "key": None})
+    content = art.get("content") or {}
+    emap = {}
+    for e in content.get("entityMap") or []:
+        if isinstance(e, dict) and "key" in e:
+            emap[str(e["key"])] = e.get("value")
+    mx = {m.get("media_id"): m.get("media_info") for m in (art.get("media_entities") or [])}
+    for b in content.get("blocks") or []:
+        if b.get("type") != "atomic":
+            continue
+        for er in b.get("entityRanges") or []:
+            ent = emap.get(str(er.get("key"))) or {}
+            data = ent.get("data") or {}
+            for mi in data.get("mediaItems") or []:
+                u = (mx.get(mi.get("mediaId")) or {}).get("original_img_url")
+                if u:
+                    out.append({"url": u, "caption": data.get("caption") or "", "key": str(er.get("key"))})
+    return out
+
+
+def render_article(art: dict, img_paths: dict | None = None, pid: str | None = None) -> list[str]:
     out = [f"\n**X Article — {art.get('title', '(untitled)')}**"]
     content = art.get("content") or {}
     blocks = content.get("blocks") or []
@@ -297,24 +328,30 @@ def render_article(art: dict) -> list[str]:
         if pv:
             out.append(pv + "  ⚠️ preview only — body blocks absent from this source")
         return out
-    emap = {}
-    for e in content.get("entityMap") or []:
-        if isinstance(e, dict) and "key" in e:
-            emap[str(e["key"])] = e.get("value")
-    mx = {m.get("media_id"): m.get("media_info") for m in (art.get("media_entities") or [])}
+    imgs = article_images(art)
+    by_key: dict[str, list[dict]] = {}
+    for n, im in enumerate(imgs, 1):
+        im["n"] = n
+        if im["key"] is not None:
+            by_key.setdefault(im["key"], []).append(im)
+    cover = next((im for im in imgs if im["key"] is None), None)
+    if cover:
+        out.append(f"🖼 cover {size_url(cover['url'])}")
+        lp = (img_paths or {}).get((pid, f"a{cover['n']}"))
+        if lp:
+            out.append(f"   → {lp}   (Read this path to actually see it)")
     for b in blocks:
         t = b.get("type")
         txt = (b.get("text") or "").strip()
         if t == "atomic":
             for er in b.get("entityRanges") or []:
-                ent = emap.get(str(er.get("key"))) or {}
-                data = ent.get("data") or {}
-                for mi in data.get("mediaItems") or []:
-                    info = mx.get(mi.get("mediaId")) or {}
-                    u = info.get("original_img_url")
-                    if u:
-                        cap = data.get("caption") or ""
-                        out.append(f"🖼 {u}" + (f"\n   caption: {cap}" if cap else ""))
+                for im in by_key.get(str(er.get("key")), []):
+                    out.append(f"🖼 fig{im['n']} {size_url(im['url'])}")
+                    if im["caption"]:
+                        out.append(f"   caption: {im['caption']}")
+                    lp = (img_paths or {}).get((pid, f"a{im['n']}"))
+                    if lp:
+                        out.append(f"   → {lp}   (Read this path to actually see it)")
         elif not txt:
             continue
         elif t and t.startswith("header"):
@@ -396,7 +433,7 @@ def render(posts: list[dict], meta: dict, img_paths: dict) -> str:
         if p.get("truncated"):
             L.append("⚠️ TRUNCATED — this is a long-form post and this source cut it. Re-run with --source fxtwitter.")
         if p.get("article"):
-            L.extend(render_article(p["article"]))
+            L.extend(render_article(p["article"], img_paths, p["id"]))
         if p.get("quote"):
             q = p["quote"]
             L.append(f"> quoting @{q['author']}: {q['text']}")
@@ -429,22 +466,34 @@ def render(posts: list[dict], meta: dict, img_paths: dict) -> str:
     return "\n".join(L)
 
 
+def fetch_image(url: str, path: str) -> bool:
+    try:
+        with open(path, "wb") as fh:
+            fh.write(get(url).body)
+        return True
+    except Exception as e:  # noqa: BLE001 — one bad image must not kill the read
+        print(f"cc-read-twitter: image {url} failed: {e}", file=sys.stderr)
+        return False
+
+
 def download_images(posts: list[dict], dest: str) -> dict:
     os.makedirs(dest, exist_ok=True)
     out = {}
     for p in posts:
+        for n, im in enumerate(article_images(p.get("article") or {}), 1):
+            u = size_url(im["url"])
+            ext = ".png" if ".png" in u.split("?")[0] else ".jpg"
+            path = os.path.join(dest, f"{p['id']}-a{n}{ext}")
+            if fetch_image(u, path):
+                out[(p["id"], f"a{n}")] = path
         for j, m in enumerate(p.get("media") or [], 1):
             if m.get("type") == "video" or not m.get("url"):
                 continue
             u = size_url(m["url"])
             ext = ".png" if ".png" in u.split("?")[0] else ".jpg"
             path = os.path.join(dest, f"{p['id']}-{j}{ext}")
-            try:
-                with open(path, "wb") as fh:
-                    fh.write(get(u).body)
+            if fetch_image(u, path):
                 out[(p["id"], j)] = path
-            except Exception as e:  # noqa: BLE001 — a failed image must not kill the read
-                print(f"cc-read-twitter: image {u} failed: {e}", file=sys.stderr)
     return out
 
 
