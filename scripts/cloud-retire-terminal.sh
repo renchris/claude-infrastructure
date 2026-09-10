@@ -175,12 +175,36 @@ MT_OK=0
 if [ "$FETCHED" = 1 ] && "$GIT_BIN" -C "$REPO" rev-parse --verify --quiet "$TRUNK" >/dev/null 2>&1 \
    && "$GIT_BIN" -C "$REPO" merge-tree --write-tree "$TRUNK" "$TRUNK" >/dev/null 2>&1; then MT_OK=1; fi
 
+# THE REASON MUST CARRY THE BRANCH MEASUREMENT, NOT JUST THE VERDICT NAME (2026-09-09, adjudicating
+# cc-backlog 95cbba839b44 — docs/research/custody-landing-backlog-2026-09-09.md). A custody discharge
+# is written ONCE and can never be amended: cc-custody refuses a second discharge on a marker that is
+# no longer open. So whatever this line says is the store's final word on that row, forever.
+#
+# `superseded` is the one verdict above that is NOT a measurement of the branch. `gone` reads the
+# remote, `landed` reads `git cherry`, `conflict` reads `merge-tree`; `superseded` reads the BACKLOG
+# ITEM's status and infers the branch's disposition from it. That inference — "the row was closed by
+# a sibling, so this branch is a second implementation of work already on trunk" — is right most of
+# the time and wrong exactly when a sibling landed PART of a commit, which is the case that costs
+# something, because the part left behind is the part nobody wrote down. Measured over the 153 rows
+# retired this way: 2 of the 3 genuine recoveries found in that adjudication came out of this class,
+# and both were live defects in the landing and dispatch machinery (770569a15, f9c98cd1a).
+#
+# The arm is NOT disarmed and its verdict is NOT changed — it retires rows that would otherwise be
+# re-examined on every cursor rotation, which is the cost its own header measures. What changes is
+# that the reason now names the count of commits the branch carries that are NOT patch-equivalent on
+# trunk, from the `git cherry` this pass has ALREADY run one screen above. Zero extra work, and it
+# makes the two populations separately addressable in the store instead of indistinguishable:
+#   "…retired: superseded (branch patch-equivalent)"        — nothing was left behind
+#   "…retired: superseded (item closed; branch holds N unlanded commit(s))"  — N is the question
+_settle_detail=""   # set beside the verdict; consumed and cleared by settle_custody
 settle_custody() { # <decl-file> <verdict> — best-effort; the retire is the act, this is bookkeeping
-  local marker; marker="$(field "$1" custody)"
+  local marker why; marker="$(field "$1" custody)"
+  why="cloud declaration retired: $2${_settle_detail:+ $_settle_detail}"
+  _settle_detail=""
   [ -n "$marker" ] && [ -n "$CUSTODY_BIN" ] || return 0
   case "$2" in
     landed) "$CUSTODY_BIN" return  "$marker" >/dev/null 2>&1 || true ;;
-    *)      "$CUSTODY_BIN" abandon "$marker" --why "cloud declaration retired: $2" >/dev/null 2>&1 || true ;;
+    *)      "$CUSTODY_BIN" abandon "$marker" --why "$why" >/dev/null 2>&1 || true ;;
   esac
   return 0
 }
@@ -227,6 +251,19 @@ for f in "$STATE"/*.decl; do
     # `landed` outranks `superseded`: both are terminal, but only the first RETURNS custody.
     if [ -z "$verdict" ] && item_done "$item"; then
       verdict=superseded
+      # `ch` is this branch's `git cherry` output, already computed above. An unreadable cherry
+      # leaves it EMPTY, which is not the same fact as "zero unlanded commits" — so an unmeasured
+      # branch says so rather than borrowing the healthy reading (lookup-miss-is-not-absence).
+      if [ -n "${ch:-}" ]; then
+        _n_unlanded="$(printf '%s\n' "$ch" | grep -c '^+' || true)"
+        if [ "${_n_unlanded:-0}" -gt 0 ]; then
+          _settle_detail="(item closed; branch holds $_n_unlanded unlanded commit(s) — NOT measured as landed)"
+        else
+          _settle_detail="(branch patch-equivalent on trunk)"
+        fi
+      else
+        _settle_detail="(branch NOT measured — cherry unreadable this pass)"
+      fi
     fi
     # `conflict` is asked last and only of a branch that carries real unlanded commits: rc 1 is a
     # conflict, rc 0 is clean (KEPT — that is the collectable work), anything else is not a verdict.

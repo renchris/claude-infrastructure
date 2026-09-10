@@ -205,6 +205,52 @@ stub_custody() {
   [ "$(grep -c 'cc-backlog list --all --json' "$BATS_TEST_TMPDIR/calls")" -eq 1 ]
 }
 
+@test "SUPERSEDED's reason NAMES the branch measurement — the two populations are separable in the store" {
+  # A custody discharge is written ONCE (cc-custody refuses a second one on a marker no longer
+  # open), so this reason is the store's final word on the row. `superseded` is the only verdict
+  # that does not measure the branch — it reads the ITEM's status — and the case that costs
+  # something is a sibling landing PART of a commit. The `git cherry` needed to tell the two apart
+  # is already run one screen above, so the count is free; this pins that it reaches the store.
+  push_work_branch claude/fire-dup2 dup2.txt "a second implementation"
+  decl_item s-dup2 claude/fire-dup2 abcdef012345 48
+  stub_backlog '[{"id":"abcdef012345","status":"done"}]'
+  stub_custody
+  run bash "$SUBJ"
+  [ "$status" -eq 0 ]
+  retired s-dup2
+  grep -q '^verdict=superseded$' "$CC_CLOUD_STATE/s-dup2.retired"
+  # the branch carries real unlanded work, so the reason must SAY SO and give the count
+  grep -q 'cc-custody abandon s-dup2 .*superseded (item closed; branch holds 1 unlanded commit(s)' "$BATS_TEST_TMPDIR/calls"
+}
+
+@test "SUPERSEDED's reason says UNMEASURED when the cherry could not run — it never rounds to healthy" {
+  # NEGATIVE CONTROL for the case above. Without it, a reason that hardcoded the alarming half would
+  # pass case 11 and say the same thing about every row, which is how a signal stops carrying
+  # information (repo memory: alarm-polarity-and-attention-budget). There are THREE branch states
+  # here, not two, and the third is the one a lookup-miss would silently fold into "nothing was left
+  # behind": the cherry did not answer at all. `landed` outranks `superseded`, so a patch-equivalent
+  # branch never reaches this arm — an unreadable cherry is the only way to reach it without a count.
+  push_work_branch claude/fire-dup3 dup3.txt "a second implementation"
+  decl_item s-dup3 claude/fire-dup3 abcdef012345 48
+  stub_backlog '[{"id":"abcdef012345","status":"done"}]'
+  stub_custody
+  # a git that refuses ONLY `cherry` and is otherwise the real one
+  mkdir -p "$BATS_TEST_TMPDIR/stubs"
+  cat > "$BATS_TEST_TMPDIR/stubs/git-nocherry" <<'SH'
+#!/bin/bash
+for a in "$@"; do [ "$a" = cherry ] && exit 3; done
+exec git "$@"
+SH
+  chmod +x "$BATS_TEST_TMPDIR/stubs/git-nocherry"
+  CLOUD_RETIRE_GIT_BIN="$BATS_TEST_TMPDIR/stubs/git-nocherry" run bash "$SUBJ"
+  [ "$status" -eq 0 ]
+  retired s-dup3
+  grep -q '^verdict=superseded$' "$CC_CLOUD_STATE/s-dup3.retired"
+  # UNCONDITIONAL: the row was discharged, and its reason must name the non-measurement
+  grep -q 'cc-custody abandon s-dup3 ' "$BATS_TEST_TMPDIR/calls"
+  grep -q 'cc-custody abandon s-dup3 .*superseded (branch NOT measured' "$BATS_TEST_TMPDIR/calls"
+}
+
 @test "SUPERSEDED fails OPEN: an unreadable backlog store yields no superseded verdict, and the branch is KEPT" {
   push_work_branch claude/fire-dup2 dup2.txt "work"
   decl_item s-dup2 claude/fire-dup2 abcdef012345 48
