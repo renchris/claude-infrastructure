@@ -109,6 +109,100 @@ PY
   return 1
 }
 
+# ── THE DEATH RECORD: Q3 predicate 2, for any caller that needs it cheaply ───────────────────────
+# "The LAST assistant record is an api error" — ANY `error` value, not just the quota spellings
+# (docs/plans/NONLIMIT_RESUME_LADDER.md § W1.1 Q3). Three callers had already grown their own
+# spelling of this before it lived here: lr-fleet's inline census python, lr-audit.py's
+# scan_lead_transcript, and hooks/recover-inject.sh. That is exactly the divergence this file
+# exists to prevent — see the header's liveness and tier incidents.
+#
+# TAIL-BOUNDED ON PURPOSE. A UserPromptSubmit hook runs on EVERY prompt, so it cannot afford a full
+# pass over a transcript that grows to tens of MB. The predicate only ever asks about the LAST
+# assistant record, so a fixed tail answers it exactly; a caller that needs the whole population of
+# delegations must use `lr-audit.py --ledger-only` instead, which reads the file once.
+#
+# THE ENVELOPE IS THE GATE, never the text: `type:"assistant"` + `isApiErrorMessage:true`. That pair
+# is what makes a text-widened read safe -- a session merely DISCUSSING "ENOTFOUND" or quoting a
+# limit message in prose (this repo does constantly, including the session that wrote this) is not a
+# synthetic api-error record and can never match. `No response requested.` turns are skipped for the
+# same reason lr_engaged_after skips them: they are not a real turn.
+lr_last_api_error() { # $1=transcript → "<uuid>\t<error>\t<kind>\t<timestamp>"; rc 1 when the last assistant record is NOT an api error
+  local f="${1:-}" bytes="${LR_TAIL_BYTES:-131072}"
+  [ -n "$f" ] && [ -f "$f" ] || return 1
+  tail -c "$bytes" "$f" 2>/dev/null | /usr/bin/python3 -c '
+import hashlib, json, sys
+last = None
+for line in sys.stdin:
+    if "\"assistant\"" not in line: continue
+    try: d = json.loads(line)
+    except Exception: continue          # a tail starts mid-record; a partial line is not a verdict
+    if d.get("type") != "assistant": continue
+    m = d.get("message") if isinstance(d.get("message"), dict) else {}
+    c = m.get("content")
+    txt = c if isinstance(c, str) else " ".join(
+        x.get("text", "") for x in (c or []) if isinstance(x, dict))
+    if txt.strip() == "No response requested.": continue
+    last = (d, txt)
+if last is None or not last[0].get("isApiErrorMessage"):
+    sys.exit(1)
+d, txt = last
+# The LATCH KEY. A death record carries a uuid in practice, but a latch that silently degrades to
+# "no key" would re-emit on every prompt forever, so fall back to a digest of the fields that
+# identify this record. Never fall back to a constant: that would latch the FIRST death for the
+# life of the session and go silent on every later one.
+uid = d.get("uuid") or "sha-" + hashlib.sha256(
+    ((d.get("timestamp") or "") + "\x00" + txt[:400]).encode("utf-8")).hexdigest()[:24]
+print("%s\t%s\t%s\t%s" % (uid, d.get("error") or "unknown",
+                          "limit" if "You'"'"'ve hit your" in txt else "other",
+                          d.get("timestamp") or "-"))
+' || return 1
+}
+
+# ── Q3 predicate 3: a NON-SUCCESS task-notification in the tail ──────────────────────────────────
+# The harness's third and last way to end delegated work: fail the task. Shape is quoted, not
+# inferred -- a real record from this repo's corpus (docs/research/pane-theft-composer-guard.md:33):
+#   {"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n
+#    <task-id>bfpgwlzqu</task-id>\n<tool-use-id>toolu_01RwHg...</tool-use-id>\n
+#    <output-file>...</output-file>\n<status>killed</status>\n<summary>...</summary>\n
+#    </task-notification>"}
+# Status vocabulary measured over 300 recent transcripts: completed 5979 · failed 358 · killed 180 ·
+# running 29 · stopped 4. `running` is the only non-terminal value, and `completed` is the only
+# success -- so this fires on failed/killed/stopped and stays quiet on the other two.
+#
+# TAIL-BOUNDED for the same reason as lr_last_api_error, and with the same consequence: this answers
+# "did something just fail" cheaply, and CANNOT answer "which delegations are still open" -- that
+# needs the whole file, so a caller confirms with `lr-audit.py --ledger-only` before acting.
+lr_tail_nonsuccess_notification() { # $1=transcript → "<task_id>\t<tool_use_id>\t<status>"; rc 1 when none
+  local f="${1:-}" bytes="${LR_TAIL_BYTES:-131072}"
+  [ -n "$f" ] && [ -f "$f" ] || return 1
+  tail -c "$bytes" "$f" 2>/dev/null | /usr/bin/python3 -c '
+import json, re, sys
+TID = re.compile(r"<tool-use-id>\s*([^<\s]+)\s*</tool-use-id>")
+TASK = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
+ST = re.compile(r"<status>\s*([^<\s]+)\s*</status>")
+hit = None
+for line in sys.stdin:
+    if "<task-notification>" not in line: continue
+    try: d = json.loads(line)
+    except Exception: continue
+    # Both carriers: the queue-operation ENQUEUE (.content) and the delivered user record.
+    body = d.get("content")
+    if not isinstance(body, str):
+        m = d.get("message") if isinstance(d.get("message"), dict) else {}
+        c = m.get("content")
+        body = c if isinstance(c, str) else " ".join(
+            x.get("text", "") for x in (c or []) if isinstance(x, dict))
+    if not isinstance(body, str) or "<task-notification>" not in body: continue
+    s = ST.search(body)
+    status = (s.group(1) if s else "")
+    if status in ("completed", "running", ""): continue
+    t, k = TASK.search(body), TID.search(body)
+    hit = ((t.group(1) if t else "-"), (k.group(1) if k else "-"), status)
+if hit is None: sys.exit(1)
+print("%s\t%s\t%s" % hit)
+' || return 1
+}
+
 # ── LIVENESS: the registry, not argv ─────────────────────────────────────────────────────────────
 # One line per LIVE process holding the sid: "<pane>\t<pid>\t<account>\t<cwd>". A row whose pid is
 # dead is a stale row and is skipped; a row is written by the session's own SessionStart hook
