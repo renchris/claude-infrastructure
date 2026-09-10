@@ -38,6 +38,10 @@
 #       RELOCATED  — trunk's version is a MULTISET SUPERSET of the ref's lines, so every line is
 #                    present and only its OFFSET moved. `diff` is positional and cannot see this;
 #                    it is the systematic false strand for INTEGRATE-only, newest-first log files.
+#       AMENDED    — the ref's OWN commit is on trunk under another sha (byte-identical author date
+#                    AND subject) and touches this path: the ref holds the PRE-AMENDMENT form of a
+#                    commit that landed. Censused 2026-09-10 over the 21 live `re-land …` rows: 11
+#                    are fully twinned this way and no other arm can retract them.
 # Exit 0 iff every path is landed.
 #
 # THE PATH SET IS THREE-DOT, and that is load-bearing. Two-dot (`<base> <ref>`) drags in every path
@@ -168,8 +172,9 @@ if ! git -C "$REPO" diff --name-only -z "${BASE}...${REF}" > "$TMP/paths" 2>/dev
   exit 2
 fi
 
-N=0 BAD=0 SUP=0 REL=0
-: > "$TMP/report"; : > "$TMP/superseded"; : > "$TMP/relocated"
+N=0 BAD=0 SUP=0 REL=0 AMD=0
+AMENDED_TWIN=""
+: > "$TMP/report"; : > "$TMP/superseded"; : > "$TMP/relocated"; : > "$TMP/amended"
 
 # ── SUPERSESSION: value that reached trunk AND WAS THEN IMPROVED ─────────────────────────────────
 # Without this arm the script convicts our own later fixes. Measured 2026-08-12 against the census
@@ -239,6 +244,57 @@ trunk_covers_every_line() {   # $1=ref's blob file $2=trunk's blob file → 0 if
   lost="${lost//[[:space:]]/}"
   [ "${lost:-1}" = "0" ]
 }
+
+# ── AMENDMENT: the ref's OWN commit landed, and landed AMENDED ───────────────────────────────────
+# The third reading of "a line present only in the ref", and the one the two arms above cannot
+# reach: the ref is the PRE-FIX form of a commit that DID land, because the author amended it on
+# the way in. `trunk_ever_carried` asks for the ref's whole-file BLOB and trunk never carried it;
+# `trunk_covers_every_line` asks whether trunk holds the ref's LINES and it does not — the whole
+# point is that trunk deliberately holds a DIFFERENT line there.
+#
+# LIVE INSTANCE (why this arm exists): refs/land/failed/20260910T064729Z-…-wt-3dd6dcf66e37, commit
+# 9dde21d2c "fix(classify): a ⛔ RECYCLE REFUSED body read as an operator turn …". Its
+# tests/interactive-parity.bats put the literal `handoff-fire.sh --recycle` inside a fixture STRING,
+# which test-hermeticity-lint rule 2 greps for against the suite's CODE — so that literal reds the
+# land. The author's retry landed the same commit as 957d01564 with the literal replaced by "the
+# recycler" plus a NOTE saying not to restore it. One line, present only in the ref, and it is the
+# exact line the land was blocked on. Re-landing it re-introduces the regression and re-reds trunk.
+# Censused over the 21 live `re-land …` rows: 11 are fully twinned this way and cannot self-retract.
+#
+# 🚨 THE DISCRIMINATOR IS AN IDENTITY, NOT A JUDGMENT — the same bar the supersession arm sets.
+# "Did trunk change this path around when the ref's commit was written?" would over-forgive exactly
+# as "did trunk touch this path after the ref's commit?" does. What is asked instead is whether the
+# ref's OWN COMMIT IS ITSELF ON TRUNK under another sha: a commit with a BYTE-IDENTICAL author date
+# AND a byte-identical subject. Both survive a rebase and a `--amend` unchanged, and neither is a
+# similarity score — two commits agreeing on an ISO-8601 instant and a full subject line are the
+# same logical commit re-landed, not two commits that resemble each other.
+#
+# The twin must ALSO touch this path, which is why the search is the path's own trunk log rather
+# than the repository's. A twin that landed while leaving P alone says nothing about P.
+#
+# WHAT IT FORGIVES, STATED HONESTLY: an author who re-landed their own commit having deliberately
+# dropped a hunk. That is the same trade the ANCESTOR note at the foot of this file already takes,
+# and takes for a weaker reason — there the removal is a SEPARATE later commit by possibly someone
+# else, while here it is the author's own final form of the very commit, decided at land time. It is
+# reported as its own class with its own ⚠ for that reason: forgiven, never silent.
+#
+# Bounded by LCV_HISTORY_MAX revisions of that ONE path, like the supersession walk. Exhausting the
+# bound without a match does NOT forgive — it falls through to the strand verdict, the safe direction.
+trunk_landed_this_commit_amended() {   # $1=path → 0 iff a ref commit touching $1 has an (author-date,subject) twin on trunk that also touches $1
+  local p="$1" key n=0 max="${LCV_HISTORY_MAX:-200}"
+  git -C "$REPO" log --format='%aI%x09%s' "${BASE}..${REF}" -- "$p" > "$TMP/refkeys" 2>/dev/null
+  [ -s "$TMP/refkeys" ] || return 1
+  while IFS= read -r key; do
+    n=$((n + 1)); [ "$n" -gt "$max" ] && return 1
+    [ -n "$key" ] || continue
+    if LC_ALL=C grep -Fxq -- "$key" "$TMP/refkeys" 2>/dev/null; then
+      AMENDED_TWIN="$(git -C "$REPO" log --format='%aI%x09%s%x09%H' "$BASE" -- "$p" 2>/dev/null \
+        | LC_ALL=C awk -F'\t' -v k="$key" '($1 "\t" $2)==k {print $3; exit}')"
+      return 0
+    fi
+  done < <(git -C "$REPO" log --format='%aI%x09%s' "$BASE" -- "$p" 2>/dev/null)
+  return 1
+}
 while IFS= read -r -d '' P; do
   N=$((N + 1))
   RB="$(git -C "$REPO" rev-parse -q --verify "${REF}:${P}" 2>/dev/null || true)"
@@ -276,6 +332,10 @@ while IFS= read -r -d '' P; do
       REL=$((REL + 1))
       printf '  %s — %s line(s) read as ref-only by positional diff, but %s holds every one of them (multiset superset): RELOCATED, not lost\n' \
         "$P" "$ONLY_REF" "$BASE" >> "$TMP/relocated"
+    elif trunk_landed_this_commit_amended "$P"; then
+      AMD=$((AMD + 1))
+      printf '  %s — %s ref-only line(s), but the ref commit that wrote them is itself on %s as %s (same author date + subject) and touches this path: AMENDED at land time, not lost\n' \
+        "$P" "$ONLY_REF" "$BASE" "${AMENDED_TWIN:-?}" >> "$TMP/amended"
     else
       BAD=$((BAD + 1))
       printf '  %s — %s line(s) present only in the ref\n' "$P" "$ONLY_REF" >> "$TMP/report"
@@ -298,18 +358,21 @@ if [ "$N" -eq 0 ]; then
 fi
 
 if [ "$BAD" -eq 0 ]; then
-  if [ "$SUP" -gt 0 ] || [ "$REL" -gt 0 ]; then
+  if [ "$SUP" -gt 0 ] || [ "$REL" -gt 0 ] || [ "$AMD" -gt 0 ]; then
     # SAY WHY, always, and say WHICH — the three ways a path can be landed are not interchangeable
     # to the reader. A bare ✓ is the silent verdict this file exists to end: only SUPERSEDED means
     # re-landing would REVERT something, while RELOCATED means the bytes are all there and the ref
     # is simply describing them at another offset.
-    printf '✓ land-content-verify: all %s path(s) of %s are on %s — LANDED (%s superseded, %s relocated):\n' \
-      "$N" "$REF" "$BASE" "$SUP" "$REL"
+    printf '✓ land-content-verify: all %s path(s) of %s are on %s — LANDED (%s superseded, %s relocated, %s amended):\n' \
+      "$N" "$REF" "$BASE" "$SUP" "$REL" "$AMD"
     [ "$SUP" -gt 0 ] && head -40 "$TMP/superseded"
     [ "$SUP" -gt 40 ] && printf '  … and %s more superseded\n' "$((SUP - 40))"
     [ "$REL" -gt 0 ] && head -40 "$TMP/relocated"
     [ "$REL" -gt 40 ] && printf '  … and %s more relocated\n' "$((REL - 40))"
+    [ "$AMD" -gt 0 ] && head -40 "$TMP/amended"
+    [ "$AMD" -gt 40 ] && printf '  … and %s more amended\n' "$((AMD - 40))"
     [ "$SUP" -gt 0 ] && printf '  ⚠ re-landing this ref would REVERT the later work on the superseded path(s) above.\n'
+    [ "$AMD" -gt 0 ] && printf '  ⚠ re-landing this ref would RESTORE the pre-amendment form on the amended path(s) above — the form the author changed to get the land through.\n'
   else
     printf '✓ land-content-verify: all %s path(s) of %s are on %s — LANDED (trunk is a superset).\n' \
       "$N" "$REF" "$BASE"
@@ -322,4 +385,5 @@ head -40 "$TMP/report"
 [ "$BAD" -gt 40 ] && printf '  … and %s more\n' "$((BAD - 40))"
 [ "$SUP" -gt 0 ] && printf '  (%s further path(s) differ but are SUPERSEDED, not lost — not counted against the verdict)\n' "$SUP"
 [ "$REL" -gt 0 ] && printf '  (%s further path(s) differ but are RELOCATED — every line is on %s at another offset — not counted against the verdict)\n' "$REL" "$BASE"
+[ "$AMD" -gt 0 ] && printf '  (%s further path(s) differ but are AMENDED — the ref commit that wrote them is on %s under another sha — not counted against the verdict)\n' "$AMD" "$BASE"
 exit 1

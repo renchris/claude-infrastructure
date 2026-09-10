@@ -399,3 +399,88 @@ fx_landed_other_sha() {
   [ "$status" -eq 1 ]
   echo "$output" | grep -q "n.md" || { echo "the strand was not named: $output"; false; }
 }
+
+# ── AMENDED: the ref's OWN commit landed, having been amended on the way in ──────────────────────
+# The third reading of "a line present only in the ref". Neither arm above can reach it: trunk never
+# carried the ref's blob (so supersession misses) and trunk deliberately holds a DIFFERENT line at
+# that spot (so the multiset test misses). What settles it is that the ref's commit is ITSELF on
+# trunk under another sha.
+#
+# LIVE INSTANCE (why these cases exist): refs/land/failed/20260910T064729Z-…-wt-3dd6dcf66e37, whose
+# single ref-only line put a tool name inside a fixture STRING that test-hermeticity-lint greps for
+# against suite CODE — the exact line the land was blocked on. The author's retry landed the same
+# commit under another sha with that line rewritten and a NOTE saying not to restore it. Censused
+# over the 21 live `re-land …` rows on 2026-09-10: 11 are fully twinned this way, and the falsifier
+# could not retract one of them, so each cost a dispatched worker per drain pass.
+#
+# The identity is (author date, subject) — both byte-identical, both preserved by rebase and by
+# --amend. The two CONTROLS below break one half each, because an identity that can be half-matched
+# is a similarity score, which is the judgment this file's supersession arm is worded to refuse.
+
+@test "AMENDED — the ref commit is on trunk under another sha ⇒ 0, and it SAYS amended" {
+  printf 'keep\n' > "$W/f.txt"; git -C "$W" add -A; git -C "$W" commit -qm base; git -C "$W" push -q origin main
+  git -C "$W" checkout -q -b amd-side
+  printf 'keep\nPRE\n' > "$W/f.txt"; git -C "$W" add -A
+  GIT_AUTHOR_DATE='2026-09-10T01:44:48-05:00' git -C "$W" commit -qm 'fix: the thing'
+  local ref; ref="$(git -C "$W" rev-parse HEAD)"
+  git -C "$W" checkout -q main
+  # the author's own retry: SAME commit, one line rewritten so the land would pass
+  printf 'keep\nCURED\n' > "$W/f.txt"; git -C "$W" add -A
+  GIT_AUTHOR_DATE='2026-09-10T01:44:48-05:00' git -C "$W" commit -qm 'fix: the thing'
+  git -C "$W" push -q origin main; git -C "$W" fetch -q origin main
+  run git -C "$W" merge-base --is-ancestor "$ref" origin/main
+  [ "$status" -ne 0 ]                                   # fixture is only valid if NOT an ancestor
+  run bash "$SUT" "$ref" --repo "$W" --no-fetch
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "AMENDED" || { echo "did not name the amendment: $output"; false; }
+  echo "$output" | grep -q "RESTORE the pre-amendment form" || { echo "no warning: $output"; false; }
+}
+
+@test "CONTROL — SUBJECT differs ⇒ 1: a same-instant trunk commit is not the ref's commit" {
+  printf 'keep\n' > "$W/f.txt"; git -C "$W" add -A; git -C "$W" commit -qm base; git -C "$W" push -q origin main
+  git -C "$W" checkout -q -b subj-side
+  printf 'keep\nPRE\n' > "$W/f.txt"; git -C "$W" add -A
+  GIT_AUTHOR_DATE='2026-09-10T01:44:48-05:00' git -C "$W" commit -qm 'fix: the thing'
+  local ref; ref="$(git -C "$W" rev-parse HEAD)"
+  git -C "$W" checkout -q main
+  printf 'keep\nCURED\n' > "$W/f.txt"; git -C "$W" add -A
+  GIT_AUTHOR_DATE='2026-09-10T01:44:48-05:00' git -C "$W" commit -qm 'fix: a DIFFERENT thing'
+  git -C "$W" push -q origin main; git -C "$W" fetch -q origin main
+  run bash "$SUT" "$ref" --repo "$W" --no-fetch
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "f.txt" || { echo "the strand was not named: $output"; false; }
+}
+
+@test "CONTROL — AUTHOR DATE differs ⇒ 1: a same-subject trunk commit is not the ref's commit" {
+  printf 'keep\n' > "$W/f.txt"; git -C "$W" add -A; git -C "$W" commit -qm base; git -C "$W" push -q origin main
+  git -C "$W" checkout -q -b date-side
+  printf 'keep\nPRE\n' > "$W/f.txt"; git -C "$W" add -A
+  GIT_AUTHOR_DATE='2026-09-10T01:44:48-05:00' git -C "$W" commit -qm 'fix: the thing'
+  local ref; ref="$(git -C "$W" rev-parse HEAD)"
+  git -C "$W" checkout -q main
+  printf 'keep\nCURED\n' > "$W/f.txt"; git -C "$W" add -A
+  GIT_AUTHOR_DATE='2026-09-10T09:00:00-05:00' git -C "$W" commit -qm 'fix: the thing'
+  git -C "$W" push -q origin main; git -C "$W" fetch -q origin main
+  run bash "$SUT" "$ref" --repo "$W" --no-fetch
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "f.txt" || { echo "the strand was not named: $output"; false; }
+}
+
+@test "CONTROL — the twin must touch THIS path: a twin that landed elsewhere forgives nothing" {
+  # The twin is real and matches on both halves, but it never touched f.txt. Searching the
+  # repository's log instead of the PATH's would forgive a strand on the strength of an unrelated
+  # file in the same commit.
+  printf 'keep\n' > "$W/f.txt"; printf 'g\n' > "$W/g.txt"; git -C "$W" add -A
+  git -C "$W" commit -qm base; git -C "$W" push -q origin main
+  git -C "$W" checkout -q -b elsewhere-side
+  printf 'keep\nPRE\n' > "$W/f.txt"; printf 'g\nG2\n' > "$W/g.txt"; git -C "$W" add -A
+  GIT_AUTHOR_DATE='2026-09-10T01:44:48-05:00' git -C "$W" commit -qm 'fix: the thing'
+  local ref; ref="$(git -C "$W" rev-parse HEAD)"
+  git -C "$W" checkout -q main
+  printf 'g\nG2\n' > "$W/g.txt"; git -C "$W" add -A       # the twin lands g.txt ONLY
+  GIT_AUTHOR_DATE='2026-09-10T01:44:48-05:00' git -C "$W" commit -qm 'fix: the thing'
+  git -C "$W" push -q origin main; git -C "$W" fetch -q origin main
+  run bash "$SUT" "$ref" --repo "$W" --no-fetch
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "f.txt" || { echo "the strand was not named: $output"; false; }
+}
