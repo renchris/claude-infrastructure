@@ -988,10 +988,21 @@ count_blocking_decisions() {
 # hooks/session-continue.sh:608-612 applying it to this exact question — "an unattributable row
 # still counts, and the message HEDGES". So `theirs` is DROPPED and `unk` is KEPT.
 #
-# MEASURED, so the unattributable class is not hypothetical: 441 open rows store-wide, 117 (26.5%)
-# carry neither `originatorPane` nor `notifyBack` — all cc-offload cloud fires from a context with
-# no ITERM_SESSION_ID. This repo's own cwd key reads 0 today, so the defect is LATENT here: real by
-# construction, not blocking a close.
+# MEASURED 2026-09-03, so the unattributable class is not hypothetical: 441 open rows store-wide,
+# 117 (26.5%) carrying neither `originatorPane` nor `notifyBack` — all cc-offload cloud fires from a
+# context with no ITERM_SESSION_ID. This repo's own cwd key read 0, so the defect was LATENT here:
+# real by construction, not blocking a close.
+#
+# ⚠ THAT IS A DATED COHORT, NOT A RATE, AND IT STOPPED GROWING BEFORE IT WAS EVER WRITTEN DOWN.
+# Re-measured 2026-09-10: the figures above reproduce EXACTLY when the store is replayed to
+# 2026-09-03T17:44Z, and every one of the 117 was opened between 2026-08-12 and 2026-08-25T08:04Z.
+# The producer cut over mid-day on 2026-08-25 and has emitted 347 consecutive attributed cloud rows
+# since, zero unattributable. Today the class is 19 of 134 open rows (14.2%) and shrinking only by
+# discharge. The `unk` arm below is therefore CORRECT and must stay — it is what renders that
+# residual tail honestly — but nobody should re-derive a production rate from this paragraph. A
+# backlog row (263dba2a0477) did exactly that, quoted these three numbers as live, and dispatched a
+# worker against a producer that had been fixed for nine days. RE-MEASURE instead, one command:
+#   cat ~/.claude/autonomy/custody/*.jsonl | jq -rs '[.[]|select(.kind=="open")]|group_by(.ts[0:10])[]|"\(.[0].ts[0:10]) n=\(length) nb=\([.[]|select(.notifyBack)]|length) op=\([.[]|select(.originatorPane)]|length)"' 
 #
 # notifyBack is a SECOND ownership spelling, not a fallback — handoff-fire arms it as either the
 # bare pane ("386") or "<worktree>-<pane>" ("wt-pool-2-415"), so the "-" anchor is required: a bare
