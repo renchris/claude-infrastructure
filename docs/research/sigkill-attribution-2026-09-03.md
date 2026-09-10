@@ -152,6 +152,34 @@ The remaining engineering question is unchanged and belongs to W5's deadline: a 
 unit can exceed the whole remaining budget once started. That is a different problem, with a
 different owner, and it is now free of a phantom killer.
 
+## Correction 2026-09-10 — the corollary does not hold for the suite (cc-backlog 4bc4336849f3)
+
+The corollary above was filed as cc-backlog `4bc4336849f3` with a proposed fix: "the discriminator has
+to be whether this run's own bound had elapsed at death". Re-measured before building it. **The risk
+does not occur for the postland corpus, and that fix would itself misfire.**
+
+1. **Our own bound yields rc 124 in the corpus shape, not 137.** The `-k` escalation needs the
+   *monitored* process to survive TERM for the grace period. For `cloud-return.sh` it does (the TERM
+   trap waits out a minutes-long gate, see above). The corpus's monitored process is bats (via
+   `cc-bats`, which execs), and bats dies on TERM. Probed on this box, GNU timeout 9.1 / Bats 1.13.0,
+   `( exec timeout -k 3 2 nice -n 19 bats F ) & wait` → **rc 124 in both arms**, including a test that
+   does `trap '' TERM` in itself and its child (timeout reaps bats and exits; it does not wait for the
+   group).
+2. **It has never happened.** runner.log 2026-07-26 → 2026-09-10, each corpus death paired with its
+   preceding `corpus: N tree suite(s)` line: **85 attributed to signal 9, all under 10000 s of corpus
+   runtime, none at the 10800 s wall.** No misfire exists to fix.
+3. **Wall-clock elapsed does not tell you whether the bound fired.** The only three corpus deaths past
+   10800 s (11707 s, 15849 s, 20159 s; 2026-08-31 to 2026-09-02) are **rc 143**. A GNU timeout whose
+   alarm fired can only exit 124, or 137 via kill-after. Probed: external TERM to timeout before its
+   alarm → 143, external TERM to the monitored bats → 143, own bound → 124. So in all three, timeout's
+   own timer had *not* fired after 3-5.6 h of wall clock. That is probably system sleep: macOS
+   `alarm`/`setitimer` does not count it. Unverified: `pmset -g log` only goes back to 2026-09-03.
+   A wall-clock discriminator would have relabelled three real external kills as ours.
+
+**Residual, not fixed:** if bats got stuck in an uninterruptible state for more than 10 s after our
+TERM, the escalation would produce 137, read as "from OUTSIDE". There are 0 observations, and no
+wall-clock test can catch it without the false positives in (3). Only timeout's own clock can.
+
 ---
 *Reproduce any arm: the commands above are complete and self-contained. Bystander script written to
 `/tmp/w6-pgid-victim.sh` during the run; it is disposable.*
