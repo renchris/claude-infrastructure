@@ -48,7 +48,18 @@
 # of them would fail exactly the way F5 describes. `date -u +%s` — the one call kept — is portable.
 set -uo pipefail
 
-BIN="${CC_RAMP_BIN:-$HOME/.claude-220/node_modules/.bin/claude}"
+# Unset, the binary comes from bin/cc-claude-bin (the launcher's own pin), never a literal: this read
+# ~/.claude-220 and kept ramping 2.1.220 after the launcher moved to 2.1.260 (cc-backlog
+# e8b753cac339). Unresolvable ⇒ EMPTY, which `up` refuses with rc 2 rather than guessing.
+BIN="${CC_RAMP_BIN:-}"
+if [ -z "$BIN" ]; then
+  for _r in "$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" 2>/dev/null && pwd)/cc-claude-bin" \
+            "$HOME/.claude/bin/cc-claude-bin"; do
+    [ -x "$_r" ] || continue
+    BIN="$("$_r" 2>/dev/null)" || BIN=""
+    [ -n "$BIN" ] && break
+  done
+fi
 PIDFILE="${CC_RAMP_PIDFILE:-/tmp/cc-ramp-pids.txt}"
 FIFODIR="${CC_RAMP_FIFODIR:-/tmp}"
 FLOOR_GB="${CC_RAMP_FLOOR_GB:-8}"     # abort below this (free+purgeable); the alarm's WARN line

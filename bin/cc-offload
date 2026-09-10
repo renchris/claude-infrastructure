@@ -82,9 +82,20 @@ CUSTODY_BIN="${CC_OFFLOAD_CUSTODY_BIN:-}"
   [ -n "$c" ] && [ -x "$c" ] && { CUSTODY_BIN="$c"; break; }; done; }
 WEBSETUP_STATE="${CC_OFFLOAD_WEBSETUP_STATE:-$HOME/.claude/autonomy/websetup}"
 REPO="${CC_OFFLOAD_REPO:-$ROOT}"
-# The create path is interactive-only and 2.1.114 has no --cloud at all; keep ONE default with
-# scripts/lib/cloud-create.sh rather than a second opinion about which binary can fire.
-CLOUD_CLAUDE="${CC_CLOUD_CREATE_BIN:-$HOME/.claude-220/node_modules/.bin/claude}"
+# The create path is interactive-only and 2.1.114 has no --cloud at all. Unset, the binary comes
+# from bin/cc-claude-bin (the launcher's own pin) — the resolver scripts/lib/cloud-create.sh also
+# uses, so the two fire lanes cannot hold different opinions. This line read ~/.claude-220 and kept
+# firing 2.1.220 after the launcher moved to 2.1.260; the rollback dir was still on disk, so no
+# check could see it (cc-backlog e8b753cac339). Unresolvable ⇒ EMPTY, which `setup` R1 and cc-notify
+# both refuse loudly.
+CLOUD_CLAUDE="${CC_CLOUD_CREATE_BIN:-}"
+if [ -z "$CLOUD_CLAUDE" ]; then
+  for _cc_ccb in "$BINDIR/cc-claude-bin" "$HOME/.claude/bin/cc-claude-bin"; do
+    [ -x "$_cc_ccb" ] || continue
+    CLOUD_CLAUDE="$("$_cc_ccb" 2>/dev/null)" || CLOUD_CLAUDE=""
+    [ -n "$CLOUD_CLAUDE" ] && break
+  done
+fi
 
 # The boot contract's text has ONE producer (scripts/lib/cloud-create.sh) so the two fire lanes
 # cannot drift on it. FAIL-OPEN: an unreadable lib must never stop a fire, so a minimal fallback
@@ -294,7 +305,7 @@ cmd_setup() {
              "export CC_CLOUD_CREATE_BIN=<a 2.1.220+ claude>" ;;
     esac
   else
-    row FAIL "create binary" "not executable: $CLOUD_CLAUDE" \
+    row FAIL "create binary" "not executable: ${CLOUD_CLAUDE:-(unresolved: bin/cc-claude-bin found none)}" \
       "export CC_CLOUD_CREATE_BIN=<a 2.1.220+ claude>"
   fi
 

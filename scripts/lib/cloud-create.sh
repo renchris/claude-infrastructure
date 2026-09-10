@@ -111,9 +111,22 @@
 [ -n "${CC_CLOUD_CREATE_LIB:-}" ] && return 0
 CC_CLOUD_CREATE_LIB=1
 
-# The claude binary that has --cloud. 2.1.114 does NOT; 2.1.220 does. Overridable per caller so a
-# test can point at a stub and a probe can pin a track.
-: "${CC_CLOUD_CREATE_BIN:=$HOME/.claude-220/node_modules/.bin/claude}"
+# The claude binary that has --cloud (2.1.114 does NOT; 2.1.220+ does). Overridable per caller so
+# a test can point at a stub and a probe can pin a track. Unset, it comes from bin/cc-claude-bin —
+# the launcher's own pin — never from a literal here: this line read ~/.claude-220 and kept firing
+# 2.1.220 after the launcher moved to 2.1.260, because the rollback dir was still on disk, so the
+# `-x` check below passed and nothing could see the two disagree (cc-backlog e8b753cac339).
+# Unresolvable ⇒ EMPTY, and cc_cloud_create_once refuses as HARNESS rather than guessing a binary.
+if [ -z "${CC_CLOUD_CREATE_BIN:-}" ]; then
+  for _cc_ccb in "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../bin" 2>/dev/null && pwd)/cc-claude-bin" \
+                 "$HOME/.claude/bin/cc-claude-bin"; do
+    [ -x "$_cc_ccb" ] || continue
+    CC_CLOUD_CREATE_BIN="$("$_cc_ccb" 2>/dev/null)" || CC_CLOUD_CREATE_BIN=""
+    [ -n "$CC_CLOUD_CREATE_BIN" ] && break
+  done
+  unset _cc_ccb
+fi
+: "${CC_CLOUD_CREATE_BIN:=}"   # SET even when unresolved: callers run under `set -u` and print it
 : "${CC_CLOUD_CREATE_TIMEOUT_S:=300}"
 : "${CC_CLOUD_CREATE_ATTEMPTS:=3}"
 : "${CC_CLOUD_CREATE_BACKOFF_S:=5}"
@@ -185,7 +198,7 @@ sys.exit(1)'
 cc_cloud_create_once() { # $1=cfgdir $2=cwd $3=prompt → "<outcome>\t<id>\t<msg>"
   local cfg="$1" dir="$2" prompt="$3" out norm outcome id
   if [ ! -x "$CC_CLOUD_CREATE_BIN" ]; then
-    printf 'refused-harness\t\tno claude binary at %s' "$CC_CLOUD_CREATE_BIN"; return 0
+    printf 'refused-harness\t\tno claude binary at %s' "${CC_CLOUD_CREATE_BIN:-(unresolved: bin/cc-claude-bin found none)}"; return 0
   fi
   if [ ! -f "$CC_CLOUD_PTY_RUN" ]; then
     printf 'refused-harness\t\tno pty allocator at %s' "$CC_CLOUD_PTY_RUN"; return 0

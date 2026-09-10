@@ -8,9 +8,31 @@ Without B, a silent A proves only that the harness saw nothing.
 
 import os, pty, re, select, signal, time
 
-CLI = os.path.expanduser(
-    "~/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
-)
+
+def launcher_cli():
+    """The binary interactive sessions actually run, from bin/cc-claude-bin (the launcher's pin).
+
+    No version literal: this probe read ~/.claude-220 and kept probing 2.1.220 after the launcher
+    moved to 2.1.260 (cc-backlog e8b753cac339). PROBE_CLI still pins a build by hand.
+    """
+    import subprocess
+    import sys
+
+    here = os.path.dirname(os.path.realpath(__file__))
+    for r in (
+        os.path.join(here, "..", "bin", "cc-claude-bin"),
+        os.path.expanduser("~/.claude/bin/cc-claude-bin"),
+    ):
+        if os.access(r, os.X_OK):
+            p = subprocess.run([r], capture_output=True, text=True, timeout=10)
+            if p.returncode == 0 and p.stdout.strip():
+                return os.path.realpath(p.stdout.strip())
+    sys.exit(
+        "mcp-modal-e2e-probe: no claude binary resolved (bin/cc-claude-bin found none); set PROBE_CLI"
+    )
+
+
+CLI = os.environ.get("PROBE_CLI") or launcher_cli()
 CFG = os.path.expanduser("~/.claude-tertiary")
 DIR = "/private/tmp/mcp-modal-probe"
 TMP = os.environ.get("TMPDIR", "/tmp")

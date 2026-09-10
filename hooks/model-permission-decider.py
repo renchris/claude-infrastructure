@@ -89,9 +89,43 @@ SETTINGS = HOME / ".claude/settings.json"
 STATE_DIR = pathlib.Path(
     os.environ.get("MITL_STATE_DIR", str(HOME / ".claude/autonomy/mitl-decider"))
 )
-CLAUDE_BIN = os.environ.get(
-    "MITL_CLAUDE_BIN", "/Users/chrisren/.claude-220/node_modules/.bin/claude"
-)
+
+
+def claude_bin() -> str:
+    """The binary the headless consult runs: MITL_CLAUDE_BIN, else bin/cc-claude-bin.
+
+    No version literal. This was a constant naming ~/.claude-220 and it kept
+    consulting 2.1.220 after the launcher moved to 2.1.260 -- the rollback dir
+    stayed on disk, so nothing could see the two disagree (cc-backlog
+    e8b753cac339). bin/cc-claude-bin reads the launcher's own pin. Resolved
+    lazily: a hook that exits on a cheap path must not pay for a fork.
+
+    Empty when unresolvable, deliberately: consult_model then returns ERROR,
+    which finishes as `ask` -- the human decides. A guessed binary is the
+    defect this replaced.
+    """
+    override = os.environ.get("MITL_CLAUDE_BIN")
+    if override:
+        return os.path.expanduser(override)
+    here = pathlib.Path(__file__).resolve().parent
+    for resolver in (
+        here.parent / "bin" / "cc-claude-bin",
+        HOME / ".claude/bin/cc-claude-bin",
+    ):
+        if not os.access(resolver, os.X_OK):
+            continue
+        try:
+            cp = subprocess.run(
+                [str(resolver)], capture_output=True, text=True, timeout=5
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        out = (cp.stdout or "").strip()
+        if cp.returncode == 0 and out:
+            return out
+    return ""
+
+
 MODEL = os.environ.get("MITL_MODEL", "claude-haiku-4-5-20251001")
 
 # Internal deadline. MUST stay strictly below the hook `timeout` in
@@ -364,6 +398,9 @@ def consult_model(
 ) -> tuple[str, str]:
     """Return (verdict, detail). verdict is ALLOW, ASK, or ERROR."""
     stub = os.environ.get("MITL_MODEL_CMD")
+    binary = "" if stub else claude_bin()
+    if not stub and not binary:
+        return "ERROR", "no claude binary resolved (bin/cc-claude-bin found none)"
     prompt = PROMPT.format(cmd=cmd[:4000], cwd=cwd, repo=repo, session=session[:6000])
     remaining = deadline - time.monotonic()
     if remaining <= 1:
@@ -375,7 +412,7 @@ def consult_model(
         shlex.split(stub)
         if stub
         else [
-            CLAUDE_BIN,
+            binary,
             "-p",
             prompt,
             "--model",

@@ -22,12 +22,29 @@ def flatten(b):
     return re.sub(rb"\s+", b" ", _ANSI.sub(b" ", b))
 
 
-CLI = os.environ.get(
-    "PROBE_CLI",
-    os.path.expanduser(
-        "~/.claude-220/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
-    ),
-)
+def launcher_cli():
+    """The binary interactive sessions actually run, from bin/cc-claude-bin (the launcher's pin).
+
+    No version literal: this probe read ~/.claude-220 and kept probing 2.1.220 after the launcher
+    moved to 2.1.260 (cc-backlog e8b753cac339) — a probe of a build nobody runs.
+    """
+    import subprocess
+
+    here = os.path.dirname(os.path.realpath(__file__))
+    for r in (
+        os.path.join(here, "..", "bin", "cc-claude-bin"),
+        os.path.expanduser("~/.claude/bin/cc-claude-bin"),
+    ):
+        if os.access(r, os.X_OK):
+            p = subprocess.run([r], capture_output=True, text=True, timeout=10)
+            if p.returncode == 0 and p.stdout.strip():
+                return os.path.realpath(p.stdout.strip())
+    sys.exit(
+        "mcp-modal-probe: no claude binary resolved (bin/cc-claude-bin found none); set PROBE_CLI"
+    )
+
+
+CLI = os.environ.get("PROBE_CLI") or launcher_cli()
 DIR = os.environ.get("PROBE_DIR", "/private/tmp/mcp-modal-probe")
 CFG = os.environ.get("PROBE_CFG", os.path.expanduser("~/.claude-tertiary"))
 NEEDLE = b"new MCP servers found in this project"
