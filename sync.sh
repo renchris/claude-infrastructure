@@ -94,8 +94,11 @@ sync_file "$HOME/.claude/statusline.sh" "$REPO_DIR/statusline.sh"
   sync_file "$HOME/.claude/statusline-debug.sh" "$REPO_DIR/statusline-debug.sh"
 
 # Global instructions
+# The repo-side name is CLAUDE.global.md, NOT CLAUDE.md — a repo-root CLAUDE.md would be loaded as
+# PROJECT memory on top of the identical user-memory copy, doubling the always-loaded budget for
+# every session in this checkout (backlog c3647a090021; install.sh states the full reason).
 echo "Global instructions:"
-sync_file "$HOME/.claude/CLAUDE.md" "$REPO_DIR/CLAUDE.md"
+sync_file "$HOME/.claude/CLAUDE.md" "$REPO_DIR/CLAUDE.global.md"
 
 # LaunchAgents
 echo "LaunchAgents:"

@@ -39,7 +39,8 @@
 #
 # Usage:  loaded-untracked-lint.sh [<repo-root>]        (default: the git toplevel of $PWD)
 #         loaded-untracked-lint.sh --selftest
-# Env:    CC_LOADED_SCOPES  space-separated pathspecs to judge (default: ".claude CLAUDE.md")
+# Env:    CC_LOADED_SCOPES  space-separated pathspecs to judge
+#                           (default: ".claude CLAUDE.md CLAUDE.global.md")
 #
 # Exit: 0 = clean — every loaded path is tracked or deliberately ignored
 #       1 = RED   — a loaded path is untracked and not ignored
@@ -47,7 +48,11 @@
 #           an indeterminate check that passes is indistinguishable from a working one.
 set -uo pipefail
 
-DEFAULT_SCOPES=".claude CLAUDE.md"
+# CLAUDE.global.md is the global-instructions SSOT install.sh copies to ~/.claude/CLAUDE.md, so an
+# untracked one reaches every session while being in no revision. Bare "CLAUDE.md" is RETAINED
+# deliberately: this repo has no root one any more (backlog c3647a090021), so the pathspec matches
+# nothing and costs nothing — but it goes red the moment someone re-adds an untracked root copy.
+DEFAULT_SCOPES=".claude CLAUDE.md CLAUDE.global.md"
 
 lint_repo() {
   local root="$1"

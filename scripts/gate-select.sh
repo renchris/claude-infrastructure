@@ -247,7 +247,10 @@ def ancestor_dirs(path):
 
 
 def is_prose(path):
-    if path in ("README.md", "CLAUDE.md"):
+    # CLAUDE.global.md is the repo-side name of the global instructions SSOT (renamed from a root
+    # CLAUDE.md — backlog c3647a090021). "CLAUDE.md" is kept so the rule still holds if a root one
+    # ever reappears; it is a superset, so nothing that was prose stops being prose.
+    if path in ("README.md", "CLAUDE.md", "CLAUDE.global.md"):
         return True
     if path.startswith("docs/research/") or path.startswith("docs/plans/"):
         return True
