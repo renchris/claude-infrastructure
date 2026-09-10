@@ -1,0 +1,126 @@
+#!/bin/bash
+# cc-halt — set, clear and read the BRAKE that hooks/unit-gate.sh enforces.
+#
+# Spec: docs/research/oversight-at-scale-2026-08-19.md §5.2-§5.3. Backlog: ad37b0296a56.
+#
+# WHY THIS SHIPS BESIDE THE HOOK RATHER THAN AFTER IT. The hook's deny text names `cc-halt`, and its
+# exemption reads an `exempt_session=` line that only a writer can produce. Landing the enforcement
+# arm with no producer for its own file format is the `spec-named-mechanism-may-be-prose-only` shape:
+# the mechanism exists, is cited, and nothing can operate it. A brake with no lever is not a brake.
+#
+# 🚨 BRAKE, NOT STOP. Setting a halt refuses the braked unit's TOOL CALLS. It does not end its turn
+# and does not stop it spending. It removes the blast radius; the spend keeps running until the unit
+# is torn down (`cc-teardown` for a pane) or finishes talking.
+set -uo pipefail
+
+CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+SELF_SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-${CC_SESSION_ID:-}}}"
+
+usage() {
+  cat >&2 <<'U'
+cc-halt --fleet                 brake EVERY in-process unit on this machine
+cc-halt <session-id|unit-id>    brake one session, or one in-process unit
+cc-halt clear fleet|<id>|--all  release a brake
+cc-halt list                    what is braked, what got stamped halted, what units are known
+cc-halt --selftest              execute hooks/unit-gate.sh against a fixture; non-zero if the
+                                brake does not deny, or denies when nothing is set
+
+The setter is exempt from its own brake (the file records exempt_session), so the session that
+brakes the fleet can still clear it. A hand-`touch`ed HALT exempts nobody — clear it from a plain
+shell, where no hook runs:  rm ~/.claude/HALT
+U
+}
+
+die() { printf 'cc-halt: %s\n' "$*" >&2; exit 2; }
+ts()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# Same guard the hook applies: these values name a path segment, and `.`/`..` would make it a
+# directory that `[ -e ]` reports present — a brake nobody set, on everything at once.
+valid_id() {
+  case "$1" in
+    ''|.|..) return 1 ;;
+    */*)     return 1 ;;
+  esac
+  [[ $1 =~ ^[A-Za-z0-9@:._-]{1,128}$ ]]
+}
+
+write_halt() { # $1 = target file, $2 = scope label
+  mkdir -p "$(dirname "$1")" || die "cannot create $(dirname "$1")"
+  { printf 'ts=%s\n' "$(ts)"
+    printf 'scope=%s\n' "$2"
+    [ -n "$SELF_SID" ] && printf 'exempt_session=%s\n' "$SELF_SID"
+    printf 'by=%s\n' "${USER:-unknown}"
+  } > "$1" || die "cannot write $1"
+  printf 'cc-halt: BRAKED %s — %s\n' "$2" "$1"
+  [ -n "$SELF_SID" ] || printf 'cc-halt: no session id in env; NOBODY is exempt. Clear with: rm %s\n' "$1"
+}
+
+selftest() {
+  local hook tmp rc=0 out
+  hook="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/hooks/unit-gate.sh"
+  [ -x "$hook" ] || hook="$CFG/hooks/unit-gate.sh"
+  [ -x "$hook" ] || { printf 'cc-halt --selftest: unit-gate.sh not found or not executable\n' >&2; return 1; }
+  tmp="$(mktemp -d)" || return 1
+  # ARM A — nothing set: the hook must stay silent. Without this arm a hook that denies
+  # unconditionally would pass the arm below and read as healthy.
+  out="$(printf '{"session_id":"s-selftest","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{}}' \
+        | CLAUDE_CONFIG_DIR="$tmp" CC_UNIT_GATE_EXEMPT='' bash "$hook" 2>/dev/null)"
+  [ -z "$out" ] || { printf 'cc-halt --selftest: FAIL — denied with no HALT set: %s\n' "$out" >&2; rc=1; }
+  # ARM B — fleet HALT set: the hook must deny, and must stamp.
+  printf 'ts=1970-01-01T00:00:00Z\nscope=fleet\n' > "$tmp/HALT"
+  out="$(printf '{"session_id":"s-selftest","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{}}' \
+        | CLAUDE_CONFIG_DIR="$tmp" CC_UNIT_GATE_EXEMPT='' bash "$hook" 2>/dev/null)"
+  case "$out" in
+    *'"permissionDecision":"deny"'*) ;;
+    *) printf 'cc-halt --selftest: FAIL — HALT set but no deny (got: %s)\n' "${out:-<empty>}" >&2; rc=1 ;;
+  esac
+  [ -s "$tmp/units/s-selftest.halted" ] \
+    || { printf 'cc-halt --selftest: FAIL — deny wrote no HALTED stamp\n' >&2; rc=1; }
+  rm -rf "$tmp"
+  [ "$rc" -eq 0 ] && printf 'cc-halt --selftest: OK (silent when clear, denies+stamps when braked)\n'
+  return "$rc"
+}
+
+case "${1:-}" in
+  ''|-h|--help) usage; exit 0 ;;
+  --selftest)   selftest; exit $? ;;
+
+  --fleet) write_halt "$CFG/HALT" fleet ;;
+
+  list)
+    printf 'BRAKES\n'
+    [ -e "$CFG/HALT" ] && printf '  fleet   %s\n' "$(tr '\n' ' ' < "$CFG/HALT" 2>/dev/null)"
+    for f in "$CFG"/HALT.d/*; do
+      [ -e "$f" ] || continue
+      printf '  %-40s %s\n' "$(basename "$f")" "$(tr '\n' ' ' < "$f" 2>/dev/null)"
+    done
+    printf 'HALTED STAMPS (units that were actually braked mid-run — these did NOT complete)\n'
+    for f in "$CFG"/units/*.halted; do
+      [ -e "$f" ] || continue
+      printf '  %-40s %s deny(s), first: %s\n' \
+        "$(basename "${f%.halted}")" "$(wc -l < "$f" | tr -d ' ')" "$(head -1 "$f")"
+    done
+    printf 'UNIT LEDGER  %s\n' "$CFG/logs/units.jsonl"
+    if [ -f "$CFG/logs/units.jsonl" ]; then
+      printf '  %s row(s); last 5:\n' "$(wc -l < "$CFG/logs/units.jsonl" | tr -d ' ')"
+      tail -5 "$CFG/logs/units.jsonl" | sed 's/^/    /'
+    else
+      printf '  absent — no in-process unit has made a tool call since the gate was registered\n'
+    fi
+    ;;
+
+  clear)
+    case "${2:-}" in
+      '')      die "clear what? fleet | <id> | --all" ;;
+      --all)   rm -f "$CFG/HALT"; rm -rf "$CFG/HALT.d"; printf 'cc-halt: all brakes released\n' ;;
+      fleet)   rm -f "$CFG/HALT" && printf 'cc-halt: fleet brake released\n' ;;
+      *)       valid_id "$2" || die "not a usable id: $2"
+               rm -f "$CFG/HALT.d/$2" && printf 'cc-halt: brake released for %s\n' "$2" ;;
+    esac
+    ;;
+
+  -*) die "unknown option: $1" ;;
+
+  *)  valid_id "$1" || die "not a usable id: $1"
+      write_halt "$CFG/HALT.d/$1" "unit:$1" ;;
+esac
