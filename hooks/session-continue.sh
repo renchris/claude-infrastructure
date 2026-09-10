@@ -93,6 +93,27 @@ log_idl() { # $1=disposition $2=reason $3=extra JSON OBJECT (optional, jq-built 
     >> "$IDL" 2>/dev/null || true
 }
 
+# ── `--why <topic>` REFERENCE TIER (backlog 1031594b6327; docs/plans/STOPHOOK_MESSAGE_TIERING.md §3) ──
+# Dispatched HERE — before stdin is read and before any IDL/latch/state write — because this arm is run
+# from a TERMINAL by a reader holding one of this hook's messages. A `cat` above it blocks forever on a
+# tty, and a state write above it would record a Stop that never happened. The library is sourced ONLY
+# on this arm, so the hot path pays nothing.
+# `$0`'s own symlink is resolved FIRST: a brand-new hooks/lib file has no ~/.claude/hooks/lib symlink
+# until install.sh runs, and the live hook IS a symlink into the checkout — so this finds the tier on
+# the same fast-forward that delivers this hook (the completion-assert.sh:113-123 pattern).
+if [ "${1:-}" = "--why" ]; then
+  _wt="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/why-tier.sh"
+  [ -f "$_wt" ] || { _wtt="$0"; [ -L "$_wtt" ] && _wtt="$(readlink "$_wtt")"
+    _wt="$(cd "$(dirname "$_wtt")" 2>/dev/null && pwd)/lib/why-tier.sh"; }
+  [ -f "$_wt" ] || _wt="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/why-tier.sh"
+  [ -f "$_wt" ] || _wt="$HOME/.claude/hooks/lib/why-tier.sh"
+  # shellcheck source=lib/why-tier.sh
+  # shellcheck disable=SC1091  # runtime-resolved source; the ship gate runs shellcheck without -x
+  if [ -f "$_wt" ] && . "$_wt" 2>/dev/null; then why_tier_main "session-continue" "${2:-}"; exit $?; fi
+  # LOUD, never a silent exit 0 — a pointer that resolves to nothing is the defect this tier closes.
+  printf 'session-continue: FATAL — the --why reference tier is missing (%s). Cure: bash ~/Development/claude-infrastructure/install.sh\n' "$_wt" >&2
+  exit 2
+fi
 _scd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 _lib="$_scd/lib/continue-sentinel.sh"
 [ -f "$_lib" ] || _lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/continue-sentinel.sh"

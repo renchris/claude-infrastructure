@@ -371,3 +371,87 @@ Only mechanism knowledge that left an emission **in §2** is listed. Everything 
 
 **Nothing in the applied set was deleted without a home, and no applied hunk points at a flag, doc, or store
 that does not exist today.** That property is exactly what the other 48 emissions fail.
+
+---
+
+## 5. THE TIER IS BUILT — what §3 may now point at (backlog `1031594b6327`, 2026-09-09)
+
+**§3's governing blocker is discharged.** The `--why <topic>` flag that three emitters cited and none
+wrote now exists: `hooks/lib/why-tier.sh` holds the bodies, and `completion-assert.sh`,
+`session-continue.sh`, `waiting-recycle.sh` and `boundary-handoff.sh` each dispatch a `--why` arm.
+This section is the CONTRACT the §3 unblock waves write against — read it before relocating a word.
+
+**The one property that makes it a destination rather than a second dangling pointer:** the arm is
+dispatched *before* stdin is read and *before* any IDL/latch/state write. Measured on trunk's
+pre-fix copy, `completion-assert.sh --why ledger` with a never-closing stdin returned **rc 124** — it
+blocked on `cat` forever, because the only place an unrecognised argv could land was hook mode. Post-fix
+the same invocation returns rc 0 with the body. A `--why` dispatched below the `cat` would have been a
+flag that hangs the reader, which is worse than the deletion it was meant to license.
+
+### 5.1 The contract
+
+```
+<emitter> --why                 list every topic, its home emitter, and a one-line summary   (rc 0)
+<emitter> --why <topic>         print that topic's body                                      (rc 0)
+<emitter> --why <a>+<b>         print BOTH bodies, in order                                  (rc 0)
+<emitter> --why <unknown>       name the unknown topic + list what IS available              (rc 3)
+  (library missing)             FATAL naming `install.sh` as the cure                        (rc 2)
+```
+
+**Any wired emitter prints any topic.** Deliberate: a completion-assert message may cite a mechanism
+that lives in session-continue, and the reader has the emitter from the message in hand, not the one
+that happens to own the topic. A pointer whose resolution depends on picking the right binary is the
+same dangling pointer in a new costume.
+
+**The `+` form is not a convenience.** `completion-assert.sh:1073-1081` composes `$arm` by `+`-joining
+every corrective that fired, and `tests/completion-assert.bats:466` pins `"arm":"handoff+fence"` (§3.3 cited :417; re-read and corrected here) — so
+the pointer a multi-corrective block prints is literally `--why handoff+fence`. §3.3's held row named
+this exact gap ("the proposal never says what `--why handoff+fence` prints"). It prints both, in arm
+order, and `tests/why-tier.bats` P4 reads the arm vocabulary out of the source so an arm added later
+without a topic is a red, not a dangling pointer.
+
+### 5.2 The topic vocabulary as shipped (15)
+
+| Topic | Home emitter | Answers | §3 row it unblocks |
+|---|---|---|---|
+| `ledger` | completion-assert | the ledger contradiction + the ownership question that gates it | 3.3 A2 (the highest-value held item — it is where "yours ⇒ /ship; a sibling's ⇒ say so" goes, long-form) |
+| `hedge` | completion-assert | one rung, unhedged | 3.3 B-items routed to `--why <arm>` |
+| `handoff` | completion-assert | when an operator-only step is a real gate vs an escape hatch | 3.3 B1/B2 |
+| `offer` | completion-assert | the three dispositions; "say the word" is not one | 3.3 B4 — **keeps the `cc-backlog needs` vs `cc-backlog add` discriminator** the proposal compressed away |
+| `fence` | completion-assert | the screenshot-measured render form for a command | 3.3 B3 |
+| `placeholder` | completion-assert | why an unfilled slot makes a plattered command unpasteable | 3.3 B5 |
+| `shape` | completion-assert | the ORIGIN close contract (rung glyph + `Good to close:` at line 2) | 3.3 B7 |
+| `act` | completion-assert | why the one command is its own line, third | 3.3 D7 |
+| `custody` | session-continue | collect / return / abandon — **`<marker-or-slug>` spelled in full** | 3.4's named restore |
+| `wake` | session-continue | a watcher is not a wake path; the live-`/goal` refusal | 3.4 + §4 row 7 |
+| `ship-floor` | session-continue | committed ≠ safe; the three ways out | 3.4 |
+| `sentinel` | session-continue | arm / clear / status, cap, sid-bind, kill-switch — **absolute path at every site** | 3.4's `:1030` restore |
+| `recycle-rc` | waiting-recycle | the rc map, **including the rc-2 do-not-retry-blind warning** | 3.1 (b) — this was a genuine WRITE, not a move; it existed nowhere on disk |
+| `holds` | waiting-recycle | all nine hold reasons and the ACTION each takes | 3.1's first standing loss — `live-team-hold` now HAS a per-hold remedy ("let the teammate finish" was correctly not replaceable by "clear the hold") |
+| `context-fill` | boundary-handoff | the four fill axes; why a forecast fires below the static bar | 3.2's `hint` axes |
+
+### 5.3 What is still NOT unblocked — read this before assuming §3 is open
+
+Building the tier discharges the *destination* objection. It does **not** discharge the other,
+independent objections each verifier raised, and every one of them still stands:
+
+- **3.1 (c)** `scripts/desk-arm-live.sh` supports only `--live`/`--shadow`; an operator paging on a BUSY
+  wedge still arms LIVE only and the desk still never execs. That is a code fix, untouched here.
+- **3.1 (d)** `set -uo pipefail` makes one unset `sysmsg` a session-costing abort — every rewritten
+  emission must still supply its string explicitly.
+- **3.2** `boundary-handoff`'s `${hint}` must still be declared and assigned with a leading separator;
+  `T_FREEWIN`'s value is still on no record, fired or abstained.
+- **3.3 B8** the re-fire tier's retain guard is still keyed on `contra`, and still asserts a state the
+  latch cannot establish.
+- **3.5** `operator-readout` is deliberately **NOT** wired: none of its eight held rows routes to
+  `--why`. They need a store, a test, or `cc-do` taught the custody store — not a reference tier.
+  Wiring it would have been scope, not progress.
+
+**And the shortening itself was not started.** No emission text changed in this diff; it is purely
+additive and reader-neutral. §3 remains one dispatched session per emitter, as §2 says.
+
+### 5.4 Adding a topic
+
+Add a `case` arm to `hooks/lib/why-tier.sh` **and** a row to `why_topic_list`. `tests/why-tier.bats`
+P7 asserts the two sets are equal and that no body is a stub, so a body with no listing — or a listing
+with no body — is a red rather than a discovery six weeks later.
