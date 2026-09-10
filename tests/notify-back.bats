@@ -18,6 +18,15 @@ setup() {
   PF="$BATS_TEST_TMPDIR/prompt.md"
   printf 'ORIGINAL PROMPT BODY\nline two\n' > "$PF"
   export TMPDIR="$BATS_TEST_TMPDIR"
+  # M11, the seam this suite was still missing (found 2026-09-09, item fe740e799fd5). The fired-peer
+  # store defaults to $HOME/.claude/cc-fired, so an unpinned run reads the OPERATOR's live stamps —
+  # and `--recycle` now consults them (a recycle of a pane that IS a fired peer inherits its
+  # self-retire contract). verify_self_pane resolves $SID to the REAL pane, not the $ITERM_SESSION_ID
+  # a case passes in, so on a box where the session RUNNING bats is itself a dispatched peer in this
+  # cwd the recycle case below read `tenancy=valid` off a genuine live stamp and composed a trailer.
+  # That is the subject behaving correctly over the wrong store: the same class as
+  # unfixtured-sensor-executes-the-deployed-subject, and the reason it presented as a new-code defect.
+  export CC_FIRED_DIR="$BATS_TEST_TMPDIR/cc-fired"; mkdir -p "$CC_FIRED_DIR"
 }
 
 # extract the "copy: <path>)" the dry-run prints on its notify-back line
