@@ -1,5 +1,5 @@
 ---
-status: open
+status: done
 ---
 
 # Account-agnostic agent state — audit + repair
@@ -235,7 +235,80 @@ grep and optionally YAKE per row, which is minutes with the index lock held. Pha
 with no `sessionId` (1,238, all in account 1) are skipped — there is no key to index them on, and
 none of them is part of this item's gap.
 
+## Close — the frozen scope is met, re-measured 17 days after W3 (2026-09-09)
+
+The plan carried `status: open` while all four waves were complete; the frontmatter was the stale
+thing, not the work. Verified this close, by content on trunk and against the live fleet rather than
+from the wave prose:
+
+| Frozen-scope clause | Evidence |
+|---|---|
+| classify every per-account surface | W1 table above; `lib/config-mirror.zsh` `_CC_ISOLATE` implements it |
+| close the gaps for MUST-SHARE | `memory/` — the adopt branch at `lib/config-mirror.zsh:241` + `tests/config-mirror-memory-adopt.bats`; `history.jsonl` — `bin/cc-history-union` + `session_index_history_gapfill` (`hooks/lib/session-index-helpers.sh:455`), both wired on `hooks/session-index-sweep.sh:229-257` |
+| un-strand the 13 slugs, losing nothing | **0 stranded today**, and the population has GROWN past the 13 |
+
+**The strand census is the load-bearing re-measurement, because W3's "0 stranded" was a statement
+about one afternoon.** Counting real (non-symlink) `projects/*/memory` dirs per config dir today:
+`.claude-secondary` 73 symlinked / **0** real, `.claude-tertiary` 73 / **0**, `.claude-quaternary`
+76 / **0**. So the 13 did not merely get moved once — 60-odd projects created SINCE W3 were adopted
+by the W2 fix as they appeared, which is the property the plan was actually buying and the only one a
+one-time backfill could not have delivered.
+
+**The second defect re-measured too, and its number is the one that proves SHARING rather than
+merely tidiness.** Misplaced indexes (`projects/<slug>/MEMORY.md`, outside `memory/`): **0** in all
+four dirs. Correctly-placed indexes: **42 — the same 42 from every account**, up from W3's 39. An
+identical count read from four config dirs is the property the plan was buying: the three projects
+created since W3 were authored with the pinned path and are visible to accounts that never wrote
+them. A count that differed per account would be exactly the strand this plan repaired.
+
+⚠️ **`.claude-next` reads as 63 stranded and is not** — its `projects/` is itself a symlink onto
+account 1's, so that census walks account 1's own canonical dirs and counts them as foreign. It is
+the same-account dir `config-mirror.zsh:219` documents as already-sharing and deliberately skipped.
+Any future re-run of this census must exclude a config dir whose `projects/` is a symlink, or it will
+report the canonical store as its own strand.
+
+### The one thing W4 found and left unfiled — driven here (out of the frozen scope)
+
+W4's own note reads *"the backfill breakage is described above and is that repo's to fix, not this
+one's"*, and filed nothing. Half of that is right and half is not: the SCRIPT is in
+`claude-session-search`, but **`launchd/com.claude.session-search-backfill.plist` is in this repo**,
+and the invocation path is what triggers the bug. So the cure was in reach here all along.
+
+**Two defects, and the second is why the first survived.**
+
+1. `~/.claude/bin/session-index-backfill.sh` is a symlink into the other checkout. That script's
+   line 10 — `SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"` — does not resolve a symlink, so invoked
+   by its link name `SCRIPT_DIR` became `~/.claude/bin` and line 13 sourced a path that does not
+   exist. The plist now invokes `"$(readlink -f …)"`, so `$0` is the real file.
+2. The old command ended `… 2>&1 | head -50 >> log`, so the status launchd saw was **head's**. A job
+   that had never once succeeded reported **exit 0 on every run**. That is the dead-rung-reports-OK
+   shape (MEMORY.md `alarm-polarity-and-attention-budget`), and it is the reason months of identical
+   errors sat in a log nobody had cause to open. The command now captures the real rc, writes a
+   parseable `verdict=ok|FAILED rc=<n>` line, and exits with it.
+
+**A/B on the live box, one variable.** By the link name: dies at line 13 in under a second. Through
+`readlink -f`: ran to `✓ Phase 1: Session index scan  154 indexed  54.2s` — 154 sessions indexed by
+a job that had never reached a phase. `tests/session-search-backfill-launchd-path.bats` holds both
+directions plus two pre-fix controls that replay the old invocation shape against the same fixture,
+so the suite exhibits the defect rather than only asserting its absence.
+
+🚀 **Landed is not live here, and the migration is the converge path.** The loaded job is a plain
+COPY at `~/Library/LaunchAgents/`, not a symlink into the repo — measured byte-identical to pre-fix
+trunk — so this commit changes nothing by itself. `migrations/0025-session-search-backfill-path.sh`
+(class **c10**) reinstalls and reloads it; it is STAGED, not run, because a `launchctl` reload is
+operator-owned. Its `--verify` reads the INSTALLED file and currently reports three reds, which is
+the state to expect until the migration runs.
+
+**Dropped, not filed:** hardening `$0` → `readlink -f` in the upstream script. The plist is its only
+invoker on this box (greped: every other mention is prose describing the bug), so the fragility is
+real but has no live victim, and a row for it would be noise a future session pays to re-derive.
+
 ## Status log
+- **2026-09-09 (close)** — Plan closed; `status: open` → `done`. Frozen scope re-verified against
+  trunk and the live fleet: 0 stranded memory dirs across all three foreign accounts (73/73/76 all
+  symlinked), the population grown past the original 13, and every wave deliverable present on trunk
+  by content. Out of scope but found unfiled by W4 and driven here: the weekly
+  `com.claude.session-search-backfill` job has never once succeeded — see the plist fix below.
 - **2026-09-09** — W4 complete. `history.jsonl` unioned across all four real copies (35,806 records) and its consumer rebuilt in-repo after the scheduled backfill was found dead on its launchd path since before this plan existed. +3,050 indexable sessions, 1,615 of them from accounts 2-4, proven by an A/B of the real search against a copy of the index. Filed nothing new; the backfill breakage is described above and is that repo's to fix, not this one's.
 
 - **2026-08-23** — W1/W2/W3 complete. Audit refuted all four suspicions and found `history.jsonl` as
