@@ -143,3 +143,32 @@ setup() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"_bin pin"* ]] || skip "live zshrc carries no claude() _bin pin"
 }
+
+@test "RATCHET: no runtime file pins its own versioned claude binary — consumers go through this resolver" {
+  # cc-backlog e8b753cac339, measured 2026-09-03: six runtime defaults (cc-offload, cloud-create.sh,
+  # capacity-ramp.sh, model-permission-decider.py, both mcp-modal probes) hardcoded
+  # ~/.claude-220/... after the launcher moved to 2.1.260. ~/.claude-220 stayed on disk as the
+  # rollback, so every `-x` check passed and each site silently kept running the old build — a copy
+  # of the pin cannot see the pin move. This case makes the next copy visible at land time.
+  # Runtime trees only. Comment lines are exempt (history may name old dirs); tests/ is not scanned
+  # (fixtures carry ps rows that name versioned paths, which is data, not a pin).
+  git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || skip "not a git checkout — git grep cannot scan"
+  # shellcheck disable=SC2016  # the $ is regex text (a literal $HOME in source), not an expansion
+  local pat='(\$HOME|~|/Users/[A-Za-z0-9._-]+)/\.claude-[0-9]+/node_modules'
+  local code_only='^[^:]+:[0-9]+:[[:space:]]*#'
+
+  # Positive control through the SAME instrument: a planted pin must be found, and a planted
+  # comment naming the same path must not. Without this an empty scan below proves nothing.
+  local ctl="$BATS_TEST_TMPDIR/ctl"; mkdir -p "$ctl"
+  # shellcheck disable=SC2016  # literal source text, planted verbatim
+  printf '%s\n' '# history: this used to read $HOME/.claude-220/node_modules/.bin/claude' \
+                'BIN="${X:-$HOME/.claude-220/node_modules/.bin/claude}"' >"$ctl/site.sh"
+  local ctl_hits
+  ctl_hits="$(git -C "$ctl" grep --no-index -n -E "$pat" -- site.sh | grep -vE "$code_only" || true)"
+  [ "$(printf '%s\n' "$ctl_hits" | grep -c .)" -eq 1 ]
+  [[ "$ctl_hits" == site.sh:2:* ]] || false
+
+  local hits
+  hits="$(git -C "$REPO" grep -n -E "$pat" -- bin scripts hooks lib | grep -vE "$code_only" || true)"
+  [ -z "$hits" ] || { printf 'versioned claude binary hardcoded — route it through bin/cc-claude-bin:\n%s\n' "$hits" >&2; false; }
+}
