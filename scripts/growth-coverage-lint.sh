@@ -32,6 +32,16 @@
 #   ignore=<why>                Not a growth surface we own — repo code, or harness-managed state
 #                               bounded by CC's own cleanupPeriodDays.
 #
+# PATTERN ROWS (2026-09-10, cc-backlog b1f7763af89f). A row whose path contains `*` classifies every
+# present surface it matches (a bash `case` glob), so a family of per-run files carries ONE row. Why
+# it had to exist: agent sessions write per-run logs straight into the live autonomy/ dir
+# (land1.301.log, suites300.log, converge299.log …), and with one exact row required per FILE the
+# nightly reported 234 unclassified surfaces, ~200 of them that single family — a red nobody could
+# clear by classifying, because the family grows by one file per run. Two guards keep a pattern from
+# deleting the class-stopper it lives in: the last path segment must carry a literal prefix of 3+
+# characters before its first `*` (so `autonomy/*.log` or `*` is MALFORMED, never a silent
+# catch-all), and a pattern that matches nothing warns as a stale row, exactly as an exact row does.
+#
 # Usage:  growth-coverage-lint.sh [--strict] [--selftest]
 # Exit:   0 = every surface classified and every reaper claim verified (gaps warn)
 #         1 = an unclassified surface, a broken reaper claim, a malformed row, or --strict with gaps
@@ -92,9 +102,21 @@ gap()  { printf '  ▫︎ GAP %s\n' "$1"; gaps=$((gaps + 1)); }
 
 # DECLARED_PATHS is a newline-delimited set; bash 3.2 has no associative arrays.
 DECLARED_PATHS=""
-declared() { case "$DECLARED_PATHS" in *"
+PATTERNS=""   # newline-delimited pattern rows (paths containing `*`) — see PATTERN ROWS above
+declared() {
+  case "$DECLARED_PATHS" in *"
 $1
-"*) return 0 ;; esac; return 1; }
+"*) return 0 ;; esac
+  local _p
+  while IFS= read -r _p; do
+    [ -n "$_p" ] || continue
+    # shellcheck disable=SC2254  # unquoted on purpose: the row IS the glob
+    case "$1" in $_p) return 0 ;; esac
+  done <<EOF
+$PATTERNS
+EOF
+  return 1
+}
 
 echo "growth-coverage-lint: root=$GROWTH_ROOT ssot=$SSOT"
 
@@ -104,9 +126,21 @@ while IFS= read -r line; do
   decl=$(printf '%s' "$line" | awk '{$1=""; sub(/^ +/,""); print}')
   [ -n "$path" ] || continue
   rows=$((rows + 1))
-  DECLARED_PATHS="$DECLARED_PATHS
+  case "$path" in
+    *'*'*)
+      _seg="${path##*/}"; _pre="${_seg%%\**}"
+      if [ "${#_pre}" -lt 3 ]; then
+        bad "$path  pattern row too broad — its last path segment needs a literal prefix of 3+ characters before the first '*'"
+        continue
+      fi
+      PATTERNS="$PATTERNS
 $path
-"
+" ;;
+    *)
+      DECLARED_PATHS="$DECLARED_PATHS
+$path
+" ;;
+  esac
   verb="${decl%%=*}"; val="${decl#*=}"
   case "$decl" in *=*) : ;; *) bad "$path  malformed row — expected '<path> <verb>=<value>', got '$decl'"; continue ;; esac
   [ -n "$val" ] || { bad "$path  '$verb=' has an empty value"; continue; }
@@ -127,7 +161,15 @@ $path
 
   # A row for something that no longer exists is drift in the other direction: harmless today,
   # but it makes the SSOT read as covering more than it does.
-  [ -e "$GROWTH_ROOT/$path" ] || warn "$path  declared but not present under $GROWTH_ROOT (stale row?)"
+  case "$path" in
+    *'*'*)
+      _hit=0
+      # shellcheck disable=SC2086  # unquoted on purpose: the row IS the glob
+      for _g in "$GROWTH_ROOT"/$path; do [ -e "$_g" ] && { _hit=1; break; }; done
+      [ "$_hit" -eq 1 ] || warn "$path  pattern matches nothing under $GROWTH_ROOT (stale row?)" ;;
+    *)
+      [ -e "$GROWTH_ROOT/$path" ] || warn "$path  declared but not present under $GROWTH_ROOT (stale row?)" ;;
+  esac
 done < "$SSOT"
 
 # ── the class-stopper: anything on disk that no row classifies ────────────────────────────────
@@ -194,6 +236,17 @@ if [ "$SELFTEST" -eq 1 ]; then
   GROWTH_ROOT="$d/root" GROWTH_COVERAGE_SSOT="$d/nope.conf" bash "$0" >/dev/null 2>&1
   if [ "$?" -eq 2 ]; then echo "  ok  a missing SSOT fails closed (exit 2)"
   else echo "  ⛔ selftest: a missing SSOT did not fail closed"; st_fail=$((st_fail + 1)); fi
+  # (e) a pattern row classifies its whole family — and an over-broad one is refused. The refusal
+  # case classifies the family EXACTLY, so the only thing that can fail it is the broad row itself.
+  mkdir -p "$d/root/scratch101" "$d/root/scratch102"
+  printf 'covered reaper=growth-coverage-lint.sh\nsurprise ignore=selftest fixture\nscratch* gap=selftest fixture\n' > "$d/ssot3.conf"
+  if GROWTH_ROOT="$d/root" GROWTH_COVERAGE_SSOT="$d/ssot3.conf" bash "$0" >/dev/null 2>&1; then
+    echo "  ok  a pattern row classifies its whole family"
+  else echo "  ⛔ selftest: a pattern row did not classify its family"; st_fail=$((st_fail + 1)); fi
+  printf 'covered reaper=growth-coverage-lint.sh\nsurprise ignore=selftest fixture\nscratch101 ignore=x\nscratch102 ignore=x\n* gap=too broad\n' > "$d/ssot4.conf"
+  if GROWTH_ROOT="$d/root" GROWTH_COVERAGE_SSOT="$d/ssot4.conf" bash "$0" >/dev/null 2>&1; then
+    echo "  ⛔ selftest: an over-broad pattern row was accepted"; st_fail=$((st_fail + 1))
+  else echo "  ok  an over-broad pattern row is refused"; fi
   rm -rf "$d"
   [ "$st_fail" -gt 0 ] && viol=$((viol + st_fail))
 fi

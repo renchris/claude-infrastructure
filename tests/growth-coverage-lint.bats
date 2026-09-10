@@ -117,6 +117,38 @@ setup() {
   echo "$output" | grep -q "stale row"
 }
 
+# ── pattern rows (2026-09-10, cc-backlog b1f7763af89f): one row per per-run family ────────────
+@test "a pattern row classifies every surface it matches, and a sibling outside it is still caught" {
+  mkdir -p "$GROWTH_ROOT/autonomy"
+  : > "$GROWTH_ROOT/autonomy/land1.300.log"; : > "$GROWTH_ROOT/autonomy/land1.301.log"
+  printf '%s\n' 'autonomy ignore=container' 'autonomy/land1.*.log gap=session scratch' > "$GROWTH_COVERAGE_SSOT"
+  run bash "$LINT"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "0 unclassified"
+  # failure-distinct (L2): a file the glob does not reach is still a class-stopper hit
+  : > "$GROWTH_ROOT/autonomy/landing.log"
+  run bash "$LINT"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "autonomy/landing.log"
+}
+
+@test "an over-broad pattern row is malformed, never a silent catch-all" {
+  mkdir -p "$GROWTH_ROOT/autonomy"; : > "$GROWTH_ROOT/autonomy/x.log"
+  # x.log is classified EXACTLY, so the broad row is the only thing that can fail this run
+  printf '%s\n' 'autonomy ignore=container' 'autonomy/x.log ignore=fixture' 'autonomy/*.log gap=too broad' \
+    > "$GROWTH_COVERAGE_SSOT"
+  run bash "$LINT"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "pattern row too broad"
+}
+
+@test "a pattern row that matches nothing warns as stale without failing" {
+  echo 'gone-scratch-* gap=fixture' > "$GROWTH_COVERAGE_SSOT"
+  run bash "$LINT"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "stale row"
+}
+
 # ── fail-closed ────────────────────────────────────────────────────────────────────────────────
 @test "an unreadable SSOT exits 2 and never reports health" {
   rm -f "$GROWTH_COVERAGE_SSOT"
