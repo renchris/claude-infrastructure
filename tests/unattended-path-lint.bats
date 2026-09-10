@@ -202,6 +202,63 @@ darwin_only_tree_arm() {
   [ "$inline" -gt 5 ] || { echo "only $inline plists resolved a Homebrew-bearing PATH — inline parsing has regressed"; echo "$output"; false; }
 }
 
+@test "EVERY plist resolves an in-tree target, or is DECLARED out-of-tree (per-MEMBER, not aggregate)" {
+  # The control this replaces was AGGREGATE — "the corpus as a whole resolves something" — and it
+  # earned its keep by catching the BRE/sed bug where the launchd half scanned NOTHING while
+  # reporting a clean corpus. It structurally could not catch the successor defect: measured
+  # 2026-08-25, 23 of 26 plists resolved a target, so the aggregate spoke loudly while TWO real jobs
+  # resolved zero and were skipped without a word — bin/cc-reaper (invoked by BARE NAME) and
+  # tools/auth/auth-timeseries.sh (named by its DEPLOYED path). A member-level zero is invisible to
+  # any statistic over the members.
+  #
+  # Asserted as the INVARIANT and not as the two instances. Pinning "cc-reaper resolves bin/cc-reaper"
+  # would be a resident restatement of a perishable fact, which this suite's own header warns has no
+  # path to learn it changed; the invariant survives every plist anyone adds later, which is the
+  # population the next instance of this defect will come from.
+  run "$LINT" --list
+  [ "$status" -eq 0 ]
+  local bad=""
+  local cur=""
+  while IFS= read -r line; do
+    case "$line" in
+      *.plist*) cur="$(printf '%s\n' "$line" | awk '{print $1}')" ;;
+      *"targets: — NONE"*) [ -n "$cur" ] && bad="$bad $cur" ;;
+    esac
+  done < <(printf '%s\n' "$output" | sed -n '/LAUNCHD POPULATION/,/BATS-CORPUS/p')
+  # The ONE legitimate member: its script lives in the claude-session-search checkout, so no rung
+  # here can or should reach it. It is named in PLIST_TARGET_OUT_OF_TREE, and this test reads that
+  # declaration from the lint rather than restating it, so adding an entry there cannot silently
+  # widen what this test tolerates without the diff showing it.
+  local declared
+  declared="$("$LINT" --print-out-of-tree)"
+  local b
+  for b in $bad; do
+    printf '%s\n' "$declared" | grep -qxF "$b" || {
+      echo "plist '$b' resolves NO in-tree script, and is not declared out-of-tree."
+      echo "Either a rung in plist_target_scripts cannot see how its target is spelled (widen the"
+      echo "rung), or the script belongs to another checkout (declare it, WITH the reason)."
+      printf '%s\n' "$output" | sed -n '/LAUNCHD POPULATION/,/BATS-CORPUS/p'
+      false
+    }
+  done
+}
+
+@test "PLIST_TARGET_OUT_OF_TREE names only plists that EXIST (a rename must not mint a blind spot)" {
+  # The declaration exempts a plist BY BASENAME. If that plist is renamed or removed, the entry
+  # stops matching anything and quietly stops meaning anything — while the renamed job, now
+  # undeclared, is caught by the test above. This asserts the other direction: the list itself never
+  # accumulates rows that match nothing, which is how a shrink-only list stops shrinking.
+  local declared b
+  declared="$("$LINT" --print-out-of-tree)"
+  while IFS= read -r b; do
+    [ -n "$b" ] || continue
+    [ -f "$REPO/launchd/$b" ] || {
+      echo "PLIST_TARGET_OUT_OF_TREE names '$b', which is not in launchd/ — delete the row."
+      false
+    }
+  done <<< "$declared"
+}
+
 @test "no plist is classified LOGIN_SHELL by its interpreter path alone" {
   # The login-shell escape hatch is keyed on the -l FLAG. An earlier spelling tested the shell NAME
   # and so matched the string "/bin/bash", which exempted every plain `/bin/bash -c` job — the
