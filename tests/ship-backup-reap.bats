@@ -148,6 +148,91 @@ land() { # rebase onto the fetched trunk, push, and record what landed
   echo "$output" | grep -q "only-on-backup.txt"
 }
 
+# ── containment: a sibling's edit on OUR path arrives through the rebase (backlog b746262ac702) ──
+# Identity against the landed head cannot tell (A) "our hunk was dropped" from (B) "the rebase also
+# carried a sibling's newer edit on a path we touched" — it reported (B) as "did not reach the trunk
+# intact" and kept the ref forever. These three cases split (B) from both shapes of (A), and each is
+# built so a DIFFERENT mutant of the containment check goes red: no containment at all (case 1), a
+# merge-rc-only check that skips the result comparison (case 2), a conflict read as carried (case 3).
+
+shared() { # [lineno=text ...] — the 10-line shared.txt with the named lines replaced
+  local i line kv
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    line="l$i"
+    for kv in "$@"; do [ "${kv%%=*}" = "$i" ] && line="${kv#*=}"; done
+    printf '%s\n' "$line"
+  done
+}
+
+seed_shared() { # a path both we and the sibling will edit, already on the trunk
+  shared > shared.txt
+  git add shared.txt
+  git commit -q -m "seed shared.txt"
+  git push -q origin main
+}
+
+land_revising_line() { # <lineno=text ...> — rebase, then the author revises lines before the push
+  git rebase -q origin/main
+  shared 9=peer9 "$@" > shared.txt
+  git add shared.txt
+  git commit -q --amend -m "feat shared.txt revised during the land"
+  git push -q origin HEAD:main
+  git fetch -q origin main
+  LANDED="$(git rev-parse HEAD)"
+}
+
+@test "REAPS when the only difference is a sibling's edit the rebase carried onto OUR path" {
+  seed_shared
+  start_change shared.txt "$(shared 2=ours2)"
+  sibling_lands shared.txt "$(shared 9=peer9)"
+  land
+  # controls: the land really carried BOTH edits, and the identity predicate really misses — so the
+  # pre-fix reaper keeps this ref (the defect), and a reaper that reaps unconditionally is not what
+  # makes this test pass (the KEEP cases below would die).
+  git show "$LANDED:shared.txt" | grep -qx ours2
+  git show "$LANDED:shared.txt" | grep -qx peer9
+  run "$REPO/scripts/land-verify.sh" "$(git merge-base "$BACKUP" "$LANDED")..$BACKUP" "$LANDED" "$BACKUP"
+  [ "$status" -eq 1 ]
+  [ -n "$(git branch --list "$BACKUP")" ]
+
+  run "$REAP" reap "$BACKUP" "$LANDED"
+  [ "$status" -eq 0 ]
+  [ -z "$(git branch --list "$BACKUP")" ]
+  echo "$output" | grep -q "contained in the landed head"
+}
+
+@test "KEEPS a ref whose dropped hunk would re-apply CLEANLY — a clean merge is not containment" {
+  seed_shared
+  start_change shared.txt "$(shared 2=ours2 5=ours5)"
+  sibling_lands shared.txt "$(shared 9=peer9)"
+  land_revising_line 2=ours2 5=l5  # the land keeps ours2 but DROPS the ours5 hunk
+  # control: the dropped hunk merges back without conflict — so a check reading only merge-file's
+  # exit code would call this ref carried and delete the only copy of ours5.
+  local b="$BATS_TEST_TMPDIR/b" r="$BATS_TEST_TMPDIR/r" l="$BATS_TEST_TMPDIR/l"
+  git show "$(git merge-base "$BACKUP" "$LANDED"):shared.txt" > "$b"
+  git show "$BACKUP:shared.txt" > "$r"
+  git show "$LANDED:shared.txt" > "$l"
+  run git merge-file -q -p "$l" "$b" "$r"
+  [ "$status" -eq 0 ]
+
+  run "$REAP" reap "$BACKUP" "$LANDED"
+  [ "$status" -ne 0 ]
+  [ -n "$(git branch --list "$BACKUP")" ]
+  echo "$output" | grep -q "shared.txt"
+  echo "$output" | grep -q "NOT in the landed head"
+}
+
+@test "KEEPS a ref whose change CONFLICTS with the landed content — unprovable is not carried" {
+  seed_shared
+  start_change shared.txt "$(shared 5=ours5)"
+  sibling_lands shared.txt "$(shared 9=peer9)"
+  land_revising_line 5=revised5    # the land rewrote OUR line differently
+  run "$REAP" reap "$BACKUP" "$LANDED"
+  [ "$status" -ne 0 ]
+  [ -n "$(git branch --list "$BACKUP")" ]
+  echo "$output" | grep -q "CONFLICTS"
+}
+
 @test "REFUSES any ref outside the ship/backup- namespace, even a content-identical one" {
   start_change a.txt alpha
   land
