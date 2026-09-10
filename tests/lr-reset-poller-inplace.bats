@@ -118,6 +118,20 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-qu
   [ "$status" -eq 0 ]
   [[ "$output" != *"unbound variable"* ]] || { echo "$output"; false; }
 }
+@test "SYMLINKED STORE: a limited session under a symlinked <cfg>/projects (the real .claude-next) is detected and parked" {
+  # ~/.claude-next/projects -> ~/.claude/projects on this box. Without find -H the detect pass listed
+  # 0 transcripts there, so no `next` session was ever parked (poller.log: 0 next, 63 other).
+  local sid="0f0f0f0f-0000-4000-8000-00000000abcd" real="$HOME/.claude/projects/$(SLUG "$CWD")" ts
+  mkdir -p "$real" "$HOME/.claude-next"; ln -s "$HOME/.claude/projects" "$HOME/.claude-next/projects"
+  ts="$(python3 -c "from datetime import datetime,timezone;print(datetime.now(timezone.utc).isoformat().replace('+00:00','Z'))")"
+  {
+    printf '{"type":"user","cwd":"%s","gitBranch":"main","timestamp":"%s","message":{"role":"user","content":"work"}}\n' "$CWD" "$ts"
+    printf '{"type":"assistant","uuid":"u2","sessionId":"%s","timestamp":"%s","error":"rate_limit","apiErrorStatus":429,"isApiErrorMessage":true,"message":{"id":"m2","type":"message","role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 11:40am (America/Chicago)"}]}}\n' "$sid" "$ts"
+  } > "$real/$sid.jsonl"
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once --dry-run
+  [ "$status" -eq 0 ]
+  grep -qE "PARKED $sid \(next, session\)" "$STATE/poller.log" || { echo "$output"; cat "$STATE/poller.log"; false; }
+}
 
 @test "TRANSPLANTED: a parked sid whose lock names ANOTHER store with the successor on disk is retired, nothing fired" {
   mk_parked "$SID"
