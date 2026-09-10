@@ -51,6 +51,10 @@ export CC_PERMPEND_ESCALATE_ATTENDED_S=400        # unproven  first rung (prod d
 # as a second, independent brake. T31 fixtures both so it can assert on an exact, named blind spot.
 export CC_SUP_SESSIONS_CMD="false"
 export CC_SUP_PANE_DELTA_TOL=1000000
+# The operator-adopted exemption forks cc-classify, which enumerates the LIVE fleet. `false` is a
+# classifier that never answers ⇒ NO VERDICT ⇒ every stale fixture pages exactly as it did before the
+# exemption existed. T41 points it at a sandbox stub.
+export CC_SUP_CLASSIFY_BIN="false"
 
 ALIVE=; cleanup(){ [ -n "$ALIVE" ] && kill "$ALIVE" 2>/dev/null; rm -rf "$SBX"; }
 trap cleanup EXIT
@@ -974,6 +978,113 @@ mktel "$SUBJ" 80 1 "$ALIVE" "$REPO"; asweep
   && ok "falling a full step below T (a compaction) re-arms, a wobble just under T does not; the next climb re-advises" \
   || no "advisory re-arm hysteresis wrong (wobble kept=$wobble_mark low kept=$low_mark sends=${before_a}→$(an))"
 rm -f "$CC_TELEMETRY_DIR"/*.json "$CC_SUPERVISOR_PAGEDIR/$SUBJ".* "$CC_SUPERVISOR_PAGEDIR"/busyx.* 2>/dev/null
+
+echo "T41 OPERATOR-ADOPTED EXEMPTION — an adopted pane inside its hold is not paged; every other owned-wait pane is (cc-backlog f527b8c23a04)"
+# THE DEFECT: an operator's own idle pane goes telemetry+transcript stale like a hung one, so STALL? paged
+# it and the deadline escalated it — while cc-classify already read it `owned-wait` / "operator-adopted
+# pane (never-reap)". Measured 2026-09-05 (panes 248, 46, 69) and again 2026-09-10 (2d71c6d8 ESCALATED
+# 15:46Z). THE HOLE NOT TO RE-OPEN: owned-wait as a CLASS must keep paging (predecessor 67040f62c9e6 was
+# refuted on exactly that), so check 3 pages a generic owned-wait sid in the same sweep.
+# The classifier is a sandbox stub answering per sid, logging "<sid> <first PATH entry>" per call.
+CSTUB="$SBX/cbin/cc-classify"; mkdir -p "$SBX/cbin" "$SBX/classify"
+cat > "$CSTUB" <<'STUB'
+#!/bin/bash
+d="${CC_TEST_CLASSIFY_DIR:?}"
+printf '%s %s\n' "$1" "${PATH%%:*}" >> "$d/calls"
+[ -f "$d/$1.json" ] && cat "$d/$1.json"
+exit "$(cat "$d/$1.rc" 2>/dev/null || echo 0)"
+STUB
+chmod +x "$CSTUB"
+ADOPTED='operator prompt 950s ago (< hold 21600s) — operator-adopted pane (never-reap)'
+OWNED='idle 900s, pid alive, work not landed / no real team — waiting (never-reap default)'
+cls(){ # $1=sid $2=cause $3=detail [$4=rc]
+  jq -nc --arg c "$2" --arg d "$3" '{cause:$c,detail:$d}' > "$SBX/classify/$1.json"
+  if [ -n "${4:-}" ]; then printf '%s' "$4" > "$SBX/classify/$1.rc"; else rm -f "$SBX/classify/$1.rc"; fi; }
+ncalls(){ local n; n="$(grep -c "^$1 " "$SBX/classify/calls" 2>/dev/null)"; echo "${n:-0}"; }
+nsupp(){ local n; n="$(grep -c "\"kind\":\"stall_suppressed_operator_adopted\",\"sid\":\"$1\"" "$CC_IDL" 2>/dev/null)"; echo "${n:-0}"; }
+adsweep(){ env CC_SUP_CLASSIFY_BIN="$CSTUB" CC_TEST_CLASSIFY_DIR="$SBX/classify" CC_NOTIFY_CAPTURE="$SBX/notify.log" \
+           CC_PAGE_TO_FILE="$SBX/desk-role" CC_PAGE_DAMP_TTL_S=0 CC_NOTIFY_BIN="$SBX/bin/cc-notify" \
+           "$@" bash "$SUP" --once >/dev/null 2>&1; }
+reset; rm -f "$CC_TELEMETRY_DIR"/*.json "$SBX/notify.log" "$CC_SUPERVISOR_PAGEDIR"/ad.* "$CC_SUPERVISOR_PAGEDIR"/ow.* 2>/dev/null
+rm -rf "$CC_SUPERVISOR_PAGEDIR/adopt" "$CC_SUPERVISOR_PAGEDIR/damp"
+
+# check 0 — CONTRACT PIN. The exemption keys on cc-classify's detail text; a rewording there would turn it
+# off silently (fail-open to today's paging). Pin the exact emitted shape here, in the file that depends on it.
+# shellcheck disable=SC2016  # the ${…} are LITERAL source text being matched, never expanded
+grep -qF 'DETAIL="operator prompt ${iage}s ago (< hold ${INTERACTIVE_HOLD_S}s) — operator-adopted pane (never-reap)"' bin/cc-classify \
+  && ok "check 0: cc-classify still emits the exact operator-adopted detail the supervisor keys on" \
+  || no "check 0: cc-classify's operator-adopted detail changed — the supervisor exemption is now inert"
+
+# check 1 — CONTROL: a generic owned-wait stale sid still pages, and the classifier was really asked,
+# with its own dir first on PATH (launchd's bare PATH cannot resolve cc-classify's bare `cc-sessions`).
+mktel ad 40 100 "$ALIVE" "$REPO"; cls ad owned-wait "$OWNED"
+: > "$CC_IDL"; adsweep CC_SUP_ADOPT_RECHECK_S=0
+idl_has '"sid":"ad","state":"STALL?"' && ok "check 1: generic owned-wait ⇒ STALL? still pages (the class is NOT muted)" \
+                                      || no "check 1: control failed — a generic owned-wait sid was not paged"
+{ [ "$(ncalls ad)" -ge 1 ] && grep -q "^ad $SBX/cbin\$" "$SBX/classify/calls"; } \
+  && ok "check 1: the classifier was asked with its OWN dir first on PATH (the launchd-PATH fix)" \
+  || no "check 1: classifier not called, or called without its dir on PATH ($(head -1 "$SBX/classify/calls" 2>/dev/null))"
+
+# check 2 — drive it to ESCALATED, so the adopted case below starts from the sticky-marker state.
+: > "$CC_IDL"; printf '%s' "$(( $(date +%s) - 3 ))" > "$CC_SUPERVISOR_PAGEDIR/ad.page"
+adsweep CC_SUP_ADOPT_RECHECK_S=0
+{ idl_has '"kind":"page_escalate","sid":"ad"' && [ "$(cat "$CC_SUPERVISOR_PAGEDIR/ad.notified" 2>/dev/null)" = ESCALATED ]; } \
+  && ok "check 2: control: effects-dark past deadline ⇒ ESCALATED, marker sticky" \
+  || no "check 2: could not reach ESCALATED — check 4 would prove nothing"
+
+# check 3 — the operator adopts it. No STALL?, no ESCALATED, recorded, page retracted — while a SECOND
+# stale sid that is generic owned-wait pages in the SAME sweep (marker-scoped, never class-scoped).
+cls ad owned-wait "$ADOPTED"; mktel ow 40 100 "$ALIVE" "$REPO"; cls ow owned-wait "$OWNED"
+: > "$CC_IDL"; adsweep CC_SUP_ADOPT_RECHECK_S=0
+idl_has '"sid":"ad","state":"STALL?"' && no "check 3: an operator-adopted pane still paged STALL?" \
+                                      || ok "check 3: operator-adopted inside its hold ⇒ NO STALL? page"
+idl_has '"kind":"page_escalate","sid":"ad"' && no "check 3: an operator-adopted pane still ESCALATED" \
+                                            || ok "check 3: …and no ESCALATED either"
+[ "$(nsupp ad)" -eq 1 ] && ok "check 3: the suppression is RECORDED (with its classifier detail)" \
+                        || no "check 3: suppression records=$(nsupp ad), want 1"
+paged ad && no "check 3: the standing page survived the suppression" || ok "check 3: the standing page is RETRACTED"
+idl_has '"sid":"ow","state":"STALL?"' \
+  && ok "check 3: a generic owned-wait sid pages in the SAME sweep (the 67040f62c9e6 hole stays closed)" \
+  || no "check 3: the exemption muted a non-adopted owned-wait pane — the refuted over-suppression"
+
+# check 4 — PLACEMENT: sustained suppression re-arms the sticky ESCALATED marker (never pinned).
+adsweep CC_SUP_ADOPT_RECHECK_S=0 CC_SUP_RECOVERY_S=1; sleep 2; adsweep CC_SUP_ADOPT_RECHECK_S=0 CC_SUP_RECOVERY_S=1
+[ -f "$CC_SUPERVISOR_PAGEDIR/ad.notified" ] \
+  && no "check 4: the ESCALATED marker is PINNED — the first page after the hold would be swallowed" \
+  || ok "check 4: sustained suppression RE-ARMS the sticky marker (placement proven)"
+
+# check 5 — CACHE: two sweeps inside the TTL classify once and record once (TTL = min(recheck, STALL_S)=5).
+rm -f "$CC_TELEMETRY_DIR/ow.json"; rm -rf "$CC_SUPERVISOR_PAGEDIR/adopt"
+c0="$(ncalls ad)"; : > "$CC_IDL"; adsweep; adsweep
+{ [ "$(( $(ncalls ad) - c0 ))" -eq 1 ] && [ "$(nsupp ad)" -eq 1 ] && ! idl_has '"sid":"ad","state":"STALL?"'; } \
+  && ok "check 5: the verdict is cached — 2 sweeps, 1 classify, 1 record, still suppressed" \
+  || no "check 5: cache wrong (classify calls=$(( $(ncalls ad) - c0 )) records=$(nsupp ad))"
+
+# check 6 — HOLD EXPIRY: 2s of hold left ⇒ suppressed now, cached only until the hold ends, and the sweep
+# after it pages AND notifies (cc-classify no longer emits the marker once the hold is past).
+rm -rf "$CC_SUPERVISOR_PAGEDIR/adopt"
+cls ad owned-wait 'operator prompt 21598s ago (< hold 21600s) — operator-adopted pane (never-reap)'
+: > "$CC_IDL"; adsweep
+cls ad owned-wait 'idle 21700s, pid alive, work not landed / no real team — waiting (never-reap default)'
+adsweep
+idl_has '"sid":"ad","state":"STALL?"' && no "check 6: paged while the hold still had seconds left" \
+                                      || ok "check 6: inside the last seconds of the hold ⇒ still suppressed (cache hit)"
+sleep 3; before_n="$(pn)"; : > "$CC_IDL"; adsweep
+{ idl_has '"sid":"ad","state":"STALL?"' && [ "$(pn)" -eq $(( before_n + 1 )) ]; } \
+  && ok "check 6: the hold EXPIRED ⇒ STALL? returns AND notifies once (cached no longer than the hold)" \
+  || no "check 6: no page+notify after the hold expired (idl=$(idl_has '"sid":"ad","state":"STALL?"' && echo yes || echo no) sends=${before_n}→$(pn))"
+
+# check 7 — NO VERDICT never mutes: a classifier that errors, or cannot be run, leaves the page as before.
+rm -rf "$CC_SUPERVISOR_PAGEDIR/adopt"; cls ad owned-wait "$ADOPTED" 2
+: > "$CC_IDL"; adsweep CC_SUP_ADOPT_RECHECK_S=0
+idl_has '"sid":"ad","state":"STALL?"' && ok "check 7: classifier rc≠0 (even with an adopted detail) ⇒ still pages" \
+                                      || no "check 7: a classifier that did not answer muted the page"
+rm -rf "$CC_SUPERVISOR_PAGEDIR/adopt"; cls ad owned-wait "$ADOPTED"
+: > "$CC_IDL"; adsweep CC_SUP_ADOPT_RECHECK_S=0 CC_SUP_CLASSIFY_BIN=false
+idl_has '"sid":"ad","state":"STALL?"' && ok "check 7: classifier unrunnable ⇒ still pages" \
+                                      || no "check 7: an unrunnable classifier muted the page"
+rm -f "$CC_TELEMETRY_DIR"/*.json "$CC_SUPERVISOR_PAGEDIR"/ad.* "$CC_SUPERVISOR_PAGEDIR"/ow.* 2>/dev/null
+rm -rf "$CC_SUPERVISOR_PAGEDIR/adopt"
 
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"

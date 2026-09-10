@@ -225,6 +225,23 @@ if [ -z "$NOTIFY_BIN" ]; then
     [ -n "$_c" ] && [ -x "$_c" ] && { NOTIFY_BIN="$_c"; break; }
   done
 fi
+# cc-classify, for the OPERATOR-ADOPTED exemption in assess() (cc-backlog f527b8c23a04; rationale at
+# operator_adopted_hold). ABSOLUTE candidates only — beside-script, then ~/.claude/bin. No bare-name
+# `command -v` fallback: on this plist's own PATH it can never resolve, and unattended-path-lint
+# rightly refuses a new bare name here. The call site also prepends this binary's OWN dir to PATH,
+# because cc-classify enumerates via a bare `cc-sessions` — under launchd's default PATH that is
+# rc 127, cc-classify answers "enumerator FAILED — NO VERDICT", and the exemption would be inert in
+# the only process that matters while every interactive test passed.
+CLASSIFY_BIN="${CC_SUP_CLASSIFY_BIN:-}"
+if [ -z "$CLASSIFY_BIN" ]; then
+  for _c in "$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/bin/cc-classify" "$HOME/.claude/bin/cc-classify"; do
+    [ -n "$_c" ] && [ -x "$_c" ] && { CLASSIFY_BIN="$_c"; break; }
+  done
+fi
+SUP_CLASSIFY_TIMEOUT_S="${CC_SUP_CLASSIFY_TIMEOUT_S:-20}"   # one classify is ~3s healthy; a cut is a NO VERDICT (⇒ page)
+ADOPT_RECHECK_S="${CC_SUP_ADOPT_RECHECK_S:-900}"            # verdict cache TTL — clamped to ≤ STALL_S at use (see operator_adopted_hold)
+case "$ADOPT_RECHECK_S" in ''|*[!0-9]*) ADOPT_RECHECK_S=900 ;; esac
+ADOPT_DIR="$PAGEDIR/adopt"                                  # a SUBDIR, like damp/: autonomy-sweep globs only top-level *.page
 # D7 send-damping (best-effort: absent lib ⇒ undamped, i.e. today's behaviour, never a lost page).
 for _c in "$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/hooks/lib/page-damp.sh" \
           "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/page-damp.sh" "$HOME/.claude/hooks/lib/page-damp.sh"; do
@@ -497,7 +514,7 @@ page(){ # $1=sid $2=state $3=detail
     printf '%s\n' "$2" > "$nf"                             # recorded only on a cc-notify-CONFIRMED enqueue
   fi                                                       # (rc 0). No channel wired (1) or a refused send
 }                                                          # (2) leaves the marker off ⇒ the next sweep retries.
-clear_page(){ rm -f "$PAGEDIR/$1.page" "$PAGEDIR/$1.notified" "$PAGEDIR/$1.ok" "$PAGEDIR/$1.advised" 2>/dev/null || true; }
+clear_page(){ rm -f "$PAGEDIR/$1.page" "$PAGEDIR/$1.notified" "$PAGEDIR/$1.ok" "$PAGEDIR/$1.advised" "$ADOPT_DIR/$1" 2>/dev/null || true; }
 # ── B-1 SUBJECT ADVISORY — the page's actuator on the one axis that matters (cc-backlog 7cbffd21171b). ──
 # B-1's own comment says "the live session's own model acts", and page() never told it: every
 # PAST-THRESHOLD page went to the desk role only. Measured on runaway c25160c2 (2026-09-03/04): 214
@@ -917,6 +934,67 @@ permpend_live(){ # $1=sid → 0 iff a beacon exists for this sid that the permpe
   [ "$(( $(now) - ts ))" -lt "$PERMPEND_HORIZON_S" ]
 }
 
+# ── OPERATOR-ADOPTED-IN-HOLD is not a stall the desk can act on (cc-backlog f527b8c23a04). ──
+# A pane the OPERATOR prompted and then left idle goes telemetry+transcript stale exactly like a hung
+# one, so the STALL? predicate pages it and escalates it at the deadline. But cc-classify already names
+# that state — `owned-wait` with the detail "operator prompt Ns ago (< hold 21600s) — operator-adopted
+# pane (never-reap)" — and it is a human's own pane inside a hold the classifier itself grants: the
+# desk can do nothing with it by construction. Measured 2026-09-05 22:32-23:05 (CDT): panes 248, 46
+# and 69 re-escalated on exactly this basis, each costing a desk wake and a turn; re-measured
+# 2026-09-10, session 2d71c6d8 (pane 61) paged ESCALATED at 15:46Z while cc-classify read it adopted.
+#
+# SCOPE IS THE MARKER, NEVER THE CLASS. owned-wait as a whole must keep paging: it is in neither
+# cc-reaper's REAPABLE_RE nor its SURFACE_PAGE_RE, so an engaged-then-dark fired peer that falls into it
+# is reaped by nobody and surfaced by nobody unless this file pages it — suppressing the class re-opens
+# that hole, which is what refuted the predecessor row 67040f62c9e6. Only the operator-adopted detail
+# is exempt, and only while cc-classify still emits it: the hold is ITS predicate (a fired worker's own
+# brief does not count as adoption, etc.), so this file asks rather than re-deriving it.
+#
+# Fail direction: anything short of a clean adopted verdict — classifier unresolvable, cut, rc≠0, a
+# session cc-sessions does not enumerate, unparseable JSON — returns 1 and the page goes out as before.
+# A sensor that did not answer must never mute the alarm it fronts.
+#
+# Verdicts are cached per sid: one classify is ~3s and a stale candidate re-enters here every sweep.
+# Measured on the live fleet 2026-09-10 (bare launchd PATH, STALL_S lowered to 120 to widen the set):
+# 15 candidates ⇒ 5 adopted (suppressed) / 9 rate-limited / 1 no-verdict (both paged); the uncached
+# sweep took 33s, the cached one 2s. At the 900s default a candidate costs one classify per 15 min.
+#   adopted  → until min(the hold's own remaining seconds, TTL) — so paging resumes the moment it expires
+#   not/none → until TTL
+# TTL is clamped to ≤ STALL_S: a pane adopted AFTER a negative verdict has to go warm (the prompt writes
+# the transcript) and then stale again for STALL_S before it can re-enter here, so a negative can never
+# outlive that gap and page an adopted pane on a stale answer.
+# Sets ADOPT_FRESH=1 when the verdict was just computed (not a cache hit) and ADOPT_DETAIL to its detail.
+# Call it BARE — a global set inside $( ) never escapes (memory:
+# assignment-inside-command-substitution-never-escapes).
+operator_adopted_hold(){ # $1=sid → 0 iff cc-classify says this session is operator-adopted inside its hold
+  local sid="$1" cf n until verdict cpath out rc cause ttl rem
+  local re='operator prompt ([0-9]+)s ago \(< hold ([0-9]+)s\)'
+  ADOPT_FRESH=0; ADOPT_DETAIL=""
+  case "$sid" in ''|.|..|.*|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  [ -n "$CLASSIFY_BIN" ] || return 1
+  cf="$ADOPT_DIR/$sid"; n="$(now)"
+  if [ -f "$cf" ] && read -r until verdict 2>/dev/null < "$cf"; then
+    case "$until" in ''|*[!0-9]*) until=0 ;; esac
+    if [ "$n" -lt "$until" ]; then [ "$verdict" = adopted ]; return; fi
+  fi
+  ttl="$ADOPT_RECHECK_S"; [ "$ttl" -gt "$STALL_S" ] 2>/dev/null && ttl="$STALL_S"
+  mkdir -p "$ADOPT_DIR" 2>/dev/null || true
+  case "$CLASSIFY_BIN" in */*) cpath="${CLASSIFY_BIN%/*}:$PATH" ;; *) cpath="$PATH" ;; esac
+  out="$(sup_bounded "$SUP_CLASSIFY_TIMEOUT_S" env PATH="$cpath" "$CLASSIFY_BIN" "$sid" --json 2>/dev/null)"; rc=$?
+  cause="$(jq -r '.cause // empty' <<<"$out" 2>/dev/null)"
+  ADOPT_DETAIL="$(jq -r '.detail // empty' <<<"$out" 2>/dev/null)"
+  ADOPT_FRESH=1
+  if [ "$rc" = 0 ] && [ "$cause" = owned-wait ] && [[ "$ADOPT_DETAIL" == *"operator-adopted pane"* ]]; then
+    rem="$ttl"
+    [[ "$ADOPT_DETAIL" =~ $re ]] && rem=$(( BASH_REMATCH[2] - BASH_REMATCH[1] ))
+    [ "$rem" -gt "$ttl" ] && rem="$ttl"
+    [ "$rem" -gt 0 ] && printf '%s adopted\n' "$(( n + rem ))" > "$cf" 2>/dev/null
+    return 0
+  fi
+  printf '%s %s\n' "$(( n + ttl ))" "${cause:-no-verdict-rc$rc}" > "$cf" 2>/dev/null
+  return 1
+}
+
 # ── classify one telemetry row and route to a PAGE (never an action) ──
 assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
   local f="$1" sid used ts cwd cfg pid age
@@ -974,6 +1052,16 @@ assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
       # OUTLIVES the prompt therefore pages AND notifies on the next sweep.
       if permpend_live "$sid"; then
         idl stall_suppressed_permpend "\"sid\":\"$sid\",\"tel_age\":$age,\"transcript_age\":$tage,\"why\":\"a LIVE permission beacon in $PERMPEND_DIR already names this session's state precisely — sweep_permission_pending pages the blocked COMMAND and cc-blockers renders the same row. Telemetry+transcript staleness is the DEFINING symptom of a prompt-blocked session, so a STALL? page here is a duplicate with a worse description. Standing page retracted and the notify alarm re-armed on the usual sustained-OK dwell, so a stall that outlives the prompt still pages.\""
+        clear_page_recovered "$sid"; echo 0; return
+      fi
+      # OPERATOR-ADOPTED EXEMPTION (cc-backlog f527b8c23a04) — rationale at operator_adopted_hold().
+      # Same placement and same recovery route as the permpend exemption above, for the same two
+      # reasons: escalation needs no guard of its own, and a bare `return` would pin a sticky ESCALATED
+      # marker so the first page after the hold expires would be swallowed. After the cheap beacon read,
+      # because this one forks cc-classify. Recorded only when the verdict is freshly computed, i.e. at
+      # most once per TTL per sid — a per-sweep record over a 6h hold is ~700 rows of the same fact.
+      if operator_adopted_hold "$sid"; then
+        [ "$ADOPT_FRESH" = 1 ] && idl stall_suppressed_operator_adopted "\"sid\":\"$sid\",\"tel_age\":$age,\"transcript_age\":$tage,\"detail\":$(json_str "$ADOPT_DETAIL"),\"why\":\"cc-classify reads this pane as OPERATOR-ADOPTED inside its hold — a human's own idle pane, which the desk cannot act on. Only this detail is exempt; every other owned-wait pane still pages. Standing page retracted, notify re-armed on the usual sustained-OK dwell, and paging resumes the sweep the hold expires.\""
         clear_page_recovered "$sid"; echo 0; return
       fi
       # SAME-SWEEP GUARD (2026-07-25 flaky-gate incident): resolve only a PRE-EXISTING page. page()
