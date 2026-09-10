@@ -222,8 +222,18 @@ prefix_hook() {
 }
 
 @test "(13) REFUSES a command-substitution assignment — the value is not knowable at hook time" {
-  probe "D=\$(mktemp -d) && rm -rf \"\$D\""
-  refused "$output" || { echo "mktemp -d was PERMITTED — the resolver guessed"; false; }
+  # RE-POINTED 2026-09-10, not deleted: the CLAUSE is the record of what was believed, and what it
+  # asserts is still true — a `$(…)` value has no value at hook time and the SCRATCHPAD resolver may
+  # never guess one. What changed is that `$(mktemp -d)` stopped being decided by guessing a path at
+  # all: the SELF-CREATED-TEMP category admits it on PROVENANCE (mktemp -d creates a NEW unique
+  # directory, so the token can only name what this command made) without ever learning where it is.
+  # That arm moved to case (25), which asserts the permit, with (26)-(29) holding the levers. This
+  # case keeps the original invariant on producers that are genuinely undecidable — the resolver's
+  # blindness is what is under test here, never mktemp specifically.
+  probe "D=\$(cat /tmp/whereto) && rm -rf \"\$D\""
+  refused "$output" || { echo "an arbitrary command substitution was PERMITTED — the resolver guessed"; false; }
+  probe "D=\$(echo $SP) && rm -rf \"\$D\""
+  refused "$output" || { echo "a substitution that LOOKS like the scratchpad was PERMITTED"; false; }
 }
 
 @test "(14) REFUSES a name assigned twice, even when the FIRST assignment is safe" {
@@ -306,4 +316,77 @@ prefix_hook() {
   refused "$output" || { echo "a \${A:-b} default was resolved"; false; }
   probe "S=$SP && CH=\$S/\$1 && rm -rf \"\$CH\""
   refused "$output" || { echo "a positional parameter was resolved"; false; }
+}
+
+# ── SELF-CREATED-TEMP CATEGORY ──────────────────────────────────────────────────────────────────
+# `T=$(mktemp -d) … rm -rf "$T"`: 165 of the 721 `rm -r` asks in the 30 days to 2026-09-10, measured
+# by replaying the archived prompts through this hook. It is admitted on PROVENANCE, not location —
+# mktemp -d creates a NEW unique directory, so the token can only name what this command made.
+#
+# Every permit below is paired with the refusal that differs from it by ONE lever, for the reason
+# the header states: a guard that merely said yes more often would pass the permits and fail these.
+# Case (29) is the mutant control — without it the permits prove the category fires but not that the
+# ONE token-shape rule is what admits them.
+
+@test "(25) PERMITS rm -rf on a dir this same command's mktemp -d created" {
+  probe 'T=$(mktemp -d); echo hi > "$T/x"; rm -rf "$T"'
+  [ "$status" -eq 0 ]
+  permitted "$output" || { echo "decision was: $(decision "$output")"; false; }
+}
+
+@test "(25b) PERMITS the quoted, braced, flag-cluster and absolute-mktemp spellings" {
+  probe 'T="$(mktemp -d)"; rm -rf "$T"'
+  permitted "$output" || { echo "quoted substitution refused"; false; }
+  probe 'T=$(/usr/bin/mktemp --directory); rm -rf ${T}'
+  permitted "$output" || { echo "absolute mktemp + --directory refused"; false; }
+  probe 'T=$(mktemp -dt probe); rm -rf "$T"'
+  permitted "$output" || { echo "clustered -dt refused"; false; }
+}
+
+@test "(25c) PERMITS a path strictly UNDER the created dir" {
+  probe 'D=$(mktemp -d) && mkdir -p "$D/sub" && rm -r "$D/sub"'
+  permitted "$output" || { echo "a child of the created dir was refused"; false; }
+}
+
+@test "(26) REFUSES a REASSIGNED name — the value is not decidable, whichever came first" {
+  probe 'T=$(mktemp -d); T=/etc; rm -rf "$T"'
+  refused "$output" || { echo "a reassigned name was PERMITTED — /etc was reachable"; false; }
+  probe 'T=/etc; T=$(mktemp -d); rm -rf "$T"'
+  refused "$output" || { echo "a reassigned name was PERMITTED in the other order"; false; }
+}
+
+@test "(27) REFUSES a substitution carrying anything but the lone mktemp call" {
+  probe 'T=$(mktemp -d; echo /etc); rm -rf "$T"'
+  refused "$output" || { echo "a second command chose the value and was PERMITTED"; false; }
+  probe 'T=$(echo x && mktemp -d); rm -rf "$T"'
+  refused "$output" || { echo "a leading command was PERMITTED"; false; }
+  probe 'T=$(mktemp -d | tee /tmp/x); rm -rf "$T"'
+  refused "$output" || { echo "a pipeline was PERMITTED"; false; }
+}
+
+@test "(28) REFUSES mktemp WITHOUT a directory flag, and any other producer" {
+  probe 'T=$(mktemp); rm -rf "$T"'
+  refused "$output" || { echo "a mktemp FILE was PERMITTED for rm -r"; false; }
+  probe 'T=$(ls /tmp); rm -rf "$T"'
+  refused "$output" || { echo "an arbitrary command's output was PERMITTED"; false; }
+  probe 'T=$(mktemp -u -d); rm -rf "$T"'
+  [ "$status" -eq 0 ]
+}
+
+@test "(29) REFUSES a token that leaves the created dir, or is not purely that name" {
+  probe 'T=$(mktemp -d); rm -rf "$T/../../etc"'
+  refused "$output" || { echo "a .. walk out of the created dir was PERMITTED"; false; }
+  probe 'T=$(mktemp -d); rm -rf "$T$X"'
+  refused "$output" || { echo "a token with a SECOND unresolved reference was PERMITTED"; false; }
+  probe 'T=$(mktemp -d); rm -rf "$T"/*'
+  [ "$status" -eq 0 ]
+}
+
+@test "(30) the category is what admits (25) — the pre-fix artifact REFUSES it, and still refuses (26)-(29)" {
+  # control-must-replay-the-real-artifact: the permits must be NEW, not something the old hook did.
+  PRE="$(prefix_hook)" || skip "pre-fix artifact unavailable"
+  probe 'T=$(mktemp -d); echo hi > "$T/x"; rm -rf "$T"' "$SID" "$PRE"
+  refused "$output" || { echo "the pre-fix hook already permitted (25) — this suite proves nothing"; false; }
+  probe 'T=$(mktemp -d); T=/etc; rm -rf "$T"' "$SID" "$PRE"
+  refused "$output" || { echo "pre-fix artifact is not functional"; false; }
 }
