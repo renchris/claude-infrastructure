@@ -26,9 +26,30 @@ Verdicts (per unit):
   PARTIAL              substantive work, no result -> re-run (salvage as seed only)
   NULL                 killed at/near spawn (limit / 529 / api error) -> re-run
   INTERRUPTED          TaskStop / user interrupt -> re-run unless salvaged
+  STALLED              one journal key re-issued N times with no result and the run
+                       json carries an error -> ONE unit with attempts=N, never N
+                       INTERRUPTED units, and never "the user did this"
   UNVERIFIABLE         artifacts missing/contradictory -> surface, never guess
-  RUNNING              (teammates only) recent activity, no terminal state ->
-                       wait; never respawn over a live member
+  RUNNING              (teammates only) the member's own process is alive and its
+                       last turn has not ended -> wait; never respawn over a live
+                       member
+  PENDING              lead process alive and IDLE, unit has no terminal record ->
+                       WAIT-FOR-NOTIFICATION; the harness owns the promise
+  UNSETTLED-INFLIGHT   lead process alive and mid-turn -> NONE; disk is silent for
+                       as long as the retry ladder runs (93-101 min measured)
+
+THE ALL-DEAD ASSUMPTION IS GONE (D1, docs/plans/NONLIMIT_RESUME_LADDER.md § W1.1 Q1).
+Every verdict above used to be computed as though the lead process were dead,
+because this file read no pid at all. A network drop usually does NOT end the
+session: measured 2026-09-09, the whole fleet produced nothing from 14:40Z to
+17:20Z while every process stayed alive, and the first api-error record landed
+107 minutes after the silence began. So a unit's liveness is INHERITED from the
+lead's process state (DEAD / IN-FLIGHT / IDLE), never inferred from its own file
+mtime or last timestamp -- a stamp is written at RECORD time and 107 minutes of
+fleet-wide disk silence under live processes is the strongest refutation of stamp
+liveness this repo has recorded. Receipt for the hazard: `wf_f3e13296-400` slot
+`agent-aefd2e2...` was reported PARTIAL -> RE-RUN one minute after its last
+record, in a live process; executing that plan would have doubled a running slot.
 
 Exit codes: 0 = no gaps, 1 = gaps present, 2 = usage/artifact error.
 """
@@ -81,10 +102,65 @@ MONTHS = {
     )
 }
 
-GAP_VERDICTS = {"PARTIAL", "NULL", "INTERRUPTED", "UNVERIFIABLE", "VACUOUS_SUSPECT"}
+GAP_VERDICTS = {
+    "PARTIAL",
+    "NULL",
+    "INTERRUPTED",
+    "STALLED",
+    "UNVERIFIABLE",
+    "VACUOUS_SUSPECT",
+}
+
+# NOT gaps, and for opposite reasons: PENDING is the harness's outstanding promise
+# (it WILL settle) and UNSETTLED-INFLIGHT is a turn still running. Both mean "do
+# not act"; neither means "nothing was interrupted", so they are reported as their
+# own strata rather than folded into either COMPLETE or the gap ledger.
+WAIT_VERDICTS = {"PENDING", "UNSETTLED-INFLIGHT"}
+
+# ── D1: lead process state ---------------------------------------------------
+LEAD_DEAD, LEAD_INFLIGHT, LEAD_IDLE = "DEAD", "IN-FLIGHT", "IDLE"
+# `system`/`turn_duration` is the structural, spelling-free turn-END marker: it is
+# written after a NORMAL turn and after an API-ERROR turn alike (137f37fe:1100,
+# 52e35019:1424). It is what separates IN-FLIGHT from IDLE on disk. Read as "is
+# there a turn end AFTER the last prompt", never as a 1:1 count against prompts --
+# 52e35019 has 27 distinct promptIds against 24 turn_duration records, because
+# prompts queued mid-turn share one turn end.
+TURN_END_SUBTYPE = "turn_duration"
+# Spawn tools whose tool_use id names a delegation the harness owes an answer for.
+# `Bash` counts ONLY with run_in_background (a foreground Bash settles inline).
+SPAWN_TOOLS = ("Agent", "Workflow", "Bash")
+
+# ── D2: the notification ledger ---------------------------------------------
+# A `<task-notification>` is the harness's terminal word on a BACKGROUND unit, and
+# this file used to read none of them (`grep -c task-notification lr-audit.py` was
+# 0), so a unit the harness had already settled read as an open gap. Shape is
+# quoted, not inferred -- a real record from this repo's corpus
+# (docs/research/pane-theft-composer-guard.md:33):
+#   {"type":"queue-operation","operation":"enqueue","content":"<task-notification>
+#    \n<task-id>bfpgwlzqu</task-id>\n<tool-use-id>toolu_01RwHg...</tool-use-id>
+#    \n<output-file>...</output-file>\n<status>killed</status>\n<summary>...
+#    </summary>\n</task-notification>"}
+# Both carriers are read: the `queue-operation` ENQUEUE (the harness's promise,
+# above) and the delivered `type:"user"` record. Either proves the harness has
+# spoken about that tool-use-id.
+NOTIF_MARKER = "<task-notification>"
+NOTIF_TOOL_USE_RE = re.compile(r"<tool-use-id>\s*([^<\s]+)\s*</tool-use-id>")
+NOTIF_STATUS_RE = re.compile(r"<status>\s*([^<\s]+)\s*</status>")
+NOTIF_TASK_ID_RE = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>")
+# Status vocabulary measured over 300 recent transcripts: completed 5979 ·
+# failed 358 · killed 180 · running 29 · stopped 4. `running` is the one value
+# that is NOT terminal -- the harness is still working and will speak again.
+NOTIF_NONTERMINAL = {"running"}
 
 # Teammate (assignee-session) audit -----------------------------------------
-TEAM_ACTIVE_WINDOW_S = 300  # last transcript activity newer than this = RUNNING
+# DEMOTED TO A DISPLAY FIELD (D1). This was the RUNNING predicate: last transcript
+# activity newer than 300 s. It is a stamp, and a stamp is not liveness -- the
+# 2026-09-09 outage held every teammate process alive with a silent disk for 2h40m,
+# so every live member crossed this window into PARTIAL, whose ACTION is respawn
+# over a live member. RUNNING is now keyed on the member's own pid plus its
+# turn-end marker, exactly like the lead. The number survives only as reported
+# context ("active Ns ago"), never as a verdict.
+TEAM_ACTIVE_WINDOW_S = 300
 # Absolute file paths (with an extension) declared inside a teammate brief —
 # the mechanical deliverable contract ("Write the FULL report ... to /…/x.md").
 PROMPT_PATH_RE = re.compile(
@@ -298,6 +374,231 @@ def slot_verdict(st, has_journal_result, result_obj):
     return "PARTIAL", evid
 
 
+# The sibling library, resolved through REALPATH. This file is deployed as a
+# per-file symlink into ~/.claude, and a $0/__file__-relative sibling lookup then
+# resolves against the LINK's directory -- where some siblings exist and some do
+# not, so one invocation silently splits into a half that resolves and a half that
+# dies (memory: symlinked-$0-splits-sibling-sources). realpath pins the lib beside
+# the file actually being executed, which is the copy whose vintage matches.
+LR_LIB_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "lr-lib.sh")
+
+# Two censuses, one per arm, delegated to lr-lib.sh rather than reimplemented:
+# two spellings of one liveness predicate is how sibling auditors end up
+# disagreeing about one population, and lr_resume_procs carries two corrections a
+# fresh implementation would silently lose -- the search pattern must not ride in
+# the census's own argv (or `ps` prints it and the census matches ITSELF, saying
+# YES for every sid ever asked), and only argv LEAVES count (a resume runs under a
+# wrapper parent that carries the same command line, so a chain reads as two
+# sessions).
+_LEAD_PIDS_SH = r"""
+set -u
+lib="$1"; sid="$2"
+# shellcheck source=/dev/null
+. "$lib" 2>/dev/null || { printf 'lib_error 1\n'; exit 0; }
+regdir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+# POSITIVE CONTROL PER ARM -- the load-bearing lines in this script. Both censuses
+# return rc 1 for "nothing is live" AND for "I could not look". Reading the second
+# as the first is what silently restores the all-DEAD assumption and re-authorises
+# a blind re-run, so each arm reports whether its INSTRUMENT could run and a double
+# refusal becomes UNKNOWN.
+#
+# The instrument for the registry arm is `jq` and ONLY `jq` -- that is the one
+# thing lr_registry_live_rows refuses on. An ABSENT registry directory is not a
+# refusal, it is a definite "no rows": there is nothing to parse and nothing to
+# miss. Conflating the two made every audit run under a fixture or a fresh $HOME
+# report UNKNOWN, which reads as a defect in the subject rather than in the probe.
+if command -v jq >/dev/null 2>&1; then
+  printf 'reg_ok 1\n'
+  [ -d "$regdir" ] || printf 'reg_dir_absent 1\n'
+  lr_registry_live_rows "$sid" 2>/dev/null | awk -F'\t' 'NF>=2 && $2 ~ /^[0-9]+$/ { print "pid " $2 }'
+else
+  printf 'reg_ok 0\n'
+fi
+if ps -axo pid= >/dev/null 2>&1; then
+  printf 'argv_ok 1\n'
+  lr_resume_procs "$sid" 2>/dev/null | awk '$1 ~ /^[0-9]+$/ { print "pid " $1 }'
+else
+  printf 'argv_ok 0\n'
+fi
+exit 0
+"""
+
+
+def lead_pids(sid, lr_lib=None):
+    """Live pids holding this sid, plus which arms could answer.
+
+    Returns (pids:set[int], arms:dict). `arms` carries reg_ok/argv_ok/lib_error so
+    the caller can tell "no live process" from "no instrument" -- never collapse
+    the two.
+    """
+    arms = {
+        "reg_ok": False,
+        "argv_ok": False,
+        "lib_error": False,
+        "reg_dir_absent": False,
+    }
+    lib = lr_lib or LR_LIB_PATH
+    if not sid or not os.path.isfile(lib):
+        arms["lib_error"] = True
+        return set(), arms
+    try:
+        cp = subprocess.run(
+            ["bash", "-c", _LEAD_PIDS_SH, "lr-audit-lead-pids", lib, sid],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        arms["lib_error"] = True
+        return set(), arms
+    pids = set()
+    for ln in (cp.stdout or "").splitlines():
+        parts = ln.split()
+        if len(parts) != 2:
+            continue
+        tag, val = parts
+        if tag == "pid" and val.isdigit():
+            pids.add(int(val))
+        elif tag == "reg_ok":
+            arms["reg_ok"] = val == "1"
+        elif tag == "argv_ok":
+            arms["argv_ok"] = val == "1"
+        elif tag == "reg_dir_absent":
+            arms["reg_dir_absent"] = True
+        elif tag == "lib_error":
+            arms["lib_error"] = True
+    return pids, arms
+
+
+def lead_state(sid, lead, lr_lib=None):
+    """The three lead states every in-process unit INHERITS (D1).
+
+    DEAD       no live process holds the session -> a fresh process holds no
+               promise; re-run is safe and correct.
+    IN-FLIGHT  process alive and no turn end after the last prompt -> the turn is
+               running (mid-retry or working) and disk stays silent for as long as
+               the ladder runs. DO NOT TOUCH.
+    IDLE       process alive and a turn end after the last prompt -> a unit with no
+               terminal record is PENDING; the harness owes it a notification.
+    UNKNOWN    neither census could run. NOT folded into DEAD: DEAD authorises a
+               re-run, so a fail-safe default that mimicked it would be exactly the
+               unfalsifiable shape this design removes.
+
+    DEAD requires BOTH arms to have RUN, never one clean arm's silence: the
+    registry arm alone missed a live session (`lr_registry_live_rows` rc=1 while
+    pid 77720 held `claude ... --resume 52e35019...`, alive since Sep 8 19:51),
+    which is why the argv census exists at all.
+    """
+    forced = os.environ.get("LR_AUDIT_LEAD_STATE")
+    if forced:
+        f = forced.strip().upper()
+        if f in (LEAD_DEAD, LEAD_INFLIGHT, LEAD_IDLE, "UNKNOWN"):
+            return {
+                "state": f,
+                "pids": [],
+                "arms": {"forced": True},
+                "turn_open": lead.get("turn_open"),
+                "evidence": f"forced by LR_AUDIT_LEAD_STATE={forced}",
+            }
+    pids, arms = lead_pids(sid, lr_lib=lr_lib)
+    turn_open = bool(lead.get("turn_open"))
+    if pids:
+        state = LEAD_INFLIGHT if turn_open else LEAD_IDLE
+        ev = (
+            f"pid(s) {sorted(pids)} alive; "
+            + (
+                "no turn end after the last prompt"
+                if turn_open
+                else "turn end present after the last prompt"
+            )
+        )
+    elif arms["reg_ok"] and arms["argv_ok"]:
+        state = LEAD_DEAD
+        ev = "no registry row and no --resume argv leaf holds this sid (both censuses ran)"
+    else:
+        state = "UNKNOWN"
+        ev = (
+            "liveness UNDETERMINED — "
+            f"registry census {'ran' if arms['reg_ok'] else 'REFUSED'}, "
+            f"argv census {'ran' if arms['argv_ok'] else 'REFUSED'}"
+            + (" (lr-lib.sh unreadable)" if arms["lib_error"] else "")
+            + " — treated as not-DEAD, because DEAD authorises a re-run"
+        )
+    return {
+        "state": state,
+        "pids": sorted(pids),
+        "arms": arms,
+        "turn_open": turn_open,
+        "evidence": ev,
+    }
+
+
+def inherit_lead_state(verdict, evid, settled, ls):
+    """Overlay the lead's process state onto one in-process unit's mechanical
+    verdict (D1). The unit's own file says what it DID; only the lead's state says
+    whether anything still holds its promise.
+
+    Only UNSETTLED units are rewritten. A unit the harness has already spoken
+    about keeps its mechanical verdict -- the lead being alive does not un-fail a
+    unit that failed.
+    """
+    state = (ls or {}).get("state")
+    if settled or verdict not in ("PARTIAL", "NULL", "INTERRUPTED", "STALLED"):
+        return verdict, evid
+    if state == LEAD_INFLIGHT:
+        return "UNSETTLED-INFLIGHT", evid + [
+            "lead process alive and mid-turn (no turn end after the last prompt); "
+            "disk silence is expected for as long as the retry ladder runs "
+            "(93-101 min measured) — this is NOT evidence of death"
+        ]
+    if state == LEAD_IDLE:
+        return "PENDING", evid + [
+            "lead process alive and idle; this unit has no terminal record "
+            "(no tool_result, no task-notification) — the harness owns the promise "
+            "and will settle it"
+        ]
+    if state == "UNKNOWN":
+        return "UNVERIFIABLE", evid + [
+            "lead liveness UNDETERMINED — cannot tell a dead session from a live "
+            "one, and a re-run over a live unit doubles it"
+        ]
+    return verdict, evid
+
+
+def _note_notification(out, raw_text, obj, carrier):
+    """Record one `<task-notification>` into the ledger (D2).
+
+    `raw_text` is the notification body as it appears on disk -- the `.content`
+    string of a `queue-operation` record, or the text of a delivered user record.
+    A tool-use-id here is the harness's terminal word on that delegation, which is
+    the second half of "settled" (the first being an ordinary `tool_result`).
+    """
+    txt = raw_text if isinstance(raw_text, str) else ""
+    if NOTIF_MARKER not in txt:
+        return
+    status_m = NOTIF_STATUS_RE.search(txt)
+    task_m = NOTIF_TASK_ID_RE.search(txt)
+    status = (status_m.group(1) if status_m else "") or None
+    for tid in NOTIF_TOOL_USE_RE.findall(txt):
+        rec = {
+            "status": status,
+            "task_id": task_m.group(1) if task_m else None,
+            "carrier": carrier,
+            "timestamp": obj.get("timestamp"),
+            "line": out["line_count"],
+        }
+        prior = out["notifications"].get(tid)
+        # Last word wins, but a TERMINAL status is never overwritten by a
+        # non-terminal one arriving out of order (`running` then `completed` is the
+        # ordinary sequence; the reverse must not un-settle the unit).
+        if prior and (prior.get("status") or "") not in NOTIF_NONTERMINAL:
+            if (status or "") in NOTIF_NONTERMINAL:
+                continue
+        out["notifications"][tid] = rec
+        if (status or "") not in NOTIF_NONTERMINAL:
+            out["notified_tool_ids"].add(tid)
+
+
 def scan_lead_transcript(path):
     """Stream the lead transcript once: limit events, delivered ids, workflow calls."""
     out = {
@@ -310,6 +611,23 @@ def scan_lead_transcript(path):
         "agent_tool_uses": {},
         "line_count": 0,
         "compact_summaries": 0,
+        # ── D2: the notification ledger ──────────────────────────────────────
+        # spawn tool_use id -> {tool, description, line}. The POPULATION of
+        # delegations, by tool name, so a zero names its strata instead of
+        # reading as "nothing was delegated" (a fail-safe default that mimics the
+        # healthy output is unfalsifiable).
+        "spawn_tool_uses": {},
+        # tool-use-id -> {status, task_id, carrier, timestamp}
+        "notifications": {},
+        "notified_tool_ids": set(),
+        # ── D1: the turn-end marker ──────────────────────────────────────────
+        "last_prompt_idx": None,
+        "last_prompt_ts": None,
+        "last_turn_end_idx": None,
+        "turn_end_count": 0,
+        "prompt_count": 0,
+        "last_api_error": None,
+        "turn_open": False,
     }
     last_model = None
     try:
@@ -325,8 +643,37 @@ def scan_lead_transcript(path):
                 typ = obj.get("type")
                 if typ == "summary":
                     out["compact_summaries"] += 1
+                # ── D1: the structural turn-END marker ───────────────────────
+                if typ == "system" and obj.get("subtype") == TURN_END_SUBTYPE:
+                    out["last_turn_end_idx"] = out["line_count"]
+                    out["turn_end_count"] += 1
+                # ── D2: a notification can ride a `queue-operation` ENQUEUE ──
+                # (the harness's promise) as well as a delivered user record.
+                # Either proves the harness has spoken about that tool-use-id.
+                if typ == "queue-operation":
+                    _note_notification(out, obj.get("content"), obj, "queue-operation")
                 msg = obj.get("message") or {}
                 if typ == "assistant":
+                    # Q3 predicate 2, the general death record: ANY api-error
+                    # assistant record, whatever its `error` value. A cap and a
+                    # network drop share this envelope byte for byte
+                    # (`model:"<synthetic>"` + `isApiErrorMessage:true`); they
+                    # differ only in which recovery MODE is legal, which is why
+                    # this is recorded separately from `limit_events` instead of
+                    # being filtered down to the quota spellings. The structural
+                    # pair is also what makes the read safe: a session merely
+                    # DISCUSSING an error in prose (this repo does constantly) is
+                    # not a synthetic api-error record and cannot match.
+                    if obj.get("isApiErrorMessage"):
+                        out["last_api_error"] = {
+                            "error": obj.get("error"),
+                            "status": obj.get("apiErrorStatus"),
+                            "text": text_of(msg)[:300],
+                            "kind": classify_limit_text(text_of(msg)),
+                            "timestamp": obj.get("timestamp"),
+                            "uuid": obj.get("uuid"),
+                            "line": out["line_count"],
+                        }
                     if (
                         obj.get("isApiErrorMessage")
                         and obj.get("error") == "rate_limit"
@@ -353,8 +700,23 @@ def scan_lead_transcript(path):
                     for it in content_items(msg):
                         if it.get("type") != "tool_use":
                             continue
-                        if it.get("name") == "Workflow":
-                            inp = it.get("input") or {}
+                        name = it.get("name")
+                        inp = it.get("input") or {}
+                        # D2: the DELEGATION POPULATION, by tool name. A `Bash`
+                        # counts only with run_in_background — a foreground Bash
+                        # settles inline and the harness owes nothing for it.
+                        if name in SPAWN_TOOLS and (
+                            name != "Bash" or bool(inp.get("run_in_background"))
+                        ):
+                            out["spawn_tool_uses"][it.get("id")] = {
+                                "tool": name,
+                                "description": inp.get("description")
+                                or inp.get("name")
+                                or None,
+                                "line": out["line_count"],
+                                "timestamp": obj.get("timestamp"),
+                            }
+                        if name == "Workflow":
                             out["workflow_calls"].append(
                                 {
                                     "tool_use_id": it.get("id"),
@@ -365,14 +727,32 @@ def scan_lead_transcript(path):
                                     "args": inp.get("args"),
                                 }
                             )
-                        elif it.get("name") == "Agent":
-                            inp = it.get("input") or {}
+                        elif name == "Agent":
                             out["agent_tool_uses"][it.get("id")] = {
                                 "description": inp.get("description"),
                                 "prompt_head": (inp.get("prompt") or "")[:200],
                             }
                 elif typ == "user":
-                    for it in content_items(msg):
+                    items = content_items(msg)
+                    utext = text_of(msg)
+                    # ── D1: what counts as "the last PROMPT" ─────────────────
+                    # Structural, not `promptSource`-dependent: a user record
+                    # carrying no tool_result is a prompt (typed, queued or
+                    # machine-injected). A tool_result record is the harness
+                    # answering, not a new turn opening.
+                    # A DELIVERED notification opens a turn too (measured: a queued
+                    # task-notification was submitted and ran a turn), so it counts
+                    # for turn_open — but not as a typed prompt, which is why the
+                    # two are tracked separately rather than as one number.
+                    if not any(i.get("type") == "tool_result" for i in items):
+                        out["last_prompt_idx"] = out["line_count"]
+                        out["last_prompt_ts"] = obj.get("timestamp")
+                        if NOTIF_MARKER not in (utext or ""):
+                            out["prompt_count"] += 1
+                    # D2: the DELIVERED notification record.
+                    if NOTIF_MARKER in (utext or ""):
+                        _note_notification(out, utext, obj, "user")
+                    for it in items:
                         if it.get("type") == "tool_result":
                             tid = it.get("tool_use_id")
                             if tid:
@@ -391,6 +771,38 @@ def scan_lead_transcript(path):
                                 out["delivered_runids"].add(rid)
     except OSError as e:
         out["read_error"] = str(e)
+
+    # ── D1: is a turn still OPEN? ────────────────────────────────────────────
+    # "No turn end AFTER the last prompt", never a 1:1 count against prompts:
+    # 52e35019 carries 27 distinct promptIds against 24 turn_duration records,
+    # because prompts queued mid-turn share one turn end. A transcript with a
+    # prompt and no turn end at all is open by the same rule.
+    lp, lte = out["last_prompt_idx"], out["last_turn_end_idx"]
+    out["turn_open"] = lp is not None and (lte is None or lte < lp)
+
+    # ── D2: settled vs open delegations ──────────────────────────────────────
+    # settled = tool_result ids ∪ terminal task-notification ids.
+    out["settled_tool_ids"] = set(out["delivered_tool_ids"]) | set(
+        out["notified_tool_ids"]
+    )
+    out["open_delegations"] = {
+        tid: meta
+        for tid, meta in out["spawn_tool_uses"].items()
+        if tid not in out["settled_tool_ids"]
+    }
+    # Population by tool name, and the settled/open split. A zero here NAMES ITS
+    # STRATA: an audit that missed a new spawn tool would otherwise print "0 open"
+    # and read exactly like a clean session.
+    pop = {}
+    for tid, meta in out["spawn_tool_uses"].items():
+        t = meta.get("tool") or "?"
+        row = pop.setdefault(t, {"total": 0, "settled": 0, "open": 0})
+        row["total"] += 1
+        if tid in out["settled_tool_ids"]:
+            row["settled"] += 1
+        else:
+            row["open"] += 1
+    out["delegation_population"] = pop
     return out
 
 
@@ -430,45 +842,60 @@ def audit_workflow_run(run_summary_path, session_dir, lead):
     run_dir = os.path.join(session_dir, "subagents", "workflows", rid)
     journal_path = os.path.join(run_dir, "journal.jsonl")
     started, results, results_by_key = {}, {}, set()
+    key_attempts, journal_failed = {}, []
     if os.path.isfile(journal_path):
         with open(journal_path, encoding="utf-8", errors="replace") as f:
             for raw in f:
                 obj = jline(raw)
                 if not obj:
                     continue
-                if obj.get("type") == "started":
-                    started.setdefault(obj.get("agentId"), obj.get("key"))
-                elif obj.get("type") == "result":
+                jtyp = obj.get("type")
+                if jtyp == "started":
+                    aid, key = obj.get("agentId"), obj.get("key")
+                    started.setdefault(aid, key)
+                    # Attempt ORDER matters: the last attempt is the one whose
+                    # evidence describes the current state of the unit.
+                    if aid not in key_attempts.setdefault(key, []):
+                        key_attempts[key].append(aid)
+                elif jtyp == "result":
                     results[obj.get("agentId")] = obj.get("result")
                     results_by_key.add(obj.get("key"))
+                elif jtyp == "failed":
+                    journal_failed.append(
+                        {"key": obj.get("key"), "error": obj.get("error")}
+                    )
     else:
         run["problems"].append("journal.jsonl missing")
+    run["journal_failed"] = journal_failed
+
+    # The run's own terminal error, quoted and never parsed for keywords. This is
+    # the STRUCTURAL discriminator between a watchdog stall and a human Ctrl-C:
+    # the watchdog kill is written into each dead attempt as
+    # `[Request interrupted by user]`, byte-identical to a real interrupt, so the
+    # attempt file cannot tell them apart. Only the run json's `error:` (and the
+    # lead's `<status>failed</status>` vs `stopped`) separates them.
+    run_error = summary.get("error") or (
+        journal_failed[0].get("error") if journal_failed else None
+    )
+    run["error"] = run_error
+    run_failed = bool(run_error) or (
+        run.get("status") is not None and run.get("status") != "completed"
+    )
 
     jsonls = {
         os.path.basename(p)[6:-6]: p
         for p in glob.glob(os.path.join(run_dir, "agent-*.jsonl"))
     }
+    # POPULATION = journal `started` ∪ agent-*.jsonl actually on disk. An attempt
+    # that never journaled still has a file, and a journaled attempt whose file is
+    # gone is a real contradiction; neither may be dropped silently.
     for aid, key in started.items():
-        path = jsonls.pop(aid, None)
-        if path is None:
-            run["slots"].append(
-                {
-                    "agentId": aid,
-                    "key": key,
-                    "verdict": "UNVERIFIABLE",
-                    "evidence": ["journal started but agent jsonl missing"],
-                }
-            )
-            continue
-        st = scan_agent_jsonl(path)
-        verdict, evid = slot_verdict(st, aid in results, results.get(aid))
-        # Supersede: a dangling slot whose journal KEY was re-issued (resume) and
-        # completed under another agentId is historically resolved — not a gap.
-        if aid not in results and key in results_by_key:
-            verdict = "SUPERSEDED"
-            evid = [
-                "call re-issued and completed under another agentId (same journal key)"
-            ]
+        key_attempts.setdefault(key, [])
+        if aid not in key_attempts[key]:
+            key_attempts[key].append(aid)
+    orphan_files = {a: p for a, p in jsonls.items() if a not in started}
+
+    def _emit(aid, key, path, st, verdict, evid, attempts=1, attempt_ids=None):
         run["slots"].append(
             {
                 "agentId": aid,
@@ -476,29 +903,137 @@ def audit_workflow_run(run_summary_path, session_dir, lead):
                 "verdict": verdict,
                 "evidence": evid,
                 "jsonl": path,
-                "prompt_head": st["prompt_head"],
-                "model": st["model"],
-                "lines": st["lines"],
-                "tool_uses": st["tool_uses"],
-                "salvaged_so": st["so_input"]
+                "prompt_head": (st or {}).get("prompt_head"),
+                "model": (st or {}).get("model"),
+                "lines": (st or {}).get("lines"),
+                "tool_uses": (st or {}).get("tool_uses"),
+                "salvaged_so": (st or {}).get("so_input")
                 if verdict == "COMPLETE_SALVAGED"
                 else None,
                 "journal_result_present": aid in results,
+                "attempts": attempts,
+                "attempt_agent_ids": attempt_ids or [aid],
             }
         )
-    for aid, path in jsonls.items():
+
+    # ── D2: FOLD retry attempts under one journal key into ONE unit ──────────
+    # The harness re-issues a stalled slot under the SAME journal key with a fresh
+    # agentId. Measured on `wf_acd6923d-9c5`: six `started` records under one key,
+    # attempt 1 doing real work until its 600 s tool timeout and then five
+    # 7-line attempts ~17 min apart with ZERO assistant records (the prompt, five
+    # spawn attachments, the interrupt), one `failed`, and a run json reading
+    # `status: failed`, `error: agent stalled on all 6 attempts (no progress for
+    # 180000ms each)`. Read per-attempt that is six INTERRUPTED units, each
+    # actioned RE-RUN and each blamed on "TaskStop / user" — the right verb applied
+    # to the wrong object with the wrong population, and five identical re-fires
+    # into a live outage already cost 85 minutes and produced nothing. Folded it is
+    # ONE unit with attempts=6.
+    for key, attempt_ids in key_attempts.items():
+        resulted = [a for a in attempt_ids if a in results]
+        # A key that completed under ANY attempt is historically resolved. The
+        # completed attempt is the unit; earlier ones are SUPERSEDED history.
+        if resulted or key in results_by_key:
+            for aid in attempt_ids:
+                path = jsonls.get(aid)
+                st = scan_agent_jsonl(path) if path else None
+                if aid in results and st is None:
+                    # A journaled RESULT whose agent transcript is gone is a
+                    # contradiction, not a completion: never let the missing file
+                    # reach slot_verdict, whose floors read st["lines"].
+                    verdict, evid = (
+                        "UNVERIFIABLE",
+                        ["journal carries a result but the agent jsonl is missing"],
+                    )
+                elif aid in results:
+                    verdict, evid = slot_verdict(st, True, results.get(aid))
+                elif path is None:
+                    verdict, evid = (
+                        "SUPERSEDED",
+                        ["earlier attempt under a key that completed elsewhere"],
+                    )
+                else:
+                    verdict, evid = (
+                        "SUPERSEDED",
+                        [
+                            "call re-issued and completed under another agentId "
+                            "(same journal key)"
+                        ],
+                    )
+                _emit(aid, key, path, st, verdict, evid)
+            continue
+
+        last = attempt_ids[-1] if attempt_ids else None
+        path = jsonls.get(last) if last else None
+        st = scan_agent_jsonl(path) if path else None
+        if st is None:
+            _emit(
+                last,
+                key,
+                None,
+                None,
+                "UNVERIFIABLE",
+                ["journal started but agent jsonl missing"],
+                attempts=len(attempt_ids),
+                attempt_ids=attempt_ids,
+            )
+            continue
+        verdict, evid = slot_verdict(st, False, None)
+        if len(attempt_ids) > 1:
+            evid = [
+                f"{len(attempt_ids)} attempts under ONE journal key, no result: "
+                + ", ".join(a[:12] for a in attempt_ids)
+            ] + evid
+            if run_failed:
+                verdict = "STALLED"
+                # REPLACE the interrupt attribution, never append beside it. The
+                # watchdog writes its kill into each dead attempt as
+                # `[Request interrupted by user]`, so slot_verdict reads
+                # "interrupted (TaskStop / user)" — and leaving that line in place
+                # next to the correction hands the reader both stories at once,
+                # with the wrong one naming a person.
+                evid = [
+                    e for e in evid if not e.startswith("interrupted (TaskStop")
+                ]
+                evid.append(
+                    "the harness exhausted its OWN retries under this key and the "
+                    "run carries a terminal error — this is a watchdog stall, not a "
+                    "user interrupt: the `[Request interrupted by user]` marker in "
+                    "each dead attempt is the WATCHDOG's, byte-identical to a human "
+                    "Ctrl-C, and only this run error separates them — "
+                    + f"run error: {str(run_error)[:160]}"
+                )
+        _emit(
+            last,
+            key,
+            path,
+            st,
+            verdict,
+            evid,
+            attempts=len(attempt_ids),
+            attempt_ids=attempt_ids,
+        )
+
+    for aid, path in orphan_files.items():
         st = scan_agent_jsonl(path)
         verdict, evid = slot_verdict(st, False, None)
         evid.append("agent jsonl present but never journaled as started")
-        run["slots"].append(
-            {
-                "agentId": aid,
-                "verdict": verdict if verdict != "PARTIAL" else "UNVERIFIABLE",
-                "evidence": evid,
-                "jsonl": path,
-                "prompt_head": st["prompt_head"],
-                "model": st["model"],
-            }
+        _emit(
+            aid,
+            None,
+            path,
+            st,
+            verdict if verdict != "PARTIAL" else "UNVERIFIABLE",
+            evid,
+        )
+
+    # ── D1: inherit the lead's process state ─────────────────────────────────
+    # Applied AFTER the mechanical verdicts, and only to unsettled gap units. A
+    # workflow slot is settled when its journal carries a result; the run's own
+    # tool_use id settles the RUN, not the slots inside it.
+    ls = lead.get("lead_state")
+    for s in run["slots"]:
+        s["verdict"], s["evidence"] = inherit_lead_state(
+            s["verdict"], s["evidence"], s.get("journal_result_present"), ls
         )
 
     counts = {}
@@ -506,12 +1041,20 @@ def audit_workflow_run(run_summary_path, session_dir, lead):
         counts[s["verdict"]] = counts.get(s["verdict"], 0) + 1
     run["slot_counts"] = counts
     gaps = sum(v for k, v in counts.items() if k in GAP_VERDICTS)
+    waiting = sum(v for k, v in counts.items() if k in WAIT_VERDICTS)
     if run["status"] == "completed" and gaps:
         run["run_verdict"] = "TAINTED_COMPLETE"
     elif run["status"] == "completed" and not run["delivered_to_lead"]:
         run["run_verdict"] = "COMPLETE_UNDELIVERED"
     elif run["status"] == "completed":
         run["run_verdict"] = "COMPLETE"
+    elif waiting and not gaps:
+        # Every unresolved slot is held by a live process. The run is not
+        # INCOMPLETE-and-resumable, it is UNSETTLED — and its action is to wait,
+        # not to resume. Resuming here is the doubling hazard.
+        run["run_verdict"] = "UNSETTLED-INFLIGHT" if waiting else "INCOMPLETE"
+        if counts.get("PENDING") and not counts.get("UNSETTLED-INFLIGHT"):
+            run["run_verdict"] = "PENDING"
     else:
         run["run_verdict"] = "INCOMPLETE"
     return run
@@ -537,11 +1080,15 @@ def audit_bare_subagents(session_dir, lead):
             verdict, evid = slot_verdict(st, False, None)
         elif st["final_text"] and st["last_kind"] == "assistant_text":
             tid = meta.get("toolUseId")
-            delivered = tid in lead["delivered_tool_ids"] if tid else None
+            # D2: "delivered" is now tool_result ids ∪ terminal notification ids.
+            # A background unit settles by NOTIFICATION, and reading only
+            # tool_result ids called such a unit undelivered while the harness had
+            # already spoken about it.
+            delivered = tid in lead["settled_tool_ids"] if tid else None
             if delivered is False:
                 verdict, evid = (
                     "COMPLETE_UNDELIVERED",
-                    ["final turn on disk; tool_result never reached lead"],
+                    ["final turn on disk; no tool_result and no task-notification"],
                 )
             else:
                 verdict, evid = "COMPLETE", []
@@ -555,6 +1102,16 @@ def audit_bare_subagents(session_dir, lead):
                 "PARTIAL",
                 [f"no final turn (lines={st['lines']} tool_uses={st['tool_uses']})"],
             )
+        tid = meta.get("toolUseId")
+        notif = (lead.get("notifications") or {}).get(tid) if tid else None
+        settled = bool(tid) and tid in lead["settled_tool_ids"]
+        if notif and notif.get("status"):
+            evid = evid + [
+                f"task-notification status={notif['status']} "
+                f"(carrier={notif.get('carrier')})"
+            ]
+        # ── D1: inherit the lead's process state ─────────────────────────────
+        verdict, evid = inherit_lead_state(verdict, evid, settled, lead.get("lead_state"))
         out.append(
             {
                 "agentId": aid,
@@ -564,6 +1121,8 @@ def audit_bare_subagents(session_dir, lead):
                 "agentType": meta.get("agentType"),
                 "description": meta.get("description"),
                 "toolUseId": meta.get("toolUseId"),
+                "settled": settled,
+                "notification": notif,
                 "prompt_head": st["prompt_head"],
                 "model": st["model"],
                 "lines": st["lines"],
@@ -621,6 +1180,11 @@ def scan_teammate_jsonl(path):
         "last_ts": None,
         "last_kind": None,
         "cwd": None,
+        # D1: the same structural turn-end read the lead gets. A teammate is a
+        # full CC session, so IN-FLIGHT / IDLE apply to it identically.
+        "last_prompt_idx": None,
+        "last_turn_end_idx": None,
+        "turn_open": False,
     }
     last_model = None
     try:
@@ -639,7 +1203,13 @@ def scan_teammate_jsonl(path):
                 if not st["cwd"] and obj.get("cwd"):
                     st["cwd"] = obj.get("cwd")
                 typ = obj.get("type")
+                if typ == "system" and obj.get("subtype") == TURN_END_SUBTYPE:
+                    st["last_turn_end_idx"] = st["lines"]
                 msg = obj.get("message") or {}
+                if typ == "user" and not any(
+                    i.get("type") == "tool_result" for i in content_items(msg)
+                ):
+                    st["last_prompt_idx"] = st["lines"]
                 if typ == "user":
                     st["last_kind"] = "user"
                     if not st["prompt_head"]:
@@ -694,6 +1264,8 @@ def scan_teammate_jsonl(path):
     except OSError as e:
         st["read_error"] = str(e)
     st["model"] = last_model
+    lp, lte = st["last_prompt_idx"], st["last_turn_end_idx"]
+    st["turn_open"] = lp is not None and (lte is None or lte < lp)
     return st
 
 
@@ -814,9 +1386,18 @@ def member_git_evidence(member, lead_cwd):
     return ev
 
 
-def member_verdict(st, deliverables, git_ev, now_utc):
+def member_verdict(st, deliverables, git_ev, now_utc, member_state=None):
     """Mechanical verdict for one teammate. Deliverable-on-disk evidence
-    outranks transcript tail state, which outranks lead-side perception."""
+    outranks transcript tail state, which outranks lead-side perception.
+
+    `member_state` is the member's OWN lead_state() reading (D1) — a teammate is a
+    full CC session, so the same three states apply to it. RUNNING is keyed on it,
+    never on a stamp: `TEAM_ACTIVE_WINDOW_S` was the RUNNING predicate and it is a
+    stamp, so an outage longer than five minutes turned every LIVE member into
+    PARTIAL, whose action is respawn over that live member. Every outage is longer
+    than five minutes (2h40m measured 2026-09-09). The verdict's polarity was right
+    and its evidence was wrong.
+    """
     declared = bool(deliverables)
     written = [d["path"] for d in deliverables if d.get("written_during_tenure")]
     delivered = (
@@ -865,9 +1446,6 @@ def member_verdict(st, deliverables, git_ev, now_utc):
             evid.append(f"floors: lines={st['lines']} tool_uses={st['tool_uses']}")
             return "VACUOUS_SUSPECT", evid
         return "COMPLETE", evid
-    if st["last_kind"] == "api_error":
-        evid.append(f"died on api error: {(st['last_api_error_text'] or '')[:100]}")
-        return ("NULL" if st["lines"] <= 12 else "PARTIAL"), evid
     age = None
     if st["last_ts"]:
         try:
@@ -876,14 +1454,41 @@ def member_verdict(st, deliverables, git_ev, now_utc):
             ).total_seconds()
         except ValueError:
             age = None
-    if age is not None and age < TEAM_ACTIVE_WINDOW_S:
-        evid.append(f"active {int(age)}s ago")
+    # `age` is now REPORTED CONTEXT only — never a verdict. See TEAM_ACTIVE_WINDOW_S.
+    ms = (member_state or {}).get("state")
+    if st["last_kind"] == "api_error":
+        evid.append(f"died on api error: {(st['last_api_error_text'] or '')[:100]}")
+        mech = "NULL" if st["lines"] <= 12 else "PARTIAL"
+    else:
+        evid.append(
+            f"substantive but unfinished (lines={st['lines']} tool_uses={st['tool_uses']}, "
+            f"last activity {int(age) if age is not None else '?'}s ago)"
+        )
+        mech = "PARTIAL"
+    # An api-error record does NOT license a respawn while the member's own process
+    # is alive: an expired retry ladder ends the TURN, not the session, and the
+    # member may already be retrying past the outage.
+    if ms == LEAD_INFLIGHT:
+        evid.append(
+            f"member process alive (pid(s) {(member_state or {}).get('pids')}) and "
+            "mid-turn — never respawn over a live member"
+        )
         return "RUNNING", evid
-    evid.append(
-        f"substantive but unfinished (lines={st['lines']} tool_uses={st['tool_uses']}, "
-        f"last activity {int(age) if age is not None else '?'}s ago)"
-    )
-    return "PARTIAL", evid
+    if ms == LEAD_IDLE:
+        evid.append(
+            f"member process alive (pid(s) {(member_state or {}).get('pids')}) and idle "
+            "at its prompt — a live member is not a gap; wake it, never respawn it"
+        )
+        return "RUNNING", evid
+    if ms == "UNKNOWN":
+        evid.append(
+            "member liveness UNDETERMINED — "
+            f"{(member_state or {}).get('evidence')}"
+        )
+        return "UNVERIFIABLE", evid
+    if ms == LEAD_DEAD:
+        evid.append("member process is gone (registry and argv censuses both ran)")
+    return mech, evid
 
 
 def audit_led_teams(config_dir, sid, cwd, force_team=None):
@@ -945,8 +1550,27 @@ def audit_led_teams(config_dir, sid, cwd, force_team=None):
                 ]
             else:
                 st = scan_teammate_jsonl(paths[-1])
-                v, evid = member_verdict(st, dl, git_ev, now_utc)
-                if entry["isActive"] is False and v == "RUNNING":
+                # The member's OWN process state, read with the same two censuses
+                # as the lead's. The member sid is its transcript's basename —
+                # config.json carries no sessionId, so this is the only link.
+                msid = os.path.basename(paths[-1])
+                for suf in (".jsonl.handed-off", ".jsonl"):
+                    if msid.endswith(suf):
+                        msid = msid[: -len(suf)]
+                        break
+                mstate = lead_state(msid, st)
+                entry["member_state"] = mstate
+                v, evid = member_verdict(st, dl, git_ev, now_utc, member_state=mstate)
+                # `isActive=false` is the harness's own word and it OUTRANKS a
+                # stamp — but not a live pid. Demoting a member whose process this
+                # audit just proved alive is the respawn-over-a-live-member hazard
+                # wearing the harness's authority, so the demotion now applies only
+                # when no live process holds the member.
+                if (
+                    entry["isActive"] is False
+                    and v == "RUNNING"
+                    and not mstate.get("pids")
+                ):
                     v, evid = (
                         "PARTIAL",
                         evid + ["config isActive=false — harness marked it dead"],
@@ -1164,9 +1788,45 @@ def render_md(doc):
         f"- config: `{doc['config_dir']}` · transcript: `{doc['transcript']}` "
         f"({doc['lead']['line_count']} records)"
     )
+    waiting = doc["counts"].get("waiting") or 0
     L.append(
-        f"- generated: {doc['generated_at']} · verdict floor: **{'GAPS: ' + str(gaps) if gaps else 'NO GAPS'}**"
+        f"- generated: {doc['generated_at']} · verdict floor: "
+        f"**{'GAPS: ' + str(gaps) if gaps else 'NO GAPS'}**"
+        + (f" · **WAITING: {waiting}** (not gaps, not complete)" if waiting else "")
     )
+    ls = doc.get("lead_state") or {}
+    if ls:
+        L.append(
+            f"- **lead process: {ls.get('state')}** — {ls.get('evidence')}. "
+            "Every in-process verdict below INHERITS this: a network drop usually "
+            "does not end the session, so DEAD is a measurement here, never an "
+            "assumption."
+        )
+        if ls.get("state") == "UNKNOWN":
+            L.append(
+                "  - ⚠️ liveness UNDETERMINED, so no unit was cleared for re-run. "
+                "This is deliberate: DEAD authorises a re-run, and a fail-safe "
+                "default that mimicked DEAD would be unfalsifiable."
+            )
+    dg = doc.get("delegations") or {}
+    if dg:
+        pop = dg.get("population_by_tool") or {}
+        strata = (
+            " · ".join(
+                f"{t} {r['total']} (settled {r['settled']}, open {r['open']})"
+                for t, r in sorted(pop.items())
+            )
+            or "none"
+        )
+        # A ZERO NAMES ITS STRATA. An audit that missed a new spawn tool would
+        # otherwise print "0 open" and read exactly like a clean session.
+        L.append(f"- delegation population by tool: {strata}")
+    ae = doc.get("last_api_error")
+    if ae:
+        L.append(
+            f"- last api-error record: `error={ae.get('error')}` "
+            f"kind={ae.get('kind')} at {ae.get('timestamp')} — {ae.get('text', '')[:120]}"
+        )
     if doc["limit_events"]:
         L.append("\n## Limit events (genuine usage limits only)")
         L.append("| kind | at (UTC) | resets (UTC) | interrupted model | text |")
@@ -1177,7 +1837,18 @@ def render_md(doc):
                 f"| {e.get('interrupted_model') or '?'} | {e['text'][:80]} |"
             )
     else:
-        L.append("\n_No genuine limit events found in the lead transcript._")
+        # THE TRAP THIS LINE USED TO SET. `limit_events` is the QUOTA subset by
+        # construction: a non-limit api error is classified `other_api_error` and
+        # excluded, so a network death yields `limit_events: []` alongside a fully
+        # correct gap ledger. The old wording — "No genuine limit events found" —
+        # was true and read as "nothing was interrupted".
+        L.append(
+            "\n_No genuine QUOTA limit events in the lead transcript. This is the "
+            "quota subset only and says NOTHING about whether work was interrupted "
+            "— a network drop, a crash or a stall all produce an empty list here. "
+            "Read the lead-process state, the api-error record and the delegation "
+            "population above._"
+        )
     if doc["workflows"]:
         L.append("\n## Dynamic Workflow runs")
         L.append(
@@ -1262,13 +1933,32 @@ def render_md(doc):
             )
         for ref in tm.get("wip_refs", []):
             L.append(f"- `{ref}`")
+    waits = doc.get("wait_units") or []
+    wait_ids = {(w["verdict"], w["unit"]) for w in waits}
+    ledger = [g for g in doc["gap_units"] if (g["verdict"], g["unit"]) not in wait_ids]
     L.append(
         "\n## Gap ledger (every non-COMPLETE unit — each REQUIRES an action; bridging is banned)"
     )
-    if not doc["gap_units"]:
-        L.append("_none — all delegated work is COMPLETE and delivered._")
-    for g in doc["gap_units"]:
+    if not ledger:
+        if waits:
+            # NOT "all COMPLETE". Nothing is owed by us and something is still
+            # moving; those are different states and collapsing them is how a lead
+            # walks away from a working teammate.
+            L.append(
+                f"_no unit requires an action from you. {len(waits)} unit(s) are "
+                "still held by a live process — see the wait ledger below. This is "
+                "NOT 'all delegated work is COMPLETE'._"
+            )
+        else:
+            L.append("_none — all delegated work is COMPLETE and delivered._")
+    for g in ledger:
         L.append(f"- **{g['verdict']}** `{g['unit']}` → {g['action']}")
+    if waits:
+        L.append(
+            "\n## Wait ledger (a live process holds these — waiting IS the action)"
+        )
+        for w in waits:
+            L.append(f"- **{w['verdict']}** `{w['unit']}` → {w['action']}")
     return "\n".join(L) + "\n"
 
 
@@ -1276,6 +1966,13 @@ ACTION = {
     "NULL": "RE-RUN (workflow: resume run; bare: re-spawn with original prompt from salvage)",
     "PARTIAL": "RE-RUN (salvage is seed-context only, never a substitute result)",
     "INTERRUPTED": "RE-RUN unless COMPLETE_SALVAGED payload exists",
+    "STALLED": (
+        "AT MOST ONE re-fire, and only under a GREEN control (the probe, twice, 30s "
+        "apart) — the harness already exhausted its own retries, so a blind re-fire "
+        "reproduces the stall; a second stall under a green control convicts the "
+        "REQUEST (size / a blocking tool / a headless permission prompt) and the "
+        "remedy is to change the request, never a third fire"
+    ),
     "VACUOUS_SUSPECT": "MODEL REVIEW output vs brief; re-run if vacuous",
     "UNVERIFIABLE": "SURFACE to user as named gap — never infer",
     "COMPLETE_UNDELIVERED": "READ result from disk (no re-run, no re-spend)",
@@ -1283,7 +1980,22 @@ ACTION = {
     "TAINTED_COMPLETE": "run 'completed' over gap slots — treat final result as CONTAMINATED until slots re-run",
     "INCOMPLETE": "resume via Workflow({scriptPath, resumeFromRunId}); re-audit after",
     "SUPERSEDED": "NONE — slot re-issued and completed under another agentId",
-    "RUNNING": "NONE — teammate still active (age < 5 min); wait, never respawn over a live member",
+    "RUNNING": (
+        "NONE — the member's OWN process is alive; wait, never respawn over a live "
+        "member. To hand it work, WAKE it; do not re-spawn it"
+    ),
+    "PENDING": (
+        "WAIT-FOR-NOTIFICATION — the lead process is alive and idle and this unit "
+        "has no terminal record, so the harness owns the promise and will settle it "
+        "with a <task-notification>. Waiting is the ACTION here, not idling: the "
+        "notification re-enters this audit on arrival. Never re-run"
+    ),
+    "UNSETTLED-INFLIGHT": (
+        "NONE — the lead process is alive and mid-turn. Disk silence is expected for "
+        "as long as the retry ladder runs (93-101 min measured, with the first error "
+        "record 107 min after the silence began). Do not touch, do not re-run, and "
+        "do not read the silence as death"
+    ),
 }
 
 
@@ -1318,6 +2030,12 @@ def main():
     session_dir = transcript[:-6]
 
     lead = scan_lead_transcript(transcript)
+    # D1 — read ONCE, before any unit is judged, and hand it to every auditor.
+    # This is the whole change in one line: the file used to read no pid at all
+    # (`grep -E 'kill -0|os.kill|psutil|lstart' lr-audit.py` was 0 hits), so it
+    # could not tell the three lead states apart and treated everything as DEAD.
+    ls = lead_state(sid, lead)
+    lead["lead_state"] = ls
     workflows = []
     for p in sorted(glob.glob(os.path.join(session_dir, "workflows", "wf_*.json"))):
         workflows.append(audit_workflow_run(p, session_dir, lead))
@@ -1331,10 +2049,32 @@ def main():
         if d not in known and os.path.isdir(d):
             fake = os.path.join(session_dir, "workflows", os.path.basename(d) + ".json")
             r = audit_workflow_run(fake, session_dir, lead)
-            r["problems"].append(
-                "run dir exists but run-summary json missing (killed mid-run)"
-            )
-            r["run_verdict"] = "INCOMPLETE"
+            # "killed mid-run" IS A DEATH ASSERTED, NEVER MEASURED — and it was
+            # wrong on the receipt case: `wf_f3e13296-400` had no run-summary json
+            # because it was STILL RUNNING in a live process, and this line told
+            # the recovering model it had been killed. A missing summary means the
+            # run has not written its terminal record; only the lead's process
+            # state says whether anything still holds it.
+            if ls["state"] == LEAD_DEAD:
+                r["problems"].append(
+                    "run dir exists but run-summary json missing (killed mid-run — "
+                    "no live process holds this session)"
+                )
+                r["run_verdict"] = "INCOMPLETE"
+            else:
+                r["problems"].append(
+                    "run-summary json missing and the session is "
+                    f"{ls['state']} — the run has not written its terminal record "
+                    "YET; this is not evidence of a kill"
+                )
+                if r["run_verdict"] == "INCOMPLETE":
+                    r["run_verdict"] = (
+                        "UNSETTLED-INFLIGHT"
+                        if ls["state"] == LEAD_INFLIGHT
+                        else "PENDING"
+                        if ls["state"] == LEAD_IDLE
+                        else "UNVERIFIABLE"
+                    )
             workflows.append(r)
 
     subagents = [s for s in audit_bare_subagents(session_dir, lead)]
@@ -1350,12 +2090,33 @@ def main():
 
     gap_units = []
     for r in workflows:
-        if r["run_verdict"] in ("TAINTED_COMPLETE", "INCOMPLETE"):
+        if r["run_verdict"] in WAIT_VERDICTS:
             gap_units.append(
                 {
                     "unit": f"workflow {r['runId']} ({r['workflowName']})",
                     "verdict": r["run_verdict"],
                     "action": ACTION[r["run_verdict"]],
+                }
+            )
+        if r["run_verdict"] in ("TAINTED_COMPLETE", "INCOMPLETE"):
+            act = ACTION[r["run_verdict"]]
+            # A run holding STALLED slots must not offer a BARE resume at the run
+            # level: that is the same blind re-fire the stall policy exists to
+            # gate, one level up, and a reader following the run row would never
+            # see the slot row's guard.
+            if r["slot_counts"].get("STALLED"):
+                act = (
+                    "GATED RESUME — this run holds "
+                    f"{r['slot_counts']['STALLED']} STALLED slot(s). "
+                    + ACTION["STALLED"]
+                    + " Only then resume via Workflow({scriptPath, resumeFromRunId}); "
+                    "re-audit after"
+                )
+            gap_units.append(
+                {
+                    "unit": f"workflow {r['runId']} ({r['workflowName']})",
+                    "verdict": r["run_verdict"],
+                    "action": act,
                 }
             )
         elif r["run_verdict"] == "COMPLETE_UNDELIVERED":
@@ -1368,10 +2129,17 @@ def main():
                 }
             )
         for s in r["slots"]:
-            if s["verdict"] in GAP_VERDICTS or s["verdict"] == "COMPLETE_SALVAGED":
+            if (
+                s["verdict"] in GAP_VERDICTS
+                or s["verdict"] in WAIT_VERDICTS
+                or s["verdict"] == "COMPLETE_SALVAGED"
+            ):
+                unit = f"{r['runId']}/{s.get('agentId')}"
+                if (s.get("attempts") or 1) > 1:
+                    unit += f" [{s['attempts']} attempts, one journal key]"
                 gap_units.append(
                     {
-                        "unit": f"{r['runId']}/{s.get('agentId')}",
+                        "unit": unit,
                         "verdict": s["verdict"],
                         "action": ACTION.get(s["verdict"], "?"),
                     }
@@ -1389,6 +2157,18 @@ def main():
     for team in led_teams:
         for m in team["members"]:
             v = m["verdict"]
+            if v == "RUNNING":
+                # A live member is not a gap, but it must never be SILENT either:
+                # its absence from the ledger is what let a lead conclude "nothing
+                # is outstanding" and move on past a working teammate.
+                gap_units.append(
+                    {
+                        "unit": f"team {team['name']}/{m['name']}",
+                        "verdict": "RUNNING",
+                        "action": ACTION["RUNNING"],
+                    }
+                )
+                continue
             if v not in GAP_VERDICTS and v != "COMPLETE_UNDELIVERED":
                 continue
             unit = f"team {team['name']}/{m['name']}"
@@ -1418,6 +2198,14 @@ def main():
         if g["verdict"] in GAP_VERDICTS
         or g["verdict"] in ("TAINTED_COMPLETE", "INCOMPLETE")
     ]
+    # PENDING / UNSETTLED-INFLIGHT / RUNNING are NOT gaps — nothing is owed by us —
+    # but they are not COMPLETE either. Kept as their own stratum so a report can
+    # never read "all delegated work is COMPLETE" over a unit that is still moving.
+    wait_units = [
+        g
+        for g in gap_units
+        if g["verdict"] in WAIT_VERDICTS or g["verdict"] == "RUNNING"
+    ]
 
     doc = {
         "session_id": sid,
@@ -1428,12 +2216,36 @@ def main():
         "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "transcript_sha256": sha256_file(transcript),
         "limit_events": lead["limit_events"],
+        # D1 — the state every in-process verdict above inherited. Reported at the
+        # top level because a reader who does not know which of the three states
+        # produced these verdicts cannot check any of them.
+        "lead_state": ls,
+        # Q3 predicate 2: the general death record, ANY `error` value. `limit_events`
+        # above is the QUOTA subset and is EMPTY on a network death — reading that
+        # emptiness as "nothing was interrupted" is the trap this field closes.
+        "last_api_error": lead["last_api_error"],
+        # D2 — the ledger, and the population a zero would otherwise hide.
+        "delegations": {
+            "population_by_tool": lead["delegation_population"],
+            "spawned": len(lead["spawn_tool_uses"]),
+            "settled": len(
+                [t for t in lead["spawn_tool_uses"] if t in lead["settled_tool_ids"]]
+            ),
+            "open": [
+                {"tool_use_id": t, **m} for t, m in lead["open_delegations"].items()
+            ],
+            "notifications": lead["notifications"],
+        },
+        "wait_units": wait_units,
         "lead": {
             "line_count": lead["line_count"],
             "last_model": lead["last_model"],
             "last_ts": lead["last_ts"],
             "compact_summaries": lead["compact_summaries"],
             "workflow_calls": lead["workflow_calls"],
+            "turn_open": lead["turn_open"],
+            "prompt_count": lead["prompt_count"],
+            "turn_end_count": lead["turn_end_count"],
         },
         "workflows": workflows,
         "subagents": subagents,
@@ -1444,6 +2256,7 @@ def main():
             "workflows": len(workflows),
             "subagents": len(subagents),
             "gaps": len(hard_gaps),
+            "waiting": len(wait_units),
             "recoverable_without_respend": sum(
                 1
                 for g in gap_units
