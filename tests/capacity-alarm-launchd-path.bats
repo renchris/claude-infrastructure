@@ -43,7 +43,9 @@ plist_path() {
   # `tr` joined 2026-08-05 with rung 7 — it was already invoked (the pressure and segment-page reads
   # pipe through it) and already absent from this list, which is the drift an ENUMERATED list always
   # accumulates while its docstring claims to extract what the script "actually calls".
-  for bin in sysctl zprint vm_stat ps python3 top awk sed tr; do
+  # `mktemp` and `perl` joined 2026-09-10 with rung 8's bounded zone read (D5). Both are also called by
+  # absolute path there, so this is the drift check, not the mechanism.
+  for bin in sysctl zprint vm_stat ps python3 top awk sed tr mktemp perl; do
     if ! env -i PATH="$p" HOME="$HOME" bash -c "command -v $bin" >/dev/null 2>&1; then
       missing="$missing $bin"
     fi

@@ -42,6 +42,9 @@
 #   5. compressor SEGMENTS    >= 70% / >= 45%  ⇒ ALARM / WARN   (the 2026-07-30 panic axis)
 #   6. terminal-coalition procs >= 700 / >= 500 ⇒ ALARM / WARN  (the 2026-07-31 panic axis)
 #   7. load-average PER CORE  >= 2.5 / >= 1.5   ⇒ ALARM / WARN  (the scheduler axis, D4 below)
+#   8. CHRONIC ratchets — swapfiles >= 20 / >= 12, kernel zone data.kalloc.1024 >= 6 / >= 4 GB.
+#      Each owns a state and a page; NEITHER enters the max above (D5: a level only a reboot clears
+#      would latch the verdict for weeks). The row reports them as `chronic_verdict`.
 #
 # WHY RUNG 6 IS NOT PART OF RUNG 4. They count different nouns, and 2026-07-31 proved the
 # difference is fatal. That box died with the iTerm2 coalition at 139.5 GiB — 89.6% of all process
@@ -106,7 +109,8 @@
 # the CHEAP ESTIMATE from §7.7 — in-core segments from vm_stat's compressor pages, swapped-out
 # segments from vm.swapusage (swap is written in 64 KiB compressed chunks, so both terms are
 # 64 KiB/segment) — three counter reads, no zone walk, nothing to block on. zprint survives only
-# behind CC_CAP_SEG_SOURCE=zprint and only wrapped in timeout(1).
+# behind CC_CAP_SEG_SOURCE=zprint and only wrapped in timeout(1). (Rung 8 walks ONE zone with it —
+# damped, bounded without coreutils, and never under a storm; see D5.)
 #
 # D3 — PER-RUNG PAGES, because a NEW crossing inside a standing alarm is the signal that matters.
 # One fixed slug damped by construction (below) also damped every subsequent rung: once ANY rung
@@ -193,6 +197,42 @@
 # the plist's PATH string is a fact about ANOTHER FILE, it has already been false once, and three
 # rungs died silently for the whole time it was.
 #
+# ══ D5 — CHRONIC PRESSURE: two ratchets only a reboot resets (rung 8, added 2026-09-10) ═══════════
+# Panic #5 (2026-08-24, docs/research/panic-2026-08-24-fifth-watchdog.md §4, §6 item 6) died on day
+# 10.9 of one boot carrying two things no rung above can see, because neither is a MOMENT: 73
+# swapfiles, and the kernel zone data.kalloc.1024 at 9.89 GB (81 MB after the reboot that followed).
+# Both ratchet across DAYS; every other rung measures NOW. cc-backlog a216d8753946.
+#
+# THEY PAGE, AND THEY NEVER RAISE THE VERDICT — D1 applied to a level that cannot decay. Max-combined,
+# rung 8 would hold the verdict at ALARM for the rest of the boot: the combined page would sit up for
+# weeks advising "shed by closing sessions" (not the lever for a zone leak), every acute crossing on
+# it would be inaudible, and scripts/pool-floor.sh — which counts only verdict=OK rows as healthy —
+# would starve. That is not hypothetical: this box read 10.34 GB after 16.0 days up on 2026-09-10,
+# already past the alarm floor, so the latch would have begun at deploy. Each ratchet therefore owns
+# a state, a page written on its own transition (D3) carrying a scheduled-reboot advisory, and the
+# row's `chronic_verdict`. Exit code and `verdict` are unchanged.
+#
+# SWAPFILES ARE COUNTED WHERE THE KERNEL PUTS THEM. The item named `ls /private/var/vm`. On this
+# macOS that directory holds only sleepimage — 0 swapfiles, measured, while vm.swapusage reported
+# 3072 MB in three 1 GiB files — so that instrument reads a healthy 0 forever. The prefix is read
+# from `sysctl vm.swapfileprefix` (/System/Volumes/VM/swapfile here, a world-readable dir), and a
+# count of 0 is REFUSED while the kernel reports swap: a contradiction is a blind instrument, not a
+# clean box.
+#
+# data.kalloc.1024 IS READ BY zprint, WHICH IS D2's HAZARD — so the read is hedged three ways:
+#   · DAMPED: one sample per CC_CAP_KALLOC_MIN_S (900 s). Rows in between CARRY the last value with
+#     its own measured-at epoch (`kalloc1024_at`, src=carried) — only a sample from THIS boot, and
+#     none older than four windows. A ~0.65 GB/day ratchet gains nothing from 60 s sampling, and
+#     the carry is what keeps the per-rung page from re-firing every time a sample is skipped.
+#   · SKIPPED UNDER A STORM: if segments or pressure already sit at their warn floor the zone map is
+#     not walked (the 2026-08-05 sample that walked it never returned).
+#   · BOUNDED WITHOUT coreutils: /usr/bin/perl forks zprint under alarm(CC_CAP_KALLOC_TIMEOUT_S=5)
+#     with zprint writing to a FILE, not a pipe, so a zprint wedged in the kernel cannot hold this
+#     tick open (a pipe would keep the command substitution waiting on it). No perl ⇒ no read —
+#     never an unbounded one.
+# Bytes = `cur inuse` (col 7) × `elem size` (col 2); GB = bytes/1024^3 like every GB in this file.
+# Unreadable / timed out ⇒ null and SKIPPED, never 0.
+#
 # Seams: CC_CAPACITY_ALARM=off (kill switch) · CC_CAP_WARN_GB (default 8) ·
 #        CC_CAP_ALARM_GB (default 3) · CC_CAP_PROC_WARN_GB (default 3) · CC_CAP_LOG ·
 #        CC_CAP_PRESSURE_WARN (default 2) · CC_CAP_PRESSURE_ALARM (default 4) ·
@@ -206,7 +246,13 @@
 #        CC_CAP_TIMEOUT (timeout(1) binary, for stubbing the zprint slow lane) ·
 #        CC_CAP_LOAD_WARN_PER_CORE (default 1.5) · CC_CAP_LOAD_ALARM_PER_CORE (default 2.5) ·
 #        CC_CAP_SYSCTL (sysctl(1) binary for EVERY rung — absolute by default, see D4; an explicit
-#          value is honoured verbatim, so =/nonexistent/sysctl is how a test reaches "unreadable")
+#          value is honoured verbatim, so =/nonexistent/sysctl is how a test reaches "unreadable") ·
+#        CC_CAP_SWAPFILE_WARN (default 12) · CC_CAP_SWAPFILE_ALARM (default 20) ·
+#        CC_CAP_SWAPFILE_PREFIX (explicit swapfile prefix; default = sysctl vm.swapfileprefix) ·
+#        CC_CAP_KALLOC=off (skip the zone read) · CC_CAP_KALLOC_WARN_GB (default 4) ·
+#        CC_CAP_KALLOC_ALARM_GB (default 6) · CC_CAP_KALLOC_MIN_S (default 900, sample damping) ·
+#        CC_CAP_KALLOC_TIMEOUT_S (default 5) · CC_CAP_ZPRINT (zprint binary; ABSOLUTE for rung 8) ·
+#        CC_CAP_BOOTTIME (boot epoch, for stubbing the carry's reboot guard)
 #
 # bash 3.2 safe. Ships to launchd ⇒ tested under /bin/bash.
 
@@ -281,6 +327,23 @@ PRIOR_ROWS="${CC_CAP_PRIOR_ROWS:-15}"
 # them, and read the selftest's 5.98 probe before believing an ALARM here means the box is dying.
 LOAD_WARN_PER_CORE="${CC_CAP_LOAD_WARN_PER_CORE:-1.5}"
 LOAD_ALARM_PER_CORE="${CC_CAP_LOAD_ALARM_PER_CORE:-2.5}"
+# Chronic-pressure ratchets (rung 8, D5). The floors are the item's, set against ONE fatal boot
+# (panic #5: 73 swapfiles, 9.89 GB on day 10.9) and one clean one (0, 0.08 GB) — orderings, not a
+# calibrated population, which is one more reason nothing gates on them.
+SWAPFILE_WARN="${CC_CAP_SWAPFILE_WARN:-12}"
+SWAPFILE_ALARM="${CC_CAP_SWAPFILE_ALARM:-20}"
+KALLOC_WARN_GB="${CC_CAP_KALLOC_WARN_GB:-4}"
+KALLOC_ALARM_GB="${CC_CAP_KALLOC_ALARM_GB:-6}"
+KALLOC_MIN_S="${CC_CAP_KALLOC_MIN_S:-900}"
+KALLOC_TIMEOUT_S="${CC_CAP_KALLOC_TIMEOUT_S:-5}"
+# These land UNQUOTED in the row and in integer tests, so a malformed override falls back to its
+# default rather than breaking every consumer of the log (the `?` lesson, further down).
+case "$SWAPFILE_WARN"    in ''|*[!0-9]*) SWAPFILE_WARN=12 ;; esac
+case "$SWAPFILE_ALARM"   in ''|*[!0-9]*) SWAPFILE_ALARM=20 ;; esac
+case "$KALLOC_WARN_GB"   in ''|*[!0-9.]*|.*|*.|*.*.*) KALLOC_WARN_GB=4 ;; esac
+case "$KALLOC_ALARM_GB"  in ''|*[!0-9.]*|.*|*.|*.*.*) KALLOC_ALARM_GB=6 ;; esac
+case "$KALLOC_MIN_S"     in ''|*[!0-9]*) KALLOC_MIN_S=900 ;; esac
+case "$KALLOC_TIMEOUT_S" in ''|*[!0-9]*|0) KALLOC_TIMEOUT_S=5 ;; esac   # alarm(0) CANCELS the bound
 # An EXPLICIT override is honoured verbatim; only the DEFAULT falls back. Folding the override into
 # the fallback list is how an override stops being one (memory path-resolved-dependency-in-daemon-code).
 SYSCTL="${CC_CAP_SYSCTL:-}"
@@ -362,7 +425,7 @@ SWAP_MB="$("$SYSCTL" -n vm.swapusage 2>/dev/null \
 # subprocess per row per tick and would put a BSD/GNU flag difference on the hot path. The rows this
 # script writes are always `%Y-%m-%dT%H:%M:%SZ`; anything else fails the shape check and is skipped.
 NOW_EPOCH="$(date -u +%s 2>/dev/null || echo 0)"
-read_prior() { # → "base|head|swapdelta|pressure|maxproc|seg|coal|compressions|decompressions|loadpercore"
+read_prior() { # → "base|head|swapdelta|pressure|maxproc|seg|coal|compressions|decompressions|loadpercore|swapfiles|kallocgb|kallocat"
   [ -f "$LOG" ] || return 1
   tail -n "$PRIOR_ROWS" "$LOG" 2>/dev/null | awk -v now="$NOW_EPOCH" -v win="$SWAP_WINDOW_S" '
     function jnum(s, key,   v) {
@@ -399,19 +462,20 @@ read_prior() { # → "base|head|swapdelta|pressure|maxproc|seg|coal|compressions
     }
     END {
       if (n == 0) exit 1
-      printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n", base, \
+      printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n", base, \
         jnum(last, "headroom_gb"), jnum(last, "swap_delta_mb"), jnum(last, "pressure_level"), \
         jnum(last, "max_proc_gb"), jnum(last, "seg_pct"), jnum(last, "coal_procs"), \
-        jnum(last, "compressions"), jnum(last, "decompressions"), jnum(last, "load_per_core")
+        jnum(last, "compressions"), jnum(last, "decompressions"), jnum(last, "load_per_core"), \
+        jnum(last, "swapfiles"), jnum(last, "kalloc1024_gb"), jnum(last, "kalloc1024_at")
     }'
 }
 
 SWAP_BASE=""; P_HEAD=""; P_SWAP_DELTA=""; P_PRESSURE=""; P_MAX_PROC=""; P_SEG=""; P_COAL=""
-P_COMPRESSIONS=""; P_DECOMPRESSIONS=""; P_LOAD=""
+P_COMPRESSIONS=""; P_DECOMPRESSIONS=""; P_LOAD=""; P_SWAPFILES=""; P_KALLOC_GB=""; P_KALLOC_AT=""
 PRIOR="$(read_prior || true)"
 if [ -n "$PRIOR" ]; then
   IFS='|' read -r SWAP_BASE P_HEAD P_SWAP_DELTA P_PRESSURE P_MAX_PROC P_SEG P_COAL \
-                  P_COMPRESSIONS P_DECOMPRESSIONS P_LOAD <<< "$PRIOR"
+                  P_COMPRESSIONS P_DECOMPRESSIONS P_LOAD P_SWAPFILES P_KALLOC_GB P_KALLOC_AT <<< "$PRIOR"
 fi
 
 # The delta itself. Empty when EITHER end is unknown — an unreadable sysctl must not be differenced
@@ -1187,6 +1251,111 @@ if [ -n "$LOAD_RAW" ]; then
   LOAD_PER_CORE="$(awk -v l="$LOAD_1M" -v n="$NCPU" 'BEGIN{printf "%.2f", l/n}')"
 fi
 
+# ── chronic-pressure ratchets (rung 8, D5) — two LEVELS only a reboot resets ─────────────────────
+# Read here, after rungs 3 and 5, because the zone read is SKIPPED when either already reads a storm.
+# Both readers resolve everything absolutely (the D4 lesson) and neither ever returns a made-up 0.
+read_swapfiles() { # → "<count> <prefix>", or nothing when the count cannot be trusted
+  local s pfx dir n f total=""
+  s="${SYSCTL:-/usr/sbin/sysctl}"
+  pfx="${CC_CAP_SWAPFILE_PREFIX:-}"
+  [ -n "$pfx" ] || pfx="$("$s" -n vm.swapfileprefix 2>/dev/null)"
+  case "$pfx" in /*/*) : ;; *) return 1 ;; esac   # the kernel's answer or nothing — no guessed path
+  dir="${pfx%/*}"
+  { [ -d "$dir" ] && [ -r "$dir" ] && [ -x "$dir" ]; } || return 1
+  n=0
+  for f in "$pfx"*; do [ -e "$f" ] && n=$((n+1)); done
+  # THE CONTRADICTION CHECK is what makes 0 a reading rather than the item's dead path: zero files
+  # while the kernel reports swap in use means we are looking in the wrong place.
+  if [ "$n" -eq 0 ]; then
+    total="$("$s" -n vm.swapusage 2>/dev/null | sed -n 's/.*total = \([0-9.]*\)M.*/\1/p' | head -1)"
+    awk -v t="${total:-0}" 'BEGIN{exit !(t+0 > 0)}' && return 1
+  fi
+  printf '%s %s' "$n" "$pfx"
+}
+
+read_kalloc() { # → "<bytes>" rc 0 · rc 1 unreadable · rc 124 timed out · rc 3 no bounded runner
+  local zp="${CC_CAP_ZPRINT:-/usr/bin/zprint}" out="" rc=0 bytes=""
+  [ -x /usr/bin/perl ] || return 3          # never an UNBOUNDED zone walk (D2)
+  case "$zp" in /*) [ -x "$zp" ] || return 1 ;; *) return 1 ;; esac
+  out="$(mktemp "${TMPDIR:-/tmp}/cap-kalloc.XXXXXX" 2>/dev/null)" || return 1
+  /usr/bin/perl -e 'my $t = shift; my $p = fork; exit 1 unless defined $p;
+    if (!$p) { exec @ARGV; exit 127 }
+    $SIG{ALRM} = sub { kill "KILL", $p; exit 124 };
+    alarm $t; waitpid($p, 0); exit($? >> 8)' "${KALLOC_TIMEOUT_S:-5}" "$zp" data.kalloc.1024 \
+    > "$out" 2>/dev/null
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    bytes="$(awk '$1 == "data.kalloc.1024" && $2 ~ /^[0-9]+$/ && $7 ~ /^[0-9]+$/ {
+                    printf "%.0f", $2 * $7; exit }' "$out" 2>/dev/null)"
+  fi
+  rm -f "$out" 2>/dev/null
+  [ "$rc" -eq 124 ] && return 124
+  case "$bytes" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$bytes"
+}
+
+SWAPFILES=""; SWAPFILE_PREFIX=""
+_sf="$(read_swapfiles || true)"
+if [ -n "$_sf" ]; then
+  SWAPFILES="${_sf%% *}"; SWAPFILE_PREFIX="${_sf#* }"
+  case "$SWAPFILES" in ''|*[!0-9]*) SWAPFILES=""; SWAPFILE_PREFIX="" ;; esac
+fi
+SWAPFILE_PREFIX_JSON="$(printf '%s' "$SWAPFILE_PREFIX" | tr -d '\\"')"   # it lands inside quotes
+
+# The boot epoch bounds the carry: a value from before a reboot is not this boot's zone. ANCHORED at
+# `{ sec = ` — an unanchored `.*sec = ` matches the `usec = ` that follows it.
+BOOT_EPOCH="${CC_CAP_BOOTTIME:-}"
+[ -n "$BOOT_EPOCH" ] || BOOT_EPOCH="$("$SYSCTL" -n kern.boottime 2>/dev/null \
+                                      | sed -n 's/^{ sec = \([0-9][0-9]*\),.*/\1/p' | head -1)"
+case "$BOOT_EPOCH" in ''|*[!0-9]*) BOOT_EPOCH="" ;; esac
+UPTIME_DAYS=""
+if [ -n "$BOOT_EPOCH" ] && [ "$BOOT_EPOCH" -le "$NOW_EPOCH" ]; then
+  UPTIME_DAYS="$(awk -v n="$NOW_EPOCH" -v b="$BOOT_EPOCH" 'BEGIN{printf "%.1f", (n-b)/86400}')"
+fi
+
+KALLOC_GB=""; KALLOC_AT=""; KALLOC_SRC="off"
+if [ "${CC_CAP_KALLOC:-on}" != "off" ]; then
+  _carry=0
+  case "$P_KALLOC_AT" in
+    ''|*[!0-9]*) : ;;
+    *) if [ -n "$P_KALLOC_GB" ] && [ -n "$BOOT_EPOCH" ] && [ "$P_KALLOC_AT" -ge "$BOOT_EPOCH" ] \
+          && [ "$P_KALLOC_AT" -le $((NOW_EPOCH + 5)) ] \
+          && [ $((NOW_EPOCH - P_KALLOC_AT)) -lt $((4 * KALLOC_MIN_S)) ]; then _carry=1; fi ;;
+  esac
+  _storm=0
+  if [ -n "$SEG_PCT" ] && awk -v a="$SEG_PCT" -v b="$SEG_WARN_PCT" 'BEGIN{exit !(a+0 >= b+0)}'; then _storm=1; fi
+  case "$PRESSURE" in ''|*[!0-9]*) : ;; *) [ "$PRESSURE" -ge "$PRESSURE_WARN" ] && _storm=1 ;; esac
+  if [ "$_carry" = 1 ] && { [ "$_storm" = 1 ] || [ $((NOW_EPOCH - P_KALLOC_AT)) -lt "$KALLOC_MIN_S" ]; }; then
+    KALLOC_GB="$P_KALLOC_GB"; KALLOC_AT="$P_KALLOC_AT"; KALLOC_SRC="carried"
+  elif [ "$_storm" = 1 ]; then
+    KALLOC_SRC="skipped-storm"
+  else
+    _kb="$(read_kalloc)"; _krc=$?
+    case "$_krc" in
+      0)   KALLOC_GB="$(awk -v b="$_kb" 'BEGIN{printf "%.2f", b/1073741824}')"
+           KALLOC_AT="$NOW_EPOCH"; KALLOC_SRC="measured" ;;
+      124) KALLOC_SRC="timeout" ;;
+      3)   KALLOC_SRC="no-bound" ;;
+      *)   KALLOC_SRC="unreadable" ;;
+    esac
+    # A failed fresh read keeps this boot's last value rather than blanking the rung — and SAYS so.
+    if [ -z "$KALLOC_GB" ] && [ "$_carry" = 1 ]; then
+      KALLOC_GB="$P_KALLOC_GB"; KALLOC_AT="$P_KALLOC_AT"; KALLOC_SRC="carried-after-$KALLOC_SRC"
+    fi
+  fi
+fi
+
+chronic_advice() { # → the scheduled-reboot advisory, one line, with the measured ratchet when known
+  local rate="" eta=""
+  if [ -n "$KALLOC_GB" ] && [ -n "$UPTIME_DAYS" ] && awk -v d="$UPTIME_DAYS" 'BEGIN{exit !(d+0 >= 1)}'; then
+    rate="$(awk -v g="$KALLOC_GB" -v d="$UPTIME_DAYS" 'BEGIN{printf "%.2f", g/d}')"
+    eta="$(awk -v g="$KALLOC_GB" -v r="$rate" -v a="$KALLOC_ALARM_GB" \
+             'BEGIN{ if (r+0 > 0 && g+0 < a+0) printf "%.0f", (a-g)/r }')"
+  fi
+  printf 'SCHEDULE A REBOOT — the one measured reset (data.kalloc.1024 read 81 MB after the 2026-08-25 reboot and only ratchets up while sessions come and go) · up %s d%s%s · panic #5 died at 9.89 GB / 73 swapfiles on day 10.9, so a weekly reboot stays under it.\n' \
+    "${UPTIME_DAYS:-?}" "${rate:+ · kalloc +${rate} GB/day since boot}" "${eta:+ · ALARM floor in ~${eta} d}"
+}
+
 # ── positive control (R6) — prove the ladder can reach every rung ─────────────────────────────────
 # Without this, "OK" is indistinguishable from "the thresholds are unreachable". Runs the SAME
 # classify function against synthetic inputs, so it tests the real code path, not a description.
@@ -1199,17 +1368,38 @@ fi
 # rung's own state to page on its own transition, and the one thing that must never happen is a
 # threshold living in two places and drifting: the verdict would then disagree with the page it
 # writes. With CC_CAP_RUNG_DETAIL=1 the output becomes
-#     "<VERDICT> swap=<S> headroom=<S> pressure=<S> maxproc=<S> segments=<S> coalition=<S> load=<S>"
-# where <S> is OK | WARN | ALARM | SKIPPED. Unset, the output is byte-identical to what every
+#     "<VERDICT> swap=<S> headroom=<S> pressure=<S> maxproc=<S> segments=<S> coalition=<S> load=<S> swapfiles=<S> kalloc=<S>"
+# where <S> is OK | WARN | ALARM | SKIPPED. The last two are rung 8's and never move <VERDICT> (D5). Unset, the output is byte-identical to what every
 # existing caller and control already expects.
-classify() { # <headroom_gb> <swap_delta_mb> [pressure] [max_proc_gb] [seg_pct] [coal_procs] [load_per_core] → verdict
+classify() { # <headroom_gb> <swap_delta_mb> [pressure] [max_proc_gb] [seg_pct] [coal_procs] [load_per_core] [swapfiles] [kalloc_gb] → verdict
   local h="$1" sd="$2" pl="${3:-}" mp="${4:-}" sg="${5:-}" cp="${6:-}" lp="${7:-}" v=0
-  local r1=SKIPPED r2=SKIPPED r3=SKIPPED r4=SKIPPED r5=SKIPPED r6=SKIPPED r7=SKIPPED
+  local sf="${8:-}" kg="${9:-}"
+  local r1=SKIPPED r2=SKIPPED r3=SKIPPED r4=SKIPPED r5=SKIPPED r6=SKIPPED r7=SKIPPED r8=SKIPPED r9=SKIPPED
+
+  # rung 8 — the CHRONIC ratchets (D5). They set their own states and NEVER touch `v`: each is a
+  # level only a reboot clears, and max-combining one would latch the verdict for the rest of the
+  # boot (D1's 59-hour latch, in weeks). Evaluated FIRST because neither needs vm_stat, so a NO-DATA
+  # verdict does not blind them. Absent instrument ⇒ SKIPPED (rung 3's policy), never an OK.
+  case "$sf" in
+    ''|*[!0-9]*) : ;;
+    *) if [ "$sf" -ge "$SWAPFILE_ALARM" ]; then r8=ALARM
+       elif [ "$sf" -ge "$SWAPFILE_WARN" ]; then r8=WARN
+       else r8=OK
+       fi ;;
+  esac
+  case "$kg" in
+    ''|*[!0-9.]*) : ;;
+    *) if awk -v a="$kg" -v b="$KALLOC_ALARM_GB" 'BEGIN{exit !(a+0 >= b+0)}'; then r9=ALARM
+       elif awk -v a="$kg" -v b="$KALLOC_WARN_GB" 'BEGIN{exit !(a+0 >= b+0)}'; then r9=WARN
+       else r9=OK
+       fi ;;
+  esac
+
   # headroom is the ONE instrument the verdict cannot exist without (see header).
   if [ -z "$h" ]; then
     printf 'NO-DATA'
-    [ "${CC_CAP_RUNG_DETAIL:-0}" = 1 ] && printf ' swap=%s headroom=%s pressure=%s maxproc=%s segments=%s coalition=%s load=%s' \
-      SKIPPED SKIPPED SKIPPED SKIPPED SKIPPED SKIPPED SKIPPED
+    [ "${CC_CAP_RUNG_DETAIL:-0}" = 1 ] && printf ' swap=%s headroom=%s pressure=%s maxproc=%s segments=%s coalition=%s load=%s swapfiles=%s kalloc=%s' \
+      SKIPPED SKIPPED SKIPPED SKIPPED SKIPPED SKIPPED SKIPPED "$r8" "$r9"
     return 0
   fi
 
@@ -1287,8 +1477,8 @@ classify() { # <headroom_gb> <swap_delta_mb> [pressure] [max_proc_gb] [seg_pct] 
   esac
 
   case "$v" in 2) printf 'ALARM' ;; 1) printf 'WARN' ;; *) printf 'OK' ;; esac
-  [ "${CC_CAP_RUNG_DETAIL:-0}" = 1 ] && printf ' swap=%s headroom=%s pressure=%s maxproc=%s segments=%s coalition=%s load=%s' \
-    "$r1" "$r2" "$r3" "$r4" "$r5" "$r6" "$r7"
+  [ "${CC_CAP_RUNG_DETAIL:-0}" = 1 ] && printf ' swap=%s headroom=%s pressure=%s maxproc=%s segments=%s coalition=%s load=%s swapfiles=%s kalloc=%s' \
+    "$r1" "$r2" "$r3" "$r4" "$r5" "$r6" "$r7" "$r8" "$r9"
   return 0
 }
 
@@ -1409,7 +1599,50 @@ if [ "${CC_CAP_SELFTEST:-0}" = "1" ]; then
     echo "  control FAIL load instrument needs /usr/sbin on PATH — it goes SKIPPED under launchd"
     fails=$((fails+1))
   fi
-  [ "$fails" -eq 0 ] && { echo "capacity-alarm: selftest GREEN (7 rungs + no-data + census + coalition + load reachable)"; exit 0; }
+  # Rung 8 (D5). probe = swapfiles:kalloc_gb:want_swapfiles:want_kalloc — and EVERY probe must leave
+  # the verdict OK: the ratchets report beside the verdict and never raise it, so a row turning
+  # OK→ALARM here is D1's latch re-introduced. `73:9.89` is panic #5's own chronic state, `0:0.08` the
+  # same box after its reboot, `3:10.34` this box on 2026-09-10 at 16 days up (leak past the floor,
+  # swapfiles quiet — the two axes are independent, which is why each owns a page).
+  for probe in "73:9.89:ALARM:ALARM" "0:0.08:OK:OK" "3:10.34:OK:ALARM" \
+               "20:6:ALARM:ALARM" "19:5.99:WARN:WARN" "12:4:WARN:WARN" "11:3.99:OK:OK" \
+               "?:?:SKIPPED:SKIPPED" "::SKIPPED:SKIPPED" "-1:-1:SKIPPED:SKIPPED"; do
+    sf="${probe%%:*}"; r="${probe#*:}"; kg="${r%%:*}"; r="${r#*:}"; wsf="${r%%:*}"; wkg="${r#*:}"
+    got="$(CC_CAP_RUNG_DETAIL=1 classify 99 0 1 0 "" "" "" "$sf" "$kg")"
+    gv="${got%% *}"; gsf="${got#* swapfiles=}"; gsf="${gsf%% *}"; gkg="${got#* kalloc=}"; gkg="${gkg%% *}"
+    if [ "$gv" = OK ] && [ "$gsf" = "$wsf" ] && [ "$gkg" = "$wkg" ]; then
+      echo "  control OK   swapfiles='$sf' kalloc='$kg' → $gv swapfiles=$gsf kalloc=$gkg"
+    else
+      echo "  control FAIL swapfiles='$sf' kalloc='$kg' → $gv swapfiles=$gsf kalloc=$gkg (want OK swapfiles=$wsf kalloc=$wkg)"
+      fails=$((fails+1))
+    fi
+  done
+  # Rung 8's two instruments, live. The swapfile control is the wrong-path defect made executable:
+  # an empty answer means the directory is unreadable OR it counted 0 while the kernel reports swap.
+  sfr="$(read_swapfiles || true)"
+  if [ -n "$sfr" ]; then
+    echo "  control OK   swapfiles ${sfr%% *} counted at ${sfr#* }* (the kernel's vm.swapfileprefix)"
+  else
+    echo "  control FAIL swapfiles — dir unreadable, or 0 counted while vm.swapusage reports swap; rung 8 would SKIP forever"
+    fails=$((fails+1))
+  fi
+  if [ "${CC_CAP_KALLOC:-on}" = "off" ]; then
+    echo "  control SKIP kalloc — CC_CAP_KALLOC=off"
+  else
+    kb="$(read_kalloc)"; krc=$?
+    case "$krc" in
+      0) if [ "${kb:-0}" -gt 0 ] 2>/dev/null; then
+           echo "  control OK   data.kalloc.1024 $(awk -v b="$kb" 'BEGIN{printf "%.2f", b/1073741824}') GB in use (zprint, bounded ${KALLOC_TIMEOUT_S}s)"
+         else
+           echo "  control FAIL kalloc — zprint answered 0 bytes; a live kernel always has this zone in use"
+           fails=$((fails+1))
+         fi ;;
+      124) echo "  control SKIP kalloc — zprint ran past ${KALLOC_TIMEOUT_S}s and was killed: the BOUND held (the rung carries or SKIPs)" ;;
+      *) echo "  control FAIL kalloc — rc ${krc}: no zprint row or no bounded runner; the zone half of rung 8 would SKIP forever"
+         fails=$((fails+1)) ;;
+    esac
+  fi
+  [ "$fails" -eq 0 ] && { echo "capacity-alarm: selftest GREEN (7 rungs + rung 8's 2 chronic ratchets + no-data + census + coalition + load + swapfiles + kalloc reachable)"; exit 0; }
   echo "capacity-alarm: selftest RED ($fails)" >&2; exit 70
 fi
 
@@ -1423,7 +1656,7 @@ fi
 # The verdict AND the six rung states from ONE call (see classify's DETAIL note) — a second
 # evaluation could disagree with the first, and a page that contradicts the verdict beside it is
 # worse than no page.
-CLASSIFY_OUT="$(CC_CAP_RUNG_DETAIL=1 classify "$HEAD" "$SWAP_DELTA" "$PRESSURE" "$MAX_PROC_GB" "$SEG_PCT" "$COAL_PROCS" "$LOAD_PER_CORE")"
+CLASSIFY_OUT="$(CC_CAP_RUNG_DETAIL=1 classify "$HEAD" "$SWAP_DELTA" "$PRESSURE" "$MAX_PROC_GB" "$SEG_PCT" "$COAL_PROCS" "$LOAD_PER_CORE" "$SWAPFILES" "$KALLOC_GB")"
 VERDICT="${CLASSIFY_OUT%% *}"
 RUNG_STATES="${CLASSIFY_OUT#* }"
 
@@ -1432,7 +1665,7 @@ RUNG_STATES="${CLASSIFY_OUT#* }"
 # be treated as unchanged and never page.
 PREV_STATES=""
 if [ -n "$PRIOR" ]; then
-  PREV_STATES="$(CC_CAP_RUNG_DETAIL=1 classify "$P_HEAD" "$P_SWAP_DELTA" "$P_PRESSURE" "$P_MAX_PROC" "$P_SEG" "$P_COAL" "$P_LOAD")"
+  PREV_STATES="$(CC_CAP_RUNG_DETAIL=1 classify "$P_HEAD" "$P_SWAP_DELTA" "$P_PRESSURE" "$P_MAX_PROC" "$P_SEG" "$P_COAL" "$P_LOAD" "$P_SWAPFILES" "$P_KALLOC_GB")"
   PREV_STATES="${PREV_STATES#* }"
 fi
 
@@ -1442,6 +1675,16 @@ rung_state() { # <states-string> <rung> → OK|WARN|ALARM|SKIPPED, or empty when
   t="${1#*"$2"=}"
   printf '%s' "${t%% *}"
 }
+
+# Rung 8's summary (D5): the worse of its two ratchets, reported BESIDE the verdict, never in it.
+CHRONIC_VERDICT=SKIPPED
+for _c in "$(rung_state "$RUNG_STATES" swapfiles)" "$(rung_state "$RUNG_STATES" kalloc)"; do
+  case "$_c:$CHRONIC_VERDICT" in
+    ALARM:*)              CHRONIC_VERDICT=ALARM ;;
+    WARN:SKIPPED|WARN:OK) CHRONIC_VERDICT=WARN ;;
+    OK:SKIPPED)           CHRONIC_VERDICT=OK ;;
+  esac
+done
 
 case "$VERDICT" in
   OK)      RC=0 ;;
@@ -1586,7 +1829,7 @@ case "$PTY_MAX" in ''|*[!0-9]*) PTY_MAX="" ;; esac
 PTY_PCT=""
 if [ -n "$PTY_MAX" ] && [ "$PTY_MAX" -gt 0 ]; then PTY_PCT=$(( PTY_USED * 100 / PTY_MAX )); fi
 
-JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"coal_true_procs":%s,"coal_id":%s,"coal_fp_mb":%s,"coal_fp_src":"%s","auto_coal_procs":%s,"auto_coal_id":%s,"auto_coal_fp_mb":%s,"auto_coal_fp_src":"%s","top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s,"per_session_mb_src":"%s"}' \
+JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"coal_true_procs":%s,"coal_id":%s,"coal_fp_mb":%s,"coal_fp_src":"%s","auto_coal_procs":%s,"auto_coal_id":%s,"auto_coal_fp_mb":%s,"auto_coal_fp_src":"%s","top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s,"per_session_mb_src":"%s","swapfiles":%s,"swapfile_prefix":"%s","swapfile_warn":%s,"swapfile_alarm":%s,"kalloc1024_gb":%s,"kalloc1024_src":"%s","kalloc1024_at":%s,"kalloc_warn_gb":%s,"kalloc_alarm_gb":%s,"uptime_days":%s,"chronic_verdict":"%s"}' \
   "$TS" "$VERDICT" "$SESSIONS" "${HEAD:-null}" "${COMP:-null}" "${ACT:-null}" "${WIRED:-null}" \
   "${SWAP_MB:-null}" "$WARN_GB" "$ALARM_GB" "$ROOM_JSON" "$PER_MB" \
   "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-null}" "$PROC_WARN_GB" "${MAX_PROC_GB:-null}" \
@@ -1599,7 +1842,10 @@ JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compre
   "${COMPRESSIONS:-null}" "${DECOMPRESSIONS:-null}" \
   "${LOAD_1M:-null}" "${LOAD_5M:-null}" "${LOAD_15M:-null}" "${NCPU:-null}" \
   "${LOAD_PER_CORE:-null}" "$LOAD_WARN_PER_CORE" "$LOAD_ALARM_PER_CORE" \
-  "$PTY_USED" "${PTY_MAX:-null}" "${PTY_PCT:-null}" "$PER_MB_SRC")"
+  "$PTY_USED" "${PTY_MAX:-null}" "${PTY_PCT:-null}" "$PER_MB_SRC" \
+  "${SWAPFILES:-null}" "$SWAPFILE_PREFIX_JSON" "$SWAPFILE_WARN" "$SWAPFILE_ALARM" \
+  "${KALLOC_GB:-null}" "$KALLOC_SRC" "${KALLOC_AT:-null}" "$KALLOC_WARN_GB" "$KALLOC_ALARM_GB" \
+  "${UPTIME_DAYS:-null}" "$CHRONIC_VERDICT")"
 
 if [ "$APPEND" = 1 ]; then
   mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
@@ -1637,6 +1883,10 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
       printf 'load: %s/%s/%s on %s cores = %s/core (warn %s · alarm %s — UNCALIBRATED, see D4)\n' \
         "${LOAD_1M:-?}" "${LOAD_5M:-?}" "${LOAD_15M:-?}" "${NCPU:-?}" "${LOAD_PER_CORE:-unreadable}" \
         "$LOAD_WARN_PER_CORE" "$LOAD_ALARM_PER_CORE"
+      if [ "$CHRONIC_VERDICT" = WARN ] || [ "$CHRONIC_VERDICT" = ALARM ]; then
+        printf 'chronic (rung 8, not in this verdict): %s — %s swapfiles · data.kalloc.1024 %s GB · up %s d\n' \
+          "$CHRONIC_VERDICT" "${SWAPFILES:-?}" "${KALLOC_GB:-?}" "${UPTIME_DAYS:-?}"
+      fi
       # NAME the outlier. A page that says "a process is large" sends the operator hunting; the whole
       # value of the rung is arriving with the pid already identified.
       if [ -n "$MAX_PROC_GB" ] \
@@ -1676,7 +1926,7 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
   # OK / SKIPPED / NO-DATA all RETRACT, for the same reason the combined page self-clears: a page
   # whose condition has passed is misinformation, and a rung whose instrument just went blind is
   # not asserting anything either.
-  for _rung in swap headroom pressure maxproc segments coalition load; do
+  for _rung in swap headroom pressure maxproc segments coalition load swapfiles kalloc; do
     _now_state="$(rung_state "$RUNG_STATES" "$_rung")"
     _prev_state="$(rung_state "$PREV_STATES" "$_rung")"
     _rung_page="$PAGES_DIR/capacity-alarm-$_rung.page"
@@ -1695,6 +1945,8 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
           # calibrated (D4), and an operator who reads "ALARM" without knowing the box has lived
           # above this number for 42 h will shed sessions it did not need to shed.
           load)      _detail="load ${LOAD_1M:-?} (1-min) on ${NCPU:-?} cores = ${LOAD_PER_CORE:-?}/core (warn >=${LOAD_WARN_PER_CORE} · alarm >=${LOAD_ALARM_PER_CORE}) · 5/15-min ${LOAD_5M:-?}/${LOAD_15M:-?} · UNCALIBRATED: 2.53/core was fatal 2026-08-05, 5.98/core survived" ;;
+          swapfiles) _detail="${SWAPFILES:-?} swapfiles at ${SWAPFILE_PREFIX:-?}* (warn >=${SWAPFILE_WARN} · alarm >=${SWAPFILE_ALARM}) · ${SWAP_MB:-?} MB of swap in use · panic #5 died holding 73" ;;
+          kalloc)    _detail="kernel zone data.kalloc.1024 holds ${KALLOC_GB:-?} GB (warn >=${KALLOC_WARN_GB} · alarm >=${KALLOC_ALARM_GB}) · ${KALLOC_SRC} · panic #5 died at 9.89 GB" ;;
           *)         _detail="" ;;
         esac
         {
@@ -1703,7 +1955,13 @@ if [ "${CC_CAP_PAGE:-on}" != "off" ] && [ "$APPEND" = 1 ]; then
           printf '%s\n' "$_detail"
           printf 'combined verdict this sample: %s  ·  thrash d/c %s\n' \
             "$VERDICT" "${THRASH_CD_RATIO:-n/a}"
-          printf 'shed by CLOSING idle sessions (/handoff them). This alarm never refuses a spawn.\n'
+          case "$_rung" in
+            swapfiles|kalloc)
+              chronic_advice
+              printf 'chronic (rung 8): reported beside the verdict, never folded into it (D5).\n' ;;
+            *)
+              printf 'shed by CLOSING idle sessions (/handoff them). This alarm never refuses a spawn.\n' ;;
+          esac
           printf 're-run:  %s\n' "$0"
         } > "$_rung_page" 2>/dev/null || true ;;
       *)
@@ -1741,7 +1999,14 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   echo "  swap used:              ${SWAP_MB:-unreadable} MB   (a LEVEL never alarms — it latches for days)"
   echo "  swap growth:            ${SWAP_DELTA:-unknown} MB in the last ${SWAP_WINDOW_S}s   (>=${SWAP_DELTA_MB} ⇒ ALARM)"
   echo "  est. room for:          >=${ROOM} more sessions   (~${PER_MB} MB/session · ${PER_MB_SRC}: ${PER_MB_NOTE})"
+  # Rung 8 (D5) — SKIPPED, never "0", when the instrument cannot be trusted.
+  echo "  swapfiles on disk:      ${SWAPFILES:-SKIPPED (dir unreadable, or 0 counted while the kernel reports swap)}${SWAPFILES:+   (warn >=${SWAPFILE_WARN} / alarm >=${SWAPFILE_ALARM} · ${SWAPFILE_PREFIX}* · chronic)}"
+  echo "  kalloc.1024 zone:       ${KALLOC_GB:-SKIPPED}${KALLOC_GB:+ GB}   (${KALLOC_SRC} · warn >=${KALLOC_WARN_GB} / alarm >=${KALLOC_ALARM_GB} · chronic · up ${UPTIME_DAYS:-?} d)"
   echo "  VERDICT:                ${VERDICT}"
+  echo "  CHRONIC (rung 8):       ${CHRONIC_VERDICT}   (reported beside the verdict, never folded into it — D5)"
+  if [ "$CHRONIC_VERDICT" = WARN ] || [ "$CHRONIC_VERDICT" = ALARM ]; then
+    echo "  $(chronic_advice)"
+  fi
   if [ "$VERDICT" = "WARN" ] || [ "$VERDICT" = "ALARM" ]; then
     echo "  This alarm never refuses a spawn. Shed by CLOSING sessions (/handoff the idle ones);"
     echo "  do NOT add a load-based spawn gate — see MACHINE_CAPACITY_V2.md §8.5.7."

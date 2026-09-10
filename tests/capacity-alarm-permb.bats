@@ -41,6 +41,10 @@ setup() {
   export CC_CAP_SEG_WARN_PCT=999999 CC_CAP_SEG_ALARM_PCT=999999
   export CC_CAP_COAL_WARN=999999 CC_CAP_COAL_ALARM=999999
   export CC_CAP_SWAP_DELTA_MB=999999
+  # Rung 8 (D5): floors pinned because it owns per-rung PAGES; the zone walk off for cost.
+  export CC_CAP_SWAPFILE_WARN=999999 CC_CAP_SWAPFILE_ALARM=999999
+  export CC_CAP_KALLOC_WARN_GB=999999 CC_CAP_KALLOC_ALARM_GB=999999
+  export CC_CAP_KALLOC=off
   STUBS="$BATS_TEST_TMPDIR/stubs"
   mkdir -p "$STUBS"
   # A spin in the ppid walk must fail the suite, not hang it. Resolved rather than hardcoded: a

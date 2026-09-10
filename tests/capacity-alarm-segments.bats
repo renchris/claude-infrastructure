@@ -43,6 +43,7 @@ run_classify() { # <script> <args...>
     SWAP_DELTA_MB=256; SWAP_WINDOW_S=600; COAL_WARN=500; COAL_ALARM=700
     LOAD_WARN_PER_CORE=1.5; LOAD_ALARM_PER_CORE=2.5
     PRESSURE_WARN=2; PRESSURE_ALARM=4
+    SWAPFILE_WARN=12; SWAPFILE_ALARM=20; KALLOC_WARN_GB=4; KALLOC_ALARM_GB=6
     '"$(sed -n '/^classify() {/,/^}/p' "$script")"'
     classify "$@"
   ' _ "$@"
@@ -194,10 +195,12 @@ run_read_segments() { # <script> <stubdir> [env...]
 @test "the in-script selftest is GREEN and reports 7 rungs" {
   # The count is asserted ON PURPOSE and is meant to go red when a rung is added: the number in the
   # GREEN line is a CLAIM about coverage, and a claim that updates itself proves nothing. 6 → 7 on
-  # 2026-08-05 when rung 7 (scheduler saturation, D4) landed.
+  # 2026-08-05 when rung 7 (scheduler saturation, D4) landed. 2026-09-10: rung 8's two chronic
+  # ratchets joined the claim but NOT the count — they report beside the verdict (D5), so the verdict
+  # ladder is still 7 and the line now says both halves.
   run env CC_CAP_SELFTEST=1 bash "$A"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"selftest GREEN (7 rungs"* ]] || false
+  [[ "$output" == *"selftest GREEN (7 rungs + rung 8's 2 chronic ratchets"* ]] || false
   [[ "$output" != *"control FAIL"* ]] || false
 }
 
