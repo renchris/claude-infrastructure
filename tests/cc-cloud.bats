@@ -1144,24 +1144,73 @@ setup() {
   [ "$(rows)" -eq 0 ]
 }
 
+@test "a BARE poll never touches the control plane — the probe is opt-in at the call site" {
+  have_subject
+  r="$(bare rembare)"
+  # An account IS present, so the only thing standing between this poll and a live HTTP call is the
+  # flag. That is the point: the earlier draft made the probe automatic, and `tests/cloud-return.bats`
+  # — which runs the real `cc-cloud poll` and does not stub CC_CLOUD_VERIFY_BIN — reached the
+  # operator's accounts from inside a suite whose header says HERMETIC. It reddened the land gate.
+  cloud declare --id barepoll --branch feat/a --remote "$r" --repo "" --boot 900 --account next3
+
+  # The seam points at a probe that would FAIL LOUDLY if it were ever invoked, so this is a positive
+  # detector and not an assertion that passes because nothing happened to run.
+  # A PYTHON spy, because cloud-inbox invokes the seam as [sys.executable, VERIFY, ...] — a bash
+  # stub there is run BY python3, dies on a SyntaxError, and reads as a probe that merely failed.
+  # That would have made the negative half below pass for the wrong reason.
+  printf '#!/usr/bin/env python3\nimport sys\nopen("%s/PROBE-RAN","w").close()\nsys.exit(9)\n' "$D" > "$D/verify-spy"
+  chmod +x "$D/verify-spy"
+  export CC_CLOUD_VERIFY_BIN="$D/verify-spy"
+
+  run cloud poll
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'no-ref  barepoll'
+  [ ! -f "$D/PROBE-RAN" ]
+  [ ! -f "$CC_CLOUD_STATE/barepoll.cp" ]
+
+  # POSITIVE CONTROL on the SAME fixture: with the flag, the probe DOES run — so the absence above
+  # is the flag doing its job, not a spy that could never have fired.
+  run cloud poll --control-plane
+  [ "$status" -eq 0 ]
+  [ -f "$D/PROBE-RAN" ]
+  # ...and the failing probe still wrote nothing: an instrument failure never mints evidence.
+  [ ! -f "$CC_CLOUD_STATE/barepoll.cp" ]
+}
+
 @test "poll's control-plane refresh is OFF-switchable and never invents a sidecar on failure" {
   have_subject
   r="$(bare rempoll)"
   cloud declare --id pollcp --branch feat/a --remote "$r" --repo "" --boot 900
 
-  # No `account=` on the declaration ⇒ --verify cannot be called at all, so poll must write nothing
-  # rather than a sidecar built out of an instrument failure. This is the fail-closed direction:
-  # absence of evidence stays absence of evidence.
-  run cloud poll
+  # A SPY, so every absence below is a detector that could have fired rather than a vacuous pass.
+  printf '#!/usr/bin/env python3\nimport sys\nopen("%s/PC-RAN","w").close()\nsys.exit(9)\n' "$D" > "$D/verify-spy2"
+  chmod +x "$D/verify-spy2"
+  export CC_CLOUD_VERIFY_BIN="$D/verify-spy2"
+
+  # ASKED FOR, and still refused: no `account=` on the declaration ⇒ `--verify` cannot be addressed
+  # at all, so the probe must not be attempted and no sidecar may appear. This is the fail-closed
+  # direction — absence of evidence stays absence of evidence.
+  run cloud poll --control-plane
   [ "$status" -eq 0 ]
   printf '%s' "$output" | grep -q 'no-ref  pollcp'
+  [ ! -f "$D/PC-RAN" ]
   [ ! -f "$CC_CLOUD_STATE/pollcp.cp" ]
 
-  # The kill switch is honoured too, and poll's own contract does not move: it still reports the
-  # ref state for every id it walked.
+  # The kill switch sits ON TOP of the flag and can only ever subtract: even a declaration that
+  # WOULD be probed is not, and poll's own contract does not move — it still reports the ref state
+  # for every id it walked.
+  cloud declare --id pollcp2 --branch feat/b --remote "$r" --repo "" --boot 900 --account next3
   export CC_CLOUD_POLL_CP=off
-  run cloud poll
+  run cloud poll --control-plane
   [ "$status" -eq 0 ]
-  printf '%s' "$output" | grep -q 'no-ref  pollcp'
-  [ ! -f "$CC_CLOUD_STATE/pollcp.cp" ]
+  printf '%s' "$output" | grep -q 'no-ref  pollcp2'
+  [ ! -f "$D/PC-RAN" ]
+  [ ! -f "$CC_CLOUD_STATE/pollcp2.cp" ]
+
+  # POSITIVE CONTROL: drop the kill switch and the SAME declaration is probed, so the two absences
+  # above are both the guard and the switch working, not a spy that never could have run.
+  unset CC_CLOUD_POLL_CP
+  run cloud poll --control-plane
+  [ "$status" -eq 0 ]
+  [ -f "$D/PC-RAN" ]
 }
