@@ -130,8 +130,22 @@ every cursor rotation, and its own header measures that cost. The remedy is that
 carry the branch measurement it already computes for `landed` — `git cherry` is one call it is
 making anyway — and say `superseded (branch patch-equivalent)` versus
 `superseded (item closed; branch holds N unlanded commit(s))`, so the second class is separately
-addressable instead of being indistinguishable from the first. Filed, not built here: the arm is on
-a live launchd path and its blast radius is the whole cloud lane.
+addressable instead of being indistinguishable from the first.
+
+**Built, not filed** (`Scope (grown): +the superseded discharge reason carries the branch
+measurement` — Follow-On Gate F1-F4 pass). The `git cherry` output is still in scope where
+`superseded` is decided, one screen below where it is computed, so the count costs nothing and no
+verdict changes: the arm retires exactly the same rows it did before. Three reasons now, because
+there are three branch states and not two — `(branch patch-equivalent on trunk)`,
+`(item closed; branch holds N unlanded commit(s) — NOT measured as landed)`, and
+`(branch NOT measured — cherry unreadable this pass)`. The third exists because an unreadable
+cherry leaves `ch` empty, which is not the same fact as "zero unlanded commits", and folding it
+into the healthy reading is the failure this whole document is about
+(repo memory: `lookup-miss-is-not-absence`). 15/15 green, the two new cases red against trunk's
+script and green against this one.
+
+This does not repair the 153 rows already discharged — a custody discharge is written once (see
+below) — so it is a fix to the generator, and the manifest is the record for the rows behind it.
 
 ## What the store can and cannot carry
 
