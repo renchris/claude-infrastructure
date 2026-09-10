@@ -155,82 +155,105 @@ def run(runs, scores):
                 fh.flush()
 
 
+QUOTA_MSG_LEN = (
+    63  # len("You've hit your session limit · resets 1:10pm (America/Chicago)")
+)
+OUTPUT_CAP = 64000  # CLAUDE_CODE_MAX_OUTPUT_TOKENS every cell ran under
+
+
+def is_quota(r):
+    """A 429 "session limit" is a QUOTA fault, not an arm outcome — never an arm's error.
+
+    Two signatures, because the runner only started recording api_error_status after the first
+    wall: an explicit 429, or (first-runner rows) an error with no status whose result is exactly
+    the session-limit message. A quota fault can arrive AFTER a full 128K-token stream, so
+    "something was served" does NOT make an error an arm outcome — classify on the error, never
+    on what was spent.
+    """
+    if r.get("api_error_status") == 429:
+        return True
+    return (
+        bool(r.get("is_error"))
+        and r.get("api_error_status") is None
+        and "api_error_status" not in r
+        and r.get("result_len") == QUOTA_MSG_LEN
+    )
+
+
+def cells(runs):
+    """Latest non-quota row per (brief, effort). A cell with no such row is UNMEASURED."""
+    raw = [
+        json.loads(line) for line in open(Path(runs) / "index.jsonl") if line.strip()
+    ]
+    latest = {}
+    for r in raw:
+        if not is_quota(r):
+            latest[(r["brief_id"], r["effort"])] = r
+    return raw, latest
+
+
 def table(runs, scores):
     man = manifest()
+    raw, latest = cells(runs)
     rows = [json.loads(line) for line in open(scores) if line.strip()]
     bad = [r for r in rows if "error" in r]
+    names = [f"f51@{e}" for e in EFFORTS] + list(REFS)
+
+    def measured(bid, arm):
+        return not arm.startswith("f51@") or (bid, arm[4:]) in latest
+
     votes = {}
     for r in rows:
-        if "error" in r:
+        if "error" in r or not measured(r["brief_id"], r["arm"]):
             continue
         for g in r["credited"]:
             votes.setdefault((r["brief_id"], r["arm"], g), set()).add(r["judge"])
-    names = [f"f51@{e}" for e in EFFORTS] + list(REFS)
-    total = sum(len(v["ground_truth"]) for v in man.values())
+    defect = {b: v for b, v in sorted(man.items()) if v["has_defect"]}
+    paired = [b for b in defect if all(measured(b, n) for n in names)]
+    total = sum(len(v["ground_truth"]) for v in defect.values())
+
+    def hits(bid, n, t=2):
+        return sum(
+            1 for (b, a, _), js in votes.items() if b == bid and a == n and len(js) >= t
+        )
+
+    print(f"judge rows {len(rows)} · parse failures {len(bad)} · ground truth {total}")
     print(
-        f"judge rows {len(rows)} · parse failures {len(bad)} · ground truth {total}\n"
+        f"index rows {len(raw)} · quota-fault rows set aside {sum(map(is_quota, raw))}"
+        f" · cells kept {len(latest)} · paired briefs (every arm measured) {paired}\n"
+    )
+    print(
+        "Recall, strict majority (>=2 of 3 judges). `—` = unmeasured (quota fault, never scored 0).\n"
     )
     print("| brief | GT | " + " | ".join(names) + " |")
     print("|---|---|" + "---|" * len(names))
-    sums = {n: 0 for n in names}
-    for bid, rec in sorted(man.items()):
-        if not rec["has_defect"]:
-            continue
-        cells = []
+    for bid, rec in defect.items():
+        c = [str(hits(bid, n)) if measured(bid, n) else "—" for n in names]
+        print(f"| {bid} | {len(rec['ground_truth'])} | " + " | ".join(c) + " |")
+    for label, briefs in [("TOTAL (measured)", list(defect)), ("PAIRED", paired)]:
+        gt = sum(len(defect[b]["ground_truth"]) for b in briefs)
+        c = []
         for n in names:
-            k = sum(
-                1
-                for (b, a, _), js in votes.items()
-                if b == bid and a == n and len(js) >= 2
-            )
-            sums[n] += k
-            cells.append(str(k))
-        print(f"| {bid} | {len(rec['ground_truth'])} | " + " | ".join(cells) + " |")
-    print(
-        "| **TOTAL** | **%d** | " % total
-        + " | ".join(f"**{sums[n]}**" for n in names)
-        + " |\n"
-    )
-    print("| threshold | " + " | ".join(names) + " |")
+            bs = [b for b in briefs if measured(b, n)]
+            g = sum(len(defect[b]["ground_truth"]) for b in bs)
+            c.append(f"**{sum(hits(b, n) for b in bs)}**/{g}")
+        print(f"| **{label}** | {gt} | " + " | ".join(c) + " |")
+    print("\n| threshold (paired briefs) | " + " | ".join(names) + " |")
     print("|---|" + "---|" * len(names))
     for t, label in [(1, ">=1 judge"), (2, ">=2 of 3"), (3, "unanimous")]:
-        c = [
-            sum(1 for (_, a, _), js in votes.items() if a == n and len(js) >= t)
-            for n in names
-        ]
-        print(f"| {label} | " + " | ".join(map(str, c)) + " |")
-    raw_idx = [
-        json.loads(line) for line in open(Path(runs) / "index.jsonl") if line.strip()
-    ]
-
-    # A 429 "session limit" is a QUOTA fault, not an arm outcome: those cells were re-run on another
-    # account, so the ledger holds both rows. Keep the latest non-quota row per cell and count the
-    # quota faults separately — never fold them into an arm's error column. Rows written before the
-    # runner recorded api_error_status carry no status, so an error with nothing served also counts.
-    def is_quota(r):
-        if r.get("api_error_status") == 429:
-            return True
-        return (
-            bool(r.get("is_error"))
-            and not r.get("served")
-            and not r.get("output_tokens")
+        print(
+            f"| {label} | "
+            + " | ".join(str(sum(hits(b, n, t) for b in paired)) for n in names)
+            + " |"
         )
 
-    latest = {}
-    for r in raw_idx:
-        if not is_quota(r):
-            latest[(r["brief_id"], r["effort"])] = r
-    idx = list(latest.values())
     print(
-        f"\nindex rows {len(raw_idx)} · quota-fault rows set aside "
-        f"{sum(map(is_quota, raw_idx))} · cells kept {len(idx)}"
+        "\n| effort | cells measured | arm failures | median output tokens | max output tokens"
+        " | cells continued past the cap | continuations | cost USD (all measured cells) |"
     )
-    print(
-        "\n| effort | cells | errors | median output tokens | total output tokens | total cost USD |"
-    )
-    print("|---|---|---|---|---|---|")
+    print("|---|---|---|---|---|---|---|---|")
     for e in EFFORTS:
-        xs = [r for r in idx if r["effort"] == e]
+        xs = [r for (b, ee), r in latest.items() if ee == e]
         ok = [
             r
             for r in xs
@@ -238,10 +261,20 @@ def table(runs, scores):
         ]
         toks = sorted(r["output_tokens"] for r in ok)
         med = toks[len(toks) // 2] if toks else "-"
-        cost = sum(r.get("cost_usd") or 0 for r in ok)
+        # No single response can exceed the cap, so any total above it was continued at least
+        # ceil(out/cap)-1 times. Needs only the total — usage.iterations is sometimes empty.
+        cont = [-(-t // OUTPUT_CAP) - 1 for t in toks]
+        fails = [f"{r['brief_id']}" for r in xs if r not in ok]
+        cost = sum(r.get("cost_usd") or 0 for r in xs)
         print(
-            f"| {e} | {len(xs)} | {len(xs) - len(ok)} | {med} | {sum(toks)} | {cost:.2f} |"
+            f"| {e} | {len(xs)} | {len(fails)}{' (' + ', '.join(fails) + ')' if fails else ''}"
+            f" | {med} | {max(toks) if toks else '-'} | {sum(1 for c in cont if c)} | {sum(cont)}"
+            f" | {cost:.2f} |"
         )
+    q = [r for r in raw if is_quota(r)]
+    print(
+        f"\nQuota faults: {len(q)} rows, {sum(r.get('cost_usd') or 0 for r in q):.2f} USD spent for no output."
+    )
 
 
 if __name__ == "__main__":
