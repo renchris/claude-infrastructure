@@ -788,7 +788,11 @@ if es: e=es[-1]; print(e['kind'], e['resets_at_utc'])
         "$sid" "$acct" "$cfg" "$cwd" "$kind" "$reset" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$PARKED/$sid.json"
       log "PARKED $sid ($acct, $kind) resets $reset  cwd=$cwd"
     fi
-  done < <(find "$cfg/projects" -maxdepth 2 -name '*.jsonl' -mmin "-$RECENCY_MIN" 2>/dev/null)
+  # -H: ~/.claude-next/projects is a SYMLINK to ~/.claude/projects, and BSD find does not descend a
+  # symlinked starting point without it. Measured 2026-09-10: 0 transcripts without -H, 123 with it —
+  # the poller had never detected, parked or resumed a single `next` session (poller.log: 17 next2,
+  # 42 next3, 4 next4, 0 next).
+  done < <(find -H "$cfg/projects" -maxdepth 2 -name '*.jsonl' -mmin "-$RECENCY_MIN" 2>/dev/null)
 done
 
 # ── 1b. CONSOLIDATE: decide the winners ONCE, before any firing ────────────────────────

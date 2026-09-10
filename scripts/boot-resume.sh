@@ -156,7 +156,8 @@ transcript_mtime() {
   if [ -n "${CC_TRANSCRIPT_MTIME_BIN:-}" ]; then "$CC_TRANSCRIPT_MTIME_BIN" "$1" "$2" "$3" 2>/dev/null; return 0; fi
   local cfg="$HOME/.$1" path
   [ -d "$cfg/projects" ] || return 0
-  path="$(find "$cfg/projects" -name "$2.jsonl" -print -quit 2>/dev/null | head -1)"
+  # -H: ~/.claude-next/projects is a symlink; BSD find returns nothing for a symlinked start without it.
+  path="$(find -H "$cfg/projects" -name "$2.jsonl" -print -quit 2>/dev/null | head -1)"
   [ -n "$path" ] && stat -f %m "$path" 2>/dev/null
 }
 
