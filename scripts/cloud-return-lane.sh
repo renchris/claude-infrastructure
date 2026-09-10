@@ -1,6 +1,7 @@
 #!/bin/bash
 # cloud-return-lane.sh — the cloud lane's OWN tick: RETURN (land what has come back from the cloud
-# VMs), then RETIRE (settle what never will), each under a bound sized to ITS unit, journaled.
+# VMs), RETIRE (settle what never will), then ANSWER (route what is asking a question at the one
+# thing that can answer it), each under a bound sized to ITS unit, journaled.
 #
 #   scripts/cloud-return-lane.sh            one tick: return pass, then retire pass, then exit
 #   scripts/cloud-return-lane.sh --status   print the lane lock's holder / age and exit
@@ -42,7 +43,8 @@
 #     file resolves its siblings from its OWN directory, so a copied tree with stubs beside it runs
 #     the stubs — which is what tests/autonomy-sweep.bats relies on.
 #
-# Env seams: CC_LANE_RETURN_BOUND_S (5400) · CC_LANE_RETIRE_BOUND_S (900) · CC_LANE_RETURN_LIMIT (25)
+# Env seams: CC_LANE_RETURN_BOUND_S (5400) · CC_LANE_RETIRE_BOUND_S (900) · CC_LANE_ANSWER_BOUND_S
+#   (300) · CC_LANE_ANSWER (1; 0 disables the answer pass) · CC_LANE_RETURN_LIMIT (25)
 #   · CC_LANE_RETIRE_MAX (200) · CC_LANE_REPO (else CC_SWEEP_PRUNE_REPO, else the shared checkout) ·
 #   CC_CLOUD_STATE · CC_IDL · CC_LANE_TIMEOUT_BIN · CC_LANE_NOW (epoch override, tests)
 # Exits: 0 ran · 4 another lane holds the lock · 3 jq missing · 2 usage
@@ -56,6 +58,7 @@ done
 DIR="$(cd "$(dirname "$_self")" && pwd)"
 RETURN_SH="$DIR/cloud-return.sh"
 RETIRE_SH="$DIR/cloud-retire-terminal.sh"
+ANSWER_PY="$DIR/cloud-answer.py"
 
 CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; CFG="${CFG%/}"
 STATE="${CC_CLOUD_STATE:-$CFG/autonomy/cloud}"
@@ -65,6 +68,8 @@ RETURN_BOUND="${CC_LANE_RETURN_BOUND_S:-5400}"; case "$RETURN_BOUND" in ''|*[!0-
 RETIRE_BOUND="${CC_LANE_RETIRE_BOUND_S:-900}";  case "$RETIRE_BOUND" in ''|*[!0-9]*) RETIRE_BOUND=900 ;; esac
 RETURN_LIMIT="${CC_LANE_RETURN_LIMIT:-25}";     case "$RETURN_LIMIT" in ''|*[!0-9]*) RETURN_LIMIT=25 ;; esac
 RETIRE_MAX="${CC_LANE_RETIRE_MAX:-200}";        case "$RETIRE_MAX" in ''|*[!0-9]*) RETIRE_MAX=200 ;; esac
+ANSWER_BOUND="${CC_LANE_ANSWER_BOUND_S:-300}";  case "$ANSWER_BOUND" in ''|*[!0-9]*) ANSWER_BOUND=300 ;; esac
+ANSWER_ON="${CC_LANE_ANSWER:-1}"
 TMO="${CC_LANE_TIMEOUT_BIN:-$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)}"
 LOCK="$STATE/.lane.lock"
 # The lock outlives one whole tick and no more: a holder past both bounds plus the grace is dead.
@@ -183,5 +188,44 @@ if [ -x "$RETIRE_SH" ]; then
 fi
 log_idl cloud-retire "$(jq -cn --arg c "$rrc" --arg e "$rtook" --argjson b "$RETIRE_BOUND" --arg s "$summary" \
   '{cloud_retire_rc:$c, elapsed_s:($e|tonumber? // null), bound_s:$b, summary:$s}')"
+
+# ── 3. ANSWER: route what is still ASKING ───────────────────────────────────────────────────────
+# The return pass collects sessions that PUSHED and went quiet. It has nothing to say about a
+# session that finished a turn and asked a QUESTION — 222 of 262 live sessions were in exactly that
+# state when cloud-inbox was built, and the field had no reader at all. This pass routes each one to
+# `cc-backlog needs`, so the operator's own consent rail (`cc-do <id>`, a typed yes) becomes the
+# gate. It EXECUTES NOTHING, least of all anything the remote composed — see cloud-answer.py's
+# docstring, where that line is the design rather than a caveat.
+#
+# 🚨 WHY IT IS THIRD, AND WHY THAT IS THE POSITION THAT WORKS. Placing it above the return pass
+# would put it behind a bound it cannot survive: ONE land costs 700-3,900 s inside a 5,400 s pass,
+# so the return pass is routinely SIGKILLed at the bound (`rc=137`, every tick since 09-04 on this
+# box) and anything sequenced under it inside that pass would never run — the inner-bound-starves-
+# the-tail shape this lane's own history records. It is a SEPARATE pass, after the retire pass,
+# because that position is measured as reachable: the retire pass completes (rc=0, 32-89 s) on the
+# very ticks whose return pass was killed, since a killed child ends the command, not the script.
+# Its own bound is 300 s — the unit is one `cloud-inbox` sweep, seconds on the live store — and it
+# is deliberately far below both siblings so this pass can never become the thing that starves.
+arc="skipped"; atook=""; atally=""
+if [ "$ANSWER_ON" != "0" ] && [ -f "$ANSWER_PY" ]; then
+  t0="$(date +%s)"
+  aout_f="$(mktemp -t cloud-lane-answer.XXXXXX 2>/dev/null || printf '/tmp/cloud-lane-answer.%s' "$$")"
+  if [ -n "$TMO" ] && [ -x "$TMO" ]; then
+    "$TMO" -k 10 "$ANSWER_BOUND" python3 "$ANSWER_PY" >"$aout_f" 2>&1
+  else
+    python3 "$ANSWER_PY" >"$aout_f" 2>&1
+  fi
+  arc=$?
+  atook=$(( $(date +%s) - t0 ))
+  # The one-line tally (`read N active session(s) — COLLECT 2, CLEAR 9`) is the fact worth keeping;
+  # the per-row detail — which QUOTES remote-authored text — goes to this lane's log and nowhere a
+  # later reader could mistake it for an instruction.
+  atally="$(grep -E '^cloud-answer: read ' "$aout_f" 2>/dev/null | tail -1)"
+  sed 's/^/    /' "$aout_f" 2>/dev/null
+  rm -f "$aout_f" 2>/dev/null
+  say "answer pass rc=$arc took=${atook}s ${atally:+— $atally}"
+fi
+log_idl cloud-answer "$(jq -cn --arg c "$arc" --arg e "$atook" --argjson b "$ANSWER_BOUND" --arg s "$atally" \
+  '{cloud_answer_rc:$c, elapsed_s:($e|tonumber? // null), bound_s:$b, tally:$s}')"
 
 exit 0
