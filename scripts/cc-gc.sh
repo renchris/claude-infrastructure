@@ -108,6 +108,10 @@ wanted() { # <store> → 0 if this run should include it
 note(){ [ "$VERBOSE" -eq 1 ] && [ "$JSON" -eq 0 ] && printf '    %s\n' "$1"; return 0; }
 
 UUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+# A pane id — the shape of every cc-registry row's paneUUID, and of the box every sender resolves to.
+PANE_RE='^[0-9]+$'
+reapable_key() { [[ "$1" =~ $UUID_RE ]] || [[ "$1" =~ $PANE_RE ]]; }
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 INERT=0                       # count of ASSERT stores whose owner is provably not running
 ROWS=''                       # newline-joined "store<TAB>kind<TAB>status<TAB>reaped<TAB>kept<TAB>detail"
 # PADDED at the emitter, because tab is IFS-WHITESPACE: an empty cell does not read back as empty,
@@ -162,9 +166,13 @@ fi
 # Layout (hooks/lib/mailbox-pending.sh): <key>.md append-only inbox · <key>.seen surfaced
 # watermark · <key>.acked consumed watermark · <key>.forward successor pointer · .<key>.lock dir.
 #
-# Reap ONLY a UUID-shaped per-session box — the measured leak class (39 dead boxes / 1,401
-# unacked). A NAME-keyed box (deskC, PANE-DESK-24) is a durable role inbox and is never reaped by
-# age; it is counted and reported instead.
+# Reap ONLY a per-session box: a UUID key, or a bare NUMERIC key — the pane id, which is the shape
+# every cc-registry row's paneUUID actually has and the key every sender resolves a target to. A
+# NAME-keyed box (deskC, PANE-DESK-24) is a durable role inbox and is never reaped by age; it is
+# counted and reported instead. Numeric keys sat in that bucket until 2026-09-10 (backlog
+# 7a40d116d06c) by accident of a UUID-only regex: 491 pane boxes read as `named` and never aged,
+# although a pane id is RECYCLED by every iTerm2 restart — its mail belongs to one occupant, not to
+# a role. Role pointers name numeric panes too (desk=672), and collect_live keeps every one of them.
 #
 # Two dispositions, because deleting the two cases alike would destroy evidence:
 #   FULLY-ACKED, dead, aged  → delete the triple. Every line was provably consumed by a turn; the
@@ -174,15 +182,34 @@ fi
 #                              deleting it would erase the only proof the comms layer dropped it.
 # `.forward` is NEVER removed: mailbox-pending.sh:44 makes it the D6 tombstone that keeps a
 # forward chain resolvable long after the box it points from is gone.
+#
+# Collision-safe archive of one box's triple. NEVER overwrites: keys recur (a pane id is recycled by
+# every iTerm2 restart; a UUID box can be re-created after a sweep), and a plain `mv -f` into
+# archive/<key>.md writes the new box straight over the evidence an earlier sweep preserved — the
+# stranded mail-v3 GC measured exactly that, 1,461 archived lines destroyed (bc3134596). On any
+# collision the WHOLE triple takes one `~<utc>-<n>` suffix so its files still pair up; `mv -n` is the
+# second brake, against a race between the existence test and the move.
+archive_box() { # <key>
+  local key="$1" dir="$MBX_DIR/archive" sfx='' n=0 ext
+  mkdir -p "$dir" 2>/dev/null || return 0
+  while [ -e "$dir/$key$sfx.md" ] || [ -e "$dir/$key$sfx.seen" ] || [ -e "$dir/$key$sfx.acked" ]; do
+    n=$((n + 1)); sfx="~$STAMP-$n"
+  done
+  for ext in md seen acked; do
+    [ -f "$MBX_DIR/$key.$ext" ] && mv -n "$MBX_DIR/$key.$ext" "$dir/$key$sfx.$ext" 2>/dev/null
+  done
+  return 0
+}
+
 gc_mailbox() {
   local reaped=0 archived=0 kept_live=0 kept_named=0 kept_young=0 kept_unacked=0 locks=0
-  local f key lines acked
+  local f key lines acked sc base ext wpid cursors=0 claims=0
   if [ ! -d "$MBX_DIR" ]; then row mailbox EXEC absent 0 0 "no mailbox dir"; return 0; fi
 
   for f in "$MBX_DIR"/*.md; do
     [ -f "$f" ] || continue
     key=$(basename "$f" .md)
-    if ! [[ "$key" =~ $UUID_RE ]]; then kept_named=$((kept_named + 1)); note "keep(named)   $key"; continue; fi
+    if ! reapable_key "$key"; then kept_named=$((kept_named + 1)); note "keep(named)   $key"; continue; fi
     if is_live "$key"; then kept_live=$((kept_live + 1)); note "keep(live)    $key"; continue; fi
 
     lines=$(wc -l < "$f" 2>/dev/null | tr -d ' '); [ -n "$lines" ] || lines=0
@@ -203,11 +230,7 @@ gc_mailbox() {
       if [ -z "$(find "$f" -maxdepth 0 -mtime +"$MBX_STRAND_DAYS" 2>/dev/null)" ]; then
         kept_unacked=$((kept_unacked + 1)); continue
       fi
-      if [ "$APPLY" -eq 1 ]; then
-        mkdir -p "$MBX_DIR/archive" 2>/dev/null || true
-        mv -f "$MBX_DIR/$key.md" "$MBX_DIR/archive/$key.md" 2>/dev/null || true
-        [ -f "$MBX_DIR/$key.seen" ] && mv -f "$MBX_DIR/$key.seen" "$MBX_DIR/archive/$key.seen" 2>/dev/null
-        [ -f "$MBX_DIR/$key.acked" ] && mv -f "$MBX_DIR/$key.acked" "$MBX_DIR/archive/$key.acked" 2>/dev/null
+      if [ "$APPLY" -eq 1 ]; then archive_box "$key"
       else note "would-archive $key (acked=$acked/$lines, stranded)"; fi
       archived=$((archived + 1))
     fi
@@ -222,8 +245,54 @@ gc_mailbox() {
     locks=$((locks + 1))
   done < <(find "$MBX_DIR" -maxdepth 1 -type d -name '.*.lock' -mmin +"$MBX_LOCK_MIN" 2>/dev/null)
 
-  row mailbox EXEC ok "$((reaped + archived))" "$((kept_live + kept_named + kept_young + kept_unacked))" \
-      "deleted=$reaped archived=$archived locks=$locks kept(live=$kept_live named=$kept_named young=$kept_young unacked=$kept_unacked)"
+  # ── orphan cursors + stale per-session sidecars (backlog 7a40d116d06c) ──────────────────────────
+  # The box loop above iterates *.md, so everything a session leaves BESIDE its box outlived it.
+  # Measured 2026-09-10: 8,083 files against 964 boxes, doubling in a month while this lane reported
+  # reaped=0..9 per six-hour run — 2,029 `.acked` with no `.md` at all (1,895 older than 7 d), 485
+  # `.watching`, 217 `.posttool`, 151 `.wakefloor`. Each kind is removed ONLY where removing it is
+  # observationally a no-op for every reader, which is what makes it safe to run unattended:
+  #   .acked/.seen, no .md  — mailbox_lines is 0 for an absent box and every cursor read clamps to
+  #                            [0, lines] (mailbox-pending.sh mailbox_seen), so any value reads as 0,
+  #                            the same as absence. Most are the 2-byte `0` a turn writes for a
+  #                            session that never got mail. While its .md exists a cursor is the box
+  #                            loop's, and it goes (or is archived) with the box.
+  #   .watching             — trusted only if re-stamped within CC_WATCH_FRESH_S (90 s) AND its pid
+  #                            is alive (mailbox_wake_armed); a days-old one already reads "not armed".
+  #   .posttool             — a post-tool drain throttle stamp, judged by its mtime in seconds.
+  #   .wakefloor            — a Stop-nag budget; absence is a fresh budget, and a dead key has no Stop.
+  #   .watchers/<key>.<pid> — per-pid watcher claims, trusted only while FRESH (cc-await-ping); the
+  #                            pid is also checked, so a recycled pid can only ever cause a KEEP.
+  # Same brakes as the boxes — reapable key shape, not live, older than MBX_DAYS. `.forward` is never
+  # touched (the D6 tombstone). `.sent/` and `.alias/` are NOT this lane's: cc-reaper's announce belt
+  # reads a missing `.sent/<pane>` as a definite "never announced", and `.alias` is the adoption
+  # oracle, pruned only by bin/cc-mailbox-alias-gc against transcript-proven death.
+  while IFS= read -r sc; do
+    [ -n "$sc" ] || continue
+    base="${sc##*/}"; ext="${base##*.}"; key="${base%.*}"
+    reapable_key "$key" || continue
+    is_live "$key" && continue
+    case "$ext" in acked|seen) [ -f "$MBX_DIR/$key.md" ] && continue ;; esac
+    if [ "$APPLY" -eq 1 ]; then rm -f "$sc" 2>/dev/null
+    else note "would-reap    $base (orphan cursor / stale sidecar)"; fi
+    cursors=$((cursors + 1))
+  done < <(find "$MBX_DIR" -maxdepth 1 -type f \( -name '*.acked' -o -name '*.seen' -o -name '*.posttool' \
+             -o -name '*.wakefloor' -o -name '*.watching' \) -mtime +"$MBX_DAYS" 2>/dev/null)
+
+  if [ -d "$MBX_DIR/.watchers" ]; then
+    while IFS= read -r sc; do
+      [ -n "$sc" ] || continue
+      base="${sc##*/}"; wpid="${base##*.}"; key="${base%.*}"
+      case "$wpid" in ''|*[!0-9]*) continue ;; esac
+      is_live "$key" && continue
+      kill -0 "$wpid" 2>/dev/null && continue
+      if [ "$APPLY" -eq 1 ]; then rm -f "$sc" 2>/dev/null
+      else note "would-reap    .watchers/$base (stale claim, dead pid)"; fi
+      claims=$((claims + 1))
+    done < <(find "$MBX_DIR/.watchers" -maxdepth 1 -type f -mtime +"$MBX_DAYS" 2>/dev/null)
+  fi
+
+  row mailbox EXEC ok "$((reaped + archived + cursors + claims))" "$((kept_live + kept_named + kept_young + kept_unacked))" \
+      "deleted=$reaped archived=$archived cursors=$cursors claims=$claims locks=$locks kept(live=$kept_live named=$kept_named young=$kept_young unacked=$kept_unacked)"
 }
 
 # ══ EXEC · watchdog ═══════════════════════════════════════════════════════════════════════════
