@@ -3686,10 +3686,21 @@ _reland_title() { printf 're-land %s: ship-land could not complete and its autho
   # without a full failing land, so assert the emitted title's SHAPE at the call site.
   # ANCHORED ON THE TOKEN, NOT ON A COLUMN. This used to require exactly four leading spaces, so
   # wrapping the call in an argument array — a pure reformat — turned it RED and it read as the
-  # title regressing (memory: exact-count-assertion-tripwires-its-own-subject). `"re-land ` occurs
-  # exactly once in the file and comments open with `#`, so leading whitespace is the only degree
-  # of freedom worth giving up.
-  run sed -n '/^[[:space:]]*"re-land /p' "$SHIPLAND"
+  # title regressing (memory: exact-count-assertion-tripwires-its-own-subject).
+  #
+  # AND IT HAPPENED A SECOND TIME, to the loosened form (2026-09-09). `^[[:space:]]*"re-land `
+  # still required the QUOTE to be the first non-blank character, so when 52f26caf6 — the very
+  # commit the sibling case above pins — moved the string into `rtitle="re-land …`, the sed matched
+  # nothing, `[ -n "$output" ]` failed, and a green title read as a regression. The case had been
+  # red on trunk ever since. A shape assertion whose anchor encodes an ASSIGNMENT'"'"'S LAYOUT is a
+  # tripwire on its own subject, which is exactly what the note above says and what the fix then
+  # re-introduced one degree of freedom higher up.
+  #
+  # So drop the layout entirely and give up the other assumption instead. The old note reasoned
+  # that `"re-land ` "occurs exactly once in the file and comments open with #" — the first half is
+  # no longer true (ship-land.sh:1101 now names both of these test cases in a comment), so the
+  # comment lines are DELETED first and the token is matched wherever it sits.
+  run sed -n '/^[[:space:]]*#/d; /"re-land /p' "$SHIPLAND"
   [ "$status" -eq 0 ]
   [ -n "$output" ]
   [[ "$output" != *'REPO_ROOT'* ]] || { echo "sandbox path is back in the title: $output"; false; }
