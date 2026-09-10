@@ -86,10 +86,18 @@ until a human logged in. So on a cliff:
    dispatch (`{ts, action, unit, note}`); respect the transplant lock (one recovery owner per
    session uuid). If the limit re-hits mid-recovery, the next invocation re-derives everything
    from ledger + disk.
-7. **Never push / ship / deploy from a recovery.** Task-clean local commits are allowed; landing
-   is the user's explicit call. This is a DELIBERATE exception to § Session Close Protocol's
-   ship policy (which auto-`/ship`s outside reso): a recovery runs on reconstructed, not
-   observed, state — exactly the condition under which an automatic land is least trustworthy.
+7. **Never land a RECOVERED session's work on its behalf.** Its commits were made on
+   reconstructed state; they stay on their branch for that session (or its successor) to finish
+   and land. Code THIS session writes and verifies — a fix to the recovery machinery itself, with
+   its tests run green this turn — lands via `/ship` under the ordinary ship policy, without
+   asking. *(Revised 2026-09-10. The old rule — "never push / ship / deploy from a recovery;
+   landing is the user's explicit call" — covered both cases, so a verified two-line poller fix
+   that six limited panes were waiting on sat unlanded behind an operator "yes" for two hours
+   while every Stop hook said to drive it. The operator's verdict: "why do you even need my yes?")*
+   **Reversible choices are taken, never asked.** Holding one expensive session out of the
+   auto-resume, staggering re-runs, or deferring a workflow re-run are undoable in one command:
+   take the safe one, name it in the report, and say how to reverse it. Ask only for a choice
+   that cannot be undone.
 
 ## Step 0 — ground truth (every mode, before any judgment)
 
@@ -364,7 +372,7 @@ no orphan, no ambiguity about which pane is which*). Script: `scripts/limit-reco
    `self-close --transplanted-source --source-pane <stale> --source-session <sid> --successor <live
    pane>` retires it — the class admits a same-account tombstone iff its successor pid is alive.
 
-Iron rules 1-7 bind unchanged: the fleet never pushes, ships or deploys; every verdict is a disk
+Iron rules 1-7 bind unchanged: the fleet never lands a recovered session's work; every verdict is a disk
 read; a PARTIAL is reported as PARTIAL. The reset poller is the daemon half of the same design:
 registry-based liveness (a live original pane is NUDGED in place, never re-spawned), transplanted
 records retired as such, visible runner-rooted kitty windows via the resolved socket, tier carried
