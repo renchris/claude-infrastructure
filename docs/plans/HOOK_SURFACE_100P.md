@@ -536,7 +536,7 @@ the binary and invocation mode that produced the verdict. Commands: § 3a, keyed
 | 9 | `SessionEnd` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` **and** `--init-only` | *wired* |
 | 10 | `Stop` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` | *wired* |
 | 11 | `StopFailure` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p`, unauthenticated | **WIRE** |
-| 12 | `SubagentStart` | ✓ / ✓ | FIRES | 220 · headless `-p` | consider |
+| 12 | `SubagentStart` | ✓ / ✓ | FIRES | 220 · headless `-p` | **DROP** (was *consider* — see below, 2026-09-10) |
 | 13 | `SubagentStop` | ✓ / ✓ | FIRES | 220 · headless `-p` | **WIRE** |
 | 14 | `PreCompact` | ✓ / ✓ | FIRES | 114 · headless `-p` (`/compact`) | *wired* |
 | 15 | `PostCompact` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` (`--resume` + `/compact`) | **WIRE** |
@@ -544,7 +544,7 @@ the binary and invocation mode that produced the verdict. Commands: § 3a, keyed
 | 17 | `PermissionDenied` | ✓ / ✓ | FIRES | **114 + 220** · headless `-p`, `--permission-mode auto` | **WIRE** |
 | 18 | `Setup` | ✓ / ✓ | FIRES | 114 + 220 · `--init-only` (no model call) | **DROP** |
 | 19 | `TeammateIdle` | ✓ / ✓ | FIRES | 220 · interactive, production (27,986 dispatches) | *wired* |
-| 20 | `TaskCreated` | ✓ / ✓ | FIRES | 220 · headless `-p` (`TaskCreate` tool) | **DROP** |
+| 20 | `TaskCreated` | ✓ / ✓ | FIRES | 220 · headless `-p` (`TaskCreate` tool) | **WIRE** (was DROP — superseded by `migrations/0023`, staged; see below) |
 | 21 | `TaskCompleted` | ✓ / ✓ | FIRES | 220 · headless `-p` (`TaskUpdate` tool) | *wired* |
 | 22 | `Elicitation` | ✓ / ✓ | FIRES | **114 + 220** · headless `-p`, purpose-built MCP server | **PROHIBITION** (decider only — an observer is mechanically inert, `H$o` @237818083) |
 | 23 | `ElicitationResult` | ✓ / ✓ | FIRES | **114 + 220** · headless `-p`, same runs | **PROHIBITION** (decider only — same three guards) |
@@ -601,6 +601,29 @@ the binary and invocation mode that produced the verdict. Commands: § 3a, keyed
 - **`Setup` DROP — confirmed, and now from a run on both binaries** rather than an inference.
   Side-benefit worth reusing: `--init-only` fires Setup + SessionStart + SessionEnd with **no model
   call**, making it the cheapest positive control available to any future probe.
+- **`SubagentStart` consider → DROP (2026-09-10, backlog `8439a41639b3`, conviction 92%).** Row 12 was
+  the ledger's last non-disposition: *consider* is not one of this section's four tokens. As an
+  **observer** it is redundant, and that is measured rather than argued: a subagent's transcript
+  (`<project>/<parent-sid>/subagents/agent-<id>.jsonl`) is born at spawn — file birth time equals its
+  first record's `timestamp`, +0 s on 12 of 12 recent transcripts — so the start is already on disk, and
+  `SubagentStop` carries the `agent_id` + `agent_transcript_path` that join it to the stop
+  (`hooks/subagent-stop.sh` v2). *"Started but never stopped"* — the agent-report-recovery case that
+  `docs/research/function-hooks-91870-2026-09-03.md` mapped to this event — is therefore a join of
+  transcripts on disk against `research-artifacts/subagent-reports.log`, not a new event. The one
+  capability an observer cannot replicate is injecting `additionalContext` **into** the subagent, which
+  is decider-class and has no consumer asking for it. Re-open only when a consumer names what it would
+  inject. The residual 8%: a subagent killed before its first transcript write leaves no file, and
+  whether SubagentStart's hook would run before that write is unmeasured.
+- **`TaskCreated` DROP → WIRE — superseded, not re-measured.** `migrations/0023-todo-tools-and-task-hooks.sh`
+  (`55896d1e7`) wires it to `hooks/task-created-attrib.sh` for a reason this ledger never weighed: its
+  payload carries `session_id` and `task_id` in one object, the attribution join the Shared Task List has
+  no other field for. Staged (`c10`), not live.
+- **Live-state check, 2026-09-10 — row 13 `SubagentStop` is WIRE on paper and registered in 0 of 5 config
+  dirs.** Its registration is `migrations/0014-subagent-stop-registration.sh`, staged since 2026-08-17
+  (operator row `296cc04bc3fd`). Re-run that day against a sandbox copy of all five `settings.json`
+  (`HOME=<scratch>`): registered 5/5, a second run printed `already registered` 5/5, the header's
+  `migration-verify` line passed 5/5, and every `Stop`/`PreToolUse` array came through with its original
+  length. No agent work remains on it — it goes live when an operator runs 0014.
 
 ### The four highest-value unknowns — three RESOLVED, one partly
 
