@@ -243,8 +243,10 @@ spawn; the `agent-teams-enforce` PreToolUse hook also points to it on every Agen
 
 Research subagents (no `team_name`, fire-and-forget) are disjoint from Agent
 Teams; teammates write code, subagents never do. No parallelism cap;
-decomposition determines count, not the reverse. Default N=12 for typical
-complex research; sensitivity table in the **research-subagents** skill. Use the custom
+decomposition determines count, not the reverse. Default N=10 (anchor band 8–12) for typical
+complex research — the 12 this line carried until 2026-09-09 was a 2026-06-06 import with no
+rationale, while the skill's 10 is derived (P(≥1 contaminated synthesis input) = 40% at N=10 vs 64% at
+N=20) and is the number `/research` and the `research-precognition-nudge` hook actually enforce; sensitivity table in the **research-subagents** skill. Use the custom
 `deep-research` subagent (`~/.claude/agents/deep-research.md`) when depth is
 warranted (BUT: nested fan-out is off — and **WE** hold it off, deliberately.
 `~/.zshrc:484` exports `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, which is the
@@ -256,6 +258,14 @@ Claude Code / recursion permission is aspirational" — a product attribution th
 was written when depth 1 was still the product DEFAULT and could not tell "cannot"
 from "configured not to". Full record: Regression notes in `deep-research.md`).
 Use `Explore` for fast terminal codebase lookups.
+
+**Venue rule for the fan-out itself** (measured, `docs/research/workflows-vs-teams-2026-08-20.md` §3;
+ratified 2026-09-09 after the exhaustive-drive audit): a read-only fan-out of **≥ ~8 same-shaped,
+self-verifying units** — the shape of a research wave — runs as a **Dynamic Workflow** (the only surface
+with per-slot `effort`, deterministic skeptic/critic stages and schema'd returns; headless `-p` sessions
+have the tool, research subagents do not); an **implementation** wave or phase stays a dispatched
+session, which buys the lead's context window. The A06 cost figure (1.7× quota per unit) compares
+units of different work and does not overturn this.
 
 Per-subagent depth target: **150-250K tokens, hard ceiling 500K** (the prior
 "500-800K" range landed in empirically-degraded context). See
