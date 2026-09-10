@@ -378,12 +378,15 @@ versions:
 #      `claude-bump-models --apply` is a deliberate NO-OP here and must stay unrun until its
 #      unanchored sed is fixed — see the prefix hazard above; its effective target set contains
 #      no Fable id, so it has nothing to do and everything to corrupt.
-#   5. ⏳ OPEN — the only remaining item. RE-SWEEP effort (see effort_defaults § fable51).
-#      Anthropic is explicit that effort level
+#   5. ✅ DONE 2026-09-10 — effort RE-SWEPT on 5.1 (cc-backlog d98bf0055818; record + re-derivation:
+#      docs/research/fable51-effort-sweep-2026-09-10/README.md). Outcome in effort_defaults
+#      § fable51: capability_sensitive xhigh → high (no recall gain at 2.5× the cost), the other
+#      three kept and each annotated with its measurement.
+#      [HISTORY — why it was open:] Anthropic is explicit that effort level
 #      names do NOT correspond to the same amount of thinking across models — the Fable 5 sweep
 #      does not transfer, exactly as the Opus 4.8 → Opus 5 sweep did not. The fable51_* keys
-#      below are LABELLED STARTING POINTS carried over from Fable 5; no probe has run against
-#      5.1. Until one does, they are an assumption wearing a measurement's clothes.
+#      below were LABELLED STARTING POINTS carried over from Fable 5; no probe had run against
+#      5.1, so they were an assumption wearing a measurement's clothes.
 # STATUS: Fable 5.1 IS frontier_latest and every Fable role routes to it. Fable 5 stays Active
 # upstream and remains accepted wherever a session pins it explicitly.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -832,11 +835,32 @@ effort_defaults:
   # retrieval tools LESS (add a verification nudge for anything needing fresh information), and
   # at `xhigh`/`max` it thinks longer before a long deliverable (leave max_tokens headroom or it
   # truncates). These are STARTING POINTS to sweep from, not measured optima — no probe has run.
-  fable51_default: high                     # 5.1's own API default and Anthropic's start point
-  fable51_capability_sensitive: xhigh       # derivation panels, security/arch judgment
-  fable51_routine: medium                   # ≈ Fable 5 quality at lower cost
-  fable51_cheap: low                        # NEW TIER — competitive with Opus/Sonnet on cost/task;
-                                            # pair with a search nudge (low suppresses retrieval)
+  # ✅ MEASURED 2026-09-10 (cc-backlog d98bf0055818) — the sentence above is now HISTORY. 45 isolated
+  # cells, 5.1 @ low..max over the frozen codex-probe corpus (36 anchored defects), blind 3-judge
+  # anchored scoring, cost read per cell. Strict-majority recall: low 6 · medium 10 · high 10 ·
+  # xhigh 9 · max 9/25 measured · (Fable 5 @xhigh 9 · Opus 5 @max 12). Record + re-derivation:
+  # docs/research/fable51-effort-sweep-2026-09-10/README.md. Scope limit: ONE task class (anchored
+  # security/code review of a single file), one sample per cell, recall only.
+  fable51_default: high                     # 10/36 — ties medium (10/36) at 1.5× medium's cost. KEPT:
+                                            # medium is a candidate free win for the default, NOT
+                                            # certified (one sample per cell; recall-only, so T1's
+                                            # fabrication-at-reduced-effort axis was not measured).
+  fable51_capability_sensitive: high        # WAS xhigh. xhigh 9/36 vs high 10/36 (paired 8 v 9,
+                                            # unanimous 8 v 8 — high ≥ xhigh at EVERY vote threshold) at
+                                            # 2.5× the cost, and 3 of 9 xhigh cells ran past a 64K output
+                                            # cap (one finished 536 tokens short of the recovery limit).
+                                            # Freewin rule: tie + cheaper ⇒ adopt. Derivation panels
+                                            # (generative, not anchored review) are the one class this
+                                            # did not cover — re-probe there before restoring xhigh.
+  fable51_routine: medium                   # 10/36 — ≈ high, and ABOVE Fable 5 @xhigh (9/36): Anthropic's
+                                            # "medium ≈ Fable 5 at lower cost" reproduced, measured.
+  fable51_cheap: low                        # 6/36 — the lowest arm at EVERY threshold (−4 vs medium). A
+                                            # cost tier, NOT a free win: keep it off grounding-heavy
+                                            # review; pair with a search nudge (low suppresses retrieval)
+  # max is NOT a key and must not become one on this evidence: = high on recall (paired 9/25) at ~2×
+  # xhigh's cost; under a 64K output cap it ran past the cap in 4 of 6 finished cells and on the
+  # largest brief produced NO review at all ("response exceeded the 64000 output token maximum",
+  # 256K tokens, $15.16). Any xhigh/max Fable 5.1 run needs CLAUDE_CODE_MAX_OUTPUT_TOKENS well above 64K.
   # Opus 5 SURFACES (on adoption) follow their OWN ladder — do NOT inherit default:max.
   # Anthropic migration guide + Opus 5 system card: `high` is Opus 5's default; `max` is
   # "prone to overthinking" and shows self-correction / re-verification loops at high effort

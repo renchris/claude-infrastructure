@@ -389,9 +389,9 @@ with `HANDOFF_ACCOUNT_SWEEP=off`. Run it standalone any time with `handoff-fire.
 | ultracode / Dynamic Workflows lead | *(none)* + `ultracode` keyword in the payload | same `opus_latest` @ default effort — the keyword changes ORCHESTRATION, not effort; workflow slots pin their own per-agent model/effort (`workflow_judge`, `workflow_synthesis_worker`) |
 | Bounded verify / judge-only session | `--effort xhigh` | Opus @ xhigh (`verify_judge` — ties max at lower cost ONLY for bounded-grounding work) |
 | Fable frontier (derivation panels, judgment) | `--model fable --probe` | `frontier_access.model` @ **high** (`fable51_default` — NOT max: Fable@high ≈ Opus@max; max over-deliberates + burns the window) |
-| Fable capability-sensitive (security/arch judgment) | `--model fable --effort xhigh --probe` | `frontier_access.model` @ xhigh (`fable51_capability_sensitive`) |
-| Fable routine | `--model fable --effort medium --probe` | `frontier_access.model` @ medium (`fable51_routine`) |
-| Fable cheap (NEW tier at 5.1) | `--model fable --effort low --probe` | `frontier_access.model` @ low (`fable51_cheap` — 5.1 at low is competitive with Opus/Sonnet on cost-per-task) |
+| Fable capability-sensitive (security/arch judgment) | `--model fable --probe` | `frontier_access.model` @ **high** (`fable51_capability_sensitive` — was xhigh until the 2026-09-10 re-sweep: xhigh found no more defects than high at 2.5× the cost, and ran past a 64K output cap on 3 of 9 briefs) |
+| Fable routine | `--model fable --effort medium --probe` | `frontier_access.model` @ medium (`fable51_routine` — measured ≈ high, and above Fable 5 @xhigh) |
+| Fable cheap (NEW tier at 5.1) | `--model fable --effort low --probe` | `frontier_access.model` @ low (`fable51_cheap` — cheapest per task, but measured the LOWEST recall of any effort on grounding-heavy review; not for that work) |
 
 ⚠️ **The right-hand column names SSOT KEYS, not models, deliberately** — a routing claim that spells a
 model out has no path to learn the tier moved, which is how the Fable rows above came to say "Fable 5"

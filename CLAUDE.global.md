@@ -374,8 +374,9 @@ scannable answer — and let it use a table or a list where that is genuinely th
 5.1 failure is the mirror image: an answer compressed past readability, which Anthropic's own
 guidance already names — *"being readable and being concise are different things, and readable
 matters more."* Two further 5.1 deltas bind on mechanism rather than prose: **fewer progress updates
-during long tool runs, more pronounced at higher effort**, so a `fable51_capability_sensitive`
-(xhigh) pane goes quiet while genuinely working and quiet is what our stall/liveness surfaces read
+during long tool runs, more pronounced at higher effort**, so a Fable 5.1 pane at xhigh (an explicit
+`--effort xhigh` — the ladder's `fable51_capability_sensitive` is `high` since the 2026-09-10
+re-sweep) goes quiet while genuinely working and quiet is what our stall/liveness surfaces read
 as stuck; and **whole-file rewrites for small edits**, which makes § File Update Rule
 (INTEGRATE-never-overwrite) and its `backup-before-write` OVERWRITE GUARD *more* load-bearing on
 5.1, not less.
