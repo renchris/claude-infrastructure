@@ -4652,6 +4652,24 @@ live_teammates_of() { # $1=CC session id -> "<name>\t<pid>" lines
 #     A forged terminal status marks a LIVE agent finished, and the gate then admits the recycle that
 #     kills it — reconstructing the exact silent loss this exists to prevent. The predicate below can
 #     only ever fail the other way.
+#     🚨 CORRECTED 2026-09-10 (cc-backlog 38eb59b0caed) — the objection is TRUE OF A SUBSTRING SCAN and
+#     FALSE OF A STRUCTURAL ONE, and the end_turn predicate it was traded for stopped working. Measured
+#     over 483 recent subagent transcripts: 241 (50%) never write "end_turn" at all — on 2.1.260, 112
+#     of 136 — because the final answer turn is flushed ONLY as `"stop_reason":null` partials and never
+#     rewritten. So every research fan-out read IN FLIGHT forever: session b1140d32 (2026-09-04) had 3
+#     agents deliver completed notifications, TaskStop answered "No task found" for each, and this gate
+#     still exited 4, with waiting-recycle re-paging every 900s against a refusal nothing could clear.
+#     THE FORGERY CANNOT REACH A STRUCTURAL MATCH, and the reason is JSON escaping, not care: every byte
+#     a tool (or a subagent's result text) contributes to the transcript sits INSIDE a JSON string, so
+#     its quotes arrive as `\"`. A key such as `"origin":{"kind":"task-notification"}` with BARE quotes
+#     can only be written by the harness's own serializer. subagent_stops_of below matches a record only
+#     when it carries one of those bare harness keys AND its content string OPENS with the task id —
+#     the Bash call that forged the scan above produces neither. Measured: 407 of the 483 have such a
+#     record, and for all 407 the agent's last write precedes it (0 violations) — which is also what
+#     retires the one false-admit the stop record could otherwise cause, a RESUMED agent (the harness
+#     note says an agent "may notify more than once"): a record written AFTER its last stop is live.
+#     end_turn stays as the fallback for an agent with no stop record (a foreground agent, a binary
+#     that predates the record), so nothing this predicate admitted before is refused now.
 # THE DIRECTION IS THE WHOLE ARGUMENT. This gate's failure budget is spent on over-refusing, never on
 # under-refusing: a false refusal costs one flag and is visible in the same breath, while a false
 # admit is unobservable by construction — nothing downstream ever learns the subagent existed.
@@ -4665,16 +4683,55 @@ live_teammates_of() { # $1=CC session id -> "<name>\t<pid>" lines
 # end_turn, so it reads in-flight forever and this gate over-refuses. That is the safe side — the
 # refusal NAMES each agent and its description, so an operator can see which one is the corpse — and
 # the override is one flag away. The opposite error is the one that cost the incident.
+# The harness's own STOP records for this session's subagents, from the PARENT transcript
+# (…/projects/<slug>/<sid>.jsonl) → "<task-id>\t<timestamp>" per record. Three measured forms carry
+# one: a user record with `"origin":{"kind":"task-notification"}` (delivered at a turn boundary), and a
+# `queue-operation` enqueue plus a `queued_command` attachment (delivered MID-turn). The grep keeps only
+# lines holding a BARE harness key; the awk then requires the content/prompt STRING to open with the
+# task id. Both halves are needed — a tool's output can open a content string with a forged id, but it
+# cannot put an unescaped key on its line (see the CORRECTED note above). The first bare "timestamp" on
+# such a line is the record's own. jq-free, like everything else on this path.
+subagent_stops_of() { # $1=parent transcript → "<task-id>\t<ts>" lines
+  local _t="${1:-}"
+  [ -n "$_t" ] && [ -f "$_t" ] || return 0
+  grep -F -e '"origin":{"kind":"task-notification"}' -e '"type":"queue-operation"' \
+       -e '"type":"queued_command"' "$_t" 2>/dev/null \
+    | awk 'match($0, /"(content|prompt)":"<task-notification>\\n<task-id>[A-Za-z0-9_-]+<\/task-id>/) {
+             id = substr($0, RSTART, RLENGTH); sub(/.*<task-id>/, "", id); sub(/<\/task-id>$/, "", id)
+             ts = ""
+             if (match($0, /"timestamp":"[0-9][0-9:.TZ-]*"/)) ts = substr($0, RSTART + 13, RLENGTH - 14)
+             print id "\t" ts
+           }' || true
+}
+
 live_subagents_of() { # $1=transcript dir (…/projects/<slug>/<sid>) → "<id>\t<description>\t<path>"
-  local _d="${1:-}" _m _id _j _stop _desc
+  local _d="${1:-}" _m _id _j _stop _desc _stops _nts _ats
   [ -n "$_d" ] && [ -d "$_d/subagents" ] || return 0
+  _stops="$(subagent_stops_of "$_d.jsonl")"
   for _m in "$_d"/subagents/agent-*.meta.json; do
     [ -f "$_m" ] || continue                       # unmatched glob
     _id="${_m##*/agent-}"; _id="${_id%.meta.json}"
     _j="$_d/subagents/agent-$_id.jsonl"
     [ -f "$_j" ] || continue                       # meta with no transcript: nothing to lose or read
-    _stop=$(grep -o '"stop_reason":"[a-z_]*"' "$_j" 2>/dev/null | tail -1) || true
-    case "$_stop" in *'"end_turn"') continue ;; esac
+    # PRIMARY: the harness recorded a stop, and the agent has written NOTHING since. The latest stop
+    # record wins; the agent's LATEST timestamp is taken as a max over every bare one in its file, so
+    # a stray nested value can only push it later — toward IN FLIGHT, the safe side.
+    _nts=""; _ats=""
+    [ -z "$_stops" ] || _nts=$(printf '%s\n' "$_stops" \
+      | awk -F '\t' -v id="$_id" '$1 == id && $2 > m { m = $2 } END { print m }')
+    if [ -n "$_nts" ]; then
+      _ats=$(grep -o '"timestamp":"[^"]*"' "$_j" 2>/dev/null | awk '$0 > m { m = $0 } END { print m }') || true
+      _ats="${_ats#\"timestamp\":\"}"; _ats="${_ats%\"}"
+    fi
+    if [ -n "$_nts" ] && [ -n "$_ats" ]; then
+      awk -v a="$_ats" -v n="$_nts" 'BEGIN { exit !(a <= n) }' && continue
+      # Written AFTER its last stop = RESUMED and live again. Deliberately NOT handed to the end_turn
+      # fallback: an old end_turn is exactly what a resumed agent still carries.
+    else
+      # FALLBACK (no stop record, or no timestamps to order by): the original end_turn predicate.
+      _stop=$(grep -o '"stop_reason":"[a-z_]*"' "$_j" 2>/dev/null | tail -1) || true
+      case "$_stop" in *'"end_turn"') continue ;; esac
+    fi
     # `awk 'NR<=1'`, never `head -1`: under `set -o pipefail` an early-exit consumer SIGPIPEs the
     # producer, and the pipeline's status becomes the producer's death — so the command reads FALSE
     # exactly when it MATCHED. awk drains instead of exiting (pipefail-sigpipe ratchet).
