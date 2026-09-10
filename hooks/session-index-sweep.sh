@@ -212,6 +212,56 @@ if [ "$SESSION_INDEX_RETENTION_DAYS" -gt 0 ] 2>/dev/null; then
     fi
 fi
 
+# ─── History union refresh (self-damped; no new launchd job) ───
+# Same reasoning as the retention block above, and the same shape. The prompt history the index
+# gap-fills from is per-account; bin/cc-history-union merges all four copies into one
+# timestamp-sorted file that lib/session-index-helpers.sh then hands to CLAUDE_HISTORY. The
+# consumer of that file is `session-index-backfill.sh`, which lives in the SEPARATE
+# claude-session-search repo and runs weekly from its own plist — so refreshing the union here is
+# what keeps this feature inside one repo instead of half in each, and an hourly rebuild against a
+# weekly reader means the union is at most an hour behind whenever that reader runs.
+# Cost is one pass over ~26 MB (measured 0.5 s for 35,806 records), which is why it is damped to
+# the hour rather than run on the 60 s tick. CC_HISTORY_UNION_MINUTES=0 disables it.
+CC_HISTORY_UNION_MINUTES="${CC_HISTORY_UNION_MINUTES:-60}"
+HISTORY_UNION_STAMP="${CC_HISTORY_UNION_STAMP:-$HOME/.claude/state/history-union.last}"
+if [ "$CC_HISTORY_UNION_MINUTES" -gt 0 ] 2>/dev/null; then
+    _hu_bin=""
+    if [ -x "$HOME/.claude/bin/cc-history-union" ]; then
+        _hu_bin="$HOME/.claude/bin/cc-history-union"
+    elif [ -x "${SESSION_SEARCH_REPO:-}/bin/cc-history-union" ]; then
+        _hu_bin="$SESSION_SEARCH_REPO/bin/cc-history-union"
+    fi
+    if [ -n "$_hu_bin" ]; then
+        _hu_due=0
+        if [ ! -f "$HISTORY_UNION_STAMP" ]; then
+            _hu_due=1
+        elif [ -n "$(find "$HISTORY_UNION_STAMP" -maxdepth 0 -mmin +"$((CC_HISTORY_UNION_MINUTES - 1))" 2>/dev/null)" ]; then
+            _hu_due=1
+        fi
+        if [ "$_hu_due" -eq 1 ]; then
+            mkdir -p "$(dirname "$HISTORY_UNION_STAMP")" 2>/dev/null || true
+            date -u +"%Y-%m-%dT%H:%M:%SZ" > "$HISTORY_UNION_STAMP" 2>/dev/null || true
+            # The verdict is LOGGED rather than discarded: a `|| true` here would turn every
+            # failed rebuild into a silent no-op and the union would rot with nothing to read.
+            # KEEP the tool's own verdict on failure and append the rc, rather than replacing it:
+            # "verdict=no-sources" and "verdict=out-is-a-source" are different incidents with
+            # different fixes, and a bare "rc=1" collapses them into one unreadable line.
+            if _hu_verdict="$("$_hu_bin" 2>&1 | tail -1)"; then :; else
+                _hu_verdict="${_hu_verdict:-verdict=no-output} rc=$?"
+            fi
+            session_index_log "History union: $_hu_verdict"
+            # Consume it in the same damped window. The union is only worth building if something
+            # indexes it, and the script that used to (session-index-backfill.sh phases 2-3) has
+            # exited 1 on its launchd path since before this was written — see the header on
+            # session_index_history_gapfill for the measurement.
+            if _gf_verdict="$(session_index_history_gapfill 2>&1 | tail -1)"; then :; else
+                _gf_verdict="${_gf_verdict:-verdict=no-output} rc=$?"
+            fi
+            session_index_log "History gap-fill: $_gf_verdict"
+        fi
+    fi
+fi
+
 # ─── Log only when work was done ──────────────────────────
 if [ "$WORK_DONE" -gt 0 ]; then
     if [ "$SKIPPED_BY_CAP" -gt 0 ]; then

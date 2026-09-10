@@ -17,7 +17,24 @@
 SESSION_INDEX_DB="${SESSION_INDEX_DB:-$HOME/.claude/session-index.db}"
 SESSION_INDEX_LOG="${SESSION_INDEX_LOG:-$HOME/.claude/logs/session-index.log}"
 CLAUDE_PROJECTS_DIR="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
-CLAUDE_HISTORY="${CLAUDE_HISTORY:-$HOME/.claude/history.jsonl}"
+# The prompt log is per-account — `history.jsonl` is named in every _CC_ISOLATE set in
+# lib/config-mirror.zsh — so account 1's copy is a QUARTER of what was actually asked on this box.
+# Measured 2026-09-09: 14,966 prompts and 1,614 otherwise-unindexed sessions sat in
+# .claude-secondary / -tertiary / -quaternary, reachable from here by no path at all.
+# bin/cc-history-union builds the timestamp-sorted union of every account's copy (a union and not a
+# symlink: history.jsonl is a single append-only FILE, so linking it would discard the three
+# non-canonical copies outright). Prefer that union when it exists and is non-empty; otherwise fall
+# back to account 1's own file, so a box where the union has never been built behaves exactly as it
+# did before and never worse. An explicit CLAUDE_HISTORY outranks both — that is the seam a
+# rehearsal run uses to point at a fixture.
+CLAUDE_HISTORY_UNION="${CLAUDE_HISTORY_UNION:-$HOME/.claude/history-union.jsonl}"
+if [ -n "${CLAUDE_HISTORY:-}" ]; then
+    :
+elif [ -s "$CLAUDE_HISTORY_UNION" ]; then
+    CLAUDE_HISTORY="$CLAUDE_HISTORY_UNION"
+else
+    CLAUDE_HISTORY="$HOME/.claude/history.jsonl"
+fi
 
 # Resolve repo root (follows symlink if helpers are symlinked from ~/.claude/hooks/)
 _helpers_real=$(readlink "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")
@@ -408,6 +425,126 @@ INSERT INTO sessions_fts (session_id, summary, first_prompt, tags, keywords, pro
     SELECT session_id, summary, first_prompt, tags, keywords, project_name, context_text, assistant_text, files_changed, commands_run, search_aliases
     FROM sessions WHERE session_id = '$sid_escaped';
 SQL
+}
+
+# ─── History gap-fill (the union's consumer) ──────────────
+# Indexes sessions that appear in the prompt history but in no transcript this box can still read.
+#
+# WHY THIS LIVES HERE AND NOT IN THE BACKFILL. `session-index-backfill.sh` owns the equivalent
+# phases 2 and 3, and it is a symlink into the SEPARATE claude-session-search repo — the same
+# reason the weekly retention pass was wired into the sweep rather than into that script. It is
+# also, as of 2026-09-09, DEAD on the path launchd actually invokes: the plist runs
+# `~/.claude/bin/session-index-backfill.sh`, whose line 13 sources `$SCRIPT_DIR/lib/progress-ui.sh`
+# — a path that resolves to ~/.claude/bin/lib/ and does not exist — so every scheduled run has
+# exited 1 before reaching any phase. `~/.claude/logs/backfill-scheduled.log` holds that one error
+# and nothing else, which is why the index carries zero rows with source='history'.
+#
+# ONLY MISSING SESSIONS ARE INSERTED. An id already in the table is left exactly as it is, so this
+# can never downgrade a transcript-derived row — and it does not lean on the ON CONFLICT ladder in
+# session_index_upsert to protect it (that ladder does rank 'history' lowest, alphabetically below
+# every other source, but not touching the row at all is the stronger guarantee).
+#
+# KEYWORDS ARE LEFT EMPTY, DELIBERATELY. session_index_extract_keywords forks grep and optionally
+# YAKE per row; over ~1,600 rows that is minutes with the index lock held. The prompt text goes
+# into first_prompt, which is FTS column 2, so the row is findable by what was asked — and when the
+# transcript is later swept, source='session-sweep' outranks 'history' and the richer row wins.
+#
+# The whole pass is ONE python3 process and ONE transaction: reading 35,806 history records and
+# inserting the missing sessions row-at-a-time through the bash upsert would be ~1,600 sqlite3
+# forks on a tick that holds the lock.
+session_index_history_gapfill() {
+    SESSION_INDEX_DB="$SESSION_INDEX_DB" CLAUDE_HISTORY="$CLAUDE_HISTORY" python3 <<'GAPFILL_PY'
+import json
+import os
+import sqlite3
+import sys
+from datetime import datetime, timezone
+
+db_path = os.environ["SESSION_INDEX_DB"]
+hist_path = os.environ["CLAUDE_HISTORY"]
+
+if not os.path.isfile(hist_path):
+    print(f"verdict=no-history candidates=0 inserted=0 history={hist_path}")
+    sys.exit(0)
+if not os.path.isfile(db_path):
+    print(f"verdict=no-db candidates=0 inserted=0 db={db_path}")
+    sys.exit(0)
+
+# Earliest record per session is the first prompt; latest is the modified time.
+first, last, count, unparseable = {}, {}, {}, 0
+with open(hist_path, encoding="utf-8", errors="replace") as fh:
+    for line in fh:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            unparseable += 1
+            continue
+        if not isinstance(rec, dict):
+            unparseable += 1
+            continue
+        sid = rec.get("sessionId") or ""
+        proj = rec.get("project") or ""
+        # No session id means no key to index on, and no project means no row worth writing.
+        if not sid or not proj:
+            continue
+        ts = rec.get("timestamp")
+        if not isinstance(ts, (int, float)) or isinstance(ts, bool):
+            continue
+        count[sid] = count.get(sid, 0) + 1
+        if sid not in first or ts < first[sid][0]:
+            first[sid] = (ts, rec.get("display") or "", proj)
+        if sid not in last or ts > last[sid]:
+            last[sid] = ts
+
+conn = sqlite3.connect(db_path)
+conn.execute(f"PRAGMA busy_timeout = {os.environ.get('SESSION_INDEX_BUSY_TIMEOUT', '5000')}")
+have = {r[0] for r in conn.execute("SELECT session_id FROM sessions")}
+missing = [s for s in first if s not in have]
+
+
+def iso(ms):
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+now = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+rows = []
+for sid in missing:
+    ts, display, proj = first[sid]
+    rows.append(
+        (sid, proj, os.path.basename(proj.rstrip("/")) or proj, "", display, "",
+         iso(ts), iso(last.get(sid, ts)), count.get(sid, 1), "", "", "history", now)
+    )
+
+inserted = 0
+if rows:
+    with conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO sessions (session_id, project_path, project_name, summary,"
+            " first_prompt, git_branch, created_at, modified_at, message_count, tags, keywords,"
+            " source, indexed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            rows,
+        )
+        # sessions_fts has no triggers on this schema — it is synced explicitly, exactly as
+        # session_index_upsert_with_fts does for the single-row hook path.
+        conn.executemany(
+            "INSERT INTO sessions_fts (session_id, summary, first_prompt, tags, keywords,"
+            " project_name, context_text, assistant_text, files_changed, commands_run,"
+            " search_aliases) SELECT session_id, summary, first_prompt, tags, keywords,"
+            " project_name, context_text, assistant_text, files_changed, commands_run,"
+            " search_aliases FROM sessions WHERE session_id = ?",
+            [(r[0],) for r in rows],
+        )
+        inserted = len(rows)
+conn.close()
+
+print(
+    f"verdict=ok history_sessions={len(first)} already_indexed={len(first) - len(missing)} "
+    f"candidates={len(missing)} inserted={inserted} unparseable={unparseable}"
+)
+GAPFILL_PY
 }
 
 # ─── Keyword Extraction ───────────────────────────────────
