@@ -8,6 +8,11 @@ Code's watcher behaviour can clear it. The remedy is to restart the daemon, whic
 The brief that commissioned this work asked to "cut the registration rate". That would not have
 worked, and this document exists to say why before anyone spends a change on it.
 
+> **STATUS 2026-09-10 — CURED AND VERIFIED.** The §5 remedy was applied 2026-09-08 15:49:38;
+> `fseventsd` now runs at 2.5-4.3% with FSEvents delivery at a median of 8 ms. The row that
+> commissioned this (`ae75073ef319`) is closed. See **§8**, which also refutes §6's prediction
+> under control. No change to Claude Code's watcher behaviour was made, or is warranted.
+
 ---
 
 ## 1. Two corrections to the incident's premise
@@ -184,7 +189,9 @@ rather than a step to fire silently.
 - **~87,000 file modifications/hour (~24/s sustained)**, of which ~95% of the hottest root is this
   repo's own `postland-verify` harness (~40,600 `bats-run-*` + ~11,000 `gate-home.*` + ~10,900
   `postland-run.*` files/hr). Harmless while FSEvents is dead; it becomes the fan-out multiplicand
-  the moment the daemon is healthy again.
+  the moment the daemon is healthy again. — **REFUTED 2026-09-10 (§8.2):** the daemon is healthy,
+  the churn re-measured *higher* at 40.1 files/s, and `fseventsd` costs 4.34% of a core. The
+  prediction is kept as the record of what was believed; it is not an open exposure.
 - `postland-verify.sh:112` does a `git worktree add` of a 2,704-file checkout **into `~/.claude`**,
   which is itself a watched settings tree — 86% of that directory's writes.
 - **Headless `claude -p` spawns SIGTERM peers' `cc-await-ping` watchers.** Observed twice during
@@ -204,3 +211,88 @@ rather than a step to fire silently.
 - `lsof -p <claude-pid>` showing no CoreServices and no `/dev/fsevents` fd is **not** evidence
   against FSEvents use — system frameworks live in the dyld shared cache and FSEvents clients talk
   to the daemon over mach, not a device fd.
+
+---
+
+## 8. Post-cure verification, 2026-09-10 (backlog `ae75073ef319`)
+
+The remedy of §5 was applied: `fseventsd` pid 610 was terminated and launchd respawned it as
+**pid 10437 at 2026-09-08 15:49:38** — 108 s before hammerspoon-config `e2220ac` recorded it.
+This section verifies the cure held, **~46 h later, on a busy box**, and closes the row.
+
+### 8.1 The cure held
+
+| quantity | during the fault (§2) | now (2026-09-10 13:37-13:45) |
+|---|---|---|
+| `fseventsd` CPU | ~110% of a core | **4.34% mean, 10.2% peak** (30 × 4 s samples); **2.50%** on an independent 40 s re-sample |
+| FSEvents delivery (`fs.watch` recursive) | **TIMEOUT at 30,000 ms**, 3/3 | **median 8 ms, max 14 ms**, 30/30 delivered |
+
+Latency was measured on **both** `/private/tmp` and a path under `$HOME` — confirmed the same
+volume (`/dev/disk3s5`), since FSEvents streams are per-volume and a one-volume probe would not
+generalise. Ambient conditions during the reading: **load 13.89**, **39 live `claude` processes**,
+and `postland-verify.sh` mid-run with a large `bats` suite.
+
+No drift toward the fault: the process's **lifetime** average is 9.85% (270:56 CPU over 45.9 h)
+against a **current** 2.5-4.3%, i.e. front-loaded by the expected post-restart rescan, not rising.
+
+### 8.2 §6's multiplicand did not materialise — measured, not assumed
+
+§6 predicted the fleet's file churn "becomes the fan-out multiplicand the moment the daemon is
+healthy again". The daemon is healthy and **the prediction is refuted under control**: churn was
+re-measured at **40.1 files/s** (12,039 files in 300 s across the repo, `TMPDIR` and `~/.claude`)
+— **167% of the ~24/s** that prompted the worry — with `fseventsd` costing 4.34% of a core at the
+same moment. The churn is real; it is simply not expensive to fan out. This is the positive
+control that makes §8.1 a reading about the daemon rather than about a quiet box.
+
+`postland-verify.sh` still mints its per-run cell inside `~/.claude` (`WT_ROOT` defaults to
+`$STATE` = `~/.claude/autonomy/postland`), so the structural condition §6 named is unchanged. That
+is now a recorded non-problem rather than an open exposure.
+
+### 8.3 The decision the row asked for: ACCEPT, do not cut the spawn rate
+
+Both premises of the row's framing are refuted, and §3 already refuted the third:
+
+- **Not a cost.** Registrations are ~3 orders of magnitude below a core (§1.2).
+- **Not headless.** Only **2 of 39** live `claude` processes were `-p`. The top registrant was a
+  **28-minute-old interactive session** emitting 41 of the hour's 127 events, in bursts of 3-4
+  every 1-2 minutes — per-turn re-registration by long-lived sessions, not spawn churn.
+- **Rate is not rising.** 127 registrations/h now against the 188/h of §3 and the ~250/h of the
+  original report.
+
+The registering code path stands as recorded in §3.1 (Bun-bundled chokidar v4; of nine `.watch()`
+sites, four do not pass `usePolling` — `FileChanged`, the settings/atomic-save watcher, `theme`,
+`ScheduledTasks`). No change is warranted, for the reasons §4 already gives.
+
+### 8.4 A recurrence detector was considered and declined — with the criterion to revisit
+
+Nothing on this box monitors `fseventsd` health, and the fault was invisible for ~25 h until a
+*screenshot* investigation stumbled on it. That argues for a detector. It was not built, on two
+grounds: the payoff is **unmeasured** (n=1, an external daemon bug, no recurrence in the 46 h
+since), and the remedy is root-gated (§5), so a detector could only page rather than act.
+
+Recording the criterion rather than the verdict, because the verdict perishes: **build it on a
+second occurrence, or if a sample ever shows sustained CPU with no delivery.** Both terms in one
+command — a healthy daemon answers with a low percentage and a small latency, a livelocked one
+with a high percentage and a timeout:
+
+```sh
+F=$(pgrep -x fseventsd); a=$(ps -o time= -p $F); sleep 10; b=$(ps -o time= -p $F)
+echo "cpu: $a -> $b"   # >90%/s sustained + a TIMEOUT below ⇒ livelock, see §5
+node -e 'const fs=require("fs"),o=require("os"),p=require("path"),d=fs.mkdtempSync(p.join(o.tmpdir(),"fsev"));
+const t=Date.now(),w=fs.watch(d,{recursive:true},()=>{console.log("delivered in",Date.now()-t,"ms");process.exit(0)});
+setTimeout(()=>fs.writeFileSync(p.join(d,"x"),"x"),300); setTimeout(()=>{console.log("TIMEOUT");process.exit(1)},15000)'
+```
+
+### 8.5 Instrument note that cost this session a false "cured"
+
+§7's first bullet reproduced exactly, and it is worth stating as the failure it produces rather
+than as a caveat: the row's own stored `run` field invokes `log show ...`. `log` is a **zsh
+builtin/function** in this harness, so the command returns `(eval):log:1: too many arguments`, and
+the row's `| grep -oE 'pid [0-9]+' | sort | uniq -c` renders that as **zero registrations** — a
+clean, tidy, entirely false "the churn has stopped". A positive control (`log show --last 5m` with
+no predicate, which also returned 0) is what exposed it. Use `/usr/bin/log`.
+
+The same class bit a second time in the same session: `find` is a shell function resolving to
+**bfs**, whose `-newermt '-10 minutes'` is a parse error, not a predicate — piped through
+`2>/dev/null | wc -l` it also renders as a clean **0 files changed**. Use `-mmin -N`, or
+`/usr/bin/find`, and never suppress stderr on a null you intend to believe.
