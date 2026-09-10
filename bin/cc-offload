@@ -730,9 +730,23 @@ cmd_up_api() {
     # the session does — an originator that closed in the gap is exactly the hole this closes.
     # Best-effort in the same sense handoff-fire's is: custody bookkeeping must never break a fire.
     if [ -n "$CUSTODY_BIN" ]; then
+      # THE ORIGINATOR PANE RESOLVES EXACTLY AS THE WAKE TARGET DOES, 175 lines up — CC_PANE_ID
+      # first, then ITERM_SESSION_ID, then the `##*:` strip. It did not, until now: 1311ff038 fixed
+      # that resolution order at the notify-back site and left this one reading ITERM_SESSION_ID
+      # alone. Two adjacent spellings of one identity, one of them updated.
+      #
+      # MEASURED 2026-09-10 on the live store, and this is the whole reason it matters: of the 347
+      # cloud custody rows opened since the 2026-08-25 cutover, 347 carry `notifyBack` (pane 5, 341×;
+      # pane 330, 6×) and ZERO carry `originatorPane` — because the firing pane is HEADLESS, and
+      # bin/cc-pane-headless:218 exports CC_PANE_ID while UNSETTING ITERM_SESSION_ID. The row was
+      # never unattributable; the attribution was simply not written. scripts/custody-deathwatch.sh
+      # reads ONLY `originatorPane` for its ADDRESS-1 direct notify, so every one of those 347 was
+      # forced onto the aggregated ADDRESS-2 backlog path while the pane that fired it was named in
+      # the very same row, alive, and reachable through the inbox it already reads.
+      local op_pane; op_pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; op_pane="${op_pane##*:}"
       "$CUSTODY_BIN" open --cwd "$PWD" --target "cloud:$sid" --marker "$sid" \
         --slug "cloud-$sid" ${UP_NOTIFY_BACK:+--notify-back "$UP_NOTIFY_BACK"} \
-        ${ITERM_SESSION_ID:+--originator-pane "${ITERM_SESSION_ID##*:}"} >/dev/null 2>&1 \
+        ${op_pane:+--originator-pane "$op_pane"} >/dev/null 2>&1 \
         || note "cc-offload: custody could not be opened for $sid — the close-integrity arm is NOT armed for it."
     fi
 
