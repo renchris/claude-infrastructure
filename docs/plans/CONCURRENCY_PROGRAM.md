@@ -556,6 +556,32 @@ why test 25 asserts **empty stderr**: dropping the guard changes no verdict (`[ 
 which an `if` reads as false) and only makes bash print `integer expression expected` from inside a
 Stop hook — an untested site otherwise, and the next simplification deletes it.
 
+#### S4.3 · …and the residual it left — the SESSION, not the write — is REFUTED (backlog `b03eb3f28845`, 2026-09-09)
+
+`b03eb3f28845` was filed the same evening as S4.1, against S4.1 itself: *the gate stops the WRITE,
+nothing stops the SESSION* — 15 clones alive in one worktree, deadlocked, burning quota. Measured
+over the whole surviving corpus (2,818 transcripts), the premise does not hold. Max concurrent
+sessions in any dispatch worktree, all-time: **3**, over 138 worktrees / 204 sessions. Post-refusal
+writes that ever succeeded: **0** of 11 refusals. A refused session runs on for a median of **2.4 min
+/ 6 tool calls**, and 8 of 11 stopped inside 11 minutes.
+
+**The mechanism S4.1 did not claim, and should have.** S4.1 sited the gate at the write because a
+mailbox stand-down *"needs a turn boundary a session deep in a tool loop never reaches"*. A
+`PreToolUse` deny **is** that turn boundary — it comes back as the `tool_result` of the call the
+session just made — so the deny text reaches the model inside the loop the mailbox could not. The
+enforcement point chosen for the write turned out to carry the message too.
+
+🚨 **Do not build the session-stop this item asks for.** The only actuator available without a C10
+settings change is `validate-bash.sh` (already registered on `PreToolUse|Bash`), i.e. deny every Bash
+from a convicted session. The corpus contains exactly one long post-refusal run — 1,079 min / 126
+tool calls — and it is a session that was **right** to continue: a `done-latched` refusal of a *pane
+spawn*, raised because another host marked the item done mid-flight, while that session finished
+landing its own work. It honoured the refusal (spawned nothing, wrote nothing) and ignored only the
+retire half. The remedy would have bricked an 18-hour legitimate land to save a median of six tool
+calls — the same inverted-direction argument `worker-claim-gate.sh` already makes against a refusal
+budget. Measurement, the two contamination traps, and the instrument's positive control:
+`docs/research/refused-worker-standdown-2026-09-09.md`.
+
 ### S5 · Scale beyond this box — the only route to ~100
 
 **100 local sessions is arithmetically unreachable**: 511 MB/session × 100 = **51.1 GB of 64 GB**,
