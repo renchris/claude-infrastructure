@@ -1,0 +1,505 @@
+#!/usr/bin/env python3
+"""Read an X/Twitter post — or a whole self-reply thread — from its URL alone.
+
+Prints compact markdown sized for an agent's context, not raw JSON. Images are
+listed as URLs (plus author alt text, which is free); --images downloads them so
+the caller can Read them.
+
+Sources are tried in order and each is validated BY CONTENT, never by status
+code — cdn.syndication.twimg.com answers HTTP 200 with a 2-byte `{}` when it
+declines, which a status check reads as healthy.
+
+  cc-read-twitter <url|id> [--single] [--images [DIR]] [--json] [--max N] [--source S]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import re
+import subprocess
+import sys
+
+UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+TIMEOUT = int(os.environ.get("CC_RT_TIMEOUT", "20"))
+# Which pbs.twimg.com size to fetch. `medium` (1200px) is the sweet spot: the
+# vision pipeline downscales to ~1568px anyway, so `orig` buys tokens, not detail.
+IMG_SIZE = os.environ.get("CC_RT_IMG_SIZE", "medium")
+MAX_VIDEO_HEIGHT = int(os.environ.get("CC_RT_MAX_VIDEO_HEIGHT", "720"))
+
+ID_RE = re.compile(r"(?:status(?:es)?/)(\d{5,25})")
+BARE_ID_RE = re.compile(r"^\d{5,25}$")
+
+
+class Fetched:
+    def __init__(self, body: bytes, url: str):
+        self.body = body
+        self.url = url
+
+
+class FetchError(RuntimeError):
+    pass
+
+
+def get(url: str, headers: dict | None = None) -> Fetched:
+    """Fetch over curl.
+
+    Not urllib: a stock macOS python3 has no CA bundle wired up and every
+    request dies CERTIFICATE_VERIFY_FAILED, which would make the whole ladder
+    look like a network outage. curl carries the system trust store.
+    """
+    cmd = ["curl", "-sS", "-L", "-m", str(TIMEOUT), "-A", UA, "-w", "\n%{http_code}"]
+    for k, v in (headers or {}).items():
+        cmd += ["-H", f"{k}: {v}"]
+    cmd.append(url)
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=TIMEOUT + 10, check=False)
+    except subprocess.TimeoutExpired as e:
+        raise FetchError(f"timeout after {TIMEOUT}s") from e
+    if r.returncode != 0:
+        raise FetchError(f"curl exit {r.returncode}: {r.stderr.decode('utf-8', 'replace').strip()[:200]}")
+    body, _, code = r.stdout.rpartition(b"\n")
+    code_s = code.decode("ascii", "replace").strip()
+    if code_s != "200":
+        raise FetchError(f"HTTP {code_s} ({len(body)} bytes)")
+    return Fetched(body, url)
+
+
+def parse_id(arg: str) -> str:
+    arg = arg.strip().strip("<>").strip()
+    if BARE_ID_RE.match(arg):
+        return arg
+    m = ID_RE.search(arg)
+    if m:
+        return m.group(1)
+    raise SystemExit(
+        f"cc-read-twitter: cannot find a status id in {arg!r}\n"
+        "  expected e.g. https://x.com/user/status/1234567890 or a bare id"
+    )
+
+
+# --------------------------------------------------------------------------
+# source 1 — fxtwitter /2/thread : one request, walks BOTH directions
+# --------------------------------------------------------------------------
+
+def src_fxtwitter(tid: str, single: bool) -> tuple[list[dict], dict]:
+    path = "status" if single else "thread"
+    d = json.loads(get(f"https://api.fxtwitter.com/2/{path}/{tid}").body)
+    if d.get("code") != 200:
+        raise ValueError(f"fxtwitter code={d.get('code')} {d.get('message')}")
+    if single:
+        posts = [d["status"]] if d.get("status") else []
+    else:
+        posts = (d.get("thread") or {}).get("posts") if isinstance(d.get("thread"), dict) else d.get("thread")
+        posts = posts or []
+    if not posts or not any(p.get("text") is not None or p.get("article") for p in posts):
+        raise ValueError("fxtwitter returned no post bodies")
+    return [norm_fx(p) for p in posts], {"source": "fxtwitter", "raw": d}
+
+
+def norm_fx(p: dict) -> dict:
+    media = []
+    seen = set()
+    for m in ((p.get("media") or {}).get("all") or []):
+        if m.get("url") in seen:
+            continue
+        seen.add(m.get("url"))
+        media.append(
+            {
+                "type": m.get("type"),
+                "url": m.get("url"),
+                "alt": m.get("altText"),
+                "w": m.get("width"),
+                "h": m.get("height"),
+                "variants": m.get("variants") or m.get("formats"),
+                "duration": m.get("duration"),
+            }
+        )
+    art = p.get("article")
+    q = p.get("quote")
+    return {
+        "id": p.get("id"),
+        "author": ((p.get("author") or {}).get("screen_name")),
+        "author_name": ((p.get("author") or {}).get("name")),
+        "created_at": p.get("created_at"),
+        "text": p.get("text") or "",
+        "truncated": bool(p.get("is_note_tweet")) and not p.get("text"),
+        "media": media,
+        "likes": p.get("likes"),
+        "replies": p.get("replies"),
+        "reposts": p.get("retweets"),
+        "views": p.get("views"),
+        "replying_to": p.get("replying_to_status"),
+        "quote": (
+            {
+                "author": ((q.get("author") or {}).get("screen_name")),
+                "text": q.get("text") or "",
+                "url": q.get("url"),
+            }
+            if q
+            else None
+        ),
+        "community_note": (p.get("community_note") or {}).get("text")
+        if isinstance(p.get("community_note"), dict)
+        else p.get("community_note"),
+        "poll": p.get("poll"),
+        "article": art,
+        "url": p.get("url"),
+    }
+
+
+# --------------------------------------------------------------------------
+# source 2 — cdn.syndication.twimg.com : X's own embed CDN (first-party)
+# `parent` gives exactly ONE hop up, so upstream needs iteration and there is
+# no downstream at all. Note tweets come back TRUNCATED, flagged by note_tweet.
+# --------------------------------------------------------------------------
+
+def syndication_token(tid: str) -> str:
+    """Port of the embed client's token: base36 of (id/1e15)*PI, '0' and '.' stripped."""
+    v = (int(tid) / 1e15) * math.pi
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    i = int(v)
+    ip = ""
+    while i:
+        ip = digits[i % 36] + ip
+        i //= 36
+    ip = ip or "0"
+    frac = v - int(v)
+    fp = ""
+    for _ in range(24):
+        frac *= 36
+        d = int(frac)
+        fp += digits[d]
+        frac -= d
+    return (ip + fp).replace("0", "")
+
+
+def src_syndication(tid: str, single: bool) -> tuple[list[dict], dict]:
+    url = (
+        "https://cdn.syndication.twimg.com/tweet-result"
+        f"?id={tid}&lang=en&token={syndication_token(tid)}"
+    )
+    body = get(url).body
+    if len(body) < 32:
+        raise ValueError(f"syndication returned a {len(body)}-byte stub (declined)")
+    d = json.loads(body)
+    if not d.get("id_str"):
+        raise ValueError("syndication payload carries no id_str")
+    chain = [d]
+    if not single:
+        node = d
+        while isinstance(node.get("parent"), dict):
+            node = node["parent"]
+            chain.insert(0, node)
+    note = "syndication (first-party)"
+    if not single:
+        # `parent` is exactly ONE hop per payload, so this walks UP only and can
+        # never see a self-reply BELOW the requested post. Say so — a 2-post
+        # render of a 6-post thread must not read as a complete thread.
+        note += " — UPSTREAM ONLY: this source cannot see replies below the requested post"
+    return [norm_syn(p) for p in chain], {"source": note, "raw": d}
+
+
+def norm_syn(p: dict) -> dict:
+    media = []
+    for m in p.get("mediaDetails") or []:
+        variants = (m.get("video_info") or {}).get("variants")
+        media.append(
+            {
+                "type": "video" if m.get("type") in ("video", "animated_gif") else "photo",
+                "url": (m.get("media_url_https") or "") + f"?name={IMG_SIZE}",
+                "alt": m.get("ext_alt_text"),
+                "w": ((m.get("original_info") or {}).get("width")),
+                "h": ((m.get("original_info") or {}).get("height")),
+                "variants": variants,
+                "duration": None,
+            }
+        )
+    user = p.get("user") or {}
+    return {
+        "id": p.get("id_str"),
+        "author": user.get("screen_name"),
+        "author_name": user.get("name"),
+        "created_at": p.get("created_at"),
+        "text": p.get("text") or "",
+        "truncated": bool(p.get("note_tweet")),
+        "media": media,
+        "likes": p.get("favorite_count"),
+        "replies": p.get("conversation_count"),
+        "reposts": None,
+        "views": None,
+        "replying_to": p.get("in_reply_to_status_id_str"),
+        "quote": None,
+        "community_note": None,
+        "poll": None,
+        "article": p.get("article"),
+        "url": f"https://x.com/{user.get('screen_name')}/status/{p.get('id_str')}",
+    }
+
+
+# --------------------------------------------------------------------------
+# source 3 — r.jina.ai : independent renderer, markdown out. Last resort:
+# it is lossy (no ids, no per-post boundaries) but it is a different origin,
+# so it survives an fxtwitter/X outage.
+# --------------------------------------------------------------------------
+
+def src_jina(tid: str, single: bool) -> tuple[list[dict], dict]:
+    body = get(
+        f"https://r.jina.ai/https://x.com/i/status/{tid}",
+        headers={"x-no-cache": "true"},
+    ).body.decode("utf-8", "replace")
+    if len(body) < 400 or "Warning" in body[:200] and "status" not in body:
+        raise ValueError(f"jina returned {len(body)} bytes, no usable body")
+    return (
+        [
+            {
+                "id": tid,
+                "author": None,
+                "author_name": None,
+                "created_at": None,
+                "text": body.strip(),
+                "truncated": False,
+                "media": [],
+                "likes": None,
+                "replies": None,
+                "reposts": None,
+                "views": None,
+                "replying_to": None,
+                "quote": None,
+                "community_note": None,
+                "poll": None,
+                "article": None,
+                "url": f"https://x.com/i/status/{tid}",
+            }
+        ],
+        {"source": "jina (degraded: markdown blob, no post boundaries)", "raw": None},
+    )
+
+
+SOURCES = [("fxtwitter", src_fxtwitter), ("syndication", src_syndication), ("jina", src_jina)]
+
+
+# --------------------------------------------------------------------------
+# article bodies (draft.js) — fxtwitter only
+# --------------------------------------------------------------------------
+
+def render_article(art: dict) -> list[str]:
+    out = [f"\n**X Article — {art.get('title', '(untitled)')}**"]
+    content = art.get("content") or {}
+    blocks = content.get("blocks") or []
+    if not blocks:
+        pv = (art.get("preview_text") or "").strip()
+        if pv:
+            out.append(pv + "  ⚠️ preview only — body blocks absent from this source")
+        return out
+    emap = {}
+    for e in content.get("entityMap") or []:
+        if isinstance(e, dict) and "key" in e:
+            emap[str(e["key"])] = e.get("value")
+    mx = {m.get("media_id"): m.get("media_info") for m in (art.get("media_entities") or [])}
+    for b in blocks:
+        t = b.get("type")
+        txt = (b.get("text") or "").strip()
+        if t == "atomic":
+            for er in b.get("entityRanges") or []:
+                ent = emap.get(str(er.get("key"))) or {}
+                data = ent.get("data") or {}
+                for mi in data.get("mediaItems") or []:
+                    info = mx.get(mi.get("mediaId")) or {}
+                    u = info.get("original_img_url")
+                    if u:
+                        cap = data.get("caption") or ""
+                        out.append(f"🖼 {u}" + (f"\n   caption: {cap}" if cap else ""))
+        elif not txt:
+            continue
+        elif t and t.startswith("header"):
+            out.append(("#" * (int(t[-1]) if t[-1].isdigit() else 2)) + " " + txt)
+        elif t == "unordered-list-item":
+            out.append("- " + txt)
+        elif t == "ordered-list-item":
+            out.append("1. " + txt)
+        else:
+            out.append(txt)
+    return out
+
+
+# --------------------------------------------------------------------------
+# rendering
+# --------------------------------------------------------------------------
+
+def pick_video(m: dict) -> str | None:
+    vs = m.get("variants") or []
+    cand = []
+    for v in vs:
+        if not isinstance(v, dict):
+            continue
+        u = v.get("url") or ""
+        if ".mp4" not in u:
+            continue
+        br = v.get("bitrate") or 0
+        hh = 0
+        mm = re.search(r"/(\d+)x(\d+)/", u)
+        if mm:
+            hh = int(mm.group(2))
+        cand.append((hh, br, u))
+    if not cand:
+        return m.get("url")
+    ok = [c for c in cand if c[0] and c[0] <= MAX_VIDEO_HEIGHT] or cand
+    return sorted(ok, key=lambda c: (c[0], c[1]))[-1][2]
+
+
+def size_url(u: str) -> str:
+    """Normalise a pbs.twimg.com URL to CC_RT_IMG_SIZE.
+
+    Printed and downloaded URLs must agree: a reader who curls the printed URL
+    should get the same bytes --images would have fetched.
+    """
+    if not u:
+        return u
+    if "name=" in u:
+        return re.sub(r"([?&])name=[^&]*", r"\1name=" + IMG_SIZE, u)
+    return u + ("&" if "?" in u else "?") + "name=" + IMG_SIZE
+
+
+def human(n) -> str:
+    if not isinstance(n, int):
+        return "?"
+    for lim, suf in ((1_000_000, "M"), (1_000, "K")):
+        if n >= lim:
+            return f"{n / lim:.1f}".rstrip("0").rstrip(".") + suf
+    return str(n)
+
+
+def render(posts: list[dict], meta: dict, img_paths: dict) -> str:
+    L: list[str] = []
+    authors = {p["author"] for p in posts if p.get("author")}
+    head = posts[0]
+    kind = "post" if len(posts) == 1 else f"thread · {len(posts)} posts"
+    who = f"@{head['author']}" if head.get("author") else "(author unknown)"
+    L.append(f"# {who} — {kind}")
+    if head.get("url"):
+        L.append(head["url"])
+    L.append(f"_source: {meta['source']}_")
+    for i, p in enumerate(posts, 1):
+        L.append("")
+        tag = f"## {i}/{len(posts)}" if len(posts) > 1 else "##"
+        by = f" · @{p['author']}" if len(authors) > 1 and p.get("author") else ""
+        when = f" · {p['created_at']}" if p.get("created_at") else ""
+        L.append(f"{tag}{by}{when} · `{p['id']}`")
+        if p.get("text"):
+            L.append(p["text"])
+        if p.get("truncated"):
+            L.append("⚠️ TRUNCATED — this is a long-form post and this source cut it. Re-run with --source fxtwitter.")
+        if p.get("article"):
+            L.extend(render_article(p["article"]))
+        if p.get("quote"):
+            q = p["quote"]
+            L.append(f"> quoting @{q['author']}: {q['text']}")
+        if p.get("poll"):
+            L.append(f"📊 poll: {json.dumps(p['poll'], separators=(',', ':'))}")
+        if p.get("community_note"):
+            L.append(f"📌 community note: {p['community_note']}")
+        for j, m in enumerate(p.get("media") or [], 1):
+            if m.get("type") == "video":
+                u = pick_video(m)
+                dur = f" · {m['duration']}s" if m.get("duration") else ""
+                L.append(f"🎬 video{dur} → {u}")
+                L.append("   (hand to the video-understanding skill; frames alone miss motion)")
+            else:
+                key = (p["id"], j)
+                local = img_paths.get(key)
+                dims = f" {m['w']}x{m['h']}" if m.get("w") else ""
+                L.append(f"🖼 img{j}{dims} {size_url(m.get('url'))}")
+                if local:
+                    L.append(f"   → {local}   (Read this path to actually see it)")
+            if m.get("alt"):
+                L.append(f"   alt: {m['alt']}")
+    stats = head
+    bits = [f"{human(stats.get(k))} {lbl}" for k, lbl in
+            (("likes", "likes"), ("reposts", "reposts"), ("replies", "replies"), ("views", "views"))
+            if isinstance(stats.get(k), int)]
+    if bits:
+        L.append("")
+        L.append("_" + " · ".join(bits) + " (on the first post)_")
+    return "\n".join(L)
+
+
+def download_images(posts: list[dict], dest: str) -> dict:
+    os.makedirs(dest, exist_ok=True)
+    out = {}
+    for p in posts:
+        for j, m in enumerate(p.get("media") or [], 1):
+            if m.get("type") == "video" or not m.get("url"):
+                continue
+            u = size_url(m["url"])
+            ext = ".png" if ".png" in u.split("?")[0] else ".jpg"
+            path = os.path.join(dest, f"{p['id']}-{j}{ext}")
+            try:
+                with open(path, "wb") as fh:
+                    fh.write(get(u).body)
+                out[(p["id"], j)] = path
+            except Exception as e:  # noqa: BLE001 — a failed image must not kill the read
+                print(f"cc-read-twitter: image {u} failed: {e}", file=sys.stderr)
+    return out
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="cc-read-twitter", add_help=True)
+    ap.add_argument("target", help="x.com/twitter.com status URL, or a bare status id")
+    ap.add_argument("--single", action="store_true", help="just this post; do not walk the thread")
+    ap.add_argument("--images", nargs="?", const="AUTO", metavar="DIR",
+                    help="download photos so they can be Read (default: a temp dir)")
+    ap.add_argument("--json", action="store_true", help="emit normalised JSON instead of markdown")
+    ap.add_argument("--raw", action="store_true", help="emit the winning source's raw payload")
+    ap.add_argument("--max", type=int, default=0, help="cap the number of posts rendered")
+    ap.add_argument("--source", choices=[n for n, _ in SOURCES], help="force one source (no fallback)")
+    a = ap.parse_args()
+
+    tid = parse_id(a.target)
+    ladder = [s for s in SOURCES if not a.source or s[0] == a.source]
+    posts, meta, errs = None, None, []
+    for name, fn in ladder:
+        try:
+            posts, meta = fn(tid, a.single)
+            break
+        except (FetchError, ValueError, KeyError, json.JSONDecodeError, TimeoutError) as e:
+            errs.append(f"{name}: {type(e).__name__}: {e}")
+        except Exception as e:  # noqa: BLE001
+            errs.append(f"{name}: {type(e).__name__}: {e}")
+    if not posts:
+        print("cc-read-twitter: every source declined for id " + tid, file=sys.stderr)
+        for e in errs:
+            print("  - " + e, file=sys.stderr)
+        return 3
+    for e in errs:
+        print(f"cc-read-twitter: fell back past {e}", file=sys.stderr)
+
+    if a.max and len(posts) > a.max:
+        posts = posts[: a.max]
+
+    if a.raw:
+        print(json.dumps(meta.get("raw"), indent=1))
+        return 0
+    img_paths = {}
+    if a.images:
+        dest = a.images if a.images != "AUTO" else os.path.join(
+            os.environ.get("TMPDIR", "/tmp").rstrip("/"), f"x-{tid}")
+        img_paths = download_images(posts, dest)
+    if a.json:
+        print(json.dumps({"source": meta["source"], "posts": posts,
+                          "images": {f"{k[0]}-{k[1]}": v for k, v in img_paths.items()}}, indent=1))
+        return 0
+    print(render(posts, meta, img_paths))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)
