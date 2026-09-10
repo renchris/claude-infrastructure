@@ -116,7 +116,7 @@ calls() { if [ -f "$D/zprint.calls" ]; then wc -l < "$D/zprint.calls" | tr -d ' 
   [ "$status" -eq 0 ] || false
   [[ "$output" == OK* ]] || false
   [[ "$output" != *"kalloc="* ]] || false      # <-- the gap: nothing in the ladder names either axis
-  [[ "$output" != *"swapfiles="* ]]
+  [[ "$output" != *"swapfiles="* ]] || false
 }
 
 @test "the fixed classify names panic #5's chronic state — and leaves the verdict OK (D5)" {
