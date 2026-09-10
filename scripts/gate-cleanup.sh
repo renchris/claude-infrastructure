@@ -66,30 +66,33 @@ WORKTREE="$(cd "$WORKTREE" && pwd -P)"
 
 say() { [ "$QUIET" = "1" ] || printf '%s\n' "$1" >&2; }
 
-ps_all() {  # → "<pid> <ppid> <command…>" per line
-  if [ -n "${CC_GATE_CLEANUP_PS:-}" ]; then "$CC_GATE_CLEANUP_PS"; else ps -eo pid=,ppid=,command=; fi
-}
+# ── SCOPING HELPERS — SOURCED, never re-derived (backlog a3eaa0dc1be2) ─────────────────────────
+# ps_all / cwd_of / under_worktree / the self+ancestor exclusion set / the argv-POSITION rule were
+# born here and now live in hooks/lib/proc-scope.sh, because hooks/lib/session-busy.sh needs the
+# SAME scoping to answer "is a job of mine executing?". A second copy of a SIGKILL selector's
+# scoping is the defect this file's own header describes one level up: the properties it encodes
+# (physical paths; argv POSITION, never a substring) are exactly what a re-derivation loses in
+# silence. The wrappers below keep this script's names and seams unchanged, so the 36 regression
+# cases in tests/pkill-scope.bats drive the real code path through the interface they already use.
+_gc_lib="$(dirname "$0")/../hooks/lib/proc-scope.sh"
+[ -f "$_gc_lib" ] || _gc_lib="$HOME/.claude/hooks/lib/proc-scope.sh"
+if [ -f "$_gc_lib" ]; then
+  # shellcheck source=../hooks/lib/proc-scope.sh
+  # shellcheck disable=SC1091
+  . "$_gc_lib"
+else
+  echo "✗ gate-cleanup: cannot find hooks/lib/proc-scope.sh — refusing to guess the scope" >&2
+  exit 2
+fi
 
-cwd_of() {  # <pid> → its cwd, or empty when unknowable (a process we may not inspect)
-  if [ -n "${CC_GATE_CLEANUP_CWD:-}" ]; then "$CC_GATE_CLEANUP_CWD" "$1"; return 0; fi
-  lsof -a -d cwd -p "$1" -Fn 2>/dev/null | sed -n 's/^n//p' | head -1
-}
-
-under_worktree() {  # <path> → 0 when at or under $WORKTREE
-  case "$1" in "$WORKTREE") return 0 ;; "$WORKTREE"/*) return 0 ;; *) return 1 ;; esac
-}
+ps_all() { ps_scope_all; }
+cwd_of() { ps_scope_cwd_of "$1"; }
+under_worktree() { ps_scope_under "$WORKTREE" "$1"; }
 
 # ── exclusion set: self + every ancestor (never kill the hand holding the knife) ────────────────
 PS_SNAPSHOT="$(ps_all)"
-ppid_of() { printf '%s\n' "$PS_SNAPSHOT" | awk -v p="$1" '$1==p {print $2; exit}' || true; }
-EXCLUDE=" $$ "
-_a="$(ppid_of "$$")"
-while [ -n "$_a" ] && [ "$_a" != "0" ] && [ "$_a" != "1" ]; do
-  case "$EXCLUDE" in *" $_a "*) break ;; esac      # cycle guard: a malformed table must not spin
-  EXCLUDE="$EXCLUDE$_a "
-  _a="$(ppid_of "$_a")"
-done
-excluded() { case "$EXCLUDE" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+EXCLUDE="$(ps_scope_ancestors "$$" "$PS_SNAPSHOT")"
+excluded() { ps_scope_in_set "$1" "$EXCLUDE"; }
 
 # ── is_gate_exec: does this command line RUN a gate program (vs merely mention one)? ────────────
 # ONLY the first two argv tokens are inspected, and only their BASENAME — `bash /x/y/ship-land.sh`
