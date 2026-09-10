@@ -219,19 +219,30 @@ CUR_UUID="$(resolve_uuid)"
 # ── cursor lib (critique F6a, amended by F-3 2026-08-09): SEED off the `.seen` cursor the drain/fold
 #    use, so mail ALREADY pending when we arm fires IMMEDIATELY — the old `wc -l` arm-time baseline
 #    missed exactly that line. But seed ONCE and then track a PRIVATE cursor: polling `.seen` live is
-#    what let the drain starve this watcher (see the F-3 block above the main loop). On fire,
-#    mailbox_take_from advances seen+acked without regressing them (our stdout rides the harness
-#    task-completion notification → a reliable delivery the model reads). Lib absent → the standalone
-#    grep -c '' fallback, which is arrival-based and therefore un-starvable too.
+#    what let the drain starve this watcher (see the F-3 block above the main loop). On fire we
+#    PEEK — print the window and advance no shared cursor at all (mailbox_peek_from). This used to
+#    be `mailbox_take_from ... 1`, justified here by the claim that "our stdout rides the harness
+#    task-completion notification → a reliable delivery the model reads". That was never tested and
+#    is FALSE: measured 2026-09-10, a backgrounded Bash task completes with a notification carrying
+#    a summary and an output-file PATH, and probe tokens on stdout AND stderr appeared in neither.
+#    Consuming into that stream marked a body read that nobody read — see the block above
+#    mailbox_peek_from in hooks/lib/mailbox-pending.sh. Lib absent → the standalone grep -c ''
+#    fallback, which is arrival-based and therefore un-starvable too (and writes no cursor either).
 _bd="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 _mbxlib="$_bd/../hooks/lib/mailbox-pending.sh"
 [ -f "$_mbxlib" ] || _mbxlib="$HOME/.claude/hooks/lib/mailbox-pending.sh"
 _have_lib=0
 if [ -f "$_mbxlib" ] && command -v jq >/dev/null 2>&1; then
-  # mailbox_take_from is REQUIRED, not optional: it is what makes this watcher's trigger private (F-3
-  # below). An older deployed lib without it degrades to the standalone line-count baseline — which is
-  # arrival-based and therefore also un-starvable, merely blind to mail already pending at arm time —
-  # rather than calling a function that does not exist.
+  # A private trigger is REQUIRED, not optional (F-3 below), and `mailbox_take_from` is what marks a
+  # lib new enough to provide one — so the gate stays keyed on IT even though the fire path now calls
+  # `mailbox_peek_from`. Keying the gate on peek instead would have been the obvious edit and is a
+  # trap: during live-layer convergence this file is symlinked ahead of hooks/lib, so a cc-await-ping
+  # that demanded peek would fall to the lib-free baseline for that window and lose the private
+  # cursor AND the multi-key keyset — a real regression, to guard against a function that is simply
+  # branched for at the call site. An older deployed lib therefore keeps every F-3 property and peeks
+  # inline; only a lib older than take_from degrades to the standalone line-count baseline, which is
+  # arrival-based (also un-starvable, merely blind to mail already pending at arm time) and, like
+  # every path here now, writes no cursor.
   # shellcheck source=/dev/null
   . "$_mbxlib" 2>/dev/null && command -v mailbox_take_from >/dev/null 2>&1 && _have_lib=1
 fi
@@ -1311,9 +1322,11 @@ _own_wake_down_line() {   # <line> → 0 iff this is a wake-path control line ar
 #   * when a WAKING line finally lands, the take window still opens at the ORIGINAL cursor, so the
 #     damped lines print WITH it. They are deferred into the next real wake, never consumed unread.
 # That last point is why the cursor is left alone rather than advanced past a damped line the way the
-# WAKE-PATH-DOWN skip does: mailbox_take_from writes `.seen` = the whole box (not = its `from`), so
-# advancing past an unprinted line would mark it consumed and the drain would never show it. The
-# control-line skip can afford that only because those lines are our OWN corpse notices.
+# WAKE-PATH-DOWN skip does: advancing our PRIVATE cursor past an unprinted line would hide it from
+# our own next window, and the drain would then be the only reader left for it. The control-line
+# skip can afford that only because those lines are our OWN corpse notices. (Since backlog
+# 0366d5cc7b87 the fire path no longer writes `.seen` either — it PEEKS — so a damped line and a
+# delivered one are now both left pending for the drain, by the same reasoning.)
 _line_class() {   # <line> → one CLASS token, always exactly one word
   case "$1" in
     *"SUPERVISOR PAGE"*)     printf 'SUPERVISOR-PAGE' ;;
@@ -1426,38 +1439,37 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     if [ -n "$_HIT" ]; then
       # Window opens at OUR cursor, never at .seen — so a drain that already advanced .seen past this
       # line cannot turn our fire into an empty print (which is exactly what F-3 was).
-      mailbox_take_from "$_HIT" "$_FROM" 1
-      _trc=$?
-      _woke_set "$_HIT" "$(mailbox_lines "$_HIT")"
-      # F9: rc 2 = the body WAS printed but the cursor write FAILED — "the caller must escalate + still
-      # deliver, never silently drop". This caller used to exit 0 regardless, so the lib's one escalation
-      # contract had no honorer: a broken cursor looked exactly like a clean take. Deliver, alarm, exit loud.
-      if [ "$_trc" = 2 ]; then
-        # Through the comms-alarm chokepoint (stamps test_origin, diverts a fixture-context write out
-        # of the operator's live root — see hooks/lib/comms-alarm.sh). Lib absent → the original
-        # inline write, so this backstop never gets weaker than before the chokepoint existed.
-        if command -v jq >/dev/null 2>&1; then
-          _ca_rec="$(jq -nc --arg u "$_HIT" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" \
-            '{kind:"cursor-write-failed", uuid:$u, actor:"cc-await-ping", reason:"mailbox_take delivered the body but could not advance .seen — the same mail will be re-delivered (dup, not loss); the guard cannot key on a cursor that is not moving", ts:$ts}' 2>/dev/null)"
-          if command -v comms_alarm_write >/dev/null 2>&1; then
-            comms_alarm_write cursor-fail "$_ca_rec" || true
-          else
-            _adir="${CC_COMMS_ALARM_DIR:-$HOME/.claude/autonomy/comms-alarms}"
-            if mkdir -p "$_adir" 2>/dev/null; then
-              printf '%s\n' "$_ca_rec" \
-                > "$_adir/cursor-fail-$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null)-$$-${RANDOM}.json" 2>/dev/null || true
-            fi
-          fi
-        fi
-        echo "cc-await-ping: verdict=ping-cursorfail $(_elapsed_f) budget=${TIMEOUT}s — ⚠ delivered, but the shared cursor could NOT be advanced for $_HIT — you will see this mail again (a dup, never a loss); alarm recorded" >&2
-        exit 4
+      # PEEK, never take. The window is printed and NO shared cursor moves, so the line stays
+      # PENDING for hooks/mailbox-drain.sh — the reader whose emit provably becomes the turn's
+      # context. This watcher cannot establish that its own streams reached anybody (measured: a
+      # backgrounded Bash task's completion notification carries neither stdout nor stderr, only a
+      # summary and an output-file path), and a reader that cannot prove delivery must not consume.
+      # Rationale + the incident in full: the block above mailbox_peek_from in
+      # hooks/lib/mailbox-pending.sh. Dup-biased on purpose: if our stdout WAS read, the drain shows
+      # it once more; that is cheap, and the alternative was a silent, unrecoverable loss.
+      if command -v mailbox_peek_from >/dev/null 2>&1; then
+        mailbox_peek_from "$_HIT" "$_FROM"
+      else
+        # Deployed lib predates peek. Print the window inline — still writing NO cursor, which is the
+        # invariant, not the function name. Unlocked here because the old lib exposes no lock helper
+        # to borrow; a torn final line is a strictly smaller harm than consuming the window.
+        _pf="$(mailbox_file "$_HIT" 2>/dev/null)"
+        [ -n "$_pf" ] && [ -f "$_pf" ] && tail -n +"$(( _FROM + 1 ))" "$_pf" 2>/dev/null
       fi
+      # Our PRIVATE cursor still advances — that is what stops us re-testing this window — and it is
+      # deliberately the ONLY cursor this path writes.
+      _woke_set "$_HIT" "$(mailbox_lines "$_HIT")"
+      # The F9 rc-2 escalation that stood here (verdict=ping-cursorfail / exit 4) is gone WITH its
+      # subject: it alarmed when the take printed a body but could not advance `.seen`. This path
+      # writes no shared cursor at all, so there is no write left to fail and no escalation to
+      # honor. bin/cc-wait's rc-4 arm is left untouched — it treats rc 4 as SATISFIED, so becoming
+      # unreachable can only ever be safe there.
       # A DELIVERY IS ALSO A DURATION. The wake path's whole claim is that it was live between the arm
       # and the ping; `elapsed=` is the only place that interval is ever stated, and a take used to say
       # nothing at all — so a ping consumed 1 s after arming (an already-pending line, or a re-arm racing
       # a peer) was indistinguishable from one that proved a four-hour watch. stderr, never stdout: the
       # body on stdout is the payload and stays uncontaminated.
-      echo "cc-await-ping: verdict=ping key=$_HIT $(_elapsed_f) budget=${TIMEOUT}s uuid=${CUR_UUID} — mail delivered; the wake path was live for that long before it fired." >&2
+      echo "cc-await-ping: verdict=ping key=$_HIT $(_elapsed_f) budget=${TIMEOUT}s uuid=${CUR_UUID} — a ping landed and the wake path was live for that long before it fired. The body is on this watcher's stdout AND still PENDING in the box: nothing was consumed here, so your next turn boundary renders it via mailbox-drain even if you never read this stream. If you want it now, read \$CC_MAILBOX_DIR/$_HIT.md." >&2
       exit 0
     fi
   else
@@ -1488,10 +1500,25 @@ done
 # with a hardcoded per-basename exemption table compiled into the binary (grep's rc 1 is in it; there
 # is no user-extensible entry), so the harness renders this as `failed with exit code 2` / status
 # `failed` / telemetry `task_local_shell_failed`. A model re-invoked by that notification has triaged
-# a clean timeout as a fault. We cannot change the classifier — but the notification carries STDERR
-# (stdout is dropped; docs/research/mechanical-wake-asyncrewake-2026-07-29.md), so the discrimination
-# can ride the stream the reader actually gets. Same `verdict=<token>` convention cc-notify (:294) and
-# cc-announce use for exactly this reason: the exit code is for shells, the token is for readers.
+# a clean timeout as a fault. We cannot change the classifier.
+#
+# 🚨 THIS BLOCK USED TO CONTINUE "…but the notification carries STDERR (stdout is dropped)", and that
+# is FALSE ON BOTH HALVES on this binary — measured twice, independently, 2026-09-10 (backlog
+# 0366d5cc7b87). A backgrounded Bash task completes with a `<task-notification>` carrying a summary,
+# a status and an output-file PATH: probe tokens on stdout AND stderr appeared in NEITHER, at exit 0
+# and again at exit 2, so the drop is not conditioned on status. The cited source
+# (docs/research/mechanical-wake-asyncrewake-2026-07-29.md) measured a DIFFERENT transport — an
+# `asyncRewake` SessionStart HOOK, whose stderr does ride into a system-reminder — and that finding
+# was carried across to the Bash-tool background path, where it does not hold. Every `verdict=`
+# token in this file was designed on the belief that it did.
+#
+# The tokens are KEPT and are still worth writing: they reach a foreground caller, they reach
+# `bin/cc-wait`, and they reach the output file when anyone opens it. What they are NOT is a
+# DELIVERY. That distinction is the whole of the fix at the fire path above — a reader that cannot
+# prove delivery must not consume — and it is why the mail body is now left PENDING for
+# hooks/mailbox-drain.sh, the one reader whose emit provably becomes the turn's context. Same
+# `verdict=<token>` convention cc-notify (:294) and cc-announce use: the exit code is for shells,
+# the token is for whoever actually reads the stream.
 #
 # NOT remapped to exit 0. rc 2 is load-bearing for cc-wait (:138 branches on it) and is already
 # overloaded with the usage errors at :108-109 — collapsing it would invert a contract and lose a

@@ -422,6 +422,55 @@ mailbox_take_from() { # <uuid> <from> [ack_now]
   return "$rc"
 }
 
+# ── A READER THAT CANNOT PROVE DELIVERY MUST NOT CONSUME (backlog 0366d5cc7b87) ───────────────────
+# `mailbox_take_from` above advances `.seen` (and optionally `.acked`) as an inseparable part of
+# printing. That couples two different claims into one call: *the body was emitted on stdout* and
+# *the body reached a reader*. For hooks/mailbox-drain.sh they coincide — its stdout becomes the
+# turn's `additionalContext`, so emitting IS delivering. For bin/cc-await-ping they do not, and the
+# gap is the whole of the incident this function exists for.
+#
+# MEASURED 2026-09-10, this box, CC 2.1.x: a `Bash` tool call with `run_in_background: true` — the
+# arming recipe CLAUDE.md prescribes for cc-await-ping — completes with a `<task-notification>`
+# carrying a `<summary>` and an `<output-file>` PATH. Two probe tokens, one on stdout and one on
+# stderr, appeared in NEITHER: both streams land in a file the model is under no obligation to open.
+# The watcher's own comment asserted the opposite ("our stdout rides the harness task-completion
+# notification → a reliable delivery the model reads") and that untested belief is what authorized
+# it to advance both cursors. Result: `.seen` = `.acked` = EOF over a body nobody read, which is
+# strictly worse than an undelivered message — an unread line is still pending and a later drain
+# still shows it, whereas a CONSUMED line is indistinguishable from one already handled and no
+# reader will ever surface it again. Measured on pane 102: `102.seen` = `102.acked` = 215, a ~4000
+# word HANDOFF-PING in the box, and nothing rendered into the turn.
+#
+# So: print the window, advance NOTHING. The caller keeps its own private cursor (that is what stops
+# it re-firing), and the shared cursors stay where they were, which leaves the line PENDING for
+# hooks/mailbox-drain.sh — the one reader whose emit provably is a delivery. DUP-BIASED by
+# construction, matching `mailbox_take_from`'s own declared bias: if the caller's stdout did reach
+# somebody, the drain shows it once more, and a duplicate is cheap where a silent drop is not.
+#
+# Exit: 0 = printed · 1 = nothing new for this reader. There is no rc 2: this function performs no
+# cursor write, so it has no write to fail, and callers need no escalation branch for one.
+mailbox_peek_from() { # <uuid> <from>   — NON-CONSUMING: prints (from, EOF], touches no cursor
+  local u="${1:-}" from="${2:-0}" f cur body
+  _mbx_valid_uuid "$u" || return 1
+  from="$(_mbx_int "$from")"
+  f="$(mailbox_file "$u")"
+  # LOCKED, exactly as mailbox_take_from is. Not consuming is not the same as not needing the lock:
+  # the desk box is a hot append target, and F1 above is explicit that a concurrent append can be
+  # observed TORN. A lock-free tail would read that torn final line, which would make the two window
+  # primitives disagree about what a window even is. Same `|| true` degrade: a lock we could not get
+  # means proceed anyway (a torn read, never a hang).
+  _mbx_lock "$u" || true
+  cur="$(mailbox_lines "$u")"
+  # Same past-EOF clamp as mailbox_take_from/mailbox_seen (F11): a rotated or GC'd box re-delivers
+  # rather than going silent.
+  [ "$from" -gt "$cur" ] 2>/dev/null && from=0
+  if [ "$cur" -le "$from" ]; then _mbx_unlock "$u"; return 1; fi
+  body="$(tail -n +"$((from + 1))" "$f" 2>/dev/null)"
+  printf '%s' "$body"
+  _mbx_unlock "$u"
+  return 0
+}
+
 mailbox_promote_acked() { # <uuid> — the Stop-fold lag: everything emitted last cycle is now consumed (a turn ran)
   local u="${1:-}" seen
   _mbx_valid_uuid "$u" || return 0
