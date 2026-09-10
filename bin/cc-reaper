@@ -546,14 +546,16 @@ _rp_bounded() { # <secs> <cmd...> — run bounded; rc 124 = the bound fired
 # (fail-closed)" at precisely the moment reaping mattered most. The arm therefore runs FIRST and
 # is deliberately cheap: two /bin/ps forks + one awk, then explicit per-pid kills.
 #
-# KILL DISCIPLINE (hard rules): explicit pids from ONE snapshot · per-pid ucomm re-verification at
-# kill time (a recycled pid whose comm changed is skipped) · TERM then KILL · NEVER a pattern-kill
+# KILL DISCIPLINE (hard rules): explicit pids from ONE snapshot · per-pid re-verification at kill
+# time of ucomm, argv AND start time (a recycled pid is skipped — see _gs_verify_kill) · TERM then KILL · NEVER a pattern-kill
 # · NEVER a claude binary, kitty, iTerm2, tmux, or any pid whose SUBTREE holds a live claude ·
 # NEVER a whitelisted daemon. Fail-open everywhere: any error skips that pid and the sweep goes on.
 # DRY-RUN (no --reap) prints candidates and kills nothing. Kill switch: CC_REAPER_GARBAGE=0.
 # Seams (tests): CC_REAPER_GARBAGE_PS_A/_PS_B fixture files replace the live snapshots;
 # CC_REAPER_GARBAGE_KILL replaces kill(1) with a collector; CC_REAPER_WATCHDOG_DIR relocates the
-# watchdog pid-file store.
+# watchdog pid-file store; CC_REAPER_GARBAGE_PS_EPOCH names the clock a fixture snapshot was taken
+# at (default: now), so a closed-world test can make a recorded age agree or disagree with a real
+# process's birth.
 #
 # ── NEVER AN ANCESTOR OF THIS SWEEP (2026-08-15, backlog 8efd655b0fe1). The kill discipline above
 # enumerates what must not be touched by IDENTITY — claude, kitty, iTerm2, a whitelisted daemon —
@@ -617,14 +619,52 @@ _gs_is_ancestor() { # <pid> — 0 iff pid is this sweep or one of its ancestors
 # the file-driven watchdog branch, whose identity is a name inside a longer command line, and
 # because `ps -o args=` truncation must not manufacture a refusal. `-` opts out for a candidate
 # whose argv was never observed, which is the fail-open this arm promises everywhere else.
-_gs_verify_kill() { # <pid> <ucomm-ere> <TERM|KILL> [<argv-signature>] — re-verify comm AND argv, then
-                    # signal. rc 0 = signalled.
-  local pid="$1" re="$2" sig="$3" argsig="${4:--}" c a
+#
+# ── AND THAT ARGV SIGNATURE IS ITSELF A TAUTOLOGY WHERE THE ARGV IS A NAME (2026-09-10, backlog
+# 8c9d4b897594). Replacing "is it a bash?" with "does it carry the argv we classified?" re-identifies
+# a process only if two processes cannot share an argv. For `stuck-wrapper` they always do: every
+# session here is launched through the same wrapper with the same leading flags, so the 120-char
+# signature is one string. MEASURED 2026-09-10: 19 live cc-close-attrib wrappers, 1 distinct
+# signature. `orphan-zsh` is the same shape (`/bin/zsh -l` x6 identical). So a stuck wrapper that
+# exits between snapshot and signal, its pid handed to a NEW session's wrapper, gets killed, and
+# that kill takes a live session down: the one outcome this arm exists never to cause.
+#
+# THE PIN IS WHEN THE PROCESS STARTED, which no two holders of one pid can share: anybody holding
+# the pid at signal time who is not the classified process was born AFTER the snapshot saw the
+# classified one alive. Snapshot A already carries etime, so the pin costs no fork there: born_by =
+# the snapshot's clock (read the moment snapshot A RETURNS, the latest instant ps can have sampled)
+# minus the candidate's age. At signal time the holder started at `now - etime`; later than
+# born_by + slack means a different process, REFUSED. etime rather than lstart because lstart
+# renders through TZ and LC_TIME (the dialect paragraph above proc_lstart), and etime is digits.
+# Only the LATER bound is tested: an older process cannot hold a pid the snapshot saw somebody else
+# holding. Residual: a newcomer passes only if the candidate's age is at most snapshot A's duration
+# plus the slack. Every class floor is >= 60 s and snapshot A is bounded at
+# CC_REAPER_GARBAGE_PS_TIMEOUT_S (30), so no candidate falls in that window unless the bound is
+# raised past ~54 s. `-` (no observed age: the watchdog branch) opts out, as for the argv.
+GARBAGE_PIN_SLACK_S="${CC_REAPER_GARBAGE_PIN_SLACK_S:-5}"
+_GS_SNAP_T=""
+_gs_esec() { # <etime> → seconds on stdout, rc 1 on a shape it cannot read. `10#` because ps pads
+             # with zeros and bash reads "08" as bad octal.
+  local e="$1" d=0 a="" b="" c=""
+  case "$e" in ''|*[!0-9:-]*) return 1 ;; esac
+  case "$e" in *-*) d="${e%%-*}"; e="${e#*-}" ;; esac
+  IFS=: read -r a b c <<< "$e"
+  case "$d" in ''|*[!0-9]*) return 1 ;; esac
+  case "$a$b$c" in *-*) return 1 ;; esac
+  [ -n "$a" ] || return 1
+  if [ -n "$c" ] && [ -n "$b" ]; then echo $(( 10#$d*86400 + 10#$a*3600 + 10#$b*60 + 10#$c ))
+  elif [ -n "$b" ] && [ -z "$c" ]; then echo $(( 10#$d*86400 + 10#$a*60 + 10#$b ))
+  elif [ -z "$b" ] && [ -z "$c" ]; then echo $(( 10#$d*86400 + 10#$a ))
+  else return 1; fi
+}
+_gs_verify_kill() { # <pid> <ucomm-ere> <TERM|KILL> [<argv-signature>] [<born-by-epoch>] — re-verify
+                    # comm, argv AND start time, then signal. rc 0 = signalled.
+  local pid="$1" re="$2" sig="$3" argsig="${4:--}" born="${5:--}" c a e s now
   if _gs_is_ancestor "$pid"; then
     log "garbage: REFUSED $sig $pid — this sweep is running inside it (ancestor)"
     return 1
   fi
-  if [ -n "${CC_REAPER_GARBAGE_KILL:-}" ]; then "$CC_REAPER_GARBAGE_KILL" "$pid" "$re" "$sig" "$argsig"; return $?; fi
+  if [ -n "${CC_REAPER_GARBAGE_KILL:-}" ]; then "$CC_REAPER_GARBAGE_KILL" "$pid" "$re" "$sig" "$argsig" "$born"; return $?; fi
   c="$(/bin/ps -p "$pid" -o ucomm= 2>/dev/null | sed 's/^ *//;s/ *$//')"
   [ -n "$c" ] || return 1
   printf '%s\n' "$c" | /usr/bin/grep -qE "$re" || return 1
@@ -635,6 +675,21 @@ _gs_verify_kill() { # <pid> <ucomm-ere> <TERM|KILL> [<argv-signature>] — re-ve
       *) log "garbage: REFUSED $sig $pid — argv no longer matches what was classified (pid reused): wanted <$argsig>, found <${a:-«gone»}>"
          return 1 ;;
     esac
+  fi
+  # Last, so it is the check nearest the signal.
+  case "$born" in ''|*[!0-9]*) born="-" ;; esac
+  if [ "$born" != "-" ]; then
+    e="$(/bin/ps -p "$pid" -o etime= 2>/dev/null | tr -d ' ')"
+    [ -n "$e" ] || return 1                                     # gone since the argv read
+    now="$(date +%s 2>/dev/null)"; s="$(_gs_esec "$e")" || s=""
+    case "$now:$s" in *[!0-9:]*|:*|*:)
+      log "garbage: REFUSED $sig $pid — start time unreadable (etime=<$e>), so the pid cannot be re-identified"
+      return 1 ;;
+    esac
+    if [ $(( now - s )) -gt $(( born + GARBAGE_PIN_SLACK_S )) ]; then
+      log "garbage: REFUSED $sig $pid — the pid changed hands: its holder started at epoch $(( now - s )), after the classified process was already alive (born by $born); the argv matched, so only the start time could tell"
+      return 1
+    fi
   fi
   kill "-$sig" "$pid" 2>/dev/null
 }
@@ -704,15 +759,17 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
     return 0
   fi
   _gs_switch_on_clear "${1:-0}"
-  local reap="${1:-0}" snapA snapB list cls pid re age argsig desc
+  local reap="${1:-0}" snapA snapB list cls pid re age argsig desc pin
   local nA=0 nkill=0
-  _GS_T_PID=(); _GS_T_RE=(); _GS_T_SIG=()
+  _GS_T_PID=(); _GS_T_RE=(); _GS_T_SIG=(); _GS_T_PIN=()
   _gs_ancestors_init
   if [ -n "${CC_REAPER_GARBAGE_PS_A:-}" ] && [ -n "${CC_REAPER_GARBAGE_PS_B:-}" ]; then
     snapA="$(cat "$CC_REAPER_GARBAGE_PS_A" 2>/dev/null)" || snapA=""
     snapB="$(cat "$CC_REAPER_GARBAGE_PS_B" 2>/dev/null)" || snapB=""
+    _GS_SNAP_T="${CC_REAPER_GARBAGE_PS_EPOCH:-$(date +%s 2>/dev/null)}"
   else
     snapA="$(_rp_bounded "${CC_REAPER_GARBAGE_PS_TIMEOUT_S:-30}" /bin/ps -Axo pid=,ppid=,etime=,ucomm= 2>/dev/null)" || snapA=""
+    _GS_SNAP_T="$(date +%s 2>/dev/null)"   # AFTER snapshot A returns: the start pin's clock (_gs_verify_kill)
     snapB="$(_rp_bounded "${CC_REAPER_GARBAGE_PS_TIMEOUT_S:-30}" /bin/ps -Axo pid=,args= 2>/dev/null)" || snapB=""
   fi
   [ -n "$snapA" ] || { log "garbage: snapshot unavailable — arm skipped (fail-open)"; return 0; }
@@ -833,6 +890,10 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
   for df in "$wdir"/*.daemon; do
     [ -f "$df" ] || continue
     sid="$(basename "$df" .daemon)"
+    # MEASURED 2026-09-10: lead-crash-watchdog now writes `<pid><TAB><lstart>` to .daemon, which the
+    # all-digits test below rejects, so on live data this branch collects NOTHING; only the pid-only
+    # test fixtures reach it. Inert, hence safe. If it is ever revived, pin it on that recorded lstart,
+    # not on its name signature, which every watchdog on the box shares (backlog 8c9d4b897594).
     dpid="$(cat "$df" 2>/dev/null)"; lpid="$(cat "$wdir/$sid.pid" 2>/dev/null)"
     case "$dpid" in ''|*[!0-9]*) continue ;; esac
     case "$lpid" in ''|*[!0-9]*) continue ;; esac
@@ -853,6 +914,8 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
     [ -n "$pid" ] || continue
     case "$pid" in *[!0-9]*) continue ;; esac
     nA=$((nA+1))
+    pin="-"
+    case "$age:$_GS_SNAP_T" in *[!0-9:]*|:*|*:) : ;; *) pin=$(( _GS_SNAP_T - age )) ;; esac
     if [ "$reap" = 1 ]; then
       # PER-CANDIDATE, ON THE PATH THAT ACTS. The reap branch used to log only the aggregate
       # (`garbage: N candidates, M TERMed`), so `grep orphan-bash` over 4.4 MB of live reaper log
@@ -860,9 +923,10 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
       # only on the dry-run branch, which is the one that changes nothing. An arm that signals
       # in anger must name what it signalled, or its log cannot answer "who killed this".
       log "garbage: TERM $cls pid=$pid age=${age}s argv=<$argsig>"
-      _gs_verify_kill "$pid" "$re" TERM "$argsig" && {
+      _gs_verify_kill "$pid" "$re" TERM "$argsig" "$pin" && {
         nkill=$((nkill+1))
         _GS_T_PID[${#_GS_T_PID[@]}]="$pid"; _GS_T_RE[${#_GS_T_RE[@]}]="$re"; _GS_T_SIG[${#_GS_T_SIG[@]}]="$argsig"
+        _GS_T_PIN[${#_GS_T_PIN[@]}]="$pin"
       }
     elif _gs_is_ancestor "$pid"; then
       # DRY-RUN must report what REAP would do. Without this the two modes disagree: the actuator
@@ -881,7 +945,7 @@ EOF_GS
     local i=0
     while [ "$i" -lt "${#_GS_T_PID[@]}" ]; do
       kill -0 "${_GS_T_PID[$i]}" 2>/dev/null \
-        && _gs_verify_kill "${_GS_T_PID[$i]}" "${_GS_T_RE[$i]}" KILL "${_GS_T_SIG[$i]}"
+        && _gs_verify_kill "${_GS_T_PID[$i]}" "${_GS_T_RE[$i]}" KILL "${_GS_T_SIG[$i]}" "${_GS_T_PIN[$i]}"
       i=$((i+1))
     done
   fi
