@@ -676,7 +676,11 @@ EOF
   # the inverse test 'the carve-out is keyed on the OWN range' proves the same shim exonerates when
   # the suite genuinely is NOT ours — so this cannot pass by convicting everything.
   union_own_answer 'exit 7'
-  union_bats '    tests/a.bats) if [ ! -f "$T/a-seen" ]; then : > "$T/a-seen"; echo "1..1"; echo "not ok 1 intermittent"; exit 1; fi ;;'
+  # FIXTURE red/green/red 2026-09-10 (cc-backlog 19ca2b91425c): the carve-out now convicts on a
+  # REPRODUCED failure (2-of-3, postland-verify.sh:24-25's standard), never on a single one its own
+  # re-run contradicted. The property under test — a recovered `own` makes a.bats OURS — is
+  # untouched; only the evidence the fence demands changed, so the fixture must supply it.
+  union_bats '    tests/a.bats) n=$(cat "$T/a-n" 2>/dev/null || echo 0); n=$(( n + 1 )); echo "$n" > "$T/a-n"; if [ "$n" = 2 ]; then echo "1..1"; echo "ok 1 green on the re-run"; exit 0; fi; echo "1..1"; echo "not ok 1 intermittent"; exit 1 ;;'
   echo 1 > "$MOVER_ARMED"
   our_branch feat/union-deadown union-deadown.sh
 
@@ -694,7 +698,11 @@ EOF
   # drop either: two different causes (an abstention and a death) must reach one fail-closed
   # outcome. Identical to the test above except for the own arm's answer.
   union_own_answer 'echo FULL'
-  union_bats '    tests/a.bats) if [ ! -f "$T/a-seen" ]; then : > "$T/a-seen"; echo "1..1"; echo "not ok 1 intermittent"; exit 1; fi ;;'
+  # FIXTURE red/green/red 2026-09-10 (cc-backlog 19ca2b91425c): the carve-out now convicts on a
+  # REPRODUCED failure (2-of-3, postland-verify.sh:24-25's standard), never on a single one its own
+  # re-run contradicted. The property under test — a recovered `own` makes a.bats OURS — is
+  # untouched; only the evidence the fence demands changed, so the fixture must supply it.
+  union_bats '    tests/a.bats) n=$(cat "$T/a-n" 2>/dev/null || echo 0); n=$(( n + 1 )); echo "$n" > "$T/a-n"; if [ "$n" = 2 ]; then echo "1..1"; echo "ok 1 green on the re-run"; exit 0; fi; echo "1..1"; echo "not ok 1 intermittent"; exit 1 ;;'
   echo 1 > "$MOVER_ARMED"
   our_branch feat/union-fullown union-fullown.sh
 

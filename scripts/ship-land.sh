@@ -2013,6 +2013,7 @@ gate_bats() {  # run bats with the operator's lander tuning scrubbed; args pass 
       -u LAND_LOCK_WAIT -u LAND_LOCK_TTL \
       -u SHIP_LAND_LANE -u SHIP_LAND_SMOKE_BUDGET_S -u SHIP_LAND_TIMEOUT_BIN \
       -u SHIP_LAND_SMOKE_PER_SUITE_S -u SHIP_LAND_SMOKE_BUDGET_CAP_S \
+      -u SHIP_LAND_CARVEOUT_CONFIRM \
       -u SHIP_LAND_T0 -u SHIP_LAND_MEAS_ROUNDS -u SHIP_LAND_MEAS_GATE_S \
       -u SHIP_LAND_MEAS_ARMS_S -u SHIP_LAND_MEAS_STATICS_S \
       CC_GATE_MAX_LOAD=0 CC_BATS_MAX_ROOTS=0 ${homeenv[@]+"${homeenv[@]}"} bats "$@" </dev/null
@@ -2523,6 +2524,7 @@ run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites
   # beats a non-verdict, and softening a real failure into "retry when quieter" is the one
   # direction this split must never fail in.
   local f="$1" direct="$2" td rc1 rc2 fdir log sig notok1 notok2 plan1 plan2 known
+  local names1 nnames1 filt3 td3 log3 rc3 plan3 notok3
   # tee (not capture-then-print): the failing run stays LIVE on stderr while its output is kept,
   # so the ledger can record WHAT failed — a bare "it flaked" line is unactionable.
   log="$(mktemp)"
@@ -2532,6 +2534,14 @@ run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites
   [[ -z "$sig" ]] && sig="exit $rc1"
   plan1="$(tap_plan "$log")"
   notok1="$(tap_named_failures "$log" "" "$f")"     # leg B is inert here: nothing to compare to yet
+  # THE NAMES, CAPTURED WHILE THE LOG STILL EXISTS. `tap_named_failures` yields a COUNT, and the
+  # log is deleted three lines below, so by the time the third observation needs to know WHICH tests
+  # failed the only record of them is gone. Bounded at 8 and shorn of the collector artifact leg A
+  # already discards by count; empty is a legitimate answer (a torn line that leg 0 admitted has no
+  # parsable name) and the third observation falls back to the whole file for it.
+  names1="$(grep -aE '^not ok [0-9]+' "$log" 2>/dev/null \
+              | sed -e 's/^not ok [0-9]* //' -e 's/[[:space:]]*$//' \
+              | grep -v '^bats-gather-tests$' | head -8 || true)"
   if [[ "$notok1" -gt 0 ]]; then
     rm -f "$log"
     echo "↻ gate: $f RED — $notok1 failing test(s); one exoneration re-run in a fresh TMPDIR…" >&2
@@ -2608,6 +2618,102 @@ run_scoped_suite() {  # $1=suite file $2=newline-list of DIRECT suites
     return 2
   fi
   rm -f "$log"
+  # ---- THE THIRD OBSERVATION: 1-of-3 IS A FLAKE, AND THIS REPO ALREADY SAYS SO ------------------
+  # WHAT WAS WRONG (cc-backlog 19ca2b91425c). The carve-out below convicts on ONE failure whose only
+  # re-observation CONTRADICTED it — run 1 red, run 2 green — and calls that "intermittence". n=1,
+  # 1-of-2, and the second observation is evidence AGAINST the conviction. The sibling tool judging
+  # the SAME corpus on the SAME box already refuses to do that: scripts/postland-verify.sh:24-25
+  # states its law as "a red suite re-runs each failing FILE alone twice more; >=2/3 fails =
+  # REPRODUCIBLE, 1/3 = flake (→ flakes.jsonl, excluded from the verdict)", and its ledger carries
+  # 179 rows labelled `1-of-3`. Two tools, one corpus, opposite verdicts — and the STRICTER one, on
+  # strictly LESS evidence, is the one that blocks. This is not a new policy; it is the land gate
+  # arriving at the standard the verifier has been using all along.
+  #
+  # WHY IT IS THE LAND'S DOMINANT REFUSAL, in the file's own numbers. v2's smoke hands its own suite
+  # list to the runner as the direct set (:2320), and with no union `own` IS `direct` (:2254) — so
+  # EVERY selected suite is convictable and exoneration is unreachable for anything this range
+  # selected. At the per-suite flake rate this file already fits — "MLE over 55 real runs …
+  # q=2.94%/suite" (:2027) — a draw of N suites refuses the land with probability 1-(1-q(1-q))^N:
+  # 54% at the 27 suites gate-select returns for a 4-commit range here, 70% at N=42. The filing
+  # measured exactly that shape: FIVE lands of ONE unchanged diff, the flaking identity ROTATING
+  # each time (fire-engagement::35, then mailbox-wake-arm::18 + teammate-auto-shutdown::21, then
+  # cc-teardown::1), every one green on ship-land's own re-run, and the single attempt that started
+  # near load 12 flaked zero times across 42 suites. A rotating identity is a property of the DRAW,
+  # not of the diff. Two of those were independently disproved as diff-caused: a tripwire probe
+  # replacing all four fire-engagement subjects with recording stubs measured ZERO executions, and a
+  # simultaneous interleaved A/B on cc-teardown ran 1/10 failures drained vs 1/10 reverted.
+  # With one confirming observation the same arithmetic gives ~3.5% at N=42.
+  #
+  # THE FENCE IS NOT SOFTENED, IT IS EVIDENCED. A genuinely intermittent test still convicts —
+  # it reproduces, and 2-of-3 is RED here exactly as it is in the verifier. What can no longer
+  # convict is a single unreproduced failure. Every non-verdict keeps the OLD direction: no budget
+  # left to run a third time, or a third run CUT, and the carve-out below fires unchanged. That is
+  # deliberate — a gate may lose a conviction to evidence, never to silence.
+  #
+  # GRANULARITY IS THE NAMED TEST, for the reason postland-verify.sh:1658-1665 gives ("costs
+  # seconds", so the ladder can decide for a heavy suite instead of timing out and calling that a
+  # failure), with its `1..0` guard carried over verbatim: a `-f` regex that matches NOTHING exits 0
+  # with an empty plan, which would exonerate the suite for FREE. Empty plan ⇒ fall back to the
+  # whole file. And the filtered run passes known=0 so leg B stays inert: a filtered plan is
+  # legitimately smaller than the file's, and leg B would read that as truncation and discard a real
+  # reproduction — the one direction this must never fail in.
+  # Seam: SHIP_LAND_CARVEOUT_CONFIRM=off restores the 1-of-2 conviction.
+  if [[ "$notok1" -gt 0 && "${SHIP_LAND_CARVEOUT_CONFIRM:-on}" != "off" ]]; then
+    case $'\n'"$direct"$'\n' in
+      *$'\n'"$f"$'\n'*)
+        if [[ -n "${SMOKE_DEADLINE:-}" && "$(date +%s)" -ge "$SMOKE_DEADLINE" ]]; then
+          echo "⚠ gate: $f — the smoke budget is spent, so the confirming third run cannot be taken; the conviction below stands on 1-of-2. Override: SHIP_LAND_SMOKE_BUDGET_S." >&2
+        else
+          td3="$(mktemp -d)"; log3="$(mktemp)"
+          # THE FILTER MUST COVER EVERY NAMED FAILURE, or it is not the same experiment. `names1`
+          # is capped at 8 and drops the collector artifact, so a run with more failures than names
+          # would re-run a SUBSET — and a reproduction living outside that subset would come back
+          # green and exonerate. Any shortfall ⇒ the whole file, which is always the safe form.
+          nnames1="$(printf '%s' "$names1" | grep -c . || true)"
+          if [[ -n "$names1" && "${nnames1:-0}" -eq "$notok1" ]]; then
+            # bats -f takes an ERE. Escape every metachar per name, then anchor the alternation.
+            filt3="$(printf '%s\n' "$names1" | sed 's/[][\\.^$*+?(){}|\/]/\\&/g' | paste -sd'|' -)"
+            TMPDIR="$td3" gate_bats -f "^(${filt3})\$" "$f" 2>&1 | tee "$log3" >&2; rc3="${PIPESTATUS[0]}"
+            plan3="$(tap_plan "$log3")"
+            if [[ "${plan3:-}" = "0" ]]; then
+              echo "⚠ gate: $f — the confirming run's filter selected NO test (\`1..0\`, a non-verdict that would exonerate for free); re-running the whole file." >&2
+              TMPDIR="$td3" gate_bats "$f" 2>&1 | tee "$log3" >&2; rc3="${PIPESTATUS[0]}"
+              plan3="$(tap_plan "$log3")"
+              notok3="$(tap_named_failures "$log3" "$known" "$f")"
+            else
+              notok3="$(tap_named_failures "$log3" "" "$f")"
+            fi
+          else
+            TMPDIR="$td3" gate_bats "$f" 2>&1 | tee "$log3" >&2; rc3="${PIPESTATUS[0]}"
+            plan3="$(tap_plan "$log3")"
+            notok3="$(tap_named_failures "$log3" "$known" "$f")"
+          fi
+          rm -rf "$td3" 2>/dev/null || true; rm -f "$log3"
+          if [[ "$notok3" -gt 0 ]]; then
+            echo "↻ gate: $f — the confirming third run REPRODUCED $notok3 failing test(s): 2-of-3 is a real intermittent failure, not a flake." >&2
+            fdir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
+            mkdir -p "$fdir" 2>/dev/null || true
+            printf '{"ts":"%s","file":"%s","sha":"%s","phase":"land-gate","outcome":"2-of-3","signal":"%s","loadavg":"%s"}\n' \
+              "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$f" "$(git rev-parse --short HEAD 2>/dev/null || echo '?')" \
+              "$sig" "$(uptime 2>/dev/null | sed 's/.*averages*: //' | awk -F'[, ]+' '{print $1}')" \
+              >> "$fdir/flakes.jsonl" 2>/dev/null || true
+          elif [[ "${rc3:-1}" -ne 0 ]]; then
+            echo "⚠ gate: $f — the confirming third run was CUT (exit $rc3, ZERO 'not ok'): it neither corroborated nor cleared run 1, so the conviction below stands on 1-of-2." >&2
+          else
+            # 1-of-3 — the verifier's own label, so gate-red-census and the flake-rate denominator
+            # read one vocabulary across both tools.
+            fdir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
+            mkdir -p "$fdir" 2>/dev/null || true
+            printf '{"ts":"%s","file":"%s","sha":"%s","phase":"land-gate","outcome":"1-of-3","signal":"%s","loadavg":"%s"}\n' \
+              "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$f" "$(git rev-parse --short HEAD 2>/dev/null || echo '?')" \
+              "$sig" "$(uptime 2>/dev/null | sed 's/.*averages*: //' | awk -F'[, ]+' '{print $1}')" \
+              >> "$fdir/flakes.jsonl" 2>/dev/null || true
+            echo "✓ gate: $f EXONERATED 1-of-3 (${notok1} named failure(s) in run 1; GREEN in the re-run AND in the confirming third run) — a DIRECT suite, but one unreproduced failure is a flake, not intermittence. Logged to flakes.jsonl." >&2
+            return 0
+          fi
+        fi ;;
+    esac
+  fi
   # THE DIRECT CARVE-OUT, and it is keyed on `notok1` — a NAMED failure in the first run — not on
   # "the first run was non-zero". Its rule is "intermittence in code you are landing is a FINDING,
   # not a flake", and a CUT is not intermittence: the first run earned no verdict at all (a peer's
