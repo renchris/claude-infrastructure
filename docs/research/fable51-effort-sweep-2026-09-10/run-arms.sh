@@ -41,8 +41,12 @@ run_cell() {
   rm -rf "$dir"
   # A refusal or an error is a real arm outcome: recorded verbatim, never retried into a number.
   jq -r '.result // ""' "$raw" >"$out/${brief}__${eff}.md" 2>/dev/null || : >"$out/${brief}__${eff}.md"
+  # account: which config dir (quota bucket) served the cell — a 429 "session limit" is a QUOTA fault,
+  # not an arm outcome, and a re-run lands on a different account; the row must say which.
   jq -c --arg b "$brief" --arg e "$eff" --arg m "$SWEEP_MODEL" --arg s "$started" --arg t "$ended" \
-     --argjson rc "$rc" '{brief_id:$b, effort:$e, model:$m, started_at:$s, ended_at:$t, rc:$rc,
+     --arg a "$(basename "$SWEEP_CONFIG_DIR")" \
+     --argjson rc "$rc" '{brief_id:$b, effort:$e, model:$m, account:$a, started_at:$s, ended_at:$t, rc:$rc,
+       api_error_status,
        is_error, stop_reason, num_turns, duration_ms,
        served:(.modelUsage // {} | keys), cost_usd:.total_cost_usd,
        input_tokens:.usage.input_tokens, cache_read:.usage.cache_read_input_tokens,

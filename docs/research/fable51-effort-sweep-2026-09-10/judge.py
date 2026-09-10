@@ -199,9 +199,32 @@ def table(runs, scores):
             for n in names
         ]
         print(f"| {label} | " + " | ".join(map(str, c)) + " |")
-    idx = [
+    raw_idx = [
         json.loads(line) for line in open(Path(runs) / "index.jsonl") if line.strip()
     ]
+
+    # A 429 "session limit" is a QUOTA fault, not an arm outcome: those cells were re-run on another
+    # account, so the ledger holds both rows. Keep the latest non-quota row per cell and count the
+    # quota faults separately — never fold them into an arm's error column. Rows written before the
+    # runner recorded api_error_status carry no status, so an error with nothing served also counts.
+    def is_quota(r):
+        if r.get("api_error_status") == 429:
+            return True
+        return (
+            bool(r.get("is_error"))
+            and not r.get("served")
+            and not r.get("output_tokens")
+        )
+
+    latest = {}
+    for r in raw_idx:
+        if not is_quota(r):
+            latest[(r["brief_id"], r["effort"])] = r
+    idx = list(latest.values())
+    print(
+        f"\nindex rows {len(raw_idx)} · quota-fault rows set aside "
+        f"{sum(map(is_quota, raw_idx))} · cells kept {len(idx)}"
+    )
     print(
         "\n| effort | cells | errors | median output tokens | total output tokens | total cost USD |"
     )
