@@ -143,8 +143,26 @@ limit beats a gate that claimed to cover it.
 why the ratchet belongs in the *statics* gate rather than in the off-box runner: it is checkable here
 precisely because it does not need the runner — `/bin/bash` 3.2 is already on this box.
 
-The remaining six deterministic suites are **not** explained by this, and why admission passed them
-is unmeasured here.
+**Measured for the remaining eight, by running the gate against them** (`offbox-admission-lint
+--added`, 2026-09-10): **seven of eight ADMIT — *"green off-box"*.** Only `runner-stdin-immunity` is
+REFUSED. So the gate is not broken and it is not bypassed: re-run today it would admit them again,
+because on this box they pass. They red the runner for the same *kind* of reason the floor did — an
+axis that exists only on the runner — and the gate says so about itself in advance.
+
+    admit   session-index-history-gapfill   admit   validate-bash-differential
+    REFUSE  runner-stdin-immunity           admit   cc-read-twitter
+    admit   capacity-alarm-chronic          admit   lr-reset-poller-inplace
+    admit   cc-jetsam-exec                  admit   idl-record-size
+
+That reframes the residual. It is not eight suites to debug against a gate that failed; it is **one
+gate-catchable suite** (`runner-stdin-immunity` — reproducible here, cure (a) applies) and **seven
+machine-axis failures**, of which this note cured the only two whose axis had been identified. The
+technique that identified it generalises and is the cheap next move: **name a candidate machine axis
+and pin it locally** — bash version was one, and `/bin/bash` 3.2 was already on this box, which is
+why the cure cost a one-line comment and a ratchet rather than a hosted-runner debug loop. Each
+machine axis found this way earns a statics ratchet like `bash32-parse-lint`, which is how the class
+shrinks; each one left unnamed is a suite that reds every fold and cannot be reproduced by asking the
+gate.
 
 ## 7 — Honest limits
 
@@ -167,5 +185,7 @@ Repair population, corrected: `mcp-no-inherit` + `mcp-ssot-wire` (**fixed here**
 (`session-index-history-gapfill`, `runner-stdin-immunity`, `capacity-alarm-chronic`,
 `cc-jetsam-exec`, `validate-bash-differential`, `cc-read-twitter`) — eight suites whose logs
 show unrelated failures across unrelated subsystems, so they are eight distinct defects and
-not one fix.
-Next lever: §6 — why admission passed them.
+not one fix. Measured in §6: seven of the eight ADMIT today, so the residual is **one
+gate-catchable suite** (`runner-stdin-immunity`) and **seven machine-axis failures**.
+Next lever: name a candidate machine axis and pin it locally, as §6 describes — each one found
+earns a statics ratchet, which is the only thing that shrinks this class.
