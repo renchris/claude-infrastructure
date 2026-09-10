@@ -319,9 +319,58 @@ Held items and their unblock conditions:
 | B1, A4, A6, B2, B3, B4, B5, B7 | all route to `--why <arm>`, which does not exist, and `$arm` is `+`-joined (`:824-831`; `bats:417` pins `"arm":"handoff+fence"`) — the proposal never says what `--why handoff+fence` prints | write the mode (dispatched before `input="$(cat)"` at `:107` and before `idl_init`) **and** specify the multi-arm case |
 | A4 (custody) | additionally deletes the only in-message pointer to `cc-custody abandon <token> --why …`, leaving an uncollectable wave with no action; the `awaiting ARMED is a valid non-close state` carve-out is **not** at `cc-custody:254` as claimed — it survives only in `~/.claude-next/CLAUDE.md`, invisible to a session cwd'd elsewhere | keep the abandon branch inline, or point at `bin/cc-custody` explicitly |
 | A6 (🚀 added-file) | one cited home is fabricated: `hooks/completion-assert.sh:485-499` carries no symlink mechanism and no `command -v`/`[ -f ]` guard text. It does survive in `CLAUDE.md § the 🚀 rung` | cite the real home only |
-| A2 (unlanded ownership) | **right diagnosis, wrong prose.** `:455`'s else-branch genuinely fires on rc 0 and rc 2 alike, and `SHAS`/`TRUNK` really are on the wire (`scripts/wrap-ledger.sh:1069-1070`). But the replacement is `yours ⇒ /ship; a sibling's ⇒ say so and close` — two arrow chains and two verbless fragments, the exact banned shape | re-write long-form; this is the highest-value held item in the file (it prescribed a `/ship` over a sibling's commit, which `.claude/CLAUDE.md` forbids by name — incident 2026-07-11, `dfacccd`) |
+| A2 (unlanded ownership) | ✅ **APPLIED 2026-09-10** — see §3.3-A2 below. Held because: **right diagnosis, wrong prose.** `:455`'s else-branch genuinely fires on rc 0 and rc 2 alike, and `SHAS`/`TRUNK` really are on the wire (`scripts/wrap-ledger.sh:1069-1070`). But the replacement is `yours ⇒ /ship; a sibling's ⇒ say so and close` — two arrow chains and two verbless fragments, the exact banned shape | re-write long-form; this is the highest-value held item in the file (it prescribed a `/ship` over a sibling's commit, which `.claude/CLAUDE.md` forbids by name — incident 2026-07-11, `dfacccd`) |
 | B8 (re-fire tier) | guard keyed on `contra` instead of per-arm; asserts a state the latch cannot establish | key the retain on `d1\|d2\|d4\|d5\|d6 == 1`; drop the "nothing moved" claim or persist the prior `facts` string |
 | B4 (offer corrective) | `FILED (\`cc-backlog needs\` / \`cc-backlog add\`)` compresses away the **discriminator** — which one is for an operator step vs agent work. `bats:494` greps only `FILED`, so this passes the suite and still degrades the action | keep the two-clause form |
+
+#### 3.3-A2 — APPLIED 2026-09-10 (the held row above, unblocked and written long-form)
+
+The diagnosis reproduced exactly on trunk. `hooks/completion-assert.sh` (`:576` today, `:455` when the
+workflow ran) resolves the unlanded term through a four-arm chain — land-in-flight, `_ca_u` rc 1
+(not mine), rc 2 **with a live peer**, else convict — so the conviction fires on rc 0 (*this session
+provably wrote a path in the unlanded diff*) and on rc 2 (*cannot tell*) alike, and told both
+`(/ship to land)`. The file's own comment at `:431-442` already spells out why that is wrong for rc 2,
+naming incident 2026-07-11 / `dfacccd` — but it stops at the LIVE-peer case, and a rc 2 whose author
+is DEAD stays convicted with the same unqualified instruction.
+
+**What was written, and why it is not simply "don't land".** rc 2 is genuinely ambiguous and the two
+readings want opposite moves: a `/handoff` or `--recycle` successor inherits a dead predecessor's
+commits and **must** land them (`hooks/lib/peer-owned.sh:32` says so in as many words), while a
+read-only session beside a dead sibling's commits must not. So the arm does not withhold the land — it
+asks the one question that settles it and names the shas to ask it of, consuming `SHAS` off the wire
+(`scripts/wrap-ledger.sh:1936`), which no arm of this hook had read before. Same split the dirty-tree
+term already makes on `$_ca_d` (hunk C, landed `2dda2fe1b`).
+
+**The envelope had to move with it.** `:1140`'s remedy line reads `📦 ⇒ /ship it` for every arm, so a
+fragment saying *authorship is unresolved* would have been contradicted by its own wrapper one clause
+later — two answers, no rule for choosing. The qualifier is therefore carried into that same
+sentence-group through `$_ca_ushare`, empty on every close but this one. The `# The ledger group is
+byte-unchanged` comment beside it was updated rather than left to go quietly false.
+
+**`set -uo pipefail` (`:101`) is why both carriers are declared unconditionally**, above the
+`UNLANDED` block: the envelope reads `$_ca_ushare` on *every* contradiction close, including ones
+where `UNLANDED=0`. This is §3.1(d)'s failure mode — one unset expansion is a session-costing abort —
+and it is not hypothetical here: mutating that single line back to the naive in-block declaration
+turns `A2 CONTROL` and `A2 CARRIER` red.
+
+**Red-proof, both arms measured, not asserted.** Three cases added to `tests/completion-assert.bats`,
+each other's control — same hook, same repo shape, differing in exactly one input (whether the
+transcript carries an edit to the committed path):
+
+| Case | trunk's pre-fix hook | post-fix | the naive mutant |
+|---|---|---|---|
+| `A2` (rc 2, write-free close, DEAD peer) | **not ok** | ok | ok |
+| `A2 CONTROL` (rc 0, same shape) | **not ok** | ok | **not ok** |
+| `A2 CARRIER` (dirty-only ⇒ no qualifier, no `set -u` abort) | ok | ok | **not ok** |
+
+`A2 CARRIER` is green in both pre/post arms and that is correct — it is an **equivalence guard**, not a
+red-proof, and the only evidence it has power is the mutant column (MEMORY: *green in both arms is an
+equivalence guard, not a red-proof*). Gate at apply time: `completion-assert` 134 ok / 0 not ok.
+
+**What A2 does NOT discharge.** The other nine held rows in §3.3 stand unchanged — B8's retain guard is
+still keyed on `contra`, and B1/A4/A6/B2/B3/B4/B5/B7 still need the `--why <arm>` multi-arm spelling
+worked through per §5.1. A2 was taken first because it is the one held row that is a live *correctness*
+defect rather than a length one.
 
 ### 3.4 `hooks/session-continue.sh` — 6 of 9 held
 

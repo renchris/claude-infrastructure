@@ -557,6 +557,10 @@ if [ "$DIRTY" -eq 1 ]; then
     fi
   fi
 fi
+# Declared unconditionally: `set -uo pipefail` (:101) makes one unset expansion a session-costing
+# abort, and the envelope below reads $_ca_ushare on every contradiction close, not only unlanded
+# ones. This is the failure mode §3.1(d) of the plan names.
+_ca_ushare=""; _ca_ushas=""
 if [ "$UNLANDED" -eq 1 ]; then
   _ca_mine unlanded; _ca_u=$?
   _ca_peer=""
@@ -574,7 +578,28 @@ if [ "$UNLANDED" -eq 1 ]; then
   elif [ "$_ca_u" -eq 2 ] && _ca_peer="$(_ca_peer_owned)" && [ -n "$_ca_peer" ]; then
     _ca_exon="${_ca_exon}unlanded-live-peer-owned:${_ca_peer} "
   else
-    contra=1; facts="${facts}${AHEAD} commit(s) committed-but-unlanded (/ship to land); "
+    contra=1
+    # A2 (STOPHOOK_MESSAGE_TIERING §3.3, the file's highest-value held row). This else-branch fires
+    # on rc 0 (this session provably wrote a path in the unlanded diff) and on rc 2 (cannot tell)
+    # alike, and told BOTH "/ship to land". Over a shared checkout that instruction IS the land
+    # .claude/CLAUDE.md forbids by name — incident 2026-07-11, dfacccd, five files rebase-dropped by
+    # a concurrent land — which the LIVE-PEER-OWNED comment at :431 already spells out for the case
+    # where the author is still running. The peer term exonerates only a LIVE author; rc 2 with a
+    # dead one stays convicted, and it is genuinely ambiguous there: a /handoff or --recycle
+    # successor inherits a dead predecessor's commits and MUST land them, while a read-only session
+    # beside a dead sibling's commits must not. So the split does not withhold the land — it asks
+    # the one question that decides it, and names the shas to ask it of. Same shape the dirty-tree
+    # term above already takes on $_ca_d.
+    if [ "$_ca_u" -eq 0 ]; then
+      facts="${facts}${AHEAD} commit(s) YOU wrote are committed-but-unlanded (/ship to land); "
+    else
+      _ca_ushas="$(lfield SHAS)"
+      facts="${facts}${AHEAD} commit(s) committed-but-unlanded${_ca_ushas:+ (${_ca_ushas})}, authorship UNRESOLVED — read them and settle whose they are before landing; "
+      # Carried to the envelope because the envelope's own remedy line says "📦 ⇒ /ship it", which
+      # is the instruction this arm has to qualify. A fragment that contradicts its own wrapper
+      # leaves the reader with two answers and no rule for choosing.
+      _ca_ushare=" One qualifier on the unlanded term: its authorship is UNRESOLVED, so do not blanket-/ship. Land it if it is yours — including commits you inherited from a predecessor session, which are yours to land. If it is a sibling's or a still-running peer's work, do not land it: say whose it is in one line and close on your own state (\`~/.claude/hooks/completion-assert.sh --why ledger\`)."
+    fi
   fi
 fi
 [ "$REMAINDER" -gt 0 ]  && { contra=1; facts="${facts}${REMAINDER} frozen-DoD item(s) remain; "; }
@@ -1135,9 +1160,11 @@ log_idl fired "false-done" \
             --argjson count "$((N+1))" --argjson max "$CLASS_MAX" \
       '{facts:$facts,rung:$rung,arm:$arm,class:$class,count:$count,max:$max}')"
 
-# Reason = one sentence-group per firing arm, in arm order. The ledger group is byte-unchanged.
+# Reason = one sentence-group per firing arm, in arm order. The ledger group is byte-unchanged
+# EXCEPT for $_ca_ushare, which is empty on every close but an unlanded-with-unresolved-authorship
+# one; it qualifies this group's own "📦 ⇒ /ship it" remedy and must therefore sit inside it.
 reason=""
-[ "$contra" -eq 1 ] && reason="Completion-assert: your close reads as done/complete, but the LIVE ledger contradicts it — ${facts}. Ship/land of verified net-positive work is DRIVABLE (not a genuine blocker), and so is converging the live layer. Re-answer by DRIVING the remainder to done (📦 ⇒ /ship it; 🚀 landed-but-not-live ⇒ run the converger named above, then re-read; finish the open items; commit with explicit paths) — or name the ONE irreducible blocker (credential / sudo / destructive-migration / external-info only the operator has)."
+[ "$contra" -eq 1 ] && reason="Completion-assert: your close reads as done/complete, but the LIVE ledger contradicts it — ${facts}. Ship/land of verified net-positive work is DRIVABLE (not a genuine blocker), and so is converging the live layer. Re-answer by DRIVING the remainder to done (📦 ⇒ /ship it; 🚀 landed-but-not-live ⇒ run the converger named above, then re-read; finish the open items; commit with explicit paths) — or name the ONE irreducible blocker (credential / sudo / destructive-migration / external-info only the operator has).${_ca_ushare}"
 [ "$d3" -eq 1 ] && reason="${reason:+$reason }Your line 1 both asserts and withdraws a verdict, so the operator has to ask a follow-up to learn which it is. Pick the ONE rung that actually governs — if something is parked or is the operator's, that IS the rung (📦 / 👤); if it is immaterial, leave it out of line 1 entirely. Line 1 answers 'is it safe to close?' with no qualifier."
 [ "$d1" -eq 1 ] && reason="${reason:+$reason }An operator-only step is not an escape hatch from work you could have done: file it only if you genuinely cannot (a credential, sudo, a GUI, or a value judgment that is theirs). If you can run it, run it now. Your close hands the operator work in prose, so the operator-readout block cannot render it and it stays buried in a paragraph. File each operator-only step — \`cc-backlog needs \"<step>\" [--run \"<exact command>\"]\` — then re-close: line 1 states the rung (👤 when steps are yours), and the steps come from the rendered block, not your prose."
 [ "$d4" -eq 1 ] && reason="${reason:+$reason }Your close names remaining work and then offers it instead of driving it — the operator's standing ruling is that the answer is always yes, so the question costs a round-trip and yields nothing. Every open item resolves to exactly one of three dispositions, never a fourth: DRIVEN (you do it now), DROPPED (you name it in one line and let it go), or BLOCKED on a genuine operator-only gate (credential / sudo / destructive migration / a real value fork), which then IS your line-1 rung. FILING IS THE EXCEPTION, NOT A CO-EQUAL CHOICE — measured 2026-08-25, 432 of 526 live backlog rows (82.1%) exist because a session wrote something down instead of finishing or dropping it, which is the single largest reason the backlog does not drain. Mint a row ONLY if you can answer all three: why THIS session could not do it ('out of scope' is not a reason), why it will still be true after a p90 of 9.3 days in the queue (ideally a \`--falsifier\` so it self-retracts), and who it is for (\`cc-backlog needs\` operator-only, \`cc-backlog add --why-not-now \"needs-credential|needs-human|not-yet-true|no-capacity: <detail>\"\` agent work — an add WITHOUT it stays YOUR loose end in the ledger). Cannot answer all three ⇒ DROP IT. 'Say the word' is not a disposition. Drive it, drop it, or justify the file — then re-close."

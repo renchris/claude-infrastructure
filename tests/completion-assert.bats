@@ -964,6 +964,59 @@ _ca_reg() { # <paneUUID> <pid> <startedAt_epoch> <cwd> <session_id>
   printf '%s' "$output" | grep -q '"decision":"block"'
 }
 
+# ── A2 (STOPHOOK_MESSAGE_TIERING §3.3, the file's highest-value held row) ────────────────────────
+# The unlanded conviction fires on rc 0 (this session provably wrote a path in the diff) and on rc 2
+# (cannot tell) alike, and told both "/ship to land". The two states want opposite first moves, and
+# the rc-2 one is the shared-checkout land `.claude/CLAUDE.md` forbids by name (incident 2026-07-11,
+# dfacccd). These two cases are each other's control: they run the SAME hook over the SAME repo
+# shape and differ in exactly one input — whether the transcript carries an edit to the committed
+# path — so a message that does not distinguish them fails one or the other, never both.
+
+@test "A2: unlanded + authorship rc 2 (write-free close, DEAD peer) states UNRESOLVED, not a bare /ship" {
+  w="$(_ca_repo a2unk config/kitty.conf)"
+  _ca_reg 234 "$(_ca_dead_pid)" "$(( $(date +%s) - 3600 ))" "$w" peer-234
+  tr="$(_ca_tr "$BATS_TEST_TMPDIR/a2unk.jsonl")"          # NO written paths ⇒ _ca_mine returns 2
+  run bash -c "printf '{\"session_id\":\"A21\",\"cwd\":\"$w\",\"transcript_path\":\"$tr\"}' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '"decision":"block"'      # ANTI-VACUITY: it really does convict
+  local r; r="$(printf '%s' "$output" | jq -r .reason)"
+  printf '%s' "$r" | grep -qF 'authorship UNRESOLVED' || false
+  # The envelope's own remedy says "📦 ⇒ /ship it"; the qualifier has to reach the SAME string or the
+  # reader gets two answers and no rule for choosing.
+  printf '%s' "$r" | grep -qF 'do not blanket-/ship' || false
+  printf '%s' "$r" | grep -qF 'completion-assert.sh --why ledger' || false
+  # and it must NOT be the unqualified instruction the rc-0 arm gives
+  ! printf '%s' "$r" | grep -qF 'YOU wrote are committed-but-unlanded' || false
+}
+
+@test "A2 CONTROL: the SAME shape with the commit provably THIS session's ⇒ plain /ship, no qualifier" {
+  w="$(_ca_repo a2mine config/kitty.conf)"
+  _ca_reg 234 "$(_ca_dead_pid)" "$(( $(date +%s) - 3600 ))" "$w" peer-234
+  tr="$(_ca_tr "$BATS_TEST_TMPDIR/a2mine.jsonl" "$w/config/kitty.conf")"   # ⇒ _ca_mine returns 0
+  run bash -c "printf '{\"session_id\":\"A22\",\"cwd\":\"$w\",\"transcript_path\":\"$tr\"}' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '"decision":"block"'
+  local r; r="$(printf '%s' "$output" | jq -r .reason)"
+  printf '%s' "$r" | grep -qF 'YOU wrote are committed-but-unlanded (/ship to land)' || false
+  ! printf '%s' "$r" | grep -qF 'authorship UNRESOLVED' || false
+  ! printf '%s' "$r" | grep -qF 'do not blanket-/ship' || false
+}
+
+@test "A2 CARRIER: a dirty-only conviction carries NO unlanded qualifier (and set -u does not abort)" {
+  # $_ca_ushare is read by the envelope on EVERY contradiction close. If it were assigned only inside
+  # the UNLANDED block, `set -uo pipefail` (hooks/completion-assert.sh:101) would kill the hook here
+  # instead of blocking — the §3.1(d) failure mode. This case is what makes that a red, not a silence.
+  w="$(mkrepo_landed a2carry)"
+  ( cd "$w" || exit 1; echo mine >> base.txt )     # dirty, landed, UNLANDED=0
+  tr="$(_ca_tr "$BATS_TEST_TMPDIR/a2carry.jsonl" "$w/base.txt")"
+  run bash -c "printf '{\"session_id\":\"A23\",\"cwd\":\"$w\",\"transcript_path\":\"$tr\"}' | bash '$HOOK'"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q '"decision":"block"'
+  local r; r="$(printf '%s' "$output" | jq -r .reason)"
+  printf '%s' "$r" | grep -qF 'dirty tree' || false
+  ! printf '%s' "$r" | grep -qF 'do not blanket-/ship' || false
+}
+
 # ── LANDED ≠ LIVE: the 🚀 rung the guard was never taught (face 4) ──
 @test "🚀: '✅ Complete & live on trunk' while the live layer is PAST its converge budget ⇒ FIRE" {
   local w; w="$(mkrepo_landed_not_live bl1)"
