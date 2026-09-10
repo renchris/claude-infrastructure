@@ -74,14 +74,24 @@ verdict() { # $1=per-core load $2=candidate ceiling → ADMIT|REFUSE (the SUBJEC
 # could only ever be run against the case it is expected to fail is not a control.
 separator() { # $1=fatal per-core  $2=space-separated survivors
   local fatal="$1" survivors="$2" c s ok
-  for c in $(awk 'BEGIN{for(i=0;i<=650;i++) printf "%.2f\n", i/100}'); do
+  # PROCESS SUBSTITUTION, NOT A PIPE, and not `for c in $(awk …)` either. The `for` form is what
+  # SC2013 flags; a pipe would silence that but run the loop in a SUBSHELL, where the `return 0`
+  # below returns from the subshell and the function falls through to `return 1` — the sweep would
+  # then report "no separator exists" for every population, INCLUDING THE CONTROL, which is the one
+  # result this suite must never manufacture.
+  #
+  # (And the note above deliberately does not open with the linter's name: a comment whose first
+  # word is that name parses as a malformed DIRECTIVE, SC1073, and ABORTS analysis of the whole
+  # file — scripts/bats-shellcheck-lint.sh's own header records three suites that sat in that
+  # state, and the gate counts an aborted file as RED, not as clean.)
+  while read -r c; do
     [ "$(verdict "$fatal" "$c")" = "REFUSE" ] || continue
     ok=1
     for s in $survivors; do
       [ "$(verdict "$s" "$c")" = "ADMIT" ] || { ok=0; break; }
     done
     [ "$ok" = 1 ] && { printf '%s' "$c"; return 0; }
-  done
+  done < <(awk 'BEGIN{for(i=0;i<=650;i++) printf "%.2f\n", i/100}')
   return 1
 }
 
