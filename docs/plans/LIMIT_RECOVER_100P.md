@@ -1,6 +1,10 @@
+---
+status: complete
+---
+
 # /limit-recover — 100th-percentile recovery: the pane IS the continuation
 
-Status: OPEN · opened 2026-09-08 by session b8fcf245 (claude-infrastructure, next)
+Status: COMPLETE 2026-09-10 (see § 6 continued, last entry) · was OPEN · opened 2026-09-08 by session b8fcf245 (claude-infrastructure, next)
 Operator ruling 2026-09-08, verbatim intent:
 
 > "every session (we provided a screenshot of three sessions) to be located, to then essentially
@@ -293,3 +297,21 @@ once this lands (the poller can never create them again).
     duplicate. Only the tmux copy in tab 648 remains, and it is the live one.
   · the four sole-copy orphans — filed one row each (above), all idle for days with 0 unlanded
     commits.
+- 2026-09-10 · **CLOSED** (cc-backlog `775afca94edc`, the plan-open row). Re-read against trunk:
+  every § 8 deliverable is on `origin/main` by content, the E2E above is the acceptance, and all six
+  rows this wave filed are `done` (`24f84b0c0c5e` converge; `653e8214d505` pane 616, gone per
+  `kitten @ ls`; `fae2b2d87a4d` `09d6dff0e45f` `2322c93da80e` `45424ff78f85` tmux orphans, gone per
+  `tmux ls`). The remainder was the two items § 8 lists as "Filed" — and **neither was ever filed**:
+  no backlog row mentions `pane_shell_root` or `WatchPaths`. Disposed this pass:
+  · `pane_shell_root` login-wrapper false-yes + ppid-1 detritus — **DRIVEN**, both narrow fixes from
+    q-survivability-spawn.md § "The gate has to be fixed too", in `scripts/handoff-fire.sh`. Red-proof
+    in `tests/handoff-recycle-pane-survives.bats` § 3b: 4 cases red on the pre-fix tree (P5's
+    login→sleep census, expect + detritus, detritus alone, login with no child), the pane-634
+    runner and bare-zsh controls green on both. Detritus and childless login ABSTAIN (`unknown`)
+    rather than count as non-shells, so the gate's affirmative-only refusal polarity is unchanged.
+  · launchd `WatchPaths` on the requests dir — **DROPPED**. `lr-fleet.sh` already prints the
+    `launchctl kickstart` that runs the poller at once, the 600 s tick bounds the rest, and a plist
+    change is an operator reinstall that `launchd-parity-lint` reads as drift until it is run: an
+    operator step to buy ≤10 min of latency on a path that already has a manual accelerator.
+  This file had no frontmatter, so `find-plan.sh --status` read `unknown` and the plan-open
+  falsifier could never fire; `status: complete` is what lets it retract.
