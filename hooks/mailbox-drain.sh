@@ -195,8 +195,37 @@ fi
 # Body on stdout; rc 1 = nothing new; rc 2 = delivered-but-.seen-write-failed (still surface the body —
 # better a dup next turn than a drop; the re-deliver is bounded and the guard sees the un-advanced .acked).
 # take_n's cap advances the cursor by exactly what it printed, so a capped drain defers, never drops.
-body="$(mailbox_take_n "$own_uuid" 0 "$MAXLINES")"; rc=$?
-[ "$MODE" = "post-tool" ] && [ -n "$body" ] && : > "$_mdir/$own_uuid.posttool" 2>/dev/null
+#
+# ── EMIT-THEN-COMMIT (backlog 6a178497df5f, 2026-09-10) — the paragraph above is the FALLBACK now ──
+# The take above advanced `.seen` ~365 lines before this hook emits (:563 as filed), and everything in
+# between — adoption, the goal read, up to eight cc-custody forks, jq — runs inside a 5 s hook timeout.
+# A reap in that span discarded the stdout while the cursor stood, and the next Stop's
+# mailbox_promote_acked (acked=seen) made the loss permanent. Measured: 322 `hook_cancelled` records for
+# this hook in 30 days, most at SessionStart ~5.03 s, where the own take ran BEFORE the slow adoption.
+# So: claim the box, PEEK the window, and advance `.seen` only after the JSON write succeeds (the commit
+# at the bottom). A reap before the commit leaves the window pending for the next boundary.
+# LIB SKEW: this file and hooks/lib are separate per-file symlinks in the live layer, so a new drain can
+# run against an older lib. Branch HERE on the primitives, never re-gate the lib load — an older lib
+# keeps the take path above verbatim.
+_etc=0 _claimed=0 _end=0
+command -v mailbox_drain_claim >/dev/null 2>&1 && command -v mailbox_peek_range >/dev/null 2>&1 \
+  && command -v mailbox_window_end >/dev/null 2>&1 && command -v mailbox_commit_seen >/dev/null 2>&1 \
+  && _etc=1
+if [ "$_etc" = 1 ]; then
+  body="" rc=1
+  # A held claim is a LIVE drain delivering this window right now — deliver nothing, never a dup.
+  if mailbox_drain_claim "$own_uuid"; then
+    _claimed=1
+    trap 'mailbox_drain_release "$own_uuid"' EXIT
+    _from="$(mailbox_seen "$own_uuid")"
+    _end="$(mailbox_window_end "$own_uuid" "$_from" "$MAXLINES")"
+    body="$(mailbox_peek_range "$own_uuid" "$_from" "$_end")" && rc=0
+    [ -n "$body" ] || _end="$_from"
+  fi
+else
+  body="$(mailbox_take_n "$own_uuid" 0 "$MAXLINES")"; rc=$?
+  [ "$MODE" = "post-tool" ] && [ -n "$body" ] && : > "$_mdir/$own_uuid.posttool" 2>/dev/null
+fi
 
 # ── ADOPTION (v3 D1) — SessionStart only: inherit what a predecessor pane never consumed ──────────
 # A pane that self-closed with a successor left `<old>.forward` → us. Its inbox may still hold lines
@@ -271,7 +300,16 @@ MBXADOPT
     # for exactly this ("a 600-line box must not be dumped into a tool result") and advances the
     # cursor by precisely what it printed, so the remainder stays undelivered rather than being
     # silently marked seen. Kill switch for the whole adoption path: CC_MBX_PULL_ADOPT=0.
-    _more="$(mailbox_take_n "$own_uuid" 0 "${CC_MBX_ADOPT_MAX_LINES:-200}")"  # surface adopted lines NOW
+    if [ "$_etc" = 1 ]; then
+      # Peeked from where the own window ended, so the one commit at the bottom covers both.
+      _more=""
+      if [ "$_claimed" = 1 ]; then
+        _end2="$(mailbox_window_end "$own_uuid" "$_end" "${CC_MBX_ADOPT_MAX_LINES:-200}")"
+        _more="$(mailbox_peek_range "$own_uuid" "$_end" "$_end2")" && _end="$_end2"
+      fi
+    else
+      _more="$(mailbox_take_n "$own_uuid" 0 "${CC_MBX_ADOPT_MAX_LINES:-200}")"  # surface adopted lines NOW
+    fi
     [ -n "$_more" ] && body="$([ -n "$body" ] && printf '%s\n' "$body"; printf '%s' "$_more")"
   fi
 fi
@@ -439,7 +477,12 @@ warn=""; [ "$rc" = 2 ] && warn=' (⚠ cursor write failed — you may see this a
 # next boundary takes it. Only the capped mode can leave one, so MAXLINES=0 renders nothing.
 rest=""
 if [ "$MAXLINES" -gt 0 ] && command -v mailbox_pending_count >/dev/null 2>&1; then
-  _left="$(mailbox_pending_count "$own_uuid")"; case "$_left" in ''|*[!0-9]*) _left=0 ;; esac
+  if [ "$_claimed" = 1 ]; then
+    _left=$(( $(mailbox_lines "$own_uuid") - _end ))   # .seen is not committed yet: count past OUR window
+  else
+    _left="$(mailbox_pending_count "$own_uuid")"
+  fi
+  case "$_left" in ''|*[!0-9]*) _left=0 ;; esac
   [ "$_left" -gt 0 ] && rest="
      (+$_left more pending — capped at $MAXLINES per mid-turn drain; the rest arrives at your next tool boundary. Nothing is lost.)"
 fi
@@ -560,6 +603,14 @@ fi
 if [ "$_cust_n" -gt 0 ]; then
   msg="${msg} · custody −${_cust_n} (returned: ${_cust_slugs})"
 fi
-jq -nc --arg e "$EVENT" --arg c "$ctx" --arg m "$msg" \
-  '{hookSpecificOutput:{hookEventName:$e, additionalContext:$c}, systemMessage:$m}'
+_out="$(jq -nc --arg e "$EVENT" --arg c "$ctx" --arg m "$msg" \
+  '{hookSpecificOutput:{hookEventName:$e, additionalContext:$c}, systemMessage:$m}')" || exit 0
+printf '%s\n' "$_out" || exit 0   # a write that failed delivered nothing — leave the window pending
+# COMMIT (6a178497df5f) — only now that the emit is written. A reap before this line re-delivers the
+# window at the next boundary; a failed write here costs a duplicate, never a loss.
+if [ "$_claimed" = 1 ]; then
+  mailbox_commit_seen "$own_uuid" "$_end" \
+    || echo "mailbox-drain: .seen commit failed for $own_uuid — this window will surface again (a dup, not a loss)" >&2
+  [ "$MODE" = "post-tool" ] && : > "$_mdir/$own_uuid.posttool" 2>/dev/null
+fi
 exit 0

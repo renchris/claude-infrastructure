@@ -1182,10 +1182,27 @@ printf '%s' "$n" > "${f}.count"
 # cycle's NEW mail with ack_now=0 (the Stop channel is less certain than additionalContext, so the
 # cc-inbox-guard's .acked watch is the backstop). The lib is already sourced and $_ouid computed above;
 # a take is confined HERE because its body is about to be delivered in the decision:block reason below.
-mail=""
-if command -v mailbox_take >/dev/null 2>&1; then
-  case "$_ouid" in ''|.|..|.*|*[!A-Za-z0-9._-]*) : ;; *) mail="$(mailbox_take "$_ouid" 0)" ;; esac
-fi
+#
+# EMIT-THEN-COMMIT (backlog 6a178497df5f, 2026-09-10): the take above advanced `.seen` before the
+# decision:block below was written, and the very next Stop's promote (acked=seen) turns a body lost to a
+# reap in between into CONSUMED. So peek under the drain claim and commit only after the jq write — the
+# same order hooks/mailbox-drain.sh uses. An older lib without the primitives keeps the take verbatim.
+mail="" _mend="" _mclaim=0
+case "$_ouid" in
+  ''|.|..|.*|*[!A-Za-z0-9._-]*) : ;;
+  *)
+    if command -v mailbox_drain_claim >/dev/null 2>&1 && command -v mailbox_peek_range >/dev/null 2>&1 \
+       && command -v mailbox_window_end >/dev/null 2>&1 && command -v mailbox_commit_seen >/dev/null 2>&1; then
+      if mailbox_drain_claim "$_ouid"; then
+        _mclaim=1
+        _mcur0="$(mailbox_seen "$_ouid")"
+        _mend="$(mailbox_window_end "$_ouid" "$_mcur0" 0)"
+        mail="$(mailbox_peek_range "$_ouid" "$_mcur0" "$_mend")" || { mail=""; _mend=""; }
+      fi
+    elif command -v mailbox_take >/dev/null 2>&1; then
+      mail="$(mailbox_take "$_ouid" 0)"
+    fi ;;
+esac
 
 step=$(cat "$f")
 reason="🔧 Loose ends remain — do NOT stop yet. Next: ${step}
@@ -1216,11 +1233,17 @@ fi
 # ALONGSIDE the block (a universal top-level field, precedent at :502) so the human sees the delivery the
 # model just got — without it the in-loop desk, the heaviest mail consumer, stays the one silent channel.
 mark_blocked continue
+_emitted=0
 if [ -n "$_sysmsg" ]; then
-  jq -nc --arg r "$reason" --arg s "$_sysmsg" '{decision:"block",reason:$r,systemMessage:$s}'
+  jq -nc --arg r "$reason" --arg s "$_sysmsg" '{decision:"block",reason:$r,systemMessage:$s}' && _emitted=1
 else
-  jq -nc --arg r "$reason" '{decision:"block",reason:$r}'
+  jq -nc --arg r "$reason" '{decision:"block",reason:$r}' && _emitted=1
 fi
+# COMMIT only after the block reason carrying the mail is written (6a178497df5f).
+if [ "$_emitted" = 1 ] && [ -n "$_mend" ]; then
+  mailbox_commit_seen "$_ouid" "$_mend" || true   # a failed write re-shows the mail next boundary: a dup
+fi
+[ "$_mclaim" = 1 ] && mailbox_drain_release "$_ouid"
 log_idl fired "continue" "$(jq -cn --argjson n "$n" --argjson m "$MAX" --arg s "$step" \
   --argjson mail "$([ -n "$mail" ] && printf 'true' || printf 'false')" \
   '{count:$n,max:$m,step:$s,mail_folded:$mail}' 2>/dev/null)"
