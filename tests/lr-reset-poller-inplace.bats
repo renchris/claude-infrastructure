@@ -110,6 +110,14 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-qu
   grep -qE "LIVE +$SID — original pane 616 is alive \(pid $$\); would NUDGE in place, never spawn \(dry-run\)" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
   [ ! -s "$IT2_LOG" ]
 }
+@test "SELF: a tick reads no variable before assigning it — _LRP_SELF is set before the lr-lib ladder" {
+  # 59e415e12 read _LRP_SELF at the lr-lib ladder and assigned it ~190 lines later. set -u killed
+  # only the $(dirname …) subshell, so every tick exited 0 while printing the error and losing rung 1.
+  mk_parked "$SID"
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"unbound variable"* ]] || { echo "$output"; false; }
+}
 
 @test "TRANSPLANTED: a parked sid whose lock names ANOTHER store with the successor on disk is retired, nothing fired" {
   mk_parked "$SID"
