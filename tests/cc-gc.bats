@@ -177,7 +177,7 @@ mkbox() { # <key> <lines> <acked>
 # (backlog 7a40d116d06c — the lane governed *.md UUID boxes only, so 8,083 files grew around 964)
 
 # Sets DEADPID: a pid that provably existed and is provably gone.
-dead_pid() { sleep 300 >/dev/null 2>&1 & DEADPID=$!; kill "$DEADPID" 2>/dev/null; wait "$DEADPID" 2>/dev/null || true; }
+dead_pid() { sleep 300 >/dev/null 2>&1 & DEADPID=$!; kill "$DEADPID" 2>/dev/null || true; wait "$DEADPID" 2>/dev/null || true; }
 
 @test "mailbox: a NUMERIC pane-keyed box is reapable, a name-keyed twin is not" {
   mkbox 4242 3 3;  age_days "$CC_MAILBOX_DIR/4242.md" 30
