@@ -59,7 +59,13 @@ beat() { # <seq> <kind> [age-seconds]
   run "$AWAIT" "$UUID" --interval 1 --timeout 5
   [ "$status" -eq 0 ]                                # fires without waiting for the timeout
   [[ "$output" == *"arrived before the watcher armed"* ]] || false
-  [ "$(cat "$CC_MAILBOX_DIR/$UUID.seen")" -eq 1 ]    # and advances the shared cursor on fire
+  # This line used to read `[ "$(cat …/$UUID.seen)" -eq 1 ]  # and advances the shared cursor on
+  # fire`. That assertion PINNED THE DEFECT (backlog 0366d5cc7b87): advancing the shared cursor is
+  # exactly how a ping got marked consumed into a stream nobody reads. Kept, inverted, with its
+  # history recorded rather than deleted — F6a's real claim is the IMMEDIACY above, never the cursor.
+  local seen=0
+  [ -f "$CC_MAILBOX_DIR/$UUID.seen" ] && seen="$(cat "$CC_MAILBOX_DIR/$UUID.seen")"
+  [ "$seen" -eq 0 ]
 }
 
 @test "times out with exit 2 when no ping arrives" {
@@ -149,33 +155,40 @@ beat() { # <seq> <kind> [age-seconds]
   [ ! -f "$CC_MAILBOX_DIR/$UUID.watching" ]
 }
 
-@test "F9: cursor-write failure still DELIVERS but exits LOUD (4) + alarms — never a silent clean take" {
-  # mailbox_take rc 2 = "body printed, but the cursor write FAILED — the caller must escalate + still
-  # deliver, never silently drop". cc-await-ping exited 0 regardless, so the lib's one escalation
-  # contract had NO honorer: a broken cursor looked exactly like a clean take, and the same mail would
-  # be re-delivered forever with nobody told. Exercised by standing the tool up beside a lib that
-  # returns rc 2 (cc-await-ping resolves the lib relative to its own path, so a temp bin/+hooks/lib
-  # tree drives the real code down its real rc-2 branch).
+# ── F9 IS RETIRED, WITH ITS SUBJECT (backlog 0366d5cc7b87) ───────────────────────────────────────
+# F9 asserted that when the fire path's cursor write FAILED, the watcher still delivered the body,
+# exited 4 and wrote a cursor-fail alarm. That contract had a subject only while the fire path WROTE
+# a cursor. It no longer does — it peeks — so there is no write left to fail, no rc 2 for the lib to
+# return here, and nothing to escalate. Deleting the case outright would have hidden that a
+# documented escalation stopped existing, so it is replaced IN PLACE by the case its stub tree is
+# now the right fixture for: the DEGRADE path, where the deployed lib predates mailbox_peek_from.
+#
+# That path matters more than it looks. This file is symlinked into the live layer per-file, so
+# during convergence a NEW cc-await-ping routinely runs against an OLDER hooks/lib. The dangerous
+# edit — and the one a future session will reach for — is to gate `_have_lib` on peek; that drops
+# the whole window to the lib-free baseline. We branch at the call site instead, and the invariant
+# the branch must hold is not the function name but this: BODY DELIVERED, NO CURSOR WRITTEN.
+@test "degrade path: an older lib without peek still delivers and still writes NO cursor" {
   local root="$BATS_TEST_TMPDIR/tree"
   mkdir -p "$root/bin" "$root/hooks/lib"
   cp "$AWAIT" "$root/bin/cc-await-ping"
-  # The stub mirrors the seam the tool actually drives. Since F-3 that is mailbox_take_from (a
-  # reader-private window) seeded by mailbox_seen — NOT mailbox_has_pending/mailbox_take, which no
-  # longer decide anything here. A stub left on the old names would silently fail the
-  # `command -v mailbox_take_from` gate, drop the tool to its lib-free path, and pass this test
-  # vacuously by never reaching an rc-2 branch at all.
+  # A lib new enough for the `command -v mailbox_take_from` gate (so the F-3 private cursor and the
+  # keyset survive) but with NO mailbox_peek_from — exactly the convergence window. mailbox_take_from
+  # is defined ONLY to satisfy the gate: if the call site ever reached for it again this case reds,
+  # because taking would advance the cursors the assertions below pin at zero.
   cat > "$root/hooks/lib/mailbox-pending.sh" <<'LIB'
 mailbox_lines() { echo 1; }
 mailbox_seen() { echo 0; }
-mailbox_take_from() { printf '%s\n' "2026-07-10T10:00:00+0000 [peer] undroppable ping"; return 2; }
+mailbox_file() { echo "$CC_MAILBOX_DIR/$1.md"; }
+mailbox_take_from() { echo "FAIL: the call site took instead of peeking" >&2; return 2; }
 LIB
-  export CC_COMMS_ALARM_DIR="$BATS_TEST_TMPDIR/comms-alarms"
   printf '2026-07-10T10:00:00+0000 [peer] undroppable ping\n' > "$MB"
   run "$root/bin/cc-await-ping" "$UUID" --interval 1 --timeout 5
-  [ "$status" -eq 4 ]
-  [[ "$output" == *"undroppable ping"* ]] || false                 # still DELIVERED, never dropped
-  [[ "$output" == *"cursor could NOT be advanced"* ]] || false     # …and said so
-  [ -n "$(find "$CC_COMMS_ALARM_DIR" -name 'cursor-fail-*.json' 2>/dev/null | head -1)" ]
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"undroppable ping"* ]] || false                  # delivered
+  [[ "$output" != *"the call site took instead of peeking"* ]] || false
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.seen" ]                             # and consumed nothing
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.acked" ]
 }
 
 # ── OWNER GUARD — a watcher must never outlive the session it wakes ───────────────────────────────
@@ -547,7 +560,7 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
   [[ "$output" == *"verdict=timeout"* ]] || false
 }
 
-@test "F-3: the watcher advances .seen/.acked when IT is first, and never REGRESSES a further-ahead one" {
+@test "F-3: the watcher never REGRESSES a further-ahead .seen (and no longer writes one at all)" {
   # Two halves of mailbox_take_from's contract in one arm. A watcher is an ADDITIONAL consumer, so it
   # must reconcile the shared cursors on fire (or cc-inbox-guard alarms and receipts read `unread`)
   # while never writing a SMALLER value over another consumer's — which would un-deliver its mail and
@@ -564,8 +577,14 @@ dead_pid() { local d; sleep 0.1 & d=$!; wait "$d" 2>/dev/null || true; printf '%
   wait "$writer" 2>/dev/null || true
   [ "$status" -eq 0 ]
   [[ "$output" == *"second line"* ]] || false
+  # NOT REGRESSED is still the real property and still asserted: a sibling drain got to 2 ahead of
+  # us and we must never write a smaller value back over it. What changed (backlog 0366d5cc7b87) is
+  # the second line, which used to read `-eq 2  # promoted by our reliable delivery`. That delivery
+  # was never reliable — a backgrounded task's notification carries neither of this watcher's
+  # streams — so promoting `.acked` asserted a read that had not happened. We now promote nothing;
+  # the Stop fold does, one cycle after a reader has actually seen the line.
   [ "$(cat "$CC_MAILBOX_DIR/$UUID.seen")" -eq 2 ]   # not regressed
-  [ "$(cat "$CC_MAILBOX_DIR/$UUID.acked")" -eq 2 ]  # promoted by our reliable delivery
+  [ "$(cat "$CC_MAILBOX_DIR/$UUID.acked")" -eq 0 ]  # and never promoted by US
 }
 
 # ── F-2: THE DEAF LEAD (2026-08-09) ──────────────────────────────────────────────────────────────
@@ -1914,4 +1933,77 @@ PINGLINE='2026-09-07T10:00:01-0500 [peer] HANDOFF-PING fire-x: landed'
   run "$AWAIT" "$UUID" --only-class HANDOFF-PING --except-class SUPERVISOR-PAGE
   [ "$status" -eq 2 ]
   [[ "$output" == *"mutually exclusive"* ]]
+}
+
+# ── A READER THAT CANNOT PROVE DELIVERY MUST NOT CONSUME (backlog 0366d5cc7b87) ──────────────────
+# The fire path used to call `mailbox_take_from "$_HIT" "$_FROM" 1`, advancing BOTH shared cursors to
+# EOF, on the strength of an untested comment: "our stdout rides the harness task-completion
+# notification → a reliable delivery the model reads". Measured 2026-09-10, that is false — a
+# backgrounded Bash task completes with a notification carrying a summary and an output-file PATH,
+# and probe tokens on stdout AND stderr appeared in neither. So the watcher marked mail CONSUMED
+# into a stream nobody read, which is strictly worse than never delivering it: an unread line is
+# still pending and a later drain shows it, whereas `.seen` = `.acked` = EOF is indistinguishable
+# from mail already handled and no reader will ever surface it again. Measured on pane 102:
+# `102.seen` = `102.acked` = 215 over a ~4000-word HANDOFF-PING that rendered nothing into the turn.
+#
+# These three fail against trunk's take (seen=1, acked=1, pending=0) and pass against the peek.
+@test "a consumed ping does NOT advance .seen — the line stays pending for the boundary drain" {
+  printf '2026-07-10T10:00:00+0000 [peer] HANDOFF-PING slug: done\n' > "$MB"
+  run "$AWAIT" "$UUID" --interval 1 --timeout 5
+  [ "$status" -eq 0 ]
+  # The cursor file is either absent or still 0 — never EOF. Absent is the honest pre-state here.
+  local seen=0
+  [ -f "$CC_MAILBOX_DIR/$UUID.seen" ] && seen="$(cat "$CC_MAILBOX_DIR/$UUID.seen")"
+  [ "$seen" -eq 0 ]
+}
+
+@test "a consumed ping does NOT advance .acked — nothing here may claim the mail was read" {
+  printf '2026-07-10T10:00:00+0000 [peer] HANDOFF-PING slug: done\n' > "$MB"
+  run "$AWAIT" "$UUID" --interval 1 --timeout 5
+  [ "$status" -eq 0 ]
+  local acked=0
+  [ -f "$CC_MAILBOX_DIR/$UUID.acked" ] && acked="$(cat "$CC_MAILBOX_DIR/$UUID.acked")"
+  [ "$acked" -eq 0 ]
+}
+
+# The property stated in the CONSUMER's own terms, which is the one that actually matters: after the
+# watcher fires, hooks/mailbox-drain.sh must still see something to deliver. A test that only checks
+# a cursor file could be satisfied by a rename; this one asks the library the drain itself asks.
+@test "after a ping fires, the drain still has the line to deliver (pending > 0)" {
+  printf '2026-07-10T10:00:00+0000 [peer] HANDOFF-PING slug: done\n' > "$MB"
+  run "$AWAIT" "$UUID" --interval 1 --timeout 5
+  [ "$status" -eq 0 ]
+  run bash -c '. "'"$REPO"'/hooks/lib/mailbox-pending.sh"; mailbox_pending_count "'"$UUID"'"'
+  [ "$status" -eq 0 ]
+  [ "$output" -ge 1 ]
+}
+
+# EQUIVALENCE GUARD, not a red-proof — it is green in BOTH arms by design, because the take printed
+# the body too. It is here to pin the half of the behaviour the fix must NOT lose: peek still emits
+# the window on stdout, so every foreground caller (bin/cc-wait, a human running this by hand) is
+# unaffected. Its power was established against the obvious mutant — a peek that advances the
+# private cursor but forgets to print — which it kills while the three cases above stay green.
+@test "peek still prints the body on stdout (equivalence guard — green pre-fix and post-fix)" {
+  printf '2026-07-10T10:00:00+0000 [peer] HANDOFF-PING slug: done\n' > "$MB"
+  run "$AWAIT" "$UUID" --interval 1 --timeout 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"HANDOFF-PING slug: done"* ]]
+}
+
+@test "mailbox_peek_from prints the window and touches no cursor" {
+  printf 'l1\nl2\nl3\n' > "$MB"
+  printf '1\n' > "$CC_MAILBOX_DIR/$UUID.seen"
+  run bash -c '. "'"$REPO"'/hooks/lib/mailbox-pending.sh"; mailbox_peek_from "'"$UUID"'" 1'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"l2"* ]] && [[ "$output" == *"l3"* ]] || false
+  [[ "$output" != *"l1"* ]] || false
+  [ "$(cat "$CC_MAILBOX_DIR/$UUID.seen")" -eq 1 ]        # unmoved
+  [ ! -f "$CC_MAILBOX_DIR/$UUID.acked" ]                 # never created
+}
+
+@test "mailbox_peek_from returns 1 when the window is empty" {
+  printf 'l1\n' > "$MB"
+  run bash -c '. "'"$REPO"'/hooks/lib/mailbox-pending.sh"; mailbox_peek_from "'"$UUID"'" 1'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
 }
