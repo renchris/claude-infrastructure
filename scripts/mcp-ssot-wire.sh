@@ -247,7 +247,11 @@ if check_only:
     print(tag + " " + "; ".join(bits))
     sys.exit(0)
 
-# Merge: set only the SSOT's own keys. An unrelated server already present is left alone.
+# NO APOSTROPHES ANYWHERE IN THIS HEREDOC. bash 3.2 (macOS /bin/bash, and what the off-box
+# runner resolves for a bare `bash`) does not recognise a heredoc delimiter inside a command
+# substitution -- it lexes this body as shell code, so one apostrophe opens an unterminated
+# quote and the whole script dies at parse time. Ratchet: scripts/bash32-parse-lint.sh
+# Merge: set only the keys the SSOT itself declares. An unrelated server already present is left alone.
 cfg.setdefault("mcpServers", {}).update(want)
 # temp + rename inside the same dir: atomic, and never leaves a truncated .claude.json behind
 # if a live session is reading it mid-write.
