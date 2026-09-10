@@ -67,6 +67,13 @@ SCAN="${1:-$ROOT/docs}"
 # the corpus. scripts/nightly-regression.sh runs it corpus-wide, but that job is dormant (its launchd
 # agent is not loaded; last regression.log entry 2026-07-26). So the corpus-wide exit 1 this script
 # returns today blocks nothing; read a whole-tree run as a REPORT, not as a gate verdict.
+# CORRECTED 2026-09-10 (cc-backlog b1f7763af89f): the nightly is NOT dormant. com.claude.nightly-
+# regression is loaded (04:00 daily since 2026-08-25) and scored this lint RED on every run that
+# finished — and it read the WORKING TREE, so another session's untracked scratch under docs/ could
+# turn it red over content that is on no branch. Corpus mode therefore (1) reads TRACKED files only,
+# and (2) grandfathers the standing debt through scripts/pane-id-lint.ratchet, so the nightly reds on
+# a NEW truncated id instead of on the same 178 lines forever. The payload gate is unchanged: its box
+# is not a git tree, so it gets neither.
 # Instead: three NARROW numeric shapes that are provably not pane ids are scrubbed from a COPY of
 # the line, and the line is re-tested. Scrubbing a copy (rather than a line-level `grep -v`) keeps a
 # line that carries BOTH a benign number and a real pane id flagged.
@@ -77,22 +84,106 @@ scrub_benign() { # <line> — drop (a) 20xxxxxx dates, (b) size-unit-suffixed co
     -e 's#(^|[^-0-9A-Za-z])20[0-9]{6}([^-0-9A-Za-z]|$)#\1<date>\2#g' \
     -e 's#(^|[^-0-9A-Za-z])[0-9]{8}([[:space:]]*(bytes|MB|MiB|KB|KiB|GB|GiB))#\1<size>\2#g'
 }
-viol=0
+tokens_of() { # <text> → each 8-char [0-9A-F] WORD, one per line
+  # A word is a maximal run of [-0-9A-Za-z] — the same delimiters PANE_RE uses. Extracting with
+  # `grep -o "$PANE_RE"` instead would CONSUME the delimiter between two adjacent tokens, so the second
+  # of `A1B2C3D4 E5F6A7B8` would never be seen, and a ratcheted first token would launder a new one.
+  printf '%s\n' "$1" | grep -oE '[-0-9A-Za-z]+' | grep -xE '[0-9A-F]{8}'
+}
+
+# ── what is scanned (2026-09-10, cc-backlog b1f7763af89f) ──────────────────────────────────────
+# A git tree is scanned by its TRACKED files (`git ls-files`), so a sibling session's untracked
+# scratch can never turn the corpus red. Anything else — handoff-fire's private payload box, every
+# hermetic test corpus — is scanned exactly as before, recursively.
+GIT_MODE=0; PREFIX=""
+if git -C "$SCAN" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  GIT_MODE=1
+  PREFIX="$(git -C "$SCAN" rev-parse --show-prefix 2>/dev/null)"
+fi
+candidates() {
+  if [ "$GIT_MODE" -eq 1 ]; then
+    # ls-files answers relative to $SCAN; re-anchor every hit to the `<abs path>:<n>:<text>` shape
+    git -C "$SCAN" ls-files -z 2>/dev/null \
+      | (cd "$SCAN" && xargs -0 grep -nHE "$PANE_RE" -- 2>/dev/null) \
+      | awk -v p="$SCAN/" '{ print p $0 }'
+  else
+    grep -rnE "$PANE_RE" "$SCAN" 2>/dev/null
+  fi
+}
+
+# ── the ratchet: the standing corpus debt, grandfathered by (path, token), never by line number ──
+# Consulted ONLY for this repo's own tree (or an explicit CC_PANE_ID_RATCHET), and never for the
+# payload box. Entries may only be DELETED: an entry whose (path, token) no longer occurs is itself a
+# violation, which is what stops a ratchet rotting into a permanent exemption — the same design as
+# scripts/typed-send-lint.sh. A new truncated id is fixed, or marked pane-id-lint:allow on its line;
+# it is never appended to the ratchet.
+TAB=$'\t'
+RATCHET="${CC_PANE_ID_RATCHET:-$ROOT/scripts/pane-id-lint.ratchet}"
+RATCHET_ON=0
+if [ "$GIT_MODE" -eq 1 ]; then
+  if [ -n "${CC_PANE_ID_RATCHET:-}" ] \
+     || [ "$(git -C "$SCAN" rev-parse --show-toplevel 2>/dev/null)" = "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" ]; then
+    RATCHET_ON=1
+  fi
+fi
+RATCHET_SET=""
+if [ "$RATCHET_ON" -eq 1 ] && [ -r "$RATCHET" ]; then
+  RATCHET_SET="$(grep -vE '^[[:space:]]*(#|$)' "$RATCHET" 2>/dev/null)"
+fi
+USED="
+"
+ratcheted() { case "
+$RATCHET_SET
+" in *"
+$1$TAB$2
+"*) return 0 ;; esac; return 1; }
+
+viol=0; grand=0; stale=0
 while IFS= read -r hit; do
   case "$hit" in *pane-id-lint:allow*) continue ;; esac
   scrub_benign "$hit" | grep -qE "$PANE_RE" || continue
+  if [ -n "$RATCHET_SET" ]; then
+    rel="${hit#"$SCAN"/}"; rel="${rel%%:*}"; key="$PREFIX$rel"
+    ntok=0; new=0
+    for tok in $(tokens_of "$(scrub_benign "${hit#*:*:}")"); do
+      ntok=$((ntok + 1))
+      if ratcheted "$key" "$tok"; then USED="$USED$key$TAB$tok
+"; else new=1; fi
+    done
+    if [ "$ntok" -gt 0 ] && [ "$new" -eq 0 ]; then grand=$((grand + 1)); continue; fi
+  fi
   printf '  %s\n' "$hit"
   viol=$((viol + 1))
 done < <(
-  grep -rnE "$PANE_RE" "$SCAN" 2>/dev/null \
-    | grep -vE '[0-9A-F]{8}-' || true
+  candidates | grep -vE '[0-9A-F]{8}-' || true
 )
 
-if [ "$viol" -gt 0 ]; then
-  echo "pane-id-lint: ⛔ $viol TRUNCATED pane id(s) above — each is a landmine for the next successor."
-  echo "  Fix: an operational address -> a ROLE token (<orchestrator>, resolved at send-time);"
-  echo "       a historical reference -> the FULL uuid, marked as a past fact, not a send target."
-  echo "  Intentional counter-example? add  pane-id-lint:allow  to that line."
+if [ -n "$RATCHET_SET" ]; then
+  while IFS= read -r ent; do
+    [ -n "$ent" ] || continue
+    case "$ent" in "$PREFIX"*) ;; *) continue ;; esac   # judge only entries inside what was scanned
+    case "$USED" in *"
+$ent
+"*) continue ;; esac
+    printf '  stale ratchet entry: %s — delete this line from %s\n' "${ent/$TAB/ }" "$RATCHET"
+    stale=$((stale + 1))
+  done <<EOF
+$RATCHET_SET
+EOF
+fi
+
+if [ "$viol" -gt 0 ] || [ "$stale" -gt 0 ]; then
+  if [ "$viol" -gt 0 ]; then
+    echo "pane-id-lint: ⛔ $viol TRUNCATED pane id(s) above — each is a landmine for the next successor."
+    echo "  Fix: an operational address -> a ROLE token (<orchestrator>, resolved at send-time);"
+    echo "       a historical reference -> the FULL uuid, marked as a past fact, not a send target."
+    echo "  Intentional counter-example? add  pane-id-lint:allow  to that line."
+  fi
+  if [ "$stale" -gt 0 ]; then
+    echo "pane-id-lint: ⛔ $stale stale ratchet entr(ies) above — the line each one grandfathered changed."
+    echo "  Delete them: the ratchet may only shrink."
+  fi
   exit 1
 fi
-echo "pane-id-lint: clean — no truncated pane ids in $SCAN"
+g=""; [ "$grand" -gt 0 ] && g=" ($grand standing line(s) grandfathered by $RATCHET)"
+echo "pane-id-lint: clean — no new truncated pane ids in $SCAN$g"
