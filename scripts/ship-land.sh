@@ -1088,7 +1088,24 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   rtitle="re-land ${BRANCH}: ship-land could not complete and its author's pane may be gone"
   rrun="$cmd   # last attempt: rc=${rc} (${cause}), head pinned at ${ref:-<unrecorded>}"
   nargs=(add --title "$rtitle" --source needs --run "$rrun"
-    --why-not-now "ship-land exited ${rc} (${cause}) on ${BRANCH}; the author's own retry runs first, and the drain lane re-lands it if that pane is gone — agent work under the standing-land authorization, not an operator step"
+    # `not-yet-true:` IS THE CLASS, AND IT IS NOT A FORMALITY (2026-09-09). cc-backlog's
+    # impossibility-class gate (bin/cc-backlog:1804, landed 2026-09-05) REFUSES a --why-not-now
+    # value that opens with anything else. Its own header names ship-land as a generator to protect
+    # and scopes itself "to the VALUE, never to PRESENCE ... requiring the flag would break every
+    # generator that files a bare row (ship-land, postland-verify, deploy-live, cc-discover)" — but
+    # this generator does not file a BARE row, it SUPPLIES the flag, so it met the value gate
+    # instead and the add exited 2. The fallback below then filed the row through `needs`, i.e.
+    # BORN-BLOCKED, which is the one state no drain lane reads and the exact defect the 2026-09-06
+    # rewrite above removed (48 such rows had sat in the operator gate holding unlanded commits).
+    # Two trunk tests were red on it: tests/ship-land.bats "P4 inbox: the backlog row carries the
+    # EXACT re-land command" and "re-land rows: the filed title carries NO per-attempt sandbox path".
+    #
+    # AND THE CLASS IS THE HONEST ONE, not the one that happens to pass. `not-yet-true` is defined
+    # as "an external precondition has not happened yet — pair it with a --falsifier". Here the
+    # precondition is literally that this branch's content reaches trunk, and the falsifier stored
+    # below (land-content-verify.sh) retracts the row exactly when it does. The row stays OPEN agent
+    # work carrying its --run: this names why it cannot be driven in THIS process, which is exiting.
+    --why-not-now "not-yet-true: ship-land exited ${rc} (${cause}) on ${BRANCH} and the branch's content is not on trunk yet; the author's own retry runs first, and the drain lane re-lands it if that pane is gone — agent work under the standing-land authorization, not an operator step"
     --session "${CLAUDE_CODE_SESSION_ID:-}")
   case "$land_proj" in
     ""|.*) : ;;                                  # unresolvable, or a sandbox — do not file a lie
