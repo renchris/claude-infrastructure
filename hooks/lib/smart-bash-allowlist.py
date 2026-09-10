@@ -68,6 +68,42 @@ SUBST_PLACEHOLDER = "__ccsubst__"
 MAX_SUBST_DEPTH = 3
 
 
+# `$(( … ))` is ARITHMETIC expansion, not command substitution: the shell evaluates integer
+# arithmetic and executes NOTHING. Until 2026-09-10 meeting one returned not-ok, which deferred
+# the WHOLE command — measured on the beacon archive as the largest single cause of a defer
+# (87 of 1,747 structural rows died on it at the top level, 91 counting nested ones), and worse,
+# it MASKED every other cause in those rows: `causes()` returns early on an undecomposable
+# command, so a harvest report attributed them to "cannot decompose" instead of to the verbs
+# they actually carry. Refusing to look at arithmetic is also inconsistent with the paragraph
+# above — a substitution is a COMMAND and we judge it; arithmetic cannot even be one.
+#
+# It is consumed as DATA (a placeholder), but ONLY when its contents are provably arithmetic,
+# because `$((` is genuinely ambiguous: `$( (subshell) )` written without the space is a command
+# substitution whose contents WOULD run. Two guards, both fail-closed:
+#   * `_arith_end` requires the matching `))` PAIR — `$((cmd) )` closes on a non-`)` and defers.
+#   * a POSITIVE character whitelist, plus an explicit refusal of the four shapes that could hide
+#     an executable inside the body (`$(`, a backtick, `${!` indirect expansion, and process
+#     substitution). `split_segments` screens the last three on the OUTER command, and replacing
+#     the body with a placeholder would otherwise hide them from it.
+# Anything that fails either guard defers exactly as before, so this is strictly additive.
+_ARITH_CHARS = re.compile(r"^[A-Za-z0-9_ \t+\-*/%()<>=!&|^~?:,.$\[\]{}]*$")
+_ARITH_NEVER = ("$(", "`", "${!", "<(", ">(")
+
+
+def _arith_end(cmd, i):
+    """Index of the `)` closing an arithmetic `$((` at i, or None if it is not a `))` pair."""
+    depth, j, n = 0, i + 1, len(cmd)
+    while j < n:
+        if cmd[j] == "(":
+            depth += 1
+        elif cmd[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return j if j > 0 and cmd[j - 1] == ")" else None
+        j += 1
+    return None
+
+
 def extract_substitutions(cmd):
     """(inner_commands, outer_with_placeholders, ok).
 
@@ -101,7 +137,15 @@ def extract_substitutions(cmd):
             continue
         if ch == "$" and i + 1 < n and cmd[i + 1] == "(":
             if i + 2 < n and cmd[i + 2] == "(":
-                return [], "", False  # $(( arithmetic )) — not a command, refuse
+                end = _arith_end(cmd, i)
+                if end is None:
+                    return [], "", False  # not a `))` pair — may be `$( (subshell) )`
+                body = cmd[i + 3 : end - 1]
+                if any(t in body for t in _ARITH_NEVER) or not _ARITH_CHARS.match(body):
+                    return [], "", False  # something could execute in there
+                out.append(SUBST_PLACEHOLDER)  # arithmetic is DATA, and runs nothing
+                i = end + 1
+                continue
             depth, j = 1, i + 2
             while j < n and depth:
                 if cmd[j] == "(":
@@ -353,10 +397,28 @@ def normalize(seg):
     # `set -e`, `set -u`, `set -euo pipefail` change shell options and run nothing.
     if _SET_OPTIONS.match(s):
         return ""
+    # A comment runs nothing. Before 2026-09-10 `verb()` returned None for it and the segment
+    # was refused as "not on the allowlist", so ONE `# …` line deferred an entire multi-line
+    # command (162 occurrences over 114 structural rows in the archive). This is the same
+    # "carries no command" class as the three returns above, and it is safe for the same reason
+    # they are: `split_segments` has already cut on `;` and newlines, so any text a comment
+    # would have swallowed in the real shell is still judged here as its own segment — this
+    # file judges MORE than bash runs, never less. A command that is ONLY comments still
+    # defers, because decide() requires judged > 0.
+    if s.startswith("#"):
+        return ""
     return s
 
 
 def verb(seg):
+    # `[` and `:` are real builtins whose NAMES are punctuation, so the identifier regex below
+    # cannot match them: `verb()` returned None and allowed_segment's `v is None` arm deferred
+    # the segment before any rule could look at it. They are named explicitly so they reach the
+    # ordinary whitelist — and therefore also reach the REDIRECT check that sits above it, which
+    # is the only thing standing between `:` and `: > file`. This is the one call site (886).
+    tok = seg.split(" ", 1)[0]
+    if tok in ("[", ":"):
+        return tok
     m = re.match(r"^([A-Za-z0-9_.\-/]+)", seg)
     if not m:
         return None
@@ -996,6 +1058,17 @@ def allowed_segment(seg, sole=False):
                 return None
         return "mkdir: targets under CWD or an accepted scratch root"
 
+    # `[` IS `test` and `:` IS `true` — both spellings of entries already in READ_ONLY, which
+    # held only the word-shaped halves. `[ -f x ]` was refused while `test -f x` was allowed:
+    # one operator-visible inconsistency, 133 occurrences over 102 structural rows. Neither can
+    # write: the redirect scanner above has already refused `: > file`, which is the one way a
+    # no-op touches the filesystem. `[` must close with `]`, or it is not the builtin at all.
+    if v == "[":
+        if parts[-1] != "]":
+            return None
+        return "[: test builtin, read-only, no redirect"
+    if v == ":":
+        return ": no-op builtin, read-only, no redirect"
     if v in READ_ONLY:
         return f"{v}: read-only, no redirect"
 
