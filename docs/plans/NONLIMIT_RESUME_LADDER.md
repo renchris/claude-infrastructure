@@ -1,8 +1,24 @@
+---
+status: in-progress
+created: 2026-09-09
+owner: W2 — dispatched cloud session claude/fire-20260910T213003Z-71267-1
+---
 # Non-limit resume + the Opus→Fable→Teams escalation ladder
 
-Opened 2026-09-09 from an operator ask in session `d79f408b`. **Status: RESEARCH CAPTURED (W0) · DESIGN
-CAPTURED (W1, § W1 — Fable 5.1 discovery) · implementation NOT started.** W2 may begin from § W1.3;
-see § Phase 0.
+Opened 2026-09-09 from an operator ask in session `d79f408b`.
+
+**Status: RESEARCH CAPTURED (W0) · DESIGN CAPTURED (W1, § W1 — Fable 5.1 discovery) · W2
+IMPLEMENTED except D4 (2026-09-10, § W2 status) · W3 CAPTURED.** The one remaining item is **T9 /
+W2-0**, a live probe that can only run on-box; it gates D4 and nothing else.
+
+⚠️ The line this replaces read *"implementation NOT started"*, which was true on 2026-09-09 and
+false a day later. It is kept here rather than deleted because it is the record of what was
+believed — but a reader acting on it would have re-derived six landed changes. **Frontmatter added
+in the same edit:** this plan was one of four in `docs/plans/` with no YAML frontmatter, so
+`find-plan.sh --status` answered `unknown` — a value that is NOT in its closed vocabulary
+(`open|in-progress|complete|superseded`) and that lands in the PERMISSIVE default, staying in
+`--list-open` forever while no falsifier can ever fire on it. That is the mechanism by which a
+finished plan gets re-dispatched indefinitely, so the state is now declared rather than defaulted.
 
 `Scope (frozen):` establish whether `/limit-recover` covers NON-quota interruptions (network drop,
 reconnect, agent stall) with the same no-partial-results discipline; capture the disk truth
@@ -37,9 +53,70 @@ Nothing here may be held in a context window.
 | T3 | Capture exact on-disk record shapes for network/stall deaths | **DONE** | W0 | § Finding 2 |
 | T4 | Measure the live blast radius | **DONE** | W0 | 29 network vs 35 limit; 6 live panes |
 | T5 | Fable 5.1 discovery pass on 100th-pct design | **DONE** | W1 | § W1 — six answers, design D1–D7, rejected R1–R8, W2 table, § W1.4 |
-| T6 | Implement the design via Agent Teams | **OPEN** | W2 | Unblocked by T5. Task table + fixtures in § W1.3; W2-0 proof gates D4 |
+| T6 | Implement the design via Agent Teams | **MOSTLY DONE** | W2 | D1·D2·D3·D5-probe·D6·D7 landed off-box; see § W2 status. Remaining: **W2-0** (a live probe, on-box only) and **D4/W2-C's arm hook**, which W2-0 gates. Its own row below |
 | T7 | Investigate the ladder as CLAUDE.md default | **DONE** | W3 | § W3 — six answers, proposed diff, R1-R4 |
 | T8 | Resume the 6 live network-blocked panes | **DONE (by the operator, by hand)** | operator | All six re-engaged 17:36–17:37Z by the typed paragraph — § W1.0. The manual act IS the defect W2 removes |
+| T9 | **W2-0 — prove asyncRewake synthesizes a turn after an api-error turn end** | **OPEN — 👤 ON-BOX ONLY** | operator / a desk session | Cannot be discharged off-box; see § W2 status. It gates D4 only |
+
+---
+
+## W2 status — what landed, and the one thing that cannot land from a cloud VM
+
+Implemented and landed 2026-09-10 by a dispatched cloud session (branch
+`claude/fire-20260910T213003Z-71267-1`). Verified with bats 1.11.0 off-box; every red-proof carries
+its control arm, and the load-bearing predicates carry mutants.
+
+| id | state | where | verification |
+|---|---|---|---|
+| **D1** lead process state | **DONE** | `lr-audit.py` — `lead_pids()`, `lead_state()`, `inherit_lead_state()`; teammate RUNNING re-keyed on the member's own pid + turn end; `TEAM_ACTIVE_WINDOW_S` demoted to a display field; `:1335`'s "killed mid-run" now conditional on DEAD | `tests/lr-audit-nonlimit.bats` 29/29 incl. the 27-prompts/24-turn-ends caveat and its inverting mutant |
+| **D2** notification ledger + retry fold | **DONE** | `scan_lead_transcript` (settled = `tool_result` ∪ terminal `<task-notification>`, both carriers), delegation population by tool, the journal fold to ONE unit with `attempts=N`, `STALLED` | same suite; STALLED's structural predicate pinned by a mutant that swaps in an unrelated error string |
+| **D3** `recover-inject.sh` | **DONE** (registration is 👤) | `hooks/recover-inject.sh` + `migrations/0026-recover-inject-registration.sh` (c10, staged) | `tests/recover-inject.bats` 18/18, **5 mutants killed**; the migration's verify AND conflict oracles controlled in both directions |
+| **D4** `net-recover-arm.sh` | **BLOCKED on T9/W2-0** | — | — |
+| **D5** stall policy + probe | **probe DONE**, policy DONE | `scripts/limit-recover/lr-probe.sh`; `commands/limit-recover.md` § Stall policy | `tests/lr-probe.bats` 19/19, 3 mutants killed |
+| **D6** `/recover` | **DONE, with a deviation** | `commands/recover.md` (new); `limit-recover.md`'s `description:` widened | — |
+| **D7** census | **DONE** | `lr-fleet.sh` — `kind` (last death) + `kinds` (all classes) + `err_age_s`; `RESUME-IN-PLACE` → `IDLE-AFTER-ERROR`; argv-leaf pid fallback | `tests/lr-fleet.bats` +8 cases (4 controls) |
+
+**Three deviations from § W1.3, each deliberate and each with its reason:**
+
+1. **`limit-recover.md` was NOT reduced to a pointer at `/recover`.** Doing that now would break
+   quota recovery for the whole convergence window: `commands/*.md` are per-file symlinks made by
+   `install.sh`, so `recover.md` does not exist in the live layer until the converger runs, and a
+   pointer would aim the live trigger phrases at a file that is not there. This is **R5's own
+   argument applied to R5's own remedy.** `recover.md` lands as an ADD, `limit-recover.md` stays the
+   working front door, and its `description:` is widened to catch the non-quota phrases meanwhile.
+   Thinning it is safe only once `/recover` is live.
+2. **The suite is bats, not `python3 -m pytest tests/limit-recover/`.** That tree does not exist and
+   this repo has always tested `lr-audit.py` through bats (`tests/lr-team-audit.bats`). The
+   done-when named a harness the repo does not have; recorded here rather than silently diverged
+   from.
+3. **Fixtures are copied from VERBATIM record quotes already in this repo**, not from byte ranges on
+   the operator's disk — a cloud VM cannot read those paths. Sources: § Finding 2 (the network-death
+   envelope), `docs/research/pane-theft-composer-guard.md:33` (a real `<task-notification>`,
+   `queue-operation` carrier), `docs/SAFEGUARD_BLOCKED_VISIBILITY.md` and the existing
+   `tests/lr-team-audit.bats` fixtures (`system`/`turn_duration`). **No api-error record is
+   synthesized** — the rule the row states was kept; only its source moved.
+
+### Why W2-0 could not be run off-box (T9)
+
+Not a punt — the instrument is wrong here, and a single-armed reading would be worse than none:
+
+- **The binary differs.** This VM ships **2.1.268**; every measurement in this plan is on
+  **2.1.260**, and no 2.1.260 track is installed here to control against. This repo's own rule is
+  that a disagreement between an old negative and a new positive is not evidence about VERSIONS
+  until both arms have been run — and only one arm exists here. A number measured on 2.1.268 and
+  reported as the fleet's behaviour is the "oracle is only true at its measured geometry" error.
+- **The probe needs a live interactive session** whose turn is ended by a forced api error, plus an
+  `asyncRewake` hook registered in a settings.json, and it would spend the operator's quota
+  unattended.
+
+**What W2-0 gates, and what it does not.** It gates **D4 only**. Everything above shipped without
+it, and the plan's own fallback still stands: if the first arm FAILS, D4 becomes the desk sweep
+writing to the session mailbox. Nothing already landed depends on the answer.
+
+**To run it on-box:** `docs/research/w2-stop-rewake-proof/blocker.sh` is the template; both arms are
+(a) a synthesized prompt with `promptSource=system` appears after an api-error turn end, and (b) no
+`stop_hook_summary` exists at that boundary. Record the result in
+`docs/research/api-error-rewake-proof-2026-09.md` and state the binary version beside it.
 
 ---
 
