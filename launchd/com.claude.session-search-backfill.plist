@@ -8,7 +8,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>~/.claude/bin/session-index-backfill.sh --quiet 2>&amp;1 | head -50 >> ~/.claude/logs/backfill-scheduled.log</string>
+        <string>L="$HOME/.claude/logs/backfill-scheduled.log"; S="$(readlink -f "$HOME/.claude/bin/session-index-backfill.sh")"; O="$(mktemp)"; rc=0; "$S" --quiet &gt;"$O" 2&gt;&amp;1 || rc=$?; head -50 "$O" &gt;&gt;"$L"; printf 'verdict=%s rc=%s script=%s at=%s\n' "$([ "$rc" -eq 0 ] &amp;&amp; echo ok || echo FAILED)" "$rc" "$S" "$(date -u +%FT%TZ)" &gt;&gt;"$L"; rm -f "$O"; exit "$rc"</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>
