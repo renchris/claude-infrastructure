@@ -1,0 +1,282 @@
+#!/usr/bin/env bash
+# cc-jetsam-exec — run a dev/QA lane so the KERNEL's own killer can reach its workers.
+#
+# THE PROBLEM THIS EXISTS FOR (docs/research/panic-2026-08-24-fifth-watchdog.md §6 fix #5).
+# In panic #5 the storm held 128 GB across 747 node workers and **746 of them sat at jetsam band
+# 180**, the default non-app band. Jetsam ran the whole spiral and could not touch one of them: it
+# harvested 3,109 small daemons for 9.28 GB while the actual holders were structurally out of its
+# reach. Every userspace guard we ship (compressor-sentinel) can itself be starved off-CPU — jetsam
+# was unrun for 94 s in the Aug-5 panic — so the kernel backstop is the one actor that still acts
+# when userspace is dead. It was disarmed by the band, not by bad luck.
+#
+# WHAT IS ACTUALLY REACHABLE, MEASURED ON THIS BOX (Darwin 24.6.0, uid 501, 2026-09-10 —
+# docs/research/jetsam-reachability-2026-09-10.md carries the arms and the instrument):
+#   · memorystatus_control(...) on a LIVE pid — the Aug-5 §7.6 "verified lever" — is EPERM for
+#     every command, including GET, including on the caller's OWN pid. It is root-only. So the
+#     shape "walk the tree and stamp what is already running" cannot be built by an agent lane at
+#     all; it needs an operator-installed root helper. That is why this tool acts at SPAWN.
+#   · posix_spawnattr_setjetsam_ext(3) IS unprivileged and IS enforced: a child spawned with a
+#     100 MB FATAL limit died SIGKILL at the limit while the identical child with no attrs walked
+#     to 300 MB and exited 0. One variable, both arms run.
+#   · The stamp is NOT INHERITED — not by fork(), not by exec'd children. A wrapper that only
+#     stamps the command it launches reaches the parent and none of the workers, which in the
+#     storm's own shape (one next-server, 746 node workers) is the whole population missed. This
+#     is the fact that decides the design: the stamp must be applied at EVERY spawn, so the tool
+#     interposes posix_spawn/posix_spawnp for the life of the tree.
+#   · The interposer's reach ENDS AT ANY SYSTEM SHELL. /bin/sh and /bin/zsh are SIP-restricted, so
+#     dyld both ignores and PURGES DYLD_INSERT_LIBRARIES — measured empty inside sh and absent from
+#     its children's environ. `sh -c 'node …'` therefore silently drops the protection. This tool
+#     execs the target directly and never through a shell; if you wrap a lane whose own launcher
+#     shells out through /bin/sh, the workers below that shell are NOT covered. node itself keeps
+#     the variable (measured) and re-stamps at depth 2, so a node→node→worker tree is covered.
+#
+# WHY THE DEFAULT LIMIT IS SOFT, NOT FATAL (Aug-5 §7.6). A soft limit is a high-water mark: the
+# process is not killed for crossing it, it becomes ELIGIBLE when the system is actually short.
+# That is precisely "jetsam reachability" — it converts the kernel's measured "no eligible
+# processes" dead-end into a targeted kill of a real holder at the edge, and costs nothing on a
+# healthy box (measured: a soft-capped child ran to 3x its limit and exited 0 under no pressure).
+# --fatal is the hard cap: it kills at the limit regardless of system state. Use it for a lane you
+# know must never exceed a number; use the default for making a lane reachable.
+#
+# WHY IT REFUSES RATHER THAN RUNNING UNPROTECTED. A guard that silently degrades to "ran the
+# command" is indistinguishable from a guard that worked, which is the failure mode this repo has
+# already eaten twice (fail-safe-default-mimics-the-healthy-state). If the helper cannot be built,
+# this exits non-zero and says so. --allow-unprotected is the deliberate, loud override.
+#
+# Usage:  cc-jetsam-exec --mem <MB> [--band N] [--fatal] [--allow-unprotected] -- <cmd> [args…]
+# Every run prints one parseable verdict token on stderr:
+#   cc-jetsam-exec: verdict=protected mem=<MB> band=<N> mode=<soft|fatal> helper=<dir>
+#   cc-jetsam-exec: verdict=unprotected reason=<…>
+set -uo pipefail
+
+PROG="cc-jetsam-exec"
+die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 2; }
+verdict() { printf '%s: %s\n' "$PROG" "$*" >&2; }
+
+MEM=""; BAND="${CC_JETSAM_BAND_DEFAULT:-30}"; FATAL=0; ALLOW_UNPROT=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --mem) MEM="${2:-}"; shift 2 || die "--mem needs a value" ;;
+    --mem=*) MEM="${1#*=}"; shift ;;
+    --band) BAND="${2:-}"; shift 2 || die "--band needs a value" ;;
+    --band=*) BAND="${1#*=}"; shift ;;
+    --fatal) FATAL=1; shift ;;
+    --allow-unprotected) ALLOW_UNPROT=1; shift ;;
+    --help|-h) sed -n '1,40p' "$0"; exit 0 ;;
+    --) shift; break ;;
+    -*) die "unknown flag: $1" ;;
+    *) break ;;
+  esac
+done
+[ $# -gt 0 ] || die "no command given (usage: $PROG --mem <MB> -- <cmd> [args…])"
+# A cap nobody chose is a cap that will surprise someone mid-build. There is no default MB.
+case "$MEM" in ''|*[!0-9]*) die "--mem <MB> is required and must be an integer (got '${MEM}')" ;; esac
+case "$BAND" in ''|*[!0-9]*) die "--band must be an integer 0-180 (got '${BAND}')" ;; esac
+[ "$MEM" -gt 0 ] || die "--mem must be > 0"
+[ "$BAND" -le 180 ] || die "--band must be <= 180 (180 IS the default band this tool exists to leave)"
+
+# ── the helper source, EMBEDDED ───────────────────────────────────────────────────────────────
+# It is embedded rather than kept in a sibling .c precisely because this file is deployed as a
+# per-file SYMLINK into ~/.claude/bin: a $0-relative sibling read resolves against the LINK's
+# directory, where no such sibling exists, and the failure is silent (memory:
+# durable-path-in-a-generated-launcher-executes-the-live-layer / symlinked-$0-splits-sibling-sources).
+# Embedding removes the resolution step entirely, so there is nothing to resolve wrongly.
+read -r -d '' CC_JETSAM_SRC <<'CSRC'
+#include <spawn.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <unistd.h>
+#include <dlfcn.h>
+#include <signal.h>
+#include <sys/wait.h>
+
+/* posix_spawnattr_setjetsam_ext is Apple SPI (spawn_private.h is not shipped in the SDK); the
+ * symbol is exported by libSystem and resolved at run time so a missing SPI degrades to a clear
+ * refusal instead of a link error on some future OS. */
+typedef int (*cc_setjet_t)(posix_spawnattr_t * __restrict, short, int, int, int);
+#define CC_JETSAM_MEMLIMIT_FATAL 0x04   /* POSIX_SPAWN_JETSAM_MEMLIMIT_FATAL */
+
+static cc_setjet_t cc_setjet(void) {
+    static cc_setjet_t f; static int tried;
+    if (!tried) { tried = 1; f = (cc_setjet_t)dlsym(RTLD_DEFAULT, "posix_spawnattr_setjetsam_ext"); }
+    return f;
+}
+
+/* The exclusion is a BACKSTOP, not the boundary. The boundary is that you only wrap a lane you
+ * intend to cap. But a stamp landing on an agent session would cap the very process doing the
+ * work, so the names this repo already treats as untouchable in compressor-sentinel.sh's actuator
+ * are refused here too. It enumerates spellings, so it cannot be the safety argument on its own. */
+static int cc_excluded(const char *path) {
+    const char *base = path ? strrchr(path, '/') : NULL;
+    base = base ? base + 1 : path;
+    if (!base) return 0;
+    const char *env = getenv("CC_JETSAM_EXCLUDE");        /* colon-separated basenames */
+    const char *deny = env && *env ? env : "claude:claude.exe:cc-jetsam-exec:cc-jetsam-launch";
+    size_t bl = strlen(base);
+    const char *p = deny;
+    while (*p) {
+        const char *q = strchr(p, ':'); size_t n = q ? (size_t)(q - p) : strlen(p);
+        if (n == bl && strncmp(p, base, n) == 0) return 1;
+        if (!q) break; p = q + 1;
+    }
+    return 0;
+}
+
+/* Build the attr set the child is spawned with. Returns 1 if a stamp was applied. */
+static int cc_stamp(const posix_spawnattr_t *in, posix_spawnattr_t *out, const char *path) {
+    const char *m = getenv("CC_JETSAM_MEMLIMIT_MB");
+    cc_setjet_t sj = cc_setjet();
+    if (!m || !*m || !sj || cc_excluded(path)) return 0;
+    int mb = atoi(m); if (mb <= 0) return 0;
+    const char *b = getenv("CC_JETSAM_BAND");
+    const char *f = getenv("CC_JETSAM_FATAL");
+    int band = (b && *b) ? atoi(b) : 30;
+    short flags = (f && *f == '1') ? CC_JETSAM_MEMLIMIT_FATAL : 0;
+    if (in && *in) { *out = *in; } else { if (posix_spawnattr_init(out) != 0) return 0; }
+    if (sj(out, flags, band, mb, mb) != 0) return 0;
+    return 1;
+}
+
+#ifdef CC_JETSAM_LAUNCH
+/* ── product 2: the launcher ────────────────────────────────────────────────────────────────
+ * The interposer only ever stamps a process's CHILDREN, so the top of the tree would otherwise
+ * be the one process left at band 180 — and on a lane like `next build` the top IS the holder.
+ * This spawns it stamped, then forwards signals and reproduces its exit disposition so the
+ * wrapper is transparent to a caller and to a CI gate. */
+extern char **environ;
+static volatile sig_atomic_t cc_child = 0;
+static void cc_fwd(int sig) { if (cc_child > 0) kill(cc_child, sig); }
+
+int main(int argc, char **argv) {
+    if (argc < 2) { fprintf(stderr, "cc-jetsam-launch: no command\n"); return 2; }
+    posix_spawnattr_t attr; const posix_spawnattr_t *use = NULL;
+    int stamped = cc_stamp(NULL, &attr, argv[1]);
+    if (stamped) use = &attr;
+    pid_t pid;
+    int rc = posix_spawnp(&pid, argv[1], NULL, use, &argv[1], environ);
+    if (rc != 0) { fprintf(stderr, "cc-jetsam-launch: cannot exec %s: %s\n", argv[1], strerror(rc)); return 127; }
+    cc_child = pid;
+    signal(SIGINT, cc_fwd); signal(SIGTERM, cc_fwd); signal(SIGHUP, cc_fwd); signal(SIGQUIT, cc_fwd);
+    int st = 0;
+    while (waitpid(pid, &st, 0) < 0 && errno == EINTR) { }
+    if (WIFSIGNALED(st)) {
+        int s = WTERMSIG(st);
+        signal(s, SIG_DFL); raise(s);            /* die as the child died */
+        return 128 + s;
+    }
+    return WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+}
+#else
+/* ── product 1: the interposer ──────────────────────────────────────────────────────────────
+ * __DATA,__interpose swaps posix_spawn/posix_spawnp for the life of every non-restricted process
+ * that loads this dylib, which is how the stamp reaches workers the wrapper never sees. */
+struct cc_interpose { const void *replacement; const void *replacee; };
+
+static int cc_my_spawn(pid_t *pid, const char *path, const posix_spawn_file_actions_t *fa,
+                       const posix_spawnattr_t *attrp, char *const argv[], char *const envp[]) {
+    posix_spawnattr_t tmp; const posix_spawnattr_t *use = attrp;
+    if (cc_stamp(attrp, &tmp, path)) use = &tmp;
+    return posix_spawn(pid, path, fa, use, argv, envp);
+}
+static int cc_my_spawnp(pid_t *pid, const char *file, const posix_spawn_file_actions_t *fa,
+                        const posix_spawnattr_t *attrp, char *const argv[], char *const envp[]) {
+    posix_spawnattr_t tmp; const posix_spawnattr_t *use = attrp;
+    if (cc_stamp(attrp, &tmp, file)) use = &tmp;
+    return posix_spawnp(pid, file, fa, use, argv, envp);
+}
+__attribute__((used)) static const struct cc_interpose cc_interposers[]
+__attribute__((section("__DATA,__interpose"))) = {
+    { (const void *)cc_my_spawn,  (const void *)posix_spawn  },
+    { (const void *)cc_my_spawnp, (const void *)posix_spawnp },
+};
+#endif
+CSRC
+
+# ── build (cached, keyed on the source's own hash + arch) ─────────────────────────────────────
+# Resolved ABSOLUTELY, and the key is then ASSERTED. A bare `shasum`/`uname` that does not resolve
+# leaves the key EMPTY, and an empty key is not a narrow cache dir — it is a SHARED one, so two
+# different versions of the embedded source would silently reuse each other's helper forever. That
+# is this repo's own recurring class (scripts/unattended-path-lint.sh; the empty-selector rule), and
+# the failure is invisible: the wrong helper runs and reports verdict=protected.
+_cc_bin() { # $1=name → absolute path, stock floor first, then PATH
+  local n="$1" d
+  for d in /usr/bin /bin /usr/sbin /sbin; do [ -x "$d/$n" ] && { printf '%s' "$d/$n"; return 0; }; done
+  command -v "$n" 2>/dev/null && return 0
+  return 1
+}
+SHASUM=$(_cc_bin shasum) || die "no shasum on PATH or the stock floor — cannot key the helper cache"
+CUT=$(_cc_bin cut)       || die "no cut on PATH or the stock floor — cannot key the helper cache"
+UNAME=$(_cc_bin uname)   || die "no uname on PATH or the stock floor — cannot key the helper cache"
+SRC_HASH=$(printf '%s' "$CC_JETSAM_SRC" | "$SHASUM" -a 256 | "$CUT" -c1-16)
+ARCH=$("$UNAME" -m)
+case "$SRC_HASH" in [0-9a-f][0-9a-f]*) : ;; *) die "helper cache key is degenerate ('$SRC_HASH') — refusing to share a cache directory across source versions" ;; esac
+[ -n "$ARCH" ] || die "could not read the architecture — refusing an arch-blind helper cache"
+CACHE="${CC_JETSAM_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/cc-jetsam}/${SRC_HASH}-${ARCH}"
+DYLIB="$CACHE/libcc-jetsam-interpose.dylib"
+LAUNCH="$CACHE/cc-jetsam-launch"
+
+build_helpers() {
+  local cc; cc=$(command -v clang || command -v cc) || return 1
+  mkdir -p "$CACHE" || return 1
+  local tmpc="$CACHE/.src.$$.c"
+  printf '%s\n' "$CC_JETSAM_SRC" > "$tmpc" || return 1
+  "$cc" -O2 -dynamiclib -o "$DYLIB.$$"  "$tmpc" 2>"$CACHE/build.log" || { rm -f "$tmpc"; return 1; }
+  "$cc" -O2 -DCC_JETSAM_LAUNCH -o "$LAUNCH.$$" "$tmpc" 2>>"$CACHE/build.log" || { rm -f "$tmpc" "$DYLIB.$$"; return 1; }
+  mv -f "$DYLIB.$$" "$DYLIB" && mv -f "$LAUNCH.$$" "$LAUNCH" || { rm -f "$tmpc"; return 1; }
+  rm -f "$tmpc"; return 0
+}
+
+if [ ! -x "$LAUNCH" ] || [ ! -f "$DYLIB" ]; then
+  if ! build_helpers; then
+    if [ "$ALLOW_UNPROT" = 1 ]; then
+      verdict "verdict=unprotected reason=build-failed (--allow-unprotected given; see $CACHE/build.log)"
+      exec "$@"
+    fi
+    verdict "verdict=unprotected reason=build-failed"
+    die "cannot build the jetsam helper (see $CACHE/build.log). Re-run with --allow-unprotected to run the lane UNCAPPED anyway."
+  fi
+fi
+
+# SMOKE-TEST THE ARTIFACT BEFORE EXPORTING IT, because dyld does not warn — it TERMINATES.
+# Measured 2026-09-10: DYLD_INSERT_LIBRARIES naming a missing or corrupt dylib aborts the process at
+# exec ("terminating because inserted dylib … could not be loaded", SIGABRT / exit 134). So a cache
+# directory pruned by any tmp-reaper would not degrade this tool, it would KILL the wrapped lane and
+# every process it spawns, with a message that names dyld and never names us. One exec of /usr/bin/true
+# with the library inserted converts that into this tool's own refusal.
+# THE PROBE MUST BE A NON-RESTRICTED BINARY. /usr/bin/true is SIP-restricted, so dyld IGNORES the
+# inserted library for it and the check passes over a corrupt artifact — a smoke test that cannot
+# see the state it exists to detect. The launcher we just built is our own unsigned binary, so it is
+# the only probe here that dyld will actually load the library into. (Caught by tests/…C5, which
+# went red on exactly this: the tool then handed the corrupt dylib to the lane and dyld aborted it.)
+smoke_ok() { DYLD_INSERT_LIBRARIES="$DYLIB" "$LAUNCH" /usr/bin/true >/dev/null 2>&1; }
+if ! smoke_ok; then
+  rm -f "$DYLIB" "$LAUNCH"
+  if build_helpers && smoke_ok; then
+    :
+  else
+    if [ "$ALLOW_UNPROT" = 1 ]; then
+      verdict "verdict=unprotected reason=helper-unloadable (--allow-unprotected given)"
+      exec "$@"
+    fi
+    verdict "verdict=unprotected reason=helper-unloadable"
+    die "the built helper does not load (dyld would ABORT your command, not warn). Cache: $CACHE"
+  fi
+fi
+
+MODE=soft; [ "$FATAL" = 1 ] && MODE=fatal
+verdict "verdict=protected mem=${MEM} band=${BAND} mode=${MODE} helper=${CACHE}"
+
+export CC_JETSAM_MEMLIMIT_MB="$MEM"
+export CC_JETSAM_BAND="$BAND"
+export CC_JETSAM_FATAL="$FATAL"
+# Appended, never overwritten: another injected dylib in the environment is not ours to drop.
+if [ -n "${DYLD_INSERT_LIBRARIES:-}" ]; then
+  export DYLD_INSERT_LIBRARIES="${DYLD_INSERT_LIBRARIES}:${DYLIB}"
+else
+  export DYLD_INSERT_LIBRARIES="$DYLIB"
+fi
+# exec DIRECTLY — never `sh -c`. A system shell in this position purges DYLD_INSERT_LIBRARIES and
+# every worker below it silently loses the stamp (measured; see the header).
+exec "$LAUNCH" "$@"
