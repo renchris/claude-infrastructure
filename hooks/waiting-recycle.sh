@@ -657,7 +657,7 @@ _ilib="$_wrd/lib/idl-log.sh"
 if ! . "$_ilib" 2>/dev/null; then
   # Fail LOUD but SAFE — a hook that cannot log its own disposition must not proceed silently, and
   # must never block the turn on a misconfig.
-  printf 'waiting-recycle: FATAL — cannot source %s (IDL writer inert).\n' "$_ilib" >&2
+  printf 'waiting-recycle: FATAL — cannot source %s (IDL writer inert; no recycle advisory, and the desk Stage-2 poll does not run this Stop). Cure: bash ~/Development/claude-infrastructure/install.sh\n' "$_ilib" >&2
   exit 0
 fi
 idl_init "$IDL" "waiting-recycle" "SID" "SIZE_JSON"

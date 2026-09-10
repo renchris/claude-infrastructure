@@ -401,7 +401,7 @@ _ilib="$SCRIPT_DIR/lib/idl-log.sh"
 if ! . "$_ilib" 2>/dev/null; then
   # Fail LOUD but SAFE — a hook that cannot log its own disposition must not proceed silently, and
   # must never block the turn on a misconfig.
-  printf 'operator-readout: FATAL — cannot source %s (IDL writer inert).\n' "$_ilib" >&2
+  printf 'operator-readout: FATAL — cannot source %s (IDL writer inert; no OPERATOR block and no close certificate this Stop). Cure: bash ~/Development/claude-infrastructure/install.sh\n' "$_ilib" >&2
   exit 0
 fi
 idl_init "$IDL" "operator-readout"
