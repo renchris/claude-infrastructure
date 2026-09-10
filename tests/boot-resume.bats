@@ -10,8 +10,14 @@
 #      mode=page  → page the delta once, DO NOT resume ("or pages once if deferred").
 #      mode=resume → invoke the resume launcher per ghost (config-basename → reso alias mapped) +
 #                    start keepalive once, then page a summary.
-#   4. FAIL-LOUD: a delta with no reachable desk role does NOT mark the boot processed (so a re-run
-#      retries — never let a wake drain to nobody, a17 S-7).
+#   4. NEVER DRAIN TO NOBODY (a17 S-7), via a LADDER — not a bare fail-loud (backlog cae796cb1bfb):
+#      a delta with no reachable desk role falls back to an ADDRESSLESS durable channel (the page
+#      text to <state>/undelivered-<boot>.page + a `cc-backlog needs` operator-blocked row) and marks
+#      the boot only once that filing SUCCEEDS. If the fallback also fails, the original polarity
+#      stands: no mark, exit 4, retry. The pre-fix branch was the right polarity over the wrong
+#      channel — its loudness is launchd stderr, so "will retry" degraded to an infinite SILENT retry
+#      (5 identical failed/no-desk-role records in 21 min at the 2026-08-25 reboot, delta correct
+#      every time, nothing surfaced).
 #   5. ABSTENTION-LOGGED: every run writes ONE {fired|abstained|failed} IDL record (B-3).
 
 setup() {
@@ -34,6 +40,18 @@ echo "NOTIFY_CALL" >> "$0.calls"
 printf '%s\n' "$*" >> "$0.log"
 SH
   chmod +x "$CC_NOTIFY_BIN"
+
+  # stub cc-backlog: echo a hex id + log the argv. MANDATORY, not optional — resolve_bin's ladder
+  # reaches the REPO's own bin/cc-backlog from $(dirname $0)/../bin, so an unstubbed run would file
+  # real rows into the operator's live ~/.claude/autonomy/backlog.jsonl from a test.
+  export CC_BACKLOG_BIN="$BATS_TEST_TMPDIR/stub-backlog"
+  cat > "$CC_BACKLOG_BIN" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$0.log"
+[ -f "$0.fail" ] && exit 1
+cat "$0.out" 2>/dev/null || echo "beef1234cafe"
+SH
+  chmod +x "$CC_BACKLOG_BIN"
 
   # stub the resume launcher: log "<acct> <cwd> <sid> <branch>" per invocation, exit 0.
   export CC_RESUME_LAUNCH_BIN="$BATS_TEST_TMPDIR/stub-launch"
@@ -273,15 +291,77 @@ SH
   [ "$(marker)" != "1784800000" ]                           # boot NOT marked → a re-run retries
 }
 
-# ── FAIL-LOUD: a delta with no desk role must NOT mark the boot processed ──────
-@test "no desk role + a delta → fail-loud (non-zero), delivered:false, marker NOT advanced" {
+# ── NEVER DRAIN TO NOBODY: the no-role LADDER (backlog cae796cb1bfb) ───────────
+# Rung 1 — the addressless fallback lands, so the retry is BOUNDED at one surfaced item.
+# Pre-fix this case exited 4 with delivered:false and an un-advanced marker, i.e. it retried
+# every ~5 min forever into launchd stderr; the assertions below invert exactly that.
+@test "no desk role + a delta → filed via cc-backlog needs, delivered:true, marker ADVANCED" {
   rm -f "$CC_ROLES_DIR/desk"
   reg_entry g1 1784700000000 claude-quaternary
   export CC_BOOT_RESUME_MODE=page
   run bash "$SCRIPT"
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 0 ]
+  grep -q '"delivered":true' "$CC_IDL"
+  grep -q '"channel":"backlog-needs"' "$CC_IDL"
+  grep -q '"backlog_id":"beef1234cafe"' "$CC_IDL"
+  grep -q '"reason":"no-desk-role"' "$CC_IDL"
+  [ "$(marker)" = "1784800000" ]                          # bounded: a re-run must NOT re-page
+  grep -q -- '--project claude-infrastructure' "$CC_BACKLOG_BIN.log"
+  grep -q 'needs ' "$CC_BACKLOG_BIN.log"
+}
+
+# The page text itself must survive somewhere addressless — the backlog row is one line and POINTS
+# at it. A row naming a file that was never written is a pointer to nothing.
+@test "no desk role → the full delta text is written to <state>/undelivered-<boot>.page" {
+  rm -f "$CC_ROLES_DIR/desk"
+  reg_entry g1 1784700000000 claude-quaternary
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ -s "$CC_BOOT_RESUME_STATE_DIR/undelivered-1784800000.page" ]
+  grep -q 'boot-delta' "$CC_BOOT_RESUME_STATE_DIR/undelivered-1784800000.page"
+  grep -qF "$CC_BOOT_RESUME_STATE_DIR/undelivered-1784800000.page" "$CC_BACKLOG_BIN.log"
+}
+
+# Rung 2 — the fallback ALSO fails ⇒ a17 S-7 is back in force. This is the case the pre-fix branch
+# handled for every input; it must still hold for THIS one, or the fix trades a silent retry for a
+# silent drop, which is strictly worse.
+@test "no desk role AND cc-backlog fails → fail-loud rc 4, delivered:false, marker NOT advanced" {
+  rm -f "$CC_ROLES_DIR/desk"
+  touch "$CC_BACKLOG_BIN.fail"
+  reg_entry g1 1784700000000 claude-quaternary
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 4 ]
   grep -q '"delivered":false' "$CC_IDL"
-  [ "$(marker)" != "1784800000" ]                         # a re-run must retry the page
+  grep -q '"fallback":"backlog-unavailable"' "$CC_IDL"
+  [ "$(marker)" != "1784800000" ]                         # unbounded retry is CORRECT here
+}
+
+# A non-id on stdout is NOT a filing. cc-backlog can print a project warning (rc 0) and file nothing;
+# accepting any exit-0 output as an id is how a fallback claims a delivery it never made.
+@test "cc-backlog exits 0 but prints no id → treated as NOT filed (rc 4, marker NOT advanced)" {
+  rm -f "$CC_ROLES_DIR/desk"
+  printf 'cc-backlog: warning — unknown project\n' > "$CC_BACKLOG_BIN.out"
+  reg_entry g1 1784700000000 claude-quaternary
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 4 ]
+  grep -q '"fallback":"backlog-unavailable"' "$CC_IDL"
+  [ "$(marker)" != "1784800000" ]
+}
+
+# The two causes reaching this branch are DIFFERENT and the record must separate them — a
+# "no-desk-role" record over an unresolvable cc-notify sends the next reader at the wrong store.
+@test "role present but cc-notify unresolvable → reason no-notify-bin, still filed durably" {
+  export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/does-not-exist"
+  reg_entry g1 1784700000000 claude-quaternary
+  export CC_BOOT_RESUME_MODE=page
+  run bash "$SCRIPT"
+  [ "$status" -eq 0 ]
+  grep -q '"reason":"no-notify-bin"' "$CC_IDL"
+  grep -q '"delivered":true' "$CC_IDL"
+  [ "$(marker)" = "1784800000" ]
 }
 
 # ── a worktree path containing a space must survive the candidate handoff ──────
