@@ -625,14 +625,23 @@ teardown() {
   /usr/bin/sed -e ':a' -e '/\\$/N; s/\\\n//; ta' "$SUT" > "$joined"
 
   # THE ONE EXEMPTION — do_bisect's generated-runner template, bounded at its CALL SITES instead
-  # (asserted below). Anchored to exactly one line: an exemption that silently widened would start
+  # (asserted below). Anchored to an EXACT TALLY: an exemption that silently widened would start
   # covering a site nobody ever looked at, which is the failure this census exists to prevent.
-  exempt="$(/usr/bin/grep -c "printf 'TMPDIR=%q" "$joined")"
-  [ "$exempt" = "1" ]
+  #
+  # The anchor is an explicit `bisect-runner-template` marker, not the incidental `TMPDIR=%q` text
+  # it used to key on. B33 gave the template a second and third emitting line (a `--count` probe and
+  # a `-f`-narrowed run), and the old key matched two of the three by accident while missing the one
+  # that mattered — an exemption keyed on incidental text cannot say which sites it MEANT to cover.
+  # 3, not >=3: growth here must be deliberate, and this line is where it is declared.
+  # Comment lines are excluded exactly as the `unbounded` census below excludes them — the block that
+  # DOCUMENTS the marker names it too, and a tally that counted prose would move whenever the prose did.
+  exempt="$(/usr/bin/grep -n 'bisect-runner-template' "$joined" \
+      | /usr/bin/grep -cv '^[0-9]*:[[:space:]]*#')"
+  [ "$exempt" = "3" ]
 
   unbounded="$(/usr/bin/grep -n '"\$BATS_BIN"' "$joined" \
       | /usr/bin/grep -v '^[0-9]*:[[:space:]]*#' \
-      | /usr/bin/grep -v "printf 'TMPDIR=%q" \
+      | /usr/bin/grep -v 'bisect-runner-template' \
       | /usr/bin/grep -v 'bounded ' \
       | /usr/bin/grep -v '"\$TIMEOUT_BIN"' || true)"
   [ -z "$unbounded" ] || { echo "UNBOUNDED \$BATS_BIN call site(s):"; echo "$unbounded"; false; }
@@ -820,7 +829,10 @@ subject_names() {
   stub_bats_marker
   TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
   [ "$status" -eq 0 ]
-  grep -qE "bisect verdict=[0-9a-f]{7,40} steps=[0-9]+ elapsed=[0-9]+s load=" "$RUNLOG"
+  # `scope=` joins the required set rather than being tolerated beside it (B33): a verdict reached on
+  # the whole SUITE and one reached on the convicted TEST are claims about different populations, and
+  # the pre-2026-09-10 log records only the first kind while looking identical to the second.
+  grep -qE "bisect verdict=[0-9a-f]{7,40} scope=(test|file) steps=[0-9]+ elapsed=[0-9]+s load=" "$RUNLOG"
 
   : > "$RUNLOG"
   subject_names "plain"
@@ -828,7 +840,7 @@ subject_names() {
   stub_bats_docs_marker
   TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD"
   [ "$status" -eq 1 ]
-  grep -qE "bisect verdict=NONE why=unreachable steps=[0-9]+ elapsed=[0-9]+s load=" "$RUNLOG"
+  grep -qE "bisect verdict=NONE why=unreachable scope=(test|file) steps=[0-9]+ elapsed=[0-9]+s load=" "$RUNLOG"
 }
 
 @test "B25: a subject LARGER than the pipe buffer that names the doc still convicts (pipefail-SIGPIPE)" {
@@ -1114,4 +1126,157 @@ STUBEOF
   # ...and it is the SAME fixture B29 refutes: the walk convicted, and nothing re-ran the culprit.
   [ "$(grep -c ' walk red$' "$CC_STUB_CALLS")" -ge 1 ]
   [ "$(grep -c ' post ' "$CC_STUB_CALLS")" -eq 0 ]
+}
+
+# ════ B33-B36 — AN EIGHTH CLAUSE: THE PREDICATE IS THE CONVICTED TEST, NOT THE SUITE ══════════════
+# Every clause above constrains WHICH sha a walk may name. This one constrains what the walk is
+# ASKING at each step, and it sits underneath all of them: until 2026-09-10 the generated runner ran
+# the whole FILE, so the bad-predicate was "does any test in this suite fail". B29's own contract
+# block states the premise it re-measures as "the failing test fails AT the culprit" — it did not
+# measure that, it measured the file, and so did the walk, the tip confirmation and the floor probe.
+#
+# WHY IT MATTERS, measured (backlog 943d0fd3759f). postland convicted 97758a6323ee for
+# `tests/memory-index-drain.bats::10 the destination append is idempotent`. Direct A/B: case 10
+# PASSES at 97758a632 (isolated AND whole-file 23/23) and first fails at 5972228d5 four commits
+# later; 8460f5ac9 cured it. What WAS red at 97758a632 under the walk's `load=34.50` was case 19 — a
+# sibling 18ed810a7 later pinned with MID_DEADLINE_S because, in its own words, the assertion
+# "silently becomes 'was the box quiet enough'" (a measured ~1-in-3 flake). The walk converged on the
+# last commit before that pin, AUTO-REVERT fired at it, and it applied nothing only because the
+# revert CONFLICTED (rc 90). A suite holding ONE load-sensitive case can therefore convict — and
+# confirm — an innocent commit whenever the box is busy, and C20 reverts whatever is named.
+#
+#   B33 scope     the walk asks about the CONVICTED TEST; a red sibling no longer convicts.
+#   B34 skip      `bats -f <no match>` exits **0**, which `git bisect run` reads as GOOD — so a tree
+#                 where the test does not exist must be 125/SKIP or the walk is driven RIGHTWARD
+#                 into a later innocent commit. Strictly worse than the predicate it replaces.
+#   B35 parse     a commit that breaks the file's SYNTAX keeps its conviction: `--count` exits 1
+#                 there (it emits `not ok 1 bats-gather-tests`, not a number), so the B34 guard
+#                 stands aside rather than laundering a real regression into a skip.
+#   B36 red-proof with CC_POSTLAND_BISECT_SCOPE=file the B33 fixture names the innocent sha again.
+#
+# The fixture is the incident in miniature: TWO tests, a SIBLING that goes red early (c2) and the
+# TARGET that goes red late (c4). File-scope convicts c2; test-scope convicts c4.
+
+# A stub that models real bats closely enough for this clause: it honours `-f <ere>` selection and
+# `--count`, and decides each selected test from its own marker. Anything less cannot express the
+# bug — a stub blind to `-f` holds the one axis B33 turns on constant (memory:
+# fixture-identifier-shape-collapses-two-spaces).
+stub_bats_two_tests() {
+  cat > "$STUB/bats-stub" <<'STUBEOF'
+#!/bin/bash
+# names: the TARGET (red iff BAD) and the SIBLING (red iff SIB) — the load-flake analogue.
+t_target='10 the destination append is idempotent'
+t_sib='19 a breached index is ALSO rotated'
+count=0; filt=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --version) echo "Bats 1.0.0"; exit 0 ;;
+    --count)   count=1; shift ;;
+    -f)        filt="$2"; shift 2 ;;
+    *)         shift ;;
+  esac
+done
+[ -f BROKEN ] && { printf '1..1\nnot ok 1 bats-gather-tests\n'; exit 1; }   # a syntax-broken suite
+sel=()
+for n in "$t_target" "$t_sib"; do
+  if [ -z "$filt" ] || printf '%s\n' "$n" | grep -Eq "$filt"; then sel+=("$n"); fi
+done
+if [ "$count" = 1 ]; then printf '%s\n' "${#sel[@]}"; exit 0; fi
+printf '%s %s %s\n' "$(git rev-parse HEAD 2>/dev/null)" "${#sel[@]}" "${filt:-none}" >> "$CC_STUB_CALLS"
+rc=0
+for n in "${sel[@]}"; do
+  [ "$n" = "$t_target" ] && [ -f BAD ] && rc=1
+  [ "$n" = "$t_sib" ]    && [ -f SIB ] && rc=1
+done
+exit "$rc"
+STUBEOF
+  chmod +x "$STUB/bats-stub"
+  export CC_POSTLAND_BATS="$STUB/bats-stub"
+  export CC_STUB_CALLS="$BATS_TEST_TMPDIR/stub-calls"
+  : > "$CC_STUB_CALLS"
+}
+
+# <n> [sib_at=2] [bad_at=4] [broken_at=] — markers on the harness repo minted by setup(). SIB is the
+# load-flake analogue (red early), BAD the convicted test (red late), BROKEN a syntax break. Reuses
+# $R exactly as mk_history does; it never re-inits and never writes a git identity.
+mk_two_marker_history() {
+  local n="$1" sib_at="${2:-2}" bad_at="${3:-4}" broken_at="${4:-}" i
+  for i in $(seq 1 "$n"); do
+    printf '%s\n' "$i" > "$R/seq.txt"
+    [ "$sib_at" != "none" ] && [ "$i" -ge "$sib_at" ] && printf 'sib\n' > "$R/SIB"
+    [ "$bad_at" != "none" ] && [ "$i" -ge "$bad_at" ] && printf 'bad\n' > "$R/BAD"
+    [ -n "$broken_at" ] && [ "$i" -ge "$broken_at" ] && printf 'x\n' > "$R/BROKEN"
+    git -C "${R:?bisect-bound: fixture repo required}" add -A >/dev/null
+    git -C "${R:?bisect-bound: fixture repo required}" commit -qm "c$i" >/dev/null
+    [ "$i" = 1 ] && GOOD="$(git -C "$R" rev-parse HEAD)"
+    [ "$i" = "$sib_at" ] && SIBBAD="$(git -C "$R" rev-parse HEAD)"
+    [ "$i" = "$bad_at" ] && TARGBAD="$(git -C "$R" rev-parse HEAD)"
+    [ -n "$broken_at" ] && [ "$i" = "$broken_at" ] && BROKENBAD="$(git -C "$R" rev-parse HEAD)"
+  done
+  BAD="$(git -C "$R" rev-parse HEAD)"
+  git -C "$R" push -q origin main
+}
+
+@test "B33: a RED SIBLING no longer convicts — the walk asks about the CONVICTED TEST" {
+  mk_two_marker_history 6
+  stub_bats_two_tests
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD" '10 the destination append is idempotent'
+
+  [ "$status" -eq 0 ]
+  # THE clause: c4 is where the TARGET went red. c2 is where the SUITE went red, and is innocent.
+  [[ "$output" == "$TARGBAD" ]] || false
+  [[ "$output" != "$SIBBAD" ]] || false
+  # ...and the walk really was narrowed: every probe selected exactly ONE test, never both.
+  [ "$(wc -l < "$CC_STUB_CALLS" | tr -d ' ')" -ge 1 ]
+  [ "$(awk '$2 != 1' "$CC_STUB_CALLS" | wc -l | tr -d ' ')" = "0" ]
+  # NON-VACUITY: the fixture must really contain a sibling that is red BELOW the target's first-bad,
+  # or file-scope and test-scope agree and B36 could not refute anything.
+  [ "$SIBBAD" != "$TARGBAD" ]
+  grep -q "scope=test" "$RUNLOG"
+}
+
+@test "B34: a tree where the convicted test does NOT exist is SKIPPED — bats -f exits 0, which reads as GOOD" {
+  mk_two_marker_history 6
+  stub_bats_two_tests
+
+  # A name no tree carries: without the --count guard every probe returns rc 0 = GOOD, the walk is
+  # driven rightward and names a commit it never saw fail.
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD" 'ZZZ no such test'
+
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"bisect undecidable"* ]] || false
+  ! [[ "$output" =~ ^[0-9a-f]{7,40}$ ]] || false
+  # ...and it abstained by SKIPPING, not by running the suite: no probe ever executed.
+  [ "$(wc -l < "$CC_STUB_CALLS" | tr -d ' ')" = "0" ]
+}
+
+@test "B35: a commit that BREAKS the suite's syntax keeps its conviction — a parse failure is not a skip" {
+  # No SIB and no BAD: the ONLY thing that changes across this range is a syntax break at c4, so a
+  # conviction there can come from nothing else. --count exits 1 at BROKEN, so B34's guard must
+  # stand aside and let the ordinary run report rc 1 = BAD.
+  mk_two_marker_history 6 none none 4
+  stub_bats_two_tests
+
+  TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD" '10 the destination append is idempotent'
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == "$BROKENBAD" ]] || false
+}
+
+@test "B36: RED-PROOF — with CC_POSTLAND_BISECT_SCOPE=file the B33 fixture convicts the innocent sha again" {
+  # The pre-fix behaviour reproduced from inside the suite. A guard whose absence has never been SEEN
+  # to convict is a guard nobody has shown to do anything.
+  mk_two_marker_history 6
+  stub_bats_two_tests
+
+  CC_POSTLAND_BISECT_SCOPE=file TMPDIR="$SUTTMP" run "$SUT" bisect tests/ok.bats "$GOOD" "$BAD" '10 the destination append is idempotent'
+
+  [ "$status" -eq 0 ]
+  # The sibling's commit — innocent of the test that was actually convicted, and what C20 reverts.
+  [[ "$output" == "$SIBBAD" ]] || false
+  [[ "$output" != "$TARGBAD" ]] || false
+  # ...and it got there by asking the whole suite: every probe selected BOTH tests.
+  [ "$(awk '$2 != 2' "$CC_STUB_CALLS" | wc -l | tr -d ' ')" = "0" ]
+  grep -q "scope=file" "$RUNLOG"
 }

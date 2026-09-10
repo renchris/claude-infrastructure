@@ -780,6 +780,7 @@ FLOOR_EXONERATED=()
 # A row asserting the wrong floor is worse than none: it is the evidence a later reader re-derives from.
 FLOOR_USED=""
 CULPRIT_CONFIRM="${CC_POSTLAND_CULPRIT_CONFIRM:-on}"   # C32 kill switch: off ⇒ a non-tip culprit is named on the walk's single probe alone
+BISECT_SCOPE="${CC_POSTLAND_BISECT_SCOPE:-test}"       # B33 kill switch: file ⇒ the walk's predicate is the WHOLE suite again (pre-2026-09-10)
 CONVICT_PENDING=0    # a ladder conviction seen in ONE window only: nothing proven yet ⇒ cut
 # ...and WHICH files those are, not merely that there were some. The flag alone decides the CUT
 # branch; the names are what a RED/HUNG verdict must NOT spend, since it adjudicated none of them.
@@ -2532,14 +2533,23 @@ bisect_tip_differential_ok() { # <good> <bad> <runner> <counter> <file> — 0 = 
   log "bisect TIP PARENT UNPROVEN: $file is neither definitely red nor definitely green at the tip's parent $(sha12 "$parent") (runner rc=$rc) — no differential was measured; undecidable, no culprit named"
   BISECT_WHY="tip-parent-unproven"; return 1
 }
-do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecidable); rc 1 = no culprit
+do_bisect() { # <file> <good> <bad> [<test>] → sets BISECT_CULPRIT (empty when undecidable); rc 1 = no culprit
   # NEVER call this in `$( )` — it MINTS a worktree cell and the record is a global. See BISECT_CULPRIT.
-  local file="$1" good="$2" bad="$3" runner out culprit qos rc=0 counter steps b0
-  local probe_tmp="" probe_own=0
+  local file="$1" good="$2" bad="$3" tname="${4:-}" runner out culprit qos rc=0 counter steps b0
+  local probe_tmp="" probe_own=0 tere=""
   BISECT_CULPRIT=""; BISECT_STEPS=0; BISECT_S=0; BISECT_LOAD=""; BISECT_WHY="no-range"
   b0="$(now_epoch)"
   [ -n "$good" ] && [ -n "$bad" ] && [ "$good" != "$bad" ] || return 1
   file="tests/$(basename "$file")"
+  # B33 (see the runner's own block): narrow the walk's predicate to the CONVICTED TEST. `?` is the
+  # call site's own "no name" fallback and must never become a regex. ERE-escape every metachar —
+  # real bats names carry `(`, `)`, `.`, `[`, `+` and `?` routinely — then anchor at the START only,
+  # because the name arrives truncated to 120 bytes and a truncated prefix must still select.
+  if [ "$BISECT_SCOPE" = "test" ] && [ -n "$tname" ] && [ "$tname" != "?" ]; then
+    # shellcheck disable=SC2016  # `\&` is sed's REPLACEMENT syntax (the whole match), not a shell
+    # expansion — single quotes are required here, and double quotes would break it.
+    tere="^$(printf '%s' "$tname" | sed 's/[][\.*^$(){}?+|]/\\&/g')"
+  fi
   BISECT_WHY="no-cell"
   prepare_worktree "$bad" || return 1
   runner="$(mktemp "$TMPBASE/postland-bisect.XXXXXX")" || return 1
@@ -2609,7 +2619,53 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
     # TMPDIR= is the ADJUDICATOR ENV invariant at its one load-bearing site: without it this probe
     # runs at the daemon's prefix while the corpus measured at a longer one, and a length-dependent
     # red is exonerated by construction. %q, not "%s", because this is being written INTO a script.
-    printf 'TMPDIR=%q %s"%s" "%s" </dev/null >/dev/null 2>&1\n' "$probe_tmp" "$qos" "$BATS_BIN" "$file"
+    # ── B33: THE PREDICATE IS THE CONVICTED TEST, NOT THE WHOLE SUITE (2026-09-10) ───────────────
+    # Until now this line ran the whole FILE, so the walk's bad-predicate was "does any test in this
+    # suite fail". Every guard built on top of it inherits that granularity — including the culprit
+    # confirmation (B29), whose own contract block states the premise it re-measures as "the failing
+    # test fails AT the culprit". It did not measure that; it measured the file. A suite holding one
+    # LOAD-SENSITIVE case therefore convicts, and confirms, an innocent commit whenever the box is
+    # busy — and C20 REVERTS whatever this names.
+    #
+    # MEASURED, backlog 943d0fd3759f: postland convicted 97758a6323ee for
+    # `tests/memory-index-drain.bats::10 the destination append is idempotent`. Direct A/B says 10
+    # PASSES there (isolated AND whole-file, 23/23) and first fails at 5972228d5, four commits
+    # later, where the already-cited veto returned rc 4 for what is a healthy idempotent re-run;
+    # 8460f5ac9 cured it. What was red at 97758a632 under the bisect's `load=34.50` was case 19 —
+    # a sibling that 18ed810a7 later pinned with MID_DEADLINE_S because, in its own words, the
+    # assertion "silently becomes 'was the box quiet enough'" (a measured ~1-in-3 flake). The walk
+    # converged on the last commit before that pin. AUTO-REVERT then fired at 97758a632 and failed
+    # only because the revert CONFLICTED (rc 90) — had it applied, it would have reverted an
+    # unrelated timeout fix and left the actual red exactly where it was.
+    #
+    # THE `--count` GUARD IS LOAD-BEARING, not defensive. `bats -f <no match>` prints `1..0` and
+    # exits **0**, which `git bisect run` reads as GOOD — so a test that was RENAMED or does not yet
+    # exist at a probed tree would silently drive the walk RIGHTWARD and convict a later innocent
+    # commit. That is strictly worse than the file-wide predicate it replaces. So: select the test
+    # first, and treat "this tree parses but has no such test" as 125/SKIP — undecidable, never
+    # good. A PARSE FAILURE is deliberately NOT folded in: `--count` exits 1 there (it emits
+    # `not ok 1 bats-gather-tests`, not a number), so the guard stands aside and the ordinary run
+    # below reports rc 1 = BAD, which is correct — a commit that breaks the suite's syntax is a
+    # genuine regression and must keep its conviction.
+    #
+    # Degrades to the old behaviour on an empty name (every existing caller and B1-B32) and under
+    # CC_POSTLAND_BISECT_SCOPE=file. The name arrives ALREADY TRUNCATED to 120 bytes by the call
+    # site, so the regex is anchored at the START only — a truncated prefix must still select.
+    # Each of the three lines below EMITS a $BATS_BIN invocation into the runner rather than making
+    # one, so none can carry a bound of its own — the runner is bounded at its CALL sites instead.
+    # B18's census exempts exactly the lines carrying `bisect-runner-template` and asserts their
+    # COUNT, so this exemption states its intent and still cannot widen silently. Adding a fourth
+    # emitting line without the marker reds B18; adding one WITH it reds B18's tally. Both are the
+    # census working.
+    if [ -n "$tere" ]; then
+      # shellcheck disable=SC2016  # authoring a script: $cnt/$crc must NOT expand here
+      printf 'cnt=$(%s"%s" --count -f %q "%s" 2>/dev/null); crc=$?\n' "$qos" "$BATS_BIN" "$tere" "$file"  # bisect-runner-template
+      # shellcheck disable=SC2016
+      printf '[ "$crc" -ne 0 ] || [ "${cnt:-0}" != "0" ] || exit 125\n'
+      printf 'TMPDIR=%q %s"%s" -f %q "%s" </dev/null >/dev/null 2>&1\n' "$probe_tmp" "$qos" "$BATS_BIN" "$tere" "$file"  # bisect-runner-template
+    else
+      printf 'TMPDIR=%q %s"%s" "%s" </dev/null >/dev/null 2>&1\n' "$probe_tmp" "$qos" "$BATS_BIN" "$file"  # bisect-runner-template
+    fi
     # shellcheck disable=SC2016  # authoring a script: $rc must NOT expand here
     printf 'rc=$?\n[ "$rc" -le 1 ] || exit 125\nexit "$rc"\n'
   } > "$runner"
@@ -2720,11 +2776,15 @@ do_bisect() { # <file> <good> <bad> → sets BISECT_CULPRIT (empty when undecida
   # loadavg printed as 0 is the alarm-polarity defect this file already carries a comment about.
   BISECT_S=$(( $(now_epoch) - b0 ))
   BISECT_LOAD="$(load1)"
+  # `scope=` is not decoration: a verdict reached on the WHOLE SUITE and one reached on the convicted
+  # TEST are different claims about different populations (B33), and the pre-2026-09-10 runner log
+  # records only the first kind while looking identical. Say which predicate produced this sha.
+  local bscope="file"; [ -n "$tere" ] && bscope="test"
   if [ -n "${culprit:-}" ]; then
     BISECT_WHY=""
-    log "bisect verdict=$(sha12 "$culprit") steps=$BISECT_STEPS elapsed=${BISECT_S}s load=${BISECT_LOAD:-?}"
+    log "bisect verdict=$(sha12 "$culprit") scope=$bscope steps=$BISECT_STEPS elapsed=${BISECT_S}s load=${BISECT_LOAD:-?}"
   else
-    log "bisect verdict=NONE why=${BISECT_WHY:-unknown} steps=$BISECT_STEPS elapsed=${BISECT_S}s load=${BISECT_LOAD:-?}"
+    log "bisect verdict=NONE why=${BISECT_WHY:-unknown} scope=$bscope steps=$BISECT_STEPS elapsed=${BISECT_S}s load=${BISECT_LOAD:-?}"
   fi
   [ -n "${culprit:-}" ] || return 1
   BISECT_CULPRIT="$culprit"
@@ -3290,7 +3350,10 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
   ftest="${FAILNAME[0]:-${FAILTEST:-?}}"; ftest="${ftest//[$'\n\r']/ }"; ftest="${ftest:0:120}"
   [ -n "$ftest" ] || ftest='?'
   good="$(cat "$LASTGREEN" 2>/dev/null || true)"
-  do_bisect "$file" "$good" "$sha" 2>/dev/null || true      # NOT `$( )` — see BISECT_CULPRIT
+  # `$ftest` is FAILNAME[0] — the name OF `$file` on every path that reaches here (see the block
+  # above). B33 hands it to the walk so the bad-predicate is that TEST rather than the whole suite;
+  # it was already computed one line up and simply was not passed.
+  do_bisect "$file" "$good" "$sha" "$ftest" 2>/dev/null || true   # NOT `$( )` — see BISECT_CULPRIT
   bisected="$BISECT_CULPRIT"
   culprit="$bisected"
   [ -n "$culprit" ] || culprit="$sha"
@@ -3846,10 +3909,12 @@ do_run_one() { # <sha>
   idl fired "ran:$(sha12 "$sha")" "$(sha12 "$sha")"
   return 0
 }
-verb_bisect() { # <file> <good> <bad>
+verb_bisect() { # <file> <good> <bad> [<test>]
   local c
-  [ "$#" -eq 3 ] || { echo "usage: postland-verify.sh bisect <file> <good> <bad>" >&2; idl abstained bad-args; return 2; }
-  do_bisect "$1" "$2" "$3" || true; c="$BISECT_CULPRIT"      # NOT `$( )` — see BISECT_CULPRIT
+  # The 4th arg is OPTIONAL so every existing caller and B1-B32 keep the file-wide predicate; supplying
+  # it selects B33's test-scoped one, which is what the daemon path now always does.
+  { [ "$#" -eq 3 ] || [ "$#" -eq 4 ]; } || { echo "usage: postland-verify.sh bisect <file> <good> <bad> [<test>]" >&2; idl abstained bad-args; return 2; }
+  do_bisect "$1" "$2" "$3" "${4:-}" || true; c="$BISECT_CULPRIT"   # NOT `$( )` — see BISECT_CULPRIT
   idl fired "bisect:$1"
   [ -n "$c" ] || { echo "postland-verify: bisect undecidable (${BISECT_WHY:-unknown}; steps=$BISECT_STEPS elapsed=${BISECT_S}s load=${BISECT_LOAD:-?})" >&2; return 1; }
   echo "$c"
@@ -4759,6 +4824,7 @@ usage() {
   echo "  --falsify-red: the STORED FALSIFIER on this script's own backlog items — 0 = a full-corpus green contains that commit AND covered that suite (premise gone) · 1 = still live · 2 = could not ask"
   echo "  kill switches: POSTLAND_VERIFY=off (inert) · POSTLAND_AUTOREVERT=off (verify+page, never push)"
   echo "                 CC_POSTLAND_FLOOR_EXONERATE=off (C30) · CC_POSTLAND_CULPRIT_CONFIRM=off (C32)"
+  echo "                 CC_POSTLAND_BISECT_SCOPE=file (B33: walk the whole suite, not the convicted test)"
   echo "  revert retry : POSTLAND_REVERT_RETRY_MAX=$REVERT_RETRY_MAX · POSTLAND_REVERT_RETRY_DECAY_S=$REVERT_RETRY_DECAY_S (a revert that never landed re-arms; one that landed never does)"
   echo "  state: $STATE   ·   host partition: $MANIFEST_REL   ·   header comment = full design notes"
 }
