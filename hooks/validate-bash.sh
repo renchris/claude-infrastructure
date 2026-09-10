@@ -739,6 +739,30 @@ if [[ "${CC_KILL_SELECTION_GATE:-on}" != off && -f "$KS_PY" ]] \
   fi
 fi
 
+# ── EMPTY-SELECTOR kill gate (2026-09-09 — the mass application termination) ─────────────────────
+# The gate ABOVE evaluates a selection live, but only when the census verb is pgrep/pkill/killall.
+# The 2026-09-09 incident used none of them: a bare `kill` over a pid list computed by a hand-rolled
+# `ps -axo pid=,command= | awk …` census. It selected 875 of 878 processes and terminated Kitty,
+# Dia, Discord, ~17 Claude Code sessions and most of the user's launchd agents in nine seconds,
+# because its awk pattern came from an env-prefix assignment on the PREVIOUS pipeline stage and was
+# therefore empty — and an empty selector is a universal one.
+#
+# lib/is-true-flag.sh :: empty_prefix_expansion_scan decides that statically, with no fork and no
+# pattern list: it convicts only when the variable is provably unset AT ITS USE SITE (see the header
+# there for the three abstentions). The signal test runs on the quote-STRIPPED copy so a `kill` in a
+# commit message body is a string; the emptiness scan runs on the ORIGINAL because that is where the
+# pattern lives. Seam: CC_EMPTY_SELECTOR_GATE=off.
+# Evidence: docs/research/mass-app-termination-2026-09-09.md.
+if [[ "${CC_EMPTY_SELECTOR_GATE:-on}" != off ]] \
+   && declare -f empty_prefix_expansion_scan >/dev/null 2>&1 \
+   && signals_in_command_position "$CMD_NOQ"; then
+  ES_NAME=$(empty_prefix_expansion_scan "$CMD_NOHD" || true)
+  if [[ -n "$ES_NAME" ]]; then
+    { [ -d "$HOME/.claude/logs" ] || mkdir -p "$HOME/.claude/logs"; printf '{"ts":"%s","sid":"%s","var":"%s"}\n' "${_P_TS:-}" "${_P_SID:-}" "$(json_escape "$ES_NAME")" >> "$HOME/.claude/logs/empty-selector-gate.jsonl"; } 2>/dev/null || true
+    deny "Empty-selector kill blocked: \$$ES_NAME is EMPTY where you read it, so this selects EVERY process, not a few. An env-prefix assignment ('$ES_NAME=… cmd') binds only to THAT command's environment — never to the shell — so a \"\$$ES_NAME\" read from any later stage of the pipeline expands to the empty string, and an empty pattern is a UNIVERSAL match: awk's index(\$0,\"\") is 1 on every line, and grep \"\" matches every line. Measured on this machine 2026-09-09 23:55:14Z: exactly this shape selected 875 of 878 processes where the corrected census selects 2, and three SIGTERM waves one second apart terminated Kitty, Dia, Discord, Hammerspoon, ~17 Claude Code sessions and most of the user's launchd agents in nine seconds (the kernel logged 'zsh(66592) deny(1) signal initproc signum:15' — it tried to signal pid 1). FIX: make the assignment reach the shell — '$ES_NAME=…' as its own statement, or 'export $ES_NAME=…', or pass the pattern as a normal awk variable ('local P=…; ps … | awk -v p=\"\$P\"'). Then PREVIEW the selection read-only — run the census alone and count what it returns — before any signal. If you were moving the pattern out of argv to stop a census matching itself, the shell-level assignment does that too; only the env-prefix form does not. Kill switch: CC_EMPTY_SELECTOR_GATE=off."
+  fi
+fi
+
 # DDL via any mechanism (turso shell, sqlite3, echo|pipe, etc.) — only
 # blocked when in DATABASE-COMMAND context. This avoids false positives on
 # commit messages that discuss DDL ("fix: block DROP TABLE in migration").
