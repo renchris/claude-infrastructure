@@ -568,3 +568,37 @@ additive and reader-neutral. §3 remains one dispatched session per emitter, as 
 Add a `case` arm to `hooks/lib/why-tier.sh` **and** a row to `why_topic_list`. `tests/why-tier.bats`
 P7 asserts the two sets are equal and that no body is a stub, so a body with no listing — or a listing
 with no body — is a red rather than a discovery six weeks later.
+
+---
+
+## 6. WHAT REMAINS — dispatchable units, state as of 2026-09-10
+
+Written because this plan is the DoD of a `plan-open` backlog row that re-dispatches while the plan is
+open: without this section the next worker re-derives today's state from §1's scoreboard, which has been
+stale since `2dda2fe1b`.
+
+**Closed today** (three landed units, each with a measured red-proof — see the sections named):
+§2 Tier 3 hunks H/I/J · §3.3 A2 · §3.1's "bonus finding" (`⛔` auto-traffic regex). **§2 is now fully
+applied — the apply list is empty.** The `--why` tier is built (`21b48b267`) and its contract is verified
+live on all four wired emitters: any emitter prints any topic (rc 0), unknown ⇒ rc 3, bare `--why` lists
+(rc 0), and the `+` form concatenates in arm order.
+
+**Still open — 47 of the 58 proposed emissions.** Each row is one dispatched session (locus **S**, as §2
+states). They are independent: no two touch the same file.
+
+| # | Unit | Emissions | State after today |
+|---|---|---|---|
+| W1 | `completion-assert` §3.3 | 9 | UNBLOCKED. A2 is done. The nine survivors need the `--why <arm>` multi-arm spelling worked through per §5.1 (`$arm` is `+`-joined; `tests/completion-assert.bats:466` pins `"arm":"handoff+fence"`), plus B8's retain guard re-keyed off `contra` onto `d1\|d2\|d4\|d5\|d6`. |
+| W2 | `session-continue` §3.4 | 6 | UNBLOCKED, and one stated objection is now **moot**: §3.4 demanded the `--why` arm in BOTH case statements because `:85`'s lib-failure path exits 0 silently. The shipped arm dispatches ABOVE the lib source (`:104`), so it never reaches either `case` — verified by execution, not by reading. The named restores (`<marker-or-slug>`, the absolute path at the `clear` site) still bind. |
+| W3 | `waiting-recycle` §3.1 | 13 | PARTLY blocked, and the blocker is CODE not prose: §3.1(c) `scripts/desk-arm-live.sh` still supports only `--live`/`--shadow`, so an operator paging on a BUSY wedge arms LIVE only and the desk never execs. Fix that first or the wedge message loses `${livearm}`. §3.1(d) still binds — `set -uo pipefail` at `:171` makes one unset `sysmsg` a session-costing abort. |
+| W4 | `boundary-handoff` §3.2 | 11 | Blocked on its own two code fixes, unchanged: declare `hint=""` and assign it **with a leading separator**; put `T_FREEWIN`'s value on a record (it is on none, fired or abstained) or restore its echo. |
+| W5 | `operator-readout` §3.5 | 8 | **NOT unblocked and deliberately not wired to `--why`** (§5.3). These need a store, a test, or `cc-do` taught the custody store — a reference tier answers none of them. Do not dispatch W5 as a message-rewrite wave. |
+
+**Read §5.3 before starting any of them.** Building the tier discharged the *destination* objection only;
+every other objection each verifier raised still stands, and W3/W4/W5 above are exactly those.
+
+**One caution earned today, and it costs a land cycle when missed:** `test-hermeticity-lint` rule 2
+matches `grep -F handoff-fire` against a suite's CODE with comments stripped. A fixture STRING containing
+that literal conscripts the suite into the capacity-gate rule and reds the land — and the remedy the lint
+prints (pin `CC_FIRE_CAPACITY_GATE=off` in `setup()`) is a false statement for a suite that fires nothing.
+Elide the tool name from fixture bodies instead; `tests/interactive-parity.bats:40-46` carries the note.
