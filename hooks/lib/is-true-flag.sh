@@ -708,3 +708,76 @@ strip_heredoc_bodies() {
     }
   '
 }
+
+# ── EMPTY-SELECTOR SCAN (2026-09-09 — the mass application termination) ──────────────────────────
+# An env-prefix assignment binds to exactly ONE command: `VAR=value cmd` puts VAR in *cmd's*
+# environment and NEVER in the shell's. So a `"$VAR"` read from any OTHER command of the same line
+# expands to the EMPTY STRING — and an empty string is not a narrow selector, it is a UNIVERSAL one.
+# `awk -v p="" 'index($0,p)'` prints every line, because index() of the empty string is 1; `grep ""`
+# and `grep -F ""` match every line for the same reason.
+#
+# MEASURED, 2026-09-09 23:55:14Z (docs/research/mass-app-termination-2026-09-09.md). A session
+# rewrote a process census to keep the pattern out of its own argv — the correct instinct, and the
+# rule it was obeying is real (memory: argv-census-must-not-carry-its-pattern-in-argv) — by moving
+# the pattern to an env prefix:
+#     count() { LA_PAT='handoff-fire.sh late-arm' ps -axo pid=,command= | awk -v p="$LA_PAT" 'index($0,p)' ; }
+#     for i in 1 2 3; do for p in $(count | awk '{print $1}'); do kill "$p" 2>/dev/null || true; done; sleep 1; done
+# `awk` is the NEXT pipeline stage, so p was empty, so `count` returned EVERY process on the box.
+# Re-run on this machine: the as-written form selects 875 of 878 processes; the same census with the
+# pattern actually reaching awk selects 2. Three waves of SIGTERM, one second apart, terminated
+# Kitty, Dia, Discord, Hammerspoon, ~17 Claude Code sessions and most of the user's launchd agents
+# inside nine seconds. The kernel logged the tell: `zsh(66592) deny(1) signal initproc signum:15` —
+# the loop tried to signal pid 1.
+#
+# WHY THIS SCAN AND NOT A PATTERN DENYLIST. The harm is not a spelling. `pkill`, `killall` and
+# `pgrep` were all absent from that line; the verb was a bare `kill` over a pid list computed by a
+# hand-rolled `ps | awk` census, which is exactly the shape hooks/lib/kill-selection.py cannot
+# evaluate (its census verb is pgrep). What IS decidable, statically and with no fork, is that the
+# selector was provably empty AT ITS USE SITE. That is a property of the code, not of the incident,
+# and it holds for every future spelling of the same bug (memory: denylist-enumerates-spellings).
+#
+# DELIBERATELY CONSERVATIVE — it abstains rather than guess:
+#   · a BARE `NAME=value` statement, or `export`/`local`/`declare`/`typeset`/`readonly NAME=`,
+#     anywhere in the command means the value DOES reach the shell → abstain.
+#   · the reference must lie on the far side of a `|`, `;`, `&`, or newline from the assignment.
+#     `FOO=bar sh -c 'echo $FOO'` reads FOO from sh's OWN environment and is correct → abstain.
+#   · a reference BEFORE the assignment is somebody else's variable → abstain.
+# The caller pairs it with a signal-verb test, so a provably-empty selector that signals nothing is
+# a measurement bug and not this gate's business.
+
+# Does a signal verb sit in COMMAND position? Feed this the quote-STRIPPED copy, so that a `kill`
+# inside a commit message body is a string and never a command (the convention validate-bash.sh
+# already uses for its pkill position test). `xargs kill` counts: the verb is not in command
+# position there, but xargs is what executes it.
+signals_in_command_position() { # $1=quote-stripped command text → rc 0 when it signals
+  printf '%s' "$1" | sed -e 's/[&|()`]/;/g' | tr ';' '\n' \
+    | sed -E -e 's/^[[:space:]]*//' \
+             -e 's/^(do|then|else|elif|\{|\}|!)[[:space:]]+//' \
+             -e 's/^[[:space:]]*//' \
+    | grep -qE '^(sudo[[:space:]]+)?(kill|pkill|killall)([[:space:]]|$)|^xargs([[:space:]]+-[^[:space:]]+)*[[:space:]]+(kill|pkill|killall)([[:space:]]|$)'
+}
+
+# Prints the offending variable NAME on the first PROVABLY-empty expansion; rc 1 when none.
+# Feed this the ORIGINAL (heredoc-stripped, quotes INTACT) text: the assignment's value and the
+# `"$NAME"` reference both live inside quotes, and a quote-stripped copy destroys both.
+empty_prefix_expansion_scan() { # $1=command text → NAME on stdout, rc 0 when provable
+  local cmd="$1" hit name apos bpos between
+  while IFS= read -r hit; do
+    [ -n "$hit" ] || continue
+    name=$(printf '%s' "$hit" | sed -E 's/^[^A-Za-z_]*//; s/=.*$//')
+    [ -n "$name" ] || continue
+    printf '%s' "$cmd" | grep -qE '(^|[;&|(){}[:space:]])(export|local|declare|typeset|readonly)[[:space:]]+'"$name"'=' && continue
+    printf '%s' "$cmd" | grep -qE '(^|[;&|(){}[:space:]])'"$name"'=([^[:space:];&|)]*|"[^"]*"|'"'"'[^'"'"']*'"'"')[[:space:]]*($|[;&|)}])' && continue
+    apos=$(printf '%s' "$cmd" | grep -bo -E "$name=" | head -1 | cut -d: -f1)
+    bpos=$(printf '%s' "$cmd" | grep -bo -E '\$\{?'"$name"'\}?' | head -1 | cut -d: -f1)
+    [ -n "$apos" ] && [ -n "$bpos" ] || continue
+    [ "$bpos" -gt "$apos" ] || continue
+    between=$(printf '%s' "$cmd" | dd bs=1 skip="$apos" count=$((bpos-apos)) 2>/dev/null)
+    # PURE-BASH separator test: a grep pattern carrying a literal newline is read as TWO patterns,
+    # the first ending in a dangling '|' — `grep: empty (sub)expression`, rc 2, which `|| continue`
+    # then reads as "no separator" and the gate silently never fires (measured while building this).
+    case "$between" in *'|'*|*';'*|*'&'*|*$'\n'*) ;; *) continue ;; esac
+    printf '%s\n' "$name"; return 0
+  done < <(printf '%s' "$cmd" | grep -oE '(^|[;&|(){}[:space:]])[A-Za-z_][A-Za-z0-9_]*=("[^"]*"|'"'"'[^'"'"']*'"'"'|[^[:space:];&|)]*)[[:space:]]+[A-Za-z_./]')
+  return 1
+}
