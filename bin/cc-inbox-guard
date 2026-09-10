@@ -504,14 +504,14 @@ sweep() {
       if [ -n "$torigin" ]; then
         if [ "$DRY" = 1 ]; then echo "  SKIP [enqueue-fail] $tgt — test_origin=$torigin (fixture, not a real failure)"; else
           echo "cc-inbox-guard: skipped a FIXTURE-origin enqueue-fail record ($torigin) — not paging the operator" >&2
-          mv -f "$ef" "$ef.handled" 2>/dev/null || rm -f "$ef" 2>/dev/null || true
+          mv -f "$ef" "$ef.handled" 2>/dev/null || rm -f "$ef" 2>/dev/null || true  # reaper-horizon-lint:not-evidence — consumes a fixture-origin enqueue-fail record when the .handled rename fails
         fi
         continue
       fi
       if [ "$DRY" = 1 ]; then echo "  WOULD-ESCALATE [enqueue-fail] $tgt"; else
         phone "⚠️ comms enqueue FAILED" "inbox unwritable for $tgt — NOT delivered: $msg" >/dev/null
         idl_rec "$tgt" "enqueue-failed-escalated" "$(jq -nc --arg m "$msg" '{msg:$m}')"
-        mv -f "$ef" "$ef.handled" 2>/dev/null || rm -f "$ef" 2>/dev/null || true
+        mv -f "$ef" "$ef.handled" 2>/dev/null || rm -f "$ef" 2>/dev/null || true  # reaper-horizon-lint:not-evidence — consumes the enqueue-fail record it just escalated, when the .handled rename fails
       fi
       n_esc=$((n_esc+1))
     done

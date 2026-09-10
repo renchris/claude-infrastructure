@@ -729,7 +729,7 @@ clear_redundant_dirt() { # <path> → 0 iff the tree is CLEAN afterwards, having
     if "$GIT_BIN" -C "$path" cat-file -e "HEAD:$p" 2>/dev/null; then
       "$GIT_BIN" -C "$path" checkout -q -- "$p" 2>/dev/null || true
     else
-      rm -f -- "$path/$p" 2>/dev/null || true
+      rm -f -- "$path/$p" 2>/dev/null || true  # reaper-horizon-lint:not-evidence — an untracked file in a landed worktree whose bytes are already on trunk
     fi
   done <<EOF
 $porc
@@ -1415,7 +1415,7 @@ if [ -e "$MAINT_LOCK" ]; then
   elif [ "$DRY_RUN" = "1" ]; then
     MAINT_LOCK_STATE=would-reap
   else
-    rm -f "$MAINT_LOCK" 2>/dev/null || true
+    rm -f "$MAINT_LOCK" 2>/dev/null || true  # reaper-horizon-lint:not-evidence — a stale git maintenance lock, not registry or telemetry
     # Verified by ABSENCE, not by `rm`'s exit code: `rm -f` reports success for a file it never
     # removed, so its rc cannot distinguish a reap from a permission refusal.
     if [ -e "$MAINT_LOCK" ]; then MAINT_LOCK_STATE=reap-failed; else MAINT_LOCK_STATE=reaped; fi
