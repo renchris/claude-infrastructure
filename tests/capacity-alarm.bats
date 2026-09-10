@@ -948,6 +948,125 @@ sys.stdout.write("null" if v is None else str(v))' "$2"
   [ "$output" = "0" ] || false
 }
 
+# ══ THE AUTOMATION COALITION THE TERMINAL FILTER CANNOT SEE (cc-backlog 6c55ce7364d4) ══════
+# Sibling of the CF block above, and it exists because the CF instrument has a POPULATION limit that
+# reads as an instrument limit. read_coalition_true() only ever considers a coalition holding an
+# iTerm2/kitty/ghostty process; measured 2026-09-09, 1 of 535 live coalitions qualified, so a
+# browser-automation tree whose terminal app is gone is in no aggregate the file records. The live
+# instance: coalition 82373, a sevenrooms-bridge sidecar at ppid 1 driving Chrome + 5 renderers,
+# 11 procs / 528 MB TRUE footprint / 0.0% CPU / 1h30m old, matched by NO rung and by NOT EVEN the
+# filing item's own `grep agent-browser` (0 of its 11 pids).
+#
+# These pin BOTH halves, exactly as CF1-CF5 do: that the quantity is now recorded, and that NOTHING
+# reads it. AC4 is the load-bearing one.
+#
+# WHICH MUTANT REDS WHICH CASE — all five applied and RUN against the real subject, 0 green, and
+# the unmutated baseline re-confirmed green 5/5 on BOTH sides of the round:
+#   M-A1 (drop auto_coal_* from the JSON row)             → AC1, AC2, AC3   (AC2 unpredicted)
+#   M-A2 (ignore the damping stamp — always measure)      → AC2
+#   M-A3 (make the CC_CAP_AUTO_COAL kill-switch a no-op)  → AC3
+#   M-A4 (feed auto_coal_fp_mb into classify())           → AC4
+#   M-A5 (drop the `- termcoals` set subtraction)         → AC1, AC5        (AC1 unpredicted)
+#
+# BOTH UNPREDICTED REDS ARE RECORDED AS UNPREDICTED rather than folded into the prediction after
+# the fact — the same discipline the CF block above kept for its own M-C1 surprise, and the reason
+# to RUN mutants instead of reasoning about them:
+#   · M-A1 also reds AC2 because deleting the JSON fields makes cf_field return the literal
+#     "MISSING", which is neither "measured" nor "damped" — a legitimate red, via a different route
+#     than the damping logic AC2 was written to guard.
+#   · M-A5 also reds AC1, and that is the more reassuring one: AC1's runtime `id != coal_id` check
+#     caught the duplicate-coalition reading on its own, so the property is pinned at runtime AND in
+#     source, not only by the source invariant.
+#
+# M-A5 is the one worth keeping: without the subtraction the selector can return the TERMINAL
+# coalition, which the CF instrument already measures — a duplicate reading dressed as a new
+# population, and the failure this whole block exists to avoid.
+
+@test "AC1: the row records the largest NON-terminal automation coalition and its footprint" {
+  export CC_CAP_AUTO_COAL_FP_STAMP="$BATS_TEST_TMPDIR/auto.stamp"
+  run bash "$ALARM" --json --no-append
+  [ -n "$output" ] || false
+  local src
+  src="$(cf_field "$output" auto_coal_fp_src)"
+  # FOUR legal readings, and "none" is a real one — this box may hold no automation tree at all.
+  case "$src" in measured|damped|none|unavailable) ;; *) false ;; esac
+  if [ "$src" = "measured" ]; then
+    local n mb id
+    n="$(cf_field "$output" auto_coal_procs)"
+    mb="$(cf_field "$output" auto_coal_fp_mb)"
+    id="$(cf_field "$output" auto_coal_id)"
+    case "$n"  in ''|*[!0-9]*) false ;; esac
+    case "$mb" in ''|*[!0-9]*) false ;; esac
+    case "$id" in ''|*[!0-9]*) false ;; esac
+    [ "$n" -gt 0 ] && [ "$mb" -gt 0 ] || false
+    # and it is NOT the coalition the CF instrument already measures — that would be a duplicate
+    # reading wearing a new field name (mutant M-A5).
+    local tid
+    tid="$(cf_field "$output" coal_id)"
+    [ "$id" != "$tid" ] || false
+  else
+    # a non-measured reading asserts NOTHING — it must not carry a fabricated number
+    [ "$(cf_field "$output" auto_coal_fp_mb)" = "null" ] || false
+  fi
+}
+
+@test "AC2: the second footprint sample is DAMPED on its OWN stamp, not the terminal one" {
+  export CC_CAP_AUTO_COAL_FP_STAMP="$BATS_TEST_TMPDIR/auto.stamp"
+  export CC_CAP_COAL_FP_STAMP="$BATS_TEST_TMPDIR/fp.stamp"
+  run bash "$ALARM" --json --no-append
+  local first
+  first="$(cf_field "$output" auto_coal_fp_src)"
+  if [ "$first" != "measured" ]; then skip "no non-terminal automation coalition on this box"; fi
+  run bash "$ALARM" --json --no-append
+  [ "$(cf_field "$output" auto_coal_fp_src)" = "damped" ] || false
+  # never re-presents the previous value as fresh
+  [ "$(cf_field "$output" auto_coal_fp_mb)" = "null" ] || false
+  # THE OWN-STAMP HALF: the two instruments must not starve each other. A fresh terminal stamp still
+  # measures while this one is damped — sharing one stamp would make whichever ran first the only
+  # one that ever samples.
+  rm -f "$BATS_TEST_TMPDIR/fp.stamp"
+  run bash "$ALARM" --json --no-append
+  [ "$(cf_field "$output" auto_coal_fp_src)" = "damped" ] || false
+  [ "$(cf_field "$output" coal_fp_src)" = "measured" ] || false
+}
+
+@test "AC3: CC_CAP_AUTO_COAL=0 switches it off without disturbing the pre-existing fields" {
+  export CC_CAP_AUTO_COAL_FP_STAMP="$BATS_TEST_TMPDIR/auto.stamp"
+  export CC_CAP_COAL_FP_STAMP="$BATS_TEST_TMPDIR/fp.stamp"
+  run env CC_CAP_AUTO_COAL=0 bash "$ALARM" --json --no-append
+  [ "$(cf_field "$output" auto_coal_fp_src)" = "off" ] || false
+  [ "$(cf_field "$output" auto_coal_procs)" = "null" ] || false
+  [ "$(cf_field "$output" auto_coal_fp_mb)" = "null" ] || false
+  # STRICTLY ADDITIVE: the terminal coalition rung keeps its own reading either way.
+  local p
+  p="$(cf_field "$output" coal_procs)"
+  case "$p" in ''|*[!0-9]*) false ;; esac
+  [ "$(cf_field "$output" coal_fp_src)" != "off" ] || false
+}
+
+@test "AC4: NO verdict reads the automation fields — n=1 here too, same as the CF row" {
+  # A SOURCE invariant for CF4's reason: a runtime check cannot tell "not read" from "read but not
+  # tripped on this box today". classify() is where every rung's threshold lives.
+  local body
+  body="$(sed -n '/^classify() {/,/^}/p' "$REPO/scripts/capacity-alarm.sh")"
+  [ -n "$body" ] || false                       # anti-vacuity: the extract must exist
+  run bash -c "printf '%s' \"\$1\" | grep -cE 'auto_coal|AUTO_COAL'" _ "$body"
+  [ "$output" = "0" ] || false
+}
+
+@test "AC5: the selector EXCLUDES terminal coalitions — the subtraction is the whole point" {
+  # Runtime is checked in AC1 (id != coal_id) but only WHEN a candidate exists. This is the source
+  # invariant that holds on a box with none, and it is what mutant M-A5 kills.
+  local fn
+  fn="$(sed -n '/^read_automation_coalition() {/,/^}/p' "$REPO/scripts/capacity-alarm.sh")"
+  [ -n "$fn" ] || false                         # anti-vacuity
+  # the candidate set is built by SUBTRACTING the terminal coalitions
+  printf '%s' "$fn" | grep -qE '\- *termcoals' || false
+  # and the predicate is the CDP flag, not an app name — a comm-based test hits Discord's Electron
+  # coalition, measured 2026-09-09.
+  printf '%s' "$fn" | grep -qE 'remote-debugging-port' || false
+}
+
 # ── the census as an INSTRUMENT: refusing beats a plausible-looking zero ──────────────────────────
 @test "(vii-e) a dead process table REFUSES instead of reporting a false empty fleet" {
   # THE DEFECT THIS PINS. Without the `rows` positive control, census()'s awk END block prints a

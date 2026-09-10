@@ -253,9 +253,21 @@ SEG_ALARM_PCT="${CC_CAP_SEG_ALARM_PCT:-70}"
 #       pid 1 by construction. So 500/700 here mean ~877/~1228 coalition procs, and the fatal sample
 #       would have walked to ~571 — WARN, never ALARM, on the very event this rung exists for.
 # Left AS-IS deliberately: fixing (2) alone would make the rung fire correctly on a quantity that
-# (1) shows cannot discriminate. Re-nouning needs a per-coalition FOOTPRINT instrument that does not
-# exist yet (summing `ps rss` is the ~2.34x shared-page over-count this header bans above), so it is
-# a design change, not a maintenance edit. Backlogged; do not tune these in the meantime.
+# (1) shows cannot discriminate. Re-nouning needs a per-coalition FOOTPRINT instrument, which THIS
+# FILE NOW SHIPS — see "THE PER-COALITION FOOTPRINT INSTRUMENT" below (ca6b067b7, 2026-08-19):
+# libproc for membership, footprint(1) for shared-aware bytes. It MEASURES ONLY, so re-nouning is
+# still a design change and not a maintenance edit; the missing piece is a calibration population,
+# never the instrument. Backlogged; do not tune these in the meantime.
+#
+# ⚠️ THAT SENTENCE USED TO READ "an instrument that does not exist yet", AND THE STALENESS COST A
+# WHOLE DISPATCHED WORKER (2026-09-09, cc-backlog 6c55ce7364d4). The instrument landed 2026-08-19;
+# item 6c55ce7364d4 was filed 2026-08-20 asserting an idle browser tree's aggregate footprint is
+# "invisible to every existing rung BY CONSTRUCTION" — a conclusion this line supports and the code
+# 600 lines below refutes. A reader doing exactly the right premise check reads the HEADER, not the
+# implementation. This is the repo's resident-policy-must-not-restate-perishable-facts class inside
+# one file: the correction is stated in place rather than by deleting the claim, because the claim
+# is the record of what was believed. If you ship an instrument, grep the file for prose that says
+# it does not exist.
 COAL_WARN="${CC_CAP_COAL_WARN:-500}"
 COAL_ALARM="${CC_CAP_COAL_ALARM:-700}"
 # Rung 1 is a DELTA (D1 above). 256 MB is a QUARTER of the smallest swap file macOS creates (1 GB)
@@ -1024,6 +1036,118 @@ if [ "${CC_CAP_COAL_FP:-1}" != 0 ]; then
   fi
 fi
 
+# ── THE AUTOMATION COALITION THE TERMINAL FILTER CANNOT SEE (cc-backlog 6c55ce7364d4) ─────────────
+# read_coalition_true() above selects among coalitions that contain a process whose comm is in
+# TERMS (iTerm2/kitty/ghostty). That filter is correct for what it was built for — the 2026-07-31
+# panic was a TERMINAL coalition — and it is why the instrument above cannot see a browser-
+# automation tree whose owning terminal app is gone. Measured 2026-09-09 on this box: **1 of 535
+# live coalitions had a terminal member**, so exactly one coalition was ever a candidate for the
+# footprint sample, and everything else was outside the only aggregate the file records.
+#
+# THE LIVE INSTANCE THAT PROVED IT, and it is not the one the filing named. cc-backlog 6c55ce7364d4
+# claimed an idle agent-browser tree is unwatched. For agent-browser that is FALSE — a tree spawned
+# under the live terminal lands in its coalition (a coalition KEEPS reparented orphans, so the
+# item's ppid==1 premise creates no blindness), and the row read coal_id=117714 coal_fp_mb=4087
+# coal_fp_src=measured with all 10 of its pids inside 117714, verified by libproc. What IS unwatched
+# is a DIFFERENT tree: coalition 82373 — a `sevenrooms-bridge/sidecar` node daemon at ppid 1, 1h30m
+# old, 0.0% CPU, driving Chrome with --user-data-dir=~/.sevenrooms-automation-profile plus five
+# renderers. 11 processes, 528 MB of TRUE footprint, no terminal member, and therefore in no rung.
+# The item's own `grep agent-browser` matches 0 of those 11 pids, so the filing could not have found
+# it either.
+#
+# WHY THE PREDICATE IS --remote-debugging-port AND NOT "is a browser". That flag IS the
+# agent-driven-browser signature: a human's browser does not carry it, and an automation daemon
+# cannot drive one without it. Measured on this box it separates cleanly — coalition 82373 matches
+# (4 CDP procs) and Discord's 11-member Electron coalition, which a comm-based "looks like Chrome"
+# test DOES hit, does not. Keying on the argv flag rather than on the app name is what makes this a
+# population and not a guess.
+#
+# IT MEASURES ONLY — no threshold reads these fields and no verdict changes, for the SAME reason
+# ca6b067b7 gave: there is no calibration population yet, and two attempts to mint one from a single
+# sample were already reverted (a7ededdad, 96c2932af). n=1 here too. The job is to make the quantity
+# RECORDABLE so a future pass has something to calibrate against — pinned by a source invariant in
+# tests/capacity-alarm.bats (AC4), the sibling of CF4.
+#
+# STRICTLY ADDITIVE: every pre-existing field, threshold and verdict is untouched, so this cannot
+# move rung 6 (whose 500/700 were derived against the tree-walk's own scale). Fails silent and
+# separate. Kill-switch CC_CAP_AUTO_COAL=0. Damped on its OWN stamp so the two footprint samples
+# cannot starve each other, at the same CC_CAP_COAL_FP_MIN_S window.
+AUTO_COAL_PROCS=""; AUTO_COAL_ID=""; AUTO_COAL_FP_MB=""; AUTO_COAL_FP_SRC="off"
+read_automation_coalition() { # → "<members> <coalition_id>" for the largest NON-terminal CDP coalition
+  "${CC_CAP_PYTHON:-python3}" -c '
+import ctypes, ctypes.util, os, subprocess, collections, sys
+try:
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    class PCI(ctypes.Structure):
+        _fields_ = [("cid", ctypes.c_uint64 * 2), ("r1", ctypes.c_uint64),
+                    ("r2", ctypes.c_uint64), ("r3", ctypes.c_uint64)]
+    libc.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                                  ctypes.c_void_p, ctypes.c_int]
+    libc.proc_pidinfo.restype = ctypes.c_int
+    def coal(pid):
+        i = PCI()
+        if libc.proc_pidinfo(pid, 20, 0, ctypes.byref(i), ctypes.sizeof(i)) <= 0:
+            return None
+        return i.cid[0]
+    TERMS = ("iTerm2", "kitty", "ghostty", "Ghostty")
+    CDP = "--remote-debugging-port"
+    comm = {}
+    for line in subprocess.run(["ps", "-Ao", "pid=,comm="], capture_output=True,
+                               text=True).stdout.split("\n"):
+        f = line.split(None, 1)
+        if len(f) == 2 and f[0].isdigit():
+            comm[int(f[0])] = os.path.basename(f[1].strip())
+    argv = {}
+    for line in subprocess.run(["ps", "-Ao", "pid=,command="], capture_output=True,
+                               text=True).stdout.split("\n"):
+        f = line.split(None, 1)
+        if len(f) == 2 and f[0].isdigit():
+            argv[int(f[0])] = f[1]
+    groups = collections.defaultdict(int)
+    cid_of = {}
+    for p in comm:
+        c = coal(p)
+        if c is not None:
+            cid_of[p] = c
+            groups[c] += 1
+    # coalitions holding a terminal app — already covered by read_coalition_true()
+    termcoals = {cid_of[p] for p in comm if comm[p] in TERMS and p in cid_of}
+    cand = {cid_of[p] for p in argv if CDP in argv[p] and p in cid_of} - termcoals
+    if not cand:
+        sys.exit(0)
+    best = max(cand, key=lambda c: groups.get(c, 0))
+    sys.stdout.write("%d %d\n" % (groups.get(best, 0), best))
+except Exception:
+    sys.exit(0)
+' 2>/dev/null
+}
+
+if [ "${CC_CAP_AUTO_COAL:-1}" != 0 ]; then
+  AUTO_COAL_FP_SRC="unavailable"
+  _at="$(read_automation_coalition || true)"
+  if [ -n "$_at" ]; then
+    AUTO_COAL_PROCS="${_at%% *}"; AUTO_COAL_ID="${_at#* }"
+    _afp_stamp="${CC_CAP_AUTO_COAL_FP_STAMP:-$HOME/.claude/logs/.capacity-auto-coal-fp.stamp}"
+    _anow="$(date +%s 2>/dev/null || echo 0)"
+    _alast="$(cat "$_afp_stamp" 2>/dev/null)"
+    case "$_alast" in ''|*[!0-9]*) _alast=0 ;; esac
+    if [ "$(( _anow - _alast ))" -ge "${CC_CAP_COAL_FP_MIN_S:-1800}" ]; then
+      AUTO_COAL_FP_MB="$(read_coalition_footprint "$AUTO_COAL_ID" || true)"
+      if [ -n "$AUTO_COAL_FP_MB" ]; then
+        AUTO_COAL_FP_SRC="measured"
+        mkdir -p "$(dirname "$_afp_stamp")" 2>/dev/null || true
+        printf '%s\n' "$_anow" > "$_afp_stamp" 2>/dev/null || true
+      fi
+    else
+      AUTO_COAL_FP_SRC="damped"
+    fi
+  else
+    # NO non-terminal CDP coalition is a real and common reading — say it, rather than leaving
+    # "unavailable" to read as a broken instrument (alarm-polarity: a null must not look like a fault).
+    AUTO_COAL_FP_SRC="none"
+  fi
+fi
+
 # ── scheduler saturation (rung 7) — the axis four panics arrived on, previously not instrumented ──
 # Two counter reads, no walk, nothing to block on — the D2 property rung 5 had to be rebuilt to get.
 #
@@ -1462,13 +1586,14 @@ case "$PTY_MAX" in ''|*[!0-9]*) PTY_MAX="" ;; esac
 PTY_PCT=""
 if [ -n "$PTY_MAX" ] && [ "$PTY_MAX" -gt 0 ]; then PTY_PCT=$(( PTY_USED * 100 / PTY_MAX )); fi
 
-JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"coal_true_procs":%s,"coal_id":%s,"coal_fp_mb":%s,"coal_fp_src":"%s","top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s,"per_session_mb_src":"%s"}' \
+JSON="$(printf '{"ts":"%s","verdict":"%s","sessions":%s,"headroom_gb":%s,"compressor_gb":%s,"active_gb":%s,"wired_gb":%s,"swap_used_mb":%s,"warn_gb":%s,"alarm_gb":%s,"est_room_sessions":%s,"per_session_mb_est":%s,"sessions_exe":%s,"sessions_binclaude":%s,"pressure_level":%s,"proc_warn_gb":%s,"max_proc_gb":%s,"seg_pct":%s,"seg_warn_pct":%s,"seg_alarm_pct":%s,"coal_procs":%s,"coal_app":"%s","coal_warn":%s,"coal_alarm":%s,"coal_true_procs":%s,"coal_id":%s,"coal_fp_mb":%s,"coal_fp_src":"%s","auto_coal_procs":%s,"auto_coal_id":%s,"auto_coal_fp_mb":%s,"auto_coal_fp_src":"%s","top_procs":%s,"seg_source":%s,"swap_delta_mb":%s,"swap_delta_floor_mb":%s,"swap_window_s":%s,"occupancy_pct":%s,"thrash_cd_ratio":%s,"compressions":%s,"decompressions":%s,"load_1m":%s,"load_5m":%s,"load_15m":%s,"ncpu":%s,"load_per_core":%s,"load_warn_per_core":%s,"load_alarm_per_core":%s,"ptys_used":%s,"ptys_max":%s,"ptys_pct":%s,"per_session_mb_src":"%s"}' \
   "$TS" "$VERDICT" "$SESSIONS" "${HEAD:-null}" "${COMP:-null}" "${ACT:-null}" "${WIRED:-null}" \
   "${SWAP_MB:-null}" "$WARN_GB" "$ALARM_GB" "$ROOM_JSON" "$PER_MB" \
   "$SESSIONS_EXE" "$SESSIONS_BIN" "${PRESSURE:-null}" "$PROC_WARN_GB" "${MAX_PROC_GB:-null}" \
   "${SEG_PCT:-null}" "$SEG_WARN_PCT" "$SEG_ALARM_PCT" \
   "${COAL_PROCS:-null}" "${COAL_APP:-}" "$COAL_WARN" "$COAL_ALARM" \
   "${COAL_TRUE:-null}" "${COAL_ID:-null}" "${COAL_FP_MB:-null}" "$COAL_FP_SRC" \
+  "${AUTO_COAL_PROCS:-null}" "${AUTO_COAL_ID:-null}" "${AUTO_COAL_FP_MB:-null}" "$AUTO_COAL_FP_SRC" \
   "$TOP_JSON" "$SEG_SOURCE_JSON" "${SWAP_DELTA:-null}" "$SWAP_DELTA_MB" "$SWAP_WINDOW_S" \
   "${OCCUPANCY_PCT:-null}" "${THRASH_CD_RATIO:-null}" \
   "${COMPRESSIONS:-null}" "${DECOMPRESSIONS:-null}" \
@@ -1600,6 +1725,10 @@ if [ "$QUIET" != 1 ] && [ "$WANT_JSON" != 1 ]; then
   echo "  largest proc footprint: ${MAX_PROC_GB:-?} GB   (warn >${PROC_WARN_GB})"
   # SKIPPED, not "0" — an unreadable ps must never render as an empty, healthy-looking coalition.
   echo "  terminal coalition:     ${COAL_PROCS:-SKIPPED (ps unreadable)}${COAL_PROCS:+ procs in ${COAL_APP}  (warn >=${COAL_WARN} / alarm >=${COAL_ALARM})}"
+  # GAUGE ONLY — feeds no rung (cc-backlog 6c55ce7364d4). Printed because the population it names is
+  # the one the terminal filter above cannot reach, and an unrecorded aggregate is how 6c55ce7364d4
+  # got filed. Silent when there is none, so a quiet box says nothing rather than saying "0".
+  [ -n "$AUTO_COAL_PROCS" ] && echo "  automation coalition:   ${AUTO_COAL_PROCS} procs, no terminal member${AUTO_COAL_FP_MB:+ · ${AUTO_COAL_FP_MB} MB footprint}  (coal ${AUTO_COAL_ID} · ${AUTO_COAL_FP_SRC} · gauge only, feeds no rung)"
   # SKIPPED, not "0.00" — a dead sysctl must never render as a perfectly idle box (that is exactly
   # the shape the launchd-PATH regression put on three other rungs).
   echo "  load per core:          ${LOAD_PER_CORE:-SKIPPED (sysctl unreadable)}${LOAD_PER_CORE:+/core   (${LOAD_1M} 1-min on ${NCPU} cores · warn >=${LOAD_WARN_PER_CORE} / alarm >=${LOAD_ALARM_PER_CORE})}"
