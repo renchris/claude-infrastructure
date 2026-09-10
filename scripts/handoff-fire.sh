@@ -2801,6 +2801,46 @@ pane_wedge_reason() { # $1=it2-bin $2=session-id → echoes the modal slug, 0 we
   printf '%s' "$slug"
 }
 
+# ---- THE EXIT-TIME BACKGROUND-WORK DIALOG: the one dialog this rail may ANSWER ----------------
+# THE INCIDENT (cc-backlog 004d154032e8, measured 2026-09-01T04:43Z, drain recycle #277). A drain
+# link backgrounds its land exactly once because its brief mandates it, so the harness is tracking
+# a shell when the recycle types /exit — and /exit then does not exit, it raises a dialog. The pane
+# is left with claude ALIVE and no composer box, so composer_content reads UNKNOWN, every nudge
+# checkpoint decides `unknown` and HOLDS, and the watcher dies at 600 s having done nothing. The
+# chain then makes no progress at all, and its only symptom is absence: the desk had to page a
+# human for one keystroke. Every drain link that follows its brief hits this, so it is a generator,
+# not a one-off.
+#
+# WHY ANSWERING IS RIGHT HERE AND NOWHERE ELSE, stated so the next reader does not mistake it for
+# the auto-answer sweeper this repo already built and reverted. The rule that sweeper broke is that
+# a dialog raised BY THE BINARY at a security boundary must reach a human. This dialog is raised by
+# OUR OWN keystroke, in the pane this watcher was armed for, and it is not a boundary: every option
+# it offers exits. The choice it asks for is one the recycle has already made — the session is
+# going away — and the only judgement left is what happens to work already running, where "do not
+# stop it" is the answer with no downside. The enumeration still lives in hooks/lib/pane-modal.sh
+# beside every other dialog, and that file still sends nothing.
+#
+# THE FILED REMEDY'S FIRST ARM IS REFUTED, and by this very incident. The row asked the recycle to
+# "drain/await tracked background Bash tasks BEFORE typing /exit" — but that incident's own land had
+# already finished (its process tree was gone, its verifier detached to ppid 1) and the harness was
+# tracking the shell anyway. Awaiting it would have waited forever. Answering the dialog is what
+# works, which is why the row's second arm is the one that shipped.
+#
+# Fails CLOSED in every direction — absent lib, unreadable pane, reworded dialog, an unindexed or
+# ambiguous menu each yield rc 1 and NOTHING is sent, which is byte-for-byte today's behaviour.
+pane_bgwork_key() { # $1=it2-bin $2=session-id → echoes the menu key to press, 0 answerable / 1 not
+  local it2="$1" id="$2" screen key
+  [ -n "$it2" ] && [ -n "$id" ] || return 1
+  command -v pane_bgwork_dialog >/dev/null 2>&1 || return 1     # live-layer skew: lib older than us
+  command -v pane_bgwork_choice >/dev/null 2>&1 || return 1
+  screen="$(hf_bounded "$it2" session read -s "$id" -n "${FIRE_TYPE_READLINES:-500}" 2>/dev/null || true)"
+  [ -n "$screen" ] || return 1
+  printf '%s\n' "$screen" | pane_bgwork_dialog || return 1
+  key="$(printf '%s\n' "$screen" | pane_bgwork_choice)" || return 1
+  [ -n "$key" ] || return 1
+  printf '%s' "$key"
+}
+
 # ---- P0-11 engagement verification (FM2 / INC-4 cold-fire auto-submit race) -------------------
 # A non-recycle fire types the launch command + focuses, then historically printed "→ fired"
 # UNCONDITIONALLY. But a cold --worktree fire can race CC boot: the auto-submit keystroke is lost
@@ -6415,6 +6455,16 @@ if [ "${1:-}" = "__recycle" ]; then
   rcy_wait_max="${HF_RECYCLE_SHELL_WAIT_S:-600}"
   case "$rcy_wait_max" in ''|*[!0-9]*) rcy_wait_max=600 ;; esac
   rcy_vanished=0
+  rcy_bgwork_seen=0; rcy_bgwork_sent=0
+  rcy_bgwork_max="${CC_RECYCLE_BGWORK_MAX:-2}"
+  case "$rcy_bgwork_max" in ''|*[!0-9]*) rcy_bgwork_max=2 ;; esac
+  # SELFTEST SEAM, same shape and same safety argument as HF_RECYCLE_SHELL_WAIT_S above: it moves
+  # only how OFTEN the screen is read. It cannot make the watcher send a key it would not otherwise
+  # send, because what to send is decided by pane_bgwork_key from the screen itself. Shipped at the
+  # vanish probe's own 15 s, and floored at 3 so a hostile value cannot spin the loop on the API.
+  rcy_bgwork_every="${CC_RECYCLE_BGWORK_EVERY_S:-15}"
+  case "$rcy_bgwork_every" in ''|*[!0-9]*) rcy_bgwork_every=15 ;; esac
+  [ "$rcy_bgwork_every" -ge 3 ] || rcy_bgwork_every=3
   while [ "$waited" -lt "$rcy_wait_max" ] && ! at_shell; do
     sleep 3; waited=$((waited+3))
     # PANE-VANISHED CHECK (2026-08-26 — pane-32 strand). The loop above can only ask the pane's TTY,
@@ -6428,6 +6478,32 @@ if [ "${1:-}" = "__recycle" ]; then
     # terminal API costs time and never mints a false "your pane is gone".
     if [ "${CC_RECYCLE_VANISH_CHECK:-on}" != off ] && [ $((waited % 15)) -eq 0 ]; then
       if [ "$(pane_enumerated "$IT2" "$RSID")" = absent ]; then rcy_vanished=1; break; fi
+    fi
+    # THE BACKGROUND-WORK DIALOG (item 004d154032e8). Checked on the SAME 15 s cadence as the
+    # vanish probe above and placed after it deliberately: a pane that is gone is gone, and asking
+    # a destroyed pane for its screen would only slow the finding down. When the dialog is up we
+    # answer it with the index READ OFF THAT SCREEN and `continue`, which skips this round's nudge
+    # — the nudge would otherwise read a composer-less screen, decide `unknown` and log a HOLD for
+    # a state we have just resolved.
+    #
+    # DETECTION IS UNCONDITIONAL, SENDING IS GATED. `rcy_bgwork_seen` is what lets the terminal
+    # message below say the true thing instead of the confident false one ("the /exit landed, so
+    # the predecessor is GONE" — it did not land and the predecessor is alive at a dialog), and
+    # that sentence is worth having even when the kill switch is off or the send is refused.
+    # Bounded by CC_RECYCLE_BGWORK_MAX (default 2, against a dialog that is answered once): a
+    # mis-detect can cost at most two stray keystrokes, never a keystroke storm.
+    if [ $((waited % rcy_bgwork_every)) -eq 0 ] && [ "$rcy_bgwork_sent" -lt "$rcy_bgwork_max" ]; then
+      if bgk="$(pane_bgwork_key "$IT2" "$RSID")" && [ -n "$bgk" ]; then
+        rcy_bgwork_seen=1
+        if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ]; then
+          hf_bounded "$IT2" session send -s "$RSID" "$bgk" >/dev/null 2>&1 || true
+          rcy_bgwork_sent=$((rcy_bgwork_sent + 1))
+          echo "→ bgwork@${waited}s: the /exit raised the background-work dialog; answered '$bgk' (${CC_MODAL_BGWORK_KEEP:-keep-work}) — the session exits and its tasks are NOT stopped"
+          emit_recycle_event recycle-bgwork-answered "" "$RSID" "the /exit raised the background-work dialog at ${waited}s; answered with the menu index '$bgk' read off the screen (${CC_MODAL_BGWORK_KEEP:-keep-work})" || true
+          continue
+        fi
+        echo "→ bgwork@${waited}s: the background-work dialog is up and answerable ('$bgk') but CC_RECYCLE_BGWORK_ANSWER=off — holding"
+      fi
     fi
     case "$waited" in 60|150|300)
       # NUDGE GATE (recycle-100p 2026-08-22): this used to be a BLIND CR — and a blind CR is what
@@ -6480,7 +6556,18 @@ if [ "${1:-}" = "__recycle" ]; then
     # intent-gap analysis over self-deleting TMPDIR logs. Every terminal watcher failure now
     # writes its recycle-dead row before exiting.
     rcy_dead_verdict="$(pane_cc_state "$TTY_PATH")"
-    emit_recycle_event recycle-dead "" "$RSID" "never reached a confirmed shell in ${waited}s (verdict: $rcy_dead_verdict)" || true
+    # THE DIALOG CASE OWNS ITS OWN SENTENCE (item 004d154032e8). The message below asserts "the
+    # /exit already landed, so the predecessor is GONE" — a confident claim that is exactly
+    # INVERTED when the exit was intercepted by the background-work dialog: the /exit did not land
+    # and the session is alive, holding a menu. An operator handed the generic line goes looking
+    # for stranded work that is sitting right there, which is what the 2026-09-01 incident cost.
+    # Populated only when the dialog was actually SEEN this run, so a recycle that failed some
+    # other way reads exactly as it does today.
+    rcy_bgwork_note=""
+    if [ "${rcy_bgwork_seen:-0}" = 1 ]; then
+      rcy_bgwork_note=" THE /exit DID NOT LAND: it raised the harness's background-work dialog (a live run_in_background task), and this pane is still holding a live session at that menu — NOT an empty pane, and nothing is stranded yet. $([ "${rcy_bgwork_sent:-0}" -gt 0 ] && printf '%s' "It was answered ${rcy_bgwork_sent}x and did not clear" || printf '%s' "It was NOT answered (CC_RECYCLE_BGWORK_ANSWER=off, or the menu carried no readable index)"). Recover with one keystroke IN THAT PANE — choose '${CC_MODAL_BGWORK_KEEP:-Move to background and exit}', then re-run the recycle, which arms a fresh watcher."
+    fi
+    emit_recycle_event recycle-dead "" "$RSID" "never reached a confirmed shell in ${waited}s (verdict: $rcy_dead_verdict)${rcy_bgwork_seen:+; background-work dialog SEEN, answered ${rcy_bgwork_sent}x}" || true
     # ESCALATE, don't just log (2026-08-25, RECYCLE_SIGTERM_INCIDENT deliverable 3). This is the
     # TERMINAL failure of a recycle: the /exit already landed, so the predecessor is GONE and the
     # successor was never typed — the pane holds no claude at all and the session's remaining work
@@ -6503,7 +6590,14 @@ if [ "${1:-}" = "__recycle" ]; then
     # lookup-miss-is-not-absence). The refusal itself stays correct and stays fail-safe: typing a
     # relaunch onto a pane that might still hold a live session is the one outcome worse than a
     # stranded pane.
-    hf_alarm recycle-dead "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-DEAD: pane $RSID — the /exit landed but no relaunch was typed, so this pane now holds NO claude and its work is stranded. Probe verdict after ${waited}s: $rcy_dead_verdict$([ "$rcy_dead_verdict" = unknown ] && printf '%s' ' (this is an ABSTENTION, not a finding: the probe could not read the pane, which does NOT establish that no shell appeared)'). Relaunch manually in that pane: $(cat "$CMDFILE")" || true
+    hf_alarm recycle-dead "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-DEAD:${rcy_bgwork_note}${rcy_bgwork_note:+ Otherwise:} pane $RSID — the /exit landed but no relaunch was typed, so this pane now holds NO claude and its work is stranded. Probe verdict after ${waited}s: $rcy_dead_verdict$([ "$rcy_dead_verdict" = unknown ] && printf '%s' ' (this is an ABSTENTION, not a finding: the probe could not read the pane, which does NOT establish that no shell appeared)'). Relaunch manually in that pane: $(cat "$CMDFILE")" || true
+    # An `if`, not `[ … ] && echo …`. NOT for the errexit reason that suggests itself and that this
+    # comment first claimed: measured on this file's own `set -euo pipefail`, a failing FIRST
+    # command of an AND-OR list is exempt, so the compound form is equally safe today. It is an
+    # `if` because it is one line above two unconditional messages, where the AND-OR form is one
+    # careless `&& something_else` away from swallowing them — and because a reader should not
+    # have to know that exemption to see that this line is conditional.
+    if [ -n "$rcy_bgwork_note" ]; then echo "!!${rcy_bgwork_note}" >&2; fi
     echo "!! pane $RSID never reached a CONFIRMED shell prompt in ${waited}s (probe verdict: $rcy_dead_verdict) — NOT typing onto an unconfirmed pane. Relaunch manually: $(cat "$CMDFILE")" >&2
     exit 1
   fi
