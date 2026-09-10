@@ -120,3 +120,65 @@ rolekey_for() { printf '%s|role:%s' "$1" "${2:-desk}" | shasum | cut -c1-16; }
   [ -s "$d/brief-$rk" ]
   [ ! -f "$d/arm-$ck" ]                                   # …and the legacy cwd key is NOT written
 }
+
+# ── --busy-force pass-through (STOPHOOK_MESSAGE_TIERING §3.1(c), 2026-09-10) ─────────────────────
+# The WEDGED-DESK page composes `livearm="--live --busy-force"` when the wedge is BUSY
+# (hooks/waiting-recycle.sh:1529) and offers `desk-arm-live.sh` as the first of its two routes. The
+# CLI has accepted --busy-force since Tier 3; this actuator did not, so that route exited 2 — or,
+# worse, an operator dropping the rejected flag armed LIVE only and was told "done", while the busy
+# exec stayed gated OFF (it requires live AND busyforce, :1430). These assert the SENTINEL, read
+# back by a different call than the one that wrote it — not the actuator's own success message.
+@test "busy-force: --busy-force arms the busyforce sentinel under EVERY config root" {
+  run "$HELPER" --cwd "$DESK" --busy-force
+  [ "$status" -eq 0 ]
+  for cfg in "$CFGA" "$CFGB"; do
+    k="$(key_for "$cfg" "$DESK")"; d="$cfg/state/waiting-recycle"
+    [ -f "$d/arm-$k" ]
+    [ -f "$d/live-$k" ]                                   # --busy-force implies LIVE
+    [ -f "$d/busyforce-$k" ]                              # …and opts the Tier-3 mid-work exec IN
+  done
+}
+
+# EQUIVALENCE GUARD, deliberately green in both arms: it does not prove the fix, it pins that the
+# opt-in stays OPT-IN. Its mutant is `BUSY_FLAG="--busy-force"` as the declared default — under that
+# mutation this case reds and the case above still passes, which is the only evidence it has power.
+@test "busy-force: a plain LIVE arm does NOT opt into the busy exec" {
+  run "$HELPER" --cwd "$DESK"
+  [ "$status" -eq 0 ]
+  k="$(key_for "$CFGA" "$DESK")"; d="$CFGA/state/waiting-recycle"
+  [ -f "$d/live-$k" ]
+  [ ! -f "$d/busyforce-$k" ]
+}
+
+# Order-independent because the check is after the arg loop, and fail-atomic because it is before
+# the config-root fan-out: a refused invocation must leave NO root touched, per the CLI's own
+# fail-atomic discipline (a half-armed desk looks armed and is inert).
+# The flags are passed as a real ARRAY, not a word-split string: `run "$HELPER" $args` would
+# need SC2086 silenced, and a `disable` would excuse the line forever instead of making it right.
+# A helper called twice keeps the argv exact AND still proves order-independence.
+_dal_refuses_writing_nothing() {   # "$@" = the contradictory flags, in the order under test
+  rm -rf "$CFGA" "$CFGB"
+  run "$HELPER" --cwd "$DESK" "$@"
+  [ "$status" -eq 2 ] || return 1
+  [[ "$output" == *"--busy-force contradicts --shadow"* ]] || return 1
+  local k; k="$(key_for "$CFGA" "$DESK")"
+  [ ! -f "$CFGA/state/waiting-recycle/arm-$k" ] || return 1        # fail-atomic: no root touched
+  [ ! -f "$CFGA/state/waiting-recycle/busyforce-$k" ] || return 1
+}
+
+@test "busy-force: --shadow --busy-force is refused in either order, and writes nothing" {
+  _dal_refuses_writing_nothing --shadow --busy-force
+  _dal_refuses_writing_nothing --busy-force --shadow
+}
+
+# The wedge page's first route must be runnable AS TYPED. This reads the flag out of the emitter
+# instead of restating it, so a future change to `livearm` that this actuator cannot accept is a red
+# here rather than a plattered command that exits 2 in the operator's shell six weeks later.
+@test "busy-force: every flag the wedge page's livearm can carry is accepted by this actuator" {
+  livearm_flags="$(grep -o -- '--[a-z-]*' "$CC_ARM_WR" | sort -u)"
+  [ -n "$livearm_flags" ]
+  grep -q -- '--busy-force) _busyforce=1' "$CC_ARM_WR"     # the CLI arm this delegates to exists
+  run "$HELPER" --cwd "$DESK" --busy-force --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"LIVE+BUSY-FORCE"* ]]
+}

@@ -2,10 +2,12 @@
 # desk-arm-live.sh — arm the monitoring desk's waiting-recycle DETERMINISTIC auto-recycle in LIVE
 # mode, DURABLY and idempotently. This is the go-live actuator for `waiting-recycle.sh` Stage 2.
 #
-# Usage: desk-arm-live.sh [--cwd <desk-dir>] [--brief <file>] [--shadow] [--dry-run]
+# Usage: desk-arm-live.sh [--cwd <desk-dir>] [--brief <file>] [--shadow|--busy-force] [--dry-run]
 #   --cwd    desk working dir to arm (default: the repo ~/.claude symlinks from — the desk's home)
 #   --brief  Stage-2 successor-prompt template (default: <repo>/docs/templates/desk-boot-brief.md)
 #   --shadow arm SHADOW (log would-fire, no exec) instead of LIVE — for a soak-first go-live
+#   --busy-force ALSO enable the Tier-3 BUSY+HIGH mid-work forced-recycle EXEC (implies LIVE; refused
+#            with --shadow). Needed to clear a WEDGED-DESK page: see WHY --busy-force IS HERE below.
 #   --dry-run print what it would arm, change nothing
 #
 # WHY THIS EXISTS (the CFG-stranding root cause, disk-verified 2026-07-19):
@@ -17,6 +19,21 @@
 #   `not-armed` on every poll (1309 such abstains observed; 0 shadow fires) — the mechanism decays to
 #   a no-op with NO signal, which reintroduces the human-in-the-loop dependency the auto-recycle
 #   exists to remove. A one-shot manual `arm` re-strands on the next migration.
+#
+# WHY --busy-force IS HERE (docs/plans/STOPHOOK_MESSAGE_TIERING.md §3.1(c), 2026-09-10):
+#   `waiting-recycle.sh` composes the WEDGED-DESK page with `livearm="--live"`, upgraded to
+#   `--live --busy-force` when the wedge is BUSY (hooks/waiting-recycle.sh:1529), and the emitted
+#   message offers two routes to clear it: "desk-arm-live.sh (or waiting-recycle.sh arm --brief
+#   <file> ${livearm})". The delegated CLI has accepted `--busy-force` since Tier 3 shipped (:505);
+#   THIS actuator did not, and its arg loop exits 2 on any unknown flag. So the first route silently
+#   armed LIVE ONLY: exit 0, "done — desk auto-recycle is LIVE", and the busy exec still gated OFF,
+#   because that exec requires BOTH live AND the busyforce opt-in (:1430). An operator paging on a
+#   BUSY wedge therefore ran the plattered command, was told it worked, and the desk went on not
+#   recycling — a half-success on a go-live actuator, which is exactly the failure the FAIL-ATOMIC
+#   block in the CLI (:509-532) exists to prevent, arriving through the wrapper instead.
+#   The flag is a PASS-THROUGH: the CLI still owns every refusal (it re-checks --live at :530). The
+#   local --shadow refusal below is not a second copy of that rule — it catches the contradiction
+#   BEFORE the config-root fan-out, so a refused invocation writes nothing under any root.
 #
 #   Fix: arm the desk cwd under EVERY config dir it may run under — DISCOVERED at arm time (all
 #   $HOME/.claude* config roots + this process's $CLAUDE_CONFIG_DIR + the config the LIVE DESK PROCESS
@@ -57,18 +74,26 @@ resolve_desk_cwd() { # echo the repo that HOOK symlinks from, or nothing
   ( cd "$(dirname "$tgt")/.." 2>/dev/null && pwd )
 }
 
-CWD="" ; BRIEF="" ; MODE_FLAG="--live" ; MODE="LIVE" ; DRY=0
+CWD="" ; BRIEF="" ; MODE_FLAG="--live" ; MODE="LIVE" ; DRY=0 ; BUSY_FLAG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --cwd)     CWD="${2:?--cwd needs a dir}"; shift 2 ;;
     --brief)   BRIEF="${2:?--brief needs a file}"; shift 2 ;;
     --shadow)  MODE_FLAG=""; MODE="SHADOW"; shift ;;
+    --busy-force) BUSY_FLAG="--busy-force"; shift ;;
     --dry-run) DRY=1; shift ;;
     -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     *) echo "desk-arm-live: unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 
+# --busy-force is an opt-in BEYOND --live, so it contradicts --shadow. Checked here rather than in
+# the arg loop so the two flags refuse in EITHER order, and before the config-root fan-out so a
+# refused invocation writes nothing under any root (the CLI's own fail-atomic discipline, :509-532).
+if [ -n "$BUSY_FLAG" ]; then
+  [ -n "$MODE_FLAG" ] || { echo "desk-arm-live: --busy-force contradicts --shadow (a mid-work forced recycle is opt-in BEYOND --live, not a shadow mode)" >&2; exit 2; }
+  MODE="LIVE+BUSY-FORCE"
+fi
 [ -n "$CWD" ]   || CWD="$(resolve_desk_cwd || true)"
 [ -n "$CWD" ]   || { echo "desk-arm-live: could not resolve desk cwd (pass --cwd)" >&2; exit 2; }
 [ -d "$CWD" ]   || { echo "desk-arm-live: desk cwd not a directory: $CWD" >&2; exit 2; }
@@ -171,7 +196,7 @@ for cfg in "${CFG_ROOTS[@]}"; do
   fi
   # Delegate to the CLI with the desk's cwd as PWD and this config dir as CLAUDE_CONFIG_DIR, so the
   # sentinel lands on the exact (cfg, cwd) key the desk's own hook invocation will look up.
-  if out="$( cd "$CWD" && CLAUDE_CONFIG_DIR="$cfg" "$WR" arm --brief "$BRIEF" ${MODE_FLAG:+$MODE_FLAG} 2>&1 )"; then
+  if out="$( cd "$CWD" && CLAUDE_CONFIG_DIR="$cfg" "$WR" arm --brief "$BRIEF" ${MODE_FLAG:+$MODE_FLAG} ${BUSY_FLAG:+$BUSY_FLAG} 2>&1 )"; then
     echo "  ✓ $cfg → arm-$key ($MODE): $out"
   else
     echo "  ✗ $cfg → arm-$key FAILED: $out" >&2
