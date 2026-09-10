@@ -1,14 +1,27 @@
 ---
-status: open
+status: complete
 ---
 
 # HOOK_SURFACE_100P — measure the entire Claude Code hook surface, then adopt all of it that earns its cost
 
-**Status:** **W1 DONE — measurement complete. All 31 events on 2.1.220 and all 27 on 2.1.114 carry a
-verdict from a command that was RUN, with the command quoted in § 3a and the binary and invocation
-mode named in § 3.** W2 (pricing) folded into W1 and also done — both HOLDs are discharged
-(`MessageDisplay` § 3 unknown 1, `PostToolBatch` § 3 table). W3 (wire what earns it) NOT started;
-W4 (adversarial review of the completed ledger) partially done — see § 3d.
+**Status (2026-09-10): COMPLETE on the agent side. The residue is three filed operator steps.**
+Every event on every installed binary carries a verdict — **27 on 2.1.114, 31 on 2.1.220, and 33 on
+2.1.260, the binary the fleet actually runs** (§ 3 rows 32–33, added today: `PreModelSwitch` and
+`PostModelSwitch` shipped in 2.1.251 and had never been probed). Every **handler type** now carries
+one too (§ 3f, new): the settings-reachable union is five types, and three more dispatch from outside
+settings. W1/W2 done; W3's handlers all landed **and their registrations are LIVE in all five config
+dirs** (measured today, § 2 live-state entry); W4 done (§ 3d). **Still owed, all operator-run c10
+migrations, each already filed:** `SubagentStop` (0014 → `296cc04bc3fd`), `TaskCreated` (0023 →
+`f97ff5765db5`, which first needs `0ab3a747f810`), and fleet parity for `PostToolUseFailure` and ten
+other guardrails (`02e67ee88123`). Nothing in them is agent work.
+
+*Superseded status line, kept verbatim as the record:* ~~W1 DONE — measurement complete. All 31
+events on 2.1.220 and all 27 on 2.1.114 carry a verdict from a command that was RUN, with the command
+quoted in § 3a and the binary and invocation mode named in § 3. W2 (pricing) folded into W1 and also
+done — both HOLDs are discharged (`MessageDisplay` § 3 unknown 1, `PostToolBatch` § 3 table). W3 (wire
+what earns it) NOT started; W4 (adversarial review of the completed ledger) partially done — see
+§ 3d.~~ That line went stale on 2026-09-06 and was never updated. So did its census:
+"all 31" stopped being all of them the day the fleet moved to 2.1.260.
 **Origin:** investigating anthropics/claude-code#91870 (Function Hooks) 2026-09-03..05. That proposal
 is Anthropic's, pre-decision, and **not on the critical path** — the investigation's real finding is
 that we under-use the surface that already ships. Provenance record:
@@ -52,9 +65,12 @@ the plan wins and the task list gets corrected — never the reverse.
 | `prompt`/`agent` support is gated on **`toolUseContext` at the call site**, not on an event list | source read + measured on both binaries: refused on `SessionStart`, accepted on `Stop` and `UserPromptSubmit` | § 3 unknown 4 |
 | **`--settings <file>` MERGES with the live settings; it does not replace them** | a probe run's stream carried 8 real fleet `SessionStart` hook_responses. A throwaway `CLAUDE_CONFIG_DIR` DOES isolate totally — but loses auth (`authentication_failed`). **Isolation XOR auth** | § 3a, § 5 |
 | An **unknown hook event name is silently accepted** — no error, no warning, no log line | `{"hooks":{"NoSuchEventXYZ":[...]}}` ran normally | § 5 |
-| `PreModelSwitch` / `PostModelSwitch` are **not hook events** on either binary | same | — |
+| `PreModelSwitch` / `PostModelSwitch` are **not hook events** on either binary | same | — ⚠️ **true of 114 and 220 only. Both ARE events on 2.1.251+ and FIRE on 2.1.260** (§ 3 rows 32–33) |
 | **`PostToolUse` never fires on a failing tool** — the harness dispatches `PostToolUseFailure` instead | positive control in one 2.1.220 run: `echo ok` → PostToolUse; `false` → PostToolUseFailure, no PostToolUse | landed fix |
-| No hook payload carries **any** context/token/window field | three independent methods: raw stdin dumped across 16 events, the single shared input-builder function, a scan of all 31 schemas | — |
+| No hook payload carries **any** context/token/window field | three independent methods: raw stdin dumped across 16 events, the single shared input-builder function, a scan of all 31 schemas | — ⚠️ **true of 114/220 only.** On 2.1.260 both model-switch payloads carry `context_tokens`, `prompt_cache_warm`, `cache_ttl`, `estimated_cache_write_usd`, `pricing` (captured, § 3a rows 32–33; built by `$rt()` near offset 162,823,000 of the 2.1.260 bundle). The window size is still in no payload |
+| **2.1.260 — the fleet binary — has 33 events** (adds `PreModelSwitch`, `PostModelSwitch`) | the same bounded enum-literal instrument: `LC_ALL=C grep -aoE '"PreToolUse"(,"[A-Za-z]+"){25,}' <260 claude.exe> \| sort -u \| tr , '\n'` → 33; same read on 220 → 31, and the diff is exactly those two names. Fleet share: 92,385 of ~97K records in a 3-day transcript sample carry `"version":"2.1.260"` | § 3 rows 32–33 (2026-09-10) |
+| **Handler types reachable from settings: exactly five** — `command`, `prompt`, `agent`, `http`, `mcp_tool`. **`function`, `script` and `callback` also dispatch, but never from settings** | the settings-schema literals near `type:k("mcp_tool")` (5 names) vs a census of `wn.type==="…"` branches in the dispatcher that contains the function-hook arm (8 names) | § 3f (2026-09-10) |
+| 🚨 **On 2.1.114 — the pinned stable — one `mcp_tool` entry silently disables EVERY hook in that settings file** | one-variable A/B, reproduced: same file, same flags, `mcp_tool` entries present → **0** rows from four sibling `command` hooks; removed → **4**. No error printed | § 3f — why `mcp_tool` is PROHIBITION in any file a 114 session reads |
 | `http`, `prompt`, `agent` handler types **work** on 2.1.220 | end-to-end, both allow and block arms | — |
 | `prompt` / `agent` are **boolean condition evaluators** returning ok/reason — they cannot emit `additionalContext`, and they **fail OPEN** on evaluator error | same | ⚠ limits the "move judgment out of bash" idea materially |
 | **A malformed hook entry silently disables every hook in that settings file**, zero log output | control/test matrix, per-file containment shown | ⚠ see § 4 adoption precondition |
@@ -78,6 +94,35 @@ the plan wins and the task list gets corrected — never the reverse.
 | `hooks/cwd-changed.sh` + `tests/cwd-changed.bats` | **LANDED** (`e48db8be5`, content-verified on trunk — W3-E). Handler + 24-test suite, 14-site red-proof, 0-red unmutated baseline. § 3e's **part 3**, which until now had no dedicated handler — and the reason `migrations/0019` had to exclude `FileChanged`. Re-emits `watchPaths` on a `CwdChanged` payload from the SAME watchlist and env seam as `hooks/file-changed.sh` (`CC_FILECHANGED_WATCHLIST`), and writes the **receipt** that handler deliberately cannot: one row per transition carrying the COUNT re-armed, including the count-0 case. NOT registered; the suite has an arm that FAILS if any settings file in this repo names it |
 | Everything else in § 3 | **measured, not yet adopted** — W1/W2 complete, W3's waves ALL LANDED (**A** `StopFailure`/`SubagentStop`, **B** `FileChanged`/`InstructionsLoaded`, **C** `PostToolBatch`, **D** `PermissionDenied`/`PostCompact`/`ConfigChange`). D was a fourth wave, added after W4 promoted its three rows |
 | `migrations/0019-hook-surface-registration.sh` + the § 4 assertion in `hooks/config-mirror-assert.sh` | **WRITTEN and STAGED (c10 — waits for a human), 2026-09-07.** The registration half W3 was missing. Registers `StopFailure`, `InstructionsLoaded` (matcher `session_start`) and `PostToolBatch` across the five fleet config dirs — idempotent, JSON-validated and content-verified before it replaces any file, per-file backup, and it re-asserts that `Stop` and `PreToolUse` survived the edit. Operator ruling `ab82a67e2c37` chose `settings.json` after § 4's separate-file rule was measured unsatisfiable. **Deliberately NOT in it:** `SubagentStop` (migration 0014 already stages exactly this), `FileChanged`+`CwdChanged` (need § 3e's three-part wiring, and `hooks/cwd-changed.sh` does not exist — wiring FileChanged without its re-arm partner yields a watcher that silently empties on the first `cd`, which is worse than not wiring it — **corrected 2026-09-07: W3-E landed `hooks/cwd-changed.sh` (`e48db8be5`), so this exclusion too now rests on REGISTRATION scope alone. The three-part wiring finally has all three parts on disk; `migrations/0017-filechanged-cwdchanged-registration.sh` is where they get wired, and 0019 itself is unchanged**), and `PermissionDenied`/`PostCompact`/`ConfigChange` (promoted to WIRE by the W4 pass AFTER the W3 waves were briefed, so they had no handlers when 0019 was written — **corrected 2026-09-07: W3-D landed all three (`426d5da66`), so the exclusion now rests on REGISTRATION scope alone, not on their absence. A follow-on migration is the right and only place to wire them; 0019 itself is unchanged**). Gate: `shellcheck` clean · `bash -n` clean · **10/10** related suites green with `RAN==TOTAL` · idempotence guard verified on a sandbox copy (90→91 registrations, `Stop` intact) · the drift assertion carries BOTH controls — silent when whole, names the event when one is removed |
+
+> **LIVE-STATE CHECK 2026-09-10 — the paragraph below is history; the registrations it waits on HAVE
+> RUN.** Read from all five config dirs' `settings.json` (`jq '.hooks[<event>] | map(.hooks|length) |
+> add'` per dir): `StopFailure`, `InstructionsLoaded`, `PostToolBatch`, `PermissionDenied`,
+> `PostCompact`, `ConfigChange`, `CwdChanged` = 1 each and `FileChanged` = 2 (the § 3e arm + dispatch
+> pair) **in 5 of 5 dirs** — the EFFECT those registration migrations were written to produce, read
+> off the files themselves (which migration ran which row was not separately checked). And
+> registered is not the same as firing, so each was checked by its OWN output store:
+>
+> | handler | store | rows | newest |
+> |---|---|--:|---|
+> | `post-tool-batch.sh` | `logs/tool-batch-census.jsonl` | 12,534 | 2026-09-10 18:10Z |
+> | `instructions-loaded.sh` | `logs/instructions-loaded.log` | 2,066 | 2026-09-10 18:09Z |
+> | `cwd-changed.sh` | `logs/cwd-changed.log` | 2,428 | 2026-09-10 18:10Z |
+> | `config-change.sh` | `logs/config-change.jsonl` | 2,002 | 2026-09-10 17:05Z |
+> | `permission-denied.sh` | `logs/permission-denied.jsonl` | 81 | 2026-09-10 17:08Z |
+> | `stop-failure-marker.sh` | `autonomy/stop-failure/*.jsonl` | 6 cause files | 2026-09-10 07:41 |
+> | `file-changed.sh` | `logs/file-changed.log` | 2 | 2026-09-07 — expected: its watchlist is opt-in |
+> | `post-compact.sh` | `logs/post-compact.jsonl` | **absent** | expected — see below |
+>
+> **`post-compact.jsonl` is absent because nothing has compacted, not because the hook is dead.** A
+> search of every transcript in the four account dirs for a real `"subtype":"compact_boundary"` record
+> found **zero**; every textual hit was prose about compaction (this session's own transcript
+> included). An event that has not occurred cannot leave a row, so this is the one registration whose
+> first live fire is still unobserved. The two operator rows that asked for these registrations
+> (`62ef571f82a5`, `b815d58e56d8`) were still `blocked` over a condition that no longer held, and are
+> closed with this read as evidence. What is genuinely still unregistered: `SubagentStop` (0 of 5
+> dirs, 0014), `TaskCreated` (0 of 5, 0023), and `PostToolUseFailure` outside `~/.claude` (1 of 5,
+> parity row `02e67ee88123`).
 
 **Net capability change so far: one repair, plus EIGHT handlers written and landed across W3-A, W3-B,
 W3-C and W3-D — every one of them NOT YET REGISTERED, and therefore inert.** § 3's other WIRE rows are
@@ -519,7 +564,9 @@ Dispositions: **WIRE** · **DROP** · **PROHIBITION** · *wired* (already live i
 > A row whose trigger could not be issued is not given a verdict on that basis — it is recorded in
 > § 3b as owed, with the blocker named. Absence of a trigger is not evidence of absence.
 
-**All 31 events on 2.1.220 and all 27 on 2.1.114 are accounted for below** — the census is re-derived
+**All 33 events on 2.1.260, all 31 on 2.1.220 and all 27 on 2.1.114 are accounted for below** (rows
+32–33 added 2026-09-10 — the census was complete for the binaries it named and silently stopped being
+complete for the fleet when the fleet moved to 2.1.260) — the census is re-derived
 non-circularly in § 5. `exists` is from each binary's own contiguous enum literal; `measured on` names
 the binary and invocation mode that produced the verdict. Commands: § 3a, keyed by event name.
 
@@ -556,6 +603,14 @@ the binary and invocation mode that produced the verdict. Commands: § 3a, keyed
 | 29 | `FileChanged` | ✓ / ✓ | FIRES | 114 + 220 · headless `-p` | **WIRE** — but only as the PAIR in § 3e |
 | 30 | `DirectoryAdded` | ✗ / ✓ | FIRES (220) · NOT-APPLICABLE (114, absent from enum) | 220 · headless, `register_repo_root` control request | **DROP** |
 | 31 | `MessageDisplay` | ✗ / ✓ | FIRES (220) · NOT-APPLICABLE (114, absent from enum) | 220 · headless `-p` **and** interactive TUI | **DROP** |
+| 32 | `PreModelSwitch` | ✗ / ✗ / **✓ 260** | FIRES (260) · NOT-APPLICABLE (114, 220 — absent from enum) | **260** · headless stream-json, `set_model` control request, unauthenticated throwaway config dir (zero quota) | **PROHIBITION** (decision-class, and an OBSERVER fails closed — see below) |
+| 33 | `PostModelSwitch` | ✗ / ✗ / **✓ 260** | FIRES (260) · NOT-APPLICABLE (114, 220 — absent from enum) | **260** · same runs | **DROP** |
+
+*Rows 32–33 carry a third `exists` column because they are the first rows whose binary is 2.1.260.
+Rows 1–31 were measured on 114/220; for 2.1.260 the wired ones have production evidence instead of a
+probe — § 2's live-state table is fed by a fleet whose transcripts are ~95% 2.1.260 — and no
+DROP/PROHIBITION row has been re-probed there, because no 260 behaviour could turn one into WIRE
+without first being a new consumer.*
 
 **Dispositions that CHANGED against the inherited ledger, and why:**
 
@@ -624,6 +679,37 @@ the binary and invocation mode that produced the verdict. Commands: § 3a, keyed
   (`HOME=<scratch>`): registered 5/5, a second run printed `already registered` 5/5, the header's
   `migration-verify` line passed 5/5, and every `Stop`/`PreToolUse` array came through with its original
   length. No agent work remains on it — it goes live when an operator runs 0014.
+- **Rows 32–33 `PreModelSwitch` / `PostModelSwitch` — NEW, 2026-09-10.** Shipped in 2.1.251 (the
+  CHANGELOG embedded in the binary: *"Added `PreModelSwitch` and `PostModelSwitch` hook events (block,
+  confirm, or annotate a model switch)"*). Triggers, read from source: the `/model` picker (`source:
+  "picker"`), the fast-mode/command path (`"command"`), an SDK `set_model` control request (`"sdk"`),
+  resuming into a transcript whose model differs (`"resume"`, Post only), and any other change of the
+  effective main-loop model (`"auto"`, Post only). Matcher field: `to_model`, with a `[1m]`/`[2m]`
+  suffix stripped before matching. Captured payload (both events, identical shape):
+  `{from_model, to_model, requested_model, source, context_tokens, prompt_cache_warm, cache_ttl,
+  estimated_cache_write_usd, pricing}` plus the common fields.
+  - **`PreModelSwitch` → PROHIBITION (conviction 90%).** It is decision-class — `permissionDecision`
+    allow/deny/ask with PreToolUse's contract, exit 2 blocks — and that is measured, not read: a hook
+    exiting 2 produced `"Model switch blocked by a PreModelSwitch hook: … probe: switch refused"` and
+    PostModelSwitch never fired. **The disqualifying measurement is the observer arm.** A hook that
+    exits 0 and prints nothing, but takes 6 s against `timeout: 2`, ALSO refused the switch:
+    `"… PreModelSwitch:claude-sonnet-5 did not respond before its timeout"`. So on this event an
+    observer's *latency* becomes a refusal of the operator's own `/model` pick — it fails CLOSED, the
+    opposite of every other observer we run — and a thrown error does the same (`a PreModelSwitch hook
+    failed before answering`, read at the `Adn()` site). No consumer asks to refuse a switch. The one
+    policy it could enforce (the frontier tier's "the lead itself never runs on it") would refuse the
+    operator's deliberate picks, since the `picker` source is the human. Re-open only when a policy
+    names a switch class it must refuse, AND it keys on `source`. Residual 10%: `"auto"`'s triggers
+    are not enumerated, so a class worth refusing may exist there unseen.
+  - **`PostModelSwitch` → DROP (conviction 88%).** It is a harmless observer, but it is redundant and
+    rare. Redundant: the transcript already stamps `message.model` on every assistant record, which is
+    how the switch census below was taken. Rare: **1 of 457** main transcripts active in the last 3
+    days changed model at all (one session toggling `claude-opus-5` ⇄ `claude-fable-5-1` seven times;
+    the census has a positive control in that same hit). Its only unique fields are `source` and the
+    re-cache estimate, and nothing we own consumes either. One wiring constraint for anyone who
+    re-opens it: exit-0 stdout **reaches the model on its next request**, so an observer must print
+    nothing. Re-open when a consumer needs to tell an `auto` switch from an operator's pick — the one
+    thing the transcript cannot say.
 
 ### The four highest-value unknowns — three RESOLVED, one partly
 
@@ -712,6 +798,15 @@ The dispatcher switches on **six** handler types plus the SDK callback: `command
 - **`mcp_tool`** — a hook can call an MCP tool directly ("mcp_tool hooks are not available for the
   '<event>' hook event (no MCP client context)"). 220-only by string evidence, which per § 5's
   wording-drift trap is suggestive rather than conclusive.
+
+✅ **RESOLVED 2026-09-10 — § 3f is the handler-type ledger this section was missing.** In short: the
+dispatcher branches on **eight** types on 2.1.260, not six or seven — the two prior reads both missed
+**`script`** — but only **five** are reachable from a settings file. `function` is real and is the
+closest shipped thing to #91870: in-process callbacks registered through `addFunctionHook`, plus
+plugin JS "hooks modules" gated by `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` falling back to the GrowthBook
+flag `tengu_plugin_hooks_modules` (default `false`). It is *consistent with* the proposal; it is not
+shown to be the same construct. And `mcp_tool` is no longer string evidence: it FIRES on 220 and 260,
+and on 114 it does something much worse than not firing.
 
 ## 3a. THE COMMANDS — one per § 3 row, all actually run on 2026-09-05/06
 
@@ -845,7 +940,8 @@ decided; none of them can change a disposition:
 |---|---|---|
 | `SubagentStart`/`SubagentStop` on **114** | `agent-teams-enforce.sh` refused the spawn (capacity 11 mid-turn > ceiling 8) — this session's own 15-agent wave was the load | Event exists in 114's enum; 220 FIRES. Retry on a quiet box; do NOT set `CC_ADMIT_GATE=off` while a wave is live |
 | `TaskCreated`/`TaskCompleted` on **114** | **there is no `TaskCreate` tool on 2.1.114** — the session fell back to `TodoWrite`, a different mechanism | The events are in 114's enum but the tool that raises them does not ship there. Do not record NOT-APPLICABLE without finding another route |
-| `PermissionRequest` on **114**, and `PermissionDenied` on **114** | not probed | 220 verdicts are firm; 114 needs its own run per § 5's wording-drift trap |
+| `PermissionRequest` on **114**, and `PermissionDenied` on **114** | not probed | 220 verdicts are firm; 114 needs its own run per § 5's wording-drift trap. *(2026-09-10: half-stale — `PermissionDenied` on 114 WAS measured by the W4 pass, § 3 row 17 reads "114 + 220". `PermissionRequest` on 114 is still owed)* |
+| The `Wlt()` interactive-exit probe for row 26 (§ 3d) | — | **DROPPED 2026-09-10, not owed.** Row 26 is do-not-wire under either outcome — the hazard shown → PROHIBITION stands; not shown → at most DROP — so the probe cannot change what gets wired, and its rig (`claude -w` in a /tmp repo with `--settings` merging the live `WorktreeCreate` provider) is the shape of the one that set `core.bare=true` on the shared checkout during W1 (§ 3a, backlog `d49917bc4e9e`). Zero decision value against a recorded fleet-incident risk |
 | `MessageDisplay` TUI rate on a SECOND sample | n=1 interactive message | The disposition is DROP on redundancy, so the rate no longer gates anything |
 | Provider N-hook resolution order | ~~settling it means registering a second observer on a live provider~~ **SETTLED 2026-09-07 for the `watchPaths` providers, from source, no observer registered** — it is a `flatMap` UNION in registration order, then a wholesale replace (§ 3b item 2 carries the extract) | Was: that is the prohibition itself — read it from source. It was read from source. Still owed for the NON-`watchPaths` providers (`WorktreeCreate`, `Elicitation`), whose arms are per-provider |
 
@@ -1156,6 +1252,76 @@ why it stayed invisible for a month: the consumer globs `*.jsonl`, so every repo
 while the mechanism those reports' atomicity argument depends on was dead. It surfaced only because
 this pass counted files and rows separately and the two numbers disagreed.
 
+## 3f. THE HANDLER-TYPE LEDGER (2026-09-10) — the other half of the frozen scope
+
+The scope names "every hook event **and handler type**". Until today § 3 covered only the first half.
+Same four verdict tokens, same dispositions, the binary named per cell.
+
+| Type | From settings? | 114 | 220 | 260 | Disposition |
+|---|:--:|---|---|---|---|
+| `command` | ✓ | FIRES | FIRES | FIRES | *wired* — **100% of our registrations** (100 / 89 / 94 / 95 / 94 across the five dirs, zero of any other type) |
+| `http` | ✓ | — | FIRES (§ 1) | not re-probed | **DROP** — a POST needs a long-lived local service to receive it, and none exists; the type is the answer to the per-hook fork tax only once that service does. Re-open with the service, not before |
+| `prompt` | ✓ | FIRES | FIRES (§ 1, § 3 unknown 4) | not re-probed | **DROP** — boolean ok/reason only, no `additionalContext`, fails OPEN (§ 1); and A12 R8 (89%): a second tool-less evaluator on Stop duplicates `/goal` on the same block-cap budget |
+| `agent` | ✓ | not probed | FIRES (§ 1) | not re-probed | **DROP** — per A12 R3 (84%): it runs at `dontAsk` against an allowlist with no rule for `wrap-ledger.sh`/`cc-backlog`/`cc-decide`, so it is denied its evidence and then fails open. Re-open only after that allowlist lands, as A12 prescribes |
+| `mcp_tool` | ✓ | 🚨 **HOSTILE** — one entry silently disables every hook in its file | FIRES | FIRES | **PROHIBITION** in any settings file a 2.1.114 session can read — which includes the shared fleet `settings.json`, since 114 is still the pinned stable (`~/.claude-versions/current` → 2.1.114) |
+| `function` | ✗ | — | — | NOT-APPLICABLE (settings) | **NOT-APPLICABLE** — in-process only: `addFunctionHook` session callbacks, and plugin JS hooks-modules behind `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` ?? GrowthBook `tengu_plugin_hooks_modules` (default `false`). We ship no plugin |
+| `script` | ✗ | — | — | NOT-APPLICABLE (settings) | **NOT-APPLICABLE** — plugin-delivered (`type:"script"` with a `file`, `${CLAUDE_PLUGIN_ROOT}` substituted). Absent from both earlier reads of this surface |
+| `callback` | ✗ | — | — | NOT-APPLICABLE (settings) | **NOT-APPLICABLE** — SDK control-stream callbacks; we are not an SDK host |
+
+**`mcp_tool`, measured — the one type with new behaviour.** A purpose-built stdio MCP server
+(`hsprobe`, one tool, `record`, appending each call's arguments to a log) was attached with
+`--mcp-config … --strict-mcp-config`, and every event carried two hooks: a `command` logger (the
+control) and an `mcp_tool` call passing `{"event":"${hook_event_name}","detail":"${session_id}"}`.
+- **260** (stream-json, `set_model` then one user message, unauthenticated config, zero quota): the
+  server recorded `PreModelSwitch`, `PostModelSwitch`, `UserPromptSubmit`, `StopFailure` and
+  `SessionEnd`, each beside its command control. `${…}` interpolation works: `detail` equalled the
+  run's `session_id`. **`SessionStart` refuses it** — `hook_response outcome:"error"`, *"mcp_tool hooks
+  are not available for the 'SessionStart' hook event (no MCP client context)"* — non-blocking: the
+  sibling command hook in the same group still ran.
+- **220** (`-p 'say pong'`, same config): the server recorded `UserPromptSubmit` and `StopFailure`.
+  `SessionEnd` did not reach the server on 220; not chased, since it changes no disposition.
+- **114** (same invocation): **zero rows from ANY hook in the file — the four `command` controls
+  included**, and nothing printed. The control arm differs in exactly one thing (the `mcp_tool`
+  entries deleted with `jq`, same flags, same `--output-format stream-json --verbose`) and gives
+  **4 of 4**; the hostile arm was reproduced a second time. So on 114 an unrecognised handler *type*
+  is not dropped per entry — it takes the whole file down, which is § 1's "a malformed hook entry
+  silently disables every hook in that settings file" with a trigger nobody would call malformed.
+  This is the dangerous direction of § 5's version trap: **a settings shape that is valid on the
+  fleet's binary is fatal on the pinned stable, and silently.**
+- **Contrast, 260:** a settings entry typed `function` or `script` — outside 260's settings union — is
+  tolerated *per entry*: `--init-only` with a `command` sibling on `SessionStart` and a `command` hook
+  on `Setup` gave 2 rows in each arm (`none`/`function`/`script`). So 260 degrades per entry where 114
+  degrades per file. Measured for those two type values only.
+
+**Commands** (rig: `$P = <scratchpad>/mswp`; `log-event.sh <Event> <tag>` appends one TSV row and
+prints nothing; `feed.sh`/`feed2.sh` write stream-json control/user lines with sleeps between):
+
+    # rows 32–33: fire, block arm, observer-timeout arm, same-model negative control (all 260, zero quota)
+    cd $P/work && $P/feed.sh claude-sonnet-5 12 | CLAUDE_CONFIG_DIR=$P/cfg      $V260 --print \
+      --input-format stream-json --output-format stream-json --verbose --model claude-opus-5
+    #   cfg:    Pre/PostModelSwitch loggers                        → Pre ×1, Post ×1, control_response success
+    #   cfgblk: + a PreModelSwitch hook that exits 2              → Pre ×1, Post ×0, "Model switch blocked by a PreModelSwitch hook"
+    #   cfgto:  + a PreModelSwitch hook sleeping 6 s, timeout 2   → Pre ×1, Post ×0, "... did not respond before its timeout"
+    #   feed.sh claude-opus-5 (same model)                        → neither fires; SessionStart/End do
+    # mcp_tool, 260 / 220 / 114, then the 114 one-variable control
+    cd $P/work && $P/feed2.sh | CLAUDE_CONFIG_DIR=$P/cfgmcp $V260 --print --input-format stream-json \
+      --output-format stream-json --verbose --model claude-opus-5 --mcp-config $P/mcp.json --strict-mcp-config
+    cd $P/work && CLAUDE_CONFIG_DIR=$P/cfgmcp114 $V114 -p 'say pong' --mcp-config $P/mcp.json \
+      --strict-mcp-config --output-format stream-json --verbose < /dev/null        # 0 rows, twice
+    #   cfgctl114 = cfgmcp114 with `jq '… map(select(.type=="command"))'`, same flags   → 4 rows
+    # out-of-union types on 260
+    cd $P/work && CLAUDE_CONFIG_DIR=$P/cfgty-{none,function,script} $V260 --init-only < /dev/null  # 2 rows each
+    # where each type is sourced (2.1.260 bundle, python byte-search, never a wide regex — § 3d method note)
+    #   settings union: type:k("…").describe("… hook type") literals beside type:k("mcp_tool") → 5
+    #   dispatcher:     wn.type==="…" branches around "Messages not provided for function hook" → 8
+    # the switch census (1 of 457): python over the four account dirs' */*.jsonl, mtime < 3 d,
+    #   de-duplicated by realpath, counting assistant message.model changes within a transcript
+
+`V260=~/.claude-260/node_modules/@anthropic-ai/claude-code/bin/claude.exe`; `V114`/`V220` as in § 3a.
+Scratch evidence, dated: `<scratchpad>/mswp/log/*.tsv` and `mcp-calls-*.jsonl`, 2026-09-10 — `/tmp`
+has a half-life (§ 3d), so the verdicts above are recorded with their counts rather than pointing at
+those files.
+
 ## 4. Adoption preconditions (non-negotiable)
 
 - **Experimental events go in a SEPARATE settings file**, never `~/.claude/settings.json`. One malformed
@@ -1273,6 +1439,23 @@ this pass counted files and rows separately and the two numbers disagreed.
    auto-reverted for skipping exactly this.
 
 ## Status log
+
+- **2026-09-10** — **Plan closed on the agent side (`status: complete`).** Driven by cc-backlog
+  `137cd295afdb`. The premise check found the plan's headline census had quietly become incomplete:
+  **2.1.260, which ~95% of fleet transcripts now run, has 33 events**, and the two new ones
+  (`PreModelSwitch`, `PostModelSwitch`, shipped 2.1.251) had never been probed. Both now FIRE on a
+  zero-quota rig, with a block arm, an observer-timeout arm and a same-model negative control;
+  dispositions PROHIBITION (an observer's latency refuses the operator's `/model`) and DROP
+  (redundant with the transcript, 1 of 457 sessions switched in 3 days). **The handler-type half of
+  the frozen scope got its ledger (§ 3f):** eight dispatcher types, five from settings; `script` was
+  missed by both earlier reads; `function` is in-process and plugin-only; and **`mcp_tool` silently
+  disables every hook in its file on 2.1.114**, measured with a one-variable control, which makes it
+  PROHIBITION in the shared settings while 114 is the pinned stable. Also: the W3 registrations were
+  found LIVE in all five dirs with each handler's own store growing (§ 2), two stale `blocked`
+  operator rows for them were closed, § 1's "no payload carries a context/token field" and "the
+  model-switch pair are not events" were scoped back to 114/220, and the `Wlt()` probe was dropped as
+  unable to change any wiring. **What remains is operator-run and filed:** 0014 (`296cc04bc3fd`),
+  0023 (`f97ff5765db5` after `0ab3a747f810`), fleet parity (`02e67ee88123`).
 
 - **2026-09-06 (later)** — **W4 partially landed, and it overturned two of this ledger's own
   dispositions.** The workflow declared dead in the entry below had not died; it completed (13 agents,
