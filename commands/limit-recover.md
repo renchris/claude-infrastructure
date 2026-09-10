@@ -160,8 +160,18 @@ Never the stall's own text — a control:
 
 1. **The fleet arm.** Any real-model assistant record from ANY session in the stall window proves
    the API path was live, which convicts the request rather than the network.
-2. **A connectivity probe independent of the request** — DNS+TCP+TLS only, no quota, and **two
-   greens 30 s apart** (recovery needs hysteresis; one green is a coin flip).
+2. **A connectivity probe independent of the request** — DNS+TCP+TLS+HTTP only, no credential, no
+   quota, and **two greens 30 s apart** (recovery needs hysteresis; one green is a coin flip):
+
+   ```bash
+   bash ~/.claude/scripts/limit-recover/lr-probe.sh        # rc 0 = GREEN (two greens, 30s apart)
+   ```
+
+   Any 3-digit HTTP status is green — the request is unauthenticated, so a refusal that travelled
+   the whole path is proof the path works (measured 2026-09-10: the live endpoint answers a HEAD
+   with **405**, so a 200-keyed check would be red forever). Only a transport failure is red. A
+   green is **necessary and not sufficient**: it never licenses touching a unit a live process
+   still holds.
 3. **The re-fire itself, as the last discriminator.** One re-fire under a green control. A second
    stall under a green control is the request.
 
