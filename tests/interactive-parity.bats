@@ -38,6 +38,23 @@ mk_tool()  { printf '{"type":"user","userType":"external","message":{"role":"use
 # text is the wrapper the harness injected. Same user/external/isMeta:null shape as a typed prompt —
 # the SHAPE cannot discriminate it, only the leading token can.
 mk_tmsg()  { printf '{"parentUuid":"p","userType":"external","cwd":"/x","sessionId":"s","type":"user","isMeta":null,"message":{"role":"user","content":"<teammate-message teammate_id=\\"team-lead\\">{\\"type\\":\\"shutdown_request\\"}</teammate-message>"},"uuid":"u","timestamp":"%s"}\n' "$(iso "$1")" >> "$TX"; }
+# NOTE — the real body names `handoff-fire.sh --recycle`; this fixture deliberately says "the
+# recycler" instead. test-hermeticity-lint rule 2 matches `grep -F handoff-fire` against the suite's
+# CODE with comments stripped, so that literal inside a fixture STRING conscripts this suite into the
+# capacity-gate rule and reds the land. The remedy the lint prints — pin CC_FIRE_CAPACITY_GATE=off in
+# setup() — would be a lie here: these two predicates are pure readers of a path argument and this
+# suite fires nothing. Do not "restore fidelity" by putting the tool name back; the property under
+# test is the LEADING GLYPH and the rest of the body is decoration.
+# waiting-recycle's ⛔ RECYCLE REFUSED body, in the shape the PostToolUse additionalContext channel
+# delivers: a user-role record with STRING content and isMeta:null — byte-identical in shape to a typed
+# prompt, exactly like mk_tmsg. Only the leading token can discriminate it. Its ⟳ and ⚠ siblings leave
+# the SAME emitter through the SAME jq object (hooks/waiting-recycle.sh:1493 vs :1352/:1321) and were
+# already in the regex; ⛔ alone was not.
+mk_refused() { printf '{"parentUuid":"p","userType":"external","cwd":"/x","sessionId":"s","type":"user","isMeta":null,"message":{"role":"user","content":"⛔ RECYCLE REFUSED — waiting-recycle fired the recycler and it EXITED 2 WITHOUT recycling."},"uuid":"u","timestamp":"%s"}\n' "$(iso "$1")" >> "$TX"; }
+# the ⟳ sibling from the same emitter — the POSITIVE CONTROL for the fixture shape: if this one were
+# adopted too, the case below would be testing the shape, not the glyph.
+mk_advisory() { printf '{"parentUuid":"p","userType":"external","cwd":"/x","sessionId":"s","type":"user","isMeta":null,"message":{"role":"user","content":"⟳ MONITORING AUTO-RECYCLE — you are at a quiet monitoring boundary."},"uuid":"u","timestamp":"%s"}\n' "$(iso "$1")" >> "$TX"; }
+
 mk_pad()   { local n="$1" i=0; while [ "$i" -lt "$n" ]; do printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]},"timestamp":"%s"}\n' "$(head -c 200 /dev/zero | tr '\0' 'z')" "$(iso "$NOW")" >> "$TX"; i=$((i+1)); done; }
 
 # ── the two adoption predicates, normalized to a boolean ──────────────────────────────────────────
@@ -210,4 +227,36 @@ verdict() { # <predicate-fn> <path> → adopted|none|unreadable
   export CC_CE_TAIL_BYTES=512 CC_CLASSIFY_INTERACTIVE_TAIL_BYTES=512
   [ "$(verdict ce_last_interactive_age "$TX")" = adopted ] || { echo "ce_ lost the buried prompt" >&2; return 1; }
   [ "$(verdict ci_last_interactive_epoch "$TX")" = adopted ] || { echo "ci_ lost the buried prompt" >&2; return 1; }
+}
+
+# ── ⛔ RECYCLE REFUSED is AUTO traffic, not an operator turn ──────────────────────────────────────
+# STOPHOOK_MESSAGE_TIERING §3.1 "bonus finding", verified here rather than taken on trust. The
+# auto-traffic regex listed ^⟳ ^⚑ ^⚠ and not ^⛔, so waiting-recycle's own refusal body read as an
+# operator interactive turn to both predicates — arming the S6 conversation-hold that suppresses the
+# very follow-on recycle the refusal is telling the session to perform. The bound matters and was
+# measured, not assumed: waiting-recycle is the ONLY hook emitting on the PostToolUse
+# additionalContext channel (boundary-handoff and session-continue are Stop hooks, whose feedback
+# already matches ^Stop hook feedback:), and the leading glyphs it emits there are exactly ⚠, ⟳ and
+# ⛔ — so ⛔ was the whole residue, and ✋ is not one (it appears only inside refusal_line's grep of
+# captured EXTERNAL stderr, never as a body's first character).
+
+@test "parity: a ⛔ RECYCLE REFUSED body is AUTO traffic ⇒ NEITHER predicate adopts" {
+  mk_refused "$(( NOW - 60 ))"
+  mk_tool "$(( NOW - 5 ))"
+  agree "$TX" no
+}
+
+@test "parity CONTROL: its ⟳ sibling — same emitter, same record shape — also ⇒ NEITHER adopts" {
+  # If this failed, the case above would be evidence about the fixture SHAPE rather than the glyph.
+  mk_advisory "$(( NOW - 60 ))"
+  mk_tool "$(( NOW - 5 ))"
+  agree "$TX" no
+}
+
+@test "parity CONTROL: a human turn that merely MENTIONS ⛔ mid-sentence is still adopted" {
+  # The predicate is anchored (^⛔). An operator typing about the rung is an operator turn, and a
+  # substring match here would silence a live conversation — the opposite failure, and the worse one.
+  mk_text "$(( NOW - 60 ))" "why did it close on ⛔ instead of driving it?"
+  mk_tool "$(( NOW - 5 ))"
+  agree "$TX" yes
 }

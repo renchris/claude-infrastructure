@@ -61,7 +61,7 @@ beat() {
   who=auto
   if [ "$kind" = prompt ]; then
     prompt=$(printf '%s' "$input" | jq -r '.prompt // empty' 2>/dev/null)
-    rx="${CC_CLASSIFY_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠}"
+    rx="${CC_CLASSIFY_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠|^⛔}"
     if [ -n "$prompt" ] && ! printf '%s' "$prompt" | jq -Rs --arg rx "$rx" -e 'test($rx)' >/dev/null 2>&1; then
       who=operator
     fi
