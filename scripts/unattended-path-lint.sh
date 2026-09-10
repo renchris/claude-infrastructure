@@ -227,6 +227,31 @@ PLIST_TARGET_ALT="${PLIST_TARGET_LAYERS// /|}"
 # reload would turn that gate RED for every session in the fleet until they acted. Filed separately
 # so the repo edit and the reload land together.
 #
+# ── The three `bin/cc-reaper` rows, added 2026-09-10 with the coverage fix that first SCANNED that
+#    file at all (see the rungs above `plist_target_scripts`). They are reports, not condemnations,
+#    and each was read at its call site before this rationale was written — the discipline the
+#    `lsof` note above prescribes after d2300b1b had to correct two rows filed from a source reading.
+#
+#   `timeout` / `gtimeout` (:513) ARE the guard, not a use of it. The site is a resolution loop that
+#   stores `$(command -v timeout)`'s ABSOLUTE output, `-x`-validates it, falls back to four absolute
+#   Homebrew//usr/local paths, and degrades to running UNBOUNDED if none exists. It is the correct
+#   spelling of this pattern — notably NOT the one the rules file records, where a sibling stored
+#   `command -v`'s bare NAME and threw away the absolute path it had just printed. Same disposition,
+#   and for the same stated reason, as `scripts/autonomy-sweep.sh:{timeout,gtimeout}` below: ONE
+#   SOURCE LINE NAMES TWO BINARIES and the ratchet counts them separately, so both rows are
+#   load-bearing and neither may be retired without the other.
+#
+#   `bats` (:3215) is the `selftest)` case arm — `exec bats "$HERE/../tests/cc-reaper.bats"` — a
+#   developer entry point. The launchd job runs `cc-reaper sweep --reap` and can never reach that
+#   arm. This lint's population is the FILE, not the path through it, so the bare name is truthfully
+#   at command position in a file on an unattended path, and it is listed for exactly the reason the
+#   `lsof` row is. Resolving it absolutely would be WRONG rather than merely unnecessary: bats sits
+#   at a different absolute path on a Homebrew box than on a /usr/local one, which is why every
+#   `command -v`-guarded site in this tree keeps the bare name.
+#
+#   What the rows BUY is the ratchet. A NEW bare name in bin/cc-reaper is red from now on; before
+#   this fix the whole 3,151-line file was invisible to this half.
+#
 # ── RESTORED 2026-08-29: `scripts/autonomy-sweep.sh:timeout`, retired by a6449cebc and put back the
 #    same hour, because ONE SOURCE LINE NAMES TWO BINARIES AND THE RATCHET COUNTS THEM SEPARATELY. ──
 # a6449cebc deleted that one row on the ratchet's say-so ("the ratchet says no longer violates") and
@@ -253,6 +278,9 @@ PLIST_TARGET_ALT="${PLIST_TARGET_LAYERS// /|}"
 EMBEDDED_ALLOWLIST="$(cat <<'ALLOW'
 bin/cc-dispatch:bun
 bin/cc-dispatch:cargo
+bin/cc-reaper:bats
+bin/cc-reaper:gtimeout
+bin/cc-reaper:timeout
 bin/screenshot-to-clipboard.sh:timeout
 hooks/anti-deference-nudge.sh:cc-decide
 hooks/completion-assert.sh:timeout
@@ -297,6 +325,21 @@ ALLOW
 # so this list pins WHO runs the corpus, never WHAT PATH they run it with.
 CORPUS_RUNNERS="com.claude.nightly-regression.plist
 com.claude.postland-verify.plist"
+
+# ── The plists whose target is NOT this repo's to scan ────────────────────────────────────────────
+# One launchd plist basename per line, each with the reason it resolves nothing. This is a DECLARED
+# residual, and declaring it is what lets lint_tree BLOCK on every other zero — see the per-plist
+# coverage check at the end of the launchd half.
+#
+# WHY A LIST AND NOT A DETECTOR. The three rungs in `plist_target_scripts` resolve what the tree can
+# name. What is left over is a job whose script lives in a DIFFERENT checkout, and no property of
+# THIS tree distinguishes that from a rung that has just gone blind — which is precisely the failure
+# being closed here, where two blind rungs looked exactly like two out-of-scope jobs. A human writes
+# the reason down once; the ratchet then holds it.
+#
+# It shrinks only. A basename here that STARTS resolving is reported as stale and blocks, the same
+# disposition EMBEDDED_ALLOWLIST gets, so this list can never quietly outlive its reason.
+PLIST_TARGET_OUT_OF_TREE="com.claude.session-search-backfill.plist"
 
 # ── The binary inventory: an UPWARD ratchet that de-environments the new-finding arm ──────────────
 # One binary NAME per line. Every name here was observed, on some box that ran `--emit-inventory`, to
@@ -958,6 +1001,29 @@ reachable_on() { # $1=PATH $2=binary
   return $rc
 }
 
+# reachable_on's sibling: the SAME loop, but it PRINTS the directory that resolved instead of only
+# answering yes/no. Deliberately written beside its twin rather than as a second search elsewhere in
+# the file — two spellings of one lookup is exactly how the BRE/sed bug below `plist_target_scripts`
+# survived a full clean run, and a resolver that disagreed with the predicate guarding it would be
+# worse than either alone.
+resolve_on() { # $1=PATH $2=binary -> stdout: the absolute path; rc 1 if it resolves nowhere
+  local d rc=1 oldifs="$IFS"
+  IFS=':'
+  for d in $1; do
+    [ -n "$d" ] || d="."
+    if [ -x "$d/$2" ] && [ ! -d "$d/$2" ]; then printf '%s\n' "$d/$2"; rc=0; break; fi
+  done
+  IFS="$oldifs"
+  return $rc
+}
+
+# The repo-relative spelling of an absolute path that lies under $2 — and NOTHING for one that does
+# not. The empty answer is the load-bearing half: it is what keeps a job whose target belongs to a
+# DIFFERENT checkout out of this tree's population instead of being manufactured into a member of it.
+plist_rel_under() { # $1=absolute path $2=repo root -> stdout: repo-relative path, or nothing
+  case "$1" in "$2"/*) printf '%s\n' "${1#"$2"/}" ;; esac
+}
+
 # Is the binary a real FILE anywhere this box installs one? A word that resolves nowhere is scanner
 # noise (a case label, a bare word), not a dependency — reporting it would be a finding nobody can act on.
 #
@@ -1124,11 +1190,97 @@ plist_effective_path() { # $1=plist -> stdout: a PATH string, or the LOGIN_SHELL
 # them, and the whole launchd half scanned NOTHING while reporting a clean corpus. It survived a
 # full run against the real tree looking exactly like "the plists are fine". Only the plist positive
 # control caught it, which is why the generating item made that control mandatory.
-plist_target_scripts() { # $1=plist -> repo-relative script paths it executes
-  plist_arg_strings "$1" \
-    | grep -oE '[A-Za-z0-9_./$-]*/('"$PLIST_TARGET_ALT"')/[A-Za-z0-9_.-]+' \
-    | sed -E 's#.*/('"$PLIST_TARGET_ALT"')/#\1/#' \
-    | sort -u
+#
+# ── WHY THERE ARE THREE RUNGS AND NOT ONE ────────────────────────────────────────────────────────
+# Rung 1 alone — a literal `/(scripts|bin|hooks)/` segment, filtered by existence — SILENTLY
+# EXEMPTED 2 of this corpus's 26 plists, because a target it cannot resolve is skipped with no word
+# said. Measured 2026-08-25 and reproduced 2026-09-10: 26 plists, 24 in-tree targets across 23
+# plists, and THREE plists yielding zero. Two of the three were real coverage holes:
+#
+#   com.chrisren.cc-reaper.plist runs `cc-reaper sweep --reap` as a BARE NAME after an inline
+#   `export PATH="$HOME/.claude/bin:$PATH"`. Rung 1 demands a path segment, so it extracted NOTHING
+#   and bin/cc-reaper (2,365 lines) had never been scanned by this half — a lint whose whole purpose
+#   is catching bare-name invocations, blinded by one.
+#
+#   com.claude.auth-timeseries.plist names "$HOME/.claude/scripts/auth-timeseries.sh", which rung 1
+#   reduces to `scripts/auth-timeseries.sh`. The REPO keeps that file at tools/auth/auth-timeseries.sh
+#   (the live ~/.claude/scripts symlink points there), so the existence test was false and the job
+#   was skipped. The plist names the DEPLOYED spelling; rung 1 can only read the tree's.
+#
+# The third, com.claude.session-search-backfill.plist, is the CONTROL and is why this needed a design
+# rather than a one-liner: its target belongs to a different repo (claude-session-search) and is
+# CORRECTLY out of this tree's population. "Report every unresolvable target" would fire a false LOUD
+# on it, and this lint's exit 2 is a NON-VERDICT that blocks the gate.
+#
+# So each new rung is TREE-DERIVED and must leave the control alone, measured over the real corpus:
+#
+#   RUNG 2 (basename) — 25 path-shaped tokens, 24 already resolved by rung 1 and UNCHANGED by this
+#   rung, 1 newly resolved (auth-timeseries), 0 ambiguous, and the control gets ZERO basename hits
+#   because no file named session-index-backfill.sh exists in this repo under any path. The
+#   uniqueness requirement is what makes the answer a fact about the tree; 0 or >=2 matches resolve
+#   to nothing, which is the same conservative silence rung 1 already keeps.
+#
+#   RUNG 3 (bare name on the plist's own PATH) — the item that generated this called rung 3 "the one
+#   most likely to mint false positives". Measurement refutes it: run over the whole corpus with a
+#   DELIBERATELY OVER-GENERATING word set (every word in ProgramArguments, not merely the ones in
+#   command position), rung 3 yields exactly ONE in-repo hit — bin/cc-reaper — and zero others. The
+#   shipped form is strictly tighter than what was measured, because it scans through scan_shell,
+#   which is the same command-position scanner every other population here goes through.
+#
+# NOT the fourth candidate that was considered: resolving a target through the LIVE ~/.claude symlink
+# layer. It reaches auth-timeseries too, and it is wrong for the reason `expand_path_string` above
+# already states in its own words — a rule whose answer depends on what is currently symlinked makes
+# a file go red or green without changing. Rung 2 gets the same answer from the tree alone.
+#
+# What no rung can do is notice its OWN next blind spot, so the residual is declared, not inferred:
+# PLIST_TARGET_OUT_OF_TREE names the plists allowed to resolve nothing, and lint_tree BLOCKS on any
+# other zero. That is the per-member control the aggregate one could never be — see its comment.
+plist_target_scripts() { # $1=plist $2=repo root -> repo-relative script paths it executes
+  local pl="$1" root="${2:-$ROOT}" args tgts="" t b hit n rel ppath tmp out w abs
+  args="$(plist_arg_strings "$pl")"
+  [ -n "$args" ] || return 0
+
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    # RUNG 1 — the tree's own spelling, exactly as before.
+    if [ -f "$root/$t" ]; then tgts="$tgts$t"$'\n'; continue; fi
+    # RUNG 2 — the DEPLOYED spelling. Resolve by basename, and only when the tree answers with
+    # exactly ONE file: 0 means the target genuinely is not ours (the control), >=2 means the tree
+    # cannot say which, and a guess there would be a fabricated verdict of the kind this whole file
+    # is built to refuse. `find` is pruned and costs ~15ms on this repo, and it runs only for a
+    # candidate rung 1 already failed to resolve — 2 of 25 tokens in this corpus.
+    b="${t##*/}"
+    hit="$(/usr/bin/find "$root" -name .git -prune -o -name node_modules -prune -o -type f -name "$b" -print 2>/dev/null)"
+    n="$(printf '%s' "$hit" | grep -c . || true)"
+    [ "$n" = "1" ] || continue
+    rel="$(plist_rel_under "$hit" "$root")"
+    [ -n "$rel" ] && tgts="$tgts$rel"$'\n'
+  done <<< "$(printf '%s\n' "$args" \
+      | grep -oE '[A-Za-z0-9_./$-]*/('"$PLIST_TARGET_ALT"')/[A-Za-z0-9_.-]+' \
+      | sed -E 's#.*/('"$PLIST_TARGET_ALT"')/#\1/#' \
+      | sort -u)"
+
+  # RUNG 3 — a BARE command name, resolved on the PATH THIS PLIST ITSELF DECLARES. The words come
+  # from scan_shell rather than a word split, so they are command-position words, judged by the same
+  # scanner as every other population; and `plist_rel_under` keeps only what lands inside this repo,
+  # so a bare name resolving to a stock binary or to another checkout contributes nothing.
+  ppath="$(plist_effective_path "$pl")"
+  if [ "$ppath" != "LOGIN_SHELL" ]; then
+    ppath="$(expand_path_string "$ppath" "$root")"
+    tmp="$(mktemp)" || die2 "mktemp failed while reading $(basename "$pl") (NON-VERDICT)"
+    printf '%s\n' "$args" > "$tmp"
+    out="$(scan_shell "$tmp")" || { rm -f "$tmp"; die2 "the scanner failed on $(basename "$pl")'s ProgramArguments (NON-VERDICT)"; }
+    rm -f "$tmp"
+    while IFS=$'\t' read -r _sf _sl w; do
+      [ -n "$w" ] || continue
+      plausible_binary "$w" || continue
+      abs="$(resolve_on "$ppath" "$w")" || continue
+      rel="$(plist_rel_under "$abs" "$root")"
+      [ -n "$rel" ] && tgts="$tgts$rel"$'\n'
+    done <<< "$out"
+  fi
+
+  printf '%s' "$tgts" | grep -v '^$' | sort -u
 }
 
 # A hook that hardens its OWN PATH is judged against what it hardened to — the same courtesy the
@@ -1275,10 +1427,12 @@ lint_tree() {
   fi
 
   # -- launchd --
+  local zero_cover="" stale_cover=""
   if [ -d "$root/launchd" ]; then
     local pl
     for pl in "$root"/launchd/*.plist; do
       [ -f "$pl" ] || continue
+      local pbase; pbase="$(basename "$pl")"
       local ppath; ppath="$(plist_effective_path "$pl")"
       [ "$ppath" = "LOGIN_SHELL" ] && continue
       # Expand the two variables a wrapper's PATH can legitimately contain, the way the wrapper's own
@@ -1286,10 +1440,11 @@ lint_tree() {
       # jobs spell their PATH as `$HOME/.claude/bin:$PATH`, and leaving it literal would test a
       # directory named '$PATH' and report the whole job unreachable.
       ppath="$(expand_path_string "$ppath" "$root")"
-      local tgt
+      local tgt n_tgt=0
       while IFS= read -r tgt; do
         [ -n "$tgt" ] || continue
         [ -f "$root/$tgt" ] || continue
+        n_tgt=$((n_tgt + 1))
         has_line "$scanned_paths" "$tgt" || scanned_paths="$scanned_paths$tgt"$'\n'
         local out; out="$(scan_shell "$root/$tgt")" || return 2
         local seen=""
@@ -1306,7 +1461,30 @@ lint_tree() {
           local kind="bare"; file_guards "$root/$tgt" "$w" && kind="guarded"
           emit "$tgt" "$l" "$w" "$kind" "$(basename "$pl")'s own PATH"
         done <<< "$out"
-      done <<< "$(plist_target_scripts "$pl")"
+      done <<< "$(plist_target_scripts "$pl" "$root")"
+      # ── THE PER-PLIST COVERAGE CHECK ──────────────────────────────────────────────────────────
+      # The plist positive control this file already had is AGGREGATE — it asserts the corpus as a
+      # whole resolves something. 23 of 26 plists resolve, so it speaks loudly while a PER-MEMBER
+      # zero stays invisible; it can only ever catch a TOTAL zero, which is the exact bug the
+      # comment above `plist_target_scripts` records (the BSD-sed one, where the whole half scanned
+      # NOTHING while reporting a clean corpus). It caught that, and it structurally could not catch
+      # these two. This is its per-member half, and unlike the aggregate it names the plist.
+      # Read through the same env seam shape `in_inventory` uses for its list, so --selftest can
+      # exercise BOTH sides of this check on a fixture tree without shipping fixture basenames in
+      # the real declaration. `${VAR-...}` and not `${VAR:-...}`: SET-BUT-EMPTY must mean "nothing
+      # is exempt", which is the arm that proves the check fires.
+      #
+      # NOT reached by a LOGIN_SHELL plist, which `continue`s above before any target is read. That
+      # is a SECOND way a plist leaves this half unjudged, and it is deliberate (its PATH is the
+      # operator's ~/.zprofile and is not assertable from the plist) — but it is also silent, so it
+      # is guarded elsewhere rather than here: --list prints the classification, and the bats case
+      # "no plist is classified LOGIN_SHELL by its interpreter path alone" asserts the count is 0.
+      # If that count ever becomes non-zero, this check goes blind to exactly that many plists.
+      if has_line "${CC_UNATTENDED_PLIST_OUT_OF_TREE-$PLIST_TARGET_OUT_OF_TREE}" "$pbase"; then
+        [ "$n_tgt" -gt 0 ] && stale_cover="$stale_cover  $pbase"$'\n'
+      elif [ "$n_tgt" -eq 0 ]; then
+        zero_cover="$zero_cover  $pbase"$'\n'
+      fi
     done
   fi
 
@@ -1473,6 +1651,27 @@ lint_tree() {
     echo "  Do NOT delete these rows to clear this notice — retire the SITE (resolve it absolutely)," >&2
     echo "  which retires the row honestly on every box at once." >&2
   fi
+  if [ -n "$zero_cover" ]; then
+    # BLOCKING, and deliberately not exit 2. A NON-VERDICT would be the wrong shape twice over: this
+    # run read the tree fine, and exit 2 blocks the gate with nothing anyone can act on. This is an
+    # actionable finding with two honest answers, and it names both.
+    echo "unattended-path-lint: these launchd jobs resolve to NO in-tree script, so nothing this" >&2
+    echo "  half reports says anything about what they actually run — a silent exemption, which is" >&2
+    echo "  the state this check exists to end:" >&2
+    printf '%s' "$zero_cover" >&2
+    echo "  Fix, whichever is true: (1) the job runs one of OUR scripts and a rung in" >&2
+    echo "  plist_target_scripts cannot see how it is spelled — widen the rung, not this list; or" >&2
+    echo "  (2) the script genuinely belongs to another checkout — add the basename to" >&2
+    echo "  PLIST_TARGET_OUT_OF_TREE in $SELF WITH the reason, the way its one entry carries one." >&2
+    return 1
+  fi
+  if [ -n "$stale_cover" ]; then
+    echo "unattended-path-lint: STUCK OUT-OF-TREE ENTRIES — these plists are declared unscannable" >&2
+    echo "  but now resolve in-tree targets, so the declaration is outliving its reason:" >&2
+    printf '%s' "$stale_cover" >&2
+    echo "  Fix: delete their lines from PLIST_TARGET_OUT_OF_TREE in $SELF — the list only shrinks." >&2
+    return 1
+  fi
   if [ -n "$stuck" ]; then
     echo "unattended-path-lint: STUCK RATCHET — these sites are allowlisted but no longer violate:" >&2
     printf '%s' "$stuck" >&2
@@ -1507,7 +1706,7 @@ if [ "${1:-}" = "--emit-inventory" ]; then
       [ -f "$pl" ] || continue
       while IFS= read -r tgt; do
         [ -n "$tgt" ] && [ -f "$root/$tgt" ] && emit_files="$emit_files$root/$tgt"$'\n'
-      done <<< "$(plist_target_scripts "$pl")"
+      done <<< "$(plist_target_scripts "$pl" "$root")"
     done
   fi
   emit_words=""
@@ -1541,10 +1740,17 @@ if [ "${1:-}" = "--list" ]; then
   echo "HOOK POPULATION (every hooks/*.sh in the tree), judged against: $STOCK_PATH"
   hook_population "$ROOT" | sed 's/^/  /'
   echo
-  echo "LAUNCHD POPULATION (per-plist effective PATH):"
+  # The TARGETS are printed beside the PATH, and per plist, because that pair is the whole verdict:
+  # a job is only as scanned as the scripts this half can name for it. The comment below says the
+  # per-plist PATH line here is what exposed the near-vacuous BSD-sed bug; a per-plist "targets: —"
+  # is the same instrument aimed at the successor defect, where 2 of 26 plists resolved NOTHING and
+  # the aggregate control could not see it because the other 23 did.
+  echo "LAUNCHD POPULATION (per-plist effective PATH, and the in-tree scripts it is judged over):"
   for pl in "$ROOT"/launchd/*.plist; do
     [ -f "$pl" ] || continue
+    _lp_t="$(plist_target_scripts "$pl" "$ROOT" | tr '\n' ' ')"
     printf '  %-46s %s\n' "$(basename "$pl")" "$(plist_effective_path "$pl")"
+    printf '  %-46s targets: %s\n' "" "${_lp_t:-— NONE (declared out-of-tree? see PLIST_TARGET_OUT_OF_TREE)}"
   done
   echo
   # Printed with its runner PATHs because that is the pair a reader has to see together: the corpus
@@ -1762,6 +1968,83 @@ PLIST
   mkdir -p "$d/bare"
   ( CC_UNATTENDED_ALLOWLIST="" "$SELF" "$d/bare" >/dev/null 2>&1 ); expect 2 "$?" 'a root with neither hooks/ nor launchd/ did not exit 2'
 
+  # ── THE PER-PLIST COVERAGE CASES (2026-09-10) ───────────────────────────────────────────────────
+  # Every case below is a red-proof for one rung of `plist_target_scripts` or for the coverage check
+  # that reports what no rung could resolve. All six FAIL against the pre-fix file: rungs 2 and 3 did
+  # not exist, and a plist that resolved nothing was skipped in silence, so t20/t21/t22/t24/t25 all
+  # exited 0 there. t23 is their control and passes on both — which is the point of shipping it.
+  #
+  # `plfix` writes a plist whose ProgramArguments are supplied verbatim, so each case differs from
+  # its neighbours in exactly the axis it is about.
+  plfix() { # $1=dir-under-d $2=basename $3=the third ProgramArguments string
+    mkdir -p "$d/$1/launchd"
+    cat > "$d/$1/launchd/$2" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>${2%.plist}</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/bash</string><string>-c</string>
+    <string>$3</string>
+  </array>
+</dict></plist>
+PLIST
+  }
+
+  # t20 — RUNG 3. The job invokes an in-tree bin/ script by BARE NAME after an inline export PATH.
+  #       This is com.chrisren.cc-reaper.plist's exact shape, and it is the one the generating item
+  #       called out for its irony: a lint whose whole purpose is catching bare-name invocations was
+  #       blinded by one. Pre-fix the extractor demands a literal path segment, finds none, and the
+  #       target file is scanned by nothing — exit 0 over a file that violates.
+  newtree t20; mkdir -p "$d/t20/bin"
+  mk t20 bin/j 'zzunobtainium --sweep'
+  chmod +x "$d/t20/bin/j"
+  plfix t20 com.test.t20.plist 'export PATH="$HOME/.claude/bin:/usr/bin:/bin"; j --sweep'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" CC_UNATTENDED_PLIST_OUT_OF_TREE="" \
+    "$SELF" "$d/t20" >/dev/null 2>&1 ); expect 1 "$?" 'a BARE-NAME launchd target resolving into the tree was not scanned (rung 3)'
+
+  # t21 — RUNG 2. The plist names the DEPLOYED spelling (~/.claude/scripts/...) while the repo keeps
+  #       the file somewhere else entirely. com.claude.auth-timeseries.plist's exact shape: the
+  #       layer-relative path extracts fine and then fails its existence test, so pre-fix the job is
+  #       skipped. Resolved here by BASENAME, in the tree — never through the live symlink layer,
+  #       which would make the verdict a fact about what is currently deployed.
+  newtree t21; mk t21 tools/auth/j.sh 'zzunobtainium --once'
+  plfix t21 com.test.t21.plist 'export PATH="/usr/bin:/bin"; exec "$HOME/.claude/scripts/j.sh" --once'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" CC_UNATTENDED_PLIST_OUT_OF_TREE="" \
+    "$SELF" "$d/t21" >/dev/null 2>&1 ); expect 1 "$?" 'a launchd target under its DEPLOYED spelling was not resolved in-tree by basename (rung 2)'
+
+  # t22 — RUNG 2 MUST NOT GUESS. Two files share the basename, so the tree cannot say which the job
+  #       runs. Resolving either would be a fabricated verdict; the honest answer is nothing, which
+  #       then surfaces as the ZERO-COVERAGE report rather than as silence. One fixture, both halves.
+  newtree t22; mk t22 tools/a/j.sh 'echo a'; mk t22 tools/b/j.sh 'echo b'
+  plfix t22 com.test.t22.plist 'export PATH="/usr/bin:/bin"; exec "$HOME/.claude/scripts/j.sh"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" CC_UNATTENDED_PLIST_OUT_OF_TREE="" \
+    "$SELF" "$d/t22" >/dev/null 2>&1 ); expect 1 "$?" 'an AMBIGUOUS basename was resolved by guess instead of reported as uncovered (rung 2)'
+
+  # t23 — THE CONTROL, and the reason this needed a design rather than a one-liner. The target
+  #       belongs to a DIFFERENT checkout: no file of that basename exists here under any path, so
+  #       no rung can or should reach it. Declared, therefore silent. "Report every unresolvable
+  #       target" would fire a false loud right here, on com.claude.session-search-backfill.plist.
+  newtree t23
+  plfix t23 com.test.t23.plist 'export PATH="/usr/bin:/bin"; exec "$HOME/.claude/bin/elsewhere-backfill.sh" --quiet'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" CC_UNATTENDED_PLIST_OUT_OF_TREE="com.test.t23.plist" \
+    "$SELF" "$d/t23" >/dev/null 2>&1 ); expect 0 "$?" 'a DECLARED out-of-tree launchd target fired a false loud'
+
+  # t24 — THE ITEM ITSELF. The same tree as t23 with the declaration removed. Pre-fix this exits 0:
+  #       the plist resolves nothing, is skipped without a word, and the AGGREGATE positive control
+  #       stays green because the other plists resolve. That silence is the whole defect, and this is
+  #       the case that ends it. It must BLOCK (exit 1) and never exit 2 — a NON-VERDICT here would
+  #       take the gate down over a tree this run read perfectly well.
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" CC_UNATTENDED_PLIST_OUT_OF_TREE="" \
+    "$SELF" "$d/t23" >/dev/null 2>&1 ); expect 1 "$?" 'a plist resolving NO in-tree target was silently exempted (the defect this check exists to end)'
+
+  # t25 — THE DECLARATION ONLY SHRINKS. A basename declared out-of-tree that now resolves is a
+  #       reason that has outlived itself, and it must be reported rather than left to sit — the same
+  #       disposition, and for the same reason, that a stuck EMBEDDED_ALLOWLIST row gets.
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" CC_UNATTENDED_PLIST_OUT_OF_TREE="com.test.t21.plist" \
+    "$SELF" "$d/t21" >/dev/null 2>&1 ); expect 1 "$?" 'a STALE out-of-tree declaration (its plist now resolves) was not reported'
+
+
   # 13. own-scope: a finding OUTSIDE the own-set is advisory (exit 0); INSIDE it blocks (exit 1).
   #     Set-but-empty must not collapse to "unset" — that would silently reinstate the hard stop.
   newtree t13; mk t13 hooks/a.sh 'zzunobtainium kill-pane'
@@ -1774,6 +2057,16 @@ PLIST
   # coupling is deliberate: rename the real plist without updating the list and case 18's real-tree
   # run goes NON-VERDICT rather than quietly green.
   mkrunner() { # $1=dir-under-d $2=PATH string
+    # The runner's own target must EXIST, and the reason is a lesson this file paid for twice. Until
+    # 2026-09-10 nothing looked at whether a plist resolved a target, so this fixture could name
+    # `$HOME/scripts/nightly-regression.sh` without shipping it and every case using it stayed
+    # green. Once the per-plist coverage check landed, that made case 15 (a GREEN control) go red for
+    # a reason having nothing to do with what it tests — and, worse, case 14 (its RED twin) would
+    # have gone on passing for the wrong reason, which is the failure mode a paired control exists to
+    # prevent. A fixture must reproduce the SHAPE of the thing it stands for; a well-formed tree here
+    # is not tidiness, it is what keeps these two cases attributable.
+    mkdir -p "$d/$1/scripts"
+    printf '%s\n' '#!/bin/bash' 'exit 0' > "$d/$1/scripts/nightly-regression.sh"
     cat > "$d/$1/launchd/com.claude.nightly-regression.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -2165,7 +2458,7 @@ PLIST
   [ "$skips" -gt 0 ] && real_tree_clause=""
 
   if [ "$fails" -eq 0 ]; then
-    echo "unattended-path-lint --selftest: $checks/$checks — RED on a bare binary inside \"\$( )\" (the shape a greedy tokenizer missed), on a bare binary at command position, on a stuck ratchet entry, on a plist whose INLINE export PATH cannot reach the binary, on a /sbin-only binary in the bats corpus under a runner whose PATH stops at /bin, on that binary reached through bats' own \`run\` wrapper, on a bare binary inside a case BODY (invisible to this lint for its whole life, until the label state landed) and on one after a REAL pipe (so the label fix was not bought by blinding the scanner to piped invocations); GREEN on a case LABEL in EITHER arity — the shape that minted two allowlist rows and contorted a real test into \`[ = ] || [ = ]\`, and whose one-arm form was wrongly believed already handled — on an absolute path, a name inside a single-quoted regex, a name in a comment, a heredoc body, a stock binary, a grandfathered site, an allowlist row whose FILE this run never scanned (a non-verdict about this run's reach, never a stale row — the shape that refused the first cloud land to touch bin/cc-dispatch), a plist whose inline PATH does reach, the same corpus file under a runner whose PATH carries /sbin, and prose following an arithmetic expansion nested in a command substitution (the desync that minted two allowlist rows out of nothing); LOUD on a missing root, a root with no governed layers, and a corpus with no runner plist; own-scope blocks INSIDE / advises OUTSIDE across all three arity states; GREEN on a python-shebang file whose prose sits where a shell scanner reads command position, against a RED control of the SAME BYTES under a bash shebang and a RED control on a shebang-less file (so the language guard is keyed on the shebang and did not widen into scanning nothing)${real_tree_clause}. EVERY fixture above names a binary installed NOWHERE (zzunobtainium) or one installed only inside the sandbox (zzreachable), so each verdict is a property of the fixture and not of the invoker's tool inventory — the defect that made this arm answer to \`apt-get install shellcheck\`."
+    echo "unattended-path-lint --selftest: $checks/$checks — RED on a bare binary inside \"\$( )\" (the shape a greedy tokenizer missed), on a bare binary at command position, on a stuck ratchet entry, on a plist whose INLINE export PATH cannot reach the binary, on a /sbin-only binary in the bats corpus under a runner whose PATH stops at /bin, on that binary reached through bats' own \`run\` wrapper, on a bare binary inside a case BODY (invisible to this lint for its whole life, until the label state landed) and on one after a REAL pipe (so the label fix was not bought by blinding the scanner to piped invocations); GREEN on a case LABEL in EITHER arity — the shape that minted two allowlist rows and contorted a real test into \`[ = ] || [ = ]\`, and whose one-arm form was wrongly believed already handled — on an absolute path, a name inside a single-quoted regex, a name in a comment, a heredoc body, a stock binary, a grandfathered site, an allowlist row whose FILE this run never scanned (a non-verdict about this run's reach, never a stale row — the shape that refused the first cloud land to touch bin/cc-dispatch), a plist whose inline PATH does reach, the same corpus file under a runner whose PATH carries /sbin, and prose following an arithmetic expansion nested in a command substitution (the desync that minted two allowlist rows out of nothing); RED on a launchd target invoked by BARE NAME and on one named by its DEPLOYED path (two plists that resolved NOTHING and were skipped in silence, which the AGGREGATE plist control could not see because the other 23 resolved), on an AMBIGUOUS basename that must be reported rather than guessed, on an UNDECLARED plist resolving no in-tree target, and on a STALE out-of-tree declaration whose plist now resolves; GREEN on a DECLARED out-of-tree target, the control that makes \"report every unresolvable target\" the wrong rule; LOUD on a missing root, a root with no governed layers, and a corpus with no runner plist; own-scope blocks INSIDE / advises OUTSIDE across all three arity states; GREEN on a python-shebang file whose prose sits where a shell scanner reads command position, against a RED control of the SAME BYTES under a bash shebang and a RED control on a shebang-less file (so the language guard is keyed on the shebang and did not widen into scanning nothing)${real_tree_clause}. EVERY fixture above names a binary installed NOWHERE (zzunobtainium) or one installed only inside the sandbox (zzreachable), so each verdict is a property of the fixture and not of the invoker's tool inventory — the defect that made this arm answer to \`apt-get install shellcheck\`."
     [ "$skips" -gt 0 ] && echo "unattended-path-lint --selftest: $skips arm(s) SKIPPED as a NON-VERDICT on this platform (named above) — the detector's own cases all ran, and the tree-level question is asked directly by ship-land's own-scope run."
     exit 0
   fi
@@ -2207,6 +2500,19 @@ fi
 # Consumed BEFORE the entrypoint below, which reads `${1:-$ROOT}` as a scan root: past that line the
 # flag resolves to a directory named "--print-scope" and the lint answers exit 2 to a question about
 # its own scope.
+# ── --print-out-of-tree ──────────────────────────────────────────────────────────────────────────
+# Print the plists declared unscannable, one basename per line, through the SAME env seam lint_tree
+# reads. It exists so a test can assert against the value the lint actually uses instead of parsing
+# this file for it: the obvious `sed -n '/^PLIST_TARGET_OUT_OF_TREE="/,/"$/p'` is a range whose end
+# pattern cannot match on the START line, so on today's one-line declaration it selects from here to
+# the next line ending in a quote — 60 lines of comment prose. That failure is silent in the
+# permissive direction (a basename mentioned in any comment would read as declared), which is the
+# same shape as the absent-range-endpoint bug already recorded in the rules file.
+if [ "${1:-}" = "--print-out-of-tree" ]; then
+  printf '%s\n' "${CC_UNATTENDED_PLIST_OUT_OF_TREE-$PLIST_TARGET_OUT_OF_TREE}" | grep -v '^$' || true
+  exit 0
+fi
+
 if [ "${1:-}" = "--print-scope" ]; then
   _ps_restore_f=0; case "$-" in *f*) _ps_restore_f=1 ;; esac
   # Globbing OFF for the split AND for the two globs: unquoted, they would PATHNAME-EXPAND against
