@@ -32,6 +32,29 @@
 # the reap is hooked at LAND TIME, where the head we compare against is the one we just pushed,
 # and the reason this script has no retrospective sweep mode at all (see the note below `cmd_reap`).
 #
+# IDENTITY IS NOT THE QUESTION WHEN THE REBASE ABSORBED A SIBLING ON OUR PATH (backlog
+# b746262ac702). Comparing against <landed-head> removed the drift that happens AFTER our push, but
+# not the drift that happens BEFORE it: a rebase onto a moved trunk folds every sibling edit already
+# on that trunk into the head we push. When a sibling touched one of our paths, the landed head's
+# blob is (ours + theirs) while the backup's is (ours alone), so identity fails — and it fails in
+# exactly the same way as a genuine rebase-drop, where the landed blob is (ours MINUS a hunk). Those
+# two conditions are OPPOSITES: in (A) the ref holds the only copy of a hunk; in (B) the ref holds a
+# strict SUBSET of what landed. Measured on the filing land (4bb44b457, ref ship/backup-1a4674469):
+# land-verify vs the landed head reported `tests/cc-inbox-guard.bats … DIFFERS`, while all three
+# paths were a clean three-way merge equal to the landed blob — nothing was dropped, and the ref
+# would have been kept forever, on every land whose base moved under a path a sibling also touched.
+#
+# So identity is tried FIRST (the common case, and the one land-verify already owns), and only on a
+# miss does the reap ask the question it actually means — CONTAINMENT: for each path the ref's own
+# range touched, apply the ref's change (merge-base → ref) onto the landed head's blob with
+# `git merge-file`. Carried IFF the merge is CLEAN *and* its result is byte-identical to the landed
+# blob — i.e. every hunk the ref introduced is already there. Both halves are load-bearing: a clean
+# merge whose result differs is precisely a dropped hunk that re-applies cleanly (condition A, KEEP),
+# and a conflict means containment could not be proven (KEEP). Presence changes (an add the landed
+# head lacks, a delete it did not carry), a path the ref ADDED whose landed content differs, and
+# any git/merge error all KEEP. Identity is a special case of containment, so this can only ever
+# reap MORE of the (B) class, never fewer of the (A) class.
+#
 # FAIL-CLOSED, AND IT NEVER FAILS A LAND. Every uncertainty — unresolvable ref, missing
 # land-verify, a git error, a branch checked out elsewhere — KEEPS the ref. A leaked ref costs one
 # row in a metric; a wrongly-deleted one can be the sole holder of real work (45 of the 739 hold at
@@ -180,14 +203,67 @@ cmd_reap() {
     return $?
   fi
 
-  # KEPT — and say exactly which path, because this is the branch that holds real work. The detail
-  # is land-verify's own stderr verdict, quoted rather than paraphrased, so the reason a ref
-  # survived is always in the verifier's words.
-  local detail
-  detail="$("$LAND_VERIFY" "${base}..${ref}" "$landed_sha" "$ref" 2>&1 >/dev/null)"
+  # Identity missed. Ask containment (see §IDENTITY IS NOT THE QUESTION in the header) before
+  # concluding the ref holds anything — identity also misses when a sibling's edit on one of our
+  # paths arrived through the rebase, which is the expected shape of a healthy land, not a drop.
+  local detail rc
+  detail="$(containment_misses "$base" "$ref" "$landed_sha")"; rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    reap_delete "$ref" "every change it made is contained in the landed head (identity missed only because the rebase also carried a sibling's edit on a shared path)"
+    return $?
+  fi
+
+  # KEPT — and say exactly which path and WHY, because this is the branch that holds real work.
+  # The per-path reason is the containment walk's own, so a KEEP now always names a hunk the landed
+  # head lacks (or a path it could not decide) — never a sibling's newer content the ref merely
+  # predates, which is what land-verify's "did not reach the trunk intact" used to report here.
   echo "⚠ ship-backup-reap: KEEPING $ref — its content is NOT fully carried by the landed head $(git rev-parse --short "$landed_sha"):" >&2
   printf '%s\n' "$detail" | sed 's/^/  /' >&2
   echo "  This ref is the rollback point AND, on these paths, the only copy — recover from it before deleting it by hand." >&2
+  return 1
+}
+
+# containment_misses <base> <ref> <landed> — rc 0 iff every change base→ref is present in <landed>.
+# Prints one line per path it could NOT prove carried, with the reason; prints nothing on rc 0.
+# rc 1 = at least one path not carried; rc 2 = could not look (every uncertainty KEEPS).
+containment_misses() {
+  local base="$1" ref="$2" landed="$3"
+  local tmp; tmp="$(mktemp -d -t shipbackupreap.XXXXXX 2>/dev/null)" || {
+    echo "(could not create a scratch dir — containment not checked)"; return 2; }
+  local paths="$tmp/paths" misses="" path bb rb lb mrc
+  if ! git diff --name-only -z "$base" "$ref" > "$paths" 2>/dev/null; then
+    rm -rf "$tmp"; echo "(git diff ${base}..${ref} failed — containment not checked)"; return 2
+  fi
+  while IFS= read -r -d '' path; do
+    [[ -n "$path" ]] || continue
+    bb="$(git rev-parse --verify --quiet "${base}:${path}" 2>/dev/null)"
+    rb="$(git rev-parse --verify --quiet "${ref}:${path}" 2>/dev/null)"
+    lb="$(git rev-parse --verify --quiet "${landed}:${path}" 2>/dev/null)"
+    [[ "$rb" == "$lb" ]] && continue                      # identical (or deleted on both)
+    if [[ -z "$rb" ]]; then
+      misses="${misses}${path}  (the ref DELETES it; the landed head still has it)"$'\n'; continue
+    fi
+    if [[ -z "$lb" ]]; then
+      misses="${misses}${path}  (ABSENT from the landed head — present only on the ref)"$'\n'; continue
+    fi
+    if [[ -z "$bb" ]]; then
+      misses="${misses}${path}  (the ref ADDED it and the landed content differs — the land revised it)"$'\n'; continue
+    fi
+    if ! { git cat-file blob "$bb" > "$tmp/b" && git cat-file blob "$rb" > "$tmp/r" \
+           && git cat-file blob "$lb" > "$tmp/l"; } 2>/dev/null; then
+      misses="${misses}${path}  (could not read its blobs — containment not proven)"$'\n'; continue
+    fi
+    git merge-file -q -p "$tmp/l" "$tmp/b" "$tmp/r" > "$tmp/m" 2>/dev/null; mrc=$?
+    if [[ "$mrc" -ne 0 ]]; then
+      misses="${misses}${path}  (the ref's change CONFLICTS with the landed content — containment not proven)"$'\n'; continue
+    fi
+    if ! cmp -s "$tmp/m" "$tmp/l"; then
+      misses="${misses}${path}  (the ref's change is NOT in the landed head — a hunk was dropped or revised)"$'\n'
+    fi
+  done < "$paths"
+  rm -rf "$tmp"
+  [[ -z "$misses" ]] && return 0
+  printf '%s' "$misses"
   return 1
 }
 
