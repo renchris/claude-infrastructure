@@ -513,3 +513,59 @@ fire() { jq -nc --arg cwd "$1" '{session_id:"s1",cwd:$cwd,tool_name:"Bash",tool_
   run jq -e '(.env.MID_DEADLINE_S|tonumber) < .hooks.PostToolUse[0].hooks[0].timeout' "$cfg"
   [ "$status" -eq 0 ]
 }
+
+# ── The `already-cited` veto's own verdict (2026-09-09) ──────────────────────────────────────────
+# `already-cited` landed in 5972228d5 with no counter arm and no verdict of its own, so it fell into
+# `exhausted`/rc 4: the census printed every cause as zero, and the hook spent the `exhausted`
+# branch — whose remedy is "append VERBATIM to the rules file" — on the one state where appending
+# mints the duplicate the veto exists to prevent. Case 10 (rc 0 on an idempotent repeat) is the
+# red-proof for the exit code; these three pin the parts it cannot see.
+
+@test "24 every over-cap line vetoed already-cited is its OWN verdict, not exhausted" {
+  d="$(mkmem cited24)"; dest="$(rules_dest)"
+  add_entry "$d" "fat.md" 700
+  run "$ROTOR" "$d/MEMORY.md" --drain-oversized --rules-file "$dest"
+  [ "$status" -eq 0 ]
+  has "$output" "verdict=drained"
+  # paste it back: the destination now cites it, so the only veto in play is already-cited
+  printf -- '- [fat](fat.md) — %s\n' "$(pad 700)" >>"$d/MEMORY.md"
+  run "$ROTOR" "$d/MEMORY.md" --drain-oversized --rules-file "$dest"
+  [ "$status" -eq 0 ]
+  has "$output" "verdict=already-cited"
+  has "$output" "cited=1"
+  hasnt "$output" "verdict=exhausted"
+}
+
+@test "25 a MIXED veto set stays exhausted, and its census NAMES the cited term" {
+  d="$(mkmem cited25)"; dest="$(rules_dest)"
+  add_entry "$d" "fat.md" 700
+  run "$ROTOR" "$d/MEMORY.md" --drain-oversized --rules-file "$dest"
+  [ "$status" -eq 0 ]
+  # one already-cited candidate + one the name convention vetoes absolutely
+  printf -- '- [fat](fat.md) — %s\n' "$(pad 700)" >>"$d/MEMORY.md"
+  add_entry "$d" "feedback-x.md" 700
+  run "$ROTOR" "$d/MEMORY.md" --drain-oversized --rules-file "$dest"
+  [ "$status" -eq 4 ]
+  has "$output" "verdict=exhausted"
+  has "$output" "oversized=2"
+  has "$output" "type=1"
+  # the term that stops this census pointing at the wrong line of code
+  has "$output" "cited=1"
+}
+
+@test "26 the hook tells an already-cited operator to DELETE, never to append again" {
+  p="$(mkproj p26)"; proj="${p%|*}"; memd="${p#*|}"
+  topic "$memd" "twice.md" project
+  run fire "$proj"
+  ( cd "$memd" && printf -- '- [Twice](twice.md) — %s\n' "$(pad 700)" >>MEMORY.md )
+  run fire "$proj"                       # drains it into the rules file
+  [ "$status" -eq 0 ]
+  ( cd "$memd" && printf -- '- [Twice](twice.md) — %s\n' "$(pad 700)" >>MEMORY.md )
+  run fire "$proj"
+  [ "$status" -eq 0 ]
+  ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
+  has "$ctx" "ALREADY CITED"
+  has "$ctx" "DELETE the MEMORY.md bullet"
+  # the exhausted remedy must NOT be what this operator is handed
+  hasnt "$ctx" "could NOT be routed automatically"
+}

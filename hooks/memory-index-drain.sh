@@ -251,6 +251,15 @@ case "$DV" in
     FILES=$(printf '%s' "$DV" | sed -n 's/.* files=\([^ ]*\).*/\1/p')
     CTX="MEMORY INDEX DRAINED (automatic, this turn): the index line(s) you just wrote were over the per-entry buffer cap, so ${FILES:-they} moved VERBATIM to ${RULES}. Nothing was shortened and nothing was archived — that file is ALWAYS LOADED, so the rule still fires unprompted; only its surface changed. Restore = paste the line back into MEMORY.md. Write the next durable rule straight to ${RULES} and keep the MEMORY.md bullet short, and this stops happening. Verdict: ${DV}"
     ;;
+  verdict=already-cited*)
+    # Distinct from `exhausted` because the REMEDY is the opposite one. `exhausted` tells the
+    # operator to append the line verbatim to the rules file; here the rules file ALREADY cites
+    # that topic, so appending is precisely the duplicate the rotor's `already-cited` veto exists
+    # to prevent. The body is reachable from an always-loaded surface, so the index line is pure
+    # cost and the only action is to delete it. The rotor will not delete it for you — the
+    # report-never-touch rule is what keeps a routing bug from eating an entry.
+    CTX="MEMORY INDEX — the over-cap entry you just wrote is ALREADY CITED in ${RULES}, which is always loaded, so its rule is firing already and the MEMORY.md line is duplicate context. Nothing was moved and nothing is broken. Do NOT append it to ${RULES} again: DELETE the MEMORY.md bullet, or fold anything the incumbent citation is missing INTO that existing line rather than beside it. Verdict: ${DV}"
+    ;;
   verdict=exhausted*)
     CTX="MEMORY INDEX — an entry you just wrote is over the per-entry buffer cap and could NOT be routed automatically. Every over-cap line is vetoed: PINNED, the feedback-/reference-/user- name convention and an operator-voice \`type:\` stamp are absolute at the routing gate, and an unparseable or dangling line is reported, never touched. Move it by hand to ${RULES} (append VERBATIM, delete the MEMORY.md line in the same edit) or shorten the hook and leave the rule in its topic file. Verdict: ${DV}"
     ;;
