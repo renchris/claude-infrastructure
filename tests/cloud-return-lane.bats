@@ -29,7 +29,15 @@ echo "  retired s-1 (gone) — branch claude/x"
 echo "cloud-retire-terminal: examined=3 gone=1 landed=1 superseded=1 conflict=0 young-held=0 kept=0 retired=3 failed=0 dry_run=0"
 exit "${RETIRE_RC:-0}"
 EOF
-  chmod +x "$D"/*.sh
+  cat >"$D/cloud-answer.py" <<'EOF'
+#!/usr/bin/env python3
+import os, sys
+open(os.environ["CALLS"], "a").write("answer %s\n" % " ".join(sys.argv[1:]))
+sys.stdout.write("COLLECT     session_01AAAA  item=i1\n")
+sys.stdout.write("cloud-answer: read 4 active session(s) - COLLECT 1, CLEAR 3\n")
+sys.exit(int(os.environ.get("ANSWER_RC", "0")))
+EOF
+  chmod +x "$D"/*.sh "$D/cloud-answer.py"
   export CC_LANE_REPO="$BATS_TEST_TMPDIR/repo"
 }
 
@@ -116,4 +124,40 @@ row() { jq -c "select(.disposition==\"$1\")" "$CC_IDL" | tail -1; }
   printf '%s' "$output" | grep -q 'lane lock FREE'
   [ ! -d "$CC_CLOUD_STATE/.lane.lock" ]
   [ ! -s "$CALLS" ]
+}
+
+@test "the ANSWER pass runs third and journals its tally, so a routed question has a record" {
+  run bash "$LANE"
+  [ "$status" -eq 0 ]
+  [ "$(sed -n 3p "$CALLS" | cut -d' ' -f1)" = answer ]
+  a="$(row cloud-answer)"; [ -n "$a" ]
+  [ "$(printf '%s' "$a" | jq -r '.tool')" = cloud-return-lane ]
+  [ "$(printf '%s' "$a" | jq -r '.cloud_answer_rc')" = "0" ]
+  printf '%s' "$a" | jq -e '.bound_s == 300' >/dev/null
+  printf '%s' "$a" | jq -e '.tally | test("read 4 active session")' >/dev/null
+}
+
+@test "PLACEMENT: a return pass KILLED at its bound does not starve the answer pass" {
+  # This is the whole reason the answer pass is a separate pass rather than a step under the
+  # return sweep. On this box every tick since 09-04 ended `return pass rc=137 — cut by the lane
+  # bound`: one land legitimately costs 700-3,900 s inside 5,400 s. Anything sequenced INSIDE that
+  # pass is unreachable by construction, so the property that has to hold is exactly this one —
+  # the killed child ends a command, not the script, and the passes below it still run.
+  # The kill is simulated by rc, exactly as case 4 does: 137 is the signature this lane records
+  # on every real cut, and asserting on it deterministically beats racing a real timeout.
+  RETURN_RC=137 run bash "$LANE"
+  [ "$status" -eq 0 ]
+  [ "$(row cloud-return | jq -r '.cloud_return_rc')" = "137" ]
+  printf '%s' "$(row cloud-return)" | jq -e '.note | test("cut by the lane bound")' >/dev/null
+  grep -q '^answer' "$CALLS"
+  [ "$(row cloud-answer | jq -r '.cloud_answer_rc')" = "0" ]
+}
+
+@test "CC_LANE_ANSWER=0 disables the answer pass, journalled skipped with null fields" {
+  CC_LANE_ANSWER=0 run bash "$LANE"
+  [ "$status" -eq 0 ]
+  if grep -q '^answer' "$CALLS"; then echo "answer ran while disabled"; return 1; fi
+  a="$(row cloud-answer)"
+  [ "$(printf '%s' "$a" | jq -r '.cloud_answer_rc')" = "skipped" ]
+  printf '%s' "$a" | jq -e '.elapsed_s == null' >/dev/null
 }
