@@ -25,7 +25,12 @@ setup() {
   LIB="$REPO_SRC/hooks/lib/pane-modal.sh"
   [ -f "$HF" ] && [ -f "$LIB" ] || { echo "subject missing" >&2; return 1; }
 
-  export CC_FIRE_CAPACITY_GATE=off CC_FIRE_HEADROOM_GATE=off HANDOFF_ACCOUNT_SWEEP=off
+  # M11 (MACHINE_CAPACITY_V2 §11.3) — both terms of the fire gate pinned off, ONE export per line:
+  # the pin-guard ratchet (tests/handoff-fire-capacity-gate.bats _setup_gate_off) matches the literal
+  # `export CC_FIRE_HEADROOM_GATE=off`, so a combined `export A=off B=off` line reads as UNPINNED.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
+  export HANDOFF_ACCOUNT_SWEEP=off
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/no-sweep.json"
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-such-claude-accounts"
   export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/no-such-heal-lock-"
