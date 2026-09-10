@@ -143,3 +143,29 @@ voiceink
 wait-contracts
 watchdog
 workflows
+# Re-snapshot 2026-09-10 (cc-backlog b1f7763af89f): the nightly reported 234 unclassified. The 22 REAL
+# surfaces below were traced to a writer and a deletion site (or its absence) and given exact rows.
+# The ~200 per-run session-scratch files are deliberately NOT listed here: they are classified by
+# PATTERN rows, and a reference layer is the reviewed inventory of real surfaces, not of litter.
+autonomy/__pycache__
+autonomy/backlog.jsonl.claim.lock.d
+autonomy/boot-resume
+autonomy/briefs
+autonomy/capacity-fire
+autonomy/custody
+autonomy/custody-deathwatch
+autonomy/customer
+autonomy/dispatch.lock
+autonomy/expired-unread.jsonl
+autonomy/nightly-triage
+autonomy/parity-filed
+autonomy/plans
+autonomy/session-window.jsonl
+autonomy/ship-backup-disposals.jsonl
+autonomy/spawn-lineage
+autonomy/staged
+autonomy/stop-failure
+autonomy/stranded
+handoff-alarms
+history-union.jsonl
+memprobe
