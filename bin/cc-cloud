@@ -101,12 +101,17 @@
 #
 # ── the state function (total, first match wins, every arm TERMINAL) ─────────────────────────────
 #   U0 UNKNOWN      a sensor could not run (ls-remote rc!=0, unreadable declaration, no git),
-#                   or the ref VANISHED after a push and landedness is not assertable (see below).
+#                   or the ref VANISHED after a push and landedness is not assertable (see below),
+#                   or the CONTROL PLANE says the VM took a turn and there is still no ref.
 #                   NO row, `--table` says UNKNOWN, `--check` FAILS. Never a vacuous pass.
-#   C1 NOT-STARTED  no ref AND no evidence of one, past declared_at+boot_s, INSIDE life_s   ROW
+#   C1 NOT-STARTED  no ref AND no evidence of one — not a push, and not a TURN — past
+#                   declared_at+boot_s, INSIDE life_s                                        ROW
 #      …past life_s the same observation is C6 ABANDONED: a session that finished without
 #      pushing leaves exactly what one that never booted leaves, so NOT-STARTED stops being
 #      a claim this function can support. `cc-cloud inbox` is the reader that can tell them apart.
+#      …and INSIDE life_s it is U0 the moment `<id>.cp` carries `ran=1`, which is that reader's
+#      durable residue: the VM ended a turn, so "never began" is refuted by positive evidence
+#      rather than merely aged out of. See CONTROL-PLANE EVIDENCE in classify().
 #                   (or the ref exists but is STILL at its fire-time sha — see BASELINE)
 #   C2 BOOTING      same, still inside the boot budget — expected, not a fault              no row
 #   C3 LANDED       every declared path is content-present on the trunk ref                 no row
@@ -161,6 +166,11 @@
 #      by `fill-paths` only after a path set was derived from the branch's own commits). With a ref
 #      gone and NEITHER present, there is genuinely no evidence the session ever pushed, and C1
 #      still fires — that is the honest limit, not a hole.
+#   3. …but PUSHING is narrower than RUNNING, and C1's claim is about running. The third piece of
+#      evidence, obeying the same law, is the `<id>.cp` sidecar (written by `poll` through
+#      `scripts/cloud-inbox.py --record`, never deleted, `ran=1` only when the control plane showed
+#      a `post_turn_summary` — i.e. a turn that ENDED). It refutes C1 without refuting C6: past
+#      life_s "over, nothing landed" is true either way.
 # A pushed ref that is gone and whose landedness is not assertable is U0, not C1: the claim
 # "never started" has been REFUTED, and "landed" was declined, so no verdict is available.
 # `scripts/branch-prune-landed.sh` fills the path set BEFORE it deletes, so a prune from here on
@@ -200,6 +210,7 @@
 #   CC_CLOUD_GIT_BIN   git binary (git)                             CC_CLOUD_RECONCILE  on|off
 #   CC_CLOUD_BOOT_S    default boot budget (900)                    CC_CLOUD_STALL_S    (3600)
 #   CC_CLOUD_LIFE_S    default lifetime budget (21600)              CC_CLOUD_NET_TIMEOUT_S (20)
+#   CC_CLOUD_POLL_CP   poll's control-plane refresh on|off          CC_CLOUD_POLL_CP_TIMEOUT_S (20)
 set -uo pipefail
 
 SELF="$0"
@@ -219,6 +230,8 @@ DEF_BOOT="${CC_CLOUD_BOOT_S:-900}"
 DEF_STALL="${CC_CLOUD_STALL_S:-3600}"
 DEF_LIFE="${CC_CLOUD_LIFE_S:-21600}"
 NET_TIMEOUT="${CC_CLOUD_NET_TIMEOUT_S:-20}"
+POLL_CP="${CC_CLOUD_POLL_CP:-on}"
+POLL_CP_TIMEOUT="${CC_CLOUD_POLL_CP_TIMEOUT_S:-20}"
 DETAIL_MAX=44
 
 now() { if [ -n "${CC_CLOUD_NOW:-}" ]; then printf '%s' "$CC_CLOUD_NOW"; else date +%s; fi; }
@@ -704,10 +717,10 @@ trailer_supported() { # <claude-binary> → 0 yes, 1 no, 2 cannot tell
 # ── the state function ───────────────────────────────────────────────────────────────────────────
 # Emits: <state>\t<detail>\t<recover_cmd>  — exactly one line per id, always.
 classify() { # <id>
-  local id="$1" f="$STATE/$1.decl" seen="$STATE/$1.seen"
+  local id="$1" f="$STATE/$1.decl" seen="$STATE/$1.seen" cp="$STATE/$1.cp"
   local branch remote repo paths trunk url dat boot stall life
   local sha rc n age url_cmd first_seen sha_age base_sha base_probe seen_sha paths_src pushed
-  local item ask_cmd
+  local item ask_cmd ran
 
   branch="$(dfield "$f" branch)"
   remote="$(dfield "$f" remote)"
@@ -742,6 +755,31 @@ classify() { # <id>
   paths_src="$(dfield "$f" paths_src)"
   if [ -n "$seen_sha" ] || [ -n "$paths_src" ]; then pushed=1; else pushed=0; fi
 
+  # ── CONTROL-PLANE EVIDENCE: the third durable fact, and the only one that refutes "never began" ──
+  # Push evidence answers "did this session PUSH?", which is a strictly narrower question than "did
+  # it RUN". A session that booted, worked and correctly DECLINED — or finished and had nothing to
+  # push, or ended a turn asking us a question — leaves no ref and no `.seen`, i.e. the identical
+  # observation to a VM that never existed. Measured 2026-08-23 on 133 declarations the board filed
+  # NOT-STARTED: 130 answered `GET /v1/code/sessions` and 113 had taken a turn. The label was wrong
+  # for 85% of them, and it is not cosmetic — `cc-backlog`'s reap maps NOT-STARTED to `open` and
+  # RETURNS the item to the wave, so every false one re-dispatches work that was already done.
+  #
+  # THE READ STAYS OFF THE HOT LOOP. This function is disk + `ls-remote` by contract and that does
+  # not move: `.cp` is a durable sidecar written by an arm that already networks (`poll`, via
+  # `scripts/cloud-inbox.py --record`), read here exactly as `.seen` is. `ran=1` means the record
+  # carried a `post_turn_summary` category — a turn ENDED, which only a VM that ran can produce.
+  # Deliberately narrower than "the record exists": a created-but-never-booted session still
+  # answers the GET, so presence alone cannot carry the claim (memory: lookup-miss-is-not-absence,
+  # met from the other side — here a HIT is what must be constrained, not a miss).
+  #
+  # ABSENT ⇒ NOTHING CHANGES. No sidecar is no evidence, which is precisely what every arm below
+  # already assumed, so this cannot flip a verdict on a session nobody has probed.
+  ran="$(dfield "$cp" ran)"
+
+  # The reader that CAN separate the two causes, resolved once: both arms below hand it over.
+  item="$(dfield "$f" item)"
+  if [ -n "$item" ]; then ask_cmd="cc-cloud inbox --item $item"; else ask_cmd="cc-cloud inbox --all"; fi
+
   # C1/C2 require BOTH: no ref now AND no evidence there ever was one. Reaching this arm on
   # evidence-of-push alone is the defect below.
   #
@@ -761,17 +799,34 @@ classify() { # <id>
   # the pushed-but-unlanded C6 does. It is NOT U0 UNKNOWN: U0 means the sensor could not run and
   # therefore emits no row (see the `--check` header), and here the sensor ran and answered.
   #
-  # The recover command is the one reader that CAN tell the two apart — `cc-cloud inbox` probes the
-  # control plane, which knows whether the VM ever existed. classify() deliberately does not: it is
-  # disk + ls-remote, and adding a network control-plane read to the board's hot loop is a different
-  # change from refusing to overclaim in this one.
+  # The recover command is the one reader that can PROBE the two apart live — `cc-cloud inbox`,
+  # which reads the control plane. classify() still never networks beyond ls-remote; what it now
+  # has is that reader's DURABLE RESIDUE (`ran`, above), which costs a disk read.
+  #
+  # WHY UNKNOWN AND NOT A NEW STATE. The row schema is FROZEN (state ∈ NOT-STARTED|STALLED|
+  # ABANDONED) because cc-blockers consumes it, and U0's contract is exactly the situation: the
+  # sensor RAN and answered, "never began" is REFUTED by positive evidence, C3 LANDED was declined
+  # below, and disk cannot tell a session still working from one that finished without pushing. A
+  # fact we cannot establish yields no verdict — the same arm this file already takes for a ref
+  # that vanished after a push. Downstream that is the correct actuation, not merely a quieter one:
+  # `cc-backlog`'s `cloud_state` returns rc 2 CANNOT-TELL on UNKNOWN and ABSTAINS, where
+  # NOT-STARTED would have reopened the item and fired a second worker at finished work.
+  #
+  # It does NOT go quiet: `--check` FAILS on UNKNOWN, so the session still surfaces — it surfaces
+  # as a question for the reader that can answer it instead of as a false claim about the past.
   if [ -z "$sha" ] && [ "$pushed" -eq 0 ]; then
     if [ "$age" -gt "$life" ]; then
-      item="$(dfield "$f" item)"
-      if [ -n "$item" ]; then ask_cmd="cc-cloud inbox --item $item"; else ask_cmd="cc-cloud inbox --all"; fi
+      # PAST life_s THE EVIDENCE CHANGES NOTHING, and that is deliberate. "Past its lifetime,
+      # nothing landed" is true of a session that ran and of one that never did, so C6 says only
+      # what is true and keeps rowing. Suppressing it on `ran=1` would hide a finished-but-unlanded
+      # session, which is the population the board exists for.
       printf 'ABANDONED\tno ref, no push evidence, past %s\t%s\n' "$(dur "$life")" "$ask_cmd"
     elif [ "$age" -gt "$boot" ]; then
-      printf 'NOT-STARTED\tno ref after %s (boot budget %s)\t%s\n' "$(dur "$age")" "$(dur "$boot")" "$url_cmd"
+      if [ "$ran" = "1" ]; then
+        printf 'UNKNOWN\tcontrol plane: ran, never pushed\t%s\n' "$ask_cmd"
+      else
+        printf 'NOT-STARTED\tno ref after %s (boot budget %s)\t%s\n' "$(dur "$age")" "$(dur "$boot")" "$url_cmd"
+      fi
     else
       printf 'BOOTING\tno ref yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
     fi
@@ -799,9 +854,20 @@ classify() { # <id>
   # probe actually answered: an unmeasured baseline abstains rather than being read as an empty one.
   base_probe="$(dfield "$f" base_probe)"
   base_sha="$(dfield "$f" base_sha)"
+  #
+  # THE SAME REFUTATION BINDS HERE. "The ref has not moved since the fire" is the same fact as "no
+  # ref" one level down (the header says so), so it inherits the same defect and the same cure: a
+  # session that ran onto a re-used branch name and pushed nothing is indistinguishable from one
+  # that never booted onto it, and only the control plane separates them. Fixing one NOT-STARTED
+  # emitter and not the other would leave the wrong label reachable by whichever arm the fixture
+  # happened to miss.
   if [ "$base_probe" = "ok" ] && [ -n "$base_sha" ] && [ "$sha" = "$base_sha" ]; then
     if [ "$age" -gt "$boot" ]; then
-      printf 'NOT-STARTED\tref still at pre-fire sha after %s\t%s\n' "$(dur "$age")" "$url_cmd"
+      if [ "$ran" = "1" ]; then
+        printf 'UNKNOWN\tcontrol plane: ran, ref unmoved\t%s\n' "$ask_cmd"
+      else
+        printf 'NOT-STARTED\tref still at pre-fire sha after %s\t%s\n' "$(dur "$age")" "$url_cmd"
+      fi
     else
       printf 'BOOTING\tno push yet, %s into a %s budget\t-\n' "$(dur "$age")" "$(dur "$boot")"
     fi
@@ -1039,6 +1105,37 @@ cmd_retire() {
   printf 'retired %s%s\n' "$id" "${verdict:+ ($verdict)}"
 }
 
+# ── poll_cp — the control-plane sidecar's WRITER, and why it lives on the no-ref path ────────────
+# `classify()` reads `<id>.cp` and will not assert NOT-STARTED over it, but a sidecar with no
+# SCHEDULED writer is a detector with no owner: the cure would be correct and permanently inert.
+# `poll` is the arm that already networks per session and already runs unattended — the autonomy
+# sweep's launchd job reaches it through `scripts/cloud-return.sh --sweep`, which calls
+# `cc-cloud poll --only <scope>` — so it is where the evidence gets refreshed.
+#
+# SCOPED TO THE AT-RISK POPULATION, NEVER THE BOARD. The probe fires only for a session whose ref
+# is ABSENT right now — exactly the set C1 can convict — so its cost is a function of how many
+# sessions might be mislabelled, not of how many exist. A session with a ref needs no control-plane
+# read: `classify()` has a heartbeat for it already.
+#
+# ONE PROJECTION, ONE READER. It shells out to `cloud-inbox.py --record`, which decodes the control
+# plane through `cloud-create-api.py --verify` — the same producer the `inbox` reader consumes. A
+# second decoding here would be a second source of truth that cannot learn the API changed
+# (memory: sibling-auditors-must-share-the-state-model), and this file is deliberately jq-free.
+#
+# FAILURE LEAVES NOTHING BEHIND. No account, no python, an unreachable API, a timeout: every one
+# writes no sidecar, so the absence of evidence stays the absence of evidence and classify()'s
+# pre-existing verdict is untouched. This arm can only ever ADD a refutation, never manufacture one.
+poll_cp() { # <id> → 0 always; the sidecar is best-effort evidence, not a precondition
+  [ "$POLL_CP" = "off" ] && return 0
+  local id="$1"
+  [ -n "$(dfield "$STATE/$id.decl" account)" ] || return 0
+  [ -f "$ROOT/scripts/cloud-inbox.py" ] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 "$ROOT/scripts/cloud-inbox.py" --state "$STATE" --id "$id" --record --all \
+    --jobs 1 --timeout "$POLL_CP_TIMEOUT" >/dev/null 2>&1 || true
+  return 0
+}
+
 # The ONLY mutator of the heartbeat sidecar. A stall verdict needs history and history needs a
 # writer; keeping it out of --json is what lets the renderers stay pure reads.
 cmd_poll() {
@@ -1058,7 +1155,7 @@ cmd_poll() {
     f="$STATE/$id.decl"; seen="$STATE/$id.seen"
     sha="$(remote_sha "$(dfield "$f" repo)" "$(dfield "$f" remote)" "$(dfield "$f" branch)")"; rc=$?
     [ "$rc" -eq 0 ] || { printf 'UNKNOWN %s (sensor failed — sidecar untouched)\n' "$id"; continue; }
-    [ -n "$sha" ] || { printf 'no-ref  %s\n' "$id"; continue; }
+    [ -n "$sha" ] || { printf 'no-ref  %s\n' "$id"; poll_cp "$id"; continue; }
     prev="$(dfield "$seen" sha)"
     if [ "$prev" != "$sha" ]; then
       { printf 'sha=%s\n' "$sha"; printf 'since=%s\n' "$n"; } > "$seen"
@@ -1118,7 +1215,7 @@ cmd_gc() { # [--days N] [--dry-run] → archives cold retired declarations under
       printf 'would-archive %s (retired %sd ago)\n' "$b" "$(( age / 86400 ))"
     else
       mkdir -p "$arch" 2>/dev/null || { echo "cc-cloud gc: cannot create $arch" >&2; return 1; }
-      # Every sidecar moves with its declaration — .retired, .seen, .returned, .land-refused — so
+      # Every sidecar moves with its declaration — .retired, .seen, .cp, .returned, .land-refused — so
       # the archived set is the WHOLE record of that session and nothing is left behind to be read
       # as a live orphan by a consumer globbing one suffix.
       mv "$STATE/$b".* "$arch/" 2>/dev/null || { skipped=$((skipped + 1)); continue; }
@@ -1160,6 +1257,10 @@ cmd_show() {
   cat "$f"
   [ -f "$STATE/$id.retired" ] && cat "$STATE/$id.retired"
   [ -f "$STATE/$id.seen" ] && cat "$STATE/$id.seen"
+  # The control-plane sidecar is EVIDENCE the verdict below may rest on, so it belongs in the same
+  # dump as the declaration and the heartbeat: a reader asking "why is this UNKNOWN and not
+  # NOT-STARTED" must be able to see the fact that refuted the claim without a second command.
+  [ -f "$STATE/$id.cp" ] && cat "$STATE/$id.cp"
   line="$(classify "$id")"
   state="${line%%	*}"; line="${line#*	}"; detail="${line%%	*}"; rcmd="${line#*	}"
   printf -- '--\nstate=%s\ndetail=%s\nrecover=%s\n' "$state" "$detail" "$rcmd"
@@ -1438,6 +1539,24 @@ do_selftest() {
   # fixtures. Past the life budget NOT-STARTED is no longer a claim this function can support.
   CC_CLOUD_NOW=$((2000000000 + 30000))
   _st_expect "past the LIFE budget that same absent ref is ABANDONED, not NOT-STARTED" ABANDONED boot
+
+  # ONE MORE TURN OF THE SAME SCREW, on the SAME declaration: past `boot` the absent ref reads
+  # NOT-STARTED only while nothing REFUTES it. The control plane's durable residue does — `ran=1`
+  # means a turn ENDED, which a VM that never booted cannot produce — so the verdict becomes U0,
+  # and cc-backlog's reap then abstains instead of re-dispatching finished work.
+  CC_CLOUD_NOW=$((2000000000 + 5000))
+  printf 'probed_at=2000000000\nstatus_category=need_input\nran=1\n' > "$STATE/boot.cp"
+  _st_expect "control-plane turn evidence refutes NOT-STARTED — it is UNKNOWN, not a claim" UNKNOWN boot
+  # …and it does NOT reach C6: past the lifetime "over, nothing landed" is true either way, so the
+  # refutation must not make the board quieter about a finished-but-unlanded session.
+  CC_CLOUD_NOW=$((2000000000 + 30000))
+  _st_expect "the same evidence does NOT withdraw ABANDONED past the life budget" ABANDONED boot
+  # A record WITHOUT a turn is what a created-but-never-booted session yields, and 130 of the 133
+  # measured sessions answered the GET — so presence of a probe cannot carry the claim.
+  CC_CLOUD_NOW=$((2000000000 + 5000))
+  printf 'probed_at=2000000000\nstatus_bucket=running\n' > "$STATE/boot.cp"
+  _st_expect "a probe record with no TURN leaves NOT-STARTED standing" NOT-STARTED boot
+  rm -f "$STATE/boot.cp"
   CC_CLOUD_NOW=2000000000
 
   cmd_declare --id gone --branch feat/y --remote "$_ST_D/nonexistent.git" --repo "" >/dev/null

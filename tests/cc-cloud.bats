@@ -1040,3 +1040,128 @@ setup() {
   run "$CLOUD" --check
   [ "$status" -ne 0 ]
 }
+
+# ── CONTROL-PLANE EVIDENCE: C1's claim is about RUNNING, and push evidence only proves PUSHING ────
+# Measured 2026-08-23 over 133 declarations the board filed NOT-STARTED: 130 answered
+# `GET /v1/code/sessions` and 113 had taken a turn. A session that booted, ran and correctly
+# DECLINED leaves no ref and no `.seen` — the identical observation to a VM that never existed —
+# and `cc-backlog`'s reap maps NOT-STARTED to `open`, so every false one RE-DISPATCHES finished
+# work. `<id>.cp` is the third durable evidence file, written by `poll` through
+# `cloud-inbox.py --record`; here it is written directly, which keeps these cases hermetic (no
+# network, no stub of the control plane — the subject under test is the READER of the sidecar).
+
+@test "C1 abstains over control-plane evidence: a session that TOOK A TURN is not NOT-STARTED" {
+  have_subject
+  r="$(bare remcp)"
+  cloud declare --id ranit --branch feat/a --remote "$r" --repo "" --boot 900 --life 21600 --item ab12cd34
+
+  # CONTROL, on the SAME declaration with only the EVIDENCE added: with no sidecar the pre-existing
+  # verdict must be unchanged. Without this arm the case could pass off a C1 that had simply
+  # stopped working, rather than off the refutation.
+  export CC_CLOUD_NOW=$((T0 + 901))
+  [ "$(tstate ranit)" = "NOT-STARTED" ]
+  [ "$(rows)" -eq 1 ]
+
+  # The control plane ended a turn for this session. "Never began" is REFUTED by positive evidence;
+  # C3 LANDED was not asserted; and disk cannot tell a session still working from one that finished
+  # without pushing — so no verdict is available.
+  printf 'probed_at=%s\nstatus_category=need_input\nran=1\n' "$T0" > "$CC_CLOUD_STATE/ranit.cp"
+  [ "$(tstate ranit)" = "UNKNOWN" ]
+
+  # IT MUST NOT ROW. A NOT-STARTED row is what the reap reads to RETURN the item to the wave; that
+  # re-dispatch onto work already done is the whole cost of the wrong label.
+  [ "$(rows)" -eq 0 ]
+
+  # ...and it must not go QUIET either. --check fails on UNKNOWN, so the session still surfaces —
+  # as a question for the reader that can answer it, instead of as a false claim about the past.
+  run "$CLOUD" --check
+  [ "$status" -ne 0 ]
+
+  # and it hands over that reader, carrying the declaration's own item id.
+  run cloud show ranit
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'recover=cc-cloud inbox --item ab12cd34'
+  # the evidence itself is in the same dump — "why is this UNKNOWN" needs no second command
+  printf '%s' "$output" | grep -q '^ran=1$'
+}
+
+@test "only a TURN refutes C1 — a probe record on its own does not, because a dead VM still answers" {
+  have_subject
+  r="$(bare rembucket)"
+  cloud declare --id bucketonly --branch feat/a --remote "$r" --repo "" --boot 900 --life 21600
+  export CC_CLOUD_NOW=$((T0 + 901))
+
+  # A session that was CREATED and never booted still returns a record with a status_bucket: 130 of
+  # the 133 answered the GET. Presence of a record therefore cannot carry the claim, and a sidecar
+  # written from one must not be read as if it did.
+  printf 'probed_at=%s\nstatus_bucket=running\nworker_status=idle\n' "$T0" > "$CC_CLOUD_STATE/bucketonly.cp"
+  [ "$(tstate bucketonly)" = "NOT-STARTED" ]
+  [ "$(rows)" -eq 1 ]
+
+  # POSITIVE CONTROL on the same fixture: add the one field that does carry it and the verdict moves.
+  printf 'probed_at=%s\nstatus_bucket=running\nstatus_category=need_input\nran=1\n' "$T0" \
+    > "$CC_CLOUD_STATE/bucketonly.cp"
+  [ "$(tstate bucketonly)" = "UNKNOWN" ]
+  [ "$(rows)" -eq 0 ]
+}
+
+@test "C6 ABANDONED is NOT withdrawn by the same evidence — past life_s it is true either way" {
+  have_subject
+  r="$(bare remlife)"
+  cloud declare --id ranold --branch feat/a --remote "$r" --repo "" --boot 900 --life 21600 --item ab12cd34
+  printf 'probed_at=%s\nstatus_category=need_input\nran=1\n' "$T0" > "$CC_CLOUD_STATE/ranold.cp"
+
+  # Inside the life budget the evidence refutes C1 (control, and the arm above).
+  export CC_CLOUD_NOW=$((T0 + 901))
+  [ "$(tstate ranold)" = "UNKNOWN" ]
+
+  # Past it, "over, nothing landed" is true whether or not the VM ran, so C6 must still fire and
+  # still ROW. Suppressing it here would hide the finished-but-unlanded population the board exists
+  # for — a fix that made the board quieter instead of righter.
+  export CC_CLOUD_NOW=$((T0 + 21601))
+  [ "$(tstate ranold)" = "ABANDONED" ]
+  [ "$(rows)" -eq 1 ]
+  [ "$(states)" = "ABANDONED" ]
+}
+
+@test "the BASELINE NOT-STARTED arm takes the same refutation — an unmoved ref is the same fact" {
+  have_subject
+  r="$(bare rembase)"
+  # Push FIRST, then declare: the declaration's fire-time baseline is that sha, so "the session has
+  # produced nothing" is `sha == base_sha` — the header's own words, the same fact as "no ref".
+  push_ref "$r" feat/reused >/dev/null
+  cloud declare --id reusedran --branch feat/reused --remote "$r" --repo "" --boot 900 --item ab12cd34
+  export CC_CLOUD_NOW=$((T0 + 901))
+
+  # CONTROL: with no evidence this arm is unchanged.
+  [ "$(tstate reusedran)" = "NOT-STARTED" ]
+  [ "$(rows)" -eq 1 ]
+
+  # Fixing one NOT-STARTED emitter and not the other would leave the wrong label reachable by
+  # whichever arm a fixture happened to miss.
+  printf 'probed_at=%s\nstatus_category=need_input\nran=1\n' "$T0" > "$CC_CLOUD_STATE/reusedran.cp"
+  [ "$(tstate reusedran)" = "UNKNOWN" ]
+  [ "$(rows)" -eq 0 ]
+}
+
+@test "poll's control-plane refresh is OFF-switchable and never invents a sidecar on failure" {
+  have_subject
+  r="$(bare rempoll)"
+  cloud declare --id pollcp --branch feat/a --remote "$r" --repo "" --boot 900
+
+  # No `account=` on the declaration ⇒ --verify cannot be called at all, so poll must write nothing
+  # rather than a sidecar built out of an instrument failure. This is the fail-closed direction:
+  # absence of evidence stays absence of evidence.
+  run cloud poll
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'no-ref  pollcp'
+  [ ! -f "$CC_CLOUD_STATE/pollcp.cp" ]
+
+  # The kill switch is honoured too, and poll's own contract does not move: it still reports the
+  # ref state for every id it walked.
+  export CC_CLOUD_POLL_CP=off
+  run cloud poll
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'no-ref  pollcp'
+  [ ! -f "$CC_CLOUD_STATE/pollcp.cp" ]
+}
