@@ -4227,6 +4227,92 @@ adopt_orphan_stamp() { # $1=fired-dir $2=cwd $3=self-pane → 0 adopted (echoes 
   return 0
 }
 
+# ---- A RECYCLE INHERITS THE SELF-RETIRE CONTRACT (item fe740e799fd5) ---------------------------
+# THE DESIGN CALL THIS ANSWERS, written down because picking it SILENTLY is what produced the
+# defect. A `--recycle` of a pane that IS a fired peer INHERITS that pane's self-retire contract; it
+# does not drop it. Three receipts, none of them taste:
+#
+#   · THE HOUSE ALREADY ANSWERED THE SAME QUESTION FOR THE OTHER LIVE CONTRACT a recycled pane
+#     holds. inherit_recycle_goal (:5089, called at :11070) re-arms the PREDECESSOR's live /goal
+#     condition on the successor, with CC_RECYCLE_GOAL_INHERIT defaulting to 1. Self-retire is the
+#     same shape: an obligation held by the PANE, not by whichever process was running in it. Two
+#     opposite answers to one question in one script is the drift this comment exists to prevent.
+#   · A DROPPED CONTRACT DOES NOT MERELY IDLE A PANE. The originator's custody debt (bin/cc-custody)
+#     is discharged by THIS pane's self-close and by nothing else, so dropping it makes the
+#     originator's ✅ certificate mechanically unreachable for good — not a lost pane, a stuck lead.
+#   · CLAUDE.md § Context Stewardship names --recycle the DEFAULT succession over /handoff ("reach
+#     for Recycle first"), so dropping the contract on the default path retires the feature on its
+#     main road — the pane-427 cost one item upstream (c163f42390a3).
+#
+# CONFERRED ONLY ON POSITIVE PROOF, which is what keeps the ORIGIN invariant whole. `valid` and
+# nothing else:
+#   · absent  — this pane never held a contract, and a recycle may not MINT one. An operator's own
+#               session recycling into a worktree must not become self-retiring.
+#   · stale   — a stamp for this id exists and names a different cwd (a live id-reuse tenant).
+#   · spent   — the contract under this id was already used up.
+# Reaching past either of the last two would hand one pane two contradictory contracts, which is
+# the same reasoning adopt_orphan_stamp and the stamp-repair path already state for themselves.
+#
+# THE REMOTE FORM ABSTAINS (RCY_REMOTE=1, --source-pane). There the pane belongs to somebody else,
+# so $PWD is the CALLER's cwd and the tenancy compare would be asking about the wrong directory —
+# an `unknown`-class answer dressed up as a verdict. Abstaining leaves today's behaviour exactly.
+hf_recycle_inherits_peer() { # $1=fired-dir $2=pane $3=this-pane-cwd $4=remote-flag → rc 0 iff inherited
+  local dir="${1:-}" pane="${2:-}" cwd="${3:-}" remote="${4:-0}"
+  [ "$remote" = 0 ] || return 1
+  [ -n "$dir" ] && [ -n "$pane" ] && [ -n "$cwd" ] || return 1
+  [ "$(fired_stamp_tenancy "$dir/$pane.json" "$cwd")" = valid ] || return 1
+  return 0
+}
+
+# ---- …and a RELOCATING recycle must carry the stamp's cwd with it (item fe740e799fd5) -----------
+# THE SECOND HALF OF THE SAME DEFECT, and the one that HARD-REFUSES rather than merely idling.
+# `--recycle --worktree/--cwd` (RECYCLE_RELOC=1) relaunches THE SAME PANE in a NEW directory. The
+# stamp is pane-keyed and its oracle is cwd, so an untouched stamp then names the OLD dir,
+# fired_stamp_tenancy answers `stale`, and the successor's self-close exits 2 with "the fired-peer
+# stamp for pane X belongs to a DIFFERENT session" — measured end-to-end, rc 2, against rc 0 for the
+# identical stamp read at its own cwd. Nothing upstream rescues it: adoption and the c163f42390a3
+# repair both run ONLY on `absent` and deliberately never reach past a stamp that says something.
+#
+# MIGRATE, DO NOT RE-MINT. mark_fired_peer would rebuild the record from this run's globals and lose
+# every field the ORIGINAL fire recorded — originator, notifyBack (the address
+# sc_announce_before_retire enforces the ping to), marker, engagedAt, engageLatencyS. The cwd is the
+# only fact the relocation changed, so the cwd is the only field that moves; `recycledFrom` /
+# `recycledAt` are ADDITIVE provenance, exactly as adopt_orphan_stamp's adoptedFrom/adoptedAt are,
+# so a migrated stamp is never mistaken for one a fire wrote here.
+#
+# THE OLD by-cwd POINTER IS LEFT ALONE, deliberately. write_fired_cwd_index below repoints the NEW
+# cwd; the OLD key still names this pane, and that is harmless by the index's own documented
+# contract — every consumer re-validates the pointer against the pane-keyed RECORD (find_open_stamp_
+# for_cwd re-reads .cwd and falls through to the scan when it does not check out), so a leftover
+# pointer costs a scan and can never produce a verdict. DELETING it would be the riskier act: the
+# index is last-writer-wins, and a genuinely different peer fired into that old worktree may already
+# own the key by the time this runs.
+hf_migrate_peer_stamp() { # $1=fired-dir $2=pane $3=new-cwd → best-effort, always 0
+  local dir="${1:-}" pane="${2:-}" newcwd="${3:-}" old tmp
+  [ -n "$dir" ] && [ -n "$pane" ] && [ -n "$newcwd" ] || return 0
+  [ -s "$dir/$pane.json" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  # Resolve the destination the same way fired_stamp_tenancy will read it back, or the migration
+  # would write a /tmp where the compare expects a /private/tmp and manufacture the very `stale` it
+  # is here to clear.
+  newcwd="$(cd "$newcwd" 2>/dev/null && pwd -P)" || return 0
+  [ -n "$newcwd" ] || return 0
+  old="$(jq -r '.cwd // ""' "$dir/$pane.json" 2>/dev/null || true)"
+  [ "$old" != "$newcwd" ] || return 0             # nothing moved (a same-dir recycle) ⇒ no write
+  tmp="$dir/.$pane.recycle.$$"
+  if jq --arg c "$newcwd" --arg from "$old" --arg at "$(_iso_now)" \
+       '. + {cwd:$c, recycledFrom:$from, recycledAt:$at}' "$dir/$pane.json" > "$tmp" 2>/dev/null \
+     && [ -s "$tmp" ] && mv -f "$tmp" "$dir/$pane.json" 2>/dev/null; then
+    write_fired_cwd_index "$dir" "$pane" "$newcwd"
+    # LEGIBILITY (R10), the standard adoption and repair hold themselves to: a pane that keeps its
+    # own authorisation across a move says so, to stderr, never only in-pane.
+    echo "→ recycle: fired-peer stamp MIGRATED with the pane — cwd is now $newcwd (was ${old:-unset}). The self-retire contract is INHERITED, not re-minted: originator, back-channel and marker are the original fire's." >&2
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+
 # ---- P0-15 role indirection (SO-1 ping-to-dead-pane break) ------------------------------------
 # A role file names the CURRENT pane for a logical role (e.g. "operator"); role-addressed pings
 # follow it, so a recycle/self-close that moves the desk to a new pane never strands a pending
@@ -9305,6 +9391,28 @@ NC="nocorrect "
 # self-retires. BACK_SID mirrors FIRING_SID (the spawn anchor), computed inline to stay self-contained.
 WANT_SELF_RETIRE=0
 [ "$SELF_RETIRE" = 1 ] && [ "$RECYCLE" = 0 ] && WANT_SELF_RETIRE=1
+# ---- THE INHERITED CONTRACT (item fe740e799fd5) -------------------------------------------------
+# WANT_SELF_RETIRE stays exactly as it was, and that is deliberate rather than timid: it is the
+# BOOKKEEPING flag, and four other sites read it — mark_fired_peer at the two fire-cleanup/spawn
+# call sites (which would RE-MINT a stamp this pane already holds, losing the original fire's
+# originator/notifyBack/marker) and the handoffs.jsonl class label. A recycle needs none of those; a
+# recycle needs the one thing the stamp cannot supply, which is the successor KNOWING it owes a ping
+# and a close. So the TRAILER gets its own flag and the bookkeeping flag is left untouched.
+#
+# WHY THE BRIEF AND NOT JUST THE STAMP. The measured split (item fe740e799fd5, verified 2026-09-09):
+# a SAME-DIR recycle leaves a valid stamp untouched, so self-close is already PERMITTED there — the
+# filed claim that a recycled peer "can no longer self-close" is true of the RELOCATING form only.
+# What a same-dir recycle really loses is the CONTRACT TEXT: the successor is never told it is a
+# fired peer, so it finishes and idles (the deference defect the trailer exists to prevent), and
+# fired_contract_in_my_brief can never re-derive its status if the stamp is ever lost — the
+# c163f42390a3 repair path is unreachable for a recycled peer without this.
+RCY_INHERIT_PEER=0
+if [ "$RECYCLE" = 1 ] \
+   && hf_recycle_inherits_peer "$FIRED_DIR" "${SID:-}" "$PWD" "${RCY_REMOTE:-0}"; then
+  RCY_INHERIT_PEER=1
+fi
+SELF_RETIRE_TRAILER="$WANT_SELF_RETIRE"
+[ "$SELF_RETIRE" = 1 ] && [ "$RCY_INHERIT_PEER" = 1 ] && SELF_RETIRE_TRAILER=1
 # ---- BACK-CHANNEL BY DEFAULT (2026-08-08) ------------------------------------------------------
 # Measured over 7 days of real fires: 8 of 301 carried a back-channel. One-way was the NORM, not the
 # exception — so a firing session that survives its fire routinely had NO completion signal, and
@@ -9333,7 +9441,7 @@ fi
 # "--recycle: original used as-is" assertion in notify-back.bats meaningful rather than merely passing.
 RECYCLE_VERIFY=0 RECYCLE_MARKER=""
 [ "$RECYCLE" = 1 ] && [ "$DRY" = 0 ] && [ -z "$RESUME_LAUNCHER" ] && RECYCLE_VERIFY=1   # resume mode verifies by transcript, not marker
-if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 1 ] || [ "$RECYCLE_VERIFY" = 1 ]; then
+if [ -n "$NOTIFY_BACK" ] || [ "$SELF_RETIRE_TRAILER" = 1 ] || [ "$ENGAGE_VERIFY" = 1 ] || [ "$RECYCLE_VERIFY" = 1 ]; then
   [ -f "$PROMPT_FILE" ] || { echo "!! prompt trailer: prompt file not found: $PROMPT_FILE" >&2; exit 1; }
   PF_NB="$(mktemp "${TMPDIR:-/tmp}/handoff-prompt-nb-XXXXXX")" || { echo "!! prompt trailer: mktemp failed" >&2; exit 1; }
   cp "$PROMPT_FILE" "$PF_NB" || { echo "!! prompt trailer: could not copy prompt" >&2; exit 1; }
@@ -9410,7 +9518,7 @@ if [ -n "$NOTIFY_BACK" ] || [ "$WANT_SELF_RETIRE" = 1 ] || [ "$ENGAGE_VERIFY" = 
       printf '%s\n' 'do NOT hand-write mailbox files yourself.)'
     } >> "$PF_NB"
   fi
-  if [ "$WANT_SELF_RETIRE" = 1 ]; then
+  if [ "$SELF_RETIRE_TRAILER" = 1 ]; then
     # shellcheck disable=SC2016  # $HOME below is LITERAL guidance for the fired reader, not a shell expansion
     {
       printf '\n'
@@ -9872,6 +9980,22 @@ elif [ "$RECYCLE" = 1 ] && [ "$RECYCLE_RELOC" = 0 ]; then LAUNCH_DIR="$PWD"
 elif [ -n "$WORKTREE" ]; then LAUNCH_DIR="$WT"
 elif [ -n "$CWD" ];      then LAUNCH_DIR="$CWD"
 else                          LAUNCH_DIR="$REPO"
+fi
+
+# ---- RELOCATING RECYCLE: carry the inherited peer stamp to the new cwd (item fe740e799fd5) -------
+# HERE, and not one line earlier: LAUNCH_DIR is the first point at which the destination is FINAL,
+# and this is the same site the succession-lineage edge below picks for the same reason ("the ONE
+# site every dir-changing succession passes through", and its own comment already names
+# `--recycle --worktree` as one of the three).
+#
+# GATED ON DRY=0, like every other side effect on this path. A dry run relaunches nothing, so the
+# pane never moves — migrating its stamp would leave the store describing a relocation that did not
+# happen, which is strictly worse than the stale stamp it was fixing.
+#
+# RECYCLE_RELOC only: a same-dir recycle's stamp already names $PWD (hf_migrate_peer_stamp
+# short-circuits on that too, so this is belt-and-braces rather than the only guard).
+if [ "$RCY_INHERIT_PEER" = 1 ] && [ "$RECYCLE_RELOC" = 1 ] && [ "$DRY" = 0 ]; then
+  hf_migrate_peer_stamp "$FIRED_DIR" "$SID" "${LAUNCH_DIR:-}" || true
 fi
 
 # ── SUCCESSION LINEAGE EDGE (row 4de3d0f9c0e1, prerequisite 2) ──────────────────────────────────
