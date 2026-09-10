@@ -1,5 +1,5 @@
 ---
-status: done
+status: complete
 ---
 
 # Account-agnostic agent state — audit + repair
@@ -238,7 +238,14 @@ none of them is part of this item's gap.
 ## Close — the frozen scope is met, re-measured 17 days after W3 (2026-09-09)
 
 The plan carried `status: open` while all four waves were complete; the frontmatter was the stale
-thing, not the work. Verified this close, by content on trunk and against the live fleet rather than
+thing, not the work.
+
+⚠️ **The terminal word is `complete`, not `done`.** `find-plan.sh` `plan_status()` accepts exactly
+`open | in-progress | complete | superseded` (plus the aliases `in_progress` and `completed`), and
+maps anything else to **`unknown`** — which `--list-open` does NOT exclude. `plan-phase-scan.sh
+--falsify` clause (a) then keys on `complete|superseded`, so a plan closed as `done` never satisfies
+its own stored falsifier and its `plan-open` backlog row stays re-dispatchable forever. This close
+was first written as `done` and corrected before it could do that. Verified this close, by content on trunk and against the live fleet rather than
 from the wave prose:
 
 | Frozen-scope clause | Evidence |
