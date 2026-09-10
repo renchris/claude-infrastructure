@@ -55,6 +55,20 @@ setup() {
   FIRED="$HOME/.claude/cc-fired"; mkdir -p "$FIRED"
   export CC_FIRED_DIR="$FIRED"
 
+  # THE KITTY TRANSPORT — the seam this suite stubbed HALF of (found 2026-09-09, item fe740e799fd5).
+  # Stubbing cc-in-kitty fixtures the ANCESTRY VERDICT ("am I in kitty") and says nothing about the
+  # QUERY, so `kt ls` still ran the operator's real `kitty @ ls`. This box has a live kitty whose
+  # window ids are small integers — and window 7 exists (pid 17430), which is the very id case 9
+  # asserts on. pane_ownership therefore resolved a REAL pid for what the fixture believes is a
+  # made-up pane and returned `not-mine`, where every case here needs `unknown`. Case 9 went red on
+  # TRUNK's untouched script as well as on a lander's, for the first time in 4,619 recorded lands.
+  # The header above already claimed "the operator's real kitty and real panes are never reachable";
+  # this is what makes that true. The subject needed no change — bin/cc-kitty-bin already honours an
+  # explicit CC_TERM_KITTY verbatim or refuses — the pin was simply never set here.
+  # A NONEXISTENT path is the right stub: the query fails, the verdict is `unknown`, and the subject
+  # degrades to exactly the documented pre-gate behaviour these cases were written against.
+  export CC_TERM_KITTY="$HOME/.claude/bin/no-such-kitty"
+
   # The it2 shim must EXIST or handoff-fire's `sed … | head -1` REAL_IT2 probe aborts the script
   # under pipefail before any gate runs (same fixture as tests/handoff-selfclose-session-pin.bats).
   printf '#!/bin/bash\nREAL_IT2="%s"\nexit 0\n' "$HOME/.claude/bin/it2" > "$HOME/.claude/bin/it2"
