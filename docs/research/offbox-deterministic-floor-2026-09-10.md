@@ -6,9 +6,9 @@ instability-dominated."* Filed 2026-09-08T22:00Z off
 `docs/research/offbox-green-floor-refutation-2026-09-08.md`.
 
 **The finding, stated first:** the fork stays closed, and it is now closed for a *mechanical* reason
-rather than a statistical one. Two suites — `mcp-no-inherit` and `mcp-ssot-wire` — were red in **12
-of 12** clean post-cure folds, so **every** fold contained a deterministic red and a pass-on-retry
-policy would have minted **0 greens in 12 folds**. Both were red for the same cause, found here and
+rather than a statistical one. Two suites — `mcp-no-inherit` and `mcp-ssot-wire` — were red in **11
+of 11** clean post-cure folds, so **every** fold contained a deterministic red and a pass-on-retry
+policy would have minted **0 greens in 11 folds**. Both were red for the same cause, found here and
 fixed: `scripts/mcp-ssot-wire.sh` carried an apostrophe inside a `<<'PY'` heredoc nested in a `$( )`,
 which **bash 3.2 cannot parse**. macOS `/bin/bash` is 3.2 and the runner uses it; the operator's PATH
 puts brew bash 5.3 first. The script died at parse time off-box and ran fine on the desk.
@@ -40,25 +40,28 @@ the one the ship-policy table already takes: **re-measure the cadence at use, ne
 
 ## 2 — The post-cure green rate is 0, and the fork is answered
 
-16 scheduled folds contain the cure; 15 completed. **Green: 0.** Of the 15, twelve are *clean*
-(`suites == expected`, not a cut) and are the population below; one is a cut (60 unreported) and two
-reported more suites than expected (`+41` each — duplicate shard folding, not analysed here).
+**Population, checked by CONTENT rather than by clock.** 16 scheduled folds were *created* after the
+cure commit, but one — `34242770799`, started five minutes after it — ran a head committed eight
+minutes *before* it, and is a pre-cure fold. `git merge-base --is-ancestor` excludes it; the clock
+does not. **15 folds contain the cure, 14 completed, and none is green.** Of the 14, eleven are
+*clean* (`suites == expected`, not a cut); one is a cut (60 unreported) and two reported more suites
+than expected (`+41` each — duplicate shard folding, not analysed here).
 
-Per-suite failure frequency across the 12 clean folds, oldest → newest:
+Per-suite failure frequency across the 11 clean folds, oldest → newest:
 
-    tests/mcp-no-inherit.bats            XXXXXXXXXXXX  12/12   DETERMINISTIC
-    tests/mcp-ssot-wire.bats             XXXXXXXXXXXX  12/12   DETERMINISTIC
-    tests/lr-reset-poller-inplace.bats   .....XXXXXXX   7/12   deterministic from fold 6
-    tests/mailbox-wake-arm.bats          ....XXXXX.X.   6/12   unstable
-    tests/cc-gc.bats                     XX.X.X..X...   5/12   unstable
-    tests/idl-record-size.bats           .......XXXXX   5/12   deterministic from fold 8
-    tests/spawn-presence.bats            XXXX........   4/12   CURED
-    tests/deploy-parity.bats             XXX.........   3/12   CURED
-    tests/memory-index-drain.bats        XX.......X..   3/12   unstable
-    …plus 5 suites that went red together at fold 11 and stayed red
+    tests/mcp-no-inherit.bats            XXXXXXXXXXX  11/11   DETERMINISTIC
+    tests/mcp-ssot-wire.bats             XXXXXXXXXXX  11/11   DETERMINISTIC
+    tests/lr-reset-poller-inplace.bats   ....XXXXXXX   7/11   deterministic from fold 5
+    tests/mailbox-wake-arm.bats          ...XXXXX.X.   6/11   unstable
+    tests/idl-record-size.bats           ......XXXXX   5/11   deterministic from fold 7
+    tests/cc-gc.bats                     X.X.X..X...   4/11   unstable
+    tests/spawn-presence.bats            XXX........   3/11   CURED
+    tests/deploy-parity.bats             XX.........   2/11   CURED
+    tests/memory-index-drain.bats        X.......X..   2/11   unstable
+    …plus 6 suites that went red together at fold 10 and stayed red
 
 **The fork simulated against this population mints nothing.** A retry clears an *unstable* suite; it
-cannot clear a deterministic one. Every one of the 12 folds contained at least one 12/12 suite, so
+cannot clear a deterministic one. Every one of the 11 folds contained at least one 11/11 suite, so
 granting the fork in full would have published **0 greens**. That is no longer an inference from
 n=1 — it is the whole post-cure record.
 
@@ -67,8 +70,8 @@ n=1 — it is the whole post-cure record.
 It named `deploy-parity`, `spawn-presence`, `memory-index-drain` as *"genuinely broken"* on a
 two-legged on-box replay at one sha, and `cc-gc`, `mcp-no-inherit`, `mcp-ssot-wire` as *"machine-
 coupled or unstable"* because they were green on this box. Measured across 12 folds the classes are
-close to inverted: the first three are 3/12, 4/12 and 3/12 (two of them **cured** eight and nine
-folds ago), while two of the three "unstable" ones are the 12/12 floor.
+close to inverted: the first three are 2/11, 3/11 and 2/11 (two of them **cured** eight folds ago),
+while two of the three "unstable" ones are the 11/11 floor.
 
 Its own limits section named this exact risk — *"three greens on this box do not acquit `cc-gc`,
 `mcp-no-inherit`, `mcp-ssot-wire` — one local green is a scalar sample of a varying quantity."* That
@@ -117,28 +120,52 @@ report, drop the exclusion, downgrade the non-verdict to 0 — each kill their c
 
 ## 6 — What actually stands between the producer and a green
 
-The predecessor's upstream lever is confirmed by the temporal table and is now the dominant term. Of
-the nine deterministic suites, seven went red *during* the 12-fold window — one at fold 6, one at
-fold 8, and **five together at fold 11**. New suites land red off-box and stay red, and nothing tells
-their author the producer just went red. With the two floor suites cured, that admission gap is what
-remains, and it is ordinary agent work needing no semantic ruling.
+**The predecessor's framing of this lever is REFUTED, and the refutation is the useful part.** It
+wrote that *"nothing today tells the author of a new suite that it just took the producer red."*
+Something does: `scripts/offbox-admission-lint.sh` landed **2026-08-12** for exactly this generator —
+it runs in the land gate and REFUSES a land that adds a suite which is not off-box-clean. (It ran on
+this land and admitted the new ratchet, *"green off-box"*.)
+
+So the question is not why the gate is missing. It is why it **admitted these**. Of the ten
+deterministic suites, eight went red *during* the 11-fold window (one at fold 5, one at fold 7, six
+together at fold 10), and six of the ten were added *after* the gate was in force.
+
+For the two floor suites the answer is now known, and it is the gate's own stated blind spot. Commit
+`35284465e` (2026-09-08) added `scripts/mcp-ssot-wire.sh` **with the apostrophe** and
+`tests/mcp-ssot-wire.bats` together, and dragged `mcp-no-inherit` (added 2026-08-11) red with it,
+since its case 5 runs that script. The gate ran and admitted, because the gate **runs on this box**:
+`offbox-run.sh` passes `PATH="${PATH}"` through, so a bare `bash` resolves to brew 5.3 here and to
+`/bin/bash` 3.2 on the runner. Its own header says so without hedging — it reproduces the
+environment axes *"and NOT the machine axes … a different brew prefix"*, and argues that stating the
+limit beats a gate that claimed to cover it.
+
+**Bash version is a machine axis.** That is the gap `scripts/bash32-parse-lint.sh` closes, and it is
+why the ratchet belongs in the *statics* gate rather than in the off-box runner: it is checkable here
+precisely because it does not need the runner — `/bin/bash` 3.2 is already on this box.
+
+The remaining six deterministic suites are **not** explained by this, and why admission passed them
+is unmeasured here.
 
 ## 7 — Honest limits
 
 - **The fix is verified locally, not off-box.** The next scheduled fold whose head contains it is the
   proof; this note's claim is the exact-signature reproduction in §4, not an observed green.
-- **Clearing the floor does not imply a green.** Seven other deterministic suites remain, and the
-  12-fold record shows 4–16 reds per fold. Expect the *next* floor, not a green.
+- **Clearing the floor does not imply a green.** Eight other deterministic suites remain, and the
+  11-fold record shows 4–16 reds per fold. Expect the *next* floor, not a green.
 - **The two `+41` folds are unexplained** and were excluded rather than diagnosed.
 - **`.bats` files are out of the lint's population** by extension — bats parses them with the bash it
   resolves, never a bare `bash`.
-- **The 24-fold threshold in the parent row was not reached** (16 folds). It is not what the fork
-  turned on: two suites red in 12/12 consecutive folds cannot be flipped by eight more folds, only by
+- **The 24-fold threshold in the parent row was not reached** (15 folds contain the cure). It is not what the fork
+  turned on: two suites red in 11/11 consecutive folds cannot be flipped by more folds, only by
   repair. Waiting was never the lever.
 
 ## Disposition
 
-Fork: **do not put it to the operator.** It would have published nothing in 12 of 12 folds.
+Fork: **do not put it to the operator.** It would have published nothing in 11 of 11 folds.
 Repair population, corrected: `mcp-no-inherit` + `mcp-ssot-wire` (**fixed here**),
-`lr-reset-poller-inplace`, `idl-record-size`, and the five that went red at fold 11.
-Next lever: the admission gap in §6.
+`lr-reset-poller-inplace`, `idl-record-size`, and the six that went red at fold 10
+(`session-index-history-gapfill`, `runner-stdin-immunity`, `capacity-alarm-chronic`,
+`cc-jetsam-exec`, `validate-bash-differential`, `cc-read-twitter`) — eight suites whose logs
+show unrelated failures across unrelated subsystems, so they are eight distinct defects and
+not one fix.
+Next lever: §6 — why admission passed them.
