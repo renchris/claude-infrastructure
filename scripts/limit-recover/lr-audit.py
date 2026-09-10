@@ -1999,6 +1999,58 @@ ACTION = {
 }
 
 
+def _ledger_only(args):
+    """`--ledger-only`: the lead-transcript ledger, as JSON, and nothing else.
+
+    Deliberately does NOT read a pid. The one caller that needs this mode is a
+    UserPromptSubmit hook running INSIDE the session it is asking about, at a
+    prompt boundary — so the lead is that process, and it is IDLE by construction.
+    Spending a subprocess to re-derive that on every prompt would be cost for no
+    information.
+    """
+    transcript = args.transcript
+    if not transcript:
+        config_dir = os.path.abspath(os.path.expanduser(args.config_dir))
+        transcript, _sid = find_session(config_dir, args.session, args.cwd)
+    if not transcript or not os.path.isfile(transcript):
+        print(
+            json.dumps({"error": "no transcript", "transcript": transcript}),
+        )
+        return 2
+    lead = scan_lead_transcript(transcript)
+    out = {
+        "transcript": transcript,
+        "line_count": lead["line_count"],
+        "turn_open": lead["turn_open"],
+        "last_api_error": lead["last_api_error"],
+        "prompt_count": lead["prompt_count"],
+        "turn_end_count": lead["turn_end_count"],
+        "population_by_tool": lead["delegation_population"],
+        "spawned": len(lead["spawn_tool_uses"]),
+        "settled": len(
+            [t for t in lead["spawn_tool_uses"] if t in lead["settled_tool_ids"]]
+        ),
+        "open_delegations": [
+            {"tool_use_id": t, **m} for t, m in lead["open_delegations"].items()
+        ],
+        # Every notification whose status is terminal-but-not-`completed`, for an id
+        # that actually spawned a delegation. This is Q3 predicate 3, and the
+        # `spawn_tool_uses` intersection is what keeps it from firing on a
+        # notification for something that was never a delegation.
+        "nonsuccess_notifications": [
+            {"tool_use_id": t, **n}
+            for t, n in lead["notifications"].items()
+            if (n.get("status") or "") not in NOTIF_NONTERMINAL
+            and (n.get("status") or "") != "completed"
+            and t in lead["spawn_tool_uses"]
+        ],
+    }
+    if lead.get("read_error"):
+        out["read_error"] = lead["read_error"]
+    print(json.dumps(out, indent=1, default=str))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument(
@@ -2016,7 +2068,26 @@ def main():
     ap.add_argument("--md", dest="md_out")
     ap.add_argument("--salvage-dir")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument(
+        "--transcript",
+        help="read THIS transcript instead of discovering one from --session/--cwd",
+    )
+    ap.add_argument(
+        "--ledger-only",
+        action="store_true",
+        help=(
+            "print ONLY the lead-transcript ledger as JSON (last api-error record, "
+            "delegation population, settled/open split, notifications, turn_open) "
+            "and exit 0. One pass over one file: no workflow globs, no team scan, "
+            "no git, and no pid census. This is what a per-prompt hook can afford "
+            "to call, and it exists so such a hook IMPORTS this ledger instead of "
+            "growing a second spelling of the same predicates."
+        ),
+    )
     args = ap.parse_args()
+
+    if args.ledger_only:
+        return _ledger_only(args)
 
     config_dir = os.path.abspath(os.path.expanduser(args.config_dir))
     transcript, sid = find_session(config_dir, args.session, args.cwd)
