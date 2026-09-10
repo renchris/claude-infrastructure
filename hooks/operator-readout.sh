@@ -785,7 +785,7 @@ render_block() {
   local esc_n; esc_n="$(escalation_unseen_count)"
 
   # ── state line from the un-fakeable ledger (cwd repo; skipped cleanly outside a repo) ──
-  local state="" wrap="" led="" branch ahead shas dirty_n gate remainder parts custody
+  local state="" wrap="" led="" branch ahead shas dirty_n gate remainder parts custody dact
   RUNG="?"
   if [ -n "$cwd" ] && [ -d "$cwd" ]; then
     wrap="${WRAP_LEDGER_BIN:-}"
@@ -823,12 +823,38 @@ render_block() {
         # "— NEW file(s) absent" with a blank count over a lag the operator never got told about.
         # Caught by the no-LIVE_ADDS case below; normalise the VARIABLE, then test it.
         case "$adds" in ''|*[!0-9]*) adds=0 ;; esac
+        # ── THE ACT BELONGS TO THE SURFACE THAT ASKED THE ARBITER (item e99533512a95) ──────────
+        # This tail is the header's OWN copy of the deploy platter, and it carries no ladder. The
+        # deploy-lag leg above already asks the lane itself (`--dry-run --offline`) and renders
+        # EITHER a `▶` deploy row (folded into `▶ cc-do`) OR a `⊘ deploy HELD` row naming the
+        # refusal — the D5 discipline whose whole point is that the surfaces agree because they ask
+        # the same arbiter, not because they carry the same copy of its ladder. The header asked
+        # nobody, so it became a THIRD surface with a hardcoded verdict. Measured live 2026-09-09,
+        # both readings in one block:
+        #   OPERATOR ▸ … 🚀 landed, NOT live — 2 NEW file(s) absent … → bash scripts/deploy-live.sh
+        #    ⊘ deploy HELD: live layer 79 behind origin/main — the lane refuses: DIVERGED — …
+        # i.e. line 1 platters a command line 2 says the actuator refuses; and when the lane IS
+        # runnable the same act is plattered twice, once raw here and once inside `▶ cc-do`. Both
+        # are the recap spec's "the ONE next action", singular
+        # (docs/research/recap-prompt-extraction-2026-08-23.md §5 gap 2), and CLAUDE.md's "at a
+        # close there is only one verdict — if you would tell them to ignore it, it does not appear
+        # at all". The 534-refusal lesson the ⊘ mechanism was built for is the same one: the board
+        # must not name a command that cannot succeed.
+        #
+        # YIELD the act when another row already owns it; KEEP it when none does. Not unconditional:
+        # this rung is reachable with the shared checkout NOT behind — LIVE_ADDS breaches at a lag
+        # of 1 and, since 2026-09-07, at a lag of 0 — and there is then no deploy row anywhere, so
+        # dropping the tail always would leave the one rung that names a drivable action actionless.
+        # The predicate reads the steps file rather than re-deciding the lane: a second copy of the
+        # ladder is the defect, not the cure.
+        dact=" → bash scripts/deploy-live.sh"
+        grep -qE "^(deploy|held)${TABC}" "$steps_file" 2>/dev/null && dact=""
         if [ "${migf:-0}" != "0" ]; then
           state="🚀 landed, NOT live — ${migf} migration(s) FAILED; the enforcing store never took this → bash scripts/deploy-migrations.sh --status"
         elif [ "$adds" != "0" ]; then
-          state="🚀 landed, NOT live — ${adds} NEW file(s) absent from the live layer; every consumer guard on them silently skips → bash scripts/deploy-live.sh"
+          state="🚀 landed, NOT live — ${adds} NEW file(s) absent from the live layer; every consumer guard on them silently skips${dact}"
         else
-          state="🚀 landed, NOT live — the live layer is ${lag:-?} commit(s) behind and PAST its converge budget → bash scripts/deploy-live.sh"
+          state="🚀 landed, NOT live — the live layer is ${lag:-?} commit(s) behind and PAST its converge budget${dact}"
         fi ;;
       "🔧")
         dirty_n="$(lf DIRTY_N)"; gate="$(lf GATE)"; remainder="$(lf REMAINDER)"

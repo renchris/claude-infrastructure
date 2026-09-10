@@ -1227,6 +1227,54 @@ stub_ledger() { # $1=RUNG, rest = extra KEY=VALUE lines
   grep -q -- '--dry-run' "$argv" || false
 }
 
+# ── THE HEADER MUST NOT CARRY AN ACT ANOTHER ROW ALREADY OWNS (item e99533512a95) ────────────────
+# The 🚀 state line hardcoded `→ bash scripts/deploy-live.sh`, having asked nobody. The deploy-lag
+# leg above asks the lane itself and renders `▶` or `⊘ HELD`. Nothing made the two agree, and the
+# two cases below are why that went unseen for the ⊘ mechanism's whole life: every ⊘ case renders
+# with `--cwd "$BATS_TEST_TMPDIR"` and no ledger, so no state line ever formed, and every 🚀 case
+# runs against setup()'s `no-such-checkout`, so no deploy row ever formed. Each fixture held the
+# OTHER half constant at the one value that cannot express the defect. These two hold both at once.
+# The positive control is already in the file and needs nothing: the three `stub_ledger "🚀"` cases
+# keep asserting the act IS in the header, because with no shared checkout no row owns it.
+
+@test "🚀 + a REFUSING lane: the header does not platter the command ⊘ says the lane refuses" {
+  # Measured live 2026-09-09 — one block asserting both:
+  #   OPERATOR ▸ … 🚀 landed, NOT live — 2 NEW file(s) absent … → bash scripts/deploy-live.sh
+  #    ⊘ deploy HELD: live layer 79 behind origin/main — the lane refuses: DIVERGED — …
+  # "at a close there is only one verdict": a command the next line calls refused does not appear.
+  w="$(mkrepo_landed rocketheld)"
+  ( cd "$w"; echo z > z.txt; git add z.txt; git commit -q -m more; git push -q origin main
+    git reset -q --hard HEAD~1 ) >/dev/null 2>&1
+  export CC_SHARED_CHECKOUT="$w"
+  live="$BATS_TEST_TMPDIR/refusing-rocket.sh"
+  printf '#!/bin/bash\necho "deploy-live: REFUSED — DIVERGED" >&2\nexit 1\n' > "$live"
+  CC_DEPLOY_SCRIPT="$live" WRAP_LEDGER_BIN="$(stub_ledger "🚀" "LIVE_LAG=41" "LIVE_ADDS=2" "MIG_FAILED=0")" \
+    run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -q '⊘ deploy HELD' || { echo "no ⊘ row: $output"; false; }
+  ! echo "$output" | grep -qF '→ bash scripts/deploy-live.sh' \
+    || { echo "header platters a command the ⊘ row says is refused: $output"; false; }
+  # …and the rung and its CAUSE survive — yielding the act must not blank the state line.
+  echo "$output" | grep -q '🚀 landed, NOT live' || { echo "state lost: $output"; false; }
+  echo "$output" | grep -q 'NEW file(s) absent' || { echo "cause lost: $output"; false; }
+}
+
+@test "🚀 + an ADVANCING lane: the act is plattered once, by the row that asked the arbiter" {
+  # The duplication half. `▶ cc-do` (or the raw step row) already carries this exact action; the
+  # header carried it a second time in a second form. One act, one surface.
+  w="$(mkrepo_landed rocketadv)"
+  ( cd "$w"; echo z > z.txt; git add z.txt; git commit -q -m more; git push -q origin main
+    git reset -q --hard HEAD~1 ) >/dev/null 2>&1
+  export CC_SHARED_CHECKOUT="$w"
+  live="$BATS_TEST_TMPDIR/advancing-rocket.sh"; printf '#!/bin/bash\nexit 0\n' > "$live"
+  CC_DEPLOY_SCRIPT="$live" WRAP_LEDGER_BIN="$(stub_ledger "🚀" "LIVE_LAG=41" "MIG_FAILED=0")" \
+    run "$HOOK" --render --cwd "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -qF "bash $(tild "$live")" || { echo "the owning row vanished: $output"; false; }
+  ! echo "$output" | grep -qF '→ bash scripts/deploy-live.sh' \
+    || { echo "the header plattered the act a second time: $output"; false; }
+}
+
 # ── blg_list_cached — the backlog-fold cache (scaling-bottlenecks-2026-08-09 §5 P0-3) ─────────
 
 @test "blg cache: two reads of an unchanged store fold once; an append re-folds" {
