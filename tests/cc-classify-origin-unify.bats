@@ -30,6 +30,17 @@ setup() {
   # operator's live session store. Every path is env-pinned below as well; this is the floor under
   # them, not a substitute (T9/T10 re-point HOME per invocation on top of it, deliberately).
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # ...but $HOME does NOT redirect an ABSOLUTE default, and cc-classify:65 reads the permission
+  # beacon out of /tmp/cc-permission-pending (scripts/test-hermeticity-lint.sh seam 5a). Every
+  # reapable verdict below was therefore a function of the DEVELOPER'S MACHINE: with that live dir
+  # present and heartbeating, permpend_state answers `clear` and the causes stand; without it the
+  # blind downgrade fires and rewrites each one to `owned-wait`. It fails CLOSED on absence, so
+  # pinning the seam at an absent path does not isolate this suite — it INVERTS it (measured: T9's
+  # `finished-teammate` control goes red). The hermetic form is therefore to fixture the beacon
+  # subsystem as OBSERVABLY RUNNING, which is the state these cases have always silently assumed:
+  # an empty dir (no beacon ⇒ not blocked) plus a heartbeat newer than any fixture activity.
+  export CC_PERMPEND_DIR="$BATS_TEST_TMPDIR/cc-permission-pending"
+  mkdir -p "$CC_PERMPEND_DIR"; : > "$CC_PERMPEND_DIR/.beacon-alive"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   C="$REPO/bin/cc-classify"
   D="$BATS_TEST_TMPDIR"
