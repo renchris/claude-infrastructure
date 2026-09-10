@@ -1185,7 +1185,14 @@ fi
 # makes both O(the working set), which is bounded by construction.
 SCOPE="$(printf '%s\n' "$WANT" | jq -r '.id' 2>/dev/null | tr '\n' ',')"
 load_item_status
-"$CLOUD_BIN" poll --only "$SCOPE" >/dev/null 2>&1 || warn "cc-cloud poll did not complete; quiet windows may read as unmeasured"
+# `--control-plane` is what gives the `<id>.cp` evidence sidecar a SCHEDULED writer, and this is the
+# call site that makes it one: this script is the autonomy sweep's §0a arm, so it is the only place
+# `poll` runs unattended. Without it the sidecar would only ever be written by an operator running
+# `cc-cloud inbox --record` by hand, i.e. a detector with no owner, and `classify()`'s C1 arm would
+# keep asserting NOT-STARTED over sessions that demonstrably ran (backlog 1b3a777d041a). The probe
+# is scoped to REF-LESS sessions only — exactly the set C1 can convict — so it costs a bounded HTTP
+# read per possibly-mislabelled session and nothing at all for the rest.
+"$CLOUD_BIN" poll --only "$SCOPE" --control-plane >/dev/null 2>&1 || warn "cc-cloud poll did not complete; quiet windows may read as unmeasured"
 
 ROWS="$("$CLOUD_BIN" list --json --state --only "$SCOPE" 2>/dev/null)"
 [ -n "$ROWS" ] || { warn "the state read returned nothing after a non-empty inventory — abstaining"; exit 0; }

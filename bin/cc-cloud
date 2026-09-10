@@ -351,6 +351,10 @@ ids() { # every declared, non-retired id, sorted
 # store gives for any id it does not hold. Reading `--only` as an id list to iterate instead would
 # make a caller's typo mint a phantom row, which is the opposite of what a filter is for.
 ONLY_SET=""
+# Initialised at file scope, not just in cmd_poll: `set -u` is on, and poll_cp reads it. A variable
+# that only exists once an arg loop has run is one refactor away from aborting the program instead
+# of taking its default — and the default here is the one that keeps the network out.
+WANT_CP=0
 only_set() { # <comma/space/newline-separated ids> → sets ONLY_SET (empty arg = no scoping)
   # 🚨 AN EMPTY --only MEANS "NO SCOPE", NOT "SCOPE TO NOTHING", and the distinction is load-bearing
   # in the caller's failure direction. cloud-return builds this list from a disk-side selection that
@@ -1125,8 +1129,27 @@ cmd_retire() {
 # FAILURE LEAVES NOTHING BEHIND. No account, no python, an unreachable API, a timeout: every one
 # writes no sidecar, so the absence of evidence stays the absence of evidence and classify()'s
 # pre-existing verdict is untouched. This arm can only ever ADD a refutation, never manufacture one.
+#
+# 🚨 AND IT IS OPT-IN AT THE CALL SITE — `poll --control-plane`, never a bare `poll`. This is the
+# only network call in this file that is not `git ls-remote`, and ls-remote is hermetic in the
+# suites by construction because every fixture "remote" is a REAL local bare repo. An HTTP control
+# plane has no such local form: it is reachable only through `CC_CLOUD_VERIFY_BIN`, a seam each
+# suite must remember to stub. Making the probe automatic would therefore have made every future
+# transitive caller of `poll` reach the operator's live accounts by DEFAULT, and one already did —
+# `tests/cloud-return.bats` runs the real `cc-cloud poll --only` through a recording pass-through,
+# and an earlier draft of this arm fired there on `session_nopush`, spending a live API call and a
+# 20s timeout inside a suite whose header says HERMETIC. It reddened the land gate, and it passed
+# locally, which is exactly how a hermeticity defect presents.
+#
+# A FLAG, not an env var, and the difference is the whole guarantee: an env var is INHERITED by
+# every subprocess a suite spawns, so one unfixtured export re-arms the hazard everywhere, while a
+# flag is passed only by a caller that literally wrote it down (memory:
+# unfixtured-sensor-executes-the-deployed-subject; and the env-inheritance trap ship-land scrubs at
+# scripts/ship-land.sh:1995 for the same reason). `CC_CLOUD_POLL_CP=off` remains as a kill switch
+# ON TOP of the flag — it can only ever subtract.
 poll_cp() { # <id> → 0 always; the sidecar is best-effort evidence, not a precondition
   [ "$POLL_CP" = "off" ] && return 0
+  [ "$WANT_CP" -eq 1 ] || return 0
   local id="$1"
   [ -n "$(dfield "$STATE/$id.decl" account)" ] || return 0
   [ -f "$ROOT/scripts/cloud-inbox.py" ] || return 0
@@ -1141,10 +1164,15 @@ poll_cp() { # <id> → 0 always; the sidecar is best-effort evidence, not a prec
 cmd_poll() {
   local id f sha rc prev n seen
   ONLY_SET=""
+  # DEFAULT 0. A bare `poll` is what it has always been: ls-remote and the heartbeat sidecar, no
+  # HTTP, no credential, no subprocess that could reach one. See poll_cp's header for why this is a
+  # flag and not an env var.
+  WANT_CP=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --only)   only_set "${2:-}"; shift 2 ;;
       --only=*) only_set "${1#--only=}"; shift ;;
+      --control-plane) WANT_CP=1; shift ;;
       *) echo "cc-cloud poll: unknown arg $1" >&2; return 2 ;;
     esac
   done

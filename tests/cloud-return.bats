@@ -35,6 +35,29 @@ setup() {
   export CALLS="$BATS_TEST_TMPDIR/calls"; : >"$CALLS"
   export STUBDIR="$BATS_TEST_TMPDIR/stubs"; mkdir -p "$STUBDIR"
 
+  # HERMETIC CONTROL PLANE. This suite runs the REAL `cc-cloud poll`, and this script now passes
+  # `--control-plane`, so a ref-less fixture session reaches `cloud-inbox.py` → `cloud-create-api.py
+  # --verify` → the operator's LIVE accounts over HTTP. Measured: an earlier draft fired on
+  # `session_nopush` and spent a real API call plus a 20s timeout inside a suite whose header says
+  # HERMETIC — green locally, RED in the land gate under load, which is exactly how this class
+  # presents. `cc-cloud poll` defaults the probe OFF for that reason, but this suite is the one
+  # caller that turns it ON, so the seam is fixtured here rather than left to that default.
+  #
+  # The stub exits non-zero with no stdout, which is `cloud-inbox`'s `unreadable` path: it writes no
+  # sidecar at all. That is the RIGHT fixture value — the assertions below are about the return
+  # lane, not about control-plane evidence, so the probe must be inert AND fast, never absent in a
+  # way that changes cc-cloud's verdicts.
+  # PYTHON, not bash: cloud-inbox invokes this seam as [sys.executable, VERIFY, ...], so a bash
+  # stub would be run BY python3 and "work" only by dying on a SyntaxError.
+  cat > "$STUBDIR/verify-inert" <<'STUB'
+#!/usr/bin/env python3
+import sys
+sys.stderr.write("cloud-return.bats: the control plane is stubbed inert in this suite\n")
+sys.exit(9)
+STUB
+  chmod +x "$STUBDIR/verify-inert"
+  export CC_CLOUD_VERIFY_BIN="$STUBDIR/verify-inert"
+
   export REMOTE="$BATS_TEST_TMPDIR/remote.git"
   export WORK="$BATS_TEST_TMPDIR/work"
   git init -q --bare "$REMOTE"
