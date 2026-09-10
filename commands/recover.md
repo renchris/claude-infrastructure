@@ -120,8 +120,10 @@ view of the same outage seen through three ladders (an 18-minute watchdog, a 51.
 
 1. **The fleet arm** — any real-model assistant record from ANY session in the stall window proves
    the API path was live, which convicts the request rather than the network.
-2. **A probe independent of the request** — DNS+TCP+TLS on the API host, no quota, and **two greens
-   30 s apart**; recovery needs hysteresis, and one green is a coin flip.
+2. **A probe independent of the request** — `lr-probe.sh`: DNS+TCP+TLS+HTTP on the API host, no
+   credential, no quota, and **two greens 30 s apart**; recovery needs hysteresis, and one green is
+   a coin flip. Any 3-digit status is green (the request is unauthenticated, so a refusal that
+   travelled the path proves the path); only a transport failure is red.
 3. **The re-fire itself, as the last discriminator** — **at most one**, under a green control. A
    second stall under a green control convicts the REQUEST (prompt size, a blocking tool, a headless
    permission prompt) and the remedy is to change the request, never a third fire.
