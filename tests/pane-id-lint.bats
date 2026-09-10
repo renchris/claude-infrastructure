@@ -74,6 +74,72 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+# ── corpus mode (2026-09-10, cc-backlog b1f7763af89f): tracked files only, plus a ratchet ─────────
+# The nightly ran this lint over the WORKING TREE, so a sibling session's untracked scratch under
+# docs/ could page the operator over content on no branch; and the standing 178 lines made it red
+# every night regardless. Each case builds a throwaway git repo; every assertion is failure-distinct.
+mk_repo() {
+  REPOX="$BATS_TEST_TMPDIR/repo"; mkdir -p "$REPOX/docs"
+  git -C "$REPOX" init -q
+}
+commit_all() { git -C "$REPOX" add -A && git -C "$REPOX" -c user.name=t -c user.email=t@t commit -qm x; }
+
+@test "corpus mode reads TRACKED files only: an untracked scratch file cannot turn it red" {
+  mk_repo
+  printf 'tracked prose\n' > "$REPOX/docs/tracked.md"; commit_all
+  printf 'a sibling scratch naming pane 1EB2C679\n' > "$REPOX/docs/untracked.json"
+  run "$LINT" "$REPOX/docs"
+  [ "$status" -eq 0 ]
+  # failure-distinct: the SAME content, once tracked, is flagged
+  commit_all
+  run "$LINT" "$REPOX/docs"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *1EB2C679* ]]
+}
+
+@test "the ratchet grandfathers a standing (path, token), and a NEW token in that same file still trips" {
+  mk_repo
+  printf 'old pane 1EB2C679\n' > "$REPOX/docs/a.md"; commit_all
+  printf 'docs/a.md\t1EB2C679\n' > "$BATS_TEST_TMPDIR/ratchet"
+  run env CC_PANE_ID_RATCHET="$BATS_TEST_TMPDIR/ratchet" "$LINT" "$REPOX/docs"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *grandfathered* ]] || false
+  printf 'new pane D08B4FC0\n' >> "$REPOX/docs/a.md"; commit_all
+  run env CC_PANE_ID_RATCHET="$BATS_TEST_TMPDIR/ratchet" "$LINT" "$REPOX/docs"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *D08B4FC0* ]]
+}
+
+@test "two tokens on one line: a ratcheted first token does not launder a new second one" {
+  # Extracting tokens with the delimited regex would consume the space between them and never see
+  # the second — the shape that turns a ratchet into a laundering channel.
+  mk_repo
+  printf 'panes 1EB2C679 D08B4FC0\n' > "$REPOX/docs/a.md"; commit_all
+  printf 'docs/a.md\t1EB2C679\n' > "$BATS_TEST_TMPDIR/ratchet"
+  run env CC_PANE_ID_RATCHET="$BATS_TEST_TMPDIR/ratchet" "$LINT" "$REPOX/docs"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *D08B4FC0* ]]
+}
+
+@test "a stale ratchet entry is itself a violation and names the line to delete" {
+  mk_repo
+  printf 'clean prose\n' > "$REPOX/docs/a.md"; commit_all
+  printf 'docs/a.md\t1EB2C679\n' > "$BATS_TEST_TMPDIR/ratchet"
+  run env CC_PANE_ID_RATCHET="$BATS_TEST_TMPDIR/ratchet" "$LINT" "$REPOX/docs"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stale ratchet entry: docs/a.md 1EB2C679"* ]]
+}
+
+@test "the payload box is not a git tree, so the ratchet never softens the enforcing gate" {
+  run git -C "$CORPUS" rev-parse --is-inside-work-tree
+  [ "$status" -ne 0 ]
+  printf 'payload naming pane 1EB2C679\n' > "$CORPUS/payload.md"
+  printf 'payload.md\t1EB2C679\n' > "$BATS_TEST_TMPDIR/ratchet"
+  run env CC_PANE_ID_RATCHET="$BATS_TEST_TMPDIR/ratchet" "$LINT" "$CORPUS"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *1EB2C679* ]]
+}
+
 # DELIBERATE, RED-PROOFED TEST CHANGE — recovered from `a6eab446` (2026-07-25) by cherry-pick and
 # rewritten here on purpose, with the reason recorded (GROUND_UP_REBUILD_MAP.md: "A test can encode a
 # falsified premise — changing it is legitimate, hiding it is not").
