@@ -48,6 +48,13 @@ setup() {
   export CC_CAP_SEG_WARN_PCT=999999 CC_CAP_SEG_ALARM_PCT=999999          # rung 5 compressor segments
   export CC_CAP_COAL_WARN=999999 CC_CAP_COAL_ALARM=999999                # rung 6 coalition population
   export CC_CAP_SWAP_DELTA_MB=999999                                     # rung 1 swap growth
+  # Rung 8 (D5) feeds no verdict, but it DOES own two per-rung pages, and (xv) counts page files —
+  # so its floors are pinned like every other ambient rung (this box's zone already reads past the
+  # 6 GB floor). The zone read itself is switched off for COST: it walks the kernel zone map (zprint,
+  # ~0.4 s) and dozens of full runs would each pay it. tests/capacity-alarm-chronic.bats owns the rung.
+  export CC_CAP_SWAPFILE_WARN=999999 CC_CAP_SWAPFILE_ALARM=999999        # rung 8 swapfiles
+  export CC_CAP_KALLOC_WARN_GB=999999 CC_CAP_KALLOC_ALARM_GB=999999      # rung 8 kernel zone
+  export CC_CAP_KALLOC=off
 
   # The same pins as an `env -u` argument list, for the two selftests, which must run at the SHIPPED
   # defaults (see (i)). An ARRAY rather than a string: `env $(f)` needs word-splitting to work, which
@@ -58,7 +65,9 @@ setup() {
           -u CC_CAP_PRESSURE_WARN      -u CC_CAP_PRESSURE_ALARM
           -u CC_CAP_PROC_WARN_GB       -u CC_CAP_SEG_WARN_PCT
           -u CC_CAP_SEG_ALARM_PCT      -u CC_CAP_COAL_WARN
-          -u CC_CAP_COAL_ALARM         -u CC_CAP_SWAP_DELTA_MB )
+          -u CC_CAP_COAL_ALARM         -u CC_CAP_SWAP_DELTA_MB
+          -u CC_CAP_SWAPFILE_WARN      -u CC_CAP_SWAPFILE_ALARM
+          -u CC_CAP_KALLOC_WARN_GB     -u CC_CAP_KALLOC_ALARM_GB )
 }
 
 # sysctl stub for rung 7. It is reached through CC_CAP_SYSCTL, not through PATH, because rung 7

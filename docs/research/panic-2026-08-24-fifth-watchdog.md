@@ -349,6 +349,15 @@ Not in this repo (tracked separately): the generator fix
 `experimental.turbopackPluginRuntimeStrategy: 'workerThreads'` for reso-management-app AND the
 reso-qa-runner clone (task #151), and the QA-lane process-group memory leash.
 
+**Follow-up 2026-09-10 — §6 item 6 shipped as capacity-alarm rung 8** (cc-backlog a216d8753946;
+`scripts/capacity-alarm.sh` D5, `tests/capacity-alarm-chronic.bats`): swapfile count and
+`data.kalloc.1024` as chronic ratchets with a scheduled-reboot advisory, paged on their own
+transitions but never folded into the verdict. Two corrections to the brief this section fed: the
+swapfiles live under `sysctl vm.swapfileprefix` (`/System/Volumes/VM/swapfile`), not
+`/private/var/vm` — that directory held 0 swapfiles while the kernel reported 3 GB of swap — and the
+zone read 10.34 GB on 2026-09-10 at 16.0 days up, already past the 9.89 GB this panic died at. Item
+6's daily jetsam-kill-count signal was not part of that backlog item.
+
 ## 11. Ledger backfill note
 
 `~/.claude/logs/panic-attribution.jsonl` holds `report:".contents.panic"` (recorded 2026-08-18 with
