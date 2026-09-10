@@ -211,3 +211,72 @@ setup() {
   [ "$status" -eq 1 ]
   echo "$output" | grep -q "UNDECLARED reaper"
 }
+
+# ── §3 REFINEMENTS (2026-09-10, cc-backlog b1f7763af89f). Three files that only READ cc-registry held
+# the nightly RED: the whole-line variable read convicted an atomic write over its mv DESTINATION, a
+# PID-scoped temp was not recognised as self-created, and four genuine non-evidence deletes had no way
+# to say so. One exoneration per refinement, each beside the control that must still convict.
+
+@test "§3: an rm span over a PID-scoped temp is self-cleanup, even with another variable on the line" {
+  # The live shape from hooks/lib/mailbox-pending.sh. `$f` is the mv DESTINATION on the same line;
+  # the delete never names it, so the whole-line read convicted a site that removes only its own temp.
+  printf '%s\n' \
+    'row="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}/$pane.json"' \
+    'tmp="$dir/.$(basename "$f").$$.tmp"' \
+    'mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }' > "$FIX/hooks/peer-thing.sh"
+  run bash "$LINT"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "clean"
+}
+
+@test "§3 control: an rm span naming a PID-scoped temp AND a registry victim still convicts" {
+  printf '%s\n' \
+    'reg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"' \
+    'tmp="${TMPDIR:-/tmp}/x.$$"' \
+    'victim="$reg_dir/$sid.json"' \
+    'rm -f "$tmp" "$victim"' > "$FIX/hooks/peer-thing.sh"
+  run bash "$LINT"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "peer-thing.sh"
+}
+
+@test "§3 control: a find -delete sharing a line with a self-cleanup rm is not exonerated by the rm" {
+  # The span read must not let an rm half launder a find half: a line carrying -delete keeps the
+  # whole-line read, and the find root here is a registry path.
+  printf '%s\n' \
+    'reg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"' \
+    'tmp="$(mktemp)"' \
+    'rm -f "$tmp"; find "$reg_dir" -mmin +5 -delete' > "$FIX/hooks/peer-thing.sh"
+  run bash "$LINT"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "peer-thing.sh"
+}
+
+@test "§3: a reviewed not-evidence marker WITH a reason exonerates that one site" {
+  printf '%s\n' \
+    'reg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"' \
+    'mv -f "$ef" "$ef.handled" || rm -f "$ef"  # reaper-horizon-lint:not-evidence — consumes an escalated alarm record' \
+    > "$FIX/hooks/peer-thing.sh"
+  run bash "$LINT"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "clean"
+}
+
+@test "§3 control: a bare not-evidence marker with no reason still convicts" {
+  printf '%s\n' \
+    'reg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"' \
+    'rm -f "$ef"  # reaper-horizon-lint:not-evidence —' > "$FIX/hooks/peer-thing.sh"
+  run bash "$LINT"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "UNDECLARED reaper"
+}
+
+@test "§3 control: the marker is per-LINE, so an unmarked delete beside a marked one still convicts" {
+  printf '%s\n' \
+    'reg_dir="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"' \
+    'rm -f "$ef"  # reaper-horizon-lint:not-evidence — consumes an escalated alarm record' \
+    'rm -f "$reg_dir/$sid.json"' > "$FIX/hooks/peer-thing.sh"
+  run bash "$LINT"
+  [ "$status" -eq 1 ]
+  echo "$output" | grep -q "peer-thing.sh"
+}

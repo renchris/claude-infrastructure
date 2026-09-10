@@ -369,22 +369,53 @@ done < <(grep -rnE 'CC_SUP_GC_S:-[0-9]+' $DECLARED 2>/dev/null)
 # resolves to a variable this same file assigns from `mktemp`. A literal path, an unattributable
 # variable, or a delete naming no variable at all still convicts. A real reaper cannot slip through:
 # it deletes something it did not create, so it has at least one site this cannot attribute.
+#
+# THREE REFINEMENTS (2026-09-10, cc-backlog b1f7763af89f). §3 held the nightly RED on three files that
+# only READ cc-registry — bin/cc-inbox-guard, hooks/lib/mailbox-pending.sh, scripts/worktree-gc.sh —
+# and not one of their deletes touches evidence:
+#   · "every path it NAMES" is now read literally for an `rm -f` site: the variables come from the
+#     rm's own argument span (up to the next ; | & } or ) character), not from the whole line. The
+#     whole-line read convicted mailbox-pending's atomic write `mv -f "$tmp" "$f" || { rm -f "$tmp"; }`
+#     over `$f`, a variable the delete never touches. A line carrying `-delete` keeps the whole-line
+#     read, because a find target can sit anywhere on the line, and a line mixing an `rm -f` with a
+#     `find … -delete` must not be exonerated by its rm half.
+#   · A PID-scoped name is self-created by the same argument as mktemp: a variable whose in-file
+#     assignment contains `$$` names a path only this process could have made. mailbox-pending's
+#     `$dir/.<name>.$$.tmp` and worktree-gc's `${TMPDIR}/worktree-gc.*.$$` are that shape.
+#   · A site that deletes something it did NOT create, and that is still not evidence (a consumed
+#     alarm record, a stale git maintenance lock, an untracked file whose bytes are already on trunk),
+#     can say so ON ITS OWN LINE: `# reaper-horizon-lint:not-evidence — <reason>`. The reason is
+#     mandatory (3+ characters; a bare marker still convicts), and the marker is per-LINE: a second,
+#     unmarked delete in the same file still convicts, so a marked file cannot grow an unreviewed
+#     reaper. It is a review claim about ONE site, where a $DECLARED entry would claim a whole file —
+#     the over-broad form the paragraph above rejects.
 self_created_delete(){   # $1 = file · $2 = one comment-stripped delete line → 0 iff pure self-cleanup
-  local vars v
-  vars="$(printf '%s\n' "$2" | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*' | sed -E 's/^\$\{?//' | sort -u)"
+  local vars v span
+  case "$2" in
+    *-delete*) span="$2" ;;
+    *)         span="$(printf '%s\n' "$2" | grep -oE 'rm -f[^;|&})]*')" ;;
+  esac
+  [ -n "$span" ] || span="$2"
+  vars="$(printf '%s\n' "$span" | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*' | sed -E 's/^\$\{?//' | sort -u)"
   [ -n "$vars" ] || return 1
   while IFS= read -r v; do
     [ -n "$v" ] || continue
-    grep -qE "^[[:space:]]*(local[[:space:]]+|export[[:space:]]+)?$v=[^=]*mktemp" "$1" || return 1
+    grep -qE "^[[:space:]]*(local[[:space:]]+|export[[:space:]]+)?$v=[^=]*"'(mktemp|[$][$])' "$1" || return 1
   done <<EOF
 $vars
 EOF
   return 0
 }
 has_code_delete(){
-  local ln
+  local ln why
   while IFS= read -r ln; do
     [ -n "$ln" ] || continue
+    case "$ln" in
+      *reaper-horizon-lint:not-evidence*)
+        why="$(printf '%s' "${ln#*reaper-horizon-lint:not-evidence}" | tr -d '[:space:]')"
+        why="${why#—}"; why="${why#-}"; why="${why#:}"
+        [ "${#why}" -ge 3 ] && continue ;;
+    esac
     self_created_delete "$1" "$ln" && continue
     return 0
   done < <(grep -nE -- '-delete|rm -f' "$1" 2>/dev/null \
