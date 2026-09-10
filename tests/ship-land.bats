@@ -884,6 +884,8 @@ scope_fixture() {   # seed tests/{a,b}.bats onto trunk + shim bats + default to 
   export BATS_ARGV="$BATS_TEST_TMPDIR/bats-argv"
   export FLAKE_ONCE="$BATS_TEST_TMPDIR/flake-once"   # suite file that fails its FIRST run only
   : > "$FLAKE_ONCE"
+  export FLAKE_THRICE="$BATS_TEST_TMPDIR/flake-thrice"  # …and one that fails runs 1 AND 3 (2-of-3)
+  : > "$FLAKE_THRICE"
   # GATE-KILLED fixtures. The shim reproduces each shape BYTE-WISE as real bats emits it, because
   # the RED-vs-KILLED split reads the TAP: `sig` = a run that was executing and then died (plan +
   # ok lines, then 137 — the live 2026-07-26 signature); `unattrib` = the same event seen from the
@@ -915,8 +917,18 @@ case "\$(cat "$KILL_MODE" 2>/dev/null)" in
              # verdict. The property under test is untouched: a real failure surfacing on the
              # re-run must outrank the first run's cut.
 esac
+# THE SUITE IS THE LAST ARG, NEVER \$1 — see the note in persuite_fixture: the confirming third
+# observation invokes bats as \`-f <regex> <suite>\`.
+for _a in "\$@"; do _last="\$_a"; done
+g="\$(cat "$FLAKE_THRICE" 2>/dev/null)"
+if [ -n "\$g" ] && [ "\${_last:-}" = "\$g" ]; then            # red, green, red — 2-of-3
+  n=\$(cat "$BATS_TEST_TMPDIR/sf-rf" 2>/dev/null || echo 0)
+  n=\$(( n + 1 )); echo "\$n" > "$BATS_TEST_TMPDIR/sf-rf"
+  if [ "\$n" = 2 ]; then echo "1..1"; echo "ok 1 green on the re-run"; exit 0; fi
+  echo "1..1"; echo "not ok 1 intermittent"; exit 1
+fi
 f="\$(cat "$FLAKE_ONCE" 2>/dev/null)"
-if [ -n "\$f" ] && [ "\$1" = "\$f" ]; then
+if [ -n "\$f" ] && [ "\${_last:-}" = "\$f" ]; then
   m="$BATS_TEST_TMPDIR/flaked-\$(basename "\$1")"
   # A NAMED failure, not a bare rc — a FLAKE is a test that fails and then passes, and the
   # discriminator between that and a machine event is the TAP body. This shim used to emit
@@ -1207,16 +1219,23 @@ landable() {  # $1=branch $2=shell file — a commit the gate always lints
   # section further down pins that half; this one pins that nothing changed without a union.
   # The `--direct` list here names ONLY a.bats while the selector's plain list names b.bats, so a
   # build that passed the plain list as the direct set would exonerate a.bats and land green.
+  # FIXTURE CHANGED 2026-09-10 (cc-backlog 19ca2b91425c), PROPERTY UNCHANGED. The membership rule
+  # this test names is exactly as before — the run-list IS the direct-list, so a.bats is convictable
+  # — but conviction now needs a REPRODUCED failure (2-of-3), the standard postland-verify.sh:24-25
+  # already applies to this corpus. So the fixture moves from "fails once" to "fails, passes, fails"
+  # and the assertion stands. The 1-of-2 case it used to carry is pinned by "smoke CARVE-OUT
+  # EXONERATES 1-of-3" above, which asserts it now LANDS — both directions stay covered.
   scope_fixture
   stub_selector "tests/b.bats" "tests/a.bats"   # plain: b · DIRECT: a — deliberately disjoint
-  echo "tests/a.bats" > "$FLAKE_ONCE"           # a NAMES a failure once, passes the re-run
+  echo "tests/a.bats" > "$FLAKE_THRICE"         # a NAMES a failure, passes, then fails again
   landable feat/flake-direct fld.sh
 
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]
   echo "$output" | grep -q "finding, not a flake"
   [ "$(echo "$output" | grep -c "EXONERATED")" -eq 0 ]       # never exonerated…
-  [ ! -f "$POSTLAND_DIR/flakes.jsonl" ]                      # …⇒ never logged
+  por="$(grep -c '"outcome":"pass-on-retry"' "$POSTLAND_DIR/flakes.jsonl" 2>/dev/null)" || true
+  [ "${por:-0}" -eq 0 ]                                   # never exonerated ⇒ never logged as one
   grep -q '"smoke":"red"' "$LAND_LOG"
   git fetch -q origin main
   [ -z "$(git ls-tree origin/main -- fld.sh)" ]              # and NOT landed
@@ -1456,11 +1475,16 @@ case "\$(cat "$CUT_MODE" 2>/dev/null)" in
   red)  echo "1..1"; echo "not ok 1 a genuine failure"; exit 1 ;;  # a REAL red: a not-ok IS present
   hang) sleep 120; exit 0 ;;                                       # outlives any sane budget
   cut)  exit 1 ;;                                                  # a CUT: rc!=0, ZERO output, always
-  red-once)                                                        # NAMES a failure, then passes —
-    if [ ! -f "$BATS_TEST_TMPDIR/red-once-done" ]; then             # the carve-out's real subject
+  red-once)                                                        # NAMES a failure, then passes
+    if [ ! -f "$BATS_TEST_TMPDIR/red-once-done" ]; then             # FOREVER: 1-of-3 = a flake
       : > "$BATS_TEST_TMPDIR/red-once-done"; echo "1..1"; echo "not ok 1 intermittent"; exit 1
     fi
     echo "1..1"; echo "ok 1 green on the re-run"; exit 0 ;;
+  red-flaky)                              # THE CARVE-OUT REAL SUBJECT under the 1-of-3 standard:
+    n=\$(cat "$BATS_TEST_TMPDIR/rf-n" 2>/dev/null || echo 0)       # red, green, red — 2-of-3, a
+    n=\$(( n + 1 )); echo "\$n" > "$BATS_TEST_TMPDIR/rf-n"          # genuinely intermittent test
+    if [ "\$n" = 2 ]; then echo "1..1"; echo "ok 1 green on the re-run"; exit 0; fi
+    echo "1..1"; echo "not ok 1 intermittent"; exit 1 ;;
   gather-artifact)                        # cut with NO plan, then bats' COLLECTOR aborting.
     if [ ! -f "$BATS_TEST_TMPDIR/ga-done" ]; then                   # leg B is inert (no plan to
       : > "$BATS_TEST_TMPDIR/ga-done"; exit 1                       # compare against) ⇒ leg A alone
@@ -1532,20 +1556,69 @@ EOF
   [ -n "$(git ls-tree origin/main -- cut.sh)" ]
 }
 
-@test "smoke CARVE-OUT CONTROL: a NAMED failure that passes on retry is still RED in a direct suite" {
+@test "smoke CARVE-OUT CONTROL: a REPRODUCED intermittent failure (2-of-3) is still RED in a direct suite" {
   # The other side of the fix above: keying on `notok` must not have disabled the fence. A first
   # run that NAMES a failure and then goes green is intermittence in code you are landing — a
   # finding. If this ever passes green, the carve-out has been softened into nothing.
+  #
+  # INVERTED IN PLACE 2026-09-10 (cc-backlog 19ca2b91425c), NOT DELETED — the assertion is the
+  # record of what was believed, and what changed is the EVIDENCE the fence now demands, never the
+  # fence. This test used `red-once` (fail, then green forever) and asserted exit 6, i.e. it pinned
+  # a conviction on 1-of-2, where the single re-observation CONTRADICTED the failure. The sibling
+  # tool judging the same corpus already refused that standard — postland-verify.sh:24-25, ">=2/3
+  # fails = REPRODUCIBLE, 1/3 = flake" — and the land gate now matches it. So the fence's positive
+  # control moves to a genuinely intermittent fixture (`red-flaky`: red, green, red), which the
+  # confirming third run REPRODUCES. The 1-of-2 case this test used to hold is now its own test
+  # below ("EXONERATES 1-of-3"), so both directions stay pinned and neither can drift silently.
   cut_fixture
-  echo red-once > "$CUT_MODE"                             # names a failure, then passes
+  echo red-flaky > "$CUT_MODE"                            # red, green, red — 2-of-3
   landable feat/red-once ro.sh
 
   run bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]
   echo "$output" | grep -q "finding, not a flake"
-  [ ! -f "$POSTLAND_DIR/flakes.jsonl" ]                   # never exonerated ⇒ never logged
+  echo "$output" | grep -q "REPRODUCED"                   # the third observation is what convicted
+  grep -q '"outcome":"2-of-3"' "$POSTLAND_DIR/flakes.jsonl"   # the conviction is COUNTABLE now
+  [ "$(grep -c '"outcome":"pass-on-retry"' "$POSTLAND_DIR/flakes.jsonl")" -eq 0 ]  # never exonerated
   git fetch -q origin main
   [ -z "$(git ls-tree origin/main -- ro.sh)" ]
+}
+
+@test "smoke CARVE-OUT EXONERATES 1-of-3: one unreproduced failure in a direct suite LANDS" {
+  # THE DEFECT THIS TEST CLOSES (cc-backlog 19ca2b91425c). v2's smoke hands its own suite list to
+  # the runner as the direct set, and with no union `own` IS `direct` — so EVERY selected suite was
+  # convictable on a single failure its own re-run had already contradicted. At the per-suite flake
+  # rate this file fits elsewhere (q=2.94%/suite) a 42-suite draw refused the land ~70% of the time,
+  # and the filing measured exactly that: five lands of ONE unchanged diff, four refused, the
+  # flaking suite DIFFERENT every time, every one green on ship-land's own re-run.
+  cut_fixture
+  echo red-once > "$CUT_MODE"                             # names a failure, then green FOREVER
+  landable feat/one-of-three oot.sh
+
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]                                     # 1-of-3 is a flake — the land proceeds
+  echo "$output" | grep -q "EXONERATED 1-of-3"
+  grep -q '"outcome":"1-of-3"' "$POSTLAND_DIR/flakes.jsonl"   # the verifier's own label, one vocab
+  [ "$(grep -cx 'tests/a.bats' "$BATS_ARGV")" -eq 2 ]     # runs 1+2 whole-file; run 3 is FILTERED
+  grep -q -- '-f .*tests/a.bats' "$BATS_ARGV"             # …at named-test granularity, not the file
+  git fetch -q origin main
+  [ -n "$(git ls-tree origin/main -- oot.sh)" ]
+}
+
+@test "smoke CARVE-OUT SEAM: SHIP_LAND_CARVEOUT_CONFIRM=off restores the 1-of-2 conviction" {
+  # The seam is the escape hatch AND this test is its red-proof: with the confirming run disabled
+  # the fixture that lands above must refuse again, so a future reader can tell the two standards
+  # apart by one variable instead of by reading the diff.
+  cut_fixture
+  echo red-once > "$CUT_MODE"
+  landable feat/seam-off so.sh
+
+  SHIP_LAND_CARVEOUT_CONFIRM=off run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q "finding, not a flake"
+  [ "$(grep -cx 'tests/a.bats' "$BATS_ARGV")" -eq 2 ]     # no third run was taken
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- so.sh)" ]
 }
 
 @test "smoke INVERSION: a suite CUT TWICE PROCEEDS as partial — never exit 9, never a block" {
@@ -2636,7 +2709,11 @@ persuite_fixture() {  # seed tests/{a,b}.bats + a shim whose behaviour is keyed 
   cat > "$SHIMDIR/bats" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$BATS_ARGV"
-b="\$(basename "\${1:-none}")"
+# THE SUITE IS THE LAST ARG, NEVER \$1. The confirming third observation invokes bats as
+# \`-f <regex> <suite>\`, so a fixture keying on \$1 sees "-f", finds no mode file and answers GREEN
+# — it would hold the very axis under test constant (memory: fixture-identifier-shape-collapses).
+for _a in "\$@"; do _last="\$_a"; done
+b="\$(basename "\${_last:-none}")"
 case "\$(cat "$MODE_DIR/\$b" 2>/dev/null)" in
   sig)  echo "1..3"; echo "ok 1 alpha"; echo "ok 2 beta"; exit 137 ;;
   red)  echo "1..1"; echo "not ok 1 boom"; exit 1 ;;
@@ -2646,6 +2723,11 @@ case "\$(cat "$MODE_DIR/\$b" 2>/dev/null)" in
   red-once) if [ ! -f "$BATS_TEST_TMPDIR/ps-red-\$b" ]; then       # NAMES a failure, then passes
               : > "$BATS_TEST_TMPDIR/ps-red-\$b"; echo "1..1"; echo "not ok 1 intermittent"; exit 1
             fi ;;
+  red-flaky)                              # red, green, red — 2-of-3, genuinely intermittent
+            n=\$(cat "$BATS_TEST_TMPDIR/ps-rf-\$b" 2>/dev/null || echo 0)
+            n=\$(( n + 1 )); echo "\$n" > "$BATS_TEST_TMPDIR/ps-rf-\$b"
+            if [ "\$n" = 2 ]; then echo "1..1"; echo "ok 1 green on the re-run"; exit 0; fi
+            echo "1..1"; echo "not ok 1 intermittent"; exit 1 ;;
   red-then-cut) if [ ! -f "$BATS_TEST_TMPDIR/ps-rtc-\$b" ]; then   # NAMES a failure, then is KILLED
                   : > "$BATS_TEST_TMPDIR/ps-rtc-\$b"; echo "1..1"; echo "not ok 1 boom"; exit 1
                 fi
@@ -2786,22 +2868,27 @@ EOF
   [ -z "$(git ls-tree origin/main -- psm.sh)" ]
 }
 
-@test "v1 lane: a DIRECT suite whose NAMED failure vanishes on retry is never exonerated" {
+@test "v1 lane: a DIRECT suite whose NAMED failure REPRODUCES is never exonerated" {
   # THE correctness fence on the exoneration re-run, and it must hold in v1 too: intermittence in
   # code you are landing is a FINDING, not a flake. The fast-lane twin is "smoke CARVE-OUT
   # CONTROL…" above; this is the half where non-direct suites also exist to be confused with it.
   # The fixture NAMES a failure (`red-once`) rather than being killed: keying the carve-out on a
   # named `not ok` is the v2 correction — see the cut-then-green tests — and a fixture that is
   # merely SIGKILLed would now (correctly) land, so it can no longer stand in for this rule.
+  # FIXTURE CHANGED 2026-09-10 (cc-backlog 19ca2b91425c), FENCE UNCHANGED — the fast-lane twin
+  # above carries the full rationale. `red-once` (fail, then green forever) is now a 1-of-3 flake
+  # and LANDS; the fence's subject is a failure that REPRODUCES, so the fixture becomes `red-flaky`.
   persuite_fixture
   stub_selector "" "tests/a.bats"          # a IS direct to this change…
-  echo red-once > "$MODE_DIR/a.bats"       # …and its named failure vanishes on the re-run
+  echo red-flaky > "$MODE_DIR/a.bats"      # …and its named failure REPRODUCES on the third run
   landable feat/ps-direct psd.sh
 
   run env SHIP_LAND_LANE=v1 bash "$SHIPLAND" --trunk main
-  [ "$status" -eq 6 ]                                      # pass-on-retry is NOT a pass here
+  [ "$status" -eq 6 ]                                      # reproduced intermittence is NOT a pass
   echo "$output" | grep -q "finding, not a flake"
-  [ ! -f "$POSTLAND_DIR/flakes.jsonl" ]                    # never exonerated ⇒ never logged
+  echo "$output" | grep -q "REPRODUCED"
+  por="$(grep -c '"outcome":"pass-on-retry"' "$POSTLAND_DIR/flakes.jsonl" 2>/dev/null)" || true
+  [ "${por:-0}" -eq 0 ]                                   # never exonerated ⇒ never logged as one
   git fetch -q origin main
   [ -z "$(git ls-tree origin/main -- psd.sh)" ]            # and NOT landed
 }
