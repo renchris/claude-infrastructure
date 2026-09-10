@@ -104,13 +104,62 @@ BLOCK_RE="($LIMIT_RE|$NET_RE)"
 #   network -> the account is FINE and the pane is usually still alive; transplanting would spend an
 #              account move to fix a problem that no longer exists. The fix is `/limit-recover resume`
 #              IN PLACE. --recover therefore refuses these by default rather than "helpfully" moving them.
-lf_kind_of() { # $1=tail -> limit|network
-  printf '%s' "$1" | grep -E "$LIMIT_RE" | grep -q '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true' \
-    && { echo limit; return; }
-  echo network
+# D7 (NONLIMIT_RESUME_LADDER § W1.2): the CLASS IS PER UNIT, AND CLASSES MIX IN ONE SESSION.
+# Measured: one workflow run held a `[security] failed: You've hit your session limit` slot INSIDE a
+# network-stalled run. So this prints two fields:
+#
+#   kind   the class of the LAST api-error record — the DECISION key, because that is the death the
+#          session is currently sitting on and it decides which recovery is legal.
+#   kinds  every class present in the tail, joined by '+' — reported so a mixed row is VISIBLE
+#          rather than silently collapsed to whichever class the decision picked.
+#
+# The old form grepped the WHOLE 20 KB tail for the limit text and answered `limit` if any line
+# matched, so a session whose last death was a network drop but which had hit a cap earlier in the
+# tail was classified `limit` — and `--recover`/`--enqueue` would then spend an account move to fix
+# a problem that no longer exists, which is the exact error the kind column was added to prevent.
+# Classifying the LAST record fixes that; `kinds` keeps the earlier class from being lost.
+lf_kinds_of() { # $1=tail -> "<kind>\t<kinds>"
+  printf '%s' "$1" | LF_LIMIT_RE="$LIMIT_RE" LF_NET_RE="$NET_RE" /usr/bin/python3 -c '
+import json,os,re,sys
+lim=re.compile(os.environ["LF_LIMIT_RE"]); net=re.compile(os.environ["LF_NET_RE"])
+last=None; seen=[]
+for l in sys.stdin:
+    if "isApiErrorMessage" not in l: continue
+    try: d=json.loads(l)
+    except Exception: continue
+    # The ENVELOPE gate, kept verbatim: only a synthetic api-error record counts, so a session
+    # merely DISCUSSING one of these strings in prose can never be classified by it.
+    if d.get("type")!="assistant" or not d.get("isApiErrorMessage"): continue
+    m=d.get("message") if isinstance(d.get("message"),dict) else {}
+    c=m.get("content")
+    txt=c if isinstance(c,str) else " ".join(x.get("text","") for x in (c or []) if isinstance(x,dict))
+    k="limit" if lim.search(txt) else ("network" if net.search(txt) else "other")
+    last=k
+    if k not in seen: seen.append(k)
+print("%s\t%s" % (last or "network", "+".join(seen) or "network"))'
+}
+# The AGE of that last api-error record, in seconds. A census snapshot of "blocked" rows EXPIRES:
+# all six panes measured on 2026-09-09 were re-engaged within ~40 minutes, so a row read without its
+# age invites acting on a session that recovered an hour ago.
+lf_err_age_s() { # $1=tail -> seconds, or "-"
+  printf '%s' "$1" | /usr/bin/python3 -c '
+import json,sys
+from datetime import datetime,timezone
+ts=None
+for l in sys.stdin:
+    if "isApiErrorMessage" not in l: continue
+    try: d=json.loads(l)
+    except Exception: continue
+    if d.get("type")!="assistant" or not d.get("isApiErrorMessage"): continue
+    ts=d.get("timestamp") or ts
+if not ts: print("-"); raise SystemExit(0)
+try:
+    t=datetime.fromisoformat(ts.replace("Z","+00:00"))
+    print(int((datetime.now(timezone.utc)-t).total_seconds()))
+except Exception: print("-")'
 }
 lf_locate() { # → TSV rows on stdout
-  local cfg tx sid tail rows pane pid acct cwd tier disp n kind
+  local cfg tx sid tail rows pane pid acct cwd tier disp n kind kinds err_age _procs
   while IFS= read -r cfg; do
     [ -n "$cfg" ] || continue
     for tx in "$cfg"/projects/*/*.jsonl; do
@@ -119,7 +168,9 @@ lf_locate() { # → TSV rows on stdout
       case "$sid" in agent-*|wf_*) continue ;; esac
       tail="$(tail -c 20000 "$tx" 2>/dev/null || true)"
       printf '%s' "$tail" | grep -E "$BLOCK_RE" | grep -q '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true' || continue
-      kind="$(lf_kind_of "$tail")"
+      IFS=$'\t' read -r kind kinds <<<"$(lf_kinds_of "$tail")"
+      [ -n "$kinds" ] || kinds="$kind"
+      err_age="$(lf_err_age_s "$tail")"; [ -n "$err_age" ] || err_age="-"
       # the limit must be the LAST assistant word — a session that took a real turn since is not blocked
       printf '%s' "$tail" | /usr/bin/python3 -c '
 import json,sys
@@ -142,15 +193,29 @@ sys.exit(0 if last else 1)' || continue
           n="$(printf '%s\n' "$rows" | grep -c .)"
           IFS=$'\t' read -r pane pid _ cwd <<<"$(printf '%s\n' "$rows" | head -1)"
           if [ "$n" -gt 1 ] || lr_resume_procs "$sid" >/dev/null 2>&1; then disp=DUPLICATE; else disp=RECOVERABLE; fi
-        elif lr_resume_procs "$sid" >/dev/null 2>&1; then disp=RESUMING
+        elif _procs="$(lr_resume_procs "$sid" 2>/dev/null)"; then
+          # D7 — THE REGISTRY HOLE, FILLED FROM THE ARGV LEAF. A session whose SessionStart hook
+          # never wrote a row (or whose row went stale) has no registry pid, and this branch used to
+          # leave pid "-" while asserting RESUMING. Measured 2026-09-09: `lr_registry_live_rows`
+          # returned rc 1 for 52e35019 while pid 77720 held `claude … --resume 52e35019…`, alive
+          # since Sep 8 19:51 — a live process reported with no pid at all. The argv census already
+          # knows that pid; take it.
+          disp=RESUMING; pid="$(printf '%s\n' "$_procs" | head -1)"; [ -n "$pid" ] || pid="-"
+          cwd="$(grep -o '"cwd":"[^"]*"' "$tx" 2>/dev/null | tail -1 | cut -d'"' -f4 || true)"; [ -n "$cwd" ] || cwd="-"
         else disp=NO-PANE; cwd="$(grep -o '"cwd":"[^"]*"' "$tx" 2>/dev/null | tail -1 | cut -d'"' -f4 || true)"; [ -n "$cwd" ] || cwd="-"
         fi
         if _to="$(lr_transplanted_to "$sid" "$cfg")"; then disp="TRANSPLANTED→$(lf_acct_of_cfg "$_to")"; fi
       fi
-      # A network-blocked session with a live pane is RESUME-IN-PLACE, not RECOVERABLE: the distinction
-      # is the whole point of the kind column, and collapsing it is what would send a transplant at it.
-      [ "$kind" = network ] && [ "$disp" = RECOVERABLE ] && disp=RESUME-IN-PLACE
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$sid" "$cfg" "$acct" "$pane" "$pid" "$cwd" "$tier" "$disp" "$kind"
+      # A network-blocked session with a live pane is IDLE-AFTER-ERROR, not RECOVERABLE: the
+      # distinction is the whole point of the kind column, and collapsing it is what would send a
+      # transplant at it. RENAMED from RESUME-IN-PLACE (D7): the old name was an INSTRUCTION to the
+      # operator ("resume this in place"), and the machine is now the one that acts — while the state
+      # it actually names is "the process is alive and sitting at its prompt after an error record".
+      # Naming the STATE rather than the remedy is also what stops the row reading as a standing
+      # to-do after the session has already re-engaged, which every measured row did within ~40 min.
+      [ "$kind" = network ] && [ "$disp" = RECOVERABLE ] && disp=IDLE-AFTER-ERROR
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$sid" "$cfg" "$acct" "$pane" "$pid" "$cwd" "$tier" "$disp" "$kind" "$kinds" "$err_age"
     done
   done <<EOF
 $(lr_config_dirs)
@@ -167,11 +232,21 @@ lf_dedup_mirror() { awk -F'\t' '
     else if (sacct[sid]==".claude" && acct!=".claude") { seen[sid]=$0; sacct[sid]=acct } }
   END { for (i=1;i<=k;i++) print seen[ord[i]] }' ; }
 lf_print_census() { # stdin: TSV rows
-  local sid cfg acct pane pid cwd tier disp n=0
-  printf '%-9s %-6s %-6s %-7s %-22s %-16s %-8s %s\n' SID ACCT PANE PID TIER DISPOSITION KIND CWD
-  while IFS=$'\t' read -r sid _cfg acct pane pid cwd tier disp kind; do
+  local sid cfg acct pane pid cwd tier disp n=0 kind kinds err_age agec
+  printf '%-9s %-6s %-6s %-7s %-22s %-17s %-14s %-7s %s\n' \
+    SID ACCT PANE PID TIER DISPOSITION 'KIND(S)' ERR-AGE CWD
+  while IFS=$'\t' read -r sid _cfg acct pane pid cwd tier disp kind kinds err_age; do
     [ -n "$sid" ] || continue; n=$((n+1))
-    printf '%-9s %-6s %-6s %-7s %-22s %-16s %-8s %s\n' "${sid:0:8}" "$acct" "$pane" "$pid" "$tier" "$disp" "${kind:--}" "$cwd"
+    # The age is rendered, not raw seconds: a row is only actionable while it is FRESH, and every
+    # blocked pane measured on 2026-09-09 had re-engaged within ~40 minutes of its error record.
+    case "$err_age" in
+      ''|-|*[!0-9]*) agec="?" ;;
+      *) if [ "$err_age" -lt 90 ]; then agec="${err_age}s"
+         elif [ "$err_age" -lt 5400 ]; then agec="$((err_age / 60))m"
+         else agec="$((err_age / 3600))h"; fi ;;
+    esac
+    printf '%-9s %-6s %-6s %-7s %-22s %-17s %-14s %-7s %s\n' \
+      "${sid:0:8}" "$acct" "$pane" "$pid" "$tier" "$disp" "${kinds:-${kind:--}}" "$agec" "$cwd"
   done
   [ "$n" -gt 0 ] || echo "(no blocked session anywhere — no cap, no network/stall death)"
 }
@@ -267,12 +342,15 @@ import sys,json
 out=[]
 for l in sys.stdin:
     p=l.rstrip("\n").split("\t")
-    # 9 fields since the KIND column landed. A hard count gate here is a SILENT data-loss bug:
-    # a stale width made the skip drop EVERY row and --json returned a valid empty list at exit 0,
-    # which any consumer reads as "no blocked sessions". Keep it exact, and keep it in step with
-    # the printf in lf_locate and every tab-split read of a locate row.
-    if len(p)!=9: continue
-    out.append(dict(zip(["sid","cfg","account","pane","pid","cwd","tier","disposition","kind"],p)))
+    # 11 fields since D7 added `kinds` and `err_age_s` beside KIND. A hard count gate here is a
+    # SILENT data-loss bug: a stale width made the skip drop EVERY row and --json returned a valid
+    # empty list at exit 0, which any consumer reads as "no blocked sessions". Keep it exact, and
+    # keep it in step with the printf in lf_locate and every tab-split read of a locate row — TAB is
+    # IFS whitespace, so a reader naming N variables over N+1 fields folds the remainder into the
+    # LAST one, silently, at exit 0.
+    if len(p)!=11: continue
+    out.append(dict(zip(["sid","cfg","account","pane","pid","cwd","tier","disposition",
+                         "kind","kinds","err_age_s"],p)))
 print(json.dumps(out,indent=1))'
     else printf '%s\n' "$rows" | lf_print_census; fi
     exit 0 ;;
@@ -281,11 +359,15 @@ print(json.dumps(out,indent=1))'
     rows="$(lf_locate | lf_dedup_mirror)"; printf '%s\n' "$rows" > "$FLEET_DIR/$RUN/census.tsv"
     printf '%s\n' "$rows" | lf_print_census >&2
     n=0; worst=0
-    while IFS=$'\t' read -r sid cfg acct pane pid cwd tier disp kind; do
+    while IFS=$'\t' read -r sid cfg acct pane pid cwd tier disp kind kinds err_age; do
       [ -n "$sid" ] || continue
       case "$disp" in
         RECOVERABLE) : ;;
-        RESUME-IN-PLACE) lf_row "$sid" "$pane" "$pane" "$acct" "-" "skipped" "network/stall death, NOT a cap — this account is fine; resume IN PLACE: type '/limit-recover resume' in pane $pane"; continue ;;
+        # Both spellings: census.tsv files from earlier runs are on disk carrying the old name, and
+        # a disposition this branch does not recognise falls to the `*)` arm below, which merely
+        # reports it — so an unrecognised RESUME-IN-PLACE would look handled while saying nothing
+        # useful. Accept the old name until no stored census carries it.
+        IDLE-AFTER-ERROR|RESUME-IN-PLACE) lf_row "$sid" "$pane" "$pane" "$acct" "-" "skipped" "network/stall death, NOT a cap — this account is fine and the process is alive; recover IN PLACE (/recover, or /limit-recover) in pane $pane — error record ${err_age}s old"; continue ;;
         NO-PANE) pane="-" ;;
         DUPLICATE) lf_row "$sid" "$pane" "$pane" "$acct" "-" "parked" "DUPLICATE — more than one live process; resolve with --duplicates first"; worst=1; continue ;;
         *) lf_row "$sid" "$pane" "$pane" "$acct" "-" "skipped" "$disp"; continue ;;
@@ -311,7 +393,7 @@ EOF
       [ -n "$cfg" ] || { echo "lr-fleet: --one $SID — no transcript in any store" >&2; exit 2; }
       acct="$(lf_acct_of_cfg "$cfg")"; pane="${SOURCE_PANE:--}"; cwd="$(grep -o '"cwd":"[^"]*"' "$cfg"/projects/*/"$SID".jsonl 2>/dev/null | tail -1 | cut -d'"' -f4)"; tier="$(lr_tier_from_transcript "$cfg" "$SID" 2>/dev/null | tr ' ' '/' || true)"
     else
-      IFS=$'\t' read -r _ cfg acct pane pid cwd tier disp kind <<<"$row"
+      IFS=$'\t' read -r _ cfg acct pane pid cwd tier disp kind kinds err_age <<<"$row"
       [ -n "$SOURCE_PANE" ] && pane="$SOURCE_PANE"
       case "$disp" in TRANSPLANTED*) echo "lr-fleet: --one $SID — already $disp; nothing to do" >&2; exit 0 ;; esac
     fi
@@ -322,10 +404,14 @@ EOF
   enqueue)
     mkdir -p "$STATE/requests"
     n=0
-    while IFS=$'\t' read -r sid cfg acct pane pid cwd tier disp kind; do
+    while IFS=$'\t' read -r sid cfg acct pane pid cwd tier disp kind kinds err_age; do
       [ -n "$sid" ] || continue
       # enqueue hands the poller a TRANSPLANT request; only a real cap earns one.
       case "$disp" in RECOVERABLE|NO-PANE) : ;; *) continue ;; esac
+      # `kind` is the class of the LAST api-error record, which is the death the session is sitting
+      # on — so this stays an EXACT match even though `kinds` may read `network+limit`. A session
+      # whose latest death is a network drop must not be transplanted however many caps it hit
+      # earlier: the account is fine and the move would be spent on a problem that no longer exists.
       [ "$kind" = limit ] || continue
       jq -n --arg sid "$sid" --arg target "$TARGET" --arg pane "$([ "$pane" != "-" ] && printf '%s' "$pane")" --arg by "${CLAUDE_CODE_SESSION_ID:-lr-fleet}" --arg ts "$(lf_now)" \
         '{sid:$sid, target:$target, source_pane:$pane, requested_by:$by, ts:$ts}' > "$STATE/requests/$sid.json"
