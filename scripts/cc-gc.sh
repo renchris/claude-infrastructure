@@ -407,7 +407,7 @@ ${CC_PUSH_RECORDS_DIR:-$HOME/.claude/autonomy/push-records}"
 }
 
 assert_transcripts() {
-  local roots="${CC_GC_CONFIG_ROOTS:-$HOME/.claude $HOME/.claude-secondary $HOME/.claude-tertiary $HOME/.claude-next}"
+  local roots="${CC_GC_CONFIG_ROOTS:-$HOME/.claude $HOME/.claude-secondary $HOME/.claude-tertiary $HOME/.claude-quaternary $HOME/.claude-next}"
   local horizon=$((TRANSCRIPT_DAYS + TRANSCRIPT_GRACE))
   local r n total=0 worst=''
   # shellcheck disable=SC2086  # CC_GC_CONFIG_ROOTS is a space-separated root list by contract
