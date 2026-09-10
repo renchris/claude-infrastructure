@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""cc-signoff — the ONLY path from `awaiting-signoff` to `signed`. Operator only.
+
+The operator's ruling, verbatim: "deeming completion for these items ie. bottle service,
+floor plan HAS TO BE HUMAN SIGNED OFF. you do not have the awareness YET to have that call."
+
+So this command exists to be UNRUNNABLE BY AN AGENT, and to make a signature a claim about
+BYTES rather than about a name.
+
+THREE ARMS, and the third is the honest one:
+
+  ARM 1 — ANCESTRY.  Walk our own parent chain; refuse if any ancestor is a claude
+  process.  Verified live from inside a Bash tool call: pid -> /bin/zsh -> ppid ->
+  .../node_modules/.bin/claude at depth 1 -> REFUSE.  The operator's own shell walks
+  zsh -> kitty with no claude in it -> ALLOW.
+
+  ARM 2 — CONTENT PIN.  The signature records `git rev-parse origin/main:<path>` for every
+  artifact path.  `cc-mission render` recomputes them; one changed byte re-opens the row and
+  says so on the board.  Without this, signing a name means an agent can edit the geometry
+  afterwards and the board stays green over a floor plan the operator never saw.
+
+  ARM 3 — THE RENDER IS THE AUDITOR.  We run as the operator's uid, so a determined process
+  can bypass arms 1 and 2; claiming otherwise would be false, and a false claim here is
+  worse than the gap.  What is achievable is that a forgery ADVERTISES ITSELF: every signoff
+  row stores the ancestry chain that wrote it, and any row showing a claude ancestor is
+  rendered as VOID (agent-written), by name, into the board that every session on every
+  account loads.  A forged signature does not merely fail to help — it broadcasts itself
+  machine-wide.
+
+DELIBERATELY NOT USED: a `[ -t 0 ]` TTY gate.  It was measured and REFUTED as a
+human/agent discriminator in both directions — git hands pre-commit hooks /dev/null on
+stdin (so the operator's own `git commit` is byte-identical to an agent), and `pty.spawn`
+hands an agent a tty.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+STORE = HOME / ".claude" / "autonomy" / "customer"
+ROWS = STORE / "rows"
+JOURNAL = STORE / "signoff.jsonl"
+CC_MISSION = HOME / ".claude" / "bin" / "cc-mission"
+
+
+def ancestry() -> list[dict]:
+    """Walk pid -> ppid to init, recording each command."""
+    chain, pid, depth = [], os.getpid(), 0
+    while pid and pid > 1 and depth < 24:
+        try:
+            out = subprocess.run(("ps", "-o", "ppid=,comm=", "-p", str(pid)),
+                                 capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            break
+        line = out.stdout.strip()
+        if not line:
+            break
+        parts = line.split(None, 1)
+        if len(parts) < 2:
+            break
+        chain.append({"pid": pid, "comm": parts[1], "depth": depth})
+        pid, depth = int(parts[0]), depth + 1
+    return chain
+
+
+def main() -> int:
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print("usage: cc-signoff <row-id> --evidence <live-url|sha> [--note <text>]\n"
+              "       run this in YOUR OWN terminal; an agent cannot.")
+        return 0
+
+    rid = sys.argv[1]
+    args = sys.argv[2:]
+    evidence = note = None
+    i = 0
+    while i < len(args):
+        if args[i] == "--evidence" and i + 1 < len(args):
+            evidence, i = args[i + 1], i + 2
+        elif args[i] == "--note" and i + 1 < len(args):
+            note, i = args[i + 1], i + 2
+        else:
+            print(f"unknown option: {args[i]}", file=sys.stderr)
+            return 2
+
+    chain = ancestry()
+    claude_anc = next((c for c in chain if "claude" in c["comm"].lower()), None)
+
+    f = ROWS / f"{rid}.json"
+    if not f.exists():
+        print(f"no such row: {rid}\ntry: cc-mission list", file=sys.stderr)
+        return 2
+    row = json.loads(f.read_text())
+
+    if claude_anc:
+        # ARM 1. Refuse, and say exactly which ancestor convicted us.
+        print("REFUSED — cc-signoff is descended from a claude process "
+              f"({claude_anc['comm']} at depth {claude_anc['depth']}).\n"
+              "A floor plan or bottle menu is signed off by the operator, in his own\n"
+              "terminal, after looking at it. An agent may only advance a row to\n"
+              "'awaiting-signoff'.\n\n"
+              f"  Operator, to sign this:  cc-signoff {rid} --evidence <the URL you opened>",
+              file=sys.stderr)
+        return 3
+
+    if not evidence:
+        print("REFUSED — --evidence is required: the live URL you actually opened, or a\n"
+              "sha of what you looked at. A signature with no referent is a claim about\n"
+              "nothing.", file=sys.stderr)
+        return 2
+
+    if row.get("state") != "awaiting-signoff":
+        print(f"REFUSED — row is '{row.get('state')}', not 'awaiting-signoff'. Nothing has\n"
+              "been published for your eyes yet.", file=sys.stderr)
+        return 2
+
+    # ARM 2 — pin the bytes.
+    repo = row.get("repo", "")
+    pins = {}
+    for p in row.get("paths") or []:
+        out = subprocess.run(("git", "-C", repo, "rev-parse", f"origin/main:{p}"),
+                             capture_output=True, text=True)
+        if out.returncode != 0:
+            print(f"REFUSED — cannot pin '{p}' on origin/main. Fetch first, or the row's\n"
+                  "paths are wrong; signing an unpinnable artifact would be a signature\n"
+                  "over nothing.", file=sys.stderr)
+            return 2
+        pins[p] = out.stdout.strip()
+
+    now = time.time()
+    row["state"] = "signed"
+    row["signoff"] = {
+        "at": now,
+        "at_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(now)),
+        "evidence": evidence,
+        "note": note,
+        "pins": pins,
+        "provenance": {"claude_ancestor": False,
+                       "chain": [c["comm"] for c in chain]},
+    }
+    tmp = f.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(row, indent=2) + "\n")
+    tmp.replace(f)
+
+    JOURNAL.parent.mkdir(parents=True, exist_ok=True)
+    with JOURNAL.open("a") as fh:
+        fh.write(json.dumps({"id": rid, "at": now, "evidence": evidence,
+                             "pins": pins,
+                             "chain": [c["comm"] for c in chain]}) + "\n")
+
+    subprocess.run((str(CC_MISSION), "render"), capture_output=True)
+    print(f"SIGNED {rid}\n  pinned {len(pins)} artifact blob(s) — if any of them changes,\n"
+          "  the row re-opens on the board and says so.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

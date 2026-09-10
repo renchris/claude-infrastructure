@@ -1,0 +1,453 @@
+#!/usr/bin/env python3
+"""cc-mission — the customer deal board.
+
+WHY THIS EXISTS (measured 2026-09-09, workflow wf_2ded8326-b32):
+  - 215 of 1284 commits in 4 weeks (16.7%) touched a shippable customer artifact.
+    Weekly share: 33.9% -> 10.0% -> 28.6% -> 14.8% -> 9.1%. The drift is accelerating.
+  - Insomniac Denver (the live lead) went untouched for 9 days / 145 commits.
+  - ROOT CAUSE, and it is structural rather than a discipline failure:
+    `drain-pick.sh:80` filters `select(.status == "open")`, and every reso backlog row
+    is `blocked`.  `drain-pick.sh --project reso-management-app` returns
+    `eligible=0 shown=0` while claude-infrastructure has open rows.  The machine's own
+    answer to "what next" is GUARANTEED to be infrastructure.  Nothing on this box
+    represented a standing customer obligation, so a chore-polish session was, by every
+    sensor we owned, genuinely clean.
+
+THE CARRIER.  ~/.claude/rules/*.md is measured at 258/258 sessions (100% reach), is a
+symlink from all four other config dirs into ~/.claude/rules, costs ~1K tokens against
+CLAUDE.md's ~23.5K for identical reach, and — contrary to the stale note in
+agent-operating-lessons.md — NOW LOADS UNDER `claude -p` TOO (re-probed 2026-09-09 on
+2.1.260, with a negative control).  So one rendered file reaches every session, on every
+account, in every worktree, headless included, with ZERO settings.json edits.
+
+HONEST LIMITS, stated because a mechanism that overclaims is worse than none:
+  1. THE BOARD A SESSION READS IS ONE SESSION STALE.  Instructions are read into the
+     process before the SessionStart hook rewrites the file (probed: hook wrote NEWNEW,
+     session answered OLDOLD).  Every clock here is days-scale, so a one-session lag is
+     immaterial — but the render is NOT live and this file says so rather than pretending.
+  2. THE AGENT RUNS AS THE OPERATOR'S UID.  No prohibition here is cryptographic.  What
+     the sign-off arms buy is that no COMPLIANT path can forge a signature and no
+     non-compliant one can forge it INVISIBLY (see cc-signoff, and VOID below).
+  3. `[ -t 0 ]` IS NOT A HUMAN/AGENT DISCRIMINATOR and is deliberately not used.  git
+     hands pre-commit hooks /dev/null on stdin, so a human's own `git commit` looks
+     byte-identical to an agent; and `pty.spawn` gives an agent a tty.  Process ancestry
+     is used instead (verified: it refused an agent live, and an operator's own shell
+     walks zsh -> kitty with no claude in the chain).
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+STORE = HOME / ".claude" / "autonomy" / "customer"
+ROWS = STORE / "rows"
+BOARD = HOME / ".claude" / "rules" / "00-mission-board.md"
+DAY = 86400.0
+
+# States an agent may set. `signed` and `live` are reachable only through cc-signoff.
+AGENT_STATES = {"lead", "provisioned", "needs-source", "drafted", "awaiting-signoff",
+                "blocked-customer", "blocked-operator"}
+OPERATOR_STATES = {"signed", "live"}
+
+
+# ---------------------------------------------------------------- git helpers
+
+def _git(repo: str, *args: str) -> str:
+    """Run git in `repo`, returning stripped stdout ('' on any failure)."""
+    try:
+        out = subprocess.run(("git", "-C", repo) + args, capture_output=True,
+                             text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def path_state(repo: str, paths: list[str]) -> tuple[str, float | None]:
+    """(state, epoch-of-last-touch) for a set of pathspecs on origin/main.
+
+    Two commands, not one, and the pathspec is passed as a LITERAL after `--`.
+    An UNQUOTED glob is expanded by the shell against the worktree and silently
+    reports NEVER-TOUCHED, which is a false absence rather than a stale row — the
+    exact trap the design wave hit.  So the ls-tree gate runs first and we test its
+    OUTPUT (it exits 0 while empty), separating PATHSPEC-DEAD from NEVER-TOUCHED.
+    """
+    if not paths:
+        return "no-paths", None
+    listed = _git(repo, "ls-tree", "-r", "--name-only", "origin/main", "--", *paths)
+    if not listed:
+        return "pathspec-dead", None
+    ct = _git(repo, "log", "origin/main", "-1", "--format=%ct", "--", *paths)
+    if not ct:
+        return "never-touched", None
+    try:
+        return "ok", float(ct)
+    except ValueError:
+        return "never-touched", None
+
+
+def blob_sha(repo: str, path: str) -> str:
+    return _git(repo, "rev-parse", f"origin/main:{path}")
+
+
+# ---------------------------------------------------------------- row loading
+
+def load_rows() -> list[dict]:
+    if not ROWS.is_dir():
+        return []
+    rows = []
+    for f in sorted(ROWS.glob("*.json")):
+        try:
+            rows.append(json.loads(f.read_text()))
+        except (OSError, ValueError):
+            continue  # a malformed row must never take the board down
+    return rows
+
+
+def save_row(row: dict) -> None:
+    ROWS.mkdir(parents=True, exist_ok=True)
+    row.setdefault("created_at", time.time())
+    dst = ROWS / f"{row['id']}.json"
+    tmp = dst.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(row, indent=2) + "\n")
+    tmp.replace(dst)  # atomic: 15+ concurrent sessions must never read a half-written row
+
+
+# ------------------------------------------------------------- row evaluation
+
+def evaluate(row: dict, now: float) -> dict:
+    """Attach derived state. Never mutates the stored row.
+
+    Order matters. Each guard below can only DEMOTE a row, so a row cannot be
+    rendered as further along than its bytes justify.
+    """
+    r = dict(row)
+    repo = r.get("repo", "")
+    r["_flags"] = []
+    r["_stale_days"] = 0.0
+    r["_clock"] = ""
+
+    # --- SOURCE GATE (the two-sided publish precondition) -------------------
+    # A deliverable whose LEFT side does not exist as committed bytes cannot be
+    # published for review, because the human would have nothing to compare against.
+    # This is the measured root cause of the floor-plan problem: all five existing
+    # quality gates compare the artifact to ITSELF and never to the venue's document.
+    # An ungrounded row's only agent action is to DRAFT THE ASK — never to build.
+    src = r.get("source") or []
+    if src:
+        st, _ = path_state(repo, src)
+        if st in ("pathspec-dead", "never-touched", "no-paths"):
+            r["state"] = "needs-source"
+            r["_flags"].append("NEEDS-SOURCE")
+
+    # --- CONTENT PIN (the fatal flaw of the un-grafted design) --------------
+    # A signature is a claim about BYTES, not about a name. If the artifact moved
+    # after it was signed, the signature stops being true — so the row silently
+    # re-enters the queue instead of staying green over changed geometry.
+    so = r.get("signoff")
+    if so and r.get("state") in OPERATOR_STATES:
+        prov = so.get("provenance") or {}
+        if prov.get("claude_ancestor"):
+            # ARM 3 — THE RENDER IS THE AUDITOR. Prevention against a same-uid process
+            # is impossible; self-advertisement is not. A forged signature does not
+            # merely fail to help, it broadcasts itself into resident context on all
+            # five accounts.
+            r["state"] = "awaiting-signoff"
+            r["_flags"].append("VOID (agent-written signature)")
+        else:
+            drift = [p for p, sha in (so.get("pins") or {}).items()
+                     if blob_sha(repo, p) != sha]
+            if drift:
+                r["state"] = "awaiting-signoff"
+                r["_flags"].append(
+                    f"RE-OPENED (changed since you signed: {', '.join(drift[:2])})")
+
+    state = r.get("state", "lead")
+
+    # --- CLOCKS: any one fires -----------------------------------------------
+    if state == "awaiting-signoff":
+        since = r.get("awaiting_since")
+        if since:
+            d = (now - float(since)) / DAY
+            if d > 1.0:
+                r["_stale_days"], r["_clock"] = d, "your eyes"
+    elif state in ("blocked-customer", "needs-source"):
+        # The action is "chase the venue", not "do work" — so this clock measures the
+        # ASK, and an unsent ask is worse than an old one.
+        sent = r.get("ask_sent_at")
+        if not sent:
+            r["_stale_days"], r["_clock"] = 999.0, "ask UNSENT"
+            r["_flags"].append("ASK UNSENT")
+        else:
+            d = (now - float(sent)) / DAY
+            if d > 3.0:
+                r["_stale_days"], r["_clock"] = d, "no reply"
+    elif state == "blocked-operator":
+        # The operator's own move. It has no agent-side action, so nothing else on this
+        # box would ever surface it — and an unclocked blocker is how a lead dies quietly.
+        since = r.get("blocked_since") or r.get("created_at")
+        if since:
+            d = (now - float(since)) / DAY
+            if d > float(r.get("budget_days", 1)):
+                r["_stale_days"], r["_clock"] = d, "YOUR MOVE — blocks everything below"
+    elif state == "lead":
+        due = r.get("reply_due")
+        if due and now > float(due):
+            r["_stale_days"] = (now - float(due)) / DAY
+            r["_clock"] = "24h REPLY PROMISE BREACHED"
+    elif state in ("drafted", "provisioned"):
+        st, ct = path_state(repo, r.get("paths") or [])
+        if st == "pathspec-dead":
+            r["_flags"].append("PATHSPEC-DEAD (row points at nothing on trunk)")
+        elif ct is not None:
+            d = (now - ct) / DAY
+            if d > float(r.get("budget_days", 2)):
+                r["_stale_days"], r["_clock"] = d, "untouched"
+    return r
+
+
+def is_stale(r: dict) -> bool:
+    return r["_stale_days"] > 0 and r.get("state") not in OPERATOR_STATES
+
+
+def rank(rows: list[dict]) -> list[dict]:
+    """Reply breach > ask unsent > awaiting your eyes > untouched; oldest first."""
+    prio = {"24h REPLY PROMISE BREACHED": 0,
+            "YOUR MOVE — blocks everything below": 1,
+            "ask UNSENT": 2, "your eyes": 3, "no reply": 4, "untouched": 5}
+    return sorted(rows, key=lambda r: (prio.get(r["_clock"], 9), -r["_stale_days"]))
+
+
+# ------------------------------------------------------------------- commands
+
+def cmd_render(_args: list[str]) -> int:
+    now = time.time()
+    rows = [evaluate(r, now) for r in load_rows()]
+    stale = rank([r for r in rows if is_stale(r)])
+    live = [r for r in rows if r.get("state") in OPERATOR_STATES]
+    stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(now))
+
+    out = ["# Mission board — the customer deliverables\n",
+           "<!-- generated by `cc-mission render`; edit the rows, never this file -->\n"]
+
+    if not stale:
+        # ALARM POLARITY. An alarm that always fires carries as many bits as one that
+        # never does, so the common case must actively say "carry on".
+        out.append(f"\n**Deal board: {len(rows)} rows, {len(live)} signed off, "
+                   f"0 stale — nothing customer-side is waiting. Infra work is "
+                   f"unblocked.**  <sub>rendered {stamp}</sub>\n")
+    else:
+        out.append(
+            f"\n🚨 **{len(stale)} customer deliverable(s) are stale. These outrank "
+            f"every infra/chore/docs task in every session on this machine.** "
+            f"Boiling-ocean improvements are welcome *alongside* these, never *instead* "
+            f"of them.  <sub>rendered {stamp}, one session behind by design</sub>\n\n")
+        for r in stale:
+            d = r["_stale_days"]
+            age = "" if d >= 999 else f" {d:.0f}d"
+            flags = ("  ⚠️ " + " · ".join(r["_flags"])) if r["_flags"] else ""
+            out.append(f"- **{r.get('lead','?')} · {r.get('venue','?')} · "
+                       f"{r.get('artifact','?')}** — {r['_clock']} {age}. "
+                       f"→ {r.get('next','(no next action recorded)')}{flags}\n")
+        out.append(
+            "\n**What to do with this.** Work the top row, or say in one line why you "
+            "are not and what you are doing instead. `cc-mission next` prints the one "
+            "action. An agent may advance a row to `awaiting-signoff` and NO further — "
+            "only the operator, running `cc-signoff`, can call a floor plan or a bottle "
+            "menu done. A row marked NEEDS-SOURCE has no venue document committed, so "
+            "the only honest action on it is to draft the ask, never to build from a "
+            "guess.\n")
+    tmp = BOARD.with_suffix(".md.tmp")
+    BOARD.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text("".join(out))
+    tmp.replace(BOARD)  # a failed render leaves the previous board intact
+    return 0
+
+
+def cmd_next(_args: list[str]) -> int:
+    now = time.time()
+    stale = rank([r for r in (evaluate(x, now) for x in load_rows()) if is_stale(r)])
+    if not stale:
+        print("mission: nothing stale — infra work is unblocked.")
+        return 0
+    r = stale[0]
+    d = r["_stale_days"]
+    print(f"MISSION · {r.get('lead')} · {r.get('venue')} · {r.get('artifact')}")
+    print(f"  clock : {r['_clock']} {'—' if d >= 999 else f'{d:.0f}d'}")
+    print(f"  next  : {r.get('next')}")
+    if r.get("ask"):
+        print(f"  ask   : {r['ask']}")
+    print(f"  id    : {r['id']}")
+    return 0
+
+
+def cmd_list(_args: list[str]) -> int:
+    now = time.time()
+    rows = [evaluate(r, now) for r in load_rows()]
+    if not rows:
+        print("no rows. seed with: cc-mission seed")
+        return 0
+    for r in rank(rows):
+        mark = "STALE" if is_stale(r) else "  ok "
+        d = r["_stale_days"]
+        age = "" if d == 0 else ("—" if d >= 999 else f"{d:.0f}d")
+        print(f"{mark} | {r.get('state','?'):<17} | {r['id']:<48} | "
+              f"{r['_clock']} {age} {' '.join(r['_flags'])}")
+    return 0
+
+
+def cmd_touch(args: list[str]) -> int:
+    """cc-mission touch <id> --state <s> [--next <text>] [--ask-sent]"""
+    if not args:
+        print("usage: cc-mission touch <id> --state <s> [--next <text>] [--ask-sent]",
+              file=sys.stderr)
+        return 2
+    rid, opts = args[0], args[1:]
+    f = ROWS / f"{rid}.json"
+    if not f.exists():
+        print(f"no such row: {rid}", file=sys.stderr)
+        return 2
+    row = json.loads(f.read_text())
+    i = 0
+    while i < len(opts):
+        if opts[i] == "--state" and i + 1 < len(opts):
+            s = opts[i + 1]
+            if s in OPERATOR_STATES:
+                # THE WHOLE POINT. The agent's maximum honest claim is "ready for your
+                # eyes"; the operator has said the agent does not yet have the awareness
+                # to call a floor plan or a bottle menu done.
+                print(f"REFUSED: '{s}' is operator-only. An agent may advance a row to "
+                      f"'awaiting-signoff' and no further.\nOnly `cc-signoff {rid}`, run "
+                      f"by the operator in his own shell, moves this row.", file=sys.stderr)
+                return 3
+            if s not in AGENT_STATES:
+                print(f"unknown state '{s}'; allowed: {sorted(AGENT_STATES)}",
+                      file=sys.stderr)
+                return 2
+            if s == "awaiting-signoff":
+                row["awaiting_since"] = time.time()
+            row["state"] = s
+            i += 2
+        elif opts[i] == "--next" and i + 1 < len(opts):
+            row["next"] = opts[i + 1]
+            i += 2
+        elif opts[i] == "--ask-sent":
+            row["ask_sent_at"] = time.time()
+            i += 1
+        else:
+            print(f"unknown option: {opts[i]}", file=sys.stderr)
+            return 2
+    save_row(row)
+    cmd_render([])
+    print(f"{rid} -> {row.get('state')}")
+    return 0
+
+
+def cmd_seed(_args: list[str]) -> int:
+    """Seed the rows the 2026-09-09 investigation measured. Idempotent: never
+    overwrites a row that already exists, so a re-run cannot erase progress."""
+    reso = str(HOME / "Development" / "reso-management-app")
+    seed = [
+        {
+            "id": "insomniacdenver.church.main-floor.floor-plan",
+            "lead": "Insomniac Denver", "venue": "The Church — main floor",
+            "tenant": "insomniacdenver", "artifact": "floor-plan", "repo": reso,
+            "state": "drafted", "owner": "agent", "budget_days": 2,
+            "paths": ["data/the-church-nightclub-main-floor-floor-plan.json",
+                      "data/the-church-nightclub-main-floor-venue-svg.json"],
+            "next": ("19 of 19 table capacities are GUESSED — get the real seat counts, "
+                     "then publish for sign-off. Geometry already exceeds Heist "
+                     "(11 structural paths / 282 commands / 19 tables vs 8 / 160 / 10); "
+                     "the gap is corrections + capacities, not tracing."),
+            "signoff": None,
+        },
+        {
+            "id": "insomniacdenver.church.balcony.floor-plan",
+            "lead": "Insomniac Denver", "venue": "The Church — balcony",
+            "tenant": "insomniacdenver", "artifact": "floor-plan", "repo": reso,
+            "state": "drafted", "owner": "agent", "budget_days": 2,
+            "paths": ["data/the-church-nightclub-balcony-floor-plan.json",
+                      "data/the-church-nightclub-balcony-venue-svg.json"],
+            "next": ("Untouched since 2026-08-30. Close out the layer-3 ruling, then "
+                     "publish beside its CAD source for sign-off."),
+            "signoff": None,
+        },
+        {
+            "id": "insomniacdenver.church.bottle-menu",
+            "lead": "Insomniac Denver", "venue": "The Church",
+            "tenant": "insomniacdenver", "artifact": "bottle-menu", "repo": reso,
+            "state": "blocked-customer", "owner": "customer", "budget_days": 2,
+            "paths": [], "source": ["data/venue-research/insomniac/_menu/church.pdf"],
+            "next": ("DRAFT AND SEND THE ASK. The Church's bottle menu is deliberately "
+                     "unpublished — it cannot be scraped and must be obtained from the "
+                     "venue. Zero bottle rows exist. Do NOT build a menu from a guess."),
+            "ask": ("Ask Insomniac Denver for The Church's current bottle/table-service "
+                    "menu: package names, bottle list, prices, table minimums per zone."),
+            "ask_sent_at": None, "signoff": None,
+        },
+        {
+            "id": "insomniacdenver.church.live-url",
+            "lead": "Insomniac Denver", "venue": "The Church",
+            "tenant": "insomniacdenver", "artifact": "live-url", "repo": reso,
+            "state": "blocked-operator", "owner": "operator", "budget_days": 1,
+            "paths": [],
+            "next": ("The dallas-group Turso token is absent from .env.local, so the "
+                     "six-map seed is landed-but-unexercised and NO live URL can be "
+                     "produced for sign-off. This blocks every floor-plan review."),
+            "ask_sent_at": None, "signoff": None,
+        },
+        {
+            "id": "fleet.bottle-menu-cross-contamination",
+            "lead": "Live fleet", "venue": "3 tenants", "tenant": "*",
+            "artifact": "bottle-menu", "repo": reso,
+            "state": "drafted", "owner": "agent", "budget_days": 1,
+            "paths": ["data/venue-research"],
+            "next": ("3 live venues silently serve ANOTHER venue's bottle menu. Real "
+                     "customers are seeing wrong prices. Identify and correct, then "
+                     "publish for sign-off."),
+            "signoff": None,
+        },
+    ]
+    made = 0
+    for row in seed:
+        row.setdefault("source", [])
+        row.setdefault("ask", None)
+        row.setdefault("ask_sent_at", None)
+        if not (ROWS / f"{row['id']}.json").exists():
+            save_row(row)
+            made += 1
+    print(f"seeded {made} new row(s); {len(load_rows())} total")
+    return cmd_render([])
+
+
+USAGE = """cc-mission — the customer deal board (the one queue that outranks chores)
+
+  cc-mission next            the ONE action, ranked
+  cc-mission list            every row with its clock
+  cc-mission render          regenerate ~/.claude/rules/00-mission-board.md
+  cc-mission touch <id> --state <s> [--next <t>] [--ask-sent]
+  cc-mission seed            create the measured starting rows (idempotent)
+
+  cc-signoff <id> --evidence <url|sha>    OPERATOR ONLY — the only path to `signed`
+"""
+
+
+def main() -> int:
+    cmds = {"render": cmd_render, "next": cmd_next, "list": cmd_list,
+            "touch": cmd_touch, "seed": cmd_seed}
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
+        print(USAGE)
+        return 0
+    fn = cmds.get(sys.argv[1])
+    if not fn:
+        print(USAGE, file=sys.stderr)
+        return 2
+    return fn(sys.argv[2:])
+
+
+if __name__ == "__main__":
+    sys.exit(main())

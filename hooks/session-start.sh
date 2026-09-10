@@ -368,6 +368,20 @@ else
   MCP_CLAIM="MCP: UNKNOWN — the probe could not ask ($MCP_REASON). This is NOT a report of zero connected servers; MCP tools may be present. agent-browser: $AGENT_BROWSER_STATUS. If a BrowserMCP tool fails with 'No such tool available', use agent-browser skill instead."
 fi
 
+# === MISSION BOARD (2026-09-09) ===
+# Re-render ~/.claude/rules/00-mission-board.md, the customer deal board. rules/*.md is
+# measured at 100% session reach (258/258) and is symlinked from all four other config
+# dirs, so this ONE line puts the live customer deliverables into every session on every
+# account -- headless included -- with ZERO settings.json edits.
+# It is best-effort and must never fail this hook: a broken board is not worth a broken
+# session start, and `cc-mission render` writes atomically (tmp+mv), so a failed render
+# leaves the previous board intact rather than a truncated one.
+# NOTE the ordering, which is honest rather than mitigated: instructions are read into the
+# process BEFORE this runs, so the board a session reads was rendered by the PREVIOUS
+# session. Every clock on it is days-scale, so the one-session lag is immaterial.
+[ -x "$HOME/.claude/bin/cc-mission" ] && \
+  timeout 20 "$HOME/.claude/bin/cc-mission" render >/dev/null 2>&1 || true
+
 cat <<EOF
 {
   "hookSpecificOutput": {
