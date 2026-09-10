@@ -52,7 +52,7 @@ for line in open(sys.argv[1], errors="replace"):
     if d.get("isApiErrorMessage"):
         c = m.get("content")
         txt = c if isinstance(c, str) else " ".join(x.get("text", "") for x in (c or []) if isinstance(x, dict))
-        if "hit your" in txt:
+        if "hit your" in txt or "reached your" in txt:   # "reached" = the model-scoped Fable cap
             last_limit = ts
         continue
     model = m.get("model") or ""

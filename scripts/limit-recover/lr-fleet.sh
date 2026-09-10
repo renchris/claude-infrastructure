@@ -83,7 +83,13 @@ lf_now() { date -u +%FT%TZ; }
 # Dispositions: RECOVERABLE (live pane, not transplanted) · TRANSPLANTED (a successor exists elsewhere)
 # · NO-PANE (no live process holds it: the poller's spawn-at-reset domain, or --recover spawns a
 # visible pane for it) · TEAMMATE (lead-owned recovery) · DUPLICATE (more than one live process).
-LIMIT_RE="You've hit your (session|weekly|fast|monthly spend)? ?limit"
+LIMIT_RE="You've (hit|reached) your (session|weekly|fast|monthly spend|Fable)? ?limit"
+# 'reached'/'Fable' widen a predicate that was blind to the MODEL-SCOPED weekly cap: Fable
+# exhaustion says "You've reached your Fable limit. Run /usage-credits to continue" -- a different
+# VERB and a different noun from every cap above, so three live Fable/max panes on `next` sat
+# blocked for 5h while --locate reported them absent (2026-09-10). Same shape as the ENOTFOUND
+# miss below: the envelope was right and only the TEXT excluded them, which is what makes
+# widening safe here too.
 # A session can be dead-in-turn for reasons that are NOT a cap, and the census used to be blind to
 # every one of them (2026-09-09, operator report: six panes killed by one DNS outage, `--locate` said
 # "(no limit-blocked session anywhere)"). Measured on the real records: the ENOTFOUND death carries
@@ -191,6 +197,11 @@ lf_pick_target() { # $1=source account $2=tier → account name on stdout / rc 1
   # --rank, then walk past the SOURCE account: the router may well rank the limited account first on
   # weekly headroom while its 5-hour window is what just closed.
   t="$("$ACCOUNTS" --rank "$kind" 2>/dev/null | awk -v s="$1" '$1 != s { print $1; exit }' || true)"
+  # `none` is the router's SENTINEL for "nothing is routable", not an account. Taken literally it
+  # passes the `!= source` test below, so the caller waited out the full capacity budget and then
+  # handed off to an account that does not exist -- observed 2026-09-10, the poller's own log reading
+  # "in-place recovery of 2d71c6d8 onto none" for 480s. An unroutable moment must PARK immediately.
+  [ "$t" = none ] && t=""
   [ -n "$t" ] || return 1
   printf '%s' "$t"
 }
