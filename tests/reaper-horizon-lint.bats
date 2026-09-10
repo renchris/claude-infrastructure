@@ -51,13 +51,15 @@ setup() {
   printf '%s\n' 'REWORDED="$(mktemp)"' 'rm -f "$REWORDED"' > "$FIX/bin/cc-recover-safeguard"
   printf '%s\n' 'gc_teardown_marker() { :; }' 'rm -f "$W/$sid.daemon"' \
     > "$FIX/hooks/lead-crash-watchdog.sh"
-  # cc-gc's four anchors: the 30 d strand horizon, the archive-instead-of-delete site that makes
-  # unacked mail evidence rather than litter, the identity-pinned watchdog age, and the dry-run
-  # default that keeps a scheduled run harmless without --apply.
+  # cc-gc's five anchors: the 30 d strand horizon, the archive-instead-of-delete site that makes
+  # unacked mail evidence rather than litter, the no-clobber `mv -n` that keeps a RECURRING key from
+  # overwriting an earlier archive, the identity-pinned watchdog age, and the dry-run default that
+  # keeps a scheduled run harmless without --apply.
   printf '%s\n' 'MBX_STRAND_DAYS="${CC_GC_MBX_STRAND_DAYS:-30}"' \
     'WD_AGE_S="${CC_GC_WATCHDOG_AGE_S:-172800}"' \
     'APPLY=0' \
-    'mv -f "$MBX_DIR/$key.md" "$MBX_DIR/archive/$key.md"' \
+    'dir="$MBX_DIR/archive"' \
+    'mv -n "$MBX_DIR/$key.$ext" "$dir/$key$sfx.$ext"' \
     'rm -f "$WD_DIR/$sid.pid"' > "$FIX/scripts/cc-gc.sh"
   # peer-owned's three anchors: the two porcelain-capture temps (one per term that captures
   # `git status --porcelain -z` to a FILE) and the registry READ site that makes §3 flag it at all.
