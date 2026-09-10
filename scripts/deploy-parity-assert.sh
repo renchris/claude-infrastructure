@@ -835,7 +835,7 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # literals · and 3 RAW `run ln`/`run cp` sites, which partition 1/1/1 by their SOURCE:
       #   install.sh:776  "$vsrc"                        loop-driven, and its for-header IS one of
       #                   the 19 — so this one is reachable from the existing map.
-      #   install.sh:797  "$REPO_DIR/CLAUDE.md"          namable in the very units both extractors
+      #   install.sh      "$REPO_DIR/CLAUDE.global.md"   namable in the very units both extractors
       #                   use, and in NEITHER population. It reached the reasonless `*) want=0`
       #                   below AND is absent from the _tracked pathspec above: dropped by BOTH
       #                   gates, the same three-gate shape as the kitty-setup.sh block.
@@ -844,7 +844,7 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       #                   extractor keyed on $REPO_DIR can ever produce it, whatever its verb. That
       #                   is the sharper half: a shape the map cannot express is one no member of
       #                   the population can ever demonstrate.
-      # The want=0 verdict is CORRECT and UNCHANGED — install.sh:797 COPIES CLAUDE.md to
+      # The want=0 verdict is CORRECT and UNCHANGED — install.sh COPIES CLAUDE.global.md to
       # $CFG/CLAUDE.md as a REAL file deliberately (its own comment: "a symlink into the repo would
       # break across branch switches"), so a `MISSING: ln -sf` demand here would be WRONG rather
       # than merely noisy. This arm is also unreachable from THIS walk today, exactly as the
@@ -858,7 +858,7 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # lines — a FOURTH extractor, keyed on the SHAPE of a byte-placing line rather than on either
       # verb name — and asserts both partitions SUM, so a raw deploy of a new shape cannot land
       # silently in only one of the two files again.
-      CLAUDE.md)                 want=0 ;;
+      CLAUDE.global.md)          want=0 ;;
       *)                         want=0 ;;
     esac
     [ "$want" = 1 ] || continue
@@ -1198,7 +1198,7 @@ fi
 # So: the direction is measured and SAID, the repair is still nobody's but the operator's, and a
 # live-ahead CLAUDE.md reports under COPYAHEAD — the token both consumers already treat as the loud
 # one — rather than under a word that means the opposite of what is true.
-if [ -f "$REPO/CLAUDE.md" ]; then
+if [ -f "$REPO/CLAUDE.global.md" ]; then
   if [ ! -e "$LIVE/CLAUDE.md" ]; then
     report "CLAUDEMD" "CLAUDE.md" "the live global instructions are ABSENT → run ./install.sh"
     cls_row 'CLAUDE.md (copy)' miss; drift=1
@@ -1207,31 +1207,31 @@ if [ -f "$REPO/CLAUDE.md" ]; then
     # /Users/... into the ledger and make the row machine-specific.
     # shellcheck disable=SC2088
     file_need "claude-md-absent" \
-      "~/.claude/CLAUDE.md is absent — deploy the global instructions (repo claude-infrastructure/CLAUDE.md); no session is reading them"
+      "~/.claude/CLAUDE.md is absent — deploy the global instructions (repo claude-infrastructure/CLAUDE.global.md); no session is reading them"
   else
-    same_file "$REPO/CLAUDE.md" "$LIVE/CLAUDE.md"
+    same_file "$REPO/CLAUDE.global.md" "$LIVE/CLAUDE.md"
     case $? in
       0) cls_row 'CLAUDE.md (copy)' live ;;
       # Deliberately no sha/count in either title: the trigger is a standing STATE, so the constant
       # title is the condition key (see file_need). A count would mint a new row on every edit.
       # TWO keys, not one, because these are two conditions with two remedies — a single key would
       # let a live-ahead divergence inherit a row already filed for a stale one, and vice versa.
-      1) case "$(copy_direction "$REPO/CLAUDE.md" "$LIVE/CLAUDE.md")" in
+      1) case "$(copy_direction "$REPO/CLAUDE.global.md" "$LIVE/CLAUDE.md")" in
            ahead)
              report "COPYAHEAD" "CLAUDE.md" "the LIVE global instructions carry bytes NOT in this checkout's history (unlanded operator edits, or a newer landed revision this checkout has not fetched) — this is UNLANDED WORK, not staleness; do NOT copy repo->live over it"
              # shellcheck disable=SC2088
              file_need "claude-md-live-ahead" \
-               "~/.claude/CLAUDE.md holds rules that are in NO tracked revision — every session is reading them and nothing else has a copy; land them into claude-infrastructure/CLAUDE.md (or fetch this checkout if they landed elsewhere) BEFORE any install.sh, which copies repo->live and would delete them" ;;
+               "~/.claude/CLAUDE.md holds rules that are in NO tracked revision — every session is reading them and nothing else has a copy; land them into claude-infrastructure/CLAUDE.global.md (or fetch this checkout if they landed elsewhere) BEFORE any install.sh, which copies repo->live and would delete them" ;;
            behind)
              report "CLAUDEMD" "CLAUDE.md" "live global instructions DIVERGE from the repo — the live copy is a PAST revision, and every session reads the live copy"
              # shellcheck disable=SC2088
              file_need "claude-md-diverged" \
-               "reconcile ~/.claude/CLAUDE.md with claude-infrastructure/CLAUDE.md — they diverge and the live copy is a past revision, so the repo side is almost certainly the one to keep; the live copy is what every session actually reads" ;;
+               "reconcile ~/.claude/CLAUDE.md with claude-infrastructure/CLAUDE.global.md — they diverge and the live copy is a past revision, so the repo side is almost certainly the one to keep; the live copy is what every session actually reads" ;;
            *)
              report "CLAUDEMD" "CLAUDE.md" "live global instructions DIVERGE from the repo, direction UNKNOWN (git could not answer) — every session reads the live copy"
              # shellcheck disable=SC2088
              file_need "claude-md-diverged" \
-               "reconcile ~/.claude/CLAUDE.md with claude-infrastructure/CLAUDE.md — they diverge, and which side is authoritative is your call (diff them; the live copy is what every session actually reads)" ;;
+               "reconcile ~/.claude/CLAUDE.md with claude-infrastructure/CLAUDE.global.md — they diverge, and which side is authoritative is your call (diff them; the live copy is what every session actually reads)" ;;
          esac
          cls_row 'CLAUDE.md (copy)' miss; drift=1 ;;
       *) report "NOVERDICT" "CLAUDE.md" "diff could not run (3 tries) — no claim either way"

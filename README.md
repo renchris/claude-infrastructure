@@ -418,7 +418,8 @@ The symlink rule came from a failure: on 2026-07-03 a *copied* `handoff-fire.sh`
 ```
 ~/.claude/                       # config dir — machine state + the deployed system
 ├── settings.json · .mcp.json    # permissions, hooks, env · MCP servers
-├── CLAUDE.md                    # global instructions (synced)
+├── CLAUDE.global.md             # global instructions SSOT → ~/.claude/CLAUDE.md (NOT a root
+│                                #   CLAUDE.md: that would double-load in this checkout)
 ├── model-config.yaml            # model / effort / frontier SSOT (per-machine, NOT synced)
 ├── hooks/  commands/  scripts/  # SYMLINKED from this repo — edits go live
 ├── skills/  agents/             # SYMLINKED — 15 skills, 4 custom agents

@@ -863,11 +863,23 @@ if [[ -d "$REPO_DIR/vendor" ]]; then
   done
 fi
 
-# --- Global instructions (CLAUDE.md) — repo is the source of truth ---
-# The lean resident knowledge layer. CLAUDE.md is COPIED as a real file (CC reads ~/.claude/CLAUDE.md
+# --- Global instructions (CLAUDE.global.md → ~/.claude/CLAUDE.md) — repo is the source of truth ---
+# The lean resident knowledge layer. It is COPIED as a real file (CC reads ~/.claude/CLAUDE.md
 # as user memory; a symlink into the repo would break across branch switches). PROJECT-only memory
 # stays in the repo at .claude/CLAUDE.md and is NEVER deployed globally — ~/.claude/CLAUDE.md remains
 # the pure global core.
+#
+# 🚨 THE REPO-SIDE NAME IS `CLAUDE.global.md`, AND IT MUST NEVER GO BACK TO `CLAUDE.md` (2026-09-10,
+# backlog c3647a090021). Claude Code loads a repo-root `CLAUDE.md` as PROJECT memory for any session
+# whose cwd is that repo — and this file IS the user-memory file, which loads in every session
+# already. So while the SSOT sat at the root under its deployed name, a session in this checkout
+# loaded the identical 94,278 bytes TWICE: 188,556 units, ~83% of the always-loaded budget, ~20.7K
+# tokens per session of pure duplicate. The duplication was invisible precisely because both copies
+# were correct — nothing diverged, nothing errored, and the parity auditors were green throughout.
+# Renaming the SSOT is what breaks the coincidence: the deployed path keeps the name Claude Code
+# requires, and the repo-side path no longer matches the pattern the loader globs. Anything that
+# restores a root `CLAUDE.md` here silently reinstates the whole cost, which is why
+# tests/deploy-parity.bats pins its ABSENCE rather than trusting this comment.
 #
 # The rules/ leg was REMOVED 2026-07-25. rules/ itself was deleted from the repo in 270baf8 (its two
 # files were relocated into skills/), so the one-shot stale-rule sweep had nothing left to sweep in
@@ -876,10 +888,10 @@ fi
 # had emptied. The migration is complete; the live empty dirs were removed with this commit.
 echo ""
 echo "Global instructions → $CONFIG_DIR/CLAUDE.md"
-if ! diff -q "$REPO_DIR/CLAUDE.md" "$CONFIG_DIR/CLAUDE.md" >/dev/null 2>&1; then
+if ! diff -q "$REPO_DIR/CLAUDE.global.md" "$CONFIG_DIR/CLAUDE.md" >/dev/null 2>&1; then
   [[ -L "$CONFIG_DIR/CLAUDE.md" ]] && run rm "$CONFIG_DIR/CLAUDE.md"
-  run cp "$REPO_DIR/CLAUDE.md" "$CONFIG_DIR/CLAUDE.md"
-  echo "  ✓ CLAUDE.md ($(wc -l < "$REPO_DIR/CLAUDE.md" | tr -d ' ') lines)"
+  run cp "$REPO_DIR/CLAUDE.global.md" "$CONFIG_DIR/CLAUDE.md"
+  echo "  ✓ CLAUDE.md ($(wc -l < "$REPO_DIR/CLAUDE.global.md" | tr -d ' ') lines)"
   installed=$((installed + 1))
 else
   skipped=$((skipped + 1))

@@ -1966,10 +1966,12 @@ missing_from_ladder() {
   done
 }
 
-@test "parity: every emitted rung appears in CLAUDE.md's ladder" {
-  run missing_from_ladder "$REPO/CLAUDE.md"
+@test "parity: every emitted rung appears in CLAUDE.global.md's ladder" {
+  # CLAUDE.global.md is the repo-side SSOT for ~/.claude/CLAUDE.md (renamed off the root so this
+  # checkout stops loading it twice — backlog c3647a090021). Same bytes, same ladder.
+  run missing_from_ladder "$REPO/CLAUDE.global.md"
   [ "$status" -eq 0 ]
-  [ -z "$output" ] || { echo "CLAUDE.md ladder is missing: $output"; false; }
+  [ -z "$output" ] || { echo "CLAUDE.global.md ladder is missing: $output"; false; }
 }
 
 @test "parity: every emitted rung appears in commands/wrap.md's ladder" {
@@ -1982,10 +1984,10 @@ missing_from_ladder() {
 # Both replay the REAL doc (copied, then mutated) rather than a hand-written approximation — an
 # approximation passes vacuously and proves nothing about the file that actually ships.
 
-@test "control: dropping 🚀 from a COPY of CLAUDE.md's ladder makes the guard FAIL" {
-  local m="$BATS_TEST_TMPDIR/CLAUDE.md"
-  sed 's/📦 > 🚀 > 👤/📦 > 👤/' "$REPO/CLAUDE.md" > "$m"
-  ! cmp -s "$m" "$REPO/CLAUDE.md" || false # the mutation actually landed
+@test "control: dropping 🚀 from a COPY of CLAUDE.global.md's ladder makes the guard FAIL" {
+  local m="$BATS_TEST_TMPDIR/CLAUDE.global.md"
+  sed 's/📦 > 🚀 > 👤/📦 > 👤/' "$REPO/CLAUDE.global.md" > "$m"
+  ! cmp -s "$m" "$REPO/CLAUDE.global.md" || false # the mutation actually landed
   run missing_from_ladder "$m"
   [ "$output" = '🚀' ]
 }
@@ -2001,7 +2003,7 @@ missing_from_ladder() {
 @test "control: the ladder anchor matches EXACTLY ONE line in each doc" {
   # A `grep` anchor that matched two lines (or zero) would make the checks above read a line that
   # is not the ladder — the failure mode where a guard is green about the wrong subject.
-  local f; for f in "$REPO/CLAUDE.md" "$REPO/commands/wrap.md"; do
+  local f; for f in "$REPO/CLAUDE.global.md" "$REPO/commands/wrap.md"; do
     [ "$(ladder_line "$f" | grep -c .)" -eq 1 ] || { echo "anchor is not unique in $f"; false; }
   done
 }

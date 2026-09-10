@@ -168,7 +168,7 @@ minus the autonomous fork.
                  lines "$M/MEMORY.md" "${recs[@]}"; } | sort -u ) |     # minus E1 + E2
    while read -r f; do                                                  # minus E3
      hit=0                                                              # SKIP MISSING PATHS — see below
-     for c in "$P/CLAUDE.md" "$P/.claude/CLAUDE.md" "$P/.claude/rules"; do
+     for c in "$P/CLAUDE.md" "$P/CLAUDE.global.md" "$P/.claude/CLAUDE.md" "$P/.claude/rules"; do
        [ -e "$c" ] || continue
        grep -rqF "${f%.md}" "$c" 2>/dev/null && { hit=1; break; }
      done
@@ -193,7 +193,7 @@ minus the autonomous fork.
    bullets it must match, and both report a clean-looking answer while under-reading.**
 
    🚨 **Why E3 iterates instead of passing all three paths to one `grep`.** The one-shot form —
-   `grep -rqF "$stem" "$P/CLAUDE.md" "$P/.claude/CLAUDE.md" "$P/.claude/rules" || echo ORPHAN` —
+   `grep -rqF "$stem" "$P/CLAUDE.md" "$P/CLAUDE.global.md" "$P/.claude/CLAUDE.md" "$P/.claude/rules" || echo ORPHAN` —
    reports **every** residual file as an orphan on any project missing one of those paths, because
    an unreadable operand makes grep exit 2 **even when another operand matched**, and `||` cannot
    tell 2 from 1. Measured on reso 2026-08-05 (that worktree has no `.claude/CLAUDE.md`): the

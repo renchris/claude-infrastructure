@@ -961,10 +961,16 @@ _copyfix() {   # a fixture whose copy classes are all present + identical, so a 
 # DOES have a cp leg — but that leg runs only on a successful advance, so it was famine-blocked with
 # everything else, and nothing measured the file at all. It read in-parity when investigated only
 # because a session had hand-synced it 34 minutes earlier.
+# THE TWO NAMES ARE DIFFERENT ON PURPOSE, and that is the fixture's load-bearing property: the
+# repo side is CLAUDE.global.md and the live side is CLAUDE.md (backlog c3647a090021 renamed the
+# SSOT off the repo root, because a root CLAUDE.md is loaded as PROJECT memory on top of the
+# identical user-memory copy and doubled every session's always-loaded budget in this checkout).
+# While both sides shared one name a subject that read the WRONG side still found a file, so the
+# fixture could not have told the two spaces apart — the shape that hides address bugs.
 _mdfix() {
   _copyfix
-  printf 'global rules v1\n' > "$CC_PARITY_REPO/CLAUDE.md"
-  cp "$CC_PARITY_REPO/CLAUDE.md" "$CC_PARITY_LIVE/CLAUDE.md"
+  printf 'global rules v1\n' > "$CC_PARITY_REPO/CLAUDE.global.md"
+  cp "$CC_PARITY_REPO/CLAUDE.global.md" "$CC_PARITY_LIVE/CLAUDE.md"
   _track
 }
 
@@ -989,7 +995,7 @@ _mdfix() {
   # advanced" or "the live file holds an uncommitted edit"). A converger that guessed would destroy
   # operator work in the second case — which is also exactly why it is legitimately operator-owned.
   [[ "$output" != *"MISSING: ln -sf"* ]] || false
-  [ "$(cat "$CC_PARITY_LIVE/CLAUDE.md")" != "$(cat "$CC_PARITY_REPO/CLAUDE.md")" ]
+  [ "$(cat "$CC_PARITY_LIVE/CLAUDE.md")" != "$(cat "$CC_PARITY_REPO/CLAUDE.global.md")" ]
 }
 
 @test "CLAUDE.md: an ABSENT live copy ⇒ CLAUDEMD + drift (no session is reading the rules)" {
@@ -1443,8 +1449,8 @@ _commitfix() {   # give the fixture repo a real history for one copy-class path
 @test "CLAUDE.md BEHIND: a live copy that IS a past revision ⇒ CLAUDEMD, named as past" {
   _mdfix
   _commitfix
-  cp "$CC_PARITY_REPO/CLAUDE.md" "$BATS_TEST_TMPDIR/md-v1"
-  printf 'global rules v2\n' > "$CC_PARITY_REPO/CLAUDE.md"
+  cp "$CC_PARITY_REPO/CLAUDE.global.md" "$BATS_TEST_TMPDIR/md-v1"
+  printf 'global rules v2\n' > "$CC_PARITY_REPO/CLAUDE.global.md"
   _track; _commitfix
   cp "$BATS_TEST_TMPDIR/md-v1" "$CC_PARITY_LIVE/CLAUDE.md"
   run "$ASSERT"
@@ -1812,7 +1818,7 @@ _skillclaim_build() {   # $1=repo root · $2=out claims · $3=out covered
   local root="$1" claims="$2" covered="$3"
   # (a) the CLAIM side: CLAUDE.md's own house spelling for naming a skill — a bold lowercase name
   # immediately followed by the word "skill". Taken WHOLE; never filtered by a prefix.
-  grep -oE '\*\*[a-z0-9-]+\*\* skill' "$root/CLAUDE.md" \
+  grep -oE '\*\*[a-z0-9-]+\*\* skill' "$root/CLAUDE.global.md" \
     | sed -E 's/\*\*([a-z0-9-]+)\*\* skill/\1/' | sort -u > "$claims"
   # (b) the COVERED side, from BOTH mechanisms, each derived from its own artifact.
   ( cd "$root" && git ls-files skills/ 2>/dev/null ) \
@@ -1822,15 +1828,56 @@ _skillclaim_build() {   # $1=repo root · $2=out claims · $3=out covered
   cat "$covered.tracked" "$covered.declared" | sort -u > "$covered"
 }
 
-@test "CLAUDE.md MANDATED SKILLS: every skill CLAUDE.md names is tracked here or declared live-only" {
-  [ -f "$REPO_ROOT/CLAUDE.md" ]
+# ══ THE SSOT MAY NOT SIT AT THE REPO ROOT UNDER ITS DEPLOYED NAME ════════════════════════════════
+# backlog c3647a090021. Claude Code loads a repo-root CLAUDE.md as PROJECT memory for any session
+# whose cwd is this repo, and install.sh copies that same file to ~/.claude/CLAUDE.md, which loads
+# as USER memory in every session regardless of cwd. While the SSOT was named CLAUDE.md at the root
+# the two were byte-identical, so a session in this checkout loaded 94,278 bytes TWICE — 188,556
+# units, ~83% of the always-loaded budget, ~20.7K tokens per session of pure duplicate.
+#
+# NOTHING ELSE CAN SEE THIS. Both copies were CORRECT, so every parity auditor was green throughout
+# and the only symptom was budget. That is why the guard is the ABSENCE of a path rather than a
+# property of one: the failure mode is a future session helpfully "restoring" CLAUDE.md, which
+# reinstates the entire cost silently and passes every other test in this file.
+@test "SSOT: the global instructions live at CLAUDE.global.md and NOT at a root CLAUDE.md" {
+  [ -f "$REPO_ROOT/CLAUDE.global.md" ] || { echo "the global-instructions SSOT is missing"; false; }
+  [ ! -e "$REPO_ROOT/CLAUDE.md" ] || {
+    echo "a repo-root CLAUDE.md is back. Claude Code loads it as PROJECT memory on top of the"
+    echo "identical ~/.claude/CLAUDE.md user memory, doubling the always-loaded budget for every"
+    echo "session in this checkout. The SSOT belongs at CLAUDE.global.md; project-only rules"
+    echo "belong in .claude/CLAUDE.md (which is NOT a duplicate and stays)."
+    false
+  }
+  # …and the project-only memory must still exist, or this rename quietly deleted the repo's own
+  # rules instead of only its duplicate.
+  [ -f "$REPO_ROOT/.claude/CLAUDE.md" ]
+  # The two are DIFFERENT documents, not two names for one. If they ever match, the split collapsed.
+  ! cmp -s "$REPO_ROOT/CLAUDE.global.md" "$REPO_ROOT/.claude/CLAUDE.md" || {
+    echo ".claude/CLAUDE.md is now a copy of the global SSOT — that is the double-load again"; false; }
+}
+
+@test "SSOT: install.sh deploys CLAUDE.global.md to the live CLAUDE.md, and reads no root CLAUDE.md" {
+  # The rename is only real if the installer followed it. A cp from a path that does not exist would
+  # leave ~/.claude/CLAUDE.md frozen at whatever it already held — stale, with no error anywhere.
+  grep -q 'cp "\$REPO_DIR/CLAUDE.global.md" "\$CONFIG_DIR/CLAUDE.md"' "$REPO_ROOT/install.sh" \
+    || { echo "install.sh does not copy CLAUDE.global.md -> \$CONFIG_DIR/CLAUDE.md"; false; }
+  # NEG CONTROL: no reader may still name the old repo-side path. `$REPO_DIR/CLAUDE.md` would read a
+  # file this repo no longer has; the sibling `$CONFIG_DIR/CLAUDE.md` is the LIVE path and is right.
+  ! grep -q '\$REPO_DIR/CLAUDE\.md' "$REPO_ROOT/install.sh" \
+    || { echo "install.sh still reads \$REPO_DIR/CLAUDE.md, which no longer exists"; false; }
+  ! grep -q '\$REPO_DIR/CLAUDE\.md' "$REPO_ROOT/sync.sh" \
+    || { echo "sync.sh still writes back to \$REPO_DIR/CLAUDE.md"; false; }
+}
+
+@test "CLAUDE.global.md MANDATED SKILLS: every skill it names is tracked here or declared live-only" {
+  [ -f "$REPO_ROOT/CLAUDE.global.md" ]
   [ -f "$REPO_ROOT/config/live-only.manifest" ]
 
   CLAIMS="$BATS_TEST_TMPDIR/skillclaims.txt"
   COVERED="$BATS_TEST_TMPDIR/skillcovered.txt"
   _skillclaim_build "$REPO_ROOT" "$CLAIMS" "$COVERED"
 
-  # POS CONTROL — the claim side must be non-empty, or CLAUDE.md has been reworded out of the
+  # POS CONTROL — the claim side must be non-empty, or CLAUDE.global.md has been reworded out of the
   # anchor's reach and every assertion below passes over an empty set.
   [ "$(grep -c . "$CLAIMS")" -ge 5 ]
   # POS CONTROL — both coverage mechanisms must have produced members, or a single failed read
@@ -2016,7 +2063,7 @@ _rawdeploy_extract() {  # $1=install.sh  $2=out TSV: line \t kind \t srcclass \t
   # an empty set. Measured 8 on 2026-09-01; the floor is deliberately loose.
   [ "$(grep -c . "$RAW")" -ge 6 ]
   # …and a KNOWN member, so a derivation that produced six lines of the wrong thing still fails.
-  [ "$(awk -F'\t' '$4=="$REPO_DIR/CLAUDE.md"{n++} END{print n+0}' "$RAW")" -eq 1 ]
+  [ "$(awk -F'\t' '$4=="$REPO_DIR/CLAUDE.global.md"{n++} END{print n+0}' "$RAW")" -eq 1 ]
 
   # (2) BOTH PARTITIONS MUST SUM. A raw line is exactly one of VERB-BODY / BACKUP / INTRA-REPO /
   # DEPLOY, and a DEPLOY is exactly one of VARIABLE / LIVE-PATH / REPO-LITERAL by its source. A shape
@@ -2077,7 +2124,7 @@ _rawdeploy_extract() {  # $1=install.sh  $2=out TSV: line \t kind \t srcclass \t
   true
 }
 
-@test "RAW INSTALL COVERAGE fire test: deleting the CLAUDE.md declaration puts its source back on the default" {
+@test "RAW INSTALL COVERAGE fire test: deleting the CLAUDE.global.md declaration puts its source back on the default" {
   # Without this the arm above is a green nobody has seen go red, and a control that has never fired
   # is indistinguishable from one that cannot. Deleting ONE declaration must put exactly its own
   # source back on the reasonless default and leave its siblings alone.
@@ -2089,18 +2136,21 @@ _rawdeploy_extract() {  # $1=install.sh  $2=out TSV: line \t kind \t srcclass \t
     "$BATS_TEST_TMPDIR/rcase.txt" > "$BATS_TEST_TMPDIR/rcaseB.txt"
   _classcov_runner "$BATS_TEST_TMPDIR/rcaseB.txt" "$BATS_TEST_TMPDIR/rintact.sh"
 
-  # BASELINE: with the arm present, CLAUDE.md is declared and must NOT read as the default.
-  [ "$(bash "$BATS_TEST_TMPDIR/rintact.sh" CLAUDE.md </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
+  # BASELINE: with the arm present, CLAUDE.global.md is declared and must NOT read as the default.
+  # (The declared source is CLAUDE.global.md, not CLAUDE.md — backlog c3647a090021 renamed the SSOT
+  # off the repo root. This test is re-keyed on the new arm rather than loosened: a seed keyed on
+  # text that no longer exists deletes nothing and the control passes having fired at nothing.)
+  [ "$(bash "$BATS_TEST_TMPDIR/rintact.sh" CLAUDE.global.md </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
 
-  # SEED: delete exactly the CLAUDE.md arm. Asserted to remove ONE line, so a reworded arm makes
-  # this test refuse rather than pass vacuously over a deletion that never happened.
-  grep -v '^      CLAUDE\.md)                 want=0 ;;$' "$BATS_TEST_TMPDIR/rcaseB.txt" \
+  # SEED: delete exactly the CLAUDE.global.md arm. Asserted to remove ONE line, so a reworded arm
+  # makes this test refuse rather than pass vacuously over a deletion that never happened.
+  grep -v '^      CLAUDE\.global\.md)          want=0 ;;$' "$BATS_TEST_TMPDIR/rcaseB.txt" \
     > "$BATS_TEST_TMPDIR/rcaseC.txt"
   [ "$(( $(grep -c . "$BATS_TEST_TMPDIR/rcaseB.txt") - $(grep -c . "$BATS_TEST_TMPDIR/rcaseC.txt") ))" -eq 1 ]
   _classcov_runner "$BATS_TEST_TMPDIR/rcaseC.txt" "$BATS_TEST_TMPDIR/rseeded.sh"
 
   # …and now that same source falls through to the reasonless default.
-  [ "$(bash "$BATS_TEST_TMPDIR/rseeded.sh" CLAUDE.md </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
+  [ "$(bash "$BATS_TEST_TMPDIR/rseeded.sh" CLAUDE.global.md </dev/null | grep -c '__DEFAULT__')" -eq 1 ]
   # …while a SIBLING declaration is untouched, so the seed removed one arm and not the block.
   [ "$(bash "$BATS_TEST_TMPDIR/rseeded.sh" accounts.json </dev/null | grep -c '__DEFAULT__')" -eq 0 ]
 }
