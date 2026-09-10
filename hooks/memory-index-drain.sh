@@ -201,11 +201,31 @@ mid_rotor() {
 # charging inside mid_rotor measured 6s against a 3s budget, because the second site opened with a
 # full fresh MID_LEFT — two per-call bounds wearing the name of one shared one, which is the exact
 # multiplication this budget exists to prevent.
+#
+# AND THE DEBIT IS CLAMPED TO THE BOUND THAT WAS IN FORCE, because `date +%s` is WHOLE-SECOND and
+# this budget is small. A call bounded at B seconds returns after B, but `now - t0` reads **B+1**
+# whenever the pair straddles a second boundary — nothing overran, the clock ticked. Measured at
+# the suite's own numbers (bound 2, a SIGTERM-killable stub): charged 3 in 1/20 runs, and every
+# such run zeroes a MID_DEADLINE_S of 3 and hands site 2 rc=125, "budget already spent, rotor never
+# invoked" — the silent zeroing the cap above exists to prevent, arriving through the measurement
+# instead of through the cap. It surfaced as tests/memory-index-drain.bats case 22 failing 1-3/10
+# under load and 0/10 quiet, i.e. as a flake, and it blocks any land whose diff maps to that suite.
+# The clamp is the same expression mid_rotor bounds the call with, re-derived in the parent (MID_CAP
+# and MID_LEFT still hold their pre-debit values here), so the two can never disagree.
+# ONLY when a bound was actually applied: with no timeout(1) mid_rotor runs UNBOUNDED, and clamping
+# an unbounded call to a bound nothing enforced would under-charge it and re-create the
+# multiplication this budget exists to prevent.
 mid_charge() {
-  local now
+  local now spent b
   case "${1:-}" in ''|*[!0-9]*) MID_LEFT=0; return 0 ;; esac
   now=$(date +%s 2>/dev/null) || { MID_LEFT=0; return 0; }
-  MID_LEFT=$(( MID_LEFT - ( now - $1 ) ))
+  spent=$(( now - $1 ))
+  if [ -n "$MID_TB" ] && [ -x "$MID_TB" ]; then
+    b="$MID_LEFT"
+    if [ -n "$MID_CAP" ] && [ "$MID_CAP" -lt "$b" ]; then b="$MID_CAP"; fi
+    [ "$spent" -le "$b" ] || spent="$b"
+  fi
+  MID_LEFT=$(( MID_LEFT - spent ))
   [ "$MID_LEFT" -ge 0 ] || MID_LEFT=0
 }
 

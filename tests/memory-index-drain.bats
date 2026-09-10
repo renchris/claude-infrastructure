@@ -569,3 +569,55 @@ fire() { jq -nc --arg cwd "$1" '{session_id:"s1",cwd:$cwd,tool_name:"Bash",tool_
   # the exhausted remedy must NOT be what this operator is handed
   hasnt "$ctx" "could NOT be routed automatically"
 }
+
+# ── the phantom second (2026-09-10) ──────────────────────────────────────────────────────────────
+# `mid_charge` measures with `date +%s`, which is WHOLE-SECOND, so a call bounded at B returns after
+# B and is charged B+1 whenever the pair straddles a tick — nothing overran, the clock ticked. On a
+# 3s budget that single phantom second zeroes MID_LEFT and hands the second site rc=125, the silent
+# zeroing MID_CAP exists to prevent, arriving through the MEASUREMENT rather than through the cap.
+# Measured at the suite's own numbers (bound 2, SIGTERM-killable stub): charged 3 in 1/20 runs,
+# which is case 22 failing 1-3/10 under load and 0/10 quiet — read as a flake for as long as it has
+# existed, and blocking any land whose diff maps to this suite by basename.
+#
+# Driven as a UNIT with a forced t0 rather than by waiting for the race: the bug is arithmetic, so
+# a test that sleeps for it would inherit the same 1-in-20 and be a flake about a flake.
+_mid_units() {                        # the budget arithmetic, lifted with its real neighbours
+  eval "$(sed -n '/^mid_charge() {/,/^}/p' "$HOOK")"
+  MID_TB="${MID_TB_STUB:-/usr/bin/true}"     # "a bound WAS applied" — the clamp's precondition
+}
+
+@test "27 a bound call charged a phantom second does not zero its sibling's share" {
+  _mid_units
+  MID_LEFT=3; MID_CAP=2                       # MID_DEADLINE_S=3 ⇒ MID_CAP=(3+1)/2=2, as case 22
+  mid_charge "$(( $(date +%s) - 3 ))"         # a 2s call whose clock read 3
+  # RED PRE-FIX: charged 3, MID_LEFT=0, and site 2 gets rc=125 "rotor never invoked".
+  [ "$MID_LEFT" -eq 1 ]
+}
+
+@test "28 CONTROL — a call that genuinely overran its bound is charged in FULL" {
+  # The clamp must not become a licence to under-charge: with no timeout(1) mid_rotor runs
+  # UNBOUNDED, so there is no bound to clamp to and the real spend is the only honest debit.
+  _mid_units
+  # Read by mid_charge, which _mid_units eval's in from the hook: shellcheck cannot see a consumer
+  # it did not parse, and the alternative (export) would leak the fixture into every child. The
+  # directive must be the LAST comment before the statement — an explanation BELOW it does not
+  # attach, which is how the first attempt at this annotation still went red.
+  # shellcheck disable=SC2034
+  MID_TB="$T/no-such-timeout-binary"          # not executable ⇒ the call was never bounded
+  MID_LEFT=10; MID_CAP=2
+  mid_charge "$(( $(date +%s) - 7 ))"
+  [ "$MID_LEFT" -eq 3 ]
+}
+
+@test "29 the clamp never lets one site spend more than the bound it was given" {
+  _mid_units
+  # Read by mid_charge, which _mid_units eval's in from the hook: shellcheck cannot see a consumer
+  # it did not parse, and the alternative (export) would leak the fixture into every child. The
+  # directive must be the LAST comment before the statement — an explanation BELOW it does not
+  # attach, which is how the first attempt at this annotation still went red.
+  MID_LEFT=24                                 # the post-0018 shape (declaration 30, budget 24)
+  # shellcheck disable=SC2034
+  MID_CAP=12
+  mid_charge "$(( $(date +%s) - 99 ))"        # a wildly inflated reading
+  [ "$MID_LEFT" -eq 12 ]                      # site 2 still holds its half, never zero
+}
