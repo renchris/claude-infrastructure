@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+# cc-history-union — build the account-agnostic union of Claude Code's prompt history.
+#
+#   cc-history-union            build ~/.claude/history-union.jsonl, print one verdict= line
+#   cc-history-union --check    measure only; write nothing (same verdict fields)
+#
+# WHY THIS EXISTS. `history.jsonl` is the prompt log the TUI's history search and the session
+# index's gap-fill phases read. It is a per-account file (`_CC_ISOLATE` names it in
+# lib/config-mirror.zsh:39-42), and the operator "uses accounts indiscriminately cycling between
+# for usage" — so the log of what was ASKED is split four ways while the one thing that reads it,
+# claude-search, reads exactly one of them. Measured 2026-09-09: 21,211 lines under ~/.claude and
+# 14,966 more under .claude-secondary / -tertiary / -quaternary, holding 3,111 distinct sessions of
+# which 1,614 appear in the session index by NO other path. Those are unreachable from account 1.
+#
+# WHY A UNION AND NOT A SYMLINK (docs/plans/ACCOUNT_AGNOSTIC_AGENT_STATE.md, W1 result). Every other
+# knowledge surface in this fleet is shared by symlinking the non-canonical copy at the canonical
+# one. That move is LOSSY here and uniquely so: the other surfaces are directories, where linking
+# preserves both sides' files, while history.jsonl is a single append-only FILE — linking it
+# discards whatever the three non-canonical files already hold. The repair therefore has to be a
+# derived artifact, and this script is a pure READER: it opens every source read-only and writes
+# only to its own output path, which it refuses to place over any source.
+#
+# ORDERING. Records carry `timestamp` (epoch ms), so the union is timestamp-sorted with a
+# deterministic tie-break on (sessionId, project, display) and `sort_keys` on the emitted JSON.
+# Byte-stability is not cosmetic: it is what makes the rebuild idempotent, so the hourly refresh in
+# hooks/session-index-sweep.sh can be compared and a test can assert the same input twice produces
+# the same file.
+#
+# COUNTS ARE REPORTED, NEVER SWALLOWED. A record that will not parse, one carrying no usable
+# timestamp, and one dropped as a duplicate are each counted into the verdict line rather than
+# silently skipped — an unreported drop is how a census reports a smaller, internally consistent
+# number with no tell.
+set -euo pipefail
+
+# Defaulted THROUGH CLAUDE_HISTORY_UNION — the same variable lib/session-index-helpers.sh reads
+# to decide what CLAUDE_HISTORY points at. The writer and the reader must never be able to name
+# two different files: pointing one of them elsewhere silently produces a union nothing loads.
+CC_HISTORY_UNION_OUT="${CC_HISTORY_UNION_OUT:-${CLAUDE_HISTORY_UNION:-$HOME/.claude/history-union.jsonl}}"
+# Colon-separated explicit source list; empty means discover. The seam exists so a test can point
+# at a fixture without moving $HOME, matching the env-seam convention in lib/session-index-helpers.sh.
+CC_HISTORY_UNION_SOURCES="${CC_HISTORY_UNION_SOURCES:-}"
+
+MODE=build
+case "${1:-}" in
+    --check) MODE=check ;;
+    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+    "") ;;
+    *) echo "cc-history-union: unknown argument '$1' (expected --check)" >&2; exit 2 ;;
+esac
+
+CC_HISTORY_UNION_OUT="$CC_HISTORY_UNION_OUT" \
+CC_HISTORY_UNION_SOURCES="$CC_HISTORY_UNION_SOURCES" \
+CC_HISTORY_UNION_MODE="$MODE" \
+python3 - <<'PY'
+import glob
+import json
+import os
+import sys
+
+out_path = os.environ["CC_HISTORY_UNION_OUT"]
+explicit = os.environ.get("CC_HISTORY_UNION_SOURCES", "")
+mode = os.environ.get("CC_HISTORY_UNION_MODE", "build")
+home = os.path.expanduser("~")
+
+
+def verdict(**kw):
+    print(" ".join(f"{k}={v}" for k, v in kw.items()))
+
+
+# ─── Source discovery ─────────────────────────────────────
+# Keyed on the FILE existing, never on a hard-coded account list, so a fifth config dir is picked
+# up the day it first writes a prompt. The canonical account is forced first so that a file two
+# dirs share by symlink (.claude-next/history.jsonl -> .claude/history.jsonl today) is attributed
+# to the canonical one and read exactly once; deduping on realpath is what keeps a shared file from
+# entering the union twice.
+if explicit:
+    candidates = [p for p in explicit.split(":") if p]
+else:
+    canonical = os.path.join(home, ".claude", "history.jsonl")
+    found = sorted(glob.glob(os.path.join(home, ".claude*", "history.jsonl")))
+    candidates = ([canonical] if os.path.exists(canonical) else []) + [
+        p for p in found if p != canonical
+    ]
+
+sources = []
+seen_real = set()
+for path in candidates:
+    if not os.path.isfile(path):
+        continue
+    real = os.path.realpath(path)
+    if real in seen_real:
+        continue
+    seen_real.add(real)
+    label = os.path.basename(os.path.dirname(path))
+    sources.append((label, path))
+
+if not sources:
+    verdict(verdict="no-sources", sources=0, records=0, out=out_path)
+    sys.exit(1)
+
+# Refuse to write over an input. The union is derived; a source is not.
+if os.path.exists(out_path) and os.path.realpath(out_path) in seen_real:
+    verdict(verdict="out-is-a-source", sources=len(sources), records=0, out=out_path)
+    sys.exit(1)
+
+# ─── Read ─────────────────────────────────────────────────
+rows = []
+seen_key = set()
+unparseable = blank = undated = dupes = 0
+per_source = []
+
+for label, path in sources:
+    n = 0
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                blank += 1
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                unparseable += 1
+                continue
+            if not isinstance(rec, dict):
+                unparseable += 1
+                continue
+            ts = rec.get("timestamp")
+            if not isinstance(ts, (int, float)) or isinstance(ts, bool):
+                ts = 0
+                undated += 1
+            sid = rec.get("sessionId") or ""
+            proj = rec.get("project") or ""
+            disp = rec.get("display") or ""
+            key = (ts, sid, proj, disp)
+            if key in seen_key:
+                dupes += 1
+                continue
+            seen_key.add(key)
+            rec["_source"] = label
+            rows.append((ts, sid, proj, disp, rec))
+            n += 1
+    per_source.append(f"{label}:{n}")
+
+if not rows:
+    verdict(verdict="empty", sources=len(sources), records=0, out=out_path)
+    sys.exit(1)
+
+rows.sort(key=lambda r: (r[0], r[1], r[2], r[3]))
+
+if mode == "check":
+    verdict(
+        verdict="check",
+        sources=len(sources),
+        records=len(rows),
+        dropped_dup=dupes,
+        unparseable=unparseable,
+        blank=blank,
+        undated=undated,
+        per_source=",".join(per_source),
+        out=out_path,
+    )
+    sys.exit(0)
+
+# ─── Write atomically ─────────────────────────────────────
+os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+tmp = f"{out_path}.tmp.{os.getpid()}"
+try:
+    with open(tmp, "w", encoding="utf-8") as fh:
+        for _, _, _, _, rec in rows:
+            fh.write(json.dumps(rec, ensure_ascii=False, sort_keys=True) + "\n")
+    os.replace(tmp, out_path)
+finally:
+    if os.path.exists(tmp):
+        os.unlink(tmp)
+
+verdict(
+    verdict="ok",
+    sources=len(sources),
+    records=len(rows),
+    dropped_dup=dupes,
+    unparseable=unparseable,
+    blank=blank,
+    undated=undated,
+    per_source=",".join(per_source),
+    bytes=os.path.getsize(out_path),
+    out=out_path,
+)
+PY

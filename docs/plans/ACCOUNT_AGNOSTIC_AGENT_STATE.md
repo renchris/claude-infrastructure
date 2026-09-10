@@ -182,7 +182,61 @@ All 13 slugs un-stranded; **0 stranded, 0 lost of 53 pre-state files, 0 unindexe
 rebuilt checker asserts a non-empty corpus and proves an impossible hash reports as missing before
 it will report zero.
 
+## W4 result — `history.jsonl`, the one surface W1 found (landed)
+
+W1 filed `4b0095d1ee73`: the prompt log is the only KNOWLEDGE surface still coupled to one account,
+and it needs a **timestamp-sorted union, not a symlink** — every other surface here is a directory,
+where linking preserves both sides, while `history.jsonl` is a single append-only FILE and linking
+it would discard the three non-canonical copies outright.
+
+**The measured state (2026-09-09).** Five config dirs now, not four: `.claude-next/history.jsonl`
+is a symlink onto account 1's file (since 2026-06-04), so it shares rather than strands. The real
+split is 21,211 lines under `~/.claude` against 6,540 + 4,524 + 3,902 = **14,966** under
+`.claude-secondary` / `-tertiary` / `-quaternary` — the plan's "~12k", grown. All four parse
+cleanly, all carry `timestamp` and `project`, and every record outside account 1 carries a
+`sessionId`. Those hold **3,111 distinct sessions, 1,614 of which reach the index by no other path**.
+
+**Built.** `bin/cc-history-union` merges every config dir's copy into
+`~/.claude/history-union.jsonl` — discovery keyed on the FILE existing rather than on a hard-coded
+account list (a fifth account is picked up the day it first writes), deduped on **realpath** so the
+`.claude-next` symlink is read once, timestamp-sorted with a deterministic tie-break, each record
+tagged `_source`, written atomically, and idempotent to the byte. It is a pure reader: it refuses
+to write over any of its own sources. 35,806 records in 0.5 s; parse failures, blanks, undated and
+deduped records are each COUNTED into a `verdict=` line rather than dropped silently.
+`lib/session-index-helpers.sh` then prefers that union for `CLAUDE_HISTORY` when it exists and is
+non-empty, falling back to account 1's own file otherwise — so a box that has never built one
+behaves exactly as before and never worse.
+
+🚨 **The union's only consumer was already dead, and that is why the index carried zero
+`source='history'` rows.** `session-index-backfill.sh` owns the equivalent phases 2-3, and the
+plist invokes it as `~/.claude/bin/session-index-backfill.sh`; its line 13 sources
+`$SCRIPT_DIR/lib/progress-ui.sh`, which on that path resolves to `~/.claude/bin/lib/` and does not
+exist. Every scheduled run has exited 1 before reaching any phase —
+`~/.claude/logs/backfill-scheduled.log` holds that one error and nothing else. Building a union for
+it would have delivered nothing, so the consumer moved in-repo:
+`session_index_history_gapfill` inserts ONLY sessions missing from the index (it never touches an
+existing row, so a history record can never downgrade a transcript-derived one) and syncs
+`sessions_fts` explicitly, because that table has no triggers on this schema — a row inserted
+without it exists and can never be found. Both it and the union refresh ride
+`session-index-sweep.sh` on a self-damped hourly cadence, the same shape as the weekly retention
+pass above and for the same stated reason: the alternative puts half the feature in a repo this
+branch cannot atomically commit.
+
+**Verified by A/B on the real search, one variable.** Against a COPY of the live index (the
+rehearsal seam the helpers document), the gap-fill inserted **3,050** sessions — 3,234 → 6,284 —
+of which **1,615 originate on accounts 2-4** and 1,435 are account-1 sessions the dead backfill
+never indexed. Session `3a9e9589` (`.claude-secondary`, `reso-management-app`) returns **0 results
+from the live index and is the top hit against the gap-filled copy**, same script, same query.
+
+**Known residual, deliberately not driven.** History-derived rows carry `first_prompt` only, so a
+session is findable by its FIRST prompt, not its whole conversation — a later transcript sweep
+outranks `history` and upgrades the row. `keywords` is left empty on purpose: extracting it forks
+grep and optionally YAKE per row, which is minutes with the index lock held. Phase-3-style records
+with no `sessionId` (1,238, all in account 1) are skipped — there is no key to index them on, and
+none of them is part of this item's gap.
+
 ## Status log
+- **2026-09-09** — W4 complete. `history.jsonl` unioned across all four real copies (35,806 records) and its consumer rebuilt in-repo after the scheduled backfill was found dead on its launchd path since before this plan existed. +3,050 indexable sessions, 1,615 of them from accounts 2-4, proven by an A/B of the real search against a copy of the index. Filed nothing new; the backfill breakage is described above and is that repo's to fix, not this one's.
 
 - **2026-08-23** — W1/W2/W3 complete. Audit refuted all four suspicions and found `history.jsonl` as
   the one remaining knowledge surface; linker fix + nudge path-pin landed with red-proof coverage;
