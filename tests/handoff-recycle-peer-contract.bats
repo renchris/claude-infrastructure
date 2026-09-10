@@ -36,7 +36,13 @@ setup() {
   HF="$REPO_SRC/scripts/handoff-fire.sh"
   # HERMETICITY (M11): $HOME first, then every seam whose default does NOT resolve under it.
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
-  export CC_FIRE_CAPACITY_GATE=off CC_FIRE_HEADROOM_GATE=off
+  # Rule 2 of test-hermeticity-lint, in the LITERAL form the pin-guard ratchet reads
+  # (tests/handoff-fire-capacity-gate.bats case 25 / _setup_gate_off): one `export` per term.
+  # Both on one export line sets the same two variables and does NOT satisfy the guard, which
+  # greps each spelling separately — a property the pin protects is only credited in the form
+  # the checker can see.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   export CC_FIRED_DIR="$BATS_TEST_TMPDIR/fired";        mkdir -p "$CC_FIRED_DIR"
   export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg";       mkdir -p "$CC_REGISTRY_DIR"
   export CC_PROJECTS_DIRS="$BATS_TEST_TMPDIR/projects"; mkdir -p "$CC_PROJECTS_DIRS"
