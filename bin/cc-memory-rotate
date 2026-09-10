@@ -665,7 +665,7 @@ if [ "$DRAIN" -eq 1 ]; then
     printf 'verdict=error reason=measure-failed\n'; exit 2; }
 
   D_MOVE=""; D_N=0; D_CAND=0; D_FILES=""; D_PAY=""
-  V_PIN=0; V_TYPE=0; V_PARSE=0; V_DANGLING=0
+  V_PIN=0; V_TYPE=0; V_PARSE=0; V_DANGLING=0; V_CITED=0
   while IFS="$TAB" read -r _lno _units; do
     [ -n "${_lno:-}" ] || continue
     case "$_lno" in ''|*[!0-9]*) continue ;; esac
@@ -684,6 +684,12 @@ if [ "$DRAIN" -eq 1 ]; then
         type) V_TYPE=$(( V_TYPE + 1 )) ;;
         unparseable) V_PARSE=$(( V_PARSE + 1 )) ;;
         dangling) V_DANGLING=$(( V_DANGLING + 1 )) ;;
+        # `already-cited` (5972228d5) landed WITHOUT an arm here, so it was counted by nothing:
+        # the census below printed `oversized=1 moved=0 vetoed: type=0 pinned=0 unparseable=0
+        # dangling=0` — every cause zero — which is the exact defect the printf's own comment
+        # forbids. A new veto class must gain a counter in the same commit that mints it, or the
+        # actuator reports a refusal with no cause (MEMORY.md new-enum-member-falls-into-fail-closed-default).
+        already-cited) V_CITED=$(( V_CITED + 1 )) ;;
       esac
       vlog "drain keep [$_v] ${_f:-<line $_lno>} (${_units} units)"
       continue
@@ -704,11 +710,36 @@ EOF
         "$ENTRY_LIMIT" "$SIZE" "$NLINES"
       exit 0
     fi
+    # EVERY over-cap line is vetoed BECAUSE THE DESTINATION ALREADY CITES IT — its own verdict,
+    # its own exit code, and neither is cosmetic.
+    #
+    # `exhausted`/rc 4 means "a human must act", and hooks/memory-index-drain.sh spends that
+    # verdict on a remedy that is WRONG here: it tells the operator to "append VERBATIM to the
+    # rules file", which would mint the duplicate this veto exists to prevent, and it enumerates
+    # the causes (PINNED · the name convention · unparseable/dangling) without naming the one that
+    # actually fired. Nothing is broken in this state — the body is already reachable from an
+    # always-loaded file — so the only correct action is to DELETE the index line, and the rotor
+    # will not do that for you (the report-never-touch rule is what keeps a routing bug from
+    # eating an entry).
+    #
+    # rc 0, because this is also what an IDEMPOTENT RE-RUN looks like: paste a routed line back
+    # into the index, run again, and every candidate is already cited. Reporting that as rc 4 made
+    # a healthy repeat indistinguishable from a state needing a human — tests/memory-index-drain
+    # case 10 has asserted rc 0 for exactly that repeat since 7d8558d29 and went red when
+    # 5972228d5 introduced the veto.
+    #
+    # MIXED vetoes stay `exhausted`: if anything is pinned or unparseable a human really is owed a
+    # message, and the `cited=` term below is what stops that census pointing at the wrong line.
+    if [ "$V_CITED" -eq "$D_CAND" ]; then
+      printf 'verdict=already-cited mode=drain-oversized entry_limit=%s oversized=%s moved=0 cited=%s dest_has_them=1\n' \
+        "$ENTRY_LIMIT" "$D_CAND" "$V_CITED"
+      exit 0
+    fi
     # Over-cap entries exist and every one is vetoed. Name which veto, in the census shape the
     # rotation path already uses: an actuator that says only "moved=0" sends its reader to the
     # wrong line of code, which is precisely what W1 fixed on the other path.
-    printf 'verdict=exhausted mode=drain-oversized entry_limit=%s oversized=%s moved=0 vetoed: type=%s pinned=%s unparseable=%s dangling=%s\n' \
-      "$ENTRY_LIMIT" "$D_CAND" "$V_TYPE" "$V_PIN" "$V_PARSE" "$V_DANGLING"
+    printf 'verdict=exhausted mode=drain-oversized entry_limit=%s oversized=%s moved=0 vetoed: type=%s pinned=%s unparseable=%s dangling=%s cited=%s\n' \
+      "$ENTRY_LIMIT" "$D_CAND" "$V_TYPE" "$V_PIN" "$V_PARSE" "$V_DANGLING" "$V_CITED"
     exit 4
   fi
 
