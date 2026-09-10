@@ -133,6 +133,12 @@ mkdir -p "$PARKED" "$RESUMED" "$CLAIMS"
 # all live there, shared with lr-handoff.sh and lr-fleet.sh. FAIL CLOSED for the arms that need it:
 # a poller that cannot tell whether the original pane is alive must not spawn (that is the 2026-09-09
 # same-account duplicate), so a missing lib disables the RESUME arm and says so.
+# _LRP_SELF must be assigned HERE, before its first read below. It used to be assigned only at the
+# engagement-lib block further down, so this loop read it unset. Under `set -u` that kills only the
+# `$(dirname …)` SUBSHELL, not the tick: every run printed "_LRP_SELF: unbound variable" to
+# poller.launchd.err (160 lines from 59e415e12 to 2026-09-10) and silently lost rung 1, the
+# symlink-resolved sibling, falling through to $LR and the live layer. The daemon kept exiting 0.
+_LRP_SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
 LRP_LIB=""
 for _lrp_lib in "$(dirname "$_LRP_SELF")/lr-lib.sh" "$LR/lr-lib.sh" "${HOME:-}/.claude/scripts/limit-recover/lr-lib.sh"; do
   [[ -f "$_lrp_lib" ]] && { LRP_LIB="$_lrp_lib"; break; }
