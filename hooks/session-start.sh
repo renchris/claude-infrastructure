@@ -379,8 +379,29 @@ fi
 # NOTE the ordering, which is honest rather than mitigated: instructions are read into the
 # process BEFORE this runs, so the board a session reads was rendered by the PREVIOUS
 # session. Every clock on it is days-scale, so the one-session lag is immaterial.
-[ -x "$HOME/.claude/bin/cc-mission" ] && \
-  timeout 20 "$HOME/.claude/bin/cc-mission" render >/dev/null 2>&1 || true
+# The bound is resolved ABSOLUTELY, never as a bare `timeout`: this hook runs under whatever PATH
+# the session inherits, and on macOS `timeout` is coreutils — it does NOT exist in /usr/bin:/bin, the
+# floor of a launchd PATH. A bare name here resolves in the operator's interactive shell and nowhere
+# a headless session actually runs, which is the one environment this board most needs to reach.
+# House ladder, same shape as hooks/memory-index-drain.sh and hooks/lead-crash-watchdog.sh; the
+# SS_MISSION_TIMEOUT_BIN seam is set-but-EMPTY-disables, verbatim, so a test can drop the bound.
+if [ -n "${SS_MISSION_TIMEOUT_BIN+set}" ]; then
+  _ss_mtb="${SS_MISSION_TIMEOUT_BIN}"
+else
+  _ss_mtb=""
+  for _ss_c in /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+               /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout /usr/bin/timeout; do
+    [ -x "$_ss_c" ] && { _ss_mtb="$_ss_c"; break; }
+  done
+fi
+# NO bound resolvable ⇒ SKIP the render, do not run it unbounded. A stale board is already the
+# documented steady state (the NOTE above: every session reads the PREVIOUS session's render, and
+# every clock on it is days-scale), so skipping costs one render. Running unbounded costs a HUNG
+# SESSION START on every session on this machine — the failure this hook's own best-effort clause
+# exists to make impossible. Degrading toward the cheaper loss is the whole point of the clause.
+if [ -x "$HOME/.claude/bin/cc-mission" ] && [ -n "$_ss_mtb" ]; then
+  "$_ss_mtb" 20 "$HOME/.claude/bin/cc-mission" render >/dev/null 2>&1 || true
+fi
 
 cat <<EOF
 {
