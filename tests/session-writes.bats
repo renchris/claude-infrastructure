@@ -242,6 +242,43 @@ PY
   [ "$(sdm_rc "$t" "$W")" -eq 0 ] || false
 }
 
+# ── SUBAGENT FILES (2026-09-10, backlog ed54373d639b) ─────────────────────────────────────────────
+# The harness writes a subagent's records to `<session>/subagents/**/agent-*.jsonl`, not inline, so a
+# filter that honours `isSidechain` sees none of them unless it is handed those files. Measured: 0
+# sidechain records in the main file of sessions holding 1-10 subagent files.
+_sub_tx() { # $1=main transcript (already written) $2=rel dir under subagents/ $3=path the subagent edits
+  local d="${1%.jsonl}/subagents/$2"; mkdir -p "$d"
+  printf '%s\n' "{\"type\":\"assistant\",\"isSidechain\":true,\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"$3\"}}]}}" \
+    > "$d/agent-a1.jsonl"
+}
+
+@test "SUBAGENT: a file only a subagent wrote is this session's write (session scope), and convicts" {
+  repo "$W"
+  echo sub > "$W/src/sub.ts"
+  local t; t="$(tx "$BATS_TEST_TMPDIR/subm.jsonl")"          # main chain wrote NOTHING
+  _sub_tx "$t" "" "$W/src/sub.ts"
+  [ "$(swp_rc "$t")" -eq 0 ] || false
+  [ "$(sdm_rc "$t" "$W")" -eq 0 ] || false
+  sdm_out "$t" "$W" | grep -qxF 'src/sub.ts' || false
+}
+
+@test "SUBAGENT: a Dynamic Workflow agent (subagents/workflows/<run>/) is read too" {
+  repo "$W"
+  echo wf > "$W/src/wf.ts"
+  local t; t="$(tx "$BATS_TEST_TMPDIR/subwf.jsonl")"
+  _sub_tx "$t" "workflows/wf_abc" "$W/src/wf.ts"
+  [ "$(sdm_rc "$t" "$W")" -eq 0 ] || false
+}
+
+# TURN scope reads the main chain only: a turn boundary is a position in the MAIN file, and a miss
+# there withholds the close certificate, which is the safe direction.
+@test "SUBAGENT: turn scope stays main-chain-only" {
+  repo "$W"
+  local t; t="$(tx "$BATS_TEST_TMPDIR/subturn.jsonl")"
+  _sub_tx "$t" "" "$W/src/sub.ts"
+  [ "$(swpt_rc "$t")" -eq 1 ] || false
+}
+
 @test "fail-safe: cannot-tell propagates through the intersection (rc 2)" {
   repo "$W"
   echo dirt > "$W/config/kitty.conf"

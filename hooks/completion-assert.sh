@@ -413,7 +413,14 @@ _ca_mine() { # $1=kind (dirty|unlanded) → rc 0 mine · 1 not mine · 2 cannot 
   fi
   case "$1" in
     dirty)
-      session_dirty_mine "$TP" "$CWD" >/dev/null 2>&1; return $? ;;
+      # rc 1 here means "no path I EDIT-RECORDED is dirty", which is not "nothing of mine is dirty":
+      # the same Bash blind spot the write-free rule above refuses to exonerate on reaches a session
+      # that made one Edit and then wrote a second file with `sed -i` — it read rc 1 over its own
+      # dirt and closed ✅. So rc 1 is downgraded to cannot-tell, and the per-path proof below
+      # (`_ca_dirt_unreachable`) is what clears it, on positive evidence (backlog ed54373d639b).
+      session_dirty_mine "$TP" "$CWD" >/dev/null 2>&1; rc=$?
+      [ "$rc" -eq 1 ] && return 2
+      return "$rc" ;;
     unlanded)
       # DELEGATED to session_unlanded_mine (CLOSE_INTEGRITY W2b) — session-continue's ship floor
       # asks the SAME question, and two inline copies of this intersection is how they drift. The
@@ -512,6 +519,24 @@ _ca_dirt_outside_exec() {   # stdout: `paths=N,windows=…,newest=…,span=…` 
   dirt_outside_session_execution "$CWD" "$TP"
 }
 
+# ── THE TWO AXES, PER PATH (2026-09-10, backlog ed54373d639b) ────────────────────────────────────
+# The two terms above are each all-or-nothing, and they cover DISJOINT populations: ordering refutes
+# on any path newer than the session, the execution term cannot-tells on any path older than the
+# transcript. A shared checkout holds both at once — weeks-old untracked dirt beside a live peer's
+# fresh WIP — so a write-free Bash-first session sitting in it was convicted by neither being able
+# to speak for the whole tree: measured, session 62dcfa08 blocked 3/3 over 25 files, 22 of them
+# weeks old and 3 a peer's WIP written while it executed nothing. This term takes the same two
+# per-path facts and asks them of each path separately. It is also the only exoneration for a
+# session that DID record edits, whose `_ca_mine dirty` rc 1 is now downgraded to cannot-tell.
+# GATED ON rc 2 ALONE and ordered LAST, like its siblings: it can only convert "cannot tell" into a
+# verdict, never override positive self-evidence. See hooks/lib/peer-owned.sh § THE TWO PROOFS,
+# PER PATH for the predicate and why neither of the item's two forks was built.
+_ca_dirt_unreachable() {   # stdout: `paths=N,predates=…,gap=…,…` on rc 0
+  _ca_po_source || return 2
+  command -v dirt_unreachable_by_session >/dev/null 2>&1 || return 2
+  dirt_unreachable_by_session "$CWD" "$SID" "$TP"
+}
+
 # hooks/lib/close-shape.sh now has TWO consumers here (D6's origin contract, D7's act line), so the
 # four-step resolution chain is factored rather than copied — the same reason _ca_po_source was
 # factored when its second consumer arrived. CLOSE_SHAPE_LIB stays the head of the chain, exactly
@@ -542,12 +567,14 @@ _ca_source_close_shape() {   # rc 0 sourced · rc 1 no lib / unsourceable
 contra=0; facts=""; _ca_exon=""
 if [ "$DIRTY" -eq 1 ]; then
   _ca_mine dirty; _ca_d=$?
-  _ca_dp=""; _ca_dx=""
+  _ca_dp=""; _ca_dx=""; _ca_du=""
   if [ "$_ca_d" -eq 1 ]; then _ca_exon="${_ca_exon}dirty-not-mine "
   elif [ "$_ca_d" -eq 2 ] && _ca_dp="$(_ca_dirt_predates)" && [ -n "$_ca_dp" ]; then
     _ca_exon="${_ca_exon}dirty-predates-session:${_ca_dp} "
   elif [ "$_ca_d" -eq 2 ] && _ca_dx="$(_ca_dirt_outside_exec)" && [ -n "$_ca_dx" ]; then
     _ca_exon="${_ca_exon}dirty-outside-session-exec:${_ca_dx} "
+  elif [ "$_ca_d" -eq 2 ] && _ca_du="$(_ca_dirt_unreachable)" && [ -n "$_ca_du" ]; then
+    _ca_exon="${_ca_exon}dirty-unreachable-per-path:${_ca_du} "
   else
     contra=1
     if [ "$_ca_d" -eq 0 ]; then

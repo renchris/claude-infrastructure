@@ -42,6 +42,16 @@
 # the prescribed-remedy-worse-than-the-bug class. Both consumers degrade SAFELY on that miss:
 # (A) withholds a certificate it cannot justify, (B) declines to force a continuation. Neither
 # fails loud, so this residue costs coverage, never correctness.
+#   THAT IS TRUE OF (A) AND (B) ONLY. `session_dirty_mine` rc 1 means "no path I EDIT-RECORDED is
+# dirty" — not "nothing of mine is dirty" — and a caller that EXONERATES on it inherits the blind
+# spot in the unsafe direction: a session that made one Edit and then wrote a second file with
+# `sed -i` reads rc 1 over its own dirt. completion-assert, the consumer that turns rc 1 into a
+# cleared false-done, no longer accepts it alone (backlog ed54373d639b, 2026-09-10): it asks
+# hooks/lib/peer-owned.sh `dirt_unreachable_by_session` for a PER-PATH proof that each dirty path
+# is one this session could not have written — older than the session, or stamped while it was
+# executing nothing — which bounds the Bash channel in TIME instead of parsing it by VERB.
+# boundary-handoff and teammate-auto-shutdown still read rc 1 as not-mine; their misread costs a
+# recycle or a reap over files that stay on disk, not a false done, so they were left as they are.
 #
 # The tempting closure is "worktree-implies-mine": if dirt sits in a LINKED worktree (not the
 # shared checkout), attribute it to the session cwd'd there, transcript evidence or not. It was
@@ -62,7 +72,10 @@
 # its own. Trading a missed nudge for a false conviction is not a coverage win.
 #
 # Sidechain (subagent) records are DELIBERATELY INCLUDED: a subagent's edit is this session's
-# write, and excluding it would attribute the session's own dirt to nobody. Note this does NOT
+# write, and excluding it would attribute the session's own dirt to nobody. The harness now writes
+# them to separate files under `<session>/subagents/` rather than inline, so SESSION scope reads
+# those files too (`_sw_subagent_files`, 2026-09-10); before that this sentence was true of the
+# jq filter and false of the data it was handed. Note this does NOT
 # generalise to an ASSIGNEE sharing a worktree: an assignee is a separate session with its own
 # transcript, not a sidechain record of this one, and cross-attributing between them is the same
 # false conviction the paragraph above rejects.
@@ -99,6 +112,22 @@ _sw_bounded() { local s="$1"; shift
   if command -v timeout >/dev/null 2>&1; then timeout "$s" "$@"; else "$@"; fi
 }
 
+# _sw_subagent_files <transcript_path> → NUL-delimited paths of this session's subagent transcripts
+#   The harness writes every subagent's records to `<session>/subagents/**/agent-*.jsonl` beside the
+#   main `<session>.jsonl` — plain subagents directly under it, Dynamic Workflow agents under
+#   `subagents/workflows/<runId>/`. Measured 2026-09-10: 0 `isSidechain` records in the main files
+#   of sessions holding 1-10 subagent files, so the SIDECHAIN paragraph in the header was describing
+#   a layout the harness no longer writes, and a subagent's Edit/Write was attributed to nobody.
+#   `find -H`: the projects root is reached through a symlink on some config dirs, and BSD find skips
+#   a symlinked START dir without it (MEMORY.md symlinked-store-invisible-to-find). An absent dir is
+#   the ordinary no-subagent case and prints nothing.
+_sw_subagent_files() {
+  local tp="${1:-}" d
+  d="${tp%.jsonl}/subagents"
+  [ -d "$d" ] || return 0
+  find -H "$d" -type f -name '*.jsonl' -print0 2>/dev/null
+}
+
 # _sw_paths <transcript_path> <true|false turn-bounded>
 #   The ONE reader. Both public scopes delegate here so the file-edit tool list can never diverge
 #   between them — a turn oracle that recognised three of the four write tools would fail in the
@@ -108,6 +137,14 @@ _sw_paths() {
   command -v jq >/dev/null 2>&1 || return 2
   case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
   [ -n "$tp" ] && [ -f "$tp" ] || return 2
+  # SESSION scope reads the subagent transcripts too; TURN scope reads the main chain only, because
+  # a turn boundary is a position in the MAIN file and the subagent files are separate streams with
+  # no shared order. A turn-scoped miss withholds the close certificate, the safe direction there.
+  local -a srcs=("$tp")
+  local _sf
+  if [ "$turn" != true ]; then
+    while IFS= read -r -d '' _sf; do srcs+=("$_sf"); done < <(_sw_subagent_files "$tp")
+  fi
 
   # `.input.edits` (MultiEdit) still carries the target in `.input.file_path`, so one selector
   # covers all four tools. `-n` + `reduce inputs` streams the file exactly as the previous filter
@@ -145,7 +182,7 @@ _sw_paths() {
                    | select(. != "") ]
         else . end)
       | .[]
-    ' "$tp" 2>/dev/null)"; rc=$?
+    ' "${srcs[@]}" 2>/dev/null)"; rc=$?
   # A non-zero jq exit means the read FAILED — that is cannot-tell, never "no writes". Getting this
   # branch wrong is how an unreadable transcript would silently certify a close as safe.
   [ "$rc" -eq 0 ] || return 2

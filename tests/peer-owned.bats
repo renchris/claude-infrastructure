@@ -361,7 +361,8 @@ dps() { # <repo> <session_id> <transcript>
 #   --win A B   a Bash tool_use at A paired with its tool_result at B
 #   --open A    a Bash tool_use at A with NO tool_result (interrupt/kill ⇒ an open window)
 #   --bg A B    a --win whose input carries run_in_background: true
-#   --write P   a file-edit tool_use, i.e. the session is no longer write-free
+#   --write P   a file-edit tool_use, i.e. the session is no longer write-free (NO id ⇒ unpaired)
+#   --edit P A B / --tool NAME A B / --sub A B / --subedit P A B   see the python below
 _po_tx_exec() { # <out> <first_ts> <last_ts> [--win A B | --open A | --bg A B | --write P]...
   local out="$1"; shift
   python3 - "$out" "$@" <<'PY'
@@ -371,7 +372,20 @@ def iso(t): return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(int(t))) + ".0
 def rec(ts, content): return {"type": "assistant", "timestamp": iso(ts),
                               "message": {"content": [content]}}
 rows = [{"type": "user", "timestamp": iso(first), "message": {"content": "go"}}]
+sub = []          # records of ONE subagent, written to <out-sans-.jsonl>/subagents/agent-a1.jsonl
 i = n = 0
+def pair(dst, name, inp, a, b):
+    global n
+    n += 1
+    tid = "t%d" % n
+    r = rec(a, {"type": "tool_use", "id": tid, "name": name, "input": inp})
+    if dst is sub: r["isSidechain"] = True
+    dst.append(r)
+    if b is not None:
+        u = {"type": "user", "timestamp": iso(b), "message": {"content": [
+             {"type": "tool_result", "tool_use_id": tid, "content": "ok"}]}}
+        if dst is sub: u["isSidechain"] = True
+        dst.append(u)
 while i < len(args):
     kind = args[i]
     if kind == "--write":
@@ -379,21 +393,35 @@ while i < len(args):
                                 "input": {"file_path": args[i + 1]}}))
         i += 2
         continue
-    n += 1
-    tid = "t%d" % n
+    # --edit P A B     a real, id-paired Edit of P (the --write above has no id ⇒ an OPEN window)
+    # --tool NAME A B  a paired window of any other tool
+    # --sub A B        a Bash window inside the SUBAGENT file
+    # --subedit P A B  an Edit of P inside the SUBAGENT file
+    if kind == "--edit":
+        pair(rows, "Edit", {"file_path": args[i + 1]}, args[i + 2], args[i + 3]); i += 4; continue
+    if kind == "--tool":
+        inp = {"run_in_background": True} if args[i + 1] == "Agent-bg" else {}
+        name = "Agent" if args[i + 1] == "Agent-bg" else args[i + 1]
+        pair(rows, name, inp, args[i + 2], args[i + 3]); i += 4; continue
+    if kind == "--sub":
+        pair(sub, "Bash", {"command": "sed -i s/a/b/ f"}, args[i + 1], args[i + 2]); i += 3; continue
+    if kind == "--subedit":
+        pair(sub, "Edit", {"file_path": args[i + 1]}, args[i + 2], args[i + 3]); i += 4; continue
     bg = (kind == "--bg")
     inp = {"command": "git status"}
     if bg:
         inp["run_in_background"] = True
-    rows.append(rec(args[i + 1], {"type": "tool_use", "id": tid, "name": "Bash", "input": inp}))
     if kind == "--open":
-        i += 2
-        continue
-    rows.append({"type": "user", "timestamp": iso(args[i + 2]), "message": {"content": [
-        {"type": "tool_result", "tool_use_id": tid, "content": "ok"}]}})
+        pair(rows, "Bash", inp, args[i + 1], None); i += 2; continue
+    pair(rows, "Bash", inp, args[i + 1], args[i + 2])
     i += 3
 rows.append(rec(last, {"type": "text", "text": "✅ Complete — all done."}))
 open(out, "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+if sub:
+    import os
+    d = out[:-len(".jsonl")] + "/subagents"
+    os.makedirs(d, exist_ok=True)
+    open(d + "/agent-a1.jsonl", "w").write("\n".join(json.dumps(r) for r in sub) + "\n")
 PY
   printf '%s' "$out"
 }
@@ -537,5 +565,186 @@ dox() { # <repo> <transcript>
   printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}' \
     > "$BATS_TEST_TMPDIR/dox11.jsonl"
   dox "$w" "$BATS_TEST_TMPDIR/dox11.jsonl"
+  [ "$status" -eq 2 ]
+}
+
+# ── dirt_unreachable_by_session: the two proofs, PER PATH (backlog ed54373d639b) ─────────────────
+# The two terms above are all-or-nothing over DISJOINT populations, so a tree holding weeks-old dirt
+# beside a peer's fresh WIP was cleared by neither (measured: session 62dcfa08, 25 files, blocked
+# 3/3). Every CONTROL below is a way a per-path union could clear a path the session could have
+# written — the under-conviction direction the item was filed to guard — and each is a real channel:
+# the Bash window, an edit record, a subagent, a non-Bash tool, a detached command.
+
+du() { # <repo> <session_id> <transcript>
+  run bash -c ". '$LIB'; dirt_unreachable_by_session '$1' '$2' '$3'"
+}
+
+# The shared-checkout shape: old untracked dirt + a tracked file modified weeks ago + a peer's WIP
+# written between two of this session's commands.
+_du_mixed_tree() { # <tag> <fresh-mtime> → echoes the worktree
+  local w; w="$(_po_clean_repo "$1")"
+  echo a >> "$w/base.txt"; echo b > "$w/old-untracked.txt"; echo c > "$w/peer-wip.txt"
+  _po_touch_at "$(( NOW - 7200 ))" "$w/base.txt"
+  _po_touch_at "$(( NOW - 7200 ))" "$w/old-untracked.txt"
+  _po_touch_at "$2" "$w/peer-wip.txt"
+  printf '%s' "$w"
+}
+
+@test "DU1 the measured shape: old dirt + a peer's WIP in a gap ⇒ cleared, where neither proof alone can" {
+  local w tr; w="$(_du_mixed_tree du1 "$(( NOW - 1800 ))")"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/du1.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --win "$(( NOW - 2400 ))" "$(( NOW - 2395 ))" --win "$(( NOW - 600 ))" "$(( NOW - 595 ))")"
+  dps "$w" du-1 "$tr"; [ "$status" -eq 1 ]           # the peer's WIP refutes ordering
+  dox "$w" "$tr";      [ "$status" -eq 2 ]           # the old dirt predates the bracket
+  du  "$w" du-1 "$tr"
+  [ "$status" -eq 0 ]
+  [[ "$output" == paths=3,predates=2,gap=1,* ]] || false
+}
+
+# THE CONTROL THE ITEM LIVES OR DIES BY: the Bash-first session's OWN heredoc write. It has no edit
+# record, so only its window can convict it — and the old dirt beside it must not dilute that.
+@test "DU2 CONTROL: the fresh path stamped INSIDE a Bash window ⇒ refuted, own Bash dirt still convicts" {
+  local w tr; w="$(_du_mixed_tree du2 "$(( NOW - 2398 ))")"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/du2.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --win "$(( NOW - 2400 ))" "$(( NOW - 2395 ))")"
+  du "$w" du-2 "$tr"
+  [ "$status" -eq 1 ]
+}
+
+# Positive self-evidence outranks ordering: an EDIT-RECORDED dirty path refutes even when its mtime
+# reads as older than the session (a `cp -p` / `touch -t` stamp is exactly how that happens).
+@test "DU3 CONTROL: an edit-recorded dirty path refutes even with a pre-session mtime" {
+  local w tr; w="$(_du_mixed_tree du3 "$(( NOW - 1800 ))")"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/du3.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --edit "$w/old-untracked.txt" "$(( NOW - 3000 ))" "$(( NOW - 2999 ))")"
+  du "$w" du-3 "$tr"
+  [ "$status" -eq 1 ]
+}
+
+# The case dirt_outside_session_execution's clause (1) abstains on: a session that DID record an
+# edit (to a file it has since committed) sitting beside a sibling's dirt. Valid here, because
+# clause (a) answers for the edited paths directly.
+@test "DU4 a session that recorded edits elsewhere + sibling dirt in a gap ⇒ cleared" {
+  local w tr; w="$(_du_mixed_tree du4 "$(( NOW - 1800 ))")"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/du4.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --edit "$w/second.txt" "$(( NOW - 3000 ))" "$(( NOW - 2999 ))" \
+        --win "$(( NOW - 2400 ))" "$(( NOW - 2395 ))")"
+  dox "$w" "$tr"; [ "$status" -eq 2 ]
+  du  "$w" du-4 "$tr"
+  [ "$status" -eq 0 ]
+}
+
+# THE UNDER-CONVICTION completion-assert used to clear: one Edit (clean), then a SECOND file written
+# with `sed -i` inside a window. session_dirty_mine reads rc 1 over it; this must not.
+@test "DU5 CONTROL: a session with a clean Edit and a Bash-written dirty file ⇒ refuted" {
+  local w tr; w="$(_po_clean_repo du5)"
+  echo mine >> "$w/base.txt"
+  _po_touch_at "$(( NOW - 2398 ))" "$w/base.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/du5.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --edit "$w/second.txt" "$(( NOW - 3000 ))" "$(( NOW - 2999 ))" \
+        --win "$(( NOW - 2400 ))" "$(( NOW - 2395 ))")"
+  run bash -c ". '$SESSION_WRITES_LIB'; session_dirty_mine '$tr' '$w' >/dev/null 2>&1; echo \$?"
+  [ "$output" = "1" ]                                  # the oracle's rc 1 — not an exoneration
+  du "$w" du-5 "$tr"
+  [ "$status" -eq 1 ]
+}
+
+# A subagent's records are in their own file; its `sed -i` runs while the MAIN chain sits in a gap.
+@test "DU6 CONTROL: a SUBAGENT's Bash window covers the mtime ⇒ refuted" {
+  local w tr; w="$(_po_clean_repo du6)"
+  echo sub >> "$w/base.txt"
+  _po_touch_at "$(( NOW - 1800 ))" "$w/base.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/du6.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --tool Agent "$(( NOW - 2000 ))" "$(( NOW - 1990 ))" \
+        --sub "$(( NOW - 1802 ))" "$(( NOW - 1798 ))")"
+  du "$w" du-6 "$tr"
+  [ "$status" -eq 1 ]
+}
+
+@test "DU7 CONTROL: a SUBAGENT's Edit of the dirty path ⇒ refuted (the edit set reads subagent files)" {
+  local w tr; w="$(_po_clean_repo du7)"
+  echo sub >> "$w/base.txt"
+  _po_touch_at "$(( NOW - 7200 ))" "$w/base.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/du7.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --subedit "$w/base.txt" "$(( NOW - 1802 ))" "$(( NOW - 1798 ))")"
+  du "$w" du-7 "$tr"
+  [ "$status" -eq 1 ]
+}
+
+# A background subagent's own windows are what bound it, so the FLAG on its Agent call is not
+# treated as detached — otherwise every session that ever delegated could never be cleared.
+@test "DU8 a backgrounded Agent call does not disable the proof; its subagent's windows do the bounding" {
+  local w tr; w="$(_du_mixed_tree du8 "$(( NOW - 1800 ))")"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/du8.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --tool Agent-bg "$(( NOW - 2000 ))" "$(( NOW - 1999 ))" \
+        --sub "$(( NOW - 1500 ))" "$(( NOW - 1490 ))")"
+  du "$w" du-8 "$tr"
+  [ "$status" -eq 0 ]
+}
+
+# Bash is the channel with no edit record, not the only one with side effects.
+@test "DU9 CONTROL: a non-Bash tool's window covers the mtime ⇒ refuted" {
+  local w tr; w="$(_du_mixed_tree du9 "$(( NOW - 1800 ))")"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/du9.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --tool mcp__ms365__download-bytes-to-file "$(( NOW - 1801 ))" "$(( NOW - 1799 ))")"
+  du "$w" du-9 "$tr"
+  [ "$status" -eq 1 ]
+}
+
+# Monitor runs its command in the background, so its effects outlive every window it has.
+@test "DU10 CONTROL: a Monitor call anywhere ⇒ a gap path is cannot-tell" {
+  local w tr; w="$(_du_mixed_tree du10 "$(( NOW - 1800 ))")"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/du10.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --tool Monitor "$(( NOW - 3000 ))" "$(( NOW - 2999 ))")"
+  du "$w" du-10 "$tr"
+  [ "$status" -eq 2 ]
+}
+
+# …and ordering is untouched by it: a command this session ran cannot predate the session.
+@test "DU11 a Monitor call does not stop the ORDERING half: all-predating dirt still clears" {
+  local w tr; w="$(_po_clean_repo du11)"
+  echo a >> "$w/base.txt"
+  _po_touch_at "$(( NOW - 7200 ))" "$w/base.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/du11.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --tool Monitor "$(( NOW - 3000 ))" "$(( NOW - 2999 ))")"
+  du "$w" du-11 "$tr"
+  [ "$status" -eq 0 ]
+  [[ "$output" == paths=1,predates=1,gap=0,* ]] || false
+}
+
+@test "DU12 CONTROL: a path stamped after the last record ⇒ cannot-tell, whatever else clears" {
+  local w tr; w="$(_du_mixed_tree du12 "$(( NOW - 5 ))")"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/du12.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 600 ))" \
+        --win "$(( NOW - 2400 ))" "$(( NOW - 2395 ))")"
+  du "$w" du-12 "$tr"
+  [ "$status" -eq 2 ]
+}
+
+# A deletion has no mtime; the cleared paths beside it are what make this non-vacuous.
+@test "DU13 CONTROL: a deletion beside cleared paths ⇒ cannot-tell" {
+  local w tr; w="$(_du_mixed_tree du13 "$(( NOW - 1800 ))")"
+  git -C "$w" checkout -q -- base.txt; rm -f "$w/second.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/du13.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --win "$(( NOW - 2400 ))" "$(( NOW - 2395 ))")"
+  du "$w" du-13 "$tr"
+  [ "$status" -eq 2 ]
+}
+
+# The bracket is what the MAIN transcript testifies about. A subagent record stamped later must not
+# stretch it over dirt the main file cannot speak for.
+@test "DU15 CONTROL: a later SUBAGENT record does not widen the bracket" {
+  local w tr; w="$(_po_clean_repo du15)"
+  echo x >> "$w/base.txt"
+  _po_touch_at "$(( NOW - 300 ))" "$w/base.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/du15.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 600 ))" \
+        --sub "$(( NOW - 100 ))" "$(( NOW - 90 ))")"
+  du "$w" du-15 "$tr"
+  [ "$status" -eq 2 ]
+}
+
+@test "DU14 CONTROL: a CLEAN tree ⇒ cannot-tell, not an exoneration" {
+  local w tr; w="$(_po_clean_repo du14)"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/du14.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))")"
+  du "$w" du-14 "$tr"
   [ "$status" -eq 2 ]
 }

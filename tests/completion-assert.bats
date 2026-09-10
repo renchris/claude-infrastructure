@@ -1417,14 +1417,21 @@ import json, sys, time
 out, first, last, args = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4:]
 def iso(t): return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(int(t))) + ".000Z"
 rows = [{"type": "user", "timestamp": iso(first), "message": {"content": "go"}}]
-for n, i in enumerate(range(0, len(args), 3)):
-    tid, inp = "t%d" % n, {"command": "git status"}
-    if args[i] == "--bg":
+i = n = 0
+while i < len(args):
+    # --edit P A B: an id-paired Edit of P — the session is no longer write-free (2026-09-10)
+    name, inp = "Bash", {"command": "git status"}
+    if args[i] == "--edit":
+        name, inp = "Edit", {"file_path": args[i + 1]}
+        i += 1
+    elif args[i] == "--bg":
         inp["run_in_background"] = True
+    tid = "t%d" % n; n += 1
     rows.append({"type": "assistant", "timestamp": iso(args[i + 1]), "message": {"content": [
-        {"type": "tool_use", "id": tid, "name": "Bash", "input": inp}]}})
+        {"type": "tool_use", "id": tid, "name": name, "input": inp}]}})
     rows.append({"type": "user", "timestamp": iso(args[i + 2]), "message": {"content": [
         {"type": "tool_result", "tool_use_id": tid, "content": "ok"}]}})
+    i += 3
 rows.append({"type": "assistant", "timestamp": iso(last), "message": {"content": [
     {"type": "text", "text": "✅ Complete — all done."}]}})
 open(out, "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
@@ -1466,6 +1473,66 @@ PY
         --bg "$(( now - 2400 ))" "$(( now - 2395 ))")"
   run run_ca "$tr" "$w"
   [ "$status" -eq 0 ]; fired "$output"
+}
+
+# ── DIRTY ATTRIBUTION, BOTH AXES PER PATH (2026-09-10, backlog ed54373d639b) ─────────────────────
+# The two terms above are each all-or-nothing over DISJOINT populations, so the shared-checkout
+# shape — weeks-old dirt beside a peer's fresh WIP — was cleared by neither. MEASURED: session
+# 62dcfa08, a write-free Bash-only session, blocked 3/3 over 25 files (22 weeks old, 3 a peer's WIP
+# written while it executed nothing). And `_ca_mine dirty` rc 1 cleared the opposite case: a session
+# with one clean Edit and a second file written by `sed -i`. Both directions are pinned here.
+
+@test "per-path: old dirt + a peer's WIP in a gap ⇒ ABSTAIN (the measured 62dcfa08 shape)" {
+  local w tr now; w="$(_ca_dirty_repo dua1)"; now="$(date +%s)"
+  _ca_touch_at "$(( now - 7200 ))" "$w/base.txt"
+  echo peer > "$w/peer-wip.txt"; _ca_touch_at "$(( now - 1800 ))" "$w/peer-wip.txt"
+  tr="$(_ca_tr_exec "$BATS_TEST_TMPDIR/dua1.jsonl" "$(( now - 3600 ))" "$(( now - 10 ))" \
+        --win "$(( now - 2400 ))" "$(( now - 2395 ))" --win "$(( now - 600 ))" "$(( now - 595 ))")"
+  run run_ca "$tr" "$w"
+  [ "$status" -eq 0 ]
+  ! fired "$output" || false
+  grep -q 'dirty-unreachable-per-path:paths=2,predates=1,gap=1' "$COMPLETION_IDL"
+}
+
+# Its control differs in ONE input — the peer file's stamp lands inside this session's own window,
+# which is where a Bash-first session's heredoc write lands.
+@test "per-path CONTROL: the same tree, fresh path stamped INSIDE a window ⇒ still FIRES, UNRESOLVED" {
+  local w tr now; w="$(_ca_dirty_repo dua2)"; now="$(date +%s)"
+  _ca_touch_at "$(( now - 7200 ))" "$w/base.txt"
+  echo mine > "$w/peer-wip.txt"; _ca_touch_at "$(( now - 2398 ))" "$w/peer-wip.txt"
+  tr="$(_ca_tr_exec "$BATS_TEST_TMPDIR/dua2.jsonl" "$(( now - 3600 ))" "$(( now - 10 ))" \
+        --win "$(( now - 2400 ))" "$(( now - 2395 ))" --win "$(( now - 600 ))" "$(( now - 595 ))")"
+  run run_ca "$tr" "$w"
+  [ "$status" -eq 0 ]; fired "$output"
+  printf '%s' "$output" | jq -r .reason | grep -qF 'authorship UNRESOLVED' || false
+}
+
+# THE UNDER-CONVICTION: one Edit to a file since committed, then `sed -i` on another inside a window.
+# session_dirty_mine reads rc 1 ("no edit-recorded path is dirty") and this hook used to clear it as
+# `dirty-not-mine`.
+@test "per-path CONTROL: a clean Edit + a Bash-written dirty file ⇒ FIRES, not dirty-not-mine" {
+  local w tr now; w="$(_ca_dirty_repo dua3)"; now="$(date +%s)"
+  _ca_touch_at "$(( now - 2398 ))" "$w/base.txt"
+  tr="$(_ca_tr_exec "$BATS_TEST_TMPDIR/dua3.jsonl" "$(( now - 3600 ))" "$(( now - 10 ))" \
+        --edit "$w/committed-elsewhere.txt" "$(( now - 3000 ))" "$(( now - 2999 ))" \
+        --win "$(( now - 2400 ))" "$(( now - 2395 ))")"
+  run run_ca "$tr" "$w"
+  [ "$status" -eq 0 ]; fired "$output"
+  ! grep -q 'dirty-not-mine' "$COMPLETION_IDL" || false
+}
+
+# …and the same edit-recording session beside a SIBLING's dirt in a gap is still cleared — by the
+# per-path proof, on positive evidence, where it used to be cleared on the oracle's rc 1 alone.
+@test "per-path: a clean Edit + a sibling's dirt in a gap ⇒ ABSTAIN via the per-path proof" {
+  local w tr now; w="$(_ca_dirty_repo dua4)"; now="$(date +%s)"
+  _ca_touch_at "$(( now - 1800 ))" "$w/base.txt"
+  tr="$(_ca_tr_exec "$BATS_TEST_TMPDIR/dua4.jsonl" "$(( now - 3600 ))" "$(( now - 10 ))" \
+        --edit "$w/committed-elsewhere.txt" "$(( now - 3000 ))" "$(( now - 2999 ))" \
+        --win "$(( now - 2400 ))" "$(( now - 2395 ))")"
+  run run_ca "$tr" "$w"
+  [ "$status" -eq 0 ]
+  ! fired "$output" || false
+  grep -q 'dirty-unreachable-per-path:paths=1,predates=0,gap=1' "$COMPLETION_IDL"
 }
 
 # ── D6 MENTION vs USE — the template was its own bypass (item 3b464e94b3ff) ─────────────────────
