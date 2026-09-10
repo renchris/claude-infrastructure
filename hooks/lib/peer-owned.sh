@@ -498,28 +498,46 @@ dirt_predates_session() {
 
 # _po_activity <transcript_path>
 #   ONE jq pass over the transcript. stdout, in this order:
-#     META <first_record_epoch> <last_record_epoch> <backgrounded_bash_count>
-#     W <start_epoch> <end_epoch|-1>        one per Bash tool_use; -1 = no tool_result recorded
+#     META <first_record_epoch> <last_record_epoch> <detached_count>     (first/last: MAIN file only)
+#     W <start_epoch> <end_epoch|-1>        one per tool_use, main + subagent files; -1 = no tool_result
 #   rc 0 read cleanly · 2 no jq / unreadable / timeout.  A record with no `.timestamp` contributes
 #   nothing to META, which is what keeps the timestamp-free fixtures cannot-tell (see (2) above).
 _po_activity() {
-  local tp="${1:-}" out rc
+  local tp="${1:-}" out rc _sf
   command -v jq >/dev/null 2>&1 || return 2
   case "$tp" in "~"*) tp="$HOME${tp#\~}" ;; esac
   [ -n "$tp" ] && [ -f "$tp" ] || return 2
   # Sidechain records are INCLUDED, exactly as session-writes.sh includes them: a subagent runs in
   # this session's process and its Bash is this session's Bash, so excluding those windows would
   # hand back gaps the session was in fact executing in — the fail-toward-exoneration direction.
+  # They live in SEPARATE FILES now (`<session>/subagents/**`, see session-writes.sh
+  # `_sw_subagent_files`), so they are read from there. Until 2026-09-10 this read the main file only
+  # and so saw none of them: a lead whose subagent ran `sed -i` got a gap where the subagent was
+  # executing. The bracket (META first/last) still comes from the MAIN file alone — it is what the
+  # main transcript testifies about, and a subagent file cannot widen it.
+  local -a srcs=("$tp")
+  if command -v _sw_subagent_files >/dev/null 2>&1 || _po_sw_source; then
+    while IFS= read -r -d '' _sf; do srcs+=("$_sf"); done < <(_sw_subagent_files "$tp")
+  fi
+  # EVERY tool_use is a window, not only Bash (2026-09-10). What makes (3) sound is that this session
+  # executed nothing outside its windows; Bash is the channel with no file-edit record, but it is not
+  # the only tool with side effects (an MCP download, a Skill, a NotebookEdit), and a window counted
+  # needlessly only costs coverage. DETACHED (clause 4) is the harness's own flag on any tool, or
+  # `Monitor`, which runs its command in the background by design. `Agent`/`Task` are exempt from the
+  # flag: a background subagent's execution is in its own transcript, read above, window by window.
   # shellcheck disable=SC2016  # jq filter body — `$r`/`$x` are jq bindings, no shell expansion
-  out="$(_po_bounded "${PEER_OWNED_TIMEOUT_S:-5}" jq -rn '
+  out="$(_po_bounded "${PEER_OWNED_TIMEOUT_S:-5}" jq -rn --arg main "$tp" '
       def ts: if (. // "") == "" then null else (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) end;
       reduce inputs as $r ({first:null, last:null, u:{}, o:[], bg:0};
           ($r.timestamp | ts) as $t
-        | (if $t == null then .
+        | (if $t == null or (input_filename != $main) then .
            else (.first = (if .first == null then $t else .first end)) | (.last = $t) end)
         | if $r.type == "assistant" then
-            reduce ($r.message.content[]? | select(.type == "tool_use" and .name == "Bash")) as $x (.;
-                (.bg = .bg + (if ($x.input.run_in_background == true) then 1 else 0 end))
+            reduce ($r.message.content[]? | select(.type == "tool_use")) as $x (.;
+                (.bg = .bg + (if ($x.name == "Monitor")
+                                 or (($x.input.run_in_background == true)
+                                     and ($x.name != "Agent") and ($x.name != "Task"))
+                              then 1 else 0 end))
               | (if ($x.id // "") == "" then (.o = .o + [$t])      # no id ⇒ unpairable ⇒ open window
                  else (.u[$x.id] = {a: $t, b: null}) end))
           elif $r.type == "user" then
@@ -531,7 +549,7 @@ _po_activity() {
       | "META \($s.first // 0) \($s.last // 0) \($s.bg)",
         ($s.u | to_entries[] | "W \(.value.a // 0) \(.value.b // -1)"),
         ($s.o[] | "W \(. // 0) -1")
-    ' "$tp" 2>/dev/null)"; rc=$?
+    ' "${srcs[@]}" 2>/dev/null)"; rc=$?
   [ "$rc" -eq 0 ] || return 2
   printf '%s\n' "$out"
 }
@@ -621,5 +639,160 @@ EOF
   # cap-whose-population-is-empty) — the tree is not dirty, so there is no verdict to give.
   [ "$n" -gt 0 ] || return 2
   printf 'paths=%s,windows=%s,newest=%s,span=%s-%s\n' "$n" "$nw" "$newest" "$first" "$last"
+  return 0
+}
+
+# ── THE TWO PROOFS, PER PATH (2026-09-10, backlog ed54373d639b) ──────────────────────────────────
+# `dirt_predates_session` and `dirt_outside_session_execution` are each ALL-OR-NOTHING over the
+# porcelain, and they cover DISJOINT populations: the ordering proof refutes on any path newer than
+# the session, and the execution proof answers cannot-tell on any path older than the transcript's
+# first record. So a tree holding BOTH shapes — weeks-old abandoned dirt plus a live peer's fresh
+# WIP, which is what a shared checkout looks like — can be cleared by neither, though every path in
+# it is individually proven. Measured on the live fleet, IDL 2026-09-09:
+#   · session 62dcfa08 (a read-only limit-recover session in the shared checkout, 44 Bash calls,
+#     ZERO file-edit records) was blocked 3/3 at 18:49:43Z, 18:50:24Z and 18:51:13Z over
+#     "dirty tree (25 file(s)), authorship UNRESOLVED". 22 paths were untracked since 2026-08-10..23
+#     (sibling sessions in the same tree cleared as `dirty-predates-session:paths=22`); the other 3
+#     were session 5204b75c's live WIP — `bin/cc-mission` Write 18:47:28Z, `bin/cc-signoff` Write
+#     18:48:01Z, `hooks/session-start.sh` via a Bash heredoc 18:49:26Z — committed at 18:51:29Z,
+#     16 s after the third block. 62dcfa08 had no execution window from 18:16:28Z to 18:49:58Z.
+#     Every path was proven not-its-own by one of the two proofs; neither proof could say so alone.
+#   · the filing case, session 88a12591 (2026-09-05): 22 of 23 paths predated it by 2-4 weeks and
+#     the 23rd was a peer's live WIP. Same shape.
+#
+# ── WHY NEITHER FORK THE ITEM NAMED ─────────────────────────────────────────────────────────────
+# The item was filed as a choice between recording writes at the PostToolUse chokepoint and parsing
+# Bash payloads for write shapes. Parsing is the denylist this file already refuses (MEMORY.md
+# denylist-enumerates-spellings-not-the-class). The chokepoint is a worse copy of what the
+# transcript already holds: a hook cannot see what a command WROTE, only diff the tree around it,
+# and a diff taken in a shared tree attributes a sibling's concurrent write to whoever's window it
+# landed in — converting "inside my window" into "mine", the false conviction session-writes.sh
+# rejects for worktree-implies-mine. The windows are already recorded, per call, in the transcript,
+# and the sound use of them is ONE-SIDED: outside every window ⇒ not written by this session; inside
+# one ⇒ cannot tell. That never asserts an authorship it cannot prove (no over-conviction), never
+# clears a path the session could have reached (no under-conviction), and needs no new store, no
+# migration and no per-call cost.
+#
+# ── THE PREDICATE, per dirty path; the tree clears only if EVERY path clears ─────────────────────
+#   (a) not in the session's file-edit set (main + subagent transcripts) — an edit-recorded dirty
+#       path is positive self-evidence and refutes the tree;
+#   (b) readable: a deletion has no mtime ⇒ cannot-tell, exactly as in both proofs above;
+#   (c) then EITHER mtime < session start (the ordering proof, over `_po_session_start`'s MIN)
+#       OR  first < mtime < last, outside every execution window, and nothing detached ran
+#           (the execution proof, clauses (2)-(4), over `_po_activity`'s windows).
+# Each clause is a per-path fact one of the two existing proofs already accepts, so this can clear
+# nothing either would call reachable. It is also valid for a session that DID record file edits —
+# clause (a) handles those paths directly — which is the case completion-assert used to clear on
+# `session_dirty_mine` rc 1 alone (see session-writes.sh § KNOWN COVERAGE RESIDUE).
+#
+# ── KNOWN COVERAGE RESIDUE (named, not silently absorbed) ────────────────────────────────────────
+#   · Everything both proofs name above holds here unchanged: a surviving double-forked child, and
+#     coverage bounded by how much of the session was spent executing.
+#   · MTIME IS SETTABLE. `cp -p`, `tar -x`, `rsync -t`, `touch -t` can stamp a file this session
+#     wrote with a moment outside its windows. Both existing proofs carry the same exposure; ctime
+#     would close it (userland cannot set it), but every fixture in tests/peer-owned.bats fakes time
+#     with `touch -t`, whose ctime is "now", so adopting it is a suite rewrite rather than a line.
+#   · LAST WRITER WINS. If this session wrote a file inside a window and a sibling rewrote it later
+#     in a gap, the mtime is the sibling's and the path clears. No timestamp separates the two.
+#   · Stop / UserPromptSubmit hooks run outside tool windows, so a hook that writes a TRACKED path in
+#     the session's tree would read as a gap write.
+
+# dirt_unreachable_by_session <repo_dir> <my_session_id> <transcript_path>
+#   "Is every dirty path in this tree one this session provably could not have written?"
+#   stdout on rc 0 = a whitespace-free evidence string for the caller's IDL.
+#   rc: 0 every path cleared · 1 refuted (a path is edit-recorded or stamped inside a window)
+#       · 2 cannot-tell   (see THREE STATES above)
+dirt_unreachable_by_session() {
+  local dir="${1:-}" sid="${2:-}" tp="${3:-}"
+  local top start act meta first last bg wl mine mine_c="" swrc porcf rec rel abs mt p
+  local plist="" n=0 rc=0 skip_next=0 verdict pre gap ref unk nw
+
+  command -v git >/dev/null 2>&1 || return 2
+  [ -n "$dir" ] || return 2
+
+  # (a) the edit set. rc 1 (none) is an ordinary input here, not an abstention — the point is to
+  # answer for the write-free Bash-first session. rc 2 (unreadable) is cannot-tell.
+  _po_sw_source || return 2
+  mine="$(session_writes_paths "$tp" 2>/dev/null)" && swrc=0 || swrc=$?
+  [ "$swrc" -eq 2 ] && return 2
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    mine_c="${mine_c}$(_sw_canon "$p")"$'\n'
+  done <<EOF
+$mine
+EOF
+
+  start="$(_po_session_start "$tp" "$sid")" || return 2
+  case "$start" in ''|*[!0-9]*) return 2 ;; esac
+
+  act="$(_po_activity "$tp")" || return 2
+  # META is the first line by construction — parameter expansion, not `head -1`, for the pipefail
+  # reason dirt_outside_session_execution documents.
+  meta="${act%%$'\n'*}"
+  case "$meta" in "META "*) meta="${meta#META }" ;; *) return 2 ;; esac
+  first="${meta%% *}"; meta="${meta#* }"
+  last="${meta%% *}";  bg="${meta##* }"
+  case "$first" in ''|*[!0-9]*) return 2 ;; esac
+  case "$last"  in ''|*[!0-9]*) return 2 ;; esac
+  case "$bg"    in ''|*[!0-9]*) return 2 ;; esac
+  wl="$(printf '%s\n' "$act" | sed -n 's/^W /W /p')"
+
+  top="$(cd "$dir" 2>/dev/null && _po_bounded 5 git rev-parse --show-toplevel 2>/dev/null)" || return 2
+  [ -n "$top" ] || return 2
+  top="$(cd "$top" 2>/dev/null && pwd -P 2>/dev/null)" || return 2
+  [ -n "$top" ] || return 2
+
+  # -z + core.quotePath=false + -uall + a FILE: the four lessons every porcelain reader in these two
+  # libs has already paid for — see session_dirty_mine.
+  porcf="$(mktemp "${TMPDIR:-/tmp}/po-reach.XXXXXX" 2>/dev/null)" || return 2
+  if ! ( cd "$top" 2>/dev/null && _po_bounded 5 git -c core.quotePath=false status --porcelain -z -uall ) >"$porcf" 2>/dev/null; then
+    rm -f "$porcf" 2>/dev/null; return 2
+  fi
+  while IFS= read -r -d '' rec; do
+    [ -n "$rec" ] || continue
+    if [ "$skip_next" -eq 1 ]; then skip_next=0; continue; fi
+    case "$rec" in [RC]*) skip_next=1 ;; esac
+    rel="${rec:3}"
+    [ -n "$rel" ] || continue
+    abs="$top/$rel"
+    # (a) positive self-evidence refutes the whole tree. Herestring, not a pipe (pipefail + SIGPIPE).
+    if [ -n "$mine_c" ] && grep -qxF "$abs" <<<"$mine_c"; then rc=1; break; fi
+    if ! mt="$(_po_mtime "$abs")"; then rc=2; break; fi         # (b) deletion / unreadable
+    n=$(( n + 1 ))
+    plist="${plist}P ${mt}"$'\n'
+  done < "$porcf"
+  rm -f "$porcf" 2>/dev/null
+  [ "$rc" -eq 0 ] || return "$rc"
+  # An empty population manufactures an exoneration out of nothing (MEMORY.md
+  # cap-whose-population-is-empty) — the tree is not dirty, so there is no verdict to give.
+  [ "$n" -gt 0 ] || return 2
+
+  # (c) one awk pass. Paths × windows is O(P·W), and a bash loop over a heredoc per path would be the
+  # cost centre at fleet scale (a long session carries thousands of tool calls). The window test is
+  # INCLUSIVE at both ends and an open window (-1) runs to +∞, exactly as in the execution proof.
+  verdict="$(printf '%s\n%s' "$wl" "$plist" | awk -v start="$start" -v first="$first" \
+                                                  -v last="$last" -v bg="$bg" '
+      $1 == "W" { nw++; wa[nw] = $2 + 0; wb[nw] = $3 + 0; next }
+      $1 == "P" {
+        mt = $2 + 0
+        if (mt < start) { pre++; next }
+        hit = 0
+        for (i = 1; i <= nw; i++) {
+          if (mt < wa[i]) continue
+          if (wb[i] == -1 || mt <= wb[i]) { hit = 1; break }
+        }
+        if (hit) { ref++; next }
+        if (bg == 0 && mt > first && mt < last) { gap++; next }
+        unk++
+      }
+      END { printf "%d %d %d %d %d\n", pre + 0, gap + 0, ref + 0, unk + 0, nw + 0 }
+    ')" || return 2
+  read -r pre gap ref unk nw <<<"$verdict"
+  case "$pre$gap$ref$unk$nw" in ''|*[!0-9]*) return 2 ;; esac
+  [ "$ref" -gt 0 ] && return 1
+  [ "$unk" -gt 0 ] && return 2
+  [ $(( pre + gap )) -eq "$n" ] || return 2
+  printf 'paths=%s,predates=%s,gap=%s,windows=%s,start=%s,span=%s-%s\n' \
+    "$n" "$pre" "$gap" "$nw" "$start" "$first" "$last"
   return 0
 }
