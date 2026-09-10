@@ -67,6 +67,30 @@ setup() {
       SWEEP_TO=("$_tb" -k 5 "${CC_SWEEP_TEST_BOUND_S:-30}"); break
     fi
   done
+  # ── THE LADDER MUST NEST: the subject's OWN bounds sit strictly INSIDE the wrap above ──────────
+  # There are TWO bound ladders here and only one of them produces a verdict. The INNER rungs are
+  # the subject's own per-arm bounds — CC_SWEEP_BOUND_S (scripts/autonomy-sweep.sh:343, _bounded)
+  # and CC_PREMISE_PASS_BOUND_S (:1437). A cut there is an OBSERVATION: the arm returns 124 and the
+  # sweep journals `fold_rc:"124"` / `premise_pass_note:"bound-exceeded"`, which is the thing a test
+  # can assert on. The OUTER rung is the harness wrap immediately above, and a cut there is the CUT
+  # state — the whole sweep dies and asserts nothing.
+  #
+  # Unset, the suite ran the subject at its PRODUCTION defaults of 180 s and 1500 s underneath a
+  # 30 s wrap: inverted 6x and 50x, so the wrap ALWAYS fired first and the subject's own instrument
+  # was structurally unreachable from this file — no test could exercise the journalling path at
+  # all, and a wedged arm read as a dead file rather than as a named verdict. Both bounds existed,
+  # both still fired, and only the ORDER was wrong, which is invisible to every other gate here.
+  # (Recovered 2026-09-09 from stranded commit 265e59b4e; its own wrap half landed as 6f01aa3da.)
+  #
+  # 20/25 UNDER 30, and the sizing argument is that this is NOT a materially tighter constraint.
+  # The slowest whole TEST in this file measures 9.7 s and a test drives several sweep invocations,
+  # so one arm inside one sweep is far under that. More to the point: any throttling that pushes an
+  # arm past 20 s pushes the whole sweep past 30 s as well, so the outer would have cut it anyway —
+  # this moves WHICH rung fires, not whether a healthy run survives, and the Darwin BACKGROUND-band
+  # exposure the wrap was sized for is unchanged. Both are overridable, so a box that needs more
+  # room re-sizes without editing 81 call sites; the nesting is ASSERTED below rather than trusted.
+  export CC_SWEEP_BOUND_S="${CC_SWEEP_BOUND_S:-20}"
+  export CC_PREMISE_PASS_BOUND_S="${CC_PREMISE_PASS_BOUND_S:-25}"
   export CC_PAGES_DIR="$BATS_TEST_TMPDIR/pages"
   export CC_ANNOUNCE_ALARM_DIR="$BATS_TEST_TMPDIR/alarms"
   export CC_COMPLETION_RECORDS_DIR="$BATS_TEST_TMPDIR/completion"
@@ -1885,4 +1909,35 @@ PY
   [ "$status" -eq 0 ]
   ! grep -q '"disposition":"self-bound"' "$CC_IDL" || false
   grep -q '"disposition":"config-parity"' "$CC_IDL"
+}
+
+# ── the two bound ladders, and their ORDER ─────────────────────────────────────────────────────────
+# Recovered from stranded commit 265e59b4e (2026-08-13). Its wrap half landed as 6f01aa3da; this
+# assertion did not, and without it the file ran inverted for ~1730 commits with every gate green.
+# The defect it pins is invisible to every other check here: both bounds exist, both fire, and only
+# the ORDER is wrong — so the harness silently REPLACES the subject's instrument instead of backing
+# it up, and the suite still reads healthy while asserting nothing about the journalled path.
+@test "THE LADDER NESTS: the subject's own bounds sit strictly inside the harness wrap" {
+  # Fail-open exactly where the wrap itself does. With no timeout(1) or gtimeout the wrap is the
+  # `env` no-op, so there is no outer rung to nest inside and nothing here is true or false.
+  [ "${SWEEP_TO[0]}" != "env" ] || skip "no timeout(1) on this box — the wrap is the env no-op"
+  local outer="${SWEEP_TO[${#SWEEP_TO[@]}-1]}"
+  case "$outer" in ''|*[!0-9]*) echo "wrap's last arg is not a seconds value: $outer"; false ;; esac
+
+  # Read from the ENVIRONMENT the suite exports, never from the literals in the subject. What
+  # decides this is what the 81 invocations actually RUN under, and tests/backlog-pipeline-unwedge
+  # already reads the script literal for a different property (a FLOOR on the inner bound); reading
+  # the literal here would assert nothing about the wrap and would go green on the broken config.
+  [ -n "${CC_SWEEP_BOUND_S:-}" ] || { echo "inner rung unset: the subject runs at its own default"; false; }
+  [ -n "${CC_PREMISE_PASS_BOUND_S:-}" ] || { echo "premise rung unset: runs at its own default"; false; }
+  [ "$CC_SWEEP_BOUND_S" -lt "$outer" ] || { echo "sweep bound $CC_SWEEP_BOUND_S not < wrap $outer"; false; }
+  [ "$CC_PREMISE_PASS_BOUND_S" -lt "$outer" ] || { echo "premise bound $CC_PREMISE_PASS_BOUND_S not < wrap $outer"; false; }
+
+  # POSITIVE CONTROL — the comparison must still be capable of REJECTING the pair it was written
+  # for. If someone ever raised the wrap above the subject's production defaults, every assertion
+  # above would pass while the ladder was inverted again, and this file would be back where it
+  # started with a green test standing over it.
+  if [ 180 -lt "$outer" ] && [ 1500 -lt "$outer" ]; then
+    echo "vacuous: wrap $outer admits the subject's 180/1500 defaults — the guard cannot fail"; false
+  fi
 }
