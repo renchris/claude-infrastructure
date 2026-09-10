@@ -372,7 +372,7 @@ ce_last_interactive_age() {
   # NOT "no operator turn" — we cannot read the file at all. Fail-closed answer, rc 2.
   { [ -n "$tp" ] && [ -f "$tp" ] && [ -r "$tp" ]; } || { printf 'unreadable'; return 2; }
   command -v jq >/dev/null 2>&1 || { printf 'unreadable'; return 2; }
-  rx="${CC_CE_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^<teammate-message|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠}"
+  rx="${CC_CE_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^<teammate-message|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠|^⛔}"
   # The predicate, applied IDENTICALLY to the tail and (on a tail-miss) the whole file — held in
   # lockstep with cc-interactive.sh's ci_last_interactive_epoch by tests/interactive-parity.bats.
   # fromjson? drops the (possibly partial) first tailed line; `objects`/`strings` guard scalar lines so

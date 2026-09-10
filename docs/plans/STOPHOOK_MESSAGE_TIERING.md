@@ -279,10 +279,51 @@ re-count line 1 on RENDERED strings (`${trig}` alone renders 16 words, pushing t
 finish" has no replacement, and "clear the hold" is not an action for that hold kind), and the cleared-
 predicate parenthetical at `:1561` deleted as "no knowledge" when it reports the hook's own verified findings.
 
-**Bonus finding worth its own backlog item:** `⛔` is absent from the `^⟳|^⚑|^⚠` auto-traffic regex, so the
+**Bonus finding worth its own backlog item — ✅ FIXED 2026-09-10:** `⛔` is absent from the `^⟳|^⚑|^⚠` auto-traffic regex, so the
 REFUSED body reads as an operator interactive turn to all three sibling classifiers
 (`context-econ.sh:375`, `cc-interactive.sh:80`, `session-beat.sh:64`) and arms the S6 conversation-hold that
 suppresses the follow-on recycle. Pre-existing, not caused by this proposal.
+
+> **Verified before fixing, and the citation had rotted in a way that mattered.** Two of the three cited
+> paths moved (`cc-interactive.sh` and `context-econ.sh` are now under `hooks/lib/`); `session-beat.sh:64`
+> is still where the plan says. All three carry an INDEPENDENT COPY of the same default under two
+> different env-var names (`CC_CLASSIFY_AUTO_RX` ×2, `CC_CE_AUTO_RX` ×1), and all three omitted `⛔`.
+> Fixed at all three.
+>
+> **The mechanism the finding states but does not explain — and it is what BOUNDS the fix.** The regex's
+> `⟳ ⚑ ⚠` entries exist because **PostToolUse `additionalContext`** bodies arrive UNPREFIXED; a Stop
+> hook's feedback arrives behind `Stop hook feedback:` and already matches. So the exposed set is exactly
+> "leading glyphs of bodies on the PostToolUse channel", and that set was MEASURED: `waiting-recycle.sh`
+> is the ONLY hook emitting there (8 sites), `boundary-handoff.sh` and `session-continue.sh` have none,
+> and waiting-recycle's leading glyphs are exactly **⚠, ⟳, ⛔**. `⛔` was the entire residue. `✋` is NOT
+> one — it appears only inside `refusal_line`'s grep of captured EXTERNAL stderr (`:683`), never as a
+> body's first character.
+>
+> **Why it is a real defect and not merely a cited one:** `⟳` (`:1352`) and `⛔` (`:1493`) leave the same
+> emitter through a byte-identical `jq` object — `{decision:"block",reason,systemMessage,
+> hookSpecificOutput:{hookEventName:"PostToolUse",additionalContext}}`. The only thing separating a body
+> the classifiers call machine traffic from one they call an operator turn was the glyph. And the cost is
+> self-cancelling: the `⛔` body's whole purpose is to tell the session to recycle, while being read as an
+> operator turn arms the S6 hold that suppresses exactly that.
+>
+> Red-proof in `tests/interactive-parity.bats` — chosen because it feeds ONE fixture to BOTH predicates
+> and asserts they agree, so one case covers two of the three sites:
+>
+> | Case | pre-fix | post-fix |
+> |---|---|---|
+> | a `⛔ RECYCLE REFUSED` body ⇒ neither predicate adopts | **not ok** | ok |
+> | CONTROL — its `⟳` sibling, same emitter, same record shape | ok | ok |
+> | CONTROL — a human turn MENTIONING `⛔` mid-sentence is still adopted | ok | ok |
+>
+> Both controls are green in both arms on purpose: the first proves the failing case is about the GLYPH
+> and not the fixture shape, the second pins the `^` anchor, whose loss would silence a live conversation
+> — the opposite failure and the worse one. Gate: interactive-parity 15 · context-econ 33 · session-beat
+> 14 · cc-classify 100 · gate-classify 20 · cc-classify-origin-unify 10 · waiting-recycle 116 = **308 ok /
+> 0 not ok**.
+>
+> Left alone deliberately: the three copies stay three copies. Consolidating them to one SSOT has its own
+> blast radius, and the parity suite exists precisely because the two legs are meant to be independent
+> implementations that cannot share a bug.
 
 ### 3.2 `hooks/boundary-handoff.sh` — 11 of 12 held
 

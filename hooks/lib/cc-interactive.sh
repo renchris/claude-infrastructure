@@ -77,7 +77,7 @@ ci_last_interactive_epoch() { # <jsonl> → see the THREE-VALUED contract above
   # NOT "no operator turn" — we cannot read the file at all. Fail-closed answer, rc 2.
   { [ -n "$f" ] && [ -f "$f" ] && [ -r "$f" ]; } || { printf 'unreadable'; return 2; }
   command -v jq >/dev/null 2>&1 || { printf 'unreadable'; return 2; }
-  rx="${CC_CLASSIFY_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^<teammate-message|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠}"
+  rx="${CC_CLASSIFY_AUTO_RX:-^<task-notification>|^<local-command-stdout>|^<teammate-message|^Stop hook feedback:|^\\[Request interrupted|^⟳|^⚑|^⚠|^⛔}"
   # The predicate, applied IDENTICALLY to the tail and (on a tail-miss) the whole file. fromjson? drops
   # the possibly-partial first tailed line; objects/strings guard scalar lines so one odd line can never
   # abort the scan (jq runtime errors are per-program, not per-line). $ntr/$nimg gate the array cases:
