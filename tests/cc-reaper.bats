@@ -1109,6 +1109,58 @@ save_out() { printf '%s\n' "$output" > "$D/sweep.out"; }   # $output survives th
   notified; grep -q 'SELF-CHECK' "$D/notify-calls"
 }
 
+# ── 88b6e65e4acf: re-arm on DURATION. Re-paging keyed only on strict growth, so a blind spot that held
+#    steady was announced once and damped for its whole life (931 consecutive sweeps at the worst
+#    measured). The clock is seamed via CC_REAPER_NOW_FILE; notify_desk's damp lib reads the REAL clock,
+#    so these cases zero its TTL — otherwise the lib, not the arm under test, would decide the count. ──
+selfcheck_pages() { [ -f "$D/notify-calls" ] || { echo 0; return 0; }; grep -c 'SELF-CHECK' "$D/notify-calls" || true; }
+
+@test "P0-12b re-arm: an UNCHANGED blind spot re-pages once the floor elapses (88b6e65e4acf)" {
+  set_desk; set_live 4; mock_classify active "$D/clean" 10 no PANE-1   # Δ3, identical every sweep
+  export CC_REAPER_NOW_FILE="$D/now" CC_REAPER_SELFCHECK_REPAGE_S=3600 CC_PAGE_DAMP_TTL_S=0
+  echo 100000 > "$D/now"; run "$R" sweep --reap; [ "$status" -eq 0 ]
+  [ "$(selfcheck_pages)" -eq 1 ]
+  echo 100300 > "$D/now"; run "$R" sweep --reap; [ "$status" -eq 0 ]
+  [ "$(selfcheck_pages)" -eq 1 ]                                      # inside the floor: still damped
+  echo "$output" | grep -q 'already paged; damped — floor re-page in 3300s'
+  echo 103600 > "$D/now"; run "$R" sweep --reap; [ "$status" -eq 0 ]
+  [ "$(selfcheck_pages)" -eq 2 ]                                      # floor elapsed: re-paged, same Δ
+  tail -n1 "$D/notify-calls" | grep -q 'STILL BLIND'
+  tail -n1 "$D/notify-calls" | grep -q 'held for 3 sweep(s) (at least 1h00m)'
+  grep -q 'reason=floor' "$D/reaper.log"
+}
+
+@test "P0-12b re-arm: CC_REAPER_SELFCHECK_REPAGE_S=0 turns the floor OFF (growth-only, as before)" {
+  set_desk; set_live 4; mock_classify active "$D/clean" 10 no PANE-1
+  export CC_REAPER_NOW_FILE="$D/now" CC_REAPER_SELFCHECK_REPAGE_S=0 CC_PAGE_DAMP_TTL_S=0
+  echo 100000 > "$D/now"; run "$R" sweep --reap; [ "$(selfcheck_pages)" -eq 1 ]
+  echo 900000 > "$D/now"; run "$R" sweep --reap; [ "$status" -eq 0 ]
+  [ "$(selfcheck_pages)" -eq 1 ]                                      # 222 h later, still one page
+  echo "$output" | grep -q 'floor OFF'
+}
+
+@test "P0-12b re-arm: GROWTH still re-pages at once, inside the floor window, and is not called STILL BLIND" {
+  set_desk; set_live 4; mock_classify active "$D/clean" 10 no PANE-1
+  export CC_REAPER_NOW_FILE="$D/now" CC_REAPER_SELFCHECK_REPAGE_S=3600 CC_PAGE_DAMP_TTL_S=0
+  echo 100000 > "$D/now"; run "$R" sweep --reap; [ "$(selfcheck_pages)" -eq 1 ]
+  set_live 6; echo 100300 > "$D/now"; run "$R" sweep --reap; [ "$status" -eq 0 ]
+  [ "$(selfcheck_pages)" -eq 2 ]
+  grep -q 'reason=grew' "$D/reaper.log"
+  ! tail -n1 "$D/notify-calls" | grep -q 'STILL BLIND' || false
+}
+
+@test "P0-12b re-arm: a LEGACY two-field state re-pages once instead of inheriting an unknown silence" {
+  set_desk; set_live 4; mock_classify active "$D/clean" 10 no PANE-1
+  export CC_REAPER_NOW_FILE="$D/now" CC_PAGE_DAMP_TTL_S=0              # default floor (21600 s)
+  mkdir -p "$D/pages"; printf '5 3\n' > "$D/pages/selfcheck.state"    # pre-fix shape: Δ3 paged, when unknown
+  echo 100000 > "$D/now"; run "$R" sweep --reap; [ "$status" -eq 0 ]
+  [ "$(selfcheck_pages)" -eq 1 ]
+  echo 100300 > "$D/now"; run "$R" sweep --reap; [ "$status" -eq 0 ]
+  [ "$(selfcheck_pages)" -eq 1 ]                                      # ONCE: the page time is now on disk
+  read -r _c _p _l _s < "$D/pages/selfcheck.state"
+  [ "$_c" = 7 ] && [ "$_p" = 3 ] && [ "$_l" = 100000 ]
+}
+
 @test "P0-12b dry-run: a blind spot prints WOULD-PAGE and NEVER notifies" {
   set_desk; set_live 4
   mock_classify active "$D/clean" 10 no PANE-1

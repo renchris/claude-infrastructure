@@ -325,6 +325,17 @@ WAKE_MAX_SILENCE_S="${CC_REAPER_WAKE_MAX_SILENCE_S:-900}"
 WAKE_BELT="${CC_REAPER_WAKE_BELT:-1}"                  # operator kill-switch for leg 5 alone
 PANE_DELTA_TOL="${CC_REAPER_PANE_DELTA_TOL:-0}"                         # live−enumerated > tol ⇒ blind-spot surface
 SELFCHECK_MIN_PERSIST="${CC_REAPER_SELFCHECK_MIN_PERSIST:-2}"          # delta must persist N sweeps (kills a race)
+# Re-page FLOOR for a blind spot that holds without growing (cc-backlog 88b6e65e4acf). Re-paging used
+# to key ONLY on strict growth, so a steady gap was announced once and then damped for as long as it
+# lasted: the out-log's persist counter ran one unbroken streak to 931 sweeps (~77 h at the plist's
+# 300 s cadence). Over its 105 streaks the median is 6 sweeps and p90 is 53, so a 6 h floor never
+# touches 90% of them and re-pages only the long tail. That tail is exactly where an alarm that stays
+# silent can't be told apart from a condition that has cleared. Wall clock, not sweeps: under load a
+# sweep takes longer than its interval. 0 = floor off (growth-only, the pre-2026-09-10 behaviour). Keep
+# it at or above CC_PAGE_DAMP_TTL_S (1800): a floor re-page carries the SAME fingerprint as the page
+# before it, so notify_desk's damp layer would otherwise swallow it.
+SELFCHECK_REPAGE_S="${CC_REAPER_SELFCHECK_REPAGE_S:-21600}"
+case "$SELFCHECK_REPAGE_S" in ''|*[!0-9]*) SELFCHECK_REPAGE_S=21600 ;; esac
 # R5e (2026-08-25, recycle #226): the registry is read ONLY to ATTRIBUTE the blind-spot delta, never
 # to compute it — live_pane_count stays registry-independent (see its header). Same spelling as
 # cc-sessions:51 so a test that isolates one isolates both.
@@ -889,10 +900,10 @@ idl_surface(){ # <cause> <name> <pane>
     '{ts:$ts, actor:"cc-reaper", kind:"surface-page", cause:$cause, name:$name, pane:$pane}' \
     2>/dev/null >> "$IDL_FILE" || true
 }
-idl_selfcheck(){ # <live> <enumerated> <delta>
+idl_selfcheck(){ # <live> <enumerated> <delta> [reason: first|grew|floor]
   mkdir -p "$(dirname "$IDL_FILE")" 2>/dev/null || true
-  jq -nc --arg ts "$(utc)" --argjson live "$1" --argjson enum "$2" --argjson delta "$3" \
-    '{ts:$ts, actor:"cc-reaper", kind:"selfcheck-page", live:$live, enumerated:$enum, delta:$delta}' \
+  jq -nc --arg ts "$(utc)" --argjson live "$1" --argjson enum "$2" --argjson delta "$3" --arg reason "${4:-}" \
+    '{ts:$ts, actor:"cc-reaper", kind:"selfcheck-page", live:$live, enumerated:$enum, delta:$delta, reason:$reason}' \
     2>/dev/null >> "$IDL_FILE" || true
 }
 idl_stranded(){ # <pane> <name> <cause> <cwd> <branch> <ahead> <dirty> <firedBy> — the blockers-board row
@@ -1841,7 +1852,11 @@ handle_stranded(){ # <reap> <name> <cause> <pane> <cwd> <idle> → 0 always (bes
 }
 
 # ── P0-12b: enumerated≈live-panes self-check. `enum` = what cc-classify saw this sweep; `live` = the
-#    independent interactive-pane count. A positive delta past tolerance, PERSISTED, pages the desk once. ──
+#    independent interactive-pane count. A positive delta past tolerance, PERSISTED, pages the desk —
+#    once, then again only when it GROWS or when it has held unchanged for SELFCHECK_REPAGE_S. ──
+# STATE FILE: "<consec> <paged> <last-page-epoch> <streak-start-epoch>". The two trailing fields are
+# new (88b6e65e4acf). A legacy two-field file reads them as empty, and an empty last-page time is read
+# as 0, NOT as now: a silence of unknown length re-pages once rather than being inherited as a fresh one.
 self_check() { # <reap> <enumerated>
   local reap="$1" enum="$2" live delta sf
   live="$(live_pane_count)"; delta=$(( live - enum ))
@@ -1855,32 +1870,61 @@ self_check() { # <reap> <enumerated>
     say "cc-reaper self-check: WOULD-PAGE — $live live panes vs $enum enumerated (Δ$delta unseen; $(blindspot_cause "$live" "$enum" "$delta"))"; return 0
   fi
   mkdir -p "$PAGEDIR" 2>/dev/null || true
-  local consec paged
-  read -r consec paged < <(cat "$sf" 2>/dev/null || echo "0 0"); consec="${consec:-0}"; paged="${paged:-0}"
+  local consec paged last since now held why="" lead="" left
+  now="$(reaper_now)"; case "$now" in ''|*[!0-9]*) now="$(date +%s)" ;; esac
+  read -r consec paged last since < <(cat "$sf" 2>/dev/null || echo "0 0"); consec="${consec:-0}"; paged="${paged:-0}"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  case "$since" in ''|*[!0-9]*) since="" ;; esac
+  [ "$consec" = 0 ] && since="$now"                  # a new streak starts its clock on its first sweep
   consec=$(( consec + 1 ))
-  if [ "$consec" -ge "$SELFCHECK_MIN_PERSIST" ] && { [ "$paged" = 0 ] || [ "$delta" -gt "$paged" ]; }; then
-    notify_desk "⚠️ REAPER SELF-CHECK — ${live} live Claude panes but only ${enum} enumerated (Δ${delta} unseen). The reaper is BLIND to ${delta} live session(s): $(blindspot_cause "$live" "$enum" "$delta"). Investigate: compare \`cc-sessions --json\` against the live interactive-claude procs." \
+  # `held` is a LOWER bound when the streak predates the since-field (legacy state): it then counts
+  # from the first sweep that could record it, which is why the page says "at least".
+  held=""; [ -n "$since" ] && [ "$now" -ge "$since" ] && \
+    held="$(( (now - since) / 3600 ))h$(printf '%02d' $(( (now - since) % 3600 / 60 )))m"
+  # WHY a page fires, as one token on every page's log line: first | grew | floor. `floor` is the new
+  # arm. It re-asserts a gap that has held unchanged for SELFCHECK_REPAGE_S of wall clock, so a blind
+  # spot that never worsens still speaks about four times a day instead of once for its whole life.
+  if [ "$consec" -ge "$SELFCHECK_MIN_PERSIST" ]; then
+    if [ "$paged" = 0 ]; then why=first
+    elif [ "$delta" -gt "$paged" ]; then why=grew
+    elif [ "$SELFCHECK_REPAGE_S" -gt 0 ] && [ $(( now - last )) -ge "$SELFCHECK_REPAGE_S" ]; then why=floor
+    fi
+  fi
+  if [ -n "$why" ]; then
+    [ "$why" = floor ] && lead="STILL BLIND — the gap has not grown since the last page and has held for ${consec} sweep(s)${held:+ (at least $held)}; re-paged on the ${SELFCHECK_REPAGE_S}s floor. "
+    notify_desk "⚠️ REAPER SELF-CHECK — ${lead}${live} live Claude panes but only ${enum} enumerated (Δ${delta} unseen). The reaper is BLIND to ${delta} live session(s): $(blindspot_cause "$live" "$enum" "$delta"). Investigate: compare \`cc-sessions --json\` against the live interactive-claude procs." \
                 "selfcheck-blind:delta${delta}" || true
-    idl_selfcheck "$live" "$enum" "$delta"
+    idl_selfcheck "$live" "$enum" "$delta" "$why"
     # Same three-way accounting as handle_surface: the blind-spot FINDING is recorded either way, but
-    # only a verdict=delivered page may claim a desk saw it. `paged` (the re-page hysteresis) advances
-    # in every case — the record stands, and re-paging a desk-less fleet each sweep is the storm.
+    # only a verdict=delivered page may claim a desk saw it. `paged` (the re-page hysteresis) and the
+    # page time advance in every case — the record stands, and re-paging a desk-less fleet each sweep is
+    # the storm. The floor bounds that storm to one page per SELFCHECK_REPAGE_S; it does not undo it.
     case "${NOTIFY_OUTCOME:-unknown}" in
       reached)
         say "cc-reaper self-check: PAGE — Δ$delta blind spot ($live live vs $enum enumerated) → desk"
-        log "self-check page: live=$live enum=$enum delta=$delta (persisted ${consec} sweep(s))" ;;
+        log "self-check page: live=$live enum=$enum delta=$delta (persisted ${consec} sweep(s)) reason=$why" ;;
       refused)
         say "cc-reaper self-check: Δ$delta blind spot ($live live vs $enum enumerated) — desk page REFUSED by the transport"
-        log "self-check page REFUSED: live=$live enum=$enum delta=$delta (persisted ${consec} sweep(s))" ;;
+        log "self-check page REFUSED: live=$live enum=$enum delta=$delta (persisted ${consec} sweep(s)) reason=$why" ;;
       *)
         say "cc-reaper self-check: RECORD — Δ$delta blind spot ($live live vs $enum enumerated) — recorded; NO live desk received it (${NOTIFY_OUTCOME:-unknown}${NOTIFY_VERDICT:+, verdict=$NOTIFY_VERDICT})"
-        log "self-check RECORDED: live=$live enum=$enum delta=$delta outcome=${NOTIFY_OUTCOME:-unknown} verdict=${NOTIFY_VERDICT:-none} (persisted ${consec} sweep(s))" ;;
+        log "self-check RECORDED: live=$live enum=$enum delta=$delta outcome=${NOTIFY_OUTCOME:-unknown} verdict=${NOTIFY_VERDICT:-none} (persisted ${consec} sweep(s)) reason=$why" ;;
     esac
-    paged="$delta"
+    paged="$delta"; last="$now"
   else
-    say "cc-reaper self-check: Δ$delta blind spot ($live live vs $enum enumerated) — persist ${consec}/${SELFCHECK_MIN_PERSIST}$([ "$paged" != 0 ] && printf ' (already paged; damped)')"
+    # The damped line names when it will speak again, so the damping is visible where it is applied.
+    left=""
+    if [ "$paged" != 0 ]; then
+      if [ "$SELFCHECK_REPAGE_S" -gt 0 ]; then
+        left=$(( SELFCHECK_REPAGE_S - (now - last) )); [ "$left" -lt 0 ] && left=0
+        left=" (already paged; damped — floor re-page in ${left}s)"
+      else
+        left=" (already paged; damped — floor OFF)"
+      fi
+    fi
+    say "cc-reaper self-check: Δ$delta blind spot ($live live vs $enum enumerated) — persist ${consec}/${SELFCHECK_MIN_PERSIST}${left}"
   fi
-  printf '%s %s\n' "$consec" "$paged" > "$sf" 2>/dev/null || true
+  printf '%s %s %s %s\n' "$consec" "$paged" "$last" "${since:-$now}" > "$sf" 2>/dev/null || true
 }
 
 sweep() {
