@@ -927,8 +927,53 @@ mktel pp 40 100 "$ALIVE" "$REPO"
 : > "$CC_IDL"; ppsweep
 { idl_has '"sid":"pp","state":"STALL?"' && [ "$(pn)" -eq $(( before_n + 1 )) ]; } \
   && ok "(iii) beacon REMOVED + still stale ⇒ STALL? returns AND notifies exactly once (a suppression, not a mute)" \
-  || no "(iii) the page did not come back with a real notify (idl=$(idl_has '"sid":"pp","state":"STALL?"' && echo yes || echo no) sends=$before_n→$(pn))"
+  || no "(iii) the page did not come back with a real notify (idl=$(idl_has '"sid":"pp","state":"STALL?"' && echo yes || echo no) sends=${before_n}→$(pn))"
 permreset; rm -f "$CC_TELEMETRY_DIR"/*.json "$CC_SUPERVISOR_PAGEDIR"/pp.* "$CC_SUPERVISOR_PAGEDIR"/nopp.* 2>/dev/null
+
+echo "T40 B-1 SUBJECT ADVISORY — PAST-THRESHOLD tells the SESSION itself, damped per fill step (cc-backlog 7cbffd21171b)"
+# The runaway this pins: c25160c2 drew 214 PAST-THRESHOLD detections and 2 desk sends (both RECORDED
+# to a desk box with no reader) while climbing 85%→97%, and not one line reached the session — the only
+# party that could act, and one whose PostToolUse mailbox drain reads <session_id>.md mid-turn.
+# CC_PAGE_TO_FILE=/dev/null leaves the DESK channel unwired, so every capture line is a SUBJECT send.
+SUBJ="c25160c2-e5f7-47ce-8bc8-fd69899e4e2f"
+asweep(){ env CC_NOTIFY_CAPTURE="$SBX/advise.log" CC_PAGE_TO_FILE=/dev/null CC_NOTIFY_BIN="$SBX/bin/cc-notify" \
+          "$@" bash "$SUP" --once >/dev/null 2>&1; }
+an(){ local n; n="$(grep -cx "$SUBJ" "$SBX/advise.log" 2>/dev/null)"; echo "${n:-0}"; }
+amark="$CC_SUPERVISOR_PAGEDIR/$SUBJ.advised"
+reset; rm -f "$CC_TELEMETRY_DIR"/*.json "$CC_SUPERVISOR_PAGEDIR/$SUBJ".* "$SBX/advise.log" 2>/dev/null
+mktel "$SUBJ" 86 1 "$ALIVE" "$REPO"; asweep
+{ [ "$(an)" -eq 1 ] && idl_has '"kind":"subject_advise"'; } \
+  && ok "a PAST-THRESHOLD session is advised DIRECTLY (the subject, not only the desk)" \
+  || no "the subject was never told (sends=$(an)) — B-1 still pages only the desk"
+asweep
+[ "$(an)" -eq 1 ] && ok "re-sweep inside the same fill step ⇒ no second advisory (damped)" \
+                  || no "re-sweep re-advised inside one fill step (sends=$(an)) — per-sweep storm into the subject"
+mktel "$SUBJ" 91 1 "$ALIVE" "$REPO"; asweep
+[ "$(an)" -eq 2 ] && ok "climbing a fill step (86→91) re-advises exactly once — state-equality damping no longer mutes a worsening climb" \
+                  || no "a worsening climb was not re-advised exactly once (sends=$(an))"
+rm -f "$amark"; before_a="$(an)"
+asweep CC_NOTIFY_STUB_RC=3; refused_mark=0; [ -f "$amark" ] && refused_mark=1
+asweep
+{ [ "$refused_mark" = 0 ] && [ -f "$amark" ] && [ "$(an)" -eq $(( before_a + 2 )) ]; } \
+  && ok "a REFUSED advisory leaves no marker and is retried on the next sweep" \
+  || no "a refused advisory was damped or not retried (marker-after-refusal=$refused_mark sends=${before_a}→$(an))"
+rm -f "$amark"; before_a="$(an)"; : > "$CC_IDL"
+asweep CC_SUP_SUBJECT_ADVISE=0
+{ [ "$(an)" -eq "$before_a" ] && idl_has '"state":"PAST-THRESHOLD"'; } \
+  && ok "CC_SUP_SUBJECT_ADVISE=0 restores desk-only paging (kill switch)" \
+  || no "the kill switch did not hold (sends=${before_a}→$(an))"
+rm -f "$CC_TELEMETRY_DIR"/*.json; mktel busyx 90 1 "$ALIVE" "$REPO"; asweep
+grep -qx busyx "$SBX/advise.log" 2>/dev/null \
+  && no "a non-uuid session id was used as an address (it would hit cc-notify's friendly-name match)" \
+  || ok "a non-uuid session id is never used as an address"
+rm -f "$CC_TELEMETRY_DIR"/*.json; mktel "$SUBJ" 91 1 "$ALIVE" "$REPO"; asweep; before_a="$(an)"
+mktel "$SUBJ" 70 1 "$ALIVE" "$REPO"; asweep; wobble_mark=0; [ -f "$amark" ] && wobble_mark=1
+mktel "$SUBJ" 40 1 "$ALIVE" "$REPO"; asweep; low_mark=0; [ -f "$amark" ] && low_mark=1
+mktel "$SUBJ" 80 1 "$ALIVE" "$REPO"; asweep
+{ [ "$wobble_mark" = 1 ] && [ "$low_mark" = 0 ] && [ "$(an)" -eq $(( before_a + 1 )) ]; } \
+  && ok "falling a full step below T (a compaction) re-arms, a wobble just under T does not; the next climb re-advises" \
+  || no "advisory re-arm hysteresis wrong (wobble kept=$wobble_mark low kept=$low_mark sends=${before_a}→$(an))"
+rm -f "$CC_TELEMETRY_DIR"/*.json "$CC_SUPERVISOR_PAGEDIR/$SUBJ".* "$CC_SUPERVISOR_PAGEDIR"/busyx.* 2>/dev/null
 
 echo ""
 echo "supervisor-e2e: $P passed, $F failed"

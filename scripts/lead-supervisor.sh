@@ -29,6 +29,7 @@
 #            CC_REGISTRY_DIR · SUPERVISOR_SWEEP_MAX_S · SUPERVISOR_SWEEP · CC_SUP_TIMEOUT_BIN ·
 #            CC_SUP_GIT_TIMEOUT_S · CC_SUP_FIND_TIMEOUT_S · CC_SUP_CKPT_TIMEOUT_S · CC_SUP_NOTIFY_TIMEOUT_S ·
 #            CC_SUP_PANE_DELTA_TOL · CC_SUP_SELFCHECK_MIN_PERSIST · CC_SUP_OS_CHANNEL ·
+#            CC_SUP_SUBJECT_ADVISE · CC_SUP_ADVISE_STEP ·
 #            CC_SUP_SHA_BIN
 set -uo pipefail
 
@@ -137,6 +138,9 @@ STALL_S="${CC_SUP_STALL_S:-1800}"                      # telemetry age past whic
 DEADLINE_S="${CC_SUP_PAGE_DEADLINE_S:-900}"            # page deadline before the re-observe (15m default)
 TRUNK="${CC_SUP_TRUNK:-origin/main}"                   # trunk for the clean-completion landed-check (cf. cc-classify CC_CLASSIFY_TRUNK)
 RECOVERY_S="${CC_SUP_RECOVERY_S:-3600}"                # sustained-OK dwell before a page's notify-damping marker is RE-ARMED (see clear_page_recovered). Default 2x STALL_S.
+SUBJECT_ADVISE="${CC_SUP_SUBJECT_ADVISE:-1}"           # B-1 also tells the SUBJECT session itself (advise_subject); 0 = desk-only, the pre-2026-09-10 behaviour
+ADVISE_STEP="${CC_SUP_ADVISE_STEP:-5}"                 # re-advise the subject once per this many fill points climbed (its damping bucket)
+case "$ADVISE_STEP" in ''|*[!0-9]*|0) ADVISE_STEP=5 ;; esac
 GC_S="${CC_SUP_GC_S:-21600}"                           # telemetry age past which a LIVE-OWNER row is GC'd — a hung/pid-recycled owner would STALL?-escalate every sweep forever (item fdc101e8b0c7). reaper-horizon-lint bounds this ≥ SUPERVISOR_SWEEP_MAX_S×10; default 6h = 12× STALL_S.
 OWNER_PAT="${CC_SUP_OWNER_PAT:-claude}"               # a live pid OWNS its telemetry row only if its process command matches this — kill -0 alone reads a RECYCLED pid as the original session (the STALL? zombie)
 TEL_DIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
@@ -493,7 +497,46 @@ page(){ # $1=sid $2=state $3=detail
     printf '%s\n' "$2" > "$nf"                             # recorded only on a cc-notify-CONFIRMED enqueue
   fi                                                       # (rc 0). No channel wired (1) or a refused send
 }                                                          # (2) leaves the marker off ⇒ the next sweep retries.
-clear_page(){ rm -f "$PAGEDIR/$1.page" "$PAGEDIR/$1.notified" "$PAGEDIR/$1.ok" 2>/dev/null || true; }
+clear_page(){ rm -f "$PAGEDIR/$1.page" "$PAGEDIR/$1.notified" "$PAGEDIR/$1.ok" "$PAGEDIR/$1.advised" 2>/dev/null || true; }
+# ── B-1 SUBJECT ADVISORY — the page's actuator on the one axis that matters (cc-backlog 7cbffd21171b). ──
+# B-1's own comment says "the live session's own model acts", and page() never told it: every
+# PAST-THRESHOLD page went to the desk role only. Measured on runaway c25160c2 (2026-09-03/04): 214
+# PAST-THRESHOLD detections, 2 desk sends (by design — .notified damps to one notify per sid+state),
+# both RECORDED to a desk box with no live reader and digested to Notification Center — and not one
+# line to the session climbing 85%→97%. That session was the only party able to act, and it was
+# reachable: mailbox-drain.sh runs on PostToolUse and reads <session_id>.md, so a line enqueued there
+# enters its model context MID-TURN — exactly the not-Stopping case the Stop-time boundary hook cannot see.
+#
+# Addressed by the telemetry session_id, which cc-notify passes through verbatim when it is a full dashed
+# uuid (no registry read) and which is the key mailbox-drain reads when the harness supplies session_id.
+# Anything else is not an address this path may use — a bare word would fall into cc-notify's
+# friendly-name match and could reach a DIFFERENT session — so it is skipped, never guessed at.
+#
+# Damped per FILL STEP, not per state: the state never changes during a climb (it is PAST-THRESHOLD the
+# whole way), so state-equality damping is exactly what reduced 214 detections to one message. One line
+# per ADVISE_STEP points climbed keeps a runaway told as it worsens without a per-sweep storm. The marker
+# is written only on cc-notify rc 0 — an ENQUEUE, which for a live subject IS the delivery, since its own
+# drain reads the box — so a refused send retries on the next sweep. The desk page is unchanged and still
+# sent: this is an additional recipient, not a reroute. Re-armed in assess()'s OK branch only once fill
+# falls a full step BELOW T (a compaction), so a session hovering at T is not re-told on every wobble.
+advise_subject(){ # $1=sid $2=used_pct
+  local sid="$1" used="$2" af bucket last out rc verdict
+  [ "$SUBJECT_ADVISE" = 1 ] || return 0
+  [ -n "$NOTIFY_BIN" ] || return 0
+  [[ "$sid" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] || return 0
+  af="$PAGEDIR/$sid.advised"
+  bucket=$(( used / ADVISE_STEP ))
+  last="$(head -n1 "$af" 2>/dev/null | tr -dc '0-9')"
+  if [ -n "$last" ] && [ "$bucket" -le "$last" ]; then return 0; fi
+  out="$(sup_bounded "$SUP_NOTIFY_TIMEOUT_S" "$NOTIFY_BIN" "$sid" \
+    "⚠️ CONTEXT ${used}% FULL (lead-supervisor, addressed to THIS session) — past the ${T}% handoff threshold and still mid-turn, where the Stop-time boundary hook cannot reach you. At your next safe seam: commit or persist what you hold, then recycle this pane (handoff-fire.sh --recycle, or /handoff). The context ceiling is a hard refusal, not a compaction." 2>&1)"; rc=$?
+  verdict="$(printf '%s' "$out" | grep -oE 'verdict=[a-z-]+' | head -1 | cut -d= -f2)"
+  : "${verdict:=unreadable}"
+  if [ "$rc" = 0 ]; then printf '%s\n' "$bucket" > "$af" 2>/dev/null || true; fi
+  idl subject_advise "\"sid\":\"$sid\",\"used\":$used,\"step\":$ADVISE_STEP,\"notify_rc\":$rc,\"verdict\":$(json_str "$verdict"),\"why\":\"B-1 told the SUBJECT, not only the desk — its PostToolUse mailbox drain reads this mid-turn; marker kept only on rc 0, so a refused send retries next sweep\""
+  printf '%s  subject ADVISED sid=%s used=%s rc=%s verdict=%s\n' "$(utc)" "$sid" "$used" "$rc" "$verdict" >> "$SUPLOG" 2>/dev/null || true
+  return 0
+}
 # ── OK-branch recovery with HYSTERESIS — the 2026-09-07 page-storm fix (desk wake-noise). ──
 # assess()'s OK branch used to call clear_page() outright, treating ONE fresh sweep as a genuine
 # recovery and RE-ARMING the notify alarm. For a session that FLAPS — a permission-blocked or
@@ -947,11 +990,15 @@ assess(){ # $1=telemetry-json-file → prints 1 if it produced a finding, else 0
     fi
   fi
   # B-1 — PAST-THRESHOLD ∧ NOT-STOPPING: fill ≥ T but the session is live and fresh (still working, never
-  # Stopped) so the boundary hook cannot fire for it. Advise via a page; the live session's own model acts.
+  # Stopped) so the boundary hook cannot fire for it. Page the desk AND advise the session itself — the
+  # live session's own model is the one that acts, so it must be told (advise_subject, cc-backlog 7cbffd21171b).
   if [ "$used" -ge "$T" ] && [ "$age" -lt "$STALL_S" ]; then
-    page "$sid" PAST-THRESHOLD "used ${used}% ≥ ${T}% and still running (not Stopping) — the boundary hook is blind here; advise /handoff"
+    page "$sid" PAST-THRESHOLD "used ${used}% ≥ ${T}% and still running (not Stopping) — the boundary hook is blind here; the session was advised directly"
+    advise_subject "$sid" "$used"
     echo 1; return
   fi
+  # Subject-advisory re-arm with a one-step hysteresis band (see advise_subject).
+  if [ "$used" -lt $(( T - ADVISE_STEP )) ]; then rm -f "$PAGEDIR/$sid.advised" 2>/dev/null || true; fi
   # OK — clear any stale page (fresh + below threshold + alive). The notify-damping marker is held
   # until the session has been OK for RECOVERY_S: a single fresh sweep is a FLAP, not a recovery.
   clear_page_recovered "$sid"; echo 0

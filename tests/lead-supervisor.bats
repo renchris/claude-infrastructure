@@ -120,6 +120,19 @@ setup() {
   echo "$output" | grep -q "never silently 'handled'"
 }
 
+@test "T40: B-1 advises the SUBJECT session itself, damped per fill step (cc-backlog 7cbffd21171b)" {
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'T40 B-1 SUBJECT ADVISORY'
+  # the incident: 214 PAST-THRESHOLD detections, desk-only sends, zero lines to the session climbing 85→97%
+  echo "$output" | grep -q '✓ a PAST-THRESHOLD session is advised DIRECTLY'
+  echo "$output" | grep -q '✓ re-sweep inside the same fill step'
+  echo "$output" | grep -q '✓ climbing a fill step (86→91) re-advises exactly once'
+  echo "$output" | grep -q '✓ a REFUSED advisory leaves no marker and is retried'
+  echo "$output" | grep -q '✓ CC_SUP_SUBJECT_ADVISE=0 restores desk-only'
+  echo "$output" | grep -q '✓ a non-uuid session id is never used as an address'
+  echo "$output" | grep -q '✓ falling a full step below T'
+}
+
 @test "T30: a hung external fork does not end supervision — bounded git/find + the INDETERMINATE third state" {
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'T30 BOUNDED EXTERNALS'
