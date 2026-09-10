@@ -470,8 +470,32 @@ if [ "$IDLE_SCOPED" = 1 ]; then
     _refuse no-beat "No readable turn-boundary beat at $BEAT_DIR/$SID.json. hooks/session-beat.sh is what writes it, on UserPromptSubmit and Stop; if it is not wired in this config dir, the idle-scoped exit condition has no oracle and this mode must not be used here."
   fi
   _now="$(date +%s 2>/dev/null || echo 0)"
+  # THE BOUND STAYS FAIL-CLOSED; ITS OLD EXPLANATION DID NOT SURVIVE MEASUREMENT (2026-09-09,
+  # cc-backlog 02c8b96e55b9). This used to read "an arm happens INSIDE a turn, so a live beat
+  # producer makes this seconds old — a stale one means either the producer is not running or the
+  # sid is not this session's". Both halves are wrong, and the wrongness is structural: `_now - _bt`
+  # at arm time is the age of the CURRENT TURN'S OPENING BEAT, i.e. HOW LONG THIS TURN HAS BEEN
+  # RUNNING — a quantity with no upper bound on a session that is working normally. A dead producer
+  # and a long turn both drive it up, so the statistic cannot separate them (memory:
+  # freshness-is-relative-to-the-subject-not-the-clock).
+  #
+  # Measured over every real emission on this box: 9 distinct sessions were refused here, and in
+  # 9 of 9 the beat producer was ALIVE — it went on writing to the session's very last record
+  # (beat.t within 64-520s of the transcript end), and the filing session itself advanced seq 8 -> 59
+  # AFTER being refused. Zero true positives. The refusal is still RIGHT to fire (a false pass arms
+  # the starvation pole; a false refusal merely declines to park, which is the wanted polarity under
+  # a goal, and it is a minority of decided arms: 71 emissions beside 446 `stood-down`, the C2 exit
+  # only this mode emits — `verdict=delivered` is NOT a denominator here, the bare form emits it too)
+  # — but it must stop naming a cause the evidence refutes, because that message is what sent a
+  # 20-day dispatch cycle hunting a beat producer that was never broken.
+  #
+  # So: report the two fields that DO separate the states, and let the reader judge. A live producer
+  # inside a long turn shows kind=prompt with a seq that keeps climbing across reads; a genuinely
+  # dead one shows a seq frozen at the same value forever.
   if [ "$(( _now - _bt ))" -gt "$BEAT_FRESH_S" ] 2>/dev/null; then
-    _refuse stale-beat "The newest beat for [$SID] is $(( _now - _bt ))s old (bound ${BEAT_FRESH_S}s). An arm happens INSIDE a turn, so a live beat producer makes this seconds old — a stale one means either the producer is not running or the sid is not this session's."
+    _sq="$(_beat_field "$SID" '.seq')"; [ -n "$_sq" ] || _sq="?"
+    _kd="$(_beat_field "$SID" '.kind')"; [ -n "$_kd" ] || _kd="?"
+    _refuse stale-beat "The newest beat for [$SID] is $(( _now - _bt ))s old (bound ${BEAT_FRESH_S}s), at seq=$_sq kind=$_kd. This is the age of THIS TURN'S opening beat, so it measures how long the current turn has been running, NOT whether the producer is alive — the two are indistinguishable here, and every real refusal measured so far was a live producer inside a long turn (0 dead ones). Do NOT go hunting hooks/session-beat.sh on this alone: re-read $BEAT_DIR/$SID.json a few seconds apart first — a climbing seq means the producer is fine and this turn is simply older than the bound, while a seq frozen across reads (or a sid that is not this session's) is the real fault. Either way the mode declines to arm, because an oracle this stale cannot prove a NEW turn happened."
   fi
   BEAT_BASE_SEQ="$(_beat_field "$SID" '.seq')"; case "$BEAT_BASE_SEQ" in ''|*[!0-9]*) BEAT_BASE_SEQ=0 ;; esac
   # THE ALLOWANCE, and why the doc's "exclude Stop-kind beats" is implemented as an OFFSET rather

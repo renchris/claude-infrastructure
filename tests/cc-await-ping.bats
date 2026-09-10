@@ -887,11 +887,33 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   [ ! -f "$CC_MAILBOX_DIR/$UUID.watching" ]
 }
 
-@test "idle-scoped: REFUSES on a STALE beat (the producer is not running, or the sid is not ours)" {
+@test "idle-scoped: REFUSES on a STALE beat (the oracle cannot prove a NEW turn happened)" {
+  # The NAME of this case used to read "(the producer is not running, or the sid is not ours)" —
+  # the two causes the refusal itself named. Measurement refuted both as the usual cause (2026-09-09,
+  # cc-backlog 02c8b96e55b9): `now - beat.t` at arm time is the age of the current turn's opening
+  # beat, so a healthy session in a long turn is indistinguishable from a dead producer, and 9 of 9
+  # real refusals on this box were live producers. The REFUSAL is unchanged and still correct —
+  # fail-closed is the whole licence — only its stated cause was wrong.
   beat 5 prompt 5000
   run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 10
   [ "$status" -eq 6 ]
   [[ "$output" == *"reason=stale-beat"* ]] || false
+}
+
+@test "idle-scoped: the stale-beat refusal does NOT blame the producer, and reports seq+kind" {
+  # RED-PROOF for the attribution fix. Pre-fix this FAILS twice over: the message asserted "a live
+  # beat producer makes this seconds old" (the refuted claim) and carried neither seq nor kind, so a
+  # reader had nothing to separate "producer dead" from "turn is simply older than the bound" — which
+  # is exactly how a 20-day dispatch cycle came to hunt a beat producer that was never broken.
+  beat 8 prompt 5000
+  run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --interval 1 --timeout 10
+  [ "$status" -eq 6 ]
+  [[ "$output" == *"reason=stale-beat"* ]] || false
+  # (a) the refuted mechanism is gone
+  [[ "$output" != *"a live beat producer makes this seconds old"* ]] || false
+  # (b) the two fields that DO separate the states are surfaced, from the beat we just wrote
+  [[ "$output" == *"seq=8"* ]] || false
+  [[ "$output" == *"kind=prompt"* ]] || false
 }
 
 @test "idle-scoped: REFUSES when no sid can be resolved at all" {
