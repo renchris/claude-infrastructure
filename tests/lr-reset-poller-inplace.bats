@@ -121,7 +121,9 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-qu
 @test "SYMLINKED STORE: a limited session under a symlinked <cfg>/projects (the real .claude-next) is detected and parked" {
   # ~/.claude-next/projects -> ~/.claude/projects on this box. Without find -H the detect pass listed
   # 0 transcripts there, so no `next` session was ever parked (poller.log: 0 next, 63 other).
-  local sid="0f0f0f0f-0000-4000-8000-00000000abcd" real="$HOME/.claude/projects/$(SLUG "$CWD")" ts
+  local sid real ts
+  sid="0f0f0f0f-0000-4000-8000-00000000abcd"
+  real="$HOME/.claude/projects/$(SLUG "$CWD")"
   mkdir -p "$real" "$HOME/.claude-next"; ln -s "$HOME/.claude/projects" "$HOME/.claude-next/projects"
   ts="$(python3 -c "from datetime import datetime,timezone;print(datetime.now(timezone.utc).isoformat().replace('+00:00','Z'))")"
   {
