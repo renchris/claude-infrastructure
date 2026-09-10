@@ -1756,11 +1756,105 @@ _rm_expand_token() {  # <token> → the token with resolvable same-command varia
   printf '%s' "$t"
 }
 
-# rm_target_is_permitted <argv-token> — the two predicates, over the RESOLVED spelling of the token.
+# ── SELF-CREATED-TEMP CATEGORY ──────────────────────────────────────────────────────────────────
+# `T=$(mktemp -d) … rm -rf "$T"` is the single largest source of manual permission prompts on this
+# machine: 165 of the 721 `rm -r on non-build-artifact target` asks over the 30 days to 2026-09-10
+# (replay of the 2,838 archived Bash prompts in ~/.claude/autonomy/permission-archive through THIS
+# hook, so the count is what would prompt TODAY, not what prompted then).
+#
+# It is refused for a reason that is correct in general and wrong here. `_rm_literal_assignment`
+# refuses any value carrying a command substitution, because `$(…)` has no decidable value at hook
+# time — and a guess at a path is the spoofable prefix match the whole span exists to avoid.
+#
+# WHY THIS ONE IS DECIDABLE WITHOUT KNOWING THE PATH. We never learn where the directory is, and we
+# do not need to: `mktemp -d` CREATES A NEW UNIQUE DIRECTORY, by contract. So a token resolving to
+# it can only ever name something THIS COMMAND MADE, wherever mktemp chose to put it. Removing it
+# cannot reach anything that existed before the command ran. That is a stronger guarantee than
+# either predicate above, both of which reason from a LOCATION and are therefore vulnerable to a
+# wrong expansion; this one reasons from PROVENANCE and is not.
+#
+# WHAT IS STILL REFUSED — each of these is a real lever a slip or an attacker would pull:
+#   · the name assigned more than once — `T=$(mktemp -d); T=/etc; rm -rf "$T"` has no single value
+#   · anything in the substitution but a lone `mktemp` — `$(mktemp -d; echo /etc)`, `$(x && mktemp -d)`
+#   · `mktemp` WITHOUT a directory flag — that is a FILE, so an `rm -r` on it means the token was
+#     built some other way; refusing costs one prompt on a shape nobody writes
+#   · a token that is not the variable itself or a path strictly under it — `$T/..`, `$T/../../etc`
+#   · a token whose `$` survives for any OTHER reason — unchanged, it never reaches this predicate
+#
+# NOT WIDENED, deliberately — the measured part a future session should not "finish". The
+# neighbouring class is 152 asks whose target resolves to a LITERAL path under /tmp or /private/tmp.
+# That looks like the same category and is not: those roots carry LIVE infrastructure this fleet
+# depends on — `/tmp/cc-daemon-501/**` (daemon sockets), `/private/tmp/.desk-land-*` (land locks),
+# `/tmp/cc-telemetry`. A blanket temp-root permit deletes those with no prompt, and an exclusion
+# list for them would enumerate spellings rather than the class (MEMORY.md
+# denylist-enumerates-spellings-not-the-class). The invariant that makes THIS category safe — the
+# command created it — is the one to generalize, never the location.
+_rm_is_mktemp_dir_substitution() {  # <assignment-value> → 0 iff it is exactly `$(mktemp -d …)`
+  local v="$1" inner a
+  # Strip one layer of surrounding quotes, then require the WHOLE value to be one substitution.
+  v=$(printf '%s' "$v" | sed -E 's|^"||; s|"$||')
+  case "$v" in
+    '$('*')') inner=${v#'$('}; inner=${inner%')'} ;;
+    *) return 1 ;;
+  esac
+  # Nothing may precede or follow the mktemp call INSIDE the substitution: a separator would let a
+  # second command choose the value. `$(mktemp -d)` yes; `$(mktemp -d; echo /etc)` no.
+  case "$inner" in *';'*|*'&'*|*'|'*|*'`'*|*'$('*|*$'\n'*) return 1 ;; esac
+  # First word must be mktemp itself (an absolute path to it is fine), and a directory flag must be
+  # a real argv token — `-d`, `--directory`, or a cluster carrying d such as `-dt`.
+  # shellcheck disable=SC2086  # deliberate word-split: $inner is the substitution's argv
+  set -- $inner
+  [ $# -ge 1 ] || return 1
+  case "$1" in mktemp|*/mktemp) ;; *) return 1 ;; esac
+  shift
+  for a in "$@"; do
+    case "$a" in
+      --directory) return 0 ;;
+      --*) ;;
+      -*) case "$a" in *d*) return 0 ;; esac ;;
+    esac
+  done
+  return 1
+}
+
+is_self_created_mktemp_target() {  # <argv-token> → 0 iff it names a dir THIS command's mktemp made
+  local t="$1" name rest all one
+  # The token must be the variable, optionally with a path strictly UNDER it. Any `..` is refused
+  # outright: a suffix that walks up leaves the directory mktemp created, which is the whole basis.
+  case "$t" in *'..'*|*'*'*|*'?'*|*'`'*) return 1 ;; esac
+  name=$(printf '%s' "$t" | sed -nE 's|^\$\{([A-Za-z_][A-Za-z0-9_]*)\}(/.*)?$|\1|p; s|^\$([A-Za-z_][A-Za-z0-9_]*)(/.*)?$|\1|p' | head -1)
+  [ -n "$name" ] || return 1
+  # Whatever follows the variable must be a plain path segment chain — no second reference.
+  rest=$(printf '%s' "$t" | sed -E "s|^\\\$\{?${name}\}?||")
+  case "$rest" in ''|/*) ;; *) return 1 ;; esac
+  case "$rest" in *'$'*) return 1 ;; esac
+  # Exactly one assignment of that name in this command — the same uniqueness rule the literal-path
+  # resolver uses, for the same reason: a reassigned name has no decidable value.
+  #
+  # The extraction is SUBSTITUTION-AWARE, and it has to be. `_rm_literal_assignment`'s pattern ends
+  # the value at the first whitespace (`[^[:space:];&|]*`), which is right for a literal path and
+  # silently truncates `T=$(mktemp -d)` to `T=$(mktemp` — a value that then matches no arm here and
+  # permits nothing. That truncation is invisible: the predicate simply returns 1 and the ask stands,
+  # which looks exactly like the category working. So the two alternatives below are ordered
+  # substitution-first, and only a value with NO `$(` falls through to the whitespace-terminated form.
+  all=$(printf '%s\n' "$CMD" \
+        | grep -oE "(^|[[:space:];&|(])${name}=(\"?\\\$\([^()]*\)\"?|[^[:space:];&|]*)" \
+        | sed -E "s|^[[:space:];&|(]*${name}=||")
+  [ -n "$all" ] || return 1
+  [ "$(printf '%s\n' "$all" | sort -u | wc -l | tr -d ' ')" = "1" ] || return 1
+  one=$(printf '%s\n' "$all" | head -1)
+  _rm_is_mktemp_dir_substitution "$one"
+}
+# ── SELF-CREATED-TEMP END ───────────────────────────────────────────────────────────────────────
+
+# rm_target_is_permitted <argv-token> — the THREE predicates. The third is checked on the RAW token,
+# not the resolved one: its whole point is a value that CANNOT be resolved (a command substitution),
+# so resolution has already refused it by the time we get here.
 rm_target_is_permitted() {
   local resolved
   resolved=$(_rm_expand_token "$1")
-  is_safe_rm_target "$resolved" || is_own_scratchpad_target "$resolved"
+  is_safe_rm_target "$resolved" || is_own_scratchpad_target "$resolved" \
+    || is_self_created_mktemp_target "$1"
 }
 
 # is_safe_rm_target <argv-token> — shared by both paths below, for the same no-drift reason.
