@@ -162,3 +162,88 @@ run_inbox() { run python3 "$INBOX" "$@"; }
   [ "$status" -eq 0 ]
   [[ "$output" != *"some_future_state"* ]]
 }
+
+# ── --record: the ephemeral read becomes evidence `cc-cloud classify()` can consult ──────────────
+# classify() is disk + ls-remote by contract, so it cannot ask the control plane whether a session
+# ever ran — and its C1 arm asserted NOT-STARTED from ref-absence alone, which a session that
+# booted, ran and declined produces identically to one that never existed. `--record` writes the
+# answer down as a durable `<id>.cp` sidecar, under the same three laws the `.seen` sidecar obeys:
+# positive-only, never on a non-read, never deleted.
+
+@test "8 --record writes ran=1 for a session that ENDED A TURN, and nothing without the flag" {
+  decl s1 item1
+  fx s1 need_input "tests green" "cc-backlog done item1"
+
+  # CONTROL: the default is unchanged. --record is a flag precisely so the reader stays a reader,
+  # and a case that only asserted the write could not tell the two apart.
+  run_inbox --all
+  [ "$status" -eq 0 ]
+  [ ! -f "$C/state/s1.cp" ]
+
+  run_inbox --all --record
+  [ "$status" -eq 0 ]
+  [ -f "$C/state/s1.cp" ]
+  grep -q '^ran=1$' "$C/state/s1.cp"
+  # the fields the sidecar is FOR, carried verbatim from the one projection --verify emits
+  grep -q '^status_category=need_input$' "$C/state/s1.cp"
+  grep -q '^status_bucket=blocked$' "$C/state/s1.cp"
+  grep -qE '^probed_at=[0-9]+$' "$C/state/s1.cp"
+  # the tally names what it wrote — a silent side effect is not auditable
+  printf '%s' "$output" | grep -q 'recorded 1 .cp sidecar'
+}
+
+@test "9 an UNREADABLE probe writes NO sidecar — a failed instrument never manufactures evidence" {
+  decl good item1
+  fx good need_input "done" "cc-backlog done item1"
+  decl missing item2          # no fixture ⇒ the stub exits 9 ⇒ UNREADABLE
+
+  run_inbox --all --record
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'UNREADABLE  missing'
+
+  # POSITIVE CONTROL in the same run: the readable sibling DID get one, so this is a discriminating
+  # absence rather than a --record that quietly did nothing at all.
+  [ -f "$C/state/good.cp" ]
+  [ ! -f "$C/state/missing.cp" ]
+  # …and no half-written temp is left behind for classify() to read as a truncated store.
+  [ ! -f "$C/state/missing.cp.tmp" ]
+}
+
+@test "10 a session with NOTHING to ask still records ran=1 — the evidence is the TURN, not the ask" {
+  decl quiet item3
+  # An empty category is what a record with no post_turn_summary yields. A session that has taken no
+  # turn cannot carry the claim, and `ran=` must be ABSENT rather than 0 — absence is what
+  # classify() already reads as "no evidence".
+  fx quiet "" "" ""
+  run_inbox --all --record
+  [ "$status" -eq 0 ]
+  [ -f "$C/state/quiet.cp" ]
+  run grep -q '^ran=' "$C/state/quiet.cp"
+  [ "$status" -ne 0 ]
+
+  # POSITIVE CONTROL: the same session once it HAS ended a turn, with nothing to ask of us. It is
+  # not in the blocked view at all, and it must still be recorded — recording only what gets
+  # PRINTED would make durable evidence a function of a display flag.
+  fx quiet completed "shipped it" ""
+  run_inbox --record
+  [ "$status" -eq 0 ]
+  grep -q '^ran=1$' "$C/state/quiet.cp"
+  grep -q '^status_category=completed$' "$C/state/quiet.cp"
+}
+
+@test "11 --id addresses ONE session by id — the key --item cannot express" {
+  decl a1 shared
+  decl a2 ""                 # many declarations carry no item= at all
+  fx a1 need_input "one" "ask one"
+  fx a2 need_input "two" "ask two"
+
+  run_inbox --all --id a2 --record
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" > "$C/out.txt"
+  grep -q 'a2' "$C/out.txt"
+  run grep -q 'a1' "$C/out.txt"
+  [ "$status" -ne 0 ]
+  # the scope is real, not cosmetic: the unselected session was never probed, so it has no sidecar
+  [ -f "$C/state/a2.cp" ]
+  [ ! -f "$C/state/a1.cp" ]
+}

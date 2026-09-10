@@ -215,8 +215,8 @@ exactly one row and `bin/cc-blockers` can consume it unchanged.
 
 | Arm | Condition | Row? |
 | --- | --- | --- |
-| **U0 UNKNOWN** | a sensor could not run (`ls-remote` rc≠0, unreadable declaration) | no row; `--table` says UNKNOWN; **`--check` fails** |
-| **C1 NOT-STARTED** | no ref, past `declared_at + boot_s` | ROW |
+| **U0 UNKNOWN** | a sensor could not run (`ls-remote` rc≠0, unreadable declaration), or the control plane says the VM **took a turn** and there is still no ref | no row; `--table` says UNKNOWN; **`--check` fails** |
+| **C1 NOT-STARTED** | no ref, past `declared_at + boot_s`, **and nothing refutes it** | ROW |
 | **C2 BOOTING** | no ref, inside the boot budget | no row |
 | **C3 LANDED** | every declared path content-present on trunk | no row |
 | **C4 STALLED** | ref exists, sha unchanged past `stall_s` — **sidecar history required** | ROW |
@@ -232,6 +232,47 @@ Two orderings are load-bearing:
   T"; only `cc-cloud poll` writes it. With no history there is no evidence the sha ever differed,
   so no verdict is available and none is invented.
 
+**C1's claim is about RUNNING, and push evidence only ever proved PUSHING** *(landed 2026-09-10,
+backlog `1b3a777d041a`)*. §4.4 below already says `NOT-STARTED` means "the declared ref never
+appeared" and not "the VM never ran" — but the row it emits is read by `cc-backlog`'s reap as
+`open`, i.e. **return the item to the wave**, so the distinction the doc drew in prose was being
+spent as a re-dispatch in practice. Measured 2026-08-23 over 133 declarations the board filed
+`NOT-STARTED`: **130 answered `GET /v1/code/sessions` and 113 had taken a turn.** A session that
+booted, ran and correctly DECLINED leaves no ref and no `.seen` — the identical observation to a VM
+that never existed.
+
+The third piece of durable evidence closes it, under the same three laws the `.seen` sidecar obeys:
+
+| | The law | How `<id>.cp` meets it |
+| --- | --- | --- |
+| **Positive only** | evidence is a fact recorded, never an absence inferred | `ran=1` is written only when the record carried a `post_turn_summary` category — a turn that ENDED. There is no `ran=0`; the file's absence is what every arm already assumed. |
+| **Never on a non-read** | a failed instrument must not manufacture a verdict | an `unreadable` probe writes nothing at all |
+| **Never deleted** | a refuted claim must not be able to come back | nothing removes it, exactly as nothing removes `.seen` |
+
+Deliberately NARROWER than "the record exists": a created-but-never-booted session still answers
+the GET (130 of the 133 did), so presence of a record cannot carry the claim.
+
+**The hot loop still does not network.** `classify()` remains disk + `ls-remote`; `<id>.cp` is
+written by `cc-cloud poll` — the arm that already networks per session and already runs unattended
+under the autonomy sweep — through `scripts/cloud-inbox.py --record`, which decodes the control
+plane via the one `cloud-create-api.py --verify` projection rather than a second time. The probe
+fires **only for a session whose ref is absent right now**, i.e. exactly the set C1 can convict, so
+its cost is a function of how many sessions might be mislabelled and not of how many exist.
+
+**Why U0 and not a new state:** the row schema is frozen (§4.5) because `cc-blockers` consumes it,
+and U0's contract is exactly this situation — the sensor ran and answered, "never began" is
+refuted by positive evidence, C3 `LANDED` was declined, and disk cannot tell a session still
+working from one that finished without pushing. Downstream that is the *correct* actuation and not
+merely a quieter one: `cc-backlog`'s `cloud_state` returns rc 2 CANNOT-TELL on U0 and **abstains**,
+where `NOT-STARTED` would have reopened the item and fired a second worker at finished work. It
+does not go silent either — `--check` fails on U0, so the session surfaces as a question for the
+reader that can answer it (`cc-cloud inbox`, which is the recover command the row hands over).
+
+**C6 is NOT withdrawn by the same evidence, and that is deliberate.** Past `life_s`, "over, nothing
+landed" is true whether or not the VM ran, so `ABANDONED` still fires and still rows — suppressing
+it would hide the finished-but-unlanded population the board exists for, making it quieter instead
+of righter (the same reasoning that made the 2026-09-07 C1 expiry C6 rather than U0).
+
 `--json` / `--table` / `--check` are pure reads; `declare` / `retire` / `poll` are the only
 mutators, and they write only under `CC_CLOUD_STATE`. Nothing fetches, and nothing writes a git ref.
 
@@ -245,7 +286,9 @@ mutators, and they write only under `CC_CLOUD_STATE`. Nothing fetches, and nothi
 cc-cloud preflight [--repo P] [--branch B]   can a fire HERE be observed at all? exit 1 = no
 cc-cloud declare --id <id> --branch <b> [--remote --repo --paths --trunk --url --surface --item --boot --stall --life]
 cc-cloud retire  --id <id>
-cc-cloud poll                     the ONLY mutator of the heartbeat sidecar
+cc-cloud poll                     the ONLY mutator of the heartbeat sidecar; on a REF-LESS session
+                                  it also refreshes <id>.cp, the control-plane evidence §4.3 reads
+cc-cloud inbox [--all --item I --id S --record]   the control plane's own answer; --record makes it durable
 cc-cloud is-offbox <id>           exit 0 iff declared and not retired — the abstain lookup
 cc-cloud show <id>
 cc-cloud list [--json]            the declaration inventory from DISK — no probe, no network
@@ -1440,6 +1483,14 @@ collapsed here of all places. What is established: a create happened, a bundle w
 one), the session was declared, and no ref reached the remote inside 15 minutes. What is **not**
 established: whether the VM executed at all, whether it attempted the push, and what it saw if it
 did.
+
+*(Forward pointer, 2026-09-10, backlog `1b3a777d041a`: "whether the VM executed at all" is no
+longer unreachable, and the label no longer quietly collapses the distinction this paragraph
+defends. `cc-cloud inbox` reads the control plane, `--record` makes that read durable as `<id>.cp`,
+and §4.3's C1 arm now abstains to U0 over `ran=1` rather than asserting never-started. The
+paragraph below was true of the instruments that existed when it was written — see §11.4's own
+"by construction, not by omission", which was a claim about a SEND channel and remains true of
+that.)*
 
 **And this box structurally cannot find out.** §9.1's asymmetry is permanent: the send arm works —
 `cc-notify --cloud` delivered a status probe to this very session, correctly routed through the

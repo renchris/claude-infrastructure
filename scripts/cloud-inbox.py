@@ -51,6 +51,30 @@ folded into "nothing to answer". An empty inbox must mean "asked and nobody is b
 is a different fact from "could not ask" (memory: lookup-miss-is-not-absence, and
 suppressed-stderr-turns-a-failed-command-into-a-zero).
 
+--record — THE DURABLE SIDECAR, so an ephemeral read becomes evidence a board can consult.
+
+`cc-cloud classify()` is disk + `ls-remote` by contract: it must never network in the board's hot
+loop. But its C1 arm asserts NOT-STARTED from ref-absence alone, and a session that booted, ran and
+finished WITHOUT pushing leaves exactly what one that never booted leaves. The control plane knows
+which; classify() cannot ask it.
+
+So the answer is written down, exactly as push evidence already is. `.seen` (written by `cc-cloud
+poll`) and `paths_src` (written by `fill-paths`) are POSITIVE, durable facts produced by arms that
+DO network, and classify() reads them off disk. `<id>.cp` is the third one, under the same three
+laws:
+
+  POSITIVE ONLY        `ran=1` is written only when the record carries a `post_turn_summary`
+                       category — the unambiguous "this VM ended a turn". There is no `ran=0`:
+                       the file's absence already means "no evidence", which is what classify()
+                       assumed before this existed. Deliberately NARROWER than "the record exists":
+                       a created session that never booted still answers the GET (130 of 133 did),
+                       so presence of a record cannot carry this claim.
+  NEVER ON A NON-READ  an `unreadable` probe writes nothing. A failed probe that left a file behind
+                       would be a verdict manufactured out of an instrument failure
+                       (memory: null-result-must-not-use-the-error-channel).
+  NEVER DELETED        that a VM took a turn does not stop being true, and a sidecar that could be
+                       removed would let the refuted claim come back.
+
 Exit codes:  0 = ran, whatever it found (an empty inbox is not an error)
              2 = usage
              3 = the declaration store is unreadable — cannot even enumerate
@@ -65,6 +89,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # The probe binary is an env seam so the suite can stub the control plane. Unstubbed, a test would
@@ -170,6 +195,44 @@ def probe(sid: str, account: str, timeout: int) -> dict:
     }
 
 
+def record_cp(state: str, row: dict) -> str:
+    """Write `<id>.cp` for one READ session. Returns the path written, or "" when nothing was.
+
+    Written atomically (tmp + rename) because `cc-cloud classify()` reads this file on every board
+    render: a reader that caught a half-written `key=value` store would see a truncated `ran=` and
+    silently fall back to asserting the very thing this refutes.
+    """
+    if row.get("state") != "read":
+        return ""
+    cat = (row.get("category") or "").strip()
+    fields = [("probed_at", str(int(time.time())))]
+    for key in ("status_bucket", "worker_status"):
+        val = row.get(key)
+        fields.append((key, "" if val is None else str(val)))
+    fields.append(("status_category", cat))
+    if cat:
+        fields.append(("ran", "1"))
+    # One key per line is the store's whole invariant, so a newline in ANY value is stripped rather
+    # than trusted — these strings are composed by a remote VM (cc-cloud declare guards its own
+    # fields the same way, and for the same reason).
+    body = "".join(
+        f"{k}={v.replace(chr(10), ' ').replace(chr(13), ' ')}\n" for k, v in fields if v
+    )
+    path = os.path.join(state, row["id"] + ".cp")
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        os.replace(tmp, path)
+        return path
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return ""
+
+
 def classify_ask(row: dict) -> str:
     """PERMISSION | RUNNABLE | PROSE | NONE — what KIND of answer this session is waiting for."""
     if row.get("requires_action"):
@@ -192,10 +255,19 @@ def main() -> int:
     ap.add_argument(
         "--item", default="", help="only the session declared for this backlog id"
     )
+    # --id is the SESSION-keyed filter --item could not express. `cc-cloud poll` refreshes the
+    # sidecar for one session it has just observed ref-less, and it holds an id, not an item — many
+    # declarations carry no `item=` at all, so --item cannot address them.
+    ap.add_argument("--id", default="", help="only this session id")
     ap.add_argument(
         "--all",
         action="store_true",
         help="report every session, not only the blocked ones",
+    )
+    ap.add_argument(
+        "--record",
+        action="store_true",
+        help="also write each READ session's control-plane evidence to <id>.cp (see the docstring)",
     )
     args = ap.parse_args()
 
@@ -210,6 +282,8 @@ def main() -> int:
 
     if args.item:
         rows = [(s, d) for s, d in rows if d.get("item") == args.item]
+    if args.id:
+        rows = [(s, d) for s, d in rows if s == args.id]
     # THE BOUND IS ANNOUNCED, NEVER SILENT. A truncated sweep that prints like a complete one reads
     # as "everything is fine" (CLAUDE.md § no silent caps), so say what was dropped and why.
     total = len(rows)
@@ -237,6 +311,16 @@ def main() -> int:
                 classify_ask(row) if row.get("state") == "read" else "UNREADABLE"
             )
             results.append(row)
+
+    # Recorded BEFORE the filtering below, and off `results` rather than `shown`: the evidence a
+    # board needs is "this VM took a turn", which is exactly as true for a session with nothing to
+    # ask as for one that is blocked. Recording only what gets PRINTED would make the durable
+    # record a function of a display flag.
+    recorded = 0
+    if args.record:
+        for r in results:
+            if record_cp(args.state, r):
+                recorded += 1
 
     results.sort(key=lambda r: (r["ask"], r["id"]))
     shown = [
@@ -276,7 +360,8 @@ def main() -> int:
         + " of "
         + str(total)
         + " active session(s) — "
-        + (", ".join(f"{k} {v}" for k, v in sorted(counts.items())) or "nothing read"),
+        + (", ".join(f"{k} {v}" for k, v in sorted(counts.items())) or "nothing read")
+        + (f" — recorded {recorded} .cp sidecar(s)" if args.record else ""),
         file=sys.stderr,
     )
     return 0
