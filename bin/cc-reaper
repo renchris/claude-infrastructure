@@ -830,9 +830,16 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
       # which is not a property visible in argv -- so an enumeration is still what this arm can check,
       # and the honest mitigation is the fixture pair in tests/cc-reaper.bats, which fails loudly the
       # next time a land shape arrives without a token.
+      # THE NIGHTLY REGRESSION NET WAS THE FOURTH (2026-09-10, cc-backlog b1f7763af89f). launchd runs
+      # com.claude.nightly-regression as scripts/nightly-regression.sh --run at 04:00, parented to
+      # launchd, and its first step alone (the full bats corpus) runs 30+ min. It carried no token, so
+      # this arm TERMed it as orphan-bash 8 times between 2026-08-30 and 2026-09-09 (cc-reaper.log,
+      # ages 754 to 258537 s), and regression.log gained ONE verdict line in that window. The net built
+      # to catch rot between lands was collected before it could report, and silently: a run that is
+      # killed pages nobody. Pinned as a fixture pair in tests/cc-reaper.bats.
       # NOTE TO A FUTURE EDITOR: this comment block sits INSIDE a single-quoted awk program. No
       # apostrophes, and no single quotes of any kind, may appear below this line in the block.
-      wl="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|kitty|tmux|iTerm|launchd"
+      wl="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|kitty|tmux|iTerm|launchd"
       for (p in comm) {
         if (p in above) continue
         if (comm[p]=="claude.exe") continue

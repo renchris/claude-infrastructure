@@ -1784,6 +1784,28 @@ EOF
   [ "$got" = "90304 90305 " ]
 }
 
+# ── THE NIGHTLY REGRESSION NET WAS THE FOURTH (2026-09-10, cc-backlog b1f7763af89f). launchd runs
+# `scripts/nightly-regression.sh --run` at 04:00 and its first step alone (the full bats corpus) runs
+# 30+ min, so a launchd-parented bash with no whitelist token was collected past the 600 s floor —
+# 8 TERMs in cc-reaper.log between 2026-08-30 and 2026-09-09, and regression.log got one verdict in
+# that window. Pair form, as above: the nightly survives and the unrelated orphan beside it dies.
+@test "garbage: the nightly regression run is never collected, and an unrelated orphan beside it still is" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90401 1 45:00 bash
+90402 1 45:00 bash
+EOF
+  cat > "$GB" <<'EOF'
+90401 /bin/bash /Users/x/Development/claude-infrastructure/scripts/nightly-regression.sh --run
+90402 /bin/bash /Users/x/some/unrelated/orphan.sh
+EOF
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  # RED before the fix: 90401 appears in this list too.
+  [ "$got" = "90402 " ]
+}
+
 # ── THE PID THAT CHANGED HANDS (2026-08-16). The kill-time re-verification checked `ucomm` only, and
 # orphan-bash / stuck-wrapper / dead-lead-watchdog all carry the ERE `^bash$` — so for the three
 # classes that dominate the candidate set it asked "is this a bash?" of a pid it had already decided
