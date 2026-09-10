@@ -46,6 +46,9 @@ setup() {
   unset KITTY_WINDOW_ID
   export IT2_WRAPPER_NO_KITTY=1
   unset CC_TERM
+  # handoff-fire reads these and this repo injects them into every pane it launches, so a suite run
+  # from a fired pane would inherit the operator's runner shape (test-hermeticity-lint rule 6).
+  unset CC_PANE_CMD CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE
   export CC_FIRE_CAPACITY_GATE=off
   export CC_FIRE_HEADROOM_GATE=off
   # capacity-admit reads LIVE load, reclaimable memory and a `ps` census of session trees, so an
