@@ -2300,9 +2300,14 @@ EOF
 # whether a keystroke is safe: measured 30 draft+"/exit" merges in 24 days (≥8 swallowed a real
 # in-flight operator message), because /exit into a NON-empty composer does not exit — it merges
 # with the draft into ONE text message (the 60-day corpus holds ZERO exact-"/exit" enqueues, so an
-# empty-composer /exit always interrupts). And there is NO safe scrub to recover with: measured on
-# 2.1.220 (probe P2), Ctrl-U and Esc both leave the composer intact, and Ctrl-C/Esc double as
-# turn-interrupt — so the only non-destructive move on a non-empty composer is to WAIT or abstain.
+# empty-composer /exit always interrupts). CORRECTED 2026-09-09 (item 1ea55b6ad9f3): this said
+# "and there is NO safe scrub to recover with — P2 measured Ctrl-U and Esc both inert", from which
+# followed a gate that could only ever refuse. Ctrl-U DOES clear, on 2.1.260 AND on the 2.1.220 P2
+# itself measured, so that was an instrument error and not a version we grew into; Esc is inert,
+# and Ctrl-C/Esc still double as turn-interrupt and stay forbidden. The scrub is a per-LINE kill,
+# so it is a bounded read-back-verified LOOP (composer_scrub_verified, below) and it is authorised
+# only over residue THIS rail can attribute to itself — an operator's draft still makes WAIT or
+# abstain the only moves.
 #
 # THE PARSE, and why it is byte-level: the input box is the text between the LAST TWO full-width
 # border rows (runs of U+2500 ─). Inside it an EMPTY composer renders only non-ASCII ink (the ❯
@@ -2370,6 +2375,122 @@ recycle_nudge_decision() { # $1=it2-bin $2=sid
     *)     printf 'hold' ;;
   esac
   return 0
+}
+
+# ---- COMPOSER SCRUB: the deadlock cure (item 1ea55b6ad9f3, 2026-09-09) ------------------------
+# THE CLAIM THIS REPLACES WAS FALSE, AND IT WAS FALSE WHEN IT WAS WRITTEN. Every refusal above
+# rests on one sentence from P2 (docs/research/recycle-100p-2026-08-22.md §2.4, binary 2.1.220):
+# "Neither Ctrl-U nor Esc clears the composer — there is NO safe programmatic scrub." From it
+# followed the whole protocol ("on any mismatch, touch nothing and escalate") and therefore a gate
+# that can only ever refuse. Re-measured 2026-09-09 with a pyte-rendered PTY probe on BOTH
+# binaries, five candidates, with a working negative arm (Esc reproduces as INERT, so the
+# instrument can still say no):
+#
+#   candidate        2.1.260   2.1.220     note
+#   Ctrl-U (0x15)    CLEARS    CLEARS      kill-to-start-of-LINE, not of buffer — see the loop
+#   Esc              INERT     INERT       the original claim's other half — correct
+#   Ctrl-W           CLEARS    CLEARS      word-delete; clears only because the fixture is one word
+#   Ctrl-A + Ctrl-K  CLEARS    CLEARS      equivalent to Ctrl-U for our purposes
+#   backspace × N    CLEARS    CLEARS      needs a length; the others do not
+#
+# 2.1.220 is the binary P2 itself measured, and the results are byte-identical to 2.1.260 — so
+# this is NOT a version change that we grew into. The original was an instrument error, and a
+# false negative measured once was hardened into a permanent architectural constraint (memory:
+# unmeasured-is-not-unreal, corrected-instrument-can-lie-again). The cost was the outage this
+# item is: 4h+ of a dead drain chain whose only symptom was absence.
+#
+# WHY IT IS A LOOP AND NOT ONE KEYSTROKE. Ctrl-U kills to the start of the CURRENT line. Measured
+# per payload shape (the shapes this rail actually leaves):
+#   short 1-line paste            → 1 round
+#   3-line paste (echoed as text) → 5 rounds   (a spent Ctrl-U on an empty line is a no-op, so the
+#                                               loop sends ONE backspace to eat the newline)
+#   ≥4-line paste (chip form)     → 1 round    (`[Pasted text #1 +N lines]` is one line)
+#   a /goal condition             → 1 round
+# Bound: CC_COMPOSER_SCRUB_ROUNDS (default 12, against a measured worst case of 5).
+#
+# THE TWO SAFETY PROPERTIES, both red-proofed:
+#   1. IT IS READ-BACK VERIFIED, NEVER FIRE-AND-FORGET. Success is `composer_content` reading
+#      EMPTY, never "we sent the keystrokes". A loop that cannot finish REFUSES (rc 1) and says
+#      what is still there — it never reports a composer clear that it did not observe clear.
+#   2. IT SENDS NOTHING INTO AN UNREADABLE BOX (rc 2, and it returns BEFORE the first keystroke).
+#      An unreadable composer is dominated by a BLOCKING MODAL (item 2ee30f87c370: a permission /
+#      trust dialog renders no composer box at all), where a keystroke is consumed as the ANSWER
+#      to a single-key prompt. That is the one place a scrub could do real damage, and it is
+#      exactly where the pre-existing "typing needs the affirmative" rule already points.
+# Kill switch: CC_COMPOSER_SCRUB=off restores the refuse-forever behaviour.
+composer_scrub_verified() { # $1=it2-bin $2=sid [$3=max-rounds] → 0 PROVEN empty · 1 could not clear (last content on stdout) · 2 unknown box (nothing sent)
+  local it2="$1" sid="$2" rounds="${3:-${CC_COMPOSER_SCRUB_ROUNDS:-12}}" n=0 c prev crc
+  [ "${CC_COMPOSER_SCRUB:-on}" != off ] || return 1
+  c="$(composer_content "$it2" "$sid")" && crc=0 || crc=1
+  [ "$crc" = 0 ] || return 2                       # UNKNOWN: return before any keystroke
+  [ -n "$c" ] || return 0
+  prev="$c"
+  while [ "$n" -lt "$rounds" ]; do
+    n=$((n + 1))
+    hf_bounded "$it2" session send -s "$sid" $'\x15' >/dev/null 2>&1 || return 1
+    /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
+    c="$(composer_content "$it2" "$sid")" && crc=0 || crc=1
+    [ "$crc" = 0 ] || return 2                     # the box vanished mid-scrub: stop, do not guess
+    [ -n "$c" ] || return 0
+    if [ "$c" = "$prev" ]; then
+      # Ctrl-U made no progress ⇒ the cursor sits at the start of an empty line; eat the newline.
+      hf_bounded "$it2" session send -s "$sid" $'\x7f' >/dev/null 2>&1 || return 1
+      /bin/sleep "${FIRE_TYPE_SETTLE:-0.5}"
+      c="$(composer_content "$it2" "$sid")" && crc=0 || crc=1
+      [ "$crc" = 0 ] || return 2
+      [ -n "$c" ] || return 0
+    fi
+    prev="$c"
+  done
+  printf '%s' "$c"
+  return 1
+}
+
+# ---- RESIDUE ATTRIBUTION: whose text is in that composer? -------------------------------------
+# A scrub is only ever safe over OUR OWN residue — an operator's mid-thought draft must still
+# defer the recycle, which is the polarity the composer gate was built for and keeps. So the two
+# call sites are attributed by DIFFERENT evidence, and only one of them needs a store:
+#
+#   at the MANGLE site (it2_paste_submit_verified rc 4) attribution is STRUCTURAL. That path has
+#   just proven the composer EMPTY (the pre-paste gate) and then pasted into it, so whatever is
+#   there is what we put there. It scrubs immediately — remedy direction (a) in the item, "the
+#   paste path must leave the composer clean on a failed read-back" — and residue never outlives
+#   the attempt that made it.
+#
+#   at the RECYCLE gate, seconds-to-hours later and usually in a different PROCESS, there is no
+#   such proof. So a mangle that could NOT be scrubbed leaves a RECEIPT naming the pane and the
+#   exact content it abandoned, and the gate may scrub only when the composer still reads back
+#   byte-identical to that receipt — remedy direction (b), "a sanctioned way to clear residue it
+#   can attribute to its own prior attempt". Anything else (an operator draft, or our residue the
+#   operator has since typed into) fails attribution and refuses exactly as before.
+#
+# The receipt is deliberately content-keyed rather than time-keyed: a stale receipt cannot
+# authorise a scrub of text that no longer matches it, so it needs no TTL and cannot rot into a
+# licence (memory: work-item-next-step-inherits-its-stores-half-life).
+composer_residue_dir() { printf '%s' "${CC_COMPOSER_RESIDUE_DIR:-$HOME/.claude/logs/composer-residue}"; }
+
+composer_residue_record() { # $1=sid $2=content-as-read → always 0 (never breaks the caller)
+  local d; d="$(composer_residue_dir)"
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
+  mkdir -p "$d" 2>/dev/null || return 0
+  printf '%s\t%s\n' "$(_iso_now)" "$2" > "$d/${1//\//_}" 2>/dev/null || true
+  return 0
+}
+
+composer_residue_forget() { # $1=sid → always 0
+  local d; d="$(composer_residue_dir)"
+  [ -n "${1:-}" ] || return 0
+  rm -f "$d/${1//\//_}" 2>/dev/null || true
+  return 0
+}
+
+# rc 0 = the composer's CURRENT content is provably this rail's own abandoned paste.
+composer_residue_is_ours() { # $1=sid $2=current-content
+  local d f rec; d="$(composer_residue_dir)"; f="$d/${1//\//_}"
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
+  [ -f "$f" ] || return 1
+  rec="$(cut -f2- < "$f" 2>/dev/null)" || return 1
+  [ -n "$rec" ] && [ "$rec" = "$2" ]
 }
 
 # ---- PASTE READ-BACK oracle: what the composer SHOWS after a bracketed paste -------------------
@@ -2470,7 +2591,8 @@ paste_readback_ok() { # $1=pasted-text $2=space-stripped read-back → rc 0 prov
 }
 
 # VERIFIED composer paste — the cc-type-verified.sh discipline adapted to the one surface where
-# scrub-and-retype is IMPOSSIBLE (no safe scrub, above). So instead of retyping on mangle it
+# scrub-and-retype was believed impossible (see the corrected note above: a scrub exists, but it
+# clears rather than re-types, so the discipline below is unchanged). So instead of retyping it
 # (a) refuses to paste until the composer is PROVEN EMPTY (bounded pre-wait — a held operator
 # draft defers us, never the reverse), (b) refuses to submit unless the read-back is one of the
 # two forms paste_readback_ok proves for THIS payload, and (c) on mismatch leaves the composer
@@ -2555,7 +2677,28 @@ it2_paste_submit_verified() { # $1=it2-bin $2=pane-uuid $3=text [$4=max-pre-wait
       if [ "$crc" != 0 ]; then FIRE_PASTE_LAST_READBACK="<unreadable>"
       elif [ -z "$got" ];  then FIRE_PASTE_LAST_READBACK="<empty>"
       else                      FIRE_PASTE_LAST_READBACK="$(printf '%.120s' "$got")"; fi
-      echo "⚠ verified paste MANGLED — ${tries} read-back(s) saw '$(printf '%.80s' "$FIRE_PASTE_LAST_READBACK")', expected $(paste_readback_expect "$text"); CR NOT sent. The paste is sitting UNSUBMITTED in pane $id's composer (no safe scrub exists — measured 2.1.220: Ctrl-U/Esc are inert there); clear it by hand or submit it deliberately." >&2
+      # SCRUB IT, HERE, WHERE ATTRIBUTION IS FREE (item 1ea55b6ad9f3). This path proved the
+      # composer EMPTY moments ago and then pasted into it, so the residue is ours by
+      # construction — no receipt, no matching, no store. Leaving it was the whole outage: the
+      # next --recycle finds a non-empty composer, correctly refuses to type /exit into it, and
+      # the chain dies with absence as its only symptom (4h+ measured, 2026-08-23). A scrub that
+      # cannot finish, or a box that has become unreadable, still leaves the residue — and THAT
+      # is when a receipt is written, so the recycle gate can finish the job later.
+      local scrub_rc=0 scrub_left="" scrub_note=""
+      if [ "${CC_COMPOSER_SCRUB:-on}" != off ]; then
+        scrub_left="$(composer_scrub_verified "$it2" "$id")" || scrub_rc=$?
+      else
+        scrub_rc=1; scrub_left="$FIRE_PASTE_LAST_READBACK"
+      fi
+      case "$scrub_rc" in
+        0) composer_residue_forget "$id"
+           scrub_note="The composer was then SCRUBBED CLEAN (read-back verified), so nothing is left behind and the next recycle is not blocked." ;;
+        2) composer_residue_record "$id" "$FIRE_PASTE_LAST_READBACK"
+           scrub_note="The scrub was NOT attempted — the composer became unreadable, which is dominated by a blocking permission/trust modal, and a keystroke there is consumed as its answer. A residue receipt was recorded so a later recycle can clear it once the modal is gone." ;;
+        *) composer_residue_record "$id" "${scrub_left:-$FIRE_PASTE_LAST_READBACK}"
+           scrub_note="The scrub could NOT clear it (still holding '$(printf '%.60s' "${scrub_left:-?}")'); a residue receipt was recorded so a later recycle can clear it, and it is safe to clear by hand." ;;
+      esac
+      echo "⚠ verified paste MANGLED — ${tries} read-back(s) saw '$(printf '%.80s' "$FIRE_PASTE_LAST_READBACK")', expected $(paste_readback_expect "$text"); CR NOT sent. ${scrub_note}" >&2
       return 4
     fi
   done
@@ -11142,20 +11285,50 @@ recycle_fire() {
   # /exit into a NON-empty composer does not exit: it MERGES with the draft into one text message
   # (measured 30 merges / 24 days, ≥8 of them swallowing a real in-flight operator message; the
   # 60-day corpus holds ZERO exact-"/exit" enqueues, so an empty-composer /exit always interrupts).
-  # There is no safe scrub (P2: Ctrl-U/Esc inert on the 2.1.220 composer), so a held draft DEFERS
-  # the recycle — bounded wait, then a loud refusal that leaves the session alive and the draft
-  # intact. That is the right polarity: the draft is the operator mid-thought, and a recycle rail
+  # An OPERATOR's held draft DEFERS the recycle — bounded wait, then a loud refusal that leaves
+  # the session alive and the draft intact. (Until 2026-09-09 that was also the answer for THIS
+  # rail's own abandoned paste, on a since-refuted "no safe scrub exists"; own residue is now
+  # scrubbed by the arm below and only a foreign draft reaches this refusal.) That is the right polarity: the draft is the operator mid-thought, and a recycle rail
   # can always re-fire; a swallowed message cannot be unsent. UNKNOWN (no box readable) also
   # refuses — typing needs the affirmative. Kill switch: CC_RECYCLE_COMPOSER_GATE=off.
   RCY_IT2="${REAL_IT2:-$HOME/.claude/bin/it2}"
   if [ "${CC_RECYCLE_COMPOSER_GATE:-on}" != off ]; then
     rcy_cg_c=""; rcy_cg_rc=0
     rcy_cg_c="$(recycle_composer_gate "$RCY_IT2" "$SID" "${CC_RECYCLE_DRAFT_WAIT:-180}" "${CC_RECYCLE_DRAFT_IVL:-15}")" || rcy_cg_rc=$?
+    # OUR-OWN-RESIDUE ARM (item 1ea55b6ad9f3). A held composer has two very different causes and
+    # the old gate could not tell them apart, so it refused both — forever, which is a deadlock
+    # rather than a guard. An operator's draft still defers us (that polarity is the whole point
+    # and is unchanged). But residue THIS RAIL abandoned on a failed paste read-back is ours to
+    # clear, and it is provably ours only when the composer still reads back byte-identical to
+    # the receipt that mangle wrote. Anything else — including our residue the operator has since
+    # typed into — fails attribution and falls through to the refusal below.
+    if [ "$rcy_cg_rc" = 1 ] && [ "${CC_COMPOSER_SCRUB:-on}" != off ] \
+       && composer_residue_is_ours "$SID" "$rcy_cg_c"; then
+      rcy_scrub_rc=0
+      composer_scrub_verified "$RCY_IT2" "$SID" >/dev/null || rcy_scrub_rc=$?
+      if [ "$rcy_scrub_rc" = 0 ]; then
+        composer_residue_forget "$SID"
+        emit_recycle_event recycle-residue-scrubbed "" "$SID" "composer held THIS rail's own abandoned paste ('$(printf '%.60s' "$rcy_cg_c")'); scrubbed clean (read-back verified) and the recycle proceeds" || true
+        echo "→ recycle: pane $SID's composer held this rail's own abandoned paste — scrubbed clean (read-back verified); proceeding" >&2
+        rcy_cg_rc=0
+      else
+        emit_recycle_event recycle-held-draft "" "$SID" "own-residue scrub FAILED (rc $rcy_scrub_rc) over '${rcy_cg_c}'" || true
+      fi
+    fi
     if [ "$rcy_cg_rc" != 0 ]; then
       [ "$rcy_cg_rc" = 2 ] && rcy_cg_c="<unreadable>"
       emit_recycle_event recycle-held-draft "" "$SID" "composer non-empty for ${CC_RECYCLE_DRAFT_WAIT:-180}s: ${rcy_cg_c}" || true
+      # AND THE DESK HEARS IT (item 1ea55b6ad9f3). The line below pages the BLOCKED pane — i.e. the
+      # victim — and the stderr above reaches only the process that refused, which on a self-recycle
+      # is the session about to be replaced. So a deferral that is now genuinely foreign (an
+      # operator draft; our own residue is scrubbed by the arm above) still had NO reader outside
+      # this pane: `recycle-held-draft` has been emitted since 2026-08-22 and has zero consumers in
+      # the tree. That is what made the 4h+ outage present as absence and get misdiagnosed as a slow
+      # link — CPU accrual cannot tell working from blocked-at-composer. One page to the desk is the
+      # difference between a stalled chain and a silent one. Best-effort, never blocks the refusal.
+      command -v cc-notify >/dev/null 2>&1 && cc-notify --role desk "RECYCLE BLOCKED on pane $SID: its composer holds unsubmitted text that is NOT this rail's own residue ('$(printf '%.60s' "${rcy_cg_c}")'), so /exit is refused and the succession CANNOT advance until it is sent or cleared. This chain makes no progress meanwhile, and it shows up as absence, never as an error." >/dev/null 2>&1 || true
       command -v cc-notify >/dev/null 2>&1 && cc-notify "$SID" "RECYCLE DEFERRED: this pane's composer holds an unsubmitted draft ('$(printf '%.60s' "${rcy_cg_c}")') — typing /exit now would merge with it and submit the hybrid (the measured Aug-16/Aug-22 mangle class). Send or clear the draft, then re-run the recycle." >/dev/null 2>&1 || true
-      echo "!! recycle REFUSED after ${CC_RECYCLE_DRAFT_WAIT:-180}s: pane $SID's composer holds unsubmitted text ('${rcy_cg_c}') — /exit would MERGE with it into one text message and there is no safe scrub. Nothing was typed; the session stays alive. Clear/send the draft, then re-run: $CMD" >&2
+      echo "!! recycle REFUSED after ${CC_RECYCLE_DRAFT_WAIT:-180}s: pane $SID's composer holds unsubmitted text ('${rcy_cg_c}') — /exit would MERGE with it into one text message and it is not this rail's own residue (no matching receipt), so clearing it is not ours to do. Nothing was typed; the session stays alive. Clear/send the draft, then re-run: $CMD" >&2
       exit 1
     fi
   fi
@@ -11321,7 +11494,7 @@ if [ "$DRY" = 1 ]; then
     else
       echo "subagents: none in flight"
     fi
-    echo "chain:    composer gate (refuse /exit over a held draft — ≤${CC_RECYCLE_DRAFT_WAIT:-180}s wait, no safe scrub exists) → arm watcher (setsid-detached, heartbeat-verified) → freshness re-read → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds — emit report/fallback BEFORE firing) → detached ps-poll ≤600s (content-gated nudges @60/150/300s: CR only onto a proven stranded /exit) → it2-typed relaunch into the shell → confirm claude on tty (guarded retype, pane-visible fallback on failure)"
+    echo "chain:    composer gate (refuse /exit over a held OPERATOR draft — ≤${CC_RECYCLE_DRAFT_WAIT:-180}s wait; this rail's OWN abandoned paste is scrubbed instead of deferred) → arm watcher (setsid-detached, heartbeat-verified) → freshness re-read → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds — emit report/fallback BEFORE firing) → detached ps-poll ≤600s (content-gated nudges @60/150/300s: CR only onto a proven stranded /exit) → it2-typed relaunch into the shell → confirm claude on tty (guarded retype, pane-visible fallback on failure)"
   else
     echo "surface:  $SURFACE"
     if [ "$FOLLOW" = 1 ]; then

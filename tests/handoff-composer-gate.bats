@@ -44,6 +44,7 @@ setup() {
   # does NOT redirect an absolute /tmp default or a bare name resolved off the operator's PATH —
   # pinned to ABSENT tmpdir paths, where the sensors that read them fail open.
   export CC_FIRE_CAPACITY_GATE=off
+  export CC_COMPOSER_RESIDUE_DIR="$BATS_TEST_TMPDIR/residue"
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/account-sweep.json"
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/no-such-claude-accounts"
   export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
@@ -57,6 +58,11 @@ setup() {
     sed -n '/^_paste_newlines() {/,/^}/p'             "$HF"
     sed -n '/^paste_readback_expect() {/,/^}/p'       "$HF"
     sed -n '/^paste_readback_ok() {/,/^}/p'           "$HF"
+    sed -n '/^composer_scrub_verified() {/,/^}/p'      "$HF"
+    sed -n '/^composer_residue_dir() {/,/^}/p'         "$HF"
+    sed -n '/^composer_residue_record() {/,/^}/p'      "$HF"
+    sed -n '/^composer_residue_forget() {/,/^}/p'      "$HF"
+    sed -n '/^composer_residue_is_ours() {/,/^}/p'     "$HF"
     sed -n '/^it2_paste_submit_verified() {/,/^}/p'   "$HF"
   } > "$BATS_TEST_TMPDIR/units.sh"
   bash -n "$BATS_TEST_TMPDIR/units.sh" || { echo "extraction from $HF is not valid bash" >&2; return 1; }
@@ -251,7 +257,11 @@ torn_hf_bounded() {
   # the operator raced in between paste and read-back — hybrid on screen
   SCREEN_FILE="$POST_FILE"; mk_screen "$GLYPH also fix the margin/goal reply with DONE"
   hf_bounded() { phased_hf_bounded "$@"; }
-  run it2_paste_submit_verified it2 sid "/goal reply with DONE"
+  # SEAM PINNED (2026-09-09): the subject here is the withheld CR, and the send counter is exact.
+  # The residue scrub added at the rc-4 branch spends keystrokes of its own, which would inflate
+  # that counter without saying anything about the CR — it is owned by its own cases below,
+  # including one pinning that the scrub never sends a CR on any path.
+  CC_COMPOSER_SCRUB=off run it2_paste_submit_verified it2 sid "/goal reply with DONE"
   [ "$status" -eq 4 ]
   grep -c 'SEND:' "$SENT_LOG" | grep -qx 1                       # the paste only
   ! grep -q $'SEND:\r' "$SENT_LOG"                               # NO CR — the whole point
@@ -410,7 +420,11 @@ _hf_strip() { printf '%s' "$1" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[
   SCREEN_FILE="$PRE_FILE";  mk_screen "$GLYPH "
   SCREEN_FILE="$POST_FILE"; mk_screen "$GLYPH also fix the margin[Pasted text #1 +9 lines]"
   hf_bounded() { phased_hf_bounded "$@"; }
-  run it2_paste_submit_verified it2 sid "$brief"
+  # SEAM PINNED (2026-09-09): this case's subject is the CR discipline, and its send/read counters
+  # are exact. The residue scrub added at the rc-4 branch spends keystrokes and reads of its own,
+  # which would inflate both without saying anything about the CR — so it is pinned off HERE and
+  # owned by its own cases below (including one that pins the scrub never sends a CR).
+  CC_COMPOSER_SCRUB=off run it2_paste_submit_verified it2 sid "$brief"
   [ "$status" -eq 4 ]
   grep -c 'SEND:' "$SENT_LOG" | grep -qx 1
   ! grep -q $'SEND:\r' "$SENT_LOG"
@@ -466,7 +480,8 @@ _hf_strip() { printf '%s' "$1" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[
   SCREEN_FILE="$PRE_FILE";  mk_screen "$GLYPH "
   SCREEN_FILE="$POST_FILE"; mk_screen "$GLYPH also fix the margin/goal reply with DONE"
   hf_bounded() { phased_hf_bounded "$@"; }
-  FIRE_PASTE_READBACK_TRIES=4 run it2_paste_submit_verified it2 sid "/goal reply with DONE"
+  # seam pinned for the same reason as the case above: the read BUDGET is this case's subject.
+  CC_COMPOSER_SCRUB=off FIRE_PASTE_READBACK_TRIES=4 run it2_paste_submit_verified it2 sid "/goal reply with DONE"
   [ "$status" -eq 4 ]
   grep -c 'SEND:' "$SENT_LOG" | grep -qx 1                       # the paste only
   [ "$(wc -l < "$READS_FILE")" -eq 5 ]                            # 1 pre-paste + 4 read-back tries
@@ -508,4 +523,187 @@ _hf_strip() { printf '%s' "$1" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[
   it2_paste_submit_verified it2 sid "/goal x" 2>/dev/null || rc=$?
   [ "$rc" -eq 3 ]
   [ "${FIRE_PASTE_LAST_READBACK:-}" = "half-typedoperatorthought" ]
+}
+
+# ── 4. THE SCRUB, and the deadlock it ends (item 1ea55b6ad9f3, 2026-09-09) ────────────────────
+#
+# The gate above can only ever REFUSE, and that is a deadlock rather than a guard: a mangled paste
+# leaves residue, residue holds the composer non-empty, and every later --recycle correctly
+# declines to type /exit into it. Measured cost: a drain chain dead 4h+ with absence as its only
+# symptom. The constraint that forced it — P2's "there is NO safe programmatic scrub" — was
+# re-measured on 2026-09-09 with a pyte-rendered PTY probe and is FALSE: Ctrl-U clears, on
+# 2.1.260 and on the 2.1.220 P2 itself measured (so an instrument error, not a version change),
+# while Esc reproduces as inert, which is the probe's negative arm.
+#
+# THE SIMULATOR BELOW IS THE MEASUREMENT, NOT A GUESS. Ctrl-U kills to the start of the CURRENT
+# line, so it models exactly that: clear the last line, no-op once that line is already empty
+# (which is where the loop spends a backspace to eat the newline). Its round counts reproduce the
+# live probe's — 1 round for a one-line or chip residue, 5 for a 3-line one — which is the check
+# that the model is faithful rather than merely convenient.
+
+_sim_setup() {                       # a STATEFUL composer: keystrokes mutate it, reads render it
+  BUF_FILE="$BATS_TEST_TMPDIR/buf"
+  : > "$SENT_LOG"
+  sim_set() { printf '%s\n' "$@" > "$BUF_FILE"; sim_render; }
+  sim_render() {
+    { echo "scrollback noise"; echo "$B"
+      if [ -s "$BUF_FILE" ]; then sed "s/^/$GLYPH /" "$BUF_FILE"; else echo "$GLYPH "; fi
+      echo "$B"; echo "  (4) repo · statusline"; } > "$SCREEN_FILE"
+  }
+  _sim_keystroke() {                 # the MUTATION half, named so a test can override the transport
+    local payload="$6" n last
+    printf '%s\n' "SEND:$(printf '%s' "$payload" | od -An -c | tr -s ' ' | head -1)" >> "$SENT_LOG"
+    n=$(wc -l < "$BUF_FILE" 2>/dev/null || echo 0); n=$((n))
+    last="$(tail -1 "$BUF_FILE" 2>/dev/null || true)"
+    case "$payload" in
+      $'\x15')                                        # Ctrl-U: kill to start of CURRENT line
+        if [ -n "$last" ]; then
+          { [ "$n" -gt 1 ] && sed '$d' "$BUF_FILE"; echo ""; } > "$BUF_FILE.n"; mv "$BUF_FILE.n" "$BUF_FILE"
+        fi ;;                                         # already-empty line ⇒ measured no-op
+      $'\x7f')                                        # backspace: on an empty line, eat the newline
+        if [ -z "$last" ] && [ "$n" -gt 1 ]; then sed '$d' "$BUF_FILE" > "$BUF_FILE.n"; mv "$BUF_FILE.n" "$BUF_FILE"; fi ;;
+    esac
+    sim_render; return 0
+  }
+  hf_bounded() {                     # <bin> session <read|send> -s <sid> <payload>
+    local verb="$3"
+    if [ "$verb" = read ]; then cat "$SCREEN_FILE" 2>/dev/null; return 0; fi
+    if [ "$verb" != send ]; then return 1; fi
+    _sim_keystroke "$@"
+  }
+}
+_ctrl_u_count() { grep -c '025' "$SENT_LOG" 2>/dev/null || true; }
+
+@test "scrub: a one-line residue is cleared and PROVEN empty (rc 0)" {
+  _sim_setup; sim_set "/goal land the item - proven by the suite"
+  run composer_scrub_verified it2 sid
+  [ "$status" -eq 0 ]
+  run composer_content it2 sid
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
+
+@test "scrub: a chip residue ([Pasted text #1 +N lines]) is ONE line, so ONE round clears it" {
+  _sim_setup; sim_set "[Pasted text #1 +24 lines]"
+  run composer_scrub_verified it2 sid
+  [ "$status" -eq 0 ]
+  [ "$(_ctrl_u_count)" -eq 1 ]
+}
+
+@test "scrub: a 3-line residue needs the backspace step — 5 rounds, as the live probe measured" {
+  _sim_setup; sim_set "line one" "line two here" "line three tail"
+  run composer_scrub_verified it2 sid
+  [ "$status" -eq 0 ]
+  [ "$(_ctrl_u_count)" -eq 5 ]
+  run composer_content it2 sid
+  [ -z "$output" ]
+}
+
+@test "scrub SAFETY: an UNREADABLE composer sends ZERO keystrokes and returns rc 2" {
+  # THE one place a scrub could do real damage: an unreadable box is dominated by a blocking
+  # permission/trust modal (item 2ee30f87c370), which renders no composer at all and consumes a
+  # keystroke as its ANSWER. The assertion that matters is the EMPTY send log, not the rc.
+  # NOTE (equivalence guard, not a red-proof): its mutant is a scrub that keys on emptiness alone
+  # — swap the `[ "$crc" = 0 ] || return 2` guard for `[ -n "$c" ] || return 0` and this is the
+  # only case that goes red.
+  _sim_setup
+  printf 'half-drawn assistant output\nno box on screen yet\n' > "$SCREEN_FILE"
+  : > "$SENT_LOG"
+  run composer_scrub_verified it2 sid
+  [ "$status" -eq 2 ]
+  [ ! -s "$SENT_LOG" ]
+}
+
+@test "scrub: a residue it cannot clear within the bound REFUSES (rc 1) and never claims empty" {
+  _sim_setup; sim_set "l1" "l2" "l3" "l4" "l5"
+  run composer_scrub_verified it2 sid 2                # bound below what this shape needs
+  [ "$status" -eq 1 ]
+  [ -n "$output" ]                                     # it reports what is still there
+}
+
+@test "scrub: the kill switch CC_COMPOSER_SCRUB=off restores refuse-forever" {
+  _sim_setup; sim_set "residue"
+  CC_COMPOSER_SCRUB=off run composer_scrub_verified it2 sid
+  [ "$status" -eq 1 ]
+  [ ! -s "$SENT_LOG" ]
+}
+
+# ── 5. ATTRIBUTION — an operator's draft is still never ours to clear ─────────────────────────
+
+@test "attribution: a receipt authorises a scrub ONLY on byte-identical content" {
+  composer_residue_record sid-A "goalconditiontext"
+  run composer_residue_is_ours sid-A "goalconditiontext"
+  [ "$status" -eq 0 ]
+  run composer_residue_is_ours sid-A "goalconditiontextAND THE OPERATOR TYPED MORE"
+  [ "$status" -ne 0 ]
+  run composer_residue_is_ours sid-B "goalconditiontext"
+  [ "$status" -ne 0 ]                                  # no receipt for this pane ⇒ not ours
+}
+
+@test "attribution: a forgotten receipt cannot authorise anything" {
+  composer_residue_record sid-A "residue"
+  composer_residue_forget sid-A
+  run composer_residue_is_ours sid-A "residue"
+  [ "$status" -ne 0 ]
+}
+
+# ── 6. THE CALL SITE: a mangled paste no longer LEAVES the residue ────────────────────────────
+
+@test "mangle site: the failed paste is SCRUBBED, so the next recycle is not blocked" {
+  # RED PRE-FIX: the shipped rc-4 branch returned with the residue in place and typed nothing —
+  # zero Ctrl-U in the send log — which is precisely the state that deadlocked the drain chain.
+  _sim_setup; sim_set ""                               # pre-paste gate must see an EMPTY composer
+  hf_bounded() {                                       # the paste lands MANGLED; the sim takes over
+    local verb="$3" payload="$6"
+    if [ "$verb" = read ]; then cat "$SCREEN_FILE"; return 0; fi
+    case "$payload" in
+      *$'\x1b[200~'*) printf '%s\n' "SEND:paste" >> "$SENT_LOG"
+                      sim_set "also fix the margin/goal reply with DONE"; return 0 ;;
+    esac
+    _sim_keystroke "$@"
+  }
+  local rc=0
+  FIRE_PASTE_READBACK_TRIES=2 it2_paste_submit_verified it2 sid "/goal reply with DONE" 2>/dev/null || rc=$?
+  [ "$rc" -eq 4 ]
+  [ "$(_ctrl_u_count)" -ge 1 ]                         # it scrubbed
+  run composer_content it2 sid
+  [ -z "$output" ]                                     # and the composer is provably clean
+  [ ! -f "$CC_COMPOSER_RESIDUE_DIR/sid" ]              # nothing left for a later recycle to clear
+}
+
+@test "mangle site: a scrub it cannot finish leaves a RECEIPT for the recycle gate" {
+  _sim_setup; sim_set ""
+  hf_bounded() {
+    local verb="$3" payload="$6"
+    if [ "$verb" = read ]; then cat "$SCREEN_FILE"; return 0; fi
+    case "$payload" in
+      *$'\x1b[200~'*) printf '%s\n' "SEND:paste" >> "$SENT_LOG"
+                      sim_set "stuck residue"; return 0 ;;
+    esac
+    printf '%s\n' "SEND:025" >> "$SENT_LOG"; return 0   # every keystroke is inert ⇒ scrub cannot win
+  }
+  local rc=0
+  CC_COMPOSER_SCRUB_ROUNDS=2 FIRE_PASTE_READBACK_TRIES=2 \
+    it2_paste_submit_verified it2 sid "/goal reply with DONE" 2>/dev/null || rc=$?
+  [ "$rc" -eq 4 ]
+  [ -f "$CC_COMPOSER_RESIDUE_DIR/sid" ]
+  run composer_residue_is_ours sid "stuckresidue"
+  [ "$status" -eq 0 ]                                  # the recycle gate can now attribute it
+}
+
+@test "scrub NEVER submits: no CR is sent on any path, cleared or refused" {
+  # The invariant the two pinned cases above hand over. A scrub that ever emitted a CR would
+  # submit the very residue it was asked to destroy — the mangle class, re-created by its cure.
+  _sim_setup; sim_set "line one" "line two here" "line three tail"
+  run composer_scrub_verified it2 sid
+  [ "$status" -eq 0 ]
+  # A count, not a negation: `! cmd` mid-test is unreachable under errexit and asserts nothing
+  # (scripts/bats-assert-liveness-lint.sh caught exactly that here). Only the LAST one is live.
+  [ "$(grep -c '\\r' "$SENT_LOG")" -eq 0 ]
+  # ...and the zero above is not vacuous: the send log CAN express a CR, proven right here.
+  hf_bounded it2 session send -s sid $'\r'
+  [ "$(grep -c '\\r' "$SENT_LOG")" -eq 1 ]
+  _sim_setup; sim_set "l1" "l2" "l3" "l4" "l5"
+  run composer_scrub_verified it2 sid 2
+  [ "$status" -eq 1 ]
+  ! grep -q '\\r' "$SENT_LOG"                          # final: the one live negation
 }
