@@ -381,6 +381,21 @@ the model — naming the incumbent and the self-close command. Tests: 26 new (`w
 `worker-claim-gate-coverage` 8), 54/54 green across the four affected suites, six mutation controls
 run and confirmed RED.
 
+⚠️ **CORRECTED 2026-09-10 (backlog `f5c3cfb86e2e`) — "denied its writes" was true of the TOOL and
+false of the FLEET, for a month.** The sentence above names `PreToolUse | Write|Edit|MultiEdit`, and
+every word of it holds on that surface. But auto mode's standing session instruction is *"make file
+changes with sed, heredocs, or short scripts, rather than using the dedicated Read, Edit, or Write
+tools"* — so in the mode this box actually runs, the routine edit never crosses that matcher at all.
+The gate was correct and its population was nearly empty, which is the same shape §S4.2 records for
+the in-process depth cap and for the per-session spawn counter that reset at exactly the edge the
+cascade traversed. MEASURED: pane 71 appended two blocks to `hooks/lib/mailbox-pending.sh` in
+`wt-0366d5cc7b87` through a `python3 - <<'PY'` heredoc under Bash with no refusal, while holder pane
+70 was mid-edit on that same file, producing a duplicate `mailbox_peek_from` that shadowed the
+holder's. `cc_worker_claim_admit` run by hand in that same shell returned REFUSED — coverage, not
+logic. A FOURTH consumer now sits on `PreToolUse|Bash` for write-shaped commands
+(`hooks/validate-bash.sh`, cases 22-26 of `tests/worker-claim-gate-coverage.bats`), so the claim
+above is true of the fleet's real write path as well as the tool's.
+
 **Three things it deliberately does NOT do, each because the evidence refutes it:**
 
 1. **It does not gate the spawn on the claim.** That is the item's first suggested remedy and
@@ -570,6 +585,16 @@ mailbox stand-down *"needs a turn boundary a session deep in a tool loop never r
 `PreToolUse` deny **is** that turn boundary — it comes back as the `tool_result` of the call the
 session just made — so the deny text reaches the model inside the loop the mailbox could not. The
 enforcement point chosen for the write turned out to carry the message too.
+
+⚠️ **AND THAT IS TRUE EXACTLY WHERE THE DENY FIRES (2026-09-10, backlog `f5c3cfb86e2e`).** The
+finding is sound and is not withdrawn; what it rests on is the deny actually reaching the session.
+On the surface this paragraph was written about — the Write/Edit tools — it did. On a Bash-driven
+edit in auto mode it did not, because no term gated that occasion until the fourth consumer landed,
+so for that month the stand-down channel was SILENT on the commonest write path in the fleet. The
+correction is the one at §S4.1 above: the mechanism was never wrong, its coverage was. Worth keeping
+as a shape — a refutation that rests on an enforcement point inherits that point's coverage, and
+inherits it silently, because nothing re-checks a closed row when the traffic moves to a surface the
+row never named.
 
 🚨 **Do not build the session-stop this item asks for.** The only actuator available without a C10
 settings change is `validate-bash.sh` (already registered on `PreToolUse|Bash`), i.e. deny every Bash
