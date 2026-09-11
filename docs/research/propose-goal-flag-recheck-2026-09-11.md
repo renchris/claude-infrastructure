@@ -62,6 +62,17 @@ so the same file is checked against the per-key census A12-skeptic2 established:
 **ABSENT** · `tengu_umber_kestrel` **ABSENT**. All four values reproduce. This is a **sixth**
 independent environment agreeing with the desk's four config dirs and yesterday's VM.
 
+> **CORRECTED 2026-09-11 by `docs/research/propose-goal-row-park-2026-09-11.md` §3.1 — "all four
+> values reproduce" is REFUTED for `tengu_umber_kestrel`, and the sentence overstates the control.**
+> Three of the four reproduce. The fourth was already on record as varying per identity — A12-skeptic2
+> measured it **F / F / T / F / T** across five files — and a seventh environment reads it **present
+> and `false`** where this note read ABSENT. The claim is left here because it is the record of what
+> was believed; what it should have said is that the control has three stable members and one
+> deliberately varying one. That is the STRONGER reading: a control set that never moves cannot tell a
+> live cache from a frozen artifact, and this one moves in a direction the instrument renders
+> correctly (`has()`, so present-and-false is `false`, not `ABSENT` — §4 below). The
+> `tengu_propose_goal` verdict is untouched: ABSENT in all seven.
+
 ## 2. The symbol moved again, one release later — §4 confirmed by event
 
 Yesterday's §4 prescribed *"cite the gate by its argument, never by its symbol or offset"*, on the
