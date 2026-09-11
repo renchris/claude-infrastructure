@@ -24,13 +24,26 @@
 # not `origin/main`, which advances past this fix on landing and would compare the fix to itself.
 
 BASE_SHA="bd5eab33e"   # immutable ancestor of origin/main; carries the pre-fix bin/cc-dispatch
+# THE LABEL CONTROL (cases 8-12). 9465e0119 is the origin/main tip the per-id CAUSE was cut from —
+# an immutable ancestor once that lands — and it journals every unplaced id with ONE fixed reason,
+# "the wave planner placed no slot for it and no arm refused it", whatever actually let it go.
+LABEL_BASE_SHA="9465e0119"
 
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  DISP="$REPO/bin/cc-dispatch"
+  # CC_DISPATCH_UNDER_TEST — the RED-PROOF seam, mirroring tests/cc-wave-plan.bats: point it at a
+  # pristine or mutated binary to re-run the proof that a case FAILS without the change it guards.
+  DISP="${CC_DISPATCH_UNDER_TEST:-$REPO/bin/cc-dispatch}"
   [ -x "$DISP" ] || skip "bin/cc-dispatch not found at $DISP"
   C="$BATS_TEST_TMPDIR/case"
-  mkdir -p "$C/stubs" "$C/home" "$C/pristine"
+  mkdir -p "$C/stubs" "$C/home" "$C/pristine" "$C/prelabel"
+  git -C "$REPO" archive "$LABEL_BASE_SHA" bin/cc-dispatch 2>/dev/null | tar -x -C "$C/prelabel"
+  PRELABEL="$C/prelabel/bin/cc-dispatch"
+  chmod +x "$PRELABEL" 2>/dev/null || true
+  if [ ! -x "$PRELABEL" ]; then
+    echo "cc-dispatch-reconcile.bats: cannot recover the pre-label control from $LABEL_BASE_SHA — cases 8-12 would compare against nothing." >&2
+    return 1
+  fi
   export HOME="$C/home"          # hermetic: nothing here may read or write the operator's live ~/
 
   git -C "$REPO" archive "$BASE_SHA" bin/cc-dispatch 2>/dev/null | tar -x -C "$C/pristine"
@@ -68,6 +81,13 @@ EOF
 items='[]'
 while [ \$# -gt 0 ]; do case "\$1" in --items) items="\$2"; printf '%s' "\$2" > "$C/wave.json"; shift 2 ;; *) shift ;; esac; done
 rc="\${STUB_WP_RC:-0}"
+# STUB_WP_CAP — the producer's capacity wall: a wave wider than the cap walls rc 4 and names the
+# bound on the wire (bin/cc-wave-plan wall_capacity), so the dispatcher re-plans at that width.
+if [ -n "\${STUB_WP_CAP:-}" ] && [ "\$(printf '%s' "\$items" | jq length)" -gt "\$STUB_WP_CAP" ]; then
+  echo "cc-wave-plan: WALL[capacity] — stub wave exceeds capacity. capacity=\$STUB_WP_CAP. No plan emitted." >&2
+  exit 4
+fi
+[ "\$rc" = 6 ] && echo "cc-wave-plan: WALL[unknown] — claude-accounts --rank general exceeded the 20s bound. Retry next pass." >&2
 if [ "\$rc" = 0 ]; then
   case "\${STUB_WP_PLAN:-full}" in
     empty) printf '[]' ;;
@@ -203,4 +223,77 @@ unplaced_recs() { jq -rs '[.[]|select(.action=="unplaced")]|length' "$C/idl.json
   [ "$(sum unplaced)" -eq 6 ]
   [ "$(sum failed)" -eq 0 ]
   [ "$(jq -rs '[.[]|select(.action=="failed")]|length' "$C/idl.jsonl")" -eq 0 ]
+}
+
+# ── WHY an admitted id went unfired — the cause is named by the arm that let it go ────────────────
+# Measured 2026-09-01..11: 658 unplaced rows over 156 passes, each joined to the wave planner's own
+# records inside its pass window. The single fixed reason those rows carried — "the wave planner
+# placed no slot for it and no arm refused it" — was false for every class present: 417 rows were a
+# WALL[unknown] (the account oracle timed out), 140 were surplus past a WALL[capacity] re-plan, 92
+# were PLACED and then stopped by MAX_SPAWN, 9 were a WALL[capped]. Zero were a free planner slot
+# left unused, so this is a label defect, not a placement bug. Each case below replays one class and
+# is RED against the pre-label artifact ($LABEL_BASE_SHA), which writes no cause at all.
+causes() { jq -rs '[.[]|select(.action=="unplaced")|.cause // "NONE"]|group_by(.)|map("\(.[0])=\(length)")|join(",")' "$C/idl.jsonl"; }
+reasons_all() { jq -es --arg re "$1" '[.[]|select(.action=="unplaced")]|length > 0 and all(.reason|test($re))' "$C/idl.jsonl" >/dev/null; }
+
+@test "8 ids the planner PLACED but MAX_SPAWN cut are named spawn-cap — not 'placed no slot'" {
+  seed_items 4
+  fresh; CC_DISPATCH_CEILING=4 CC_DISPATCH_MAX_SPAWN=2 "$DISP" --once >/dev/null 2>&1
+  [ "$(sum fired)" -eq 2 ]
+  [ "$(sum unplaced)" -eq 2 ]
+  [ "$(causes)" = "spawn-cap=2" ]
+  reasons_all 'MAX_SPAWN=2'
+  [ "$(jq -rs '[.[]|select(.action=="summary")][-1].unplaced_by_cause|tojson' "$C/idl.jsonl")" = '{"spawn-cap":2}' ]
+  # RED: the same fixture on the pre-label tree — the same two rows, each claiming the planner
+  # "placed no slot" for an id the planner had in fact placed.
+  fresh; CC_DISPATCH_CEILING=4 CC_DISPATCH_MAX_SPAWN=2 "$PRELABEL" --once >/dev/null 2>&1
+  [ "$(sum unplaced)" -eq 2 ]
+  [ "$(causes)" = "NONE=2" ]
+  reasons_all 'placed no slot'
+}
+
+@test "9 a WALL[unknown] is named as the wall — the oracle refused them, not the planner" {
+  seed_items 5
+  fresh; CC_DISPATCH_CEILING=5 STUB_WP_RC=6 "$DISP" --once >/dev/null 2>&1
+  [ "$(sum unplaced)" -eq 5 ]
+  [ "$(causes)" = "wall-unknown=5" ]
+  reasons_all 'WALL\[unknown\]'
+  fresh; CC_DISPATCH_CEILING=5 STUB_WP_RC=6 "$PRELABEL" --once >/dev/null 2>&1
+  [ "$(sum unplaced)" -eq 5 ]
+  [ "$(causes)" = "NONE=5" ]
+  reasons_all 'no arm refused it'
+}
+
+@test "10 surplus cut by a WALL[capacity] re-plan is named capacity-surplus, with its bound" {
+  seed_items 5
+  fresh; CC_DISPATCH_CEILING=5 STUB_WP_CAP=2 "$DISP" --once >/dev/null 2>&1
+  [ "$(sum fired)" -eq 2 ]
+  [ "$(sum unplaced)" -eq 3 ]
+  [ "$(causes)" = "capacity-surplus=3" ]
+  reasons_all 'capacity=2'
+  fresh; CC_DISPATCH_CEILING=5 STUB_WP_CAP=2 "$PRELABEL" --once >/dev/null 2>&1
+  [ "$(sum unplaced)" -eq 3 ]
+  [ "$(causes)" = "NONE=3" ]
+}
+
+@test "11 EQUIVALENCE GUARD: rc 0 without the id keeps the old wording — the one case it was true" {
+  # The reason text is green in BOTH arms by design: this is the class the old label described
+  # correctly (pass 20260824T083341Z-71481). What the case guards is that it is now NAMED — the
+  # mutant that deletes the not-placed note turns this red as `unattributed`.
+  seed_items 3
+  fresh; CC_DISPATCH_CEILING=3 STUB_WP_PLAN=half "$DISP" --once >/dev/null 2>&1
+  [ "$(causes)" = "not-placed=2" ]
+  reasons_all 'no arm refused it'
+}
+
+@test "12 summary.unplaced_by_cause tallies exactly the per-id causes and sums to unplaced" {
+  seed_items 5
+  for knob in STUB_WP_PLAN=empty STUB_WP_RC=6 STUB_WP_CAP=2 CC_DISPATCH_MAX_SPAWN=1; do
+    fresh; env CC_DISPATCH_CEILING=5 "$knob" "$DISP" --once >/dev/null 2>&1
+    run jq -rs '([.[]|select(.action=="summary")][-1]) as $s
+      | ([.[]|select(.action=="unplaced")|.cause]|group_by(.)|map({(.[0]):length})|add // {}) as $r
+      | ($s.unplaced > 0) and ($s.unplaced_by_cause == $r) and (([$s.unplaced_by_cause[]]|add) == $s.unplaced)' "$C/idl.jsonl"
+    [ "$status" -eq 0 ]
+    [ "$output" = true ]
+  done
 }

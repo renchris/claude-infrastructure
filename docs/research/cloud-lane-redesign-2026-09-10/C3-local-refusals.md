@@ -162,7 +162,7 @@ the stderr body). Fixture-replay items removed per §6.9; the row totals agree w
 | **Quota — 5-hour session cutoff (`S_CUT = 0.85`)** | **THE DOMINANT BINDING TERM TODAY** | 14:28–16:17Z: `next:s100 next4:s100 next3:s100 next2:s1` ⇒ `ranked_n=1`, wave capacity **2 slots** against 5–8-item waves, 8 consecutive `wave-overflow` walls |
 | **Account routing INSTRUMENT (router blind)** | **BINDS, and is the largest single wall class** | 145 of 185 walls: `oracle-timeout` 99 + `rank-data-unavailable` 46. Each is `action: retry-next-pass`, so it costs a whole pass |
 | **Pane anchor (dead iTerm2 ring pane)** | **BINDS, 09-07 → 09-10** | 55 of 80 `failed` rows name *"ring pane N not found in iTerm2 (settled + retried) anchor gone; NOT firing into a random window"*; + 13 *"REFUSING to mint a fresh window"*; **69 of 297 real fire attempts (23.2 %) exited rc 1**, 0 of them before 09-07 |
-| **Admitted-but-never-placed** | **BINDS, and is rising** | 665 `action:unplaced` rows, every one *"the wave planner placed no slot for it and no arm refused it — re-admitted next pass"*; 70 → 158/day, worst on 09-10 |
+| **Admitted-but-never-placed** | **BINDS, and is rising** — ⚠️ **REFUTED as a placement term 2026-09-11, see §8**: it is a LABEL over four other terms, not a term of its own | 665 `action:unplaced` rows, every one *"the wave planner placed no slot for it and no arm refused it — re-admitted next pass"*; 70 → 158/day, worst on 09-10 |
 
 **One-line verdict:** *the local lane is capped by ACCOUNT ELIGIBILITY (5h cutoff → `ranked_n` → 2
 slots/wave) and by PANE ANCHORS — not by the box, and not by weekly quota except on `next`.*
@@ -411,3 +411,31 @@ not optional.**
   production accounts log.** 145 wave-plan passes were lost to this. Not in my scope to fix; flagged.
 - **Cloud quota-pool hypothesis is UNRESOLVED and cannot be resolved from this box's history** —
   no cloud fires in the window, no measurement in the repo. §5 gives the discriminating test.
+
+---
+
+## 8. CORRECTIONS — 2026-09-11 (the wave planner's two walls, measured and fixed)
+
+### 8a. "Admitted-but-never-placed" is a label, not a binding term
+
+The row's own reason text was the whole evidence for §2's verdict, and it was never tested. The
+question that separates a placement bug from queue arithmetic is whether the planner had a FREE
+slot when the row went unplaced. Each of the **658** `action:unplaced` rows still in the IDL
+(**156 passes**, 2026-09-01..11) was joined to the wave planner's own records inside its pass
+window `[pass-id start, summary ts]`:
+
+| rows | passes | what actually let the row go |
+|---|---|---|
+| **417** | 88 | a `WALL[unknown]` refused the whole wave — the account oracle timed out (§8b) |
+| **140** | 31 | surplus past the `capacity=<n>` a `WALL[capacity]` reported, cut by the dispatcher's re-plan |
+| **92** | 36 | the planner **placed** them; the spawn loop stopped at `MAX_SPAWN=2` (a per-pass cap, `bin/cc-dispatch:169-172`) |
+| **9** | 1 | a `WALL[capped]` refused the wave |
+
+**Zero** were a free planner slot left unused, so there was no placement bug. The fixed reason
+text was false for all four classes, and it hid the dominant one (the oracle wall, 63%). The fix
+makes each arm name its cause on the row (`cause` ∈ `wall-<verdict>` · `capacity-surplus` ·
+`spawn-cap` · `not-placed` · `unattributed`) and adds `unplaced_by_cause` to the pass summary, so
+this census is now one jq read. The ceilings are named, not changed: `MAX_SPAWN=2` is deliberate.
+Note what that does to §4(iii)'s *"the per-account per-wave allowance is"* the cap: on 36 passes
+the planner placed more than the dispatcher would ever spawn, so for those passes the binding term
+was `MAX_SPAWN`, not the planner's allowance.
