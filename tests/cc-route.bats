@@ -20,6 +20,7 @@ effort_defaults:
 YAML
   cat > "$BATS_TEST_TMPDIR/accounts-stub" <<'STUB'
 #!/bin/bash
+[ -n "${STUB_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$STUB_ARGV_LOG"
 if [ "${1:-}" = "--route" ]; then
   case "$2" in
     fable)   rc="${STUB_FABLE_RC:-0}";   name="next4" ;;
@@ -52,6 +53,25 @@ STUB
   # count moves WITH the addition, deliberately — that is the whole point of pinning it: a suite
   # whose check count can drift silently cannot tell "26 ran" from "19 ran and 7 were skipped".
   [ "$n_ok" -eq 26 ]
+}
+
+@test "CC_ROUTE_ACCOUNTS_MAX_AGE rides the inner --route call as --max-age; unset ⇒ argv unchanged" {
+  # The wave planner's grace-band read (bin/cc-wave-plan) reaches claude-accounts THROUGH this tool,
+  # so the pass-through is the half of that fix that lives here. The unset arm is the load-bearing
+  # one: every other caller must keep the exact TTL-only argv it had before.
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv"
+  CC_ROUTE_ACCOUNTS_MAX_AGE=600 run "$T" lead
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_ARGV_LOG")" = "--route general --max-age 600" ]
+  : > "$STUB_ARGV_LOG"
+  run "$T" lead
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_ARGV_LOG")" = "--route general" ]
+  # a malformed value degrades to the STRICTER TTL read — never to a wider band, never an error
+  : > "$STUB_ARGV_LOG"
+  CC_ROUTE_ACCOUNTS_MAX_AGE=10m run "$T" lead
+  [ "$status" -eq 0 ]
+  [ "$(cat "$STUB_ARGV_LOG")" = "--route general" ]
 }
 
 @test "lead → one-line JSON plan {slot,model,account,lead_effort,reason} on stdout" {
