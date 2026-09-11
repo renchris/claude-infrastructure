@@ -366,9 +366,10 @@ ALLOWLIST="${CC_PIPEFAIL_ALLOWLIST:-$ALLOWLIST_DEFAULT}"
 # applies both AFTER the per-file scan, to its output, and a carried file contributes exactly the
 # output it earned, which is none.
 #
-# THE TWO INTERPRETERS ARE KEYED BY THEIR BINARY, not by a version banner: gate-memo's salt covers
-# shellcheck, bash, python3 and git and neither of these, and a banner can survive a rebuild. Hashing
-# /usr/bin/awk (~300 KB) costs one fork per RUN, not per file.
+# THE TWO INTERPRETERS ARE KEYED BY THEIR BINARY, not by a version banner: gate-memo's salt covers the
+# static analyser, bash, python3 and git and neither of these, and a banner can survive a rebuild.
+# Hashing /usr/bin/awk (~300 KB) costs one fork per RUN, not per file. (No line of this header may
+# BEGIN with the analyser's own name: it parses as a directive, SC1073, and aborts the whole file.)
 #
 # ONLY "EMITTED NOTHING, AND EVERY PROBE ANSWERED" IS EVER RECORDED (gate-memo invariant 1). A file
 # with hits re-runs and re-prints on every run, so a grandfathered site is never replayed from a cache.
