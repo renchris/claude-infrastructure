@@ -1563,7 +1563,7 @@ shifting from 143 to 0.
 
 ### A9.5 · Landed, deployed, first live readings (2026-09-07T05:30-06:20Z)
 
-Landed `a7390066b` (the lane + the plist SSOT/c10) and `ee6740491` (the migration verifies the LOADED
+Landed `a7390066b` (the lane + the plist SSOT/c10) and `42b802d3` (the migration verifies the LOADED
 job); `scripts/deploy-live.sh --auto` converged the live layer `8a40cd3fa → a7390066b` (DEGRADED mode:
 no GREEN stamp among the newest 200, newest NOT-RED taken under the 6 h budget) after the shared
 checkout's `core.bare=true` was unset — deploy-live's own `checkout-not-a-worktree` remedy; the
@@ -1593,8 +1593,16 @@ cloud-retire-terminal: examined=331 gone=23 landed=8 superseded=142 conflict=126
 read like the SSOT (no `ProcessType`, `taskpolicy -c utility` present) while `launchctl print` still
 showed the old argv and the running sweep still sat at PRI 4. Migration 0016's verifier and its
 already-applied arm both read the file — they would have retired the operator step with the task
-role still live. Both now read the loaded job's argv (`ee6740491`; memory:
+role still live. Both now read the loaded job's argv (`42b802d3`; memory:
 gate-on-presence-is-cleared-by-any-string, in a new costume).
+
+> **Citation corrected 2026-09-07** (off-box cloud fire, row `64c150ba2a8e`). Both lines above cited
+> `ee6740491`, which `git cat-file -t` resolves **nowhere in this repository** — it was the pre-rebase
+> sha, and the content landed as `42b802d3` (identical subject, authored 2026-09-07T00:45Z, an
+> ancestor of `origin/main`). The verdict of this section is unaffected; only its evidence chain was
+> unreadable. Caught by an off-box reader who had no local tree to resolve it from — the S5 rule
+> ("a sha on no branch resolves in your checkout and nowhere else") demonstrated on a live plan.
+> Detail: `docs/research/backlog-zero-close-2026-09-07.md` §5.3.
 
 **What the next session should see, and when.** The last old-code sweep tick was still running at
 06:20Z (pid 51906, PRI 4, ~30 min in); the first new-code tick spawns the lane at its start, and the

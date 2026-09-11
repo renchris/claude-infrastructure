@@ -1,6 +1,8 @@
 ---
-status: in-progress
+status: complete
 created: 2026-09-04
+closed: 2026-09-07
+closed-evidence: docs/research/backlog-zero-close-2026-09-07.md (§7 below)
 supersedes-for-operation: BACKLOG_DRAIN_24_7.md §4.1 (the recycle-fire template — its invariants are replaced by the generated brief, see §3), DRAIN_CIRCUIT_2026-09-01.md (its measurements stand; its W3 "re-aim the local lane" is delivered here)
 ---
 
@@ -618,3 +620,55 @@ named here and left for a session with that mandate; the recurrence brake lives 
   recycle and carry the fix. The blocked count itself drifted 204 → 216 across the day from session
   `needs` and re-blocks by stale worktrees, which is the population this section leaves to hand
   adjudication; the class this session owned reads 0.
+
+## §7 CLOSE — DONE (adjudicated against trunk tip `902ac519f`, 2026-09-07, off-box cloud fire on row `64c150ba2a8e`)
+
+**The frontmatter was the stale thing.** This plan read `in-progress` with 24 of 24 sections
+scanning `PENDING`, while all **20** commits it cites are ancestors of `origin/main` and every
+mechanism §3/§5/§6 describes is present in trunk *content*. Full adjudication, per-sha and
+per-mechanism: **`docs/research/backlog-zero-close-2026-09-07.md`**.
+
+The sections scan `PENDING` for a parser reason, not a work reason: `plan-phase-scan.sh` reads `DONE`
+or a commit hash **in the heading**, which measurement and status-log headings do not carry. Nothing
+in §1–§6 names remaining work.
+
+| half of the mandate | state | evidence |
+|---|---|---|
+| local 24/7 drain | **delivered, live** | W1 `89a020f08` → W5's self-perpetuating chain (§4 17:20Z) → §5's close floor `c46af65b7` → §6's blocked-floor producer `3c2d73c4c`, byte-proven live 2026-09-06T23:33Z (§6.7) |
+| cloud 24/7 drain | **delivered; ongoing ownership delegated** | W3's five commits are ancestors of trunk; `docs/plans/CLOUD_BACKLOG_PIPELINE.md` reads `status: complete`, and its §A9.5 records the deployed retire pass settling 299 of 331 declarations at 2026-09-07T05:30–06:20Z |
+| the frozen scope's proof (`closed ≥ filed`) | **met when last read; not re-readable off-box** | §5.1 (09-05T03:47Z, rolling 7 d filed 137 / closed 205 / **net −68**) and §6.7 (09-06T23:45Z, 8 closes on the re-keyed ids, re-land rows in `blocked` 48 → 0) |
+
+**Why `complete` rather than "open until the metric is re-read."** A metric holding is a continuing
+measurement, not a task. LIVE rose 489 → 506 across 09-06 and this box (a cloud VM) cannot read the
+store, so the number is not re-read here — but a plan kept open until a number stays good forever is
+exactly the *"parking state with a cheap entrance and no scheduled exit"* §6.2 named as the
+generator. The desk's re-read is `bash scripts/backlog-telemetry.sh`; a reversal is a new mandate,
+not an unfinished section of this one.
+
+The flip is mechanism, not bookkeeping: `find-plan.sh` `list_open` skips `complete|superseded`
+(:108), so this plan stops minting new `plan-open` rows, and clause (a) of the stored falsifier
+(`plan-phase-scan.sh --falsify` → `find-plan.sh --status`) now returns `FALSIFIED`, retracting row
+`64c150ba2a8e` on its next premise re-run.
+
+### §7.1 Two corrections this close makes to the sections above
+
+- **§5.5's forward pointer is RETRACTED, not deferred.** It leaves *"re-keying that falsifier on the
+  branch's patch-ids"* as where the amend case *"lives"*. The falsifier it would re-key **is**
+  `scripts/land-content-verify.sh`, whose header records patch-id as measured unfit for this exact
+  job: *"`git cherry` (patch-id) — wrong in BOTH directions: it cleared 3 refs that still held
+  residue, and convicted `0a131da73` whose every path was blob-identical to trunk."* The re-key would
+  trade a bounded false-*strand* for a documented false-*clear*, and a false clear here is the
+  failure the oracle exists to prevent (*"actioning four of them would have REVERTED trunk"*). The
+  amend case is a design limit of a content-superset oracle with a named cost — **3 rows in 167
+  (1.8%)**, below the ±70/day noise — reachable by neither rescue arm (SUPERSEDED needs trunk to have
+  once carried the ref's whole-file blob; RELOCATED needs trunk to be a multiset superset of its
+  lines). Not an open task with a known fix.
+
+- **§5.5's `45 genuinely unlanded` and §6.2's `47` are patch-id-derived upper bounds, not content
+  verdicts.** Both were measured with `git cherry origin/main <ref>` — the instrument the paragraph
+  above documents as wrong in both directions. **The §6 re-key was safe anyway, and the reason is the
+  direction:** it moved rows `blocked → open`, the *preserving* direction, so the next drain link
+  re-adjudicated each by content (§6.7: 6 closed MOOT reasoning *"main is a strict SUPERSET of the
+  ref"*). Had that instrument been used to **close** them, its documented false-clear rate would have
+  stranded real work silently. The content verdict for any single row is
+  `bash scripts/land-content-verify.sh <ref> --no-fetch`.
