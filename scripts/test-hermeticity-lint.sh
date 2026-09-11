@@ -1879,6 +1879,34 @@ in_own() {  # $1=path the lint knows · $2=own-set text · $3=1 if an own-set wa
 # to the script blob: `CC_HERM_SEAM_ALLOWLIST=…` changes six suites' verdicts without changing one
 # byte of this file, and a key that only fingerprinted the file would serve a stale green to the
 # next caller who set it. Same for the five rule switches and the two table roots.
+# ROOT-RELATIVE TABLES — what lets the memo carry across worktrees at all (2026-09-11, follow-on 3 of the
+# cloud-lane redesign). build_seam_table / build_env_table walk "$root"/bin/* etc., so every row used to
+# BEGIN with the checkout's ABSOLUTE path, and both table roots were hashed as themselves. Every worktree
+# therefore minted its own key, and a land from a fresh worktree — most lands — carried nothing another
+# worktree had earned, from a store every worktree of the repo already shares. Measured: a real precheck
+# carried 0 of 656 suites (85.8s, the gate's second-largest arm) against 69 checker dirs of this shape
+# minted in the previous 24h; tests/herm-memo-worktrees.bats reproduced it as 0 of 12 before this change.
+#
+# EXACT, not approximate: the per-suite decision reads a row ONLY through seam_names_tool's
+# "${s_tool#"$SEAM_ROOT/"}" (resp. ENV_ROOT) — the RELATIVE path — and the variable name. s_cls and s_def
+# reach nothing but a finding's wording, and a finding is never cached. So two checkouts whose relative
+# tables match give every suite the same verdict. A root that is NOT this lint's own (the selftest points
+# them at fixture trees) is still hashed as itself, the conservative direction; and the relative rows are
+# still IN the key, so a changed table still invalidates (the suite's last case pins that half).
+# Per-row `${line#"$2/"}`, never `${table//"$2/"/}`: bash 3.2 mangles a quoted pattern in the global form
+# (measured — it printed `"//bin/tool`), while the prefix form is literal even with `[` in the path.
+herm_rel_root() {  # $1=a table root → "<root>" when it is this lint's own ROOT, else the path itself
+  if [ "$1" = "$ROOT" ]; then printf '<root>'; else printf '%s' "$1"; fi
+}
+herm_rel_table() {  # $1=table text · $2=the root it was built from → each row's leading "$2/" removed
+  local line out=""
+  while IFS= read -r line; do
+    out="$out${out:+
+}${line#"$2/"}"
+  done <<< "$1"
+  printf '%s' "$out"
+}
+
 herm_memo_arm() {  # $1 = rule 1's allowlist text · $2… = the EXACT ordered suite population
   HERM_MEMO_OK=0
   [ "${CC_HERM_MEMO:-on}" != "off" ] || return 1
@@ -1899,10 +1927,10 @@ herm_memo_arm() {  # $1 = rule 1's allowlist text · $2… = the EXACT ordered s
     printf 'env_allow=%s\n'   "$ENV_ALLOW"
     printf 'admit_allow=%s\n' "$ADMIT_ALLOW"
     printf 'kick_allow=%s\n'  "$KICK_ALLOW"
-    printf 'seam_root=%s\n'   "$SEAM_ROOT"
-    printf 'env_root=%s\n'    "$ENV_ROOT"
-    printf 'seam_table=%s\n'  "$SEAM_TABLE"
-    printf 'env_table=%s\n'   "$ENV_TABLE"
+    printf 'seam_root=%s\n'   "$(herm_rel_root "$SEAM_ROOT")"
+    printf 'env_root=%s\n'    "$(herm_rel_root "$ENV_ROOT")"
+    printf 'seam_table=%s\n'  "$(herm_rel_table "$SEAM_TABLE" "$SEAM_ROOT")"
+    printf 'env_table=%s\n'   "$(herm_rel_table "$ENV_TABLE" "$ENV_ROOT")"
   )" || return 1
   # The checker-id carries the read set, so gate-memo's audited per-file primitives can be reused
   # unchanged: memo_file_key already folds in its own salt (the interpreters' versions) and the
