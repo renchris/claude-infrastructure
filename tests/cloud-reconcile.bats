@@ -437,6 +437,107 @@ Claude-Session: https://claude.ai/code/session_01ABCDEF"
   [ "$status" -ne 0 ]
 }
 
+@test "the attribution block is dropped even when a (cherry picked from …) line shares its paragraph" {
+  # B2-refusal-autopsy.md §iv-A, shas 60eaebef7 / c52af905f. strip_trailer_block() demands the final
+  # paragraph be EXACTLY what `interpret-trailers --parse` returned (n != nt ⇒ exit 1); `-x` adds a
+  # third non-blank line to a 2-trailer paragraph, so the strip declines and the reconciler then
+  # blames the VM for text it never found. The hook names both lines by number — cut those.
+  install_real_msg_hook
+  push_branch_msg claude/vmcherry "$VM_EMAIL" \
+"docs(research): a thing the VM wrote
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01ABCDEF
+(cherry picked from commit deadbeefdeadbeefdeadbeefdeadbeefdeadbeef)"
+  decl cloud-vc claude/vmcherry
+  orig="$(remote_sha claude/vmcherry)"
+
+  CONFIRM=1 run cr --land claude/vmcherry
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  landed_branches | /usr/bin/grep -q '^claude/vmcherry$'
+
+  msg="$(git -C "$REPO" log -1 --format=%B refs/heads/claude/vmcherry)"
+  printf '%s\n' "$msg" | /usr/bin/grep -qx 'docs(research): a thing the VM wrote' || false
+  # what the commit SAYS survives the cut — only the two blocked trailers went
+  printf '%s\n' "$msg" | /usr/bin/grep -q '^(cherry picked from commit deadbeef' || false
+  if printf '%s\n' "$msg" | /usr/bin/grep -qi 'co-authored-by'; then false; fi
+  if printf '%s\n' "$msg" | /usr/bin/grep -q 'claude\.ai/code'; then false; fi
+  printf '%s\n' "$msg" | /usr/bin/grep -qx "Original-commit: $orig" || false
+}
+
+@test "the attribution block is dropped when a PROSE line shares its paragraph — git parses no trailers there" {
+  # B2 §iv-A, sha 4b4e47343: with prose in the paragraph `interpret-trailers --parse` returns ZERO,
+  # so the positional strip exits at its first guard (nt == 0) and never looks further. The hook
+  # still names the two blocked lines, which is the whole point of asking it.
+  install_real_msg_hook
+  push_branch_msg claude/vmprose "$VM_EMAIL" \
+"fix(x): a thing the VM wrote
+
+Not run in this container: the full suite.
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01ABCDEF"
+  decl cloud-vp claude/vmprose
+  orig="$(remote_sha claude/vmprose)"
+
+  CONFIRM=1 run cr --land claude/vmprose
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  landed_branches | /usr/bin/grep -q '^claude/vmprose$'
+
+  msg="$(git -C "$REPO" log -1 --format=%B refs/heads/claude/vmprose)"
+  printf '%s\n' "$msg" | /usr/bin/grep -qx 'fix(x): a thing the VM wrote' || false
+  printf '%s\n' "$msg" | /usr/bin/grep -qx 'Not run in this container: the full suite.' || false
+  if printf '%s\n' "$msg" | /usr/bin/grep -qi 'co-authored-by'; then false; fi
+  if printf '%s\n' "$msg" | /usr/bin/grep -q 'claude\.ai/code'; then false; fi
+  printf '%s\n' "$msg" | /usr/bin/grep -qx "Original-commit: $orig" || false
+}
+
+@test "the attribution block is dropped when it is NOT the final paragraph" {
+  # B2 §iv-A, shas d17d97d19 / f80ccd504: the block sits mid-message with prose after it, so the
+  # final paragraph the positional strip measures is ordinary prose and it declines. Position is
+  # not the property — being named by the hook is.
+  install_real_msg_hook
+  push_branch_msg claude/vmmid "$VM_EMAIL" \
+"chore(y): a thing the VM wrote
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01ABCDEF
+
+RE-LAND. The first attempt hit a rebase conflict against trunk."
+  decl cloud-vm2 claude/vmmid
+  orig="$(remote_sha claude/vmmid)"
+
+  CONFIRM=1 run cr --land claude/vmmid
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  landed_branches | /usr/bin/grep -q '^claude/vmmid$'
+
+  msg="$(git -C "$REPO" log -1 --format=%B refs/heads/claude/vmmid)"
+  printf '%s\n' "$msg" | /usr/bin/grep -qx 'chore(y): a thing the VM wrote' || false
+  printf '%s\n' "$msg" | /usr/bin/grep -q '^RE-LAND\. The first attempt' || false
+  if printf '%s\n' "$msg" | /usr/bin/grep -qi 'co-authored-by'; then false; fi
+  if printf '%s\n' "$msg" | /usr/bin/grep -q 'claude\.ai/code'; then false; fi
+  printf '%s\n' "$msg" | /usr/bin/grep -qx "Original-commit: $orig" || false
+}
+
+@test "a blocked URL in BODY PROSE is refused, not cut — the hook's claude.ai/code arm is unanchored" {
+  # THE CENSORSHIP BOUNDARY, and the reason the cut is not simply "delete every line the hook
+  # named". `claude\.ai/code` matches mid-sentence, so a body paragraph citing a session URL is a
+  # line the hook names and this rewrite may NOT delete: re-attributing authorship is not editing
+  # what a commit says. Only trailer-shaped named lines are cut; everything else stays refused.
+  install_real_msg_hook
+  push_branch_msg claude/vmbodyurl "$VM_EMAIL" \
+"docs: a clean subject
+
+The measurement is written up at https://claude.ai/code/session_01ZZ and reproduces."
+  decl cloud-vb claude/vmbodyurl
+  orig="$(remote_sha claude/vmbodyurl)"
+
+  CONFIRM=1 run cr --land claude/vmbodyurl
+  [ "$status" -eq 70 ]
+  echo "$output" | /usr/bin/grep -q 'SUBJECT or BODY'
+  [ ! -s "$LAND_STUB_LOG" ]
+  [ "$(local_sha claude/vmbodyurl)" = "$orig" ]
+}
+
 @test "blocked text in the SUBJECT is refused, not silently edited — a rewrite re-attributes, it does not censor" {
   install_real_msg_hook
   push_branch_msg claude/badsubject "$VM_EMAIL" "docs: see https://claude.ai/code/session_01ZZ for the write-up"
