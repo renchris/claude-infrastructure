@@ -21,7 +21,7 @@ setup() {
 # Load the extensionless script as a python module.
 py() {
   python3 - "$TOOL" "$@" <<'PY'
-import importlib.util, sys
+import importlib.machinery, importlib.util, sys
 spec = importlib.util.spec_from_loader(
     "rt", importlib.machinery.SourceFileLoader("rt", sys.argv[1]))
 rt = importlib.util.module_from_spec(spec)
