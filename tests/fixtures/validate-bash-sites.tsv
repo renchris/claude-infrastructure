@@ -15,9 +15,19 @@
 #   (`grep -qE '[$`*?]'` in _rm_literal_assignment) is GONE: that single blanket refusal is what made
 #   the scratchpad rm-allowlist unreachable for a chained variable path, and it is replaced by `case`
 #   patterns, which are not grep sites. It was pinned EQUIVALENT, so no DIVERGENT counterexample was
-#   lost and the non-vacuity floor is untouched. S31/S28/S29/S30 only MOVED (1248->1268, 1289->1323,
-#   1304->1338, 1307->1341); their patterns and pinned verdicts are unchanged. Net: the hook has one
+#   lost and the non-vacuity floor is untouched. S31/S28/S29/S30 only MOVED (1772->1868, 1787->1883, 1790->1886); their patterns and pinned verdicts are unchanged. Net: the hook has one
 #   fewer grep on the hottest path in the fleet, which is the direction row 8942f3b1506d wanted.
+#
+# 2026-09-11 (row 120e8054eb98) — POPULATION CHANGE, recorded rather than absorbed. S33 is NEW: the
+#   substitution-aware extraction in `is_self_created_mktemp_target`, added with the self-created-temp
+#   permit. It is the sibling of S31 (same `${name}=` extraction in `_rm_literal_assignment`) with the
+#   alternation widened to admit a whole command substitution, so that `T=$(mktemp -d)` is no longer
+#   truncated at the first whitespace. MEASURED EQUIVALENT over the same 60 cases S31 scores, so it
+#   adds no DIVERGENT counterexample and the non-vacuity floor is untouched.
+#   S28/S29/S30 only MOVED (1772->1868, 1787->1883, 1790->1886) — the permit inserts 94 net lines at
+#   above them; S31 sits above the insertion and is unchanged. No pattern and no
+#   pinned verdict changed. THE LINE NUMBERS ARE THE POINT: this fixture is what turned a silent
+#   +96-line edit to the hook into a land-blocking RED, which is the behaviour it was built for.
 # proposes converting from `grep -qE` to bash-native `[[ =~ ]]`.
 #
 # Columns (TAB separated):
@@ -68,7 +78,8 @@ S24	1159	qE	raw	clause	lit	EQUIVALENT	[[:space:]]-(l|e)([[:space:]]|$)
 S25	1161	qE	raw	clause	lit	DIVERGENT	\buser\.(email|name)[[:space:]]+[^[:space:]]
 S26	1556	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+reset[[:space:]]+--hard\b
 S27	1562	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*[xX]
-S28	1772	qE	raw	token	syn	EQUIVALENT	^(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)(/|$)
-S29	1787	oE	nl	whole	lit	DIVERGENT	rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*[^[:space:];&|-][^[:space:];&|]*
-S30	1790	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
+S28	1868	qE	raw	token	syn	EQUIVALENT	^(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)(/|$)
+S29	1883	oE	nl	whole	lit	DIVERGENT	rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*[^[:space:];&|-][^[:space:];&|]*
+S30	1886	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
 S31	1717	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=[^[:space:];&|]*
+S33	1843	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=("?\$\([^()]*\)"?|[^[:space:];&|]*)
