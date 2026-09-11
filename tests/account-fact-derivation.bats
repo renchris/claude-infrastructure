@@ -386,9 +386,70 @@ assert abs(kf(row(k=8, k_work=None)) - 0.8) < 1e-9, kf(row(k=8, k_work=None))
 assert ca.k_src(row(k=None, k_work=None)) == "unmeasured"
 assert ca._excluded(row(k=None, k_work=None), R, cliff=False) == "concurrency-unmeasured"
 assert ca.reason_class(row(k=None, k_work=None), "concurrency-unmeasured") == "data"
+
+# INHERITED census (this sweep could not read ps; the last one could, inside the grace): the
+# router charges it under the RESIDENT cap, because it is a pane census — an older one.
+import time
+from datetime import datetime, timezone
+def asof(age_s):
+    return datetime.fromtimestamp(time.time() - age_s, timezone.utc).isoformat()
+st = row(k=None, k_work=None, k_stale=8, k_stale_as_of=asof(120))
+assert ca.k_src(st) == "panes-stale"
+assert ca.k_cap(st, R) == 40
+assert ca.k_eff(st) == 8
+assert ca._excluded(st, R, cliff=False) is None, "the fleet-wide abstention is back"
+assert ca._excluded(row(k=None, k_work=None, k_stale=40, k_stale_as_of=asof(120)),
+                    R, cliff=False) == "kmax-concurrency"
+# PAST the grace the same row is no instrument at all — the charge and the label expire together,
+# and they expire where the value is USED, not only where it was written.
+old = row(k=None, k_work=None, k_stale=8, k_stale_as_of=asof(4000))
+assert ca.k_panes(old) is None and ca.k_src(old) == "unmeasured"
+assert ca._excluded(old, R, cliff=False) == "concurrency-unmeasured"
+assert ca.k_shown(old) == "?" and ca.k_shown(st) == "8*"
+# a count with NO provenance cannot be aged, so it is refused: fail-closed, like an absent one
+assert ca.k_src(row(k=None, k_work=None, k_stale=8)) == "unmeasured"
 print("OK")'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *OK* ]] || false
+}
+
+@test "live-count: an INHERITED census reaches the router only — both k==0 gates still refuse" {
+  # The fifth instance of this file's shape, pre-empted rather than found in production. inherit_k
+  # widens ROUTING eligibility over a starved `ps` (desk-router-abstention-2026-09-01 §4), and the
+  # same number would be catastrophic in the two places that read the census as a LIVENESS PROOF:
+  # heal()'s rotation gate and handoff-fire.sh's Phase-1 relogin gate both redeem a refresh token
+  # only at k==0, and a token redeemed under N live sessions is a manufactured logout. So the
+  # inherited value lives in its OWN field and `row["k"]` stays None — this pins that, on both
+  # consumers, against the real spellings.
+  run python3 -c "$LOADCA"'
+import json, subprocess
+R = {"S_CUT": 0.85, "S_SOFT": 0.5, "SF_FLOOR": 0.05, "KMAX": 8, "KMAX_RESIDENT": 40,
+     "KFLOOR": 0.1, "MARGIN_H": 0.5, "EPS_H": 0.25, "WEEKLY_FLOOR": 0.005,
+     "FABLE_FLOOR": 0.02, "JB_BONUS": 1.25}
+row = {"acct": "next3", "session_pct": 10.0, "session_reset_h": 3.0, "weekly_pct": 20.0,
+       "k": None, "k_work": None, "auth": "token-invalid", "auth_actionable": True}
+import copy
+inherited = copy.deepcopy(row)
+assert ca.inherit_k(inherited, {"ts": __import__("time").time() - 30,
+                                "rows": {"next3": {"k": 6}}}) is True
+assert inherited["k_stale"] == 6
+# (1) the ROUTER: now eligible
+assert ca._excluded(inherited, R, cliff=False) is None
+# (2) heal(): reads its k_live ARGUMENT, and None is a refusal — an inherited row cannot supply it
+ok, why = ca.heal({"claude_bin": "/nonexistent"}, {"name": "next3"}, "rt", None)
+assert ok is False and "UNMEASURABLE" in why, (ok, why)
+# (3) the --json field handoff-fire reads is still null, so its own spelling says the word
+assert inherited["k"] is None
+print(json.dumps({"rows": [inherited]}))'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # handoff-fire.sh spells a null census as the WORD `unmeasured`, and its Phase-1 gate compares
+  # for equality to 0 — so unknown refuses by construction. Run ITS expression, not a paraphrase.
+  run bash -c 'printf "%s" "$1" | jq -r ".rows[] | [.acct, .auth, (if (.k | type) == \"number\" then .k else \"unmeasured\" end)] | @tsv"' _ "$output"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "$(printf 'next3\ttoken-invalid\tunmeasured')" ]
+  # ...and that expression is still the one in the script (a copy under assertion, not a fork).
+  run bash -c "grep -c 'if (.k | type) == \"number\" then .k else \"unmeasured\" end' \"\$1\"" _ "$HF"
+  [ "$output" -ge 1 ]
 }
 
 @test "KMAX: the SSOT carries both caps and the validator refuses an incoherent pair" {
