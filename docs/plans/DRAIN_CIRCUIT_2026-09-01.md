@@ -847,11 +847,73 @@ so it resolves on its own; it just cannot be *driven* from this side. `deploy-li
   retire ~25/day, land ~1/day** — a circuit that no longer stalls and still discards what it produces.
   **Falsifier:** if over any 7-day window after 2026-09-07 `sum(census.landed)/sum(census.retired)`
   exceeds 25 %, retract this characterisation. (4) is what makes that expression runnable.
+  > 🔻 **REFUTED IN PLACE 2026-09-11 by W10 — the words above stand as the record of what was
+  > believed.** Measured over the four complete days 09-07…09-10 from `origin`'s refs: **land ~1/day
+  > CONFIRMED** (1.25/day, 5 lands), **fire ~25/day REFUTED by 10x** (2.50/day, 10 fires, including a
+  > ZERO day on 09-08 and gaps of 31.1 h and 35.8 h), retire arm unreadable off-box. "No longer
+  > stalls" is false as stated — the stall became **lane-specific**: on 09-08 the cloud lane fired 0
+  > times while trunk took **130** commits. Note the arms' asymmetry: the one that was wrong is the
+  > one with no falsifier — the stated falsifier covers only the retire/land ratio and is still
+  > unrun. See §4's W10 entry and
+  > `docs/research/drain-circuit-w9-prediction-readjudication-2026-09-11.md`.
   ⚠️ **Dispatcher vintage:** the brief that fired this session came from `bin/cc-dispatch` blob
   `646b8a65…`, against `origin/main`'s `98ab38f5…` — **DIFFERENT**, so the dispatcher that fired it is
   behind trunk. A convergence fact about the deploy layer, not a defect in anything read here; every
   cure in (1) was asserted against `origin/main`, and (2) is read from refs the live dispatcher itself
   created.
+
+- **2026-09-11 — W10 (cloud VM, off-box): W9's prediction re-adjudicated — the LAND arm holds, the
+  FIRE arm is wrong by 10x, and the stall did not end, it went LANE-SPECIFIC.** No code changed;
+  the measurement is the deliverable. Full record:
+  `docs/research/drain-circuit-w9-prediction-readjudication-2026-09-11.md`.
+  **(0) Both controls first.** The ref census rests on "nothing deletes a branch", so that was
+  re-checked before anything was believed: refs dated ≤09-07 read **425 → 426**, exactly `+1` and it
+  lands on 09-07 itself — nothing removed, the population is still complete, an absent date is a real
+  absence. And the lane has not been RENAMED (this plan's §1.1 scar): every `claude/*` ref on the
+  remote is a well-formed `fire-<ts>` ref and no other prefix carries fires.
+  **(1) Land arm CONFIRMED**: predicted ~1/day, measured **1.25/day** (5 lands over the four complete
+  days 09-07…09-10). ⚠️ **Ancestry and `git cherry` are the WRONG instrument here** and say so loudly:
+  14 of 16 post-W9 branches read "not an ancestor", **W9's own branch among them** — whose content
+  this session read from `origin/main`. The desk lander REPLAYS commits, so the subject survives and
+  the patch-id does not (*cherry `+` ≠ absence*). Subject-on-trunk cross-checked against per-path
+  content is what works, with W9's branch as the positive control: `PARTIAL` by content, **landed** by
+  subject — the one distinction a content diff alone cannot make.
+  **(2) Fire arm REFUTED, 10x**: predicted ~25/day, measured **2.50/day** (10 fires / 4 days), with a
+  **zero day on 09-08** and gaps of **31.1 h** and **35.8 h** — shorter than the 58 h 45 m deadlock W9
+  broke, and the same kind. The cap is NOT what binds (2.5/day is nowhere near 50), so this does not
+  convict W9's retire pass; what failed is that **~25/day was read off the 09-03/09-04 burst and
+  carried forward as a property of the pipeline** — *requested rate ≠ delivered rate* aimed at an
+  observation instead of a cron line. **Cause deliberately left OPEN**: a drained backlog (good) and
+  an operator-present dispatcher (not) both fit every ref-derived number, and separating them needs a
+  store read only the desk can do. The burst structure leans to the latter — the four newest fires
+  arrived in **13.7 min**, one of them 80 s after this session's own boot ping — but that is evidence,
+  not proof.
+  **(3) NEW — landing latency is 17–96 h and BATCHED.** Three of the five lands carry the *identical*
+  committer second (one replay, not three lands); **W9's own report sat on its branch for 81 h**. So
+  every dispatched worker reads this tracker stale by up to four days — the exact cost W9 recorded
+  paying ("spent its first hour re-deriving landed cures"), now measured rather than anecdotal.
+  **(4) NEW — the framing inverts by lane, and this is §1.5's defect in its THIRD costume.** Trunk's
+  three busiest days in this plan's whole window are 09-08 **130**, 09-09 **152**, 09-10 **133**
+  (vs 56/74 in the 09-03/04 era), arriving spread at ~15–30 min spacing — while cloud fired 0/1/4.
+  §1.5 counted commits where the question was closure; §W9(3) counted pile SIZE where the question was
+  pile DISPOSITION; here **trunk volume reads as pipeline health where the question is per-lane
+  liveness**, and an aggregate over both lanes hides it completely. ⚠️ Not claimed: that 138 commits/day
+  is good — that is §1.4's churn shape, and throughput-vs-churn turns on W8's EFFORT ratio, which needs
+  the backlog store.
+  **(5) The instrument gap this exposes.** W9's prediction had three arms and **only one was made
+  falsifiable** — and the arm that was wrong is one of the two that were not. Its stated falsifier
+  (`sum(census.landed)/sum(census.retired) > 25 %`) is still **UNRUN**: the typed `census` that makes it
+  runnable is verified present on trunk by content (`scripts/cloud-return-lane.sh:205-217`), but the IDL
+  rows are on the operator box. The research doc carries the ref-derived fire-rate command beside it so
+  both are re-measurable rather than quotable. ⚠️ Do NOT compare W10's `landed/fired` = **50 %** against
+  W9's `census.landed/census.retired` = 2.7 %: different denominators over different populations, which
+  is the very conflation §1.5 and §W9(3) are about.
+  ⚠️ **Dispatcher vintage:** brief blob `9109de61…` against `origin/main`'s `e61bcbfc…` — **DIFFERENT**,
+  the dispatcher that fired this session is behind trunk, consistent with (3)'s return latency and with
+  W9's identical observation four days earlier. A deploy-layer convergence fact, not a defect here.
+  **Cure sha asserted:** W9 landed `140c2889b5ff09597b8b151b0d5f0f1dc908f109`
+  (`git merge-base --is-ancestor … origin/main` → 0), on trunk 2026-09-10T10:38:41−05:00 — i.e. W9's
+  own work is intact and verified; what is retracted is one prediction, marked refuted IN PLACE above.
 
 ---
 
