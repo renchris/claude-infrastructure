@@ -3721,7 +3721,33 @@ run_gate() {  # $1=range → 0 green / 1 red
     # caller without /sbin, 23/23 passing for one with it. A blob-only key would carry a green
     # earned under one environment into another. It is the most expensive selftest of the eleven and
     # it is excluded anyway: an unsound memo on a detector-validity proof is worse than the seconds.
-    if ! "$UNATTENDED_LINT" --selftest >/dev/null 2>&1; then
+    local _st_rc=0
+    "$UNATTENDED_LINT" --selftest >/dev/null 2>&1 || _st_rc=$?
+    # A SIGNAL DEATH IS A THIRD STATE, NEVER RED (measured 2026-09-11, during the land of backlog
+    # 5a5a3073626c). This is the ONE selftest deliberately excluded from selftest_ok's memo — see
+    # its header above — so it is the only arm that re-runs its full ~2.5min scan on EVERY round,
+    # which makes it far and away the likeliest of the eleven to be cut by a peer or the reaper.
+    # When that happened the bare `if !` here put rc 143 in the SAME branch as a genuine detector
+    # failure and printed "the detector no longer discriminates": a claim about the LINT, asserted
+    # out of a fact about the BOX. Measured that night — SIGTERMed at load 41 with six concurrent
+    # landers, `Terminated: 15`, gate RED, land refused; the same blob scored 53/53 rc 0 when
+    # re-run unbounded seconds later, so nothing whatever was wrong with the detector or the tree.
+    # It cost that land a full ~33min gate cycle and sent its author to fix a lint that was fine.
+    #
+    # WHY `rc > 128` IS SOUND HERE, though it is explicitly WRONG for the bats arms: those run
+    # under run_scoped_suite, which MASKS the signal (a SIGKILLed suite surfaces as plain 1), so
+    # there the TAP body is the only honest discriminator. This child is a plain script invoked
+    # directly — nothing masks its status, so the shell reports 128+signum and that is exactly
+    # what we key on. arm_nonverdict (⇒ GATE_KILLED ⇒ the retryable exit 9) rather than gate_red
+    # (⇒ exit 6), mirroring the `_arm_rc == 2` branch four lines below: a run that was killed
+    # earned NO verdict, and a non-verdict must never be reported as evidence about your tree.
+    if (( _st_rc > 128 )); then
+      arm_nonverdict "unattended-path-lint --selftest" \
+        "It was KILLED by signal $(( _st_rc - 128 )), not answered — this says nothing about the detector or your tree." \
+        "$_st_rc"
+      return 1
+    fi
+    if (( _st_rc != 0 )); then
       echo "✗ gate: unattended-path-lint --selftest FAILED — the detector no longer discriminates, so" >&2
       echo "  its clean verdict would mean nothing. Fix the lint before landing." >&2
       gate_red unattended-path-selftest
