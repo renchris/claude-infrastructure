@@ -11,6 +11,18 @@
 #   because this file's own rule is that a site MOVED in the hook is a failure until it is
 #   re-pinned deliberately — absorbing a line shift silently is how that assertion rots to a no-op.
 #
+# 2026-09-11 (row 7e8cff2e822c) — MOVE ONLY, no population change. The worker-claim pre-filter
+#   above these sites was narrowed from a whole-command SUBSTRING match to command position, which
+#   added 30 lines and shifted every site below it by exactly +30 (S01a/S01b sit ABOVE the edit and
+#   did not move). No grep site was added, removed or re-worded: the narrowing replaced two `case`
+#   arms with a `case` inside a loop, and `case` patterns are not grep sites — so every pattern and
+#   every pinned verdict is unchanged, the DIVERGENT counterexamples are all still present, and the
+#   non-vacuity floor is untouched. Re-anchored by requiring each site's line to be BYTE-IDENTICAL
+#   between trunk's copy and this one at its new number, then re-asserting the literal pattern
+#   there; the delta was measured as uniform (+30 on all 23 unambiguous `lit` sites, one value in
+#   the histogram) rather than assumed, because five patterns occur on two lines each and a
+#   pattern-search re-anchor would have silently picked the wrong one for them.
+#
 # 2026-09-09 (row 6293bf3bbbf1) — POPULATION CHANGE, recorded rather than absorbed. S32
 #   (`grep -qE '[$`*?]'` in _rm_literal_assignment) is GONE: that single blanket refusal is what made
 #   the scratchpad rm-allowlist unreachable for a chained variable path, and it is replaced by `case`
@@ -51,35 +63,35 @@
 id	line	form	feed	subject	verify	expect	pattern
 S01a	187	qE	nl	whole	syn	EQUIVALENT	(^|[[:space:]])--force([[:space:]]|$)
 S01b	187	qE	nl	whole	syn	EQUIVALENT	(^|[[:space:]])--no-verify([[:space:]]|$)
-S02	699	qE	nl	whole	lit	DIVERGENT	(sudo[[:space:]]+rm|:\(\)\{[[:space:]]*:\|:&[[:space:]]*\};:)
-S03	730	qE	raw	whole	lit	EQUIVALENT	(^|[^a-zA-Z0-9_-])rm([[:space:]]|$)
-S04	769	oE	raw	whole	lit	DIVERGENT	(^|[^a-zA-Z0-9_-])rm([[:space:]]+[^;&|]*)?
-S05	772	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
-S06	773	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*f[a-zA-Z]*([[:space:]]|$)|--force([[:space:]=]|$)
-S07	826	qE	pipeline	stream	lit	DIVERGENT	^(sudo[[:space:]]+)?(pkill|killall)([[:space:]]|$)
-S08	827	oE	raw	whole	lit	DIVERGENT	(pkill|killall)[^;&|]*
-S08b	914	qE	pipeline	stream	lit	DIVERGENT	^(sudo[[:space:]]+)?(pkill|killall|pgrep)([[:space:]]|$)
-S09	867	qE	nl	line	lit	EQUIVALENT	(bats|ship-land|postland-verify)
-S10	871	qE	nl	line	lit	EQUIVALENT	\$PWD|\$\{PWD|\$\(pwd|`pwd|\$\(basename|(^|[[:space:]])-P[[:space:]]|\.worktrees/|(^|[^a-zA-Z0-9])wt-[a-zA-Z0-9]
-S11	875	qF	nl	line	syn	EQUIVALENT	r15-diffcorpus
-S12	970	qiE	nl	whole	lit	DIVERGENT	\b(turso|sqlite3?|psql|mysql|mariadb|libsql|drizzle-kit[[:space:]]+(push|drop|migrate))\b
-S13	971	qiE	nl	whole	lit	DIVERGENT	\b(DROP[[:space:]]+TABLE|DROP[[:space:]]+DATABASE|DROP[[:space:]]+INDEX|ALTER[[:space:]]+TABLE|CREATE[[:space:]]+TABLE|TRUNCATE[[:space:]]+TABLE)\b
-S14	976	qE	nl	whole	lit	DIVERGENT	drizzle-kit[[:space:]]+push
-S15	1014	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+add\b
-S16	1017	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+add\b
-S17	1037	qE	nl	whole	lit	DIVERGENT	git([[:space:]]+-[a-zA-Z]+[[:space:]]+[^[:space:]]+)*[[:space:]]+commit\b[^|&;]*[[:space:]]-n\b
-S18	1056	qE	raw	whole	lit	DIVERGENT	\bCC_GIT_IDENTITY_(TEST|EMAIL|OWNER|HOOK)=
-S19	1064	qE	raw	whole	lit	DIVERGENT	\bconfig\b
-S20	1065	qE	raw	whole	lit	DIVERGENT	\-\-(get|get-all|get-regexp|list|unset|unset-all|remove-section)\b
-S21	1066	qE	raw	whole	lit	DIVERGENT	\bcc\.identity\.exempt[[:space:]]+[^[:space:]]
-S22	1156	qE	raw	clause	lit	DIVERGENT	git\b.*\bconfig\b.*\buser\.(email|name)\b
-S23	1158	qE	raw	clause	lit	DIVERGENT	\-\-(get|get-all|get-regexp|get-urlmatch|list|unset|unset-all|remove-section|rename-section|global|system|file|blob)\b
-S24	1159	qE	raw	clause	lit	EQUIVALENT	[[:space:]]-(l|e)([[:space:]]|$)
-S25	1161	qE	raw	clause	lit	DIVERGENT	\buser\.(email|name)[[:space:]]+[^[:space:]]
-S26	1556	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+reset[[:space:]]+--hard\b
-S27	1562	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*[xX]
-S28	1868	qE	raw	token	syn	EQUIVALENT	^(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)(/|$)
-S29	1883	oE	nl	whole	lit	DIVERGENT	rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*[^[:space:];&|-][^[:space:];&|]*
-S30	1886	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
-S31	1717	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=[^[:space:];&|]*
-S33	1843	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=("?\$\([^()]*\)"?|[^[:space:];&|]*)
+S02	729	qE	nl	whole	lit	DIVERGENT	(sudo[[:space:]]+rm|:\(\)\{[[:space:]]*:\|:&[[:space:]]*\};:)
+S03	760	qE	raw	whole	lit	EQUIVALENT	(^|[^a-zA-Z0-9_-])rm([[:space:]]|$)
+S04	799	oE	raw	whole	lit	DIVERGENT	(^|[^a-zA-Z0-9_-])rm([[:space:]]+[^;&|]*)?
+S05	802	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
+S06	803	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*f[a-zA-Z]*([[:space:]]|$)|--force([[:space:]=]|$)
+S07	856	qE	pipeline	stream	lit	DIVERGENT	^(sudo[[:space:]]+)?(pkill|killall)([[:space:]]|$)
+S08	857	oE	raw	whole	lit	DIVERGENT	(pkill|killall)[^;&|]*
+S08b	944	qE	pipeline	stream	lit	DIVERGENT	^(sudo[[:space:]]+)?(pkill|killall|pgrep)([[:space:]]|$)
+S09	897	qE	nl	line	lit	EQUIVALENT	(bats|ship-land|postland-verify)
+S10	901	qE	nl	line	lit	EQUIVALENT	\$PWD|\$\{PWD|\$\(pwd|`pwd|\$\(basename|(^|[[:space:]])-P[[:space:]]|\.worktrees/|(^|[^a-zA-Z0-9])wt-[a-zA-Z0-9]
+S11	905	qF	nl	line	syn	EQUIVALENT	r15-diffcorpus
+S12	1000	qiE	nl	whole	lit	DIVERGENT	\b(turso|sqlite3?|psql|mysql|mariadb|libsql|drizzle-kit[[:space:]]+(push|drop|migrate))\b
+S13	1001	qiE	nl	whole	lit	DIVERGENT	\b(DROP[[:space:]]+TABLE|DROP[[:space:]]+DATABASE|DROP[[:space:]]+INDEX|ALTER[[:space:]]+TABLE|CREATE[[:space:]]+TABLE|TRUNCATE[[:space:]]+TABLE)\b
+S14	1006	qE	nl	whole	lit	DIVERGENT	drizzle-kit[[:space:]]+push
+S15	1044	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+add\b
+S16	1047	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+add\b
+S17	1067	qE	nl	whole	lit	DIVERGENT	git([[:space:]]+-[a-zA-Z]+[[:space:]]+[^[:space:]]+)*[[:space:]]+commit\b[^|&;]*[[:space:]]-n\b
+S18	1086	qE	raw	whole	lit	DIVERGENT	\bCC_GIT_IDENTITY_(TEST|EMAIL|OWNER|HOOK)=
+S19	1094	qE	raw	whole	lit	DIVERGENT	\bconfig\b
+S20	1095	qE	raw	whole	lit	DIVERGENT	\-\-(get|get-all|get-regexp|list|unset|unset-all|remove-section)\b
+S21	1096	qE	raw	whole	lit	DIVERGENT	\bcc\.identity\.exempt[[:space:]]+[^[:space:]]
+S22	1186	qE	raw	clause	lit	DIVERGENT	git\b.*\bconfig\b.*\buser\.(email|name)\b
+S23	1188	qE	raw	clause	lit	DIVERGENT	\-\-(get|get-all|get-regexp|get-urlmatch|list|unset|unset-all|remove-section|rename-section|global|system|file|blob)\b
+S24	1189	qE	raw	clause	lit	EQUIVALENT	[[:space:]]-(l|e)([[:space:]]|$)
+S25	1191	qE	raw	clause	lit	DIVERGENT	\buser\.(email|name)[[:space:]]+[^[:space:]]
+S26	1586	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+reset[[:space:]]+--hard\b
+S27	1592	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*[xX]
+S28	1898	qE	raw	token	syn	EQUIVALENT	^(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)(/|$)
+S29	1913	oE	nl	whole	lit	DIVERGENT	rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*[^[:space:];&|-][^[:space:];&|]*
+S30	1916	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
+S31	1747	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=[^[:space:];&|]*
+S33	1873	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=("?\$\([^()]*\)"?|[^[:space:];&|]*)

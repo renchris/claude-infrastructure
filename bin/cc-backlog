@@ -975,6 +975,105 @@ usage() {
 
 now_iso()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# ── HOST IDENTITY — one derivation, and why it is NOT `hostname -s` (backlog 7e8cff2e822c) ─────
+# `hostname -s` on macOS reports the dynamic store's HostName, which is supplied by DHCP / reverse
+# DNS. It is a NETWORK-DERIVED value: when the lease or the resolver changes under a running box
+# the short name flips, and it flips BACK. Measured on this box 2026-09-11 — `hostname -s` =
+# `MacBookPro`, `scutil --get LocalHostName` = `Chriss-MacBook-Pro-3` — with BOTH spellings
+# interleaved in the live ledger (514 `MacBookPro-*` claims since 2026-09-08 alongside 5,024
+# `Chriss-MacBook-Pro-3-*` since 2026-07-19, both still arriving on 2026-09-11). One machine, two
+# spellings, neither of them wrong at the moment it was written.
+#
+# A lease identity is `<host>-<pid>`, so a flip RE-SPELLS A LIVE WORKER and the damage runs in both
+# directions — each one a verdict this file exists to refuse:
+#   · the incumbent's recorded spelling no longer equals `$host-$pid`, so `claimer_live` skips the
+#     `kill -0` branch, asks the registry about a pid-shaped claimer it never lists, and answers
+#     rc 1 PROVEN NOT-LIVE. A false death on a demonstrably live session is the one verdict that
+#     lets Rule A reopen — i.e. a second worker onto live work.
+#   · and from the other side the session is refused as A DUPLICATE OF ITSELF: measured
+#     2026-09-10, claude pid 90701 reclaimed 775afca94edc as `MacBookPro-90701` at 20:33Z, then had
+#     its own read-only commands denied by worker-claim-gate as "holder MacBookPro-90701, this
+#     session Chriss-MacBook-Pro-3-90701" and was told to stand down.
+#
+# TWO HALVES, AND BOTH ARE LOAD-BEARING. `host_id` MINTS from `scutil --get LocalHostName` (the
+# Bonjour name: set once, never network-derived; when unset it exits 1 with EMPTY stdout and its
+# message on stderr, so the `||` chain is sound, and on a box with no scutil at all it degrades to
+# exactly today's expression). That stops NEW claims splitting, and it cannot rescue the claims
+# ALREADY in the ledger under the other spelling — which is every claim a live worker is holding
+# right now. So `host_is_local` accepts any spelling THIS BOX CURRENTLY ANSWERS TO.
+#
+# THE ALIAS SET IS BOUNDED AND DERIVABLE — deliberately NOT "any host component". `cloudvm-4242`
+# under an absent venue field must keep resolving to rc 1 exactly as it does today (the measured
+# row in claimer_live's venue gate below); a tolerant-of-everything compare would instead
+# `kill -0 4242` against this kernel's pid table and mint a verdict about a machine it cannot see.
+#
+# ABSOLUTE `/usr/sbin/scutil`, not a bare name: `/usr/sbin` is NOT on the PATH a launchd job
+# inherits here, so a bare spelling resolves for you and NOT for com.claude.dispatcher — and
+# because the `||` chain is a FALLBACK, it would not error there, it would silently degrade
+# back to `hostname -s` on exactly the unattended paths this fixes. scripts/unattended-path-lint.sh
+# caught it at the gate; same treatment bin/cc-backlog already gives `/usr/sbin/lsof`.
+#
+# RESIDUAL, named rather than papered over: a claim minted under a spelling NEITHER source produces
+# any more is outside the set. Nothing mints such a spelling after this change and a stale claim
+# ages out through `reap`, so the set is closed over the transition window rather than forever.
+#
+# CC_HOST_ALIASES is a TEST SEAM (space-separated extra aliases). It can only ever WIDEN the set,
+# so a leak into a subprocess cannot manufacture a false death; tests set it explicitly.
+_CC_HOST_ID=""
+host_id() {
+  [ -n "$_CC_HOST_ID" ] || _CC_HOST_ID="$(/usr/sbin/scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  printf '%s' "$_CC_HOST_ID"
+}
+
+# host_is_local <hostpart> → rc 0 iff <hostpart> is a spelling this box currently answers to.
+# Cached: `claimer_live` runs once per claimed row inside `reap`, and three forks per row over a
+# 17k-line ledger is the cost profile BACKLOG_ZERO §6 spent a fold removing.
+_CC_HOST_ALIASES_CACHE=""
+_host_aliases() {
+  if [ -z "$_CC_HOST_ALIASES_CACHE" ]; then
+    local hs h
+    hs="$(hostname -s 2>/dev/null || printf '')"
+    h="$(hostname 2>/dev/null || printf '')"; h="${h%%.*}"
+    _CC_HOST_ALIASES_CACHE=" $(host_id) $hs $h ${CC_HOST_ALIASES:-} "
+  fi
+  printf '%s' "$_CC_HOST_ALIASES_CACHE"
+}
+host_is_local() {
+  local h="${1:-}"
+  [ -n "$h" ] || return 1
+  case "$(_host_aliases)" in *" $h "*) return 0 ;; esac
+  return 1
+}
+
+# same_local_worker <a> <b> → rc 0 iff two identity strings name the SAME worker on THIS box.
+#
+# THE LINE THIS EXISTS FOR. `reclaim`'s "is it us?" test was `[ "$cby" = "$by" ]` — a STRING
+# equality over an identity whose host half was network-derived. A host flip therefore made a
+# session's own lease look like somebody else's: it fell past the self-arm into the ANTI-STEAL
+# guard, `claimer_live` correctly reported the holder LIVE (it is — it is the caller), and the
+# reclaim answered `noop-live-claimer`, which worker-claim-gate consumes as STAND DOWN. A live
+# worker was told to retire on the evidence of its OWN presence (backlog 7e8cff2e822c).
+#
+# The identity is `<host>-<pid>` and the PID is the part that identifies the worker: the host half
+# is there to stop a cross-box collision, not to tell two local sessions apart. Two panes are two
+# claude processes and two pids, and a harness subagent never takes a lease at all
+# (_cc_wclaim_is_agent_argv), so equal pid + both hosts local IS the same worker, by construction.
+#
+# IT CANNOT LAUNDER A REAL DUPLICATE: a genuine second session has a different claude ancestor pid,
+# so this arm never fires for it, and every guard below is reached exactly as before. Note it is
+# deliberately NOT symmetric with a re-key — the arm is a NO-OP, so the ledger keeps whichever
+# spelling the item was claimed under until it closes, and `host_is_local` reads that spelling
+# correctly. Converging the record would mean falling through to the write path, which is the
+# displacement this arm exists to avoid.
+same_local_worker() {
+  local a="${1:-}" b="${2:-}" apid bpid
+  [ -n "$a" ] && [ -n "$b" ] || return 1
+  apid="${a##*-}"; bpid="${b##*-}"
+  [ "$apid" = "$bpid" ] || return 1
+  case "$apid" in ''|*[!0-9]*) return 1 ;; esac
+  host_is_local "${a%-*}" && host_is_local "${b%-*}"
+}
+
 # cutoff_iso <days-ago> → an ISO-8601 UTC timestamp N days in the past (BSD + GNU).
 cutoff_iso() {
   local d="$1"
@@ -2366,7 +2465,10 @@ _bl_derive_lane() {
 _bl_derive_closed_by() {
   if [ -n "${CC_BACKLOG_BY:-}" ]; then printf '%s' "$CC_BACKLOG_BY"; return 0; fi
   local host unit top
-  host="$(hostname -s 2>/dev/null || printf 'box')"
+  # `host_id`, never `hostname -s`: this string is DURABLE BY CONSTRUCTION (the comment above says
+  # so) and a network-derived short name is not durable — it split this box's own attribution into
+  # two actors mid-flight. See HOST IDENTITY near now_iso.
+  host="$(host_id)"
   if top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ]; then unit="${top##*/}"; else unit=""; fi
   [ -n "$unit" ] || unit="$(pwd -P 2>/dev/null || printf '')"
   unit="${unit##*/}"
@@ -4600,6 +4702,16 @@ cmd_reclaim() {
     printf 'cc-backlog reclaim: verdict=noop-already-ours %s by %s\n' "$id" "$by"
     return 0
   fi
+  # THE SAME ARM, reached when the host half was re-spelled under a running worker. Kept separate
+  # from the string compare above so the two are distinguishable in a log: the verdict TOKEN is
+  # identical on purpose (every consumer selects on it, and worker-claim-gate's `*)` arm admits),
+  # while the message names the recorded spelling so a reader can see which flip happened. See
+  # same_local_worker near now_iso for why equal pid + both hosts local is the same worker.
+  if same_local_worker "$cby" "$by"; then
+    printf 'cc-backlog reclaim: verdict=noop-already-ours %s by %s (recorded as %s — same pid on this box under another host spelling)\n' \
+      "$id" "$by" "$cby"
+    return 0
+  fi
   # ANTI-STEAL: refuse when the incumbent claimer is PROVABLY live, is not us, and is a WORKER.
   # What it blocks is a second session opened in the same worktree (a hand /ship, a GC pass) taking
   # the claim away from the worker that is still running: two live claimants is precisely the
@@ -4699,10 +4811,14 @@ cmd_reclaim() {
     # one spelling of "<host>-<pid>" in this file, so a shape that takes the `kill -0` path there
     # takes the self-subtraction path here. Any other shape yields no anchor and `foreign_wait`
     # abstains, which is today's behaviour unchanged.
-    local rhost rpid ranchor=""
-    rhost="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+    local rpid ranchor=""
     rpid="${by##*-}"
-    if [ "$by" = "$rhost-$rpid" ] && [[ "$rpid" =~ ^[0-9]+$ ]]; then ranchor="$rpid"; fi
+    # ALIAS-TOLERANT, for the same reason claimer_live is (HOST IDENTITY near now_iso). Pinning the
+    # anchor to today's `hostname -s` meant that after a host-spelling flip this session's OWN
+    # identity yielded NO anchor, `foreign_wait` then counted this session's own worktree process as
+    # a foreign occupier, and the reclaim answered `noop-live-worktree` — refusing the caller on the
+    # evidence of its own presence (backlog 7e8cff2e822c).
+    if [[ "$rpid" =~ ^[0-9]+$ ]] && host_is_local "${by%-*}"; then ranchor="$rpid"; fi
     local rforeign rfrc
     rforeign="$(foreign_wait "$id" "$rvenue" "$ranchor")"; rfrc=$?
     if [ "$rfrc" -eq 0 ]; then
@@ -5612,9 +5728,12 @@ claimer_live() {
   if [ "$venue" != local ]; then
     return 2
   fi
-  local host; host="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  # `host_is_local`, not `[ "$by" = "$(hostname -s)-$pid" ]` — the equality test convicted a LIVE
+  # session whose recorded spelling was this same box under its other name (HOST IDENTITY near
+  # now_iso). The pid-shape test is unchanged and still gates `kill -0`; what widened is only WHICH
+  # spellings of this box are recognised, and the venue gate above still decides the population.
   local pid="${by##*-}"
-  if [ "$by" = "$host-$pid" ] && [[ "$pid" =~ ^[0-9]+$ ]]; then
+  if [[ "$pid" =~ ^[0-9]+$ ]] && host_is_local "${by%-*}"; then
     if kill -0 "$pid" 2>/dev/null; then return 0; fi
     return 1
   fi

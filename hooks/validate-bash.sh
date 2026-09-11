@@ -449,14 +449,44 @@ fi
 # is answerable from the same store as the verdicts (memory
 # `sensor-default-off-makes-blindness-the-shipping-path` — one value must never mean both
 # "answered no" and "could not ask").
-_wcs_first="${CMD%%[[:space:]]*}"
+# COMMAND POSITION, NEVER SUBSTRING (backlog 7e8cff2e822c). The second arm used to test these paths
+# against the WHOLE command, so anything that merely NAMED one was lease-checked: `git show
+# origin/main:scripts/handoff-fire.sh`, `grep -n x scripts/handoff-fire.sh`, a `--goal` string or a
+# pane title carrying the path. Harmless while the lease is right — one fork and an admit — and
+# fatal beside a mis-keyed lease: on 2026-09-10 a host-spelling flip made a session a duplicate of
+# ITSELF, and it was precisely these read-only reads that were DENIED with "STAND DOWN", telling the
+# owner of the work to retire. The two defects are independent and only lethal together.
+#
+# THE FIX IS A NARROWING, AND THE CHARTER ABOVE IS WHY THAT IS THE RIGHT DIRECTION: this is a COST
+# GATE, the LEASE is the predicate, and a spelling this filter misses falls through to today's
+# ungated behaviour — so a miss can never be a regression, while a false hit hands a correct session
+# a stand-down order. Matching argument position bought nothing the lease does not already decide,
+# and cost the ability to READ the file.
+#
+# Command position = the first word of the command and of every segment after a shell separator,
+# behind up to three env-assignment or interpreter/prefix words. This is strictly WIDER than the old
+# first-word arm (which saw only segment one) and strictly NARROWER than the old whole-string arm.
+# Forkless throughout — this hook fires on EVERY Bash call on the box.
+_wcs_words="$CMD"
+for _wcs_sep in ';' '&&' '||' '|' '&' '(' ')' '{' '}'; do
+  _wcs_words="${_wcs_words//"$_wcs_sep"/$'\n'}"
+done
 _wcs_hit=0
-case "$_wcs_first" in
-  *it2-kitty|*kitty-split-launch.sh|*kitty-pane-menu|*handoff-fire.sh|*cc-respawn|*lr-handoff.sh|*lr-fire-resume.sh|*lr-reset-poller.sh) _wcs_hit=1 ;;
-esac
-case "$CMD" in
-  *bin/it2-kitty*|*bin/kitty-split-launch.sh*|*bin/kitty-pane-menu*|*bin/cc-respawn*|*scripts/handoff-fire.sh*|*limit-recover/lr-handoff.sh*|*limit-recover/lr-fire-resume.sh*|*limit-recover/lr-reset-poller.sh*) _wcs_hit=1 ;;
-esac
+while IFS= read -r _wcs_seg; do
+  _wcs_w="${_wcs_seg#"${_wcs_seg%%[![:space:]]*}"}"          # left-trim
+  for _wcs_peel in 1 2 3; do
+    case "$_wcs_w" in
+      [A-Za-z_]*=*[[:space:]]*|'bash '*|'sh '*|'zsh '*|'nohup '*|'exec '*|'command '*|'sudo '*|'env '*|'time '*|'source '*|'. '*)
+        _wcs_w="${_wcs_w#*[[:space:]]}"
+        _wcs_w="${_wcs_w#"${_wcs_w%%[![:space:]]*}"}" ;;
+      *) break ;;
+    esac
+  done
+  _wcs_w="${_wcs_w%%[[:space:]]*}"
+  case "$_wcs_w" in
+    *it2-kitty|*kitty-split-launch.sh|*kitty-pane-menu|*handoff-fire.sh|*cc-respawn|*lr-handoff.sh|*lr-fire-resume.sh|*lr-reset-poller.sh) _wcs_hit=1; break ;;
+  esac
+done <<< "$_wcs_words"
 # The cure, and the same-pane relaunch that mints no session, are never refused.
 case "$CMD" in *self-close*) _wcs_hit=0 ;; esac
 if [[ "$_wcs_hit" == 1 && "${CC_WCLAIM_GATE:-on}" != off ]]; then

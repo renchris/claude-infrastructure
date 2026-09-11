@@ -439,7 +439,24 @@ reclaim_worker_item() {
   # a mismatch falls through to the registry, which does not list a pid-shaped claimer and would
   # answer PROVEN NOT-LIVE. That round trip (this writer → that reader) is asserted by test, not by
   # inspection (memory: output-must-round-trip-into-input).
-  host="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  # THE HOST HALF IS `scutil --get LocalHostName`, NOT `hostname -s` (backlog 7e8cff2e822c).
+  # `hostname -s` reports the dynamic store's HostName, supplied by DHCP / reverse DNS — a
+  # NETWORK-DERIVED value that flips under a running box and flips back. Measured 2026-09-11 on this
+  # box: `hostname -s` = MacBookPro, `scutil --get LocalHostName` = Chriss-MacBook-Pro-3, and the live
+  # ledger carries 514 claims under the first spelling interleaved with 5,024 under the second. A
+  # flip re-spells a LIVE worker, so the same session is refused as a duplicate OF ITSELF (pid 90701,
+  # 2026-09-10) and, from the other side, a live claim resolves PROVEN NOT-LIVE. LocalHostName is the
+  # Bonjour name: set once, not network-derived, rc 1 with EMPTY stdout when unset — so the `||` chain
+  # is sound and degrades to exactly the previous expression where scutil is absent. The reader half
+  # lives in cc-backlog's `host_is_local`, which still recognises the OTHER spelling so claims already
+  # in the ledger keep taking the `kill -0` path.
+  #
+  # ABSOLUTE `/usr/sbin/scutil`, not a bare name: `/usr/sbin` is NOT on the PATH a launchd job
+  # inherits here, so a bare spelling resolves for you and NOT for com.claude.dispatcher — and
+  # because the `||` chain is a FALLBACK, it would not error there, it would silently degrade
+  # back to `hostname -s` on exactly the unattended paths this fixes. scripts/unattended-path-lint.sh
+  # caught it at the gate; same treatment bin/cc-backlog already gives `/usr/sbin/lsof`.
+  host="$(/usr/sbin/scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
   pid="$CPID"
   [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null || { reclaim_idl abstained "no claude ancestor pid" "$item"; return 0; }
 

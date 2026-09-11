@@ -218,7 +218,11 @@ actor_id() {
   # `actor="$(actor_id)"`, and a die() inside a command substitution exits only the SUBSHELL.
   if [ -n "${CC_BUS_ACTOR:-}" ]; then printf '%s\n' "$CC_BUS_ACTOR"; return 0; fi
   local host unit top
-  host="$(hostname -s 2>/dev/null || echo box)"
+  # STABLE, not network-derived: this header's own rule is that "a process-keyed id silently breaks
+  # everything", and a DHCP-supplied short name is unstable for the same reason — it split this box
+  # into two actors mid-flight on 2026-09-08 (backlog 7e8cff2e822c). The claim two comments down
+  # that "no peer can be addressing an earlier form of it" is only true once the host half is stable.
+  host="$(/usr/sbin/scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
   # Lowercase + strip anything that is not [a-z0-9-]; a shard filename must be portable. The
   # clamps keep host+unit inside ACTOR_ID_MAX, so the derived path can never mint an id the gate
   # would refuse. Transforming silently is safe HERE and only here: this value is ours, derived
