@@ -61,7 +61,7 @@ setup() {
   # The probes live in the lib, sourced by install.sh, so the fixture repo must carry it. Test 13
   # pins what happens when it does NOT.
   cp "$REPO/scripts/lib/cc-common.sh" "$FX/scripts/lib/cc-common.sh"
-  printf '# fixture global instructions\n' > "$FX/CLAUDE.md"
+  printf '# fixture global instructions\n' > "$FX/CLAUDE.global.md"
   printf '#!/bin/bash\necho fixture-statusline\n' > "$FX/statusline.sh"
 
   mk_plist com.claude.fx-resident keepalive

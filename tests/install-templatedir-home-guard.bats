@@ -33,6 +33,15 @@
 # global git config is redirected to a probe file, so no arm of this suite can reach ~/.gitconfig
 # even if the subject is broken. `launchctl`/`defaults` are PATH-stubbed, as in the neighbouring
 # install-*.bats, because install.sh reaches real machine state through both.
+#
+# THE FIXTURE IS ITSELF UNDER TEST, as of 2026-09-11 (backlog e7bdbf4f8343, tests 11-12 — APPENDED,
+# so the positions cited above stay true). 367e42f2 renamed the repo-side global-instructions SSOT
+# CLAUDE.md → CLAUDE.global.md; install.sh followed and this fixture did not, so `cp` stat-failed
+# under `set -e` and tests 6/7/8/10 went red on `[ "$status" -eq 0 ]` — four reds, none of them
+# about the guard, none naming the file. That is the same "three tests away from the cause, reading
+# as a test bug" shape recorded at the top of this header, turned on the suite that recorded it.
+# Test 11 pins the fixture's NAMES against the repo, test 12 pins the SET's sufficiency, and
+# install_fixture puts install.sh's own error on stderr so the red says why.
 
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"   # hermetic: never the operator's live ~
@@ -42,13 +51,22 @@ setup() {
   # The observation point AND a second belt: `--global` can only reach this file.
   export GIT_CONFIG_GLOBAL="$BATS_TEST_TMPDIR/probe-gitconfig"
 
-  # Minimal but REAL fixture checkout — install.sh aborts under `set -e` without CLAUDE.md or
-  # statusline.sh (both unconditional cp targets); agents/ gives the link legs something to link.
+  # Minimal but REAL fixture checkout. install.sh reads exactly TWO repo-root files with no
+  # existence guard in front of them — every other `$REPO_DIR/<file>` read sits behind an
+  # `[[ -f ]]`/`[[ -d ]]` — so under `set -e` an absent one aborts the whole install. Those two are
+  # FIXTURE_UNCONDITIONAL below, which test 11 pins against the repo; agents/ gives the link legs
+  # something to link.
+  #
+  # 🚨 THE GLOBAL-INSTRUCTIONS FILE IS `CLAUDE.global.md`, NOT `CLAUDE.md` (367e42f2). The repo root
+  # deliberately carries NO `CLAUDE.md` — Claude Code would load one as PROJECT memory on top of the
+  # byte-identical user-memory copy — so a fixture doubling that name doubles a file the repo is
+  # pinned not to have, and install.sh's `cp "$REPO_DIR/CLAUDE.global.md"` then dies on a stat.
+  FIXTURE_UNCONDITIONAL=(CLAUDE.global.md statusline.sh)
   FIX="$BATS_TEST_TMPDIR/repo"
   mkdir -p "$FIX/agents" "$FIX/scripts/lib"
   cp "$REPO/install.sh" "$FIX/install.sh"
   cp "$LIB" "$FIX/scripts/lib/real-home.sh"
-  printf '# fixture global instructions\n' > "$FIX/CLAUDE.md"
+  printf '# fixture global instructions\n' > "$FIX/CLAUDE.global.md"
   printf '#!/bin/bash\necho fixture-statusline\n' > "$FIX/statusline.sh"
   printf 'fixture agent\n' > "$FIX/agents/fixture-agent.md"
 
@@ -66,7 +84,15 @@ lacks() { if printf '%s' "$output" | grep -qF -- "$1"; then return 1; fi; return
 # dropped argument at each bare `install_fixture` call (SC2119/SC2120).
 # NB: no line of this comment may BEGIN with the linter's name — a comment opening that way is
 # parsed as a malformed directive and aborts the whole file, which the lint's own selftest catches.
-install_fixture() { run bash "$FIX/install.sh" --config-dir "$BATS_TEST_TMPDIR/cfg"; }
+install_fixture() {
+  run bash "$FIX/install.sh" --config-dir "$BATS_TEST_TMPDIR/cfg"
+  # A stale fixture reds EVERY install.sh arm below on the same `[ "$status" -eq 0 ]` line with the
+  # cause nowhere in sight — the "three tests away from the cause, reading as a test bug" shape this
+  # suite was written about, and the shape it fell into itself when the global-instructions file was
+  # renamed. Put install.sh's own words on stderr so the red names its reason. Diagnostic only: the
+  # verdict stays with each caller's own assertion, so this never decides a test.
+  [ "$status" -eq 0 ] || printf 'install.sh exited %s under the fixture:\n%s\n' "$status" "$output" >&2
+}
 probe_templatedir() { git config --global --get init.templateDir 2>/dev/null || true; }
 
 # ---- the predicate (scripts/lib/real-home.sh) -------------------------------------------------
@@ -157,4 +183,44 @@ probe_templatedir() { git config --global --get init.templateDir 2>/dev/null || 
   [ "$status" -eq 0 ]
   has "real-home.sh is missing"
   [ -z "$(probe_templatedir)" ]
+}
+
+# ---- the fixture itself ------------------------------------------------------------------------
+# Appended, not inserted: tests 1-10 keep the numbering the RED-PROOF block at the top of this file
+# cites by position.
+
+@test "FIXTURE CONTRACT: each repo-root file the fixture doubles still exists in the repo" {
+  # WHY (measured 2026-09-11, backlog e7bdbf4f8343). 367e42f2 renamed the repo-side global-instructions
+  # SSOT CLAUDE.md → CLAUDE.global.md. install.sh followed; this fixture did not, so `cp
+  # "$REPO_DIR/CLAUDE.global.md"` stat-failed under `set -e` and tests 6/7/8/10 all went red on
+  # `[ "$status" -eq 0 ]` — four reds, none of them about the guard under test, none naming the file.
+  #
+  # A fixture double is a claim that the repo has a file by that name. This test asserts the claim
+  # directly, so the NEXT rename reds here, by name, one test instead of four. It cannot catch an
+  # unconditional input install.sh ADDS (nothing here enumerates install.sh's reads) — that case is
+  # covered by install_fixture surfacing install.sh's own stat error.
+  local f missing=0
+  # ${a[@]+…}: bash 3.2 treats an empty array as UNBOUND under `set -u` (the idiom cc-common.sh
+  # uses for the same reason). This box's bash32-parse-lint is a NON-VERDICT — no bash 3.2 here —
+  # so the construct is made safe by shape rather than certified by the lint.
+  for f in ${FIXTURE_UNCONDITIONAL[@]+"${FIXTURE_UNCONDITIONAL[@]}"}; do
+    if [ ! -e "$REPO/$f" ]; then
+      echo "fixture doubles '$f', but the repo has no such file — install.sh's unconditional" >&2
+      echo "repo-root inputs were renamed and this fixture was not updated with them." >&2
+      missing=1
+    fi
+    if [ ! -e "$FIX/$f" ]; then
+      echo "setup() did not create '$f' in the fixture checkout" >&2
+      missing=1
+    fi
+  done
+  [ "$missing" -eq 0 ] || return 1
+}
+
+@test "FIXTURE CONTROL: the fixture is sufficient — install.sh completes under it" {
+  # The positive arm for the test above: it proves the NAMES are right, this proves the SET is
+  # complete. An unconditional read added to install.sh with no fixture double reds here with
+  # install.sh's own error on stderr (see install_fixture), not three tests away.
+  install_fixture
+  [ "$status" -eq 0 ] || return 1
 }

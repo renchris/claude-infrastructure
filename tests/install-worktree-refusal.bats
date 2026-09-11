@@ -38,11 +38,11 @@ setup() {
   PRIMARY="$TDIR/primary"
   WT="$TDIR/wt"
 
-  # Minimal but REAL repo: install.sh aborts under `set -e` if CLAUDE.md or statusline.sh are
+  # Minimal but REAL repo: install.sh aborts under `set -e` if CLAUDE.global.md or statusline.sh are
   # absent (both are unconditional cp targets), and agents/ gives the link legs something to link.
   mkdir -p "$PRIMARY/agents"
   cp "$REPO/install.sh" "$PRIMARY/install.sh"
-  printf '# fixture global instructions\n' > "$PRIMARY/CLAUDE.md"
+  printf '# fixture global instructions\n' > "$PRIMARY/CLAUDE.global.md"
   printf '#!/bin/bash\necho fixture-statusline\n' > "$PRIMARY/statusline.sh"
   printf 'fixture agent\n' > "$PRIMARY/agents/fixture-agent.md"
   git init -q "$PRIMARY"
@@ -124,7 +124,7 @@ lacks() { if printf '%s' "$output" | grep -qF -- "$1"; then return 1; fi; return
 @test "a non-git checkout still installs — detection fails OPEN for tarballs / fresh machines" {
   plain="$TDIR/plain"
   mkdir -p "$plain"
-  cp -R "$PRIMARY/install.sh" "$PRIMARY/CLAUDE.md" "$PRIMARY/statusline.sh" "$PRIMARY/agents" "$plain/"
+  cp -R "$PRIMARY/install.sh" "$PRIMARY/CLAUDE.global.md" "$PRIMARY/statusline.sh" "$PRIMARY/agents" "$plain/"
   run bash "$plain/install.sh"
   [ "$status" -eq 0 ]
   lacks "REFUSING"

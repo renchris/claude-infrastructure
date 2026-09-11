@@ -60,11 +60,12 @@ setup() {
   export LOG="$TDIR/launchctl.log"
   : > "$LOG"
 
-  # Minimal but REAL fixture repo: CLAUDE.md and statusline.sh are unconditional cp targets, so
-  # install.sh aborts under `set -e` without them.
+  # Minimal but REAL fixture repo: CLAUDE.global.md and statusline.sh are unconditional cp targets,
+  # so install.sh aborts under `set -e` without them. The repo-side name is CLAUDE.global.md (367e42f2)
+  # — the repo root deliberately carries no CLAUDE.md; only the DEPLOYED copy has that name.
   mkdir -p "$FX/launchd"
   cp "$REPO/install.sh" "$FX/install.sh"
-  printf '# fixture global instructions\n' > "$FX/CLAUDE.md"
+  printf '# fixture global instructions\n' > "$FX/CLAUDE.global.md"
   printf '#!/bin/bash\necho fixture-statusline\n' > "$FX/statusline.sh"
 
   for l in fx-run fx-staged fx-retired fx-undeclared; do
