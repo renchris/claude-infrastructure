@@ -537,6 +537,160 @@ if [[ "$_wcs_hit" == 1 && "${CC_LINEAGE_GATE:-on}" != off ]]; then
   fi
 fi
 
+# ── DUPLICATE-WORKER BASH-WRITE ADMISSION ────────────────────────────────────────────────────────
+# The FOURTH consumer of the duplicate-worker lease (backlog f5c3cfb86e2e), and the one that covers
+# the write path this fleet actually uses. The other three: hooks/check-edit-boundary.sh
+# (PreToolUse|Write|Edit|MultiEdit), hooks/agent-teams-enforce.sh (PreToolUse|Agent), and the
+# pane-spawn term directly above.
+#
+# ── WHY A FOURTH, WHEN "the write" WAS ALREADY GATED ───────────────────────────────────────────
+# Because the gate on Write/Edit and the writes this fleet performs are two different populations.
+# Auto mode's standing session instruction is:
+#
+#   "make file changes with sed, heredocs, or short scripts, rather than using the dedicated Read,
+#    Edit, or Write tools"
+#
+# So in the mode this box runs, the ROUTINE edit never reaches the Write|Edit matcher at all — it
+# arrives here, as Bash. check-edit-boundary.sh is not wrong and is not redundant; it simply sits
+# on a surface the common case no longer crosses. This is the same shape the pane-spawn term above
+# records for the 2026-08-07 cascade (a bound whose population is empty by construction), arriving
+# one surface later, and the same shape as the per-session spawn counter that reset at exactly the
+# edge the runaway traversed.
+#
+# MEASURED, NOT INFERRED. Pane 71 (MacBookPro-88086) appended two blocks to
+# hooks/lib/mailbox-pending.sh in wt-0366d5cc7b87 through a `python3 - <<'PY'` heredoc under Bash
+# with NO refusal, while the lease HOLDER pane 70 (MacBookPro-67081) was mid-edit on that same
+# file — producing a duplicate `mailbox_peek_from` definition that shadowed the holder's (in bash
+# the later definition wins), i.e. precisely the silent divergence the lease exists to prevent. The
+# predicate was healthy the whole time and said so: run by hand in that same shell,
+# `cc_worker_claim_admit` returned REFUSED, "0366d5cc7b87 is held by MacBookPro-67081; this session
+# is MacBookPro-88086". The decision was correct and unreachable — coverage, not logic, which is
+# the founding defect of this whole gate (scripts/lib/worker-claim-gate.sh § THE DEFECT).
+#
+# RE-DERIVED HERE BEFORE THIS TERM WAS WRITTEN, with a positive control on the same fixture: the
+# item's exact heredoc payload, in a wt- dir whose ledger refuses, ran through this hook and
+# produced EMPTY output at rc 0 — admitted — while a pane-spawn payload against the SAME refusing
+# ledger in the SAME worktree denied. So the hole was in the occasion, never in the instrument.
+#
+# ── THE DOWNSTREAM THIS RESTORES ───────────────────────────────────────────────────────────────
+# backlog b03eb3f28845 was closed REFUTED on the finding that "a PreToolUse deny IS the turn
+# boundary a message lacks" — the reason this repo needs no separate stand-down actuator for the
+# refused worker. That refutation is sound exactly where the deny FIRES. In auto mode on a
+# Bash-driven edit it did not fire, so the stand-down channel was silent on the commonest write
+# path, and the refutation was resting on a surface the traffic had left. This term puts the
+# traffic back under the deny.
+#
+# ── THE PRE-FILTER IS A COST GATE, NOT THE PREDICATE (the same rule as the term above) ─────────
+# This hook fires on EVERY Bash call on the box and the library's real check forks, so a forkless
+# shape match selects candidates and the LEASE decides — identity, never a spelling. A write
+# spelling this filter misses falls through to today's behaviour, which is ungated, so a miss is
+# never a REGRESSION, only a smaller improvement (memory `denylist-enumerates-spellings-not-the-
+# class`). Over-matching is safe in the other direction too, and this is the load-bearing asymmetry:
+# `cc_worker_claim_admit` ADMITS whenever the cwd is not a `wt-<12hex>` dispatch worktree or the
+# session holds the lease, so a false shape match can only ever reach a session that is ALREADY
+# required to stand down. It cannot reach the holder.
+#
+# READS STAY ADMITTED, AND THAT IS DELIBERATE. Case 15's CONTROL 3 pins the same commitment for the
+# spawn term — "a duplicate must keep the Bash it needs to inspect, checkpoint and retire". So the
+# redirect arm strips `2>&1`, `>&2` and every `/dev/null` target BEFORE asking whether a `>` remains;
+# without that strip, `grep … 2>/dev/null` is a write and the gate degenerates into a refusal of the
+# whole Bash surface, which carries as few bits as one that never fires (memory
+# `alarm-polarity-and-attention-budget`).
+#
+# THE GATE ALLOWS ITS OWN CURE. `self-close` is exempt unconditionally, for the reason the term
+# above states: a guard that forbids its own prescribed remedy re-emits forever (memory
+# `work-item-remedy-can-become-forbidden`). The stand-down REPORTING path — cc-backlog, cc-notify,
+# cc-custody — matches no arm below, by construction: no redirect, no heredoc, no write verb in
+# command position.
+#
+# FAIL OPEN, NEVER SILENTLY: library unreachable ⇒ admit AND record, so "was this surface gated?"
+# is answerable from the same store as the verdicts.
+_wbw_hit=0
+if [[ "${CC_WCLAIM_GATE:-on}" != off ]]; then
+  # ARM 1 — a redirection whose target is a FILE. Strip fd duplication and /dev/null first; what
+  # survives is a write. Pure parameter expansion, bash 3.2-safe, zero forks.
+  _wbw_scan="$CMD"
+  _wbw_scan="${_wbw_scan//2>&1/ }"; _wbw_scan="${_wbw_scan//1>&2/ }"
+  _wbw_scan="${_wbw_scan//>&2/ }";  _wbw_scan="${_wbw_scan//>&1/ }"
+  _wbw_scan="${_wbw_scan//&>>\/dev\/null/ }"; _wbw_scan="${_wbw_scan//&>\/dev\/null/ }"
+  _wbw_scan="${_wbw_scan//2>> \/dev\/null/ }"; _wbw_scan="${_wbw_scan//2>>\/dev\/null/ }"
+  _wbw_scan="${_wbw_scan//2> \/dev\/null/ }";  _wbw_scan="${_wbw_scan//2>\/dev\/null/ }"
+  _wbw_scan="${_wbw_scan//>> \/dev\/null/ }";  _wbw_scan="${_wbw_scan//>>\/dev\/null/ }"
+  _wbw_scan="${_wbw_scan//> \/dev\/null/ }";   _wbw_scan="${_wbw_scan//>\/dev\/null/ }"
+  case "$_wbw_scan" in *'>'*) _wbw_hit=1 ;; esac
+
+  # ARM 2 — a heredoc fed to something that can write. This is the shape the incident used
+  # (`python3 - <<'PY'` … `open(…,'a').write(…)`), and no redirect appears in it anywhere.
+  # `*sh` deliberately subsumes bash/zsh/sh and any `./foo.sh`, and `*ed` subsumes sed/ed — spelling
+  # them out separately is what shellcheck flags as SC2221/SC2222, and the subsuming pattern is the
+  # wider one anyway, which is the safe direction for a cost filter.
+  if [[ "$_wbw_hit" == 0 ]]; then
+    case "$CMD" in
+      *'<<'*)
+        case "${CMD%%[[:space:]]*}" in
+          *python3|*python|*perl|*ruby|*node|*sh|*awk|*ed|*cat|*tee|*patch|*dd)
+            _wbw_hit=1 ;;
+        esac ;;
+    esac
+  fi
+
+  # ARM 3 — a write verb. Command position first, then a whole-command pass for the path-qualified
+  # and post-separator spellings the first pass cannot see (`cd x && rm y`, `cat a | tee b`).
+  if [[ "$_wbw_hit" == 0 ]]; then
+    case "${CMD%%[[:space:]]*}" in
+      *cp|*mv|*rm|*mkdir|*rmdir|*touch|*tee|*ln|*install|*patch|*truncate|*dd|*chmod|*chown|*ed)
+        _wbw_hit=1 ;;
+    esac
+  fi
+  if [[ "$_wbw_hit" == 0 ]]; then
+    case "$CMD" in
+      *'sed -i'*|*'perl -i'*|*'ruby -i'*|*'| tee'*|*'|tee'*|*'tee -a'*|*'&& rm '*|*'; rm '*|\
+      *'&& mv '*|*'; mv '*|*'&& cp '*|*'; cp '*|*'&& mkdir'*|*'; mkdir'*|*'&& touch'*|*'; touch'*|\
+      *'git apply'*|*'git commit'*|*'git add '*|*'git checkout'*|*'git restore'*|*'git rm '*|\
+      *'git mv '*|*'git reset'*|*'git stash'*|*'git push'*|*'git merge'*|*'git rebase'*|\
+      *'shfmt -w'*|*'prettier --write'*|*'ruff format'*|*'dd of='*|*'install -m'*|*'patch -p'*)
+        _wbw_hit=1 ;;
+    esac
+  fi
+
+  # The cure is never refused — the same exemption, and the same reason, as the term above.
+  case "$CMD" in *self-close*) _wbw_hit=0 ;; esac
+fi
+# FORKLESS PRE-SCREEN ON THE PAYLOAD, and it is why this term is affordable on this hook. A write
+# is COMMON — unlike a pane spawn, which is rare — so resolving the library and forking `jq` for the
+# cwd on every write would add two execs to the hottest path in the fleet, which is the cost
+# docs/plans/HOOK_CHAIN_COST.md exists to stop (this hook already paid 11.6 ms of a 71.9 ms modal
+# path to three duplicate `jq` reads of one payload, backlog 054499f0c342). The lease can only bind
+# in a `wt-<12hex>` dispatch worktree, and such a cwd necessarily contains the substring `/wt-`
+# SOMEWHERE in the payload — so a pure parameter match on $INPUT skips the whole term, at zero
+# forks, for every session that is not in one. It cannot produce a miss: the substring is implied by
+# the shape the library keys on. A false HIT (the text appears in the command rather than the cwd)
+# costs one jq and is then decided correctly by the library, which abstains on a non-worktree cwd.
+case "$INPUT" in *'/wt-'*) ;; *) _wbw_hit=0 ;; esac
+if [[ "$_wbw_hit" == 1 ]]; then
+  _wbw_self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+  for _wbw_lib in "$(dirname "$_wbw_self")/../scripts/lib/worker-claim-gate.sh" \
+                  "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/worker-claim-gate.sh" \
+                  "${HOME:-}/.claude/scripts/lib/worker-claim-gate.sh"; do
+    # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
+    [[ -f "$_wbw_lib" ]] && . "$_wbw_lib" 2>/dev/null && break
+  done
+  if command -v cc_worker_claim_admit >/dev/null 2>&1; then
+    _wbw_cwd="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)"
+    [[ -n "$_wbw_cwd" ]] || _wbw_cwd="$PWD"
+    if ! CC_WCLAIM_SID="$(printf '%s' "$INPUT" | jq -r '.session_id // "?"' 2>/dev/null || echo '?')" \
+         cc_worker_claim_admit bash-write "$_wbw_cwd" "file write via Bash"; then
+      deny "DUPLICATE WORKER — file write refused. This session does not hold the lease on item $(cc_worker_claim_item). $(cc_worker_claim_reason). Another LIVE session ($(cc_worker_claim_holder)) holds it and is editing this worktree right now. Routing the edit through Bash does not change that: a \`sed -i\`, a redirect and a \`python3 - <<'PY'\` heredoc are the same act as the Write tool, and this is the exact path that put a DUPLICATE \`mailbox_peek_from\` into hooks/lib/mailbox-pending.sh on 2026-09-10 — a later definition silently shadowing the holder's, with no error anywhere. DO NOT retry, DO NOT re-word the command, and DO NOT work around this by writing elsewhere — you are the duplicate, and the refusal is a FACT about a live lease read from your working directory, not a transient throttle and not a judgement about your text. STAND DOWN: stop work. Retiring this pane is CONDITIONAL on how it was started, not a step you can assume: \`\$HOME/.claude/scripts/handoff-fire.sh self-close --terminal\` is exempt from THIS gate by construction and refuses a dirty tree (the intended safety), but it closes this pane only if the pane was FIRED as a peer. With no fired-peer stamp — every operator-launched pane and every Agent-Team lead — self-close exits 2, ORIGIN session, not a fired peer, and such a session STAYS UP and reports instead of closing. Standing down is the instruction either way. Reporting is NOT refused: cc-backlog, cc-notify and cc-custody match no arm of this gate. If you believe the incumbent is DEAD, do not force it — the lease self-releases the moment its claimer dies or \`cc-backlog reap\` ages the claim out, and the next write is admitted automatically. Override for this session only: CC_WCLAIM_GATE=off. Rule: backlog f5c3cfb86e2e, docs/plans/CONCURRENCY_PROGRAM.md#s4."
+    fi
+  else
+    jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')" \
+      '{ts:$ts,hook:"worker-claim-gate",sid:"?",disposition:"abstained",reason:"duplicate-worker",
+        gate:"worker-claim-gate",verdict:"admit",basis:"absent",caller:"bash-write",
+        what:"file write via Bash",detail:"scripts/lib/worker-claim-gate.sh unreachable — Bash-driven file writes UNGATED for duplicate workers"}' \
+      >> "${CC_WCLAIM_IDL:-$HOME/.claude/autonomy/idl.jsonl}" 2>/dev/null || true
+  fi
+fi
+
 # ── Hard deny: catastrophic or rule-violating patterns ────────────────
 
 # System damage, part 1 — the two shapes that are NOT an rm argv question. A fork bomb is syntax,

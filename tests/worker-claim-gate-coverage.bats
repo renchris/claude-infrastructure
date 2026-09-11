@@ -554,3 +554,207 @@ noncompliant_prescriptions() { # $1=file → echoes the offending lines, if any
   printf '%s\n' '  deny "retire with self-close --terminal only if fired; else it exits 2, ORIGIN session, not a fired peer."' > "$ok"
   [ -z "$(noncompliant_prescriptions "$ok")" ]
 }
+
+# ── THE FOURTH ENFORCEMENT POINT, cases 22-26 (backlog f5c3cfb86e2e) ────────────────────────────
+# HOOK3 again, but a different OCCASION: PreToolUse|Bash for commands that WRITE. Cases 14-18 gate
+# pane spawns on that hook; these gate file writes, and the two populations barely overlap.
+#
+# WHY IT WAS NEEDED AT ALL — case 01 has certified since 2026-08-07 that "the write" is gated, and
+# it is right about the surface it names. But auto mode's standing session instruction tells the
+# model to "make file changes with sed, heredocs, or short scripts, rather than using the dedicated
+# Read, Edit, or Write tools", so in the mode this fleet runs, the ROUTINE edit never reaches
+# PreToolUse|Write|Edit at all. A green case 01 and an ungated fleet were compatible for a month.
+# This is the `empty population` shape the pane-spawn block above records for the depth cap, and the
+# `counter-resets-at-the-boundary-the-runaway-crosses` shape, arriving on a third surface.
+#
+# MEASURED BEFORE THESE CASES WERE WRITTEN (2026-09-10), with the instrument's own positive control:
+# the incident payload — pane 71 appending to hooks/lib/mailbox-pending.sh via `python3 - <<'PY'` in
+# wt-0366d5cc7b87 while pane 70 held the lease — run through HOOK3 against a REFUSING ledger gave
+# EMPTY output at rc 0, i.e. admitted, while a pane-spawn payload against the SAME ledger in the
+# SAME worktree denied. The hole was the occasion, never the predicate.
+#
+# RED-PROOF (recorded 2026-09-10), five mutations on hooks/validate-bash.sh, each run against the
+# full suite so what STAYS green is part of the evidence:
+#   M1' `_wbw_hit=0` forced immediately above the gate — the occasion disarmed, which reproduces the
+#       exact pre-fix state with the file still parsing  → 23, 24 RED, everything else green
+#   M2  the whole block moved BELOW the first hard deny  → 22 RED alone, with the call fully present,
+#       so 22 observes POSITION and not presence
+#   M3  `*self-close*) _wbw_hit=0` deleted               → 24, 26 RED (the cure-is-exempt axis)
+#   M4  the /dev/null strip deleted from ARM 1           → 23 RED via its CONTROL 3, and 26 RED
+#   M5  `caller:"bash-write"` dropped from the fail-open record → 25 RED alone
+# Every case 22-26 is killed by at least one mutant, so none of them is decorative.
+#
+# 🚨 M1 WAS FIRST WRITTEN THE OBVIOUS WAY — the `cc_worker_claim_admit bash-write` line commented
+# out — and it reddened 22, 23, 24 AND the pane-spawn cases 15 and 18, which this term does not
+# touch. That spread is the tell: the invocation is the middle line of a multi-line `if ! VAR=… \`
+# continuation, so commenting it leaves the file UNPARSEABLE, every payload produces empty output,
+# and every end-to-end case in the suite fails for one reason that has nothing to do with the gate.
+# A mutant that breaks the subject's syntax cannot attribute anything — it proves the cases notice
+# the file is broken. M1' replaces it and isolates the decision, which is why its red set is two
+# cases rather than five (memory `per-site-mutation-attributes-coverage`: a mutant must remove the
+# cure, not demolish the building).
+#
+# M4 IS THE ONE THAT EARNS ITS KEEP, and it guards a design commitment rather than a bug: without
+# the strip, `grep … 2>/dev/null` is a redirection and therefore a "write", and this gate collapses
+# into a refusal of the whole Bash surface — which would take the duplicate's ability to inspect,
+# checkpoint and retire, the exact commitment case 15's CONTROL 3 pins for the spawn term, and would
+# carry as few bits as a gate that never fires.
+#
+# EVERY PROBE BELOW GETS ITS OWN CC_WCLAIM_STATE_DIR. The library caches an ADMIT keyed on the
+# caller, so a negative assertion sharing a cache with an earlier positive is not a control at all —
+# case 18's lesson (memory `sibling-guard-makes-the-fixture-vacuous`), and it applies identically
+# here because all of these probes share the one caller id `bash-write`.
+
+# the incident's own payload — a heredoc write with NO redirection anywhere in it
+WRITE_HEREDOC="python3 - <<'PY'
+open('hooks/lib/mailbox-pending.sh','a').write('mailbox_peek_from() { :; }')
+PY"
+
+# emit a PreToolUse Bash payload; $1 cwd, $2 command. jq -Rs so heredocs and quotes survive intact.
+bash_payload() {
+  jq -cn --arg cwd "$1" --arg cmd "$2" \
+    '{cwd:$cwd,session_id:"s1",tool_name:"Bash",tool_input:{command:$cmd}}'
+}
+
+@test "22 the BASH-WRITE surface carries the gate — a real invocation, above every hard deny" {
+  [ -f "$HOOK3" ]
+  # a real call, anchored to a statement start so a leading `#` cannot be absorbed (case 01's lesson)
+  [ "$(grep -cE '^[[:space:]]*cc_worker_claim_admit bash-write' "$HOOK3")" -ge 1 ]
+  # …and it must sit ABOVE the first hard deny, or the common case exits before reaching it.
+  gate="$(lineno "$HOOK3" 'cc_worker_claim_admit bash-write')"
+  firstdeny="$(lineno "$HOOK3" 'Dangerous command pattern blocked')"
+  [ -n "$gate" ] && [ -n "$firstdeny" ] && [ "$gate" -lt "$firstdeny" ]
+}
+
+@test "23 END-TO-END: a Bash-driven file write is DENIED from a session that lacks the lease" {
+  wt="$BATS_TEST_TMPDIR/.worktrees/wt-cccccccccccc"; mkdir -p "$wt"
+  fake="$BATS_TEST_TMPDIR/cc-backlog-w"
+  cat > "$fake" <<'EOF'
+#!/bin/bash
+echo "cc-backlog: refused — verdict=noop-live-claimer; cccccccccccc is held by Chriss-MacBook-Pro-3-999999, which is LIVE"
+exit 4
+EOF
+  chmod +x "$fake"
+
+  # THE SUBJECT — the measured incident shape. No redirect, no write verb: a heredoc into python3.
+  bash_payload "$wt" "$WRITE_HEREDOC" > "$BATS_TEST_TMPDIR/p-subject.json"
+  run env CC_WCLAIM_BACKLOG_BIN="$fake" CC_WCLAIM_STATE_DIR="$BATS_TEST_TMPDIR/stw-1" \
+      bash -c "bash '$HOOK3' < '$BATS_TEST_TMPDIR/p-subject.json'"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq -r '.hookSpecificOutput.permissionDecision')" = "deny" ]
+  printf '%s' "$output" | jq -r '.hookSpecificOutput.permissionDecisionReason' | grep -q 'DUPLICATE WORKER'
+
+  # CONTROL 1 — the lease held BY THIS SESSION must ADMIT the identical command. Without it the deny
+  # above could be an unconditional refusal of every write in a wt- dir, which would stop dispatch.
+  cat > "$fake" <<'EOF'
+#!/bin/bash
+echo "cc-backlog: verdict=noop-already-ours"
+exit 0
+EOF
+  run env CC_WCLAIM_BACKLOG_BIN="$fake" CC_WCLAIM_STATE_DIR="$BATS_TEST_TMPDIR/stw-2" \
+      bash -c "bash '$HOOK3' < '$BATS_TEST_TMPDIR/p-subject.json'"
+  [ "$status" -eq 0 ]
+  refute_match "$output" 'DUPLICATE WORKER'
+
+  # CONTROL 2 — NOT a dispatch worktree ⇒ not our population, whatever the ledger would have said.
+  cat > "$fake" <<'EOF'
+#!/bin/bash
+echo "cc-backlog: refused — verdict=noop-live-claimer; held by someone-else, which is LIVE"
+exit 4
+EOF
+  bash_payload "$BATS_TEST_TMPDIR" "$WRITE_HEREDOC" > "$BATS_TEST_TMPDIR/p-nonwt.json"
+  run env CC_WCLAIM_BACKLOG_BIN="$fake" CC_WCLAIM_STATE_DIR="$BATS_TEST_TMPDIR/stw-3" \
+      bash -c "bash '$HOOK3' < '$BATS_TEST_TMPDIR/p-nonwt.json'"
+  [ "$status" -eq 0 ]
+  refute_match "$output" 'DUPLICATE WORKER'
+
+  # CONTROL 3 — THE SCOPE CONTROL, and the one mutation M4 kills. Same refusing ledger, same
+  # worktree, a READ whose only redirection is `2>/dev/null`. A duplicate must keep the Bash it
+  # needs to inspect, checkpoint and retire (case 15's CONTROL 3, same commitment on the write
+  # surface). If this ever denies, the gate has become a refusal of the whole Bash surface.
+  bash_payload "$wt" 'grep -n mailbox_peek_from hooks/lib/mailbox-pending.sh 2>/dev/null' \
+    > "$BATS_TEST_TMPDIR/p-read.json"
+  run env CC_WCLAIM_BACKLOG_BIN="$fake" CC_WCLAIM_STATE_DIR="$BATS_TEST_TMPDIR/stw-4" \
+      bash -c "bash '$HOOK3' < '$BATS_TEST_TMPDIR/p-read.json'"
+  [ "$status" -eq 0 ]
+  refute_match "$output" 'DUPLICATE WORKER'
+
+  # CONTROL 4 — the STAND-DOWN REPORTING path must survive, else the refusal's own instruction
+  # ("report, then retire") is unrunnable and the gate forbids the behaviour it demands.
+  bash_payload "$wt" 'cc-notify --role desk "standing down: duplicate worker"' \
+    > "$BATS_TEST_TMPDIR/p-report.json"
+  run env CC_WCLAIM_BACKLOG_BIN="$fake" CC_WCLAIM_STATE_DIR="$BATS_TEST_TMPDIR/stw-5" \
+      bash -c "bash '$HOOK3' < '$BATS_TEST_TMPDIR/p-report.json'"
+  [ "$status" -eq 0 ]
+  refute_match "$output" 'DUPLICATE WORKER'
+
+  # CONTROL 5 — the OTHER write spellings the item names must deny too, or the term covers exactly
+  # one incident rather than the class. Each gets its own cache, for case 18's reason.
+  i=0
+  for c in "sed -i '' s/a/b/ hooks/lib/mailbox-pending.sh" \
+           'echo "fn(){ :; }" >> hooks/lib/mailbox-pending.sh' \
+           'rm -f hooks/lib/mailbox-pending.sh' \
+           'git commit -m wip'; do
+    i=$((i+1))
+    bash_payload "$wt" "$c" > "$BATS_TEST_TMPDIR/p-w$i.json"
+    run env CC_WCLAIM_BACKLOG_BIN="$fake" CC_WCLAIM_STATE_DIR="$BATS_TEST_TMPDIR/stw-w$i" \
+        bash -c "bash '$HOOK3' < '$BATS_TEST_TMPDIR/p-w$i.json'"
+    [ "$status" -eq 0 ]
+    printf '%s' "$output" | grep -q 'DUPLICATE WORKER'
+  done
+}
+
+@test "24 THE WRITE GATE ALLOWS ITS OWN CURE — self-close is exempt, and the fixture proves it bites" {
+  # Its own @test with its own caches, because the assertion is a NEGATIVE and a negative is only
+  # worth anything beside a positive that fires on the same fixture (case 18's lesson).
+  wt="$BATS_TEST_TMPDIR/.worktrees/wt-dddddddddddd"; mkdir -p "$wt"
+  fake="$BATS_TEST_TMPDIR/cc-backlog-wcure"
+  cat > "$fake" <<'EOF'
+#!/bin/bash
+echo "cc-backlog: refused — verdict=noop-live-claimer; dddddddddddd is held by Chriss-MacBook-Pro-3-999999, which is LIVE"
+exit 4
+EOF
+  chmod +x "$fake"
+
+  # POSITIVE CONTROL FIRST — same ledger, same worktree, a write: must DENY. If this stops firing,
+  # the ADMIT below proves nothing at all.
+  bash_payload "$wt" "$WRITE_HEREDOC" > "$BATS_TEST_TMPDIR/p-cure-pos.json"
+  run env CC_WCLAIM_BACKLOG_BIN="$fake" CC_WCLAIM_STATE_DIR="$BATS_TEST_TMPDIR/stw-cure-a" \
+      bash -c "bash '$HOOK3' < '$BATS_TEST_TMPDIR/p-cure-pos.json'"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | grep -q 'DUPLICATE WORKER'
+
+  # THE SUBJECT — self-close carries a `--terminal` flag and NO write shape of its own, so this
+  # would pass even unexempted; the spelling that needs the exemption is the one a dirty-tree
+  # retire actually uses, where the cure is chained after a write verb. Fresh cache either way.
+  bash_payload "$wt" 'git add -A && $HOME/.claude/scripts/handoff-fire.sh self-close --terminal' \
+    > "$BATS_TEST_TMPDIR/p-cure-sub.json"
+  run env CC_WCLAIM_BACKLOG_BIN="$fake" CC_WCLAIM_STATE_DIR="$BATS_TEST_TMPDIR/stw-cure-b" \
+      bash -c "bash '$HOOK3' < '$BATS_TEST_TMPDIR/p-cure-sub.json'"
+  [ "$status" -eq 0 ]
+  refute_match "$output" 'DUPLICATE WORKER'
+}
+
+@test "25 an ABSENT library leaves the WRITE surface fall-through and SAYS SO — never silently ungated" {
+  block="$(sed -n '/DUPLICATE-WORKER BASH-WRITE ADMISSION/,/^# ── Hard deny/p' "$HOOK3")"
+  # `[ -f ] && . && break` then a `command -v` test — never an unconditional source, never an exit.
+  refute_match "$(printf '%s' "$block" | grep -A3 'for _wbw_lib in')" 'exit 1'
+  # the symlink-resolved sibling must be FIRST (deployed-layer-bootstrap-circle, as in cases 08/17)
+  first="$(printf '%s' "$block" | grep -A1 'for _wbw_lib in' | head -1)"
+  printf '%s' "$first" | grep -q 'dirname "\$_wbw_self"'
+  # and the fall-through must RECORD, so "was this surface gated?" is answerable from the IDL.
+  printf '%s' "$block" | grep -q 'caller:"bash-write"'
+  printf '%s' "$block" | grep -q 'basis:"absent"'
+}
+
+@test "26 the write refusal names a drivable action, and does not forbid the reporting it demands" {
+  block="$(sed -n '/DUPLICATE-WORKER BASH-WRITE ADMISSION/,/^# ── Hard deny/p' "$HOOK3")"
+  printf '%s' "$block" | grep -q 'self-close --terminal'
+  printf '%s' "$block" | grep -q 'CC_WCLAIM_GATE=off'
+  # the cure is exempted by the FILTER, not merely mentioned in the sentence — else the refusal
+  # would name a command it also refuses (case 16's predicate, on this term's own variable).
+  printf '%s' "$block" | grep -qE '\*self-close\*\) _wbw_hit=0'
+  # the reads/reporting commitment is STRUCTURAL, not prose: the /dev/null strip must exist, or a
+  # duplicate cannot run the `cc-notify` and inspection the refusal instructs it to run.
+  printf '%s' "$block" | grep -q '2>\\/dev\\/null'
+}
