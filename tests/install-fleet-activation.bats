@@ -60,11 +60,20 @@ setup() {
   export LOG="$TDIR/launchctl.log"
   : > "$LOG"
 
-  # Minimal but REAL fixture repo: CLAUDE.md and statusline.sh are unconditional cp targets, so
-  # install.sh aborts under `set -e` without them.
+  # Minimal but REAL fixture repo: CLAUDE.global.md and statusline.sh are unconditional cp targets,
+  # so install.sh aborts under `set -e` without them.
+  #
+  # 🚨 THE REPO-SIDE NAME IS `CLAUDE.global.md` (367e42f2, backlog c3647a090021 — the global SSOT
+  # moved OFF the repo root because Claude Code loads a root CLAUDE.md as PROJECT memory on top of
+  # the byte-identical user-memory copy). install.sh copies `$REPO_DIR/CLAUDE.global.md` →
+  # `$CONFIG_DIR/CLAUDE.md`, so the LIVE side keeps the old name and only the REPO side moved.
+  # This fixture seeded the repo-side under the pre-rename name and was not updated with the rename,
+  # so `cp` failed under `set -e` at install.sh's global-instructions stage — which sits BEFORE the
+  # LaunchAgents loop every test here measures. All 9 tests went red at `[ "$status" -eq 0 ]` with an
+  # EMPTY launchctl log, i.e. the suite was asserting about a loop that never executed.
   mkdir -p "$FX/launchd"
   cp "$REPO/install.sh" "$FX/install.sh"
-  printf '# fixture global instructions\n' > "$FX/CLAUDE.md"
+  printf '# fixture global instructions\n' > "$FX/CLAUDE.global.md"
   printf '#!/bin/bash\necho fixture-statusline\n' > "$FX/statusline.sh"
 
   for l in fx-run fx-staged fx-retired fx-undeclared; do

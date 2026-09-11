@@ -42,13 +42,13 @@ setup() {
   # The observation point AND a second belt: `--global` can only reach this file.
   export GIT_CONFIG_GLOBAL="$BATS_TEST_TMPDIR/probe-gitconfig"
 
-  # Minimal but REAL fixture checkout — install.sh aborts under `set -e` without CLAUDE.md or
+  # Minimal but REAL fixture checkout — install.sh aborts under `set -e` without CLAUDE.global.md or
   # statusline.sh (both unconditional cp targets); agents/ gives the link legs something to link.
   FIX="$BATS_TEST_TMPDIR/repo"
   mkdir -p "$FIX/agents" "$FIX/scripts/lib"
   cp "$REPO/install.sh" "$FIX/install.sh"
   cp "$LIB" "$FIX/scripts/lib/real-home.sh"
-  printf '# fixture global instructions\n' > "$FIX/CLAUDE.md"
+  printf '# fixture global instructions\n' > "$FIX/CLAUDE.global.md"
   printf '#!/bin/bash\necho fixture-statusline\n' > "$FIX/statusline.sh"
   printf 'fixture agent\n' > "$FIX/agents/fixture-agent.md"
 
