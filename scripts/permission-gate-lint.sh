@@ -151,6 +151,19 @@ EMBEDDED_SET="install.sh scripts/deploy-* scripts/*land* scripts/ship-* scripts/
 # became three: behind-trunk, level, and git-could-not-answer) and still LOST an undeclared gate,
 # which is the whole point of the shape. Lowering the line is the DOWNWARD half: leaving 9 would be
 # a permanent one-gate allowance created by an improvement.
+#
+# ship-land.sh 9 -> 8 (2026-09-11, backlog 5a5a3073626c): the LAST bare `if ! cmd` of the class the
+# two entries above rewrote. That 2026-08-13 pass moved eight arms' `own_run` legs to the rc-capture
+# form but left the unattended-path arm's `--selftest` PREAMBLE in the old shape, so a selftest cut
+# by a SIGNAL was still dressed up as a RED — and it is the one selftest excluded from selftest_ok's
+# memo, hence the only one that re-runs its full scan every round and by far the likeliest to be
+# cut. Measured live that night: SIGTERM at load 41 with six concurrent landers, gate RED, land
+# refused, and the same blob then scored 53/53 rc 0 re-run unbounded. It now captures the rc and
+# routes 128+signum to arm_nonverdict (retryable exit 9); `negated()` matches `if ! cmd` and not an
+# rc compare, so it left the undeclared count. NOTHING WAS UN-GATED — the genuine exit-1 failure
+# still fires gate_red, red-proved by a positive-control case that is green in BOTH arms. Lowering
+# the line is the DOWNWARD half again: leaving 9 would be a permanent one-gate allowance minted by
+# an improvement.
 EMBEDDED_RATCHET="$(cat <<'RATCHET'
 install.sh 1
 scripts/deploy-live.sh 8
@@ -158,7 +171,7 @@ scripts/deploy-parity-assert.sh 1
 scripts/desk-land.sh 7
 scripts/land-verify.sh 1
 scripts/ship-backup-reap.sh 2
-scripts/ship-land.sh 9
+scripts/ship-land.sh 8
 RATCHET
 )"
 
