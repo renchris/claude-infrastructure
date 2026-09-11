@@ -342,7 +342,7 @@ import sys,json
 out=[]
 for l in sys.stdin:
     p=l.rstrip("\n").split("\t")
-    # 11 fields since D7 added `kinds` and `err_age_s` beside KIND. A hard count gate here is a
+    # 11 fields since D7 added kinds and err_age_s beside KIND. A hard count gate here is a
     # SILENT data-loss bug: a stale width made the skip drop EVERY row and --json returned a valid
     # empty list at exit 0, which any consumer reads as "no blocked sessions". Keep it exact, and
     # keep it in step with the printf in lf_locate and every tab-split read of a locate row — TAB is
