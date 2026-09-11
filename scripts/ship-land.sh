@@ -474,12 +474,21 @@ net_timeout_abort() {  # $1=the op, as the operator would type it  $2=base for t
 #
 # Counts, never `grep -q`: under this file's `set -o pipefail` a producer piped into an early-exiting
 # `grep -q` reads FALSE **on a match** (the same trap already documented at the two grep sites below).
-push_failure_kind() {  # $1 = git push's combined output → "non-ff" (a real race) | "refused"
-  local out="${1-}" n_rejected n_ffreason
+push_failure_kind() {  # $1 = git push's combined output → "non-ff" (a real race) | "transport" (never reached the remote) | "refused"
+  local out="${1-}" n_rejected n_ffreason n_transport
   n_rejected="$(printf '%s' "$out" | /usr/bin/grep -c '! \[rejected\]' || true)"
   n_ffreason="$(printf '%s' "$out" | /usr/bin/grep -cE '\((fetch first|non-fast-forward|stale info)\)' || true)"
+  # TRANSPORT: git never reached the remote, so no hook ran and no ref was judged. Measured
+  # 2026-09-10: a DNS outage mid-land produced exactly
+  #   fatal: unable to access '<url>': Could not resolve host: github.com
+  # and was classified "refused" — blaming the pre-push hook and saying a re-run would NOT clear it,
+  # twice in one session, when a re-run once DNS returned was the whole cure. Only CONNECTION-failure
+  # wording counts: an HTTP 403 or an ssh publickey refusal is auth, not transient, and stays "refused".
+  n_transport="$(printf '%s' "$out" | /usr/bin/grep -cE "unable to access '[^']*': (Could not resolve host|Failed to connect|Connection timed out|Operation timed out|Connection refused|Recv failure|SSL_ERROR_SYSCALL)|ssh: (Could not resolve hostname|connect to host .*(Operation timed out|Connection refused|Connection timed out))" || true)"
   if [ "${n_rejected:-0}" -gt 0 ] && [ "${n_ffreason:-0}" -gt 0 ]; then
     echo "non-ff"
+  elif [ "${n_rejected:-0}" -eq 0 ] && [ "${n_transport:-0}" -gt 0 ]; then
+    echo "transport"
   else
     echo "refused"
   fi
@@ -4567,8 +4576,11 @@ main_locked() {
     # refusal that now knows why it fired, not a new gate. The exit code and the promises are
     # identical on both branches; only the sentence differs.
     local PUSH_WHY
-    if [ "$(push_failure_kind "$(cat "$PUSH_LOG")")" = "non-ff" ]; then
+    local PUSH_KIND; PUSH_KIND="$(push_failure_kind "$(cat "$PUSH_LOG")")"
+    if [ "$PUSH_KIND" = "non-ff" ]; then
       PUSH_WHY="REJECTED (non-fast-forward — a sibling beat you inside the window). Re-run /ship to re-fetch+rebase+re-verify."
+    elif [ "$PUSH_KIND" = "transport" ]; then
+      PUSH_WHY="never reached the remote — git could not connect (network/DNS; the fatal line above says which). No hook ran and no ref was judged, so this is NOT a hook refusal and NOT a race: re-run /ship once the network is back."
     else
       PUSH_WHY="was turned away, and git rejected NO ref for a fast-forward reason — so this is NOT a trunk race and re-running /ship unchanged will not clear it. The party that turned it away is almost always the pre-push hook (githooks/pre-push — e.g. an unattributable author over the range); its output is above, verbatim. Fix what it names, then re-run /ship."
     fi
@@ -4636,7 +4648,8 @@ main_locked() {
       cat "$REPUSH_LOG" >&2
       [[ "$NET_TIMED_OUT" = "1" ]] && net_timeout_abort "push origin HEAD:$TRUNK" "$LAND_BASE" \
         "Whether the remote took this re-push is UNKNOWN; the next /ship re-fetches and decides."
-      if [ "$(push_failure_kind "$(cat "$REPUSH_LOG")")" = "non-ff" ]; then
+      local REPUSH_KIND; REPUSH_KIND="$(push_failure_kind "$(cat "$REPUSH_LOG")")"
+      if [ "$REPUSH_KIND" = "non-ff" ]; then
         # a sibling advanced trunk again inside the retry window — reconcilable. The next loop iteration's
         # verify fails (our head is not on the trunk) and drives another bounded reconcile; the attempt
         # counter still terminates a persistently-rejecting remote.
@@ -4646,13 +4659,17 @@ main_locked() {
         # clean, backup ref intact. No attest_land here by design — _land_exit_trap attests EVERY
         # non-zero terminal exit, and this file's own header puts that rule in the trap and not at
         # the exit sites; the first push's exit 7 is silent for the same reason.
+        # ONE refusal statement with the cause selected into it, as at the first push: a transport
+        # failure never reached the remote, so "the pre-push hook turned it away" would be false.
+        local REPUSH_WHY="and git rejected NO ref for a fast-forward reason — NOT a race, so reconciling again cannot clear it. The party that turned it away is almost always the pre-push hook; its output is above, verbatim. Fix what it names, then re-run /ship."
+        [ "$REPUSH_KIND" = "transport" ] && REPUSH_WHY="but git never reached the remote (network/DNS; the fatal line above says which) — NOT a hook refusal and NOT a race: re-run /ship once the network is back."
         rm -f "$REPUSH_LOG"
         # gate_bounded: SHIP_LAND_VERIFY_RETRIES — this branch IS that budget's expiry turned into an
         # event, which is the conversion this lint asks for. Reaching it costs no wait at all: git has
         # already returned a determinate verdict, and the refusal carries git's own output with it.
         # What stood here BEFORE was the standing state the lint exists to catch — a hook refusal
         # burned every retry silently and then exited 8 blaming a concurrent content-drop.
-        echo "✗ ship-land: re-push was turned away inside the retry window, and git rejected NO ref for a fast-forward reason — NOT a race, so reconciling again cannot clear it. The party that turned it away is almost always the pre-push hook; its output is above, verbatim. Fix what it names, then re-run /ship. Backup ref ship/backup-* intact (exit 7)." >&2
+        echo "✗ ship-land: re-push was turned away inside the retry window, $REPUSH_WHY Backup ref ship/backup-* intact (exit 7)." >&2
         exit 7  # gate_bounded: SHIP_LAND_VERIFY_RETRIES — the retry budget's expiry, made into an event
       fi
     fi
