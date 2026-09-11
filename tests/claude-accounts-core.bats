@@ -30,6 +30,11 @@ setup() {
   export CACHE="$BATS_TEST_TMPDIR/cache.json"
   export CLAUDE_ACCOUNTS_JSON="$CA_CFG"
   export CLAUDE_ACCOUNTS_LASTGOOD="$CA_LEDGER"
+  # The SUBPROCESS half of the LOG_PATH redirect $LOAD does in-process. `run "$CA_BIN" …` re-imports
+  # the module in a child where that assignment never happened, so without this any CLI case on a
+  # logging path appends to the operator's real ~/.claude/logs/claude-accounts.log. Pinned here as
+  # well as fixed in the tool, so the suite is hermetic even against a tool that forgets.
+  export CLAUDE_ACCOUNTS_LOG="$BATS_TEST_TMPDIR/claude-accounts.log"
   export YAML="$BATS_TEST_TMPDIR/model-config.yaml"
   # M7 hermeticity: every CLI invocation now READS the utilization series (apply_burn) and the
   # assignment ledger (apply_assignments). The fixture uses real account names, so without these
@@ -318,6 +323,52 @@ assert by["bad"]["auth"] == "probe-error" and "error" in by["bad"]
 assert by["good"]["auth"] == "ok" and by["good"]["weekly_pct"] == 11
 print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || false
+}
+
+# RAW import — deliberately NOT $LOAD. $LOAD assigns `ca.LOG_PATH` for hermeticity, which is
+# exactly the thing under test here: these cases must observe what a FRESH process RESOLVES, and an
+# in-process assignment would overwrite the answer before it could be read.
+RAWLOAD='
+import importlib.machinery, importlib.util, os
+ca = importlib.util.module_from_spec(importlib.util.spec_from_loader(
+    "ca", importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"])))
+importlib.machinery.SourceFileLoader("ca", os.environ["CA_BIN"]).exec_module(ca)
+print(ca.LOG_PATH)'
+
+@test "LOG_PATH: a child process honours the env redirect — an in-process assignment cannot reach one" {
+  # THE STRUCTURAL HALF of the fixture leak. $LOAD assigns `ca.LOG_PATH` and that fixes every
+  # in-process case — but a test that shells out to the CLI (`run "$CA_BIN" …`) re-imports the
+  # module in a CHILD, where the assignment never happened, so LOG_PATH resolved from $HOME and any
+  # error path appended to the operator's real ~/.claude/logs/claude-accounts.log. That log is READ
+  # as evidence about the fleet, so a fixture line in it is not noise, it is false testimony.
+  #
+  # THE LEAK THIS CLOSES IS NOT CURRENTLY FLOWING, and the measurement says so rather than the
+  # headline: 982 lines of `RuntimeError: simulated keychain explosion` sit in that log, but their
+  # last write is 2026-08-10T00:38Z — 32 days before the 2026-09-10 memo that reported them in the
+  # present tense — and this whole suite run against the pre-fix binary moved the real log by 0
+  # lines. What is still live is the RESOLUTION: no env var could redirect it, so the next suite to
+  # shell out on a logging path leaks again with nothing in the tool to stop it.
+  run env -u CLAUDE_ACCOUNTS_LOG CLAUDE_ACCOUNTS_JSON="$CA_CFG" python3 -c "$RAWLOAD"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | tail -1)" != "$HOME/.claude/logs/claude-accounts.log" ] || false
+}
+
+@test "LOG_PATH: CLAUDE_ACCOUNTS_LOG is honoured exactly, and beats the derived sibling" {
+  want="$BATS_TEST_TMPDIR/explicit.log"
+  run env CLAUDE_ACCOUNTS_LOG="$want" CLAUDE_ACCOUNTS_JSON="$CA_CFG" python3 -c "$RAWLOAD"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | tail -1)" = "$want" ]
+}
+
+@test "LOG_PATH: with NO override the operator's own log path is unchanged" {
+  # EQUIVALENCE GUARD, green in both arms by construction — and the reason the derivation is
+  # CONDITIONAL rather than unconditional. Deriving a sibling whenever the SSOT is non-default
+  # would orphan the whole accumulated operator log the day an account is added or the SSOT moves,
+  # blanking "what the fleet did" precisely when someone is reading it to find out. Same trade the
+  # ledger's _lastgood_path() already makes, and stated here so a later "simplification" meets it.
+  run env -u CLAUDE_ACCOUNTS_LOG -u CLAUDE_ACCOUNTS_JSON python3 -c "$RAWLOAD"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | tail -1)" = "$HOME/.claude/logs/claude-accounts.log" ]
 }
 
 @test "cache_read: a valid-JSON non-dict cache degrades to a miss instead of wedging the tool" {

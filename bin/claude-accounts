@@ -185,7 +185,34 @@ _HEAL_GATE = threading.Semaphore(1)
 
 HOME = os.path.expanduser("~")
 CFG_PATH = os.environ.get("CLAUDE_ACCOUNTS_JSON", os.path.join(HOME, ".claude", "accounts.json"))
-LOG_PATH = os.path.join(HOME, ".claude", "logs", "claude-accounts.log")
+# Event log. Env-overridable on the SAME discipline as the ledger below, and for the same reason:
+# a module-level constant computed from HOME is not redirectable by a caller that has already
+# redirected the SSOT, so every suite that exercises an error path wrote its fixtures into the real
+# operator log. Measured 2026-09-11: 982 lines of `RuntimeError: simulated keychain explosion` — a
+# TEST fixture (tests/claude-accounts-core.bats "collect: one account raising does not blank the
+# others") in ~/.claude/logs/claude-accounts.log, plus ~250 keychain timeouts and 615 `ps
+# UNAVAILABLE` rows of mixed provenance. That log is READ as evidence about the fleet, so a fixture
+# in it is not noise, it is false testimony: 145 wave-plan passes were lost reasoning over it
+# (docs/research/cloud-lane-redesign-2026-09-10/C3-local-refusals.md §7).
+#
+# The previous containment was per-call — `render_limit_gaps()` gates its own log line and says so
+# ("LOG_PATH resolves at import; only some suites redirect it") — which fixes one emitter and
+# leaves every other one leaking. Redirect the PATH and the whole class goes with it.
+def _log_path():
+    explicit = os.environ.get("CLAUDE_ACCOUNTS_LOG")
+    if explicit:
+        return explicit
+    logs = os.path.join(HOME, ".claude", "logs")
+    # Same shape as _lastgood_path(): a scratch SSOT gets a sibling keyed on the config it points
+    # at, and the DEFAULT keeps the unchanged path on purpose — deriving it unconditionally would
+    # orphan the accumulated operator log the day an account is added or the SSOT moves.
+    if os.environ.get("CLAUDE_ACCOUNTS_JSON"):
+        h = sha256(os.path.realpath(CFG_PATH).encode()).hexdigest()[:8]
+        return os.path.join(logs, f"claude-accounts-{h}.log")
+    return os.path.join(logs, "claude-accounts.log")
+
+
+LOG_PATH = _log_path()
 # Last-good quota ledger: TTL-free, per-account, persisted OUTSIDE /tmp so a reboot/tmp-sweep
 # never strands the last-known numbers. Env-overridable (mirrors CLAUDE_ACCOUNTS_JSON) so tests
 # and scratch configs never touch the real ledger.
