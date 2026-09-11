@@ -302,6 +302,37 @@ memo_batch_record() {  # $1=index — only ever called on a PROVEN-green run
   return 0
 }
 
+# ---- the per-lint read-set arm, shared (follow-on 3 of the cloud-lane redesign) ------------------
+# Every lint that memoizes per file takes the same four steps — memo_init, fold its read set into a
+# checker id, refuse an empty id, arm the batch. Three hand copies of them (herm, gitid, pipefail) is how
+# the repo came to have one keyed on a relative path and one keyed on the checkout's absolute path. This
+# is the four steps ONCE. The READ SET stays the lint's own business: it is that lint's locality proof,
+# and only the lint can state what its verdict reads.
+memo_readset_arm() {  # $1=checker prefix · $2=read-set text · $3…=the EXACT ordered population → 0 = armed
+  local prefix="$1" readset="$2" ck
+  shift 2
+  # An empty population arms nothing. (Worded differently from memo_batch_arm's own guard ON PURPOSE:
+  # tests/gate-memo-batch.bats mutates that line by its exact literal and requires ONE match.)
+  [ "$#" -gt 0 ] || return 1
+  memo_init || return 1                          # dirty tree · no git dir · unwritable store ⇒ OFF
+  ck="$prefix/$(printf '%s' "$readset" | _memo_hash)"
+  [ "$ck" != "$prefix/" ] || return 1
+  memo_batch_arm "$ck" "$@"
+}
+
+# The identity of an interpreter a per-file verdict depends on, keyed by its BINARY rather than a version
+# banner: the salt above covers the static analyser, bash, python3 and git and nothing else, and a banner
+# can survive a rebuild. rc 1 — so the caller's memo stays OFF — when the name resolves to anything but a
+# FILE: an exported function or a builtin resolves to its bare name, which this cannot fingerprint.
+memo_bin_id() {  # $1=bare command name → "<absolute path> <blob>" on stdout
+  local p b
+  p="$(command -v "$1" 2>/dev/null)" || return 1
+  case "$p" in /*) ;; *) return 1 ;; esac
+  b="$(git hash-object -- "$p" 2>/dev/null)" || return 1
+  [ -n "$b" ] || return 1
+  printf '%s %s' "$p" "$b"
+}
+
 # ---- why the repo-wide RATCHET arms are NOT memoized here --------------------
 # P3's spec asks for a second mechanism beside this one: "cache each arm's verdict against lint-sha
 # + scanned-set state, or make the arm diff-incremental where that is SOUND. Where an arm cannot be

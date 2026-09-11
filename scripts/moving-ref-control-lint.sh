@@ -79,6 +79,45 @@ ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 # into an exemption list.
 EMBEDDED_ALLOWLIST=""
 
+# ── THE PER-FILE MEMO (ratchet-arm memo rollout — follow-on 3 of the cloud-lane redesign) ────────────
+# 10.7s on a real precheck (2026-09-11, load ~10): one awk fork per suite over ~660 tests/*.bats, and
+# every round of every land re-proved verdicts about bytes that had not moved.
+#
+# THE READ SET. A suite's output here is a function of exactly: its own bytes · this lint's blob (the
+# awk program and every branch) · the ALLOWLIST text in force — CC_MOVINGREF_ALLOWLIST changes it without
+# changing a byte of this file, so it is hashed BY VALUE — · and the awk binary that runs the detector.
+# The own-set is NOT in it: in_own only picks the WORDING of a line a suite already emits, and only a
+# suite that emits nothing is ever recorded.
+#
+# ONLY "CLEAN, NOT GRANDFATHERED, AND THE DETECTOR EXITED 0" IS RECORDED. A finding re-runs and re-prints
+# on every run. A suite whose basename appears ANYWHERE in the allowlist text — asked with a builtin that
+# cannot fail — is never recorded either, so its RATCHET line cannot be silenced by a forked in_allowlist
+# that failed and fell through to the clean branch.
+#
+# Kill switch: CC_MOVINGREF_MEMO=off (SHIP_LAND_MEMO=off too, via memo_init). --selftest forces it OFF so
+# its detector cases always exercise the detector. Proven by tests/tests-dir-lint-memo.bats.
+MR_MEMO_OK=0; MR_MEMO_HITS=0; MR_MEMO_RAN=0
+if [ "${CC_MOVINGREF_MEMO:-on}" != "off" ] && [ -r "$ROOT/scripts/lib/gate-memo.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$ROOT/scripts/lib/gate-memo.sh" 2>/dev/null || true
+fi
+mr_memo_arm() {  # $1=allowlist text in force · $2…=the EXACT ordered population → 0 = armed
+  MR_MEMO_OK=0
+  [ "${CC_MOVINGREF_MEMO:-on}" != "off" ] || return 1
+  command -v memo_readset_arm >/dev/null 2>&1 || return 1   # an older lib ⇒ memo OFF, today's behaviour
+  local allow="$1" selfabs selfblob awkid
+  shift
+  # ABSOLUTE: $SELF is symlink-resolved above but may still be relative ($0), and a key that cannot be
+  # computed from another cwd is a memo that silently never arms (git-identity-lint shipped that once).
+  selfabs="$(cd "$(dirname "$SELF")" && pwd)/$(basename "$SELF")" || return 1
+  selfblob="$(git hash-object -- "$selfabs" 2>/dev/null)" || return 1
+  [ -n "$selfblob" ] || return 1
+  awkid="$(memo_bin_id awk)" || return 1
+  memo_readset_arm movingref "$(printf 'movingref-readset/v1\nlint=%s\nallow=%s\nawk=%s\n' \
+                                  "$selfblob" "$allow" "$awkid")" "$@" || return 1
+  MR_MEMO_OK=1
+}
+
 # OWN-SCOPE — THREE states, and `${VAR:-}` cannot express them: own-set ABSENT ⇒ strict whole-tree;
 # SET-BUT-EMPTY ⇒ "I change no suite" ⇒ nothing blocks; SET ⇒ block on those only. Presence rides on
 # argument count here and on `${CC_MOVINGREF_OWN+set}` at the entry point.
@@ -210,10 +249,20 @@ lint_dir() {
   local dir="$1" allow="$2" own="${3:-}" own_scoped=0 f base hits bad=0 seen=0 other=0 stuck=0
   [ "$#" -ge 3 ] && own_scoped=1
   [ -d "$dir" ] || { echo "moving-ref-control-lint: ⛔ not a directory: $dir" >&2; return 2; }
-  for f in "$dir"/*.bats; do
-    [ -e "$f" ] || continue
-    seen=$((seen + 1)); base="$(basename "$f")"
-    hits="$(moving_ref_shows "$f")"
+  # THE POPULATION, BUILT EXACTLY ONCE: the batch memo is INDEX-KEYED (scripts/lib/gate-memo.sh), so the
+  # list it arms on and the list this loop walks must be the same array.
+  local files=() hrc
+  for f in "$dir"/*.bats; do [ -e "$f" ] && files[${#files[@]}]="$f"; done
+  MR_MEMO_HITS=0; MR_MEMO_RAN=0
+  if [ "${#files[@]}" -gt 0 ]; then mr_memo_arm "$allow" "${files[@]}" || true; fi
+  for f in ${files[@]+"${files[@]}"}; do
+    seen=$((seen + 1))                             # FIRST: the memo index is seen - 1, derived
+    if [ "$MR_MEMO_OK" = "1" ] && memo_batch_hit "$((seen - 1))"; then
+      MR_MEMO_HITS=$((MR_MEMO_HITS + 1)); continue
+    fi
+    MR_MEMO_RAN=$((MR_MEMO_RAN + 1))
+    base="$(basename "$f")"
+    hits="$(moving_ref_shows "$f")"; hrc=$?
     if [ -n "$hits" ]; then
       if in_allowlist "$base" "$allow"; then
         continue                                   # grandfathered — known site, already on the list
@@ -233,8 +282,18 @@ lint_dir() {
         printf '  ratchet?   %s is fixed but still grandfathered (NOT in your diff — advisory)\n' "$base"
         other=$((other + 1))
       fi
+    elif [ "$MR_MEMO_OK" = "1" ] && [ "$hrc" -eq 0 ]; then
+      # THE RECORD — the only place a green is earned. Clean, and the detector answered (an awk that died
+      # leaves `hits` empty, which reads as clean). "Not grandfathered" is asked AGAIN with a builtin:
+      # in_allowlist above is a forked grep that answers "not listed" when it fails, which lands a
+      # grandfathered suite right here — and banking it would silence its RATCHET line for as long as the
+      # key holds. Conservatively, a basename appearing ANYWHERE in the allowlist text is never recorded.
+      case "$allow" in *"$base"*) ;; *) memo_batch_record "$((seen - 1))" ;; esac
     fi
   done
+  if [ "$MR_MEMO_OK" = "1" ]; then
+    echo "moving-ref-control-lint: per-file memo — $MR_MEMO_HITS verdict(s) carried, $MR_MEMO_RAN proven fresh." >&2
+  fi
   [ "$seen" -gt 0 ] || { echo "moving-ref-control-lint: ⛔ no .bats suites under $dir" >&2; return 2; }
   [ "$other" -eq 0 ] || echo "moving-ref-control-lint: $other pre-existing item(s) NOT in your diff — reported, not blocking (own-scope)."
 
@@ -263,6 +322,10 @@ lint_dir() {
 
 # ── --selftest: every case proves a RED path fires or a GREEN path does not, both directions ──────
 if [ "${1:-}" = "--selftest" ]; then
+  # MEMO OFF for the whole selftest: every case below must exercise the DETECTOR, and a carried verdict
+  # would let a green case pass on the memo instead. The gate carries the selftest as a whole anyway
+  # (ship-land.sh's selftest_ok, keyed on this blob).
+  CC_MOVINGREF_MEMO=off
   d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
   for c in cmdsub mainref headref bareref branchref expansion dangling pinned pinnedfull mention prose nogit push catfile showref; do mkdir -p "$d/$c"; done
   mk() { printf '#!/usr/bin/env bats\n%s\n@test "x" { true; }\n' "$2" > "$d/$1/zz-fixture.bats"; }
