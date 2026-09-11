@@ -473,16 +473,23 @@ git_ident_email() {  # <repo> → the author email git ITSELF would use (empty �
   printf '%s' "${id%%>*}"
 }
 
+MSG_HOOK_REFUSAL=""
 msg_hook_refuses() {  # <repo> <msg-file> → 0 the repo's OWN commit-msg hook refuses this message
   # The trailer names are chosen to clear githooks/commit-msg, and that constraint is invisible in
   # the strings themselves — so it is CHECKED by the hook rather than restated as a regex here. One
   # predicate, one arbiter: if someone later reaches for `Co-authored-by:`, this refuses before a
   # single commit object is written, instead of the whole range failing later somewhere else.
-  local repo="$1" f="$2" hook
+  #
+  # The refusal TEXT is kept in MSG_HOOK_REFUSAL because the hook greps with `-n`: it does not
+  # merely say no, it names the offending lines by number. strip_hook_blocked_trailers() cuts
+  # exactly those, which is how the cut stays the hook's judgement rather than a copy of it.
+  local repo="$1" f="$2" hook out
+  MSG_HOOK_REFUSAL=""
   hook="$("$GIT_BIN" -C "$repo" rev-parse --git-path hooks/commit-msg 2>/dev/null)" || return 1
   case "$hook" in /*) ;; *) hook="$repo/$hook" ;; esac
   [ -x "$hook" ] || return 1                       # no hook installed ⇒ nothing refuses
-  ( cd "$repo" && "$hook" "$f" ) >/dev/null 2>&1 && return 1
+  out="$( ( cd "$repo" && "$hook" "$f" ) 2>&1 )" && return 1
+  MSG_HOOK_REFUSAL="$out"
   return 0
 }
 
@@ -490,6 +497,59 @@ add_trailers() {  # <repo> <msg-file> <orig-sha> <branch> <decl-id>
   local -a ta=(--trailer "Original-commit: $3" --trailer "Original-branch: $4")
   [ -n "$5" ] && ta=(--trailer "Cloud-session: $5" "${ta[@]}")
   "$GIT_BIN" -C "$1" interpret-trailers --in-place "${ta[@]}" "$2" 2>/dev/null
+}
+
+strip_hook_blocked_trailers() {  # <repo> <msg-file> → 0 the hook's OWN named lines were cut
+  # THE PRIMARY CUT. githooks/commit-msg greps with `-n`, so a refusal does not merely say no — it
+  # NAMES the offending lines by number. Cutting exactly those keeps the one-arbiter property the
+  # positional strip below was reaching for and does not achieve: that one consults the hook about
+  # nothing, and demands the AI block be *exactly* the final paragraph, so a `(cherry picked from
+  # …)` line, one line of adjacent prose, or any prose appended after the block defeats it. All 5
+  # live refusals on this box are that shape, and the reconciler then blamed the VM for text it had
+  # simply failed to find (docs/research/cloud-lane-redesign-2026-09-10/B2-refusal-autopsy.md §iv-A).
+  #
+  # TWO LINES ARE NEVER CUT, because this rewrite re-attributes authorship and does not censor what
+  # a commit SAYS: the subject, and any named line that is not trailer-shaped (`Token: value`). The
+  # hook's `claude.ai/code` arm is unanchored and can match mid-prose, so without that guard a URL
+  # in a body paragraph would be silently deleted. Either case falls through to the caller's
+  # "the SUBJECT or BODY the VM wrote" refusal, which is the correct verdict for both.
+  #
+  # Non-destructive on failure: the cut is written beside the message and only moved into place
+  # once the hook has ACCEPTED it, so a caller may fall back to the positional strip on the
+  # untouched original.
+  local repo="$1" f="$2" nums
+  msg_hook_refuses "$repo" "$f" || return 1          # nothing refuses ⇒ nothing to cut
+  # SPACE-separated, not newline: BSD awk refuses a literal newline inside a -v assignment
+  # ("awk: newline in string"), and that is a parse error at source line 1 — every line survives and
+  # the cut silently declines.
+  nums="$(printf '%s\n' "$MSG_HOOK_REFUSAL" | sed -n 's/^[[:space:]]*\([0-9][0-9]*\):.*$/\1/p' | tr '\n' ' ')"
+  case "$nums" in *[0-9]*) ;; *) return 1 ;; esac    # refused without naming a line ⇒ not ours to cut
+  awk -v nums="$nums" '
+    BEGIN { n = split(nums, a, " "); for (i = 1; i <= n; i++) if (a[i] != "") drop[a[i] + 0] = 1 }
+    {
+      if (drop[NR]) {
+        if (NR == 1) { bad = 1; exit 1 }             # the SUBJECT — refused, never edited
+        if ($0 !~ /^[[:space:]]*[A-Za-z][A-Za-z0-9_-]*:[[:space:]]*[^[:space:]]/) { bad = 1; exit 1 }
+        next                                         # a trailer the hook named: cut it
+      }
+      line[++m] = $0
+    }
+    END {
+      if (bad) exit 1
+      end = m; while (end > 0 && line[end] ~ /^[[:space:]]*$/) end--
+      if (end == 0) exit 1                           # the message was nothing but the cut lines
+      prev = 0                                       # collapse the blank run the cut left behind
+      for (i = 1; i <= end; i++) {
+        blank = (line[i] ~ /^[[:space:]]*$/)
+        if (blank && prev) continue
+        print line[i]
+        prev = blank
+      }
+    }
+  ' "$f" > "$f.hookcut" 2>/dev/null || { rm -f "$f.hookcut"; return 1; }
+  if msg_hook_refuses "$repo" "$f.hookcut"; then rm -f "$f.hookcut"; return 1; fi
+  mv "$f.hookcut" "$f" 2>/dev/null || { rm -f "$f.hookcut"; return 1; }
+  return 0
 }
 
 strip_trailer_block() {  # <repo> <msg-file> → 0 the final paragraph WAS the trailer block, dropped
@@ -613,9 +673,9 @@ EOF
     # the evidence that the block is the machine attribution this repo does not keep.
     if msg_hook_refuses "$repo" "$f"; then
       if ! "$GIT_BIN" -C "$repo" log -1 --format=%B "$sha" > "$f" 2>/dev/null \
-         || ! strip_trailer_block "$repo" "$f" \
+         || ! { strip_hook_blocked_trailers "$repo" "$f" || strip_trailer_block "$repo" "$f"; } \
          || ! add_trailers "$repo" "$f" "$sha" "$b" "$id"; then
-        REAUTH_DETAIL="this repo's OWN commit-msg hook REFUSES the message of $sha and there is no trailer block to drop, so what it blocks is in the SUBJECT or BODY the VM wrote. This rewrite re-attributes authorship; it does NOT edit what a commit says. Fix the message at the source and re-push."
+        REAUTH_DETAIL="this repo's OWN commit-msg hook REFUSES the message of $sha and no blocked trailer line could be dropped, so what it blocks is in the SUBJECT or BODY the VM wrote. This rewrite re-attributes authorship; it does NOT edit what a commit says. Fix the message at the source and re-push."
         rm -f "$f"; return 1
       fi
       if msg_hook_refuses "$repo" "$f"; then
