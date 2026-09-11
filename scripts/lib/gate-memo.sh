@@ -403,11 +403,30 @@ memo_bin_id() {  # $1=bare command name → "<absolute path> <blob>" on stdout
 # memo is keyed on its own lint's inputs, so an unmemoized lint runs exactly as it does today — the
 # rollout is incomplete, never unsound, and no lint waits on any other.
 #
-# ── STATUS 2026-09-11: the rollout, re-ranked from a real precheck ─────────────────────────────────
-# Per-file memos: test-hermeticity (suites), git-identity, pane-spawn-coverage, pipefail-sigpipe.
-# The next arms by measured cost are listed with their numbers in each lint's own memo header; an arm
-# whose verdict reads the BOX (unattended-path: installed_somewhere/reachable_on probe the invoker's
-# PATH) has no content key and is left unmemoized rather than keyed loosely.
+# ── STATUS 2026-09-11: the rollout, measured on real lands ─────────────────────────────────────────
+# Per-file memos now: test-hermeticity (suites), git-identity, pane-spawn-coverage, pipefail-sigpipe,
+# moving-ref-control, test-afunix-path, test-walltime, bats-kill-guard, utc-stamp. The last five sit on
+# memo_readset_arm above. Each lint's scan, timed as ship-land's own_run invokes it: warm vs the same
+# lint with its memo OFF, same box, same minutes (load ~9-12, tree 606d26bfb):
+#
+#   test-hermeticity   77.2 -> 23.1s   root-relative key: it had minted one key PER WORKTREE, so a land
+#                                       from a fresh worktree carried 0 of 656 (the ~20s left is the
+#                                       seam/env table build, which a verdict memo cannot store)
+#   pipefail-sigpipe   17.2 ->  3.4s
+#   moving-ref-control 10.5 ->  0.3s
+#   bats-kill-guard     8.9 ->  0.4s   the memo shrinks its ONE awk pass to the unproven suites
+#   test-walltime       8.8 ->  0.3s   keyed on TODAY and the horizon; today pinned once per run
+#   test-afunix-path    6.5 ->  0.3s   keyed on the window
+#   utc-stamp           4.6 ->  0.5s
+#   unattended-path    NOT memoized: its verdict reads the BOX (installed_somewhere / reachable_on), so no
+#                      content key can carry it without carrying a green earned on one box into another.
+#                      LC_ALL=C instead: its cost was bash decoding UTF-8 inside has_line. Arm (selftest +
+#                      scan) 232.7 -> 88.3s on a real precheck; the scan alone 112.1 -> 41.4s, same minutes.
+#
+# REAL LANDS: single-round successful lands since 2026-09-08 ran their arms at p50 365s (n=100). The first
+# land carrying this rollout (606d26bfb, five of these memos still COLD) ran its arms in 220s, against
+# 315s for each of the two lands just before it. Left unmemoized, with the number that decided it:
+# self-path 2.1s and every arm under 1s. git-identity (8.2s) and pane-spawn (3.4s) were already memoized.
 
 memo_summary() {  # one line for the gate's stderr — counters, not prose
   [[ "$MEMO_OK" = "1" ]] || { echo "→ gate: statics memo OFF (${SHIP_LAND_MEMO:-on}) — every static ran." >&2; return 0; }
