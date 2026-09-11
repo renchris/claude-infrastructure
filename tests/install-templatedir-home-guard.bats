@@ -48,7 +48,7 @@ setup() {
   mkdir -p "$FIX/agents" "$FIX/scripts/lib"
   cp "$REPO/install.sh" "$FIX/install.sh"
   cp "$LIB" "$FIX/scripts/lib/real-home.sh"
-  printf '# fixture global instructions\n' > "$FIX/CLAUDE.md"
+  printf '# fixture global instructions\n' > "$FIX/CLAUDE.global.md"
   printf '#!/bin/bash\necho fixture-statusline\n' > "$FIX/statusline.sh"
   printf 'fixture agent\n' > "$FIX/agents/fixture-agent.md"
 
