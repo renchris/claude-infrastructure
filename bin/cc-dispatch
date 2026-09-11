@@ -538,25 +538,67 @@ idl() {
      '{ts:$ts, actor:"cc-dispatch", action:$action, detail:$detail}' >> "$IDL" 2>/dev/null || true
 }
 
-# idl_unplaced <id> — an ADMITTED id that reached no terminal record. Its own action token rather
-# than `failed` or `skipped`: it is neither (nothing refused it and nothing broke), and folding it
-# into either would mislabel a capacity artefact as a fault — the same reason a cloud-ineligible
-# refusal is a skip and not a failure. The item keeps its row and is re-admitted next pass.
+# idl_unplaced <id> <cause> <reason> — an ADMITTED id that reached no terminal record. Its own action
+# token rather than `failed` or `skipped`: it is neither (nothing broke), and folding it into either
+# would mislabel a capacity artefact as a fault — the same reason a cloud-ineligible refusal is a
+# skip and not a failure. The item keeps its row and is re-admitted next pass.
 idl_unplaced() {
   mkdir -p "$(dirname "$IDL")" 2>/dev/null || true
-  jq -cn --arg ts "$(now_iso)" --arg pass "$PASS_ID" --arg id "$1" --arg reason "$2" \
-     '{ts:$ts, actor:"cc-dispatch", action:"unplaced", pass:$pass, id:$id, reason:$reason,
-       detail:($id + ": admitted but never placed — " + $reason)}' >> "$IDL" 2>/dev/null || true
+  jq -cn --arg ts "$(now_iso)" --arg pass "$PASS_ID" --arg id "$1" --arg cause "$2" --arg reason "$3" \
+     '{ts:$ts, actor:"cc-dispatch", action:"unplaced", pass:$pass, id:$id, cause:$cause, reason:$reason,
+       detail:($id + ": admitted, no terminal record — " + $reason)}' >> "$IDL" 2>/dev/null || true
+}
+
+# ── WHY an admitted id went unfired — named by the arm that let it go ─────────────────────────────
+# Every unplaced record used to carry ONE fixed reason: "the wave planner placed no slot for it and
+# no arm refused it". Measured over 658 unplaced rows / 156 passes (2026-09-01..11, joined to the
+# planner's own records in each pass window), that sentence was false for every class it covered:
+#   417 rows  a wave-plan WALL[unknown] refused the whole wave (the account oracle timed out)
+#   140 rows  surplus past the capacity=<n> a WALL[capacity] reported, cut by the re-plan below
+#    92 rows  the planner DID place them — the spawn loop stopped at MAX_SPAWN (a per-pass cap)
+#     9 rows  a WALL[capped] refused the wave
+# Zero were a free planner slot left unused, so there is no placement bug to fix here — the defect
+# is the label, which pointed every reader at the planner for losses the planner never made and hid
+# the one term (the oracle wall) that actually dominates. So each arm that knowingly lets an
+# admitted id go without a terminal record NOTES its cause, first noter wins, and the reconcile
+# below journals that cause. An id no arm noted keeps `unattributed` — a named residual, never a
+# guess. Causes and reasons carry no TAB and no newline (the store is tab-delimited lines).
+TAB=$'\t'
+UNPLACED_CAUSES=""     # lines "<id>\t<cause>\t<reason>" for admitted ids an arm knowingly let go
+UNPLACED_CAUSE_LIST="" # one cause per unplaced id, newline-separated — the summary's tally input
+note_unplaced() { # <cause> <reason> <id>...
+  local cause="$1" reason="$2" _id; shift 2
+  for _id in "$@"; do
+    [ -n "$_id" ] || continue
+    case "$NL$UNPLACED_CAUSES" in *"$NL$_id$TAB"*) continue ;; esac   # first noter wins
+    UNPLACED_CAUSES="$UNPLACED_CAUSES$_id$TAB$cause$TAB$reason$NL"
+  done
+}
+# note_unplaced_wave <cause> <reason> <json-array-of-{id}> [from-index] — the same, for every id of a
+# wave/plan from an index on. The loop reads a process substitution, so it runs in THIS shell and
+# the global it appends to survives (a pipe would run it in a subshell and lose every note).
+note_unplaced_wave() {
+  local _nid
+  while IFS= read -r _nid; do note_unplaced "$1" "$2" "$_nid"; done \
+    < <(printf '%s' "$3" | jq -r --argjson k "${4:-0}" '.[$k:][] | .id // empty' 2>/dev/null)
 }
 
 # reconcile_admitted — run from idl_summary on every firing pass, so no exit path can skip it.
 reconcile_admitted() {
-  local _id
+  local _id _cid _c _r _cause _reason
   while IFS= read -r _id; do
     [ -n "$_id" ] || continue
     case "$NL$TERMINAL_IDS" in *"$NL$_id$NL"*) continue ;; esac
     UNPLACED=$((UNPLACED + 1))
-    idl_unplaced "$_id" "the wave planner placed no slot for it and no arm refused it — re-admitted next pass"
+    _cause=unattributed
+    _reason="it reached no terminal record and no arm recorded why — re-admitted next pass"
+    while IFS="$TAB" read -r _cid _c _r; do
+      [ "$_cid" = "$_id" ] && { _cause="$_c"; _reason="$_r"; break; }
+    done <<EOF
+$UNPLACED_CAUSES
+EOF
+    UNPLACED_CAUSE_LIST="$UNPLACED_CAUSE_LIST$_cause$NL"
+    idl_unplaced "$_id" "$_cause" "$_reason"
   done < <(printf '%s' "$ADMITTED_IDS")
 }
 
@@ -1789,10 +1831,13 @@ idl_summary() {
      --argjson rc "$READY_CHECKED" --argjson rv "$READY_VOID" --argjson ru "$READY_UNKNOWN" \
      --argjson rp "$(ready_rate_pct)" --arg rg "$READY_GATE" \
      --argjson up "$UNPLACED" --argjson at "$_terminal" --argjson rec "$RECONCILE" \
+     --arg ubc "$UNPLACED_CAUSE_LIST" \
      '{ts:$ts, actor:"cc-dispatch", action:"summary", fired:$f, abstained:$b, failed:$x, skipped:$s,
        admitted:$a, deferred:$d, pass:$pass, ready_gate:$rg, ready_checked:$rc, ready_void:$rv,
        ready_unknown:$ru, ready_would_block_pct:$rp,
-       admitted_terminal:$at, unplaced:$up, reconciled:($rec == 1)}' \
+       admitted_terminal:$at, unplaced:$up, reconciled:($rec == 1),
+       unplaced_by_cause:($ubc | split("\n") | map(select(length > 0)) | group_by(.)
+                          | map({(.[0]): length}) | add // {})}' \
      >> "$IDL" 2>/dev/null || true
 }
 
@@ -2574,6 +2619,7 @@ EOF
        && [ -n "$wpcap" ] && [ "$wpcap" -gt 0 ] && [ "$wpcap" -lt "$wave_n" ]; then
       replanned=1
       DEFERRED=$((DEFERRED + wave_n - wpcap))
+      note_unplaced_wave capacity-surplus "past the capacity=$wpcap the wave planner reported for this pass — deferred, re-admitted next pass" "$wave" "$wpcap"
       echo "cc-dispatch: wave-plan WALL[capacity] — re-planning $wave_n → $wpcap item(s) at the capacity it reported; $((wave_n - wpcap)) deferred." >&2
       wave="$(printf '%s' "$wave" | jq -c --argjson k "$wpcap" '[ .[0:$k][] ]')"
       wave_n="$wpcap"
@@ -2584,6 +2630,9 @@ EOF
   [ -n "$wperrf" ] && rm -f "$wperrf" 2>/dev/null || true
 
   if [ "$rc" -ne 0 ]; then
+    # Every id still in the wave dies with this wall — say WHICH wall, so its `unplaced` row names
+    # the verdict that refused it rather than blaming a planner that never got to place anything.
+    note_unplaced_wave "wall-${wpverdict:-rc$rc}" "wave-plan WALL[${wpverdict:-rc=$rc}]${wpexc:+ ($wpexc)} — no plan this pass, re-admitted next pass" "$wave"
     case "$wpverdict" in
       capacity)
         # NOT a quota cliff and NOT a page: the accounts have headroom; the wave is simply wider than
@@ -2629,6 +2678,10 @@ EOF
   printf '%s' "$plan" | jq -e 'type=="array"' >/dev/null 2>&1 \
     || die3 "wave-plan did not return a JSON array"
   n="$(printf '%s' "$plan" | jq 'length' 2>/dev/null || echo 0)"
+  # rc 0 without an id is the one case the old fixed label described truthfully (pass
+  # 20260824T083341Z-71481: a successful call that placed nothing), so it keeps that wording.
+  note_unplaced_wave not-placed "the wave planner returned rc 0 without placing it and no arm refused it — re-admitted next pass" \
+    "$(printf '%s' "$wave" | jq -c --argjson p "$plan" '[ .[] | select(.id as $i | ($p | map(.id) | index($i)) == null) ]' 2>/dev/null || echo '[]')"
 
   # dry-run: PRINT the plan, no writes.
   if [ "$mode" = dry ]; then
@@ -2644,7 +2697,12 @@ EOF
     || die3 "spawn bin unresolvable (set CC_DISPATCH_SPAWN_BIN)"
   local i=0 spawned=0 p id acct ftype a
   while [ "$i" -lt "$n" ]; do
-    [ "$spawned" -ge "$MAX_SPAWN" ] && break
+    if [ "$spawned" -ge "$MAX_SPAWN" ]; then
+      # The planner PLACED these; this pass's own per-pass spawn cap is what stops them. Named as
+      # such, because "the planner placed no slot" pointed every reader at the wrong component.
+      note_unplaced_wave spawn-cap "placed by the wave planner, but this pass already spawned MAX_SPAWN=$MAX_SPAWN — re-admitted next pass" "$plan" "$i"
+      break
+    fi
     p="$(printf '%s' "$plan" | jq -c ".[$i]")"; i=$((i + 1))
     id="$(printf '%s' "$p" | jq -r '.id // empty')"
     acct="$(printf '%s' "$p" | jq -r '.account // "?"')"
