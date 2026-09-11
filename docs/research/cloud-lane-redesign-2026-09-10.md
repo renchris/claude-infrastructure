@@ -404,6 +404,56 @@ decay at the rate §3.1 measures (69% at one day, 28% at seven).
    (run p50 2,825 s, 9 greens of 70 stamps since 09-01), whose tree is on trunk — the one place a key
    lines up.
 
+### Outcome of the three follow-ons — executed 2026-09-11, appended, nothing above rewritten
+
+**Follow-on 1 — harvested in full, 7 landed shas, nothing skipped.** The trailer-stripper prereq
+landed first (`e49308b92`): the cut is now the lines githooks/commit-msg itself NAMES (it greps with
+`-n`), so position stopped being the property and all five shapes in §3.2 clear. Then `9465e0119`
+(unit 1, router), `50e6bb075` (2), `1a5a79ae4` (3), `a702c9517` (4), `2d17544d7` (5), `36859c6e0`
+(6). Unit 7 `9ce3c6350e2f` needed no judgment call after all — `land-content-verify` returns rc 0,
+its content is already on trunk, so the operator's block is moot. Units 8-10 are disposable as §(v)
+of `B1-stranded-branches.md` says, and that was checked rather than taken: a `probe=B2-VERIFY-BURST`
+receipt `.txt` and two toy probes (`wordfreq.py`, `rangefmt.py`), absent from trunk by design.
+
+⚠️ **Unit 6's blocker was true when measured and false two hours later, which is the reusable part.**
+At the first pass `claude/fire-20260910T185102Z-27906-1` was held by a live `desk-land` (pid 79623,
+running 3 h 32 m), so it was named-blocked rather than landed — landing over a live lander forks it.
+Re-checked later the pid was gone, the worktree was still there, and the content was still off
+trunk: the land had died without landing. Adopted and landed as `36859c6e0`. **Re-measure a blocker
+before inheriting it** — a stranded lander and a working one look identical from the branch.
+
+**Follow-on 2 — three of four landed; the fourth is blocked on the operator.**
+- `5a983031a` — the 665 `unplaced` rows were a MISLABEL, not a placement bug: of 658 rows over 156
+  passes, **0** had a free planner slot (417 were `WALL[unknown]`, 140 capacity re-plan surplus, 92
+  placed-then-cut by `cc-dispatch MAX_SPAWN=2`, 9 `WALL[capped]`). Each row now carries its cause.
+- `4d7a65d70` — `oracle-timeout` was NOT a bound that needed raising. 83/83 walls had a successful
+  sweep ≤488 s old at call start (p50 238 s), inside `claude-accounts`' own 600 s `cache_grace_s`;
+  the planner read with a 90 s TTL, re-swept at background QoS, and `timeout(1)` killed the sweep
+  before `cache_write`. Fixed by passing `--max-age <SSOT cache_grace_s>`; the 20 s bound is
+  unchanged. `rank-data-unavailable` was 5/6 fleet-wide concurrency-unmeasured, already cured by
+  unit 1 — no planner change.
+- `5fcb13211` — the `simulated keychain explosion` fixture leak. 🚨 **The FACT is confirmed and the
+  TENSE is wrong, and §7 of `C3-local-refusals.md` should be read with this beside it.** 982 lines
+  carrying that string do sit in `~/.claude/logs/claude-accounts.log`, but their last write is
+  **2026-08-10T00:38Z — 32 days before this memo** — and the full 94-case core suite run against the
+  pre-fix binary moved the real log by **0 lines**. So "a TEST fixture writing into the production
+  accounts log", present tense, describes a residue, not a flow, and the 145 lost wave-plan passes
+  belong to the two walls above. What WAS still live is structural and is what the commit fixes:
+  `LOG_PATH` had no env override at all, so the six suites that redirect it by assigning
+  `ca.LOG_PATH` fix every in-process case and **cannot reach a child** — `run "$CA_BIN" …`
+  re-imports the module in a process where that assignment never happened.
+- **Defect A, the pane-anchor refusal, is NOT fixed and is the one thing left.** Dispatched to its
+  own session, which found a lead worth recording and then stalled on a permission prompt holding an
+  uncommitted `scripts/handoff-fire.sh` change plus a new `tests/handoff-fire-split-bound.bats`.
+  The lead: `d7b85c39c` landed **2026-09-07** — *"fix(it2-kitty): a missing `-s` was a silent rc 1,
+  indistinguishable from an unreadable pane"* — the exact day rc=1 goes 0 → 5 → 35. If that holds,
+  the alarm is firing CORRECTLY on a defect that pre-dates it and was previously silent, the cause
+  is upstream in what id is passed to `it2 session split -s`, and reverting the alarm is the wrong
+  answer. Filed for the operator as backlog `e04168383cd6`.
+
+**Follow-on 3 — dispatched and in flight**, per-suite blob-sha memoization inside each ratchet lint,
+`gate-memo.sh:337-364` as the pattern. No off-box gate was built; `D3-gate-split.md` stands.
+
 ---
 
 ## 9 · Receipts and reproduction
