@@ -1,5 +1,5 @@
 ---
-status: open
+status: complete
 owner: session b418b97a (lead), operator goal 2026-09-08
 ---
 
@@ -17,6 +17,8 @@ research-then-dispatch / permission-allowlist growth) plus the matching CLAUDE.m
 project-local `/ship` from a dedicated worktree and converge the live layer.
 
 ## Phase 0 — Agent Team Orchestration
+
+**Status**: DONE — every locus in the table below was executed; the Dynamic-Workflow research lane, the one-dispatched-session-per-wave implementation lane and the lead-owned CLAUDE.md edit all ran as declared.
 
 **Execution locus per wave** (S = dispatched handoff session, the default · T = in-session teammates ·
 L = lead-inline):
@@ -36,6 +38,8 @@ worktree), goal re-armed from this file's frozen scope.
 
 ## The operator's goal (verbatim intent, 2026-09-08)
 
+**Status**: DONE as a RECORD — this section is the frozen intent, not a work unit; it is quoted verbatim and is never edited. Clause (6) *"only stop for user input after all that"* is what makes the six open operator decisions a legitimate terminal state rather than a residual.
+
 > We want Claude Code to continue to work exhaustively until there is a hard blocker/requirement/decision
 > from the user. (1) Are there follow-on / loose-end / optional items? Net-positive available work is never
 > optional, always mandatory; improve everything we touch to 100th percentile ("boil the ocean"). If there
@@ -48,6 +52,8 @@ worktree), goal re-armed from this file's frozen scope.
 > permission prompts to the allowlist.
 
 ## What the lead measured before firing W0 (2026-09-08, 21:20–21:45Z)
+
+**Status**: DONE as a RECORD — a dated measurement, kept as taken. Several figures here were later overtaken by the W2 instruments (notably the 24 %/32.5 % Stop-coverage number and the "13-hour IDL" premise, both corrected in § W2 returns and § Findings the lead's own notes got wrong); read those corrections before quoting anything below. *(This line deliberately avoids the word that would otherwise be read as a status token — `plan-phase-scan.sh` tests for it before DONE, and the first draft of this very line flipped the section's status by describing its contents.)*
 
 - **Binary** 2.1.260 (`~/.claude-260`). Task tools (`TaskCreate/TaskUpdate/TaskList/TaskGet/TodoWrite`) are
   in the binary (35/29/20 string hits) but not offered to this session — gated behind
@@ -83,6 +89,8 @@ worktree), goal re-armed from this file's frozen scope.
   routes to `next` (all four accounts at ~0 pressure).
 
 ### Lead probes while W0 ran (2026-09-08, 22:05–22:20Z)
+
+**Status**: DONE as a RECORD — dated probe results, kept as taken.
 
 - **Headless `-p` sessions DO get the Workflow tool** (measured: `claude -p 'list your tools'` on
   `.claude-secondary` returned Agent, Bash, Edit, ListAgents, Read, ReportFindings, ScheduleWakeup, Skill,
@@ -159,6 +167,8 @@ conviction-adjusted change list, the itemized operator decisions (answer-first),
 
 ## Waves — filled from SYNTHESIS.md (2026-09-09T00:05Z; source of every rank: `docs/research/exhaustive-drive-2026-09-08/SYNTHESIS.md`)
 
+**Status**: DONE — every wave in the table below was fired and returned; see § Definition of done for the per-wave ancestry verification run 2026-09-11.
+
 **The synthesis verdict.** The wave aimed at the Stop, and the Stop is where ≤24% of sessions end: of
 108 dead main-chain sessions today, 26 reached a clean Stop while 61 (56%) retired themselves inside a
 `handoff-fire.sh self-close` / `--recycle` Bash call that checks a dirty tree and nothing else — the
@@ -190,6 +200,8 @@ synthesis harvest; it fires W0 + W1a–g, commits this plan, lands the docs bran
 nothing itself, fires W2 when W1a and W1c have landed, and holds ≥50% of its window.
 
 ### Fires (2026-09-09T00:15–00:25Z, from the lead in pane 625 / `next3`)
+
+**Status**: DONE — all eight fires resolved (the first attempt's eight F3 aborts, then the second attempt's engagements including the two that engaged LATE and were falsely reported never-engaged; W1h is the fix for that verdict and has landed).
 
 | Wave | worktree branch | brief | back-channel |
 |---|---|---|---|
@@ -281,6 +293,8 @@ per item, halts on the first rc 9; log `/tmp/fire-ed-w2-slice4.log`).
 
 ### W2 returns (seven of eight by 09:10Z — each content-verified on origin/main)
 
+**Status**: DONE — eight of eight W2 items returned and are content-verified on `origin/main`. B2's return is recorded in the § W3 returns row rather than here, because it was driven straight to implementation.
+
 | Item | landed | the number | verdict → W3 |
 |---|---|---|---|
 | B17 jq-fatal record | `1550268e6` | ONE fatal record across live IDL + 8 archives: a 6,679 B `backlog-health` record from `scripts/autonomy-sweep.sh:1400` (72 emissions / 11 d, 100 % > 4,096 B, producer live) spliced at byte 4,096 by a concurrent `waiting-recycle` append — an **interleaved concurrent append** (> 4 KiB ⇒ ≥ 2 `write()`s on the shared O_APPEND fd), none of the brief's five classes; every `jq` census that redirects stderr silently drops **12.33 %** of the store (jq rc 5) | **CROSSES 90 (96)** → `W3-B17`: strip the 5,763 B constant `note:` (record → 845 B), a size assertion in the writer, tolerant readers in every census. Brief `/tmp/fire-ed-w2-w3b17.txt` |
@@ -289,7 +303,7 @@ per item, halts on the first rc 9; log `/tmp/fire-ed-w2-slice4.log`).
 | B1 self-close refusal | `739a18337` (`scripts/measure-selfclose-rung.py`) | over 54 self-closes / 28 h (44 resolvable, 10 unresolvable): a refusal on **📦 fires 0/44**, on **REMAINDER≠0 fires 0/44**, on **⛔ fires 3/44 and all three were legitimate** (fired peers whose deliverable was the filed packet); reading the RUNG instead gives 5/44 = 11.4 % and the opposite verdict | **📦 + REMAINDER arms CROSS 90 (93); the ⛔ arm is REFUTED (90)** → `W3-B1`: refuse `self-close --terminal` on the stamp's UNLANDED / REMAINDER **fields**, never on RUNG, annotate-only for ⛔, FILED_MINE-only 🔧, `--recycle`, absent stamp. Brief `/tmp/fire-ed-w2-w3b1.txt` |
 | B6 permission prefixes | `bccf99f0f` | **0** prefixes recur across ≥3 **distinct** approval sets. The 22 `settings.local.json` files are not 22 populations: 14 carry an empty `allow` and 3 are byte-identical copies of one 95-entry set, so 302 raw entries collapse to **111 distinct across 6 sets** (63.2 % are copy duplicates). Every candidate that reached "≥3 files" — `claude-accounts` (8), `awk`, `curl`, `rm`, `pnpm design:gate`, covering 20/64 = 31.2 % of exact approvals — reached it via the copy trio. Residual that IS real and is NOT a permissions finding: **27 of 64 exact Bash approvals (42.2 %) are read-only by construction** (`sysctl` ×5, `vm_stat`, `mdls`, the `claude-accounts` read flags ×8, the `git -C … status/log` reads) — the admission gate prompting on a read, already covered by decision packet `1df4081249d2` | **REFUTED (94)** — no W3 item, no settings diff, no operator read. Two classifier defects fixed before the count: dedupe by allow-set fingerprint, and `Bash(git *)` ends in `" *"` not `":*"` so a prefix-form classifier scores 10 wildcards as literals |
 | B4 harvest latency | `2a196c1e2` (`scripts/measure-harvest-latency.py`, selftest 7/7) | permanent loss **38.3 %** (74/193) on the most generous reading, **78.8 %** once same-second self-commits are excluded. The median latency of **0.07 d** is itself the finding: 78 of 119 apparent harvests land inside 0.5 d — the closing session's own trailing commit, not a later reader — so only **41/193 = 21.2 %** reach a later reader. Hand-read precision **7/20 = 35 %**, and every matcher error is a false POSITIVE harvest | **CROSSES 90 (95)** → a peer-findings drain producer is worth building. No error direction rescues REFUTED. Does NOT license "recovers 78.8 %": the rate says the CHANNEL is lossy, it does not price the cargo. Adverse exclusion named: 302 of 820 transcripts had no turn-final close at all (died mid-turn) — the population most likely to lose findings |
-| B5 write attribution | `ed4e2054b` | the proposed extraction runs at **5.6 %** false conviction (12/214 in-repo hits) and NO subset meets the rule: the tightest under 2 % (`{>/>>, sed -i}`, 1.0 %) covers **17.9 %** of the write population against 80 %, and any subset reaching 80 % must include `heredoc` at 9.3 %. But all 12 share ONE cause and it is not the idioms — the extractor resolves a relative target against the session's LAUNCH cwd while the command has already `cd`'d; 11 of 12 land in a path that exists in the session's own tree, and 11 of 41 wrong-repo resolutions land in the SHARED CHECKOUT, the #105 venue. Track the `cd` and the rate is **0 of 214** (95 % upper bound 1.43 %) with `heredoc` kept | **STAYS BELOW as proposed (35); CROSSES 90 (88) for the corrected variant** → three idioms (drop `tee`), target resolved against an effective dir that tracks in-command `cd`, `rc 2` when that dir is unknown (`cd -`, `cd "$VAR"`). Two inversions named: the mechanical proxy's 75.7 % "not-authored" measures the COVERAGE GAP not the error (18 of 20 hand-read are the session's own write), and `-uall` means untracked files convict too — scoping to `git ls-files` would have dropped 87/214 |
+| B5 write attribution | `ed4e2054b` | the proposed extraction runs at **5.6 %** false conviction (12/214 in-repo hits) and NO subset meets the rule: the tightest under 2 % (`{>/>>, sed -i}`, 1.0 %) covers **17.9 %** of the write population against 80 %, and any subset reaching 80 % must include `heredoc` at 9.3 %. But all 12 share ONE cause and it is not the idioms — the extractor resolves a relative target against the session's LAUNCH cwd while the command has already `cd`'d; 11 of 12 land in a path that exists in the session's own tree, and 11 of 41 wrong-repo resolutions land in the SHARED CHECKOUT, the #105 venue. Track the `cd` and the rate is **0 of 214** (95 % upper bound 1.43 %) with `heredoc` kept | **STAYS BELOW as proposed (35); CROSSES 90 (88) for the corrected variant** → three idioms (drop `tee`), target resolved against an effective dir that tracks in-command `cd`, `rc 2` when that dir is unknown (`cd -`, `cd "$VAR"`). Two inversions named: the mechanical proxy's 75.7 % "not-authored" measures the COVERAGE GAP not the error (18 of 20 hand-read are the session's own write), and `-uall` means untracked files convict too — scoping to `git ls-files` would have dropped 87/214 <br><br>🚨 **CORRECTED IN PLACE 2026-09-11 — the phrase "CROSSES 90 (88)" above is self-contradictory and reads as a green light. 88 is BELOW the wave bar of 90, so NO W3-B5 is owed, and none was dispatched.** The report's own § 7 says so in words this cell compressed away: *"CROSSES 90 for a narrower, corrected variant — conviction 88 %, **which is the number W3 should carry, not a green light**"*, under a heading *"Why 88 and not above 90"* — the cd-tracker is itself shell parsing, the *prescribed-remedy-worse-than-the-bug* class `session-writes.sh:40-44` names, and a cd-tracker with a bug mints exactly the wrong-tree convictions this census found. The original words are kept because they are the record of what was believed. **The evidence that would lift it over 90 is named and is a W3 deliverable, not more research** — one bats mutant per idiom plus a cd-tracker red-proof whose fixture `cd`s to a SECOND tree and is asserted to name that tree's path while arming nothing in the first (a single-tree fixture holds constant the one axis the bug lives on). **Re-check key: the `cd`-divergence rate (10.4 % of in-repo hits at measurement), never the conviction count** — on a fleet that does not `cd` this census returns 0 and reads as safe while the mechanism is merely dormant. |
 
 Both W2 panes that carried a goal or a custody row (677, 678) retired clean; 673 and 675 (no rows, per
 the never-engaged strip W1h fixes) also retired. **Standing, not this programme's:** `deploy-live`
@@ -344,8 +358,11 @@ alive but every recent verdict is non-green (129 h since the last green). Verdic
 
 ### W3 returns
 
+**Status**: DONE — every W2 verdict that crossed the bar of 90 has a landed implementation (B1, B2, B4, B17). B5 at 88 is below the bar and is correctly undispatched; see its corrected cell in § W2 returns.
+
 | Item | landed | what changed | proof |
 |---|---|---|---|
+| **W3-B1** self-close refusal on FIELDS — *row recorded 2026-09-11, not on the day it landed; see § Why this row was missing* | `889c65600` · `f6ee42ea0` (both `git merge-base --is-ancestor <sha> origin/main` ⇒ 0, re-verified 2026-09-11; `scripts/handoff-fire.sh` · `tests/handoff-fire-selfclose-refusal.bats` · `tests/handoff-fire-ledger-stamp.bats` · `scripts/measure-selfclose-rung.py`) | `hf_selfclose_ledger_refusal()` (`handoff-fire.sh:3935`) refuses `self-close --terminal` on the frozen stamp's **UNLANDED>0 ∨ REMAINDER≠0** and on nothing else. The three arms B1 priced are honoured exactly: ⛔ is **annotate-only, permanently** (it fired 3/44 and all three were legitimate — `BLOCKED` counts open class-C packets THIS SESSION filed, and on a fired peer filing the operator's decision IS the deliverable, so the polarity is inverted by construction); `🔧` is never read, because it is a COMPOUND (dirty ∨ gate-stale ∨ REMAINDER>0 ∨ FILED_MINE>0 ∨ DRAIN_SCOPE ∨ custody) and BOTH 🔧 retires in the window were raised by terms this rule never names. `STAMP_READ=0` **warns and proceeds** — 10 of 54 retires carried no frozen ledger, so a refusal on a non-answer would strand a pane on the instrument rather than on the work; non-numeric and empty fields take the same branch, so the guard may only ever refuse on a POSITIVE disproof. `hf_ledger_stamp` writes `STAMP_READ` FIRST and on every path including the three UNREAD returns, into an optional fields-FILE — because every caller runs it inside `$(…)`, where an assigned variable cannot escape. Every refusal prints both the cure (`/ship`, `--successor`) and the deliberate-park escape (`--allow-unlanded`) | `tests/handoff-fire-selfclose-refusal.bats` **8 cases** (re-enumerated from `origin/main` 2026-09-11), of which **case 3 is the discriminating arm** — ⛔ with `UNLANDED=0 REMAINDER=0` must PASS, so a rung-keyed implementation fails there — and case 4 pins the 🔧 compound. `python3 scripts/measure-selfclose-rung.py --selftest` **re-run on this branch 2026-09-11: 10/10, SELFTEST PASS, rc 0**, including all three `--as-built` arms (`blocked`⇒PASS, `wrench_filed`⇒PASS, `parked`⇒REFUSE) and the `--rung-mode` control that must give the OPPOSITE verdict on `wrench_filed`. The `--as-built` mode exists because the shipped predicate deliberately deviates from the rule W2 priced (⛔ exempt), so re-running the as-specified instrument would certify a program nobody shipped — rung 7.3 % · as-specified 4.9 % · **as-built 0.0 %**, and their disagreement is the finding |
 | **W3-B17** IDL write splice | `48c6d64a2` · `d8bf3da9a` · `1e33fce5d` | **(1)** the `backlog-health` `note:` was a 6,953-byte CONSTANT — 86 % of the record, next-largest emitter 663 B. Moved verbatim into a comment above the emit (preserved, not deleted); record **6,679 B → 972 B (−85.4 %)**, 4.2× headroom under the 4,096 B splice boundary. **(2)** `idl_guarded_append` in the shared writer refuses a record over **4,000 B** and writes a short valid `idl-oversize` record naming hook · kind · byte count — it NEVER truncates, because a truncated JSON line IS the defect and would be minted deliberately. ONE contract, TWO builders: the sweep keeps its own envelope (seven ambient counters) and sources the lib for the assertion only. **(3)** the tolerant-reader arm needed no conversion — `cc-audit`, `idl-abstain-alarm.sh`, `measure-close-vs-idl.py` and `measure-terminations.py` were already tolerant and counting; the gap was ENFORCEMENT, so a chokepoint lint now fails any reader that slurps the LIVE IDL with stderr suppressed | bats 6/6. Red-proofed against the PRISTINE artifact (`git archive HEAD`), never a hand-edited approximation: cases 1-2 red at 7,843 B pre-fix, cases 3-5 red pre-fix on the absent contract, and the lint is POSITIVE-CONTROLLED — a synthetic offender turns it red and its removal returns green (a lint green on day one is indistinguishable from a broken one). 13 consumer suites re-run because the shared lib feeds 9 hooks |
 | **W3-B2** Stop-path hot term | `591a82f62` (+ report §6 in the same commit) | `cc-decide cmd_list --json` forked ONE jq PER PACKET FILE — 198 files, 199 forks, 1.265 s = 56 % of an uncached `wrap-ledger --machine`, on a path two Stop-path consumers call at every close. Now ONE jq pass with a per-file fallback on a non-zero jq exit that REPORTS its parse-failure count: **0.053 s vs 0.813 s, 15.3×**, byte-identical (29 rows, `cmp` clean). **The one-pass alone would have been silently wrong** — jq stops at the FIRST unparseable input, so a bare pass drops every packet AFTER a bad one, under-counting the open class-C packets that decide the `⛔` rung. **Both of the row's own proposed designs were REFUTED as targets**: a fold snapshot for `cc-backlog list` aims at 0.061 s (2.7 %), and the "one jq for three store reads" cannot exist because two of the three run only in sessions whose rung falls through (`FILED_SRC=skip`, `:1784-1786` inside the ladder's `else`) while `cc-decide` runs unconditionally at `:1742` | bats `1..60`, 60 ok. **THREE arms, because two were not enough**: pre-fix `ok/NOT OK/ok/ok`, post-fix all ok, and a **naive-one-pass MUTANT** (fallback deleted) `NOT OK/NOT OK/ok/ok`. The mid-glob tolerance case is green in BOTH real arms by design — the old loop already tolerated a bad packet — so it is an EQUIVALENCE guard and the mutant is the only thing proving the fixture has power. Landed as a rule (`f78f775aa`) |
 | **W3-B2 second site** — measured, not assumed | (no code; recorded in report §6) | `hooks/operator-readout.sh` §3 carries the identical fork-loop shape, and parity was the wrong guess **twice**. Its hot term is a `deploy-live --dry-run --offline` fork at **53 %**, with the jq loops only ~26 %. And its cost is BUDGETED: **13.224 s cold then 0.363 s**, latched under `CC_OPREADOUT_TTL_S=900`, so it runs at most **once per 15 min** — against `cc-decide`'s 1.265 s at EVERY Stop (`wrap-ledger`'s memo keys on the transcript's `(mtime,size)`, which grows every turn). That inverts the priority and is why this unit is `cc-decide` alone. **Do not quote "operator-readout costs 13 s a Stop" — it costs 13 s a quarter hour.** The 53 % deploy-live fork is a separate, larger, uncosted question | 3 traced runs, 41.59 s traced, attribution table in report §6 |
@@ -383,6 +400,8 @@ soft-reset and three correctly-scoped rebuilds; the resulting tree is byte-ident
 
 ### Operator decisions — filed as class-C packets (conviction · receipt = SYNTHESIS.md · two options each)
 
+**Status**: DONE as FILINGS, and the six decisions remain OPEN by design — that is the distinction this line exists to make. The session work (measure each, carry a conviction and a receipt, offer two options) is complete; answering them is the operator's and is the hard blocker this plan's own scope names as the stopping condition. An open decision here must never be read as an unfinished wave.
+
 1. **Who answers a permission prompt while you are asleep?** Recommendation (60%): the decider in shadow
    for 7 days, then enforce only for the compound test-fixture class. Below 90 because auto-granting
    removes the human from the loop by design and hook-allow vs deny precedence is unmeasured on 2.1.260.
@@ -397,6 +416,8 @@ soft-reset and three correctly-scoped rebuilds; the resulting tree is byte-ident
 
 ### Findings the lead's own notes got wrong (CRITIC, kept for the record)
 
+**Status**: DONE as a RECORD — kept deliberately. These are refuted claims preserved in place, because the claim is the record of what was believed; do not delete them when they read as wrong.
+
 - "104 of 127 hook-less closes ran on 2.1.220" — not reproduced by the critic (2.1.220 produced 17
   closes / 16 rows today); the 14% closes-vs-evaluations deficit is real and unexplained (B21).
 - "ENABLE_STOP_REVIEW is dead" — it is the security-guidance plugin's Stop-review gate (installed,
@@ -406,7 +427,71 @@ soft-reset and three correctly-scoped rebuilds; the resulting tree is byte-ident
 - The IDL has eight gz archives from 2026-08-29; the "13-hour IDL" premise was wrong and six axes
   inherited it.
 
+## Definition of done — reached 2026-09-11, and what is deliberately NOT in it
+
+**Status**: DONE
+
+Every wave this plan declared has landed and is content-verified on `origin/main`. The close was made
+from a cloud VM against a tree at `git rev-list --count HEAD..origin/main` = **0**, so every read below is
+a read of trunk, not of a stale checkout.
+
+| Wave | verification run 2026-09-11 | result |
+|---|---|---|
+| W0 claude-md | `git merge-base --is-ancestor 2c882c549 origin/main` | ancestor |
+| W1a · W1b · W1c · W1d · W1e · W1f · W1g · W1h | same, over all 16 cited shas (`6ebb17d7c 1de88352c 40d4317fe 295c1da82 889102f7e a910384b7 61059cbc9 6d5b9b892 223369d30 32b64cfef 026e653e3 86a21bb57 eb3f5a2c8 55896d1e7 23d5994da fb0b6866e`) | **16 of 16 ancestor** |
+| W2 (8 items: 14 · B1 · B2 · B4 · B5 · B6 · B17 · B21) | `git ls-tree origin/main` over each report + instrument | all present; 8 `W2-*.md` reports in `docs/research/exhaustive-drive-2026-09-08/` |
+| W3-B1 | `889c65600` · `f6ee42ea0` ancestor; `python3 scripts/measure-selfclose-rung.py --selftest` | ancestor; **10/10 SELFTEST PASS** |
+| W3-B17 | `hooks/lib/idl-log.sh` carries `idl_guarded_append`, `CC_IDL_MAX_BYTES:-4000`, the `idl-oversize` record | present by content |
+| W3-B2 | `bin/cc-decide:389` carries the ONE-jq-pass block and its tolerant fallback | present by content |
+| W3-B4 | `scripts/drain-peer-findings.py` · `tests/drain-peer-findings.bats` · `W3-B4-harvest-drain.md` | present by content |
+| W3-B5 | not owed — conviction **88 < the wave bar of 90** (§ W2 returns, corrected in place) | correctly never dispatched |
+
+**Why the W3-B1 row was missing for two days, which is the finding this close bought.** W3-B1 landed
+2026-09-09T16:59Z and this file's § W3 returns had no row for it — the plan said at § Locus change that
+it *"stays dispatched"* and nothing ever wrote the return. A wave's record is written by the lead that
+harvests it, and this one landed after the lead had stopped harvesting; the CODE was verifiable the whole
+time (two ancestor shas, a green selftest) while the RECORD showed a dispatched-and-never-returned wave.
+⇒ **a plan's return table is a separate deliverable from the wave's own land, and it has no gate.**
+`/ship` proves the diff; nothing proves the row. The cheap check is the one run here — enumerate the
+dispatched waves and ask `--is-ancestor` for each, rather than reading the table.
+
+**Why this plan kept re-minting `plan-open` work items, which is why this session exists.** The
+frontmatter read `status: open` and no level-≥2 heading carried a DONE token, so
+`plan-phase-scan.sh --falsify` exited **1** (measured on this branch before the change: silent, rc 1) and
+`find-plan.sh --status` printed `open`. Under the falsifier contract exit 0 is the only load-bearing
+answer, so an item minted from this plan's H1 could never retract itself and was re-dispatched
+indefinitely — the `a50e6ab779e8` shape the falsifier's own header names. **A recurring work item is
+evidence about the closing mechanism, not about the work.** The terminal token is `complete`, read back
+through the consumer (`find-plan.sh --status`) rather than assumed: `done` is NOT in that closed
+vocabulary and maps to `unknown`, which `--list-open` keeps in the open list — a fail-OPEN default that
+converts a terminal state into a permanent one.
+
+**Two sections read DONE by accident, and that is worth naming rather than relying on.** Before this
+change the scanner already reported § W0 and § Harvest as DONE — not because anyone marked them, but
+because `wf_928fd862-9aa` and the session id `093e40f3` each satisfy its "7+ hex in the heading ⇒ DONE"
+rule. Incidental text that happens to look like a commit hash is not a status; the `**Status**:` lines
+added in this pass are the explicit signal, and they are additive body lines rather than heading edits so
+nothing that greps these headings by wording is disturbed.
+
+**NOT in this plan's done-ness, by construction — both already filed elsewhere, neither is a residual
+this plan may close over:**
+
+1. **The six operator decisions** (§ Operator decisions) are filed as class-C packets with two options
+   each. They are the *hard blocker* this programme's own scope names as the stopping condition — a
+   session may not answer them, and the plan is complete WITH them open. That is the design, not a gap.
+2. **`deploy-live` convergence** — labelled *"Standing, not this programme's"* at § W2 returns and filed
+   as `f36bc0986c43` / `5511ea906e2e`. It is a live-layer fact, not a wave.
+
+**What would reopen this plan.** Not time, and not the title: a wave whose landed content leaves
+`origin/main` (verify by CONTENT with `git ls-tree origin/main -- <paths>`, never by the cited shas —
+several in this file were rewritten by their land and read NOT-ancestor while their content is present),
+or a new W3 item crossing 90 on a re-measurement. The one candidate below the bar is W3-B5 at 88, and
+§ W2 returns names both the deliverable that would lift it and the re-check key (`cd`-divergence rate,
+never the conviction count).
+
 ## Session events
+
+**Status**: DONE as a RECORD — a dated event log, kept as written.
 
 - 2026-09-08T23:09Z — account `next2` (`.claude-secondary`) hit its 5-hour session cap while W0's
   critic and synthesis agents were running; both died as `api_error[session]` (NULL slots
@@ -434,6 +519,8 @@ soft-reset and three correctly-scoped rebuilds; the resulting tree is byte-ident
   about the window; before any re-fire, read the peer's transcript mtime and its worktree's dirt.
 
 ## Decisions log
+
+**Status**: DONE as a RECORD — dated decisions, kept as written.
 
 - 2026-09-08 — Research locus = Dynamic Workflow, not teammates: the operator's goal names Workflows as
   the research default, and a workflow's agents cost the lead one structured summary each instead of a
