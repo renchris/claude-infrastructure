@@ -128,6 +128,30 @@
 
 set -uo pipefail
 
+# BYTE-WISE STRING OPS — the measurement that put this line here (2026-09-11, follow-on 3 of the
+# cloud-lane redesign). This arm was 232.7s of a 394.5s land-gate arms phase (59%), timed as ship-land's
+# precheck invokes it, and none of it is forks: a native `sample` of a real-tree run put ~3,400 of
+# ~5,000 top-of-stack samples in mbrlen / _UTF8_mbrtowc / mbsinit — bash decoding UTF-8 one character
+# at a time inside has_line's `case` matches, which test every (file, word) pair against newline-joined
+# sets that grow to thousands of entries. Under the C locale those are byte comparisons. Measured on
+# the real tree at load ~19: the scan went 112.1s -> 41.4s, and the arm pays that scan TWICE per land
+# (--selftest case 19 re-runs it on the real tree).
+#
+# NO MEMO, deliberately: this lint's verdict reads the BOX (installed_somewhere and reachable_on stat
+# the live filesystem), so no content key can carry it without carrying a green earned on one box into
+# another. Removing work is the sound lever here; a cached verdict is not.
+#
+# VERDICT-NEUTRAL, measured rather than argued, on the real tree: a strict run with the allowlist
+# emptied (40 findings, rc 1), `--list` and `--selftest` are byte-identical under both locales. Every
+# string this lint compares is a path or a command word, and for those byte equality IS character
+# equality (UTF-8 never encodes an ASCII byte inside a multibyte sequence). EXPORTED, so the children
+# (grep, sed, sort, python) run under the same locale the off-box runner already gives them. Two
+# visible consequences, both measured: plausible_binary's [A-Za-z_] is seven-bit under C, so it carries
+# a high-byte arm that keeps its candidate set (selftest case 2b); and `--emit-inventory` now sorts
+# byte-wise, so a regen lists CC and SEQ first instead of in collation order — cosmetic, because the
+# list is only ever read by MEMBERSHIP (in_inventory, and the bats coverage case's `grep -qxF`).
+export LC_ALL=C
+
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
 ROOT="$(cd "$(dirname "$SELF")/.." 2>/dev/null && pwd -P)" || ROOT=""
 
@@ -955,8 +979,14 @@ plausible_binary() {
     */*|*'$'*|*=*|*'['*|*'*'*|*'!'*|'') return 1 ;;
     [0-9]*) return 1 ;;
   esac
+  # The second arm is NOT a widening, it is what keeps this predicate where it was. The lint runs under
+  # LC_ALL=C (see the top of the file), where [A-Za-z_] is seven-bit only; under the UTF-8 locale it
+  # used to inherit, the same range also admitted a word BEGINNING with a non-ASCII letter (measured
+  # on bash 3.2: é/Ä/ñ-initial words were candidates under en_CA.UTF-8 and dropped under C). A dropped
+  # candidate is a finding nobody sees, so every high byte is admitted — equal to or wider than
+  # before, never narrower. Selftest case 2b is the RED control that dies if this arm is removed.
   case "$1" in
-    [A-Za-z_]*) : ;;
+    [A-Za-z_]*|[$'\200'-$'\377']*) : ;;
     *) return 1 ;;
   esac
   return 0
@@ -1848,6 +1878,12 @@ zzreachable"
   # 2. RED — the plainest shape, bare at line start.
   newtree t2; mk t2 hooks/a.sh 'zzunobtainium kill-pane -t "$p"'
   ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="$INV_Z" "$SELF" "$d/t2" >/dev/null 2>&1 ); expect 1 "$?" 'a bare binary at command position was not detected'
+
+  # 2b. RED — the same shape under a name that BEGINS with a non-ASCII letter. This lint runs under
+  #     LC_ALL=C, where plausible_binary's [A-Za-z_] no longer admits such a word; its high-byte arm is
+  #     what keeps the candidate set equal to the UTF-8 one. Remove that arm and this case goes GREEN.
+  newtree t2b; mk t2b hooks/a.sh 'ézzunobtainium kill-pane -t "$p"'
+  ( CC_UNATTENDED_ALLOWLIST="" CC_UNATTENDED_INVENTORY="ézzunobtainium" "$SELF" "$d/t2b" >/dev/null 2>&1 ); expect 1 "$?" 'a bare binary whose name begins with a non-ASCII letter was dropped as not-a-name'
 
   # 3. GREEN — an absolute path is the fix, and must not be reported. Spelled with the fixture binary
   #    so the case still discriminates: a scanner that stripped the directory would report the tail.
