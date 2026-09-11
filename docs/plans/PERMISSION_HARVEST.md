@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 created: 2026-09-08
 owner: permission-harvest worktree
 ---
@@ -645,3 +645,50 @@ precondition ASSERTED, not hoped; (b) `local name="$1" d="$TMP/$name"` expands `
 one statement, so both test arms resolved to the tmpdir root and the pre-fix tree silently
 OVERWROTE the fixed one, making the control compare a file against itself — caught only by the
 positive control ON the control (a grep into a directory that had never been created).
+
+---
+
+## 13. Close — verified complete 2026-09-11 (`status: in-progress` → `complete`)
+
+**Record:** `docs/research/permission-harvest-completion-2026-09-11.md`. Closes cc-backlog
+`3e77c8eb182f`. **No code was owed** — every unit of the §7 File map was already on `origin/main`,
+and the only stale thing was this file's own frontmatter.
+
+**Why the row kept returning, and why neither signal was about the work.** `plan-phase-scan.sh`
+marks a section DONE only when the HEADING carries the literal `DONE` or a 7+ hex sha; no heading
+here carries either, so all 18 read PENDING regardless of state — the scan is SILENT on completion,
+not negative. Meanwhile `find-plan.sh --list-open` excludes only `complete|superseded` (`:53,108`),
+so `in-progress` kept the plan open forever and `--falsify`'s clause (a), which retracts on terminal
+frontmatter, could never fire. The item's title is this plan's H1 as it read on discovery day, so
+every session that claimed the row investigated the FEATURE, found it finished, and nothing in that
+loop ever pointed at the status field.
+
+**Verified before flipping, by content on trunk, not by presence alone:**
+
+- All 19 File-map artifacts present on `origin/main`, including the C3 in-file edits that are the
+  droppable ones (`validate-bash.sh` `--apply` deny arm `:1328-1378` + decision log `:129`;
+  `cc-permission-beacon.sh` `ARCH_MAXLEN` default 12000 `:62`) and the C4 cross-links
+  (`permission-prompts-2026-08-23.md:194-203`, matcher-doc DO #8 `:615-616`,
+  `smart-bash-allowlist.sh:26-29` correction).
+- `7a73a511` · `63734f03` · `a8837a8c` each asserted an ancestor of `origin/main` with
+  `git merge-base --is-ancestor`, on an UNSHALLOWED clone (a depth-50 horizon answers "never landed"
+  for a cure that landed weeks ago).
+- Suites re-run against trunk's code, plan lines asserted present: **200 of 202 ok**
+  (49 + 61 + 29 + 22/24 + 39). The two reds are macOS-only binaries absent on the Linux VM that ran
+  them — `date -v` (`:292`) and `/usr/bin/plutil` (`:316`, rc 127) — and #17's assertions were
+  re-derived through Python `plistlib` instead, reproducing Weekday 0 · Hour 4 · Minute 17 ·
+  `RunAtLoad` false · `bash -c exec` · literal log paths · no `ProcessType`/`Nice`, exactly as §5
+  specifies.
+
+**Read back through the consumer that dispatches on it** — the flip is worth nothing until the
+reader that defaults has been asked: `find-plan.sh --status` `in-progress` → `complete`, and
+`plan-phase-scan.sh --falsify` silent/rc 1 → `FALSIFIED`/rc 0, which is the only load-bearing answer
+under cc-premise's close-on-0 contract. Headings were deliberately NOT rewritten to carry `DONE`:
+clause (a) is sufficient and is checked first by design.
+
+**One incidental finding, recorded and deliberately NOT fixed here.** The plist fails a STRICT XML
+parse (XML forbids `--` inside a comment; line 11 reads ``denies `--apply` …``), which macOS
+`plutil` accepts via CoreFoundation's lenient parser. Scoped before reporting: **9 of 26**
+`launchd/*.plist` files in this repo share it, so it is a standing convention that predates this
+plan and is load-bearing on nothing. Repo-wide and out of this row's frozen scope — noted so a
+future strict-parser run is not filed as a regression of this feature.
