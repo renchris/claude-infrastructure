@@ -217,7 +217,12 @@ pgw_binary() {
   PGW_TRIPWIRE="$n"
   [ "$PGW_TRIPWIRE" -gt 0 ] || return 2
 
-  n="$(grep -a -o -F 'ProposeGoal' "$PGW_BIN" 2>/dev/null | wc -l)" || true
+  # `wc -l` PADS to width 8 on BSD, so the raw value is "       1" — and the digit-guard below
+  # reads those leading spaces as non-digits and normalizes a real count to 0, turning "present but
+  # minified past the gate pattern" (rc 0, look at it by hand) into "absent from a verified build"
+  # (rc 3, the feature is gone upstream). Opposite verdicts from a formatting artifact. `tr -d ' '`
+  # is this repo's idiom for it (85 other sites); the guard stays, it just gets a value it can read.
+  n="$(grep -a -o -F 'ProposeGoal' "$PGW_BIN" 2>/dev/null | wc -l | tr -d ' ')" || true
   case "${n:-0}" in ''|*[!0-9]*) n=0 ;; esac
   PGW_N_PROPOSEGOAL="$n"
 
@@ -311,11 +316,11 @@ pgw_selftest() {
   # of it. The env prefixes below are prefixes to `bash`, so they do reach the child's environment —
   # which the "no subject → NON-VERDICT" arm proves by observing rc 2 rather than by assuming it.
   # A pattern moved out of argv that never arrives is how an empty selector becomes a universal one.
-  # shellcheck disable=SC2317  # invoked indirectly, as `chk`'s "$@"
+  # shellcheck disable=SC2329,SC2317  # invoked indirectly, as `chk`'s "$@"
   run_f() { PGW_NOW="$NOW" PGW_CONFIG_PATHS="$1" PGW_CLAUDE_BIN='' bash "$0" --falsify; }
-  # shellcheck disable=SC2317  # invoked indirectly, as `chk`'s "$@"
+  # shellcheck disable=SC2329,SC2317  # invoked indirectly, as `chk`'s "$@"
   run_h() { PGW_NOW="$NOW" PGW_CONFIG_PATHS="$1" PGW_CLAUDE_BIN='' bash "$0" --health; }
-  # shellcheck disable=SC2317  # invoked indirectly, as `chk`'s "$@"
+  # shellcheck disable=SC2329,SC2317  # invoked indirectly, as `chk`'s "$@"
   run_b() { PGW_CLAUDE_BIN="$1" bash "$0" --binary; }
 
   echo "cache arms (§5's table, all seven rows):"
