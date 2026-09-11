@@ -33,6 +33,11 @@ setup() {
   SUBJ="$REPO/scripts/propose-goal-flag-watch.sh"
   [ -f "$SUBJ" ] || { echo "missing $SUBJ"; return 1; }
   T="$BATS_TEST_TMPDIR"
+  # HERMETIC, and it matters here more than usual: the subject's DEFAULT population is
+  # $HOME/.claude*/.claude.json plus $HOME/.claude.json — i.e. the operator's live account caches.
+  # Every case below names PGW_CONFIG_PATHS explicitly, but a future case that forgets would read
+  # the real fleet and its verdict would depend on whose box ran it.
+  export HOME="$T/home"; mkdir -p "$HOME"
   NOW=1789000000
   FRESH=$(( (NOW - 3600) * 1000 ))
   STALE=$(( (NOW - 30 * 86400) * 1000 ))

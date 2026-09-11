@@ -191,7 +191,14 @@ pgw_resolve_bin() {
   # 2.1.42 sitting beside the native build, and greps against IT return 0 for all three strings —
   # i.e. the wrong subject answers "feature removed" with total confidence.
   c="$(command -v claude 2>/dev/null)" || return 0
-  [ -n "$c" ] && [ -r "$c" ] && ! head -c 2 "$c" 2>/dev/null | grep -q '#!' && printf '%s\n' "$c"
+  [ -n "$c" ] || return 0
+  [ -r "$c" ] || return 0
+  # Captured, not piped. `head -c 2 … | grep -q` has grep exit on its first match, SIGPIPE the head,
+  # and under pipefail the whole pipeline then reads FALSE on a MATCH — the polarity inverts exactly
+  # where the guard matters, and the wrong subject is accepted.
+  local magic; magic="$(head -c 2 "$c" 2>/dev/null)" || true
+  case "$magic" in '#!') return 0 ;; esac
+  printf '%s\n' "$c"
   return 0
 }
 
