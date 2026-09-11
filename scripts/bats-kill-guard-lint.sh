@@ -414,6 +414,44 @@ in_own() {
   return 1
 }
 
+# ── THE PER-FILE MEMO (ratchet-arm memo rollout — follow-on 3 of the cloud-lane redesign) ────────────
+# 8.9-9.1s on a real precheck (2026-09-11, load ~10), and NOT from forks: this lint is ONE awk pass over
+# every suite, so the cost is the scanner's own work over ~660 files. The memo therefore does not skip a
+# fork per file — it SHRINKS THE AWK'S INPUT to the suites whose bytes are unproven.
+#
+# THAT IS SOUND ONLY BECAUSE THE DETECTOR IS PER-FILE, checked rather than assumed: every piece of
+# cross-line state (hd, qs, qdepth) resets at FNR == 1, and an UNBALANCED verdict is attributed to its file
+# by NAME (at the next file's first line, or at END). So a suite's output is the same whether the awk sees
+# it alone or among 659 others.
+#
+# THE READ SET: the suite's bytes · this lint's blob (the DETECT program and every branch) · the awk
+# binary. There is no allowlist (the baseline is zero), and the own-set only words a line a suite emits.
+#
+# ONLY A SUITE THE PASS NEVER NAMED, FROM A PASS THAT EXITED 0, IS RECORDED. "Never named" is a substring
+# test over the whole output — "<path>:" for a finding, "UNBALANCED<TAB><path>" for an unreadable file —
+# so a path that itself contains a colon, which the parse loop's `${line%%:*}` would cut short, still
+# cannot be banked by mis-attribution: its own prefix is in the output.
+#
+# Kill switch: CC_KILLGUARD_MEMO=off (SHIP_LAND_MEMO=off too, via memo_init). --selftest EXPORTS it off:
+# unlike its siblings, this selftest re-invokes the lint as a subprocess.
+KG_MEMO_OK=0; KG_MEMO_HITS=0; KG_MEMO_RAN=0
+if [ "${CC_KILLGUARD_MEMO:-on}" != "off" ] && [ -r "$ROOT/scripts/lib/gate-memo.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$ROOT/scripts/lib/gate-memo.sh" 2>/dev/null || true
+fi
+kg_memo_arm() {  # $@ = the EXACT ordered population → 0 = armed
+  KG_MEMO_OK=0
+  [ "${CC_KILLGUARD_MEMO:-on}" != "off" ] || return 1
+  command -v memo_readset_arm >/dev/null 2>&1 || return 1   # an older lib ⇒ memo OFF, today's behaviour
+  local selfabs selfblob awkid
+  selfabs="$(cd "$(dirname "$SELF")" && pwd)/$(basename "$SELF")" || return 1
+  selfblob="$(git hash-object -- "$selfabs" 2>/dev/null)" || return 1
+  [ -n "$selfblob" ] || return 1
+  awkid="$(memo_bin_id awk)" || return 1
+  memo_readset_arm killguard "$(printf 'killguard-readset/v1\nlint=%s\nawk=%s\n' "$selfblob" "$awkid")" "$@" || return 1
+  KG_MEMO_OK=1
+}
+
 # lint_files <own_scoped:0|1> <own-set text> <file>... → 0 clean · 1 violation · 2 nothing scannable
 #
 # The own-set arrives as two LEADING parameters rather than by argument count, because the file list
@@ -426,7 +464,34 @@ lint_files() {
   for f in "$@"; do [ -f "$f" ] || continue; files+=("$f"); seen=$((seen + 1)); done
   [ "$seen" -gt 0 ] || { echo "bats-kill-guard-lint: ⛔ no .bats file to scan" >&2; return 2; }
 
-  out="$(detect "${files[@]}")"
+  # THE MEMO PARTITION — see the header above kg_memo_arm. `files` is the population it arms on (built once,
+  # above); `todo` is the subset whose bytes are unproven, each member's index into `files` kept beside it
+  # in `todo_i`, because the batch memo is INDEX-KEYED.
+  local todo=() todo_i=() i=0 arc=0
+  KG_MEMO_HITS=0; KG_MEMO_RAN=0
+  kg_memo_arm "${files[@]}" || true
+  for f in "${files[@]}"; do
+    if [ "$KG_MEMO_OK" = "1" ] && memo_batch_hit "$i"; then
+      KG_MEMO_HITS=$((KG_MEMO_HITS + 1))
+    else
+      todo[${#todo[@]}]="$f"; todo_i[${#todo_i[@]}]="$i"
+    fi
+    i=$((i + 1))
+  done
+  KG_MEMO_RAN=${#todo[@]}
+  out=""
+  if [ "${#todo[@]}" -gt 0 ]; then out="$(detect "${todo[@]}")"; arc=$?; fi
+  # THE RECORD — only from a pass that exited 0, and only for a suite the pass never NAMED (see the header).
+  if [ "$KG_MEMO_OK" = "1" ] && [ "$arc" -eq 0 ]; then
+    i=0
+    for f in ${todo[@]+"${todo[@]}"}; do
+      case "$out" in *"$f:"*|*"UNBALANCED"$'\t'"$f"*) ;; *) memo_batch_record "${todo_i[$i]}" ;; esac
+      i=$((i + 1))
+    done
+  fi
+  if [ "$KG_MEMO_OK" = "1" ]; then
+    echo "bats-kill-guard-lint: per-file memo — $KG_MEMO_HITS verdict(s) carried, $KG_MEMO_RAN proven fresh." >&2
+  fi
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     case "$line" in
@@ -501,6 +566,10 @@ EOF
 
 # ── --selftest: every case proves a RED path fires or a GREEN path does not, in BOTH directions ────
 if [ "${1:-}" = "--selftest" ]; then
+  # MEMO OFF for the whole selftest, and EXPORTED — unlike the siblings, the cases below re-invoke this lint
+  # as a SUBPROCESS, and a plain shell variable would not reach them. Every case must exercise the DETECTOR;
+  # the gate carries the selftest as a whole via ship-land.sh's selftest_ok.
+  export CC_KILLGUARD_MEMO=off
   d="$(mktemp -d)" || { echo "bats-kill-guard-lint --selftest: ⛔ mktemp failed" >&2; exit 2; }
   trap 'rm -rf "$d"' EXIT
   fails=0
