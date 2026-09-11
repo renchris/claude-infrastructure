@@ -320,6 +320,59 @@ seed_batsc() {   # $1 = "real-nosc" | an exit code for a stub lint
   [ -z "$(git ls-tree origin/main -- batsc-stub.sh)" ]
 }
 
+# ── unattended-path --selftest: a KILLED detector is a NON-VERDICT, never a RED ──────────────────
+# THE DEFECT (measured 2026-09-11, during the land of backlog 5a5a3073626c): this arm opened with a
+# bare `if ! "$UNATTENDED_LINT" --selftest`, so a selftest CUT BY A SIGNAL landed in the same branch
+# as one that genuinely failed, and the gate printed "the detector no longer discriminates" — a
+# claim about the LINT inferred from a fact about the BOX. Observed live: SIGTERM at load 41 with
+# six concurrent landers (`Terminated: 15`), gate RED, land refused; the identical blob then scored
+# 53/53 rc 0 re-run unbounded seconds later. It is the ONE selftest excluded from selftest_ok's
+# memo, so it re-runs its full scan every round and is by far the likeliest of the eleven to be cut.
+seed_unatt() {   # $1 = "sigterm" | an exit code for the stub's --selftest
+  mkdir -p hooks
+  printf '#!/bin/bash\necho hi\n' > hooks/zz-unatt-hook.sh
+  if [ "$1" = "sigterm" ]; then
+    # The child dies to a SIGNAL, exactly as a reaped/peer-killed selftest does — we do not fake a
+    # number. bash reports 128+15 to ship-land, which is the production shape under test.
+    printf '#!/bin/bash\ncase "$1" in --print-scope) printf "hooks/*\\n"; exit 0 ;; --selftest) kill -TERM $$; sleep 5 ;; esac\nexit 0\n' > unatt-stub.sh
+  else
+    printf '#!/bin/bash\ncase "$1" in --print-scope) printf "hooks/*\\n"; exit 0 ;; --selftest) exit %s ;; esac\nexit 0\n' "$1" > unatt-stub.sh
+  fi
+  chmod +x unatt-stub.sh
+  git add hooks/zz-unatt-hook.sh unatt-stub.sh && git commit -q -m "feat: unattended fixture"
+}
+
+@test "unattended selftest KILLED by a signal → exit 9 NON-VERDICT, never GATE RED" {
+  git checkout -q -b feat/unatt-killed main
+  seed_unatt sigterm
+
+  run env SHIP_LAND_UNATTENDED_LINT="$WORK/unatt-stub.sh" bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 9 ]                                                    # 9 = no verdict, not 6
+  echo "$output" | grep -q 'unattended-path-lint --selftest could not RUN' || false
+  echo "$output" | grep -q 'NON-VERDICT' || false
+  echo "$output" | grep -q 'KILLED by signal 15' || false
+  ! echo "$output" | grep -q 'detector no longer discriminates' || false  # the false claim
+  ! echo "$output" | grep -q 'GATE RED' || false                          # a kill is never a claim
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- unatt-stub.sh)" ]                    # fail-closed: nothing landed
+}
+
+@test "unattended selftest exit 1 is still a REAL verdict → exit 6 GATE RED, never softened to 9" {
+  # THE POSITIVE CONTROL for the case above, and the only thing that makes it evidence: without it
+  # "killed → 9" passes just as well for an arm that had stopped blocking altogether, which is the
+  # one way this split can silently go wrong (and the way that ships a blind gate).
+  git checkout -q -b feat/unatt-verdict main
+  seed_unatt 1
+
+  run env SHIP_LAND_UNATTENDED_LINT="$WORK/unatt-stub.sh" bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q 'detector no longer discriminates' || false
+  ! echo "$output" | grep -q 'could not RUN' || false                     # a verdict is never softened
+  ! echo "$output" | grep -q 'GATE-KILLED' || false
+  git fetch -q origin main
+  [ -z "$(git ls-tree origin/main -- unatt-stub.sh)" ]
+}
+
 # ── THE CHOKEPOINT: own-scope must cover every population the lint judges ────────────────────────
 # Own-scope makes a violation OUTSIDE the lander's diff advisory, so the pathspec that builds the
 # own-set IS the gate's scope. It listed only `tests/*.bats` until rule 4 (embedded selftests)
