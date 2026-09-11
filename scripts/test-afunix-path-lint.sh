@@ -73,6 +73,36 @@ ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 # explained, never an unexamined hit, because that is how a ratchet decays into an exemption list.
 EMBEDDED_ALLOWLIST=""
 
+# ── THE PER-FILE MEMO (ratchet-arm memo rollout — follow-on 3 of the cloud-lane redesign) ────────────
+# 6.9s on a real precheck (2026-09-11, load ~10): one awk fork per suite over ~660 tests/*.bats. Same
+# shape, same contract and the same record-site guard as moving-ref-control-lint's memo — read that one.
+#
+# THE READ SET here: the suite's bytes · this lint's blob · the ALLOWLIST text in force (by value) · the
+# awk binary · and the WINDOW (CC_AFUNIX_WINDOW), which changes what counts as "AF_UNIX in scope" for a
+# bind without changing a byte of this file — selftest case "a 1-line window makes the heredoc shape
+# INVISIBLE" is exactly a verdict that flips on it.
+#
+# Kill switch: CC_AFUNIX_MEMO=off (SHIP_LAND_MEMO=off too, via memo_init). --selftest forces it OFF.
+AF_MEMO_OK=0; AF_MEMO_HITS=0; AF_MEMO_RAN=0
+if [ "${CC_AFUNIX_MEMO:-on}" != "off" ] && [ -r "$ROOT/scripts/lib/gate-memo.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$ROOT/scripts/lib/gate-memo.sh" 2>/dev/null || true
+fi
+af_memo_arm() {  # $1=allowlist text in force · $2…=the EXACT ordered population → 0 = armed
+  AF_MEMO_OK=0
+  [ "${CC_AFUNIX_MEMO:-on}" != "off" ] || return 1
+  command -v memo_readset_arm >/dev/null 2>&1 || return 1   # an older lib ⇒ memo OFF, today's behaviour
+  local allow="$1" selfabs selfblob awkid
+  shift
+  selfabs="$(cd "$(dirname "$SELF")" && pwd)/$(basename "$SELF")" || return 1
+  selfblob="$(git hash-object -- "$selfabs" 2>/dev/null)" || return 1
+  [ -n "$selfblob" ] || return 1
+  awkid="$(memo_bin_id awk)" || return 1
+  memo_readset_arm afunix "$(printf 'afunix-readset/v1\nlint=%s\nallow=%s\nawk=%s\nwindow=%s\n' \
+                               "$selfblob" "$allow" "$awkid" "$(window_lines)")" "$@" || return 1
+  AF_MEMO_OK=1
+}
+
 # How many preceding non-comment lines count as "in scope". 6 covers every real shape in this corpus:
 # the one-liner (`import os,socket,sys; …; os.chdir(d); …bind(b)`, everything on one line) and the
 # heredoc block (`s = socket.socket(socket.AF_UNIX)` then `s.bind(…)`, 1-3 lines apart). Read at CALL
@@ -154,10 +184,20 @@ lint_dir() {
   local dir="$1" allow="$2" own="${3:-}" own_scoped=0 f base hits bad=0 seen=0 other=0 stuck=0
   [ "$#" -ge 3 ] && own_scoped=1
   [ -d "$dir" ] || { echo "test-afunix-path-lint: ⛔ not a directory: $dir" >&2; return 2; }
-  for f in "$dir"/*.bats; do
-    [ -e "$f" ] || continue
-    seen=$((seen + 1)); base="$(basename "$f")"
-    hits="$(afunix_bad_binds "$f")"
+  # THE POPULATION, BUILT EXACTLY ONCE: the batch memo is INDEX-KEYED (scripts/lib/gate-memo.sh), so the
+  # list it arms on and the list this loop walks must be the same array.
+  local files=() hrc
+  for f in "$dir"/*.bats; do [ -e "$f" ] && files[${#files[@]}]="$f"; done
+  AF_MEMO_HITS=0; AF_MEMO_RAN=0
+  if [ "${#files[@]}" -gt 0 ]; then af_memo_arm "$allow" "${files[@]}" || true; fi
+  for f in ${files[@]+"${files[@]}"}; do
+    seen=$((seen + 1))                             # FIRST: the memo index is seen - 1, derived
+    if [ "$AF_MEMO_OK" = "1" ] && memo_batch_hit "$((seen - 1))"; then
+      AF_MEMO_HITS=$((AF_MEMO_HITS + 1)); continue
+    fi
+    AF_MEMO_RAN=$((AF_MEMO_RAN + 1))
+    base="$(basename "$f")"
+    hits="$(afunix_bad_binds "$f")"; hrc=$?
     if [ -n "$hits" ]; then
       if in_allowlist "$base" "$allow"; then
         continue                                   # grandfathered — known site, already on the list
@@ -177,8 +217,15 @@ lint_dir() {
         printf '  ratchet? %s is fixed but still grandfathered (NOT in your diff — advisory)\n' "$base"
         other=$((other + 1))
       fi
+    elif [ "$AF_MEMO_OK" = "1" ] && [ "$hrc" -eq 0 ]; then
+      # THE RECORD — clean, the detector answered, and not grandfathered by a builtin re-ask (the forked
+      # in_allowlist above reads "not listed" when it fails). moving-ref-control-lint states the why.
+      case "$allow" in *"$base"*) ;; *) memo_batch_record "$((seen - 1))" ;; esac
     fi
   done
+  if [ "$AF_MEMO_OK" = "1" ]; then
+    echo "test-afunix-path-lint: per-file memo — $AF_MEMO_HITS verdict(s) carried, $AF_MEMO_RAN proven fresh." >&2
+  fi
   [ "$seen" -gt 0 ] || { echo "test-afunix-path-lint: ⛔ no .bats suites under $dir" >&2; return 2; }
   [ "$other" -eq 0 ] || echo "test-afunix-path-lint: $other pre-existing item(s) NOT in your diff — reported, not blocking (own-scope)."
 
@@ -206,6 +253,9 @@ lint_dir() {
 
 # ── --selftest: every case proves a RED path fires or a GREEN path does not, both directions ──────
 if [ "${1:-}" = "--selftest" ]; then
+  # MEMO OFF for the whole selftest: every case below must exercise the DETECTOR (moving-ref-control-lint
+  # states the why; the gate carries the selftest as a whole via ship-land.sh's selftest_ok).
+  CC_AFUNIX_MEMO=off
   d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
   for c in abs absheredoc safe inet chdirabs prose nobind; do mkdir -p "$d/$c"; done
   mk() { printf '#!/usr/bin/env bats\n%s\n@test "x" { true; }\n' "$2" > "$d/$1/zz-fixture.bats"; }

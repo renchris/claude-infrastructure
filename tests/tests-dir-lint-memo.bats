@@ -164,3 +164,107 @@ mr() { mkcorpus moving-ref-control-lint.sh MOVINGREF 'run git -C "$REPO" show ma
   printf '# uncommitted\n' >> "$CORPUS/tests/clean1.bats"
   [[ "$(run_lint)" != *"per-file memo"* ]]
 }
+
+# ── test-afunix-path-lint ────────────────────────────────────────────────────────────────────────────
+# Its finding: an AF_UNIX socket bound to an ABSOLUTE path. The detector reads RAW lines — no quote
+# stripping — so this suite may never carry the two tokens literally near each other; the fixture line is
+# assembled from split words, and the lint judging THIS file sees neither token.
+af() {
+  local u="AF""_UNIX" b=".bi""nd("
+  mkcorpus test-afunix-path-lint.sh AFUNIX "python3 -c \"import socket; s=socket.socket(socket.${u}); s${b}'/tmp/x.sock')\""
+}
+
+@test "afunix POSITIVE CONTROL: the memo arms, and carries every clean suite" {
+  af
+  first="$(run_lint)"
+  [[ "$first" == *"per-file memo"* ]] || { echo "MEMO NEVER ARMED — every afunix case is vacuous"; echo "$first"; false; }
+  [ "$(carried "$first")" -eq 0 ]
+  [ "$(proven "$first")" -eq 4 ]
+  second="$(run_lint)"
+  [ "$(carried "$second")" -eq 3 ]
+  [ "$(proven "$second")" -eq 1 ]
+}
+
+@test "afunix: a carried run says exactly what an unmemoized run says, and re-reports the finding" {
+  af
+  run_lint >/dev/null
+  warm="$(run_lint)"
+  [ "$(carried "$warm")" -eq 3 ]
+  cold="$(run_lint CC_AFUNIX_MEMO=off)"
+  [ "$(printf '%s\n' "$warm" | grep -v 'per-file memo')" = "$(printf '%s\n' "$cold" | grep -v 'per-file memo')" ]
+  [[ "$warm" == *"zz-hit.bats"* ]]
+}
+
+@test "afunix: editing one suite re-proves THAT suite and no other" {
+  af
+  run_lint >/dev/null
+  printf '# bytes that change no verdict\n' >> "$CORPUS/tests/clean2.bats"
+  commit edit
+  after="$(run_lint)"
+  [ "$(proven "$after")" -eq 2 ]
+  [ "$(carried "$after")" -eq 2 ]
+}
+
+@test "afunix KEY: the lint's own blob invalidates every carried verdict" {
+  af
+  run_lint >/dev/null
+  printf '\n# read-set change\n' >> "$CORPUS/scripts/test-afunix-path-lint.sh"
+  commit lint-edit
+  [ "$(carried "$(run_lint)")" -eq 0 ]
+}
+
+@test "afunix KEY: the allowlist is in the key BY VALUE — no byte of any file moves" {
+  af
+  run_lint >/dev/null
+  [ "$(carried "$(run_lint CC_AFUNIX_ALLOWLIST=unrelated.bats)")" -eq 0 ]
+}
+
+@test "afunix KEY: the WINDOW is in the key — it decides what counts as AF_UNIX in scope" {
+  af
+  run_lint >/dev/null
+  [ "$(carried "$(run_lint CC_AFUNIX_WINDOW=1)")" -eq 0 ]
+}
+
+@test "afunix KEY: a different AWK binary invalidates — and then re-earns" {
+  af
+  run_lint >/dev/null
+  shim awk 'NEVER-MATCHES' 3
+  [ "$(carried "$(run_lint PATH="$SHIM:$PATH")")" -eq 0 ]
+  [ "$(carried "$(run_lint PATH="$SHIM:$PATH")")" -eq 3 ]
+}
+
+@test "afunix: an AWK that could not run for a clean suite is never banked" {
+  af
+  shim awk '*tests/clean1.bats*' 3
+  : > "$MEMO_SHIM_FLAG"
+  run_lint PATH="$SHIM:$PATH" >/dev/null
+  rm -f "$MEMO_SHIM_FLAG"
+  b="$(run_lint PATH="$SHIM:$PATH")"
+  [ "$(proven "$b")" -eq 2 ]
+  [ "$(carried "$b")" -eq 2 ]
+}
+
+@test "afunix: an allowlisted CLEAN suite is never banked, even when the allowlist probe cannot run" {
+  af
+  shim grep '*-xF*' 2
+  : > "$MEMO_SHIM_FLAG"
+  run_lint PATH="$SHIM:$PATH" CC_AFUNIX_ALLOWLIST=clean1.bats >/dev/null
+  rm -f "$MEMO_SHIM_FLAG"
+  out="$(run_lint PATH="$SHIM:$PATH" CC_AFUNIX_ALLOWLIST=clean1.bats)"
+  [[ "$out" == *"clean1.bats"* ]]
+}
+
+@test "afunix: --selftest runs memo-OFF and writes nothing to the store" {
+  af
+  run_lint >/dev/null
+  before="$(store_entries)"
+  ( cd "$CORPUS" && bash scripts/test-afunix-path-lint.sh --selftest >/dev/null 2>&1 ) || true
+  [ "$(store_entries)" -eq "$before" ]
+}
+
+@test "afunix: a dirty worktree, and CC_AFUNIX_MEMO=off, each disarm the memo" {
+  af
+  [[ "$(run_lint CC_AFUNIX_MEMO=off)" != *"per-file memo"* ]] || false
+  printf '# uncommitted\n' >> "$CORPUS/tests/clean1.bats"
+  [[ "$(run_lint)" != *"per-file memo"* ]]
+}
