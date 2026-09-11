@@ -442,3 +442,144 @@ seam_state_lib() {
   grep -q 'elif \[ -n "\$cgate" \]' "$src" \
     || { echo "the two records are not exclusive — a skipped gate could journal both"; false; }
 }
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# THE PREMISE GATE REPORTS ITSELF — guard (5), given guard (5b)'s already-ratified treatment.
+#
+# The suite above was written for the ELIGIBILITY gate: an unresolvable helper, a silent skip, and
+# a skipped gate indistinguishable from one that ran and admitted. Its sibling forty lines up in
+# cmd_claim — the PREMISE gate — had the identical hole and did not get the cure. It was silent on
+# every path except refusal: no report when cc-premise could not be resolved, `$pout` computed and
+# DROPPED on the admit path, and the kill switch skipping the block entirely with nothing said.
+#
+# MEASURED, 2026-09-10 (backlog 82b87a8a2945). That row asked to re-land a branch whose content had
+# reached trunk at 16:16:34Z; its stored falsifier exits 0 and `cc-premise check` answers rc 3
+# `verdict=falsified`, so guard (5) should have REFUSED. The dispatcher claimed it at 19:44:49Z with
+# no --force and fired a worker at a dead row. The claim record holds {id, ts, event, by, role} and
+# the IDL holds a plain admit — so what the gate actually ANSWERED is unreconstructable, and "how
+# often does a worker get dispatched onto a falsified row" cannot be asked of the store at all.
+# These cases are what make it askable: the refusal path was already loud, and now so is every
+# other one.
+#
+# NOTE THE FIXTURE'S OWN COMPLICITY: setup() copies cc-backlog and cc-eligible into the fake
+# checkout and NOT cc-premise, so every case above this line has been skipping the premise gate in
+# silence. That is the defect, latent in the very suite written to catch its sibling.
+
+# A stub cc-premise. Run it alone before trusting a red (memory: fixture-stub-cannot-carry-an-
+# apostrophe — a quoting death in a stub reads as a logic defect in the subject). No apostrophes,
+# no spaces in the emitted line, so there is nothing here to quote wrong.
+mk_premise() {   # $1 = exit code · $2 = optional single stdout line
+  local f="$BATS_TEST_TMPDIR/premise-$BATS_TEST_NUMBER-$1"
+  printf '#!/bin/bash\n' > "$f"
+  if [ -n "${2:-}" ]; then printf 'echo %s\n' "$2" >> "$f"; fi
+  printf 'exit %s\n' "$1" >> "$f"
+  chmod +x "$f"
+  printf '%s' "$f"
+}
+
+@test "PREMISE GATE: the stub answers as written (instrument control)" {
+  # Without this, every red below is ambiguous between the subject and the fixture.
+  local s; s="$(mk_premise 3 verdict=falsified)"
+  run "$s" check deadbeef
+  [ "$status" -eq 3 ] || { echo "stub rc=$status, wanted 3"; false; }
+  [[ "$output" == "verdict=falsified" ]] || { echo "stub said: $output"; false; }
+}
+
+@test "PREMISE GATE: an unresolvable cc-premise NAMES ITSELF, and still fails open" {
+  local id; id="$(add_boxy "$CB_REAL")"
+  run env CC_BACKLOG_PREMISE_BIN="$BATS_TEST_TMPDIR/nope/cc-premise" \
+      "$CB_REAL" claim "$id" --by sid-p1
+  [ "$status" -eq 0 ] || { echo "fail-open lost: $output"; false; }
+  [[ "$output" == *"gate=premise-unresolved"* ]] \
+    || { echo "a gate that never ran looks exactly like one that admitted: $output"; false; }
+}
+
+@test "PREMISE GATE: the admit carries the verdict it computed and threw away" {
+  local id s; id="$(add_boxy "$CB_REAL")"; s="$(mk_premise 0 verdict=clear)"
+  run env CC_BACKLOG_PREMISE_BIN="$s" "$CB_REAL" claim "$id" --by sid-p2
+  [ "$status" -eq 0 ] || { echo "an admitting gate refused: $output"; false; }
+  [[ "$output" == *"gate=premise-admitted verdict=clear"* ]] \
+    || { echo "the verdict was computed and dropped, as before: $output"; false; }
+}
+
+@test "PREMISE GATE: a helper that emits no verdict reports unreported, never a guess" {
+  # Guard (5b)'s `park=unreported` reasoning: rc 0 with no verdict line is a helper whose BYTES
+  # PREDATE the token, and saying so positively is what stops a reader inferring a version from an
+  # absence. A blank after `verdict=` would read as a verdict of "".
+  local id s; id="$(add_boxy "$CB_REAL")"; s="$(mk_premise 0)"
+  run env CC_BACKLOG_PREMISE_BIN="$s" "$CB_REAL" claim "$id" --by sid-p3
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"gate=premise-admitted verdict=unreported"* ]] \
+    || { echo "an absent verdict was rendered as a present one: $output"; false; }
+}
+
+@test "PREMISE GATE: the kill switch leaves a RECORD, and it is not an alarm" {
+  # (5b)'s distinction, preserved: an override is not an outage, so no SKIPPED warning — the machine
+  # token alone, so the fact reaches a journal without reaching a human as noise. The two existing
+  # tests that pin this switch (tests/cc-premise.bats) assert rc 0 only and stay green.
+  local id; id="$(add_boxy "$CB_REAL")"
+  run env CC_BACKLOG_PREMISE_GATE=off "$CB_REAL" claim "$id" --by sid-p4
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"gate=premise-disabled"* ]] \
+    || { echo "a switched-off gate is still indistinguishable from one that admitted: $output"; false; }
+  [[ "$output" != *"SKIPPED"* ]] \
+    || { echo "a deliberate override was reported as an outage: $output"; false; }
+  [[ "$output" != *"gate=premise-admitted"* ]] \
+    || { echo "a gate that never ran claimed to have admitted: $output"; false; }
+}
+
+@test "PREMISE GATE: the verdict lands on the claim RECORD, where a fold can count it" {
+  # THE LOAD-BEARING ASSERTION. The question this change exists to make askable — "how often is a
+  # worker dispatched onto a row whose own falsifier would have retracted it?" — is a question about
+  # a POPULATION, and a stderr line nobody stores cannot answer it. Before this, a claim record held
+  # {id, ts, event, by, role} and nothing about what any gate saw.
+  local id s; id="$(add_boxy "$CB_REAL")"; s="$(mk_premise 0 verdict=clear)"
+  run env CC_BACKLOG_PREMISE_BIN="$s" "$CB_REAL" claim "$id" --by sid-p6
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run bash -c "grep '\"event\":\"claim\"' '$CC_BACKLOG_FILE' | tail -1"
+  [[ "$output" == *'"premise":"admitted:clear"'* ]] \
+    || { echo "the claim record still says nothing about the gate: $output"; false; }
+}
+
+@test "PREMISE GATE: an unresolvable gate is recorded too — absence is the fact worth counting" {
+  local id; id="$(add_boxy "$CB_REAL")"
+  run env CC_BACKLOG_PREMISE_BIN="$BATS_TEST_TMPDIR/nope/cc-premise" \
+      "$CB_REAL" claim "$id" --by sid-p7
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run bash -c "grep '\"event\":\"claim\"' '$CC_BACKLOG_FILE' | tail -1"
+  [[ "$output" == *'"premise":"unresolved"'* ]] \
+    || { echo "a gate that never ran left no trace in the store: $output"; false; }
+}
+
+@test "PREMISE GATE CONTROL: a REFUSAL carries NO premise report at all" {
+  # THE REGRESSION THIS SHAPE WAS BUILT TO PREVENT, and it is not hypothetical: the first cut of
+  # this change printf'd from inside the gate, which put its line ahead of guard (6)'s refusal on
+  # EVERY claim and displaced `verdict=sibling-held` off line 1 — the one position cc-dispatch's
+  # `claim_excerpt` (head -1, 200 chars) reads. tests/cc-backlog-condition-lease.bats cases 3 and
+  # 19 named it, twice, in ship-land's own gate. The report is now a deferred flush on the success
+  # path plus a ledger field, so a refusal can carry neither by construction; that suite remains
+  # the enforcing guard for the line-1 invariant itself, and this case pins the local half.
+  local id s; id="$(add_boxy "$CB_REAL")"; s="$(mk_premise 3 verdict=falsified)"
+  run env CC_BACKLOG_PREMISE_BIN="$s" "$CB_REAL" claim "$id" --by sid-p5
+  [ "$status" -eq 4 ] || { echo "a falsified premise was not refused: rc=$status $output"; false; }
+  printf '%s' "$output" | head -1 | grep -q "verdict=premise-refuted" \
+    || { echo "the refusal verdict is not on line 1: $output"; false; }
+  [[ "$output" != *"gate=premise-admitted"* ]] \
+    || { echo "the refusal path emitted an admit record: $output"; false; }
+  run bash -c "grep -c '\"premise\"' '$CC_BACKLOG_FILE' || true"
+  [[ "$output" == 0* ]] || { echo "a refused claim wrote a premise field: $output"; false; }
+}
+
+@test "PREMISE GATE CONTROL (legacy name): a REFUSAL does not also claim to have admitted" {
+  # GREEN IN BOTH ARMS BY CONSTRUCTION, and therefore an EQUIVALENCE GUARD rather than a red-proof:
+  # pre-fix no admit line exists anywhere, so the absence below is trivially true. It earns its
+  # place against the mutant a future edit reaches for — hoisting the admit line above the rc-3
+  # branch, where it would fire on every refusal too — which this case kills and the four above
+  # cannot see (memory: green-in-both-arms-is-an-equivalence-guard).
+  local id s; id="$(add_boxy "$CB_REAL")"; s="$(mk_premise 3 verdict=falsified)"
+  run env CC_BACKLOG_PREMISE_BIN="$s" "$CB_REAL" claim "$id" --by sid-p5
+  [ "$status" -eq 4 ] || { echo "a falsified premise was not refused: rc=$status $output"; false; }
+  [[ "$output" == *"verdict=premise-refuted"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"gate=premise-admitted"* ]] \
+    || { echo "the refusal path emitted an admit record: $output"; false; }
+}

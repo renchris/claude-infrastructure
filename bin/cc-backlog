@@ -2900,9 +2900,46 @@ cmd_transition() {
     # absent helper, unreadable ledger, timeout, a jq/python that is not there — must let the claim
     # through. ONLY exit 3 blocks; every other exit code, including a crash, proceeds. Starving the
     # queue on a sensor failure is the worse error (I6).
+    # THE REPORT IS A RECORD, NOT A LINE ON THIS CLAIM'S STDERR — and that is a correction, made
+    # under the gate that caught it. The first cut of this copied guard (5b) literally and printf'd
+    # from inside the gate, which put it ahead of guard (6)'s refusal on EVERY claim and displaced
+    # `verdict=sibling-held` off line 1 — the one position cc-dispatch's `claim_excerpt` (head -1,
+    # 200 chars) can read. tests/cc-backlog-condition-lease.bats cases 3 and 19 named it twice.
+    # 5b escapes the same collision only by being scoped to `--venue cloud`; the hazard is latent
+    # there too and is NOT fixed here.
+    #
+    # So the verdict rides the LEDGER instead, which is the better home anyway: the question this
+    # whole change exists to make askable — "how often is a worker dispatched onto a row whose own
+    # falsifier would have retracted it?" — is a question about a POPULATION, and a stderr line
+    # nobody stores cannot answer it. A field on the claim record can, by a fold. The human-facing
+    # warning is kept but DEFERRED to the success path (see the flush beside the record append), so
+    # a refusal's stderr still opens with the refusal.
+    local pgate="" pmsg=""
     if [ "${CC_BACKLOG_PREMISE_GATE:-on}" != off ]; then
-      local pbin prc pout
+      local pbin prc pout pverd
       pbin="$(premise_bin)"
+      # AN UNRESOLVABLE HELPER NAMES ITSELF — guard (5b)'s treatment, applied to its sibling. The
+      # fail-open is correct and unchanged (this predicate lives outside the ledger fold), but it
+      # was SILENT, so a premise gate that never ran was byte-identical, on every channel, to one
+      # that ran and admitted. That is the same blind spot tests/cc-backlog-self-path.bats was
+      # written for — and this suite's own fixture copies cc-backlog and cc-eligible into the fake
+      # checkout and NOT cc-premise, so every case in it has been skipping this gate in silence.
+      #
+      # MEASURED, 2026-09-10 (backlog 82b87a8a2945). That row's stored falsifier exits 0 — the
+      # content it asked to re-land reached trunk at 16:16:34Z — and `cc-premise check` returns
+      # rc 3 `verdict=falsified` on it today, so guard (5) should have REFUSED. The dispatcher
+      # claimed it at 19:44:49Z with no --force, and a worker was fired onto a dead row. The claim
+      # record holds `{id, ts, event, by, role}` and nothing else, the IDL holds a plain admit, and
+      # the refusal path is the only one that writes anything — so what the gate actually answered
+      # at 19:44 is UNRECONSTRUCTABLE, and "how often does this happen" is unanswerable from the
+      # store. This block, and the two below it, are what make that question askable next time.
+      #
+      # `gate=` and not `verdict=`, deliberately: a verdict is a decision this gate did not reach,
+      # and reusing the word would make a non-evaluation indexable as one (guard 5b's wording).
+      if [ ! -x "$pbin" ]; then
+        pgate="unresolved"
+        pmsg="cc-backlog claim: premise gate SKIPPED gate=premise-unresolved — cc-premise unresolvable at $pbin (fail-open; set CC_BACKLOG_PREMISE_BIN)"
+      fi
       if [ -x "$pbin" ]; then
         pout="$("$pbin" check "$id" 2>&1)"; prc=$?
         if [ "$prc" -eq 3 ]; then
@@ -2962,7 +2999,39 @@ cmd_transition() {
             printf '  Already landed ⇒  cc-backlog "done" %s --evidence "SUPERSEDED by <sha> (sibling <id>)"\n' "$id"
           } >&2
         fi
+        # (5c) THE ADMIT CARRIES ITS VERDICT THROUGH — guard (5b)'s admit line, for the premise
+        # gate. Reaching here means the gate RAN and did not refuse, which is the branch nearly
+        # every claim takes, and until now `$pout` was computed and DROPPED on exactly this path.
+        # One line, machine-tokened, never a block: the (5a) comment's objection to relaying the
+        # whole contract on every claim stands, and this is the token alone.
+        #
+        # PARSED THE WAY THE REFUSAL PATH PARSES IT — by the `verdict=` token, off the merged
+        # stream, taking the LAST match — because cc-premise writes its verdict to stdout and its
+        # contract to stderr, and `2>&1` interleaves them by buffering rather than by order.
+        #
+        # EMITTED AFTER (5a), so a granted claim's stderr still opens with the supersession warning
+        # for any reader that takes head -1; this line is additive, never a replacement.
+        #
+        # `verdict=unreported` IS THE DIAGNOSTIC, not padding — a helper that answers rc 0 with no
+        # verdict line is a helper whose BYTES PREDATE the token, and saying so positively is what
+        # stops a reader inferring a version from an absence (guard 5b's `park=unreported`).
+        pverd="$(printf '%s\n' "$pout" | sed -n 's/^verdict=\(.*\)$/\1/p' | tail -1)"
+        pgate="admitted:${pverd:-unreported}"
+        pmsg="cc-backlog claim: gate=premise-admitted verdict=${pverd:-unreported} rc=${prc}"
       fi
+    fi
+    # A DELIBERATE OFF-SWITCH IS STILL AN UNRUN GATE — guard (5b)'s closing record, for the premise
+    # gate. `CC_BACKLOG_PREMISE_GATE=off` skips the block above ENTIRELY, including both reports it
+    # now emits, so a switched-off gate would otherwise be the one remaining state indistinguishable
+    # from a gate that ran and admitted.
+    #
+    # A RECORD, NOT A WARNING, for (5b)'s reason verbatim: an override is not an outage, and an
+    # alarm on every deliberate claim is one a reader learns to skip. Its own guard rather than an
+    # `else`, because the block above is two conditions deep and an `else` there would read as the
+    # helper's fallback rather than as the switch's.
+    if [ "${CC_BACKLOG_PREMISE_GATE:-on}" = off ]; then
+      pgate="disabled"
+      pmsg="cc-backlog claim: gate=premise-disabled — CC_BACKLOG_PREMISE_GATE=off, the premise predicate was not evaluated for $id"
     fi
     # (5b) OFF-BOX ELIGIBILITY — fires ONLY on `--venue cloud`, so a local claim is byte-for-byte
     # what it was. The question it asks is prior to every other guard here: not "is this finished",
@@ -3174,8 +3243,13 @@ cmd_transition() {
     [ -n "$closedsess" ] || closedsess="${CLAUDE_CODE_SESSION_ID:-}"
     [ -n "$closedsess" ] || closedsess="${CC_SESSION_ID:-}"
   fi
+  # THE DEFERRED PREMISE REPORT. Reaching here means every refusing guard passed, so this can no
+  # longer sit ahead of a refusal's own verdict on line 1. Emitted before the append, never after:
+  # a reader that sees the record must be able to see the sentence that explains it.
+  if [ -n "${pmsg:-}" ]; then printf '%s\n' "$pmsg" >&2; fi
   jq -nc --arg id "$id" --arg ts "$(now_iso)" --arg event "$event" \
      --arg by "$by" --arg evidence "$evidence" --arg needs "$needs" \
+     --arg pgate "${pgate:-}" \
      --arg run "$run" --arg session "$session" --arg venue "$venue" --argjson force "$force" \
      --arg selfrel "$selfrel" --arg role "$role" \
      --arg lane "$lane" --arg closedby "$closedby" --arg closedsess "$closedsess" \
@@ -3190,6 +3264,7 @@ cmd_transition() {
       + (if $session != ""  then {session:$session}   else {} end)
       + (if $venue != ""    then {venue:$venue}       else {} end)
       + (if $role != ""     then {role:$role}         else {} end)
+      + (if $pgate != ""    then {premise:$pgate}     else {} end)
       + (if $force == 1     then {force:true}         else {} end)
       + (if $selfrel != ""  then {selfRelease:true, releaseReason:$selfrel} else {} end)' \
      >> "$BACKLOG"
