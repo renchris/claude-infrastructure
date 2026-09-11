@@ -17,7 +17,7 @@ stop until pre-existing rows are gone.
 
     export PATH="/opt/homebrew/bin:$HOME/.claude/bin:$PATH"
     cd {{WORKTREE}} && git fetch -q origin && git status --short | head -5 && git log --oneline -1
-    ME="$(hostname -s)-$(ps -o ppid= -p $$ | tr -d ' ')"; echo "lease identity: $ME"
+    ME="$(/usr/sbin/scutil --get LocalHostName 2>/dev/null || hostname -s)-$(ps -o ppid= -p $$ | tr -d ' ')"; echo "lease identity: $ME"
     export CC_BACKLOG_LANE=local-drain   # in EVERY call that runs cc-backlog done — see below
     bash {{INFRA}}/scripts/drain-recycle-fire.sh --closure-report {{SINCE}} --min {{MIN}} --project {{PROJECT}}
 

@@ -280,9 +280,28 @@ EOF
   b="$(sed -n '/_cc_wclaim_ancestor_pid()/,/^}/p'  "$LIB"                            | grep -v '^_cc_wclaim_ancestor_pid')"
   [ -n "$a" ]; [ -n "$b" ]
   [ "$a" = "$b" ]
-  # and the host derivation, which is the half that actually bit in the referenced incident
-  grep -q 'hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost' "$LIB"
-  grep -q 'hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost' "$REPO/hooks/session-register.sh"
+  # and the host derivation, which is the half that actually bit in the referenced incident.
+  #
+  # THE PIN MOVED, AND THE OLD ONE WOULD NOT HAVE NOTICED (backlog 7e8cff2e822c). It read
+  # `hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost`, which is a SUFFIX of the
+  # expression that replaced it — so it kept passing across the very change it existed to guard,
+  # and was decorative on its own axis from the moment the fix landed. Pin the whole expression.
+  #
+  # WHY THE EXPRESSION CHANGED: `hostname -s` reports the DHCP / reverse-DNS supplied HostName, so
+  # it flips under a running box and flips back — measured 2026-09-11, `hostname -s` = MacBookPro
+  # against `scutil --get LocalHostName` = Chriss-MacBook-Pro-3, with both spellings live in the
+  # ledger at once. A lease keyed on it re-spells a running worker, and worker-claim-gate then
+  # refuses that worker as a duplicate OF ITSELF. LocalHostName is not network-derived; when unset
+  # it exits 1 with EMPTY stdout, so the chain degrades to exactly the previous expression.
+  want='/usr/sbin/scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost'
+  grep -qF -- "$want" "$LIB"
+  grep -qF -- "$want" "$REPO/hooks/session-register.sh"
+  # NEGATIVE arm: neither side may still mint from the bare network name. Comment lines are excluded
+  # or this count moves whenever the prose explaining the change does.
+  for _f in "$LIB" "$REPO/hooks/session-register.sh"; do
+    n="$(grep -vE '^[[:space:]]*#' "$_f" | grep -c 'hostname -s 2>/dev/null || hostname' || true)"
+    [ "${n:-0}" -le 1 ] || { echo "stale bare-hostname mint in $_f"; false; }
+  done
 }
 
 # ── 15-17 · the actual PreToolUse contract, through the real hook ─────────────────────────────

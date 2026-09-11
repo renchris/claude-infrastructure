@@ -45,7 +45,19 @@ setup() {
   # only thing that can absolve — the isolation every verdict below depends on.
   printf '#!/bin/bash\necho "[]"\n' > "$BATS_TEST_TMPDIR/nosess"; chmod +x "$BATS_TEST_TMPDIR/nosess"
   export CC_BACKLOG_SESSIONS_BIN="$BATS_TEST_TMPDIR/nosess"
+  # TWO SPELLINGS OF THIS BOX, AND THE SUITE NEEDS BOTH (backlog 7e8cff2e822c).
+  #   HOST     what these tests WRITE when they plant an incumbent claim. Deliberately left as
+  #            `hostname -s`, which is now the OTHER spelling: every fixture below therefore also
+  #            exercises the alias-tolerant read path a live ledger depends on during the
+  #            transition, instead of only ever presenting the subject with its own output.
+  #   MINTHOST what the SUBJECT mints — `scutil --get LocalHostName`, because `hostname -s` is
+  #            DHCP/reverse-DNS supplied and flips under a running box, re-spelling a live worker.
+  # This file's ROUND TRIP case is the reason the distinction has to be explicit rather than one
+  # variable doing both jobs: an assertion that re-states the subject's derivation from the test's
+  # own side proves the two agree only by construction. That they agree is pinned once, structurally,
+  # in tests/worker-claim-gate.bats "14 the identity derivation is byte-identical".
   HOST="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
+  MINTHOST="$(/usr/sbin/scutil --get LocalHostName 2>/dev/null || hostname -s 2>/dev/null || hostname 2>/dev/null || echo localhost)"
   DEADPID=2147483647
   # In production the re-key is DETACHED (the hook must not delay a session start), which makes the
   # moment of effect nondeterministic — and no amount of polling can prove a NEGATIVE case wrote
@@ -90,7 +102,7 @@ by_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   [ "$status" -eq 0 ]
   new="$(by_of "$id")"
   [ "$new" != "$HOST-$DEADPID" ]
-  echo "$new" | grep -qE "^$HOST-[0-9]+\$"                    # <host>-<pid>, the form kill -0 takes
+  echo "$new" | grep -qE "^$MINTHOST-[0-9]+\$"                    # <host>-<pid>, the form kill -0 takes
   kill -0 "${new##*-}"                                        # and the pid it names is genuinely LIVE
   [ "$(bash "$CB" list --all --json | jq -r --arg i "$id" '.[]|select(.id==$i)|.status')" = claimed ]
 }
@@ -220,6 +232,10 @@ by_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   # the hook's own identity is its live `claude` ancestor pid, which the harness must not restate
   # (memory: make-the-actuator-the-arbiter).
   refute_match "$(by_of "$id")" "^$HOST-$$\$"
+  # AND the positive shape. The refute alone became satisfiable-by-accident the moment the subject
+  # started minting a different host spelling from the one this test plants: it would pass over an
+  # item nothing had touched. Pin that the worker's own identity is what is there now.
+  by_of "$id" | grep -qE "^$MINTHOST-[0-9]+\$"
   [ "$(bash "$CB" list --all --json | jq -r --arg i "$id" '.[]|select(.id==$i)|.status')" = claimed ]
 }
 
@@ -284,7 +300,7 @@ by_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
   # and the registry pid is the SAME durable claude pid the claim was keyed on — one derivation, two
   # consumers, so cc-sessions and cc-backlog can never disagree about who the worker is.
   regpid="$(printf '%s' "$output" | jq -r '.pid')"
-  [ "$(by_of "$id")" = "$HOST-$regpid" ]
+  [ "$(by_of "$id")" = "$MINTHOST-$regpid" ]
 }
 
 @test "PRODUCTION SHAPE: fired DETACHED (no wait seam), the re-key still lands its durable record" {
@@ -304,7 +320,7 @@ by_of() { bash "$CB" list --all --json | jq -r --arg i "$1" '.[]|select(.id==$i)
     sleep 1; i=$((i + 1))
   done
   [ "$landed" -eq 1 ]
-  by_of "$id" | grep -qE "^$HOST-[0-9]+\$"
+  by_of "$id" | grep -qE "^$MINTHOST-[0-9]+\$"
   [ "$(grep -c 'reclaim' "$CC_BACKLOG_FILE")" -eq 1 ]
 }
 
@@ -386,7 +402,7 @@ agent_pstable() { # $1=name $2=team → writes the table, echoes its path
   run fire "$BATS_TEST_TMPDIR/wt-$id"
   [ "$status" -eq 0 ]
   [ "$(by_of "$id")" != "$HOST-$DEADPID" ]
-  by_of "$id" | grep -qE "^$HOST-[0-9]+\$"
+  by_of "$id" | grep -qE "^$MINTHOST-[0-9]+\$"
 }
 
 @test "C the guard has an OFF seam, and it is not load-bearing for the hand-over" {
