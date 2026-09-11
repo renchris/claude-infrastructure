@@ -88,6 +88,7 @@ proven() {
   warm="$(run_in "$MAIN")"
   [ "$(carried "$warm")" -gt 0 ]
   # A new tool with a shape-5a seam adds ONE seam-table row, and moves no byte of the lint or any suite.
+  # shellcheck disable=SC2016  # the fixture tool must CONTAIN the literal ${…:-/tmp/…} the extractor reads
   printf '#!/bin/bash\nWT_STATE="${CC_WT_TOOL_DIR:-/tmp/cc-wt-tool}"\n' > "$MAIN/bin/cc-wt-tool"
   ( cd "$MAIN" && git add -A && git -c user.email=t@e.x -c user.name=t commit -qm tool )
   after="$(run_in "$MAIN")"
