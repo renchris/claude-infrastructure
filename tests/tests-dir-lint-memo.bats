@@ -268,3 +268,149 @@ af() {
   printf '# uncommitted\n' >> "$CORPUS/tests/clean1.bats"
   [[ "$(run_lint)" != *"per-file memo"* ]]
 }
+
+# ── test-walltime-lint ───────────────────────────────────────────────────────────────────────────────
+# Its finding: a FUTURE absolute date inside the horizon. Built with arithmetic, so this suite — which the
+# lint also judges — never carries a literal future date of its own.
+wt() {
+  local y; y=$(( $(date -u +%Y) + 2 ))
+  mkcorpus test-walltime-lint.sh WALLTIME "run subject --until \"${y}-01-15\""
+}
+
+@test "walltime POSITIVE CONTROL: the memo arms, and carries every clean suite" {
+  wt
+  first="$(run_lint)"
+  [[ "$first" == *"per-file memo"* ]] || { echo "MEMO NEVER ARMED — every walltime case is vacuous"; echo "$first"; false; }
+  [ "$(carried "$first")" -eq 0 ]
+  [ "$(proven "$first")" -eq 4 ]
+  second="$(run_lint)"
+  [ "$(carried "$second")" -eq 3 ]
+  [ "$(proven "$second")" -eq 1 ]
+}
+
+@test "walltime: a carried run says exactly what an unmemoized run says, and re-reports the finding" {
+  wt
+  run_lint >/dev/null
+  warm="$(run_lint)"
+  [ "$(carried "$warm")" -eq 3 ]
+  cold="$(run_lint CC_WALLTIME_MEMO=off)"
+  [ "$(printf '%s\n' "$warm" | grep -v 'per-file memo')" = "$(printf '%s\n' "$cold" | grep -v 'per-file memo')" ]
+  [[ "$warm" == *"zz-hit.bats"* ]]
+}
+
+@test "walltime: editing one suite re-proves THAT suite and no other" {
+  wt
+  run_lint >/dev/null
+  printf '# bytes that change no verdict\n' >> "$CORPUS/tests/clean2.bats"
+  commit edit
+  after="$(run_lint)"
+  [ "$(proven "$after")" -eq 2 ]
+  [ "$(carried "$after")" -eq 2 ]
+}
+
+@test "walltime KEY: the lint's own blob invalidates every carried verdict" {
+  wt
+  run_lint >/dev/null
+  printf '\n# read-set change\n' >> "$CORPUS/scripts/test-walltime-lint.sh"
+  commit lint-edit
+  [ "$(carried "$(run_lint)")" -eq 0 ]
+}
+
+@test "walltime KEY: the allowlist is in the key BY VALUE — no byte of any file moves" {
+  wt
+  run_lint >/dev/null
+  [ "$(carried "$(run_lint CC_WALLTIME_ALLOWLIST=unrelated.bats)")" -eq 0 ]
+}
+
+@test "walltime KEY: TODAY is in the key — a clean verdict earned today is not honoured on another day" {
+  wt
+  run_lint >/dev/null
+  [ "$(carried "$(run_lint CC_WALLTIME_TODAY=20200101)")" -eq 0 ]
+}
+
+@test "walltime KEY: the HORIZON is in the key" {
+  wt
+  run_lint >/dev/null
+  [ "$(carried "$(run_lint CC_WALLTIME_HORIZON_YEARS=3)")" -eq 0 ]
+}
+
+@test "walltime KEY: a different GREP binary invalidates — and then re-earns" {
+  wt
+  run_lint >/dev/null
+  shim grep 'NEVER-MATCHES' 2
+  [ "$(carried "$(run_lint PATH="$SHIM:$PATH")")" -eq 0 ]
+  [ "$(carried "$(run_lint PATH="$SHIM:$PATH")")" -eq 3 ]
+}
+
+@test "walltime KEY: a different SORT binary invalidates — and then re-earns" {
+  wt
+  run_lint >/dev/null
+  shim sort 'NEVER-MATCHES' 2
+  [ "$(carried "$(run_lint PATH="$SHIM:$PATH")")" -eq 0 ]
+  [ "$(carried "$(run_lint PATH="$SHIM:$PATH")")" -eq 3 ]
+}
+
+@test "walltime KEY: a different AWK binary invalidates — and then re-earns" {
+  wt
+  run_lint >/dev/null
+  shim awk 'NEVER-MATCHES' 2
+  [ "$(carried "$(run_lint PATH="$SHIM:$PATH")")" -eq 0 ]
+  [ "$(carried "$(run_lint PATH="$SHIM:$PATH")")" -eq 3 ]
+}
+
+@test "walltime: a date scan that could not RUN banks nothing — the veto is ABSOLUTE, not per file" {
+  # clean1 is FIRST in glob order, so the two readings separate completely: an absolute veto banks
+  # nothing (carried 0 next run); a per-file one banks clean2, clean3 (carried 2).
+  wt
+  shim grep '*tests/clean1.bats*' 2
+  : > "$MEMO_SHIM_FLAG"
+  run_lint PATH="$SHIM:$PATH" >/dev/null
+  rm -f "$MEMO_SHIM_FLAG"
+  b="$(run_lint PATH="$SHIM:$PATH")"
+  [ "$(carried "$b")" -eq 0 ]
+  [ "$(proven "$b")" -eq 4 ]
+}
+
+@test "walltime: an allowlisted CLEAN suite is never banked, even when the allowlist probe cannot run" {
+  wt
+  shim grep '*-xF*' 2
+  : > "$MEMO_SHIM_FLAG"
+  run_lint PATH="$SHIM:$PATH" CC_WALLTIME_ALLOWLIST=clean1.bats >/dev/null
+  rm -f "$MEMO_SHIM_FLAG"
+  out="$(run_lint PATH="$SHIM:$PATH" CC_WALLTIME_ALLOWLIST=clean1.bats)"
+  [[ "$out" == *"clean1.bats"* ]]
+}
+
+@test "walltime: --selftest runs memo-OFF and writes nothing to the store" {
+  wt
+  run_lint >/dev/null
+  before="$(store_entries)"
+  ( cd "$CORPUS" && bash scripts/test-walltime-lint.sh --selftest >/dev/null 2>&1 ) || true
+  [ "$(store_entries)" -eq "$before" ]
+}
+
+@test "walltime: a dirty worktree, and CC_WALLTIME_MEMO=off, each disarm the memo" {
+  wt
+  [[ "$(run_lint CC_WALLTIME_MEMO=off)" != *"per-file memo"* ]] || false
+  printf '# uncommitted\n' >> "$CORPUS/tests/clean1.bats"
+  [[ "$(run_lint)" != *"per-file memo"* ]]
+}
+
+@test "walltime: ONE DAY PER RUN — a run straddling midnight cannot bank a verdict under the wrong day" {
+  # The clock shim answers DAY1 to the first `date -u +%Y%m%d` and DAY2 to every later one: a run that
+  # crosses midnight. Unpinned, the key reads DAY1 (it is computed first) while the suites are judged
+  # against DAY2, so a date EQUAL to DAY2 — future on DAY1, not on DAY2 — is judged clean and banked under
+  # DAY1's key, and the next DAY1 run carries it silently over a real finding. Pinned, the run is DAY1.
+  # Dates are assembled arithmetically so this suite, which the lint also judges, carries no literal one.
+  local d1 d2 ymd
+  d1="20$((30))0101"; d2="20$((30))0102"; ymd="20$((30))-01-02"
+  mkcorpus test-walltime-lint.sh WALLTIME "run subject --until \"$ymd\""
+  SHIM="$BATS_TEST_TMPDIR/shim"; mkdir -p "$SHIM"
+  # shellcheck disable=SC2016  # the shim's own "$*", "$c" and "$@" must reach it LITERALLY
+  printf '#!/bin/bash\nc="%s"\nif [ "$*" = "-u +%%Y%%m%%d" ]; then\n  if [ -e "$c" ]; then echo %s; else : > "$c"; echo %s; fi\n  exit 0\nfi\nexec /bin/date "$@"\n' \
+    "$BATS_TEST_TMPDIR/date.calls" "$d2" "$d1" > "$SHIM/date"
+  chmod +x "$SHIM/date"
+  run_lint PATH="$SHIM:$PATH" >/dev/null
+  out="$(run_lint CC_WALLTIME_TODAY="$d1")"
+  [[ "$out" == *"zz-hit.bats"* ]]            # on DAY1 that date IS in the future: it must be reported
+}
