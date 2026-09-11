@@ -621,8 +621,14 @@ STUB
   # coverage loop below walks launchd/*.plist -> manifest, so a label whose plist is brew's can only
   # ever be noticed by THIS count — the same argument the relogin and cc-gc entries above make for
   # launchd/staged/, one step further out. The count moves WITH the addition, as every entry above.
-  if [ "$n" != 33 ]; then
-    echo "manifest declares $n labels, expected 33 — if a plist was legitimately added or retired,"
+  # 34 since 2026-09-10: com.claude.permission-harvest (63734f039, `run`, the fleet's only WEEKLY row,
+  # interval 604800) — the qos-census / accounts-keepwarm shape: plist and manifest row landed in ONE
+  # commit, correctly, and this count was left behind, so this assertion alone went red on trunk for
+  # every lander after it. A/B: green (1/1) at the parent 7a73a511c, red at 63734f039 and on trunk.
+  # postland-verify caught it and its auto-revert FAILED rc=90 (a 32-file feature does not revert
+  # cleanly under the commits on top), so forward was the only remedy — backlog c893ce32210b.
+  if [ "$n" != 34 ]; then
+    echo "manifest declares $n labels, expected 34 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1
