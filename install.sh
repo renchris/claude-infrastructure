@@ -881,6 +881,16 @@ fi
 # restores a root `CLAUDE.md` here silently reinstates the whole cost, which is why
 # tests/deploy-parity.bats pins its ABSENCE rather than trusting this comment.
 #
+# 🚨 IF YOU RENAME THIS FILE AGAIN, THE FIVE INSTALL FIXTURES ARE CONSUMERS TOO. The `cp` below is
+# unconditional under `set -e`, so every test that hands install.sh a fixture repo dies at THIS line
+# when the fixture seeds the old name — with the cause as the last of ~60 lines of install output,
+# under a "seed install failed" message that names neither this file nor this step. 367e42f26 renamed
+# the SSOT and updated tests/deploy-parity.bats and tests/wrap-ledger.bats, but not the fixture
+# builders in tests/install-{fleet-activation,resident-reload,stale-refusal,templatedir-home-guard,
+# worktree-refusal}.bats — all five went red together ~13 h later in the full corpus, where the RED
+# was attributed to an unrelated landing tip (backlog 933c84f457ec). The failing set was exactly the
+# fixture-building set; the other four install-*.bats suites do not seed a repo and stayed green.
+#
 # The rules/ leg was REMOVED 2026-07-25. rules/ itself was deleted from the repo in 270baf8 (its two
 # files were relocated into skills/), so the one-shot stale-rule sweep had nothing left to sweep in
 # any of the 5 config dirs and the deploy loop nothing to deploy — all the leg still did was

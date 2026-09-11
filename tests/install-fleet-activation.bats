@@ -64,7 +64,7 @@ setup() {
   # install.sh aborts under `set -e` without them.
   mkdir -p "$FX/launchd"
   cp "$REPO/install.sh" "$FX/install.sh"
-  printf '# fixture global instructions\n' > "$FX/CLAUDE.md"
+  printf '# fixture global instructions\n' > "$FX/CLAUDE.global.md"
   printf '#!/bin/bash\necho fixture-statusline\n' > "$FX/statusline.sh"
 
   for l in fx-run fx-staged fx-retired fx-undeclared; do

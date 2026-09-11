@@ -24,7 +24,7 @@ setup() {
   git init -q --bare "$ORIGIN"
   mkdir -p "$TDIR/seed/agents"
   cp "$REPO/install.sh" "$TDIR/seed/install.sh"
-  printf 'TRUNK-V1\n' > "$TDIR/seed/CLAUDE.md"
+  printf 'TRUNK-V1\n' > "$TDIR/seed/CLAUDE.global.md"
   printf '#!/bin/bash\necho fixture-statusline\n' > "$TDIR/seed/statusline.sh"
   printf 'fixture agent\n' > "$TDIR/seed/agents/fixture-agent.md"
   git init -q "$TDIR/seed"
@@ -51,7 +51,7 @@ lacks() { if printf '%s' "$output" | grep -qF -- "$1"; then return 1; fi; return
 
 # advance origin/main past the clone, so the clone is BEHIND trunk
 advance_origin() {
-  printf 'TRUNK-V2-LANDED\n' > "$TDIR/seed/CLAUDE.md"
+  printf 'TRUNK-V2-LANDED\n' > "$TDIR/seed/CLAUDE.global.md"
   git -C "$TDIR/seed" -c user.email=t@t -c user.name=t commit -q -am "trunk moves on"
   git -C "$TDIR/seed" push -q origin main
 }
