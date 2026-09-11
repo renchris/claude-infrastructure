@@ -351,6 +351,73 @@ ROOT="${CC_PIPEFAIL_ROOT:-$(cd "$(dirname "$SELF")/.." && pwd)}"
 ALLOWLIST_DEFAULT="$(dirname "$SELF")/pipefail-sigpipe-allow.txt"
 ALLOWLIST="${CC_PIPEFAIL_ALLOWLIST:-$ALLOWLIST_DEFAULT}"
 
+# ── THE PER-FILE MEMO (ratchet-arm memo rollout — follow-on 3 of the cloud-lane redesign) ──────────
+# Measured as ship-land's precheck invokes it (2026-09-11, load ~10, a clean tree): this arm is 17.7s,
+# the largest arm of the land gate that had no memo and whose verdict is a function of CONTENT. Nearly
+# all of it is per-file work in scan(): one grep for clause 1 on every file in the population, then a
+# second grep and a two-pass awk on every file that enables pipefail. Every round of every land
+# re-proved those verdicts over bytes that had not moved.
+#
+# WHAT MAKES A PER-FILE KEY EXACT HERE. A file's per-file output is a function of exactly four things:
+# its own bytes; this lint's blob (DETECT_AWK and both clause regexes live in it); the awk that runs
+# DETECT_AWK; and the grep that runs the two clause probes. Nothing else reaches it — DETECT_AWK reads
+# FILE only to PRINT it, HASE is derived from the file's own bytes, and no pass follows an include or
+# compares two files. The ALLOWLIST and CC_PIPEFAIL_OWN are deliberately NOT in the key: main_scan
+# applies both AFTER the per-file scan, to its output, and a carried file contributes exactly the
+# output it earned, which is none.
+#
+# THE TWO INTERPRETERS ARE KEYED BY THEIR BINARY, not by a version banner: gate-memo's salt covers
+# shellcheck, bash, python3 and git and neither of these, and a banner can survive a rebuild. Hashing
+# /usr/bin/awk (~300 KB) costs one fork per RUN, not per file.
+#
+# ONLY "EMITTED NOTHING, AND EVERY PROBE ANSWERED" IS EVER RECORDED (gate-memo invariant 1). A file
+# with hits re-runs and re-prints on every run, so a grandfathered site is never replayed from a cache.
+# And three could-not-answer states that already read as clean today — clause 1's grep exiting >=2,
+# the HASE grep exiting >=2, the awk exiting non-zero — are NEVER recorded. Today's handling of them is
+# unchanged; a memo that banked them would freeze a could-not-check into a permanent green keyed on
+# content, which is the one way a memo turns "I don't know" into "green".
+#
+# Kill switch: CC_PIPEFAIL_MEMO=off. SHIP_LAND_MEMO=off also disables it, via memo_init. The library is
+# sourced from beside THIS file and never from ROOT: CC_PIPEFAIL_ROOT points the scan at fixture trees
+# that carry no scripts/lib/, and a copy of the lint must arm the memo it ships with. Proven by
+# tests/pipefail-file-memo.bats, including that each key component INVALIDATES when it moves.
+PF_MEMO_OK=0
+PF_CHECKER=""
+PF_FILES=()
+PF_MEMO_HITS=0
+PF_MEMO_RAN=0
+PF_ATTEST=0   # main_scan sets it: --census and --regen stdout+stderr must stay exactly what they were
+if [ "${CC_PIPEFAIL_MEMO:-on}" != "off" ] && [ -r "$(dirname "$SELF")/lib/gate-memo.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$(dirname "$SELF")/lib/gate-memo.sh" 2>/dev/null || true
+fi
+
+pf_memo_arm() {  # $@ = the EXACT ordered population scan() walks → 0 = armed
+  PF_MEMO_OK=0
+  [ "${CC_PIPEFAIL_MEMO:-on}" != "off" ] || return 1
+  command -v memo_init >/dev/null 2>&1 || return 1
+  command -v memo_batch_arm >/dev/null 2>&1 || return 1   # an older lib ⇒ memo OFF, today's behaviour
+  memo_init || return 1                    # dirty tree · no git dir · unwritable store ⇒ memo OFF
+  local selfblob awkbin grepbin awkblob grepblob readset
+  selfblob="$(git hash-object -- "$SELF" 2>/dev/null)" || return 1
+  awkbin="$(command -v awk 2>/dev/null)" || return 1
+  grepbin="$(command -v grep 2>/dev/null)" || return 1
+  # An exported FUNCTION named awk or grep resolves to its bare NAME here, which is not a file this can
+  # fingerprint. Refuse rather than hash whatever happens to sit at that relative path.
+  case "$awkbin" in /*) ;; *) return 1 ;; esac
+  case "$grepbin" in /*) ;; *) return 1 ;; esac
+  awkblob="$(git hash-object -- "$awkbin" 2>/dev/null)" || return 1
+  grepblob="$(git hash-object -- "$grepbin" 2>/dev/null)" || return 1
+  [ -n "$selfblob" ] && [ -n "$awkblob" ] && [ -n "$grepblob" ] || return 1
+  readset="$(printf 'pipefail-readset/v1\nlint=%s\nawk=%s %s\ngrep=%s %s\n' \
+               "$selfblob" "$awkbin" "$awkblob" "$grepbin" "$grepblob")" || return 1
+  PF_CHECKER="pipefail/$(printf '%s' "$readset" | git hash-object --stdin 2>/dev/null)"
+  [ "$PF_CHECKER" != "pipefail/" ] || return 1
+  memo_batch_arm "$PF_CHECKER" "$@" || return 1
+  PF_MEMO_OK=1
+  return 0
+}
+
 # ── the population, NAMED ONCE ───────────────────────────────────────────────────────────────────
 # The file shapes this lint judges, as git pathspecs. scan() tests membership with in_scan_set below
 # and `--print-scope` prints the same list, so the two cannot disagree.
@@ -1446,23 +1513,61 @@ scan() {
     rel="$(find . -type f \( -name '*.sh' -o -name '*.bats' -o -path './bin/*' -o -path './hooks/*' \) | sed 's|^\./||')"
   fi
 
-  printf '%s\n' "$rel" | while IFS= read -r f; do
+  # THE POPULATION, BUILT EXACTLY ONCE. The batch memo is INDEX-KEYED (scripts/lib/gate-memo.sh), so
+  # the list it arms on and the list the loop walks must be the SAME array. Every path filter lives
+  # here, so a file skipped for any reason is absent from both and the index cannot drift. This used
+  # to be one `printf | while` loop doing both jobs; it is split so the population is a real array.
+  PF_FILES=()
+  while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in
       scripts/pipefail-sigpipe-lint.sh|tests/pipefail-sigpipe-lint.bats) continue ;;
     esac
     in_scan_set "$f" || continue
     [ -f "$f" ] || continue
+    PF_FILES[${#PF_FILES[@]}]="$f"
+  done <<< "$rel"
+  PF_MEMO_HITS=0; PF_MEMO_RAN=0
+  if [ "${#PF_FILES[@]}" -gt 0 ]; then pf_memo_arm "${PF_FILES[@]}" || true; fi
+
+  local i=0 hase out p1 p2 arc
+  for f in ${PF_FILES[@]+"${PF_FILES[@]}"}; do
+    # `i` moves FIRST, before any continue, so the index is always i - 1 — derived, never a second
+    # counter that can slide one file's verdict onto its neighbour.
+    i=$((i + 1))
+    if [ "$PF_MEMO_OK" = "1" ] && memo_batch_hit "$((i - 1))"; then
+      PF_MEMO_HITS=$((PF_MEMO_HITS + 1))
+      continue
+    fi
+    PF_MEMO_RAN=$((PF_MEMO_RAN + 1))
     # clause 1 — the file must actually enable pipefail
-    grep -E '^[[:space:]]*set[[:space:]]+-[a-zA-Z]*o[[:space:]]+pipefail|^[[:space:]]*set[[:space:]]+-o[[:space:]]+pipefail' "$f" >/dev/null 2>&1 || continue
-    local hase=0
-    grep -E '^[[:space:]]*set[[:space:]]+-[a-zA-Z]*e[a-zA-Z]*([[:space:]]|$)|^[[:space:]]*set[[:space:]]+-o[[:space:]]+errexit' "$f" >/dev/null 2>&1 && hase=1
+    grep -E '^[[:space:]]*set[[:space:]]+-[a-zA-Z]*o[[:space:]]+pipefail|^[[:space:]]*set[[:space:]]+-o[[:space:]]+pipefail' "$f" >/dev/null 2>&1; p1=$?
+    if [ "$p1" -ne 0 ]; then
+      # rc 1 is an ANSWER — this file does not enable pipefail, so it can emit nothing — and it is
+      # the one clean verdict this branch may bank. rc >= 2 is grep failing to RUN: skipped exactly
+      # as it always was, and NOT recorded.
+      if [ "$p1" -eq 1 ] && [ "$PF_MEMO_OK" = "1" ]; then memo_batch_record "$((i - 1))"; fi
+      continue
+    fi
+    hase=0
+    grep -E '^[[:space:]]*set[[:space:]]+-[a-zA-Z]*e[a-zA-Z]*([[:space:]]|$)|^[[:space:]]*set[[:space:]]+-o[[:space:]]+errexit' "$f" >/dev/null 2>&1; p2=$?
+    [ "$p2" -eq 0 ] && hase=1
     # TWICE, and that is clause 4c: pass one collects the callers whose status-read reaches a
     # function-final pipeline, pass two judges. A caller may sit either side of the definition, so
     # one pass cannot answer it. NR == FNR is the pass discriminator, which is why the same path is
     # named twice rather than the file being read from a variable.
-    awk -v FILE="$f" -v HASE="$hase" "$DETECT_AWK" "$f" "$f"
+    out="$(awk -v FILE="$f" -v HASE="$hase" "$DETECT_AWK" "$f" "$f")"; arc=$?
+    [ -z "$out" ] || printf '%s\n' "$out"
+    # THE RECORD. Every condition is fail-safe: a finding (non-empty output) is never cached, and an
+    # awk that did not exit 0 or a HASE probe that could not RUN (>= 2 — it decides clause 4's
+    # errexit arm, so a wrong HASE is a wrong verdict) leaves the file unrecorded, re-proven next run.
+    if [ "$PF_MEMO_OK" = "1" ] && [ -z "$out" ] && [ "$arc" -eq 0 ] && [ "$p2" -le 1 ]; then
+      memo_batch_record "$((i - 1))"
+    fi
   done
+  if [ "$PF_MEMO_OK" = "1" ] && [ "$PF_ATTEST" = "1" ]; then
+    echo "$SELF_NAME: per-file memo — $PF_MEMO_HITS verdict(s) carried, $PF_MEMO_RAN proven fresh." >&2
+  fi
 }
 
 # ── allowlist ────────────────────────────────────────────────────────────────────────────────────
@@ -1505,6 +1610,10 @@ scan_or_nonverdict() { # $1=varname to fill with the scan output; returns 2 on a
 
 main_scan() {
   local hits rc=0
+  # The memo's attestation line is printed only on THIS path: --census and --regen are consumed as
+  # data (test 14 diffs --regen's merged output against the committed allowlist), so a stderr line
+  # there would change their output. scan() runs in a subshell and inherits this.
+  PF_ATTEST=1
   scan_or_nonverdict hits || return 2
 
   local -a over=() under=()

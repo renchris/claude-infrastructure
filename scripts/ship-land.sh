@@ -3426,8 +3426,14 @@ run_gate() {  # $1=range → 0 green / 1 red
       [[ -n "$pown" ]] && echo "→ gate: pipefail-sigpipe own-scope — blocking on $(printf '%s\n' "$pown" | grep -c .) file(s) in this land's diff; others advisory." >&2
     fi
     echo "→ gate: pipefail/SIGPIPE ratchet (an early-exit pipe consumer that reads FALSE on a match)" >&2
-    local pf_self=0
-    selftest_ok "$PF_LINT" || pf_self=$?
+    local pf_self=0 _pf_self _pf_readset
+    # THE EXTRA READ SET — same reason and shape as the pane-spawn arm below. This lint sources
+    # scripts/lib/gate-memo.sh from beside itself for its per-file memo, and it runs under `set -u`,
+    # so a change to that library can change this selftest's verdict without moving a byte of the
+    # lint. Resolved exactly as the lint resolves it; an unhashable path disarms the carry.
+    _pf_self="$(readlink -f "$PF_LINT" 2>/dev/null || printf '%s' "$PF_LINT")"
+    _pf_readset="$(dirname "$_pf_self")/lib/gate-memo.sh"
+    selftest_ok "$PF_LINT" "$_pf_readset" || pf_self=$?
     if (( pf_self != 0 )); then
       echo "✗ gate: pipefail-sigpipe-lint --selftest FAILED — the detector no longer discriminates," >&2
       echo "  so its clean verdict would mean nothing. Fix the lint before landing." >&2
