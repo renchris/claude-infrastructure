@@ -15,6 +15,8 @@
 # stubbed with a fake it2 whose split of "GOOD" succeeds and any other anchor errors (rc 3, exactly
 # like the real CLI); spawn_frontmost / it2_land / as_tab are stubbed to record which path ran.
 
+bats_require_minimum_version 1.5.0   # `run --separate-stderr` (the it2_split stdout/stderr split)
+
 setup() {
   # M11 (MACHINE_CAPACITY_V2 §11.3) — a test's environment is PINNED, not ambient. handoff-fire.sh's
   # capacity_gate reads the box's live loadavg AND (M10) its memory headroom, exiting 9 when either is
@@ -32,6 +34,14 @@ setup() {
   # (bound applied, expiry -> 124, set-but-empty disable seam) are covered by
   # tests/handoff-fire-it2-bound.bats against the real definition.
   hf_bounded() { "$@"; }
+  # it2_split is bounded by its OWN duration (hf_bounded_s "$HF_SPLIT_TIMEOUT_S" …, 2026-09-11) and the
+  # split caller consults two kitty-only helpers before retrying / wording its refusal. Both are
+  # exercised against the real definitions in tests/handoff-fire-split-bound.bats; here they are held
+  # at their non-kitty answers (nothing to adopt, liveness unobserved) so this suite keeps testing the
+  # split-surface invariants it was written for, hermetically — even when run from inside a kitty pane.
+  hf_bounded_s() { shift; "$@"; }
+  hf_adopt_split_pane() { return 1; }
+  hf_anchor_live() { return 1; }
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
 
@@ -67,9 +77,12 @@ SH
 }
 
 @test "it2_split: returns non-zero and echoes nothing when the anchor is not found" {
-  run it2_split DEADBEEF vertically
+  # STDOUT stays empty (it is the new-pane-id channel); the splitter's own reason now goes to STDERR
+  # instead of being discarded — 69 refusals once read "anchor gone" with no cause anywhere in the log.
+  run --separate-stderr it2_split DEADBEEF vertically
   [ "$status" -ne 0 ]
   [ -z "$output" ]
+  [[ "$stderr" == *"DEADBEEF"*"not found"* ]] || false
 }
 
 @test "spawn split-right with a live anchor lands via it2 (it2_land), never frontmost" {

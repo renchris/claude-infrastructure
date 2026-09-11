@@ -148,6 +148,20 @@ the stderr body). Fixture-replay items removed per §6.9; the row totals agree w
 
 **rc=1 is 69 of 297 = 23.2 % of every real fire attempt in the window, and 0 of them before 09-07.**
 
+> **CORRECTED 2026-09-11 (fire-pane-anchor, landed with `tests/handoff-fire-split-bound.bats`) — the
+> count stands, the diagnosis does not.** (1) *"0 before 09-07"* is a property of this doc's window,
+> not of the defect: `dispatch-fires.log` holds 7 identical refusals on 08-07..08-11. (2) The anchors
+> were **not** gone: 535, 643 and 672 each took successful splits hours after the fire that called
+> them gone, and a kitty window id is never reused within one kitty process. (3) What actually
+> failed: `it2_split` bounded a whole `it2-kitty session split` run with the 10 s one-IPC-round-trip
+> `HF_TIMEOUT_S`, around a kitty launch it2-kitty itself bounds at 15 s. The outer bound killed
+> splits kitty had already completed; the pane was running the predelivered brief, and the 0.8 s
+> retry launched a second — fires 4b0095d1ee73, 6a5a218fd9a8 and 9d1c8dadf1f8 each left **two
+> transcripts 12–16 s apart under ONE engagement marker** after printing "Nothing was launched".
+> So these rows are not lost capacity alone: some are duplicate sessions. `d7b85c39c` (same day)
+> touched only `session focus|read` and is not implicated. The §2 "Pane anchor" row should be read
+> through this note.
+
 ---
 
 ## 2. "WHAT BINDS NOW" — verdict with one evidence line per candidate
