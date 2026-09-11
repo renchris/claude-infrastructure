@@ -22,6 +22,24 @@ next morning to re-measure "still off" — which is what a watch row with no wat
 red-proved. The row still closes only on a flip; it now closes on a flip *that something is looking
 for*.
 
+## 0. The one action this note asks for — repoint the row's falsifier
+
+**No scheduling is needed, and no launchd job should be written for this.** The dispatcher already
+runs the row's stored falsifier on every dispatch — the brief that fired this session quotes its own
+re-run of it. The dispatcher *is* the watcher; it was simply running the probe with the hole. So the
+whole handoff is a one-line store edit on the desk, replacing the row's stored `probe` with:
+
+```sh
+bash scripts/propose-goal-flag-watch.sh --falsify
+```
+
+It is a drop-in: rc 0 still means *retract this row* and non-zero still means *keep it open*, so no
+consumer changes behaviour. What changes is that the third state stops being silent — rc 2 says
+*nobody asked GrowthBook inside the window* out loud, instead of spending the word `false` on it.
+
+Anything beyond that (a cadence, a surface to page) is the operator's call and is deliberately not
+built here; §8 records why.
+
 ## 1. The verdict at 2.1.268
 
 | Question | Answer at 2.1.268 / 2026-09-11 |
@@ -213,9 +231,14 @@ morning after a full re-check landed.
   observation of a `true` for those identities; GrowthBook targeting is per-identity.
 - Whether an adopted `ask_user:false` proposal engages on a fired peer. Still unmeasurable — no
   environment on which the tool is enabled exists to test against.
-- Whether the watcher should be **scheduled**. It is not wired to launchd or to any sweep lane here;
-  C10 forbids editing launchd in place from a worker, and the right cadence is the operator's call.
-  Everything §3 of yesterday's note priced about adoption cost is unchanged and un-re-measured.
+- Whether the watcher should be **scheduled**. It is deliberately not wired to launchd or to any
+  sweep lane, and §0 argues it should not be: the dispatcher already runs the row's falsifier, so a
+  scheduled job would be a second watcher for a row that has one. C10 forbids editing launchd in
+  place from a worker in any case, and a cadence is the operator's call.
+- Everything §3 of yesterday's note priced about **adoption cost** — the 500-char `rAt` cap against
+  the typed path's 4000, the `alwaysAsk` upgrade that turns an unattended proposal into a dialog
+  nobody presses, the plan-mode throw — is unchanged and un-re-measured. It becomes actionable only
+  when the flag flips, and nothing about 2.1.268 moves it.
 
 ## 9. How to run it
 
