@@ -64,3 +64,40 @@ since every one of them did prompt. The splitter does not over-clear.
 
 The remaining ~1,300 curl prompts are compound (`for u in …; do curl …; done`) and no
 allow rule can express them.
+
+## The curl "hook-raised" premise expired on 2026-08-23
+
+`docs/research/permission-harvest-hook-ceiling-2026-09-10.md` §"curl" excludes curl from the
+hook-layer ceiling because "curl is hook-raised, measured: 1,367 of 1,368 curl 'gap' rows joined
+to a `curl-gate` ask within ±15 s", and `permission-harvest-completion-2026-09-11.md` §4 carries
+that forward into the closing verdict — the three greedy picks `rm` → `git` → `curl` are "all
+already owned by existing guards", leaving 1.9 %, so `proposed=0` is the correct steady state and
+"nothing in §§1-12 names an outstanding unit".
+
+That join is against what curl-gate did AT PROMPT TIME. This census replays TODAY's gate over the
+same archive. Both are correct about different binaries, and a landed fix separates them:
+`d8b517b28` (2026-08-23) — "the gate spent 1,822 prompts on its own parser and 370 hard blocks on
+the word cd". Split at that date, replayed through today's curl-gate:
+
+  pre-fix  (<2026-08-23):  660 curl-bearing prompts — 641 get NO hook decision, 17 ask
+  post-fix (>=2026-08-23): 1123 curl-bearing prompts — 896 get NO hook decision, 204 ask
+
+~86 % of curl prompts are not hook-raised today. They are raised by the RULE layer, because there
+is no `Bash(curl:*)` allow rule — which is the layer the exclusion also removed curl from, since
+"already owned by a guard" was the reason for both.
+
+WHAT THIS DOES AND DOES NOT CLAIM. It does NOT refute the ≤1.9 % hook-ceiling headline, and it does
+not re-open the completion note by itself: the two populations may not be identical (theirs is a
+filtered "gap" subset; mine is every archived Bash prompt whose command bears `curl`), and I did not
+reconcile the denominators. What it claims is narrower and sufficient: **the specific premise that
+removed curl from consideration is a property the gate LOST on 2026-08-23, so it needs re-measuring
+before `proposed=0` is inherited as settled.** Re-derive with the instrument that note ships —
+`python3 docs/research/permission-harvest-hook-ceiling-2026-09-10/hook-ceiling.py` — after
+restricting the archive to prompts at or after 2026-08-23; its own header says every figure decays
+with the archive at ~40 rows/day, which is exactly the decay observed here (MEMORY.md
+published-figure-decays-with-its-source).
+
+The 323 whole-command-clearable figure in §"What settings.json can actually buy" above is a HAND
+estimate from an approximate statement splitter and has been through none of `cc-permission-harvest`'s
+eleven refutation gates. Run the `permission-harvest` skill before adding any rule; do not treat
+that number as a proposal.
