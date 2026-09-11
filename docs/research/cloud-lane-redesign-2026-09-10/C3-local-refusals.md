@@ -439,3 +439,26 @@ this census is now one jq read. The ceilings are named, not changed: `MAX_SPAWN=
 Note what that does to §4(iii)'s *"the per-account per-wave allowance is"* the cap: on 36 passes
 the planner placed more than the dispatcher would ever spawn, so for those passes the binding term
 was `MAX_SPAWN`, not the planner's allowance.
+
+### 8b. The router-oracle wall was the READ, not the bound
+
+Re-measured from the IDL (09-01..11): **83 `oracle-timeout`** (60 on `--rank`, 22 on cc-route after
+a successful rank, 1 on `--json`) and **6 `rank-data-unavailable`** — fewer than §1b's 99 + 46
+because the pre-09-01 rotation behind §1b's 09-01 column (62 unknown that day) is no longer on disk.
+
+- **Runtime at the dispatcher's own QoS** (`/usr/sbin/taskpolicy -c background`, the planner's call
+  order, 5 rounds spaced past the 90s TTL): cold `--json` sweep **3.8–5.1 s**, warm `--rank` /
+  `cc-route` **1.3–2.3 s**. The 20 s bound is not tight on a quiet box; the walls are loaded moments.
+- **What fills the 20 s** (45 s before each wall vs the 160 placed passes as control): `ps` census
+  timeout **14% vs 0%**, usage-fetch failure **14% vs 0%**, heal **0% vs 0%**, keychain timeout
+  **0% vs 0%**, nothing logged at all **54%**. No single account's probe blocks the rest.
+- **What decides it:** at **83 of 83** walls a successful sweep had completed ≤ **488 s** before the
+  call began (p50 238 s, p90 375 s) — inside claude-accounts' own `cache_grace_s` (600 s). The
+  planner read with the 90 s TTL, re-swept, and timeout(1) killed a sweep that therefore never
+  wrote the cache: 51 of the 60 rank walls had lost their `--json` snapshot the same way.
+- **Fix:** the planner reads with `--max-age <cache_grace_s>` (SSOT, default 600) on both reads and
+  passes it to cc-route's inner `--route`. The bound is unchanged. Kill switch
+  `CC_WAVE_ORACLE_MAX_AGE_S=0`.
+- **`rank-data-unavailable`:** 5 of 6 were `concurrency-unmeasured` on all four accounts (a starved
+  `ps`), cured at the producer by `9465e0119`; the 6th was a genuine all-account `no data (http
+  None)`, where `retry-next-pass` stays correct. No planner change.

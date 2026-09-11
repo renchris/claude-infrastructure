@@ -34,6 +34,14 @@ setup() {
   #     not empty along with the headroom set. STUB_ROWS still overrides it explicitly.
   cat > "$C/bin/claude-accounts" <<'STUB'
 #!/bin/bash
+[ -n "${STUB_ARGV_LOG:-}" ] && printf '%s\n' "$*" >> "$STUB_ARGV_LOG"
+# STUB_CACHE_AGE — the shared cache's age in seconds. The caller's `--max-age N` (absent ⇒ the
+# producer's 90s TTL) decides whether it is SERVED or re-SWEPT, and a sweep costs STUB_SWEEP_S —
+# the shape of claude-accounts get_data(): cache_read(grace_s=max_age), else sweep under the lock.
+if [ -n "${STUB_CACHE_AGE:-}" ]; then
+  ma=90; prev=""; for a in "$@"; do [ "$prev" = --max-age ] && ma="$a"; prev="$a"; done
+  [ "$STUB_CACHE_AGE" -gt "$ma" ] && sleep "${STUB_SWEEP_S:-5}"
+fi
 case "${1:-}" in
   --rank)
     i=0; for n in ${STUB_RANK-next next4 next3 next2}; do printf '%s 0.%06d\n' "$n" $((900-i)); i=$((i+1)); done
@@ -58,6 +66,7 @@ STUB
   # cc-route stub — mirrors the real slot table + edges (STUB_ROUTE_CLIFF → exit 4; STUB_FABLE_NONE → Opus).
   cat > "$C/bin/cc-route" <<'STUB'
 #!/bin/bash
+[ -n "${STUB_ROUTE_ENV_LOG:-}" ] && printf '%s\n' "${CC_ROUTE_ACCOUNTS_MAX_AGE-UNSET}" >> "$STUB_ROUTE_ENV_LOG"
 [ -n "${STUB_ROUTE_CLIFF:-}" ] && { echo "cc-route: cliff" >&2; exit 4; }
 slot="$1"
 case "$slot" in
@@ -82,6 +91,25 @@ STUB
   # a new ambient input to a CLI is a new fixture surface for every suite that drives it.)
   printf '{"router":{"KMAX":8}}\n' > "$C/accounts-ssot.json"
   export CLAUDE_ACCOUNTS_JSON="$C/accounts-ssot.json"
+
+  # THE GRACE-BAND CONTROL (cases C1-C6). 9465e0119 is the origin/main tip the grace-band read was
+  # cut from — an immutable ancestor once it lands — whose oracle reads carry no --max-age at all.
+  mkdir -p "$C/pristine"
+  git -C "$REPO" archive 9465e0119 bin/cc-wave-plan 2>/dev/null | tar -x -C "$C/pristine"
+  PRISTINE="$C/pristine/bin/cc-wave-plan"
+  chmod +x "$PRISTINE" 2>/dev/null || true
+  if [ ! -x "$PRISTINE" ]; then
+    echo "cc-wave-plan.bats: cannot recover the pre-grace control from 9465e0119 — C1-C6 would compare against nothing." >&2
+    return 1
+  fi
+  # Resolved exactly as the subject resolves it — absolute paths only — so a bound-dependent case
+  # skips LOUDLY on a box without timeout(1) instead of passing against an unbounded oracle.
+  TMO=""
+  for p in /usr/bin/timeout /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+           /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -x "$p" ] && { TMO="$p"; break; }
+  done
+  IT1='[{"id":"a","slot":"lead"}]'
 
   export CC_WAVE_ACCOUNTS_BIN="$C/bin/claude-accounts" CC_WAVE_ROUTE_BIN="$C/bin/cc-route" \
          CC_WAVE_IDL="$C/idl.jsonl"
@@ -351,5 +379,80 @@ STUB
 
 @test "config: an invalid slot in an item → exit 3 (never a silent default)" {
   run "$WP" --items '[{"id":"a","slot":"chief-vibes-officer"}]'
+  [ "$status" -eq 3 ]
+}
+
+# ── C: the router-oracle wall — serve the grace band, never re-sweep inside the bound ─────────────
+# Measured 2026-09-01..11: 83 `oracle-timeout` walls (60 on --rank, 22 on cc-route, 1 on --json),
+# each `retry-next-pass`, i.e. each a whole 300s pass lost. At EVERY one of them a successful sweep
+# had completed <=488s before the call began (p50 238s, p90 375s, from the sweep stamps in
+# account-utilization.jsonl) — inside claude-accounts' own 600s `cache_grace_s`, the band its
+# --max-age docs call free by measurement. The planner read with the 90s TTL instead, so it
+# re-swept at background QoS, timeout(1) killed the sweep at 20s, and a killed sweep writes no
+# cache: the next call, and the next pass, began cold again. The bound itself is NOT raised.
+
+@test "C1 the measured median: a 238s-old cache is SERVED — the TTL-only read walls unknown" {
+  [ -n "$TMO" ] || skip "no absolute-path timeout(1) on this box — the bound cannot be exercised"
+  export STUB_CACHE_AGE=238 STUB_SWEEP_S=4 CC_WAVE_ORACLE_TIMEOUT_S=2
+  run "$WP" --items "$IT1" --json
+  [ "$status" -eq 0 ]
+  plan="$("$WP" --items "$IT1" --json 2>/dev/null)"
+  echo "$plan" | jq -e '.[0].account=="next"'
+  # RED: the identical fixture on the pre-grace tree re-sweeps inside the bound and walls.
+  run "$PRISTINE" --items "$IT1" --json
+  [ "$status" -eq 6 ]
+  tail -1 "$CC_WAVE_IDL" | jq -e 'select(.verdict=="unknown" and .evidence.reason=="oracle-timeout")'
+}
+
+@test "C2 past the grace the read still sweeps and the bound still fires — nothing is widened" {
+  # The two exit-status halves are an EQUIVALENCE GUARD, green in both arms by design: the band must
+  # widen nothing past itself and the 20s-class bound must bind exactly as before. The pre-grace arm
+  # reds here only on the NEW evidence field; what shows the status halves have power is the mutant
+  # that makes the band unbounded (it serves the 700s cache and exits 0).
+  [ -n "$TMO" ] || skip "no absolute-path timeout(1) on this box — the bound cannot be exercised"
+  export STUB_CACHE_AGE=700 STUB_SWEEP_S=4 CC_WAVE_ORACLE_TIMEOUT_S=2
+  run "$WP" --items "$IT1"
+  [ "$status" -eq 6 ]
+  tail -1 "$CC_WAVE_IDL" | jq -e 'select(.evidence.reason=="oracle-timeout" and .evidence.oracle_max_age_s==600)'
+  run "$PRISTINE" --items "$IT1"
+  [ "$status" -eq 6 ]
+}
+
+@test "C3 the grace is the SSOT's cache_grace_s — never a constant copied into the planner" {
+  [ -n "$TMO" ] || skip "no absolute-path timeout(1) on this box — the bound cannot be exercised"
+  export STUB_CACHE_AGE=238 STUB_SWEEP_S=4 CC_WAVE_ORACLE_TIMEOUT_S=2
+  printf '{"router":{"KMAX":8},"cache_grace_s":120}\n' > "$CLAUDE_ACCOUNTS_JSON"
+  run "$WP" --items "$IT1"
+  [ "$status" -eq 6 ]                                   # 238 > 120 ⇒ re-swept ⇒ the bound fires
+  printf '{"router":{"KMAX":8},"cache_grace_s":300}\n' > "$CLAUDE_ACCOUNTS_JSON"
+  run "$WP" --items "$IT1" --json
+  [ "$status" -eq 0 ]                                   # 238 <= 300 ⇒ served
+}
+
+@test "C4 kill switch CC_WAVE_ORACLE_MAX_AGE_S=0 — the oracle argv is byte-identical to the pre-grace tree" {
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv"
+  CC_WAVE_ORACLE_MAX_AGE_S=0 "$WP" --items "$IT1" --json >/dev/null 2>&1
+  killed="$(cat "$STUB_ARGV_LOG")"; : > "$STUB_ARGV_LOG"
+  "$PRISTINE" --items "$IT1" --json >/dev/null 2>&1
+  pristine="$(cat "$STUB_ARGV_LOG")"; : > "$STUB_ARGV_LOG"
+  [ -n "$pristine" ]
+  [ "$killed" = "$pristine" ]
+  # positive control: armed, the same run differs — by exactly the grace flag on every oracle read
+  "$WP" --items "$IT1" --json >/dev/null 2>&1
+  [ "$(cat "$STUB_ARGV_LOG")" = "$(printf '%s\n' "$pristine" | sed 's/$/ --max-age 600/')" ]
+}
+
+@test "C5 cc-route's inner --route read inherits the same grace, and loses it under the kill switch" {
+  export STUB_ROUTE_ENV_LOG="$BATS_TEST_TMPDIR/route-env"
+  "$WP" --items "$IT1" --json >/dev/null 2>&1
+  [ "$(sort -u "$STUB_ROUTE_ENV_LOG")" = 600 ]
+  : > "$STUB_ROUTE_ENV_LOG"
+  # an ambient value must not survive the kill switch either — off means the pre-grace argv
+  CC_ROUTE_ACCOUNTS_MAX_AGE=999 CC_WAVE_ORACLE_MAX_AGE_S=0 "$WP" --items "$IT1" --json >/dev/null 2>&1
+  [ "$(sort -u "$STUB_ROUTE_ENV_LOG")" = UNSET ]
+}
+
+@test "C6 a malformed CC_WAVE_ORACLE_MAX_AGE_S is a LOUD config-fail (3), never a silent default" {
+  CC_WAVE_ORACLE_MAX_AGE_S=10m run "$WP" --items "$IT1"
   [ "$status" -eq 3 ]
 }

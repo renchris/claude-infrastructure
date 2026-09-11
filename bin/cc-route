@@ -140,7 +140,15 @@ route_account() { # <fable|general> ; sets ROUTE_ACCT / ROUTE_REASON, returns rc
   local kind="$1" bin out rc
   bin="$(accounts_bin)"
   [ -n "$bin" ] || { ROUTE_REASON="claude-accounts unavailable"; return 3; }
-  out="$("$bin" --route "$kind" 2>"${TMPDIR:-/tmp}/cc-route-err.$$")"; rc=$?
+  # CC_ROUTE_ACCOUNTS_MAX_AGE — a caller that has already decided a grace-band cache is fit to route
+  # on says so ONCE, in the environment, and this inner call honours it as `--max-age`. The wave
+  # planner (bin/cc-wave-plan) is that caller: it runs every 300s at background QoS under a 20s
+  # bound, and a TTL-only read here re-swept a cache its own `--rank` had just been served, inside
+  # that bound. Unset or non-integer ⇒ no flag at all, so every other caller's argv is byte-identical
+  # (and a malformed value degrades to the STRICTER TTL read, never to a wider one).
+  local ma=""
+  case "${CC_ROUTE_ACCOUNTS_MAX_AGE:-}" in ''|*[!0-9]*) ;; *) ma="$CC_ROUTE_ACCOUNTS_MAX_AGE" ;; esac
+  out="$("$bin" --route "$kind" ${ma:+--max-age "$ma"} 2>"${TMPDIR:-/tmp}/cc-route-err.$$")"; rc=$?
   # M3b: lift the machine-parseable `route-meta:` token out FIRST and EXCLUDE it from ROUTE_REASON.
   # ROUTE_REASON is collapsed onto one line and rendered to humans / embedded in records; leaving the
   # token in it would put the same facts in twice, once unparseably.

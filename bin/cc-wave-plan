@@ -54,11 +54,16 @@
 #   · BOUNDED ORACLE — every claude-accounts / cc-route call runs under absolute-path timeout(1)
 #     (CC_WAVE_ORACLE_TIMEOUT_S, default 20). rc 124 ⇒ `unknown`, NEVER `capped` (S4's load-bearing
 #     mapping: a hang reported as "everything is capped" is the exact bug being removed).
+#   · GRACE-BAND READ — both claude-accounts reads carry `--max-age <cache_grace_s>` (the SSOT's own
+#     grace, default 600), and cc-route's inner `--route` inherits it via CC_ROUTE_ACCOUNTS_MAX_AGE.
+#     At all 83 measured oracle-timeout walls a sweep ≤488s old existed; the TTL-only read re-swept
+#     at background QoS instead, and the bound killed the sweep before it could write the cache.
 #
 # Exit: 0 = plan emitted · 2 = usage (bad/empty args) · 3 = config/parse-fail (LOUD, never a silent
 #       default) · 4 = capped | capacity · 5 = auth · 6 = unknown. One IDL record per invocation.
 # Env (tests): CC_WAVE_ACCOUNTS_BIN, CC_WAVE_ROUTE_BIN, CC_WAVE_MAX_PER_ACCT, CC_WAVE_FABLE_GUARD_MIN,
 #       CC_WAVE_IDL, CC_WAVE_ORACLE_TIMEOUT_S, CC_WAVE_TIMEOUT_BIN (set-but-empty ⇒ force "absent"),
+#       CC_WAVE_ORACLE_MAX_AGE_S (seconds; 0|off ⇒ the TTL-only argv verbatim; unset ⇒ cache_grace_s),
 #       CC_WAVE_VERDICT_LANE (v1 ⇒ the pre-v2 path verbatim: one exit 4, no evidence, no bound),
 #       CC_WAVE_MAX_PER_ACCT_URGENT (≤ CC_WAVE_MAX_PER_ACCT ⇒ urgency off, byte-identical plans),
 #       CLAUDE_ACCOUNTS_JSON (the SSOT accounts.json the router's KMAX is read from — the SAME env
@@ -85,6 +90,39 @@ IDL="${CC_WAVE_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
 # revert. Everything new below is gated on it.
 VERDICT_LANE="${CC_WAVE_VERDICT_LANE:-v2}"
 ORACLE_TIMEOUT_S="${CC_WAVE_ORACLE_TIMEOUT_S:-20}"
+
+# ── THE GRACE-BAND READ (C, 2026-09-11) ──────────────────────────────────────────────────────────
+# The bound above was never the defect, and it is deliberately NOT raised. Measured 2026-09-01..11:
+# 83 `oracle-timeout` walls, each a whole 300s pass lost to `retry-next-pass`, and at EVERY one of
+# them a successful sweep had completed ≤488s before the call began (p50 238s; sweep stamps in
+# account-utilization.jsonl) — inside claude-accounts' own `cache_grace_s` (600s), the band its
+# --max-age docs call free by measurement. This planner read with the 90s TTL instead, so it
+# re-swept in the dispatcher's background QoS band; timeout(1) killed that sweep at the bound, and a
+# killed sweep never reaches cache_write — so the next call, and the next pass, began cold again.
+# Timed at background QoS on a quiet box a cold sweep is 3.8-5.1s; the walls are the loaded moments
+# (a `ps` census timeout 14% vs 0% of placed passes, a usage-fetch failure 14% vs 0%, heal 0%).
+# So the read asks for the grace band, and the value is the SSOT's — read from the file the producer
+# reads, through the same override — never a copy. 0|off is the kill switch (TTL-only argv verbatim).
+# A plan built on a ≤600s read is still gated by handoff-fire's own `--fresh --json` at fire time.
+ORACLE_MAX_AGE_S=""
+resolve_oracle_max_age() {
+  local f g
+  if [ -n "${CC_WAVE_ORACLE_MAX_AGE_S:-}" ]; then
+    case "$CC_WAVE_ORACLE_MAX_AGE_S" in
+      0|off)       ORACLE_MAX_AGE_S="" ;;
+      *[!0-9]*)    fail_config "CC_WAVE_ORACLE_MAX_AGE_S must be whole seconds or 'off' (got '$CC_WAVE_ORACLE_MAX_AGE_S')" ;;
+      *)           ORACLE_MAX_AGE_S="$CC_WAVE_ORACLE_MAX_AGE_S" ;;
+    esac
+    return 0
+  fi
+  f="${CLAUDE_ACCOUNTS_JSON:-$HOME/.claude/accounts.json}"
+  g="$(jq -r '.cache_grace_s // empty' "$f" 2>/dev/null)" || g=""
+  case "$g" in
+    ''|*[!0-9]*) g=600 ;;   # the producer's own default (claude-accounts get_data, cache_grace_s)
+    0)           g="" ;;    # a zero grace is "serve nothing stale" — the TTL read, not a new band
+  esac
+  ORACLE_MAX_AGE_S="$g"
+}
 
 usage()       { sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//'; }
 die()         { echo "cc-wave-plan: $*" >&2; exit 2; }                       # usage
@@ -188,7 +226,7 @@ load_acct_json() {
   [ "$ACCT_JSON_TRIED" -eq 1 ] && { [ -n "$ACCT_JSON" ]; return $?; }
   ACCT_JSON_TRIED=1
   local bin; bin="$(accounts_bin)"; [ -n "$bin" ] || { ACCT_JSON_RC=127; return 1; }
-  ACCT_JSON="$(run_oracle "$bin" --json)"; ACCT_JSON_RC=$?
+  ACCT_JSON="$(run_oracle "$bin" --json ${ORACLE_MAX_AGE_S:+--max-age "$ORACLE_MAX_AGE_S"})"; ACCT_JSON_RC=$?
   [ "$ACCT_JSON_RC" -eq 0 ] && [ -n "$ACCT_JSON" ]
 }
 
@@ -226,9 +264,10 @@ wall_emit() {
          --arg raw "$(excerpt "$RANK_RAW")" --arg err "$(excerpt "$(oracle_stderr)")" \
          --argjson rc "$EV_ORACLE_RC" --argjson rrc "$RANK_RC" --argjson orc "$EV_ROUTE_RC" \
          --argjson rn "${#RANKED[@]}" --argjson accts "$EV_ACCOUNTS" \
+         --argjson ma "${ORACLE_MAX_AGE_S:-null}" \
      '{ts:$ts, actor:$actor, action:"wall", verdict:$verdict, detail:$detail,
        evidence:{oracle_rc:$rc, rank_rc:$rrc, route_rc:$orc, ranked_n:$rn, accounts:$accts,
-                 raw_excerpt:$raw, stderr_excerpt:$err, timeout_bin:$tb,
+                 raw_excerpt:$raw, stderr_excerpt:$err, timeout_bin:$tb, oracle_max_age_s:$ma,
                  reason:$reason, action:$act}}' \
      >> "$IDL" 2>/dev/null || true
   case "$verdict" in
@@ -316,7 +355,7 @@ load_ranks() {
   bin="$(accounts_bin)"; [ -n "$bin" ] || fail_config "claude-accounts unavailable (cannot rank accounts)"
   # Captured (not piped from a process substitution) because the rc and the RAW text are both
   # EVIDENCE now: an empty ranked set means nothing until you know whether the oracle answered.
-  RANK_RAW="$(run_oracle "$bin" --rank general)"; RANK_RC=$?
+  RANK_RAW="$(run_oracle "$bin" --rank general ${ORACLE_MAX_AGE_S:+--max-age "$ORACLE_MAX_AGE_S"})"; RANK_RC=$?
   # PARSE BY SHAPE, against the producer's literal contract: `--rank` emits
   # `f"{acct} {score:.6f}"` per routable account (claude-accounts:1699), and when NOTHING is
   # routable it prints the sentinel `none` on stdout and exits 2 (policy refused) or 3 (data
@@ -643,6 +682,12 @@ cmd_plan() {
   # Prime the ONE bounded account snapshot in the PARENT, before anything reads it. Every consumer
   # below (straddle window, live-load seed, wall evidence) shares it; a failure here is NOT fatal —
   # only the wall path turns an unavailable snapshot into a verdict.
+  # The grace band, resolved once and handed to cc-route's inner `--route` read too — else the rank
+  # would be served a 238s cache and cc-route would re-sweep it inside the same bound (22 of the 83
+  # measured walls were exactly that). Unset under the kill switch, so an ambient value cannot leak.
+  resolve_oracle_max_age
+  if [ -n "$ORACLE_MAX_AGE_S" ]; then export CC_ROUTE_ACCOUNTS_MAX_AGE="$ORACLE_MAX_AGE_S"
+  else unset CC_ROUTE_ACCOUNTS_MAX_AGE; fi
   oracle_errf || true
   load_acct_json || true
 
