@@ -371,6 +371,12 @@ memo_batch_record() {  # $1=index — only ever called on a PROVEN-green run
 # ARM-LEVEL key in reason 3, and reason 3 is measured-insufficient, so it stays rejected. A per-file
 # memo is keyed on its own lint's inputs, so an unmemoized lint runs exactly as it does today — the
 # rollout is incomplete, never unsound, and no lint waits on any other.
+#
+# ── STATUS 2026-09-11: the rollout, re-ranked from a real precheck ─────────────────────────────────
+# Per-file memos: test-hermeticity (suites), git-identity, pane-spawn-coverage, pipefail-sigpipe.
+# The next arms by measured cost are listed with their numbers in each lint's own memo header; an arm
+# whose verdict reads the BOX (unattended-path: installed_somewhere/reachable_on probe the invoker's
+# PATH) has no content key and is left unmemoized rather than keyed loosely.
 
 memo_summary() {  # one line for the gate's stderr — counters, not prose
   [[ "$MEMO_OK" = "1" ]] || { echo "→ gate: statics memo OFF (${SHIP_LAND_MEMO:-on}) — every static ran." >&2; return 0; }
