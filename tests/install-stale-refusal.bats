@@ -15,16 +15,54 @@
 # Test 9 is the positive control: it proves the guarded mechanism is REAL (a stale deploy really
 # does write pre-trunk content), so the refusals cannot be passing vacuously.
 
+# THE SEEDED SSOT NAME IS DERIVED FROM install.sh, NEVER HARDCODED. 367e42f2 renamed the repo-side
+# global SSOT `CLAUDE.md` -> `CLAUDE.global.md` and its commit body lists "every reader of the old
+# path, audited and repointed" — this file was not among them, because it does not READ a repo path,
+# it WRITES a synthetic one ("$TDIR/seed/CLAUDE.md"), which matches no grep for the old reader. The
+# seed then lacked the file install.sh copies out, its `cp` aborted the run, and SIX tests went red
+# on `[ "$status" -eq 0 ]` while the real cause ("cp: cannot stat .../CLAUDE.global.md") appeared
+# only in captured output no TAP reader prints (cc-backlog cde8a9e450bc convicted a commit 32 later,
+# whose diff touches neither install.sh nor this file — record:
+# docs/research/install-fixture-ssot-drift-2026-09-11.md). Deriving the name means the next rename cannot
+# silently drift this fixture; the derivation FAILS CLOSED (a broken match aborts with a named
+# message) because a default here would restore exactly the mute failure it replaces.
+# NOTE THE ASYMMETRY, which is load-bearing: repo side CLAUDE.global.md, live side CLAUDE.md. While
+# both sides shared one name a subject reading the WRONG side still found a file, so no fixture
+# could tell the two identifier spaces apart. Do NOT also seed a root CLAUDE.md to "be safe" — it
+# re-collapses the two spaces, and a root CLAUDE.md is the very thing 367e42f2 exists to forbid.
+# NON-EMPTY IS NOT THE GUARD — measured, a mutant that respelled the cp source as an unexpanded
+# "$REPO_DIR/$GLOBAL_SSOT" made the capture non-empty (`[^"]*` matches a variable reference just as
+# happily as a filename), so the first draft of this derivation failed OPEN straight back into the
+# six mute `status -eq 0` reds it exists to replace. The load-bearing check is therefore that the
+# derived token is a PLAIN filename AND names a real file in the real repo: a derivation that
+# produced garbage then cannot be mistaken for one that produced an answer.
+derive_ssot_name() {
+  local src="$1" n
+  n="$(sed -n 's|^ *run cp "\$REPO_DIR/\([^"]*\)" "\$CONFIG_DIR/CLAUDE\.md".*|\1|p' "$src" | head -1)"
+  case "$n" in
+    ''|*'$'*|*/*) return 1 ;;
+  esac
+  [ -f "$(dirname "$src")/$n" ] || return 1
+  printf '%s' "$n"
+}
+
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   TDIR="$(cd "$(mktemp -d)" && pwd -P)"; export TDIR
   ORIGIN="$TDIR/origin.git"; CLONE="$TDIR/clone"
 
+  if ! SSOT="$(derive_ssot_name "$REPO/install.sh")"; then
+    echo "FIXTURE: cannot derive the global-SSOT filename from install.sh — the line that copies" >&2
+    echo "  \$REPO_DIR/<name> to \$CONFIG_DIR/CLAUDE.md has changed shape. Repoint derive_ssot_name;" >&2
+    echo "  do NOT hardcode a name here, that is what drifted at 367e42f2." >&2
+    return 1
+  fi
+
   git init -q --bare "$ORIGIN"
   mkdir -p "$TDIR/seed/agents"
   cp "$REPO/install.sh" "$TDIR/seed/install.sh"
-  printf 'TRUNK-V1\n' > "$TDIR/seed/CLAUDE.md"
+  printf 'TRUNK-V1\n' > "$TDIR/seed/$SSOT"
   printf '#!/bin/bash\necho fixture-statusline\n' > "$TDIR/seed/statusline.sh"
   printf 'fixture agent\n' > "$TDIR/seed/agents/fixture-agent.md"
   git init -q "$TDIR/seed"
@@ -51,7 +89,7 @@ lacks() { if printf '%s' "$output" | grep -qF -- "$1"; then return 1; fi; return
 
 # advance origin/main past the clone, so the clone is BEHIND trunk
 advance_origin() {
-  printf 'TRUNK-V2-LANDED\n' > "$TDIR/seed/CLAUDE.md"
+  printf 'TRUNK-V2-LANDED\n' > "$TDIR/seed/$SSOT"
   git -C "$TDIR/seed" -c user.email=t@t -c user.name=t commit -q -am "trunk moves on"
   git -C "$TDIR/seed" push -q origin main
 }
