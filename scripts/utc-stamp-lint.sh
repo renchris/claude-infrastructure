@@ -59,6 +59,40 @@ SCAN_LAYERS="bin hooks scripts"
 # violation, cc-reaper:59, was fixed in b4e3c355). An allowlist that starts empty can only shrink.
 EMBEDDED_ALLOWLIST=""
 
+# ── THE PER-FILE MEMO (ratchet-arm memo rollout — follow-on 3 of the cloud-lane redesign) ────────────
+# 5.8-6.4s on a real precheck (2026-09-11): two three-stage grep pipelines per file over every script
+# under bin/, hooks/ and scripts/. Same record-site contract as moving-ref-control-lint's memo.
+#
+# THE READ SET: the file's bytes · this lint's blob (both patterns and every branch) · the allowlist
+# text in force (by value) · the grep binary that runs all six stages. Nothing else reaches a verdict:
+# lying_stamps reads one file and compares it to nothing.
+#
+# A PROBE THAT COULD NOT RUN IS NEVER BANKED. lying_stamps now answers rc 3 when any stage of either
+# pipeline exits >= 2 (read off PIPESTATUS). Its REPORTING is unchanged — a failed probe still yields
+# whatever lines it yielded, as it always did — but a memo that banked such a file would freeze a scan
+# that never happened into a permanent green, so the record site requires rc 0.
+#
+# Kill switch: CC_UTC_MEMO=off (SHIP_LAND_MEMO=off too, via memo_init). --selftest exports it OFF.
+UT_MEMO_OK=0; UT_MEMO_HITS=0; UT_MEMO_RAN=0
+if [ "${CC_UTC_MEMO:-on}" != "off" ] && [ -r "$ROOT/scripts/lib/gate-memo.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$ROOT/scripts/lib/gate-memo.sh" 2>/dev/null || true
+fi
+ut_memo_arm() {  # $1=allowlist text in force · $2…=the EXACT ordered population → 0 = armed
+  UT_MEMO_OK=0
+  [ "${CC_UTC_MEMO:-on}" != "off" ] || return 1
+  command -v memo_readset_arm >/dev/null 2>&1 || return 1   # an older lib ⇒ memo OFF, today's behaviour
+  local allow="$1" selfabs selfblob grepid
+  shift
+  selfabs="$(cd "$(dirname "$SELF")" && pwd)/$(basename "$SELF")" || return 1
+  selfblob="$(git hash-object -- "$selfabs" 2>/dev/null)" || return 1
+  [ -n "$selfblob" ] || return 1
+  grepid="$(memo_bin_id grep)" || return 1
+  memo_readset_arm utcstamp "$(printf 'utcstamp-readset/v1\nlint=%s\nallow=%s\ngrep=%s\n' \
+                                "$selfblob" "$allow" "$grepid")" "$@" || return 1
+  UT_MEMO_OK=1
+}
+
 # OWN-SCOPE — same three-state contract as test-hermeticity-lint / test-walltime-lint, and for the
 # same measured reason: a whole-tree BLOCKING lint is a fleet-wide hard stop (a lander refused over a
 # file it never touched), which is itself the defect that discipline exists to prevent. States:
@@ -109,13 +143,22 @@ in_allowlist() { printf '%s\n' "$2" | grep -xF "$1" >/dev/null; }
 # Comment lines are skipped: prose about a stamp is documentation, and flagging it trains people to
 # ignore the lint. `TZ=UTC` anywhere on the line also exonerates — that is the other legitimate way
 # to produce true UTC (cc-reaper:299 uses it).
-lying_stamps() { # $1=file
+lying_stamps() { # $1=file · stdout = violations · rc 0 = answered · rc 3 = a probe could not RUN
+  local s rc=0
   grep -nE "date[[:space:]]+((-[^u[:space:]]+|\+[^[:space:]]*)[[:space:]]+)*['\"]?\+[^'\"]*Z['\"]?" "$1" 2>/dev/null \
     | grep -vE '^[0-9]+:[[:space:]]*#' \
     | grep -vE 'date[[:space:]]+-[a-zA-Z]*u|TZ=UTC|CC_[A-Z_]*=|utc_ok'
+  # EVERY stage, read before anything else runs. Under pipefail a pipeline's own status is its RIGHTMOST
+  # non-zero stage, so a first grep that could not run (2) hides behind the filter's "no lines" (1) and
+  # reads as a clean file. grep answers 0 or 1; only >= 2 is a stage that never ran. Both pipelines still
+  # run and print exactly what they always printed — this only makes the failure VISIBLE to the caller
+  # (the per-file memo will not bank it; see its header).
+  for s in "${PIPESTATUS[@]}"; do [ "$s" -le 1 ] || rc=3; done
   grep -nE "datetime\.now\(\)[^#]*(strftime|isoformat)[^#]*Z" "$1" 2>/dev/null \
     | grep -vE '^[0-9]+:[[:space:]]*#' \
     | grep -vE 'timezone\.utc|tz=|TZ=UTC|utc_ok'
+  for s in "${PIPESTATUS[@]}"; do [ "$s" -le 1 ] || rc=3; done
+  return "$rc"
 }
 
 # lint <dir> <allowlist-text> [own-set-text] — 0 clean · 1 violations · 2 unusable scan dir
@@ -124,7 +167,10 @@ lint_dir() {
   [ "$#" -ge 3 ] && own_scoped=1
   [ -d "$dir" ] || { echo "utc-stamp-lint: ⛔ not a directory: $dir" >&2; return 2; }
   # Every executable/script under the scan root. -type f only; symlinks into the live layer would
-  # double-report the same repo file.
+  # double-report the same repo file. THE POPULATION IS BUILT EXACTLY ONCE, into an array: the batch memo
+  # is INDEX-KEYED (scripts/lib/gate-memo.sh), so the list it arms on and the list walked below must be the
+  # same, every filter applied here.
+  local files=() hrc
   while IFS= read -r f; do
     [ -f "$f" ] || continue
     case "$f" in *.pyc|*/.git/*) continue ;; esac
@@ -137,10 +183,21 @@ lint_dir() {
     # What validates THIS file is `--selftest`, which is wired into the gate alongside the scan.
     # For any OTHER file that legitimately carries the pattern as data, the per-line escape hatch is
     # a trailing `utc_ok` marker — see lying_stamps.
-    case "$(basename "$f")" in utc-stamp-lint.sh) continue ;; esac
-    seen=$((seen + 1))
+    case "${f##*/}" in utc-stamp-lint.sh) continue ;; esac   # ${f##*/}, not basename: one fork less per file
+    files[${#files[@]}]="$f"
+  done <<EOF
+$(find "$dir" -type f \( -name '*.sh' -o -name '*.py' -o -name '*.bats' -o ! -name '*.*' \) 2>/dev/null)
+EOF
+  UT_MEMO_HITS=0; UT_MEMO_RAN=0
+  if [ "${#files[@]}" -gt 0 ]; then ut_memo_arm "$allow" "${files[@]}" || true; fi
+  for f in ${files[@]+"${files[@]}"}; do
+    seen=$((seen + 1))                             # FIRST: the memo index is seen - 1, derived
+    if [ "$UT_MEMO_OK" = "1" ] && memo_batch_hit "$((seen - 1))"; then
+      UT_MEMO_HITS=$((UT_MEMO_HITS + 1)); continue
+    fi
+    UT_MEMO_RAN=$((UT_MEMO_RAN + 1))
     rel="${f#"$dir"/}"
-    hits="$(lying_stamps "$f")"
+    hits="$(lying_stamps "$f")"; hrc=$?
     if [ -n "$hits" ]; then
       if in_allowlist "$rel" "$allow"; then
         continue
@@ -160,10 +217,16 @@ lint_dir() {
         printf '  ratchet? %s is fixed but still grandfathered (NOT in your diff — advisory)\n' "$rel"
         other=$((other + 1))
       fi
+    elif [ "$UT_MEMO_OK" = "1" ] && [ "$hrc" -eq 0 ]; then
+      # THE RECORD — clean, every probe answered (lying_stamps rc 0), and not grandfathered by a builtin
+      # re-ask: the forked in_allowlist reads "not listed" when it fails (moving-ref-control-lint states the
+      # why). Conservatively, a path appearing ANYWHERE in the allowlist text is never recorded.
+      case "$allow" in *"$rel"*) ;; *) memo_batch_record "$((seen - 1))" ;; esac
     fi
-  done <<EOF
-$(find "$dir" -type f \( -name '*.sh' -o -name '*.py' -o -name '*.bats' -o ! -name '*.*' \) 2>/dev/null)
-EOF
+  done
+  if [ "$UT_MEMO_OK" = "1" ]; then
+    echo "utc-stamp-lint: per-file memo — $UT_MEMO_HITS verdict(s) carried, $UT_MEMO_RAN proven fresh ($dir)." >&2
+  fi
   [ "$seen" -gt 0 ] || { echo "utc-stamp-lint: ⛔ no scannable files under $dir" >&2; return 2; }
   [ "$other" -eq 0 ] || echo "utc-stamp-lint: $other pre-existing item(s) NOT in your diff — reported, not blocking (own-scope)."
 
@@ -189,6 +252,9 @@ EOF
 
 # ── --selftest: every case proves a RED path fires or a GREEN path does not, both directions ──────
 if [ "${1:-}" = "--selftest" ]; then
+  # MEMO OFF for the whole selftest, EXPORTED so a re-invoked subprocess inherits it too: every case must
+  # exercise the DETECTOR (the gate carries the selftest as a whole via ship-land.sh's selftest_ok).
+  export CC_UTC_MEMO=off
   d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
   for c in scar utc tzutc offset logfmt comment pynaive pyaware; do mkdir -p "$d/$c"; done
   mk() { printf '#!/bin/bash\n%s\n' "$2" > "$d/$1/probe.sh"; }

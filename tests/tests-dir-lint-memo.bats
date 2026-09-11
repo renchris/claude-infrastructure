@@ -533,3 +533,121 @@ kg() { mkcorpus bats-kill-guard-lint.sh KILLGUARD 'kill "$p" 2>/dev/null'; }
   out="$(run3)"
   [[ "$out" == *"zz-hit.bats"* ]]
 }
+
+# ── utc-stamp-lint ───────────────────────────────────────────────────────────────────────────────────
+# Its population is every script under a TARGET DIR (a bare run takes bin/ hooks/ scripts/); the one target
+# here is the corpus's tests/, so the same four suites are its population. Its finding: a stamp that CLAIMS
+# UTC with a literal Z and reads the local clock.
+ut() { local q="'"; mkcorpus utc-stamp-lint.sh UTC "ts=\"\$(date ${q}+%Y-%m-%dT%H:%M:%SZ${q})\""; }
+
+# A grep shim that fails ONE of lying_stamps' two pipelines for clean1, told apart by the second one's
+# `strftime` pattern. Its own dir, so no other case's SHIM is touched. $1=which pipeline (1|2).
+ut_probe_shim() {
+  PSHIM="$BATS_TEST_TMPDIR/pshim$1"; mkdir -p "$PSHIM"
+  export MEMO_SHIM_FLAG="$BATS_TEST_TMPDIR/fail.flag"
+  local arm='*strftime*) ;; *tests/clean1.bats*) exit 2 ;;'
+  [ "$1" = 2 ] && arm='*strftime*tests/clean1.bats*) exit 2 ;;'
+  # shellcheck disable=SC2016  # the shim's own "$MEMO_SHIM_FLAG" / "$*" / "$@" must reach it LITERALLY
+  printf '#!/bin/bash\nif [ -e "$MEMO_SHIM_FLAG" ]; then case "$*" in %s esac; fi\nexec /usr/bin/grep "$@"\n' "$arm" > "$PSHIM/grep"
+  chmod +x "$PSHIM/grep"
+}
+
+@test "utc POSITIVE CONTROL: the memo arms, and carries every clean file" {
+  ut
+  first="$(run_lint)"
+  [[ "$first" == *"per-file memo"* ]] || { echo "MEMO NEVER ARMED — every utc case is vacuous"; echo "$first"; false; }
+  [ "$(carried "$first")" -eq 0 ]
+  [ "$(proven "$first")" -eq 4 ]
+  second="$(run_lint)"
+  [ "$(carried "$second")" -eq 3 ]
+  [ "$(proven "$second")" -eq 1 ]
+}
+
+@test "utc: a carried run says exactly what an unmemoized run says, and re-reports the finding" {
+  ut
+  run_lint >/dev/null
+  warm="$(run_lint)"
+  [ "$(carried "$warm")" -eq 3 ]
+  cold="$(run_lint CC_UTC_MEMO=off)"
+  [ "$(printf '%s\n' "$warm" | grep -v 'per-file memo')" = "$(printf '%s\n' "$cold" | grep -v 'per-file memo')" ]
+  [[ "$warm" == *"zz-hit.bats"* ]]
+}
+
+@test "utc: editing one file re-proves THAT file and no other" {
+  ut
+  run_lint >/dev/null
+  printf '# bytes that change no verdict\n' >> "$CORPUS/tests/clean2.bats"
+  commit edit
+  after="$(run_lint)"
+  [ "$(proven "$after")" -eq 2 ]
+  [ "$(carried "$after")" -eq 2 ]
+}
+
+@test "utc KEY: the lint's own blob invalidates every carried verdict" {
+  ut
+  run_lint >/dev/null
+  printf '\n# read-set change\n' >> "$CORPUS/scripts/utc-stamp-lint.sh"
+  commit lint-edit
+  [ "$(carried "$(run_lint)")" -eq 0 ]
+}
+
+@test "utc KEY: the allowlist is in the key BY VALUE — no byte of any file moves" {
+  ut
+  run_lint >/dev/null
+  [ "$(carried "$(run_lint CC_UTC_ALLOWLIST=unrelated.bats)")" -eq 0 ]
+}
+
+@test "utc KEY: a different GREP binary invalidates — and then re-earns" {
+  ut
+  run_lint >/dev/null
+  shim grep 'NEVER-MATCHES' 2
+  [ "$(carried "$(run_lint PATH="$SHIM:$PATH")")" -eq 0 ]
+  [ "$(carried "$(run_lint PATH="$SHIM:$PATH")")" -eq 3 ]
+}
+
+@test "utc: a FIRST-pipeline probe that could not run is never banked" {
+  ut
+  ut_probe_shim 1
+  : > "$MEMO_SHIM_FLAG"
+  run_lint PATH="$PSHIM:$PATH" >/dev/null
+  rm -f "$MEMO_SHIM_FLAG"
+  b="$(run_lint PATH="$PSHIM:$PATH")"
+  [ "$(proven "$b")" -eq 2 ]                   # clean1 + the finding
+  [ "$(carried "$b")" -eq 2 ]
+}
+
+@test "utc: a SECOND-pipeline probe that could not run is never banked" {
+  ut
+  ut_probe_shim 2
+  : > "$MEMO_SHIM_FLAG"
+  run_lint PATH="$PSHIM:$PATH" >/dev/null
+  rm -f "$MEMO_SHIM_FLAG"
+  b="$(run_lint PATH="$PSHIM:$PATH")"
+  [ "$(proven "$b")" -eq 2 ]
+  [ "$(carried "$b")" -eq 2 ]
+}
+
+@test "utc: an allowlisted CLEAN file is never banked, even when the allowlist probe cannot run" {
+  ut
+  shim grep '*-xF*' 2
+  : > "$MEMO_SHIM_FLAG"
+  run_lint PATH="$SHIM:$PATH" CC_UTC_ALLOWLIST=clean1.bats >/dev/null
+  rm -f "$MEMO_SHIM_FLAG"
+  out="$(run_lint PATH="$SHIM:$PATH" CC_UTC_ALLOWLIST=clean1.bats)"
+  [[ "$out" == *"clean1.bats"* ]]
+}
+
+@test "utc: --selftest runs memo-OFF and writes nothing to the store" {
+  ut
+  run_lint >/dev/null
+  before="$(store_entries)"
+  ( cd "$CORPUS" && bash scripts/utc-stamp-lint.sh --selftest >/dev/null 2>&1 ) || true
+  [ "$(store_entries)" -eq "$before" ]
+}
+
+@test "utc: a dirty worktree, and CC_UTC_MEMO=off, each disarm the memo" {
+  ut
+  [[ "$(run_lint CC_UTC_MEMO=off)" != *"per-file memo"* ]] || false
+  printf '# uncommitted\n' >> "$CORPUS/tests/clean1.bats"
+  [[ "$(run_lint)" != *"per-file memo"* ]]
+}
