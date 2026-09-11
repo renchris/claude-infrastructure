@@ -1789,6 +1789,7 @@ _rm_expand_token() {  # <token> → the token with resolvable same-command varia
 # list for them would enumerate spellings rather than the class (MEMORY.md
 # denylist-enumerates-spellings-not-the-class). The invariant that makes THIS category safe — the
 # command created it — is the one to generalize, never the location.
+# shellcheck disable=SC2016  # the single-quoted '$(' `` ` `` and '$' are LITERALS to match in the
 _rm_is_mktemp_dir_substitution() {  # <assignment-value> → 0 iff it is exactly `$(mktemp -d …)`
   local v="$1" inner a
   # Strip one layer of surrounding quotes, then require the WHOLE value to be one substitution.
@@ -1822,6 +1823,7 @@ is_self_created_mktemp_target() {  # <argv-token> → 0 iff it names a dir THIS 
   # The token must be the variable, optionally with a path strictly UNDER it. Any `..` is refused
   # outright: a suffix that walks up leaves the directory mktemp created, which is the whole basis.
   case "$t" in *'..'*|*'*'*|*'?'*|*'`'*) return 1 ;; esac
+  # shellcheck disable=SC2016  # the sed script is a LITERAL: $ and \1 are sed syntax, not shell
   name=$(printf '%s' "$t" | sed -nE 's|^\$\{([A-Za-z_][A-Za-z0-9_]*)\}(/.*)?$|\1|p; s|^\$([A-Za-z_][A-Za-z0-9_]*)(/.*)?$|\1|p' | head -1)
   [ -n "$name" ] || return 1
   # Whatever follows the variable must be a plain path segment chain — no second reference.
