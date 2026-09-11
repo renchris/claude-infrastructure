@@ -70,6 +70,44 @@ cc-relogin.bats
 ALLOW
 )"
 
+# ── THE PER-FILE MEMO (ratchet-arm memo rollout — follow-on 3 of the cloud-lane redesign) ────────────
+# 9.0s on a real precheck (2026-09-11, load ~10): a four-stage grep|grep|sort|awk pipeline per suite over
+# ~660 tests/*.bats. Same shape, contract and record-site guard as moving-ref-control-lint's memo.
+#
+# THE READ SET here is the easy one to get wrong, because this lint's verdict moves with the CALENDAR:
+# "future" is (today, today + HORIZON]. So beside the suite's bytes, this lint's blob, the allowlist text
+# in force and the three probes' binaries (grep, sort, awk), the key carries TODAY and the HORIZON. A
+# clean verdict earned today is not honoured tomorrow, when a date that sat beyond the horizon may have
+# moved inside it.
+#
+# TODAY IS PINNED ONCE PER RUN (lint_dir), and the key reads that same value. Before this, every suite
+# re-read the clock, so a run straddling midnight UTC judged its suites against two different days — and
+# a key taken once could then disagree with the day a verdict was earned on. One run is now one day. It
+# also retires a `date` fork per suite.
+#
+# Kill switch: CC_WALLTIME_MEMO=off (SHIP_LAND_MEMO=off too, via memo_init). --selftest forces it OFF.
+WT_MEMO_OK=0; WT_MEMO_HITS=0; WT_MEMO_RAN=0
+if [ "${CC_WALLTIME_MEMO:-on}" != "off" ] && [ -r "$ROOT/scripts/lib/gate-memo.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$ROOT/scripts/lib/gate-memo.sh" 2>/dev/null || true
+fi
+wt_memo_arm() {  # $1=allowlist text in force · $2…=the EXACT ordered population → 0 = armed
+  WT_MEMO_OK=0
+  [ "${CC_WALLTIME_MEMO:-on}" != "off" ] || return 1
+  command -v memo_readset_arm >/dev/null 2>&1 || return 1   # an older lib ⇒ memo OFF, today's behaviour
+  local allow="$1" selfabs selfblob grepid sortid awkid
+  shift
+  selfabs="$(cd "$(dirname "$SELF")" && pwd)/$(basename "$SELF")" || return 1
+  selfblob="$(git hash-object -- "$selfabs" 2>/dev/null)" || return 1
+  [ -n "$selfblob" ] || return 1
+  grepid="$(memo_bin_id grep)" || return 1
+  sortid="$(memo_bin_id sort)" || return 1
+  awkid="$(memo_bin_id awk)" || return 1
+  memo_readset_arm walltime "$(printf 'walltime-readset/v1\nlint=%s\nallow=%s\ngrep=%s\nsort=%s\nawk=%s\ntoday=%s\nhorizon=%s\n' \
+      "$selfblob" "$allow" "$grepid" "$sortid" "$awkid" "$(today_ymd)" "$(horizon_years)")" "$@" || return 1
+  WT_MEMO_OK=1
+}
+
 # HORIZON_YEARS — beyond this a date is a "never" SENTINEL, not a bomb. 10 years: far past any
 # plausible band comparison, and it keeps the 2099 idiom legal without special-casing a literal.
 # Read at CALL time, not load time: a load-time global cannot be overridden by an env prefix on the
@@ -150,12 +188,21 @@ in_allowlist() { # 0 = allowlisted · 1 = not · sets CHECK_FAILED if grep could
 # an-answer defect this change exists to remove. A return code survives the subshell (pipefail carries
 # it past the `tr`/`sed` stages); the caller translates it into CHECK_FAILED in the parent shell.
 future_dates() { # $1=file · stdout = future in-band dates · rc 0 = answered · rc 3 = COULD NOT RUN
-  local today horizon out rc
+  local today horizon out rc body
   today="$(today_ymd)"; horizon=$(( ${today%????} + $(horizon_years) ))${today#????}
   for _ in 1 2 3; do
-    # rc 1 is a real ANSWER here, not a failure: `grep -oE` exits 1 when the file carries no date at
-    # all, which under pipefail becomes the pipeline's rc. Only >=2 means a stage could not run.
-    out="$(grep -vE '^[[:space:]]*#' "$1" 2>/dev/null \
+    # STAGE 1 IS READ ALONE, and that is a fix, not a style (2026-09-11). This used to be ONE pipeline,
+    # and under pipefail a pipeline's status is its RIGHTMOST non-zero stage: a first-stage grep that
+    # could not RUN (rc 2) hands `grep -oE` an empty input, `grep -oE` exits 1 on it, and the pipeline
+    # reported 1 — "answered: no dates". So a suite this scan never read PASSED, silently, which is the
+    # exact false green the rc-3 contract below exists to prevent. Found by tests/tests-dir-lint-memo.bats:
+    # the per-file memo would have BANKED that green for as long as its key held. Healthy output is
+    # unchanged: the same bytes reach the same three stages.
+    body="$(grep -vE '^[[:space:]]*#' "$1" 2>/dev/null)"; rc=$?
+    case "$rc" in 0|1) ;; *) sleep 1; continue ;; esac   # 1 = every line is a comment: an ANSWER
+    # rc 1 is a real ANSWER here too: `grep -oE` exits 1 when the file carries no date at all, which
+    # under pipefail becomes the pipeline's rc. Only >=2 means a stage could not run.
+    out="$(printf '%s\n' "$body" \
       | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' \
       | sort -u \
       | awk -v t="$today" -v h="$horizon" '{ y=$0; gsub("-","",y); if (y+0 > t+0 && y+0 <= h+0) print $0 }')"
@@ -170,18 +217,33 @@ future_dates() { # $1=file · stdout = future in-band dates · rc 0 = answered �
 
 # lint <tests-dir> <allowlist-text> [own-set-text] — 0 clean · 1 violations · 2 unusable scan dir
 lint_dir() {
-  local dir="$1" allow="$2" own="${3:-}" own_scoped=0 f base d bombs=0 seen=0 other=0 stuck=0
+  local dir="$1" allow="$2" own="${3:-}" own_scoped=0 f base d drc bombs=0 seen=0 other=0 stuck=0
+  # ONE DAY PER RUN — pinned here, where both future_dates (a callee, which sees this local through bash's
+  # dynamic scoping, including inside its command substitution) and wt_memo_arm's key read it. See the
+  # memo header: a run straddling midnight UTC used to judge its suites against two different days.
+  # shellcheck disable=SC2034  # read indirectly, by today_ymd, in every callee below
+  local CC_WALLTIME_TODAY="${CC_WALLTIME_TODAY:-$(date -u +%Y%m%d)}"
   [ "$#" -ge 3 ] && own_scoped=1
   [ -d "$dir" ] || { echo "test-walltime-lint: ⛔ not a directory: $dir" >&2; return 2; }
-  for f in "$dir"/*.bats; do
-    [ -e "$f" ] || continue
-    seen=$((seen + 1)); base="$(basename "$f")"
-    d="$(future_dates "$f" | tr '\n' ' ' | sed 's/ $//')"
+  # THE POPULATION, BUILT EXACTLY ONCE: the batch memo is INDEX-KEYED (scripts/lib/gate-memo.sh), so the
+  # list it arms on and the list this loop walks must be the same array.
+  local files=()
+  for f in "$dir"/*.bats; do [ -e "$f" ] && files[${#files[@]}]="$f"; done
+  WT_MEMO_HITS=0; WT_MEMO_RAN=0
+  if [ "${#files[@]}" -gt 0 ]; then wt_memo_arm "$allow" "${files[@]}" || true; fi
+  for f in ${files[@]+"${files[@]}"}; do
+    seen=$((seen + 1))                             # FIRST: the memo index is seen - 1, derived
+    if [ "$WT_MEMO_OK" = "1" ] && memo_batch_hit "$((seen - 1))"; then
+      WT_MEMO_HITS=$((WT_MEMO_HITS + 1)); continue
+    fi
+    WT_MEMO_RAN=$((WT_MEMO_RAN + 1))
+    base="$(basename "$f")"
+    d="$(future_dates "$f" | tr '\n' ' ' | sed 's/ $//')"; drc=$?
     # rc 3 = the date scan could not RUN for this file (see future_dates). Translate it into
     # CHECK_FAILED HERE, in the parent shell — the function itself is inside a command substitution
     # and cannot set a global that survives. Without this the empty "$d" would read as "no future
     # dates", the file would pass, and a real timebomb would go unreported: a false GREEN.
-    if [ "$?" -eq 3 ]; then
+    if [ "$drc" -eq 3 ]; then
       CHECK_FAILED=1
       echo "test-walltime-lint: ⛔ could not scan $base for dates after 3 tries — NOT a clean verdict for this file" >&2
       continue
@@ -204,8 +266,17 @@ lint_dir() {
         printf '  ratchet? %s is fixed but still grandfathered (NOT in your diff — advisory)\n' "$base"
         other=$((other + 1))
       fi
+    elif [ "$WT_MEMO_OK" = "1" ] && [ "$drc" -eq 0 ] && [ "$CHECK_FAILED" -eq 0 ]; then
+      # THE RECORD — clean, the date scan answered, and not grandfathered by a builtin re-ask (the forked
+      # in_allowlist reads "not listed" when it gives up; moving-ref-control-lint states the why).
+      # CHECK_FAILED is an ABSOLUTE veto, never a per-file delta: once any probe in this run could not
+      # run, the run exits 2 and earned no verdict, so nothing from that point on may be banked.
+      case "$allow" in *"$base"*) ;; *) memo_batch_record "$((seen - 1))" ;; esac
     fi
   done
+  if [ "$WT_MEMO_OK" = "1" ]; then
+    echo "test-walltime-lint: per-file memo — $WT_MEMO_HITS verdict(s) carried, $WT_MEMO_RAN proven fresh." >&2
+  fi
   [ "$seen" -gt 0 ] || { echo "test-walltime-lint: ⛔ no .bats suites under $dir" >&2; return 2; }
   [ "$other" -eq 0 ] || echo "test-walltime-lint: $other pre-existing item(s) NOT in your diff — reported, not blocking (own-scope)."
 
@@ -232,6 +303,9 @@ lint_dir() {
 
 # ── --selftest: every case proves a RED path fires or a GREEN path does not, both directions ──────
 if [ "${1:-}" = "--selftest" ]; then
+  # MEMO OFF for the whole selftest: every case below must exercise the DETECTOR (moving-ref-control-lint
+  # states the why; the gate carries the selftest as a whole via ship-land.sh's selftest_ok).
+  CC_WALLTIME_MEMO=off
   d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
   mkdir -p "$d/bomb" "$d/safe" "$d/sentinel" "$d/past" "$d/comment"
   mk() { printf '#!/usr/bin/env bats\n%s\n@test "x" { true; }\n' "$2" > "$d/$1/zz-fixture.bats"; }
