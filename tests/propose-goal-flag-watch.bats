@@ -50,6 +50,8 @@ setup() {
   printf 'function xyz(){return I("tengu_propose_goal",!1)}\ntengu_other\nProposeGoal\n' > "$T/bin_off"
   printf 'function q9(){return I("tengu_propose_goal",!0)}\ntengu_other\nProposeGoal\n'  > "$T/bin_on"
   printf 'tengu_other\nProposeGoal used here\n'                                          > "$T/bin_minified"
+  # two occurrences, on ONE line, so the count under test is occurrences and not matching lines
+  printf 'tengu_other\nProposeGoal and ProposeGoal again\n'                               > "$T/bin_two"
   printf 'tengu_other\nnothing of interest\n'                                            > "$T/bin_removed"
   printf 'nothing of interest at all\n'                                                  > "$T/bin_wrongsubject"
 }
@@ -207,6 +209,32 @@ PY
   [[ "$output" == *"tengu_propose_goal=ABSENT"* ]] || { echo "mutant did not invert G5 -- $output"; false; }
   run env PGW_NOW="$NOW" PGW_CONFIG_PATHS="$T/fresh_false.json" PGW_CLAUDE_BIN='' bash "$SUBJ" --report
   [[ "$output" == *"tengu_propose_goal=false"* ]] || false
+}
+
+# ── G11/M5 · the control count is a NUMBER, and `wc -l` does not print the same one everywhere ────
+@test "G11 the ProposeGoal control reports occurrences, and reports them as a bare integer" {
+  run env PGW_CLAUDE_BIN="$T/bin_two" bash "$SUBJ" --report
+  [[ "$output" == *"ProposeGoal×2"* ]] || { echo "$output"; false; }
+  run env PGW_CLAUDE_BIN="$T/bin_two" bash "$SUBJ" --binary
+  [ "$status" -eq 0 ] || false      # feature present, gate minified past the pattern → look by hand
+}
+
+@test "M5 BSD's padded wc output zeroes the count, and a zeroed count reads as 'feature removed'" {
+  # This is the LAND-GATE RED, reproduced on a GNU box. macOS `wc -l` pads its output with leading
+  # blanks where GNU does not; the subject's digit guard rejects any non-digit, so the padded form
+  # scored 0 and `bin_two` returned 3 ("the feature is gone upstream") instead of 0 ("present, read
+  # it by hand") — a false RETRACTION signal for the row, from a platform difference in a count
+  # nobody looks at. Green here, red on the operator's box, which is the whole shape of the bug.
+  # The mutant re-pads deliberately, so the case has power on a machine whose wc never would.
+  local m; m="$(mutate bsdwc \
+      "| wc -l | tr -dc '0-9')" \
+      "| wc -l | awk '{printf \"      %s\", \$1}')")" || { echo "$m"; false; }
+  run env PGW_CLAUDE_BIN="$T/bin_two" bash "$m" --binary
+  [ "$status" -eq 3 ] || { echo "mutant did not invert G11 (got $status, want 3)"; false; }
+  run env PGW_CLAUDE_BIN="$T/bin_two" bash "$m" --report
+  [[ "$output" == *"ProposeGoal×0"* ]] || { echo "$output"; false; }
+  run env PGW_CLAUDE_BIN="$T/bin_two" bash "$SUBJ" --binary
+  [ "$status" -eq 0 ] || false      # control: the real subject is unmoved by the padding
 }
 
 # ── G9 · the contract the row's consumers actually read ───────────────────────────────────────────

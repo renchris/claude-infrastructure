@@ -120,6 +120,11 @@ pgw_read_cache() {
     ] | @tsv' "$1" 2>/dev/null
 }
 
+pgw_age_h() {  # $1 = ts_ms (0 = no stamp), $2 = now
+  [ "$1" -gt 0 ] || { printf 'no-stamp'; return 0; }
+  printf '%dh' $(( ( $2 - $1 / 1000 ) / 3600 ))
+}
+
 # ── the cache arms ────────────────────────────────────────────────────────────────────────────────
 # Sets: PGW_N_TOTAL PGW_N_FRESH PGW_N_UNREADABLE PGW_FRESH_TRUE PGW_STALE_TRUE, and PGW_ROWS (a
 # rendered per-member table). Callers read those rather than re-walking the population.
@@ -151,11 +156,6 @@ pgw_scan_caches() {
   done < <(pgw_cache_paths)
 }
 
-pgw_age_h() {  # $1 = ts_ms (0 = no stamp), $2 = now
-  [ "$1" -gt 0 ] || { printf 'no-stamp'; return 0; }
-  printf '%dh' $(( ( $2 - $1 / 1000 ) / 3600 ))
-}
-
 pgw_falsify() {
   pgw_scan_caches
   [ "$PGW_FRESH_TRUE" -gt 0 ] && return 0
@@ -175,7 +175,14 @@ pgw_health() {
 # every release — measured `mct` (A12, 2026-09-08), `cgt` (2.1.267, 2026-09-10), `syt` (2.1.268,
 # 2026-09-11) — so a re-check that greps for last month's symbol finds nothing, which reads exactly
 # like the feature was removed. The argument string is what is stable.
-PGW_GATE_RE='function [A-Za-z0-9_$]+\(\)\{return [A-Za-z0-9_$]+\("tengu_propose_goal",![01]\)\}'
+#
+# Written with BRACKET EXPRESSIONS rather than backslash escapes: `\(` and `\{` in an ERE are
+# "undefined" by POSIX and only literal by convention, so the escaped spelling is a bet on which
+# regex implementation reads it. `[(]` and `[{]` are literal in every one. This matters because the
+# subject runs on the operator's macOS box (BSD grep) and in CI, and a pattern that silently fails
+# to compile leaves PGW_GATE empty — which this file reads as "minified past the pattern", i.e. a
+# SIGNAL. A portability bug would therefore surface as a false retraction of the row.
+PGW_GATE_RE='function [A-Za-z0-9_$]+[(][)][{]return [A-Za-z0-9_$]+[(]"tengu_propose_goal",![01][)][}]'
 
 pgw_resolve_bin() {
   if [ -n "${PGW_CLAUDE_BIN+set}" ]; then
@@ -217,7 +224,13 @@ pgw_binary() {
   PGW_TRIPWIRE="$n"
   [ "$PGW_TRIPWIRE" -gt 0 ] || return 2
 
-  n="$(grep -a -o -F 'ProposeGoal' "$PGW_BIN" 2>/dev/null | wc -l)" || true
+  # `tr -dc '0-9'` is load-bearing, not defensive: BSD `wc -l` PADS its output with leading blanks
+  # (`      18`) where GNU `wc -l` does not, so the guard below — which rejects any non-digit — read
+  # the padded form as garbage and silently scored 0. On macOS that made `bin_minified` (no gate
+  # match, feature present) return 3 "the feature is gone" instead of 0 "read it by hand": a false
+  # RETRACTION signal for the row, from a platform difference in a count nobody looks at. Green on
+  # Linux, red on the operator's box — which is exactly how the land gate found it.
+  n="$(grep -a -o -F 'ProposeGoal' "$PGW_BIN" 2>/dev/null | wc -l | tr -dc '0-9')" || true
   case "${n:-0}" in ''|*[!0-9]*) n=0 ;; esac
   PGW_N_PROPOSEGOAL="$n"
 
@@ -300,38 +313,45 @@ pgw_selftest() {
   mk nostamp_true "{\"cachedGrowthBookFeatures\":{\"tengu_propose_goal\":true}}" >/dev/null
   printf 'not json at all\n' > "$tmp/broken.json"
 
-  chk() {  # $1 = label, $2 = expected rc, $3.. = env assignments, then mode
-    local label="$1" want="$2"; shift 2
-    local got
-    ( "$@" ) >/dev/null 2>&1; got=$?
+  # $1 label · $2 expected rc · $3 mode · $4 payload (a cache path list, or a binary path).
+  #
+  # The mode is a WORD the case below dispatches on, not a function name passed through "$@". The
+  # first draft used three one-line helpers invoked as `chk`'s "$@", which shellcheck cannot follow:
+  # it reports them unreachable as SC2317 up to 0.9 and as **SC2329** from 0.10, so a file carrying
+  # only the SC2317 disable is clean on one shellcheck and RED on the next. That is what the land
+  # gate found. Silencing the new code too would work and would stay a bet on the next rename;
+  # dispatching on a word removes the indirection, so no version has anything to report.
+  #
+  # Each arm re-execs THIS file so the fixture reaches the real entry point rather than an in-process
+  # copy of it. The assignments are prefixes to `bash`, so they do reach the child's environment —
+  # which the "no subject → NON-VERDICT" arm proves by observing rc 2 rather than by assuming it. A
+  # pattern moved out of argv that never arrives is how an empty selector becomes a universal one.
+  chk() {
+    local label="$1" want="$2" mode="$3" payload="$4" got=0
+    case "$mode" in
+      falsify) PGW_NOW="$NOW" PGW_CONFIG_PATHS="$payload" PGW_CLAUDE_BIN='' bash "$0" --falsify >/dev/null 2>&1; got=$? ;;
+      health)  PGW_NOW="$NOW" PGW_CONFIG_PATHS="$payload" PGW_CLAUDE_BIN='' bash "$0" --health  >/dev/null 2>&1; got=$? ;;
+      binary)  PGW_CLAUDE_BIN="$payload" bash "$0" --binary >/dev/null 2>&1; got=$? ;;
+      *) printf '  FAIL %-38s unknown mode %s\n' "$label" "$mode"; fail=$((fail + 1)); return 0 ;;
+    esac
     if [ "$got" -eq "$want" ]; then pass=$((pass + 1)); printf '  ok   %-38s rc=%d\n' "$label" "$got"
     else fail=$((fail + 1)); printf '  FAIL %-38s rc=%d want=%d\n' "$label" "$got" "$want"; fi
   }
-  # Each arm re-execs THIS file so the fixture reaches the real entry point, not an in-process copy
-  # of it. The env prefixes below are prefixes to `bash`, so they do reach the child's environment —
-  # which the "no subject → NON-VERDICT" arm proves by observing rc 2 rather than by assuming it.
-  # A pattern moved out of argv that never arrives is how an empty selector becomes a universal one.
-  # shellcheck disable=SC2317  # invoked indirectly, as `chk`'s "$@"
-  run_f() { PGW_NOW="$NOW" PGW_CONFIG_PATHS="$1" PGW_CLAUDE_BIN='' bash "$0" --falsify; }
-  # shellcheck disable=SC2317  # invoked indirectly, as `chk`'s "$@"
-  run_h() { PGW_NOW="$NOW" PGW_CONFIG_PATHS="$1" PGW_CLAUDE_BIN='' bash "$0" --health; }
-  # shellcheck disable=SC2317  # invoked indirectly, as `chk`'s "$@"
-  run_b() { PGW_CLAUDE_BIN="$1" bash "$0" --binary; }
 
   echo "cache arms (§5's table, all seven rows):"
-  chk "fresh+true → RETRACT"            0 run_f "$tmp/fresh_true.json"
-  chk "fresh+false → off"               1 run_f "$tmp/fresh_false.json"
-  chk "fresh+absent → off"              1 run_f "$tmp/fresh_absent.json"
-  chk "stale+true only → NON-VERDICT"   2 run_f "$tmp/stale_true.json"
-  chk "no stamp → NON-VERDICT"          2 run_f "$tmp/nostamp_true.json"
-  chk "stale-true + fresh-absent → off" 1 run_f "$tmp/stale_true.json"$'\n'"$tmp/fresh_absent.json"
-  chk "stale-true + fresh-true → RETRACT" 0 run_f "$tmp/stale_true.json"$'\n'"$tmp/fresh_true.json"
-  chk "empty population → NON-VERDICT"  2 run_f "$tmp/does-not-exist.json"
-  chk "unreadable only → NON-VERDICT"   2 run_f "$tmp/broken.json"
+  chk "fresh+true → RETRACT"            0 falsify "$tmp/fresh_true.json"
+  chk "fresh+false → off"               1 falsify "$tmp/fresh_false.json"
+  chk "fresh+absent → off"              1 falsify "$tmp/fresh_absent.json"
+  chk "stale+true only → NON-VERDICT"   2 falsify "$tmp/stale_true.json"
+  chk "no stamp → NON-VERDICT"          2 falsify "$tmp/nostamp_true.json"
+  chk "stale-true + fresh-absent → off" 1 falsify "$tmp/stale_true.json"$'\n'"$tmp/fresh_absent.json"
+  chk "stale-true + fresh-true → RETRACT" 0 falsify "$tmp/stale_true.json"$'\n'"$tmp/fresh_true.json"
+  chk "empty population → NON-VERDICT"  2 falsify "$tmp/does-not-exist.json"
+  chk "unreadable only → NON-VERDICT"   2 falsify "$tmp/broken.json"
   echo "health arm:"
-  chk "health: fresh present"           0 run_h "$tmp/fresh_absent.json"
-  chk "health: all stale"               1 run_h "$tmp/stale_true.json"
-  chk "health: nothing readable"        2 run_h "$tmp/broken.json"
+  chk "health: fresh present"           0 health "$tmp/fresh_absent.json"
+  chk "health: all stale"               1 health "$tmp/stale_true.json"
+  chk "health: nothing readable"        2 health "$tmp/broken.json"
 
   printf 'function xyz(){return I("tengu_propose_goal",!1)}\ntengu_other\nProposeGoal\n' > "$tmp/bin_off"
   printf 'function q9(){return I("tengu_propose_goal",!0)}\ntengu_other\nProposeGoal\n' > "$tmp/bin_on"
@@ -339,12 +359,12 @@ pgw_selftest() {
   printf 'tengu_other\nnothing of interest\n' > "$tmp/bin_removed"
   printf 'nothing of interest at all\n' > "$tmp/bin_wrongsubject"
   echo "binary arms (§4):"
-  chk "gate !1 → still off"             1 run_b "$tmp/bin_off"
-  chk "gate !0 → SIGNAL"                0 run_b "$tmp/bin_on"
-  chk "no gate + ProposeGoal → SIGNAL"  0 run_b "$tmp/bin_minified"
-  chk "no gate, no feature → removed"   3 run_b "$tmp/bin_removed"
-  chk "tripwire fails → NON-VERDICT"    2 run_b "$tmp/bin_wrongsubject"
-  chk "no subject → NON-VERDICT"        2 run_b ""
+  chk "gate !1 → still off"             1 binary "$tmp/bin_off"
+  chk "gate !0 → SIGNAL"                0 binary "$tmp/bin_on"
+  chk "no gate + ProposeGoal → SIGNAL"  0 binary "$tmp/bin_minified"
+  chk "no gate, no feature → removed"   3 binary "$tmp/bin_removed"
+  chk "tripwire fails → NON-VERDICT"    2 binary "$tmp/bin_wrongsubject"
+  chk "no subject → NON-VERDICT"        2 binary ""
 
   printf '\npropose-goal-flag-watch --selftest: %d ok · %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ] || return 1
@@ -357,6 +377,8 @@ case "${1:---report}" in
   --binary)   pgw_binary;  exit $? ;;
   --report)   pgw_report;  exit $? ;;
   --selftest) pgw_selftest; exit $? ;;
-  -h|--help)  sed -n '2,70p' "$0"; exit 0 ;;
+  # Prints the header to wherever it actually ends, rather than to a line number that drifts every
+  # time the header grows — as it just did, leaving `--help` cut off mid-sentence at line 70.
+  -h|--help)  awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 && NF { exit }' "$0"; exit 0 ;;
   *) printf 'usage: %s [--report|--falsify|--health|--binary|--selftest]\n' "$(basename "$0")" >&2; exit 2 ;;
 esac

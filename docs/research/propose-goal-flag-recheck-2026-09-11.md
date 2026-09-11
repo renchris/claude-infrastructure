@@ -79,8 +79,13 @@ feature was removed*. That prediction was made on 2026-09-10 and came true on 20
 version-proof form is now what the watcher executes, so no future reader has to remember it:
 
 ```sh
-grep -a -o -E 'function [A-Za-z0-9_$]+\(\)\{return [A-Za-z0-9_$]+\("tengu_propose_goal",![01]\)\}' "$BIN"
+grep -a -o -E 'function [A-Za-z0-9_$]+[(][)][{]return [A-Za-z0-9_$]+[(]"tengu_propose_goal",![01][)][}]' "$BIN"
 ```
+
+Bracket expressions, not the backslash escapes yesterday's note used: `\(` and `\{` are **undefined**
+in a POSIX ERE and only literal by convention, so the escaped spelling is a bet on which regex
+implementation reads it — and a pattern that fails to compile leaves the match empty, which this
+subject reads as *minified past the pattern*, i.e. a signal. `[(]` and `[{]` are literal everywhere.
 
 ## 3. The hole in the stored falsifier is not hypothetical — it is measurable on this box
 
@@ -161,7 +166,7 @@ Live output on this VM:
 
 ## 5. The red-proofs, and why the "keep waiting" cases are not among them
 
-`tests/propose-goal-flag-watch.bats` — 15/15, plan line present. The subject's own `--selftest`
+`tests/propose-goal-flag-watch.bats` — 17/17, plan line present. The subject's own `--selftest`
 covers §5's seven cache rows and §4's binary rows (18 arms, run in-suite as G0).
 
 The load-bearing cases are the ones expecting **RETRACT**. A falsifier's job is to stay quiet for
@@ -177,6 +182,7 @@ discriminate:
 | M2 | delete the binary tripwire | a file that is not a Claude build reports "feature removed" (rc 2 → 3) |
 | M3 | fold rc 2 into rc 1 | **the incumbent**: an empty population answers "off" (rc 2 → 1) |
 | M4 | read the flag with jq's `//` | present-and-false renders as `ABSENT` (text, not status) |
+| M5 | re-pad the count as BSD `wc -l` does | a present feature reports as removed upstream (rc 0 → 3) |
 
 M3 is worth naming separately: it does not introduce a hypothetical bug, it **reconstructs the
 stored one-liner's behaviour as a consumer sees it**. The control beside it is the real subject
@@ -214,7 +220,42 @@ The 8 were this diff's, and both causes were real:
   caches. Every case names `PGW_CONFIG_PATHS` explicitly, so nothing was reading the fleet today; the
   leak is that a case which forgot would, and its verdict would then depend on whose box ran it.
 
-Both fixed; 214/214 restored, suite 15/15, `shellcheck -x` clean on the subject.
+Both fixed; 214/214 restored, `shellcheck -x` clean on the subject.
+
+**Then the desk's land gate refused it anyway, and both of its reds were things no Linux box can
+see.** They are worth recording because each is a platform difference hiding inside something
+nobody reads.
+
+- **`shellcheck` RED — a lint code that was renamed between versions.** The subject's `--selftest`
+  drove its arms through three one-line helpers invoked as `chk`'s `"$@"`. ShellCheck cannot follow
+  that indirection and reports the helpers unreachable — as **SC2317** up to 0.9, and as **SC2329**
+  from 0.10. This VM has 0.9.0, so the file was clean here with only the SC2317 disable, and red on
+  the desk. Adding the second code would have worked and would have stayed a bet on the next
+  rename; the fix instead dispatches on a mode WORD, so the indirection is gone and no version has
+  anything to report. (The repo already carries ten `disable=SC2329` sites — the evidence that the
+  desk runs ≥ 0.10 was in the tree the whole time, one grep away.)
+- **`offbox-admission` RED — BSD `wc -l` pads its output and GNU's does not.** The subject counted
+  `ProposeGoal` occurrences with `grep -a -o -F … | wc -l`, then rejected the result if it contained
+  any non-digit. On macOS `wc -l` prints `      18`, the guard read that as garbage, and the count
+  silently became **0** — which is the exact input to §4's second reading, so a binary with the
+  feature present but the gate minified past the pattern returned **3 ("removed upstream")** instead
+  of **0 ("present — read it by hand")**. **A platform difference in a control count nobody looks at
+  was producing a false RETRACTION signal for the row.** Fixed with `tr -dc '0-9'`, and pinned by a
+  new case (G11) plus **M5**, a mutant that re-pads the count deliberately so the assertion has
+  power on a machine whose `wc` never would.
+
+The second one is the more interesting failure, and the gate is the only reason it was ever seen:
+this is a watcher whose entire job is to fire once, correctly, months from now — and it would have
+fired the wrong way on the operator's own box, in the direction that closes the row.
+
+Sibling swept in the same pass, before it could bite: the gate regex used `\(` and `\{`, which POSIX
+leaves **undefined** in an ERE and which are only literal by convention. A pattern that fails to
+compile leaves the gate string empty, which this subject reads as "minified past the pattern" — a
+signal. It is now written with bracket expressions (`[(]`, `[{]`), literal in every implementation.
+
+Final: suite **17/17**, off-box runner green under the identical `env -i` / `LC_ALL=C` / fresh-`HOME`
+harness CI uses, 257/259 across the tree-scanning lints — the two remaining reds being the
+`bats-shellcheck-lint` pair that reproduces identically on pristine `origin/main` here.
 
 ## 7. Dispatcher vintage: BEHIND trunk
 
