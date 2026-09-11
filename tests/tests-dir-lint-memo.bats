@@ -405,12 +405,131 @@ wt() {
   local d1 d2 ymd
   d1="20$((30))0101"; d2="20$((30))0102"; ymd="20$((30))-01-02"
   mkcorpus test-walltime-lint.sh WALLTIME "run subject --until \"$ymd\""
-  SHIM="$BATS_TEST_TMPDIR/shim"; mkdir -p "$SHIM"
+  CLOCK="$BATS_TEST_TMPDIR/clock"; mkdir -p "$CLOCK"   # its own name: SHIM belongs to shim(), read by later cases
   # shellcheck disable=SC2016  # the shim's own "$*", "$c" and "$@" must reach it LITERALLY
   printf '#!/bin/bash\nc="%s"\nif [ "$*" = "-u +%%Y%%m%%d" ]; then\n  if [ -e "$c" ]; then echo %s; else : > "$c"; echo %s; fi\n  exit 0\nfi\nexec /bin/date "$@"\n' \
-    "$BATS_TEST_TMPDIR/date.calls" "$d2" "$d1" > "$SHIM/date"
-  chmod +x "$SHIM/date"
-  run_lint PATH="$SHIM:$PATH" >/dev/null
+    "$BATS_TEST_TMPDIR/date.calls" "$d2" "$d1" > "$CLOCK/date"
+  chmod +x "$CLOCK/date"
+  run_lint PATH="$CLOCK:$PATH" >/dev/null
   out="$(run_lint CC_WALLTIME_TODAY="$d1")"
   [[ "$out" == *"zz-hit.bats"* ]]            # on DAY1 that date IS in the future: it must be reported
+}
+
+# ── bats-kill-guard-lint ─────────────────────────────────────────────────────────────────────────────
+# A different mechanism: ONE awk pass over every suite, so the memo shrinks the awk's INPUT to the unproven
+# suites and banks only suites the pass never named. Its finding — a kill whose stderr is silenced and whose
+# status is not — is carried inside single quotes, which this lint's own scanner blanks.
+# shellcheck disable=SC2016  # the fixture LINE is data written into a corpus suite, never expanded here
+kg() { mkcorpus bats-kill-guard-lint.sh KILLGUARD 'kill "$p" 2>/dev/null'; }
+
+@test "kill-guard POSITIVE CONTROL: the memo arms, and carries every clean suite" {
+  kg
+  first="$(run_lint)"
+  [[ "$first" == *"per-file memo"* ]] || { echo "MEMO NEVER ARMED — every kill-guard case is vacuous"; echo "$first"; false; }
+  [ "$(carried "$first")" -eq 0 ]
+  [ "$(proven "$first")" -eq 4 ]
+  second="$(run_lint)"
+  [ "$(carried "$second")" -eq 3 ]
+  [ "$(proven "$second")" -eq 1 ]
+}
+
+@test "kill-guard: a carried run says exactly what an unmemoized run says, and re-reports the finding" {
+  kg
+  run_lint >/dev/null
+  warm="$(run_lint)"
+  [ "$(carried "$warm")" -eq 3 ]
+  cold="$(run_lint CC_KILLGUARD_MEMO=off)"
+  [ "$(printf '%s\n' "$warm" | grep -v 'per-file memo')" = "$(printf '%s\n' "$cold" | grep -v 'per-file memo')" ]
+  [[ "$warm" == *"zz-hit.bats"* ]]
+}
+
+@test "kill-guard: editing one suite re-proves THAT suite and no other" {
+  kg
+  run_lint >/dev/null
+  printf '# bytes that change no verdict\n' >> "$CORPUS/tests/clean2.bats"
+  commit edit
+  after="$(run_lint)"
+  [ "$(proven "$after")" -eq 2 ]
+  [ "$(carried "$after")" -eq 2 ]
+}
+
+@test "kill-guard KEY: the lint's own blob invalidates every carried verdict" {
+  kg
+  run_lint >/dev/null
+  printf '\n# read-set change\n' >> "$CORPUS/scripts/bats-kill-guard-lint.sh"
+  commit lint-edit
+  [ "$(carried "$(run_lint)")" -eq 0 ]
+}
+
+@test "kill-guard KEY: a different AWK binary invalidates — and then re-earns" {
+  kg
+  run_lint >/dev/null
+  shim awk 'NEVER-MATCHES' 3
+  [ "$(carried "$(run_lint PATH="$SHIM:$PATH")")" -eq 0 ]
+  [ "$(carried "$(run_lint PATH="$SHIM:$PATH")")" -eq 3 ]
+}
+
+@test "kill-guard: a pass that did not exit 0 banks NOTHING — not even the suites it never named" {
+  # The whole population is ONE awk invocation, so its failure says nothing about ANY suite in it. Banking
+  # the unnamed ones would bank the finding too: a dead pass names nobody, zz-hit included.
+  kg
+  shim awk '*tests/clean1.bats*' 3
+  : > "$MEMO_SHIM_FLAG"
+  run_lint PATH="$SHIM:$PATH" >/dev/null
+  rm -f "$MEMO_SHIM_FLAG"
+  b="$(run_lint PATH="$SHIM:$PATH")"
+  [ "$(carried "$b")" -eq 0 ]
+  [[ "$b" == *"zz-hit.bats"* ]]
+}
+
+@test "kill-guard: an UNREADABLE suite (UNBALANCED) is never banked — it must say so on every run" {
+  # The unterminated quote sits AFTER the last column-zero `}`, where the scanner's resync cannot clear it.
+  kg
+  printf '@test "u" {\n  true\n}\nx="this quote never closes\n' > "$CORPUS/tests/unbal.bats"
+  commit unbal
+  run_lint >/dev/null
+  out="$(run_lint)"
+  [[ "$out" == *"unbal.bats"* ]]
+}
+
+@test "kill-guard: a finding in a path containing a colon is never banked by mis-attribution" {
+  kg
+  # shellcheck disable=SC2016  # the fixture BODY is data written into a corpus suite, never expanded here
+  printf '@test "c" {\n  kill "$p" 2>/dev/null\n}\n' > "$CORPUS/tests/zz:colon.bats"
+  commit colon
+  run_lint >/dev/null
+  out="$(run_lint)"
+  [[ "$out" == *"zz:colon.bats"* ]]
+}
+
+@test "kill-guard: --selftest runs memo-OFF (EXPORTED — it re-invokes itself) and writes nothing to the store" {
+  kg
+  run_lint >/dev/null
+  before="$(store_entries)"
+  ( cd "$CORPUS" && bash scripts/bats-kill-guard-lint.sh --selftest >/dev/null 2>&1 ) || true
+  [ "$(store_entries)" -eq "$before" ]
+}
+
+@test "kill-guard: a dirty worktree, and CC_KILLGUARD_MEMO=off, each disarm the memo" {
+  kg
+  [[ "$(run_lint CC_KILLGUARD_MEMO=off)" != *"per-file memo"* ]] || false
+  printf '# uncommitted\n' >> "$CORPUS/tests/clean1.bats"
+  [[ "$(run_lint)" != *"per-file memo"* ]]
+}
+
+@test "kill-guard: the record index is the suite's place in the POPULATION, never in the miss-list" {
+  # A finding is never recorded, so it sits in EVERY pass's miss-list. With the population [clean1, zz-hit,
+  # clean2] and clean2 edited, the miss-list is [zz-hit, clean2]: recording clean2 by its miss-list
+  # position (1) would bank population[1] — the FINDING — as green, and the next run would carry it.
+  # THE ORDER IS PINNED by naming the files: collect_bats walks a directory with find, whose order is the
+  # filesystem's, and a case that assumed alphabetical order let exactly this mutant survive.
+  kg
+  run3() { ( cd "$CORPUS" && env CC_KILLGUARD_OWN=x bash scripts/bats-kill-guard-lint.sh \
+               tests/clean1.bats tests/zz-hit.bats tests/clean2.bats 2>&1 ) || true; }
+  run3 >/dev/null
+  printf '# bytes that change no verdict\n' >> "$CORPUS/tests/clean2.bats"
+  commit edit
+  run3 >/dev/null
+  out="$(run3)"
+  [[ "$out" == *"zz-hit.bats"* ]]
 }
