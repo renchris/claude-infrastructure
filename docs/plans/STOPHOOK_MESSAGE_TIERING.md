@@ -457,7 +457,7 @@ and does not say it. No other home named.
 
 - Three sibling hooks carry the same actionless `IDL writer inert` FATAL that hunks A and B fix:
   `hooks/operator-readout.sh:315`, `hooks/anti-deference-nudge.sh:83`, `hooks/waiting-recycle.sh:638`.
-  **✅ FIXED 2026-09-10 (`7dedc6d8f`).** All three confirmed present in the un-cured form on trunk
+  **✅ FIXED 2026-09-10 (`c377c7ba2`).** All three confirmed present in the un-cured form on trunk
   (line numbers had drifted to :404, :83, :660 — the `:83` is unchanged, the other two moved, so the
   citation had partly rotted in the usual direction). Each now names its OWN consequence rather than a
   shared phrase, because the three silences are not interchangeable: operator-readout loses the OPERATOR
@@ -562,7 +562,7 @@ independent objections each verifier raised, and every one of them still stands:
 
 - **3.1 (c)** `scripts/desk-arm-live.sh` supports only `--live`/`--shadow`; an operator paging on a BUSY
   wedge still arms LIVE only and the desk still never execs. That is a code fix, untouched here.
-  **✅ CLEARED 2026-09-10 (`7df55160c`)** — `--busy-force` is now a pass-through arm. The defect was
+  **✅ CLEARED 2026-09-10 (`765e09ab1`)** — `--busy-force` is now a pass-through arm. The defect was
   worse than "the flag is missing": the wedge page offers TWO routes, and the CLI half
   (`waiting-recycle.sh arm --busy-force`) has worked since Tier 3 shipped (`:505`), so only the
   `desk-arm-live.sh` route was broken — it exits 2 on any unknown flag, and an operator who dropped the
@@ -618,7 +618,7 @@ states). They are independent: no two touch the same file.
 |---|---|---|---|
 | W1 | `completion-assert` §3.3 | 9 | UNBLOCKED. A2 is done. The nine survivors need the `--why <arm>` multi-arm spelling worked through per §5.1 (`$arm` is `+`-joined; `tests/completion-assert.bats:466` pins `"arm":"handoff+fence"`), plus B8's retain guard re-keyed off `contra` onto `d1\|d2\|d4\|d5\|d6`. |
 | W2 | `session-continue` §3.4 | 6 | UNBLOCKED, and one stated objection is now **moot**: §3.4 demanded the `--why` arm in BOTH case statements because `:85`'s lib-failure path exits 0 silently. The shipped arm dispatches ABOVE the lib source (`:104`), so it never reaches either `case` — verified by execution, not by reading. The named restores (`<marker-or-slug>`, the absolute path at the `clear` site) still bind. |
-| W3 | `waiting-recycle` §3.1 | 13 | **§3.1(c) CLEARED 2026-09-10 (`7df55160c`)** — `desk-arm-live.sh` takes `--busy-force`, so the wedge message may now keep `${livearm}` and both of its routes are runnable as typed. **§3.1(d) still binds and is now the only blocker left on this unit**: `set -uo pipefail` at `:171` makes one unset `sysmsg` a session-costing abort, so every rewritten emission must supply its string explicitly. Also still standing, and neither is a code fix: the two named LOSSES (the `live-team-hold` per-hold remedy at `:1297`, the cleared-predicate parenthetical at `:1561`) and §3.1(e)'s re-count of line 1 on RENDERED strings. |
+| W3 | `waiting-recycle` §3.1 | 13 | **§3.1(c) CLEARED 2026-09-10 (`765e09ab1`)** — `desk-arm-live.sh` takes `--busy-force`, so the wedge message may now keep `${livearm}` and both of its routes are runnable as typed. **§3.1(d) still binds and is now the only blocker left on this unit**: `set -uo pipefail` at `:171` makes one unset `sysmsg` a session-costing abort, so every rewritten emission must supply its string explicitly. Also still standing, and neither is a code fix: the two named LOSSES (the `live-team-hold` per-hold remedy at `:1297`, the cleared-predicate parenthetical at `:1561`) and §3.1(e)'s re-count of line 1 on RENDERED strings. |
 | W4 | `boundary-handoff` §3.2 | 11 | Blocked on its own two code fixes, unchanged: declare `hint=""` and assign it **with a leading separator**; put `T_FREEWIN`'s value on a record (it is on none, fired or abstained) or restore its echo. |
 | W5 | `operator-readout` §3.5 | 8 | **NOT unblocked and deliberately not wired to `--why`** (§5.3). These need a store, a test, or `cc-do` taught the custody store — a reference tier answers none of them. Do not dispatch W5 as a message-rewrite wave. |
 
@@ -632,9 +632,9 @@ against trunk rather than inherited from the filing, and they did **not** hold i
 
 | § | Claim as filed | Verified against trunk | Landed |
 |---|---|---|---|
-| 3.1(c) | `desk-arm-live.sh` supports only `--live`/`--shadow`, so a BUSY wedge arms LIVE only | **CONFIRMED, and worse than filed** — the CLI half has accepted `--busy-force` since Tier 3 (`:505`), so only the wrapper route was broken, and an operator who dropped the rejected flag got `exit 0` + "done … is LIVE" over an exec still gated OFF | `7df55160c` |
+| 3.1(c) | `desk-arm-live.sh` supports only `--live`/`--shadow`, so a BUSY wedge arms LIVE only | **CONFIRMED, and worse than filed** — the CLI half has accepted `--busy-force` since Tier 3 (`:505`), so only the wrapper route was broken, and an operator who dropped the rejected flag got `exit 0` + "done … is LIVE" over an exec still gated OFF | `765e09ab1` |
 | 3.2 | `boundary-handoff`'s `${hint}` must be declared and assigned with a leading separator | **REFUTED as a live defect** — `hint` does not appear anywhere in `hooks/boundary-handoff.sh` on trunk. It was never a bug ON trunk; it is a **precondition on the §3.2 rewrite**, which was never applied. W4 is therefore not "blocked on its own code fixes" — it is blocked on nothing but the rewrite itself, whose author must declare `hint` as part of writing it | — (see below) |
-| 3.6 | three siblings carry the actionless `IDL writer inert` FATAL | CONFIRMED (line numbers had drifted for two of the three) | `7dedc6d8f` |
+| 3.6 | three siblings carry the actionless `IDL writer inert` FATAL | CONFIRMED (line numbers had drifted for two of the three) | `c377c7ba2` |
 
 **The W4 row above overstates its blocker and is corrected here rather than edited away.** Its `T_FREEWIN`
 half does still stand and is a genuine, separable finding: `T_FREEWIN`'s VALUE reaches the fired message
