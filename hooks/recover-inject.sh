@@ -152,7 +152,17 @@ if [ -z "$OPEN_LINES" ]; then
   OPEN_LINES="  - (none open by tool-use-id — every spawn has a tool_result or a task-notification)"
 fi
 
-BODY="$(cat <<EOF
+# THE HEREDOC IS NOT INSIDE A COMMAND SUBSTITUTION, and that is load-bearing. `read -r -d ''`,
+# NOT `BODY="$(cat <<EOF … EOF)"`: macOS /bin/bash is 3.2 and the off-box runner resolves a bare
+# `bash` to it, and its `$( )` parser hunts for the matching `)` WITHOUT honouring a heredoc
+# delimiter — it lexes this body as shell code. The prose below carries three apostrophes on one
+# line, so under that parser the third opens a quote that never closes, the real `)` is swallowed
+# inside it, and the whole file dies at parse time far from anything it names. Ratchet:
+# scripts/bash32-parse-lint.sh; the same rationale, and this idiom, at scripts/git-identity-lint.sh.
+# Removing the CONSTRUCT rather than the apostrophes is the point: this body is English prose that
+# a later editor will keep growing apostrophes in, and a no-apostrophes rule over prose is a trap.
+# `|| true`: read returns 1 when it hits EOF without finding the NUL delimiter, which is every time.
+IFS= read -r -d '' BODY <<EOF || true
 ⚠️ INTERRUPTED WORK DETECTED ON DISK — audit before anything else.
 
 $HEAD.
@@ -187,7 +197,9 @@ Then run /recover (or /limit-recover) and execute its Verdict → action table. 
 
 This notice fires ONCE per death record. It is context, not an instruction to spend anything.
 EOF
-)"
+# `read` keeps the final newline where `$( )` stripped it. The body always ends in exactly one, so
+# this strip makes the emitted context byte-identical to what the command substitution produced.
+BODY="${BODY%$'\n'}"
 
 printf '%s' "$_stdin_json" | jq -n --arg ctx "$BODY" \
   '{hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: $ctx}}' 2>/dev/null \
