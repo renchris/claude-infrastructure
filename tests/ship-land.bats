@@ -3858,6 +3858,24 @@ error: failed to push some refs to '\''/tmp/remA.git'\'''"
   [ "$output" = "refused" ]
 }
 
+@test "push classify: a TRANSPORT failure (DNS) is neither a race nor a hook refusal" {
+  # Real output, captured 2026-09-10 when DNS dropped mid-land: git never reached the remote, so the
+  # old two-way classifier called it "refused" and told the lander a re-run could not clear it.
+  local probe; probe="$(_pfk_probe)"
+  run bash -c ". '$probe'; push_failure_kind \"fatal: unable to access 'https://github.com/renchris/claude-infrastructure.git/': Could not resolve host: github.com\""
+  [ "$status" -eq 0 ]
+  [ "$output" = "transport" ]
+}
+
+@test "push classify CONTROL: an auth refusal over the same transport is NOT transport" {
+  # Same "unable to access" prefix, but the remote ANSWERED — a re-run cannot clear a 403.
+  local probe; probe="$(_pfk_probe)"
+  run bash -c ". '$probe'; push_failure_kind \"remote: Permission to x/y.git denied to someone.
+fatal: unable to access 'https://github.com/x/y.git/': The requested URL returned error: 403\""
+  [ "$status" -eq 0 ]
+  [ "$output" = "refused" ]
+}
+
 @test "push refused by a hook: the land says NOT-a-race and REPLAYS the hook's own words" {
   # End-to-end through the real pipeline. A server-side decline is what the two pre-existing exit-7
   # tests already use; what is new is that the OUTPUT must now name the cause. Note those two tests
