@@ -834,8 +834,24 @@ PY
   # timeout(1) is not on the stock macOS floor — so the bound has to live in the interpreter. On the
   # live stores the same invocation measured 1,045 s, which is 52x cc-premise's 20 s probe bound and
   # long enough to hold the wrapper's lock past the fleet board's staleness window.
+  #
+  # WHY 0.001 AND NOT THE 0.01 THIS ARM SHIPPED WITH, AND WHY THE MARGIN IS NOW ASSERTED. The cut
+  # can only fire while the pipeline is STILL RUNNING, so this arm carries an unstated precondition
+  # — `pipeline runtime > bound` — and that runtime is pure-Python CPU (set_cover / rule_matches_leaf
+  # dominate its profile; there is no I/O or subprocess term to speak of on this fixture). The
+  # margin is therefore a bet on CORE SPEED, and it erodes on a FASTER, QUIETER box rather than on a
+  # loaded one. That is the direction no triage looks in: every load-keyed diagnosis in this repo
+  # reads "the box was too busy", while this arm fails when the box was too QUICK — and it fails as
+  # `status 0` with a proposal written, i.e. byte-for-byte how a DELETED deadline would read.
+  # Measured 2026-09-11 on a cloud vCPU against this fixture: `_pipeline` 30.3-35.5 ms over 7 runs,
+  # and a bound sweep flips the verdict between 0.030 s (8/8 exit 6) and 0.040 s (1/8) — so 0.01 s
+  # left a 3.5x margin, which a ~3x faster single core closes. 0.001 s is ~31x on the same reading,
+  # and the third arm below RE-DERIVES that ratio at run time so an erosion goes red NAMING itself
+  # instead of a working deadline being reported as a broken one. `bin/cc-permission-harvest`'s own
+  # `_deadline_s` docstring already specified 0.001 as the exercisable figure; this arm had drifted
+  # 10x off its subject's spec, and nothing measured the gap.
   have_tool
-  run env CC_PERMHARVEST_MAX_S=0.01 python3 "$HARVEST" 30 --json --out "$BATS_TEST_TMPDIR/bounded"
+  run env CC_PERMHARVEST_MAX_S=0.001 python3 "$HARVEST" 30 --json --out "$BATS_TEST_TMPDIR/bounded"
   [ "$status" -eq 6 ]
   [[ "$output" == *"DEADLINE"* ]] || false
   [[ "$output" == *"NO PARTIAL result"* ]] || false
@@ -844,6 +860,35 @@ PY
   run env -u CC_PERMHARVEST_MAX_S python3 "$HARVEST" 30 --json --out "$BATS_TEST_TMPDIR/bounded"
   [ "$status" -eq 0 ]
   [ -f "$BATS_TEST_TMPDIR/bounded/latest.json" ]
+  # THE MARGIN, measured on THIS box rather than assumed from the reading above. It times
+  # `_pipeline` itself and not the process: interpreter startup is ~as large as the pipeline here
+  # and is NOT subject to the timer (the alarm is armed inside `pipeline()`), so timing the process
+  # would inflate the ratio in the one direction that HIDES erosion. Same in-process import shape as
+  # the marker-timeout arm below, and the same interpreter the arm above runs under — a margin read
+  # under a different python is a fact about that python.
+  cat > "$BATS_TEST_TMPDIR/margin.py" <<'PY'
+import sys, time, importlib.util
+from importlib.machinery import SourceFileLoader
+tool, bound, floor = sys.argv[1], float(sys.argv[2]), float(sys.argv[3])
+spec = importlib.util.spec_from_loader("hv", SourceFileLoader("hv", tool))
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+args = m.build_parser().parse_args(["30", "--json"])
+t = time.perf_counter()
+m._pipeline(args, m.Seams(args), 30)
+elapsed = time.perf_counter() - t
+ratio = elapsed / bound
+print("MARGIN %.4fs / %.4fs = %.1fx" % (elapsed, bound, ratio))
+assert ratio >= floor, (
+    "the deadline arm's margin has eroded to %.1fx (pipeline %.4fs against a %.4fs bound, floor "
+    "%.0fx). The deadline is NOT broken and this is NOT a flake: the bound has simply come too "
+    "close to this box's pipeline runtime, and at ~1x the arm above starts reporting exit 0 with a "
+    "proposal written — which reads exactly like a deleted deadline. LOWER the bound in that arm "
+    "and re-record the reading in its comment. Do not relax this floor." % (ratio, elapsed, bound, floor))
+PY
+  run python3 "$BATS_TEST_TMPDIR/margin.py" "$HARVEST" 0.001 10
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"MARGIN"* ]] || false
 }
 
 @test "the denial-oracle grep batch carries a timeout, and expiry is UNKNOWN not an acquittal" {
