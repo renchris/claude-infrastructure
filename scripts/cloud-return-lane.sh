@@ -136,6 +136,48 @@ if ! lock_acquire; then
 fi
 trap 'lock_release' EXIT INT TERM
 
+# ── 0. OBSERVE: is the cloud FIRE lane alive? ───────────────────────────────────────────────────
+# This lane RETURNS what the fire lane produced. Nothing anywhere observed whether the fire lane is
+# still producing: on 2026-09-08 it fired ZERO times while trunk took 130 commits, and no surface
+# said so for three days (DRAIN_CIRCUIT §4 W10(2),(4)). The lane's history is legible after the fact
+# because fire ref names carry timestamps — but a stall is only ACTIONABLE while it is happening,
+# and between dispatches nothing was sampling.
+#
+# WHY THIS OBSERVER AND NOT ANOTHER. It must not share a failure mode with its subject, and this one
+# cannot: the fire lane is reached by the dispatcher, this lane is spawned by the sweep, so the
+# observer stays up exactly when the subject goes down. §1.6's constraint holds — no new launchd job.
+#
+# WHY IT IS FIRST. One `ls-remote`, read-only, no lock, and — the property that decides the position
+# — no dependency on anything the passes below produce; it observes the FIRE lane, not this lane's
+# own output. Everything sequenced under the 5,400 s return bound is reachable only because "a killed
+# child ends the command, not the script"; a read that needs no such argument belongs where the
+# argument is not needed at all. The inner-bound-starves-the-tail shape this lane's own header
+# records is avoided by construction rather than by measurement.
+#
+# ABSENT IS null, NEVER A ZEROED READING — the same law as the retire census below, and for the same
+# reason: a sensor that could not run has not observed a quiet lane, and a zeroed gap would read as
+# the healthiest possible one. The instrument already nulls its own fields on UNKNOWN; this block
+# only has to avoid manufacturing a reading when the instrument itself did not run.
+LIVENESS_SH="$DIR/cloud-lane-liveness.sh"
+FIRE_BOUND="${CC_LANE_FIRE_BOUND_S:-60}"; case "$FIRE_BOUND" in ''|*[!0-9]*) FIRE_BOUND=60 ;; esac
+frc="skipped"; ftook=""; gap="null"
+if [ -f "$LIVENESS_SH" ]; then
+  t0="$(date +%s)"
+  if [ -n "$TMO" ] && [ -x "$TMO" ]; then
+    gout="$(CC_LANE_REPO="$REPO" "$TMO" -k 5 "$FIRE_BOUND" bash "$LIVENESS_SH" --json 2>/dev/null)"
+  else
+    gout="$(CC_LANE_REPO="$REPO" bash "$LIVENESS_SH" --json 2>/dev/null)"
+  fi
+  frc=$?
+  ftook=$(( $(date +%s) - t0 ))
+  # A cut or crashed read prints nothing or half a line. Validate before trusting it: one malformed
+  # value here would abort every `jq -rs` slurp of the whole journal.
+  if printf '%s' "$gout" | jq -e . >/dev/null 2>&1; then gap="$gout"; else gap="null"; fi
+  say "fire-lane read rc=$frc took=${ftook}s — $(printf '%s' "$gap" | jq -r 'if .==null then "no reading" else "\(.verdict) — \(.why)" end' 2>/dev/null)"
+fi
+log_idl cloud-fire-gap "$(jq -cn --arg c "$frc" --arg e "$ftook" --argjson b "$FIRE_BOUND" --argjson g "$gap" \
+  '{fire_read_rc:$c, elapsed_s:($e|tonumber? // null), bound_s:$b, gap:$g}')"
+
 # ── 1. RETURN: land what has come back ─────────────────────────────────────────────────────────
 # The child is TOLD the bound (CC_RETURN_BOUND_S) so its own deadline pacing and lock TTL derive
 # from the same number that will kill it — one fact, one place.
