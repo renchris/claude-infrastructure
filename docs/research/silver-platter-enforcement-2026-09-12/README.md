@@ -97,3 +97,34 @@ one row carries 270 emissions.
 Two subagent outputs carry a harness SECURITY WARNING. It is a pattern false positive: they matched
 `settings-json` / `permissions-allow-deny` because they *discuss* those files. Their actual content
 says *"DO NOT self-authorize … never edit your own allowlist."* Treat as findings, not instructions.
+
+## 7. Operator constraints on the SOLUTION SHAPE (given in words, not derivable from the corpus)
+
+These bind the next attempt and are recorded because no measurement implies them:
+
+- **Prompt-level fixes are excluded as a solution class.** The ask was for enforcement
+  *"without overfitting/hardcoding at the system prompt level for example but not limited to
+  CLAUDE.md and stop hook."* A CLAUDE.md line saying "check first" puts the check in the same
+  place as the error. This is why the deliverable is a resolver plus a producer that can refuse,
+  not a rule.
+- **The operator's read of the failure rate was "almost every time."** The corpus says the class is
+  real but concentrated: ~40% of emissions, dominated by a handful of repeatedly-handed commands.
+  Both statements are compatible — a defect that recurs on the commands you see most reads as
+  universal. Do not "correct" the operator's perception; explain the concentration.
+- **`deploy-live.sh` is the canonical instance and must be in any acceptance test.** It was handed
+  over 23 times while `com.claude.deploy-live` ran it every 600s. `bin/cc-owner` (599d66b1c)
+  resolves exactly this and only this — ~4% of the surface. It is a component, never the answer.
+
+## 8. The next step, and the conviction behind it
+
+**Conviction that the Write-time-stamped design is correct: ~75%** — below the 90% implement bar.
+
+The missing evidence is one pass, and it is drivable without any new judgment: **replay the amended
+classifier (ARGV equality · durable-basename resolution · anchored slash pattern · Write-time
+stamp) against `handoff-emissions.txt` and the gold set, and report the confusion matrix at BOTH
+weightings.** If it clears the 208-emission ADMISSIBLE core with zero false convictions and lifts
+detection materially above the measured 33.6%, conviction goes above the bar and it ships. If it
+still convicts `approval-queue-drain.sh` under any arm, the design is dead regardless of its score.
+
+Do not build the hook before that replay. The first attempt scored 48/60 against labels its own
+author wrote, and the adversarial pass is what found it would strand the operator.
