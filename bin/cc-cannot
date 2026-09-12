@@ -183,8 +183,23 @@ fi
 # ── refutation · scheduler-owned (composes with cc-owner, never duplicates it) ──────────────────
 CC_OWNER="$HOME/.claude/bin/cc-owner"
 [ -x "$CC_OWNER" ] || CC_OWNER="$HOME/Development/claude-infrastructure/bin/cc-owner"
+# A4 APPLIES HERE TOO, AND IT DID NOT USED TO. cc-owner resolves on BASENAME, so it reports
+# `deploy-live.sh` owned by com.claude.deploy-live whatever flags follow. But the scheduler runs
+# `deploy-live.sh --auto`; `deploy-live.sh --force` is the escape hatch that DISCARDS the
+# green-stamp gate, and the gold set rightly calls that the operator's decision. Refuting it told
+# the operator "a launchd agent already does this" about a command no launchd agent ever runs.
+# Measured: every false block in the corpus (6 emissions, 3 distinct) was this one bug.
+# So a scheduler receipt is only good for the invocation the scheduler actually makes: if the
+# handed-over command carries a flag the owner's own command line does not, ABSTAIN.
 if [ -x "$CC_OWNER" ]; then
   if owner="$("$CC_OWNER" "$CMD" 2>/dev/null)" && [ -n "$owner" ]; then
+    _flag_divergence=0
+    for _f in $(printf '%s' "$CMD" | tr ' ' '\n' | grep -E '^--?[a-zA-Z]' || true); do
+      printf '%s' "$owner" | grep -Fq -- "$_f" || _flag_divergence=1
+    done
+    if [ "$_flag_divergence" -eq 1 ]; then
+      unresolved scheduler-flag-divergence "a scheduler runs this script, but NOT with these flags — its receipt does not cover this invocation"
+    fi
     refuted scheduler-owned "$(printf '%s' "$owner" | sed -n '2p' | sed 's/^[[:space:]]*//')"
   fi
 fi

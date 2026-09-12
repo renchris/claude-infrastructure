@@ -107,3 +107,17 @@ setup() { CC="${BATS_TEST_DIRNAME}/../bin/cc-cannot"; }
   run bash "$CC" -- "cc-do 042b5a4dede3"
   [ "$status" -ne 1 ]
 }
+
+@test "A4 on the scheduler arm · a receipt covers only the invocation the scheduler makes" {
+  # com.claude.deploy-live runs `deploy-live.sh --auto`. `--force` is the escape hatch that
+  # DISCARDS the green-stamp gate, and is the operator's decision. cc-owner resolves on basename,
+  # so without this the gate told the operator "a launchd agent already does this" about a command
+  # no launchd agent ever runs. Every false block in the corpus was this one bug; with it, zero.
+  run bash "$CC" -- "bash /Users/chrisren/Development/claude-infrastructure/scripts/deploy-live.sh"
+  [ "$status" -eq 1 ]                       # the plain form IS scheduler-owned
+  printf '%s' "$output" | grep -q "scheduler-owned"
+
+  run bash "$CC" -- "bash ~/Development/claude-infrastructure/scripts/deploy-live.sh --force"
+  [ "$status" -eq 2 ]                       # the escape hatch is NOT covered by that receipt
+  printf '%s' "$output" | grep -q "flag-divergence"
+}
