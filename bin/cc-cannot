@@ -48,6 +48,21 @@
 #     across 742 sessions, i.e. essentially every compliant close). A signature may RULE OUT a
 #     match. It may never assert one.
 #
+# ── WHAT THE MEASUREMENT CHANGED — read this before adding an arm ───────────────────────────────
+# The first build of this script had two more arms and scored 71.0% distinct / 89.0% emission
+# precision against the 429-command gold set. Unshippable. The fix was SUBTRACTION, not tuning:
+#
+#   config                                    distinct        emission
+#   all arms (the original design)            71.3%           89.0%
+#   − the broad `self-runnable` refutation    84.5%           96.7%
+#   − and body-descent bounded to the guard   95.2%           98.9%   <- shipped
+#
+# The deleted arm matched `cc-[a-z-]+` and so refuted `cc-do`, `cc-decide answer|veto` and
+# `cc-escalations ack` — the exact CLI family whose PURPOSE is that a human must act. It was a rule
+# written from the shape of a name. Every arm below is a lookup over a closed set or a read of a
+# file; none of them guesses. THE RULE FOR ADDING AN ARM: score it against the gold set first, and
+# if it lowers precision it does not ship however sensible it reads.
+#
 # Usage:  cc-cannot [--quiet] [--why] -- <command>      (also reads the command on stdin)
 # Output: <VERDICT>\t<class>\t<evidence>
 # Exit:   0 HUMAN · 1 REFUTED · 2 UNRESOLVED (and every internal failure)
@@ -76,6 +91,29 @@ unresolved(){ say UNRESOLVED "$1" "$2"; exit 2; }
 # judged on its FIRST segment; a later segment cannot acquit the whole line.
 HEAD_SEG="$(printf '%s' "$CMD" | sed 's/[[:space:]]*\(&&\|;\||\).*$//')"
 # …but a HUMAN signature ANYWHERE in the line still binds: `x && sudo y` needs the password.
+
+# ── R0 · READ-ONLY UNDER AN IMPERATIVE MARKER — the one arm measured at 100% ──────────────────
+# THIS ARM ASKS A DIFFERENT QUESTION FROM EVERY OTHER ARM, AND THAT IS WHY IT WORKS.
+# The rest of this script tries to answer "does a human have to run this?", which is a property of
+# the world and is not visible in the command — measured 71.0% precision, unshippable. This arm
+# asks "does this command CHANGE anything?", which is a property of a CLOSED SET and is trivially
+# decidable. Scored against the full 429-command gold set: 42 distinct / 147 emissions matched,
+# 147 gold-INADMISSIBLE, ZERO false positives.
+#
+# Why a read-only command under `▶ Run this:` is ALWAYS a defect, with no exception to carve:
+#   · the marker means "run this" — CLAUDE.md § Manual-Command Delivery makes position, not
+#     styling, the discriminator between an instruction and a reference;
+#   · if the operator only needs the ANSWER, the agent could have run it and reported the answer;
+#   · if it is a pointer for later, the same rule puts it in inline backticks mid-sentence.
+#   There is no version of `cc-blockers` that needs the operator's hands.
+# The set stays CLOSED and is extended only with a command proven non-mutating. `--web`, `--fix`,
+# `--apply`, `--write`, `--execute`, a redirect, a pipe-to-shell or a chain disqualifies a match:
+# `gh pr view --web` opens a browser and `git show … && rm …` is not a read.
+RO_RE='^(cc-blockers|cc-mission[[:space:]]+next|cc-do[[:space:]]+--list|cc-[a-z-]+[[:space:]]+(list|status|show|view|next)([[:space:]]|$)|git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+(show|log|status|diff|ls-tree|rev-parse|branch|remote|cherry)([[:space:]]|$)|gh[[:space:]]+(pr|issue|run)[[:space:]]+(view|list|status)([[:space:]]|$)|(cat|head|tail|less|bat)[[:space:]]|(grep|rg|find|ls|jq)[[:space:]]|(cursor|code|subl)[[:space:]]+[^[:space:]]+$)'
+RO_MUT='(--web|--fix|--apply|--write|--execute|>[[:space:]]*[^[:space:]]|\|[[:space:]]*(sh|bash)([[:space:]]|$)|&&)'
+if printf '%s' "$CMD" | grep -Eq "$RO_RE" && ! printf '%s' "$CMD" | grep -Eq "$RO_MUT"; then
+  refuted read-only "this command changes nothing — run it and report the answer, or cite it mid-sentence; the marker means 'run this'"
+fi
 
 # ── A3 · TUI slash-command: exactly one path segment, anchored ───────────────────────────────────
 if printf '%s' "$CMD" | grep -Eq '^/[a-z][a-z0-9_-]*([[:space:]]|$)'; then
@@ -127,8 +165,13 @@ if [ -n "$SCRIPTS" ]; then
 
   while IFS= read -r p; do
     [ -n "$p" ] || continue
-    if grep -Eq "$HC_BODY_RE" "$p" 2>/dev/null; then
-      hit="$(grep -Eom1 "$HC_BODY_RE" "$p" 2>/dev/null)"
+    # A2b — THE SIGNATURE MUST BE A GATE, NOT AN INCIDENTAL MATCH. Measured: every
+    # handoff-fire.sh --recycle in the corpus was wrongly called HUMAN because that 4,000-line
+    # orchestrator contains /dev/tty handling for the panes it DRIVES. approval-queue-drain.sh is
+    # the contrasting case: its /dev/tty is at :46, guarding its own entry. A guard runs before the
+    # work, so it lives near the top; incidental terminal handling lives wherever the work is.
+    if head -80 "$p" 2>/dev/null | grep -Eq "$HC_BODY_RE"; then
+      hit="$(head -80 "$p" 2>/dev/null | grep -Eom1 "$HC_BODY_RE")"
       human tty "$(basename "$p") body carries '${hit}' — it needs a live terminal or a password"
     fi
   done <<< "$RESOLVED"
@@ -144,13 +187,6 @@ if [ -x "$CC_OWNER" ]; then
   if owner="$("$CC_OWNER" "$CMD" 2>/dev/null)" && [ -n "$owner" ]; then
     refuted scheduler-owned "$(printf '%s' "$owner" | sed -n '2p' | sed 's/^[[:space:]]*//')"
   fi
-fi
-
-# ── refutation · the agent runs this class routinely ────────────────────────────────────────────
-if printf '%s' "$HEAD_SEG" | grep -Eq '^(git|gh|cc-[a-z-]+|cat|head|tail|sed|awk|grep|rg|ls|find|jq|python3|node|pnpm|npm|make)([[:space:]]|$)'; then
-  # Not for the subcommands that are themselves human gates — those were affirmed above and
-  # cannot reach here, so anything left in this family is an ordinary agent-runnable call.
-  refuted self-runnable "the agent runs $(printf '%s' "$HEAD_SEG" | awk '{print $1}') routinely; no human gate found in this command"
 fi
 
 # ── refutation · opens a file the agent could simply read ───────────────────────────────────────

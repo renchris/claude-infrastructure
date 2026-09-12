@@ -70,3 +70,40 @@ setup() { CC="${BATS_TEST_DIRNAME}/../bin/cc-cannot"; }
   run bash "$CC" -- "frobnicate --widget 7"
   [ "$status" -eq 2 ]
 }
+
+# ── arms added 2026-09-12 after scoring against the 429-command gold set ────────────────────────
+
+@test "R0 · a READ-ONLY command under an imperative marker is always a defect" {
+  # The one arm measured at 100% precision (42 distinct / 147 emissions, zero false positives).
+  # It asks "does this CHANGE anything" — a closed set — instead of "does a human have to run it",
+  # which is not visible in the command at all.
+  for c in "cc-blockers" "cc-decide list --open" "git log --oneline -5" "cursor docs/OWNER_BRIEF.md"; do
+    run bash "$CC" -- "$c"
+    [ "$status" -eq 1 ]
+    printf '%s' "$output" | grep -q "read-only"
+  done
+}
+
+@test "R0 · a mutating flag or a chain disqualifies the read-only match" {
+  # `gh pr view --web` opens a browser; `git show … && rm …` is not a read.
+  run bash "$CC" -- "gh pr view 1 --repo x/y --web"
+  ! printf '%s' "$output" | grep -q "read-only"
+  run bash "$CC" -- "git show abc123 && rm -rf /tmp/x"
+  ! printf '%s' "$output" | grep -q "read-only"
+}
+
+@test "A2b · the body signature must be a GUARD, not an incidental match" {
+  # approval-queue-drain.sh gates on /dev/tty at :46, before its work → HUMAN.
+  run bash "$CC" -- "bash /tmp/approval-queue-drain.sh"
+  [ "$status" -eq 0 ]
+  # handoff-fire.sh contains /dev/tty handling for the panes it DRIVES, far down the file. Every
+  # `--recycle` in the corpus was wrongly called HUMAN before this bound → must now abstain.
+  run bash "$CC" -- "bash ~/.claude/scripts/handoff-fire.sh --recycle"
+  [ "$status" -eq 2 ]
+}
+
+@test "the cc-* family is NOT blanket self-runnable (the deleted arm's defect)" {
+  # cc-do is the operator's ACTION RUNNER. The removed arm refuted it on the shape of its name.
+  run bash "$CC" -- "cc-do 042b5a4dede3"
+  [ "$status" -ne 1 ]
+}

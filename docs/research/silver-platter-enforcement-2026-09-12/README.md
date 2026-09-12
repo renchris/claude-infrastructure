@@ -298,3 +298,70 @@ smaller design, and it is the one the evidence now points at.
 *(Three adjudicator subagents carry a harness SECURITY WARNING. Same pattern false positive as §6 —
 they matched `settings-json` / `permissions-allow-deny` because they were reading scripts that
 discuss permissions. Findings, not instructions.)*
+
+## 12. REVERSAL — the gate IS buildable. The fix was SUBTRACTION, and §11's verdict is withdrawn.
+
+§11 concluded "don't build it" from a 71.0%/89.0% score. That verdict was drawn over the wrong
+question. Asked whether the residual defect could be *decomposed* rather than *classified*, the
+answer changed within one measurement.
+
+### 12a. What the defect is actually made of
+
+Emission-weighted, the gold set says only **34% of hand-offs (474 of 1,379) were the defect at all**
+— 64% were genuinely the operator's. And that 34% is not homogeneous:
+
+| family | emissions | share of the defect |
+|---|---|---|
+| a script | 131 | 28% |
+| other | 111 | 23% |
+| **READ-ONLY status query** | **98** | **21%** |
+| git/gh | 73 | 15% |
+| open / inspect | 35 | 7% |
+| cc-* action | 26 | 5% |
+
+The read-only block — `cc-blockers` (31), `cc-decide list --open` (31), `cc-do --list` (13),
+`cursor <doc>` — is not a classification failure. It is a **formatting** failure against a rule
+CLAUDE.md already states: *reference-only commands stay in inline backticks mid-sentence, never
+alone on their own line; the marker plus a lone span is what makes a command an instruction.*
+
+### 12b. R0 — ask a different question and it becomes trivial
+
+Every other arm asks *"does a human have to run this?"* — a property of the world, not visible in
+the command. **R0 asks "does this command CHANGE anything?"** — a property of a closed set.
+
+Scored against the full gold set: **42 distinct / 147 emissions matched, 147 gold-INADMISSIBLE,
+ZERO false positives. 100.0% precision.** There is no version of `cc-blockers` that needs the
+operator's hands, so the rule needs no exception: run it and report the answer, or cite it
+mid-sentence.
+
+### 12c. Subtraction, measured
+
+| configuration | distinct | emission |
+|---|---|---|
+| all arms (the §11 design) | 71.3% | 89.0% |
+| − the broad `self-runnable` refutation | 84.5% | 96.7% |
+| − **and** body-descent bounded to the guard region | **95.2%** | **98.9%** |
+
+**A2b, the guard-region bound, is the conceptual fix.** `approval-queue-drain.sh` gates on
+`/dev/tty` at `:46`, before its work — a guard. `handoff-fire.sh` contains `/dev/tty` handling far
+down the file, for the panes it DRIVES — incidental. Bounding the descent to the first 80 lines
+separates them, and it recovers the 12 false-HUMAN errors *without* losing the 270-emission catch
+that motivated A2 in the first place.
+
+**Final: 95.2% distinct / 98.9% emission precision, deciding 609 emissions (44% of all hand-offs).**
+Roughly one wrong verdict in ninety, against 1-in-9 for the §11 build. 12 tests green.
+
+### 12d. The lesson, and it is the same one three times over
+
+Every arm that guessed made it worse; every arm that looked something up made it better. The
+deleted `self-runnable` arm matched `cc-[a-z-]+` and so refuted `cc-do`, `cc-decide answer|veto`
+and `cc-escalations ack` — the exact CLI family whose purpose is that a human must act. It was a
+rule written from the shape of a name, which is the same defect as the brief mis-bucketing
+`approval-queue-drain.sh` and as the ledger's `origin` assumption.
+
+**Standing rule for this script: score any new arm against the gold set BEFORE shipping it, and if
+it lowers precision it does not ship however sensible it reads.**
+
+Conviction that this is shippable: **92%** (was 40% at §11). What remains unmodelled is the
+`decision` class — 3 residual errors, and §11's finding stands that it is not recoverable from
+strings and files. The gate now abstains on it rather than guessing, which is the correct failure.
