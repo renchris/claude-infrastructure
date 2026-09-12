@@ -13,6 +13,7 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   SUT="$REPO/scripts/cloud-lane-liveness.sh"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REFS="$BATS_TEST_TMPDIR/refs"
   export CC_LANE_REFS_CMD="cat '$REFS'"
   export CC_LANE_SELF_BRANCH="main"     # the desk's shape: HEAD is not a fire ref
