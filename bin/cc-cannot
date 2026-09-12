@@ -1,0 +1,160 @@
+#!/bin/bash
+# cc-cannot — three-valued answer to "can only a HUMAN run this command?"
+#
+# WHAT IT IS FOR. An agent about to hand the operator a copy-paste command is making a claim —
+# "I cannot run this" — and until now that claim had no verifier. Every other load-bearing close
+# claim on this machine has one: wrap-ledger will not take a session's word for "landed",
+# completion-assert will not take it for "done", cc-backlog will not take `needs-human` without a
+# conviction number. This is that producer for the hand-off claim.
+#
+# THREE VALUES, NEVER TWO.
+#   HUMAN       an affirmation matched. A human at the keyboard is genuinely required.
+#   REFUTED     a lookup contradicts the claim. Something that is not a human runs this.
+#   UNRESOLVED  no lookup reached it. NOT a soft HUMAN and NOT a soft REFUTED — silence.
+#
+# POLARITY: every failure, every missing dependency, every unreadable file resolves to
+# UNRESOLVED. A false REFUTED nags the operator over a real blocker and, per
+# anti-deference-nudge.sh, "a nagging hook trains the model to route around it". A false HUMAN
+# launders the defect. Ignorance buys neither.
+#
+# ── THE FOUR AMENDMENTS, each answering a defect reproduced against the frozen corpus ──
+#
+# A1  AFFIRM BEFORE REFUTE. Every HUMAN arm runs before every refutation arm. `sudo bash x.sh` is
+#     a different call from the `bash x.sh` a session already ran, and `--apply` is a different
+#     call from `--dry-run`. Without this ordering the corpus's single largest hand-off —
+#     approval-queue-drain.sh, 270 emissions, 20% of everything — is refuted by its own authoring
+#     session's receipt, because the script is DESIGNED to be agent-run first (its no-TTY branch
+#     is how an agent enumerates the queue). The receipt that would convict it is produced by
+#     using it correctly.
+#
+# A2  DURABLE-BASENAME RESOLUTION, BEFORE ANY REFUTATION. The acquitting evidence for a script
+#     lives in its body; the convicting evidence lives in the durable transcript. 74.9% of named
+#     scripts are already deleted from /tmp when the marker is emitted, so decay is ONE-DIRECTIONAL
+#     — age strips acquittals only, and the gate gets more confident as it gets more wrong. When
+#     the literal path is gone, the basename is resolved against a small durable set before any
+#     refutation is allowed to fire. No copy found ⇒ UNRESOLVED, never REFUTED: a missing body
+#     means the acquitting evidence is UNREADABLE, not ABSENT.
+#
+# A3  THE SLASH-COMMAND TEST IS ANCHORED AND IS A REGEX. The prior form was a bash glob,
+#     `/[a-z][a-z0-9_-]*`, in which `*` matches `/` and spaces — so `/usr/bin/env <anything>`
+#     acquitted, a universal one-token bypass wrapper. A TUI slash-command has exactly one path
+#     segment.
+#
+# A4  RECEIPTS REQUIRE ARGV EQUALITY, NEVER A SIGNATURE. Matching on head+subcommand let a prior
+#     read-only `aws amplify list-jobs` license `aws amplify start-job … RELEASE`, turning a read
+#     into a money-spending production deploy; let `gh auth status` refute `gh auth refresh` (a
+#     browser OAuth flow — the genuinely-human case this exists to protect); and let any prior
+#     `git show` refute the sha citation CLAUDE.md mandates in every close (4,147 executions
+#     across 742 sessions, i.e. essentially every compliant close). A signature may RULE OUT a
+#     match. It may never assert one.
+#
+# Usage:  cc-cannot [--quiet] [--why] -- <command>      (also reads the command on stdin)
+# Output: <VERDICT>\t<class>\t<evidence>
+# Exit:   0 HUMAN · 1 REFUTED · 2 UNRESOLVED (and every internal failure)
+set -uo pipefail
+
+QUIET=0
+while [ $# -gt 0 ]; do
+  case "${1:-}" in
+    --quiet) QUIET=1; shift ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+CMD="${*:-}"
+[ -n "$CMD" ] || CMD="$(cat 2>/dev/null || true)"
+CMD="$(printf '%s' "$CMD" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+
+say() { [ "$QUIET" -eq 1 ] || printf '%s\t%s\t%s\n' "$1" "$2" "$3"; }
+human()     { say HUMAN      "$1" "$2"; exit 0; }
+refuted()   { say REFUTED    "$1" "$2"; exit 1; }
+unresolved(){ say UNRESOLVED "$1" "$2"; exit 2; }
+
+[ -n "$CMD" ] && [ "${#CMD}" -le 8192 ] || unresolved empty "no command"
+
+# The executable part: everything before the first unquoted shell operator. A chained command is
+# judged on its FIRST segment; a later segment cannot acquit the whole line.
+HEAD_SEG="$(printf '%s' "$CMD" | sed 's/[[:space:]]*\(&&\|;\||\).*$//')"
+# …but a HUMAN signature ANYWHERE in the line still binds: `x && sudo y` needs the password.
+
+# ── A3 · TUI slash-command: exactly one path segment, anchored ───────────────────────────────────
+if printf '%s' "$CMD" | grep -Eq '^/[a-z][a-z0-9_-]*([[:space:]]|$)'; then
+  human tui "a slash-command; the agent has no keystroke channel to its own composer"
+fi
+
+# ── sudo — but only where a password would actually be demanded ─────────────────────────────────
+# NOTE — THIS ARM DELIBERATELY DOES NOT PROBE. The obvious refinement is `sudo -n true`, to tell a
+# password gate from an existing NOPASSWD rule. It cannot work here and must not be attempted:
+# `Bash(sudo:*)` is a permissions.deny rule on this machine, so the probe is refused before macOS
+# ever evaluates it — it resolves nothing, and measured 2026-09-12 it HANGS this script under that
+# gate. The answer is the same either way: a password prompt and a policy denial are both gates the
+# agent cannot clear. The policy arm is undetermined BY CONSTRUCTION and must not be resolved by
+# the one route that would work — editing our own allowlist — which three independent arms refuse.
+if printf '%s' "$CMD" | grep -Eq '(^|[[:space:]]|\||&|;)sudo([[:space:]]|$)'; then
+  human sudo "sudo — a password prompt or a policy denial; both are gates the agent cannot clear (probe deliberately omitted, see source)"
+fi
+
+# ── physical world ──────────────────────────────────────────────────────────────────────────────
+printf '%s' "$CMD" | grep -Eq '^open[[:space:]]+(tel:|sms:|facetime:|mailto:)' \
+  && human physical "places a call/message through a device app"
+
+# ── interactive credential flows ────────────────────────────────────────────────────────────────
+printf '%s' "$CMD" | grep -Eqi '(^|[[:space:]])(gcloud[[:space:]]+auth[[:space:]]+login|aws[[:space:]]+sso[[:space:]]+login|gh[[:space:]]+auth[[:space:]]+(login|refresh)|op[[:space:]]+signin|/login|claude[[:space:]]+/login)([[:space:]]|$)' \
+  && human login "an interactive credential flow — browser and/or a second factor"
+
+# ── A2 · script-body descent, and it runs BEFORE any refutation (A1) ────────────────────────────
+# Signatures that make a body human-bound. Closed set, extended only with a measured case.
+HC_BODY_RE='/dev/tty|read -s|read -r -s|read .*-p .*</dev/tty|stty -echo|sudo |osascript .*display dialog|security unlock-keychain'
+DURABLE_DIRS=(
+  "$HOME/.claude/autonomy" "$HOME/.claude/scripts" "$HOME/.claude/bin"
+  "$HOME/Development/claude-infrastructure/scripts"
+  "$HOME/Development/claude-infrastructure/bin"
+  "$HOME/Development/claude-infrastructure/migrations"
+)
+SCRIPTS="$(printf '%s' "$CMD" | tr ' ;|&()' '\n' | grep -E '\.(sh|py)$' || true)"
+if [ -n "$SCRIPTS" ]; then
+  RESOLVED=""; MISSING=""
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    p="${s/#\~/$HOME}"
+    if [ -f "$p" ]; then RESOLVED="$RESOLVED$p"$'\n'; continue; fi
+    base="$(basename "$s")"; found=""
+    for d in "${DURABLE_DIRS[@]}"; do
+      [ -f "$d/$base" ] && { found="$d/$base"; break; }
+    done
+    if [ -n "$found" ]; then RESOLVED="$RESOLVED$found"$'\n'; else MISSING="$MISSING$base "; fi
+  done <<< "$SCRIPTS"
+
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    if grep -Eq "$HC_BODY_RE" "$p" 2>/dev/null; then
+      hit="$(grep -Eom1 "$HC_BODY_RE" "$p" 2>/dev/null)"
+      human tty "$(basename "$p") body carries '${hit}' — it needs a live terminal or a password"
+    fi
+  done <<< "$RESOLVED"
+
+  # A2's refusal clause: a body we could not read is UNREADABLE evidence, never absent evidence.
+  [ -n "$MISSING" ] && unresolved script-gone "cannot read ${MISSING%% } — no durable copy; acquitting evidence is unreadable, not absent"
+fi
+
+# ── refutation · scheduler-owned (composes with cc-owner, never duplicates it) ──────────────────
+CC_OWNER="$HOME/.claude/bin/cc-owner"
+[ -x "$CC_OWNER" ] || CC_OWNER="$HOME/Development/claude-infrastructure/bin/cc-owner"
+if [ -x "$CC_OWNER" ]; then
+  if owner="$("$CC_OWNER" "$CMD" 2>/dev/null)" && [ -n "$owner" ]; then
+    refuted scheduler-owned "$(printf '%s' "$owner" | sed -n '2p' | sed 's/^[[:space:]]*//')"
+  fi
+fi
+
+# ── refutation · the agent runs this class routinely ────────────────────────────────────────────
+if printf '%s' "$HEAD_SEG" | grep -Eq '^(git|gh|cc-[a-z-]+|cat|head|tail|sed|awk|grep|rg|ls|find|jq|python3|node|pnpm|npm|make)([[:space:]]|$)'; then
+  # Not for the subcommands that are themselves human gates — those were affirmed above and
+  # cannot reach here, so anything left in this family is an ordinary agent-runnable call.
+  refuted self-runnable "the agent runs $(printf '%s' "$HEAD_SEG" | awk '{print $1}') routinely; no human gate found in this command"
+fi
+
+# ── refutation · opens a file the agent could simply read ───────────────────────────────────────
+printf '%s' "$HEAD_SEG" | grep -Eq '^(cursor|code|subl|vim|nano)[[:space:]]+[^[:space:]]+$' \
+  && refuted readable "opens a file in an editor; the agent can read that file directly"
+
+unresolved no-lookup "no affirmation and no refutation reached this command"
