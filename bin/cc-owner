@@ -1,0 +1,104 @@
+#!/bin/bash
+# cc-owner — "before you hand a command to the operator, ask who ALREADY runs it."
+#
+# THE DEFECT THIS ANSWERS. A session that is refused a command infers three things and only the
+# first is justified: (1) I cannot run this, (2) therefore only a human can, (3) therefore I hand
+# it over. Steps 2 and 3 skip the question this script answers. Measured 2026-09-11 over 2,690
+# transcripts: 1,352 `▶ Run this:` emissions, 693 of which name a script, and 55 of those named a
+# command a SCHEDULER on this box was already running — `scripts/deploy-live.sh` alone 23 times,
+# every one of them redundant with the `com.claude.deploy-live` launchd agent that runs it every
+# 600s. The operator's words: "This happens a lot. Almost every time I feel."
+#
+# WHY THIS IS A LOOKUP AND NOT A RULE. Every other load-bearing close claim on this machine has a
+# producer that can refuse it: wrap-ledger.sh will not take a session's word for "landed",
+# completion-assert will not take it for "done", cc-backlog add will not take `needs-human` without
+# a conviction number. `▶ Run this:` was the one claim with no verifier — free text, asserted by
+# the same model that made the faulty inference. The owner set is FINITE and ENUMERABLE (52 launchd
+# agents + crontab + 472 registered hooks as of 2026-09-11), so this is a deterministic lookup over
+# a closed set, not a heuristic.
+#
+# POLARITY: FAILS OPEN, DELIBERATELY. "No owner found" is NOT proof a human is needed — it is the
+# absence of a finding, and this script says so. It can only ever tell you that a command IS owned.
+# An alarm that fired on its own ignorance would be worse than none.
+#
+# SCOPE, STATED SO IT IS NOT OVERSOLD: resolution is keyed on the SCRIPT a command names. 659 of
+# the 1,352 measured emissions (48.7%) name no script at all — `/deploy`, `cc-blockers`,
+# `open tel:…` — and this script is silent on every one of them. It answers "does something else
+# already run this", which is a SUBSET of "is a human needed", not a synonym for it.
+#
+# Usage:  cc-owner "<command>"        → prints owners, rc 0 if OWNED, rc 1 if none found
+#         cc-owner --quiet "<cmd>"    → rc only
+set -uo pipefail
+
+QUIET=0
+[ "${1:-}" = "--quiet" ] && { QUIET=1; shift; }
+CMD="${*:-}"
+[ -n "$CMD" ] || { echo "cc-owner: usage: cc-owner [--quiet] \"<command>\"" >&2; exit 2; }
+
+# ── the command's resolvable identity: the script basenames it names ──
+# Basename, not full path: the same script is handed over as an absolute path, a ~-path and a
+# repo-relative path in the measured corpus, and a scheduler names it a fourth way.
+TOKENS="$(printf '%s' "$CMD" \
+  | tr " ;|&()'\"" '\n' \
+  | grep -Eo '[^/]+\.(sh|py|ts|js)$' \
+  | sort -u)"
+
+[ -n "$TOKENS" ] || {
+  [ "$QUIET" -eq 1 ] || echo "cc-owner: no script named in this command — cannot resolve (this is NOT 'unowned')"
+  exit 1
+}
+
+FOUND=""
+emit() { FOUND="${FOUND}$1"$'\n'; }
+
+# ── surface 1: launchd agents ──
+for p in "$HOME"/Library/LaunchAgents/*.plist; do
+  [ -f "$p" ] || continue
+  txt="$(/usr/libexec/PlistBuddy -c Print "$p" 2>/dev/null)" || continue
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    case "$txt" in *"$t"*)
+      label="$(basename "$p" .plist)"
+      state="unloaded"
+      launchctl list 2>/dev/null | grep -q "[[:space:]]$label\$" && state="LOADED"
+      every="$(printf '%s' "$txt" | sed -n 's/.*StartInterval = \([0-9]*\).*/\1/p' | head -1)"
+      [ -n "$every" ] && every=" every ${every}s"
+      emit "launchd:$label ($state$every) — names $t"
+      break ;;
+    esac
+  done <<< "$TOKENS"
+done
+
+# ── surface 2: crontab ──
+CRON="$(crontab -l 2>/dev/null || true)"
+while IFS= read -r t; do
+  [ -n "$t" ] || continue
+  case "$CRON" in *"$t"*) emit "crontab — names $t" ;; esac
+done <<< "$TOKENS"
+
+# ── surface 3: registered hooks ──
+while IFS= read -r line; do
+  [ -n "$line" ] && emit "$line"
+done < <(python3 - "$TOKENS" <<'PY' 2>/dev/null
+import json, glob, sys
+toks = [t for t in sys.argv[1].split("\n") if t]
+seen = set()
+for f in glob.glob("/Users/chrisren/.claude*/settings.json"):
+    try: d = json.load(open(f))
+    except Exception: continue
+    for ev, groups in (d.get("hooks") or {}).items():
+        for g in groups:
+            for h in g.get("hooks", []):
+                c = h.get("command", "") or ""
+                for t in toks:
+                    if t in c and (ev, t) not in seen:
+                        seen.add((ev, t)); print(f"hook:{ev} — names {t}")
+PY
+)
+
+if [ -n "${FOUND//[$'\n' ]/}" ]; then
+  [ "$QUIET" -eq 1 ] || { echo "OWNED — something already runs this; do NOT hand it to the operator:"; printf '%s' "$FOUND" | sed '/^$/d;s/^/  /'; }
+  exit 0
+fi
+[ "$QUIET" -eq 1 ] || echo "cc-owner: no scheduler on this box names $(printf '%s' "$TOKENS" | tr '\n' ' ')— NOT proof a human is needed, only that nothing else runs it"
+exit 1
