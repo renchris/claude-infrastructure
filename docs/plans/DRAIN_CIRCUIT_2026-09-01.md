@@ -915,6 +915,98 @@ so it resolves on its own; it just cannot be *driven* from this side. `deploy-li
   (`git merge-base --is-ancestor … origin/main` → 0), on trunk 2026-09-10T10:38:41−05:00 — i.e. W9's
   own work is intact and verified; what is retracted is one prediction, marked refuted IN PLACE above.
 
+- **2026-09-12 — W11 (cloud VM, off-box): W10's instrument gap is CLOSED — the fire arm now has a
+  criterion, a threshold and a suite, and the statistic is the GAP, not the rate.** Full record:
+  `docs/research/drain-circuit-fire-lane-instrument-2026-09-12.md`.
+  **(0) Both controls re-run, not inherited** (a pre-existing state is a claim until measured): refs
+  dated ≤09-07 read **426** — 425 at W9, 426 at W10, 426 now, i.e. **monotone**, as a never-deleting
+  population must be — and every `claude/*` head is still a well-formed fire ref, so the lane has not
+  been renamed. 445 fire refs total.
+  **(1) 🚨 W10's headline number rotted in ONE DAY, and that is the finding.** The identical
+  expression re-run 24 h later: 09-11 alone delivered **13 fires**, more than W10's entire four-day
+  window. 09-07…09-10 still reads **2.50/day** (W10 reproduced exactly); 09-07…09-11 reads **4.60/day**
+  — **+84 % in a day**. W10 predicted this of itself. It is the third instance of one error class in
+  this plan and the first caught in advance: W9 read ~25/day off the 09-03/09-04 burst, 2.50/day is a
+  four-day lull read the same way, and **any ceiling derived from an observed rate inherits the rot of
+  the rate it came from.**
+  **(2) Built — `scripts/cloud-lane-liveness.sh`**, ref-derived, store-free, identical on the desk and
+  on a VM. **The rate cannot express the fault and the gap can**: W10's window reads 2.50/day and
+  *contains* a 35.78 h silence and a zero day; both come from the same seven numbers and only one
+  survives the mean. So the rate is REPORTED (W2's add-don't-redefine) and the VERDICT is the gap —
+  reading rate as liveness would be §1.5's defect in its **fourth** costume, after commits-for-closure,
+  pile-size-for-disposition, and W10 §4's trunk-volume-for-lane-liveness. **The OPEN gap is the verdict
+  arm** (a stall in progress has no closing endpoint, so max-gap-between-fires is structurally blind to
+  the live failure); closed gaps are reported as history and never charged, or the 58.76 h silence that
+  ended five days ago would hold the gate red forever — a gate with no path to green.
+  **(3) 🚨 The reader can be its own subject.** Run from a cloud VM the script's own boot-ping branch
+  IS the newest fire ref, so the live arm could never trip — firing a session TO DIAGNOSE a stalled
+  lane would be the act that makes the lane read healthy (`argv-census-must-not-carry-its-pattern-in-argv`
+  in a different medium). The ref naming the current branch is excluded and the exclusion is NAMED in
+  the output; self-limiting, since on the desk HEAD is never a fire ref. Measured: 445 → 444, and the
+  reported gap is to the *previous* session's fire, not to my own push four minutes earlier.
+  **(4) Every UNKNOWN arm ranks ABOVE the compare, and the asymmetry is the reason** — a census that
+  cannot be trusted reports a QUIET lane, never a busy one, so a fall-through would mint STALLED out of
+  an instrument failure. Four arms: the `ls-remote` failed (*cannot look ≠ nothing found*), a malformed
+  `claude/*` ref (§1.1's scar), the ref population SHRANK below its pinned floor (a deleted branch
+  makes an absent date an artifact), nothing left to measure from. UNKNOWN nulls **every** numeric
+  field — a reading through a sensor that could not run is not a smaller reading, it is no reading.
+  **(5) The ceiling is 24 h from the PLAN'S OWN NAME, not from a burst** — a lane that is "24/7" and
+  has not fired in a day has stalled by its own definition. Polarity measured rather than hoped:
+  trips on W9's **58.76 h** deadlock (recomputed from ref names by a tool told nothing about it — the
+  positive control for the whole census) and on W10's 31.14 h and 35.78 h, silent across every interval
+  since 09-10T12:31Z (max 6.33 h).
+  **(6) Wired, §1.6 constraint intact.** `scripts/cloud-return-lane.sh` gains a §0 journalling a
+  `cloud-fire-gap` row per tick. **The observer does not share a failure mode with its subject** — the
+  fire lane is reached by the *dispatcher*, this lane is spawned by the *sweep*, so it stays up exactly
+  when the subject goes down. It runs FIRST because it depends on nothing the passes below produce:
+  everything under the 5,400 s return bound is reachable only via "a killed child ends the command, not
+  the script", and a read needing no such argument belongs where the argument is not needed
+  (inner-bound-starves-the-tail avoided by construction, not by measurement). Absent is `null`, never a
+  zeroed reading; a cut read is `jq -e .`-validated first, since one malformed value aborts every
+  `jq -rs` slurp of the journal.
+  **Proof:** cloud-lane-liveness **17/17** · cloud-return-lane 14 → **19/19** · **twelve mutants**, each
+  reddening a PREDICTED case set, subject restored byte-identical (`cmp`: IDENTICAL), comment-only
+  controls killing nothing in both files. **Three of the first eight predictions were WRONG and each was
+  a finding** — M2 left case 6 alive because it credited a cure it never ran (it passed on the
+  no-fire-refs arm too; it now asserts the REASON), M3 as first written killed six cases and therefore
+  attributed nothing, and M5/M6 also kill `--selftest`, correctly, because the selftest is an
+  independent second guard on the same arms. A vacuous assertion of my own died in the same pass: in
+  jq, `A and .elapsed_s | type != "string"` pipes the WHOLE conjunction into `type` and is
+  unconditionally true. **Not mine, attributed by A/B against a detached worktree at `origin/main`:**
+  `bats-assert-liveness` reds on exactly `{3,4,5,14,21,36}` in BOTH arms (its own case 3 is the CONTROL
+  naming the bash 3.2 grid this Linux VM lacks); `unattended-path-lint` byte-identical in both arms but
+  for one checkout path. kill-guard 35/35 · shim-parity 28/28 · testname-eval 666 suites · clean.
+  ⚠️ **NOT shellcheck-verified** — absent on the VM; the desk's land gate owns that arm.
+  **(7) Hygiene trap found while reproducing W10's cross-lane table.** Its trunk column (09-08 130,
+  09-09 152, 09-10 133) reproduces only on the **UTC** day boundary; on the committer's own −05:00
+  offset the same commits give 152/140/105 — up to 28 commits moved and the peak shifts from 09-09 to
+  09-08. The fire census is FORCED to UTC (ref names carry a `Z`), a `git log` date is whatever basis
+  you ask for, and nothing made that explicit. W10 used UTC for both and is correct; a reader
+  re-deriving with a default `--date=short` gets the other table and concludes the two sessions
+  disagree about trunk. **A cross-lane comparison is sound only if both lanes share a day boundary.**
+  **Left open ON PURPOSE, with the reason:** the instrument does NOT explain the rate and must not be
+  read as claiming to — W10's (a) drained backlog vs (b) operator-present dispatcher still needs a
+  store read only the desk can do, and 09-11's burst structure (13 fires clustered at 04:39–04:40,
+  07:49–08:42, 16:31–16:35) still leans to (b) as evidence, not proof. **W9's own falsifier remains
+  UNRUN** — `sum(census.landed)/sum(census.retired) > 25 %` needs the `cloud-retire` IDL rows on the
+  operator box; the typed census that makes it runnable is on trunk and content-verified, only the
+  store is out of reach. **The LAND arm was not instrumented, deliberately** — it is the arm W10
+  CONFIRMED, its instrument is described in W10 §3.1 (subject-on-trunk; the desk lander replays, so
+  ancestry and `git cherry` lie), and it costs a fetch per branch rather than one `ls-remote`. **The
+  `cloud-fire-gap` rows have no reader yet** — whether a STALLED reading should page, and through which
+  existing surface, is an operator-box question (C10) left to the desk; `--assert` (1 = STALLED,
+  3 = UNKNOWN) is the seam for it.
+  ⚠️ **Dispatcher vintage:** brief blob `9109de61…` against `origin/main`'s `27c461a5…` — **DIFFERENT**.
+  Sharper than W9's and W10's identical notes because it is now a SERIES: `9109de61…` is the *same blob
+  that fired W10 a day earlier*, while trunk's copy changed twice in between (`5a983031`, `59270aae`)
+  and stood at `e61bcbfc…` when W10 read it — the live dispatcher has been behind through at least two
+  waves while trunk moved under it. A deploy-layer convergence fact, not a defect here; *landed is not
+  live*, and consistent with W10 §3.3's measured 17–96 h return latency.
+  **Cure sha asserted:** W9's `140c2889b5ff09597b8b151b0d5f0f1dc908f109` is an ancestor of `origin/main`
+  (rc 0) and W10 landed as `44a18513`; this checkout is trunk exactly
+  (`git rev-list --count HEAD..origin/main` = 0 after `--unshallow`), so every file read here is
+  trunk's own copy and not a stale horizon.
+
 ---
 
 ## 3e. THE SIGKILL IS ATTRIBUTED — `timeout` kills itself (W6, 2026-09-03)
