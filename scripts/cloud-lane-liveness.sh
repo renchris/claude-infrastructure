@@ -222,8 +222,19 @@ case "$malformed" in ''|*[!0-9]*) malformed=0 ;; esac   # `wc`/`grep -c` pad on 
 [ -n "$names" ] || malformed=0                          # no rows at all is a sensor story, not a rename
 
 # SELF-EXCLUSION. Drop the ref naming the branch we are standing on, and only that one.
+#
+# `grep -xF … >/dev/null` and NOT `grep -qxF`: under `pipefail` an early-exiting consumer SIGPIPEs
+# its producer, and the pipeline then reports the PRODUCER's death — so the condition reads FALSE on
+# a MATCH, which here would silently restore the exact bug the self-exclusion exists to prevent. It
+# is latent rather than absent today only because `$stamps` (444 refs, 15,983 B) still fits the 64 KB
+# pipe buffer, so `printf` completes before `grep -q` can kill it. Measured by bisection on this box,
+# matching the FIRST line so the consumer exits as early as it can: rc 0 up to 1,811 refs, rc 141
+# (128+SIGPIPE) from **1,812 refs / 65,231 B** — while the drained form returns rc 0 at every size
+# tried, to 4,000. So it inverts at ~4x the current pile, i.e. precisely as the ref population this
+# script exists to watch grows, which is the worst possible schedule for it. Draining costs one full
+# read of a list already in memory.
 excluded=""
-if [ -n "$self" ] && printf '%s\n' "$stamps" | grep -qxF "$self"; then
+if [ -n "$self" ] && printf '%s\n' "$stamps" | grep -xF "$self" >/dev/null; then
   excluded="$self"
   stamps="$(printf '%s\n' "$stamps" | grep -vxF "$self" || true)"
 fi
