@@ -178,7 +178,7 @@
 #   writes are its own memo under TMPDIR (below) — which is why the live-layer read never fetches
 #   (see compute_live_layer).
 #
-# Env seams (tests): WRAP_TRUNK · WRAP_DOD_DIR · WRAP_DOD_FILE · WRAP_GATE_GREEN ·
+# Env seams (tests): WRAP_TRUNK (the repo-local, non-test seam is `git config claude.trunk`) · WRAP_DOD_DIR · WRAP_DOD_FILE · WRAP_GATE_GREEN ·
 #                    WRAP_SESSION_ID · CC_BACKLOG_BIN · CC_DECIDE_BIN · WRAP_LIVE_REPO ·
 #                    WRAP_LIVE_BUDGET_COMMITS · WRAP_LIVE_BUDGET_MIN · CC_MIGRATIONS_STATE ·
 #                    WRAP_BACKLOG_TIMEOUT_S · WRAP_DECIDE_TIMEOUT_S · WRAP_TRANSCRIPT ·
@@ -458,9 +458,37 @@ die_notrepo() {
 command -v git >/dev/null 2>&1 || { printf 'wrap-ledger: git not found.\n' >&2; exit 3; }
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die_notrepo
 
-# ── Trunk ref: explicit override → origin/HEAD → origin/main → origin/master → none ──
+# ── Trunk ref: explicit override → git config claude.trunk → origin/HEAD → origin/main → origin/master → none ──
 TRUNK="${WRAP_TRUNK:-}"
 if [ -z "$TRUNK" ]; then
+  # A REPO WHOSE TRUNK IS NOT ON `origin` HAS NO OTHER WAY TO SAY SO, and the ladder below can only
+  # ever name an `origin` ref. That is not exotic: a FORK of someone else's project keeps `origin`
+  # pointed at the upstream it can never push to, and lands on its own remote instead. Measured
+  # 2026-09-11 in ~/Development/voiceink — origin=Beingpax/VoiceInk (upstream), real trunk
+  # github/main-2.0, `rev-list --left-right --count github/main-2.0...HEAD` = 0 0 — where this
+  # ledger read AHEAD=11 UNLANDED=1 RUNG=📦 over work that was fully landed, and completion-assert
+  # spent its whole 3-assert budget at every close demanding a /ship that would have pushed to a
+  # third party's repository. A permanent false 📦 is the mirror of the false ✅ the rungs below
+  # were written against: same defect, opposite polarity, and it trains the operator to read the
+  # gate as noise.
+  # `git config` is the right store rather than a tracked file: it lives in .git/config, so it is
+  # per-clone and INVISIBLE to a diff against the upstream the fork tracks — a tracked
+  # `.claude/trunk` would show up in every PR back to that upstream.
+  # The value is a ref name (`github/main-2.0`), not a remote. It is verified by the same
+  # `rev-parse --verify` below as every other rung, so a stale or misspelled value falls through to
+  # the ladder rather than blanking TRUNK. A value that resolves but names the WRONG ref can still
+  # manufacture a false ✅ — that risk is identical to WRAP_TRUNK's and is why this is a deliberate
+  # per-repo human write, never inferred from the remote set.
+  # VERIFIED BEFORE IT IS ACCEPTED, and that is not belt-and-braces — it is the 7bc4b4e5 defect
+  # again. A non-empty value short-circuits every `[ -n "$TRUNK" ] ||` rung below as "already
+  # resolved", and the final --verify then blanks it ⇒ TRUNK=none on a repo with a perfectly good
+  # origin/main. A stale value (renamed branch, removed remote) must fall THROUGH to the ladder,
+  # never collapse it.
+  _wl_cfg_trunk="$(git config --get claude.trunk 2>/dev/null || true)"
+  if [ -n "$_wl_cfg_trunk" ] && git rev-parse --verify -q "$_wl_cfg_trunk" >/dev/null 2>&1; then
+    TRUNK="$_wl_cfg_trunk"
+  fi
+  unset _wl_cfg_trunk
   # `git rev-parse --abbrev-ref origin/HEAD` PRINTS "origin/HEAD" ON STDOUT EVEN WHEN IT FAILS
   # fatally — rev-parse echoes the argument back before erroring. With `|| true` swallowing the rc,
   # TRUNK was assigned that bogus ref, and the `[ -n "$TRUNK" ]` guards below then SKIPPED the
@@ -472,7 +500,7 @@ if [ -z "$TRUNK" ]; then
   # Measured 2026-08-01: 66 of 436 clones on this machine have no refs/remotes/origin/HEAD (cloning
   # from a bare/mirror never sets it), so this was live rather than theoretical.
   # `symbolic-ref -q` is the probe that actually answers the question — it prints NOTHING on failure.
-  TRUNK="$(git symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null || true)"
+  [ -n "$TRUNK" ] || TRUNK="$(git symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null || true)"
   [ -n "$TRUNK" ] || { git rev-parse --verify -q origin/main >/dev/null 2>&1 && TRUNK="origin/main"; }
   [ -n "$TRUNK" ] || { git rev-parse --verify -q origin/master >/dev/null 2>&1 && TRUNK="origin/master"; }
 fi

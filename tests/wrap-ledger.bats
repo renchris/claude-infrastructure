@@ -2049,6 +2049,42 @@ missing_from_ladder() {
   [ "$(field "$output" TRUNK)" = "origin/main" ]
 }
 
+@test "trunk ladder: git config claude.trunk names a trunk that is NOT on origin (the fork case)" {
+  # A FORK keeps `origin` pointed at the upstream it can never push to and lands on its own remote.
+  # Every rung below the override can only name an `origin` ref, so such a repo read UNLANDED=1
+  # forever over work that was fully landed — a permanent false 📦, the mirror of the false ✅ the
+  # rungs above were written against. Measured 2026-09-11 in ~/Development/voiceink.
+  unset WRAP_TRUNK
+  git remote add fork "$(git rev-parse --git-dir)"   # a second remote, no network
+  git update-ref refs/remotes/fork/trunk HEAD        # …carrying the CURRENT commit
+  echo landed-elsewhere > f.txt; git add f.txt; git commit -q -m "work the fork has, origin does not"
+  git update-ref refs/remotes/fork/trunk HEAD        # fork/trunk keeps up; origin/main does not
+
+  # Control: without the config the ladder falls to origin/main and reports the false 📦.
+  run bash "$LEDGER" --machine
+  [ "$(field "$output" TRUNK)" = "origin/main" ]
+  [ "$(field "$output" UNLANDED)" = "1" ]
+
+  git config claude.trunk fork/trunk
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" TRUNK)" = "fork/trunk" ]
+  [ "$(field "$output" AHEAD)" = "0" ]
+  [ "$(field "$output" UNLANDED)" = "0" ]
+}
+
+@test "trunk ladder: an UNRESOLVABLE claude.trunk falls through to the ladder, never blanks TRUNK" {
+  # The value is a human write and can go stale (a renamed branch, a removed remote). It must not
+  # short-circuit the ladder into TRUNK=none, which is the silent "found no trunk" state that reads
+  # as landed.
+  unset WRAP_TRUNK
+  git config claude.trunk fork/does-not-exist
+  run bash "$LEDGER" --machine
+  [ "$status" -eq 0 ]
+  [ "$(field "$output" TRUNK)" = "origin/main" ]
+  ! printf '%s' "$output" | grep -q "^TRUNK=none"
+}
+
 @test "no trunk resolves at all ⇒ 🔧 landing UNPROVEN, never ✅ 'Clean & landed'" {
   # With no trunk, UNLANDED=0 is a DEFAULT and not a measurement. This rung used to sit BELOW the
   # absent-DoD arm, whose readout opens "✅ Clean & landed" — so the abstain was shadowed on exactly
