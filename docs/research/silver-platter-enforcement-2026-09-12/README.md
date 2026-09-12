@@ -154,3 +154,86 @@ this one.
 2026-09-11 and 2026-09-12 snapshots (max per command, never sum), **1,376 emissions / 425 distinct
 commands**. It is strictly larger than any single scan can ever be again: one command in it has
 already been GC'd out of the live corpus. Score against this file, not against a fresh scan.
+
+## 10. THE REPLAY RAN. The design is NOT shippable, and the error taxonomy is two arms.
+
+Built `bin/cc-cannot` with all four amendments (fd74695be), built the gold set that §1 cited but
+never emitted, and scored one against the other. 8 unit tests green; every reproduced defect from
+§4 now resolves correctly. That was not enough.
+
+### 10a. The gold set now exists, and it is double-labelled
+
+425 commands, two independent labellers each, no sight of the other's answers.
+
+| | |
+|---|---|
+| commands with two independent labels | 420 |
+| **AGREED** | **363 (86.4%)** |
+| DISAGREED | 57 (13.6%) |
+| labeller A marginals | ADMISSIBLE 53% · INADMISSIBLE 43% · UNKNOWN 4% |
+| labeller B marginals | ADMISSIBLE 49% · INADMISSIBLE 43% · UNKNOWN 7% |
+| labels where the agent actually opened a file | 430 of 840 (51%) |
+
+Two independent readers land at ~50% ADMISSIBLE / ~43% INADMISSIBLE, which **corroborates §1's
+56.7/40.2 and buries the brief's 15.4%** for good. Three independent labellings now agree the
+original bucket-count was the outlier.
+
+**86.4% is the practical ceiling for ANY classifier here, and the disagreements say why.** They are
+not sloppiness — they concentrate on one axis, `decision` vs `permission-gated`: A reads
+`CONFIRM=1 bash …activate.sh`, `launchctl bootout …`, `npm i @anthropic-ai/claude-code@…` as *an
+irreversible act that is the operator's*, B reads the same string as *a settings rule away from
+agent-runnable*. Both are defensible. **That 13.6% is a VALUE question, not a fact question, and no
+lookup resolves it** — which is the strongest argument in this whole file for `UNRESOLVED` being a
+first-class output rather than a soft failure.
+
+### 10b. Scored against the 363 agreed commands
+
+| gold | predicted | n | |
+|---|---|---|---|
+| HUMAN | UNRESOLVED | 130 | abstain |
+| REFUTED | UNRESOLVED | 83 | abstain |
+| REFUTED | REFUTED | 68 | ok |
+| HUMAN | HUMAN | 31 | ok |
+| **HUMAN** | **REFUTED** | **30** | **WRONG** |
+| UNRESOLVED | UNRESOLVED | 11 | abstain |
+| **REFUTED** | **HUMAN** | **10** | **WRONG** |
+
+**Decides 139 of 363 (38%). Precision when it speaks: 99/139 = 71.2%.** A gate that is wrong
+better than one time in four cannot be wired to anything — per `anti-deference-nudge.sh`, a hook
+that nags wrongly trains the model to route around it.
+
+### 10c. Both error families are the SAME defect this project exists to correct
+
+**Family 1 — 30 of 40 errors: the `self-runnable` arm eats the operator-action CLIs.** The arm
+matches `cc-[a-z-]+` and refutes it. But `cc-do <id>` IS the operator's action runner — the tool
+whose entire purpose is running steps only the operator may run — and `cc-decide answer|veto`
+records an operator ruling, and `cc-escalations ack` is an operator acknowledgement. The classifier
+refuted the exact CLI family that MEANS "a human must act". Written from the shape of the name
+(`cc-*` is our tooling, therefore agent-runnable) without reading what the tools do.
+
+**Family 2 — 10 of 40: A2's body descent conflates "the script touches a tty" with "this
+invocation needs a human".** Every `handoff-fire.sh --recycle` / `self-close` was called HUMAN
+because that orchestrator contains `/dev/tty` handling for the panes it drives. It does not need an
+operator; it drives terminals on the agent's behalf. Contrast `approval-queue-drain.sh`, where the
+`/dev/tty` use is a HARD GATE on its own entry and exits without one. **A signature's PRESENCE in a
+body is not its ROLE.** A2 was right that the body is where the evidence lives and right to resolve
+the durable copy; it was wrong to treat any match as decisive.
+
+**And a whole class has no arm at all:** `decision` — `git reset --hard origin/main`,
+`pnpm release:fly --iad`, `pnpm invite:admin --execute`. Irreversible or money-spending, gold-labelled
+ADMISSIBLE by both readers, and this classifier refutes them because they look like ordinary tooling.
+
+### 10d. What that means
+
+Both families are a rule written from a NAME rather than from what the thing DOES — the same defect
+as the brief's mis-bucketing of `approval-queue-drain.sh`, and as the ledger's `origin` assumption.
+Fixing them is not a tuning pass: Family 1 needs a per-tool ROLE declaration the tools themselves
+own, and Family 2 needs the body descent to distinguish a guard from an incidental match. Neither
+is a lookup over a closed set today.
+
+**Conviction that a shippable version exists on this architecture: 55%,** down from 75% before the
+replay, because the measurement found a class (`decision`) the design never modelled and an
+arm whose premise is wrong rather than mistuned. The next real question is not "how do we fix these
+two arms" but "does a string-and-file classifier reach a useful precision at all, or does the
+verdict have to come from the tool being invoked declaring its own class?" That is answerable, and
+it is the next pass.
