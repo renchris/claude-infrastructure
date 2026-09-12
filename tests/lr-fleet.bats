@@ -335,3 +335,62 @@ assert r["disposition"]=="NO-PANE", r
 assert r["pid"]=="-", r
 '
 }
+
+# ─── 2026-09-12 · four defects measured during a live two-pane recovery ───────────────────────
+# The census RENDERS ${sid:0:8} and --one/--mark REJECTED that exact string, so the operator had to
+# round-trip through `--locate --json | jq` to recover a full uuid. An identifier a tool prints must
+# be one it accepts. (Family: fixture-identifier-shape-collapses-two-spaces — two identifier spaces,
+# one of them display-only.)
+@test "D8: --one accepts the 8-char sid the census PRINTS, and says what it resolved to" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  run bash "$FLEET" --one "${SID:0:8}" --target next3 --source-pane 616
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"resolves to $SID"* ]] || { echo "$output"; false; }
+  grep -q -- "--sid $SID " "$LRH_LOG" || { cat "$LRH_LOG"; false; }
+}
+
+@test "D8: --one REFUSES an ambiguous prefix rather than picking one — a wrong recovery is unrecoverable" {
+  a="abcd1234-0000-4000-8000-000000000001"; b="abcd1234-0000-4000-8000-000000000002"
+  blocked_tx "$SEC" "$a"; blocked_tx "$SEC" "$b"
+  run bash "$FLEET" --one abcd1234 --target next3
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *AMBIGUOUS* ]] || { echo "$output"; false; }
+  [ ! -s "$LRH_LOG" ] || { cat "$LRH_LOG"; false; }
+}
+
+# A reaped worktree cannot host a resume. The pre-fix --recover offered these for recovery, and the
+# spawn would have died in a missing directory.
+@test "D8: a NO-PANE session whose cwd was reaped is CWD-GONE and is never handed to lr-handoff" {
+  blocked_tx "$SEC" "$SID"
+  gone="$BATS_TEST_TMPDIR/reaped-worktree"
+  sed -i '' "s#\"cwd\":\"$CWD\"#\"cwd\":\"$gone\"#" "$SEC/projects/$SLUG/$SID.jsonl"
+  run bash "$FLEET" --locate
+  [[ "$output" == *"52e35019"*"CWD-GONE"* ]] || { echo "$output"; false; }
+  run bash "$FLEET" --recover
+  [[ "$output" == *"CWD-GONE"* ]] || { echo "$output"; false; }
+  [ ! -s "$LRH_LOG" ] || { cat "$LRH_LOG"; false; }
+}
+
+# 20 teammate rows made `--recover` report PARTIAL on every possible run: a verdict that cannot be
+# COMPLETE carries no information (memory: alarm-polarity-and-attention-budget). A teammate is
+# lead-owned BY DESIGN — nothing is owed by anyone.
+@test "D8: skips that are owed NOTHING do not read as gaps — a teammate-only census is COMPLETE" {
+  tm="9b9b9b9b-0000-4000-8000-000000000002"; blocked_tx "$SEC" "$tm"
+  sed -i '' '1s/{"type":"user",/{"type":"user","agentName":"w1",/' "$SEC/projects/$SLUG/$tm.jsonl"
+  run bash "$FLEET" --recover
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"RECOVERY COMPLETE"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"1 not owed"* ]] || { echo "$output"; false; }
+}
+
+# CONTROL for the case above — the fix must not turn every skip into a non-gap. A DUPLICATE is a
+# REAL gap (two live writers) and must still force PARTIAL, sitting beside a by-design teammate.
+@test "D8 CONTROL: a genuine gap still reports PARTIAL even when a by-design skip sits beside it" {
+  tm="9b9b9b9b-0000-4000-8000-000000000002"; blocked_tx "$SEC" "$tm"
+  sed -i '' '1s/{"type":"user",/{"type":"user","agentName":"w1",/' "$SEC/projects/$SLUG/$tm.jsonl"
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"; row 617 "$SID"
+  run bash "$FLEET" --recover
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"RECOVERY PARTIAL — 1 named gap(s)"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"1 not owed"* ]] || { echo "$output"; false; }
+}

@@ -43,6 +43,28 @@ for _lf_am in "${CC_ACCOUNT_MAP:-}" "$LR/../../lib/account-map.generated.sh" "$H
   # shellcheck disable=SC1090
   [ -n "$_lf_am" ] && [ -f "$_lf_am" ] && { . "$_lf_am"; break; }
 done
+# Resolve a sid PREFIX to the one full sid it names. `--locate` renders ${sid:0:8}, so its own
+# printed SID column was rejected by --one/--mark ("no transcript in any store") and the caller had
+# to round-trip through --locate --json. An identifier a tool prints must be one it accepts.
+# REFUSES an ambiguous prefix rather than picking: two sessions sharing 8 hex chars is rare, and
+# silently recovering the wrong one is unrecoverable.
+lf_resolve_sid() { # $1=sid-or-prefix -> full sid on stdout; rc 2 = ambiguous, rc 1 = no match
+  local want="$1" c f b hits="" n=0
+  case "$want" in *[!0-9a-fA-F-]*|"") printf '%s' "$want"; return 0 ;; esac
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    for f in "$c"/projects/*/"$want"*.jsonl; do
+      [ -f "$f" ] || continue
+      b="$(basename "$f" .jsonl)"
+      case "$hits" in *" $b "*) continue ;; esac
+      hits="$hits $b "; n=$((n+1))
+    done
+  done <<EOF
+$(lr_config_dirs)
+EOF
+  [ "$n" -eq 1 ] || { [ "$n" -eq 0 ] && return 1; printf '%s' "$hits" >&2; return 2; }
+  printf '%s' "$hits" | tr -d ' '
+}
 STATE="${LR_STATE_DIR:-$HOME/.reso/limit-recover}"
 FLEET_DIR="$STATE/fleet"; mkdir -p "$FLEET_DIR" 2>/dev/null || true
 HANDOFF="${LR_HANDOFF_BIN:-$LR/lr-handoff.sh}"
@@ -203,6 +225,11 @@ sys.exit(0 if last else 1)' || continue
           disp=RESUMING; pid="$(printf '%s\n' "$_procs" | head -1)"; [ -n "$pid" ] || pid="-"
           cwd="$(grep -o '"cwd":"[^"]*"' "$tx" 2>/dev/null | tail -1 | cut -d'"' -f4 || true)"; [ -n "$cwd" ] || cwd="-"
         else disp=NO-PANE; cwd="$(grep -o '"cwd":"[^"]*"' "$tx" 2>/dev/null | tail -1 | cut -d'"' -f4 || true)"; [ -n "$cwd" ] || cwd="-"
+          # A reaped worktree cannot host a resume. Measured 2026-09-12: a fleet --recover dry-run
+          # offered 9 stale NO-PANE sessions, 3 of whose cwds no longer exist — a spawn there dies
+          # in a missing directory. This is a NAMED gap, never a by-design skip: work may be
+          # stranded and only a human can decide whether the tree is worth recreating.
+          [ "$cwd" = "-" ] || [ -d "$cwd" ] || disp=CWD-GONE
         fi
         if _to="$(lr_transplanted_to "$sid" "$cfg")"; then disp="TRANSPLANTED→$(lf_acct_of_cfg "$_to")"; fi
       fi
@@ -315,20 +342,20 @@ lf_row() { # sid pane_before pane_after acct_before acct_after mechanism/verdict
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$(lf_now)" >> "$FLEET_DIR/$RUN/results.tsv"
 }
 lf_report() { # $1=run dir
-  local d="$1" f="$1/results.tsv" sid pb pa ab aa mv note n=0 inplace=0 newp=0 gaps=0
+  local d="$1" f="$1/results.tsv" sid pb pa ab aa mv note n=0 inplace=0 newp=0 gaps=0 bydesign=0
   [ -f "$f" ] || { echo "lr-fleet: no results in $d"; return 1; }
   echo "FLEET RECOVERY — $(basename "$d")"
   printf '%-9s %-8s %-8s %-7s %-7s %-26s %s\n' SID "PANE→" "PANE←" "ACCT→" "ACCT←" MECHANISM/VERDICT NOTE
   while IFS=$'\t' read -r sid pb pa ab aa mv note _ts; do
     [ -n "$sid" ] || continue; n=$((n+1))
     printf '%-9s %-8s %-8s %-7s %-7s %-26s %s\n' "${sid:0:8}" "${pb:--}" "${pa:--}" "$ab" "$aa" "$mv" "$note"
-    case "$mv" in *RECOVERED) [ "$pa" = "$pb" ] && inplace=$((inplace+1)) || newp=$((newp+1)) ;; *dry-run) : ;; *) gaps=$((gaps+1)) ;; esac
+    case "$mv" in *RECOVERED) [ "$pa" = "$pb" ] && inplace=$((inplace+1)) || newp=$((newp+1)) ;; *by-design) bydesign=$((bydesign+1)) ;; *dry-run) : ;; *) gaps=$((gaps+1)) ;; esac
   done < "$f"
   echo
   if [ "$gaps" -eq 0 ]; then
-    echo "RECOVERY COMPLETE — $inplace in place (same pane id), $newp replaced beside their source, 0 left over ($n session(s); evidence: $d)"
+    echo "RECOVERY COMPLETE — $inplace in place (same pane id), $newp replaced beside their source, 0 left over ($n session(s), $bydesign not owed: teammate/resuming/already-transplanted; evidence: $d)"
   else
-    echo "RECOVERY PARTIAL — $gaps named gap(s) above ($inplace in place, $newp replaced; evidence: $d)"
+    echo "RECOVERY PARTIAL — $gaps named gap(s) above ($inplace in place, $newp replaced, $bydesign not owed; evidence: $d)"
   fi
   [ "$gaps" -eq 0 ]
 }
@@ -370,6 +397,13 @@ print(json.dumps(out,indent=1))'
         IDLE-AFTER-ERROR|RESUME-IN-PLACE) lf_row "$sid" "$pane" "$pane" "$acct" "-" "skipped" "network/stall death, NOT a cap — this account is fine and the process is alive; recover IN PLACE (/recover, or /limit-recover) in pane $pane — error record ${err_age}s old"; continue ;;
         NO-PANE) pane="-" ;;
         DUPLICATE) lf_row "$sid" "$pane" "$pane" "$acct" "-" "parked" "DUPLICATE — more than one live process; resolve with --duplicates first"; worst=1; continue ;;
+        # BY-DESIGN skips: nothing is owed by anyone. A teammate is lead-owned (this command's
+        # own doc: the poller deliberately skips teammate transcripts), an already-TRANSPLANTED
+        # session has been moved, and RESUMING is held by a live pid whose documented action is
+        # NONE. Counting them as gaps made fleet --recover report PARTIAL on every possible run —
+        # 20 teammates alone guaranteed it — so the verdict carried no information at all.
+        TEAMMATE|RESUMING|TRANSPLANTED*) lf_row "$sid" "$pane" "$pane" "$acct" "-" "skipped/by-design" "$disp"; continue ;;
+        CWD-GONE) lf_row "$sid" "$pane" "$pane" "$acct" "-" "skipped" "CWD-GONE — $cwd no longer exists; a resume cannot be spawned there"; continue ;;
         *) lf_row "$sid" "$pane" "$pane" "$acct" "-" "skipped" "$disp"; continue ;;
       esac
       [ "$MAX" -gt 0 ] && [ "$n" -ge "$MAX" ] && { lf_row "$sid" "$pane" "$pane" "$acct" "-" "parked" "--max $MAX reached"; worst=1; continue; }
@@ -382,6 +416,12 @@ EOF
     lf_report "$FLEET_DIR/$RUN" || worst=1
     exit "$worst" ;;
   one)
+    if _full="$(lf_resolve_sid "$SID")"; then
+      [ "$_full" = "$SID" ] || echo "lr-fleet: --one ${SID} resolves to $_full" >&2
+      SID="$_full"
+    elif [ $? -eq 2 ]; then
+      echo "lr-fleet: --one $SID is AMBIGUOUS — it names more than one session; pass the full uuid" >&2; exit 2
+    fi
     RUN="${LR_FLEET_RUN:-one-$(date -u +%Y%m%dT%H%M%SZ)}"; mkdir -p "$FLEET_DIR/$RUN"; : > "$FLEET_DIR/$RUN/results.tsv"
     row="$(lf_locate | lf_dedup_mirror | awk -F'\t' -v s="$SID" '$1 == s { print; exit }')"
     if [ -z "$row" ]; then
@@ -427,6 +467,8 @@ EOF
     exit 0 ;;
   duplicates)
     if [ -n "$MARK_SID" ]; then
+      if _full="$(lf_resolve_sid "$MARK_SID")"; then MARK_SID="$_full"
+      elif [ $? -eq 2 ]; then echo "lr-fleet: --mark $MARK_SID is AMBIGUOUS; pass the full uuid" >&2; exit 2; fi
       [ -n "$LIVE_PID" ] || { echo "lr-fleet: --mark needs --live <pid> naming the copy that CARRIES the session" >&2; exit 2; }
       kill -0 "$LIVE_PID" 2>/dev/null || { echo "lr-fleet: --live $LIVE_PID is not alive; a SUPERSEDED tombstone must name a live successor" >&2; exit 2; }
       cfg=""; tx=""
