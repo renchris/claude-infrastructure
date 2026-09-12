@@ -236,3 +236,73 @@ EOF
   [ "$(printf '%s' "$a" | jq -r '.cloud_answer_rc')" = "skipped" ]
   printf '%s' "$a" | jq -e '.elapsed_s == null' >/dev/null
 }
+
+# ── the fire-lane observation (§0), added 2026-09-12 by DRAIN_CIRCUIT W11 ────────────────────────
+# The lane RETURNS what the fire lane produced; nothing observed whether the fire lane is still
+# producing. These cases pin the three properties that make the added read worth having: it runs
+# FIRST (so nothing below can starve it), it journals a TYPED reading, and it journals `null` —
+# never a zero — whenever the instrument did not actually answer.
+
+# a stub standing in for scripts/cloud-lane-liveness.sh, resolved from the lane's own directory
+liveness() { # $1 rc  $2 stdout
+  cat >"$D/cloud-lane-liveness.sh" <<EOF
+#!/bin/bash
+echo "fire \$*" >>"\$CALLS"
+printf '%s' '$2'
+exit $1
+EOF
+  chmod +x "$D/cloud-lane-liveness.sh"
+}
+
+@test "the fire-lane read runs FIRST and journals the instrument's TYPED reading" {
+  liveness 0 '{"verdict":"LIVE","why":"last fire 3.04 h ago","open_gap_h":3.04,"stalls_in_window":3}'
+  run bash "$LANE"
+  [ "$status" -eq 0 ] || false
+  # FIRST is the property: nothing below it can starve a read it does not depend on.
+  [ "$(sed -n 1p "$CALLS" | cut -d' ' -f1)" = fire ] || false
+  [ "$(sed -n 2p "$CALLS" | cut -d' ' -f1)" = return ] || false
+  g="$(row cloud-fire-gap)"; [ -n "$g" ] || false
+  [ "$(printf '%s' "$g" | jq -r '.tool')" = cloud-return-lane ] || false
+  [ "$(printf '%s' "$g" | jq -r '.gap.verdict')" = "LIVE" ] || false
+  # NB precedence: `A and .elapsed_s | type != "string"` pipes the whole conjunction into `type`
+  # and is vacuously true. Parenthesise, or the second half asserts nothing.
+  printf '%s' "$g" | jq -e '.gap.open_gap_h == 3.04 and (.elapsed_s | type) == "number"' >/dev/null || false
+}
+
+@test "a STALLED verdict is a READING, not a lane failure — it is journalled and the tick goes on" {
+  liveness 1 '{"verdict":"STALLED","why":"silent for 35.78 h","open_gap_h":35.78}'
+  run bash "$LANE"
+  [ "$status" -eq 0 ] || false
+  [ "$(row cloud-fire-gap | jq -r '.gap.verdict')" = "STALLED" ] || false
+  [ "$(row cloud-fire-gap | jq -r '.fire_read_rc')" = "1" ] || false
+  # the passes below still ran — an observation must never become a gate on the lane's own work
+  [ "$(row cloud-return | jq -r '.cloud_return_rc')" = "0" ] || false
+}
+
+@test "an UNKNOWN reading is journalled AS UNKNOWN — the sensor's own nulls survive the journal" {
+  liveness 3 '{"verdict":"UNKNOWN","why":"cannot look","open_gap_h":null,"rate_per_day":null}'
+  run bash "$LANE"
+  [ "$status" -eq 0 ] || false
+  [ "$(row cloud-fire-gap | jq -r '.gap.verdict')" = "UNKNOWN" ] || false
+  printf '%s' "$(row cloud-fire-gap)" | jq -e '.gap.open_gap_h == null' >/dev/null || false
+}
+
+@test "an ABSENT instrument journals a null gap and a skipped rc — never a zeroed reading" {
+  rm -f "$D/cloud-lane-liveness.sh"
+  run bash "$LANE"
+  [ "$status" -eq 0 ] || false
+  g="$(row cloud-fire-gap)"; [ -n "$g" ] || false
+  [ "$(printf '%s' "$g" | jq -r '.fire_read_rc')" = "skipped" ] || false
+  printf '%s' "$g" | jq -e '.gap == null and .elapsed_s == null' >/dev/null || false
+}
+
+@test "a CUT or garbled read journals null — one malformed value would abort every slurp" {
+  liveness 124 '{"verdict":"LIV'      # half a line, exactly what a kill mid-write leaves
+  run bash "$LANE"
+  [ "$status" -eq 0 ] || false
+  g="$(row cloud-fire-gap)"; [ -n "$g" ] || false
+  printf '%s' "$g" | jq -e '.gap == null' >/dev/null || false
+  [ "$(printf '%s' "$g" | jq -r '.fire_read_rc')" = "124" ] || false
+  # the journal itself must still be wholly parseable — the property the guard exists for
+  jq -e . "$CC_IDL" >/dev/null || false
+}
