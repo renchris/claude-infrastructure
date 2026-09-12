@@ -337,7 +337,15 @@ if git -C "$CWD" rev-parse --git-dir >/dev/null 2>&1; then
     BRANCH="$NEWBR"
   fi
   DIRTY=$(git -C "$CWD" status --porcelain | wc -l | tr -d ' ')
-  [[ "$DIRTY" != "0" ]] && echo "lr-handoff: WARNING — $DIRTY dirty paths; commit in-scope WIP before firing (bundle records the list)" >&2
+  # NAME the paths, never a bare count: the reader cannot act on "1 dirty paths", and the list it
+  # points at lives inside a bundle nobody opens mid-recovery (§ close message S6: named, never
+  # counted). Capped at 5 so a genuinely dirty tree cannot flood the recovery log.
+  [[ "$DIRTY" != "0" ]] && {
+    echo "lr-handoff: WARNING — $DIRTY dirty path(s); commit in-scope WIP before firing:" >&2
+    git -C "$CWD" status --porcelain 2>/dev/null | awk 'NR<=5' | sed 's/^/  /' >&2
+    [[ "$DIRTY" -gt 5 ]] && echo "  … $((DIRTY-5)) more (full list: git-status.txt in the bundle)" >&2
+    true
+  }
 fi
 
 # --- bundle ----------------------------------------------------------------
