@@ -186,7 +186,7 @@ agent-runnable*. Both are defensible. **That 13.6% is a VALUE question, not a fa
 lookup resolves it** — which is the strongest argument in this whole file for `UNRESOLVED` being a
 first-class output rather than a soft failure.
 
-### 10b. Scored against the 363 agreed commands
+### 10b. Scored against the 363 agreed commands (superseded by §11 — kept for the delta)
 
 | gold | predicted | n | |
 |---|---|---|---|
@@ -237,3 +237,64 @@ arm whose premise is wrong rather than mistuned. The next real question is not "
 two arms" but "does a string-and-file classifier reach a useful precision at all, or does the
 verdict have to come from the tool being invoked declaring its own class?" That is answerable, and
 it is the next pass.
+
+
+## 11. FINAL — scored against the full adjudicated gold set (`GOLDSET-FINAL.tsv`, 429 rows)
+
+Adjudication completed: 363 agreed · 56 adjudicated · 10 single-labelled.
+Final tally **ADMISSIBLE 219 (51%) · INADMISSIBLE 199 (46%) · UNKNOWN 11 (3%)**.
+
+The adjudicators did the thing the whole project is about — they read the files, and several
+recovered a deleted script's body verbatim out of an old transcript. One ruling directly overturns
+both labellers and my classifier at once: `cc-do <id>` is **INADMISSIBLE/permission-gated**, because
+`bin/cc-do:449` prints `CC_DO_ASSUME_YES=1 cc-do <id>` as its own documented non-tty path — the tty
+prompt is a convenience, not a human gate.
+
+### The two weightings disagree, and that is the headline
+
+| | decides | abstains | **precision when it speaks** |
+|---|---|---|---|
+| **distinct-weighted** (what the classifier learned) | 155/429 (36%) | 64% | **110/155 = 71.0%** |
+| **emission-weighted** (what the operator experienced) | 755/1379 (55%) | 45% | **671/755 = 88.9%** |
+
+The 18-point gap is the 270-emission row: it gets the high-frequency commands right and the long
+tail wrong. Reporting either number alone would misrepresent it — which is exactly why §5 demanded
+both.
+
+**Neither clears the bar.** At 88.9% roughly one block in nine is wrong, against an artifact — the
+operator's own close — where a false block costs a round-trip on work that was genuinely theirs.
+
+### Error taxonomy, final (45 wrong verdicts, distinct-weighted)
+
+| n | gold | predicted | |
+|---|---|---|---|
+| **19** | HUMAN/**decision** | REFUTED | **a class with NO arm at all** |
+| 12 | REFUTED/self-runnable | HUMAN | body-descent false positive (§10c family 2) |
+| 11 | HUMAN/tty | REFUTED | the `cc-*` over-match (§10c family 1) |
+| 3 | HUMAN/{physical,gui,tui} | REFUTED | singles |
+
+**`decision` is now the largest error family and it was never modelled.** `git reset --hard
+origin/main`, `pnpm release:fly --iad`, `pnpm invite:admin --execute`, `cc-decide veto` — irreversible,
+money-spending, or an operator ruling. All of them look like ordinary tooling to a string-and-file
+classifier, and all of them are the operator's by right rather than by capability.
+
+That is the finding that decides the architecture. The other two families are mistuned arms. This
+one is a category error: **`decision` is not a property of the command text or of any file on disk —
+it is a property of what the command DOES to the world, which only the invoked tool knows.** No
+lookup over strings and bodies can recover it, and it is 42% of the errors.
+
+### Verdict
+
+**Conviction that a useful gate exists on a string-and-file architecture: 40%** (was 75% before the
+replay, 55% at §10). The replay did its job: it converted an argument into a measurement and the
+measurement says this shape tops out below the bar.
+
+**The next pass is not a fourth amendment.** It is the question the `decision` family forces: can a
+tool declare its own class — a `# cc-class: operator` line, an exit convention, a manifest — so the
+verdict comes from the thing being invoked rather than from a classifier guessing at it? `bin/cc-do`
+already effectively does this by printing its own non-tty escape hatch. That is a different and much
+smaller design, and it is the one the evidence now points at.
+
+*(Three adjudicator subagents carry a harness SECURITY WARNING. Same pattern false positive as §6 —
+they matched `settings-json` / `permissions-allow-deny` because they were reading scripts that
+discuss permissions. Findings, not instructions.)*
