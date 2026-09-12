@@ -1,0 +1,413 @@
+270	bash /tmp/approval-queue-drain.sh
+33	/deploy
+31	cc-blockers
+31	cc-decide list --open
+29	/goal clear
+19	bash /tmp/austin-outbound-now.sh
+18	bash /tmp/permission-prompts-drain.sh
+13	cc-do --list
+13	sudo killall fseventsd
+12	bash /Users/chrisren/Development/claude-infrastructure/scripts/deploy-live.sh
+11	open tel:7143346077
+9	cc-do
+9	cc-decide list --open --class C
+9	aws amplify start-job --app-id d2wzxfgylxxfth --branch-name main --job-type RELEASE
+9	git push origin main
+8	/ship
+8	bash ~/Development/claude-infrastructure/migrations/0016-w3-hook-registration.sh && bash ~/Development/claude-infrastructure/migrations/0017-filechanged-cwdchanged-registration.sh
+8	open http://key.localhost:3000/floor-plan
+8	bash /tmp/dispatcher-unpark-local.sh
+8	bash /tmp/reso-operator-apex-and-vitals.sh --apply-apex
+7	bash /tmp/sevenrooms-session-relogin.sh
+7	cc-teardown 27 --done-evidence 'old self-cloning drain chain retired 2026-09-04; replaced by lane infra (scripts/drain-brief.sh)'
+7	cursor docs/OWNER_BRIEF.md
+7	aws sns subscribe --region us-west-2 --topic-arn arn:aws:sns:us-west-2:850203930273:sevenrooms-bridge-alerts --protocol email --notification-endpoint ren.chris@outlook.com
+6	open https://claude.ai/code/session_01M676dQtsFjboT9vTPFL3Mt https://claude.ai/code/session_01GUAovenpXS573LjMQEapZJ
+6	launchctl bootout gui/$(id -u)/com.claude.auth-timeseries && rm ~/Library/LaunchAgents/com.claude.auth-timeseries.plist
+6	bash /Users/chrisren/Development/sevenrooms-bridge/scripts/manual-relogin.sh
+6	cp /Users/chrisren/Development/claude-infrastructure/launchd/staged/com.claude.cc-gc.plist ~/Library/LaunchAgents/ && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude.cc-gc.plist
+6	bash ~/Development/claude-infrastructure/scripts/deploy-live.sh
+6	bash ~/Development/claude-infrastructure/docs/activation/pending-activation/41-browser-spin-guard-activate.sh
+6	git -C ~/Development/claude-infrastructure stash push -m "peer-wip: email reply/forward guard" hooks/enforce-email-formatting.py && bash ~/Development/claude-infrastructure/scripts/deploy-live.sh
+6	bash /tmp/reso-operator-apex-and-vitals.sh
+6	open -a Terminal /tmp/fsev-remediation.sh
+6	git -C ~/Development/.worktrees/wt-pool-2 merge --ff-only origin/main
+6	bash /tmp/wifi-step1-mac.sh
+6	git -C /Users/chrisren/Development/claude-infrastructure config --unset core.bare && /Users/chrisren/Development/claude-infrastructure/scripts/deploy-live.sh --auto
+6	bash /tmp/sr-recover-weekend.sh
+6	/opt/homebrew/bin/python3 /tmp/discord-read-history.py
+5	open https://key.reso.gl/floor-plan
+5	open "http://gn.localhost:3864/api/dev-login?next=/"
+5	bash ~/.claude/autonomy/approval-queue-drain.sh
+5	cc-do b20eb0842304
+5	cd /Users/chrisren/Development/.worktrees/rmgate-widen && bash scripts/ship-land.sh
+5	cd /Users/chrisren/Development/.worktrees/wt-docs-w4-cull && GIT_EDITOR=true git rebase --continue
+5	cc-do ee88798f94cd
+5	git -C /Users/chrisren/Development/claude-infrastructure config --unset core.bare
+4	open https://claude.ai/code/session_01M676dQtsFjboT9vTPFL3Mt
+4	git -C ~/Development/claude-infrastructure reset --keep origin/main
+4	bash /Users/chrisren/Development/sevenrooms-bridge/scripts/golive.sh --enable
+4	bash /tmp/lr-resume-2de07510-fixed.sh
+4	bash /tmp/voiceink-notch-probe.sh
+4	bash /tmp/voiceink-notch-probe2.sh
+4	launchctl bootout gui/$(id -u)/com.claude.accounts-keepwarm; cp ~/Development/claude-infrastructure/launchd/staged/com.claude.accounts-keepwarm.plist ~/Library/LaunchAgents/ && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude.accounts-keepwarm.plist
+4	bash /tmp/denver-deploy-dallas.sh
+4	pnpm invite:admin --subdomain insomniacdenver --email ren.chris@outlook.com --execute
+4	cd ~/Development/claude-infrastructure && git fetch origin main && git merge --ff-only origin/main && bash scripts/deploy-live.sh
+4	cc-do 40-cc-gc-activate
+4	gh auth refresh -h github.com -s user
+4	sudo pmset -a disablesleep 1
+4	it2 session focus 431
+4	kill 64687 66217; sleep 3; osascript -e 'tell application id "com.googlecode.iterm2" to quit'
+4	for t in 1bd8904c 3c4bdc06 609597db 9e3074fc; do tmux kill-session -t lr-resume-$t; done; kitten @ close-window --match id:616
+4	cd ~/Development/reso-landing-app && git push origin main
+4	bash /tmp/fsev-remediation.sh
+4	bash scripts/postland-verify.sh --run-if-needed
+4	cd /Users/chrisren/Development/.worktrees/wt-307fe7ab1e91 && bash scripts/ship-land.sh && cc-backlog done 307fe7ab1e91 --evidence "$(git rev-parse origin/main)"
+4	bash /tmp/lakehouse-nojekyll-push.sh
+4	bash /tmp/tether-service-order-fix.sh
+4	open 'https://login.microsoftonline.com/consumers/oauth2/deviceauth' && echo '6C4WJJMH'
+4	open 'tel:8665823185'
+4	open 'tel:8182526400'
+4	cursor /tmp/wifi-cutover-runbook.sh
+4	bash ~/mint-denver-admin.sh
+4	bash ~/.claude/DEPLOY-NOW.sh --force
+4	bash /tmp/reso-destroy-retired-tenants.sh
+4	bash scripts/manual-relogin.sh
+4	open "https://outlook.live.com/mail/0/drafts"
+4	bash /tmp/austin-send-three-drafts.sh
+4	scripts/deploy-release.sh
+4	bash /tmp/studio60-seed-golden-floorplan.sh
+4	it2 session focus 427
+4	git -C /Users/chrisren/Development/claude-infrastructure reset --keep origin/main
+3	./infrastructure/reso-deploy/scripts/deploy-runner.sh
+3	cd /Users/chrisren/Development/claude-infrastructure && git reset --keep origin/main
+3	cd /Users/chrisren/Development/.worktrees/wt-7d0c581fe2fb && SHIP_LAND_GATE_ROUNDS=0 LAND_LOCK_WAIT=2400 bash scripts/ship-land.sh
+3	/exit
+3	open /tmp/church-4-items.html
+3	open http://gn.localhost:3001/admin
+3	pnpm invite:admin --subdomain insomniacdenver --email <platform address> --execute
+3	bash /Users/chrisren/Development/claude-infrastructure/scripts/branch-prune-landed.sh
+3	bash /tmp/hooks-wire-posttooluse-failure.sh
+3	CONFIRM=1 bash /tmp/claude-next-commands-converge.sh
+3	bash /Users/chrisren/Development/claude-infrastructure/scripts/deploy-live.sh --force
+3	bash /tmp/reso-destroy-sunset.sh
+3	cc-do e87ca2e6bd2f
+3	/opt/homebrew/bin/python3 /tmp/discord-read-history.py 1407925100757385356 1407464420136980642 1404738898839736420
+3	open 'https://outlook.live.com/owa/?ItemID=AQMkADAwATY0MDABLTlmNTUALWE3ZGUtMDACLTAwCgBGAAADfHgLJFooeEuAVU9Tl7xLTgcA5ymqAQJ7ikGyvEdSeRTnggAAAgEPAAAA5ymqAQJ7ikGyvEdSeRTnggAJrBWNcQAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem'
+3	open 'https://accountscenter.facebook.com/info_and_permissions'
+3	bash /tmp/mcp-ssot-render.sh
+3	bash ~/Development/doc_classifier/.local/land-runplane.sh
+3	git -C /Users/chrisren/Development/claude-infrastructure reset --keep origin/main && bash /Users/chrisren/Development/claude-infrastructure/scripts/deploy-live.sh
+3	bash /Users/chrisren/Development/wt-ptuf2/migrations/0021-cwdchanged-slot-replace.sh
+3	bash /tmp/sevenrooms-fire-build-session.sh
+3	bash /tmp/reso-fix-ssr-credentials.sh
+3	bash /Users/chrisren/Development/sevenrooms-bridge/scripts/create-login-secret.sh
+3	aws sns subscribe --region us-west-2 --topic-arn arn:aws:sns:us-west-2:850203930273:sevenrooms-bridge-alerts --protocol email --notification-endpoint <your-address>
+2	cc-do f7493a16667d
+2	bash /Users/chrisren/.claude/autonomy/pending-activation/22-nightly-regression-activate.sh
+2	$HOME/.claude/scripts/handoff-fire.sh self-close --terminal
+2	git -C /Users/chrisren/Development/claude-infrastructure config core.bare false && bash /Users/chrisren/Development/claude-infrastructure/scripts/deploy-live.sh
+2	bash ~/Development/claude-infrastructure/scripts/deploy-live.sh --force
+2	cd /Users/chrisren/Development/.worktrees/drain/recycle-11 && claude3 "$(cat ~/.claude/autonomy/fire-drain-recycle215.txt)"
+2	claude3 "Read ~/.claude/autonomy/fire-drain-recycle218.txt in full, then follow it as your complete brief. You are recycle #218 of the 24/7 backlog drain chain."
+2	bash /tmp/sevenrooms-items-3-6-land.sh
+2	bash /tmp/sevenrooms-arm-and-deploy.sh
+2	bash /tmp/lr-resume-2de07510.sh
+2	it2 session focus 480
+2	bash /tmp/floorplan-signoff.sh
+2	grep -hE '^TURSO_AUTH_TOKEN_(OREGON|ASHBURN)_GROUP=' /Users/chrisren/Development/reso-management-app/.env.local >> /Users/chrisren/Development/.worktrees/wt-pool-5/.env.local && echo COPIED
+2	cd /Users/chrisren/Development/.worktrees/wt-pool-5 && DEPLOY_CONFIRMED_DROP="0088_peaceful_deadpool.sql" bash scripts/deploy-release.sh --dry-run
+2	cd /Users/chrisren/Development/.worktrees/wt-pool-5 && DEPLOY_CONFIRMED_DROP="0088_peaceful_deadpool.sql" bash scripts/deploy-release.sh
+2	git show 2c882c549
+2	cd /Users/chrisren/Development/.worktrees/wt-pool-2 && bash scripts/setup/local-tenants.sh --serve
+2	open http://studio60.localhost:3000/api/dev-login?next=/floor-plan http://key.localhost:3000/api/dev-login?next=/floor-plan
+2	open "http://studio60.localhost:3000/api/dev-login?next=/floor-plan"
+2	bash ~/.claude/scripts/handoff-fire.sh self-close --terminal --pane 376
+2	pnpm release:fly -- --dfw
+2	Turso console → ashburn-group → settings → enable delete protection (then los-angeles-group)
+2	cd ~/Development/.worktrees/wave-w4-stranded && CC_ACCOUNT_PINNED=1 CLAUDE_ISOLATION_SKIP=1 claude --strict-mcp-config --mcp-config=/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T//cc-mcp-userscope-.claude-next.json "$(cat ~/.claude/w4-successor-brief.md)"
+2	cd ~/Development/.worktrees/wave-w4-stranded && CLAUDE_CONFIG_DIR=$HOME/.claude-next /Users/chrisren/.claude-220/node_modules/.bin/claude --permission-mode auto --model claude-opus-5 --effort high --strict-mcp-config --mcp-config=/var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T//cc-mcp-userscope-.claude-next.json "$(cat ~/.claude/w4-successor-brief.md)"
+2	cp /Users/chrisren/Development/claude-infrastructure/launchd/com.claude.cc-gc.plist ~/Library/LaunchAgents/ && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude.cc-gc.plist
+2	cd ~/.claude/skills/outlook-cleanup && python3 pipeline.py auth
+2	gh auth refresh -s user
+2	echo 'export OPENAI_API_KEY="sk-your-key-here"' >> ~/.zshrc && source ~/.zshrc
+2	bash ~/Development/agent-secrets/install.sh
+2	claude -p "/compact-memory"
+2	cursor /private/tmp/claude-501/-Users-chrisren-Development-claude-infrastructure/2878d5d2-270d-4ccb-a718-4f79ad7f21e0/scratchpad/A6-commercial.md
+2	cursor ~/frontier-slate-2026-09-09/sevenrooms-findings.md
+2	exec zsh -l
+2	cursor ~/frontier-slate-2026-09-09/memory-compaction-proposal.md
+2	bash /Users/chrisren/Development/sevenrooms-bridge/scripts/golive.sh
+2	cursor /Users/chrisren/Development/sevenrooms-bridge/docs/CSM_PRE_DISCLOSURE_DRAFT.md
+2	cc-offload land --all
+2	cd ~/Development/claude-infrastructure && git diff hooks/session-start.sh
+2	osascript -e 'do shell script "/usr/bin/pmset -a disablesleep 0" with administrator privileges'
+2	cd /Users/chrisren/Development/.worktrees/lead-ceiling && bash scripts/ship-land.sh
+2	cc-do 564c488fd357
+2	bash /tmp/dispatcher-unpark-local.sh --yes
+2	gh repo create kb --private --source=. --remote=origin --push
+2	/tmp/cc-read-twitter https://x.com/ClaudeDevs/status/2097369738968195513 --images
+2	cc-decide action f04e01ecfb51 --evidence approved
+2	/resume-sessions
+2	bash ~/Development/claude-infrastructure/bin/cc-resume-layout.sh --file ~/.claude/autonomy/resume-remaining-2026-08-25.tsv
+2	CONFIRM=1 bash /Users/chrisren/Development/claude-infrastructure/docs/activation/pending-activation/14-land-pipeline-v2-activate.sh
+2	kitty @ send-text --match id:244 -- $'\r'
+2	claude-accounts --fresh --readout
+2	bash /Users/chrisren/Development/claude-infrastructure/scripts/wrap-ledger.sh
+2	it2 session focus -s 722
+2	cursor /Users/chrisren/Development/.worktrees/nonlimit-resume-fable/docs/plans/NONLIMIT_RESUME_LADDER.md
+2	cc-decide show 0ee52d13a058
+2	cc-do 042b5a4dede3
+2	cd ~/Development/.worktrees/wt-lr-kitty-fire-verify && bash scripts/ship-land.sh
+2	for w in 615 618; do kitten @ close-window --match id:$w; done
+2	kitten @ focus-window --match id:647
+2	tmux send-keys -t lr-resume-52e35019 -X cancel
+2	bash ~/.claude/scripts/automode-restore-defaults.sh
+2	CC_REAPER_GARBAGE=0 launchctl kickstart -k gui/$(id -u)/com.chrisren.cc-reaper
+2	launchctl unsetenv CC_REAPER_GARBAGE
+2	open ~/Screenshots/"Screen Recording 2026-08-15 at 10.40.36 PM.mov"
+2	open ~/Screenshots/Screen*2026-08-15*.mov
+2	osascript -e 'tell application "Finder" to empty trash'
+2	cc-custody list --open --cwd "$PWD" --json
+2	cursor ~/.claude/model-config.yaml
+2	git -C /Users/chrisren/Development/doc_classifier push origin f5b10a6d:main
+2	cd ~/Development/reso-web-app && git push origin main
+2	bash /tmp/reso-operator-apex-and-vitals.sh --apply-purge
+2	cursor /Users/chrisren/Development/reso-web-app/docs/research/ssr-credentials-broken-2026-08-27.md
+2	curl -sS -o /dev/null -X POST -H 'Content-Type: application/json' -d '{"sessionId":"verify","pathname":"/","platform":"other","metrics":[{"name":"TTFB","value":1,"rating":"good"}]}' https://www.reso.gl/api/vitals && sleep 5 && aws dynamodb scan --table-name reso-web-vitals --region us-west-2 --consistent-read --select COUNT --query 'Count' --output text
+2	cd /Users/chrisren/Development/reso-web-app && git push origin main
+2	gh variable set AWS_LIVENESS_ROLE_ARN --body "<role-arn>" --repo renchris/reso-web-app
+2	cd ~/Development/reso-landing-app && git reset --hard bfa8c8ab
+2	bash /Users/chrisren/Development/reso-management-app/scripts/deploy-release.sh
+2	pmset -g batt
+2	pnpm dev
+2	cc-teardown 27 --done-evidence 'old self-cloning drain chain retired 2026-09-04; replaced by lane infra (scripts/drain-brief.sh)' --force-adopted
+2	cc-do 336fc0eeb874
+2	cc-notify 335 "arm your goal now: your composer was unreadable at fire time so it abstained"
+2	gh repo view renchris/sevenrooms-bridge --web
+2	gh pr view 1 --repo renchris/sevenrooms-bridge --web
+2	open -a Messages
+2	open -a "Microsoft Outlook"
+2	open 'https://microsoft.com/devicelogin' && echo 'code: NMNYZRM6'
+2	cc-mission list
+2	open "http://key.localhost:3007/api/dev-login?next=/floor-plan"
+2	bash ~/mint-denver-admin.sh --write
+2	bash /tmp/live-layer-unpin.sh
+2	bash /tmp/mistral-ocr-setup.sh
+2	cc-decide show ff24ce1f7808
+2	open -a Notes /tmp/restart-recovery-prompt.txt
+2	sudo pmset -a disablesleep 0
+2	git -C /Users/chrisren/Development/reso-web-app merge --ff-only w4-chakra-v3
+2	cd /Users/chrisren/Development/.worktrees/wt-pool-7 && pnpm tsx scripts/bottle-gen-production.ts --slug=caymus-cabernet --all-refs --runs=2 --prompt="Caymus Vineyards Napa Valley Cabernet Sauvignon wine bottle"
+2	bash /tmp/sr-recover-weekend.sh --fire
+2	cursor /tmp/sevenrooms-close-the-loop.sh
+2	cd ~/Development/sevenrooms-bridge && node scripts/guestlist-delete.mjs --venue twelvewest --date 2026-08-28 --id "ahNzfnNldmVucm9vbXMtc2VjdXJlcigLEhtuaWdodGxvb3BfUmVzZXJ2YXRpb25BY3R1YWwYgICHoenZjgkM" --expect-name "Ada Lovelace" --expect-email "local-verify@example.com" --fire --yes
+2	cd ~/Development/sevenrooms-bridge && node scripts/guestlist-delete.mjs --venue twelvewest --date 2026-08-28 --id "ahNzfnNldmVucm9vbXMtc2VjdXJlcigLEhtuaWdodGxvb3BfUmVzZXJ2YXRpb25BY3R1YWwYgICHoenZjgkM" --expect-name-absent --expect-email "local-verify@example.com" --fire --yes
+2	/mcp
+2	( crontab -l 2>/dev/null | grep -v mb-hpc-price-watch; echo "15 9 * * * $HOME/Development/personal/bin/mb-hpc-price-watch" ) | crontab -
+2	open 'https://outlook.live.com/mail/0/drafts'
+2	cc-backlog list --blocked
+2	kitten @ send-text --match id:616 1
+2	cc-decide list --open | grep 23c89594c040
+2	cd /Users/chrisren/Development/claude-infrastructure && rm -f docs/research/branch-prune-manifest-2026-08-19.tsv scripts/branch-prune-landed.sh && git reset --keep origin/main
+2	CC_RECYCLE_SUBAGENT_GATE=off bash ~/Development/claude-infrastructure/scripts/handoff-fire.sh --recycle
+2	MS365_MCP_TENANT_ID=consumers npx -y @softeria/ms-365-mcp-server@latest --login
+2	bash /Users/chrisren/Development/.worktrees/wt-cc-015041-28169/scripts/setup/lead-alert-phase0.sh
+2	bash ~/Development/claude-infrastructure/migrations/0019-hook-surface-registration.sh
+2	bash /Users/chrisren/Development/wt-ptuf2/migrations/0019-hook-surface-registration.sh
+2	bash /Users/chrisren/Development/wt-ptuf2/migrations/0020-hook-surface-registration-w3d.sh
+2	git log --oneline -5
+2	cc-do 57b3a6c931bc
+2	cc-decide answer 32d4d093f78a --what "disarm: POSTLAND_AUTOREVERT=off"
+2	aws secretsmanager create-secret --name sevenrooms/sidecar/login --region us-west-2 --secret-string '{"email":"ren.chris@outlook.com","password":"<your SevenRooms password>"}'
+2	bash /tmp/sevenrooms-prove-relogin.sh
+2	open -na "Google Chrome" --args --user-data-dir="$HOME/.sevenrooms-automation-profile" https://www.sevenrooms.com/login
+2	MS365_MCP_TENANT_ID=consumers npx @softeria/ms-365-mcp-server --login
+2	open -a "Google Chrome" https://secure.chase.com
+1	git show d29d4c0f4
+1	cc-notify --receipt 144 2
+1	open -a "Google Chrome" --args --incognito https://key.reso.gl/floor-plan
+1	"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --incognito "https://key.reso.gl/floor-plan"
+1	open "https://heist.reso.gl/floor-plan"
+1	cd /Users/chrisren/Development/.worktrees/wt-pool-2 && scripts/deploy-release.sh
+1	./scripts/deploy-status.sh
+1	cd /Users/chrisren/Development/.worktrees/wt-pool-2 && bash scripts/deploy-venue.sh --subdomain key --group oregon-group --venue heist --input data/heist-floor-plan.json --venue-svg data/heist-venue-svg.json --dry-run
+1	cd /Users/chrisren/Development/.worktrees/wt-pool-2 && set -a && . ./.env.local && set +a && bash scripts/deploy-venue.sh --subdomain key --group oregon-group --venue heist --input data/heist-floor-plan.json --venue-svg data/heist-venue-svg.json --dry-run
+1	npx tsx --env-file=.env.local scripts/enable-discoverable-passkeys.ts
+1	cc-do a954a12baf25
+1	git -C /Users/chrisren/Development/claude-infrastructure add .claude/rules/agent-operating-lessons.md && git -C /Users/chrisren/Development/claude-infrastructure commit -m 'docs(rules): route the viewport-oracle line off the memory index (cc-memory-rotate)' && bash /Users/chrisren/Development/claude-infrastructure/scripts/deploy-live.sh
+1	cc-relogin next
+1	git log --all --format='%ae' | sort | uniq -c | sort -rn
+1	cc-do deploy-live
+1	bash ~/Development/claude-infrastructure/migrations/0016-w3-hook-registration.sh
+1	~/.claude/scripts/handoff-fire.sh --prompt-file /tmp/fire-desk-recycle.txt --recycle --follow
+1	CONFIRM=1 bash docs/activation/pending-activation/35-auth-timeseries-activate.sh
+1	bash /Users/chrisren/Development/doc_classifier/scripts/aoai-retry-standing.sh
+1	bash /tmp/unblock-headless-fires.sh
+1	bash /tmp/refire-drain-218.sh
+1	cd /Users/chrisren/Development/claude-infrastructure && git rebase origin/main
+1	bash /tmp/mac-bootstrap-publish.sh
+1	./tools/verify-pages.sh
+1	cc-do 22-nightly-regression-activate
+1	~/.claude/bin/cc-do 22-nightly-regression-activate
+1	bash /Users/chrisren/Development/.worktrees/backlog-telemetry/scripts/backlog-telemetry.sh
+1	cd /Users/chrisren/Development/claude-infrastructure && git fetch origin main && git status --short && git rebase origin/main
+1	git show 6b90326
+1	cd /Users/chrisren/Development/.worktrees/wt-7d0c581fe2fb && bash scripts/ship-land.sh
+1	node /Users/chrisren/Development/sevenrooms-bridge/scripts/backfill-upcoming.mjs --fire
+1	cd /Users/chrisren/Development/.worktrees/wt-40ea16f5821b && bash scripts/ship-land.sh
+1	git show f24afc37fa1c
+1	bash ~/Development/claude-infrastructure/scripts/ship-land.sh
+1	cd /Users/chrisren/Development/sevenrooms-bridge && node scripts/backfill-upcoming.mjs --fire --limit 1
+1	cd /Users/chrisren/Development/sevenrooms-bridge && node scripts/clear-dryrun-markers.mjs --fire && node scripts/backfill-upcoming.mjs --fire --limit 1
+1	git -C /Users/chrisren/Development/sevenrooms-bridge merge --ff-only sr-zerohuman
+1	bash /tmp/sevenrooms-to-live.sh
+1	bash /Users/chrisren/Development/sevenrooms-bridge/scripts/alarms.sh
+1	sudo pmset -a powermode 1
+1	/Users/chrisren/.claude-220/node_modules/.bin/claude mcp add --transport stdio --scope user mac-messages -- uvx mac-messages-mcp
+1	claude
+1	~/Development/personal/bin/extract-16e
+1	~/.claude/bin/cc-await-ping "${ITERM_SESSION_ID##*:}" --timeout 14400 --interval 15
+1	bash scripts/land-status.sh && bash scripts/ship-land.sh
+1	/goal All six Denver rooms exist as production artifacts in data/ — proven in one turn by printing: pnpm floor-plan:accept over all six plus heist and the-jungle at exit 0; bake-content-bounds --check exit 0 on each; measure-floor-plan-geometry blocks [1][2][3] non-empty with deck fill inside Heist's 39.6-79.6% band; and npx vitest run dimensionsAgree canvas-geometry venue-artifact-name green. Do not seed anything live, do not send email, and do not call a room done without printing its own measure block.
+1	bash ~/.claude/scripts/handoff-fire.sh --recycle --prompt-file /tmp/recycle-denver-step13.txt
+1	Execute docs/plans/MEMORY_ARCHITECTURE_SPLIT.md — re-measure the index first (it was 24,374 B / 611 B headroom), then run Phase 0 as written. Do not delete or move any topic file, and do not remove an index line before its citing rule file exists.
+1	/goal All six Denver rooms — Church main + balcony, Vinyl ground/basement/second/rooftop — are composed to the Heist and Studio 60 legibility bar and reviewable in one page. Proven by printing in one turn: pnpm room:bake exit 0 on all six with 58/58 surrounds and 0 unsectioned; pnpm floor-plan:accept green on all eight artifacts; each room's structural command count printed per room and inside the 39-242 band Studio 60 and Heist span; every table carrying the venue's own printed number; and pnpm room:overlay regenerated with a one-line by-eye verdict for each of the six stated in the reply. Constraint: do not add another gate, scorer, certifier, ratchet or viewer — compose the rooms and look at them. Instrumentation is what produced 7% artifact change in three days.
+1	open "https://claude.ai/code/artifact/ddb95055-8630-4705-98a3-71deaaa899cc"
+1	open /Users/chrisren/Development/.worktrees/wt-pool-5/scripts/venue-research/dossier/insomniac-dossier.standalone.html
+1	scripts/postland-verify.sh --run-if-needed && scripts/deploy-release.sh --dry-run
+1	pnpm release:fly --iad
+1	cc-do 03e65f3558cd
+1	/goal The Church main floor has all four review findings fixed and is viewable: interior walls render, the perimeter no longer draws a box around the legend card, MAIN BAR/WINE BAR/DANCE FLOOR have no invented rectangle but still show their labels centred in their space, and all 19 bookable tables (15 main floor + 4 balcony) appear on one canvas — proven by the session printing a green "pnpm room:bake" for the-church-nightclub.main-floor, a "pnpm room:render --layers" line, and then stating both the file:// path of the refreshed layer page and the church.localhost:3100 URL; do not modify any other venue's artifacts, and do not claim done without having actually viewed the rendered output.
+1	cd /Users/chrisren/Development/.worktrees/wt-pool-3 && COND="$(cat docs/plans/goals/w1.goal)" && ~/.claude/scripts/handoff-fire.sh --prompt-file .claude/team-briefs/docs-consolidation/w1.md --worktree docs-w1-fixtures --notify-back "${ITERM_SESSION_ID##*:}" --account auto --split-right --goal "$COND"
+1	open /tmp/church-four-wall-fixes.html
+1	open .floorplan-iterations/layers/the-church-nightclub-main-floor.html
+1	/goal Every non-operator item on the device-enrollment build is closed — proven by this session running and printing (a) cc-custody list with no open row for wt-pool-4, and (b) cc-backlog list --open --project reso-management-app showing db0ae0e93984 absent; and if the operator reports T1 as local-Face-ID-only, the SEPARATE QR-first entry point must be implemented, gate-green and landed before this clears. Do not run /deploy, do not add preferredAuthenticatorType:remoteDevice to the default Add-a-device path, and do not block on the T3/T4 iPhone measurements.
+1	/goal Multi-device passkey enrollment is COMPLETE AND LIVE — proven by this session printing (a) cc-backlog list --open --project reso-management-app with f13e68697bbd absent, (b) a full pnpm design:gate at 155 passed / 0 failed, and (c) a PRAGMA table_info(credential) against a production tenant showing credential_device_type present, which is the only proof the deploy actually reached the enforcing store. If the operator reports that the macOS sheet offers no nearby-phone path even under Other Options, the separate QR-first entry point must be implemented, gate-green and landed before this clears. Do not run /deploy — it is the operator's alone, so when everything else is done, say so and stop. Do not add preferredAuthenticatorType:remoteDevice to the default Add-a-device path. Do not override the fire capacity gate.
+1	/goal Multi-device passkey enrollment is LIVE — proven by this session printing a PRAGMA table_info(credential) against a production tenant showing credential_device_type present, which is the only evidence the deploy reached the enforcing store rather than just origin/main. If the operator reports the macOS sheet offers no nearby-phone path even under Other Options, the separate QR-first entry point must be implemented, gate-green and landed before this clears. Do not run /deploy — it is the operator's alone, so when everything else is done, say so and stop. Do not add preferredAuthenticatorType:remoteDevice to the default Add-a-device path. Do not override the fire capacity gate.
+1	open "http://gn.localhost:3001/login"
+1	bash /tmp/converge-live-layer.sh
+1	kitty @ focus-window --match id:126
+1	bash ~/.claude/autonomy/staged/dispatcher-venue-apply.sh both
+1	bash /Users/chrisren/.claude/bin/cc-do --list
+1	CC_FIRE_CAPACITY_GATE=off bash /Users/chrisren/Development/claude-infrastructure/scripts/handoff-fire.sh --prompt-file <your-brief> --worktree <branch>
+1	npm i --prefix ~/.claude-260 @anthropic-ai/claude-code@2.1.260 && sed -i '' 's#\.claude-220/node_modules/\.bin/claude#.claude-260/node_modules/.bin/claude#' ~/.zshrc
+1	bash /tmp/live-layer-repair.sh
+1	bash /tmp/live-layer-repair.sh --yes
+1	bash /tmp/hooks-wire-posttooluse-failure.sh --yes
+1	launchctl setenv CC_REAPER_GARBAGE 0
+1	bash /tmp/claude-next-commands-converge.sh
+1	CONFIRM=1 bash /tmp/claude-next-converge.sh
+1	CONFIRM=1 bash /tmp/escalation-watch-activate.sh
+1	cc-do eac72456751a
+1	CC_DO_ASSUME_YES=1 cc-do eac72456751a
+1	CONFIRM=1 bash ~/.claude/autonomy/pending-activation/39-smart-allowlist-activate.sh
+1	kitty @ get-text --match id:1 >/dev/null; echo "now try shift+drag in pane 1 (the plain zsh pane in your own window — no Claude running)"
+1	open "x-apple.systempreferences:com.apple.preferences.softwareupdate"
+1	bash ~/Development/claude-infrastructure/bin/cc-backlog done f4184622d743 --evidence "Operator ruling 2026-08-25: staying on Sequoia 15.7.9. Residual (2) is already satisfied — AutomaticallyInstallMacOSUpdates=0, AutomaticDownload=0, /Library/Updates holds no payload, so nothing can stage or ride a restart. Residual (1) Tahoe declined: no executable path in scripts/bin/hooks branches on the OS version, so it buys no capability, while the 30-pane terminal/Metal/Rosetta posture is measured on Darwin 24 and a major jump invalidates that evidence base."
+1	/harvest-skill
+1	/skill-promote self-explaining-artifact
+1	pnpm tsx --env-file=.env.local scripts/setup/prune-orphan-section-configs.ts --tenant=key --tenant=harbourtwo --tenant=time --tenant=gm --tenant=envy --execute
+1	git add docs/research/exhaustive-drive-2026-09-08/W2-B5-write-attribution-census.md
+1	git commit -m "docs(exhaustive-drive): W2-B5 — the Bash-write extraction's coverage and its false convictions live in the same idiom" -- docs/research/exhaustive-drive-2026-09-08/W2-B5-write-attribution-census.md
+1	for db in parent-schema-database-lax parent-schema-database-singapore parent-schema-database-ashburn parent-schema-database-dallas; do turso db config delete-protection enable "$db" && turso db config delete-protection show "$db"; done
+1	for db in academy apt101 envy gm harbour harbourtwo insomniacdenver key muin studio60 sunset time; do turso db config delete-protection enable "$db-database" >/dev/null && turso db config delete-protection show "$db-database" | sed "s|^|$db: |"; done
+1	cd /Users/chrisren/Development/.worktrees/wt-region-foldin && bash scripts/ship-land.sh
+1	bash /tmp/reso-destroy-retired-tenants-v2.sh
+1	git -C /Users/chrisren/Development/reso-web-app push origin main
+1	bash /Users/chrisren/Development/reso-web-app/scripts/verify-agent-readiness.sh https://www.reso.gl
+1	for p in / /twelve-west /mansion; do echo -n "$p "; curl -s "https://www.reso.gl$p?cb=$RANDOM" | grep -c '@layer recipes{\.css-'; done
+1	npx oxlint@1.80.0 src theme
+1	cursor /Users/chrisren/Development/reso-web-app/docs/plans/OXLINT_MIGRATION.md
+1	handoff-fire.sh --recycle
+1	open http://localhost:3010/preview/floor-plan-viewer-composite
+1	git -C /Users/chrisren/Development/.worktrees/wt-pool-8 add src/components/CheckDB.tsx src/components/PageCard.tsx src/components/CardFormBody.tsx src/components/PageCardFooter.tsx
+1	cd ~/Development/reso-landing-app && git checkout landing-overview-wip && pnpm dev
+1	msg send "+13057668171" "Is your buddy Lucas Gilschenk the ops director? Need his email — the invite link only works for the exact address it's issued to."
+1	cd /Users/chrisren/Development/.worktrees/wt-pool-7 && pnpm tsx scripts/bottle-gen-production.ts --slug=chivas-18 --all-refs --runs=2 --prompt="Chivas Regal 18 Year Old Gold Signature blended Scotch whisky bottle"
+1	cd /Users/chrisren/Development/.worktrees/wt-pool-7 && pnpm tsx scripts/bottle-gen-production.ts --slug=glenlivet-12 --all-refs --runs=2 --prompt="The Glenlivet 12 Year Old Double Oak single malt Scotch whisky bottle"
+1	cd /Users/chrisren/Development/.worktrees/wt-pool-7 && pnpm tsx scripts/bottle-gen-production.ts --slug=glenlivet-12 --all-refs --runs=3 --prompt="The Glenlivet 12 Year Old Double Oak single malt Scotch whisky bottle"
+1	aws amplify update-branch --app-id d2wzxfgylxxfth --branch-name main --no-enable-auto-build
+1	cd ~/Development/sevenrooms-bridge && bash scripts/deploy.sh
+1	bash /tmp/sr-finish.sh
+1	bash scripts/prove-relogin.sh
+1	export DISCORD_TOKEN='paste-token-here' && python3 /tmp/discord-read-history.py list
+1	export DISCORD_TOKEN='<your real token>' && /opt/homebrew/bin/python3 /tmp/discord-read-history.py list
+1	cursor ~/Development/personal/roommate-settlement/REVIEW.md
+1	open ~/Development/personal/roommate-settlement/settlement.html
+1	cursor ~/Development/personal/docs/research/montway-exit-FINAL-2026-08-25.md
+1	bash ~/.claude/scripts/handoff-fire.sh --recycle --prompt-file /private/tmp/claude-501/-Users-chrisren-Development-personal/dd976890-9569-4a02-879c-0bd764b1f7ae/scratchpad/recycle-brief.txt
+1	open https://www.amazon.com/dp/B0F8NYK28W
+1	open "https://www.hellolanding.com/homes/apartment-in-austin-tx-pearl-springdale-254"
+1	cursor /Users/chrisren/Development/personal/montway-fcba-letter-2026-08-26.md
+1	open 'https://outlook.live.com/owa/?ItemID=AQMkADAwATY0MDABLTlmNTUALWE3ZGUtMDACLTAwCgBGAAADfHgLJFooeEuAVU9Tl7xLTgcA5ymqAQJ7ikGyvEdSeRTnggAAAgEPAAAA5ymqAQJ7ikGyvEdSeRTnggAJrBWNbwAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem'
+1	open 'https://outlook.live.com/owa/?ItemID=AQMkADAwATY0MDABLTlmNTUALWE3ZGUtMDACLTAwCgBGAAADfHgLJFooeEuAVU9Tl7xLTgcA5ymqAQJ7ikGyvEdSeRTnggAAAgEPAAAA5ymqAQJ7ikGyvEdSeRTnggAJrBWNcAAAAA%3D%3D&exvsurl=1&viewmodel=ReadMessageItem'
+1	open tel:+16037900857
+1	open "https://www.google.com/travel/flights?q=flights%20from%20SNA%20to%20AUS%20on%202026-08-30%20one%20way"
+1	open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+1	cursor ~/Development/personal/roommate-settlement/STATEMENTS.md
+1	open "https://wa.me/18329516136"
+1	bash /tmp/austin-tuesday-night.sh
+1	cursor /Users/chrisren/Development/personal/roommate-settlement/STATEMENTS.md
+1	open /tmp/jiahao-receipts
+1	open 'https://www.beeper.com/download'
+1	curl -s "https://mercedesbenzhpc.com/wp-json/wp/v2/charging-station?slug=tx-austin-the-domain" | python3 -c "import sys,json; d=json.load(sys.stdin); print('MB HPC Domain: \$'+str(d[0]['acf']['current_price'])+'/kWh')"
+1	cc-do 75d6718b3df3
+1	git -C $HOME/Development/claude-infrastructure reset --hard origin/main
+1	cd /Users/chrisren/Development/.worktrees/ladder-default && bash scripts/ship-land.sh
+1	aws amplify start-job --app-id djnbdqpvc08g4 --branch-name main --job-type RETRY --job-id 1470 --region us-west-2
+1	git show 88af9bfe1
+1	open "https://claude.ai/code/artifact/2fee5230-a940-4907-9325-85c5b0bdf18c"
+1	bash /tmp/studio60-rollback-floorplan-to-deployed.sh
+1	jq -r --arg v red 'select(.verdict==$v).failing[]?' ~/.claude/autonomy/postland/stamps/*.json | sort | uniq -c | sort -rn | head
+1	git show 1ecbb2e65 dd53b1282
+1	bash /var/folders/0s/t55zvgts2qqb78fbqgn8ldy40000gn/T/lr-launch-7193ec2b-PA1BtD.sh
+1	pnpm tsx scripts/seed-floor-plan-from-json.ts --subdomain studio60 --create="Studio 60 — Main Floor"
+1	git show b5aaa213c5de842eece7e1cd67614e9cbbf7ec49
+1	cc-mission next
+1	it2 session focus -s 616
+1	bash ~/Development/claude-infrastructure/migrations/0015-memory-index-drain-registration.sh
+1	bash ~/.claude/bin/cc-memory-rotate --dry-run ~/.claude/projects/-Users-chrisren-Development-claude-infrastructure/memory/MEMORY.md
+1	cd ~/Development/claude-infrastructure && CC_RECYCLE_SUBAGENT_GATE=off bash scripts/handoff-fire.sh --recycle --prompt-file /tmp/fire-recycle-83.txt
+1	open https://github.com/settings/installations
+1	open https://github.com/settings/installations/
+1	CC_FIRE_CAPACITY_GATE=off bash /Users/chrisren/Development/claude-infrastructure/scripts/handoff-fire.sh --prompt-file /tmp/fire-drain-recycle58.txt --cwd /Users/chrisren/Development/.worktrees/drain/recycle-11 --notify-back 102 --account auto --split-right
+1	launchctl kickstart -k gui/$(id -u)/com.claude.compressor-sentinel
+1	git -C /Users/chrisren/Development/claude-infrastructure config --unset core.bare && bash /Users/chrisren/Development/claude-infrastructure/scripts/deploy-live.sh --auto
+1	cc-backlog list --blocked | head -20
+1	bash /tmp/reso-cursor-gate-flip.sh
+1	bash scripts/deploy-release.sh
+1	/compact-memory
+1	aws ssm put-parameter --name /amplify/djnbdqpvc08g4/main/REPLICACHE_PULL_CURSOR_GATE --value on --type String --overwrite
+1	mv ~/.claude/cc-registry/580.json ~/.claude/cc-registry/580.json.stale-$(date +%s)
+1	bash scripts/setup/lead-alert-phase0.sh
+1	cd /Users/chrisren/Development/.worktrees/wt-cc-015041-28169 && bash scripts/setup/lead-alert-phase0.sh
+1	cd /Users/chrisren/Development/claude-infrastructure && git status --short hooks/enforce-email-formatting.py && git diff hooks/enforce-email-formatting.py
+1	git -C /Users/chrisren/Development/claude-infrastructure stash push -m "identical to trunk; unblocks deploy-live" -- hooks/enforce-email-formatting.py && bash /Users/chrisren/Development/claude-infrastructure/scripts/deploy-live.sh
+1	bash /private/tmp/claude-501/-Users-chrisren-Development--worktrees-wt-cc-115127-44020/ce7e15dd-e346-4a83-8877-2cd873bcde0d/scratchpad/apply.sh
+1	cd /Users/chrisren/Development/wt-ptuf2 && bash scripts/ship-land.sh
+1	cc-escalations ack --all
+1	cc-decide action ab82a67e2c37 --evidence "settings-json: register across the config dirs with the count assertion"
+1	cd /Users/chrisren/Development/.worktrees/wt-3dd6dcf66e37 && /ship
+1	cc-backlog unblock 32d4d093f78a
+1	kitty @ ls | grep -q wt-pool-3 && echo "check the new pane to the right"
+1	pnpm exec bash -c '/deploy'
+1	cursor /Users/chrisren/Development/.worktrees/wt-pool-7/.claude-plans/MEMORY_COMPACTION_LONG_HORIZON.md
+1	aws dynamodb create-table --table-name reso-web-vitals --attribute-definitions AttributeName=day,AttributeType=S AttributeName=id,AttributeType=S --key-schema AttributeName=day,KeyType=HASH AttributeName=id,KeyType=RANGE --billing-mode PAY_PER_REQUEST --region us-west-2
+1	! aws dynamodb create-table --table-name reso-web-vitals --attribute-definitions AttributeName=day,AttributeType=S AttributeName=id,AttributeType=S --key-schema AttributeName=day,KeyType=HASH AttributeName=id,KeyType=RANGE --billing-mode PAY_PER_REQUEST --region us-west-2
+1	! aws amplify start-job --app-id d2wzxfgylxxfth --branch-name main --job-type RELEASE
+1	aws iam create-role --role-name reso-amplify-ssr-compute --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"amplify.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+1	python3 ~/Development/claude-infrastructure/scripts/cloud-answer.py --dry-run
+1	bash /Users/chrisren/Development/sevenrooms-bridge/scripts/arm-sidecar.sh
+1	npx @softeria/ms-365-mcp-server --login
+1	cd ~/Development/reso-management-app && claude "Decision 517e175ffe3b says the guestlist confirmation email has been ~99.5% failing for months. Find the sending path and the queue, verify whether it is still failing today, and report what is actually stuck, why, and how many queued items are stale."
+1	git -C /Users/chrisren/Development/claude-infrastructure log --oneline 8460f5ac9fb23f01e220b83463724d0b36624f7e..HEAD
+1	cc-do f8b768eaaebd
+1	~/Development/agent-secrets/bin/agent-secrets setup
+1	pbcopy < ~/.config/secrets/age.key
+1	~/Development/agent-secrets/bin/agent-secrets add CODA_API_TOKEN && ~/Development/agent-secrets/bin/agent-secrets backup
+1	open "https://www.ihg.com/holidayinnexpress/hotels/us/en/santa-ana/jwaex/hoteldetail"
+1	open "https://www.google.com/travel/search?q=hotels%20Santa%20Ana%20CA&ts=CAESCgoCCAMKAggDEAA&checkin=2026-08-29&checkout=2026-08-30"
+1	sudo networksetup -ordernetworkservices "Wi-Fi" "iPhone USB 8"
+1	git show 1fe7a1bc4
