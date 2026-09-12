@@ -128,3 +128,29 @@ still convicts `approval-queue-drain.sh` under any arm, the design is dead regar
 
 Do not build the hook before that replay. The first attempt scored 48/60 against labels its own
 author wrote, and the adversarial pass is what found it would strand the operator.
+
+## 9. CORRECTION — the corpus is a rolling 30-day window that DECAYS, and waiting is negative-value
+
+Two measurement errors in §1's provenance, both found 2026-09-12 by re-measuring rather than
+re-reasoning. Neither changes the gold set's verdicts; both change what the corpus IS.
+
+**(a) Coverage.** The first pass globbed `~/.claude*/projects/*/*.jsonl` — depth-2 only, 2,684 of
+the 6,884 transcript files that exist. It missed 12 distinct commands entirely.
+
+**(b) Decay — the one that matters.** `scripts/cc-gc.sh` runs every 6 h with
+`CC_GC_TRANSCRIPT_DAYS=30`, so transcripts are **deleted at 30 days**. Measured: the live corpus
+spans `2026-08-11 → 2026-09-12`, exactly 32 days. Re-scanning the *same* population 19 hours later
+returned **1,166 emissions where the first pass saw 1,352** — the fuller file set yielded FEWER
+emissions because GC had reaped the tail in between. Per-block and joined-text counting agree
+exactly (1,167 = 1,167) on today's files, so this is not a methodology artifact: it is data loss.
+
+**Consequence for the project, and it inverts the obvious instinct.** There is no external event to
+wait for and no larger dataset accumulating. *Waiting shrinks the evidence.* The 14k+ commits in git
+are permanent; the transcripts that carry hand-off behaviour are not, and they are the only record
+of it. Any future re-derivation from a live scan will be measuring a strictly smaller corpus than
+this one.
+
+**`handoff-emissions-FROZEN.txt` is therefore the artifact of record** — the union of the
+2026-09-11 and 2026-09-12 snapshots (max per command, never sum), **1,376 emissions / 425 distinct
+commands**. It is strictly larger than any single scan can ever be again: one command in it has
+already been GC'd out of the live corpus. Score against this file, not against a fresh scan.
