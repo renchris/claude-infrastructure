@@ -30,7 +30,7 @@ setup() { CC="${BATS_TEST_DIRNAME}/../bin/cc-cannot"; }
   # a universal one-token acquittal wrapper.
   run bash "$CC" -- "/usr/bin/env cc-blockers"
   [ "$status" -ne 0 ]
-  ! printf '%s' "$output" | grep -q "tui"
+  ! printf '%s' "$output" | grep -q "tui" || false
 
   run bash "$CC" -- "/deploy"          # the real thing still acquits
   [ "$status" -eq 0 ]
@@ -87,7 +87,7 @@ setup() { CC="${BATS_TEST_DIRNAME}/../bin/cc-cannot"; }
 @test "R0 · a mutating flag or a chain disqualifies the read-only match" {
   # `gh pr view --web` opens a browser; `git show … && rm …` is not a read.
   run bash "$CC" -- "gh pr view 1 --repo x/y --web"
-  ! printf '%s' "$output" | grep -q "read-only"
+  ! printf '%s' "$output" | grep -q "read-only" || false
   run bash "$CC" -- "git show abc123 && rm -rf /tmp/x"
   ! printf '%s' "$output" | grep -q "read-only"
 }
