@@ -71,13 +71,13 @@ EOF
 @test "status reads the live setting, both ways" {
   run "$LID"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"ENABLED (normal)"* ]] || false
-  [[ "$output" == *"caffeinate does NOT cover this"* ]] || false
+  [[ "$output" == *"SLEEPS when the lid is closed"* ]] || false
+  [[ "$output" == *"caffeinate does NOT cover clamshell sleep"* ]] || false
   echo 1 > "$D/state"
   run "$LID"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"DISABLED"* ]] || false
-  [[ "$output" == *"persists across reboot"* ]]
+  [[ "$output" == *"KEEPS RUNNING with the lid closed"* ]] || false
+  [[ "$output" == *"Survives reboot"* ]]
 }
 
 @test "toggle from off renders the operator block for bit 1 and exits 10" {
@@ -139,15 +139,26 @@ EOF
   CC_LID_SUDO="$D/sudo-can" run "$LID" on
   [ "$status" -eq 0 ]
   [ "$(cat "$D/state")" = 1 ]
-  [[ "$output" == *"SleepDisabled=1"* ]] || false
+  [[ "$output" == *"now KEEPS RUNNING with the lid closed. (verified)"* ]] || false
   [[ "$output" != *"▶ Run this:"* ]]
+}
+
+# BOTH directions are rendered, and only one of them was covered. The report is now a
+# shared renderer with an on/off branch, so an off-direction change can regress alone.
+@test "the off direction reports the behaviour too, not just the on direction" {
+  echo 1 > "$D/state"
+  CC_LID_SUDO="$D/sudo-can" run "$LID" off
+  [ "$status" -eq 0 ]
+  [ "$(cat "$D/state")" = 0 ]
+  [[ "$output" == *"now SLEEPS when the lid is closed"* ]] || false
+  [[ "$output" != *"KEEPS RUNNING"* ]]
 }
 
 @test "CONTROL: a write that does not move the setting fails closed (exit 4)" {
   PMSET_LIES=1 CC_LID_SUDO="$D/sudo-can" run "$LID" on
   [ "$status" -eq 4 ]
   [[ "$output" == *"still reads"* ]] || false
-  [[ "$output" != *"now DISABLED"* ]]
+  [[ "$output" != *"now KEEPS RUNNING"* ]]
 }
 
 @test "CONTROL: an unreadable pmset is 'unknown', never 'off'" {
@@ -184,7 +195,7 @@ EOF
   run env CC_LID_PMSET="$D/pmset" CC_LID_SUDO="$D/sudo-scoped" CC_LID_TTY=0 "$LID" on
   [ "$status" -eq 0 ]
   [[ "$output" != *"Run this"* ]] || false
-  [[ "$output" == *"verified: SleepDisabled=1"* ]] || false
+  [[ "$output" == *"now KEEPS RUNNING with the lid closed. (verified)"* ]] || false
   [ "$(cat "$D/state")" = 1 ]
 }
 

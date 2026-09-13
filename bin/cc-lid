@@ -102,23 +102,31 @@ if [ -n "$MACHINE" ]; then
   [ "$CUR" = "$WANT" ] && exit 0 || exit 10
 fi
 
-if [ "$ACTION" = status ] || [ "$CUR" = "$WANT" ]; then
-  if [ "$CUR" = on ]; then
-    echo "Lid-close sleep is DISABLED — the machine keeps running with the lid shut."
-    echo "This persists across reboot. Turn it back off with: cc-lid off"
-    echo "Keep it plugged in and out of a bag; it runs full-tilt with no airflow."
+# ONE renderer for both the status read and the post-change report — the wording IS the
+# product of this tool, and two copies of it drift. It leads with the BEHAVIOUR, never
+# with the setting name: "DISABLED" is a value with no referent, so the reader has to
+# work out which way it points before they know whether they can shut the lid. Operator
+# ruling 2026-09-13, on a toggle whose whole answer was "now DISABLED (verified:
+# SleepDisabled=1)" — true, verified, and silent on the only question being asked.
+render_state() {   # $1 = on|off · $2 = "now " after a change · $3 = optional tail
+  if [ "$1" = on ]; then
+    printf '%s\n' "The laptop ${2}KEEPS RUNNING with the lid closed.${3:-}"
+    printf '%s\n' "Survives reboot — undo with \`cc-lid off\`. Keep it plugged in and out of a bag; it runs full-tilt with no airflow."
   else
-    echo "Lid-close sleep is ENABLED (normal) — closing the lid suspends the machine."
-    echo "caffeinate does NOT cover this; only 'pmset disablesleep' does. Enable with: cc-lid on"
+    printf '%s\n' "The laptop ${2}SLEEPS when the lid is closed.${3:-}"
+    printf '%s\n' "That is the macOS default. Keep it awake with \`cc-lid on\` — caffeinate does NOT cover clamshell sleep, only pmset does."
   fi
+}
+
+if [ "$ACTION" = status ] || [ "$CUR" = "$WANT" ]; then
+  render_state "$CUR" ""
   exit 0
 fi
 
 verify_and_report() {   # verify by a DIFFERENT call than the one that made the change
   local new; new="$(read_state)"
   [ "$new" = "$WANT" ] || { echo "cc-lid: applied but pmset still reads '$new' (wanted '$WANT')" >&2; exit 4; }
-  echo "Lid-close sleep is now $([ "$new" = on ] && echo DISABLED || echo ENABLED) (verified: SleepDisabled=$TARGET_BIT)."
-  [ "$new" = on ] && echo "Persists across reboot — revert with: cc-lid off"
+  render_state "$new" "now " " (verified)"
   return 0
 }
 
@@ -153,10 +161,9 @@ fi
 #    back a command that has already been shown not to work on this surface — measured
 #    2026-09-03, when the shipped line failed in Claude Code's `!` surface, and again
 #    when the first cut of this very fix re-printed it after a cancelled prompt.
-WHAT=$([ "$WANT" = on ] && echo "keep running with the lid closed" || echo "restore normal lid-close sleep")
-printf '%s\n' "Needs root, and sudo cannot get a password on this surface."
-printf '%s\n' "This one uses the macOS password dialog instead. It will $WHAT, and the setting persists across reboot."
-printf '%s\n' "This dialog is retirable for good — see the PERMANENT FIX in \`cc-lid --help\`."
+WHAT=$([ "$WANT" = on ] && echo "KEEP RUNNING with the lid closed" || echo "SLEEP when the lid is closed (macOS default)")
+printf '%s\n' "This makes the laptop $WHAT, and it survives reboot."
+printf '%s\n' "Needs root, and sudo cannot get a password on this surface, so it goes through the macOS password dialog — retirable for good, see the PERMANENT FIX in \`cc-lid --help\`."
 printf '\n%s\n\n' "▶ Run this:"
 printf '%s\n' "\`$GUI_CMD\`"
 exit 10

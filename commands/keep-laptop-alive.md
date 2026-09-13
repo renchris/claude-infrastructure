@@ -26,10 +26,22 @@ Then **relay `cc-lid`'s output verbatim** — it is a shipped renderer and its
 `▶ Run this:` block is already in the operator's copy-paste form. Do not paraphrase
 it, do not re-wrap the command, do not add a second command.
 
+🚨 **Relay BOTH lines, and add no summary of your own.** The renderer leads with the
+BEHAVIOUR — "the laptop KEEPS RUNNING / SLEEPS with the lid closed" — precisely so the
+answer needs no gloss; line 2 carries the undo and the one caveat that matters. A
+restatement in your own words re-creates the second renderer this tool exists to
+prevent. *(Operator ruling 2026-09-13: the shipped line was "Lid-close sleep is now
+DISABLED (verified: SleepDisabled=1)" — true, verified, and silent on whether he could
+shut the lid. "DISABLED" is a value with no referent. Fixed in the renderer, not here.)*
+
 - **exit 0** — the setting is already where it should be, or the script applied and
-  verified it. Report the one line it printed and stop.
-- **exit 10** — root is required and this shell cannot elevate (`sudo` is denied to an
-  agent by `hooks/validate-bash.sh`, so you never can). The block it printed IS the
+  verified it. Relay its two lines and stop. **This is the normal outcome on this
+  machine**: the `PERMANENT FIX` sudoers drop-in is installed, so `cc-lid` takes rung 1
+  and applies the change itself with no dialog and no tty. (Verified 2026-09-13 by a
+  no-tty toggle that moved the setting and exited 0. You still cannot type `sudo`
+  yourself — `hooks/validate-bash.sh` denies it — but `cc-lid` may, from inside.)
+- **exit 10** — root is required and this shell could not elevate, i.e. that grant is
+  gone or never existed. The block it printed IS the
   answer. Relay it as-is; never re-prompt the user for the command, and **never
   substitute a `sudo …` line of your own** — with no TTY `sudo` cannot prompt at all
   and dies on "a terminal is required to read the password", which is exactly what
