@@ -650,6 +650,20 @@ def verify(acct: str, before: dict[str, Any]) -> tuple[bool, str, dict[str, Any]
         return False, "no refresh token in the keychain after the attempt", after
     old, new = before.get("login_expires_at"), after.get("login_expires_at")
     if old is None:
+        # TWO causes land here and they are not the same fact. `old` is absent either because
+        # this claude-accounts emits no login_expires_* at all (contract §2), or because the
+        # ACCOUNT had no login to have a deadline — `no-oauth-blob` / a real logout, which is
+        # exactly the state phase 2 exists to repair. Reporting both as "this claude-accounts
+        # emits no login_expires_at" blames the TOOLING for what is usually a property of the
+        # ACCOUNT, and sends the next reader to check versions instead of reading the verdict.
+        # (Measured 2026-09-13 recovering `next` from no-oauth-blob: the field WAS emitted, and
+        # the run still printed the contract-§2 wording.) The discriminator is `after`: if a
+        # deadline exists NOW where none existed before, it did not merely move — it was
+        # ESTABLISHED, which is strictly STRONGER evidence than a move, so it proves rather
+        # than abstains.
+        if new is not None:
+            return True, (f"auth ok + refresh token present; login deadline ESTABLISHED at "
+                          f"{new} (no prior deadline — the account had no login to renew)"), after
         return True, ("auth ok + refresh token present; deadline-move UNVERIFIABLE — this "
                       "claude-accounts emits no login_expires_at (contract §2)"), after
     if new is None:

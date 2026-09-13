@@ -464,6 +464,24 @@ ssot_cfg() { # [trigger_h] — omit for a config that predates the key
   echo "$output" | grep -q 'UNVERIFIABLE'
 }
 
+# A missing PRIOR deadline has TWO causes and they are different facts: this claude-accounts emits
+# no login_expires_* at all (contract §2 — the control above), or the ACCOUNT had no login to have
+# a deadline (no-oauth-blob / a real logout), which is the state phase 2 exists to repair. Measured
+# 2026-09-13 recovering `next` from no-oauth-blob: the field WAS emitted and the run still printed
+# the contract-§2 wording, blaming the tooling for a property of the account. The discriminator is
+# `after` — a deadline existing NOW where none existed before was ESTABLISHED, which is strictly
+# STRONGER evidence than a move, so it must PROVE rather than abstain.
+@test "§2: a prior deadline absent because the ACCOUNT was logged out is ESTABLISHED, not UNVERIFIABLE" {
+  mk_info all true; mk_creds
+  mk_fresh 1 logged-out; mk_fresh 2 ok 2026-10-13T06:19:49Z
+  run "$C" next3
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q 'ESTABLISHED'
+  echo "$output" | grep -q '2026-10-13T06:19:49Z'
+  # and it must NOT blame the tooling for what the account did
+  if echo "$output" | grep -q 'emits no login_expires_at'; then false; fi
+}
+
 # ---- the deadline-move EPSILON ------------------------------------------------------------------
 # The two "moved" / "did NOT move" cases above move the deadline by a MONTH or by exactly nothing,
 # and production's real case was neither. The server returns a countdown to a FIXED wall, re-
