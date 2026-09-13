@@ -171,3 +171,53 @@ analyzer that certifies it is calibrated to 3.2 by design.
 ## Disposition
 
 Not refuted; **cured**. The row closes on this diff, not on a disproof.
+
+## Addendum 2026-09-13 (desk re-land) — those 4 reds were the LAND-BLOCKING defect
+
+The land of this diff exited **6, gate-red**, and the gate named a file this
+commit itself touches:
+
+```
+LEAK     cc-cannot.bats: setup() does not fixture $HOME — it runs against the live ~/
+AMBIENT  cc-cannot.bats: setup() does not pin CC_FIRE_CAPACITY_GATE=off
+SEAM     cc-cannot.bats: HANDOFF_ACCOUNT_SWEEP_STAMP, CC_ACCOUNTS_BIN, CC_HEAL_LOCK_PREFIX
+```
+
+Those violations predate this commit; `test-hermeticity-lint` is **own-scope**,
+so touching the file is what made them blocking. Not a bypassable finding — the
+remedy is the fixture, and it is the same defect as the section above.
+
+**The section above called the 4 reds "off-box artifacts … a desk path absent on
+this VM", which is true and is NOT the whole reading.** A suite whose verdict is
+a function of the operator's `~/` has no fixed colour: it was 13/13 GREEN on the
+desk and 4-RED on the VM *on identical bytes*. The VM was right and the desk was
+the lucky arm. Stated as an artifact, the finding invites the next reader to
+discount it; it is the reason the land refused.
+
+A/B on one box, one variable — the same suite run with `$HOME` pointed at an
+empty directory:
+
+| arm | `$HOME` | reds |
+|---|---|---|
+| pre-fixture | empty | **4 — cases 1, 7, 11, 13** |
+| pre-fixture | live `~/` | 0 |
+| post-fixture | empty | **0** |
+| post-fixture | live `~/` | 0 |
+
+The pre-fixture empty-`$HOME` arm reproduces the VM's recorded red set
+**exactly, case for case**, from a desk with no VM involved — independent
+corroboration that the attribution above is right, and the red-proof for the
+fixture (green in both arms would have been an equivalence guard proving
+nothing).
+
+The fixture seeds the one property each case turns on rather than copying the
+operator's files: a `/dev/tty` guard inside `cc-cannot`'s `head -80` band versus
+incidental terminal handling below it, and a `cc-owner` stub emitting the real
+two-line `OWNED` shape — which keeps the flag-divergence composition under test
+while reading no live launchd. Two hardcoded `/Users/chrisren/...` literals
+became `$HOME/...`; same shape (an absolute path), now fixture-relative.
+
+Residual, unchanged and pre-existing: `cc-owner.bats` and
+`handoff-claim-assert.bats` leak `$HOME` too. Both are outside this diff, both
+were already reported advisory by the same gate run, and neither is this
+commit's to fix.
