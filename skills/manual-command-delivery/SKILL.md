@@ -29,6 +29,16 @@ question about *the human's consent*. A shell can `DROP TABLE` and `git push --f
   row count), one line on what it cannot undo, and why it was blocked; then require a typed `yes`,
   defaulting to no. Declining skips that step and reports it. Support `--dry-run`.
 
+🚨 **Those five are the ONLY gate classes, and the list is EXHAUSTIVE — not a starting set.** If you
+are reaching for a sixth, you are deferring, not gating. The failure has a tell: you invent an axis
+the taxonomy does not have — "it touches the system", "it is their machine", "they should choose
+this" — and gate on *consent-feel* instead of *blast radius*. Consent-feel is unbounded, because
+every action touches something. **Installing free, reversible, already-ratified tooling is a DRIVE,
+not a gate.** Measured case, 2026-09-13: a 233 MB notarized app that this fleet's own research had
+already ratified as the pick was handed back as "say go and I'll install it" — which the Follow-On
+Gate (F1–F4 PASS) and "offering is the defect" had each already settled. Verify it is safe
+(signature · notarization · the maintainer the research named), install it, and report that you did.
+
 **A block bought a human READING that specific command. A keystroke over an unread program does not
 pay it.** Bundling a refused command into a 200-line run converts per-command review into one
 undifferentiated `bash` — the consent obtained is "run the hand-off", never "delete these rows".
