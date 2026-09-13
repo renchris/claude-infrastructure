@@ -83,6 +83,8 @@ fired()  { echo "$1" | grep -q '"decision":"block"'; }   # hook stdout ⇒ did i
 @test "fires on every listed deference tell" {
   local msgs=(
     "The migration is ready. Say the word and I'll apply it."                 # say the word
+    "The install is ready. Say go and I'll run it."                          # say go
+    "It's staged — give me the word and it ships."                            # give me the word
     "I've drafted everything — on your word I'll land it."                     # on your word
     "I've finished the refactor. Want me to run the tests next?"              # want me to
     "Shall I proceed with wiring the remaining hooks?"                        # shall I
@@ -142,6 +144,10 @@ fired()  { echo "$1" | grep -q '"decision":"block"'; }   # hook stdout ⇒ did i
 }
 
 # ── SILENT on substring / boundary traps (must not match the tells) ──
+@test "silent: 'say going' does not match the 'say go' tell" {
+  run runhook "$(mkfix "I would say going forward we keep the plates at DPR 4.")"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+}
 @test "silent: 'should i download' does not match 'should i do'" {
   run runhook "$(mkfix "Should I download the larger dataset for this analysis?")"
   [ "$status" -eq 0 ]; [ -z "$output" ]
