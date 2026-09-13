@@ -165,7 +165,7 @@ MSG="$(printf '%s' "$LASTJSON" | jq -r '. // empty' 2>/dev/null || true)"
 # ── (A) Deference tells on DRIVABLE work (corpus-validated; boundaries guard the substring traps:
 #    "should i (do)" won't match "should i download"; the "otherwise" tell requires a first-person
 #    hold, so "otherwise the code…" stays silent). ──
-TELLS='say the word|on your word|want me to|shall i|should i (proceed|do|go)([^a-z0-9]|$)|let me know if you|holding for your|otherwise (i.?ll|i will|i.?d) (hold|wait|leave|hang|pause|stand)|your steer|do you want me to|awaiting your|i can [a-z]+ (it|this)( (next|now))?[[:space:]]*[—–-]+[[:space:]]*otherwise[[:space:]]+i'
+TELLS='say the word|say go([^a-z0-9]|$)|give me the word|on your word|want me to|shall i|should i (proceed|do|go)([^a-z0-9]|$)|let me know if you|holding for your|otherwise (i.?ll|i will|i.?d) (hold|wait|leave|hang|pause|stand)|your steer|do you want me to|awaiting your|i can [a-z]+ (it|this)( (next|now))?[[:space:]]*[—–-]+[[:space:]]*otherwise[[:space:]]+i'
 # ── (P0-4c) Confident DONE-assertions (NARROW: only the "nothing-to-do"-class). Fires ONLY when
 #    the live ledger contradicts the claim, so an HONEST completion stays silent (G-P11-3 / a19 D-1). ──
 DONE_TELLS='nothing (left|more|else)?[a-z ]{0,12}to do|everything [a-z ]{0,20}(is|was) done|everything (requested|else|you asked)[a-z ,]{0,20}(is|was)? ?done|complete[ ,—–-]+nothing|(we.?re|we are|all)[ ,]*done[ ,.—–-]+nothing|that.?s everything'
