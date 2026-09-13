@@ -1,6 +1,6 @@
 ---
 name: demo-recording
-description: Record a real screen demo — a live agent session, a terminal, a two-way exchange between panes — and land it in a README as an image GitHub will actually animate. Use when asked to record or re-record a demo, capture a live session on video for docs, shrink an oversized README GIF or MP4, or add a screen recording to a README. Covers the settled format decision (GitHub strips <video>, so the inline slot is an image; it serves animated WebP byte-identical, and camo is not in the path for a relative README image) and the format rule that cost a shipped regression to learn — flat terminal output goes through lossless gif2webp, but live screen capture MUST use img2webp -near_lossless 40, because ordinary lossy WebP seams every flat region (an unfocused pane's grey) at every size that beats the GIF, and SSIM/PSNR do not catch it. Also iTerm2 window sizing (font size is per-session and silently breaks pane matching), firing a two-way agent demo so the whole exchange is on camera, the mandatory contact-sheet review, caption strips as padded frames (this ffmpeg has no drawtext), and encode recipes with measured byte counts. NOT for understanding an existing video (that is video-understanding), and NOT for a scripted terminal clip where nothing live is needed — vhs + a .tape file is simpler and re-runnable (assets/demo/handoff-real.tape is the working reference).
+description: Record a real screen demo — a live agent session, a terminal, a two-way exchange between panes — and land it in a README as an image GitHub will actually animate. Use when asked to record or re-record a demo, capture a live session on video for docs, shrink an oversized README GIF or MP4, or add a screen recording to a README. Covers the settled format decision (GitHub strips <video>, so the inline slot is an image; it serves animated WebP byte-identical, and camo is not in the path for a relative README image) and the format rule that cost a shipped regression to learn — flat terminal output goes through lossless gif2webp, but live screen capture MUST use img2webp -near_lossless 40, because ordinary lossy WebP seams every flat region (an unfocused pane's grey) at every size that beats the GIF, and SSIM/PSNR do not catch it. Also iTerm2 window sizing (font size is per-session and silently breaks pane matching), firing a two-way agent demo so the whole exchange is on camera, the mandatory contact-sheet review, caption strips as padded frames (the PATH ffmpeg has no drawtext; ffmpeg-full does), and encode recipes with measured byte counts. NOT for understanding an existing video (that is video-understanding), and NOT for a scripted terminal clip where nothing live is needed — vhs + a .tape file is simpler and re-runnable (assets/demo/handoff-real.tape is the working reference).
 ---
 
 <!-- markdownlint-configure-file {
@@ -198,6 +198,16 @@ inline slot has no fallback once `<video>` is stripped.
 
 ## Setup: size the WINDOW, never the font
 
+🚨 **The host terminal is kitty (`net.kovidgoyal.kitty`), not iTerm2** — measured
+2026-09-03, re-measured 2026-09-13. The recipes below are kept because the *lesson*
+is host-independent, but the `it2` / `"iTerm2"` forms **fail as typed** here: only an
+`iTermServer` daemon is resident, no iTerm2 application process, so
+`tell process "iTerm2"` matches nothing. Note the trap — the launcher *synthesises*
+`ITERM_SESSION_ID` into a kitty-shaped `w0t0p0:<KITTY_WINDOW_ID>`, so that variable is
+**not** evidence the host is iTerm2. Read `$KITTY_WINDOW_ID`, or
+`osascript -e 'tell application "System Events" to get name of every process whose name contains "itty"'`.
+kitty equivalents are given inline under each recipe.
+
 iTerm2 font size is **per-session**. `⌘+` on one pane does not reach a pane created
 later — a `handoff-fire.sh` split inherits the *profile* default. Different font ⇒
 different row grid ⇒ different composer offset ⇒ mismatched panes and a chat box
@@ -212,6 +222,19 @@ it2 session list --json | python3 -c "import json,sys; [print(s['window_id'], s[
 This is not hypothetical: a live check found two panes **in the same window** at
 `75×78` and `68×83`.
 
+**On kitty, the same check** (verified 2026-09-13 — it reproduced the defect on
+sight: `30×44`, `77×43`, `77×44` live on one machine):
+
+```bash
+kitten @ ls | python3 -c "
+import json,sys
+for w in json.load(sys.stdin):
+  for t in w['tabs']:
+    for p in t['windows']:
+      print(w['id'], t['id'], p['columns'], 'x', p['lines'], (p.get('title') or '')[:40])
+"
+```
+
 Capture the **whole window** (title bar → status footer); crop = window bounds × 2
 on Retina. AppleScript `bounds` is top-left origin; `it2 window list` is
 bottom-left — they disagree, so pick one and stay in it. `it2 window resize` +
@@ -223,6 +246,11 @@ AppleScript instead:
 osascript -e 'tell application "System Events" to tell process "iTerm2" to set position of window 1 to {0, 0}' \
           -e 'tell application "System Events" to tell process "iTerm2" to set size of window 1 to {1920, 1200}'
 osascript -e 'tell application "System Events" to tell process "iTerm2" to get {position, size} of window 1'
+
+# kitty host: same call, same atomicity rule — only the process name changes
+osascript -e 'tell application "System Events" to tell process "kitty" to set position of window 1 to {0, 0}' \
+          -e 'tell application "System Events" to tell process "kitty" to set size of window 1 to {1920, 1200}'
+osascript -e 'tell application "System Events" to tell process "kitty" to get {position, size} of window 1'
 ```
 
 ### The capture itself
@@ -329,9 +357,21 @@ Crop it out or confirm it is empty.
          -c:v libx264 -crf 18 out.mp4
   ```
 
-- **This ffmpeg has no `drawtext`** (built without libfreetype; `ffmpeg -filters |
-  grep -w drawtext` returns nothing) — so caption frames must be *rendered*, not
-  drawn by ffmpeg. PIL is the path; render one PNG per frame so captions can fade,
+- **The PATH ffmpeg has no `drawtext`** (built without libfreetype; `ffmpeg -filters |
+  grep -w drawtext` returns nothing) — but **there is an escape hatch**, measured
+  2026-09-03 and re-measured 2026-09-13: `/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg`
+  (also 9.0.1) **does** carry `drawtext`. Re-assert before relying on it — one grep,
+  both builds:
+
+  ```bash
+  for f in /opt/homebrew/bin/ffmpeg /opt/homebrew/opt/ffmpeg-full/bin/ffmpeg; do
+    printf '%s -> ' "$f"; "$f" -hide_banner -filters 2>/dev/null | grep -cw drawtext
+  done      # expect: 0, then 1
+  ```
+
+  PIL still wins for anything that moves — `drawtext` hard-cuts, and captions that
+  fade, rise or carry a progress line have to be *rendered* per frame. Use the full
+  path only for a static burn-in. PIL is the path; render one PNG per frame so captions can fade,
   rise, or carry a progress line rather than hard-cutting:
 
   ```python
