@@ -18,6 +18,20 @@
 # pasted it into Claude Code's `!` surface, which has no tty either. One command that
 # only works in a window the reader may not be in is a worksheet, not a hand-off.
 #
+# PERMANENT FIX — retire the password dialog entirely (one time, operator-run). The
+# elevation itself is root-only by design: pmset writes powerd's config, and no
+# unprivileged path to clamshell sleep exists (caffeinate's assertions are the wrong
+# path, see WHY above). What CAN be removed is the per-invocation password, with a
+# sudoers drop-in scoped to these two exact command lines and nothing else:
+#
+#   chrisren ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1
+#
+# Installed at /etc/sudoers.d/cc-lid (0440 root:wheel), validated with `visudo -cf`
+# BEFORE it is moved into place — an invalid file there breaks sudo machine-wide, so
+# never write that path directly. With it, rung 1 below fires on every surface,
+# including an agent with no tty, and `cc-lid on|off|toggle` becomes silent and
+# instant. Uninstall is one file: `rm /etc/sudoers.d/cc-lid`.
+#
 # Usage:
 #   cc-lid                 status — current setting, and what it does/doesn't cover
 #   cc-lid on              disable sleep (lid may be closed)
@@ -40,7 +54,7 @@ while [ $# -gt 0 ]; do
     toggle|flip)      ACTION="toggle" ;;
     status|"")        ACTION="status" ;;
     --machine)        MACHINE=1 ;;
-    -h|--help)        sed -n '2,29p' "$0"; exit 0 ;;
+    -h|--help)        sed -n '2,44p' "$0"; exit 0 ;;
     *) echo "cc-lid: unknown argument '$1' (want: on | off | toggle | status)" >&2; exit 2 ;;
   esac
   shift
@@ -110,7 +124,15 @@ verify_and_report() {   # verify by a DIFFERENT call than the one that made the 
 
 # A change is needed. Three rungs, in order of how little they ask of the operator.
 # 1. Passwordless sudo — just do it.
-if $SUDO -n true >/dev/null 2>&1; then
+#    THE PROBE IS THE COMMAND ITSELF, not `true`. `sudo -n true` answers "may I run
+#    ANYTHING without a password", which is a different question and the wrong one: the
+#    grant this tool recommends (§ PERMANENT FIX above) is scoped to exactly these two
+#    pmset invocations, so `true` is NOT permitted under it and the probe would report
+#    "no passwordless sudo" on precisely the machine that has been set up for it — then
+#    render a password dialog the operator installed the rule to be rid of. `-l <cmd>`
+#    asks whether THAT command line is permitted and runs nothing. The `-n true` arm
+#    stays first because a blanket NOPASSWD machine answers it in one call.
+if $SUDO -n true >/dev/null 2>&1 || $SUDO -n -l "$PMSET" -a disablesleep "$TARGET_BIT" >/dev/null 2>&1; then
   $SUDO "$PMSET" -a disablesleep "$TARGET_BIT" || {
     echo "cc-lid: '$PMSET -a disablesleep $TARGET_BIT' failed" >&2; exit 4; }
   verify_and_report; exit 0
@@ -134,6 +156,7 @@ fi
 WHAT=$([ "$WANT" = on ] && echo "keep running with the lid closed" || echo "restore normal lid-close sleep")
 printf '%s\n' "Needs root, and sudo cannot get a password on this surface."
 printf '%s\n' "This one uses the macOS password dialog instead. It will $WHAT, and the setting persists across reboot."
+printf '%s\n' "This dialog is retirable for good — see the PERMANENT FIX in \`cc-lid --help\`."
 printf '\n%s\n\n' "▶ Run this:"
 printf '%s\n' "\`$GUI_CMD\`"
 exit 10
