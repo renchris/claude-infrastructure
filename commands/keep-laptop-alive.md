@@ -1,16 +1,26 @@
+---
+name: keep-laptop-alive
+description: Toggle whether this Mac keeps running with the lid shut — disables sleep on lid close. Use for "keep the laptop alive", "let me close the lid", "stop it sleeping", lid sleep, clamshell sleep, caffeinate, or /keep-laptop-alive.
+argument-hint: "[on|off|toggle|status]"
+---
+
 Toggle whether this Mac keeps running with the lid closed, so a long session is not
 suspended mid-turn.
 
-Run exactly this, with `$ARGUMENTS` passed through (empty = status):
+Run exactly this, with `$ARGUMENTS` passed through — and when `$ARGUMENTS` is empty,
+pass `toggle`:
 
 ```bash
-cc-lid $ARGUMENTS
+cc-lid $ARGUMENTS      # $ARGUMENTS empty ⇒ run: cc-lid toggle
 ```
 
-`cc-lid` accepts `on` · `off` · `toggle` · `status` (default). With no argument the
-user almost always means **toggle** — if `$ARGUMENTS` is empty and the request was
-phrased as an action ("keep it alive", "let me close the lid", "turn it back on"),
-pass `toggle`; if it was phrased as a question ("is it on?"), pass nothing.
+`cc-lid` accepts `on` · `off` · `toggle` · `status`. **A bare `/keep-laptop-alive` is a
+TOGGLE, always** — lid-close sleep enabled ⇒ disable it; disabled ⇒ enable it. The
+empty-argument case has exactly one meaning, so do not read the operator's phrasing and
+do not fall back to `status`; `status`, `on` and `off` happen only when they are typed.
+*(Corrected 2026-09-13: the rule used to branch on action-vs-question wording, and a bare
+re-invocation with no words at all fell through to `status` — the operator had to say
+what a toggle is. A heuristic that cannot fire on the commonest input is not a heuristic.)*
 
 Then **relay `cc-lid`'s output verbatim** — it is a shipped renderer and its
 `▶ Run this:` block is already in the operator's copy-paste form. Do not paraphrase
