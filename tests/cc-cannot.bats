@@ -3,7 +3,55 @@
 # (docs/research/silver-platter-enforcement-2026-09-12/). Each test names the amendment it pins.
 # rc: 0 HUMAN · 1 REFUTED · 2 UNRESOLVED.
 
-setup() { CC="${BATS_TEST_DIRNAME}/../bin/cc-cannot"; }
+setup() {
+  CC="${BATS_TEST_DIRNAME}/../bin/cc-cannot"
+
+  # RULE 1 — cc-cannot resolves script bodies and cc-owner under $HOME (bin/cc-cannot:147-150,184-185),
+  # so unfixtured this suite read the OPERATOR's live ~/. That is not a style point: it passed 13/13 on
+  # the desk and went 4-RED (1,7,11,13) on a cloud VM that simply lacks those paths, which is how a
+  # correct diff reached the land gate carrying a red nobody could reproduce. Seed the state instead.
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME/.claude/autonomy" "$HOME/.claude/scripts" "$HOME/.claude/bin" \
+           "$HOME/Development/claude-infrastructure/scripts"
+
+  # A2b's contrasting pair, seeded to the ONE property each case turns on: a /dev/tty GUARD inside
+  # cc-cannot's head -80 band (HUMAN) versus incidental terminal handling below it (must abstain).
+  printf '%s\n' '#!/usr/bin/env bash' \
+                 '# drain the approval queue' \
+                 'read -r -p "proceed? " ans </dev/tty' \
+    > "$HOME/.claude/autonomy/approval-queue-drain.sh"
+  { printf '%s\n' '#!/usr/bin/env bash'
+    i=0; while [ "$i" -lt 90 ]; do printf '%s\n' '# orchestration preamble - no human gate here'; i=$((i+1)); done
+    printf '%s\n' 'printf "" >/dev/tty   # drives a PANE it spawned, far below the guard band'
+  } > "$HOME/.claude/scripts/handoff-fire.sh"
+
+  # The scheduler arm's subject. Its body must carry no guard signature, or A2 would answer first.
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' \
+    > "$HOME/Development/claude-infrastructure/scripts/deploy-live.sh"
+
+  # cc-owner stub — the two-line OWNED shape bin/cc-owner emits. cc-cannot reads line 2 and scans it
+  # for the handed-over command's flags (bin/cc-cannot:195-203), which is the whole flag-divergence
+  # test; stubbing keeps that composition under test without reading the operator's live launchd.
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'case "$1" in' \
+    '  *deploy-live.sh*)' \
+    '    printf "OWNED - something already runs this; do NOT hand it to the operator:\n" ;' \
+    '    printf "  launchd:com.claude.deploy-live (LOADED every 600s) - names deploy-live.sh\n" ;;' \
+    '  *) exit 1 ;;' \
+    'esac' \
+    > "$HOME/.claude/bin/cc-owner"
+  chmod +x "$HOME/.claude/bin/cc-owner"
+
+  # RULE 2 — this suite NAMES handoff-fire, so the lint requires the pin even though it never
+  # executes it: capacity_gate() reads live vm.loadavg and would make a fire red-by-load.
+  export CC_FIRE_CAPACITY_GATE=off
+
+  # RULE 5 — seams that do NOT resolve under $HOME: two absolute /tmp defaults and one bare name the
+  # subject would execute off the operator's PATH. An ABSENT path is the right value here.
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/handoff-account-sweep.json"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/claude-accounts-heal-"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/claude-accounts"
+}
 
 @test "A1+A2 · the corpus's largest hand-off is HUMAN even though /tmp copy is gone" {
   # approval-queue-drain.sh — 270 emissions, 20% of the whole corpus. Deleted from /tmp; a durable
@@ -59,7 +107,7 @@ setup() { CC="${BATS_TEST_DIRNAME}/../bin/cc-cannot"; }
 }
 
 @test "scheduler-owned refutation composes with cc-owner rather than duplicating it" {
-  run bash "$CC" -- "bash /Users/chrisren/Development/claude-infrastructure/scripts/deploy-live.sh"
+  run bash "$CC" -- "bash $HOME/Development/claude-infrastructure/scripts/deploy-live.sh"
   [ "$status" -eq 1 ]
   printf '%s' "$output" | grep -q "com.claude.deploy-live"
 }
@@ -113,7 +161,7 @@ setup() { CC="${BATS_TEST_DIRNAME}/../bin/cc-cannot"; }
   # DISCARDS the green-stamp gate, and is the operator's decision. cc-owner resolves on basename,
   # so without this the gate told the operator "a launchd agent already does this" about a command
   # no launchd agent ever runs. Every false block in the corpus was this one bug; with it, zero.
-  run bash "$CC" -- "bash /Users/chrisren/Development/claude-infrastructure/scripts/deploy-live.sh"
+  run bash "$CC" -- "bash $HOME/Development/claude-infrastructure/scripts/deploy-live.sh"
   [ "$status" -eq 1 ]                       # the plain form IS scheduler-owned
   printf '%s' "$output" | grep -q "scheduler-owned"
 
