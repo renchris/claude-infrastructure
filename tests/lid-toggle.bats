@@ -43,6 +43,18 @@ EOF
 exec "$@"
 EOF
   chmod +x "$D/sudo-can"
+  # SCOPED: models the recommended /etc/sudoers.d/cc-lid rule — NOPASSWD for exactly
+  # `pmset -a disablesleep 0|1` and nothing else. `-n true` is REFUSED under it, which is
+  # why the probe cannot be `-n true`.
+  cat > "$D/sudo-scoped" <<'EOF'
+#!/bin/bash
+permitted() { case "$*" in */pmset\ -a\ disablesleep\ [01]) return 0 ;; *) return 1 ;; esac; }
+if [ "${1:-}" = "-n" ] && [ "${2:-}" = "-l" ]; then shift 2; permitted "$@" && exit 0 || exit 1; fi
+[ "${1:-}" = "-n" ] && shift
+permitted "$@" || exit 1
+exec "$@"
+EOF
+  chmod +x "$D/sudo-scoped"
   # PROMPTS: refuses -n (a password IS required) but succeeds when driven with a tty.
   cat > "$D/sudo-prompts" <<'EOF'
 #!/bin/bash
@@ -162,4 +174,21 @@ EOF
   run "$LID" enable-please
   [ "$status" -eq 2 ]
   [[ "$output" == *"unknown argument"* ]]
+}
+
+# A grant narrow enough to be worth installing is narrow enough to be INVISIBLE to a
+# `sudo -n true` probe. That mismatch is not a corner case: it is what the operator gets
+# for following this tool's own PERMANENT FIX, and its symptom is the password dialog
+# they installed the rule to be rid of — i.e. the rule silently buys nothing.
+@test "a NOPASSWD rule scoped to pmset alone fires rung 1 — no dialog, no tty" {
+  run env CC_LID_PMSET="$D/pmset" CC_LID_SUDO="$D/sudo-scoped" CC_LID_TTY=0 "$LID" on
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Run this"* ]] || false
+  [[ "$output" == *"verified: SleepDisabled=1"* ]] || false
+  [ "$(cat "$D/state")" = 1 ]
+}
+
+@test "CONTROL: the scoped grant is not a blanket one — sudo -n true stays refused" {
+  run "$D/sudo-scoped" -n true
+  [ "$status" -eq 1 ]
 }
