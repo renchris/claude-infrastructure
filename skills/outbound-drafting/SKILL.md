@@ -143,6 +143,60 @@ or route the question to the party who owes the answer and lacks the incentive t
 
 ---
 
+## 8. Format — build the body, never hand-write the markup
+
+Sections 1-7 govern the WORDS. This one governs how they reach the recipient, and it is the half
+that had no rules at all until 2026-09-14: a real draft went out as one run-on paragraph, in grey
+rather than black, with no signature. Full root cause and the measurements:
+`claude-infrastructure/docs/research/email-formatting-2026-09-14.md`.
+
+**For email, you write prose into a file and a tool emits the HTML:**
+
+```
+$HOME/.claude/bin/ms365-compose-body.py --text-file reply.txt --signature <id> --out body.html
+```
+
+Then pass the contents of `body.html` as the reply tool's **`Comment`** — not `Message.body`,
+which would replace Graph's own quoted chain. One API call; Graph appends the quote itself, at the
+original's full depth, and no part of the original ever passes through you.
+
+`reply.txt` is plain prose: a blank line between paragraphs, `- ` for a bullet. Nothing else.
+
+**Why a tool and not a handful of tags.** Three things kept going wrong, and none is a matter of
+care:
+
+- **Breaks.** Microsoft Graph strips NEWLINES out of a reply Comment. It does not strip MARKUP.
+  Prose passed as prose arrives as one paragraph, every time.
+- **Colour.** Graph drops your text into a BARE `<body>` as an unstyled text node, while its own
+  quote header directly below is explicitly black Calibri 11pt. Unstyled text takes the reading
+  client's default, so it renders grey against a black quoted chain. Every block element has to
+  state its own font, size and colour — inline, because the fragment lands inside a document the
+  other party wrote, whose stylesheet Graph copies into the draft's head.
+- **Signature.** Graph never adds one, and no Graph API can read the user's Outlook signature.
+  If the tool does not put it in the body, the message ships unsigned.
+
+**The signature is data, not prose.** It lives in `~/.claude/email-signatures.json`, keyed by
+sending identity. The tool REFUSES an unknown id rather than filling the gap — if a title or a
+phone number is missing, **ask the operator; do not invent one.** An invented job title in a real
+business email is worse than no signature at all.
+
+**Structure of the message.** Answer-first. What reads as junior reads that way because it defers
+the answer behind context, gratitude, or self-introduction.
+
+| | |
+|---|---|
+| Greeting | own line, name included — omitting it is the most-disliked opening measured |
+| Anchor | ONE sentence that could only have been written to *this* message (§3) |
+| Body | 1-3 paragraphs, one idea each. The FIRST carries the answer, not the reasoning |
+| The ask | exactly one, own paragraph, concrete (§1) |
+| Sign-off | one line, sentence case, comma |
+| Signature | 3-5 lines; no quote, no logo, no invented title |
+
+No *"I hope this email finds you well"* — it spends the one sentence a stranger actually reads.
+No bullet list unless there are ≥3 genuinely parallel items; prose is the default register of
+correspondence, and a list where prose belongs is a machine tell. Neither is `**markdown**`,
+which is the highest-signal tell of all because no mail client renders it.
+
 ## Ambiguity check before sending
 
 - **Every role named precisely.** *"your agent"* reads as the accounts person; *"your insurance
@@ -210,4 +264,5 @@ it.** If the operator asks "provide the full text", output the message and nothi
 `CLAUDE.md` § Communication Discipline (your own prose — different rules) ·
 memories: `feedback_draft_outbound_messages` (provenance) ·
 `feedback_quote_the_thread_not_the_recollection` · `feedback_lead_with_the_one_sentence` ·
-`disclosure-sequencing-gatekeepers` · skill: `manual-command-delivery`
+`disclosure-sequencing-gatekeepers` · skill: `manual-command-delivery` ·
+`docs/research/email-formatting-2026-09-14.md` (§8's measurements, and the guard that enforces it)
