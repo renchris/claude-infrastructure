@@ -71,6 +71,19 @@ def refuse(msg: str):
 DEFAULT_FONT = "Aptos,'Aptos_EmbeddedFont','Aptos_MSFontService',Calibri,'Segoe UI',Arial,sans-serif"
 DEFAULT_SIZE = "11pt"
 DEFAULT_COLOR = "#000000"
+# Declared as a PAIR with the colour, or not at all. A fragment spliced into someone
+# else's document has exactly ONE dark-mode lever — the colours it states — because every
+# published mechanism (<meta name="color-scheme">, :root{color-scheme}, prefers-color-scheme,
+# [data-ogsc]) needs a <head>, a :root, or a <style> block that a fragment cannot deliver.
+# Declaring a colour ALONE is the shape that goes invisible: a client doing PARTIAL inversion
+# darkens the background it inherited and keeps the text colour you stated, which is how black
+# text ends up on a dark background. Stating both means they are inverted together or preserved
+# together, and either outcome is readable. Measured under Chrome's force-dark (a FULL-inversion
+# engine) both shapes render correctly, so that instrument cannot separate them — this default
+# follows the contrast arithmetic instead: across four backgrounds, NO single text colour clears
+# WCAG AA on both white and a dark-mode ground, so "pick a safe grey" is not available.
+# --no-background exists for a fragment going somewhere a white slab would be wrong.
+DEFAULT_BG = "#ffffff"
 
 # Space between paragraphs. 12pt is Outlook's own "space after" for a default paragraph.
 PARA_MARGIN = "0 0 12pt 0"
@@ -169,8 +182,11 @@ def render_blocks(text: str, font: str, size: str, color: str) -> str:
                 f"{esc(_BULLET.match(ln).group(1).strip())}</li>"
                 for ln in lines
             )
+            # margin-left, NOT padding-left. classic Outlook renders through Word, where
+            # padding is supported on table cells ONLY — a padded <ul> simply loses its
+            # indent there, silently, while looking correct everywhere else.
             out.append(
-                f'<ul style="margin:0 0 12pt 0;padding-left:24px;">{items}</ul>'
+                f'<ul style="margin:0 0 12pt 24px;">{items}</ul>'
             )
         else:
             # A single newline INSIDE a paragraph is a soft break — that is how a
@@ -189,13 +205,19 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("--text-file", help="plain-text source; omit to read stdin")
-    ap.add_argument("--out", help="write here instead of stdout")
+    ap.add_argument("--out", help='write here instead of stdout ("-" means stdout)')
     ap.add_argument("--signature", help="signature id from the signature file")
     ap.add_argument("--signature-file", help=f"default: ${SIG_FILE_ENV} or {DEFAULT_SIG_FILE}")
     ap.add_argument("--no-signature", action="store_true", help="omit the signature block")
     ap.add_argument("--font", default=DEFAULT_FONT)
     ap.add_argument("--size", default=DEFAULT_SIZE)
     ap.add_argument("--color", default=DEFAULT_COLOR)
+    ap.add_argument("--background", default=DEFAULT_BG)
+    ap.add_argument(
+        "--no-background",
+        action="store_true",
+        help="omit background-color; see DEFAULT_BG for why the pair is the default",
+    )
     ap.add_argument(
         "--list-signatures", action="store_true", help="print the known signature ids and exit"
     )
@@ -241,12 +263,13 @@ def main() -> int:
     # The outer wrapper restates font/size/colour so that anything NOT covered by a
     # block rule above (a stray text node, a nested inline element) still inherits from
     # us rather than from the carrier document.
+    bg = "" if args.no_background else f"background-color:{args.background};"
     fragment = (
-        f'<div style="font-family:{args.font};font-size:{args.size};color:{args.color};">'
+        f'<div style="font-family:{args.font};font-size:{args.size};color:{args.color};{bg}">'
         f"{blocks}{sig_html}</div>"
     )
 
-    if args.out:
+    if args.out and args.out != "-":
         with open(args.out, "w", encoding="utf-8") as fh:
             fh.write(fragment)
         visible = len(re.sub(r"<[^>]+>", "", fragment))
