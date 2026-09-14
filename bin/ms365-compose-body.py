@@ -288,7 +288,7 @@ def main() -> int:
     # us rather than from the carrier document.
     bg = "" if args.no_background else f"background-color:{args.background};"
     fragment = (
-        f'<div style="font-family:{args.font};font-size:{args.size};color:{args.color};{bg}">'
+        f'<div style="font-family:{font};font-size:{size};color:{args.color};{bg}">'
         f"{blocks}{sig_html}</div>"
     )
 

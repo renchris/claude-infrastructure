@@ -133,7 +133,18 @@ compose() { python3 "$TOOL" --signature-file "$SIGS" "$@"; }
   # is what makes picking 11pt an easy and wrong inference.
   run compose --no-signature --out - <<< 'One.'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"font-family:Calibri,Helvetica,sans-serif;font-size:12pt;"* ]]
+  # `|| false`: this assertion was the FINAL statement, where a bare [[ ]] does set the test's
+  # exit status and is live. Adding the wrapper pin below makes it non-final, and therefore dead.
+  [[ "$output" == *"font-family:Calibri,Helvetica,sans-serif;font-size:12pt;"* ]] || false
+
+  # PIN THE WRAPPER SEPARATELY. The assertion above passed for three commits while the WRAPPER
+  # read `font-family:None;font-size:None` — a .replace() that silently matched nothing — because
+  # it is satisfied by any <p>, and every <p> was correct. An assertion whose span is wider than
+  # its subject cannot see a defect confined to one element.
+  # Not cosmetic: the wrapper's style attribute also carries background-color, and an invalid
+  # declaration sitting beside it puts the whole attribute — the dark-mode pair — at risk.
+  [[ "$output" == '<div style="font-family:Calibri,Helvetica,sans-serif;font-size:12pt;color:#000000;background-color:#ffffff;">'* ]] || false
+  run ! grep -q 'None' <<<"$output"
 }
 
 @test "an identity may carry its own font, and an explicit flag still beats it" {
