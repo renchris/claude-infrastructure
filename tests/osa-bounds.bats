@@ -416,9 +416,11 @@ delay_launder(){ # <path>… → delay-exempt rows carrying another call (empty 
   [ "$output" = "through" ]
 }
 
-# ── the two converted sites ─────────────────────────────────────────────────────────────────────
-@test "converted: screenshot-to-clipboard and dia-cdp-launch call through osa_bounded" {
-  for f in "$ROOT/bin/screenshot-to-clipboard.sh" "$ROOT/bin/dia-cdp-launch.sh"; do
+# ── the converted sites ─────────────────────────────────────────────────────────────────────────
+# bin/screenshot-to-clipboard.sh was the other converted site; it was retired 2026-09-13 with its
+# launchd agent (hammerspoon-config supervises Hammerspoon now), so only dia-cdp-launch remains.
+@test "converted: dia-cdp-launch calls through osa_bounded" {
+  for f in "$ROOT/bin/dia-cdp-launch.sh"; do
     [ -r "$f" ] || { echo "missing $f"; false; }
     "$G" -qE 'osa_bounded osascript' "$f" || { echo "$f still calls osascript unbounded"; false; }
     # The lib must be reached through $0's PHYSICAL location: ~/bin holds per-file symlinks into the

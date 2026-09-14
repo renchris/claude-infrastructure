@@ -73,8 +73,10 @@ echo "Bin tools:"
 # and claude-bump-models is exactly the file that drifted (live gained the frontier family; the
 # repo copy could not bump that tier), so the one leg that could have caught it did not look.
 # browsermcp-wrapper.sh dropped 2026-08-11 with the server it wrapped — see install.sh.
+# screenshot-to-clipboard.sh dropped 2026-09-13 with its agent — see install.sh. It must leave THIS
+# list too: sync copies ~/bin back into the repo, so a stale ~/bin copy would resurrect it.
 for tool in claude-latest claude-update claude-versions claude-accounts \
-            claude-kimi claude-bump-models screenshot-to-clipboard.sh; do
+            claude-kimi claude-bump-models; do
   [[ -f "$HOME/bin/$tool" ]] || continue
   sync_file "$HOME/bin/$tool" "$REPO_DIR/bin/$tool"
 done
