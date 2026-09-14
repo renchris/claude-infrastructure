@@ -150,10 +150,30 @@ main()
   awk -v t="$TOL" 'BEGIN { exit !(t > 2.0 && t < 40) }' || { echo "drag tolerance $TOL is not a usable grab region"; false; }
 }
 
-@test "cmd+shift+b toggles window title bars — the only handle for drag-to-reorder" {
+# WAS: asserted `toggle_window_title_bars`. That action takes one text ROW from every pane, and a
+# row change is a PTY resize, so it SIGWINCHes every child on the show AND again on the hide — one
+# peek = two full scrollback reflows. cmd+shift+b now runs a script that swaps the whole config in
+# ONE relayout, trading a top-padding reservoir for the bar's row, so the row count never changes.
+@test "cmd+shift+b runs the zero-shift toggle, NOT the row-stealing built-in" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  echo "$output" | grep -qx 'cmd_shift_b_last=toggle_window_title_bars' || { echo "$output"; false; }
+  printf '%s\n' "$output" > "$BATS_TEST_TMPDIR/b.out"
+  grep -q 'cmd_shift_b_last=.*kitty-pane-title-toggle\.sh' "$BATS_TEST_TMPDIR/b.out" || { cat "$BATS_TEST_TMPDIR/b.out"; false; }
+  grep -q 'cmd_shift_b_last=.*toggle_window_title_bars' "$BATS_TEST_TMPDIR/b.out" && { echo "the row-stealing built-in is back"; false; }
+  :
+}
+
+# THE TILDE TRAP, pinned because it cost the operator a dead chord. kitty expands ENVIRONMENT
+# VARIABLES in a map's command but NOT `~`: a tilde path throws inside kitty's own remote-control
+# handler and the chord silently does nothing — no beep, no message, no reaction. Every script
+# binding in this file uses ${HOME} for exactly this reason.
+@test "cmd+shift+b uses \${HOME}, never a tilde — a tilde path dies silently" {
+  run probe "$CONF"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s\n' "$output" > "$BATS_TEST_TMPDIR/b2.out"
+  grep -q 'cmd_shift_b_last=.*\${HOME}/' "$BATS_TEST_TMPDIR/b2.out" || { cat "$BATS_TEST_TMPDIR/b2.out"; false; }
+  grep -qE 'cmd_shift_b_last=.*[[:space:]]~/' "$BATS_TEST_TMPDIR/b2.out" && { echo "tilde path in the binding — it will die silently"; false; }
+  :
 }
 
 @test "drag_threshold stays non-zero — 0 disables ALL dragging in kitty" {
