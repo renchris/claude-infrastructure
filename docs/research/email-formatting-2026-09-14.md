@@ -67,6 +67,18 @@ color:       #000000;
 - **An explicit colour, on every block.** See §2 — this is the grey defect.
 - **Inline on every element, never a `<style>` block.** See §3 — the fragment lands inside a
   document someone else wrote.
+- **`margin` only. NEVER `padding` on a `<div>`, `<p>` or `<ul>`.** Classic Outlook renders through
+  Word, where padding is supported on **table cells only** — a padded list silently loses its
+  indent there and nowhere else, so it looks correct in every client you can easily check. A
+  horizontal rule must be an `<hr>`, not a `border-top`, for the same reason.
+- **Hex colours, never whitespace-syntax `rgb()`.** A `style` attribute containing
+  `rgb(31 35 41)` has **the whole attribute stripped** by Gmail, and a modern token
+  (`oklch()`, `lab()`) removes *every* inline style on that element. `rgb(31 35 41)` and
+  `rgb(31,35,41)` are the difference between a styled fragment and an unstyled one, with no
+  warning. The tool emits hex; a test pins it.
+
+Both of these are pinned by `tests/ms365-compose-body.bats`, the padding one with a mutant,
+because each is invisible in the clients a session can actually render.
 
 ---
 
@@ -170,6 +182,17 @@ research: `bodyPreview` is documented at exactly **255** characters, and there i
 issue where the `comment` parameter *"isn't part of the body of the response message draft"*, which
 makes a comment *look* absent. Neither is a length cap.
 
+### Lark publishes its own mail-HTML spec, and it documents this exact failure
+
+`larksuite/cli`'s `lark-mail` reference shows Lark's compose-path lint rewriting `<p>正文</p>` into
+`<div style="margin-top:4px;margin-bottom:4px;line-height:1.6"><div dir="auto" style="font-size:14px">…`
+— your margins and font-size replaced, your `<p>` gone. It also confirms `rgb(31,35,41)` as Lark's
+documented body-text token (which is exactly what the ByteDance original is full of), and documents
+an inline-style property whitelist that silently deletes non-members. That is Lark's *outbound*
+path, which is why the original looks the way it does; whether Lark's reader applies the same
+treatment to *our* mail is untested. `lark-cli mail +lint-html --body-file <f> --show-lint-details`
+is read-only, makes no API call, and returns `cleaned_html` — it would settle it in one command.
+
 **Honest limit on this claim:** "no documented cap" is not the same as "measured unlimited". The
 largest `Comment` exercised here is ~3 KB. The governing documented limit is the global **4 MB**
 Graph write cap, which a 38 KB body uses 0.9% of.
@@ -253,18 +276,32 @@ How a session proves a draft renders right, in order of cost:
    `--headless --screenshot --window-size=980,1250`. Deterministic and needs no auth.
 4. **The operator's own eyes in Outlook** — the only instrument that sees Outlook's rendering.
 
-### Dark mode: measured, and NOT resolved
+### Dark mode
 
-Chrome's force-dark inverted the fragment cleanly — `color:#000000` became near-white on dark, no
-black-on-black. I then ran the control that would have made this a rule (an identical fragment that
-*also* pins `background-color:#ffffff`) expecting it to break, and **it did not** — Chrome inverted
-the declared background too.
+**A fragment has exactly one dark-mode lever: the colours it states.** Every published mechanism —
+`<meta name="color-scheme">`, `:root{color-scheme}`, `prefers-color-scheme`, `[data-ogsc]` — needs
+a `<head>`, a `:root`, or a `<style>` block that a fragment spliced into someone else's document
+cannot deliver. All the usual dark-mode advice is simply inapplicable here.
 
-So the two arms did not separate, and this instrument cannot decide the question. Chrome's
-force-dark is a *full*-inversion engine; the clients where black-on-black actually arises
-(Outlook mobile, some Gmail modes) use *partial* inversion, where a declared background is often
-preserved while text colour is inverted. **Recorded as unresolved rather than written up as a
-rule.** The shipped default sets a colour and no background, which is the conservative side.
+**And "pick a dark-mode-safe text colour" is arithmetically impossible.** Across four backgrounds,
+no fixed colour clears WCAG AA on both white and a dark-mode ground (best case `#858585` at
+3.69:1). Lark's own `rgb(31,35,41)` — the grey this whole investigation started from — scores
+**1.04–1.15:1 on dark, i.e. invisible, and worse than pure black.**
+
+So the rule is: **declare `color` and `background-color` as a pair, or declare neither.** Colour
+alone is the shape that goes invisible under *partial* inversion, where the client darkens the
+background it inherited and keeps the text colour you stated. Stating both means they are inverted
+together or preserved together, and both outcomes are readable. The tool now does this;
+`--no-background` opts out.
+
+**What my own instrument could and could not decide, stated honestly.** Chrome's force-dark
+inverted the colour-only fragment cleanly. I then ran the control that would have made *that* a
+rule — the same fragment additionally pinning `background-color:#ffffff` — expecting it to break,
+and it did not: Chrome inverted the declared background too. Two arms that do not separate decide
+nothing. Chrome force-dark is a *full*-inversion engine and cannot reproduce the partial-inversion
+clients where black-on-black actually arises. The pair rule above therefore rests on the contrast
+arithmetic, not on my render — which is why it is stated with its evidence class rather than as a
+measurement.
 
 ---
 
@@ -328,6 +365,13 @@ sources are learn.microsoft.com for every Graph and Exchange claim; the installe
 `@softeria/ms-365-mcp-server` 0.143.0 source for every MCP claim, read at `file:line`; Purdue OWL,
 Federal Plain Language Guidelines, Perkbox (n=1,928) and three academic email-corpus studies for
 §1's structure.
+
+Two corrections worth propagating, because both are widely repeated and both are wrong:
+Campaign Monitor's CSS support guide (named in the brief) is from 2017 and carries a 2013 claim
+that 2026 data contradicts — use caniemail's dataset instead; and *"Gmail strips all `<style>`
+tags"* is false, tracing to a 2014 article whose own 2016 update reverses it. Also: *"classic
+Outlook loses support October 2026"* is false — Microsoft's opt-out stage is April 2026 and
+support runs to **at least 2029**, so the Word engine still has to be coded for.
 
 **Where the research disagreed with the brief, the brief lost:** the grey was not carrier
 inheritance (§2), the 300-char cap is not Graph's (§3), and the splice is not required (§3).
