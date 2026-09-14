@@ -277,11 +277,30 @@ sys.stdout.write(draft[:m.end()] + body + draft[m.end():])' "$WORK/bare.html" "$
   # Non-vacuity: the population must be non-empty, else "all members pass" says nothing.
   [ "$(grep -c . "$TOOLS")" -ge 1 ]
 
+  # THE GLOB FAMILIES ARE READ OUT OF install.sh, NOT LISTED HERE. They were listed here, as
+  # `cc-*|desk-*`, and that list went stale the moment bin/ms365-* joined the glob on 2026-08-31:
+  # from then on this arm demanded that every ms365 tool be NAMED in install.sh, which is exactly
+  # what the glob exists to avoid. It kept passing only because ms365-reply-splice.py happens to
+  # appear in two install.sh COMMENTS — an accident, not a link — so the first genuinely new
+  # ms365-* tool went red for a deployment that was never broken (ms365-compose-body.py,
+  # 2026-09-14). Deriving the families is what this file's sibling arms already do.
+  FAMS="$WORK/families.txt"
+  sed -n 's#.*for tool in \(.*bin/.*\); do#\1#p' "$REPO/install.sh" \
+    | tr ' ' '\n' | sed -n 's#.*/bin/##p' | sort -u >"$FAMS"
+  # Non-vacuity: an empty family list would exempt nothing and this arm would pass by accident
+  # in the other direction. The glob line must be found and must name the families we expect.
+  [ "$(grep -c . "$FAMS")" -ge 3 ]
+  grep -qx 'ms365-\*' "$FAMS"
+  grep -qx 'cc-\*' "$FAMS"
+
   MISSED="$WORK/missed.txt"; : >"$MISSED"
   while IFS= read -r t; do
-    case "$t" in
-      cc-*|desk-*) continue ;;                                   # taken by the glob
-    esac
+    taken=0
+    while IFS= read -r fam; do
+      # shellcheck disable=SC2254  # the family IS a glob; that is the point
+      case "$t" in $fam) taken=1; break ;; esac
+    done <"$FAMS"
+    [ "$taken" -eq 0 ] || continue
     # otherwise install.sh must name it explicitly somewhere
     [ "$(grep -cF "$t" "$REPO/install.sh")" -ge 1 ] || printf '%s\n' "$t" >>"$MISSED"
   done <"$TOOLS"

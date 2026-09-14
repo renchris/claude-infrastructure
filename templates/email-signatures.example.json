@@ -1,0 +1,13 @@
+{
+  "_comment": "Copy to ~/.claude/email-signatures.json (or $CC_MS365_SIGNATURES). One entry per sending identity. ms365-compose-body.py REFUSES an unknown id rather than inventing a name, title or phone — if a field is unknown, ask the operator, do not guess. Omit a key entirely rather than writing a placeholder into it.",
+  "chris-personal": {
+    "name": "Chris Ren",
+    "email": "ren.chris@outlook.com"
+  },
+  "chris-reso": {
+    "name": "Chris Ren",
+    "company": "Reso",
+    "email": "chris@reso.gl",
+    "website": "reso.gl"
+  }
+}

@@ -108,6 +108,14 @@ import sys
 MIN_LEN = 300  # bodies at or under this many visible chars are never blocked
 DENSITY_FLOOR = 700  # only apply the "too few breaks for length" rule above this
 DENSITY_DIVISOR = 700  # require >= visible_len // DENSITY_DIVISOR structural breaks
+# No SINGLE block element may hold more than this many visible chars. The density rule
+# above is a whole-body average and is blind to the shape that actually reads as a wall:
+# one enormous <p> inside a couple of wrapper <div>s scores 4 "breaks" and sails through
+# at any length. That hole was harmless while a long Comment was refused outright on raw
+# length; opening Comment to HTML (2026-09-14) would have inherited it, so it is closed
+# here rather than left for the next reader to find. Applies to Message.body too, which
+# has had the hole all along.
+MAX_BLOCK_CHARS = 600
 
 # Tools whose body we inspect. (send-draft-message has no body to judge — the
 # body was set at draft-creation time, which IS gated below.)
@@ -294,6 +302,24 @@ _BREAK_TAG_RE = re.compile(
     r"<\s*(br|/p|p|div|/div|li|tr|h[1-6]|ul|ol|table|blockquote)\b", re.IGNORECASE
 )
 _TAG_RE = re.compile(r"<[^>]+>")
+
+# A Comment that carries BLOCK-LEVEL markup is a different animal from a Comment that
+# carries prose with newlines in it, and conflating the two is what made the old rule
+# wrong. MEASURED 2026-09-14 against this mailbox: a Comment of
+#   <div style="color:#C00000"><p>para one</p><p>para two here</p></div>
+# came back in the draft's own MIME as, byte for byte,
+#   <body>\r\n<div style="color:#C00000">\r\n<p>para one</p>\r\n<p>para two here</p>\r\n</div>\r\n<hr …><div id="divRplyFwdMsg" …>
+# — inserted VERBATIM, above Graph's own quote, at the original's full depth. So Graph
+# strips NEWLINES, not MARKUP. The 300-char cap was therefore protecting against a
+# failure mode that structural HTML does not have, while forcing every formatted reply
+# down the Message.body path that destroys the auto-quote (or the four-step splice).
+_BLOCK_MARKUP_RE = re.compile(r"<\s*(?:p|div|br|ul|ol|li|h[1-6]|table|blockquote)\b", re.IGNORECASE)
+
+
+def is_structured_html(content: str) -> bool:
+    """True when this text carries block-level HTML that Graph will render as breaks."""
+    return bool(_BLOCK_MARKUP_RE.search(content or ""))
+
 _WS_RE = re.compile(r"\s+")
 
 # Fresh-message tools create a NEW message with no In-Reply-To/References headers.
@@ -365,49 +391,62 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    "RE:"/"FW:" subject — that makes a detached message with no In-Reply-To/References and
    silently breaks the chain.
 
-1b. WHICH FIELD — this is the one that bites. Graph auto-quotes the original ONLY when you
-   pass **Comment**. Passing **Message.body REPLACES that auto-quote**, so the reply threads
-   correctly but arrives with NO VISIBLE HISTORY — it reads to the recipient as a brand-new
-   email. So: **short reply (<=300 visible chars) -> use Comment.** Longer or formatted ->
-   **the placeholder splice (rule 3)**, which gets you both. Do NOT hand-type a quote block.
-   Hook-enforced: a reply tool passing Message.body with no quote block is now DENIED.
-   ⚠️ **Comment INHERITS THE ORIGINAL SENDER'S CARRIER DOCUMENT** — Graph drops your text inside
-   their <body> tag AND copies their <style> blocks into the draft's <head> (measured
-   2026-08-25). Two things leak, not one: `body{color:red}` (Montway's confirmation carries it,
-   so a Comment reply renders ENTIRELY RED) and generic element rules like `p{margin:0}`, which
-   silently collapse YOUR paragraph spacing. **The splice does not fix this by itself** — the
-   carrier document is above the cut. The fix is to make your own fragment self-defending: an
-   explicit `color:#000000` on your wrapper div and an explicit inline `margin` on EVERY block
-   element. Inline styles beat both an inherited body colour and a copied stylesheet rule.
-   ms365-reply-splice.py warns when your fragment omits either.
+1b. WHICH FIELD — this is the one that bites, and the old answer here was WRONG.
+   Graph auto-quotes the original ONLY when you pass **Comment**. Passing **Message.body
+   REPLACES that auto-quote**, so the reply threads correctly but arrives with NO VISIBLE
+   HISTORY — it reads to the recipient as a brand-new email (caught in Outlook, not here,
+   2026-08-24). Hook-enforced: a reply tool passing Message.body with no quote block is DENIED.
+   ⚠️ THE CORRECTION (measured 2026-09-14, this mailbox): Graph strips NEWLINES from a Comment.
+   It does NOT strip MARKUP. A Comment of
+       <div style="color:#C00000"><p>para one</p><p>para two here</p></div>
+   came back in the draft's own MIME byte-identical, sitting above Graph's own
+   <hr><div id="divRplyFwdMsg"> quote. So the cure for a long, formatted reply was never
+   "shorten it" and never "move to Message.body" — it is **put the HTML in the Comment**.
+   That is ONE API call, keeps Graph's native quote at full depth, and nothing of the
+   original ever passes through you. The old ~300-char cap is gone; it was our own number,
+   not Graph's (no such limit is documented anywhere on Microsoft Learn).
 
-2. FORMATTING. Pass Message.body {contentType:"html"} wrapped in an inline
-   font-family:Calibri,Arial,sans-serif;font-size:11pt style, with real <p>/<ul>/<ol>.
-   Never put more than ~300 chars in `Comment` — Graph strips its newlines into one
-   paragraph.
+2. FORMATTING — build the fragment, do not hand-write it.
+       $HOME/.claude/bin/ms365-compose-body.py --text-file reply.txt --signature <id> --out body.html
+   You write PROSE (blank line between paragraphs, "- " for bullets); it emits the house HTML.
+   Pass the contents of body.html as the **Comment**. Three things it gets right that hand-written
+   markup kept getting wrong:
+     • EVERY block element carries its own inline font-family/font-size/colour. Your fragment is
+       pasted into a document somebody else wrote, and Graph copies the original's <style> blocks
+       into the draft's <head> — a vendor `p{margin:0}` silently collapses your paragraph spacing
+       and a `body{color:…}` recolours your prose. Inline beats both.
+     • An explicit colour. Graph drops the reply text into a BARE <body> as a naked text node
+       (measured 2026-09-14) while its own quote header right below is explicitly
+       <font face="Calibri, sans-serif" color="#000000" style="font-size:11pt">. Unstyled text
+       inherits whatever the reading client defaults to — which is why our replies looked GREY
+       against a black quoted chain.
+     • A signature. Graph NEVER adds one (the ms365 server's own tool description: "Signatures
+       are added by the Outlook client only, not via Graph"), and no Graph API can read the
+       user's Outlook signature. If the tool does not put it in the body, the mail goes unsigned.
+   Hook-enforced: no single paragraph may exceed MAX_BLOCK_CHARS visible chars, on Comment and
+   Message.body alike — the density rule is a whole-body average and is blind to one huge <p>.
 
-3. LONG + FORMATTED + GENUINE MULTI-LEVEL CHAIN — THE PLACEHOLDER SPLICE. Let Graph build
-   the quote, then replace only YOUR half. Never hand-author a quote block: a hand-typed
-   quote is an assertion, Graph's is the record, and a rebuilt one was rejected outright in
-   a live dispute (2026-08-25). Four steps:
-     a. create-reply-all-draft with a SHORT placeholder Comment (e.g. "."). Graph returns a
-        draft carrying its OWN quote — as many levels deep as the original already was.
-     b. download-bytes-to-file on /me/messages/<THAT DRAFT'S id>/$value, to disk. MIME works
-        on drafts, and going to disk keeps a 30KB body out of context.
-     c. $HOME/.claude/bin/ms365-reply-splice.py --draft-mime d.eml --body yours.html --out spliced.html
-        --placeholder . --assert-depth N. It cuts at Graph's own <div id="divRplyFwdMsg">
-        and keeps everything below byte-identical. It REFUSES on a missing separator, a
-        surviving placeholder, or a chain shallower than N.
-     d. update-mail-message with the spliced body. Verified 2026-08-25: In-Reply-To and
-        References survive the PATCH, and recipients + the `from` alias can be set in the
-        SAME call (see rule 5).
-   ⚠️ DEPTH IS A PROPERTY OF THE MESSAGE YOU REPLY TO, not of this flow. Graph quotes that
-   one message, whose own HTML supplies every deeper level. An auto-generated confirmation
-   or receipt quotes NOTHING, so replying to one can only ever yield 1 level, no matter what
-   you do. To get N levels, reply to the message that ACTUALLY carries the chain.
-   ⚠️ Graph SANITISES what it quotes (strips MSO conditional comments, drops some <body>
-   attributes). That is Outlook's own reproduction — the same thing a human clicking Reply
-   gets — not a defect, and not something to "fix" by substituting the raw original.
+3. WHEN YOU STILL NEED THE SPLICE. Rule 2 covers essentially every reply. The splice remains for
+   the case where you must build the body from the draft Graph already made — e.g. editing an
+   existing draft's text while keeping its quote. Never hand-author a quote block: a typed quote
+   is an assertion, Graph's is the record, and a rebuilt one was rejected outright in a live
+   dispute (2026-08-25).
+     a. create-reply-all-draft with a UNIQUE placeholder Comment — e.g. CCPLACEHOLDER7X2Q.
+        ⚠️ NOT "." as this recipe used to say: a lone "." occurs in every quoted chain, so the
+        splicer's own placeholder check can never pass with it.
+     b. download-bytes-to-file on /me/messages/<THAT DRAFT'S id>/$value, to disk. MIME works on
+        drafts, and going to disk keeps a 38KB body out of your context.
+     c. $HOME/.claude/bin/ms365-reply-splice.py --draft-mime d.eml --body body.html
+        --out spliced.html --placeholder CCPLACEHOLDER7X2Q --assert-depth N
+     d. update-mail-message with the spliced body.
+   ⚠️ COST OF THIS PATH, and the reason rule 2 is the default: it reads the quote out of Graph and
+   writes it back, and Graph filters unsafe HTML on READ by default — so the sanitised form
+   permanently replaces the stored quote. Rule 2 never reads the quote at all, so it cannot lose
+   anything. It also puts the whole 38KB body through your tool call; the ms365 server has no
+   file-path parameter for any argument (verified against the installed 0.143.0 source).
+   ⚠️ DEPTH IS A PROPERTY OF THE MESSAGE YOU REPLY TO. Graph quotes that one message, whose own
+   HTML supplies every deeper level. An auto-generated confirmation quotes NOTHING, so replying
+   to one can only ever yield 1 level.
 
 4. VERIFYING — ON THE DRAFT ITSELF, no send involved. get-mail-message ALWAYS reports
    contentType "text": that is the READER handing back the text/plain alternative, NOT
@@ -665,7 +704,11 @@ def extract_body(tool_input):
 
     comment = body.get("Comment")
     if isinstance(comment, str) and comment.strip():
-        candidates.append((comment, "text", "comment"))
+        # A Comment carrying block markup renders through Graph verbatim (see
+        # is_structured_html), so its breaks are HTML breaks, not newlines.
+        candidates.append(
+            (comment, "html" if is_structured_html(comment) else "text", "comment")
+        )
 
     msg_content = dig(body, "Message", "body", "content")
     if isinstance(msg_content, str) and msg_content.strip():
@@ -682,6 +725,24 @@ def extract_body(tool_input):
 
     # The real message is the longest candidate (Graph rejects Comment+Message together).
     return max(candidates, key=lambda c: len(c[0]))
+
+
+def longest_block(content: str, is_html: bool) -> int:
+    """Visible chars in the single largest block of this body.
+
+    For HTML, split on any tag that opens or closes a block; for text, split on blank
+    lines. The largest surviving run is the longest thing the reader meets without a
+    visual break, which is what "wall of text" actually means.
+    """
+    if is_html:
+        pieces = _BREAK_TAG_RE.split(content)
+    else:
+        pieces = re.split(r"\n\s*\n", content)
+    longest = 0
+    for piece in pieces:
+        visible = _WS_RE.sub(" ", _TAG_RE.sub(" ", piece)).strip()
+        longest = max(longest, len(visible))
+    return longest
 
 
 def analyze(content: str):
@@ -940,16 +1001,24 @@ def main():
                     "Override for a deliberately quote-free reply: "
                     "CLAUDE_EMAIL_FORMAT_GATE_DISABLED=1."
                 )
-            if isinstance(comment, str) and len(comment) > MIN_LEN:
+            if (
+                isinstance(comment, str)
+                and not is_structured_html(comment)
+                and len(re.sub(r"<[^>]+>", "", comment).strip()) > MIN_LEN
+            ):
                 deny(
                     "BLOCKED: Comment is "
-                    + str(len(comment))
-                    + " chars (>"
+                    + str(len(re.sub(r"<[^>]+>", "", comment).strip()))
+                    + " visible chars (>"
                     + str(MIN_LEN)
-                    + "). Graph strips newlines from Comment into one unreadable paragraph at "
-                    "this length. Use Message.body contentType:'html' instead — and then you "
-                    "MUST append the quoted chain yourself, because Message.body replaces the "
-                    "auto-quote."
+                    + ") and carries NO block markup. Graph strips NEWLINES from a Comment, so "
+                    "plain prose this long collapses into one unreadable paragraph. The fix is "
+                    "NOT to shorten it and NOT to move to Message.body (which would replace "
+                    "Graph's auto-quote): put the SAME text in the Comment as HTML — a wrapper "
+                    "<div> with your font/size/colour and one <p style=\"margin:0 0 12pt 0\"> per "
+                    "paragraph. Graph inserts that verbatim above its own quoted chain "
+                    "(measured 2026-09-14). $HOME/.claude/bin/ms365-compose-body.py builds it "
+                    "for you from plain text."
                 )
 
     # Threading guard: a fresh-send tool carrying a reply/forward subject would start a
@@ -984,14 +1053,17 @@ def main():
     # The reply/forward `Comment` field strips newlines on plain-text replies, so a
     # multi-paragraph Comment collapses into a wall regardless of how many \n it has.
     # \n is NOT a reliable break here — steer to an explicit HTML Message.body.
-    if source == "comment":
+    if source == "comment" and (ctype or "").lower() != "html":
         deny(
-            f"BLOCKED: this is a {visible_len}-char reply in the `Comment` field. "
+            f"BLOCKED: this is a {visible_len}-char PLAIN-TEXT reply in the `Comment` field. "
             f"Microsoft Graph strips newlines from reply comments, so it will send as "
             f"one unreadable paragraph (exactly what broke the UBC Sleep Clinic reply). "
-            f"Put the reply text in `Message.body` instead, with contentType:'html' and "
-            f"<p>…</p> per paragraph — Graph keeps those breaks. (A Message.body reply "
-            f"omits the quoted thread, which is fine for a re-send.) "
+            f"The fix is to make the COMMENT ITSELF HTML — keep using Comment so Graph "
+            f"still auto-quotes the original, but wrap the text in a <div> carrying "
+            f"font-family/font-size/color and one <p style='margin:0 0 12pt 0'> per "
+            f"paragraph. Graph inserts that markup verbatim (measured 2026-09-14). "
+            f"Build it with $HOME/.claude/bin/ms365-compose-body.py rather than by hand. "
+            f"Do NOT move to Message.body to fix this — that replaces the auto-quote. "
             f"(Override for this one send: set env CLAUDE_EMAIL_FORMAT_GATE_DISABLED=1.)"
         )
 
@@ -1008,6 +1080,16 @@ def main():
         deny(
             f"BLOCKED: email body is a {visible_len}-char wall of text with NO line "
             f"breaks — it will render as one unreadable paragraph. Fix: {fix}. "
+            f"(Override for this one send: set env CLAUDE_EMAIL_FORMAT_GATE_DISABLED=1.)"
+        )
+
+    widest = longest_block(content, (ctype or "").lower() == "html")
+    if widest > MAX_BLOCK_CHARS:
+        deny(
+            f"BLOCKED: one paragraph of this body is {widest} visible chars long "
+            f"(limit {MAX_BLOCK_CHARS}). The body has breaks elsewhere, so the density "
+            f"check passes, but a single block this long is the wall-of-text the reader "
+            f"actually sees. Fix: split it — {fix}. "
             f"(Override for this one send: set env CLAUDE_EMAIL_FORMAT_GATE_DISABLED=1.)"
         )
 

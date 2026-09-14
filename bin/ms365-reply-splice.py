@@ -7,13 +7,23 @@ Microsoft Graph gives you two mutually exclusive things on a reply:
 
   * `Comment`        -> Graph builds the reply body itself and appends the ORIGINAL's
                         full quoted chain, however many levels deep it already was.
-                        But: the comment is capped at ~300 usable chars (Graph strips
-                        its newlines), and Graph drops your text INSIDE the original
-                        sender's <body> tag, so a vendor template's `color:red`
-                        becomes YOUR text's colour.
   * `Message.body`   -> arbitrary length and full styling control, but it REPLACES
                         Graph's auto-quote outright. The reply threads (In-Reply-To /
                         References are still set) and shows no history at all.
+
+⚠️ READ THIS BEFORE REACHING FOR THIS SCRIPT (2026-09-14). The docstring here used to say
+the Comment was "capped at ~300 usable chars (Graph strips its newlines)", and that number
+is what made this splice look mandatory for any formatted reply. It was wrong twice over.
+No such cap is documented anywhere on Microsoft Learn — 300 was our own hook constant — and
+Graph strips NEWLINES, not MARKUP: a Comment containing block HTML is inserted VERBATIM
+above Graph's own quote (measured against this mailbox, both halves). So the ordinary path
+for a long, formatted, quote-preserving reply is now ONE call with an HTML Comment, built by
+bin/ms365-compose-body.py. Prefer it. It is strictly safer than this script, because it never
+reads the quoted region back — and Graph filters unsafe HTML on READ by default, so a
+read-then-write round trip replaces the stored quote with its sanitised form.
+
+This script remains correct and is still the right tool when you must rebuild a body from a
+draft Graph has ALREADY created (e.g. rewriting an existing draft while keeping its quote).
 
 Hand-typing a quote block to fill that gap is what this script exists to prevent.
 A hand-typed quote is an assertion; Graph's is the record. On 2026-08-25 a reply in a
@@ -33,7 +43,10 @@ docs/research/reply-chain-preservation-2026-08-25.md.
 
 USAGE
     ms365-reply-splice.py --draft-mime draft.eml --body new.html --out spliced.html \
-        --placeholder PLACEHOLDER_XYZZY --assert-depth 2
+        --placeholder CCPLACEHOLDER7X2Q --assert-depth 2
+
+⚠️ The placeholder must be UNIQUE. An earlier recipe suggested "." — a lone "." appears in
+every quoted chain, so the survives-in-output check below can never pass with it.
 
 Exit codes: 0 ok · 1 usage/IO error · 2 splice refused (marker missing, depth
 regression, placeholder survived). A refusal is deliberate: shipping a reply whose
@@ -45,6 +58,17 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+
+# A REFUSAL is not a usage error, and a caller must be able to tell them apart: exit 1
+# means "you invoked me wrong", exit 2 means "I looked, and I will not do this".
+# The module docstring has always promised 2; raise SystemExit(str) exits 1, so this
+# promise was broken from the first commit and every caller branching on it was wrong.
+_REFUSE_RC = 2
+
+
+def refuse(msg: str):
+    print(msg, file=sys.stderr)
+    raise SystemExit(_REFUSE_RC)
 
 # Graph's reply separator. Two shapes have been observed on this mailbox and the
 # attribute ORDER differs between them, so never anchor on the <hr>'s attributes:
@@ -113,7 +137,7 @@ def find_cut(draft: str) -> tuple[int, str]:
     if rule:
         return rule.start(), "underscore rule (plain-text original)"
 
-    raise SystemExit(
+    refuse(
         "refused: no Graph separator found in the draft body.\n"
         '  Expected <div id="divRplyFwdMsg"> or a run of underscores.\n'
         "  Was this draft really created with a Comment? A draft built from\n"
@@ -162,7 +186,7 @@ def main() -> int:
 
     body_open = _BODY_OPEN.search(draft)
     if not body_open:
-        raise SystemExit("refused: draft has no <body> tag; cannot place new content")
+        refuse("refused: draft has no <body> tag; cannot place new content")
     head = draft[: body_open.end()]
 
     if args.placeholder:
@@ -184,7 +208,7 @@ def main() -> int:
 
     before, after = depth(quote), depth(spliced[len(head) + len(new_body) :])
     if before != after:
-        raise SystemExit(f"refused: quoted-region depth changed {before} -> {after}")
+        refuse(f"refused: quoted-region depth changed {before} -> {after}")
     if before < args.assert_depth:
         raise SystemExit(
             f"refused: quoted chain is {before} level(s) deep, expected at least {args.assert_depth}.\n"
