@@ -4,7 +4,7 @@
 content layout shift** to the pane underneath. Explicitly disqualified as answers: "always on" and
 "never on" title bars.
 
-**Status: INVESTIGATION, one axis still open.** Five mechanisms measured in isolated kitty
+**Status: COMPLETE. The answer is that it does not exist in 0.48.2.** Five mechanisms measured in isolated kitty
 instances plus one lead-run lane. Nothing has been changed in the operator's config by this work.
 
 ## The defect, stated once
@@ -25,7 +25,8 @@ content rather than allocated beside it.** Everything below is judged on that.
 |---|---|---|---|---|
 | A | `window_logo` / `kitty @ set-window-logo` | **YES** (22 set/clear ops, 0 SIGWINCH) | **NO** — above the cell background, below glyphs | PARTLY |
 | B | overlay window (`launch --type=overlay`) | **YES** (7 lifecycles, 0 SIGWINCH) | n/a — replaces the pane entirely | DEAD |
-| C | graphics protocol, `z >= 0` | expected yes | **YES, by spec** | **OPEN — the linchpin** |
+| C | graphics protocol, `z >= 0` | **YES** (200 cycles in 0.98s, 0 SIGWINCH) | **YES** — measured, not just spec'd | DEAD — see below |
+| F | header painted into top PADDING | n/a | n/a | DEAD — logo anchors to the CELL area |
 | D | external macOS overlay (Hammerspoon) | YES (never touches the grid) | YES | VIABLE, EXPENSIVE |
 | E | any native kitty option | — | — | DEAD, none exists |
 
@@ -100,3 +101,66 @@ script a private remote-control socket via `KITTY_LISTEN_ON`.
 * `-o` overrides passed to `kitty @ load-config` are **sticky** and survive later bare reloads; they
   must be reverted with an explicit `-o`. `modify_font` additionally **accumulates** per target, so
   resetting `cell_height` does not clear `cell_width`.
+
+
+## C, settled: the right layer, destroyed without notice
+
+`z >= 0` really does paint above the glyphs — confirmed visually, not merely quoted: a `z=1,c=40,r=1`
+placement hid columns 1-40 of row 1 while the same line's tail past column 40 stayed visible. Cost
+is nil: 200 rapid place/delete cycles in 0.98 s produced **0 SIGWINCH**, with a layout split as the
+positive control firing 1. Delivery works too — `kitty @ send-text` is NOT a paint route (it writes
+to the program's stdin; a marker escape landed in a `cat` capture file and never on screen), but
+writing the escape to the pane's slave tty from an unrelated process paints with 0 bytes reaching
+stdin.
+
+**It dies on INVALIDATION.** The placement survives continuous cursor-home repainting (~45 frames),
+cursor movement and an alt-screen round trip — but `ESC[2J` deletes it, any scroll carries it out of
+the viewport with the text, and `vim :redraw!` alone wiped it with nothing else happening. Worse,
+`ESC[2J` frees the image DATA, so a cheap re-place fails with `ENOENT: Put command refers to
+non-existent image`. And the ACK channel is unusable: with `q=0` the terminal's reply is delivered
+into the program's stdin, so `q=2` is mandatory and you therefore get no error reporting either.
+
+The TUI owns the screen buffer, destroys the header on any clear, frees the bytes, and tells nobody.
+What is left is a blind timed re-transmission of the full PNG against a surface that may have
+discarded it — a polling loop with no invalidation signal. That is the opposite of the clean
+implementation the goal asks for.
+
+## F, tested and dead: the header cannot hide in the padding
+
+The one idea none of the five axes covered. If the top `window_padding_width` were one cell tall and
+the strip were drawn INTO that band, no glyph could ever overprint it — A's only defect would be
+gone, at the price of one permanently reserved row of PADDING (not a title bar, so the toggle still
+works, which is what the operator actually objected to losing).
+
+**Measured false.** An isolated instance with `window_padding_width 23 7 10 7` (top = 46 device px =
+one cell) and a 1200x46 strip at `--position top-left`: the band rendered **over row 1**, with the
+shell's own first line printed on top of it. `--position top-left` anchors to the **cell area**
+origin, not the window origin, so padding does not move the logo out of the glyph zone. Dead.
+
+## VERDICT
+
+**There is no clean implementation in kitty 0.48.2.** Six mechanisms, each failing on exactly one
+property:
+
+* native title bar — reserves the row by construction (upstream PR #9450)
+* overlay window — zero-reflow, but covers the pane entirely and is opaque
+* window logo — zero-reflow and pixel-exact, but paints under the glyphs
+* graphics protocol — zero-reflow AND above the glyphs, but destroyed by any clear, with the image
+  data freed and no invalidation signal
+* padding band — the logo anchors to the cell area, not the window
+* external macOS overlay — works, and is a ~500-LOC polling daemon that cannot follow Spaces
+
+The renderer demonstrably HAS a non-reserving above-text layer: `hints` and `select-window` both
+paint text over panes with no resize, and `progress_bar`/`scrollbar_*` are non-reserving per-window
+paints. None is exposed as a persistent per-window TEXT overlay, and the graphics protocol — the one
+public door into that layer — is cell-anchored and therefore at the mercy of the program that owns
+the cells.
+
+**The single upstream lever is issue #7450** — overlay windows with custom size and position while
+the covered window keeps rendering. If that lands, this becomes a `launch --type=overlay` one-row
+strip and the whole problem is a five-line config change. It is open and unmerged; 0.48.2 is the
+newest release, so there is nothing to upgrade to.
+
+**What that leaves today:** the current setting (`window_title_bar_min_windows 0`, chord live) is the
+correct one. It costs two reflows per peek and keeps the control, which is the trade the operator
+already chose when always-on removed the chord.
