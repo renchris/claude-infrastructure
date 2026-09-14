@@ -44,7 +44,7 @@ call() {
   GATE_UT="$GATE" TOOL="$1" TIN="$2" SID_UT="$SID" python3 -c '
 import json, os, subprocess, sys
 pay = json.dumps({"session_id": os.environ["SID_UT"], "hook_event_name": "PreToolUse",
-                  "tool_name": os.environ["TOOL"], "tool_input": json.loads(os.environ["TIN"])})
+                  "tool_name": os.environ["TOOL"], "tool_input": {"account": "ren.chris@outlook.com", **json.loads(os.environ["TIN"])}})
 p = subprocess.run([sys.executable, os.environ["GATE_UT"]], input=pay, capture_output=True, text=True)
 out = p.stdout.strip()
 if not out:
@@ -88,7 +88,7 @@ reason() {
   GATE_UT="$GATE" TOOL="$1" TIN="$2" SID_UT="$SID" python3 -c '
 import json, os, subprocess, sys
 pay = json.dumps({"session_id": os.environ["SID_UT"], "hook_event_name": "PreToolUse",
-                  "tool_name": os.environ["TOOL"], "tool_input": json.loads(os.environ["TIN"])})
+                  "tool_name": os.environ["TOOL"], "tool_input": {"account": "ren.chris@outlook.com", **json.loads(os.environ["TIN"])}})
 p = subprocess.run([sys.executable, os.environ["GATE_UT"]], input=pay, capture_output=True, text=True)
 print(json.loads(p.stdout)["hookSpecificOutput"]["permissionDecisionReason"])
 '

@@ -58,7 +58,7 @@ decision() {
 import json, os, subprocess, sys
 pay = json.dumps({"session_id": "bats", "hook_event_name": "PreToolUse",
                   "tool_name": os.environ["TOOL"],
-                  "tool_input": json.loads(os.environ["TIN"])})
+                  "tool_input": {"account": "ren.chris@outlook.com", **json.loads(os.environ["TIN"])}})
 p = subprocess.run([sys.executable, os.environ["GATE_UT"]], input=pay, capture_output=True, text=True)
 out = p.stdout.strip()
 if not out:
@@ -75,7 +75,7 @@ context() {
 import json, os, subprocess, sys
 pay = json.dumps({"session_id": "bats-ctx", "hook_event_name": "PreToolUse",
                   "tool_name": os.environ["TOOL"],
-                  "tool_input": json.loads(os.environ["TIN"])})
+                  "tool_input": {"account": "ren.chris@outlook.com", **json.loads(os.environ["TIN"])}})
 p = subprocess.run([sys.executable, os.environ["GATE_UT"]], input=pay, capture_output=True, text=True)
 out = p.stdout.strip()
 if not out:
@@ -173,7 +173,7 @@ import json, os, subprocess, sys
 pay = json.dumps({"session_id": "bats", "hook_event_name": "PreToolUse",
                   "transcript_path": os.environ["TP"],
                   "tool_name": os.environ["TOOL"],
-                  "tool_input": json.loads(os.environ["TIN"])})
+                  "tool_input": {"account": "ren.chris@outlook.com", **json.loads(os.environ["TIN"])}})
 p = subprocess.run([sys.executable, os.environ["GATE_UT"]], input=pay, capture_output=True, text=True)
 out = p.stdout.strip()
 if not out:
@@ -400,6 +400,86 @@ stopfeedback() { printf '{"type":"user","message":{"content":"Stop hook feedback
   # surfaced half has silently become no half at all.
   run context mcp__ms365__create-reply-draft "$(tin_from 'ren.chris@outlook.com')"
   [[ "$output" == *"toRecipients"* ]]
+}
+
+# ── R2: MAILBOX IDENTITY (2026-09-14) ─────────────────────────────────────────────────────────────
+# The server holds two mailboxes and routes each call by `account`; with none it silently uses the
+# personal one. So every builder above defaults account to ren.chris@outlook.com, and these cases
+# override it — `"account": null` is how a fixture says "names no mailbox".
+
+# tin_from_in <account|null> <address> -> the tin_from reply, addressed to a named mailbox.
+tin_from_in() {
+  ACCT="$1" ADDR="$2" python3 -c '
+import json, os
+print(json.dumps({"account": json.loads(os.environ["ACCT"]), "body": {"message": {
+    "body": {"contentType": "html", "content": "<p>Hi.</p><blockquote><p>Prior.</p></blockquote>"},
+    "from": {"emailAddress": {"address": os.environ["ADDR"]}}}}}))'
+}
+
+NO_MAILBOX_DRAFT='{"account":null,"body":{"subject":"Hi","body":{"contentType":"html","content":"<p>Hi.</p>"}}}'
+
+@test "a draft that names no mailbox is refused — the server would silently use the personal one" {
+  run decision "$GATE" mcp__ms365__create-draft-email "$NO_MAILBOX_DRAFT"
+  [ "$output" = "deny" ]
+}
+
+@test "a draft naming a mailbox the server does not hold is refused, and the deny lists the real ones" {
+  run context mcp__ms365__create-draft-email \
+    '{"account":"chris.ren@gmail.com","body":{"subject":"Hi","body":{"contentType":"html","content":"<p>Hi.</p>"}}}'
+  [[ "$output" == *"BLOCKED (R2, mailbox)"* ]] || false
+  [[ "$output" == *"ren.chris@outlook.com or chris@reso.gl"* ]]
+}
+
+@test "a reso.gl draft may send as its own aliases, including the SendAs one, in any case" {
+  run decision "$GATE" mcp__ms365__create-reply-draft "$(tin_from_in '"chris@reso.gl"' hello@reso.gl)"
+  [ "$output" = "allow" ]
+  run decision "$GATE" mcp__ms365__create-reply-draft "$(tin_from_in '" Chris@Reso.GL "' Info@Reso.gl)"
+  [ "$output" = "allow" ]
+}
+
+@test "a reso.gl draft may not claim the personal identity, and the deny names the right mailbox" {
+  # The flat two-alias set this replaces would have ALLOWED this: a union of both mailboxes' addresses
+  # lets a draft in one claim the other's identity.
+  run decision "$GATE" mcp__ms365__create-reply-draft "$(tin_from_in '"chris@reso.gl"' ichris96@hotmail.com)"
+  [ "$output" = "deny" ]
+  run context mcp__ms365__create-reply-draft "$(tin_from_in '"chris@reso.gl"' ichris96@hotmail.com)"
+  [[ "$output" == *"account='ren.chris@outlook.com'"* ]]
+}
+
+@test "a personal draft may not claim a reso.gl identity" {
+  run decision "$GATE" mcp__ms365__create-reply-draft "$(tin_from_in '"ren.chris@outlook.com"' chris@reso.gl)"
+  [ "$output" = "deny" ]
+}
+
+@test "send-draft-message must name its mailbox too — the one call that cannot be undone" {
+  T="$BATS_TEST_TMPDIR/mbx.jsonl"; human "send the draft to Harry" > "$T"
+  run tp_decision mcp__ms365__send-draft-message '{"account":null,"messageId":"d1"}' "$T"
+  [ "$output" = "deny" ]
+  run tp_decision mcp__ms365__send-draft-message '{"account":"chris@reso.gl","messageId":"d1"}' "$T"
+  [ "$output" = "allow" ]
+}
+
+@test "flagging a message writes no content and sets no sender, so it needs no mailbox" {
+  # The friction control: without it, "require account on every gated tool" also passes this suite.
+  run decision "$GATE" mcp__ms365__update-mail-message \
+    '{"account":null,"messageId":"m1","body":{"flag":{"flagStatus":"flagged"}}}'
+  [ "$output" = "allow" ]
+}
+
+@test "redproof_prefix_ignores_the_mailbox: the pre-change hook got all three the other way" {
+  # Blob 724840277 is hooks/enforce-email-formatting.py at origin/main immediately before this change,
+  # pinned as a blob for the same reason as the R1 red-proof below.
+  local pre="$BATS_TEST_TMPDIR/pre-mailbox-hook.py"
+  git -C "$REPO" cat-file -p 724840277 > "$pre"
+  run grep -c '^MAILBOXES' "$pre"
+  [ "$output" = "0" ]
+
+  run decision "$pre" mcp__ms365__create-draft-email "$NO_MAILBOX_DRAFT"
+  [ "$output" = "allow" ]
+  run decision "$pre" mcp__ms365__create-reply-draft "$(tin_from_in '"chris@reso.gl"' ichris96@hotmail.com)"
+  [ "$output" = "allow" ]
+  run decision "$pre" mcp__ms365__create-reply-draft "$(tin_from_in '"chris@reso.gl"' hello@reso.gl)"
+  [ "$output" = "deny" ]
 }
 
 # ── THE RED-PROOF CONTROL: replay every send against the REAL pre-R1 artifact ───────────────────────

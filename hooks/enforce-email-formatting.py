@@ -33,11 +33,13 @@ Fires on the ms365 mail send/draft tools. Three independent guard families:
       it would let a compose → Stop-hook-block → send sequence read as two turns and
       pass. R1b uses hooks/lib/cc-interactive.sh's predicate instead.
 
-  R2  ALIAS CONTINUITY (2026-08-25). This mailbox has two aliases —
-      ichris96@hotmail.com and ren.chris@outlook.com. An outgoing message must use
-      the alias the counterparty already has for THAT thread. Enforced here: a
-      `from`/`sender` outside those two addresses is denied. NOT enforceable here:
-      whether the chosen alias matches the thread — see ALIAS NOTE below.
+  R2  MAILBOX IDENTITY + ALIAS CONTINUITY (2026-08-25; two mailboxes 2026-09-14). The
+      server holds the personal mailbox (ichris96@hotmail.com, ren.chris@outlook.com) and
+      chris@reso.gl, and routes each call by its `account` argument — silently falling
+      back to the personal one without it. Enforced here: a call that writes content, sets
+      a sender or transmits must name its mailbox, and `from`/`sender` must be an address
+      THAT mailbox owns (MAILBOXES). NOT enforceable here: whether the chosen alias matches
+      the thread — see ALIAS NOTE below.
 
   R3  FORMATTING / THREADING (pre-existing). Wall-of-text, lost-quote and
       detached-thread guards, unchanged in substance.
@@ -284,18 +286,55 @@ def _writes_content(tool_name: str, tool_input) -> bool:
     return bool(dig(tool_input, "body", "body", "content"))
 
 
-# --- R2: alias continuity -------------------------------------------------
-# The two aliases on this mailbox. Anything else in a `from`/`sender` is a typo, a
-# hallucinated address, or another account's identity — all denied. This set is the
-# ONLY part of R2 that is mechanically checkable here (see ALIAS NOTE in the module
-# docstring: a PreToolUse hook cannot see which alias the thread is on).
-KNOWN_ALIASES = {"ichris96@hotmail.com", "ren.chris@outlook.com"}
+# --- R2: mailbox identity + alias continuity ----------------------------------
+# The ms365 server holds TWO signed-in mailboxes (2026-09-14) and routes each call by its
+# `account` argument. A call WITHOUT one silently goes to the selected default — the personal
+# mailbox — so a reso.gl draft that forgets it is written in the wrong mailbox under the wrong
+# identity, with nothing to say so. Hence every call that writes content, sets a sender or
+# transmits must NAME its mailbox, and `from`/`sender` is checked against THAT mailbox's own
+# addresses: a flat union would let a draft in one mailbox claim the other's identity.
+#
+# account (as `ms-365-mcp-server --list-accounts` prints it) ->
+#   (Graph's default From when `from` is omitted, every address the mailbox may send as).
+# The default matters: VERIFIED 2026-08-25, a reply on a thread addressed to ren.chris came
+# back from ichris96 — Graph applies the MAILBOX default, not the thread's alias.
+# chris@reso.gl's set is its Exchange proxy addresses plus info@ (SendAs), read 2026-09-14
+# with `Get-Mailbox chris` / `Get-RecipientPermission`.
+MAILBOXES = {
+    "ren.chris@outlook.com": (
+        "ichris96@hotmail.com",
+        frozenset({"ichris96@hotmail.com", "ren.chris@outlook.com"}),
+    ),
+    "chris@reso.gl": (
+        "chris@reso.gl",
+        frozenset(
+            f"{user}@reso.gl"
+            for user in "chris admin hello alerts test postmaster info".split()
+        ),
+    ),
+}
 
-# What Graph uses when `from` is omitted. VERIFIED 2026-08-25, and it is the reason
-# "just leave from unset" is NOT a safe rule: a reply draft created on a thread
-# addressed to ren.chris@outlook.com came back from ichris96@hotmail.com. Graph
-# applies the MAILBOX DEFAULT, not the thread's alias.
-MAILBOX_DEFAULT_ALIAS = "ichris96@hotmail.com"
+
+def require_mailbox(tool_name: str, tool_input) -> str:
+    """The mailbox this call names in `account` — or a deny: without one the server silently
+    uses its selected default, the personal mailbox."""
+    given = tool_input.get("account")
+    account = given.strip().lower() if isinstance(given, str) else None
+    if account in MAILBOXES:
+        return account
+    named = (
+        f"account={given!r} is not one this server holds"
+        if given
+        else "it passes no `account`"
+    )
+    deny(
+        f"BLOCKED (R2, mailbox): {tool_name.split('__')[-1]} writes, re-addresses or sends mail, "
+        f"so it must name its mailbox, and {named}. Without one the server uses its selected "
+        f"default — the personal mailbox — which puts a reso.gl message in the wrong mailbox "
+        f"under the wrong identity. Retry with account set to the mailbox whose thread this "
+        f"is: {' or '.join(MAILBOXES)}."
+    )
+
 
 # Tag-open patterns that introduce a visible line/paragraph break in HTML.
 _BREAK_TAG_RE = re.compile(
@@ -458,7 +497,14 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    recipients to yourself and SENDING. Both halves are dead: the premise was false, and
    sending is denied outright (rule 0). Verifying a draft costs one read now.
 
-5. SENDER ALIAS — MATCH THE THREAD. This mailbox has TWO aliases: ichris96@hotmail.com
+5. NAME THE MAILBOX, THEN MATCH THE THREAD'S ALIAS. Two mailboxes, chosen by `account`:
+     account "ren.chris@outlook.com" — personal; aliases ichris96@hotmail.com and
+       ren.chris@outlook.com; Graph's default From is ichris96.
+     account "chris@reso.gl" — sends as chris@ admin@ hello@ alerts@ test@ postmaster@ and
+       info@ reso.gl; default From chris@reso.gl.
+   Hook-enforced: every draft write, `from` change and send-draft-message must pass
+   `account` — without it the server silently uses the personal mailbox.
+   The personal mailbox has TWO aliases: ichris96@hotmail.com
    and ren.chris@outlook.com. THE INVARIANT: an outgoing message uses the alias the
    counterparty already has for THAT thread. Derive it — read the original's
    toRecipients/ccRecipients and see which of the two they wrote to. Never default.
@@ -474,7 +520,7 @@ RECIPE = """ms365 email recipe (auto-injected — settled, do not re-derive):
    longer a reason to abandon the auto-quote: use the rule-3 splice and set the alias on the
    PATCH. Nothing about the alias forces you to hand-build a chain any more.
    Confirm on the finished draft with rule 4 and read its From: header.
-   Hook-enforced: a from/sender outside those two addresses is DENIED. The hook CANNOT
+   Hook-enforced: a from/sender the named mailbox does not own is DENIED. The hook CANNOT
    check thread-match — a PreToolUse hook sees only the request, never Graph's response —
    so that half is yours. Your backstop is that the operator sees From in Outlook.
    WHY THIS RULE EXISTS: it used to read "set from = ren.chris@outlook.com" flatly. Every
@@ -791,6 +837,9 @@ def main():
     global _SESSION_ID
     _SESSION_ID = data.get("session_id") or None
     tool_name = data.get("tool_name", "")
+    tool_input = data.get("tool_input")
+    if not isinstance(tool_input, dict):
+        tool_input = {}
 
     # ── R1: DRAFTS ONLY ───────────────────────────────────────────────────────────
     # Deliberately ABOVE the kill switch and above the GATED_TOOLS scoping. A Graph send
@@ -852,16 +901,13 @@ def main():
                 "this gate opens on its own. Do not re-word the draft to get around this — "
                 "revising it is composing it, and the gate will still hold."
             )
+        mailbox = require_mailbox(tool_name, tool_input)
         allow(
-            "R1b — sending an EXISTING draft (permitted; compose-and-send is still denied, "
-            "and this turn composed nothing). This TRANSMITS and cannot be recalled: "
-            "Outlook's 'undo send' does not exist on the Graph path. Send only the draft the "
-            "operator actually named."
+            f"R1b — sending an EXISTING draft from {mailbox} (permitted; compose-and-send is "
+            "still denied, and this turn composed nothing). This TRANSMITS and cannot be "
+            "recalled: Outlook's 'undo send' does not exist on the Graph path. Send only the "
+            "draft the operator actually named."
         )
-
-    tool_input = data.get("tool_input")
-    if not isinstance(tool_input, dict):
-        tool_input = {}
 
     # Bookkeeping BEFORE the scoping check: the read tools that satisfy R4 are not in
     # GATED_TOOLS and would exit at the next branch, so recording below it would mean the
@@ -927,20 +973,33 @@ def main():
                     f"Override: {FRESHNESS_ENV}=0, or CLAUDE_EMAIL_FORMAT_GATE_DISABLED=1."
                 )
 
-    # ── R2: ALIAS CONTINUITY ──────────────────────────────────────────────────────
-    # Enforceable half: the address must be one this mailbox actually owns. The
-    # thread-match half is NOT checkable here (no access to Graph's response), so a
-    # well-formed alias is allowed WITH an advisory rather than waved through silently.
+    # ── R2: MAILBOX IDENTITY + ALIAS CONTINUITY ─────────────────────────────────────
+    # Enforceable half: a call that writes content or sets a sender names its mailbox, and the
+    # sender is an address THAT mailbox owns. The thread-match half is NOT checkable here (no
+    # access to Graph's response), so a well-formed alias is allowed WITH an advisory rather
+    # than waved through silently.
     alias = extract_from_alias(tool_input)
-    if alias is not None and alias not in KNOWN_ALIASES:
-        deny(
-            f"BLOCKED (R2, alias): from/sender is '{alias}', which is not an address this "
-            f"mailbox owns. The only two aliases are "
-            f"{' and '.join(sorted(KNOWN_ALIASES))}. Graph would reject this outright or "
-            f"send under an identity the operator does not control. Pick the alias the "
-            f"counterparty already has for THIS thread: read the original's "
-            f"toRecipients/ccRecipients and match whichever of the two they wrote to."
-        )
+    default_alias = None
+    if alias is not None or (
+        tool_name in DRAFT_WRITE_TOOLS and _writes_content(tool_name, tool_input)
+    ):
+        mailbox = require_mailbox(tool_name, tool_input)
+        default_alias, aliases = MAILBOXES[mailbox]
+        if alias is not None and alias not in aliases:
+            owner = next((m for m, (_, a) in MAILBOXES.items() if alias in a), None)
+            deny(
+                f"BLOCKED (R2, alias): from/sender is '{alias}', which the {mailbox} mailbox "
+                f"does not own — its addresses are {', '.join(sorted(aliases))}. "
+                + (
+                    f"'{alias}' belongs to the {owner} mailbox: if this thread is there, pass "
+                    f"account={owner!r} instead. "
+                    if owner
+                    else "Graph would reject it outright or send under an identity the "
+                    "operator does not control. "
+                )
+                + "Pick the alias the counterparty already has for THIS thread: read the "
+                "original's toRecipients/ccRecipients and match the address they wrote to."
+            )
     if alias is not None:
         # NOT an early allow(): the formatting, quote and threading guards below still
         # have to run. Stash the advisory so whichever allow() eventually fires carries
@@ -953,7 +1012,7 @@ def main():
             f"an address they have never seen on the thread can be filed against no order: "
             f"Montway #3414154 was addressed to ichris96 throughout, the hold request went "
             f"from ren.chris, and they dispatched and charged $1,779 anyway. If the thread "
-            f"is on {MAILBOX_DEFAULT_ALIAS} you can simply omit `from` — that is already "
+            f"is on {default_alias} you can simply omit `from` — that is already "
             f"Graph's default. Confirm on the finished draft with get-mail-message-mime "
             f"(it works on drafts) and read its From: header."
         )
