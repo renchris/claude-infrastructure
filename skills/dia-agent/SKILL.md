@@ -46,11 +46,42 @@ focused profile*) `execute … javascript`.
 — a browser-level CDP session enumerates every Space's targets but `Target.createTarget` is refused
 for a context DevTools does not own. Agents should make their own tab and keep it in their own Space.
 
-**The one gap is a LAUNCH FLAG, not a prompt:** `execute … javascript` returns
-`JavaScript execution via AppleScript requires the --enable-applescript-javascript launch flag.
-(-10006)`. So navigation, tab/Space management and page metadata work today; in-page JS needs Dia
-started once with that flag (a Dock launch does not carry it). This is NOT Chrome's
-`browser.allow_javascript_apple_events` pref — that key is absent here and setting it does nothing.
+**In-page JS needs a LAUNCH FLAG, not a prompt — and it is ENABLED on this machine as of
+2026-09-14.** Without it `execute … javascript` returns `JavaScript execution via AppleScript
+requires the --enable-applescript-javascript launch flag. (-10006)`; a Dock launch does not carry
+it, so re-check after any relaunch by the operator (`ps -o command= -p "$(pgrep -x Dia | head -1)"`
+— read the flag off Dia's OWN pid, never a `ps | grep` census, which matches its own shell). This is
+NOT Chrome's `browser.allow_javascript_apple_events` pref; that key is absent here and setting it
+does nothing. Restore the flag with `open -a Dia --args --enable-applescript-javascript` after a
+quit, and join the quit and the launch with `;` — a `-128` from the quit makes `&&` skip the
+relaunch and Dia comes back flagless.
+
+**Proven end to end 2026-09-14** (created tab → navigated → extracted → closed, count restored,
+zero dialogs). Three gotchas that each cost a cycle:
+
+```applescript
+tell application "Dia"
+  tell window 1                                    -- `make` needs a literal `window 1` or this
+    set newTab to make new tab with properties {URL:"https://example.com/"}
+  end tell                                         -- `… at end of tabs of <variable>` does NOT parse
+  repeat 20 times
+    if not (loading of newTab) then exit repeat
+    delay 0.5
+  end repeat
+  set payload to execute newTab javascript ¬
+    "JSON.stringify({t:document.title,n:document.querySelectorAll('a').length})"
+  close newTab
+end tell
+```
+
+1. **`before` is a RESERVED WORD.** `set before to count of tabs …` fails as
+   `syntax error: Expected expression but found "to"`, pointing at the `to` and not at the real
+   culprit. Same for other positional keywords; name the variable `tabsBefore`.
+2. **Back-to-back `execute` calls return EMPTY.** Three consecutive calls gave the first result and
+   two empty strings; the same three with `delay 0.5` between them all returned. Prefer ONE call
+   returning `JSON.stringify(…)` — one round trip, no pacing to tune.
+3. **The result is JSON-encoded**, so a returned string arrives quoted and escaped
+   (`"{\"t\":\"Example Domain\"}"`). Unwrap one layer before parsing.
 
 **What AppleScript cannot do**, i.e. when to drop to CDP: trusted input events (its JS is
 `isTrusted=false`, which hardened SPAs reject), screenshots, network interception, cookies,
