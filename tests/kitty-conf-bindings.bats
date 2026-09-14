@@ -159,7 +159,7 @@ main()
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   printf '%s\n' "$output" > "$BATS_TEST_TMPDIR/b.out"
   grep -q 'cmd_shift_b_last=.*kitty-pane-title-toggle\.sh' "$BATS_TEST_TMPDIR/b.out" || { cat "$BATS_TEST_TMPDIR/b.out"; false; }
-  grep -q 'cmd_shift_b_last=.*toggle_window_title_bars' "$BATS_TEST_TMPDIR/b.out" && { echo "the row-stealing built-in is back"; false; }
+  ! grep -q 'cmd_shift_b_last=.*toggle_window_title_bars' "$BATS_TEST_TMPDIR/b.out" || { echo "the row-stealing built-in is back"; false; }
   :
 }
 
@@ -172,8 +172,33 @@ main()
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   printf '%s\n' "$output" > "$BATS_TEST_TMPDIR/b2.out"
   grep -q 'cmd_shift_b_last=.*\${HOME}/' "$BATS_TEST_TMPDIR/b2.out" || { cat "$BATS_TEST_TMPDIR/b2.out"; false; }
-  grep -qE 'cmd_shift_b_last=.*[[:space:]]~/' "$BATS_TEST_TMPDIR/b2.out" && { echo "tilde path in the binding — it will die silently"; false; }
+  ! grep -qE 'cmd_shift_b_last=.*[[:space:]]~/' "$BATS_TEST_TMPDIR/b2.out" || { echo "tilde path in the binding — it will die silently"; false; }
   :
+}
+
+@test "MUTANT CONTROL: restore the built-in and the zero-shift guard sees it" {
+  # Without this the guard above could be vacuous — it would pass on any config that merely fails
+  # to bind cmd+shift+b at all. Put the row-stealing built-in back and prove the guard catches it.
+  MUT="$BATS_TEST_TMPDIR/mutant-b.conf"
+  { grep -v 'kitty-pane-title-toggle' "$CONF"; echo 'map cmd+shift+b toggle_window_title_bars'; } > "$MUT"
+  run probe "$MUT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -qx 'cmd_shift_b_last=toggle_window_title_bars' || {
+    echo "CONTROL FAILED — the guard cannot distinguish the row-stealing config:"; echo "$output"; false; }
+}
+
+@test "MUTANT CONTROL: a tilde path is visible to the guard as a tilde" {
+  # The bug that shipped: kitty expands ${HOME} in a map's command but NOT `~`, and a tilde throws
+  # inside kitty's remote-control handler with no user-visible reaction at all. Prove the probe
+  # surfaces the tilde rather than silently normalising it, or the guard above proves nothing.
+  MUT="$BATS_TEST_TMPDIR/mutant-tilde.conf"
+  sed 's|--allow-remote-control \${HOME}/|--allow-remote-control ~/|' "$CONF" > "$MUT"
+  grep -q 'allow-remote-control ~/' "$MUT" || { echo "mutation did not apply"; false; }
+  run probe "$MUT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '%s\n' "$output" > "$BATS_TEST_TMPDIR/mt.out"
+  grep -qE 'cmd_shift_b_last=.*[[:space:]]~/' "$BATS_TEST_TMPDIR/mt.out" || {
+    echo "CONTROL FAILED — the guard cannot see a tilde path:"; cat "$BATS_TEST_TMPDIR/mt.out"; false; }
 }
 
 @test "drag_threshold stays non-zero — 0 disables ALL dragging in kitty" {
