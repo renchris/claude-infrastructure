@@ -55,6 +55,14 @@ def _ensure_pil():
         return
     except ImportError:
         pass
+    cache = os.path.expanduser("~/.claude/autonomy/kitty-title-overlay.interp")
+    try:
+        cand = open(cache).read().strip()
+        if cand and os.path.exists(cand) and not os.environ.get("_KTO_REEXEC"):
+            os.environ["_KTO_REEXEC"] = "1"
+            os.execv(cand, [cand, os.path.abspath(__file__)] + sys.argv[1:])
+    except OSError:
+        pass
     if os.environ.get("_KTO_REEXEC"):
         _log("FATAL: no interpreter with Pillow found; titles cannot render")
         print("kitty-pane-title-overlay: no python with Pillow found", file=sys.stderr)
@@ -66,6 +74,14 @@ def _ensure_pil():
             continue
         probe = subprocess.run([cand, "-c", "import PIL"], capture_output=True)
         if probe.returncode == 0:
+            # Remember the winner: each probe is a FULL interpreter start (~20ms), and
+            # paying that on every keypress is most of the chord's felt latency.
+            try:
+                os.makedirs(os.path.dirname(cache), exist_ok=True)
+                with open(cache, "w") as fh:
+                    fh.write(cand)
+            except OSError:
+                pass
             os.environ["_KTO_REEXEC"] = "1"
             os.execv(cand, [cand, os.path.abspath(__file__)] + sys.argv[1:])
     _log("FATAL: scanned candidates, none had Pillow")
@@ -80,7 +96,15 @@ FONT_CANDIDATES = [
     "/System/Library/Fonts/Monaco.dfont",
     "/Library/Fonts/Arial.ttf",
 ]
-FG, BG = (236, 236, 236), (58, 58, 64)
+# Every value below is READ OFF config/kitty.conf, not chosen. The strip must belong to
+# this terminal, and an invented grey is exactly how it stops belonging.
+#   background #1e1e24 · foreground #e6e6e6 · color8 #727272 · color7 #c8c8c8
+BG        = (0x1e, 0x1e, 0x24)   # the terminal's OWN background: no card, no bar
+INK_IDLE  = (0x8a, 0x8a, 0x94)   #  4.85:1 — a label sits BELOW the body it labels
+INK_LIVE  = (0xa8, 0xa8, 0xb2)   #  7.03:1 — the focused pane, promoted ONE ramp step
+RULE      = (0x3a, 0x3a, 0x42)   # one hairline, ~rgba(255,255,255,.10) over BG
+# Why not brighter: body is 13.29:1. The first version painted the title at 14.04:1 —
+# brighter than the content it describes, which inverts the hierarchy. Measured, not felt.
 
 
 def ksock():
@@ -140,12 +164,42 @@ def kitty_ls(sock):
     return json.loads(out.stdout)
 
 
-def pane_tty(pid):
-    """Slave tty of the pane's foreground process group leader."""
-    r = subprocess.run(["ps", "-o", "tty=", "-p", str(pid)],
+_TTY_CACHE = {}
+
+
+def pane_ttys(pids):
+    """Every pane's tty, resolved ONCE per pid and then never again.
+
+    Two measurements shaped this. Four separate `ps` calls cost 32ms — so batch. But
+    ONE `ps` still costs 94.7ms on this machine, because the expense is spawning a
+    process that walks the whole table, not the number of pids asked about. Batching
+    alone therefore bought almost nothing.
+
+    A pane's tty cannot change while the pane lives, so the right number of lookups
+    per pid is one. The cache is in-memory ONLY and deliberately not persisted: pids
+    are reused after death, and a stale pid->tty mapping would write escape sequences
+    into somebody else's terminal.
+    """
+    pids = [p for p in pids if p]
+    if not pids:
+        return {}
+    missing = [p for p in pids if p not in _TTY_CACHE]
+    if not missing:
+        return {p: _TTY_CACHE[p] for p in pids if _TTY_CACHE.get(p)}
+    r = subprocess.run(["ps", "-o", "pid=,tty=", "-p", ",".join(str(p) for p in missing)],
                        capture_output=True, text=True)
-    t = r.stdout.strip()
-    return "/dev/%s" % t if t and t != "??" else None
+    for line in (r.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] != "??":
+            try:
+                _TTY_CACHE[int(parts[0])] = "/dev/%s" % parts[1]
+            except ValueError:
+                pass
+    for p in missing:                      # remember the misses too, so a pane with no
+        _TTY_CACHE.setdefault(p, None)     # tty is not re-probed on every single cycle
+    if len(_TTY_CACHE) > 512:
+        _TTY_CACHE.clear()
+    return {p: _TTY_CACHE[p] for p in pids if _TTY_CACHE.get(p)}
 
 
 def tiocgwinsz(path):
@@ -165,10 +219,29 @@ def tiocgwinsz(path):
         os.close(fd)
 
 
-def strip_png(width, height, text):
+_PNG_CACHE = {}
+
+
+def strip_png(width, height, text, live=False):
+    """One cell-high title strip.
+
+    The design is three decisions, each with a reference behind it:
+      · background = the terminal's OWN background, so the strip reads as empty space
+        rather than a card. Airbnb's no-card rule is the highest-value anti-template
+        move available and it costs nothing.
+      · ONE hairline along the bottom — the single structural signal, no shadow, no box.
+      · hierarchy carried by LUMINANCE, never by size or hue. The focused pane is
+        promoted one step; kitty's blue border already says which pane is focused, so
+        this is a quiet echo, not a second encoding.
+    """
+    key = (width, height, text, live)
+    hit = _PNG_CACHE.get(key)
+    if hit is not None:
+        return hit
     from PIL import Image, ImageDraw, ImageFont
     im = Image.new("RGB", (max(width, 1), max(height, 1)), BG)
     d = ImageDraw.Draw(im)
+    FG = INK_LIVE if live else INK_IDLE
     font = None
     for p in FONT_CANDIDATES:
         if os.path.exists(p):
@@ -179,7 +252,7 @@ def strip_png(width, height, text):
                 continue
     if font is None:
         font = ImageFont.load_default()
-    pad = max(int(height * 0.28), 4)
+    pad = 0  # column 1 — optically aligned with the pane's own text column
     # trim to fit rather than overflow the strip
     t = text
     while t and d.textlength(t, font=font) > width - 2 * pad:
@@ -190,9 +263,15 @@ def strip_png(width, height, text):
     except Exception:
         y = 0
     d.text((pad, y), t, font=font, fill=FG)
+    # the one hairline: bottom edge only, full bleed, no corners, no shadow
+    d.line([(0, height - 1), (width, height - 1)], fill=RULE, width=1)
     b = io.BytesIO()
     im.save(b, format="PNG", optimize=True)
-    return b.getvalue()
+    out = b.getvalue()
+    if len(_PNG_CACHE) > 64:
+        _PNG_CACHE.clear()
+    _PNG_CACHE[key] = out
+    return out
 
 
 def place(tty, png, img_id):
@@ -228,8 +307,8 @@ def clear(tty, img_id):
 
 
 def targets(sock, all_windows):
-    """(pane_id, title, tty) for panes we should label."""
-    out = []
+    """(pane_id, title, tty, is_focused) for panes we should label."""
+    found = []
     for w in kitty_ls(sock):
         for t in w.get("tabs", []):
             if not all_windows and not t.get("is_focused"):
@@ -238,9 +317,14 @@ def targets(sock, all_windows):
             if len(panes) < 2:          # a lone pane needs no label
                 continue
             for p in panes:
-                tty = pane_tty(p.get("pid"))
-                if tty:
-                    out.append((p["id"], (p.get("title") or "").strip(), tty))
+                found.append(p)
+    ttys = pane_ttys([p.get("pid") for p in found if p.get("pid")])
+    out = []
+    for p in found:
+        tty = ttys.get(p.get("pid"))
+        if tty:
+            out.append((p["id"], (p.get("title") or "").strip(), tty,
+                        bool(p.get("is_focused"))))
     return out
 
 
@@ -250,18 +334,19 @@ def paint(sock, all_windows):
     if not tg:
         _log("no targets: sock=%r — a pane query that returns nothing is the SILENT "
              "failure mode, not a quiet success" % (sock,))
-    for pid_, title, tty in tg:
+    for pid_, title, tty, live in tg:
         g = tiocgwinsz(tty)
         if not g:
             continue
-        png = strip_png(int(g["xpx"]), int(round(g["ch"])), title or "(untitled)")
+        png = strip_png(int(g["xpx"]), int(round(g["ch"])),
+                        title or "(untitled)", live)
         if place(tty, png, IMG_BASE + (pid_ % 800)):
             n += 1
     return n
 
 
 def wipe(sock, all_windows):
-    for pid_, _t, tty in targets(sock, all_windows):
+    for pid_, _t, tty, _live in targets(sock, all_windows):
         clear(tty, IMG_BASE + (pid_ % 800))
 
 
@@ -284,12 +369,33 @@ def main():
     if arg == "on":
         with open(STATE, "w") as fh:
             fh.write(str(os.getpid()))
-        # Re-assert until the state file is removed: kitty discards placements on
-        # any clear or scroll and never says so, so this is the only way to hold.
+        # Re-assert until the state file is removed: kitty discards placements on any
+        # clear or scroll and never says so, so this is the only way to hold.
+        #
+        # SPEED. A cycle is two very different costs: asking kitty what the panes are
+        # (a `kitty @` spawn plus a `ps`, ~40ms) and actually drawing (a tty write,
+        # measured 0.0ms). Re-querying every cycle capped the refresh at ~2s, which is
+        # long enough that a repaint visibly eats a title and it stays eaten. So the
+        # pane list is cached and refreshed about once a second, while the redraw runs
+        # at REFRESH — the titles re-appear faster than the eye resolves, which is the
+        # whole of "feels faster" here.
+        REFRESH, REQUERY_EVERY = 0.35, 8
         deadline = time.time() + 3600
+        tg, i = None, 0
         while os.path.exists(STATE) and time.time() < deadline:
-            paint(sock, all_windows)
-            time.sleep(2.0)
+            if tg is None or i % REQUERY_EVERY == 0:
+                tg = targets(sock, all_windows)
+                if not tg:
+                    _log("hold: no targets (sock=%r)" % (sock,))
+            for pid_, title, tty, live in tg:
+                g = tiocgwinsz(tty)
+                if not g:
+                    continue
+                png = strip_png(int(g["xpx"]), int(round(g["ch"])),
+                                title or "(untitled)", live)
+                place(tty, png, IMG_BASE + (pid_ % 800))
+            i += 1
+            time.sleep(REFRESH)
         wipe(sock, all_windows)
         return 0
 
