@@ -90,21 +90,38 @@ def _ensure_pil():
 
 STATE = os.path.expanduser("~/.claude/autonomy/kitty-title-overlay.state")
 IMG_BASE = 7100                      # image ids we own; never collides with a user's
+# Palette read off config/kitty.conf; sizes and contrasts chosen from a 1:1 proof
+# rendered against real body text, not from taste.
+#   background #1e1e24 · foreground #e6e6e6 · color0 #262b33 · color7 #c8c8c8
+#
+# CORRECTED after the operator saw it: "text is too small and blends in as background
+# un-highlighted text". The first version had no band and sat at 4.85:1 — it borrowed a
+# no-card rule written for transcript speech and applied it to a pane HEADER, whose
+# whole job is to be pickable out of the page. A header you cannot find is not subtle.
+# It also rendered ~27px against body's ~36px, so it was literally smaller than the text
+# it labelled. Both halves of his sentence were separate defects.
+BAND_IDLE = (0x27, 0x2c, 0x36)   # a real band: clearly above the terminal ground
+BAND_LIVE = (0x31, 0x3a, 0x4c)   # focused pane, lifted one step
+INK_IDLE  = (0xd2, 0xd6, 0xe0)   # 9.62:1 on its band — reads instantly
+INK_LIVE  = (0xee, 0xf0, 0xf6)   # 10.2:1
+RULE      = (0x3a, 0x3a, 0x42)   # one hairline along the bottom, no shadow, no box
+TYPE_SCALE = 0.800               # 36px in a 45px cell — kitty's OWN em, exactly
+# Why 0.800 and not a rounder guess: kitty runs font_size 18.0, which on a 2x display is
+# a 36px em, and PIL's truetype(36) is the same em. Measured from a 1:1 screen capture,
+# the earlier 33px rendered glyphs 32px tall against the body's 37px — 86%, which is what
+# "too small" looked like. 36 is also the LARGEST that fits: ascent+descent is exactly 45,
+# the cell height. 38 overflows. There is no room above this without clipping.
+
+# Monaco is the terminal's OWN face and it IS loadable — as Monaco.ttf. The first
+# version listed Monaco.dfont, which does not exist on this machine, so every strip
+# silently fell back to Menlo at a smaller size. Guessing a filename extension is how
+# a font substitution happens with no error anywhere.
 FONT_CANDIDATES = [
+    "/System/Library/Fonts/Monaco.ttf",
+    "/Library/Fonts/Monaco.ttf",
     "/System/Library/Fonts/Menlo.ttc",
     "/System/Library/Fonts/SFNSMono.ttf",
-    "/System/Library/Fonts/Monaco.dfont",
-    "/Library/Fonts/Arial.ttf",
 ]
-# Every value below is READ OFF config/kitty.conf, not chosen. The strip must belong to
-# this terminal, and an invented grey is exactly how it stops belonging.
-#   background #1e1e24 · foreground #e6e6e6 · color8 #727272 · color7 #c8c8c8
-BG        = (0x1e, 0x1e, 0x24)   # the terminal's OWN background: no card, no bar
-INK_IDLE  = (0x8a, 0x8a, 0x94)   #  4.85:1 — a label sits BELOW the body it labels
-INK_LIVE  = (0xa8, 0xa8, 0xb2)   #  7.03:1 — the focused pane, promoted ONE ramp step
-RULE      = (0x3a, 0x3a, 0x42)   # one hairline, ~rgba(255,255,255,.10) over BG
-# Why not brighter: body is 13.29:1. The first version painted the title at 14.04:1 —
-# brighter than the content it describes, which inverts the hierarchy. Measured, not felt.
 
 
 def ksock():
@@ -239,20 +256,22 @@ def strip_png(width, height, text, live=False):
     if hit is not None:
         return hit
     from PIL import Image, ImageDraw, ImageFont
-    im = Image.new("RGB", (max(width, 1), max(height, 1)), BG)
+    im = Image.new("RGB", (max(width, 1), max(height, 1)),
+                   BAND_LIVE if live else BAND_IDLE)
     d = ImageDraw.Draw(im)
     FG = INK_LIVE if live else INK_IDLE
+    BG = BAND_LIVE if live else BAND_IDLE
     font = None
     for p in FONT_CANDIDATES:
         if os.path.exists(p):
             try:
-                font = ImageFont.truetype(p, max(int(height * 0.62), 8))
+                font = ImageFont.truetype(p, max(int(height * TYPE_SCALE), 8))
                 break
             except Exception:
                 continue
     if font is None:
         font = ImageFont.load_default()
-    pad = 0  # column 1 — optically aligned with the pane's own text column
+    pad = max(int(height * 0.24), 6)  # inset; keeps the label off the pane edge
     # trim to fit rather than overflow the strip
     t = text
     while t and d.textlength(t, font=font) > width - 2 * pad:
@@ -263,8 +282,9 @@ def strip_png(width, height, text, live=False):
     except Exception:
         y = 0
     d.text((pad, y), t, font=font, fill=FG)
-    # the one hairline: bottom edge only, full bleed, no corners, no shadow
-    d.line([(0, height - 1), (width, height - 1)], fill=RULE, width=1)
+    # No hairline. At 36px the descenders reach the final row, and the band's own edge
+    # against the terminal ground already separates it — the rule was only earning its
+    # keep back when the band was invisible.
     b = io.BytesIO()
     im.save(b, format="PNG", optimize=True)
     out = b.getvalue()
