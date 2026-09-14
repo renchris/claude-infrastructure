@@ -58,7 +58,11 @@ cmd_arm() {
   _k set-window-logo --no-response --match "id:$win" --position center --alpha 1 "$png" || return $?
   # Record the tier ON THE WINDOW, so kitty itself is the state store. User-vars survive a
   # config reload; an external file would desync from a pane that died.
-  _k set-user-vars --match "id:$win" "cc_wash=$tier" >/dev/null 2>&1
+  # set-window-logo is armed with --no-response, so it CANNOT report a missing window: it
+  # returns 0 whether or not the match hit. set-user-vars is the only arm that answers, so it
+  # is also our existence probe — and its rc is the function's rc, never swallowed.
+  if _k set-user-vars --match "id:$win" "cc_wash=$tier" >/dev/null 2>&1; then return 0; fi
+  return 3   # 3 = the window went away between enumeration and arming (a benign race)
 }
 
 cmd_clear() {
@@ -120,7 +124,12 @@ for w in wins[1:4]: print(w, "weak")
   echo "Painting a DEMO on the OS-window you are looking at (fully reversible):"
   while read -r w tier; do
     [ -n "$w" ] || continue
-    cmd_arm "$w" "$tier" && echo "  win $w  <- $tier"
+    cmd_arm "$w" "$tier"; rc=$?
+    case "$rc" in
+      0) echo "  win $w  <- $tier" ;;
+      3) echo "  win $w  -- skipped: pane closed before it could be painted" ;;
+      *) echo "  win $w  -- FAILED (rc=$rc)" >&2 ;;
+    esac
   done <<< "$plan"
   echo
   echo "Revert with:  cc-kitty-wash clear all"
