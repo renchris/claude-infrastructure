@@ -100,27 +100,41 @@ IMG_BASE = 7100                      # image ids we own; never collides with a u
 # whole job is to be pickable out of the page. A header you cannot find is not subtle.
 # It also rendered ~27px against body's ~36px, so it was literally smaller than the text
 # it labelled. Both halves of his sentence were separate defects.
-BAND_IDLE = (0x27, 0x2c, 0x36)   # a real band: clearly above the terminal ground
-BAND_LIVE = (0x31, 0x3a, 0x4c)   # focused pane, lifted one step
-INK_IDLE  = (0xd2, 0xd6, 0xe0)   # 9.62:1 on its band — reads instantly
-INK_LIVE  = (0xee, 0xf0, 0xf6)   # 10.2:1
+BAND_IDLE = (0x3d, 0x44, 0x55)   # 1.70:1 over the ground — reads as a band, not a tint
+BAND_LIVE = (0x39, 0x4d, 0x77)   # kitty's own active_border_color #6194f3 at 40% over
+                                 # the ground: the focused pane is unmistakable, and the hue
+                                 # is the one the border already uses, so colour carries
+                                 # FOCUS rather than decorating every pane
+INK_IDLE  = (0xf2, 0xf4, 0xfa)   # 8.86:1 on its band
+INK_LIVE  = (0xf5, 0xf7, 0xfc)   # 8.6:1 on the blue band
 RULE      = (0x3a, 0x3a, 0x42)   # one hairline along the bottom, no shadow, no box
-TYPE_SCALE = 0.800               # 36px in a 45px cell — kitty's OWN em, exactly
+TYPE_SCALE = 0.755               # SF Pro is proportional: it renders optically smaller
+                                 # than mono at the same px, so this is sized from the RENDER
+                                 # (cap height against body), not from kitty's em.
 # Why 0.800 and not a rounder guess: kitty runs font_size 18.0, which on a 2x display is
 # a 36px em, and PIL's truetype(36) is the same em. Measured from a 1:1 screen capture,
 # the earlier 33px rendered glyphs 32px tall against the body's 37px — 86%, which is what
 # "too small" looked like. 36 is also the LARGEST that fits: ascent+descent is exactly 45,
 # the cell height. 38 overflows. There is no room above this without clipping.
 
-# Monaco is the terminal's OWN face and it IS loadable — as Monaco.ttf. The first
-# version listed Monaco.dfont, which does not exist on this machine, so every strip
-# silently fell back to Menlo at a smaller size. Guessing a filename extension is how
-# a font substitution happens with no error anywhere.
+# A HEADER MUST BE A DIFFERENT REGISTER, not just a different size. Matching the body's
+# Monaco exactly made it read as more body text — "the font size/style/placement is still
+# too similar to the body text". Four registers were rendered at 1:1 against real body
+# text (Menlo Bold sentence · Monaco uppercase tracked · SF Semibold sentence · SF
+# Semibold uppercase tracked) and the proportional semibold wins outright: it is visibly
+# NOT terminal output, which is the whole job, and unlike the uppercase variants it stays
+# readable when a session name runs long.
+#
+# SF Pro is the macOS system UI face, so a label set in it reads as chrome by convention,
+# not by decoration. It is a variable font; the Semibold instance is selected by name and
+# falls back silently to Regular if that ever fails.
+UI_FONT = "/System/Library/Fonts/SFNS.ttf"
+UI_VARIATION = "Semibold"
+TRACKING = 0.4                   # a hair of tracking; proportional type at label size
 FONT_CANDIDATES = [
+    UI_FONT,
     "/System/Library/Fonts/Monaco.ttf",
-    "/Library/Fonts/Monaco.ttf",
     "/System/Library/Fonts/Menlo.ttc",
-    "/System/Library/Fonts/SFNSMono.ttf",
 ]
 
 
@@ -266,6 +280,11 @@ def strip_png(width, height, text, live=False):
         if os.path.exists(p):
             try:
                 font = ImageFont.truetype(p, max(int(height * TYPE_SCALE), 8))
+                if p == UI_FONT:
+                    try:
+                        font.set_variation_by_name(UI_VARIATION)
+                    except Exception:
+                        pass          # Regular is an acceptable degrade, a crash is not
                 break
             except Exception:
                 continue
@@ -273,15 +292,20 @@ def strip_png(width, height, text, live=False):
         font = ImageFont.load_default()
     pad = max(int(height * 0.24), 6)  # inset; keeps the label off the pane edge
     # trim to fit rather than overflow the strip
+    def measure(txt):
+        return sum(font.getlength(c) + TRACKING for c in txt)
     t = text
-    while t and d.textlength(t, font=font) > width - 2 * pad:
+    while t and measure(t) > width - 2 * pad:
         t = t[:-1]
     try:
         asc, desc = font.getmetrics()
         y = max((height - (asc + desc)) // 2, 0)
     except Exception:
         y = 0
-    d.text((pad, y), t, font=font, fill=FG)
+    x = pad
+    for ch in t:                      # drawn per glyph so tracking is possible at all
+        d.text((x, y), ch, font=font, fill=FG)
+        x += font.getlength(ch) + TRACKING
     # No hairline. At 36px the descenders reach the final row, and the band's own edge
     # against the terminal ground already separates it — the rule was only earning its
     # keep back when the band was invisible.
