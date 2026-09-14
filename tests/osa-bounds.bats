@@ -420,12 +420,11 @@ delay_launder(){ # <path>… → delay-exempt rows carrying another call (empty 
 # bin/screenshot-to-clipboard.sh was the other converted site; it was retired 2026-09-13 with its
 # launchd agent (hammerspoon-config supervises Hammerspoon now), so only dia-cdp-launch remains.
 @test "converted: dia-cdp-launch calls through osa_bounded" {
-  for f in "$ROOT/bin/dia-cdp-launch.sh"; do
-    [ -r "$f" ] || { echo "missing $f"; false; }
-    "$G" -qE 'osa_bounded osascript' "$f" || { echo "$f still calls osascript unbounded"; false; }
-    # The lib must be reached through $0's PHYSICAL location: ~/bin holds per-file symlinks into the
-    # checkout, and a directory of per-file symlinks never gains a NEW file.
-    "$G" -qE 'readlink' "$f" || { echo "$f does not resolve \$0's symlink before sourcing the lib"; false; }
-    "$G" -qE 'osa_bounded\(\) \{ timeout' "$f" || { echo "$f has no inline fallback if the lib is unreadable"; false; }
-  done
+  local f="$ROOT/bin/dia-cdp-launch.sh"
+  [ -r "$f" ] || { echo "missing $f"; false; }
+  "$G" -qE 'osa_bounded osascript' "$f" || { echo "$f still calls osascript unbounded"; false; }
+  # The lib must be reached through $0's PHYSICAL location: ~/bin holds per-file symlinks into the
+  # checkout, and a directory of per-file symlinks never gains a NEW file.
+  "$G" -qE 'readlink' "$f" || { echo "$f does not resolve \$0's symlink before sourcing the lib"; false; }
+  "$G" -qE 'osa_bounded\(\) \{ timeout' "$f" || { echo "$f has no inline fallback if the lib is unreadable"; false; }
 }
