@@ -509,8 +509,11 @@ if $IS_GLOBAL; then
   # frontier family while the repo copy could not bump that tier at all (audit 02, 2026-07-25).
   # browsermcp-wrapper.sh dropped 2026-08-11 with the server it wrapped (0 invocations / 3,504
   # transcripts / 30 d; upstream frozen 2025-04-11). Browser work goes through agent-browser.
+  # screenshot-to-clipboard.sh dropped 2026-09-13 with its launchd agent: hammerspoon-config now
+  # supervises Hammerspoon under KeepAlive (respawn ~50 ms), and the fallback's pid-based deferral
+  # and 10 s throttle × 10 s recency guard lost shots by construction (that repo's KB §F1/§F1b).
   for tool in claude-latest claude-update claude-versions claude-kimi \
-              claude-bump-models screenshot-to-clipboard.sh; do
+              claude-bump-models; do
     [[ -f "$REPO_DIR/bin/$tool" ]] || continue
     copy_file "$REPO_DIR/bin/$tool" "$HOME/bin/$tool"
   done

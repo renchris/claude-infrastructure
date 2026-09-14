@@ -305,7 +305,6 @@ bin/cc-dispatch:cargo
 bin/cc-reaper:bats
 bin/cc-reaper:gtimeout
 bin/cc-reaper:timeout
-bin/screenshot-to-clipboard.sh:timeout
 hooks/anti-deference-nudge.sh:cc-decide
 hooks/completion-assert.sh:timeout
 hooks/lead-crash-watchdog.sh:cc-teardown

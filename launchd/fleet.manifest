@@ -365,7 +365,12 @@ com.claude.auth-timeseries          | staged | 300  | ~/.claude/logs/auth-timese
 com.chrisren.autonomy-sweep        | run    | 300  | auto | 5  | 18-fleet-activate.sh
 com.chrisren.cc-reaper             | run    | 300  | auto | 4  | 18-fleet-activate.sh
 com.chrisren.restic-claude-archive | run    | 0    | auto | 12 | 18-fleet-activate.sh
-com.chrisren.screenshot-clipboard  | run    | 0    | auto | 12 | 18-fleet-activate.sh
+# com.chrisren.screenshot-clipboard RETIRED 2026-09-13 (plist + bin/screenshot-to-clipboard.sh
+# removed): hammerspoon-config supervises Hammerspoon under launchd KeepAlive (respawn ~50 ms), and
+# this WatchPaths fallback lost shots by construction — it deferred to any Hammerspoon PID (a zombie
+# on 2026-09-10) and its 10 s throttle × 10 s recency guard dropped stalled ones. Kept declared so a
+# resurrected copy reads as intentional-off, never as an undeclared label.
+com.chrisren.screenshot-clipboard  | retired | 0   | -    | 12 | 18-fleet-activate.sh
 com.chrisren.verify-2114-archive   | run    | 0    | auto | 12 | 18-fleet-activate.sh
 com.chrisren.watch-claude-code-2118-hold | run | 0 | auto | 7 | 18-fleet-activate.sh
 com.claude.accounts-keepwarm        | staged | 180  | ~/.claude/logs/accounts-keepwarm.out.log | -  | 36-start-latency-router-activate.sh
