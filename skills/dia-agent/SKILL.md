@@ -1,6 +1,6 @@
 ---
 name: dia-agent
-description: Drive your real warm, logged-in Dia (The Browser Company, Chromium 149) over the Chrome DevTools Protocol with navigator.webdriver=false. PRIMARY = your REAL Dia via dia://inspect#remote-debugging + chrome-devtools-mcp --autoConnect; SECONDARY = an isolated CLEAN dedicated-profile Dia via ~/bin/dia-cdp-launch.sh; plain Chrome = labeled fallback only (Dia is the requirement). Use when the user wants to "drive my real/warm Dia", "attach an agent to my Dia", "use dia://inspect", "allow remote debugging", "autoConnect to Dia", "drive my logged-in Dia tabs", or launch/kill/check the agent Dia (or types /dia). Covers consent-dialog approval, the ephemeral WS-only port, browserContextId space-scoping, security lifecycle (UNCHECK the toggle when done), the dedicated-profile launcher, and troubleshooting. Deep CDP capability map + provenance in memory dia-agent-browser-cdp-entrypoint.md.
+description: Drive your real warm, logged-in Dia (The Browser Company) with ZERO consent prompts. PRIMARY (2026-09-14, Dia 1.48) = Dia's own first-party AppleScript dictionary — no port, no modal, no second instance; covers tabs, windows, Spaces/profiles, writable tab URL, focus/move, and execute-javascript behind the --enable-applescript-javascript launch flag. Use it for "drive Dia without the permission popup", "zero-human browser automation", "osascript Dia", "open a tab in Dia", "agent browser in my daily browser". CDP remains the rail for trusted input, screenshots, network capture and cookies, over the Chrome DevTools Protocol with navigator.webdriver=false — via your REAL Dia at dia://inspect#remote-debugging (the modal approves the CONNECTION once, so hold ONE) + chrome-devtools-mcp --autoConnect; SECONDARY = an isolated CLEAN dedicated-profile Dia via ~/bin/dia-cdp-launch.sh; plain Chrome = labeled fallback only (Dia is the requirement). Use when the user wants to "drive my real/warm Dia", "attach an agent to my Dia", "use dia://inspect", "allow remote debugging", "autoConnect to Dia", "drive my logged-in Dia tabs", or launch/kill/check the agent Dia (or types /dia). Covers consent-dialog approval, the ephemeral WS-only port, browserContextId space-scoping, security lifecycle (UNCHECK the toggle when done), the dedicated-profile launcher, and troubleshooting. Deep CDP capability map + provenance in memory dia-agent-browser-cdp-entrypoint.md.
 allowed-tools: Bash, Read
 ---
 
@@ -20,6 +20,65 @@ Two paths to Dia, plus a last-resort fallback:
 For the full CDP capability catalog, detection surface, alternatives (OpenDia extension,
 Dia native agent-server), onboarding internals, and launchd: read memory
 `dia-agent-browser-cdp-entrypoint.md`.
+
+## 🚨 ZERO-PROMPT RAIL (2026-09-14, Dia 1.48.0) — reach for AppleScript BEFORE CDP
+
+**Dia ships a first-party AppleScript dictionary and it needs no port, no consent dialog and no
+second instance.** `NSAppleScriptEnabled=true`; `/Applications/Dia.app/Contents/Resources/Dia.sdef`
+declares a suite TBC names *"Dia Suite — Automation support for Dia."* Everything below was proven
+live on the operator's own warm Dia with **zero dialogs of any kind** (the Automation TCC grant
+`com.googlecode.iterm2 → company.thebrowser.dia` is already `auth_value 2`; a new terminal app
+prompts once):
+
+```bash
+osascript -e 'tell application "Dia" to return count of windows'                      # => 1
+osascript -e 'tell application "Dia" to tell window 1 to make new tab with properties {URL:"https://example.com/"}'
+osascript -e 'tell application "Dia" to return URL of active tab of window 1'
+```
+
+Dictionary: `window` → `id name active tab active profile index`, `tab layout`/`minimized`/`visible`/
+`zoomed` (rw), elements `tabs` (**rw**) + `profiles` (r) · `tab` → `id title` **`URL` (rw)** `loading
+isPinned isFocused` · `profile` → `name index`, elements `tabs` (**rw**) · commands `make` `close`
+`count` `focus` (a tab **or a profile**) `move` (a tab to another profile *without changing the
+focused profile*) `execute … javascript`.
+
+**`profile` is Dia's Space, and `move`/`make`-into-a-profile is the isolation lever CDP cannot give**
+— a browser-level CDP session enumerates every Space's targets but `Target.createTarget` is refused
+for a context DevTools does not own. Agents should make their own tab and keep it in their own Space.
+
+**The one gap is a LAUNCH FLAG, not a prompt:** `execute … javascript` returns
+`JavaScript execution via AppleScript requires the --enable-applescript-javascript launch flag.
+(-10006)`. So navigation, tab/Space management and page metadata work today; in-page JS needs Dia
+started once with that flag (a Dock launch does not carry it). This is NOT Chrome's
+`browser.allow_javascript_apple_events` pref — that key is absent here and setting it does nothing.
+
+**What AppleScript cannot do**, i.e. when to drop to CDP: trusted input events (its JS is
+`isTrusted=false`, which hardened SPAs reject), screenshots, network interception, cookies,
+`Accessibility.getFullAXTree`.
+
+### Corrections to the 2026-06-29 status below (measured 2026-09-14 on 1.48.0)
+
+- **The port is FIXED 9222, not ephemeral** (it was ephemeral on 1.37.1), and the toggle PERSISTS —
+  `devtools.remote_debugging.user-enabled: true` lives in `Local State`, so the port returns after
+  every relaunch. That makes "UNCHECK when done" load-bearing, not cosmetic.
+- **The modal approves the CONNECTION, once — not the action.** "Dozens per session" is client
+  connection churn, not a browser property: chrome-devtools-mcp 1.7.0 silently re-connects whenever
+  its transport drops (each reconnect = a new modal), and agent-browser 0.27.1's port discovery
+  *probes, closes, then connects* = two modals. Passing an explicit `ws://…/devtools/browser` URL is
+  agent-browser's only single-connection path. ⇒ the fix is ONE held connection behind a local
+  multiplexer, not a faster finger on Allow.
+- **In approval mode the browser GUID is NOT checked** ("If we require user approval, we do not
+  require guid"), so bare `ws://127.0.0.1:9222/devtools/browser` works and a stale UUID still works.
+  Every other WS path including `/devtools/page/<id>` is **403** — per-page sockets are impossible;
+  use flat sessions on the browser socket.
+- **Never auto-press the dialog.** It carries no pid, no port, no origin — unattributable by
+  construction, so a pid gate approves whoever heads the queue. `AXPress` on it also returns
+  `*element invalid*` **on success**; confirm by re-reading the container, never by the return value.
+- **A timed-out CDP handshake strands a modal sheet on the operator's browser** with no connection
+  behind it. Pair any WS attempt with a teardown that clears the sheet.
+
+Full verdict, ruled-out rails and the 11 agent reports:
+`docs/research/dia-zero-human-browser-2026-09-14/VERDICT.md`.
 
 ## Status — autonomy verified on Dia 1.37.1 / chrome-devtools-mcp 1.4.0 (2026-06-29)
 
