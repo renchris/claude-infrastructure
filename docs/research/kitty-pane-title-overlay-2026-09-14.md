@@ -4,7 +4,7 @@
 content layout shift** to the pane underneath. Explicitly disqualified as answers: "always on" and
 "never on" title bars.
 
-**Status: COMPLETE. The answer is that it does not exist in 0.48.2.** Five mechanisms measured in isolated kitty
+**Status: SOLVED — see § G. The six over-painting routes all fail; the answer was to move the row, not the paint.** Five mechanisms measured in isolated kitty
 instances plus one lead-run lane. Nothing has been changed in the operator's config by this work.
 
 ## The defect, stated once
@@ -165,7 +165,49 @@ newest release, so there is nothing to upgrade to.
 correct one. It costs two reflows per peek and keeps the control, which is the trade the operator
 already chose when always-on removed the chord.
 
-## G — the compensation idea, and why it is NOT yet a result
+## G — SOLVED: pay the row once in padding, and hand it back when the bar wants it
+
+Every route in the table above tries to draw the header somewhere that costs no row. That is the
+wrong axis. The bar needs exactly one cell height of pixels; the only question is WHERE it takes
+them from. Keep that much permanently in the TOP padding, and when the bar appears swap the whole
+config in ONE relayout to a variant whose top padding is exactly one cell smaller. The cell area
+gains precisely the row the bar consumes: the row count never changes, the PTY is never resized, no
+child is signalled, and the first text row lands on the same absolute pixel because the bar fills
+exactly the band the padding vacated.
+
+**MEASURED, all in ONE run** — the pairing is the point, because every earlier attempt had one half
+or the other and the two had never been observed together:
+
+    two-pane split, WINCH-trapping shells in both, Monaco 18, 45 px cell
+      OFF   rows [7,7]   SIGWINCH 0/0
+      ON    rows [7,7]   SIGWINCH 0/0   + a capture showing the title bar VISIBLE in BOTH panes
+      cursor block bottom edge: 626 px (ON) vs 625 px (OFF) — the content does not move
+
+On the live fleet, five consecutive toggles: rows and PTY pixel height IDENTICAL in every state
+(win341 rows=46 ypx=2070 in both ON and OFF). No resize means no signal means no reflow.
+
+**ATOMICITY IS THE TRICK.** Two remote commands (`action toggle_window_title_bars` then
+`set-spacing`) are two relayouts and measured 16 -> 15 -> 16, i.e. TWO signals — worse than the
+defect being fixed. One `load-config` of a complete file is one relayout and gives none. `-o`
+overrides were tried first and do NOT reproduce it reliably, which is why the ON half is a real conf
+file that `include`s the main config rather than a list of overrides.
+
+**Shipped as:** `window_padding_width 32.5 7 10 7` in the main config (the reservoir — 32.5pt = 65
+device px = one 45 px cell above the ordinary 10pt), `config/kitty-title-on.conf` as the ON half,
+`scripts/kitty-pane-title-toggle.sh` as the swap, and `map cmd+shift+b launch --type=background` as
+the chord — background, so the trigger creates no window and cannot shift anything either.
+
+**COST:** one row per pane, permanently (47 -> 46). That is the reservoir. It buys a header that
+genuinely appears and disappears, which is exactly what "always on" took away, and it satisfies the
+constraint the other six routes could not.
+
+**CAVEAT worth keeping:** the numbers are tied to the cell height. 32.5pt is one 45 px cell above
+10pt; if `modify_font cell_height` ever changes, re-derive both paddings or the toggle silently
+starts costing a row again. And per-tab `toggle_window_title_bars` state is sticky and survives a
+config reload, so a window whose bar was toggled by hand can disagree with the config until kitty
+restarts.
+
+### The six routes that failed, kept because they bound the design space
 
 Prompted by the goal evaluator correctly objecting that an impossibility verdict is not an
 implementation, one more shape was tried — the only one that attacks the CAUSE rather than the
