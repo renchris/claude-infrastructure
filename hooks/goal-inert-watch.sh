@@ -155,7 +155,21 @@ else
   log_idl() { :; }
 fi
 
-_gi_abstain() { log_idl abstained "${1:-unspecified}" "${2:-}"; exit 0; }
+# CRUMB — the model cannot see this hook. DELIVERY above is systemMessage-only, deliberately:
+# additionalContext at Stop forces another turn. So for the whole life of this hook the OPERATOR
+# was told his goal had gone inert and the AGENT never was — measured 2026-09-14, a session sat
+# idle under a live-but-never-evaluated goal until the operator asked why. The fix is not to change
+# the Stop channel (that invariant is right) but to leave a durable mark that a hook on a
+# model-readable event can pick up. mailbox-drain.sh's UserPromptSubmit arm reads it.
+# $HOME-based, matching this hook's own idl-log default two dozen lines up — NOT
+# CLAUDE_CONFIG_DIR. Writer and reader must agree, and a HOME-based path is the one a
+# fixtured test can actually isolate (the suite pins $HOME; it does not pin the config dir).
+_gi_crumb_dir="${CC_GOAL_INERT_DIR:-$HOME/.claude/autonomy/goal-inert}"
+_gi_crumb_path() { [ -n "${SID:-}" ] || return 1; printf '%s/%s.json' "$_gi_crumb_dir" "$SID"; }
+_gi_crumb_clear() { _p="$(_gi_crumb_path)" 2>/dev/null || return 0; [ -n "${_p:-}" ] && rm -f "$_p" 2>/dev/null; return 0; }
+# Clear ONLY on `no-goal:*` — that is the one abstain reason that positively means the goal is not
+# live. Every other abstain is "could not tell", and a true warning must survive those.
+_gi_abstain() { case "${1:-}" in no-goal:*) _gi_crumb_clear ;; esac; log_idl abstained "${1:-unspecified}" "${2:-}"; exit 0; }
 
 input="$(cat 2>/dev/null || true)"
 [ -n "$input" ] || _gi_abstain "no-stdin"
@@ -369,5 +383,12 @@ MSG="$(printf '%s\n' \
 log_idl fired "goal-inert:${GI_ARM}" "$(jq -cn --arg a "$GI_ARM" --arg l "$GI_LAST" \
   --argjson e "$GI_EVALS" --argjson t "$TURNS" --argjson n "$N" --argjson c "$CHECKINS" \
   '{arm:$a,last:$l,evals:$e,turns:$t,deferrers:$n,checkins:$c}' 2>/dev/null)"
+if _gi_cp="$(_gi_crumb_path)" && [ -n "${_gi_cp:-}" ]; then
+  mkdir -p "$_gi_crumb_dir" 2>/dev/null || true
+  jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg arm "$GI_ARM" --arg cond "$COND" \
+         --arg cause "$CAUSE" --argjson evals "${GI_EVALS:-0}" --argjson deferrers "${N:-0}" \
+    '{ts:$ts,arm:$arm,condition:$cond,cause:$cause,evals:$evals,deferrers:$deferrers}' \
+    > "$_gi_cp" 2>/dev/null || true
+fi
 jq -nc --arg m "$MSG" '{systemMessage:$m}' 2>/dev/null || true
 exit 0

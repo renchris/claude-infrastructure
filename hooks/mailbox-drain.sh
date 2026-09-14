@@ -444,6 +444,36 @@ else
 (no watcher armed — before you go idle, run this as a Bash tool call with run_in_background=true, or peer mail will sit unread until someone types at you: $_armcmd)"
 fi
 
+# ── INERT-GOAL BREADCRUMB (2026-09-14) ────────────────────────────────────────────────────────────
+# The nudge above warns against ARMING a parker under a live goal. It says nothing about one that is
+# ALREADY parked — and the PreToolUse guard (validate-bash.sh) structurally cannot either, because it
+# fires when the background command is created and the goal may be armed AFTERWARDS. That ordering is
+# the whole gap: measured 2026-09-14, a `while pgrep …; do sleep 20; done` land-waiter was backgrounded
+# several turns BEFORE `/goal` was set, so nothing ever denied it, and the goal stayed live-and-never-
+# evaluated while the session idled. goal-inert-watch.sh DID detect it at every Stop — but it may only
+# emit systemMessage (additionalContext at Stop forces a turn), which reaches the operator and not the
+# model, so the agent could not act and the operator had to ask.
+#
+# UserPromptSubmit is where additionalContext is FREE — it reaches the model and extends no turn — so
+# this is the right place to hand the detector's finding over. We only relay a mark the detector left;
+# we never re-derive inertness here (one reader, one state model).
+if [ -n "${own_sid:-}" ]; then
+  _gi_crumb="${CC_GOAL_INERT_DIR:-$HOME/.claude/autonomy/goal-inert}/${own_sid}.json"
+  if [ -f "$_gi_crumb" ]; then
+    _gi_age=$(( $(date +%s) - $(stat -f %m "$_gi_crumb" 2>/dev/null || echo 0) ))
+    # Stale marks are worse than none: the crumb is cleared on `no-goal:*`, but a session that simply
+    # stopped stopping would keep an old one. 6h is well past any real idle window.
+    if [ "$_gi_age" -lt "${CC_GOAL_INERT_CRUMB_TTL_S:-21600}" ]; then
+      _gi_cause="$(jq -r '.cause // "unknown"' "$_gi_crumb" 2>/dev/null | head -3 | tr '\n' ' ')"
+      _gi_n="$(jq -r '.deferrers // 0' "$_gi_crumb" 2>/dev/null)"
+      nudge="${nudge}
+🚨 YOUR /goal WAS SKIPPED at a recent Stop and is NOT being evaluated (${_gi_n} deferring background task(s); cause: ${_gi_cause}). Claude Code deletes the goal's Stop hook at every Stop while a non-terminal background Bash exists, then restores it, so nothing ever looks wrong and the goal simply never fires. THIS IS ABOUT A TASK THAT IS ALREADY RUNNING — the PreToolUse guard cannot catch it, because it may have been backgrounded before the goal was armed. Fix it as your next action: list your background tasks, and kill the one that is a parker (an event-polling \`while … sleep\` loop, a \`tail -f\`, a long \`sleep\`, a cc-await-ping without --idle-scoped). Its death is the receipt — the harness renders the kill as exit 143/144. If you still need to wait on that work, poll it synchronously once per turn instead, or use ~/.claude/hooks/session-continue.sh set \"<next step>\" which is goal-safe. Detail: docs/research/goal-in-handoff-2026-08-08.md"
+    else
+      rm -f "$_gi_crumb" 2>/dev/null || true
+    fi
+  fi
+fi
+
 # EMPTY INBOX — nothing to deliver, but this is still a boundary at which we can see the session has
 # no wake path. Arming here is the whole point (see the hoist note above), so emit the nudge alone.
 # additionalContext only: this fires on every prompt, and a systemMessage per turn would bury the
