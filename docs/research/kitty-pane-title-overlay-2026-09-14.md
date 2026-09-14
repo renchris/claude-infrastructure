@@ -164,3 +164,37 @@ newest release, so there is nothing to upgrade to.
 **What that leaves today:** the current setting (`window_title_bar_min_windows 0`, chord live) is the
 correct one. It costs two reflows per peek and keeps the control, which is the trade the operator
 already chose when always-on removed the chord.
+
+## G — the compensation idea, and why it is NOT yet a result
+
+Prompted by the goal evaluator correctly objecting that an impossibility verdict is not an
+implementation, one more shape was tried — the only one that attacks the CAUSE rather than the
+symptom. The bar needs exactly one cell height of pixels. Keep that much permanently in the TOP
+padding, and when the bar appears, shrink the top padding by exactly one cell **in the same
+relayout**. The cell area's row capacity rises by one at the instant the bar consumes one, so the
+PTY never resizes, no child is signalled, and the first text row lands on the same absolute pixel
+because the bar occupies precisely the band the padding vacated.
+
+Atomicity is the whole trick and it is expressible: two remote commands (`action
+toggle_window_title_bars` then `set-spacing`) are two relayouts and measured 16 -> 15 -> 16, i.e.
+TWO signals — worse than the defect. A single `kitty @ load-config` carrying BOTH overrides is one
+relayout. `scripts/kitty-pane-title-toggle.sh` implements it.
+
+**It is not verified, and the honest reading is that it may be vacuous.** In an isolated instance
+three on/off cycles held rows at 7x7 with 0 SIGWINCH in both panes of a split, and a fresh OS window
+on the live config held 39 rows across OFF -> ON -> OFF with 0 SIGWINCH. But a capture of that fresh
+window shows **no pane title bar drawn at all** — so "nothing moved" is equally explained by
+"nothing happened". Meanwhile the one window where bars were definitely visible is the one whose
+rows DID move. Every zero-SIGWINCH run is therefore unfalsified rather than confirmed.
+
+**Two things must be settled before this can be claimed.** (1) A capture proving the bar is VISIBLE
+in the same run in which rows stay constant — the two facts have never been observed together.
+(2) Whether `window_title_bar_min_windows` is even a reliable lever on a live fleet: per-tab
+`toggle_window_title_bars` state is sticky, `kitty @ action -m` fires on the wrong OS window, and a
+config reload does not clear it, so the operator's windows currently disagree with each other. Some
+of that pollution is mine, from probing; a kitty restart clears it, which is why this was NOT left
+wired up.
+
+**Live config is therefore REVERTED to the known-good state** (`window_padding_width 10 7`,
+`map cmd+shift+b toggle_window_title_bars`). The script is committed unwired, with its derivation,
+so the next session can finish the two checks above rather than re-derive the idea.
