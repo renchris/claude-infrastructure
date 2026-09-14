@@ -158,3 +158,35 @@ rather than taken.
 - **Dia's Chromium lives in `ArcCore.framework`**, not a `Chromium Framework` — a recipe aimed at
   `Contents/Frameworks/*Framework.framework` finds nothing and misreads as "not Chromium". macOS
   `strings` without `-a` reads only the first ~5 MB of the 128 MB binary.
+
+## Addendum — the residual closed, same day
+
+The operator enabled `--enable-applescript-javascript` and the rail is now proven **complete** end
+to end on the warm browser, with zero dialogs at any point: a tab created, navigated to
+example.com, `document.title`, an `h1` `textContent` and a `JSON.stringify` payload all extracted
+through `execute … javascript`, then closed with the tab count restored 38 → 38.
+
+Three usage facts that each cost a cycle to find, now in the skill:
+
+1. **`before` is an AppleScript reserved word.** `set before to …` fails as
+   `syntax error: Expected expression but found "to"` — the error points at the `to`, not at the
+   name, so it reads like a problem with the surrounding statement.
+2. **Consecutive `execute` calls return empty.** Three back-to-back gave one result and two empty
+   strings; spaced 0.5 s apart all three returned. One call returning `JSON.stringify(…)` is the
+   right shape.
+3. **`make new tab` needs a literal `window 1`** (or a `tell window 1` block); `at end of tabs of
+   <variable>` does not parse.
+
+And two delivery lessons from handing the flag step over, both mine:
+
+- **`&&` between a quit and a relaunch is a trap.** The quit returned `-128` and the relaunch was
+  skipped, so Dia came back flagless — the opposite of the intent, silently. Use `;`.
+- **A `read` confirmation gate dies on a pipe.** Run through a harness with no TTY, `read` takes
+  EOF and the script aborts as if the operator declined. Gate on an explicit token or a countdown,
+  and say which happened.
+
+One instrument scar worth repeating: the first verifier read the flag with
+`ps -axo command= | grep Dia | grep -- --enable-applescript-javascript` and returned TRUE against a
+Dia that had no flag, because `ps` printed the calling shell whose command line contained both
+search strings. Read the flag off the process's own pid. This is the third instance of that class
+in one session.
