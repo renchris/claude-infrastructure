@@ -2,9 +2,9 @@
 # cc-cannot-replay.sh — score bin/cc-cannot against the frozen corpus.
 # Reports BOTH weightings, because one command carries 270 of 1,376 emissions and a single
 # weighted number over that distribution is meaningless.
-#   $1 = corpus tsv (count<TAB>command)   $2 = optional gold tsv (command<TAB>verdict)
+#   $1 = corpus tsv (count<TAB>command)
 set -uo pipefail
-CORPUS="${1:?corpus tsv}"; GOLD="${2:-}"
+CORPUS="${1:?corpus tsv}"
 # Resolve $0 through its symlinks first: via the live layer's per-file link, dirname/.. is ~/.claude.
 self="$0"; while [ -L "$self" ]; do
   d="$(cd "$(dirname "$self")" && pwd)"; self="$(readlink "$self")"
@@ -12,7 +12,10 @@ self="$0"; while [ -L "$self" ]; do
 done
 CC="$(cd "$(dirname "$self")/.." && pwd)/bin/cc-cannot"
 out="$(mktemp)"
-while IFS=$'\t' read -r n cmd; do
+# Split on the FIRST tab by hand: IFS=<tab> collapses an empty cell and shifts the command left.
+while IFS= read -r line; do
+  [[ "$line" == *$'\t'* ]] || continue
+  n="${line%%$'\t'*}"; cmd="${line#*$'\t'}"
   case "$n" in ''|\#*) continue ;; esac
   v="$("$CC" --quiet -- "$cmd" >/dev/null 2>&1; case $? in 0) echo HUMAN;; 1) echo REFUTED;; *) echo UNRESOLVED;; esac)"
   printf '%s\t%s\t%s\n' "$n" "$v" "$cmd" >> "$out"
