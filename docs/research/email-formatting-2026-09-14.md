@@ -317,6 +317,31 @@ How a session proves a draft renders right, in order of cost:
 3. **Headless Chrome render** of the extracted `text/html` part, light and dark:
    `--headless --screenshot --window-size=980,1250`. Deterministic and needs no auth.
 4. **The operator's own eyes in Outlook** — the only instrument that sees Outlook's rendering.
+   The sample draft is addressed to the operator himself for exactly this reason: opening it is
+   both the render check and the double-signature check in §5.
+
+### The sample, and what it measured
+
+A draft built to this standard was created in the personal mailbox and its MIME read back. Two
+questions that were open in the research are closed by it:
+
+**Graph does NOT normalise or rewrite HTML on write.** Every declaration survived byte-for-byte:
+14 × `font-family:Calibri,Helvetica,sans-serif`, 14 × `font-size:12pt`, 16 × `color:#000000`,
+1 × `background-color:#ffffff`, 6 `<p>`, 2 `<li>`, **0 `padding`**. Graph's documented HTML
+filtering is read-side; the write side left the fragment alone. It also generated a correct
+multi-paragraph `text/plain` alternative from our markup, unasked.
+
+**Graph chooses the narrowest charset that fits, and it is not always UTF-8.** This draft came back
+as `text/html; charset="Windows-1252"`, quoted-printable — while the Comment-built reply draft
+earlier in the same session came back `charset=utf-8`, because the Lark original carries a
+fullwidth colon and emoji that cp1252 cannot represent. The content decodes correctly in both
+cases, so this is not a defect; it is a fact to know before reading one of these files.
+
+⚠️ **Instrument caveat that cost a wrong conclusion for a minute.** Extracting the `text/html` part
+and saving it as UTF-8 leaves the stored `<meta … charset=Windows-1252>` inside it, so a browser
+honours the meta against UTF-8 bytes and the em-dash renders as `â€"`. That looks exactly like a
+real encoding defect in the draft and is entirely an artifact of the extraction. Rewrite the meta
+to match the bytes you wrote before screenshotting.
 
 ### Dark mode
 
