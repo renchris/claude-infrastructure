@@ -49,6 +49,12 @@ setup() {
   LIVE_ISH="$REAL_HOME/.cc-kitty-guardtest-$$"
 
   # ── the canonical tree, and a REAL linked worktree of it ──────────────────────────────────────
+  # This suite's "canonical" tree is necessarily built under $BATS_TEST_TMPDIR, which is itself an
+  # ephemeral root. kitty-setup grew a DURABILITY arm on 2026-09-13 (a land staged a full clone in
+  # /private/tmp and the worktree-only predicate could not fire on it), and a location test cannot
+  # tell this fixture from that clone. Declaring durability here keeps case 4 testing what it means
+  # to test — that a CANONICAL tree is not refused — instead of silently retesting the new arm.
+  export CC_KITTY_ASSUME_DURABLE=1
   MAIN="$BATS_TEST_TMPDIR/canon"
   WT="$BATS_TEST_TMPDIR/linked-wt"
   mkdir -p "$MAIN/scripts"
@@ -156,4 +162,40 @@ aim_fixtured() {
     echo "--check was refused:"; echo "$output"; false
   fi
   [ ! -e "$LIVE_ISH" ] || { echo "--check is read-only but created $LIVE_ISH"; false; }
+}
+
+# ── the DURABILITY arm (2026-09-13) ───────────────────────────────────────────────────────────────
+# The worktree predicate above is NECESSARY BUT NOT SUFFICIENT. A land staged a FULL CLONE at
+# /private/tmp/adn-land.<rand> and ran kitty-setup from it; a clone's --git-dir EQUALS its
+# --git-common-dir, so REPO_IS_LINKED_WT was 0, the guard stayed silent, and
+# ~/.config/kitty/kitty.conf was pointed into a tree /tmp then reaped — leaving the operator's
+# 755-line config dangling and one restart from compiled-in defaults (which also drops
+# allow_remote_control/listen_on, the two options kitty cannot reload).
+# $MAIN is already a CANONICAL repo under an ephemeral root, so it IS the incident's shape once the
+# suite-wide durability declaration is withdrawn. Withdrawing it is what makes this a test of the
+# new arm rather than a second copy of case 4.
+
+@test "a CANONICAL tree on an EPHEMERAL path is refused — the full-clone-in-/tmp incident" {
+  unset CC_KITTY_ASSUME_DURABLE
+  aim_live
+  run bash "$MAIN/scripts/kitty-setup.sh"
+  [ "$status" -eq 3 ] || { echo "expected exit 3, got $status"; echo "$output"; false; }
+  echo "$output" | grep -q 'NON-CANONICAL' \
+    || { echo "refusal did not name the class:"; echo "$output"; false; }
+  echo "$output" | grep -q 'EPHEMERAL' \
+    || { echo "refusal did not name WHICH arm fired:"; echo "$output"; false; }
+  [ ! -e "$LIVE_ISH" ] || { echo "refused but still wrote to the live target"; false; }
+}
+
+@test "MUTANT CONTROL: with the durability arm disabled, that same tree sails through" {
+  # Proves the case above is attributable to the durability arm and not to some other refusal —
+  # same tree, same target, one variable. Without this the test could be passing for any reason.
+  export CC_KITTY_ASSUME_DURABLE=1
+  aim_live
+  run bash "$MAIN/scripts/kitty-setup.sh" --bogus
+  [ "$status" -eq 2 ] || { echo "expected exit 2 (option parser reached), got $status"; echo "$output"; false; }
+  if echo "$output" | grep -q 'NON-CANONICAL'; then
+    echo "refused even with the durability arm disabled — the case above is not attributable:"
+    echo "$output"; false
+  fi
 }

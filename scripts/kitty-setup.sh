@@ -104,11 +104,20 @@ fi
 # breaking every Agent-Teams pane spawn).
 # The wanted invariant was never "is a linked worktree", it is "is a DURABLE path" — so test that
 # directly, and keep the worktree arm beside it since neither implies the other.
+# CC_KITTY_ASSUME_DURABLE is the TEST seam, and it exists because durability is NOT decidable
+# from a path inside a harness: tests/kitty-setup-canonical-tree.bats builds a REAL throwaway repo
+# under $BATS_TEST_TMPDIR and aims it at the real $HOME on purpose (its case 4 is the control that
+# a CANONICAL tree is not refused), so a location test convicts the verifier's own fixture — the
+# "guard refusal fires on its own harness" class. Nothing on the land/install path sets this, so
+# production keeps the full check; a harness that deliberately simulates a durable canonical tree
+# declares it, exactly as it already fixtures CC_KITTY_CONFIG_DIR / CC_KITTY_BIN_DIR.
 REPO_IS_EPHEMERAL=0
-case "${REPO%/}/" in
-  /tmp/*|/private/tmp/*|/var/tmp/*|/private/var/tmp/*|/var/folders/*|/private/var/folders/*)
-    REPO_IS_EPHEMERAL=1 ;;
-esac
+if [ "${CC_KITTY_ASSUME_DURABLE:-0}" != 1 ]; then
+  case "${REPO%/}/" in
+    /tmp/*|/private/tmp/*|/var/tmp/*|/private/var/tmp/*|/var/folders/*|/private/var/folders/*)
+      REPO_IS_EPHEMERAL=1 ;;
+  esac
+fi
 _REPO_NONDURABLE=0
 [ "${REPO_IS_LINKED_WT:-0}" = 1 ] && _REPO_NONDURABLE=1
 [ "$REPO_IS_EPHEMERAL" = 1 ] && _REPO_NONDURABLE=1
