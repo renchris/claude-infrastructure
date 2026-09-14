@@ -150,55 +150,37 @@ main()
   awk -v t="$TOL" 'BEGIN { exit !(t > 2.0 && t < 40) }' || { echo "drag tolerance $TOL is not a usable grab region"; false; }
 }
 
-# WAS: asserted `toggle_window_title_bars`. That action takes one text ROW from every pane, and a
-# row change is a PTY resize, so it SIGWINCHes every child on the show AND again on the hide — one
-# peek = two full scrollback reflows. cmd+shift+b now runs a script that swaps the whole config in
-# ONE relayout, trading a top-padding reservoir for the bar's row, so the row count never changes.
-@test "cmd+shift+b runs the zero-shift toggle, NOT the row-stealing built-in" {
+# cmd+shift+b is the BUILT-IN again. A zero-shift replacement was built and landed and then
+# measured dead on this machine: a per-tab `toggle_window_title_bars` override beats
+# `window_title_bar_min_windows` and survives a config reload, so the replacement flipped a setting
+# the live windows ignore. Measured on the focused OS window — config ON: 0 title-bar rows; one
+# toggle action: 34. The per-tab toggle is an ACTION, so it cannot be fused with the padding swap
+# and costs 2 relayouts per press against the built-in's 1.
+@test "cmd+shift+b toggles window title bars — the only handle for drag-to-reorder" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s\n' "$output" > "$BATS_TEST_TMPDIR/b.out"
-  grep -q 'cmd_shift_b_last=.*kitty-pane-title-toggle\.sh' "$BATS_TEST_TMPDIR/b.out" || { cat "$BATS_TEST_TMPDIR/b.out"; false; }
-  ! grep -q 'cmd_shift_b_last=.*toggle_window_title_bars' "$BATS_TEST_TMPDIR/b.out" || { echo "the row-stealing built-in is back"; false; }
-  :
+  echo "$output" | grep -qx 'cmd_shift_b_last=toggle_window_title_bars' || { echo "$output"; false; }
 }
 
-# THE TILDE TRAP, pinned because it cost the operator a dead chord. kitty expands ENVIRONMENT
-# VARIABLES in a map's command but NOT `~`: a tilde path throws inside kitty's own remote-control
-# handler and the chord silently does nothing — no beep, no message, no reaction. Every script
-# binding in this file uses ${HOME} for exactly this reason.
-@test "cmd+shift+b uses \${HOME}, never a tilde — a tilde path dies silently" {
-  run probe "$CONF"
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s\n' "$output" > "$BATS_TEST_TMPDIR/b2.out"
-  grep -q 'cmd_shift_b_last=.*\${HOME}/' "$BATS_TEST_TMPDIR/b2.out" || { cat "$BATS_TEST_TMPDIR/b2.out"; false; }
-  ! grep -qE 'cmd_shift_b_last=.*[[:space:]]~/' "$BATS_TEST_TMPDIR/b2.out" || { echo "tilde path in the binding — it will die silently"; false; }
-  :
+# THE TILDE TRAP, kept although the binding that taught it is gone — it applies to every script
+# binding in this file. kitty expands ENVIRONMENT VARIABLES in a map's command but NOT `~`: a tilde
+# path throws inside kitty's own remote-control handler and the chord silently does nothing — no
+# beep, no message, no reaction. That shipped once, on cmd+shift+b, and cost the operator a dead key.
+@test "no map command uses a tilde path — a tilde in a binding dies silently" {
+  printf '%s\n' "$(grep -E '^[[:space:]]*map[[:space:]]' "$CONF")" > "$BATS_TEST_TMPDIR/maps.out"
+  ! grep -qE '^[[:space:]]*map[[:space:]].*[[:space:]]~/' "$BATS_TEST_TMPDIR/maps.out" || {
+    echo "tilde path in a binding — kitty will not expand it and the chord will do nothing:"
+    grep -nE '^[[:space:]]*map[[:space:]].*[[:space:]]~/' "$BATS_TEST_TMPDIR/maps.out"; false; }
+  # and the positive half: the script bindings that DO exist use the ${HOME} form
+  grep -qE '^[[:space:]]*map[[:space:]].*\$\{HOME\}/' "$BATS_TEST_TMPDIR/maps.out" || {
+    echo "no \${HOME}-form script binding found — this guard is vacuous"; false; }
 }
 
-@test "MUTANT CONTROL: restore the built-in and the zero-shift guard sees it" {
-  # Without this the guard above could be vacuous — it would pass on any config that merely fails
-  # to bind cmd+shift+b at all. Put the row-stealing built-in back and prove the guard catches it.
-  MUT="$BATS_TEST_TMPDIR/mutant-b.conf"
-  { grep -v 'kitty-pane-title-toggle' "$CONF"; echo 'map cmd+shift+b toggle_window_title_bars'; } > "$MUT"
-  run probe "$MUT"
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
-  echo "$output" | grep -qx 'cmd_shift_b_last=toggle_window_title_bars' || {
-    echo "CONTROL FAILED — the guard cannot distinguish the row-stealing config:"; echo "$output"; false; }
-}
-
-@test "MUTANT CONTROL: a tilde path is visible to the guard as a tilde" {
-  # The bug that shipped: kitty expands ${HOME} in a map's command but NOT `~`, and a tilde throws
-  # inside kitty's remote-control handler with no user-visible reaction at all. Prove the probe
-  # surfaces the tilde rather than silently normalising it, or the guard above proves nothing.
+@test "MUTANT CONTROL: a tilde path is visible to the tilde guard" {
   MUT="$BATS_TEST_TMPDIR/mutant-tilde.conf"
-  sed 's|--allow-remote-control \${HOME}/|--allow-remote-control ~/|' "$CONF" > "$MUT"
-  grep -q 'allow-remote-control ~/' "$MUT" || { echo "mutation did not apply"; false; }
-  run probe "$MUT"
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s\n' "$output" > "$BATS_TEST_TMPDIR/mt.out"
-  grep -qE 'cmd_shift_b_last=.*[[:space:]]~/' "$BATS_TEST_TMPDIR/mt.out" || {
-    echo "CONTROL FAILED — the guard cannot see a tilde path:"; cat "$BATS_TEST_TMPDIR/mt.out"; false; }
+  sed 's|\${HOME}/|~/|' "$CONF" > "$MUT"
+  grep -qE '^[[:space:]]*map[[:space:]].*[[:space:]]~/' "$MUT" || {
+    echo "CONTROL FAILED — mutation did not produce a tilde binding"; false; }
 }
 
 @test "drag_threshold stays non-zero — 0 disables ALL dragging in kitty" {
