@@ -122,16 +122,36 @@ opposite ends.
 instance (up since Sep 9) held a good config in memory, so the exposure was the *next restart*,
 which would also have dropped `allow_remote_control` and `listen_on` — silently breaking the whole
 Agent-Teams spawn path, not just the colours.
-- Root cause: `kitty-setup.sh:36` derives `$REPO` from `$0`. A guard for this exact failure exists
-  at `:97-107` but its predicate is *"is a linked git worktree"*; the wanted invariant is
-  *"is a durable path"*, so a standalone `/tmp` clone lands on the permissive default.
+- Root cause: `kitty-setup.sh:36` derives `$REPO` from `$0`. A guard for this exact failure existed
+  but its predicate was *"is a linked git worktree"*; the wanted invariant is *"is a DURABLE path"*,
+  and a full clone's `--git-dir` equals its `--git-common-dir`, so a standalone `/tmp` clone landed
+  on the permissive default and the guard could not fire on the case that actually happened.
+  **FIXED this session** — `REPO_IS_EPHEMERAL` tests `/tmp`, `/var/tmp`, `/var/folders` directly and
+  sits beside the worktree arm (neither implies the other). Three-arm proof: the pre-fix script run
+  from an ephemeral clone REPRODUCES the defect (prints `✓ kitty.conf -> repo SSOT`, 0 refusals);
+  the fixed script REFUSES (rc 3, naming the ephemeral path); the durable checkout is unaffected
+  (0 refusals), so the guard does not over-fire.
 - `--check` detects it, but **nothing schedules `--check`**, and `deploy-parity-assert.sh:742`
   exempts the path by design — so the break was undetectable in practice.
 
-**B. `--title` is sticky and permanently freezes a pane's liveness glyph.** `lr-lib.sh:340` and
-`lr-handoff.sh:749` both warn about this, but **`bin/kitty-split-launch.sh:148` passes `--title`
-unconditionally** and `bin/cc-offload:874` does too. Measured: **7 of 23 live panes are
-permanently dark to the glyph signal.** Fix: pass `--temporary`, or drop `--title`.
+**B. ~~`--title` is passed unconditionally and freezes the glyph.~~ REFUTED 2026-09-13 — the
+repo is already correct on this axis.** (Kept in place rather than deleted: the claim is the
+record of what was believed, and a future reader would otherwise re-derive it.)
+The sticky-title *mechanism* is real — `kitty @ launch --title` has no `--temporary`, so it
+permanently overrides the child's OSC titles. The attribution was wrong:
+- `bin/kitty-split-launch.sh:148` is `[ -n "$title" ] && args+=(--title "$title")` — **conditional
+  on a caller supplying one**, not unconditional.
+- `lr-lib.sh:339` and `lr-handoff.sh:749` both explicitly refuse `--title` *by name*, citing this
+  exact hazard.
+- `bin/cc-resume-layout.sh:303` uses `--os-window-title`, deliberately and with its rationale at
+  `:33-37` — a fixed placement handle, because an OS-window title that carries a live spinner is a
+  racing match key. Correct as written.
+- The remaining `--title` sites launch panes that never run Claude Code: `kitty-drift-run.sh`
+  (a drift-test harness), `cloud-websetup-drive.sh` (a websetup pane), `cc-offload:874`
+  (a `cc-offload watch` watcher).
+The `resumed-*` titles observed on live panes come from **outside this repo's launch paths**; no
+in-tree writer produces them. Nothing to fix here — the lesson is that a subagent's attribution
+needs the call site read before the remedy is written.
 
 ---
 

@@ -94,10 +94,33 @@ if [ -n "$REPO" ] && command -v git >/dev/null 2>&1; then
   fi
 fi
 
-[ "$REPO_GUARD_SKIP" = 1 ] || [ "${REPO_IS_LINKED_WT:-0}" != 1 ] || case "$KCONF_DIR/|$BIN_DIR/" in
+# REPO_IS_EPHEMERAL: 1 when $REPO sits under a path the OS reaps. The linked-worktree test above
+# is NECESSARY BUT NOT SUFFICIENT, and the gap is not theoretical — it fired on 2026-09-13:
+# a land staged a FULL CLONE at /private/tmp/adn-land.<rand> and ran this script from it. A clone's
+# --git-dir EQUALS its --git-common-dir, so REPO_IS_LINKED_WT was 0, the guard stayed silent, and
+# ~/.config/kitty/kitty.conf was pointed into a tree that /tmp then reaped — leaving the operator's
+# 755-line config DANGLING and one kitty restart away from compiled-in defaults (which would also
+# have dropped allow_remote_control/listen_on, the two options kitty cannot reload, silently
+# breaking every Agent-Teams pane spawn).
+# The wanted invariant was never "is a linked worktree", it is "is a DURABLE path" — so test that
+# directly, and keep the worktree arm beside it since neither implies the other.
+REPO_IS_EPHEMERAL=0
+case "${REPO%/}/" in
+  /tmp/*|/private/tmp/*|/var/tmp/*|/private/var/tmp/*|/var/folders/*|/private/var/folders/*)
+    REPO_IS_EPHEMERAL=1 ;;
+esac
+_REPO_NONDURABLE=0
+[ "${REPO_IS_LINKED_WT:-0}" = 1 ] && _REPO_NONDURABLE=1
+[ "$REPO_IS_EPHEMERAL" = 1 ] && _REPO_NONDURABLE=1
+
+[ "$REPO_GUARD_SKIP" = 1 ] || [ "$_REPO_NONDURABLE" != 1 ] || case "$KCONF_DIR/|$BIN_DIR/" in
   *"$REAL_HOME"/*)
     printf 'kitty-setup: REFUSING to link the live layer from a NON-CANONICAL tree\n' >&2
-    printf '  repo      : %s (a linked git worktree)\n' "$REPO" >&2
+    if [ "${REPO_IS_EPHEMERAL:-0}" = 1 ]; then
+      printf '  repo      : %s (an EPHEMERAL path — /tmp, /var/tmp or /var/folders)\n' "$REPO" >&2
+    else
+      printf '  repo      : %s (a linked git worktree)\n' "$REPO" >&2
+    fi
     printf '  canonical : %s\n' "${CANON_REPO:-<unresolved>}" >&2
     printf '  target    : %s , %s\n' "$KCONF_DIR" "$BIN_DIR" >&2
     printf '  why       : deploy fast-forwards the CHECKOUT, so a link into any other tree can\n' >&2
