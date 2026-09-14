@@ -5,7 +5,12 @@
 #   $1 = corpus tsv (count<TAB>command)   $2 = optional gold tsv (command<TAB>verdict)
 set -uo pipefail
 CORPUS="${1:?corpus tsv}"; GOLD="${2:-}"
-CC="$(dirname "$0")/../bin/cc-cannot"
+# Resolve $0 through its symlinks first: via the live layer's per-file link, dirname/.. is ~/.claude.
+self="$0"; while [ -L "$self" ]; do
+  d="$(cd "$(dirname "$self")" && pwd)"; self="$(readlink "$self")"
+  case "$self" in /*) ;; *) self="$d/$self" ;; esac
+done
+CC="$(cd "$(dirname "$self")/.." && pwd)/bin/cc-cannot"
 out="$(mktemp)"
 while IFS=$'\t' read -r n cmd; do
   case "$n" in ''|\#*) continue ;; esac
