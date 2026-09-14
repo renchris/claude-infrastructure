@@ -575,3 +575,40 @@ checkin_rec() {
   printf '%s' "$m" | grep -q "NOTHING IS NAMEABLE HERE"    # the pre-arm check-in is not this goal's
   ! printf '%s' "$m" | grep -q "CC ITSELF SAID SO" || false
 }
+
+# ── CRUMB (2026-09-14) ────────────────────────────────────────────────────────────────────────────
+# This hook may only emit systemMessage (additionalContext at Stop forces a turn), which reaches the
+# OPERATOR and not the MODEL. Measured 2026-09-14: a session idled under a live-but-never-evaluated
+# goal and only the operator could see it. The crumb is the model's route in, relayed by
+# mailbox-drain.sh at UserPromptSubmit. These pin that it is written when we fire, and cleared ONLY
+# on the one abstain reason that positively means the goal is not live.
+LOOP_TASK='[{"id":"b9","type":"shell","status":"running","command":"while pgrep -f ship-land.sh; do sleep 20; done"}]'
+
+@test "crumb: FIRING writes a crumb naming the deferrer count" {
+  export CC_GOAL_INERT_DIR="$BATS_TEST_TMPDIR/crumbs"
+  t="$(mk_armed)"
+  run bash -c "CC_GOAL_INERT_DIR='$CC_GOAL_INERT_DIR' printf '%s' '$(payload "$t" "$LOOP_TASK" "sid-crumb1")' | CC_GOAL_INERT_DIR='$CC_GOAL_INERT_DIR' '$H'"
+  [ "$status" -eq 0 ]
+  [ -f "$CC_GOAL_INERT_DIR/sid-crumb1.json" ] || false
+  run jq -r '.deferrers' "$CC_GOAL_INERT_DIR/sid-crumb1.json"
+  [ "$output" = "1" ] || false
+}
+
+@test "crumb: a no-goal abstain CLEARS a stale crumb" {
+  export CC_GOAL_INERT_DIR="$BATS_TEST_TMPDIR/crumbs"
+  mkdir -p "$CC_GOAL_INERT_DIR"
+  echo '{"cause":"stale"}' > "$CC_GOAL_INERT_DIR/sid-crumb2.json"
+  t="$(mk_no_goal_token)"
+  run bash -c "printf '%s' '$(payload "$t" "$LOOP_TASK" "sid-crumb2")' | CC_GOAL_INERT_DIR='$CC_GOAL_INERT_DIR' '$H'"
+  [ "$status" -eq 0 ]
+  [ ! -f "$CC_GOAL_INERT_DIR/sid-crumb2.json" ] || false
+}
+
+@test "crumb: a CANNOT-TELL abstain does NOT clear it — a true warning must survive" {
+  export CC_GOAL_INERT_DIR="$BATS_TEST_TMPDIR/crumbs"
+  mkdir -p "$CC_GOAL_INERT_DIR"
+  echo '{"cause":"real"}' > "$CC_GOAL_INERT_DIR/sid-crumb3.json"
+  # no transcript_path ⇒ abstain "no-transcript-path", which means "could not tell", not "no goal"
+  run bash -c "printf '{\"session_id\":\"sid-crumb3\",\"hook_event_name\":\"Stop\",\"background_tasks\":[]}' | CC_GOAL_INERT_DIR='$CC_GOAL_INERT_DIR' '$H'"
+  [ -f "$CC_GOAL_INERT_DIR/sid-crumb3.json" ] || false
+}

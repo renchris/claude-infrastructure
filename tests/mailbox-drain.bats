@@ -753,3 +753,52 @@ headless_drain() { # <mode> → runs the drain as a headless agent (no ITERM, CC
   [ "$status" -eq 0 ]
   printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext' | grep -qF 'no watcher armed' || false
 }
+
+# ── INERT-GOAL BREADCRUMB RELAY (2026-09-14) ──────────────────────────────────────────────────────
+# goal-inert-watch.sh detects a skipped /goal at Stop but may only emit systemMessage, which the
+# MODEL cannot see. The crumb it drops is relayed here, at UserPromptSubmit, where additionalContext
+# is free. These pin the relay, its silence, and its TTL.
+_gi_crumb_setup() {  # $1 = session id
+  mkdir -p "$HOME/.claude/autonomy/goal-inert"
+  jq -nc '{ts:"now",arm:"3a",condition:"c",cause:"   shell: while pgrep x; do sleep 20; done",evals:0,deferrers:1}' \
+    > "$HOME/.claude/autonomy/goal-inert/$1.json"
+  GI_TP="$BATS_TEST_TMPDIR/tp.jsonl"
+  printf '%s\n' '{"type":"user","message":{"role":"user","content":"hi"}}' > "$GI_TP"
+}
+
+@test "inert-crumb: a fresh crumb is relayed to the MODEL as additionalContext" {
+  sid="deadbeef-0000-0000-0000-00000000ab01"
+  _gi_crumb_setup "$sid"
+  run bash -c "printf '{\"session_id\":\"$sid\",\"transcript_path\":\"$GI_TP\"}' | '$DRAIN' prompt"
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"YOUR /goal WAS SKIPPED"* ]] || false
+  # it must name the ALREADY-RUNNING nature — that is the gap the PreToolUse guard cannot cover
+  [[ "$output" == *"ALREADY RUNNING"* ]] || false
+}
+
+@test "inert-crumb: NO crumb means NO advisory — prior behaviour is untouched" {
+  sid="deadbeef-0000-0000-0000-00000000ab02"
+  _gi_crumb_setup "$sid"
+  rm -f "$HOME/.claude/autonomy/goal-inert/$sid.json"
+  run bash -c "printf '{\"session_id\":\"$sid\",\"transcript_path\":\"$GI_TP\"}' | '$DRAIN' prompt"
+  [[ "$output" != *"YOUR /goal WAS SKIPPED"* ]] || false
+}
+
+@test "inert-crumb: a crumb past its TTL is dropped, not relayed" {
+  sid="deadbeef-0000-0000-0000-00000000ab03"
+  _gi_crumb_setup "$sid"
+  run bash -c "CC_GOAL_INERT_CRUMB_TTL_S=0 ; export CC_GOAL_INERT_CRUMB_TTL_S; printf '{\"session_id\":\"$sid\",\"transcript_path\":\"$GI_TP\"}' | '$DRAIN' prompt"
+  [[ "$output" != *"YOUR /goal WAS SKIPPED"* ]] || false
+  [ ! -f "$HOME/.claude/autonomy/goal-inert/$sid.json" ] || false
+}
+
+@test "MUTANT CONTROL: strip the relay and the fresh-crumb test stops seeing the advisory" {
+  sid="deadbeef-0000-0000-0000-00000000ab04"
+  _gi_crumb_setup "$sid"
+  cp "$DRAIN" "$BATS_TEST_TMPDIR/mutant.sh"
+  # isolated COPY, never the live hook — a live guardrail is not a test fixture
+  perl -0pi -e 's/YOUR \/goal WAS SKIPPED/XX MUTANT XX/' "$BATS_TEST_TMPDIR/mutant.sh"
+  run bash -c "printf '{\"session_id\":\"$sid\",\"transcript_path\":\"$GI_TP\"}' | bash '$BATS_TEST_TMPDIR/mutant.sh' prompt"
+  [[ "$output" != *"YOUR /goal WAS SKIPPED"* ]] || false
+  [[ "$output" == *"XX MUTANT XX"* ]] || false
+}
