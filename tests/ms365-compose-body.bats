@@ -60,7 +60,7 @@ compose() { python3 "$TOOL" --signature-file "$SIGS" "$@"; }
   # not be able to inject an element into the draft body.
   run compose --no-signature --out - <<< 'Margins of <5% on R&D, per <b>their</b> note.'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"&lt;5% on R&amp;D"* ]]
+  [[ "$output" == *"&lt;5% on R&amp;D"* ]] || false
   [[ "$output" == *"&lt;b&gt;their&lt;/b&gt;"* ]]
 }
 
@@ -110,7 +110,7 @@ compose() { python3 "$TOOL" --signature-file "$SIGS" "$@"; }
 @test "--no-background drops the background but keeps the colour" {
   run compose --no-signature --no-background --out - <<< 'One.'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"color:#000000;"* ]]
+  [[ "$output" == *"color:#000000;"* ]] || false
   run ! grep -q 'background-color' <<<"$output"
 }
 
@@ -141,7 +141,7 @@ compose() { python3 "$TOOL" --signature-file "$SIGS" "$@"; }
   # so the stack belongs to the sending identity, not to the tool.
   run compose --signature m365 --out - <<< 'One.'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"font-family:Aptos,Calibri,sans-serif;font-size:11pt;"* ]]
+  [[ "$output" == *"font-family:Aptos,Calibri,sans-serif;font-size:11pt;"* ]] || false
   run compose --signature m365 --font 'Georgia,serif' --size 13pt --out - <<< 'One.'
   [ "$status" -eq 0 ]
   [[ "$output" == *"font-family:Georgia,serif;font-size:13pt;"* ]]
@@ -151,9 +151,9 @@ compose() { python3 "$TOOL" --signature-file "$SIGS" "$@"; }
   run compose --signature full --out - <<< 'One.'
   [ "$status" -eq 0 ]
   for f in "Chris Ren" "Founder" "Reso" "chris@reso.gl" "reso.gl" "+1 555 0100"; do
-    [[ "$output" == *"$f"* ]]
+    [[ "$output" == *"$f"* ]] || false
   done
-  [[ "$output" == *'href="mailto:chris@reso.gl"'* ]]
+  [[ "$output" == *'href="mailto:chris@reso.gl"'* ]] || false
   [[ "$output" == *'href="https://reso.gl"'* ]]
 }
 
@@ -162,7 +162,7 @@ compose() { python3 "$TOOL" --signature-file "$SIGS" "$@"; }
   # plausible-looking invented one, in a real business email.
   run compose --signature sparse --out - <<< 'One.'
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Chris Ren"* && "$output" == *"Reso"* ]]
+  [[ "$output" == *"Chris Ren"* && "$output" == *"Reso"* ]] || false
   run ! grep -qiE 'founder|mailto:|title|phone|\+1' <<<"$output"
 }
 
