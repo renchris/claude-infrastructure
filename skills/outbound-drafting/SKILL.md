@@ -233,6 +233,11 @@ Graph does *not* do this for you: it applies the mailbox default (`operator.alt`
 throughout; a hold request sent from `operator` reached an address they had never seen on that
 order, and they dispatched and charged anyway.
 
+**Name the mailbox before the alias.** The ms365 server also holds `chris@example.org` (the business
+mailbox, sending as `chris@`, `hello@`, `info@` and the other reso.gl aliases). Every draft write,
+`from` change and send must pass `account` — `operator@example.com` or `chris@example.org` — because
+without it the server silently uses the personal mailbox. The email hook denies the call otherwise.
+
 **A question is not an instruction.** *"So they won't auto-inspect unless we tell them?"* is a
 request for information. Answering it by emailing the landlord is not responsiveness — it commits
 him to wording, dates and asks he never saw. (2026-08-24: three sends in one evening, only the
