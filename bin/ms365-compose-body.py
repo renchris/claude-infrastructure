@@ -63,13 +63,29 @@ def refuse(msg: str):
     print(msg, file=sys.stderr)
     raise SystemExit(_REFUSE_RC)
 
-# The house type stack. Aptos is the Microsoft 365 default since 2024 and is what a
-# message composed in new Outlook uses; it is NOT installed outside the Microsoft
-# ecosystem, so Calibri (installed with Office everywhere) and then Segoe UI / Arial
-# carry the fallback. Size is stated in pt because Outlook's own quote header states it
-# in pt, and mixing pt and px across the separator is visibly inconsistent.
-DEFAULT_FONT = "Aptos,'Aptos_EmbeddedFont','Aptos_MSFontService',Calibri,'Segoe UI',Arial,sans-serif"
-DEFAULT_SIZE = "11pt"
+# The house type stack. NOT chosen from documentation — MEASURED off a message this
+# operator's own Outlook composed and sent (2026-09-02), read out of its MIME:
+#
+#     <div style="font-family: Calibri, Helvetica, sans-serif; font-size: 12pt;
+#                 color: rgb(0, 0, 0);" class="elementToProof">
+#
+# so a reply we draft is typographically indistinguishable from one he typed. Two
+# corrections are baked in here, and both were wrong in the first draft of this file:
+#
+#   * 12pt, not 11pt. The brief and this file both said 11pt. A survey of 25 real
+#     Outlook-composed messages found 182 declarations of 12pt against 6 of 11pt, and
+#     this mailbox agrees. (11pt appears in the SAME file — it is what Outlook uses for
+#     the quote HEADER it generates, which is not the compose size.)
+#   * Calibri, not Aptos. Aptos is the Microsoft 365 default since 2024, and a doc-led
+#     choice lands there; this CONSUMER Outlook.com mailbox still composes in Calibri.
+#     An M365 mailbox will differ, which is why the stack is per-identity below.
+#
+# Size in pt because Outlook states its own in pt; mixing pt above the separator with px
+# below it is visibly inconsistent inside one message. Never add an @font-face to "make
+# Aptos work": an element using an @font-face font ignores the whole stack and falls back
+# to Times New Roman in Outlook Windows 2007-2016.
+DEFAULT_FONT = "Calibri,Helvetica,sans-serif"
+DEFAULT_SIZE = "12pt"
 DEFAULT_COLOR = "#000000"
 # Declared as a PAIR with the colour, or not at all. A fragment spliced into someone
 # else's document has exactly ONE dark-mode lever — the colours it states — because every
@@ -209,8 +225,11 @@ def main() -> int:
     ap.add_argument("--signature", help="signature id from the signature file")
     ap.add_argument("--signature-file", help=f"default: ${SIG_FILE_ENV} or {DEFAULT_SIG_FILE}")
     ap.add_argument("--no-signature", action="store_true", help="omit the signature block")
-    ap.add_argument("--font", default=DEFAULT_FONT)
-    ap.add_argument("--size", default=DEFAULT_SIZE)
+    # Default None, not the constant: the signature entry may carry its own font/size
+    # (an M365 identity composes in Aptos where a consumer one composes in Calibri), and
+    # an explicit flag must still beat it. Resolving below keeps that precedence readable.
+    ap.add_argument("--font", default=None, help=f"default: the identity's, else {DEFAULT_FONT}")
+    ap.add_argument("--size", default=None, help=f"default: the identity's, else {DEFAULT_SIZE}")
     ap.add_argument("--color", default=DEFAULT_COLOR)
     ap.add_argument("--background", default=DEFAULT_BG)
     ap.add_argument(
@@ -240,7 +259,11 @@ def main() -> int:
     if not text.strip():
         refuse("refused: empty body text")
 
-    blocks = render_blocks(text, args.font, args.size, args.color)
+    sig = sigs.get(args.signature) if args.signature else None
+    font = args.font or (sig or {}).get("font") or DEFAULT_FONT
+    size = args.size or (sig or {}).get("size") or DEFAULT_SIZE
+
+    blocks = render_blocks(text, font, size, args.color)
 
     sig_html = ""
     if not args.no_signature:
@@ -258,7 +281,7 @@ def main() -> int:
                 "  Do NOT invent a name, title or phone number to fill the gap — ask the\n"
                 "  operator for the real ones and add them to that file."
             )
-        sig_html = render_signature(sigs[args.signature], args.font, args.size, args.color)
+        sig_html = render_signature(sigs[args.signature], font, size, args.color)
 
     # The outer wrapper restates font/size/colour so that anything NOT covered by a
     # block rule above (a stray text node, a nested inline element) still inherits from

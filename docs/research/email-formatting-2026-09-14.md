@@ -50,23 +50,50 @@ no bullet list unless there are ≥3 genuinely parallel items; no PS.
 
 ### Typography
 
-The tool's defaults, and why each is what it is:
+The tool's defaults are **measured, not chosen from documentation** — read out of the MIME of a
+message this operator's own Outlook composed and sent (2026-09-02):
 
-```css
-font-family: Aptos,'Aptos_EmbeddedFont','Aptos_MSFontService',Calibri,'Segoe UI',Arial,sans-serif;
-font-size:   11pt;
-color:       #000000;
-/* every block element, not just the wrapper. margin:0 0 12pt 0 on each <p>. */
+```html
+<div style="font-family: Calibri, Helvetica, sans-serif; font-size: 12pt; color: rgb(0, 0, 0);"
+     class="elementToProof">
 ```
 
-- **Aptos first, Calibri behind it.** Aptos is the Microsoft 365 default since 2024; it is not
-  installed outside the Microsoft ecosystem, so Calibri (ships with Office everywhere) and then
-  Segoe UI / Arial carry the fallback.
-- **pt, not px.** Graph's own quote header states its size in pt (`style="font-size:11pt"`);
-  mixing pt above the separator with px below it is visibly inconsistent in the same message.
+so a reply the agent drafts is typographically indistinguishable from one he typed. The tool emits
+the same three declarations (in hex rather than `rgb()`, see below):
+
+```css
+font-family: Calibri,Helvetica,sans-serif;
+font-size:   12pt;
+color:       #000000;   background-color: #ffffff;
+/* on every block element, not just the wrapper. margin:0 0 12pt 0 on each <p>. */
+```
+
+**Two things the obvious, documentation-led answer gets wrong**, and the first draft of this
+standard got both:
+
+- **12pt, not 11pt.** The brief said 11pt and so did my first version. A survey of 25 real
+  Outlook-composed messages found **182 declarations of 12pt against 6 of 11pt**, and this mailbox
+  agrees. 11pt is a real number in the same file — it is the size Outlook uses for the **quote
+  header it generates** (`<font face="Calibri, sans-serif" color="#000000" style="font-size:11pt">`),
+  which is exactly what makes reading it off a reply draft an easy and wrong inference.
+- **Calibri, not Aptos.** Aptos is the Microsoft 365 default since 2024, and a documentation-led
+  choice lands there — my first version shipped an Aptos-first stack. This **consumer**
+  Outlook.com mailbox still composes in Calibri. An M365 mailbox (`chris@reso.gl`) will differ,
+  which is why the stack is **per-identity** in the signature file rather than global.
+  Microsoft's own support page, meanwhile, still says "the default font is Calibri in black" —
+  stale prose sitting beside a still-correct value.
+
+- **Never add `@font-face` to "make Aptos work".** An element using an `@font-face` font ignores
+  the whole stack and falls back to **Times New Roman** in Outlook Windows 2007-2016. It is the
+  highest-severity failure in this area and it is triggered by the obvious fix.
+- **pt, not px.** Outlook states its own sizes in pt; mixing pt above the separator with px below
+  it is visibly inconsistent inside one message.
 - **An explicit colour, on every block.** See §2 — this is the grey defect.
 - **Inline on every element, never a `<style>` block.** See §3 — the fragment lands inside a
-  document someone else wrote.
+  document someone else wrote. (Outlook's own compose emits a
+  `<style>P{margin-top:0;margin-bottom:0}</style>` reset and spaces paragraphs with empty `<div>`s;
+  a fragment cannot rely on a `<style>` block, so explicit inline margins do the same job more
+  robustly.)
 - **`margin` only. NEVER `padding` on a `<div>`, `<p>` or `<ul>`.** Classic Outlook renders through
   Word, where padding is supported on **table cells only** — a padded list silently loses its
   indent there and nowhere else, so it looks correct in every client you can easily check. A

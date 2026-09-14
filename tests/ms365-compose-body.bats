@@ -20,12 +20,18 @@ setup() {
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   TOOL="$REPO/bin/ms365-compose-body.py"
   [ -f "$TOOL" ]
+  # HERMETICITY: the tool resolves its signature file from $CC_MS365_SIGNATURES, else
+  # ~/.claude/email-signatures.json. An unfixtured $HOME means the suite reads the live
+  # one, so a real signature on this machine could make a case pass that should fail.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  unset CC_MS365_SIGNATURES
   SIGS="$BATS_TEST_TMPDIR/sigs.json"
   cat >"$SIGS" <<'JSON'
 {
   "full":     {"name":"Chris Ren","title":"Founder","company":"Reso",
                "email":"chris@reso.gl","website":"reso.gl","phone":"+1 555 0100"},
-  "sparse":   {"name":"Chris Ren","company":"Reso"}
+  "sparse":   {"name":"Chris Ren","company":"Reso"},
+  "m365":     {"name":"Chris Ren","company":"Reso","font":"Aptos,Calibri,sans-serif","size":"11pt"}
 }
 JSON
 }
@@ -119,6 +125,27 @@ compose() { python3 "$TOOL" --signature-file "$SIGS" "$@"; }
 }
 
 # ── the signature ─────────────────────────────────────────────────────────────────────────────────
+
+@test "typography defaults to what this operator's Outlook actually composes" {
+  # Not a documentation choice: measured off a message his own Outlook sent (2026-09-02),
+  # `font-family: Calibri, Helvetica, sans-serif; font-size: 12pt; color: rgb(0, 0, 0)`.
+  # 11pt appears in that same file as the size of the QUOTE HEADER Outlook generates, which
+  # is what makes picking 11pt an easy and wrong inference.
+  run compose --no-signature --out - <<< 'One.'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"font-family:Calibri,Helvetica,sans-serif;font-size:12pt;"* ]]
+}
+
+@test "an identity may carry its own font, and an explicit flag still beats it" {
+  # An M365 mailbox composes in Aptos where a consumer Outlook.com one composes in Calibri,
+  # so the stack belongs to the sending identity, not to the tool.
+  run compose --signature m365 --out - <<< 'One.'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"font-family:Aptos,Calibri,sans-serif;font-size:11pt;"* ]]
+  run compose --signature m365 --font 'Georgia,serif' --size 13pt --out - <<< 'One.'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"font-family:Georgia,serif;font-size:13pt;"* ]]
+}
 
 @test "a full signature renders every field it was given" {
   run compose --signature full --out - <<< 'One.'
