@@ -150,16 +150,45 @@ main()
   awk -v t="$TOL" 'BEGIN { exit !(t > 2.0 && t < 40) }' || { echo "drag tolerance $TOL is not a usable grab region"; false; }
 }
 
-# cmd+shift+b is the BUILT-IN again. A zero-shift replacement was built and landed and then
-# measured dead on this machine: a per-tab `toggle_window_title_bars` override beats
-# `window_title_bar_min_windows` and survives a config reload, so the replacement flipped a setting
-# the live windows ignore. Measured on the focused OS window — config ON: 0 title-bar rows; one
-# toggle action: 34. The per-tab toggle is an ACTION, so it cannot be fused with the padding swap
-# and costs 2 relayouts per press against the built-in's 1.
-@test "cmd+shift+b toggles window title bars — the only handle for drag-to-reorder" {
+# cmd+shift+b is the OVERLAY, and the history is why. The built-in takes a row from the grid, so
+# every press SIGWINCHes every child twice — the jitter. `window_title_bar_min_windows 1` killed the
+# jitter by nailing the bars open and thereby killed the chord, which the operator refused. A padding
+# reservoir paid one row permanently to buy an occasional bar, which he also refused: "Having a
+# permanent row for a no CLS show/hide row is not the answer." Every in-grid option is one of those
+# two, because the bar needs one cell of pixels and inside the grid it can only take or reserve.
+# The overlay draws ABOVE the grid (graphics protocol z=1), so the grid never changes at all.
+@test "cmd+shift+b runs the zero-shift overlay, not the row-stealing built-in" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  echo "$output" | grep -qx 'cmd_shift_b_last=toggle_window_title_bars' || { echo "$output"; false; }
+  echo "$output" | grep -q 'cmd_shift_b_last=launch' || { echo "$output"; false; }
+  # the built-in is what we are deliberately NOT bound to — it is the defect, not a fallback
+  # Explicit block form, NOT `A && { …; false; }`: under errexit the && absorbs the false and the
+  # guard can never fail. The liveness fixer declined to re-flow this across its line continuation
+  # and said so; this is the hand-edit it asked for, mutant-verified in BOTH directions.
+  if echo "$output" | grep -qx 'cmd_shift_b_last=toggle_window_title_bars'; then
+    echo "cmd+shift+b regressed to the row-stealing built-in"
+    false
+  fi
+  grep -q 'kitty-pane-title-overlay.py' "$CONF" || { echo "overlay script not referenced"; false; }
+}
+
+# The overlay script must EXIST and parse. A binding pointing at a missing or broken script is the
+# silent-dead-key failure this suite was created for: kitty reports nothing when a launch target
+# fails, so only a test can see it.
+@test "the overlay script referenced by cmd+shift+b exists and is valid python" {
+  script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
+  [ -f "$script" ] || { echo "missing: $script"; false; }
+  [ -x "$script" ] || { echo "not executable: $script"; false; }
+  python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$script" \
+    || { echo "overlay script does not parse"; false; }
+}
+
+# q=2 is MANDATORY in every graphics escape the script emits. With q=0 the terminal's reply is
+# delivered into the PROGRAM's stdin — an acknowledgement lands in whatever is running in the pane.
+@test "every graphics escape in the overlay suppresses responses (q=2)" {
+  script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
+  bad="$(grep -n '033_G' "$script" | grep -v 'q=2' || true)"
+  [ -z "$bad" ] || { echo "graphics escape without q=2:"; echo "$bad"; false; }
 }
 
 # THE TILDE TRAP, kept although the binding that taught it is gone — it applies to every script
