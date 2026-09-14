@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# cc-kitty-wash — paint a pane's WAITING state as an areal warm wash, via kitty window logos.
+#
+# WHY A LOGO AND NOT A COLOUR: measured on kitty 0.48.2 (docs/research/, this repo) —
+#   * per-window BORDER colour is IMPOSSIBLE: `set-colors --match id:N inactive_border_color`
+#     exits 0, IGNORES --match and repaints EVERY window. Exactly three border states exist
+#     (focused / not / bell), so the border cannot carry a fourth meaning.
+#   * per-window `set-colors background` DOES scope correctly, but is WIPED BY A CONFIG RELOAD,
+#     and a __watch_conf__ watcher is live on this box. Window LOGOS survive both a reload and
+#     the alternate screen (Claude Code enters alt-screen ~1.42 s after launch, which is what
+#     kills every text-painting approach).
+# WHY AREAL AND NOT A RAIL: at this display's geometry a 4 px divider is resolvable only within
+#   3.4 deg of fixation, so a LINE cannot serve as a scanning cue however pretty. The wash spans
+#   the pane. (This is why the operator's blue focus divider works for the pane they are looking
+#   at and can never work for the pane they are trying to FIND.)
+# WHY GOLD: blue<->gold is the only colour-blind-safe axis here. Red-green opponency is
+#   behaviourally absent by 25-30 deg eccentricity and the screen corners sit at 20.8 deg.
+#   #f6c177 holds a 2x luminance ratio over the existing #6194f3 under BOTH protanopia and
+#   deuteranopia. Orange is already spoken for by Claude Code's own spinner.
+#
+# Verbs:
+#   arm <winid> strong|weak|blocked   set the wash on one window
+#   clear <winid>|all                 remove it
+#   demo                              paint the CURRENT OS-window's panes so a human can judge
+#   status                            list windows currently wearing a wash
+# rc: 0 ok · 4 no live kitty socket · 2 usage
+set -uo pipefail
+
+REPO="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/.." && pwd)"
+ASSETS="$REPO/assets/kitty-wash"
+[ -d "$ASSETS" ] || ASSETS="$HOME/.claude/assets/kitty-wash"
+
+# Socket: a hook or launchd job carries no KITTY_LISTEN_ON, so never assume it (bin/cc-kitty-socket).
+_sock() {
+  if [ -n "${KITTY_LISTEN_ON:-}" ]; then printf '%s' "$KITTY_LISTEN_ON"; return 0; fi
+  local s; s="$("$REPO/bin/cc-kitty-socket" 2>/dev/null)" || return 4
+  [ -n "$s" ] || return 4; printf '%s' "$s"
+}
+_k() { local to; to="$(_sock)" || return 4; kitty @ --to "$to" "$@"; }
+
+_tier_png() {
+  case "$1" in
+    strong)  printf '%s' "$ASSETS/wash-strong.png"  ;;
+    weak)    printf '%s' "$ASSETS/wash-weak.png"    ;;
+    blocked) printf '%s' "$ASSETS/wash-blocked.png" ;;
+    *) return 2 ;;
+  esac
+}
+
+cmd_arm() {
+  local win="${1:-}" tier="${2:-weak}" png
+  [ -n "$win" ] || { echo "usage: cc-kitty-wash arm <winid> strong|weak|blocked" >&2; return 2; }
+  png="$(_tier_png "$tier")" || { echo "unknown tier: $tier" >&2; return 2; }
+  [ -f "$png" ] || { echo "missing asset: $png" >&2; return 2; }
+  # --no-response: fire-and-forget, so a Stop hook never blocks on the compositor.
+  # --alpha 1: the tint is baked into the PNG. Without this the runtime default (-1) falls
+  # back to `window_logo_alpha` (0.5) and SILENTLY HALVES every tier — a measured trap.
+  _k set-window-logo --no-response --match "id:$win" --position center --alpha 1 "$png" || return $?
+  # Record the tier ON THE WINDOW, so kitty itself is the state store. User-vars survive a
+  # config reload; an external file would desync from a pane that died.
+  _k set-user-vars --match "id:$win" "cc_wash=$tier" >/dev/null 2>&1
+}
+
+cmd_clear() {
+  local win="${1:-}"
+  [ -n "$win" ] || { echo "usage: cc-kitty-wash clear <winid>|all" >&2; return 2; }
+  if [ "$win" = all ]; then
+    _k set-window-logo --no-response --match "var:cc_wash" none 2>/dev/null
+    # belt and braces: some windows may carry a logo without the var (e.g. a crashed arm)
+    _k set-window-logo --no-response --match "state:parent_active" none >/dev/null 2>&1
+    for w in $(cmd_status --ids 2>/dev/null); do
+      _k set-window-logo --no-response --match "id:$w" none >/dev/null 2>&1
+      _k set-user-vars --match "id:$w" "cc_wash=" >/dev/null 2>&1
+    done
+    return 0
+  fi
+  _k set-window-logo --no-response --match "id:$win" none || return $?
+  _k set-user-vars --match "id:$win" "cc_wash=" >/dev/null 2>&1
+}
+
+cmd_status() {
+  local ids_only=0; [ "${1:-}" = "--ids" ] && ids_only=1
+  local to; to="$(_sock)" || return 4
+  kitty @ --to "$to" ls 2>/dev/null | python3 -c '
+import json,sys
+ids_only = len(sys.argv)>1 and sys.argv[1]=="1"
+d=json.load(sys.stdin); rows=[]
+for o in d:
+    for t in o.get("tabs",[]):
+        for w in t.get("windows",[]):
+            v=(w.get("user_vars") or {}).get("cc_wash")
+            if v: rows.append((w["id"], v, (w.get("title") or "")[:44]))
+if ids_only:
+    for r in rows: print(r[0])
+else:
+    if not rows: print("no panes are wearing a wash"); sys.exit(0)
+    for i,v,t in rows: print("  win %-5s %-8s %s" % (i,v,t))
+' "$ids_only"
+}
+
+cmd_demo() {
+  local to; to="$(_sock)" || { echo "no live kitty socket" >&2; return 4; }
+  local plan
+  plan="$(kitty @ --to "$to" ls 2>/dev/null | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+# the OS-window the operator is actually looking at
+osw=[o for o in d if o.get("is_focused")] or d
+wins=[]
+for t in osw[0].get("tabs",[]):
+    for w in t.get("windows",[]):
+        wins.append(w["id"])
+wins.sort()
+# one STRONG (the longest-waiting, simulated here as the first), the rest WEAK, cap at 4
+if not wins: sys.exit(1)
+print(wins[0], "strong")
+for w in wins[1:4]: print(w, "weak")
+')" || { echo "could not enumerate panes" >&2; return 4; }
+  [ -n "$plan" ] || { echo "no panes found" >&2; return 4; }
+  echo "Painting a DEMO on the OS-window you are looking at (fully reversible):"
+  while read -r w tier; do
+    [ -n "$w" ] || continue
+    cmd_arm "$w" "$tier" && echo "  win $w  <- $tier"
+  done <<< "$plan"
+  echo
+  echo "Revert with:  cc-kitty-wash clear all"
+}
+
+case "${1:-}" in
+  arm)    shift; cmd_arm "$@" ;;
+  clear)  shift; cmd_clear "$@" ;;
+  status) shift; cmd_status "$@" ;;
+  demo)   shift; cmd_demo "$@" ;;
+  *) echo "usage: cc-kitty-wash {arm <winid> strong|weak|blocked | clear <winid>|all | demo | status}" >&2; exit 2 ;;
+esac
