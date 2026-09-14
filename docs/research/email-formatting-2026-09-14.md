@@ -83,6 +83,14 @@ standard got both:
   Microsoft's own support page, meanwhile, still says "the default font is Calibri in black" —
   stale prose sitting beside a still-correct value.
 
+- **The family is client-dependent; the SIZE and COLOUR are not.** A second sent message from the
+  same mailbox, composed on **Outlook mobile**, reads
+  `font-family: Aptos, Aptos_MSFontService, -apple-system, Roboto, Arial, Helvetica, sans-serif;
+  font-size: 12pt; color: rgb(0, 0, 0);` — a different family from the web client's Calibri, with
+  **identical 12pt and identical black**. So there is no single family that matches everything this
+  operator sends, and 12pt/`#000000` are the load-bearing constants. The default is Calibri-first
+  because that is what the **web** client composes and the web client is where drafts get reviewed;
+  the per-identity `font` key is how the other cases are handled rather than argued about.
 - **Never add `@font-face` to "make Aptos work".** An element using an `@font-face` font ignores
   the whole stack and falls back to **Times New Roman** in Outlook Windows 2007-2016. It is the
   highest-severity failure in this area and it is triggered by the obvious fix.
@@ -264,12 +272,19 @@ phone number** — an invented job title in a real business email is worse than 
 The `chris-reso` entry is deliberately incomplete: name, company, email, website. **No title and no
 phone, because nobody has told me what they are.** Those are the operator's to supply.
 
-### Two open items on signatures
+### Two open items on signatures — one now CLOSED by measurement
 
-- **Double signature (needs one eyeball).** Does opening an API-created draft in Outlook cause the
-  client to add its *own* signature on top? Mechanically it should not — clients insert at *compose
-  initiation*, and opening an existing draft is not one — but that is reasoning, not a measurement.
-  The sample draft in §7 is the test: open it and look.
+- **Double signature: RESOLVED for this mailbox, risk is zero.** The question was whether opening
+  an API-created draft in Outlook makes the client add its *own* signature on top. Rather than
+  reason about compose-initiation semantics, I read two messages this operator's own Outlook
+  composed and sent. The compose region of each contains **only a `<br>`, then an empty
+  `<div id="appendonsend"></div>`** — the very element Outlook would populate — and then the quote.
+
+  **No client signature is configured on this mailbox at all.** So nothing can be doubled. It also
+  means the "no signature" defect was never the agent dropping one: **every message from this
+  mailbox has been going out unsigned**, and per-draft injection is not restoring a signature, it
+  is supplying the first one. Whoever configures a client signature later re-opens this question —
+  that is the trigger to re-measure, and this paragraph is the record of how.
 - **Statutory footers.** "No legal boilerplate" is wrong for a whole class of sender: UK Companies
   Act 2006 s.82 requires registered name, number, place of registration and registered office on
   business emails. If Reso is ever UK-incorporated that is an operator decision and belongs in a
