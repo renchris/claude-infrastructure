@@ -25,7 +25,52 @@ delivered into the *program's* stdin — a reply lands in whatever is running in
 pane. Suppressing responses is the only safe mode, and the cost is that there is no
 error channel: failures here are silent by construction.
 """
-import base64, io, json, os, subprocess, sys, time, fcntl, struct, termios
+import base64, io, json, os, stat, subprocess, sys, time, fcntl, struct, termios
+
+LOG = os.path.expanduser("~/.claude/autonomy/kitty-title-overlay.log")
+
+
+def _log(msg):
+    """Failures here are otherwise INVISIBLE. The chord is a background launch with no
+    tty: a traceback goes nowhere and a wrong answer reads as 'nothing happened'. This
+    round was lost twice to exactly that — `painted 0 pane(s)` printed to a closed pipe."""
+    try:
+        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        with open(LOG, "a") as fh:
+            fh.write("%s %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), msg))
+    except OSError:
+        pass
+
+
+def _ensure_pil():
+    """Re-exec into an interpreter that HAS Pillow, if this one does not.
+
+    The chord runs under `launch --type=background`, whose PATH is
+    /Applications/kitty.app/Contents/MacOS:/usr/bin:/bin:/usr/sbin:/sbin — so `python3`
+    is SYSTEM python, which ships no Pillow. Measured 2026-09-14: the script resolved
+    its socket, found all four panes, and then died on `ModuleNotFoundError: PIL`.
+    """
+    try:
+        import PIL  # noqa: F401
+        return
+    except ImportError:
+        pass
+    if os.environ.get("_KTO_REEXEC"):
+        _log("FATAL: no interpreter with Pillow found; titles cannot render")
+        print("kitty-pane-title-overlay: no python with Pillow found", file=sys.stderr)
+        sys.exit(3)
+    for cand in ("/usr/local/bin/python3", "/opt/homebrew/bin/python3",
+                 "/Library/Frameworks/Python.framework/Versions/Current/bin/python3",
+                 "/usr/bin/python3"):
+        if not os.path.exists(cand):
+            continue
+        probe = subprocess.run([cand, "-c", "import PIL"], capture_output=True)
+        if probe.returncode == 0:
+            os.environ["_KTO_REEXEC"] = "1"
+            os.execv(cand, [cand, os.path.abspath(__file__)] + sys.argv[1:])
+    _log("FATAL: scanned candidates, none had Pillow")
+    print("kitty-pane-title-overlay: no python with Pillow found", file=sys.stderr)
+    sys.exit(3)
 
 STATE = os.path.expanduser("~/.claude/autonomy/kitty-title-overlay.state")
 IMG_BASE = 7100                      # image ids we own; never collides with a user's
@@ -39,15 +84,51 @@ FG, BG = (236, 236, 236), (58, 58, 64)
 
 
 def ksock():
-    s = os.environ.get("KITTY_LISTEN_ON")
-    if s:
+    """Resolve a socket `kitty @` can reach FROM A SUBPROCESS.
+
+    KITTY_LISTEN_ON is NOT always a path. Inside `launch --type=background` kitty
+    hands the child an inherited file descriptor — `fd:47` — and Python's subprocess
+    closes non-standard fds, so `kitty @ --to fd:47` reaches nothing and every query
+    returns empty. That is SILENT: the script finds no panes and paints none.
+
+    Two further traps, both measured 2026-09-14, both from matching a NAME instead of
+    testing the thing: `/tmp/kitty-*` also matches leftover logs and screenshots (13
+    entries here, exactly ONE of them a socket), and `ps -o comm=` TRUNCATES at 16
+    chars, so kitty reads as "/Applications/ki" and any endswith("kitty") test fails.
+    So: test for an actual socket, and identify the owner by ancestry, never by name.
+    """
+    def sock_for(pid):
+        path = "/tmp/kitty-%s" % pid
+        try:
+            return "unix:%s" % path if stat.S_ISSOCK(os.stat(path).st_mode) else None
+        except OSError:
+            return None
+
+    s = os.environ.get("KITTY_LISTEN_ON") or ""
+    if s.startswith("unix:"):
         return s
-    pid = os.environ.get("KITTY_PID")
-    if pid:
-        return "unix:/tmp/kitty-%s" % pid
-    # last resort: a background `launch` may carry neither var
+    got = sock_for(os.environ.get("KITTY_PID") or "")
+    if got:
+        return got
+    # Walk our own ancestry; the kitty that owns this pane names the socket
+    # (listen_on is `unix:/tmp/kitty-{kitty_pid}`). No name comparison anywhere.
+    cur = os.getppid()
+    for _ in range(12):
+        if cur <= 1:
+            break
+        got = sock_for(cur)
+        if got:
+            return got
+        try:
+            r = subprocess.run(["ps", "-o", "ppid=", "-p", str(cur)],
+                               capture_output=True, text=True)
+            cur = int((r.stdout or "0").strip() or 0)
+        except Exception:
+            break
+    # Last resort: the one real socket, if there is exactly one
     import glob
-    socks = sorted(glob.glob("/tmp/kitty-*"))
+    socks = [p for p in glob.glob("/tmp/kitty-*")
+             if sock_for(p.rsplit("-", 1)[-1])]
     return "unix:%s" % socks[0] if len(socks) == 1 else None
 
 
@@ -165,7 +246,11 @@ def targets(sock, all_windows):
 
 def paint(sock, all_windows):
     n = 0
-    for pid_, title, tty in targets(sock, all_windows):
+    tg = targets(sock, all_windows)
+    if not tg:
+        _log("no targets: sock=%r — a pane query that returns nothing is the SILENT "
+             "failure mode, not a quiet success" % (sock,))
+    for pid_, title, tty in tg:
         g = tiocgwinsz(tty)
         if not g:
             continue
@@ -218,4 +303,5 @@ def main():
 
 
 if __name__ == "__main__":
+    _ensure_pil()
     sys.exit(main())

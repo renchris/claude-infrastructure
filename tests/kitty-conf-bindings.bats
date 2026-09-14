@@ -183,6 +183,21 @@ main()
     || { echo "overlay script does not parse"; false; }
 }
 
+# The chord runs under `launch --type=background`, whose PATH is kitty's own plus /usr/bin:/bin —
+# so `python3` there is SYSTEM python, which ships no Pillow. The script must therefore find a
+# capable interpreter itself. This cost a full land to learn: the script resolved its socket, found
+# all four panes, then died on ModuleNotFoundError where nothing could see it.
+@test "the overlay can reach a python with Pillow, as the background launch would" {
+  script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
+  grep -q '_ensure_pil' "$script" || { echo "no interpreter guard in the overlay"; false; }
+  found=0
+  for c in /usr/local/bin/python3 /opt/homebrew/bin/python3 /usr/bin/python3; do
+    [ -x "$c" ] || continue
+    if "$c" -c 'import PIL' 2>/dev/null; then found=1; break; fi
+  done
+  [ "$found" -eq 1 ] || { echo "no interpreter on this box has Pillow — titles cannot render"; false; }
+}
+
 # q=2 is MANDATORY in every graphics escape the script emits. With q=0 the terminal's reply is
 # delivered into the PROGRAM's stdin — an acknowledgement lands in whatever is running in the pane.
 @test "every graphics escape in the overlay suppresses responses (q=2)" {
