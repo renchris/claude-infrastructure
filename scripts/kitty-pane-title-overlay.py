@@ -197,11 +197,51 @@ IMG_BASE = 7100                  # image ids we own; never collides with a user'
 #     2:50    2c/90px   50     57          0.63         1.29
 #     2:58    2c/90px   58     66          0.73         1.46     ← "way too big"
 #
-# Two cells is the only step available: a placement covers ceil(h/cell) rows, so a 1.5-cell
-# band leaves row 2 half covered and clips the glyph tops of live content. Integer cells.
-# The refused 2:58 is four steps away, and the type is now unambiguously ABOVE the body
-# rather than level with it, which is the other half of what "larger" was asking for.
-BAND_CELLS = 2
+# ── AND TWO CELLS WAS TOO LARGE (operator, 2026-09-15): "now the titles are too large.
+#    is there no in between?" There is, and the reason I said there was not is a conflation
+#    worth keeping: COVERAGE and BAND HEIGHT are two different numbers. ─────────────────
+#
+# The constraint is real but it binds COVERAGE. A placement shorter than the rows it spans
+# leaves the last row PART painted, and the part it paints is the top of that row's glyphs,
+# so live content under it reads as clipped. Nothing, however, forces the painted band to
+# fill the placement. Cover two WHOLE cells — no partial row, no clipping — and paint the
+# band for only the first BAND_FILL_CELLS of it, filling the remainder with the terminal's
+# own background. Row 2 then reads as a blank line under the header, which is what a header
+# wants anyway, and the band height becomes CONTINUOUS from one cell to two.
+#
+# Rendered at 1:1 over real body text, with the two rejected ends as the controls:
+#
+#     band   em   ink(worst)  ink/band   air/side   cap/body
+#     45px   38     42px        0.93        1px       0.96    ← "oversized to its container"
+#     54px   40     44px        0.81        5px       1.00
+#     58px   41     46px        0.79        6px       1.04    ← is
+#     62px   42     46px        0.74        8px       1.04
+#     68px   44     48px        0.71       10px       1.11
+#     90px   46     51px        0.57       19px       1.14    ← "too large"
+#
+# 58 is one unit up from 45 in the band and one in the type, which is the ask as he first
+# put it, and it turns 1px of air into 6. The dial is continuous now, so the next move in
+# either direction is a one-line change and not another architecture.
+BAND_FILL_CELLS = 1.29           # the PAINTED band, in cells: 58px at a 45px cell
+GROUND        = (0x1e, 0x1e, 0x24)   # config/kitty.conf `background` — the unpainted remainder
+
+
+def band_geometry(cell):
+    """(painted band height, placement height) for a cell of `cell` device px.
+
+    The placement is always a whole number of cells so no row is ever part-painted; the
+    band is whatever BAND_FILL_CELLS asks for inside it.
+    """
+    import math
+    cell = max(int(round(cell)), 1)
+    fill = max(int(round(cell * BAND_FILL_CELLS)), 1)
+    cover = int(math.ceil(fill / float(cell))) * cell
+    return fill, cover
+
+
+def band_cells(cell=45):
+    """How many whole rows a strip covers — derived, so it cannot drift from the band."""
+    return band_geometry(cell)[1] // max(int(round(cell)), 1)
 
 # A HEADER MUST BE A DIFFERENT REGISTER, not just a different size. Matching the body's
 # Monaco exactly made it read as more body text — "the font size/style/placement is still
@@ -216,7 +256,7 @@ BAND_CELLS = 2
 # falls back silently to Regular if that ever fails.
 UI_FONT      = "/System/Library/Fonts/SFNS.ttf"
 UI_VARIATION = "Semibold"
-TYPE_RATIO   = 0.512             # of the BAND height: em 46 at a 90px (2-cell) band.
+TYPE_RATIO   = 0.707             # of the PAINTED band (not the placement): em 41 at 58px.
                                  #
                                  # THE OLD BOUND WAS THE FONT'S, NOT THE INK'S. Sizing by
                                  # `ascent + descent <= band` capped this at em 37 and was
@@ -348,8 +388,8 @@ def _face_for(ch, primary, symbol, notdef):
 _PNG_CACHE = {}
 
 
-def strip_png(width, band_h, text, live=False):
-    """One BAND_CELLS-high title strip.
+def strip_png(width, band_h, text, live=False, cover_h=None):
+    """One title strip: a band `band_h` tall inside a placement `cover_h` tall.
 
     Three decisions, each with a reference behind it:
       · a real BAND, not a tint — a pane header's whole job is to be pickable out of the
@@ -359,14 +399,20 @@ def strip_png(width, band_h, text, live=False):
       · no rule, no shadow, no box. The band's own edge against the terminal ground is the
         structural signal, and at this height it does not need help.
     """
-    key = (width, band_h, text, live)
+    key = (width, band_h, text, live, cover_h)
     hit = _PNG_CACHE.get(key)
     if hit is not None:
         return hit
     from PIL import Image, ImageDraw
     W, H = max(width, 1), max(band_h, 1)
-    im = Image.new("RGB", (W, H), BAND_LIVE if live else BAND_IDLE)
+    # THE PLACEMENT IS AS TALL AS ITS WHOLE ROWS; THE BAND NEED NOT BE. Everything below
+    # the band is painted the terminal's own background, so the row the placement covers
+    # but the band does not reads as an empty line rather than as clipped glyph tops —
+    # which is what makes a band height between one cell and two possible at all.
+    C = max(cover_h or H, H)
+    im = Image.new("RGB", (W, C), GROUND)
     d = ImageDraw.Draw(im)
+    d.rectangle([0, 0, W, H - 1], fill=BAND_LIVE if live else BAND_IDLE)
     FG = INK_LIVE if live else INK_IDLE
     em = max(int(H * TYPE_RATIO), 8)
     primary, symbol, notdef = _faces(em)
@@ -375,7 +421,7 @@ def strip_png(width, band_h, text, live=False):
     # became two — doubling a horizontal margin because a VERTICAL dimension changed, and
     # walking the label out of alignment with the body text under it. Divide the band back
     # down to its cell first.
-    pad = max(int((H / max(BAND_CELLS, 1)) * 0.21), 8)   # inset; keeps the label off the edge
+    pad = max(int((H / max(BAND_FILL_CELLS, 0.1)) * 0.21), 8)  # inset, off the pane edge
     faces = [(ch, _face_for(ch, primary, symbol, notdef)) for ch in text]
 
     def measure(seq):
@@ -475,7 +521,7 @@ def measure(cell_h=45):
     BREATHE = 2
     body = ImageFont.truetype(BODY_FONT, BODY_EM)
     b_cap = ink_h(body, CAPS)
-    band = cell_h * BAND_CELLS
+    band, cover = band_geometry(cell_h)
     em = max(int(band * TYPE_RATIO), 8)
     primary, _symbol, _nd = _faces(em)
     t_cap, typ, worst = ink_h(primary, CAPS), ink_h(primary, TYPICAL), ink_h(primary, WORST)
@@ -484,7 +530,8 @@ def measure(cell_h=45):
         if ink_h(_faces(e)[0], WORST) <= band - BREATHE:
             ceiling = e
     ratio = worst / float(band)
-    print("cell            %d device px   band %d px (%d cell)" % (cell_h, band, BAND_CELLS))
+    print("cell            %d device px   band %d px in a %d px placement (%d whole cell(s))"
+          % (cell_h, band, cover, cover // cell_h))
     print("BODY   Monaco   em %-3d  cap %d px" % (BODY_EM, b_cap))
     print("TITLE  SF %-9s em %-3d  cap %d px   = %.2fx BODY" % (UI_VARIATION, em, t_cap,
                                                                 t_cap / float(b_cap)))
@@ -499,25 +546,34 @@ def measure(cell_h=45):
     # it is the bound that keeps a pathological title from clipping; it is no longer the
     # target. A header's label wants somewhere around half its band: below BREATHES_LO it is
     # a lost line in a slab, above BREATHES_HI it is pressed against its own container.
-    BREATHES_LO, BREATHES_HI = 0.45, 0.68
-    OUTRANKS = 1.05                     # the label must be LARGER than the body, not level
+    # AIR IN PIXELS, NOT A RATIO OF THE BAND. A ratio was the second attempt and it rules
+    # out the band heights the operator can actually choose between: the same 0.79 is
+    # 6px of air at 58px and 19px at 90px, and 90px was rejected on sight. What he named
+    # is the gap — "the text doesn't look oversized to its boundary container" — and the
+    # gap is what the eye reads, so the gap is what is asserted. AIR_MIN 4 is comfortably
+    # above the 1px this shipped with and comfortably below every candidate rendered.
+    AIR_MIN = 4                         # device px of band above and below the worst ink
+    OUTRANKS = 1.00                     # the label may not be SMALLER than the body's cap
     face_ok = os.path.basename(FONT_CANDIDATES[0]) != os.path.basename(BODY_FONT)
     fits = worst <= band - BREATHE
-    breathes = BREATHES_LO <= ratio <= BREATHES_HI
+    air = (band - worst) // 2
+    breathes = air >= AIR_MIN
     outranks = (t_cap / float(b_cap)) >= OUTRANKS
+    whole = (cover % cell_h) == 0 and band <= cover
     print("VERDICT %s" % (
-        "BREATHING (ink %.2f of band, in %.2f-%.2f) and OUTRANKING the body (%.2fx), in a "
-        "register the body does not use" % (ratio, BREATHES_LO, BREATHES_HI,
-                                            t_cap / float(b_cap))
-        if (fits and breathes and outranks and face_ok) else
-        "FAILS: %s%s%s%s" % (
+        "BREATHING (%dpx of air each side, >= %d) and OUTRANKING the body (%.2fx), in a "
+        "register the body does not use, on a whole-cell placement"
+        % (air, AIR_MIN, t_cap / float(b_cap))
+        if (fits and breathes and outranks and face_ok and whole) else
+        "FAILS: %s%s%s%s%s" % (
             "" if fits else "the accented worst case overflows; ",
-            "" if breathes else "ink is %.2f of the band, outside %.2f-%.2f; " % (
-                ratio, BREATHES_LO, BREATHES_HI),
-            "" if outranks else "the label is %.2fx the body cap, not above %.2fx; " % (
+            "" if breathes else "only %dpx of air each side, under %d; " % (air, AIR_MIN),
+            "" if outranks else "the label is %.2fx the body cap, under %.2fx; " % (
                 t_cap / float(b_cap), OUTRANKS),
-            "" if face_ok else "same face as the body")))
-    return 0 if (fits and breathes and outranks and face_ok) else 1
+            "" if face_ok else "same face as the body; ",
+            "" if whole else "the placement is not a whole number of cells — the last row "
+                             "would be part-painted and its glyph tops would read clipped")))
+    return 0 if (fits and breathes and outranks and face_ok and whole) else 1
 
 
 # ───────────────────────────── talking to kitty ──────────────────────────────
@@ -770,8 +826,8 @@ def render(tg):
         g = tiocgwinsz(tty)
         if not g:
             continue
-        band = int(round(g["ch"])) * BAND_CELLS
-        frames.append((tty, strip_png(int(g["xpx"]), band, title, live),
+        band, cover = band_geometry(g["ch"])
+        frames.append((tty, strip_png(int(g["xpx"]), band, title, live, cover),
                        IMG_BASE + (pid_ % 800)))
     return frames
 
