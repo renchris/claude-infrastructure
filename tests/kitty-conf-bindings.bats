@@ -404,3 +404,33 @@ PYEOF
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   echo "$output" | grep -q '^ok$' || { echo "$output"; false; }
 }
+
+# THE EM NOW SITS ABOVE THE FONT'S OWN ascent+descent, which is only safe because strip_png
+# solves the baseline from the ACTUAL string's ink and steps the em down when that ink would not
+# fit. Without both halves this clips silently — PIL draws past the image edge without complaint —
+# so the property is asserted on RENDERED PIXELS, against the worst string we could be handed
+# (accented capitals plus descenders) and a stacked-diacritic case beyond it.
+@test "no title clips the band — ink stays inside it, accents and descenders included" {
+  script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
+  PY="$(pil_python)" || skip "no interpreter with Pillow"
+  run "$PY" - "$script" <<'PYEOF'
+import importlib.util, io, sys
+from PIL import Image
+spec = importlib.util.spec_from_file_location("kto", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+H = 45 * m.BAND_CELLS
+for t in ("\u25d0 Kitty pane-title overlay refinements",
+          "\xc5\xc9\xce\xd5\xdc Kitty gjpqy accented worst case",
+          "\u25d1 \xddg\u0135 Q extreme stack",
+          "\u2733 CPAP"):
+    im = Image.open(io.BytesIO(m.strip_png(1694, H, t, True))).convert("RGB")
+    px = im.load()
+    rows = [y for y in range(H) if any(px[x, y] != m.BAND_LIVE for x in range(0, 1694, 2))]
+    assert rows, "no ink at all for %r" % t
+    assert rows[0] >= 1 and rows[-1] <= H - 2, \
+        "ink %d..%d touches the band edge for %r" % (rows[0], rows[-1], t)
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -q '^ok$' || { echo "$output"; false; }
+}

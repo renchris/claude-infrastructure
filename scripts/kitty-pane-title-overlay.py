@@ -194,13 +194,27 @@ BAND_CELLS = 1
 # falls back silently to Regular if that ever fails.
 UI_FONT      = "/System/Library/Fonts/SFNS.ttf"
 UI_VARIATION = "Semibold"
-TYPE_RATIO   = 0.825             # of the BAND height. At a 45px band that is em 37 —
-                                 # ascent+descent 44 of a 45px cell, so this is the
-                                 # ceiling itself and not a chosen size: em 38 overflows
-                                 # and clips. There is no further increase available
-                                 # without a taller band, and a taller band was refused.
-                                 # `measure` asserts it, and the bats suite pins it, so
-                                 # neither a silent shrink nor an overflow can ship.
+TYPE_RATIO   = 0.845             # of the BAND height: em 38 at a 45px cell.
+                                 #
+                                 # THE OLD BOUND WAS THE FONT'S, NOT THE INK'S. Sizing by
+                                 # `ascent + descent <= band` capped this at em 37 and was
+                                 # reported as a hard ceiling — twice. It is not: those
+                                 # metrics reserve room for accents and descenders the
+                                 # glyphs may never use, so the box is ~9px taller than
+                                 # anything a title actually draws. Measured ink, worst
+                                 # realistic case (accented capitals ÅÉÎÕÜ plus gjpqy):
+                                 # em 37 -> 42px, em 38 -> 43px, em 40 -> 44px, and the
+                                 # band is 45 with 2px reserved so nothing sits flush
+                                 # against an edge. So em 38 is the real accent-safe
+                                 # ceiling — ONE unit above the old bound, and the last
+                                 # one that holds for EVERY string rather than only the
+                                 # ones that happen to carry no accent.
+                                 #
+                                 # Going past the metrics box is only safe because the
+                                 # baseline is now solved from the ACTUAL string's ink
+                                 # (see strip_png) rather than from asc/desc, and because
+                                 # a title whose ink still overflows steps the em down
+                                 # until it fits. Without both, this would clip silently.
 TRACKING     = 0.6               # a hair of tracking; proportional type at label size
 
 # SF PRO HAS NO ✳ ◐ ◑ ✻ ✶ — and every Claude Code pane title STARTS with one. Read out of
@@ -321,7 +335,8 @@ def strip_png(width, band_h, text, live=False):
     im = Image.new("RGB", (W, H), BAND_LIVE if live else BAND_IDLE)
     d = ImageDraw.Draw(im)
     FG = INK_LIVE if live else INK_IDLE
-    primary, symbol, notdef = _faces(max(int(H * TYPE_RATIO), 8))
+    em = max(int(H * TYPE_RATIO), 8)
+    primary, symbol, notdef = _faces(em)
     pad = max(int(H * 0.21), 8)               # inset; keeps the label off the pane edge
     faces = [(ch, _face_for(ch, primary, symbol, notdef)) for ch in text]
 
@@ -332,11 +347,41 @@ def strip_png(width, band_h, text, live=False):
         while faces and measure(faces) > W - 2 * pad - primary.getlength("…"):
             faces.pop()
         faces.append(("…", primary))
-    try:
-        asc, desc = primary.getmetrics()
-        base = max((H - (asc + desc)) // 2, 0) + asc
-    except Exception:
-        base = H // 2
+    # BASELINE FROM INK, NOT FROM METRICS — and the em steps down if the ink still
+    # overflows. `getbbox(anchor="ls")` returns each glyph's ink relative to the baseline
+    # (y0 negative above it), so the union over the glyphs actually being drawn is the
+    # exact box on screen. Centring THAT is what makes a label sit right whether or not it
+    # happens to carry an accent or a descender, and it is what makes an em above the
+    # font's own ascent+descent safe rather than a silent clip.
+    def ink_span(seq):
+        top, bot = None, None
+        for c, f in seq:
+            try:
+                b = f.getbbox(c, anchor="ls")
+            except Exception:
+                continue
+            if b[1] == b[3]:
+                continue                      # a space has no ink
+            top = b[1] if top is None else min(top, b[1])
+            bot = b[3] if bot is None else max(bot, b[3])
+        return (top, bot) if top is not None else None
+    span = ink_span(faces)
+    BREATHE = 2                               # 1px of band above and below the ink; a
+                                              # glyph flush against the edge reads clipped
+                                              # even when it is not
+    while span and (span[1] - span[0]) > H - BREATHE and em > 8:
+        em -= 1                               # an exotic title degrades, never clips
+        primary, symbol, notdef = _faces(em)
+        faces = [(c, _face_for(c, primary, symbol, notdef)) for c, _f in faces]
+        span = ink_span(faces)
+    if span:
+        base = (H - (span[1] - span[0])) // 2 - span[0]
+    else:
+        try:
+            asc, desc = primary.getmetrics()
+            base = max((H - (asc + desc)) // 2, 0) + asc
+        except Exception:
+            base = H // 2
     x = pad
     for ch, f in faces:      # per glyph, so tracking and the symbol fallback are possible
         try:
@@ -367,54 +412,53 @@ BODY_EM   = 36                                   # font_size 18.0 on a 2x displa
 def measure(cell_h=45):
     """Print what the size argument actually turns on, at kitty's own device scale.
 
-    This is a 1:1 comparison and not an analogy — kitty runs Monaco at font_size 18.0,
-    which on a 2x display is a 36px em, and PIL's truetype(36) is that same em, so the ink
-    boxes measured here are the ink boxes on the glass. Capitals only, so ascenders and
-    descenders cannot inflate either side.
+    1:1 and not an analogy — kitty runs Monaco at font_size 18.0, which on a 2x display is
+    a 36px em, and PIL's truetype(36) is that same em, so the ink boxes here are the ink
+    boxes on the glass.
 
-    WHAT IT ASSERTS, and why it is not "bigger than the body". Three rounds of "too small"
-    were answered by restyling inside one cell; the fourth was answered by making the band
-    two cells, and that drew "way too big". Rendered at 1:1 against real body text, a
-    two-cell band with smaller type looks WORSE than either extreme — so the band is the
-    dial that was wrong, and at one cell the type has a hard ceiling that sits just under
-    body size. The invariant worth pinning is therefore that the type is AT that ceiling
-    (nothing was left on the table) and that the face is not the body's, which is what
-    makes a header a header here. A number below 1.0x is expected and correct.
+    THE CEILING IS MEASURED FROM INK, AND THAT CORRECTS A BOUND STATED TWICE. The earlier
+    rule was `ascent + descent <= band`, which capped the type at em 37 and was reported as
+    a hard limit. Those metrics reserve room for accents and descenders a given string may
+    never draw, so the box runs ~9px taller than anything a title actually puts on screen.
+    The real limit is the worst string we might be handed — accented capitals plus
+    descenders — and it sits three ems higher. Sizing to it is only safe because strip_png
+    now solves the baseline from the ACTUAL string's ink and steps the em down when that
+    ink would not fit, so the bound below is a design target rather than a promise.
     """
     from PIL import Image, ImageDraw, ImageFont
 
     def ink_h(font, text):
-        im = Image.new("L", (1600, 400), 0)
-        ImageDraw.Draw(im).text((20, 80), text, font=font, fill=255)
+        im = Image.new("L", (2400, 500), 0)
+        ImageDraw.Draw(im).text((20, 200), text, font=font, fill=255)
         bb = im.getbbox()
         return (bb[3] - bb[1]) if bb else 0
 
-    CAPS = "HEXBD"
+    CAPS, TYPICAL, WORST = "HEXBD", "Kitty pane-title overlay", "ÅÉÎÕÜ Kitty gjpqy"
+    BREATHE = 2
     body = ImageFont.truetype(BODY_FONT, BODY_EM)
     b_cap = ink_h(body, CAPS)
     band = cell_h * BAND_CELLS
     em = max(int(band * TYPE_RATIO), 8)
     primary, _symbol, _nd = _faces(em)
-    t_cap = ink_h(primary, CAPS)
-    asc, desc = primary.getmetrics()
+    t_cap, typ, worst = ink_h(primary, CAPS), ink_h(primary, TYPICAL), ink_h(primary, WORST)
     ceiling = 8
-    for e in range(8, 120):                       # the largest em whose asc+desc fits
-        f = _faces(e)[0]
-        a, d_ = f.getmetrics()
-        if a + d_ <= band:
+    for e in range(8, 160):             # the largest em whose WORST-CASE ink still fits
+        if ink_h(_faces(e)[0], WORST) <= band - BREATHE:
             ceiling = e
     print("cell            %d device px   band %d px (%d cell)" % (cell_h, band, BAND_CELLS))
     print("BODY   Monaco   em %-3d  cap %d px" % (BODY_EM, b_cap))
-    print("TITLE  SF %-9s em %-3d  cap %d px   = %.2fx BODY   asc+desc %d <= band %d"
-          % (UI_VARIATION, em, t_cap, t_cap / float(b_cap), asc + desc, band))
+    print("TITLE  SF %-9s em %-3d  cap %d px   = %.2fx BODY" % (UI_VARIATION, em, t_cap,
+                                                                t_cap / float(b_cap)))
+    print("  ink: typical %d px · accented worst case %d px · band %d px (need %d spare)"
+          % (typ, worst, band, BREATHE))
     print("  CEILING for this band: em %d — headroom %d em(s)" % (ceiling, ceiling - em))
     face_ok = os.path.basename(FONT_CANDIDATES[0]) != os.path.basename(BODY_FONT)
-    fits = (asc + desc) <= band
+    fits = worst <= band - BREATHE
     at_ceiling = (ceiling - em) <= 1
     print("VERDICT %s" % (
         "AT THE CEILING for this band, in a register the body does not use"
         if (fits and at_ceiling and face_ok) else
-        "FAILS: %s%s%s" % ("" if fits else "overflows the band; ",
+        "FAILS: %s%s%s" % ("" if fits else "the accented worst case overflows; ",
                            "" if at_ceiling else "em %d is below the ceiling %d; " % (em, ceiling),
                            "" if face_ok else "same face as the body")))
     return 0 if (fits and at_ceiling and face_ok) else 1
