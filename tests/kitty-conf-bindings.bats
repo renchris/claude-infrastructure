@@ -553,6 +553,59 @@ main()
   echo "$output" | grep -q 'inactive=Color(63, 85, 144)' || { echo "$output"; false; }
 }
 
+# A REFUSAL MUST NOT BE INDISTINGUISHABLE FROM AN ANSWER. `_faces` used to fall back to
+# `ImageFont.load_default()` — PIL's ~11px fixed bitmap — when no candidate font opened, and
+# hand it back as though a face had been chosen. Found by a POST-LAND TRACEBACK, not by
+# reading: under fd exhaustion on a loaded box (`OSError: [Errno 24] Too many open files`,
+# load 22) every candidate genuinely failed to open and that branch was reached. It crashed
+# only because PIL's lazy plugin import failed in the same instant; one frame of fd budget
+# later it would have returned the default face and been believed.
+#
+# The two consumers fail in opposite directions and the RENDER one is the dangerous half:
+# `measure` computes its verdict on the wrong subject (loud here, rc 1, but a judgement
+# about a font nobody chose), while `strip_png` DRAWS LIVE PANE HEADERS in that face —
+# silently, no error, in exactly the wrong register the overlay exists to establish. An
+# absent header is a feature that is off; a bitmap header is a feature that looks broken.
+#
+# Both arms are asserted, because arm 1 alone cannot show what the fix prevents.
+@test "no usable face is a REFUSAL, not a verdict computed on a substitute font" {
+  script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
+  run python3 - "$script" <<'PYEOF'
+import importlib.util, sys, io, contextlib
+spec = importlib.util.spec_from_file_location("ov", sys.argv[1])
+ov = importlib.util.module_from_spec(spec); spec.loader.exec_module(ov)
+ov.FONT_CANDIDATES = ["/nonexistent/NoSuchFace.ttf"]
+ov.SYMBOL_FONT = "/nonexistent/NoSuchSymbol.ttc"
+ov._FACES.clear()
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    rc = ov.measure(45)
+out = buf.getvalue()
+assert rc == 3, "expected refusal rc 3, got %r" % rc
+assert "CANNOT MEASURE" in out, "refusal not stated"
+assert "VERDICT UNAVAILABLE" in out, "refusal not labelled as a non-verdict"
+assert "VERDICT BREATHING" not in out and "VERDICT FAILS" not in out, \
+    "LEAK: a number verdict was emitted with no face resolved"
+
+# ARM 2 — restore the pre-fix degrade and require it to behave DIFFERENTLY. Without this
+# the case above is green whether or not the fallback was ever there.
+from PIL import ImageFont
+def old_faces(em, _c={}):
+    if em in _c: return _c[em]
+    f = ImageFont.load_default(); _c[em] = (f, f, None); return _c[em]
+ov._faces = old_faces
+buf2 = io.StringIO()
+with contextlib.redirect_stdout(buf2):
+    ov.measure(45)
+out2 = buf2.getvalue()
+assert "VERDICT" in out2 and "UNAVAILABLE" not in out2, \
+    "CONTROL FAILED — the pre-fix path did not produce a verdict, so this case proves nothing"
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -q '^ok$' || { echo "$output"; false; }
+}
+
 # A LONE PANE IS STILL A PANE. The overlay skipped any tab with fewer than two windows, on the
 # reasoning that one pane needs no disambiguation — which answers a question nobody asked, since the
 # label also says WHAT THE SESSION IS. Operator, 2026-09-14: the chord "doesn't work when there is
