@@ -778,6 +778,40 @@ can ever change it. The tell was free and went unused for two sections: **run a 
 reorder through the same reading.** `move_window left` — which definitely reorders — leaves
 the ls ids untouched.
 
+🚨 **CORRECTED 2026-09-15, AND THE CORRECTION MATTERS MORE THAN THE ORIGINAL FINDING.**
+The sentence above is true of the `windows` ARRAY and was generalised to `kitty @ ls` as a
+whole — "the verdict read from `kitty @ ls` window ORDER" (§ I7) became "ls is blind", and
+the response was to build a screen-reading instrument, two attempts, a synthetic pointer and
+a C program. **`ls` was never blind. Only that one field was.** Each window also carries a
+`neighbors` object — `{left, right, top, bottom}` as window ids — and that IS the layout
+adjacency. Controlled on a throwaway instance before any use, same shape as the control that
+exposed the original error:
+
+```
+before        : 1 L=None R=[2] | 2 L=[1] R=[3] | 3 L=[2] R=None
+move_window L : 1 L=None R=[3] | 2 L=[3] R=None | 3 L=[1] R=[2]   ← the reading MOVES
+restored      : 1 L=None R=[2] | 2 L=[1] R=[3] | 3 L=[2] R=None
+```
+
+So the layout order was readable in one JSON call the whole time, on the operator's LIVE
+windows, without a capture, a flood, or a pointer. **The shape to recognise: a negative
+measured on one FIELD was generalised to the API that exposes it, and the expensive rebuild
+that followed looked like diligence.** This is the same generalisation the rules file records
+twice about `~/.claude/rules/*.md` — a negative measured once got promoted first to the
+SURFACE and then to a VERSION RANGE. When an instrument reads blind, ask which field is
+blind before concluding the source is.
+
+**What it bought.** A watcher over the live `neighbors` graph can witness the operator's own
+hand drag and print the pane that moved with its before/after neighbours — turning the one
+proof a session cannot synthesise from a question into a measurement. **And it has a trap of
+its own, which fired within minutes of arming:** closing a pane makes its two neighbours
+adjacent, so their neighbour strings change, and a differ that tests *moved* before
+*set-changed* reports ordinary churn as `REORDERED` — a FABRICATED confirmation of exactly
+the thing being witnessed. Across 13 live Claude panes that fires every few minutes (4 in the
+first hour). A stable pane set is a PRECONDITION of the word REORDERED, not a detail; test
+the set first, and control the differ (reorder / closed / opened / identical / multi-id
+neighbour list) rather than only the reader.
+
 **The verdict instrument, rebuilt from the screen.** Each pane floods itself with one
 distinct letter, so the left-to-right sequence of letters in a capture IS the layout order.
 It took two attempts, and the first failure is the more instructive:
