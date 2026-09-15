@@ -477,3 +477,51 @@ Two instrument notes, both of which produced a wrong answer first:
   count came out N+2. `min(r,g,b) > 180` separates a near-neutral block glyph from a
   saturated border. The tell was free and should have been read immediately: **the
   detected pane count did not equal the pane count kitty reported.**
+
+### I3 · "now the titles are too large. is there no in between?" — there is, and I had conflated two numbers
+
+§ I1 above shipped a two-cell band and was rejected within the hour. The reply that matters
+is the question: *is there no in between?* § I1 says there is not, and gives the reason —
+*"a placement covers `ceil(h/cell)` rows, so a fractional band leaves row 2 half covered and
+clips the glyph tops of live content. Integer cells."* Every clause of that is true. The
+conclusion does not follow, because the sentence is about **two different numbers wearing
+one name**:
+
+- **COVERAGE** — how many rows the placement spans. Quantised, genuinely: a placement
+  shorter than its rows paints the *top* of the last row, which is exactly where that row's
+  glyphs are, so live content under it reads as clipped.
+- **THE BAND** — how much of that placement is painted the band colour. Nothing constrains
+  this at all.
+
+Cover two whole cells and paint the band for only the first `BAND_FILL_CELLS` of them,
+filling the remainder with the terminal's own `background`. No row is part-painted, nothing
+clips, and the covered-but-unbanded row reads as **a blank line under the header** — which
+is what a header wants under it anyway. The band height is now continuous from one cell to
+two, and the next move in either direction is a one-line change rather than another
+architecture:
+
+| band | em | ink (worst) | ink/band | air/side | cap vs body | |
+|---|---|---|---|---|---|---|
+| 45px | 38 | 42px | 0.93 | **1px** | 0.96x | *"oversized to its boundary container"* |
+| 54px | 40 | 44px | 0.81 | 5px | 1.00x | |
+| **58px** | **41** | **46px** | **0.79** | **6px** | **1.04x** | **is** |
+| 62px | 42 | 46px | 0.74 | 8px | 1.04x | |
+| 68px | 44 | 48px | 0.71 | 10px | 1.11x | |
+| 90px | 46 | 51px | 0.57 | 19px | 1.14x | *"too large"* |
+
+**The acceptance test moved twice, and the second move is the instructive one.** § I1
+replaced a ceiling (`headroom <= 1`) with a **ratio** (`0.45 <= ink/band <= 0.68`). A ratio
+cannot express the choice that is actually on the table: the *same* 0.79 is 6px of air at a
+58px band and 19px at a 90px band, and the 90px band was rejected on sight. What the
+operator named both times is **the gap** — "the text doesn't look oversized to its boundary
+container" — so the gap in **device pixels** is what is asserted now (`air >= 4`, against
+the 1px this shipped with). *When a rule keeps needing new constants, check that it is
+measuring the quantity the complaint is about.*
+
+And the suite had to be corrected a second time in three commits: the case that demanded
+`BAND_CELLS` be a whole integer read that number as **the band's height**, which is what
+made one cell and two the only two headers available. It now pins the pair — the placement
+lands on whole cells, the band fits inside it, and the rows below the band are the ground
+colour rather than band colour. Three mutants, each killing: `TYPE_RATIO` back to 0.845
+(the reported crowding), the placement collapsed onto the band (a part-painted last row),
+and the unbanded rows painted band colour instead of ground.

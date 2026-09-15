@@ -354,33 +354,44 @@ pil_python() {
   run "$PY" "$script" measure
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   echo "$output" | grep -q 'VERDICT BREATHING' || { echo "$output"; false; }
-  # The ratio is printed, so a drift in either direction is visible in the output itself, and
-  # the bound is asserted here too rather than only inside the script that computes it.
-  ratio="$(echo "$output" | sed -n 's/.*INK-TO-BAND: \([0-9.]*\).*/\1/p')"
-  [ -n "$ratio" ] || { echo "no INK-TO-BAND line"; echo "$output"; false; }
-  awk -v r="$ratio" 'BEGIN { exit !(r >= 0.45 && r <= 0.68) }' || {
-    echo "ink-to-band $ratio is outside 0.45-0.68 — crowded above it, lost in the slab below"
+  # AIR IN PIXELS, asserted here and not only inside the script that computes it. This was
+  # a 0.45-0.68 RATIO for one commit, and a ratio cannot express the choice that is actually
+  # available: 0.79 is 6px of air at a 58px band and 19px at a 90px band, and the 90px band
+  # was rejected on sight. The gap is what the eye reads.
+  air="$(echo "$output" | sed -n 's/.*air \([0-9][0-9]*\) px above and below.*/\1/p')"
+  [ -n "$air" ] || { echo "no air figure in the INK-TO-BAND line"; echo "$output"; false; }
+  [ "$air" -ge 4 ] || {
+    echo "only ${air}px of air each side — this shipped at 1px and was reported as the label"
+    echo "looking oversized to its container; 4 is the floor that state fails"
     echo "$output"; false; }
 }
 
-# THE BAND PAYS FOR ITSELF IN COVERED ROWS, so its height is a decision and not an accident.
-# It is also QUANTISED: a placement covers ceil(h/cell) rows, so a fractional band leaves the last
-# row half covered and clips the glyph tops of live content under it. Whole cells only — that is
-# the invariant worth a test, and it is the one that survives the operator changing his mind about
-# how many. Two is the current value (asked for 2026-09-15, "one unit larger"); one was the value
-# before it; the refused extreme was never the band alone, it was two cells at em 58.
-@test "the band is a whole number of cells and the script agrees with itself" {
+# THE PLACEMENT IS QUANTISED; THE BAND IS NOT. That distinction is the whole of the 2026-09-15
+# second round, and this case asserted the conflation for one commit: it demanded BAND_CELLS be a
+# whole number and read that as the band's height, which made one cell and two the only two
+# headers available — 45px was "oversized to its container" and 90px was "too large", with nothing
+# between them. A placement shorter than the rows it spans part-paints the last row and the glyph
+# tops under it read as clipped; that is what must be whole. Everything below the band is painted
+# the terminal's own background, so the covered-but-unbanded row reads as a blank line.
+#
+# So what is pinned is the pair: the placement lands on whole cells, and the band fits inside it.
+@test "the placement is whole cells and the band fits inside it" {
   script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
-  cells="$(sed -n 's/^BAND_CELLS = \([0-9][0-9]*\)$/\1/p' "$script")"
-  [ -n "$cells" ] || { echo "BAND_CELLS is not a plain integer literal — it must be, because a"
-                       echo "fractional band clips the row it half-covers"; false; }
-  [ "$cells" -ge 1 ] && [ "$cells" -le 2 ] || {
-    echo "BAND_CELLS is $cells — 3+ cells covers a third row of live content, which has never"
-    echo "been asked for; raise this bound deliberately if it ever is"; false; }
+  grep -qE '^BAND_FILL_CELLS = [0-9.]+' "$script" || {
+    echo "BAND_FILL_CELLS is gone — the band height must stay a continuous dial, or the only"
+    echo "headers available are one cell and two, both of which were rejected"; false; }
   PY="$(pil_python)" || skip "no interpreter with Pillow"
   run "$PY" "$script" measure
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  echo "$output" | grep -qE "band $((45 * cells)) px \\($cells cell\\)" || { echo "$output"; false; }
+  # measure prints both numbers; the script itself asserts the whole-cell property, and the
+  # regex here pins that it is still REPORTING both rather than collapsing back to one.
+  echo "$output" | grep -qE 'band [0-9]+ px in a [0-9]+ px placement \([12] whole cell\(s\)\)' \
+    || { echo "$output"; false; }
+  echo "$output" | grep -q 'on a whole-cell placement' || { echo "$output"; false; }
+  band="$(echo "$output" | sed -n 's/.*band \([0-9][0-9]*\) px in a.*/\1/p')"
+  cover="$(echo "$output" | sed -n 's/.*in a \([0-9][0-9]*\) px placement.*/\1/p')"
+  [ "$band" -le "$cover" ] || { echo "band $band exceeds its placement $cover"; false; }
+  [ $(( cover % 45 )) -eq 0 ] || { echo "placement $cover is not a whole number of 45px cells"; false; }
 }
 
 # THE KEYPRESS MUST NOT PAY FOR PILLOW. The whole ~0.5s the operator felt was process startup —
@@ -442,17 +453,24 @@ import importlib.util, io, sys
 from PIL import Image
 spec = importlib.util.spec_from_file_location("kto", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-H = 45 * m.BAND_CELLS
+H, C = m.band_geometry(45)
 for t in ("\u25d0 Kitty pane-title overlay refinements",
           "\xc5\xc9\xce\xd5\xdc Kitty gjpqy accented worst case",
           "\u25d1 \xddg\u0135 Q extreme stack",
           "\u2733 CPAP"):
-    im = Image.open(io.BytesIO(m.strip_png(1694, H, t, True))).convert("RGB")
+    im = Image.open(io.BytesIO(m.strip_png(1694, H, t, True, C))).convert("RGB")
     px = im.load()
+    assert im.size[1] == C, "placement is %d px, expected %d" % (im.size[1], C)
+    # only the BAND rows are searched for ink: below it the strip is ground by design, and
+    # searching there would read every pixel of the blank row as "ink touching the edge".
     rows = [y for y in range(H) if any(px[x, y] != m.BAND_LIVE for x in range(0, 1694, 2))]
     assert rows, "no ink at all for %r" % t
     assert rows[0] >= 1 and rows[-1] <= H - 2, \
         "ink %d..%d touches the band edge for %r" % (rows[0], rows[-1], t)
+    # and the covered-but-unbanded rows must be the terminal ground, not band colour —
+    # that is what makes the row read as blank instead of as a half-painted header.
+    for y in range(H, C):
+        assert px[4, y] == m.GROUND, "row %d below the band is %r, not the ground" % (y, px[4, y])
 print("ok")
 PYEOF
   [ "$status" -eq 0 ] || { echo "$output"; false; }
