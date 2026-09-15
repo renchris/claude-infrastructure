@@ -179,7 +179,29 @@ IMG_BASE = 7100                  # image ids we own; never collides with a user'
 # type cannot be the thing that makes a header, so the header is carried by REGISTER (a
 # proportional semibold against a monospace body) and by the band's colour. Size was never
 # the free dial it looked like.
-BAND_CELLS = 1
+#
+# ── REVERSED 2026-09-15, BY THE OPERATOR, AND THE PARAGRAPH ABOVE IS KEPT AS THE RECORD ──
+# "one unit larger, the band and the text together, so the text doesn't look oversized to
+# its boundary container." The paragraph above is not wrong about what it measured; it is
+# wrong about what it CONCLUDED, and the flaw is named in its own last line. Pinning the em
+# to the cell's ink ceiling made ink/band 0.93 — the type stands 1px off both edges — which
+# is the crowding he is describing. The comparison that sent the band back to one cell was
+# "a two-cell band with SMALLER type", rendered and rejected on MY taste; a two-cell band
+# with MODESTLY LARGER type was never rendered for him at all. It is now (scratchpad
+# hdr/grid.py, seven candidates at 1:1 over real Monaco body):
+#
+#     cand    band      em   ink(worst)  worst/band   cap/body
+#     1:38    1c/45px   38     42          0.93         0.96     ← was: crowded
+#     2:42    2c/90px   42     46          0.51         1.04
+#     2:46    2c/90px   46     51          0.57         1.14     ← is
+#     2:50    2c/90px   50     57          0.63         1.29
+#     2:58    2c/90px   58     66          0.73         1.46     ← "way too big"
+#
+# Two cells is the only step available: a placement covers ceil(h/cell) rows, so a 1.5-cell
+# band leaves row 2 half covered and clips the glyph tops of live content. Integer cells.
+# The refused 2:58 is four steps away, and the type is now unambiguously ABOVE the body
+# rather than level with it, which is the other half of what "larger" was asking for.
+BAND_CELLS = 2
 
 # A HEADER MUST BE A DIFFERENT REGISTER, not just a different size. Matching the body's
 # Monaco exactly made it read as more body text — "the font size/style/placement is still
@@ -194,7 +216,7 @@ BAND_CELLS = 1
 # falls back silently to Regular if that ever fails.
 UI_FONT      = "/System/Library/Fonts/SFNS.ttf"
 UI_VARIATION = "Semibold"
-TYPE_RATIO   = 0.845             # of the BAND height: em 38 at a 45px cell.
+TYPE_RATIO   = 0.512             # of the BAND height: em 46 at a 90px (2-cell) band.
                                  #
                                  # THE OLD BOUND WAS THE FONT'S, NOT THE INK'S. Sizing by
                                  # `ascent + descent <= band` capped this at em 37 and was
@@ -209,6 +231,17 @@ TYPE_RATIO   = 0.845             # of the BAND height: em 38 at a 45px cell.
                                  # ceiling — ONE unit above the old bound, and the last
                                  # one that holds for EVERY string rather than only the
                                  # ones that happen to carry no accent.
+                                 #
+                                 # THAT CEILING IS STILL THE RIGHT NUMBER AND IS NO LONGER
+                                 # THE RIGHT TARGET (2026-09-15). A ceiling is where type
+                                 # stops being safe, not where a header should sit: at the
+                                 # ceiling the label touches its own band, which is the
+                                 # crowding the operator named. This ratio now buys AIR on
+                                 # purpose — em 46 in a 90px band, accented worst case 51px,
+                                 # so ~19px of band above and below the ink. The em is still
+                                 # bounded by the same ink rule below, which is what keeps
+                                 # a pathological title from clipping; it simply is not
+                                 # pressed against it any more.
                                  #
                                  # Going past the metrics box is only safe because the
                                  # baseline is now solved from the ACTUAL string's ink
@@ -337,7 +370,12 @@ def strip_png(width, band_h, text, live=False):
     FG = INK_LIVE if live else INK_IDLE
     em = max(int(H * TYPE_RATIO), 8)
     primary, symbol, notdef = _faces(em)
-    pad = max(int(H * 0.21), 8)               # inset; keeps the label off the pane edge
+    # THE INSET IS A PROPERTY OF THE CELL, NOT OF THE BAND. It was `H * 0.21`, which is
+    # the same 9px while the band was one cell and silently became 18px the moment the band
+    # became two — doubling a horizontal margin because a VERTICAL dimension changed, and
+    # walking the label out of alignment with the body text under it. Divide the band back
+    # down to its cell first.
+    pad = max(int((H / max(BAND_CELLS, 1)) * 0.21), 8)   # inset; keeps the label off the edge
     faces = [(ch, _face_for(ch, primary, symbol, notdef)) for ch in text]
 
     def measure(seq):
@@ -445,23 +483,41 @@ def measure(cell_h=45):
     for e in range(8, 160):             # the largest em whose WORST-CASE ink still fits
         if ink_h(_faces(e)[0], WORST) <= band - BREATHE:
             ceiling = e
+    ratio = worst / float(band)
     print("cell            %d device px   band %d px (%d cell)" % (cell_h, band, BAND_CELLS))
     print("BODY   Monaco   em %-3d  cap %d px" % (BODY_EM, b_cap))
     print("TITLE  SF %-9s em %-3d  cap %d px   = %.2fx BODY" % (UI_VARIATION, em, t_cap,
                                                                 t_cap / float(b_cap)))
     print("  ink: typical %d px · accented worst case %d px · band %d px (need %d spare)"
           % (typ, worst, band, BREATHE))
+    print("  INK-TO-BAND: %.2f  (air %d px above and below the worst case)"
+          % (ratio, (band - worst) // 2))
     print("  CEILING for this band: em %d — headroom %d em(s)" % (ceiling, ceiling - em))
+    # THE TARGET IS AIR, NOT THE CEILING (2026-09-15). This used to demand `headroom <= 1`,
+    # i.e. it asserted the exact crowding the operator then asked us to remove — a test
+    # pinning the defect as the contract. The ceiling is still computed and printed, because
+    # it is the bound that keeps a pathological title from clipping; it is no longer the
+    # target. A header's label wants somewhere around half its band: below BREATHES_LO it is
+    # a lost line in a slab, above BREATHES_HI it is pressed against its own container.
+    BREATHES_LO, BREATHES_HI = 0.45, 0.68
+    OUTRANKS = 1.05                     # the label must be LARGER than the body, not level
     face_ok = os.path.basename(FONT_CANDIDATES[0]) != os.path.basename(BODY_FONT)
     fits = worst <= band - BREATHE
-    at_ceiling = (ceiling - em) <= 1
+    breathes = BREATHES_LO <= ratio <= BREATHES_HI
+    outranks = (t_cap / float(b_cap)) >= OUTRANKS
     print("VERDICT %s" % (
-        "AT THE CEILING for this band, in a register the body does not use"
-        if (fits and at_ceiling and face_ok) else
-        "FAILS: %s%s%s" % ("" if fits else "the accented worst case overflows; ",
-                           "" if at_ceiling else "em %d is below the ceiling %d; " % (em, ceiling),
-                           "" if face_ok else "same face as the body")))
-    return 0 if (fits and at_ceiling and face_ok) else 1
+        "BREATHING (ink %.2f of band, in %.2f-%.2f) and OUTRANKING the body (%.2fx), in a "
+        "register the body does not use" % (ratio, BREATHES_LO, BREATHES_HI,
+                                            t_cap / float(b_cap))
+        if (fits and breathes and outranks and face_ok) else
+        "FAILS: %s%s%s%s" % (
+            "" if fits else "the accented worst case overflows; ",
+            "" if breathes else "ink is %.2f of the band, outside %.2f-%.2f; " % (
+                ratio, BREATHES_LO, BREATHES_HI),
+            "" if outranks else "the label is %.2fx the body cap, not above %.2fx; " % (
+                t_cap / float(b_cap), OUTRANKS),
+            "" if face_ok else "same face as the body")))
+    return 0 if (fits and breathes and outranks and face_ok) else 1
 
 
 # ───────────────────────────── talking to kitty ──────────────────────────────

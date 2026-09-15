@@ -328,6 +328,18 @@ main()
 # nothing is left on the table: the em is at the largest that fits, and the face is not the body's,
 # which is what makes this read as a header at all. `measure` uses the script's OWN renderer, so it
 # cannot drift from what is drawn.
+#
+# ── THE TWO CASES BELOW WERE INVERTED 2026-09-15; THE PARAGRAPH ABOVE IS KEPT AS THE RECORD ──
+# They asserted `headroom <= 1` and `BAND_CELLS == 1`: between them they pinned the type AGAINST
+# its own band (ink 0.93 of band, 1px of air) as the contract. The operator then asked for exactly
+# that to be removed — "one unit larger, the band and the text together, so the text doesn't look
+# oversized to its boundary container" — so the suite demanded the state the cure had to delete,
+# and would have blocked it. Note WHY the old reasoning held: its decisive comparison was "a
+# two-cell band with SMALLER type", which is a real finding and still true; a two-cell band with
+# MODESTLY LARGER type was never in that comparison. It was rendered at 1:1 on 2026-09-15 across
+# seven candidates and it is what shipped. What is pinned now is the proportion, in both
+# directions — the label must OUTRANK the body and must NOT touch its band — because those are the
+# two ways this has actually been wrong, three rounds in one direction and one in the other.
 pil_python() {
   for c in /usr/local/bin/python3 /opt/homebrew/bin/python3 /usr/bin/python3; do
     [ -x "$c" ] || continue
@@ -336,27 +348,39 @@ pil_python() {
   return 1
 }
 
-@test "the title type is at the band's ceiling, in a register the body does not use" {
+@test "the title type breathes inside its band and outranks the body, in another register" {
   script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
   PY="$(pil_python)" || skip "no interpreter with Pillow"
   run "$PY" "$script" measure
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  echo "$output" | grep -q 'VERDICT AT THE CEILING' || { echo "$output"; false; }
-  # headroom is stated, so a silent shrink is visible in the output itself
-  echo "$output" | grep -qE 'CEILING for this band: em [0-9]+ — headroom [01] em' || { echo "$output"; false; }
+  echo "$output" | grep -q 'VERDICT BREATHING' || { echo "$output"; false; }
+  # The ratio is printed, so a drift in either direction is visible in the output itself, and
+  # the bound is asserted here too rather than only inside the script that computes it.
+  ratio="$(echo "$output" | sed -n 's/.*INK-TO-BAND: \([0-9.]*\).*/\1/p')"
+  [ -n "$ratio" ] || { echo "no INK-TO-BAND line"; echo "$output"; false; }
+  awk -v r="$ratio" 'BEGIN { exit !(r >= 0.45 && r <= 0.68) }' || {
+    echo "ink-to-band $ratio is outside 0.45-0.68 — crowded above it, lost in the slab below"
+    echo "$output"; false; }
 }
 
 # THE BAND PAYS FOR ITSELF IN COVERED ROWS, so its height is a decision and not an accident.
-# Two cells was shipped once and rejected on sight; one is the resting value and the ratio below
-# it must stay a value that FILLS that cell, not one that rattles around in it.
-@test "the band is one cell and the type ratio fills it" {
+# It is also QUANTISED: a placement covers ceil(h/cell) rows, so a fractional band leaves the last
+# row half covered and clips the glyph tops of live content under it. Whole cells only — that is
+# the invariant worth a test, and it is the one that survives the operator changing his mind about
+# how many. Two is the current value (asked for 2026-09-15, "one unit larger"); one was the value
+# before it; the refused extreme was never the band alone, it was two cells at em 58.
+@test "the band is a whole number of cells and the script agrees with itself" {
   script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
-  grep -qE '^BAND_CELLS = 1$' "$script" || {
-    echo "BAND_CELLS is no longer 1 — a taller band covers more rows and was refused once"; false; }
+  cells="$(sed -n 's/^BAND_CELLS = \([0-9][0-9]*\)$/\1/p' "$script")"
+  [ -n "$cells" ] || { echo "BAND_CELLS is not a plain integer literal — it must be, because a"
+                       echo "fractional band clips the row it half-covers"; false; }
+  [ "$cells" -ge 1 ] && [ "$cells" -le 2 ] || {
+    echo "BAND_CELLS is $cells — 3+ cells covers a third row of live content, which has never"
+    echo "been asked for; raise this bound deliberately if it ever is"; false; }
   PY="$(pil_python)" || skip "no interpreter with Pillow"
   run "$PY" "$script" measure
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  echo "$output" | grep -qE 'band 45 px \(1 cell\)' || { echo "$output"; false; }
+  echo "$output" | grep -qE "band $((45 * cells)) px \\($cells cell\\)" || { echo "$output"; false; }
 }
 
 # THE KEYPRESS MUST NOT PAY FOR PILLOW. The whole ~0.5s the operator felt was process startup —
