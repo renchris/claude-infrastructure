@@ -174,6 +174,56 @@ COMPOSE_BODY_KEYS = ("body", "toRecipients", "ccRecipients", "bccRecipients", "s
 # have started failing open the moment it moved into R1b.
 TRANSMITTING_TOOLS = set(SEND_TOOLS) | {"mcp__ms365__send-draft-message"}
 
+# --- R1c: A BATCH MAY ONLY READ -------------------------------------------------
+# graph-batch (POST /$batch) forwards up to 20 raw Graph requests in ONE tool call. Every
+# named write tool above is reachable inside it — /me/sendMail, /me/messages/{id}/send,
+# createReply, createForward — so a single batched POST transmits mail with no named tool
+# in the payload and no guard in its path. R1 is ABSOLUTE for the four send tools; without
+# this arm it was one indirection away from optional.
+#
+# BOTH dialects, and ONLY this server. Claude Code spells an MCP tool
+# mcp__<server>__<tool>; the Copilot CLI spells it <server>-<tool>. Another server's
+# graph-batch is not this mailbox and is deliberately untouched — the set is exact
+# names, never a `graph-batch` suffix match.
+MS365_BATCH_TOOLS = {"mcp__ms365__graph-batch", "ms365-graph-batch"}
+
+# Where the server's schema puts the request list, and where a passthrough schema lets it
+# arrive instead. Both are accepted, and the FIRST one present decides — a payload that
+# carries a readable list under one key is judged on that list.
+BATCH_REQUEST_KEYS = (("body", "requests"), ("requests",))
+
+
+def batch_reads_only(tool_input) -> bool:
+    """True iff the batch's request list is readable, non-empty, and every method is GET.
+
+    FAIL CLOSED, deliberately, and only for this one tool: an unreadable, empty or missing
+    list returns False. This is the inverse of the file's default posture because the thing
+    being judged is the same irreversible send R1 refuses outright — and unlike a formatting
+    rule, "I could not parse it" here means "I do not know whether this transmits". Graph
+    reads the method case-insensitively, so a lowercase `post` is a post.
+    """
+    if not isinstance(tool_input, dict):
+        return False
+    for key_path in BATCH_REQUEST_KEYS:
+        node = tool_input
+        for key in key_path:
+            if not isinstance(node, dict):
+                node = None
+                break
+            node = node.get(key)
+        if not isinstance(node, list):
+            continue
+        if not node:
+            return False
+        for req in node:
+            if not isinstance(req, dict):
+                return False
+            method = req.get("method")
+            if not isinstance(method, str) or method.strip().upper() != "GET":
+                return False
+        return True
+    return False
+
 # WHAT COUNTS AS A TURN BOUNDARY — and why the OBVIOUS predicate is the WRONG one here.
 # hooks/lib/session-writes.sh treats any main-chain `user` record without a tool_result as a
 # boundary, and deliberately counts `isMeta` records, which include Stop-hook `decision:block`
@@ -909,6 +959,30 @@ def main():
             "draft the operator actually named."
         )
 
+    # ── R1c: A BATCH MAY ONLY READ ────────────────────────────────────────────────
+    # Same placement rationale as R1 and R1b, and for the same reason: above the kill
+    # switch and above GATED_TOOLS scoping, because what it prevents cannot be undone. A
+    # batched POST /me/sendMail is a send — the fact that no send tool appears in the
+    # payload is exactly what makes it worth guarding.
+    if tool_name in MS365_BATCH_TOOLS:
+        if not batch_reads_only(tool_input):
+            deny(
+                "BLOCKED (R1c, batch reads only): graph-batch was refused because it "
+                "carries a request that is not a GET, or a request list this guard cannot "
+                "read. A batched POST reaches /me/sendMail, /me/messages/{id}/send, reply "
+                "and forward — every write — without the checks the named tools get, so "
+                "one batch would make R1 optional. BATCH READS ONLY, and make a write with "
+                "its own tool: compose mail as a draft with create-draft-email (or "
+                "create-reply-draft / create-reply-all-draft / create-forward-draft) and "
+                "let the operator send it. An unreadable or empty request list is denied "
+                "rather than allowed: here 'I cannot parse it' means 'I cannot tell "
+                "whether this transmits', and a Graph send cannot be recalled."
+            )
+        allow(
+            "R1c — graph-batch carrying only GETs (reads are fine). Any non-GET request in "
+            "a batch is refused: make writes with their own named tool, mail as a draft."
+        )
+
     # Bookkeeping BEFORE the scoping check: the read tools that satisfy R4 are not in
     # GATED_TOOLS and would exit at the next branch, so recording below it would mean the
     # gate never observed a single inbound read and denied every draft forever.
@@ -1183,7 +1257,13 @@ if __name__ == "__main__":
         # into R1b (2026-09-08) this line silently began failing OPEN for it: a crash during a
         # send-draft-message call would have transmitted. The crash path must key on "does this
         # payload transmit", which is a strictly wider question than "is this denied outright".
-        if any(t in (_RAW_PAYLOAD or "") for t in TRANSMITTING_TOOLS):
+        # MS365_BATCH_TOOLS joins TRANSMITTING_TOOLS here because a crash on a batch is
+        # the same state R1c denies on: the request list could not be read, so whether it
+        # transmits is unknown. Failing open there would hand back the exact bypass R1c
+        # closes. The cost is that a read-only batch is refused while the hook is broken,
+        # which is recoverable; a batched send is not.
+        _crash_batch = any(t in (_RAW_PAYLOAD or "") for t in MS365_BATCH_TOOLS)
+        if _crash_batch or any(t in (_RAW_PAYLOAD or "") for t in TRANSMITTING_TOOLS):
             print(
                 json.dumps(
                     {
@@ -1191,6 +1271,11 @@ if __name__ == "__main__":
                             "hookEventName": "PreToolUse",
                             "permissionDecision": "deny",
                             "permissionDecisionReason": (
+                                f"BLOCKED (R1c, batch reads only): the email guard crashed "
+                                f"({exc}) on a graph-batch, so whether it carries a write "
+                                f"could not be determined. Denying rather than failing "
+                                f"open. Batch reads only; make writes with their own tool."
+                                if _crash_batch else
                                 f"BLOCKED (R1, drafts only): the email guard crashed "
                                 f"({exc}) on a call that would TRANSMIT mail. Denying "
                                 f"rather than failing open — a Graph send cannot be "
