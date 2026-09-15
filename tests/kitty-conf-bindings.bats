@@ -484,11 +484,24 @@ PYEOF
 # `toggle_window_title_bars` (the test above pins that, and must keep pinning it), which means the
 # action has to live on some OTHER chord or the gesture does not exist at all. That is the hole
 # this test fills: the previous suite asserted only where the action must NOT be.
-@test "the re-order drag survives — toggle_window_title_bars is bound, on its own chord" {
+@test "the re-order drag survives — ⌘⌥B clears the overlay, then toggles the real bars" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  echo "$output" | grep -qx 'cmd_opt_b_last=toggle_window_title_bars' || {
+  # ENDS IN the built-in. This was an exact-match on `cmd_opt_b_last=toggle_window_title_bars`,
+  # which pinned the chord as a BARE action and so forbade the fix for the defect it was meant
+  # to protect: with the overlay also on, kitty's real bar and the overlay strip stack — two
+  # labels of the same text, and the operator grabs the lower one, which is a graphics
+  # placement and is not in kitty's hit-test. The drag was never broken; the wrong thing was
+  # being dragged. What must hold is that the chord still ARRIVES at the built-in.
+  echo "$output" | grep -qE '^cmd_opt_b_last=.*toggle_window_title_bars$' || {
     echo "the window title bars are not bound — drag-to-reorder is GONE, not merely unstyled"
+    echo "$output"; false; }
+  # …and that it wipes the overlay FIRST, so exactly one bar is on screen and it is the one
+  # the mouse can grab. Order matters: after the toggle it would clear a strip that the hold
+  # loop has already re-asserted over the new layout.
+  echo "$output" | grep -qE '^cmd_opt_b_last=combine :.*kitty-pane-title-overlay\.py off.*: toggle_window_title_bars$' || {
+    echo "⌘⌥B no longer clears the overlay before showing the real bars — the two stack, and"
+    echo "the operator grabs the painted one, which can never drag"
     echo "$output"; false; }
   # and it is a DIFFERENT chord from the overlay, which must stay zero-shift
   if echo "$output" | grep -qx 'cmd_shift_b_last=toggle_window_title_bars'; then
