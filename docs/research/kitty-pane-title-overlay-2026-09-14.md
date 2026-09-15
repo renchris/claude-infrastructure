@@ -525,3 +525,64 @@ lands on whole cells, the band fits inside it, and the rows below the band are t
 colour rather than band colour. Three mutants, each killing: `TYPE_RATIO` back to 0.845
 (the reported crowding), the placement collapsed onto the band (a part-painted last row),
 and the unbanded rows painted band colour instead of ground.
+
+### I4 · The uneven gutters were never the padding — they are unequal COLUMNS, and ⌘⇧E already cures them
+
+§ H diagnosed the wide gaps as sub-cell leftover and shipped `window_padding_width 10 7 ->
+10 5` against it. § I2 corrected its predicted range and kept the diagnosis. Both are
+wrong, and the instrument that produced them is the reason.
+
+**The probe was building a geometry the operator does not have.** `launch
+--location=vsplit` splits the CURRENT pane, so six launches give columns
+**77,38,18,8,3,3** — a halving cascade — and every gutter figure in § I2 describes that.
+Re-run with kitty's `horizontal` layout, which is what "N vertical splits" means on screen:
+
+| padding | N=2 | N=3 | N=4 | N=5 | N=6 | spread |
+|---|---|---|---|---|---|---|
+| 10 7 | 32 | 32,32 | 32,32,32 | 32,32,32,32 | 32,32,32,32,32 | **0** |
+| 10 5 | 24 | 24,24 | 24,24,24 | 24,24,24,24 | 24,24,24,24,24 | **0** |
+
+**On equal columns the gutters were always uniform, at every split count, at either
+padding.** Kitty absorbs the remainder by handing whole extra COLUMNS to panes
+(50,50,52 · 29,29,29,29,33), not by leaving pixels in the gutter, which is what the
+leftover model assumed.
+
+Measured on the operator's own live windows with an exact ruler — the overlay's title
+strips are solid blocks exactly one pane wide, so a band run IS a pane's content and a gap
+IS a gutter, which is immune to the text-sparsity that made the first live reading
+(54,54 -> 32,31) unreliable:
+
+```
+3 panes · content 1078,1078,1078 · GUTTERS 42,42 · spread 0 · margins 21/21
+```
+
+…and **identical at padding 7 and at padding 5**, one variable, frames verified distinct.
+The 8 device px the change frees per pane is less than one 22px cell, so no pane gains a
+column and the leftover absorbs all of it. **The landed padding change is a no-op on his
+actual windows.** (It is kept: after equalising it gives 26px gutters against 32px, and one
+more column per pane in some regimes. It is simply not the fix it was landed as.)
+
+**Where the complaint does reproduce, and what actually cures it:**
+
+```
+cascade (repeated ⌘D)        columns 77,38,18,8,3,3   gutters 31,32,38,41,42   spread 11
+layout_action equalize       columns 25,25,25,25,25,25 gutters 26,26,26,26,26   spread  0
+```
+
+`map cmd+shift+e layout_action equalize` has been in `config/kitty.conf` since before any
+of this. The uneven gaps are unequal column widths, they are what repeated ⌘D produces by
+construction, and ⌘⇧E removes them completely. Nothing needed building.
+
+**Two levers swept and refuted along the way**, both at his real window width with a
+distinctness control per arm: `placement_strategy top-left` moves each pane's leftover from
+both sides to one and makes the cascade spread **worse** (14 against 11) — the render
+agreeing with § H's arithmetic; `window_border_width 0` buys nothing to N=4 and is worse at
+N=6 (18). `draw_minimal_borders yes` is a wash costing a pixel everywhere.
+
+**The lesson is the one this file keeps relearning in a new costume.** A model that
+reproduces a *correlated* observable — here kitty's column counts, 77/50/29, exactly — reads
+as validated, and its actual prediction was never checked against a render. When it finally
+was, the number was wrong (§ I2). When the *geometry* was finally checked, the mechanism was
+wrong too. **Reproduce the user's own geometry before measuring anything in it**: the probe
+and the operator's screen differed in the one axis that decides the answer, and nothing in
+either reading announced that.
