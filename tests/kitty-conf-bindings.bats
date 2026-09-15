@@ -316,3 +316,85 @@ main()
   echo "$output" | grep -qx 'ctrl_shift_w_last=close_window' || { echo "$output"; false; }
   echo "$output" | grep -qx 'cmd_shift_w_last=close_os_window' || { echo "$output"; false; }
 }
+
+# ── the overlay's two 2026-09-14 refinements: size, and the keypress budget ──────────────
+#
+# THE SIZE COMPLAINT WAS NEVER A STYLING COMPLAINT, and three rounds were spent styling it. At
+# one cell the LARGEST SF Pro that fits a 45px cell renders capitals at 0.96x the body's, so a
+# one-cell strip cannot be a header at all — it can only ever be body-sized or smaller, whatever
+# face, weight or tracking it uses. `measure` prints that ceiling beside the shipped size so the
+# next person cannot re-open the question from taste. It is the script's OWN renderer, not a
+# re-implementation, so it cannot drift away from what is drawn.
+pil_python() {
+  for c in /usr/local/bin/python3 /opt/homebrew/bin/python3 /usr/bin/python3; do
+    [ -x "$c" ] || continue
+    if "$c" -c 'import PIL' 2>/dev/null; then echo "$c"; return 0; fi
+  done
+  return 1
+}
+
+@test "the title is LARGER than the body text it labels" {
+  script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
+  PY="$(pil_python)" || skip "no interpreter with Pillow"
+  run "$PY" "$script" measure
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -q 'VERDICT LARGER THAN BODY' || { echo "$output"; false; }
+  # and the ratio is stated, so a regression to body-size is visible in the output itself
+  echo "$output" | grep -qE 'cap [0-9]+ px   = [1-9]\.[0-9]{2}x BODY' || { echo "$output"; false; }
+}
+
+@test "a one-cell strip could never have satisfied it — the band must be taller than a cell" {
+  script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
+  PY="$(pil_python)" || skip "no interpreter with Pillow"
+  run "$PY" "$script" measure
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -qE 'CEILING at one cell: .* = 0\.[0-9]{2}x BODY' || {
+    echo "the one-cell ceiling is no longer below body size — re-derive BAND_CELLS"; echo "$output"; false; }
+  grep -qE '^BAND_CELLS = [2-9]' "$script" || { echo "BAND_CELLS regressed to one cell"; false; }
+}
+
+# THE KEYPRESS MUST NOT PAY FOR PILLOW. The whole ~0.5s the operator felt was process startup —
+# interpreter, a re-exec into a Pillow-capable python, the PIL import, `kitty @ ls`, the first
+# `ps` — and none of it was work. The client half therefore imports os and sys and nothing else
+# at module scope, and reaches the daemon over a unix socket. A stray top-level `from PIL import`
+# or `import subprocess` would silently put ~60ms back on every press with no visible symptom.
+@test "the keypress path imports nothing but os and sys at module scope" {
+  script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
+  run python3 -c '
+import ast, sys
+tree = ast.parse(open(sys.argv[1]).read())
+bad = []
+for n in tree.body:
+    if isinstance(n, ast.Import):
+        bad += [a.name for a in n.names if a.name not in ("os", "sys")]
+    elif isinstance(n, ast.ImportFrom):
+        bad.append(n.module or "?")
+print(" ".join(bad))
+' "$script"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -z "$output" ] || { echo "module-scope imports beyond os/sys: $output"; false; }
+}
+
+# A STALE pid->tty MAPPING DOES NOT DEGRADE, IT PAINTS INTO A STRANGER'S TERMINAL. This code's
+# output is raw escape sequences written into a device file, and pids are reused within minutes.
+# So the cache is keyed by (pane_id, pid) — which a reused pid alone cannot re-mint — and pruned
+# to the panes kitty just listed, so a returning pid is re-resolved rather than answered from
+# memory. Asserted against the real function, with a hand-built cache entry standing in for the
+# dead pane.
+@test "the tty cache is keyed by pane AND pid, and pruned to the panes kitty just listed" {
+  script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
+  PY="$(pil_python)" || skip "no interpreter with Pillow"
+  run "$PY" - "$script" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("kto", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+# a pane that has died, whose pid is about to be reused by a different pane
+m._TTY_CACHE[(11, 4242)] = "/dev/ttys099"
+out = m.pane_ttys([{"id": 12, "pid": 4242}])       # same pid, NEW pane id
+assert (11, 4242) not in m._TTY_CACHE, "dead pane kept its tty in the cache"
+assert out.get((12, 4242)) != "/dev/ttys099", "a reused pid inherited the dead pane's tty"
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -q '^ok$' || { echo "$output"; false; }
+}

@@ -240,3 +240,99 @@ wired up.
 **Live config is therefore REVERTED to the known-good state** (`window_padding_width 10 7`,
 `map cmd+shift+b toggle_window_title_bars`). The script is committed unwired, with its derivation,
 so the next session can finish the two checks above rather than re-derive the idea.
+
+---
+
+## H — the two ceilings that were never ceilings (2026-09-14, after C shipped)
+
+C shipped and the operator refused it three more times, on the same two axes both times:
+**"too small"** and **"still too subtle"**. Each round restyled inside a 45px cell and each round
+lost, because both complaints were about limits that had been ASSUMED rather than measured.
+
+### H1. A placement is sized in PIXELS. One cell was never the ceiling.
+
+Every version through `8778b4ff6` rendered a strip exactly one cell tall, because row 1 is what the
+placement anchors to. That is not what the protocol says and not what kitty does: an image occupies
+`ceil(h / cell_h)` rows and is drawn at its full pixel height. Measured against the live terminal —
+a 90px strip on a 45px cell rendered **90px**, ink-measured off the capture at rows 22..111.
+
+This is the whole of the size complaint, and it is arithmetic rather than taste:
+
+```
+$ scripts/kitty-pane-title-overlay.py measure
+cell            45 device px   band 90 px (2 cells)
+BODY   Monaco   em 36   cap 28 px
+TITLE  SF Semibold  em 58   cap 41 px   = 1.46x BODY   asc+desc 70 <= band 90
+  CEILING at one cell: em 37 (the largest that fits 45px) -> cap 27 px = 0.96x BODY
+```
+
+**At one cell the best attainable header is 0.96x the body's cap height.** Not the shipped 0.86x —
+the *ceiling*, at the largest em that fits, in any face. So no restyling inside a cell could ever
+have produced a header, and three rounds were spent looking for one. The band is now `BAND_CELLS =
+2` and the label is 1.46x the body. The cost is honest and bounded: while the toggle is up, two rows
+are covered instead of one. Nothing moves — pane `lines` measured identical with titles on and off
+across all 8 panes.
+
+`measure` is a subcommand of the script itself, using the script's own renderer, so it cannot drift
+from what is drawn; two bats tests assert the verdict and the one-cell ceiling, both mutation-checked.
+
+### H2. SF Pro has no ✳ ◐ ◑ ✻ ✶ — and every pane title starts with one.
+
+Read out of the real cmaps: those five are absent from `SFNS.ttf` and present in `Menlo.ttc`. PIL
+does not raise on a missing glyph, it draws `.notdef` — a striped box — so this survived two
+restyles and was only visible once a strip was rendered at 1:1 and looked at. **Neither of the two
+obvious coverage tests works**: `getmask` returns ink for `.notdef`, and `getlength` returns an
+ordinary advance. The test that does work needs no `fontTools`: render `U+E000` (private use, which
+no font carries), keep its bitmap, and compare. Characters that match it are drawn from Menlo
+instead, cap-height-matched and set on a shared baseline (`anchor="ls"`).
+
+### H3. Vibrancy is a FOCUS budget, not a brightness knob.
+
+Four idle candidates were rendered beside the live band before choosing. Seven loud bands say
+nothing, so the chroma is spent on the one pane that is live: `#2f62d8` is kitty's own
+`active_border_color` hue at full chroma, so the focused strip and the focused border are the same
+blue. Idle is `#3f5590` — blue rather than grey, 2.30:1 over the ground, and it loses to the live
+band on both brightness and saturation.
+
+### H4. The 0.5s chord was startup, so the fix is a daemon — not a faster path.
+
+Measured, per press: interpreter ~20ms, re-exec into a Pillow-capable python ~20ms, PIL import
+~40ms, `kitty @ ls` ~30ms, the first `ps` ~95ms, then ~11ms of PIL per pane. **The tty write is
+1.5ms for eight panes.** There was nothing to shave; the work was already free and the startup was
+the whole bill.
+
+So a daemon holds the pane list and the rendered strips warm, and the chord becomes a unix-socket
+message plus that 1.5ms write. Measured on this machine:
+
+| | before | after |
+|---|---|---|
+| client process, warm daemon | — | **p50 33.7 ms**, p90 36.3, max 38.4 (n=24) |
+| end to end, stamped by the launched process | ~500 ms | **p50 46.7 ms**, max 63.5 (n=10) |
+
+The end-to-end figure still includes a `/bin/sh` the real binding does not spawn, and excludes only
+the 27.8ms `kitty @` remote-control CLI, which a keypress genuinely never pays (kitty's own internal
+fork/exec measured ~3ms, as `launch background /usr/bin/true` minus `ls`).
+
+Three design points are load-bearing:
+
+* **No pidfile.** A dead daemon leaves its socket FILE behind and `connect()` to it fails instantly
+  with `ECONNREFUSED`, so staleness is self-detecting. The alternative — validate a pid's start time
+  with `ps` — costs 95ms, more than the entire budget it was meant to protect.
+* **The refresh runs on its own thread.** Putting it on the accept loop only MOVES the cost:
+  measured, one press in five landed mid-refresh and took **293ms** against 40ms for the rest.
+* **The tty cache is keyed by `(pane_id, pid)` and pruned to the panes kitty just listed.** This
+  code writes raw escape sequences into a device file and pids are reused within minutes; a stale
+  mapping does not degrade, it paints into a stranger's terminal. A reused pid alone cannot re-mint
+  a `(pane_id, pid)` pair, and pruning forces a returning pid to be re-resolved.
+
+### H5. Method — the stale-frame trap fired again, and it fired on the SUCCESS this time
+
+`screencapture -l <window>` on a window macOS is not compositing returns a **frozen frame and exit
+0**. It cost two rounds earlier in this work; here it nearly produced a false *negative* — three
+captures after an `off` showed the strips still up, byte-identical to the capture taken before it,
+and the honest reading was "off is broken". They were the same frozen frame. A live capture taken
+while kitty was genuinely frontmost showed **zero band pixels**.
+
+**Never trust a single capture. Pair it with a liveness control** — two captures separated in time
+that MUST differ (a spinner, a clock, a deliberate change) — and treat identical bytes as *no
+information*, never as *no change*.
