@@ -825,3 +825,57 @@ whether the thing being read could express the answer. A one-line control — dr
 reorder, require the reading to move — would have caught it before either section was
 written, and before an upstream-mechanism story (`NSDraggingSession` cannot be synthesised)
 was constructed to explain a result that was an artifact.
+
+### I10 · Why it fails in the operator's hands: the arm is a MODE, and it is consumed
+
+The operator: *"Is our current window not updating with our changes because I still cannot
+click the title and drag the split pane to a new position?"* Two separate answers, and the
+first one is a real defect this session found and fixed (§ the install commit): his ⌘⇧B
+chord was executing a **stale real file** at `~/.claude/scripts/…`, four commits behind,
+because `install.sh` globs `scripts/*.sh` and never linked a `.py`. That is now a symlink
+like its 203 siblings. It is not, however, the drag — kitty's drag comes from the kitty
+binary, not from this repo.
+
+**The drag works in his exact configuration.** Reproduced with the screen-based verdict of
+§ I9, in both modes, with the `move_window` control passing in each run:
+
+```
+window_title_bar_min_windows 1  (bars always visible)    3 of 3 drags REORDERED
+window_title_bar_min_windows 0  + toggle_window_title_bars   drags REORDER
+```
+
+**What makes it feel broken is that the arm is a MODE with two ways to end, and the bars
+look identical in all three states.** Upstream: *"Press again to cancel before dragging …
+After any drag operation completes, the bars are automatically hidden again."* Measured by
+counting presses on top of one initial arm, dragging after each:
+
+```
++0 presses (still armed)   ABC -> BAC   REORDERED
++1 press   (cancelled)     BAC -> BAC   no reorder
++2 presses (re-armed)      BAC -> CAC   REORDERED
++1 press                   CAC -> BCC   REORDERED   <- parity BROKEN
+```
+
+The last row is the finding, not an anomaly: a **successful drag consumes the arm**, so the
+parity of presses is reset by every drag that lands. State after attempt N depends on
+whether attempt N-1 succeeded, which is unknowable from the screen — the bars are drawn
+whether the mode is armed or not. That is the whole user-visible failure: press twice
+because nothing looked different, and the second press silently disarmed it.
+
+**The instruction that works: one press, one drag, re-press for the next.** And drag
+deliberately — a fast press-move-release does not clear the threshold; the tells that it has
+started are kitty's drag thumbnail near the cursor and a green drop-target line.
+
+**Why `window_title_bar_min_windows 2` is NOT the fix** even though it is the most reliable
+mode (3 of 3, no arm to lose): naturally-visible bars take a permanent ROW per pane. That is
+the exact cost the operator rejected — *"a permanent row for a no-CLS show/hide row is not
+the answer"* — and it is why the overlay exists at all. The frozen scope forbids it.
+
+**Method note, the fourth instrument failure in this section and the cheapest to have
+avoided.** Two runs reported "no reorder" in BOTH modes before this, and both were void: the
+conf line was written as `window_title_bar_min_windows ${MINW:-1}` inside a SINGLE-QUOTED
+printf format, so kitty received the literal text, rejected the option, drew no bars, and the
+aim detector — which had no abort path — silently aimed at `WY + 0`, i.e. macOS chrome.
+A shell variable that does not expand and a detector that returns -1 without refusing
+compose into a confident wrong answer. Both are fixed: `%s` with the value as an argument,
+and an explicit `ABORT: refusing to aim blind`.
