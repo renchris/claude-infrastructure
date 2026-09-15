@@ -769,3 +769,59 @@ explanation has been eliminated by measurement — bars not drawn, binding not l
 not armed, press landing on macOS chrome, wrong drop target, drag too fast, instrument
 unable to drag at all — and the feature is documented to exist in this exact version. What
 is left is one hand movement, and nothing on this machine can synthesise it.
+
+### I9 · The drag DOES reorder. Every negative in §§ I7-I8 was read from a blind instrument
+
+`kitty @ ls` returns each tab's `windows` array in **creation order**, not layout order. Every
+drag verdict in §§ I7 and I8 was `[1 2 3] -> [1 2 3]` read from that array, and no reorder
+can ever change it. The tell was free and went unused for two sections: **run a known-good
+reorder through the same reading.** `move_window left` — which definitely reorders — leaves
+the ls ids untouched.
+
+**The verdict instrument, rebuilt from the screen.** Each pane floods itself with one
+distinct letter, so the left-to-right sequence of letters in a capture IS the layout order.
+It took two attempts, and the first failure is the more instructive:
+
+- **v1 labelled columns by first-seen signature**, so column 1 was always "A" and the
+  reading was the constant string `ABC` whatever the layout did — blind by construction, and
+  it *passed* the control by printing the same thing before and after. A reader that assigns
+  labels positionally cannot report a permutation.
+- **v2 anchors the labels to reference signatures captured at the start**, so a letter means
+  a pane rather than a slot. Control: `move_window left` gives `ABC -> ACB`, and
+  `move_window right` restores `ABC`.
+
+Under that instrument:
+
+```
+CONTROL  move_window left            ABC -> ACB      (and right -> ABC)
+DRAG     pane1 title -> pane3 title  ABC -> CBB      REORDERED
+DRAG     pane1 title -> pane2 title  CBB -> BCB      REORDERED
+DRAG     pane1 title -> pane3 body   BCB -> CAC      REORDERED
+```
+
+**So the feature works on this build, and it was never the thing that was broken.** Two
+other things had to be fixed first and both are worth keeping:
+
+1. **The drag must be slow enough to start.** The original binary warps, presses, moves and
+   releases in milliseconds. `draghold` adds a 250 ms hover, a 120 ms press dwell and slower
+   motion — and a capture taken mid-drag then shows kitty's **drag thumbnail** floating near
+   the cursor and a **green drop-target line** at the insertion point. That capture is what
+   proved the drag starts; before it, "no reorder" and "no drag" were indistinguishable.
+2. **`WY + 14` presses macOS's own title bar, not kitty's.** `hide_window_decorations` is not
+   set, so the top ~28pt of the window is OS chrome; a mid-drag capture caught the whole OS
+   WINDOW sliding across the screen, which is exactly what dragging chrome does. The aim must
+   be found by kitty's configured bar colours in a capture.
+
+**And the indicator the operator asked for already exists.** Pointer shapes, captured with
+`screencapture -C` over three regions of the same window: ordinary cell grid gives an
+**I-beam**, a pane border gives a **four-way move** cursor, and an armed title bar gives a
+**pointing hand**. So hovering is a free check that the bar is live and that the press will
+land on it — no config needed.
+
+**The generalisable rule, which this file has now paid for four times in one session:**
+*control the VERDICT instrument, not just the actuator.* §§ I7-I8 controlled the drag
+(a border drag resized panes, proving synthetic drags reach kitty) and never once asked
+whether the thing being read could express the answer. A one-line control — drive a known
+reorder, require the reading to move — would have caught it before either section was
+written, and before an upstream-mechanism story (`NSDraggingSession` cannot be synthesised)
+was constructed to explain a result that was an artifact.
