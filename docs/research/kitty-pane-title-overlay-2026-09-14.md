@@ -628,3 +628,44 @@ it is the argument against and it is easy to miss: the conf raises `window_drag_
 to 6 specifically so dividers are grabbable, i.e. deliberate manual resizing is a workflow
 this setup was tuned for. Auto-equalising on every split would silently undo it. That is why
 this is a 45% call and not an implementation.
+
+### I6 · Closing (iii): within one window, equal columns give a uniform gutter at every N
+
+§ I4 established the mechanism and cure. This closes the measurement, at **his** window
+widths, in **his** layout, both paddings, every arm with a distinctness control.
+
+**`horizontal` layout — equal columns by construction:**
+
+| window | padding | N=2 | N=3 | N=4 | N=5 | N=6 |
+|---|---|---|---|---|---|---|
+| 3360 device | 10 7 | 32 | 32,32 | 32,32,32 | 32,32,32,32 | 32,32,32,32,32 |
+| 3360 device | 10 5 | 24 | 24,24 | 24,24,24 | 24,24,24,24 | 24,24,24,24,24 |
+| 3456 device | 10 7 | 32 | 32,32 | 32,32,32 | 32,32,32,32 | 32,32,32,32,32 |
+| 3456 device | 10 5 | 24 | 24,24 | 24,24,24 | 24,24,24,24 | 24,24,24,24,24 |
+
+Spread 0 in every row, and the *same value* across N: in this layout the gutter does not
+depend on the split count at all, and padding 5 is a uniform 8px tighter than padding 7.
+
+**`splits` layout — his — with `layout_action equalize` after each split:** spread 0 at
+every split count as well, but the absolute width moves with N (42 · 48 · 34 · 32 at
+padding 7). The two layouts differ in where the remainder goes: `horizontal` hands the
+leftover cells to one pane as extra COLUMNS (49,49,51), `splits` leaves it distributed,
+which is why his live 3-pane window reads 42px where the horizontal probe reads 24px at the
+same width. Both are uniform; only `splits` pays for the remainder in gutter width.
+
+**So the answer to "are the gutters uniform across 2..6 panes" is yes, conditional on one
+thing, and the condition is the finding:** *equal columns*. Within any single window, once
+the columns are equal, every gutter in it is the same width at every split count from two
+to six, at either padding, at either of his window sizes. The uneven case is unequal
+columns — what repeated ⌘D produces by construction — and ⌘⇧E removes it in one keystroke.
+What remains is that the *absolute* width differs between split counts in the `splits`
+layout (32-48px), which is sub-cell remainder and is only visible comparing two different
+windows side by side, not within one.
+
+**Instrument note, the third geometry error in this section and the same shape each time.**
+Measuring `splits` instead of `horizontal` is not a detail: the two divide the remainder
+differently and answer differently at the same width, by 18px. § I2 measured a cascade and
+called it N splits; § I4 measured `horizontal` and called it his layout. **Each reading was
+internally consistent, carried a liveness control, and described a window the operator does
+not have.** A liveness control proves the instrument is *awake*; nothing in it proves the
+instrument is pointed at the right thing.
