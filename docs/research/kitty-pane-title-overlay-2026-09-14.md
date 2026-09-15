@@ -586,3 +586,45 @@ was, the number was wrong (§ I2). When the *geometry* was finally checked, the 
 wrong too. **Reproduce the user's own geometry before measuring anything in it**: the probe
 and the operator's screen differed in the one axis that decides the answer, and nothing in
 either reading announced that.
+
+### I5 · The no-layout-shift invariant re-proved at two-cell coverage, and two residues
+
+The band now sits inside a **two-cell** placement (§ I3), so the property the whole mechanism
+exists for had to be re-measured rather than inherited from the one-cell era. Rows, columns
+and pixel size read from each pane's own `TIOCGWINSZ`, across `off -> on -> off`:
+
+```
+pane   titles OFF             titles ON              OFF again
+129    (44, 49, 1078, 1980)   (44, 49, 1078, 1980)   (44, 49, 1078, 1980)
+265    (45, 49, 1078, 2025)   (45, 49, 1078, 2025)   (45, 49, 1078, 2025)
+276    (22, 49, 1078,  990)   (22, 49, 1078,  990)   (22, 49, 1078,  990)
+312    (22, 49, 1078,  990)   (22, 49, 1078,  990)   (22, 49, 1078,  990)
+315    (44, 49, 1078, 1980)   (44, 49, 1078, 1980)   (44, 49, 1078, 1980)
+341    (45, 49, 1078, 2025)   (45, 49, 1078, 2025)   (45, 49, 1078, 2025)
+384    (44, 49, 1078, 1980)   (44, 49, 1078, 1980)   (44, 49, 1078, 1980)
+```
+
+7 of 7 identical. No PTY resize, no SIGWINCH, no row reserved — the placement paints above
+the cell grid whether it is one cell tall or two, and covering a second row costs nothing
+permanent because the strips are a toggle.
+
+**Residue 1 — the daemon is running from a worktree, on purpose, and it expires.** The
+`~/.claude/scripts/…` symlink points into the deploy checkout, which holds inside its
+converge budget (lag 5 / 1h41m against 25 / 6h) and so still carries the one-cell band. The
+daemon was restarted from the worktree copy so the operator could see the change the hour he
+asked for it, with nothing hand-placed under `~/.claude` or `~/.config` — trap 2 forbids
+that and the converger would revert it anyway. The failure mode to know: if that daemon
+dies, the client respawns one from the DEPLOYED path and the band silently reverts to 45px
+until the converger advances. It self-heals; it does not announce itself.
+
+**Residue 2 — the padding is live via the runtime API, not a file.** `kitty @ set-spacing
+--all --configured` applies to the running instance and to new windows, but not across a
+kitty restart. `config/kitty.conf` on trunk already reads `10 5`, so a restart after the
+converger advances lands in the same place. Per § I4 this is a no-op on his current windows
+either way.
+
+**One consideration for the open ⌘D decision** (`cc-decide acfef5ea0753`), recorded because
+it is the argument against and it is easy to miss: the conf raises `window_drag_tolerance`
+to 6 specifically so dividers are grabbable, i.e. deliberate manual resizing is a workflow
+this setup was tuned for. Auto-equalising on every split would silently undo it. That is why
+this is a 45% call and not an implementation.
