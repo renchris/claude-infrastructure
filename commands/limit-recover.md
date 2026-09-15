@@ -213,22 +213,43 @@ key five times into a live outage — 85 minutes, six attempts, nothing produced
      audit's run-level action for such a run reads `GATED RESUME`, not a bare resume, precisely so
      this step cannot be skipped by reading the run row instead of the slot row.
    - **`resumeFromRunId` is same-session only.** The tool schema caches completed `agent()` calls
-     with unchanged `(prompt, opts)` and re-runs only the failed ones — but only *inside the same
-     process*. So it is available when the lead is **IDLE (this very session)** and
-     **unavailable once the process boundary has been crossed**: a `DEAD` lead means a fresh run
-     from the salvage, not a resume, however inviting the `INCOMPLETE` action's wording is. Under
-     `UNKNOWN` liveness, fire nothing and surface it.
+     with unchanged `(prompt, opts)` — but only *inside the same process*. So it is available when
+     the lead is **IDLE (this very session)** and **unavailable once the process boundary has been
+     crossed**: a `DEAD` lead means a fresh run from the salvage, not a resume, however inviting the
+     `INCOMPLETE` action's wording is. Under `UNKNOWN` liveness, fire nothing and surface it.
+   - 🚨 **…and its cache is a PREFIX, not a set** (corrected 2026-09-15; this bullet used to say
+     "journaled results replay free, dangling slots re-run"). A resume replays completed calls only
+     up to the FIRST call that is not a cache hit — an EDITED call (any change to prompt or opts),
+     a NEW call, or a DANGLING one (a failed or null slot is never cached). That call and every
+     call after it in issue order re-run live, completed or not, because each journal key is
+     chained on the calls before it. Measured on one run: after an earlier prompt was edited, an
+     unchanged research prompt got a NEW key; with the edit reverted its key matched the original
+     byte-for-byte and it re-ran anyway, because an earlier failed slot had broken the prefix. So a
+     resume is free only when the dangling slots come AFTER every completed one in call order (a
+     failed final stage). In a `pipeline()` every stage-1 call is issued before any stage-2 call,
+     so ONE failed stage-1 slot re-runs every later stage-1 item and ALL of stage 2. When the
+     dangling slots sit early, skip the resume and go straight to step 5's continuation — each
+     journal `result` event carries the full schema'd object, so the completed results can be
+     seeded from disk. And never "fix" a dangling call's prompt before resuming: the edit re-keys
+     the rest of the run. Companion trap, same mechanism: inside ONE run an identical
+     `(prompt, opts)` call is deduplicated by its key, so a script-level retry wrapper that
+     re-issues the same request never actually runs — give the retry attempt a distinct `label`.
    - Then: ledger-append, `Workflow({scriptPath: <audit's scriptPath>, resumeFromRunId: <runId>,
-     args: <original args from audit's lead.workflow_calls>})`. Journaled results replay free;
-     dangling slots re-run (validated: nulls are never cached). If the original deaths were a
-     same-second 529 burst across many slots, EDIT the script first to stagger stage-1 launches
-     (90s base + 20-30s/index — memory `reference-workflow-burst-529-stagger-launches`).
+     args: <original args from audit's lead.workflow_calls>})`. Results journaled BEFORE the first
+     dangling call replay free; that call and everything after it re-run (prefix rule above). If
+     the original deaths were a same-second 529 burst across many slots, EDIT the script first to
+     stagger stage-1 launches (90s base + 20-30s/index — memory
+     `reference-workflow-burst-529-stagger-launches`).
 4. **Bare-subagent re-runs**: re-spawn with the ORIGINAL prompt from
    `salvage/subagents/<agentId>.json` (verbatim — do not paraphrase from memory).
 5. **Re-audit** (rule 5). A slot STILL dangling after a resume means the script did not re-issue
    that call (changed conditional / `.filter(Boolean)` tail): hand-author a continuation script
-   seeded with the salvaged COMPLETE results (`salvage/<runId>/slots.json`) that runs ONLY the
-   missing slots, run it as a fresh Workflow, re-audit again.
+   seeded with the salvaged COMPLETE results (`salvage/<runId>/slots.json`, or the `result`
+   events in the run's `journal.jsonl`) that runs ONLY the missing slots, run it as a fresh
+   Workflow, re-audit again. Take this route FIRST, without resuming, whenever a dangling slot sits
+   before completed ones in call order (step 3's prefix rule) — a resume there re-spends everything
+   after it. Seed through files the agents read (a per-unit digest on disk), not through `args`:
+   everything in `args` is typed out by the lead as output tokens.
 6. **Teams**: the audit now classifies every assignee session of every team this session LEADS
    (per-member verdict table + `salvage/teams/<team>/<member>.json`). Execute § Teams below —
    never re-implement teammate work the disk already holds, never respawn over a RUNNING member.
