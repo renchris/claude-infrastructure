@@ -214,15 +214,19 @@ IMG_BASE = 7100                  # image ids we own; never collides with a user'
 #     band   em   ink(worst)  ink/band   air/side   cap/body
 #     45px   38     42px        0.93        1px       0.96    ← "oversized to its container"
 #     54px   40     44px        0.81        5px       1.00
-#     58px   41     46px        0.79        6px       1.04    ← is
-#     62px   42     46px        0.74        8px       1.04
+#     58px   41     46px        0.79        6px       1.04    ← was
+#     62px   42     46px        0.74        8px       1.04    ← is
 #     68px   44     48px        0.71       10px       1.11
 #     90px   46     51px        0.57       19px       1.14    ← "too large"
 #
-# 58 is one unit up from 45 in the band and one in the type, which is the ask as he first
-# put it, and it turns 1px of air into 6. The dial is continuous now, so the next move in
-# either direction is a one-line change and not another architecture.
-BAND_FILL_CELLS = 1.29           # the PAINTED band, in cells: 58px at a 45px cell
+# 58 was one unit up from 45 in the band and one in the type, and it turned 1px of air
+# into 6. The operator then asked for the same move AGAIN — "one unit larger in BOTH band
+# and text, with the text no longer crowding its container" (2026-09-15) — so the dial is
+# now at 62/42: 8px of air each side, ink-to-band 0.74, label still 1.04x the body cap.
+# That was the promise this ladder was built to keep: the next move in either direction is
+# two constants, not another architecture. COVERAGE IS UNCHANGED at two whole cells (90px),
+# so this buys the air without touching the placement and cannot reintroduce layout shift.
+BAND_FILL_CELLS = 1.378          # the PAINTED band, in cells: 62px at a 45px cell
 GROUND        = (0x1e, 0x1e, 0x24)   # config/kitty.conf `background` — the unpainted remainder
 
 
@@ -256,7 +260,7 @@ def band_cells(cell=45):
 # falls back silently to Regular if that ever fails.
 UI_FONT      = "/System/Library/Fonts/SFNS.ttf"
 UI_VARIATION = "Semibold"
-TYPE_RATIO   = 0.707             # of the PAINTED band (not the placement): em 41 at 58px.
+TYPE_RATIO   = 0.678             # of the PAINTED band (not the placement): em 42 at 62px.
                                  #
                                  # THE OLD BOUND WAS THE FONT'S, NOT THE INK'S. Sizing by
                                  # `ascent + descent <= band` capped this at em 37 and was
