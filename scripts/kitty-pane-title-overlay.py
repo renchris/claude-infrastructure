@@ -10,16 +10,17 @@ when off, and it is what this implements: a graphics-protocol placement at z=1, 
 the protocol doc defines as painting over the glyphs. The grid never changes, so no PTY
 is resized and no child is signalled.
 
-THE STRIP IS NOT CAPPED AT ONE CELL. That was assumed for two rounds and it was wrong:
-a placement is sized in PIXELS and simply occupies ceil(h/cell) rows, so it may be drawn
-as tall as we like. Measured 2026-09-14 against the real terminal: a 90px strip on a 45px
-cell rendered its full 90px. That is what unlocked a header that is actually LARGER than
-the body text instead of smaller — at one cell the biggest SF Pro that fit rendered caps
-at 0.86x the body's, i.e. the label was literally smaller than the text it labelled, which
-is exactly what "still too small" was pointing at.
+THE STRIP IS NOT CAPPED AT ONE CELL — but one cell is what it should be. A placement is
+sized in PIXELS and simply occupies ceil(h/cell) rows, so it may be drawn as tall as we
+like; measured against the real terminal, a 90px strip on a 45px cell rendered its full
+90px. Two cells was therefore tried, and it put the label at 1.46x the body's cap height.
+The verdict on that was "way too big", and rendering the middle grounds at 1:1 showed the
+band, not the type, was what dominated: a two-cell band with smaller type reads worse than
+either extreme. So the height stays at one cell and the type sits at that cell's ceiling —
+the header is carried by REGISTER and COLOUR, which is what a one-cell band leaves you.
 
-THE ONE COST, stated plainly: while titles are up, the top BAND_CELLS rows of each pane
-are COVERED, not moved. Nothing shifts; those lines are hidden behind the strip.
+THE ONE COST, stated plainly: while titles are up, the top row of each pane is COVERED,
+not moved. Nothing shifts; that line is hidden behind the strip.
 
 WHY THE REFRESH LOOP. kitty frees a placement whenever its anchoring cells are cleared or
 scrolled away — `ESC[2J` even frees the image DATA, so a bare re-place returns ENOENT and
@@ -163,13 +164,22 @@ def _ensure_pil():
 # ───────────────────────────── the design ────────────────────────────────────
 IMG_BASE = 7100                  # image ids we own; never collides with a user's
 
-# THE STRIP IS TWO CELLS TALL. Size was the operator's complaint three times running, and
-# at one cell it could not be fixed: the largest SF Pro that fits a 45px cell renders caps
-# at 0.86x the body's, so the header was SMALLER than the text under it. A placement is
-# sized in pixels, not cells (measured, see the module docstring), so the ceiling was an
-# assumption rather than a limit. Two cells buys caps at 1.46x body — unmistakably a
-# header — and costs one extra covered row only while the toggle is up.
-BAND_CELLS = 2
+# THE STRIP IS ONE CELL TALL, AND THE TYPE IS PINNED AT THAT CELL'S CEILING.
+#
+# Band height and type size are INDEPENDENT dials, and it took overshooting to see which
+# one was carrying the complaint. A placement is sized in pixels and is not clipped to the
+# cell it anchors to (measured — see the module docstring), so two cells was available and
+# was tried: caps at 1.46x the body's. The verdict was "way too big", and rendering the
+# alternatives at 1:1 showed why it was not a type-size problem — a two-cell band with
+# SMALLER type is worse, not better, because the slab is what dominates. The band is the
+# dial that was wrong.
+#
+# So one cell, one covered row, and TYPE_RATIO at the largest em that fits it. That leaves
+# the label at ~0.9x the body's cap height, which is FINE and is the point: at one cell the
+# type cannot be the thing that makes a header, so the header is carried by REGISTER (a
+# proportional semibold against a monospace body) and by the band's colour. Size was never
+# the free dial it looked like.
+BAND_CELLS = 1
 
 # A HEADER MUST BE A DIFFERENT REGISTER, not just a different size. Matching the body's
 # Monaco exactly made it read as more body text — "the font size/style/placement is still
@@ -184,10 +194,11 @@ BAND_CELLS = 2
 # falls back silently to Regular if that ever fails.
 UI_FONT      = "/System/Library/Fonts/SFNS.ttf"
 UI_VARIATION = "Semibold"
-TYPE_RATIO   = 0.645             # of the BAND height, not the cell. At a 90px band that
-                                 # is em 58: ascent+descent 70, so 20px of air, and caps
-                                 # measure 1.46x the body's — checked by rendering both at
-                                 # kitty's own 36px em and comparing ink boxes, never by eye.
+TYPE_RATIO   = 0.82              # of the BAND height. At a 45px band that is em 36:
+                                 # ascent+descent 43, i.e. within 2px of the ceiling, so
+                                 # this is "as large as the band allows" rather than a
+                                 # chosen size. `measure` asserts exactly that, and the
+                                 # bats suite pins it, so a silent shrink cannot ship.
 TRACKING     = 0.6               # a hair of tracking; proportional type at label size
 
 # SF PRO HAS NO ✳ ◐ ◑ ✻ ✶ — and every Claude Code pane title STARTS with one. Read out of
@@ -352,18 +363,21 @@ BODY_EM   = 36                                   # font_size 18.0 on a 2x displa
 
 
 def measure(cell_h=45):
-    """Print the ONE number the operator's complaint was about: title cap height
-    against BODY cap height, both rendered at kitty's own device scale.
+    """Print what the size argument actually turns on, at kitty's own device scale.
 
     This is a 1:1 comparison and not an analogy — kitty runs Monaco at font_size 18.0,
-    which on a 2x display is a 36px em, and PIL's truetype(36) is that same em, so the
-    ink boxes measured here are the ink boxes on the glass. Capitals only, so ascenders
-    and descenders cannot inflate either side.
+    which on a 2x display is a 36px em, and PIL's truetype(36) is that same em, so the ink
+    boxes measured here are the ink boxes on the glass. Capitals only, so ascenders and
+    descenders cannot inflate either side.
 
-    Three rounds of "still too small" were argued from taste. The number says what taste
-    could not: at one cell the largest SF Pro that fits renders caps at 0.86x the body's,
-    so the header was SMALLER than the text it labelled, and no amount of restyling
-    inside a 45px cell could have fixed it.
+    WHAT IT ASSERTS, and why it is not "bigger than the body". Three rounds of "too small"
+    were answered by restyling inside one cell; the fourth was answered by making the band
+    two cells, and that drew "way too big". Rendered at 1:1 against real body text, a
+    two-cell band with smaller type looks WORSE than either extreme — so the band is the
+    dial that was wrong, and at one cell the type has a hard ceiling that sits just under
+    body size. The invariant worth pinning is therefore that the type is AT that ceiling
+    (nothing was left on the table) and that the face is not the body's, which is what
+    makes a header a header here. A number below 1.0x is expected and correct.
     """
     from PIL import Image, ImageDraw, ImageFont
 
@@ -378,26 +392,31 @@ def measure(cell_h=45):
     b_cap = ink_h(body, CAPS)
     band = cell_h * BAND_CELLS
     em = max(int(band * TYPE_RATIO), 8)
-    primary, symbol, _nd = _faces(em)
+    primary, _symbol, _nd = _faces(em)
     t_cap = ink_h(primary, CAPS)
     asc, desc = primary.getmetrics()
-    one_cell_em = 8                       # the CEILING at one cell, not this ratio applied
-    for e in range(8, 80):                # to it: the largest em whose asc+desc still fits
+    ceiling = 8
+    for e in range(8, 120):                       # the largest em whose asc+desc fits
         f = _faces(e)[0]
         a, d_ = f.getmetrics()
-        if a + d_ <= cell_h:
-            one_cell_em = e
-    one_cell_cap = ink_h(_faces(one_cell_em)[0], CAPS)
-    print("cell            %d device px   band %d px (%d cells)" % (cell_h, band, BAND_CELLS))
+        if a + d_ <= band:
+            ceiling = e
+    print("cell            %d device px   band %d px (%d cell)" % (cell_h, band, BAND_CELLS))
     print("BODY   Monaco   em %-3d  cap %d px" % (BODY_EM, b_cap))
     print("TITLE  SF %-9s em %-3d  cap %d px   = %.2fx BODY   asc+desc %d <= band %d"
           % (UI_VARIATION, em, t_cap, t_cap / float(b_cap), asc + desc, band))
-    print("  CEILING at one cell: em %d (the largest that fits 45px) -> cap %d px = %.2fx BODY"
-          % (one_cell_em, one_cell_cap, one_cell_cap / float(b_cap)))
-    ok = t_cap > b_cap and (asc + desc) <= band
-    print("VERDICT %s" % ("LARGER THAN BODY, fits the band"
-                          if ok else "FAILS: not larger than body, or overflows"))
-    return 0 if ok else 1
+    print("  CEILING for this band: em %d — headroom %d em(s)" % (ceiling, ceiling - em))
+    face_ok = os.path.basename(FONT_CANDIDATES[0]) != os.path.basename(BODY_FONT)
+    fits = (asc + desc) <= band
+    at_ceiling = (ceiling - em) <= 1
+    print("VERDICT %s" % (
+        "AT THE CEILING for this band, in a register the body does not use"
+        if (fits and at_ceiling and face_ok) else
+        "FAILS: %s%s%s" % ("" if fits else "overflows the band; ",
+                           "" if at_ceiling else "em %d is below the ceiling %d; " % (em, ceiling),
+                           "" if face_ok else "same face as the body")))
+    return 0 if (fits and at_ceiling and face_ok) else 1
+
 
 # ───────────────────────────── talking to kitty ──────────────────────────────
 

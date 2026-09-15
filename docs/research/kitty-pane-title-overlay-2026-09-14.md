@@ -336,3 +336,36 @@ while kitty was genuinely frontmost showed **zero band pixels**.
 **Never trust a single capture. Pair it with a liveness control** — two captures separated in time
 that MUST differ (a spinner, a clock, a deliberate change) — and treat identical bytes as *no
 information*, never as *no change*.
+
+### H6. CORRECTION to H1: the height was the dial, and two cells overshot it
+
+H1 above is right about the MECHANISM and wrong about the conclusion it drew. A placement
+genuinely is sized in pixels and genuinely is not clipped to one cell — that measurement stands.
+But "therefore make it two cells" was my inference, not the operator's ask, and shipped it drew
+**"way too big"** on sight.
+
+Rendering four points at 1:1 against real body text settles which dial was carrying the complaint:
+
+| | band | type | cap vs body | verdict |
+|---|---|---|---|---|
+| A | 2 cells | em 58 | 1.46x | the slab dominates the pane |
+| B | 2 cells | em 41 | 1.04x | **worse than either extreme** — text rattling inside a slab |
+| C | 1 cell | em 36 | 0.89x | reads as a header, costs one row |
+| D | 1 cell | em 32 | 0.82x | the version originally called "too small" |
+
+**B is the finding.** If the complaint had been about type size, shrinking the type inside the tall
+band would have improved it; it does the opposite. The band is what dominates, so the band is what
+was wrong, and the shipped value is C: one cell, with the type at that cell's ceiling (em 36 against
+a ceiling of 37 — one em of headroom).
+
+**So size was never the free dial it looked like, and three rounds of "too small" were answered on
+the wrong axis.** At one cell the type has a hard ceiling that sits just *under* body size (0.96x at
+em 37), which means a one-cell header can never win on size and must win on REGISTER and COLOUR
+instead — a proportional semibold against a monospace body, on a band that carries focus. That is
+the rule; the numbers are downstream of it.
+
+`measure` was rewritten to assert that rule rather than the old one. It no longer claims "LARGER
+THAN BODY" — unreachable at one cell, and asserting an unreachable property is how a test starts
+lying — it asserts that the em is AT the band's ceiling (nothing left on the table), that it fits,
+and that the face is not the body's. Two bats tests pin it, both mutation-checked in both
+directions: shrinking TYPE_RATIO below the ceiling and restoring BAND_CELLS to 2 each turn them red.

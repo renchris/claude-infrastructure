@@ -319,12 +319,15 @@ main()
 
 # ── the overlay's two 2026-09-14 refinements: size, and the keypress budget ──────────────
 #
-# THE SIZE COMPLAINT WAS NEVER A STYLING COMPLAINT, and three rounds were spent styling it. At
-# one cell the LARGEST SF Pro that fits a 45px cell renders capitals at 0.96x the body's, so a
-# one-cell strip cannot be a header at all — it can only ever be body-sized or smaller, whatever
-# face, weight or tracking it uses. `measure` prints that ceiling beside the shipped size so the
-# next person cannot re-open the question from taste. It is the script's OWN renderer, not a
-# re-implementation, so it cannot drift away from what is drawn.
+# SIZE WAS NOT THE FREE DIAL IT LOOKED LIKE. Three rounds of "too small" were answered by
+# restyling inside one cell; the fourth was answered by making the band two cells, which put the
+# label at 1.46x the body's cap height and drew "way too big". Rendered at 1:1 against real body
+# text, a two-cell band with SMALLER type reads worse than either extreme — the slab is what
+# dominates — so the band went back to one cell and the type sits at that cell's ceiling. What is
+# worth pinning is therefore NOT "bigger than the body" (at one cell that is unreachable) but that
+# nothing is left on the table: the em is at the largest that fits, and the face is not the body's,
+# which is what makes this read as a header at all. `measure` uses the script's OWN renderer, so it
+# cannot drift from what is drawn.
 pil_python() {
   for c in /usr/local/bin/python3 /opt/homebrew/bin/python3 /usr/bin/python3; do
     [ -x "$c" ] || continue
@@ -333,24 +336,27 @@ pil_python() {
   return 1
 }
 
-@test "the title is LARGER than the body text it labels" {
+@test "the title type is at the band's ceiling, in a register the body does not use" {
   script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
   PY="$(pil_python)" || skip "no interpreter with Pillow"
   run "$PY" "$script" measure
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  echo "$output" | grep -q 'VERDICT LARGER THAN BODY' || { echo "$output"; false; }
-  # and the ratio is stated, so a regression to body-size is visible in the output itself
-  echo "$output" | grep -qE 'cap [0-9]+ px   = [1-9]\.[0-9]{2}x BODY' || { echo "$output"; false; }
+  echo "$output" | grep -q 'VERDICT AT THE CEILING' || { echo "$output"; false; }
+  # headroom is stated, so a silent shrink is visible in the output itself
+  echo "$output" | grep -qE 'CEILING for this band: em [0-9]+ — headroom [01] em' || { echo "$output"; false; }
 }
 
-@test "a one-cell strip could never have satisfied it — the band must be taller than a cell" {
+# THE BAND PAYS FOR ITSELF IN COVERED ROWS, so its height is a decision and not an accident.
+# Two cells was shipped once and rejected on sight; one is the resting value and the ratio below
+# it must stay a value that FILLS that cell, not one that rattles around in it.
+@test "the band is one cell and the type ratio fills it" {
   script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
+  grep -qE '^BAND_CELLS = 1$' "$script" || {
+    echo "BAND_CELLS is no longer 1 — a taller band covers more rows and was refused once"; false; }
   PY="$(pil_python)" || skip "no interpreter with Pillow"
   run "$PY" "$script" measure
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  echo "$output" | grep -qE 'CEILING at one cell: .* = 0\.[0-9]{2}x BODY' || {
-    echo "the one-cell ceiling is no longer below body size — re-derive BAND_CELLS"; echo "$output"; false; }
-  grep -qE '^BAND_CELLS = [2-9]' "$script" || { echo "BAND_CELLS regressed to one cell"; false; }
+  echo "$output" | grep -qE 'band 45 px \(1 cell\)' || { echo "$output"; false; }
 }
 
 # THE KEYPRESS MUST NOT PAY FOR PILLOW. The whole ~0.5s the operator felt was process startup —
