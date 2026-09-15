@@ -80,7 +80,7 @@ def main():
     for label, mods, key in (("cmd_d",8,100), ("cmd_shift_d",9,100), ("cmd_shift_b",9,98),
                              ("cmd_w",8,119), ("ctrl_shift_w",5,119), ("cmd_shift_w",9,119),
                              ("cmd_shift_o",9,111), ("cmd_opt_o",10,111), ("cmd_opt_shift_o",11,111),
-                             ("cmd_opt_shift_left",11,57350)):
+                             ("cmd_opt_shift_left",11,57350), ("cmd_opt_b",10,98)):
         b = binds(mods, key)
         print("%s_n=%d" % (label, len(b)))
         print("%s_last=%s" % (label, b[-1] if b else ""))
@@ -433,4 +433,55 @@ print("ok")
 PYEOF
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   echo "$output" | grep -q '^ok$' || { echo "$output"; false; }
+}
+
+# THE OVERLAY SILENTLY COST US THE RE-ORDER DRAG, and nothing here noticed for a whole day.
+# kitty's drag-to-reorder handle IS the real window title bar — its drag state hangs off
+# `set_window_title_bar_render_data` / `set_window_being_dragged` — so a graphics placement that
+# merely LOOKS like a title bar keeps the label and drops the gesture. ⌘⇧B is deliberately NOT
+# `toggle_window_title_bars` (the test above pins that, and must keep pinning it), which means the
+# action has to live on some OTHER chord or the gesture does not exist at all. That is the hole
+# this test fills: the previous suite asserted only where the action must NOT be.
+@test "the re-order drag survives — toggle_window_title_bars is bound, on its own chord" {
+  run probe "$CONF"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -qx 'cmd_opt_b_last=toggle_window_title_bars' || {
+    echo "the window title bars are not bound — drag-to-reorder is GONE, not merely unstyled"
+    echo "$output"; false; }
+  # and it is a DIFFERENT chord from the overlay, which must stay zero-shift
+  if echo "$output" | grep -qx 'cmd_shift_b_last=toggle_window_title_bars'; then
+    echo "the overlay chord regressed to the row-stealing built-in"
+    false
+  fi
+}
+
+@test "MUTANT CONTROL: dropping the re-order map is visible to that guard" {
+  MUT="$BATS_TEST_TMPDIR/mutant-reorder.conf"
+  grep -v '^map cmd+opt+b toggle_window_title_bars$' "$CONF" > "$MUT"
+  run probe "$MUT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  if echo "$output" | grep -qx 'cmd_opt_b_last=toggle_window_title_bars'; then
+    echo "CONTROL FAILED — the mutation did not remove the binding"
+    false
+  fi
+}
+
+# The real bars are the SAME feature as the overlay wearing a different face, so they carry the
+# same palette. Asserted through kitty's parser rather than by grepping the file: a colour option
+# it does not recognise is dropped silently, which is the failure this whole suite exists for.
+@test "the real title bars carry the overlay's palette" {
+  CC_TEST_CONF="$CONF" run "$KITTY" +runpy '
+def main():
+    import os
+    from kitty.config import load_config
+    o = load_config(os.environ["CC_TEST_CONF"])
+    print("align=%s" % o.window_title_bar_align)
+    print("active=%s" % (o.window_title_bar_active_background,))
+    print("inactive=%s" % (o.window_title_bar_inactive_background,))
+main()
+'
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -qx 'align=left' || { echo "$output"; false; }
+  echo "$output" | grep -q 'active=Color(47, 98, 216)' || { echo "$output"; false; }
+  echo "$output" | grep -q 'inactive=Color(63, 85, 144)' || { echo "$output"; false; }
 }
