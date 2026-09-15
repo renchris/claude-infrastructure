@@ -326,6 +326,17 @@ INK_LIVE  = (0xff, 0xff, 0xff)   # 5.4:1 on the blue
 _FACES = {}
 
 
+_NOFACE_WARNED = False   # one warning per process, not per pane per tick
+
+
+class _NoFace(RuntimeError):
+    """No real font face could be opened — raised instead of silently degrading.
+
+    Distinct from every other failure here because it is the one that would otherwise be
+    invisible: a face is not optional decoration, it IS the header's register.
+    """
+
+
 def _faces(em):
     """(primary, symbol, notdef_signature) for one em, resolved once.
 
@@ -352,10 +363,26 @@ def _faces(em):
         except Exception:
             continue
     if primary is None:
-        primary = ImageFont.load_default()
-        out = (primary, primary, None)
-        _FACES[em] = out
-        return out
+        # A REFUSAL MUST NOT BE INDISTINGUISHABLE FROM AN ANSWER (2026-09-15). This used to
+        # fall back to `ImageFont.load_default()` — PIL's ~11px fixed bitmap face — and hand
+        # it back as though a face had been chosen. Nothing downstream can tell the two
+        # apart, and the two consumers fail in opposite, both-bad ways:
+        #   · `measure` computes its VERDICT on a font nobody selected. The ink/band and
+        #     cap-ratio numbers are then about the default bitmap, not SF Pro Semibold, so
+        #     the one instrument that certifies the header's size is answering about a
+        #     different subject while looking completely healthy.
+        #   · `strip_png` DRAWS HIS LIVE PANE HEADERS in it — silently, no error, in exactly
+        #     the wrong register the overlay exists to establish. A header that renders as
+        #     tiny bitmap text is worse than no header: it reads as a broken feature rather
+        #     than an absent one, and there is no log line anywhere to explain it.
+        # Found by a post-land traceback, not by reasoning: under fd exhaustion on a loaded
+        # box (`OSError: [Errno 24] Too many open files`, load 22) every candidate failed to
+        # open and this branch was reached for real. It crashed there only because PIL's
+        # lazy plugin import ALSO failed; had the fd budget recovered one frame later it
+        # would have returned the default face and been believed.
+        # So: say so. The caller decides, and both callers decline rather than guess.
+        raise _NoFace("no usable face: none of %s could be opened" %
+                      ", ".join(os.path.basename(c) for c in FONT_CANDIDATES))
 
     def cap_h(font):
         bb = font.getbbox("HEXBD")
@@ -527,7 +554,17 @@ def measure(cell_h=45):
     b_cap = ink_h(body, CAPS)
     band, cover = band_geometry(cell_h)
     em = max(int(band * TYPE_RATIO), 8)
-    primary, _symbol, _nd = _faces(em)
+    try:
+        primary, _symbol, _nd = _faces(em)
+    except _NoFace as e:
+        # NOT a verdict. Every number below is a statement about SF Pro Semibold at this em;
+        # computed on a substitute face they are answers about a different subject, and the
+        # VERDICT line would read as a judgement on the header's size while measuring
+        # something nobody chose. Exit non-zero so a caller cannot mistake it for a pass.
+        print("CANNOT MEASURE: %s" % e)
+        print("VERDICT UNAVAILABLE — no face resolved, so no number here would be about "
+              "the header. This is a refusal, not a failing measurement.")
+        return 3
     t_cap, typ, worst = ink_h(primary, CAPS), ink_h(primary, TYPICAL), ink_h(primary, WORST)
     ceiling = 8
     for e in range(8, 160):             # the largest em whose WORST-CASE ink still fits
@@ -831,8 +868,21 @@ def render(tg):
         if not g:
             continue
         band, cover = band_geometry(g["ch"])
-        frames.append((tty, strip_png(int(g["xpx"]), band, title, live, cover),
-                       IMG_BASE + (pid_ % 800)))
+        # NO FACE ⇒ NO STRIP. `_faces` raises rather than handing back PIL's default
+        # bitmap, so this is where that refusal becomes a decision: skip the pane and
+        # leave it unlabelled. An absent header is a feature that is off; a header drawn
+        # in an 11px bitmap face is a feature that looks BROKEN, and the operator has no
+        # way to tell which he is looking at. One warning per process, because the hold
+        # loop re-enters here every 2s and a per-pane warning would be the louder bug.
+        try:
+            png = strip_png(int(g["xpx"]), band, title, live, cover)
+        except _NoFace as e:
+            global _NOFACE_WARNED
+            if not _NOFACE_WARNED:
+                _NOFACE_WARNED = True
+                sys.stderr.write("kitty-pane-title-overlay: %s — panes left unlabelled\n" % e)
+            continue
+        frames.append((tty, png, IMG_BASE + (pid_ % 800)))
     return frames
 
 
