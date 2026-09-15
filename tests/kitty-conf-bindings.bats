@@ -485,3 +485,27 @@ main()
   echo "$output" | grep -q 'active=Color(47, 98, 216)' || { echo "$output"; false; }
   echo "$output" | grep -q 'inactive=Color(63, 85, 144)' || { echo "$output"; false; }
 }
+
+# A LONE PANE IS STILL A PANE. The overlay skipped any tab with fewer than two windows, on the
+# reasoning that one pane needs no disambiguation — which answers a question nobody asked, since the
+# label also says WHAT THE SESSION IS. Operator, 2026-09-14: the chord "doesn't work when there is
+# only one split pane in the window". It failed silently: no log line, no error, just nothing drawn.
+# Asserted against the real targets() with a stubbed kitty_ls, so it pins behaviour rather than text.
+@test "a single-pane tab still gets a title — no minimum-pane guard" {
+  script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
+  PY="$(pil_python)" || skip "no interpreter with Pillow"
+  run "$PY" - "$script" <<'PYEOF'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("kto", sys.argv[1])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.kitty_ls = lambda sock: [{"tabs": [{"is_focused": True, "windows": [
+    {"id": 1, "pid": 4242, "title": "lone pane", "is_focused": True}]}]}]
+m._TTY_CACHE[(1, 4242)] = "/dev/null"          # stand in for a real tty
+got = m.targets(None, False)
+assert len(got) == 1, "a lone pane was skipped: %r" % (got,)
+assert got[0][1] == "lone pane", got
+print("ok")
+PYEOF
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -q '^ok$' || { echo "$output"; false; }
+}

@@ -682,10 +682,13 @@ def targets(sock, all_windows):
         for t in w.get("tabs", []):
             if not all_windows and not t.get("is_focused"):
                 continue
-            panes = t.get("windows", [])
-            if len(panes) < 2:          # a lone pane needs no label
-                continue
-            found.extend(panes)
+            # A LONE PANE GETS A LABEL TOO. This used to `continue` on len < 2, on the
+            # reasoning that a single pane needs no disambiguation — which answers a question
+            # nobody asked. The label's job is not only "which of these is which"; it is also
+            # "what is this session", and that is exactly as useful in one pane as in four.
+            # Operator, 2026-09-14: the chord "doesn't work when there is only one split pane
+            # in the window", and it was this line, silently, with no log and no error.
+            found.extend(t.get("windows", []))
     ttys = pane_ttys(found)
     out = []
     for p in found:
