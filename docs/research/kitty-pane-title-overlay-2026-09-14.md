@@ -369,3 +369,111 @@ THAN BODY" — unreachable at one cell, and asserting an unreachable property is
 lying — it asserts that the em is AT the band's ceiling (nothing left on the table), that it fits,
 and that the face is not the body's. Two bats tests pin it, both mutation-checked in both
 directions: shrinking TYPE_RATIO below the ceiling and restoring BAND_CELLS to 2 each turn them red.
+
+---
+
+## I — 2026-09-15: the header grew a unit, and the gutter range in § H was a MODEL, not a reading
+
+Three operator asks closed this session. Two of them corrected a figure that had already
+landed, and in both cases the correction came from measuring the RENDER rather than
+re-reading the derivation that produced it.
+
+### I1 · The band and the type each went up a unit — and the suite had pinned the defect
+
+The ask: *"one unit larger, the band and the text together, so the text doesn't look
+oversized to its boundary container."* The second clause is the whole brief. § H had
+pinned the type to the cell's **ink ceiling**, which put the accented worst case at 43px
+inside a 45px band — ink-to-band **0.93**, one pixel of air on each edge. That is what
+"oversized to its boundary container" is describing, and it was arrived at deliberately:
+the previous round read a ceiling as a target. **A ceiling is where type stops being safe.
+It is not where a header should sit.**
+
+Seven candidates rendered at 1:1 over real Monaco body before choosing (the grid script is
+in the session scratchpad; `measure` prints the same numbers from the shipped renderer):
+
+| cand | band | em | ink (accented worst) | ink/band | cap vs body |
+|---|---|---|---|---|---|
+| 1:38 | 1 cell / 45px | 38 | 42px | **0.93** | 0.96x |
+| 2:42 | 2 cells / 90px | 42 | 46px | 0.51 | 1.04x |
+| **2:46** | **2 cells / 90px** | **46** | **51px** | **0.57** | **1.14x** |
+| 2:50 | 2 cells / 90px | 50 | 57px | 0.63 | 1.29x |
+| 2:58 | 2 cells / 90px | 58 | 66px | 0.73 | 1.46x — *"way too big"* |
+
+Two cells is the only step that exists. A placement covers `ceil(h/cell)` rows, so a
+fractional band leaves its last row half covered and clips the glyph tops of live content
+under it. The refused extreme was never the band on its own — it was two cells **at em
+58**, four steps above what shipped.
+
+**Why this was not tried eight commits ago.** The comparison that sent the band back to
+one cell was *"a two-cell band with SMALLER type"*. That finding is real and still holds —
+the slab does dominate when the label is small inside it. A two-cell band with **modestly
+larger** type was never in that comparison; it was excluded on my taste, and taste here is
+the operator's. Recorded because the shape recurs: *a rendered A/B rules on the pair it
+rendered, and the pair is chosen before the render.*
+
+**The suite demanded the state the cure had to delete.** `measure` asserted
+`headroom <= 1` and a bats case asserted `BAND_CELLS == 1`: between them they pinned
+ink-to-band 0.93 as the contract, so the suite would have blocked its own fix. Both are
+inverted **in place**, old reasoning kept — the clause is the record of what was believed.
+What is pinned now is the proportion in **both** directions (the label must outrank the
+body, and must not touch its band), because those are the two ways this has actually gone
+wrong: three rounds in one direction, one in the other. Mutants: `TYPE_RATIO` back to
+0.845 reddens the breathing case, `BAND_CELLS = 3` reddens the whole-cells case.
+
+One side effect worth naming on its own: the label's inset was `band * 0.21`, which is the
+same 9px at one cell and silently **18px** at two — a horizontal margin doubling because a
+vertical dimension changed, walking the label out of alignment with the body under it. It
+divides by `BAND_CELLS` first now. *A constant derived from one dimension will be applied
+to the other by whoever changes that dimension next.*
+
+### I2 · § H's "26-34px" was the model speaking, and the render says 28-42px
+
+§ H predicted that horizontal padding 7 -> 5 would land the gutters *"at 26-34px across
+every split count instead of 34-53px"*. That number came from the arithmetic
+(`gutter = 2*padding + 2*border + LEFTOVER`), which is sound and reproduces kitty's own
+column counts — but a model's output is not a reading. Measured from rendered PNGs at the
+operator's real window width (3456 device px), every pane flooded with a solid block so a
+gutter is the only place the block colour is absent:
+
+| padding_h | N=2 | N=3 | N=4 | N=5 | N=6 | range |
+|---|---|---|---|---|---|---|
+| 3 | 34 | 31,28 | 31,32,36 | 31,32,27,18 | 31,32,27,19,20 | 18-36 |
+| 4 | 34 | 31,28 | 31,32,36 | 31,32,38,40 | 31,32,38,30,20 | 20-40 |
+| **5** | **34** | **31,28** | **31,32,36** | **31,32,38,40** | **31,32,38,41,42** | **28-42** |
+| 6 | 34 | 31,28 | 31,32,36 | 31,32,38,40 | 31,32,38,41,42 | 28-42 |
+| 7 *(was)* | 34 | 42,50 | 42,43,36 | 42,43,38,40 | 42,43,38,41,42 | 34-50 |
+| 8 | 56 | 53,50 | 53,43,36 | 53,43,38,40 | 53,43,38,41,42 | 36-56 |
+| 9 | 56 | 53,50 | 53,54,58 | 53,54,49,40 | 53,54,49,41,42 | 40-58 |
+| 10 | 56 | 53,50 | 53,54,58 | 53,54,60,62 | 53,54,60,63,64 | 50-64 |
+
+**5 is still the right value and the reasoning behind it still holds** — its overall range
+(14px) is the tightest in the family, and it removes the step the operator actually
+reported: at padding 7 the window goes 34px at two panes to 42/50px at three, a 16px jump
+that is exactly *"two panes look right and three or more do not"*; at padding 5 it goes 34
+to 31/28, a 6px settle. Confirmed on his own live windows, before and after: the
+three-column window measured **54,54 -> 32,31**, and the second window **-> 45,46**.
+
+**What is NOT true is "uniform".** At N=5 and N=6 the gutters still run 31,32,38,41,42 —
+an 11px spread that no padding value removes, because the leftover is sub-cell waste paid
+per column and shrinking the padding only re-accumulates it further along the row. The
+whole family was swept to establish that rather than assumed: padding 3 has a *smaller*
+worst-case gutter (36px) but a worse within-layout spread (an 18px gutter beside a 32px
+one), and padding 7 has the tightest within-layout spread of all while carrying the 2-vs-3
+step that prompted the report. There is no value that is best on both axes. **The honest
+claim is a tighter band and no step, not uniformity.**
+
+Two instrument notes, both of which produced a wrong answer first:
+
+- **A probe window of the wrong width answers a different question.** The first sweep ran
+  at 1400 logical px and reported padding 5, 6, 7 and 8 as *byte-distinct frames with
+  identical gutters* — which is true at that width and says nothing about the operator's.
+  The leftover term is a function of the window width, so a gutter measurement is only
+  valid at the width it was taken at. The positive control that saved it: padding 40 moved
+  the gutter to 168px, proving the config was applied and the instrument was sensitive,
+  which is what turned "the fix does nothing" into "this window cannot see it".
+- **Kitty's active-pane border is bright enough to count as ink.** The first analyser
+  keyed on `sum(rgb) > 300`, which also matches `#6194f3`; the border sits *inside* the
+  gutter, so every gutter beside the focused pane split into two ~10px runs and the pane
+  count came out N+2. `min(r,g,b) > 180` separates a near-neutral block glyph from a
+  saturated border. The tell was free and should have been read immediately: **the
+  detected pane count did not equal the pane count kitty reported.**
