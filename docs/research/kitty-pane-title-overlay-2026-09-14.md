@@ -722,3 +722,50 @@ reorder this feature would give, without a pointer: `cmd+shift+left/right/up/dow
 (`move_window`), `cmd+opt+shift+<arrow>` (`move_to_screen_edge`, the only route for a pane
 with no neighbour to swap with), `cmd+shift+r` (`rotate`), and `cmd+shift+o` /
 `cmd+opt+o` (`detach_window`) for moving one to another tab or OS window.
+
+### I8 · Upstream settles what the feature IS; the action was armed; the answer is unchanged
+
+Two things were still unknown after § I7: whether kitty 0.48.2 even *has* drag-to-reorder
+for windows inside a tab (the symbol set could equally have served tab dragging or
+detaching), and whether making the bars visible by CONFIG is the same state as invoking the
+action. Both are now answered, and neither rescues the synthetic test.
+
+**Upstream documents the feature as exactly the operator's ask** — `toggle_window_title_bars`:
+
+> *"Temporarily show window title bars to allow **drag-to-reorder**. When window title bars
+> are hidden (because `window_title_bar_min_windows` is not met), this action forces them
+> temporarily visible so that they can be dragged to reorder windows. After any drag
+> operation completes, the bars are automatically hidden again. Press again to cancel before
+> dragging. Map an action to this, then press it before dragging a window title bar."*
+
+Introduced in **0.46.0**, alongside *"Allow dragging tabs in the tab bar to re-order, move to
+another OS Window or detach"* and *"Allow dragging window borders to resize kitty windows in
+all the different layouts, controlled by `window_drag_tolerance`"*. So ⌘⌥B is bound to the
+right thing, the build has it, and the intended gesture is: **press once, then drag a title
+bar — the bars hide themselves when the drag finishes.**
+
+**The action is a MODE, and that was a real hypothesis, now tested.** § I7's probe made the
+bars visible with `window_title_bar_min_windows 1` and never invoked the action; the doc's
+wording ("forces them temporarily visible *so that they can be dragged*") allows that the
+action arms something config alone does not. Re-run with `min_windows 0` and
+`kitty @ action --self toggle_window_title_bars` before each attempt — the bars were
+confirmed drawn by the same colour-keyed capture (png row 88), which is itself proof the
+action fired:
+
+```
+CONTROL  border drag            cols 41 41 41 -> 51 36 36
+TEST     pane 3 body, pane 3 title bar, pane 2 title bar, pane 2 title bar slow
+         all four:  [1 2 3] -> [1 2 3]    no reorder
+```
+
+Identical to the unarmed run. **So the mode hypothesis is refuted and the AppKit one stands**:
+a border drag is GLFW mouse motion and a CGEvent stream drives it; the reorder path is an
+NSDraggingSession (`start_drag_with_data`, `on_drag_source_finished`,
+`change_drag_thumbnail`, `GLFW_DRAG_OPERATION_MOVE`), which AppKit begins from a real event
+and a synthesised stream appears unable to start.
+
+**This is now a genuinely operator-only step, and the record says why**: every alternative
+explanation has been eliminated by measurement — bars not drawn, binding not loaded, action
+not armed, press landing on macOS chrome, wrong drop target, drag too fast, instrument
+unable to drag at all — and the feature is documented to exist in this exact version. What
+is left is one hand movement, and nothing on this machine can synthesise it.
