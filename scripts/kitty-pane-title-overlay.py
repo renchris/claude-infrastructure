@@ -194,11 +194,13 @@ BAND_CELLS = 1
 # falls back silently to Regular if that ever fails.
 UI_FONT      = "/System/Library/Fonts/SFNS.ttf"
 UI_VARIATION = "Semibold"
-TYPE_RATIO   = 0.82              # of the BAND height. At a 45px band that is em 36:
-                                 # ascent+descent 43, i.e. within 2px of the ceiling, so
-                                 # this is "as large as the band allows" rather than a
-                                 # chosen size. `measure` asserts exactly that, and the
-                                 # bats suite pins it, so a silent shrink cannot ship.
+TYPE_RATIO   = 0.825             # of the BAND height. At a 45px band that is em 37 —
+                                 # ascent+descent 44 of a 45px cell, so this is the
+                                 # ceiling itself and not a chosen size: em 38 overflows
+                                 # and clips. There is no further increase available
+                                 # without a taller band, and a taller band was refused.
+                                 # `measure` asserts it, and the bats suite pins it, so
+                                 # neither a silent shrink nor an overflow can ship.
 TRACKING     = 0.6               # a hair of tracking; proportional type at label size
 
 # SF PRO HAS NO ✳ ◐ ◑ ✻ ✶ — and every Claude Code pane title STARTS with one. Read out of
