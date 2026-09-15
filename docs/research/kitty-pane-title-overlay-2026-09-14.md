@@ -879,3 +879,45 @@ aim detector — which had no abort path — silently aimed at `WY + 0`, i.e. ma
 A shell variable that does not expand and a detector that returns -1 without refusing
 compose into a confident wrong answer. Both are fixed: `%s` with the value as an argument,
 and an explicit `ABORT: refusing to aim blind`.
+
+### I11 · The double title: the drag was never broken, the wrong bar was being dragged
+
+The operator, with a screenshot: *"the title above drags but not the title below. why do we
+have double title"*. That one image closes the whole investigation.
+
+**Both toggles were on, and they stack.** kitty's real title bar (⌘⌥B) takes a text row at
+the top of the pane; the overlay strip then paints over the pane's FIRST CONTENT ROW — which
+is directly beneath it. Two labels of the same text, one above the other, in two different
+faces: Monaco above, SF Pro Semibold below.
+
+The top one is kitty's and drags. **The bottom one is a graphics placement — it is PIXELS.
+It is not in kitty's hit-test at all**, which is why it shows no hand cursor, why no drag
+ever starts on it, and why nothing about it could be fixed by looking harder at the drag.
+
+**So every negative in §§ I7-I10 was about the wrong object.** Nine sections of instrument
+work — an aim keyed on bar colours, a slow drag, a mid-drag thumbnail capture, a screen-based
+verdict with a `move_window` control, an arm-count parity test — all correct, all measuring
+a feature that worked, while the operator's hand was on an image. The probes could not
+reproduce it because a probe instance never had the overlay running.
+
+**The defect is the design: two chords treated as independent when they are mutually
+exclusive VIEWS of the same information.** ⌘⇧B is the zero-shift glance; ⌘⌥B is the
+deliberate rearrange. There is never a reason to see both. ⌘⌥B now clears the overlay first
+and then toggles the real bars, via `combine`, so exactly one bar is on screen and it is the
+one the mouse can grab. Order matters: clearing after the toggle would wipe a strip the hold
+loop has already re-asserted over the new layout. The `off` is a no-op when the overlay is
+already hidden, so the chord stays a plain toggle for anyone who never presses ⌘⇧B.
+
+**The test had pinned the bare action** — an exact match on
+`cmd_opt_b_last=toggle_window_title_bars` — so the suite forbade the fix for the very defect
+it existed to protect against. Re-keyed to the two properties that actually matter: the chord
+must still ARRIVE at the built-in, and it must clear the overlay FIRST. Mutant: restoring the
+bare action reddens it. 26/26.
+
+**The lesson, and it is the one this session kept paying for in different costumes.** Every
+earlier trap was an instrument that could not see the answer: a verdict array in creation
+order, a reader labelling by position, a probe in the wrong geometry, a variable that did not
+expand. This one is worse and cheaper — **the instrument was fine and the SUBJECT was wrong**,
+and the thing that revealed it was not a measurement at all. It was one screenshot from the
+person whose hand was on the mouse. *When a user reports that a mechanism does not work and
+every measurement says it does, stop measuring the mechanism and ask what they are touching.*
