@@ -157,25 +157,34 @@ main()
 # permanent row for a no CLS show/hide row is not the answer." Every in-grid option is one of those
 # two, because the bar needs one cell of pixels and inside the grid it can only take or reserve.
 # The overlay draws ABOVE the grid (graphics protocol z=1), so the grid never changes at all.
-@test "cmd+shift+b runs the zero-shift overlay, not the row-stealing built-in" {
+# INVERTED 2026-09-15, DELIBERATELY, and the previous assertion is quoted rather than deleted
+# because it is the record of a decision the operator reversed, not a bug: it demanded
+# `cmd_shift_b_last=launch` and forbade `toggle_window_title_bars` on this chord. He then asked
+# for ONE title bar on ⌘⇧B that is draggable and shows the hand cursor, and the overlay is a
+# graphics placement — PIXELS above the grid, absent from kitty's hit-test — so it can never be
+# either. Draggable ⇒ real bar. The chord therefore ENDS IN the built-in now, and must still
+# wipe the overlay first or the two stack, which is the photograph that started this.
+@test "cmd+shift+b is the ONE bar — overlay cleared, then the real draggable bars" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  echo "$output" | grep -q 'cmd_shift_b_last=launch' || { echo "$output"; false; }
-  # the built-in is what we are deliberately NOT bound to — it is the defect, not a fallback
-  # Explicit block form, NOT `A && { …; false; }`: under errexit the && absorbs the false and the
-  # guard can never fail. The liveness fixer declined to re-flow this across its line continuation
-  # and said so; this is the hand-edit it asked for, mutant-verified in BOTH directions.
-  if echo "$output" | grep -qx 'cmd_shift_b_last=toggle_window_title_bars'; then
-    echo "cmd+shift+b regressed to the row-stealing built-in"
-    false
-  fi
+  # ENDS IN the built-in: without this the drag gesture does not exist at all.
+  echo "$output" | grep -qE '^cmd_shift_b_last=.*toggle_window_title_bars$' || {
+    echo "⌘⇧B no longer reaches the real title bars — drag-to-reorder is GONE from the chord"
+    echo "the operator asked for it on"
+    echo "$output"; false; }
+  # …and CLEARS THE OVERLAY FIRST, so exactly one bar is on screen and it is the hit-tested one.
+  # Order matters: after the toggle it would clear a strip the hold loop has already re-asserted.
+  echo "$output" | grep -qE '^cmd_shift_b_last=combine :.*kitty-pane-title-overlay\.py off.*: toggle_window_title_bars$' || {
+    echo "⌘⇧B no longer clears the overlay before showing the real bars — the two stack, and"
+    echo "the operator grabs the painted one, which can never drag"
+    echo "$output"; false; }
   grep -q 'kitty-pane-title-overlay.py' "$CONF" || { echo "overlay script not referenced"; false; }
 }
 
 # The overlay script must EXIST and parse. A binding pointing at a missing or broken script is the
 # silent-dead-key failure this suite was created for: kitty reports nothing when a launch target
 # fails, so only a test can see it.
-@test "the overlay script referenced by cmd+shift+b exists and is valid python" {
+@test "the overlay script referenced by the title-bar chords exists and is valid python" {
   script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
   [ -f "$script" ] || { echo "missing: $script"; false; }
   [ -x "$script" ] || { echo "not executable: $script"; false; }
@@ -484,39 +493,42 @@ PYEOF
 # `toggle_window_title_bars` (the test above pins that, and must keep pinning it), which means the
 # action has to live on some OTHER chord or the gesture does not exist at all. That is the hole
 # this test fills: the previous suite asserted only where the action must NOT be.
-@test "the re-order drag survives — ⌘⌥B clears the overlay, then toggles the real bars" {
+@test "the styled glance survives on ⌘⌥B — the overlay, still zero-shift" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  # ENDS IN the built-in. This was an exact-match on `cmd_opt_b_last=toggle_window_title_bars`,
-  # which pinned the chord as a BARE action and so forbade the fix for the defect it was meant
-  # to protect: with the overlay also on, kitty's real bar and the overlay strip stack — two
-  # labels of the same text, and the operator grabs the lower one, which is a graphics
-  # placement and is not in kitty's hit-test. The drag was never broken; the wrong thing was
-  # being dragged. What must hold is that the chord still ARRIVES at the built-in.
-  echo "$output" | grep -qE '^cmd_opt_b_last=.*toggle_window_title_bars$' || {
-    echo "the window title bars are not bound — drag-to-reorder is GONE, not merely unstyled"
+  # The overlay did not go away when the chords swapped; it moved. It is the only thing on this
+  # box that labels a pane WITHOUT a PTY resize, so losing it to the swap would trade the whole
+  # reason it was built for a chord letter.
+  echo "$output" | grep -q 'cmd_opt_b_last=launch' || {
+    echo "⌘⌥B is no longer the zero-shift overlay — the styled glance is gone"
     echo "$output"; false; }
-  # …and that it wipes the overlay FIRST, so exactly one bar is on screen and it is the one
-  # the mouse can grab. Order matters: after the toggle it would clear a strip that the hold
-  # loop has already re-asserted over the new layout.
-  echo "$output" | grep -qE '^cmd_opt_b_last=combine :.*kitty-pane-title-overlay\.py off.*: toggle_window_title_bars$' || {
-    echo "⌘⌥B no longer clears the overlay before showing the real bars — the two stack, and"
-    echo "the operator grabs the painted one, which can never drag"
-    echo "$output"; false; }
-  # and it is a DIFFERENT chord from the overlay, which must stay zero-shift
-  if echo "$output" | grep -qx 'cmd_shift_b_last=toggle_window_title_bars'; then
-    echo "the overlay chord regressed to the row-stealing built-in"
+  # and this chord must NOT reach the built-in: that is the row-stealing jitter the overlay
+  # exists to avoid, and it now has its own chord.
+  if echo "$output" | grep -qE '^cmd_opt_b_last=.*toggle_window_title_bars$'; then
+    echo "the glance chord regressed to the row-stealing built-in"
     false
   fi
 }
 
+# THIS CONTROL WAS VACUOUS FOR A DAY AND NOTHING COULD SEE IT. It deleted
+# `^map cmd+opt+b toggle_window_title_bars$` — a BARE-action line that stopped existing the
+# moment the chord became a `combine`, so `grep -v` removed nothing, the probe read the
+# unmutated file, and the exact-match check duly did not fire. A control that mutates nothing
+# passes for the same reason a working one does. Re-keyed on the line that is actually in the
+# file, and asserted to have REMOVED something before its verdict is believed.
 @test "MUTANT CONTROL: dropping the re-order map is visible to that guard" {
   MUT="$BATS_TEST_TMPDIR/mutant-reorder.conf"
-  grep -v '^map cmd+opt+b toggle_window_title_bars$' "$CONF" > "$MUT"
+  grep -v '^map cmd+shift+b ' "$CONF" > "$MUT"
+  # the mutation must have BITTEN — one line fewer, no more, no less
+  before="$(wc -l < "$CONF")"; after="$(wc -l < "$MUT")"
+  [ "$((before - after))" -eq 1 ] || {
+    echo "CONTROL FAILED — the mutation removed $((before - after)) line(s), expected exactly 1"
+    false
+  }
   run probe "$MUT"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  if echo "$output" | grep -qx 'cmd_opt_b_last=toggle_window_title_bars'; then
-    echo "CONTROL FAILED — the mutation did not remove the binding"
+  if echo "$output" | grep -qE '^cmd_shift_b_last=.*toggle_window_title_bars$'; then
+    echo "CONTROL FAILED — the binding survived its own deletion"
     false
   fi
 }
