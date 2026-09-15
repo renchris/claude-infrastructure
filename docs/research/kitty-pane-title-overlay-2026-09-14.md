@@ -669,3 +669,56 @@ called it N splits; § I4 measured `horizontal` and called it his layout. **Each
 internally consistent, carried a liveness control, and described a window the operator does
 not have.** A liveness control proves the instrument is *awake*; nothing in it proves the
 instrument is pointed at the right thing.
+
+### I7 · The drag: four aimed attempts, a passing control, and a specific reason it may still be untestable from here
+
+The previous record left this as *"a synthetic CGEvent drag never did, in any layout, but
+that instrument probably cannot start a macOS drag session — treat the negative as
+untrusted."* That is a negative claim about a tool, which is the shape this corpus keeps
+being wrong about, and the cause identified since (the ⌘⌥B binding had not reached the
+running kitty, so **no bars were drawn** and every press landed on ordinary cell grid) is
+now fixed. So it was re-run properly, in an ISOLATED instance so the operator's own panes
+are never reordered, with the verdict read from `kitty @ ls` window ORDER — objective, no
+screenshot, no liveness problem.
+
+Two things had to be got right before the negative meant anything:
+
+1. **Aim.** `hide_window_decorations` is not set, so macOS draws its own title bar at the
+   top of the window and `WY + 14` presses *that*, dragging the OS window. The pane title
+   bars are found by their exact configured colours (`#2f62d8` / `#3f5590`) in a capture and
+   converted back to screen points — png row 88, scale 2x, screen y 96.
+2. **A positive control**, in the same run, on the same binary: kitty resizes a split by
+   dragging the BORDER between panes. If that works, synthetic drags reach kitty's drag
+   handling and a title-bar negative is about the FEATURE; if it does not, the negative is
+   about the INSTRUMENT and says nothing.
+
+```
+CONTROL  border drag      cols 41 41 41  ->  51 36 36          ← the instrument CAN drag
+TEST     pane 3 body           60 steps  [1 2 3] -> [1 2 3]    no reorder
+TEST     pane 3 title bar      60 steps  [1 2 3] -> [1 2 3]    no reorder
+TEST     pane 2 title bar      60 steps  [1 2 3] -> [1 2 3]    no reorder
+TEST     pane 2 title bar slow 400 steps [1 2 3] -> [1 2 3]    no reorder
+```
+
+**The control passes and all four variants fail** — distance, whether the drop lands on a
+pane's body or on another title bar, and speed (a hand drag takes about a second; 60
+synthetic steps take milliseconds, which could miss a drag threshold, so 400 was tried too).
+
+**And there is a specific reason this may still not settle it.** The symbol set is AppKit
+drag-and-drop, not plain mouse handling: `start_drag_with_data`, `on_drag_source_finished`,
+`change_drag_thumbnail`, `GLFW_DRAG_OPERATION_MOVE/COPY/GENERIC`, alongside
+`set_window_being_dragged` and `set_window_drag_overlay`. A border drag is GLFW mouse
+motion and a CGEvent stream drives it fine; an **NSDraggingSession** is begun by AppKit from
+a real event and a synthesised stream may be unable to start one at all. That is a
+mechanism, not a shrug: it predicts exactly this result — control passes, feature does not —
+and it is why a hand drag remains the decisive test.
+
+What HAS been eliminated: the bars not being drawn, the binding not reaching the running
+kitty, a mis-aimed press landing on macOS chrome, the drop target, the drag speed, and the
+instrument being unable to drag at all.
+
+**And if the drag turns out to be dead, nothing is lost** — the conf already binds every
+reorder this feature would give, without a pointer: `cmd+shift+left/right/up/down`
+(`move_window`), `cmd+opt+shift+<arrow>` (`move_to_screen_edge`, the only route for a pane
+with no neighbour to swap with), `cmd+shift+r` (`rotate`), and `cmd+shift+o` /
+`cmd+opt+o` (`detach_window`) for moving one to another tab or OS window.
