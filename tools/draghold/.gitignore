@@ -1,0 +1,2 @@
+# The compiled binary is per-arch and reproducible via ./build.sh — never commit it.
+draghold
