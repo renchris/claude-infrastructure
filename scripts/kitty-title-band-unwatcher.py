@@ -61,7 +61,12 @@ def on_load(boss, data) -> None:
                     n += 1
                 except Exception:
                     pass
-        _log("unwatcher: restored stock set_geometry and relayed out %d tab(s)" % n)
+        import os
+
+        _log(
+            "uninstalled pid=%d (unwatcher: restored stock set_geometry, relaid out %d tab(s))"
+            % (os.getpid(), n)
+        )
     except Exception:
         import traceback
 
