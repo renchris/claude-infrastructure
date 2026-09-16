@@ -86,8 +86,11 @@ handle_event                           master mouse.c:948-958
   → handle_button_event                master mouse.c:900-937                 v0.48.2 :864-905
         clear_potential_drag(...)      master :907
         if (handle_scrollbar_mouse(…)) return;   master :909    v0.48.2 :873   ← earlier return
-        (focus switch to the pressed window)     master :875-877 region
-        v0.48.2 ONLY: if (!set_mouse_position(w,&a,&b)) return;  v:883         ← the padding swallow
+        (focus switch to the pressed window)     master :911 region            v0.48.2 :875-877
+        if (!set_mouse_position(w,&a,&b)) return;   master :917   v0.48.2 :883  ← the padding swallow
+        [CORRECTED 2026-09-16 by §10.4: this line read "v0.48.2 ONLY" and carried v0.48.2's
+         :875-877 under a master label. set_mouse_position has the identical early return in
+         BOTH refs — verified by grep at master mouse.c:917 and v0.48.2 mouse.c:883.]
         arm_potential_drag(w, button)  master :918  (LEFT only, master :893-899)
         if (!dispatch_mouse_event(w, button, …, screen->modes.mouse_tracking_mode != 0))  master :921 / v:894
   → dispatch_mouse_event               master mouse.c:206-229                 v0.48.2 :212-226
@@ -333,7 +336,13 @@ mouse_map cmd+left press grabbed,ungrabbed kitten kitty-drag-window.py
 ### 3.3 What the kitten does, in order
 
 1. **Take the target window from the dispatch.** The `no_ui` handler receives the window id as its
-   second argument, and it is the pointer's window.
+   **THIRD** argument, and it is the pointer's window. The file-level signature an author must write
+   is `handle_result(args, answer, target_window_id, boss)` (master `docs/kittens/custom.rst:32`
+   and `:61`) — `kittens/runner.py:96` binds the arg list first via
+   `partial(handle_result, [kitten] + orig_args)`, so the id lands third, not second.
+   [CORRECTED 2026-09-16 by §10.5's sibling finding: this step read "second argument". Writing
+    the signature that way gives the wrong arity, which surfaces as a popup on every press with
+    no stack trace.]
 2. **Optionally gate on the band.** `boss.window_id_map[wid].current_mouse_position()` →
    `get_mouse_data_for_window` → `{cell_x, cell_y, in_left_half_of_cell}` — **cell resolution only**,
    and it returns **`None`** on a window-lookup miss (master state.c:1979 / v:1745 `Py_RETURN_NONE`).
@@ -1175,8 +1184,12 @@ contextmanager wrapping `dnd_test_create_fake_window()` / `dnd_test_cleanup_fake
 - **T5** no window ⇒ no crash, state untouched.
 - **Passthrough** must be asserted separately: a region-restricted action that consumes when it should
   pass through is invisible to the arming test.
-- **Do NOT reach for the `dnd_test_*` family beyond `create/cleanup_fake_window`** — those thirteen
-  hooks drive `w->drag_source`, the OSC protocol a *client program* uses, and share no state with
+- **Do NOT reach for the `dnd_test_*` family beyond `create/cleanup_fake_window`** — those hooks
+  drive `w->drag_source`, the OSC protocol a *client program* uses, and share no state with
+  [CORRECTED 2026-09-16 by §10.5: this said "those thirteen hooks", which is wrong for exactly
+   one of them. `dnd_test_set_mouse_pos` touches NO `drag_source` field — it writes only
+   `w->mouse_pos.{cell_x,cell_y,global_x,global_y}` (master `kitty/dnd.c`, verified), which makes
+   it the one headless lever for a region/passthrough test. Do not exclude it with the rest.]
   `global_state.window_being_dragged`.
 
 ---
