@@ -25,6 +25,21 @@ WHY cmd+right, NOT PLAIN right-click
     `grabbed,ungrabbed` so it fires everywhere, mirrors the already-verified-free cmd+left, and
     leaves kitty's own plain-right-click paste intact for the panes where it still works.
 
+WHICH WINDOW THE MENU BELONGS TO — the POINTER, never the focus (fixed 2026-09-16)
+    Every row in this menu is relative to one window: the directions are measured from it, it is
+    the one window NOT offered as a destination, and its active pane is what Paste / Close Pane /
+    the move act on. That window used to be `focused_window_id()`. macOS makes a background window
+    key on a LEFT mouse down and not on a right one, so right-clicking a window the operator had
+    not been typing in moved kitty's focus by nothing at all, and the menu belonged to the window
+    they had left. The operator's report contained its own control: "the direction is stale if you
+    right-click a window on the screen above and then one below — not a problem if you left-click
+    before the second right-click", i.e. the defect vanishes exactly when a left click supplies the
+    focus change the right click never made. Measured on that tree, right-clicking os-window 14
+    rendered `claude-infrastructure — 2 panes, on the display above`: the clicked window offering
+    ITSELF as a destination, and describing itself as being on a display it was not on.
+    choose_anchor() now hit-tests the pointer against the kitty window frames the probe emits, and
+    falls back to focus only when the pointer cannot be placed in a window this instance owns.
+
 WHAT THE MENU OFFERS (and where it routes)
     Paste                       kitty @ action paste_from_selection  — parity with the binding
                                  this replaces, so nothing is lost by adding the rest.
@@ -269,6 +284,85 @@ def owning_os_window_id(tree: list, wid: int) -> int | None:
     return None
 
 
+def os_window_by_platform_id(tree: list, pwid: int | None) -> dict | None:
+    """The kitty os-window whose macOS window number is `pwid`.
+
+    A miss is ordinary, not an error: kitty keeps helper windows the tree never lists (a 500x500
+    unnamed one and the title-bar probe are both live on this box), and the probe's only filter is
+    a 200 px height floor. A pointer over one of those returns None and the caller falls back."""
+    if pwid is None:
+        return None
+    for osw in tree:
+        if osw.get("platform_window_id") == pwid:
+            return osw
+    return None
+
+
+def active_window_id(osw: dict | None) -> int | None:
+    """The pane that a click in `osw` acts on: its active tab's active window.
+
+    NOT `is_focused`. kitty sets `is_focused` only inside the frontmost OS window, so on the very
+    window this function exists to serve — one the operator right-clicked WITHOUT raising — every
+    pane reads focused=False. `is_active` is the per-OS-window answer and is the one kitty updates
+    on a mouse press in that window, so it names the pane under the pointer rather than the last
+    one the operator typed in."""
+    if not osw:
+        return None
+    tabs = osw.get("tabs", [])
+    tab = next(
+        (t for t in tabs if t.get("is_active")),
+        next((t for t in tabs if t.get("is_focused")), tabs[0] if tabs else None),
+    )
+    if not tab or not tab.get("windows"):
+        return None
+    wins = tab["windows"]
+    w = next((x for x in wins if x.get("is_active")),
+             next((x for x in wins if x.get("is_focused")), wins[0]))
+    return w["id"]
+
+
+def choose_anchor(tree: list, probe_out: str,
+                  focused_wid: int | None) -> tuple[int | None, int | None, str, int | None]:
+    """Which OS window this menu BELONGS to: (os-window id, pane id, source, macOS window number).
+
+    WHERE THE POINTER IS, NOT WHERE THE KEYBOARD FOCUS IS — the whole fix of 2026-09-16. Every
+    direction in this menu is measured from the anchor, and until today the anchor was kitty's
+    FOCUSED pane. macOS does not make a background window key on a RIGHT click (only a left one
+    does), so right-clicking a kitty window on another display left kitty's focus exactly where it
+    was and the menu placed every target relative to a window the operator had left. The operator's
+    report named its own control: "the direction is stale if you right-click a window on the screen
+    above and then one below — not a problem if you left-click before the second right-click", i.e.
+    the bug disappears precisely when a left click supplies the focus change the right click never
+    made.
+
+    IT WAS NEVER ONLY THE CLAUSE. The anchor also decides WHICH windows are offered (itself is
+    excluded) and WHICH PANE Paste / Close Pane / the move act on — so a stale anchor offered the
+    clicked window as a destination for itself and aimed all three actions at a pane in a different
+    OS window. The clause is just the half that is visible before you commit.
+
+    THE FALLBACK IS THE OLD BEHAVIOUR, deliberately and in three cases that are not the same
+    failure: an old helper binary emits no `C`/`W` rows at all; a pointer over a kitty window this
+    instance does not own (another kitty --instance-group, or one of the helper windows the tree
+    never lists) resolves to no os-window; and a pointer that could not be read at all comes back
+    `-`. Focus is right in the single-window case, which is most of them, and it was the entire
+    behaviour of this file before today — so degrading to it can only ever restore the status quo.
+
+    THE POINTER IS SAMPLED BY THE PROBE, tens of milliseconds after the click that spawned it. That
+    is a sample of a moving quantity and it is still the correct one: a hand completing a right
+    click does not cross a window boundary in that time, whereas the focused window is not a sample
+    of the click at all — it is a different fact that merely used to be correlated with it."""
+    cursor, frames = parse_hit(probe_out)
+    pwid = window_under(cursor, frames)
+    osw = os_window_by_platform_id(tree, pwid)
+    if osw is not None:
+        pane = active_window_id(osw)
+        if pane is not None:
+            return osw["id"], pane, "cursor", pwid
+    if focused_wid is None:
+        return None, None, "focus", pwid
+    return owning_os_window_id(tree, focused_wid), focused_wid, "focus", pwid
+
+
 # ── IDENTITY: what a window IS, in the words the operator is already reading ─────────────────────
 # The row's job is to match a string ALREADY in the operator's visual field. On this box that
 # string is the OS-window title: macOS paints it on the Mission Control tile, and kitty paints it
@@ -395,6 +489,7 @@ def describe_os_window(osw: dict, mc_name: str) -> tuple[str, str]:
 
 _PROBE_MARKER = b"KPM-WINDOWS-MODE-V1"
 _GEOM_MARKER = b"KPM-DISPLAY-GEOM-V1"
+_CURSOR_MARKER = b"KPM-CURSOR-HIT-V1"
 
 
 @functools.lru_cache(maxsize=1)
@@ -431,6 +526,72 @@ def native_supports_geom() -> bool:
     cannot be fixed at all, and only this test tells them apart — so --check reports it rather than
     leaving the operator to wonder why a two-monitor menu lost its directions."""
     return _GEOM_MARKER in _native_image()
+
+
+def native_supports_cursor() -> bool:
+    """True when that helper also emits the `C` pointer row and the `W` window frames (2026-09-16).
+
+    Third marker, third capability, and the only one whose absence used to produce a CONFIDENTLY
+    WRONG menu rather than a quiet one — so it is the one that most needs to be distinguishable
+    from an old binary. Without these rows the anchor falls back to kitty's focused window, which
+    is the bug: see anchor_os_window()."""
+    return _CURSOR_MARKER in _native_image()
+
+
+def parse_hit(out: str) -> tuple[tuple[int, int] | None, list[dict]]:
+    """Split the probe's `C` and `W` rows into (pointer, window frames front-to-back).
+
+    Pure, and kept OUT of parse_probe() rather than folded into it: parse_probe's three-value
+    return is read positionally at eight call sites, and widening it to carry an unrelated fourth
+    fact is how a signature change becomes a silent mis-bind. These are a different question over
+    the same text.
+
+    Frames come back sorted by the probe's own z index — 0 is frontmost — because the hit test
+    wants the TOPMOST window under the pointer and line order is not something a TSV promises."""
+    cursor: tuple[int, int] | None = None
+    frames: list[dict] = []
+    for line in (out or "").splitlines():
+        if line.startswith("C\t"):
+            f = line.split("\t")
+            if len(f) >= 3 and f[1].lstrip("-").isdigit() and f[2].lstrip("-").isdigit():
+                cursor = (int(f[1]), int(f[2]))
+            continue
+        if line.startswith("W\t"):
+            f = line.split("\t")
+            if len(f) < 8:
+                continue
+            try:
+                num, z = int(f[1]), int(f[2])
+                rect = tuple(int(v) for v in f[3:7])
+            except ValueError:
+                continue
+            frames.append({"num": num, "z": z, "rect": rect, "onscreen": f[7] == "1"})
+    frames.sort(key=lambda w: w["z"])
+    return cursor, frames
+
+
+def window_under(cursor: tuple[int, int] | None, frames: list[dict]) -> int | None:
+    """The kCGWindowNumber of the FRONTMOST on-screen kitty window containing the pointer.
+
+    OFF-SCREEN WINDOWS ARE EXCLUDED, and that is the whole correctness argument rather than a
+    tidiness one: `.optionAll` enumerates windows on every Space, and a window sitting on another
+    desktop keeps the frame it had there — measured, two windows on this box report the identical
+    1680x1050 rect at (-63,-1050) with only one of them visible. Hit-testing against a window the
+    operator cannot see would name a window they did not click.
+
+    Given that filter, the answer is exact: a right-click lands on pixels the operator can see, so
+    the window they clicked IS the frontmost visible one under the pointer. No other window can be
+    in front of it there — if one were, it would have received the click."""
+    if cursor is None:
+        return None
+    x, y = cursor
+    for w in frames:
+        if not w["onscreen"]:
+            continue
+        rx, ry, rw, rh = w["rect"]
+        if rx <= x < rx + rw and ry <= y < ry + rh:
+            return w["num"]
+    return None
 
 
 def parse_probe(out: str) -> tuple[dict[int, tuple[int, int]], dict[int, str], dict[int, dict]]:
@@ -481,24 +642,28 @@ def parse_probe(out: str) -> tuple[dict[int, tuple[int, int]], dict[int, str], d
     return places, names, displays
 
 
-def reap_probe(proc) -> tuple[dict[int, tuple[int, int]], dict[int, str], dict[int, dict], str]:
-    """Collect the Popen started before the tree fetch. (places, names, displays, source). Bounded
-    and fail-quiet: a cosmetic label may never hold the menu open, and a wrong SPI signature would
-    segfault the CHILD — which arrives here as a non-zero exit and a dropped label, never a dead
-    menu. That containment is the reason the probe is a subprocess at all."""
+def reap_probe(proc) -> tuple[dict[int, tuple[int, int]], dict[int, str], dict[int, dict], str, str]:
+    """Collect the Popen started before the tree fetch. (places, names, displays, source, raw).
+    Bounded and fail-quiet: a cosmetic label may never hold the menu open, and a wrong SPI
+    signature would segfault the CHILD — which arrives here as a non-zero exit and a dropped
+    label, never a dead menu. That containment is the reason the probe is a subprocess at all.
+
+    The RAW text comes back beside the parsed maps because choose_anchor() reads a different
+    question out of the same rows, and re-running the probe to ask it would be a second pointer
+    sample taken later than the click."""
     if proc is None:
-        return {}, {}, {}, "none"
+        return {}, {}, {}, "none", ""
     try:
         out, _err = proc.communicate(timeout=0.4)
     except subprocess.TimeoutExpired:
         proc.kill()
-        return {}, {}, {}, "none"
+        return {}, {}, {}, "none", ""
     except OSError:
-        return {}, {}, {}, "none"
+        return {}, {}, {}, "none", ""
     if proc.returncode != 0:
-        return {}, {}, {}, "none"  # 2 = DLSYM-MISS: a future macOS dropped the SPI. Checkable.
+        return {}, {}, {}, "none", ""  # 2 = DLSYM-MISS: a future macOS dropped the SPI.
     places, names, displays = parse_probe(out or "")
-    return places, names, displays, "cgs" if places else "none"
+    return places, names, displays, "cgs" if places else "none", out or ""
 
 
 def space_probe_plist() -> dict[int, tuple[int, int]]:
@@ -755,12 +920,16 @@ def main() -> int:
         print(f"kitty-pane-menu: no reply from kitty (address={ADDRESS})", file=sys.stderr)
         return 3
 
-    wid = focused_window_id(tree)
+    places, mc_names, displays, place_src, probe_raw = reap_probe(probe)
+
+    # The anchor — see choose_anchor(). This is the line the 2026-09-16 fix turns on: the menu
+    # belongs to the window under the POINTER, and only falls back to the focused one when the
+    # pointer cannot be placed in a window this kitty owns.
+    self_osw, wid, anchor_src, clicked_pwid = choose_anchor(tree, probe_raw, focused_window_id(tree))
     if wid is None:
         print("kitty-pane-menu: no focused window — refusing to guess", file=sys.stderr)
         return 0
 
-    places, mc_names, displays, place_src = reap_probe(probe)
     if not places:
         # The plist is a stale CACHE of the same layout: insertions preserve relative ORDER but not
         # the counts, so this source yields a direction word and never a number. It carries no
@@ -770,7 +939,6 @@ def main() -> int:
         displays = {}
         place_src = "plist" if places else "none"
 
-    self_osw = owning_os_window_id(tree, wid)
     targets = (
         other_targets(tree, self_osw, places, mc_names, place_src == "cgs", displays)
         if self_osw is not None
@@ -781,6 +949,17 @@ def main() -> int:
 
     if check:
         print(f"window    : {wid}")
+        # The anchor is the fact a --check most needs to report: `focus` on a two-window box means
+        # either an old helper or a pointer the probe could not place, and both render a menu whose
+        # directions are measured from wherever the keyboard was.
+        print(
+            f"anchor    : {anchor_src}"
+            + (f" (macOS window {clicked_pwid} -> kitty os-window {self_osw})"
+               if anchor_src == "cursor" else " [pointer unplaced — directions are from the FOCUSED"
+                                              " window, which a right click does not move]")
+            + ("" if native_supports_cursor() else
+               "  [helper predates the pointer rows; run kitty-setup.sh --apply]")
+        )
         print(
             f"desktops  : {place_src} ({len(places)} window(s) placed)"
             + ("" if native_supports_windows() else "  [helper predates --windows; run kitty-setup.sh --apply]")

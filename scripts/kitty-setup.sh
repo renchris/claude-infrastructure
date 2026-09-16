@@ -609,7 +609,12 @@ elif ! grep -q KPM-WINDOWS-MODE-V1 "$BIN_DIR/kitty-pane-menu-native" 2>/dev/null
   info "native helper predates --windows — run --apply to recompile; menu works, no directions"
 else
   probe_out="$("$BIN_DIR/kitty-pane-menu-native" --windows 2>/tmp/kitty-setup-probe.err)"; probe_rc=$?
-  placed=$(printf '%s\n' "$probe_out" | awk -F'\t' 'NF>=5 && $3!="-"' | grep -c . || true)
+  # ONLY THE UNTAGGED ROWS ARE WINDOW ROWS. The probe's other kinds are tagged in field 1 (`D`
+  # displays, `C` pointer, `W` frames) and several of them also carry >=5 fields with a non-`-`
+  # third one, so an NF-only filter counts them as placed windows — it was already inflating this
+  # number by one per display before the `W` rows existed. Anchoring on a numeric field 1 is what
+  # the row grammar actually promises.
+  placed=$(printf '%s\n' "$probe_out" | awk -F'\t' '$1 ~ /^[0-9]+$/ && NF>=5 && $3!="-"' | grep -c . || true)
   if [ "$probe_rc" -ne 0 ] && grep -q DLSYM-MISS /tmp/kitty-setup-probe.err 2>/dev/null; then
     info "the Spaces SPI is gone on this macOS — rows keep their name and pane count, no direction"
   elif [ "$probe_rc" -ne 0 ]; then
@@ -629,6 +634,23 @@ else
       ok "one display — cross-display directions ready if a second is attached"
     else
       info "no display frames read — cross-display rows will say 'on another display'"
+    fi
+    # THE THIRD CAPABILITY, and the only one whose absence produces a CONFIDENTLY WRONG menu rather
+    # than a quiet one. Without the `C`/`W` rows the menu anchors on kitty's FOCUSED window; macOS
+    # does not make a background window key on a right click, so right-clicking a window on another
+    # display then measures every direction from the window the operator had left, and offers the
+    # clicked window as a destination for itself (operator report 2026-09-16).
+    if ! grep -q KPM-CURSOR-HIT-V1 "$BIN_DIR/kitty-pane-menu-native" 2>/dev/null; then
+      info "helper predates the pointer rows — run --apply, or a right-click on an UNFOCUSED window aims the menu at the focused one"
+    # COUNTED, not `grep -q`: an early-exit consumer SIGPIPEs the producer above it, and under
+    # `set -o pipefail` that makes the condition read FALSE on a MATCH — the repo's own land gate
+    # names this class and caught this very line. `grep -c` prints its 0 before exiting 1, so the
+    # `|| true` adds no second producer to the stream.
+    elif [ "$(printf '%s\n' "$probe_out" | awk -F'\t' '$1=="C" && $2!="-"' | grep -c . || true)" -ge 1 ]; then
+      wframes=$(printf '%s\n' "$probe_out" | awk -F'\t' '$1=="W"' | grep -c . || true)
+      ok "pointer anchor live — the menu belongs to the window under the cursor ($wframes frame(s))"
+    else
+      info "pointer could not be read — the menu falls back to kitty's focused window"
     fi
   else
     info "probe ran but placed no window — rows keep their name and pane count, no direction"
