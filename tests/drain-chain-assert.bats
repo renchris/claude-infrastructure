@@ -495,3 +495,46 @@ age_file() { python3 -c 'import os,sys,time;t=time.time()-float(sys.argv[2]);os.
   run grep -c 'drain_chain_rc' "$REPO/scripts/autonomy-sweep.sh"
   [ "$status" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------------------------
+# THE LANE SPLIT — the default glob must span it, and until 2026-09-16 it did not.
+#
+# Every case above overrides CC_DRAIN_BRIEF_GLOB to `fire-drain-recycle*.txt`, which is the PRE-SPLIT
+# name. That override holds the one axis this pair tests constant, so the suite was decorative on it
+# [[fixture-identifier-shape-collapses-two-spaces]]: the 2026-09-04 lane split renamed briefs to
+# `fire-drain-infra-recycle<N>.txt` / `fire-drain-reso-…`, the production default could not match
+# either, and the detector aged out against a stale pre-split file for twelve days. It still said
+# `dead` on 2026-09-16 only because BOTH ages exceeded the bound — had the chain died within a day of
+# a legacy brief being touched it would have reported ALIVE over a dead chain.
+#
+# These two cases therefore UNSET the override and exercise the real default.
+
+@test "lane-split: the DEFAULT glob finds an infra-lane brief (pre-fix it found nothing)" {
+  add "a row" >/dev/null
+  mkdir -p "$HOME/.claude/autonomy"
+  : > "$HOME/.claude/autonomy/fire-drain-infra-recycle333.txt"
+  unset CC_DRAIN_BRIEF_GLOB
+  export CLAUDE_CONFIG_DIR="$HOME/.claude"
+  brief="$(bash "$SUBJECT" --json | jq -r '.brief')"
+  case "$brief" in
+    *fire-drain-infra-recycle333.txt) : ;;
+    *) echo "default glob did not resolve the lane-split brief: $brief"; return 1 ;;
+  esac
+}
+
+@test "lane-split MUTANT: restore the pre-split glob and the same brief becomes invisible" {
+  add "a row" >/dev/null
+  mkdir -p "$HOME/.claude/autonomy"
+  : > "$HOME/.claude/autonomy/fire-drain-infra-recycle333.txt"
+  unset CC_DRAIN_BRIEF_GLOB
+  export CLAUDE_CONFIG_DIR="$HOME/.claude"
+  sed 's/fire-drain-\*recycle\*\.txt/fire-drain-recycle*.txt/g' "$SUBJECT" \
+      > "$BATS_TEST_TMPDIR/mutant-dca.sh"
+  if cmp -s "$SUBJECT" "$BATS_TEST_TMPDIR/mutant-dca.sh"; then
+    echo "mutant applied to NOTHING — the anchor moved, so this case proves nothing"; return 1
+  fi
+  brief="$(bash "$BATS_TEST_TMPDIR/mutant-dca.sh" --json | jq -r '.brief')"
+  case "$brief" in
+    *fire-drain-infra-recycle333.txt) echo "mutant still saw the brief — the cure is not what is tested"; return 1 ;;
+  esac
+}
