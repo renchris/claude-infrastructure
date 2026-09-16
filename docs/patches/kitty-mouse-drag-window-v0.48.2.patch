@@ -1,0 +1,250 @@
+# mouse_drag_window — BACKPORT to kitty v0.48.2 (2cb1d95, tag v0.48.2)
+#
+# Apply with:  git -C <a v0.48.2 checkout> apply docs/patches/kitty-mouse-drag-window-v0.48.2.patch
+#
+# This is NOT the master patch. Two hunks below exist ONLY in this file, because
+# OSWindow.mouse_left_press_x/y is master-only at v0.48.2:
+#   * kitty/state.h  — the field on OSWindow
+#   * kitty/glfw.c   — its WRITE SITE, in the LEFT-press branch of
+#                      mouse_button_callback, before the mouse_event(...) call.
+# Exposing the field without the write site yields a drag armed at (0,0), which is
+# indistinguishable from a successful arm in a before/after state read.
+#
+# Deliberately NOT ported, each for a stated reason (see
+# docs/patches/kitty-mouse-drag-window-PR.md § Backport notes (v0.48.2)):
+#   * kitty/shaders.c     — a DIFFERENT master-only feature that reads the same field.
+#   * kitty/tabs.py        — the Q5 on_window_drop ordering fix; v0.48.2's
+#                            on_window_drop is a materially different function.
+#   * docs/changelog.rst   — local build, not an upstream submission.
+#   * kitty_tests/*        — kitty_tests/base.py is master-only; there is no test wave.
+diff --git a/kitty/fast_data_types.pyi b/kitty/fast_data_types.pyi
+index 70b85c7..ff94a30 100644
+--- a/kitty/fast_data_types.pyi
++++ b/kitty/fast_data_types.pyi
+@@ -1582,6 +1582,16 @@ class MousePosition(TypedDict):
+ 
+ def get_mouse_data_for_window(os_window_id: int, tab_id: int, window_id: int) -> Optional[MousePosition]: ...
+ 
++class MousePressData(TypedDict):
++    cell_x: int
++    cell_y: int
++    left_press_x: float
++    left_press_y: float
++    drag_in_progress: bool
++
++def get_mouse_press_data_for_window(window_id: int) -> Optional[MousePressData]: ...
++def clear_click_queue_for_window(window_id: int, button: int) -> None: ...
++
+ class StreamingBase64Decoder:
+     # reset the state to empty to start decoding a new stream
+     def reset(self) -> None: ...
+diff --git a/kitty/glfw.c b/kitty/glfw.c
+index 877eee4..c383211 100644
+--- a/kitty/glfw.c
++++ b/kitty/glfw.c
+@@ -587,6 +587,10 @@ mouse_button_callback(GLFWwindow *w, int button, int action, int mods) {
+             if (is_window_ready_for_callbacks()) mouse_event(-1, mods, -1);
+         }
+         global_state.callback_os_window->mouse_button_pressed[button] = action == GLFW_PRESS ? true : false;
++        if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
++            window->mouse_left_press_x = window->mouse_x;
++            window->mouse_left_press_y = window->mouse_y;
++        }
+         if (is_window_ready_for_callbacks()) mouse_event(button, mods, action);
+     }
+     request_tick_callback();
+diff --git a/kitty/options/utils.py b/kitty/options/utils.py
+index acee2cf..b3d8b33 100644
+--- a/kitty/options/utils.py
++++ b/kitty/options/utils.py
+@@ -460,6 +460,22 @@ def mouse_selection(func: str, rest: str) -> FuncArgsType:
+     return func, [cmap[rest]]
+ 
+ 
++@func_with_args('mouse_drag_window')
++def mouse_drag_window(func: str, rest: str) -> FuncArgsType:
++    rows = 0
++    rest = rest.strip()
++    if rest:
++        try:
++            rows = int(rest)
++        except Exception:
++            log_error(f'Invalid number of rows for mouse_drag_window: {rest}')
++        else:
++            if rows < 0:
++                log_error(f'The number of rows for mouse_drag_window must be non-negative, not: {rows}')
++                rows = 0
++    return func, [rows]
++
++
+ @func_with_args('load_config_file')
+ def load_config_file(func: str, rest: str) -> FuncArgsType:
+     return func, list(shlex_split(rest))
+diff --git a/kitty/state.c b/kitty/state.c
+index 56e0896..92b3ffd 100644
+--- a/kitty/state.c
++++ b/kitty/state.c
+@@ -1745,6 +1745,41 @@ get_mouse_data_for_window(PyObject *self UNUSED, PyObject *args) {
+     Py_RETURN_NONE;
+ }
+ 
++static PyObject*
++get_mouse_press_data_for_window(PyObject *self UNUSED, PyObject *args) {
++    // The data needed to start a drag of the specified window: the cell the
++    // mouse is over, the position, in OS Window pixels, of the last left button
++    // press in the OS Window containing it, and whether some other mouse drag
++    // is already in progress. The OS Window is resolved from the window, never
++    // from the OS Window the current callback is for, since actions are not
++    // always dispatched from within a callback.
++    id_type window_id;
++    PA("K", &window_id);
++    Window *window = window_for_window_id(window_id);
++    OSWindow *osw = os_window_for_kitty_window(window_id);
++    if (!window || !osw) Py_RETURN_NONE;
++    const bool drag_in_progress = global_state.active_drag_in_window || global_state.tracked_drag_in_window;
++    return Py_BuildValue("{sI sI sd sd sO}",
++            "cell_x", window->mouse_pos.cell_x,
++            "cell_y", window->mouse_pos.cell_y,
++            "left_press_x", osw->mouse_left_press_x,
++            "left_press_y", osw->mouse_left_press_y,
++            "drag_in_progress", drag_in_progress ? Py_True : Py_False);
++}
++
++static PyObject*
++clear_click_queue_for_window(PyObject *self UNUSED, PyObject *args) {
++    // Forget the presses recorded for the specified button in the specified
++    // window, so that a press whose release is consumed elsewhere does not make
++    // the next press count as a multi-click.
++    id_type window_id;
++    int button;
++    PA("Ki", &window_id, &button);
++    Window *window = window_for_window_id(window_id);
++    if (window && 0 <= button && button < (ssize_t)arraysz(window->click_queues)) window->click_queues[button].length = 0;
++    Py_RETURN_NONE;
++}
++
+ #define tbd global_state.tab_being_dragged
+ static PyObject*
+ set_tab_being_dragged(PyObject *self UNUSED, PyObject *args) {
+@@ -1798,6 +1833,8 @@ request_callback_with_thumbnail(PyObject *self UNUSED, PyObject *args) {
+ static PyMethodDef module_methods[] = {
+     M(os_window_focus_counters, METH_NOARGS),
+     M(get_mouse_data_for_window, METH_VARARGS),
++    M(get_mouse_press_data_for_window, METH_VARARGS),
++    M(clear_click_queue_for_window, METH_VARARGS),
+     M(request_callback_with_thumbnail, METH_VARARGS),
+     M(set_tab_being_dragged, METH_VARARGS),
+     M(get_tab_being_dragged, METH_NOARGS),
+diff --git a/kitty/state.h b/kitty/state.h
+index 77a1599..4ea91bf 100644
+--- a/kitty/state.h
++++ b/kitty/state.h
+@@ -445,6 +445,7 @@ typedef struct OSWindow {
+     int mouse_show_threshold;
+     bool has_received_cursor_pos_event;
+     double mouse_x, mouse_y;
++    double mouse_left_press_x, mouse_left_press_y;
+     bool mouse_button_pressed[32];
+     bool has_too_few_tabs;
+     PyObject *window_title;
+diff --git a/kitty/window.py b/kitty/window.py
+index aa1096d..83f409b 100644
+--- a/kitty/window.py
++++ b/kitty/window.py
+@@ -44,6 +44,7 @@
+     ESC_DCS,
+     ESC_OSC,
+     GLFW_MOD_CONTROL,
++    GLFW_MOUSE_BUTTON_LEFT,
+     GLFW_PRESS,
+     GLFW_RELEASE,
+     GLFW_REPEAT,
+@@ -62,6 +63,7 @@
+     base64_decode,
+     buffer_keys_in_window,
+     cell_size_for_window,
++    clear_click_queue_for_window,
+     click_mouse_cmd_output,
+     click_mouse_url,
+     current_focused_os_window_id,
+@@ -70,6 +72,7 @@
+     get_boss,
+     get_click_interval,
+     get_mouse_data_for_window,
++    get_mouse_press_data_for_window,
+     get_options,
+     get_window_logo_settings_if_not_default,
+     glfw_get_keyboard_repeat_interval,
+@@ -85,6 +88,7 @@
+     remove_timer,
+     replace_c0_codes_except_nl_space_tab,
+     set_redirect_keys_to_overlay,
++    set_window_being_dragged,
+     set_window_logo,
+     set_window_padding,
+     set_window_render_data,
+@@ -1994,6 +1998,64 @@ def mouse_selection(self, code: int) -> None:
+                 return
+         mouse_selection(self.os_window_id, self.tab_id, self.id, code, self.current_mouse_event_button)
+ 
++    @ac(
++        'mouse',
++        """
++        Begin dragging the window under the mouse
++
++        Starts the same drag that pressing in a window title bar starts, so that the window can be
++        re-ordered within its layout, moved to another tab or OS Window, or detached into a new OS
++        Window, by dropping it. The drag begins only after the mouse has moved farther than
++        :opt:`drag_threshold`; setting that option to zero disables this action as well. While the
++        drag is in progress kitty temporarily shows window title bars so that other windows can be
++        used as drop targets, hiding them again when the drop completes.
++
++        Unlike :ac:`toggle_window_title_bars` this does not require window title bars to be
++        visible, so it can be used to drag a window whose title bar is hidden::
++
++            mouse_map cmd+left press grabbed,ungrabbed mouse_drag_window
++
++        Optionally takes the number of rows, counted from the top of the window, within which the
++        press must occur. Presses below that region are passed on to the program running in the
++        window instead. This is intended for programs that draw their own header at the top of the
++        window, for instance with the :doc:`graphics protocol </graphics-protocol>`, which kitty
++        has no way of knowing about::
++
++            mouse_map cmd+left press grabbed,ungrabbed mouse_drag_window 2
++
++        Note that the rows are counted from the top of the window's text area, so when a window
++        title bar is visible, row one is the first row below it.
++
++        Map this to the press of the left mouse button. Mapping it to a different button will leave
++        the drag armed after the button is released. For the same reason, do not use this action as
++        anything other than the first action of a :ac:`combine`, since the rest of a combine runs
++        after the mouse event that triggered it has been fully processed.
++
++        For examples, see :ref:`conf-kitty-mouse.mousemap`
++        """,
++    )
++    def mouse_drag_window(self, rows: int = 0) -> bool | None:
++        # Returning True means the press was not consumed and is passed on.
++        if self.current_mouse_event_button != GLFW_MOUSE_BUTTON_LEFT:
++            return True
++        threshold = get_options().drag_threshold
++        if not threshold:  # dragging is disabled
++            return True
++        data = get_mouse_press_data_for_window(self.id)
++        if data is None or data['drag_in_progress']:
++            return True
++        if rows > 0 and data['cell_y'] >= rows:
++            return True
++        get_boss().set_active_window(self, switch_os_window_if_needed=True)
++        # The drag is armed but not started, the motion handler starts it once
++        # the pointer has moved farther than drag_threshold from this position.
++        set_window_being_dragged(self.id, False, data['left_press_x'], data['left_press_y'])
++        # The release is consumed by the drag handler, so the presses recorded
++        # for this button must be forgotten, otherwise the next press counts as
++        # a double click. Same hazard and cure as in handle_potential_drag().
++        clear_click_queue_for_window(self.id, GLFW_MOUSE_BUTTON_LEFT)
++        return None
++
+     @ac('mouse', 'Paste the current primary selection')
+     def paste_selection(self) -> None:
+         txt = get_boss().current_primary_selection()
