@@ -66,9 +66,20 @@ final class MenuDelegate: NSObject {
 }
 
 // ── --windows probe mode ────────────────────────────────────────────────────────────────────────
-// Two row kinds on stdout, and nothing else. Displays first, then windows:
+// Four row kinds on stdout, and nothing else. Displays, then the pointer, then window frames,
+// then the window table:
 //     D\t<displayIndex>\t<Display Identifier>\t<x>\t<y>\t<w>\t<h>\t<currentSpaceOrdinal|->
+//     C\t<pointerX|->\t<pointerY|->
+//     W\t<kCGWindowNumber>\t<zIndex, 0 = frontmost>\t<x>\t<y>\t<w>\t<h>\t<onscreen 0|1>
 //     <kCGWindowNumber>\t<displayIndex>\t<ordinal|->\t<onscreen 0|1>\t<kCGWindowName>
+//
+// THE LAST KIND IS UNCHANGED ON PURPOSE, and the three tagged kinds are additive for the same
+// reason: the caller is a symlink that goes live on a land while this binary only moves when
+// kitty-setup.sh recompiles it, so BOTH skew directions have to survive. An old caller splits a
+// `C`/`W` row and drops it (a non-numeric first field is not a window number); a new caller
+// against an old binary sees no such rows and falls back. Appending fields to the window row
+// instead would have broken the old caller's parse, which reads the NAME as everything after the
+// fourth tab.
 // displayIndex/ordinal are 1-based; "-" means the window joined no managed Space (the caller then
 // drops the direction clause from EVERY row rather than rendering a half-numbered menu).
 //
@@ -105,6 +116,17 @@ let PROBE_MARKER = "KPM-WINDOWS-MODE-V1"   // >15 UTF-8 bytes on purpose — see
 // `swiftc -O` into the string table where the caller can grep it.
 let GEOM_MARKER = "KPM-DISPLAY-GEOM-V1"
 
+// Third capability, third marker, same skew story — and this one fixes a WRONG ANSWER rather than
+// a missing clause, so it is the one that most needs telling apart from "an old binary". The
+// caller's anchor used to be kitty's FOCUSED window; macOS does not make a background window key
+// on a RIGHT click, so right-clicking a window on another display left the anchor on the window
+// the operator had been in and every direction was measured from the wrong origin (operator
+// report 2026-09-16: "stale unless I left-click first"). The cure is the cursor, which is ground
+// truth at the moment of the click — so this mode now emits where the pointer is and where each
+// kitty window is, and the caller hit-tests. An old binary emits neither, which is exactly the
+// state where the caller must fall back to focus rather than guess.
+let CURSOR_MARKER = "KPM-CURSOR-HIT-V1"
+
 private func emitWindows() -> Int32 {
     // Emitted on stderr, which the caller discards — its job is to force the literal into the
     // compiled binary, and TWO things had to be true for that to work, both found by grepping the
@@ -114,7 +136,7 @@ private func emitWindows() -> Int32 {
     // string table at all — the first marker, `KPM-WINDOWS-V1`, was 14 bytes and was absent from
     // the optimised build while being printed correctly at run time. Keep this literal above 15
     // bytes or the caller's capability test silently reads every new binary as old.
-    FileHandle.standardError.write("\(PROBE_MARKER) \(GEOM_MARKER)\n".data(using: .utf8)!)
+    FileHandle.standardError.write("\(PROBE_MARKER) \(GEOM_MARKER) \(CURSOR_MARKER)\n".data(using: .utf8)!)
     guard let h = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_NOW),
           let pConn = dlsym(h, "_CGSDefaultConnection") ?? dlsym(h, "CGSMainConnectionID"),
           let pDisp = dlsym(h, "CGSCopyManagedDisplaySpaces"),
@@ -129,7 +151,12 @@ private func emitWindows() -> Int32 {
         FileHandle.standardError.write("CGWINDOWLIST-NIL\n".data(using: .utf8)!)
         return 1
     }
-    var kitty: [(num: Int, name: String, onscreen: Bool)] = []
+    // THE ORDER OF THIS ARRAY IS THE Z-ORDER. CGWindowListCopyWindowInfo returns the window list
+    // front-to-back, and the `W` rows below preserve it as an explicit index rather than trusting
+    // line order to survive the TSV — the caller's hit test needs the FRONTMOST window under the
+    // pointer, and a right-click lands on pixels the operator can see, so that window is the one
+    // they clicked. The frame was already being read here and thrown away; it is now carried.
+    var kitty: [(num: Int, name: String, onscreen: Bool, rect: CGRect)] = []
     for w in list {
         guard (w[kCGWindowOwnerName as String] as? String) == "kitty",
               (w[kCGWindowLayer as String] as? Int) == 0,
@@ -138,7 +165,8 @@ private func emitWindows() -> Int32 {
               let hgt = b["Height"], hgt > 200 else { continue }
         kitty.append((num,
                       w[kCGWindowName as String] as? String ?? "",
-                      (w[kCGWindowIsOnscreen as String] as? Bool) ?? false))
+                      (w[kCGWindowIsOnscreen as String] as? Bool) ?? false,
+                      CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: hgt)))
     }
 
     let conn = unsafeBitCast(pConn, to: MainConnFn.self)()
@@ -197,6 +225,25 @@ private func emitWindows() -> Int32 {
             "\(Int($0.origin.x))\t\(Int($0.origin.y))\t\(Int($0.size.width))\t\(Int($0.size.height))"
         } ?? "-\t-\t-\t-"
         head += "D\t\(di + 1)\t\(ident)\t\(geom)\t\(curOrd.map(String.init) ?? "-")\n"
+    }
+
+    // WHERE THE POINTER IS, in the SAME coordinate space as kCGWindowBounds and CGDisplayBounds:
+    // CGEvent(source:nil)!.location has a top-left origin and spans all displays. NSEvent
+    // .mouseLocation is the trap here — it is bottom-left origin, so on a two-display layout it
+    // hit-tests into the wrong monitor while looking correct on a single screen. This mode also
+    // exits before any NSApplication exists, which NSEvent would need.
+    //
+    // A `-` for either field rather than a dropped row: the caller falls back to kitty's focused
+    // window when the pointer cannot be placed, and that is a different degrade from "this binary
+    // has no cursor mode at all" (which the marker answers).
+    if let loc = CGEvent(source: nil)?.location {
+        head += "C\t\(Int(loc.x))\t\(Int(loc.y))\n"
+    } else {
+        head += "C\t-\t-\n"
+    }
+    for (z, k) in kitty.enumerated() {
+        head += "W\t\(k.num)\t\(z)\t\(Int(k.rect.origin.x))\t\(Int(k.rect.origin.y))"
+              + "\t\(Int(k.rect.size.width))\t\(Int(k.rect.size.height))\t\(k.onscreen ? 1 : 0)\n"
     }
 
     // Queried one window at a time so the join is positional-free: a batch call returns a flat
