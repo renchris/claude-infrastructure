@@ -1,12 +1,33 @@
 #!/bin/bash
-# deploy-live.sh — the OPERATOR's one safe command for advancing the LIVE layer.
+# deploy-live.sh — the one safe command for advancing the LIVE layer.
 #
 # Why: the live checkout (~/Development/claude-infrastructure) is what every session actually
 # runs — hooks, scripts, launchd jobs. The old nag emitted a raw `git pull --ff-only`, which
-# deploys whatever happens to be on origin/main, VERIFIED OR NOT. Agents are classifier-blocked
-# from deploying, so the operator is the only one who can pull the trigger — this script makes
-# that trigger fail-closed: it advances ONLY to a commit whose tree carries a GREEN post-land
-# verification stamp, and refuses (loudly, with a page) when none exists.
+# deploys whatever happens to be on origin/main, VERIFIED OR NOT — so this script makes the
+# trigger fail-closed instead: it advances ONLY to a commit whose tree carries a GREEN post-land
+# verification stamp, degrades through the named tiers below when none exists, and refuses
+# (loudly, with a page) when trunk is red all the way down.
+#
+# 🚨 WHO MAY RUN IT — CORRECTED 2026-09-15, and the sentence this replaces cost a hand-off. It read
+# "Agents are classifier-blocked from deploying, so the operator is the only one who can pull the
+# trigger." MEASURED FALSE for the bare form: an agent ran `bash scripts/deploy-live.sh` that day
+# with no denial from the classifier or from any hook, and hooks/validate-bash.sh:1352 — the arm
+# that DOES deny an ungated advance — names THIS SCRIPT as the sanctioned alternative, i.e. the
+# hook layer already routes agents here. (The classifier does still refuse an agent EDIT to this
+# file, which is a different and correct guard: it protects the deploy path from being rewritten,
+# not from being run. Measured the same day, both arms.) A prose claim about a mechanism nobody
+# re-ran became the reason a session read the in-budget wait below, declined to converge, and
+# handed the operator a command; the operator then reached for `--force`, whose UNSTAMPED advance
+# immediately turned deploy-parity-assert's verification leg RED. Both costs trace to one sentence.
+#
+#   THE AGENT'S LEVER IS THE DEGRADED TIER, NEVER --force. `--force` takes the tip regardless of
+#   RED stamps and bypasses the ladder entirely; T2 takes the newest NOT-RED commit, still refuses
+#   a trunk that is red all the way down (T3), still runs install.sh so brand-new tracked files get
+#   their symlinks, and still banners + pages the unverified advance. So an agent that has just
+#   landed and needs its own work live relaxes the CLOCK, never the EVIDENCE:
+#       CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh
+#   `--force` stays what it always was: the operator's escape hatch, for when the ladder itself is
+#   the thing in the way. See .claude/CLAUDE.md § Standing-converge authorization.
 #
 # Stamp contract: <stamps>/<tree-sha>.json containing "verdict":"green" (tree-keyed, so a
 # rebase/cherry-pick that preserves the tree keeps its verdict). Written by postland-verify.sh.
@@ -2239,7 +2260,13 @@ EOF
         fi
         if [ -z "$TARGET" ] && [ -z "$LAG_TRIP" ] && { [ -n "$GREEN_SHA" ] || [ -n "$WAIT_DEEP" ]; }; then
           [ "$AUTO" -eq 1 ] && damp_clear
-          asay "waiting — $RMSG${WAIT_DEEP:+ ($WAIT_DEEP)}; lag $LAG_COMMITS commit(s) / $LAG_HM, inside the degrade budget ($MAX_LAG_COMMITS / ${MAX_LAG_HOURS}h) — no advance, and none is due yet"
+          # THE REMEDY RIDES THE REFUSAL, because this exact line is where a session stopped and
+          # handed the operator a command (2026-09-15). It stated a magnitude and a budget and no
+          # next step, so the only lever a reader could find was `--force` — which bypasses the
+          # ladder and reddened the verification leg within the minute. A caller that needs its own
+          # just-landed work live now has a strictly safer one, named HERE rather than in a doc, so
+          # it reaches the reader at the moment the question is actually being asked.
+          asay "waiting — $RMSG${WAIT_DEEP:+ ($WAIT_DEEP)}; lag $LAG_COMMITS commit(s) / $LAG_HM, inside the degrade budget ($MAX_LAG_COMMITS / ${MAX_LAG_HOURS}h) — no advance, and none is due yet. To converge NOW on the degraded tier (relaxes the CLOCK, keeps the no-RED evidence and the link refresh; never --force): CC_DEPLOY_MAX_LAG_COMMITS=0 bash $DEPLOY_REPO/scripts/deploy-live.sh"
           exit 0
         fi
         ;;
