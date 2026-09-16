@@ -35,6 +35,8 @@ setup() {
   OFF="$REPO/config/kitty.conf"
   ON="$REPO/config/kitty-title-on.conf"
   TOGGLE="$REPO/scripts/kitty-pane-title-toggle.sh"
+  # Kept though a49280bd9 removed the reservoir: case 4 still pins the FONT that derived it,
+  # because font_size 18.0 x cell_height 94% = 22.5pt is what any future one-cell band must use.
   RESERVOIR_PT="22.5"   # one cell, at font_size 18 x cell_height 94%
 }
 
@@ -42,7 +44,14 @@ setup() {
 # first would pass over a later line that actually decides the behaviour.
 last_directive() { grep -E "^[[:space:]]*$2([[:space:]]|$)" "$1" | tail -1 | sed -E "s/^[[:space:]]*$2[[:space:]]+//"; }
 
-@test "kitty.conf reserves exactly one cell of TOP padding and nothing at the bottom" {
+# REFUTED IN PLACE 2026-09-16 by a49280bd9, kept as the record of what was believed.
+# This case demanded top == 22.5 (one cell), the reservoir the ON-half config swap handed back.
+# The operator asked for that band to go ("Is there a way to remove the top margin?"): it cost
+# 45px of dead space at the top of every pane, all day, to make a chord pressed a few times a
+# week zero-shift. a49280bd9 removed it, so BOTH halves now read `0 5 0 5` and the assertion
+# below is the shipped design, not the old one. a49280bd9 ran kitty-conf-bindings and
+# cc-kitty-reload but NOT this suite, which is why these four cases sat red on trunk.
+@test "kitty.conf reserves NO top padding — the reservoir was removed (a49280bd9)" {
   run last_directive "$OFF" window_padding_width
   [ "$status" -eq 0 ] || false
   # four values = top right bottom left (CSS order)
@@ -51,7 +60,7 @@ last_directive() { grep -E "^[[:space:]]*$2([[:space:]]|$)" "$1" | tail -1 | sed
   # shellcheck disable=SC2086
   set -- $output
   [ "$#" -eq 4 ] || false
-  [ "$1" = "$RESERVOIR_PT" ] || false
+  [ "$1" = "0" ] || false
   [ "$3" = "0" ] || false
 }
 
@@ -67,14 +76,19 @@ last_directive() { grep -E "^[[:space:]]*$2([[:space:]]|$)" "$1" | tail -1 | sed
   [ "$3" = "0" ] || false
 }
 
-@test "the pairing identity holds: top_OFF - top_ON == one cell, bottoms equal" {
+# REFUTED IN PLACE 2026-09-16 by a49280bd9. The identity used to be top_OFF - top_ON == one
+# cell; the commit states the consequence itself — "config/kitty-title-on.conf is now identical
+# to kitty.conf on both paired values, so the ⌘⌥B swap compensates nothing and its real bars
+# take one row while they are up. Accepted trade." So the surviving invariant is EQUALITY, and
+# a non-zero delta now means the reservoir crept back in unnoticed.
+@test "the pairing identity holds: top_OFF == top_ON, bottoms equal (swap compensates nothing)" {
   local ot on_ ob nb
   ot="$(last_directive "$OFF" window_padding_width | awk '{print $1}')"
   ob="$(last_directive "$OFF" window_padding_width | awk '{print $3}')"
   on_="$(last_directive "$ON" window_padding_width | awk '{print $1}')"
   nb="$(last_directive "$ON" window_padding_width | awk '{print $3}')"
   # the row-count half
-  run awk -v a="$ot" -v b="$on_" -v c="$RESERVOIR_PT" 'BEGIN{exit !((a-b)==c)}'
+  run awk -v a="$ot" -v b="$on_" 'BEGIN{exit !((a-b)==0)}'
   [ "$status" -eq 0 ] || false
   # the pixel half: if the bottoms ever differ the grid's top edge can move
   [ "$ob" = "$nb" ] || false
@@ -120,11 +134,15 @@ last_directive() { grep -E "^[[:space:]]*$2([[:space:]]|$)" "$1" | tail -1 | sed
   case "$line" in *toggle_window_title_bars*) false ;; *) ;; esac
 }
 
-@test "cmd+opt+b clears the REAL bars before drawing the overlay" {
+# RE-KEYED 2026-09-16: a49280bd9 swapped the chords — ⌘⇧B now carries the GRAPHICS OVERLAY and
+# ⌘⌥B the real bars. The clear-before-draw ordering this case guards therefore lives on ⌘⇧B now.
+# The invariant is unchanged and is still the double-title trap: clear the real bars BEFORE the
+# overlay paints, or a strip is drawn under a bar that is about to be raised over it.
+@test "cmd+shift+b clears the REAL bars before drawing the overlay" {
   # The bars now PERSIST, so the reverse order is a standing double-title trap rather than the
   # accident it used to be. ⌘⇧B already guards the other direction; this is its mirror.
   local line
-  line="$(grep -E '^map[[:space:]]+cmd\+opt\+b([[:space:]]|$)' "$OFF" | tail -1)"
+  line="$(grep -E '^map[[:space:]]+cmd\+shift\+b([[:space:]]|$)' "$OFF" | tail -1)"
   [ -n "$line" ] || false
   case "$line" in *kitty-pane-title-toggle.sh\ off*) ;; *) false ;; esac
   # ORDER matters, so assert on the prefix that precedes the overlay call rather than on the
@@ -154,6 +172,6 @@ print('ON ', on.window_padding_width.top, on.window_padding_width.bottom,
       on.window_title_bar_min_windows)
 "
   [ "$status" -eq 0 ] || false
-  echo "$output" | grep -qE "^OFF 22\.5 0(\.0)? 0 top$" || false
+  echo "$output" | grep -qE "^OFF 0(\.0)? 0(\.0)? 0 top$" || false
   echo "$output" | grep -qE "^ON  0 0 1$" || false
 }
