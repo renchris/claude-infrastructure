@@ -31,7 +31,7 @@ WHAT THE MENU OFFERS (and where it routes)
     Move to New Window           kitty @ detach-window (no --target-tab -> new OS window; this is
                                  kitty's own documented behaviour for an unspecified target).
     <what it is> — N panes,     kitty @ detach-window --target-tab id:<repr-window-of-that-tab>
-      <desktops left|right>      for every OTHER os-window's active tab. --match on `id:` falls
+      <where it is>              for every OTHER os-window's active tab. --match on `id:` falls
                                  back from tab to the window's OWNING tab (kitty docs), so a
                                  representative window id is enough to name the tab.
                                  The ROW WORDING is the subject of describe_os_window() below and
@@ -42,6 +42,14 @@ WHAT THE MENU OFFERS (and where it routes)
                                  and `+N` counted an arbitrary tab. Nothing in the row identified
                                  the window. It now leads with the string macOS itself paints on
                                  the Mission Control tile and ends with the swipe to reach it.
+                                 ON ONE DISPLAY that swipe is `2 desktops left`. ACROSS DISPLAYS
+                                 the ordinals stop being comparable, so the clause switches unit
+                                 rather than going quiet — `on the display above[, 1 desktop
+                                 right]`, counted from what THAT display is currently showing.
+                                 It went quiet for real once (2026-09-15, an external monitor
+                                 arranged above the built-in): one unplaceable row strips the
+                                 clause off ALL of them, so a single cross-display window deleted
+                                 the feature. tests/kitty-pane-menu-direction.bats pins it.
     Close Pane                   shells out to kitty-confirm-close (same busy-check + native
                                  dialog as ⌘W — this menu must not open a SECOND, weaker close
                                  path next to the one that already protects live Claude sessions).
@@ -66,6 +74,7 @@ WHY --self IS NOT ENOUGH FOR "MOVE TO WINDOW N"
 
 from __future__ import annotations
 
+import functools
 import glob
 import json
 import os
@@ -385,6 +394,20 @@ def describe_os_window(osw: dict, mc_name: str) -> tuple[str, str]:
 
 
 _PROBE_MARKER = b"KPM-WINDOWS-MODE-V1"
+_GEOM_MARKER = b"KPM-DISPLAY-GEOM-V1"
+
+
+@functools.lru_cache(maxsize=1)
+def _native_image() -> bytes:
+    """The compiled helper's bytes, read at most once per invocation. Two capability tests read
+    this and the menu pops on the second one's heels; an 82 KB re-read is not expensive, but two
+    reads can also disagree if a --apply lands between them, and a menu built from two different
+    beliefs about the same binary is the one outcome with no safe rendering."""
+    try:
+        with open(NATIVE_BIN, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return b""
 
 
 def native_supports_windows() -> bool:
@@ -396,32 +419,50 @@ def native_supports_windows() -> bool:
     binary would get a one-item NSMenu reading "--windows" popped at the cursor on every
     right-click — the binary has no such mode and treats argv as titles. Grepping the marker out
     of the Mach-O costs one 57 KB read, needs no subprocess, and cannot be fooled by timing."""
-    try:
-        with open(NATIVE_BIN, "rb") as fh:
-            return _PROBE_MARKER in fh.read()
-    except OSError:
-        return False
+    return _PROBE_MARKER in _native_image()
 
 
-def reap_probe(proc) -> tuple[dict[int, tuple[int, int]], dict[int, str], str]:
-    """Collect the Popen started before the tree fetch. (places, names, source). Bounded and
-    fail-quiet: a cosmetic label may never hold the menu open, and a wrong SPI signature would
-    segfault the CHILD — which arrives here as a non-zero exit and a dropped label, never a dead
-    menu. That containment is the reason the probe is a subprocess at all."""
-    if proc is None:
-        return {}, {}, "none"
-    try:
-        out, _err = proc.communicate(timeout=0.4)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        return {}, {}, "none"
-    except OSError:
-        return {}, {}, "none"
-    if proc.returncode != 0:
-        return {}, {}, "none"  # 2 = DLSYM-MISS: a future macOS dropped the SPI. Checkable.
+def native_supports_geom() -> bool:
+    """True when that helper also emits the `D` display rows (2026-09-15).
+
+    Separate marker, same gap, and here the silent degrade is WORSE than a wrong menu item: an old
+    binary emits window rows and no display table, which is byte-identical to "this macOS would
+    not give up its display frames". The first is fixed by `kitty-setup.sh --apply`, the second
+    cannot be fixed at all, and only this test tells them apart — so --check reports it rather than
+    leaving the operator to wonder why a two-monitor menu lost its directions."""
+    return _GEOM_MARKER in _native_image()
+
+
+def parse_probe(out: str) -> tuple[dict[int, tuple[int, int]], dict[int, str], dict[int, dict]]:
+    """Split the probe's stdout into (places, names, displays). Pure, so the row grammar is
+    testable without a Mac, a WindowServer or a second display.
+
+    THE ROW KINDS FAIL INDEPENDENTLY, on purpose. A window with no Space is still NAMED; a display
+    whose frame could not be resolved still carries a current-Space ordinal. Each `-` is dropped on
+    its own rather than voiding the row, because every one of these facts feeds a different clause
+    and the alternative is a menu that goes quiet over one missing field."""
     places: dict[int, tuple[int, int]] = {}
     names: dict[int, str] = {}
+    displays: dict[int, dict] = {}
     for line in (out or "").splitlines():
+        if line.startswith("D\t"):
+            f = line.split("\t")
+            if len(f) < 8:
+                continue
+            try:
+                di = int(f[1])
+            except ValueError:
+                continue
+            try:
+                rect = tuple(float(v) for v in f[3:7])
+            except ValueError:
+                rect = None
+            displays[di] = {
+                "uuid": f[2],
+                "rect": rect,
+                "cur": int(f[7]) if f[7].lstrip("-").isdigit() else None,
+            }
+            continue
         parts = line.split("\t", 4)
         if len(parts) < 5:
             continue
@@ -437,7 +478,27 @@ def reap_probe(proc) -> tuple[dict[int, tuple[int, int]], dict[int, str], str]:
                 places[pwid] = (int(parts[1]), int(parts[2]))
             except ValueError:
                 pass
-    return places, names, "cgs" if places else "none"
+    return places, names, displays
+
+
+def reap_probe(proc) -> tuple[dict[int, tuple[int, int]], dict[int, str], dict[int, dict], str]:
+    """Collect the Popen started before the tree fetch. (places, names, displays, source). Bounded
+    and fail-quiet: a cosmetic label may never hold the menu open, and a wrong SPI signature would
+    segfault the CHILD — which arrives here as a non-zero exit and a dropped label, never a dead
+    menu. That containment is the reason the probe is a subprocess at all."""
+    if proc is None:
+        return {}, {}, {}, "none"
+    try:
+        out, _err = proc.communicate(timeout=0.4)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return {}, {}, {}, "none"
+    except OSError:
+        return {}, {}, {}, "none"
+    if proc.returncode != 0:
+        return {}, {}, {}, "none"  # 2 = DLSYM-MISS: a future macOS dropped the SPI. Checkable.
+    places, names, displays = parse_probe(out or "")
+    return places, names, displays, "cgs" if places else "none"
 
 
 def space_probe_plist() -> dict[int, tuple[int, int]]:
@@ -465,11 +526,74 @@ def space_probe_plist() -> dict[int, tuple[int, int]]:
     return out
 
 
-def vector(target: tuple[int, int] | None, own: tuple[int, int] | None, exact: bool) -> str:
+def display_relation(a: dict | None, b: dict | None) -> str:
+    """Where display `a` sits relative to display `b`, as the word used to get there. '' when
+    either frame is unknown or the two coincide (mirrored displays, where no word is true).
+
+    y GROWS DOWNWARD. The frames come from CGDisplayBounds, whose origin is top-left — so the
+    display ABOVE another has the SMALLER y, the opposite of NSScreen.frame. Measured on the box
+    this was fixed for: built-in at y=0, the SOTSU ELITE16 arranged above it at y=-1050.
+
+    DECIDED ON THE GAP BETWEEN THE RECTANGLES, not on their centres and not on their origins.
+    Centres was written first and is WRONG under size asymmetry, which a mutant found and a
+    plausible-sounding comment had defended: a wide display sitting directly above a narrow one
+    shares no horizontal offset an operator would call sideways, yet its centre is a full half-width
+    away, so the dominant-axis test on centres calls it "to the right" and sends the eye sideways at
+    a monitor that is overhead. Origins invert the same failure. The gap is the only reading that
+    survives both, and it is also what the words MEAN for rectangles: `above` is true when the two
+    are separated vertically and overlap horizontally.
+
+    macOS forbids overlapping arrangements, so for every layout reachable from the Displays pane
+    exactly one axis separates (gap >= 0 — edge-adjacent displays touch at exactly 0) unless the
+    placement is diagonal, where the larger gap wins. Both axes overlapping means the frames
+    coincide: mirrored displays, where no direction word is true and "" is the honest answer."""
+    ra = (a or {}).get("rect")
+    rb = (b or {}).get("rect")
+    if not ra or not rb:
+        return ""
+    gap_x = max(rb[0] - (ra[0] + ra[2]), ra[0] - (rb[0] + rb[2]))
+    gap_y = max(rb[1] - (ra[1] + ra[3]), ra[1] - (rb[1] + rb[3]))
+    if gap_x < 0 and gap_y < 0:
+        return ""  # mirrored, or an overlap macOS does not allow — no word is true
+    if gap_y >= gap_x:
+        return "above" if ra[1] + ra[3] <= rb[1] else "below"
+    return "to the left" if ra[0] + ra[2] <= rb[0] else "to the right"
+
+
+def vector(target: tuple[int, int] | None, own: tuple[int, int] | None, exact: bool,
+           displays: dict[int, dict] | None = None) -> str:
     """The direction clause. '' means 'say nothing', which the caller then applies to EVERY row —
-    a half-numbered menu is a wrong swipe, and a wrong swipe is the failure being fixed."""
-    if target is None or own is None or target[0] != own[0]:
-        return ""  # different display: the ordinals are per-display and not comparable
+    a half-numbered menu is a wrong swipe, and a wrong swipe is the failure being fixed.
+
+    A CROSS-DISPLAY TARGET IS PLACED, NOT SKIPPED (2026-09-15). Space ordinals are per-display and
+    genuinely not comparable across two monitors, and this function used to answer that by
+    returning '' — which the caller correctly read as 'unplaceable' and used to strip the clause
+    off EVERY row, including the same-display ones it could still have numbered. So attaching one
+    external monitor deleted the whole feature, in the direction that looks like a removed feature
+    rather than a broken one: measured, five windows split 2/3 across two displays, and every row
+    rendered bare. The ordinals are still not comparable — what changed is that the DISPLAYS are,
+    by their frames, so the clause switches unit instead of going silent.
+
+    The cross-display swipe is measured against THAT display's current Space, never against our own
+    desktop number: once the eye is on the other monitor, what it sees is whatever that monitor is
+    showing, and our own position has stopped being the origin."""
+    if target is None or own is None:
+        return ""
+    displays = displays or {}
+    if target[0] != own[0]:
+        rel = display_relation(displays.get(target[0]), displays.get(own[0]))
+        head = f"on the display {rel}" if rel else "on another display"
+        cur = displays.get(target[0], {}).get("cur")
+        # The plist source is a stale CACHE whose ordinals were measured three-of-five wrong; only
+        # the SIGN survives it, and a sign against a remote display's current Space is not a fact
+        # that source can supply. The display word alone is what it can honestly say.
+        if not exact or cur is None:
+            return head
+        d = target[1] - cur
+        if d == 0:
+            return head
+        n = abs(d)
+        return f"{head}, {n} desktop{'' if n == 1 else 's'} {'right' if d > 0 else 'left'}"
     d = target[1] - own[1]
     if d == 0:
         return "here"
@@ -480,7 +604,8 @@ def vector(target: tuple[int, int] | None, own: tuple[int, int] | None, exact: b
     return f"{n} desktop{'' if n == 1 else 's'} {side}"
 
 
-def other_targets(tree: list, self_osw_id: int, places: dict, mc_names: dict, exact: bool) -> list[tuple[int, str, str]]:
+def other_targets(tree: list, self_osw_id: int, places: dict, mc_names: dict, exact: bool,
+                  displays: dict[int, dict] | None = None) -> list[tuple[int, str, str]]:
     """One row per OTHER os-window: (representative window id, label, ident source).
 
     The label is `<what it is> — <N panes>[, <direction>]`. There is no `Move to ` verb and no
@@ -524,7 +649,7 @@ def other_targets(tree: list, self_osw_id: int, places: dict, mc_names: dict, ex
         if ntabs > 1:
             clause += f" in {ntabs} tabs"
         rows.append([osw_id, repr_w["id"], ident, clause,
-                     vector(places.get(osw.get("platform_window_id")), own_place, exact),
+                     vector(places.get(osw.get("platform_window_id")), own_place, exact, displays),
                      source, panes])
 
     # If ANY offered row could not be placed, the direction clause comes off ALL of them. A menu
@@ -635,16 +760,19 @@ def main() -> int:
         print("kitty-pane-menu: no focused window — refusing to guess", file=sys.stderr)
         return 0
 
-    places, mc_names, place_src = reap_probe(probe)
+    places, mc_names, displays, place_src = reap_probe(probe)
     if not places:
         # The plist is a stale CACHE of the same layout: insertions preserve relative ORDER but not
-        # the counts, so this source yields a direction word and never a number.
+        # the counts, so this source yields a direction word and never a number. It carries no
+        # display frames either, so a cross-display row falls back to the unworded "on another
+        # display" — still a placement, which is what keeps the all-or-nothing strip off the rest.
         places = space_probe_plist()
+        displays = {}
         place_src = "plist" if places else "none"
 
     self_osw = owning_os_window_id(tree, wid)
     targets = (
-        other_targets(tree, self_osw, places, mc_names, place_src == "cgs")
+        other_targets(tree, self_osw, places, mc_names, place_src == "cgs", displays)
         if self_osw is not None
         else []
     )
@@ -657,6 +785,18 @@ def main() -> int:
             f"desktops  : {place_src} ({len(places)} window(s) placed)"
             + ("" if native_supports_windows() else "  [helper predates --windows; run kitty-setup.sh --apply]")
         )
+        # Printed even when there is one display, because the interesting failure is the SECOND
+        # one appearing and the clause going quiet — and that is read here, not guessed at.
+        geom_note = "" if native_supports_geom() else "  [helper predates the display table; run kitty-setup.sh --apply]"
+        print(f"displays  : {len(displays)} placed{geom_note}")
+        for di in sorted(displays):
+            d = displays[di]
+            r = d.get("rect")
+            print(
+                f"display {di} : {d.get('uuid', '-')}  "
+                + (f"{int(r[2])}x{int(r[3])} at ({int(r[0])},{int(r[1])})" if r else "frame unknown")
+                + f"  showing desktop {d.get('cur') if d.get('cur') is not None else '-'}"
+            )
         srcs = {label: src for _, label, src in targets}
         for item in items:
             print(f"item      : {item}" + (f"   [ident: {srcs[item]}]" if item in srcs else ""))

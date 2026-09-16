@@ -616,6 +616,20 @@ else
     info "probe failed (rc $probe_rc) — rows keep their name and pane count, no direction"
   elif [ "${placed:-0}" -ge 1 ]; then
     ok "desktop directions live — $placed kitty window(s) placed on a Space"
+    # The SECOND capability, checked separately because its absence is INVISIBLE on one display and
+    # deletes the whole clause on two: without the `D` rows a cross-display target is unplaceable,
+    # and one unplaceable row strips the direction off every row in the menu. That is what happened
+    # on 2026-09-15 when an external display was arranged above the built-in.
+    dcount=$(printf '%s\n' "$probe_out" | awk -F'\t' '$1=="D"' | grep -c . || true)
+    if ! grep -q KPM-DISPLAY-GEOM-V1 "$BIN_DIR/kitty-pane-menu-native" 2>/dev/null; then
+      info "helper predates the display table — run --apply, or a 2nd display silences the directions"
+    elif [ "${dcount:-0}" -ge 2 ]; then
+      ok "cross-display directions live — $dcount displays with frames"
+    elif [ "${dcount:-0}" -eq 1 ]; then
+      ok "one display — cross-display directions ready if a second is attached"
+    else
+      info "no display frames read — cross-display rows will say 'on another display'"
+    fi
   else
     info "probe ran but placed no window — rows keep their name and pane count, no direction"
   fi
