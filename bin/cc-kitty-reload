@@ -9,6 +9,41 @@
 # killing a fleet of Claude sessions. That is the whole defect: the deploy was complete and the
 # effect was zero, with nothing anywhere reporting a difference.
 #
+# 🚨 ~~CORRECTED 2026-09-16 (W1 / plan KITTY_DRAG_ACTION Q19 item 6): "kitty parses its config at
+# startup and then never looks again. So every config change was live on disk and inert on screen
+# until the operator quit and relaunched the terminal"~~ — **REFUTED ON THIS BOX.** The original
+# sentences stay above, unedited, because the clause is the record of what was believed and
+# deleting it is how the next session repeats the § 2 mistake of the drag plan.
+#
+# WHAT IS ACTUALLY TRUE: kitty watches its own config and reloads itself, unprompted. The
+# `auto_reload_config` option defaults to `0.1` seconds (v0.48.2
+# `kitty/options/definition.py:2927-2937`) and THIS repo's config never overrides it, so kitty
+# forks a `kitten __watch_conf__` child that debounces writes and SIGUSR1s its own parent:
+#
+#   $ ps -axo pid=,command= | grep __watch_conf__
+#   97219 /Applications/kitty.app/Contents/MacOS/kitten __watch_conf__ 97084 100 \
+#         /etc/xdg/kitty/kitty.conf /Users/chrisren/.config/kitty/kitty.conf
+#                                   ^ 97084 = the live kitty   ^ 100 = the debounce, in ms
+#
+#   tools/watch/api.go:223-225   func signal_kitty_to_reload_config(kitty_pid int) error {
+#                                    return unix.Kill(kitty_pid, unix.SIGUSR1)
+#
+# and the watcher resolves symlinks whole, so it is watching the SHARED CHECKOUT directory that
+# `deploy-live.sh` fast-forwards. A landed config change therefore goes live in the operator's
+# terminal ~100 ms after a converge, with nobody running this tool and nobody pressing anything.
+#
+# WHAT SURVIVES INTACT, and why this tool is still the right thing to ship: the MEASUREMENT below
+# (SIGUSR1 -> 30 rows -> 28 rows, 2026-09-15) was never in doubt and is untouched — SIGUSR1 IS the
+# reload actuator, which is precisely what the watcher above uses. What was never tested is the
+# CAUSAL SENTENCE beside it. The tool remains useful for every instance the watcher cannot reach:
+# one whose `__watch_conf__` child died, one started BEFORE its kitty.conf existed (kitty's own
+# docs: "automatic reload works only if the kitty.conf already exists when kitty is started"), and
+# one running with `auto_reload_config` negative. It is a backstop, not the only path — and its
+# content-keyed no-op below means being a backstop costs nothing.
+#
+# READ THIS BEFORE EDITING ANY KITTY CONFIG: because the reload is automatic, a landed config line
+# is NOT inert until someone runs this tool. See `docs/plans/KITTY_DRAG_ACTION.md` § 2.
+#
 # THE MECHANISM: SIGUSR1. Measured 2026-09-15 on kitty 0.48.2, isolated instance, one variable —
 # baseline 30 rows, `window_padding_width 25 5` appended to the config FILE, `kill -USR1 <pid>` ->
 # 28 rows; a following bare `kitty @ load-config` gave 28 as well, i.e. idempotent and the same
