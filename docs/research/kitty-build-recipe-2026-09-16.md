@@ -54,6 +54,41 @@ export SLANGC="$HOME/slang/bin/slangc"          # setup.py honours this env var
 ( cd ~/kdev && make )        # needs 1,2,3,4
 ```
 
+## 🚨 DO NOT RUN `./autoformat` IN A KITTY CHECKOUT ON THIS MACHINE
+
+**It panicked the kernel twice on 2026-09-16** — `panic-full-2026-09-16-155400` and
+`panic-full-2026-09-16-162856` — and both panics ended a Claude Code session mid-wave, destroying
+one in-flight patch and every scratchpad artifact of two research phases. The two "reboots" this
+document elsewhere treats as bad luck were **self-inflicted, by this exact command.**
+
+**Mechanism.** `./autoformat` walks every top-level directory except `dist`, `build`, `bypy` and
+`3rdparty` — so it formats the vendored ~300 MB `dependencies/` tree. It runs ten parallel
+`clang-format` workers, and on `dependencies/darwin-arm64/include/simde/*.h` (1-3 MB of macro
+soup: `wasm/simd128.h`, `wasm/relaxed-simd.h`, `mips/msa.h`) each worker grew to **1-19 GB RSS**.
+The VM compressor reached 100% of its segment limit and the kernel watchdog panicked 4-5 minutes
+later. Its cache is written only on completion, so an interrupted run re-formats everything next
+time — the failure is perfectly repeatable and gets no cheaper.
+
+**Corroborated from two directions.** A sibling session matched the two invocations to the two
+panic files; independently, a `ps` sample taken here at 16:25:40 while diagnosing a "slow agent"
+caught `./autoformat` plus three clang-format workers on exactly those simde headers, **2 min 16 s
+before** the 16:28:56 panic.
+
+**What to do instead.** Format only the files you changed:
+
+```bash
+clang-format -i --style=file:.clang-format kitty/state.c        # one changed file at a time
+ruff format kitty/window.py kitty/options/utils.py kitty_tests/window_drag.py
+```
+
+A `dependencies` entry in autoformat's skip tuple is the real fix and looks upstream-worthy.
+
+⚠️ **The generalisable half:** a formatter, linter or test runner that walks "the whole tree" is
+sized by the VENDORED tree, not by yours — and a repo that vendors its C dependencies in-tree can
+turn a routine pre-commit step into a machine-killer. Before running a whole-tree tool in an
+unfamiliar checkout, read its exclusion list against `du -sh */`. Here the two numbers are 0.4 MB
+of changed source against 300 MB of vendored headers.
+
 ## Running kitty's GATES, not just its build
 
 The build is not the whole story — `./autoformat`, `ruff check .` and `./test.py type-check` are
