@@ -1892,8 +1892,8 @@ kitty_config_reload() {
 # UNCONDITIONAL, and deliberately ahead of the fetch — a landed-but-unlinked file must be repaired
 # even when the network is down, the tip has no green stamp, or the live layer already sits above it.
 link_refresh
-kitty_config_reload
 migrations_converge
+kitty_config_reload
 # THIRD, not first: it must read the state the two steps above leave behind — link_refresh can
 # create the very link whose target resident_image_stale() then follows with `stat -L`.
 residency_report
@@ -2659,6 +2659,7 @@ fi
 # for the first time here. This is the call that makes LANDED ⇒ LIVE true within ONE cycle rather
 # than two — the pre-fetch call above ran before the merge and could not see it.
 migrations_converge
+kitty_config_reload   # same-cycle: the advance above is what changed the config bytes
 
 # The live layer has ADVANCED — only now do the host suites have a real subject to assert.
 host_checks "$TARGET"

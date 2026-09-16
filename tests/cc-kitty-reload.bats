@@ -137,11 +137,28 @@ PS
   [ ! -s "$KILLLOG" ]
 }
 
-@test "deploy-live calls it unconditionally, beside link_refresh and before migrations" {
-  run grep -n -A2 '^link_refresh$' "$REPO/scripts/deploy-live.sh"
+@test "deploy-live calls it on BOTH paths, for the reason migrations_converge has two sites" {
+  # The unconditional call is the catch-up: it runs even when the fetch fails or the advance
+  # refuses, so a config that landed on some earlier tick still reaches a running kitty. The
+  # post-advance call is the only one that can act in the SAME cycle as the merge that changed the
+  # config bytes — without it the deploy is correct but always one 600s tick late.
+  # `\([ ]\|$\)` keeps the DEFINITION line (`kitty_config_reload() {`) out of the count, so this
+  # counts call sites and cannot be satisfied by the function merely existing.
+  run grep -c '^kitty_config_reload\([ ]\|$\)' "$REPO/scripts/deploy-live.sh"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"kitty_config_reload"* ]] || false
-  [[ "$output" == *"migrations_converge"* ]] || false
+  [ "$output" -eq 2 ]
+  run grep -q 'kitty_config_reload() {' "$REPO/scripts/deploy-live.sh"
+  [ "$status" -eq 0 ]
+}
+
+@test "it does NOT sit between link_refresh and migrations_converge — that adjacency is pinned" {
+  # tests/deploy-migrations.bats case 2 asserts migrations_converge is on the line after
+  # link_refresh, as its proof that the unconditional call was not nested under the advance.
+  # Inserting anything between them reddens that suite while changing nothing about this one, so
+  # the constraint is pinned HERE too rather than re-learned from a land gate (it cost one).
+  run bash -c "grep -A1 '^link_refresh\$' '$REPO/scripts/deploy-live.sh' | tail -1"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "migrations_converge" ]] || false
 }
 
 @test "deploy-live's dry run goes through --would, so a platter read never relayouts a window" {

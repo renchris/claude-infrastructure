@@ -84,7 +84,7 @@ if [ "$hash_now" = "$hash_was" ]; then
 fi
 
 pids="$(live_kitty_pids)"
-n_live="$(printf '%s\n' $pids | grep -c . || true)"
+n_live="$(printf '%s' "$pids" | grep -c . )" || n_live=0
 if [ "$WOULD" = 1 ]; then
   say would "key=${hash_now:0:12} would-signal=${n_live:-0} instance(s) — nothing signalled, no stamp written"
   exit 0
