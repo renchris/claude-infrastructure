@@ -2552,6 +2552,51 @@ r7_ancestral_green() { # the live layer ABOVE the only green — widening the sc
   grep -q '^next: CC_DEPLOY_SCAN=' "$PAGES/deploy-refusal-escalation-scan-window-blind.page" || false
 }
 
+@test "R7 LEVER: the in-budget wait names the SAFE converge-now lever, and it is not --force" {
+  # THE MESSAGE IS THE DEFECT SURFACE (2026-09-15). This line stated a magnitude and a budget and no
+  # next step, so a session that had just landed read it, concluded the converge was operator-owned,
+  # and handed over a command; the operator reached for the only lever the text made findable,
+  # `--force`, whose UNSTAMPED advance reddened deploy-parity-assert's verification leg inside the
+  # minute. A refusal that a reader can only act on by reaching past the ladder is the ladder's
+  # problem, so the remedy now rides the refusal.
+  r7_setup
+  r7_ancestral_green
+  R7_SCAN=2                                          # budget 999/999: INSIDE, the waiting branch
+  run dlrq; [ "$status" -eq 0 ] || false
+  [[ "$output" == *"none is due yet"* ]] || false
+  # The lever, spelled exactly as it must be pasted — an env PREFIX on the invocation, never an
+  # exported shell variable (memory: empty-selector-is-a-universal-selector is the sibling trap;
+  # here the hazard is the mirror, a knob that outlives the one command it was meant for).
+  [[ "$output" == *"CC_DEPLOY_MAX_LAG_COMMITS=0 bash "*"/scripts/deploy-live.sh"* ]] || false
+  # …and it must say which half it relaxes, or a reader cannot tell it from --force.
+  [[ "$output" == *"CLOCK"* ]] || false
+  # NEGATIVE ARM, and it is the load-bearing one: the message must never read as though --force were
+  # the remedy. It may NAME it, but only inside the prohibition it now carries.
+  [[ "$output" == *"never --force"* ]] || false
+}
+
+@test "R7 LEVER: budget 0 is not 'disabled' — it arms T2 at a lag of ONE, which is what the lever buys" {
+  # The lever is only real if the documented semantics of a 0 budget hold: deploy-live.sh:112 says a
+  # budget of 0 means "degrade the moment there is any lag at all", and the whole recommendation
+  # rests on that sentence being executed rather than merely written. Same world as the wait above,
+  # one env var moved — so this is the A/B that separates "the clock was relaxed" from "the evidence
+  # was", and the tree here carries NO green stamp above live HEAD.
+  r7_setup
+  r7_ancestral_green
+  R7_SCAN=2
+  # ONE AXIS, and the isolation is the whole case. Written first as `R7_LAGC=0 R7_LAGH=0`, it passed
+  # — and went on passing under a mutant that made the COMMITS sanitiser treat 0 as unset, because
+  # the HOURS budget at 0 was doing all the work and the axis the lever actually moves was held
+  # constant (same family as fixture-identifier-shape-collapses-two-spaces). The recommended lever
+  # is CC_DEPLOY_MAX_LAG_COMMITS=0, so hours stays at its 999 default and only the commits arm can
+  # arm T2 here.
+  R7_LAGC=0
+  run dlrq; [ "$status" -eq 0 ] || false
+  # It ADVANCED, under the degraded banner — not the waiting message.
+  [[ "$output" != *"none is due yet"* ]] || false
+  [[ "$output" == *"DEGRADED"* ]] || false
+}
+
 @test "R7 POLARITY: inside the degrade budget this state is a WAIT — it does not escalate at all" {
   # An escalation means the machine needs a human. This lane's OWN verdict on the same world one env
   # var away was "inside the degrade budget (25 / 6h) — no advance, and none is due yet", and it paged
