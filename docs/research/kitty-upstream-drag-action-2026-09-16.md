@@ -86,7 +86,7 @@ coupled only because the region that starts a drag is private to the title bar.
 A mappable mouse action that begins a window drag for the window under the pointer, usable from
 `mouse_map`, unmapped by default (like `toggle_window_title_bars`):
 
-    mouse_map ctrl+alt+left press grabbed,ungrabbed mouse_drag_window
+    mouse_map cmd+shift+left press grabbed,ungrabbed mouse_drag_window
 
 Semantics: on the press, the window under the pointer becomes the drag source, exactly as a press
 inside its title bar does today. Once the pointer has moved farther than `drag_threshold` the
@@ -136,10 +136,13 @@ Environment: kitty 0.48.2 (Homebrew cask), macOS (Darwin 24.6.0), Monaco 18, 2x 
 
 Measurements, all on that build:
 
-1. Bindable window actions, read off the live binary via `kitty.actions.get_all_actions()`:
-   `win -> set_window_title, move_window, move_window_backward, move_window_forward,
-   move_window_to_top, detach_window, toggle_window_title_bars`. There is no action that begins
-   a drag. `debug -> test_dragging` exists and is a debug hook.
+1. Bindable actions, read off the live binary via `kitty.actions.get_all_actions()`: **142
+   actions in 11 groups, 41 of them in the `win` (Window management) group.** Across all 142,
+   exactly **five** mention "drag" anywhere in their name or help text — `detach_tab`,
+   `move_tab_backward`, `move_tab_forward`, `win -> toggle_window_title_bars`, and
+   `debug -> test_dragging`, which is a debug hook. **None of the 142 begins a window drag at the
+   pointer.** (The instrument can see the word: the same census returns 0 for a token that does
+   not occur, so the null is informative.)
 
 2. The drag hit region is set internally: `kitty.window.Window.update_title_bar` renders the
    bar, takes the renderer's `.geometry`, and passes it to
@@ -217,3 +220,113 @@ about where a drag may begin.
   `CONTRIBUTING.md`, `docs/changelog.rst`, `kitty/options/definition.py`, `kitty/boss.py`,
   `kitty/tabs.py`, `kitty/mouse.c`, `kitty/state.c`, `kitty/window_title_bar.py` at master
   `1d67ecd47c0b`; issues #9619, #8907, #7407; PRs #9450, #9626; discussion #9448.
+
+## 6. W1 record corrections (2026-09-16) — Q19 items 1, 2 and 5
+
+**Applied by wave W1 of `docs/plans/KITTY_DRAG_ACTION.md` (ruling Q19).** The draft body in § 3
+above is the CORRECTED text — it is what would be posted. This section is the record of what the
+draft said before, and of the measurement that replaced it, so a later reader can see the error
+rather than inherit a silently-fixed number. Nothing here is part of the issue body.
+
+### Item 1 — the action census was wrong by ~6×
+
+~~ORIGINAL (§ 3, "Additional context", measurement 1): *"Bindable window actions, read off the live
+binary via `kitty.actions.get_all_actions()`: `win -> set_window_title, move_window,
+move_window_backward, move_window_forward, move_window_to_top, detach_window,
+toggle_window_title_bars`. There is no action that begins a drag. `debug -> test_dragging` exists
+and is a debug hook."*~~ — **WRONG ON THE FIGURE.** That list names **7** `win` actions; the live
+binary exposes **41**, in a total of **142** across 11 groups.
+
+Re-measured this wave, directly on the shipped build, not re-quoted from the record:
+
+```
+$ env -u KITTY_LISTEN_ON -u KITTY_PID -u KITTY_WINDOW_ID \
+    /Applications/kitty.app/Contents/MacOS/kitty +runpy \
+    'from kitty.actions import get_all_actions; a=get_all_actions(); print("TOTAL",sum(len(v) for v in a.values()))
+     [print(" ",k,len(v)) for k,v in sorted(a.items(), key=lambda x:-len(x[1]))]'
+TOTAL 142
+  win 41 · misc 33 · sc 15 · cp 14 · tab 12 · mouse 8 · debug 6 · lay 5 · mk 4 · session 3 · fs 1
+version 0.48.2   kitty.__file__ .../kitty-extensions/python-lib.bypy.frozen/kitty/__init__.pyc
+```
+
+**The substantive half of the original claim STANDS, and it is the half the issue rests on.** Across
+all 142, exactly **five** mention "drag" anywhere in name, short help or long help — `detach_tab`,
+`move_tab_backward`, `move_tab_forward`, `toggle_window_title_bars`, `test_dragging` — and **none
+begins a window drag at the pointer**. The instrument can see the word, so the null is informative:
+
+```
+actions mentioning drag anywhere (name/short/long): 5
+   tab detach_tab · tab move_tab_backward · tab move_tab_forward
+   debug test_dragging · win toggle_window_title_bars
+NEG CTRL (a token that does not occur):             0
+```
+
+⚠️ **A second-order note for anyone re-deriving this from source rather than from the binary.** A
+static AST census of `@ac(...)`-decorated functions over the whole `kitty/` package at
+`/private/tmp/kitty-482` (v0.48.2, `2cb1d95`) returns **141**, not 142 — `win` is 41 either way. The
+one-item gap is `misc -> no_op`, which is not written with a literal `@ac('misc', ...)` decorator in
+source. Quote **142** (the binary) and know why the source count differs; do not treat the 141 as a
+contradiction.
+
+### Item 2 — the example chord was one of kitty's own shipped bindings
+
+~~ORIGINAL (§ 3, "Describe the solution you'd like"): `mouse_map ctrl+alt+left press
+grabbed,ungrabbed mouse_drag_window`~~ — **`ctrl+alt+left press` is TAKEN by kitty itself**, so as an
+example it asks the maintainer to shadow a shipped default. Replaced with the plan's Q12 chord,
+`cmd+shift+left press`.
+
+**Which mode, precisely — because "taken" unqualified sends the next reader the wrong way.** It is
+taken in `ungrabbed` **only**, and is **FREE in `grabbed`**:
+
+```
+$ grep -n "rectangle" /private/tmp/kitty-482/kitty/options/definition.py
+1285: 'start_rectangle_selection ctrl+alt+left press ungrabbed mouse_selection rectangle'
+1346: 'start_rectangle_selection_grabbed ctrl+shift+alt+left press ungrabbed,grabbed mouse_selection rectangle'
+```
+
+i.e. the *grabbed* rectangle-selection binding is `ctrl+shift+alt+left`, a different chord — so a
+reader who probes only `grabbed` finds `ctrl+alt+left` free and reopens this question. It is still
+the wrong example for an upstream issue, because the draft's own line asks for
+`grabbed,ungrabbed`, which collides.
+
+### Item 5 — the `mouse.c:1432` citation error is NOT in this file
+
+Q19 item 5 names **this** file ("A10's table") as citing master `mouse.c:1432` for
+`} else if (r.window_border) {`. **It does not.** This file contains no `1432`, no `1433`, and no
+`mouse.c` line citation of any kind:
+
+```
+$ grep -n "1432\|1433" docs/research/kitty-upstream-drag-action-2026-09-16.md   → (no output)
+$ grep -n "mouse.c"    docs/research/kitty-upstream-drag-action-2026-09-16.md
+107: ... and `mouse.c` routes motion and release to that handler whenever
+218: ... `kitty/tabs.py`, `kitty/mouse.c`, `kitty/state.c`, ... at master
+```
+
+The A10 artifact that carried the error (`A10-our-integration.md`) is listed in the implementation
+doc's § 9 SOURCES as living under a per-session scratchpad, which is reaped — it is in no commit and
+is not recoverable. The **only tracked** places the `1432`/`1433` pair appears are
+`docs/research/kitty-drag-action-implementation-2026-09-16.md` § 5.23 and § 7.4, and **both already
+carry the correct line**, stating "**1433**, not 1432". The underlying fact is re-verified here:
+
+```
+$ sed -n '1432,1433p' /private/tmp/kitty-dev/kitty/mouse.c        # master 1d67ecd
+        debug("handled by window title bar\n");
+    } else if (r.window_border) {
+```
+
+**So item 5 is correct about the CODE and wrong about the FILE, and it is already discharged in the
+tracked record.** Nothing in this file needed changing for it. Left here so the next session does not
+re-hunt a citation that is not in the repo.
+
+### Items 8 and 9 — not quoted in this file either
+
+Q19 items 8 and 9 correct `layout/vertical.py`'s `start_offset=1, end_offset=1` reasoning and the
+`?1000h`/`?1006h` mouse-mode reading. Neither appears here:
+
+```
+$ grep -n "vertical.py\|start_offset" docs/research/kitty-upstream-drag-action-2026-09-16.md  → (none)
+$ grep -n "1000h\|1002h\|1003h"       docs/research/kitty-upstream-drag-action-2026-09-16.md  → (none)
+```
+
+Both are corrected in place in `docs/research/kitty-drag-action-implementation-2026-09-16.md`
+(§ 7.4 / § 5.23 and § 7.3 respectively).

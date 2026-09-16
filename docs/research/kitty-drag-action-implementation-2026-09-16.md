@@ -964,6 +964,23 @@ plus `gofmt` plus clang-format, so `python gen config` can dirty tracked files w
   `mouse_selection rectangle` (`definition.py:1285` v / `:1320` master). Fix it to `cmd+left press`
   before posting.
 
+> ✅ **DISCHARGED 2026-09-16 by wave W1** (plan Q19 items 1 and 2). Both figures are now corrected in
+> `docs/research/kitty-upstream-drag-action-2026-09-16.md`, with the original wording preserved in
+> that file's new § 6 rather than silently overwritten. Two things this section got slightly wrong,
+> recorded rather than edited away:
+>
+> 1. 🚨 **The prescribed replacement chord is superseded.** *"Fix it to `cmd+left press`"* is the
+>    wrong target now: plan Q12 rules **`cmd+shift+left press`**, and Q11(b) hardens that from a
+>    preference to a near-certainty — `cmd+left press` kills `config/kitty.conf:772`, the only
+>    link-open gesture that works in a grabbed pane, and collides with `show_hyperlink_targets cmd`
+>    so that hold-⌘-preview-then-click becomes hold-⌘-preview-then-DRAG. W1 wrote
+>    `cmd+shift+left press`. Do not "restore" `cmd+left`.
+> 2. **"`ctrl+alt+left press ungrabbed` is `mouse_selection rectangle`" is right but reads as
+>    absolute.** It is TAKEN in `ungrabbed` **only** and **FREE in `grabbed`** — the grabbed
+>    rectangle-selection binding is a different chord, `ctrl+shift+alt+left`
+>    (`definition.py:1346` v). State the mode, or the next reader probes `grabbed`, finds it free,
+>    and reopens the question.
+
 ### 5.20 Our own `config/kitty.conf:322-323` closure is HALF REFUTED — mark it in place, never delete
 **(A11 F13.)** The three-part sentence *"the overlay … is not in kitty's hit-test and can never carry a
 hand cursor or be dragged, however it is drawn"* splits:
@@ -972,6 +989,12 @@ hand cursor or be dragged, however it is drawn"* splits:
 - **"can never be dragged, however it is drawn"** — **REFUTED.** The band's pixels sit inside an
   ordinary window region, which *is* mouse-mapped; the hit test is **bypassed** by the `||` at
   mouse.c:1362, not satisfied.
+
+> ✅ **DISCHARGED 2026-09-16 by wave W1** (plan Q19 item 3). The refutation is now written into
+> `config/kitty.conf` beside the original sentence, which is **left unedited** — the § 3 block there
+> carries the `||` at v `mouse.c:1362` verbatim and states which two thirds still stand. The edit is
+> **comment-only**; no non-comment line of that file changed, which is the mechanical check plan § 2
+> requires of any W1 touch of the live kitty config.
 
 Also note A11's own closing claim that *"0.48.2 vs master is a non-issue for everything this axis
 touched"* is refuted in one place (V25): master changed the very thumbnail call A11's own kitten
@@ -1018,7 +1041,23 @@ and our conf sets it to **`no`** (kitty.conf:1133). That choice is what routes b
 `add_borders`, which emits all four edges of **every** group. Under kitty's default the rects come from
 `get_minimal_borders`, and `layout/vertical.py`'s `start_offset=1, end_offset=1` trims the first and
 last `BorderLine` — so the **topmost pane would have no top border rect and its row 0 would be fully
-reachable**. The claim is true of *our* configuration and false as a general conditional. Two smaller
+reachable**. The claim is true of *our* configuration and false as a general conditional.
+
+> 🚨 **CORRECTED 2026-09-16 (W1 / plan Q19 item 8) — the `vertical.py` half of that sentence is off
+> this box's code path.** The original stays above; this is the correction beside it. `start_offset`
+> / `end_offset` are parameters of `kitty/layout/vertical.py::borders()` (v0.48.2 `:19`), and that
+> function is imported by exactly two modules — `layout/interface.py:10` (the registry) and
+> `layout/tall.py:27`. **The operator runs `enabled_layouts splits,stack`** (`config/kitty.conf:76`),
+> and `layout/splits.py` imports nothing from `.vertical` — it has its **own** `minimal_borders` at
+> v `splits.py:703`; `stack.py` has none at all. So the "topmost pane would have no top border rect"
+> reasoning describes a layout he does not use, and cannot be used to price remedy (b) for him.
+> **The measured splits-layout result is BETTER than this text claims** — see plan § 4.M/Q8(d):
+> under `draw_minimal_borders yes`, hsplit drops from a 24 px frame on every pane to a single 12 px
+> top edge on non-topmost panes only, **vsplit goes to ZERO**, and the 17 px divider dead zone
+> disappears. What the text gets RIGHT and keeps: the claim is true of *our* configuration and false
+> as a general conditional, and `draw_minimal_borders` really does default to `True` upstream.
+
+Two smaller
 corrections: master's `} else if (r.window_border) {` is at line **1433**, not 1432 (1432 is a `debug()`
 call — and our own A10 table carries the same error); and "12 device px" is 2×-display-specific
 (`tolerance = round(6 × scale)`, 12 at 2×, 6 at 1×), though the **19.4% fraction is scale-invariant**.
@@ -1273,6 +1312,22 @@ stable across four installed versions — and kitty's encoder gate forwards only
 `BUTTON_MODE`. **Motion is never reported to Claude Code**, so the drag gesture takes nothing it uses.
 What the chord *does* take is one press+release pair on that one modifier combination.
 
+> 🚨 **CORRECTED 2026-09-16 (W1 / plan Q19 item 9) — leg (2) is a GREP ARTIFACT, and phase 3 must
+> not repeat it.** The original stays above. Measured (plan § 4.M/Q11(a)): the live binary's default
+> mouse mode is **`full`** = `?1000h ?1002h ?1003h ?1006h` — producer `wH()`, three call sites, with
+> both override env vars measured absent on this box. **Motion IS reported to Claude Code, up to the
+> press.** The sentence "motion is never reported" is false as written; a grep that finds only
+> `?1000h`/`?1006h` found the literals it searched for, not the mode that is actually set.
+>
+> **The CONCLUSION survives, for a different reason, and phase 3 must carry the reason rather than
+> the sentence:** motion is suppressed **during** the drag because kitty's arm 7 short-circuits it
+> (v `mouse.c:1362` — the same `||` that makes the whole feature possible), **not** because the
+> program never asked for motion. The chord still takes only one press+release pair.
+>
+> ⚠️ *Honest bound, carried forward from the measurement:* "live mouse mode is `full`" is
+> **statically** measured — producer, call sites, and the measured absence of both override env
+> vars. The three-arm pty capture came back identical in all arms and is recorded as a NON-VERDICT.
+
 ### 7.4 🚨 THE `window_drag_tolerance` × ZERO-TOP-PADDING INTERACTION
 
 **This is the finding that most constrains band-scoping, and it is independent of everything else.**
@@ -1315,6 +1370,16 @@ remedies:
 2. **`draw_minimal_borders yes`** would fix it for the **topmost pane only**: `layout/vertical.py`'s
    `start_offset=1, end_offset=1` drops the first and last `BorderLine`, so the topmost pane gets no
    top border rect at all.
+   > 🚨 **CORRECTED 2026-09-16 (W1 / plan Q19 item 8).** Same defect as § 5.23, and W7 must cite the
+   > corrected figures when it quotes this remedy. `vertical.py` is **not on this box's code path**:
+   > `enabled_layouts splits,stack` (`config/kitty.conf:76`), `splits.py` never imports `.vertical`
+   > and carries its own `minimal_borders` (v `:703`). `vertical.borders()`'s offsets reach only
+   > `interface.py:10` and `tall.py:27`. **Measured on the real splits layout** (plan § 4.M/Q8(d)):
+   > hsplit → a single 12 px top edge, non-topmost panes only; **vsplit → ZERO**; divider dead zone
+   > → gone. So remedy (b) is the front-runner, not the "topmost pane only" partial written here.
+   > **Its price, stated because it is the operator's call and not ours:** the active-pane box
+   > disappears entirely. That trade is handed to him at W4 with both screenshots, at ~70%
+   > conviction he keeps the box — below the threshold at which an agent decides.
 3. Lowering `window_drag_tolerance` — but kitty.conf:306-313 argues 6pt is load-bearing for divider
    grabbing at 30 panes.
 
