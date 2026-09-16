@@ -167,3 +167,31 @@ PS
   [[ "$output" == *"DRY_RUN"* ]] || false
   [[ "$output" == *"--would"* ]] || false
 }
+
+@test "a changed config also reconciles per-window spacing overrides, and only then" {
+  # `kitty @ set-spacing` is a SECOND scope that outlives load-config and SIGUSR1: a pane that was
+  # ever its subject keeps its own padding forever while the config says otherwise. MEASURED on the
+  # operator's live kitty — 414=46 441=46 341=47 lines, equal widths, one tab — and the extra row
+  # did NOT follow the focus across three moves, so it was a stale per-window override on 341, not
+  # an active/inactive difference. Reset to default equalised all three at 46.
+  mkdir -p "$TMP/sockdir"
+  : > "$TMP/sockdir/kitty-123"   # a regular file, not a socket — the loop must skip it
+  export CC_KITTY_SOCKET_DIR="$TMP/sockdir"
+  export CC_KITTY_BIN="$TMP/bin/kittystub"
+  cat > "$TMP/bin/kittystub" <<'STUB'
+#!/bin/sh
+echo "$@" >> "$KITTYLOG"
+STUB
+  chmod +x "$TMP/bin/kittystub"
+  export KITTYLOG="$TMP/kittylog"; : > "$KITTYLOG"
+  run bash "$TOOL"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spacing=reconciled"* ]] || false
+  # no SOCKET present, so nothing was invoked — a plain file must not be treated as one
+  [ ! -s "$KITTYLOG" ]
+  # and an unchanged tick must not reconcile at all
+  : > "$KITTYLOG"
+  run bash "$TOOL"
+  [[ "$output" == *"verdict=unchanged"* ]] || false
+  [ ! -s "$KITTYLOG" ]
+}

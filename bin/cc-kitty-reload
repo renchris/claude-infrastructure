@@ -96,6 +96,27 @@ if [ -z "$pids" ]; then
   exit 0
 fi
 
+# ── per-window spacing overrides: a SECOND scope that silently beats the landed config ──────────
+# `kitty @ set-spacing` sets padding/margin on ONE window, and that override outlives every
+# load-config and every SIGUSR1 — so a pane that was ever the subject of one keeps its own padding
+# forever while the config says otherwise. MEASURED on the operator's live kitty: three panes in one
+# tab, equal widths, 414=46 441=46 341=47 lines. The extra row did NOT follow the focus (it stayed
+# with 341 through three focus moves), so it was never an active/inactive difference — it was a
+# stale override on that one pane, almost certainly from this repo's own earlier `set-spacing`
+# experiments, which the toggle script's header still records. `set-spacing --all padding=default
+# margin=default` reset it and all three read 46.
+# Same family as the --ignore-overrides defect one directory over: a NARROWER scope wins silently
+# and the global config keeps reporting what it wishes were true. Reconciling it belongs here, in
+# the tool whose whole job is "make the landed config actually live", and it is gated on the content
+# key like everything else, so a quiet tick still touches nothing.
+reconcile_spacing() {
+  local sock
+  for sock in "${CC_KITTY_SOCKET_DIR:-/tmp}"/kitty-*; do
+    [ -S "$sock" ] || continue
+    "${CC_KITTY_BIN:-kitty}" @ --to "unix:$sock" set-spacing --all padding=default margin=default >/dev/null 2>&1 || true
+  done
+}
+
 ok=0 bad=0 failed=''
 for p in $pids; do
   if "$KILL_BIN" -USR1 "$p" 2>/dev/null; then ok=$((ok+1)); else bad=$((bad+1)); failed="$failed $p"; fi
@@ -106,7 +127,8 @@ if [ "$bad" -gt 0 ]; then
   exit 5
 fi
 
+reconcile_spacing
 mkdir -p "$(dirname "$STAMP")" 2>/dev/null
 printf '%s' "$hash_now" > "$STAMP"
-say reloaded "key=${hash_now:0:12} instances=$ok"
+say reloaded "key=${hash_now:0:12} instances=$ok spacing=reconciled"
 exit 0
