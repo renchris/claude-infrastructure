@@ -106,6 +106,11 @@ GRAPH_PY="${REPO}/scripts/kitty-pane-graph.py"
 
 RUN_ROOT="${KDW4_ROOT:-/tmp/kdw4}"
 SOCK="${KDW4_SOCK:-/tmp/kdw4.sock}"          # MUST NOT match /tmp/kitty-*
+# One line per chord press, written by the kitten when KITTY_DRAG_LOG is set (opt-in; the
+# deployed kitten writes nothing without it). This is what separates "no chord ever fired"
+# from "a chord fired and the drag did not complete" — the pane-adjacency diff renders both
+# as "no layout change", and two hand-driven runs produced a non-verdict for exactly that.
+PRESS_LOG="${RUN_ROOT}/presses.log"
 CFG_DIR="${RUN_ROOT}/config"
 CACHE_DIR="${RUN_ROOT}/cache"
 SHOT_DIR="${RUN_ROOT}/shots"
@@ -420,6 +425,7 @@ launch_sandbox() {
         [ -S "$SOCK" ] && rm -f "$SOCK"
         env -u KITTY_LISTEN_ON -u KITTY_PID -u KITTY_WINDOW_ID \
             KITTY_CONFIG_DIRECTORY="$CFG_DIR" KITTY_CACHE_DIRECTORY="$CACHE_DIR" \
+            KITTY_DRAG_LOG="$PRESS_LOG" \
             "$KITTY_BIN" --listen-on "unix:${SOCK}" --instance-group kdw4 \
             --directory "$RUN_ROOT" \
             sh -c "cat '${RUN_ROOT}/INSTRUCTIONS.txt'; exec \$SHELL" \
@@ -523,6 +529,15 @@ print_verdict() {
     local v
     v="$(python3 "$GRAPH_PY" diff "$before" "$after" 2>/dev/null \
          | sed -n 's/^verdict=//p' | tail -1)"
+    say ""
+    if [ -s "$PRESS_LOG" ]; then
+        say "  PRESSES: $(wc -l < "$PRESS_LOG" | tr -d " ") chord press(es) reached the kitten:"
+        sed 's/^/          /' "$PRESS_LOG" | tail -12
+    else
+        say "  PRESSES: NONE — the kitten was never invoked, so no bound chord fired."
+        say "           That is a finding about the BINDING or the press, not about the drag:"
+        say "           re-check the modifiers, and that you pressed inside the pane CONTENT."
+    fi
     say ""
     case "$v" in
         REORDERED)

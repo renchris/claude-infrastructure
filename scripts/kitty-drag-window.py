@@ -164,6 +164,7 @@ from typing import Any
 # expect.  Cost: this import runs on every press (runner.py:53-66 re-execs the
 # file, no cache), but kittens.tui.handler is already in sys.modules after the
 # first one, so it is a dict lookup thereafter.
+import os
 from kittens.tui.handler import result_handler
 
 # ---------------------------------------------------------------------------
@@ -359,7 +360,36 @@ def handle_result(args: list[str], answer: str, target_window_id: int, boss: Any
         return f'kitty-drag-window: bad arguments: {e}'
     if opts['selftest']:
         return _selftest(target_window_id, boss, opts, answer)
-    return _arm(boss, target_window_id, opts['spelling'], opts['rows'])
+    verdict = _arm(boss, target_window_id, opts['spelling'], opts['rows'])
+    _log_press(opts, target_window_id, verdict)
+    return verdict
+
+
+def _log_press(opts: dict[str, Any], wid: int, verdict: Any) -> None:
+    """Append one line per press, but ONLY when KITTY_DRAG_LOG names a file.
+
+    WHY THIS EXISTS. The W4 operator gate reads its verdict from a pane-adjacency
+    diff, and that diff cannot distinguish the two states the operator most needs
+    told apart: NO CHORD EVER FIRED, and A CHORD FIRED AND THE DRAG DID NOT
+    COMPLETE. Both render as "no layout change". Two hand-driven runs produced a
+    non-verdict for exactly that reason before this was added.
+
+    It is OPT-IN and unset in production, so the deployed kitten writes nothing.
+    Every failure is swallowed: a logging fault must never become a popup on a
+    press, which is the same hazard the four guards above exist to avoid — an
+    exception here would reach Boss.combine and render as "Key action failed".
+    """
+    path = os.environ.get('KITTY_DRAG_LOG')
+    if not path:
+        return
+    try:
+        import time
+        with open(path, 'a') as fh:
+            fh.write('%s wid=%s spelling=%s rows=%s -> %s\n' % (
+                time.strftime('%H:%M:%S'), wid, opts.get('spelling'),
+                opts.get('rows'), verdict))
+    except Exception:
+        pass
 
 
 
