@@ -90,6 +90,42 @@ main()
 
 # ── the split bindings ───────────────────────────────────────────────────────────────
 
+# ── ROLE, not spelling — added 2026-09-16 after the THIRD chord re-key in this file ─────────────
+# The two chords have traded roles twice now (e5116d0fb, then back on operator instruction), and
+# each trade reddened three tests that had encoded WHICH CHORD rather than WHICH PROPERTY. The
+# assignment is the operator's to change and is pinned once, explicitly, in its own case below;
+# every other case resolves the role from the config and asserts the property. A chord swap should
+# flip exactly one assertion, not three.
+# Returns the probe key (cmd_shift_b_last / cmd_opt_b_last) whose chord ENDS in the real-bar route.
+real_bar_key() {  # $1 = probe output
+  if echo "$1" | grep -qE '^cmd_shift_b_last=.*(toggle_window_title_bars|kitty-pane-title-toggle\.sh toggle)$'; then
+    echo cmd_shift_b_last
+  elif echo "$1" | grep -qE '^cmd_opt_b_last=.*(toggle_window_title_bars|kitty-pane-title-toggle\.sh toggle)$'; then
+    echo cmd_opt_b_last
+  fi
+}
+glance_key() {  # $1 = probe output
+  if echo "$1" | grep -qE '^cmd_shift_b_last=.*kitty-pane-title-overlay\.py toggle$'; then
+    echo cmd_shift_b_last
+  elif echo "$1" | grep -qE '^cmd_opt_b_last=.*kitty-pane-title-overlay\.py toggle$'; then
+    echo cmd_opt_b_last
+  fi
+}
+
+@test "the chord ASSIGNMENT is the operator's, and this is the ONE place it is pinned" {
+  # Chosen 2026-09-16: "Please fix the font to what we had then." The styled overlay is the only
+  # thing that can carry our face — kitty's real bar is a monospace cell grid and the header is SF
+  # Pro Semibold, proportional, which kitty's matcher refuses (four spec forms all fell back to
+  # Menlo Italic). So the everyday glance takes the chord the hand knows and the rearrange takes
+  # the other. If the operator asks to trade them again, THIS assertion is the only one to edit.
+  run probe "$CONF"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(glance_key "$output")" = cmd_shift_b_last ] || {
+    echo "⌘⇧B is not the styled glance — the operator asked for our font on this chord"; echo "$output"; false; }
+  [ "$(real_bar_key "$output")" = cmd_opt_b_last ] || {
+    echo "⌘⌥B is not the real draggable bar"; echo "$output"; false; }
+}
+
 @test "cmd+d splits vertically (pane to the RIGHT, iTerm2 Split Vertically)" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -179,8 +215,10 @@ main()
 @test "cmd+shift+b is the ONE bar — overlay cleared, then the real draggable bars" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  local last; last="$(echo "$output" | grep -E '^cmd_shift_b_last=' | head -1)"
-  [ -n "$last" ] || { echo "⌘⇧B is not bound at all"; echo "$output"; false; }
+  local key; key="$(real_bar_key "$output")"
+  [ -n "$key" ] || { echo "NO chord reaches the real title bars — drag-to-reorder is gone entirely"; echo "$output"; false; }
+  local last; last="$(echo "$output" | grep -E "^${key}=" | head -1)"
+  [ -n "$last" ] || { echo "the real-bar chord is not bound at all"; echo "$output"; false; }
 
   # REACHES REAL BARS, by either sanctioned route. A painted overlay is not in kitty's hit-test
   # and can never be dragged, so a chord that ends there has silently dropped the gesture.
@@ -216,7 +254,7 @@ main()
   # …and CLEARS THE OVERLAY FIRST, so exactly one bar is on screen and it is the hit-tested one.
   # Order matters: after the toggle it would clear a strip the hold loop has already re-asserted.
   # Asserted on the PREFIX that precedes the real-bar step, which is what "first" actually means.
-  echo "$last" | grep -qE '^cmd_shift_b_last=combine :.*kitty-pane-title-overlay\.py off' || {
+  echo "$last" | grep -qE "^${key}=combine :.*kitty-pane-title-overlay\\.py off" || {
     echo "⌘⇧B no longer clears the overlay before showing the real bars — the two stack, and"
     echo "the operator grabs the painted one, which can never drag"
     echo "$last"; false; }
@@ -548,12 +586,12 @@ PYEOF
   # title again), and the probe reports a combine's whole definition, so a chord that still ends
   # in the overlay failed a test whose own comment asks only that the overlay survive. Keyed on
   # the END of the chord, which is what "the glance still happens" actually means.
-  echo "$output" | grep -qE '^cmd_opt_b_last=.*kitty-pane-title-overlay\.py toggle$' || {
+  [ -n "$(glance_key "$output")" ] || {
     echo "⌘⌥B is no longer the zero-shift overlay — the styled glance is gone"
     echo "$output"; false; }
   # and this chord must NOT reach the built-in: that is the row-stealing jitter the overlay
   # exists to avoid, and it now has its own chord.
-  if echo "$output" | grep -qE '^cmd_opt_b_last=.*toggle_window_title_bars$'; then
+  if echo "$output" | grep -qE "^$(glance_key "$output")=.*toggle_window_title_bars$"; then
     echo "the glance chord regressed to the row-stealing built-in"
     false
   fi
@@ -567,7 +605,13 @@ PYEOF
 # file, and asserted to have REMOVED something before its verdict is believed.
 @test "MUTANT CONTROL: dropping the re-order map is visible to that guard" {
   MUT="$BATS_TEST_TMPDIR/mutant-reorder.conf"
-  grep -v '^map cmd+shift+b ' "$CONF" > "$MUT"
+  run probe "$CONF"; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  case "$(real_bar_key "$output")" in
+    cmd_shift_b_last) RB_MAP='^map cmd+shift+b ' ;;
+    cmd_opt_b_last)   RB_MAP='^map cmd+opt+b ' ;;
+    *) echo "CONTROL VACUOUS — no chord reaches the real bars, nothing to mutate"; false ;;
+  esac
+  grep -v "$RB_MAP" "$CONF" > "$MUT"
   # the mutation must have BITTEN — one line fewer, no more, no less
   before="$(wc -l < "$CONF")"; after="$(wc -l < "$MUT")"
   [ "$((before - after))" -eq 1 ] || {
@@ -583,7 +627,7 @@ PYEOF
   # un-mutated input is measuring nothing. Keyed now on the same two routes the guard accepts,
   # and PROVEN to fire by asserting the un-mutated file DOES match before the mutant is judged.
   reaches_real_bars() {  # $1 = a probe output
-    echo "$1" | grep -qE '^cmd_shift_b_last=.*(toggle_window_title_bars|kitty-pane-title-toggle\.sh toggle)$'
+    [ -n "$(real_bar_key "$1")" ]
   }
   local mutated="$output"
   run probe "$CONF"
