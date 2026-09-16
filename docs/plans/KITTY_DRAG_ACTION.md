@@ -150,9 +150,15 @@ $ ps -axo pid=,command= | grep __watch_conf__
 ```
 
 🚨 **THE PID IN THIS SECTION IS STALE, AND THE WAY IT WENT STALE IS THE REUSABLE PART.**
-**CORRECTED 2026-09-16 (phase 3):** the box rebooted at 15:50 and `97084` no longer exists
-(`ps -p 97084` returns nothing). The operator's live kitty is now **pid 633**, socket
-`/tmp/kitty-633`. The original number is left above rather than overwritten, because the number was
+**CORRECTED 2026-09-16 (phase 3), AND THE CORRECTION ITSELF WENT STALE INSIDE ONE HOUR — which is
+the real lesson.** The box rebooted at 15:50 and `97084` no longer existed, so this was first
+corrected to *"the live kitty is pid 633, socket `/tmp/kitty-633`"*. A second kernel panic at 16:28
+made that false too, and **far worse than merely false: `ps -p 633` now returns
+`calaccessd`, the system calendar daemon.** The pid was not just freed, it was REUSED by an
+unrelated live process — so a rule reading "never signal pid 633" had, within the hour, become a
+rule pointing at Calendar. An identity-keyed refusal does not decay into harmlessness; it decays
+into a loaded gun aimed somewhere new. The live kitty is **pid 597** as of 17:05, and that number
+will be wrong too. The original number is left above rather than overwritten, because the number was
 never the point — **an identity-keyed refusal reads as SATISFIED once its subject is gone.** Every
 brief in this phase carried "never signal pid 97084"; after the reboot each one named a process that
 did not exist, so the constraint was trivially true while the real terminal was unnamed and
