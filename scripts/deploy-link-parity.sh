@@ -529,6 +529,14 @@ for f in "$REPO"/hooks/lib/*.sh;  do check_one "hooks/lib/$(basename "$f")" "$CF
 for f in "$REPO"/hooks/lib/*.py;  do check_one "hooks/lib/$(basename "$f")" "$CFG/hooks/lib/$(basename "$f")"; done
 for f in "$REPO"/commands/*.md;   do check_one "commands/$(basename "$f")"  "$CFG/commands/$(basename "$f")"; done
 for f in "$REPO"/scripts/*.sh;    do check_one "scripts/$(basename "$f")"   "$CFG/scripts/$(basename "$f")"; done
+# SAME OMISSION AS hooks/lib/*.py ABOVE, one class down and eleven days later. `1aa535891` extended
+# install.sh's scripts leg to `*.py` — for the reason its own subject gives, a live chord executing
+# a stale copy — and that commit's comment at install.sh:690 says the auditor "mirrors this loop 1:1
+# by design". The mirror was not extended, so 35 deployed .py helpers had no per-file existence
+# check on the forward leg. Found by the coverage arm added for exactly this (tests/
+# deploy-link-parity.bats case 42), which has been RED on trunk since — a class install.sh globs
+# that this file neither walks nor declares NOT-PER-FILE.
+for f in "$REPO"/scripts/*.py;    do check_one "scripts/$(basename "$f")"   "$CFG/scripts/$(basename "$f")"; done
 for f in "$REPO"/scripts/limit-recover/*; do
   check_one "scripts/limit-recover/$(basename "$f")" "$CFG/scripts/limit-recover/$(basename "$f")"
 done
