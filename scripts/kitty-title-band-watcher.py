@@ -56,6 +56,7 @@ Self-disabling: if the running kitty already has the native band (the C patch's
 `window_title_bar_overlay` option), this module does nothing at all, so the two can never fight.
 """
 
+import os
 import traceback
 
 _ORIGINAL_ATTR = "_kitty_title_band_original_set_geometry"
@@ -243,7 +244,10 @@ def install() -> bool:
         # The band is the feature; the drag-time tab-bar reflow is a refinement. Losing the
         # refinement must never cost the feature.
         _log("tab-bar suppression not installed:\n" + traceback.format_exc())
-    _log("installed")
+    # Name the process. The log is one shared file and a sandbox run writes to it too, so a bare
+    # "installed" cannot tell a caller whether THIS kitty is patched -- which is exactly what a
+    # status report is asked for.
+    _log("installed pid=%d" % os.getpid())
     return True
 
 
@@ -273,7 +277,7 @@ def uninstall() -> bool:
             delattr(TabManager, _DROPMOVE_ATTR)
     except Exception:
         _log("tab-bar suppression not removed:\n" + traceback.format_exc())
-    _log("uninstalled")
+    _log("uninstalled pid=%d" % os.getpid())
     return True
 
 

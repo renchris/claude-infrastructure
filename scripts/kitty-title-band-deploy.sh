@@ -82,13 +82,30 @@ watcher \${HOME}/.claude/scripts/kitty-title-band-watcher.py
 EOF
 }
 
+shim_state() {  # shim_state <socket path> -> INSTALLED | not installed
+  # kitty names its socket /tmp/kitty-<pid> (listen_on unix:/tmp/kitty-{kitty_pid}), so the owning
+  # pid is in the path -- which is what lets one shared log give a PER-INSTANCE verdict. A bare
+  # "installed" line in that log may have been written by a sandbox run against another kitty.
+  # The LAST line naming this pid wins, because install and uninstall both append.
+  local pid="${1##*/kitty-}" last
+  case "$pid" in ''|*[!0-9]*) printf 'unknown (socket not named /tmp/kitty-<pid>)'; return ;; esac
+  [ -f "$LOG" ] || { printf 'not installed'; return; }
+  # ONE capture. `grep -c`/`grep` print a valid answer AND exit non-zero on no match, so appending
+  # `|| echo 0` puts a second producer on the same stream and the caller reads "0\n0".
+  last="$(grep -E "^(un)?installed pid=${pid}\$" "$LOG" 2>/dev/null | tail -1)" || true
+  case "$last" in
+    installed*) printf 'INSTALLED' ;;
+    *)          printf 'not installed' ;;
+  esac
+}
+
 status() {
   printf '\n\033[1mkitty title band — status\033[0m\n'
   local n=0
   while read -r s; do
     [ -n "$s" ] || continue
     n=$((n+1))
-    say "socket $s  panes: $(geom "$s")"
+    say "socket $s  panes: $(geom "$s")  shim: $(shim_state "$s")"
   done < <(sockets)
   [ "$n" -gt 0 ] || say "no running kitty with a control socket"
   if [ -s "$DROPIN" ] && grep -q 'kitty-title-band' "$DROPIN" 2>/dev/null; then
@@ -96,7 +113,7 @@ status() {
   else
     say "drop-in  $DROPIN: not armed"
   fi
-  if [ -f "$LOG" ]; then say "watcher log tail: $(tail -1 "$LOG")"; else say "watcher log: none yet"; fi
+  if [ -f "$LOG" ]; then say "watcher log: $LOG (shared with sandbox runs; the per-socket line above is the live verdict)"; fi
 }
 
 case "$MODE" in
