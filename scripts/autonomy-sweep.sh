@@ -514,6 +514,56 @@ log_idl config-parity "$(jq -cn --arg d "$_drift_rc" \
   '{settings_drift_rc:$d,
     note:"rc 0 = the 5 config dirs agree; 1 = drift, ONE condition-keyed item filed; 3 = could not compare (NOT clean); skipped = tool absent"}')"
 
+# ── DETECTORS FIRST — the two arms that report on THIS JOB'S OWN FAILURE (2026-09-16) ────────────
+# The block above hoisted the parity checker past §0a on the argument that an arm which cannot be
+# REACHED is indistinguishable from an arm that does not exist. These two are the same case, one
+# level worse: they are the instruments that detect the drain pipeline dying, and they were starved
+# by the very condition they exist to report.
+#
+# MEASURED, live idl on 2026-09-16: 86 self-bound rows, `stopped_before` is `1-collect-pages-alarms`
+# 46 times and `0b-author-death-join` 39 times — checkpoints ONE and TWO — with exactly one row
+# anywhere else, ever. §2b-v sits at checkpoint SEVEN of ten. It has run 0 times/day since
+# 2026-09-08. The local drain chain died on 2026-09-09 and the cloud lane on 2026-09-12; the death
+# was found by a human on 2026-09-16, because both detectors were downstream of the bound.
+#
+# This is the general repair the §2c note above says is "not row 6's surface and is filed". Its own
+# reasoning is why the fix is ORDER and not trimming: §0a's 900 s bound is correct on its own terms
+# and the tick's 400 s bound is correct on its own terms, and no re-measurement of the arms above
+# reconciles 900 with 400. Only sequence does.
+#
+# COST, the cheap half of that trade, measured on this box: drain-chain-assert --file 3.10/3.14/3.22 s
+# and backlog-flow-assert --json 0.30/0.31 s — 3.4 s total, the same order as the 3.77 s the parity
+# checker pays one screen up, against a 400 s budget. Both are `_bounded`, neither lands, neither
+# touches the network, and each writes only its own condition-keyed self-falsifying row.
+#
+# The original sites remain, guarded on _DETECTORS_HOISTED, so the arms still run on a tick where
+# this block did not — the hoist can never silently become the only path.
+_DETECTORS_HOISTED=1
+_drain_rc="skipped"
+_drain="$_SWEEP_DIR/drain-chain-assert.sh"
+if [ -x "$_drain" ]; then _bounded bash "$_drain" --file >/dev/null 2>&1; _drain_rc=$?; fi
+
+_flow_rc="skipped"; _flow_verdict="skipped"; _flow_added=0; _flow_closed=0; _flow_net=0
+_flow="$_SWEEP_DIR/backlog-flow-assert.sh"
+if [ -x "$_flow" ]; then
+  _flow_out="$(_bounded bash "$_flow" --json 2>/dev/null)"; _flow_rc=$?
+  _flow_verdict="$(printf '%s' "$_flow_out" | jq -r '.verdict // empty' 2>/dev/null)"
+  case "${_flow_verdict:-}" in
+    draining|net-positive|unknown) ;;
+    *) _flow_verdict="no-verdict" ;;
+  esac
+  _flow_added="$( printf '%s' "$_flow_out" | jq -r '.added  // 0' 2>/dev/null)"
+  _flow_closed="$(printf '%s' "$_flow_out" | jq -r '.closed // 0' 2>/dev/null)"
+  _flow_net="$(   printf '%s' "$_flow_out" | jq -r '.net    // 0' 2>/dev/null)"
+  case "${_flow_added:-}"  in ''|*[!0-9]*)   _flow_added=0  ;; esac
+  case "${_flow_closed:-}" in ''|*[!0-9]*)   _flow_closed=0 ;; esac
+  case "${_flow_net:-}"    in ''|*[!0-9-]*)  _flow_net=0    ;; esac
+  # The row is condition-keyed and its title carries no figures, so this is one record however many
+  # ticks the week stays red — see the subject's header for why that is not a cosmetic choice.
+  [ "$_flow_verdict" = "net-positive" ] && _bounded bash "$_flow" --file >/dev/null 2>&1
+fi
+
+
 # ── 0a. CLOUD RETURN — FIRST OF THE SUBSTANTIVE ARMS, because a block this sweep never REACHES
 #        does nothing ─────────────────────────────────────────────────────────────────────────
 # 🚨 WHY THIS IS THE FIRST SUBSTANTIVE THING THE SWEEP DOES, AND IT IS A MEASUREMENT, NOT A
@@ -1543,9 +1593,13 @@ sweep_yield 2b-v-drain-chain-liveness
 # (0.43 s measured over a 2400-record ledger) and well under the 3.30 s the premise-pass note records
 # for the whole-store `list --all` at utility. Bounded like every sibling, so a store that goes slow
 # costs one arm and not the sweep.
+# COMPUTED AT THE TOP OF THE TICK (see § DETECTORS FIRST). This site stays as the fallback for a
+# tick where the hoist did not run, so the arm is correct whether or not it did — never a double run.
+if [ "${_DETECTORS_HOISTED:-0}" != 1 ]; then
 _drain_rc="skipped"
 _drain="$_SWEEP_DIR/drain-chain-assert.sh"
 if [ -x "$_drain" ]; then _bounded bash "$_drain" --file >/dev/null 2>&1; _drain_rc=$?; fi
+fi
 
 # ── 2b-vi. THE FLOW REPORT (BACKLOG_DRAIN_24_7 §6) — is the draining WINNING? ─────────────────────
 # The arm above asks whether anything is draining; this asks whether the draining is winning, and a
@@ -1571,6 +1625,7 @@ if [ -x "$_drain" ]; then _bounded bash "$_drain" --file >/dev/null 2>&1; _drain
 # arm's 0.43 s and far under the currency pass that had to buy an interval gate. One `jq -n -R` pass
 # over the append-only trail, no per-record forks — sized on a store the size of the real one
 # (memory: bound-must-fit-the-band-not-the-bench).
+if [ "${_DETECTORS_HOISTED:-0}" != 1 ]; then
 _flow_rc="skipped"; _flow_verdict="skipped"; _flow_added=0; _flow_closed=0; _flow_net=0
 _flow="$_SWEEP_DIR/backlog-flow-assert.sh"
 if [ -x "$_flow" ]; then
@@ -1589,6 +1644,7 @@ if [ -x "$_flow" ]; then
   # The row is condition-keyed and its title carries no figures, so this is one record however many
   # ticks the week stays red — see the subject's header for why that is not a cosmetic choice.
   [ "$_flow_verdict" = "net-positive" ] && _bounded bash "$_flow" --file >/dev/null 2>&1
+fi
 fi
 
 # FIELD SEMANTICS FOR THE backlog-health RECORD BELOW.
