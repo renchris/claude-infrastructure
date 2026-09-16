@@ -1911,7 +1911,13 @@ run_ke() { # <now-epoch> <reason>
   local TO=""
   for c in "$(command -v gtimeout 2>/dev/null || true)" "$(command -v timeout 2>/dev/null || true)" \
            /opt/homebrew/bin/gtimeout /opt/homebrew/bin/timeout /usr/local/bin/gtimeout /usr/local/bin/timeout; do
-    [ -n "$c" ] && [ -x "$c" ] && { TO="$c"; break; }
+    # AN `if`, NOT AN `A && B` CHAIN, and the shape is load-bearing twice over. This is candidate
+    # SELECTION, not an assertion: a candidate that does not exist is the NORMAL case, so a failing
+    # test here would be the loop working. The dead-assertion ratchet cannot tell the two apart from
+    # an `&&` chain, and its fixer appended `|| false` — which under errexit fails the case on the
+    # FIRST empty candidate. The gate says a decline is a hand-edit verified in both directions;
+    # this one is verified by the pair below (a box WITH a timeout runs the case, a box without SKIPs).
+    if [ -n "$c" ] && [ -x "$c" ]; then TO="$c"; break; fi
   done
   [ -n "$TO" ] || skip "no timeout(1) on this box — the mutex case needs a bounded run"
   run "$TO" 10 env PATH="$STUB:$PATH" PSMAP="$PSMAP" CC_SENTINEL_LOG="$LOG" \
