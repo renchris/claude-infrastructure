@@ -1478,7 +1478,7 @@ judgement.
 | # | Criterion | The check |
 |---|---|---|
 | 1 | The six record corrections are landed, with the three refuted claims marked **in place** | `git diff origin/main~N -- config/kitty.conf` shows comment-only lines; grep finds each original clause still present |
-| 2 | The route-A kitten exists in the repo and is deployed | `ls -la ~/.config/kitty/kitty-drag-window.py` resolves to the repo source |
+| 2 | The route-A kitten exists in the repo and is deployed | ~~`ls -la ~/.config/kitty/kitty-drag-window.py`~~ — **CORRECTED 2026-09-16 (phase 3): that is the route-A path, and § 4.M ruled route A′.** The check is **`ls -la ~/.claude/scripts/kitty-drag-window.py`**, which is what the W3 goal already says. `install.sh:689` globs `scripts/*.sh` **and** `scripts/*.py`, so the kitten deploys through the existing symlink farm with no new `install.sh` line, no `kitty-setup.sh` `ln -sfn`, and no `deploy-parity-assert.sh` arm. |
 | 3 | Every deploy gate is green with the new linked source declared | `tests/deploy-parity.bats` TAP with its `1..N` line, 0 failures; `scripts/deploy-parity-assert.sh` clean |
 | 4 | **A human has driven the gesture** and the chord is chosen | W4's script prints a before/after `neighbors` diff showing the layout changed, set-change tested BEFORE order |
 | 5 | The operator's styled pane header is draggable in his live kitty | the chord works in his own panes, by his own hand |
@@ -1565,4 +1565,35 @@ Recorded here so they arrive as *known* rather than as bug reports. None of thes
    `/private/tmp/claude-501/-private-tmp-wt-kitty-overlay/8294ff72-2d70-4ad2-86b9-33bc226c6f0e/scratchpad/research/`.
    They are **not committed and will not survive a reboot**. Anything phase 3 needs from them must be
    quoted into a tracked file first.
+
+9. 🚨 **AND THAT REBOOT HAPPENED — 2026-09-16 15:50, mid-phase-3, about nine minutes into the
+   first implementation wave.** Item 8 was right and understated it. `/private/tmp` is reaped on
+   **reboot**, not merely eventually, and it took **everything** in one stroke: both built kitty
+   trees (`/private/tmp/kitty-dev`, `/private/tmp/kitty-482`), every phase-1 artifact
+   (`A1..A12` + `_VERDICTS.md`), every phase-2 probe log, and one wave's entire in-flight patch.
+
+   **What survived is exactly what had been written into the repo worktree** — W1's record
+   corrections, W2's kitten, W8's recovered `draghold`. Nothing else. Three consequences, each
+   worth more than the hour it cost:
+
+   - **W8's "run it EARLY, not last" ruling was vindicated by about two minutes.** The scratchpad
+     `draghold` was recovered into `tools/draghold/` at 15:41-15:43 and its source was reaped at
+     15:50. Had W8 been scheduled last, as "off the critical path" invites, the only copy of the
+     driver, its build line and all four invocation-carrying harnesses would be gone permanently.
+     **An item's position in a schedule is part of its risk, not a detail of its priority** — and
+     the thing that makes a wave urgent can be the perishability of its INPUT rather than the
+     value of its output.
+   - **Build at a DURABLE short path.** The ~80-character ceiling is what put the trees in
+     `/private/tmp`, and durability was never weighed against it. `~/kitty-dev` and `~/kitty-482`
+     are **25 characters**, comfortably under the ceiling, and survive a reboot. There was never a
+     trade here — only an unexamined default. *(§ 5's W5/W6 goals and § 6 DoD item 7 still name
+     the `/private/tmp` paths; read those as "the built master tree" and "the built v0.48.2 tree".
+     A symlink at the old path keeps the literal checks resolving.)*
+   - **A deliverable that lives only outside the repo is not a deliverable yet.** Deliverable B is
+     a patch against someone else's tree, so it has no natural home here — which is exactly why it
+     needs a deliberate one. Phase 3 therefore also tracks the patch and its PR body under
+     `docs/patches/`, so B survives a reboot the way A already did.
+     `Scope (grown): +track deliverable B's patch and PR body in the repo` — Follow-On Gate
+     F1-F4 PASS: net-positive, grounded in this session's own measured incident rather than in
+     speculation, inside the same safety envelope, and bounded to two files.
 
