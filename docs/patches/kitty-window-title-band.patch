@@ -1,0 +1,564 @@
+diff --git a/kitty/boss.py b/kitty/boss.py
+index b0c75ed..c6632e7 100644
+--- a/kitty/boss.py
++++ b/kitty/boss.py
+@@ -2024,6 +2024,20 @@ def on_drop(self, os_window_id: int, drop: dict[str, bytes] | int, from_self: bo
+             if (tab_id := tm.tab_bar.tab_id_at(x, y)) and (tab := self.tab_for_id(tab_id)) and (w := tab.active_window):
+                 w.on_drop(drop)
+ 
++    def abort_window_drag(self) -> None:
++        # Called from C when a window drag ended without ever becoming a system drag and drop. The
++        # C-side flag is already cleared; this undoes the Python-side effects, which nothing else
++        # will now undo because the drop and drag-source-finished callbacks will never fire.
++        from .fast_data_types import set_window_being_dragged
++        set_window_being_dragged()
++        for tm in self.all_tab_managers:
++            tm._set_drag_target_window(0)
++            tm._set_drag_target_tab(0)
++            for t in tm:
++                if t.force_show_title_bars:
++                    t.force_show_title_bars = False
++                    t.relayout()
++
+     def on_drag_source_finished(
+         self, was_dropped: bool, was_canceled: bool, accepted_mime_type: str, action: int, data: dict[str, bytes] | None,
+         needs_toplevel_on_wayland: bool
+diff --git a/kitty/layout/base.py b/kitty/layout/base.py
+index 6d9be87..b6990f0 100644
+--- a/kitty/layout/base.py
++++ b/kitty/layout/base.py
+@@ -406,10 +406,14 @@ def __call__(self, all_windows: WindowList) -> None:
+         self.update_visibility(all_windows)
+         self.blank_rects = []
+         # Set show_title_bar flag on each visible window before layout
+-        min_windows = get_options().window_title_bar_min_windows
++        opts = get_options()
++        min_windows = opts.window_title_bar_min_windows
+         visible_groups = tuple(all_windows.iter_all_layoutable_groups(only_visible=True))
+         force_show = all_windows.force_show_title_bars
+-        show_title_bar = force_show or (min_windows > 0 and len(visible_groups) >= min_windows)
++        # An overlay title bar is drawn over the window rather than allocated a row of
++        # it, so the layout must not reserve a row: it is never a cell title bar.
++        show_title_bar = False if opts.window_title_bar_overlay else (
++            force_show or (min_windows > 0 and len(visible_groups) >= min_windows))
+         for wg in visible_groups:
+             for w in wg.windows:
+                 w.show_title_bar = show_title_bar
+diff --git a/kitty/mouse.c b/kitty/mouse.c
+index f865343..095b9af 100644
+--- a/kitty/mouse.c
++++ b/kitty/mouse.c
+@@ -930,6 +930,22 @@ static void
+ handle_window_title_bar_mouse(Window *w, int button, int modifiers, int action) {
+     OSWindow *osw = global_state.callback_os_window;
+     if (!osw) return;
++    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE && global_state.window_being_dragged.id
++            && global_state.window_being_dragged.drag_started && !global_state.drag_source.is_active) {
++        // The mirror of the escape hatch in handle_tab_bar_mouse below, which the window drag has
++        // never had. Once a system drag and drop is active the release is consumed by it and never
++        // delivered to us, so a release arriving in this state means the drag never became a system
++        // DND: glfwStartDrag failed, was not reached, or the compositor ignored it.
++        // Without this, window_being_dragged stays set for the life of the process, and the routing
++        // arm that consults it (mouse_region's caller, below) is unconditional on POSITION: every
++        // mouse event in every OS window is then handed to the title bar handler, so selection, URL
++        // detection, border resize and click dispatch die everywhere at once and the only cure is
++        // restarting kitty. Reaching that state needs a press that arms a window drag, which before
++        // overlay title bars required a drawn cell title bar and was therefore nearly unreachable.
++        zero_at_ptr(&global_state.window_being_dragged);
++        call_boss(abort_window_drag, "");
++        return;
++    }
+     if (button > -1 || global_state.window_being_dragged.id) {
+         call_boss(handle_window_title_bar_mouse, "KKddiii",
+             osw->id, w->id, osw->mouse_x, osw->mouse_y, button, modifiers, action);
+@@ -1001,6 +1017,17 @@ mouse_region(bool detect_borders, bool detect_title_bar) {
+     }
+     if (in_central && w->num_tabs > 0) {
+         Tab *t = global_state.callback_os_window->tabs + global_state.callback_os_window->active_tab;
++        if (detect_title_bar) {
++            for (unsigned int i = 0; i < t->num_windows; i++) {
++                Window *win = t->windows + i;
++                unsigned bl, bt, bw, bh;
++                if (window_title_band_rect(w, win, &bl, &bt, &bw, &bh) &&
++                        w->mouse_x >= bl && w->mouse_x < bl + bw && w->mouse_y >= bt && w->mouse_y < bt + bh) {
++                    ans.in_title_bar = true; ans.window = win; ans.window_idx = i;
++                    return ans;
++                }
++            }
++        }
+         if (detect_borders && num_visible_windows(t) > 1) {
+             id_type window_id = 0;
+             double dpi = (w->fonts_data->logical_dpi_x + w->fonts_data->logical_dpi_y) / 2.;
+diff --git a/kitty/options/definition.py b/kitty/options/definition.py
+index 3ef8396..4fefab2 100644
+--- a/kitty/options/definition.py
++++ b/kitty/options/definition.py
+@@ -1941,10 +1941,29 @@
+     'window_title_bar',
+     'top',
+     choices=('top', 'bottom'),
++    ctype='window_title_bar',
+     long_text="""
+ Control the position of the window title bar relative to the window content.
+ Use :opt:`window_title_bar_min_windows` to control when title bars are shown.
+-Use :opt:`window_title_template` to format the displayed window title.
++Use :opt:`window_title_bar_overlay` to draw it over the window content instead of
++above or below it. Use :opt:`window_title_template` to format the displayed window title.
++""",
++)
++
++opt(
++    'window_title_bar_overlay',
++    'no',
++    option_type='to_bool',
++    ctype='bool',
++    long_text="""
++Draw window title bars as an overlay over the first (or last, see
++:opt:`window_title_bar`) row of the window, instead of allocating a row of the
++window to them. An overlay title bar costs the window no rows, so turning it on
++and off neither resizes the pty nor moves the window contents, and it does not
++scroll with them. It is drawn in the system UI font rather than the terminal
++font, so it is not restricted to the cell grid. Note that the row it is drawn
++over is covered while the title bar is visible. When enabled, title bars are
++shown for every window, and :opt:`window_title_bar_min_windows` is not used.
+ """,
+ )
+ 
+diff --git a/kitty/options/parse.py b/kitty/options/parse.py
+index 6f99de6..e14a49b 100644
+--- a/kitty/options/parse.py
++++ b/kitty/options/parse.py
+@@ -1575,6 +1575,9 @@ def window_title_bar_inactive_foreground(self, val: str, ans: dict[str, typing.A
+     def window_title_bar_min_windows(self, val: str, ans: dict[str, typing.Any]) -> None:
+         ans['window_title_bar_min_windows'] = positive_int(val)
+ 
++    def window_title_bar_overlay(self, val: str, ans: dict[str, typing.Any]) -> None:
++        ans['window_title_bar_overlay'] = to_bool(val)
++
+     def window_title_template(self, val: str, ans: dict[str, typing.Any]) -> None:
+         ans['window_title_template'] = tab_title_template(val)
+ 
+diff --git a/kitty/options/to-c-generated.h b/kitty/options/to-c-generated.h
+index d209fb7..7c55434 100644
+--- a/kitty/options/to-c-generated.h
++++ b/kitty/options/to-c-generated.h
+@@ -1071,6 +1071,32 @@ convert_from_opts_window_title_bar_inactive_background(PyObject *py_opts, Option
+     Py_DECREF(ret);
+ }
+ 
++static void
++convert_from_python_window_title_bar(PyObject *val, Options *opts) {
++    opts->window_title_bar = window_title_bar(val);
++}
++
++static void
++convert_from_opts_window_title_bar(PyObject *py_opts, Options *opts) {
++    PyObject *ret = PyObject_GetAttrString(py_opts, "window_title_bar");
++    if (ret == NULL) return;
++    convert_from_python_window_title_bar(ret, opts);
++    Py_DECREF(ret);
++}
++
++static void
++convert_from_python_window_title_bar_overlay(PyObject *val, Options *opts) {
++    opts->window_title_bar_overlay = PyObject_IsTrue(val);
++}
++
++static void
++convert_from_opts_window_title_bar_overlay(PyObject *py_opts, Options *opts) {
++    PyObject *ret = PyObject_GetAttrString(py_opts, "window_title_bar_overlay");
++    if (ret == NULL) return;
++    convert_from_python_window_title_bar_overlay(ret, opts);
++    Py_DECREF(ret);
++}
++
+ static void
+ convert_from_python_tab_bar_edge(PyObject *val, Options *opts) {
+     opts->tab_bar_edge = PyLong_AsLong(val);
+@@ -1692,6 +1718,10 @@ convert_opts_from_python_opts(PyObject *py_opts, Options *opts) {
+     if (PyErr_Occurred()) return false;
+     convert_from_opts_window_title_bar_inactive_background(py_opts, opts);
+     if (PyErr_Occurred()) return false;
++    convert_from_opts_window_title_bar(py_opts, opts);
++    if (PyErr_Occurred()) return false;
++    convert_from_opts_window_title_bar_overlay(py_opts, opts);
++    if (PyErr_Occurred()) return false;
+     convert_from_opts_tab_bar_edge(py_opts, opts);
+     if (PyErr_Occurred()) return false;
+     convert_from_opts_tab_bar_margin_height(py_opts, opts);
+diff --git a/kitty/options/to-c.h b/kitty/options/to-c.h
+index 4a43e8d..ef29830 100644
+--- a/kitty/options/to-c.h
++++ b/kitty/options/to-c.h
+@@ -28,6 +28,12 @@ color_or_none_as_int(PyObject *color) {
+     return color_as_int(color);
+ }
+ 
++static WindowTitleBarPosition
++window_title_bar(PyObject *src) {
++    const char *q = PyUnicode_AsUTF8(src);
++    return (q && q[0] == 'b') ? TITLE_BAR_BOTTOM : TITLE_BAR_TOP;
++}
++
+ static inline color_type
+ active_border_color(PyObject *color) {
+     if (color == Py_None) return 0x00ff00;
+diff --git a/kitty/options/types.py b/kitty/options/types.py
+index cf7009f..5f6d589 100644
+--- a/kitty/options/types.py
++++ b/kitty/options/types.py
+@@ -517,6 +517,7 @@
+     'window_title_bar_inactive_background',
+     'window_title_bar_inactive_foreground',
+     'window_title_bar_min_windows',
++    'window_title_bar_overlay',
+     'window_title_template',
+ )
+ 
+@@ -725,6 +726,7 @@ class Options:
+     window_title_bar_inactive_background: kitty.fast_data_types.Color | None = None
+     window_title_bar_inactive_foreground: kitty.fast_data_types.Color | None = None
+     window_title_bar_min_windows: int = 0
++    window_title_bar_overlay: bool = False
+     window_title_template: str = '{fmt.fg.red}{bell_symbol}{activity_symbol}{fmt.fg.window}{progress_percent}{title}'
+     action_alias: dict[str, str] = {}
+     env: dict[str, str] = {}
+diff --git a/kitty/shaders.c b/kitty/shaders.c
+index 8d99136..7aa21e6 100644
+--- a/kitty/shaders.c
++++ b/kitty/shaders.c
+@@ -37,7 +37,7 @@ typedef struct UIRenderData {
+     GraphicsRenderData grd;
+     WindowLogoRenderData *window_logo;
+     float bg_alpha, inactive_text_alpha;
+-    bool has_background_image;
++    bool has_background_image, is_active_window;
+     color_type background_color; // RGB only
+ } UIRenderData;
+ 
+@@ -1407,6 +1407,105 @@ send_cell_data_to_gpu(ssize_t vao_idx, Screen *screen, OSWindow *os_window) {
+     return changed;
+ }
+ 
++// Window title band {{{
++// A one-cell-tall strip of system-font text drawn OVER the window's first (or
++// last) row. Unlike the cell title bar it is not a Screen and takes no row from
++// the grid: nothing about the layout changes when it appears, so no pty is
++// resized, no child is signalled and no content moves. It is redrawn at a fixed
++// rect every frame, so it does not scroll with the content beneath it.
++
++bool
++window_title_band_rect(const OSWindow *os_window, const Window *w, unsigned *left, unsigned *top, unsigned *width, unsigned *height) {
++    if (!OPT(window_title_bar_overlay) || !w || !w->visible || !os_window || !os_window->fonts_data) return false;
++    const Screen *screen = w->render_data.screen;
++    if (!screen || screen->lines < 2) return false;
++    const unsigned ch = os_window->fonts_data->fcm.cell_height;
++    const WindowGeometry *g = &w->render_data.geometry;
++    // Never draw a band over a window that is not at least one cell taller than it.
++    if (!ch || g->right <= g->left || g->bottom <= g->top + ch) return false;
++    *left = g->left; *width = g->right - g->left; *height = ch;
++    *top = OPT(window_title_bar) == TITLE_BAR_BOTTOM ? g->bottom - ch : g->top;
++    return true;
++}
++
++void
++free_window_title_band(Window *w) {
++    WindowTitleBandData *band = &w->title_band;
++    if (band->texture_id) { GLuint t = band->texture_id; free_texture(&t); band->texture_id = 0; }
++    free(band->buf); band->buf = NULL; band->width = 0; band->height = 0;
++    Py_CLEAR(band->last_title);
++    band->texture_is_current = false;
++}
++
++static void
++window_title_band_colors(const UIRenderData *ui, color_type *fg, color_type *bg) {
++    color_type f = ui->is_active_window ? OPT(window_title_bar_active_foreground) : OPT(window_title_bar_inactive_foreground);
++    color_type b = ui->is_active_window ? OPT(window_title_bar_active_background) : OPT(window_title_bar_inactive_background);
++    // An unset (none) colour arrives as 0; fall back to the window's own colours,
++    // which is what the other bars kitty draws over a window use.
++#define RGBCOL(which) (colorprofile_to_color_with_fallback(ui->screen->color_profile, ui->screen->color_profile->overridden.which, ui->screen->color_profile->configured.which, ui->screen->color_profile->overridden.which, ui->screen->color_profile->configured.which))
++    if (!f) f = RGBCOL(default_fg);
++    if (!b) b = RGBCOL(default_bg);
++#undef RGBCOL
++    // The text stays opaque; the FILL takes the window's own alpha, so on a translucent terminal
++    // the band is translucent too rather than a solid strip across it. cocoa_render_line_of_text
++    // and its freetype sibling both read the fill alpha from the top byte of bg.
++    float a = ui->bg_alpha; a = a < 0.f ? 0.f : (a > 1.f ? 1.f : a);
++    *fg = 0xff000000 | f; *bg = ((color_type)(uint8_t)(a * 255.f) << 24) | b;
++}
++
++static void
++draw_window_title_band(const UIRenderData *ui, bool for_final_output) {
++    unsigned left, top, width, height;
++    Window *w = ui->window;
++    if (!w || !w->title || !window_title_band_rect(ui->os_window, w, &left, &top, &width, &height)) return;
++    WindowTitleBandData *band = &w->title_band;
++    color_type fg, bg;
++    window_title_band_colors(ui, &fg, &bg);
++
++    if (band->width != width || band->height != height) {
++        uint8_t *nbuf = realloc(band->buf, (size_t)4 * width * height);
++        if (!nbuf) return;
++        band->buf = nbuf; band->width = width; band->height = height;
++        Py_CLEAR(band->last_title);  // force a re-render into the new buffer
++    }
++    if (!band->last_title || band->last_title != w->title || band->last_fg != fg || band->last_bg != bg) {
++        const char *title = PyUnicode_Check(w->title) ? PyUnicode_AsUTF8(w->title) : NULL;
++        if (!title) { PyErr_Clear(); return; }
++        static char titlebuf[2048];
++        snprintf(titlebuf, arraysz(titlebuf), " %s", title);
++        if (!draw_window_title(ui->os_window->fonts_data->font_sz_in_pts, ui->os_window->fonts_data->logical_dpi_y,
++                               titlebuf, fg, bg, band->buf, width, height, NULL)) { PyErr_Clear(); return; }
++        Py_CLEAR(band->last_title); band->last_title = Py_NewRef(w->title);
++        band->last_fg = fg; band->last_bg = bg;
++        band->texture_is_current = false;
++    }
++    if (!band->texture_id) { glGenTextures(1, &band->texture_id); band->texture_is_current = false; }
++    if (!band->texture_id) return;
++    glBindTexture(GL_TEXTURE_2D, band->texture_id);
++    if (!band->texture_is_current) {
++        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
++        glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB_ALPHA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, band->buf);
++        band->texture_is_current = true;
++    }
++    // draw_window_title() fills the whole buffer with bg, so the quad is opaque and
++    // no separate blanking pass is needed.
++    ImageRenderData data = {.group_count=1};
++    gpu_data_for_image(&data, -1, 1, 1, -1);
++    data.texture_id = band->texture_id;
++    bind_program(GRAPHICS_PROGRAM);
++    if (for_final_output) glEnable(GL_FRAMEBUFFER_SRGB);
++    save_viewport_using_top_left_origin(left, top, width, height, ui->full_framebuffer_height);
++    draw_graphics(GRAPHICS_PROGRAM, &data, 0, 1, 1.f);
++    restore_viewport();
++    if (for_final_output) glDisable(GL_FRAMEBUFFER_SRGB);
++}
++// }}}
++
+ void
+ draw_cells(const WindowRenderData *srd, OSWindow *os_window, bool is_active_window, bool is_tab_bar, bool is_single_window, Window *window) {
+     Screen *screen = srd->screen;
+@@ -1440,6 +1539,7 @@ draw_cells(const WindowRenderData *srd, OSWindow *os_window, bool is_active_wind
+         .full_framebuffer_width = os_window->viewport_width, .full_framebuffer_height = os_window->viewport_height,
+         .window = window, .screen = screen, .os_window = os_window, .grd = grman_render_data(grman), .window_logo = wl,
+         .inactive_text_alpha = current_inactive_text_alpha, .has_background_image = has_bgimage(os_window),
++        .is_active_window = is_active_window,
+         .background_color = default_bg, .bg_alpha=effective_os_window_alpha(os_window),
+     };
+     screen->reload_all_gpu_data = false;
+@@ -1447,6 +1547,7 @@ draw_cells(const WindowRenderData *srd, OSWindow *os_window, bool is_active_wind
+         ui.screen_left, ui.screen_top, ui.screen_width, ui.screen_height, ui.full_framebuffer_height);
+     if (ui.os_window->needs_layers) draw_cells_with_layers(&ui, srd->vao_idx);
+     else draw_cells_without_layers(&ui, srd->vao_idx);
++    if (!is_tab_bar) draw_window_title_band(&ui, !ui.os_window->needs_layers);
+     restore_viewport();
+ }
+ // }}}
+diff --git a/kitty/state.c b/kitty/state.c
+index 92b3ffd..8bca9f3 100644
+--- a/kitty/state.c
++++ b/kitty/state.c
+@@ -422,6 +422,7 @@ destroy_window(Window *w) {
+     free(w->pending_clicks.clicks); zero_at_ptr(&w->pending_clicks);
+     free(w->buffered_keys.key_data); zero_at_ptr(&w->buffered_keys);
+     Py_CLEAR(w->render_data.screen); Py_CLEAR(w->title);
++    free_window_title_band(w);
+     Py_CLEAR(w->title_bar_data.last_drawn_title_object_id);
+     free(w->title_bar_data.buf); w->title_bar_data.buf = NULL;
+     Py_CLEAR(w->url_target_bar_data.last_drawn_title_object_id);
+diff --git a/kitty/state.h b/kitty/state.h
+index 4ea91bf..4c19eb3 100644
+--- a/kitty/state.h
++++ b/kitty/state.h
+@@ -32,6 +32,7 @@ typedef struct UrlPrefix {
+ 
+ typedef enum AdjustmentUnit { POINT = 0, PERCENT = 1, PIXEL = 2 } AdjustmentUnit;
+ typedef enum UnderlineHyperlinks { UNDERLINE_ON_HOVER = 0, UNDERLINE_ALWAYS = 1, UNDERLINE_NEVER = 2 } UnderlineHyperlinks;
++typedef enum WindowTitleBarPosition { TITLE_BAR_TOP = 0, TITLE_BAR_BOTTOM = 1 } WindowTitleBarPosition;
+ typedef enum ShowHyperlinkTargets {
+     SHOW_HYPERLINK_TARGETS_NEVER = 0,
+     SHOW_HYPERLINK_TARGETS_ALWAYS = 1,
+@@ -78,6 +79,8 @@ typedef struct Options {
+     struct {
+         bool on_cross, on_drop;
+     } focus_follows_mouse;
++    WindowTitleBarPosition window_title_bar;
++    bool window_title_bar_overlay;
+     unsigned int hide_window_decorations;
+     bool macos_hide_from_tasks, macos_quit_when_last_window_closed, macos_window_resizable, macos_traditional_fullscreen, macos_fullscreen_ignore_safe_area_insets, macos_use_physical_screen_frame;
+     unsigned int macos_option_as_alt;
+@@ -225,6 +228,21 @@ typedef struct WindowBarData {
+     bool needs_render;
+ } WindowBarData;
+ 
++// The overlay window title band: a one-cell-tall strip of system-font text drawn
++// OVER the window's first (or last) row rather than allocating a row for it, so
++// showing it costs no cells, resizes no pty and moves no content. Both the pixels
++// and the GL texture holding them are cached here and re-made only when the title,
++// the colours or the band size change, so a visible band costs one textured quad
++// per window per frame and nothing else.
++typedef struct WindowTitleBandData {
++    unsigned width, height;      // size of buf, in device pixels
++    uint8_t *buf;                // RGBA pixels, fully opaque, rendered by draw_window_title()
++    PyObject *last_title;        // the title object buf was rendered from
++    color_type last_fg, last_bg; // the colours buf was rendered with
++    uint32_t texture_id;         // GL texture holding buf, 0 when none
++    bool texture_is_current;     // false when buf has changed since the last upload
++} WindowTitleBandData;
++
+ typedef struct PendingEntry {
+     char *buf; size_t header_sz;
+     size_t data_sz;
+@@ -274,6 +292,7 @@ typedef struct Window {
+     monotonic_t last_drag_scroll_at;
+     uint32_t last_special_key_pressed;
+     WindowBarData title_bar_data, url_target_bar_data;
++    WindowTitleBandData title_band;
+     id_type redirect_keys_to_overlay;
+     struct {
+         bool enabled;
+@@ -627,6 +646,8 @@ void dispatch_pending_clicks(id_type, void*);
+ void send_pending_click_to_window(Window*, int);
+ void get_platform_dependent_config_values(void *glfw_window);
+ bool draw_window_title(double, double, const char *text, color_type fg, color_type bg, uint8_t *output_buf, size_t width, size_t height, size_t *actual_width);
++void free_window_title_band(Window *w);
++bool window_title_band_rect(const OSWindow *os_window, const Window *w, unsigned *left, unsigned *top, unsigned *width, unsigned *height);
+ uint8_t* draw_single_ascii_char(const char ch, size_t *result_width, size_t *result_height);
+ bool is_os_window_fullscreen(OSWindow *);
+ void update_ime_focus(OSWindow* osw, bool focused);
+diff --git a/kitty/tabs.py b/kitty/tabs.py
+index e1e17f9..4d842dc 100644
+--- a/kitty/tabs.py
++++ b/kitty/tabs.py
+@@ -1286,7 +1286,17 @@ def refresh_sprite_positions(self) -> None:
+ 
+     @property
+     def tab_bar_should_be_visible(self) -> bool:
+-        if self.tab_being_dropped is not None or self.window_drag_over_me:
++        # A WINDOW drag normally reveals the tab bar in the destination so the dragged window can
++        # be dropped onto a tab or onto the new-tab button. Revealing it takes pixels from the
++        # central area, which resizes every window in the OS window and signals every child -- the
++        # exact reflow an overlay title bar exists to avoid, and it would happen twice per drag, in
++        # every OS window the pointer crosses. With overlay title bars every window is already a
++        # visible, hit-tested drop target, and dropping into another OS window's central area still
++        # works, so the reveal is dropped. A TAB drag (tab_being_dropped) is a different gesture
++        # that has no other drop target, and still reveals it.
++        if self.tab_being_dropped is not None:
++            return True  # keep tab bar visible in the dest
++        if self.window_drag_over_me and not get_options().window_title_bar_overlay:
+             return True  # keep tab bar visible in the dest
+         count = get_options().tab_bar_min_tabs
+         if count < 1:
+@@ -1890,6 +1900,12 @@ def start_window_drag(self, pixels: bytes, width: int, height: int) -> None:
+         min_w = opts.window_title_bar_min_windows
+         for tm in boss.all_tab_managers:
+             tm.mark_tab_bar_dirty()
++            # Overlay title bars are always shown and cost no rows, so there is nothing
++            # to force-show for the duration of the drag, and therefore nothing for the
++            # drop to clear afterwards: a drag that puts a window back where it started
++            # leaves the title bars exactly as it found them.
++            if opts.window_title_bar_overlay:
++                continue
+             for t in tm:
+                 visible = sum(1 for _ in t.windows.iter_all_layoutable_groups(only_visible=True))
+                 if not (min_w > 0 and visible >= min_w):
+@@ -1925,6 +1941,21 @@ def _clear_force_show_title_bars(self) -> None:
+                     tab.force_show_title_bars = False
+                     tab.relayout()
+ 
++    def _pointer_in_title_bar_of(self, win: 'Window', rel_y: int) -> bool:
++        # True when the point is in win's title bar, whether that bar is a row of cells
++        # or an overlay band drawn over the window's first (or last) row.
++        opts = get_options()
++        overlay = opts.window_title_bar_overlay
++        if not (overlay or getattr(win, 'show_title_bar', False)):
++            return False
++        if overlay and win.screen.lines < 2:
++            return False  # matches the C side, which refuses to cover a one-row window
++        from .fast_data_types import cell_size_for_window
++        _, ch = cell_size_for_window(self.os_window_id)
++        g = win.geometry
++        tb_top = g.top if opts.window_title_bar == 'top' else g.bottom - ch
++        return tb_top <= rel_y < tb_top + ch
++
+     def _find_window_at(self, x: int, y: int) -> 'Window | None':
+         from .fast_data_types import viewport_for_window
+         central = viewport_for_window(self.os_window_id)[0]
+@@ -1964,18 +1995,22 @@ def _set_drag_target_window(self, window_id: int, quadrant: int = 0) -> None:
+             self.window_being_dropped = None
+ 
+     def on_window_drop_move(self, window_id: int = 0, is_dest: bool = False, x: int = 0, y: int = 0) -> None:
++        # With overlay title bars the tab bar is not revealed for a window drag (see
++        # tab_bar_should_be_visible), so there is no tab-bar geometry change to lay out and no
++        # central-area resize to propagate: the flag is still tracked, the reflow is not done.
++        reveals_tab_bar = not self.tab_bar_hidden and not get_options().window_title_bar_overlay
+         if not is_dest:
+             self._set_drag_target_window(0)
+             self._set_drag_target_tab(0)
+             if self.window_drag_over_me:
+                 self.window_drag_over_me = False
+-                if not self.tab_bar_hidden:
++                if reveals_tab_bar:
+                     self.layout_tab_bar()
+                     self.resize(only_tabs=True)
+             return
+         if not self.window_drag_over_me:
+             self.window_drag_over_me = True
+-            if not self.tab_bar_hidden:
++            if reveals_tab_bar:
+                 self.layout_tab_bar()
+                 self.resize(only_tabs=True)
+         from .fast_data_types import viewport_for_window
+@@ -1990,16 +2025,10 @@ def on_window_drop_move(self, window_id: int = 0, is_dest: bool = False, x: int
+             from .fast_data_types import viewport_for_window as _vfw
+             central = _vfw(self.os_window_id)[0]
+             rel_y = y - central.top
+-            if dest_window.show_title_bar:
+-                from .fast_data_types import cell_size_for_window
+-                _, ch = cell_size_for_window(self.os_window_id)
+-                g = dest_window.geometry
+-                opts = get_options()
+-                tb_top = g.top if opts.window_title_bar == 'top' else g.bottom - ch
+-                if tb_top <= rel_y < tb_top + ch:
+-                    # Title bar hover: full window + title bar highlight (swap)
+-                    self._set_drag_target_window(dest_window.id, 5)
+-                    return
++            if self._pointer_in_title_bar_of(dest_window, rel_y):
++                # Title bar hover: full window + title bar highlight (swap)
++                self._set_drag_target_window(dest_window.id, 5)
++                return
+             active_tab = self.active_tab
+             if active_tab is not None:
+                 rel_x = x - central.left
+@@ -2024,7 +2053,7 @@ def on_window_drop_move(self, window_id: int = 0, is_dest: bool = False, x: int
+             self._set_drag_target_window(0)
+ 
+     def on_window_drop(self, x: int, y: int, window_id: int) -> None:
+-        from .fast_data_types import cell_size_for_window, viewport_for_window
++        from .fast_data_types import viewport_for_window
+         boss = get_boss()
+         # A window is being dropped on this tab manager, so the tab bar must have been
+         # visible to the user (showing the "+" button). Ensure it stays visible for the
+@@ -2061,17 +2090,11 @@ def on_window_drop(self, x: int, y: int, window_id: int) -> None:
+ 
+         dest_window = None
+         dest_in_title_bar = False
+-        opts = get_options()
+-        cw, ch = cell_size_for_window(self.os_window_id)
+         for win in active_tab:
+             g = win.geometry
+-            if opts.window_title_bar == 'top':
+-                tb_top, tb_bottom = g.top, g.top + ch
+-            else:
+-                tb_top, tb_bottom = g.bottom - ch, g.bottom
+             if g.left <= rel_x < g.right and g.top <= rel_y < g.bottom:
+                 dest_window = win
+-                dest_in_title_bar = getattr(win, 'show_title_bar', False) and (tb_top <= rel_y < tb_bottom)
++                dest_in_title_bar = self._pointer_in_title_bar_of(win, rel_y)
+                 break
+ 
+         if dest_window is None or dest_window.id == window_id:
