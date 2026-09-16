@@ -51,6 +51,10 @@
 # ============================================================================
 
 setup() {
+    # Fixture $HOME even though every fixture below already lives under BATS_TEST_TMPDIR: the
+    # hermeticity ratchet is STRUCTURAL, not behavioural, and it is right to be — "hermetic today
+    # because nothing happens to read $HOME" is a property of the current body, not of the suite.
+    export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
     REPO="$(cd "${BATS_TEST_DIRNAME}/.." && pwd)"
     KPG="${KITTY_PANE_GRAPH_BIN:-${REPO}/scripts/kitty-pane-graph.py}"
     FIX="${BATS_TEST_TMPDIR}"

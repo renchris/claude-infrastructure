@@ -80,7 +80,20 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 #  Constants
 # ---------------------------------------------------------------------------
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve $0 through its symlinks BEFORE deriving the repo root. ~/.claude/scripts/ is a per-file
+# SYMLINK FARM into this checkout, so through the live layer `dirname "$0"/..` is ~/.claude — no
+# tests/, no docs/, no .git — and this script would not fail, it would read the WRONG TREE and
+# quietly bind the wrong kitten. Canonical loop from _resolve_self() in scripts/ship-land.sh; no
+# `readlink -f`, which is GNU-only and this box is BSD. (This is the SECOND instance of this exact
+# class in this one file — the kitten path had it too, where a build tree's launcher/kitty is a
+# symlink into kitty.app/Contents/MacOS/.)
+_kdw4_self="${BASH_SOURCE[0]}"
+while [ -L "$_kdw4_self" ]; do
+    _kdw4_d="$(cd "$(dirname "$_kdw4_self")" && pwd)"
+    _kdw4_self="$(readlink "$_kdw4_self")"
+    case "$_kdw4_self" in /*) ;; *) _kdw4_self="$_kdw4_d/$_kdw4_self" ;; esac
+done
+REPO="$(cd "$(dirname "$_kdw4_self")/.." && pwd)"
 KITTEN_PY="${REPO}/scripts/kitty-drag-window.py"
 GRAPH_PY="${REPO}/scripts/kitty-pane-graph.py"
 
