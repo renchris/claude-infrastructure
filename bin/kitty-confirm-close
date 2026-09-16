@@ -341,7 +341,7 @@ def close(ids: list[int]) -> None:
         kitty("close-window", "--match", f"id:{wid}")
 
 
-USAGE = "usage: kitty-confirm-close {window|os-window} [--check]"
+USAGE = "usage: kitty-confirm-close {window|os-window} [--window <id>] [--check]"
 
 
 def main() -> int:
@@ -350,6 +350,31 @@ def main() -> int:
     # default worth keeping in a script whose entire job is to not close things by surprise.
     args = [a for a in sys.argv[1:] if a != "--check"]
     check = "--check" in sys.argv[1:]
+
+    # --window <id>: close THAT pane (or its OS window) instead of the focused one.
+    #
+    # WHY IT EXISTS, and it is not a convenience. kitty-pane-menu's Close Pane row routes here so
+    # there is exactly ONE close path — one busy-check, one dialog, one set of protections for a
+    # live Claude session. That menu is raised by a RIGHT click, and as of 2026-09-16 it anchors on
+    # the window under the POINTER, because macOS does not make a background window key on a right
+    # mouse down. Without this flag the two halves disagree: the menu would be describing the
+    # window you clicked while this file closed a pane in the one you last typed in — and a pane
+    # sitting at a bare shell prompt is closed with no dialog at all, so the disagreement would be
+    # SILENT. The chords in kitty.conf pass nothing and keep the focused-window behaviour they have
+    # always had.
+    #
+    # AN UNKNOWN ID REFUSES rather than falling back to focus. A window that died between the menu
+    # popping and the pick is a real race; closing "something else instead" is the one response to
+    # it that cannot be undone.
+    explicit: int | None = None
+    if "--window" in args:
+        i = args.index("--window")
+        if i + 1 >= len(args) or not args[i + 1].lstrip("-").isdigit():
+            print(USAGE, file=sys.stderr)
+            return 2
+        explicit = int(args[i + 1])
+        del args[i:i + 2]
+
     scope = args[0] if args else "window"
     if len(args) > 1 or scope not in ("window", "os-window"):
         print(USAGE, file=sys.stderr)
@@ -370,7 +395,16 @@ def main() -> int:
         print(f"kitty-confirm-close: no reply from kitty (address={ADDRESS})", file=sys.stderr)
         return 3
 
-    wid = focused_window_id(tree)
+    if explicit is not None:
+        wid = explicit
+        # .get, not t["windows"]: every other walk in this file tolerates a tab without the key,
+        # and a KeyError on the close path is a chord that does nothing with no message.
+        if not any(w["id"] == wid
+                   for o in tree for t in o.get("tabs", []) for w in t.get("windows", [])):
+            print(f"kitty-confirm-close: window {wid} is gone — closing nothing", file=sys.stderr)
+            return 0
+    else:
+        wid = focused_window_id(tree)
     if wid is None:
         print("kitty-confirm-close: no focused window — refusing to guess", file=sys.stderr)
         return 0
