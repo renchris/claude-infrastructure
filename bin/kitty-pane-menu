@@ -996,7 +996,11 @@ def main() -> int:
         log_pane_spawn("os-window", "kitty", str(wid), "kitty-pane-menu detach-window (new window)")
         kitty("detach-window", "--match", f"id:{wid}")
     elif choice == "Close Pane":
-        subprocess.run([os.path.join(HERE, "kitty-confirm-close"), "window"])
+        # --window, not a bare `window`: this menu anchors on the pane under the POINTER and
+        # kitty-confirm-close anchors on the FOCUSED one, so on a right-click in a window macOS
+        # did not raise, the two disagree — and a pane at a bare shell prompt closes with no
+        # dialog, making that disagreement silent. One close path, one target.
+        subprocess.run([os.path.join(HERE, "kitty-confirm-close"), "window", "--window", str(wid)])
     else:
         for target_wid, label, _src in targets:
             if label == choice:

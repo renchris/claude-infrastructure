@@ -254,3 +254,68 @@ print(sorted(n))'
   run python3 -c 'print(len("KPM-CURSOR-HIT-V1".encode()))'
   [ "$output" = "17" ]
 }
+
+@test "13 Close Pane routes the ANCHORED pane to the one close path, not the focused one" {
+  # The gap the anchor fix OPENED, closed in the same change. kitty-confirm-close resolves its own
+  # target from focus; with the menu anchored on the pointer the two disagree on exactly the click
+  # this feature exists for — and a pane at a bare shell prompt is closed with NO dialog, so the
+  # disagreement would be silent. Driving main() with the dispatch real is what pins it: a grep for
+  # the flag would pass over a call that never runs.
+  TREE="$TREE" run kpm '
+import json, sys
+# kpm() hands the snippet as argv[1], and main() reads sys.argv — left alone it sees the whole
+# snippet as an unknown argument and returns 2 before dispatching anything.
+sys.argv = ["kitty-pane-menu"]
+calls = []
+class FakeProc:
+    returncode = 0
+    stderr = ""
+def fake_run(argv, *a, **k):
+    calls.append(list(argv)); return FakeProc()
+m.subprocess.run = fake_run
+m.load = lambda *a, **k: json.loads(os.environ["TREE"])
+m.reap_probe = lambda p: ({}, {}, {}, "none",
+                          os.environ["PROBE"].replace("C\t1500\t900", "C\t700\t-600"))
+m.space_probe_plist = lambda: {}
+m.focused_window_id = lambda tree: 441          # focus is in the OTHER OS window
+m.choose_native = lambda items: "Close Pane"
+m.NATIVE_BIN = "/nonexistent/helper"
+assert m.main() == 0
+close = [c for c in calls if c and c[0].endswith("kitty-confirm-close")]
+assert len(close) == 1, calls
+print(os.path.basename(close[0][0]), *close[0][1:])'
+  [ "$status" -eq 0 ]
+  [ "$output" = "kitty-confirm-close window --window 440" ]
+}
+
+@test "14 kitty-confirm-close --window closes THAT pane, and a bare invocation still uses focus" {
+  CLOSE="$REPO/bin/kitty-confirm-close" TREE="$TREE" python3 - <<'PY'
+import importlib.machinery, importlib.util, json, os, sys
+loader = importlib.machinery.SourceFileLoader("kcc", os.environ["CLOSE"])
+spec = importlib.util.spec_from_loader("kcc", loader)
+m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+tree = json.loads(os.environ["TREE"])
+closed = []
+m.load = lambda *a, **k: tree
+m.close = lambda ids: closed.append(list(ids))
+m.is_busy = lambda w: False            # a bare shell prompt: closes with NO dialog
+m.focused_window_id = lambda t: 441
+for argv, want in ((["window"], [441]),
+                   (["window", "--window", "440"], [440]),
+                   (["os-window", "--window", "440"], [999, 440])):
+    closed.clear()
+    sys.argv = ["kitty-confirm-close"] + argv
+    rc = m.main()
+    assert rc == 0, (argv, rc)
+    assert closed == [want], (argv, closed, want)
+# A pane that died between the menu popping and the pick closes NOTHING — never "something else".
+closed.clear()
+sys.argv = ["kitty-confirm-close", "window", "--window", "999999"]
+assert m.main() == 0
+assert closed == [], closed
+# A flag with no value is a usage error, not a silent fall-back to focus.
+sys.argv = ["kitty-confirm-close", "window", "--window"]
+assert m.main() == 2
+print("ok")
+PY
+}
