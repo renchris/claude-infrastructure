@@ -1,0 +1,120 @@
+[
+  {
+    "oswin": 4,
+    "platform": 292,
+    "tab": 4,
+    "layout": "splits",
+    "pos": 0,
+    "win": 5,
+    "pid": 19052,
+    "cols": 77,
+    "lines": 47,
+    "cwd": "/Users/chrisren/Development/.worktrees/kitty-drag-impl",
+    "title": "\u2733 Kitty window drag implementation phase 3",
+    "account": "next3",
+    "session_id": "1e0730c9-28ea-4cc1-8157-e9c64a2ebc91",
+    "worktree": "/Users/chrisren/Development/.worktrees/kitty-drag-impl",
+    "branch": "kitty-drag-impl",
+    "source": "argv(reso-resume-one)",
+    "neighbors": {
+      "right": [
+        12
+      ]
+    }
+  },
+  {
+    "oswin": 4,
+    "platform": 292,
+    "tab": 4,
+    "layout": "splits",
+    "pos": 1,
+    "win": 3,
+    "pid": 7179,
+    "cols": 77,
+    "lines": 47,
+    "cwd": "/Users/chrisren/Development/claude-infrastructure",
+    "title": "\u25d0 Claude Code",
+    "account": "next2",
+    "session_id": "cc1f8d0a-6aba-4e2c-9929-8c089e8d2804",
+    "worktree": "/Users/chrisren/Development/claude-infrastructure",
+    "branch": "main",
+    "source": "cc-registry",
+    "neighbors": {
+      "left": [
+        8
+      ]
+    }
+  },
+  {
+    "oswin": 5,
+    "platform": 414,
+    "tab": 5,
+    "layout": "splits",
+    "pos": 0,
+    "win": 4,
+    "pid": 6126,
+    "cols": 51,
+    "lines": 47,
+    "cwd": "/Users/chrisren/Development/claude-infrastructure",
+    "title": "\u2733 Forward Deployed Engineer laptop email",
+    "account": "next",
+    "session_id": "04235d35-02ce-4c5e-b199-300d9bb13d9b",
+    "worktree": "/Users/chrisren/Development/claude-infrastructure",
+    "branch": "main",
+    "source": "argv(reso-resume-one)",
+    "neighbors": {
+      "right": [
+        11
+      ]
+    }
+  },
+  {
+    "oswin": 5,
+    "platform": 414,
+    "tab": 5,
+    "layout": "splits",
+    "pos": 1,
+    "win": 9,
+    "pid": 22833,
+    "cols": 51,
+    "lines": 47,
+    "cwd": "/Users/chrisren/Development/claude-infrastructure",
+    "title": "\u25d1 Claude Code",
+    "account": "next4",
+    "session_id": "5cea01e1-0277-4d44-ae56-06c32b6504f6",
+    "worktree": "/Users/chrisren/Development/claude-infrastructure",
+    "branch": "main",
+    "source": "cc-registry",
+    "neighbors": {
+      "left": [
+        9
+      ],
+      "right": [
+        13
+      ]
+    }
+  },
+  {
+    "oswin": 5,
+    "platform": 414,
+    "tab": 5,
+    "layout": "splits",
+    "pos": 2,
+    "win": 7,
+    "pid": 30898,
+    "cols": 51,
+    "lines": 47,
+    "cwd": "/Users/chrisren/Development/.worktrees/kpanic-research",
+    "title": "\u25d1 Kernel panic 2026-09-16 investigation",
+    "account": "next2",
+    "session_id": "089dda26-5fdc-4366-97a9-b73458b2aca2",
+    "worktree": "/Users/chrisren/Development/.worktrees/kpanic-research",
+    "branch": "research/kernel-panic-2026-09-16",
+    "source": "argv(reso-resume-one)",
+    "neighbors": {
+      "left": [
+        11
+      ]
+    }
+  }
+]

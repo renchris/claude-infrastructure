@@ -1,0 +1,565 @@
+[
+  {
+    "active_tab_history": [],
+    "background_opacity": 1.0,
+    "id": 4,
+    "is_active": false,
+    "is_focused": false,
+    "last_focused": false,
+    "platform_window_id": 292,
+    "tabs": [
+      {
+        "active_window_history": [
+          5,
+          3
+        ],
+        "enabled_layouts": [
+          "splits",
+          "stack"
+        ],
+        "groups": [
+          {
+            "id": 8,
+            "windows": [
+              5
+            ]
+          },
+          {
+            "id": 12,
+            "windows": [
+              3
+            ]
+          }
+        ],
+        "id": 4,
+        "is_active": true,
+        "is_focused": false,
+        "layout": "splits",
+        "layout_opts": {
+          "equalize_on_window_close": "n",
+          "split_axis": "horizontal"
+        },
+        "layout_state": {
+          "all_windows": {
+            "active_group_history": [
+              8,
+              10,
+              12
+            ],
+            "active_group_idx": 0,
+            "window_groups": [
+              {
+                "id": 8,
+                "window_ids": [
+                  5
+                ]
+              },
+              {
+                "id": 12,
+                "window_ids": [
+                  3
+                ]
+              }
+            ]
+          },
+          "class": "Splits",
+          "opts": {
+            "equalize_on_window_close": "n",
+            "split_axis": "horizontal"
+          },
+          "pairs": {
+            "one": 8,
+            "two": 12
+          }
+        },
+        "title": "\u2733 Kitty window drag implementation phase 3",
+        "title_overridden": false,
+        "windows": [
+          {
+            "at_prompt": false,
+            "cmdline": [
+              "bash",
+              "/Users/chrisren/.reso/bin/reso-resume-one",
+              "next3",
+              "/Users/chrisren/Development/.worktrees/kitty-drag-impl",
+              "1e0730c9-28ea-4cc1-8157-e9c64a2ebc91",
+              "kitty-drag-impl"
+            ],
+            "columns": 77,
+            "created_at": 1789594474528776000,
+            "cwd": "/Users/chrisren/Development/.worktrees/kitty-drag-impl",
+            "env": {
+              "CC_ADMIT_DONE": "1",
+              "KITTY_WINDOW_ID": "5",
+              "PWD": "/Users/chrisren/Development/.worktrees/kitty-drag-impl",
+              "WINDOWID": "182"
+            },
+            "foreground_processes": [
+              {
+                "cmdline": [
+                  "expect",
+                  "-c",
+                  "\n  set timeout 240\n  set cfg    $env(CC_RR_CFG)\n  set bin    $env(CC_RR_BIN)\n  set model  $env(CC_RR_MODEL)\n  set effort $env(CC_RR_EFFORT)\n  set sid    $env(CC_RR_SID)\n  set thr    $env(CC_RR_THRESHOLD)\n  set mcpdec $env(CC_RR_MCP_ARGS)\n  set answered 0\n  # The env prefix is a LIST so the suppression variable can be absent rather than empty. Passing\n  # NAME= with no value is not the same thing: Rue() reads \"\" as NaN and falls back to the default\n  # of 70 baked into the binary, which raises the dialog on every session older than 70 minutes \u2014\n  # i.e. \"off\" would look identical to \"on\" from here. One spawn line, appended to, so the two\n  # paths cannot drift apart the way two spawn lines would.\n  # NO APOSTROPHES ANYWHERE BELOW THIS LINE: the whole program is a single-quoted bash string, so\n  # one apostrophe in a Tcl comment closes it and the rest of the file stops being expect at all.\n  set envpfx [list DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg]\n  if {$thr ne \"\"} { lappend envpfx CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=$thr }\n  # A LIST again, and for the second reason this file already gives: an absent decision must pass\n  # NO argument, not an empty one, and appending the value as a single element keeps a path with a\n  # space in it one argument rather than two.\n  set mcplist [list]\n  if {$mcpdec ne \"\"} { lappend mcplist $mcpdec }\n  spawn -noecho env {*}$envpfx $bin --permission-mode auto --model $model --effort $effort {*}$mcplist --resume $sid\n  # keep the claude UI responsive: propagate iTerm2 pane resizes (SIGWINCH) to the spawned pty.\n  # interact does NOT forward window-size changes, so without this the Ink UI stays frozen at the\n  # spawn-time width (verified 2026-07-05).\n  trap {\n    set rows [stty rows]\n    set cols [stty columns]\n    catch {stty rows $rows columns $cols < $spawn_out(slave,name)}\n  } WINCH\n  expect {\n    # \u2500\u2500 THE RESUME DIALOG. Two defects lived in the one line this replaces. \u2500\u2500\n    #\n    # WRONG OPTION. It answered with a bare CR, which takes whatever the cursor is resting on \u2014\n    # option 1, \"Resume from summary\". That runs /compact on the transcript: the session comes back\n    # as a precis of itself, and (REFERENCE.md section 5) drops its session-scoped /goal Stop-hook,\n    # which is why recovered sessions then sit idle. A crash recovery is supposed to return the\n    # session. The operator wants option 2, \"Resume full session as-is\".\n    #\n    # WIDTH-DEPENDENT MATCH. \"Resume from summary\" is a 19-character literal and Ink hard-wraps to\n    # the pane width, so on a pane narrowed by a recovery layout the phrase is split across rows and\n    # the match never fires at all \u2014 the session then sits on an unanswered menu until the timeout,\n    # which is how three transplants parked 20+ minutes.\n    #\n    # So the trigger is as-is: five characters, narrow enough that no usable pane can break it, and\n    # present in exactly one place in the dialog \u2014 option 2 label. Not the title, and NOT the body\n    # (\"we recommend resuming from a summary\"), which matters for the reason lr-fire-resume:178\n    # documents: the body streams several seconds before Ink mounts the SelectInput and enables raw\n    # mode, so anything triggered on it is answered into a terminal that is not listening yet.\n    # Verbatim from the 2.1.220 bundle, in render order:\n    #   [{value:\"compact\",  label:\"Resume from summary (recommended)\"},\n    #    {value:\"continue\", label:\"Resume full session as-is\"},\n    #    {value:\"never\",    label:\"Do not ask me again\"}]\n    # RE-CHECK that list on any CC bump. Option 3 dismisses the dialog PERMANENTLY for the account,\n    # so an extra Down here is a persistent preference change, not a mis-click \u2014 which is why the\n    # move below is a clamp and exactly one step, never a loop.\n    -re {as-is} {\n      if {!$answered} {\n        set answered 1\n        # settle for raw mode, then move DETERMINISTICALLY. Up clamps at the first option, so three\n        # of them cost nothing and leave the cursor at a KNOWN place whatever it did before; one\n        # Down then lands on option 2.\n        sleep 2\n        send \"\\033\\[A\"; send \"\\033\\[A\"; send \"\\033\\[A\"\n        sleep 1\n        send \"\\033\\[B\"\n        sleep 1\n        send \"\\r\"\n      }\n      exp_continue\n    }\n    -re {you created or one you trust|Quick safety check} { sleep 1; send \"1\"; send \"\\r\"; exp_continue }\n    -re {spent .* on the Anthropic API this session} { send \"\\r\"; exp_continue }\n    # fullscreen upsell: Down+CR selects \"Not now\" (option 2). RE-CHECK on any CC bump.\n    -re {new fullscreen renderer|Try the new fullscreen} { sleep 1; send \"\\033\\[B\"; send \"\\r\"; exp_continue }\n    -re {shift.tab to cycle}  { }\n    -re {auto mode on}        { }\n    -re {\\? for shortcuts}    { }\n    timeout {}\n    eof { exit }\n  }\n  # interact needs a controlling tty, so it is the one thing a headless harness cannot run. The\n  # tests drive everything above this line \u2014 the real spawn, the real matcher, the real keystrokes.\n  if {$env(CC_RR_NO_INTERACT) ne \"\"} {\n    set timeout 20\n    expect eof\n    exit\n  }\n  interact\n"
+                ],
+                "cwd": "/Users/chrisren/Development/.worktrees/kitty-drag-impl",
+                "pid": 19693
+              },
+              {
+                "cmdline": [
+                  "bash",
+                  "/Users/chrisren/.reso/bin/reso-resume-one",
+                  "next3",
+                  "/Users/chrisren/Development/.worktrees/kitty-drag-impl",
+                  "1e0730c9-28ea-4cc1-8157-e9c64a2ebc91",
+                  "kitty-drag-impl"
+                ],
+                "cwd": "/Users/chrisren/Development/.worktrees/kitty-drag-impl",
+                "pid": 19052
+              }
+            ],
+            "has_activity_since_last_focus": false,
+            "id": 5,
+            "in_alternate_screen": false,
+            "is_active": true,
+            "is_focused": false,
+            "is_self": false,
+            "last_cmd_exit_status": 0,
+            "last_focused_at": 2898.016054,
+            "last_reported_cmdline": "",
+            "lines": 47,
+            "needs_attention": false,
+            "neighbors": {
+              "right": [
+                12
+              ]
+            },
+            "pid": 19052,
+            "session_name": "",
+            "title": "\u2733 Kitty window drag implementation phase 3",
+            "title_overridden": false,
+            "user_vars": {}
+          },
+          {
+            "at_prompt": false,
+            "cmdline": [
+              "/bin/zsh",
+              "-l"
+            ],
+            "columns": 77,
+            "created_at": 1789594174481664000,
+            "cwd": "/Users/chrisren/Development/claude-infrastructure",
+            "env": {
+              "KITTY_WINDOW_ID": "3",
+              "MANPATH": "/Applications/kitty.app/Contents/Resources/man:",
+              "PWD": "/Users/chrisren/Development/claude-infrastructure",
+              "WINDOWID": "132"
+            },
+            "foreground_processes": [
+              {
+                "cmdline": [
+                  "caffeinate",
+                  "-i",
+                  "-t",
+                  "300"
+                ],
+                "cwd": "/Users/chrisren/Development/claude-infrastructure",
+                "pid": 69717
+              },
+              {
+                "cmdline": [
+                  "node",
+                  "/Users/chrisren/Library/Application Support/fnm/aliases/default/bin/ms-365-mcp-server"
+                ],
+                "cwd": "/Users/chrisren/Development/claude-infrastructure",
+                "pid": 15100
+              },
+              {
+                "cmdline": [
+                  "/Users/chrisren/.claude-260/node_modules/.bin/claude",
+                  "--permission-mode",
+                  "auto",
+                  "--model",
+                  "claude-opus-5",
+                  "--effort",
+                  "high"
+                ],
+                "cwd": "/Users/chrisren/Development/claude-infrastructure",
+                "pid": 15034
+              },
+              {
+                "cmdline": [
+                  "tee",
+                  "-a",
+                  "/Users/chrisren/.claude/logs/close-records/.stderr.hz2Azg"
+                ],
+                "cwd": "/Users/chrisren/Development/claude-infrastructure",
+                "pid": 15032
+              },
+              {
+                "cmdline": [
+                  "bash",
+                  "/Users/chrisren/.claude/bin/cc-close-attrib",
+                  "/Users/chrisren/.claude-260/node_modules/.bin/claude",
+                  "--permission-mode",
+                  "auto",
+                  "--model",
+                  "claude-opus-5",
+                  "--effort",
+                  "high"
+                ],
+                "cwd": "/Users/chrisren/Development/claude-infrastructure",
+                "pid": 15004
+              }
+            ],
+            "has_activity_since_last_focus": false,
+            "id": 3,
+            "in_alternate_screen": true,
+            "is_active": false,
+            "is_focused": false,
+            "is_self": false,
+            "last_cmd_exit_status": 0,
+            "last_focused_at": 2897.29788,
+            "last_reported_cmdline": "",
+            "lines": 47,
+            "needs_attention": false,
+            "neighbors": {
+              "left": [
+                8
+              ]
+            },
+            "pid": 7179,
+            "session_name": "",
+            "title": "\u25d0 Claude Code",
+            "title_overridden": false,
+            "user_vars": {}
+          }
+        ]
+      }
+    ],
+    "wm_class": "kitty",
+    "wm_name": "kitty"
+  },
+  {
+    "active_tab_history": [],
+    "background_opacity": 1.0,
+    "id": 5,
+    "is_active": true,
+    "is_focused": true,
+    "last_focused": true,
+    "platform_window_id": 414,
+    "tabs": [
+      {
+        "active_window_history": [
+          4,
+          7,
+          9
+        ],
+        "enabled_layouts": [
+          "splits",
+          "stack"
+        ],
+        "groups": [
+          {
+            "id": 9,
+            "windows": [
+              4
+            ]
+          },
+          {
+            "id": 11,
+            "windows": [
+              9
+            ]
+          },
+          {
+            "id": 13,
+            "windows": [
+              7
+            ]
+          }
+        ],
+        "id": 5,
+        "is_active": true,
+        "is_focused": true,
+        "layout": "splits",
+        "layout_opts": {
+          "equalize_on_window_close": "n",
+          "split_axis": "horizontal"
+        },
+        "layout_state": {
+          "all_windows": {
+            "active_group_history": [
+              9,
+              13,
+              11
+            ],
+            "active_group_idx": 0,
+            "window_groups": [
+              {
+                "id": 9,
+                "window_ids": [
+                  4
+                ]
+              },
+              {
+                "id": 11,
+                "window_ids": [
+                  9
+                ]
+              },
+              {
+                "id": 13,
+                "window_ids": [
+                  7
+                ]
+              }
+            ]
+          },
+          "class": "Splits",
+          "opts": {
+            "equalize_on_window_close": "n",
+            "split_axis": "horizontal"
+          },
+          "pairs": {
+            "bias": 0.3333333333333333,
+            "one": 9,
+            "two": {
+              "one": 11,
+              "two": 13
+            }
+          }
+        },
+        "title": "\u2733 Forward Deployed Engineer laptop email",
+        "title_overridden": false,
+        "windows": [
+          {
+            "at_prompt": false,
+            "cmdline": [
+              "bash",
+              "/Users/chrisren/.reso/bin/reso-resume-one",
+              "next",
+              "/Users/chrisren/Development/claude-infrastructure",
+              "04235d35-02ce-4c5e-b199-300d9bb13d9b",
+              "main"
+            ],
+            "columns": 51,
+            "created_at": 1789594461023978000,
+            "cwd": "/Users/chrisren/Development/claude-infrastructure",
+            "env": {
+              "CC_ADMIT_DONE": "1",
+              "KITTY_WINDOW_ID": "4",
+              "PWD": "/Users/chrisren/Development/claude-infrastructure",
+              "WINDOWID": "182"
+            },
+            "foreground_processes": [
+              {
+                "cmdline": [
+                  "expect",
+                  "-c",
+                  "\n  set timeout 240\n  set cfg    $env(CC_RR_CFG)\n  set bin    $env(CC_RR_BIN)\n  set model  $env(CC_RR_MODEL)\n  set effort $env(CC_RR_EFFORT)\n  set sid    $env(CC_RR_SID)\n  set thr    $env(CC_RR_THRESHOLD)\n  set mcpdec $env(CC_RR_MCP_ARGS)\n  set answered 0\n  # The env prefix is a LIST so the suppression variable can be absent rather than empty. Passing\n  # NAME= with no value is not the same thing: Rue() reads \"\" as NaN and falls back to the default\n  # of 70 baked into the binary, which raises the dialog on every session older than 70 minutes \u2014\n  # i.e. \"off\" would look identical to \"on\" from here. One spawn line, appended to, so the two\n  # paths cannot drift apart the way two spawn lines would.\n  # NO APOSTROPHES ANYWHERE BELOW THIS LINE: the whole program is a single-quoted bash string, so\n  # one apostrophe in a Tcl comment closes it and the rest of the file stops being expect at all.\n  set envpfx [list DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg]\n  if {$thr ne \"\"} { lappend envpfx CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=$thr }\n  # A LIST again, and for the second reason this file already gives: an absent decision must pass\n  # NO argument, not an empty one, and appending the value as a single element keeps a path with a\n  # space in it one argument rather than two.\n  set mcplist [list]\n  if {$mcpdec ne \"\"} { lappend mcplist $mcpdec }\n  spawn -noecho env {*}$envpfx $bin --permission-mode auto --model $model --effort $effort {*}$mcplist --resume $sid\n  # keep the claude UI responsive: propagate iTerm2 pane resizes (SIGWINCH) to the spawned pty.\n  # interact does NOT forward window-size changes, so without this the Ink UI stays frozen at the\n  # spawn-time width (verified 2026-07-05).\n  trap {\n    set rows [stty rows]\n    set cols [stty columns]\n    catch {stty rows $rows columns $cols < $spawn_out(slave,name)}\n  } WINCH\n  expect {\n    # \u2500\u2500 THE RESUME DIALOG. Two defects lived in the one line this replaces. \u2500\u2500\n    #\n    # WRONG OPTION. It answered with a bare CR, which takes whatever the cursor is resting on \u2014\n    # option 1, \"Resume from summary\". That runs /compact on the transcript: the session comes back\n    # as a precis of itself, and (REFERENCE.md section 5) drops its session-scoped /goal Stop-hook,\n    # which is why recovered sessions then sit idle. A crash recovery is supposed to return the\n    # session. The operator wants option 2, \"Resume full session as-is\".\n    #\n    # WIDTH-DEPENDENT MATCH. \"Resume from summary\" is a 19-character literal and Ink hard-wraps to\n    # the pane width, so on a pane narrowed by a recovery layout the phrase is split across rows and\n    # the match never fires at all \u2014 the session then sits on an unanswered menu until the timeout,\n    # which is how three transplants parked 20+ minutes.\n    #\n    # So the trigger is as-is: five characters, narrow enough that no usable pane can break it, and\n    # present in exactly one place in the dialog \u2014 option 2 label. Not the title, and NOT the body\n    # (\"we recommend resuming from a summary\"), which matters for the reason lr-fire-resume:178\n    # documents: the body streams several seconds before Ink mounts the SelectInput and enables raw\n    # mode, so anything triggered on it is answered into a terminal that is not listening yet.\n    # Verbatim from the 2.1.220 bundle, in render order:\n    #   [{value:\"compact\",  label:\"Resume from summary (recommended)\"},\n    #    {value:\"continue\", label:\"Resume full session as-is\"},\n    #    {value:\"never\",    label:\"Do not ask me again\"}]\n    # RE-CHECK that list on any CC bump. Option 3 dismisses the dialog PERMANENTLY for the account,\n    # so an extra Down here is a persistent preference change, not a mis-click \u2014 which is why the\n    # move below is a clamp and exactly one step, never a loop.\n    -re {as-is} {\n      if {!$answered} {\n        set answered 1\n        # settle for raw mode, then move DETERMINISTICALLY. Up clamps at the first option, so three\n        # of them cost nothing and leave the cursor at a KNOWN place whatever it did before; one\n        # Down then lands on option 2.\n        sleep 2\n        send \"\\033\\[A\"; send \"\\033\\[A\"; send \"\\033\\[A\"\n        sleep 1\n        send \"\\033\\[B\"\n        sleep 1\n        send \"\\r\"\n      }\n      exp_continue\n    }\n    -re {you created or one you trust|Quick safety check} { sleep 1; send \"1\"; send \"\\r\"; exp_continue }\n    -re {spent .* on the Anthropic API this session} { send \"\\r\"; exp_continue }\n    # fullscreen upsell: Down+CR selects \"Not now\" (option 2). RE-CHECK on any CC bump.\n    -re {new fullscreen renderer|Try the new fullscreen} { sleep 1; send \"\\033\\[B\"; send \"\\r\"; exp_continue }\n    -re {shift.tab to cycle}  { }\n    -re {auto mode on}        { }\n    -re {\\? for shortcuts}    { }\n    timeout {}\n    eof { exit }\n  }\n  # interact needs a controlling tty, so it is the one thing a headless harness cannot run. The\n  # tests drive everything above this line \u2014 the real spawn, the real matcher, the real keystrokes.\n  if {$env(CC_RR_NO_INTERACT) ne \"\"} {\n    set timeout 20\n    expect eof\n    exit\n  }\n  interact\n"
+                ],
+                "cwd": "/Users/chrisren/Development/claude-infrastructure",
+                "pid": 7617
+              },
+              {
+                "cmdline": [
+                  "bash",
+                  "/Users/chrisren/.reso/bin/reso-resume-one",
+                  "next",
+                  "/Users/chrisren/Development/claude-infrastructure",
+                  "04235d35-02ce-4c5e-b199-300d9bb13d9b",
+                  "main"
+                ],
+                "cwd": "/Users/chrisren/Development/claude-infrastructure",
+                "pid": 6126
+              }
+            ],
+            "has_activity_since_last_focus": false,
+            "id": 4,
+            "in_alternate_screen": true,
+            "is_active": true,
+            "is_focused": true,
+            "is_self": false,
+            "last_cmd_exit_status": 0,
+            "last_focused_at": 4270.496451,
+            "last_reported_cmdline": "",
+            "lines": 47,
+            "needs_attention": false,
+            "neighbors": {
+              "right": [
+                11
+              ]
+            },
+            "pid": 6126,
+            "session_name": "",
+            "title": "\u2733 Forward Deployed Engineer laptop email",
+            "title_overridden": false,
+            "user_vars": {}
+          },
+          {
+            "at_prompt": false,
+            "cmdline": [
+              "/bin/zsh",
+              "-l"
+            ],
+            "columns": 51,
+            "created_at": 1789596402613080000,
+            "cwd": "/Users/chrisren/Development/claude-infrastructure",
+            "env": {
+              "KITTY_WINDOW_ID": "9",
+              "PWD": "/Users/chrisren/Development/claude-infrastructure",
+              "WINDOWID": "414"
+            },
+            "foreground_processes": [
+              {
+                "cmdline": [
+                  "caffeinate",
+                  "-i",
+                  "-t",
+                  "300"
+                ],
+                "cwd": "/Users/chrisren/Development/claude-infrastructure",
+                "pid": 93749
+              },
+              {
+                "cmdline": [
+                  "node",
+                  "/Users/chrisren/Library/Application Support/fnm/aliases/default/bin/ms-365-mcp-server"
+                ],
+                "cwd": "/Users/chrisren/Development/claude-infrastructure",
+                "pid": 27189
+              },
+              {
+                "cmdline": [
+                  "/Users/chrisren/.claude-260/node_modules/.bin/claude",
+                  "--permission-mode",
+                  "auto",
+                  "--model",
+                  "claude-opus-5",
+                  "--effort",
+                  "high"
+                ],
+                "cwd": "/Users/chrisren/Development/claude-infrastructure",
+                "pid": 26095
+              },
+              {
+                "cmdline": [
+                  "tee",
+                  "-a",
+                  "/Users/chrisren/.claude/logs/close-records/.stderr.ykjbUn"
+                ],
+                "cwd": "/Users/chrisren/Development/claude-infrastructure",
+                "pid": 26090
+              },
+              {
+                "cmdline": [
+                  "bash",
+                  "/Users/chrisren/.claude/bin/cc-close-attrib",
+                  "/Users/chrisren/.claude-260/node_modules/.bin/claude",
+                  "--permission-mode",
+                  "auto",
+                  "--model",
+                  "claude-opus-5",
+                  "--effort",
+                  "high"
+                ],
+                "cwd": "/Users/chrisren/Development/claude-infrastructure",
+                "pid": 26012
+              }
+            ],
+            "has_activity_since_last_focus": false,
+            "id": 9,
+            "in_alternate_screen": true,
+            "is_active": false,
+            "is_focused": false,
+            "is_self": false,
+            "last_cmd_exit_status": 0,
+            "last_focused_at": 4252.686255,
+            "last_reported_cmdline": "",
+            "lines": 47,
+            "needs_attention": false,
+            "neighbors": {
+              "left": [
+                9
+              ],
+              "right": [
+                13
+              ]
+            },
+            "pid": 22833,
+            "session_name": "",
+            "title": "\u25d1 Claude Code",
+            "title_overridden": false,
+            "user_vars": {}
+          },
+          {
+            "at_prompt": false,
+            "cmdline": [
+              "bash",
+              "/Users/chrisren/.reso/bin/reso-resume-one",
+              "next2",
+              "/Users/chrisren/Development/.worktrees/kpanic-research",
+              "089dda26-5fdc-4366-97a9-b73458b2aca2",
+              "research/kernel-panic-2026-09-16"
+            ],
+            "columns": 51,
+            "created_at": 1789594501468694000,
+            "cwd": "/Users/chrisren/Development/.worktrees/kpanic-research",
+            "env": {
+              "CC_ADMIT_DONE": "1",
+              "KITTY_WINDOW_ID": "7",
+              "PWD": "/Users/chrisren/Development/.worktrees/kpanic-research",
+              "WINDOWID": "182"
+            },
+            "foreground_processes": [
+              {
+                "cmdline": [
+                  "expect",
+                  "-c",
+                  "\n  set timeout 240\n  set cfg    $env(CC_RR_CFG)\n  set bin    $env(CC_RR_BIN)\n  set model  $env(CC_RR_MODEL)\n  set effort $env(CC_RR_EFFORT)\n  set sid    $env(CC_RR_SID)\n  set thr    $env(CC_RR_THRESHOLD)\n  set mcpdec $env(CC_RR_MCP_ARGS)\n  set answered 0\n  # The env prefix is a LIST so the suppression variable can be absent rather than empty. Passing\n  # NAME= with no value is not the same thing: Rue() reads \"\" as NaN and falls back to the default\n  # of 70 baked into the binary, which raises the dialog on every session older than 70 minutes \u2014\n  # i.e. \"off\" would look identical to \"on\" from here. One spawn line, appended to, so the two\n  # paths cannot drift apart the way two spawn lines would.\n  # NO APOSTROPHES ANYWHERE BELOW THIS LINE: the whole program is a single-quoted bash string, so\n  # one apostrophe in a Tcl comment closes it and the rest of the file stops being expect at all.\n  set envpfx [list DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg]\n  if {$thr ne \"\"} { lappend envpfx CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=$thr }\n  # A LIST again, and for the second reason this file already gives: an absent decision must pass\n  # NO argument, not an empty one, and appending the value as a single element keeps a path with a\n  # space in it one argument rather than two.\n  set mcplist [list]\n  if {$mcpdec ne \"\"} { lappend mcplist $mcpdec }\n  spawn -noecho env {*}$envpfx $bin --permission-mode auto --model $model --effort $effort {*}$mcplist --resume $sid\n  # keep the claude UI responsive: propagate iTerm2 pane resizes (SIGWINCH) to the spawned pty.\n  # interact does NOT forward window-size changes, so without this the Ink UI stays frozen at the\n  # spawn-time width (verified 2026-07-05).\n  trap {\n    set rows [stty rows]\n    set cols [stty columns]\n    catch {stty rows $rows columns $cols < $spawn_out(slave,name)}\n  } WINCH\n  expect {\n    # \u2500\u2500 THE RESUME DIALOG. Two defects lived in the one line this replaces. \u2500\u2500\n    #\n    # WRONG OPTION. It answered with a bare CR, which takes whatever the cursor is resting on \u2014\n    # option 1, \"Resume from summary\". That runs /compact on the transcript: the session comes back\n    # as a precis of itself, and (REFERENCE.md section 5) drops its session-scoped /goal Stop-hook,\n    # which is why recovered sessions then sit idle. A crash recovery is supposed to return the\n    # session. The operator wants option 2, \"Resume full session as-is\".\n    #\n    # WIDTH-DEPENDENT MATCH. \"Resume from summary\" is a 19-character literal and Ink hard-wraps to\n    # the pane width, so on a pane narrowed by a recovery layout the phrase is split across rows and\n    # the match never fires at all \u2014 the session then sits on an unanswered menu until the timeout,\n    # which is how three transplants parked 20+ minutes.\n    #\n    # So the trigger is as-is: five characters, narrow enough that no usable pane can break it, and\n    # present in exactly one place in the dialog \u2014 option 2 label. Not the title, and NOT the body\n    # (\"we recommend resuming from a summary\"), which matters for the reason lr-fire-resume:178\n    # documents: the body streams several seconds before Ink mounts the SelectInput and enables raw\n    # mode, so anything triggered on it is answered into a terminal that is not listening yet.\n    # Verbatim from the 2.1.220 bundle, in render order:\n    #   [{value:\"compact\",  label:\"Resume from summary (recommended)\"},\n    #    {value:\"continue\", label:\"Resume full session as-is\"},\n    #    {value:\"never\",    label:\"Do not ask me again\"}]\n    # RE-CHECK that list on any CC bump. Option 3 dismisses the dialog PERMANENTLY for the account,\n    # so an extra Down here is a persistent preference change, not a mis-click \u2014 which is why the\n    # move below is a clamp and exactly one step, never a loop.\n    -re {as-is} {\n      if {!$answered} {\n        set answered 1\n        # settle for raw mode, then move DETERMINISTICALLY. Up clamps at the first option, so three\n        # of them cost nothing and leave the cursor at a KNOWN place whatever it did before; one\n        # Down then lands on option 2.\n        sleep 2\n        send \"\\033\\[A\"; send \"\\033\\[A\"; send \"\\033\\[A\"\n        sleep 1\n        send \"\\033\\[B\"\n        sleep 1\n        send \"\\r\"\n      }\n      exp_continue\n    }\n    -re {you created or one you trust|Quick safety check} { sleep 1; send \"1\"; send \"\\r\"; exp_continue }\n    -re {spent .* on the Anthropic API this session} { send \"\\r\"; exp_continue }\n    # fullscreen upsell: Down+CR selects \"Not now\" (option 2). RE-CHECK on any CC bump.\n    -re {new fullscreen renderer|Try the new fullscreen} { sleep 1; send \"\\033\\[B\"; send \"\\r\"; exp_continue }\n    -re {shift.tab to cycle}  { }\n    -re {auto mode on}        { }\n    -re {\\? for shortcuts}    { }\n    timeout {}\n    eof { exit }\n  }\n  # interact needs a controlling tty, so it is the one thing a headless harness cannot run. The\n  # tests drive everything above this line \u2014 the real spawn, the real matcher, the real keystrokes.\n  if {$env(CC_RR_NO_INTERACT) ne \"\"} {\n    set timeout 20\n    expect eof\n    exit\n  }\n  interact\n"
+                ],
+                "cwd": "/Users/chrisren/Development/.worktrees/kpanic-research",
+                "pid": 31676
+              },
+              {
+                "cmdline": [
+                  "bash",
+                  "/Users/chrisren/.reso/bin/reso-resume-one",
+                  "next2",
+                  "/Users/chrisren/Development/.worktrees/kpanic-research",
+                  "089dda26-5fdc-4366-97a9-b73458b2aca2",
+                  "research/kernel-panic-2026-09-16"
+                ],
+                "cwd": "/Users/chrisren/Development/.worktrees/kpanic-research",
+                "pid": 30898
+              }
+            ],
+            "has_activity_since_last_focus": false,
+            "id": 7,
+            "in_alternate_screen": false,
+            "is_active": false,
+            "is_focused": false,
+            "is_self": false,
+            "last_cmd_exit_status": 0,
+            "last_focused_at": 2900.92693,
+            "last_reported_cmdline": "",
+            "lines": 47,
+            "needs_attention": false,
+            "neighbors": {
+              "left": [
+                11
+              ]
+            },
+            "pid": 30898,
+            "session_name": "",
+            "title": "\u25d1 Kernel panic 2026-09-16 investigation",
+            "title_overridden": false,
+            "user_vars": {}
+          }
+        ]
+      }
+    ],
+    "wm_class": "kitty",
+    "wm_name": "kitty"
+  }
+]
