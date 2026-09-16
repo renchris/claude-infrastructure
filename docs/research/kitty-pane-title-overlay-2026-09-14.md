@@ -955,3 +955,146 @@ expand. This one is worse and cheaper — **the instrument was fine and the SUBJ
 and the thing that revealed it was not a measurement at all. It was one screenshot from the
 person whose hand was on the mouse. *When a user reports that a mechanism does not work and
 every measurement says it does, stop measuring the mechanism and ask what they are touching.*
+
+---
+
+## J — 2026-09-16: the three-way trade had a fourth corner, and § G's own arithmetic hid it
+
+The operator's ask, in full: *"ensure that Kitty Terminal ⌘⇧B to show split pane title (a)
+causes no content layout shift when toggling showing title and hiding title and (b) ensure if
+we drag the split pane placed in the same position (no-op) that the title stays up."*
+
+Both were delivered, and the second one is what forced the design. Landed in `99fcad32a`.
+
+### J1 · The false premise, quoted
+
+`kitty.conf` § 3 closed the question with a three-way trade — shift (A), permanent row (B), or
+no drag (C) — and justified "no fourth point" like this:
+
+> Padding is the only lever, and a reservoir must EXIST before it can be spent — top padding is
+> 10pt against a ~16pt cell here, so today there is nothing to hand back.
+
+Both halves are wrong, and they are wrong in ways that are cheap to check.
+
+**The cell is 22.5pt, not ~16pt.** Bisected by stepping the padding and reading `kitty @ ls`:
+the 30-row band spans total vertical padding **3..25**, i.e. 23 wide, and the title bar
+measures **45px** in a screenshot — 22.5pt at 2x, which is `font_size 18` × `modify_font
+cell_height 94%`. The "~16pt" in § 3 came from a probe whose own numbers (top_pad 0→31, 10→30,
+17→29, 25→28) imply a band ~7-8 wide and therefore contradict it; nobody re-read them.
+
+**The padding is not 10pt — it is 20pt.** Rows depend only on the TOTAL vertical padding, and
+the config has top 10 **plus bottom 10**. § 3 only ever considered the TOP, because it only ever
+considered a top-placed bar. The 2026-09-14 pair lost a row for exactly this reason: it wrote
+`26 5 10 5`, **adding** the reservoir to a bottom padding it never asked whether it could spend.
+Total 36pt → 29 rows. Spend the bottom instead and the total is 22.5pt, inside the same 30-row
+band as today's 20pt.
+
+    D  the SPENT-bottom reservoir pair     draggable · NO shift · costs ZERO rows
+       OFF `22.5 5 0 5` + min_windows 0  ⇄  ON `0 5 0 5` + min_windows 1, one `load-config`
+
+### J2 · (a) measured — rows, signals and pixels, one run
+
+Isolated kitty 0.48.2, this `kitty.conf`, Monaco 18, 2-pane split, SIGWINCH-trapping children,
+absolute paths, no `-o` anywhere:
+
+| state | padding | min_w | rows | SIGWINCH |
+|---|---|---|---|---|
+| today | `10 5` | 0 | 30,30 | — |
+| OFF | `22.5 5 0 5` | 0 | 30,30 | 0 |
+| ON | `0 5 0 5` | 1 | 30,30 (×6 swaps) | 0 |
+| control | `10 5 60 5` | 0 | **27,27** | **1 → 2** |
+
+The control is what makes the zeros mean anything: the counter moves when a row genuinely
+changes, so `SIGWINCH 0` is a reading rather than a dead file.
+
+**The bar is drawn** — proven by one variable, not by absence. At a FIXED `0 5 0 5`:
+`min_windows 0` → **31,15,15**; `min_windows 1` → **30,14,14**. Twice. The row each pane loses
+IS the bar. This matters because *constant rows is also exactly what a bar that never drew would
+produce* — the fail-safe mimics the healthy state, and the first screenshot pass fell for it.
+
+**Pixels**, static pane, full-screen capture: content row 1 occupies **y 465..644 in BOTH**
+states, and the only changed rows are **y 420..464** — one band, 45px, exactly one cell, where
+the reservoir was.
+
+**22.5 must EQUAL the cell in pixels, not merely exceed it.** At 23pt the reservoir rounds to
+46px against a 45px cell and content row 1 lands at 466 (OFF) vs 465 (ON) — a 1px creep on every
+toggle. `window_padding_width` takes floats. (§ G's own note — *"cursor block bottom edge: 626 px
+(ON) vs 625 px (OFF) — content does not move"* — was this same 1px, read as noise.)
+
+It also depends on **`placement_strategy top`**, which kitty defaults to `center`. `top` pins the
+grid to the top of the padded area and parks all sub-cell leftover at the BOTTOM; under `center`
+the leftover is split and changing the padding would move the grid's top edge.
+
+### J3 · (b) the no-op drag — and why the chord had to stop being the built-in action
+
+kitty hides the bars after **any** drag completes, including one that drops the pane back where
+it started. Read out of the binary: `TabManager._clear_force_show_title_bars` sets the per-tab
+`force_show_title_bars` bool to False and relayouts — that is all it does. And
+`Layout.__call__` computes
+
+    show_title_bar = force_show or (min_windows > 0 and len(visible_groups) >= min_windows)
+
+so bars held up by a CONFIG value are immune to the clear. Measured with a synthetic CGEvent
+drag, identical geometry in both arms, pane order unchanged and one tab throughout — the two
+facts that make it a *no-op* rather than a move:
+
+| arm | bars up via | before | after no-op drag |
+|---|---|---|---|
+| today's config | the action (force flag) | 29,29 | **30,30 — the title VANISHES** |
+| pair D | `min_windows 1` (config) | 30,30 | **30,30, ×3 — bar still at y=221pt** |
+
+In the ON state `31,31` would mean the bars had gone, so the row count alone is an unambiguous
+read here. Corollary: with `min_windows >= 1` the built-in `toggle_window_title_bars` becomes
+**inert on every tab** (two presses, rows unchanged), which is *why* ⌘⇧B must call the config
+swap and can no longer call the action.
+
+**Not established here:** whether a REAL reorder drag still works. The synthetic drag failed to
+reorder in the 2-pane top-bar layout in **both** arms — including today's unmodified config — so
+that is a limit of the instrument, not a regression. Earlier runs did produce real reorders while
+`min_windows 1` was in force, which is the positive evidence that dragging functions; the
+operator's own hand is the instrument that settles it.
+
+### J4 · What it costs, stated plainly
+
+Every pane's top inset goes **20px → 45px**; its bottom inset goes 20px → 0 plus whatever
+leftover `placement_strategy top` parks there. The seam between vertically stacked panes barely
+moves — **40px → 45px** — because both halves of that seam were already padding. **No text row is
+lost anywhere**, which is the cost the operator rejected twice ("Having a permanent row for a no
+CLS show/hide row is not the answer"). The reserved band is not new dead space: it is the dead
+space the panes already had, gathered into one contiguous cell at the top so the bar can fill it.
+
+### J5 · A rejected corner, and why bottom placement is worse here
+
+`window_title_bar bottom` is a valid choice (read off the live binary) and is *structurally*
+exact: `Window.set_geometry`'s bottom branch sets `render_top = geometry.top`, byte-identical to
+the no-bar branch, so the grid's top edge cannot move whatever the reservoir rounds to — no 1px
+creep, on any display. It was measured working (`0 5 23 5` ⇄ `0 5 0 5`, rows 30,14,14 across four
+swaps, content bands identical to the pixel). It was rejected for two reasons:
+
+1. **The reservoir would sit at the bottom**, which re-creates the complaint that produced the
+   current padding — *"i feel like were leaving a lot of room on the bottom"* (§ 7d).
+2. **The drag handle moves to the window's bottom edge.** Measured: 4 of 4 drags started from a
+   bottom bar were interpreted as a drop *outside* the layout and **created a new tab** — which
+   then shows the tab bar and costs every pane a row. A top bar has no such neighbour.
+
+`window_padding_width` also **silently clamps negatives to 0** (`-6 5 10 5` parses to top 0), so
+the obvious "negative top padding + top bar" corner does not exist either.
+
+### J6 · Method — two instruments that lied, and one that only looked like it did
+
+**`screencapture -l<windowid>` returns a STALE frame.** Three captures of three different states
+came back **byte-identical**, including a control whose row count differed (30,14,14 vs 27,12,12).
+Read naively, that says "the title bar never drew" — a clean, confident, wrong negative. Full-screen
+`-D<n>` is live. *A capture that cannot distinguish two states it was pointed at is not evidence
+about either.*
+
+**Display P3 moves your colours.** `#ff00ff` captures as **(234,51,247)** and `#00ff00` as
+(117,251,76), so an exact-match probe returns zero hits and reads as "the element is absent". The
+window was on screen the whole time; only the threshold was wrong.
+
+**And one non-lie:** the probe window was genuinely unreachable for a while — launched from a
+background shell it lands on another macOS Space, which `screencapture -D` cannot reach.
+`open -na` put it on the current one. Side effect worth knowing: `open -na` passes the calling
+environment, so the probe inherited `KITTY_PID` from the launching shell and handed that stale
+value to its own children. **`KITTY_PID` is inherited, not set by kitty for `launch
+--type=background` children**, so it cannot be used to key per-instance state.
