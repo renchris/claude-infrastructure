@@ -276,3 +276,92 @@ Eight read-only axes, each with its own commands, denominators and named exclusi
 `A3-closure-quality` · `A4-inflow` · `A5-uptime` · `A6-blocked` · `A7-convergence` · `A8-cost`.
 Where this synthesis disagrees with an axis, the disagreement is stated in place (the trunk-rate
 correction in §3, the cloud cost-denominator range in §5).
+
+---
+
+## 9 · Addendum — the cloud lane's proximate cause, found after this doc first landed
+
+§4 attributed the cloud lane's stop to latency and to the starved sweep. Both hold, but the
+**proximate** cause is narrower, and it is a one-line reader bug rather than anything about
+credentials, capacity or the model.
+
+**Measured.** Two macOS generic-password items share the service
+`Claude Code-credentials-136fa815`:
+
+| `acct` | payload top-level keys |
+|---|---|
+| `chrisren` | `claudeAiOauth`, `mcpOAuth` — the real credential (`accessToken` present, 108 chars, full scopes) |
+| `unknown` | `mcpOAuth` only |
+
+`scripts/cloud-create-api.py:183` called `security find-generic-password -s <service> -w` **with no
+`-a`**, so it got the `unknown` item, `json.loads` succeeded, and `["claudeAiOauth"]` raised
+`KeyError`. The handler reported that as *"keychain item … holds no OAuth access token"* — a
+**WORLD-shaped cause** (the credential is broken, go re-login) for a fact about the **READER**. The
+cloud return lane emitted that abstain **719 times from 2026-09-11T23:20:56Z** and returned nothing
+for four days, which is exactly the window §1 measures as the lane's death.
+
+The prescribed remedy was refuted the whole time by the box's own tool:
+`cc-relogin --dry-run --json next4` → `"result":"refused"`, `"detail":"no re-auth needed — healthy
+(auth=ok, login_expires_h=533.2)"`, and `--relogin-info next4` reports `keychain_state: present`,
+`has_refresh_token: true`, `refresh_token_expired: false`. Anyone following the error message would
+have re-logged in a healthy account and changed nothing.
+
+**A second site had the same bug, and a comment asserting the belief that caused it.**
+`bin/cc-relogin:318` also omitted `-a`, under: *"the service string already embeds
+sha256(config_dir)[:8], so it is unique on its own."* It embeds the hash and is still not unique —
+the hash keys the **config dir**, not the item. Its `-a` branch was guarded on
+`info["keychain_account"]`, which `--relogin-info` does not emit, so the branch was unreachable in
+production. Consequence: `read_refresh_token()` returned `None`, phase 1 reported *"refresh token
+unreadable from keychain"*, and the tool fell through to a **browser** login on an account whose
+refresh grant is valid for another three weeks. Same family as this repo's own
+`checker-population-rests-on-an-untested-belief`: the belief lived in a comment and nothing executed
+it.
+
+**Fixed, with an A/B and two mutants.** Both readers now narrow by `accounts.json`'s top-level
+`keychain_account` (the field its own `_secrets` note names as the item's account); the two readers
+that always worked — `bin/claude-accounts:455` and `scripts/handoff-fire.sh:6942` — already passed
+`-a`, so the repo held the correct pattern at two of four sites. Live A/B on the real keychain:
+patched reads the token (len 108), pre-fix sees `['mcpOAuth']` only.
+`tests/keychain-account-narrowing.bats` pins it 6/6 with a `security` stub that **distinguishes
+`-a`-present from `-a`-absent** — a stub blind to that axis would hold constant the one thing the
+suite exists for — plus a mutant per site that must go red.
+
+🚨 **Operational note from writing that test: it leaked a live credential.** `cc-relogin` resolves
+`SECURITY_BIN` to the **absolute** `/usr/bin/security`, so a PATH-only stub is silently bypassed;
+the first run reached the real keychain and printed a live `next4` refresh token into the run log.
+Two lessons, both now encoded in the suite: stub through the **documented seam**
+(`CC_RELOGIN_SECURITY_BIN`), never PATH alone, when the subject resolves an absolute path; and a
+test helper must **never print a secret even on its happy path**, because the day a stub is bypassed
+is the day that print emits a real one. The suite now prints a classified marker and carries case 6,
+which fails if anything `sk-ant-`-shaped appears.
+
+## 10 · Late corrections to figures in this file and in the plan record
+
+Arrived from the wave after the first land; recorded rather than silently edited.
+
+- **`BACKLOG_DRAIN_24_7.md:42`'s "+426 rows over 5 days (1,129 filed / 503 closed)" does not
+  reproduce.** The maximum 5-day add window in the whole store is 762 filed / 581 closed = **+181**.
+  Treat the plan's figure as **UNRECONCILED**, not as a baseline.
+- **Duplicate pressure is 5.2%, not the 20.3% title-stem figure**, which was a template collapse and
+  was withdrawn by its own author; the `cwd`-derived-`project` dedup hole that caused it closed
+  2026-08-19.
+- **The conviction protocol is 8 days old.** "14 of 3,525 rows carry `conviction`" is 99.4% of the
+  pile filed *before the rule existed*, not 99.6% non-compliance; in-population compliance is
+  **14/20 = 70%**. §4's 94.9%-no-impossibility-class figure is unaffected — that gate is older.
+- **The premise re-validation lane is dead too**: `premise-pass.stamp` is 9 days old (~36 missed 6 h
+  passes), starved below the same 400 s self-bound as the detectors in §4.3. 4 of 23 runnable
+  falsifiers exit 0 today with their rows still blocked, and ~47% of 17 hand-checked blocked rows are
+  stale — worked case `ae3fdca64013` ("trunk RED blocking every land") passes today, cure `8460f5ac9`
+  is on `origin/main`.
+- **91% of the 296 blocked rows carry no falsifier** — 171 can neither self-retract nor be read by
+  any lane. Only 4 of 296 exist as decision packets, so a parked operator value call never becomes a
+  `⛔`.
+- **`no-capacity` is measurably false as a filing class**: `general → next4` sits at 0% of its 5 h
+  window while next3 strands ~99pp this cycle.
+- **The largest controllable local cost is not the model**: a ~107K-token resident preamble re-read
+  every turn is **≥43% of a drain session's bill**. Since §5 shows cost-per-closure is a fixed
+  session cost divided by rows closed, this is the one lever that moves the denominator and the
+  numerator at once.
+- **A2's "the repo's landing rate did not depend on the chain" is withdrawn** (already corrected in
+  §3): trunk ran ~65 commits/day during the chain's life and ~36/day in the 7 days after, roughly
+  halved; net of the chain's own `docs(drain)` journaling the drop is ~27%.

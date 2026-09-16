@@ -310,17 +310,41 @@ def phase1_blocked(info: dict[str, Any], row: dict[str, Any]) -> str | None:
     return None
 
 
+def _accounts_keychain_account() -> str | None:
+    """Top-level `keychain_account` from accounts.json — the item's `acct` attribute. Read here
+    because --relogin-info does not emit it; returns None rather than guessing."""
+    # ACCOUNTS_JSON is this module's existing SSOT (CLAUDE_ACCOUNTS_JSON, :99). Reading the path
+    # from a second env var here would be a second source of truth for one fact.
+    try:
+        with open(ACCOUNTS_JSON) as fh:
+            val = json.load(fh).get("keychain_account")
+    except (OSError, ValueError):
+        return None
+    return val if isinstance(val, str) and val else None
+
+
 def read_refresh_token(info: dict[str, Any]) -> str | None:
     """claudeAiOauth.refreshToken out of the account's keychain item (read-only)."""
     service = info.get("keychain_service")
     if not service:
         return None
     cmd = [SECURITY_BIN, "find-generic-password", "-s", service]
-    # --relogin-info does not emit keychain_account today; the service string already embeds
-    # sha256(config_dir)[:8], so it is unique on its own. Narrow with -a only if a future
-    # claude-accounts starts emitting the field.
-    if info.get("keychain_account"):
-        cmd += ["-a", str(info["keychain_account"])]
+    # 🚨 THE UNIQUENESS BELIEF THIS USED TO REST ON IS FALSE, measured 2026-09-16. It read:
+    # "the service string already embeds sha256(config_dir)[:8], so it is unique on its own."
+    # It embeds the hash and it is still not unique — the hash keys the CONFIG DIR, not the item,
+    # and this box carries TWO generic-password items under 'Claude Code-credentials-136fa815':
+    # acct="chrisren" with {claudeAiOauth, mcpOAuth}, and acct="unknown" with {mcpOAuth} alone.
+    # An -a-less lookup returns the first match, so `blob["claudeAiOauth"]` is absent, this
+    # function returns None, and phase1 reports "refresh token unreadable from keychain" and falls
+    # through to the browser — on an account whose refresh grant is valid for another three weeks.
+    # The -a branch below was never reached in production because --relogin-info does not emit
+    # keychain_account, so the guard silently selected the broken path; accounts.json's top-level
+    # field is the source of record (its own `_secrets` note names it as the item's account).
+    # The same omission killed the cloud lane for four days — scripts/cloud-create-api.py and
+    # docs/research/drain-pipeline-productivity-2026-09-16.md.
+    kc_account = info.get("keychain_account") or _accounts_keychain_account()
+    if kc_account:
+        cmd += ["-a", str(kc_account)]
     cmd.append("-w")
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
