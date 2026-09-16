@@ -129,6 +129,10 @@ Whether one was mounted, and whether it is on the mutex chain, is UNTESTED.
   reached 21 concurrent `clang-format` processes. A peer session captured the swarm live and walked
   its ancestry to a `claude --resume` with `ps`. That reproduction is Part II § 1 and it is the
   reason this diagnosis rests on a control arm rather than on a single log.
+- **2026-09-16 17:0x (research session):** fix landed `b11d92f53..82cd45371`, content-verified on
+  trunk; live layer converged on the degraded tier and the sentinel daemon restarted onto it
+  (pid 1055 → 9749), so the repair is RUNNING and not merely on a git ref. Live acceptance check:
+  cohort 0 on the healthy box, node-only without a baseline.
 - **2026-09-16 (research session):** Part II diagnosis and Part III prevention written and landed.
   All six open questions answered with citations; two of them re-posed because the evidence did not
   support the question as asked (§ 4.1 process count, § 4.3 the reclaim ratio). Fix landed in
@@ -513,3 +517,82 @@ it had been failing 127 on trunk independently of any subject — the very class
   enough that this did not matter here, but a future storm of processes whose *resident* share falls
   below 40 MB while their footprint climbs would evade the floor. Naming it rather than fixing it:
   no cheap per-process footprint instrument exists for a 10-second shell tick.
+
+### 6.5 A second session reached the same verdict independently
+
+While this was in flight, a peer session working the same incident wrote
+`actuator-roster-keyed-on-the-last-culprits-shape` into project memory, with the same mechanism
+(`clang-format`, the `^node` allow-list, twelve trips, zero processes stopped) derived from its own
+reads. Two sessions converging on one call without coordination is evidence **for** the call. Its
+prescription — *"an actuator selects its targets by the same axis the detector trips on … never by a
+list of binaries"* — is what § 6.1 implements; its own deliverable is the complementary one, a
+post-panic **replay quarantine** (`docs/plans/KPANIC_DEFENSE_2026-09-16.md`), aimed at the fact that
+a crashed session is auto-resumed carrying a brief that still names the fatal command as a required
+gate. Neither change touches the other's code.
+
+Its note contributes one residual that this diff does **not** close, recorded here rather than
+silently inherited:
+
+- **A 1:1 wrapper parent defeats the parent-breaker.** `select_break_parents` ranks a parent by how
+  many of the selected cohort it owns (`≥ ACT_PARENT_MIN`, default 3). When each worker is launched
+  through its own wrapper — which is exactly the shape now running on this box, `cc-jetsam-exec` →
+  `cc-jetsam-launch` → `clang-format`, one wrapper per worker — every parent owns exactly one child
+  and no spawner clears the threshold. The cohort arm still selects all ten workers, and they are the
+  ones holding the memory, so the reclaim path is intact; what is lost is the *stop-the-minting* half.
+  Walking ancestry to depth 2 before deciding nobody owns the swarm is the fix, and it is left to the
+  peer's change rather than written twice into one function.
+
+  **Corroborated in the panic log, not only in the live `ps` walk.** Panic 2's ten `clang-format`
+  processes sit in `jetsamCoalition` **663**, and that coalition's membership is this fleet and
+  nothing else — 67 `bash`, 24 `zsh`, 21 `Python`, **17 `claude.exe`**, 12 `kitten`, 7 `kitty`,
+  6 `expect` — 211 of the 815 processes on the box. `Python` **pid 38839** (RSS 34 MB) is a member:
+  that is the exact pid the peer named as `python ./autoformat cwd=/Users/chrisren/kdev`, so the
+  ancestry it walked live is independently reproduced from the crash dump. And beside the ten
+  `clang-format` pids (40214–40301) sit **eight `Python` processes at ~10 MB each in the same pid
+  range** (40131, 40142, 40147, 40204, 40213, 40223, 40244, 40294) — the per-worker wrappers, which
+  is the 1:1 parent shape above, visible in the panic data rather than inferred from it.
+
+### 6.6 The fix is inert until the live layer converges
+
+`~/.claude/scripts/compressor-sentinel.sh` is a **symlink** into the shared checkout, and the launchd
+job execs that path (`launchd/com.claude.compressor-sentinel.plist:96`). Landing on trunk therefore
+changes nothing by itself: the shared checkout was 19 commits behind at the time of this land, and
+the running daemon has the pre-fix script already open. Two steps make the repair real, both taken
+here under this repo's standing-converge authorization:
+
+```
+bash scripts/deploy-live.sh                                   # fast-forward the symlink source
+launchctl kickstart -k gui/$UID/com.claude.compressor-sentinel  # the daemon re-reads the script
+```
+
+The restart is not optional and is not merely hygiene: bash reads a script incrementally, so a
+long-running daemon whose file changes underneath it is in an undefined state — restarting is both
+how the fix takes effect and the safe response to the file having moved. The freeze ledger was empty
+(`compressor-sentinel-frozen.tsv`, 0 bytes), so no custody is stranded by the restart.
+
+**Both were run, and verified by CONTENT rather than by a lag counter.** The converge was taken on
+the degraded tier while the ordinary budget still read `lag 6 commit(s) / 0h32m, inside the degrade
+budget (25 / 6h)` — i.e. no advance was due for up to six hours, which is the wrong trade for a
+guard against a fault that has already recurred once today at a 35-minute interval.
+
+```
+~/.claude/scripts/compressor-sentinel.sh:597   if (eprot[pid] == 1) next        ← the new cohort test
+~/.claude/scripts/compressor-sentinel.sh:598   if (!has_prev && b !~ /^node/) next
+~/.claude/scripts/compressor-sentinel.sh:592   # WAS `if (b !~ /^node/) next` …  ← comment only
+daemon pid 1055 → 9749, started 17:31:10, lsof confirms the fixed script open
+```
+
+### 6.7 The acceptance test, re-run against the DEPLOYED script on the live machine
+
+The suite proves the predicate; this proves the thing actually running on the box. Functions
+extracted from `~/.claude/scripts/compressor-sentinel.sh` (the live symlink), given a real census
+roster taken 45 s earlier and the real `ps` table:
+
+| | measured, 2026-09-16 17:32 |
+|---|---|
+| census roster (unprotected, ≥ 40 MB) | **87 pids** |
+| **cohort the actuator would freeze right now** | **0** |
+| same call with NO baseline (positive control) | **1 row, `node`** — pre-fix behaviour, exactly |
+
+Zero on a healthy box and ten on the storm is the whole safety argument, and both halves are now
+measurements rather than predictions.
