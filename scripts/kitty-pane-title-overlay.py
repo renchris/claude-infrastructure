@@ -90,8 +90,20 @@ def _client(cmd, timeout=0.4):
             pass
 
 
-def _spawn_daemon(initial):
+def _spawn_daemon(initial, all_windows=False):
     """Start the daemon detached, and let IT serve this first press.
+
+    ALL_WINDOWS MUST RIDE THE SPAWN, not just the socket message. This argument did not
+    exist until 2026-09-16 and its absence is a silent narrowing: a press that asks for
+    --all finds no daemon, spawns one that defaults to the FOCUSED TAB ONLY, and that
+    daemon serves the very press that asked for every window. MEASURED on the operator's
+    live kitty, calling targets() directly against the same socket: all=True -> 9 panes,
+    all=False -> 3. Worse than the undercount, the daemon logged
+    "warm: no targets ... the SILENT failure mode, not a quiet success" twice at startup
+    and then painted nothing, so the chord read as "shows up one time temporarily" —
+    exactly the operator\'s words. The next client message repairs it (the accept loop
+    widens st["all"] on any msg carrying --all), which is why it looked intermittent
+    rather than broken.
 
     The interpreter must be a Pillow-capable one; the cached winner from a previous run
     is used when it is still there, and otherwise the daemon itself re-execs (it calls
@@ -108,7 +120,7 @@ def _spawn_daemon(initial):
     try:
         devnull = open(os.devnull, "r+b")
         subprocess.Popen([interp, os.path.abspath(__file__), "daemon",
-                          "--initial=" + initial],
+                          "--initial=" + initial] + (["--all"] if all_windows else []),
                          stdin=devnull, stdout=devnull, stderr=devnull,
                          start_new_session=True, close_fds=True)
         return True
@@ -1117,7 +1129,7 @@ def main():
         if "--no-daemon" not in argv:
             if _client(arg + (" --all" if all_windows else "")):
                 return 0
-            if _spawn_daemon(arg if arg != "off" else "off"):
+            if _spawn_daemon(arg if arg != "off" else "off", all_windows):
                 # `off` with no daemon has nothing to erase but a cold-path leftover, so
                 # it still runs here; `on`/`toggle` are served by the daemon we just made.
                 if arg == "off":
