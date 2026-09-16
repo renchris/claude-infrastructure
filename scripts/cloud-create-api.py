@@ -89,6 +89,7 @@ EXIT CODES — the outcome is the exit code, never a string a caller has to pars
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import ssl
@@ -140,18 +141,26 @@ def account_row(name: str) -> dict:
     a second implementation of an identity rule in the tree — and this repo has already paid for
     exactly that: a hand-copied list in handoff-fire.sh had drifted to 3 of 5 auth states. Ask the
     tool; fall back to accounts.json only for the fields it plainly owns."""
-    proc = subprocess.run(
-        [
-            os.path.expanduser(
-                os.environ.get("CC_ACCOUNTS_BIN", "~/bin/claude-accounts")
-            ),
-            "--relogin-info",
-            name,
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode == 0:
+    # The accounts.json fallback below is deliberate, and an unguarded subprocess.run() made it
+    # unreachable in the one case it exists for: an ABSENT tool raises FileNotFoundError before any
+    # returncode is read, so the process dies with a traceback instead of degrading. Found by
+    # fixturing $HOME in tests/keychain-account-narrowing.bats — the default path is under ~/, so
+    # every run until then had silently depended on the operator's real home.
+    try:
+        proc = subprocess.run(
+            [
+                os.path.expanduser(
+                    os.environ.get("CC_ACCOUNTS_BIN", "~/bin/claude-accounts")
+                ),
+                "--relogin-info",
+                name,
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        proc = None
+    if proc is not None and proc.returncode == 0:
         try:
             return json.loads(proc.stdout)
         except ValueError:
@@ -172,6 +181,20 @@ def account_row(name: str) -> dict:
     return {}
 
 
+def keychain_account() -> str:
+    """The `acct` attribute of the keychain item, from accounts.json's TOP-LEVEL
+    `keychain_account` (its own `_secrets` note names that field as the item's account). Falls
+    back to the macOS short name, which is what that field has always held."""
+    try:
+        with open(ACCOUNTS) as fh:
+            val = json.load(fh).get("keychain_account")
+        if isinstance(val, str) and val:
+            return val
+    except (OSError, ValueError):
+        pass
+    return getpass.getuser()
+
+
 def access_token(row: dict) -> str:
     """From the account's OWN keychain item. Never a shared/default one: a token from the wrong
     account creates the session under that account, and the id is then invisible to every tool
@@ -179,20 +202,43 @@ def access_token(row: dict) -> str:
     service = row.get("keychain_service")
     if not service:
         die(3, f"account {row.get('name')!r} declares no keychain_service")
+    # -a IS LOAD-BEARING, and omitting it is not a tidiness question: the service string is NOT
+    # unique. This box carries TWO generic-password items under
+    # 'Claude Code-credentials-136fa815' — acct="chrisren" holding {claudeAiOauth, mcpOAuth}, and
+    # acct="unknown" holding {mcpOAuth} alone. An -a-less lookup returns the FIRST match, which is
+    # the mcpOAuth-only item, so json.loads() succeeds and KeyError('claudeAiOauth') is raised —
+    # and the old message reported that as "holds no OAuth access token", i.e. it named a
+    # WORLD-shaped cause (the credential is broken, go re-login) for a fact about the READER.
+    # Measured cost: the cloud return lane abstained 719 times from 2026-09-11T23:20:56Z, closed 0
+    # rows for 4 days, and `cc-relogin --dry-run next4` refused the prescribed remedy as
+    # "no re-auth needed — healthy (auth=ok)" the whole time. The credential was never the problem.
+    # Both readers that always worked (bin/claude-accounts:455, scripts/handoff-fire.sh:6942) pass
+    # -a; both that did not carried this bug. Record: docs/research/
+    # drain-pipeline-productivity-2026-09-16.md.
+    kc_account = keychain_account()
     proc = subprocess.run(
-        ["security", "find-generic-password", "-s", service, "-w"],
+        ["security", "find-generic-password", "-s", service, "-a", kc_account, "-w"],
         capture_output=True,
         text=True,
     )
     if proc.returncode != 0:
         die(
             3,
-            f"keychain item {service!r} unreadable (rc {proc.returncode}) — try /relogin",
+            f"keychain item {service!r} (account {kc_account!r}) unreadable "
+            f"(rc {proc.returncode}) — try /relogin",
         )
     try:
         return json.loads(proc.stdout)["claudeAiOauth"]["accessToken"]
     except (ValueError, KeyError) as exc:
-        die(3, f"keychain item {service!r} holds no OAuth access token ({exc})")
+        # Say WHICH item was read. A bare "holds no OAuth access token" sent four days of
+        # investigation at a healthy credential.
+        die(
+            3,
+            f"keychain item {service!r} account {kc_account!r} parsed but carries no "
+            f"claudeAiOauth.accessToken ({exc}) — this is the READ selecting the wrong item "
+            f"far more often than a bad credential; check `security find-generic-password "
+            f"-s {service} -a {kc_account}` before re-logging in",
+        )
     return ""
 
 
