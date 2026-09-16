@@ -509,7 +509,7 @@ reason it is on the W4 checklist rather than dropped.
 ### Q12 — Which chord? — **RULED: `cmd+shift+left press`, with W4 free to overturn it**
 
 The research body calls `cmd+left press` "best on every other axis" and names its one cost: it
-**silently kills `cmd+left click → mouse_handle_click link`** (`config/kitty.conf:772`), because
+**silently kills `cmd+left click → mouse_handle_click link`** (`config/kitty.conf:821`), because
 arm 7 swallows the release so the `click` is never synthesised (§ 3.5 #7).
 
 **That cost is larger than the body prices it, and this session read the provenance to find out.**
@@ -517,7 +517,7 @@ That binding is not incidental — it was built deliberately, to a problem the o
 its ten-line rationale block says so in his own record:
 
 ```
-config/kitty.conf:765-772  (commit 175eeb7d8, "feat(kitty): cmd+click opens links in Dia, in TUIs too")
+config/kitty.conf:814-772  (commit 175eeb7d8, "feat(kitty): cmd+click opens links in Dia, in TUIs too")
 #      which is exactly the "not always" the operator described.
 # THE FIX IS A BINDING THAT IS LINK-ONLY AND GRAB-INDEPENDENT.
 mouse_map cmd+left click grabbed,ungrabbed mouse_handle_click link
@@ -649,8 +649,8 @@ Pure correction, cheap, and every downstream artifact quotes these. **Nine items
 |---|---|---|---|
 | 1 | `docs/research/kitty-upstream-drag-action-2026-09-16.md:139-142` | *"kitty 0.48.2 exposes 7 bindable `win` actions"* — wrong by ~6×; measured **41** `win` actions, **142** total, with positive and negative controls | Correct the figure. Keep the substantive half: across all 142, only five mention "drag" and **none begins a window drag at the pointer** — the instrument can see "drag", so that null is informative. |
 | 2 | same file `:89` | the example chord `ctrl+alt+left press` **is kitty's shipped `mouse_selection rectangle`** | Replace with the Q12 chord. § 10.6(c) narrows it: it is TAKEN in `ungrabbed` only, FREE in `grabbed` — say **which mode**, or the next reader finds it free and reopens the question. |
-| 3 | `config/kitty.conf:322-323` | *"the overlay … can never be dragged, however it is drawn"* — **REFUTED**; the band's pixels sit inside an ordinary mouse-mapped window region and the hit test is **bypassed** by the `\|\|` at `mouse.c:1362`, not satisfied | 🚨 **Mark refuted IN PLACE. Never delete** — the clause is the record of what was believed. The other two thirds of that sentence (*"not in kitty's hit-test"*, *"can never carry a hand cursor"*) **stand** and were attacked directly. |
-| 4 | `config/kitty.conf:508-511` | the claim that the drag machinery *"hangs off real title-bar render data"* | Narrow it, in place: `window_title_render_data` is read in `mouse.c` at **exactly one line** (master `:1115` / v `:1072`), inside `mouse_region`'s hit test. **Only the HIT TEST needs a real bar**; neither the drag state machine nor the routing touches it. |
+| 3 | `config/kitty.conf:335-323` | *"the overlay … can never be dragged, however it is drawn"* — **REFUTED**; the band's pixels sit inside an ordinary mouse-mapped window region and the hit test is **bypassed** by the `\|\|` at `mouse.c:1362`, not satisfied | 🚨 **Mark refuted IN PLACE. Never delete** — the clause is the record of what was believed. The other two thirds of that sentence (*"not in kitty's hit-test"*, *"can never carry a hand cursor"*) **stand** and were attacked directly. |
+| 4 | `config/kitty.conf:541-511` | the claim that the drag machinery *"hangs off real title-bar render data"* | Narrow it, in place: `window_title_render_data` is read in `mouse.c` at **exactly one line** (master `:1115` / v `:1072`), inside `mouse_region`'s hit test. **Only the HIT TEST needs a real bar**; neither the drag state machine nor the routing touches it. |
 | 5 | `docs/research/kitty-upstream-drag-action-2026-09-16.md` (A10's table) | cites master `mouse.c:1432` for `} else if (r.window_border) {`; it is **`:1433`** (`:1432` is a `debug()` call) | Correct. |
 | 6 | **`bin/cc-kitty-reload`'s header** | *"kitty parses its config at startup and then never looks again … every config change was live on disk and inert on screen until the operator quit and relaunched"* — **REFUTED on this box** by the live `__watch_conf__` watcher (§ 2) | 🚨 **Mark refuted in place, never delete.** Its *measurement* (SIGUSR1 → 30 rows → 28 rows, 2026-09-15) is sound and the tool is still useful — it reaches an instance whose watcher died, one started before the config file existed, or one with the option disabled. It is the **causal sentence beside the measurement** that was never tested. Leaving it is how the next session repeats § 2. |
 
@@ -1053,7 +1053,7 @@ and it correctly declined to copy credentials or to fire 15 `SessionStart` hooks
 mailbox.)*
 
 **(b) Q12's cost is larger again, and this settles it.** `cmd+left press` does not merely "kill a link
-binding". It kills `config/kitty.conf:772`, which that file documents at `:752-767` as **the only
+binding". It kills `config/kitty.conf:821`, which that file documents at `:752-767` as **the only
 link-open gesture that works in a grabbed pane** — the reason plain left-click was rejected — and for
 which the ⌘E hints route was **deliberately retired** (`:818-832`, decision `bbbedc12cb8b`). **Claude
 Code does not backfill it** (its hyperlink shim is ghostty/Warp-only). And ⌘ is additionally
@@ -1468,7 +1468,7 @@ they are not: `TabManager.start_window_drag` paints the **drag thumbnail** in th
 **Goal.** *The chord the operator selected in W4 is landed in config/kitty.conf with the retirements
 of § 7.1 applied and every kitty test green — proven by printing the TAP output of
 tests/kitty-conf-bindings.bats and tests/kitty-title-zero-shift.bats with their `1..N` plan lines,
-and `ls -la ~/.config/kitty/kitty-drag-window.py`; do not land this wave unless W4 has been driven by
+and `ls -la ~/.claude/scripts/kitty-drag-window.py` **(CORRECTED 2026-09-16: the W7 goal still carried the route-A `~/.config/kitty/` spelling that § 4.M superseded when it ruled route A′; W3 measured the deploy edge and it is `~/.claude/scripts/`)**; do not land this wave unless W4 has been driven by
 a human hand and the operator has chosen the chord.*
 
 ### W8 — Recover the `draghold` CGEvent driver (Q18) — off the critical path, but TIME-BOXED
@@ -1502,7 +1502,7 @@ judgement.
 | # | Criterion | The check |
 |---|---|---|
 | 1 | The six record corrections are landed, with the three refuted claims marked **in place** | `git diff origin/main~N -- config/kitty.conf` shows comment-only lines; grep finds each original clause still present |
-| 2 | The route-A kitten exists in the repo and is deployed | ~~`ls -la ~/.config/kitty/kitty-drag-window.py`~~ — **CORRECTED 2026-09-16 (phase 3): that is the route-A path, and § 4.M ruled route A′.** The check is **`ls -la ~/.claude/scripts/kitty-drag-window.py`**, which is what the W3 goal already says. `install.sh:689` globs `scripts/*.sh` **and** `scripts/*.py`, so the kitten deploys through the existing symlink farm with no new `install.sh` line, no `kitty-setup.sh` `ln -sfn`, and no `deploy-parity-assert.sh` arm. |
+| 2 | The route-A kitten exists in the repo and is deployed | ~~`ls -la ~/.claude/scripts/kitty-drag-window.py` **(CORRECTED 2026-09-16: the W7 goal still carried the route-A `~/.config/kitty/` spelling that § 4.M superseded when it ruled route A′; W3 measured the deploy edge and it is `~/.claude/scripts/`)**~~ — **CORRECTED 2026-09-16 (phase 3): that is the route-A path, and § 4.M ruled route A′.** The check is **`ls -la ~/.claude/scripts/kitty-drag-window.py`**, which is what the W3 goal already says. `install.sh:689` globs `scripts/*.sh` **and** `scripts/*.py`, so the kitten deploys through the existing symlink farm with no new `install.sh` line, no `kitty-setup.sh` `ln -sfn`, and no `deploy-parity-assert.sh` arm. |
 | 3 | Every deploy gate is green with the new linked source declared | `tests/deploy-parity.bats` TAP with its `1..N` line, 0 failures; `scripts/deploy-parity-assert.sh` clean |
 | 4 | **A human has driven the gesture** and the chord is chosen | W4's script prints a before/after `neighbors` diff showing the layout changed, set-change tested BEFORE order |
 | 5 | The operator's styled pane header is draggable in his live kitty | the chord works in his own panes, by his own hand |
@@ -1531,7 +1531,7 @@ Recorded here so they arrive as *known* rather than as bug reports. None of thes
    the **rearrange**. Plus a **second** row per OS window showing fewer than `tab_bar_min_tabs` tabs
    (a drag independently forces the tab bar visible, v `tabs.py:1288-1291` → `state.c:1149`), and our
    config leaves `tab_bar_min_tabs` at the default **2** — the `tab_bar_min_tabs 1` line is
-   **commented out** at `config/kitty.conf:636` — so every single-tab OS window pays it.
+   **commented out** at `config/kitty.conf:685` — so every single-tab OS window pays it.
 2. **One drag turns the operator's toggled-on bars off across every tab of every OS window.**
    `_clear_force_show_title_bars` iterates `boss.all_tab_managers` while `toggle_window_title_bars`
    only ever sets the flag on `self.active_tab_manager`.

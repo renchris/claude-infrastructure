@@ -218,7 +218,7 @@ Four independent facts, each re-verified:
    at **exactly one line** — master:1115 / v:1072, inside `mouse_region`'s hit test. Every other read
    in either tree is a rendering path in `child-monitor.c` or a test fixture in `dnd.c`. Neither the
    drag state machine nor the routing touches it (V7). *(This narrows, and corrects, our own
-   `config/kitty.conf:508-511` claim that the drag machinery "hangs off real title-bar render data".
+   `config/kitty.conf:541-511` claim that the drag machinery "hangs off real title-bar render data".
    Only the HIT TEST needs a real bar.)*
 3. **A pointer over no window still resolves.** `window_for_window_id` (master state.c:174-185 /
    v:155-166) scans every OS window × tab × window, so the drag survives the pointer leaving the
@@ -232,7 +232,7 @@ Four independent facts, each re-verified:
    pointer.
 
 **On this box the first disjunct is structurally dead**, which strengthens the approach rather than
-weakening it: `window_title_bar_min_windows 0` (config/kitty.conf:1196) leaves the bar render
+weakening it: `window_title_bar_min_windows 0` (config/kitty.conf:1245) leaves the bar render
 geometry empty, and mouse.c:1114-1119 requires `trd->geometry.right > trd->geometry.left &&
 trd->geometry.bottom > trd->geometry.top` to set `in_title_bar`. The second disjunct is the only live
 route here (V2).
@@ -427,7 +427,7 @@ mouse_map cmd+left press grabbed,ungrabbed kitten kitty-drag-window.py
 6. **A double chord-press under threshold pops the rename prompt** — v tabs.py:1878-1881 / master
    :2031-2034 reach `w.set_window_title()`. Our band does not do this today and nobody asked for it.
 7. **`cmd+left click → mouse_handle_click link` dies silently** if `cmd+left press` is the chord
-   (config/kitty.conf:772): arm 7 swallows the release, so the `click` is never synthesised.
+   (config/kitty.conf:821): arm 7 swallows the release, so the `click` is never synthesised.
 8. **The border-tolerance dead band** — see § 7.4. A press in the top 12 device px of a pane never
    reaches any mousemap.
 9. **The force-show cost lands here too.** Route A reaches the same `TabManager.start_window_drag`
@@ -775,7 +775,7 @@ Executed A/B sweep of ~20k pointer positions: central (0,0) → 0% disagreement 
 mouse.c:883 before `dispatch_mouse_event`. **But the antecedent is false and structurally so:** our
 header is a graphics-protocol placement anchored at **row 1 col 1**
 (`scripts/kitty-pane-title-overlay.py:813, :823`), the live top padding is **0**
-(`config/kitty.conf:1060 window_padding_width 0 5 0 5`, after HEAD `a49280bd9` deleted the 22.5pt
+(`config/kitty.conf:1109 window_padding_width 0 5 0 5`, after HEAD `a49280bd9` deleted the 22.5pt
 reservoir), and a placement anchors to a **cell** and grows downward. So the press lands inside the
 cell area, `cell_for_pos` succeeds unclamped, and the mousemap fires **on 0.48.2 today** — corroborated
 by the three `mouse_map` bindings already working in the content area (config/kitty.conf:182, 183, 772).
@@ -880,7 +880,7 @@ content area). Reuse is also **structural**, not merely conventional: an action 
   `window_drag_over_me` is set, v tabs.py:1288-1291), which reaches C as `has_too_few_tabs`
   (state.c:1149) and carves `cell_height + margins` out of the **central** region (state.c:728, 735-736).
   Our config leaves `tab_bar_min_tabs` at the default **2** — the `tab_bar_min_tabs 1` line is
-  **commented out** at config/kitty.conf:636 — so every single-tab OS window pays it.
+  **commented out** at config/kitty.conf:685 — so every single-tab OS window pays it.
 - **Plus at least FOUR relayouts per tab, not two** (V31): the force-show, the tab-bar flip on
   drag-enter, the flip on drag-leave, and the clear. `TabManager.resize(only_tabs=True)` relayouts
   **every** tab (`only_tabs` skips only `layout_tab_bar()`). Relayout is per **TAB**, not per pane.
@@ -971,7 +971,7 @@ plus `gofmt` plus clang-format, so `python gen config` can dirty tracked files w
 >
 > 1. 🚨 **The prescribed replacement chord is superseded.** *"Fix it to `cmd+left press`"* is the
 >    wrong target now: plan Q12 rules **`cmd+shift+left press`**, and Q11(b) hardens that from a
->    preference to a near-certainty — `cmd+left press` kills `config/kitty.conf:772`, the only
+>    preference to a near-certainty — `cmd+left press` kills `config/kitty.conf:821`, the only
 >    link-open gesture that works in a grabbed pane, and collides with `show_hyperlink_targets cmd`
 >    so that hold-⌘-preview-then-click becomes hold-⌘-preview-then-DRAG. W1 wrote
 >    `cmd+shift+left press`. Do not "restore" `cmd+left`.
@@ -981,7 +981,7 @@ plus `gofmt` plus clang-format, so `python gen config` can dirty tracked files w
 >    (`definition.py:1346` v). State the mode, or the next reader probes `grabbed`, finds it free,
 >    and reopens the question.
 
-### 5.20 Our own `config/kitty.conf:322-323` closure is HALF REFUTED — mark it in place, never delete
+### 5.20 Our own `config/kitty.conf:335-323` closure is HALF REFUTED — mark it in place, never delete
 **(A11 F13.)** The three-part sentence *"the overlay … is not in kitty's hit-test and can never carry a
 hand cursor or be dragged, however it is drawn"* splits:
 - **"not in kitty's hit-test"** — **stands.**
@@ -1246,7 +1246,7 @@ mouse_map cmd+left press grabbed,ungrabbed mouse_drag_window
 
 **Retires:**
 
-1. `map cmd+opt+b` (config/kitty.conf:552) — its only job is to raise real, hit-tested bars so a pane
+1. `map cmd+opt+b` (config/kitty.conf:601) — its only job is to raise real, hit-tested bars so a pane
    can be dragged.
 2. The `combine :` prefix on ⌘⇧B (:502), collapsing it to a single `launch` of the overlay toggle. The
    guard exists only because the two views **stack** (kitty's real bar takes the top row; the overlay
@@ -1541,8 +1541,8 @@ overlay doc's own §J warns about.
 **Q19 — Fix the record before anything is posted or landed?**
 Three concrete corrections are pending: the `7 → 41` `win`-action count in the upstream draft
 (`:139-142`), the `ctrl+alt+left press` example chord (`:89`), and the *"can never be dragged, however
-it is drawn"* clause at `config/kitty.conf:322-323` (§ 5.20 — **mark it refuted in place, never
-delete; it is the record of what was believed**). Also `config/kitty.conf:508-511`'s render-data
+it is drawn"* clause at `config/kitty.conf:335-323` (§ 5.20 — **mark it refuted in place, never
+delete; it is the record of what was believed**). Also `config/kitty.conf:541-511`'s render-data
 mechanism claim (§ 2.3) and A10's own `1432`/`1433` citation error (§ 5.23). *Settled by:* doing it.
 
 **Q20 — Does the 0.48.2 three-site drop-classifier offset defect warrant an upstream backport report?**
