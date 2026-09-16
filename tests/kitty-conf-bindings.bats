@@ -679,7 +679,22 @@ main()
 # Both arms are asserted, because arm 1 alone cannot show what the fix prevents.
 @test "no usable face is a REFUSAL, not a verdict computed on a substitute font" {
   script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
-  run python3 - "$script" <<'PYEOF'
+  # RESOLVE A PIL-CAPABLE INTERPRETER, exactly as the "can reach a python with Pillow" case above
+  # does — this case was pinned to a bare `python3` and went red on this box for an ENVIRONMENT
+  # reason with nothing to do with the property under test: PATH python3 is /usr/bin/python3 and
+  # /usr/local/bin/python3 is the only one here carrying Pillow (12.2.0). The body below IMPORTS
+  # PIL itself in ARM 2, so PIL is a precondition of the case, and a precondition the environment
+  # can falsify must SKIP rather than redden — a red there asserts a defect in the overlay that the
+  # run never looked for. Measured pre-existing at HEAD before the W3 case was appended:
+  #   bats -f 'no usable face is a REFUSAL' <HEAD copy of this suite>
+  #     not ok 1 ... ModuleNotFoundError: No module named 'PIL'
+  PYPIL=""
+  for c in /usr/local/bin/python3 /opt/homebrew/bin/python3 /usr/bin/python3; do
+    [ -x "$c" ] || continue
+    if "$c" -c 'import PIL' 2>/dev/null; then PYPIL="$c"; break; fi
+  done
+  [ -n "$PYPIL" ] || skip "no interpreter on this box has Pillow — the refusal path cannot be exercised"
+  run "$PYPIL" - "$script" <<'PYEOF'
 import importlib.util, sys, io, contextlib
 spec = importlib.util.spec_from_file_location("ov", sys.argv[1])
 ov = importlib.util.module_from_spec(spec); spec.loader.exec_module(ov)
@@ -770,4 +785,134 @@ PYEOF
   [ "$n_fwd" -eq 1 ] || { echo "the spawn does not forward --all"; false; }
   n_call="$(grep -c '_spawn_daemon(arg if arg != "off" else "off", all_windows)' "$SRC")" || n_call=0
   [ "$n_call" -eq 1 ] || { echo "the call site does not pass all_windows"; false; }
+}
+
+# ── THE DRAG KITTEN (KITTY_DRAG_ACTION.md W3, route A′) ─────────────────────────────────────────
+#
+# scripts/kitty-drag-window.py is DEPLOYED AND INERT: it reaches ~/.claude/scripts/ through
+# install.sh's existing top-level `scripts/*.py` glob (install.sh:689), and no config file names it
+# yet. That ordering is not tidiness — it is S3/M4 of the plan. A `mouse_map … kitten X.py` whose
+# target is missing or unimportable raises inside `import_kitten_main_module` (kittens/runner.py:59),
+# which `Boss.combine` catches into `show_error('Key action failed', …)` AND CONSUMES THE PRESS: an
+# error overlay in every live pane on every press, with whatever default that chord had also lost.
+# So the file has to be deployable and dispatchable BEFORE W7 writes the line that names it, and
+# both halves of that are pinned here.
+#
+# WHY THIS CASE EXISTS AT ALL, beyond coverage: gate-select maps a changed file to the suites whose
+# EXECUTABLE text names it. With no suite naming this path, `gate-select --direct` answers
+# `FULL <- unmapped:scripts/kitty-drag-window.py` and ship-land runs NO smoke, deferring the whole
+# corpus to postland-verify where it surfaces as a post-land RED with a possible AUTO-REVERT against
+# a diff that was fine. Reproduced on 254e1b47b before this case existed. It is a land-gate mechanic.
+#
+# WHAT IS DELIBERATELY NOT ASSERTED: that no config line references the kitten. Inertness is this
+# wave's state, not an invariant — W7 lands the arming line in a `globinclude`d drop-in — and a test
+# pinning today's state would have to be deleted by the wave it is meant to protect.
+@test "the drag kitten deploys through the scripts/*.py glob and is dispatchable — W3, route A′" {
+  script="$REPO/scripts/kitty-drag-window.py"
+  [ -f "$script" ] || { echo "missing: $script"; false; }
+
+  # (1) THE DEPLOY ROUTE. Route A′ turns on install.sh globbing *.py alongside *.sh at the top level
+  # of scripts/ — that one glob is the entire deployment, which is why route A′ needs no
+  # kitty-setup.sh ln -sfn and no deploy-parity-assert.sh sibling arm. Narrow it back to *.sh and the
+  # kitten silently stops reaching ~/.claude/scripts/, leaving W7's absolute-path config line
+  # pointing at nothing — M4's worst state, not its safe one.
+  grep -q 'scripts/\*\.py' "$REPO/install.sh" || {
+    echo "install.sh no longer globs scripts/*.py — the drag kitten would not deploy"; false; }
+
+  # (2) THE DISPATCH CONTRACT, read out of the AST rather than grepped, because all three of these
+  # are structure and a grep would pass on a mention in a comment. G2: runner.py:65 subscripts
+  # g['main'] unconditionally, before it ever looks at no_ui, so a missing main() is a KeyError on
+  # every press. G1: runner.py:95 binds `partial(handle_result, [kitten] + orig_args)` and boss.py
+  # then calls it with three more, so the signature must be the documented four-parameter one with
+  # the window id THIRD. no_ui is what makes the kitten run in-process instead of opening an overlay
+  # window; the PROPERTY is what matters, so the decorator form and the attribute form both count.
+  run python3 - "$script" <<'PY'
+import ast, sys
+mod = ast.parse(open(sys.argv[1]).read())
+fns = {n.name: n for n in mod.body if isinstance(n, ast.FunctionDef)}
+print("has_main=%d" % ("main" in fns))
+h = fns.get("handle_result")
+print("has_handle_result=%d" % (h is not None))
+print("handle_result_args=%s" % (",".join(a.arg for a in h.args.args) if h else ""))
+no_ui = False
+if h:
+    for d in h.decorator_list:                       # @result_handler(no_ui=True)
+        if isinstance(d, ast.Call):
+            for k in d.keywords:
+                if k.arg == "no_ui" and getattr(k.value, "value", None) is True:
+                    no_ui = True
+for n in ast.walk(mod):                              # handle_result.no_ui = True
+    if isinstance(n, ast.Assign) and getattr(n.value, "value", None) is True:
+        for t in n.targets:
+            if isinstance(t, ast.Attribute) and t.attr == "no_ui":
+                no_ui = True
+print("no_ui=%d" % no_ui)
+PY
+  [ "$status" -eq 0 ] || { echo "scripts/kitty-drag-window.py does not parse as python:"; echo "$output"; false; }
+  echo "$output" | grep -q '^has_main=1$' || {
+    echo "no module-level main() — runner.py:65 subscripts g['main'] and every press raises KeyError"
+    echo "$output"; false; }
+  echo "$output" | grep -q '^has_handle_result=1$' || {
+    echo "no module-level handle_result()"; echo "$output"; false; }
+  echo "$output" | grep -q '^handle_result_args=args,answer,target_window_id,boss$' || {
+    echo "handle_result has the wrong signature — kitty calls it (args, answer, target_window_id, boss)"
+    echo "$output"; false; }
+  echo "$output" | grep -q '^no_ui=1$' || {
+    echo "the kitten does not declare no_ui — a press would open an overlay window instead of arming"
+    echo "$output"; false; }
+}
+
+# MUTANT CONTROL for the case above. Without it the four AST assertions are green whether or not
+# they can see anything: the shape they read is the shape the file already has, so a check that
+# silently matched nothing would look identical. Each mutation removes exactly ONE guard, and the
+# probe must report that one as absent while the others stay intact.
+@test "MUTANT CONTROL: the drag kitten's dispatch guards are each visible to that probe" {
+  probe() {  # $1 = a python file — same reader as the case above
+    python3 - "$1" <<'PY'
+import ast, sys
+mod = ast.parse(open(sys.argv[1]).read())
+fns = {n.name: n for n in mod.body if isinstance(n, ast.FunctionDef)}
+print("has_main=%d" % ("main" in fns))
+h = fns.get("handle_result")
+print("handle_result_args=%s" % (",".join(a.arg for a in h.args.args) if h else ""))
+no_ui = False
+if h:
+    for d in h.decorator_list:
+        if isinstance(d, ast.Call):
+            for k in d.keywords:
+                if k.arg == "no_ui" and getattr(k.value, "value", None) is True:
+                    no_ui = True
+for n in ast.walk(mod):
+    if isinstance(n, ast.Assign) and getattr(n.value, "value", None) is True:
+        for t in n.targets:
+            if isinstance(t, ast.Attribute) and t.attr == "no_ui":
+                no_ui = True
+print("no_ui=%d" % no_ui)
+PY
+  }
+  SRC="$REPO/scripts/kitty-drag-window.py"
+
+  # positive control first: on the UNMUTATED file every guard must read present, or a mutant going
+  # red below would prove nothing about the mutation.
+  probe "$SRC" > "$BATS_TEST_TMPDIR/pos.out"
+  grep -q '^has_main=1$' "$BATS_TEST_TMPDIR/pos.out" || { echo "CONTROL VACUOUS — main absent already"; cat "$BATS_TEST_TMPDIR/pos.out"; false; }
+  grep -q '^no_ui=1$' "$BATS_TEST_TMPDIR/pos.out" || { echo "CONTROL VACUOUS — no_ui absent already"; cat "$BATS_TEST_TMPDIR/pos.out"; false; }
+
+  # (a) drop main()
+  sed 's/^def main(args: list\[str\]) -> None:/def NOT_main(args: list[str]) -> None:/' "$SRC" > "$BATS_TEST_TMPDIR/m-main.py"
+  probe "$BATS_TEST_TMPDIR/m-main.py" > "$BATS_TEST_TMPDIR/m-main.out"
+  grep -q '^has_main=0$' "$BATS_TEST_TMPDIR/m-main.out" || { echo "CONTROL FAILED — losing main() is invisible"; cat "$BATS_TEST_TMPDIR/m-main.out"; false; }
+  grep -q '^no_ui=1$' "$BATS_TEST_TMPDIR/m-main.out" || { echo "CONTROL FAILED — the main mutation moved no_ui too"; cat "$BATS_TEST_TMPDIR/m-main.out"; false; }
+
+  # (b) collapse handle_result to the three-parameter signature the file's own header forbids
+  sed 's/^def handle_result(args: list\[str\], answer: str, target_window_id: int, boss: Any) -> Any:/def handle_result(args: list[str], target_window_id: int, boss: Any) -> Any:/' "$SRC" > "$BATS_TEST_TMPDIR/m-sig.py"
+  probe "$BATS_TEST_TMPDIR/m-sig.py" > "$BATS_TEST_TMPDIR/m-sig.out"
+  grep -q '^handle_result_args=args,target_window_id,boss$' "$BATS_TEST_TMPDIR/m-sig.out" || {
+    echo "CONTROL FAILED — a wrong handle_result signature is invisible"; cat "$BATS_TEST_TMPDIR/m-sig.out"; false; }
+
+  # (c) drop the no_ui declaration
+  sed 's/^@result_handler(no_ui=True)$/@result_handler()/' "$SRC" > "$BATS_TEST_TMPDIR/m-noui.py"
+  probe "$BATS_TEST_TMPDIR/m-noui.py" > "$BATS_TEST_TMPDIR/m-noui.out"
+  grep -q '^no_ui=0$' "$BATS_TEST_TMPDIR/m-noui.out" || { echo "CONTROL FAILED — losing no_ui is invisible"; cat "$BATS_TEST_TMPDIR/m-noui.out"; false; }
+  grep -q '^has_main=1$' "$BATS_TEST_TMPDIR/m-noui.out" || { echo "CONTROL FAILED — the no_ui mutation moved main too"; cat "$BATS_TEST_TMPDIR/m-noui.out"; false; }
 }
