@@ -118,3 +118,265 @@ Whether one was mounted, and whether it is on the mutex chain, is UNTESTED.
 
 - **2026-09-16 (recovery session):** panic anchored, memory + census + blocking chain extracted,
   6 crashed sessions restored unnudged. Analysis not started. This doc created; nothing implemented.
+
+---
+
+# PART II — Diagnosis (research session, 2026-09-16 16:30–)
+
+## 0. Answer, one line
+
+**Both of today's panics were caused by ten `clang-format` processes holding 242 GB and 274 GB of
+resident memory on a 64 GB machine** — spawned by kitty's `./autoformat` walking a dev tree's
+vendored SIMDe headers — which filled **100 % of the VM compressor's 1,629,609 segment slots in
+~130 seconds**, wedged `VM_pageout_scan` against the compressor lock, and starved `watchdogd` for
+91 s / 94 s. **Our fleet caused it**, but not in the way the recovery session's framing suggests:
+the process COUNT is exonerated and the RSS CONCENTRATION is the culprit. The shipped guard
+detected both storms correctly and **actuated on nothing, twelve times**, because its cohort
+selector is keyed on the executable name `^node` and the culprit is not node.
+
+## 1. THE SECOND PANIC — a natural experiment nobody had to design
+
+**The box panicked again at 16:28:56, 38 minutes after the reboot from the first one**, while this
+investigation was in flight. `/Library/Logs/DiagnosticReports/panic-full-2026-09-16-162856.0002.panic`
+(3.2 MB). `kern.shutdownreason: wdog,reset_in1 unknown`; `ResetCounter-2026-09-16-162908.diag`
+`Boot faults: wdog,reset_in1`. A peer session (`claude-infrastructure-1`) captured the swarm LIVE at
+16:25–16:27, three minutes before it died, and walked the full ancestry with `ps`.
+
+This is worth more than any amount of re-reading of the first log: it is a **replication with the
+generator observed in flight**, and it holds two variables that the first panic left confounded.
+
+| | **PANIC 1** 15:54:00 | **PANIC 2** 16:28:56 | reading |
+|---|---|---|---|
+| panic string | `no checkins from watchdogd in 91 seconds` | `…in 94 seconds` | same class |
+| checkins since enabled | 26,079 (≈ 22 d) | **197** (≈ 33 min) | uptime is irrelevant |
+| Compressor Info | 64 % pages (OK) / **100 % segments (BAD)**, 74 swapfiles | 67 % pages (OK) / **100 % segments (BAD)**, 65 swapfiles | **the invariant** |
+| panicked task | pid 0 `kernel_task`, 778 threads | pid 0 `kernel_task`, 712 threads | same |
+| **wired** | **20.22 GB** | **3.57 GB** | **wired is NOT the mechanism** |
+| free | 906 pages (14.2 MB) | 906 pages (14.2 MB) | identical — see § 4.3 |
+| `memoryPressure` | `false` | `false` | false at both deaths |
+| last started kext | **`com.apple.filesystems.smbfs`** | **`com.apple.filesystems.autofs`** | **smbfs is NOT the mechanism** |
+| processes | 1,032 | **815** | **count is NOT the mechanism** |
+| total process RSS | 269.8 GB | 289.5 GB | 4.2–4.5× RAM |
+| **`clang-format`** | **10 procs, 242.2 GB = 89.8 %** | **10 procs, 273.9 GB = 94.6 %** | **the mechanism** |
+| largest non-`clang-format` | WindowServer, 1,528 MB | kitty, 856 MB | nothing else is close |
+
+Two of the recovery session's three live hypotheses die on this table, and they die by a control
+arm rather than by argument:
+
+- **smbfs is refuted.** `last started kext` is `smbfs` in panic 1 and `autofs` in panic 2. It names
+  the most recently loaded kext, not a participant; on this box an `smbfs` load is what happens the
+  first time anything touches an SMB path, and it had been loaded at `mach_absolute_time`
+  33,434,671,703,740 against a panic at 39,631,829,001,741 — **84 % of the way through a 22-day
+  boot**, i.e. hours to days before the storm, not adjacent to it. There were no SMB mounts at the
+  panic (`mount` shows none now; the only smb-shaped process in the 1,032 was
+  `smb-sync-preferences`, RSS 1 MB, not on any lock chain).
+- **The 20.2 GB of wired is refuted as the mechanism.** Panic 2 reproduced the identical kill with
+  **3.57 GB wired**, 5.7× less. Wired was a real *accelerant* on panic 1 (§ 4.2) and it is a real
+  standing defect, but a mechanism that is absent from a reproduction of the same death cannot be
+  the cause of it.
+- **"1,032 processes panicked the box" is refuted.** Panic 2 died with **815**. This box is running
+  **1,019 processes right now, healthy, at idle**, with 9 sessions
+  (`ps -ax | wc -l` = 1019 at 16:12 post-boot). `xpcproxy` — the "spawn-storm signature" — reads
+  **175 / 170 / (idle) comparable**, i.e. it is a *constant of this fleet*, not a storm indicator.
+  Process count carried no information about either death.
+
+## 2. Q1 — Who owned thread 101? **`VM_pageout_scan`. Not smbfs.**
+
+Resolved directly out of the panic log's own thread table, which carries kernel thread NAMES that
+nobody had read:
+
+```
+processByPid["0"].waitInfo      = ["thread 2298: kernel mutex 0xfffffe000c294940 owned by thread 101"]
+processByPid["0"].turnstileInfo = ["thread 2298: blocked on 101, hops: 1, priority: 91"]
+processByPid["0"].threadById["101"]  = {name: "VM_pageout_scan",  state: [TH_RUN],
+                                        schedPriority: 91, systemTime: 1604.12 s}
+processByPid["0"].threadById["2298"] = {name: "VM_compressor",    state: [TH_WAIT, TH_UNINT],
+                                        schedFlags: [TH_SFLAG_RW_PROMOTED], systemTime: 989.76 s}
+```
+
+So the blocking chain is **`VM_compressor` blocked, uninterruptibly, on a kernel mutex held by
+`VM_pageout_scan`, which was ON CORE and had burned 1,604 s of system time.** Both at priority 91.
+The panicking thread, tid 2299, is a **second `VM_compressor`** thread, also `TH_RUN`, 179 s.
+The two threads at the top of the panic log's CPU table are both `kernel_task` (2,781,816 and
+1,890,233 — the same two VM threads).
+
+This is a **memory** wedge end to end. There is no filesystem, no network, no driver on the chain.
+The pageout scanner is spinning through a page queue it cannot reclaim from while the compressor
+waits on it, and every userspace thread that faults — `watchdogd` among them — queues behind that.
+
+*What this PROVES:* the lock holder is the VM pageout scanner, and the waiter is the compressor.
+*What it only PERMITS:* it does not prove pageout_scan was making no progress — a `TH_RUN` sample
+is one instant. The corroboration is `memoryPressureDetails` and the compressor's own 100 %-of-
+segments verdict, both below.
+
+## 3. Q4 — Did our fleet cause it? **Yes, and here is the price.**
+
+The corpus rule binds: a mechanism must be priced in the units of the observed cost before it is
+accepted. The observed cost is *the VM compressor's segment table, 1,629,609 slots, driven to
+100 %*.
+
+**The generator, named:** `clang-format`, 10 processes, one coalition (`jetsamCoalition` 117715 in
+panic 1 — the same coalition as this fleet's `bash`/`zsh`/`claude.exe`/`node`; 663 in panic 2).
+Their argv is preserved verbatim in our own sentinel's trip snapshot
+(`~/.claude/logs/compressor-sentinel-snap.log:72245+`, trip `2026-09-16T20:46:29Z`):
+
+```
+  PID    PPID     RSS_KB   %CPU  ARGV
+92423   91887    971504   45.7  clang-format --style=file:.clang-format \
+                                --assume-filename=/private/tmp/kitty-dev/dependencies/darwin-arm64/include/xxhash.h
+92469   91887    922288   59.1  … /simde/x86/avx.h
+92467   91887    905600   60.2  … /simde/x86/avx2.h
+92461   91887    875552   56.5  … /simde/x86/sse4.2.h
+…
+```
+
+`pid 91887` is `Python`, RSS 32 MB, in the fleet's coalition — that is `python3 ./autoformat`.
+The transcript holds the exact tool call that started it
+(`~/.claude-tertiary/projects/…/wf_20caef3b-51e/agent-a1f6652a41a091e36.jsonl`,
+**2026-09-16T20:46:07.797Z**, i.e. **22 seconds before the sentinel's first trip**):
+
+```
+cd /private/tmp/kitty-dev && export PATH="…/XcodeDefault.xctoolchain/usr/bin:$PATH" \
+  && clang-format --version && python3 ./autoformat 2>&1 | tail -20
+```
+
+And the peer session walked the SECOND storm's ancestry live, with `ps`, at 16:25:
+
+```
+kitty(633) → reso-resume-one next3 …/kitty-drag-impl (98737) → expect(99821)
+  → claude --resume 1e0730c9 (99828) → zsh(38828)
+  → python ./autoformat  cwd=/Users/chrisren/kdev  (38839) → 21 × clang-format
+```
+
+**So the answer to Q4 is CAUSED, not merely died-with** — and the second storm settles the residual
+doubt the first left, because it was observed from outside while it ran.
+
+**The price, in the units of the cost:**
+
+| quantity | measured |
+|---|---|
+| clang-format processes | 10 (panic 1 and 2); 21 seen live at 16:25 |
+| RSS **per process** | 23.8–27.9 GB (panic 1), 28.5–30.4 GB (panic 2) |
+| RSS **summed** | 242.2 GB / 273.9 GB |
+| machine RAM | 64 GB |
+| overcommit | **3.8× / 4.3× physical memory** |
+| ignition → 100 % segments | **128 s** (panic 1: 13.79 % @20:46:18Z → 93.91 % @20:48:26Z) and **133 s** (panic 2: 8.71 % @21:23:45Z → 92.65 % @21:25:58Z) |
+| swap created in that window | 3.1 GB → 73.3 GB (panic 1); 0 → 61.3 GB (panic 2) |
+
+A 3.8× overcommit of anonymous memory is *exactly* the shape that exhausts a compressor segment
+table, and the sentinel's own segment counter recorded it happening twice, at ~9,000–15,000
+segments/second. **The mechanism reaches the observed magnitude with two orders of margin.** No
+other candidate on this box comes within 1.5 GB of it.
+
+**The refuting arm, run:** if the fleet did not cause this, some non-fleet process must hold the
+memory. The full RSS ranking says otherwise — the largest non-`clang-format` process at panic 1 is
+`WindowServer` at 1,528 MB and at panic 2 is `kitty` at 856 MB. Removing every `clang-format` row
+leaves 27.6 GB and 15.6 GB of total process RSS respectively, on a 64 GB box: no storm, no panic.
+The arm that could have acquitted us was run, and it convicts.
+
+**Why `clang-format` at 27 GB is itself pathological** (and worth its own follow-up): `clang-format`
+on ordinary source uses single-digit MB. The files here are `dependencies/darwin-arm64/include/simde/**`
+— vendored SIMD-everywhere headers, the largest generated C headers in common circulation. Whether
+this is quadratic behaviour in `clang-format` or merely a very large input, **10 concurrent copies
+of it is a fleet decision and a fleet defect**, not an upstream one.
+
+## 4. The remaining open questions
+
+### 4.1 Q5 — steady-state process count and its ceiling: **the question is mis-posed**
+
+Measured three ways: **1,032** at panic 1, **815** at panic 2, **1,019 at idle** 22 minutes after
+the first reboot with 9 sessions and nothing wrong. Process count does not separate the healthy box
+from the dying one; it is dominated by a constant tail (`xpcproxy` 175/170, `bash` 123/105, and the
+per-session shell layer) that is present in all three readings.
+
+**A process-count admission gate would not have prevented either panic, and would fire constantly
+in normal operation.** Building one is the single most tempting wrong fix available here, and the
+evidence forecloses it. The quantity that separates the three readings is **summed RSS**: 269.8 GB /
+289.5 GB at the two deaths against roughly 25 GB at idle.
+
+### 4.2 Q2 — who holds the wired memory: **`data.kalloc.1024`, ~75 % of it, and it is a separate defect**
+
+Our own `capacity-alarm` already samples this, so no new instrument was needed:
+`~/.claude/logs/capacity-alarm.jsonl`, row `2026-09-16T20:45:40Z` (8 minutes before panic 1) reads
+`"wired_gb":19.47, "kalloc1024_gb":14.53, "uptime_days":22.6, "chronic_verdict":"ALARM"`.
+So **14.53 of 19.47 GB — 75 % — of the wired footprint was the `data.kalloc.1024` zone**, the
+boot-scoped ratchet attributed to upstream `anthropics/claude-code#44824` and already tracked as
+capacity-alarm rung 8 (`docs/research/panic-2026-08-24-fifth-watchdog.md` § 10 follow-up). The
+post-reboot rows read `"wired_gb":2.92, "kalloc1024_gb":0.02` — a clean before/after that confirms
+the attribution and confirms it is uptime-scoped.
+
+**It did not cause this panic** (panic 2 reproduced at 3.57 GB wired) but it is not innocent either:
+20.2 GB of unswappable memory is 32 % of RAM taxed before the storm began, so panic 1 started
+~5.7 GB closer to the cliff than panic 2 did. **Accelerant, not trigger** — the same verdict the
+2026-08-24 synthesis reached for the same zone, now with a control arm behind it.
+
+### 4.3 Q3 — `memoryPressure: false` with "1.7 % reclaim": **the reclaim figure is an artifact; the flag is real and is a genuine trap**
+
+The recovery session read `pagesWanted 3094 / pagesReclaimed 52` as a 1.7 % reclaim efficiency.
+**`pagesWanted` is not a demand measurement.** It reads **3094 in BOTH panics**, and:
+
+```
+vm.vm_page_free_target = 4000        (sysctl, this box)
+free at panic 1        =  906 pages
+free at panic 2        =  906 pages
+4000 − 906             = 3094        ← exactly pagesWanted, both times
+```
+
+`pagesWanted` is the arithmetic identity *free_target − free_count*, so quoting a ratio built on it
+describes the constant 4000, not the storm. The ratio is withdrawn. (`pagesReclaimed` does differ —
+52 vs 162 — and is a real counter, but it has no denominator here.) **Free landing on exactly 906
+pages in two independent panics is itself the finding**: the pageout path holds the free list pinned
+just under its target and cannot get above it.
+
+**The `memoryPressure: false` flag, however, is real, was `false` at both deaths, and is the reason
+no pressure-keyed guard can ever work on this box.** It was `false` at the 2026-08-05 panic too
+(`docs/research/panic-compressor-2026-08-05.md:196`). It is not a kernel bug: the flag tracks
+*physical page scarcity*, and this kill axis is **segment-table exhaustion at 64–67 % of the pages
+limit** — the compressor has plenty of pages and no free slots to put them in. Any future guard
+keyed on `memoryPressure`, `DISPATCH_SOURCE_MEMORYPRESSURE`, jetsam bands, or "free RAM" is
+**structurally blind to the only axis that has ever killed this machine.** The segment percentage
+is the instrument, and we already compute it.
+
+## 5. Q6 precondition — why the shipped guard did not prevent either panic
+
+`scripts/compressor-sentinel.sh` was alive, sampling every 10 s, and **detected both storms
+correctly and early**. It tripped at 27.68 % on panic 1 and at 8.71 % on panic 2. It then
+**SIGSTOPped zero processes, on every single trip, twelve times across the two storms**, with its
+own write-ahead evidence on disk:
+
+```
+~/.claude/logs/compressor-sentinel-snap.log
+  ═══ TRIP 2026-09-16T20:46:29Z  why=seg+cbu ═══      (panic 1: 6 trips)
+  actuator: INTENT SIGSTOP cohort_n=0 cliff=0 (write-ahead; signals follow)
+  actuator: SIGSTOPped 0 process(es) (cap 400, floor 40960 kB)
+  actuator: parent-break none — no eligible parent owns >= 3 of the 0 selected burst procs
+  …
+  ═══ TRIP 2026-09-16T21:25:58Z  why=seg+swap+cliff ═══  (panic 2: 6 more trips)
+  actuator: SIGSTOPped 0 process(es) (cap 400, floor 40960 kB)
+```
+
+**The cause is one line of the cohort selector**, `scripts/compressor-sentinel.sh:517`:
+
+```awk
+      if (b !~ /^node/) next          # b = executable basename
+```
+
+`select_stop_targets` is keyed on **the executable NAME `^node`**, and `clang-format` is not node.
+The parent-breaker cannot help either: `select_break_parents` ranks parents by *how many of the
+selected cohort they own* (`:574`, `if (index(cohort, " " pid " ") > 0) kids[ppid]++`), and the
+cohort was empty, so its threshold of 3 was unreachable by construction — the log line
+`no eligible parent owns >= 3 of the 0 selected burst procs` is that arithmetic, printed.
+
+This is the **empty-population** failure this repo has now met four times
+(`.claude/rules/agent-operating-lessons.md`: *"A gate's surface is not its traffic"*). The guard was
+built in August against a `next-server`/`postcss` node fork storm and encodes that storm's SPELLING
+as its class test. The file's own header already anticipates the objection and accepts it
+deliberately — *"Deliberately UNDER-inclusive: the cohort test is the EXECUTABLE NAME… a missed
+worker costs one more tick of ramp, a wrongly-stopped process costs the operator's session"*
+(`:487`). That cost model was wrong: **a missed worker cost the whole machine, twice in 35 minutes.**
+
+Nothing else in the chain got a chance to matter. The kill rung (`kill_due` / `kill_escalate`,
+`:909`) acts only on pids already in `FROZEN_DB`; with `cohort_n=0` the debt is 0 and `kill_due`
+exits 1 at its first line (`if (debt + 0 < 1) exit 1`). The release-policy repairs, the probation
+arm, the cliff regime and the write-ahead intent — the whole of the August remediation — all
+functioned exactly as designed and all operated on the empty set.
