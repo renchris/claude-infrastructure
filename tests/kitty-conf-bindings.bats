@@ -755,3 +755,19 @@ PYEOF
     echo "a load-config without --ignore-overrides survives in the toggle script"; false
   fi
 }
+
+@test "--all rides the daemon SPAWN, not only the socket message" {
+  # A press asking for --all finds no daemon, spawns one, and that daemon serves the very
+  # press that asked. Without --all on the spawn it starts focused-tab-only: measured on the
+  # operator's live kitty, targets(all=True)=9 panes vs targets(all=False)=3, and at startup it
+  # logged "warm: no targets ... the SILENT failure mode, not a quiet success" twice and painted
+  # nothing. The next client message widens it, which is why it read as "shows up one time
+  # temporarily" rather than as broken.
+  SRC="$REPO/scripts/kitty-pane-title-overlay.py"
+  n_sig="$(grep -c 'def _spawn_daemon(initial, all_windows=False):' "$SRC")" || n_sig=0
+  [ "$n_sig" -eq 1 ] || { echo "_spawn_daemon does not take all_windows"; false; }
+  n_fwd="$(grep -c '(\["--all"\] if all_windows else \[\])' "$SRC")" || n_fwd=0
+  [ "$n_fwd" -eq 1 ] || { echo "the spawn does not forward --all"; false; }
+  n_call="$(grep -c '_spawn_daemon(arg if arg != "off" else "off", all_windows)' "$SRC")" || n_call=0
+  [ "$n_call" -eq 1 ] || { echo "the call site does not pass all_windows"; false; }
+}
