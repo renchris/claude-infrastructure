@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# cc-kitty-reload — push a changed kitty config into EVERY ALREADY-RUNNING kitty, unattended.
+#
+# THE GAP THIS CLOSES. `~/.config/kitty/kitty.conf` is a SYMLINK into the shared checkout, so the
+# moment a land fast-forwards that checkout the new bytes are already on disk — live, by
+# construction, with no copy step. What does NOT happen is any running kitty re-READING them: kitty
+# parses its config at startup and then never looks again. So every config change was live on disk
+# and inert on screen until the operator quit and relaunched the terminal, which on this box means
+# killing a fleet of Claude sessions. That is the whole defect: the deploy was complete and the
+# effect was zero, with nothing anywhere reporting a difference.
+#
+# THE MECHANISM: SIGUSR1. Measured 2026-09-15 on kitty 0.48.2, isolated instance, one variable —
+# baseline 30 rows, `window_padding_width 25 5` appended to the config FILE, `kill -USR1 <pid>` ->
+# 28 rows; a following bare `kitty @ load-config` gave 28 as well, i.e. idempotent and the same
+# answer. SIGUSR1 is chosen as the actuator over the remote-control route because it needs NO
+# socket and NO `allow_remote_control`: it reaches a kitty started before this repo existed, or one
+# launched with remote control off, which the socket path cannot. The socket is still used, where
+# one exists, as a LIVENESS read — never as the actuator.
+#
+# CONTENT-KEYED, so it is monotone and safe to call on any cadence (deploy-live does, every 600s).
+# It hashes the RESOLVED config bytes and compares against a stamp; unchanged is a silent no-op that
+# signals nothing. Only a genuine content change signals, so a running kitty is never disturbed for
+# a tick that changed nothing — and a relayout is exactly what a user notices.
+#
+# FAIL-CLOSED ON THE STAMP: the stamp advances only when EVERY live kitty was signalled. A partial
+# pass leaves the stamp behind, so the next tick retries rather than recording a deploy that half
+# happened. `no-instances` DOES advance it — a kitty that starts later parses the new file at
+# startup by definition, so there is nothing owed to it.
+#
+# stdout: exactly one `cc-kitty-reload: verdict=<v> ...` line. v ∈ unchanged | reloaded |
+#         no-instances | partial. rc: 0 unchanged/reloaded/no-instances · 5 partial (retry next tick).
+# NEVER launches kitty, never edits a config, never writes outside its own stamp.
+#
+# Seams (tests only): CC_KITTY_CONF_DIR · CC_KITTY_RELOAD_STAMP · CC_KITTY_RELOAD_PS (absolute,
+# launchd-safe per unattended-path-lint) · CC_KITTY_RELOAD_KILL.
+set -uo pipefail
+
+# --would: report the verdict this call WOULD reach and signal NOTHING, write NO stamp. It exists
+# because deploy-live runs with --dry-run (and --offline, which implies it) from the operator
+# platter, and a "what would happen" read that relayouts every live window is not a dry run.
+WOULD=0
+case "${1:-}" in
+  --would) WOULD=1 ;;
+  '') : ;;
+  *) printf 'usage: %s [--would]\n' "${0##*/}" >&2; exit 2 ;;
+esac
+
+CONF_DIR="${CC_KITTY_CONF_DIR:-$HOME/.config/kitty}"
+STAMP="${CC_KITTY_RELOAD_STAMP:-$HOME/.claude/autonomy/kitty-config-deployed}"
+PS_BIN="${CC_KITTY_RELOAD_PS:-/bin/ps}"
+KILL_BIN="${CC_KITTY_RELOAD_KILL:-/bin/kill}"
+
+say() { printf 'cc-kitty-reload: verdict=%s %s\n' "$1" "${2:-}"; }
+
+# ── the content key ──────────────────────────────────────────────────────────────────────────────
+# Every *.conf kitty could read, contents FOLLOWED through symlinks (the live path is a link into
+# the checkout, so hashing the link itself would never change). Sorted, so the key is order-stable.
+config_hash() {
+  local f found=0 out=''
+  for f in "$CONF_DIR"/*.conf; do
+    [ -f "$f" ] || continue          # -f follows symlinks; a dangling link is correctly skipped
+    found=1
+    out="$out$(cat "$f" 2>/dev/null)"
+  done
+  [ "$found" = 1 ] || return 1
+  printf '%s' "$out" | /usr/bin/shasum -a 256 2>/dev/null | awk '{print $1}'
+}
+
+# ── live kitty instances ─────────────────────────────────────────────────────────────────────────
+# The ONE process whose argv ends in the kitty app binary. Not `pgrep -x kitty` (the macOS app's
+# comm is the full bundle path, so -x never matches), and not a pattern in our own argv — a census
+# that carries its search string in argv matches itself (memory: argv-census-must-not-carry-its-
+# pattern-in-argv). `kitten` children are excluded by requiring the basename to be exactly `kitty`.
+live_kitty_pids() {
+  "$PS_BIN" -axo pid=,comm= 2>/dev/null | awk '{ p=$1; c=$2; n=split(c,a,"/"); if (a[n]=="kitty") print p }'
+}
+
+hash_now="$(config_hash)" || { say error "no readable *.conf under $CONF_DIR"; exit 5; }
+hash_was="$(cat "$STAMP" 2>/dev/null || printf '')"
+
+if [ "$hash_now" = "$hash_was" ]; then
+  say unchanged "key=${hash_now:0:12}"
+  exit 0
+fi
+
+pids="$(live_kitty_pids)"
+n_live="$(printf '%s\n' $pids | grep -c . || true)"
+if [ "$WOULD" = 1 ]; then
+  say would "key=${hash_now:0:12} would-signal=${n_live:-0} instance(s) — nothing signalled, no stamp written"
+  exit 0
+fi
+if [ -z "$pids" ]; then
+  mkdir -p "$(dirname "$STAMP")" 2>/dev/null
+  printf '%s' "$hash_now" > "$STAMP"
+  say no-instances "key=${hash_now:0:12} — nothing running; a kitty started from here parses the new file itself"
+  exit 0
+fi
+
+ok=0 bad=0 failed=''
+for p in $pids; do
+  if "$KILL_BIN" -USR1 "$p" 2>/dev/null; then ok=$((ok+1)); else bad=$((bad+1)); failed="$failed $p"; fi
+done
+
+if [ "$bad" -gt 0 ]; then
+  say partial "key=${hash_now:0:12} reloaded=$ok failed=$bad pids=$failed — stamp NOT advanced, next tick retries"
+  exit 5
+fi
+
+mkdir -p "$(dirname "$STAMP")" 2>/dev/null
+printf '%s' "$hash_now" > "$STAMP"
+say reloaded "key=${hash_now:0:12} instances=$ok"
+exit 0

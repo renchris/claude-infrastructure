@@ -1,0 +1,152 @@
+#!/usr/bin/env bats
+# cc-kitty-reload — a landed kitty config reaching an ALREADY-RUNNING kitty, unattended.
+#
+# The axis this suite exists for is the one a fixture is most likely to hold constant: the PS
+# census must tell `kitty` from `kitten` (both live, both under the same app bundle, differing only
+# in basename), and the stamp must fail CLOSED on a partial pass. A fixture whose processes all
+# share one shape cannot express either.
+
+setup() {
+  REPO="${BATS_TEST_DIRNAME}/.."
+  TOOL="$REPO/bin/cc-kitty-reload"
+  TMP="$BATS_TEST_TMPDIR"
+  # HERMETIC: every default in the subject is $HOME-relative (the stamp above all), so a missed
+  # seam must land in the tmpdir and never on the operator's live ~/.
+  export HOME="$TMP/home"; mkdir -p "$HOME"
+  mkdir -p "$TMP/conf" "$TMP/bin"
+  printf 'font_size 18\n' > "$TMP/conf/kitty.conf"
+  export CC_KITTY_CONF_DIR="$TMP/conf"
+  export CC_KITTY_RELOAD_STAMP="$TMP/stamp"
+  export CC_KITTY_RELOAD_PS="$TMP/bin/ps"
+  export CC_KITTY_RELOAD_KILL="$TMP/bin/kill"
+  # production shape: the app's comm is the FULL bundle path, and a kitten sits beside it
+  cat > "$TMP/bin/ps" <<'PS'
+#!/bin/sh
+echo "  501 /Applications/kitty.app/Contents/MacOS/kitty"
+echo "  777 /Applications/kitty.app/Contents/MacOS/kitten"
+echo "  888 /usr/bin/kittygrep"
+PS
+  cat > "$TMP/bin/kill" <<'KILL'
+#!/bin/sh
+echo "$@" >> "$KILLLOG"
+exit 0
+KILL
+  chmod +x "$TMP/bin/ps" "$TMP/bin/kill"
+  export KILLLOG="$TMP/killlog"
+  : > "$KILLLOG"
+}
+
+@test "a changed config signals every live kitty and advances the stamp" {
+  run bash "$TOOL"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=reloaded"* ]] || false
+  [[ "$output" == *"instances=1"* ]] || false
+  [ -s "$CC_KITTY_RELOAD_STAMP" ]
+  [[ "$(cat "$KILLLOG")" == *"-USR1 501"* ]] || false
+}
+
+@test "the census takes kitty and NOT kitten, and not a name that merely contains it" {
+  run bash "$TOOL"
+  [ "$status" -eq 0 ]
+  if grep -q '777' "$KILLLOG"; then echo "signalled a kitten: $(cat "$KILLLOG")"; return 1; fi
+  if grep -q '888' "$KILLLOG"; then echo "signalled kittygrep: $(cat "$KILLLOG")"; return 1; fi
+  [ "$(grep -c . "$KILLLOG")" -eq 1 ]
+}
+
+@test "MUTANT CONTROL: a substring census would pick up the kitten and this fixture sees it" {
+  run bash -c "\"$CC_KITTY_RELOAD_PS\" -axo pid=,comm= | awk '/kitty/ { print \$1 }'"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *777* ]] || false
+  [[ "$output" == *888* ]] || false
+}
+
+@test "an unchanged config is a silent no-op that signals nothing" {
+  run bash "$TOOL"
+  [ "$status" -eq 0 ]
+  : > "$KILLLOG"
+  run bash "$TOOL"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=unchanged"* ]] || false
+  [ ! -s "$KILLLOG" ]
+}
+
+@test "a partial pass FAILS CLOSED: rc 5 and the stamp does not move" {
+  cat > "$CC_KITTY_RELOAD_KILL" <<'KILL'
+#!/bin/sh
+exit 1
+KILL
+  chmod +x "$CC_KITTY_RELOAD_KILL"
+  run bash "$TOOL"
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"verdict=partial"* ]] || false
+  [ ! -f "$CC_KITTY_RELOAD_STAMP" ]
+}
+
+@test "no running kitty still advances the stamp — a later kitty parses the file itself" {
+  cat > "$CC_KITTY_RELOAD_PS" <<'PS'
+#!/bin/sh
+echo "  123 /bin/zsh"
+PS
+  chmod +x "$CC_KITTY_RELOAD_PS"
+  run bash "$TOOL"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=no-instances"* ]] || false
+  [ -s "$CC_KITTY_RELOAD_STAMP" ]
+  [ ! -s "$KILLLOG" ]
+}
+
+@test "--would signals nothing and writes no stamp" {
+  run bash "$TOOL" --would
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=would"* ]] || false
+  [ ! -f "$CC_KITTY_RELOAD_STAMP" ]
+  [ ! -s "$KILLLOG" ]
+}
+
+@test "the key follows a SYMLINKED config — the live path is a link into the checkout" {
+  real="$BATS_TEST_TMPDIR/real.conf"
+  printf 'font_size 18\n' > "$real"
+  rm -f "$CC_KITTY_CONF_DIR/kitty.conf"
+  ln -s "$real" "$CC_KITTY_CONF_DIR/kitty.conf"
+  run bash "$TOOL"
+  [ "$status" -eq 0 ]
+  first="$(cat "$CC_KITTY_RELOAD_STAMP")"
+  printf 'font_size 20\n' > "$real"          # content changes THROUGH the link, link itself does not
+  run bash "$TOOL"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=reloaded"* ]] || false
+  if [ "$(cat "$CC_KITTY_RELOAD_STAMP")" = "$first" ]; then
+    echo "key did not follow the symlink — a landed change would deploy as unchanged"; return 1
+  fi
+}
+
+@test "a dangling link is skipped, and no readable conf at all is an error not a silent pass" {
+  ln -s "$BATS_TEST_TMPDIR/nowhere.conf" "$CC_KITTY_CONF_DIR/dangling.conf"
+  run bash "$TOOL"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verdict=reloaded"* ]] || false
+  rm -f "$CC_KITTY_CONF_DIR"/*.conf
+  run bash "$TOOL"
+  [ "$status" -eq 5 ]
+  [[ "$output" == *"no readable"* ]] || false
+}
+
+@test "an unknown argument is refused rather than silently treated as a live run" {
+  run bash "$TOOL" --definitely-not-a-flag
+  [ "$status" -eq 2 ]
+  [ ! -s "$KILLLOG" ]
+}
+
+@test "deploy-live calls it unconditionally, beside link_refresh and before migrations" {
+  run grep -n -A2 '^link_refresh$' "$REPO/scripts/deploy-live.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"kitty_config_reload"* ]] || false
+  [[ "$output" == *"migrations_converge"* ]] || false
+}
+
+@test "deploy-live's dry run goes through --would, so a platter read never relayouts a window" {
+  run awk '/^kitty_config_reload\(\)/,/^}/' "$REPO/scripts/deploy-live.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"DRY_RUN"* ]] || false
+  [[ "$output" == *"--would"* ]] || false
+}
