@@ -380,3 +380,121 @@ Nothing else in the chain got a chance to matter. The kill rung (`kill_due` / `k
 exits 1 at its first line (`if (debt + 0 < 1) exit 1`). The release-policy repairs, the probation
 arm, the cliff regime and the write-ahead intent — the whole of the August remediation — all
 functioned exactly as designed and all operated on the empty set.
+
+---
+
+# PART III — Prevention
+
+## 6. The design, and the three candidates it beats
+
+The measured defect is precise: **the actuator's cohort was an allow-list of one executable name.**
+Everything downstream of it — the parent-breaker, the freeze ledger, probation, the cliff regime,
+the kill rung — was built correctly in August and ran twelve times on the empty set. So the design
+is to **repair the predicate and let the shipped machine work**, not to add a new mechanism.
+
+Three candidates were considered and rejected on evidence, which is worth recording because each is
+the obvious thing to reach for:
+
+| candidate | why not |
+|---|---|
+| **A process-count admission gate** (the recovery session's first suggestion) | Refuted by § 4.1: 1,032 / 815 / 1,019 processes at panic 1, panic 2 and healthy idle. The signal carries no information, and a gate on it would fire permanently. |
+| **A wired-memory watchdog** | Refuted by the second panic: 3.57 GB wired. It would not have fired. |
+| **A pressure- or jetsam-keyed guard** | Refuted by `memoryPressure: false` at both deaths and at 2026-08-05 (§ 4.3). The kill axis is segment exhaustion at 64–67 % of the *pages* limit; every pressure API is blind to it by construction. |
+
+### 6.1 What changed (`scripts/compressor-sentinel.sh`)
+
+**One predicate, one new safety flag, one population floor.**
+
+1. **`exe_table` gained two fields** — the full executable path (5) and a **path-protection flag**
+   (6). The flag is computed in ONE place because three consumers read it, and three copies of a
+   safety predicate are three chances to drift. Protected: a comm that is not an absolute path
+   (a zombie renders as `(git)`; `kernel_task` has no path), and `/System/`, `/usr/libexec/`,
+   `/usr/sbin/`, `/sbin/` — Apple's own daemons, the only processes here whose death is an OS event.
+   `/usr/bin` and `/opt` are deliberately **not** protected: both of today's generators lived
+   outside the system prefixes, one in an Xcode toolchain and one in a Python venv.
+2. **`census()`'s pid roster became name-agnostic** (its three logged numbers stay node-only, so
+   70,000+ historical rows keep their meaning). This is half the repair: with a node-only roster a
+   `clang-format` pid was never in `prev`, so the *newness* gate was inert for it and the name test
+   was the only thing between a storm and the actuator.
+3. **`select_stop_targets` tests protection instead of the name** — `if (b !~ /^node/) next` became
+   `if (eprot[pid] == 1) next`. The flag **fails closed**: anything not literally `0`, including a
+   short row from an older capture, reads as protected.
+4. **`ACT_MIN_COHORT` (3)** — the new class must show a *population*. **Scoped**: a cohort holding a
+   node-named member is one the pre-fix selector would also have produced, so the floor never
+   touches it and every shipped behaviour is preserved bit for bit.
+
+The blast radius is unchanged in kind: `SIGSTOP` first, reversible, every existing exclusion intact
+(`claude`/`claude.exe` by name, anything claude- or mcp-shaped by argv, this daemon and its
+launcher), capped at `ACT_CAP`, and `SIGKILL` still reachable only through `kill_escalate`, only over
+pids already in custody, only at ≥ 60 % and climbing.
+
+### 6.2 Why this is safe — the control, run on the live box rather than argued
+
+The honest objection to widening a cohort off a name is that it will freeze the operator's work.
+The discriminator that answers it is **not** the protection flag; it is the **newness gate**, and its
+strength is measurable. Two censuses 60 s apart on this box, healthy, under load 29:
+
+| | measured |
+|---|---|
+| processes ≥ 40 MB (the actuator's floor) | **175** → 176 |
+| of those, new since 60 s ago, not claude/mcp | **2** |
+| after the path-protection rules | **0** — `/usr/libexec/coreduetd` and a `(git)` are exactly what those two rules remove |
+| during the storm, same predicate | **10** `clang-format`, plus their spawner |
+
+A process that has been running for hours — every browser renderer, every editor helper, the
+operator's whole desktop — is on the previous census and cannot be in the cohort. Measured at the
+panic: 90 of the 175 over-floor processes live in a GUI app bundle, and not one of them was new.
+
+`.app/Contents/MacOS/` was tested as an explicit GUI exclusion and **rejected**, because it would
+have spared the spawner: `python3` on this box resolves to Xcode's
+`…/Python3.framework/…/Python.app/Contents/MacOS/Python`, a framework stub wearing a bundle path.
+That near-miss is pinned as a test.
+
+### 6.3 The acceptance test
+
+`tests/compressor-sentinel.bats` § 5d, 8 cases, run against a **pinned pre-fix artifact**
+(`a37feb5a9`, marked by the literal `b !~ /^node/` that this diff deletes — an unpinned
+`origin/main` control would compare the fix to itself the moment it lands).
+
+**The red-proof is the panic itself, replayed.** The ten real `clang-format` rows, transcribed from
+the trip our own sentinel wrote 22 seconds after the generator started
+(`compressor-sentinel-snap.log`, `TRIP 2026-09-16T20:46:29Z`), with the `exe_table` capture written
+by hand so that `argv[0]` is the bare word `clang-format` while the path is the Xcode toolchain —
+because a fixture that derived the path from `argv[0]` would hold constant the one axis under test.
+
+```
+PRE-FIX  (a37feb5a9): select_stop_targets → ""            ← the twelve-trip cohort_n=0, reproduced
+POST-FIX            : select_stop_targets → 10 rows       ← plus the spawner
+PRE-FIX  parent-break → ""                                 ← "no eligible parent owns >= 3 of the 0"
+POST-FIX parent-break → "91887 10 Python"                  ← the autoformat driver, frozen first
+```
+
+The other six cases pin the safety argument: Apple daemons never selectable (with a positive control
+proving the emptiness is the exclusion and not a broken selector), unidentifiable and short rows fail
+closed, `claude.exe` still excluded now that `^node` is not doing it for free, the roster generalises
+while the logged numbers do not, the toolchain-inside-a-bundle near-miss, and the population floor's
+node escape hatch.
+
+**Full suite: 137/137.** One pre-existing red was repaired on the way: the single-instance case
+called a bare `timeout`, which is coreutils and is absent from the stock macOS PATH bats builds, so
+it had been failing 127 on trunk independently of any subject — the very class
+`scripts/unattended-path-lint.sh` exists to prevent, reproduced inside the suite.
+
+### 6.4 What this does NOT fix, stated plainly
+
+- **The generator is not in this repo.** `~/kitty-dev/autoformat` walks every directory under the
+  checkout except `dist`, `build`, `bypy`, `3rdparty` and dotfiles — and a dev tree that has run
+  `./dev.sh build` contains **`dependencies/darwin-arm64/include/simde/**`**, thousands of vendored
+  SIMD headers among the largest generated C in circulation. `.clang-format-ignore` lists
+  `3rdparty/**` and not `dependencies/`. Adding `dependencies` to either list ends this storm class
+  at its source for one line. That tree is another session's working copy and is **not** edited here.
+- **`clang-format` at 25–30 GB for one header is itself pathological** and is worth its own
+  measurement; ten concurrent copies is our decision, but the per-process figure is not.
+- **The `data.kalloc.1024` wired ratchet** (§ 4.2, 14.53 GB at 22.6 days) is untouched. It is
+  already tracked as capacity-alarm rung 8 and is an accelerant, not a trigger.
+- **`ACT_RSS_KB` may be the wrong instrument at the cliff.** `ps` RSS reports *resident* pages, and
+  under an active compressor a process's footprint hides: the ten `clang-format`s read 530 MB–1 GB
+  in `ps` at the trip while the panic log records 24–28 GB of footprint each. The 40 MB floor is low
+  enough that this did not matter here, but a future storm of processes whose *resident* share falls
+  below 40 MB while their footprint climbs would evade the floor. Naming it rather than fixing it:
+  no cheap per-process footprint instrument exists for a 10-second shell tick.
