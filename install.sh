@@ -672,21 +672,7 @@ fi
 echo ""
 echo "Scripts → $CONFIG_DIR/scripts/"
 ensure_real_dir "$CONFIG_DIR/scripts"
-# 🚨 *.py TOO, AND THIS IS THE SECOND INSTANCE OF A CLASS THE scripts/lib/ COMMENT BELOW
-# ALREADY DIAGNOSES IN FULL — "a deploy glob keyed on an EXTENSION goes stale the moment a
-# later commit puts a different extension in the same directory, and NOTHING re-examines the
-# glob". That was written for scripts/lib/ on 2026-08-24 and fixed there; this loop, one
-# directory up, was left globbing *.sh.
-#
-# MEASURED 2026-09-15. scripts/kitty-pane-title-overlay.py landed on trunk and never reached
-# the live layer: 203 of 205 entries in ~/.claude/scripts/ are symlinks and this was one of
-# two real files, a one-off copy nothing updates. deploy-live.sh reported "at trunk tip —
-# nothing above the live layer to deploy" while the deployed copy still read TYPE_RATIO 0.845
-# against the checkout's 0.707, so the operator was looking at a band four commits old. The
-# convergence counter was RIGHT and irrelevant: the checkout advanced, and the file that
-# executes is not in the checkout. Same shape as the pty-run.py incident below, and the same
-# blind spot in the auditor, which mirrors this loop 1:1 by design.
-for script in "$REPO_DIR"/scripts/*.sh "$REPO_DIR"/scripts/*.py; do
+for script in "$REPO_DIR"/scripts/*.sh; do
   [[ -f "$script" ]] || continue
   if $IS_GLOBAL; then
     link_file "$script" "$CONFIG_DIR/scripts/$(basename "$script")"

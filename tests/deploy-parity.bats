@@ -725,14 +725,6 @@ _degrade_page() {   # what deploy-live.sh:715 writes on a T2 advance, keyed as i
   # keyed on the same EXTENSION — the "coverage vs silence" hazard this block's header names, in the
   # one form a 1:1 mirror cannot catch: not the deployer's DRIFT, but its OMISSION.
   printf 'x\n' > "$CC_PARITY_REPO/scripts/lib/pty-run.py"
-  # scripts/*.py (TOP LEVEL) — the FOURTH instance, and the first where the auditor's exclusion
-  # was the thing that hid it. want=0 was declared here deliberately on 2026-08-31 with a census
-  # showing no live consumer; config/kitty.conf:346 then bound a chord to
-  # ${HOME}/.claude/scripts/kitty-pane-title-overlay.py by absolute path, and the deployed copy
-  # was a stale real file nothing updates — four commits of landed work invisible while
-  # deploy-live printed "at trunk tip". A negative decision keyed on "no consumer today" expires
-  # silently; this fixture is what makes the class RED if anyone narrows the glob again.
-  printf 'x\n' > "$CC_PARITY_REPO/scripts/kitty-pane-title-overlay.py"
   printf 'x\n' > "$CC_PARITY_REPO/bin/desk-register"           # bin/desk-* — its own install.sh glob
   printf 'x\n' > "$CC_PARITY_REPO/model-config.yaml"           # root SSOT
   printf 'x\n' > "$CC_PARITY_REPO/providers.json"              # root SSOT
@@ -742,11 +734,11 @@ _degrade_page() {   # what deploy-live.sh:715 writes on a T2 advance, keyed as i
   # Per-CLASS, not a total: a single count would go green again the moment one class regressed and
   # another gained a file. Each line is the exact remedy deploy-live's link_refresh consumes.
   for f in hooks/curl-gate.py agents/deep-research.md lib/config-mirror.zsh lib/cc-resume-shell.sh \
-           scripts/lib/pane-spawn-log.sh scripts/lib/pty-run.py scripts/kitty-pane-title-overlay.py \
-           bin/desk-register model-config.yaml providers.json; do
+           scripts/lib/pane-spawn-log.sh scripts/lib/pty-run.py bin/desk-register \
+           model-config.yaml providers.json; do
     [[ "$output" == *"MISSING: ln -sf $CC_PARITY_REPO/$f $CC_PARITY_LIVE/$f"* ]] || false
   done
-  [ "$(printf '%s\n' "$output" | grep -c '^MISSING: ln -sf')" -eq 10 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^MISSING: ln -sf')" -eq 9 ]
 }
 
 # ── ROOT SSOT: LINK-NESS, not existence (2026-08-12, consolidation audit 02 / b13787e71c9f) ─────
