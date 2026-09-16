@@ -1856,9 +1856,43 @@ residency_report() { # never fails, never changes the exit code, never mutates a
   return 0
 }
 
+# ── kitty config: LANDED IS NOT LIVE, and the gap is a process that never re-reads ───────────────
+# ~/.config/kitty/kitty.conf is a SYMLINK into this checkout, so the moment the checkout advances
+# the new bytes ARE the live bytes — there is no copy class to repair and link_refresh has nothing
+# to do. What is missing is entirely on the other side: a running kitty parses its config once, at
+# startup, and never looks again. So a landed config change was reaching disk perfectly and the
+# screen not at all, and the only remedy was quitting the terminal — which on this box kills the
+# whole session fleet. This is face 4 of the inertness generator with a different mechanism:
+# landed, linked, and still not running the bytes.
+#
+# UNCONDITIONAL and CONTENT-KEYED, for the same reason link_refresh above is: it depends on neither
+# the fetch nor the TARGET decision, and it signals only when the config bytes actually changed, so
+# a tick that changed nothing never disturbs a live window. cc-kitty-reload owns the predicate and
+# the stamp; re-deriving either here would be the second source of truth this file's own headers
+# keep warning about. Its rc 5 (a partial pass, stamp deliberately not advanced) is REPORTED and
+# then dropped — the next tick retries in 600s, and a terminal reload has no business changing the
+# exit code of the deploy lane.
+kitty_config_reload() {
+  local tool="${CC_KITTY_RELOAD_BIN-$DEPLOY_REPO/bin/cc-kitty-reload}" out
+  [ -x "$tool" ] || return 0
+  if [ "$DRY_RUN" -eq 1 ]; then
+    out="$(CC_KITTY_RELOAD_STAMP="${CC_KITTY_RELOAD_STAMP:-$HOME/.claude/autonomy/kitty-config-deployed}" \
+           "$tool" --would 2>/dev/null)" || true
+    [ -n "$out" ] && say "kitty-reload: ${out#cc-kitty-reload: }"
+    return 0
+  fi
+  out="$("$tool" 2>&1)" || true
+  case "$out" in
+    *verdict=unchanged*) : ;;                       # the common tick — silent by design
+    *) [ -n "$out" ] && say "kitty-reload: ${out#cc-kitty-reload: }" ;;
+  esac
+  return 0
+}
+
 # UNCONDITIONAL, and deliberately ahead of the fetch — a landed-but-unlinked file must be repaired
 # even when the network is down, the tip has no green stamp, or the live layer already sits above it.
 link_refresh
+kitty_config_reload
 migrations_converge
 # THIRD, not first: it must read the state the two steps above leave behind — link_refresh can
 # create the very link whose target resident_image_stale() then follows with `stat -L`.
