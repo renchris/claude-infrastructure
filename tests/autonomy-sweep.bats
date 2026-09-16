@@ -1941,3 +1941,48 @@ PY
     echo "vacuous: wrap $outer admits the subject's 180/1500 defaults — the guard cannot fail"; false
   fi
 }
+
+# ---------------------------------------------------------------------------------------------
+# §7. THE DETECTORS MUST BE REACHED — a structural ratchet on ORDER, not on behaviour.
+#
+# The tick self-bounds at 400 s (CC_SWEEP_SELF_BOUND_S) while §0a's arm is bounded at 900 s, so an
+# arm allowed 900 s inside a tick that ends at 400 s can consume the whole tick. Measured on the
+# live idl 2026-09-16: 86 self-bound rows, `stopped_before` = `1-collect-pages-alarms` 46 and
+# `0b-author-death-join` 39 — checkpoints ONE and TWO — with exactly one row anywhere else ever.
+# §2b-v (drain-chain liveness) sits at checkpoint SEVEN and had run 0 times/day since 2026-09-08.
+# The drain chain died 2026-09-09 and the cloud lane 2026-09-12; a human found it on 2026-09-16.
+#
+# Both bounds are individually correct and no re-measurement of the arms above reconciles 900 with
+# 400 — only ORDER does. So the invariant worth pinning is positional, and a behavioural test cannot
+# hold it: a suite that runs the sweep with a generous bound reaches every arm and goes green over
+# exactly the production configuration that starves them.
+#
+# This ratchet is deliberately blind to WHAT the detectors do (§6's canary already covers that) and
+# asserts only that they cannot be sequenced behind a checkpoint again.
+
+@test "§7 the drain-chain and flow detectors run before the FIRST yield checkpoint" {
+  local subj="$REPO/scripts/autonomy-sweep.sh"
+  local first_yield drain_line flow_line
+  first_yield="$(grep -n '^sweep_yield ' "$subj" | head -1 | cut -d: -f1)"
+  [ -n "$first_yield" ] || { echo "no sweep_yield checkpoint found — the harness is wrong, not the file"; false; }
+
+  # The HOISTED invocations, not the guarded fallbacks: take the FIRST occurrence of each.
+  drain_line="$(grep -n 'bash "\$_drain" --file' "$subj" | head -1 | cut -d: -f1)"
+  flow_line="$(grep -n 'bash "\$_flow" --json'  "$subj" | head -1 | cut -d: -f1)"
+  [ -n "$drain_line" ] || { echo "drain-chain-assert invocation not found"; false; }
+  [ -n "$flow_line" ]  || { echo "backlog-flow-assert invocation not found"; false; }
+
+  [ "$drain_line" -lt "$first_yield" ] || {
+    echo "drain-chain liveness runs at line $drain_line, AFTER the first checkpoint at $first_yield"
+    echo "— it is starved by the self-bound exactly as it was on 2026-09-08."; false; }
+  [ "$flow_line" -lt "$first_yield" ] || {
+    echo "flow report runs at line $flow_line, AFTER the first checkpoint at $first_yield"; false; }
+}
+
+@test "§7 the hoist is not the only path — the guarded fallback sites still exist" {
+  # If a later edit deletes the guarded originals, a tick where the hoist did not run silently
+  # stops checking. The guard must appear exactly twice: once per detector.
+  local subj="$REPO/scripts/autonomy-sweep.sh" n
+  n="$(grep -c '_DETECTORS_HOISTED:-0' "$subj")" || true
+  [ "${n:-0}" -eq 2 ] || { echo "expected 2 guarded fallback sites, found ${n:-0}"; false; }
+}
