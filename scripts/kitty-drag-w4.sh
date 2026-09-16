@@ -98,7 +98,7 @@ REPO="$(cd "$(dirname "$_kdw4_self")/.." && pwd)"
 # the inference "a pane with NO row was spawned by something OUTSIDE this tree" — and one
 # uninstrumented site downgrades that to "outside the tree, OR that one site", which is the exact
 # ambiguity it exists to close. This script opens a real OS window, so it is a spawn site.
-# shellcheck source=scripts/lib/pane-spawn-log.sh
+# shellcheck source=/dev/null
 [ -r "${REPO}/scripts/lib/pane-spawn-log.sh" ] && . "${REPO}/scripts/lib/pane-spawn-log.sh" || true
 
 KITTEN_PY="${REPO}/scripts/kitty-drag-window.py"
