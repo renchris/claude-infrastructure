@@ -47,6 +47,7 @@ STATE    = os.path.join(AUTONOMY, "kitty-title-overlay.state")
 SOCK     = os.path.join(AUTONOMY, "kitty-title-overlay.sock")
 LOCK     = os.path.join(AUTONOMY, "kitty-title-overlay.lock")
 INTERP   = os.path.join(AUTONOMY, "kitty-title-overlay.interp")
+STRIPDIR = os.path.join(AUTONOMY, "kitty-title-strips")
 
 
 def _log(msg):
@@ -818,22 +819,40 @@ def place(tty, png, img_id, budget=0.05):
     very first strip it had been given.
     """
     import base64
-    b64 = base64.standard_b64encode(png)
-    CH = 4096
-    parts = [b"\0337\033[1;1H",                       # save cursor, home
-             b"\033_Ga=d,d=I,i=%d,q=2\033\\" % img_id]
-    i, first = 0, True
-    while i < len(b64):
-        chunk, i = b64[i:i + CH], i + CH
-        more = b"1" if i < len(b64) else b"0"
-        if first:
-            parts.append(b"\033_Ga=T,f=100,z=1,C=1,q=2,i=%d,m=%s;%s\033\\"
-                         % (img_id, more, chunk))
-            first = False
-        else:
-            parts.append(b"\033_Gm=%s,q=2;%s\033\\" % (more, chunk))
-    parts.append(b"\0338")                            # restore cursor
-    return _tty_write(tty, b"".join(parts), budget=budget)
+    # TRANSMIT BY FILE PATH, NEVER INLINE. The payload is not ours alone: we write it into
+    # a tty a full-screen program (Claude Code) is writing to at the same time, and a
+    # foreign write can only land BETWEEN two of our write() syscalls. Measured 2026-09-16
+    # against a saturating TUI, 80 repaints per arm, one variable:
+    #     inline base64  14142 B  ->  14.60 write() syscalls avg, 80/80 cycles needed >1
+    #     t=f file path    251 B  ->   1.00 write() syscall,       0/80 cycles needed >1
+    # So inline opens ~13 interleave windows PER REPAINT and t=f opens none — this is a
+    # structural property of the syscall count, not a probability we are shading.
+    #
+    # WHAT THE INTERLEAVE COSTS, reproduced on demand: kitty terminates any string escape
+    # on ST (ESC \\). Claude Code emits ST constantly — its OSC-8 hyperlinks are built as
+    # `]8;;<url>ESC\\` — so one of those landing inside our half-written APC closes it
+    # early, kitty drops back to ground state, and THE REST OF OUR BASE64 RENDERS AS
+    # LITERAL TEXT across the operator's pane. Three arms, only the third fires: a
+    # truncated payload leaves the pane dark (kitty keeps swallowing), an embedded CSI is
+    # consumed harmlessly, an embedded ST produces the garbage.
+    #
+    # Atomic rename so kitty can never read a half-written strip, and a stable path per
+    # image id so the files stay bounded rather than accumulating per frame.
+    try:
+        os.makedirs(STRIPDIR, exist_ok=True)
+        path = os.path.join(STRIPDIR, "strip-%d.png" % img_id)
+        tmp = "%s.%d.tmp" % (path, os.getpid())
+        with open(tmp, "wb") as fh:
+            fh.write(png)
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    payload = (b"\0337\033[1;1H"                       # save cursor, home
+               + b"\033_Ga=d,d=I,i=%d,q=2\033\\" % img_id
+               + b"\033_Ga=T,f=100,t=f,z=1,C=1,q=2,i=%d;%s\033\\"
+                 % (img_id, base64.standard_b64encode(path.encode()))
+               + b"\0338")                              # restore cursor
+    return _tty_write(tty, payload, budget=budget)
 
 
 def clear(tty, img_id, budget=0.04):
