@@ -119,6 +119,20 @@ ACT_CAP="${CC_SENTINEL_ACT_CAP:-200}"
 # invisible — the trip snapshot would look exactly as it does today. So this is an OPT-OUT
 # (CC_SENTINEL_ACT_PARENT=off), the arming decision stays the single one the operator already made,
 # and the snapshot prints a parent-break verdict on EVERY armed trip, including "none".
+# A STORM HAS MEMBERS; A ONE-OFF DOES NOT. With the cohort generalised off the `^node` name
+# (2026-09-16), a single freshly-spawned unprotected process over the floor — a browser renderer, a
+# compile step that happened to start during someone else s storm — would be selectable where before
+# it could not be. This floor says the actuator acts on a POPULATION or not at all. It costs nothing
+# on any storm this box has ever recorded: the smallest measured cohort is 10 (clang-format, both
+# 2026-09-16 panics) and the August node storms ran 250-736. It is the cheap half of the safety
+# argument for widening the cohort; the newness gate is the other half.
+ACT_MIN_COHORT="${CC_SENTINEL_ACT_MIN_COHORT:-3}"
+# SCOPED TO THE NEW CLASS, and the scoping is what makes this change strictly additive. A cohort
+# containing a `node`-named member is one the PRE-2026-09-16 selector would also have produced, so
+# the floor does not apply to it: every behaviour this actuator shipped with is preserved exactly,
+# including acting on a single node worker (tests/compressor-sentinel.bats, the write-ahead case,
+# which asserts cohort_n=1 and is the control that caught an unscoped floor changing shipped
+# behaviour). Only the capability this diff ADDS is asked to show a population.
 ACT_PARENT="${CC_SENTINEL_ACT_PARENT:-on}"
 ACT_PARENT_MIN="${CC_SENTINEL_ACT_PARENT_MIN:-3}"   # burst children a parent must own to be a spawner
 ACT_PARENT_CAP="${CC_SENTINEL_ACT_PARENT_CAP:-4}"   # most spawners frozen per trip, biggest first
@@ -441,25 +455,76 @@ classify_breach() { # <seg_est> <seg_limit> <seg_rate_per_s> <dcbu_bytes_per_s> 
 # Elevation Service`, 41 of 1224 live rows). Emitting it raw would make this table's own 4th field
 # ambiguous for every consumer below — the same defect one layer down. `_` cannot appear in a name
 # this file tests for, so collapsing is lossless for every decision made on it.
+#
+# FIELDS 5 AND 6 WERE ADDED 2026-09-16, AFTER TWO PANICS IN 35 MINUTES. Field 5 is the FULL
+# executable path and field 6 is a PATH-PROTECTION flag. Both exist because the cohort test used to
+# be the executable NAME `^node`, and on 2026-09-16 the thing that killed this box twice was named
+# `clang-format`: the actuator selected 0 processes on all 12 trips across both storms while ten
+# processes carried 242 GB and 274 GB of anonymous footprint (docs/research/
+# kernel-watchdog-panic-2026-09-16.md). Generalising the cohort means the actuator now has to be
+# told what it must NEVER touch, and that judgement is made HERE, ONCE, rather than in each of the
+# three consumers — three copies of a safety predicate is three chances to drift apart.
+#
+# THE FLAG IS PATH-ONLY. The argv-based exclusions (claude-shaped, mcp-shaped) stay in the
+# consumers, which are the readers that have argv. This split is deliberate: every consumer applies
+# BOTH, and neither file can weaken the other.
+#
+# WHAT IS PROTECTED, and each line is a different failure:
+#   · a comm that is not an absolute path — a zombie or exiting process renders as `(git)`, and
+#     UNIDENTIFIABLE ⇒ NEVER ACTED ON is this file's polarity throughout. (It also covers pid 0,
+#     whose comm is the bare string `kernel_task`.)
+#   · /System/, /usr/libexec/, /usr/sbin/, /sbin/ — Apple's own daemons and launchd itself. These
+#     are the only processes on the box whose death is an OS-level event rather than a lost job.
+#     Measured: the 60 s newness control on a healthy box under load 29 left exactly two survivors,
+#     `/usr/libexec/coreduetd` and a `(git)` in parentheses, and these two rules are why the
+#     cohort is now empty there instead of two.
+#   · /usr/bin and /opt are deliberately NOT protected: a storm generator genuinely can live there
+#     (both of 2026-09-16's clang-formats did — one in an Xcode toolchain, one in a venv), and a
+#     transient CLI tool's death is not an OS event.
+#
+# NOT USED AS A GUI TEST, and the near-miss is worth recording: `.app/Contents/MacOS/` looks like a
+# clean way to spare the operator's apps, and it would ALSO have spared the 2026-09-16 spawner,
+# because `python3` on this box resolves to Xcode's
+# /Applications/Xcode.app/.../Python3.framework/.../Python.app/Contents/MacOS/Python — a framework
+# stub, not a GUI app. A GUI app is instead kept out of the cohort by the NEWNESS gate in
+# select_stop_targets (a browser that has been up for hours is in the previous census), which is
+# the gate doing nearly all of the work here: 175 processes over the floor, 2 of them new.
 exe_table() {
   ps -axwwo pid=,ppid=,rss=,comm= 2>/dev/null | awk '
     $1 ~ /^[0-9]+$/ {
       comm = $4; for (i = 5; i <= NF; i++) comm = comm " " $i
       n = split(comm, p, "/"); base = p[n]
+      prot = 0
+      if (comm !~ /^\//) prot = 1
+      else if (comm ~ /^\/System\// || comm ~ /^\/usr\/libexec\// \
+            || comm ~ /^\/usr\/sbin\// || comm ~ /^\/sbin\//) prot = 1
+      if (base == "claude" || base == "claude.exe") prot = 1
       gsub(/[[:space:]]+/, "_", base)
-      print $1, $2, $3, base
+      full = comm; gsub(/[[:space:]]+/, "_", full)
+      print $1, $2, $3, base, full, prot
     }'
 }
 
 # ── node census (every CENSUS_EVERY ticks) ────────────────────────────────────────────────────────
 # → "<node_count> <orphans> <node_rss_mb>|<pid pid ...>". The pid list is what makes the actuator
 # able to say "new since 60 s ago" — the burst cohort — instead of stopping the whole fleet.
-census() {
-  exe_table | awk '
-    $4 ~ /^node/ {
-      c++; rss += $3; if ($2 == 1) orph++
-      pids = pids " " $1
-    }
+#
+# THE THREE NUMBERS STAY NODE-ONLY; THE PID ROSTER DOES NOT. `n`/`orph`/`nrss` are a logged series
+# with 70,000+ rows behind them, so re-defining what they count would silently change the meaning of
+# every historical row (memory: changelog-and-tracker-are-different-populations). The ROSTER after
+# the `|` is a different object with exactly one consumer — select_stop_targets' "new since the last
+# census" test — and generalising it is the whole repair: with a node-only roster, a clang-format pid
+# was never in `prev`, so the newness gate was inert for it and the name test was the only thing
+# standing between a storm and the actuator. Now every unprotected process over the floor is on the
+# roster, so "new" means new.
+#
+# THE FLOOR IS THE ACTUATOR'S OWN. Roster and cohort must be drawn from the same population or the
+# newness test compares two different sets: a process under the floor is never a target, so putting
+# it on the roster would only cost string length.
+census() { # <rss_floor_kb>
+  exe_table | awk -v floor="${1:-0}" '
+    $4 ~ /^node/ { c++; rss += $3; if ($2 == 1) orph++ }
+    $6 == "0" && $3 + 0 >= floor + 0 { pids = pids " " $1 }
     END { printf "%d %d %d|%s", c + 0, orph + 0, rss / 1024, pids }'
 }
 
@@ -507,14 +572,30 @@ census() {
 # cannot be applied, so the only safe reading is that it might be one).
 select_stop_targets() { # <exe_file> <prev_census_pids> <rss_floor_kb> <cap>
   awk -v prev=" $2 " -v floor="$3" -v cap="$4" '
-    NR == FNR { if ($1 ~ /^[0-9]+$/) { base[$1] = $4; eppid[$1] = $2 } next }
+    # NO BASELINE ⇒ NO GENERIC ARM. `prev` is the previous census roster, and "new since the last
+    # census" is the gate doing nearly all of the safety work once the cohort stopped being keyed on
+    # one executable name (175 processes over the floor on a healthy box, 2 of them new). An EMPTY
+    # roster does not mean "nothing was running" — it means THIS DAEMON HAS NOT YET OBSERVED THE
+    # POPULATION, which is true for the first CENSUS_EVERY ticks of every start, i.e. precisely the
+    # minute after a reboot. Without this line a trip in that window would read the whole live desktop
+    # as newly-spawned and select it. The `node` arm is exempt because it is what the
+    # pre-2026-09-16 selector did in the same window, and this diff does not get to change that.
+    # Found by the suite, not by review: it reddened the two cases that pin exactly this window.
+    BEGIN { has_prev = (prev ~ /[0-9]/) }
+    NR == FNR { if ($1 ~ /^[0-9]+$/) { base[$1] = $4; eppid[$1] = $2; eprot[$1] = ($6 == "0" ? 0 : 1) } next }
     $1 ~ /^[0-9]+$/ {
       pid = $1; rss = $3 + 0
       args = ""; for (i = 4; i <= NF; i++) args = args " " $i
       if (!(pid in base)) next                        # named by no exe_table row ⇒ never a target
       if (eppid[pid] != $2) next                      # the two reads disagree on its parent ⇒ ditto
       b = base[pid]
-      if (b !~ /^node/) next
+      # WAS `if (b !~ /^node/) next` UNTIL 2026-09-16, and that one line is why this actuator
+      # SIGSTOPped 0 processes on all 12 trips of the two panics that day. The cohort is no longer
+      # an ALLOW-LIST OF ONE NAME; it is everything the path-protection flag does not forbid. The
+      # under-inclusive rule the old comment defended traded "one more tick of ramp" for safety —
+      # the measured price of that trade was the whole machine, twice in 35 minutes.
+      if (eprot[pid] == 1) next
+      if (!has_prev && b !~ /^node/) next             # no observed baseline ⇒ generic arm stands down
       if (b == "claude.exe" || b == "claude") next
       if (args ~ /claude/) next
       if (args ~ /(^|[\/ _-])mcp([-_\/ @.]|$)|modelcontextprotocol/) next
@@ -561,7 +642,7 @@ select_stop_targets() { # <exe_file> <prev_census_pids> <rss_floor_kb> <cap>
 # would make the instrument allocate in proportion to the fleet at the one moment memory is scarce.
 select_break_parents() { # <exe_file> <cohort_pids> <min_children> <cap> <self_pid> <self_ppid>
   awk -v cohort=" $2 " -v min="$3" -v cap="$4" -v self="$5" -v selfp="$6" '
-    NR == FNR { if ($1 ~ /^[0-9]+$/) { ebase[$1] = $4; eppid[$1] = $2 } next }
+    NR == FNR { if ($1 ~ /^[0-9]+$/) { ebase[$1] = $4; eppid[$1] = $2; eprot[$1] = ($6 == "0" ? 0 : 1) } next }
     $1 ~ /^[0-9]+$/ {
       pid = $1; ppid = $2
       args = ""; for (i = 4; i <= NF; i++) args = args " " $i
@@ -569,6 +650,7 @@ select_break_parents() { # <exe_file> <cohort_pids> <min_children> <cap> <self_p
       base = named ? ebase[pid] : "?"
       seen[pid] = 1; name[pid] = base
       if (!named) protect[pid] = 1                    # cannot apply the name test ⇒ assume it fails
+      if (named && eprot[pid] == 1) protect[pid] = 1   # path-protected (Apple daemon, unnamed)
       if (base == "claude.exe" || base == "claude" || args ~ /claude/ \
           || args ~ /(^|[\/ _-])mcp([-_\/ @.]|$)|modelcontextprotocol/) protect[pid] = 1
       if (index(cohort, " " pid " ") > 0) kids[ppid]++
@@ -1431,7 +1513,7 @@ while :; do
   # A stale CENSUS_PIDS in cliff only WIDENS the cohort ("new since the last census" excludes fewer
   # pids), which is the safe direction there.
   if [ "$CLIFF" = "0" ] && [ $((TICK % CENSUS_EVERY)) -eq 0 ]; then
-    CRAW="$(census)"
+    CRAW="$(census "$ACT_RSS_KB")"
     if [ -n "$CRAW" ]; then
       CENSUS_PIDS="${CRAW#*|}"
       CHEAD="${CRAW%%|*}"
@@ -1516,6 +1598,16 @@ while :; do
       TARGETS="$(printf '%s\n' "$PSTABLE" | select_stop_targets "$EXEF" "$CENSUS_PIDS" "$ACT_RSS_KB" "$ACT_CAP")"
       COHORT="$(printf '%s\n' "$TARGETS" | awk '$1 ~ /^[0-9]+$/ { printf "%s ", $1 }')"
       COHORT_N="$(printf '%s' "$COHORT" | wc -w | tr -d ' ')"   # derived from COHORT so they cannot disagree
+      # THE POPULATION FLOOR (ACT_MIN_COHORT). Below it nothing is signalled and the tick says so in
+      # one line, so a below-floor selection is legible as a DECISION rather than as the silent
+      # `cohort_n=0` that the 2026-09-16 panics printed twelve times. The trip, the snapshot and the
+      # page have already happened; only the signals are withheld.
+      COHORT_NODE_N="$(printf '%s\n' "$TARGETS" | awk '$3 ~ /^node/' | wc -l | tr -d ' ')"
+      if [ "$COHORT_N" -lt "$ACT_MIN_COHORT" ] && [ "$COHORT_N" -gt 0 ] && [ "$COHORT_NODE_N" -eq 0 ]; then
+        printf 'actuator: HELD cohort_n=%s < ACT_MIN_COHORT=%s and no node-named member — a population, not a one-off, is the trigger\n' \
+          "$COHORT_N" "$ACT_MIN_COHORT" >> "$SNAP" 2>/dev/null || true
+        TARGETS=""; COHORT=""; COHORT_N=0
+      fi
       # WRITE-AHEAD (panic #5, trip 4): the intent reaches disk BEFORE the first signal, so an
       # actuation the storm kills mid-flight is distinguishable from one that never ran. The
       # per-signal lines that follow are the confirmations.

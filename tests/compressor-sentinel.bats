@@ -419,9 +419,20 @@ assert rows[0]["n"] == 2 and rows[0]["orph"] == 2 and rows[0]["nrss"] == 1044, r
 # the SAME fixture rows the case already writes, so a case states its processes once: field 4 of an
 # actuator row is argv[0], and its basename is what the real exe_table would have reported. Cases
 # that need the two tables to DISAGREE (a stale pid, a recycled one) write $D/exe by hand instead.
-mkexe() { # <actuator rows>  → "<pid> <ppid> <rss> <exe_basename>"
+# 2026-09-16: six fields, not four. exe_table gained a full path (5) and a PATH-PROTECTION flag (6)
+# when the cohort stopped being an allow-list of the single name `node`. mkexe computes both by the
+# same rules the subject uses, from the same fixture row, so a case still states its processes once.
+# A fixture whose argv[0] is a BARE NAME therefore now renders as PROTECTED — which is correct and
+# is the point: the subject fails closed on any process it cannot name by absolute path.
+mkexe() { # <actuator rows>  → "<pid> <ppid> <rss> <exe_basename> <exe_path> <protected>"
   awk '$1 ~ /^[0-9]+$/ { b = $4; sub(/.*\//, "", b); gsub(/[[:space:]]+/, "_", b)
-                         print $1, $2, $3, b }' <<< "$1" > "$D/exe"
+                         prot = 0
+                         if ($4 !~ /^\//) prot = 1
+                         else if ($4 ~ /^\/System\// || $4 ~ /^\/usr\/libexec\// \
+                               || $4 ~ /^\/usr\/sbin\// || $4 ~ /^\/sbin\//) prot = 1
+                         if (b == "claude" || b == "claude.exe") prot = 1
+                         f = $4; gsub(/[[:space:]]+/, "_", f)
+                         print $1, $2, $3, b, f, prot }' <<< "$1" > "$D/exe"
 }
 
 sel() { # <prev pids> <stdin lines> [exe_file]
@@ -450,8 +461,20 @@ sel() { # <prev pids> <stdin lines> [exe_file]
 }
 
 @test "non-node executables are out of the cohort entirely" {
+  # THE MEANING OF THIS CASE CHANGED ON 2026-09-16 AND THE ASSERTION DID NOT, which is why it is
+  # kept rather than rewritten. It was written when the cohort was the allow-list `^node`, so the
+  # emptiness below was that name test. The cohort is now keyed on path-protection instead (ten
+  # `clang-format` processes killed this box twice while `^node` selected nothing), and what keeps
+  # these two rows out today is the FIRST argument: `sel ""` passes an EMPTY previous census, i.e.
+  # a daemon that has not yet observed the population, and in that window the generic arm stands
+  # down and only `node` is eligible. Same verdict, different mechanism — and this case is one of
+  # the two that went red and caught the window when the guard was missing.
   sel "" "$(printf '906 1 4000000 /Applications/Chrome.app/Contents/MacOS/Chrome --type=renderer\n907 1 4000000 /usr/bin/python3 train.py')"
   [ -z "$output" ] || false
+  # WITH a baseline, the same two rows ARE selectable — that is the repair, stated as its own
+  # assertion so the line above can never be read as "non-node is permanently out".
+  sel "1 2" "$(printf '906 1 4000000 /Applications/Chrome.app/Contents/MacOS/Chrome --type=renderer\n907 1 4000000 /usr/bin/python3 train.py')"
+  [ "$(echo "$output" | wc -l | tr -d ' ')" = "2" ] || false
 }
 
 @test "the RSS floor holds: a 100 MB worker is not the burst" {
@@ -993,8 +1016,12 @@ FNM='/Users/x/Library/Application Support/fnm/node-versions/v22.21.1/installatio
   # `Razer Elevation Service` is 41 of 1224 live rows. Emitted raw it would make exe_table's own 4th
   # field ambiguous for every consumer — the same defect one layer down.
   nowcensus "$(printf '1010 1 900000 /Library/Application Support/Razer/Razer Elevation Service\n1011 1 900000 %s' "$FNM")"
-  [ "${output%%|*}" = "1 1 878" ] || false
-  [ "${output#*|}" = " 1011" ] || false
+  [ "${output%%|*}" = "1 1 878" ] || false          # the NUMBERS are still node-only: 1 proc, not 2
+  # THE ROSTER IS NOT. Since 2026-09-16 it lists every unprotected process over the floor, because
+  # its one consumer is the "new since the last census" gate and a roster that named only node left
+  # that gate inert for every other executable — which is how ten clang-format processes read as
+  # freshly-spawned forever. A wider roster can only EXCLUDE more from the cohort, never less.
+  [ "${output#*|}" = " 1010 1011" ] || false
 }
 
 @test "SELECTOR SITE: an fnm node is SEEN — the name comes from exe_table, not the args table" {
@@ -1003,7 +1030,10 @@ FNM='/Users/x/Library/Application Support/fnm/node-versions/v22.21.1/installatio
   mkstubs 0 0 0
   printf '1001 1 900000 %s\n' "$FNM" > "$PS_CENSUS"
   run env PATH="$STUB:$PATH" bash -c '. "$1"; exe_table' _ "$D/lib.sh"
-  [ "$output" = "1001 1 900000 node" ] || false
+  # SIX fields since 2026-09-16: pid ppid rss basename FULL_PATH PROTECTED. The full path is how the
+  # protection flag is computed, and the spaces in this very path are why it is underscore-collapsed
+  # the same way the basename is — field 6 must stay readable as $6 whatever the path contains.
+  [ "$output" = "1001 1 900000 node ${FNM// /_} 0" ] || false
   printf '%s\n' "$output" > "$D/exe.fnm"
   sel "" "$(printf '1001 1 900000 %s /w/app/worker.js' "$FNM")" "$D/exe.fnm"
   [ "$output" = "1001 900000 node" ] || false
@@ -1041,11 +1071,11 @@ FNM='/Users/x/Library/Application Support/fnm/node-versions/v22.21.1/installatio
   # The hazard the second read opens. Both tables carry ppid, they are taken back-to-back, so a
   # healthy process agrees trivially and a pid reused between the reads has to reproduce its
   # predecessor's parent to get through.
-  printf '1201 4242 900000 node\n' > "$D/exe.mm"
+  printf '1201 4242 900000 node /opt/homebrew/bin/node 0\n' > "$D/exe.mm"
   sel "" '1201 7 900000 /opt/homebrew/bin/node /w/app/w.js' "$D/exe.mm"
   [ -z "$output" ] || false
   # POSITIVE CONTROL — the identical row with the ppids AGREEING is selected.
-  printf '1201 7 900000 node\n' > "$D/exe.ok"
+  printf '1201 7 900000 node /opt/homebrew/bin/node 0\n' > "$D/exe.ok"
   sel "" '1201 7 900000 /opt/homebrew/bin/node /w/app/w.js' "$D/exe.ok"
   [ "$output" = "1201 900000 node" ] || false
 }
@@ -1064,13 +1094,17 @@ FNM='/Users/x/Library/Application Support/fnm/node-versions/v22.21.1/installatio
   brk "40001 40002 40003" "$(printf '36923 1 3432416 /w/reso/node_modules/.bin/next-server next-server\n40001 36923 900000 /opt/homebrew/bin/node p.js\n40002 36923 900000 /opt/homebrew/bin/node p.js\n40003 36923 900000 /opt/homebrew/bin/node p.js')" 3 4 "$D/exe.noparent"
   [ -z "$output" ] || false
   # POSITIVE CONTROL — the same table with the spawner NAMED yields the incident's own verdict.
-  printf '36923 1 3432416 next-server\n40001 36923 900000 node\n40002 36923 900000 node\n40003 36923 900000 node\n' > "$D/exe.named"
+  printf '36923 1 3432416 next-server /w/reso/node_modules/.bin/next-server 0\n40001 36923 900000 node /opt/homebrew/bin/node 0\n40002 36923 900000 node /opt/homebrew/bin/node 0\n40003 36923 900000 node /opt/homebrew/bin/node 0\n' > "$D/exe.named"
   brk "40001 40002 40003" "$(printf '36923 1 3432416 /w/reso/node_modules/.bin/next-server next-server\n40001 36923 900000 /opt/homebrew/bin/node p.js\n40002 36923 900000 /opt/homebrew/bin/node p.js\n40003 36923 900000 /opt/homebrew/bin/node p.js')" 3 4 "$D/exe.named"
   [ "$output" = "36923 3 next-server" ] || false
 }
 
 @test "BREAK-PARENTS SITE: a modelcontextprotocol spawner is protected by the class test" {
-  printf '36924 1 3432416 node\n40001 36924 900000 node\n40002 36924 900000 node\n40003 36924 900000 node\n' > "$D/exe.mcp"
+  # SIX-FIELD FIXTURE, and the reason is a vacuous pass this diff created and then removed: with a
+  # four-field row the protection flag reads EMPTY, fails closed, and the spawner is spared for a
+  # reason that has nothing to do with the mcp class test this case exists to prove. It stayed green
+  # throughout and proved nothing (memory: sibling-guard-makes-the-fixture-vacuous).
+  printf '36924 1 3432416 node /opt/homebrew/bin/node 0\n40001 36924 900000 node /opt/homebrew/bin/node 0\n40002 36924 900000 node /opt/homebrew/bin/node 0\n40003 36924 900000 node /opt/homebrew/bin/node 0\n' > "$D/exe.mcp"
   brk "40001 40002 40003" "$(printf '36924 1 3432416 /opt/homebrew/bin/node /w/@modelcontextprotocol/server/i.js\n40001 36924 900000 /opt/homebrew/bin/node p.js\n40002 36924 900000 /opt/homebrew/bin/node p.js\n40003 36924 900000 /opt/homebrew/bin/node p.js')" 3 4 "$D/exe.mcp"
   [ -z "$output" ] || false
 }
@@ -1867,7 +1901,20 @@ run_ke() { # <now-epoch> <reason>
   mkstubs 800000 0 0
   mkcohort "$(printf '7001\tMon 24 Aug 20:00:00 2026')"          # ps -p map for proc_lstart
   printf '7001\nMon 24 Aug 20:00:00 2026\n' > "$D/cs.pid"        # PIDFILE derives from LOG
-  run timeout 10 env PATH="$STUB:$PATH" PSMAP="$PSMAP" CC_SENTINEL_LOG="$LOG" \
+  # `timeout` IS NOT ON THE STOCK macOS PATH — it is coreutils, and bats runs this case with
+  # PATH=.../usr/bin:/bin:/usr/sbin:/sbin, so a BARE `timeout` here resolved to nothing and the case
+  # failed 127 ("command not found") on every run, on trunk, regardless of the subject. That is the
+  # same class `scripts/unattended-path-lint.sh` exists to stop, reproduced inside the suite that
+  # lints it. Resolve an ABSOLUTE binary (the repo's idiom: store the path `command -v` prints, never
+  # the bare name) and SKIP when the box has none — a case that cannot run must say so rather than
+  # report a verdict about the subject (memory: a gate refusal is not a gate result).
+  local TO=""
+  for c in "$(command -v gtimeout 2>/dev/null || true)" "$(command -v timeout 2>/dev/null || true)" \
+           /opt/homebrew/bin/gtimeout /opt/homebrew/bin/timeout /usr/local/bin/gtimeout /usr/local/bin/timeout; do
+    [ -n "$c" ] && [ -x "$c" ] && { TO="$c"; break; }
+  done
+  [ -n "$TO" ] || skip "no timeout(1) on this box — the mutex case needs a bounded run"
+  run "$TO" 10 env PATH="$STUB:$PATH" PSMAP="$PSMAP" CC_SENTINEL_LOG="$LOG" \
       CC_PANIC_SCAN=off CC_FREEZE_SCAN=off bash "$S"             # TICKS=0: the daemon path
   [ "$status" -eq 0 ] || false                                   # a 124 here = the mutex did NOT fire
   echo "$output" | grep -q 'another live instance' || false
@@ -1878,4 +1925,191 @@ run_ke() { # <now-epoch> <reason>
       CC_PANIC_SCAN=off CC_FREEZE_SCAN=off bash "$S" --ticks 1
   [ "$status" -eq 0 ] || false
   [ "$(rows)" = "1" ] || false
+}
+
+# ══ 5d. THE 2026-09-16 PANICS — the cohort is no longer an allow-list of one name ═════════════════
+#
+# Two watchdog panics, 35 minutes apart (15:54:00 and 16:28:56), same class, same 100 %-of-segments
+# verdict, killed by TEN `clang-format` processes carrying 242 GB and 274 GB of anonymous footprint
+# on a 64 GB box. The sentinel detected both storms early and correctly and then SIGSTOPped **zero
+# processes on all twelve trips**, because `select_stop_targets` tested the executable NAME against
+# `^node`. Full record: docs/research/kernel-watchdog-panic-2026-09-16.md.
+#
+# THE PRE-FIX ARTIFACT IS PINNED AND MARKED, for the reason setup() already gives at length:
+# `origin/main` moves, and the moment this fix lands there an unpinned control would replay the
+# POST-fix code and compare the fix to itself — green forever, asserting nothing. a37feb5a9 is the
+# commit immediately before this change (its tree carries the diagnosis, not the repair), and
+# `b !~ /^node/` is the literal this diff DELETES, so its presence proves the artifact is the old one.
+prefix_lib() {
+  [ -s "$D/prelib2.sh" ] && return 0
+  git -C "$REPO" show a37feb5a9:scripts/compressor-sentinel.sh 2>/dev/null \
+    | sed -n '/^[a-z_]*() {/,/^}/p' > "$D/prelib2.sh"
+  [ -s "$D/prelib2.sh" ] || skip "pre-fix commit a37feb5a9 unavailable (shallow clone?)"
+  grep -q 'b !~ /\^node/' "$D/prelib2.sh" || false     # the marker: this MUST be the pre-fix code
+}
+
+# The ten real rows, transcribed from the trip the sentinel itself wrote 22 s after the generator
+# started: ~/.claude/logs/compressor-sentinel-snap.log, `═══ TRIP 2026-09-16T20:46:29Z ═══`.
+# `ps -axwwo pid=,ppid=,rss=,args=` shape, exactly as the actuator reads it.
+storm_rows() {
+  printf '%s\n' \
+    '92423 91887 971504 clang-format --style=file:.clang-format --assume-filename=/private/tmp/kitty-dev/dependencies/darwin-arm64/include/xxhash.h' \
+    '92469 91887 922288 clang-format --style=file:.clang-format --assume-filename=/private/tmp/kitty-dev/dependencies/darwin-arm64/include/simde/x86/avx.h' \
+    '92467 91887 905600 clang-format --style=file:.clang-format --assume-filename=/private/tmp/kitty-dev/dependencies/darwin-arm64/include/simde/x86/avx2.h' \
+    '92462 91887 877520 clang-format --style=file:.clang-format --assume-filename=/private/tmp/kitty-dev/dependencies/darwin-arm64/include/simde/x86/fma.h' \
+    '92461 91887 875552 clang-format --style=file:.clang-format --assume-filename=/private/tmp/kitty-dev/dependencies/darwin-arm64/include/simde/x86/sse4.2.h' \
+    '92458 91887 732112 clang-format --style=file:.clang-format --assume-filename=/private/tmp/kitty-dev/dependencies/darwin-arm64/include/simde/wasm/simd128.h' \
+    '92459 91887 695040 clang-format --style=file:.clang-format --assume-filename=/private/tmp/kitty-dev/dependencies/darwin-arm64/include/simde/wasm/relaxed-simd.h' \
+    '92476 91887 675328 clang-format --style=file:.clang-format --assume-filename=/private/tmp/kitty-dev/dependencies/darwin-arm64/include/simde/x86/mmx.h' \
+    '96492 91887 655648 clang-format --style=file:.clang-format --assume-filename=/private/tmp/kitty-dev/dependencies/darwin-arm64/include/simde/x86/sse4.1.h' \
+    '92460 91887 616928 clang-format --style=file:.clang-format --assume-filename=/private/tmp/kitty-dev/dependencies/darwin-arm64/include/simde/mips/msa.h' \
+    '91887 91880 32768 python3 ./autoformat'
+}
+
+# The matching exe_table capture. HAND-WRITTEN rather than derived by mkexe, and that is the point of
+# the case: argv[0] for these is the BARE word `clang-format` (the agent put an Xcode toolchain on
+# PATH and invoked it by name), while exe_table reads `comm`, which is the resolved ABSOLUTE PATH.
+# A fixture that derived the path from argv[0] would hold constant the one axis under test.
+# The census roster as it stood one tick before the generator started: the shell that launched
+# autoformat and launchd, and NOT the storm. An empty roster would make the case vacuous — the
+# generic arm stands down without a baseline, so every row would be excluded for the wrong reason.
+PRESTORM=" 1 91880 633 "
+storm_exe() {
+  local CF='/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-format'
+  local PY='/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python'
+  { for pid in 92423 92469 92467 92462 92461 92458 92459 92476 96492 92460; do
+      printf '%s 91887 900000 clang-format %s 0\n' "$pid" "$CF"; done
+    printf '91887 91880 32768 Python %s 0\n' "$PY"
+  } > "$D/exe.storm"
+}
+
+@test "PANIC 2026-09-16 RED-PROOF: the ten clang-format rows are selected — pre-fix selects NONE" {
+  storm_exe
+  # PRE-FIX: the real artifact, the real rows. This is the twelve-trip `cohort_n=0` reproduced.
+  prefix_lib
+  run env bash -c '. "$1"; select_stop_targets "$2" "$3" 102400 200' \
+    _ "$D/prelib2.sh" "$D/exe.storm" "$PRESTORM" <<< "$(storm_rows)"
+  [ "$status" -eq 0 ] || false
+  [ -z "$output" ] || false                       # ← the panic, in one assertion
+  # POST-FIX: all ten, and the spawner too (it is over the floor and unprotected).
+  run env bash -c '. "$1"; select_stop_targets "$2" "$3" 102400 200' \
+    _ "$D/lib.sh" "$D/exe.storm" "$PRESTORM" <<< "$(storm_rows)"
+  [ "$status" -eq 0 ] || false
+  [ "$(awk '$3 == "clang-format"' <<< "$output" | wc -l | tr -d ' ')" -eq 10 ] || false
+}
+
+@test "PANIC 2026-09-16: the parent-breaker now reaches the autoformat spawner — pre-fix it could not" {
+  storm_exe
+  local cohort=" 92423 92469 92467 92462 92461 92458 92459 92476 96492 92460 "
+  prefix_lib
+  run env bash -c '. "$1"; select_break_parents "$2" "$3" 3 4 70001 70002' \
+    _ "$D/prelib2.sh" "$D/exe.storm" "$cohort" <<< "$(storm_rows)"
+  # Pre-fix the cohort was EMPTY, so this is the honest replay: no cohort, no parent, and the log
+  # line the box actually printed — "no eligible parent owns >= 3 of the 0 selected burst procs".
+  run env bash -c '. "$1"; select_break_parents "$2" "$3" 3 4 70001 70002' \
+    _ "$D/prelib2.sh" "$D/exe.storm" "$PRESTORM" <<< "$(storm_rows)"
+  [ -z "$output" ] || false
+  # POST-FIX, with the cohort the repaired selector produces: pid 91887 owns all ten.
+  run env bash -c '. "$1"; select_break_parents "$2" "$3" 3 4 70001 70002' \
+    _ "$D/lib.sh" "$D/exe.storm" "$cohort" <<< "$(storm_rows)"
+  [ "$status" -eq 0 ] || false
+  [ "$(awk 'NR==1 {print $1, $2}' <<< "$output")" = "91887 10" ] || false
+}
+
+@test "NEAR-MISS: a toolchain binary inside an .app bundle stays selectable" {
+  # `.app/Contents/MacOS/` was the obvious way to spare the operator's GUI apps, and it is NOT used,
+  # because BOTH of the 2026-09-16 generators would have escaped a naive /Applications test and the
+  # SPAWNER would have escaped the bundle test itself: python3 on this box is Xcode's
+  # Python.app/Contents/MacOS/Python — a framework stub, not a GUI app. Pin both directions.
+  printf '%s\n' \
+    '92423 91887 900000 clang-format --assume-filename=/x/simde/x86/avx512.h' \
+    '91887 91880 900000 python3 ./autoformat' > "$D/rows.nm"
+  printf '92423 91887 900000 clang-format /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-format 0\n91887 91880 900000 Python /Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python 0\n' > "$D/exe.nm"
+  run env bash -c '. "$1"; select_stop_targets "$2" "$3" 102400 200' \
+    _ "$D/lib.sh" "$D/exe.nm" "$PRESTORM" < "$D/rows.nm"
+  [ "$(wc -l <<< "$output" | tr -d ' ')" -eq 2 ] || false
+}
+
+@test "NEGATIVE CONTROL: an Apple daemon is never selectable, however new and however large" {
+  # The measured residue of the 60 s newness control on a healthy box was exactly two processes:
+  # /usr/libexec/coreduetd and a `(git)` in parentheses. These two rules are why it is now zero.
+  printf '336 1 900000 /usr/libexec/coreduetd\n302 1 900000 /usr/libexec/logd\n99 1 900000 /System/Library/CoreServices/x\n1 0 900000 /sbin/launchd\n' > "$D/rows.d"
+  mkexe "$(cat "$D/rows.d")"
+  run env bash -c '. "$1"; select_stop_targets "$2" "$3" 102400 200' _ "$D/lib.sh" "$D/exe" "$PRESTORM" < "$D/rows.d"
+  [ -z "$output" ] || false
+  # POSITIVE CONTROL: the identical shape under a non-system path IS selected, so the emptiness
+  # above is the exclusion working rather than the selector being broken.
+  printf '336 1 900000 /opt/homebrew/bin/clang-format x.h\n' > "$D/rows.p"
+  mkexe "$(cat "$D/rows.p")"
+  run env bash -c '. "$1"; select_stop_targets "$2" "$3" 102400 200' _ "$D/lib.sh" "$D/exe" "$PRESTORM" < "$D/rows.p"
+  [ "$output" = "336 900000 clang-format" ] || false
+}
+
+@test "FAIL CLOSED: an exe row that cannot name a process by absolute path is PROTECTED" {
+  # `(git)` — ps renders an exiting process's comm in parentheses. UNIDENTIFIABLE ⇒ NEVER ACTED ON
+  # is this file's polarity, and a safety flag must fail toward protection, never toward selection
+  # (memory: gate-default-decides-failure-direction). A SHORT row — one written before field 6
+  # existed — must read the same way.
+  printf '76746 1 900000 git gc --auto\n76747 1 900000 worker --run\n' > "$D/rows.u"
+  printf '76746 1 900000 (git) (git) 1\n76747 1 900000 worker\n' > "$D/exe.u"   # row 2 has NO field 6
+  run env bash -c '. "$1"; select_stop_targets "$2" "$3" 102400 200' _ "$D/lib.sh" "$D/exe.u" "$PRESTORM" < "$D/rows.u"
+  [ -z "$output" ] || false
+}
+
+@test "claude.exe is STILL never stopped once the name allow-list is gone" {
+  # The widening's most important regression: before this diff `^node` excluded claude.exe for free.
+  # Now the exclusion has to be doing the work itself, so assert it against a clean absolute path.
+  printf '901 1 4000000 /Users/x/.claude-260/node_modules/.bin/claude --permission-mode auto\n902 1 4000000 /usr/local/bin/claude serve\n903 1 4000000 /opt/x/bin/worker --mcp-server\n' > "$D/rows.c"
+  mkexe "$(cat "$D/rows.c")"
+  run env bash -c '. "$1"; select_stop_targets "$2" "$3" 102400 200' _ "$D/lib.sh" "$D/exe" "$PRESTORM" < "$D/rows.c"
+  [ -z "$output" ] || false
+}
+
+@test "the census roster is name-agnostic and floored; its three NUMBERS stay node-only" {
+  # The roster generalises (that IS the repair); n/orph/nrss must not, because 70,000+ logged rows
+  # already mean "node" by those keys.
+  cat > "$STUB/ps" <<'PSEOF'
+#!/bin/sh
+printf '%s\n' \
+  '400 1 900000 /opt/homebrew/bin/node' \
+  '401 1 900000 /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-format' \
+  '402 1 900000 /usr/libexec/coreduetd' \
+  '403 1   5000 /opt/homebrew/bin/tiny'
+PSEOF
+  chmod +x "$STUB/ps"
+  run env PATH="$STUB:$PATH" bash -c '. "$1"; census 102400' _ "$D/lib.sh"
+  [ "${output%%|*}" = "1 1 878 " ] || [ "${output%%|*}" = "1 1 878" ] || false   # node numbers: 1 proc
+  local roster="${output#*|}"
+  [[ "$roster" == *" 400 "* || "$roster" == *" 400" ]] || false   # node: on the roster
+  [[ "$roster" == *" 401 "* || "$roster" == *" 401" ]] || false   # clang-format: on it too (the repair)
+  [[ "$roster" != *" 402"* ]] || false                            # Apple daemon: never
+  [[ "$roster" != *" 403"* ]] || false                            # under the floor: never
+}
+
+@test "ACT_MIN_COHORT: a one-off is not a storm, and the withholding is logged as a decision" {
+  # A single freshly-spawned unprotected process over the floor became selectable when the cohort
+  # stopped being name-keyed. Signals are withheld below the floor; the trip, snapshot and page have
+  # already happened. Ten — the smallest cohort either 2026-09-16 panic produced — clears it.
+  grep -q 'ACT_MIN_COHORT="\${CC_SENTINEL_ACT_MIN_COHORT:-3}"' "$S" || false
+  grep -q 'actuator: HELD cohort_n=' "$S" || false
+  # THE FLOOR IS SCOPED TO THE NEW CLASS. A cohort holding a node-named member is one the pre-fix
+  # selector would also have produced, so the floor must not touch it — the write-ahead case above
+  # asserts cohort_n=1 on exactly that shape and is the control that caught an unscoped floor
+  # silently changing shipped behaviour. Assert the node escape hatch is present and is an AND.
+  grep -q 'COHORT_NODE_N.*awk .\$3 ~ /\^node/' "$S" || false
+  grep -q '\[ "\$COHORT_NODE_N" -eq 0 \]; then' "$S" || false
+}
+
+@test "NO BASELINE, NO GENERIC ARM: an unobserved population is not a burst" {
+  # CENSUS_PIDS is empty for the first CENSUS_EVERY ticks of every daemon start — the minute after a
+  # reboot, which is exactly when a box recovering from one panic is rebuilding toward the next. An
+  # empty roster is NOT evidence that nothing was running; it is evidence that nothing was observed.
+  # Without this guard the generic cohort reads the entire live desktop as newly-spawned.
+  printf '906 1 4000000 /Applications/Cursor.app/Contents/MacOS/Cursor\n907 1 4000000 /opt/homebrew/bin/clang-format x.h\n908 1 4000000 /opt/homebrew/bin/node w.js\n' > "$D/rows.nb"
+  mkexe "$(cat "$D/rows.nb")"
+  run env bash -c '. "$1"; select_stop_targets "$2" "$3" 102400 200' _ "$D/lib.sh" "$D/exe" "" < "$D/rows.nb"
+  [ "$output" = "908 4000000 node" ] || false        # the node arm only: unchanged from before this diff
+  # WITH a baseline the same three rows give the generic cohort. This pair is the whole guard.
+  run env bash -c '. "$1"; select_stop_targets "$2" "$3" 102400 200' _ "$D/lib.sh" "$D/exe" " 1 2 " < "$D/rows.nb"
+  [ "$(echo "$output" | wc -l | tr -d ' ')" = "3" ] || false
 }
