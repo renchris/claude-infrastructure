@@ -29,6 +29,21 @@
 #   `--force` stays what it always was: the operator's escape hatch, for when the ladder itself is
 #   the thing in the way. See .claude/CLAUDE.md § Standing-converge authorization.
 #
+#   ⚠️ AND THE LEVER ABOVE IS CURRENTLY DENIED TO AN UNATTENDED AGENT, which is worth stating
+#   beside the recommendation rather than leaving the next session to discover at the tool call.
+#   Measured 2026-09-15 as a 2x2, one variable per cell, on auto mode:
+#
+#                                     --dry-run   real
+#       bash deploy-live.sh             ALLOW     ALLOW
+#       CC_DEPLOY_MAX_LAG_COMMITS=0 …   ALLOW     DENY
+#
+#   So the guard is not "agents may not deploy" — an agent may run the sanctioned deploy, and does.
+#   It is the far narrower and better rule: AN AGENT MAY NOT ALTER THE GATING AND THEN DEPLOY.
+#   That is exactly the line worth holding, so the remedy is a permission rule the operator grants
+#   once, never a workaround. Until they do, an agent's real options are the bare form (which waits
+#   out the budget honestly) and surfacing the lever to the operator — and `--force` is not the
+#   fallback, for every reason above.
+#
 # Stamp contract: <stamps>/<tree-sha>.json containing "verdict":"green" (tree-keyed, so a
 # rebase/cherry-pick that preserves the tree keeps its verdict). Written by postland-verify.sh.
 #
