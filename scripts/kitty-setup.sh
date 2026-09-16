@@ -223,6 +223,38 @@ if [ "$(readlink "$KCONF_DIR/kitty.conf" 2>/dev/null)" = "$SRC_CONF" ]; then
   ok "kitty.conf -> repo SSOT"
 else no "kitty.conf is not linked to $SRC_CONF"; fi
 
+# ── 1b. the window-drag ARMING drop-in ───────────────────────────────────────────────────────────
+# config/kitty.conf's section 8 ends with `globinclude drag-arm.d/*.conf`. This creates the
+# directory that glob points at, plus an EMPTY drag.conf inside it — the disarmed state.
+#
+# 🚨 REAL DIRECTORY AND REAL FILE, NEVER A SYMLINK BACK INTO THE REPO, and the reason is not
+# tidiness. If the drop-in were a symlink to a tracked file, the operator's act of ARMING would be
+# an edit to a TRACKED file — which a later land, a rebase, or a deploy-live fast-forward could
+# silently clobber, un-arming or re-arming his live terminal with no one deciding to. Worse, the
+# disarm rule (EMPTY THE FILE, NEVER DELETE IT — a deletion does not fire kitty's __watch_conf__
+# child, plan § 2.2 M2) would be fighting git on every converge: an emptied tracked file reads as
+# an uncommitted deletion of content that a checkout would restore. A real untracked file is
+# stable across every land, and is the operator's alone.
+#
+# 🚨 NEVER OVERWRITE AN EXISTING drag.conf. Its contents ARE the operator's armed/disarmed state;
+# clobbering it here would silently arm or disarm his live terminal on the next setup run. Created
+# only when absent, and only ever empty.
+if [ "$MODE" = apply ]; then
+  mkdir -p "$KCONF_DIR/drag-arm.d"
+  # `:` truncates, so guard on absence rather than using a plain redirect.
+  [ -e "$KCONF_DIR/drag-arm.d/drag.conf" ] || : > "$KCONF_DIR/drag-arm.d/drag.conf"
+fi
+if [ -d "$KCONF_DIR/drag-arm.d" ] && [ ! -L "$KCONF_DIR/drag-arm.d" ] \
+   && [ -f "$KCONF_DIR/drag-arm.d/drag.conf" ] && [ ! -L "$KCONF_DIR/drag-arm.d/drag.conf" ]; then
+  if [ -s "$KCONF_DIR/drag-arm.d/drag.conf" ]; then
+    ok "drag-arm drop-in present (real file) — ARMED by the operator, left untouched"
+  else
+    ok "drag-arm drop-in present (real file), empty — disarmed"
+  fi
+else
+  no "$KCONF_DIR/drag-arm.d/drag.conf is missing, or is a symlink (it must be a real file)"
+fi
+
 # ── 2. the it2 translator ────────────────────────────────────────────────────────────────────────
 hdr "2. Agent Teams pane backend (native kitty splits)"
 if [ "$MODE" = apply ]; then
