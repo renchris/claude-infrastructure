@@ -1,6 +1,12 @@
 # Kernel watchdog panic, 2026-09-16 — the whole kitty fleet died at once
 
-**Status:** OPEN — evidence captured by the recovery session, analysis and prevention design NOT started.
+**Status:** DIAGNOSED AND FIXED (2026-09-16). Cause: ten `clang-format` processes, 242 GB and 274 GB
+of anonymous footprint on a 64 GB box, from kitty `./autoformat` walking a dev tree's vendored SIMDe
+headers. **The box panicked TWICE** — 15:54:00 and 16:28:56 — and the second one, with the swarm
+observed live three minutes before it, is what settled the diagnosis. Prevention landed in
+`scripts/compressor-sentinel.sh` (Part III). Three of the recovery session's hypotheses are refuted
+by control arm, including one of its own framings. Residual, not fixed here: the generator lives in
+`~/kitty-dev/autoformat`, another session's tree (§ 6.4).
 **Owner:** the research session fired from this doc.
 **Artifact:** `/Library/Logs/DiagnosticReports/panic-full-2026-09-16-155400.0002.panic` (4.5 MB, JSON;
 a copy rides beside this doc as `panic-2026-09-16.panic.copy`, untracked).
@@ -80,21 +86,21 @@ Whether one was mounted, and whether it is on the mutex chain, is UNTESTED.
 
 ## Open questions — these are the work, not a list to file
 
-1. **Who owned thread 101?** Resolve the mutex owner. `binaryImages` + the kext load list are in the
+1. ~~Who owned thread 101?~~ **ANSWERED § 2 — `VM_pageout_scan`, not smbfs.** Resolve the mutex owner. `binaryImages` + the kext load list are in the
    same JSON. If it is `smbfs`, the story is a network-filesystem stall; if it is the VM/compressor,
    the story is memory. These imply different fixes.
-2. **Which subsystem holds 20.2 GB wired?** The panic log may not answer it; if not, say so and
+2. ~~Which subsystem holds 20.2 GB wired?~~ **ANSWERED § 4.2 — `data.kalloc.1024`, 14.53 of 19.47 GB; and § 1 shows it is not the mechanism.** The panic log may not answer it; if not, say so and
    design the instrument that WOULD (a wired-memory sampler is cheap and we have none).
-3. **Is `memoryPressure: false` with 1.7 % reclaim a kernel bug, a definitional artifact, or our
-   misreading?** It matters because every jetsam/pressure-based guard we might build keys on that flag.
-4. **Did our fleet CAUSE it, CONTRIBUTE to it, or merely die with it?** Be honest about which the
+3. ~~Is `memoryPressure: false` with 1.7 % reclaim a kernel bug, a definitional artifact, or our
+   misreading?~~ **ANSWERED § 4.3 — the ratio is an artifact (`pagesWanted` = free_target − free_count, 3094 in BOTH panics); the FLAG is real and is why no pressure-keyed guard can work here.**
+4. ~~Did our fleet CAUSE it, CONTRIBUTE to it, or merely die with it?** Be honest about which the
    evidence supports. 1,032 processes is a fact; "1,032 processes panicked the box" is a hypothesis,
    and the corpus rule is that a mechanism must be priced in the units of the observed cost before
    it is accepted (see `.claude/rules/agent-operating-lessons.md`, "price a proposed cause").
-5. **What is the fleet's steady-state process count, and what is its ceiling?** Nothing on this box
+5. ~~What is the fleet's steady-state process count, and what is its ceiling?** Nothing on this box
    measures or bounds it. `hooks/`, `scripts/autonomy-sweep.sh`, `cc-reaper`, the postland lane and
    the per-session shells all spawn; no admission gate counts TOTAL processes.
-6. **Prevention.** Candidates, none yet argued: a process-count admission gate; a wired-memory
+6. ~~Prevention.~~ **DELIVERED Part III — landed, 138/138.** Candidates, none yet argued: a process-count admission gate; a wired-memory
    watchdog that sheds sessions before the kernel watchdog fires; bounding concurrent sessions;
    bounding hook fan-out; a pre-panic tripwire that at least LEAVES A RECORD (we got none —
    the first thing anyone knew was a black screen).
@@ -118,6 +124,15 @@ Whether one was mounted, and whether it is on the mutex chain, is UNTESTED.
 
 - **2026-09-16 (recovery session):** panic anchored, memory + census + blocking chain extracted,
   6 crashed sessions restored unnudged. Analysis not started. This doc created; nothing implemented.
+- **2026-09-16 16:28 (during the investigation):** **the box panicked a second time.** One of the
+  restored sessions came back with its `/goal` armed, auto-continued, re-ran `./autoformat`, and
+  reached 21 concurrent `clang-format` processes. A peer session captured the swarm live and walked
+  its ancestry to a `claude --resume` with `ps`. That reproduction is Part II § 1 and it is the
+  reason this diagnosis rests on a control arm rather than on a single log.
+- **2026-09-16 (research session):** Part II diagnosis and Part III prevention written and landed.
+  All six open questions answered with citations; two of them re-posed because the evidence did not
+  support the question as asked (§ 4.1 process count, § 4.3 the reclaim ratio). Fix landed in
+  `scripts/compressor-sentinel.sh` with 9 new cases in `tests/compressor-sentinel.bats`, 138/138.
 
 ---
 
