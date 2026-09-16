@@ -94,6 +94,13 @@ while [ -L "$_kdw4_self" ]; do
     case "$_kdw4_self" in /*) ;; *) _kdw4_self="$_kdw4_d/$_kdw4_self" ;; esac
 done
 REPO="$(cd "$(dirname "$_kdw4_self")/.." && pwd)"
+# Pane-spawn logging. EVERY in-tree spawn site must leave a row, because the log's whole value is
+# the inference "a pane with NO row was spawned by something OUTSIDE this tree" — and one
+# uninstrumented site downgrades that to "outside the tree, OR that one site", which is the exact
+# ambiguity it exists to close. This script opens a real OS window, so it is a spawn site.
+# shellcheck source=scripts/lib/pane-spawn-log.sh
+[ -r "${REPO}/scripts/lib/pane-spawn-log.sh" ] && . "${REPO}/scripts/lib/pane-spawn-log.sh" || true
+
 KITTEN_PY="${REPO}/scripts/kitty-drag-window.py"
 GRAPH_PY="${REPO}/scripts/kitty-pane-graph.py"
 
@@ -407,6 +414,8 @@ launch_sandbox() {
         sleep 0.4
         kit launch --type=os-window --cwd="$RUN_ROOT" \
             sh -c "cat '${RUN_ROOT}/INSTRUCTIONS.txt'; exec \$SHELL" >/dev/null
+        command -v cc_log_pane_spawn >/dev/null 2>&1 && \
+            cc_log_pane_spawn os-window kitty "" "$RUN_ROOT" "kitty-drag-w4 sandbox reuse sock:${SOCK}" || true
     else
         [ -S "$SOCK" ] && rm -f "$SOCK"
         env -u KITTY_LISTEN_ON -u KITTY_PID -u KITTY_WINDOW_ID \
@@ -415,6 +424,8 @@ launch_sandbox() {
             --directory "$RUN_ROOT" \
             sh -c "cat '${RUN_ROOT}/INSTRUCTIONS.txt'; exec \$SHELL" \
             >"${RUN_ROOT}/kitty.stderr" 2>&1 &
+        command -v cc_log_pane_spawn >/dev/null 2>&1 && \
+            cc_log_pane_spawn os-window kitty "" "$RUN_ROOT" "kitty-drag-w4 sandbox launch sock:${SOCK} bin:${KITTY_BIN}" || true
         local _i
         for _i in $(seq 1 60); do
             sandbox_alive && break
