@@ -83,5 +83,13 @@ guard is added for it.
 
 ## Checks
 
-`./autoformat`, `ruff check .`, `./test.py type-check` and `./test.py --module window_drag` all
+`ruff check .`, `./test.py type-check` and `./test.py --module window_drag` (8 tests, OK) all
 clean. No default `mouse_map` ships — the action is inert until a user binds it.
+
+> **`./autoformat` was NOT run for this draft, deliberately.** On this machine it panicked the
+> kernel twice in one afternoon: it walks every top-level directory except `dist`/`build`/`bypy`/
+> `3rdparty`, so it formats the vendored ~300 MB `dependencies/` tree, and ten parallel
+> `clang-format` workers over the multi-MB `simde` macro headers each grew to 1-19 GB RSS until the
+> VM compressor hit its segment limit. Its cache is only written on completion, so every re-run
+> formats everything again. The changed files were formatted individually instead. A skip-tuple
+> entry for `dependencies` looks upstream-worthy and is not proposed here.
