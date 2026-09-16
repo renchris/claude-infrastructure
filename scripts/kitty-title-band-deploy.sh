@@ -33,6 +33,18 @@ DROPIN="${DROPIN:-$HOME/.config/kitty/drag-arm.d/drag.conf}"
 LOG=/tmp/kitty-title-band-watcher.log
 MODE="${1:-install}"
 
+# Every in-tree site that creates a terminal surface leaves ONE row, so the pane census's "a pane
+# with no row was spawned by something outside this tree" inference stays true. The overlays below
+# are transient -- they exist for 0.2s to carry a watcher module in -- but a pane is a pane.
+# shellcheck source=/dev/null
+for _c in "$SCRIPTS/lib/pane-spawn-log.sh" "$HOME/.claude/scripts/lib/pane-spawn-log.sh"; do
+  [ -r "$_c" ] && { . "$_c"; break; }
+done
+_ktb_log_spawn() {  # _ktb_log_spawn <note>
+  command -v cc_log_pane_spawn >/dev/null 2>&1 && \
+    cc_log_pane_spawn overlay kitty "" "$PWD" "$1" || true
+}
+
 die() { printf '\033[31m✗\033[0m %s\n' "$1" >&2; exit 1; }
 say() { printf '  %s\n' "$1"; }
 ok()  { printf '\033[32m✓\033[0m %s\n' "$1"; }
@@ -97,6 +109,7 @@ case "$MODE" in
       before="$(geom "$s")"
       tmp="/tmp/ktb-unwatch-$$-$RANDOM.py"; cp "$UNWATCHER" "$tmp"
       k "$s" launch --type=overlay --watcher "$tmp" sh -c 'sleep 0.2' >/dev/null 2>&1
+      _ktb_log_spawn "kitty-title-band-deploy --revert: transient overlay carrying the unwatcher into $s"
       sleep 2
       say "$s: $before -> $(geom "$s")"
       n=$((n+1))
@@ -123,6 +136,7 @@ while read -r s; do
   # with the same filename would be a silent no-op.
   tmp="/tmp/ktb-watch-$$-$RANDOM.py"; cp "$WATCHER" "$tmp"
   k "$s" launch --type=overlay --watcher "$tmp" sh -c 'sleep 0.2' >/dev/null 2>&1
+  _ktb_log_spawn "kitty-title-band-deploy: transient overlay carrying the title-band shim into $s"
   sleep 2
   after="$(geom "$s")"
   if [ "$before" = "$after" ]; then
