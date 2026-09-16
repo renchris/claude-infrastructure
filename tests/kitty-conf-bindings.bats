@@ -694,3 +694,20 @@ PYEOF
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   echo "$output" | grep -q '^ok$' || { echo "$output"; false; }
 }
+
+@test "the title toggle passes --ignore-overrides — without it it is a silent no-op on a live kitty" {
+  # `kitty @ load-config` RESPECTS overrides from the invocation AND from a PREVIOUS load-config
+  # unless this flag is passed, so any `-o` that ever reached an instance pins the very setting the
+  # pairing flips: the script exits 0 and nothing on screen moves. MEASURED on the operator's live
+  # kitty (pid 97084, 11 panes), one variable, rows via `kitty @ ls`:
+  #   mw=1 WITHOUT the flag → [8,8,8,8,8,45,45,45,45,47,47,47]   identical to mw=0, i.e. inert
+  #   mw=1 WITH    the flag → [7,7,7,7,8,44,45,45,46,46,46]      the bar drew
+  # A FRESH instance cannot express this — it has accumulated no override — which is why an
+  # isolated-instance measurement called the whole approach sound while the operator's chord did
+  # nothing. That asymmetry is the reason this is pinned by TEXT rather than by a live run.
+  n="$(grep -o 'load-config --ignore-overrides' "$REPO/scripts/kitty-pane-title-toggle.sh" | grep -c . )" || n=0
+  [ "$n" -eq 2 ] || { echo "expected BOTH load-config calls to carry --ignore-overrides, found $n"; false; }
+  if grep -E 'load-config +"' "$REPO/scripts/kitty-pane-title-toggle.sh" | grep -qv 'ignore-overrides'; then
+    echo "a load-config without --ignore-overrides survives in the toggle script"; false
+  fi
+}

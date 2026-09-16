@@ -75,5 +75,19 @@ esac
 # Consequence, and it is the whole of it: after a kitty restart the file may still read `on`
 # while the fresh instance is showing the OFF config, and the next press is a no-op that
 # re-loads OFF. One dead press, self-correcting on the second. `… off` / `… on` force a state.
-if [ "$next" = on ]; then kitty @ load-config "$CONF_ON"; else kitty @ load-config "$CONF_OFF"; fi
+# 🚨 --ignore-overrides IS LOAD-BEARING, and without it this script is a silent no-op on a
+# long-lived kitty. `kitty @ load-config` RESPECTS overrides from the kitty invocation AND from a
+# PREVIOUS load-config, by documented design, unless this flag is passed. Any `-o` that ever
+# reached this instance therefore pins the very setting the pairing flips, and the toggle reports
+# success while nothing on screen moves. MEASURED on the operator's live kitty (pid 97084, 12
+# panes), one variable, rows via `kitty @ ls`:
+#     load-config mw=1 WITHOUT the flag ... [8,8,8,8,8,45,45,45,45,47,47,47]  (identical — inert)
+#     load-config mw=1 WITH    the flag ... [7,7,7,7,7,44,44,44,44,45,45,46]  (the bar drew)
+# That instance was launched with NO `-o` in its argv, so the sticky override came from an earlier
+# load-config, not from startup — which is why nothing about the process looked wrong. This is the
+# mechanism kitty.conf §3 originally recorded as "measured DEAD ON THIS MACHINE": the reading was
+# RIGHT about his windows, and the isolated-instance re-measurement that appeared to refute it was
+# testing a kitty too young to have accumulated an override. A fresh instance cannot express this
+# bug; only a long-lived one can.
+if [ "$next" = on ]; then kitty @ load-config --ignore-overrides "$CONF_ON"; else kitty @ load-config --ignore-overrides "$CONF_OFF"; fi
 printf '%s' "$next" > "$STATE"
