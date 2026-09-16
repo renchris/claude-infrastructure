@@ -120,6 +120,20 @@ last_directive() { grep -E "^[[:space:]]*$2([[:space:]]|$)" "$1" | tail -1 | sed
   case "$line" in *toggle_window_title_bars*) false ;; *) ;; esac
 }
 
+@test "cmd+opt+b clears the REAL bars before drawing the overlay" {
+  # The bars now PERSIST, so the reverse order is a standing double-title trap rather than the
+  # accident it used to be. ⌘⇧B already guards the other direction; this is its mirror.
+  local line
+  line="$(grep -E '^map[[:space:]]+cmd\+opt\+b([[:space:]]|$)' "$OFF" | tail -1)"
+  [ -n "$line" ] || false
+  case "$line" in *kitty-pane-title-toggle.sh\ off*) ;; *) false ;; esac
+  # ORDER matters, so assert on the prefix that precedes the overlay call rather than on the
+  # whole line: clearing AFTER the toggle would wipe a strip the overlay's hold loop just drew.
+  [ "${line%%kitty-pane-title-overlay.py*}" != "$line" ] || false
+  local before_overlay="${line%%kitty-pane-title-overlay.py*}"
+  case "$before_overlay" in *kitty-pane-title-toggle.sh\ off*) ;; *) false ;; esac
+}
+
 @test "the toggle script exists, is executable, and rejects an unknown argument" {
   [ -x "$TOGGLE" ] || false
   run env KITTY_TITLE_STATE="$BATS_TEST_TMPDIR/state" "$TOGGLE" nonsense

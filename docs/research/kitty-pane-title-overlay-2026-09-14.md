@@ -1058,10 +1058,32 @@ operator's own hand is the instrument that settles it.
 
 Every pane's top inset goes **20px → 45px**; its bottom inset goes 20px → 0 plus whatever
 leftover `placement_strategy top` parks there. The seam between vertically stacked panes barely
-moves — **40px → 45px** — because both halves of that seam were already padding. **No text row is
-lost anywhere**, which is the cost the operator rejected twice ("Having a permanent row for a no
-CLS show/hide row is not the answer"). The reserved band is not new dead space: it is the dead
-space the panes already had, gathered into one contiguous cell at the top so the bar can fill it.
+moves — **40px → 45px** — because both halves of that seam were already padding. The reserved band
+is not new dead space: it is the dead space the panes already had, gathered into one contiguous
+cell at the top so the bar can fill it.
+
+🚨 **"No text row is lost anywhere" is what I wrote first, and it is an overclaim — corrected the
+same day by sweeping the OS-window height instead of measuring one of them.** There are two
+claims here and only the first is universal.
+
+**(1) The toggle never shifts — universal.** ON rows == OFF rows at every height swept, in every
+layout tried: 7/7 heights at 2 panes (700–940px), 8/8 at 4 stacked panes (700–1120px), and the
+single-pane case. This is arithmetic rather than luck — freeing exactly one cell makes
+`floor((A+c)/c) == floor(A/c)+1` whatever the leftover is.
+
+**(2) The resting config costs a row at SOME heights — not universal.** Total vertical padding
+rises 20pt → 22.5pt, because the reservoir alone must be a whole cell and 22.5 > 20. Where a
+window's sub-cell leftover is under that 2.5pt (5px of a 45px cell, so ≈11% of heights), the pane
+shows one row fewer than it does today — **in both states**, so it is a property of the resting
+config and not of the toggle. Measured: at 2 panes, 1 of 7 sampled heights (900px: 39 → 38); the
+band is narrow and real — 895/900/905 all lose it, 880 and 940 do not, stable across re-reads. In
+a stacked layout the panes share a leftover, so they lose together: at 900px all four went
+19,9,4,4 → 18,8,3,3.
+
+**22.5pt is the FLOOR**, so that 2.5pt is irreducible: any smaller reservoir is less than one cell
+and the pairing stops being exact. This is the residual cost of the feature, and it is much
+smaller than the permanent row the operator rejected — but it is not zero, and the first draft of
+this section said it was.
 
 ### J5 · A rejected corner, and why bottom placement is worse here
 
@@ -1098,3 +1120,45 @@ background shell it lands on another macOS Space, which `screencapture -D` canno
 environment, so the probe inherited `KITTY_PID` from the launching shell and handed that stale
 value to its own children. **`KITTY_PID` is inherited, not set by kitty for `launch
 --type=background` children**, so it cannot be used to key per-instance state.
+
+### J7 · Three assertions in one file that encoded a SPELLING where they meant a PROPERTY
+
+The land gate caught this, not me: `not ok 6 cmd+shift+b is the ONE bar`. `kitty-conf-bindings.bats`
+demanded the chord **literally end in `toggle_window_title_bars`**, and its own comment states the
+property it meant — *"without this the drag gesture does not exist at all"*, i.e. **the chord must
+reach real, hit-tested bars**. The built-in was the only way to do that when it was written, so one
+INSTANCE of the invariant got encoded as the whole rule; there is now a second way (a config half
+that raises `min_windows`), which produces the same real bars *and* survives a no-op drag. **Keyed
+on the spelling, the suite forbade the fix for the very defect it exists to protect against** — and
+§ I11 records this same file doing it once before, which makes this the third instance.
+
+Two more surfaced in the same sitting, and the second is the instructive one:
+
+- **The sibling MUTANT CONTROL went vacuous.** It deletes the `map cmd+shift+b` line and asserts the
+  chord no longer matches `toggle_window_title_bars$`. From the moment ⌘⇧B stopped using that
+  spelling the **un-mutated** file stopped matching it too, so the control passed whether or not its
+  mutation bit — the exact failure its own header describes having been fixed for once already. It
+  now probes the un-mutated config FIRST and fails loudly with `CONTROL VACUOUS` if that does not
+  match, so the control cannot silently stop measuring again.
+- **`cmd_opt_b_last=launch`** required the glance chord to be a BARE launch. Making ⌘⌥B a `combine`
+  (below) failed a test that only ever asked that the overlay survive. Re-keyed onto the END of the
+  chord.
+
+All three are re-keyed onto the property and each is covered by a mutant that reddens it: chord
+ending at the overlay → #6; ON half flattened to `min_windows 0` → #6; overlay not cleared first →
+#6; glance not ending in the overlay → #23; glance not clearing the real bars → zero-shift #9.
+
+### J8 · Making the bars persist WIDENED the double-title trap, so the guard had to be symmetric
+
+§ I11 solved the double title in one direction: ⌘⇧B clears the overlay before raising the real
+bars. The other direction was safe only **by accident** — the real bars used to be transient,
+because kitty hid them after any drag. They now persist until ⌘⇧B is pressed again, which is the
+whole point of (b), and that converts the reverse order into a standing trap: press ⌘⌥B while
+titles are up and the overlay paints a second label directly under kitty's own — the photograph
+the operator sent on 2026-09-15, *"the title above drags but not the title below. why do we have
+double title"*.
+
+So ⌘⌥B now clears the real bars first, mirroring ⌘⇧B. `off` is a no-op when they are already down,
+so it stays a plain toggle for anyone who never presses the other chord. **The general shape: a fix
+that makes a transient state PERSISTENT inherits every latent interaction that state had, and the
+ones that were safe only because the state was short-lived are exactly the ones nobody wrote down.**
