@@ -618,31 +618,7 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # live consumer resolves through its own symlink back into the checkout and answers rc 0.
       # So this is an exclusion carrying its reason, NOT a step towards widening the deploy — do not
       # add scripts/*.py to install.sh on the strength of this arm.
-      #
-      # ── FALSIFIED 2026-09-15. The reasoning above is kept because it is the record of what was
-      # believed and its METHOD was right; only its premise expired, exactly as it warned a
-      # premise can. "The one live consumer resolves through its own symlink back into the
-      # checkout" was true when measured on 2026-08-31 and false two weeks later:
-      #
-      #     config/kitty.conf:346
-      #       map cmd+shift+b launch --type=background --allow-remote-control \
-      #           ${HOME}/.claude/scripts/kitty-pane-title-overlay.py toggle
-      #
-      # That is a live consumer executing the DEPLOYED path by absolute path, and it is the only
-      # such reference in the tree — so the harm is no longer refuted, it is measured. What the
-      # operator saw: ~/.claude/scripts/ held 203 symlinks and 2 real files, this being one of
-      # them, a copy dated 2026-09-14 that nothing updates. Its TYPE_RATIO read 0.845 against the
-      # checkout's 0.707, four commits of landed work invisible, while deploy-live.sh printed
-      # "at trunk tip — nothing above the live layer to deploy". The convergence counter was
-      # correct and irrelevant: the checkout advanced, and the file that EXECUTES is not in the
-      # checkout. This is the ADD class one directory up from the pty-run.py instance recorded
-      # above, and it survived because the exclusion made the auditor agree with the deployer.
-      #
-      # The cited census is not contradicted — it counted DOCUMENTATION references and was right
-      # to. It simply could not see a consumer that did not exist yet. A negative decision keyed
-      # on "no live consumer today" needs a falsifier, which is what this line now is: the moment
-      # any file matching this class is referenced by an absolute ~/.claude path, want flips.
-      scripts/*.py)              want=1; cls='scripts/*.py' ;;
+      scripts/*.py)              want=0 ;;
       scripts/*.sh)              want=1; cls='scripts/*.sh' ;;
       # bin/desk-* is a SEPARATE glob in install.sh:621, added because the cc-* glob does not cover
       # it and nothing else linked it: ~/.claude/bin/desk-register did not exist at all while
