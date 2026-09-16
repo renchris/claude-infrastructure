@@ -1,0 +1,551 @@
+diff --git a/docs/changelog.rst b/docs/changelog.rst
+index bd70e43..7325f7d 100644
+--- a/docs/changelog.rst
++++ b/docs/changelog.rst
+@@ -202,6 +202,10 @@ Detailed list of changes
+ 0.49.0 [future]
+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
++- A new action :ac:`mouse_drag_window` to start dragging the window under the mouse from anywhere
++  in it, or from a specified number of rows at its top, so that programs that draw their own
++  headers can make them draggable
++
+ - Support for :doc:`/custom-shaders` for adding various graphical effects (:iss:`10344`)
+ 
+ - Various throughput performance improvements for a 15-35% real world improvement depending on workload
+diff --git a/kitty/fast_data_types.pyi b/kitty/fast_data_types.pyi
+index 7788531..760bd3b 100644
+--- a/kitty/fast_data_types.pyi
++++ b/kitty/fast_data_types.pyi
+@@ -1605,6 +1605,16 @@ class MousePosition(TypedDict):
+ 
+ def get_mouse_data_for_window(os_window_id: int, tab_id: int, window_id: int) -> Optional[MousePosition]: ...
+ 
++class MousePressData(TypedDict):
++    cell_x: int
++    cell_y: int
++    left_press_x: float
++    left_press_y: float
++    drag_in_progress: bool
++
++def get_mouse_press_data_for_window(window_id: int) -> Optional[MousePressData]: ...
++def clear_click_queue_for_window(window_id: int, button: int) -> None: ...
++
+ class StreamingBase64Decoder:
+     # reset the state to empty to start decoding a new stream
+     def reset(self) -> None: ...
+diff --git a/kitty/options/utils.py b/kitty/options/utils.py
+index da7c5ae..de0ab56 100644
+--- a/kitty/options/utils.py
++++ b/kitty/options/utils.py
+@@ -508,6 +508,22 @@ def mouse_selection(func: str, rest: str) -> FuncArgsType:
+     return func, [cmap[rest]]
+ 
+ 
++@func_with_args('mouse_drag_window')
++def mouse_drag_window(func: str, rest: str) -> FuncArgsType:
++    rows = 0
++    rest = rest.strip()
++    if rest:
++        try:
++            rows = int(rest)
++        except Exception:
++            log_error(f'Invalid number of rows for mouse_drag_window: {rest}')
++        else:
++            if rows < 0:
++                log_error(f'The number of rows for mouse_drag_window must be non-negative, not: {rows}')
++                rows = 0
++    return func, [rows]
++
++
+ @func_with_args('load_config_file')
+ def load_config_file(func: str, rest: str) -> FuncArgsType:
+     return func, list(shlex_split(rest))
+diff --git a/kitty/state.c b/kitty/state.c
+index eb85a16..d47b5ec 100644
+--- a/kitty/state.c
++++ b/kitty/state.c
+@@ -1979,6 +1979,47 @@ get_mouse_data_for_window(PyObject *self UNUSED, PyObject *args) {
+     Py_RETURN_NONE;
+ }
+ 
++static PyObject *
++get_mouse_press_data_for_window(PyObject *self UNUSED, PyObject *args) {
++    // The data needed to start a drag of the specified window: the cell the
++    // mouse is over, the position, in OS Window pixels, of the last left button
++    // press in the OS Window containing it, and whether some other mouse drag
++    // is already in progress. The OS Window is resolved from the window, never
++    // from the OS Window the current callback is for, since actions are not
++    // always dispatched from within a callback.
++    id_type window_id;
++    PA("K", &window_id);
++    Window *window = window_for_window_id(window_id);
++    OSWindow *osw = os_window_for_kitty_window(window_id);
++    if (!window || !osw) Py_RETURN_NONE;
++    const bool drag_in_progress = global_state.active_drag_in_window || global_state.tracked_drag_in_window;
++    return Py_BuildValue(
++        "{sI sI sd sd sO}",
++        "cell_x",
++        window->mouse_pos.cell_x,
++        "cell_y",
++        window->mouse_pos.cell_y,
++        "left_press_x",
++        osw->mouse_left_press_x,
++        "left_press_y",
++        osw->mouse_left_press_y,
++        "drag_in_progress",
++        drag_in_progress ? Py_True : Py_False);
++}
++
++static PyObject *
++clear_click_queue_for_window(PyObject *self UNUSED, PyObject *args) {
++    // Forget the presses recorded for the specified button in the specified
++    // window, so that a press whose release is consumed elsewhere does not make
++    // the next press count as a multi-click.
++    id_type window_id;
++    int button;
++    PA("Ki", &window_id, &button);
++    Window *window = window_for_window_id(window_id);
++    if (window && 0 <= button && button < (ssize_t)arraysz(window->click_queues)) window->click_queues[button].length = 0;
++    Py_RETURN_NONE;
++}
++
+ #define tbd global_state.tab_being_dragged
+ static PyObject *
+ set_tab_being_dragged(PyObject *self UNUSED, PyObject *args) {
+@@ -2035,6 +2076,8 @@ request_callback_with_thumbnail(PyObject *self UNUSED, PyObject *args) {
+ static PyMethodDef module_methods[] = {
+     M(os_window_focus_counters, METH_NOARGS),
+     M(get_mouse_data_for_window, METH_VARARGS),
++    M(get_mouse_press_data_for_window, METH_VARARGS),
++    M(clear_click_queue_for_window, METH_VARARGS),
+     M(request_callback_with_thumbnail, METH_VARARGS),
+     M(set_tab_being_dragged, METH_VARARGS),
+     M(get_tab_being_dragged, METH_NOARGS),
+diff --git a/kitty/tabs.py b/kitty/tabs.py
+index 5b58b96..5371808 100644
+--- a/kitty/tabs.py
++++ b/kitty/tabs.py
+@@ -2199,47 +2199,55 @@ def on_window_drop(self, x: int, y: int, window_id: int) -> None:
+         # run before the on_drop data transfer completes, clearing window_drag_over_me
+         # and hiding the tab bar for the single-tab case before we get here.
+         self.set_drag_over_me(True)
+-        self._clear_force_show_title_bars()
+         w = boss.window_id_map.get(window_id)
+         if w is None:
++            self._clear_force_show_title_bars()
+             return
+         set_window_being_dragged()
+         self.mark_tab_bar_dirty()
+-        central, tab_bar = viewport_for_window(self.os_window_id)[:2]
++        # The title bars forced visible for the drag must stay visible until the drop
++        # has been classified. Hiding them relayouts every window, which changes both
++        # the geometry the pointer is tested against and whether any window has a title
++        # bar under it, so clearing first classifies the drop against a layout that was
++        # never on screen and contradicts the preview the user was shown.
++        try:
++            central, tab_bar = viewport_for_window(self.os_window_id)[:2]
+ 
+-        # Case 1: Drop on tab bar → move to that tab
+-        in_tab_bar = tab_bar.left <= x < tab_bar.right and tab_bar.top <= y < tab_bar.bottom
+-        if in_tab_bar:
+-            if (tab_id := self.tab_bar.tab_id_at(x, y)) and (dest_tab := self.tab_for_id(tab_id)):
+-                boss._move_window_to(w, target_tab_id=dest_tab.id)
+-            else:
+-                boss._move_window_to(w, target_tab_id='new')
+-            return
++            # Case 1: Drop on tab bar → move to that tab
++            in_tab_bar = tab_bar.left <= x < tab_bar.right and tab_bar.top <= y < tab_bar.bottom
++            if in_tab_bar:
++                if (tab_id := self.tab_bar.tab_id_at(x, y)) and (dest_tab := self.tab_for_id(tab_id)):
++                    boss._move_window_to(w, target_tab_id=dest_tab.id)
++                else:
++                    boss._move_window_to(w, target_tab_id='new')
++                return
+ 
+-        # Case 2: Drop in central area
+-        in_central = central.left <= x < central.right and central.top <= y < central.bottom
+-        if not in_central:
+-            return
++            # Case 2: Drop in central area
++            in_central = central.left <= x < central.right and central.top <= y < central.bottom
++            if not in_central:
++                return
+ 
+-        if (active_tab := self.active_tab) is None:
+-            return
++            if (active_tab := self.active_tab) is None:
++                return
+ 
+-        dest_window = self._find_window_at(x, y)
+-        if dest_window is None or dest_window.id == window_id:
+-            # Dropped on empty space or self; if different tab, move there
+-            if active_tab is not w.tabref():
+-                boss._move_window_to(w, target_tab_id=active_tab.id)
+-            return
++            dest_window = self._find_window_at(x, y)
++            if dest_window is None or dest_window.id == window_id:
++                # Dropped on empty space or self; if different tab, move there
++                if active_tab is not w.tabref():
++                    boss._move_window_to(w, target_tab_id=active_tab.id)
++                return
+ 
+-        if self._pointer_in_title_bar_of(dest_window, y):
+-            if (src_tab := w.tabref()) is dest_window.tabref() and src_tab is not None:
+-                # Same tab: swap positions
+-                src_tab.swap_windows(w, dest_window)
++            if self._pointer_in_title_bar_of(dest_window, y):
++                if (src_tab := w.tabref()) is dest_window.tabref() and src_tab is not None:
++                    # Same tab: swap positions
++                    src_tab.swap_windows(w, dest_window)
++                else:
++                    # Cross-tab title bar drop: move to the destination tab
++                    boss._move_window_to(w, target_tab_id=active_tab.id)
+             else:
+-                # Cross-tab title bar drop: move to the destination tab
+-                boss._move_window_to(w, target_tab_id=active_tab.id)
+-        else:
+-            boss._insert_window_in_direction(w, dest_window, self._drop_direction_for(dest_window, x, y))
++                boss._insert_window_in_direction(w, dest_window, self._drop_direction_for(dest_window, x, y))
++        finally:
++            self._clear_force_show_title_bars()
+ 
+     def update_progress(self) -> None:
+         self.num_of_windows_with_progress = 0
+diff --git a/kitty/window.py b/kitty/window.py
+index 16121aa..71db2d4 100644
+--- a/kitty/window.py
++++ b/kitty/window.py
+@@ -46,6 +46,7 @@
+     ESC_OSC,
+     GLFW_DRAG_OPERATION_COPY,
+     GLFW_MOD_CONTROL,
++    GLFW_MOUSE_BUTTON_LEFT,
+     GLFW_PRESS,
+     GLFW_RELEASE,
+     GLFW_REPEAT,
+@@ -64,6 +65,7 @@
+     base64_encode,
+     buffer_keys_in_window,
+     cell_size_for_window,
++    clear_click_queue_for_window,
+     click_mouse_cmd_output,
+     click_mouse_url,
+     current_focused_os_window_id,
+@@ -72,6 +74,7 @@
+     get_boss,
+     get_click_interval,
+     get_mouse_data_for_window,
++    get_mouse_press_data_for_window,
+     get_options,
+     get_window_logo_settings_if_not_default,
+     glfw_get_keyboard_repeat_interval,
+@@ -87,6 +90,7 @@
+     remove_timer,
+     replace_c0_codes_except_nl_space_tab,
+     set_redirect_keys_to_overlay,
++    set_window_being_dragged,
+     set_window_logo,
+     set_window_padding,
+     set_window_render_data,
+@@ -2054,6 +2058,64 @@ def mouse_click_url_or_select(self) -> None:
+     def mouse_selection(self, code: int) -> None:
+         mouse_selection(self.os_window_id, self.tab_id, self.id, code, self.current_mouse_event_button)
+ 
++    @ac(
++        'mouse',
++        """
++        Begin dragging the window under the mouse
++
++        Starts the same drag that pressing in a window title bar starts, so that the window can be
++        re-ordered within its layout, moved to another tab or OS Window, or detached into a new OS
++        Window, by dropping it. The drag begins only after the mouse has moved farther than
++        :opt:`drag_threshold`; setting that option to zero disables this action as well. While the
++        drag is in progress kitty temporarily shows window title bars so that other windows can be
++        used as drop targets, hiding them again when the drop completes.
++
++        Unlike :ac:`toggle_window_title_bars` this does not require window title bars to be
++        visible, so it can be used to drag a window whose title bar is hidden::
++
++            mouse_map cmd+left press grabbed,ungrabbed mouse_drag_window
++
++        Optionally takes the number of rows, counted from the top of the window, within which the
++        press must occur. Presses below that region are passed on to the program running in the
++        window instead. This is intended for programs that draw their own header at the top of the
++        window, for instance with the :doc:`graphics protocol </graphics-protocol>`, which kitty
++        has no way of knowing about::
++
++            mouse_map cmd+left press grabbed,ungrabbed mouse_drag_window 2
++
++        Note that the rows are counted from the top of the window's text area, so when a window
++        title bar is visible, row one is the first row below it.
++
++        Map this to the press of the left mouse button. Mapping it to a different button will leave
++        the drag armed after the button is released. For the same reason, do not use this action as
++        anything other than the first action of a :ac:`combine`, since the rest of a combine runs
++        after the mouse event that triggered it has been fully processed.
++
++        For examples, see :ref:`conf-kitty-mouse.mousemap`
++        """,
++    )
++    def mouse_drag_window(self, rows: int = 0) -> bool | None:
++        # Returning True means the press was not consumed and is passed on.
++        if self.current_mouse_event_button != GLFW_MOUSE_BUTTON_LEFT:
++            return True
++        threshold = get_options().drag_threshold
++        if not threshold:  # dragging is disabled
++            return True
++        data = get_mouse_press_data_for_window(self.id)
++        if data is None or data['drag_in_progress']:
++            return True
++        if rows > 0 and data['cell_y'] >= rows:
++            return True
++        get_boss().set_active_window(self, switch_os_window_if_needed=True)
++        # The drag is armed but not started, the motion handler starts it once
++        # the pointer has moved farther than drag_threshold from this position.
++        set_window_being_dragged(self.id, False, data['left_press_x'], data['left_press_y'])
++        # The release is consumed by the drag handler, so the presses recorded
++        # for this button must be forgotten, otherwise the next press counts as
++        # a double click. Same hazard and cure as in handle_potential_drag().
++        clear_click_queue_for_window(self.id, GLFW_MOUSE_BUTTON_LEFT)
++        return None
++
+     @ac('mouse', 'Paste the current primary selection')
+     def paste_selection(self) -> None:
+         txt = get_boss().current_primary_selection()
+diff --git a/kitty_tests/window_drag.py b/kitty_tests/window_drag.py
+new file mode 100644
+index 0000000..74e2c62
+--- /dev/null
++++ b/kitty_tests/window_drag.py
+@@ -0,0 +1,230 @@
++#!/usr/bin/env python
++# License: GPL v3 Copyright: 2026, kitty contributors
++
++import os
++from collections.abc import Iterator
++from contextlib import contextmanager
++from functools import partial
++from types import SimpleNamespace
++from unittest.mock import Mock, patch
++
++from kitty.actions import get_all_actions
++from kitty.boss import Boss
++from kitty.conf.utils import KeyAction
++from kitty.config import load_config
++from kitty.fast_data_types import (
++    GLFW_MOUSE_BUTTON_LEFT,
++    GLFW_MOUSE_BUTTON_RIGHT,
++    clear_click_queue_for_window,
++    dnd_test_cleanup_fake_window,
++    dnd_test_create_fake_window,
++    dnd_test_set_mouse_pos,
++    get_mouse_press_data_for_window,
++    get_window_being_dragged,
++    set_window_being_dragged,
++)
++from kitty.tabs import TabManager
++from kitty.window import Window
++
++from .base import BaseTest
++
++ACTION = 'mouse_drag_window'
++
++
++@contextmanager
++def fake_window() -> Iterator[tuple[int, int]]:
++    """A window that exists on the C side, so that the real mouse position and drag state can be used.
++
++    The drag state is process global, so it must be cleared however the test ends."""
++    os_window_id, window_id = dnd_test_create_fake_window()
++    try:
++        yield os_window_id, window_id
++    finally:
++        set_window_being_dragged()
++        dnd_test_cleanup_fake_window(os_window_id)
++
++
++class DragWindow:
++    "The parts of Window that mouse_drag_window touches. Deliberately not a Mock: see test_unimplemented_action_is_not_consumed()"
++
++    mouse_drag_window = Window.mouse_drag_window
++
++    def __init__(self, window_id: int, button: int = GLFW_MOUSE_BUTTON_LEFT) -> None:
++        self.id = window_id
++        self.current_mouse_event_button = button
++        self.tab = SimpleNamespace()
++
++    def tabref(self) -> SimpleNamespace:
++        # dispatch_action() gives up before reaching the window if the tab is None
++        return self.tab
++
++
++class DragBoss(Boss):
++    window_for_dispatch: 'DragWindow | None'
++
++    @property
++    def active_window(self) -> 'DragWindow | None':
++        return self.window_for_dispatch
++
++    @property
++    def active_tab(self) -> None:
++        return None
++
++    def set_active_window(self, window: object, switch_os_window_if_needed: bool = False, **kw: object) -> None:
++        self.activated.append((window, switch_os_window_if_needed))
++
++
++def make_boss() -> DragBoss:
++    boss = DragBoss.__new__(DragBoss)
++    boss.args = SimpleNamespace(debug_keyboard=False)
++    boss.window_for_dispatch = None
++    boss.activated = []
++    return boss
++
++
++def press_data(cell_x: int = 0, cell_y: int = 0, x: float = 0.0, y: float = 0.0, drag_in_progress: bool = False) -> dict[str, object]:
++    return {'cell_x': cell_x, 'cell_y': cell_y, 'left_press_x': x, 'left_press_y': y, 'drag_in_progress': drag_in_progress}
++
++
++class TestWindowDrag(BaseTest):
++    def setUp(self) -> None:
++        super().setUp()
++        self.set_options({'drag_threshold': 5})
++
++    def tearDown(self) -> None:
++        set_window_being_dragged()
++        super().tearDown()
++
++    def dispatch(self, boss: DragBoss, w: DragWindow, defn: str = ACTION) -> bool:
++        with patch('kitty.window.get_boss', return_value=boss):
++            return boss.combine(defn, window_for_dispatch=w, dispatch_type='MouseEvent', raise_error=True)
++
++    # T1
++    def test_action_is_bindable_in_mouse_map(self) -> None:
++        errors: list[object] = []
++        opts = load_config(overrides=(f'mouse_map cmd+left press ungrabbed {ACTION} 2',), accumulate_bad_lines=errors)
++        self.ae(errors, [])
++        self.ae([d for d in opts.mousemap.values() if d.startswith(ACTION)], [f'{ACTION} 2'])
++        # The same resolution combine() performs, which is what the func_with_args parser exists for
++        self.ae(opts.alias_map.resolve_aliases(f'{ACTION} 2', 'mouse_map'), (KeyAction(ACTION, (2,)),))
++        self.ae(opts.alias_map.resolve_aliases(ACTION, 'mouse_map'), (KeyAction(ACTION, ()),))
++        # An unparseable argument must fall back to the default rather than raise
++        self.ae(opts.alias_map.resolve_aliases(f'{ACTION} nonsense', 'mouse_map'), (KeyAction(ACTION, (0,)),))
++        self.ae(opts.alias_map.resolve_aliases(f'{ACTION} -3', 'mouse_map'), (KeyAction(ACTION, (0,)),))
++        # and the action must be discoverable, which also proves the @ac() doc is well formed
++        self.assertIn(ACTION, {a.name for a in get_all_actions()['mouse']})
++
++    # T2
++    def test_action_arms_the_drag(self) -> None:
++        with fake_window() as (os_window_id, window_id):
++            boss, w = make_boss(), DragWindow(window_id)
++            with patch('kitty.window.get_mouse_press_data_for_window', return_value=press_data(x=12.5, y=34.5)):
++                self.assertTrue(self.dispatch(boss, w), 'the press must be consumed')
++            self.ae(get_window_being_dragged(), (window_id, False, 12.5, 34.5))
++            self.ae(boss.activated, [(w, True)])
++
++    def test_action_refuses_to_arm(self) -> None:
++        for name, data, button, opts in (
++            ('a non-left button', press_data(), GLFW_MOUSE_BUTTON_RIGHT, {}),
++            ('dragging disabled', press_data(), GLFW_MOUSE_BUTTON_LEFT, {'drag_threshold': 0}),
++            ('another drag in progress', press_data(drag_in_progress=True), GLFW_MOUSE_BUTTON_LEFT, {}),
++            ('no mouse data', None, GLFW_MOUSE_BUTTON_LEFT, {}),
++        ):
++            if opts:
++                self.set_options(opts)
++            with fake_window() as (os_window_id, window_id):
++                boss, w = make_boss(), DragWindow(window_id, button)
++                with patch('kitty.window.get_mouse_press_data_for_window', return_value=data):
++                    self.assertFalse(self.dispatch(boss, w), f'the press must pass through with {name}')
++                self.ae(get_window_being_dragged()[0], 0, f'the drag must not be armed with {name}')
++                self.ae(boss.activated, [], f'the window must not be focused with {name}')
++            if opts:
++                self.set_options({'drag_threshold': 5})
++
++    # T2-neg: the control that makes T2 mean anything
++    def test_unimplemented_action_is_not_consumed(self) -> None:
++        with fake_window() as (os_window_id, window_id):
++            boss, w = make_boss(), DragWindow(window_id)
++            self.assertFalse(self.dispatch(boss, w, 'definitely_not_an_action'))
++            self.ae(get_window_being_dragged()[0], 0)
++            self.ae(boss.activated, [])
++
++    # T3: the only test that does the distance arithmetic
++    def test_threshold_crossing_starts_the_drag(self) -> None:
++        threshold = self.set_options({'drag_threshold': 5}).drag_threshold
++        self.ae(threshold, 5)
++        for dx, dy, expected in ((3, 4, False), (4, 4, True)):  # 5.0 and 5.66 from the press point
++            with fake_window() as (os_window_id, window_id):
++                boss = SimpleNamespace(request_thumbnail=Mock(), start_window_drag=object())
++                tm = SimpleNamespace(os_window_id=os_window_id, recent_title_bar_mouse_events=Mock())
++                set_window_being_dragged(window_id, False, 100.0, 200.0)
++                with patch('kitty.tabs.get_boss', return_value=boss):
++                    TabManager.handle_window_title_bar_mouse(tm, window_id, 100.0 + dx, 200.0 + dy, -1, 0, 0)
++                self.ae(get_window_being_dragged(), (window_id, expected, 100.0, 200.0))
++                self.ae(boss.request_thumbnail.call_count, 1 if expected else 0, f'thumbnail at dx={dx} dy={dy}')
++
++    # T4
++    def test_drag_payload(self) -> None:
++        with fake_window() as (os_window_id, window_id):
++            w = SimpleNamespace(id=window_id, title='a window')
++            boss = SimpleNamespace(window_id_map={window_id: w}, all_tab_managers=())
++            tm = SimpleNamespace(os_window_id=os_window_id)
++            tm._clear_force_show_title_bars = partial(TabManager._clear_force_show_title_bars, tm)
++            set_window_being_dragged(window_id, True, 0.0, 0.0)
++            with (
++                patch('kitty.tabs.get_boss', return_value=boss),
++                patch('kitty.tabs.draw_single_line_of_text', return_value=(b'\0' * 16, 4)) as draw,
++                patch('kitty.tabs.start_drag_with_data') as sdwd,
++            ):
++                TabManager.start_window_drag(tm, b'\1' * 32, 4, 2)
++                self.ae(draw.call_count, 1)
++                self.ae(sdwd.call_count, 1)
++                os_window_arg, drag_data, thumbnails = sdwd.call_args.args
++                self.ae(os_window_arg, os_window_id)
++                self.ae(drag_data, {f'application/net.kovidgoyal.kitty-window-{os.getpid()}': str(window_id).encode()})
++                self.ae(thumbnails, ((b'\0' * 16 + b'\1' * 32, 4, 3),))
++                self.ae(get_window_being_dragged()[0], window_id, 'a successful drag must not clear the state')
++
++                # A failure to hand the drag to the OS must unwind the state
++                sdwd.side_effect = OSError('no drag for you')
++                set_window_being_dragged(window_id, True, 0.0, 0.0)
++                TabManager.start_window_drag(tm, b'\1' * 32, 4, 2)
++                self.ae(get_window_being_dragged()[0], 0)
++
++    # T5
++    def test_no_window(self) -> None:
++        boss, w = make_boss(), DragWindow(0xDEAD)
++        self.assertIsNone(get_mouse_press_data_for_window(w.id), 'the C side must not know this window')
++        self.assertFalse(self.dispatch(boss, w), 'the press must pass through when there is no window')
++        self.ae(get_window_being_dragged()[0], 0)
++        self.ae(boss.activated, [])
++        clear_click_queue_for_window(w.id, GLFW_MOUSE_BUTTON_LEFT)  # must not crash either
++
++        tm = SimpleNamespace(os_window_id=1)
++        tm._clear_force_show_title_bars = partial(TabManager._clear_force_show_title_bars, tm)
++        set_window_being_dragged(0xDEAD, True, 0.0, 0.0)
++        with (
++            patch('kitty.tabs.get_boss', return_value=SimpleNamespace(window_id_map={}, all_tab_managers=())),
++            patch('kitty.tabs.start_drag_with_data') as sdwd,
++        ):
++            TabManager.start_window_drag(tm, b'', 0, 0)
++        self.ae(sdwd.call_count, 0)
++        self.ae(get_window_being_dragged()[0], 0)
++
++    # T-pass: asserted separately, since an action that consumes when it should pass through is
++    # invisible to the arming test. Reads the real mouse position, so a wrong region unit shows up.
++    def test_region_restriction(self) -> None:
++        for cell_y, rows, consumed in ((0, 2, True), (1, 2, True), (2, 2, False), (5, 2, False), (5, 0, True)):
++            with fake_window() as (os_window_id, window_id):
++                dnd_test_set_mouse_pos(window_id, 3, cell_y, 30, 20 * cell_y)
++                data = get_mouse_press_data_for_window(window_id)
++                self.assertIsNotNone(data)
++                assert data is not None
++                self.ae(data['cell_y'], cell_y, 'the C side must report the cell the pointer is in')
++                self.ae((data['left_press_x'], data['left_press_y']), (0.0, 0.0))
++                self.assertFalse(data['drag_in_progress'])
++
++                boss, w = make_boss(), DragWindow(window_id)
++                defn = ACTION if not rows else f'{ACTION} {rows}'
++                self.ae(self.dispatch(boss, w, defn), consumed, f'cell_y={cell_y} rows={rows}')
++                self.ae(get_window_being_dragged()[0], window_id if consumed else 0)
