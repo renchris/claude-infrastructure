@@ -164,20 +164,62 @@ main()
 # graphics placement — PIXELS above the grid, absent from kitty's hit-test — so it can never be
 # either. Draggable ⇒ real bar. The chord therefore ENDS IN the built-in now, and must still
 # wipe the overlay first or the two stack, which is the photograph that started this.
+# RE-KEYED 2026-09-16, and the previous assertion is quoted rather than deleted for the same
+# reason the one above it was. It demanded the chord LITERALLY end in `toggle_window_title_bars`:
+#     grep -qE '^cmd_shift_b_last=.*toggle_window_title_bars$'
+#     grep -qE '^cmd_shift_b_last=combine :.*overlay\.py off.*: toggle_window_title_bars$'
+# Its own comment states the property it meant to protect — "without this the drag gesture does
+# not exist at all", i.e. THE CHORD MUST REACH REAL, HIT-TESTED BARS. The built-in action was
+# the only way to do that when it was written, so one INSTANCE of the invariant got encoded as
+# the whole rule. There is now a second way: loading a config half that sets
+# `window_title_bar_min_windows >= 1`, which produces the same real bars with no row change and
+# survives a no-op drag (the built-in's bars do not — kitty clears the per-tab force flag after
+# every drag). Keyed on the spelling, the suite forbade the fix for the very defect it exists to
+# protect against — the third time this file has met that shape.
 @test "cmd+shift+b is the ONE bar — overlay cleared, then the real draggable bars" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  # ENDS IN the built-in: without this the drag gesture does not exist at all.
-  echo "$output" | grep -qE '^cmd_shift_b_last=.*toggle_window_title_bars$' || {
+  local last; last="$(echo "$output" | grep -E '^cmd_shift_b_last=' | head -1)"
+  [ -n "$last" ] || { echo "⌘⇧B is not bound at all"; echo "$output"; false; }
+
+  # REACHES REAL BARS, by either sanctioned route. A painted overlay is not in kitty's hit-test
+  # and can never be dragged, so a chord that ends there has silently dropped the gesture.
+  local via_action=0 via_config=0
+  case "$last" in *toggle_window_title_bars) via_action=1 ;; esac
+  case "$last" in *kitty-pane-title-toggle.sh\ toggle) via_config=1 ;; esac
+  [ "$((via_action + via_config))" -eq 1 ] || {
     echo "⌘⇧B no longer reaches the real title bars — drag-to-reorder is GONE from the chord"
-    echo "the operator asked for it on"
-    echo "$output"; false; }
+    echo "the operator asked for it on. Expected the chord to END IN either the built-in"
+    echo "toggle_window_title_bars or scripts/kitty-pane-title-toggle.sh toggle. Got:"
+    echo "$last"; false; }
+
+  # The config route only produces bars if the half it loads actually raises min_windows. Without
+  # this the chord could point at a script whose ON half had been flattened, and the test would
+  # still pass while ⌘⇧B did nothing at all.
+  if [ "$via_config" -eq 1 ]; then
+    local on_half; on_half="$(dirname "$CONF")/kitty-title-on.conf"
+    [ -f "$on_half" ] || { echo "the ON half is missing: $on_half"; false; }
+    run bash -c 'grep -E "^[[:space:]]*window_title_bar_min_windows[[:space:]]+" "$1" | tail -1' _ "$on_half"
+    [ "$status" -eq 0 ] || false
+    local mw; mw="$(echo "$output" | awk '{print $2}')"
+    # Two separate assertions rather than `[ -n ] && [ -ge ] || {…}`: the dead-assertion ratchet
+    # names that shape [and-absorbed], and an unset $mw would make the -ge comparison itself an
+    # error rather than a verdict.
+    [ -n "$mw" ] || {
+      echo "the ON half sets no window_title_bar_min_windows at all, so ⌘⇧B shows no bars"
+      echo "$on_half"; false; }
+    [ "$mw" -ge 1 ] || {
+      echo "the ON half does not raise window_title_bar_min_windows, so ⌘⇧B shows no bars"
+      echo "got: $mw"; false; }
+  fi
+
   # …and CLEARS THE OVERLAY FIRST, so exactly one bar is on screen and it is the hit-tested one.
   # Order matters: after the toggle it would clear a strip the hold loop has already re-asserted.
-  echo "$output" | grep -qE '^cmd_shift_b_last=combine :.*kitty-pane-title-overlay\.py off.*: toggle_window_title_bars$' || {
+  # Asserted on the PREFIX that precedes the real-bar step, which is what "first" actually means.
+  echo "$last" | grep -qE '^cmd_shift_b_last=combine :.*kitty-pane-title-overlay\.py off' || {
     echo "⌘⇧B no longer clears the overlay before showing the real bars — the two stack, and"
     echo "the operator grabs the painted one, which can never drag"
-    echo "$output"; false; }
+    echo "$last"; false; }
   grep -q 'kitty-pane-title-overlay.py' "$CONF" || { echo "overlay script not referenced"; false; }
 }
 
@@ -499,7 +541,14 @@ PYEOF
   # The overlay did not go away when the chords swapped; it moved. It is the only thing on this
   # box that labels a pane WITHOUT a PTY resize, so losing it to the swap would trade the whole
   # reason it was built for a chord letter.
-  echo "$output" | grep -q 'cmd_opt_b_last=launch' || {
+  # RE-KEYED 2026-09-16 — the THIRD assertion in this file to encode a SPELLING where it meant a
+  # PROPERTY, and the second found in one sitting. It matched `cmd_opt_b_last=launch`, a prefix
+  # that silently required the chord to be a BARE launch; the chord became a `combine` (it now
+  # clears the real bars first, since those persist and would otherwise stack into the double
+  # title again), and the probe reports a combine's whole definition, so a chord that still ends
+  # in the overlay failed a test whose own comment asks only that the overlay survive. Keyed on
+  # the END of the chord, which is what "the glance still happens" actually means.
+  echo "$output" | grep -qE '^cmd_opt_b_last=.*kitty-pane-title-overlay\.py toggle$' || {
     echo "⌘⌥B is no longer the zero-shift overlay — the styled glance is gone"
     echo "$output"; false; }
   # and this chord must NOT reach the built-in: that is the row-stealing jitter the overlay
@@ -527,7 +576,23 @@ PYEOF
   }
   run probe "$MUT"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  if echo "$output" | grep -qE '^cmd_shift_b_last=.*toggle_window_title_bars$'; then
+  # RE-KEYED 2026-09-16 for the SECOND time, and for the same reason the header above records.
+  # It matched `toggle_window_title_bars$` — a spelling the chord stopped using the moment ⌘⇧B
+  # became the config swap, so from that commit the UNMUTATED file did not match it either and
+  # this control passed whether or not its mutation bit. A control that cannot fire on the
+  # un-mutated input is measuring nothing. Keyed now on the same two routes the guard accepts,
+  # and PROVEN to fire by asserting the un-mutated file DOES match before the mutant is judged.
+  reaches_real_bars() {  # $1 = a probe output
+    echo "$1" | grep -qE '^cmd_shift_b_last=.*(toggle_window_title_bars|kitty-pane-title-toggle\.sh toggle)$'
+  }
+  local mutated="$output"
+  run probe "$CONF"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  reaches_real_bars "$output" || {
+    echo "CONTROL VACUOUS — the UNMUTATED config does not match the pattern this control keys on,"
+    echo "so its verdict on the mutant carries no information. Re-key it."
+    echo "$output"; false; }
+  if reaches_real_bars "$mutated"; then
     echo "CONTROL FAILED — the binding survived its own deletion"
     false
   fi
