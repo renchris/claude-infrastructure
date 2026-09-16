@@ -1,0 +1,51 @@
+# drag.conf.example — the line the operator writes to ARM the window-drag chord.
+#
+# 🚨 THIS FILE'S NAME IS THE SAFETY PROPERTY, NOT A NAMING CONVENTION.
+# config/kitty.conf's last line is `globinclude drag-arm.d/*.conf`. This file is named
+# `drag.conf.example`, which does NOT match `*.conf` — so even if config/drag-arm.d/ were ever
+# symlinked into the live kitty config directory, or a sandbox pointed KITTY_CONFIG_DIRECTORY at
+# this repo's config/ directly, kitty could never include it. The tracked tree is inert by
+# CONSTRUCTION rather than by anyone remembering to keep it empty. Do not rename this file to
+# end in `.conf`, and do not add a sibling that does: tests/kitty-drag-arm.bats fails the land if
+# any `config/drag-arm.d/*.conf` becomes tracked, and that assertion is the whole proof that this
+# wave's landed diff arms nothing.
+#
+# WHERE THE REAL FILE LIVES — and why it is NOT this one.
+#   ~/.config/kitty/drag-arm.d/drag.conf      a REAL, UNTRACKED, initially EMPTY file,
+#                                             created by scripts/kitty-setup.sh
+# It is deliberately not a symlink back to this repo. If arming were an edit to a tracked file,
+# a later land or a deploy-live fast-forward could clobber the operator's armed state, and the
+# disarm rule below would be fighting git on every converge. A real untracked file is stable
+# across every land.
+#
+# MEASURED 2026-09-16, kitty 0.48.2: `globinclude` resolves relative to the path kitty is GIVEN,
+# not to the resolved symlink target. With ~/.config/kitty/kitty.conf symlinked into the shared
+# checkout, the drop-in kitty reads is ~/.config/kitty/drag-arm.d/*.conf — the live-side one.
+# (Controlled: loading the same config via its real checkout path read the checkout-side drop-in
+# instead, and emptying both fell back to kitty's built-in default.)
+#
+# TO ARM — one line, no restart, live in ~100ms via kitty's own __watch_conf__ child:
+#     cat >> ~/.config/kitty/drag-arm.d/drag.conf   # then paste the uncommented line below
+#
+# 🚨 TO DISARM — EMPTY THE FILE, NEVER DELETE IT:
+#     : > ~/.config/kitty/drag-arm.d/drag.conf
+# A DELETION DOES NOT FIRE THE WATCHER (plan § 2.2 M2, measured). Emptying does, and withdraws
+# the binding in ~3s with no restart, because the reload rebuilds opts.mousemap from a fresh
+# empty dict (§ 2.2).
+#
+# ── THE ARMING LINE — COMMENTED OUT, AND THE CHORD IS A PLACEHOLDER ─────────────────────────
+# 🚨 THE CHORD IS NOT CHOSEN YET. W4 is the hand-driven gate where the operator picks it, and it
+# has not been run. `<CHORD>` below is a placeholder, NOT a default — do not guess one, and do
+# not uncomment this line until W4 has ruled. Likewise `<ACTION>`: route A dispatches a kitten,
+# route B a built-in `mouse_drag_window`, and which one ships is W4's other output.
+#
+# The two fixed parts, which W4 does not change and which are argued in the plan:
+#   `press`, not `click` — promotion to a drag happens on MOTION, and a `click` is only
+#                          synthesised on RELEASE, by which time the drag is over.
+#   `grabbed,ungrabbed`  — Claude Code runs in essentially every pane and holds the mouse, so a
+#                          binding that omits `grabbed` is dead in exactly the panes that matter.
+#
+# mouse_map <CHORD> press grabbed,ungrabbed <ACTION>
+#
+# For reference, the shape the plan sketches (§ W7) — still commented, still a placeholder:
+# mouse_map cmd+shift+left press grabbed,ungrabbed <kitten under A · mouse_drag_window 2 under B>
