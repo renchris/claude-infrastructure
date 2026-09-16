@@ -54,6 +54,45 @@ export SLANGC="$HOME/slang/bin/slangc"          # setup.py honours this env var
 ( cd ~/kdev && make )        # needs 1,2,3,4
 ```
 
+## Running kitty's GATES, not just its build
+
+The build is not the whole story — `./autoformat`, `ruff check .` and `./test.py type-check` are
+kitty's own acceptance gates and none of their tooling was on this box either. All three are
+isolated installs that touch no system Python:
+
+```bash
+uv tool install ruff          # 0.16.8
+uv tool install ty            # 0.0.81 — the type checker is ty (Astral), NOT mypy
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+🚨 **And `./test.py type-check` will report 10 errors that are NOT yours.** They are
+`unresolved-import` for `sphinx`, `docutils` and `pygments` — documentation-build dependencies ty
+resolves out of `/opt/homebrew/lib/python3.14/site-packages`. Install them and the gate reads
+`All checks passed!` at rc 0:
+
+```bash
+pip3 install --break-system-packages sphinx docutils pygments
+```
+
+**Two failed controls are recorded here because each looked authoritative and neither was.** Asked
+whether that red was pre-existing or caused by a patch, the obvious move is to A/B against a
+pristine tree — and a detached `git worktree` of the same commit is the wrong instrument twice over:
+
+1. `./test.py` there exits **127, `bad interpreter: ./kitty/launcher/kitty`** — an unbuilt tree has
+   no launcher, so the harness cannot run at all. A diff of "10 errors vs 0 errors" then reads as
+   *the patch caused them*, which is an artifact of a dead instrument.
+2. Running `ty check .` directly in both trees does execute, and inverts the answer: the pristine
+   worktree reports **341** errors against the patched tree's **10**, because an unbuilt tree lacks
+   build-GENERATED sources (`kitty/cli_stub.py` and friends). The two trees differ in build state,
+   not only in the patch, so the comparison cannot isolate anything.
+
+⇒ **A control must differ from its subject in exactly one thing, and "same commit" does not mean
+"same tree" once a build generates sources.** What actually settled it was cheaper than either
+control: *none of the 10 diagnostics named any changed file*, and installing the three missing
+dependencies drove the count to zero. When an A/B is expensive or confounded, ask first whether the
+finding even points at your diff.
+
 ## Verifying which build you are running
 
 🚨 **`--version` cannot tell you** — master also reports `0.48.2`. Use:
