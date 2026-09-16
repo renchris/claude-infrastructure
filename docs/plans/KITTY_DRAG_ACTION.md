@@ -149,6 +149,30 @@ $ ps -axo pid=,command= | grep __watch_conf__
       /etc/xdg/kitty/kitty.conf /Users/chrisren/.config/kitty/kitty.conf
 ```
 
+🚨 **THE PID IN THIS SECTION IS STALE, AND THE WAY IT WENT STALE IS THE REUSABLE PART.**
+**CORRECTED 2026-09-16 (phase 3):** the box rebooted at 15:50 and `97084` no longer exists
+(`ps -p 97084` returns nothing). The operator's live kitty is now **pid 633**, socket
+`/tmp/kitty-633`. The original number is left above rather than overwritten, because the number was
+never the point — **an identity-keyed refusal reads as SATISFIED once its subject is gone.** Every
+brief in this phase carried "never signal pid 97084"; after the reboot each one named a process that
+did not exist, so the constraint was trivially true while the real terminal was unnamed and
+unprotected. A wave could have signalled pid 633 in full compliance with its own safety block.
+
+⇒ **Key the refusal on something IDENTITY-FREE.** `scripts/kitty-drag-w4.sh` refuses any socket
+matching the `/tmp/kitty-*` glob, which is how kitty names every live control socket, so it cannot
+go stale across a reboot, a restart, or a second instance. Prefer that shape to any pid, and read a
+pid in a safety rule as a *perishable fact* of exactly the kind § 8 item 9 and the ship-policy table
+warn about — correct when written, silently false later, and failing in the direction that looks
+fine.
+
+⚠️ *Collateral, recorded because it was self-inflicted:* phase 3 created `/private/tmp/kitty-dev` and
+`/private/tmp/kitty-482` as symlinks to the durable trees so this plan's literal paths keep
+resolving — and those names now match that same `/tmp/kitty-*` glob. They are **directories, not
+sockets**, so a correct consumer that tests for a socket is unaffected, and a glob-only consumer
+becomes *more* conservative, never less. Noted so the next reader is not surprised by two extra
+glob hits.
+
+
 `97084` is the operator's live kitty; `100` is the debounce in ms. The watcher resolves symlinks
 whole (`tools/watch/api.go:86-91`) so it watches **`~/Development/claude-infrastructure/config/`** —
 the directory `deploy-live.sh` fast-forwards on every converge — and `unix.Kill(kitty_pid, SIGUSR1)`
