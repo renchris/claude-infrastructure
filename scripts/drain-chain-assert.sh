@@ -223,10 +223,21 @@ BACKLOG_BIN="${CC_BACKLOG_BIN:-$REPO/bin/cc-backlog}"
 # `~/.claude`, so resolving only the caller's own dir makes the answer depend on WHO ASKED — the
 # detector would see the chain from the sweep and not from a session, or the reverse. Newest match
 # across all globs wins, so listing a directory that does not exist costs nothing.
+# 🚨 THE GLOB MUST SPAN THE LANE SPLIT. On 2026-09-04 the chain split into per-lane briefs named
+# `fire-drain-infra-recycle<N>.txt` / `fire-drain-reso-recycle<N>.txt`; the original
+# `fire-drain-recycle*.txt` cannot match either, so from that day this detector was blind to the
+# lane's own briefs and aged out against a pre-split file. It still returned DEAD on 2026-09-16 —
+# by accident, because BOTH the stale pre-split brief (11.7 d) and the true last fire (6.4 d)
+# exceeded the 24 h bound. Had the lane died within a day of a legacy brief being touched, the
+# verdict would have been ALIVE over a dead chain. `*recycle*` spans legacy, infra and reso, and
+# the `-*-` shape is not enumerated because a future lane name would be missed the same way.
+# Measured cost of the blindness: exactly one `local-drain-chain-dead` row has ever been filed
+# (2026-09-01) and none for the 2026-09-09 death, which a human found instead.
+# Record: docs/research/drain-pipeline-productivity-2026-09-16.md §4.
 BRIEF_GLOB="${CC_DRAIN_BRIEF_GLOB:-$(printf '%s\n%s\n%s' \
-  "${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/autonomy/fire-drain-recycle*.txt" \
-  "${HOME:-}/.claude/autonomy/fire-drain-recycle*.txt" \
-  "/tmp/fire-drain-recycle*.txt")}"
+  "${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/autonomy/fire-drain-*recycle*.txt" \
+  "${HOME:-}/.claude/autonomy/fire-drain-*recycle*.txt" \
+  "/tmp/fire-drain-*recycle*.txt")}"
 MAX_AGE="${CC_DRAIN_CHAIN_MAX_AGE_S:-86400}"
 PROGRESS_MAX_AGE="${CC_DRAIN_PROGRESS_MAX_AGE_S:-3600}"
 HANDOVER_GRACE="${CC_DRAIN_HANDOVER_GRACE_S:-900}"
