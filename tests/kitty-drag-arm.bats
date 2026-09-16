@@ -45,6 +45,13 @@
 # so every negative here is written `if grep -q X f; then … return 1; fi`.
 
 setup() {
+  # 🚨 FIXTURE $HOME FIRST. This suite exercises scripts/kitty-setup.sh's creation of
+  # ~/.config/kitty/drag-arm.d/ — the operator's LIVE kitty config directory, whose kitty.conf
+  # is a symlink into the shared checkout and whose every write is picked up ~100ms later by a
+  # live __watch_conf__ child. An unfixtured $HOME does not merely make the suite non-hermetic,
+  # it aims a config-writing test at the running terminal. REPO is derived from
+  # BATS_TEST_FILENAME, never from $HOME, so overriding it here is safe.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   CONF="$REPO/config/kitty.conf"
   ARMDIR="$REPO/config/drag-arm.d"
@@ -115,7 +122,7 @@ setup() {
   run git -C "$REPO" ls-files -- 'config/*.conf'
   echo "control (same pathspec shape, known-tracked dir): $output"
   [ "$status" -eq 0 ] || { echo "control query failed: $output"; return 1; }
-  [[ "$output" == *"config/kitty.conf"* ]]
+  [[ "$output" == *"config/kitty.conf"* ]] || false
 }
 
 @test "the example's arming line is COMMENTED OUT" {
