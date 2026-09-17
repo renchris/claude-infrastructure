@@ -332,7 +332,14 @@ enabled_layouts splits
 drag_threshold 5
 window_padding_width 6
 tab_bar_style powerline
-macos_quit_when_last_window_closed no
+# --teardown MUST actually end the process, not just close its windows. At \`no\` the
+# process lingers with no windows, so the next run takes launch_sandbox's REUSE branch --
+# which cannot inject KITTY_DRAG_LOG into an already-running process. That silently
+# produces a run whose \`PRESSES: NONE\` means "no log", not "no chord": measured
+# 2026-09-16, a 420s watch spent against a sandbox started five minutes before the press
+# log existed. Ending on last-window-close is the ONLY lever here that sends no signal,
+# so S4 holds.
+macos_quit_when_last_window_closed yes
 
 # ============ SPELLING (i) THRESHOLD-PRESERVING -- dead band KEPT ===========
 # kitty's own drag_threshold arithmetic (tabs.py:1855-1863) still decides when
@@ -414,7 +421,23 @@ teardown_windows() {
 
 launch_sandbox() {
     if sandbox_alive; then
-        say "  reusing the existing sandbox on ${SOCK} (re-run safe)"
+        # A reused process keeps the environment it was LAUNCHED with, and no remote-control
+        # command can add one (0.48.2's kitten has no @ quit either). If it predates the press
+        # log, every press goes unrecorded and the gate reports PRESSES: NONE -- which reads as
+        # a finding about the BINDING when it is really a finding about the INSTRUMENT. Refuse
+        # rather than produce that run. pid via lsof on our own socket: no pattern, no census.
+        _kdw4_pid="$(lsof -t "$SOCK" 2>/dev/null | head -1 || true)"
+        # NOT \`grep -q\`: it exits early on a MATCH, SIGPIPEs tr, and under this script's
+        # pipefail the pipeline then reports FAILURE on success -- refusing the healthy sandbox.
+        if [ -n "$_kdw4_pid" ] && ! ps -Eww -p "$_kdw4_pid" -o command= 2>/dev/null | tr ' ' '\n' | grep '^KITTY_DRAG_LOG=' >/dev/null; then
+            die "the live sandbox on ${SOCK} (pid ${_kdw4_pid}) was launched WITHOUT
+         KITTY_DRAG_LOG, so no press can be logged and PRESSES: NONE would be
+         meaningless. End it and let this script launch a fresh one:
+             kill -9 ${_kdw4_pid} && ${BASH_SOURCE[0]} --watch-secs 420
+         -9 is required, not belt-and-braces: a kitty holding no windows never
+         processes SIGTERM, so a plain kill leaves it alive and this refusal repeats."
+        fi
+        say "  reusing the existing sandbox on ${SOCK} (re-run safe, logging armed)"
         kit close-window --match all >/dev/null 2>&1 || true
         sleep 0.4
         kit launch --type=os-window --cwd="$RUN_ROOT" \
