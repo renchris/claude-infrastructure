@@ -61,6 +61,7 @@ import traceback
 
 _ORIGINAL_ATTR = "_kitty_title_band_original_set_geometry"
 import os as _os  # noqa: E402
+
 # Honour the same override the deploy script uses, so a sandbox run logs to its own
 # file instead of the shared store that records the live kitty's state.
 _LOG = _os.environ.get("KITTY_TITLE_BAND_LOG") or "/tmp/kitty-title-band-watcher.log"
@@ -227,6 +228,40 @@ def install() -> bool:
     module-global guard would then wrap the already-wrapped method a second time."""
     from kitty.window import Window
 
+    # 🚨 FENCED OFF 2026-09-16 AFTER THIS SHIM SEGFAULTED THE OPERATOR'S TERMINAL. It must now be
+    # asked for explicitly, per injection, via KITTY_TITLE_BAND_SHIM=1.
+    #
+    # WHAT HAPPENED: kitty 0.48.2 SIGSEGV'd at 20:13:49 (EXC_BAD_ACCESS at 0x20, main thread,
+    # Cocoa key dispatch -> Python -> fast_data_types) and took every pane in the only OS window
+    # with it. /tmp/kitty-title-band-watcher.log records `installed pid=597` -- this shim was in
+    # the process that died, and in the two earlier ones.
+    #
+    # WHY IT IS THIS SHIM AND NOT THE CHORD THAT PRESSED IT: `_patched_set_geometry` runs kitty's
+    # own set_geometry with the bar switched OFF -- so the content keeps its full rect -- and then
+    # hands the title bar a rect over ROW 1. Stock kitty never produces that: it reduces
+    # render_ynum and pushes render_top down by one cell BEFORE calling
+    # set_window_title_bar_render_data (window.py:1113-1135). And that call validates nothing --
+    # state.c:1006 takes the screen through a bare `O` format code, casts it to Screen* with no
+    # type check, and writes `screen->reload_all_gpu_data = true`. Any relayout re-enters this;
+    # `kitty @ load-config` is merely the commonest way to cause one.
+    #
+    # RULED OUT, by measurement, so the next reader does not re-hunt them: the deliberate
+    # negative-padding underflow is CONTAINED (`->padding.` is read by exactly four functions,
+    # mouse.c:251/256/261/266, and by NO render path); and init_window_render_data does
+    # `Py_NewRef(screen)` (state.c:973), so there is no use-after-free on the screen object.
+    #
+    # WHY A FENCE RATHER THAN DELETION: the approach is sound and the C patch
+    # (docs/patches/kitty-window-title-band.patch) is the real fix -- this file is the bridge until
+    # a rebuilt kitty exists. But an opt-OUT bridge is one a session can inject into the operator's
+    # live terminal without anyone deciding to, which is exactly how this happened three times in
+    # one afternoon. Opt-IN makes the injection a decision with a name on it.
+    if os.environ.get("KITTY_TITLE_BAND_SHIM") != "1":
+        _log(
+            "install refused: this shim segfaulted kitty 0.48.2 on 2026-09-16 (see the block at "
+            "install()); set KITTY_TITLE_BAND_SHIM=1 to inject it deliberately"
+        )
+        return False
+
     if _native_band_available():
         _log("native window_title_bar_overlay present; shim standing down")
         return False
@@ -240,7 +275,9 @@ def install() -> bool:
 
         if getattr(TabManager, _TABBAR_ATTR, None) is None:
             setattr(TabManager, _TABBAR_ATTR, TabManager.tab_bar_should_be_visible)
-            TabManager.tab_bar_should_be_visible = property(_patched_tab_bar_should_be_visible)
+            TabManager.tab_bar_should_be_visible = property(
+                _patched_tab_bar_should_be_visible
+            )
             setattr(TabManager, _DROPMOVE_ATTR, TabManager.on_window_drop_move)
             TabManager.on_window_drop_move = _patched_on_window_drop_move
     except Exception:
