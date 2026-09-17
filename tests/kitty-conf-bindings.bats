@@ -128,7 +128,13 @@ glance_key() {  # $1 = probe output
 # STRONGER safety property — and the armed assertion is kept verbatim in the other arm, coming
 # back the moment the prefixes come off. The polarity follows the config, so re-arming needs no
 # test edit and CANNOT be done silently.
-band_disarmed() { grep -q '^# DISARMED-map cmd+' "$CONF"; }
+# PER CHORD, not per band. The disarm is NOT all-or-nothing: 5252bd28b re-armed ⌘⇧B (it only
+# ever turns real bars OFF and toggles the overlay) while deliberately leaving ⌘⌥B down, because
+# ⌘⌥B is the one that sets window_title_bar_min_windows 1 — the only state in which a bar is
+# visible and therefore the only state in which the shim's faulting branch can run. A gate that
+# read "any chord disarmed ⇒ both must be unbound" reddened trunk on that legitimate state.
+chord_disarmed() { grep -q "^# DISARMED-map cmd+$1+b" "$CONF"; }
+band_disarmed()  { grep -q '^# DISARMED-map cmd+' "$CONF"; }
 
 @test "the chord ASSIGNMENT is the operator's, and this is the ONE place it is pinned" {
   # Chosen 2026-09-16: "Please fix the font to what we had then." The styled overlay is the only
@@ -138,21 +144,22 @@ band_disarmed() { grep -q '^# DISARMED-map cmd+' "$CONF"; }
   # the other. If the operator asks to trade them again, THIS assertion is the only one to edit.
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  if band_disarmed; then
-    # DISARMED: neither chord may be bound AT ALL. Stricter than the armed assertion below,
-    # and it is the property that makes the fault unreachable from the keyboard.
+  # Each chord is judged on its OWN disarm state, so every one of the four combinations is
+  # expressible: both armed, both down, or either one down alone.
+  if chord_disarmed shift; then
     echo "$output" | grep -qE '^cmd_shift_b_n=0$' || {
-      echo "⌘⇧B is STILL BOUND while the band is disarmed — the crash is reachable again"
-      echo "$output"; false; }
-    echo "$output" | grep -qE '^cmd_opt_b_n=0$' || {
-      echo "⌘⌥B is STILL BOUND while the band is disarmed — the crash is reachable again"
-      echo "$output"; false; }
-    return 0
+      echo "⌘⇧B is STILL BOUND while it is marked disarmed"; echo "$output"; false; }
+  else
+    [ "$(glance_key "$output")" = cmd_shift_b_last ] || {
+      echo "⌘⇧B is not the styled glance — the operator asked for our font on this chord"; echo "$output"; false; }
   fi
-  [ "$(glance_key "$output")" = cmd_shift_b_last ] || {
-    echo "⌘⇧B is not the styled glance — the operator asked for our font on this chord"; echo "$output"; false; }
-  [ "$(real_bar_key "$output")" = cmd_opt_b_last ] || {
-    echo "⌘⌥B is not the real draggable bar"; echo "$output"; false; }
+  if chord_disarmed opt; then
+    echo "$output" | grep -qE '^cmd_opt_b_n=0$' || {
+      echo "⌘⌥B is STILL BOUND while it is marked disarmed"; echo "$output"; false; }
+  else
+    [ "$(real_bar_key "$output")" = cmd_opt_b_last ] || {
+      echo "⌘⌥B is not the real draggable bar"; echo "$output"; false; }
+  fi
 }
 
 @test "cmd+d splits vertically (pane to the RIGHT, iTerm2 Split Vertically)" {
@@ -244,11 +251,12 @@ band_disarmed() { grep -q '^# DISARMED-map cmd+' "$CONF"; }
 @test "cmd+shift+b is the ONE bar — overlay cleared, then the real draggable bars" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  if band_disarmed; then
-    # INVERTED while disarmed: reaching the real bars is exactly what must NOT happen. The
-    # armed assertion below is the record of what this guard demands once the fault is fixed.
+  if chord_disarmed opt; then
+    # ⌘⌥B is the real-bar chord and it is down, so NOTHING may reach the real bars — that is the
+    # whole point of leaving this one disarmed while ⌘⇧B is back. The armed assertion below is
+    # the record of what this guard demands once the band ships as the patch, not the shim.
     [ -z "$(real_bar_key "$output")" ] || {
-      echo "a chord STILL reaches the real title bars while the band is disarmed"
+      echo "a chord STILL reaches the real title bars while ⌘⌥B is disarmed"
       echo "$output"; false; }
     return 0
   fi
@@ -623,11 +631,10 @@ PYEOF
   # title again), and the probe reports a combine's whole definition, so a chord that still ends
   # in the overlay failed a test whose own comment asks only that the overlay survive. Keyed on
   # the END of the chord, which is what "the glance still happens" actually means.
-  if band_disarmed; then
-    # The glance chord is disarmed too: it ends in the overlay, but the same keypress dispatch
-    # is what faulted, and a half-disarm leaves a live path to it.
+  if chord_disarmed shift; then
+    # The glance chord itself is down; there is no glance to survive.
     [ -z "$(glance_key "$output")" ] || {
-      echo "the glance chord is STILL bound while the band is disarmed"
+      echo "the glance chord is STILL bound while ⌘⇧B is disarmed"
       echo "$output"; false; }
     return 0
   fi
