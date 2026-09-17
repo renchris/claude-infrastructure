@@ -24,8 +24,19 @@ frontier_access:
   active: true
 YAML
 
+  # 🚨 THE ZSHRC FIXTURE REPRODUCES THE PRODUCTION SHAPE, AND THAT IS LOAD-BEARING.
+  # Two launcher tracks live in ~/.zshrc and they read DIFFERENT knobs on purpose:
+  #   claude()      — the MODERN track, ${CLAUDE_EFFORT:-${CLAUDE_OPUS5_EFFORT:-<v>}}   → GATING
+  #   claude-prev() — the LEGACY stable track, ${CLAUDE_DEFAULT_EFFORT:-<v>}            → NON-gating NOTE
+  # Corroborated independently of the fix by two in-repo records that predate it:
+  # docs/plans/backlog-consolidation-2026-08-09/OUT-accounts.md:34 (".zshrc:451 claude() → :497
+  # ${CLAUDE_EFFORT:-${CLAUDE_OPUS5_EFFORT:-high}} … the disagreement is claude()-only") and
+  # docs/research/fable51-vs-opus5-routing-2026-09-16/A6-mechanics.md:194.
+  # The FIRST line is a COMMENT carrying the modern knob at a WRONG value (low). That is not
+  # decoration: it reproduces ~/.zshrc's header prose, and it is the live red-proof of the comment
+  # filter — drop the `grep -vE '^[[:space:]]*#'` and every case below reads `low` and goes red.
   export CC_EFFORT_ZSHRC="$BATS_TEST_TMPDIR/zshrc"
-  printf 'alias claude="claude --effort ${CLAUDE_DEFAULT_EFFORT:-max}"\n' > "$CC_EFFORT_ZSHRC"
+  write_zshrc max max   # $1 = modern claude() default, $2 = legacy claude-prev default
 
   export CC_EFFORT_PS="$BATS_TEST_TMPDIR/ps.txt"
   printf 'claude --effort max\nnode server.js\n' > "$CC_EFFORT_PS"   # no below-floor live session
@@ -35,6 +46,19 @@ YAML
   export CC_EFFORT_DIRS="$D/one $D/two $D/three $D/four $D/five"
 }
 
+# Build a two-track zshrc: $1 = claude()'s default (GATING), $2 = claude-prev()'s (NON-gating).
+# Defined above its first caller deliberately — a helper placed below silently leaves every site
+# above it broken while the suite stays green.
+write_zshrc() {
+  cat > "$CC_EFFORT_ZSHRC" <<ZRC
+# header prose — the modern launcher resolves \${CLAUDE_EFFORT:-\${CLAUDE_OPUS5_EFFORT:-low}}.
+# This is a COMMENT and must never be gated on; before 2026-09-16 the check read it first.
+CLAUDE_DEFAULT_EFFORT="\${CLAUDE_DEFAULT_EFFORT:-$2}"   # legacy claude-prev track — separate knob BY DESIGN
+claude-prev() { command claude-stable --effort "\${CLAUDE_DEFAULT_EFFORT:-$2}" "\$@"; }
+claude() { local _eff="\${CLAUDE_EFFORT:-\${CLAUDE_OPUS5_EFFORT:-$1}}"; command claude-latest --effort "\$_eff" "\$@"; }
+ZRC
+}
+
 set_all() {  # $1 = effortLevel written to every fake dir's settings.json
   local d
   for d in "$D"/one "$D"/two "$D"/three "$D"/four "$D"/five; do
@@ -42,11 +66,14 @@ set_all() {  # $1 = effortLevel written to every fake dir's settings.json
   done
 }
 
-@test "parity: every dir at the SSOT floor (xhigh) + zshrc max ⇒ exit 0" {
+@test "parity: every dir at the SSOT floor (xhigh) + claude() at SSOT max ⇒ exit 0" {
   set_all xhigh
   run "$ASSERT"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"parity"* ]]
+  [[ "$output" == *"parity"* ]] || false
+  # The launcher row must be a REAL OK, not a SKIP. Asserting only the exit code let this case pass
+  # while the gating grep matched NOTHING in the fixture — green, and decorative on the launcher.
+  [[ "$output" == *"OK"*"zshrc launcher"*"claude() --effort default = max"* ]] || false
 }
 
 @test "the live-state shape (one dir high, four low) ⇒ DRIFT, exit 1 (the 2026-07-24 regression)" {
@@ -60,12 +87,55 @@ set_all() {  # $1 = effortLevel written to every fake dir's settings.json
   [[ "$output" == *"low < floor xhigh"* ]] || false
 }
 
-@test "zshrc launcher --effort default drifted below SSOT (high, not max) ⇒ exit 1" {
+# 🚨 THIS CASE WAS INVERTED ON 2026-09-17, AND THE INVERSION IS THE POINT — DO NOT "RESTORE" IT.
+# It used to write ONE line, `alias claude="claude --effort ${CLAUDE_DEFAULT_EFFORT:-high}"`, and
+# demand DRIFT + exit 1 on it. That is the LEGACY claude-prev knob, which the modern claude() never
+# reads — so the case encoded the very defect 2909762748ee cures (a check gating on the wrong track's
+# variable, convicting a launcher already sitting on the floor). When that fix landed, this case went
+# red, post-land AUTO-REVERT convicted the fix, and ab16fb3e reverted it: the cure was undone by a
+# test demanding the disease. The legacy knob's non-gating behaviour is now pinned one case below,
+# where it belongs, and this case drifts the knob the launcher ACTUALLY reads.
+@test "claude() --effort default drifted below SSOT (high, not max) ⇒ DRIFT, exit 1" {
   set_all xhigh
-  printf 'alias claude="claude --effort ${CLAUDE_DEFAULT_EFFORT:-high}"\n' > "$CC_EFFORT_ZSHRC"
+  write_zshrc high max          # modern track drifts; legacy track stays on the SSOT default
   run "$ASSERT"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"zshrc launcher"* ]]
+  # Name claude() explicitly: a bare "zshrc launcher" match is satisfied by a SKIP row too.
+  [[ "$output" == *"DRIFT"*"zshrc launcher"*"claude()"* ]] || false
+  [[ "$output" == *"CLAUDE_OPUS5_EFFORT:-high"* ]] || false
+}
+
+@test "the LEGACY claude-prev knob differing from SSOT is a NON-gating NOTE ⇒ exit 0" {
+  set_all xhigh
+  write_zshrc max low           # modern track correct; legacy track far below the SSOT default
+  run "$ASSERT"
+  [ "$status" -eq 0 ]           # the exact assertion the old case had backwards
+  [[ "$output" == *"NOTE"*"zshrc claude-prev"*"CLAUDE_DEFAULT_EFFORT:-low"* ]] || false
+  [[ "$output" == *"OK"*"zshrc launcher"*"claude() --effort default = max"* ]] || false
+}
+
+@test "a comment carrying a WRONG modern value must not outrank the code line ⇒ OK, exit 0" {
+  set_all xhigh
+  # write_zshrc's header comment already claims the modern knob is `low` while claude() says `max`.
+  # Pre-2026-09-16 the check grepped unfiltered and `head -1` reached the header prose first.
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"OK"*"zshrc launcher"*"claude() --effort default = max"* ]] || false
+  [[ "$output" != *"DRIFT"* ]] || false
+}
+
+@test "modern knob present ONLY in a comment ⇒ SKIP naming the cause, never a silent pass" {
+  set_all xhigh
+  cat > "$CC_EFFORT_ZSHRC" <<'ZRC'
+# claude() used to resolve ${CLAUDE_EFFORT:-${CLAUDE_OPUS5_EFFORT:-max}} — prose only, no code.
+CLAUDE_DEFAULT_EFFORT="${CLAUDE_DEFAULT_EFFORT:-max}"
+ZRC
+  run "$ASSERT"
+  [ "$status" -eq 0 ]
+  # The SKIP must name the knob it looked for AND tell the reader not to trust it blindly —
+  # a bare "SKIP" is indistinguishable from "this surface is fine".
+  [[ "$output" == *"SKIP"*"zshrc launcher"*"no CLAUDE_EFFORT default found"* ]] || false
+  [[ "$output" == *"re-derive before trusting this SKIP"* ]] || false
 }
 
 @test "a below-floor LIVE session is REPORT-ONLY by default (⚠, does NOT gate)" {
