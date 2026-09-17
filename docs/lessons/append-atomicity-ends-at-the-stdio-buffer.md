@@ -1,0 +1,5 @@
+# Append atomicity ends at the stdio buffer
+
+_Relocated VERBATIM from `.claude/rules/agent-operating-lessons.md` (always-loaded tier) — the rules file now carries the hook and links here. Nothing was shortened._
+
+[Append atomicity ends at the stdio buffer](.) — 2026-09-09, W2-B17 (`1550268e6`): a JSON line longer than the writer's stdio buffer (4,096 B here) is appended as ≥2 `write()` calls, so O_APPEND no longer makes it atomic and any concurrent appender on the shared fd can land BETWEEN the pieces — one 6,679 B record, spliced at byte 4,096 by a 20-producer store, and jq exits 5 at that line; every census that redirected stderr silently dropped 12.33 % of the store and reported a smaller, internally-consistent number with no tell. ⇒ bound record SIZE at the writer (refuse above ~4,000 B, never truncate a JSON line), and read a shared append-only store record-at-a-time with parse failures REPORTED as a count — an absence of new fatal lines proves nothing at a 1.4 % interleave rate; bind the claim to a control arm.
