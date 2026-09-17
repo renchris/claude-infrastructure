@@ -37,6 +37,31 @@ The population is **monotone**, which is what a never-deleting store must be
 and not a collection artifact, and the lane has still not been renamed — this plan's §1.1 scar,
 where a `grep -rl` null was real *for a name* and wrong about the world.
 
+> 🚨 **REFUTED IN PLACE, 2026-09-17 (measured; the claim above is kept as the record of what was
+> believed).** The population is **not** monotone and the store is **not** never-deleting. Both cited
+> sources are correct and neither is the whole population: `cloud-return.sh:529` says *"the branch is
+> never deleted"* and `cloud-retire-terminal.sh:55` says *"It NEVER deletes a branch, a declaration or
+> a byte"* — but a **third** actor deletes, `scripts/branch-prune-landed.sh:142`
+> (`git push origin --delete "${batch[@]}"`), which reaps landed `claude/*` branches. Measured today:
+> refs dated ≤ 2026-09-07 read **334 against the pinned floor of 426** — −92 refs (−21.6 %) in the five
+> days between W11 and this land. The three readings 425/426/426 were four days in which that pruner
+> had not reached this cohort, not evidence of a store that cannot delete.
+>
+> **Consequence, and it is the whole delivered value of W11:** `obs` counts refs with dates already in
+> the past, so it can only ever **fall**; 334 < 426 is therefore permanent and monotonically worsening.
+> `cloud-lane-liveness.sh` returns `UNKNOWN` on **every** invocation, nulling every numeric field, so
+> the `cloud-fire-gap` row §0 journals per tick carries no reading — *a gate with no path to green*,
+> the exact shape §3.5 invokes to justify never charging closed gaps. The instrument is behaving
+> exactly as designed; the **constant** is what rotted.
+>
+> This is `checker-population-rests-on-an-untested-belief`: the belief ("a never-deleting store") was
+> derived from two true citations, generalised to the population, and never executed against it. The
+> remedy is a design call on this wave's own stated properties (store-free · pinned-rather-than-trusted
+> · `UNKNOWN` nulls *every* field) and is filed rather than taken unilaterally, as cc-backlog
+> `529aebcb4992` ("the fire-lane liveness instrument can never return a verdict"), conviction 65,
+> carrying a falsifier that retracts the row by itself the day the instrument stops citing the floor.
+
+
 Total fire refs now: **445** (444 excluding this session's own boot ping; see §3.3).
 
 ---
