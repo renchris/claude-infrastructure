@@ -70,6 +70,7 @@ import datetime
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -97,6 +98,48 @@ def boot_epoch_default():
     except Exception:
         pass
     return None
+
+
+# ── THE ANCHOR IS THE EVENT THAT KILLED THE PANES, WHICH IS NOT ALWAYS A REBOOT (2026-09-16) ──────
+# This tool anchored on kern.boottime alone, i.e. it assumed the only thing that kills a fleet of
+# sessions is the box going down. A TERMINAL EMULATOR crash kills every pane it hosts and leaves
+# the machine up, so boottime then points at an event HOURS before the one that mattered, and the
+# reading inverts: measured 2026-09-16, kitty SIGSEGV'd at 01:13:49Z while boottime read 21:28:30Z
+# the previous evening. Against boottime the run returned 3 UNKNOWN + 1 INTERRUPTED; against the
+# true anchor it returned 3 AT-REST + 1 INTERRUPTED — and the one genuinely interrupted session was
+# a DIFFERENT session in each reading. Every UNKNOWN defaults to AT-REST, so the wrong anchor would
+# have restored the fleet and nudged nobody, reporting success.
+#
+# macOS writes a per-process .ips report for exactly this crash, so the anchor is recoverable
+# rather than guessable: take the newest terminal-emulator crash NEWER than boottime. Falling back
+# to boottime when there is none keeps the ordinary reboot case byte-identical.
+TERMINAL_CRASH_PROCS = ("kitty", "iTerm2", "Terminal", "Alacritty", "WezTerm", "Ghostty")
+
+
+def terminal_crash_epoch(since, reports_dir=None):
+    """Newest terminal-emulator crash report strictly newer than `since` -> epoch, else None.
+
+    The filename carries the local timestamp (`kitty-2026-09-16-201349.ips`), which is what makes
+    this cheap: no .ips body is parsed, so a truncated or unreadable report cannot mislead us.
+    """
+    if reports_dir is None:
+        reports_dir = os.path.expanduser("~/Library/Logs/DiagnosticReports")
+    best = None
+    for proc in TERMINAL_CRASH_PROCS:
+        for path in glob.glob(f"{reports_dir}/{proc}-*.ips"):
+            m = re.search(r"-(\d{4})-(\d{2})-(\d{2})-(\d{6})", os.path.basename(path))
+            if not m:
+                continue
+            y, mo, d, hms = m.groups()
+            try:
+                when = datetime.datetime(
+                    int(y), int(mo), int(d), int(hms[:2]), int(hms[2:4]), int(hms[4:6])
+                ).timestamp()
+            except ValueError:
+                continue
+            if when > since and (best is None or when > best[0]):
+                best = (when, os.path.basename(path))
+    return best
 
 
 def find_transcript(sid):
@@ -253,6 +296,63 @@ SELFTEST_CASES = [
 ]
 
 
+def _selftest_anchor():
+    """Prove the terminal-crash anchor is load-bearing AND cannot fire in the ordinary case.
+
+    Case 4 is the one that keeps this honest: with no terminal crash newer than boot, the helper
+    must return None so a plain reboot recovery behaves exactly as it did before 2026-09-16. A
+    helper that always answered would pass cases 1-3 and silently change every reboot recovery.
+    """
+    import shutil
+    import tempfile
+
+    d = tempfile.mkdtemp()
+    failures = 0
+    try:
+        boot = datetime.datetime(2026, 9, 16, 16, 28, 30).timestamp()
+        for name in (
+            "kitty-2026-09-16-181446.ips",   # after boot, older of the two kitty crashes
+            "kitty-2026-09-16-201349.ips",   # after boot, THE one — newest terminal crash
+            "kitty-2026-09-15-090000.ips",   # BEFORE boot: a previous boot's crash, must not win
+            "Python-2026-09-16-235959.ips",  # newest file in the dir, but NOT a terminal
+        ):
+            open(os.path.join(d, name), "w").close()
+
+        cases = []
+        hit = terminal_crash_epoch(boot, d)
+        cases.append((
+            "picks newest terminal crash after boot",
+            hit is not None and hit[1] == "kitty-2026-09-16-201349.ips",
+        ))
+        cases.append((
+            "ignores a non-terminal process",
+            hit is not None and not hit[1].startswith("Python-"),
+        ))
+        late = datetime.datetime(2026, 9, 16, 21, 0, 0).timestamp()
+        cases.append((
+            "ignores crashes older than the anchor",
+            terminal_crash_epoch(late, d) is None,
+        ))
+        empty = tempfile.mkdtemp()
+        try:
+            cases.append((
+                "no reports -> None (ordinary reboot unchanged)",
+                terminal_crash_epoch(boot, empty) is None,
+            ))
+        finally:
+            shutil.rmtree(empty, ignore_errors=True)
+
+        for name, ok in cases:
+            failures += 0 if ok else 1
+            print(
+                f"{'ok  ' if ok else 'FAIL'} anchor: {name}",
+                file=sys.stderr,
+            )
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    return failures
+
+
 def _selftest():
     """Prove BOTH signals are load-bearing, with cases that must fail if either is dropped.
 
@@ -292,12 +392,14 @@ def _selftest():
             f"{'ok  ' if ok else 'FAIL'} {name:<20} expected={expected:<12} got={got:<12} ({why})",
             file=sys.stderr,
         )
+    anchor_failures = _selftest_anchor()
+    total = len(SELFTEST_CASES) + 4
+    passed = total - failures - anchor_failures
     print(
-        f"cc-resume-classify --selftest: {len(SELFTEST_CASES) - failures}/{len(SELFTEST_CASES)} "
-        f"passed",
+        f"cc-resume-classify --selftest: {passed}/{total} passed",
         file=sys.stderr,
     )
-    return 1 if failures else 0
+    return 1 if (failures or anchor_failures) else 0
 
 
 def main():
@@ -307,6 +409,12 @@ def main():
         type=int,
         default=None,
         help="crash anchor in epoch seconds (default: kern.boottime)",
+    )
+    ap.add_argument(
+        "--no-terminal-crash",
+        action="store_true",
+        help="do not consider terminal-emulator crash reports when choosing the anchor; use "
+        "kern.boottime alone (the pre-2026-09-16 behaviour)",
     )
     ap.add_argument(
         "--selftest",
@@ -332,6 +440,15 @@ def main():
         return _selftest()
 
     boot = args.boot_epoch if args.boot_epoch is not None else boot_epoch_default()
+    crash_src = "kern.boottime"
+    if args.boot_epoch is not None:
+        crash_src = "--boot-epoch (operator-supplied)"
+    elif boot is not None and not args.no_terminal_crash:
+        # A terminal-emulator crash kills every pane without touching boottime — see the block
+        # above terminal_crash_epoch(). Prefer it whenever it is NEWER than the boot we found.
+        hit = terminal_crash_epoch(boot)
+        if hit is not None:
+            boot, crash_src = int(hit[0]), f"terminal crash report {hit[1]}"
     if boot is None:
         print(
             "cc-resume-classify: kern.boottime unreadable and no --boot-epoch — refusing to "
@@ -342,11 +459,13 @@ def main():
     boot_dt = datetime.datetime.fromtimestamp(boot, tz=datetime.timezone.utc)
     if args.explain:
         print(
-            f"cc-resume-classify: crash anchor {boot_dt.isoformat()}", file=sys.stderr
+            f"cc-resume-classify: crash anchor {boot_dt.isoformat()}  [{crash_src}]",
+            file=sys.stderr,
         )
 
     counts = {"INTERRUPTED": 0, "AT-REST": 0, "UNKNOWN": 0}
     notfound = 0  # UNKNOWNs caused by a transcript lookup MISS, not by an unreadable transcript
+    nopre = 0  # rows with NO records before the anchor -> the anchor predates the session entirely
     for raw in sys.stdin:
         row = raw.rstrip("\n")
         if not row or row.startswith("#"):
@@ -369,6 +488,8 @@ def main():
             )
         else:
             verdict, why, last = classify(path, boot_dt, args.alive_window)
+            if why == "no pre-crash records":
+                nopre += 1
         counts[verdict] += 1
         print(row + "\t" + verdict)
         if args.explain:
@@ -395,7 +516,26 @@ def main():
     # 0 nudges, no error. A uniform miss indicts the INSTRUMENT, never the population: a real
     # fleet always has some readable transcript. Say so, and exit nonzero so a caller that checks
     # its status can tell "nothing to nudge" apart from "I could not read anything".
+    # ── ANCHOR-TOO-OLD ALARM (2026-09-16), the sibling of the total-miss alarm below. A row with
+    # NO records before the anchor did not exist yet when the anchor fired, so it cannot be a
+    # casualty of it. One such row is ordinary; a MAJORITY of them means the anchor predates the
+    # fleet, i.e. we are measuring the wrong event — and because every "no pre-crash records" row
+    # is UNKNOWN, and UNKNOWN defaults to AT-REST, the whole run goes quiet and reads as a healthy
+    # recovery. Same unfalsifiable shape as the miss alarm: a broken instrument that looks calm.
+    # Measured 2026-09-16: 3 of 4 rows, anchored on a boottime 3h45m before the kitty SIGSEGV that
+    # actually killed the panes. This says so instead of going quiet.
     total = sum(counts.values())
+    if total and nopre * 2 >= total:
+        print(
+            f"cc-resume-classify: ANCHOR LOOKS TOO OLD — {nopre} of {total} row(s) have no "
+            f"records at all before {boot_dt.isoformat()} ({crash_src}), so they began AFTER it "
+            "and cannot be casualties of it. Every one of those is UNKNOWN, which callers treat "
+            "as AT-REST, so this run may nudge nobody and still look healthy. If a terminal "
+            "emulator crashed rather than the box rebooting, pass that moment as --boot-epoch "
+            "(the .ips under ~/Library/Logs/DiagnosticReports carries it).",
+            file=sys.stderr,
+        )
+
     if total and notfound == total:
         print(
             f"cc-resume-classify: INSTRUMENT FAILURE — all {total} row(s) missed the transcript "
