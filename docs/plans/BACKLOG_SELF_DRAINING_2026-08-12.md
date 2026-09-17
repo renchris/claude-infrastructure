@@ -1682,7 +1682,7 @@ inferred:
 - **9 of 15 ratchet arms collapse exit 2 into gate_red** → `b7f771848` ("8 gate arms collapsed a
   lint's exit 2 into gate_red — route could-not-run to GATE_KILLED"), on trunk, closed as
   `446fe07464e0`.
-- **A SIGKILLed bats run reads as GATE RED** → `tests/ship-land.bats:1904` asserts a SIGNAL-killed
+- **A SIGKILLed bats run reads as GATE RED** → `tests/ship-land.bats:1910` asserts a SIGNAL-killed
   corpus exits **9, not 6**, and greps that GATE RED is *absent*. It ran GREEN inside this session's
   own land (`ok 84`).
 - **bats-assert-liveness fails OPEN** → `4a33679c7`, closed last recycle — and **live-confirmed here

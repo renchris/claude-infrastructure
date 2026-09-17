@@ -20470,9 +20470,9 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
      *"degrade to FULL"*. That **is** v1, deleted deliberately: `:1316-1323` calls it *"the
      amplifier law (R7) in its purest form: the net is inert precisely when the box is wedged, and
      the response was to add 40 minutes of bats per land to a wedged box."* Pinned inert by
-     `tests/ship-land.bats:1261` — *"never a corpus degrade"*, asserting no corpus was summoned.
+     `tests/ship-land.bats:1267` — *"never a corpus degrade"*, asserting no corpus was summoned.
   3. **(c) collapsing into (a) is a TESTED DECISION, not an omission** (method 51).
-     `tests/ship-land.bats:1310` seeds an ancient never-green stamp and asserts `net:"none"` —
+     `tests/ship-land.bats:1316` seeds an ancient never-green stamp and asserts `net:"none"` —
      *"'not adopted', not 'inert' (bootstrap must not warn)"*.
   4. **The row's actual ask is DELIVERED, at the enforcing site.** *"Say so loudly"* belongs to the
      freshness alarm v2's own header names (R9 / cc-blockers), and `bin/cc-blockers` `alarm_rows`
