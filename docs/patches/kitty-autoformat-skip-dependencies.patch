@@ -1,0 +1,24 @@
+diff --git a/autoformat b/autoformat
+index f3881ef3c..be2df89ca 100755
+--- a/autoformat
++++ b/autoformat
+@@ -34,7 +34,14 @@ threading.Thread(target=wait_go).start()
+ 
+ clang_files = []
+ for x in os.listdir(base):
+-    if x in ('dist', 'build', 'bypy', '3rdparty') or x.startswith('.'):
++    # 'dependencies' added 2026-09-17: it is a GITIGNORED vendored tree (.gitignore:12), and
++    # formatting it panicked this machine's kernel twice on 2026-09-16 - ten parallel
++    # clang-format workers over dependencies/darwin-arm64/include/simde/*.h reached 242 GB and
++    # 274 GB of anonymous footprint on a 64 GB box and exhausted the VM compressor segment
++    # table in ~130 s. .clang-format-ignore CANNOT substitute: run_clang_format pipes content on
++    # stdin with --assume-filename, and an ignore file is only consulted for a path clang-format
++    # opens (measured: skipped by path, reformatted through stdin).
++    if x in ('dist', 'build', 'bypy', '3rdparty', 'dependencies') or x.startswith('.'):
+         continue
+     for root, dirnames, files in os.walk(os.path.join(base, x)):
+         for file in files:
+
+# Provenance
+#
+# Generated 2026-09-17 from ~/kitty-dev at upstream master 1d67ecd47.
