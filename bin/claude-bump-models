@@ -128,9 +128,17 @@ while IFS= read -r file; do
   while IFS= read -r pair; do
     OLD="${pair%%|*}"
     NEW="${pair##*|}"
-    if grep -qF "$OLD" "$file" 2>/dev/null; then
+    # WORD-BOUNDARY, both in the detector and the rewrite. An id must NOT match when it is a
+    # PREFIX of a longer one: `claude-fable-5` is a strict prefix of `claude-fable-5-1` (the first
+    # time in this fleet's history that an old id prefixes its successor), so an unanchored
+    # `s|$OLD|$NEW|g` over a file ALREADY carrying 5.1 rewrites it to `claude-fable-5-1-1` and
+    # silently un-matches the base id in every guard that keys on it. Same rule as
+    # scripts/claude-lint-models.sh:82 — two tools, one SSOT, and they must agree.
+    if grep -qE "${OLD}([^-0-9]|$)" "$file" 2>/dev/null; then
       if [[ "$MODE" == "apply" ]]; then
-        sed -i.bump-bak "s|$OLD|$NEW|g" "$file" && rm -f "${file}.bump-bak"
+        # Two expressions because BSD sed has no negative lookahead: one for a following
+        # non-[-0-9] char (preserved via \1), one for end-of-line.
+        sed -i.bump-bak -e "s|${OLD}\([^-0-9]\)|${NEW}\1|g" -e "s|${OLD}$|${NEW}|g" "$file" && rm -f "${file}.bump-bak"
         log "APPLIED $OLD → $NEW in $file"
         echo "  APPLIED: $file   ($OLD → $NEW)"
         APPLIED=$((APPLIED + 1))
