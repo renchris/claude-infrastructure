@@ -65,6 +65,31 @@ def _log(msg):
         pass
 
 
+def _self_sha():
+    """sha256 of this file ON DISK, or "" when it cannot be read RIGHT NOW.
+
+    "" is an ABSTAIN, never a change: git replaces a file by rename, so a read landing mid-swap
+    must not be mistaken for "the source changed". Every caller treats "" as "no comparison
+    exists" — the same polarity as lead-supervisor.sh's sup_self_sha().
+
+    IMPORTS INSIDE THE FUNCTION, deliberately. This module's header keeps the client path to
+    `import os, sys` and nothing else because a keypress must not pay for an import it never
+    uses; only the daemon calls this. Measured cost when it IS called: 44.8 us to digest the
+    whole file, i.e. 0.0045% of a core at 1 Hz — so no mtime pre-filter, which would be a cost
+    gate that is not strictly weaker than the predicate it guards.
+
+    Follows symlinks by construction: ~/.claude/scripts/kitty-pane-title-overlay.py is a symlink
+    into the checkout, so this sees both a checkout fast-forward and a symlink repoint.
+    """
+    try:
+        import hashlib
+
+        with open(os.path.abspath(__file__), "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+    except OSError:
+        return ""
+
+
 # ───────────────────────────── the fast path ─────────────────────────────────
 # Everything above this line is import-cheap on purpose. A keypress must not pay for
 # Pillow, json, or subprocess, none of which the client needs.
@@ -1132,6 +1157,15 @@ def daemon(initial, all_windows):
         fcntl.flock(lockfh, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         return 0  # another daemon owns this; not an error
+    # THE RUNNING BYTES, digested once we own the lock. Compared per idle tick below so a landed
+    # fix reaches this process without anyone killing it — see _self_sha() and the retire branch.
+    sha0 = _self_sha()
+    if not sha0:
+        _log(
+            "daemon: cannot digest %s at start — the self-retire check is INERT for this "
+            "process's lifetime (a landed fix will not reach it until the next press after "
+            "IDLE_EXIT, or a kitty restart)" % (os.path.abspath(__file__),)
+        )
     sock = ksock()
     kpid = kitty_pid(sock)
     if not kpid:
@@ -1233,6 +1267,38 @@ def daemon(initial, all_windows):
                 break
             if not st["on"] and time.time() - st["touched"] > IDLE_EXIT:
                 break
+            # 🚨 SELF-RETIRE ON A LANDED CHANGE. This daemon holds its source in RAM, so a landed
+            # fix never reaches it: on 2026-09-16 the hold-path cost fix (RSS +0.93 MB/s -> flat)
+            # required killing pid 84540 by hand before the new code ran. That manual step is the
+            # L4 gap — the live layer had the bytes and the running process did not.
+            #
+            # SAME SHAPE AS THE CURE ALREADY SHIPPED HERE: lead-supervisor.sh:1329
+            # self_restart_if_stale() — digest own source per tick, ABSTAIN if unreadable, exit on
+            # change. Its incident is this one almost verbatim ("a landed fix never reaches this
+            # process and is silent").
+            #
+            # WHY QUIT RATHER THAN os.execv, probed rather than assumed: PEP 446 makes the
+            # listening socket CLOEXEC, so an exec CLOSES it while the socket FILE stays on disk
+            # with nobody listening. For the ~0.1-0.2 s of interpreter + PIL import, every
+            # _client() connect gets ECONNREFUSED — which _client documents as "no daemon" and
+            # answers by spawning a competitor that can win the freed flock, and the press that
+            # spawned it is silently dropped. Quitting has none of it: process exit releases the
+            # flock and the `finally` below unlinks SOCK, so the next connect gets ENOENT, which
+            # is the state _spawn_daemon is built for. Cost: one cold press, 0.07s -> 0.33s.
+            #
+            # `not st["on"]` IS LOAD-BEARING, not caution. Retiring while titles are up hits
+            # `finally: if st["on"]: wipe(...)` and the bars vanish for no reason the operator can
+            # see. Nothing is lost by quitting while idle: st["tg"]/st["frames"] are rebuilt by
+            # warm(), _PNG_CACHE and _SENT are caches the next press re-transmits past anyway
+            # (force=True), and the strips are on disk.
+            if not st["on"] and sha0:
+                _cur = _self_sha()
+                if _cur and _cur != sha0:
+                    _log(
+                        "daemon: self-retire — on-disk sha256 changed (%s -> %s); the next press "
+                        "respawns on the new bytes" % (sha0[:12], _cur[:12])
+                    )
+                    break
             srv.settimeout(HOLD if st["on"] else 1.0)
             try:
                 conn, _ = srv.accept()
