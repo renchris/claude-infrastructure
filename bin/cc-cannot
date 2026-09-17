@@ -111,12 +111,12 @@ HEAD_SEG="$(printf '%s' "$CMD" | sed 's/[[:space:]]*\(&&\|;\||\).*$//')"
 # `gh pr view --web` opens a browser and `git show … && rm …` is not a read.
 RO_RE='^(cc-blockers|cc-mission[[:space:]]+next|cc-do[[:space:]]+--list|cc-[a-z-]+[[:space:]]+(list|status|show|view|next)([[:space:]]|$)|git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+(show|log|status|diff|ls-tree|rev-parse|branch|remote|cherry)([[:space:]]|$)|gh[[:space:]]+(pr|issue|run)[[:space:]]+(view|list|status)([[:space:]]|$)|(cat|head|tail|less|bat)[[:space:]]|(grep|rg|find|ls|jq)[[:space:]]|(cursor|code|subl)[[:space:]]+[^[:space:]]+$)'
 RO_MUT='(--web|--fix|--apply|--write|--execute|>[[:space:]]*[^[:space:]]|\|[[:space:]]*(sh|bash)([[:space:]]|$)|&&)'
-if printf '%s' "$CMD" | grep -Eq "$RO_RE" && ! printf '%s' "$CMD" | grep -Eq "$RO_MUT"; then
+if printf '%s' "$CMD" | grep -E "$RO_RE" >/dev/null && ! printf '%s' "$CMD" | grep -E "$RO_MUT" >/dev/null; then
   refuted read-only "this command changes nothing — run it and report the answer, or cite it mid-sentence; the marker means 'run this'"
 fi
 
 # ── A3 · TUI slash-command: exactly one path segment, anchored ───────────────────────────────────
-if printf '%s' "$CMD" | grep -Eq '^/[a-z][a-z0-9_-]*([[:space:]]|$)'; then
+if printf '%s' "$CMD" | grep -E '^/[a-z][a-z0-9_-]*([[:space:]]|$)' >/dev/null; then
   human tui "a slash-command; the agent has no keystroke channel to its own composer"
 fi
 
@@ -128,7 +128,7 @@ fi
 # gate. The answer is the same either way: a password prompt and a policy denial are both gates the
 # agent cannot clear. The policy arm is undetermined BY CONSTRUCTION and must not be resolved by
 # the one route that would work — editing our own allowlist — which three independent arms refuse.
-if printf '%s' "$CMD" | grep -Eq '(^|[[:space:]]|\||&|;)sudo([[:space:]]|$)'; then
+if printf '%s' "$CMD" | grep -E '(^|[[:space:]]|\||&|;)sudo([[:space:]]|$)' >/dev/null; then
   human sudo "sudo — a password prompt or a policy denial; both are gates the agent cannot clear (probe deliberately omitted, see source)"
 fi
 
@@ -170,7 +170,7 @@ if [ -n "$SCRIPTS" ]; then
     # orchestrator contains /dev/tty handling for the panes it DRIVES. approval-queue-drain.sh is
     # the contrasting case: its /dev/tty is at :46, guarding its own entry. A guard runs before the
     # work, so it lives near the top; incidental terminal handling lives wherever the work is.
-    if head -80 "$p" 2>/dev/null | grep -Eq "$HC_BODY_RE"; then
+    if awk 'NR<=80' "$p" 2>/dev/null | grep -E "$HC_BODY_RE" >/dev/null; then
       hit="$(head -80 "$p" 2>/dev/null | grep -Eom1 "$HC_BODY_RE")"
       human tty "$(basename "$p") body carries '${hit}' — it needs a live terminal or a password"
     fi
