@@ -657,6 +657,42 @@ _gs_esec() { # <etime> → seconds on stdout, rc 1 on a shape it cannot read. `1
   elif [ -z "$b" ] && [ -z "$c" ]; then echo $(( 10#$d*86400 + 10#$a ))
   else return 1; fi
 }
+# ── THE ESCALATION'S LIVENESS CHECK IS THE ONE SITE THE FIXTURE SEAM MISSED (2026-09-17) ───────
+# The ancestor-guard note above says the guard sits at the ACTUATOR so it "covers all three call
+# sites at once — the TERM pass, the KILL escalation, and the watchdog branch". The escalation has
+# a SECOND question the actuator never sees, asked before it: *did this pid survive the TERM?*,
+# answered by a bare `kill -0` against the REAL process table. Every other read in this arm goes
+# through CC_REAPER_GARBAGE_PS_A/_PS_B; that one did not, so the fixture's "closed world" was open
+# on exactly one axis.
+#
+# WHAT IT COST, measured rather than reasoned. tests/cc-reaper.bats pins the fixture's pids as
+# 900NN and its comment states the premise outright: "9xxxx pids never exist on the host, so the
+# KILL escalation pass (which does a REAL kill -0 existence check) skips them by construction."
+# That is a claim about a SHARED, WRAPPING namespace, it lives in a comment, and nothing executes a
+# comment. On this box 2026-09-17 pid 90006 was a live CoreRecents daemon, so `kill -0 90006`
+# succeeded and the escalation logged a KILL for it: the suite's own probe prints
+# `KILLSET=[90006 <GSPID>]` against an assertion demanding only GSPID. The red is a PID COLLISION,
+# reproduces identically on a pristine trunk with no diff at all, and convicts whatever land
+# happens to reach the suite — it reached three of mine.
+# Nothing real was ever signalled: CC_REAPER_GARBAGE_KILL replaces kill(1) with a collector on that
+# path, so the only syscall that touched the daemon was the harmless `kill -0`.
+#
+# THE FIX MAKES THE PREMISE TRUE BY CONSTRUCTION INSTEAD OF BY LUCK. A pid listed in the fixture
+# snapshot is FICTIONAL — it names a process that was never started — so it cannot outlive a TERM,
+# and its liveness is the fixture's to state, never the host's. A pid absent from the fixture is a
+# REAL one the test spawned (the watchdog child), and it keeps the real check, which is what lets
+# that arm still assert a genuine TERM→KILL escalation.
+# PRODUCTION IS BYTE-FOR-BYTE UNCHANGED: with CC_REAPER_GARBAGE_PS_A unset — every non-test
+# invocation — this is `kill -0` and nothing else.
+# Defined HERE, immediately above _gs_verify_kill and so above the escalation loop that calls it:
+# a helper placed beside its first caller silently leaves every site above it on the old path.
+_gs_escalation_alive() { # <pid> — did this pid survive the TERM? rc 0 = still alive, escalate
+  if [ -n "${CC_REAPER_GARBAGE_PS_A:-}" ] \
+     && /usr/bin/awk -v p="$1" '$1==p{f=1} END{exit !f}' "$CC_REAPER_GARBAGE_PS_A" 2>/dev/null; then
+    return 1
+  fi
+  kill -0 "$1" 2>/dev/null
+}
 _gs_verify_kill() { # <pid> <ucomm-ere> <TERM|KILL> [<argv-signature>] [<born-by-epoch>] — re-verify
                     # comm, argv AND start time, then signal. rc 0 = signalled.
   local pid="$1" re="$2" sig="$3" argsig="${4:--}" born="${5:--}" c a e s now
@@ -951,7 +987,7 @@ EOF_GS
     [ -n "${CC_REAPER_GARBAGE_KILL:-}" ] || sleep 3
     local i=0
     while [ "$i" -lt "${#_GS_T_PID[@]}" ]; do
-      kill -0 "${_GS_T_PID[$i]}" 2>/dev/null \
+      _gs_escalation_alive "${_GS_T_PID[$i]}" \
         && _gs_verify_kill "${_GS_T_PID[$i]}" "${_GS_T_RE[$i]}" KILL "${_GS_T_SIG[$i]}" "${_GS_T_PIN[$i]}"
       i=$((i+1))
     done
