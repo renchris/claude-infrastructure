@@ -1083,7 +1083,56 @@ fi
 # so the single-var form is already inert. This blocks the two-var form and the exemption: a
 # bypass that merely also has to disable the seal is still a bypass, and an exemption is a
 # DECISION about how the operator's commits are attributed, which is theirs to make.
-if printf '%s' "$CMD" | grep -qE '\bCC_GIT_IDENTITY_(TEST|EMAIL|OWNER|HOOK)='; then
+# -- POSITION, NOT SUBSTRING -- AND NEVER WEAKER THAN THE BROAD MATCH (2026-09-17) -------------
+# The clause below matched the assignment ANYWHERE in $CMD, so it refused text that merely
+# MENTIONS these vars. Measured, cwd a worktree so no sibling arm confounds it: a heredoc writing
+# a doc that contains the assignment -> DENY; a commit message quoting it -> DENY; and, sharpest,
+# a read-only `grep -rn` FOR the variable -> DENY. A peer session hit this for real today while
+# writing up a report about the guard, and it blocked the very edit that repairs it.
+#
+# That grep case is condemned by this very file, one clause up: "A guard that blocks reading the
+# thing it guards makes the state unauditable, which is the opposite of the point" -- the lesson
+# was learned for cc.identity.exempt and never applied here. Third instance in one session of
+# mention-read-as-invocation (the git-add scanner's newline split, the shared-commit arm's heredoc
+# carve-out, now this).
+#
+# THE OBVIOUS FIX IS A BYPASS, which is why this is a conjunction and not a rewrite. Requiring the
+# assignment in COMMAND POSITION alone would let eval "..." and sh -c "..." straight through --
+# the assignment is real there and simply is not the first token. A usability repair that quietly
+# weakens an identity guard is worse than the friction it removes. So the broad match STANDS for
+# every indirect-execution form, and position is consulted only where the command is plainly
+# direct. Strictly no weaker than the clause it replaces; more permissive only where provably safe.
+_cgi_re='\bCC_GIT_IDENTITY_(TEST|EMAIL|OWNER|HOOK)='
+_cgi_hit=0
+if printf '%s' "$CMD" | grep -E "$_cgi_re" >/dev/null; then
+  if printf '%s' "$CMD" | grep -E '(^|[[:space:]]|\||&|;)(eval|env|xargs|sudo|(ba|z|k|da)?sh)([[:space:]]|$)' >/dev/null; then
+    _cgi_hit=1          # indirect execution -- undecidable here, so keep the old broad verdict
+  else
+    while IFS= read -r _cgi_cl; do
+      # `read -ra` splits on IFS WITHOUT globbing, so this needs no `set -f` dance and no
+      # suppression comment at all — the earlier `set -- $x` form raised SC2086 and a disable
+      # would not stick to it. (Do not begin a comment line with the linter's own name: a line
+      # opening `# shell`+`check <word>` is PARSED as a directive and errors SC1072/SC1073 —
+      # which is the same mention-read-as-invocation class this whole clause is about, hit a
+      # fourth time in one session, in the comment explaining the third.)
+      read -r -a _cgi_toks <<<"$_cgi_cl"
+      _cgi_i=0
+      while [ "$_cgi_i" -lt "${#_cgi_toks[@]}" ]; do
+        case "${_cgi_toks[$_cgi_i]}" in
+          export|declare|local|typeset) _cgi_i=$((_cgi_i+1)); continue ;;
+          CC_GIT_IDENTITY_TEST=*|CC_GIT_IDENTITY_EMAIL=*|CC_GIT_IDENTITY_OWNER=*|CC_GIT_IDENTITY_HOOK=*) _cgi_hit=1; break ;;
+          *=*) _cgi_i=$((_cgi_i+1)); continue ;;
+          *) break ;;
+        esac
+      done
+      [ "$_cgi_hit" = 1 ] && break
+    # `tr ';|&' '\n'` — the short-target form the FF-GATE below already uses (tr pads with the
+    # last char). A newline needs no translating: `read` splits the here-string on them anyway,
+    # which is what makes a heredoc BODY line its own clause here.
+    done <<<"$(printf '%s' "$CMD" | tr ';|&' '\n')"
+  fi
+fi
+if [ "$_cgi_hit" = 1 ]; then
   deny "CC_GIT_IDENTITY_* assignment blocked — these are the identity gate's TEST seams, not a route past it. Setting OWNER takes the repo out of scope so the gate never reads the identity at all; setting EMAIL widens the allowlist. If a commit is being refused, the identity is genuinely wrong — run the cure the hook printed. To run the suite, invoke bats (it sets the sentinel itself); never set these by hand."
 fi
 # WRITES only. The first cut matched the key anywhere after `config`, so `--get cc.identity.exempt`

@@ -209,3 +209,53 @@ allowed() { [ "$status" -eq 0 ] && [[ "$output" != *"identity write"* ]]; }
   [ "$status" -eq 0 ]
   [[ "$output" != *'"permissionDecision": "deny"'* ]] || false
 }
+
+
+# ── MENTION IS NOT INVOCATION (2026-09-17, peer finding) ────────────────────────────────────────
+# The clause matched the assignment ANYWHERE in $CMD, so it refused text that merely NAMES these
+# vars. The sharpest case is (d): a read-only grep FOR the variable was denied, which this very
+# hook condemns one clause up — "A guard that blocks reading the thing it guards makes the state
+# unauditable". A peer session hit this for real, and it blocked the edit that repairs it, twice.
+#
+# Every permit below is PAIRED with a deny that must survive it, because the obvious fix is a
+# BYPASS: requiring command position alone lets `eval "…"` and `sh -c '…'` through, where the
+# assignment is real and simply is not the first token. Cases (e) and (f) are that backstop and
+# are the reason this clause may be called strictly-no-weaker rather than merely nicer.
+_V="CC_GIT_IDENTITY_EMAIL"
+
+@test "mention: a heredoc writing a doc that CONTAINS the assignment is allowed" {
+  run_hook "cat > /tmp/n.md <<EOF
+set ${_V}=you@example.com to seal it
+EOF"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"assignment blocked"* ]] || false
+}
+
+@test "mention: a commit message quoting the assignment is allowed" {
+  run_hook "git commit -m \"note: ${_V}=... is sealed\""
+  [[ "$output" != *"assignment blocked"* ]] || false
+}
+
+@test "mention: a read-only grep FOR the variable is allowed — the guard must stay auditable" {
+  run_hook "grep -rn '${_V}=' hooks/"
+  [[ "$output" != *"assignment blocked"* ]] || false
+}
+
+@test "BACKSTOP: eval hiding the assignment is still DENIED" {
+  run_hook "eval \"${_V}=x git commit\""
+  [[ "$output" == *"assignment blocked"* ]] || false
+}
+
+@test "BACKSTOP: sh -c hiding the assignment is still DENIED" {
+  run_hook "bash -c '${_V}=x git commit'"
+  [[ "$output" == *"assignment blocked"* ]] || false
+}
+
+@test "position: a run of env prefixes, and one after a chain operator, are still DENIED" {
+  run_hook "FOO=1 ${_V}=x git commit"
+  [[ "$output" == *"assignment blocked"* ]] || false
+  run_hook "cd /tmp && ${_V}=x git commit"
+  [[ "$output" == *"assignment blocked"* ]] || false
+  run_hook "export ${_V}=x"
+  [[ "$output" == *"assignment blocked"* ]] || false
+}

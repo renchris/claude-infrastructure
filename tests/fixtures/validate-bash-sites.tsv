@@ -1,5 +1,24 @@
 # Pattern-matching sites in hooks/validate-bash.sh — the population the backlog row 8942f3b1506d
 #
+# 2026-09-17b (peer finding, no row) — LINE SHIFT ONLY, no population change. The
+#   CC_GIT_IDENTITY_* clause at 1086 was one grep line and is now a 50-line block: it kept the
+#   broad whole-$CMD match as a BACKSTOP for indirect execution (eval / sh -c / env / xargs /
+#   sudo) and added a COMMAND-POSITION walk for the direct case, so a doc, a commit message or a
+#   read-only grep that merely MENTIONS the vars is no longer refused. Pure insert, so every site
+#   pinned at line >= 1087 moved exactly +49 and everything above is unchanged.
+#   POPULATION CHANGE, recorded rather than absorbed: the old single `grep -qE` at 1086 became
+#   TWO `grep -E ... >/dev/null` reads inside the new block. S18 is RE-POINTED to 1107 and its
+#   verify flips `lit` -> `syn`, because its pattern now lives in a variable ($_cgi_re) and the
+#   literal-on-the-line check cannot apply — the same declaration S01a/S01b carry for
+#   `grep -qE "$pattern"`. S18b is NEW at 1108, the indirect-execution backstop, and its verdict
+#   was READ BACK from the harness's own MEASURED column (EQUIVALENT), never guessed.
+#   S18 stays DIVERGENT and that is load-bearing: its counterexample is
+#   `CC_GIT_IDENTITY_OWNER=x git commit` with grep=MATCH, bash=no, i.e. the site is in the harness's
+#   MUST-NOT-CONVERT set. Rewriting either read as a bash `case` — the obvious way to add no grep
+#   site at all — would MISS the real assignment. That is why this block still greps.
+#   Applied arithmetically from the real diff hunk (`git diff -U0` reports `@@ -1086 +1086,50 @@`)
+#   and then CHECKED by assertion 4, which re-reads each `verify=lit` pattern off its newly
+#   pinned line, so a wrong offset reds the suite instead of silently re-pointing a site.#
 # 2026-09-17 (row 5529482875e8) — LINE SHIFT ONLY, no population change. The FF-GATE gained a
 #   SECOND arm — a deny for `git commit` in the shared checkout, the write that makes the fleet's
 #   `merge --ff-only` converge arithmetically impossible — as a pure 31-line insert after line
@@ -97,18 +116,19 @@ S14	1006	qE	nl	whole	lit	DIVERGENT	drizzle-kit[[:space:]]+push
 S15	1044	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+add\b
 S16	1047	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+add\b
 S17	1067	qE	nl	whole	lit	DIVERGENT	git([[:space:]]+-[a-zA-Z]+[[:space:]]+[^[:space:]]+)*[[:space:]]+commit\b[^|&;]*[[:space:]]-n\b
-S18	1086	qE	raw	whole	lit	DIVERGENT	\bCC_GIT_IDENTITY_(TEST|EMAIL|OWNER|HOOK)=
-S19	1094	qE	raw	whole	lit	DIVERGENT	\bconfig\b
-S20	1095	qE	raw	whole	lit	DIVERGENT	\-\-(get|get-all|get-regexp|list|unset|unset-all|remove-section)\b
-S21	1096	qE	raw	whole	lit	DIVERGENT	\bcc\.identity\.exempt[[:space:]]+[^[:space:]]
-S22	1186	qE	raw	clause	lit	DIVERGENT	git\b.*\bconfig\b.*\buser\.(email|name)\b
-S23	1188	qE	raw	clause	lit	DIVERGENT	\-\-(get|get-all|get-regexp|get-urlmatch|list|unset|unset-all|remove-section|rename-section|global|system|file|blob)\b
-S24	1189	qE	raw	clause	lit	EQUIVALENT	[[:space:]]-(l|e)([[:space:]]|$)
-S25	1191	qE	raw	clause	lit	DIVERGENT	\buser\.(email|name)[[:space:]]+[^[:space:]]
-S26	1617	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+reset[[:space:]]+--hard\b
-S27	1623	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*[xX]
-S28	1929	qE	raw	token	syn	EQUIVALENT	^(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)(/|$)
-S29	1944	oE	nl	whole	lit	DIVERGENT	rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*[^[:space:];&|-][^[:space:];&|]*
-S30	1947	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
-S31	1778	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=[^[:space:];&|]*
-S33	1904	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=("?\$\([^()]*\)"?|[^[:space:];&|]*)
+S18	1107	qE	raw	whole	syn	DIVERGENT	\bCC_GIT_IDENTITY_(TEST|EMAIL|OWNER|HOOK)=
+S18b	1108	qE	raw	whole	lit	EQUIVALENT	(^|[[:space:]]|\||&|;)(eval|env|xargs|sudo|(ba|z|k|da)?sh)([[:space:]]|$)
+S19	1143	qE	raw	whole	lit	DIVERGENT	\bconfig\b
+S20	1144	qE	raw	whole	lit	DIVERGENT	\-\-(get|get-all|get-regexp|list|unset|unset-all|remove-section)\b
+S21	1145	qE	raw	whole	lit	DIVERGENT	\bcc\.identity\.exempt[[:space:]]+[^[:space:]]
+S22	1235	qE	raw	clause	lit	DIVERGENT	git\b.*\bconfig\b.*\buser\.(email|name)\b
+S23	1237	qE	raw	clause	lit	DIVERGENT	\-\-(get|get-all|get-regexp|get-urlmatch|list|unset|unset-all|remove-section|rename-section|global|system|file|blob)\b
+S24	1238	qE	raw	clause	lit	EQUIVALENT	[[:space:]]-(l|e)([[:space:]]|$)
+S25	1240	qE	raw	clause	lit	DIVERGENT	\buser\.(email|name)[[:space:]]+[^[:space:]]
+S26	1666	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+reset[[:space:]]+--hard\b
+S27	1672	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*[xX]
+S28	1978	qE	raw	token	syn	EQUIVALENT	^(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)(/|$)
+S29	1993	oE	nl	whole	lit	DIVERGENT	rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*[^[:space:];&|-][^[:space:];&|]*
+S30	1996	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
+S31	1827	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=[^[:space:];&|]*
+S33	1953	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=("?\$\([^()]*\)"?|[^[:space:];&|]*)
