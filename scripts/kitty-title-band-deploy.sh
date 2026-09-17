@@ -140,6 +140,36 @@ case "$MODE" in
   *) die "usage: $0 [--status|--revert]" ;;
 esac
 
+# ── THE DISARM INTERLOCK, 2026-09-16 ─────────────────────────────────────────────────────────
+# ⌘⇧B SIGSEGV'd kitty (pid 597, 2026-09-16 20:13:49): EXC_BAD_ACCESS KERN_INVALID_ADDRESS at
+# 0x20 in kitty.fast_data_types.so+840952, via glfw-cocoa -> Python key dispatch. Every pane in
+# the only OS window died with it; lr-select then found 55 resumable sessions across 16
+# worktrees. Report ~/Library/Logs/DiagnosticReports/kitty-2026-09-16-201349.ips, filed as
+# cc-backlog bf6af099a712.
+#
+# WHY THE INTERLOCK IS HERE AND NOT IN A COMMENT. Disarming the CHORD in kitty.conf does not
+# disarm this script: `install` rewrites the drop-in with both map lines AND a `watcher` line,
+# and that watcher is what makes every kitty started afterwards inject the shim INTO ITSELF.
+# That is not hypothetical — it is exactly how the shim came back after the crash. kitty died at
+# 20:13:49, the successor started at 20:13:53 while the drop-in was still armed, and the log's
+# last record for the live process reads `installed pid=73832`. A doc that says "do not re-arm"
+# advises; the enforcement has to live at the event that IS the act.
+#
+# SINGLE SOURCE OF TRUTH: the same `# DISARMED-` marker tests/kitty-conf-bindings.bats keys its
+# polarity on, read from the config kitty ACTUALLY loads. Lift the disarm and this lifts with
+# it — no second switch to remember, and no way to re-arm half of it.
+KCONF="${KCONF:-$HOME/.config/kitty/kitty.conf}"
+if [ "$MODE" != "--revert" ] && [ "$MODE" != "revert" ] \
+   && grep -q '^# DISARMED-map cmd+' "$KCONF" 2>/dev/null; then
+  printf '\n\033[31m\033[1mREFUSING TO INSTALL — the title band is DISARMED.\033[0m\n' >&2
+  printf 'The chord it arms SIGSEGV\x27d kitty on 2026-09-16 and killed ~55 live sessions.\n' >&2
+  printf 'Marker: %s carries a %s line.\n' "$KCONF" "'# DISARMED-map cmd+'" >&2
+  printf 'Open row: cc-backlog bf6af099a712 — reproduce the fault in a sandbox and fix it FIRST.\n' >&2
+  printf 'To lift: remove the two %s prefixes in config/kitty.conf, land it, converge.\n' "'# DISARMED-'" >&2
+  printf '\nThis refusal is a VERDICT, not a bug. --revert and --status still work.\n' >&2
+  exit 3
+fi
+
 [ -f "$WATCHER" ] || die "missing $WATCHER — land the branch and run scripts/deploy-live.sh first"
 [ -f "$SCRIPTS/kitty-pane-title-toggle.sh" ] || die "missing $SCRIPTS/kitty-pane-title-toggle.sh"
 
