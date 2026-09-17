@@ -3,7 +3,8 @@
 #
 # Subject: hooks/validate-bash.sh, FF-GATE span. The class (backlog 8c6606b6f048) was DETECTED and
 # enforced by nothing: deploy-parity-assert.sh's provenance leg scores it UNGATED after the fact and
-# .claude/commands/ship.md:120 forbids it in prose, but a bare `git merge origin/main` /
+# .claude/commands/ship.md ("Never raw-ff the shared checkout") forbids it in prose — anchored on
+# that phrase rather than a line number, which had already rotted — but a bare `git merge origin/main` /
 # `git pull --ff-only` in ~/Development/claude-infrastructure advances the files, creates no
 # symlinks, skips the green-stamp gate, and leaves live and checkout in perfect agreement — so
 # nothing that measures a QUANTITY can see it, and nothing at all could stop it.

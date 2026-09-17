@@ -1251,8 +1251,8 @@ fi
 
 # ── FF-GATE BEGIN — ungated advance of the SHARED CHECKOUT (backlog 8c6606b6f048) ────────────────
 # The class was DETECTED and enforced by NOTHING. `scripts/deploy-parity-assert.sh` (third leg,
-# :755-830) scores an ungated advance UNGATED *after the fact*, and `.claude/commands/ship.md:120`
-# states the doctrine in prose — but prose advises and a post-hoc check reports; neither can stop
+# :755-830) scores an ungated advance UNGATED *after the fact*, and `.claude/commands/ship.md`
+# states the doctrine in prose under "Never raw-ff the shared checkout" — but prose advises and a post-hoc check reports; neither can stop
 # the advance. Measured over the shared checkout's full reflog window (2026-08-01 → 2026-08-17):
 # 42 `merge origin/main` + 8 `pull --ff-only …` ungated advances against the sanctioned lane.
 #

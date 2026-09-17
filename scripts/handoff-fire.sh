@@ -8347,8 +8347,9 @@ hf_freshness_gate() {
     # a peer into whatever directory it is already in (8 of 15 live sessions were cwd'd there,
     # scripts/deploy-parity-assert.sh:912). So the cure fired on the symlink SOURCE.
     #
-    # `merge --ff-only origin/main` there is the operation .claude/commands/ship.md:120 forbids BY
-    # NAME. It advances the files and runs no install.sh, and ~/.claude/{hooks,commands,scripts,bin,
+    # `merge --ff-only origin/main` there is the operation .claude/commands/ship.md forbids BY
+    # NAME, under the heading "Never raw-ff the shared checkout" (anchored on the phrase: the line
+    # number has rotted repeatedly and a dead one already propagated into a backlog item). It advances the files and runs no install.sh, and ~/.claude/{hooks,commands,scripts,bin,
     # skills} are directories of PER-FILE symlinks — so a brand-new tracked file lands with no link
     # and silently does nothing, which is the LIVE_ADDS harm (cc-backlog 4e6a51df2a84), not a
     # cosmetic one. It also reflogs the REF, which is precisely what deploy-parity-assert's

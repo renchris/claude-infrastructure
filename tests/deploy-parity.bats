@@ -497,7 +497,9 @@ _pendfix() {   # a staged activation naming <path>, un-run; $1 = repo-relative p
 }
 
 # ── THIRD LEG: DEPLOY PROVENANCE (2026-07-31) — the bare-ff deploy, caught by its CAUSE ──────────
-# ship.md:98 names this script "the check that catches a bare-ff deploy after the fact", and until
+# ship.md ("Never raw-ff the shared checkout") names this script "the check that catches a bare-ff
+# deploy after the fact" — anchored on that phrase, not a line number, because the number has
+# rotted twice already (it read :98 while the sentence sat at :124). Until
 # this leg it could not: a raw `git merge --ff-only origin/main` leaves live and checkout in PERFECT
 # agreement, so every leg above reads clean by construction. What made it urgent is 70d86739, which
 # made deploy-live's link_refresh unconditional — it now repairs the unlinked-new-file residue on

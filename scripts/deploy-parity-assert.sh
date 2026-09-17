@@ -28,7 +28,8 @@
 # THIRD LEG (2026-07-31) — PROVENANCE: how the shared checkout reached the commit it is on. The two
 # legs above compare LIVE against CHECKOUT, and a raw `git merge --ff-only origin/main` leaves those
 # two in perfect agreement while skipping both the green-stamp gate and install.sh — so the one
-# failure ship.md:98 names this script the catcher of was, until now, the one failure it could not
+# failure ship.md ("Never raw-ff the shared checkout") names this script the catcher of was, until
+# now, the one failure it could not
 # see. Scored as two independent facts: UNGATED (the mechanism bypassed deploy-live.sh) and
 # UNVERIFIED (the live tree never earned a green stamp). Full derivation at the leg itself.
 # The CONTENT fact is three-valued as of 2026-08-07 — VERIFIED · DEGRADED · UNVERIFIED — because the
@@ -1266,7 +1267,8 @@ fi
 
 # ── THIRD LEG: DEPLOY PROVENANCE — HOW the live checkout reached the commit it is on ────────────
 # Both legs above ask "does the LIVE layer match the CHECKOUT?". Neither can answer the question
-# ship.md:98 actually assigns to this file — "the check that catches a bare-ff deploy after the
+# ship.md ("Never raw-ff the shared checkout") actually assigns to this file — "the check that
+# catches a bare-ff deploy after the
 # fact" — because a raw `git merge --ff-only origin/main` in the shared checkout leaves live and
 # checkout in PERFECT agreement. It skips the green-stamp gate and skips install.sh, and is then
 # indistinguishable from a sanctioned deploy by every quantity either leg above measures.
@@ -1437,7 +1439,8 @@ if [ "$ungated" -ne 0 ] || [ "$unverified" -ne 0 ]; then
   printf '\ndeploy-parity-assert: PROVENANCE — the live layer did not get here through the deploy gate.\n' >&2
   if [ "$ungated" -ne 0 ]; then
     printf '  A raw ff/pull moved the shared checkout. It advances FILES but creates NO symlinks, so any\n' >&2
-    printf '  brand-new tracked file lands unlinked and silently does nothing (ship.md:98).\n' >&2
+    printf '  brand-new tracked file lands unlinked and silently does nothing\n' >&2
+    printf '  (ship.md, "Never raw-ff the shared checkout").\n' >&2
   fi
   if [ "$unverified" -ne 0 ]; then
     printf '  The tree now LIVE never earned a green post-land stamp — nothing vouches for what is running.\n' >&2
