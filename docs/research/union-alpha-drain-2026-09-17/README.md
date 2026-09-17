@@ -342,7 +342,9 @@ and found customer content" is rc **3**, not rc 1 — it is an ANSWER and the to
 worked. Sharing 1 with "I could not screen at all" would let a caller read a broken
 screen as a dirty corpus, or a dirty corpus as a broken screen, and the second
 direction sends. Full table: `0` clean · `1` hard error · `2` refused to send ·
-`3` check found drops · `4` ran, some calls failed.
+`3` check found drops · `4` ran, some calls failed · `64` usage error.
+(`64`, not argparse's default `2`, so "you typed the flags wrong" cannot be
+mistaken for "a guard refused to send".)
 
 The key is read only from the environment (`agent-secrets run --`), never argv, and is
 never written to output, log or error. A failed call is classified by **HTTP status and
@@ -414,3 +416,77 @@ and one paste, because `add` reads the value hidden from a terminal:
 Unchanged and still correct: **never store `ANTHROPIC_API_KEY`.** Doctor's two ⚠ lines
 about `apiKeyHelper` are the CORRECT state — satisfying them is what moves Claude Code
 off the Max subscription and onto per-token billing.
+
+## 🚨 THE SUBJECT MODEL NO LONGER EXISTS (measured live, 2026-09-17, same day)
+
+The key was stored and the harness run end-to-end. `stealth/union-alpha` **returns HTTP
+404**, verbatim:
+
+> *"Thank you for participating in the Stealth Union Alpha testing period. This model
+> was Unbiased's Pareto. Use it now: https://openrouter.ai/unbiased/pareto"*
+
+**This dossier's own advice predicted it and was right** — §"WHAT TO DO INSTEAD" said to
+assume the model vanishes mid-run because the prior stealth model (Ox Alpha) lasted six
+days. Union Alpha's window closed on the same day it was analysed.
+
+### What replaced it is PAID, and the key cannot reach it — by design
+
+| | Union Alpha | `unbiased/pareto` (the successor) |
+|---|---|---|
+| prompt | `0` | **$2.50 / MTok** |
+| completion | `0` | **$7.50 / MTok** |
+| context | 262,144 | 262,144 |
+
+The free premise the three jobs rested on is gone. **The unfunded-account decision in
+§Throughput then did exactly its job**: `GET /api/v1/key` returns `limit: 0`,
+`limit_remaining: 0`, `is_free_tier: true`, so the paid successor is not merely
+ill-advised to call, it is **mechanically uncallable**. A spend-incapable key converted
+a pricing change into a clean refusal instead of a bill.
+
+### 24 of 445 catalogue models are still free; three were verified answering
+
+One live wire call each, through the harness:
+
+| Model | ctx | Result |
+|---|---|---|
+| `nvidia/nemotron-3-ultra-550b-a55b:free` | 1,048,576 | **200**, replied exactly `READY` |
+| `nex-agi/nex-n2.5-pro:free` | 262,144 | **200**, `READY` |
+| `inclusionai/ling-3.0-flash-vl:free` | 262,144 | **200**, `READY` |
+| `nvidia/nemotron-3.5-lightning:free` | 1,000,000 | 200, but leaked its scratchpad on a trivial instruction |
+| `thinkingmachines/inkling:free` | 1,048,576 | **403** — restricted, not generally available |
+
+### What this does and does not settle
+
+**Unchanged:** the verdict. The drain does not go on free inference, and the five
+mechanical kills stand — none of them was about *which* free model.
+
+**Open, and it is a decision rather than a measurement.** Conditions (1)–(3) and (5) of
+the envelope are model-agnostic, and the filter enforcing (4) is vendor-independent. But
+**kill #4 was specifically about the data policy**, and that analysis was about
+OpenRouter's stealth tier, not about DeepInfra or BaseTen serving an NVIDIA free variant.
+It cannot be re-settled from here: `GET /api/v1/models/<id>/endpoints` returns the
+providers and quantisation but **no `data_policy` field at all** — measured on all three
+candidates. So re-pointing the jobs at a surviving free model needs that one axis
+re-checked against each vendor's published terms, by a human reading them.
+
+⇒ **Do not re-point the three jobs at a substitute model on the strength of this dossier.**
+It analysed one model that no longer exists; the class is not the instance.
+
+### Harness defects found by running it for real
+
+1. **No CA bundle.** python.org's macOS framework Python ships none —
+   `ssl.get_default_verify_paths()` returns `cafile=None` AND `capath=None`, so every
+   HTTPS call died `CERTIFICATE_VERIFY_FAILED`. Fixed by handing SSL a **real** bundle
+   (`certifi`), never by weakening verification: an unverified context makes a hostile
+   network indistinguishable from the endpoint, on a connection carrying a bearer token.
+   A/B with one variable and no `SSL_CERT_FILE` in either arm: pre-fix `http=None`
+   (never reached the server), post-fix `http=404` (real response).
+2. **A default model is a trap once it dies.** `--model` is now **required**; a default
+   pointing at a 404 fails at call time with an error that reads like an outage.
+3. `agent-secrets run` enforces an **egress allowlist** (`~/.config/secrets/egress.allow`,
+   a loopback CONNECT proxy). It held one host; `openrouter.ai` was added by the operator.
+   This is why the first real call returned `Tunnel connection failed: 403 Forbidden`.
+
+**The classification rule earned itself on the first run:** every one of these failures
+was reported as what it was — a network error, a TLS error, a 404, a 403 — and never as a
+quota fault, because the classifier reads status and error text rather than tokens spent.
