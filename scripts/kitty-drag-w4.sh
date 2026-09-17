@@ -129,6 +129,8 @@ WAIT_BUILD=0
 DO_SHOTS=1
 DRY_RUN=0
 TEARDOWN_ONLY=0
+ARM_ONLY=0
+VERDICT_ONLY=0
 
 # ---------------------------------------------------------------------------
 #  Output helpers
@@ -146,6 +148,8 @@ while [ $# -gt 0 ]; do
         --dry-run)       DRY_RUN=1 ;;
         --no-screenshot) DO_SHOTS=0 ;;
         --teardown)      TEARDOWN_ONLY=1 ;;
+        --arm)           ARM_ONLY=1 ;;
+        --verdict)       VERDICT_ONLY=1 ;;
         --watch-secs)    shift; WATCH_SECS="${1:-120}" ;;
         --wait-build)    shift; WAIT_BUILD="${1:-0}" ;;
         -h|--help)       sed -n '1,80p' "${BASH_SOURCE[0]}"; exit 0 ;;
@@ -444,9 +448,15 @@ launch_sandbox() {
         fi
     fi
     [ -S "$SOCK" ] && rm -f "$SOCK"
+        # DETACHED, and that is load-bearing. A bare `&` child stays in the arming shell's
+        # process group, so anything that tears that shell down takes the sandbox with it --
+        # measured 2026-09-16, a 420s watch died at 59s with a CLEAN kitty.stderr and no press
+        # recorded, costing the operator the whole gesture window. macOS ships no setsid(1),
+        # but python3 has setsid(2), so exec through it to get our own group.
         env -u KITTY_LISTEN_ON -u KITTY_PID -u KITTY_WINDOW_ID \
             KITTY_CONFIG_DIRECTORY="$CFG_DIR" KITTY_CACHE_DIRECTORY="$CACHE_DIR" \
             KITTY_DRAG_LOG="$PRESS_LOG" \
+            nohup python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
             "$KITTY_BIN" --listen-on "unix:${SOCK}" --instance-group kdw4 \
             --directory "$RUN_ROOT" \
             sh -c "cat '${RUN_ROOT}/INSTRUCTIONS.txt'; exec \$SHELL" \
@@ -679,6 +689,21 @@ if [ "$TEARDOWN_ONLY" = 1 ]; then
     exit 0
 fi
 
+# --verdict: read the answer WITHOUT having held a foreground watch. The press log and the
+# baseline graph are both files, so the gesture's evidence outlives whatever armed it; only
+# the sandbox has to still be up, and it is detached now.
+if [ "$VERDICT_ONLY" = 1 ]; then
+    BEFORE="${RUN_ROOT}/before.json"
+    AFTER="${RUN_ROOT}/after.json"
+    [ -s "$BEFORE" ] || die "no baseline at ${BEFORE} -- nothing was armed.
+         Arm a run first:  ${BASH_SOURCE[0]} --arm"
+    sandbox_alive || die "no live sandbox on ${SOCK} -- it is gone, so the pane graph
+         cannot be compared. Re-arm:  ${BASH_SOURCE[0]} --arm"
+    snapshot_to "$AFTER" || die "could not read the pane graph from ${SOCK}"
+    print_verdict "$BEFORE" "$AFTER"
+    exit 0
+fi
+
 write_config
 write_instructions
 launch_sandbox
@@ -693,6 +718,17 @@ shoot "before" || warn "Q10: the before frame did not capture (see the Q10 note 
 head2 "GO -- the sandbox window is up and says what to press"
 python3 "$GRAPH_PY" snapshot --ls "$BEFORE" --out "${RUN_ROOT}/before.graph.json" \
     | sed 's/^/  /'
+
+if [ "$ARM_ONLY" = 1 ]; then
+    say ""
+    say "  ARMED and detached. Do the gesture whenever you like -- nothing is holding a"
+    say "  foreground watch, so no timeout, recycle or closed shell can cost you the run."
+    say "  When you have pressed, read the answer with:"
+    say ""
+    say "      ${BASH_SOURCE[0]} --verdict"
+    say ""
+    exit 0
+fi
 
 watch_for_gesture "$BEFORE" "$AFTER"
 print_verdict "$BEFORE" "$AFTER"
