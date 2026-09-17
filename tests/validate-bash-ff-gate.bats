@@ -182,3 +182,99 @@ git pull --ff-only -q origin main 2>&1 | tail -2" "$D"
   probe "cd $SHARED && git pull --ff-only -q origin main 2>&1 | tail -2" "$D"
   denied "$output"
 }
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# THE COMMIT ARM (G1, backlog 5529482875e8). A commit in the shared checkout is not an ADVANCE, it
+# is the thing that makes an advance impossible: the live layer moves by `merge --ff-only`, which
+# compares ANCESTRY, so one local commit wedges the converge for the WHOLE FLEET until a human
+# cures it. Measured 63 commits in 36 days, 16 hand-cures, 45+ logged DIVERGED refusals.
+#
+# WHY A BLANKET DENY IS SAFE HERE, WHERE IT WAS NOT FOR `reset`/`checkout`. The gate's own header
+# declines those two because "every innocent spelling outnumbers the guilty one and no predicate
+# here separates them". For commit the ratio is INVERTED and measured: all 63 reflog commits in
+# that window are ordinary development work (23 fix / 18 docs / 11 feat / 5 test / 2 perf / 1 wip /
+# 1 revert / 1 chore), and NOT ONE is machine-, desk- or bus-authored. The desk has never needed to
+# commit there. The innocent population is not small, it is EMPTY — and the one shape that looks
+# innocent, a session whose cwd resets to the shared checkout, is already handled by the cd walk
+# that ships above: case (14) is that exact shape and it is ALLOWED.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+
+@test "(11) DENIES \`git commit\` when the CWD is the shared checkout" {
+  probe "git commit -m 'some work'" "$SHARED"
+  [ "$status" -eq 0 ]
+  denied "$output"
+  reason "$output" | grep -q 'ARITHMETICALLY IMPOSSIBLE' || false
+  reason "$output" | grep -q 'git worktree add' || false     # names the remedy, not just the sin
+}
+
+@test "(12) CONTROL: the identical spelling in a WORKTREE is ALLOWED — the innocent population" {
+  probe "git commit -m 'some work'" "$WT"
+  ! denied "$output" || { echo "fired on the innocent population"; false; }
+}
+
+@test "(13) DENIES through \`git -C\` from anywhere — the target is named, not inherited" {
+  probe "git -C $SHARED commit -m x" "$WT"
+  denied "$output"
+}
+
+@test "(14) CONTROL: \`cd <worktree> && git commit\` FROM the shared checkout is ALLOWED" {
+  # THE LOAD-BEARING CONTROL. The backlog row was filed needs-human on the belief that "the desk's
+  # cwd resets to the shared checkout, so a blanket deny WILL break the desk". That conflates the
+  # shell's STARTING cwd with the directory the commit ACTS in. _ffg_scan already tracks a
+  # governing `cd`, so this — the exact shape every session on this box uses, and the one the
+  # objection describes — resolves to the worktree and is untouched. If this case ever reds, the
+  # objection has become true and the arm must be reconsidered, not patched.
+  probe "cd $WT && git commit -m 'work in my own worktree'" "$SHARED"
+  ! denied "$output" || { echo "BROKE THE ORDINARY SHAPE — the filed objection is now real"; false; }
+}
+
+@test "(15) DENIES from a SUBDIRECTORY of the shared checkout — same repo, same HEAD" {
+  probe "git commit -am wip" "$SHARED/scripts"
+  denied "$output"
+}
+
+@test "(16) the kill switch CC_SHARED_COMMIT_GATE=off allows it" {
+  export CC_SHARED_COMMIT_GATE=off
+  probe "git commit -m x" "$SHARED"
+  ! denied "$output" || false
+}
+
+@test "(17) CONTROL: that kill switch is PER-ARM — it does not disarm the advance arm" {
+  # A switch that silently widened to merge/pull would hand back the key to the older, narrower
+  # guard while appearing to relax only the new one.
+  export CC_SHARED_COMMIT_GATE=off
+  probe "git merge origin/main" "$SHARED"
+  denied "$output" || { echo "the commit switch disarmed the ADVANCE arm"; false; }
+}
+
+@test "(18) POSITION, not substring: \`git log\` mentioning commit is not a commit" {
+  probe "git log --format=%H --grep=commit" "$SHARED"
+  ! denied "$output" || { echo "matched the word, not the subcommand"; false; }
+}
+
+@test "(19) FAIL OPEN on a heredoc — a fixture that CONTAINS the words is not an invocation" {
+  # The measured failure mode of the sibling git-add guard (three refusals in one session,
+  # 2026-09-17): clause splitting never breaks on newlines, so a heredoc body is flattened into
+  # the writer's own clause. A false deny here blocks writing a TEST.
+  probe "cat > /tmp/f.bats <<'EOF'
+git commit -m fixture
+EOF" "$SHARED"
+  ! denied "$output" || { echo "denied a heredoc that merely mentions git commit"; false; }
+}
+
+@test "(20) MUTATION CONTROL: with the SHARED-COMMIT-ARM span deleted, (11) is ALLOWED" {
+  # Anchor-checked, and it must leave the ADVANCE arm intact — a mutant that disabled both would
+  # credit this suite for coverage it does not have.
+  grep -q '── SHARED-COMMIT-ARM BEGIN' "$HOOK" || { echo "BEGIN anchor moved"; false; }
+  grep -q '── SHARED-COMMIT-ARM END' "$HOOK"   || { echo "END anchor moved"; false; }
+  sed '/── SHARED-COMMIT-ARM BEGIN/,/── SHARED-COMMIT-ARM END/d' "$HOOK" > "$D/cmutant.sh"
+  chmod +x "$D/cmutant.sh"
+  ! diff -q "$HOOK" "$D/cmutant.sh" >/dev/null || { echo "mutation did not apply"; false; }
+  bash -n "$D/cmutant.sh" || { echo "mutant is not valid — the span is not self-contained"; false; }
+
+  probe "git commit -m x" "$SHARED" "$D/cmutant.sh"
+  ! denied "$output" || { echo "still denies — something OTHER than the commit arm is doing it"; false; }
+
+  probe "git merge origin/main" "$SHARED" "$D/cmutant.sh"
+  denied "$output" || { echo "the mutant also killed the ADVANCE arm — control is too coarse"; false; }
+}
