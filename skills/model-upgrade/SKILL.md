@@ -48,6 +48,41 @@ step did not exist. That is the whole reason it is Step 0.
 | **A. Lateral** | New model REPLACES same-family prior | Opus 4.7 → 4.8; Sonnet 4.6 → 4.7; Fable 5 → 5.1 |
 | **B. Tier-insertion** | New tier ABOVE the ladder; old top STAYS in service | Fable 5 above Opus 4.8 (2026-06-09) |
 | **C. Downgrade / window-end** | Access to top tier lapses; fall back | a FUTURE tier lapses (Fable 5 is now PERMANENT — Max/Team-Premium inclusion at 50% of limits from 2026-07-20, `frontier_access.permanent: true`, so it no longer applies) |
+| **D. Default-tier repoint** | The ladder is unchanged and every id stays in service — what moves is WHICH tier `roles.lead_default` (and the launcher) points at | "should Fable 5.1 replace Opus 5 as the starting model?" (asked 2026-09-16; answer was NO) |
+
+🚨 **CASE D IS NOT SERVED BY THIS RUNBOOK'S TOOLING, AND THE FAILURE IS SILENT.** Added
+2026-09-16 after the question was asked for the first time. A, B and C all move a `versions.*`
+key; D moves **`roles.*`** and touches `versions.*` not at all. Both sweep tools derive their
+working set exclusively from `versions`:
+
+* `~/bin/claude-bump-models:65-69` — `for family in frontier opus sonnet haiku` … builds pairs
+  from `versions.${family}_prior|${family}_latest`. A `roles.*` edit yields **no pair**.
+* `scripts/claude-lint-models.sh:33` — `.versions | … select(.key | test("_prior$"))`. A
+  `roles.*` edit contributes **nothing** to the stale set.
+
+⇒ **Running `/model-upgrade` on a Case D change certifies it while checking nothing**, and both
+tools report clean, which reads as a pass. Verified 2026-09-16 by reading both files.
+
+**So for Case D, the verification is not the sweep — it is these, and none of them is automatic:**
+
+1. **Decide in the currency that binds.** On a Max-plan fleet this is NOT $/token. Fable is a
+   **sub-cap of the same weekly bucket at 50%** (`accounts.json` `frontier.coupling`), so a
+   default on it strands half the weekly capacity at any quality. Read
+   `docs/research/fable51-vs-opus5-routing-2026-09-16/` before re-opening this; §&nbsp;Re-derive
+   gives the two commands.
+2. **Enumerate the default-model EMITTERS by hand** — they are not a `versions` sweep:
+   `roles.lead_default` · `~/.zshrc` `claude()` `--model`/`--effort` · the five per-config-dir
+   `settings.json` (incl. any `"model"` key — `.claude-quaternary` carries one and the other four
+   do not) · `agents/*.md` frontmatter · `commands/handoff.md` · `hooks/frontier-spawn-gate.sh`
+   (keyed by PREFIX — under a Fable default it throttles ORDINARY work) ·
+   `lib/cc-upgrade-gate/check05_launcher.sh` (hardcodes both `--model` and `--effort`, so any
+   repoint reds the gate that certifies binary bumps).
+3. **Never widen `model-classification.json`'s `update` list to fix this** without first
+   anchoring `claude-bump-models:133` — its `sed` is unanchored and `claude-fable-5` is a strict
+   PREFIX of `claude-fable-5-1`, so a sweep would corrupt ids to `claude-fable-5-1-1`.
+4. **There is no staging surface for a routing decision.** `*_staged` stages a RELEASE and is
+   invisible to both tools by construction; `accounts.json` accounts carry no model field. The
+   **role ladder is the only A/B surface** — move ONE role, measure, revert in one line.
 
 A blind literal sweep is correct ONLY for Case A. Case B is "add alongside" (per
 claude-api migration guide Step 1 Bucket 2) — rewriting `opus → fable` would
