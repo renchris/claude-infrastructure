@@ -556,10 +556,57 @@ def strip_env_prefix(argv):
     return argv[i:]
 
 
+def unquoted_lines(src):
+    """Split on NEWLINES that are outside quotes.
+
+    A newline is a command separator in shell, exactly like `;`. shlex.split() discards it as
+    ordinary whitespace, so before this existed `git add x\n[ ! -f m ]` tokenized into ONE argv
+    and force_token() read the next line's `-f` as git add's own flag. That is the too-STRONG
+    half of backlog 44750ff72ae7 verbatim — the half this file was written to kill — surviving on
+    the one separator the clause walk never learned. Measured 2026-09-17: three refusals in one
+    session, each blocking a bats fixture whose `git add` and whose `-f` were on different lines,
+    with the deny text asserting "a -f belonging to another command on the same line is not this
+    rule" — precisely the case it could not see.
+
+    Quote state is tracked so a newline INSIDE a quoted argument (`git commit -m "a\nb"`) does not
+    split, which would desync every later token and throw the whole scan to the text fallback.
+    A BACKSLASH-newline is a line CONTINUATION and is deliberately NOT split: `git add \\\n -f x`
+    is one command and one force-add, and splitting it would reopen the too-weak half.
+    Comments are handled by scanning each line separately rather than by joining with `;` — with
+    comments=True a joined `echo hi # note ; git add -f x` would swallow the real invocation into
+    the comment, turning this repair into a BYPASS.
+    """
+    out, cur, q, esc = [], [], None, False
+    for ch in src:
+        if esc:
+            cur.append(ch); esc = False; continue
+        if ch == "\\" and q != "'":
+            cur.append(ch); esc = True; continue
+        if q:
+            cur.append(ch)
+            if ch == q:
+                q = None
+            continue
+        if ch in ('"', "'"):
+            q = ch; cur.append(ch); continue
+        if ch == "\n":
+            out.append("".join(cur)); cur = []; continue
+        cur.append(ch)
+    out.append("".join(cur))
+    return [ln for ln in out if ln.strip()]
+
+
 def scan(src, depth=0):
     out = []
     if depth > 3:
         return out
+    for _line in unquoted_lines(src):
+        out.extend(scan_line(_line, depth))
+    return out
+
+
+def scan_line(src, depth=0):
+    out = []
     tokens = shlex.split(src, comments=True, posix=True)
     clauses = [[]]
     for tok in tokens:

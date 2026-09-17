@@ -295,3 +295,84 @@ prefix_hook_dir() {
   [ "$status" -eq 0 ]
   echo "$output" | grep -q 'PASSED' || false
 }
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# THE NEWLINE SEPARATOR — the too-STRONG half, surviving on the one separator the clause walk
+# never learned. The repair above split clauses on `|`, `||`, `&&`, `;`, `;;` and `&`; a NEWLINE is
+# a command separator too, and shlex.split() discards it as ordinary whitespace. So `git add x` on
+# one line and an unrelated `-f` on the NEXT tokenized into one argv and force_token() read the
+# next line's flag as git add's own — the reported symptom of backlog 44750ff72ae7 verbatim, with
+# the deny text asserting "a -f belonging to another command on the same line is not this rule"
+# about exactly the case it could not see. Measured 2026-09-17: three refusals in one session,
+# each blocking a bats fixture from being written.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+
+# A LITERAL SHA, never `origin/main`. The first build of this control replayed from the branch,
+# and the moving-ref ratchet caught it before it could land: the moment this fix IS origin/main,
+# the "pre-fix" artifact becomes the fix and the control compares it to itself — green, asserting
+# nothing, and a red control that later gets "fixed" is the worse half of that failure.
+# 5ec378a9d is this fix's parent.
+_NL_PRE_SHA=5ec378a9d
+_nl_prefix_hook() {  # the pre-fix artifact, recovered from git, never approximated
+  local old="$BATS_TEST_TMPDIR/nlpre"
+  mkdir -p "$old/lib"
+  git -C "$REPO" show "$_NL_PRE_SHA:hooks/validate-bash.sh"    > "$old/validate-bash.sh" 2>/dev/null
+  git -C "$REPO" show "$_NL_PRE_SHA:hooks/lib/is-true-flag.sh" > "$old/lib/is-true-flag.sh" 2>/dev/null
+  [ -s "$old/validate-bash.sh" ] || return 1
+  [ -s "$old/lib/is-true-flag.sh" ] || return 1
+  # THE MARKER, and the pin alone is not enough — a sha that is ever re-pointed goes vacuous
+  # silently. `unquoted_lines` is the identifier this fix introduces; it is DERIVED FROM THE
+  # MEASURED DIFF (pre=0, post=2 occurrences), not from the prose, because the obvious spelling is
+  # usually named in the post-fix file's own explanatory comment and would grep 1 on BOTH sides.
+  ! grep -q 'unquoted_lines' "$old/lib/is-true-flag.sh" \
+    || { echo "the replayed artifact ALREADY carries the fix — this control is vacuous"; return 1; }
+  printf '%s' "$old"
+}
+
+@test "NEWLINE: a git add and an unrelated -f on the NEXT line is not a force-add" {
+  # The exact command refused on 2026-09-17 while writing tests/ship-land-converge-edge.bats.
+  local cmd
+  cmd=$'cat > /tmp/t3 <<EOF\ngit -C "$R" add drift.txt\n[ ! -f "$MARKER" ] || false\nEOF'
+  [ "$(decision "$cmd")" != "DENY" ] || { echo "still falsely denied"; false; }
+}
+
+@test "NEWLINE RED CONTROL: the pre-fix hook at a PINNED sha DENIES that same command" {
+  # Without this the case above is green on a tree that never had the bug, and credits nothing.
+  local old; old="$(_nl_prefix_hook)" || { echo "cannot recover origin/main — a silent skip would be a fake pass"; false; }
+  local cmd
+  cmd=$'cat > /tmp/t3 <<EOF\ngit -C "$R" add drift.txt\n[ ! -f "$MARKER" ] || false\nEOF'
+  [ "$(decide_with "$old/validate-bash.sh" "$cmd")" = "DENY" ] \
+    || { echo "the pre-fix hook did NOT deny — this control proves nothing"; false; }
+}
+
+@test "NEWLINE: a real force-add on a LATER line is still DENIED — no bypass was opened" {
+  # The whole risk of teaching the scanner about newlines is that it stops looking past the first
+  # one. Each of these hides the invocation on a line of its own.
+  [ "$(decision $'echo setup\ngit add -f ignored.bin')" = "DENY" ] || false
+  [ "$(decision $'cd /tmp\ngit stage -f ignored.bin')" = "DENY" ] || false
+  [ "$(decision $'true\ngit -C /tmp/x add -Af node_modules')" = "DENY" ] || false
+}
+
+@test "NEWLINE: a COMMENT may not swallow the next line's invocation" {
+  # The tempting one-line implementation — join the lines with ' ; ' and let the existing splitter
+  # do the work — is a BYPASS, because shlex runs with comments=True: `echo hi # note ; git add -f x`
+  # puts the real force-add inside the comment. Scanning each line separately is what avoids it,
+  # and this case is why that choice is not a style preference.
+  [ "$(decision $'echo hi # note\ngit add -f x')" = "DENY" ] || false
+}
+
+@test "NEWLINE: a backslash-continuation is ONE command, and still a force-add" {
+  # A trailing backslash continues the line, so this must NOT be split — splitting it would
+  # reopen the too-weak half for the price of closing the too-strong one.
+  [ "$(decision $'git add \\\n  -f ignored.bin')" = "DENY" ] || false
+}
+
+@test "NEWLINE: a newline INSIDE quotes does not split, and does not desync the scan" {
+  # If a quoted newline split, every later token would shift and the scan would throw to the text
+  # fallback — which over-blocks. Both halves asserted: the innocent one passes, the guilty one
+  # sharing the same shape is still caught.
+  [ "$(decision 'git commit -m "line one
+line two"')" != "DENY" ] || { echo "a quoted newline was treated as a separator"; false; }
+  [ "$(decision 'git commit -m "line one
+line two" && git add -f ignored.bin')" = "DENY" ] || false
+}
