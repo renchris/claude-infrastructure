@@ -1,0 +1,45 @@
+# customer-terms.txt — the deny list for union-batch.py's content filter.
+# One term per line, case-insensitive substring match. '#' starts a comment.
+#
+# WHY THIS FILE EXISTS: condition (4) of the five-condition envelope in README.md is
+# "no customer content". A1/A6 established that OpenRouter's stealth tier trains on
+# prompts and publishes no ZDR path, so any customer string in a payload is a
+# disclosure that cannot be recalled. This list is the mechanical form of that rule.
+#
+# It is deliberately OVER-BROAD. A false positive costs one dropped record; a false
+# negative discloses a paying customer's data to an anonymous lab. Add, never prune.
+
+# --- tenants and venues (lib/config/tenants.ts) ---
+insomniac
+insomniacdenver
+clubvinyl
+vinylnightclub
+the church
+church nightclub
+heist
+the key
+key collection
+evolve
+evolvenanaimo
+nanaimo
+studio 60
+studio60
+studio60mia
+
+# --- the product and its infrastructure ---
+reso
+reso.gl
+renchris
+turso
+libsql
+amplify
+
+# --- named people at customer organisations ---
+padilla
+sheksconsulting
+
+# --- operator identity ---
+chrisren
+chris ren
+ichris96
+ren.chris
