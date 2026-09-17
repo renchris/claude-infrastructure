@@ -55,7 +55,9 @@
 #   this pair, bars up via min_windows:      30,30 -> 30,30   x3, bar still at y=221pt
 set -euo pipefail
 
-CONF_OFF="${KITTY_CONF:-$HOME/.config/kitty/kitty.conf}"
+# The OFF half is its OWN file, never the main kitty.conf. Borrowing the resting config made
+# OFF unreachable the moment the resting value became "bar up" (operator ruling 2026-09-16).
+CONF_OFF="${KITTY_CONF_TITLE_OFF:-$HOME/.config/kitty/kitty-title-off.conf}"
 CONF_ON="${KITTY_CONF_TITLE_ON:-$HOME/.config/kitty/kitty-title-on.conf}"
 STATE="${KITTY_TITLE_STATE:-$HOME/.claude/autonomy/kitty-title-state}"
 
