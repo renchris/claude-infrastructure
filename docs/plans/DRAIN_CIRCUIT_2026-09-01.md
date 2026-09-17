@@ -922,6 +922,17 @@ so it resolves on its own; it just cannot be *driven* from this side. `deploy-li
   dated ≤09-07 read **426** — 425 at W9, 426 at W10, 426 now, i.e. **monotone**, as a never-deleting
   population must be — and every `claude/*` head is still a well-formed fire ref, so the lane has not
   been renamed. 445 fire refs total.
+  🚨 **(0) IS REFUTED IN PLACE, 2026-09-17, by the session that finally landed W11** (the claim stays
+  as the record of what was believed). The population is NOT monotone: `scripts/branch-prune-landed.sh:142`
+  deletes landed `claude/*` branches from origin, and refs dated ≤09-07 now read **334 against the pinned
+  floor of 426** (−92 in five days). The two sources W11 cited never delete and are not the population.
+  Because `obs` can only fall, the floor is now **permanently unreachable** and
+  `scripts/cloud-lane-liveness.sh` returns UNKNOWN on every tick — so W11 landed correct and delivers
+  no liveness signal until the floor is redesigned. Full record + the refuted paragraph:
+  `docs/research/drain-circuit-fire-lane-instrument-2026-09-12.md` §1. The remedy trades against this
+  wave's own stated properties (store-free · pinned-rather-than-trusted · UNKNOWN nulls every field),
+  so it is FILED as cc-backlog `529aebcb4992` (conviction 65, with a self-retracting falsifier), not
+  taken unilaterally.
   **(1) 🚨 W10's headline number rotted in ONE DAY, and that is the finding.** The identical
   expression re-run 24 h later: 09-11 alone delivered **13 fires**, more than W10's entire four-day
   window. 09-07…09-10 still reads **2.50/day** (W10 reproduced exactly); 09-07…09-11 reads **4.60/day**
