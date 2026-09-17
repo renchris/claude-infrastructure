@@ -989,9 +989,53 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   # teardown still runs when its setup failed (memory: destructive-cleanup-runs-after-its-setup-
   # failed) — here that would hand `git worktree remove --force` an empty path. The static half is
   # SINGLE-quoted so `$_tw`/`$_rc` survive to run time; only land_root and BRANCH interpolate now.
-  # shellcheck disable=SC2016  # the single quotes are the POINT — $_tw/$_rc must survive unexpanded
+  # shellcheck disable=SC2016  # the single quotes are the POINT — $_wt/$_bw/$_tw/$_rc must survive unexpanded
   # into the stored command and be evaluated by the shell that RUNS it, not by this one. Expanding
   # them here would bake this trap handler's own (empty) values into an operator's re-land step.
+  # 🚨 THE BRANCH GETS ITS OWN WORKTREE — land_root's HEAD IS NEVER MOVED (2026-09-17, 947508942c60).
+  # This used to read `cd ${land_root} && git checkout ${BRANCH}`, and land_root is DELIBERATELY the
+  # durable main checkout (resolve_main_root, above) — which on this machine is
+  # ~/Development/claude-infrastructure, the symlink SOURCE for the live ~/.claude layer. Checking a
+  # branch out there leaves HEAD carrying commits origin/main lacks, so deploy-live's `merge
+  # --ff-only` is arithmetically impossible and the live layer stops converging for EVERY session on
+  # the box, not merely the one that ran the retry. Nothing here repairs it: a grep of scripts/ bin/
+  # hooks/ for a checkout-main / switch-main / restore returns ZERO, and deploy-live refuses by
+  # contract ("This lane never rebases or resets a shared checkout", :2543), so the cure is a HUMAN
+  # running `git -C <repo> checkout main`. The hazard was LATENT when filed and still was when fixed
+  # (shared checkout on main, `git cherry` empty, core.bare unset), so no row had been run verbatim.
+  #
+  # RE-MEASURE THE POPULATION, NEVER RE-QUOTE IT. The backlog is a LIVE store that drains: two reads
+  # 20 minutes apart while this fix was written returned 11 rows and then 8, so a frozen count here
+  # would rot the way a published p95 does. The stable thing is the CRITERION — an open row whose
+  # `run` checks the branch out in land_root — and the command that re-derives it:
+  #   cc-backlog list --json | jq -r '.[]|select(.run and (.run|test("git checkout -q -B")))|.run'
+  #
+  # AND FOR HALF OF THEM THE COMMAND COULD NEVER HAVE LANDED ANYTHING. The shared-checkout refusal
+  # (:4954) exempts only branches matching SHIP_LAND_SESSION_BRANCH_RE (`^(feat|fix|chore|docs|
+  # refactor|test|perf|style|build|ci)/.+`); a `claude/fire-…` or `wt-…` branch moved HEAD and then
+  # exited 4 (4 of the 8 rows at the 2026-09-17T16:2xZ read were that shape). Certain converge block,
+  # zero lands — so this is a capability fix as much as a safety
+  # one, and running in a worktree drops the refusal entirely (TOP is a /var/folders path).
+  #
+  # WHY NOT THE TWO CHEAPER SHAPES: restoring HEAD afterwards is FAIL-OPEN — an interrupted retry
+  # leaves it parked, and these lands run for hours under lock contention, so "interrupted" is the
+  # case rather than the corner. Extracting trunk's pipeline with `git archive` instead of the
+  # second worktree would hold worktree ops at one, but the tracked tree is 121 MB and one stuck
+  # branch is retried dozens of times; it also breaks ${SCRIPT_DIR}/../hooks/lib/land-inflight.sh,
+  # whose dependency set is not enumerable from here.
+  #
+  # THE RESIDUAL, STATED: this runs TWO worktree add/remove cycles against the shared checkout where
+  # it used to run one, and that machinery can set core.bare=true on it (memory:
+  # worktree-ops-can-bare-the-shared-checkout — measured after two cycles from one session). That is
+  # a wider window on a PROBABILISTIC fleet-killer, traded for removing a CERTAIN one; detection
+  # stays `git -C <repo> rev-parse --is-inside-work-tree` → false, repair `git config core.bare
+  # false`. `--force` on the first arm is what keeps the case where land_root itself is already
+  # parked on the branch working (git allows two worktrees on one branch; it flatly refuses to
+  # force-update a branch checked out elsewhere, at ANY number of --force, so the `-B` arm is
+  # reachable only when the branch is absent — which is exactly when nothing can hold it). It does
+  # change one case: a branch checked out in a LIVE peer's worktree used to make both checkouts fail
+  # and the command refuse; it now proceeds. That branch is this row's own stuck branch and the row
+  # is the sanctioned instruction to land it, so the change is deliberate.
   # THE CHECKOUT MUST SURVIVE A DELETED BRANCH (2026-09-06, BACKLOG_ZERO §6). The row pins the
   # failed head at `$ref` precisely because the author's pane — and with it the branch — may be gone
   # by the time anyone re-lands: measured on the live store, 22 of the 48 open re-land rows had NO
@@ -999,6 +1043,25 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   # token and the command that was the row's whole reason to exist was unrunnable for nearly half
   # of them. `checkout -B <branch> <ref>` recreates the branch from the pinned head; the plain
   # checkout is tried first so a branch that still exists (possibly ahead of the pin) is what lands.
+  # AND IT MUST NOT MOVE THE DURABLE CHECKOUT'S HEAD AT ALL (2026-09-17, cc-backlog 947508942c60).
+  # TWO SESSIONS FOUND THIS INDEPENDENTLY AND AGREED ON THE DIAGNOSIS — b62bf7ae5 landed first and
+  # its analysis is kept verbatim below, because convergence on the call is evidence FOR it. They
+  # differ only on the CURE, and the one that shipped first is superseded here for two measured
+  # reasons, neither of which is a defect in it:
+  #   · A RESTORE IS FAIL-OPEN IN TIME. `_oh` puts HEAD back in the teardown, so the shared checkout
+  #     is parked on the branch for the ENTIRE ship-land run — which under land-lock contention is
+  #     hours (a measured 3h10m optimistic-round livelock; a land killed at 936s). Every session's
+  #     deploy-live sees DIVERGED for that whole window, so the fleet block is bounded, not removed
+  #     — and an interrupted retry (SIGTERM, panic, reboot) never runs the restore at all.
+  #   · IT LEAVES HALF THE ROWS UNLANDABLE. The retry still runs with cwd = land_root = SHARED, so
+  #     the shared-checkout refusal at :4954 still fires for any branch outside
+  #     SHIP_LAND_SESSION_BRANCH_RE — `claude/fire-…`, `wt-…` — which was 4 of the 8 open rows at
+  #     the 2026-09-17T16:2xZ read. Those moved HEAD, exited 4, and landed nothing, every time.
+  # Giving the branch its OWN worktree removes both: HEAD is never moved, so there is nothing to
+  # restore and no window to be interrupted in, and TOP becomes a /var/folders path so the refusal
+  # does not apply. `_oh` is therefore dropped rather than kept — with HEAD unmoved it is dead code.
+  #
+  # ── b62bf7ae5's record, preserved (the analysis is shared; only the cure changed) ───────────────
   # AND IT MUST PUT THE CHECKOUT BACK (2026-09-17). land_root above is deliberately the DURABLE
   # main checkout — and on this box that is the symlink SOURCE for ~/.claude. `checkout -B` there
   # leaves HEAD carrying commits origin/main lacks, so `merge --ff-only` is arithmetically
@@ -1014,9 +1077,12 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   #   · symbolic-ref FIRST, rev-parse as the fallback, so a detached HEAD is restored detached;
   #   · it is a `;` statement before `exit $_rc`, so a restore that cannot run (a tree the land
   #     left dirty) costs nothing and can never overwrite the land's own exit code.
-  # shellcheck disable=SC2016  # the single quotes are the POINT — $_tw/$_rc/$_oh must survive
+  #   (its stored command, for the record:)
+  #   cmd="cd ${land_root} && "'_oh="$(git symbolic-ref -q --short HEAD 2>/dev/null || git rev-parse HEAD 2>/dev/nul …
+  # ───────────────────────────────────────────────────────────────────────────────────────────────
+  # shellcheck disable=SC2016  # the single quotes are the POINT — $_wt/$_bw/$_tw/$_rc must survive
   # unexpanded into the stored command and be evaluated by the shell that RUNS it, not by this one.
-  cmd="cd ${land_root} && "'_oh="$(git symbolic-ref -q --short HEAD 2>/dev/null || git rev-parse HEAD 2>/dev/null || true)" && git fetch origin --quiet && '"{ git checkout -q ${BRANCH} 2>/dev/null || git checkout -q -B ${BRANCH} ${ref:-${BRANCH}}; } && "'_tw="$(mktemp -d)/trunk" && git worktree add --detach "$_tw" origin/main >/dev/null && bash "$_tw/scripts/ship-land.sh"; _rc=$?; [ -n "${_tw:-}" ] && git worktree remove --force "$_tw" >/dev/null 2>&1; [ -n "${_oh:-}" ] && git checkout -q "$_oh" >/dev/null 2>&1; exit $_rc'
+  cmd="cd ${land_root} && _br=${BRANCH} && _pin=${ref:-${BRANCH}} && "'git fetch origin --quiet && _wt="$(mktemp -d)" && _bw="$_wt/branch" && _tw="$_wt/trunk" && { git worktree add --force "$_bw" "$_br" >/dev/null 2>&1 || git worktree add --force -B "$_br" "$_bw" "$_pin" >/dev/null; } && git worktree add --detach "$_tw" origin/main >/dev/null && ( cd "$_bw" && bash "$_tw/scripts/ship-land.sh" ); _rc=$?; [ -n "${_bw:-}" ] && git worktree remove --force "$_bw" >/dev/null 2>&1; [ -n "${_tw:-}" ] && git worktree remove --force "$_tw" >/dev/null 2>&1; [ -n "${_wt:-}" ] && rmdir "$_wt" 2>/dev/null; exit $_rc'
   # A FIXTURE pipeline must never file into the operator's live ledger — tests/ship-land.bats
   # drives ~50 of them, several deliberately non-zero. Same discipline as gate_home_setup's
   # bats detection, and `on` forces it so the suite can prove the real thing against its own
