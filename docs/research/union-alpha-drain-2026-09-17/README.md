@@ -490,3 +490,49 @@ It analysed one model that no longer exists; the class is not the instance.
 **The classification rule earned itself on the first run:** every one of these failures
 was reported as what it was — a network error, a TLS error, a 404, a 403 — and never as a
 quota fault, because the classifier reads status and error text rather than tokens spent.
+
+## THE STRONGEST REMAINING JOB DOES NOT NEED THE LANE AT ALL (measured 2026-09-17)
+
+§"Where Union Alpha CAN be used" ranks **job 2** — the false-closure audit over `done`
+evidence strings — as the largest and best-oracled of the three. Measured against the
+live store, it is **deterministic**, and the model was never doing the load-bearing work.
+
+Its oracle is already `git merge-base --is-ancestor`. The only thing an LLM was being
+asked for is *extracting a sha from free text* — which is a regex:
+
+| | count | share |
+|---|---|---|
+| `done` rows carrying evidence | 3,410 | — |
+| carry ≥1 sha-shaped token (regex, pure-digit runs excluded) | **2,811** | **82.4%** |
+| carry none | 599 | 17.6% |
+| distinct sha candidates | 3,563 | — |
+| resolve in this repo (`git cat-file --batch-check`, one call) | 2,159 | — |
+
+So ~82% of the job is regex + git: no model, no key, no vendor, no data-policy question,
+no money, and seconds instead of 31 minutes. This is the dossier's own §"Explicitly NOT
+rented to it" principle — *"Most 'bulk LLM' jobs here have deterministic solutions"* —
+applying to its own job 2.
+
+🚨 **And the naive deterministic version is WRONG in the direction that manufactures
+findings, which is why this is recorded rather than shipped.** On a 400-sha sample of
+shas that resolve here, **155 are not ancestors of `origin/main`**. That is an **upper
+bound on false closures, not a count of them**, because this repo's own corpus already
+records the mechanism: *a rebased land rewrites the object, so `--is-ancestor` rc 1 reads
+as never-landed over content that is on trunk* (`cited-sha-may-not-survive-the-land`).
+A further 1,404 candidates do not resolve here at all — another repo's sha, or an object
+rewritten away — and that is **not** evidence of non-landing either (`absent-from-trunk-
+has-two-opposite-causes`).
+
+A stage-1-only tool would therefore report ~155 confident "false closures" whose true
+count is unknown and much smaller — **the exact defect class the audit exists to find**.
+The honest build is two-stage and still fully deterministic: ancestry first, then a
+CONTENT check (patch-id, or the commit's paths against trunk) for every non-ancestor,
+and a separate "not this repo" bucket that is never scored. That is real work and it was
+not started here; what is settled is that **it needs no model**, so it is not blocked on
+the key, the egress allowlist, a vendor's data policy, or anything in this dossier.
+
+**Why it is worth building.** This session's predecessor found a row about a **paying
+customer's bottle prices** (`05f63af4e918`) that had been *falsely auto-closed* by a
+falsifier whose `git -C` bound only the `fetch`, so `git show` ran in the sweep's cwd and
+retracted vacuously — blast radius 1 of 597. The audit's purpose is finding more of that
+class, and it can run today.
