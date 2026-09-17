@@ -122,10 +122,19 @@ chord_disarmed() { grep -q "^# DISARMED-map cmd+$1+b" "$OFF"; }
   [ "$status" -eq 0 ] || false
 }
 
-@test "bars are OFF by default and held up ONLY by the ON half" {
+# 🚨 INVERTED IN PLACE 2026-09-16 BY OPERATOR RULING, never deleted. This case demanded the
+# RESTING config keep `window_title_bar_min_windows 0` — bars off until a chord raises them.
+# The operator has overruled that: "all other features come secondary to being draggable if
+# its a technical impossibility for all/both". At 0 there is NO real bar, so a plain drag on a
+# pane title cannot work, and he has now reported that failure three times. The original
+# expectation is kept verbatim in the comment below as the record of what was believed:
+#     run last_directive "$OFF" window_title_bar_min_windows   ->  "0"
+# The ON half still reads 1; what changed is that the RESTING state reads 1 too, so the pair
+# no longer toggles the bar's EXISTENCE — only the padding that decides whether it costs a row.
+@test "bars are ON in the resting config — the operator ruling, and the ON half agrees" {
   run last_directive "$OFF" window_title_bar_min_windows
   [ "$status" -eq 0 ] || false
-  [ "$output" = "0" ] || false
+  [ "$output" = "1" ] || false
   run last_directive "$ON" window_title_bar_min_windows
   [ "$status" -eq 0 ] || false
   [ "$output" = "1" ] || false
@@ -195,6 +204,8 @@ print('ON ', on.window_padding_width.top, on.window_padding_width.bottom,
       on.window_title_bar_min_windows)
 "
   [ "$status" -eq 0 ] || false
-  echo "$output" | grep -qE "^OFF 0(\.0)? 0(\.0)? 0 top$" || false
+  # min_windows 1, not 0: the resting config carries the real draggable bar (operator ruling
+  # 2026-09-16). The previous expectation was `... 0 top$` and is recorded here, not deleted.
+  echo "$output" | grep -qE "^OFF 0(\.0)? 0(\.0)? 1 top$" || false
   echo "$output" | grep -qE "^ON  0 0 1$" || false
 }
