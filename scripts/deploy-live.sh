@@ -335,32 +335,77 @@ HOST_GREEN="$POSTLAND_DIR/host-green"                            # rows: "<suite
 # only what a verdict actually said, a red DELETES rather than merely fails to write, and a missing
 # row stays non-zero — so none of the three ambiguities above survive into it.
 if [ "${1:-}" = "--falsify-host" ]; then
-  _fh_suite="${2:-}"
-  [ -n "$_fh_suite" ] || exit 2                       # nothing named ⇒ could not ask
+  shift
+  [ "$#" -ge 1 ]      || exit 2                       # nothing named ⇒ could not ask
   [ -r "$MANIFEST" ]  || exit 2                       # unreadable manifest ⇒ could not ask.
   # NOT exit 0: an ABSENT manifest is the EMPTY set by the manifest's own contract, which would make
   # every host suite read as "no longer run" and retract every item this script has ever filed. That
   # is the emptiness reading the same partition contract makes safe for the VERIFIER and catastrophic
   # here, so the two consumers deliberately part company on it.
+  #
+  # ── N SUITES, CONJUNCTION (2026-09-17, backlog 236c1a881e97) ────────────────────────────────────
+  # This verb took ONE suite, and fals_host_set below therefore emitted NO probe for a failing set of
+  # two or more — "the honest answer rather than a confident wrong one", because evidence about one
+  # member cannot retract a finding about the set. The honesty was real and the conclusion was one
+  # step short: the set's question IS askable, as the CONJUNCTION over its members. Asking it of the
+  # first name would retract on a member; asking it of EVERY name retracts only when the whole
+  # premise is gone, which is exactly the item's own subject.
+  # What "no probe" cost, measured on the row that paid it: item 236c1a881e97
+  # (tests/deploy-parity-live.bats + tests/test-hermeticity-lint.bats, filed 2026-09-16) had no
+  # retraction path of any kind — `cc-premise check` read `verdict=clear`, no arm able to speak — and
+  # re-dispatched 14 times in 40 hours while BOTH of its suites sat green in HOST_GREEN the whole
+  # time. Against it, the two single-suite rows filed after HOST_GREEN landed and therefore carrying
+  # a probe closed in 3 claims and in ZERO claims (92b2e22da7d0, ada97f901c65); every probe-less row
+  # in this filer's history took multiple. An unfalsifiable row is not a cautious row, it is a
+  # permanent one.
+  #
+  # A WHITESPACE-BEARING SINGLE ARGUMENT IS REFUSED, and that is a live hole this closes rather than
+  # a hypothetical. Before this change `--falsify-host 'tests/a.bats tests/b.bats'` exited 0 — not
+  # through any of the three GONE legs but through the manifest loop, which strips all whitespace
+  # from every row and so can never equal an argument containing a space. The could-not-ask state
+  # was returning the one load-bearing success value: a false retraction, available to any caller
+  # who spelled a set the obvious way. The set is now spelled as separate arguments, so a single
+  # argument that is really a set is a CALLER error (exit 2) and can never again read as a cure.
+  # Shape is validated across ALL arguments BEFORE any of them is evaluated: a malformed call is a
+  # property of the call, not something whose verdict depends on which member happened to be asked
+  # first.
+  for _fh_arg in "$@"; do
+    [ -n "$_fh_arg" ] || exit 2                       # an empty name asks nothing
+    case "$_fh_arg" in *[[:space:]]*) exit 2 ;; esac   # a set smuggled into one argument
+  done
+
+  # ONE SUITE's predicate, factored out so the set above is a conjunction OVER it rather than a
+  # second copy OF it — two copies would be free to disagree, and the disagreement would show up as
+  # a retraction. 0 = this suite has left the host population, 1 = it is still in it.
   # Same normalisation as host_checks' own manifest read — comment strip, whitespace strip — so the
   # probe and the producer can never disagree about what counts as a row.
-  _fh_in=1
-  while IFS= read -r _fh_line || [ -n "$_fh_line" ]; do
-    _fh_line="${_fh_line%%#*}"
-    _fh_line="$(printf '%s' "$_fh_line" | tr -d '[:space:]')"
-    [ -n "$_fh_line" ] || continue
-    [ "$_fh_line" = "$_fh_suite" ] && { _fh_in=0; break; }
-  done < "$MANIFEST"
-  [ "$_fh_in" -eq 0 ] || exit 0                       # left the manifest ⇒ the live layer stopped running it
-  [ -f "$DEPLOY_REPO/$_fh_suite" ] || exit 0          # absent in the deployed tree ⇒ host_checks skips it
-  # Still run, and still present. The remaining question is what the live layer last SAID about it.
-  # Quoted case pattern = literal match: the suite is a path and `*` in one must not glob a row.
-  if [ -f "$HOST_GREEN" ]; then
-    while IFS= read -r _fh_row || [ -n "${_fh_row:-}" ]; do
-      case "${_fh_row%% *}" in "$_fh_suite") exit 0 ;; esac
-    done < "$HOST_GREEN"
-  fi
-  exit 1                                              # still in the population ⇒ the finding can still be live
+  _fh_gone() {
+    local _fh_suite="$1" _fh_in=1 _fh_line _fh_row
+    while IFS= read -r _fh_line || [ -n "$_fh_line" ]; do
+      _fh_line="${_fh_line%%#*}"
+      _fh_line="$(printf '%s' "$_fh_line" | tr -d '[:space:]')"
+      [ -n "$_fh_line" ] || continue
+      [ "$_fh_line" = "$_fh_suite" ] && { _fh_in=0; break; }
+    done < "$MANIFEST"
+    [ "$_fh_in" -eq 0 ] || return 0                   # left the manifest ⇒ the live layer stopped running it
+    [ -f "$DEPLOY_REPO/$_fh_suite" ] || return 0      # absent in the deployed tree ⇒ host_checks skips it
+    # Still run, and still present. The remaining question is what the live layer last SAID about it.
+    # Quoted case pattern = literal match: the suite is a path and `*` in one must not glob a row.
+    if [ -f "$HOST_GREEN" ]; then
+      while IFS= read -r _fh_row || [ -n "${_fh_row:-}" ]; do
+        case "${_fh_row%% *}" in "$_fh_suite") return 0 ;; esac
+      done < "$HOST_GREEN"
+    fi
+    return 1                                          # still in the population ⇒ the finding can still be live
+  }
+
+  # SHORT-CIRCUIT ON THE FIRST SURVIVOR. One member still in the population is enough to keep the
+  # set's premise live, and the caller's contract has no channel for "partly gone" — exit 1 is the
+  # advisory "still live" that every non-zero already means here.
+  for _fh_arg in "$@"; do
+    _fh_gone "$_fh_arg" || exit 1
+  done
+  exit 0                                              # EVERY named suite is gone ⇒ the premise is gone
 fi
 
 DRY_RUN=0; BOOTSTRAP=0; FORCE=0; AUTO=0; OFFLINE=0
@@ -897,30 +942,43 @@ except Exception: sys.exit(1)' "$1" 2>/dev/null && return 0
 # tests/<name>.bats per line, `#` comments. MISSING manifest ⇒ EMPTY set ⇒ skip silently — the
 # verifier's side of the same contract reads a missing manifest as "run everything", so the two
 # halves stay total by construction and neither ever needs hand-syncing.
-# fals_host <suite> → the STORED FALSIFIER string for an item about ONE host suite (see the
-# --falsify-host block at the top of this file for the predicate and why it is the narrow one).
+# fals_host <suite>... → the STORED FALSIFIER string for an item about one or more host suites (see
+# the --falsify-host block at the top of this file for the predicate, and for why the set's question
+# is the CONJUNCTION over its members rather than no question at all).
 fals_sq()   { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 fals_host() {
-  [ -n "${1:-}" ] || return 1
+  local s
+  [ "$#" -ge 1 ] || return 1
+  # EVERY name is validated BEFORE the first byte is emitted. printf'ing the verb and then bailing
+  # mid-list on a bad member would store a HALF-FORMED probe — a string that still runs, asks a
+  # SMALLER question than the item's, and answers it with the one load-bearing exit code.
+  for s in "$@"; do [ -n "$s" ] || return 1; done
   # shellcheck disable=SC2016  # $HOME must NOT expand here — see the --falsify-host block above.
   # The output is a STORED STRING that cc-premise later runs through `/bin/sh -c`, so the expansion
   # belongs at probe time, not at write time. Expanding it now would bake this machine's home into
   # a durable ledger record.
-  printf '"$HOME/.claude/scripts/deploy-live.sh" --falsify-host %s' "$(fals_sq "$1")"
+  printf '"$HOME/.claude/scripts/deploy-live.sh" --falsify-host'
+  for s in "$@"; do printf ' %s' "$(fals_sq "$s")"; done
 }
-# fals_host_set "<red>" → a probe for a SINGLE-suite failing set, and deliberately NOTHING for a
-# wider one. `$red` arrives as host_checks built it — a leading space, then ` <suite>(<n>)` per
-# failing suite — so this strips the counts, and emits only when exactly one name survives. A set of
-# two cannot be answered by a probe about one of them, and answering it anyway is the "exit 0 means
-# two different things" defect with extra steps.
+# fals_host_set "<red>" → the probe for a failing set of ANY size. `$red` arrives as host_checks
+# built it — a leading space, then ` <suite>(<n>)` per failing suite — so this strips the counts and
+# hands every surviving name to fals_host, which spells them as SEPARATE arguments.
+#
+# THIS EMITTED NOTHING FOR A SET OF TWO OR MORE until 2026-09-17, on the reasoning that "a set of two
+# cannot be answered by a probe about one of them". That is true, and it is not the only probe
+# available: the set is answered by a probe about ALL of them. The narrow reading left item
+# 236c1a881e97 with no retraction path at all — `cc-premise check` read `verdict=clear`, no arm able
+# to speak — and it re-dispatched 14 times in 40 hours over two suites that sat green in HOST_GREEN
+# throughout. The names go out as separate ARGUMENTS precisely so this cannot degrade into the old
+# one-argument spelling, which the predicate now refuses as could-not-ask rather than resolving it
+# through the manifest leg as a false retraction.
 fals_host_set() {
-  local cleaned n
+  local cleaned
   cleaned="$(printf '%s' "${1:-}" | sed 's/([0-9]*)//g')"
-  # shellcheck disable=SC2086  # deliberate split on whitespace: this is counting words, not paths
+  # shellcheck disable=SC2086  # deliberate split on whitespace: this is splitting words, not paths
   set -- $cleaned
-  n=$#
-  [ "$n" -eq 1 ] || return 1
-  fals_host "$1"
+  [ "$#" -ge 1 ] || return 1
+  fals_host "$@"
 }
 
 host_cut_row() { # <suite> → its prior "<consecutive-n> <epoch>", or "0 0" when it has no streak
