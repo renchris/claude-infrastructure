@@ -791,7 +791,16 @@ frontier_discovery_budget:
 #     effort with NO override surface (AgentInput has no effort field; frontmatter
 #     `effort` not parsed — GH #25591/#25669/#31536/#65598 open). Fable panels
 #     fired from an Opus@max lead therefore run @max: an accepted, BOUNDED premium
-#     (CursorBench $18-vs-$15 band per task, capped by max_fable_spawns_per_session)
+#     (~~CursorBench $18-vs-$15 band per task~~, capped by max_fable_spawns_per_session)
+#     ⚠️ THAT BAND IS UNANCHORED — 2026-09-16. It matches neither CursorBench board checked
+#     (3.2.0 nor 4.0), so the cap's stated justification cites a figure with no live source.
+#     A published $/task figure perishes with its board, and a number restated in resident
+#     config has no path to learn it changed — the same reason the ship-policy table names no
+#     repo. THE CRITERION, not the number: a Fable spawn is worth its premium only where the
+#     work is unknown-unknown DISCOVERY the default tier is blind to; re-measure before citing
+#     any figure, with `bash scripts/effort-parity-assert.sh` for the effort side and
+#     `claude-accounts` for the quota side (which is the currency that actually binds here —
+#     docs/research/fable51-vs-opus5-routing-2026-09-16/).
 #     — do NOT ask the user to /effort-dip around waves; that's manual steering.
 #     ⚠️ SCARCE-WINDOW CARVE-OUT (2026-06-30, "Prompting Fable 5" guide): the line above
 #     is COST-framed and holds for an OPEN-ENDED window. During a PLAN-USAGE-CAPPED window
@@ -874,7 +883,18 @@ effort_defaults:
   # explicit in "Prompting Claude Fable 5.1": "Re-run the sweep even if you already ran one on
   # Claude Fable 5: effort level names don't correspond to the same amount of thinking across
   # models." Same lesson the Opus 4.8 → Opus 5 sweep taught. `high` is 5.1's API default and the
-  # stated starting point; gains over Fable 5 are largest at the HIGHER settings, while `medium`
+  # stated starting point; ~~gains over Fable 5 are largest at the HIGHER settings~~, while `medium`
+  # 🚨 REFUTED IN PLACE 2026-09-10 by our own sweep, and left standing because the clause is the
+  # record of what was believed: recall does NOT rise with effort above medium. Measured
+  # low 6 · medium 10 · high 10 · xhigh 9 · max 9/25 — the curve PLATEAUS at medium and is flat
+  # to max, so "largest at the HIGHER settings" is wrong-signed for this task class. Compounding
+  # it, the 64K output cap BINDS above `high`: xhigh continued in 3 of 9 cells (one finishing 536
+  # tokens short of the recovery limit) and max in 4 of 6, producing NO review at all on the
+  # largest brief after 256K tokens and 47 minutes. ⇒ the Fable 5.1 effort ladder has TWO usable
+  # rungs here, medium and high, not five — and any xhigh/max run needs
+  # CLAUDE_CODE_MAX_OUTPUT_TOKENS well above 64K. Scope limit, stated: one task class (anchored
+  # single-file review), one sample per cell, recall only. Record:
+  # docs/research/fable51-effort-sweep-2026-09-10/README.md, while
   # roughly matches Fable 5 at lower cost and `low` is often competitive with Opus/Sonnet on
   # cost-per-task while scoring higher. Two effort-specific traps: at `low` it calls search and
   # retrieval tools LESS (add a verification nudge for anything needing fresh information), and
