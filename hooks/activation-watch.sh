@@ -452,8 +452,9 @@ EOF
     "$( [ -n "$lag" ] && [ "$lag" != 0 ] && printf ' (this checkout is %s commit(s) BEHIND its trunk — every finding below is live-vs-checkout, so read it with that in mind)' "$lag" )")"
   if [ "${#undep[@]}" -gt 0 ]; then
     out="$out"$'\n'"  UNDEPLOYED-MIRROR — committed ON TRUNK but absent from this checkout, i.e. DEPLOY LAG, not a missing commit: $(join_names "${undep[@]}")"
-    # THE SANCTIONED ADVANCE, never a raw ff (.claude/commands/ship.md:112, "Never raw-ff the shared
-    # checkout" — the old `ship.md:98` pointer was DEAD: commands/ship.md is 55 lines and the
+    # THE SANCTIONED ADVANCE, never a raw ff (.claude/commands/ship.md, "Never raw-ff the shared
+    # checkout" — anchored on the PHRASE, because every numeric spelling of this pointer has died in
+    # turn: :98 then :112, and commands/ship.md is 55 lines while the
     # doctrine lives in the PROJECT copy. A backlog item cited the dead pointer verbatim off this
     # comment, so it was propagating). This line used to render
     # `git -C $root merge --ff-only origin/main` as a ▶ runnable step on EVERY SessionStart, which

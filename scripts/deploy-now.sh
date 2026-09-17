@@ -6,7 +6,7 @@
 #   Hammer: bash ~/.claude/DEPLOY-NOW.sh --force    (every flag is passed straight through)
 #
 # This script used to advance the shared checkout ITSELF, with `git merge --ff-only origin/main`.
-# That is the exact operation `.claude/commands/ship.md:112` forbids by name — "Never raw-ff the
+# That is the exact operation `.claude/commands/ship.md` forbids by name — "Never raw-ff the
 # shared checkout" — and it made this file the one TRACKED, DOCUMENTED, operator-blessed spelling
 # of the forbidden path. Three properties of that body are why it is gone rather than patched:
 #
