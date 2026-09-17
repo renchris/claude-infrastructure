@@ -178,7 +178,30 @@ versions:
 # unavailable to this fleet whatever the API docs say. Re-measure at the next binary bump rather than
 # trusting this block: it is a fact about ONE build, exactly like the `fable` alias resolution above.
 #  - Per-message effort, `mid-conversation-output-config-2026-07-01` — change effort mid
-#    conversation WITHOUT invalidating the prompt cache. Also supported on Opus 5. This is the
+#    conversation WITHOUT invalidating the prompt cache. ~~Also supported on Opus 5.~~
+#    🚨 CORRECTED 2026-09-16 — MEASURED, AND IT IS FABLE-5.1-EXCLUSIVE AT THE CLIENT.
+#    Every model entry in claude.exe 2.1.260 carries a `capabilities:[...]` array. Across ALL
+#    SIX pricing tiers present in the binary, exactly one lists `per_turn_effort`:
+#        HAS    tier_10_50_cache_read_0_25   (Fable 5.1)
+#        LACKS  tier_5_25                    (Opus 5 / Opus 4.8)   <- the discriminating arm
+#        LACKS  tier_10_50                   (Fable 5)
+#        LACKS  tier_3_15                    (Sonnet 5)
+#        LACKS  tier_15_75 · tier_2_10
+#    Positive controls on the same instrument: claude-opus-5 18 hits, claude-fable-5-1 11 (a
+#    plain grep on the Bun-compiled binary reads 0 for every model, so `strings -a` first,
+#    always). The client ALSO carries a runtime latch, so this is belt-and-braces rather than a
+#    static allowlist alone: "[effort] model ${f.model} rejected output_config.effort; latching
+#    unsupported and retrying without it." (tengu_effort_unsupported_retry).
+#    ⚠️ The API may differ from the CLIENT — the bundled claude-api skill lists per-message
+#    effort for Fable/Mythos AND Opus (beta). Both can be true: the CLI owns the header set, so
+#    a beta the API serves but Claude Code does not send is unavailable to this fleet. What is
+#    measured here is what OUR sessions can reach.
+#    🚨 STRATEGIC TENSION, recorded deliberately: the 2026-09-16 routing decision keeps Opus 5
+#    as the default and moves the lever to EFFORT (docs/research/fable51-vs-opus5-routing-
+#    2026-09-16/) — and per-turn effort, the capability that would make an effort-axis router
+#    cheap, exists ONLY on the model that decision declines to default to. Re-measure at the
+#    next binary bump; if `tier_5_25` ever gains it, the effort-axis router becomes buildable
+#    on the default tier and this trade-off dissolves. This is
 #    first lever that would let a lead raise effort for one hard step and drop back, instead of
 #    the launcher-wide --effort flag we are stuck with today (GH #25591).
 #  - Turn-scoped system messages, `mid-conversation-system-clear-at-2026-08-21` —
