@@ -1440,9 +1440,22 @@ region-test lever.*
 `dnd_test_cleanup_fake_window()` that calls `set_window_being_dragged()` in its `finally` — **the
 state is process-global** — and the `kitty_tests/keys.py:688` `Boss.__new__(TestBoss)` idiom.
 
-**Acceptance checklist before the patch is called done** (research § 4.7): `./autoformat` (the
+🚨 **`./autoformat` IS STRUCK FROM THIS CHECKLIST — IT PANICKED THE KERNEL TWICE ON 2026-09-16.**
+The original clause is preserved below because it is the record of what was believed, and it is
+REFUTED, not merely discouraged: running it is how this machine died at 15:54:00 and again at
+16:28:56 (`docs/research/kernel-watchdog-panic-2026-09-16.md`). It formats the vendored, GITIGNORED
+`dependencies/` tree, so ten parallel `clang-format` workers over the SIMDe headers reached 242 GB
+and 274 GB of anonymous footprint on a 64 GB box and filled the VM compressor's segment table in
+~130 s. **The hazard is dormant only because the panics wiped the trees; it re-arms the moment
+anyone runs `./dev.sh build`.** Two further traps this clause cannot see: `.clang-format-ignore`
+does NOT protect you (autoformat pipes content on stdin with `--assume-filename`, and the ignore
+file is measured honoured by-path and BYPASSED on that path), and `gen/config.py:76` ends in
+`os.execl(autoformat)`, so REGENERATING THE OPTION DEFINITIONS RE-EXECS IT WITHOUT YOU TYPING IT.
+**Run instead:** `ruff format` and `gofmt -s -l -w tools kittens` (the safe two-thirds of what
+autoformat does), plus `clang-format -i --style=file:.clang-format <only the C files you changed>`.
+~~**Acceptance checklist before the patch is called done** (research § 4.7): `./autoformat` (the
 declared `pre_commit` hook — `ruff format`, `gofmt -s -l -w tools kittens`, `clang-format`;
-**master-only**, neither exists at v0.48.2) · `ruff check .` clean **including the `ANN` ruleset**,
+**master-only**, neither exists at v0.48.2)~~ · `ruff check .` clean **including the `ANN` ruleset**,
 single quotes, 160 columns, **no `from __future__ import annotations` anywhere**, PEP 604 unions ·
 `./test.py type-check` clean — the checker is **`ty` (Astral), not mypy** · `./test.py` clean · the
 two literal CI greps: **no trailing whitespace anywhere** and **no space after `` :code:` ``** ·
@@ -1455,7 +1468,10 @@ empty list` at `kitty/actions.py:49`; a group outside `groups` raises `KeyError`
 taking the command palette, the docs build and the Go codegen down with it. Both measured.
 
 **Goal.** *A patch adding the mouse_drag_window action is complete in /private/tmp/kitty-dev and
-passes kitty's own gates — proven by printing the output of `./autoformat`, `ruff check .`,
+passes kitty's own gates — proven by printing the output of `ruff format`, `gofmt -s -l -w tools
+kittens`, per-file `clang-format -i` on the changed C files (**NOT `./autoformat`, which panicked
+this kernel twice on 2026-09-16 — see the struck clause above; a goal naming it cannot be cleared
+without reproducing the panic**), `ruff check .`,
 `./test.py type-check`, and `./test.py --module window_drag` showing its plan line and zero failures;
 do not post anything to any upstream tracker, do not open a PR, and do not modify
 /Users/chrisren/Development/claude-infrastructure.*
@@ -1554,7 +1570,7 @@ judgement.
 | 3 | Every deploy gate is green with the new linked source declared | `tests/deploy-parity.bats` TAP with its `1..N` line, 0 failures; `scripts/deploy-parity-assert.sh` clean |
 | 4 | **A human has driven the gesture** and the chord is chosen | W4's script prints a before/after `neighbors` diff showing the layout changed, set-change tested BEFORE order |
 | 5 | The operator's styled pane header is draggable in his live kitty | the chord works in his own panes, by his own hand |
-| 6 | The upstream patch is complete and passes kitty's own gates on master | `./autoformat`; `ruff check .`; `./test.py type-check`; `./test.py --module window_drag` with its plan line and 0 failures |
+| 6 | The upstream patch is complete and passes kitty's own gates on master | `ruff format` + `gofmt -s -l -w tools kittens` + per-file `clang-format -i` (**never `./autoformat`** — it panicked the kernel twice, 2026-09-16); `ruff check .`; `./test.py type-check`; `./test.py --module window_drag` with its plan line and 0 failures |
 | 7 | A patched v0.48.2 build arms the drag | `kitty +runpy 'import kitty; print(kitty.__file__)'` under `/private/tmp/kitty-482` **(never `--version`)**; state before/after |
 | 8 | The docs build passes with the new docstring | Q23's check, § 4.M |
 | 9 | Nothing in this plan posted anything upstream | no PR, no issue, no comment — the operator's call |

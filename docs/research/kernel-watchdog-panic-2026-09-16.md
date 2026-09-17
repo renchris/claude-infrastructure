@@ -504,9 +504,23 @@ it had been failing 127 on trunk independently of any subject — the very class
 - **The generator is not in this repo.** `~/kitty-dev/autoformat` walks every directory under the
   checkout except `dist`, `build`, `bypy`, `3rdparty` and dotfiles — and a dev tree that has run
   `./dev.sh build` contains **`dependencies/darwin-arm64/include/simde/**`**, thousands of vendored
-  SIMD headers among the largest generated C in circulation. `.clang-format-ignore` lists
-  `3rdparty/**` and not `dependencies/`. Adding `dependencies` to either list ends this storm class
-  at its source for one line. That tree is another session's working copy and is **not** edited here.
+  SIMD headers among the largest generated C in circulation, and **`dependencies/` is in kitty's own
+  `.gitignore`** — a formatter reformatting gitignored vendored content is a defect on its face,
+  which is what makes this upstream-worthy rather than a local quirk.
+
+  ~~`.clang-format-ignore` lists `3rdparty/**` and not `dependencies/`. Adding `dependencies` to
+  either list ends this storm class at its source for one line.~~ **CORRECTED 2026-09-17: "either
+  list" is REFUTED, and it matters because the wrong half looks like a fix and changes nothing.**
+  `autoformat:98-99` pipes file CONTENT on stdin with `--assume-filename`, and an ignore file is
+  consulted against a path clang-format OPENS. Measured, one variable, Apple clang-format 17.0.0:
+  by path the file is skipped and nothing is printed; through stdin with `--assume-filename` the
+  identical file is reformatted. So the ONLY effective edit is the `os.listdir` skip tuple at
+  `autoformat:37`, beside `dist`, `build`, `bypy` and `3rdparty`. **And one caller is invisible:**
+  `gen/config.py:76` ends in `os.execl(autoformat)`, so regenerating the option definitions re-execs
+  the formatter without anyone typing its name. That tree is another session's working copy and is
+  **not** edited here; what IS ours is `docs/plans/KITTY_DRAG_ACTION.md`, which commanded
+  `./autoformat` in its acceptance checklist, its definition of done, and a `/goal` condition a
+  fired session could not have cleared without reproducing the panic. All three are struck in place.
 - **`clang-format` at 25–30 GB for one header is itself pathological** and is worth its own
   measurement; ten concurrent copies is our decision, but the per-process figure is not.
 - **The `data.kalloc.1024` wired ratchet** (§ 4.2, 14.53 GB at 22.6 days) is untouched. It is
