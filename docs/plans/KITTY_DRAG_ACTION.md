@@ -1312,6 +1312,48 @@ graphics placement survive) · Q8 (is the dead band actually annoying in the han
 
 **What W4 unblocks:** W7, and nothing else. It is also the phase-3 lead's **succession point**.
 
+### W4 — RUN LOG (2026-09-16, the operator's own hand)
+
+**Two runs, both INCONCLUSIVE, and the second one produced the fix.** Recorded because the next
+session must not re-derive any of this, and because the apparatus is fine — what was missing was a
+distinction it could not draw.
+
+| run | flags | verdict | what it meant |
+|---|---|---|---|
+| 1 | *(default 120s watch)* | `NO-CHANGE`, panes 2→2 | no gesture observed. The script's watch is **120 s**, which is exactly the harness's foreground timeout, so the call backgrounded at the moment watching began and there was no visible `GO`. |
+| 2 | `--watch-secs 420` | `SET-CHANGED`, panes **2→0**, `gone: 1, 2` | the sandbox OS window CLOSED during the watch. Not a reorder, and the witness correctly refused to call it one. Process stayed alive with a live socket; `kitten @ ls` returned `[]`; stderr held one benign `glCopyImageSubData` warning and **no traceback**. |
+
+🚨 **THE GAP RUN 2 EXPOSED, AND IT IS THE REUSABLE PART.** The gate reads its answer from a
+pane-adjacency diff, and that diff **cannot separate the two states the operator most needs told
+apart**: *no chord ever fired* and *a chord fired and the drag did not complete*. Both render as "no
+layout change". So an inconclusive run said nothing about which half to fix — the binding and the
+modifiers, or the gesture — and two runs of a human's time bought no direction at all.
+
+**The cure (landed `a57c4ba0c`):** `scripts/kitty-drag-window.py` appends one line per press —
+timestamp, window id, spelling, rows, and the verdict string it returned, so a *decline* is recorded
+as loudly as an arm. It is **opt-in on `KITTY_DRAG_LOG`** and unset in production, and every failure
+inside it is swallowed, because a logging fault must never become a popup on a press — the same
+hazard the four guards exist to avoid. `kitty-drag-w4.sh` passes the log to the sandbox and prints a
+`PRESSES:` line above the Q9 reading; `PRESSES: NONE` now names the finding explicitly.
+
+Verified both directions in a throwaway sandbox by invoking the kitten through **remote control
+rather than any synthesised mouse event** (see § 8's note on why that distinction is load-bearing
+here): with the variable set, two invocations returned `armed:preserving:installed` and `armed:free`
+and both appear in the log; without it the kitten still arms and **no file is created**.
+
+**To resume W4:** a teardown is REQUIRED, not cosmetic — a reused sandbox was launched without
+`KITTY_DRAG_LOG` in its environment, so only a fresh kitty logs.
+
+```
+bash scripts/kitty-drag-w4.sh --teardown && bash scripts/kitty-drag-w4.sh --watch-secs 420
+```
+
+**Also open on this wave:** the Q10 **before** frame did not capture on run 1 while all 196 burst
+frames did — so this is not a Screen Recording permission fault; the window was most likely not yet
+mapped when the first shot fired. Q10 stays answerable by comparing an early burst frame to a late
+one, but the clean before/after pair is not there. That path had never executed before the operator
+ran it, deliberately: `screencapture` raises a TCC modal no subagent can answer.
+
 ### W5 — Deliverable B, the patch against master
 
 **Deliverable.** A complete, formatted, type-checked, tested patch in `/private/tmp/kitty-dev`, plus
