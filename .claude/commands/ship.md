@@ -22,7 +22,7 @@ of either number here. Revisit this sentence once the panel clears its 8-row flo
 background verifier** (`postland-verify.sh`, every 300s, fresh worktree, background QoS)
 which is now the **only** party that may assert "this tree is green": a GREEN stamp is
 what advances the `gate-green` marker, and a reproducible red is **auto-reverted** with
-the author notified. **Deploy** (`deploy-live.sh --auto`, every 600s) is fail-closed on
+the author notified. **Deploy** (`deploy-live.sh --auto`, every 600s — **or at the land itself, whichever comes first**) is fail-closed on
 those stamps — the live `~/.claude` only ever advances to a full-suite-proven tree, then
 runs the host-suite partition against it. Why: the old frame ran the corpus per land, per
 session, load-gated — 43 lands/day × a 20-53 min corpus on a box whose ambient load never
@@ -41,6 +41,21 @@ a tuning problem, so the verdict moved off the land path instead.
 - **green ≠ deployed.** Your land is on trunk in seconds; the live layer advances on the
   next verifier+deploy cycle. `📦 → ✅` is earned at the land; deployment is observable
   separately (below), not something to wait on.
+- **…and the land now KICKS that cycle, so "the next cycle" is usually this one.** `post_release_finish()`
+  fires `deploy-live.sh` detached once the land-lock is released (`cbcf90b1b`, 2026-09-17): the 600s
+  launchd clock is the **backstop**, the land is the mover. Until that landed, 40.1% of 152 measured
+  live-layer advances were run **by hand**, median commit→live residency 2.31h / p90 15.95h. It runs
+  the **degraded tier** — the bare form with `CC_DEPLOY_MAX_LAG_COMMITS=0`, exactly what
+  `.claude/settings.json` already grants an agent — never `--force`, which would bypass the
+  T1/T1H/T2/T3 ladder. It **cannot fail your land**: it is detached, every guard degrades to a silent
+  no-op, and its output goes to `~/.claude/autonomy/postland/converge-edge.log`, not to the land.
+  **The guard is read in the SHARED CHECKOUT, never in your worktree** — `git -C $DEPLOY_REPO cherry
+  origin/$TRUNK HEAD` — because `merge --ff-only` compares ANCESTRY there; your own HEAD is by
+  construction ahead of its own origin at that moment, which is precisely what you just landed, so
+  reading it here would always pass. Non-empty ⇒ it prints `⚠ ship-land: live-layer converge NOT
+  kicked` naming the divergence and the inspect command, and stands down; **your land is still fine
+  and still on trunk**, but nothing reaches the live layer for ANY session until that checkout stops
+  diverging. Kill switch `SHIP_LAND_CONVERGE=off`.
 - **…but that transition is BUDGETED, and the ledger owns the verdict — not this line.** Inside
   the converge budget the land is a `✅` carrying a converging note, which is why you never wait
   on the 600s cycle. Past it — `LIVE_LAG` > `WRAP_LIVE_BUDGET_COMMITS`, HEAD older than
