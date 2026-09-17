@@ -3351,7 +3351,7 @@ _reland_author_pane() { # <branch> <badfile> → files a real re-land row from a
 
   git worktree remove --force "$_AW"
   git branch -q -D feat/reland-head-pin
-  git rev-parse -q --verify feat/reland-head-pin >/dev/null && false || true
+  ! git rev-parse -q --verify feat/reland-head-pin >/dev/null || false
 
   before_sha="$(git rev-parse HEAD)"
   run bash -c "$cmd"
