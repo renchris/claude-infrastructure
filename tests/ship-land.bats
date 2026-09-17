@@ -34,6 +34,13 @@ setup() {
   export CC_BACKLOG_BIN="$REPO/bin/cc-backlog"
   export POSTLAND_DIR="$BATS_TEST_TMPDIR/postland"            # flakes.jsonl + queue, sandboxed
   export POSTLAND_VERIFY=off                                  # never spawn a real post-land child
+  # …and never spawn a real CONVERGE child. This suite is one of the grandfathered non-$HOME-hermetic
+  # entries in scripts/test-hermeticity-lint.sh, so an unfixtured `converge_kick` would resolve
+  # DEPLOY_REPO to ${HOME}/Development/claude-infrastructure — THE OPERATOR'S REAL SHARED CHECKOUT —
+  # and fire deploy-live --auto at it from a unit test. OFF for the whole suite; the kick's own cases
+  # arm it per-test with DEPLOY_REPO, CC_POSTLAND_DIR and SHIP_LAND_DEPLOY_LIVE all pointed at
+  # BATS_TEST_TMPDIR. Same shape, and the same reason, as POSTLAND_VERIFY above.
+  export SHIP_LAND_CONVERGE_KICK=off
   # env-bleed immunity: when THIS suite runs inside an outer ship-land gate, the outer
   # pipeline's scope resolution must not leak into the fixture pipelines under test.
   # SHIP_LAND_GATE_ROUNDS / _VERIFY_RETRIES were the two gaps here, and the omission was
@@ -2599,7 +2606,9 @@ add_assert() {   # $1=branch $2=suite basename $3=the FIRST (non-final) statemen
   # THE PLACEMENT PROPERTY, and the one the three tests above cannot see. setup() exports
   # CC_GATE_MAX_LOAD=0 for the whole suite, so every one of them runs with shedding OFF — they
   # prove the ratchet FIRES, never that it fires in a phase shedding cannot drop. Move the
-  # DEAD_LINT block from run_gate's ratchet position (ship-land.sh:1588) down past run_smoke's
+  # DEAD_LINT block from run_gate's ratchet position (the `DEAD_LINT=` assignment and the ratchet
+  # arm that reads it — re-keyed off a line number 2026-09-17, which had ALREADY rotted on trunk to
+  # a typed-send-lint comment before this diff moved anything) down past run_smoke's
   # `load_above_ceiling` early return and all three stay GREEN, while the ratchet silently becomes
   # a no-op on exactly the busy box it is needed on. Mutation-proved in both directions.
   #
@@ -4109,4 +4118,262 @@ _markers_repo() { # $1=markers(1|0) $2=filler bytes → prints a repo dir with t
   [ "$(printf '%s\n' "$code" | grep -c -e '-cE')" -eq 1 ]
   [ "$(printf '%s\n' "$code" | grep -c -e 'grep -q')" -eq 0 ]
   true
+}
+
+# ══ G2 · THE CONVERGE EDGE TRIGGER (CONTINUOUS_DELIVERY_TO_LIVE_KITTY.md T15) ═════════════════════
+# A land puts bytes on trunk that nothing runs until deploy-live fast-forwards the SHARED CHECKOUT
+# (~/.claude is a per-file symlink farm over it). Before converge_kick the only automated caller of
+# that converge was a 600 s launchd clock — nothing was wired to the event that CREATES the work,
+# and 40.1% of 152 measured advances were consequently run by hand.
+#
+# EVERY CASE BELOW POINTS DEPLOY_REPO, CC_POSTLAND_DIR **AND** SHIP_LAND_DEPLOY_LIVE AT
+# $BATS_TEST_TMPDIR. That is not boilerplate: this suite is grandfathered as non-$HOME-hermetic in
+# scripts/test-hermeticity-lint.sh, so an unfixtured kick resolves DEPLOY_REPO to the operator's
+# REAL shared checkout and fires a REAL deploy-live --auto at it from a unit test. setup() therefore
+# holds the kick OFF for the whole suite and these cases arm it one at a time.
+#
+# The stub is what makes the SPAWN itself testable rather than held constant (the fixture-shape trap:
+# a stub that cannot express the axis under test leaves every case decorative on it). It records its
+# ARGV and the two lag-budget env vars, so the two decisions most likely to be "helpfully" broken
+# later — the mode must be `--auto`, and the kick must NOT relax the T2 lag budget — are pinned by
+# CONTENT rather than by a comment nothing executes.
+
+_arm_kick() {   # fixture a clean shared checkout + a recording deploy-live stub, then arm the kick
+  DEPLOY="$BATS_TEST_TMPDIR/deploy"
+  git clone -q "$ORIGIN" "$DEPLOY"
+  git -C "$DEPLOY" config user.email tester@example.com
+  git -C "$DEPLOY" config user.name tester
+  STUB="$BATS_TEST_TMPDIR/deploy-live-stub.sh"
+  STUB_REC="$BATS_TEST_TMPDIR/stub.rec"
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'printf "argv=%s\n" "$*"                             >> "$STUB_REC"'
+    echo 'printf "lag_commits=[%s]\n" "${CC_DEPLOY_MAX_LAG_COMMITS-<unset>}" >> "$STUB_REC"'
+    echo 'printf "lag_hours=[%s]\n"   "${CC_DEPLOY_MAX_LAG_HOURS-<unset>}"   >> "$STUB_REC"'
+    echo 'echo "STUB-STDOUT-TOKEN"'
+    echo 'echo "STUB-STDERR-TOKEN" >&2'
+  } > "$STUB"
+  chmod +x "$STUB"
+  export STUB_REC
+  export DEPLOY_REPO="$DEPLOY"
+  export CC_POSTLAND_DIR="$POSTLAND_DIR"     # deploy-live's spelling of the dir ship-land calls POSTLAND_DIR
+  export SHIP_LAND_DEPLOY_LIVE="$STUB"
+  export SHIP_LAND_CONVERGE_KICK=on
+}
+
+_await_stub() {  # bounded wait for the DETACHED child; absence after the bound is the verdict
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [ -s "$STUB_REC" ] && return 0
+    sleep 0.25
+  done
+  return 1
+}
+
+_land() {  # $1=branch $2=file — one complete land off `main`
+  git checkout -q -b "$1" main
+  printf 'x\n' > "$2"
+  git add "$2" && git commit -q -m "feat: $2"
+  bash "$SHIPLAND" --trunk main
+}
+
+_markers() {
+  # `grep -c` PRINTS a valid 0 and EXITS 1 on no-match, and exits 2 printing NOTHING on a missing
+  # file — so `$(grep -c … || echo 0)` puts a second producer on one stream ("0\n0") and a bare
+  # `|| true` yields the EMPTY string, which is what `[ "$(_markers)" -eq 0 ]` then chokes on with
+  # `integer expression expected`. Capture once, default the VARIABLE. (Measured here: four cases
+  # died exactly that way on the first run of this block.)
+  local n
+  n="$(grep -c 'converge edge-trigger' "$POSTLAND_DIR/deploy.log" 2>/dev/null)" || true
+  case "${n:-}" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
+}
+
+@test "converge kick: a clean shared checkout FIRES deploy-live --auto, detached, into deploy.log" {
+  _arm_kick
+  run _land feat/kick1 k1.txt
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "LANDED"
+
+  # (a) the marker line — written by ship-land BEFORE the spawn, so it survives --auto's (correct)
+  #     silence on an already-converged box. It is the ONLY thing separating an edge-triggered
+  #     advance from a tick's in a log that records both, i.e. the whole measurability of this lane.
+  grep -q 'ship-land: converge edge-trigger after ' "$POSTLAND_DIR/deploy.log"
+  grep -q 'sid test-sid-123' "$POSTLAND_DIR/deploy.log"
+  # (b) the interval stamp exists and is a plain epoch
+  [ -s "$POSTLAND_DIR/converge-kick.last" ]
+  run cat "$POSTLAND_DIR/converge-kick.last"
+  [[ "$output" =~ ^[0-9]+$ ]] || { echo "stamp is not an epoch: $output"; false; }
+  # (c) the lock is RELEASED — it covers the stamp update only, never the detached run
+  [ ! -d "$POSTLAND_DIR/converge-kick.lock" ]
+  # (d) the child really ran, with the mode this lane is contracted to use
+  _await_stub || { echo "detached deploy-live never ran"; false; }
+  grep -q '^argv=--auto$' "$STUB_REC"
+  # (e) …and WITHOUT relaxing the T2 lag budget. Baking CC_DEPLOY_MAX_LAG_COMMITS=0 into every land
+  #     would convert .claude/CLAUDE.md's attributable, agent-held standing-converge exception into
+  #     unattended standing policy — every land advancing the live layer on ABSENCE of evidence.
+  #     That is a fleet behaviour change and a C10 decision; this pins that the trigger does not
+  #     take it on its own.
+  grep -q '^lag_commits=\[<unset>\]$' "$STUB_REC"
+  grep -q '^lag_hours=\[<unset>\]$' "$STUB_REC"
+  # (f) the child's streams were REDIRECTED to the lane's log, not inherited by the land
+  grep -q 'STUB-STDOUT-TOKEN' "$POSTLAND_DIR/deploy.log"
+  grep -q 'STUB-STDERR-TOKEN' "$POSTLAND_DIR/deploy.log"
+}
+
+@test "converge kick: a SLOW deploy-live does not delay the land by one second" {
+  # WHY THIS CASE EXISTS AND WHAT IT REPLACED. The obvious complement to (f) — assert the child's
+  # tokens are ABSENT from the land's own stdout — is VACUOUS BY CONSTRUCTION, and a mutant is what
+  # proved it: dropping `stdout=f,stderr=f` from the spawn (so the child inherits the land's fds)
+  # left that assertion green, because a DETACHED child writes after bats' `run` has already
+  # collected the output. Its verdict was the same in both arms, so it tested nothing. The
+  # redirection is covered where it is actually observable — (f) above, which the same mutant kills.
+  #
+  # What IS worth pinning here is the reason the spawn is detached at all: deploy-live's post-deploy
+  # host-check phase is bounded at 3600 s (CC_DEPLOY_HOST_TIMEOUT_S), so a SYNCHRONOUS kick would put
+  # up to an hour of bats between a content-verified land and the operator getting their prompt back.
+  # A Popen→run/call regression is invisible on a fast box and catastrophic on a busy one.
+  _arm_kick
+  printf '#!/usr/bin/env bash\nprintf "argv=%%s\\n" "$*" >> "$STUB_REC"\nsleep 20\n' > "$STUB"
+  chmod +x "$STUB"
+  local t0 t1
+  t0="$(date +%s)"
+  run _land feat/kick-slow kslow.txt
+  t1="$(date +%s)"
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "LANDED"
+  _await_stub || { echo "detached deploy-live never ran"; false; }
+  # Generous against a loaded CI box and still ~4x below the stub's own sleep: this separates
+  # "detached" from "waited", which is the only distinction the case is making.
+  [ "$((t1 - t0))" -lt 15 ] || { echo "the land waited $((t1 - t0))s on the converge child"; false; }
+}
+
+@test "converge kick: a DIVERGED shared checkout is SKIPPED, and the lander is told why" {
+  # THE GUARD THE PLAN'S T15 ROW NAMES, and it is not merely an optimisation. --ff-only compares
+  # ANCESTRY, so ANY commit the checkout carries that trunk does not blocks the advance — both of
+  # deploy-live's divergence classes refuse, including `diverged-superseded` where an equivalent
+  # copy landed elsewhere (deploy-live.sh:2392-2412). `git cherry` prints a line for both, which is
+  # why the predicate is "any output at all" rather than "any `+` line".
+  _arm_kick
+  ( cd "$DEPLOY" && echo local > local-only.txt && git add local-only.txt && git commit -q -m "wip: peer commit in the shared checkout" )
+
+  run _land feat/kick-div kd.txt
+  [ "$status" -eq 0 ]                                   # a divergence is NEVER a land failure
+  echo "$output" | grep -q "LANDED"
+  # The notice goes to the LANDER'S OWN TERMINAL, because G1 — a commit in the shared checkout —
+  # freezes the live layer fleet-wide and is otherwise discoverable only through the page channel
+  # the plan's G3 measured dead (66/66 undelivered in 24 h).
+  echo "$output" | grep -q "converge NOT kicked"
+  echo "$output" | grep -q "1 commit(s) origin/main does not have"
+  echo "$output" | grep -q "YOUR LAND IS FINE"
+  echo "$output" | grep -q "git -C $DEPLOY cherry -v origin/main HEAD"
+  # …and nothing fired: no child, no marker, no stamp.
+  [ ! -s "$STUB_REC" ]
+  [ "$(_markers)" -eq 0 ]
+  [ ! -e "$POSTLAND_DIR/converge-kick.last" ]
+}
+
+@test "converge kick: the interval floor bounds the second un-serialised caller" {
+  # deploy-live HAS NO RUN LOCK — checked, not assumed (deploy-live.sh:180: "What serialises them is
+  # launchd, on the timer path only"). A per-land kick is a caller launchd does not serialise, so the
+  # floor bounds the population this introduces to one kick per period per box.
+  _arm_kick
+  export SHIP_LAND_CONVERGE_KICK_MIN_S=3600
+  run _land feat/kick-a a.txt
+  [ "$status" -eq 0 ]
+  [ "$(_markers)" -eq 1 ]
+  run _land feat/kick-b b.txt
+  [ "$status" -eq 0 ]
+  [ "$(_markers)" -eq 1 ]                               # the second land inside the floor did NOT fire
+}
+
+@test "converge kick: floor=0 fires on EVERY land — the floor test's positive control" {
+  # Without this arm the case above is green whether the floor works or whether the kick simply
+  # cannot fire twice for some unrelated reason: one marker is the expected reading in both worlds.
+  _arm_kick
+  export SHIP_LAND_CONVERGE_KICK_MIN_S=0
+  run _land feat/kick-c c.txt
+  [ "$status" -eq 0 ]
+  run _land feat/kick-d d.txt
+  [ "$status" -eq 0 ]
+  [ "$(_markers)" -eq 2 ]
+}
+
+@test "converge kick: a non-numeric floor falls back to the default rather than firing freely" {
+  _arm_kick
+  export SHIP_LAND_CONVERGE_KICK_MIN_S=banana
+  run _land feat/kick-e e.txt
+  [ "$status" -eq 0 ]
+  run _land feat/kick-f f.txt
+  [ "$status" -eq 0 ]
+  [ "$(_markers)" -eq 1 ]                               # 600 s default, not "0" and not "unbounded"
+}
+
+@test "converge kick: a HELD stamp lock defers to the sibling lander" {
+  # The lock's intended job. It covers the STAMP read-modify-write only — without it two landers
+  # finishing together both read the old value and both fire, which is the one collision this
+  # trigger is entirely able to prevent (the launchd tick it cannot).
+  _arm_kick
+  mkdir -p "$POSTLAND_DIR"
+  mkdir "$POSTLAND_DIR/converge-kick.lock"
+  run _land feat/kick-held kh.txt
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "LANDED"
+  [ "$(_markers)" -eq 0 ]
+  [ -d "$POSTLAND_DIR/converge-kick.lock" ]             # a live holder's lock is left alone
+}
+
+@test "converge kick: a LEAKED stamp lock is reaped, never latched off forever" {
+  # The failure the case above would otherwise hide, and the reason it needs its own arm: a HELD
+  # lock and a LEAKED one are the same directory. This pipeline is routinely group-SIGKILLed, so a
+  # lock orphaned in the millisecond critical section would disable this box's converge lane
+  # permanently and SILENTLY — a guard whose failure mode looks exactly like the healthy state.
+  _arm_kick
+  mkdir -p "$POSTLAND_DIR"
+  mkdir "$POSTLAND_DIR/converge-kick.lock"
+  # 10 minutes old: past the reaper's 2-minute floor by 5x, so this is not a clock-resolution race.
+  touch -t "$(date -u -d '10 minutes ago' +%Y%m%d%H%M 2>/dev/null || date -u -v-10M +%Y%m%d%H%M)" \
+        "$POSTLAND_DIR/converge-kick.lock"
+  run _land feat/kick-leaked kl.txt
+  [ "$status" -eq 0 ]
+  [ "$(_markers)" -eq 1 ]
+  [ ! -d "$POSTLAND_DIR/converge-kick.lock" ]           # reaped, taken, and released again
+}
+
+@test "converge kick: SHIP_LAND_CONVERGE_KICK=off is a total no-op" {
+  _arm_kick
+  export SHIP_LAND_CONVERGE_KICK=off
+  run _land feat/kick-off ko.txt
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "LANDED"
+  [ ! -s "$STUB_REC" ]
+  [ "$(_markers)" -eq 0 ]
+  [ ! -e "$POSTLAND_DIR/converge-kick.last" ]
+}
+
+@test "converge kick: a DEPLOY_REPO that is not a git repo degrades silently, land still green" {
+  # The accelerator's polarity: anything it cannot establish means DO NOTHING (the 600 s tick still
+  # converges), never fail the land and never narrate. This is also the arm that keeps an unfixtured
+  # or freshly-provisioned box from turning a healthy land into a noisy one.
+  _arm_kick
+  export DEPLOY_REPO="$BATS_TEST_TMPDIR/not-a-repo"
+  mkdir -p "$DEPLOY_REPO"
+  run _land feat/kick-norepo kn.txt
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "LANDED"
+  # NOT `! echo … | grep -q …`: POSIX ignores errexit for a pipeline beginning with `!`, so a
+  # mid-test negated assertion is DEAD and always passes (repo memory: negated-assertion-dead-unless
+  # -final). The `if`-form is the live spelling.
+  if echo "$output" | grep -q "converge"; then echo "the silent degrade narrated: $output"; false; fi
+  [ ! -s "$STUB_REC" ]
+  [ "$(_markers)" -eq 0 ]
+}
+
+@test "converge kick: an unexecutable deploy-live is a no-op, not a land failure" {
+  _arm_kick
+  export SHIP_LAND_DEPLOY_LIVE="$BATS_TEST_TMPDIR/absent-deploy-live.sh"
+  run _land feat/kick-nobin knb.txt
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -q "LANDED"
+  [ "$(_markers)" -eq 0 ]
 }

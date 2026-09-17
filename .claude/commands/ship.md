@@ -22,9 +22,17 @@ of either number here. Revisit this sentence once the panel clears its 8-row flo
 background verifier** (`postland-verify.sh`, every 300s, fresh worktree, background QoS)
 which is now the **only** party that may assert "this tree is green": a GREEN stamp is
 what advances the `gate-green` marker, and a reproducible red is **auto-reverted** with
-the author notified. **Deploy** (`deploy-live.sh --auto`, every 600s) is fail-closed on
-those stamps — the live `~/.claude` only ever advances to a full-suite-proven tree, then
-runs the host-suite partition against it. Why: the old frame ran the corpus per land, per
+the author notified. **Deploy** (`deploy-live.sh --auto`, every 600s **or at a land, whichever
+comes first**) is fail-closed on those stamps — the live `~/.claude` only ever advances to a
+full-suite-proven tree, then runs the host-suite partition against it. The land-edge half is
+`converge_kick()` in `ship-land.sh` (CONTINUOUS_DELIVERY_TO_LIVE_KITTY §T15): it is an
+ACCELERATOR, not a second lane — same `--auto`, same ladder, same lag budget, one kick per
+`SHIP_LAND_CONVERGE_KICK_MIN_S` (600) at most, skipped entirely when `git cherry origin/main HEAD`
+in the shared checkout is non-empty (a divergence cannot fast-forward, so the kick prints it to
+your terminal and stands down). It can never fail a land; kill switch `SHIP_LAND_CONVERGE_KICK=off`.
+Its one marker line per fire — `ship-land: converge edge-trigger after <sha> (sid …)` in
+`deploy.log` — is what separates an edge-triggered advance from a tick's; count it against
+`deployed` lines to read the lane. Why: the old frame ran the corpus per land, per
 session, load-gated — 43 lands/day × a 20-53 min corpus on a box whose ambient load never
 drops below the gate's own ceiling. P(green) for the monolith measured **2.3%**; one branch
 died 37 consecutive times and then landed first-try, 0 not-ok, when load fell. That is not

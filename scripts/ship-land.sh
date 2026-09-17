@@ -1464,6 +1464,173 @@ post_state_read() {  # $1=file — one explicit arm per key: no `eval`, so a cor
   done < "$1"
 }
 
+# ── G2 · THE CONVERGE EDGE TRIGGER (CONTINUOUS_DELIVERY_TO_LIVE_KITTY.md T15) ───────────────────
+# A land puts new bytes on trunk. Until `deploy-live.sh` fast-forwards the SHARED CHECKOUT, none of
+# them run: ~/.claude is a per-file symlink farm over that checkout, so a landed hook/script/belt is
+# inert until the converge. Before this function the ONLY automated caller of that converge was a
+# launchd clock (com.claude.deploy-live, StartInterval 600) — nothing was wired to the event that
+# creates the work. Measured for the plan: **40.1% of 152 advances were run BY HAND** (independently
+# reproduced at 39.4% in .claude/commands/ship.md; the discriminator is a resolved-SHA ff in the
+# checkout's reflog with no matching line in the launchd job's deploy.log, which is what a manually
+# invoked deploy-live leaves behind — see deploy-parity-assert.sh:1330 for why that read is sound
+# HERE and is NOT a general attribution instrument). Median residency commit→live 2.31 h, p90 15.95 h.
+#
+# So this is the DEPLOY sibling of the postland-verify kick ten lines below it, and it is deliberately
+# the same shape: detached, guarded, and never able to fail the land. The clock stays exactly as it
+# is — it remains the backstop for a land that died before reaching this line, and for the tail of a
+# burst this kick's interval floor skips.
+#
+# 🚨 FIVE DECISIONS THAT ARE NOT STYLE, each of which a plausible simpler version gets wrong:
+#
+# 1. IT DOES NOT RELAX THE LAG BUDGET, AND THAT IS THE POINT OF RESTRAINT HERE. `deploy-live`'s T2
+#    tier advances on ABSENCE of evidence once the lag budget trips, and .claude/CLAUDE.md § Standing-
+#    converge authorization lets an AGENT relax the clock (`CC_DEPLOY_MAX_LAG_COMMITS=0`) for its own
+#    just-landed, content-verified work. That is an attributable, operator-granted exception taken by
+#    a session that is present. Baking it into EVERY land would convert it into standing unattended
+#    policy — every land advancing the live layer on absence of evidence — which is a fleet behaviour
+#    change and a C10 decision, not a trigger's to make. So the kick fires the SAME ladder with the
+#    SAME budget the clock has; all it changes is WHEN the question is asked. T1 (green) and T1H
+#    (off-box hermetic green) carry no budget at all, so the common accelerated case is a POSITIVE
+#    result reaching the live layer at the land instead of up to 600 s later — or not at all, on a
+#    box where a Background-QoS launchd timer is being coalesced (unmeasurable from here; the kick
+#    helps in both worlds precisely because it does not depend on launchd).
+#
+# 2. `--auto`, NOT THE BARE FORM. The bare form looks safer — `refusal_bump()` is AUTO-gated, so it
+#    would never touch the R7 streak counter. It is not safer, because the refusal PAGE at
+#    deploy-live.sh:2336 is keyed on the TIP SHA (`$RSTEM-<tip>.page`) and is damped ONLY under
+#    --auto: a land MOVES the tip, so a bare-form kick would mint a FRESH page file per land for as
+#    long as a green famine lasts. The plan's own G3 finding is that the page channel is already
+#    drowning (1,554 unseen escalations, 66/66 pages undelivered in 24 h); adding a per-land page
+#    mint to that is the one regression this must not ship. --auto is the mode built for an
+#    unattended caller — silent steady state, damp-per-reason, damp_clear on recovery, and
+#    structurally unable to take --force/--bootstrap. Accepted residual, stated rather than hidden:
+#    --auto makes this the SECOND writer of the single-line REFUSALS_FILE, whose read-modify-write
+#    has no lock, so a collision loses one increment and delays an R7 escalation by one tick. At the
+#    interval floor below the two callers run at ~the same cadence and the window is microseconds;
+#    a lost increment in a standing-refusal streak is invisible, where a page-per-land is not.
+#
+# 3. THE `git cherry` GUARD, AND IT IS NOT MERELY AN OPTIMISATION. A shared checkout carrying ANY
+#    commit trunk does not have cannot fast-forward — `--ff-only` compares ANCESTRY, so both of
+#    deploy-live's divergence classes refuse (diverged-unlanded AND diverged-superseded; an
+#    equivalent copy landed elsewhere does NOT clear it, deploy-live.sh:2392-2412). `git cherry
+#    origin/main HEAD` prints one line per such commit — `+` genuinely unlanded, `-` present by
+#    patch-id — and BOTH block, so the guard is "any output at all", exactly as the plan's T15 row
+#    specifies. Reading it against a possibly-stale origin/main is safe in ONE direction only, and
+#    it is the right one: a stale upstream can only make cherry report MORE commits, never fewer, so
+#    the guard degrades to SKIP and never to a false fire.
+#    What the guard BUYS beyond skipping a doomed call is the sentence it prints. G1 — a commit made
+#    in the shared checkout — is the condition that freezes the live layer FLEET-WIDE, and it is
+#    currently discoverable only through the page channel G3 says is dead. The lander's own terminal
+#    is a surface somebody is reading at that exact moment (memory: a verdict goes WHERE THE OPERATOR
+#    LOOKS), so the notice goes there, named, with the inspect command, and says in as many words
+#    that the LAND is fine.
+#
+# 4. AN INTERVAL FLOOR, BECAUSE deploy-live HAS NO RUN LOCK. That is checked, not assumed, and the
+#    script says so at deploy-live.sh:180: "THIS SCRIPT HAS NO RUN LOCK … What serialises them is
+#    launchd, on the timer path only" — StartInterval skips a firing while the job still runs, and
+#    the host-check phase is bounded at 3600 s. A per-land kick is a second caller that launchd does
+#    not serialise, and lands are frequent here (~63 commits/day). The floor bounds the population
+#    this introduces: one kick per SHIP_LAND_CONVERGE_KICK_MIN_S (default 600, the tick's own period)
+#    per box, so the --auto call rate at worst DOUBLES and the R7 streak's arithmetic stays
+#    interpretable — the lane now ticks on a 600 s clock OR a land, whichever comes first. The stamp
+#    is updated under an atomic `mkdir` lock so two concurrent landers cannot both read the old value
+#    and both fire. The lock covers the STAMP ONLY, not the detached deploy-live run; it cannot, and
+#    claiming otherwise would be the false half. Overlap with a launchd tick therefore remains
+#    possible and is the same exposure deploy-live already accepts for scripts/deploy-now.sh.
+#
+# 5. IT EXECS THIS WORKTREE'S deploy-live.sh, like the postland kick beside it execs this worktree's
+#    verifier. That copy is newer-or-equal to the live layer's by construction (this tree just
+#    rebased onto trunk and content-verified), so the kick can never be the stale-bytes case the
+#    launchd plist's I11 fallback exists for — and it incidentally cures deploy-live.sh:2520's
+#    "correct on the SECOND deploy" trap for a fix to deploy-live itself, since the advancing copy
+#    is already the fixed one.
+#
+# Kill switch: SHIP_LAND_CONVERGE_KICK=off. Seams: DEPLOY_REPO · SHIP_LAND_CONVERGE_KICK_MIN_S ·
+# SHIP_LAND_DEPLOY_LIVE · POSTLAND_DIR (the stamp and the log live beside the lane's own state).
+#
+# ⚠️ POSTLAND_DIR here vs CC_POSTLAND_DIR in deploy-live is NOT a bug and NOT tidied: the two scripts
+# have always spelled the same directory differently and BOTH default to ~/.claude/autonomy/postland,
+# so production is one dir. Renaming either is a change to a variable other callers already set.
+# What it means is narrow and worth knowing: a caller that overrides only ONE of them puts this
+# kick's stamp+marker somewhere other than the log deploy-live itself writes. Every test below sets
+# both, which is also the honest instruction for any other fixtured caller.
+converge_kick() {  # $1=landed head sha. NEVER fails the land: every path returns 0.
+  [[ "${SHIP_LAND_CONVERGE_KICK:-on}" = "off" ]] && return 0
+  # Seamed on the same principle deploy-live seams every helper it forks (CC_POSTLAND_BIN,
+  # CC_DEPLOY_BATS_BIN, CC_DEPLOY_PARITY_ASSERT): a forked binary that cannot be pointed elsewhere
+  # cannot be tested without running the real thing against the operator's real checkout. Read once,
+  # `-x`-checked, never expanded — an unset or unexecutable value degrades to a silent no-op, which
+  # is the correct polarity for an accelerator (the 600 s tick still converges).
+  local dl="${SHIP_LAND_DEPLOY_LIVE:-$SCRIPT_DIR/deploy-live.sh}"
+  [[ -x "$dl" ]] || return 0
+  local repo="${DEPLOY_REPO:-$HOME/Development/claude-infrastructure}"
+  # Not a git repo (a box with no shared checkout, and every unfixtured test) ⇒ silently nothing.
+  git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || return 0
+
+  local pdir; pdir="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}"
+  local log="$pdir/deploy.log"
+
+  # --- guard 3: divergence. Any output from cherry blocks the ff; say so where it will be read. ---
+  # `origin/main` is LITERAL on purpose, not $TRUNK: it is the ref deploy-live itself resolves against
+  # everywhere (:1936, :1944, :2089, :2173 — the lane has no trunk parameter), and a guard must speak
+  # the gate's own predicate rather than invent a second, divergent one. If that lane ever gains a
+  # branch parameter this line follows it; until then, matching it is the correctness condition.
+  local div
+  div="$(git -C "$repo" cherry origin/main HEAD 2>/dev/null || true)"
+  if [[ -n "$div" ]]; then
+    local n; n="$(printf '%s\n' "$div" | grep -c . || true)"
+    echo "ℹ ship-land: converge NOT kicked — the shared checkout ($repo) carries $n commit(s) origin/main does not have, so deploy-live cannot fast-forward and the LIVE layer is frozen for every session until it stops diverging. YOUR LAND IS FINE and is on trunk. Inspect: git -C $repo cherry -v origin/main HEAD" >&2
+    return 0
+  fi
+
+  # --- guard 4: interval floor, stamp updated under an atomic mkdir lock ---
+  local minf="${SHIP_LAND_CONVERGE_KICK_MIN_S:-600}"
+  case "$minf" in ''|*[!0-9]*) minf=600 ;; esac
+  local stamp="$pdir/converge-kick.last" lock="$pdir/converge-kick.lock"
+  mkdir -p "$pdir" 2>/dev/null || true
+  if ! mkdir "$lock" 2>/dev/null; then
+    # A HELD lock means a sibling lander is deciding right now — it fires, we do not, and that is
+    # the whole point. A LEAKED one is a different animal and must not be mistaken for it: the
+    # critical section below is a `date`, a `read` and a `printf`, but this pipeline is routinely
+    # group-SIGKILLed by the harness, and a lock orphaned in that window would latch the converge
+    # lane OFF for this box FOREVER — silently, with nothing anywhere saying so, which is the worst
+    # polarity a guard can have (repo memory: fail-safe-default-mimics-the-healthy-state). Anything
+    # older than a couple of minutes cannot be a live holder of a millisecond-long section, so reap
+    # it and take it. `find -mmin` rather than a stat(1) spelling: BSD and GNU stat disagree on
+    # every flag, find does not.
+    if [ -n "$(find "$lock" -maxdepth 0 -mmin +2 2>/dev/null)" ]; then
+      rmdir "$lock" 2>/dev/null || true
+      mkdir "$lock" 2>/dev/null || return 0
+    else
+      return 0
+    fi
+  fi
+  local now last=0 due=1
+  now="$(date +%s 2>/dev/null || echo 0)"
+  case "$now" in ''|*[!0-9]*) now=0 ;; esac
+  [[ -r "$stamp" ]] && read -r last < "$stamp" 2>/dev/null
+  case "${last:-}" in ''|*[!0-9]*) last=0 ;; esac
+  # now=0 means date(1) failed. Fire rather than latch: a broken clock must not disable the lane.
+  [[ "$now" -gt 0 && "$last" -gt 0 && "$((now - last))" -lt "$minf" ]] && due=0
+  [[ "$due" -eq 1 ]] && { printf '%s\n' "$now" > "$stamp" 2>/dev/null || true; }
+  rmdir "$lock" 2>/dev/null || true
+  [[ "$due" -eq 1 ]] || return 0
+
+  # --- fire: detached, stdin closed, output appended to the lane's own log -------------------------
+  # start_new_session is MANDATORY for the same reason the postland kick states it: a nohup/disown
+  # child shares our process group and is reaped by the harness's group SIGKILL.
+  # The marker line is what makes this lane MEASURABLE — it is the only thing separating an
+  # edge-triggered advance from a tick's in a log that records both. It is written by US rather than
+  # by the child so it survives --auto's (correct) silence on an already-converged box; that costs
+  # at most one short line per interval, which is the price of the metric this row exists to move.
+  { printf 'ship-land: converge edge-trigger after %.12s (sid %s)\n' "$1" "${CLAUDE_CODE_SESSION_ID:-nosid}" >> "$log"; } 2>/dev/null || true
+  python3 -c 'import subprocess,sys
+f=open(sys.argv[2],"a"); n=open("/dev/null")
+subprocess.Popen([sys.argv[1],"--auto"],stdin=n,stdout=f,stderr=f,start_new_session=True)' \
+    "$dl" "$log" 2>/dev/null || true
+  return 0
+}
+
 post_release_finish() {  # $1=trunk — runs in the OUTER process, the land-lock ALREADY RELEASED.
   # No-op unless the locked child left a handover, i.e. unless a real land happened. The child's
   # other exit-0 paths (nothing-to-land, --dry-run, a drop that self-healed because a sibling
@@ -1554,6 +1721,11 @@ post_release_finish() {  # $1=trunk — runs in the OUTER process, the land-lock
     python3 -c 'import subprocess,sys; subprocess.Popen([sys.argv[1],"--run-if-needed"],start_new_session=True)' \
       "$SCRIPT_DIR/postland-verify.sh" 2>/dev/null || true
   fi
+
+  # --- converge edge trigger (G2/T15) — ordered AFTER the verifier kick on purpose: the verifier is
+  # the producer of the GREEN stamp the converge's T1 tier consumes, so starting it first is the only
+  # ordering under which a single land can (eventually) supply its own evidence. Never fails a land.
+  converge_kick "$LANDED_HEAD" || true
 
   echo "✓ ship-land: LANDED $(git rev-parse --short "$LANDED_HEAD") → origin/$TRUNK; content-verified; sweep=$sweep_field."
   return 0

@@ -173,16 +173,105 @@ a shape produced by the auto-mode style instruction to prefer heredocs over the 
 
 Ordered by (harm prevented ÷ size). G3 first because it is what made the rest invisible.
 
-| id | Task | Depends on |
-|----|------|-----------|
-| T13 | G3: `cc-notify --role` non-zero on dead target + sweep records `channel:"dead-target"` | — |
-| T14 | G1: FF-GATE arm denying `git commit` in the shared checkout, with a named escape hatch | — |
-| T15 | G2: edge-trigger converge from `post_release_finish()`, guarded on `git cherry` empty | — |
-| T16 | G4: overlay daemon self-retire on source-sha change, gated on `not st["on"]` | — |
-| T17 | Re-mint `/tmp/resident-reload-flip.sh` for packet `4194644aea26` | — |
+| id | Task | Depends on | Status |
+|----|------|-----------|--------|
+| T13 | G3: `cc-notify --role` non-zero on dead target + sweep records `channel:"dead-target"` | — | open |
+| T14 | G1: FF-GATE arm denying `git commit` in the shared checkout, with a named escape hatch | — | open |
+| T15 | G2: edge-trigger converge from `post_release_finish()`, guarded on `git cherry` empty | — | **BUILT** — `converge_kick()` in `scripts/ship-land.sh`, 11 cases in `tests/ship-land.bats` |
+| T16 | G4: overlay daemon self-retire on source-sha change, gated on `not st["on"]` | — | open |
+| T17 | Re-mint `/tmp/resident-reload-flip.sh` for packet `4194644aea26` | — | open |
+
+### T15 as built — what it does, and the four things it deliberately does NOT do
+
+`post_release_finish()` now calls `converge_kick()`, the DEPLOY sibling of the postland-verify kick
+already beside it: detached, guarded, and structurally unable to fail a land. The clock is untouched
+and remains the backstop for a land that died before reaching that line, and for the tail of a burst
+the interval floor skips.
+
+**Does:** skip when `git cherry origin/main HEAD` in the shared checkout is non-empty — and when it
+skips, prints the G1 divergence to the LANDER'S OWN TERMINAL, named, with the inspect command and an
+explicit "YOUR LAND IS FINE", because that is a surface someone is reading at that moment and the
+page channel G3 measured is not. Then, at most once per `SHIP_LAND_CONVERGE_KICK_MIN_S` (default
+600, the tick's own period), it writes one marker line to `deploy.log` and spawns
+`deploy-live.sh --auto` detached, stdin closed, both streams appended to that same log.
+
+**Does NOT relax the lag budget.** `CC_DEPLOY_MAX_LAG_COMMITS=0` is the *agent's* standing-converge
+lever (`.claude/CLAUDE.md`), taken by a session that is present and attributable. Baking it into
+every land converts it into unattended standing policy — every land advancing the live layer on
+ABSENCE of evidence — which is a fleet behaviour change and a C10 decision, not a trigger's. A test
+pins that the spawn passes neither lag variable, so a later "helpful" edit reddens.
+
+**Does NOT use the bare form.** It looks safer (`refusal_bump()` is `--auto`-gated) and is not: the
+refusal page at `deploy-live.sh:2336` is keyed on the TIP SHA and damped only under `--auto`, and a
+land MOVES the tip — so a bare-form kick would mint a FRESH page file per land through any green
+famine, straight into the channel G3 says is already drowning. Accepted residual, stated: `--auto`
+makes this the second writer of the unlocked single-line `REFUSALS_FILE`; a collision loses one
+increment and delays an R7 escalation by one tick. That is strictly cheaper than a page per land.
+
+**Does NOT serialise against the launchd tick, and cannot.** `deploy-live` has no run lock — checked,
+not assumed (`deploy-live.sh:180`: *"What serialises them is launchd, on the timer path only"*). The
+`mkdir` lock here covers the interval STAMP only, so two concurrent landers cannot both read the old
+value and both fire; the floor is what bounds the population this adds (the lane now ticks on a 600 s
+clock OR a land, whichever comes first, so the `--auto` call rate at worst doubles). Overlap with a
+tick remains possible and is the same exposure already accepted for `scripts/deploy-now.sh`.
+
+**What is NOT established, and is not establishable off-box.** This was built in a cloud VM with no
+access to the operator's `deploy.log`, land ledger or launchd state, so the *size* of the win is
+unmeasured. Specifically: the kick can only beat the clock by up to 600 s **if the clock is
+delivering its requested cadence** — `com.claude.deploy-live` is `ProcessType Background`, which the
+plan's own T8 finding notes is the one job the CPU-band repair skipped, and a requested cadence is a
+request to a scheduler, never an observation. The honest claim is therefore structural, not
+numeric: the converge now has a caller wired to the EVENT that creates the work and independent of
+launchd entirely, which helps whether the timer is healthy or being coalesced. **The re-measurement
+that settles it** (on-box, after this is live for a few days) is: count `converge edge-trigger` lines
+in `deploy.log` against `deployed` lines over the same window, and re-derive the hand-run share the
+way `.claude/commands/ship.md:124` does — resolved-SHA ffs in the checkout's reflog against
+`deployed` lines. If the marker count is ~0 while advances continue, the kick is being skipped (read
+the floor and the cherry guard, in that order) rather than the timer being the problem.
 
 ## Record
 
 - 2026-09-17 created. Wave A1-A10 dispatched; 9 reported, T4 (gate-green) outstanding.
 - Divergence that blocked the converge at wave start (`145c32f53`) cleared itself when its
   author landed it; checkout returned to 0-ahead/0-behind without intervention.
+- 2026-09-17 T15 built off-box (cloud). 11 new cases; **6 red-proved** against trunk's
+  `ship-land.sh`. The rest are the no-op/degrade arms and are green in BOTH arms by construction —
+  equivalence guards, not red-proofs — so each is instead pinned by a MUTANT: **12 mutants run, 12
+  killed** (bare form · relaxed budget · cherry guard removed · floor removed · floor fails open ·
+  kill switch ignored · git-repo check removed · `-x` check removed · streams inherited ·
+  `Popen`→`call` · lock removed · stale-reap removed). The last two are a discriminating PAIR: each
+  kills exactly one of the two lock cases and leaves the other green, which is what separates "the
+  lock defers to a live holder" from "a leaked lock is reaped" — two states that are the same
+  directory on disk.
+  The streams-inherited mutant is the one that earned its keep: it SURVIVED the case originally
+  written for it, because a detached child writes after bats' `run` has already collected — that
+  case was vacuous by construction and was replaced with one that pins the reason for detaching (a
+  slow `deploy-live` must not delay the land), which the `Popen`→`call` mutant kills.
+  **The stale-lock reap exists because of that same review pass**, not because a test asked for it:
+  the first draft's `mkdir "$lock" || return 0` meant a lander group-SIGKILLed inside the
+  millisecond critical section would leave a directory that latched this box's converge lane OFF
+  permanently — and silently, since a kick that never fires is indistinguishable from a kick with
+  nothing to do. That is the fail-safe-mimics-healthy shape, in a guard added to make things safer.
+- 2026-09-17 **What was verified off-box, and with what instrument** — stated because a cloud VM is
+  not the operator's box and the difference matters in one direction. Ran: `bash -n`; shellcheck
+  **0.11.0** (the gate's version, fetched for this — clean, rc 0, and the LOCAL 0.9.0 is red on
+  trunk too, so the differential and not the absolute is what carries); `bats-assert-liveness.py`
+  clean; test-hermeticity / test-walltime / utc-stamp lints clean over the whole `tests` tree;
+  `bats-shellcheck-lint --range` clean; `unattended-path-lint` **77 findings on this branch and 77
+  on a pristine `origin/main` worktree, none naming either changed file**. Full `tests/ship-land.bats`
+  A/B against that same pristine worktree: trunk **11 failing**, branch **10 failing**, and the
+  branch's failing set is a strict SUBSET of trunk's — **zero branch-only failures**. Those shared
+  failures are this Linux VM, not the tree (`sysctl hw.ncpu`, `/usr/sbin`, an absent-shellcheck
+  expectation, postland stamps), which is exactly why the claim is made as a differential rather
+  than as a suite verdict. NOT verified here and not verifiable here: any behaviour of the real
+  `deploy-live.sh` against the real shared checkout — the tests drive a recording stub, by design.
+- 2026-09-17 **`scripts/ship-land.sh` LINE-SHIFT MAP** for T15's insert, computed from the diff
+  hunks rather than eyeballed. Old line **< 1467** → unchanged · **1467–1557** → **+151** ·
+  **≥ 1558** → **+156**. Fourteen `ship-land.sh:NNNN` citations exist across the tree; one grep
+  establishes that **every one of them is prose in a comment or a dated plan — none is an executed
+  lookup**, so nothing breaks and the map is published here instead of rewriting eight files this
+  row does not otherwise touch (scoping a re-pin by LIVENESS, not by count). The one citation
+  inside a file this diff already owns was re-keyed off its number entirely — and it had ALREADY
+  rotted on trunk, pointing at a `typed-send-lint` comment rather than the `DEAD_LINT` block it
+  names, which is the argument for a stable anchor over a number in anything meant to outlive one
+  commit.
