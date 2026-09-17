@@ -3282,6 +3282,97 @@ _reland_run_of() { # <backlog-store> → the filed row's --run command
   [ "$(git worktree list | wc -l | tr -d ' ')" -eq "$before" ]
 }
 
+
+# ── THE STORED COMMAND MUST NOT PARK THE DURABLE CHECKOUT ON AN UNLANDED BRANCH ──────────────────
+# (2026-09-17, cc-backlog 947508942c60.) `land_root` is DELIBERATELY the durable main checkout
+# (resolve_main_root, above) — and on this machine that is ~/Development/claude-infrastructure, the
+# symlink SOURCE for the live ~/.claude layer. The stored command used to `git checkout` the failed
+# branch THERE. That leaves HEAD carrying commits origin/main lacks, so `merge --ff-only` is
+# arithmetically impossible and scripts/deploy-live.sh dies DIVERGED for EVERY session on the box,
+# not merely the one that ran the retry. Nothing on this tree restores it: a grep of scripts/ bin/
+# hooks/ for a checkout-main / switch-main / restore returns ZERO, and deploy-live refuses by
+# contract ("This lane never rebases or resets a shared checkout"), so the cure is a HUMAN running
+# `git -C <repo> checkout main`. The live store DRAINS — two reads 20 minutes apart returned 11 rows
+# then 8 — so re-derive rather than quote:
+#   cc-backlog list --json | jq -r '.[]|select(.run and (.run|test("git checkout -q -B")))|.run'
+# At the 2026-09-17T16:2xZ read, 4 of the 8 named a branch that does NOT match ship-land's own
+# session-branch regex — so those moved HEAD and then hit the shared-checkout refusal (exit 4),
+# creating the fleet-wide converge block with certainty and landing nothing, every single time.
+#
+# 🚨 THE FIXTURE MUST PUT land_root ON main AND THE BRANCH IN A WORKTREE. That is the production
+# topology — the author works in a worktree, the durable checkout sits on main — and it is the only
+# shape in which the defect is EXPRESSIBLE: in a fixture whose land_root is already on the branch
+# the offending `git checkout` is a no-op and the case is vacuous whether or not the bug is present
+# (memory: control-fixture-must-reach-the-bugs-regime).
+_reland_author_pane() { # <branch> <badfile> → files a real re-land row from a linked worktree
+  git checkout -q main
+  mkdir -p scripts
+  printf '#!/usr/bin/env bash\necho RAN-TRUNK-BYTES\n' > scripts/ship-land.sh
+  chmod +x scripts/ship-land.sh
+  git add -A && git commit -q -m "chore: trunk pipeline"
+  git push -q origin main
+  _AW="$BATS_TEST_TMPDIR/authors-pane-$1"
+  git worktree add --quiet -b "$1" "$_AW" main
+  ( cd "$_AW" \
+    && printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > "$2" \
+    && git add -A && git commit -q -m "feat: $2" ) || return 1
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" \
+      bash -c "cd '$_AW' && bash '$SHIPLAND' --trunk main"
+  [ "$status" -eq 6 ] || return 1
+}
+
+@test "P4 inbox: the re-land command leaves the durable checkout's HEAD where it found it" {
+  _reland_author_pane feat/reland-head bad7.sh
+  cmd="$(_reland_run_of "$BATS_TEST_TMPDIR/backlog.jsonl")"
+  [ -n "$cmd" ] && [ "$cmd" != null ] || false
+
+  # the author's pane is gone by the time anyone re-lands — measured, 22 of 48 live rows
+  git worktree remove --force "$_AW"
+
+  before_ref="$(git rev-parse --abbrev-ref HEAD)"
+  before_sha="$(git rev-parse HEAD)"
+  [ "$before_ref" = main ] || false     # precondition: the durable checkout really is on main
+
+  run bash -c "$cmd"
+  # the land still happens — this case must not pass by making the command inert
+  printf '%s' "$output" | grep -q 'RAN-TRUNK-BYTES'
+  # …and the durable checkout is exactly where it was
+  [ "$(git rev-parse --abbrev-ref HEAD)" = "$before_ref" ]
+  [ "$(git rev-parse HEAD)" = "$before_sha" ]
+}
+
+# The pinned-ref arm is a SEPARATE code path (`worktree add -B` vs a plain add) and it is the arm
+# that runs for the 22-of-48 rows whose branch is gone, so it needs its own case: recreating the
+# branch must not be done by checking it out in the durable checkout either.
+@test "P4 inbox: the pinned-ref arm recreates the branch WITHOUT moving the durable checkout" {
+  _reland_author_pane feat/reland-head-pin bad8.sh
+  cmd="$(_reland_run_of "$BATS_TEST_TMPDIR/backlog.jsonl")"
+  [ -n "$cmd" ] && [ "$cmd" != null ] || false
+
+  git worktree remove --force "$_AW"
+  git branch -q -D feat/reland-head-pin
+  git rev-parse -q --verify feat/reland-head-pin >/dev/null && false || true
+
+  before_sha="$(git rev-parse HEAD)"
+  run bash -c "$cmd"
+  printf '%s' "$output" | grep -q 'RAN-TRUNK-BYTES'
+  git rev-parse -q --verify feat/reland-head-pin >/dev/null   # recreated from the pinned ref
+  [ "$(git rev-parse --abbrev-ref HEAD)" = main ]
+  [ "$(git rev-parse HEAD)" = "$before_sha" ]
+}
+
+# A restore-afterwards cure would pass both cases above on the happy path and STILL park the
+# checkout whenever the retry is interrupted — and these lands run for hours under lock contention,
+# so "interrupted" is the case, not the corner. Pin the SHAPE: the branch is reached by giving it
+# its own worktree, never by moving the durable checkout's HEAD and putting it back.
+@test "P4 inbox: the re-land command reaches the branch by worktree, not by a checkout in land_root" {
+  _reland_author_pane feat/reland-shape bad9.sh
+  cmd="$(_reland_run_of "$BATS_TEST_TMPDIR/backlog.jsonl")"
+  [ -n "$cmd" ] && [ "$cmd" != null ] || false
+  printf '%s' "$cmd" | grep -qE 'git worktree add[^;]*feat/reland-shape|git worktree add[^;]*\$_br'
+  ! printf '%s' "$cmd" | grep -qE 'git checkout' || false
+}
+
 # ── defect 2d: THE ROW'S IDENTITY CARRIED THE ATTEMPT'S SANDBOX (2026-08-18, dc014c6829ac) ───────
 # Stabilising the TITLE (defect 2a) fixed one of the two hashed fields. The id is
 # `sha256(project ⑟ title ⑟ source)`, and this call passed no --project — so cc-backlog derived one
