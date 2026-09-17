@@ -97,7 +97,7 @@ rc_with_never_eof_stdin() {   # $1=bound seconds; $2… = the command
 # ── R1/R2 — ship-land.sh gate_bats ───────────────────────────────────────────────────────────────
 
 # Extract gate_bats from the REAL file and append a call. Same function-probe idiom as
-# tests/ship-land.bats:1463 and tests/gate-home-isolation.bats' probe_fn. SMOKE_DEADLINE is left
+# tests/ship-land.bats:1469 and tests/gate-home-isolation.bats' probe_fn. SMOKE_DEADLINE is left
 # UNSET deliberately: with it set the function wraps its child in its own timeout, and the probe
 # would then be measuring THAT bound rather than the redirect.
 build_gate_probe() {   # $1=variant(fixed|mutant) → $BATS_TEST_TMPDIR/probe.sh

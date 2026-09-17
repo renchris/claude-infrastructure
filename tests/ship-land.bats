@@ -34,6 +34,12 @@ setup() {
   export CC_BACKLOG_BIN="$REPO/bin/cc-backlog"
   export POSTLAND_DIR="$BATS_TEST_TMPDIR/postland"            # flakes.jsonl + queue, sandboxed
   export POSTLAND_VERIFY=off                                  # never spawn a real post-land child
+  # ...and never a real LIVE-LAYER CONVERGE either (2026-09-17, backlog b2135387fd55). A green
+  # fixture land reaches land_and_verify's converge kick, which resolves DEPLOY_REPO under the
+  # UNFIXTURED $HOME and spawns a detached deploy-live against the OPERATOR'S SHARED CHECKOUT.
+  # Full mechanism + the two-armed proof: the converge-kick test at the foot of this file.
+  export SHIP_LAND_CONVERGE=off                               # ship-land.sh:1611, its own switch
+  export DEPLOY_REPO="$BATS_TEST_TMPDIR/nope-deploy-repo"     # belt-and-braces: :1613 is its ONLY reader
   # env-bleed immunity: when THIS suite runs inside an outer ship-land gate, the outer
   # pipeline's scope resolution must not leak into the fixture pipelines under test.
   # SHIP_LAND_GATE_ROUNDS / _VERIFY_RETRIES were the two gaps here, and the omission was
@@ -4240,4 +4246,78 @@ _markers_repo() { # $1=markers(1|0) $2=filler bytes → prints a repo dir with t
   [ "$(printf '%s\n' "$code" | grep -c -e '-cE')" -eq 1 ]
   [ "$(printf '%s\n' "$code" | grep -c -e 'grep -q')" -eq 0 ]
   true
+}
+
+# ── THE CONVERGE KICK MUST NEVER FIRE FROM THIS FIXTURE (2026-09-17, backlog b2135387fd55) ───────
+# THE LEAK. land_and_verify ends in a live-layer converge kick (scripts/ship-land.sh:1611-1616)
+# which resolves `${DEPLOY_REPO:-$HOME/Development/claude-infrastructure}` and, via
+# subprocess.Popen(..., env=dict(os.environ, ...), start_new_session=True), spawns a REAL detached
+# deploy-live. This suite does not fixture $HOME, so pre-fix that default was the OPERATOR'S SHARED
+# CHECKOUT and the child inherited this setup()'s whole environment. Measured with a recording stub
+# standing where that script stands: the single case "green: land end-to-end" fired it —
+# cwd = the deploy repo, CLAUDE_CODE_SESSION_ID=test-sid-123, and CC_POSTLAND_DIR / CC_PAGES_DIR
+# UNSET, so deploy-live's own stores resolved to the live ~/.claude/autonomy.
+#
+# WHAT IT COST, and it is why this is a suite-wide pin rather than a note. On 2026-09-17T21:29Z such
+# a child advanced the live layer, ran post-deploy host_checks against the real tree concurrently
+# with the corpus that was its load, and wrote a real `post-deploy HOST RED` naming all three host
+# suites into the operator's backlog — filedBy "test-sid-123", the only row in 21.5k carrying it.
+# Re-run afterwards, all three were GREEN (deploy-parity-live 2/2, test-walltime-lint 16/16,
+# test-hermeticity-lint 82/82), so a test minted a false finding about the live layer. It also
+# arrived with NO falsifier: the kick's child began from the checkout's pre-advance bytes, which
+# predate fals_host_set's multi-suite probe (2c808efc0), so the row was unfalsifiable as well —
+# the state deploy-live.sh's own --falsify-host header calls permanent rather than cautious.
+#
+# tests/ship-land-converge-edge.bats OWNS this kick and pins DEPLOY_REPO for exactly this reason;
+# its setup() already warned that "an unfixtured run ... would point the guard at the OPERATOR'S
+# REAL SHARED CHECKOUT and, on the clean branch, fire a real deploy-live from a test." That was
+# true of this suite the whole time.
+_dl_recorder() {  # $1=dir — a NON-DIVERGED git repo whose deploy-live.sh records that it ran.
+  # Non-diverged is load-bearing: the kick's guard requires `git cherry origin/main HEAD` to be
+  # empty, so a recorder without refs/remotes/origin/main can never fire and would make BOTH arms
+  # silent — a fixture that cannot express the bug (memory: control-fixture-must-reach-the-regime).
+  git init -q "$1"
+  mkdir -p "$1/scripts"
+  printf '#!/usr/bin/env bash\ntouch %q\n' "$DL_MARKER" > "$1/scripts/deploy-live.sh"
+  git -C "$1" add -A
+  git -C "$1" -c user.email=tester@example.com -c user.name=tester commit -q -m "fixture deploy-live"
+  git -C "$1" update-ref refs/remotes/origin/main "$(git -C "$1" rev-parse HEAD)"
+}
+
+_dl_settle() {  # the fire is DETACHED; wait for the marker rather than racing it
+  local i=0
+  while [ "$i" -lt 50 ]; do [ -e "$DL_MARKER" ] && return 0; sleep 0.1; i=$((i+1)); done
+  return 1
+}
+
+# TWO ARMS, and the positive one is what gives the negative one any meaning: the fire is detached,
+# so "no marker after the settle window" is also exactly what a slow spawn, a broken recorder or a
+# land that never reached the kick would look like. Arm 1 lifts the pin and REQUIRES the recorder to
+# fire; arm 2 keeps setup()'s pin and requires silence. Pre-fix arm 2 fails; post-fix both pass.
+@test "converge kick: setup() pins it off — a fixture land never fires a real deploy-live" {
+  DL_MARKER="$BATS_TEST_TMPDIR/deploy-live-ran"
+  _dl_recorder "$BATS_TEST_TMPDIR/dlrepo"
+  export DEPLOY_REPO="$BATS_TEST_TMPDIR/dlrepo"
+
+  # ARM 1 — POSITIVE CONTROL: with the switch forced on, the recorder DOES fire. This proves the
+  # instrument can see a fire, so arm 2's silence is attributable to the pin and not to the fixture.
+  git checkout -q -b feat/dl-arm1 main
+  printf '#!/usr/bin/env bash\necho a\n' > dl-a.sh
+  git add dl-a.sh && git commit -q -m "feat: dl a"
+  run env SHIP_LAND_CONVERGE=on bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  _dl_settle || { echo "positive control never fired — the recorder cannot see a fire; output: $output"; false; }
+
+  # ARM 2 — THE RED-PROOF: setup()'s pin holds, and nothing reaches the deploy repo.
+  rm -f "$DL_MARKER"
+  git checkout -q main
+  git checkout -q -b feat/dl-arm2 main
+  printf '#!/usr/bin/env bash\necho b\n' > dl-b.sh
+  git add dl-b.sh && git commit -q -m "feat: dl b"
+  run bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 0 ]
+  if _dl_settle; then
+    echo "THE LEAK IS BACK: a fixture land fired deploy-live at $DEPLOY_REPO"
+    false
+  fi
 }
