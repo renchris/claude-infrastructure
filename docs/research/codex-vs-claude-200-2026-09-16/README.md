@@ -106,3 +106,78 @@ python3 docs/research/codex-vs-claude-200-2026-09-16/measure-weekly-value.py   #
 Arms A–E are the verbatim research deliverables, each with its own sourcing table and its own
 "unknowns / not published" section. Read A §3 (the credit→dollar derivation) and E §4 (the
 gating asymmetry) first — they carry the two facts most likely to change a decision.
+
+---
+
+## CORRECTIONS after reading all five arms in full (same session, 2026-09-16)
+
+The verdict above is unchanged. Four supporting claims are not, and one new constraint appeared.
+
+**C1 — The cache-read price edge is an API fact, and whether it reaches a SUBSCRIBER is
+unresolved.** Above I leaned on Fable 5.1's $0.25/Mtok vs Astra's $1.00 as an advantage for this
+fleet. Three sources disagree about whether a Max seat ever sees it, and they cannot all be right:
+
+| source | says |
+|---|---|
+| A6 local fit (R²=0.974, 0→735M span) | cache-read has a **zero** coefficient on the **5-hour** meter |
+| `code.claude.com/docs/en/costs` | cache reads **do** draw on subscription limits |
+| Arm D headline | the 5.1 cache-read cut is an API price that "subscription metering does not pass through" |
+
+⇒ Do not use the cache-read price as a reason to prefer either plan until the **weekly** meter is
+fitted. It remains the highest-value open measurement here.
+
+**C2 — The honest headline number is output work, not the 83× multiple.** The 83× (and the 33×
+floor) are both dominated by cache accounting, which is exactly the artifact arm C warns about:
+the one published study pricing both plans from local logs found 43× Codex vs 94× Claude, then
+showed **the entire 2× gap is Anthropic's 2× cache-write price**, with output work at **$977 vs
+$911/mo** — near-parity. That study's Claude arm is weak (extrapolated from ONE day at 10% of
+quota ×10; the author calls it unreliable, and it pre-dates both current models).
+
+**This box supplies the strong arm it lacked.** Measured here over 7 days, 4 seats, deduped:
+output-token spend is **$873/wk fleet = $218/wk = $945/mo per seat** — landing within 4% of
+codelynx's $911 by a wholly independent and better-instrumented route. ⇒ **Real-work value per
+$200 is ~4.7× and is near-identical on both plans.** Quote this, not the 83×.
+
+**C3 — The ToS flag in "What is NOT settled" was wrong and is withdrawn.** Anthropic Consumer ToS
+§3 bans automated access *"except when you are accessing our Services via an Anthropic API Key **or
+where we otherwise explicitly permit it**"* — and the exception covers first-party Claude Code.
+Arm E finds 2026 enforcement tracked **third-party-harness auth**, never first-party volume, with
+no documented ban of a heavy Claude Code or Codex user; per-profile `CLAUDE_CONFIG_DIR` + official
+binary + official OAuth — **this fleet's exact setup** — is the accepted pattern. What is banned is
+a **relay / token-pool** architecture (the OpenClaw wave). Don't put a relay in front of it.
+
+**C4 — Provenance of the −17% weekly cut, sharpened.** It is Anthropic's own words on
+**@ClaudeDevs (X)** plus press, **not** a help-centre page — arm B checked Anthropic-owned doc
+pages and found nothing, arm C found the vendor post. Both are right about different surfaces. The
+claim stands; its source is a vendor social post, so it can be edited or deleted without trace.
+
+**C5 — NEW, and the most actionable thing in this document: the binding limit on this fleet's
+fan-out may not be quota at all.** Arm E found an **undocumented burst limiter, separate from
+quota** — `"Server is temporarily limiting requests (not your usage limit)"` at **~3–4 simultaneous
+cold starts** (claude-code issues #53922, #52784, #68502, #76133, all closed as not-planned, keying
+never stated). **That is below the standing 6-concurrent-teammate ceiling in CLAUDE.md**, i.e. the
+documented ceiling may be unreachable in practice for reasons no meter shows. Cheap falsifiable
+test, not yet run: stagger N simultaneous cold starts across the four accounts and record failures
+against N.
+
+**Also worth carrying (not corrections, just under-weighted above):**
+- Fable 5.1 emits **2.04×** Fable 5's output tokens/turn (n=7,835 turns) and its effort ladder
+  spans **11×** (13.1M low → 143.7M max) for 8 index points — so on Claude the *effort knob* is a
+  larger cost lever than the model choice.
+- Any Astra-vs-Fable cost comparison that does not pin effort on **both** sides is measuring the
+  effort knob: AA has Astra at 44% of Fable's cost/task, MindStudio has it **75% more expensive** —
+  reconciled by MindStudio running Astra at Ultra Thinking in a different harness.
+- Quality is a tie under every neutral instrument: AA Coding Agent Index **62 vs 62**, Intelligence
+  Index **53 vs 53**, Arena 13.71%±1.72 vs 11.54%±2.10 (overlapping), one fixed harness 61.7 vs 58.9.
+- **Codex wins long autonomous runs on measured evidence** — `/goal` runs of ~25 h / 13M tok / 30k
+  LOC, 8 parallel subagents GA, and a **sleep tool** cutting idle burn from 83–188M to 10–15M
+  tok/hr. Nothing equivalent is documented Claude-side, and idle burn is a real term for this fleet.
+- **Both vendors served degraded output in September.** OpenAI confirmed it (Sottiaux postmortem,
+  2026-09-12): "misconfigured serving engines that degraded quality for a long tail of traffic".
+  Anthropic's analogue is deliberate and disclosed: safety classifiers route flagged requests to a
+  weaker model, which bites security-adjacent and C/C++/Rust work.
+
+**Instrument failure, stated not hidden:** every OpenAI origin page (`openai.com/policies/*`,
+`help.openai.com/*`) returned 403 to WebFetch, curl, and agent-browser. All OpenAI *clause* wording
+here is from secondary sources; Anthropic's was read at origin. And no primary Reddit or X post was
+reachable through the search index, so every Reddit-attributed number in arm C is rated RUMOR.
