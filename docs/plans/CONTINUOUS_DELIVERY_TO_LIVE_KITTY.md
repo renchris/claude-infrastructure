@@ -173,16 +173,23 @@ a shape produced by the auto-mode style instruction to prefer heredocs over the 
 
 Ordered by (harm prevented ÷ size). G3 first because it is what made the rest invisible.
 
-| id | Task | Depends on |
-|----|------|-----------|
+| id | Task | Depends on | Outcome |
+|----|------|-----------|---------|
 | T13 | G3: `cc-notify --role` non-zero on dead target + sweep records `channel:"dead-target"` | — |
 | T14 | G1: FF-GATE arm denying `git commit` in the shared checkout, with a named escape hatch | — |
-| T15 | G2: edge-trigger converge from `post_release_finish()`, guarded on `git cherry` empty | — |
+| T15 | G2: edge-trigger converge from `post_release_finish()`, guarded on `git cherry` empty | — | **DONE** — `tests/ship-land-converge-edge.bats`, 9/9 green with the diff and 9/9 red on pristine trunk. ONE REFINEMENT AGAINST THE SPEC, and it decides whether the guard works at all: the predicate is read with `git -C $DEPLOY_REPO`, **never in the lander's own worktree**. `merge --ff-only` compares ANCESTRY in the SHARED CHECKOUT, so that checkout is the only repo whose divergence can block the advance; the lander's HEAD is by construction ahead of its own origin at this point (it is what just landed), so reading `git cherry` there would answer a different question and skip every time. Case 6 pins exactly that. Failure direction is deliberate — a stale ref, an unreadable repo, `core.bare=true`, or no git at all each yield non-empty output or a non-zero rc, and every one of them SKIPS while the 600 s timer still converges. Concurrency needed no new lock: `deploy-live.sh:180` already records that the non-timer path can overlap a host phase and that the overlap "costs load, not correctness". Kill switch `SHIP_LAND_CONVERGE=off`. |
 | T16 | G4: overlay daemon self-retire on source-sha change, gated on `not st["on"]` | — |
 | T17 | Re-mint `/tmp/resident-reload-flip.sh` for packet `4194644aea26` | — |
 
 ## Record
 
 - 2026-09-17 created. Wave A1-A10 dispatched; 9 reported, T4 (gate-green) outstanding.
+- 2026-09-17 T15 (G2) landed. The edge trigger closes the 40.1%-by-hand figure at its source: every
+  land that leaves the shared checkout fast-forwardable now kicks the degraded-tier converge
+  itself, so the clock becomes the backstop rather than the mover. What it deliberately does NOT
+  do is cure a DIVERGED checkout — that is G1's subject, and until G1 lands a diverged checkout
+  turns this trigger into a warning on every land rather than an advance. The two gaps are
+  therefore coupled in one direction: G2's value is bounded by how often G1's defect occurs
+  (measured: 63 commits in 36 days).
 - Divergence that blocked the converge at wave start (`145c32f53`) cleared itself when its
   author landed it; checkout returned to 0-ahead/0-behind without intervention.

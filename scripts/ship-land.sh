@@ -1555,6 +1555,64 @@ post_release_finish() {  # $1=trunk — runs in the OUTER process, the land-lock
       "$SCRIPT_DIR/postland-verify.sh" 2>/dev/null || true
   fi
 
+  # --- edge-triggered live-layer converge (G2, backlog 193d63e30c82) ---------------------------
+  # LANDING IS THE SECOND-TO-LAST STEP, NOT THE LAST. ~/.claude is a per-file symlink farm over the
+  # SHARED CHECKOUT, so a landed commit changes nothing that executes until that checkout
+  # fast-forwards. Until this kick existed the only movers were a 600s launchd timer whose budget
+  # holds it back and a HUMAN: measured over the lane's history, 40.1% of live-layer advances were
+  # run by hand, median commit→live residency 2.31h, and advances arrived in batches of median 9 /
+  # max 110 commits. This is the same handoff shape as the postland-verify kick above — the timer
+  # stays the backstop, this is the fast path.
+  #
+  # 🚨 THE GUARD IS THE WHOLE DESIGN, AND IT IS MEASURED IN THE SHARED CHECKOUT, NEVER HERE.
+  # deploy-live advances $DEPLOY_REPO with `merge --ff-only`, which compares ANCESTRY: a single
+  # commit sitting in that checkout and absent from the trunk makes the advance ARITHMETICALLY
+  # IMPOSSIBLE — deploy-live.sh:2543 dies DIVERGED and, by contract, that lane never rebases or
+  # resets a shared checkout. Ungated, this trigger would therefore fire into a GUARANTEED refusal
+  # on every land for as long as the divergence stood (measured: 63 such commits in 36 days).
+  # Reading `git cherry` HERE would answer a different question and always pass — the lander's own
+  # worktree HEAD is precisely what we just landed. So the predicate is read with `git -C` against
+  # $DEPLOY_REPO.
+  #
+  # ITS FAILURE DIRECTION IS DELIBERATE. Every way the predicate can be wrong — a stale origin/main
+  # in that checkout, an unreadable repo, core.bare=true (a real incident here), no git at all —
+  # produces non-empty output or a non-zero rc, and every one of those SKIPS the fire. The timer
+  # still converges. A false skip costs latency that the backstop repays; a false FIRE costs a
+  # refusal on every land, which is the failure this guard exists to prevent.
+  #
+  # NON-FATAL AND DETACHED, for the same reason as the verifier above: a land that has already
+  # content-verified must never be turned red by what happens after it. start_new_session is
+  # MANDATORY (a shared process group is reaped by the harness's group SIGKILL). CONCURRENCY IS
+  # ALREADY ADJUDICATED rather than re-argued: deploy-live.sh:180 records that it has no run lock
+  # BY ANALYSIS, that the non-timer path (deploy-now.sh) can already land inside a running host
+  # phase, and that the overlap "costs load, not correctness" — this kick joins that same class,
+  # and lands are serialised by the land-lock upstream, so it fires at most once per land.
+  # The spelling is `CC_DEPLOY_MAX_LAG_COMMITS=0` — the degraded tier, which relaxes the CLOCK and
+  # keeps the no-RED evidence, and is the exact form .claude/settings.json already grants. NEVER
+  # --force, which bypasses the T1/T1H/T2/T3 ladder outright.
+  # Kill switch: SHIP_LAND_CONVERGE=off.
+  if [[ "${SHIP_LAND_CONVERGE:-on}" != "off" ]]; then
+    local dl_repo dl_script dl_log dl_cherry
+    dl_repo="${DEPLOY_REPO:-$HOME/Development/claude-infrastructure}"
+    dl_script="$dl_repo/scripts/deploy-live.sh"
+    if [[ -f "$dl_script" ]] \
+      && dl_cherry="$(git -C "$dl_repo" cherry origin/"$TRUNK" HEAD 2>/dev/null)" \
+      && [[ -z "$dl_cherry" ]]; then
+      dl_log="${POSTLAND_DIR:-$HOME/.claude/autonomy/postland}/converge-edge.log"
+      mkdir -p "$(dirname "$dl_log")" 2>/dev/null || true
+      python3 -c 'import os,subprocess,sys
+env = dict(os.environ, CC_DEPLOY_MAX_LAG_COMMITS="0")
+with open(sys.argv[3], "a") as log:
+    subprocess.Popen(["bash", sys.argv[1]], cwd=sys.argv[2], env=env,
+                     stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                     start_new_session=True)' "$dl_script" "$dl_repo" "$dl_log" 2>/dev/null || true
+      echo "✓ ship-land: live-layer converge kicked (detached; log $dl_log)."
+    elif [[ -n "${dl_cherry:-}" ]]; then
+      # NOT a land failure — a fact about the shared checkout that the operator has to cure there.
+      echo "⚠ ship-land: live-layer converge NOT kicked — $dl_repo carries commit(s) absent from origin/$TRUNK, so merge --ff-only cannot advance it. The land itself is fine; the LIVE layer will not carry it until that divergence is cured. inspect: git -C $dl_repo cherry origin/$TRUNK HEAD" >&2
+    fi
+  fi
+
   echo "✓ ship-land: LANDED $(git rev-parse --short "$LANDED_HEAD") → origin/$TRUNK; content-verified; sweep=$sweep_field."
   return 0
 }
