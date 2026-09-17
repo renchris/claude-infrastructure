@@ -90,7 +90,8 @@ exit 128
 EOF
   chmod +x "$BATS_TEST_TMPDIR/dead"
   export CC_LANE_REFS_CMD="bash '$BATS_TEST_TMPDIR/dead'"
-  export CC_LANE_NOW=$(epoch 20260911T000000Z)
+  CC_LANE_NOW=$(epoch 20260911T000000Z)
+  export CC_LANE_NOW
   run bash "$SUT" --assert
   [ "$status" -eq 3 ] || false
   [[ "$output" == *"VERDICT       UNKNOWN"* ]] || false
@@ -105,7 +106,8 @@ exit 128
 EOF
   chmod +x "$BATS_TEST_TMPDIR/dead"
   export CC_LANE_REFS_CMD="bash '$BATS_TEST_TMPDIR/dead'"
-  export CC_LANE_NOW=$(epoch 20260911T000000Z)
+  CC_LANE_NOW=$(epoch 20260911T000000Z)
+  export CC_LANE_NOW
   run bash "$SUT" --json
   [ "$status" -eq 3 ] || false
   printf '%s' "$output" | jq -e '.verdict=="UNKNOWN"' >/dev/null || false
