@@ -1390,6 +1390,18 @@ hf_close_attrib() { # $1=id $2=site $3=mode $4=terminal $5=owner $6=verdict
 # The sole exception is boot-resume-launch.sh, which launches iTerm2 EXPLICITLY (`open -a iTerm`)
 # one line earlier — there the launch is the intent, so it carries the id swap and no guard.
 
+# NAME ONLY THE TRANSPORTS THAT WERE ACTUALLY TRIED (2026-09-17). Both callers of as_write printed
+# "BOTH transports failed 3x (osascript AppleEvents and the it2 shim's session run)" on every
+# failure — but the kitty branch below `return`s before osascript is reached, so inside kitty that
+# sentence names a transport that never ran and a verb that is no longer used. It sends the next
+# reader hunting AppleEvents on a box that has no iTerm2, which is the exact failure class the
+# comment at the second-transport line says it was written to prevent. Derived from the SAME
+# predicate the branch is taken on, so the two cannot drift.
+as_write_transports() {
+  if in_kitty; then printf '%s' "the it2 shim's session type (kitty; AppleEvents not attempted here)"
+  else printf '%s' "osascript AppleEvents and the it2 shim's session run"; fi
+}
+
 # Shared single-lookup writer: find the session once, type one line into it.
 as_write() { # $1=session-uuid $2=text
   if in_kitty; then
@@ -1404,6 +1416,28 @@ as_write() { # $1=session-uuid $2=text
     # $REAL_IT2 there would trip `set -u` and abort the close mid-teardown, so the shim path is the
     # default; under kitty the REAL_IT2 block resolves to that exact same shim anyway (:3397 area),
     # which is why the two spellings cannot disagree.
+    # `session type`, NOT `session run` (2026-09-17). The comment above was right that there must be
+    # ONE seam and wrong about which verb it is. `run` is the LAUNCH verb: against a pane the shim
+    # classifies as ARMED it does not type at all — it writes the text to $CMD_DIR/<id>.cmd and waits
+    # for cc-pane-runner to exec it. `/exit` starts no agent and a live Claude Code pane has no
+    # runner behind it, so that proof can only fail. It did: measured 2026-09-17 on pane 17, whose
+    # arming marker had been left on disk 19h earlier by a runner that fell back to a shell without
+    # consuming it. as_write returned non-zero 3x and both callers killed their own armed watcher,
+    # which is the whole KITTY_RECYCLE_TRANSPORT defect.
+    #
+    # `type` is text + \r, typed, unconditionally — the population this call actually belongs to (a
+    # MESSAGE into a live composer), with every id/addressing/existence gate `run` has and none of
+    # the launch machinery it does not need. The marker leak is fixed at its two sources as well, so
+    # this is a second, independent lock rather than a workaround for the first.
+    #
+    # THE rc 64 DEGRADE IS THE DEPLOY ORDERING, NOT A FALLBACK. 64 is this shim's "unsupported
+    # subcommand" and nothing else produces it, so it means exactly "the deployed it2-kitty predates
+    # this verb" — during the window between this file going live and the shim converging. Falling
+    # back to today's transport there is strictly better than failing: it is the behaviour this line
+    # has had all along, defect included. Any other non-zero is a real refusal and is returned.
+    hf_bounded "${REAL_IT2:-$HOME/.claude/bin/it2}" session type -s "${1##*:}" "$2"
+    _aw_rc=$?
+    [ "$_aw_rc" = 64 ] || return $_aw_rc
     hf_bounded "${REAL_IT2:-$HOME/.claude/bin/it2}" session run -s "${1##*:}" "$2"
     return $?
   fi
@@ -8124,7 +8158,7 @@ MSG
     # as_write grew its second transport (:973) this is no longer "AppleEvents had a bad minute" — it
     # is BOTH transports refusing 3x each, so the message must not send the next reader hunting the
     # one that is merely listed first (the class f59d4ff3 fixed for the PARKED verdict).
-    [ "$wrote" = 1 ] || { kill "$SC_WATCHER" 2>/dev/null; echo "!! could not type /exit into $SC_SID — BOTH transports failed 3x (osascript AppleEvents and the it2 shim's session run); watcher disarmed, session stays alive" >&2; exit 1; }
+    [ "$wrote" = 1 ] || { kill "$SC_WATCHER" 2>/dev/null; echo "!! could not type /exit into $SC_SID — every transport tried failed 3x ($(as_write_transports)); watcher disarmed, session stays alive" >&2; exit 1; }
     # Anti-strand best-effort (may not run if the interrupt kills us first — the watcher's CR
     # nudge at 60s covers a stranded /exit).
     osascript -e 'delay 1.5' >/dev/null 2>&1
@@ -11731,7 +11765,7 @@ recycle_fire() {
   # /exit untypeable → un-arm: a live watcher would eventually type the relaunch into a still-
   # running CC session's composer. Same correction as the self-close twin (:4104): as_write now
   # exhausts BOTH transports before returning non-zero, so this is a pane neither can reach.
-  [ "$wrote" = 1 ] || { kill "$WATCHER_PID" 2>/dev/null; echo "!! recycle: could not type /exit into $SID — BOTH transports failed 3x (osascript AppleEvents and the it2 shim's session run); watcher disarmed, session stays alive" >&2; exit 1; }
+  [ "$wrote" = 1 ] || { kill "$WATCHER_PID" 2>/dev/null; echo "!! recycle: could not type /exit into $SID — every transport tried failed 3x ($(as_write_transports)); watcher disarmed, session stays alive" >&2; exit 1; }
   # Anti-strand best-effort: may never run if the interrupt kills us first — the watcher's CR
   # nudges (@60/150/300s) cover a stranded /exit either way.
   osascript -e 'delay 1.5' >/dev/null 2>&1

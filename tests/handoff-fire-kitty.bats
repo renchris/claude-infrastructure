@@ -212,13 +212,35 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
 
 # ── as_write ─────────────────────────────────────────────────────────────────────────────────────
 
+# INVERTED IN PLACE 2026-09-17, NOT REWRITTEN. Both cases below read `session run` until today, and
+# they were right about the PROPERTY (one seam, through the shim, surviving self-close's unset
+# REAL_IT2) and wrong about the VERB. `run` is the LAUNCH verb: against a pane the shim classifies
+# as ARMED it writes the text to a command FILE and waits for cc-pane-runner to exec it, which
+# `/exit` can never satisfy. Measured on pane 17, whose arming marker had been orphaned 19h earlier,
+# that is exactly how --recycle failed (docs/plans/KITTY_RECYCLE_TRANSPORT.md). The verb is now
+# `session type` — text + \r, typed, unconditionally. The assertions keep their old shape so the
+# diff is readable as what it is: a change of verb, not of contract.
+
 @test "as_write in kitty routes through the it2 shim (ONE seam), not a second kitty spelling" {
   pin_kitty
   run as_write 25 "/exit"
   [ "$status" -eq 0 ]
-  grep -qx 'session run -s 25 /exit' "$ILOG"
+  grep -qx 'session type -s 25 /exit' "$ILOG"
   # It must NOT open a second, divergent path straight at the control socket.
   [ ! -s "$KLOG" ]
+}
+
+@test "as_write in kitty uses session TYPE, never session RUN — run is the launch verb" {
+  # THE RED-PROOF for the transport fix. `run` argv-delivers to an ARMED pane instead of typing, and
+  # a live Claude Code pane carrying a stale arming marker is exactly the shape that broke: /exit
+  # went to $CC_PANE_CMD_DIR/<id>.cmd, no runner read it, deliver_argv's pickup proof failed, and
+  # both callers killed their own armed watcher. Pinning the verb is what keeps the message path off
+  # a classification it does not need.
+  pin_kitty
+  run as_write 25 "/exit"
+  [ "$status" -eq 0 ]
+  grep -q 'session type ' "$ILOG"
+  ! grep -q 'session run ' "$ILOG" || false
 }
 
 @test "as_write in kitty survives self-close mode, where REAL_IT2 is not yet assigned" {
@@ -228,7 +250,28 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
   unset REAL_IT2
   run as_write 25 ""
   [ "$status" -eq 0 ]
-  grep -qx 'session run -s 25 ' "$ILOG"
+  grep -qx 'session type -s 25 ' "$ILOG"
+}
+
+@test "an OLD shim (rc 64 = unsupported subcommand) degrades to session run, and only rc 64 does" {
+  # THE DEPLOY ORDERING, stated as a pair. ~/.claude/bin/it2 and bin/it2-kitty converge at different
+  # moments, so between this file going live and the shim carrying `type` there is a window where
+  # the verb does not exist. 64 is the shim's "unsupported subcommand" and nothing else emits it, so
+  # it means exactly "old shim" and falling back to today's transport there is strictly better than
+  # failing. The CONTROL is the second half: any other non-zero is a real refusal and must NOT be
+  # retried, or a genuinely-refused pane gets the text twice.
+  pin_kitty
+  export KFAKE_IT2_RC=64
+  run as_write 25 "/exit"
+  grep -q 'session type -s 25 /exit' "$ILOG"
+  grep -q 'session run -s 25 /exit' "$ILOG"        # degraded to the old verb
+
+  : > "$ILOG"
+  export KFAKE_IT2_RC=1
+  run as_write 25 "/exit"
+  [ "$status" -ne 0 ]
+  grep -q 'session type -s 25 /exit' "$ILOG"
+  ! grep -q 'session run ' "$ILOG" || false        # a real refusal is NOT retried
 }
 
 @test "as_write on iTerm2 still goes to osascript — kitty is never consulted" {
@@ -296,7 +339,7 @@ pin_kitty()  { export KITTY_WINDOW_ID=25; unset IT2_WRAPPER_NO_KITTY; }
   export KFAKE_IT2_RC=1
   run as_write 25 "/exit"
   [ "$status" -ne 0 ]
-  [ "$(grep -c 'session run -s 25 /exit' "$ILOG")" -eq 1 ]
+  [ "$(grep -c 'session type -s 25 /exit' "$ILOG")" -eq 1 ]
   [ ! -s "$OLOG" ]                                 # and kitty never reaches osascript
 }
 

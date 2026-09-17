@@ -1,10 +1,10 @@
 ---
-status: open
+status: complete
 ---
 
 # KITTY_RECYCLE_TRANSPORT — `--recycle` and `self-close` cannot type `/exit` in a kitty pane
 
-**Status:** OPEN · filed 2026-09-17 · diagnosed, not fixed.
+**Status:** COMPLETE · filed 2026-09-17 · fixed, landed and converged the same day.
 **Scope (frozen):** make `handoff-fire.sh --recycle` and `self-close` deliver `/exit` to a kitty
 pane, land it on `origin/main`, and converge it to the live layer. No behaviour change on iTerm2.
 
@@ -71,7 +71,105 @@ failure class the comment at `:8124` says it was written to prevent.
 
 ---
 
-## Design fork — decide in W2, record the answer here
+## W1 CORRECTION — the mechanism above is right about the SYMPTOM and wrong about the CAUSE
+
+**Measured 2026-09-17 in the dispatched session, both arms, before any edit.** §5 of the diagnosis
+says *"`bin/it2-kitty` exposes only `split`, `list`, `run`, `close`. There is no send-only verb —
+that is the actual gap."* Both halves are false, and the second one sent the fix at the wrong file.
+
+- **`send` has existed all along** (`bin/it2-kitty:1062`), and so do `focus` and `read`. `send` is
+  text with NO newline, which is why it is not what `as_write` needs — but "there is no send-only
+  verb" is not the reason.
+- **`run` does not always launch-and-verify.** Its three dispositions are named in its own comment:
+  ARMED ⇒ `deliver_argv` (the 20s proof at `:356`), TUI ⇒ `type_verified` abstains and the text is
+  typed, SHELL ⇒ verified typing. **Only the ARMED branch reaches the proof that failed.** On a pane
+  that is not armed, `run -s <id> "/exit"` types `/exit` and submits it, today, unchanged.
+
+So the question the diagnosis never asked is *why was a live Claude Code pane classified ARMED*.
+
+**Because the arming marker outlived everything it stands for.** `armed()` was a bare
+`[ -f "$CMD_DIR/<id>.armed" ]`, and the marker leaks two ways:
+
+1. `bin/cc-pane-runner` consumed it only on the path where a command actually ARRIVED (`:239`).
+   Its wait loop timing out — the ordinary outcome for a pane nobody ever `run`s into — exec'd a
+   shell via `_fallback` and left the marker on disk forever. A runner KILLED outright leaves it too
+   and can never clean up.
+2. A kitty window id is a **per-process counter that restarts at 1 with every kitty** — exactly the
+   hazard § CLOSE-TARGET IDENTITY PIN already documents for the close path, which grew a
+   `--expect-generation` pin for it. The ARM path never had one, so a marker minted for the previous
+   kitty's pane 8 answers for this kitty's pane 8.
+
+**The live evidence, read without typing anything into any pane:**
+
+```
+$ ls ~/.claude/run/kitty-pane-cmd            # 12 markers
+   8 9 10 14 15 17 18 29 30 31 34 487
+$ comm -12 <(it2-kitty session list | sort) <(ls … | sed 's/\.armed$//' | sort)
+   17                                        # ← the ONE live pane, and it is the pane §Mechanism measured
+$ stat -f %Sm ~/.claude/run/kitty-pane-cmd/17.armed
+   2026-09-16T19:09                          # 19 HOURS old, against a runner wait budget of 300s
+```
+
+Eleven of the twelve markers are orphans for panes that no longer exist; the twelfth sat over a live
+Claude Code session. `session run -s 17 "/exit"` therefore wrote `/exit` into `$CMD_DIR/17.cmd`, a
+file no runner was reading, and failed `deliver_argv`'s pickup proof — which is precisely the
+`:356` error §Mechanism recorded.
+
+**Both arms of the control, run in the dispatched session:**
+
+| arm | result |
+|---|---|
+| stale marker present, `session run -s <id> "/exit"` | takes `deliver_argv`; text goes to a FILE; proof fails |
+| same command, marker absent | takes `prove_target` → typing path; refuses only because the probe id is not a live pane |
+
+*Lesson for the record (it cost the first hour): the plan reasoned from `run`'s NAME and its error
+MESSAGE, both of which describe the launch path, and neither of which is a claim about which branch
+was taken. The branch is decided by a file on disk that nothing in the diagnosis looked at.*
+
+## W2 DECISION — Option A, and a second, independent lock
+
+**Both defects are fixed, because either one alone leaves a live failure mode.**
+
+**A. `session type` — a send-only verb (the plan's Option A).** Text + `\r`, typed, unconditionally.
+`as_write`'s kitty branch points at it. Rationale beyond the plan's: `run`'s own header already says
+*"`run`'s traffic is NOT one population"* and names `as_write`'s `/exit` as the second population —
+a MESSAGE into a live composer, not a command. Every mechanism `run` carries is built for a command
+(argv delivery, the launch proof, the nonce echo-verify that the same header calls **destructive**
+on a TUI). Giving the message path its own verb stops it depending on a classification it never
+needed. Option B (`--no-verify` on `run`) was rejected as the plan recommended: it overloads a verb
+whose whole contract is "the agent started", and every future caller must remember the flag.
+
+**B. The marker's lifetime — the generator.** Fixing only A would leave `run` and `send` still
+mis-routing into a dead file for every other caller, and Claude Code's own teammate spawn uses both.
+So:
+
+- `cc-pane-runner`'s `_fallback` removes its own marker before exec'ing the shell — the leak at its
+  source.
+- `armed()` gains two pins, **both of which fail toward the legacy typing transport** (the path that
+  works on a live pane), so neither can withhold delivery — only re-route it:
+  - **GENERATION** — the marker records the kitty it was minted against, taken for free from the
+    control socket's own name (`unix:/tmp/kitty-<pid>`). No extra RPC; nothing on the hot spawn path.
+  - **AGE** — the marker stands for "a runner is waiting", and the runner gives up at
+    `CC_PANE_CMD_WAIT_S` (300s). Past that budget there is provably nobody behind it. `+60s` slack
+    because the marker is created BEFORE the launch, so its age always exceeds the runner's own
+    elapsed wait.
+
+**Residual, stated rather than hidden:** a kitty that restarts and re-mints an id *within ~6 minutes*
+of a spawn would still match on age, and a marker written before this change carries no generation to
+check. Judged acceptable — the generation pin covers every marker minted from now on, and it was
+never the observed failure.
+
+**C. The message that lied.** `as_write_transports()` derives the clause from the SAME `in_kitty`
+predicate the branch is taken on, so the two cannot drift. Inside kitty it now reads
+*"the it2 shim's session type (kitty; AppleEvents not attempted here)"*.
+
+**One defect found by the tests, worth recording because it would have made the pin silently inert:**
+`local sock="$X" gen="${sock##*-}"` reads an EMPTY `sock` — bash declares every name on a `local`
+line before expanding the later initialisers — so `kitty_generation` returned 1 for every generation.
+Caught by its own paired control (matching generation still arms), which is the only reason it was
+not shipped as a no-op.
+
+## Design fork — decided above; kept for the record
 
 **Option A — add a send-only verb to `bin/it2-kitty`** (e.g. `session send`), and point `as_write`'s
 kitty branch at it. Keeps "one seam" (as_write's own stated principle), fixes self-close for free,
