@@ -136,6 +136,39 @@ Also recorded by them, and load-bearing for anyone re-arming: **the chord is dar
 not one — `config/kitty.conf`'s maps are commented AND `~/.config/kitty/drag-arm.d/drag.conf` has
 been 0 bytes since 20:16. A re-arm must handle both.
 
+## The candidate is a CONJUNCTION, which is why every single-variable sweep comes back clean
+
+Three arms are now on the record and NONE of them reproduces:
+
+| arm | tabs | window | result |
+|---|---|---|---|
+| shipped shim-verify, unmodified | 1 | visible | 12/12 pass, no crash |
+| this note's sandbox | 1 | **minimized** | no crash |
+| variant harness, +1 `new_tab` | **2** | visible | no crash; 5/7, bar did not draw |
+
+Each arm moves ONE variable off the dead instance's configuration and each returns a clean null.
+Read singly that looks like three pieces of exonerating evidence; read together it says the
+remaining candidate is a **conjunction** — visible AND multi-tab AND injected-into-a-RUNNING
+instance — and a sweep that moves one variable at a time cannot reach it. That is precisely the
+shape that made `12/12 pass` look like safety.
+
+So visibility alone is not the missing half (arm 3 was visible), and tab count alone is not either
+(arm 3 had two tabs). The next probe must hold ALL THREE at the dead instance's values at once and
+vary something else.
+
+**Start from the SHIPPED harness** — `scripts/checks/kitty-title-band-shim-verify.sh` with a second
+`new_tab` — not from a /tmp copy, so the next session inherits an instrument that still exists.
+
+### Attribution, corrected twice in one hour
+
+`9476a0a9c` ("honour the operator's disarm … on trunk this time") and the 8-line 20:41 record it
+carries belong to a THIRD session — not to claude-infrastructure-1, whose own disarm commit
+(`8015ab808`) was killed mid-land at 21:49 and whose branch was deleted once trunk already had it.
+Their only landed work today is `4fa6d3c80`. In the same hour I wrongly told them
+`scripts/kitty-pane-title-overlay.py` was theirs, on no evidence beyond it being dirty next to
+their work. **In a checkout three sessions share, "the other one did it" has two referents** —
+resolve authorship with `git log`/`git branch --contains`, never by adjacency.
+
 ## Next experiment
 
 Re-run the harness with the sandbox window VISIBLE, **at least two tabs** (the one variable that
