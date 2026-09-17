@@ -3,7 +3,43 @@
 # The two tests that matter are the POLARITY ones: this script must never convert its own ignorance
 # into a finding, in either direction.
 
-setup() { OWNER="${BATS_TEST_DIRNAME}/../bin/cc-owner"; }
+setup() {
+  OWNER="${BATS_TEST_DIRNAME}/../bin/cc-owner"
+  # FIXTURE $HOME — and it fixes a second defect on the way.
+  #
+  # cc-owner:55 globs "$HOME"/Library/LaunchAgents/*.plist with NO env override, so an unfixtured
+  # run reads the OPERATOR'S live agent set. These cases were therefore passing for the wrong
+  # reason: they asserted the resolver works, but what they actually depended on was him happening
+  # to own com.claude.deploy-live.plist. Seeding the plist makes the suite hermetic AND
+  # self-contained — it now proves the RESOLVER, not the box's launchd inventory.
+  #
+  # WHY THIS MATTERS BEYOND HYGIENE: an unfixtured $HOME here made
+  # `scripts/test-hermeticity-lint.sh --selftest` exit 1, which routes postland-verify to CUT
+  # instead of GREEN (postland-verify.sh:3784-3785, contract at :523 — "never a red, and NEVER A
+  # GREEN either"). No green stamp has existed since 2026-09-12T03:07Z, the commit that added this
+  # file. A green-only deploy tier then pins the live layer. Two unfixtured suites held the whole
+  # certification chain shut.
+  export HOME="$BATS_TEST_TMPDIR/home"
+  mkdir -p "$HOME/Library/LaunchAgents"
+  # PlistBuddy must parse it and the text must CONTAIN the token cc-owner greps for
+  # (`deploy-live.sh`), because surface 1 is a substring match against the printed plist.
+  cat > "$HOME/Library/LaunchAgents/com.claude.deploy-live.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.claude.deploy-live</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>exec "$HOME/.claude/scripts/deploy-live.sh"</string>
+  </array>
+  <key>StartInterval</key><integer>600</integer>
+</dict>
+</plist>
+PLIST
+}
 
 @test "a launchd-owned script resolves to its agent, whatever spelling names it" {
   # Keyed on BASENAME, not path: the measured corpus hands the same script over as an absolute
