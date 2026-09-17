@@ -198,7 +198,7 @@ EOF
   [[ "$output" == "rc=1" ]]
 }
 
-@test "deploy-live: a single-suite failing set gets a probe; a multi-suite set gets none" {
+@test "deploy-live: EVERY failing set gets a probe — one suite or many, as a conjunction" {
   # Lift all three helpers together. A `/^fals_sq()/,/^}$/` range stops at the FIRST closing brace,
   # which is fals_host's — so fals_host_set never came across and the assertion below passed for the
   # wrong reason (an undefined function is rc 127, which is also non-zero).
@@ -207,11 +207,45 @@ $(awk '/^fals_sq\(\)/,/^host_cut_row\(\)/' "$DEPLOY" | sed '$d')"
   run bash -c "$ext
     fals_host_set ' tests/a.bats(2)'"
   [[ "$output" == *"--falsify-host 'tests/a.bats'"* ]] || false
-  # TWO suites, ONE probe subject — the item's premise is about the SET, so answering it with
-  # evidence about one member is the two-meanings defect wearing a helpful face. Emit nothing.
+
+  # INVERTED IN PLACE 2026-09-17 (backlog 236c1a881e97), and the original words are kept because the
+  # assertion is the record of what was believed. It read:
+  #   "TWO suites, ONE probe subject — the item's premise is about the SET, so answering it with
+  #    evidence about one member is the two-meanings defect wearing a helpful face. Emit nothing."
+  #   run bash -c "$ext
+  #     fals_host_set ' tests/a.bats(2) tests/b.bats(1)'; echo \"rc=\$?\""
+  #   [[ "$output" == "rc=1" ]]
+  # The objection it encodes is still true and is not what changed: evidence about ONE member may
+  # not retract a finding about the SET. What changed is the conclusion drawn from it. The set's
+  # question is askable — as the CONJUNCTION over its members — and `emit nothing` was not the
+  # cautious answer but a PERMANENT one: item 236c1a881e97 carried no probe of any kind, cc-premise
+  # read `verdict=clear`, and it re-dispatched 14 times in 40 hours while both of its suites sat
+  # green in HOST_GREEN throughout. So the emission is now required, and the SPELLING is what carries
+  # the old objection: separate ARGUMENTS, never one string, so the predicate answers about every
+  # member or refuses. This case is a RED-PROOF — it fails against the pre-fix emitter, which
+  # returned 1 and printed nothing here.
   run bash -c "$ext
-    fals_host_set ' tests/a.bats(2) tests/b.bats(1)'; echo \"rc=\$?\""
-  [[ "$output" == "rc=1" ]]
+    fals_host_set ' tests/a.bats(2) tests/b.bats(1)'; echo \"|rc=\$?\""
+  [[ "$output" == *"--falsify-host 'tests/a.bats' 'tests/b.bats'|rc=0"* ]] || false
+
+  # …and three, so the emitter is a fold over the set rather than a special case for two.
+  run bash -c "$ext
+    fals_host_set ' tests/a.bats(2) tests/b.bats(1) tests/c.bats(9)'"
+  [[ "$output" == *"--falsify-host 'tests/a.bats' 'tests/b.bats' 'tests/c.bats'"* ]] || false
+
+  # An EMPTY set still emits nothing. `$red` is non-empty at every call site, so this is the guard
+  # against a future one, and it is the one case where silence is the honest answer: there is no
+  # premise to ask about.
+  run bash -c "$ext
+    fals_host_set ''; echo \"rc=\$?\""
+  [[ "$output" == "rc=1" ]] || false
+
+  # A HALF-FORMED PROBE IS WORSE THAN NONE, so validation precedes the first emitted byte: a set
+  # carrying an unusable name emits NOTHING rather than a shorter verb line that would still run and
+  # answer a smaller question than the item's with the one load-bearing exit code.
+  run bash -c "$ext
+    fals_host 'tests/a.bats' ''; echo \"|rc=\$?\""
+  [[ "$output" == "|rc=1" ]]
 }
 
 @test "needs: no falsifier by default — an operator step has no oracle to fabricate" {
@@ -385,6 +419,69 @@ assert_state() { # <label> <premise: FALSE|TRUE|UNKNOWN> <rc>
   rm -f "$CC_HOST_MANIFEST"
   run bash "$DEPLOY" --falsify-host tests/live.bats
   assert_state "manifest unreadable, green row present" UNKNOWN "$status"
+}
+
+# THE SET, and the two ways it can be got wrong. Until 2026-09-17 this verb took ONE suite, so a
+# multi-suite failing set got NO probe at all (see fals_host_set) — item 236c1a881e97 re-dispatched
+# 14 times in 40 hours with `cc-premise check` reading `verdict=clear`, while both of its suites sat
+# green in HOST_GREEN the whole time. The set's question is the CONJUNCTION over its members: it is
+# gone only when EVERY member is gone, because one surviving member keeps the item's premise live.
+@test "deploy-live --falsify-host: a SET retracts only when EVERY member has left the population" {
+  export DEPLOY_REPO="$BATS_TEST_TMPDIR/ds"
+  mkdir -p "$DEPLOY_REPO/tests" "$DEPLOY_REPO/scripts"
+  export CC_HOST_MANIFEST="$DEPLOY_REPO/scripts/host-suites.manifest"
+  printf 'tests/a.bats\ntests/b.bats\ntests/c.bats\n' > "$CC_HOST_MANIFEST"
+  printf 'ok\n' > "$DEPLOY_REPO/tests/a.bats"
+  printf 'ok\n' > "$DEPLOY_REPO/tests/b.bats"
+  printf 'ok\n' > "$DEPLOY_REPO/tests/c.bats"
+  printf 'tests/a.bats 1788800000 abc123\ntests/b.bats 1788800001 abc123\n' > "$CC_POSTLAND_DIR/host-green"
+
+  run bash "$DEPLOY" --falsify-host tests/a.bats tests/b.bats
+  assert_state "every member green" FALSE "$status"
+
+  # ONE SURVIVOR IS ENOUGH, and it is enough in EITHER POSITION. A conjunction that short-circuits
+  # is order-sensitive by construction, so the survivor is asserted first and last: a verdict that
+  # depended on which member happened to be asked first would retract half of a live finding.
+  run bash "$DEPLOY" --falsify-host tests/a.bats tests/c.bats
+  assert_state "one member still in the population, asked last" TRUE "$status"
+  run bash "$DEPLOY" --falsify-host tests/c.bats tests/a.bats
+  assert_state "one member still in the population, asked first" TRUE "$status"
+
+  # The members do not have to be gone the SAME WAY. Each is evaluated by the whole three-leg
+  # predicate, so a set mixing "green again" with "left the manifest" is still one meaning.
+  run bash "$DEPLOY" --falsify-host tests/a.bats tests/never-listed.bats
+  assert_state "one green, one no longer in the manifest" FALSE "$status"
+}
+
+# THE FALSE RETRACTION THIS CLOSED — a COULD-NOT-ASK that was returning the one load-bearing success
+# value. Before the set was spelled as separate arguments, `--falsify-host 'tests/a.bats tests/b.bats'`
+# exited 0, and not through any of the three GONE legs: the manifest loop strips ALL whitespace from
+# every row, so a row can never equal an argument containing a space, `_fh_in` stayed 1, and the
+# "left the manifest ⇒ the live layer stopped running it" arm fired. The obvious spelling of a set
+# was therefore an unconditional retraction of it, available to any caller. It is now the caller
+# error it always was.
+@test "deploy-live --falsify-host: a SET smuggled into ONE argument is UNKNOWN, never a retraction" {
+  export DEPLOY_REPO="$BATS_TEST_TMPDIR/dw"
+  mkdir -p "$DEPLOY_REPO/tests" "$DEPLOY_REPO/scripts"
+  export CC_HOST_MANIFEST="$DEPLOY_REPO/scripts/host-suites.manifest"
+  printf 'tests/a.bats\ntests/b.bats\n' > "$CC_HOST_MANIFEST"
+  printf 'ok\n' > "$DEPLOY_REPO/tests/a.bats"
+  printf 'ok\n' > "$DEPLOY_REPO/tests/b.bats"
+
+  run bash "$DEPLOY" --falsify-host 'tests/a.bats tests/b.bats'
+  assert_state "two names in one argument" UNKNOWN "$status"
+  [ "$status" -eq 2 ]
+
+  # …and the refusal is a property of the CALL, not of evaluation order: a malformed member is
+  # refused even when an earlier member would have answered on its own. Validating shape across all
+  # arguments BEFORE evaluating any of them is what keeps the two states from trading places.
+  run bash "$DEPLOY" --falsify-host tests/never-listed.bats 'tests/a.bats tests/b.bats'
+  assert_state "a malformed member behind one that would have retracted" UNKNOWN "$status"
+  [ "$status" -eq 2 ]
+
+  run bash "$DEPLOY" --falsify-host tests/a.bats ''
+  assert_state "an empty member names nothing" UNKNOWN "$status"
+  [ "$status" -eq 2 ]
 }
 
 @test "plan-phase-scan --falsify: exit 0 only where the plan holds no work to advance" {
