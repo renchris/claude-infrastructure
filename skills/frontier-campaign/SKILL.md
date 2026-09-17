@@ -56,7 +56,7 @@ One Fable architect session/spawn (counts against the spawn cap) produces
   panes re-resolve their worktree's `.claude/settings.local.json`
   (binary-verified 2.1.170; the lead's effort is not forwarded). Without the
   override, panes resolve the user-settings floor (xhigh).
-- **Implementers = default tier** (Opus 4.8 teammates): worktree-isolated,
+- **Implementers = default tier** (Opus 5 teammates): worktree-isolated,
   ≤150-line briefs pointing at pre-greped SPEC SECTIONS (never "read the whole
   spec"), "stop on issue, message lead" verbatim, checkpoint per phase.
 - **Lead (Opus) orchestrates**: explicit ack between phases; monitors commit

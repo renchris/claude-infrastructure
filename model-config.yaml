@@ -541,6 +541,26 @@ pricing_per_mtok:
                                              # for most work (routing note in § Opus 5 adoption above).
                                              # ⚠️ That verdict is BASE-RATE-ONLY; re-check it against Fable
                                              # 5.1's 0.025× cache reads before reusing it. Cache read $0.50.
+                                             # ✅ THE RE-CHECK IS DONE — 2026-09-16, docs/research/
+                                             # fable51-vs-opus5-routing-2026-09-16/. On DOLLARS the answer is
+                                             # PARITY (±6%), sign UNDETERMINED: our own measured token profile
+                                             # first read Fable 5% cheaper, and a skeptic INVERTED the sign by
+                                             # correcting the cache-WRITE TTL multiplier — 60.7% of this fleet's
+                                             # opus-5@high cache writes are ephemeral_1h, billed 2× not the
+                                             # 1.25× five-minute rate (the SIXTH instance of that same error in
+                                             # this repo; usage-telemetry-100p-2026-08-16/critic.md:39 names
+                                             # five priors). The 1h share has moved 99.7% → 85.1% → 60.7% in one
+                                             # month against a crossover at ~50%, so the INSTABILITY is the
+                                             # finding: record the criterion, never the number.
+                                             # 🚨 AND DOLLARS ARE THE WRONG CURRENCY HERE. accounts.json has
+                                             # spend.usage_credits_authorized=false AND
+                                             # frontier.credits_authorized=false, so this fleet has ZERO dollar
+                                             # exposure — every vendor $/task chart describes an economy we are
+                                             # not billed in. The scarce resource is 4×100 weekly points, and in
+                                             # THAT currency Fable costs ~3.2–3.7× per token against a bucket it
+                                             # can never use more than half of (frontier.coupling=0.5). Before
+                                             # citing ANY cost comparison for a routing decision, state which
+                                             # currency it is in.
   claude-opus-4-8: [5, 25]                   # still served (Opus 5 fallback); kept for prior-pinned cost math
   claude-sonnet-5: [2, 10]                   # CORRECTED 2026-09-03 (was [3,15]). The $2/$10 launch price is
                                              # now the STANDARD price — Anthropic cancelled the increase:
@@ -586,7 +606,9 @@ classifier_model: claude-sonnet-4-6
 # Docs, team briefs, and scripts reference role aliases via claude-bump-models —
 # when a role's optimal model changes, update here + run `claude-bump-models --apply`.
 roles:
-  lead_default: claude-opus-5             # lead/orchestrator sessions — Opus 5 @ effort max.
+  lead_default: claude-opus-5             # lead/orchestrator sessions — Opus 5 @ effort high
+                                            # (effort_defaults.default; was `max` until 2026-08-01 cb7f8e3fa,
+                                            #  and this comment kept saying max for 46 days).
                                             # REVERTED from claude-fable-5 2026-06-09 (launch day):
                                             # Fable-by-default at max effort exhausted 5-hour plan
                                             # windows prematurely. Fable 5 is OPT-IN ONLY while
