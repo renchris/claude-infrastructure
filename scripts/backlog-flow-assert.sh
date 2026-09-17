@@ -77,15 +77,40 @@
 #                          as backlog-ratchet.sh's 100% high-water against a population that could
 #                          not reach it (memory: cap-whose-population-is-empty), pointed the other
 #                          way. The window must fit the history it is measured over.
-#   unparsed > |net|     ⇒ unknown:unparsed-could-flip. A record with no readable `ts` is excluded
+#   excluded > |net|     ⇒ unknown:unparsed-could-flip. A record with no readable `ts` is excluded
 #                          from both sides, and excluded evidence is not absent evidence: if the
 #                          pile of records this pass could not place is larger than the margin the
 #                          verdict rests on, that pile alone could reverse the sign, and the honest
 #                          answer is that we do not know (recycle #20's rule: an absence test
 #                          inherits every hole in its input as a positive finding).
+#                          🚨 AMENDED 2026-09-17 (backlog 40250b0f698a): this guard was implemented
+#                          for ONE of the two exclusion channels and was blind to the larger one.
+#                          `fromjson? // empty` DROPPED a line that would not parse, so it landed in
+#                          neither `records` nor `unparsed` and the guard weighed its margin against
+#                          a pile that excluded the store's dominant hole — the >4,096-byte splice
+#                          this repo measured at 12.33% of this very store. It now weighs
+#                          `excluded` = unparsed + dropped. See the jq block for the measurement.
 #
-# `--assert` therefore exits 0 on every abstention. It is a falsifier — its rc-1 direction is the
-# CONVICTION — so an unknown must read exactly like a healthy week to every consumer.
+# ~~`--assert` therefore exits 0 on every abstention. It is a falsifier — its rc-1 direction is the
+# CONVICTION — so an unknown must read exactly like a healthy week to every consumer.~~
+# 🚨 **THAT SENTENCE WAS WRONG IN ITS SECOND HALF AND IS SUPERSEDED (2026-09-17, backlog
+# 40250b0f698a). Kept struck-through, not deleted: the abstentions above are right, and it is the
+# POLARITY DELIVERED TO THE CONSUMER that could not survive being named.** `--assert` has exactly
+# one consumer in this tree — the `--falsifier` string the `--file` arm stores on the row it files
+# — and for that consumer exit 0 is not "a healthy week", it is `run_falsifier`'s one load-bearing
+# answer: THE CONDITION IS GONE (bin/cc-premise:1402). So "reads like a healthy week" and "retracts
+# the standing alarm" were the same rc, and every abstention took the second meaning: an absent
+# store, an absent jq, an unparseable store, a short history or an over-wide excluded pile each
+# retired the inflow alarm on a measurement that never ran, silently. Measured pre-fix through that
+# consumer, all four abstentions AND a genuine `draining` returned an identical `rc=0, output:
+# (silent)` — five states, one reading (memory: fail-safe-default-mimics-the-healthy-state). The
+# replacement is the sibling's, not a new policy: `--assert` exits 1 on net-positive, 0 on draining
+# and **2** on every unknown, 2 being cc-premise's `_FALSIFIER_UNASKABLE_RCS`, and EVERY verdict now
+# prints its line, because exiting without judging is only honest if it says so
+# (scripts/backlog-ratchet.sh, backlog 2366f99e04a7 — the identical defect on the identical signal,
+# fixed there before this file was written and not inherited here). The fail-open intent survives
+# intact where it was actually load-bearing: `--file` still files on `net-positive` alone, so no
+# abstention can mint a row, and a new box on day one is untouched.
 #
 # ── WHY THE FILED ROW'S TITLE CARRIES NO FIGURES ────────────────────────────────────────────────
 # The caller is autonomy-sweep at 300 s, and cc-backlog's update arm rewrites a known row's title
@@ -98,7 +123,8 @@
 #
 # Usage:
 #   backlog-flow-assert.sh                report the window's figures and verdict (always prints)
-#   backlog-flow-assert.sh --assert       exit 1 when the window is NET-POSITIVE (the falsifier)
+#   backlog-flow-assert.sh --assert       the falsifier: 1 = NET-POSITIVE, 0 = DRAINING, 2 = could
+#                                         not tell (cc-premise reads 2 as UNVERIFIED, 0 as GONE)
 #   backlog-flow-assert.sh --file         file/update ONE condition-keyed row when net-positive
 #   backlog-flow-assert.sh --json         the whole reading as one JSON object
 #   backlog-flow-assert.sh --project <p>  scope both sides to one project (default: whole store)
@@ -143,6 +169,7 @@ DAYS=$(( WINDOW / 86400 )); [ "$DAYS" -gt 0 ] || DAYS=0
 # row is filed against and the number a human reads are the same read of the same store.
 VERDICT="unknown"; WHY="skipped"
 ADDED=0; CLOSED=0; REOPENED=0; NET=0; UNPARSED=0; TOTAL=0; HISTORY=-1; UNATTRIBUTED=0
+DROPPED=0; EXCLUDED=0
 
 TITLE="the backlog is taking in more work than it closes"
 
@@ -153,17 +180,54 @@ emit() { # render + exit, per mode. Called exactly once.
              --argjson a "$ADDED" --argjson c "$CLOSED" --argjson r "$REOPENED" \
              --argjson n "$NET" --argjson u "$UNPARSED" --argjson t "$TOTAL" \
              --argjson h "$HISTORY" --argjson x "$UNATTRIBUTED" \
+             --argjson d "$DROPPED" --argjson e "$EXCLUDED" \
              --argjson win "$WINDOW" --argjson since "$SINCE" --argjson now "$NOW" \
         '{verdict:$v, why:$w, project:(if $p=="" then null else $p end),
           window_s:$win, since_epoch:$since, now_epoch:$now,
           added:$a, closed:$c, reopened:$r, net:$n,
-          unparsed:$u, records:$t, unattributed:$x,
+          unparsed:$u, dropped:$d, excluded:$e, records:$t, unattributed:$x,
           history_s:(if $h < 0 then null else $h end),
-          note:"verdict draining|net-positive|unknown. FLOW, not stock: added counts distinct ids with an `add` record inside the window, closed counts `done` RECORDS (a row closed twice is two closings, which is what the drain did), reopened is reported beside them and never folded into added because BACKLOG_DRAIN_24_7 §6 routes a net-positive week to the INFLOW list C1-C4 and every member of that list is a FILING generator. net = added - closed; net > 0 is net-positive and is the state §6 says must be answered by fixing inflow, not by adding drain horsepower. unknown is always an abstention and never a conviction: skipped = no store or no jq, read-failed = the store would not parse, short-history = the store is younger than the window so the first-week-is-always-net-positive artefact cannot be ruled out, unparsed-could-flip = more records lack a readable ts than the margin the verdict rests on. --assert exits 0 on every unknown."}'
+          note:"verdict draining|net-positive|unknown. FLOW, not stock: added counts distinct ids with an `add` record inside the window, closed counts `done` RECORDS (a row closed twice is two closings, which is what the drain did), reopened is reported beside them and never folded into added because BACKLOG_DRAIN_24_7 §6 routes a net-positive week to the INFLOW list C1-C4 and every member of that list is a FILING generator. net = added - closed; net > 0 is net-positive and is the state §6 says must be answered by fixing inflow, not by adding drain horsepower. unknown is always an abstention and never a conviction: skipped = no store or no jq, read-failed = the store would not parse, short-history = the store is younger than the window so the first-week-is-always-net-positive artefact cannot be ruled out, unparsed-could-flip / unreadable-lines-could-flip = more records were EXCLUDED than the margin the verdict rests on, named for whichever channel dominates. The two exclusion channels are counted separately and weighed together: unparsed = records that parsed but carry no readable ts; dropped = non-blank LINES that did not parse into a record at all, the channel a >4096-byte concurrent append splices and which was uncounted before backlog 40250b0f698a; excluded = unparsed + dropped, and it is excluded that guard 4 weighs. --assert exits 1 on net-positive, 0 on draining, and 2 on every unknown — 2 is cc-premise _FALSIFIER_UNASKABLE_RCS, because this arm is a stored FALSIFIER and exit 0 there means THE CONDITION IS GONE, so an abstention exiting 0 retracts the alarm on a measurement that never ran."}'
       exit 0 ;;
     assert)
-      [ "$VERDICT" = net-positive ] || exit 0
-      _line >&2; exit 1 ;;
+      # ── THE ABSTENTION IS NOT A PASS, AND THIS ARM HAS EXACTLY ONE CONSUMER ────────────────────
+      # Corrected 2026-09-17, backlog 40250b0f698a. This arm used to be `[ net-positive ] || exit 0`
+      # and printed nothing on the else, on the header's argument that "an unknown must read exactly
+      # like a healthy week to EVERY CONSUMER". Grep the tree: `--assert` has ONE consumer, the
+      # `--falsifier` string the --file arm below stores on the row it files. autonomy-sweep reads
+      # `--json` and calls `--file`; nothing anywhere runs `--assert` as a gate. So the fail-open was
+      # argued for a gate that does not exist, and delivered to a consumer whose forbidden direction
+      # is the opposite one: cc-premise's run_falsifier reads exit 0 as THE CONDITION IS GONE
+      # (bin/cc-premise:1402) and renders "FALSIFIER PASSED ... Close it citing this run".
+      #
+      # So an absent store, an absent jq, an unparseable store, a short history, or an excluded pile
+      # wider than the margin did not merely fail to measure the week — each one RETRACTED the
+      # standing inflow alarm on a measurement that never ran, and did it silently. Measured pre-fix
+      # through that consumer: all four abstentions AND a genuine `draining` returned the identical
+      # `rc=0, output: (silent)`. Five states, one reading (memory:
+      # fail-safe-default-mimics-the-healthy-state).
+      #
+      # THIS IS NOT NEW POLICY — IT IS THIS REPO'S OWN, APPLIED TO THE SIBLING THAT MISSED IT.
+      # backlog 2366f99e04a7 fixed exactly this for scripts/backlog-ratchet.sh, whose `--assert` is
+      # likewise the stored falsifier of the row it files; its comment states the rule verbatim
+      # ("an absent jq did not just fail to measure coverage: it told the currency pass the coverage
+      # regression had cleared") and its abstention arm prints its non-verdict and declines to judge.
+      # This file landed AFTER that fix (5000db42) and did not inherit it. 2 is the code that cure
+      # chose because it is in cc-premise's _FALSIFIER_UNASKABLE_RCS ({2,124,126,127}), which renders
+      # "COULD NOT ASK ... UNVERIFIED, not confirmed ... fix the PROBE if it is the thing that is
+      # broken" — the state this actually is. A fourth code would land outside that set and render
+      # "NOT REFUTED" (memory: new-enum-member-falls-into-fail-closed-default). It is also already
+      # this file's own spelling for "could not": the unknown-arg arm above exits 2.
+      #
+      # DRAINING NOW SPEAKS TOO, and that is the other half of the cure. cc-premise captures
+      # stdout+stderr and renders `output:` on the exit-0 branch as well, so a genuine pass hands the
+      # closer "12 filed / 18 closed (net -6)" instead of "(silent)" — evidence for the close rather
+      # than a bare rc. The row that prompted this fix was closed on `output: (silent)`.
+      case "$VERDICT" in
+        net-positive) _line >&2; exit 1 ;;
+        draining)     _line >&2; exit 0 ;;
+        *)            _line >&2; exit 2 ;;
+      esac ;;
     report)
       _line; exit 0 ;;
     file)
@@ -193,8 +257,8 @@ _line() {
       printf 'backlog-flow: DRAINING over %sd — %s filed / %s closed (net %s) · %s reopened%s\n' \
         "$DAYS" "$ADDED" "$CLOSED" "$NET" "$REOPENED" "$scope" ;;
     *)
-      printf 'backlog-flow: CANNOT TELL (%s) over %sd — %s filed / %s closed · %s unparsed of %s record(s)%s\n' \
-        "$WHY" "$DAYS" "$ADDED" "$CLOSED" "$UNPARSED" "$TOTAL" "$scope" ;;
+      printf 'backlog-flow: CANNOT TELL (%s) over %sd — %s filed / %s closed · %s unparsed + %s unreadable line(s) of %s record(s)%s. No verdict: this is an ABSTENTION, never that the flow is fine.\n' \
+        "$WHY" "$DAYS" "$ADDED" "$CLOSED" "$UNPARSED" "$DROPPED" "$TOTAL" "$scope" ;;
   esac
 }
 
@@ -210,11 +274,49 @@ command -v jq >/dev/null 2>&1 || { WHY="skipped"; emit; }
 # (cmd_transition writes id/ts/event and the verb's own operands, nothing else). Filtering adds by
 # project while counting every project's closings would produce a net that is not about any project
 # at all. `project` is part of the id hash, so an add's project is the row's project for life.
+#
+# ── A LINE THAT DOES NOT BECOME A RECORD IS EXCLUDED EVIDENCE, AND IT WAS UNCOUNTED ─────────────
+# (backlog 40250b0f698a.) This pass used to open `[ inputs | fromjson? // empty | select(...) ]`,
+# which DROPS an unparseable line outright: it landed in neither `records` nor `unparsed`, so
+# guard 4 — whose entire stated job is "excluded evidence is not absent evidence" — weighed its
+# margin against a pile that excluded the store's largest exclusion channel.
+#
+# That channel is measured, and it is this repo's own. A record longer than the writer's stdio
+# buffer (4,096 B here) is appended as >=2 write() calls, so O_APPEND stops making it atomic and a
+# concurrent appender lands BETWEEN the pieces; both halves then stop parsing. One census dropped
+# 12.33% of THIS store that way (W2-B17, 1550268e6) — the same note sits one screen above this
+# file's own call site in autonomy-sweep.sh, beside the 6,953-byte emitter that caused it.
+#
+# Measured pre-fix, one store, one variable — 12 in-window `add` lines spliced by a concurrent
+# append: net +6 -> -6, verdict `net-positive` -> `draining`, `--assert` rc 1 -> 0, and `unparsed`
+# read 0 in BOTH arms. The mirror (splicing `done` lines) inflates net 8x in the other direction.
+# So the hole reaches both forbidden directions, and the guard built to stop exactly that was blind.
+#
+# `has("id")` is the discriminator rather than a sentinel key, deliberately: every kept record has
+# `id` BY CONSTRUCTION (the select requires it) and the drop marker `{}` has none, so the two can
+# never collide however a real record is shaped.
+#
+# A blank line carries no record and is not evidence of a lost one, so it is not in the pile. A
+# non-blank line that will not parse IS, counted once per PHYSICAL line — one spliced record
+# therefore counts as 2, over-stating the pile and making guard 4 readier to abstain. That
+# over-statement is the safe direction in both arms that read it: an abstention files nothing, and
+# (since this commit) retracts nothing either.
+#
+# No apostrophes below this line: the jq program is a single-quoted shell string, and one
+# apostrophe in a comment ends it (memory: fixture-stub-cannot-carry-an-apostrophe — found here by
+# running it, which is why the prose lives up here where it is safe).
 READ="$(jq -n -R --argjson since "$SINCE" --arg proj "$PROJECT" '
   def ep: (try fromdateiso8601 catch null);
-  [ inputs | fromjson? // empty
-    | select(type == "object" and has("id") and has("event")) ]
-  | map(. + {e: ((.ts // "") | ep)})                                        as $rec
+  [ inputs
+    | . as $l
+    | ( try ($l | fromjson) catch null ) as $j
+    | if ($j | type) == "object" and ($j | has("id")) and ($j | has("event"))
+      then $j
+      else (if ($l | test("^[[:space:]]*$")) then empty else {} end)
+      end
+  ]                                                                         as $raw
+  | ( $raw | map(select(has("id"))) | map(. + {e: ((.ts // "") | ep)}) )    as $rec
+  | ( $raw | map(select(has("id") | not)) | length )                        as $dropped
   | ( $rec | map(select(.event == "add")) | map({key: .id, value: (.project // "")}) | from_entries )
                                                                             as $pj
   | ( $rec | map(select(.e != null)) )                                      as $ok
@@ -226,6 +328,7 @@ READ="$(jq -n -R --argjson since "$SINCE" --arg proj "$PROJECT" '
   {
     records:      ($rec | length),
     unparsed:     ($rec | map(select(.e == null)) | length),
+    dropped:      $dropped,
     oldest:       ($ok  | map(.e) | min),
     added:        ($win | map(select(.event == "add"    and keep)) | map(.id) | unique | length),
     closed:       ($win | map(select(.event == "done"   and keep)) | length),
@@ -237,10 +340,12 @@ printf '%s' "$READ" | jq -e 'type == "object"' >/dev/null 2>&1 || { WHY="read-fa
 
 _num() { local v; v="$(printf '%s' "$READ" | jq -r --arg k "$1" '.[$k] // 0')"
          case "$v" in ''|*[!0-9-]*) printf '0' ;; *) printf '%s' "$v" ;; esac; }
-TOTAL="$(_num records)"; UNPARSED="$(_num unparsed)"
+TOTAL="$(_num records)"; UNPARSED="$(_num unparsed)"; DROPPED="$(_num dropped)"
 ADDED="$(_num added)";   CLOSED="$(_num closed)"; REOPENED="$(_num reopened)"
 UNATTRIBUTED="$(_num unattributed)"
 NET=$(( ADDED - CLOSED ))
+# The pile guard 4 weighs is EVERY record this pass could not place, by either channel.
+EXCLUDED=$(( UNPARSED + DROPPED ))
 
 OLDEST="$(printf '%s' "$READ" | jq -r '.oldest // "null"')"
 case "$OLDEST" in ''|null|*[!0-9]*) OLDEST="" ;; esac
@@ -253,8 +358,14 @@ HISTORY=$(( NOW - OLDEST )); [ "$HISTORY" -ge 0 ] || HISTORY=0
 if [ "$HISTORY" -lt "$WINDOW" ]; then WHY="short-history"; emit; fi
 
 # ── guard 4: excluded evidence is not absent evidence ─────────────────────────────────────────
+# Weighed against EXCLUDED, not UNPARSED: a record excluded because its line would not parse is
+# excluded exactly as hard as one excluded because its `ts` would not — see the jq block's header
+# for the measurement. The `why` still names the dominant channel so the reader knows which.
 _ABS=$NET; [ "$_ABS" -ge 0 ] || _ABS=$(( -_ABS ))
-if [ "$UNPARSED" -gt "$_ABS" ]; then WHY="unparsed-could-flip"; emit; fi
+if [ "$EXCLUDED" -gt "$_ABS" ]; then
+  if [ "$DROPPED" -gt "$UNPARSED" ]; then WHY="unreadable-lines-could-flip"; else WHY="unparsed-could-flip"; fi
+  emit
+fi
 
 # ── the verdict ───────────────────────────────────────────────────────────────────────────────
 if [ "$NET" -gt 0 ]; then

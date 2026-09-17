@@ -33036,6 +33036,43 @@ Brief body invariants (regenerate the specifics each recycle; never drop these):
     (memory `fail-safe-default-mimics-the-healthy-state`).
 - Weekly report: adds vs closes; net-positive week ⇒ the INFLOW list (C1-C4) gets the next
   fix, not more drain horsepower.
+  **IMPLEMENTED 2026-09-08** → `scripts/backlog-flow-assert.sh` (`5000db42`), called from
+  `autonomy-sweep.sh` § 2b-v as `--json` + `--file` (`backlog_flow_verdict` in the `backlog-health`
+  IDL row), pinned by `tests/backlog-flow-assert.bats`. It reads the RECORD TRAIL rather than the
+  fold, because the fold is last-event-wins per id and cannot answer a FLOW question at all.
+  🚨 **AND IT COULD RETRACT ITS OWN ALARM — TWO DEFECTS, FIXED 2026-09-17 (backlog
+  `40250b0f698a`, the row this detector itself filed).** The row came back to a worker with
+  *"FALSIFIER PASSED … the condition it was filed for is GONE"* and `output: (silent)`, and the
+  silence was the finding rather than the answer.
+  · **(a) THE ABSTENTION AND THE HEALTHY WEEK WERE THE SAME rc, AND THAT rc MEANS "CLOSE IT".**
+    `--assert` exited **0** on all four abstentions by explicit design, on the header's argument
+    that *"an unknown must read exactly like a healthy week to every consumer"*. Grep the tree:
+    `--assert` has exactly ONE consumer — the `--falsifier` string the `--file` arm stores on the
+    row it files — and nothing anywhere runs it as a gate. For that consumer exit 0 is not "a
+    healthy week", it is `run_falsifier`'s one load-bearing answer, THE CONDITION IS GONE
+    (`bin/cc-premise:1402`). So a missing store, a missing jq, an unparseable store, a short
+    history or an over-wide excluded pile each **retired the standing inflow alarm on a measurement
+    that never ran**. Measured through that consumer pre-fix: four abstentions and a genuine
+    `draining` returned an identical `rc=0, output: (silent)` — five states, one reading. This is
+    the same defect `backlog-ratchet.sh` had fixed under backlog `2366f99e04a7` before this file was
+    written, on the identical signal, and not inherited; the cure is that file's, not a new policy:
+    1 = net-positive, 0 = draining, **2** = could not tell (cc-premise's
+    `_FALSIFIER_UNASKABLE_RCS`, rendered "UNVERIFIED, not confirmed"), and every verdict now prints
+    its line, so a genuine pass hands the closer figures instead of silence.
+  · **(b) GUARD 4 WEIGHED A PILE THAT EXCLUDED THE STORE'S LARGEST HOLE.** The guard exists to say
+    *excluded evidence is not absent evidence*, and it counted only records whose `ts` would not
+    parse. A line that would not parse AT ALL was dropped by `fromjson? // empty` into neither
+    `records` nor `unparsed` — and that is the >4,096-byte splice class this repo measured at
+    **12.33% of this very store** (W2-B17, `1550268e6`, the note one screen above this detector's
+    own call site in `autonomy-sweep.sh`). Measured, one store, one variable — 12 in-window `add`
+    lines spliced: net **+6 → −6**, verdict `net-positive` → `draining`, `--assert` rc 1 → 0, with
+    `unparsed` reading **0 in both arms**. The mirror (splicing `done` lines) inflates net ~8× the
+    other way, so the hole reaches both forbidden directions. Now counted as `dropped` and weighed
+    as `excluded` = unparsed + dropped.
+  · **The positive control is that the FILING polarity is untouched**: `--file` still files on
+    `net-positive` alone, so no abstention can mint a row and §6's structural false-positive (a
+    store younger than the window, net-positive by construction) is unchanged on a healthy new box.
+    Record: `docs/research/backlog-flow-falsifier-polarity-2026-09-17.md`.
 
 ---
 
