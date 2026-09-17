@@ -235,6 +235,70 @@ a real design trade, named here rather than made unilaterally.
 
 ---
 
+## DECIDED AFTER THE VERDICT (same session, 2026-09-17)
+
+The verdict above answers "should the DRAIN run on it." The operator then asked the narrower
+questions, and these are the answers, none of which are derivable from the axes alone.
+
+**An operator correction that stands, and it weakens one of my arguments above.** §"THE ONE-LINE
+REASON" leans partly on stranded quota implying abundance. That is wrong: *"we are purposely not
+exhausting our usage due to our usage working backwards — i.e. having both our cloud and local
+pipeline drains off."* The stranded 3.51 account-weeks are the **shadow of switching the drains
+off**, not spare capacity. The verdict is unaffected because it rests on mechanics, not economics —
+but do not re-use the quota argument.
+
+**Two mechanical kills, verified in our own source rather than relayed from an axis:**
+
+1. `hooks/model-permission-decider.py` is a PreToolUse hook that shells out to `claude -p --model
+   claude-haiku-4-5-20251001` with `env = dict(os.environ)` (line ~409) — the child **inherits
+   `ANTHROPIC_BASE_URL`**. Repointed, it asks OpenRouter for a Haiku id that endpoint does not
+   serve → `ERROR`, and the file's own comment fixes the fail direction as **"`ask`, never
+   `allow`"**. An unattended link does not error; it **hangs** waiting for a human.
+2. `scripts/handoff-fire.sh:5915` REFUSES the fire when `claude-accounts --route general` finds no
+   routable account, and that router knows only the four Anthropic Max accounts. **The chain cannot
+   fire its own successor** on a non-Anthropic backend.
+
+Together: the drain would wedge on its first gated command and could not perpetuate even if it
+didn't. Add that the drain's measured defect is **precision** (thrash, false closure, 74–76%
+self-directed) while a free model is a **throughput** lever — throughput on a precision problem is
+what produced 304 commits against 30 closures.
+
+### Where Union Alpha CAN be used — the five-condition envelope
+
+All five must hold: **(1)** called from a standalone script, never Claude Code (a plain `POST`
+carries no `CLAUDE.md`, no mission board, no 128K preamble) · **(2)** tool-less and map-shaped, so
+the missing prompt cache stops mattering · **(3)** under the 262K per-call ceiling · **(4)** no
+customer content · **(5)** adjudicated by a deterministic oracle, or advisory-only — the model must
+never be the thing that decides.
+
+| | Job | Oracle | Calls |
+|---|---|---|---|
+| **1** | Score it on the frozen 36-defect corpus (where Opus-5@max = 12/36, Fable-5.1@high = 10/36) | anchored ground truth, already built | 36 |
+| **2** | False-closure audit — 3,377 `done` evidence strings, 457K tokens, **2,872 (85%) carry no customer term** (measured) | `git merge-base --is-ancestor` | 2,872 |
+| **3** | Contradiction sweep of our own rules corpus | each flagged pair is two line numbers | ~60 |
+
+**Explicitly NOT rented to it:** auditing the 597 stored falsifiers for the cwd bug found this
+session — a 12-line Python regex found the 1-in-597 in seconds. Most "bulk LLM" jobs here have
+deterministic solutions; that is the same reason the drain does not need it.
+
+### Throughput: the rate limit does not bind, by two orders of magnitude
+
+All three jobs = **2,968 calls = 29.7 minutes at OpenRouter's 100 RPM**, on ONE key. Therefore:
+
+- **OpenRouter key only.** Cloudflare's stealth path bills through Unified Billing, whose documented
+  prerequisite is loaded credits + a 5% fee, and it publishes no context window. Real setup cost for
+  capacity we do not need.
+- **No multiple keys per provider.** That is rate-limit evasion; OpenRouter's Stealth AUP bans
+  excessive request volume by name, and the likely outcome is losing access. Legitimate levers in
+  order: concurrency *within* the published limit, smaller per-record prompts, sharding.
+- **Leave the OpenRouter account UNFUNDED.** Union Alpha is priced `0`/`0`, so no credits are
+  needed, and an unfunded account's key is **spend-incapable by construction** — a leaked key cannot
+  bill. This also means declining the $10 top-up that raises the daily cap, which the arithmetic
+  says we do not need.
+- **No new vendors.** Two zero-dollar non-Claude backends (Codex CLI, Pi·Codex) have been routable
+  since 2026-08-10 and produced zero closures in five weeks. A third vendor does not fix whatever
+  kept those idle.
+
 ## AXIS ARTIFACTS
 
 | File | Axis |
