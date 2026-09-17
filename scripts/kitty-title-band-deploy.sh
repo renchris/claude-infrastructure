@@ -98,7 +98,15 @@ shim_state() {  # shim_state <socket path> -> INSTALLED | not installed
   [ -f "$LOG" ] || { printf 'unknown (no log)'; return; }
   # ONE capture. `grep -c`/`grep` print a valid answer AND exit non-zero on no match, so appending
   # `|| echo 0` puts a second producer on the same stream and the caller reads "0\n0".
-  last="$(grep -E "^(un)?installed pid=${pid}\$" "$LOG" 2>/dev/null | tail -1)" || true
+  # THE TWO PRODUCERS DO NOT WRITE THE SAME SHAPE, and only one was ever checked against this
+  # reader. The watcher emits a bare `installed pid=N` (watcher.py:253); the unwatcher emits
+  # `uninstalled pid=N (unwatcher: restored stock set_geometry, relaid out K tab(s))`
+  # (unwatcher.py:70). Anchored at `pid=N$` this matched the install and NEVER the uninstall, so
+  # a kitty that had been cleanly unshimmed still read INSTALLED — the last MATCHING line being
+  # the install. Measured on the live kitty: pid 73832 was uninstalled at 20:47 and this function
+  # still called it INSTALLED. Allow an optional trailing clause; keep the pid itself anchored so
+  # pid=7383 can never match pid=73832.
+  last="$(grep -E "^(un)?installed pid=${pid}([[:space:]]|\$)" "$LOG" 2>/dev/null | tail -1)" || true
   case "$last" in
     installed*)   printf 'INSTALLED' ;;
     uninstalled*) printf 'not installed' ;;
