@@ -34,6 +34,8 @@ second as the first and send anyway.
     2  REFUSED to send — a guard fired (drops, no --oracle, no key)
     3  --check ANSWER: the screen found drops. Not an error; the tool worked.
     4  the run completed but some calls failed (per-record status is in --out)
+   64  USAGE error — bad flags (argparse's own default is 2, which would collide
+       with EXIT_REFUSED and make "you typed it wrong" look like "a guard refused")
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ import json
 import os
 import queue
 import re
+import ssl
 import sys
 import threading
 import time
@@ -50,12 +53,31 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# TLS trust. python.org's macOS framework build ships NO CA bundle — measured here,
+# ssl.get_default_verify_paths() returns cafile=None AND capath=None, so every HTTPS
+# call dies "CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate". The
+# fix is to hand it a REAL bundle (certifi), never to weaken verification: an
+# unverified context would make a proxy or a hostile network indistinguishable from
+# the real endpoint, on a connection carrying a bearer token.
+try:
+    import certifi
+    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+except Exception:  # no certifi — fall back to the platform default, still verifying
+    _SSL_CTX = ssl.create_default_context()
+
 HERE = Path(__file__).resolve().parent
 EXIT_CLEAN, EXIT_ERROR, EXIT_REFUSED, EXIT_CHECK_DIRTY, EXIT_PARTIAL = 0, 1, 2, 3, 4
+EXIT_USAGE = 64  # argparse's own default is 2, which is our EXIT_REFUSED
 
 
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "stealth/union-alpha"
+
+# NO DEFAULT MODEL, DELIBERATELY. This script was written for "stealth/union-alpha",
+# which on 2026-09-17 began returning 404 ("revealed as Unbiased's Pareto"), and whose
+# named successor "unbiased/pareto" is PAID ($2.50/$7.50 per MTok) and therefore
+# unreachable on an intentionally unfunded key. A default pointing at a dead endpoint
+# is a trap: the run fails at call time with a model error that reads like an outage.
+# Requiring --model forces the caller to name a model they have checked is alive.
 
 # A1 measured the published context window at 262,144. Records are screened at a
 # conservative 4 chars/token: over-estimating the count can only refuse a record that
@@ -183,7 +205,7 @@ def call_once(key: str, model: str, prompt: str, system: str | None,
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX) as r:
             payload = json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         detail = ""
@@ -229,7 +251,14 @@ def main() -> int:
                     help="Literal text prepended to every record (the task instruction).")
     ap.add_argument("--prompt-prefix-file", type=Path)
     ap.add_argument("--system", default=None)
-    ap.add_argument("--model", default=DEFAULT_MODEL)
+    # NOT required at the parser level: --check and --dry-run exist to screen with no
+    # key, no network and no model chosen. Enforced below for a real run instead, so
+    # the screen-only modes stay usable and the refusal carries our own exit code.
+    ap.add_argument("--model", default=None,
+                    help="REQUIRED. Verify it is live and free first: GET "
+                         "https://openrouter.ai/api/v1/models. Verified free and "
+                         "answering on 2026-09-17: nvidia/nemotron-3-ultra-550b-a55b:free, "
+                         "nex-agi/nex-n2.5-pro:free, inclusionai/ling-3.0-flash-vl:free.")
     ap.add_argument("--terms", type=Path, default=HERE / "customer-terms.txt")
     ap.add_argument("--max-tokens", type=int, default=8000)
     ap.add_argument("--rpm", type=int, default=DEFAULT_RPM)
@@ -247,6 +276,13 @@ def main() -> int:
     ap.add_argument("--allow-drops", action="store_true",
                     help="Proceed when the screen drops records. Without it a dirty "
                          "corpus stops the run, so a silent partial can never happen.")
+    # argparse exits 2 on a usage error, which is our EXIT_REFUSED — a caller could not
+    # tell "a guard refused to send" from "you typed the flags wrong". Move usage to 64.
+    def _usage_error(message: str) -> None:
+        ap.print_usage(sys.stderr)
+        print(f"union-batch: {message}", file=sys.stderr)
+        sys.exit(EXIT_USAGE)  # sys.exit(str) would exit 1 and re-collide with EXIT_ERROR
+    ap.error = _usage_error  # type: ignore[method-assign]
     args = ap.parse_args()
 
     if args.prompt_prefix_file:
@@ -287,6 +323,13 @@ def main() -> int:
         return EXIT_REFUSED
     if not kept:
         print("union-batch: nothing clean to send.", file=sys.stderr)
+        return EXIT_REFUSED
+
+    if not args.model and not (args.check or args.dry_run):
+        print("union-batch: REFUSING — --model is required for a real run. Verify the "
+              "model is live and free first (GET /api/v1/models): 'stealth/union-alpha' "
+              "is GONE (404) and its successor 'unbiased/pareto' is PAID.",
+              file=sys.stderr)
         return EXIT_REFUSED
 
     if not args.oracle and not args.dry_run:
