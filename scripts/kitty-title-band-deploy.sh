@@ -30,7 +30,9 @@ SCRIPTS="${SCRIPTS:-$HOME/.claude/scripts}"
 WATCHER="$SCRIPTS/kitty-title-band-watcher.py"
 UNWATCHER="$SCRIPTS/kitty-title-band-unwatcher.py"
 DROPIN="${DROPIN:-$HOME/.config/kitty/drag-arm.d/drag.conf}"
-LOG=/tmp/kitty-title-band-watcher.log
+# Overridable so a sandbox test cannot be forced to share — and therefore destroy — the one
+# store that says whether the OPERATOR's kitty is still shimmed.
+LOG="${KITTY_TITLE_BAND_LOG:-/tmp/kitty-title-band-watcher.log}"
 MODE="${1:-install}"
 
 # Every in-tree site that creates a terminal surface leaves ONE row, so the pane census's "a pane
@@ -89,13 +91,20 @@ shim_state() {  # shim_state <socket path> -> INSTALLED | not installed
   # The LAST line naming this pid wins, because install and uninstall both append.
   local pid="${1##*/kitty-}" last
   case "$pid" in ''|*[!0-9]*) printf 'unknown (socket not named /tmp/kitty-<pid>)'; return ;; esac
-  [ -f "$LOG" ] || { printf 'not installed'; return; }
+  # THREE states, not two. A DESTROYED or truncated log must not read as "not installed" —
+  # that is the healthy-looking answer, and it would be returned over a process that is STILL
+  # PATCHED. This log is the only evidence of the live shim and two things erased it (this
+  # script's own install truncation, and shim-verify's cleanup), so absence is genuinely UNKNOWN.
+  [ -f "$LOG" ] || { printf 'unknown (no log)'; return; }
   # ONE capture. `grep -c`/`grep` print a valid answer AND exit non-zero on no match, so appending
   # `|| echo 0` puts a second producer on the same stream and the caller reads "0\n0".
   last="$(grep -E "^(un)?installed pid=${pid}\$" "$LOG" 2>/dev/null | tail -1)" || true
   case "$last" in
-    installed*) printf 'INSTALLED' ;;
-    *)          printf 'not installed' ;;
+    installed*)   printf 'INSTALLED' ;;
+    uninstalled*) printf 'not installed' ;;
+    # The log exists but names nothing for THIS pid — what a truncation leaves behind. Report the
+    # ignorance; do not manufacture an all-clear.
+    *)            printf 'unknown (no record for pid %s)' "$pid" ;;
   esac
 }
 
@@ -118,6 +127,9 @@ status() {
 
 case "$MODE" in
   --status|status) status; exit 0 ;;
+  # --shim-state <socket-path>: print this instance's verdict and nothing else. Reads the log,
+  # touches no socket, changes nothing. Exists so the three-state logic has a red-proof.
+  --shim-state) shim_state "${2:-}"; printf '\n'; exit 0 ;;
   --revert|revert)
     [ -f "$UNWATCHER" ] || die "missing $UNWATCHER — land and converge the repo first"
     n=0
@@ -137,7 +149,7 @@ case "$MODE" in
     status
     exit 0 ;;
   install|--install) : ;;
-  *) die "usage: $0 [--status|--revert]" ;;
+  *) die "usage: $0 [--status|--revert|--shim-state <socket-path>]" ;;
 esac
 
 # ── THE DISARM INTERLOCK, 2026-09-16 ─────────────────────────────────────────────────────────
@@ -175,7 +187,10 @@ fi
 
 printf '\n\033[1mInstalling the zero-shift title band into running kitty instances\033[0m\n'
 installed=0; failed=0
-: > "$LOG" 2>/dev/null || true
+# NOT truncated. shim_state()'s own contract is "the LAST line naming this pid wins, because
+# install and uninstall both append" — i.e. an APPEND-ONLY log. Truncating here discarded the
+# records of every OTHER live kitty, which is exactly the per-instance verdict it exists to give.
+: >> "$LOG" 2>/dev/null || true
 while read -r s; do
   [ -n "$s" ] || continue
   before="$(geom "$s")"

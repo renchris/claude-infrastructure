@@ -16,7 +16,10 @@ what calls `update_effective_padding()`. So the relayout below is load-bearing, 
 """
 
 _ORIGINAL_ATTR = "_kitty_title_band_original_set_geometry"
-_LOG = "/tmp/kitty-title-band-watcher.log"
+import os as _os  # noqa: E402
+# Honour the same override the deploy script uses, so a sandbox run logs to its own
+# file instead of the shared store that records the live kitty's state.
+_LOG = _os.environ.get("KITTY_TITLE_BAND_LOG") or "/tmp/kitty-title-band-watcher.log"
 
 
 def _log(msg: str) -> None:

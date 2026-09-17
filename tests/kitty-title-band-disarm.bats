@@ -32,6 +32,10 @@ setup() {
   SCRIPT="$REPO/scripts/kitty-title-band-deploy.sh"
   CONF="$REPO/config/kitty.conf"
   [ -f "$SCRIPT" ] || skip "deploy script missing"
+  # The subject reads KITTY_TITLE_BAND_LOG, whose default is an absolute /tmp path that a
+  # fixtured $HOME does not redirect — so pin it here or these cases touch the operator's live
+  # shim log. Absent is correct: the status line these cases do not assert on degrades to unknown.
+  export KITTY_TITLE_BAND_LOG="$BATS_TEST_TMPDIR/seam-absent.log"
   EMPTY="$BATS_TEST_TMPDIR/empty-scripts"; mkdir -p "$EMPTY"
   DROPIN_T="$BATS_TEST_TMPDIR/drag.conf"
   DISARMED_CONF="$BATS_TEST_TMPDIR/disarmed.conf"

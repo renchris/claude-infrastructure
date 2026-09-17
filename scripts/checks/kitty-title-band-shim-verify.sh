@@ -98,7 +98,11 @@ echo "== launching a STOCK kitty sandbox =="
 echo "   binary : $KITTY_BIN"
 echo "   watcher: $WATCHER"
 k action quit >/dev/null 2>&1; sleep 3
-rm -f "$SB"/winch.* "$SB"/*.png "$SB"/bands.txt /tmp/kitty-title-band-watcher.log
+# NEVER rm the shared /tmp/kitty-title-band-watcher.log: it is the only evidence of whether the
+# OPERATOR's kitty is still shimmed, and deleting it made `--status` report a false all-clear
+# over a still-patched process. This sandbox logs to its own file instead.
+export KITTY_TITLE_BAND_LOG="$SB/watcher.log"
+rm -f "$SB"/winch.* "$SB"/*.png "$SB"/bands.txt "$SB/watcher.log"
 ( cd "$SB" && env -u KITTY_LISTEN_ON -u KITTY_PID -u KITTY_WINDOW_ID nohup "$KITTY_BIN" \
     --config "$SB/off.conf" --session "$SB/session" --listen-on "unix:$SB/sock" \
     --instance-group ktbshim --directory "$SB" > "$SB/kitty.log" 2>&1 & )
@@ -145,10 +149,10 @@ INJ="$SB/watcher-$$.py"; cp "$WATCHER" "$INJ"
 k launch --type=overlay --watcher "$INJ" sh -c 'sleep 0.2' >/dev/null 2>&1
 _ktb_log_spawn overlay "kitty-title-band-shim-verify: transient watcher-injection overlay, exits in 0.2s"
 sleep 3
-if grep -q 'installed' /tmp/kitty-title-band-watcher.log 2>/dev/null; then
+if grep -q 'installed' "$SB/watcher.log" 2>/dev/null; then
   ok "the shim installed itself into the running kitty"
 else
-  bad "the shim did not install (see /tmp/kitty-title-band-watcher.log)"
+  bad "the shim did not install (see $SB/watcher.log)"
 fi
 
 echo
