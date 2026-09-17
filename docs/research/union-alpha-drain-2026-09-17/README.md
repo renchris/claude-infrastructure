@@ -313,3 +313,104 @@ All three jobs = **2,968 calls = 29.7 minutes at OpenRouter's 100 RPM**, on ONE 
 | `A8-economics.md` | $/closure, stranded quota, the ceiling on the prize, counterfactual |
 | `A9-throughput.md` | Measured demand/hour vs published supply; the gateway decoupled |
 | `A10-verify.md` | Does cheap-generate + expensive-validate hold on our own data |
+
+## BUILT AND MEASURED AFTER THE VERDICT (2026-09-17, successor session)
+
+The harness for the three jobs now exists and is verified, **without a key and without
+sending anything**: `union-batch.py` (map-shaped batch POST) and `customer-terms.txt`
+(the deny list). Building it before the key exists was free, and it bought three
+findings that change the job order below.
+
+### The harness
+
+`union-batch.py` is the executable form of the five-condition envelope. Conditions
+(1)–(4) are enforced in code; (5) is a property of the job, so the script **refuses a
+real run unless `--oracle` names the deterministic check** that will adjudicate the
+output. Verified refusal paths, exit codes measured in bash:
+
+| Guard | rc |
+|---|---|
+| screen dropped records and `--allow-drops` absent | 2 |
+| `--oracle` absent on a real run | 2 |
+| `OPENROUTER_API_KEY` absent | 2 |
+| deny list empty (a filter that denies nothing) | 1 |
+| unreadable input (a JSON parse failure is a verdict, not a skip) | 1 |
+| `--check` found drops / found none | **3** / 0 |
+
+**A verdict and an error never share an exit code.** `--check` returning "I screened
+and found customer content" is rc **3**, not rc 1 — it is an ANSWER and the tool
+worked. Sharing 1 with "I could not screen at all" would let a caller read a broken
+screen as a dirty corpus, or a dirty corpus as a broken screen, and the second
+direction sends. Full table: `0` clean · `1` hard error · `2` refused to send ·
+`3` check found drops · `4` ran, some calls failed.
+
+The key is read only from the environment (`agent-secrets run --`), never argv, and is
+never written to output, log or error. A failed call is classified by **HTTP status and
+error text, never by tokens or cost** — a 429 after a full stream is a quota wall, and
+the two are indistinguishable on usage fields.
+
+### Finding 1 — a substring filter is not merely noisy here, it is useless
+
+First screen of the 36-defect corpus: **9 of 9 briefs dropped.** Measured, almost every
+hit was an artifact — `reso` matched `resolve` 37×, `resolved` 18×, `resource` 9× and
+the product name **once**; `the key` matched "the keystroke" and "the keychain"; all
+four "phone numbers" were epoch timestamps. Word-boundary matching keeps every term and
+drops the artifact. **The deny list was never pruned to quieten it** — the matcher was
+fixed, not the policy. Controlled both ways before it was believed: 4/4 seeded customer
+records (venue, person+email, phone, API key) drop; 2/2 artifact records pass.
+
+### Finding 2 — job 1 cannot rank, and its clean subset cannot compare
+
+Two independent problems, neither of which is a reason not to run it, both of which are
+reasons not to report it as a ranking.
+
+- **Power.** Its own sibling analysis already measured this corpus:
+  `fable51-vs-opus5-routing-2026-09-16/A4-our-measurements.md` §1.2 — Monte-Carlo over
+  20,000 trials gives **4.8% power** at the observed rates, because **21 of 36
+  ground-truth defects (58%) were found by no arm at all**. A 12/36-vs-10/36 comparison
+  there is `+5.6 pp, 95% CI [−15.7, +26.8]`. A third arm inherits that floor.
+- **Comparability.** After the boundary fix, **4 of 9 briefs are clean**; 5 carry
+  `chrisren` (the operator's own username inside `/Users/chrisren/…` paths), `turso` and
+  `libsql` (public DB CLI names inside a generic DDL-guard regex, beside
+  `sqlite3|psql|mysql|mariadb`), and one `t@e.com` placeholder. **None of that is
+  customer data** — but it is operator identity, and it is a ruling, not a measurement.
+  The trap: running only the 4 clean briefs scores against a *different denominator*,
+  so the number cannot be set beside 12/36 or 10/36 at all. **A frozen comparison corpus
+  cannot be redacted without destroying the comparison it exists for.**
+
+⇒ Job 1 is still the right thing to run **first**, re-labelled: it is a **smoke test**
+— does this model return parseable, on-task output over a real brief — worth ~4 calls
+and ten attended minutes before committing 3,114. It is not a ranking, and its result
+must not be quoted against the Opus/Fable figures.
+
+### Finding 3 — job 2 is the strongest job, and it is the one the filter actually earns
+
+Screened independently with the corrected matcher: **3,114 of 3,403 `done` evidence
+strings are clean (91.5%)**, against this document's earlier 2,872/3,377 (85%) — the
+gap is substring over-dropping, and **the 85% figure is the more conservative one, so
+both support the job.** Unlike the code-review corpus the drops here are *real*:
+`chrisren` 126, `reso` 98, `amplify` 23, `reso.gl` 20, `the key` 18, `studio60` 14,
+`heist` 11, `turso` 10, 13 email addresses. This is the job where the content filter is
+load-bearing rather than ceremonial.
+
+End-to-end dry run, no network: **3,114 calls, ~492K prompt tokens, 31 min at the
+published 100 RPM** — reproducing this document's throughput arithmetic from the real
+corpus rather than an estimate.
+
+    python3 union-batch.py --check --in <corpus> --out /dev/null    # screen only
+    python3 union-batch.py --dry-run --in <corpus> --out <results>  # + build payloads
+
+### The blocker, corrected
+
+This session's predecessor recorded the blocker as *"`agent-secrets setup` must be run
+in Terminal"*. **Setup has already been run** — `agent-secrets doctor` reads keychain
+custody primary, store present, decrypt self-test canary readable, and the store already
+holds two unrelated secrets. `setup` is also documented as **headless in an agent
+session**, so it was never the tty-gated step. The real remaining step is one command
+and one paste, because `add` reads the value hidden from a terminal:
+
+    agent-secrets add OPENROUTER_API_KEY
+
+Unchanged and still correct: **never store `ANTHROPIC_API_KEY`.** Doctor's two ⚠ lines
+about `apiKeyHelper` are the CORRECT state — satisfying them is what moves Claude Code
+off the Max subscription and onto per-token billing.
