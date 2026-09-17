@@ -112,6 +112,24 @@ glance_key() {  # $1 = probe output
   fi
 }
 
+# ── THE DISARM GATE, 2026-09-16 ──────────────────────────────────────────────────────────────
+# ⌘⇧B SIGSEGV'd kitty (pid 597, 2026-09-16 20:13:49): EXC_BAD_ACCESS KERN_INVALID_ADDRESS at
+# 0x20 in kitty.fast_data_types.so+840952, reached glfw-cocoa -> Python key dispatch ->
+# cfunction_call. It took every pane in the only OS window with it, and lr-select then found 55
+# resumable sessions across 16 worktrees. Report:
+# ~/Library/Logs/DiagnosticReports/kitty-2026-09-16-201349.ips · cc-backlog bf6af099a712.
+# Both chords were commented out with a `# DISARMED-` prefix.
+#
+# FOUR guards below demand that SOME chord reach the real bars, so the disarm turned them red:
+# the cure removing precisely what the acceptance criteria demanded — the shape this repo has
+# met before (MASTER_CONVERGENCE_DEADLOCK, whose DoD could only be met by the system its own
+# cure replaced). They are INVERTED IN PLACE, never deleted. While the disarm holds, each
+# asserts the DISARMED invariant — no path from a keypress to the faulting code, which is the
+# STRONGER safety property — and the armed assertion is kept verbatim in the other arm, coming
+# back the moment the prefixes come off. The polarity follows the config, so re-arming needs no
+# test edit and CANNOT be done silently.
+band_disarmed() { grep -q '^# DISARMED-map cmd+' "$CONF"; }
+
 @test "the chord ASSIGNMENT is the operator's, and this is the ONE place it is pinned" {
   # Chosen 2026-09-16: "Please fix the font to what we had then." The styled overlay is the only
   # thing that can carry our face — kitty's real bar is a monospace cell grid and the header is SF
@@ -120,6 +138,17 @@ glance_key() {  # $1 = probe output
   # the other. If the operator asks to trade them again, THIS assertion is the only one to edit.
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+  if band_disarmed; then
+    # DISARMED: neither chord may be bound AT ALL. Stricter than the armed assertion below,
+    # and it is the property that makes the fault unreachable from the keyboard.
+    echo "$output" | grep -qE '^cmd_shift_b_n=0$' || {
+      echo "⌘⇧B is STILL BOUND while the band is disarmed — the crash is reachable again"
+      echo "$output"; false; }
+    echo "$output" | grep -qE '^cmd_opt_b_n=0$' || {
+      echo "⌘⌥B is STILL BOUND while the band is disarmed — the crash is reachable again"
+      echo "$output"; false; }
+    return 0
+  fi
   [ "$(glance_key "$output")" = cmd_shift_b_last ] || {
     echo "⌘⇧B is not the styled glance — the operator asked for our font on this chord"; echo "$output"; false; }
   [ "$(real_bar_key "$output")" = cmd_opt_b_last ] || {
@@ -215,6 +244,14 @@ glance_key() {  # $1 = probe output
 @test "cmd+shift+b is the ONE bar — overlay cleared, then the real draggable bars" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
+  if band_disarmed; then
+    # INVERTED while disarmed: reaching the real bars is exactly what must NOT happen. The
+    # armed assertion below is the record of what this guard demands once the fault is fixed.
+    [ -z "$(real_bar_key "$output")" ] || {
+      echo "a chord STILL reaches the real title bars while the band is disarmed"
+      echo "$output"; false; }
+    return 0
+  fi
   local key; key="$(real_bar_key "$output")"
   [ -n "$key" ] || { echo "NO chord reaches the real title bars — drag-to-reorder is gone entirely"; echo "$output"; false; }
   local last; last="$(echo "$output" | grep -E "^${key}=" | head -1)"
@@ -586,6 +623,14 @@ PYEOF
   # title again), and the probe reports a combine's whole definition, so a chord that still ends
   # in the overlay failed a test whose own comment asks only that the overlay survive. Keyed on
   # the END of the chord, which is what "the glance still happens" actually means.
+  if band_disarmed; then
+    # The glance chord is disarmed too: it ends in the overlay, but the same keypress dispatch
+    # is what faulted, and a half-disarm leaves a live path to it.
+    [ -z "$(glance_key "$output")" ] || {
+      echo "the glance chord is STILL bound while the band is disarmed"
+      echo "$output"; false; }
+    return 0
+  fi
   [ -n "$(glance_key "$output")" ] || {
     echo "⌘⌥B is no longer the zero-shift overlay — the styled glance is gone"
     echo "$output"; false; }
@@ -606,6 +651,33 @@ PYEOF
 @test "MUTANT CONTROL: dropping the re-order map is visible to that guard" {
   MUT="$BATS_TEST_TMPDIR/mutant-reorder.conf"
   run probe "$CONF"; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  if band_disarmed; then
+    # THE CONTROL FOLLOWS THE POLARITY. While disarmed there is no re-order map left to delete,
+    # so a skip here would leave this file's one live control vacuous at exactly the moment its
+    # subject matters most. The mutation that matters now is the OPPOSITE one: RE-ARMING. Strip
+    # one `# DISARMED-` prefix and both the gate and the probe must see it — a disarm nothing
+    # can detect is a disarm that can be undone silently, which is the whole failure mode.
+    MUT="$BATS_TEST_TMPDIR/mutant-rearm.conf"
+    # BSD sed has no address 0; the first DISARMED line is far below line 1, so 1,/re/ is the
+    # portable spelling of "first match only".
+    sed '1,/^# DISARMED-map cmd+/s/^# DISARMED-map cmd+/map cmd+/' "$CONF" > "$MUT"
+    # capture ONCE and default the VARIABLE: `grep -c` prints a valid 0 AND exits 1 on no match,
+    # so `|| echo 0` would put a second producer on the same stream and the caller reads "0\n0".
+    before="$(grep -c '^# DISARMED-map cmd+' "$CONF")" || true
+    after="$(grep -c '^# DISARMED-map cmd+' "$MUT")" || true
+    [ "$(( ${before:-0} - ${after:-0} ))" -eq 1 ] || {
+      echo "CONTROL FAILED — the re-arm mutation moved $(( ${before:-0} - ${after:-0} )) prefix(es), expected exactly 1"
+      false; }
+    # the UNMUTATED file must read as disarmed, or this control's verdict on the mutant carries
+    # no information at all.
+    band_disarmed || { echo "CONTROL VACUOUS — the unmutated config does not read as disarmed"; false; }
+    run probe "$MUT"; [ "$status" -eq 0 ] || { echo "$output"; false; }
+    [ -n "$(real_bar_key "$output")$(glance_key "$output")" ] || {
+      echo "CONTROL FAILED — re-arming a chord was INVISIBLE to the probe, so the guards above"
+      echo "could not have caught a silent re-arm either."
+      echo "$output"; false; }
+    return 0
+  fi
   case "$(real_bar_key "$output")" in
     cmd_shift_b_last) RB_MAP='^map cmd+shift+b ' ;;
     cmd_opt_b_last)   RB_MAP='^map cmd+opt+b ' ;;
