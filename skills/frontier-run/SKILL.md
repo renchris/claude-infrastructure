@@ -6,7 +6,7 @@ description: Spend the frontier-model window (currently Fable 5 — SSOT ~/.clau
 # frontier-run — spend the frontier window on what the default tier can't see
 
 The frontier tier's value is exclusively the delta above the default tier:
-problems Opus 4.8 @ max is **blind to**, not problems it has already found. The
+problems Opus 5 @ high is **blind to**, not problems it has already found. The
 deliverable is always a *report back* — findings tagged by novelty, ledger
 updated — never silent token burn.
 

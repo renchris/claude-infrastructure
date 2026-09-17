@@ -5,7 +5,7 @@ description: Capture an unknown-unknown candidate (a "frontier hole") for the fr
 
 # frontier-hole — park an unknown-unknown for the frontier window
 
-Routine work runs on the default tier (Opus 4.8 @ max — `lead_default` in
+Routine work runs on the default tier (Opus 5 @ high — `lead_default` in
 `~/.claude/model-config.yaml`). When something *smells beyond that tier*, do NOT
 switch models, spawn frontier agents, or keep grinding inline — capture a
 structured hole in the project ledger and move on. `/frontier-run` spends the
