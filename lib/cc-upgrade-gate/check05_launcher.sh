@@ -119,8 +119,28 @@ check_05() {
   _gate05_effect_read claude "$zshrc" "$fakehome"
   argv_main="$_g5_argv"; depth_main="$_g5_depth"
 
-  case "$argv_main" in *"--model claude-opus-5"*)  : ;; *) miss="$miss model" ;; esac
-  case "$argv_main" in *"--effort high"*)          : ;; *) miss="$miss effort" ;; esac
+  # EXPECTATIONS COME FROM THE SSOT, NOT FROM LITERALS HERE. Until 2026-09-16 this check pinned
+  # `--model claude-opus-5` and `--effort high` as hardcoded strings, which made the gate that
+  # CERTIFIES binary bumps go RED on any legitimate model repoint or effort-ladder change — and
+  # claude-bump-models cannot auto-repair it, because lib/ is not in model-classification.json's
+  # update list. A gate that reds on the correct value trains you to ignore it (the same lesson
+  # model-config.yaml:800-805 records about effort-parity-assert, and the same one that had
+  # effort-parity's launcher row reading DRIFT against a launcher that was already right).
+  # FAIL-LOUD, never fall back to a literal: a silent default would reintroduce exactly this bug.
+  _g5_ssot="${CC_GATE05_SSOT:-$HOME/.claude/model-config.yaml}"
+  [ -r "$_g5_ssot" ] || _g5_ssot="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/model-config.yaml"
+  _g5_want_model="$(sed -n 's/^[[:space:]]*opus_latest:[[:space:]]*\([^[:space:]#]*\).*/\1/p' "$_g5_ssot" 2>/dev/null | head -1)"
+  _g5_want_effort="$(awk '/^effort_defaults:/{f=1;next} f&&/^[a-z_]+:/{exit} f' "$_g5_ssot" 2>/dev/null \
+                     | sed -n 's/^[[:space:]]*default:[[:space:]]*\([^[:space:]#]*\).*/\1/p' | head -1)"
+  if [ -z "$_g5_want_model" ] || [ -z "$_g5_want_effort" ]; then
+    emit_result 05 launcher-resolution FAIL \
+      "cannot read the SSOT — expectations are UNKNOWN, so this check cannot judge the launcher" \
+      "ssot=$_g5_ssot model=[${_g5_want_model:-<unreadable>}] effort=[${_g5_want_effort:-<unreadable>}]"
+    rm -rf "$fakehome"
+    return 0
+  fi
+  case "$argv_main" in *"--model $_g5_want_model"*) : ;; *) miss="$miss model" ;; esac
+  case "$argv_main" in *"--effort $_g5_want_effort"*) : ;; *) miss="$miss effort" ;; esac
   case "$argv_main" in *"--permission-mode auto"*) : ;; *) miss="$miss permission-mode" ;; esac
   [ "$depth_main" = "SPAWN_DEPTH=1" ]              ||    miss="$miss depth-guard"
 
