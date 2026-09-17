@@ -625,28 +625,43 @@ def measure(cell_h=45):
     b_cap = ink_h(body, CAPS)
     band, cover = band_geometry(cell_h)
     em = max(int(band * TYPE_RATIO), 8)
-    try:
-        primary, _symbol, _nd = _faces(em)
-    except _NoFace as e:
+
+    def _refuse(exc):
         # NOT a verdict. Every number below is a statement about SF Pro Semibold at this em;
         # computed on a substitute face they are answers about a different subject, and the
         # VERDICT line would read as a judgement on the header's size while measuring
         # something nobody chose. Exit non-zero so a caller cannot mistake it for a pass.
-        print("CANNOT MEASURE: %s" % e)
+        print("CANNOT MEASURE: %s" % exc)
         print(
             "VERDICT UNAVAILABLE — no face resolved, so no number here would be about "
             "the header. This is a refusal, not a failing measurement."
         )
         return 3
+
+    try:
+        primary, _symbol, _nd = _faces(em)
+    except _NoFace as e:
+        return _refuse(e)
     t_cap, typ, worst = (
         ink_h(primary, CAPS),
         ink_h(primary, TYPICAL),
         ink_h(primary, WORST),
     )
     ceiling = 8
-    for e in range(8, 160):  # the largest em whose WORST-CASE ink still fits
-        if ink_h(_faces(e)[0], WORST) <= band - BREATHE:
-            ceiling = e
+    # THE REFUSAL IS ONE DECISION, NOT TWO — and for one commit it was written at only one
+    # of its two sites. This loop makes 152 further _faces() calls, each a cache MISS that
+    # reopens the font files; none was guarded, so the call above could succeed and one of
+    # these raise, and _NoFace then escaped measure() as a TRACEBACK instead of the refusal
+    # written directly above it. That is precisely the fd-exhaustion shape the refusal was
+    # built for: measured in 14 of 14 postland windows (9 surfacing as _NoFace, 5 as a raw
+    # OSError Errno 24), reddening this suite on a property it does not assert. A resource
+    # ceiling must yield the same honest non-verdict wherever in the measure it lands.
+    try:
+        for e in range(8, 160):  # the largest em whose WORST-CASE ink still fits
+            if ink_h(_faces(e)[0], WORST) <= band - BREATHE:
+                ceiling = e
+    except _NoFace as exc:
+        return _refuse(exc)
     ratio = worst / float(band)
     print(
         "cell            %d device px   band %d px in a %d px placement (%d whole cell(s))"

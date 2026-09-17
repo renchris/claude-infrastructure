@@ -490,6 +490,18 @@ pil_python() {
   script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
   PY="$(pil_python)" || skip "no interpreter with Pillow"
   run "$PY" "$script" measure
+  # A REFUSAL IS NOT A RESULT, so it may not be scored as one. `measure` exits 3 with
+  # VERDICT UNAVAILABLE when no font face can be opened — an AMBIENT resource condition
+  # (fd exhaustion on a loaded box), not a statement about the typography this case
+  # asserts. Measured: in 14 of 14 postland windows this suite was convicted while the
+  # test never once failed on a property it asserts; 9 surfaced as _NoFace and 5 as a raw
+  # OSError Errno 24. The precedent is the "no usable face is a REFUSAL" case below —
+  # a precondition the environment can falsify must SKIP rather than redden. This is
+  # NARROW on purpose: only the designed refusal skips, so a traceback or any other
+  # non-zero status is still a red, and the refusal PATH itself stays asserted there.
+  if [ "$status" -eq 3 ] && echo "$output" | grep -q 'VERDICT UNAVAILABLE'; then
+    skip "no font face resolvable in this environment — measure refused, so there is no verdict to judge"
+  fi
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   echo "$output" | grep -q 'VERDICT BREATHING' || { echo "$output"; false; }
   # AIR IN PIXELS, asserted here and not only inside the script that computes it. This was
@@ -520,6 +532,18 @@ pil_python() {
     echo "headers available are one cell and two, both of which were rejected"; false; }
   PY="$(pil_python)" || skip "no interpreter with Pillow"
   run "$PY" "$script" measure
+  # A REFUSAL IS NOT A RESULT, so it may not be scored as one. `measure` exits 3 with
+  # VERDICT UNAVAILABLE when no font face can be opened — an AMBIENT resource condition
+  # (fd exhaustion on a loaded box), not a statement about the typography this case
+  # asserts. Measured: in 14 of 14 postland windows this suite was convicted while the
+  # test never once failed on a property it asserts; 9 surfaced as _NoFace and 5 as a raw
+  # OSError Errno 24. The precedent is the "no usable face is a REFUSAL" case below —
+  # a precondition the environment can falsify must SKIP rather than redden. This is
+  # NARROW on purpose: only the designed refusal skips, so a traceback or any other
+  # non-zero status is still a red, and the refusal PATH itself stays asserted there.
+  if [ "$status" -eq 3 ] && echo "$output" | grep -q 'VERDICT UNAVAILABLE'; then
+    skip "no font face resolvable in this environment — measure refused, so there is no verdict to judge"
+  fi
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   # measure prints both numbers; the script itself asserts the whole-cell property, and the
   # regex here pins that it is still REPORTING both rather than collapsing back to one.
@@ -819,6 +843,58 @@ PYEOF
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   echo "$output" | grep -q '^ok$' || { echo "$output"; false; }
 }
+
+# THE REFUSAL MUST HOLD AT EVERY SITE, NOT JUST THE FIRST. The case above forces the no-face
+# condition before measure's FIRST _faces() call, which is the one that was guarded. But the
+# ceiling search below it calls _faces() 152 more times — one per em in range(8,160), each a
+# cache MISS that reopens the font files — and for one commit not one of those was guarded.
+# Under fd exhaustion the guarded call can SUCCEED and a later one raise, so _NoFace escaped
+# measure() as a traceback instead of the refusal written ten lines above it. That is not a
+# hypothetical: it reddened this suite in 14 of 14 postland windows (9 as _NoFace, 5 as a raw
+# OSError Errno 24) on a property neither case asserts. So the guard is pinned at the SECOND
+# site specifically, with a first call that is allowed to succeed — the shape the real
+# exhaustion has, and the shape the case above structurally cannot reach.
+#
+# shellcheck disable=SC2317  # a bats @test body is invoked indirectly, by bats
+@test "a face that fails MID-measure refuses too, rather than escaping as a traceback" {
+  script="$(dirname "$CONF")/../scripts/kitty-pane-title-overlay.py"
+  PYPIL=""
+  for c in /usr/local/bin/python3 /opt/homebrew/bin/python3 /usr/bin/python3; do
+    [ -x "$c" ] || continue
+    if "$c" -c 'import PIL' 2>/dev/null; then PYPIL="$c"; break; fi
+  done
+  [ -n "$PYPIL" ] || skip "no interpreter on this box has Pillow — the refusal path cannot be exercised"
+  run "$PYPIL" - "$script" <<'PYEOF2'
+import importlib.util, sys, io, contextlib
+spec = importlib.util.spec_from_file_location("ov", sys.argv[1])
+ov = importlib.util.module_from_spec(spec); spec.loader.exec_module(ov)
+# The FIRST face resolves — the guarded call populates the cache — and the budget is gone
+# for every later em. This is the fd-exhaustion shape, not a total absence of fonts.
+real = ov._faces
+seen = {"n": 0}
+def flaky(em):
+    seen["n"] += 1
+    if seen["n"] == 1:
+        return real(em)
+    raise ov._NoFace("no usable face: none of SFNS.ttf could be opened")
+ov._faces = flaky
+buf = io.StringIO()
+try:
+    with contextlib.redirect_stdout(buf):
+        rc = ov.measure(45)
+except ov._NoFace:
+    print("LEAK: _NoFace escaped measure() — the ceiling loop is unguarded")
+    sys.exit(1)
+out = buf.getvalue()
+assert rc == 3, "expected the designed refusal rc 3, got %r" % rc
+assert "VERDICT UNAVAILABLE" in out, "refusal not labelled as a non-verdict"
+assert "VERDICT BREATHING" not in out and "VERDICT FAILS" not in out, \
+    "LEAK: a number verdict was emitted after a face failed mid-measure"
+assert seen["n"] > 1, "the first call never succeeded — this is the OTHER case, not this one"
+PYEOF2
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
 
 # A LONE PANE IS STILL A PANE. The overlay skipped any tab with fewer than two windows, on the
 # reasoning that one pane needs no disambiguation — which answers a question nobody asked, since the
