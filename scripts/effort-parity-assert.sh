@@ -11,7 +11,9 @@
 #
 # Compares the SSOT's effort_defaults against three surfaces:
 #   (b) settings.json "effortLevel" in every CLAUDE_CONFIG_DIR  — GATING: below the declared floor = drift.
-#   (a) the launcher --effort default in ~/.zshrc (CLAUDE_DEFAULT_EFFORT:-<v>) — GATING: != SSOT default = drift.
+#   (a) the MODERN launcher `claude()`'s --effort default in ~/.zshrc — GATING: != SSOT default = drift.
+#       Its knob is ${CLAUDE_EFFORT:-${CLAUDE_OPUS5_EFFORT:-<v>}}. The legacy `claude-prev` track's
+#       CLAUDE_DEFAULT_EFFORT is a SEPARATE knob by design and is reported NON-gating (see § (a) below).
 #   (c) live `ps -eo command` claude sessions carrying --effort <v> — REPORT-ONLY: below-floor sessions are
 #       SURFACED (⚠) but do NOT gate, because /effort legitimately re-tiers a live session; the DURABLE
 #       drift is the static config, which is what silently resolves every non-wrapped surface. Set
@@ -97,17 +99,35 @@ for d in $DIRS; do
   fi
 done
 
-# --- (a) zshrc launcher --effort default (CLAUDE_DEFAULT_EFFORT:-<v>) — GATING ---
+# --- (a) zshrc launcher --effort default — GATING ---
+# 🚨 THE MODERN LAUNCHER IS `claude()` AND IT READS `CLAUDE_EFFORT`, NEVER `CLAUDE_DEFAULT_EFFORT`.
+# ~/.zshrc states it outright: "CLAUDE_DEFAULT_EFFORT is deliberately NOT read (it is the stable
+# track's knob)". Until 2026-09-16 this check grepped the FIRST `CLAUDE_DEFAULT_EFFORT:-<v>` in the
+# file — which is a COMMENT in the header — and compared the LEGACY `claude-prev` track's `max`
+# against the SSOT floor. It therefore reported DRIFT forever against a launcher that was already
+# correct, i.e. it convicted a launcher for a variable that launcher does not read. A guard that
+# reds on the correct value trains you to ignore it, and model-config.yaml:800-805 records that
+# exact lesson about this exact script — the second instance, so read this one as a pattern.
+# MEASURED 2026-09-16: claude() resolves ${CLAUDE_EFFORT:-${CLAUDE_OPUS5_EFFORT:-high}} = high =
+# the SSOT floor. Record: docs/research/fable51-vs-opus5-routing-2026-09-16/.
 if [ -f "$ZSHRC" ]; then
-  zdef="$(lc "$(grep -oE 'CLAUDE_DEFAULT_EFFORT:-[A-Za-z]+' "$ZSHRC" | head -1 | sed 's/.*-//')")"
+  # Comment lines are excluded on BOTH greps: each literal appears in the header prose as well as
+  # in code, and `head -1` over an unfiltered file reaches the prose first.
+  zdef="$(lc "$(grep -vE '^[[:space:]]*#' "$ZSHRC" \
+          | grep -oE 'CLAUDE_EFFORT:-\$\{CLAUDE_OPUS5_EFFORT:-[A-Za-z]+' \
+          | head -1 | sed 's/.*-//')")"
   if [ -z "$zdef" ]; then
-    report "SKIP" "zshrc launcher" "no CLAUDE_DEFAULT_EFFORT default in $ZSHRC"
+    report "SKIP" "zshrc launcher" "no CLAUDE_EFFORT default found in $ZSHRC (claude() may have been renamed — re-derive before trusting this SKIP)"
   elif [ "$zdef" != "$(lc "$LAUNCHER")" ]; then
-    report "DRIFT" "zshrc launcher" "--effort default {CLAUDE_DEFAULT_EFFORT:-$zdef} != SSOT $LAUNCHER"
+    report "DRIFT" "zshrc launcher" "claude() --effort default {CLAUDE_EFFORT:-{CLAUDE_OPUS5_EFFORT:-$zdef}} != SSOT $LAUNCHER"
     drift=1
   else
-    report "OK" "zshrc launcher" "--effort default = $LAUNCHER"
+    report "OK" "zshrc launcher" "claude() --effort default = $LAUNCHER"
   fi
+  # NON-GATING: the legacy `claude-prev` (stable 2.1.114) track keeps its own knob, deliberately.
+  # Reported so a reader can see it is DIFFERENT ON PURPOSE rather than rediscovering it as drift.
+  ldef="$(lc "$(grep -vE '^[[:space:]]*#' "$ZSHRC" | grep -oE 'CLAUDE_DEFAULT_EFFORT:-[A-Za-z]+' | head -1 | sed 's/.*-//')")"
+  [ -n "$ldef" ] && report "NOTE" "zshrc claude-prev" "legacy track {CLAUDE_DEFAULT_EFFORT:-$ldef} — separate knob by design, not gated"
 else
   report "SKIP" "zshrc launcher" "no zshrc at $ZSHRC"
 fi
