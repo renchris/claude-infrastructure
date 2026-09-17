@@ -39,14 +39,15 @@ into the *program's* stdin — a reply lands in whatever is running in the pane.
 responses is the only safe mode, and the cost is that there is no error channel: failures
 here are silent by construction.
 """
-import os, sys                      # the client path imports NOTHING else — see _client()
+
+import os, sys  # the client path imports NOTHING else — see _client()
 
 AUTONOMY = os.path.expanduser("~/.claude/autonomy")
-LOG      = os.path.join(AUTONOMY, "kitty-title-overlay.log")
-STATE    = os.path.join(AUTONOMY, "kitty-title-overlay.state")
-SOCK     = os.path.join(AUTONOMY, "kitty-title-overlay.sock")
-LOCK     = os.path.join(AUTONOMY, "kitty-title-overlay.lock")
-INTERP   = os.path.join(AUTONOMY, "kitty-title-overlay.interp")
+LOG = os.path.join(AUTONOMY, "kitty-title-overlay.log")
+STATE = os.path.join(AUTONOMY, "kitty-title-overlay.state")
+SOCK = os.path.join(AUTONOMY, "kitty-title-overlay.sock")
+LOCK = os.path.join(AUTONOMY, "kitty-title-overlay.lock")
+INTERP = os.path.join(AUTONOMY, "kitty-title-overlay.interp")
 STRIPDIR = os.path.join(AUTONOMY, "kitty-title-strips")
 
 
@@ -57,6 +58,7 @@ def _log(msg):
     try:
         os.makedirs(AUTONOMY, exist_ok=True)
         import time
+
         with open(LOG, "a") as fh:
             fh.write("%s %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), msg))
     except OSError:
@@ -67,6 +69,7 @@ def _log(msg):
 # Everything above this line is import-cheap on purpose. A keypress must not pay for
 # Pillow, json, or subprocess, none of which the client needs.
 
+
 def _client(cmd, timeout=0.4):
     """Hand the command to a warm daemon. False means 'no daemon' — never 'it failed'.
 
@@ -76,6 +79,7 @@ def _client(cmd, timeout=0.4):
     honest validation (`ps` for the start time) costs 95ms — more than the whole budget.
     """
     import socket
+
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         s.settimeout(timeout)
@@ -111,6 +115,7 @@ def _spawn_daemon(initial, all_windows=False):
     _ensure_pil on the way in), so this never has to probe interpreters on the keypress.
     """
     import subprocess
+
     interp = sys.executable
     try:
         cand = open(INTERP).read().strip()
@@ -120,10 +125,15 @@ def _spawn_daemon(initial, all_windows=False):
         pass
     try:
         devnull = open(os.devnull, "r+b")
-        subprocess.Popen([interp, os.path.abspath(__file__), "daemon",
-                          "--initial=" + initial] + (["--all"] if all_windows else []),
-                         stdin=devnull, stdout=devnull, stderr=devnull,
-                         start_new_session=True, close_fds=True)
+        subprocess.Popen(
+            [interp, os.path.abspath(__file__), "daemon", "--initial=" + initial]
+            + (["--all"] if all_windows else []),
+            stdin=devnull,
+            stdout=devnull,
+            stderr=devnull,
+            start_new_session=True,
+            close_fds=True,
+        )
         return True
     except OSError as e:
         _log("daemon spawn failed: %s" % e)
@@ -140,10 +150,12 @@ def _ensure_pil():
     """
     try:
         import PIL  # noqa: F401
+
         return
     except ImportError:
         pass
     import subprocess
+
     try:
         cand = open(INTERP).read().strip()
         if cand and os.path.exists(cand) and not os.environ.get("_KTO_REEXEC"):
@@ -155,12 +167,18 @@ def _ensure_pil():
         _log("FATAL: no interpreter with Pillow found; titles cannot render")
         print("kitty-pane-title-overlay: no python with Pillow found", file=sys.stderr)
         sys.exit(3)
-    for cand in ("/usr/local/bin/python3", "/opt/homebrew/bin/python3",
-                 "/Library/Frameworks/Python.framework/Versions/Current/bin/python3",
-                 "/usr/bin/python3"):
+    for cand in (
+        "/usr/local/bin/python3",
+        "/opt/homebrew/bin/python3",
+        "/Library/Frameworks/Python.framework/Versions/Current/bin/python3",
+        "/usr/bin/python3",
+    ):
         if not os.path.exists(cand):
             continue
-        if subprocess.run([cand, "-c", "import PIL"], capture_output=True).returncode == 0:
+        if (
+            subprocess.run([cand, "-c", "import PIL"], capture_output=True).returncode
+            == 0
+        ):
             try:
                 os.makedirs(AUTONOMY, exist_ok=True)
                 with open(INTERP, "w") as fh:
@@ -175,7 +193,7 @@ def _ensure_pil():
 
 
 # ───────────────────────────── the design ────────────────────────────────────
-IMG_BASE = 7100                  # image ids we own; never collides with a user's
+IMG_BASE = 7100  # image ids we own; never collides with a user's
 
 # THE STRIP IS ONE CELL TALL, AND THE TYPE IS PINNED AT THAT CELL'S CEILING.
 #
@@ -239,8 +257,8 @@ IMG_BASE = 7100                  # image ids we own; never collides with a user'
 # That was the promise this ladder was built to keep: the next move in either direction is
 # two constants, not another architecture. COVERAGE IS UNCHANGED at two whole cells (90px),
 # so this buys the air without touching the placement and cannot reintroduce layout shift.
-BAND_FILL_CELLS = 1.378          # the PAINTED band, in cells: 62px at a 45px cell
-GROUND        = (0x1e, 0x1e, 0x24)   # config/kitty.conf `background` — the unpainted remainder
+BAND_FILL_CELLS = 1.378  # the PAINTED band, in cells: 62px at a 45px cell
+GROUND = (0x1E, 0x1E, 0x24)  # config/kitty.conf `background` — the unpainted remainder
 
 
 def band_geometry(cell):
@@ -250,6 +268,7 @@ def band_geometry(cell):
     band is whatever BAND_FILL_CELLS asks for inside it.
     """
     import math
+
     cell = max(int(round(cell)), 1)
     fill = max(int(round(cell * BAND_FILL_CELLS)), 1)
     cover = int(math.ceil(fill / float(cell))) * cell
@@ -259,6 +278,7 @@ def band_geometry(cell):
 def band_cells(cell=45):
     """How many whole rows a strip covers — derived, so it cannot drift from the band."""
     return band_geometry(cell)[1] // max(int(round(cell)), 1)
+
 
 # A HEADER MUST BE A DIFFERENT REGISTER, not just a different size. Matching the body's
 # Monaco exactly made it read as more body text — "the font size/style/placement is still
@@ -271,41 +291,41 @@ def band_cells(cell=45):
 # SF Pro is the macOS system UI face, so a label set in it reads as chrome by convention,
 # not by decoration. It is a variable font; the Semibold instance is selected by name and
 # falls back silently to Regular if that ever fails.
-UI_FONT      = "/System/Library/Fonts/SFNS.ttf"
+UI_FONT = "/System/Library/Fonts/SFNS.ttf"
 UI_VARIATION = "Semibold"
-TYPE_RATIO   = 0.678             # of the PAINTED band (not the placement): em 42 at 62px.
-                                 #
-                                 # THE OLD BOUND WAS THE FONT'S, NOT THE INK'S. Sizing by
-                                 # `ascent + descent <= band` capped this at em 37 and was
-                                 # reported as a hard ceiling — twice. It is not: those
-                                 # metrics reserve room for accents and descenders the
-                                 # glyphs may never use, so the box is ~9px taller than
-                                 # anything a title actually draws. Measured ink, worst
-                                 # realistic case (accented capitals ÅÉÎÕÜ plus gjpqy):
-                                 # em 37 -> 42px, em 38 -> 43px, em 40 -> 44px, and the
-                                 # band is 45 with 2px reserved so nothing sits flush
-                                 # against an edge. So em 38 is the real accent-safe
-                                 # ceiling — ONE unit above the old bound, and the last
-                                 # one that holds for EVERY string rather than only the
-                                 # ones that happen to carry no accent.
-                                 #
-                                 # THAT CEILING IS STILL THE RIGHT NUMBER AND IS NO LONGER
-                                 # THE RIGHT TARGET (2026-09-15). A ceiling is where type
-                                 # stops being safe, not where a header should sit: at the
-                                 # ceiling the label touches its own band, which is the
-                                 # crowding the operator named. This ratio now buys AIR on
-                                 # purpose — em 46 in a 90px band, accented worst case 51px,
-                                 # so ~19px of band above and below the ink. The em is still
-                                 # bounded by the same ink rule below, which is what keeps
-                                 # a pathological title from clipping; it simply is not
-                                 # pressed against it any more.
-                                 #
-                                 # Going past the metrics box is only safe because the
-                                 # baseline is now solved from the ACTUAL string's ink
-                                 # (see strip_png) rather than from asc/desc, and because
-                                 # a title whose ink still overflows steps the em down
-                                 # until it fits. Without both, this would clip silently.
-TRACKING     = 0.6               # a hair of tracking; proportional type at label size
+TYPE_RATIO = 0.678  # of the PAINTED band (not the placement): em 42 at 62px.
+#
+# THE OLD BOUND WAS THE FONT'S, NOT THE INK'S. Sizing by
+# `ascent + descent <= band` capped this at em 37 and was
+# reported as a hard ceiling — twice. It is not: those
+# metrics reserve room for accents and descenders the
+# glyphs may never use, so the box is ~9px taller than
+# anything a title actually draws. Measured ink, worst
+# realistic case (accented capitals ÅÉÎÕÜ plus gjpqy):
+# em 37 -> 42px, em 38 -> 43px, em 40 -> 44px, and the
+# band is 45 with 2px reserved so nothing sits flush
+# against an edge. So em 38 is the real accent-safe
+# ceiling — ONE unit above the old bound, and the last
+# one that holds for EVERY string rather than only the
+# ones that happen to carry no accent.
+#
+# THAT CEILING IS STILL THE RIGHT NUMBER AND IS NO LONGER
+# THE RIGHT TARGET (2026-09-15). A ceiling is where type
+# stops being safe, not where a header should sit: at the
+# ceiling the label touches its own band, which is the
+# crowding the operator named. This ratio now buys AIR on
+# purpose — em 46 in a 90px band, accented worst case 51px,
+# so ~19px of band above and below the ink. The em is still
+# bounded by the same ink rule below, which is what keeps
+# a pathological title from clipping; it simply is not
+# pressed against it any more.
+#
+# Going past the metrics box is only safe because the
+# baseline is now solved from the ACTUAL string's ink
+# (see strip_png) rather than from asc/desc, and because
+# a title whose ink still overflows steps the em down
+# until it fits. Without both, this would clip silently.
+TRACKING = 0.6  # a hair of tracking; proportional type at label size
 
 # SF PRO HAS NO ✳ ◐ ◑ ✻ ✶ — and every Claude Code pane title STARTS with one. Read out of
 # the real cmaps, not guessed: those five are absent from SFNS and present in Menlo. A
@@ -313,8 +333,8 @@ TRACKING     = 0.6               # a hair of tracking; proportional type at labe
 # invisible until a strip was rendered at 1:1 and looked at. Any character the UI face
 # lacks is therefore drawn from SYMBOL_FONT instead, cap-height-matched to the primary,
 # and the two are set on a shared BASELINE (anchor "ls") so the run does not stagger.
-SYMBOL_FONT   = "/System/Library/Fonts/Menlo.ttc"
-NOTDEF_PROBE  = "\uE000"       # private use: no font carries it, so its bitmap IS .notdef
+SYMBOL_FONT = "/System/Library/Fonts/Menlo.ttc"
+NOTDEF_PROBE = "\ue000"  # private use: no font carries it, so its bitmap IS .notdef
 FONT_CANDIDATES = [
     UI_FONT,
     "/System/Library/Fonts/Monaco.ttf",
@@ -328,18 +348,22 @@ FONT_CANDIDATES = [
 # — but to spend the whole colour budget on the ONE that is live. #2f62d8 is kitty's own
 # active_border_color hue at full chroma, so the focused strip and the focused border are
 # the same blue, and the idle bands lift just far enough off the ground to read as bands.
-BAND_IDLE = (0x3f, 0x55, 0x90)   # 2.30:1 over the ground, and BLUE rather than grey:
-                                 # four idle candidates were rendered beside the live band and
-                                 # this one carries the most chroma while still losing to it
-BAND_LIVE = (0x2f, 0x62, 0xd8)   # 3.05:1 over the ground — the vivid one, the focused one
-INK_IDLE  = (0xf4, 0xf6, 0xfd)   # 6.67:1 on its band
-INK_LIVE  = (0xff, 0xff, 0xff)   # 5.4:1 on the blue
+BAND_IDLE = (0x3F, 0x55, 0x90)  # 2.30:1 over the ground, and BLUE rather than grey:
+# four idle candidates were rendered beside the live band and
+# this one carries the most chroma while still losing to it
+BAND_LIVE = (
+    0x2F,
+    0x62,
+    0xD8,
+)  # 3.05:1 over the ground — the vivid one, the focused one
+INK_IDLE = (0xF4, 0xF6, 0xFD)  # 6.67:1 on its band
+INK_LIVE = (0xFF, 0xFF, 0xFF)  # 5.4:1 on the blue
 
 
 _FACES = {}
 
 
-_NOFACE_WARNED = False   # one warning per process, not per pane per tick
+_NOFACE_WARNED = False  # one warning per process, not per pane per tick
 
 
 class _NoFace(RuntimeError):
@@ -361,6 +385,7 @@ def _faces(em):
     if hit:
         return hit
     from PIL import ImageFont
+
     primary = None
     for p in FONT_CANDIDATES:
         if not os.path.exists(p):
@@ -371,7 +396,7 @@ def _faces(em):
                 try:
                     primary.set_variation_by_name(UI_VARIATION)
                 except Exception:
-                    pass          # Regular is an acceptable degrade, a crash is not
+                    pass  # Regular is an acceptable degrade, a crash is not
             break
         except Exception:
             continue
@@ -394,8 +419,10 @@ def _faces(em):
         # lazy plugin import ALSO failed; had the fd budget recovered one frame later it
         # would have returned the default face and been believed.
         # So: say so. The caller decides, and both callers decline rather than guess.
-        raise _NoFace("no usable face: none of %s could be opened" %
-                      ", ".join(os.path.basename(c) for c in FONT_CANDIDATES))
+        raise _NoFace(
+            "no usable face: none of %s could be opened"
+            % ", ".join(os.path.basename(c) for c in FONT_CANDIDATES)
+        )
 
     def cap_h(font):
         bb = font.getbbox("HEXBD")
@@ -448,6 +475,7 @@ def strip_png(width, band_h, text, live=False, cover_h=None):
     if hit is not None:
         return hit
     from PIL import Image, ImageDraw
+
     W, H = max(width, 1), max(band_h, 1)
     # THE PLACEMENT IS AS TALL AS ITS WHOLE ROWS; THE BAND NEED NOT BE. Everything below
     # the band is painted the terminal's own background, so the row the placement covers
@@ -465,7 +493,9 @@ def strip_png(width, band_h, text, live=False, cover_h=None):
     # became two — doubling a horizontal margin because a VERTICAL dimension changed, and
     # walking the label out of alignment with the body text under it. Divide the band back
     # down to its cell first.
-    pad = max(int((H / max(BAND_FILL_CELLS, 0.1)) * 0.21), 8)  # inset, off the pane edge
+    pad = max(
+        int((H / max(BAND_FILL_CELLS, 0.1)) * 0.21), 8
+    )  # inset, off the pane edge
     faces = [(ch, _face_for(ch, primary, symbol, notdef)) for ch in text]
 
     def measure(seq):
@@ -475,6 +505,7 @@ def strip_png(width, band_h, text, live=False, cover_h=None):
         while faces and measure(faces) > W - 2 * pad - primary.getlength("…"):
             faces.pop()
         faces.append(("…", primary))
+
     # BASELINE FROM INK, NOT FROM METRICS — and the em steps down if the ink still
     # overflows. `getbbox(anchor="ls")` returns each glyph's ink relative to the baseline
     # (y0 negative above it), so the union over the glyphs actually being drawn is the
@@ -489,16 +520,17 @@ def strip_png(width, band_h, text, live=False, cover_h=None):
             except Exception:
                 continue
             if b[1] == b[3]:
-                continue                      # a space has no ink
+                continue  # a space has no ink
             top = b[1] if top is None else min(top, b[1])
             bot = b[3] if bot is None else max(bot, b[3])
         return (top, bot) if top is not None else None
+
     span = ink_span(faces)
-    BREATHE = 2                               # 1px of band above and below the ink; a
-                                              # glyph flush against the edge reads clipped
-                                              # even when it is not
+    BREATHE = 2  # 1px of band above and below the ink; a
+    # glyph flush against the edge reads clipped
+    # even when it is not
     while span and (span[1] - span[0]) > H - BREATHE and em > 8:
-        em -= 1                               # an exotic title degrades, never clips
+        em -= 1  # an exotic title degrades, never clips
         primary, symbol, notdef = _faces(em)
         faces = [(c, _face_for(c, primary, symbol, notdef)) for c, _f in faces]
         span = ink_span(faces)
@@ -511,13 +543,14 @@ def strip_png(width, band_h, text, live=False, cover_h=None):
         except Exception:
             base = H // 2
     x = pad
-    for ch, f in faces:      # per glyph, so tracking and the symbol fallback are possible
+    for ch, f in faces:  # per glyph, so tracking and the symbol fallback are possible
         try:
             d.text((x, base), ch, font=f, fill=FG, anchor="ls")
         except Exception:
             d.text((x, base - int(H * 0.7)), ch, font=f, fill=FG)
         x += f.getlength(ch) + TRACKING
     import io
+
     b = io.BytesIO()
     # compress_level=1, not the default 6. The payload's only journey is a write into a
     # tty on this machine — eight strips measure 1.5ms — so trading ~3KB per strip for a
@@ -533,8 +566,8 @@ def strip_png(width, band_h, text, live=False, cover_h=None):
 
 # ───────────────────────────── the proof ─────────────────────────────────────
 
-BODY_FONT = "/System/Library/Fonts/Monaco.ttf"   # kitty.conf font_family
-BODY_EM   = 36                                   # font_size 18.0 on a 2x display
+BODY_FONT = "/System/Library/Fonts/Monaco.ttf"  # kitty.conf font_family
+BODY_EM = 36  # font_size 18.0 on a 2x display
 
 
 def measure(cell_h=45):
@@ -575,25 +608,41 @@ def measure(cell_h=45):
         # VERDICT line would read as a judgement on the header's size while measuring
         # something nobody chose. Exit non-zero so a caller cannot mistake it for a pass.
         print("CANNOT MEASURE: %s" % e)
-        print("VERDICT UNAVAILABLE — no face resolved, so no number here would be about "
-              "the header. This is a refusal, not a failing measurement.")
+        print(
+            "VERDICT UNAVAILABLE — no face resolved, so no number here would be about "
+            "the header. This is a refusal, not a failing measurement."
+        )
         return 3
-    t_cap, typ, worst = ink_h(primary, CAPS), ink_h(primary, TYPICAL), ink_h(primary, WORST)
+    t_cap, typ, worst = (
+        ink_h(primary, CAPS),
+        ink_h(primary, TYPICAL),
+        ink_h(primary, WORST),
+    )
     ceiling = 8
-    for e in range(8, 160):             # the largest em whose WORST-CASE ink still fits
+    for e in range(8, 160):  # the largest em whose WORST-CASE ink still fits
         if ink_h(_faces(e)[0], WORST) <= band - BREATHE:
             ceiling = e
     ratio = worst / float(band)
-    print("cell            %d device px   band %d px in a %d px placement (%d whole cell(s))"
-          % (cell_h, band, cover, cover // cell_h))
+    print(
+        "cell            %d device px   band %d px in a %d px placement (%d whole cell(s))"
+        % (cell_h, band, cover, cover // cell_h)
+    )
     print("BODY   Monaco   em %-3d  cap %d px" % (BODY_EM, b_cap))
-    print("TITLE  SF %-9s em %-3d  cap %d px   = %.2fx BODY" % (UI_VARIATION, em, t_cap,
-                                                                t_cap / float(b_cap)))
-    print("  ink: typical %d px · accented worst case %d px · band %d px (need %d spare)"
-          % (typ, worst, band, BREATHE))
-    print("  INK-TO-BAND: %.2f  (air %d px above and below the worst case)"
-          % (ratio, (band - worst) // 2))
-    print("  CEILING for this band: em %d — headroom %d em(s)" % (ceiling, ceiling - em))
+    print(
+        "TITLE  SF %-9s em %-3d  cap %d px   = %.2fx BODY"
+        % (UI_VARIATION, em, t_cap, t_cap / float(b_cap))
+    )
+    print(
+        "  ink: typical %d px · accented worst case %d px · band %d px (need %d spare)"
+        % (typ, worst, band, BREATHE)
+    )
+    print(
+        "  INK-TO-BAND: %.2f  (air %d px above and below the worst case)"
+        % (ratio, (band - worst) // 2)
+    )
+    print(
+        "  CEILING for this band: em %d — headroom %d em(s)" % (ceiling, ceiling - em)
+    )
     # THE TARGET IS AIR, NOT THE CEILING (2026-09-15). This used to demand `headroom <= 1`,
     # i.e. it asserted the exact crowding the operator then asked us to remove — a test
     # pinning the defect as the contract. The ceiling is still computed and printed, because
@@ -606,31 +655,44 @@ def measure(cell_h=45):
     # is the gap — "the text doesn't look oversized to its boundary container" — and the
     # gap is what the eye reads, so the gap is what is asserted. AIR_MIN 4 is comfortably
     # above the 1px this shipped with and comfortably below every candidate rendered.
-    AIR_MIN = 4                         # device px of band above and below the worst ink
-    OUTRANKS = 1.00                     # the label may not be SMALLER than the body's cap
+    AIR_MIN = 4  # device px of band above and below the worst ink
+    OUTRANKS = 1.00  # the label may not be SMALLER than the body's cap
     face_ok = os.path.basename(FONT_CANDIDATES[0]) != os.path.basename(BODY_FONT)
     fits = worst <= band - BREATHE
     air = (band - worst) // 2
     breathes = air >= AIR_MIN
     outranks = (t_cap / float(b_cap)) >= OUTRANKS
     whole = (cover % cell_h) == 0 and band <= cover
-    print("VERDICT %s" % (
-        "BREATHING (%dpx of air each side, >= %d) and OUTRANKING the body (%.2fx), in a "
-        "register the body does not use, on a whole-cell placement"
-        % (air, AIR_MIN, t_cap / float(b_cap))
-        if (fits and breathes and outranks and face_ok and whole) else
-        "FAILS: %s%s%s%s%s" % (
-            "" if fits else "the accented worst case overflows; ",
-            "" if breathes else "only %dpx of air each side, under %d; " % (air, AIR_MIN),
-            "" if outranks else "the label is %.2fx the body cap, under %.2fx; " % (
-                t_cap / float(b_cap), OUTRANKS),
-            "" if face_ok else "same face as the body; ",
-            "" if whole else "the placement is not a whole number of cells — the last row "
-                             "would be part-painted and its glyph tops would read clipped")))
+    print(
+        "VERDICT %s"
+        % (
+            "BREATHING (%dpx of air each side, >= %d) and OUTRANKING the body (%.2fx), in a "
+            "register the body does not use, on a whole-cell placement"
+            % (air, AIR_MIN, t_cap / float(b_cap))
+            if (fits and breathes and outranks and face_ok and whole)
+            else "FAILS: %s%s%s%s%s"
+            % (
+                "" if fits else "the accented worst case overflows; ",
+                ""
+                if breathes
+                else "only %dpx of air each side, under %d; " % (air, AIR_MIN),
+                ""
+                if outranks
+                else "the label is %.2fx the body cap, under %.2fx; "
+                % (t_cap / float(b_cap), OUTRANKS),
+                "" if face_ok else "same face as the body; ",
+                ""
+                if whole
+                else "the placement is not a whole number of cells — the last row "
+                "would be part-painted and its glyph tops would read clipped",
+            )
+        )
+    )
     return 0 if (fits and breathes and outranks and face_ok and whole) else 1
 
 
 # ───────────────────────────── talking to kitty ──────────────────────────────
+
 
 def ksock():
     """Resolve a socket `kitty @` can reach FROM A SUBPROCESS.
@@ -675,12 +737,14 @@ def ksock():
         if got:
             return got
         try:
-            r = subprocess.run(["ps", "-o", "ppid=", "-p", str(cur)],
-                               capture_output=True, text=True)
+            r = subprocess.run(
+                ["ps", "-o", "ppid=", "-p", str(cur)], capture_output=True, text=True
+            )
             cur = int((r.stdout or "0").strip() or 0)
         except Exception:
             break
     import glob
+
     socks = [p for p in glob.glob("/tmp/kitty-*") if sock_for(p.rsplit("-", 1)[-1])]
     return socks[0] if len(socks) == 1 else None
 
@@ -695,6 +759,7 @@ def kitty_pid(sock):
 
 def kitty_ls(sock):
     import json, subprocess
+
     cmd = ["kitty", "@"] + (["--to", "unix:" + sock] if sock else []) + ["ls"]
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -727,6 +792,7 @@ def pane_ttys(panes):
     returning pid is re-resolved from scratch rather than answered from memory.
     """
     import subprocess
+
     live = set()
     missing = []
     for p in panes:
@@ -739,9 +805,11 @@ def pane_ttys(panes):
     for k in [k for k in _TTY_CACHE if k not in live]:
         del _TTY_CACHE[k]
     if missing:
-        r = subprocess.run(["ps", "-o", "pid=,tty=",
-                            "-p", ",".join(str(k[1]) for k in missing)],
-                           capture_output=True, text=True)
+        r = subprocess.run(
+            ["ps", "-o", "pid=,tty=", "-p", ",".join(str(k[1]) for k in missing)],
+            capture_output=True,
+            text=True,
+        )
         by_pid = {}
         for line in (r.stdout or "").splitlines():
             parts = line.split()
@@ -750,7 +818,7 @@ def pane_ttys(panes):
                     by_pid[int(parts[0])] = "/dev/%s" % parts[1]
                 except ValueError:
                     pass
-        for k in missing:                   # remember the misses too, so a pane with no
+        for k in missing:  # remember the misses too, so a pane with no
             _TTY_CACHE[k] = by_pid.get(k[1])  # tty is not re-probed every single cycle
     return _TTY_CACHE
 
@@ -758,6 +826,7 @@ def pane_ttys(panes):
 def tiocgwinsz(path):
     """Exact pane pixel size and therefore exact cell size — no assumed constants."""
     import fcntl, struct, termios
+
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
     except OSError:
@@ -767,8 +836,9 @@ def tiocgwinsz(path):
         rows, cols, xpx, ypx = struct.unpack("HHHH", buf)
         if not (rows and cols and xpx and ypx):
             return None
-        return dict(rows=rows, cols=cols, xpx=xpx, ypx=ypx,
-                    cw=xpx / cols, ch=ypx / rows)
+        return dict(
+            rows=rows, cols=cols, xpx=xpx, ypx=ypx, cw=xpx / cols, ch=ypx / rows
+        )
     finally:
         os.close(fd)
 
@@ -784,6 +854,7 @@ def _tty_write(tty, data, budget=0.03):
     its strip simply does not get one this cycle, and the 0.35s hold loop offers it again.
     """
     import select, time as _t
+
     try:
         fd = os.open(tty, os.O_WRONLY | os.O_NONBLOCK)
     except OSError:
@@ -810,6 +881,40 @@ def _tty_write(tty, data, budget=0.03):
         os.close(fd)
 
 
+_SENT = {}  # img_id -> digest of the PNG kitty currently holds under that id
+
+
+def reassert(tty, img_id, budget=0.02):
+    """Re-display an image kitty ALREADY holds. No delete, no file read, no PNG decode.
+
+    🚨 THIS IS THE HOLD PATH, AND IT IS THE WHOLE COST OF THE FEATURE. The refresh loop
+    re-asserts every HOLD (0.35s) because kitty frees a PLACEMENT whenever its anchoring
+    cells are cleared or scrolled away. Doing that with the full `place()` payload is a
+    delete + retransmit + decode PER PANE PER TICK -- 18/s across six panes -- and kitty
+    does not give the texture back. MEASURED, sandbox kitty, 40 cycles/arm at 0.35s, two
+    bracketing idle controls both flat at +0K, reproduced twice:
+        control  +0K      0.0% of a core
+        place()  +1008K   1.0%      <- +0.069 MB/s on two 89x15 panes
+        this     -16K     0.1%      <- inside the control band on BOTH axes
+    On the operator's kitty (6 panes, 47 rows) the same churn measured +0.93 MB/s and
+    +6.8pp of CPU, and only ~36% of the memory came back on `off`: 190.9 MB -> 212.7 MB
+    retained after a single 17-second hold. That is the "memory pressure" this path exists
+    to remove.
+
+    WHAT IT CANNOT DO, stated plainly: `ESC[2J` frees the image DATA, not merely the
+    placement, and q=2 means there is no error channel to learn that from. So a re-assert
+    against freed data is a silent no-op, and the strip stays missing until the next FULL
+    transmit. That is why `paint_frames` still forces a full one every FULL_EVERY ticks --
+    the interval is the worst-case time a title can be absent after a full-screen clear,
+    traded against a cost that is ~1/FULL_EVERY of today's.
+    """
+    return _tty_write(
+        tty,
+        b"\0337\033[1;1H" + b"\033_Ga=p,i=%d,z=1,C=1,q=2\033\\" % img_id + b"\0338",
+        budget=budget,
+    )
+
+
 def place(tty, png, img_id, budget=0.05):
     """Transmit+display at row 1 col 1, above the text, without moving the cursor.
 
@@ -819,6 +924,8 @@ def place(tty, png, img_id, budget=0.05):
     very first strip it had been given.
     """
     import base64
+    import hashlib
+
     # TRANSMIT BY FILE PATH, NEVER INLINE. The payload is not ours alone: we write it into
     # a tty a full-screen program (Claude Code) is writing to at the same time, and a
     # foreign write can only land BETWEEN two of our write() syscalls. Measured 2026-09-16
@@ -847,15 +954,28 @@ def place(tty, png, img_id, budget=0.05):
         os.replace(tmp, path)
     except OSError:
         return False
-    payload = (b"\0337\033[1;1H"                       # save cursor, home
-               + b"\033_Ga=d,d=I,i=%d,q=2\033\\" % img_id
-               + b"\033_Ga=T,f=100,t=f,z=1,C=1,q=2,i=%d;%s\033\\"
-                 % (img_id, base64.standard_b64encode(path.encode()))
-               + b"\0338")                              # restore cursor
-    return _tty_write(tty, payload, budget=budget)
+    payload = (
+        b"\0337\033[1;1H"  # save cursor, home
+        + b"\033_Ga=d,d=I,i=%d,q=2\033\\" % img_id
+        + b"\033_Ga=T,f=100,t=f,z=1,C=1,q=2,i=%d;%s\033\\"
+        % (img_id, base64.standard_b64encode(path.encode()))
+        + b"\0338"
+    )  # restore cursor
+    ok = _tty_write(tty, payload, budget=budget)
+    # Record what kitty now holds under this id, so the hold path can tell a re-assert
+    # (free) from a genuine restyle (must retransmit, per DELETE FIRST above). Keyed on
+    # the BYTES rather than on the title, because width, focus colour and the .notdef
+    # fallback all change the strip without changing the text.
+    if ok:
+        _SENT[img_id] = hashlib.blake2b(png, digest_size=16).digest()
+    return ok
 
 
 def clear(tty, img_id, budget=0.04):
+    # d=I frees the DATA, not just the placement, so kitty no longer holds anything under
+    # this id. Forgetting it here is what stops the next `on` from taking the re-assert
+    # path against an image that is gone -- which would be a silently blank strip.
+    _SENT.pop(img_id, None)
     _tty_write(tty, b"\033_Ga=d,d=I,i=%d,q=2\033\\" % img_id, budget=budget)
 
 
@@ -878,8 +998,14 @@ def targets(sock, all_windows):
     for p in found:
         tty = ttys.get((p.get("id"), p.get("pid")))
         if tty:
-            out.append((p["id"], (p.get("title") or "").strip() or "(untitled)", tty,
-                        bool(p.get("is_focused"))))
+            out.append(
+                (
+                    p["id"],
+                    (p.get("title") or "").strip() or "(untitled)",
+                    tty,
+                    bool(p.get("is_focused")),
+                )
+            )
     return out
 
 
@@ -892,6 +1018,7 @@ def render(tg):
     234ms against a 38ms median. With it, the worst case is one strip.
     """
     import time as _t
+
     frames = []
     for pid_, title, tty, live in tg:
         _t.sleep(0)
@@ -911,14 +1038,25 @@ def render(tg):
             global _NOFACE_WARNED
             if not _NOFACE_WARNED:
                 _NOFACE_WARNED = True
-                sys.stderr.write("kitty-pane-title-overlay: %s — panes left unlabelled\n" % e)
+                sys.stderr.write(
+                    "kitty-pane-title-overlay: %s — panes left unlabelled\n" % e
+                )
             continue
         frames.append((tty, png, IMG_BASE + (pid_ % 800)))
     return frames
 
 
-def paint_frames(frames, budget=0.04):
+FULL_EVERY = 16  # hold ticks between self-heal transmits: 16 x 0.35s = 5.6s, which is
+# the worst case a strip can be missing after an ESC[2J frees its data.
+# Lower it to shorten that gap, at 1/FULL_EVERY of the old cost each way.
+_HOLD_TICK = 0
+
+
+def paint_frames(frames, budget=0.04, force=False):
     """Paint every pane, under ONE shared deadline.
+
+    `force` means A PRESS: transmit in full, never take the cheap re-assert path. A press
+    is the one moment the strip must appear whatever kitty currently holds.
 
     The budget is per PAINT, not per pane, because the thing being protected is the
     keypress and a keypress does not care which pane was slow. A pane that cannot take its
@@ -927,14 +1065,30 @@ def paint_frames(frames, budget=0.04):
     not be. Measured: kitty occasionally stops draining its ttys for ~150ms, and without a
     shared deadline that lands on the press.
     """
+    import hashlib
     import time as _t
+
+    global _HOLD_TICK
     end = _t.time() + budget
     n = 0
+    # A press always transmits in full; only the hold loop may take the cheap path.
+    heal = force or (_HOLD_TICK % FULL_EVERY == 0)
+    if not force:
+        _HOLD_TICK += 1
     for tty, png, iid in frames:
         left = end - _t.time()
         if left <= 0:
             break
-        if place(tty, png, iid, budget=min(left, 0.05)):
+        # FULL transmit when the strip CHANGED (kitty ignores new bytes under a held id,
+        # so a restyle that skipped the delete would be invisible), or on the periodic
+        # self-heal that recovers from an ESC[2J having freed the data. Otherwise the
+        # placement is simply re-asserted, which costs nothing — see reassert().
+        changed = _SENT.get(iid) != hashlib.blake2b(png, digest_size=16).digest()
+        if heal or changed:
+            ok = place(tty, png, iid, budget=min(left, 0.05))
+        else:
+            ok = reassert(tty, iid, budget=min(left, 0.02))
+        if ok:
             n += 1
     return n
 
@@ -942,6 +1096,7 @@ def paint_frames(frames, budget=0.04):
 def wipe(tg, budget=0.12):
     """Erase every strip, under one deadline — `off` is a keypress too."""
     import time as _t
+
     end = _t.time() + budget
     for pid_, _title, tty, _live in tg:
         left = end - _t.time()
@@ -951,6 +1106,7 @@ def wipe(tg, budget=0.12):
 
 
 # ───────────────────────────── the daemon ────────────────────────────────────
+
 
 def daemon(initial, all_windows):
     """Hold the pane list and the rendered strips warm so a keypress is only a tty write.
@@ -969,12 +1125,13 @@ def daemon(initial, all_windows):
     chord's connect() to its stale socket file fails instantly with ECONNREFUSED.
     """
     import fcntl, socket, threading, time
+
     os.makedirs(AUTONOMY, exist_ok=True)
     lockfh = open(LOCK, "w")
     try:
         fcntl.flock(lockfh, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        return 0                                # another daemon owns this; not an error
+        return 0  # another daemon owns this; not an error
     sock = ksock()
     kpid = kitty_pid(sock)
     if not kpid:
@@ -995,24 +1152,31 @@ def daemon(initial, all_windows):
     # be COLD_POLL stale at a press with no visible consequence: the hold loop re-warms
     # within HOT_POLL and the very next repaint covers anything that changed.
     HOLD, HOT_POLL, COLD_POLL, HOT_FOR = 0.35, 1.5, 15.0, 120.0
-    IDLE_EXIT = 6 * 3600           # nobody has pressed it in six hours; the next press
-                                   # respawns in ~400ms and this stops holding 31MB
-    st = {"on": False, "all": all_windows, "tg": [], "frames": [],
-          "touched": time.time()}
+    IDLE_EXIT = 6 * 3600  # nobody has pressed it in six hours; the next press
+    # respawns in ~400ms and this stops holding 31MB
+    st = {
+        "on": False,
+        "all": all_windows,
+        "tg": [],
+        "frames": [],
+        "touched": time.time(),
+    }
     stop = threading.Event()
 
     def warm(force=False):
         tg = targets(sock, st["all"])
         st["tg"], st["frames"] = tg, render(tg)
         if not tg and (st["on"] or force):
-            _log("warm: no targets (sock=%r) — a pane query that returns nothing is the "
-                 "SILENT failure mode, not a quiet success" % (sock,))
+            _log(
+                "warm: no targets (sock=%r) — a pane query that returns nothing is the "
+                "SILENT failure mode, not a quiet success" % (sock,)
+            )
 
     def warm_loop():
         while not stop.is_set():
             try:
                 warm()
-            except Exception as e:              # a refresh must never kill the daemon
+            except Exception as e:  # a refresh must never kill the daemon
                 _log("warm failed: %s" % e)
             hot = st["on"] or (time.time() - st["touched"]) < HOT_FOR
             stop.wait(HOT_POLL if hot else COLD_POLL)
@@ -1023,7 +1187,28 @@ def daemon(initial, all_windows):
 
     def turn_on():
         st["on"] = True
-        paint_frames(st["frames"], budget=0.025)   # the keypress's whole share
+        # 🚨 AN EMPTY FRAME LIST IS THE COLD-DAEMON STATE, AND PAINTING IT IS A SILENT NO-OP.
+        # The press normally spends the warm cache, which is the whole reason this daemon
+        # exists. But the FIRST press after a kitty restart spawns the daemon and arrives
+        # before warm() has ever completed, so st["frames"] is [] and the press paints
+        # nothing — measured 2026-09-16 on a fresh daemon: targets were empty for the first
+        # 30s (log `warm: no targets` at 20:45:28..41, silent from 20:45:41), during which
+        # every press did nothing at all and then the hold loop quietly started painting.
+        # That is almost certainly the whole history of "⌘⇧B doesn't do anything": it was
+        # only ever pressed cold. Re-warming HERE costs ~130ms (kitty @ ls ~30ms + one ps
+        # ~95ms) and only on the press that would otherwise have been wasted; a warm daemon
+        # never enters this branch and keeps its measured 0.07s.
+        if not st["frames"]:
+            try:
+                warm(force=True)
+            except Exception as e:  # never let a cold press kill the daemon
+                _log("turn_on: cold warm failed: %s" % e)
+        # force: a PRESS always transmits in full. The hold loop may re-assert cheaply
+        # because it is only fighting placement loss, but a press must survive kitty
+        # having freed the data too, and it has no way to ask which happened.
+        paint_frames(
+            st["frames"], budget=0.025, force=True
+        )  # the keypress's whole share
         try:
             with open(STATE, "w") as fh:
                 fh.write(str(os.getpid()))
@@ -1043,7 +1228,7 @@ def daemon(initial, all_windows):
     try:
         while True:
             try:
-                os.kill(kpid, 0)                # our kitty; free liveness check
+                os.kill(kpid, 0)  # our kitty; free liveness check
             except OSError:
                 break
             if not st["on"] and time.time() - st["touched"] > IDLE_EXIT:
@@ -1081,8 +1266,8 @@ def daemon(initial, all_windows):
                 if cmd == "quit":
                     break
             elif st["on"]:
-                paint_frames(st["frames"])      # hold: kitty frees a placement on any
-                                                # clear or scroll and never says so
+                paint_frames(st["frames"])  # hold: kitty frees a placement on any
+                # clear or scroll and never says so
     finally:
         stop.set()
         if st["on"]:
@@ -1101,6 +1286,7 @@ def daemon(initial, all_windows):
 
 # ───────────────────────────── entry points ──────────────────────────────────
 
+
 def cold(arg, all_windows):
     """No daemon, no socket: do the work here. Used by `once` and by --no-daemon."""
     sock = ksock()
@@ -1109,8 +1295,10 @@ def cold(arg, all_windows):
         arg = "off" if os.path.exists(STATE) else "on"
     tg = targets(sock, all_windows)
     if not tg:
-        _log("no targets: sock=%r — a pane query that returns nothing is the SILENT "
-             "failure mode, not a quiet success" % (sock,))
+        _log(
+            "no targets: sock=%r — a pane query that returns nothing is the SILENT "
+            "failure mode, not a quiet success" % (sock,)
+        )
     if arg == "off":
         try:
             os.unlink(STATE)
@@ -1170,8 +1358,11 @@ def main():
                 cell = int(a.split("=", 1)[1])
         return measure(cell)
 
-    print("usage: kitty-pane-title-overlay.py "
-          "[toggle|on|off|once|daemon|stop|measure] [--all] [--no-daemon]", file=sys.stderr)
+    print(
+        "usage: kitty-pane-title-overlay.py "
+        "[toggle|on|off|once|daemon|stop|measure] [--all] [--no-daemon]",
+        file=sys.stderr,
+    )
     return 2
 
 
