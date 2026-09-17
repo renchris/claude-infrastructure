@@ -113,7 +113,12 @@ jfield() { "$SUBJECT" --json "${@:2}" | jq -r ".$1"; }
   run "$SUBJECT"; [ "$status" -eq 0 ]
   [[ "$output" == *DRAINING* ]] || false
   [[ "$output" == *"1 filed / 3 closed (net -2)"* ]] || false
+  # rc 0 is unchanged and is the ONLY rc that still means "the condition is gone". What is new is
+  # that it now SPEAKS: cc-premise renders `output:` on its exit-0 branch too, so a closer citing
+  # this run gets the figures instead of the "(silent)" that closed backlog 40250b0f698a.
   run "$SUBJECT" --assert; [ "$status" -eq 0 ]
+  [[ "$output" == *"DRAINING"* ]] || false
+  [[ "$output" == *"1 filed / 3 closed (net -2)"* ]] || false
 }
 
 @test "closing exactly as many as were filed is DRAINING, not net-positive — B5 is close >= file" {
@@ -174,18 +179,32 @@ jfield() { "$SUBJECT" --json "${@:2}" | jq -r ".$1"; }
   [ "$(jq -r 'select(.event=="update")' "$CC_BACKLOG_FILE" | wc -l)" -eq 0 ]
 }
 
-# ── 8-11. the four abstentions, none of which may convict ──────────────────────────────────────
+# ── 8-11. the four abstentions, none of which may convict ─── AND none of which may ACQUIT ─────
+# 🚨 THE `--assert` EXPECTATION IN THESE CASES WAS `-eq 0`, AND IT PINNED THE DEFECT
+# (backlog 40250b0f698a). Inverted in place rather than deleted: the old expectation is the record
+# of what was believed, and it was believed on the subject header's argument that "an unknown must
+# read exactly like a healthy week to every consumer". `--assert` has exactly ONE consumer — the
+# `--falsifier` string the --file arm stores on the row it files — and for cc-premise exit 0 is not
+# "a healthy week", it is THE CONDITION IS GONE. So each of these cases was asserting that a
+# measurement which never ran RETRACTS the standing inflow alarm. 2 is cc-premise's
+# _FALSIFIER_UNASKABLE_RCS ("UNVERIFIED, not confirmed"), and case 11d below pins that join.
+# The FILING polarity is untouched and is still asserted in every one of them: an abstention files
+# nothing, so no abstention can mint a row on a healthy new box.
 @test "no store at all is skipped, not draining and not net-positive" {
   export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/absent.jsonl"
   [ "$(jfield verdict)" = unknown ]
   [ "$(jfield why)" = skipped ]
-  run "$SUBJECT" --assert; [ "$status" -eq 0 ]
+  run "$SUBJECT" --assert; [ "$status" -eq 2 ]
+  [[ "$output" == *"CANNOT TELL (skipped)"* ]] || false
 }
 
 @test "a store that parses to no records is read-failed — 'I could not ask' is never 'no'" {
   printf 'not json\n{oops\n' > "$CC_BACKLOG_FILE"
   [ "$(jfield verdict)" = unknown ]
   [ "$(jfield why)" = read-failed ]
+  # Both lines are now COUNTED rather than silently discarded — see case 11a.
+  [ "$(jfield dropped)" = 2 ]
+  run "$SUBJECT" --assert; [ "$status" -eq 2 ]
   run "$SUBJECT" --file; [ "$status" -eq 0 ]
   [ "$(grep -c backlog-flow-assert "$CC_BACKLOG_FILE" || true)" -eq 0 ]
 }
@@ -198,7 +217,7 @@ jfield() { "$SUBJECT" --json "${@:2}" | jq -r ".$1"; }
   [ "$(jfield verdict)" = unknown ]
   [ "$(jfield why)" = short-history ]
   [ "$(jfield added)" = 8 ]          # the figures are still REPORTED; only the verdict abstains
-  run "$SUBJECT" --assert; [ "$status" -eq 0 ]
+  run "$SUBJECT" --assert; [ "$status" -eq 2 ]
   run "$SUBJECT" --file;   [ "$status" -eq 0 ]
   [ "$(grep -c backlog-inflow-net-positive "$CC_BACKLOG_FILE" || true)" -eq 0 ]
 }
@@ -222,8 +241,12 @@ jfield() { "$SUBJECT" --json "${@:2}" | jq -r ".$1"; }
   done
   [ "$(jfield unparsed)" = 3 ]
   [ "$(jfield verdict)" = unknown ]
+  # Still named for the ts channel: `why` reports whichever channel DOMINATES, and here `dropped`
+  # is 0. The threshold itself is now `excluded` = unparsed + dropped (case 11a).
   [ "$(jfield why)" = unparsed-could-flip ]
-  run "$SUBJECT" --assert; [ "$status" -eq 0 ]
+  [ "$(jfield dropped)" = 0 ]
+  [ "$(jfield excluded)" = 3 ]
+  run "$SUBJECT" --assert; [ "$status" -eq 2 ]
 }
 
 @test "a margin wider than the unreadable pile survives it, and the pile is still reported" {
@@ -235,6 +258,105 @@ jfield() { "$SUBJECT" --json "${@:2}" | jq -r ".$1"; }
   done
   [ "$(jfield verdict)" = net-positive ]
   [ "$(jfield unparsed)" = 3 ]
+}
+
+# ── 11a-11d. THE TWO DEFECTS backlog 40250b0f698a CLOSED ───────────────────────────────────────
+# Each of these is red against the pre-fix subject and green after; 11a and 11b are the two halves
+# of one incident, and they compose — 11a MANUFACTURES a false verdict and 11b DELIVERS it to the
+# only consumer as "the condition is gone", which is how the row that prompted this fix was closed
+# on `output: (silent)`.
+
+# splice <n> <event> — cut the first n records of that event in two, the way a concurrent appender
+# lands between the >=2 write() calls of a record over the writer's 4,096-byte stdio buffer. Both
+# halves then stop parsing. This is not a synthetic corruption: it is the measured shape that cost
+# one census 12.33% of THIS store (W2-B17, 1550268e6).
+#
+# seed_history's anchor is itself an `add`, so it MUST be held out: splicing it destroys the store's
+# history depth and the subject then abstains at guard 3 (short-history) instead of guard 4. Both
+# are abstentions and both exit 2, so the case would still look green while exercising a different
+# guard from the one it names — the axis under test held constant by the fixture (memory:
+# fixture-identifier-shape-collapses-two-spaces). Caught by asserting `why`, not just `verdict`.
+splice() {
+  local want="$1" ev="$2" n=0 l; local tmp="$BATS_TEST_TMPDIR/pre-splice.jsonl"
+  mv "$CC_BACKLOG_FILE" "$tmp"; : > "$CC_BACKLOG_FILE"
+  while IFS= read -r l; do
+    case "$l" in
+      *'"id":"anchor"'*) printf '%s\n' "$l" >> "$CC_BACKLOG_FILE" ;;
+      *"\"event\":\"$ev\""*)
+        n=$(( n + 1 ))
+        if [ "$n" -le "$want" ]; then printf '%s\n%s\n' "${l:0:18}" "${l:18}" >> "$CC_BACKLOG_FILE"
+        else printf '%s\n' "$l" >> "$CC_BACKLOG_FILE"; fi ;;
+      *) printf '%s\n' "$l" >> "$CC_BACKLOG_FILE" ;;
+    esac
+  done < "$tmp"
+}
+
+@test "11a a line that will not parse is EXCLUDED EVIDENCE and is weighed as such" {
+  # RED-PROOF, and the control is the same store one variable apart. Pre-fix, `fromjson? // empty`
+  # dropped a spliced line into neither `records` nor `unparsed`, so guard 4 — whose stated job is
+  # "excluded evidence is not absent evidence" — compared its margin against a pile that excluded
+  # the store's dominant channel, and emitted a CONFIDENT verdict of the opposite sign.
+  seed_history
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do rec "a$i" 3600 add claude-infrastructure; done
+  for i in 1 2 3 4 5 6; do rec "d$i" 3600 "done"; done
+  # the control arm: intact, the week really is net-positive, and the row must STAY OPEN.
+  [ "$(jfield verdict)" = net-positive ]
+  [ "$(jfield net)" = 6 ]
+  run "$SUBJECT" --assert; [ "$status" -eq 1 ]
+
+  splice 12 add
+  # PRE-FIX this read `verdict=draining, net=-6, unparsed=0` and `--assert` exited 0 — a sign flip
+  # of 12 on a pile the guard reported as empty, handed to cc-premise as "the condition is GONE".
+  [ "$(jfield verdict)" = unknown ]
+  [ "$(jfield why)" = unreadable-lines-could-flip ]
+  [ "$(jfield unparsed)" = 0 ]              # the OLD pile is still empty — that is the whole point
+  [ "$(jfield dropped)" -gt 0 ]             # the NEW one is not
+  run "$SUBJECT" --assert; [ "$status" -eq 2 ]
+}
+
+@test "11b the mirror direction: splicing CLOSINGS may not mint a confident net-positive either" {
+  # The hole reaches both forbidden directions. Splicing `done` records inflates the net instead of
+  # flipping it, which is the FALSE NET-POSITIVE that files a standing row into the store this
+  # program exists to drain. Pre-fix: net +1 -> +8, verdict net-positive, unparsed 0, --file FILES.
+  seed_history
+  local i
+  for i in 1 2 3 4 5 6 7 8; do rec "a$i" 3600 add claude-infrastructure; done
+  for i in 1 2 3 4 5 6 7; do rec "d$i" 3600 "done"; done
+  [ "$(jfield net)" = 1 ]
+  splice 7 "done"
+  [ "$(jfield verdict)" = unknown ]
+  run "$SUBJECT" --file; [ "$status" -eq 0 ]
+  [ "$(grep -c backlog-inflow-net-positive "$CC_BACKLOG_FILE" || true)" -eq 0 ]
+}
+
+@test "11c a blank line is not a lost record, so it cannot drag the store into an abstention" {
+  # The over-statement in 11a is deliberate and bounded; this is the boundary. A blank line carries
+  # no record and is not evidence of one, so counting it would let a store with a trailing newline
+  # abstain forever — an alarm that can never speak (memory: gate-must-ease-with-evidence).
+  seed_history
+  rec a1 3600 add claude-infrastructure
+  printf '\n   \n\n' >> "$CC_BACKLOG_FILE"
+  [ "$(jfield dropped)" = 0 ]
+  [ "$(jfield verdict)" = net-positive ]
+}
+
+@test "11d the abstention rc is the one cc-premise renders as UNVERIFIED (canary)" {
+  # THE JOIN THAT MAKES THE WHOLE FIX LOAD-BEARING, and the reason 2 rather than a fresh code: a
+  # falsifier rc outside cc-premise's unaskable set renders "NOT REFUTED", which is a different and
+  # weaker claim than "could not ask" (memory: new-enum-member-falls-into-fail-closed-default). If
+  # that set is ever re-spelled, this goes red here rather than silently at a closer.
+  grep -qE '^_FALSIFIER_UNASKABLE_RCS = frozenset\(\(2,' "$REPO/bin/cc-premise" || false
+  # and exit 0 must still be the one blocking answer, or `draining` stops closing the row at all
+  grep -qF 'if p.returncode == 0:' "$REPO/bin/cc-premise" || false
+  # the five states must be DISTINGUISHABLE through that one consumer — pre-fix, four abstentions
+  # and a genuine `draining` all returned an identical rc 0 with no output at all.
+  seed_history; rec a1 3600 add claude-infrastructure
+  run "$SUBJECT" --assert; [ "$status" -eq 1 ]
+  rec x1 3600 "done"; rec x2 3600 "done"
+  run "$SUBJECT" --assert; [ "$status" -eq 0 ]; [ -n "$output" ]
+  export CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/absent.jsonl"
+  run "$SUBJECT" --assert; [ "$status" -eq 2 ]; [ -n "$output" ]
 }
 
 # ── 12-15. what counts, and what deliberately does not ─────────────────────────────────────────
