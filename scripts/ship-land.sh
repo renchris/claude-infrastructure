@@ -3527,6 +3527,53 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── always-loaded rules-file HOOK BUDGET ratchet ─────────────────────────────────────────────
+  # `.claude/rules/agent-operating-lessons.md` is injected into EVERY session in this repo, in
+  # full. On 2026-09-17 it measured 190,960 chars (~48K tokens a session) because 70 of its 121
+  # lessons had been pasted in WHOLE rather than split hook-from-body; the bodies moved to
+  # docs/lessons/ and the file fell to ~45K for the same rules. The convention that prevents a
+  # repeat is written in that file's header, and a convention in a header is executed by nothing.
+  #
+  # SCOPED BY DIFF, NOT BY SIZE, and that is deliberate: a whole-file byte ceiling would convict a
+  # land that added one well-formed hook to a file a SIBLING had already inflated — attribution by
+  # reachability, the polarity this repo has measured as wrong. This arms only when the land's own
+  # diff touches that file, and every finding names a line the land can fix.
+  RULES_LINT="${SHIP_LAND_RULES_LINT:-scripts/rules-hook-budget-lint.sh}"
+  if [[ -x "$RULES_LINT" ]]; then
+    local rules_own=""
+    rules_own="$(git diff --name-only "$range" -- '.claude/rules/*.md' 2>/dev/null || true)"
+    if [[ -n "$rules_own" ]]; then
+      echo "→ gate: always-loaded rules hook-budget ratchet (this land edits $(printf '%s\n' "$rules_own" | grep -c .) rules file(s))" >&2
+      # gate_bounded: SHIP_LAND_RULES_LINT — pointing it at a non-executable path disarms the whole
+      # arm, and the arm only ever fires for a land whose diff touches .claude/rules/*.md, so a
+      # broken detector cannot become a standing refusal across the pipeline the way deploy-live's
+      # green-stamp gate did. It blocks one narrow population and names its own escape.
+      if ! selftest_ok "$RULES_LINT"; then
+        echo "✗ gate: rules-hook-budget-lint --selftest FAILED — the detector no longer" >&2
+        echo "  discriminates, so its clean verdict would mean nothing. Fix the lint before landing." >&2
+        echo "  Escape if it is the detector that is broken: SHIP_LAND_RULES_LINT=/nonexistent" >&2
+        gate_red rules-hook-budget-selftest
+        return 1
+      fi
+      local _rrc=0
+      while IFS= read -r _rf; do
+        [[ -n "$_rf" ]] || continue
+        # --own-range: BLOCK on bullets this land ADDED, advisory on the rest. A rebase onto a
+        # moved trunk routinely brings in siblings' bullets, and convicting this land for them is
+        # attribution by reachability. Coverage is intact: every bullet is added by SOME land.
+        "$RULES_LINT" --file "$_rf" --own-range "$range" >&2 || { _rrc=$?; [[ "$_rrc" -eq 2 ]] && break; }
+      done <<< "$rules_own"
+      if (( _rrc == 2 )); then arm_nonverdict "rules-hook-budget-lint"; return 1; fi
+      if (( _rrc != 0 )); then
+        echo "✗ gate: rules hook-budget RED — a bullet in an ALWAYS-LOADED rules file has no body" >&2
+        echo "  file, or carries evidence that belongs in one. Write the body to docs/lessons/<slug>.md" >&2
+        echo "  and leave a hook that still STATES its rule. Lines are named above." >&2
+        gate_red rules-hook-budget
+        return 1
+      fi
+    fi
+  fi
+
   # ── pipefail/SIGPIPE ratchet (backlog 791345455b58) ───────────────────────────────────────────
   # Fifth deterministic blocker class, same own-scope contract as the ratchets above. `producer |
   # grep -q PAT` under `set -o pipefail` reads FALSE **on a match**: grep exits at the match, the
