@@ -1247,7 +1247,7 @@ fi
 # the fixture (MEMORY.md control-must-replay-the-real-artifact, per-site-mutation-attributes-coverage).
 #
 # Builtin fast pass-through, fork-free — this hook runs on EVERY Bash tool call in the fleet.
-if [[ "$CMD" == *merge* || "$CMD" == *pull* ]]; then
+if [[ "$CMD" == *merge* || "$CMD" == *pull* || "$CMD" == *commit* ]]; then
 FFG_SHARED="${CC_SHARED_CHECKOUT:-$HOME/Development/claude-infrastructure}"
 FFG_CWD="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)"
 [[ -n "$FFG_CWD" ]] || FFG_CWD="$PWD"
@@ -1285,7 +1285,7 @@ _ffg_scan() {
       pre)  case "$tok" in git|*/git) state=opts ;; esac ;;
       opts) case "$tok" in
               -*) ;;                                  # a git GLOBAL option, keep looking
-              merge|pull) sub="$tok"; state=args ;;
+              merge|pull|commit) sub="$tok"; state=args ;;
               *) state=pre ;;                         # another subcommand — rewind, keep walking
             esac ;;
       args) case "$tok" in -*) ;; *) [ -n "$tgt" ] || tgt="$tok" ;; esac ;;
@@ -1348,6 +1348,37 @@ while IFS= read -r ffg_clause; do
     "$ffg_shared"|"$ffg_shared"/*) ;;
     *) continue ;;                              # a worktree or another repo — never this guard's business
   esac
+  # Per-arm kill switch. The commit arm is the newer and broader of the two — `git commit` is the
+  # single most-typed git command in the fleet — so it gets a switch of its own rather than
+  # borrowing the advance arm's `--force`, which is a deploy-live flag and means nothing here.
+  [ "$ffg_sub" = commit ] && [ "${CC_SHARED_COMMIT_GATE:-on}" = off ] && continue
+
+  # A COMMIT is not an advance, so it gets its own arm and its own message. `continue` after the
+  # deny is unreachable in production (deny exits) and exists so the mutation control below can
+  # delete the span and leave a commit ALLOWED while merge/pull stays denied — without it the
+  # mutant would fall through to the advance message and still deny, proving nothing.
+  if [ "$ffg_sub" = commit ]; then
+    # 🚨 FAIL OPEN WHEN THE COMMAND WRITES A HEREDOC — the measured failure mode of the sibling
+    # git-add guard, hit three times in one session on 2026-09-17: a test fixture or doc that
+    # merely CONTAINS the words `git commit` reads as an invocation. That guard's own refusal says
+    # a flag "belonging to another command on the same line is not this rule" — precisely the case
+    # it cannot see. The exposure is far larger for `commit` than for merge/pull, because this
+    # repo's bats corpus writes `git commit` into fixtures constantly.
+    #
+    # THE TEST IS ON $CMD, NOT ON THE CLAUSE, and the first build got that wrong — case (19) is
+    # what caught it. Clauses come from `tr ';|' '\n'` read line by line, so `read` splits on
+    # NEWLINES as well: a heredoc body line is its OWN clause and carries no `<<` of its own. Only
+    # the whole command still shows the redirection that proves those lines are data.
+    # A skipped heredoc costs one ungated commit the operator can still cure; a false deny blocks
+    # writing a TEST, with a message about a commit nobody was making.
+    case "$CMD" in *'<<'*) continue ;; esac
+    # ── SHARED-COMMIT-ARM BEGIN ────────────────────────────────────────────────────────────────
+    deny "Commit in the SHARED CHECKOUT blocked: 'git commit' in $ffg_at. That checkout is the symlink SOURCE for ~/.claude, and the live layer is advanced by 'git merge --ff-only', which compares ANCESTRY — so ONE commit here that the trunk does not have makes the advance ARITHMETICALLY IMPOSSIBLE for the WHOLE FLEET, not just for you. deploy-live then dies DIVERGED on every tick and, by contract, never rebases or resets a shared checkout, so it stays wedged until a human cures it by hand. Measured: 63 commits here in 36 days, 16 hand-cures, 45+ logged DIVERGED refusals (a floor — refusal_bump returns early unless AUTO=1). The commit is ALSO unreviewed: it never passes a land gate, and this checkout frequently sits on another session's branch, so you may be committing onto a branch you did not create and a concurrent /ship can rebase-drop it (incident 2026-07-11: dfacccd, 5 files, silently lost while 'git rev-list origin/main..HEAD' read 0). WHAT TO DO INSTEAD — work in your own worktree, which is the project rule already ('.claude/CLAUDE.md' § Never commit or land in the shared checkout): git worktree add -b <branch> /tmp/wt-<topic> origin/main . A 'cd <your worktree> && git commit …' is UNTOUCHED by this guard — it resolves the cd and only fires when the commit would land in the shared checkout itself. If you have already staged work here, move it: git -C <your worktree> fetch and re-apply, or stash it and re-commit there. Override for this session only: CC_SHARED_COMMIT_GATE=off."
+    # ── SHARED-COMMIT-ARM END ──────────────────────────────────────────────────────────────────
+    # shellcheck disable=SC2317  # deliberately unreachable: deny exits. It exists so the mutation
+    # control can delete the span above and leave a commit ALLOWED — see the note before the `if`.
+    continue
+  fi
 
   deny "Ungated advance of the SHARED CHECKOUT blocked: 'git $ffg_sub${ffg_tgt:+ $ffg_tgt}' in $ffg_at. That fast-forward advances the FILES but creates no symlinks — ~/.claude/{hooks,commands,scripts,bin,skills} are per-file symlinks, so every newly tracked file lands UNLINKED and silently does nothing (hooks/lib/cc-interactive.sh shipped that way and disabled an operator hold) — and it skips the green-stamp gate, so unverified trunk goes live for the whole fleet. It is also invisible afterwards: it leaves live and checkout in perfect agreement, which is why deploy-parity-assert's provenance leg has to read the reflog to see it at all (42 merge origin/main + 8 pull --ff-only ungated advances, 2026-08-01..08-17). Run the one sanctioned advance instead — it is green-gated and runs install.sh, which is what actually creates the links: bash $ffg_shared/scripts/deploy-live.sh . (--force is the deliberate escape hatch; 'git fetch' to refresh refs is fine and is not what this blocks; the same command in YOUR worktree is untouched.)"
 done <<<"$FFG_CLAUSES"

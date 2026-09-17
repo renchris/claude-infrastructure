@@ -1,5 +1,22 @@
 # Pattern-matching sites in hooks/validate-bash.sh — the population the backlog row 8942f3b1506d
 #
+# 2026-09-17 (row 5529482875e8) — LINE SHIFT ONLY, no population change. The FF-GATE gained a
+#   SECOND arm — a deny for `git commit` in the shared checkout, the write that makes the fleet's
+#   `merge --ff-only` converge arithmetically impossible — as a pure 31-line insert after line
+#   1350 (inside the clause loop, immediately above the advance deny). The two other edits in that
+#   diff are IN PLACE and shift nothing: the pre-screen at 1250 gained `|| "$CMD" == *commit*`,
+#   and _ffg_scan's subcommand arm at 1288 became `merge|pull|commit)`. So every site pinned at
+#   line >= 1351 moved exactly +31 and everything above is unchanged.
+#   NO GREP SITE WAS ADDED, REMOVED OR REWRITTEN — the new arm matches with `case` globs and a
+#   `[` test and contains no `grep` at all (checked: `git diff | grep '^+' | grep -c grep` = 0) —
+#   so no pinned VERDICT moved in either direction, the DIVERGENT counterexamples are all still
+#   present, and the non-vacuity floor is untouched.
+#   Applied ARITHMETICALLY FROM THE REAL DIFF HUNKS (`git diff -U0`, which reports the insert at
+#   `@@ -1350,0 +1351,31 @@`) and then CHECKED, never asserted: assertion 4 (drift) re-reads each
+#   `verify=lit` pattern off its newly pinned line, so a wrong offset reds the suite instead of
+#   silently re-pointing a site at an unrelated line. Recorded because this file's own rule is
+#   that a site MOVED in the hook is a failure until it is re-pinned deliberately — absorbing a
+#   line shift silently is how that assertion rots to a no-op.#
 # 2026-09-10 (row f5c3cfb86e2e) — LINE SHIFT ONLY, no population change. The duplicate-worker
 #   BASH-WRITE admission term went into hooks/validate-bash.sh as a pure 154-line insert at line
 #   540 (immediately above the `Hard deny` section), so the 31 sites pinned at line >= 540 each
@@ -88,10 +105,10 @@ S22	1186	qE	raw	clause	lit	DIVERGENT	git\b.*\bconfig\b.*\buser\.(email|name)\b
 S23	1188	qE	raw	clause	lit	DIVERGENT	\-\-(get|get-all|get-regexp|get-urlmatch|list|unset|unset-all|remove-section|rename-section|global|system|file|blob)\b
 S24	1189	qE	raw	clause	lit	EQUIVALENT	[[:space:]]-(l|e)([[:space:]]|$)
 S25	1191	qE	raw	clause	lit	DIVERGENT	\buser\.(email|name)[[:space:]]+[^[:space:]]
-S26	1586	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+reset[[:space:]]+--hard\b
-S27	1592	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*[xX]
-S28	1898	qE	raw	token	syn	EQUIVALENT	^(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)(/|$)
-S29	1913	oE	nl	whole	lit	DIVERGENT	rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*[^[:space:];&|-][^[:space:];&|]*
-S30	1916	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
-S31	1747	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=[^[:space:];&|]*
-S33	1873	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=("?\$\([^()]*\)"?|[^[:space:];&|]*)
+S26	1617	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+reset[[:space:]]+--hard\b
+S27	1623	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*[xX]
+S28	1929	qE	raw	token	syn	EQUIVALENT	^(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)(/|$)
+S29	1944	oE	nl	whole	lit	DIVERGENT	rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*[^[:space:];&|-][^[:space:];&|]*
+S30	1947	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
+S31	1778	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=[^[:space:];&|]*
+S33	1904	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=("?\$\([^()]*\)"?|[^[:space:];&|]*)
