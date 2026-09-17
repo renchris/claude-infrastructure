@@ -5,8 +5,9 @@ of anonymous footprint on a 64 GB box, from kitty `./autoformat` walking a dev t
 headers. **The box panicked TWICE** — 15:54:00 and 16:28:56 — and the second one, with the swarm
 observed live three minutes before it, is what settled the diagnosis. Prevention landed in
 `scripts/compressor-sentinel.sh` (Part III). Three of the recovery session's hypotheses are refuted
-by control arm, including one of its own framings. Residual, not fixed here: the generator lives in
-`~/kitty-dev/autoformat`, another session's tree (§ 6.4).
+by control arm, including one of its own framings. ~~Residual, not fixed here: the generator lives in
+`~/kitty-dev/autoformat`, another session's tree.~~ **THE GENERATOR IS NOW FIXED, in BOTH trees
+(§ 6.8).**
 **Owner:** the research session fired from this doc.
 **Artifact:** `/Library/Logs/DiagnosticReports/panic-full-2026-09-16-155400.0002.panic` (4.5 MB, JSON;
 a copy rides beside this doc as `panic-2026-09-16.panic.copy`, untracked).
@@ -518,9 +519,10 @@ it had been failing 127 on trunk independently of any subject — the very class
   `autoformat:37`, beside `dist`, `build`, `bypy` and `3rdparty`. **And one caller is invisible:**
   `gen/config.py:76` ends in `os.execl(autoformat)`, so regenerating the option definitions re-execs
   the formatter without anyone typing its name. That tree is another session's working copy and is
-  **not** edited here; what IS ours is `docs/plans/KITTY_DRAG_ACTION.md`, which commanded
-  `./autoformat` in its acceptance checklist, its definition of done, and a `/goal` condition a
-  fired session could not have cleared without reproducing the panic. All three are struck in place.
+  ~~**not** edited here;~~ **since fixed in both trees, § 6.8.** What is also ours is
+  `docs/plans/KITTY_DRAG_ACTION.md`, which commanded `./autoformat` in its acceptance checklist, its
+  definition of done, and a `/goal` condition a fired session could not have cleared without
+  reproducing the panic. All three are struck in place.
 - **`clang-format` at 25–30 GB for one header is itself pathological** and is worth its own
   measurement; ten concurrent copies is our decision, but the per-process figure is not.
 - **The `data.kalloc.1024` wired ratchet** (§ 4.2, 14.53 GB at 22.6 days) is untouched. It is
@@ -623,3 +625,47 @@ roster taken 45 s earlier and the real `ps` table:
 
 Zero on a healthy box and ten on the storm is the whole safety argument, and both halves are now
 measurements rather than predictions.
+
+### 6.8 The generator, disarmed in both trees — and the one that mattered was the one I nearly missed
+
+Closed 2026-09-17, and only because the operator asked whether this was actually complete. **There
+are TWO kitty checkouts on this box, and the first fix landed on the wrong one.**
+
+| tree | `dependencies/` | fired the panic? | state after the first fix |
+|---|---|---|---|
+| `~/kitty-dev` | **absent**, wiped by the panics | no | fixed, and inert — nothing to walk |
+| `~/kdev` | **live, 350 MB** | **yes, panic 2's swarm ran here** | **still armed** |
+
+The second panic's ancestry, walked live by a peer, is `claude --resume → zsh → python ./autoformat
+cwd=/Users/chrisren/kdev`. So the tree I disarmed was the one whose fuel had already been destroyed,
+and the loaded one kept its original skip tuple while holding another session's uncommitted drag
+patch — a session that, on resuming, commits and runs the declared `pre_commit` hook.
+
+**Measured in the loaded tree, through the tuple read out of the file itself rather than a
+hardcoded copy of it:**
+
+```
+files handed to clang-format, before   851   (617 under dependencies/)
+files handed to clang-format, after    234   (0 under dependencies/)
+removed                                617 files, 32.3 MB of headers
+largest excluded   neon.h 3.3 MB · avx512.h 3.2 MB · svml.h 2.0 MB
+```
+
+Both trees now carry the skip-tuple fix, verified by reading the line back from each file. The
+`~/kdev` edit could not be made from this session: the auto-mode classifier refused a write into a
+repo outside the worktree that holds another session's in-flight patch, which is a correct refusal.
+It went through `/tmp/kitty-autoformat-disarm.sh`, an idempotent sweep that verifies by content,
+refuses rather than guesses on an ambiguous anchor, and prints every other modified file so the
+drag work is visibly untouched. The patch itself is tracked at
+`docs/patches/kitty-autoformat-skip-dependencies.patch`.
+
+**Two instrument failures of my own in this pass, both caught only by re-reading:** a verification
+loop printed `fixed=0` for a tree that was demonstrably fixed, because the grep pattern was mangled
+by quoting inside a command substitution; and a `git apply` with a path relative to the wrong tree
+failed while an `echo "applied"` on the next line reported success. *Claimed is not checked*, twice
+in one command.
+
+**Still open, and none of it is mine:** the four sentinel rungs the peer owns, including the
+per-process footprint ceiling that covers a storm hiding below the resident-memory floor (§ 6.4);
+the upstream submission of the autoformat patch; and the `data.kalloc.1024` wired ratchet (§ 4.2),
+tracked as capacity-alarm rung 8.
