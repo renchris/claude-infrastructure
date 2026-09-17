@@ -317,7 +317,75 @@ VERIFY_S="${CC_KITTY_SPAWN_VERIFY_S:-20}"
 SELF_DIR="$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")"
 RUNNER="${CC_PANE_RUNNER_BIN:-$SELF_DIR/cc-pane-runner}"
 
-armed(){ [ -f "$CMD_DIR/$1.armed" ]; }
+# ── AN ARMING MARKER IS A CLAIM WITH A LIFETIME, AND IT USED TO HAVE NONE (2026-09-17) ───────────
+# `armed` decides whether `run`/`send` hand their text to cc-pane-runner as a FILE instead of typing
+# it. A bare `[ -f ]` made that decision on a marker that nothing was obliged to be behind:
+#   · the runner removed it only on the path where a command actually ARRIVED (cc-pane-runner:239).
+#     Its wait loop timing out — the ordinary outcome for a pane nobody ever `run`s into — exec'd a
+#     shell and left the marker on disk. (Now also cleaned there; this gate is the fail-safe for the
+#     case that path can never cover: a runner KILLED outright, which cleans nothing.)
+#   · a kitty window id is a PER-PROCESS COUNTER that restarts at 1 with every kitty, exactly as
+#     § CLOSE-TARGET IDENTITY PIN says of the close path. The close verb grew a generation pin for
+#     it; the ARM path never did, so a marker minted for the previous kitty's pane 8 answers for
+#     this kitty's pane 8.
+# MEASURED on this box 2026-09-17: 12 markers, 11 for panes that no longer existed, and `17.armed`
+# — written 19 hours earlier — sitting over a LIVE Claude Code session. `session run -s 17 "/exit"`
+# therefore wrote /exit into $CMD_DIR/17.cmd, a file no runner was reading, and failed deliver_argv's
+# 20s pickup proof. That is the whole of why handoff-fire.sh's --recycle and self-close could not
+# type /exit in a kitty pane (docs/plans/KITTY_RECYCLE_TRANSPORT.md).
+#
+# TWO PINS, and both fail toward the LEGACY TYPING TRANSPORT — the path that works on a live pane —
+# so neither can withhold delivery, only re-route it to the weaker-proof but universally-correct
+# one. Nothing here relaxes a check.
+#   GENERATION  the marker records the kitty it was minted against (the pid in the control socket's
+#               own name). A marker from another generation is not this pane's. Markers written
+#               before this change are EMPTY, carry no generation, and are judged on age alone.
+#   AGE         the marker stands for "a runner is waiting", and the runner gives up at
+#               CC_PANE_CMD_WAIT_S (300s). Past that budget there is provably nobody behind it,
+#               whether the runner fell back cleanly or was killed. The +60s slack is deliberate:
+#               the marker is created BEFORE the launch, so its age always exceeds the runner's own
+#               elapsed wait, and erring long keeps today's behaviour in the only window where the
+#               two could disagree.
+# An UNREADABLE age is not an expired one (fleet memory: lookup-miss-is-not-absence) — it returns
+# today's answer rather than silently retiring the argv transport.
+_armed_ttl_s(){
+  local w="${CC_PANE_CMD_WAIT_S:-300}"
+  case "$w" in ''|*[!0-9]*) w=300 ;; esac
+  printf '%s' "${CC_PANE_ARMED_TTL_S:-$(( w + 60 ))}"
+}
+# The generation is FREE: kitty names its control socket after its own pid (unix:/tmp/kitty-<pid>),
+# and this shim has already resolved that socket to talk at all. No extra RPC, no `kt ls`, nothing
+# on the hot spawn path.
+kitty_generation(){
+  # TWO STATEMENTS, not one `local a=… b=$a`: bash declares every name on a `local` line BEFORE
+  # expanding the later initialisers, so `gen` would read an already-localised, still-EMPTY `sock`
+  # and this function would return 1 for every generation. Caught by its own test, which is the only
+  # reason the pin is not silently inert.
+  local sock gen
+  sock="${CC_TERM_KITTY_TO:-${KITTY_LISTEN_ON:-}}"
+  gen="${sock##*-}"
+  case "$gen" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$gen"
+}
+_file_age_s(){ # $1=path → prints age in seconds, rc 1 if it cannot be read
+  local m now
+  m="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null)" || return 1
+  case "$m" in ''|*[!0-9]*) return 1 ;; esac
+  now="$(date +%s 2>/dev/null)" || return 1
+  printf '%s' "$(( now - m ))"
+}
+armed(){ # $1=window id → 0 a runner is plausibly waiting · 1 type at the pane instead
+  local marker="$CMD_DIR/$1.armed" gen cur age
+  [ -f "$marker" ] || return 1
+  gen="$(head -n 1 "$marker" 2>/dev/null || true)"
+  case "$gen" in ''|*[!0-9]*) gen="" ;; esac
+  if [ -n "$gen" ]; then
+    cur="$(kitty_generation 2>/dev/null || true)"
+    [ -n "$cur" ] && [ "$gen" != "$cur" ] && return 1
+  fi
+  age="$(_file_age_s "$marker")" || return 0
+  [ "$age" -le "$(_armed_ttl_s)" ]
+}
 
 pane_exists(){ # $1=window id → 0 present, 1 absent, 2 could not tell
   local out; out="$(kt ls 2>/dev/null)" || return 2
@@ -1004,7 +1072,11 @@ case "$verb" in
     fi
     command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn split kitty "$new" "${PWD:-}" "it2-kitty session split anchor:${SESSION:-} loc:${loc:-} argv:${arm:-0}"
     if [ "$arm" = 1 ]; then
-      : > "$CMD_DIR/$new.armed" 2>/dev/null || err "could not mark pane $new armed — its command will be typed"
+      # STAMPED WITH THE GENERATION, not merely touched — see § armed() above. A marker that cannot
+      # name the kitty it belongs to can only be judged on age; one that can is refused outright the
+      # moment this kitty restarts and re-mints the same id.
+      { kitty_generation 2>/dev/null || true; printf '\n'; } > "$CMD_DIR/$new.armed" 2>/dev/null \
+        || err "could not mark pane $new armed — its command will be typed"
       # Sweep only OUR OWN filename shapes, and only at this directory level. A bare `find -type f`
       # here would annex anything a future reader co-locates in the dir (memory:
       # content-keyed-dir-annexes-what-you-colocate); the -name fences are what keep it a fence.
@@ -1071,6 +1143,41 @@ else:
       prove_target "$SESSION" send || exit 1
       kt send-text --match "id:$SESSION" -- "$text" || exit 1
     else unaddressed send; fi
+    ;;
+
+  type)
+    # ── SEND-ONLY: raw text + Enter, TYPED, always. Nothing else. (2026-09-17) ──────────────────
+    # WHY THIS IS A VERB AND NOT A FLAG ON `run`. `run`'s own header three arms up already says it:
+    # *"`run`'s traffic is NOT one population"*, and names the second population by name — 
+    # scripts/handoff-fire.sh:as_write routing `/exit` into a LIVE CLAUDE CODE COMPOSER on the
+    # self-close and recycle paths. That text is a MESSAGE, not a command, and every mechanism `run`
+    # carries is built for a command:
+    #   · deliver_argv writes it to $CMD_DIR/<id>.cmd and waits for a RUNNER to pick it up and
+    #     exec it. `/exit` starts no agent and there is no runner behind a live TUI, so the proof
+    #     at deliver_argv's deadline can only ever fail — and it did, for 3 attempts, whereupon
+    #     handoff-fire killed its own armed watcher and the recycle aborted.
+    #   · the nonce wire (`: <nonce>; <line>`) is not merely useless on a TUI but DESTRUCTIVE: it
+    #     would enter that literal text as a chat message and submit it. type_verified abstains on
+    #     a TUI today, but the abstention is an oracle that can be wrong; this verb never asks.
+    # So the two populations get two verbs, and the message path stops depending on a classification
+    # it does not need. That is the same "one seam per meaning" split `send` (text, no Enter) and
+    # `run` (command) already are — `type` is text WITH Enter, and it is the missing third.
+    #
+    # EVERY EXISTING GATE STILL BINDS, and that is deliberate — a send-only path must not become a
+    # way to reach a pane the other verbs refuse:
+    #   unaddressed   no -s ⇒ exit 65, never a send-text into whatever window has focus
+    #   valid_id      an iTerm2 UUID is refused (tests/it2-kitty-operator-safety.bats,
+    #                 tests/it2-kitty-terminal-guard.bats both enumerate the verbs that must)
+    #   prove_target  kitty's send-text exits 0 for a window that does not exist, so absence is
+    #                 proven before delivery is claimed
+    # What it does NOT consult is `armed`, on purpose: an armed pane is a freshly-split runner with
+    # no composer and nothing to type at, which is a different pane than this verb is ever aimed at.
+    # A caller wanting argv delivery wants `run`.
+    text="${ARGS[*]:-}"
+    if [ -n "$SESSION" ]; then valid_id "$SESSION" || reject_id "$SESSION" type
+      prove_target "$SESSION" type || exit 1
+      kt send-text --match "id:$SESSION" -- "$text"$'\r' || exit 1
+    else unaddressed type; fi
     ;;
 
   run)

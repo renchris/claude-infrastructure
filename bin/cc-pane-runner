@@ -64,7 +64,21 @@ _wait="${CC_PANE_CMD_WAIT_S:-300}"
 # The fallback is an ORDINARY SHELL, never an exit. A pane that vanishes because a variable was unset
 # takes its diagnostic with it; a pane sitting at a prompt can be read by the operator and by the
 # `session list` liveness probe, and Claude Code's dead-pane pruning will not mistake it for gone.
+# CONSUME THE ARMING MARKER ON THE WAY OUT TOO (2026-09-17). The marker is a claim that "a runner
+# is waiting behind this pane id", and it is consumed at :239 only on the path where a command
+# actually arrived. Every OTHER exit from this file — the wait loop timing out, an unusable state
+# dir, an empty command — left it on disk forever, where it outlives this pane and then answers
+# `armed()` for whatever LIVE pane later carries that id (kitty window ids are a per-process counter
+# that restarts at 1). Measured on this box 2026-09-17: 12 markers on disk, 11 of them for panes
+# that no longer exist, and `17.armed` — written 19h earlier — sitting over a LIVE Claude Code
+# session. `it2 session run -s 17 /exit` therefore wrote /exit to a FILE no runner reads and failed
+# its 20s pickup proof, which is precisely why handoff-fire's --recycle and self-close could not
+# type /exit in a kitty pane (docs/plans/KITTY_RECYCLE_TRANSPORT.md).
+#
+# Best-effort and unconditional: a pane degrading to a shell has no further use for the marker, and
+# a failure to remove it must never keep this pane from becoming the shell it promised to be.
 _fallback() {
+  [ -n "${_armed:-}" ] && rm -f "$_armed" 2>/dev/null
   [ -n "${1:-}" ] && printf 'cc-pane-runner: %s — this pane is an ordinary shell.\n' "$1" >&2
   exec "${SHELL:-/bin/zsh}" -l -i
 }
