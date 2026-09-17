@@ -31,6 +31,15 @@ is `27f3978ae` 13:52, a cv-review research commit with nothing to do with kitty.
 these four into the band's account without a trigger; equally, do not drop them — five crashes of
 the operator's terminal in one day is the fact, whatever caused them.
 
+⚠️ **CORRECTED 2026-09-17 — the two clusters have different ENTRY PATHS but ONE ROOT CAUSE.**
+The paragraph below is right that the entry paths differ (`update_pointer_shape` vs
+`viewport_for_window`) and wrong that "these are not one bug seen five times". Both attributed
+signatures are the same NULL field, `os_window->fonts_data`, read at two different offsets:
+`fcm.cell_width` sits at +0x20 and `logical_dpi_x` at +0x8 in `FONTS_DATA_HEAD`, which is exactly
+the two fault addresses. So a cure for the NULL covers both entry paths; a cure for one ENTRY PATH
+still does not. (The 13:56/13:57 pair, pc=0, remains a genuinely different fault shape and is
+still unattributed.) See `docs/research/kitty-crash-attribution-2026-09-17.md`.
+
 **And the two clusters have DIFFERENT ENTRY PATHS, which is the sharpest thing here.** All four
 13:5x crashes run `builtin_exec <- PyEval_EvalCode` — code executed through `exec()`, which is
 how a kitty `--watcher` module or a kitten is loaded. The 20:13:49 crash has no `builtin_exec` at
@@ -99,7 +108,19 @@ dangling working-tree edit". That claim was false when written — the commit ne
 and becomes true once this land does. Two sessions converging on one call is evidence for the
 call, not duplicated work.
 
-## A repro is the ONLY route to a function name
+## A repro is the ONLY route to a function name — **REFUTED 2026-09-17**
+
+🚨 **This section's claim is false, and the heading is left standing because it is the record of
+what was believed.** The offsets ARE resolvable from the shipped binary: `LC_FUNCTION_STARTS`
+(bounds) and the module's `PyMethodDef` arrays (name beside address — CPython must read them at
+import, so stripping cannot remove them) intersect to name the function. `+840952` is
+**`viewport_for_window`**, faulting on `os_window->fonts_data->fcm.cell_width` with `fonts_data`
+NULL; `+821436` is **`update_pointer_shape`**. The paragraph below is correct only about the
+SYMBOL TABLE, which was never the only name source. Disproof, method and positive control:
+`docs/research/kitty-crash-attribution-2026-09-17.md`; tool `scripts/kitty-crash-attribute.py`.
+
+The original text follows, unaltered:
+
 
 `/Applications/kitty.app/.../kitty.fast_data_types.so` carries 664 symbols and every one is an
 undefined import — zero local text symbols — so the shipped offsets (`+840952`, `+816344`) can

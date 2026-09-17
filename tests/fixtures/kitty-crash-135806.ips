@@ -1,0 +1,64 @@
+{"app_name": "kitty", "bug_type": "309", "os_version": "redacted", "timestamp": "redacted"}
+{
+ "_comment": "REDACTED FIXTURE for tests/kitty-crash-attribute.bats \u2014 faulting thread only, 6 frames, no environment/process data. Source: kitty-2026-09-16-135806.ips",
+ "cpuType": "ARM-64",
+ "exception": {
+  "codes": "0x0000000000000001, 0x0000000000000008",
+  "rawCodes": [
+   1,
+   8
+  ],
+  "type": "EXC_BAD_ACCESS",
+  "signal": "SIGSEGV",
+  "subtype": "KERN_INVALID_ADDRESS at 0x0000000000000008"
+ },
+ "faultingThread": 0,
+ "threads": [
+  {
+   "frames": [
+    {
+     "imageIndex": 1,
+     "imageOffset": 816344
+    },
+    {
+     "imageIndex": 1,
+     "imageOffset": 596680
+    },
+    {
+     "imageIndex": 1,
+     "imageOffset": 821436
+    },
+    {
+     "imageIndex": 0,
+     "imageOffset": 1117748
+    },
+    {
+     "imageIndex": 0,
+     "imageOffset": 2233552
+    },
+    {
+     "imageIndex": 0,
+     "imageOffset": 2185856
+    }
+   ]
+  }
+ ],
+ "usedImages": [
+  {
+   "name": "Python",
+   "path": "/Applications/kitty.app/Contents/Frameworks/Python.framework/Versions/3.14/Python",
+   "uuid": "ab93046f-7723-36f5-9710-58d4759b281b",
+   "arch": "arm64",
+   "base": 4348100608,
+   "size": 4898816
+  },
+  {
+   "name": "kitty.fast_data_types.so",
+   "path": "/Applications/kitty.app/Contents/Resources/Python/lib/kitty-extensions/kitty.fast_data_types.so",
+   "uuid": "ca7c2fb0-544e-35b7-bf30-93235293adb1",
+   "arch": "arm64",
+   "base": 4337762304,
+   "size": 1294336
+  }
+ ]
+}
