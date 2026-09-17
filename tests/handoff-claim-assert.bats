@@ -11,6 +11,18 @@ setup() {
   H="${BATS_TEST_DIRNAME}/../hooks/handoff-claim-assert.sh"
   T="$BATS_TEST_TMPDIR"
   export HANDOFF_CLAIM_STATE_DIR="$T/state"
+  # FIXTURE $HOME. HANDOFF_CLAIM_STATE_DIR already redirects the state this suite writes, so the
+  # subject was well behaved — but any $HOME-relative path the hook or its libraries resolve still
+  # lands in the operator's live ~/. The hermeticity lint keys on the setup(), not on whether a
+  # write happened to occur, and it is right to: a suite that CAN reach live state is one that
+  # will the next time the subject grows a path.
+  # This is load-bearing far beyond this file: an unfixtured suite makes
+  # `scripts/test-hermeticity-lint.sh --selftest` exit 1, which routes postland-verify to CUT
+  # rather than GREEN (postland-verify.sh:3784-3785; :523 — "never a red, and NEVER A GREEN
+  # either"), and a green-only deploy tier then pins the live layer. No green stamp has existed
+  # since 2026-09-12T03:07Z.
+  export HOME="$T/home"
+  mkdir -p "$HOME"
 }
 
 # write_msg <file-with-the-assistant-text> → builds the transcript + stdin payload at $T/in.json
