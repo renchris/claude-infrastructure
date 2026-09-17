@@ -60,7 +60,7 @@ for p in "$HOME"/Library/LaunchAgents/*.plist; do
     case "$txt" in *"$t"*)
       label="$(basename "$p" .plist)"
       state="unloaded"
-      launchctl list 2>/dev/null | grep -q "[[:space:]]$label\$" && state="LOADED"
+      launchctl list 2>/dev/null | grep "[[:space:]]$label\$" >/dev/null && state="LOADED"
       every="$(printf '%s' "$txt" | sed -n 's/.*StartInterval = \([0-9]*\).*/\1/p' | head -1)"
       [ -n "$every" ] && every=" every ${every}s"
       emit "launchd:$label ($state$every) — names $t"
