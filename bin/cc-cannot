@@ -133,11 +133,11 @@ if printf '%s' "$CMD" | grep -E '(^|[[:space:]]|\||&|;)sudo([[:space:]]|$)' >/de
 fi
 
 # ── physical world ──────────────────────────────────────────────────────────────────────────────
-printf '%s' "$CMD" | grep -Eq '^open[[:space:]]+(tel:|sms:|facetime:|mailto:)' \
+printf '%s' "$CMD" | grep -E '^open[[:space:]]+(tel:|sms:|facetime:|mailto:)' >/dev/null \
   && human physical "places a call/message through a device app"
 
 # ── interactive credential flows ────────────────────────────────────────────────────────────────
-printf '%s' "$CMD" | grep -Eqi '(^|[[:space:]])(gcloud[[:space:]]+auth[[:space:]]+login|aws[[:space:]]+sso[[:space:]]+login|gh[[:space:]]+auth[[:space:]]+(login|refresh)|op[[:space:]]+signin|/login|claude[[:space:]]+/login)([[:space:]]|$)' \
+printf '%s' "$CMD" | grep -Ei '(^|[[:space:]])(gcloud[[:space:]]+auth[[:space:]]+login|aws[[:space:]]+sso[[:space:]]+login|gh[[:space:]]+auth[[:space:]]+(login|refresh)|op[[:space:]]+signin|/login|claude[[:space:]]+/login)([[:space:]]|$)' >/dev/null \
   && human login "an interactive credential flow — browser and/or a second factor"
 
 # ── A2 · script-body descent, and it runs BEFORE any refutation (A1) ────────────────────────────
@@ -205,7 +205,7 @@ if [ -x "$CC_OWNER" ]; then
 fi
 
 # ── refutation · opens a file the agent could simply read ───────────────────────────────────────
-printf '%s' "$HEAD_SEG" | grep -Eq '^(cursor|code|subl|vim|nano)[[:space:]]+[^[:space:]]+$' \
+printf '%s' "$HEAD_SEG" | grep -E '^(cursor|code|subl|vim|nano)[[:space:]]+[^[:space:]]+$' >/dev/null \
   && refuted readable "opens a file in an editor; the agent can read that file directly"
 
 unresolved no-lookup "no affirmation and no refutation reached this command"

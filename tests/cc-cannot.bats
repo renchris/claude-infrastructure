@@ -169,3 +169,23 @@ setup() {
   [ "$status" -eq 2 ]                       # the escape hatch is NOT covered by that receipt
   printf '%s' "$output" | grep -q "flag-divergence"
 }
+
+@test "no undrained early-exit consumer survives on a CONTINUATION line (the ratchet is blind here)" {
+  # THE RATCHET CANNOT SEE THESE LINES, which is why this pin exists rather than an allowlist row.
+  # pipefail-sigpipe-lint's qmask() "does not join CONTINUATION lines" (scripts/pipefail-sigpipe-lint.sh
+  # :532, a residual that file names and declines to widen). Measured 2026-09-17, one variable per
+  # fixture: `p | grep -Eq P && act` on ONE physical line IS reported, and the identical shape split
+  # across a `\` is NOT — so `&&` is not the blind axis, the continuation is.
+  #
+  # 0ea2ab91c drained the five sites the ratchet DID flag. Three more in this file were the same bug
+  # wearing a continuation: :136 (open tel:/sms:), :140 (interactive credential flows) and :208 (the
+  # editor refutation). Each gates an `&&` that fires a VERDICT, so under pipefail a match SIGPIPEs
+  # the producer and the guard fails OPEN exactly when it should speak — the polarity 0ea2ab91c names.
+  # (Line 174's `head -80 … | grep -Eom1` stays untouched: its rc dies in a command substitution, so
+  # no verdict can be corrupted. Drained vs not is about whether an rc is READ, not about the shape.)
+  local bad
+  bad="$(awk '/\\$/ { prev=$0; sub(/\\$/,"",prev); n=NR; if ((getline nxt) > 0) {
+                        j = prev " " nxt
+                        if (j ~ /\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q/) printf "%d: %s\n", n, prev } }' "$CC")"
+  [ -z "$bad" ] || { echo "undrained early-exit consumer hidden on a continuation line:"; echo "$bad"; false; }
+}
