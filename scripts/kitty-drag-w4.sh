@@ -420,32 +420,30 @@ teardown_windows() {
 }
 
 launch_sandbox() {
+    # ALWAYS relaunch, never reuse. Reuse was "re-run safe" while the process outlived its
+    # windows; with macos_quit_when_last_window_closed yes it no longer does, so the old
+    # reuse branch closed every window (ending the process) and then dialled a dead socket:
+    #   Failed to connect to unix:... connect: no such file or directory
+    # Relaunching also makes every run logging-armed by construction, which is the property
+    # the env guard used to police after the fact.
     if sandbox_alive; then
-        # A reused process keeps the environment it was LAUNCHED with, and no remote-control
-        # command can add one (0.48.2's kitten has no @ quit either). If it predates the press
-        # log, every press goes unrecorded and the gate reports PRESSES: NONE -- which reads as
-        # a finding about the BINDING when it is really a finding about the INSTRUMENT. Refuse
-        # rather than produce that run. pid via lsof on our own socket: no pattern, no census.
-        _kdw4_pid="$(lsof -t "$SOCK" 2>/dev/null | head -1 || true)"
-        # NOT \`grep -q\`: it exits early on a MATCH, SIGPIPEs tr, and under this script's
-        # pipefail the pipeline then reports FAILURE on success -- refusing the healthy sandbox.
-        if [ -n "$_kdw4_pid" ] && ! ps -Eww -p "$_kdw4_pid" -o command= 2>/dev/null | tr ' ' '\n' | grep '^KITTY_DRAG_LOG=' >/dev/null; then
-            die "the live sandbox on ${SOCK} (pid ${_kdw4_pid}) was launched WITHOUT
-         KITTY_DRAG_LOG, so no press can be logged and PRESSES: NONE would be
-         meaningless. End it and let this script launch a fresh one:
-             kill -9 ${_kdw4_pid} && ${BASH_SOURCE[0]} --watch-secs 420
-         -9 is required, not belt-and-braces: a kitty holding no windows never
-         processes SIGTERM, so a plain kill leaves it alive and this refusal repeats."
-        fi
-        say "  reusing the existing sandbox on ${SOCK} (re-run safe, logging armed)"
+        say "  ending the existing sandbox so the new one is fresh (and logging-armed)"
         kit close-window --match all >/dev/null 2>&1 || true
-        sleep 0.4
-        kit launch --type=os-window --cwd="$RUN_ROOT" \
-            sh -c "cat '${RUN_ROOT}/INSTRUCTIONS.txt'; exec \$SHELL" >/dev/null
-        command -v cc_log_pane_spawn >/dev/null 2>&1 && \
-            cc_log_pane_spawn os-window kitty "" "$RUN_ROOT" "kitty-drag-w4 sandbox reuse sock:${SOCK}" || true
-    else
-        [ -S "$SOCK" ] && rm -f "$SOCK"
+        _kdw4_i=0
+        while sandbox_alive; do
+            _kdw4_i=$((_kdw4_i + 1))
+            [ "$_kdw4_i" -ge 50 ] && break
+            sleep 0.2
+        done
+        if sandbox_alive; then
+            _kdw4_pid="$(lsof -t "$SOCK" 2>/dev/null | head -1 || true)"
+            die "the sandbox on ${SOCK} still answers after its last window closed.
+         It predates macos_quit_when_last_window_closed yes, so nothing short of a
+         signal ends it -- and a windowless kitty ignores SIGTERM:
+             kill -9 ${_kdw4_pid:-<pid>} && ${BASH_SOURCE[0]} --watch-secs 420"
+        fi
+    fi
+    [ -S "$SOCK" ] && rm -f "$SOCK"
         env -u KITTY_LISTEN_ON -u KITTY_PID -u KITTY_WINDOW_ID \
             KITTY_CONFIG_DIRECTORY="$CFG_DIR" KITTY_CACHE_DIRECTORY="$CACHE_DIR" \
             KITTY_DRAG_LOG="$PRESS_LOG" \
@@ -463,7 +461,6 @@ launch_sandbox() {
         unset _i
         sandbox_alive || die "the sandbox never came up on ${SOCK};
          see ${RUN_ROOT}/kitty.stderr"
-    fi
     # The second, stacked pane. hsplit gives a top/bottom pair, measured:
     # neighbors {'bottom':[2]} / {'top':[1]}.
     kit launch --location=hsplit --cwd="$RUN_ROOT" >/dev/null
