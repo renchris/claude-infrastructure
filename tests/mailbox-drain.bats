@@ -795,10 +795,35 @@ _gi_crumb_setup() {  # $1 = session id
 @test "MUTANT CONTROL: strip the relay and the fresh-crumb test stops seeing the advisory" {
   sid="deadbeef-0000-0000-0000-00000000ab04"
   _gi_crumb_setup "$sid"
-  cp "$DRAIN" "$BATS_TEST_TMPDIR/mutant.sh"
-  # isolated COPY, never the live hook — a live guardrail is not a test fixture
-  perl -0pi -e 's/YOUR \/goal WAS SKIPPED/XX MUTANT XX/' "$BATS_TEST_TMPDIR/mutant.sh"
-  run bash -c "printf '{\"session_id\":\"$sid\",\"transcript_path\":\"$GI_TP\"}' | bash '$BATS_TEST_TMPDIR/mutant.sh' prompt"
+  # PRODUCTION-SHAPED COPY (2026-09-17, backlog d54c9338c68f). The mutant is an isolated COPY, never
+  # the live hook — a live guardrail is not a test fixture — but a BARE copy into $BATS_TEST_TMPDIR
+  # severs the subject's own sibling resolution. hooks/mailbox-drain.sh:55-61 resolves its lib as
+  # $(dirname $0)/lib/..., then falls back to $CLAUDE_CONFIG_DIR, then $HOME. $HOME is hermetic here
+  # (see setup), so the ONLY candidate that could ever resolve was $CLAUDE_CONFIG_DIR — a var the
+  # launcher exports into every interactive session and the land gate does not carry. The copy
+  # therefore sourced nothing, took the hook's documented fail-safe `exit 0`, emitted NOTHING, and
+  # this case reported that as "the mutation was not applied".
+  #
+  # Measured one-variable, both arms: green with CLAUDE_CONFIG_DIR set, red with it unset — the same
+  # assertion and line the postland TAP names, RED in 7 consecutive postland windows across unrelated
+  # shas. Mirroring hooks/ so the PRIMARY (production) path resolves is the repo idiom:
+  # tests/desk-arm-live.bats:97, tests/cloud-venue-provision.bats:202.
+  #
+  # The lib is the REPO's, not the live layer's, so this case now exercises the tree under test.
+  mkdir -p "$BATS_TEST_TMPDIR/mutant-hooks"
+  ln -sfn "$REPO/hooks/lib" "$BATS_TEST_TMPDIR/mutant-hooks/lib"
+  MUT="$BATS_TEST_TMPDIR/mutant-hooks/mailbox-drain.sh"
+  cp "$DRAIN" "$MUT"
+  # PRECONDITIONS, asserted rather than assumed — a fixture that violates one produces EXACTLY the
+  # output a dead relay produces, which is what sent this red at the subject for three days.
+  [ -f "$BATS_TEST_TMPDIR/mutant-hooks/lib/mailbox-pending.sh" ] || false   # the copy can resolve
+  [ "$(grep -c 'YOUR /goal WAS SKIPPED' "$MUT")" -eq 1 ] || false           # the anchor is unique
+  perl -0pi -e 's/YOUR \/goal WAS SKIPPED/XX MUTANT XX/' "$MUT"
+  [ "$(grep -c 'XX MUTANT XX' "$MUT")" -eq 1 ] || false                     # the mutation applied
+  # env -u CLAUDE_CONFIG_DIR PINS the property: the copy must resolve through its OWN mirrored dir.
+  # Without this the ambient var silently rescues a severed fixture on an operator desk while the
+  # land gate reds — the split that made this failure unreadable from either side.
+  run env -u CLAUDE_CONFIG_DIR bash -c "printf '{\"session_id\":\"$sid\",\"transcript_path\":\"$GI_TP\"}' | bash '$MUT' prompt"
   [[ "$output" != *"YOUR /goal WAS SKIPPED"* ]] || false
   [[ "$output" == *"XX MUTANT XX"* ]] || false
 }
