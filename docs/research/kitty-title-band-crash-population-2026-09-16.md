@@ -108,9 +108,38 @@ symbols, including `_pyset_window_title_bar_render_data`. So a crash reproduced 
 symbolizes itself; one reproduced in the shipped build never will. (Offsets do NOT transfer
 between the two builds — do not map `+840952` onto a sandbox address.)
 
+## The tab count is a live variable — measured by a second session, 22:04
+
+claude-infrastructure-1 ran `scripts/checks/kitty-title-band-shim-verify.sh` unmodified (own
+stock instance, shim injected into the RUNNING instance, real drag): **12 passed, 0 failed, no
+crash, no new .ips**. So the falsifier filed on `bf6af099a712` — "run a sandbox kitty with the
+watcher installed and press the chord" — is INSUFFICIENT as written: that harness already does
+essentially that, and a session following it concludes the shim is fine.
+
+They then changed ONE variable, a second `new_tab` plus two panes: still no crash, but **5 passed
+/ 7 FAILED**, on `the bar did not draw once the shim was installed` and `the drag did not swap the
+panes`. So the shim behaves differently with more than one tab — it appears not to draw at all —
+and the single-tab harness is structurally blind to it.
+
+**That is the same null this note already records, from the other side.** The sandbox run above
+also did not crash, and it was ONE tab (`new_tab sbx` + two launches). Two independent single-tab
+probes agreeing on "no crash" are not two pieces of evidence when both hold the same variable
+fixed — the shape this repo files under `control-fixture-must-reach-the-bugs-regime`.
+
+**And the operator's kitty had TWO TABS when it died.** The unwatcher's own line says so:
+`uninstalled pid=73832 (unwatcher: restored stock set_geometry, relaid out 2 tab(s))`.
+
+Their variant harness: `…/bc7972f8-5b1d-413c-ba14-94258801db31/scratchpad/shim-2tab.sh`, log at
+`/tmp/claude-501/2tab.log` — both ephemeral, which is why the result is written down here.
+
+Also recorded by them, and load-bearing for anyone re-arming: **the chord is dark in TWO places**,
+not one — `config/kitty.conf`'s maps are commented AND `~/.config/kitty/drag-arm.d/drag.conf` has
+been 0 bytes since 20:16. A re-arm must handle both.
+
 ## Next experiment
 
-Re-run the harness with the sandbox window VISIBLE, several nested splits, and both halves of
-the chord driven at the sandbox socket. If it reproduces, the backtrace names the function and
+Re-run the harness with the sandbox window VISIBLE, **at least two tabs** (the one variable that
+has already produced a behavioural difference, and the shape the dead instance was in), several
+nested splits, and both halves of the chord driven at the sandbox socket. If it reproduces, the backtrace names the function and
 hypothesis 1/2/3 collapses to one. If it does not, the next variable is the drag path
 (`force_show_title_bars`), which is what makes the currently-live shim dangerous.
