@@ -999,7 +999,24 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   # token and the command that was the row's whole reason to exist was unrunnable for nearly half
   # of them. `checkout -B <branch> <ref>` recreates the branch from the pinned head; the plain
   # checkout is tried first so a branch that still exists (possibly ahead of the pin) is what lands.
-  cmd="cd ${land_root} && git fetch origin --quiet && { git checkout -q ${BRANCH} 2>/dev/null || git checkout -q -B ${BRANCH} ${ref:-${BRANCH}}; } && "'_tw="$(mktemp -d)/trunk" && git worktree add --detach "$_tw" origin/main >/dev/null && bash "$_tw/scripts/ship-land.sh"; _rc=$?; [ -n "${_tw:-}" ] && git worktree remove --force "$_tw" >/dev/null 2>&1; exit $_rc'
+  # AND IT MUST PUT THE CHECKOUT BACK (2026-09-17). land_root above is deliberately the DURABLE
+  # main checkout — and on this box that is the symlink SOURCE for ~/.claude. `checkout -B` there
+  # leaves HEAD carrying commits origin/main lacks, so `merge --ff-only` is arithmetically
+  # impossible and deploy-live dies DIVERGED for EVERY session on the machine, not just the one
+  # that ran the retry. Nothing puts it back on its own: deploy-live refuses BY CONTRACT (:2400,
+  # :2403, :2543 — "this lane never rebases or resets a shared checkout"), so the repair is a human
+  # who first has to work out why the live layer stopped moving. "Durable" and "safe to check a
+  # branch out in" are different properties and only the first was weighed.
+  # `_oh` is captured BEFORE the checkout and restored in the teardown beside `_tw`, guarded the
+  # same way and for the same reason. Three details are load-bearing:
+  #   · the capture ends `|| true` so an empty repo (both spellings fail) yields an EMPTY _oh and
+  #     exit 0 — without it the `&&` chain would stop and the retry would never run at all;
+  #   · symbolic-ref FIRST, rev-parse as the fallback, so a detached HEAD is restored detached;
+  #   · it is a `;` statement before `exit $_rc`, so a restore that cannot run (a tree the land
+  #     left dirty) costs nothing and can never overwrite the land's own exit code.
+  # shellcheck disable=SC2016  # the single quotes are the POINT — $_tw/$_rc/$_oh must survive
+  # unexpanded into the stored command and be evaluated by the shell that RUNS it, not by this one.
+  cmd="cd ${land_root} && "'_oh="$(git symbolic-ref -q --short HEAD 2>/dev/null || git rev-parse HEAD 2>/dev/null || true)" && git fetch origin --quiet && '"{ git checkout -q ${BRANCH} 2>/dev/null || git checkout -q -B ${BRANCH} ${ref:-${BRANCH}}; } && "'_tw="$(mktemp -d)/trunk" && git worktree add --detach "$_tw" origin/main >/dev/null && bash "$_tw/scripts/ship-land.sh"; _rc=$?; [ -n "${_tw:-}" ] && git worktree remove --force "$_tw" >/dev/null 2>&1; [ -n "${_oh:-}" ] && git checkout -q "$_oh" >/dev/null 2>&1; exit $_rc'
   # A FIXTURE pipeline must never file into the operator's live ledger — tests/ship-land.bats
   # drives ~50 of them, several deliberately non-zero. Same discipline as gate_home_setup's
   # bats detection, and `on` forces it so the suite can prove the real thing against its own

@@ -3197,6 +3197,46 @@ _reland_run_of() { # <backlog-store> → the filed row's --run command
   git rev-parse -q --verify feat/reland-gone >/dev/null    # recreated from the pinned ref
 }
 
+# ── the stored command must not PARK the shared checkout on the branch (2026-09-17) ─────────────
+# land_root is deliberately the DURABLE main checkout (ship-land.sh:945-957), and on this box that
+# is the symlink SOURCE for ~/.claude. `git checkout -B <branch>` there leaves HEAD carrying
+# commits origin/main lacks, so `merge --ff-only` is arithmetically impossible and deploy-live dies
+# DIVERGED for EVERY session on the machine — not just the one that ran the retry. Nothing in the
+# tree puts it back: deploy-live refuses BY CONTRACT ("this lane never rebases or resets a shared
+# checkout", :2400/:2403/:2543), so the repair is a human. The durability decision is correct and
+# is NOT what this pins; what it pins is that "durable" and "safe to check a branch out in" are
+# different properties. RED pre-fix: HEAD is left on the fire branch.
+@test "P4 inbox: the re-land command RESTORES the checkout's HEAD — never parks it on the branch" {
+  git checkout -q main
+  mkdir -p scripts
+  printf '#!/usr/bin/env bash\necho RAN-TRUNK-BYTES\n' > scripts/ship-land.sh
+  chmod +x scripts/ship-land.sh
+  git add -A && git commit -q -m "chore: trunk pipeline"
+  git push -q origin main
+
+  git checkout -q -b feat/reland-park main
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad6.sh    # SC2164 → the land fails, rc 6
+  git add -A && git commit -q -m "feat: bad6"
+
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_FILE="$BATS_TEST_TMPDIR/backlog.jsonl" \
+      bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  cmd="$(_reland_run_of "$BATS_TEST_TMPDIR/backlog.jsonl")"
+  [ -n "$cmd" ] && [ "$cmd" != null ] || false
+
+  # The operator's checkout sits on main, as it does between lands.
+  git checkout -q main
+  [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || false
+
+  run bash -c "$cmd"
+  printf '%s' "$output" | grep -q 'RAN-TRUNK-BYTES'   # the retry really ran, so the check below has a subject
+
+  # THE ASSERTION: HEAD is back where it was. Pre-fix it is `feat/reland-park`, and a checkout
+  # carrying that branch's commits cannot fast-forward — the fleet's live layer is frozen.
+  [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || false
+  [ -z "$(git cherry origin/main HEAD)" ] || false
+}
+
 # ── a cc-backlog that predates `add --run` must still get the row (2026-09-06) ────────────────────
 # The producer's first day: this tree's ship-land ran against a LIVE cc-backlog that refused
 # `add --run` (exit 2, no id) — and a failed land that files nothing is the silent version of the
