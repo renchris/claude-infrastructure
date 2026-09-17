@@ -33,6 +33,20 @@
 # the binding in ~3s with no restart, because the reload rebuilds opts.mousemap from a fresh
 # empty dict (§ 2.2).
 #
+# 🚨 DO NOT PUT `window_title_bar_min_windows` IN THE LIVE DROP-IN. It was added there ad-hoc on
+# 2026-09-16 (never from this file) to force a grabbable bar, and because this drop-in is
+# globincluded LAST it silently made the ⌘⇧B toggle's OFF half UNREACHABLE: that half loads
+# kitty.conf, whose final directive is the globinclude, which re-pinned the option on every load.
+# The chord flipped its state file honestly and the bar never moved — measured, pane rows stayed
+# 47 across three presses while `-o window_title_bar_min_windows=0` moved them to 48, which is how
+# the pin was found. The operator then saw TWO titles: that pinned always-on bar, and the graphics
+# overlay drawn at row 1 of the content area just beneath it.
+# The general rule, which outlives this instance: a LAST-WINS drop-in is the wrong home for any
+# option something else toggles — it does not merely set a default, it makes the other value
+# unreachable, and the toggle reports success the whole time. Put a toggled option where the
+# toggle owns it (kitty.conf for the resting value, config/kitty-title-on.conf for the raised
+# one); keep this drop-in for bindings, which nothing else flips.
+#
 # ── THE ARMING LINE — COMMENTED OUT, AND THE CHORD IS A PLACEHOLDER ─────────────────────────
 # 🚨 THE CHORD IS NOT CHOSEN YET. W4 is the hand-driven gate where the operator picks it, and it
 # has not been run. `<CHORD>` below is a placeholder, NOT a default — do not guess one, and do

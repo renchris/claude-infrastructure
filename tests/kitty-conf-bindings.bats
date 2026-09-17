@@ -150,16 +150,22 @@ band_disarmed()  { grep -q '^# DISARMED-map cmd+' "$CONF"; }
     echo "$output" | grep -qE '^cmd_shift_b_n=0$' || {
       echo "⌘⇧B is STILL BOUND while it is marked disarmed"; echo "$output"; false; }
   else
-    [ "$(glance_key "$output")" = cmd_shift_b_last ] || {
-      echo "⌘⇧B is not the styled glance — the operator asked for our font on this chord"; echo "$output"; false; }
+    # 🚨 TRADED 2026-09-16 22:45 BY OPERATOR RULING — and this is the block the comment above
+    # predicted would need editing. His words: "Ensure we have ONE title that is draggable with
+    # click, and togglable with command+shift+b." The styled glance cannot BE that title: a
+    # graphics placement is in no hit-test path and can never be dragged. So ⌘⇧B now carries the
+    # REAL bar, and our font on this chord was given up on purpose. The previous expectation is
+    # kept here as the record of what was believed:
+    #     [ "$(glance_key "$output")" = cmd_shift_b_last ]   # ⌘⇧B was the styled glance
+    [ "$(real_bar_key "$output")" = cmd_shift_b_last ] || {
+      echo "⌘⇧B is not the real draggable bar — the 22:45 ruling put the ONE title on this chord"
+      echo "$output"; false; }
   fi
-  if chord_disarmed opt; then
-    echo "$output" | grep -qE '^cmd_opt_b_n=0$' || {
-      echo "⌘⌥B is STILL BOUND while it is marked disarmed"; echo "$output"; false; }
-  else
-    [ "$(real_bar_key "$output")" = cmd_opt_b_last ] || {
-      echo "⌘⌥B is not the real draggable bar"; echo "$output"; false; }
-  fi
+  # ⌘⌥B is RETIRED by the same ruling: one title, one chord, no second mechanism reachable.
+  # Previously: [ "$(real_bar_key "$output")" = cmd_opt_b_last ]   # ⌘⌥B was the real bar
+  echo "$output" | grep -qE '^cmd_opt_b_n=0$' || {
+    echo "⌘⌥B is still bound — the 22:45 ruling retired it so two titles cannot coexist"
+    echo "$output"; false; }
 }
 
 @test "cmd+d splits vertically (pane to the RIGHT, iTerm2 Split Vertically)" {
@@ -251,15 +257,13 @@ band_disarmed()  { grep -q '^# DISARMED-map cmd+' "$CONF"; }
 @test "cmd+shift+b is the ONE bar — overlay cleared, then the real draggable bars" {
   run probe "$CONF"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  if chord_disarmed opt; then
-    # ⌘⌥B is the real-bar chord and it is down, so NOTHING may reach the real bars — that is the
-    # whole point of leaving this one disarmed while ⌘⇧B is back. The armed assertion below is
-    # the record of what this guard demands once the band ships as the patch, not the shim.
-    [ -z "$(real_bar_key "$output")" ] || {
-      echo "a chord STILL reaches the real title bars while ⌘⌥B is disarmed"
-      echo "$output"; false; }
-    return 0
-  fi
+  # 🚨 THE ⌘⌥B EARLY-RETURN IS RETIRED, 2026-09-16 22:45. It read:
+  #     if chord_disarmed opt; then [ -z "$(real_bar_key "$output")" ] || fail; return 0; fi
+  # i.e. "⌘⌥B is THE real-bar chord, so while it is down nothing may reach real bars". That was
+  # true only while the real bar lived on ⌘⌥B. The operator's ruling moved the ONE draggable
+  # title onto ⌘⇧B and retired ⌘⌥B, so a disarmed ⌘⌥B now says nothing about whether real bars
+  # are reachable — and left in place it FAILED the very state the ruling requires, which is how
+  # it was found. Kept as a comment because it is the record of the previous assignment.
   local key; key="$(real_bar_key "$output")"
   [ -n "$key" ] || { echo "NO chord reaches the real title bars — drag-to-reorder is gone entirely"; echo "$output"; false; }
   local last; last="$(echo "$output" | grep -E "^${key}=" | head -1)"
@@ -638,9 +642,16 @@ PYEOF
       echo "$output"; false; }
     return 0
   fi
-  [ -n "$(glance_key "$output")" ] || {
-    echo "⌘⌥B is no longer the zero-shift overlay — the styled glance is gone"
+  # 🚨 INVERTED 2026-09-16 22:45: the styled glance is RETIRED, deliberately. It was the price of
+  # "one draggable title", because a graphics placement can never be dragged and a second label
+  # under the real bar is exactly the "two titles" the operator reported. The original
+  # expectation is kept as the record of what was believed:
+  #     [ -n "$(glance_key "$output")" ]   # a glance chord had to still exist
+  [ -z "$(glance_key "$output")" ] || {
+    echo "a glance chord is STILL bound — the 22:45 ruling retired the overlay chord entirely,"
+    echo "and a second title on screen is the defect it was ruled out to prevent."
     echo "$output"; false; }
+  return 0
   # and this chord must NOT reach the built-in: that is the row-stealing jitter the overlay
   # exists to avoid, and it now has its own chord.
   if echo "$output" | grep -qE "^$(glance_key "$output")=.*toggle_window_title_bars$"; then

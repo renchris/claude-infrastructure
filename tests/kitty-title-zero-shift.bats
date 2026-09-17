@@ -164,9 +164,19 @@ chord_disarmed() { grep -q "^# DISARMED-map cmd+$1+b" "$OFF"; }
 # ⌘⌥B the real bars. The clear-before-draw ordering this case guards therefore lives on ⌘⇧B now.
 # The invariant is unchanged and is still the double-title trap: clear the real bars BEFORE the
 # overlay paints, or a strip is drawn under a bar that is about to be raised over it.
-@test "cmd+shift+b clears the REAL bars before drawing the overlay" {
-  # The bars now PERSIST, so the reverse order is a standing double-title trap rather than the
-  # accident it used to be. ⌘⇧B already guards the other direction; this is its mirror.
+@test "cmd+shift+b clears the OVERLAY before toggling the real draggable bars" {
+  # 🚨 THE ORDER IS INVERTED, 2026-09-16 22:45, BY OPERATOR RULING. This case used to demand
+  # `kitty-pane-title-toggle.sh off` BEFORE the overlay call — real bars down, then draw the
+  # picture — which is the assignment the ruling retired. Its original body is kept verbatim in
+  # the comment below as the record of what was believed:
+  #     case "$line" in *kitty-pane-title-toggle.sh\ off*) ;; *) false ;; esac
+  #     [ "${line%%kitty-pane-title-overlay.py*}" != "$line" ] || false
+  #     case "${line%%kitty-pane-title-overlay.py*}" in *kitty-pane-title-toggle.sh\ off*) ;; *) false ;; esac
+  # The DOUBLE-TITLE TRAP IT GUARDS IS REAL AND UNCHANGED — only its direction moved. The overlay
+  # must be cleared FIRST, so a stray placement left by an older binding or a sibling session can
+  # never stack a second, undraggable label under the real bar. That stacking is exactly what the
+  # operator reported: "an always on draggable title on the top and a togglable from command
+  # shift b that is undraggable on the bottom".
   local line
   line="$(grep -E '^map[[:space:]]+cmd\+shift\+b([[:space:]]|$)' "$OFF" | tail -1)"
   if chord_disarmed shift; then
@@ -176,12 +186,14 @@ chord_disarmed() { grep -q "^# DISARMED-map cmd+$1+b" "$OFF"; }
     return 0
   fi
   [ -n "$line" ] || false
-  case "$line" in *kitty-pane-title-toggle.sh\ off*) ;; *) false ;; esac
-  # ORDER matters, so assert on the prefix that precedes the overlay call rather than on the
-  # whole line: clearing AFTER the toggle would wipe a strip the overlay's hold loop just drew.
-  [ "${line%%kitty-pane-title-overlay.py*}" != "$line" ] || false
-  local before_overlay="${line%%kitty-pane-title-overlay.py*}"
-  case "$before_overlay" in *kitty-pane-title-toggle.sh\ off*) ;; *) false ;; esac
+  # the chord must clear the overlay at all
+  case "$line" in *kitty-pane-title-overlay.py\ off*) ;; *) false ;; esac
+  # ORDER matters, so assert on the prefix that precedes the real-bar toggle: clearing the
+  # overlay AFTER raising the bar leaves the stacked second label visible in between, and a
+  # placement that survives the relayout leaves it visible for good.
+  [ "${line%%kitty-pane-title-toggle.sh*}" != "$line" ] || false
+  local before_toggle="${line%%kitty-pane-title-toggle.sh*}"
+  case "$before_toggle" in *kitty-pane-title-overlay.py\ off*) ;; *) false ;; esac
 }
 
 @test "the toggle script exists, is executable, and rejects an unknown argument" {
