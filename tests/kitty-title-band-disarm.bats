@@ -107,6 +107,12 @@ run_install() {  # $1 = KCONF to present
   grep -q '^# DISARMED-map cmd+' "$CONF" || skip "band is armed — nothing to check"
   grep -q 'kitty-2026-09-16-201349.ips' "$CONF" || { echo "the disarm does not name the crash report"; false; }
   grep -qE 'EXC_BAD_ACCESS|SIGSEGV' "$CONF" || { echo "the disarm does not name the fault"; false; }
+  # NOT a count of 2. The disarm is per-chord and a PARTIAL state is legitimate: 5252bd28b
+  # re-armed ⌘⇧B, which only turns real bars OFF and toggles the overlay, while deliberately
+  # leaving ⌘⌥B down because it is the chord that sets window_title_bar_min_windows 1 — the only
+  # state in which the shim's faulting branch runs. What must hold is that whatever IS disarmed
+  # carries its reason; which chords those are is a live judgment recorded in the config itself,
+  # not something this suite should freeze.
   n="$(grep -c '^# DISARMED-map cmd+' "$CONF")" || true
-  [ "${n:-0}" -eq 2 ] || { echo "expected BOTH chords disarmed, found ${n:-0}"; false; }
+  [ "${n:-0}" -ge 1 ] || { echo "no chord is disarmed, but the receipt block is present"; false; }
 }

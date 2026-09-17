@@ -52,7 +52,9 @@ last_directive() { grep -E "^[[:space:]]*$2([[:space:]]|$)" "$1" | tail -1 | sed
 # `^map cmd+shift+b`, which the prefix removes — the cure deleting what the acceptance criteria
 # demanded. INVERTED IN PLACE, never deleted: while the disarm holds each asserts the chord is
 # UNBOUND, and the armed assertion is kept verbatim in the other arm for when it is lifted.
-band_disarmed() { grep -q '^# DISARMED-map cmd+' "$OFF"; }
+# PER CHORD: 5252bd28b re-armed ⌘⇧B alone and left ⌘⌥B down deliberately, so a band-wide
+# predicate calls a legitimate state a failure. These two cases are about ⌘⇧B specifically.
+chord_disarmed() { grep -q "^# DISARMED-map cmd+$1+b" "$OFF"; }
 
 # REFUTED IN PLACE 2026-09-16 by a49280bd9, kept as the record of what was believed.
 # This case demanded top == 22.5 (one cell), the reservoir the ON-half config swap handed back.
@@ -137,8 +139,8 @@ band_disarmed() { grep -q '^# DISARMED-map cmd+' "$OFF"; }
 @test "cmd+shift+b runs the toggle script and NOT the bare built-in action" {
   local line
   line="$(grep -E '^map[[:space:]]+cmd\+shift\+b([[:space:]]|$)' "$OFF" | tail -1)"
-  if band_disarmed; then
-    # DISARMED: the chord must reach NOTHING. An empty match is the pass, not the failure.
+  if chord_disarmed shift; then
+    # ⌘⇧B is down: it must reach NOTHING. An empty match is the pass, not the failure.
     [ -z "$line" ] || { echo "⌘⇧B is still bound while the band is disarmed: $line"; false; }
     return 0
   fi
@@ -158,9 +160,9 @@ band_disarmed() { grep -q '^# DISARMED-map cmd+' "$OFF"; }
   # accident it used to be. ⌘⇧B already guards the other direction; this is its mirror.
   local line
   line="$(grep -E '^map[[:space:]]+cmd\+shift\+b([[:space:]]|$)' "$OFF" | tail -1)"
-  if band_disarmed; then
-    # No chord, no ordering to guard. The double-title trap this case exists for is unreachable
-    # while nothing raises the bars; the assertion below returns when the prefixes come off.
+  if chord_disarmed shift; then
+    # ⌘⇧B is down, so there is no ordering to guard. The double-title trap this case exists for
+    # is unreachable; the assertion below returns the moment the prefix comes off.
     [ -z "$line" ] || { echo "⌘⇧B is still bound while the band is disarmed: $line"; false; }
     return 0
   fi
