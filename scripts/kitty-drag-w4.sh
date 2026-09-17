@@ -605,6 +605,17 @@ print_verdict() {
         say "  ▶ Run this:"
         say ""
         say "  \`open ${SHOT_DIR}\`"
+    elif [ "$DO_SHOTS" = 1 ] && [ "$VERDICT_ONLY" = 1 ]; then
+        # --verdict NEVER shoots -- it only re-reads the pane graph. Reporting that absence as
+        # a Screen Recording permission fault names a cause this mode cannot have, and sends
+        # the operator into System Settings over a frame nobody asked for.
+        say "  Q10 : NOT MEASURED IN THIS MODE -- --verdict re-reads the pane graph only."
+        say "        Frames are captured by the armed run and by the watch, not here."
+        if [ -d "$SHOT_DIR" ] && [ -n "$(find "$SHOT_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+            say "        Frames from this run dir are already on disk:"
+            say ""
+            say "  \`open ${SHOT_DIR}\`"
+        fi
     elif [ "$DO_SHOTS" = 1 ]; then
         say "  Q10 : NO FRAMES CAPTURED -- /usr/sbin/screencapture produced nothing."
         say "        On macOS that is Screen Recording permission, not a bug here:"
@@ -720,10 +731,21 @@ python3 "$GRAPH_PY" snapshot --ls "$BEFORE" --out "${RUN_ROOT}/before.graph.json
     | sed 's/^/  /'
 
 if [ "$ARM_ONLY" = 1 ]; then
+    # RAISE IT. The sandbox is a separate OS window, and a detached launch can land it
+    # behind everything else -- measured 2026-09-16, the operator answered "I dont know
+    # this sandbox pane you talk of" while it sat unfocused with its instructions on
+    # screen. A gate whose subject the operator cannot find has not been armed, it has
+    # been hidden. Focus is stolen only here, where the operator just asked for it.
+    kit focus-window --match "cwd:${RUN_ROOT}" >/dev/null 2>&1 || \
+        warn "could not raise the sandbox window; find it by its title: ${RUN_ROOT}"
     say ""
-    say "  ARMED and detached. Do the gesture whenever you like -- nothing is holding a"
-    say "  foreground watch, so no timeout, recycle or closed shell can cost you the run."
-    say "  When you have pressed, read the answer with:"
+    say "  ARMED and detached, and the sandbox window has been brought to the front."
+    say "  LOOK FOR: a SEPARATE kitty window -- not one of your panes -- with two stacked"
+    say "  panes, both titled '${RUN_ROOT}', showing a 'W4 OPERATOR GATE' banner that"
+    say "  lists the six chords. Drag the BOTTOM pane onto the TOP one."
+    say ""
+    say "  Nothing is holding a foreground watch, so no timeout, recycle or closed shell"
+    say "  can cost you the run. When you have pressed, read the answer with:"
     say ""
     say "      ${BASH_SOURCE[0]} --verdict"
     say ""
