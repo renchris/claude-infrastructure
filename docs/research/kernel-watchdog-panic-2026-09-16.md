@@ -530,6 +530,19 @@ post-panic **replay quarantine** (`docs/plans/KPANIC_DEFENSE_2026-09-16.md`), ai
 a crashed session is auto-resumed carrying a brief that still names the fatal command as a required
 gate. Neither change touches the other's code.
 
+**Ownership, as of 2026-09-16 18:00 — read this before editing the sentinel.** That session has
+taken `scripts/compressor-sentinel.sh` for the follow-on work and asked, reasonably, that nothing
+else write to it without a ping, so that one function never has two writers. It is building, on top
+of the fix landed here: the **wrapper-parent residual** (depth-2 ancestry, so the parent-breaker
+reaches the ThreadPool python through a 1:1 wrapper — § 6.5 above is the evidence it is real), a
+**first-trip action** rung, a **per-process footprint ceiling independent of the burst census** (the
+right answer to the `ps`-RSS blindness named in § 6.4), and the **custody-only SIGKILL constraint at
+the cliff**. Separately: the post-panic **replay quarantine**, and a root LaunchDaemon stamping fatal
+per-process footprint limits. Its companion record is
+`docs/research/panic-2026-09-16-clang-format-swarm.md` — committed on its branch and **not yet on
+trunk at the time this line was written**, so a reader who cannot find it should look for the
+landing rather than conclude it does not exist.
+
 Its note contributes one residual that this diff does **not** close, recorded here rather than
 silently inherited:
 
