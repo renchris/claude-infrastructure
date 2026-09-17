@@ -176,7 +176,7 @@ Ordered by (harm prevented ÷ size). G3 first because it is what made the rest i
 | id | Task | Depends on | Outcome |
 |----|------|-----------|---------|
 | T13 | G3: `cc-notify --role` non-zero on dead target + sweep records `channel:"dead-target"` | — |
-| T14 | G1: FF-GATE arm denying `git commit` in the shared checkout, with a named escape hatch | — |
+| T14 | G1: FF-GATE arm denying `git commit` in the shared checkout, with a named escape hatch | — | **DONE** — landed `6cc03fc19`, live and verified end-to-end against `~/.claude/hooks/validate-bash.sh`. The row sat needs-human at conviction 80 on "a blanket deny WILL break the desk"; that is REFUTED, by measurement rather than argument. It conflated the shell's STARTING cwd with the directory the commit ACTS in — `_ffg_scan` already tracks a governing `cd`, shipped and tested for the advance arm, so `cd <worktree> && git commit` resolves to the worktree and is untouched (case 14, which states that if it ever reds the objection has become true and the arm must be reconsidered, not patched). And the innocent population is not small but EMPTY: all 63 reflog commits over 36 days are ordinary dev work (23 fix / 18 docs / 11 feat / 5 test / 2 perf / 1 wip / 1 revert / 1 chore), zero machine-, desk- or bus-authored. Nested subprocess commits (`bin/cc-bus`) never reach a PreToolUse hook, so they are out of scope by construction, not by exemption. Escape hatch `CC_SHARED_COMMIT_GATE=off` is house-standard and PER-ARM (case 17). |
 | T15 | G2: edge-trigger converge from `post_release_finish()`, guarded on `git cherry` empty | — | **DONE** — `tests/ship-land-converge-edge.bats`, 9/9 green with the diff and 9/9 red on pristine trunk. ONE REFINEMENT AGAINST THE SPEC, and it decides whether the guard works at all: the predicate is read with `git -C $DEPLOY_REPO`, **never in the lander's own worktree**. `merge --ff-only` compares ANCESTRY in the SHARED CHECKOUT, so that checkout is the only repo whose divergence can block the advance; the lander's HEAD is by construction ahead of its own origin at this point (it is what just landed), so reading `git cherry` there would answer a different question and skip every time. Case 6 pins exactly that. Failure direction is deliberate — a stale ref, an unreadable repo, `core.bare=true`, or no git at all each yield non-empty output or a non-zero rc, and every one of them SKIPS while the 600 s timer still converges. Concurrency needed no new lock: `deploy-live.sh:180` already records that the non-timer path can overlap a host phase and that the overlap "costs load, not correctness". Kill switch `SHIP_LAND_CONVERGE=off`. |
 | T16 | G4: overlay daemon self-retire on source-sha change, gated on `not st["on"]` | — |
 | T17 | Re-mint `/tmp/resident-reload-flip.sh` for packet `4194644aea26` | — |
@@ -184,6 +184,17 @@ Ordered by (harm prevented ÷ size). G3 first because it is what made the rest i
 ## Record
 
 - 2026-09-17 created. Wave A1-A10 dispatched; 9 reported, T4 (gate-green) outstanding.
+- 2026-09-17 T14 (G1) landed and live. See the Outcome column: the filed blocker was refuted by
+  measuring the population rather than by arguing about the desk.
+- 2026-09-17 A BLOCKER FOUND ON THE WAY TO T15, and it belonged to nobody. `tests/cc-reaper.bats`
+  case "garbage --reap: exactly the residue dies" fails IDENTICALLY on a pristine trunk with no
+  diff at all, while ship-land attributes it by REACHABILITY to any land touching `ship-land.sh` —
+  it convicted three. Root cause, predicted then measured: the fixture pins its closed world at
+  pids `900NN` and justifies it in a COMMENT ("9xxxx pids never exist on the host"), but pids are
+  a shared namespace that WRAPS and 90006 is a live CoreRecents daemon, so the escalation's real
+  `kill -0` found it and logged a KILL (`KILLSET=[90006 <GSPID>]`). Nothing real was signalled —
+  the kill is stubbed on that path. Cured by completing the fixture seam at the one call site that
+  missed it, production byte-identical; suite 223/0.
 - 2026-09-17 T15 (G2) landed. The edge trigger closes the 40.1%-by-hand figure at its source: every
   land that leaves the shared checkout fast-forwardable now kicks the degraded-tier converge
   itself, so the clock becomes the backstop rather than the mover. What it deliberately does NOT
