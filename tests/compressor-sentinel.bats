@@ -2119,3 +2119,82 @@ PSEOF
   run env bash -c '. "$1"; select_stop_targets "$2" "$3" 102400 200' _ "$D/lib.sh" "$D/exe" " 1 2 " < "$D/rows.nb"
   [ "$(echo "$output" | wc -l | tr -d ' ')" = "3" ] || false
 }
+
+@test "END TO END 2026-09-16: the whole actuator path reaches the clang-format storm and its spawner" {
+  # THE INTEGRATION CLAIM THE UNIT CASES DO NOT MAKE. §5d proves the SELECTOR selects the ten rows
+  # when handed a roster; it says nothing about whether the daemon, driving itself, ever gets there.
+  # That path has four gates in series and each can silently empty the set: the census must have
+  # taken a baseline (no baseline ⇒ the generic arm stands down), the storm must be NEW against it,
+  # the path-protection flag must not forbid it, and the parent-breaker must then attribute it. This
+  # case runs all four in one daemon, against the real 2026-09-16 shape.
+  #
+  # THE FIXTURE IS TICK-AWARE, which is what makes the newness gate real rather than assumed: the
+  # box is quiet for two ticks so a census records a PRE-STORM roster, and only then does the storm
+  # appear — exactly the ordering of the incident, where the census ran at 20:45:57 and autoformat
+  # started at 20:46:07. A static fixture cannot express it: the storm would be in the very roster
+  # that is supposed to predate it, and the case would pass for the wrong reason.
+  mkstubs "$(printf '800000\n800000\n2600000\n2600000')" 0 0
+
+  CF='/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang-format'
+  PY='/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python'
+  # Impossible pids, as §5b does: nothing on this machine can be signalled by this test, so the
+  # verdict is read from the actuator's own INTENT and attribution lines, never from a delivered
+  # signal. `SIGSTOPped 0` is therefore the EXPECTED tail and is not what is being asserted.
+  : > "$D/pre.census"; : > "$D/pre.act"; : > "$D/storm.census"; : > "$D/storm.act"
+  # THE PRE-STORM POPULATION MUST CONTAIN SOMETHING OVER THE ACTUATOR FLOOR, and the first draft of
+  # this case did not — so the census roster came back EMPTY, the no-baseline guard fired, and the
+  # generic arm correctly stood down. That read as the fix failing when it was the fixture failing.
+  # A long-running editor over the floor is both realistic (the live box had 87 such processes) and
+  # load-bearing: it is on the roster, so it is NOT new, so sparing it is the assertion that
+  # separates "selected the storm" from "selected everything above the floor".
+  printf '999790 1 900000 /Applications/Cursor.app/Contents/MacOS/Cursor\n999800 1 40000 /bin/zsh\n999801 999800 32768 %s\n' "$PY" > "$D/pre.census"
+  printf '999790 1 900000 /Applications/Cursor.app/Contents/MacOS/Cursor\n999800 1 40000 /bin/zsh -l\n999801 999800 32768 python3 ./autoformat\n' > "$D/pre.act"
+  cp "$D/pre.census" "$D/storm.census"; cp "$D/pre.act" "$D/storm.act"
+  for p in 999810 999811 999812 999813 999814 999815 999816 999817 999818 999819; do
+    printf '%s 999801 900000 %s\n' "$p" "$CF" >> "$D/storm.census"
+    printf '%s 999801 900000 clang-format --style=file:.clang-format --assume-filename=/x/dependencies/simde/x86/avx512.h\n' "$p" >> "$D/storm.act"
+  done
+
+  cat > "$STUB/ps" <<'SH'
+#!/bin/bash
+# TICKF is bumped once per tick by the sysctl stub, so it reads N-1 during tick N. The storm
+# arrives at tick 3, AFTER the census at tick 2 has recorded the quiet population.
+# THE THRESHOLD IS 3, AND IT WAS MEASURED, NOT REASONED. The tick file is bumped by the sysctl
+# stub BEFORE the census reads ps, so it already reads 2 on the census tick — a stub switching at
+# >=2 hands the census the storm itself, the ten pids land on the roster, and they are then never
+# "new". That produced a perfect cohort_n=0: the fix looking broken because the fixture had quietly
+# removed the one condition it exists to test. Traced: comm at 2 (census), comm+args at 3 (trip).
+if [ "$(cat "$TICKF")" -ge 3 ]; then P="$STORM_CENSUS"; A="$STORM_ACT"; else P="$PRE_CENSUS"; A="$PRE_ACT"; fi
+case "$*" in
+  *"pid=,ppid=,rss=,pcpu=,args="*) cat "$A" 2>/dev/null ;;
+  *"pid=,ppid=,rss=,args="*)       cat "$A" 2>/dev/null ;;
+  *"pid=,ppid=,rss=,comm="*)       cat "$P" 2>/dev/null ;;
+  *) echo "stub-ps $*" ;;
+esac
+SH
+  chmod +x "$STUB/ps"
+  export PRE_CENSUS="$D/pre.census" PRE_ACT="$D/pre.act" \
+         STORM_CENSUS="$D/storm.census" STORM_ACT="$D/storm.act"
+
+  # ACT=observe, NOT stop, and it is the stronger choice rather than the timid one. Observe runs the
+  # ENTIRE selection and attribution path and signals nothing, so every process the actuator would
+  # touch is NAMED in the log. Under ACT=stop the per-target lines are written only after a
+  # successful kill(2), and these are deliberately impossible pids, so the naming would be
+  # unreachable and the case could only ever assert a summary count.
+  CENSUS_EVERY=2 ACT=observe run_daemon 4
+
+  # 1. THE COHORT IS THE STORM. Ten, not zero — the twelve real trips printed cohort_n=0.
+  grep -qE 'actuator: INTENT WOULD-STOP cohort_n=10 ' "$SNAPLOG" || false
+  [ "$(grep -c 'WOULD-STOP pid=9998' "$SNAPLOG")" -ge 10 ] || false
+  # 2. THE SPAWNER IS ATTRIBUTED BY NAME. The parent-breaker needs a non-empty cohort to count
+  #    against; on the day it printed "no eligible parent owns >= 3 of the 0 selected burst procs".
+  grep -qE 'parent-break .* 1 spawner\(s\), each owning >= 3 of the 10 selected burst procs' "$SNAPLOG" || false
+  grep -qF 'WOULD-STOP parent pid=999801 kids=10 comm=Python' "$SNAPLOG" || false
+  # 3. THE PRE-STORM POPULATION IS SPARED. The shell that launched it was over no floor and is not
+  #    new; asserting its ABSENCE is what separates "selected the storm" from "selected everything".
+  ! grep -q 'pid=999800 ' "$SNAPLOG" || false
+  # 4. AND THE LONG-RUNNING EDITOR IS SPARED THOUGH IT IS 900 MB AND UNPROTECTED BY PATH. The only
+  #    thing keeping it out is that the census saw it a tick earlier. This is the newness gate, and
+  #    it is the whole safety argument for selecting on anything other than one executable name.
+  ! grep -q 'pid=999790 ' "$SNAPLOG" || false
+}
