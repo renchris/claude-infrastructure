@@ -7,9 +7,11 @@ owner: W2 — dispatched cloud session claude/fire-20260910T213003Z-71267-1
 
 Opened 2026-09-09 from an operator ask in session `d79f408b`.
 
-**Status: RESEARCH CAPTURED (W0) · DESIGN CAPTURED (W1, § W1 — Fable 5.1 discovery) · W2
-IMPLEMENTED except D4 (2026-09-10, § W2 status) · W3 CAPTURED.** The one remaining item is **T9 /
-W2-0**, a live probe that can only run on-box; it gates D4 and nothing else.
+**Status: RESEARCH CAPTURED (W0) · DESIGN CAPTURED (W1) · W2 IMPLEMENTED except D4 (2026-09-10) ·
+W3 CAPTURED (2026-09-09) and W3's recommendations now DISPOSED (2026-09-17, § W4): R1 landed,
+R2 landed, R3 filed as the operator's decision, R4 closed REJECT.** Two items remain and neither
+is agent-drivable: **T9 / W2-0**, the live probe that gates D4, and **T12 / R3**, a value call.
+Nothing else in this plan is open.
 
 ⚠️ The line this replaces read *"implementation NOT started"*, which was true on 2026-09-09 and
 false a day later. It is kept here rather than deleted because it is the record of what was
@@ -55,6 +57,10 @@ Nothing here may be held in a context window.
 | T5 | Fable 5.1 discovery pass on 100th-pct design | **DONE** | W1 | § W1 — six answers, design D1–D7, rejected R1–R8, W2 table, § W1.4 |
 | T6 | Implement the design via Agent Teams | **MOSTLY DONE** | W2 | D1·D2·D3·D5-probe·D6·D7 landed off-box; see § W2 status. Remaining: **W2-0** (a live probe, on-box only) and **D4/W2-C's arm hook**, which W2-0 gates. Its own row below |
 | T7 | Investigate the ladder as CLAUDE.md default | **DONE** | W3 | § W3 — six answers, proposed diff, R1-R4 |
+| T10 | **W3-R1 — land the § Frontier Tier Routing diff** | **DONE 2026-09-17** | W4 (on-box) | `c50a363b1`. Landed into `CLAUDE.global.md` (NOT a root `CLAUDE.md` — § W4 corrects the plan's own instruction) + the two companion skill sentences. Written AS-BUILT: R2 landed first, so the paragraph states the bound that exists rather than the one proposed |
+| T11 | **W3-R2 — extend the spawn gate to the SESSION path** | **DONE 2026-09-17, registration is 👤** | W4 (on-box) | `3d0af8257` + `migrations/0029` (c10, staged). `tests/frontier-spawn-gate.bats` 24/24, red-proof, 4 mutants killed |
+| T12 | **W3-R3 — does the ladder fire AUTOMATICALLY?** | **FILED — ⛔ OPERATOR'S** | operator | Decision packet `a825773ca37b`, class C, conviction **72**, receipt `docs/research/ladder-r3-control-arm-2026-09-17.md`. Below 90 after research, and the residue is a value call, so per F2 it is theirs WITH the number |
+| T13 | **W3-R4 — encode stepped-down assignee effort** | **REJECTED, closed** | W3 | Untested on Opus 5 and the nearest same-repo certification points the other way. Deliberately NOT landed; § W3.5 holds the probe design if it is ever revisited |
 | T8 | Resume the 6 live network-blocked panes | **DONE (by the operator, by hand)** | operator | All six re-engaged 17:36–17:37Z by the typed paragraph — § W1.0. The manual act IS the defect W2 removes |
 | T9 | **W2-0 — prove asyncRewake synthesizes a turn after an api-error turn end** | **OPEN — 👤 ON-BOX ONLY** | operator / a desk session | Cannot be discharged off-box; see § W2 status. It gates D4 only |
 
@@ -849,3 +855,50 @@ Split, because the parts have very different evidence:
 **What I would do:** land R1, file R2, run the §6 control arm before R3. R3 is the one genuine
 operator decision, and it is a small one: *does the ladder fire on its own, or does it stay a
 recipe a session chooses?* R1 makes the recipe correct and available either way.
+
+---
+
+## W4 — disposing W3's recommendations, on-box, 2026-09-17
+
+W3 produced four recommendations and landed none of them — correctly, since it was a research
+wave. This section records what happened to each, and the two things the reader should not
+re-derive.
+
+| | W3 said | W4 did | Evidence |
+|---|---|---|---|
+| **R1** | land the § Frontier Tier Routing diff (92%) | **LANDED** | `c50a363b1` |
+| **R2** | extend `frontier-spawn-gate.sh` to the session path (93%) | **LANDED**, registration staged | `3d0af8257` + `migrations/0029` |
+| **R3** | make the ladder fire automatically (72%) | **FILED as the operator's** | packet `a825773ca37b` |
+| **R4** | encode stepped-down assignee effort | **REJECT, closed** | not landed, by design |
+
+**R2 before R1, and that ordering is the point.** W3 wrote R1's replacement paragraph to say *"it
+does not yet see the SESSION path, so a `--model fable` fire is currently uncounted — until it
+does, treat `frontier_discovery_budget` as advisory."* Landing that sentence AFTER R2 would have
+put a false statement into the always-resident policy on the day it landed. The paragraph as
+landed states the bound that now exists, and — because landed is not live here — carries the one
+`jq` that tells a reader which of the two states their own machine is in. This repo's own rule:
+re-running an instrument against an implementation that deliberately deviates from the spec it
+priced measures a program nobody shipped.
+
+**The plan's own landing instruction was stale and is corrected here.** § W3 said the diff *"lands
+in both `~/.claude/CLAUDE.md` and the repo `CLAUDE.md` (byte-identical today)"*. There is no repo
+`CLAUDE.md` and there must not be: `.claude/CLAUDE.md` (project memory) records that the SSOT is
+**`CLAUDE.global.md`**, which `install.sh` copies out under the deployed name, and that creating a
+root `CLAUDE.md` makes Claude Code load ~94 KB of project memory on top of the byte-identical user
+memory every session (~20.7 K tokens of pure duplicate, backlog `c3647a090021`; `tests/deploy-parity.bats`
+pins the absence). The edit went to `CLAUDE.global.md` only. `~/.claude/CLAUDE.md` is a separate
+real file and is synced by the converger, not by hand.
+
+**What R2 actually closes, stated as a number.** The gate counted Agent spawns; measured
+2026-09-09 over 4,117 transcripts, Fable ran **52 lead sessions** against 140 subagent runs, and
+`/frontier-hole` + `/frontier-run` + `/frontier-campaign` had been invoked **once between them**.
+So `max_fable_spawns_per_session` bounded the minority carrier and nothing bounded the majority
+one. The session arm keys on `--model` and nothing else — the same sole-source-of-truth
+`handoff-fire.sh` itself uses, whose launcher-name arm was deleted on 2026-08-01 precisely because
+a second, disagreeing oracle is worse than one predicate.
+
+**Residual, named rather than hidden.** `migrations/0029` is c10 and waits for the operator, so
+until it is run the session arm is landed-but-inert and the budget is still advisory on that path.
+The migration's own precondition greps the LIVE hook for `frontier_fire_model` rather than trusting
+a lag counter, so it refuses rather than registering a no-op.
+
