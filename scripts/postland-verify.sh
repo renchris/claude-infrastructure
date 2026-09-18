@@ -3092,7 +3092,7 @@ auto_revert() { # <culprit> <failing-file> [<failing-test>] — 0 = attempted (m
   local c="$1" file="${2:-tests/}" ftest="${3:-}" c12 br wt mk rc=1 rev="" step="mint" outcome pf sid tip=""
   c12="$(sha12 "$c")"
   [ "$AUTOREVERT" = "off" ] && { log "AUTOREVERT verdict=skipped reason=kill-switch culprit=$c12"; return 1; }
-  git -C "$REPO" log -1 --format=%s "$c" 2>/dev/null | grep -q '^Revert' \
+  git -C "$REPO" log -1 --format=%s "$c" 2>/dev/null | grep '^Revert' >/dev/null \
     && { log "AUTOREVERT verdict=skipped reason=culprit-is-itself-a-revert culprit=$c12"; return 1; }
 
   # ── GUARD: A NONDETERMINISTIC PREDICATE CANNOT ELECT A CULPRIT (2026-09-17, item 615406aea490)

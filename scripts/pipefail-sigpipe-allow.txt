@@ -4,9 +4,7 @@
 # Regenerate: scripts/pipefail-sigpipe-lint.sh --regen > scripts/pipefail-sigpipe-allow.txt
 bin/cc-announce	5
 bin/cc-blockers	1
-bin/cc-bus	1
 bin/cc-cloud	1
-bin/cc-comms-alarm-sweep	1
 docs/activation/pending-activation/13-mailbox-gc-activate.sh	2
 docs/activation/pending-activation/32-cc-roles-kitty-normalise-activate.sh	2
 docs/activation/wiring-all.sh	2

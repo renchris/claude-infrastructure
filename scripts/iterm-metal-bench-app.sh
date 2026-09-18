@@ -244,7 +244,7 @@ verify_app() {
 
   if codesign -d --entitlements - --xml "$app" 2>/dev/null \
        | plutil -convert xml1 -o - - 2>/dev/null \
-       | grep -q 'disable-library-validation'; then
+       | grep 'disable-library-validation' >/dev/null; then
     note "✓ disable-library-validation entitlement present"
   else
     echo "  ✗ disable-library-validation entitlement ABSENT — this is the crash, it will not launch"

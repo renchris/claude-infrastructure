@@ -889,8 +889,8 @@ fi
 #   CA_SETTLED / CA_RETRACT / ca_first are defined at the close-tell gate above, which needs the
 #   same first line — see the note there on why a settled line 1 counts as a close.
 if [ -n "$ca_first" ] \
-   && printf '%s' "$ca_first" | grep -iqE "$CA_SETTLED" \
-   && printf '%s' "$ca_first" | grep -iqE "$CA_RETRACT"; then
+   && printf '%s' "$ca_first" | grep -iE "$CA_SETTLED" >/dev/null \
+   && printf '%s' "$ca_first" | grep -iE "$CA_RETRACT" >/dev/null; then
   d3=1
 fi
 

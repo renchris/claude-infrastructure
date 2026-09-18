@@ -110,7 +110,7 @@ if [[ "$FORMAT" == "--falsify" ]]; then
   case "$_fs_n" in ''|*[!0-9]*) exit 2 ;; esac
   [[ "$_fs_n" -gt 0 ]] || exit 2
   if printf '%s\n' "$_fs_json" \
-     | grep -qE '"level": ([2-9]|[1-9][0-9]+), "status": "(PENDING|IN_PROGRESS)"'; then
+     | grep -E '"level": ([2-9]|[1-9][0-9]+), "status": "(PENDING|IN_PROGRESS)"' >/dev/null; then
     exit 1
   fi
   echo FALSIFIED

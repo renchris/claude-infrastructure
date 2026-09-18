@@ -410,7 +410,7 @@ if [ "${1:-}" = "--selftest" ]; then
     ab="$(grep -lE '^[[:space:]]*#[[:space:]]*shellcheck[[:space:]]' "$ROOT"/tests/*.bats 2>/dev/null \
           | while IFS= read -r _p; do
               grep -E '^[[:space:]]*#[[:space:]]*shellcheck[[:space:]]' "$_p" \
-                | grep -qvE '#[[:space:]]*shellcheck[[:space:]]+(disable|enable|shell|source|source-path|external-sources)=' \
+                | grep -vE '#[[:space:]]*shellcheck[[:space:]]+(disable|enable|shell|source|source-path|external-sources)=' >/dev/null \
                 && printf '%s\n' "$_p"
             done | grep -c . || true)"
     [ "${ab:-0}" -eq 0 ] || { echo "SELFTEST FAIL: $ab suite(s) in tests/ open a comment with the tool's name — shellcheck aborts on them"; fails=1; }

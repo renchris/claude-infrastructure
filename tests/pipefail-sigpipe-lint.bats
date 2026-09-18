@@ -34,7 +34,7 @@ mkfile() { # $1=name $2=body  [$3=set line]
 }
 census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" --census 2>/dev/null; }
 
-@test "1: the lint's own --selftest passes (65/65, both directions)" {
+@test "1: the lint's own --selftest passes (72/72, both directions)" {
   # 32 -> 34 on 2026-09-02: clause 3's head/tail producer arm gained r16/r17, the FIRE controls for
   # the g11/g12 pair that had pinned only the GREEN direction. Updated deliberately, per the line
   # below, and the two new arms are attribution-proved: reverting the arm to its pre-fix `-?[1-9]`
@@ -191,9 +191,36 @@ census() { CC_PIPEFAIL_ROOT="$FIX" CC_PIPEFAIL_ALLOWLIST=/dev/null bash "$LINT" 
   # design and is pinned by a mutant instead (64/65 with exactly g36 failing when past_seps never
   # cuts) — because an arm that passes in both states is a test of something else until a mutant
   # says otherwise.
+  #
+  # 65 -> 72, THE CONTINUATION JOIN 2026-09-18 (backlog c128aeff816e, condition
+  # `pipefail-lint-continuation-join`), updated deliberately as this assertion asks. Every arm above
+  # spells its pipeline on ONE physical line, so the suite could not distinguish a detector that
+  # judges SHELL from one that judges LINES. A pipeline split by a backslash reached the ladder as
+  # two fragments, each individually clean, and was never JUDGED — not exonerated by a clause, which
+  # is why no census could show it and why the lint header said for weeks that it "does not show up
+  # in today numbers".
+  # r37/r38 are the two spellings measured in docs/research/pipefail-continuation-join-2026-09-17.md
+  # and they are r10 and r1 with one newline added, so the CONTINUATION is the only variable. The
+  # other five are the join guards, and every one of them is scored against its own mutant rather
+  # than assumed — the first cut of g37 and g38 passed in BOTH states and pinned nothing:
+  #   r39  a comment ending in a backslash continues nothing; joining there swallows the next line
+  #        of real code into a record that is next-ed as a comment (a latched false NEGATIVE)
+  #   g37  `x=1\\` ends in an ESCAPED backslash and does not continue — the odd-count rule
+  #   g38  the heredoc opener is read from `raw`, not `$0`, which since the join is the LAST
+  #        physical line of a record
+  #   g39  is_early is asked of a STAGE, so it stops at the first list separator — the
+  #        migrations/0010-postland-band-plist.sh:74 shape, a DRAINED consumer followed by an && and
+  #        a command that happens to carry -q. Without it the join convicts the remedy this lint
+  #        prescribes, which is the a6449cebc class
+  #   r40  that truncation is quote-aware, because sed exits early via a `;q` INSIDE its script
+  # RED-PROVED 6 of 7: M1 (no join) kills r37+r38, M2 (no comment guard) r39, M3 (anchored /\\$/)
+  # g37, M5 (is_early untruncated) g39, M6 (opener read from $0) g38, M7 (quote-blind first_cmd)
+  # r40, each failing that arm and nothing else. M4 — the join moved ABOVE the heredoc tracker — is
+  # GREEN on all 72 and is recorded as an equivalence in the lint header rather than claimed as a
+  # pin: the tracker tests `$0`, and a terminator is always alone on its own physical line.
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  printf '%s' "$output" | grep '65/65' >/dev/null \
+  printf '%s' "$output" | grep '72/72' >/dev/null \
     || { echo "selftest count changed — update this assertion deliberately: $output"; false; }
 }
 
@@ -608,12 +635,16 @@ $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"
   # OPENING line of a multi-line quoted construct, whose tail is genuinely DATA and must not be
   # judged — or the CLOSING line of one, whose tail is genuinely CODE and should be. A line-local
   # masker cannot tell those apart, because the discriminator is on a PREVIOUS line. So this is not
-  # a contract worth flipping; it is the visible half of the missing continuation join, which
-  # pipe258.py already implements and nobody has wired in.
+  # a contract worth flipping; it is the visible half of the missing continuation join.
   # ⚠️ THIS LINE USED TO SAY ca97c678b18b OWNS THAT JOIN. It does not: that row is the FUNCTION-FINAL
   # gap (condition `pipefail-lint-function-final-pipeline`), CURED by clause 4c — the FOURTEENTH
   # CORRECTION in scripts/pipefail-sigpipe-lint.sh — and re-measured on the shipped detector
-  # 2026-09-04. The join has no row of its own — do not cite a cured id for it.
+  # 2026-09-04.
+  # ⚠️ AND THE SENTENCE ABOVE IS NOW HALF STALE, 2026-09-18. The BACKSLASH join landed under its own
+  # row, c128aeff816e / `pipefail-lint-continuation-join` (test 28 below, and GATE ZERO in the
+  # lint). It does NOT close this arm: a multi-line jq or awk program carries no backslash, so its
+  # opening line is still joined by nothing and the contract this arm pins is still the live one.
+  # Two gaps that a single sentence used to name together, and only one of them moved.
   #
   # The two fixtures differ in ONE variable — whether an unpartnered quote precedes the pipeline —
   # and the second is the FIRE control: it proves the detector DOES see this exact producer and
@@ -675,4 +706,57 @@ $(census | grep -c 'lr-reset-poller\.sh:' || true) hit(s), so arm 20 is vacuous"
   [ "$status" -ne 0 ] || { echo "frontmatter with no status line was accepted"; false; }
   run bash -c "set -uo pipefail; $fn; has_valid_status '$BATS_TEST_TMPDIR/none.md'"
   [ "$status" -ne 0 ] || { echo "a file with no frontmatter at all was accepted"; false; }
+}
+
+@test "28: MECHANISM — a pipeline split by a backslash inverts the SAME verdict, and the detector now sees it" {
+  # Test 6 proves the inline scar in real bash and test 26 proves it survives being named. This
+  # proves it survives being WRAPPED, which is the whole of the continuation join (backlog
+  # c128aeff816e). The point is not that a newline changes bash — it changes nothing, and that is
+  # exactly the finding: the shell sees one command, the detector saw two fragments, and neither
+  # fragment is a violation on its own. `p | grep -q P \` reads no status, and `&& act` is not a
+  # pipeline. So the site was never JUDGED — an outcome a census cannot distinguish from a clean
+  # tree, which is why the lint header claimed for weeks that this gap "does not show up in today
+  # numbers" while three live fail-open guards in bin/cc-cannot were hiding behind it (22e133a0e).
+  seq 1 200000 > "$BATS_TEST_TMPDIR/big.txt"
+  B="$BATS_TEST_TMPDIR/big.txt"
+
+  # (a) GROUND TRUTH — one command, spelled across two physical lines. NEEDLE is on line 1 of a
+  #     202,506-byte stream, so the producer still owes ~200 KB when grep -q exits; pipefail
+  #     promotes the 141 and the && never fires. `hit` staying 0 IS the inversion.
+  run bash -c "set -uo pipefail
+  hit=0
+  { sed -n '1s/^1\$/NEEDLE/p; p' '$B'; } | grep -q NEEDLE \\
+    && hit=1
+  printf '%s' \"\$hit\""
+  [ "$output" = 0 ] || { echo "the split scar did NOT invert — this arm is vacuous (hit=$output)"; false; }
+
+  # (b) the DRAIN repairs it, same two lines, same continuation, only the consumer flag differing.
+  run bash -c "set -uo pipefail
+  hit=0
+  { sed -n '1s/^1\$/NEEDLE/p; p' '$B'; } | grep NEEDLE >/dev/null \\
+    && hit=1
+  printf '%s' \"\$hit\""
+  [ "$output" = 1 ] || { echo "the drained form did not fire on a match that IS present"; false; }
+
+  # (c) the DETECTOR, both directions, with the continuation as the only variable between the first
+  #     two fixtures. Without the joiner `split` reads GREEN — the false negative this closes.
+  mkfile oneline "printf '%s' \"\$V\" | grep -q NEEDLE && :"        'set -uo pipefail'
+  mkfile split   "printf '%s' \"\$V\" | grep -q NEEDLE \\
+  && :"                                                             'set -uo pipefail'
+  mkfile drained "printf '%s' \"\$V\" | grep NEEDLE >/dev/null \\
+  && :"                                                             'set -uo pipefail'
+  run census
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/oneline\.sh')" -eq 1 ] \
+    || { echo "the one-line twin was not reported — this arm is vacuous"; echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/split\.sh')" -eq 1 ] \
+    || { echo "a pipeline split across a continuation was not judged"; echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 'scripts/drained\.sh')" -eq 0 ] \
+    || { echo "the drained form was convicted through the join"; echo "$output"; false; }
+
+  # (d) the row is reported at its FIRST physical line, which is where a reader has to start
+  #     editing. FNR is the LAST one since the join, so this is not free.
+  printf '%s\n' "$output" | grep -q '^scripts/split\.sh:3:' \
+    || { echo "a joined record was not reported at its first physical line"; echo "$output"; false; }
+  true
 }
