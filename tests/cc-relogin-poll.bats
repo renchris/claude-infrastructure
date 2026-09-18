@@ -1172,3 +1172,123 @@ STUB
   json | jq -e '.child_exit=="0" and .action=="invoked"' >/dev/null || false
   grep -q 'CC_RELOGIN_POLL_KILL_GRACE_S' "$P" || false
 }
+
+# ── THE HUMAN GATE (2026-09-18) ────────────────────────────────────────────────────────────────
+# `cc-relogin` exit 6 is EXIT_FALLBACK_REQUIRED — "REMAINING HUMAN STEP: open that URL, sign in,
+# take the emailed code". Before this, the poller booked it like any other failure and re-fired an
+# hour later: 84 attempts against next2 since 2026-07-30, 31 of them exit 6, none of which could
+# ever have succeeded. The cost was not this box's — cc-relogin phase 2 spawns `claude auth login`,
+# which opens the DEFAULT browser (it resolves `open` through PATH), so every attempt left a dead
+# "Sign in - Claude" tab in the operator's daily browser, hourly, indefinitely.
+#
+# Each case below fails with the gate removed; H1b/H5/H6 are the CONTROLS that keep the gate from
+# being satisfiable by simply never attempting anything.
+
+# a tick that returns <rc> from the cc-relogin stub, at clock NOW+<h> hours
+hg_tick() { # <rc> <hours-from-NOW> [extra args...]
+  local rc="$1" h="$2"; shift 2
+  printf '%s\n' "$rc" > "$D/relogin.rc"
+  CC_RELOGIN_POLL_NOW=$((NOW + h * 3600)) run "$P" --json "$@"
+}
+hg_state() { jq -r "$1" "$CC_RELOGIN_POLL_STATE_DIR/relogin-poll-next3.json"; }
+
+@test "H1: a cc-relogin exit 6 arms the human gate — the next tick invokes NOTHING" {
+  mk next3 100 0; build json
+  hg_tick 6 0
+  [ "$(ncalls)" -eq 1 ] || false                       # the first attempt DID run
+  grep -q 'HUMAN-GATE-ARMED next3' "$CC_RELOGIN_POLL_LOG" || false
+  [ "$(hg_state '.human_gated_at')" != "" ] || false
+  hg_tick 6 1                                          # one hour later, exactly as launchd would
+  [ "$(ncalls)" -eq 1 ] || false                       # STILL 1 — nothing was invoked
+  grep -q 'SKIP-HUMAN-GATED next3' "$CC_RELOGIN_POLL_LOG" || false
+  json | jq -e '.action=="skipped-human-gated" and .human_gated==true' >/dev/null || false
+}
+
+@test "H1b CONTROL: a non-6 failure does NOT arm it — the next tick still attempts" {
+  mk next3 100 0; build json
+  hg_tick 4 0                                          # BROWSER-FAILED: transient, retryable
+  [ "$(ncalls)" -eq 1 ] || false
+  ! grep -q 'HUMAN-GATE-ARMED' "$CC_RELOGIN_POLL_LOG" || false
+  hg_tick 4 1
+  [ "$(ncalls)" -eq 2 ] || false                       # the hourly cadence is untouched for exit 4
+}
+
+@test "H2: the gate re-probes after CC_RELOGIN_POLL_HUMAN_GATE_RETRY_H — it is a pause, not a ban" {
+  export CC_RELOGIN_POLL_HUMAN_GATE_RETRY_H=6
+  mk next3 100 0; build json
+  hg_tick 6 0;  [ "$(ncalls)" -eq 1 ] || false
+  hg_tick 6 5;  [ "$(ncalls)" -eq 1 ] || false         # inside the interval: still silent
+  hg_tick 6 7;  [ "$(ncalls)" -eq 2 ] || false         # past it: one probe, so a healed world heals
+}
+
+@test "H3: while the gate holds, the attempt counter does NOT move (nothing was invoked)" {
+  mk next3 100 0; build json
+  hg_tick 6 0; local a1; a1="$(attempts next3)"
+  hg_tick 6 1; hg_tick 6 2
+  [ "$(attempts next3)" = "$a1" ] || false             # a skip is not an attempt — same as skipped-busy
+  [ "$(hg_state '.last_result')" = "skipped-human-gated" ] || false
+}
+
+@test "H4: a genuinely moved deadline RESETS the gate — a new world is asked afresh" {
+  mk next3 100 0; build json
+  hg_tick 6 0; [ "$(ncalls)" -eq 1 ] || false
+  : > "$D/fixture"; mk next3 30 0; build json          # deadline moved ~70h: a different cycle
+  hg_tick 6 1
+  [ "$(ncalls)" -eq 2 ] || false                       # asked again, because the facts changed
+}
+
+@test "H5 CONTROL: RETRY_H=0 disables the gate entirely — every tick attempts, as before" {
+  export CC_RELOGIN_POLL_HUMAN_GATE_RETRY_H=0
+  mk next3 100 0; build json
+  hg_tick 6 0; hg_tick 6 1; hg_tick 6 2
+  [ "$(ncalls)" -eq 3 ] || false                       # the kill switch restores the old behaviour
+}
+
+@test "H6 CONTROL: the gate silences the INVOCATION, never the escalation" {
+  mk next3 30 0; build json                            # inside T-48h ⇒ escalation is due
+  hg_tick 6 0
+  local r1; r1="$(nrows)"; [ "$r1" -ge 1 ] || false
+  hg_tick 6 1
+  [ "$(ncalls)" -eq 1 ] || false                       # invocation suppressed...
+  json | jq -e '.escalated==true and .exit==5' >/dev/null || false   # ...verdict is NOT
+  [ "$status" -eq 5 ] || false
+}
+
+@test "H7: on the REQUIRED path a deadline that drifts hourly cannot disarm the gate" {
+  # On this path \$DL is NOW, so it moves an hour every tick. The first shape of this gate ALSO
+  # keyed on the deadline (a same_cycle guard, mirroring the escalation key) and would slide out of
+  # the 12h tolerance and silently re-open the loop — the same drift that reset next2's attempt
+  # counter from #51 to #1 in production. The gate is keyed on its ARMING TIME alone.
+  build ls
+  printf 'next3\tREQUIRED\ttoken-invalid\t—\t—\tclaude3\n' > "$D/ls.tsv"
+  printf '1\n' > "$D/ls.rc"
+  hg_tick 6 0; [ "$(ncalls)" -eq 1 ] || false
+  local h; for h in 1 5 11 17 23; do hg_tick 6 "$h"; done
+  [ "$(ncalls)" -eq 1 ] || false                       # 23h of ticks, still one invocation
+  hg_tick 6 25                                         # past the 24h default re-probe
+  [ "$(ncalls)" -eq 2 ] || false
+}
+
+@test "H8: --json publishes the gate so a consumer can see WHY a tick was quiet" {
+  mk next3 100 0; build json
+  hg_tick 6 0
+  json | jq -e '.human_gated==false and .human_gate_retry_h==24' >/dev/null || false
+  hg_tick 6 1
+  json | jq -e '.human_gated==true and .action=="skipped-human-gated"' >/dev/null || false
+}
+
+@test "H9: a long BUSY stretch does not disarm the gate — the clock is the arming time, not the deadline" {
+  # The case that killed the deadline-keyed first draft. A busy account books `skipped-busy`, which
+  # rewrites .deadline every tick but re-arms nothing; keyed on the deadline, >12h of busy ticks
+  # slid the gate out of its own cycle and the hourly invocation resumed with no human involved.
+  build ls
+  printf 'next3\tREQUIRED\ttoken-invalid\t—\t—\tclaude3\n' > "$D/ls.tsv"
+  printf '1\n' > "$D/ls.rc"
+  hg_tick 6 0; [ "$(ncalls)" -eq 1 ] || false
+  # now the account goes busy for 20 hours — inside the 24h re-probe, outside the 12h cycle epsilon
+  jq -c '.rows = [.rows[] | .k = 3]' "$D/cached.json" > "$D/cached.tmp" && mv "$D/cached.tmp" "$D/cached.json"
+  printf 'next3\tREQUIRED\ttoken-invalid\t—\t—\tclaude3\n' > "$D/ls.tsv"
+  local h; for h in 4 9 14 19; do hg_tick 6 "$h"; done
+  [ "$(ncalls)" -eq 1 ] || false
+  grep -q 'SKIP-HUMAN-GATED next3' "$CC_RELOGIN_POLL_LOG" || false   # gated, NOT merely busy-skipped
+}
