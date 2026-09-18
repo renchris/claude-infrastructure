@@ -60,7 +60,7 @@ added_lines() {
 }
 
 scan() {  # scan <file> → 0 clean, 1 findings, 2 non-verdict
-  local f="$1" n=0 bodyless=0 over=0 line=0 adv=0
+  local f="$1" n=0 bodyless=0 over=0 dup=0 line=0 adv=0
   [ -f "$f" ] || { echo "rules-hook-budget-lint: NON-VERDICT — no such file: $f" >&2; return 2; }
   local OWN_SET=""
   if [ -n "${OWN_RANGE:-}" ]; then
@@ -106,7 +106,7 @@ scan() {  # scan <file> → 0 clean, 1 findings, 2 non-verdict
   if [ -n "$dups" ]; then
     while IFS= read -r _d; do
       [ -n "$_d" ] || continue
-      over=$((over+1))
+      dup=$((dup+1))
       printf '%s: DUPLICATE — two or more bullets link %s. One rule, resident twice. Keep the\n' "$f" "$_d"
       printf '    better hook and delete the other; the body file is shared and stays.\n'
     done <<< "$dups"
@@ -116,9 +116,9 @@ scan() {  # scan <file> → 0 clean, 1 findings, 2 non-verdict
     return 2
   fi
   [ "$adv" -gt 0 ] && printf 'rules-hook-budget-lint: %d advisory finding(s) on lines this land did not add — not blocking.\n' "$adv" >&2
-  if [ $((bodyless+over)) -gt 0 ]; then
-    printf 'rules-hook-budget-lint: %d finding(s) over %d bullet(s) — bodyless=%d over-budget=%d\n' \
-      "$((bodyless+over))" "$n" "$bodyless" "$over" >&2
+  if [ $((bodyless+over+dup)) -gt 0 ]; then
+    printf 'rules-hook-budget-lint: %d finding(s) over %d bullet(s) — bodyless=%d over-budget=%d duplicate=%d\n' \
+      "$((bodyless+over+dup))" "$n" "$bodyless" "$over" "$dup" >&2
     return 1
   fi
   printf 'rules-hook-budget-lint: clean — %d bullet(s), all bodied and within %d chars\n' "$n" "$BUDGET" >&2
