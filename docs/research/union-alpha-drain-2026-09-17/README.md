@@ -536,3 +536,56 @@ customer's bottle prices** (`05f63af4e918`) that had been *falsely auto-closed* 
 falsifier whose `git -C` bound only the `fetch`, so `git show` ran in the sweep's cwd and
 retracted vacuously — blast radius 1 of 597. The audit's purpose is finding more of that
 class, and it can run today.
+
+## ⚠️ CORRECTION TO THE SECTION ABOVE — "the free premise is gone" was WRONG (2026-09-17, same day)
+
+The operator challenged the recap ("Isn't it launched today, and free for a whole week via
+OpenRouter and Cloudflare?") and he is right. Two claims in §"THE SUBJECT MODEL NO LONGER
+EXISTS" are corrected here **in place; the original words stay** as the record of what was
+believed and why the error was reachable.
+
+**WRONG — "Union Alpha is dead."** What retired is the stealth **alias**, because the model
+was **revealed and launched**. The 404 body says so in its own words ("This model *was*
+Unbiased's Pareto. **Use it now**"). A stealth alias retiring at launch is the opposite of a
+model disappearing, and the Ox Alpha precedent — a model deleted from the catalogue — primed
+the wrong reading of an identical-looking 404.
+
+**WRONG — "the free premise the three jobs rested on is gone."** There IS a free route, and
+OpenRouter's own FAQ states it verbatim:
+
+> *"Is Pareto Code Router free? Yes. The pricing shown on this page for Pareto Code Router
+> is zero, so you are not charged for prompt or completion tokens."* — `openrouter/pareto-code`,
+> **2,000,000** token context.
+
+**STILL TRUE, and all of it measured rather than inferred:**
+
+- `stealth/union-alpha` returns 404.
+- The **direct** model `unbiased/pareto` is genuinely paid — $2.50/$7.50 per MTok, and its
+  embedded page payload carries `"is_free": false` with `promotion_message: null`. The free
+  access is via the **router**, not via that id. Reading the direct id's price and concluding
+  "no free route exists" is the whole error: **one id's price is not the product's price.**
+- Our key 403s on **both** pareto ids with `Key limit exceeded (total limit)`, while all three
+  explicitly zero-priced `:free` models return 200 on the same key in the same minute.
+
+### The real blocker is our own safeguard, not the price
+
+`GET /api/v1/key` reports `limit: 0`. The 24 models priced exactly `0` are callable; both
+pareto ids advertise `prompt=-1, completion=-1` — *router-determined, not provably zero at
+request time* — and a zero-limit key refuses those. (That the `-1` is the mechanism is
+**inference**; what is measured is the 403 on `-1`-priced ids beside 200s on `0`-priced ids.)
+
+So the free week is real and we cannot reach it, for exactly the reason we chose: the key was
+deliberately left spend-incapable *by construction*. Unlocking it means raising the key's limit
+above `0`, which trades that property away — the effective charge would be ~$0, but no longer
+**provably** $0. **That is a money-path decision and it is the operator's.**
+
+### Method note — why a spend-incapable key is a BAD instrument for "is this free?"
+
+A `limit: 0` key answers "is this id's listed price literally zero", which is *not* the
+question "is this model free to use this week". It cannot see a promotion, a router whose
+effective price is zero, or any billing-time discount — it refuses all of them identically,
+with an error naming the KEY rather than the price. Reading that refusal as evidence about the
+market is the same shape as
+[[reference-a-refusal-bounds-the-tool-not-the-world]]: **a refusal bounds the instrument, and
+its message names world-shaped causes, so it gets believed as a fact about the world.** The
+discriminating instrument here was not the API at all — it was the vendor's own pricing page.
