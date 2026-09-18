@@ -691,3 +691,60 @@ _pkt() {  # $1=id  [$2=raw body override]
   [ "$status" -eq 0 ]
   [ "$(printf '%s' "$output" | jq -c '.')" = "[]" ]
 }
+
+# ── inv7 amendment drift: the no-op must be LOUD ───────────────────────────────
+# Measured 2026-09-17: a session filed a class-C packet whose --receipt pointed into a `mktemp -d`,
+# realised the path would evaporate, wrote the receipt to a committed docs/research path and
+# re-opened with it — and the packet kept the dead pointer while the tool exited 0 and echoed the id.
+# inv7 is right (an open packet is evidence) and stays; what was wrong is that the dropped amendment
+# was SILENT, which is the fail-safe-default-mimics-the-healthy-state trap. These four pin the
+# warning, its silence on a true no-op, and — the load-bearing one — that the file is still not
+# written.
+
+@test "inv7 drift: re-open with a CHANGED receipt warns that the amendment did not land" {
+  printf 'a\n' > "$BATS_TEST_TMPDIR/r1.txt"; printf 'b\n' > "$BATS_TEST_TMPDIR/r2.txt"
+  run bash "$CD" open --class C --what "drift probe" --conviction 60 \
+      --receipt "$BATS_TEST_TMPDIR/r1.txt" --option "a::x" --option "b::y"
+  [ "$status" -eq 0 ]
+  id="$output"
+  run bash "$CD" open --class C --what "drift probe" --conviction 60 \
+      --receipt "$BATS_TEST_TMPDIR/r2.txt" --option "a::x" --option "b::y"
+  [ "$status" -eq 0 ]                       # a warning, never a new way for a close path to fail
+  [[ "$output" == *"was NOT modified"* ]]
+  [[ "$output" == *"your receipt did not land"* ]]
+  [[ "$output" == *"$id"* ]]                # the id is still echoed for the caller
+  # and the packet on disk is untouched — inv7 is enforced, not merely announced
+  [ "$(jq -r .receipt "$CC_DECISIONS_DIR/$id.json")" = "$BATS_TEST_TMPDIR/r1.txt" ]
+}
+
+@test "inv7 drift: a CHANGED conviction is named too" {
+  printf 'a\n' > "$BATS_TEST_TMPDIR/r1.txt"
+  run bash "$CD" open --class C --what "drift probe 2" --conviction 60 \
+      --receipt "$BATS_TEST_TMPDIR/r1.txt" --option "a::x" --option "b::y"
+  id="$output"
+  run bash "$CD" open --class C --what "drift probe 2" --conviction 75 \
+      --receipt "$BATS_TEST_TMPDIR/r1.txt" --option "a::x" --option "b::y"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"conviction"* ]]
+  [ "$(jq -r .conviction "$CC_DECISIONS_DIR/$id.json")" = "60" ]
+}
+
+@test "inv7 drift CONTROL: an IDENTICAL re-open stays silent — the id and nothing else" {
+  printf 'a\n' > "$BATS_TEST_TMPDIR/r1.txt"
+  run bash "$CD" open --class C --what "drift probe 3" --conviction 60 \
+      --receipt "$BATS_TEST_TMPDIR/r1.txt" --option "a::x" --option "b::y"
+  id="$output"
+  run bash "$CD" open --class C --what "drift probe 3" --conviction 60 \
+      --receipt "$BATS_TEST_TMPDIR/r1.txt" --option "a::x" --option "b::y"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$id" ]                     # bats merges stderr; any warning would show here
+}
+
+@test "inv7 drift CONTROL: a re-open passing NEITHER field stays silent" {
+  printf 'a\n' > "$BATS_TEST_TMPDIR/r1.txt"
+  run bash "$CD" open --class A --what "drift probe 4"
+  id="$output"
+  run bash "$CD" open --class A --what "drift probe 4"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$id" ]
+}
