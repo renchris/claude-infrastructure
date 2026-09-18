@@ -34,22 +34,36 @@ rather than deleted. Arm E replaces them with a NON-retryable 400, which ends th
 under their natural name needs `git add -f`, which the global rules forbid — a gitignore entry is
 intentional. `../w2-stop-rewake-proof/` reached the same place (`phaseB-lifecycle.txt`).
 
-## The arm-1 rig (T9b), committed unfinished on purpose
+## The arm-1 rig — hermetic, and it answered
 
-`drive2.sh` + `settings.probe.sessionstart.json` are the rig for W2-0's FIRST arm — the watcher
-declared on **SessionStart**, so it is armed before the turn that dies, which is what D4 actually
-proposes. `watch.armG.txt` is its control run: `WATCHER-FIRE body=[T9-ARM-G-MAIL 01:28:58] exiting 2`.
+`drive3.sh` + `mockapi.py` are the rig for W2-0's FIRST arm: the watcher declared on **SessionStart**
+so it is armed before the turn that dies, then mail fed from an unrelated shell while the session
+idles.
 
-**It is committed unfinished because the blocker is isolation, not mechanism.** `--settings <file>`
-MERGES with the live config dir rather than replacing it, so the fleet's own Stop hooks ran in the
-probe session and forced turns of their own — one of the records the wake was meant to produce is
-literally `Stop hook feedback: 🔔 WAKE FLOOR …`. A synthesized wake and a hook-forced turn are then
-indistinguishable in the stream. `../w2-stop-rewake-proof/` avoided this with a throwaway
-`CLAUDE_CONFIG_DIR` holding exactly one hook; on this box that dir has no credentials (keychain /
-`oauth-tokens`), so finishing this arm needs either an `ANTHROPIC_API_KEY` (which makes it fully
-hermetic) or the operator's call on seeding a temp config dir.
+**It is hermetic, and that is the whole trick.** A throwaway `CLAUDE_CONFIG_DIR` holding only the
+hook under test is what makes the stream readable — but it has no credentials here (keychain /
+`oauth-tokens`), so it answers `Not logged in`. `ANTHROPIC_API_KEY=<any string>` plus `mockapi.py`
+on `ANTHROPIC_BASE_URL` fixes that: the client takes the API-key path, the mock answers
+`/v1/messages` either as a valid SSE turn (`ok`) or as HTTP 400 with an `api_error` body (`error`),
+and **no credential and no quota are involved at all**.
+
+```
+bash drive3.sh H ok    8801 100    # control
+bash drive3.sh I error 8802 150    # test
+echo "mail" >> mail.I.txt          # from an UNRELATED shell, while it idles
+```
+
+`stream.arm{H,I,J}.jsonl` go from 4 records to 8 when the wake lands — `hook_response`, `init`,
+`assistant`, `result`. Identical in the control and both test runs: **an api-error turn end does not
+suppress the wake.**
+
+`drive2.sh` and `settings.probe.sessionstart.json` are the SUPERSEDED merged-config rig, kept only
+for their failure mode: `--settings <file>` MERGES with the live config rather than replacing it, so
+the fleet's own Stop hooks ran and forced turns of their own — one record reads
+`Stop hook feedback: 🔔 WAKE FLOOR …`. A synthesized wake and a hook-forced turn are then the same
+thing in the stream. That is why arm 1 needs its own config dir and not an overlay.
 
 **Do not re-derive the feeder bug.** An earlier `drive2.sh` fed the mail from inside itself, racing
 its own `: > mail.txt`, so every run ended with an empty mailbox — a state in which the watcher
-*could not* fire, whose null reads exactly like "the harness refused to wake". Feed from an
-unrelated shell.
+*could not* fire, whose null reads exactly like "the harness refused to wake". `drive3.sh` takes a
+per-arm mail file and never truncates it after arming.

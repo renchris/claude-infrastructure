@@ -6,16 +6,20 @@ implemented D1-D7 ran **2.1.268**, every measurement in the plan is on **2.1.260
 track was installed there to control against — one arm on one binary is the *oracle is only true at
 its measured geometry* error.
 
-**Answer: NO — and read § CORRECTION at the foot before acting on that.** On a turn whose end is an
-API error, the Stop hook chain does not run at all, so nothing can ARM at that boundary.
+## Both arms, and the verdict
 
-🚨 **That is W2-0's SECOND arm, not its first, and D4 never depended on it.** D4 arms at
-SessionStart and at every PRIOR Stop precisely because the plan already expected this (§ W1.2's
-hazard table, row `nothing can be armed at the death`). W2-0's first arm — does a watcher armed
-EARLIER synthesize a turn when its `exit 2` lands after an api-error turn end — is **still open**,
-and the correction section says exactly what it needs. An earlier version of this file concluded
-"D4 as specified is not implementable". It is not implementable *in the shape those two arms
-tested*, which was never the proposed shape.
+**Arm 1 — does a watcher armed EARLIER synthesize a turn after an api-error turn end? YES.**
+**Arm 2 — do Stop hooks run AT that boundary? NO.**
+
+**Together: D4 is implementable exactly as § W1.2 specifies it** — arm at SessionStart and at every
+prior Stop, idempotently, so the watcher already exists when the death happens. Arm 2 is the reason
+that "arm it earlier" clause is load-bearing rather than defensive; arm 1 is the proof that it
+works. **T14 (build D4) is unblocked.**
+
+⚠️ **An earlier version of this file, landed as `0dc8ed879`, concluded "D4 as specified is not
+implementable."** That was wrong twice over and § The two errors keeps the record: it generalised
+arm 2's result to arm 1, and D4 had never proposed arming at the death in the first place. The
+sentence was corrected before anything acted on it.
 
 **Ran on:** Claude Code **2.1.114** (`~/.claude/bin/claude-latest`, the fleet's pinned stable),
 2026-09-17, macOS, model `claude-haiku-4-5-20251001`. The probe is about the harness, not the model.
@@ -40,7 +44,7 @@ Both log at START and never only at exit: an exit-time log cannot separate "neve
 "started then reaped" (W0's rule). Both log their arm label, which is what makes the negative
 readable — see § The contamination I had to design around.
 
-## The four arms — one variable each
+## Arm 2 — the four arms, one variable each
 
 | arm | shape | endpoint | how the turn ended | `syncstop` | `watcher` |
 |---|---|---|---|---|---|
@@ -99,7 +103,7 @@ reader counting lines would see a watcher entry in a failing arm's log and concl
 It did not — that is D's watcher finishing. This is why every START line carries `arm=`, and why the
 verdict above is stated as `grep -c 'arm=<X>'` rather than as "the file is empty".
 
-## What this does NOT establish
+## Arm 2 — what it does NOT establish
 
 1. **One binary.** 2.1.114 only. The plan's measurements are 2.1.260 and the implementing VM was
    2.1.268. This repo's rule is that a disagreement between binaries is not evidence about VERSIONS
@@ -113,90 +117,84 @@ verdict above is stated as `grep -c 'arm=<X>'` rather than as "the file is empty
    armed `asyncRewake` hook's `exit 2` synthesizes a turn at a normal Stop. This probe shows the
    hook never gets the chance to arm after an api error. Two different claims; both were needed.
 
-## What follows for D4 — ONLY if arm 1 also fails
+## Arm 1 — the hermetic rig, and its result
 
-These are the options *if* the open arm comes back negative too. They are not established by this
-document, and § CORRECTION is why.
+Arm 1 needs a config dir holding ONLY the hook under test. The merged-`--settings` rig used for
+arms A/B/D/E cannot do it: `--settings <file>` **merges with** the live config rather than replacing
+it, so the fleet's own Stop hooks run too and a synthesized wake is indistinguishable from a
+hook-forced turn — one record in an early attempt is literally
+`Stop hook feedback: 🔔 WAKE FLOOR …`. A throwaway `CLAUDE_CONFIG_DIR` answers `Not logged in ·
+Please run /login` because auth here is keychain/`oauth-tokens`-backed.
 
-- **The desk sweep would be the design.** An external observer reads each session's transcript for the
-  api-error tail (`lr_last_api_error`, already built and tested — `tests/lr-audit-nonlimit.bats`
-  29/29) and writes the session mailbox, which `mailbox-wake-arm` (migration `0007`, `asyncRewake`
-  on **SessionStart** — not Stop) already wakes. Nothing new has to be discovered; it is composition
-  of parts that exist.
-- **D3 covers the other half and never depended on this answer.** `hooks/recover-inject.sh` fires on
-  `UserPromptSubmit`, so the moment anything prompts the session — the operator, or the harness's own
-  `<task-notification>` wake — the audit instruction arrives.
+**The unlock: `ANTHROPIC_API_KEY=<any string>` + a local endpoint.** With a dummy key the client
+takes the API-key path and reaches the API layer normally, and `mockapi.py` then answers
+`/v1/messages` in two modes — a valid SSE assistant turn, or HTTP 400 with an `api_error` body. So
+the whole arm is hermetic: **no credentials, no quota, and nothing but the hook under test can
+manufacture a turn.** That last clause is the property the merged rig lacked, and it is what makes
+the stream readable.
+
+| arm | mock mode | how the first turn ended | watcher | stream records |
+|---|---|---|---|---|
+| **H** control | `ok` (valid SSE) | normally, assistant said `OK` | `WATCHER-FIRE … exiting 2` at 01:33:13 | **4 → 8** |
+| **I** test | `error` (400, `api_error`) | `API Error: 400 {"type":"error","error":{"type":"api_error"…}}` | `WATCHER-FIRE … exiting 2` at 01:34:20 | **4 → 8** |
+| **J** test, repeat | `error` | same | `WATCHER-FIRE … exiting 2` at 01:35:31 | **4 → 8** |
+
+The four records the wake adds are identical in all three: `system/hook_response` (the watcher's
+`exit 2`), then `system/init`, `assistant`, `result` — **a second turn ran**. The test arms match
+the control exactly, so an api-error turn end does not suppress the wake.
+
+In I and J that synthesized turn immediately hits the mock's 400 again, because the mock never
+recovers. That is an artefact of the fixture, not of the mechanism: the question is whether the turn
+was SYNTHESIZED, and it was. In the case D4 exists for, the network has come back by then — which is
+what the watcher was waiting to observe.
+
+## The two errors, kept because they are the transferable part
+
+**1. I wrote a conclusion broader than my arms.** W2-0 has two arms and the plan names both in
+W2-0's own row; I ran arm 2 and wrote arm 1's verdict on top of it. Worse, § W1.2's hazard table
+already carried the row `nothing can be armed at the death` with the remedy *"D4 arms at SessionStart
+and at every PRIOR Stop, idempotently — it must already exist when the death happens"* — so the
+design had anticipated arm 2's result before I measured it, and I had that table open. **When a probe
+has a named arm you did not run, that belongs in the verdict line, not in a caveat below it.**
+
+**2. I fed the mailbox from inside the driver that truncates the mailbox.** An early arm-G driver did
+`: > mail.txt` and then backgrounded its own feeder; the two raced and every run ended with an empty
+mailbox — a state in which the watcher *could not* have fired. Read naively that null says "the
+harness refused to wake". It is a verdict about my driver. `../w2-stop-rewake-proof/`'s README says
+to feed from an unrelated shell, and I had read it. `drive3.sh` takes the mail path as a per-arm
+file and never truncates it after arming.
+
+**3. Two arm-C runs were discarded for being KILLED rather than ending** — see § Two arms DISCARDED
+above. Same family as (2): a process that never reached its verdict, whose evidence file is
+byte-identical to a real negative.
+
+## What follows for D4 (T14)
+
+Build it as specified. `hooks/net-recover-arm.sh`, `asyncRewake`, declared on **SessionStart** (and
+re-armed at every Stop, idempotently, via the claim-guard pattern in `hooks/mailbox-wake-arm.sh` —
+the W2 probe's P-W2c result is that the harness dedupes nothing, so only the hook can decline). Its
+body waits on the condition W1.2 names — `[api-error ∧ turn_duration ∧ 2 greens]` — and exits 2 to
+wake. Registration is a c10 migration (the `0007`/`0012`/`0026`/`0029` pattern), staged for the
+operator.
 
 ## Reproducing
 
-`docs/research/w2-0-api-error-stop-proof/` holds every file as run: `syncstop.sh`, `watcher.sh`,
-`settings.probe.json`, `mock500.py` / `mock400.py` (the reachable endpoints), `drive.sh` (the
-streaming-json driver that holds stdin open across the turn end), and each arm's logs and streams,
-including the two discarded C runs.
+`docs/research/w2-0-api-error-stop-proof/` holds every file as run.
 
----
+**Arm 2** (Stop-hook absence): `syncstop.sh`, `watcher.sh`, `settings.probe.json`, `drive.sh`,
+`mock400.py` / `mock500.py`, and each arm's `stop.arm*.txt` / `watch.arm*.txt` / stream, including
+the two discarded C runs.
 
-## CORRECTION, same session, before this was acted on
+**Arm 1** (the wake): `drive3.sh` + `mockapi.py` — fully hermetic, one command per arm and no
+credentials:
 
-**The verdict above ("D4 as specified is not implementable") is WRONG, and the error is worth more
-than the result.** I answered the arm I could build and then wrote the conclusion of the arm I had
-not built.
+```
+bash drive3.sh H ok    8801 100    # control — the mock serves a valid turn
+bash drive3.sh I error 8802 150    # test    — the mock returns an api_error
+# then, from an UNRELATED shell while the session idles:
+echo "mail" >> mail.I.txt
+```
 
-W2-0 has **two** arms, and the plan (`§ W2 task breakdown`, W2-0's row) names both:
-
-1. **A synthesized prompt with `promptSource=system` appears after an api-error turn end** — i.e. a
-   watcher armed EARLIER, still alive, whose `exit 2` lands while the session sits idle post-error.
-2. **Stop-hook absence at that boundary** (assert no `stop_hook_summary`).
-
-**Arms B and E above answer arm 2. They say nothing about arm 1.** And D4 never proposed arming AT
-the death: the plan's own hazard table already says so in the row `nothing can be armed at the
-death` — *"D4 arms at SessionStart and at every PRIOR Stop, idempotently — **it must already exist
-when the death happens**"*, resting on transcript evidence (`137f37fe:1085`/`:1144` with nothing in
-`:1099-1103`; `52e35019:1423→1424` carrying no `stop_hook_summary`). So the design already
-anticipated exactly what arms B and E measured.
-
-### What arms B and E are actually worth
-
-They convert arm 2 from **transcript archaeology into a controlled experiment**: the plan inferred
-Stop-hook absence from records of a death nobody staged, while B and E stage the death, hold
-everything else fixed, and show two controls firing both hooks where the two tests fire neither.
-That is a real upgrade in evidence class, and it is all they are.
-
-### Why arm 1 is still OPEN, stated so the next session does not repeat my afternoon
-
-An arm G was built: the watcher declared on **SessionStart** (so it is armed before the turn that
-dies), then mail fed from an unrelated shell while the session idles. **The control fired** —
-`WATCHER-FIRE body=[T9-ARM-G-MAIL 01:28:58] exiting 2`, and the session's stream grew by 13 records.
-But **the rig cannot read arm 1's answer**, for a reason that invalidates the measurement rather
-than the mechanism:
-
-> `--settings <file>` **merges with** the live config dir's settings; it does not replace them. So
-> the fleet's own Stop hooks ran too, and the records the wake was supposed to produce are
-> indistinguishable from turns forced by `wake-floor`/`session-continue` — one of the 13 new records
-> is literally `"Stop hook feedback:\n🔔 WAKE FLOOR — you are about to go idle with NO wake path
-> armed…"`. The probe session also hit `"This command requires approval"`, which a subagent-shaped
-> run cannot answer.
-
-`docs/research/w2-stop-rewake-proof/` avoided all of this by using a **throwaway
-`CLAUDE_CONFIG_DIR` holding exactly one hook**, so nothing but the hook under test could manufacture
-a turn. On this box that dir has no credentials — auth is keychain/`oauth-tokens`-backed — so
-reproducing it means seeding a temp config dir with credential material, which is not something to
-do unasked.
-
-**So arm 1 needs, and only needs:** a throwaway `CLAUDE_CONFIG_DIR` carrying the one hook plus
-whatever auth the operator is willing to expose to it (or an `ANTHROPIC_API_KEY`, which makes the
-whole thing hermetic). `drive2.sh` in the probe directory is the driver, already written, with the
-SessionStart arming and the external-mail discipline in place.
-
-### The methodology error, named
-
-Two of them, and the second is the one that generalises:
-
-- **I fed the mail from inside the driver that truncates the mailbox.** `: > mail.txt` raced the
-  backgrounded feeder, so every early arm-G run ended with an empty mailbox — a state in which the
-  watcher *could not* have fired. Read naively, that null says "the harness refused to wake". It is
-  a verdict about my driver. Fixed by feeding from an unrelated shell, which is what the sibling
-  probe's README says to do and I had already read.
-- **I wrote a conclusion broader than my arms.** The two-arm structure was in the plan, in a table I
-  had open. Nothing about the experiment was wrong; the sentence on top of it was. When a probe has
-  a named arm you did not run, the write-up says so in the verdict line, not in a caveat below it.
+`watch.<arm>.txt` records the watcher; `stream.<arm>.jsonl` goes from 4 records to 8 when the wake
+lands. `drive2.sh` and `settings.probe.sessionstart.json` are the superseded merged-config rig, kept
+only because their failure mode (§ The two errors) is the reusable part.
