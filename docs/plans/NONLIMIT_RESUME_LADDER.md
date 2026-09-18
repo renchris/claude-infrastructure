@@ -7,11 +7,11 @@ owner: W2 — dispatched cloud session claude/fire-20260910T213003Z-71267-1
 
 Opened 2026-09-09 from an operator ask in session `d79f408b`.
 
-**Status: RESEARCH CAPTURED (W0) · DESIGN CAPTURED (W1) · W2 IMPLEMENTED except D4 (2026-09-10) ·
-W3 CAPTURED (2026-09-09) and W3's recommendations now DISPOSED (2026-09-17, § W4): R1 landed,
-R2 landed, R3 filed as the operator's decision, R4 closed REJECT.** Two items remain and neither
-is agent-drivable: **T9 / W2-0**, the live probe that gates D4, and **T12 / R3**, a value call.
-Nothing else in this plan is open.
+**Status: RESEARCH CAPTURED (W0) · DESIGN CAPTURED (W1) · W2 IMPLEMENTED, D4 RE-SPECIFIED ·
+W3 CAPTURED (2026-09-09) and DISPOSED (2026-09-17, § W4): R1 landed, R2 landed, R3 filed as the
+operator's decision, R4 closed REJECT · T9 / W2-0 DISCHARGED on-box 2026-09-17, and the answer is
+NO.** Two items remain: **T14** — build D4 in the shape T9's answer forces (agent-drivable, the last
+implementation item) — and **T12 / R3**, a value call that is the operator's. Nothing else is open.
 
 ⚠️ The line this replaces read *"implementation NOT started"*, which was true on 2026-09-09 and
 false a day later. It is kept here rather than deleted because it is the record of what was
@@ -62,7 +62,8 @@ Nothing here may be held in a context window.
 | T12 | **W3-R3 — does the ladder fire AUTOMATICALLY?** | **FILED — ⛔ OPERATOR'S** | operator | Decision packet `a825773ca37b`, class C, conviction **72**, receipt `docs/research/ladder-r3-control-arm-2026-09-17.md`. Below 90 after research, and the residue is a value call, so per F2 it is theirs WITH the number |
 | T13 | **W3-R4 — encode stepped-down assignee effort** | **REJECTED, closed** | W3 | Untested on Opus 5 and the nearest same-repo certification points the other way. Deliberately NOT landed; § W3.5 holds the probe design if it is ever revisited |
 | T8 | Resume the 6 live network-blocked panes | **DONE (by the operator, by hand)** | operator | All six re-engaged 17:36–17:37Z by the typed paragraph — § W1.0. The manual act IS the defect W2 removes |
-| T9 | **W2-0 — prove asyncRewake synthesizes a turn after an api-error turn end** | **OPEN — 👤 ON-BOX ONLY** | operator / a desk session | Cannot be discharged off-box; see § W2 status. It gates D4 only |
+| T9 | **W2-0 — prove asyncRewake synthesizes a turn after an api-error turn end** | **DONE 2026-09-17 — ANSWER IS NO** | W4 (on-box) | `docs/research/api-error-rewake-proof-2026-09.md` + `docs/research/w2-0-api-error-stop-proof/`. The Stop hook chain does NOT run when the turn it ends died with an API error, so nothing can arm there. 4 arms, 2 controls, 2 discarded; hermetic, ~2 haiku turns |
+| T14 | **D4 — re-specify as the desk sweep, now that T9 has ruled** | **OPEN — the last implementation item** | unassigned | T9 killed the arm-at-the-boundary design. The fallback the plan already named is the design, and every part exists: `lr_last_api_error` + the session mailbox + `mailbox-wake-arm` (migration `0007`, asyncRewake on **SessionStart**, not Stop) |
 
 ---
 
@@ -77,7 +78,7 @@ its control arm, and the load-bearing predicates carry mutants.
 | **D1** lead process state | **DONE** | `lr-audit.py` — `lead_pids()`, `lead_state()`, `inherit_lead_state()`; teammate RUNNING re-keyed on the member's own pid + turn end; `TEAM_ACTIVE_WINDOW_S` demoted to a display field; `:1335`'s "killed mid-run" now conditional on DEAD | `tests/lr-audit-nonlimit.bats` 29/29 incl. the 27-prompts/24-turn-ends caveat and its inverting mutant |
 | **D2** notification ledger + retry fold | **DONE** | `scan_lead_transcript` (settled = `tool_result` ∪ terminal `<task-notification>`, both carriers), delegation population by tool, the journal fold to ONE unit with `attempts=N`, `STALLED` | same suite; STALLED's structural predicate pinned by a mutant that swaps in an unrelated error string |
 | **D3** `recover-inject.sh` | **DONE** (registration is 👤) | `hooks/recover-inject.sh` + `migrations/0026-recover-inject-registration.sh` (c10, staged) | `tests/recover-inject.bats` 18/18, **5 mutants killed**; the migration's verify AND conflict oracles controlled in both directions |
-| **D4** `net-recover-arm.sh` | **BLOCKED on T9/W2-0** | — | — |
+| **D4** `net-recover-arm.sh` | **RE-SPECIFIED — T9 refuted the design, 2026-09-17** | — | The arm-at-the-api-error-boundary hook is impossible: no Stop hook runs at that boundary (`docs/research/api-error-rewake-proof-2026-09.md`). Becomes the desk sweep → session mailbox → SessionStart wake. Tracked as T14 |
 | **D5** stall policy + probe | **probe DONE**, policy DONE | `scripts/limit-recover/lr-probe.sh`; `commands/limit-recover.md` § Stall policy | `tests/lr-probe.bats` 19/19, 3 mutants killed |
 | **D6** `/recover` | **DONE, with a deviation** | `commands/recover.md` (new); `limit-recover.md`'s `description:` widened | — |
 | **D7** census | **DONE** | `lr-fleet.sh` — `kind` (last death) + `kinds` (all classes) + `err_age_s`; `RESUME-IN-PLACE` → `IDLE-AFTER-ERROR`; argv-leaf pid fallback | `tests/lr-fleet.bats` +8 cases (4 controls) |
@@ -102,7 +103,7 @@ its control arm, and the load-bearing predicates carry mutants.
    `tests/lr-team-audit.bats` fixtures (`system`/`turn_duration`). **No api-error record is
    synthesized** — the rule the row states was kept; only its source moved.
 
-### Why W2-0 could not be run off-box (T9)
+### Why W2-0 could not be run off-box (T9) — and what running it on-box cost
 
 Not a punt — the instrument is wrong here, and a single-armed reading would be worse than none:
 
@@ -119,10 +120,29 @@ Not a punt — the instrument is wrong here, and a single-armed reading would be
 it, and the plan's own fallback still stands: if the first arm FAILS, D4 becomes the desk sweep
 writing to the session mailbox. Nothing already landed depends on the answer.
 
+⚠️ **RESOLVED 2026-09-17 — the first arm FAILED, so the fallback in that sentence is now the
+design.** Run on-box on **2.1.114**: a turn that ends with an API error runs NO Stop hook at all,
+not even a plain synchronous one, while the identical invocation against the real API fires both
+hooks. So `asyncRewake` never gets the chance to arm there and the question of whether its `exit 2`
+would synthesize a turn is moot at this boundary. Full record, including the two arms that were
+discarded for being killed mid-retry rather than ending: `docs/research/api-error-rewake-proof-2026-09.md`.
+The one caveat that matters: **2.1.114 only** — re-run both arms on 2.1.260+ before treating it as
+fleet-wide, which is one command per arm.
+
 **To run it on-box:** `docs/research/w2-stop-rewake-proof/blocker.sh` is the template; both arms are
 (a) a synthesized prompt with `promptSource=system` appears after an api-error turn end, and (b) no
 `stop_hook_summary` exists at that boundary. Record the result in
 `docs/research/api-error-rewake-proof-2026-09.md` and state the binary version beside it.
+
+**What it actually cost, recorded because the estimate above was the reason it sat 8 days: ~2 haiku
+turns and no quota at all on the arms that mattered.** The row read *"it would spend the operator's
+quota unattended"*, and that was the expensive half of the premise. It is false for a probe about
+the HARNESS: point `ANTHROPIC_BASE_URL` at a local endpoint and the failing arms never reach the
+API, while the two controls need one trivial turn each on the cheapest model. The other half —
+*"needs an `asyncRewake` hook registered in a settings.json"* — was also softer than it read:
+`--settings <file>` declares hooks for one run without touching the live config, so C10 is never in
+play. **Generalisable:** before filing a probe as operator-gated on cost, ask which arms have to
+talk to the real service. Here it was two of four, for three seconds.
 
 ---
 
