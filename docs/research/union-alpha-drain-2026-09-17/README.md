@@ -651,3 +651,63 @@ control arm can be convicted of the treatment arm's cost.
 - The operator's "free for a week" report is **not refuted** — it may describe a promotion not
   applied to this account, or the Cloudflare path, which remains **unmeasured**. What is refuted
   is *this* route being free.
+
+## THE DETERMINISTIC AUDIT WAS BUILT AND RUN — AND IT FINDS NOTHING (2026-09-18)
+
+§"THE STRONGEST REMAINING JOB DOES NOT NEED THE LANE" said the honest build was two-stage and
+"was not started here". It has now been built (`scripts/backlog-closure-audit.py`) and run.
+**Its mechanism claim holds and its VALUE claim does not.** Recording the negative so no future
+session rebuilds it.
+
+### It works
+
+400 most recent `done` rows: **258 on-trunk · 1 content-landed · 4 SUSPECT · 68 foreign (not
+scored) · 69 no-sha (not scored)**. Stage 2 earns its place immediately — a naive stage-1 pass
+flags ~39% of resolvable shas as non-ancestors, and content-comparison clears almost all of
+them, exactly as `cited-sha-may-not-survive-the-land` predicts.
+
+### But its SUSPECT precision is 0 of 4
+
+Every SUSPECT is a **role misattribution**, not a false closure. The tool assumes any cited sha
+is a landing *claim*; these cite a sha as the **subject**:
+
+- *"The row claimed 11 commits stranded across 4 orphaned branches"* — a sha being discussed.
+- *"branch commit a0de7f605→a37feb5a9"* — progress, not a landing.
+- *"The tracked test file was reverted"* — a sha in a revert.
+
+Deciding **whether an evidence string is even making a landing claim** is the genuinely
+non-deterministic part, and it is upstream of the oracle. The regex extracts the sha; nothing
+extracts its *role*.
+
+### 🚨 And the positive control FAILS — it is blind to the only known instance
+
+The one confirmed false closure, `05f63af4e918` (a paying customer's bottle prices, the row that
+motivated this whole idea), closed on evidence reading:
+
+    falsifier passed: git -C <reso> fetch -q origin && ! git show origin/main:<path>
+
+**No sha at all** ⇒ classified `no-sha` ⇒ **not scored**. The defect was never "a cited sha did
+not land"; it was a falsifier whose `git -C` bound only the `fetch`, so `git show` ran in the
+sweep's cwd and the negation passed vacuously. A sha-ancestry audit cannot see that class.
+
+⇒ **An audit must be positive-controlled against a KNOWN instance of the defect it is built to
+find, before its clean run is read as an absence of defects.** Ours reported 263 scored rows and
+0 real findings, which is indistinguishable from a healthy corpus — and it could not have found
+the one case we already knew about.
+
+### The adjacent audit, also run, also negative
+
+Falsifier vacuity is the real class. Measured: **1,001 rows carry a stored `--falsifier`, 94
+were closed on `falsifier passed`**, and a deliberately over-generating scan flags 15. On
+inspection nearly all are **guarded** (`grep -q X file && ! grep … file`) — the leading positive
+grep proves the subject is readable before the negation runs. **Polarity is what makes the
+guarded form safe:** an unrunnable `grep|grep` returns rc 1, the falsifier does NOT fire, and the
+row stays open. A vacuous *pass* retracts a live row; a vacuous *fail* merely annoys. Only an
+**unguarded negation** is dangerous, and the one measured instance was already cured.
+
+### Disposition
+
+The tool is landed and re-runnable (`--limit`, `--json`, exits 0). Treat it as a **ratchet, not a
+detector**: a rising SUSPECT count is signal, a clean run is not evidence. Its blind spot is
+documented in its own docstring. **The job-2 idea is closed** — not because the mechanism was
+wrong, but because the defect class it targets is not the one that bites us.
