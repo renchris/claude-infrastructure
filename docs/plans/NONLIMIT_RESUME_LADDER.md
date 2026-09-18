@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: in-progress   # ONE item open: T12/R3, the operator's value call (packet a825773ca37b)
 created: 2026-09-09
 owner: W2 — dispatched cloud session claude/fire-20260910T213003Z-71267-1
 ---
@@ -7,13 +7,16 @@ owner: W2 — dispatched cloud session claude/fire-20260910T213003Z-71267-1
 
 Opened 2026-09-09 from an operator ask in session `d79f408b`.
 
-**Status: RESEARCH CAPTURED (W0) · DESIGN CAPTURED (W1) · W2 IMPLEMENTED except D4 · W3 CAPTURED
+**Status: RESEARCH CAPTURED (W0) · DESIGN CAPTURED (W1) · W2 COMPLETE · W3 CAPTURED
 (2026-09-09) and DISPOSED (2026-09-17, § W4): R1 landed, R2 landed, R3 filed as the operator's
 decision, R4 closed REJECT · W2-0 DISCHARGED on-box 2026-09-17, BOTH ARMS — T9a: no Stop hook runs
 at the death; T9b: a watcher armed at SessionStart wakes the session anyway, so D4 is buildable as
-designed.** Two items
-remain: **T14** — build D4, now unblocked and agent-drivable, the last implementation item — and
-**T12 / R3**, a value call that is the operator's. Nothing else is open.
+designed · **D4 BUILT (T14), so W2 is COMPLETE.**
+
+ONE item remains and it is not the agent's: **T12 / R3**, a value call, filed as decision packet
+`a825773ca37b` at 72% conviction. Everything else in this plan is done. Three registrations
+(`0026`, `0029`, `0030`) are staged c10 migrations awaiting the operator — until they run, the hooks
+they register are landed and inert.
 
 ⚠️ The line this replaces read *"implementation NOT started"*, which was true on 2026-09-09 and
 false a day later. It is kept here rather than deleted because it is the record of what was
@@ -66,7 +69,7 @@ Nothing here may be held in a context window.
 | T8 | Resume the 6 live network-blocked panes | **DONE (by the operator, by hand)** | operator | All six re-engaged 17:36–17:37Z by the typed paragraph — § W1.0. The manual act IS the defect W2 removes |
 | T9a | **W2-0 arm 2 — Stop-hook ABSENCE at an api-error turn end** | **DONE 2026-09-17 — CONFIRMED (no Stop hook runs)** | W4 (on-box) | `docs/research/api-error-rewake-proof-2026-09.md` § Arm 2. Upgrades this plan's transcript archaeology to a controlled experiment: 2 controls fire both hooks, 2 tests fire neither. This is WHY D4 must arm earlier, not a refutation of D4 |
 | T9b | **W2-0 arm 1 — does a watcher armed EARLIER synthesize a turn after an api-error turn end?** | **DONE 2026-09-17 — YES** | W4 (on-box) | `§ Arm 1`. Control (normal turn end) and two independent api-error runs all go 4 → 8 stream records: `hook_response` → `init` → `assistant` → `result`. **Fully hermetic** — throwaway `CLAUDE_CONFIG_DIR` + `ANTHROPIC_API_KEY=<any string>` + a local two-mode endpoint, so no credentials and NO QUOTA |
-| T14 | **D4 `net-recover-arm.sh` — build it** | **OPEN — UNBLOCKED, the last implementation item** | unassigned | T9 ruled both arms: build it as § W1.2 specifies. `asyncRewake` on **SessionStart**, re-armed idempotently at every Stop via the claim guard in `hooks/mailbox-wake-arm.sh` (P-W2c: the harness dedupes nothing, only the hook can decline); body waits on `[api-error ∧ turn_duration ∧ 2 greens]`; registration a c10 migration (`0007`/`0012`/`0026`/`0029`). 🚨 **Two measured constraints before writing a line** — `lr_last_api_error` is validated end-to-end against a staged death (rc 0 with its latch uuid; rc 1 on the control), and **the `turn_duration` term MUST fail OPEN**: it is absent from BOTH probe arms including the control, so a gate that requires it is unreachable in any transcript that emits none. Details: `docs/research/api-error-rewake-proof-2026-09.md` § Two things the rig measured |
+| T14 | **D4 `net-recover-arm.sh` — build it** | **DONE 2026-09-17, registration is 👤** | W4 (on-box) | `hooks/net-recover-arm.sh` + `tests/net-recover-arm.bats` (21 cases, 5 mutants) + `migrations/0030` (c10, staged). Wakes on `[api-error ∧ turn-ended ∧ 2 greens]`, once per death uuid, with the turn-end term **failing OPEN**. The headless guard is the load-bearing safety property: asyncRewake is dispatched SYNC in a one-shot, so an unguarded watch would wedge every probe on the box at session birth |
 
 ---
 
@@ -81,7 +84,7 @@ its control arm, and the load-bearing predicates carry mutants.
 | **D1** lead process state | **DONE** | `lr-audit.py` — `lead_pids()`, `lead_state()`, `inherit_lead_state()`; teammate RUNNING re-keyed on the member's own pid + turn end; `TEAM_ACTIVE_WINDOW_S` demoted to a display field; `:1335`'s "killed mid-run" now conditional on DEAD | `tests/lr-audit-nonlimit.bats` 29/29 incl. the 27-prompts/24-turn-ends caveat and its inverting mutant |
 | **D2** notification ledger + retry fold | **DONE** | `scan_lead_transcript` (settled = `tool_result` ∪ terminal `<task-notification>`, both carriers), delegation population by tool, the journal fold to ONE unit with `attempts=N`, `STALLED` | same suite; STALLED's structural predicate pinned by a mutant that swaps in an unrelated error string |
 | **D3** `recover-inject.sh` | **DONE** (registration is 👤) | `hooks/recover-inject.sh` + `migrations/0026-recover-inject-registration.sh` (c10, staged) | `tests/recover-inject.bats` 18/18, **5 mutants killed**; the migration's verify AND conflict oracles controlled in both directions |
-| **D4** `net-recover-arm.sh` | **UNBLOCKED 2026-09-17 — design CONFIRMED, not yet built** | — | Both W2-0 arms measured on-box. Nothing can arm AT the death (which D4 never proposed), and a watcher armed at SessionStart DOES wake the session after it. Build per § W1.2; tracked as T14 |
+| **D4** `net-recover-arm.sh` | **DONE 2026-09-17** (registration is 👤) | `hooks/net-recover-arm.sh` + `migrations/0030-net-recover-arm-registration.sh` (c10, staged) | `tests/net-recover-arm.bats` — 21 cases over W2-C's done-when verbatim plus the fail-open branch, **5 mutants**, and all seven behaviours additionally hand-verified end-to-end against a staged death record |
 | **D5** stall policy + probe | **probe DONE**, policy DONE | `scripts/limit-recover/lr-probe.sh`; `commands/limit-recover.md` § Stall policy | `tests/lr-probe.bats` 19/19, 3 mutants killed |
 | **D6** `/recover` | **DONE, with a deviation** | `commands/recover.md` (new); `limit-recover.md`'s `description:` widened | — |
 | **D7** census | **DONE** | `lr-fleet.sh` — `kind` (last death) + `kinds` (all classes) + `err_age_s`; `RESUME-IN-PLACE` → `IDLE-AFTER-ERROR`; argv-leaf pid fallback | `tests/lr-fleet.bats` +8 cases (4 controls) |
