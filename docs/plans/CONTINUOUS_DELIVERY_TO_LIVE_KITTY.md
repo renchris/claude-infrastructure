@@ -1,8 +1,34 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # Continuous delivery to LIVE kitty sessions — no human prompt, no restart
+
+**Status: DONE 2026-09-17.** All five implementation rows landed — T13 `27bac8f79` · T14 `6cc03fc19`
+· T15 `cbcf90b1b` · T16 `38ec05382` · T17 `9af6c28db` — every one re-verified as an ancestor of
+trunk, and T4, the one research row that was never reported, needed no research (see the Record).
+What the chain still cannot do is stated in § The irreducible residue, which is an answer, not an
+omission.
+
+⚠️ **T15's sha is not the one its own row recorded**, and the difference is worth one line because
+it will happen again: the land rebased, which rewrites the commit object, so the three shas that
+carry that diff in the reflog (`c733ec122`, `f0160bf11`, `c1d97f0bf`) all resolve in a local
+checkout and NONE is an ancestor of trunk. Verify a cited sha with `git merge-base --is-ancestor`,
+and when it fails, re-find it by CONTENT (`git log origin/main -S<token> -- <path>`) rather than
+concluding the work never landed.
+
+🚨 **It is marked terminal deliberately, and the reason is a defect this plan was itself re-minting.**
+The dispatcher mints a work item from a plan's open headings, so an open plan whose work is finished
+keeps producing sessions that re-derive landed cures — measured elsewhere at twelve days on one row.
+Everything still genuinely open here has moved to a store that tracks it properly and can act on it:
+
+| what remains | where it now lives | who acts |
+|---|---|---|
+| may the unattended converger restart a stale daemon | decision packet `4194644aea26` (class C, open) — its actuator is staged at `migrations/0031-resident-reload-flip.sh` and refuses until the packet is ruled | operator |
+| self-retire for `compressor-sentinel` + `caffeinate-floor` (the third option the packet does not carry) | backlog `309ff6d7d4d2`, conviction 70%, receipt attached | operator's risk call |
+| wire the Pushover phone leg, so a refused page reaches a human | backlog `a9ba169c626e` (pre-existing, blocked on credentials) | operator |
+
+Do not re-open this plan to chase those. Read them where they are.
 
 **Operator's question, 2026-09-17:** *"How can we consistently without human-in-the-loop
 prompting have your work landed, deployed, and live to current ongoing Kitty sessions without
@@ -67,7 +93,7 @@ delete a row.
 | T1 | Why do shared-checkout commits keep blocking converge, and what auto-resolves it | L2 | research | A1 |
 | T2 | What fires `/ship` today without a human, and where are the gaps | L1 | research | A2 |
 | T3 | What fires `deploy-live` after a land; why is it effectively manual | L2 | research | A3 |
-| T4 | The gate-green / certgate deadlock pinning the live layer | L1/L2 | research | A4 |
+| T4 | The gate-green / certgate deadlock pinning the live layer | L1/L2 | **ANSWERED by citation, 2026-09-17 — no new research needed** | A4 (never reported) |
 | T5 | Reaching a RUNNING process: the four classes, what each needs | L4 | research | A5 |
 | T6 | Daemon hot-reload: how a long-lived python daemon adopts new code | L4 | research | A6 |
 | T7 | Verification: how we PROVE live sessions run the new bytes | L3/L4 | research | A7 |
@@ -184,6 +210,16 @@ Ordered by (harm prevented ÷ size). G3 first because it is what made the rest i
 ## Record
 
 - 2026-09-17 created. Wave A1-A10 dispatched; 9 reported, T4 (gate-green) outstanding.
+- 2026-09-17 **T4 needed no research — it was already answered, in this repo's own project
+  `.claude/CLAUDE.md:59-61`, with numbers**: *"the green-stamp producer emits ~0.17 greens/day
+  against a trunk moving ~63 commits/day, so T1 is structurally unreachable and EVERY real advance
+  already comes through T2's absence-of-evidence door — the budget only spaces those out."* So the
+  "deadlock" is not a bug pinning the live layer; it is the designed steady state, and the lane that
+  actually moves bytes is T2. Confirmed live this session: the converge that deployed T13/T17 printed
+  `DEGRADED deploy — no GREEN stamp among the newest 200 commits of origin/main; taking the newest
+  NOT-RED commit instead` (`deploy-live.sh:2198`) and advanced correctly. A row can be outstanding
+  because nobody reported it and *still* be closed by reading what the repo already says — check that
+  before dispatching a subagent at it.
 - 2026-09-17 T14 (G1) landed and live. See the Outcome column: the filed blocker was refuted by
   measuring the population rather than by arguing about the desk.
 - 2026-09-17 A BLOCKER FOUND ON THE WAY TO T15, and it belonged to nobody. `tests/cc-reaper.bats`
