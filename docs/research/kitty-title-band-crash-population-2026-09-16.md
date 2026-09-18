@@ -18,6 +18,18 @@ Two further reports today are NOT this bug and should not be counted: 15:10:07 i
 down a mock; 18:14:46 is a sandbox dying in `objc_msgSend <- glfwPostEmptyEvent <- io_loop`, a
 different (threading) fault on the event loop.
 
+> ⚠️ **REFUTED IN PLACE 2026-09-17 — "a sandbox" was read as "ours", and it is not.** The
+> sentence above is correct that 18:14:46 is a different fault from this note's family, and that
+> is the half that got used. The half that did not: calling it *a sandbox* fault left it
+> attributed to the patched build, and cc-backlog `fd1c840434a5` was filed on that reading. The
+> **stock** `/Applications/kitty.app` crashed with the same signature on **2026-09-15 00:15:22**,
+> ~42 h before the crashed sandbox build was linked — same `KittyChildMon` thread, same
+> `objc_msgSend+38944`, same indirect call out of `io_loop`; the stock stack merely *looks*
+> different because `glfwPostEmptyEvent` tail-calls `objc_msgSend` and its frame is elided, and
+> because the shipped `.so` is stripped. It is an upstream kitty/GLFW defect, and the title band
+> is exonerated for this crash class. Full derivation, and why the row's falsifier could never
+> have fired: `kitty-childmon-crash-attribution-2026-09-17.md`.
+
 **Why the count matters.** Four crashes inside 75 seconds at 13:56–13:58 is a reproduction that
 already happened, and the 13:58 pair share a signature byte-for-byte. A root-cause hunt aimed
 only at the 20:13:49 signature (`+840952`, `0x20`) is aimed at one member of the family, and the

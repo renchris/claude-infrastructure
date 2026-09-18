@@ -129,3 +129,47 @@ PY
   [ "$status" -eq 0 ] || false
   [[ "$output" == *"control: PASS"* ]] || false
 }
+
+# -- THREAD-ENTRY ATTRIBUTION (cc-backlog fd1c840434a5) ------------------------
+# The PyMethodDef trick only reaches Python-callable entry points, so a THREAD entry resolved
+# to "internal (not a module-level PyCFunction)" and stopped. That left the 2026-09-15 stock
+# crash unattributed, and the row it belongs to concluded the segfault was peculiar to the
+# PATCHED sandbox build. It is not: the same crash is in the shipped binary, and naming the
+# function is what shows it. A third table survives stripping for the same reason the other two
+# do — the program reads it at runtime — its own string literals, reached by an adrp/add pair.
+
+@test "the stock pre-patch crash attributes its faulting thread to a named entry point" {
+  have_subject || skip "shipped kitty 0.48.2 (uuid $WANT_UUID) not present"
+  run "$TOOL" "$FIX/kitty-crash-001522.ips"
+  # rc 3, and it is CORRECT: this stack reaches libsystem_pthread, whose on-disk stub carries a
+  # different uuid from the shared-cache copy the report recorded, so those two frames refuse by
+  # the documented contract. Pinned here because it also asserts the property that matters — a
+  # refusal on ONE frame does not suppress the attribution of another.
+  [ "$status" -eq 3 ] || false
+  # THE load-bearing assertion: before the literal scan this frame read
+  # "internal (not a module-level PyCFunction)" and the crash stayed unattributed.
+  [[ "$output" == *'thread entry for "KittyChildMon"'* ]] || false
+  # anchored to a specific function, not merely to the image
+  [[ "$output" == *"func 0x106f4+144"* ]] || false
+}
+
+@test "GUARD: an unmatched thread name does NOT become an attribution" {
+  have_subject || skip "shipped kitty 0.48.2 not present"
+  # The whole method is a CROSS-CHECK between two independent facts: the name the report says
+  # the thread had, and a literal compiled into the function. An implementation that simply
+  # echoed the report's thread name would pass the case above and be worthless. This is the arm
+  # that can refute it — one variable changed, the claimed thread name, against the same binary.
+  python3 - "$FIX/kitty-crash-001522.ips" "$TMP/wrong-thread.ips" <<'PY'
+import json, sys
+raw = open(sys.argv[1]).read()
+i = raw.index("\n")
+hdr, body = raw[:i], json.loads(raw[i:])
+body["threads"][0]["name"] = "NoSuchThreadNameInThisBinary"
+open(sys.argv[2], "w").write(hdr + "\n" + json.dumps(body))
+PY
+  run "$TOOL" "$TMP/wrong-thread.ips"
+  [ "$status" -eq 3 ] || false
+  [[ "$output" != *"thread entry for"* ]] || false
+  # and it must fall back to the honest verdict, not invent a different name
+  [[ "$output" == *"internal (not a module-level PyCFunction)"* ]] || false
+}

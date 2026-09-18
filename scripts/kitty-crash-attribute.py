@@ -262,6 +262,52 @@ def decode_load(word: int) -> tuple[str, int] | None:
     return None
 
 
+# -- ADRP/ADD literal recovery: names an INTERNAL function from its own strings ----
+def adrp_literals(m: "MachO", start: int, end: int, limit: int = 4096) -> set[str]:
+    """cstrings referenced by adrp+add pairs inside [start, end).
+
+    The PyMethodDef trick only reaches Python-callable entry points. A thread entry
+    function is not one, so it resolves to "internal" and stops there. But a third table
+    survives stripping for the same reason the other two do — the program READS it at
+    runtime: its own string literals, in __cstring, reached by an adrp/add pair whose
+    displacement is baked into the instruction stream. That is enough to recognise a
+    function whose literal is distinctive, and a thread entry's pthread_setname_np
+    argument is exactly that.
+    """
+    text0, text1 = m.section_range("__text")
+    c0, c1 = m.section_range("__cstring")
+    if not c1 or not (text0 <= start < text1):
+        return set()
+    end = min(end if end else start + limit, start + limit, text1)
+    blob = m.read(start, end - start)
+    pages: dict[int, int] = {}
+    out: set[str] = set()
+    for i in range(0, len(blob) - 3, 4):
+        word = struct.unpack_from("<I", blob, i)[0]
+        pc = start + i
+        if (word >> 24) & 0x9F == 0x90:  # ADRP Rd, page
+            immlo = (word >> 29) & 3
+            immhi = (word >> 5) & 0x7FFFF
+            imm = (immhi << 2) | immlo
+            if imm & (1 << 20):
+                imm -= 1 << 21
+            pages[word & 0x1F] = (pc & ~0xFFF) + (imm << 12)
+        elif (word >> 23) & 0x1FF == 0x122:  # ADD (immediate, 64-bit)
+            rn = (word >> 5) & 0x1F
+            base = pages.get(rn)
+            if base is None:
+                continue
+            imm12 = (word >> 10) & 0xFFF
+            if (word >> 22) & 1:
+                imm12 <<= 12
+            addr = base + imm12
+            if c0 <= addr < c1:
+                sv = m.cstring(addr, 128)
+                if sv and sv.isprintable():
+                    out.add(sv)
+    return out
+
+
 def fault_instruction(m: MachO, pc: int) -> dict:
     raw = m.read(pc, 4)
     if len(raw) != 4:
@@ -313,7 +359,7 @@ class Attributor:
         self._cache[key] = res
         return res
 
-    def frame(self, img: dict, off: int, arch: str) -> dict:
+    def frame(self, img: dict, off: int, arch: str, thread_name: str | None = None) -> dict:
         out = {"image": img.get("name"), "offset": off}
         if off == 0:
             out["resolution"] = "UNATTRIBUTABLE: pc is 0 (jump through a NULL code pointer)"
@@ -343,13 +389,25 @@ class Attributor:
             out["resolution"] = f"{nm[0]} (PyCFunction, ml_flags={nm[1]})"
         else:
             out["resolution"] = "internal (not a module-level PyCFunction)"
+            # A thread entry is internal by construction. If the report says the faulting
+            # thread is named N and this function is the one that contains the literal N,
+            # the two independent facts agree and the function IS that thread's entry.
+            # Cross-checked, never guessed: an unmatched literal is not reported at all.
+            if thread_name and end is not None:
+                lits = adrp_literals(m, st, end)
+                if thread_name in lits:
+                    out["thread_entry"] = thread_name
+                    out["resolution"] = (
+                        f'thread entry for "{thread_name}" '
+                        "(matched against the report's own thread name)"
+                    )
         return out
 
-    def frame_at_fault(self, img: dict, off: int, arch: str) -> dict:
+    def frame_at_fault(self, img: dict, off: int, arch: str, thread_name: str | None = None) -> dict:
         """frame() plus the decoded instruction. Only frame 0's pc is the faulting
         address; decoding a RETURN address further up names an instruction that completed
         successfully, which reads as evidence and is not."""
-        out = self.frame(img, off, arch)
+        out = self.frame(img, off, arch, thread_name)
         got = self.for_image(img, arch)
         if not isinstance(got, str) and off:
             fi = fault_instruction(got[0], off)
@@ -365,14 +423,16 @@ def attribute_report(path: str) -> dict:
     ft = b.get("faultingThread", 0)
     ex = b.get("exception", {}) or {}
     att = Attributor()
+    tname = (b["threads"][ft].get("name") or "").strip() or None
     frames = []
     for n, fr in enumerate(b["threads"][ft]["frames"]):
         img = imgs[fr["imageIndex"]]
         fn = att.frame_at_fault if n == 0 else att.frame
-        frames.append(dict(n=n, **fn(img, fr.get("imageOffset", 0), arch)))
+        frames.append(dict(n=n, **fn(img, fr.get("imageOffset", 0), arch, tname)))
     res = {
         "report": os.path.basename(path),
         "arch": arch,
+        "thread_name": tname,
         "signal": ex.get("signal"),
         "subtype": ex.get("subtype"),
         "frames": frames,
@@ -390,7 +450,10 @@ def attribute_report(path: str) -> dict:
 
 
 def render(res: dict) -> str:
-    L = [f"{res['report']}  [{res['arch']}]  {res.get('signal')}  {res.get('subtype')}"]
+    hdr = f"{res['report']}  [{res['arch']}]  {res.get('signal')}  {res.get('subtype')}"
+    if res.get("thread_name"):
+        hdr += f"\n  faulting thread: {res['thread_name']}"
+    L = [hdr]
     for f in res["frames"][:12]:
         line = f"  f{f['n']:<2} {f.get('image')}+{f.get('offset')}"
         if "func_start" in f:
