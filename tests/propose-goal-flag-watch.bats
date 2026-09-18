@@ -85,15 +85,15 @@ PY
 }
 
 # ── G0 · the subject's own fixture table ──────────────────────────────────────────────────────────
-@test "G0 --selftest is green (18 arms: §5's cache table + §4's binary table)" {
+@test "G0 --selftest is green (24 arms: §5's cache table + §4's binary table + the mootness arm)" {
   run bash "$SUBJ" --selftest
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"0 failed"* ]] || false
-  [[ "$output" == *"18 ok"* ]] || false
+  [[ "$output" == *"24 ok"* ]] || false
 }
 
 # ── G1-G3 · the three states, which is the whole point ────────────────────────────────────────────
-@test "G1 fresh cache with the flag TRUE retracts the row (rc 0)" {
+@test "G1 fresh cache with the flag TRUE ARMS the row (rc 0) — see G11, it must not CLOSE it" {
   run run_f "$SUBJ" "$T/fresh_true.json"
   [ "$status" -eq 0 ] || false
 }
@@ -210,6 +210,73 @@ PY
 }
 
 # ── G9 · the contract the row's consumers actually read ───────────────────────────────────────────
+# ── G11-G12 · THE POLARITY FIX (2026-09-17) — the row's stored `--falsifier` ──────────────────────
+# WHAT WENT WRONG, and why these are the load-bearing cases in the whole suite now. Until
+# 2026-09-17 the row stored `--falsify` as its `--falsifier`. `cc-premise.run_falsifier` reads exit 0
+# as "the condition this row was filed for is GONE — close it" (bin/cc-premise:1370, 1402), and
+# scripts/autonomy-sweep.sh runs `cc-premise sweep --record --close-falsified 25` every 6 h. G1 above
+# pins that `--falsify` exits 0 on a flip. Compose those three facts and the row titled "adopt WHEN
+# THE FLAG FLIPS" was wired to auto-close at the exact instant it became actionable.
+#
+# The fix is that the stored field now holds `--moot`, which asks the OTHER question: is this row
+# still real? It stops being real only if ProposeGoal is REMOVED upstream — adopting a feature that
+# no longer exists is not work. A flip must land on rc 1, and that is G11.
+@test "G11 a FLIPPED flag is NOT moot — the arming event may never close the row" {
+  run env PGW_CLAUDE_BIN="$T/bin_on" bash "$SUBJ" --moot
+  [ "$status" -eq 1 ] || { echo "a flip read as MOOT (rc $status) — this is the auto-close defect"; false; }
+  # the control that makes the pair a measurement: the OLD stored probe does exit 0 on that flip,
+  # so the two probes disagree on exactly the fixture that matters.
+  run run_f "$SUBJ" "$T/fresh_true.json"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "G12 --moot exits 0 only on a genuine removal, never on an instrument artifact" {
+  run env PGW_CLAUDE_BIN="$T/bin_removed" bash "$SUBJ" --moot
+  [ "$status" -eq 0 ] || { echo "a verified removal did not read MOOT (rc $status)"; false; }
+  # minified past the argument-keyed pattern is §4's "read it by hand", NOT a removal — the exact
+  # conflation the `wc -l` padding bug (8c26adeb) produced in the other direction.
+  run env PGW_CLAUDE_BIN="$T/bin_minified" bash "$SUBJ" --moot
+  [ "$status" -eq 1 ] || { echo "a minified subject read as MOOT (rc $status) — would retire a live row"; false; }
+  # a subject that fails its own tripwire cannot answer, and a non-verdict must not close anything
+  run env PGW_CLAUDE_BIN="$T/bin_wrongsubject" bash "$SUBJ" --moot
+  [ "$status" -eq 2 ] || false
+  run env PGW_CLAUDE_BIN='' bash "$SUBJ" --moot
+  [ "$status" -eq 2 ] || false
+}
+
+@test "M5 restoring the pre-fix polarity makes --moot close the row on the flip" {
+  # THIS MUTANT IS THE INCUMBENT STORE STATE, the way M3's is. It re-points the mootness arm at the
+  # arming signal — one line, exactly the composition that was live for nine days — and the assertion
+  # is that G11 inverts. Without it G11 is an equivalence guard that several wrong implementations
+  # would also pass.
+  local m; m="$(mutate mootpolarity       '    3) return 0 ;;        # ProposeGoal gone from a verified subject → the row is finished
+    0|1) return 1 ;;      # feature still present (flipped, default-false, or minified) → still real'       '    3) return 1 ;;
+    0) return 0 ;; 1) return 1 ;;')" || { echo "$m"; false; }
+  run env PGW_CLAUDE_BIN="$T/bin_on" bash "$m" --moot
+  [ "$status" -eq 0 ] || { echo "mutant did not invert G11 (got $status, want 0)"; false; }
+  run env PGW_CLAUDE_BIN="$T/bin_on" bash "$SUBJ" --moot
+  [ "$status" -eq 1 ] || false                     # control: the real subject holds the row open
+}
+
+# ── G13 · THE CALLER LANDS WITH THE TOOL ──────────────────────────────────────────────────────────
+# The repo's flagship failure is the unscheduled watchdog — a detector built, selftest green, and
+# never called (scripts/autonomy-sweep.sh §2f records it by name). `--moot` is correct and SILENT
+# about the flip, so removing `--falsify` from the store without giving the flip an owner would make
+# this row strictly less observable than before the fix. That owner is the sweep arm; this pins it.
+@test "G13 the flip has an owner that PAGES, and it is not a falsifier" {
+  local sweep="$REPO/scripts/autonomy-sweep.sh"
+  [ -f "$sweep" ] || skip "autonomy-sweep.sh not in this checkout"
+  grep -q 'propose-goal-flag-watch.sh' "$sweep" || { echo "the watcher has no caller in the sweep"; false; }
+  # it must call the ARMING arm …
+  grep -q -- '--falsify' "$sweep" || { echo "the sweep does not run the arming arm"; false; }
+  # … and its consequence must be a NOTIFY, never a close: nothing in that arm may touch the store.
+  local arm; arm="$(sed -n '/2b-iii-b. THE ARMING WATCH/,/2b-iv-ratchet-consumer/p' "$sweep")"
+  [ -n "$arm" ] || { echo "the arm is not where its marker says it is"; false; }
+  printf '%s' "$arm" | grep -q -- '--role desk' || { echo "the arm does not page the desk"; false; }
+  ! printf '%s' "$arm" | grep -qE 'cc-backlog (done|close)' || { echo "the arm writes to the backlog — it must only page"; false; }
+  true
+}
+
 @test "G9 --report never exits 0 unless an arm is signalling" {
   run env PGW_NOW="$NOW" PGW_CONFIG_PATHS="$T/fresh_absent.json" PGW_CLAUDE_BIN="$T/bin_off" bash "$SUBJ" --report
   [ "$status" -eq 1 ] || false
