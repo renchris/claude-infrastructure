@@ -138,7 +138,7 @@ count_of() { cat "$TMPDIR/frontier-gate-$1.count" 2>/dev/null || echo 0; }
   printf '6' > "$TMPDIR/frontier-gate-L.count"
   run bash -c "$(declare -f agent_call); agent_call L fable | bash '$HOOK' 2>&1"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"cap reached (6/6"* ]]
+  [[ "$output" == *"cap reached (6/6"* ]] || false
   [[ "$output" == *"FRONTIER_HOLES.md"* ]]
 }
 
@@ -146,8 +146,8 @@ count_of() { cat "$TMPDIR/frontier-gate-$1.count" 2>/dev/null || echo 0; }
   printf '6' > "$TMPDIR/frontier-gate-M.count"
   run bash -c "$(declare -f bash_call); bash_call M 'handoff-fire.sh --model fable' | bash '$HOOK' 2>&1"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"cap reached (6/6"* ]]
-  [[ "$output" == *"--model claude-opus-5"* ]]
+  [[ "$output" == *"cap reached (6/6"* ]] || false
+  [[ "$output" == *"--model claude-opus-5"* ]] || false
   # It must NOT tell a SESSION fire to "re-spawn this agent" — that names a tool the caller
   # did not use, and the agent then looks for a defect in the wrong place.
   [[ "$output" != *"Re-spawn this agent"* ]]
@@ -166,7 +166,7 @@ count_of() { cat "$TMPDIR/frontier-gate-$1.count" 2>/dev/null || echo 0; }
   write_cfg false 2099-12-31 6
   run bash -c "$(declare -f bash_call); bash_call O 'handoff-fire.sh --model fable' | bash '$HOOK' 2>&1"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"window is CLOSED"* ]]
+  [[ "$output" == *"window is CLOSED"* ]] || false
   [[ "$output" == *"--model claude-opus-5"* ]]
 }
 
@@ -210,28 +210,28 @@ mutate() { # <sed expr> → path to a mutated copy of the hook
   M="$(mutate '/grep -qE/s/|| return 1/|| :/')"
   # the mutant is built by neutering the entry-point guard: assert it CHANGED the file,
   # or the mutant is vacuous and proves nothing.
-  ! cmp -s "$M" "$HOOK"
+  ! cmp -s "$M" "$HOOK" || false
   run bash -c "$(declare -f bash_call); bash_call T 'cc-backlog add --why-not-now \"needs-human: re-fire with --model claude-fable-5-1\"' | bash '$M'"
   [ "$(count_of T)" = 1 ]   # the mutant MIScounts — case 9b is what kills it
 }
 
 @test "21 MUTANT — equality instead of prefix stops counting the PRIOR frontier id" {
   M="$(mutate 's|    fable\|claude-fable-5\*) return 0 ;;|    fable) return 0 ;;|')"
-  ! cmp -s "$M" "$HOOK"
+  ! cmp -s "$M" "$HOOK" || false
   run bash -c "$(declare -f bash_call); bash_call U 'handoff-fire.sh --model claude-fable-5' | bash '$M'"
   [ "$(count_of U)" = 0 ]   # silently unbounded — case 5 is what kills it
 }
 
 @test "22 MUTANT — treating --dry-run as a real fire spends a slot on a probe" {
   M="$(mutate 's|  case "\$c" in \*--dry-run\*) return 1 ;; esac|  :|')"
-  ! cmp -s "$M" "$HOOK"
+  ! cmp -s "$M" "$HOOK" || false
   run bash -c "$(declare -f bash_call); bash_call V 'handoff-fire.sh --dry-run --model fable' | bash '$M'"
   [ "$(count_of V)" = 1 ]   # case 10 is what kills it
 }
 
 @test "23 MUTANT — reading tool_input.model on a Bash call restores the original hole" {
   M="$(mutate 's|^  path=session$|  path=session; exit 0|')"
-  ! cmp -s "$M" "$HOOK"
+  ! cmp -s "$M" "$HOOK" || false
   run bash -c "$(declare -f bash_call); bash_call W 'handoff-fire.sh --model fable' | bash '$M'"
   [ "$status" -eq 0 ]
   [ "$(count_of W)" = 0 ]   # this IS the pre-fix behaviour; cases 3-8 are what kill it
