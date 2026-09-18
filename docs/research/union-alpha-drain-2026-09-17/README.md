@@ -589,3 +589,65 @@ market is the same shape as
 [[reference-a-refusal-bounds-the-tool-not-the-world]]: **a refusal bounds the instrument, and
 its message names world-shaped causes, so it gets believed as a fact about the world.** The
 discriminating instrument here was not the API at all — it was the vendor's own pricing page.
+
+## ⚠️ SECOND CORRECTION — the router is NOT free either (measured with money, 2026-09-18)
+
+The correction above said free access exists via `openrouter/pareto-code`, quoting OpenRouter's
+FAQ. **That was wrong too, and this one was settled by spending real money rather than by
+reading.** The operator raised the key's cap from `0` to **$1**, which is what made the
+experiment possible and what bounded being wrong — the cap did exactly its job.
+
+### What the FAQ actually means
+
+> *"Is Pareto Code Router free? Yes. The pricing shown on this page for Pareto Code Router is
+> zero, so you are not charged for prompt or completion tokens."*
+
+It means **the ROUTER takes no markup**. The model it dispatches to bills normally. "The router
+is free" and "the inference is free" are different claims, and the page only supports the first.
+
+### Measured
+
+| | |
+|---|---|
+| `openrouter/pareto-code` dispatches to | **`anthropic/claude-fable-5.1`** — 8 of 8 calls, every prompt type |
+| cost per small call | **$0.00036 – $0.00242**, billed |
+| total spent establishing this | **$0.00943675** of the $1 cap |
+| control: 3 × `inclusionai/ling-3.0-flash-vl:free` | **$0.00000000** |
+
+Sum of every reported per-call `usage.cost` across 13 calls = **0.00943675**; final key `usage`
+= **0.00943675**. Exact match ⇒ **every reported cost is billed.** The 24 `:free` models are
+genuinely free; the routers are not.
+
+### 🚨 The instrument error, which nearly landed the opposite conclusion
+
+**The `usage` counter is EVENTUALLY CONSISTENT, with latency > 35s — so a same-session
+before/after delta attributes arm N's cost to arm N+1.** Measured, with the arms inverted:
+
+| arm | reported cost | observed usage delta |
+|---|---|---|
+| 1 — three `pareto-code` calls | $0.00108 | **$0.00000000** |
+| 2 — three `:free` calls (control) | $0.00000000 | **$0.00108** |
+
+The probe printed **"=> pareto-code is FREE to us"** and the control arm looked like the thing
+costing money. Both exactly backwards. Nothing in either arm was wrong except *when* the
+counter was read.
+
+⇒ **A cost/usage counter must be settled with a NO-NEW-CALLS hold before any delta is a
+measurement.** The disambiguating test spends nothing: stop calling, then poll the counter until
+it stops moving (here it held at `0.00943675` across 120s). Only then does a delta attribute.
+And the cheapest check of all is the one that caught it — **reconcile the sum of per-response
+reported costs against the account total**; they agreed to the cent, which is what proved the
+lag rather than a discount.
+
+Same family as this repo's alarm/latency rules, with a sharper edge: an eventually-consistent
+counter does not merely go stale, it **transplants** a value from one window into the next, so a
+control arm can be convicted of the treatment arm's cost.
+
+### Where this leaves the lane
+
+- Genuinely free and verified answering: the **24 `:free` models** (3 controlled at $0).
+- **Not free:** `unbiased/pareto` (listed price), `openrouter/pareto-code`, and by the same
+  mechanism every `-1` router (`auto-beta`, `fusion`).
+- The operator's "free for a week" report is **not refuted** — it may describe a promotion not
+  applied to this account, or the Cloudflare path, which remains **unmeasured**. What is refuted
+  is *this* route being free.
