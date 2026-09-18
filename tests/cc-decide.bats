@@ -710,9 +710,9 @@ _pkt() {  # $1=id  [$2=raw body override]
   run bash "$CD" open --class C --what "drift probe" --conviction 60 \
       --receipt "$BATS_TEST_TMPDIR/r2.txt" --option "a::x" --option "b::y"
   [ "$status" -eq 0 ]                       # a warning, never a new way for a close path to fail
-  [[ "$output" == *"was NOT modified"* ]]
-  [[ "$output" == *"your receipt did not land"* ]]
-  [[ "$output" == *"$id"* ]]                # the id is still echoed for the caller
+  [[ "$output" == *"was NOT modified"* ]] || false
+  [[ "$output" == *"your receipt did not land"* ]] || false
+  [[ "$output" == *"$id"* ]] || false       # the id is still echoed for the caller
   # and the packet on disk is untouched — inv7 is enforced, not merely announced
   [ "$(jq -r .receipt "$CC_DECISIONS_DIR/$id.json")" = "$BATS_TEST_TMPDIR/r1.txt" ]
 }
@@ -725,7 +725,7 @@ _pkt() {  # $1=id  [$2=raw body override]
   run bash "$CD" open --class C --what "drift probe 2" --conviction 75 \
       --receipt "$BATS_TEST_TMPDIR/r1.txt" --option "a::x" --option "b::y"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"conviction"* ]]
+  [[ "$output" == *"conviction"* ]] || false
   [ "$(jq -r .conviction "$CC_DECISIONS_DIR/$id.json")" = "60" ]
 }
 
