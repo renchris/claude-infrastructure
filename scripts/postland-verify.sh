@@ -2659,7 +2659,7 @@ do_bisect() { # <file> <good> <bad> [<test>] → sets BISECT_CULPRIT (empty when
     # census working.
     if [ -n "$tere" ]; then
       # shellcheck disable=SC2016  # authoring a script: $cnt/$crc must NOT expand here
-      printf 'cnt=$(%s"%s" --count -f %q "%s" 2>/dev/null); crc=$?\n' "$qos" "$BATS_BIN" "$tere" "$file"  # bisect-runner-template
+      printf 'cnt=$(%s"%s" --count -f %q "%s" </dev/null 2>/dev/null); crc=$?\n' "$qos" "$BATS_BIN" "$tere" "$file"  # bisect-runner-template
       # shellcheck disable=SC2016
       printf '[ "$crc" -ne 0 ] || [ "${cnt:-0}" != "0" ] || exit 125\n'
       printf 'TMPDIR=%q %s"%s" -f %q "%s" </dev/null >/dev/null 2>&1\n' "$probe_tmp" "$qos" "$BATS_BIN" "$tere" "$file"  # bisect-runner-template
