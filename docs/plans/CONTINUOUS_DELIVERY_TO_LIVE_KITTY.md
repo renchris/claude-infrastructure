@@ -179,7 +179,7 @@ Ordered by (harm prevented ÷ size). G3 first because it is what made the rest i
 | T14 | G1: FF-GATE arm denying `git commit` in the shared checkout, with a named escape hatch | — | **DONE** — landed `6cc03fc19`, live and verified end-to-end against `~/.claude/hooks/validate-bash.sh`. The row sat needs-human at conviction 80 on "a blanket deny WILL break the desk"; that is REFUTED, by measurement rather than argument. It conflated the shell's STARTING cwd with the directory the commit ACTS in — `_ffg_scan` already tracks a governing `cd`, shipped and tested for the advance arm, so `cd <worktree> && git commit` resolves to the worktree and is untouched (case 14, which states that if it ever reds the objection has become true and the arm must be reconsidered, not patched). And the innocent population is not small but EMPTY: all 63 reflog commits over 36 days are ordinary dev work (23 fix / 18 docs / 11 feat / 5 test / 2 perf / 1 wip / 1 revert / 1 chore), zero machine-, desk- or bus-authored. Nested subprocess commits (`bin/cc-bus`) never reach a PreToolUse hook, so they are out of scope by construction, not by exemption. Escape hatch `CC_SHARED_COMMIT_GATE=off` is house-standard and PER-ARM (case 17). |
 | T15 | G2: edge-trigger converge from `post_release_finish()`, guarded on `git cherry` empty | — | **DONE** — `tests/ship-land-converge-edge.bats`, 9/9 green with the diff and 9/9 red on pristine trunk. ONE REFINEMENT AGAINST THE SPEC, and it decides whether the guard works at all: the predicate is read with `git -C $DEPLOY_REPO`, **never in the lander's own worktree**. `merge --ff-only` compares ANCESTRY in the SHARED CHECKOUT, so that checkout is the only repo whose divergence can block the advance; the lander's HEAD is by construction ahead of its own origin at this point (it is what just landed), so reading `git cherry` there would answer a different question and skip every time. Case 6 pins exactly that. Failure direction is deliberate — a stale ref, an unreadable repo, `core.bare=true`, or no git at all each yield non-empty output or a non-zero rc, and every one of them SKIPS while the 600 s timer still converges. Concurrency needed no new lock: `deploy-live.sh:180` already records that the non-timer path can overlap a host phase and that the overlap "costs load, not correctness". Kill switch `SHIP_LAND_CONVERGE=off`. |
 | T16 | G4: overlay daemon self-retire on source-sha change, gated on `not st["on"]` | — | **DONE** — landed `38ec05382`, verified an ancestor of trunk by content. The row was already built when this session read it and was simply never marked; recording it here so the next reader does not re-derive it (memory: `a-plan-is-not-a-queue`). Implemented exactly as the wave prescribed: digest own source per tick, ABSTAIN if unreadable, quit on change — the shipped `lead-supervisor.sh:1329` pattern — with `not st["on"]` load-bearing rather than cautious (retiring while titles are up hits `finally: wipe(...)` and the bars vanish for no reason the operator can see), and QUIT rather than `os.execv` for the probed PEP 446 reason in the Corrections section above. |
-| T17 | Re-mint `/tmp/resident-reload-flip.sh` for packet `4194644aea26` | — |
+| T17 | Re-mint `/tmp/resident-reload-flip.sh` for packet `4194644aea26` | — | **DONE, and NOT in `/tmp`** — landed as `migrations/0031-resident-reload-flip.sh`, `tests/migration-0031-resident-reload.bats` 14/14. The row's own spelling was the defect: `/tmp` is *why* the predecessor died (reaped by the 2026-09-16 reboot), so re-minting it there re-arms the same failure on the next boot. `migrations/` is the enforcing side — a `c10` migration is STAGED and never self-runs, and `registration-state.sh` files its `migration-step:` to cc-backlog, so the operator's step is tracked by the machine instead of by a file someone must remember to visit. The script REFUSES while the packet is `open` (and on `vetoed`, missing, or unreadable — fails closed), so it cannot answer a class-C question by acting; case 13's mutant proves that refusal is consulted. It sets `CC_INSTALL_RESIDENT_RELOAD=1` in the `com.claude.deploy-live` plist rather than flipping install.sh's `:-0` default, because the default would arm every hand-run and agent-run install.sh on the box — a strictly larger grant than the packet asks about. Rollback one-liner is in the header, per the class-C contract. **Verified the live plist and the live packet were never touched by any of this.** |
 
 ## Record
 
@@ -223,6 +223,28 @@ Ordered by (harm prevented ÷ size). G3 first because it is what made the rest i
   SYMPTOM (66/66 undelivered) and inferred the remedy from the symptom's location. The instrument
   that settled it was one command — `cc-roles list` — asked of the POPULATION rather than the code.
   A gate's surface is not its traffic, and the traffic is a thing you can just go and count.
+- 2026-09-17 T17 landed as `migrations/0031-resident-reload-flip.sh`, **and the packet it stages
+  for is measurably overstated — the operator should rule on the corrected version, not the filed
+  one.** Packet `4194644aea26` names "two daemons: the one that supervises sessions, and the one
+  that is the only guard against the crash class that killed five machines in eleven days."
+  Enumerated from the live LaunchAgents dir, exactly THREE claude jobs are resident (KeepAlive):
+  `caffeinate-floor`, `compressor-sentinel`, `lead-supervisor` — and **lead-supervisor already cures
+  itself** (`self_restart_if_stale()`, `lead-supervisor.sh:1329`). So one of the packet's two named
+  daemons is out of scope, and the cost of its "no" branch — *"stale daemons keep running old code
+  indefinitely until you restart each one by hand"* — is true today of two daemons, neither of them
+  the supervisor. Same shape as T13 one entry up: the claim was about a POPULATION, and nobody had
+  counted it.
+- 2026-09-17 **THE THIRD OPTION THE PACKET DOES NOT CARRY**, filed `309ff6d7d4d2` at conviction 70%:
+  give `compressor-sentinel` and `caffeinate-floor` the self-retire that `lead-supervisor` and (as
+  of `38ec05382`) the overlay daemon already have. A daemon retiring ITSELF is not the unattended
+  path holding a power withheld from agents — it is a process deciding about its own lifetime, which
+  is why nobody had to rule on the supervisor's. If it were built, the packet's remaining population
+  would be zero and the decision would be moot rather than answered. **Not driven, deliberately, and
+  the reason is not scope:** `compressor-sentinel` is the crash guard the packet says was absent when
+  five machines died, a self-exit opens a restart gap in exactly that protection, and how wide a gap
+  that guard tolerates is not a fact this session could measure. That is a `needs-human` value call
+  in the same daemon-restart class the packet already reserves — so it is filed WITH its number and
+  its receipt rather than either driven or dropped.
 - 2026-09-17 A pre-existing bug fell out of that arm and is fixed with it: the `pane=` signal
   convicted on ANY non-zero probe exit, so a probe that merely failed to RUN produced `ABSENT
   dead-pane` — a false absence cc-notify escalates to rc 3 and a phone page. It was unreachable
