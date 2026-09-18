@@ -179,3 +179,50 @@ EOF
   [[ "$output" == *"--selftest:"* ]] || { echo "$output"; false; }
   [[ "$output" == *"REFUSES an added suite"* ]] || { echo "$output"; false; }
 }
+
+# ── THE OTHER DOOR INTO THE PARTITION (2026-09-17, found while landing b2135387fd55) ─────────────
+# The partition is a SET DIFFERENCE, so a suite enters it TWO ways: the file is added, or its line
+# in scripts/offbox-excluded.manifest is DELETED. The gate read only the first, so a de-listing
+# admitted a suite with no off-box evidence at all — past the one check whose entire purpose is that
+# evidence. Measured on the real tree at the time: with the line deleted, `--working` reported
+# "0 added suite(s) checked … admit" (rc 0); with the derivation fixed, the same tree REFUSED
+# "tests/ship-land.bats — off-box state=cut" (rc 1).
+#
+# THE LINT ITSELF ISSUES THE INVITATION, which is why this is a red-proof and not a hypothetical:
+# the shrink arm advises deleting the line whenever an excluded suite the change modifies
+# re-measures green, and that measurement is ONE sample of a state that oscillates. The same
+# run_suite predicate read `green` in the shrink arm and `cut` in the admission arm minutes apart on
+# tests/ship-land.bats — 173 tests against a per-suite bound. A single green was enough to advise
+# the deletion, and nothing downstream re-asked.
+_delist_fixture() {  # $1 = manifest body at HEAD → prints "<base> <head>"
+  git init -q "$FIX"
+  printf '# measured 2026-01-01: off-box state=red\ntests/ambient.bats\n' \
+    > "$FIX/scripts/offbox-excluded.manifest"
+  git -C "$FIX" add -A
+  git -C "$FIX" -c user.email=tester@example.com -c user.name=tester commit -q -m base
+  local base; base="$(git -C "$FIX" rev-parse HEAD)"
+  printf '%s' "$1" > "$FIX/scripts/offbox-excluded.manifest"
+  git -C "$FIX" add -A
+  git -C "$FIX" -c user.email=tester@example.com -c user.name=tester commit -q -m change
+  printf '%s %s' "$base" "$(git -C "$FIX" rev-parse HEAD)"
+}
+
+@test "a DE-LISTING is an admission and is REFUSED when the suite is not off-box-clean" {
+  read -r base head <<< "$(_delist_fixture '')"     # the entry, and its measurement, deleted
+  run bash "$LINT" --range "$base..$head"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"REFUSE"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"tests/ambient.bats"* ]] || { echo "$output"; false; }
+}
+
+# THE CONTROL, and it is the one that stops the case above passing for the wrong reason: the range
+# must not refuse merely because it touches the manifest. Here the entry SURVIVES and only its
+# comment changes, so nothing enters the partition and the land proceeds.
+@test "control: a manifest change that de-lists NOTHING admits — only a deletion is an admission" {
+  read -r base head <<< "$(_delist_fixture '# measured 2026-06-01: off-box state=red
+tests/ambient.bats
+')"
+  run bash "$LINT" --range "$base..$head"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"admit"* ]] || { echo "$output"; false; }
+}

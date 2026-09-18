@@ -131,6 +131,34 @@ excluded_has()  { printf '%s\n' "$1" | grep -xF -f <(bash "$(partition_bin)" exc
 added_in_range() { # $1=range
   ( cd "$(root_dir)" && git diff --diff-filter=A --name-only "$1" -- 'tests/*.bats' 2>/dev/null )
 }
+# THE OTHER DOOR INTO THE PARTITION, and it was unguarded (2026-09-17, found while landing
+# b2135387fd55). The partition is a SET DIFFERENCE, so a suite enters it two ways: the file is
+# ADDED (above), or ITS EXCLUSION LINE IS DELETED. This gate is the admission gate for that
+# partition and read only the first, so shrinking scripts/offbox-excluded.manifest admitted a suite
+# with no off-box evidence of any kind — past the one check whose entire purpose is that evidence.
+#
+# NOT HYPOTHETICAL, AND THE LINT ITSELF ISSUES THE INVITATION. The RATCHET arm below advises exactly
+# this deletion whenever an excluded suite THIS change modifies re-measures green. Measured on
+# tests/ship-land.bats minutes apart with the SAME run_suite predicate: the shrink arm read `green`
+# and this gate's admission arm read `cut`. That suite is 173 tests and cuts against the per-suite
+# bound under load, so its off-box state OSCILLATES — and a single green was enough to advise
+# deleting the line, while nothing downstream would have re-asked. The cost is named in this file's
+# own refusal text: a suite that reds or cuts off-box writes no off-box stamp and shuts deploy-live
+# T1H for every session on this box.
+#
+# `-- <manifest>` with `--unified=0`, and the `-` lines are the deletions. The `^-tests/.*[.]bats$`
+# anchor keeps a removed COMMENT out (every entry carries a measurement comment, which is removed in
+# the same hunk and is not a suite).
+delisted_in_range() { # $1=range
+  ( cd "$(root_dir)" && git diff --unified=0 "$1" -- scripts/offbox-excluded.manifest 2>/dev/null ) \
+    | sed -n 's/^-\(tests\/[^[:space:]]*\.bats\)$/\1/p'
+}
+# The same read against the WORKING TREE, for --precheck --working: a de-listing that is still
+# unstaged is exactly the case the untracked-suites note below exists for, one door over.
+delisted_working() {
+  ( cd "$(root_dir)" && git diff --unified=0 -- scripts/offbox-excluded.manifest 2>/dev/null ) \
+    | sed -n 's/^-\(tests\/[^[:space:]]*\.bats\)$/\1/p'
+}
 untracked_suites() {
   ( cd "$(root_dir)" && git ls-files --others --exclude-standard -- 'tests/*.bats' 2>/dev/null )
 }
@@ -194,8 +222,8 @@ lint_range() {
     added="$(printf '%s\n' "$added_override" | tr ', ' '\n' | awk 'NF')"
   else
     [ -n "$range" ] || return 2
-    added="$(added_in_range "$range")"
-    [ "$working" = "1" ] && added="$(printf '%s\n%s\n' "$added" "$(untracked_suites)" | awk 'NF' | sort -u)"
+    added="$(printf '%s\n%s\n' "$(added_in_range "$range")" "$(delisted_in_range "$range")" | awk 'NF' | sort -u)"
+    [ "$working" = "1" ] && added="$(printf '%s\n%s\n%s\n' "$added" "$(untracked_suites)" "$(delisted_working)" | awk 'NF' | sort -u)"
     modified="$(modified_in_range "$range")"
   fi
 
