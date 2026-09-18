@@ -56,7 +56,7 @@ This is the hazard `scripts/ship-land.sh:1246-1247` already documents in prose �
 actioning four of them would have REVERTED trunk"* — confirmed here on a live row, with
 the regression measured rather than asserted.
 
-## The population: 7 rows, and the oracle cannot see supersession for any of them
+## The population: 7 rows, and every supersession hatch needs textual lineage
 
 All 7 live rows whose falsifier is `land-content-verify.sh`:
 
@@ -70,9 +70,31 @@ All 7 live rows whose falsifier is `land-content-verify.sh`:
 | `78e8987b1306` | open | 1 | no | exit 1 |
 | `34c8de93de46` | claimed | 1 | no | — |
 
-Three of seven have a same-subject corrected retry already on trunk. The oracle is
-byte-level, so it reports *not landed* for every one of them — the retraction arm fails
-in the direction that **preserves the pile**, for exactly the rows built to retire it.
+Three of seven have a same-subject corrected retry already on trunk, and the oracle
+reports *not landed* for every one of them.
+
+**CORRECTION to the obvious reading, and it is the sharpest thing in this document.**
+The oracle is **not** naively byte-level — an earlier draft of this file said so and was
+wrong. `scripts/land-content-verify.sh:326-338` already carries **three** escape hatches,
+tried in order, before a path counts against the verdict:
+
+| hatch | what it requires |
+|---|---|
+| `trunk_ever_carried` | trunk once held **this exact whole-file blob** → SUPERSEDED |
+| `trunk_covers_every_line` | trunk holds **every ref line** as a multiset superset → RELOCATED |
+| `trunk_landed_this_commit_amended` | **this commit** landed in amended form → AMENDED |
+
+All three are tests of **TEXTUAL LINEAGE** between the ref and trunk, and the design is
+sound for what it was built for. A **corrected rewrite** shares none of them: `1784b21e6`
+re-implemented the same feature from scratch, so trunk never held `6f099e0b8`'s blob,
+does not contain its `hostname -s` lines (it deliberately replaced them), and is not that
+commit amended. The ref falls through all three hatches **correctly**.
+
+So the verdict is *literally true of every path* and still produces the **wrong action**.
+That is the whole defect, and it is much narrower than "the oracle is byte-level": the
+gap is a supersession relation with **no textual lineage at all**, which no lineage test
+can reach. The retraction arm fails in the direction that **preserves the pile**, for
+exactly the rows it was built to retire.
 
 ## Two further live faults found while measuring
 
@@ -102,7 +124,8 @@ store*). The instrument it landed makes it askable, and the answer is above.
 
 ## The open fork — why this is filed rather than fixed
 
-Making the oracle supersession-aware is a genuine value fork on the landing gate:
+Adding a **fourth, lineage-free** hatch is a genuine value fork on the landing gate
+(the three lineage hatches above already exist and are not in question):
 
 - **Auto-retract** on a same-subject trunk match changes `rc`, so `cc-premise` would
   close rows automatically — and a wrong match **silently drops genuinely stranded
