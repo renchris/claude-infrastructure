@@ -150,6 +150,16 @@
 #               unreadable INSTRUMENT, not a mismatch, and is honoured TTL-bounded — the fail
 #               direction here is asymmetric: `stranger ⇒ reap` is the only branch that can mint a
 #               second verifier, so an unverifiable identity must make the reader MORE patient.
+#   C39 predicate AUTO-REVERT REFUSES A CULPRIT ELECTED OVER A KNOWN-FLAKY PREDICATE. `git bisect
+#               run` assumes its predicate is a function of the TREE; over a flaky test it is a
+#               function of the tree AND the box, so the walk names a commit by coin-flip. The SUT
+#               already writes flakes.jsonl and, until this clause, never read it. auto_revert now
+#               consults it keyed on the failing FILE plus the bisected TEST (prefix-matched —
+#               red_actions truncates the name to 120 chars) and skips with
+#               reason=flaky-predicate. ONE-SIDED like bisect_reach_ok: it refuses only on a PROVEN
+#               prior flake, an absent/unreadable store is no evidence and proceeds under its own
+#               BLIND token. The RED, the page and the backlog row are untouched — only the
+#               irreversible trunk-mutating action is withheld.
 #   C37 tap     on a NON-GREEN verdict (red|cut|hung) the corpus TAP is retained at
 #               $CC_POSTLAND_DIR/tap/<tree-sha>.tap BEFORE $RUN_TMP is removed, and the page
 #               for that verdict quotes the path on a `tap:` line. It is the ONLY artifact
@@ -2805,6 +2815,73 @@ orphan_culprit_bats() {   # <culprit> → echoes the wrapper's path
   run git -C "$R" cat-file -e "origin/main:tests/bad.bats"
   [ "$status" -eq 0 ]
   [ "$(git -C "$R" rev-parse origin/main)" = "$twin" ]
+}
+
+# ── C39 A NONDETERMINISTIC PREDICATE CANNOT ELECT A CULPRIT (item 615406aea490) ──────────────────
+# `git bisect run` assumes its predicate is a FUNCTION OF THE TREE. Over a flaky test it is a
+# function of the tree AND the box, so the walk elects whichever commit the coin happened to favour
+# while every step of it stays individually honest. Measured TWICE on the live box, and both times
+# the only thing that stopped the revert was the reverse patch failing to apply:
+#
+#   97758a632      the rc-90 note in do_bisect                              rc 90, revert=none
+#   06504849a4e3   touches exactly ONE path — tests/fixtures/validate-bash-sites.tsv, a fixture
+#                  belonging to tests/validate-bash-differential.bats — and was elected for a red
+#                  in tests/cc-permission-harvest.bats::"the read-only pipeline is BOUNDED…"
+#                  (2026-09-16T11:31Z, tip a7c61d899016)                    rc 90, revert=none
+#
+# rc 90 IS LUCK, NOT A GUARD: a culprit whose lines have not moved reverts CLEANLY and the land lane
+# puts it on trunk. bisect_reach_ok cannot cover this either — it vetoes only a culprit whose paths
+# are ALL `*.md`, and a `.tsv` fixture falls into its "code/config, possibly transitively reachable"
+# arm. And the evidence was ALREADY ON DISK: flakes.jsonl carried four 1-of-3 rows for that exact
+# file+test (09-11T15:21Z, 09-11T21:58Z, 09-12T04:23Z, 09-12T22:06Z) before the walk ran. `FLAKES`
+# had no reader anywhere in the SUT — two append sites and a `wc -l` for `status`.
+@test "C39: a culprit elected over a KNOWN-FLAKY predicate is refused, and the RED still stands" {
+  ship_stub
+  culprit="$(arv_red)"
+  # The store the SUT writes and never read. Seeded AFTER arv_red's two windows so it is evidence
+  # the walk could have consulted, exactly as the four live rows predated the 09-16 walk. `false`
+  # fails 3-of-3, so the SUT mints no row of its own for this file and this is the only one.
+  printf '{"ts":"2026-09-11T15:21:28Z","file":"tests/bad.bats","test":"boom","sha":"%s","phase":"postland","outcome":"1-of-3","signal":"exit:0","loadavg":"20.89"}\n' \
+    "$culprit" >> "$CC_POSTLAND_DIR/flakes.jsonl"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  # CLAIM 1: refused, with the token that names WHY — not the kill switch, not the cap, not rc 90.
+  run grep -c 'AUTOREVERT verdict=skipped reason=flaky-predicate' "$CC_POSTLAND_DIR/runner.log"
+  [ "$output" = "1" ]
+  # CLAIM 2: refused BEFORE anything was attempted, so the retry ladder records no attempt against a
+  # culprit nothing tried to revert and the budget stays with the real ones.
+  [ ! -f "$CC_POSTLAND_DIR/reverts/$culprit" ]
+  run git -C "$R" branch --list "postland-revert-${culprit:0:12}"
+  [ -z "$output" ]
+  [ ! -f "$REC/ship.argv" ]
+  # CLAIM 3 — THE HARM ITSELF. Here the reverse patch applies CLEANLY (the culprit ADDS
+  # tests/bad.bats, so reverting it merely deletes the file), which is the half rc 90 never reached:
+  # unguarded, the land lane puts that revert on trunk.
+  git -C "$R" fetch -q origin
+  [ "$(git -C "$R" rev-parse origin/main)" = "$culprit" ]
+  run git -C "$R" cat-file -e "origin/main:tests/bad.bats"
+  [ "$status" -eq 0 ]
+  # CLAIM 4 — SCOPE. Only the irreversible action is withheld: the net still reports exactly as it
+  # does under the kill switch, so a flaky suite stays actionable by a human.
+  [ "$(pages_n)" = "1" ]
+  [ -f "$REC/cc-backlog.argv" ]
+}
+
+# THE MUTANT THIS KILLS: a guard keyed on the FILE alone. The bisect's predicate is the NAMED test —
+# do_bisect takes it as its 4th argument and `--count`-guards it — so a flake in a SIBLING test is
+# not evidence about this predicate, and a file-keyed guard would refuse every culprit in any file
+# that has ever flaked anywhere, which on this box is most of the corpus. C20's happy path proves
+# the lane still works against an EMPTY store; this proves it still works against a NON-empty one
+# that simply does not name this predicate, which is the case a file-keyed guard gets wrong.
+@test "C39: a flake in a SIBLING test of the same file does NOT suppress the revert" {
+  ship_stub
+  culprit="$(arv_red)"
+  printf '{"ts":"2026-09-11T15:21:28Z","file":"tests/bad.bats","test":"some other case entirely","sha":"%s","phase":"postland","outcome":"1-of-3","signal":"exit:0","loadavg":"20.89"}\n' \
+    "$culprit" >> "$CC_POSTLAND_DIR/flakes.jsonl"
+  run env POSTLAND_AUTOREVERT=on bash "$SUT" --run-if-needed
+  run grep -c 'AUTOREVERT verdict=skipped reason=flaky-predicate' "$CC_POSTLAND_DIR/runner.log"
+  [ "$output" = "0" ]
+  [ -s "$REC/ship.argv" ]
+  [ -f "$CC_POSTLAND_DIR/reverts/$culprit" ]
 }
 
 # ── C34 the ARTIFACTS A HUMAN READS must say the culprit is orphaned too (item 6e1361f39202) ────

@@ -3088,12 +3088,70 @@ patch_twin() { # <sha> → echoes `<trunk-sha>` | `none` | `blind`
   [ -n "$twin" ] || { printf 'none\n'; return 0; }
   printf '%s\n' "$twin"
 }
-auto_revert() { # <culprit> <failing-file> — 0 = attempted (marker written), 1 = skipped
-  local c="$1" file="${2:-tests/}" c12 br wt mk rc=1 rev="" step="mint" outcome pf sid tip=""
+auto_revert() { # <culprit> <failing-file> [<failing-test>] — 0 = attempted (marker written), 1 = skipped
+  local c="$1" file="${2:-tests/}" ftest="${3:-}" c12 br wt mk rc=1 rev="" step="mint" outcome pf sid tip=""
   c12="$(sha12 "$c")"
   [ "$AUTOREVERT" = "off" ] && { log "AUTOREVERT verdict=skipped reason=kill-switch culprit=$c12"; return 1; }
   git -C "$REPO" log -1 --format=%s "$c" 2>/dev/null | grep -q '^Revert' \
     && { log "AUTOREVERT verdict=skipped reason=culprit-is-itself-a-revert culprit=$c12"; return 1; }
+
+  # ── GUARD: A NONDETERMINISTIC PREDICATE CANNOT ELECT A CULPRIT (2026-09-17, item 615406aea490)
+  # `git bisect run` assumes its predicate is a FUNCTION OF THE TREE. When the convicted test is a
+  # known flake the predicate is a function of the tree AND the box, so the walk converges on
+  # whichever commit the coin happened to favour: the verdict is noise wearing a sha, and every
+  # step of the walk is individually honest.
+  #
+  # THIS IS THE FILE'S SECOND RECORDED INSTANCE, AND BOTH WERE STOPPED BY LUCK. The rc-90 note in
+  # do_bisect records 97758a632. The twin is 06504849a4e3, which touches exactly ONE path —
+  # tests/fixtures/validate-bash-sites.tsv, a fixture belonging to tests/validate-bash-differential
+  # .bats — and was elected for a red in tests/cc-permission-harvest.bats::"the read-only pipeline
+  # is BOUNDED…". Neither revert was refused; both CONFLICTED (rc 90) and applied nothing. A culprit
+  # whose lines have not moved reverts CLEANLY and the land lane puts it on trunk, so the conflict is
+  # the save, not a guard — and bisect_reach_ok cannot be that guard here: it vetoes only a culprit
+  # whose paths are ALL `*.md`, and a `.tsv` fixture falls into its "code/config, possibly
+  # transitively reachable" arm.
+  #
+  # THE EVIDENCE WAS ALREADY ON DISK AND NOTHING READ IT. flakes.jsonl held FOUR 1-of-3 rows for that
+  # exact file+test (2026-09-11T15:21Z, 09-11T21:58Z, 09-12T04:23Z, 09-12T22:06Z) before the
+  # 2026-09-16T11:31Z walk ran, and three more have landed since. `FLAKES` was WRITE-ONLY in this
+  # script: two append sites and a `wc -l` for `status`, no reader anywhere. This is that reader.
+  #
+  # SCOPE — the RED, the page and the backlog row are UNTOUCHED; only the irreversible trunk-mutating
+  # action is withheld, so a flaky suite still reds and still pages and a human still decides. C29
+  # corroboration is NOT a substitute: it asks whether the TIP is genuinely failing, which can be
+  # true while a bisect over the same coin-flip predicate is still meaningless.
+  #
+  # ONE-SIDED, exactly like bisect_reach_ok: it refuses only on a PROVEN prior flake. An absent or
+  # unreadable store is NO EVIDENCE and proceeds — failing closed would disable auto-revert on any
+  # box whose store has not been written yet, and C20's positive control would red. The blind case
+  # gets its OWN token so the fail-open is never silent.
+  #
+  # PREFIX MATCH, NOT EXACT: red_actions truncates $ftest to 120 chars (see there), so an exact
+  # `"test":"$ftest"` would silently miss every longer name — the direction that reads as "no prior
+  # flake" and reverts anyway. Anchored at the field, so it is still a field match and not a scan.
+  # `case` over a string already in memory, never `printf | grep -q`: that pipe is the
+  # pipefail-SIGPIPE trap this repo ratchets against, and here it would invert the guard's meaning.
+  local fl_rows="" fl_n=0 fl_line fl_what
+  case "$ftest" in ''|'?'|'tests/') fl_what="" ;; *) fl_what="$ftest" ;; esac
+  if [ -r "$FLAKES" ]; then
+    fl_rows="$(grep -F "\"file\":\"$file\"" "$FLAKES" 2>/dev/null || true)"
+    while IFS= read -r fl_line; do
+      [ -n "$fl_line" ] || continue
+      if [ -n "$fl_what" ]; then
+        case "$fl_line" in *"\"test\":\"$fl_what"*) fl_n=$((fl_n+1)) ;; esac
+      else
+        fl_n=$((fl_n+1))
+      fi
+    done <<EOF
+$fl_rows
+EOF
+  else
+    log "AUTOREVERT flake-guard BLIND: $FLAKES unreadable — no evidence either way, proceeding (culprit=$c12 file=$file)"
+  fi
+  [ "$fl_n" -gt 0 ] && {
+    log "AUTOREVERT verdict=skipped reason=flaky-predicate culprit=$c12 file=$file test=${fl_what:-<file-wide>} prior-flakes=$fl_n (this predicate is nondeterministic on this box, so the bisect walk that named $c12 elected it by coin-flip, not by cause — the RED, the page and the backlog row stand; pin the flake first, then revert by hand if it is still real)"
+    return 1
+  }
   mkdir -p "$REVERTS" 2>/dev/null || true
   mk="$REVERTS/$c"
   ATTEMPT_N=1
@@ -3576,7 +3634,7 @@ red_actions() { # <sha> <file> — bisect, page, backlog, notify, auto-revert. S
   # AUTO-REVERT only a BISECTED culprit (guard 0). When the bisect was undecidable, `culprit` above
   # fell back to the target sha for PAGING purposes — reverting that would revert a tip nothing
   # convicted, so the fallback is deliberately not passed through here.
-  [ -n "$bisected" ] && auto_revert "$bisected" "$file"
+  [ -n "$bisected" ] && auto_revert "$bisected" "$file" "$ftest"
   return 0
 }
 hung_actions() { # <sha> <tree> — page + backlog + notify, routed to the SEAM owner.
