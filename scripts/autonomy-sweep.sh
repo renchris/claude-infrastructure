@@ -1522,6 +1522,74 @@ if [ -x "$_premise" ] && command -v python3 >/dev/null 2>&1; then
   fi
 fi
 
+sweep_yield 2b-iii-b-propose-goal-arm
+
+# ── 2b-iii-b. THE ARMING WATCH — a signal that must PAGE, because it may not CLOSE ────────────────
+# backlog 2a65b9bf722d ("ProposeGoal (`tengu_propose_goal`) is default-off upstream — adopt when the
+# flag flips"). This arm is the other half of a polarity fix landed 2026-09-17, and it exists
+# because the currency pass directly above it can only express ONE disposition.
+#
+# THE DEFECT IT REPLACES, measured end-to-end against the real cc-premise rather than inferred. That
+# row stored `propose-goal-flag-watch.sh --falsify` as its `--falsifier`. `run_falsifier` reads exit
+# 0 as "the condition this row was filed for is GONE" (bin/cc-premise:1370, 1402) and the pass above
+# runs `--close-falsified 25` every 6 h. `--falsify` exits 0 when the flag FLIPS TRUE. So the row
+# whose entire title is "adopt WHEN THE FLAG FLIPS" was wired to auto-close at the exact instant it
+# became actionable, with evidence reading "falsifier passed — the condition is GONE", and the
+# adoption would never have happened. Proof, both arms, one fixture: a fresh cache carrying
+# `tengu_propose_goal:true` makes `cc-premise check 2a65b9bf722d` print `verdict=falsified` and
+# instruct "Close it citing this run", while the live control prints `verdict=clear`.
+#
+# ARMING AND MOOTNESS ARE DIFFERENT QUESTIONS AND THE `--falsifier` FIELD HOLDS ONLY ONE. The store
+# now holds the mootness probe (`--moot`, exit 0 only when `ProposeGoal` is absent from a subject
+# that passes its own tripwire — adopting a removed feature is not work). That is correct and it is
+# also SILENT about the flip, which would leave the arming event owned by nothing. A detector with
+# no owner is not an actuator, so the flip gets this arm: it PAGES and touches no store.
+#
+# ABOVE THE `nothing-new` EARLY EXIT, for 2f's reason stated sharply: an upstream flag flip produces
+# no page, no alarm and no ledger row of its own — the silence IS the failure — so wiring it below
+# the gate would run it only on sweeps that already had other news.
+#
+# ALARM BUDGET. The subject is a vendor flag that has been absent (not false — absent) from all five
+# config caches for the nine days this row has existed, and the arm fires ONLY on exit 0. Steady
+# state is therefore zero pages; one page means the thing we have been waiting for happened. rc 1
+# (off, healthy instrument) and rc 2 (nobody asked GrowthBook inside the window) are both journalled
+# and neither pages — rc 2 in particular is NOT "off", and paging on it would spend the budget on
+# our own instrument going quiet (memory: alarm-polarity-and-attention-budget).
+#
+# PURE READ + one notify: it reads cache JSON and greps a binary. It writes no store, marks nothing
+# and spends no quota, so like 2f it needs no deployed-copy guard.
+_pgw="$_SWEEP_DIR/propose-goal-flag-watch.sh"
+_pgw_rc=""
+if [ -x "$_pgw" ]; then
+  # Bounded and at `utility` like every other probe here, so the Background band's E-core
+  # confinement cannot turn a grep into an rc-124 non-verdict
+  # (memory: bound-must-fit-the-band-not-the-bench).
+  _bounded bash "$_pgw" --falsify >/dev/null 2>&1; _pgw_rc=$?
+  if [ "$_pgw_rc" -eq 0 ]; then
+    # The page names the ROW and the ONE command, and says explicitly what must NOT happen — the
+    # close this whole fix exists to prevent. Addressed to the desk ROLE, resolved at send time,
+    # exactly as §3 does below.
+    CC_ROLES_DIR="$ROLES_DIR" sweep_bounded "$NOTIFY_TIMEOUT_S" "$NOTIFY" --role desk       "🚩 tengu_propose_goal FLIPPED TRUE — cc-backlog 2a65b9bf722d is now ACTIONABLE. Adopt ProposeGoal: cc-backlog unblock 2a65b9bf722d. Do NOT close it as falsified; the flip is the START of this work, not the end of it. Read: bash scripts/propose-goal-flag-watch.sh --report"       >/dev/null 2>&1 || true
+  fi
+fi
+# Journalled on EVERY sweep, including the quiet ones. "the watcher is absent", "the bound cut it"
+# and "the flag is still off" are three different facts and collapsing them would make a dead rail
+# read exactly like a patient one — the failure this arm's own subject spent nine days proving.
+# ONE command, no `|| fallback`, and that is a CONTRACT with tests/idl-record-size.bats rather
+# than a style choice. That suite extracts each `log_idl <disp> "$(…)"` block verbatim and re-runs
+# it with ` > "$1"` appended. A redirect binds to the LAST command of an `||` list, so a
+# `jq … || printf …` block writes only the FALLBACK to the file and leaks jq's real output to
+# stdout — the emit then reads as two lines and the size assertion dies on "integer expected"
+# rather than on a size. So the verdict is resolved in shell first and the emit is a single jq.
+case "${_pgw_rc:-absent}" in
+  0)   _pgw_verdict="FLIPPED-paged" ;;
+  1)   _pgw_verdict="still-off" ;;
+  2)   _pgw_verdict="non-verdict-nobody-asked" ;;
+  124) _pgw_verdict="bound-exceeded" ;;
+  *)   _pgw_verdict="watcher-absent" ;;
+esac
+log_idl propose-goal-arm "$(jq -nc --arg rc "${_pgw_rc:-absent}" --arg v "$_pgw_verdict" '{propose_goal_rc:$rc, propose_goal_verdict:$v}')"
+
 sweep_yield 2b-iv-ratchet-consumer
 
 # ── 2b-iv. THE RATCHET'S CONSUMER (W1 item 6) ─────────────────────────────────────────────────────

@@ -38,11 +38,31 @@
 # consumer of the stored falsifier treats non-zero as "keep the row open" and would therefore never
 # learn its instrument had gone blind.
 #
-#   --falsify   0 = RETRACT THE ROW: `tengu_propose_goal == true` in a cache refreshed inside the
-#                   freshness window. This is the ONLY arm that should ever close the row.
+#   --falsify   0 = ARM THE ROW: `tengu_propose_goal == true` in a cache refreshed inside the
+#                   freshness window. The precondition has ARRIVED — go adopt ProposeGoal.
 #               1 = observed off, on a healthy instrument — keep waiting.
 #               2 = NON-VERDICT: no readable cache, or every readable cache is stale. Means "nobody
 #                   asked", NOT "off". Go launch a session; do not read this as a negative.
+#
+#   🚨 --falsify MUST NOT BE THE ROW'S STORED `--falsifier`, AND WAS, FOR NINE DAYS (fixed
+#   2026-09-17). `cc-premise.run_falsifier` reads exit 0 as "the condition this row was filed for is
+#   GONE — close it" (bin/cc-premise:1370, 1402), and `scripts/autonomy-sweep.sh` runs
+#   `cc-premise sweep --record --close-falsified 25` every 6 h. So with `--falsify` stored as the
+#   falsifier, the row titled "adopt when the flag flips" was wired to AUTO-CLOSE at the exact
+#   moment the flag flipped, and the adoption it exists to trigger would never have happened.
+#   Proved end-to-end against the real cc-premise, not inferred — a fresh cache carrying
+#   `tengu_propose_goal:true` makes `cc-premise check 2a65b9bf722d` print `verdict=falsified` and
+#   instruct "Close it citing this run", while the live control prints `verdict=clear`.
+#   ARMING and MOOTNESS are different questions and only one of them may hold that field.
+#
+#   --moot      THE MOOTNESS QUESTION, and the only honest auto-closing condition for this row:
+#               adopting a feature that no longer exists upstream is not work.
+#               0 = MOOT: `ProposeGoal` is absent from a subject that PASSES its own tripwire
+#                   (--binary rc 3) — the feature looks removed upstream, so the row is finished.
+#               1 = NOT MOOT: the feature is still present, whatever the flag reads. A flip lands
+#                   here, which is the whole point — the row stays open and stays real.
+#               2 = NON-VERDICT: no readable subject, or the subject fails its tripwire. Fail-open;
+#                   cc-premise reads any non-zero as "still live", which is the safe direction.
 #   --health    0 = at least one cache was refreshed inside the window (so --falsify's 1 means "off")
 #               1 = every readable cache is stale
 #               2 = no readable cache at all
@@ -239,6 +259,31 @@ pgw_binary() {
   return 3                                     # genuinely absent from a verified subject
 }
 
+# ── the mootness arm ──────────────────────────────────────────────────────────────────────────────
+# WHY THIS IS A SEPARATE MODE AND NOT A FLAG ON --falsify. A `not-yet-true` row carries ONE
+# `--falsifier` field and cc-premise gives that field exactly one meaning: exit 0 retires the row.
+# This row has two distinct events to watch and they demand OPPOSITE dispositions —
+#
+#   the flag FLIPS            → the work becomes possible   → ARM  (--falsify, and page a human)
+#   ProposeGoal is REMOVED    → the work becomes pointless   → MOOT (--moot, and close the row)
+#
+# — so the field can only ever hold the second. The first gets its own owner instead: an arm in
+# scripts/autonomy-sweep.sh that PAGES the desk rather than touching the store.
+#
+# IT IS DELIBERATELY STRICTER THAN `--binary`. `--binary` signals on rc 0 too (gate flipped, or the
+# gate minified past the argument-keyed pattern), and neither of those makes the row moot: one is
+# the arming event and the other is an instrument artifact this file's §4 header exists to warn
+# about. Only rc 3 — absent from a subject whose tripwire PASSED — reaches 0 here.
+pgw_moot() {
+  local brc
+  pgw_binary; brc=$?
+  case "$brc" in
+    3) return 0 ;;        # ProposeGoal gone from a verified subject → the row is finished
+    0|1) return 1 ;;      # feature still present (flipped, default-false, or minified) → still real
+    *) return 2 ;;        # no readable subject / tripwire failed → could not ask
+  esac
+}
+
 # ── report ────────────────────────────────────────────────────────────────────────────────────────
 pgw_report() {
   local frc brc
@@ -248,7 +293,7 @@ pgw_report() {
   echo "propose-goal-flag-watch — cc-backlog 2a65b9bf722d (adopt ProposeGoal when tengu_propose_goal flips)"
   echo
   printf '(1) FALSIFIER  rc=%d  %s\n' "$frc" \
-    "$(case $frc in 0) echo '🚩 FLAG IS TRUE on a fresh cache — RETRACT THE ROW';;
+    "$(case $frc in 0) echo '🚩 FLAG IS TRUE on a fresh cache — ARM THE ROW, go adopt ProposeGoal';;
                     1) echo 'off, on a healthy instrument — keep waiting';;
                     *) echo '⚠️  NON-VERDICT — nobody asked GrowthBook inside the window; this is NOT "off"';;
        esac)"
@@ -269,8 +314,16 @@ pgw_report() {
   printf '    gate    %s\n' "${PGW_GATE:-<no match for the argument-keyed pattern>}"
   printf '    control ProposeGoal×%s · tripwire tengu_×%s\n' "$PGW_N_PROPOSEGOAL" "$PGW_TRIPWIRE"
   echo
-  if [ "$frc" -eq 0 ] || [ "$brc" -eq 0 ] || [ "$brc" -eq 3 ]; then
-    echo "⇒ SIGNAL. Re-read by hand, then dispose of cc-backlog 2a65b9bf722d citing what you read."
+  # The two signals are NOT interchangeable and the disposition line says which one fired, because
+  # they point opposite ways: rc 3 retires the row, frc 0 starts its work.
+  if [ "$brc" -eq 3 ]; then
+    echo "⇒ MOOT. ProposeGoal is absent from a verified build — the feature looks gone upstream."
+    echo "   Close cc-backlog 2a65b9bf722d citing this read; there is nothing left to adopt."
+    return 0
+  fi
+  if [ "$frc" -eq 0 ] || [ "$brc" -eq 0 ]; then
+    echo "⇒ ARMED. The precondition has arrived — cc-backlog 2a65b9bf722d is now ACTIONABLE."
+    echo "   \`cc-backlog unblock 2a65b9bf722d\` and adopt ProposeGoal. Do NOT close it as falsified."
     return 0
   fi
   if [ "$frc" -eq 2 ] || [ "$brc" -eq 2 ]; then
@@ -322,6 +375,8 @@ pgw_selftest() {
   run_h() { PGW_NOW="$NOW" PGW_CONFIG_PATHS="$1" PGW_CLAUDE_BIN='' bash "$0" --health; }
   # shellcheck disable=SC2329,SC2317  # invoked indirectly, as `chk`'s "$@"
   run_b() { PGW_CLAUDE_BIN="$1" bash "$0" --binary; }
+  # shellcheck disable=SC2329,SC2317  # invoked indirectly, as `chk`'s "$@"
+  run_m() { PGW_CLAUDE_BIN="$1" bash "$0" --moot; }
 
   echo "cache arms (§5's table, all seven rows):"
   chk "fresh+true → RETRACT"            0 run_f "$tmp/fresh_true.json"
@@ -351,6 +406,17 @@ pgw_selftest() {
   chk "tripwire fails → NON-VERDICT"    2 run_b "$tmp/bin_wrongsubject"
   chk "no subject → NON-VERDICT"        2 run_b ""
 
+  # MOOTNESS ARM. The load-bearing row is "gate !0 → NOT moot": it is the one that fails against the
+  # pre-fix store, where the flip WAS the closing condition. The others pin that only a genuine
+  # removal reaches 0, so this field can never retire a live row on an instrument artifact.
+  echo "mootness arm (the falsifier this row actually stores):"
+  chk "gate !0 (FLIPPED) → NOT moot"    1 run_m "$tmp/bin_on"
+  chk "gate !1 → NOT moot"              1 run_m "$tmp/bin_off"
+  chk "minified past pattern → NOT moot" 1 run_m "$tmp/bin_minified"
+  chk "feature removed → MOOT"          0 run_m "$tmp/bin_removed"
+  chk "tripwire fails → NON-VERDICT"    2 run_m "$tmp/bin_wrongsubject"
+  chk "no subject → NON-VERDICT"        2 run_m ""
+
   printf '\npropose-goal-flag-watch --selftest: %d ok · %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ] || return 1
   return 0
@@ -360,8 +426,9 @@ case "${1:---report}" in
   --falsify)  pgw_falsify; exit $? ;;
   --health)   pgw_health;  exit $? ;;
   --binary)   pgw_binary;  exit $? ;;
+  --moot)     pgw_moot;    exit $? ;;
   --report)   pgw_report;  exit $? ;;
   --selftest) pgw_selftest; exit $? ;;
   -h|--help)  sed -n '2,70p' "$0"; exit 0 ;;
-  *) printf 'usage: %s [--report|--falsify|--health|--binary|--selftest]\n' "$(basename "$0")" >&2; exit 2 ;;
+  *) printf 'usage: %s [--report|--falsify|--moot|--health|--binary|--selftest]\n' "$(basename "$0")" >&2; exit 2 ;;
 esac
