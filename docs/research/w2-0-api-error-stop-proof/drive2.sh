@@ -4,7 +4,11 @@
 # and it is the arm W2-0 names: does the armed watcher's exit 2 synthesize a turn after an
 # api-error turn end? Mail is fed by an external shell while the session sits idle.
 P="$(cd "$(dirname "$0")" && pwd)"
-arm="$1"; hold="${2:-120}"; feed_at="${3:-35}"
+arm="$1"; hold="${2:-120}"
+# NOTE: this took a third arg, the seconds to wait before feeding its own mailbox. It is GONE, and
+# its absence is the record: that in-script feeder raced this script's own `: > mail.txt`, so every
+# run ended with an empty mailbox — a state in which the watcher could not fire. Mail is fed from an
+# unrelated shell now. See ./README.md § The arm-1 rig.
 # mail.txt is NOT truncated here and NOT fed here. The original in-script feeder raced its own
 # truncate: every run ended with an empty mailbox, so the watcher could never have fired, and that
 # null would have read as "the harness refused to wake" — a verdict about my driver wearing the
