@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [
+          { "type": "command", "command": "/private/tmp/claude-501/-Users-chrisren-Development--worktrees-wt-4236edc78a72/23a9a12e-c3c9-4672-b8a8-92e6831618e7/scratchpad/t9probe/watcher.sh", "asyncRewake": true, "timeout": 300,
+            "rewakeMessage": "T9 ARM-F — the watcher armed at SessionStart fired after an api-error turn end:",
+            "rewakeSummary": "T9 arm F: post-api-error wake" } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "/private/tmp/claude-501/-Users-chrisren-Development--worktrees-wt-4236edc78a72/23a9a12e-c3c9-4672-b8a8-92e6831618e7/scratchpad/t9probe/syncstop.sh", "timeout": 10 } ] }
+    ]
+  }
+}

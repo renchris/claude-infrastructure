@@ -9,9 +9,10 @@ Opened 2026-09-09 from an operator ask in session `d79f408b`.
 
 **Status: RESEARCH CAPTURED (W0) · DESIGN CAPTURED (W1) · W2 IMPLEMENTED, D4 RE-SPECIFIED ·
 W3 CAPTURED (2026-09-09) and DISPOSED (2026-09-17, § W4): R1 landed, R2 landed, R3 filed as the
-operator's decision, R4 closed REJECT · T9 / W2-0 DISCHARGED on-box 2026-09-17, and the answer is
-NO.** Two items remain: **T14** — build D4 in the shape T9's answer forces (agent-drivable, the last
-implementation item) — and **T12 / R3**, a value call that is the operator's. Nothing else is open.
+operator's decision, R4 closed REJECT · W2-0 arm 2 measured on-box 2026-09-17 (T9a), arm 1 still
+open (T9b).** Three items remain: **T9b** (the probe arm D4 actually rests on — rig built, blocked
+on config isolation), **T14** (build D4, blocked on T9b), and **T12 / R3**, a value call that is the
+operator's. Nothing else is open.
 
 ⚠️ The line this replaces read *"implementation NOT started"*, which was true on 2026-09-09 and
 false a day later. It is kept here rather than deleted because it is the record of what was
@@ -62,8 +63,9 @@ Nothing here may be held in a context window.
 | T12 | **W3-R3 — does the ladder fire AUTOMATICALLY?** | **FILED — ⛔ OPERATOR'S** | operator | Decision packet `a825773ca37b`, class C, conviction **72**, receipt `docs/research/ladder-r3-control-arm-2026-09-17.md`. Below 90 after research, and the residue is a value call, so per F2 it is theirs WITH the number |
 | T13 | **W3-R4 — encode stepped-down assignee effort** | **REJECTED, closed** | W3 | Untested on Opus 5 and the nearest same-repo certification points the other way. Deliberately NOT landed; § W3.5 holds the probe design if it is ever revisited |
 | T8 | Resume the 6 live network-blocked panes | **DONE (by the operator, by hand)** | operator | All six re-engaged 17:36–17:37Z by the typed paragraph — § W1.0. The manual act IS the defect W2 removes |
-| T9 | **W2-0 — prove asyncRewake synthesizes a turn after an api-error turn end** | **DONE 2026-09-17 — ANSWER IS NO** | W4 (on-box) | `docs/research/api-error-rewake-proof-2026-09.md` + `docs/research/w2-0-api-error-stop-proof/`. The Stop hook chain does NOT run when the turn it ends died with an API error, so nothing can arm there. 4 arms, 2 controls, 2 discarded; hermetic, ~2 haiku turns |
-| T14 | **D4 — re-specify as the desk sweep, now that T9 has ruled** | **OPEN — the last implementation item** | unassigned | T9 killed the arm-at-the-boundary design. The fallback the plan already named is the design, and every part exists: `lr_last_api_error` + the session mailbox + `mailbox-wake-arm` (migration `0007`, asyncRewake on **SessionStart**, not Stop) |
+| T9a | **W2-0 arm 2 — Stop-hook ABSENCE at an api-error turn end** | **DONE 2026-09-17 — CONFIRMED** | W4 (on-box) | `docs/research/api-error-rewake-proof-2026-09.md` + `docs/research/w2-0-api-error-stop-proof/`. Upgrades the plan's transcript archaeology to a controlled experiment: 2 controls fire both hooks, 2 tests fire neither. ~2 haiku turns, no quota on the failing arms |
+| T9b | **W2-0 arm 1 — does a watcher armed EARLIER synthesize a turn after an api-error turn end?** | **STILL OPEN** | a desk session | The arm D4 actually rests on. Rig is built (`w2-0-api-error-stop-proof/drive2.sh`, SessionStart arming + external mail) and its CONTROL fires. Blocked only on isolation: `--settings` MERGES with the live config, so the fleet's own Stop hooks force turns and the wake is unreadable. Needs a throwaway `CLAUDE_CONFIG_DIR` holding one hook — which on this box needs auth (keychain/`oauth-tokens`), or an `ANTHROPIC_API_KEY` |
+| T14 | **D4 — build it** | **OPEN — the last implementation item, BLOCKED on T9b** | unassigned | Shape depends on T9b: arm-at-SessionStart if the wake lands, the desk sweep if it does not. Every part of either exists — `lr_last_api_error`, the session mailbox, `mailbox-wake-arm` (migration `0007`) |
 
 ---
 
@@ -78,7 +80,7 @@ its control arm, and the load-bearing predicates carry mutants.
 | **D1** lead process state | **DONE** | `lr-audit.py` — `lead_pids()`, `lead_state()`, `inherit_lead_state()`; teammate RUNNING re-keyed on the member's own pid + turn end; `TEAM_ACTIVE_WINDOW_S` demoted to a display field; `:1335`'s "killed mid-run" now conditional on DEAD | `tests/lr-audit-nonlimit.bats` 29/29 incl. the 27-prompts/24-turn-ends caveat and its inverting mutant |
 | **D2** notification ledger + retry fold | **DONE** | `scan_lead_transcript` (settled = `tool_result` ∪ terminal `<task-notification>`, both carriers), delegation population by tool, the journal fold to ONE unit with `attempts=N`, `STALLED` | same suite; STALLED's structural predicate pinned by a mutant that swaps in an unrelated error string |
 | **D3** `recover-inject.sh` | **DONE** (registration is 👤) | `hooks/recover-inject.sh` + `migrations/0026-recover-inject-registration.sh` (c10, staged) | `tests/recover-inject.bats` 18/18, **5 mutants killed**; the migration's verify AND conflict oracles controlled in both directions |
-| **D4** `net-recover-arm.sh` | **RE-SPECIFIED — T9 refuted the design, 2026-09-17** | — | The arm-at-the-api-error-boundary hook is impossible: no Stop hook runs at that boundary (`docs/research/api-error-rewake-proof-2026-09.md`). Becomes the desk sweep → session mailbox → SessionStart wake. Tracked as T14 |
+| **D4** `net-recover-arm.sh` | **STILL BLOCKED — on T9b, not on T9a** | — | T9a confirmed by experiment that nothing can arm AT the death — which D4 never proposed (§ W1.2 hazard row `nothing can be armed at the death`). The open question is T9b: does a watcher armed at SessionStart wake the session AFTER that death? Tracked as T14 |
 | **D5** stall policy + probe | **probe DONE**, policy DONE | `scripts/limit-recover/lr-probe.sh`; `commands/limit-recover.md` § Stall policy | `tests/lr-probe.bats` 19/19, 3 mutants killed |
 | **D6** `/recover` | **DONE, with a deviation** | `commands/recover.md` (new); `limit-recover.md`'s `description:` widened | — |
 | **D7** census | **DONE** | `lr-fleet.sh` — `kind` (last death) + `kinds` (all classes) + `err_age_s`; `RESUME-IN-PLACE` → `IDLE-AFTER-ERROR`; argv-leaf pid fallback | `tests/lr-fleet.bats` +8 cases (4 controls) |
@@ -120,11 +122,14 @@ Not a punt — the instrument is wrong here, and a single-armed reading would be
 it, and the plan's own fallback still stands: if the first arm FAILS, D4 becomes the desk sweep
 writing to the session mailbox. Nothing already landed depends on the answer.
 
-⚠️ **RESOLVED 2026-09-17 — the first arm FAILED, so the fallback in that sentence is now the
-design.** Run on-box on **2.1.114**: a turn that ends with an API error runs NO Stop hook at all,
+⚠️ **PARTIALLY RESOLVED 2026-09-17 — the SECOND arm is measured; the FIRST is still open, and it
+is the one this row turns on.** Run on-box on **2.1.114**: a turn that ends with an API error runs NO Stop hook at all,
 not even a plain synchronous one, while the identical invocation against the real API fires both
-hooks. So `asyncRewake` never gets the chance to arm there and the question of whether its `exit 2`
-would synthesize a turn is moot at this boundary. Full record, including the two arms that were
+hooks. **That is W2-0's arm 2** (`assert no stop_hook_summary`), and it confirms by controlled
+experiment what this plan had inferred from transcripts — see the hazard row `nothing can be armed
+at the death`, which already says D4 must arm BEFORE the death. **W2-0's arm 1 — does a watcher
+armed at SessionStart synthesize a turn when its `exit 2` lands after that death — remains OPEN**
+(T9b), and it is the one D4 rests on. Full record, including the two arms that were
 discarded for being killed mid-retry rather than ending: `docs/research/api-error-rewake-proof-2026-09.md`.
 The one caveat that matters: **2.1.114 only** — re-run both arms on 2.1.260+ before treating it as
 fleet-wide, which is one command per arm.

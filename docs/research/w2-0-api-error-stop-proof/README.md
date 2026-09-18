@@ -33,3 +33,23 @@ rather than deleted. Arm E replaces them with a NON-retryable 400, which ends th
 **Why the hook logs are `.txt` and not `.log`.** This repo gitignores `*.log`, so committing them
 under their natural name needs `git add -f`, which the global rules forbid — a gitignore entry is
 intentional. `../w2-stop-rewake-proof/` reached the same place (`phaseB-lifecycle.txt`).
+
+## The arm-1 rig (T9b), committed unfinished on purpose
+
+`drive2.sh` + `settings.probe.sessionstart.json` are the rig for W2-0's FIRST arm — the watcher
+declared on **SessionStart**, so it is armed before the turn that dies, which is what D4 actually
+proposes. `watch.armG.txt` is its control run: `WATCHER-FIRE body=[T9-ARM-G-MAIL 01:28:58] exiting 2`.
+
+**It is committed unfinished because the blocker is isolation, not mechanism.** `--settings <file>`
+MERGES with the live config dir rather than replacing it, so the fleet's own Stop hooks ran in the
+probe session and forced turns of their own — one of the records the wake was meant to produce is
+literally `Stop hook feedback: 🔔 WAKE FLOOR …`. A synthesized wake and a hook-forced turn are then
+indistinguishable in the stream. `../w2-stop-rewake-proof/` avoided this with a throwaway
+`CLAUDE_CONFIG_DIR` holding exactly one hook; on this box that dir has no credentials (keychain /
+`oauth-tokens`), so finishing this arm needs either an `ANTHROPIC_API_KEY` (which makes it fully
+hermetic) or the operator's call on seeding a temp config dir.
+
+**Do not re-derive the feeder bug.** An earlier `drive2.sh` fed the mail from inside itself, racing
+its own `: > mail.txt`, so every run ended with an empty mailbox — a state in which the watcher
+*could not* fire, whose null reads exactly like "the harness refused to wake". Feed from an
+unrelated shell.
