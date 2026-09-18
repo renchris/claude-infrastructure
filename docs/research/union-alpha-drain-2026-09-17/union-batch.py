@@ -82,6 +82,13 @@ ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 CF_ENDPOINT_TEMPLATE = ("https://api.cloudflare.com/client/v4/accounts/"
                         "{account_id}/ai/v1/chat/completions")
 
+# THIRD ROUTE. OpenCode Zen still carries `union-alpha` under the name "Union Alpha Free"
+# (measured 2026-09-18, negative-controlled). It is the only route that calls the model FREE
+# in its own words rather than by example. But it speaks the ANTHROPIC MESSAGES schema, not
+# the OpenAI one — `system` is a top-level field, and the reply is a content-block list, not
+# `choices[].message`. A harness that only builds OpenAI bodies cannot drive it at all.
+ZEN_ENDPOINT = "https://opencode.ai/zen/v1/messages"
+
 # NO DEFAULT MODEL, DELIBERATELY. This script was written for "stealth/union-alpha",
 # which on 2026-09-17 began returning 404 ("revealed as Unbiased's Pareto"), and whose
 # named successor "unbiased/pareto" is PAID ($2.50/$7.50 per MTok) and therefore
@@ -195,25 +202,31 @@ class RateLimiter:
 
 
 def call_once(key: str, model: str, prompt: str, system: str | None,
-              max_tokens: int, timeout: int, endpoint: str = ENDPOINT) -> dict:
+              max_tokens: int, timeout: int, endpoint: str = ENDPOINT,
+              schema: str = "openai", auth: str = "bearer") -> dict:
     """One POST. Returns a dict that ALWAYS records how the call ended."""
-    msgs = []
-    if system:
-        msgs.append({"role": "system", "content": system})
-    msgs.append({"role": "user", "content": prompt})
-    body = json.dumps({
-        "model": model,
-        "messages": msgs,
-        "max_tokens": max_tokens,
-        "stream": False,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        endpoint, data=body, method="POST",
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        },
-    )
+    if schema == "anthropic":
+        # Messages API: `system` is TOP-LEVEL, never a message role.
+        payload = {"model": model, "max_tokens": max_tokens,
+                   "messages": [{"role": "user", "content": prompt}]}
+        if system:
+            payload["system"] = system
+    else:
+        msgs = []
+        if system:
+            msgs.append({"role": "system", "content": system})
+        msgs.append({"role": "user", "content": prompt})
+        payload = {"model": model, "messages": msgs,
+                   "max_tokens": max_tokens, "stream": False}
+    body = json.dumps(payload).encode("utf-8")
+
+    headers = {"Content-Type": "application/json"}
+    if auth == "x-api-key":
+        headers["x-api-key"] = key
+        headers["anthropic-version"] = "2023-06-01"
+    else:
+        headers["Authorization"] = f"Bearer {key}"
+    req = urllib.request.Request(endpoint, data=body, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX) as r:
             payload = json.loads(r.read().decode("utf-8"))
@@ -227,12 +240,20 @@ def call_once(key: str, model: str, prompt: str, system: str | None,
     except Exception as e:  # socket timeout, DNS, TLS, malformed JSON
         return {"ok": False, "http_status": None, "error": f"{type(e).__name__}: {e}"}
 
-    choices = payload.get("choices") or []
     text = ""
     finish = None
-    if choices:
-        text = (choices[0].get("message") or {}).get("content") or ""
-        finish = choices[0].get("finish_reason")
+    if schema == "anthropic":
+        # content is a LIST OF BLOCKS; concatenating only the text ones is what makes a
+        # thinking/tool block not silently become part of the answer.
+        for blk in payload.get("content") or []:
+            if isinstance(blk, dict) and blk.get("type") == "text":
+                text += blk.get("text") or ""
+        finish = payload.get("stop_reason")
+    else:
+        choices = payload.get("choices") or []
+        if choices:
+            text = (choices[0].get("message") or {}).get("content") or ""
+            finish = choices[0].get("finish_reason")
     return {
         "ok": True,
         "http_status": 200,
@@ -277,6 +298,11 @@ def main() -> int:
     ap.add_argument("--endpoint", default=ENDPOINT,
                     help="OpenAI-compatible chat-completions URL. Default is OpenRouter; "
                          "for Cloudflare pass the /accounts/<id>/ai/v1/chat/completions form.")
+    ap.add_argument("--schema", choices=("openai", "anthropic"), default="openai",
+                    help="Request/response shape. OpenCode Zen's union-alpha needs "
+                         "'anthropic' (endpoint /zen/v1/messages).")
+    ap.add_argument("--auth", choices=("bearer", "x-api-key"), default="bearer",
+                    help="Header style for the token.")
     ap.add_argument("--key-env", default="OPENROUTER_API_KEY",
                     help="Env var holding the bearer token (CLOUDFLARE_API_TOKEN for CF). "
                          "Read from the environment only — never argv.")
@@ -384,12 +410,14 @@ def main() -> int:
             except queue.Empty:
                 return
             row = {"id": item["id"], "model": args.model, "endpoint": args.endpoint,
+                   "schema": args.schema,
                    "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
             res = None
             for attempt in range(args.retries + 1):
                 limiter.wait()
                 res = call_once(key, args.model, item["prompt"], args.system,
-                                args.max_tokens, args.timeout, args.endpoint)
+                                args.max_tokens, args.timeout, args.endpoint,
+                                args.schema, args.auth)
                 if res["ok"] or not retryable(res.get("http_status")):
                     break
                 if attempt < args.retries:

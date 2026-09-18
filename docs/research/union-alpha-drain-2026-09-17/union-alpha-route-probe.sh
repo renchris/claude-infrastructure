@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
-# cf-union-alpha-probe.sh — can we reach `stealth/union-alpha` on Cloudflare, and is it free?
+# union-alpha-route-probe.sh — can we reach union-alpha on a given route, and is it free there?
+#
+# ROUTES (measured 2026-09-18, each negative-controlled so the check can say no):
+#   cf   Cloudflare  `stealth/union-alpha` — STILL LISTED (1 of 161 catalogue ids).
+#                    Free BY EXAMPLE (every published sample returns "cost": 0) but Cloudflare
+#                    publishes no price and states no end date.
+#   zen  OpenCode Zen `union-alpha` — listed as "Union Alpha Free". The ONLY route that calls
+#                    it free IN ITS OWN WORDS. Speaks the ANTHROPIC MESSAGES schema.
+#   (OpenRouter retired the alias at reveal — 404 — and its successor unbiased/pareto BILLS,
+#    measured at $0.0094 over 13 calls. That route is closed; this tool does not offer it.)
 #
 # WHY THIS EXISTS. OpenRouter retired the `stealth/union-alpha` alias at reveal (404, "This
 # model WAS Unbiased's Pareto") and its successor bills. Measured 2026-09-18, CLOUDFLARE STILL
@@ -22,7 +31,12 @@
 #   agent-secrets run -- bash cf-union-alpha-probe.sh
 set -uo pipefail
 
-MODEL="${CF_PROBE_MODEL:-stealth/union-alpha}"
+ROUTE="${1:-cf}"
+case "$ROUTE" in
+  cf)  MODEL="stealth/union-alpha"; KEYVAR="CLOUDFLARE_API_TOKEN"; HOST="api.cloudflare.com" ;;
+  zen) MODEL="union-alpha";         KEYVAR="OPENCODE_ZEN_API_KEY"; HOST="opencode.ai" ;;
+  *)   printf 'usage: %s [cf|zen]\n' "$0" >&2; exit 64 ;;
+esac
 say()  { printf '%s\n' "$*"; }
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$*"; }
@@ -31,49 +45,65 @@ note() { printf '    → %s\n' "$*"; }
 say "== preconditions =="
 missing=0
 
-if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
-  ok "CLOUDFLARE_API_TOKEN present in env (${#CLOUDFLARE_API_TOKEN} chars; value never printed)"
+KEYVAL="$(eval printf '%s' "\"\${${KEYVAR}:-}\"")"
+if [ -n "$KEYVAL" ]; then
+  ok "$KEYVAR present in env (${#KEYVAL} chars; value never printed)"
 else
-  bad "CLOUDFLARE_API_TOKEN not in the environment"
+  bad "$KEYVAR not in the environment"
   note "store it once (hidden input, tty-gated — an agent cannot do this):"
-  note "    agent-secrets add CLOUDFLARE_API_TOKEN"
-  note "token needs: Account > Workers AI > Read   (dash.cloudflare.com > My Profile > API Tokens)"
-  note "then re-run this under:  agent-secrets run -- bash $0"
+  note "    agent-secrets add $KEYVAR"
+  if [ "$ROUTE" = cf ]; then
+    note "token needs: Account > Workers AI > Read  (dash.cloudflare.com > My Profile > API Tokens)"
+  else
+    note "get it by logging in to OpenCode Zen: opencode.ai/docs/zen/ — 'You login to OpenCode"
+    note "Zen and get your API key.' It is optional for OpenCode itself; we need it for the API."
+  fi
+  note "then re-run:  agent-secrets run -- bash $0 $ROUTE"
   missing=$((missing+1))
 fi
 
 ACCT="${CLOUDFLARE_ACCOUNT_ID:-}"
-if [ -n "$ACCT" ]; then
-  ok "CLOUDFLARE_ACCOUNT_ID present (${ACCT:0:6}…)"
+if [ "$ROUTE" = cf ]; then
+  if [ -n "$ACCT" ]; then
+    ok "CLOUDFLARE_ACCOUNT_ID present (${ACCT:0:6}…)"
+  else
+    bad "CLOUDFLARE_ACCOUNT_ID not set"
+    note "not secret, but keep it beside the token: agent-secrets add CLOUDFLARE_ACCOUNT_ID"
+    note "find it at: dash.cloudflare.com → any domain → right sidebar 'Account ID'"
+    missing=$((missing+1))
+  fi
 else
-  bad "CLOUDFLARE_ACCOUNT_ID not set"
-  note "it is not secret, but keep it beside the token:  agent-secrets add CLOUDFLARE_ACCOUNT_ID"
-  note "find it at: dash.cloudflare.com → any domain → right sidebar 'Account ID'"
-  missing=$((missing+1))
+  ok "no account id needed on the zen route"
 fi
 
 ALLOW="$HOME/.config/secrets/egress.allow"
-if [ -f "$ALLOW" ] && grep -qx 'api.cloudflare.com' "$ALLOW" 2>/dev/null; then
-  ok "api.cloudflare.com is on the egress allowlist"
+if [ -f "$ALLOW" ] && grep -qx "$HOST" "$ALLOW" 2>/dev/null; then
+  ok "$HOST is on the egress allowlist"
 else
-  bad "api.cloudflare.com is NOT on the egress allowlist"
+  bad "$HOST is NOT on the egress allowlist"
   note "agent-secrets run proxies HTTPS and refuses non-allowlisted hosts, so the call dies"
   note "with 'Tunnel connection failed: 403'. This line is YOURS to add — an agent may not"
   note "widen its own egress:"
-  note "    echo api.cloudflare.com >> $ALLOW"
+  note "    echo $HOST >> $ALLOW"
   missing=$((missing+1))
 fi
 
 [ "$missing" -ne 0 ] && { say ""; say "== stopped: $missing precondition(s) above. Nothing was sent. =="; exit 2; }
 
-URL="https://api.cloudflare.com/client/v4/accounts/${ACCT}/ai/v1/chat/completions"
+if [ "$ROUTE" = cf ]; then
+  URL="https://api.cloudflare.com/client/v4/accounts/${ACCT}/ai/v1/chat/completions"
+  body=$(printf '{"model":"%s","max_tokens":24,"messages":[{"role":"user","content":"Reply with exactly the word READY and nothing else."}]}' "$MODEL")
+else
+  # Anthropic Messages schema — NOT chat/completions. `system` would be top-level; we send none.
+  URL="https://opencode.ai/zen/v1/messages"
+  body=$(printf '{"model":"%s","max_tokens":24,"messages":[{"role":"user","content":"Reply with exactly the word READY and nothing else."}]}' "$MODEL")
+fi
 say ""
 say "== probing $MODEL =="
 say "   POST $URL"
 
-body=$(printf '{"model":"%s","max_tokens":24,"messages":[{"role":"user","content":"Reply with exactly the word READY and nothing else."}]}' "$MODEL")
 resp_file=$(mktemp); code=$(curl -sS -o "$resp_file" -w '%{http_code}' -X POST "$URL" \
-  -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+  -H "Authorization: Bearer ${KEYVAL}" \
   -H 'Content-Type: application/json' --data "$body" --max-time 120 2>"$resp_file.err")
 rc=$?
 
@@ -86,12 +116,16 @@ fi
 say "== HTTP $code =="
 python3 - "$resp_file" "$code" <<'PY'
 import json, sys
-body = open(sys.argv[1]).read(); code = sys.argv[2]
+body = open(sys.argv[1]).read(); code = sys.argv[2]; route = sys.argv[3]
 try: d = json.loads(body)
 except Exception: print("  (non-JSON body)"); print("  " + body[:400]); sys.exit(0)
 if code == "200":
-    ch = (d.get("choices") or [{}])[0]
-    print("  text  :", repr(((ch.get("message") or {}).get("content") or "")[:80]))
+    if route == "zen":       # Messages API: content is a LIST OF BLOCKS, text blocks only
+        txt = "".join(b.get("text","") for b in (d.get("content") or [])
+                      if isinstance(b, dict) and b.get("type") == "text")
+    else:
+        txt = ((d.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    print("  text  :", repr(txt[:80]))
     print("  model :", d.get("model"))
     u = d.get("usage") or {}
     print("  usage :", json.dumps(u))
