@@ -2432,7 +2432,7 @@ EOF
       [ -n "$did" ] || continue
       pos=$((di + 1)); di=$((di + 1))
       if [ -n "$dclus" ] && [ "${CC_DISPATCH_CLUSTER:-on}" != off ] \
-         && printf '%s' "$taken_clusters" | grep -Fxq -- "$dclus"; then
+         && printf '%s' "$taken_clusters" | grep -Fx -- "$dclus" >/dev/null; then
         # A sibling of an item ALREADY ADMITTED THIS PASS. Capacity-independent, like the done-guard
         # skip: it would defer at any free_slots, so it must not be reported as `at-ceiling` — that
         # reason feeds cc-blockers' SATURATED premise gate, which counts it as evidence the fleet is

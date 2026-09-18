@@ -291,7 +291,7 @@ if [ "$MODE" = "selftest" ]; then
     || bad "wrong census in: $out"
 
   out="$("$SELF" --sweep --dry-run 2>&1)"
-  printf '%s' "$out" | grep -q 'WOULD quarantine 3 of 6' && ok "--dry-run reports 3, mutates nothing" \
+  printf '%s' "$out" | grep 'WOULD quarantine 3 of 6' >/dev/null && ok "--dry-run reports 3, mutates nothing" \
     || bad "dry-run census wrong: $out"
   [ -e "$S/enqueue-fail-A.json.handled" ] && ok "--dry-run left the store untouched" \
     || bad "--dry-run MOVED a record"

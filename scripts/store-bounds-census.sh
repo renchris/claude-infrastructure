@@ -206,7 +206,7 @@ if [ "${CC_SB_SELFTEST:-0}" = "1" ]; then
   # `[$]` rather than `\$` for the literal dollar: it keeps the two characters `$(` out of the pattern
   # entirely, so the regex cannot be misread (by ShellCheck or by a human) as a command substitution.
   if sed 's/#.*//' "$SELF" \
-     | grep -qE '(\brm\b|\bmv\b|\btruncate\b|\bgzip\b|\bshred\b|\bsed[[:space:]]+-i\b)[^;&|]*[$](ROOT|f|pat|glob)\b|>[[:space:]]*"?[$](ROOT|f|pat|glob)\b'; then
+     | grep -E '(\brm\b|\bmv\b|\btruncate\b|\bgzip\b|\bshred\b|\bsed[[:space:]]+-i\b)[^;&|]*[$](ROOT|f|pat|glob)\b|>[[:space:]]*"?[$](ROOT|f|pat|glob)\b' >/dev/null; then
     echo "  control FAIL a destructive verb targets a store path on an executable line"; fails=$((fails+1))
   else
     echo "  control OK   no destructive verb targets any store path (measure-only)"

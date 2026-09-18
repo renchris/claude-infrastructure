@@ -132,8 +132,8 @@ LAST_USER="$(jq -r 'select(.type=="user" and (.isSidechain != true))
                     | select(. != "")' "$TP" 2>/dev/null | tail -1 || true)"
 kill_switch() {
   [ -n "$LAST_USER" ] || return 1
-  printf '%s' "$LAST_USER" | grep -iqE \
-    '(^|[^[:alnum:]])and( then)? stop([^[:alnum:]]|$)|no[ _-]?auto[ _-]?continue|(^|[^[:alnum:]])just do [^[:space:]]|(^|[^[:alnum:]])stop here([^[:alnum:]]|$)|come back to this|^[[:space:]]*(stop|halt)[[:space:].!]*$'
+  printf '%s' "$LAST_USER" | grep -iE \
+    '(^|[^[:alnum:]])and( then)? stop([^[:alnum:]]|$)|no[ _-]?auto[ _-]?continue|(^|[^[:alnum:]])just do [^[:space:]]|(^|[^[:alnum:]])stop here([^[:alnum:]]|$)|come back to this|^[[:space:]]*(stop|halt)[[:space:].!]*$' >/dev/null
 }
 
 # ── THIS turn's main-agent texts (all assistant text at/after the turn start). Computed BEFORE the
@@ -197,7 +197,7 @@ discharged_since() {
   # deliberate and bounded: a false match costs one un-fired nag (the pre-gate status quo), while
   # refusing to hear a drop costs a permanent row that nothing drains.
   if [ -n "${TURN_TEXT:-}" ] \
-     && printf '%s' "$TURN_TEXT" | grep -iqE 'dropping|not worth|letting (this|that|it) go'; then
+     && printf '%s' "$TURN_TEXT" | grep -iE 'dropping|not worth|letting (this|that|it) go' >/dev/null; then
     DISCHARGE_KIND=dropped
     return 0
   fi

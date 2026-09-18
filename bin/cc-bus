@@ -1052,7 +1052,7 @@ STUB
   out="$(CC_BUS_DIR="$d/bus" CC_BUS_ACTOR=alpha CC_BUS_BACKLOG_BIN="$d/stub/cc-backlog" \
          CC_BUS_NOTIFY_BIN="$d/stub/cc-notify" CC_BUS_APPLIED_FILE="$d/applied" "$SELF" drain 2>&1)"
   a="$(wc -c < "$CC_BUS_SELFTEST_CALLS" | tr -d ' ')"
-  printf '%s' "$out" | grep -q '^would ' && [ "$a" = 0 ] \
+  printf '%s' "$out" | grep '^would ' >/dev/null && [ "$a" = 0 ] \
     && okp "drain is DRY-RUN by default (reports, calls nothing)" \
     || badp "drain dry-run leaked calls (bytes=$a) or printed nothing"
 

@@ -533,6 +533,42 @@ in_scan_set() { # $1=repo-relative path → 0 if this lint judges it
 # treats a dangling quote as opening a context that runs to end of line. Neither shows up in today
 # numbers — LOST = 0 says the mask never eats an operator pipe on this tree — but both are claims
 # about a tree that grows.
+# ── THE FIRST HALF OF THAT RESIDUAL IS CLOSED, 2026-09-18 (backlog c128aeff816e, condition
+#    `pipefail-lint-continuation-join`), AND THE SENTENCE ABOVE WAS ALREADY FALSE WHEN WRITTEN. ──
+# "Neither shows up in today numbers" is a claim the census cannot support in either direction: a
+# split pipeline is not EXONERATED by a clause, it is never JUDGED, so the instrument that would
+# have to report it is the one that cannot see it. docs/research/pipefail-continuation-join-2026-09-17.md
+# measured the gap with a four-fixture control (`p | grep -Eq P && act` against the same text split
+# by a backslash, in both the && and the `if` spellings): the one-line arms report, the split arms
+# do not, so the blind axis is the CONTINUATION and not the operator. It had already hidden three
+# live fail-open guards in bin/cc-cannot, drained by 22e133a0e.
+# The joiner is wired in at GATE ZERO below — cont_open/strip_cont plus the block at the head of the
+# pass-two rule — and every clause from here down now judges a LOGICAL line. What it cost on this
+# tree, measured as four arms with one variable each, `--census` keyed on (path, TEXT) with
+# CC_PIPEFAIL_ROOT pinned and the control REPRODUCING the shipped census byte-for-byte at 121 rows:
+#   · the is_early stage truncation ALONE, no join  121 → 121 rows   (a no-op until the join exists)
+#   · the join alone                                121 → 130 rows   (+12 NEW, −2 LOST, +1 re-texted)
+#   · join + truncation, shipped                    121 → 128 rows   (the 2 it drops are false
+#     positives it minted: migrations/0010-postland-band-plist.sh:74 and 0016-…:79, both a DRAINED
+#     consumer followed by an && and a command that happens to carry -q)
+#   · the 10 newly-visible rc-consuming sites DRAINED, and the 2 LOST ones drained rather than left
+#     to clause 5                                   → 119 rows, allowlist SHRINKS by 2 and gains none
+# THE TWO LOST ROWS ARE THE PART WORTH READING. bin/cc-bus:1055 and bin/cc-comms-alarm-sweep:294 are
+# `p | grep -q X && ok … || bad …` split across a backslash: joined, clause 5 sees the top-level ||
+# and exonerates them, so the join RETIRES two rows it did not fix. That is clause 5 policy working
+# as specified and it is not a cure — a SIGPIPEd producer still flips those assertions to a spurious
+# FAIL — so both are drained here too. A row that leaves the census because a clause finally sees an
+# exoneration is a row nothing will ever count again.
+# STILL OPEN, and it is now the WHOLE of what this paragraph names: the dangling-quote contract. A
+# multi-line jq or awk program is joined by NEITHER a backslash nor this block, so its opening line
+# still runs to end of line as quoted context (arm 25 pins that the obvious repair is wrong for this
+# tree). Pass ONE — collect_caller, clause 4c — is also still line-local by choice: joining there
+# changes which CALLERS are found, which is a different population and wants its own measurement.
+# NOT PINNED, AND SAID SO RATHER THAN CLAIMED: the join sits BELOW the heredoc tracker deliberately,
+# but the mutant that swaps them is GREEN on the whole suite, because the tracker tests `$0` — the
+# LAST physical line of a record — and a terminator is always alone on its own line. The ordering is
+# defensive, not load-bearing; six of the seven mutants written for this change die on exactly one
+# arm each (M1 on r37/r38, M2 r39, M3 g37, M5 g39, M6 g38, M7 r40) and this is the seventh.
 # ⚠️ THE OWNER NAMED HERE WAS WRONG AND THE ID IS NOW SPENT, 2026-09-04. This paragraph said the
 # join gap "is owned by ca97c678b18b", and tests/pipefail-sigpipe-lint.bats repeated it. That row is
 # the FUNCTION-FINAL gap — condition key `pipefail-lint-function-final-pipeline` — and the
@@ -581,6 +617,20 @@ in_scan_set() { # $1=repo-relative path → 0 if this lint judges it
 # probe282-example.sh}, 20 gated predictions across three probes, one refused and repaired.
 DETECT_AWK='
 function ltrim(s) { sub(/^[ \t]+/, "", s); return s }
+
+# GATE ZERO. A LOGICAL line, not a physical one — the continuation join, wired in below.
+#
+# Bash removes a backslash-newline pair OUTRIGHT, so `a \` + newline + `   b` is the single command
+# `a    b`: the joiner concatenates VERBATIM after dropping the backslash, and adds no separator of
+# its own. The test is an ODD trailing run of backslashes, because `a \\` ends in an escaped
+# backslash and does NOT continue; an anchored `\\$` reads both alike and would splice the next line
+# onto a command that already ended.
+function cont_open(s,   i, k) {
+  k = 0; i = length(s)
+  while (i >= 1 && substr(s, i, 1) == "\134") { k++; i-- }
+  return (k % 2) == 1
+}
+function strip_cont(s) { return cont_open(s) ? substr(s, 1, length(s) - 1) : s }
 
 # GATE ONE. Mask every `|` that is INSIDE a quote or a substitution to \004, so the stage split
 # below cuts on pipes that are shell OPERATORS and not on pipes that are pattern bytes. The
@@ -676,8 +726,37 @@ function qmask(s,   i, c, d, n, st, out) {
 }
 
 # Clause 2: does this last stage exit before draining its input?
+# A STAGE ENDS AT ITS FIRST LIST SEPARATOR, AND UNTIL THE CONTINUATION JOIN LANDED NOTHING HERE HAD
+# TO KNOW THAT. is_early below anchors its command WORD at the head of the segment but scans the
+# whole segment for the early-exit FLAG, and a segment is only ever one command while the record is
+# one physical line. Joined, `! plutil -p F | grep PAT >/dev/null \` + `&& grep -q OTHER F` becomes
+# one record whose second segment is `grep PAT >/dev/null \003 grep -q OTHER F` — the -q belongs to
+# a command that is not in the pipeline at all, and the drained consumer this lint PRESCRIBES is
+# convicted by the remedy. That is the a6449cebc class: a ratchet refusing a land for a reason that
+# is not about the code. Measured as its own arm against the shipped detector on this tree: the
+# truncation alone, with no join, leaves --census BYTE-IDENTICAL at 121 rows, so it mints and drops
+# nothing on its own; under the join it removes exactly two rows, migrations/0010-postland-band-plist.sh:74
+# and migrations/0016-autonomy-sweep-band-plist.sh:79, and no others.
+# Quote-aware, because a `;` inside a quoted program is not a separator — `sed -n \0471,5p;q\047`
+# must keep its `;q` or the sed arm below stops seeing the one shape it exists for.
+function first_cmd(s,   i, c, q, out) {
+  q = 0; out = ""; i = 1
+  while (i <= length(s)) {
+    c = substr(s, i, 1)
+    if (q == 1) { if (c == "\047") q = 0; out = out c; i++; continue }
+    if (q == 2) { if (c == "\134") { out = out c substr(s, i + 1, 1); i += 2; continue }
+                  if (c == "\042") q = 0; out = out c; i++; continue }
+    if (c == "\134") { out = out c substr(s, i + 1, 1); i += 2; continue }
+    if (c == "\047") { q = 1; out = out c; i++; continue }
+    if (c == "\042") { q = 2; out = out c; i++; continue }
+    if (c == ";" || c == "\002" || c == "\003") break
+    out = out c; i++
+  }
+  return out
+}
+
 function is_early(s,   t) {
-  t = ltrim(s); sub(/^[({][ \t]*/, "", t); t = ltrim(t)
+  t = ltrim(s); sub(/^[({][ \t]*/, "", t); t = ltrim(t); t = first_cmd(t)
   if (t ~ /^(\/usr\/bin\/|\/bin\/)?(grep|egrep|fgrep)([ \t]|$)/) {
     # The q/l/L may sit ANYWHERE in a flag cluster — `-qi`, `-qE`, `-iq` are all early-exit. An
     # anchored `[qlL]$` reads only `-q` and silently passes the other three (caught by selftest).
@@ -1319,7 +1398,7 @@ function group_wraps_or(s,   t, i, c, d, q, endi, sawor) {
   return 1
 }
 
-BEGIN { FS = "" }
+BEGIN { FS = ""; JOIN_MAX = 40 }
 # PASS ONE (clause 4c). scan() hands the file TWICE, so NR == FNR is the first read: collect the
 # function names whose status some caller reads, then start over. It needs its own heredoc tracker —
 # a scar quoted in a heredoc is data on both passes, and the pass-2 tracker has not run yet.
@@ -1333,12 +1412,49 @@ NR == FNR {
   }
   next
 }
-FNR == 1 { inhd = 0; curfn = ""; pend = 0 }   # pass two starts clean, whatever pass one latched
+FNR == 1 { inhd = 0; curfn = ""; pend = 0; jpend = 0; jbuf = "" }   # pass two starts clean, whatever pass one latched
 {
-  raw = $0
-
-  # Heredoc bodies are DATA, not code — a scar shape quoted inside one is not executed.
+  # Heredoc bodies are DATA, not code — a scar shape quoted inside one is not executed. This test
+  # runs on the PHYSICAL line and UPSTREAM of the join below, deliberately: a body line ending in a
+  # backslash is data, and joining it would splice the terminator into the same record so
+  # `$0 ~ hdterm` could never match again — the latched false negative documented forty lines down,
+  # reintroduced by the cure for a different gap.
   if (inhd) { if ($0 ~ hdterm) inhd = 0; next }
+
+  # ── THE CONTINUATION JOIN — THE RESIDUAL NAMED AT THE HEAD OF THIS FILE, NOW CLOSED ────────────
+  # Every clause below judges ONE record, and until this block existed that record was one PHYSICAL
+  # line. A pipeline split across a backslash therefore reached the ladder as two fragments, each
+  # of which is individually clean: `printf … | grep -q P \` carries no reader of its status (so
+  # clause 4 drops it), and `&& act` is not a pipeline at all (so the n < 2 split drops it). The
+  # site is not exonerated by any clause — it is never JUDGED, which is the one outcome a ratchet
+  # cannot see in its own census.
+  #
+  # MEASURED, docs/research/pipefail-continuation-join-2026-09-17.md: a four-fixture control with
+  # ONE variable, `printf … | grep -Eq P && act` against the same text split by a backslash, in
+  # both the `&&` and the `if` spellings. The one-line arms REPORT, the split arms do not. So the
+  # blind axis is the continuation and not the operator — which is why this is a joiner and not
+  # another clause.
+  #
+  # ORDER MATTERS THREE WAYS and each is a bug that was written before it was avoided:
+  #   · heredoc FIRST (above), so a body line is never joined;
+  #   · a COMMENT never opens a join — bash ends a comment at the newline and a trailing backslash
+  #     inside one continues nothing, so joining there would swallow the next line of real code
+  #     into a record that is `next`ed as a comment: a latched false negative, not a false positive;
+  #   · the heredoc OPENER test below moves from `$0` to `raw`, or an opener sitting on the second
+  #     physical line of a joined construct is never seen at all.
+  # JOIN_MAX bounds the damage if a file ends mid-continuation or a quoting accident leaves one
+  # open: the buffer is JUDGED at the cap rather than abandoned, because abandoning it would drop
+  # every line it swallowed.
+  if (jpend) {
+    jbuf = jbuf strip_cont($0); jn++
+    if (cont_open($0) && jn < JOIN_MAX) next
+    raw = jbuf; lno = jfnr; jpend = 0; jbuf = ""
+  } else {
+    raw = $0; lno = FNR
+    if (ltrim($0) !~ /^#/ && cont_open($0)) {
+      jbuf = strip_cont($0); jfnr = FNR; jn = 1; jpend = 1; next
+    }
+  }
 
   line = ltrim(raw)
   # A COMMENT IS NOT CODE, AND THIS TEST MUST RUN BEFORE THE OPENER TEST BELOW. It used to sit
@@ -1373,8 +1489,10 @@ FNR == 1 { inhd = 0; curfn = ""; pend = 0 }   # pass two starts clean, whatever 
   # be read as a claim that the arm is still absent.)
   if (line ~ /^#/ || line == "") next
 
-  if (match($0, /<<-?[ \t]*[\x27"]?[A-Za-z_][A-Za-z0-9_]*[\x27"]?/)) {
-    tok = substr($0, RSTART, RLENGTH)
+  # `raw`, never `$0` — since the join above, `$0` is the LAST physical line of this record, so an
+  # opener on any earlier one would be invisible and its body judged as code.
+  if (match(raw, /<<-?[ \t]*[\x27"]?[A-Za-z_][A-Za-z0-9_]*[\x27"]?/)) {
+    tok = substr(raw, RSTART, RLENGTH)
     sub(/^<<-?[ \t]*/, "", tok); gsub(/[\x27"]/, "", tok)
     hdterm = "^[ \t]*" tok "[ \t]*$"; inhd = 1
   }
@@ -1481,11 +1599,13 @@ FNR == 1 { inhd = 0; curfn = ""; pend = 0 }   # pass two starts clean, whatever 
   # function-final candidate; a masked pipeline is masked whoever calls the function (FOURTEENTH).
   cv = consumed(line, HASE)
   if (amp == 0 && !cap && cv != 1) {
-    if (cv == 2 && curfn != "") { pend = 1; pend_fnr = FNR; pend_txt = line }
+    if (cv == 2 && curfn != "") { pend = 1; pend_fnr = lno; pend_txt = line }
     next
   }
 
-  printf "%s:%d:%s\n", FILE, FNR, line
+  # `lno`, not FNR: a joined record is reported at its FIRST physical line, which is where a
+  # reader has to start editing. FNR is the LAST one since the join.
+  printf "%s:%d:%s\n", FILE, lno, line
 }'
 
 # ── scan ─────────────────────────────────────────────────────────────────────────────────────────
@@ -2067,6 +2187,62 @@ v=\"\$(f)\""
   # a past_seps that never cuts would leave the word at `0;` and mint this correct line.
   mk g36 "has_tell=0; printf 'lit' | grep -q N"
   expect g36 GREEN "a ; at TOP level is still read past — a bounded literal printf stays exonerated"
+
+  # ── THE CONTINUATION JOIN (2026-09-18, backlog c128aeff816e) ──────────────────────────────────
+  # Until the joiner landed, every arm in this suite spelled its pipeline on ONE physical line, so
+  # the suite could not distinguish a detector that judges shell from one that judges lines. A
+  # pipeline split by a backslash reached the ladder as two fragments, each individually clean —
+  # `p | grep -q P \\` carries no reader of its status, and `&& act` is not a pipeline at all — so the
+  # site was never JUDGED. Not exonerated: invisible, which is the one outcome a census cannot show.
+  # r37/r38 are the two spellings measured in docs/research/pipefail-continuation-join-2026-09-17.md,
+  # where their one-line twins (r10 and r1 respectively) already report; the pair is what makes the
+  # continuation, and not the operator, the variable.
+  mk_noe r37 "printf '%s' \"\$V\" | grep -q NEEDLE \\
+  && :"
+  expect r37 RED "a pipeline split by a backslash, && spelling — r10 with one newline added"
+  mk_noe r38 "if printf '%s' \"\$V\" \\
+     | grep -qE 'pat'; then :; fi"
+  expect r38 RED "a pipeline split by a backslash, if spelling, with the PIPE on the second line"
+  # r39 is the join guard that fails in the DANGEROUS direction. Bash ends a comment at the newline,
+  # so a trailing backslash inside one continues nothing; a joiner that does not know that swallows
+  # the next line of real code into a record that is next-ed as a comment — a latched false NEGATIVE,
+  # exactly the heredoc mute r15/g31 pin, reintroduced by the cure for a different gap.
+  mk_noe r39 "# a note that happens to end in a backslash \\
+printf '%s' \"\$V\" | grep -q NEEDLE && :"
+  expect r39 RED "a comment ending in a backslash does not swallow the line below it"
+  # g37 is the ODD-COUNT cell. `x=1\\\\` ends in an ESCAPED backslash and does NOT continue; an
+  # anchored /\\$/ reads it the same as a real continuation and splices two complete commands into
+  # one record. Here that moves the producer word off a bounded literal printf onto `1\\printf`,
+  # convicting the very shape g1 exists to exonerate. The first version of this arm opened with `:`,
+  # which is_external lists BESIDE echo and printf as a bounded builtin — so the mutant stayed green
+  # and the arm pinned nothing. Both assertions true in both states is the arm fault, not a subject
+  # fault, and it is why every arm below was scored against its own mutant rather than assumed.
+  mk g37 "x=1\\\\
+printf '%s\\n' 'ready' | grep -q ready"
+  expect g37 GREEN "a line ending in an ESCAPED backslash is not a continuation"
+  # g38 pins the HEREDOC OPENER moving from `$0` to `raw`. Since the join, `$0` is the LAST physical
+  # line of a record, so an opener on any earlier one is invisible and the body it introduces is
+  # judged as CODE. Under errexit the first body line here is a bare pipeline, i.e. RED — so the arm
+  # that looks like paranoia about a redirect is the one that stops a whole heredoc being executed.
+  mk g38 "cat <<EOF \\
+  --flag
+printf '%s' \"\$V\" | grep -q NEEDLE
+EOF"
+  expect g38 GREEN "a heredoc opener on the FIRST physical line of a joined record still opens it"
+  # ── is_early is asked of a STAGE, and a stage ends at its first list separator ────────────────
+  # g39 is the migrations/0010-postland-band-plist.sh:74 shape, verbatim in structure: a DRAINED
+  # consumer followed by an && and a command that happens to carry -q. Before the join these two
+  # were never in one record and the over-read could not fire; the join is what put them there, and
+  # an is_early that scans the whole segment convicts the remedy this lint prescribes.
+  mk_noe g39 "! plutil -p \"\$LIVE\" 2>/dev/null | grep 'ProcessType' >/dev/null \\
+   && grep -q 'taskpolicy' \"\$LIVE\" && :"
+  expect g39 GREEN "a -q on a command AFTER the && is not a flag on the drained consumer"
+  # r40 is that truncation bounded in the other direction, and it is the reason first_cmd re-walks
+  # the quotes instead of cutting at the first `;`: sed exits early via `;q` INSIDE a quoted script,
+  # so a quote-blind cut leaves `sed -n \0471,5p` and the one shape the sed arm exists for goes
+  # silent. No arm in this suite exercised the sed arm at all before this one.
+  mk r40 "cat \"\$f\" | sed -n '1,5p;q'"
+  expect r40 RED "sed with a ;q INSIDE its quoted script is still early-exit"
 
   local total=$((pass+fail))
   if [ "$fail" -gt 0 ]; then
