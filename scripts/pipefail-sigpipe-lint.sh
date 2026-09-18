@@ -1444,7 +1444,10 @@ FNR == 1 { inhd = 0; curfn = ""; pend = 0; jpend = 0; jbuf = "" }   # pass two s
   #     physical line of a joined construct is never seen at all.
   # JOIN_MAX bounds the damage if a file ends mid-continuation or a quoting accident leaves one
   # open: the buffer is JUDGED at the cap rather than abandoned, because abandoning it would drop
-  # every line it swallowed.
+  # every line it swallowed. 40 is measured rather than guessed — the longest backslash-continued
+  # logical line in this tree is 23 physical lines (scripts/lib/cc-type-verified.sh:121), and no
+  # scanned file ends mid-continuation, so the cap is not reached today and the EOF drop has an
+  # empty population. Both are properties of a tree that grows; re-measure before lowering it.
   if (jpend) {
     jbuf = jbuf strip_cont($0); jn++
     if (cont_open($0) && jn < JOIN_MAX) next
