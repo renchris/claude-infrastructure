@@ -282,7 +282,36 @@ cmd_open() {
   [ -n "$id" ] || id="$(mk_id "$class" "$sid" "$what")"
   local file="$DECISIONS_DIR/$id.json"
   # Idempotent + inv7: an existing packet is EVIDENCE — never overwrite it, just echo the id.
-  if [ -f "$file" ]; then echo "$id"; return 0; fi
+  #
+  # BUT SAY SO WHEN THE CALLER WAS TRYING TO CORRECT SOMETHING. The id is content-keyed on
+  # class+sid+what ONLY, so a re-open carrying a DIFFERENT `--receipt` or `--conviction` is not a
+  # duplicate — it is a filer amending the two fields THE CONVICTION PROTOCOL makes load-bearing,
+  # and it used to return the id and exit 0 with the amendment silently dropped. Measured
+  # 2026-09-17: a session filed a class-C packet whose receipt pointed into a `mktemp -d`, noticed
+  # that the path would evaporate, wrote the receipt to a committed docs/research path, re-opened
+  # with it — and the packet kept the dead pointer while the tool reported success. A fail-safe
+  # default that mimics the healthy state is unfalsifiable; this makes the no-op loud.
+  #
+  # It stays a WARNING, never a failure and never a write: inv7 governs the file, the exit code is
+  # what callers branch on, and `cc-decide` is invoked from close paths that must not acquire a new
+  # way to fail. The repair is named because there is no `update` verb and the filer would
+  # otherwise have to discover that too.
+  if [ -f "$file" ]; then
+    local _cur_r _cur_c _drift=""
+    _cur_r="$(jq -r '.receipt // ""'    "$file" 2>/dev/null)"
+    _cur_c="$(jq -r '.conviction // ""' "$file" 2>/dev/null)"
+    [ -n "$receipt" ]    && [ "$receipt" != "$_cur_r" ]        && _drift="receipt"
+    [ -n "${conviction:-}" ] && [ "${conviction}" != "$_cur_c" ] && _drift="${_drift:+$_drift and }conviction"
+    if [ -n "$_drift" ]; then
+      printf 'cc-decide open: packet %s already exists and was NOT modified — your %s did not land.\n' "$id" "$_drift" >&2
+      printf '  on disk: receipt=%s conviction=%s\n' "${_cur_r:-<empty>}" "${_cur_c:-<empty>}" >&2
+      printf '  you passed: receipt=%s conviction=%s\n' "${receipt:-<empty>}" "${conviction:-<empty>}" >&2
+      printf '  inv7: an open packet is EVIDENCE and is never overwritten, and there is no update verb.\n' >&2
+      printf '  To amend, edit the field in place (back the file up first):\n' >&2
+      printf '    cp %s %s.bak && jq \x27.receipt = "<path>"\x27 %s > t && mv t %s\n' "$file" "$file" "$file" "$file" >&2
+    fi
+    echo "$id"; return 0
+  fi
 
   # Build the options array (bash 3.2-safe: guard the empty-array expansion under set -u).
   local opts_json="[]" o label outcome
