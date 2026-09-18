@@ -141,3 +141,16 @@ _own_fixture() {  # -> echoes the repo dir
   run "$LINT" --file "$TMP/f.md"
   [ "$status" -eq 0 ] || false
 }
+
+# The tally line is what a reader acts on, and it used to attribute DUPLICATE findings to the
+# over-budget bucket (`over=$((over+1))` in the duplicate arm), sending them hunting for long
+# bullets that do not exist. Found live 2026-09-18 on the failed chore/rules-lesson-tiering ref,
+# whose own file lints as 5 bodyless + 4 duplicates and reported `bodyless=5 over-budget=4` with
+# zero bullets actually over budget. The per-finding lines were always right; only the tally lied.
+@test "the tally counts duplicates as duplicates, not as over-budget" {
+  printf '# r\n\n- [A](../../docs/lessons/x.md) - one.\n- [B](../../docs/lessons/x.md) - two.\n' > "$TMP/f.md"
+  run "$LINT" --file "$TMP/f.md"
+  [ "$status" -eq 1 ] || false
+  [[ "$output" == *"duplicate=1"* ]] || false
+  [[ "$output" == *"over-budget=0"* ]] || false
+}
