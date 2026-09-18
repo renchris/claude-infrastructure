@@ -84,3 +84,43 @@ compressor). Either way the ranking is unchanged: clang-format is the memory eve
 
 Clear: 0 clang-format, load 14.5, 17.9 GB free, compressor 0, `memory_pressure` 95 % free.
 Nothing to kill. A sibling has a 20 s watcher armed on the swarm signature.
+
+---
+
+## Landed 2026-09-17 — two corrections that arrived after this was written
+
+This doc sat on `refs/land/failed/20260916T220556Z-…-docs-panic-clang-format-swarm` overnight
+(its author's `ship-land` did not complete) and is landed here unchanged above this line.
+`docs/research/kernel-watchdog-panic-2026-09-16.md` — the sibling record of the same incident —
+landed in the meantime, went further, and **contradicts one claim made above**. Read that doc's
+§ 4.3 before quoting anything from the table.
+
+**1. The reclaim ratio is WITHDRAWN.** The table's `pagesWanted / reclaimed` row (`3094 / 52 =
+1.7 %`, `3094 / 162 = 5.2 %`) and the sentence *"the starvation evidence is the reclaim ratio and
+the pinned free floor"* rest on a denominator that is not a measurement.
+`memoryStatus.memoryPressureDetails.pagesWanted` is the arithmetic identity
+`vm_page_free_target − free_count` = `4000 − 906` = **3094 in both panics because both operands are
+pinned**, so a ratio built on it describes the sysctl constant, not the storm. `pagesReclaimed`
+(52 vs 162) is a real counter and keeps its value; the *ratio* does not. The surviving half of that
+paragraph is the one this doc found independently and is still correct: **free landing on exactly
+906 pages in two unrelated panics is itself the finding**, and `memoryPressure: false` is real,
+which is why no pressure-keyed guard can work on this box. Sources:
+`docs/research/kernel-watchdog-panic-2026-09-16.md` § 4.3 and
+`docs/lessons/a-crash-dump-s-memory-fields-are-derived-check-their-arithmetic.md`.
+
+**2. "Resident sum" is the wrong name for the right number.** The table's `260.0 GB` and `294.1 GB`
+are sums of per-process `residentMemoryBytes` on a **64 GB** box — 4.1× and 4.6× physical, which is
+impossible for resident pages and is the tell. The field is the task's **`phys_footprint`, which
+counts COMPRESSED pages at their UNCOMPRESSED size**; the arithmetic closes against the sentinel's
+own `vm_stat`. For *pricing* a compressor exhaustion it is the right unit — it is exactly the
+anonymous demand that fills the segment table — but it must be named footprint. This doc's own
+closing note (`ps` RSS understates it ~35×, "the two fields are not the same measurement") reaches
+the same place from the other side and stands; what changes is only what the number is called. The
+consequence the sibling doc draws and this one did not: a `ps`-RSS-keyed **actuator** is nearly
+blind to these processes, because RSS is the one quantity the compressor is actively hiding.
+
+**Cross-reference.** `kernel-watchdog-panic-2026-09-16.md` § 6.5 cites this record as
+`docs/research/panic-2026-09-16-clang-format-swarm.md`. The path is
+`docs/research/panic-clang-format-swarm-2026-09-16.md` (this file); that citation is corrected in
+the same commit as this land. Nothing above this line was edited — the doc is the author's record
+of what the panic reports said on 2026-09-16, corrections appended rather than folded in.
