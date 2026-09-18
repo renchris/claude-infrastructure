@@ -1204,6 +1204,18 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   # worker fired onto the branch in that window would race it on one ref. The drain lane picks OPEN
   # rows on its own cadence — tier 0 (falsifier) and oldest first, so a stranded land is exactly
   # what it reaches for — which is the backstop this row exists for once the author's pane is gone.
+  # ⚠️ THAT CADENCE IS A TIMING ASSUMPTION, NOT A GUARD, AND THE GAP IS DELIBERATELY LEFT OPEN
+  # (2026-09-17, measured by two sessions that were themselves the duplicate). `bin/cc-dispatch`
+  # greps ZERO for both `land/failed` and `re-land`, so nothing stops a worker being fired onto this
+  # row while the author is still retrying — an author whose retries take ~1h, which is exactly the
+  # contended case this row exists for, is structurally duplicable. The falsifier cannot retract it
+  # either: land-content-verify is correct that the content is NOT on trunk yet.
+  # NOT BUILDING THE LIVENESS GUARD IS THE DECISION, and the reason is the useful part so the next
+  # reader does not re-derive it: incidence over the whole store is 4 of 102 claimed re-land rows
+  # (<=3.9%, and that is an UPPER bound — "original row still open" is a proxy for "author live",
+  # confirmed in only 1 case), while a liveness guard's false-positive direction DEFERS the re-land
+  # of a genuinely WEDGED author, which is this row's entire purpose. A remedy whose failure mode
+  # attacks the feature it protects is worse than the <=3.9% it saves. Re-measure before reopening.
   local rtitle rrun
   rtitle="re-land ${BRANCH}: ship-land could not complete and its author's pane may be gone"
   rrun="$cmd   # last attempt: rc=${rc} (${cause}), head pinned at ${ref:-<unrecorded>}"
@@ -1225,7 +1237,7 @@ land_failure_inbox() {  # $1=exit code $2=cause word
     # precondition is literally that this branch's content reaches trunk, and the falsifier stored
     # below (land-content-verify.sh) retracts the row exactly when it does. The row stays OPEN agent
     # work carrying its --run: this names why it cannot be driven in THIS process, which is exiting.
-    --why-not-now "not-yet-true: ship-land exited ${rc} (${cause}) on ${BRANCH} and the branch's content is not on trunk yet; the author's own retry runs first, and the drain lane re-lands it if that pane is gone — agent work under the standing-land authorization, not an operator step"
+    --why-not-now "not-yet-true: ship-land exited ${rc} (${cause}) on ${BRANCH} and the branch's content is not on trunk yet; the author's own retry runs first (a CADENCE ASSUMPTION, not a guard — cc-dispatch does not know about re-land rows, so a worker can be fired onto this branch mid-retry; see the producer comment), and the drain lane re-lands it if that pane is gone — agent work under the standing-land authorization, not an operator step"
     --session "${CLAUDE_CODE_SESSION_ID:-}")
   case "$land_proj" in
     ""|.*) : ;;                                  # unresolvable, or a sandbox — do not file a lie
