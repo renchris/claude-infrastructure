@@ -21,6 +21,23 @@ patch, the build, the tests and the PR body; it does not open the PR.
 
 ---
 
+## 🚨 STATUS 2026-09-17 — EVERY AGENT WAVE HAS LANDED. WHAT REMAINS IS ONE HUMAN GESTURE.
+
+W0-W8 are all on trunk with shas (§ 0's table). Of the nine DoD criteria in § 6, **seven are
+discharged with a check that printed** — #8, the docs build, was the last and closed today with its
+mandatory positive control (§ 4.M/Q23). The two that remain are **#4 and #5, and both are the
+operator's hand on a real mouse.** No agent can supply them: a synthetic CGEvent has no sandbox
+(the screen is global — `docs/lessons/a-synthetic-input-event-has-no-sandbox-the-screen-is-global.md`),
+so driving `tools/draghold` at a live desktop is forbidden, and W4 was written as locus **L** for
+exactly this reason.
+
+**The gesture no longer needs the sandbox.** The chord has been armed in the operator's own kitty
+since 2026-09-16 22:47 — see § 5's *W4 — STATE AS OF 2026-09-17*, which also records the one thing
+the sandbox structurally could not test (the grabbed-mode promotion path, answered from source,
+negative) and why the § 7.1 retirements need re-arguing before anyone executes them.
+
+---
+
 ## § 0. PHASE 0 — AGENT TEAM ORCHESTRATION
 
 **Execution locus per wave — the FIRST field, because it decides whose context pays.**
@@ -28,14 +45,14 @@ patch, the build, the tests and the PR body; it does not open the PR.
 | Wave | What | Locus | Size band | Why this locus |
 |---|---|---|---|---|
 | **W0** | Re-pin `tests/kitty-title-zero-shift.bats` — **DONE `ee0652933`**, discharged by a sibling while this plan was being written | — | — | — |
-| **W1** | Fix the record (Q19): nine citation/claim corrections + the `cc-kitty-reload` header refutation | **S** · dispatched session | 20–40K · 1 unit | default |
-| **W2** | Deliverable A — the config-only prototype kitten, both arming spellings, sandbox-only | **S** · dispatched session | 40–80K · 1 unit | default |
-| **W3** | Deploy the kitten file (route A′: `scripts/` + absolute path) + the mandatory `kitty-conf-bindings` case | **S** · dispatched session | 20–40K · 1 unit | default |
+| **W1** | Fix the record (Q19) — **DONE `fe1d82342`**, citations re-pinned by `b73e9a42f` | — | — | — |
+| **W2** | Deliverable A, the prototype kitten — **DONE `254e1b47b`** | — | — | — |
+| **W3** | Deploy the kitten (route A′) + its suite case — **DONE `cc9276931`**; live symlink verified 2026-09-17 | — | — | — |
 | **W4** | **OPERATOR GATE — Q9/Q10/Q8/Q12 hand-drag session.** Not an agent wave. | **L** · lead-inline, and only to *hand over* | — | It needs a human hand on a real mouse. The lead's only job is to deliver ONE script that drives everything drivable and reads the verdict back; see § 5.W4. |
-| **W5** | Deliverable B — the upstream patch against master (action + parser + accessor + changelog + tests) | **S** · dispatched session | 80–150K · 1 unit | default |
-| **W6** | Deliverable B on v0.48.2 — backport build, incl. **adding** the master-only `mouse_left_press_x/y` field | **S** · dispatched session | 40–80K · 1 unit | default |
-| **W7** | Our config integration — the armed-off `globinclude` drop-in, the § 7.1 retirements, the Q7 coupling test | **S** · dispatched session | 40–80K · 1 unit | default |
-| **W8** | Recover + commit the `draghold` CGEvent driver **with its invocation** (Q18) | **S** · dispatched session | 20–40K · 1 unit | default; off the critical path but **time-boxed** — the only surviving copy is in a reapable scratchpad |
+| **W5** | Deliverable B, the patch against master — **DONE `2788de2e1`**; DoD #8's docs gate closed 2026-09-17 (§ 4.M/Q23) | — | — | — |
+| **W6** | Deliverable B on v0.48.2 — **DONE `8aec777ef`** | — | — | — |
+| **W7** | Config integration — drop-in **DONE ARMED-OFF `46dc69d98`**; the § 7.1 retirements stay 🚨 GATED ON W4 *and* need re-arguing against the draggable-bar ruling (see § 5.W4 state) | **S** | 40–80K | default |
+| **W8** | Recover the `draghold` CGEvent driver (Q18) — **DONE `6f64a25e5`**, off the reapable scratchpad and tracked | — | — | — |
 
 **T (teammates) is used nowhere in this plan and that is deliberate.** Every wave here is one
 subsystem's files, verifiable on its own, with no member that must be synthesised against another
@@ -1124,7 +1141,52 @@ LITERALLY.** Without it `gate-select` answers `FULL <- unmapped:` and **ship-lan
 all**, deferring the whole corpus to `postland-verify`, where it becomes a **post-land RED with a
 possible AUTO-REVERT**. This is a land-gate mechanic, not a coverage nicety.
 
-#### Q23 — Does the docs build pass with the proposed docstring? — **DEFERRED to W5, with the gate named**
+#### Q23 — Does the docs build pass with the proposed docstring? — **RULED 2026-09-17: YES, with its positive control run. DoD #8 is discharged.**
+
+**The verdict, and the two commands that produced it.** The gate was run against `~/kdev` carrying
+the W5 patch, and then run again with a deliberate dangling role, so a clean build means something:
+
+```
+# THE GATE — rc=0, the only output a benign "matplotlib is not installed, social cards
+# will not be generated". -n nitpicky, -W warnings-as-errors, exactly what docs/Makefile builds.
+cd ~/kdev/docs && PYTHONPATH=<docs deps> \
+  ~/kdev/dependencies/darwin-arm64/python/Python.framework/Versions/3.14/bin/python3.14 \
+  -m sphinx -M html . _build -n -q -j auto -T -W
+
+# THE POSITIVE CONTROL — append `and :ac:`no_such_action_xyz`` to the mouse_drag_window
+# docstring's last line, add -E to force a full re-read, and the SAME command goes rc=1 with
+#   docs/generated/actions.rst:569: WARNING: 'ac' reference target not found: no_such_action_xyz
+# The gate has power on the exact axis Q23 named. window.py was restored byte-for-byte after.
+```
+
+🚨 **TWO ENVIRONMENT TRAPS SIT IN FRONT OF THIS GATE, AND BOTH PRODUCE A RED THAT LOOKS LIKE THE
+PATCH'S FAULT.** Recorded because the next session pays for each of them again otherwise.
+
+1. **The interpreter is not the one on `PATH`.** `sphinx-build` on `PATH` is Homebrew's, shebanged
+   to Homebrew's `python3.14`, and `~/kdev/kitty/fast_data_types.so` is linked against a **vendored**
+   Python framework of the *same version* under `~/kdev/dependencies/`. Two libpython 3.14 binaries
+   in one process **segfault** at `PyInit_fast_data_types` — `make` reports only
+   `*** Segmentation fault: 11`. Visible only in the C stack (`python3 -X faulthandler -c 'import
+   kitty.fast_data_types'`), which names both framework paths. The control that settled it in one
+   command: `/private/tmp/kitty-482` imports the same module cleanly under the *same* Homebrew
+   interpreter, so the difference is linkage, not the patch. Run the gate with the **vendored**
+   interpreter; its framework has no `pip`/`ensurepip`, so install the five pure-Python deps
+   (`sphinx furo sphinx-copybutton sphinx-design sphinxext-opengraph` — `matplotlib` from
+   `docs/requirements.txt` is NOT imported by `docs/conf.py`) with any 3.14 `pip --target` and pass
+   the directory on `PYTHONPATH`.
+2. **`~/kdev` was a SHALLOW clone**, so three `:commit:` references in `docs/changelog.rst` at lines
+   **4856, 4971, 4983** could not resolve and `-W` turned them into a failed build. `changelog.rst`
+   **is one of the seven files this patch modifies**, which is the whole trap — the patch's four
+   lines are at line **205**, ~4,650 lines away. `git fetch --unshallow` (run 2026-09-17, the clone
+   is no longer shallow) made all three resolve and the same build passed. Lesson filed:
+   `docs/lessons/gate-red-on-a-file-your-diff-touches-is-not-a-red-on-your-diff.md`.
+
+**The original deferral is preserved below**, because its reasoning is what made the control
+mandatory and the control is what makes the verdict worth anything.
+
+---
+
+#### Q23 — the original deferral (superseded by the ruling above, kept in place)
 
 The probe wave did not return a verdict on this one before the plan landed; it is the only question of
 the nine left open, and it is the cheapest to close. **It is deferred rather than ruled, and the
@@ -1354,6 +1416,64 @@ mapped when the first shot fired. Q10 stays answerable by comparing an early bur
 one, but the clean before/after pair is not there. That path had never executed before the operator
 ran it, deliberately: `screencapture` raises a TCC modal no subagent can answer.
 
+### W4 — STATE AS OF 2026-09-17, and the one thing the sandbox structurally cannot test
+
+**The gate's apparatus is fixed and runs.** The blocking `rc=2` binary-selection defect the
+adversarial verification found is gone: `bash scripts/kitty-drag-w4.sh --dry-run` reads
+`DRY RUN CLEAN`, generating all six bindings and passing the differ selfcheck. And `--arm` /
+`--verdict` now exist (`142e0d91e`), so the answer no longer depends on a 420 s foreground watch
+surviving — the operator arms, presses whenever he likes, and reads the verdict later.
+
+🚨 **THE CHORD IS ALREADY ARMED IN HIS LIVE KITTY, AND THE TRACKED RECORD STILL SAYS IT IS NOT.**
+`~/.config/kitty/drag-arm.d/drag.conf` has carried, since 2026-09-16 22:47:
+
+```
+mouse_map cmd+shift+left press grabbed,ungrabbed kitten ${HOME}/.claude/scripts/kitty-drag-window.py --spelling=preserving
+```
+
+That is W7's arming line with Q12's chord and route A's preserving spelling, live in the operator's
+own panes — written under the operator ruling in
+`docs/lessons/a-draggable-pane-title-outranks-every-other-title-bar-property-o.md`. Meanwhile
+`tests/kitty-drag-arm.bats` case 7, *"the example refuses to ship a chosen chord — W4 has not
+ruled"*, is green, and `config/drag-arm.d/drag.conf.example` still carries `<CHORD>`/`<ACTION>`
+placeholders. **Both are correct**: the live drop-in is untracked by design (W7's whole safety
+argument) so arming it changes no tracked file. But it means DoD #4 and #5 no longer need a
+sandbox — **the operator can answer them by pressing ⌘⇧+left-button in any of his own panes**, and
+what the record is missing is not apparatus, it is a verdict.
+
+**The § 7.1 retirements stay parked** behind that verdict, and one of them now needs re-arguing
+rather than just executing: retiring `map cmd+opt+b` and `scripts/kitty-pane-title-toggle.sh` was
+premised on real title bars never being deliberately raised, and the operator ruling has since made
+a real, hit-tested, draggable bar **primary**. Re-read § 7.1 against that lesson before touching
+either.
+
+**THE GRABBED-MODE QUESTION — ANSWERED FROM SOURCE 2026-09-17, NEGATIVE, NO HAND REQUIRED.** The
+sandbox binds all six chords `ungrabbed` only and its panes run a bare `$SHELL`, so it cannot
+exercise the mode production actually runs in — Claude Code holds the mouse in essentially every
+pane, which is exactly why the live line says `grabbed,ungrabbed`. The worry that the *preserving*
+spelling arms and then never promotes in a grabbed pane is **refuted**, in three steps, read off
+`/private/tmp/kitty-482/kitty/mouse.c` (the build the operator runs):
+
+1. **The press reaches the mousemap with the right mode.** `pc->grabbed = screen->modes
+   .mouse_tracking_mode != 0` (`:858`) is what `dispatch_mouse_event` (`:835`) carries into
+   `Boss.on_mouse_input`, so a `grabbed,ungrabbed` binding matches in both modes by construction.
+2. **A consumed press cannot set the forwarding flag.** `tracked_drag_in_window` — the state whose
+   motion branch (`:1307-1320`) forwards movement to the child and `return`s *before* the
+   window-drag branch is reached — is assigned only inside `encode_mouse_button` (`:137-139`),
+   which runs only when kitty is FORWARDING the event. A `mouse_map … kitten …` always consumes,
+   so our chord never sets it.
+3. **Once armed, the drag branch pre-empts the grabbed content path unconditionally.**
+   `} else if ((r.in_title_bar && r.window) || global_state.window_being_dragged.id) {` (`:1362`)
+   sits *above* the `} else if (w) { … handle_event(…) }` content branch (`:1389`) and tests no
+   tracking mode at all. `set_window_being_dragged(wid, False, x, y)` is precisely what the
+   preserving spelling calls.
+
+**Residual, stated rather than hidden:** step 2 leaves one edge — an already-forwarded, un-released
+left press (so `tracked_drag_in_window` is set) followed by the chord, in a pane whose app is in
+`MOTION_MODE` *and* `SGR_PIXEL_PROTOCOL`. Both conditions are required by `:1311`; SGR_PIXEL (1016)
+is rarer than SGR (1006). Not measured, and not worth a hand — recorded as an open unknown beside
+§ 7's V13.
+
 ### W5 — Deliverable B, the patch against master
 
 **Deliverable.** A complete, formatted, type-checked, tested patch in `/private/tmp/kitty-dev`, plus
@@ -1572,7 +1692,7 @@ judgement.
 | 5 | The operator's styled pane header is draggable in his live kitty | the chord works in his own panes, by his own hand |
 | 6 | The upstream patch is complete and passes kitty's own gates on master | `ruff format` + `gofmt -s -l -w tools kittens` + per-file `clang-format -i` (**never `./autoformat`** — it panicked the kernel twice, 2026-09-16); `ruff check .`; `./test.py type-check`; `./test.py --module window_drag` with its plan line and 0 failures |
 | 7 | A patched v0.48.2 build arms the drag | `kitty +runpy 'import kitty; print(kitty.__file__)'` under `/private/tmp/kitty-482` **(never `--version`)**; state before/after |
-| 8 | The docs build passes with the new docstring | Q23's check, § 4.M |
+| 8 | The docs build passes with the new docstring | ✅ **DONE 2026-09-17.** Q23's check ran `rc=0` under `-n -W`, and its mandatory positive control (a dangling `:ac:` role) took the same command to `rc=1` naming the role. Both commands, and the two environment traps that make this gate red for reasons that are not the patch, are in § 4.M/Q23. |
 | 9 | Nothing in this plan posted anything upstream | no PR, no issue, no comment — the operator's call |
 
 **Explicitly NOT in the DoD, and why:**
