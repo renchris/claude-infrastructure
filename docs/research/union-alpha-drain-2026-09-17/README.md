@@ -711,3 +711,65 @@ The tool is landed and re-runnable (`--limit`, `--json`, exits 0). Treat it as a
 detector**: a rising SUSPECT count is signal, a clean run is not evidence. Its blind spot is
 documented in its own docstring. **The job-2 idea is closed** — not because the mechanism was
 wrong, but because the defect class it targets is not the one that bites us.
+
+## THE CLOUDFLARE ROUTE IS A DIFFERENT QUESTION, AND union-alpha IS STILL THERE (2026-09-18)
+
+Operator challenge: *"Why are we talking about pareto instead of Union Alpha? If OpenRouter
+isn't as advertised for fully free Union Alpha usage, let's go with Cloudflare?"* Both halves
+are answered here, and the second one changes the state of this dossier.
+
+**On the first: Union Alpha IS Pareto.** OpenRouter's 404 body — *"Thank you for participating
+in the Stealth Union Alpha testing period. This model **was** Unbiased's Pareto"* — says the
+stealth codename and the launched product are the same weights. There is no longer an
+addressable `union-alpha` id **on OpenRouter**. Talking about Pareto is talking about Union
+Alpha.
+
+**On the second — and this was worth the challenge: Cloudflare is NOT the same question, and
+still carries the model.** Measured today against the public catalogue, no credentials needed:
+
+| | |
+|---|---|
+| `stealth/union-alpha` in Cloudflare's catalogue | **LISTED** — 1 of 161 ids |
+| `unbiased/pareto` | also listed |
+| negative control (`stealth/definitely-not-a-model-xyz`, `nonsense/qqqq`) | **404** — the instrument can say no |
+
+So one vendor retired the alias at reveal and the other did not. **A model's availability is a
+property of the VENDOR, not of the model** — the same error as reading one id's price as the
+product's price, one level up. This dossier's §"THE SUBJECT MODEL NO LONGER EXISTS" is
+OpenRouter-scoped and should be read that way.
+
+### What A2 already settled, and the one thing it could not
+
+`A2-cloudflare.md` did this work properly on 2026-09-16 and its findings stand:
+
+- **Cloudflare publishes no price** for union-alpha (no Model Info table at all), while every
+  generated example returns `"cost": 0`. Free **by example, not by policy**.
+- **"Free for a week" is OpenCode's framing, not Cloudflare's** — *"Union Alpha Free is a
+  stealth model available on OpenCode for a limited time."* Cloudflare states no end date, no
+  preview, no week; the hard `2026-09-23` is a community claim from a GitHub issue. So the
+  operator's recollection traces to **OpenCode Zen**, a third route this dossier has not tested.
+- **The data policy remains the disqualifier** (kill #4): prompts *"may be retained by the
+  provider"*, Cloudflare withholds its Zero-data-retention badge from this model specifically
+  (it grants it to 90 of 226), and its ZDR switch supports only OpenAI and Anthropic, so a
+  stealth request **falls back to non-ZDR**.
+- **Rate ceiling** 200 req/60s per gateway, BYOK-exempt — and you cannot BYOK a stealth provider.
+
+**The UNKNOWN A2 could not close by reading:** the REST-API doc says *"Ensure your Cloudflare
+account has sufficient credits loaded before calling third-party models"*, yet union-alpha's
+every example is `cost: 0`. **Is a zero-cost model actually gated on a non-zero balance?** Only
+a call answers it. Do **not** assume the OpenRouter result carries over — there the answer was
+*gated for variable-priced, ungated for explicitly-zero*, which is a fact about OpenRouter's
+limit check, not a law.
+
+### Built to close it
+
+- `union-batch.py` gained `--endpoint` and `--key-env`, so the same screened, map-shaped harness
+  drives Cloudflare unchanged (its API is OpenAI-compatible). All 7 guards re-proved and the
+  OpenRouter path regression-tested live.
+- `cf-union-alpha-probe.sh` — read-only, sends ONE completion, checks its own preconditions and
+  names the exact remedy for each. It writes **no** credential, config or allowlist entry: those
+  are the operator's, never an agent's to script. Verified it stops at rc 2 with nothing sent.
+
+Endpoint shape, from the docs rather than guessed: `POST /accounts/{account_id}/ai/v1/chat/
+completions`, `Authorization: Bearer $CLOUDFLARE_API_TOKEN`, token permission **Account >
+Workers AI > Read**. Notably **no gateway id is required** on this path — an account id suffices.

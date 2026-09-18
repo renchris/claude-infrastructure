@@ -72,6 +72,16 @@ EXIT_USAGE = 64  # argparse's own default is 2, which is our EXIT_REFUSED
 
 ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 
+# Cloudflare AI Gateway speaks the same OpenAI-compatible schema, so the SAME harness
+# drives it — only the URL and the key's env var change. Measured 2026-09-18: Cloudflare
+# still lists `stealth/union-alpha` (1 of 161 catalogue ids, negative-controlled: a
+# nonsense model path 404s) while OpenRouter retired that alias at reveal. No gateway id
+# is needed on this path, only an account id.
+#   --endpoint https://api.cloudflare.com/client/v4/accounts/<ACCT>/ai/v1/chat/completions
+#   --key-env  CLOUDFLARE_API_TOKEN          (token needs Account > Workers AI > Read)
+CF_ENDPOINT_TEMPLATE = ("https://api.cloudflare.com/client/v4/accounts/"
+                        "{account_id}/ai/v1/chat/completions")
+
 # NO DEFAULT MODEL, DELIBERATELY. This script was written for "stealth/union-alpha",
 # which on 2026-09-17 began returning 404 ("revealed as Unbiased's Pareto"), and whose
 # named successor "unbiased/pareto" is PAID ($2.50/$7.50 per MTok) and therefore
@@ -185,7 +195,7 @@ class RateLimiter:
 
 
 def call_once(key: str, model: str, prompt: str, system: str | None,
-              max_tokens: int, timeout: int) -> dict:
+              max_tokens: int, timeout: int, endpoint: str = ENDPOINT) -> dict:
     """One POST. Returns a dict that ALWAYS records how the call ended."""
     msgs = []
     if system:
@@ -198,7 +208,7 @@ def call_once(key: str, model: str, prompt: str, system: str | None,
         "stream": False,
     }).encode("utf-8")
     req = urllib.request.Request(
-        ENDPOINT, data=body, method="POST",
+        endpoint, data=body, method="POST",
         headers={
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
@@ -264,6 +274,12 @@ def main() -> int:
     ap.add_argument("--rpm", type=int, default=DEFAULT_RPM)
     ap.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     ap.add_argument("--timeout", type=int, default=300)
+    ap.add_argument("--endpoint", default=ENDPOINT,
+                    help="OpenAI-compatible chat-completions URL. Default is OpenRouter; "
+                         "for Cloudflare pass the /accounts/<id>/ai/v1/chat/completions form.")
+    ap.add_argument("--key-env", default="OPENROUTER_API_KEY",
+                    help="Env var holding the bearer token (CLOUDFLARE_API_TOKEN for CF). "
+                         "Read from the environment only — never argv.")
     ap.add_argument("--retries", type=int, default=3)
     ap.add_argument("--oracle", default=None,
                     help="REQUIRED for a real run: name the deterministic oracle that "
@@ -346,9 +362,9 @@ def main() -> int:
               file=sys.stderr)
         return EXIT_CLEAN
 
-    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    key = os.environ.get(args.key_env, "").strip()
     if not key:
-        print("union-batch: OPENROUTER_API_KEY is not set. Run under:\n"
+        print(f"union-batch: {args.key_env} is not set. Run under:\n"
               "  agent-secrets run -- python3 union-batch.py ...", file=sys.stderr)
         return EXIT_REFUSED
 
@@ -367,13 +383,13 @@ def main() -> int:
                 item = work.get_nowait()
             except queue.Empty:
                 return
-            row = {"id": item["id"], "model": args.model,
+            row = {"id": item["id"], "model": args.model, "endpoint": args.endpoint,
                    "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
             res = None
             for attempt in range(args.retries + 1):
                 limiter.wait()
                 res = call_once(key, args.model, item["prompt"], args.system,
-                                args.max_tokens, args.timeout)
+                                args.max_tokens, args.timeout, args.endpoint)
                 if res["ok"] or not retryable(res.get("http_status")):
                     break
                 if attempt < args.retries:
