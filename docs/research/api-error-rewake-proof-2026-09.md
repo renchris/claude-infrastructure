@@ -168,13 +168,42 @@ file and never truncates it after arming.
 above. Same family as (2): a process that never reached its verdict, whose evidence file is
 byte-identical to a real negative.
 
+## Two things the rig measured that D4's BUILDER needs before writing a line
+
+**1. `lr_last_api_error` works against a real staged death — validated, not assumed.** Run over the
+arm-I transcript it returns `d630bb7f-f7a2-4caa-93b5-102c0c5b5eeb  unknown  other
+2026-09-18T01:34:20.791Z` at rc 0, and over the arm-H control it returns rc 1. So D4's core
+predicate, and the uuid it needs as a latch key, are confirmed end to end rather than only against
+the fixtures in `tests/lr-audit-nonlimit.bats`.
+
+**2. 🚨 `turn_duration` is ABSENT from BOTH arms — including the normal one — so D4's turn-end gate
+must FAIL OPEN on it.** § W1.2 specifies D4's condition as `[api-error ∧ turn_duration ∧ 2 greens]`,
+and § W1.2's hazard table explains why (`a synthesized prompt into a live turn is queued, not lost,
+but it must not fire the audit before the ladder resolves`). But in the headless streaming shape this
+probe uses, `grep -c turn_duration` is **0 in the api-error arm and 0 in the control**, so the record
+is a property of the SHAPE, not of how the turn ended.
+
+That is not evidence that `turn_duration` is unusable — Finding 2 of this plan measured 24 of them in
+a real interactive transcript (`52e35019`), which is the shape D4 actually runs in. What it does
+establish is the failure mode: **a gate written as "wait for a `turn_duration` after the api error"
+is unreachable by construction in any transcript that emits none**, and an unreachable gate is a
+hook that reads as registered and never fires — this repo's most-measured trap, and the exact thing
+D4 exists to avoid. So the gate must be: *if this transcript contains `turn_duration` records at
+all, require one after the api-error record; if it contains none, fall back to the api-error-is-the-
+last-assistant-record test that `lr_last_api_error` already implements.* Absence of the discriminator
+is a fact about the instrument, never a verdict about the turn.
+
+The probe cannot test the interactive arm of that gate — it has no interactive shape — so the
+fallback branch is what it covers and the primary branch needs a fixture from a real interactive
+transcript.
+
 ## What follows for D4 (T14)
 
 Build it as specified. `hooks/net-recover-arm.sh`, `asyncRewake`, declared on **SessionStart** (and
 re-armed at every Stop, idempotently, via the claim-guard pattern in `hooks/mailbox-wake-arm.sh` —
 the W2 probe's P-W2c result is that the harness dedupes nothing, so only the hook can decline). Its
-body waits on the condition W1.2 names — `[api-error ∧ turn_duration ∧ 2 greens]` — and exits 2 to
-wake. Registration is a c10 migration (the `0007`/`0012`/`0026`/`0029` pattern), staged for the
+body waits on the condition W1.2 names — `[api-error ∧ turn_duration ∧ 2 greens]` — with the
+turn-end term failing OPEN per § Two things the rig measured, and exits 2 to wake. Registration is a c10 migration (the `0007`/`0012`/`0026`/`0029` pattern), staged for the
 operator.
 
 ## Reproducing
