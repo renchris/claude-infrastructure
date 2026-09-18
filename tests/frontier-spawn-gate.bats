@@ -1,4 +1,6 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2030,SC2031,SC2329,SC2317  # every @test is a subshell BY DESIGN: a
+# per-case `export` is meant to be case-local, which is the whole point of setup() + overrides.
 # hooks/frontier-spawn-gate.sh — R2 of docs/plans/NONLIMIT_RESUME_LADDER.md § W3 (conviction 93%).
 #
 # THE DEFECT THIS SUITE PINS. The gate counted AGENT spawns only. Measured 2026-09-09 over 4,117
