@@ -766,10 +766,48 @@ limit check, not a law.
 - `union-batch.py` gained `--endpoint` and `--key-env`, so the same screened, map-shaped harness
   drives Cloudflare unchanged (its API is OpenAI-compatible). All 7 guards re-proved and the
   OpenRouter path regression-tested live.
-- `cf-union-alpha-probe.sh` — read-only, sends ONE completion, checks its own preconditions and
-  names the exact remedy for each. It writes **no** credential, config or allowlist entry: those
+- `union-alpha-route-probe.sh <cf|zen>` — read-only, sends ONE completion, checks its own
+  preconditions and names the exact remedy for each. It writes **no** credential, config or allowlist entry: those
   are the operator's, never an agent's to script. Verified it stops at rc 2 with nothing sent.
 
 Endpoint shape, from the docs rather than guessed: `POST /accounts/{account_id}/ai/v1/chat/
 completions`, `Authorization: Bearer $CLOUDFLARE_API_TOKEN`, token permission **Account >
 Workers AI > Read**. Notably **no gateway id is required** on this path — an account id suffices.
+
+
+## A THIRD ROUTE, AND IT IS THE ONLY ONE THAT SAYS "FREE" IN ITS OWN WORDS (2026-09-18)
+
+A2 mentioned OpenCode Zen in passing as the source of the "free for a week" framing. It was
+never tested. It is now, and it carries the model:
+
+| route | id | state today | says free? |
+|---|---|---|---|
+| OpenRouter | `stealth/union-alpha` | **404** — alias retired at reveal | successor `unbiased/pareto` **BILLS** ($0.0094 measured over 13 calls) |
+| Cloudflare | `stealth/union-alpha` | **LISTED**, 1 of 161 ids | by EXAMPLE only (`cost: 0` in samples); CF publishes no price |
+| **OpenCode Zen** | `union-alpha` | **LISTED as "Union Alpha Free"** | **YES, in its own words** |
+
+Negative-controlled on both live hosts (a nonsense path 404s), so the checks can fail.
+
+🚨 **Zen speaks the ANTHROPIC MESSAGES schema** (`@ai-sdk/anthropic`,
+`https://opencode.ai/zen/v1/messages`), not OpenAI chat-completions — and the two differ in ways
+that fail **silently**, which is why this needed code and a test rather than a URL swap:
+
+- `system` is a **top-level field** in Messages and a message **role** in OpenAI. Send it as a
+  role and nothing errors; the instruction is simply ignored.
+- A Messages reply is a **list of content blocks**. Concatenating all of them folds a thinking or
+  tool block into the answer, which reads as the model rambling rather than as a bug.
+
+`union-batch.py` gained `--schema {openai,anthropic}` and `--auth {bearer,x-api-key}`;
+`test-union-batch-schema.py` pins both shapes offline (no key, nothing sent). The test has
+measured power: mutating the block filter to fold **every** block turns it red, and the OpenAI
+path is regression-asserted in the same run and re-verified live.
+
+**Zen needs one credential and no account id** — *"You login to OpenCode Zen and get your API
+key"*. That makes it the cheapest of the three to try, and the only one whose own price table
+says Free.
+
+**Kill #4 still governs all three.** A2 recorded that Zen and OpenRouter publish **incompatible
+retention claims** about the same anonymous lab — Zen asserts zero-retention and no training,
+OpenRouter says prompts *"may be retained by the provider"* — and neither is auditable because
+the counterparty is undisclosed. Where two vendors disagree about a third party, the conservative
+reading governs: **assume retention**, and let the content filter do its job.
