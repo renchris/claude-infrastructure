@@ -48,6 +48,13 @@ updated — never silent token burn.
   `model: "fable"` override. Fable runs as fresh-context subagents — also the
   cost design: a panelist bills only its brief + its own tool calls at
   frontier rates, never the lead's accumulated session history.
+  **The one carve-out — stage 2 of the escalation ladder.** That ladder does not
+  `/model`-swap either: it fires a NEW PROCESS into the same pane
+  (`handoff-fire.sh --recycle --model claude-fable-5-1`), so the cache objection
+  below does not reach it and the lead of that stage IS on the frontier tier, for
+  one document, then recycles back. Conditions + the open 72% operator decision:
+  CLAUDE.md § Frontier Tier Routing and
+  `claude-infrastructure/docs/plans/NONLIMIT_RESUME_LADDER.md` § W3.
 - **Never `/model`-swap a live session to Fable.** Prompt caches are
   model-scoped, so a mid-session switch reprocesses the entire conversation at
   uncached frontier input rates — the most expensive possible start — and a

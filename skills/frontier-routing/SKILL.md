@@ -32,7 +32,14 @@ problems or routine work. Standing agent duties, every session:
    Hard bounds (non-negotiable): the per-session spawn cap in
    `frontier_discovery_budget` is hook-enforced — a blocked spawn means PARK,
    never retry; mark each hole `IN-PANEL` in the ledger BEFORE spawning
-   (concurrent-session lock); the lead itself never runs on the frontier model.
+   (concurrent-session lock); the lead itself never runs on the frontier model —
+   **except stage 2 of the escalation ladder**, where the lead RECYCLES ONTO it to
+   write a document and recycles back (CLAUDE.md § Frontier Tier Routing; design +
+   the three trigger conditions T-a/T-b/T-c in
+   `claude-infrastructure/docs/plans/NONLIMIT_RESUME_LADDER.md` § W3). The premise of
+   the blanket form was prompt-cache cost, which a fresh process does not pay. The cap
+   now counts that fire too (hooks/frontier-spawn-gate.sh session arm), so the carve-out
+   is bounded rather than an exemption.
 4. **Feed the supply side — discovery must not wait for walls.** Standing
    default-tier sources, outputs routed to the ledger (anti-capture filter
    applies): (a) wrap-up scan — did this session expose an unswept seam or a
