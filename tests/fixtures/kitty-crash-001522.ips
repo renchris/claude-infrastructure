@@ -1,0 +1,74 @@
+{"app_name": "kitty", "bug_type": "309", "os_version": "redacted", "timestamp": "redacted"}
+{
+ "_comment": "REDACTED FIXTURE for tests/kitty-crash-attribute.bats \u2014 faulting thread only, 6 frames, no environment/process data. Source: kitty-2026-09-15-001522.ips, the STOCK /Applications/kitty.app crashing with the SAME signature ~42h before the patched sandbox build existed. The thread's NAME is kept deliberately: it is the cross-check the attribution rests on.",
+ "cpuType": "ARM-64",
+ "exception": {
+  "codes": "0x0000000000000001, 0x000007b84c952d70",
+  "rawCodes": [
+   1,
+   8488140221808
+  ],
+  "type": "EXC_BAD_ACCESS",
+  "signal": "SIGSEGV",
+  "subtype": "KERN_INVALID_ADDRESS at 0x000007b84c952d70"
+ },
+ "faultingThread": 0,
+ "threads": [
+  {
+   "name": "KittyChildMon",
+   "frames": [
+    {
+     "imageOffset": 38944,
+     "symbol": "objc_msgSend",
+     "symbolLocation": 32,
+     "imageIndex": 2
+    },
+    {
+     "imageOffset": 67460,
+     "imageIndex": 0
+    },
+    {
+     "imageOffset": 27592,
+     "symbol": "_pthread_start",
+     "symbolLocation": 136,
+     "imageIndex": 1
+    },
+    {
+     "imageOffset": 7040,
+     "symbol": "thread_start",
+     "symbolLocation": 8,
+     "imageIndex": 1
+    }
+   ]
+  }
+ ],
+ "usedImages": [
+  {
+   "source": "P",
+   "arch": "arm64",
+   "base": 4382195712,
+   "size": 1294336,
+   "uuid": "ca7c2fb0-544e-35b7-bf30-93235293adb1",
+   "path": "/Applications/kitty.app/Contents/Resources/Python/lib/kitty-extensions/kitty.fast_data_types.so",
+   "name": "kitty.fast_data_types.so"
+  },
+  {
+   "source": "P",
+   "arch": "arm64e",
+   "base": 6737186816,
+   "size": 51832,
+   "uuid": "2886f4f3-500b-36c8-a20c-c457eb754e3d",
+   "path": "/usr/lib/system/libsystem_pthread.dylib",
+   "name": "libsystem_pthread.dylib"
+  },
+  {
+   "source": "P",
+   "arch": "arm64e",
+   "base": 6733037568,
+   "size": 342164,
+   "uuid": "e6f30eb4-facf-3381-ae46-10e556f1fc39",
+   "path": "/usr/lib/libobjc.A.dylib",
+   "name": "libobjc.A.dylib"
+  }
+ ]
+}
