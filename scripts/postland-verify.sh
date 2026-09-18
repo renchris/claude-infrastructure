@@ -35,7 +35,7 @@
 # MACHINE event — a peer pkill, OOM, starvation: nothing was proven, never stamped green or red,
 # retried next sweep, honest page + cool-off at CUT_MAX). HUNG vs CUT is the load-bearing split:
 # "retry when quieter" is the right answer to one and the one answer guaranteed never to clear the
-# other. Bounds: POSTLAND_SUITE_TIMEOUT_S (5400) · POSTLAND_FILE_TIMEOUT_S (300); unbounded, HUNG is
+# other. Bounds: POSTLAND_SUITE_TIMEOUT_S (10800) · POSTLAND_FILE_TIMEOUT_S (300); unbounded, HUNG is
 # UNPROVABLE (nothing can return 124) so every hang candidate honestly degrades to a CUT.
 # EVIDENCE ON A NON-GREEN VERDICT: the corpus TAP is copied to $STATE/tap/<tree>.tap and quoted by
 # the page, because it is the ONLY artifact naming WHICH tests failed and at which line — the stamp

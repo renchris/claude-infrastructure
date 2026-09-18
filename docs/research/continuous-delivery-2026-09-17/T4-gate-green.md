@@ -552,3 +552,39 @@ exactly this (`CUT_MAX=3`) has read `consecutive=1` for five days and never fire
    convictions stand with no working differential control.
 5. **Attribution defect**: `CUT_WHY` says *"the LINT is broken, not the tree"* while quoting the
    lint saying *"the real tree is not clean"*.
+
+---
+
+## RESOLVED — item (6), the "third floor" left at 55% conviction (2026-09-18, successor)
+
+§(6) closed with *"the largest thing I have left unmeasured"* and prescribed: **"Next session
+should grep the corpus rc for 124."** Done. The answer is **no third floor**, and the prescribed
+probe could not have produced it.
+
+**The probe was unanswerable as written.** Grepping the postland stores for an rc finds nothing:
+2,303 records scanned across `$STATE/*.jsonl` and **no `rc` field exists on any of them** (the one
+literal `124` in `flakes.jsonl` is a substring, not an exit code). A cut does not record its rc
+there; it routes into the CUT path instead.
+
+**The evidence that actually answers it is the `cuts` ledger, and it holds ONE entry** —
+`688c1ef0…  1  1789717338` (2026-09-18T07:42:18Z). The hypothesis was that `run_s` clustering at
+11,130–11,360s is "the classic signature of a bound that is always hit". A wall firing on every
+run would have produced a cut per run; there is one. ⇒ **`SUITE_TO` is behaving as its own comment
+claims — a backstop, not a floor.** The primary bound is the TAP-progress stall
+(`POSTLAND_STALL_S`, 900s), which is what `postland-verify.sh:3735` cuts as rc 124.
+
+⚠️ **One correction to §(6)'s own reading, worth keeping.** Line 39's *"nothing can return 124"*
+is scoped by the word immediately before it — **"unbounded"**. It means an *unwrapped* command
+cannot return 124, which is why bounds exist at all; it does **not** mean 124 never occurs. The
+stall detector produces exactly that code. Reading the clause without its qualifier turns a
+statement about one configuration into a statement about the system — the same
+narrow-fact-widened-to-a-world-fact shape this repo logged three times on 2026-09-17/18.
+
+**And the search turned up a real defect: the header's bound had drifted from the code.** Line 38
+advertised `POSTLAND_SUITE_TIMEOUT_S (5400)` while line 279 sets **10800** — and line 280 documents
+the change in passing (*"10800 (was 5400, was 2700)"*), so the value moved and the header did not.
+Anyone reading the contract block got a number the program stopped using. Corrected in place;
+`POSTLAND_FILE_TIMEOUT_S (300)` was verified to still match. That drift is very likely **why §(6)
+was alarming in the first place**: `run_s` at ~11,100s sits far above a believed 5400s wall and
+right at a real 10800s one, so the clustering looked like a bound always being breached rather
+than a backstop rarely reached.
