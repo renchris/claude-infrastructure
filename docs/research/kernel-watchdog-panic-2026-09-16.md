@@ -559,6 +559,16 @@ per-process footprint limits. Its companion record is
 trunk at the time this line was written**, so a reader who cannot find it should look for the
 landing rather than conclude it does not exist.
 
+  **Landed 2026-09-17 at `docs/research/panic-clang-format-swarm-2026-09-16.md`** (the path above
+  transposes the date; the file never existed under that name). Its author's `ship-land` did not
+  complete, so it was re-landed from `refs/land/failed/20260916T220556Z-…` unchanged, with the two
+  corrections this doc's § 4.3 makes appended to it rather than folded in: its
+  `pagesWanted / reclaimed` ratio is withdrawn for the reason given there, and its "resident sum"
+  rows are footprint, not resident. The finding it owns and this doc does not: **the
+  `26079`-vs-`197` checkin counts in the two panic strings carry no starvation signal** — they are a
+  denominator artifact of uptime (541.6 h vs 0.62 h), and the *rates* are 0.0134/s and 0.0885/s, so
+  the second panic's is 6.6× **higher**.
+
 Its note contributes one residual that this diff does **not** close, recorded here rather than
 silently inherited:
 
