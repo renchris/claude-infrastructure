@@ -419,6 +419,89 @@
 #   same contract as rules 1-2, 5 and 7 — ONLY EVER DELETE LINES; pinning a suite without deleting
 #   its line is a RED.
 #
+# RULE 9 (the live-layer converge kick) — rule 8's TWIN at the other end of the land, and the same
+# class arriving through a seam rule 8 is blind to by construction. Rule 8 knows exactly one lever,
+# CC_BACKLOG_KICK, because it was written for the tool that carried it; nothing scoped "a test
+# CONVERGES the operator's live layer". Backlog b2135387fd55.
+#
+# THE SEAM. scripts/ship-land.sh ends a SUCCESSFUL land in a converge kick that resolves
+# `${DEPLOY_REPO:-$HOME/Development/claude-infrastructure}` and spawns a DETACHED deploy-live with
+# `env=dict(os.environ, ...)`, by design, so a land does not wait on the next launchd tick. In a
+# fixture that default is the OPERATOR'S SHARED CHECKOUT, and the child inherits the suite's whole
+# environment. deploy-live then advances the live layer, runs post-deploy host_checks against the
+# real tree, and writes to stores IT resolves for itself.
+#
+# WHY THIS IS NOT RULE 1 WEARING A NEW NAME, and it is the whole point: the kick reads TWO
+# $HOME-relative paths through DIFFERENT names. Fixturing $HOME redirects DEPLOY_REPO, but
+# deploy-live's own CC_POSTLAND_DIR and CC_PAGES_DIR are read by the CHILD, from ITS environment,
+# and a suite that pins POSTLAND_DIR (ship-land.sh's spelling) has not pinned CC_POSTLAND_DIR
+# (deploy-live's). A seam bound under a name the subject does not read looks exactly like a closed
+# leak (memory: lookup-miss-is-not-absence). Rule 5 cannot see it either: DEPLOY_REPO's default is
+# an ABSOLUTE $HOME path in a script this suite does not name as its subject.
+#
+# MEASURED ON A REAL SUITE, not a fixture, with a recording stub standing where the operator's
+# deploy-live.sh stands:
+#   ARM  tests/ship-land.bats  unpinned  -> 0 not-ok, and the single case "green: land end-to-end"
+#        SPAWNS a real converge: cwd = the deploy repo, CLAUDE_CODE_SESSION_ID=test-sid-123, and
+#        CC_POSTLAND_DIR / CC_PAGES_DIR UNSET, so the child's stores were the live ~/.claude.
+#   CTRL the same suite with setup() pinned -> 0 not-ok, 0 spawns.
+# The suite is GREEN in both arms, which is the finding: the leak is invisible to the suite's own
+# verdict, and was invisible to this lint, which named neither seam before this diff.
+#
+# WHAT IT COST, on disk. At 2026-09-17T21:29:27Z such a child advanced the live layer, ran
+# host_checks concurrently with the corpus that was its load, and filed a real `post-deploy HOST
+# RED` naming three host suites into the operator's backlog -- filedBy "test-sid-123", this suite's
+# own fixture session id and the only row in 21.5k carrying it. Re-run, all three were GREEN
+# (2/2, 16/16, 82/82). A test minted a false finding about the live layer, and it arrived with no
+# falsifier, so nothing could retract it either.
+#
+#   SCOPE. A suite is in scope iff its COMMENT-STRIPPED text both names `ship-land.sh` AND
+#   INVOKES it -- the second clause matters because naming it alone pulls in the static
+#   text-analysis suites that grep the lander's SOURCE and execute nothing. ACCEPTED FLOOR, stated
+#   rather than hidden: textual, so a suite reaching the lander through a wrapper built from
+#   variables is not matched; and in scope is not the same as reaching a GREEN land, which is the
+#   only state that actually fires.
+#
+#   THIS RULE IS PREVENTIVE FOR THE GRANDFATHERED SET, AND THE MEASUREMENT SAYS SO RATHER THAN
+#   LEAVING IT TO BE ASSUMED. Four of the seventeen were run against a recording deploy-live --
+#   land-inflight, gate-precheck, stranded-sweep, land-lock -- and ALL FOUR spawn ZERO (0 not-ok
+#   each). Only tests/ship-land.bats was measured spawning, and it is pinned. So the list below is
+#   not seventeen live leaks: it is seventeen suites that drive the lander and have nothing
+#   stopping them if one ever reaches a green land. That is the same bet rule 8 records losing --
+#   "three suites were pinned that day and nothing stopped the fourth" -- which is the whole
+#   argument for spending a ratchet on a population whose present spawn count is zero.
+#
+#   COMPLIANCE -- rule 3's ASYMMETRY, DERIVED as in rule 8. A suite is compliant iff its
+#   setup()/setup_file() BODY takes a position on SHIP_LAND_CONVERGE or DEPLOY_REPO. What is
+#   forbidden is inheriting BOTH. Per-test pinning does NOT count, for rule 1's reason verbatim.
+#   POSTLAND_DIR deliberately does NOT count -- it is ship-land.sh's own spelling and redirects only
+#   the kick's LOG, leaving the spawn and every store the child resolves untouched: the one pin that
+#   looks like a fix and closes nothing.
+#
+#   THE TWO FORMS ARE NOT EQUALLY STRONG, and saying which is which is the honest version of rule
+#   8's "only what is individually SUFFICIENT". SHIP_LAND_CONVERGE=off prevents the SPAWN.
+#   DEPLOY_REPO does not -- it moves the TARGET off the operator's shared checkout, so the child
+#   cannot advance the live layer, cannot run host_checks against the real tree, and therefore
+#   cannot file a finding about it, which is the whole of the measured harm; what survives is a
+#   deploy-live process writing its own logs, because CC_POSTLAND_DIR and CC_PAGES_DIR are read by
+#   the CHILD and neither form binds them. Both are accepted, for rule 3's asymmetry; BELT AND
+#   BRACES (the switch AND a DEPLOY_REPO pin) is the recommended practice and is what
+#   tests/ship-land.bats now carries. Stated here so the weaker form does not get read as equal.
+#
+#   THE SUITE THAT OWNS THIS KICK IS OUT OF SCOPE, AND THAT IS THE SCOPE CLAUSE WORKING rather than
+#   a gap -- checked rather than assumed, because "the owning suite would be reddened" is the kind
+#   of claim a rule's author writes and nobody re-runs. tests/ship-land-converge-edge.bats drives
+#   post_release_finish by EXTRACTION (`sed -n '/^post_release_finish() {/,/^}/p' "$SHIPLAND"` into
+#   a stubbed harness), never by invoking the lander, so clause 2 matches ZERO of its lines and it
+#   is out of scope whether or not it pins anything. Measured both ways: as-is and with its setup()
+#   DEPLOY_REPO export deleted, the rule reports nothing about it. It pins DEPLOY_REPO regardless,
+#   which is where the belt-and-braces practice above comes from.
+#
+#   Rule 9's grandfather list (EMBEDDED_CONVERGE_ALLOWLIST) ships with the population measured on
+#   the landing tree, under the same contract as rules 1-2, 5, 7 and 8 -- ONLY EVER DELETE LINES;
+#   pinning a suite without deleting its line is a RED. NOT fixed in this diff, for rule 7's and
+#   rule 8's reason verbatim: each fix wants its own two-sided spawn measurement, not a sweep.
+#
 # Exit: 0 = clean · 1 = violation · 2 = bad usage / unreadable scan dir (LOUD, never silent-green)
 #
 # Env seams (selftest / escape hatch):
@@ -444,6 +527,8 @@
 #   CC_HERM_ADMIT_RULE=off     kill switch — disables rule 7 entirely, leaving rules 1-6 untouched
 #   CC_HERM_KICK_ALLOWLIST     overrides rule 8's embedded allowlist (same set-but-empty semantics)
 #   CC_HERM_KICK_RULE=off      kill switch — disables rule 8 entirely, leaving rules 1-7 untouched
+#   CC_HERM_CONVERGE_ALLOWLIST overrides rule 9's embedded allowlist (same set-but-empty semantics)
+#   CC_HERM_CONVERGE_RULE=off  kill switch — disables rule 9 entirely, leaving rules 1-8 untouched
 set -uo pipefail
 # Resolve $0 THROUGH symlinks before deriving ROOT. Everything under ~/.claude/scripts/ is a per-file
 # symlink into this checkout, so a bare `dirname "$0"` yields ~/.claude — which has no tests/ — and the
@@ -885,6 +970,41 @@ KICKALLOW
 # `-` not `:-`, so set-but-EMPTY means "grandfather nothing".
 KICK_ALLOW="${CC_HERM_KICK_ALLOWLIST-$EMBEDDED_KICK_ALLOWLIST}"
 KICK_RULE="${CC_HERM_KICK_RULE:-on}"
+
+# Rule 9's grandfather list — the suites that INVOKE scripts/ship-land.sh and pin neither
+# SHIP_LAND_CONVERGE nor DEPLOY_REPO, measured on the landing tree. Being here is NOT a claim that
+# the suite spawns: in scope is not the same as reaching a GREEN land, which is the only state that
+# fires. Four of these were measured against a recording deploy-live — land-inflight, gate-precheck,
+# stranded-sweep, land-lock — and all four spawn ZERO. Being here is a claim that nothing STOPS the
+# suite if it ever does, which is what a ratchet is for.
+#
+# tests/ship-land.bats is deliberately ABSENT: it is the suite that was measured spawning, it filed
+# b2135387fd55 from a test, and it was pinned in the same landing.
+EMBEDDED_CONVERGE_ALLOWLIST="$(cat <<'CONVALLOW'
+bats-kill-guard-lint.bats
+bats-shellcheck-lint.bats
+cc-backlog-add-update.bats
+cc-reaper.bats
+gate-home-isolation.bats
+gate-ownscope-leak.bats
+gate-precheck.bats
+gate-selftest-memo.bats
+land-gate-cas.bats
+land-gate-memo.bats
+land-inflight.bats
+land-lint-scope-derived.bats
+operator-readout.bats
+pkill-scope.bats
+qos-rewrite.bats
+runner-stdin-immunity.bats
+session-busy.bats
+CONVALLOW
+)"
+
+# Rule 9's runtime knobs. Globals rather than lint_dir parameters for rule 2's reason verbatim.
+# `-` not `:-`, so set-but-EMPTY means "grandfather nothing".
+CONVERGE_ALLOW="${CC_HERM_CONVERGE_ALLOWLIST-$EMBEDDED_CONVERGE_ALLOWLIST}"
+CONVERGE_RULE="${CC_HERM_CONVERGE_RULE:-on}"
 
 # THE EXTRACTOR'S ANCHOR, and it must exercise BOTH halves of the intersection or it cannot tell a
 # broken extractor from an empty tree. These two lines are read by nothing: the first is a literal
@@ -1520,6 +1640,63 @@ is_kick_pinned() {
   return 0                        # fail-SAFE: 'pinned' cannot fabricate an AMBIENT violation
 }
 
+# ── RULE 9's two predicates. Same shape, same retry, same CHECK_FAILED third state and same
+# fail-SAFE directions as rule 8's pair above.
+#
+# 0 = drives scripts/ship-land.sh · 1 = out of scope. The second clause is what keeps the static
+# text-analysis suites out: several suites GREP the lander's source and execute nothing, and naming
+# the path alone cannot tell that position from an invocation.
+references_converge() {
+  local rc code
+  # NO COST PRE-SCREEN, and the absence is measured rather than assumed. A forkless raw-text screen
+  # was built here on a reading of +31s against a 62s whole-tree scan, and that reading was an
+  # ARTIFACT: the comparison arm was a COPY of this script at /tmp, so ROOT resolved there, rules
+  # 5-6 built their tables from an empty tree, and the "before" arm was simply doing less work.
+  # Re-measured with CC_HERM_SEAM_ROOT / CC_HERM_ENV_ROOT / CC_HERM_SELFTEST_ROOT pinned equal and
+  # the arms alternated, three pairs: before 82/74/74s, after 75/76/74s — this rule is free at the
+  # resolution the instrument has. Same class as memory subject-reads-its-own-path: the executable's
+  # LOCATION is an input, and an A/B that moves it is not an A/B.
+  code="$(code_lines "$1" 2>/dev/null)"
+  for _ in 1 2 3; do
+    grep -qF 'ship-land.sh' <<<"$code"; rc=$?
+    # rc 1 here is a real "out of scope", not a failure — short-circuit before the second clause.
+    [ "$rc" -eq 1 ] && return 1
+    if [ "$rc" -eq 0 ]; then
+      grep -qE '(^|[[:space:];&|(])((bash|sh|exec|env|run)[[:space:]][^|;&]*(SHIPLAND|ship-land[.]sh)|"?[$][{]?SHIPLAND[}]?"?[[:space:]])' <<<"$code"; rc=$?
+      case "$rc" in
+        0) return 0 ;;
+        1) return 1 ;;
+      esac
+    fi
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ converge-scope check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 1                        # fail-SAFE: 'not in scope' cannot fabricate an AMBIENT violation
+}
+
+# 0 = takes a deterministic position on the converge kick in setup() · 1 = inherits the operator's.
+# Fail-SAFE = 0 (pinned). Comment-stripped through setup_statements(), so a setup() that merely
+# DOCUMENTS the pin does not read as pinned — the prose-match regression rules 2 and 3 were both
+# proven vacuous by. POSTLAND_DIR is excluded BY CONSTRUCTION: it redirects the kick's LOG only.
+is_converge_pinned() {
+  local rc st
+  for _ in 1 2 3; do
+    # Pipe-free for is_hermetic()'s reason — same producer, same early-exit match, same pipefail
+    # promotion that would otherwise render a MATCH as "the check could not run".
+    st="$(setup_statements "$1")"
+    grep -qE '(^|[[:space:];&|(])(export[[:space:]]+)?(SHIP_LAND_CONVERGE|DEPLOY_REPO)=' <<< "$st"; rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      1) return 1 ;;
+    esac
+    sleep 1                       # transient fork pressure — see PREDICATE RETRY above
+  done
+  CHECK_FAILED=1
+  echo "test-hermeticity-lint: ⛔ converge-pin check could not RUN for $1 after 3 tries (grep rc=$rc)" >&2
+  return 0                        # fail-SAFE: 'pinned' cannot fabricate an AMBIENT violation
+}
+
 # ── RULE 3's two predicates. Same shape, same retry, same CHECK_FAILED third state, same fail-SAFE
 # directions as rule 2's pair above — and same accepted floor: textual, so a suite that reaches the
 # close leg through some other wrapper is not matched. The ratchet binds where evidence is plain.
@@ -1919,7 +2096,7 @@ herm_memo_arm() {  # $1 = rule 1's allowlist text · $2… = the EXACT ordered s
   readset="$(
     printf 'herm-readset/v1\n'
     printf 'lint=%s\n'        "$selfblob"
-    printf 'rules=%s|%s|%s|%s|%s|%s\n' "$FIRE_RULE" "$ORPHAN_RULE" "$SEAM_RULE" "$ENV_RULE" "$ADMIT_RULE" "$KICK_RULE"
+    printf 'rules=%s|%s|%s|%s|%s|%s|%s\n' "$FIRE_RULE" "$ORPHAN_RULE" "$SEAM_RULE" "$ENV_RULE" "$ADMIT_RULE" "$KICK_RULE" "$CONVERGE_RULE"
     printf 'allow=%s\n'       "$1"
     printf 'fire_allow=%s\n'  "$FIRE_ALLOW"
     printf 'orph_allow=%s\n'  "$ORPHAN_ALLOW"
@@ -1927,6 +2104,7 @@ herm_memo_arm() {  # $1 = rule 1's allowlist text · $2… = the EXACT ordered s
     printf 'env_allow=%s\n'   "$ENV_ALLOW"
     printf 'admit_allow=%s\n' "$ADMIT_ALLOW"
     printf 'kick_allow=%s\n'  "$KICK_ALLOW"
+    printf 'conv_allow=%s\n'  "$CONVERGE_ALLOW"
     printf 'seam_root=%s\n'   "$(herm_rel_root "$SEAM_ROOT")"
     printf 'env_root=%s\n'    "$(herm_rel_root "$ENV_ROOT")"
     printf 'seam_table=%s\n'  "$(herm_rel_table "$SEAM_TABLE" "$SEAM_ROOT")"
@@ -1948,14 +2126,14 @@ herm_memo_arm() {  # $1 = rule 1's allowlist text · $2… = the EXACT ordered s
 }
 
 # THE EMIT DETECTOR. Every branch in lint_dir that prints a finding also increments exactly one of
-# these fifteen counters, so their sum is unchanged across a suite IFF that suite emitted nothing.
+# these seventeen counters, so their sum is unchanged across a suite IFF that suite emitted nothing.
 # Two lines instead of an `emitted=1` on twenty printf sites — but it is only true while it stays
 # true, so --selftest pins a violating suite under EVERY rule as never-memoized (herm_memo cases
 # below). A new rule that prints without counting would be caught there, not here.
 herm_emit_sum() {
   printf '%s' "$(( new_leak + stuck + other + fire_leak + fire_stuck + orphan_leak + orphan_stuck \
                  + seam_leak + seam_stuck + env_leak + env_stuck + admit_leak + admit_stuck \
-                 + kick_leak + kick_stuck ))"
+                 + kick_leak + kick_stuck + converge_leak + converge_stuck ))"
 }
 
 HERM_CHECKER=""
@@ -1974,6 +2152,7 @@ lint_dir() {
   local env_text="" env_setup="" env_why="" env_seen="" e_tool e_var
   local admit_allow="$ADMIT_ALLOW" admit_leak=0 admit_stuck=0
   local kick_allow="$KICK_ALLOW" kick_leak=0 kick_stuck=0
+  local converge_allow="$CONVERGE_ALLOW" converge_leak=0 converge_stuck=0
   local _herm_emit0=0
   [ "$#" -ge 3 ] && own_scoped=1
   CHECK_FAILED=0
@@ -2135,6 +2314,32 @@ lint_dir() {
           kick_leak=$((kick_leak + 1))
         else
           printf '  ambient? %s does not pin the dispatch kick (NOT in your diff — advisory, not blocking)\n' "$base"
+          other=$((other + 1))
+        fi
+      fi
+    fi
+    # ── RULE 9, applied INDEPENDENTLY of rules 1-8 (a suite can violate any, all, or none) and ONLY
+    # to suites that INVOKE scripts/ship-land.sh. A suite that never drives the lander cannot
+    # converge and must never appear here — that scoping is why references_converge() exists.
+    # Deliberately NOT folded into rule 8: that rule knows one lever, on the other end of the land.
+    if [ "$CONVERGE_RULE" = on ] && references_converge "$f"; then
+      if is_converge_pinned "$f"; then
+        if in_allowlist "$base" "$converge_allow"; then
+          if in_own "$f" "$own" "$own_scoped"; then
+            printf '  RATCHET-CONVERGE %s pins the converge kick now — delete its CONVERGE allowlist line\n' "$base"
+            converge_stuck=$((converge_stuck + 1))
+          else
+            printf '  ratchet-converge? %s pins the converge but is still grandfathered (NOT in your diff — advisory)\n' "$base"
+            other=$((other + 1))
+          fi
+        fi
+      elif ! in_allowlist "$base" "$converge_allow"; then
+        if in_own "$f" "$own" "$own_scoped"; then
+          # Prose carries neither backticks nor an apostrophe, for the reason stated under rule 8.
+          printf '  AMBIENT  %s: setup() pins neither SHIP_LAND_CONVERGE nor DEPLOY_REPO — a green land spawns a real deploy-live at the operator shared checkout\n' "$base"
+          converge_leak=$((converge_leak + 1))
+        else
+          printf '  ambient? %s does not pin the converge kick (NOT in your diff — advisory, not blocking)\n' "$base"
           other=$((other + 1))
         fi
       fi
@@ -2349,6 +2554,26 @@ EOF
     echo "test-hermeticity-lint: ⛔ $kick_stuck suite(s) above pin the dispatch kick but are still grandfathered."
     echo "  Fix: delete their lines from EMBEDDED_KICK_ALLOWLIST in $0 — the ratchet only shrinks."
   fi
+  if [ "$converge_leak" -gt 0 ]; then
+    echo "test-hermeticity-lint: ⛔ $converge_leak suite(s) above drive scripts/ship-land.sh without pinning the converge kick."
+    # shellcheck disable=SC2016  # "$HOME"/"${DEPLOY_REPO:-...}" are prose — the message names them, not their values
+    echo "  WHY: a SUCCESSFUL land ends in a converge kick that resolves \${DEPLOY_REPO:-\$HOME/Development/"
+    echo "       claude-infrastructure} and spawns a DETACHED deploy-live carrying the whole environment."
+    echo "       In a fixture that default is the operator's SHARED CHECKOUT, so the test advances the LIVE"
+    # shellcheck disable=SC2016
+    echo "       layer. Fixturing \$HOME does not close it: the child reads CC_POSTLAND_DIR and CC_PAGES_DIR"
+    # shellcheck disable=SC2016
+    echo "       for itself, and a suite pinning POSTLAND_DIR (ship-land.sh's spelling) has not pinned those."
+    echo "       Measured: tests/ship-land.bats passed 0 not-ok while spawning one, and that child filed a"
+    echo "       false post-deploy HOST RED into the operator's backlog (b2135387fd55)."
+    # shellcheck disable=SC2016
+    echo "  Fix: in setup(), \`export SHIP_LAND_CONVERGE=off\` (with DEPLOY_REPO pinned to \$BATS_TEST_TMPDIR"
+    echo "       as belt-and-braces — see tests/ship-land.bats:39-40)."
+  fi
+  if [ "$converge_stuck" -gt 0 ]; then
+    echo "test-hermeticity-lint: ⛔ $converge_stuck suite(s) above pin the converge kick but are still grandfathered."
+    echo "  Fix: delete their lines from EMBEDDED_CONVERGE_ALLOWLIST in $0 — the ratchet only shrinks."
+  fi
   if [ "$orphan_leak" -gt 0 ]; then
     echo "test-hermeticity-lint: ⛔ $orphan_leak suite(s) above drive the orphaned-pane close leg against an AMBIENT arming lever."
     echo "  WHY: ~/.zshrc sources ~/.claude/autonomy/watchdog.env, which exports LCW_ORPHAN_CLOSE=1, so"
@@ -2389,7 +2614,7 @@ EOF
     echo "test-hermeticity-lint: ⛔ $env_stuck suite(s) above pin their inherited-value seams but are still grandfathered."
     echo "  Fix: delete their lines from EMBEDDED_ENV_ALLOWLIST in $0 — the ratchet only shrinks."
   fi
-  [ $((new_leak + stuck + fire_leak + fire_stuck + orphan_leak + orphan_stuck + seam_leak + seam_stuck + env_leak + env_stuck + admit_leak + admit_stuck + kick_leak + kick_stuck)) -eq 0 ] || return 1
+  [ $((new_leak + stuck + fire_leak + fire_stuck + orphan_leak + orphan_stuck + seam_leak + seam_stuck + env_leak + env_stuck + admit_leak + admit_stuck + kick_leak + kick_stuck + converge_leak + converge_stuck)) -eq 0 ] || return 1
   # The summary must say what was ENFORCED, not what is merely on disk: with rule 2 killed, printing
   # its grandfather count would read as "43 suites checked and grandfathered" when zero were checked.
   local fire_note orphan_note
@@ -2420,13 +2645,18 @@ EOF
   else
     admit_note="capacity-admit rule OFF (CC_HERM_ADMIT_RULE)"
   fi
-  local kick_note
+  local kick_note converge_note
   if [ "$KICK_RULE" = on ]; then
     kick_note="$(printf '%s\n' "$kick_allow" | grep -c .) grandfathered (dispatch kick)"
   else
     kick_note="dispatch-kick rule OFF (CC_HERM_KICK_RULE)"
   fi
-  echo "test-hermeticity-lint: clean — $seen suite(s); $(printf '%s\n' "$allow" | grep -c .) grandfathered (\$HOME), $fire_note, $orphan_note, $seam_note, $env_note, $admit_note, $kick_note, 0 new leaks."
+  if [ "$CONVERGE_RULE" = on ]; then
+    converge_note="$(printf '%s\n' "$converge_allow" | grep -c .) grandfathered (converge kick)"
+  else
+    converge_note="converge-kick rule OFF (CC_HERM_CONVERGE_RULE)"
+  fi
+  echo "test-hermeticity-lint: clean — $seen suite(s); $(printf '%s\n' "$allow" | grep -c .) grandfathered (\$HOME), $fire_note, $orphan_note, $seam_note, $env_note, $admit_note, $kick_note, $converge_note, 0 new leaks."
   return 0
 }
 
@@ -2761,6 +2991,98 @@ setup() {
   }
 }
 @test "x" { mk_kick_stub; run bin/cc-backlog add --title "t" --project p; }
+F
+
+  # ── RULE 9's fixtures (the live-layer converge kick). Every one fixtures $HOME and names no
+  # handoff-fire, no admit caller and no cc-backlog, so a rule-9 verdict cannot be another rule
+  # leaking through — and the $HOME pin is doing REAL work rather than ceremony, exactly as in rule
+  # 8: rule 9's claim is that a $HOME-hermetic suite STILL converges the operator's live layer,
+  # because the child reads CC_POSTLAND_DIR and CC_PAGES_DIR from its own environment.
+  # `noconv` and `convnamed` are the two scope controls: the first names no ship-land.sh at all, the
+  # second names it but only GREPS its source, which is the static text-analysis shape the
+  # invocation clause exists to subtract.
+  mkdir -p "$d/noconv" "$d/convleak" "$d/convpin" "$d/convrepopin" "$d/convpostlandonly" \
+           "$d/convpertest" "$d/convcomment" "$d/convnamed"
+  cat >"$d/noconv/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  SUBJECT="$REPO/scripts/some-other-tool.sh"
+}
+@test "x" { run bash "$SUBJECT" --dry-run; }
+F
+  cat >"$d/convleak/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  SHIPLAND="$REPO/scripts/ship-land.sh"
+}
+@test "x" { run bash "$SHIPLAND" --trunk main; }
+F
+  cat >"$d/convpin/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export SHIP_LAND_CONVERGE=off
+  SHIPLAND="$REPO/scripts/ship-land.sh"
+}
+@test "x" { run bash "$SHIPLAND" --trunk main; }
+F
+  # FORM 2 — a DEPLOY_REPO pin, independently sufficient and NOT a courtesy: it is the form
+  # tests/ship-land-converge-edge.bats uses, and that suite OWNS this kick. A rule demanding the
+  # kill switch would RED the one suite whose subject this is, i.e. disarm the mechanism's own
+  # coverage — rule 3's scope-by-leg lesson and rule 8's (c8) verbatim.
+  cat >"$d/convrepopin/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export DEPLOY_REPO="$BATS_TEST_TMPDIR/shared-checkout"
+  SHIPLAND="$REPO/scripts/ship-land.sh"
+}
+@test "x" { run bash "$SHIPLAND" --trunk main; }
+F
+  # 🚨 THE EXCLUSION CONTROL — POSTLAND_DIR alone must stay RED. It is ship-land.sh's OWN spelling
+  # and the kick does use it, but only for the converge-edge LOG; the spawn still happens and the
+  # child still resolves DEPLOY_REPO, CC_POSTLAND_DIR and CC_PAGES_DIR for itself. Certifying it
+  # would mint a false negative on a suite that still deploys the operator's live layer — and the
+  # trap is real rather than hypothetical, because tests/ship-land.bats pinned exactly this and
+  # nothing else while it was filing a false HOST RED from a test.
+  cat >"$d/convpostlandonly/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  export POSTLAND_DIR="$BATS_TEST_TMPDIR/postland"
+  SHIPLAND="$REPO/scripts/ship-land.sh"
+}
+@test "x" { run bash "$SHIPLAND" --trunk main; }
+F
+  cat >"$d/convpertest/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  SHIPLAND="$REPO/scripts/ship-land.sh"
+}
+@test "x" { export SHIP_LAND_CONVERGE=off; run bash "$SHIPLAND" --trunk main; }
+F
+  cat >"$d/convcomment/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # the converge is disabled here with export SHIP_LAND_CONVERGE=off
+  SHIPLAND="$REPO/scripts/ship-land.sh"
+}
+@test "x" { run bash "$SHIPLAND" --trunk main; }
+F
+  # SCOPE CONTROL 2: names scripts/ship-land.sh but GREPS it rather than running it, so it can never
+  # converge. This is the clause that keeps the population at 17 instead of every suite that mentions
+  # the lander, and without it the rule would sweep in the static text-analysis suites wholesale.
+  cat >"$d/convnamed/zz-fixture.bats" <<'F'
+#!/usr/bin/env bats
+setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  SUBJECT="$REPO/scripts/ship-land.sh"
+}
+@test "x" { grep -q "set -uo pipefail" "$SUBJECT"; }
 F
   cat >"$d/noadmit/zz-fixture.bats" <<'F'
 #!/usr/bin/env bats
@@ -3657,6 +3979,44 @@ F
   ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_KICK_ALLOWLIST="zz-fixture.bats" CC_HERM_KICK_RULE=on CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/kickleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_KICK_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
   ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_KICK_ALLOWLIST="" CC_HERM_KICK_RULE=off CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/kickleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_KICK_RULE=off did not disable rule 8"; fails=1; }
 
+  # ── RULE 9 (the live-layer converge kick). Rule 8's battery verbatim: both violation kinds, both
+  # compliant FORMS, the exclusion control, the prose-match regression, the per-test shape, TWO scope
+  # controls, the ratchet in both directions, own-scope both ways, and both env seams.
+  # (a9) the leak, and the rule's inertness control — if this passes, rule 9 is doing nothing.
+  lint_dir "$d/convleak" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a suite driving ship-land.sh without pinning the converge kick did not go RED (rule 9 is inert)"; fails=1; }
+  # (b9) FORM 1 — the kill switch.
+  lint_dir "$d/convpin" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a suite pinning SHIP_LAND_CONVERGE=off in setup() did not go GREEN"; fails=1; }
+  # (c9) FORM 2 — a DEPLOY_REPO pin, accepted for rule 3's asymmetry: it does not stop the SPAWN,
+  # but it moves the target off the operator's shared checkout, which is where every measured harm
+  # came from. This case is what pins the rule to "takes a position" rather than "uses this lever".
+  lint_dir "$d/convrepopin" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a suite pinning DEPLOY_REPO in setup() did not go GREEN (rule 9 is demanding a specific lever)"; fails=1; }
+  # (d9) 🚨 THE EXCLUSION CONTROL — POSTLAND_DIR alone must stay RED. It redirects the kick's LOG and
+  # nothing else: the spawn still fires and the child still resolves its own stores. This is the pin
+  # tests/ship-land.bats actually had while it was filing a false HOST RED from a test.
+  lint_dir "$d/convpostlandonly" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: pinning POSTLAND_DIR ALONE read as compliant — it redirects the log, the spawn still converges the live layer"; fails=1; }
+  # (e9) per-test pinning does not count — rule 1's clause, verbatim.
+  lint_dir "$d/convpertest" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a PER-TEST converge pin read as compliant — every other test in the file still converges"; fails=1; }
+  # (f9) the prose-match regression: a setup() COMMENT naming the pin has not set it.
+  lint_dir "$d/convcomment" "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a setup() COMMENT naming the pin read as pinned (rule 9 is not comment-stripped)"; fails=1; }
+  # (g9) SCOPE CONTROL 1: names no ship-land.sh at all. Without it every case above is consistent
+  # with a rule that reds on everything.
+  lint_dir "$d/noconv" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a suite that never names ship-land.sh was pulled INTO rule 9"; fails=1; }
+  # (h9) SCOPE CONTROL 2: names ship-land.sh but GREPS it instead of running it, so it cannot
+  # converge. This is the clause that keeps the population at 17 rather than every mention.
+  lint_dir "$d/convnamed" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a suite that only GREPS ship-land.sh was pulled INTO rule 9 — the invocation clause is not binding"; fails=1; }
+  # (i9) the ratchet, both directions.
+  CONVERGE_ALLOW="zz-fixture.bats"
+  lint_dir "$d/convleak" "" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a grandfathered unpinned converge suite did not go GREEN"; fails=1; }
+  lint_dir "$d/convpin"  "" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a pinned-but-still-grandfathered suite did not go RED (converge ratchet is not shrinking)"; fails=1; }
+  CONVERGE_ALLOW=""
+  # (j9) own-scope, both ways — a violation OUTSIDE the diff advises, INSIDE it blocks.
+  lint_dir "$d/convleak" "" "some-other-suite.bats" >/dev/null 2>&1 || { echo "SELFTEST FAIL: a converge violation OUTSIDE the own-set blocked"; fails=1; }
+  lint_dir "$d/convleak" "" "zz-fixture.bats" >/dev/null 2>&1; [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: a converge violation INSIDE the own-set did not block"; fails=1; }
+  # (k9) entrypoint parity for both env seams, all three directions — rule 8's (l8) verbatim.
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_CONVERGE_ALLOWLIST="" CC_HERM_CONVERGE_RULE=on CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/convleak" >/dev/null 2>&1 ); [ "$?" -eq 1 ] || { echo "SELFTEST FAIL: CC_HERM_CONVERGE_ALLOWLIST set-but-empty did not block at the entrypoint"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_CONVERGE_ALLOWLIST="zz-fixture.bats" CC_HERM_CONVERGE_RULE=on CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/convleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_CONVERGE_ALLOWLIST did not grandfather at the entrypoint"; fails=1; }
+  ( CC_HERM_SEAM_RULE=off CC_HERM_ALLOWLIST="" CC_HERM_CONVERGE_ALLOWLIST="" CC_HERM_CONVERGE_RULE=off CC_HERM_SELFTEST_RULE=off CC_HERM_ENV_RULE=off "$SELF" "$d/convleak" >/dev/null 2>&1 ) || { echo "SELFTEST FAIL: CC_HERM_CONVERGE_RULE=off did not disable rule 9"; fails=1; }
+
   # ── RULE 4 (the embedded selftest) — the same two-sided discipline with TWO scope controls,
   # because rule 4 has two independent ways to be worthless: firing on tools that ship no selftest,
   # and firing on selftests that create no state. Each RED below is paired with the GREEN that
@@ -4012,7 +4372,7 @@ F
     exit 2
   fi
   if [ "$sx" -eq 0 ]; then
-    echo "test-hermeticity-lint --selftest: 147/147 — THE THIRD STATE OF THE REAL-TREE SCAN (case e): a lost fork proved to leave CHECK_FAILED READABLE in the caller's shell (the property a \$( ) around lint_dir destroys, and the whole reason the two exit-2 reasons can be told apart at all) and proved to map to a NON-VERDICT, with a bad ROOT as its paired too-wide control — still exit 2, but CHECK_FAILED clear, so it stays a FAIL and cannot be excused by an abstain that has grown over it; and this script's own exit code proved on all four (fails, nonverdict) combinations, including the one that is the point — no failure beside a non-verdict exits 2, and a real FAIL beside a non-verdict still exits 1, so absence of evidence can never suppress evidence that is present. THE PER-SUITE MEMO: a positive control proving it CARRIES on an unchanged committed corpus (without which every case below it passes vacuously), a live finding re-reported rather than cached in EITHER direction, per-SUITE rather than per-run granularity beside a violating neighbour, the read set proved binding in BOTH of its halves — by changing an allowlist that touches no scanned byte, and by moving the cross-population inherited-value TABLE that rules 5-6 judge against while the suite's own bytes stay identical, a suite whose predicate could not RUN proved never cached (the fail-SAFE third state is indistinguishable from clean at the record site — the only branch three mutants left uncovered), and both OFF states (CC_HERM_MEMO=off, dirty worktree) proved to disarm it. RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (the PATH form matched against the judged path, a BARE entry matched in any directory, and the SAME basename under a DIFFERENT directory proved NOT to block — the collapse control), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form and its collapse control (the same tool basename under another dir must not block), NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint. RULE 5 (non-\$HOME seams): RED on an unpinned ABSOLUTE /tmp default (shape 5a) + on a BARE NAME the subject EXECUTES (shape 5b) + on a per-test assignment + on a pinned-but-still-grandfathered suite, GREEN on a setup()-assigned seam + on a grandfathered one + on a suite naming a SEAMLESS tool + on a tool named only in a COMMENT + on a tool whose name merely PREFIXES the seam-bearing one + on a bare-name seam whose holder is never executed (the four scope controls, without which the rule could be firing on everything), NON-VERDICT on an extractor blind to its own seam anchor with a working anchor as its paired GREEN, and all three env seams (CC_HERM_SEAM_ALLOWLIST, CC_HERM_SEAM_ROOT, CC_HERM_SEAM_RULE=off) proved at the entrypoint. RULE 6 (inherited values): RED on a suite whose subject READS a variable this repo INJECTS into every pane it launches + on a per-test unset + on a pin of a variable that merely PREFIXES the unpinned one (the boundary control) + on a pinned-but-still-grandfathered suite, GREEN when the position is taken by \`unset\` (the remedy rule 5's assignment-only predicate REJECTS — this is what makes rule 6 a rule and not a shape of rule 5) or by ASSIGNMENT (rule 3's asymmetry) or by a STATEMENT-TERMINATED unset (the too-narrow trailing boundary inherited from rule 3, found by mutation — its fail direction is a false RED on a compliant suite), on a grandfathered suite, and on the THREE scope controls that carry the whole design: a tool that INJECTS a variable it never reads (scripts/handoff-fire.sh's shape — worth 49 suites), a plain-valued seam that NOTHING injects (the filing's naive rule — worth most of 324), and a tool named only in a COMMENT; NON-VERDICT on an extractor blind to its own anchor with a real copy as its paired GREEN, proving BOTH halves of the intersection at once; and all three env seams (CC_HERM_ENV_ALLOWLIST, CC_HERM_ENV_ROOT, CC_HERM_ENV_RULE=off) proved at the entrypoint. RULE 7 (the capacity-ADMIT gate): RED on a suite driving a capacity-admit caller without closing the gate + on a per-test close + on a setup() COMMENT that merely names the pin + on a closed-but-still-grandfathered suite, GREEN on FORM 1 (CC_ADMIT_GATE=off) + on the COMPLETE FORM 2 (both instrument overrides AND a reserve closure) + on a grandfathered one + on the two scope controls — a suite naming no caller at all, and one naming a caller only inside a SENTENCE it carries as data (the case that proves parameterising the shared strip_prose did not disarm the subtraction); and the one case rule 2 has no analogue for, RED on the TWO-VARIABLE form 2 — the filing's own remedy, which the reserve term (450a47c50) made incomplete two days after it was written and which tests/capacity-admit.bats still runs today (20/20 green ambient, 17/20 under CC_SP_TREES_OVERRIDE=999), so a rule certifying it would mint a false negative on the one suite whose subject IS this gate; own-scope honoured both ways, and both env seams (CC_HERM_ADMIT_ALLOWLIST, CC_HERM_ADMIT_RULE=off) proved at the entrypoint; and THE PIPE-BUFFER PAIR (722210a91870), the branch no fixture in this battery could reach until it was built — GREEN on a suite pinning CC_ADMIT_GATE=off EARLY in a setup() body past the 65536-byte pipe buffer, which is where the last \`printf … | grep -q\` predicate in this file inverted PRECISELY BECAUSE the suite was compliant (grep -q exits on the match, the producer takes SIGPIPE, pipefail promotes 141, and 141 is neither 0 nor 1, so the retry exhausts and CHECK_FAILED kills the whole lint on a correct tree), GREEN on its byte-identical partner pinned at the END so no early exit occurs — which is what makes the first a claim about WHERE the match sits and not about how big the file is — and the fixture's own extracted body asserted ≥ 65536 through setup_statements() first, since below the regime both halves pass vacuously and the assertion would certify nothing. RULE 8 (the dispatch kick): RED on a suite driving a real \`cc-backlog add\` while inheriting both kick seams + on a PER-TEST pin + on a setup() COMMENT that merely names the pin + on a pinned-but-still-grandfathered suite, GREEN on FORM 1 (CC_BACKLOG_KICK=off) + on FORM 2 (a CC_BACKLOG_KICK_BIN pin, independently sufficient — a rule demanding form 1 would RED tests/dispatch-cadence.bats, the suite that OWNS the kick) + on a pin living inside a HELPER FUNCTION defined in setup(), which is that suite's actual shape + on a grandfathered one + on the TWO scope controls that keep the population at 20 instead of 71 — a suite naming no cc-backlog at all, and one that names it but only READS the store; and the case rule 7's battery has no analogue for, RED on pinning CC_BACKLOG_KICK_MARKER **alone** — the one pin that looks like a remedy and closes nothing, since kick_bin() resolves \`command -v cc-dispatch\` BEFORE \$HOME and the marker pin merely relocates the debounce stamp while the spawn stays live, so a rule certifying it would mint a false negative on a suite still spawning the operator's dispatcher (the obvious \`CC_BACKLOG_KICK\` substring spelling passes it; the \`(_BIN)?=\` boundary is what fails it); own-scope honoured both ways, and both env seams (CC_HERM_KICK_ALLOWLIST, CC_HERM_KICK_RULE=off) proved at the entrypoint. Rule 8's four sites are attributed by MUTATION rather than by a green count — pin-regex widened to accept _MARKER, scope stripped of its \`add --title\` clause, pin predicate reading the RAW setup body, and the lint_dir wiring disabled outright: each reds its OWN named case against a clean baseline."
+    echo "test-hermeticity-lint --selftest: 162/162 — THE THIRD STATE OF THE REAL-TREE SCAN (case e): a lost fork proved to leave CHECK_FAILED READABLE in the caller's shell (the property a \$( ) around lint_dir destroys, and the whole reason the two exit-2 reasons can be told apart at all) and proved to map to a NON-VERDICT, with a bad ROOT as its paired too-wide control — still exit 2, but CHECK_FAILED clear, so it stays a FAIL and cannot be excused by an abstain that has grown over it; and this script's own exit code proved on all four (fails, nonverdict) combinations, including the one that is the point — no failure beside a non-verdict exits 2, and a real FAIL beside a non-verdict still exits 1, so absence of evidence can never suppress evidence that is present. THE PER-SUITE MEMO: a positive control proving it CARRIES on an unchanged committed corpus (without which every case below it passes vacuously), a live finding re-reported rather than cached in EITHER direction, per-SUITE rather than per-run granularity beside a violating neighbour, the read set proved binding in BOTH of its halves — by changing an allowlist that touches no scanned byte, and by moving the cross-population inherited-value TABLE that rules 5-6 judge against while the suite's own bytes stay identical, a suite whose predicate could not RUN proved never cached (the fail-SAFE third state is indistinguishable from clean at the record site — the only branch three mutants left uncovered), and both OFF states (CC_HERM_MEMO=off, dirty worktree) proved to disarm it. RULE 1 (\$HOME): RED on a new leak + on a stuck ratchet entry, GREEN on hermetic + grandfathered, GREEN on the real tree, LOUD on a bad dir, own-scope blocks INSIDE / advises OUTSIDE for both violation kinds (the PATH form matched against the judged path, a BARE entry matched in any directory, and the SAME basename under a DIFFERENT directory proved NOT to block — the collapse control), NON-VERDICT on an unrunnable check (with and without an own-set). RULE 2 (capacity gate): RED on an unpinned handoff-fire suite + on a per-test pin + on a stuck fire-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never mentions handoff-fire (the scope control) + on one that names handoff-fire ONLY in a comment (the scope half of the prose discipline), RED on a setup() COMMENT that merely names the pin (the prose-match regression), own-scope honoured both ways, NON-VERDICT on an unrunnable fire predicate, and both env seams (CC_HERM_FIRE_ALLOWLIST, CC_HERM_FIRE_RULE=off) proved at the entrypoint. RULE 3 (orphan-close lever): RED on a close-leg suite that inherits LCW_ORPHAN_CLOSE + on a per-test pin + on a stuck orphan-ratchet entry, GREEN on a setup()-pinned suite + on a grandfathered one + on a suite that never drives --close-panes (the scope control) + on one that names it ONLY in a comment (rule 2's scope-half control, asserted here so the twins cannot be hardened one side at a time again), and CC_HERM_ORPHAN_RULE=off proved to actually disable it. RULE 4 (embedded selftests): RED on a selftest naming a CONSTANT scratch path + on one that creates state without mktemp + on a COMMENT that merely names mktemp (the prose-match regression, one rule later) + on a stuck selftest-ratchet entry, GREEN on an mktemp-confined selftest + on a grandfathered one + on a file that ships NO selftest and on a selftest that creates NO state (the two scope controls, without which the rule could be flagging everything), own-scope honoured both ways incl. the path form and its collapse control (the same tool basename under another dir must not block), NON-VERDICT on an unrunnable rule-4 predicate AND on an extractor blind to its own anchor (the calibration-free control that stops a broken extractor reading as clean, with a working anchor as its paired GREEN and as the IFBLOCK shape's coverage), the REAL tree proved clean under the embedded allowlist, and all three env seams (CC_HERM_SELFTEST_ALLOWLIST, CC_HERM_SELFTEST_ROOT, CC_HERM_SELFTEST_RULE=off) proved at the entrypoint. RULE 5 (non-\$HOME seams): RED on an unpinned ABSOLUTE /tmp default (shape 5a) + on a BARE NAME the subject EXECUTES (shape 5b) + on a per-test assignment + on a pinned-but-still-grandfathered suite, GREEN on a setup()-assigned seam + on a grandfathered one + on a suite naming a SEAMLESS tool + on a tool named only in a COMMENT + on a tool whose name merely PREFIXES the seam-bearing one + on a bare-name seam whose holder is never executed (the four scope controls, without which the rule could be firing on everything), NON-VERDICT on an extractor blind to its own seam anchor with a working anchor as its paired GREEN, and all three env seams (CC_HERM_SEAM_ALLOWLIST, CC_HERM_SEAM_ROOT, CC_HERM_SEAM_RULE=off) proved at the entrypoint. RULE 6 (inherited values): RED on a suite whose subject READS a variable this repo INJECTS into every pane it launches + on a per-test unset + on a pin of a variable that merely PREFIXES the unpinned one (the boundary control) + on a pinned-but-still-grandfathered suite, GREEN when the position is taken by \`unset\` (the remedy rule 5's assignment-only predicate REJECTS — this is what makes rule 6 a rule and not a shape of rule 5) or by ASSIGNMENT (rule 3's asymmetry) or by a STATEMENT-TERMINATED unset (the too-narrow trailing boundary inherited from rule 3, found by mutation — its fail direction is a false RED on a compliant suite), on a grandfathered suite, and on the THREE scope controls that carry the whole design: a tool that INJECTS a variable it never reads (scripts/handoff-fire.sh's shape — worth 49 suites), a plain-valued seam that NOTHING injects (the filing's naive rule — worth most of 324), and a tool named only in a COMMENT; NON-VERDICT on an extractor blind to its own anchor with a real copy as its paired GREEN, proving BOTH halves of the intersection at once; and all three env seams (CC_HERM_ENV_ALLOWLIST, CC_HERM_ENV_ROOT, CC_HERM_ENV_RULE=off) proved at the entrypoint. RULE 7 (the capacity-ADMIT gate): RED on a suite driving a capacity-admit caller without closing the gate + on a per-test close + on a setup() COMMENT that merely names the pin + on a closed-but-still-grandfathered suite, GREEN on FORM 1 (CC_ADMIT_GATE=off) + on the COMPLETE FORM 2 (both instrument overrides AND a reserve closure) + on a grandfathered one + on the two scope controls — a suite naming no caller at all, and one naming a caller only inside a SENTENCE it carries as data (the case that proves parameterising the shared strip_prose did not disarm the subtraction); and the one case rule 2 has no analogue for, RED on the TWO-VARIABLE form 2 — the filing's own remedy, which the reserve term (450a47c50) made incomplete two days after it was written and which tests/capacity-admit.bats still runs today (20/20 green ambient, 17/20 under CC_SP_TREES_OVERRIDE=999), so a rule certifying it would mint a false negative on the one suite whose subject IS this gate; own-scope honoured both ways, and both env seams (CC_HERM_ADMIT_ALLOWLIST, CC_HERM_ADMIT_RULE=off) proved at the entrypoint; and THE PIPE-BUFFER PAIR (722210a91870), the branch no fixture in this battery could reach until it was built — GREEN on a suite pinning CC_ADMIT_GATE=off EARLY in a setup() body past the 65536-byte pipe buffer, which is where the last \`printf … | grep -q\` predicate in this file inverted PRECISELY BECAUSE the suite was compliant (grep -q exits on the match, the producer takes SIGPIPE, pipefail promotes 141, and 141 is neither 0 nor 1, so the retry exhausts and CHECK_FAILED kills the whole lint on a correct tree), GREEN on its byte-identical partner pinned at the END so no early exit occurs — which is what makes the first a claim about WHERE the match sits and not about how big the file is — and the fixture's own extracted body asserted ≥ 65536 through setup_statements() first, since below the regime both halves pass vacuously and the assertion would certify nothing. RULE 8 (the dispatch kick): RED on a suite driving a real \`cc-backlog add\` while inheriting both kick seams + on a PER-TEST pin + on a setup() COMMENT that merely names the pin + on a pinned-but-still-grandfathered suite, GREEN on FORM 1 (CC_BACKLOG_KICK=off) + on FORM 2 (a CC_BACKLOG_KICK_BIN pin, independently sufficient — a rule demanding form 1 would RED tests/dispatch-cadence.bats, the suite that OWNS the kick) + on a pin living inside a HELPER FUNCTION defined in setup(), which is that suite's actual shape + on a grandfathered one + on the TWO scope controls that keep the population at 20 instead of 71 — a suite naming no cc-backlog at all, and one that names it but only READS the store; and the case rule 7's battery has no analogue for, RED on pinning CC_BACKLOG_KICK_MARKER **alone** — the one pin that looks like a remedy and closes nothing, since kick_bin() resolves \`command -v cc-dispatch\` BEFORE \$HOME and the marker pin merely relocates the debounce stamp while the spawn stays live, so a rule certifying it would mint a false negative on a suite still spawning the operator's dispatcher (the obvious \`CC_BACKLOG_KICK\` substring spelling passes it; the \`(_BIN)?=\` boundary is what fails it); own-scope honoured both ways, and both env seams (CC_HERM_KICK_ALLOWLIST, CC_HERM_KICK_RULE=off) proved at the entrypoint. Rule 8's four sites are attributed by MUTATION rather than by a green count — pin-regex widened to accept _MARKER, scope stripped of its \`add --title\` clause, pin predicate reading the RAW setup body, and the lint_dir wiring disabled outright: each reds its OWN named case against a clean baseline. RULE 9 (the live-layer converge kick): RED on a suite driving scripts/ship-land.sh while inheriting both converge seams + on a PER-TEST pin + on a setup() COMMENT that merely names the pin + on a pinned-but-still-grandfathered suite, GREEN on FORM 1 (SHIP_LAND_CONVERGE=off, which stops the SPAWN) + on FORM 2 (a DEPLOY_REPO pin, which does not stop the spawn but moves the target off the operator's checkout, where every measured harm came from — accepted for rule 3's asymmetry, with belt-and-braces the recommended practice) + on a grandfathered one + on the TWO scope controls that keep the population at 17 rather than every mention of the lander — a suite naming no ship-land.sh at all, and one that names it but only GREPS its source; and rule 8's exclusion case in this rule's own currency, RED on pinning POSTLAND_DIR **alone** — ship-land.sh's OWN spelling, which redirects the kick's converge-edge LOG while the spawn still fires and the child still resolves DEPLOY_REPO, CC_POSTLAND_DIR and CC_PAGES_DIR for itself, so a rule certifying it would mint a false negative on a suite still deploying the operator's live layer (and that is the pin tests/ship-land.bats actually carried while filing a false post-deploy HOST RED from a test, b2135387fd55); own-scope honoured both ways, and both env seams (CC_HERM_CONVERGE_ALLOWLIST, CC_HERM_CONVERGE_RULE=off) proved at the entrypoint. Rule 9's four sites are attributed by MUTATION rather than by a green count — pin-regex widened to accept POSTLAND_DIR, scope stripped of its invocation clause, pin predicate reading the RAW setup body, and the lint_dir wiring disabled outright: each reds its OWN named case (d9, h9, f9, a9) against a baseline whose only failures are the three a copied script incurs from its LOCATION."
     exit 0
   fi
   echo "test-hermeticity-lint --selftest: FAILED — the ratchet does not discriminate."
