@@ -82,3 +82,42 @@ the measurement was inconvenient.
 - The word **"dead"** did work that no measurement supported. The measurement was
   *"this identifier returns 404"*; the claim was *"this model no longer exists."* Watch for a
   summary verb that outruns its evidence, especially one that closes off a line of work.
+
+---
+
+## Third instance, same day: availability is a property of the VENDOR, not of the model
+
+The two errors above were about **one identifier's price** and **one credential's reach**. The
+same generator produced a third, and the operator caught this one too — *"Why are we talking
+about pareto instead of Union Alpha? … let's go with Cloudflare?"*
+
+I had queried **OpenRouter**, received a 404 for `stealth/union-alpha`, and written that the
+model was gone. Measured against Cloudflare's public catalogue the same week — no credentials
+needed, and negative-controlled so the instrument could say no:
+
+| | |
+|---|---|
+| `stealth/union-alpha` on Cloudflare | **LISTED**, 1 of 161 catalogue ids |
+| nonsense model paths (`stealth/definitely-not-a-model-xyz`, `nonsense/qqqq`) | **404** — the check can fail |
+
+**One vendor retired the alias at reveal; the other did not.** A single vendor's catalogue is a
+statement about that vendor's shelf, never about whether the thing exists. And the failure is
+seductive for the same reason as the others: the 404 is authoritative, specific, and *correct* —
+it is simply answering a narrower question than the one being asked.
+
+**The generator, stated once for all three:**
+
+> A lookup returns a fact about **the thing you looked up** — this id, this key, this vendor,
+> this window. The conclusion reached is usually about **the product, the market, or the world**.
+> Every step of widening is an inference, and none of them announce themselves.
+
+⇒ Before concluding *"X is unavailable / paid / gone"*, write down the scope your evidence
+actually covers — `on this vendor`, `for this key`, `under this id`, `at this moment` — and then
+ask which of those qualifiers the conclusion silently dropped. Where the product plausibly exists
+on more than one surface, **check a second surface before writing the negative down**; it cost one
+public HTTP GET here and it inverted the answer.
+
+**Corollary that also bit:** a doc section written against one surface must SAY so. This dossier's
+"THE SUBJECT MODEL NO LONGER EXISTS" was OpenRouter-scoped and did not say it, so it read as a
+statement about the model. Scope belongs in the heading, not in the reader's memory of how the
+measurement was taken.
