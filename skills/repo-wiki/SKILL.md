@@ -9,9 +9,11 @@ description: >-
   passes: a STRUCTURE pass that explores the repo and commits to a page plan
   before writing any prose, then a PAGE pass that writes each page against its
   own file list. Carries the decomposition rules (the part that decides whether
-  the output is useful), the beyond-README requirement, the citation contract,
-  and the diagram harness that stops weak Mermaid. One page = a README; N pages
-  = a wiki. NOT for the grok-wiki CLI itself (that is grok-wiki-cli /
+  the output is useful), all 15 of the generator's named styles/lenses
+  (technical · first-30 · mental-model · worth-stealing · hidden-quirks ·
+  debugging-atlas · documentation · …), the beyond-README requirement, the
+  citation contract, and the diagram harness that stops weak Mermaid. One
+  page = a README; N pages = a wiki. NOT for the grok-wiki CLI itself (that is grok-wiki-cli /
   grok-wiki-custom) and NOT for a defect sweep (that is grok-wiki-audit).
 ---
 
@@ -29,8 +31,44 @@ the app's version, and they are the reason this is not a worse copy:
 - **No page-level context reset.** The app re-prompts per page with only that page's file list;
   you keep the structure pass in context, so cross-page coherence is free.
 
-What genuinely does not carry over is state, not intelligence: the `~/.rlm-wiki` store, per-page
-concurrency, and the multi-repo namespace (`repoId:path`) — do that one by hand if you span repos.
+**What does not carry, stated honestly, because the first version of this line undersold it.** Three
+of the gaps really are state: the `~/.rlm-wiki` store, per-page concurrency (here, fan the page pass
+out to subagents instead), and the multi-repo namespace (`repoId:path`) — do that one by hand if you
+span repos. But the largest gap was never state at all: it is the **style table below**, 15 named
+lenses and ~12.6K chars of prompt in the app's `wikiStyleGuidance` alone, of which this skill
+originally carried exactly one — and not even the CLI's default. It is carried now.
+
+Still out of scope on purpose: the `ask` surface (repo Q&A, `fast`/`deep`, the five workspace goals
+`compare`/`steal`/`understand`/`bridge`/`audit`). Answering questions about a repo in front of you is
+Claude Code's native competence, so distilling a prompt for it would add ceremony, not capability.
+The styles are where the distillation has real content; `ask` is where it would not.
+
+## Pick the lens first — style decides the table of contents
+
+A style is not a tone setting. It changes what the structure pass goes looking for, so pick it
+BEFORE pass 1 and say which you picked. Default to `technical` for a reference and `first-30` for
+onboarding; the app's own CLI default is `first-30`.
+
+| style | the lens | what the TOC prioritizes |
+|---|---|---|
+| `technical` | developer reference | architecture, module responsibilities, APIs, data flows, integrations, operational surfaces |
+| `basic` | balanced guide | let the repo shape decide; force no architecture/workflow/journal frame |
+| `first-30` | first 30 minutes | what the repo is, where to start, entry points, read order, glossary, setup signals — a guided path |
+| `eli5` | plain language | what it does, who the actors are, what moves where, why each part exists. Every analogy must map back to source and erase no caveat |
+| `mental-model` | how it works in your head | flows, invariants, boundaries, state ownership, failure modes, dependency direction, safe-change reasoning |
+| `socratic-exploration` | first principles | what problem exists, what is the simplest version, where complexity becomes necessary. Pages framed as sharp questions that still have concrete files |
+| `feature-scout` | product surface | user-visible capabilities, agent workflows, CLI commands, UI affordances, hidden power-user moves, automation hooks |
+| `worth-stealing` | reusable moves | name the strongest reusable designs first; the description is a thesis — what a naive clone would miss. End each page with `## What To Reuse` |
+| `hidden-quirks` | code archaeology | non-obvious details the README does not show: odd constraints, localized hacks, safety rails, implicit contracts, generated files, adapter behavior |
+| `pattern-discovery` | patterns you did not know to ask for | repeated mechanisms, runtime abstractions, provider boundaries, routing choices, adapter shapes, state machines |
+| `repo-comparison` | cross-repo contrast | what each side does better, where they differ, which ideas port. Dedicate pages to contrasts, never isolated summaries |
+| `debugging-atlas` | how it fails | symptoms, probes, logs, state transitions, error boundaries, root-cause paths, observability hooks, recovery, regression checks |
+| `tech-reader` | HN/TechCrunch brief | hook, why it matters, mechanism, tradeoffs, surprising details, what builders should notice. No hype, no invented market analysis |
+| `documentation` | MDX docs site | a docs manifest — navigation groups, ordered routes, page archetypes. Fact-first openings, no "By the end you will learn", frontmatter instead of an `#` heading |
+| `custom` | the user's brief | their brief is the editorial lens for audience, tone, section style, framing |
+
+**Every style except `basic`, `technical` and `custom` also carries the beyond-README bar below** —
+that bar is what stops a lens from collapsing back into a README paraphrase.
 
 ## Pass 1 — structure. Commit to a plan before writing any prose.
 
