@@ -31,7 +31,7 @@
 # ── RECORD FORMAT — line 1 is the bare target, on purpose ─────────────────────────────────────────
 #   <target>                ← line 1: exactly what every existing `head -n1` reader already expects
 #   pid=<claimant pid>      ← the liveness evidence (kill -0)
-#   pane=<pane id>          ← optional second signal (probed only when CC_ROLES_PANE_PROBE is set)
+#   pane=<pane id>          ← optional second signal (probed; see THE EVIDENCE ARM below)
 #   role=<name> claimed=<iso> host=<hostname>
 # So a legacy reader is unchanged by a claim written here, and a liveness-aware reader gets the
 # evidence from the same file. Writes are atomic (tmp + mv), mirroring handoff-fire's write_role.
@@ -47,13 +47,115 @@
 #                          claim asserts nothing, so nothing may be claimed on its behalf.
 #   exit 2  usage.
 #
+# ── THE EVIDENCE ARM ONLY EVER COVERED A POPULATION OF ZERO (backlog c19d0aedce0f) ───────────────
+# The three states above are right, and until now the middle one swallowed EVERY role on this box:
+# `cc-roles list` read `desk UNVERIFIED 672 · docs-lead UNVERIFIED 450 · drain-lead UNVERIFIED 7 ·
+# orchestrator ABSENT empty` — four roles, ZERO verifiable, while pane 672 had been dead since
+# 2026-09-09 and 66/66 overnight pages in 24 h reported `notify_rc:0` against it. A dead claimant
+# reads as ABSENT *only when the file carries pid=/pane= evidence*, and nothing on this box has ever
+# written that evidence: `cc-roles claim` is the only producer of it and no automation calls it for
+# the desk. So the cure landed, was correct, and covered nothing that actually flows through here
+# (memory: a-gate-s-surface-is-not-its-traffic).
+#
+# THE TARGET ITSELF IS EVIDENCE WHEN IT IS PANE-SHAPED. A role file's line 1 is an ADDRESS, and when
+# that address is a pane id the terminal can be asked about it directly — no `pane=` line required.
+# That is what this arm adds, and it is the ONLY way the conviction reaches the legacy population.
+#
+# 🚨 IT STILL MAY NOT FOLD UNVERIFIED INTO ABSENT, and does not: absence now requires a POSITIVE
+# refutation from the probe. Could-not-tell stays UNVERIFIED, exactly as today. That distinction is
+# the whole safety argument, so the probe contract is THREE-valued rather than two:
+#
+#   exit 0  the pane was enumerated          → LIVE
+#   exit 1  the enumeration ran and it was NOT there → ABSENT
+#   exit 2  could not tell (terminal unreachable, blind/zero-row enumeration, a rendered table)
+#           → UNVERIFIED. An unreadable enumeration is never a "gone" verdict.
+#   other   treated as exit 2. An unknown code is a refusal, not a negative
+#           (memory: predicate-refusal-is-not-a-negative).
+#
+# The two-valued spelling this replaces convicted on ANY non-zero, so a probe that merely failed to
+# run produced `ABSENT dead-pane` — a false absence that cc-notify turns into rc 3 and a phone page.
+# That bug was unreachable only because no probe was ever configured; wiring one would have armed it.
+#
+# THE DEFAULT PROBE IS `cc-pane address`, WHICH IS ALREADY THIS REPO'S ARBITER OF THAT QUESTION.
+# bin/cc-pane is the terminal-agnostic pane seam and ships this exact trichotomy (RC_OK / RC_NO /
+# RC_INDET at :41), including the two traps a hand-rolled probe here would have re-introduced: a
+# zero-row enumeration is INDETERMINATE rather than "no panes" (:239-242, the verdict that "gets
+# fleets reaped"), and the membership test is drained rather than `grep -q`, whose SIGPIPE inverts
+# the answer on a large listing (:253-267, measured wrong 20/20 at 120 KB). Calling it instead of
+# re-implementing it is the standing rule (memory: make-the-actuator-the-arbiter).
+#
 # Env / seams: CC_ROLES_DIR (default ~/.claude/cc-roles) · CC_ROLES_PANE_PROBE (a command run as
-# `$probe <pane>`; exit 0 = live, non-zero = dead. UNSET ⇒ the pane signal is not evaluated at all,
-# which can only ever make a claim easier to keep, never a false ABSENT).
+# `$probe <pane>`, honouring the three-valued contract above; `off` disables the pane signal
+# entirely — UNSET now resolves the default probe rather than skipping, because a seam with no
+# setter is a seam with no traffic) · CC_ROLES_PROBE_TIMEOUT_S (default 10) · CC_ROLES_TIMEOUT_BIN.
 set -uo pipefail
 
 ROLES_DIR="${CC_ROLES_DIR:-$HOME/.claude/cc-roles}"
 PANE_PROBE="${CC_ROLES_PANE_PROBE:-}"
+PROBE_TIMEOUT_S="${CC_ROLES_PROBE_TIMEOUT_S:-10}"
+
+# A pane id we can put to the terminal: a bare window id (kitty) or a canonical UUID (iTerm2). Any
+# other address — a session NAME, a legacy hand-written token — is NOT pane-shaped, is not
+# enumerable by `cc-pane list`, and must never be probed: the probe would answer "not among the
+# panes" (exit 1) about something that was never a pane, manufacturing a false ABSENT for the exact
+# population this file refuses to convict.
+pane_shaped() { # <target> → 0 when it can be put to a pane enumerator
+  case "$1" in
+    ''|*[!0-9]*)
+      case "$1" in
+        [0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) return 0 ;;
+        *) return 1 ;;
+      esac ;;
+    *) return 0 ;;   # all-digits: a kitty window id
+  esac
+}
+
+# Bounded, by ABSOLUTE path. This runs inside cc-notify at SEND time, and cc-notify is called from
+# launchd (autonomy-sweep, cc-reaper) where PATH is whatever the plist exports and a bare `timeout`
+# is not on it — the same finding `unattended-path-lint` carries against a bare `osascript`
+# (scripts/autonomy-sweep.sh:1988-1994). A wedged terminal API blocks indefinitely, which is why
+# handoff-fire bounds its own copy of this call (hf_bounded); an unbounded probe here would hang the
+# pager rather than page. NO BOUNDING BINARY ⇒ ABSTAIN, never an unbounded call and never a convict.
+probe_timeout_bin() {
+  local c
+  if [ -n "${CC_ROLES_TIMEOUT_BIN:-}" ]; then
+    [ -x "$CC_ROLES_TIMEOUT_BIN" ] && { printf '%s' "$CC_ROLES_TIMEOUT_BIN"; return 0; }
+    return 1
+  fi
+  for c in /opt/homebrew/bin/timeout /usr/local/bin/timeout /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout /usr/bin/timeout; do
+    [ -x "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  c="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
+  [ -n "$c" ] && { printf '%s' "$c"; return 0; }
+  return 1
+}
+
+# Resolve the DEFAULT probe the way cc-notify resolves cc-roles: sibling first, then the deployed
+# bin, then PATH. Prints a command LINE (two words), so every caller goes through probe_pane().
+default_probe_cmd() {
+  local c
+  for c in "$(dirname "$0")/cc-pane" "$HOME/.claude/bin/cc-pane" "$(command -v cc-pane 2>/dev/null || true)"; do
+    [ -n "$c" ] && [ -x "$c" ] && { printf '%s address' "$c"; return 0; }
+  done
+  return 1
+}
+
+probe_pane() { # <pane-id> → 0 live · 1 provably gone · 2 could not tell (ABSTAIN)
+  local id="$1" cmd tb rc=0
+  [ "${PANE_PROBE:-}" = off ] && return 2
+  if [ -n "${PANE_PROBE:-}" ]; then cmd="$PANE_PROBE"; else cmd="$(default_probe_cmd)" || return 2; fi
+  tb="$(probe_timeout_bin)" || return 2
+  # Deliberately UNQUOTED so a two-word default (`<path> address`) and a one-word stub both work;
+  # `cmd` is never empty here, so this cannot degrade into running the bare id as a command
+  # (memory: empty-selector-is-a-universal-selector).
+  # shellcheck disable=SC2086  # the split IS the contract: CC_ROLES_PANE_PROBE is a command LINE
+  "$tb" "$PROBE_TIMEOUT_S" $cmd "$id" >/dev/null 2>&1; rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    1) return 1 ;;
+    *) return 2 ;;   # 2 INDETERMINATE · 124 cut at the bound · 126/127 unrunnable — all ABSTAIN
+  esac
+}
 
 usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; }
 die()   { echo "cc-roles: $*" >&2; exit 2; }
@@ -71,25 +173,41 @@ target_of() { # <file> → line 1, whitespace-stripped
 # make-the-actuator-the-arbiter).
 # Prints: LIVE <target> | ABSENT <reason> | UNVERIFIED <target>
 role_state() { # <role>
-  local r="$1" f="$ROLES_DIR/$1" t pid pane
+  local r="$1" f="$ROLES_DIR/$1" t pid pane _pr
   [ -f "$f" ] || { echo "ABSENT unset"; return; }
   t="$(target_of "$f")"
   [ -n "$t" ] || { echo "ABSENT empty"; return; }
   pid="$(field "$f" pid)"
   pane="$(field "$f" pane)"
-  if [ -z "$pid" ] && [ -z "$pane" ]; then echo "UNVERIFIED $t"; return; fi
+  # ── THE LEGACY SHAPE: no evidence LINES, but the ADDRESS may itself be checkable. ──
+  # This is where every role file on this box lands, so it is the only arm that can reach the real
+  # population. Probe the TARGET, and convict ONLY on a positive refutation.
+  if [ -z "$pid" ] && [ -z "$pane" ]; then
+    if pane_shaped "$t"; then
+      probe_pane "$t"
+      case "$?" in
+        0) echo "LIVE $t"; return ;;
+        1) echo "ABSENT dead-target"; return ;;
+      esac
+    fi
+    echo "UNVERIFIED $t"; return      # not pane-shaped, or the probe abstained — unchanged
+  fi
   # pid is the authoritative signal when the claim carries one.
   if [ -n "$pid" ]; then
     case "$pid" in (*[!0-9]*|'') echo "ABSENT bad-pid"; return ;; esac
     kill -0 "$pid" 2>/dev/null || { echo "ABSENT dead-pid"; return; }
   fi
-  # The pane signal is evaluated ONLY when a probe is configured. With no probe the pane is UNKNOWN,
-  # and UNKNOWN must not convict a claim whose pid is alive — an unprobeable signal is not a dead one.
-  if [ -n "$pane" ] && [ -n "$PANE_PROBE" ]; then
-    "$PANE_PROBE" "$pane" >/dev/null 2>&1 || { echo "ABSENT dead-pane"; return; }
+  # The pane signal convicts only on a POSITIVE refutation (probe rc 1). An abstain — no probe
+  # resolvable, no bound available, a blind enumeration, a wedged terminal — must not convict a
+  # claim whose pid is alive: an unprobeable signal is not a dead one. The `|| ABSENT` spelling this
+  # replaces convicted on every non-zero, so a probe that merely failed to RUN read as a dead pane.
+  if [ -n "$pane" ]; then
+    probe_pane "$pane"
+    _pr=$?
+    [ "$_pr" -eq 1 ] && { echo "ABSENT dead-pane"; return; }
+    # rc 0 verified it; rc 2 abstained. A pane-only claim that could not be checked asserts nothing.
+    if [ -z "$pid" ] && [ "$_pr" -ne 0 ]; then echo "UNVERIFIED $t"; return; fi
   fi
-  # A pane-only claim with no probe asserts nothing checkable.
-  if [ -z "$pid" ] && [ -z "$PANE_PROBE" ]; then echo "UNVERIFIED $t"; return; fi
   echo "LIVE $t"
 }
 
