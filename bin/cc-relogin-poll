@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#;help-begin
 # cc-relogin-poll — the CADENCE layer for autonomous re-login. One tick per hour (launchd,
 # StartInterval 3600); each tick picks AT MOST ONE account and hands it to `cc-relogin`.
 #
@@ -10,6 +11,7 @@
 #                        invocation reads like the launchd one. This tool never loops/daemonizes.
 #   --trigger-days N     start attempting at T−N days (default 7)
 #   --escalate-hours N   raise the class-C blocker at T−N hours (default 48)
+#;help-end
 #
 # WHY T−7d, not the 72h warn: `cc-relogin` can only act when the account has ZERO live sessions
 # (k==0), so a login deadline is otherwise one fragile attempt. A 7-day window turns it into
@@ -29,6 +31,34 @@
 # Counts ATTEMPTS, not successes (a counter that only moves on success never trips while the
 # thing is failing): CC_RELOGIN_POLL_MAX_ATTEMPTS attempts against one deadline escalate early.
 #
+# THE HUMAN GATE — why a cc-relogin exit 6 is not retried on the hour.
+# `cc-relogin` exit 6 is EXIT_FALLBACK_REQUIRED, and its own message names what is left:
+# "REMAINING HUMAN STEP: open that URL, sign in as <email>, take the emailed code". That is a
+# verdict about the WORLD, not about this tick — it cannot become true in an hour because nothing
+# this poller runs can make it true. Booking it like a transient failure and re-firing at the next
+# tick is not persistence, it is a loop with no exit.
+#
+# It also is not free, and the cost lands on the operator rather than on this box. `cc-relogin`
+# phase 2 spawns `claude auth login`, and that child opens the DEFAULT BROWSER (it resolves `open`
+# through PATH; measured 2026-09-18 with a shim that caught the call). On this machine the https
+# handler is Dia, the operator's daily browser — so every attempt leaves a dead "Sign in - Claude"
+# tab in the window they actually work in. Measured the same day: 84 attempts against next2 since
+# 2026-07-30, 31 of them exit 6, one tab each, hourly, and not one could ever have succeeded.
+#
+# So: the first exit 6 in a cycle ARMS the gate, and subsequent ticks skip the invocation entirely
+# (the escalation above still runs — the board row is the loud channel, and it is the one that can
+# actually be acted on). The gate re-probes every CC_RELOGIN_POLL_HUMAN_GATE_RETRY_H hours so a
+# world that quietly became true again self-heals, and a genuinely moved deadline resets it like
+# every other per-cycle fact. The gate is NOT a stop on the ACCOUNT — it is a stop on re-asking a
+# question that has already been answered "a human must do this".
+#
+# WHAT THIS DELIBERATELY DOES NOT DO: suppress the child's browser open. That open is load-bearing
+# — `drive()` returns EXIT_PROVEN on "login child completed (warm session, localhost callback)",
+# which is the child's own browser finishing the flow in a browser that already holds a warm
+# claude.ai session. Neutering it (a PATH shim over `open`) removes the only leg that can succeed
+# with no human at all. The tab is a symptom of retrying a dead verdict, not of opening a browser.
+#
+#;help-begin
 # Detection ladder — never treat "cannot detect" as "nothing to do":
 #   1. `claude-accounts --login-status` (TSV: acct state reason when hours launcher) — support is
 #      probed POSITIVELY from the help text, never assumed: on `main` the unknown flag falls
@@ -43,12 +73,14 @@
 # Exit: 0 nothing due / attempted / renewed · 1 poller error (bad args, missing jq, unwritable
 # state) · 3 DETECTION-UNAVAILABLE · 5 ESCALATED. A child `cc-relogin` failure is DATA, not a
 # poller error — it is logged, counted, and exits 0; the escalation is the loud channel.
+#;help-end
 #
 # Env (test injection): CC_RELOGIN_POLL_LOG · CC_RELOGIN_POLL_STATE_DIR · CC_REAPER_IDL ·
 # CC_RELOGIN_POLL_ACCOUNTS_BIN · CC_RELOGIN_POLL_RELOGIN_BIN · CC_RELOGIN_POLL_NOW (fixed clock) ·
 # CC_RELOGIN_POLL_MAX_ATTEMPTS (24) · CC_RELOGIN_POLL_TIMEOUT_S (900, child watchdog) ·
 # CC_RELOGIN_POLL_KILL_GRACE_S (20, TERM→KILL escalation delay — see the watchdog) ·
-# CC_RELOGIN_POLL_DEADLINE_EPSILON_H (12, same-cycle tolerance; 0 = exact match).
+# CC_RELOGIN_POLL_DEADLINE_EPSILON_H (12, same-cycle tolerance; 0 = exact match) ·
+# CC_RELOGIN_POLL_HUMAN_GATE_RETRY_H (24; 0 disables the gate entirely — every tick attempts).
 set -uo pipefail
 
 JSON=0 DRYRUN=0 TRIG_DAYS="" ESC_HOURS=48
@@ -58,7 +90,12 @@ while [ $# -gt 0 ]; do case "$1" in
   --once)           shift ;;
   --trigger-days)   TRIG_DAYS="${2:-}"; shift 2 ;;
   --escalate-hours) ESC_HOURS="${2:-}"; shift 2 ;;
-  -h|--help)        sed -n '2,12p;29,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  # STRUCTURAL, not positional. This used to be `sed -n '2,12p;29,45p'`, and the two ranges were
+  # a claim about where prose SITS in this file — invalidated by any insertion above them, which is
+  # exactly what adding the human-gate section did (the ranges then printed the new prose and
+  # dropped DETECTION-UNAVAILABLE, caught only because the -h test greps for that word). Markers
+  # move with the text they bracket, so the help cannot silently drift again.
+  -h|--help)        awk '/^#;help-begin$/{p=1;next} /^#;help-end$/{p=0;next} p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) echo "cc-relogin-poll: unknown arg $1 (usage: cc-relogin-poll [--json] [--dry-run] [--once] [--trigger-days N] [--escalate-hours N])" >&2; exit 1 ;;
 esac; done
 if [ -n "$TRIG_DAYS" ]; then
@@ -105,6 +142,8 @@ KILL_GRACE_S="${CC_RELOGIN_POLL_KILL_GRACE_S:-$KILL_GRACE_DEFAULT}"
 case "$KILL_GRACE_S" in ''|*[!0-9]*) KILL_GRACE_S="$KILL_GRACE_DEFAULT" ;; esac
 EPS_H="${CC_RELOGIN_POLL_DEADLINE_EPSILON_H:-12}"
 case "$EPS_H" in ''|*[!0-9]*) echo "cc-relogin-poll: CC_RELOGIN_POLL_DEADLINE_EPSILON_H needs a non-negative integer" >&2; exit 1 ;; esac
+HG_RETRY_H="${CC_RELOGIN_POLL_HUMAN_GATE_RETRY_H:-24}"
+case "$HG_RETRY_H" in ''|*[!0-9]*) echo "cc-relogin-poll: CC_RELOGIN_POLL_HUMAN_GATE_RETRY_H needs a non-negative integer" >&2; exit 1 ;; esac
 
 # Do two deadlines name the SAME login cycle? Not a rounding nicety — the state key.
 #
@@ -360,17 +399,25 @@ else
 fi
 
 # ── state: attempts + escalation are keyed to THIS deadline; a moved deadline resets both ────
-SFILE="$STATE_DIR/relogin-poll-$ACCT.json"; S_DL=""; S_ATT=0; S_ESC=""
+SFILE="$STATE_DIR/relogin-poll-$ACCT.json"; S_DL=""; S_ATT=0; S_ESC=""; S_HGAT=""
 if [ -f "$SFILE" ]; then
-  IFS=$'\t' read -r S_DL S_ATT S_ESC < <(jq -r '[(.deadline//""),(.attempts//0),(.escalated_for//"")]|@tsv' "$SFILE" 2>/dev/null | norm 3)
-  S_DL="$(dash "$S_DL")"; S_ESC="$(dash "$S_ESC")"
+  IFS=$'\t' read -r S_DL S_ATT S_ESC S_HGAT < <(jq -r '[(.deadline//""),(.attempts//0),(.escalated_for//""),
+        (.human_gated_at//"")]|@tsv' "$SFILE" 2>/dev/null | norm 4)
+  S_DL="$(dash "$S_DL")"; S_ESC="$(dash "$S_ESC")"; S_HGAT="$(dash "$S_HGAT")"
 fi
 case "${S_ATT:-}" in ''|*[!0-9]*) S_ATT=0 ;; esac
-same_cycle "$S_DL" "$DL" || { S_ATT=0; S_ESC=""; }    # genuinely moved (or first sighting) → fresh cycle
-write_state() { # <attempts> <escalated_for> <result>
+case "${S_HGAT:-}" in ''|*[!0-9]*) S_HGAT="" ;; esac
+# A moved deadline is a NEW WORLD: the attempt count, the escalation key and the human gate are all
+# facts about one cycle, so all three reset together. Leaving the gate armed across a real deadline
+# change would be the mirror defect of the loop it replaces — a permanent refusal where the loop was
+# a permanent retry, and just as unfalsifiable.
+same_cycle "$S_DL" "$DL" || { S_ATT=0; S_ESC=""; S_HGAT=""; }
+write_state() { # <attempts> <escalated_for> <result> [human_gated_at]
   mkdir -p "$STATE_DIR" 2>/dev/null || { echo "cc-relogin-poll: cannot create state dir $STATE_DIR" >&2; exit 1; }
   jq -nc --arg dl "$DL" --argjson att "$1" --arg esc "$2" --arg res "$3" --arg ts "$(utc)" \
-    '{deadline:$dl,attempts:$att,escalated_for:$esc,last_ts:$ts,last_result:$res}' > "$SFILE" \
+    --arg hgat "${4:-}" \
+    '{deadline:$dl,attempts:$att,escalated_for:$esc,last_ts:$ts,last_result:$res,
+      human_gated_at:$hgat}' > "$SFILE" \
     || { echo "cc-relogin-poll: cannot write state $SFILE" >&2; exit 1; }
 }
 
@@ -449,13 +496,35 @@ case "$K" in ''|0|*[!0-9]*) K_BUSY=0 ;; *) K_BUSY=1 ;; esac
 # skipped-busy, the attempt) falls through to one --json emitter under `set -u`, so a variable
 # born inside one branch is an unbound-variable abort on the others.
 ACTION="invoked"; CHILD_RC=""; TIMED_OUT=""
+# ── is the human gate armed, and still inside its re-probe interval? ─────────────────────────
+# The gate is keyed on WHEN IT WAS ARMED and on nothing else. Keying it on the deadline as well
+# (a `same_cycle` guard, mirroring the escalation key) was the first shape of this and it was
+# wrong in a way a deadline-shaped test cannot see: the escalation key is RATCHETED forward every
+# tick, but the gate is not re-armed on a tick that never invoked anything, so on the `required`
+# path — where $DL is NOW and drifts an hour per tick — a stretch of skipped-busy ticks longer
+# than the 12h tolerance would slide the gate out of its own cycle and silently re-open the loop.
+# One clock, one question: how long since a human was asked for. Cycle changes clear $S_HGAT
+# above, beside $S_ATT and $S_ESC, which is the ONE place a new world resets it.
+HG_ACTIVE=0
+if [ "$HG_RETRY_H" -gt 0 ] && [ -n "$S_HGAT" ]; then
+  HG_AGE=$(( NOW - S_HGAT )); [ "$HG_AGE" -lt 0 ] && HG_AGE=0
+  [ "$HG_AGE" -lt $(( HG_RETRY_H * 3600 )) ] && HG_ACTIVE=1
+fi
 if [ "$DRYRUN" = 1 ]; then
   ACTION="dry-run"
-  log "DRY-RUN $ACCT deadline=$DL_DISP ($T_DISP, k=${K:-?}, attempts=$S_ATT) would run: $RELOGIN_BIN $ACCT"
+  log "DRY-RUN $ACCT deadline=$DL_DISP ($T_DISP, k=${K:-?}, attempts=$S_ATT, human_gated=$HG_ACTIVE) would run: $RELOGIN_BIN $ACCT"
+elif [ "$HG_ACTIVE" = 1 ]; then
+  # NOT an attempt: nothing was invoked, so the attempt cap must not move — same contract as
+  # skipped-busy. The escalation above has already run, so this is silent to the operator by
+  # design; the board row is where this account is asking for them.
+  ACTION="skipped-human-gated"
+  _hg_left=$(( HG_RETRY_H * 3600 - HG_AGE )); [ "$_hg_left" -lt 0 ] && _hg_left=0
+  log "SKIP-HUMAN-GATED $ACCT — cc-relogin returned 6 (FALLBACK-REQUIRED: a human must complete the email-code leg) $(( HG_AGE / 60 ))m ago; not re-asking for another $(( _hg_left / 60 ))m. deadline=$DL_DISP $T_DISP attempts=$S_ATT. Recover: $RECOVER_CMD"
+  write_state "$S_ATT" "$S_ESC" "skipped-human-gated" "$S_HGAT"
 elif [ "$K_BUSY" = 1 ]; then
   ACTION="skipped-busy"     # NOT an attempt: nothing was invoked, so the attempt cap must not move
   log "SKIP $ACCT k=$K (>0) — cc-relogin would refuse; deadline=$DL_DISP $T_DISP attempts=$S_ATT"
-  write_state "$S_ATT" "$S_ESC" "skipped-busy"
+  write_state "$S_ATT" "$S_ESC" "skipped-busy" "$S_HGAT"
 else
   S_ATT=$((S_ATT + 1))
   log "ATTEMPT #$S_ATT $ACCT deadline=$DL_DISP $T_DISP k=${K:-?} → $RELOGIN_BIN $ACCT (child stdout+stderr below)"
@@ -536,10 +605,19 @@ else
                             || _how="died on TERM"
     log "TIMEOUT $ACCT attempt=$S_ATT — child exceeded ${TIMEOUT_S}s and was stopped ($_how)"
     log "RESULT $ACCT attempt=$S_ATT exit=$CHILD_RC timeout=$TIMED_OUT — NOT proven, deadline has not moved"
-    write_state "$S_ATT" "$S_ESC" "timeout-$TIMED_OUT exit=$CHILD_RC"
+    write_state "$S_ATT" "$S_ESC" "timeout-$TIMED_OUT exit=$CHILD_RC" "$S_HGAT"
   else
     log "RESULT $ACCT attempt=$S_ATT exit=$CHILD_RC$([ "$CHILD_RC" = 0 ] && echo ' PROVEN — deadline should move')"
-    write_state "$S_ATT" "$S_ESC" "exit=$CHILD_RC"
+    # exit 6 = cc-relogin EXIT_FALLBACK_REQUIRED. Arm the human gate: the answer to "should I try
+    # again in an hour" is already on the record, and it is no. A cc-relogin exit code we do not
+    # recognise is NOT armed — only the one whose documented meaning is "a human must act".
+    if [ "$CHILD_RC" = 6 ]; then
+      S_HGAT="$NOW"
+      log "HUMAN-GATE-ARMED $ACCT — exit 6 (FALLBACK-REQUIRED); no further invocation for $HG_RETRY_H h or until the deadline moves. The board row carries the step; nothing here can complete it."
+      write_state "$S_ATT" "$S_ESC" "exit=$CHILD_RC human-gate-armed" "$S_HGAT"
+    else
+      write_state "$S_ATT" "$S_ESC" "exit=$CHILD_RC" "$S_HGAT"
+    fi
   fi
 fi
 
@@ -552,11 +630,13 @@ if [ "$JSON" = 1 ]; then
          --arg src "$DLSRC" --arg cause "$CAUSE" --argjson known "$DL_KNOWN" \
          --argjson td "$TRIG_DAYS" --argjson eh "$ESC_HOURS" --argjson hl "$HL_JSON" \
          --argjson att "$S_ATT" --argjson cand "$NCAND" --argjson esc "$ESCALATED" --argjson dry "$DRYRUN" \
+         --argjson hg "$HG_ACTIVE" --argjson hgr "$HG_RETRY_H" \
     '{ts:(now|todate),detection:$d,trigger_days:$td,escalate_hours:$eh,candidates:$cand,acct:$a,
       deadline:$dl,deadline_known:($known==1),deadline_src:$src,cause:$cause,
       hours_left:$hl,k:$k,attempts:$att,action:$act,child_exit:$rc,
       child_timeout:(if $to == "" then null else $to end),
       escalated:($esc==1),escalation_reason:$reason,recover_cmd:$cmd,dry_run:($dry==1),
+      human_gated:($hg==1),human_gate_retry_h:$hgr,
       exit:(if ($esc==1 and $dry==0) then 5 else 0 end)}'
 fi
 [ "$ESCALATED" = 1 ] && [ "$DRYRUN" = 0 ] && exit 5
