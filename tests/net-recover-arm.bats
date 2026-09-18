@@ -1,4 +1,8 @@
 #!/usr/bin/env bats
+# shellcheck disable=SC2030,SC2031,SC2329,SC2317,SC2016  # every @test is a subshell BY DESIGN: a
+# per-case `export` is meant to be case-local, which is the whole point of setup() + overrides.
+# SC2016: the mutate() sed scripts are single-quoted ON PURPOSE — $_probe and $_state must reach sed
+# as literal text to match the subject's source, never as this shell's (empty) values.
 # hooks/net-recover-arm.sh — D4 of docs/plans/NONLIMIT_RESUME_LADDER.md (T6/W2-C).
 #
 # The done-when from the plan's W2-C row, verbatim: "fires exactly once on
