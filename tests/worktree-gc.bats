@@ -200,6 +200,46 @@ has_br() { git -C "$R" rev-parse --verify --quiet "refs/heads/$1" >/dev/null; }
   has_br feat/landed          # the janitor never deletes a branch without --prune-branches
 }
 
+@test "landed removal lane RECORDS the gitignored content it destroys (a record, never a gate)" {
+  # RED-PROOF. Until 2026-09-19 this was the ONLY one of the three removal actuators in the
+  # subject that destroyed gitignored content while writing no disposal record: dispose_record()
+  # reads ignored_inventory at :1056 and logs at :1090, the landed-dirt lane at :1226/:1249, and
+  # this lane did neither. Measured on the live box that day: 64 of 86 worktrees carry ignored
+  # content, and the ledger held 148 `remove` rows against 0 `dispose` rows over 7 sweeps — so
+  # ~100% of executed removals went unrecorded, on the one lane that actually runs.
+  #
+  # The fixture's whole point is that gate 3 CANNOT see the payload: an ignored file leaves
+  # `git status --porcelain` empty, so this worktree is "clean + idle + landed" and reaches the
+  # removal below exactly as a real one does.
+  printf 'secrets.env\n' >> "$R/.git/info/exclude"
+  p="$(wt wt-blast feat/blast)"
+  echo 'TOKEN=hunter2' > "$p/secrets.env"
+  [ -z "$(git -C "$p" status --porcelain)" ]   # the blind spot, asserted — else this tests nothing
+  # DRAINED into a variable and glob-matched, never piped into `grep -q`: under pipefail a
+  # `producer | grep -q` fails on the very input it matched (the same trap loaded-untracked-lint.sh
+  # documents at :74). The positive half matters as much as the negative — if the fixture failed to
+  # make the file ignored there is no blast radius to record and the case would pass vacuously.
+  ign="$(git -C "$p" status --porcelain --ignored)"
+  case "$ign" in
+    *"!! secrets.env"*) ;;
+    *) echo "FIXTURE FAILED — secrets.env is not ignored, so this case proves nothing: [$ign]" >&2; return 1 ;;
+  esac
+
+  run_gc
+  [ "$status" -eq 0 ]
+
+  # A RECORD, NOT A GATE. git-forest's `remove` KEEPS when ignored content exists; :858-864
+  # measured that a KEEP gate here makes oracle 3 inert, so the removal must still happen.
+  [ ! -d "$p" ]
+  grep -q '"event":"worktree-disposed"' "$DLOG"
+  grep -q '"destroyed_ignored":"secrets.env"' "$DLOG"
+  # Being LANDED is what defines this class, so the count is a measured 0, not an unset default.
+  grep -q '"unlanded_patches":0' "$DLOG"
+  # preserved_at names the TRUNK, never the branch: --prune-branches may delete this now-landed,
+  # worktree-less ref later in the same run, and a record pointing at nothing is worse than none.
+  ! grep -q '"preserved_at":"refs/heads/feat/blast"' "$DLOG" || false
+}
+
 @test "dirty tree → KEPT (removal would need --force ⇒ data loss)" {
   p="$(wt wt-dirty feat/dirty)"
   echo dirt >> "$p/f"

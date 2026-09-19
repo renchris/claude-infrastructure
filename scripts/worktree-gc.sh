@@ -1271,9 +1271,32 @@ process_record() {
     N_KEPT=$((N_KEPT + 1))
     return 0
   fi
+  # Read the blast radius BEFORE removal — afterwards the directory is gone and the answer is
+  # unrecoverable, the same reason dispose_record() and the landed-dirt lane read it first.
+  # THIS LANE SHIPPED WITHOUT IT, and of the three removal actuators in this file it was the only
+  # one destroying gitignored content while recording nothing about what went. Measured
+  # 2026-09-19: 64 of 86 live worktrees carry gitignored content, and the disposal log held 148
+  # `remove` lines against 0 `dispose` lines over 7 sweeps — so ~100% of executed removals were
+  # unrecorded, on the ONE lane that actually runs (backlog ef5f9ea26926).
+  #
+  # A RECORD, never a GATE. The obvious-looking sibling move — KEEP when ignored content exists,
+  # which is what git-forest's `remove` does — is measured-wrong here: :858-864 shows a KEEP gate
+  # on ignored content makes oracle 3 inert. The asymmetry was the defect, not the removal.
+  _landed_ign="$(ignored_inventory "$path")"
+  # The recovery pointer, read BEFORE removal for the same reason the blast radius is:
+  # `--prune-branches` may delete this now-landed, now-worktree-less ref later in this very run.
+  _landed_head="$("$GIT_BIN" -C "$MAIN" rev-parse --verify --quiet "refs/heads/$branch" 2>/dev/null)"
   # NEVER --force: git's refusal is the second gate on our evidence.
   if "$GIT_BIN" -C "$MAIN" worktree remove "$path" 2>/dev/null; then
+    # Two fields are deliberately not the abandoned path's, set exactly as the dirt lane sets
+    # them: `unlanded_patches` is 0 with no shas because being LANDED is what DEFINES this class
+    # (`landed "$branch"` held above), not an unmeasured default; and `preserved_at` names the
+    # TRUNK rather than the branch, because the branch is the one pointer that can be gone by the
+    # time anyone reads the record.
+    log_disposal "$path" "$branch" "$_landed_head" 0 "" "" "$((age / 60))" \
+      "landed-on-$TRUNK" "clean · idle · landed" "$_landed_ign" "$TRUNK"
     echo "remove  $path [$branch] — clean · idle · landed on $TRUNK"
+    [ -n "$_landed_ign" ] && echo "        └ gitignored content destroyed with it (git records this nowhere else): $_landed_ign"
     N_REMOVED=$((N_REMOVED + 1))
     printf '%s\n' "$branch" >> "$REMOVED_BR"
   else
