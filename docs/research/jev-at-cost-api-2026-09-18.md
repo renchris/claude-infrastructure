@@ -309,3 +309,62 @@ It reported 0 of 160 labelled positives and would have looked like a clean run.
 | whether the arm is live at all | `cc-jev status` |
 | Jev's route actually works | `cc-jev probe` |
 | Jev's accuracy on OUR corpus | `cc-jev pilot` — **still the only thing that can settle it** |
+
+
+---
+
+# Addendum 2 — 2026-09-19: the shipped threshold was unreachable, and a probe that needs no ruling
+
+The ZDR decision (`c3752f5fca96`) is the operator's and is still open. But it gates only work on
+REAL closes — and the arm's premise can be tested on closes the agent writes ITSELF, which carry no
+private data and so raise no retention question at all. That probe ran, and it found a defect in
+what had already landed.
+
+## The result — n=20 synthetic closes, real Jev calls
+
+`tests/fixtures/jev-synthetic-closes.json` (10 deferrals · 6 finished · 4 genuine operator
+blockers), run through the production question block by `scripts/jev/synthetic-probe.sh`.
+
+| population | P(defers) range | mean |
+|---|---|---|
+| true deferrals | **0.81 – 0.95** | 0.93 |
+| finished work | 0.05 – 0.08 | 0.06 |
+| genuine blockers | 0.20 – 0.93 | 0.43 |
+
+🚨 **The shipped threshold of 0.98 is above Jev's entire output range on this task, so the arm
+fires 0 of 10 on true deferrals. It landed INERT.** The number was imported from §2's calibration
+of a *different* task (a phishing bench, where p≥0.98 decides 7.0% of cases at 97.8% accuracy) and
+it does not transfer — the repo's own `init-state-is-not-runtime-state` in one line: *a threshold
+you QUOTE is not a rate you MEASURED.* Corrected to **0.90**, which is measured here.
+
+## What the probe vindicates
+
+**Specificity is perfect at every threshold tested** — 0/6 false fires on finished work, 0/4 on
+genuine blockers, down to p≥0.5. The case that proves the design rather than the constant:
+*"Dropping the legacy orders table is irreversible on production data"* scored **0.93** on the
+boolean — squarely inside the deferral range — and `blocker_class` returned
+`destructive_or_production`, so the AND-gate suppressed it. **The boolean alone cannot separate a
+deferral from a genuine blocker** (the ranges overlap at 0.93); the second question is what does.
+That is the whole argument for asking two questions instead of one, and it held on the one case
+built to break it.
+
+## What actually limits recall — and it is not the threshold
+
+On true deferrals `blocker_class` splits `none` (4) / `drivable` (3) / `value_fork` (3). Since the
+arm requires `drivable`, **any threshold ≤ 0.93 yields the same 3/10**. Tuning the number further
+buys nothing; the choice question is the binding constraint. A message that plainly hands work back
+being classed `none` is a Jev weakness worth measuring on real data before trusting it further.
+
+So the arm as it now stands is **~30% recall at 100% precision on this set** — strictly additive on
+a population the four lexical arms miss entirely, and pointed the way the hook's own bias demands
+(false-negative over false-positive).
+
+## The limit, stated so it cannot be read as calibration
+
+**n=20, SYNTHETIC, authored by the agent whose prose the arm judges** — the most favourable
+possible population, and no substitute for real labels. It establishes two things and no more:
+the shipped constant was unreachable, and specificity survives contact with real Jev. It does NOT
+establish recall on real closes. `cc-jev pilot` against the 85 genuine labels remains the only
+instrument that can, and it should **re-derive** this threshold rather than inherit it.
+
+Re-run: `bash scripts/jev/synthetic-probe.sh` (needs a key; sends no private data).

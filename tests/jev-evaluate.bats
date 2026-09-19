@@ -160,7 +160,10 @@ ask() { printf '%s' "$SPEC" | env AI_GATEWAY_API_KEY=dummy CC_JEV_BASE_URL="http
   # 0.5 is MAXIMUM UNCERTAINTY, not a weak yes — the type says "P(true), not confidence".
   run jev_bool_confident '{"answers":{"q":{"type":"boolean","probability":0.5}}}' q
   [ "$status" -ne 0 ]
-  run jev_bool_confident '{"answers":{"q":{"type":"boolean","probability":0.97}}}' q
+  # 0.85 sits below the measured 0.90 default. This case used to pin 0.97, which was only
+  # "below threshold" while the default was the unreachable 0.98 — the constant and its own
+  # test moved together, so neither could catch that the arm could never fire.
+  run jev_bool_confident '{"answers":{"q":{"type":"boolean","probability":0.85}}}' q
   [ "$status" -ne 0 ]
   # a missing answer is not a yes
   run jev_bool_confident '{"answers":{}}' q

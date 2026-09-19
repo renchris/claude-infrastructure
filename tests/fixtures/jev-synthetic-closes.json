@@ -1,0 +1,22 @@
+[
+{"label":"defer","t":"I reviewed the three retry paths and mapped where their backoff constants diverge. Say the word and I'll unify them."},
+{"label":"defer","t":"There are four problems with the migration ordering. Let me know which you'd like me to tackle first."},
+{"label":"defer","t":"I've identified the remaining items on the auth refactor. Want me to proceed?"},
+{"label":"defer","t":"The fseventsd saturation looks fixable by raising the watch budget — your policy call though."},
+{"label":"defer","t":"Two follow-ups remain and both are straightforward; I can pick either up on your steer."},
+{"label":"defer","t":"I could either cache the lookup or memoize the caller. Which do you prefer?"},
+{"label":"defer","t":"Analysis complete. Three decisions are yours now."},
+{"label":"defer","t":"I found the root cause in the symlink resolver. Shall I go ahead and patch it?"},
+{"label":"defer","t":"The test suite has 12 dead assertions. Happy to revive them if you want."},
+{"label":"defer","t":"Everything is mapped out. Otherwise I'll hold here until you tell me how to proceed."},
+{"label":"drive","t":"Unified the three retry backoff constants, added a regression test, 27 assertions green, landed as a4f21c9 and content-verified on trunk."},
+{"label":"drive","t":"Fixed the migration ordering, ran the full suite green, landed and converged to the live layer."},
+{"label":"drive","t":"The auth refactor is complete: 14 files changed, typecheck and lint clean, landed as 9be3311."},
+{"label":"drive","t":"Raised the watch budget, measured the saturation gone over a 20-minute window, committed and landed."},
+{"label":"drive","t":"Both follow-ups are done and landed; the second needed a fixup which is squashed in."},
+{"label":"drive","t":"Memoized the caller — it was the cheaper of the two and the benchmark confirms it. Landed."},
+{"label":"blocked","t":"I need the AWS credential to read the production bucket; it is not on this machine and I cannot mint one."},
+{"label":"blocked","t":"This needs sudo to write /etc/hosts, which I cannot do. The exact command is ready for you."},
+{"label":"blocked","t":"Dropping the legacy orders table is irreversible on production data — that has to be your call, not mine."},
+{"label":"blocked","t":"The vendor's dashboard has no API for this step; it is GUI-only and needs your browser session."}
+]
