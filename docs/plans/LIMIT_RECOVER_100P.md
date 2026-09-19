@@ -1,5 +1,5 @@
 ---
-status: complete
+status: open
 ---
 
 # /limit-recover — 100th-percentile recovery: the pane IS the continuation
@@ -315,3 +315,75 @@ once this lands (the poller can never create them again).
     operator step to buy ≤10 min of latency on a path that already has a manual accelerator.
   This file had no frontmatter, so `find-plan.sh --status` read `unknown` and the plan-open
   falsifier could never fire; `status: complete` is what lets it retract.
+
+## 9. REOPENED 2026-09-19 — the n=5 production run refutes "complete"
+
+`status: complete` rested on n=1 (one throwaway, one-turn-old, self-spawned pane on a quiet box — U09).
+The first production run — five sessions limit-killed on next4 between 11:58 and 12:20 — measured
+**98.7 min wall for 5 sessions, 1 RECOVERED / 4 PARTIAL**, and the one success was bought by a
+two-day-old refusal counter that happened to sit at 2. Full corpus: `docs/research/lr100p-2026-09-19/`
+(14 research units, 3 designs, 9 critiques, synthesis in `PLAN_DRAFT.md` — the waves below are its
+ordered output; every number is cited there).
+
+### Phase 0 — Agent orchestration (execution locus per wave)
+
+| wave | locus | why |
+|---|---|---|
+| W1, W4, W6a (Round A, independent) | **W** — workflow agents, `claude-opus-5`/high, one pre-created worktree each off `feat/limit-recover-100p` | **S is refused on a measurement**, not a feeling: at 21:10Z `claude-accounts --rank general` => `none` (next weekly-exhausted · next3 5h-cutoff · next2/next4 kmax-concurrency); teammates take the same admission gate. Workflow agents take no pane, their tool output stays out of the lead's window (the property S exists to buy), and ultracode prescribes them. Opus not Fable: 5.1 rewrites whole files for small edits and `handoff-fire.sh` is 12,383 lines. |
+| W2 → W3 (serial; W2 needs W1, W3 needs W2) | **W**, same terms | both edit `handoff-fire.sh`'s recycle region — one writer at a time |
+| W5 → W6b, W7 | **W**, same terms; **S** if the admission gate admits by then (re-measure, never assume) | W5 fans across poller + hook + transplant + two new bins |
+| lead | merges each wave into `feat/limit-recover-100p` (rebase + ff), runs the wave's own suites + shellcheck, lands via the project `/ship` from `wt-lr-100p`, converges. **Never the shared checkout** (`.claude/CLAUDE.md`; this lead violated it once today and paid 7.7 min for a permission prompt) | lead context budget: hold ≥50% for merge judgment; succession point = after Round A lands (recycle, same pane) |
+
+Merge order: smallest diff first; every wave's bats suite + `shellcheck` green in the lead's worktree
+before its land; no wave lands over a red sibling. Iron rule 7 is unchanged throughout — nothing in this
+work lands a *recovered* session's work.
+
+### Measured baseline (the "before" column)
+
+| | measured |
+|---|---|
+| wall, 5 sessions | 98.7 min (146 tool calls, 68.8 min inside them) |
+| identify | `lr-fleet --locate` 40–86 s (2,579 transcripts × tail+2 greps = 61.1 s); statusline carries no pane/sid; panes 122/124 render byte-identical |
+| invoke | every fire blocks the invoking turn: 658 s park + 5 × ~2.5 min; screenshots queued 13.5 / 38.1 / 35.2 min behind those turns |
+| engaged | 1/5, and that one falsely (oracle satisfied by the harness's own `Continue from where you left off.` / `No response requested.`); ingest prompt reached 0/5 target transcripts |
+| husks | 4/5: watcher makes exactly 2 relaunch attempts (`handoff-fire.sh:6811,6815`) vs a 3-refusal budget (`capacity-admit.sh:581`) — release needs a 4th evaluation, so under load the in-place recycle CANNOT succeed by arithmetic |
+| gate split | driver probes non-charging with the load term OFF; the relaunch is typed into the pane's own zsh (`lr-handoff.sh:586-593` exports two vars) and re-gated CHARGING with the load term ON — structural, not per-term: after `226b73888` the 8-session next3 event still refused on the ACTIVE term in the launcher |
+| detection | `hooks/stop-failure-marker.sh` recorded all five sub-second (first 3 min before the first `/limit-recover`) into `~/.claude/autonomy/stop-failure/` — zero consumers; the reset poller parked all five 128 s before the operator acted and waited for 2:40pm by design (`lr-reset-poller.sh:896`) |
+| target | ranker has no weekly gate; `next` at 2 pp weekly was a legal pick and hit 100 % 1 h 54 m later |
+| ingest | bought zero information on 5/5 (`gaps_at_handoff: 0` in every bundle); ~26.5 K resident tokens and 6–9 round trips per session for one verifiable line |
+
+### Waves (ordered by minutes-saved ÷ lines; full file:function detail and acceptance in `PLAN_DRAFT.md` §waves)
+
+| wave | goal | files (anchor, re-grep before editing) | deps | est |
+|---|---|---|---|---|
+| **W1** | non-blocking invocation + a verdict that reaches someone: `lr-fleet --one … --detach` returns ≤3 s; verdict via `cc-notify` mailbox; the silent no-process arm (`handoff-fire.sh` "relaunch typed but no claude process appeared") writes a `recycle-dead` row + `hf_alarm` + IDL-joined `term=` + real elapsed + a pane-tty paint | `scripts/lib/detach.sh` (new, lifted from handoff-fire `detach()`), `lr-fleet.sh` (lf_one), `handoff-fire.sh` (that arm), `commands/limit-recover.md` front section | — | 90 |
+| **W2** | ONE admission decision; nothing irreversible before every refusable read: corrected probe mints a one-shot TTL-300 sid-enforced token; `lr-fire-resume` redeems it call-scoped (`env -u` on spawn); per-RUN budget key; `lrh_precheck()` before the transplant (registry bind · `lr_last_api_error` kind=limit · teammate head · pane_cc_state==cc · composer EMPTY) refuses with nothing moved; boot wait becomes a 0.5 s loop on positive discriminators (`relaunch.rc`, IDL row, `cc_alive`), timeouts INDETERMINATE, no retype | `capacity-admit.sh`, `lr-lib.sh`, `handoff-fire.sh` (new read-only verb `--probe-recycle-preconditions`; boot wait), `lr-handoff.sh` (precheck; launcher heredoc exports `LR_RUN LR_RUN_DIR LR_ADMIT_TOKEN LR_SUBMIT_TOKEN LR_LOAD_TERM`), `lr-fire-resume.sh` | W1 | 240 |
+| **W3** | RECOVERED = submitted then engaged: `lr-submit-probe.sh` (submitted\|queued\|none from the TARGET transcript, run token); `resume_engaged` requires an assistant record AFTER the token record; dead `esc to interrupt` oracle deleted; quiet pty ⇒ loud READY-NOT-SEEN, never a blind CR; `lr-ingest-verify.sh` fast path inside the launcher (1 round trip, ≤0.2 K resident) fails closed when a subagent was killed | `lr-fire-resume.sh` expect block, `handoff-fire.sh` resume_engaged, two new scripts, `lr-handoff.sh` | W2 | 200 |
+| **W4** | identity in the pixels + a resolver that refuses: statusline `⌗<pane> <sid8>` left-anchored (+1.2 ms/render); `bin/cc-find` (pane/sid8/tuple/keyword/--limited; teammate rule 0; liveness by (pid,lstart); REFUSES within 12 pct points); `--one` resolves registry/store FIRST, census only on a miss; DUPLICATE subtracts registry pids | `statusline.sh`, `bin/cc-find` (new), `lr-fleet.sh`, `lr-lib.sh` | — | 180 |
+| **W5** | the request lane + state readers + one actuator per pane: StopFailure ARM 2 writes `requests/<sid>` atomically (write-then-latch, teammate/tombstone skip, `CC_SF_REQUEST=off`); poller claims per-sid and drives OFF its lock (hook-originated only under `autorecover.on`); read-only REAPER names every non-terminal run past its bound; retire only on RECOVERED or a live target registry row; lock gains custody so a re-limited target can hop; `bin/cc-lr` (find/recover/status/repair) and `scripts/lib/cc-tui.sh` | `hooks/stop-failure-marker.sh`, `lr-reset-poller.sh`, `lr-transplant.sh`, `bin/cc-husk-sweep`, `bin/cc-lr` (new), `scripts/lib/cc-tui.sh` (new) | W1–W3 | 300 |
+| **W6a** | ranker recovery lane: `--recovery` floors (weekly ≥ 90 excluded; 5h projected ≤ 0.60; fable floor 0.05); POLICY-classed reasons so an all-thin fleet exits 2; `CC_ROUTE_RECOVERY=off` byte-identical | `bin/claude-accounts`, `accounts.json .router`, `tests/account-recovery-lane.bats` | — | 110 |
+| **W6b** | fleet pool: rank→assign→probe→mint under `flock`, pool of `LR_RECOVER_MAX_CONCURRENT=2`, empty rank parks with the router's own reasons | `lr-fleet.sh`, `handoff-fire.sh` `--assign` guard | W5, W6a | 60 |
+| **W7** | census as one Python pass (0.148 s vs 40–86 s); `tests/lr-drill.sh` — the operator-launched DoD instrument (5 throwaway sessions, fault arms a–e); command doc rewritten around `cc-lr` | `lr-fleet.sh` lf_locate, `tests/lr-drill.sh` (new), `commands/limit-recover.md` | W5 | 180 |
+
+### DoD (a diff against the operator's target; the drill in W7 is the instrument)
+
+- identify < 2 s from a screenshot tuple / pane id / sid8 / keyword, REFUSING a tie — `time bin/cc-find …`, `tests/cc-lr.bats`
+- one command (`cc-lr recover <ref>` or `/limit-recover <ref>`) = one Bash call; the turn ends ≤ 5 s; verdict via `cc-notify` — `grep -c 'until \[' commands/limit-recover.md` = 0
+- engaged in place on the recovery lane's target: p50 ≤ 45 s, max ≤ 90 s idle; loaded ⇒ ENGAGED ≤ 300 s or a NAMED `PARKED:capacity:<term>` with nothing moved; same kitty window id, same uuid
+- every failure named ≤ 30 s (`FAILED:gate:<term>` ≤ 3 s via `relaunch.rc`; unsubmitted prompt ≤ 40 s or `queued`), every terminal arm = events row + alarm + pane paint + notify; `cc-lr status` ≤ 0.1 s; re-drivable under the one-actuator rule
+- zero silent husks in the 5-session drill; every recycle-intent has a terminal row (today 7/15); a held draft refuses BEFORE the transplant with no lock and no tombstone
+- no teammate touched (cc-find rule 0, precheck, hook skip); no recovered work landed (iron rule 7 — `grep -c 'git \(commit\|push\|merge\|reset\|checkout\)'` over the recovery scripts = 0)
+- ≤ 0.2 K resident tokens and 1 round trip on the gaps-0 ingest path; HANDOFF-CONTEXT ≤ 2 KB
+
+### Dropped, with reason (full list in `PLAN_DRAFT.md` § dropped)
+
+`CC_ADMIT_NET_ZERO` (double-discounts with `226b73888`; patched one of two `act + 1` sites; leaked into every hook of the recovered session) · the watcher retype (re-runs the same command against a counter advanced by one) · expect exit-code verdicts (an exit before `interact` kills the TUI) · quiet-pty blind CR (takes a parked menu's default) · per-run keystroke watchdogs (two actuators on one pane) · `cc-lr … &` from the hook (child reaped before its own setsid; inherits the session id) · `statusLine.refreshInterval: 5` (+0.28 core, buys nothing — liveness is (pid,lstart)) · the never-released global lock as the already-moved guard · WatchPaths (race-prone per Apple; QueueDirectories) · unbounded `--all` (N probes mint N tokens; pool of 2 + flock).
+
+### Open decisions (genuine operator value-forks — everything else is decided above)
+
+1. **Auto-recover policy (spend).** Should a session limit transplant with no human in the loop? Shipped default OFF — `~/.reso/limit-recover/autorecover.on` absent; the hook still writes the request so `cc-find --limited` is instant and the one command needs no census. Flip = `touch` that file after two clean drills. Conviction the lane is safe ON: 85 % pending fault arms (b)/(c) — below 90, so it is the operator's.
+2. **Thin-account policy.** When the lane excludes every account, park until the source resets (today 2 h 41 m) or admit the least-thin for its last ≤ 10 %? Shipped default PARK with the router's reasons. Conviction 80 % — an hour of a thin account against an hour of a parked session is a value call.
+
+### Status log (§9)
+
+- 2026-09-19 21:2xZ — reopened by session 11569d45 (itself limit-killed on next3 mid-research and transplanted in place to next2; post-ingest audit NO GAPS, 25/27 workflow slots survived on disk, 2 re-run). Corpus committed. Round A (W1 ∥ W4 ∥ W6a) firing as workflow agents in pre-created worktrees.
