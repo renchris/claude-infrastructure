@@ -55,7 +55,9 @@ _jev_resolve_root() {
 }
 CC_JEV_LIB_ROOT="${CC_JEV_LIB_ROOT:-$(_jev_resolve_root)}"
 : "${CC_JEV_MIN_P:=0.98}"
-: "${CC_JEV_TIMEOUT_MS:=1500}"
+# 2500: measured steady state on the agent-secrets + proxy path is 742-791 ms, and a cold
+# proxy took 1515 ms. See scripts/jev/evaluate.mjs for why 1500 was not the 2x it looked like.
+: "${CC_JEV_TIMEOUT_MS:=2500}"
 : "${CC_JEV_MAX_STATE_B:=24000}"   # well under Jev's 32k-TOKEN state ceiling; bytes are the cheap bound
 
 # ── WHERE THE KEY COMES FROM: INJECTED, NEVER EXPORTED ───────────────────────────────────────

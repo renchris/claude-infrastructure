@@ -133,7 +133,7 @@ while IFS= read -r row; do
     msg=$(last_close "$tp"); [ -n "$msg" ] || { skipped=$((skipped+1)); continue; }
   fi
 
-  out="$(jq -n --arg m "$msg" '{
+  spec="$(jq -n --arg m "$msg" '{
     state: { closing_message: $m },
     questions: {
       defers: { type:"boolean",
@@ -142,8 +142,19 @@ while IFS= read -r row; do
       blocker_class: { type:"choice",
         instructions:"If something is being handed over, what KIND of wall is it?",
         criteria: { none:"nothing is handed over", drivable:"the author could have done it", credential_or_sudo:"needs a credential, login, sudo, or a GUI/physical act", destructive_or_production:"a destructive migration or production change the operator must own", value_fork:"a genuine preference only the operator holds", external_info:"a fact only the operator has" } }
-    }}' | jev_ask)" || true
+    }}')"
+  out="$(printf '%s' "$spec" | jev_ask)" || true
 
+  # ── PACE, AND RETRY A 429 ONCE ──────────────────────────────────────────────────────────────
+  # Free-tier requests on this model are rate-limited (measured: HTTP 429 during a rapid burst,
+  # 2026-09-19). Unpaced, arm A would measure OUR REQUEST RATE and report it as Jev missing the
+  # labels — a confident wrong answer, and exactly the disqualifying direction. So: a gap between
+  # calls, and one backoff retry on the class that says "slow down" rather than "this is broken".
+  if [ "$(printf '%s' "$out" | jq -r '.reason // ""' 2>/dev/null)" = "rate-limited" ]; then
+    sleep "${CC_JEV_PILOT_BACKOFF:-5}"
+    out="$(printf '%s' "$spec" | jev_ask)" || true
+  fi
+  sleep "${CC_JEV_PILOT_GAP:-1}"
   p=$(printf '%s' "$out" | jq -r '.answers.defers.probability // empty' 2>/dev/null)
   cls=$(printf '%s' "$out" | jq -r '.answers.blocker_class.choice // empty' 2>/dev/null)
   if [ -z "$p" ]; then skipped=$((skipped+1)); continue; fi

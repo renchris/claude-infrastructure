@@ -49,7 +49,12 @@ const out = (code, body) => {
 const abstain = (reason) => out(10, { ok: false, reason });
 
 const MODEL = process.env.CC_JEV_MODEL || 'typesafe-ai/jev';
-const TIMEOUT_MS = Number(process.env.CC_JEV_TIMEOUT_MS || 1500);
+// 2500 ms, MEASURED not guessed. The real path is agent-secrets (~230 ms) + a loopback CONNECT
+// proxy + the round trip, and steady state on this box is 742-791 ms. 1500 ms looked like 2x
+// headroom and was not: the FIRST call through a cold proxy took 1515 ms and abstained. An
+// abstain is safe — it falls through to the caller's existing path — but one that fires on every
+// cold start makes the arm useless at exactly the moment a session begins.
+const TIMEOUT_MS = Number(process.env.CC_JEV_TIMEOUT_MS || 2500);
 const ZDR = process.env.CC_JEV_ZDR !== '0';
 
 if (!process.env.AI_GATEWAY_API_KEY) abstain('no-key');
@@ -110,13 +115,25 @@ try {
 } catch (e) {
   // Classify, never collapse. A caller that cannot tell `no-key` from `timeout` cannot tell a
   // misconfiguration it should fix from a network blip it should ignore.
-  const name = e?.name || '';
-  const msg = String(e?.message || e);
-  if (name === 'TimeoutError' || name === 'AbortError' || /abort|timed? ?out/i.test(msg)) abstain('timeout');
+  // Walk the CAUSE CHAIN, not just the top error. The gateway wraps a provider failure in its own
+  // GatewayError, so an AbortSignal timeout arrives with a Gateway name and a message that says
+  // nothing about aborting — and the first draft duly classified a timeout of MY OWN budget as
+  // `http`. That reason sent this session hunting a network fault for a value it had itself set.
+  // A classifier that cannot see its own timeout is worse than one that does not classify.
+  const chain = [];
+  for (let c = e, i = 0; c && i < 5; c = c.cause, i++) chain.push(c);
+  const name = chain.map((c) => c?.name || '').join(' ');
+  const msg = chain.map((c) => String(c?.message || '')).join(' ');
+  if (/TimeoutError|AbortError/.test(name) || /abort|timed? ?out|signal is aborted/i.test(msg)) abstain('timeout');
   if (/LoadAPIKey|API key/i.test(name + msg)) abstain('no-key');
   if (/UnsupportedQuestionType/i.test(name)) out(2, { ok: false, reason: 'unsupported-question', detail: msg.slice(0, 200) });
   if (/InvalidArgument|InvalidPrompt/i.test(name)) out(2, { ok: false, reason: 'bad-spec', detail: msg.slice(0, 200) });
   if (/InvalidResponseData|TypeValidation/i.test(name)) abstain('invalid-response');
   if (/NoSuchModel|NoSuchProvider/i.test(name)) abstain('no-model');
+  // 429 gets its OWN reason. "Free until 2026-09-25" is free PRICING, not free THROUGHPUT — the
+  // gateway rate-limits free-tier requests on this model, and a caller that cannot tell a rate
+  // limit from a server fault will read a self-inflicted burst as a broken route. It is also the
+  // one abstain class where the right response is to SLOW DOWN rather than to give up.
+  if (/RateLimit/i.test(name) || /rate.?limit/i.test(msg)) abstain('rate-limited');
   abstain('http');
 }
