@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# cc-jev — operate and MEASURE the Jev evaluation path. The library hooks call is
+# hooks/lib/jev.sh; this is the human-facing side of it.
+#
+#   cc-jev status            what is configured and what is missing. Read-only, no network.
+#   cc-jev probe             ONE real call. Proves the key, the model id and the ZDR route.
+#   cc-jev ask <file|->      raw {state,questions} through the same path a hook uses.
+#   cc-jev pilot [-n N]      score Jev against REAL closes this fleet already labelled.
+#
+# WHY `pilot` IS THE POINT OF THIS FILE. The whole case for the semantic arm in
+# anti-deference-nudge.sh rests on Jev being good at ONE judgment on OUR corpus, and
+# docs/research/jev-at-cost-api-2026-09-18.md §5 states the evidence position plainly: "Nobody
+# has ever scored Jev against real labels." Every number in circulation is the vendor's or a
+# relay of it, and the one independent bench says Jev's terminal verdict LOSES to Haiku 4.5
+# (62.6% vs 81.3%) while its decomposed extractor form wins on cost and speed at parity. So the
+# arm ships DISABLED-BY-DEFAULT and this command is how it earns the right to be turned on.
+#
+# 🚨 `pilot` SENDS REAL CLOSING MESSAGES TO A THIRD PARTY. That is a new sub-processor for this
+# fleet's own prose, so it is GATED on a typed yes and never runs as a side effect of anything.
+# ZDR is on and fails closed, and only the closing message is sent — no transcript, no paths, no
+# history. It is still the operator's call, not the agent's.
+set -uo pipefail
+
+# Resolve $0 through its symlinks BEFORE deriving anything from it. ~/.claude/{bin,scripts}/ are
+# per-file symlinks into the checkout, so an unresolved `dirname "$0"/..` yields ~/.claude — which
+# has no node_modules, no tests/ and no .git. The script would not fail; it would read the WRONG
+# TREE, and only on the live path (memory symlinked-$0-splits-siblings). No `readlink -f`: GNU-only.
+_resolve_self() {
+  local p="$1" d
+  while [ -L "$p" ]; do
+    d="$(cd -P "$(dirname "$p")" && pwd)"
+    p="$(readlink "$p")"
+    case "$p" in /*) ;; *) p="$d/$p" ;; esac
+  done
+  printf '%s' "$p"
+}
+_self="$(_resolve_self "${BASH_SOURCE[0]}")"
+ROOT="$(cd -P "$(dirname "$_self")/.." && pwd)"
+# shellcheck source=/dev/null
+. "$ROOT/hooks/lib/jev.sh"
+
+die() { printf '%s\n' "$*" >&2; exit 2; }
+
+cmd_status() {
+  local key deps node_ok arm
+  key=$([ -n "${AI_GATEWAY_API_KEY:-}" ] && echo yes || echo "NO")
+  deps=$([ -d "$ROOT/node_modules/ai" ] && echo yes || echo "NO")
+  node_ok=$(command -v node >/dev/null && node --version || echo "NO")
+  arm=$([ "${CC_JEV:-1}" = "0" ] && echo "off (CC_JEV=0)" || echo on)
+  printf 'root        %s\n' "$ROOT"
+  printf 'node        %s\n' "$node_ok"
+  printf 'deps (ai)   %s\n' "$deps"
+  printf 'API key     %s\n' "$key"
+  printf 'kill switch %s\n' "$arm"
+  printf 'model       %s\n' "${CC_JEV_MODEL:-typesafe-ai/jev}"
+  printf 'threshold   P(true) >= %s\n' "$CC_JEV_MIN_P"
+  printf 'timeout     %s ms (maxRetries 0)\n' "$CC_JEV_TIMEOUT_MS"
+  printf 'ZDR         %s\n' "$([ "${CC_JEV_ZDR:-1}" = 0 ] && echo OFF || echo "on, fails closed")"
+  echo
+  if jev_available; then
+    echo "ENABLED — the semantic arm in anti-deference-nudge.sh is live."
+    echo "Next: cc-jev probe   (one real call), then cc-jev pilot (score it on real closes)."
+  else
+    echo "DISABLED — every consumer falls through to today's behaviour. Nothing is degraded."
+    [ "$deps" = "NO" ] && echo "  to fix deps: (cd $ROOT && npm install)"
+    [ "$key" = "NO" ] && cat <<'EOF'
+  to fix the key: create one at https://vercel.com/dashboard  ->  AI Gateway  ->  API Keys
+                  then export AI_GATEWAY_API_KEY=vck_...  in your shell profile.
+                  Jev is free on the Gateway until 2026-09-25.
+  This command deliberately does NOT write the key anywhere for you.
+EOF
+  fi
+}
+
+cmd_probe() {
+  jev_available || die "not available — run: cc-jev status"
+  local out rc
+  out="$(jq -n '{
+    state: "The build failed with exit code 1.",
+    questions: {
+      passed: { type: "boolean", instructions: "Did the build succeed?",
+                criteria: { true: "exit code 0", false: "any non-zero exit code" } },
+      area:   { type: "choice", instructions: "Which area is this?",
+                criteria: { build: "compilation or packaging", test: "a failing test", deploy: "a release step" } }
+    }}' | jev_ask)"
+  rc=$?
+  printf '%s\n' "$out" | jq .
+  if [ "$rc" -ne 0 ]; then
+    printf '\nABSTAINED (%s) — no verdict was produced.\n' "$(jev_reason "$out")" >&2
+    return 1
+  fi
+  # A correct model answers ~0 here. This is a smoke test of the ROUTE, not of accuracy.
+  printf '\nroute OK. P(passed)=%s expected near 0.\n' "$(printf '%s' "$out" | jq -r '.answers.passed.probability')"
+}
+
+cmd_ask() {
+  local src="${1:--}"
+  jev_available || die "not available — run: cc-jev status"
+  if [ "$src" = "-" ]; then jev_ask; else [ -r "$src" ] || die "unreadable: $src"; jev_ask < "$src"; fi
+  echo
+}
+
+usage() { sed -n '3,9p' "$_self" | sed 's/^# \{0,1\}//'; }
+
+case "${1:-status}" in
+  status) cmd_status ;;
+  probe)  cmd_probe ;;
+  ask)    shift; cmd_ask "${1:--}" ;;
+  pilot)  shift; exec "$ROOT/scripts/jev/pilot.sh" "$@" ;;
+  -h|--help|help) usage ;;
+  *) usage; exit 2 ;;
+esac

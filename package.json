@@ -2,7 +2,7 @@
   "name": "claude-infrastructure-diagrams",
   "private": true,
   "type": "module",
-  "description": "Diagram render pipeline only — this repo is shell/markdown; node is used solely to pre-render assets/diagrams/*.mmd through beautiful-mermaid for GitHub.",
+  "description": "Node is used for two things in this shell/markdown repo: pre-rendering assets/diagrams/*.mmd through beautiful-mermaid, and scripts/jev/evaluate.mjs, the fail-safe Jev evaluation shim that hooks call for in-hook semantic verdicts. Both degrade cleanly when node_modules is absent.",
   "scripts": {
     "diagrams": "node scripts/render-diagrams.mjs",
     "diagrams:check": "node scripts/render-diagrams.mjs --check",
@@ -11,5 +11,9 @@
   },
   "devDependencies": {
     "beautiful-mermaid": "1.1.3"
+  },
+  "dependencies": {
+    "ai": "7.0.107",
+    "@ai-sdk/gateway": "4.0.87"
   }
 }
