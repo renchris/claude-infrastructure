@@ -183,6 +183,29 @@ shortlist, so it could disagree with it. It did.
 | `anti-deference-nudge` | **CONFIRMED** (semantic ✓, failure real ✓, latency ✓, fail-open safe ✓) | wired, off by default |
 | `completion-assert` kill-switch authorship | 🚨 **REFUTED** | the 89.7% false-positive rate is real, but **27 of the 28 false positives die to a literal envelope-prefix test plus a first-non-meta-record test** — both free, deterministic, offline, and derivable from the jq reader the hook already runs. Ship those and Jev is left adjudicating **~0.06 calls/day**. |
 
+**The refuter's REMEDY, however, only half-replicates — measured here, and this is a correction to
+the correction.** Its claim was "envelope-prefix test **plus a first-non-meta-record test** kills 27
+of 28". Scanned independently: 1,200 transcripts over 21 days, taking each session's last non-meta
+user record and applying `CA_KILL_RE` verbatim. **18 matches: 3 genuine, 15 machine-authored.**
+
+| discriminator | result |
+|---|---|
+| **envelope prefix** (`[handoff `, `<teammate-message`, `<local-command-stdout>`) | **11 of 15 machine killed, 0 genuine harmed** ✓ |
+| **first-non-meta-record** | 🚨 **REFUTED — 0 of 15.** All three genuine matches (`Count to 1 and stop.`, …) are *also* the only non-meta record in their session, so the test flags them identically. |
+| **length threshold** | 🚨 **REFUTED BY AN EXISTING TEST.** `tests/completion-assert.bats` "KILL-SWITCH PIPEFAIL" uses a **200,000-line GENUINE operator message**; a length guard misclassifies it. `completion-assert.sh:197` already records length as considered and rejected. |
+
+So the structural fix is real but **partial**: 11 of 15 fall to one prefix test, and the residual 4 are
+free-form dispatch briefs ("You are the dispatched session for wave W0…", "Implement **W3 / Phase
+3…**") carrying no structural tell at all. The clean remedy for those is for the **fire machinery to
+stamp its own briefs**, not for the hook to infer authorship — a cross-subsystem change. Filed
+`217241f4dfcb` with this receipt, at 62% conviction, because a second question is genuinely the
+operator's: `completion-assert.sh:189` says those briefs *"SHOULD disarm"* while CLAUDE.md § Kill-switch
+says the opposite verbatim. Those contradict, and which governs is a value call.
+
+*(Method note, and it is the general lesson: refuting an objection establishes ¬objection, never the
+claim. The workflow was right that this is not a Jev target and right that a structural fix exists;
+its specific two-test remedy still had to be measured, and one leg of it is inert.)*
+
 **This is the correction that matters most**, because §4 sold the two together as one ~960/day
 population. They are not one population. The authorship half was never a capability gap — the
 hook was discarding structural evidence sitting in front of it, and buying a classifier to
