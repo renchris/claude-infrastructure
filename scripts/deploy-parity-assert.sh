@@ -608,6 +608,15 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # .py, not .sh: this directory's executables are Python (install.sh globs it accordingly).
       scripts/backlog-consolidation/*/*)  want=0 ;;
       scripts/backlog-consolidation/*.py) want=1; cls='scripts/backlog-consolidation/*.py' ;;
+      # scripts/jev/* — declared here at the SAME time as its install.sh loop, which is the
+      # whole point: every prior instance in this block (scripts/lib *.sh then *.py,
+      # backlog-consolidation) is a record of the auditor and the installer learning a class at
+      # different times and agreeing over an absence in between. This class is globbed `*` on
+      # BOTH sides so neither can go stale on an extension — scripts/jev holds evaluate.mjs
+      # beside pilot.sh, and `.mjs` appears in no other deploy glob in this repo.
+      # want=1 is also what keeps link_refresh() able to repair the class without an advance.
+      scripts/jev/*/*)           want=0 ;;
+      scripts/jev/*)             want=1; cls='scripts/jev/*' ;;
       scripts/*/*)               want=0 ;;   # scripts/ is globbed top-level only
       # scripts/*.py — a class the MAP does not deploy, DECLARED here rather than left to the
       # catch-all. install.sh's scripts/ leg globs scripts/*.sh ONLY, so the 25 top-level .py files

@@ -740,6 +740,36 @@ if [[ -d "$REPO_DIR/scripts/lib" ]]; then
   done
 fi
 
+# scripts/jev/ — the fourth instance of the subdirectory gap above, and the first one written
+# with the lesson already in hand rather than after an outage.
+#
+# 🚨 GLOBBED `*`, NOT `*.sh` — DELIBERATELY. The scripts/lib comment directly above records the
+# generator: "a deploy glob keyed on an EXTENSION goes stale the moment a later commit puts a
+# different extension in the same directory, and NOTHING re-examines the glob — not even the
+# auditor". This directory would have tripped that on its FIRST commit, because it holds
+# evaluate.mjs beside pilot.sh and `.mjs` appears in no deploy glob anywhere in this file. A
+# bare `*` cannot go stale on an extension, which is the same form scripts/limit-recover already
+# uses for the same reason.
+#
+# WHY IT IS LOAD-BEARING RATHER THAN COSMETIC: hooks/lib/jev.sh resolves evaluate.mjs relative to
+# its OWN resolved source dir, and `jev_available` returns FALSE when that file is missing. So an
+# omission here does not fail loud — it renders the semantic arm in anti-deference-nudge.sh
+# permanently inert while every hook keeps reporting a perfectly healthy `no-tell`. That is the
+# ADD class from CLAUDE.md stated exactly: an added file is not stale, it is ABSENT.
+if [[ -d "$REPO_DIR/scripts/jev" ]]; then
+  echo ""
+  echo "Jev evaluation shim → $CONFIG_DIR/scripts/jev/"
+  ensure_real_dir "$CONFIG_DIR/scripts/jev"
+  for f in "$REPO_DIR"/scripts/jev/*; do
+    [[ -f "$f" ]] || continue
+    if $IS_GLOBAL; then
+      link_file "$f" "$CONFIG_DIR/scripts/jev/$(basename "$f")"
+    else
+      copy_file "$f" "$CONFIG_DIR/scripts/jev/$(basename "$f")"
+    fi
+  done
+fi
+
 # scripts/backlog-consolidation/ — the SAME subdirectory gap as scripts/lib above and
 # scripts/limit-recover below, hit a third time, and this instance is the one that proves the
 # pattern is a defect rather than a quirk: the classes here are ENUMERATED BY HAND, so a wave that

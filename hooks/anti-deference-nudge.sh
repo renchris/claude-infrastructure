@@ -227,7 +227,92 @@ n_gloss=$(printf '%s' "$MSG" | grep -coE "$OPAQUE_GLOSS_RE" 2>/dev/null || true)
 case "$n_ids"   in ''|*[!0-9]*) n_ids=0 ;;   esac
 case "$n_gloss" in ''|*[!0-9]*) n_gloss=0 ;; esac
 has_id=0; { [ "$n_ids" -ge 2 ] && [ "$n_gloss" -eq 0 ]; } && has_id=1
-{ [ "$has_tell" -eq 1 ] || [ "$has_done" -eq 1 ] || [ "$has_cat" -eq 1 ] || [ "$has_id" -eq 1 ]; } || abstain "no-tell"
+# ── SEMANTIC SECOND OPINION (Jev) — runs ONLY where the four lexical arms found nothing ──────
+# THE HOLE IT COVERS — and the honest denominator, because the tempting number is rhetoric.
+# This hook abstains `no-tell` on 5,127 of 5,419 evaluations (94.6%), but that is an abstention
+# rate over ALL Stops, NOT a miss rate: most closes are not deferrals at all, and being silent
+# on them is the hook working. The repo's own census (docs/research/conviction-close-2026-09-08.md
+# §2.2) puts ungated deferrals at 9.4% of closes with hand-read precision 30% (21/70, Wilson
+# 20-42%), i.e. a TRUE population of roughly 2.8% of closes, ~300 over 30 days. Against that the
+# hook fires 160 times. The real claim is therefore "it catches about HALF of the deferrals that
+# matter", which is worth fixing and is not the same sentence as "blind 19 times in 20".
+# WHAT IT MISSES IS A FAMILY, NOT A TAIL: 447 of those 1,000 ungated hits are the DECISION
+# vocabulary — "your call", "policy call", "the decision is yours" — which appears in none of the
+# four alternations above. That is why the measured incident `(fseventsd saturation, your policy
+# call)` passed every prose arm three times. The arms above are PHRASE matchers, and
+# CLAUDE.md § Session Close's own E0 row names the gap they structurally cannot close: "a
+# research turn that identifies ten items trips no arm and closes clean". You cannot extend a
+# phrase list onto that; deference is a property of what the message MEANS, and a hook cannot
+# spend a Claude turn to find out. Jev answers a typed question in one round trip, which is the
+# one thing at-cost API buys that plan usage cannot
+# (docs/research/jev-at-cost-api-2026-09-18.md §3).
+#
+# STRICTLY ADDITIVE — this is the entire safety argument, and each clause is load-bearing:
+#   · it runs ONLY on messages this hook would otherwise have dropped, so no existing fire
+#     changes and the 5.3% that already match pay no latency at all;
+#   · it is LAST in the FIRE_KIND chain below, so every established arm keeps precedence;
+#   · every carve-out still applies to it — team-assignee, genuine-blocker, ship-hold, the
+#     latch and the cap all sit downstream — so "never fire on a legitimate surface" is
+#     preserved BY CONSTRUCTION, not by re-arguing it here;
+#   · ANY abstain (no key, no deps, timeout, HTTP, CC_JEV=0, oversize) falls through to exactly
+#     today's `abstain "no-tell"`. With no key configured this block forks nothing and the hook
+#     is byte-for-byte the hook it was.
+# Threshold is the calibrated tail (p>=0.98) — hooks/lib/jev.sh documents why that number and
+# why a mid-band probability is maximum UNCERTAINTY rather than a weak yes.
+# The bias rule at the top of this file still governs: false-negative over false-positive.
+has_jev=0; JEV_P=""
+if [ "$has_tell" -eq 0 ] && [ "$has_done" -eq 0 ] && [ "$has_cat" -eq 0 ] && [ "$has_id" -eq 0 ]; then
+  _ad_jev_lib="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/jev.sh"
+  if [ -r "$_ad_jev_lib" ]; then
+    # shellcheck source=/dev/null
+    . "$_ad_jev_lib"
+    if jev_available; then
+      # The state is the ONE message under judgment, built with jq so any quote, backtick or
+      # newline in it is encoded rather than interpolated. Nothing else about the session is
+      # sent: no transcript, no history, no paths. ZDR is on and fails closed (jev.sh).
+      # TWO QUESTIONS, DECOMPOSED — an EXTRACTOR, not a judge, and that is a measured choice.
+      # On the one independent benchmark a single terminal Jev verdict scores 62.6%, LOSING to
+      # Haiku's 81.3%; the same signal decomposed into typed sub-questions reaches 95.0%
+      # [93.5, 96.2] (docs/research/jev-at-cost-api-2026-09-18.md §2). So the boolean opens the
+      # gate and the CHOICE closes it: the second question reproduces this hook's own "genuine
+      # three" carve-out as a typed class, which means a credential, a value-fork or a C10 is
+      # excluded by the model's own answer rather than by a phrase list. Both must agree, which
+      # pushes the arm hard toward the false-NEGATIVE the top of this file demands. They cost one
+      # round trip together — parallel evaluation against one state is the whole point of Jev.
+      _ad_jev_out="$(jq -n --arg m "$MSG" '{
+        state: { closing_message: $m },
+        questions: {
+          defers: {
+            type: "boolean",
+            instructions: "This is the final message of a turn by an autonomous coding agent explicitly authorised to finish drivable work without asking permission. Is the author handing back, offering, parking, or requesting approval for work or a decision it could have carried out itself?",
+            criteria: {
+              true: "it offers a next step, asks whether to proceed, invites the reader to choose, or reports having IDENTIFIED remaining work without doing it - including the decision vocabulary: your call, policy call, the decision is yours, I would want your steer",
+              false: "it reports work it actually finished, or what remains is genuinely outside the author reach"
+            }
+          },
+          blocker_class: {
+            type: "choice",
+            instructions: "If something is being handed over, what KIND of wall is it?",
+            criteria: {
+              none: "nothing is handed over",
+              drivable: "the author could have done it - research, a land, or a decision it already holds the measurement for",
+              credential_or_sudo: "needs a credential, an interactive login, sudo, or a GUI-only or physical act",
+              destructive_or_production: "a destructive migration or production data change the operator must own",
+              value_fork: "a genuine preference only the operator holds, with no measurement that settles it",
+              external_info: "a fact only the operator has"
+            }
+          }
+        }
+      }' | jev_ask)"
+      _ad_jev_class="$(printf '%s' "$_ad_jev_out" | jq -r '.answers.blocker_class.choice // ""' 2>/dev/null)"
+      if [ "$_ad_jev_class" = "drivable" ] && jev_bool_confident "$_ad_jev_out" defers; then
+        has_jev=1
+        JEV_P="$(printf '%s' "$_ad_jev_out" | jq -r '.answers.defers.probability // "?"' 2>/dev/null)"
+      fi
+    fi
+  fi
+fi
+{ [ "$has_tell" -eq 1 ] || [ "$has_done" -eq 1 ] || [ "$has_cat" -eq 1 ] || [ "$has_id" -eq 1 ] || [ "$has_jev" -eq 1 ]; } || abstain "no-tell"
 
 # ── DEFERRING TO A LEAD IS NOT THE DEFERENCE DEFECT (2026-08-02) ────────────────────────────────
 # This hook's premise is one session ↔ one human: its reason text says "the operator cannot act on
@@ -341,6 +426,10 @@ elif [ "$has_id" -eq 1 ]; then
   # or not the ledger agrees. Placed after the three established kinds so it only fires on a message
   # nothing else caught.
   FIRE_KIND="opaque-identifier"
+elif [ "$has_jev" -eq 1 ]; then
+  # LAST, and therefore lowest precedence: this arm can only ever fire on a message that not one
+  # of the four lexical arms recognised. It is the 94.7% no-tell population and nothing else.
+  FIRE_KIND="semantic-deference"
 elif [ "$has_done" -eq 1 ]; then
   # An HONEST done-assertion over a clean ledger, carrying no category handover → still silent
   # (unchanged behaviour; this arm exists so the has_cat check above is REACHABLE for a message
@@ -360,6 +449,11 @@ elif [ "$FIRE_KIND" = "category-not-idea" ]; then
   TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$CATEGORY_TELLS" 2>/dev/null | head -1 | tr -d '\n')"
 elif [ "$FIRE_KIND" = "opaque-identifier" ]; then
   TRIGGER="$(printf '%s' "$MSG" | grep -oE "$OPAQUE_ID_RE" 2>/dev/null | tr -cd '0-9a-f\n' | sort -u | head -2 | tr '\n' ' ' | sed 's/ $//')"
+elif [ "$FIRE_KIND" = "semantic-deference" ]; then
+  # No phrase matched — that is the definition of this arm — so the record carries the posterior
+  # instead. A TRIGGER of "" would make the fired row unreadable, and the suppressed-record
+  # lesson at :353 applies with equal force here.
+  TRIGGER="P(defers)=${JEV_P}"
 else
   TRIGGER="$(printf '%s' "$MSG" | grep -ioE "$TELLS" 2>/dev/null | head -1 | tr -d '\n')"
 fi
@@ -402,6 +496,8 @@ log_idl fired "$FIRE_KIND" \
 
 if [ "$FIRE_KIND" = "opaque-identifier" ]; then
   reason="Opaque-identifier: you handed the operator ${n_ids} bare hex ids and expanded NONE of them (${TRIGGER}). CLAUDE.md § Session Close: 'Every identifier is expanded at first use in that same message' — ≥2 unexpanded ids measured at 49.2% vs 33.6% reply-failure (+15.5pp, p=0.0001), ~10x the effect of length. An id is a filing key, not a fact: the operator cannot answer '0aa3febf3143' without a round-trip asking what it IS, and you already know. Re-close with the QUESTION as the subject and the id in parentheses after it — not 'answer b1614375d051' but 'may the sync endpoint read permissions inside the transaction it guards? (b1614375d051)'. Gloss ONE id anywhere and this never fires. (opaque-identifier nudge $((N+1))/${MAX})"
+elif [ "$FIRE_KIND" = "semantic-deference" ]; then
+  reason="Anti-deference (semantic): no banned phrase appears in this message, but read as a whole it hands work back rather than doing it — P(defers)=${JEV_P} on a threshold of ${CC_JEV_MIN_P}. This is the E0 shape CLAUDE.md § Session Close names: a turn that IDENTIFIES work and then yields is not a read-only turn, and 'I have identified the remaining items' is not a close — the items are the work. Run the Follow-On Gate F1-F4 on each thing you just named and DRIVE the passes, here or by firing a session; drop the fails in one line. Surface only the genuine three (external info the operator alone has / an unsettled value-fork / a C10 you cannot self-execute). (semantic-deference nudge $((N+1))/${MAX})"
 elif [ "$FIRE_KIND" = "category-not-idea" ]; then
   reason="Category-not-idea: you handed work over by COUNT, not by CONTENT (matched: \"${TRIGGER}\"). That is the blank assertion CLAUDE.md § Session Close bans, citing Minto Ch 7 p. 94 — \"'There are three problems' tells the kind, not the idea\". The operator cannot act on a count; they have to spend a round-trip asking \"which one?\". You almost certainly already know the answer — say it. Re-close with line 1 naming the THING: not \"one item is yours\" but \"the Fly deploy trigger still points at main, so every /ship deploys\". Name it after a ':' or a dash and this never fires. (category-not-idea nudge $((N+1))/${MAX})"
 else
