@@ -300,3 +300,109 @@ idl_field() { # $1=jq path → newline-separated values, in order
   [ "$(idl_field '.basis')" != "fail-open" ]
   [[ "$(idl_field '.detail')" == *"/core"* ]]
 }
+
+# ══ THE ADMISSION TOKEN (LIMIT_RECOVER_100P W2, 2026-09-19) ════════════════════════════════════
+# ONE net-zero operation, TWO gates, 11-16 s apart, in two processes that cannot see each other:
+# the fleet's probe ADMITS, the launcher it typed into the pane's shell re-evaluates and REFUSES,
+# and the transplant has already run. Measured 2026-09-19 (U05 §3.3): 5 of 5 recoveries, 4 husks.
+# The token carries the probe's decision across that process boundary WITHOUT letting a probe widen
+# admission — one-shot, TTL-bounded, uid-checked, sid-enforced, probe-inert.
+#
+# RED AT 6a6f9a129 (recorded, all five): the library has no cc_capacity_token_mint and no
+# _cc_admit_token_redeem, so 15/15b/15d return 9 where 0 is asserted, 15c exits 127 on the
+# existence leg, and 15e's second run RELEASES (rc 0) because both runs share one counter file.
+
+mint() { # $1=sid [$2=explicit path] → prints the minted token path
+  bash -c '. "$1"; cc_capacity_token_mint "$2" "${3:-}"' _ "$LIB" "$1" "${2:-}"
+}
+
+@test "15 a minted token ADMITS once over a refusing box, then is GONE" {
+  local tok
+  tok="$(mint sid-abc)"
+  [ -n "$tok" ] || { echo "mint printed nothing"; false; }
+  [ -f "$tok" ]
+  # 0600, because the file IS an admission: another uid must not be able to read or forge one.
+  [ "$(stat -f '%Lp' "$tok")" = "600" ] || { stat -f '%Sp' "$tok"; false; }
+  # the record: sid, uid and the term switches the minting evaluation ran with
+  grep -q "sid-abc" "$tok"
+  grep -q "$(id -u)" "$tok"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-abc \
+               cc_capacity_admit c15 "in-place recycle"' _ "$LIB" "$tok"
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$CC_ADMIT_IDL"; false; }
+  [ "$(idl_field 'select(.basis=="token")|.verdict')" = "admit" ]
+  [[ "$(idl_field 'select(.basis=="token")|.detail')" == *"sid-abc"* ]]
+  [ ! -f "$tok" ]                                   # ONE-SHOT: unlinked on redemption
+  # …and the SECOND call, with the same (now absent) token, gets the real box: load 99 REFUSES.
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-abc \
+               cc_capacity_admit c15 "in-place recycle"' _ "$LIB" "$tok"
+  [ "$status" -eq 9 ]
+  [ "$(idl_field 'select(.caller=="c15" and .verdict=="refuse")|.term')" = "load" ]
+  # never a SILENT refuse: the row says the token was absent
+  [[ "$(idl_field 'select(.caller=="c15" and .verdict=="refuse")|.token')" == *"ABSENT"* ]]
+}
+
+@test "15b an EXPIRED token does not admit, is still consumed, and names its age" {
+  local tok
+  tok="$(mint sid-abc)"
+  printf '%s\t%s\t%s\t%s\n' "$(( $(date +%s) - 600 ))" sid-abc "$(id -u)" load > "$tok"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN_TTL_S=60 CC_ADMIT_TOKEN="$2" \
+               CC_ADMIT_WANT_SID=sid-abc cc_capacity_admit c15b "s"' _ "$LIB" "$tok"
+  [ "$status" -eq 9 ]                               # FRESH evaluation, not a silent admit
+  [ ! -f "$tok" ]                                   # consumed even though it was stale
+  [[ "$(idl_field 'select(.caller=="c15b")|.token')" == *"EXPIRED"* ]]
+  [ "$(idl_field 'select(.caller=="c15b")|.term')" = "load" ]
+}
+
+@test "15c a PROBE never redeems a token (it would spend the caller's admission)" {
+  local tok
+  tok="$(mint sid-abc)"
+  # The existence leg is what makes this RED pre-fix (exit 127 on a library with no redeem); the
+  # inertness leg below is the property. Without the first, this case is green in both arms.
+  run bash -c '. "$1"; command -v _cc_admit_token_redeem >/dev/null || exit 127
+               CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-abc \
+               cc_capacity_probe c15c "s"' _ "$LIB" "$tok"
+  [ "$status" -eq 9 ]
+  [ -f "$tok" ]                                     # untouched — a probe charges nothing, ever
+  [ "$(idl_field 'select(.caller=="c15c")|.basis')" = "probe" ]
+}
+
+@test "15d a token for ANOTHER sid is REFUSED, names both, and is NOT consumed" {
+  # D3-safety R13. Consuming a foreign token would destroy a sibling recovery's admission — one
+  # wiring bug becoming two failures — so the sid check runs BEFORE the unlink.
+  local tok
+  tok="$(mint sid-other)"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-mine \
+               cc_capacity_admit c15d "s"' _ "$LIB" "$tok"
+  [ "$status" -eq 9 ]
+  [ -f "$tok" ] || { echo "a foreign token was CONSUMED — a sibling recovery just lost its admission"; false; }
+  note="$(idl_field 'select(.caller=="c15d")|.token')"
+  [[ "$note" == *"sid-other"* ]] || { echo "$note"; false; }
+  [[ "$note" == *"sid-mine"* ]]  || { echo "$note"; false; }
+}
+
+@test "15e the per-RUN budget key isolates two recoveries' refusal counters" {
+  # Measured 2026-09-19 (U05 §3.4): five recoveries shared `lr-fire-resume.refusals`. The only one
+  # that got through did so on two EARLIER runs' charges, and its release reset the counter for
+  # everyone else. With budget 1, run A's refusal must NOT release run B's spawn.
+  run bash -c '. "$1"; CC_ADMIT_BUDGET=1 CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_BUDGET_KEY=runA \
+               cc_capacity_admit lr-fire-resume "resume A"' _ "$LIB"
+  [ "$status" -eq 9 ]
+  run bash -c '. "$1"; CC_ADMIT_BUDGET=1 CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_BUDGET_KEY=runB \
+               cc_capacity_admit lr-fire-resume "resume B"' _ "$LIB"
+  [ "$status" -eq 9 ] || { echo "run B RELEASED on run A's charge — the counters are shared"; ls "$CC_ADMIT_STATE_DIR"; false; }
+  [ -f "$CC_ADMIT_STATE_DIR/lr-fire-resume.runA.refusals" ]
+  [ -f "$CC_ADMIT_STATE_DIR/lr-fire-resume.runB.refusals" ]
+  # …and run B's OWN second refusal does release: the bound still exists, it is just per-run.
+  run bash -c '. "$1"; CC_ADMIT_BUDGET=1 CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_BUDGET_KEY=runB \
+               cc_capacity_admit lr-fire-resume "resume B"' _ "$LIB"
+  [ "$status" -eq 0 ]
+}
+
+@test "15f with NO key the state file is byte-identical to the old path (no caller changes)" {
+  # The control for 15e: the keying must be opt-in, or every existing caller silently gets a fresh
+  # counter and the bound they have been sharing for a month quietly changes shape.
+  run bash -c '. "$1"; CC_ADMIT_BUDGET=3 CC_ADMIT_LOADAVG_OVERRIDE=99 cc_capacity_admit c15f "s"' _ "$LIB"
+  [ "$status" -eq 9 ]
+  [ -f "$CC_ADMIT_STATE_DIR/c15f.refusals" ]
+  [ "$(cat "$CC_ADMIT_STATE_DIR/c15f.refusals")" = "1" ]
+}

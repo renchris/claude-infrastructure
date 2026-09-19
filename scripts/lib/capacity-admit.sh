@@ -419,14 +419,15 @@ _cc_admit_emit() { # $1=verdict admit|refuse  $2=basis  $3=caller  $4=what  $5=d
          --arg v "$1" --arg b "$2" --arg c "$3" --arg w "$4" --arg d "$5" --arg t "${6:-}" \
          --arg sid "${CC_ADMIT_SID:-?}" --arg pres "${CC_ADMIT_PRESENCE:-}" \
          --arg rsv "${CC_ADMIT_RESERVE:-}" --arg tms "${CC_ADMIT_TERMS:-}" \
-         --arg bld "${CC_ADMIT_BLIND:-}" \
+         --arg bld "${CC_ADMIT_BLIND:-}" --arg tok "${CC_ADMIT_TOKEN_NOTE:-}" \
     '{ts:$ts,hook:"capacity-admit",sid:$sid,disposition:$disp,reason:"capacity",
       gate:"capacity-admit",verdict:$v,basis:$b,caller:$c,what:$w,detail:$d}
      + (if $t    == "" then {} else {term:$t} end)
      + (if $pres == "" then {} else {presence:$pres} end)
      + (if $rsv  == "" then {} else {reserve:$rsv} end)
      + (if $tms  == "" then {} else {terms:$tms} end)
-     + (if $bld  == "" then {} else {blind:$bld} end)' >> "$idl" 2>/dev/null || true
+     + (if $bld  == "" then {} else {blind:$bld} end)
+     + (if $tok  == "" then {} else {token:$tok} end)' >> "$idl" 2>/dev/null || true
   return 0
 }
 
@@ -506,14 +507,120 @@ CC_ADMIT_RESERVE_SLOTS=0
 # State is a single integer per caller. Deliberately NOT a timestamp: this must behave identically
 # in a PreToolUse hook (cannot sleep — a slot is held), in a launchd job at boot, and in a live
 # pane. A count is the only bound with that property, and it is what makes the expiry an EVENT.
+# PER-RUN KEYING (LIMIT_RECOVER_100P W2, 2026-09-19). The key was the CALLER ALONE, so the whole
+# box shared five counters and every concurrent recovery charged the same one. Measured 2026-09-19
+# (U05 §3.4): five in-place recoveries ran through `lr-fire-resume.refusals`; the ONE that survived
+# the gate did so because two EARLIER, unrelated invocations had pre-spent two thirds of the budget,
+# and its release then RESET the counter — so the next four started at "refusal 1 of 3" and could
+# never reach the release inside their watcher's window. One recovery's refusals released another
+# recovery's spawn, and one recovery's admit disarmed the next one's bound.
+#
+# CC_ADMIT_BUDGET_KEY is the run id. Unset ⇒ the path is byte-identical to what it has always been,
+# so no existing caller changes behaviour. The budget VALUE is deliberately untouched (U05 P3 asked
+# for 1 here; D3-safety R2 refuted it — budget 1 makes every remaining term a one-attempt delay plus
+# a page). An unusable key degrades to the caller-only file rather than to no file at all: an
+# untrackable bound is an UNBOUNDED gate (see _cc_admit_spend), which is the failure this must not
+# manufacture out of a bad key.
 _cc_admit_state_file() { # $1=caller → path, or empty when the caller id is unusable
-  local dir="${CC_ADMIT_STATE_DIR:-$HOME/.claude/autonomy/capacity-admit}"
+  local dir="${CC_ADMIT_STATE_DIR:-$HOME/.claude/autonomy/capacity-admit}" key="${CC_ADMIT_BUDGET_KEY:-}"
   case "$1" in ''|*[!A-Za-z0-9._-]*) return 0 ;; esac
+  case "$key" in *[!A-Za-z0-9._-]*) key="" ;; esac
   mkdir -p "$dir" 2>/dev/null || return 0
-  printf '%s/%s.refusals' "$dir" "$1"
+  printf '%s/%s%s.refusals' "$dir" "$1" "${key:+.$key}"
 }
 
 _cc_admit_reset() { local f; [ "${_CC_ADMIT_PROBE:-0}" = 1 ] && return 0; f="$(_cc_admit_state_file "$1")"; [ -n "$f" ] && : > "$f" 2>/dev/null; return 0; }
+
+# ══ THE ADMISSION TOKEN (LIMIT_RECOVER_100P W2, 2026-09-19) ═════════════════════════════════════
+# ONE net-zero operation was being gated TWICE, 11-16 s apart, by two processes that could not see
+# each other. handoff-fire.sh:8270 does not gate a RECYCLE at all — ":5620 a recycle REPLACES a
+# session (net-zero panes), so gating it would strand the very handoff that SHEDS load" — and the
+# in-place limit recovery IS that recycle. But the relaunch it types is `bash <launcher>`, a FRESH
+# process tree in the pane's own shell, and that tree re-evaluates the gate from scratch. Measured
+# 2026-09-19 (U05 §3.3): the fleet probe ADMITTED five times and the launcher REFUSED 11-16 s later
+# every time, after the transplant had already run. Four husks.
+#
+# The token makes the probe's decision THE decision, without letting a probe WIDEN admission:
+#   · minted only by a caller whose probe ADMITTED (the mint is a separate verb; the gate never
+#     mints, so a refusal can never leave a token behind),
+#   · ONE-SHOT — unlinked on read, whatever the verdict, so it grants at most one spawn,
+#   · TTL-bounded (CC_ADMIT_TOKEN_TTL_S, 300 s — the composer gate's 180 s + shell wait + boot,
+#     with margin; past it the launcher evaluates fresh and says so),
+#   · uid-checked (`-O`) — another uid's file is never honoured,
+#   · SID-ENFORCED — a token names the session it was issued for and cannot be replayed onto a
+#     different spawn (D3-safety R13),
+#   · PROBE-INERT — cc_capacity_probe never redeems, or the token would turn the probe's
+#     never-spend contract into a spend (U05 T1's 15c is the case that keeps this honest).
+#
+# IT CANNOT ADMIT ANYTHING THE GATE DID NOT ALREADY ADMIT for that sid ≤ TTL ago. And a token that
+# is missing, expired, foreign or unreadable is NEVER a silent refuse either: the gate falls through
+# to a FRESH evaluation and the reason rides on that row's `token` field (CC_ADMIT_TOKEN_NOTE), so a
+# stale-admission window is greppable rather than invisible.
+CC_ADMIT_TOKEN_AGE=""
+CC_ADMIT_TOKEN_SID=""
+CC_ADMIT_TOKEN_TERMS=""
+CC_ADMIT_TOKEN_NOTE=""
+cc_capacity_token_note() { printf '%s' "$CC_ADMIT_TOKEN_NOTE"; }
+
+cc_capacity_token_mint() { # $1=sid [$2=explicit path] → prints the token path · rc 1 = not minted
+  local sid="${1:-}" path="${2:-}" dir uid
+  case "$sid" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  uid="$(id -u 2>/dev/null || printf '?')"
+  if [ -n "$path" ]; then
+    dir="$(dirname "$path")"
+    mkdir -p "$dir" 2>/dev/null || return 1
+    : > "$path" 2>/dev/null || return 1
+    chmod 600 "$path" 2>/dev/null || true
+  else
+    # The NONCE comes from mktemp, which creates the file atomically at mode 0600 — so two
+    # concurrent recoveries of the same sid cannot collide on a name, and there is no window in
+    # which the path exists world-readable. `<sid>.<nonce>` keeps the sid in the path: a token
+    # found on disk names its own subject without being parsed.
+    dir="${CC_ADMIT_STATE_DIR:-$HOME/.claude/autonomy/capacity-admit}/tokens"
+    mkdir -p "$dir" 2>/dev/null || return 1
+    path="$(mktemp "$dir/$sid.XXXXXXXX" 2>/dev/null)" || return 1
+    chmod 600 "$path" 2>/dev/null || true
+  fi
+  # ONE line, tab-separated: issued · sid · uid · the TERM SWITCHES the minting evaluation ran with.
+  # The terms are recorded because the T3 ratchet is about the pair agreeing: a token minted under a
+  # different term set than the launcher would evaluate is still ONE decision, and the row must be
+  # able to say which decision it was.
+  printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$sid" "$uid" "${CC_ADMIT_TERMS:-}" > "$path" 2>/dev/null || return 1
+  printf '%s' "$path"
+}
+
+_cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usable token · sets the CC_ADMIT_TOKEN_* globals
+  CC_ADMIT_TOKEN_AGE=""; CC_ADMIT_TOKEN_SID=""; CC_ADMIT_TOKEN_TERMS=""; CC_ADMIT_TOKEN_NOTE=""
+  # CC_ADMIT_TOKEN is the library's own spelling; LR_ADMIT_TOKEN is the limit-recover launcher's,
+  # accepted here so a launcher env that carries only the LR_ name still redeems. Both are read,
+  # neither is exported by this library, and lr-fire-resume passes CC_ADMIT_TOKEN call-scoped.
+  local t="${CC_ADMIT_TOKEN:-${LR_ADMIT_TOKEN:-}}" want="${CC_ADMIT_WANT_SID:-}" line issued sid terms now age
+  [ -n "$t" ] || return 1
+  if [ ! -f "$t" ]; then CC_ADMIT_TOKEN_NOTE="token ABSENT ($t) — evaluating fresh"; return 1; fi
+  if [ ! -O "$t" ]; then CC_ADMIT_TOKEN_NOTE="token not owned by uid $(id -u 2>/dev/null || printf '?') ($t) — evaluating fresh"; return 1; fi
+  line="$(awk 'NR==1' "$t" 2>/dev/null || true)"
+  issued="$(printf '%s' "$line" | cut -f1)"
+  sid="$(printf '%s' "$line" | cut -f2)"
+  terms="$(printf '%s' "$line" | cut -f4)"
+  # THE SID CHECK RUNS BEFORE THE UNLINK, and that ordering is deliberate. A token for ANOTHER sid
+  # is not ours to consume: unlinking it would destroy a sibling recovery's admission and turn one
+  # wiring bug into two failures. Everything that IS ours is consumed below, whatever the verdict.
+  if [ -n "$want" ] && [ "$sid" != "$want" ]; then
+    CC_ADMIT_TOKEN_NOTE="token REFUSED: issued for '${sid:-<none>}' but this spawn is '${want}' — not consumed, evaluating fresh"
+    return 1
+  fi
+  rm -f "$t" 2>/dev/null || true                    # ONE-SHOT, even when it turns out to be stale
+  if ! cc_hw_is_int "$issued"; then
+    CC_ADMIT_TOKEN_NOTE="token UNPARSEABLE (issued='${issued}') — consumed, evaluating fresh"; return 1
+  fi
+  now="$(date +%s)"; age=$(( now - issued ))
+  if [ "$age" -lt 0 ] || [ "$age" -gt "${CC_ADMIT_TOKEN_TTL_S:-300}" ]; then
+    CC_ADMIT_TOKEN_NOTE="token EXPIRED (${age}s old > TTL ${CC_ADMIT_TOKEN_TTL_S:-300}s) — consumed, evaluating fresh"
+    return 1
+  fi
+  CC_ADMIT_TOKEN_AGE="$age"; CC_ADMIT_TOKEN_SID="$sid"; CC_ADMIT_TOKEN_TERMS="$terms"
+  return 0
+}
 
 # ── THE NON-CHARGING PROBE (LIMIT_RECOVER_100P, 2026-09-09) ─────────────────────────────────────
 # A fleet recovery must never type /exit into a pane it cannot relaunch, so it asks the box BEFORE
@@ -562,6 +669,26 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
     # as a healthy admit. This is the row that keeps "the gate was OFF" out of the measured population.
     CC_ADMIT_REASON="capacity-admit: OFF (CC_ADMIT_GATE=off) — no term evaluated"
     _cc_admit_emit admit gate-off "$caller" "$what" "CC_ADMIT_GATE=off"; return 0
+  fi
+
+  # ── REDEEM AN ADMISSION TOKEN (W2) ─────────────────────────────────────────────────────────────
+  # Placed immediately after the kill switch and BEFORE every term, because the whole point is that
+  # the terms were already evaluated — by the driver, on this box, ≤ TTL ago, for THIS sid. `token`
+  # is an EIGHTH basis value; adding here is the legal direction (coverage case 27 requires
+  # capacity_gate's vocabulary to stay a SUBSET of this one, never the reverse).
+  # The reset is the ordinary one: a redeemed admission ends a consecutive-refusal run exactly as a
+  # measured admit does.
+  CC_ADMIT_TOKEN_NOTE=""
+  if [ "${_CC_ADMIT_PROBE:-0}" != 1 ] && [ -n "${CC_ADMIT_TOKEN:-${LR_ADMIT_TOKEN:-}}" ]; then
+    if _cc_admit_token_redeem; then
+      CC_ADMIT_REASON="capacity-admit: ADMIT (admission token, ${CC_ADMIT_TOKEN_AGE}s old, issued for ${CC_ADMIT_TOKEN_SID}) — one decision, redeemed once"
+      _cc_admit_emit admit token "$caller" "$what" \
+        "redeemed a probe admission ${CC_ADMIT_TOKEN_AGE}s old for ${CC_ADMIT_TOKEN_SID} (TTL ${CC_ADMIT_TOKEN_TTL_S:-300}s; minted under terms ${CC_ADMIT_TOKEN_TERMS:-?})"
+      _cc_admit_reset "$caller"; return 0
+    fi
+    # NOT a refusal and NOT a silent fall-through: CC_ADMIT_TOKEN_NOTE now rides on whatever row
+    # this evaluation writes, so "the launcher evaluated fresh" always carries WHY.
+    :
   fi
 
   # Probes + defaults come from the SHARED TERMS above — the same resolver, the same reads and the
