@@ -317,7 +317,7 @@ payload_stable() {       # the STABLE launcher's config dir — not in the ordin
 render() { # <payload-producer> <dir> [VAR=VAL ...]
   local p d; p=$("$1"); d="$2"; shift 2
   ( cd "$d" && printf '%s' "$p" \
-      | env -u CLAUDE_INSTANCE_N -u ITERM_SESSION_ID \
+      | env -u CLAUDE_INSTANCE_N -u ITERM_SESSION_ID -u KITTY_WINDOW_ID \
             CLAUDE_CONFIG_DIR= TERM_PROGRAM=not-iterm TERM=xterm-256color \
             "$@" bash "$NEW" 2>/dev/null
   ) | sed $'s/\033\[[0-9;]*m//g'
@@ -341,7 +341,26 @@ render() { # <payload-producer> <dir> [VAR=VAL ...]
 # no longer empty). So the erosion is one assertion going vacuous behind a neighbour that
 # happens to fail — the kind that survives a green suite the moment the neighbour changes.
 marker_of() { printf '%s' "${1%%"$2"*}"; }                       # <line> <dir> — chip + context %
+# ── W4 (U07 2026-09-19): the head gained an IDENTITY segment between the chip and the % ────────
+# statusline.sh now renders `⌗<pane> <sid8> ` there — two fields that are unique by construction,
+# where every other field on the line is a property of a GROUP or of a MOMENT (U07 §4: two of
+# sixteen live panes render a byte-identical line). It is peeled off HERE, at the head parser,
+# rather than asserted away in each case, so every marker assertion below keeps testing the
+# MARKER — `[ "$spoof" = "$base" ]` in the iTerm2-gate case sets ITERM_SESSION_ID and would
+# otherwise compare a head that carries `⌗901` against one that does not, and pass for the
+# wrong reason.
+#
+# The peel names the two token SHAPES rather than a position, because each half is rendered
+# independently (statusline.sh omits the pane token when no pane env is set and the sid8 token
+# when the payload carries no session_id — that independence is what the two new cases below
+# mutation-check). `marker_of` stays RAW: `body_of` subtracts it from the line as a literal
+# prefix, and `pct_of` already reads the LAST space-separated token, so neither needs the peel.
+peel_id() { # <head> → the head with the identity segment removed
+  printf '%s' "$1" | sed -e 's/⌗[^ ]* //' -e 's/#[0-9][^ ]* //' \
+                         -e 's/[0-9a-fA-F][0-9a-fA-F-]\{7\} //'
+}
 chip_of()   { local m; m=$(marker_of "$1" "$2")                  # the instance marker alone
+              m="$(peel_id "$m")"                                # drop `⌗<pane> <sid8> ` (W4)
               m="${m% [0-9]*% · }"                               # chip present: "(3) 47% · "
               m="${m#[0-9]*% · }"                                # chip absent:  "47% · "
               printf '%s' "$m"; }
@@ -516,6 +535,89 @@ body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
   [ -n "$mov" ]
   [[ "$mov" == *"(7)"* ]] || { printf 'marker: %s\n' "$mov" >&2; false; }
   [[ "$mov" != *next* ]] || { printf 'marker: %s\n' "$mov" >&2; false; }
+}
+
+# ── W4 · IDENTITY IN THE PIXELS (U07 2026-09-19) ──────────────────────────────────────────────
+# Measured that day on 16 live sessions: panes 122 and 124 rendered the BYTE-IDENTICAL statusline,
+# 6 of 16 shared the cwd basename and all 6 shared the git sha (one checkout), and the sha MOVES
+# under a session that has done nothing. So a perfectly fresh, perfectly read screenshot did not
+# identify a session, and the two fields that fix it by construction were already in the script's
+# hands at zero fork cost: $KITTY_WINDOW_ID is inherited env and PAY_SID is parsed by the single
+# jq extraction. These cases pin the FIELD and its INDEPENDENCE — the suite's own history records
+# seven single-line mutants of statusline.sh leaving it 10/10 green, so each half here has a
+# stated red arm rather than a shared one.
+payload_nosid() {   # no session_id at all — the sid8 half must vanish, the pane half must not
+  jq -nc '{transcript_path:"/Users/x/.claude-tertiary/projects/-Users-x-p/aaaa.jsonl",
+           model:{id:"claude-opus-4-8"}, effort:{level:"max"},
+           context_window:{context_window_size:1000000, used_percentage:47},
+           cwd:"/Users/x/p"}'
+}
+
+@test "live: the identity segment renders the pane and the sid8 between the chip and the context %" {
+  mk_repo "$WORK/live-id" some-branch
+  local line head
+  line=$(render payload_full "$WORK/live-id" KITTY_WINDOW_ID=117)
+  head=$(marker_of "$line" live-id)
+  # POSITION is the whole point: 9 of 16 live panes are <=38 columns and already amputate the sha
+  # and the effort, so identity has to sit at the ellipsis-immune edge (U07 2b).
+  [ "$head" = "(3) ⌗117 aaaa-bbb 47% · " ] || { printf 'head: [%s]\n' "$head" >&2; false; }
+  # ...and the body is untouched — the segment is additive, not a re-layout.
+  [ "$(body_of "$line" live-id)" = "live-id ($(git -C "$WORK/live-id" rev-parse --short HEAD))  some-branch · max" ]
+}
+
+@test "live: RED ARM — the pane half vanishes with its env var, and the sid8 half with its payload field" {
+  mk_repo "$WORK/live-idmut" some-branch
+  local both nopane nosid
+  both=$(marker_of "$(render payload_full   "$WORK/live-idmut" KITTY_WINDOW_ID=117)" live-idmut)
+  # (a) no pane env at all (render already pins BOTH spellings unset) — the sid8 survives alone.
+  nopane=$(marker_of "$(render payload_full "$WORK/live-idmut")" live-idmut)
+  # (b) a payload with no session_id — the pane survives alone.
+  nosid=$(marker_of "$(render payload_nosid "$WORK/live-idmut" KITTY_WINDOW_ID=117)" live-idmut)
+  [[ "$both"   == *"⌗117"*   ]] || { printf 'both: [%s]\n'   "$both"   >&2; false; }
+  [[ "$both"   == *"aaaa-bbb"* ]] || { printf 'both: [%s]\n' "$both"   >&2; false; }
+  [[ "$nopane" != *"⌗"*      ]] || { printf 'nopane: [%s]\n' "$nopane" >&2; false; }
+  [[ "$nopane" == *"aaaa-bbb"* ]] || { printf 'nopane: [%s]\n' "$nopane" >&2; false; }
+  [[ "$nosid"  == *"⌗117"*   ]] || { printf 'nosid: [%s]\n'  "$nosid"  >&2; false; }
+  [[ "$nosid"  != *"aaaa-bbb"* ]] || { printf 'nosid: [%s]\n' "$nosid" >&2; false; }
+  # neither half is a placeholder: an absent source renders NOTHING, so the absence is readable
+  [ "$nopane" = "(3) aaaa-bbb 47% · " ] || { printf 'nopane: [%s]\n' "$nopane" >&2; false; }
+}
+
+@test "live: the pane falls back to ITERM_SESSION_ID's tail, and KITTY_WINDOW_ID wins the tie" {
+  mk_repo "$WORK/live-idterm" some-branch
+  # ~/.zshrc exports ITERM_SESSION_ID=w0t0p0:$KITTY_WINDOW_ID INSIDE kitty, and
+  # hooks/session-register.sh:127 keys the registry FILENAME on exactly this `##*:` strip — so the
+  # two spellings must resolve to the same integer or the statusline and the registry disagree
+  # about what a pane is called. Reading it for its VALUE is fine; reading it as a TERMINAL claim
+  # is the banned move the glyph block records shipping and reverting.
+  local iterm both
+  iterm=$(marker_of "$(render payload_full "$WORK/live-idterm" ITERM_SESSION_ID=w0t0p0:901)" live-idterm)
+  [[ "$iterm" == *"⌗901"* ]] || { printf 'iterm: [%s]\n' "$iterm" >&2; false; }
+  both=$(marker_of "$(render payload_full "$WORK/live-idterm" ITERM_SESSION_ID=w0t0p0:901 KITTY_WINDOW_ID=117)" live-idterm)
+  [[ "$both" == *"⌗117"* ]] || { printf 'both: [%s]\n' "$both" >&2; false; }
+  [[ "$both" != *901*    ]] || { printf 'both: [%s]\n' "$both" >&2; false; }
+}
+
+@test "live: a non-UTF-8 locale falls back to a plain # — the mark is never a mojibake box" {
+  mk_repo "$WORK/live-idloc" some-branch
+  local utf8 c
+  utf8=$(marker_of "$(render payload_full "$WORK/live-idloc" KITTY_WINDOW_ID=117 LC_ALL=en_US.UTF-8)" live-idloc)
+  c=$(marker_of "$(render payload_full "$WORK/live-idloc" KITTY_WINDOW_ID=117 LC_ALL=C)" live-idloc)
+  [[ "$utf8" == *"⌗117"* ]] || { printf 'utf8: [%s]\n' "$utf8" >&2; false; }
+  [[ "$c"    == *"#117"* ]] || { printf 'C: [%s]\n'    "$c"    >&2; false; }
+  [[ "$c"    != *"⌗"*    ]] || { printf 'C: [%s]\n'    "$c"    >&2; false; }
+}
+
+@test "live: the telemetry row carries the pane, so a reader can join a sid to a pane without ps" {
+  mk_repo "$WORK/live-idtel" some-branch
+  render payload_full "$WORK/live-idtel" KITTY_WINDOW_ID=117 >/dev/null
+  [ -f "$CC_TELEMETRY_DIR/aaaa-bbbb-cccc.json" ] || { ls -la "$CC_TELEMETRY_DIR"; false; }
+  [ "$(jq -r '.pane' "$CC_TELEMETRY_DIR/aaaa-bbbb-cccc.json")" = "117" ]
+  # RED ARM: with no pane env the field is NULL, never the string "" — a reader joining on it must
+  # be able to tell "no pane" from "a pane called nothing".
+  rm -f "$CC_TELEMETRY_DIR/aaaa-bbbb-cccc.json"
+  render payload_full "$WORK/live-idtel" >/dev/null
+  [ "$(jq -r '.pane' "$CC_TELEMETRY_DIR/aaaa-bbbb-cccc.json")" = "null" ]
 }
 
 @test "live: outside a git repo only the non-git fields render" {

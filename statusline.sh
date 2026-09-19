@@ -86,6 +86,50 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     )"
 fi
 
+# --- IDENTITY: the pane id and the sid8, left-anchored (U07 §6a, LIMIT_RECOVER_100P W4) --------
+# THE LINE DID NOT IDENTIFY A SESSION. Measured 2026-09-19 over 16 live sessions: panes 122 and
+# 124 rendered the BYTE-IDENTICAL statusline; 6 of 16 shared the cwd basename and all 6 shared the
+# git sha, because it is one checkout; and the sha MOVES under a session that has done nothing
+# (b80f9408e → 0194d9cb1 inside one 25-minute window). Every other field here is a property of a
+# GROUP (account, checkout, branch, sha) or of a MOMENT (context %, which is also 0-7 points stale
+# by the time a screenshot is read, p90 12 at 40 minutes). These two are unique by construction:
+# the pane id IS the registry's filename and the sid is the session.
+#
+# COST: zero forks, both sides. $KITTY_WINDOW_ID is inherited env (verified on a live claude's
+# `ps eww`, and inherited again by its children) and $PAY_SID is already parsed by the single jq
+# extraction above, so `${PAY_SID:0:8}` is a parameter expansion. A/B over 30 renders x 3 reps:
+# 89.0 ms → 90.2 ms, +1.2 ms (+1.3%), inside the ±7% spread between reps of the same arm.
+#
+# POSITION is not cosmetic. Live pane widths that day: 5 @ 30 cols, 4 @ 38, 6 @ 51, 1 @ 156, against
+# a 51-column base line — so in 9 of 16 panes (56%) the sha and the effort are ALREADY amputated by
+# the terminal. Identity placed at the right-hand end would be the first thing clipped, in exactly
+# the narrow panes where a screenshot is the only way to ask. It goes where the glyph and the % go.
+#
+# EACH HALF IS INDEPENDENTLY OMITTED when its source is absent, rather than rendering a `?`
+# placeholder: a placeholder identifies nothing and makes its own absence unfalsifiable, and the
+# suite's history records seven single-line mutants of this script leaving it 10/10 green.
+#
+# ⚠️ $ITERM_SESSION_ID is read for its VALUE only. ~/.zshrc exports it INSIDE kitty as
+# `w0t0p0:$KITTY_WINDOW_ID` by design, so it is not a terminal claim — the glyph block below
+# records what shipped and broke when it was used as one. The `##*:` strip is the SAME idiom
+# hooks/session-register.sh:127 keys the registry FILENAME on, so both spellings land on the one
+# integer the registry, the statusline and cc-find all agree is "the pane".
+ID_PANE="${KITTY_WINDOW_ID:-}"
+if [ -z "$ID_PANE" ]; then ID_PANE="${ITERM_SESSION_ID:-}"; ID_PANE="${ID_PANE##*:}"; fi
+ID_SEG=""
+if [ -n "$ID_PANE" ] || [ -n "$PAY_SID" ]; then
+    # U+2317 VIEWDATA SQUARE is outside the East-Asian-Width Ambiguous set this file documents
+    # kitty downsampling (see the glyph block), but it is still non-ASCII: under a non-UTF-8 locale
+    # the terminal is not being told to decode it, so a `#` fallback — one column cheaper — is what
+    # renders. `#` is also the zero-risk design the operator eyes-check may keep outright.
+    _idmark='#'
+    case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+        *UTF-8*|*utf-8*|*UTF8*|*utf8*) _idmark='⌗' ;;
+    esac
+    ID_SEG="${ID_PANE:+$_idmark$ID_PANE }${PAY_SID:+${PAY_SID:0:8} }"
+    unset _idmark
+fi
+
 # --- Telemetry export (session self-knowledge; SESSION_AUTONOMY_PLAN 2026-07-14) ----
 # Persist the payload's context/identity fields so the SESSION ITSELF (and peers /
 # supervisors / the orchestrator) can read live context % programmatically — /context
@@ -146,8 +190,14 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
             done
         fi
         _tmp="$TDIR/.${_sid}.$$.tmp"
-        if echo "$INPUT" | jq -c --arg cfg "$_cfg" --arg pid "$_pid" '{ts: (now|floor), session_id, cwd,
+        # `pane` (W4): the sid→pane join every reader wanted and none had. cc-find, the fleet
+        # census and lead-supervisor all key on the pane id, and before this the only way to get
+        # one from a sid was to walk the registry directory or the process table. It rides the jq
+        # call that already runs — no extra fork — and is NULL, never "", when no pane env is set,
+        # so a reader can tell "no pane" from "a pane called nothing".
+        if echo "$INPUT" | jq -c --arg cfg "$_cfg" --arg pid "$_pid" --arg pane "$ID_PANE" '{ts: (now|floor), session_id, cwd,
             config_dir: $cfg, model: .model.id, effort: .effort.level,
+            pane: (if $pane == "" then null else $pane end),
             pid: (if $pid == "" then null else ($pid|tonumber) end),
             window: .context_window.context_window_size,
             used_pct: .context_window.used_percentage,
@@ -483,4 +533,4 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     fi
 fi
 
-echo -e "${GLYPH_PREFIX}${PCT_SEG}${OUTPUT}${RESET}"
+echo -e "${GLYPH_PREFIX}${ID_SEG}${PCT_SEG}${OUTPUT}${RESET}"
