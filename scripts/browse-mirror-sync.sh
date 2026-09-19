@@ -237,7 +237,12 @@ rc=0
 out=$(
   while IFS='|' read -r path ref; do
     [ -z "${path:-}" ] && continue
-    case "$path" in \#*) continue ;; esac
+    # NOT a `case`. bash 3.2 — which is /bin/bash, and therefore the interpreter launchd resolves
+    # this script's `#!/usr/bin/env bash` to — cannot parse a `case` arm containing `continue`
+    # inside a command substitution, in ONE-line or multi-line form. It is a parse error, so the
+    # whole script died at startup on every trigger while parsing fine under bash 5 by hand.
+    # Parameter expansion has no such problem and needs no case.
+    [ "${path#\#}" != "$path" ] && continue
     sync_one "$path" "$ref" || echo "__FAIL__"
   done <<< "$MIRRORS"
 )

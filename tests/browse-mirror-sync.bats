@@ -243,3 +243,32 @@ advance_origin() {
     || { echo "fast-forwarded a branch that a worktree has checked out"; false; }
 }
 
+@test "11: the subject parses AND runs under /bin/bash — the interpreter launchd actually uses" {
+  # THE DEFECT THIS EXISTS FOR, and it made the whole feature inert on the day it shipped.
+  #
+  # The plist runs `/bin/bash -c 'exec …/browse-mirror-sync.sh'`, so the script's
+  # `#!/usr/bin/env bash` resolves against launchd's PATH — which is /bin/bash, **3.2.57**, not the
+  # 5.x on a developer's PATH. bash 3.2 cannot parse a `case` arm containing `continue` inside a
+  # command substitution (one-line OR multi-line), so the script died at startup on EVERY trigger
+  # with a syntax error, exit 2, while `bash -n` and all ten cases above passed under bash 5.
+  # WatchPaths was firing correctly the whole time — 5 runs, ref mtimes matching the log — and the
+  # mirror had silently stopped advancing. It was caught only because the migration's own verifier
+  # asserts at-target rather than merely job-loaded.
+  #
+  # Parse alone is not enough: a 3.2 runtime defect (an associative array, ${v^^}, a bare `mapfile`)
+  # parses fine and dies at execution. So this RUNS it end to end.
+  [ -x /bin/bash ] || skip "/bin/bash absent — cannot test the deployment interpreter"
+
+  run /bin/bash -n "$SUBJECT"
+  [ "$status" -eq 0 ] || { echo "does not PARSE under /bin/bash:"; echo "$output"; false; }
+
+  advance_origin two.txt two
+  git -C "$MIRROR" checkout --quiet --detach "$C1"
+
+  run /bin/bash "$SUBJECT"
+  [ "$status" -eq 0 ] || { echo "does not RUN under /bin/bash:"; echo "$output"; false; }
+  echo "$output" | grep -q 'verdict=advanced' || { echo "$output"; false; }
+  [ "$(git -C "$MIRROR" rev-parse HEAD)" = "$C2" ] \
+    || { echo "ran under /bin/bash but did not advance the mirror"; false; }
+}
+
