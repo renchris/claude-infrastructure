@@ -237,3 +237,33 @@ at run time**:
 
 Every run below prints its own `uptime` and CPU idle immediately before and after, and the box state
 is stated **in the verdict sentence itself**.
+
+### The preflight bar was WRONG, and it cost 78 minutes — the measurement that proves it
+
+The first preflight demanded `cc_sp_active <= 3` (later 4), reasoned as *"a lead plus four members
+must stay under the ceiling of 8"*. **That is not the gate's condition.** `cc_capacity_admit` refuses
+when `active + 1 > 8` — the refusal text says so in its own words, *"8 sessions mid-turn + 1 > active
+ceiling 8"* — so it **admits at `active <= 7`**, and it counts sessions **mid-turn**, which probe
+members stop being seconds after they spawn.
+
+78 one-minute samples, 22:30Z–23:49Z (`captures/preflight-census/`):
+
+| condition | met | |
+|---|---|---|
+| `active <= 3` | **0/78 (0.0%)** | the probe's first bar |
+| `active <= 4` | **0/78 (0.0%)** | the probe's fallback bar |
+| `active <= 6` | 35/78 (44.9%) | the corrected bar |
+| **`active <= 7`** | **64/78 (82.1%)** | **the gate's own condition** |
+| `idle >= 25%` | 34/78 (43.6%) | |
+| `active <= 4` **and** `idle >= 25%` | **0/78 (0.0%)** | the conjunction that blocked everything |
+| `active <= 6` **and** `idle >= 25%` | 15/78 (19.2%) | reachable within minutes |
+
+`cc_sp_active` ranged 5–10, median 7. **The admission gate was never the blocker.** The probe's own
+preflight was, and it was *stricter than the gate it existed to satisfy* — so a bar written to respect
+a protective mechanism instead blocked the work for 78 minutes while the mechanism itself would have
+admitted 82% of the time. This is `docs/lessons/the-blocking-gate-was-stricter-than-the-repo-s-own-verifier.md`
+in a new place: **when two gates judge one population, adopt the standard of the one that actually
+adjudicates, and read its refusal text for the predicate rather than deriving your own.**
+
+The corrected bar is `active <= 6` — one slot of margin below the gate's 7, because the spawn burst
+briefly makes the four members mid-turn themselves — with `idle >= 25%` retained for interpretation.

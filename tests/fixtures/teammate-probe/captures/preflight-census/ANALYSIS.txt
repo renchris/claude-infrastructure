@@ -1,0 +1,19 @@
+P1 preflight load census — 1-minute samples, 2026-09-19 22:30Z to 23:49Z
+samples=78 (~78 minutes)
+cc_sp_active: min=5 median=7 max=10
+cpu_idle:     min=0.0 median=18.73 max=55.74
+
+Why the original bar was unreachable, and why it was the WRONG bar:
+  active<=3: 0/78 (0.0%)
+  active<=4: 0/78 (0.0%)
+  active<=5: 8/78 (10.3%)
+  active<=6: 35/78 (44.9%)
+  active<=7: 64/78 (82.1%)
+  idle>=25%: 34/78 (43.6%)
+  active<=4 AND idle>=25%: 0/78 (0.0%)
+  active<=6 AND idle>=25%: 15/78 (19.2%)
+  active<=7 AND idle>=25%: 31/78 (39.7%)
+
+cc_capacity_admit refuses when active+1 > 8, so it ADMITS at active<=7 — held 83.1%.
+The preflight demanded active<=4, held 0.0%. The gate was never the blocker; the
+probe's own bar was, and it was stricter than the gate it existed to satisfy.
