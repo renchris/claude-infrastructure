@@ -183,6 +183,8 @@
 #                    WRAP_LIVE_BUDGET_COMMITS · WRAP_LIVE_BUDGET_MIN · CC_MIGRATIONS_STATE ·
 #                    WRAP_BACKLOG_TIMEOUT_S · WRAP_DECIDE_TIMEOUT_S · WRAP_TRANSCRIPT ·
 #                    WRAP_GOAL_TIMEOUT_S · WRAP_PROJECT_ROOTS ·
+#                    WRAP_RESIDENT · WRAP_RESIDENT_TIMEOUT_S · CC_WF_TEAM_ROOTS ·
+#                    CC_WF_PSTABLE_FILE · CC_SESSIONS_BIN ·
 #                    WRAP_CACHE · WRAP_CACHE_DIR · WRAP_CACHE_WAIT_MS · WRAP_CACHE_WAIT_TRIES ·
 #                    WRAP_CACHE_LOCK_STALE_S
 set -uo pipefail
@@ -1082,6 +1084,189 @@ count_open_custody() {
   CUSTODY_OPEN="$n"; CUSTODY_MINE=0; CUSTODY_UNK="$n"; CUSTODY_SRC="cwd"
 }
 
+# ── RESIDENT MEMBERS — live teammate processes THIS session started and never ended (the 🔧 arm) ──
+# RC-2 of docs/plans/SUBAGENT_LIFECYCLE_ROOT_CAUSE.md, measured in
+# docs/research/SUBAGENT_LIFECYCLE_ROOT_CAUSE_2026-09-19.md §3: the vendor requires the LEAD to end
+# its members, and 58% of leads send nothing (42/72); 44.7% of members get no signal; 82% of
+# teammate sessions never see a `shutdown_request`. 105 of the fleet closer's 124 reaps in 30 d
+# fired while the lead was still ALIVE — a janitor working behind a live lead. Nothing at a close
+# told the lead it still had residents, so the fleet's answer was a sweeper rather than the owner.
+#
+# THIS IS A CHECK AND NOTHING ELSE. It computes a FACT — which of MY members are still running —
+# and renders it. It sends no shutdown_request, calls no TaskStop, kills nothing, starts no timer
+# and counts no idle. The lead decides; RC-8's correct-but-unresolvable hold (a member whose own
+# files are dirty in a shared worktree) is discharged by naming those files here, so the only owner
+# that can commit them knows they exist.
+#
+# THE MATCH IS THE THREE-FLAG CONJUNCTION, NEVER `pgrep -f <name>` (MEMORY.md
+# pgrep-f-matches-agent-briefs; the same trap hooks/lib/agent-identity.sh:24-29 and
+# handoff-fire.sh:949-957 each document after being bitten). `ps -o command=` flattens argv, so a
+# session whose BRIEF merely MENTIONS a member matches any single-flag probe — and a count built
+# that way manufactures a PERMANENT 🔧 on every close, fleet-wide, which is the one failure
+# direction this arm may not have. So a process claims membership only if it carries all three
+# flags AND they agree with each other: ` --agent-id <name>@<team> `, ` --agent-name <name> ` and
+# ` --team-name <team> `, every one a literal substring naming THIS member of THIS team. Literal
+# index() rather than regex so a `.` or `-` in a member name cannot widen the match.
+#
+# Fail-OPEN in every direction, like YOURS/CUSTODY/FILED_MINE: no session id, no team config, no
+# jq, an unreadable ps — all read 0 and leave the rung exactly as it was. Most sessions on this box
+# are not leads, and an arm that fired on a read failure would fire at every close forever.
+# RESIDENT_SRC: skip (a worse rung governs — never computed) · none (no session id, or no team
+# config for it: the common case) · ok (a config was read; the count is a measurement) · error
+# (config present but unreadable — no jq / bad json / unreadable ps).
+#
+# 🚨 THE RESIDUAL, NAMED RATHER THAN WRAPPED. The team config is MUTATED, not append-only: CC
+# REMOVES a member row when its shutdown completes (measured 2026-09-19 — of 95 team configs
+# created in the last 30 d, 91 now list only the lead, while the lead transcripts of that same
+# window record 496 named spawns). For the case this arm exists for that is exactly right: a
+# member properly shut down is gone from BOTH the config and the process table, so the rung
+# clears. But it means the config is a SURVIVOR set, and a member whose row was removed while its
+# PROCESS survived — RC-11 records that `TaskStop` may leave the process — is invisible here. That
+# gap is real, it is measured, and it is deliberately NOT closed in this wave: the fix for it is a
+# different fact (a team-scoped scan of the process table with no config to check against), and
+# the operator constraint on this work is "only solve if and when we have explicit issues
+# identified to explicitly solve". It is stated so the next session inherits the gap rather than
+# the impression of coverage.
+RESIDENT_MINE=0; RESIDENT_SRC="skip"; RESIDENT_MINE_NAMES=""; RESIDENT_DIRTY_FILES=""
+
+# The team config CC writes for a session, or "" when it wrote none. TWO SPELLINGS, both measured
+# live on 2026-09-19: the harness names the team `session-<first dash-segment of the session id>`
+# (e.g. session-eb77ca3e for eb77ca3e-c23c-4f1d-858f-4b116cd759d3), while the plan and the older
+# configs spell it with the full id. Both are tried by PATH — a `leadSessionId == $SID` scan over
+# the 438 team dirs on this box would be a jq fork per dir on a Stop-hook path, which is what
+# "cheap gate first" means here. Roots follow agent-identity.sh:99-109: the *2/*3/*4 launchers each
+# run a DIFFERENT real config dir, so a team led from any of them records its members ONLY there.
+_resident_team_cfg() {
+  local team roots=() root cfg
+  if [ -n "${CC_WF_TEAM_ROOTS:-}" ]; then
+    # shellcheck disable=SC2206  # deliberate split of a space-separated test seam
+    roots=( ${CC_WF_TEAM_ROOTS} )
+  else
+    [ -n "${CLAUDE_CONFIG_DIR:-}" ] && roots+=( "${CLAUDE_CONFIG_DIR}/teams" )
+    for root in "$HOME"/.claude*/teams; do [ -d "$root" ] && roots+=( "$root" ); done
+  fi
+  for root in "${roots[@]+"${roots[@]}"}"; do
+    [ -n "$root" ] || continue
+    for team in "session-${SID}" "session-${SID%%-*}"; do
+      case "$team" in *[!A-Za-z0-9_.-]*) continue ;; esac
+      cfg="$root/$team/config.json"
+      if [ -f "$cfg" ]; then printf '%s\t%s' "$cfg" "$team"; return 0; fi
+    done
+  done
+  return 1
+}
+
+count_resident_members() {
+  [ "${WRAP_RESIDENT:-on}" = "off" ] && { RESIDENT_SRC="none"; return 0; }
+  [ -n "$SID" ] || { RESIDENT_SRC="none"; return 0; }
+  local pair cfg team members tbl live nm cwd pane
+  pair="$(_resident_team_cfg)" || { RESIDENT_SRC="none"; return 0; }
+  cfg="${pair%%	*}"; team="${pair##*	}"
+  command -v jq >/dev/null 2>&1 || { RESIDENT_SRC="error"; return 0; }
+  # NOT-THE-LEAD is the same predicate agent-identity.sh:115-117 uses, and it is the whole reason
+  # this arm does not fire on every session that ever called the Agent tool: CC writes a config
+  # holding only `team-lead` the first time, so the lead-excluded member set is empty and we return
+  # before the `ps` fork. Verified against live configs (tmuxPaneId "leader", agentType team-lead).
+  members="$(jq -r '.members[]? | select((.tmuxPaneId // "") != "leader" and (.agentType // "") != "team-lead")
+                    | [(.name // ""), (.cwd // ""), (.tmuxPaneId // "")] | @tsv' "$cfg" 2>/dev/null)" \
+    || { RESIDENT_SRC="error"; return 0; }
+  RESIDENT_SRC="ok"
+  [ -n "$members" ] || return 0
+
+  # The ps snapshot is taken BEFORE awk runs, so awk's own argv (which carries the flag names
+  # below) cannot appear in the table it is matching against — the census-matches-itself trap
+  # (docs/lessons/census-matches-itself.md) closed by ordering rather than by quoting.
+  if [ -n "${CC_WF_PSTABLE_FILE:-}" ] && [ -f "${CC_WF_PSTABLE_FILE}" ]; then
+    tbl="$(cat "$CC_WF_PSTABLE_FILE" 2>/dev/null)"
+  else
+    tbl="$(_bounded "${WRAP_RESIDENT_TIMEOUT_S:-5}" ps -axo pid=,ppid=,command= 2>/dev/null)"
+  fi
+  [ -n "$tbl" ] || { RESIDENT_SRC="error"; return 0; }
+
+  # One awk pass: for every member name, is there a process CLAIMING to be that member of this
+  # team? Names are passed through the environment (never argv) and validated to a charset that
+  # cannot carry a separator.
+  local names=""
+  while IFS='	' read -r nm cwd pane; do
+    [ -n "$nm" ] || continue
+    case "$nm" in *[!A-Za-z0-9_.-]*) continue ;; esac
+    names="${names}${nm}"$'\n'
+  done <<EOF
+$members
+EOF
+  [ -n "$names" ] || return 0
+  live="$(printf '%s\n' "$tbl" | RESIDENT_NAMES="$names" awk -v team="$team" '
+    function claims(c, nm, tm) {
+      # >>> RESIDENT-MATCH-PREDICATE (ONE line; tests/wrap-ledger-resident.bats mutates exactly
+      # this line to build the pgrep-f / single-flag / co-presence mutants and prove the
+      # anti-false-positive control kills each. Keep it one line, literal index(), no regex.)
+      return index(c, " --agent-id " nm "@" tm " ") && index(c, " --agent-name " nm " ") && index(c, " --team-name " tm " ")
+      # <<< RESIDENT-MATCH-PREDICATE
+    }
+    BEGIN { n = split(ENVIRON["RESIDENT_NAMES"], NAMES, "\n") }
+    { c = ""; for (i = 3; i <= NF; i++) c = c " " $i; c = c " "; LINES[++L] = c }
+    END {
+      for (k = 1; k <= n; k++) {
+        nm = NAMES[k]; if (nm == "") continue
+        if (nm in SEEN) continue
+        for (j = 1; j <= L; j++) if (claims(LINES[j], nm, team)) { SEEN[nm] = 1; print nm; break }
+      }
+    }' 2>/dev/null)"
+  [ -n "$live" ] || return 0
+  RESIDENT_MINE="$(printf '%s\n' "$live" | grep -c . | tr -d ' ')"
+  case "$RESIDENT_MINE" in ''|*[!0-9]*) RESIDENT_MINE=0; RESIDENT_SRC="error"; return 0 ;; esac
+  RESIDENT_MINE_NAMES="$(printf '%s' "$live" | tr '\n' ' ' | sed 's/ *$//')"
+
+  # RC-8: a member sharing the LEAD's cwd can have its OWN files dirty there, and the fleet closer
+  # correctly refuses to reap it (91 own-footprint holds in 30 d) — a hold nothing resolves,
+  # because only the lead can commit them. Attribution is per-member and runs against the MEMBER's
+  # transcript, never the lead's: a sibling's dirt may not be laid at this member's door
+  # (hooks/lib/session-writes.sh). Best-effort throughout — an unresolvable session id, an absent
+  # transcript or rc 2 all yield nothing, and the rung above is already decided without this.
+  local sw_lib tp msid dirty
+  sw_lib="$(dirname "$0")/../hooks/lib/session-writes.sh"
+  [ -f "$sw_lib" ] || sw_lib="$HOME/.claude/hooks/lib/session-writes.sh"
+  [ -f "$sw_lib" ] || return 0
+  # The lib is SOURCED IN A CHILD (the `bash -c` below), never into this shell: wrap-ledger runs
+  # inside a Stop hook and session-writes defines names four other hooks also define. A child also
+  # means one bounded fork per member rather than an unbounded read on this process.
+  while IFS='	' read -r nm cwd pane; do
+    [ -n "$nm" ] || continue
+    case " $RESIDENT_MINE_NAMES " in *" $nm "*) ;; *) continue ;; esac
+    # ONLY a SHARED cwd. An owned worktree is the member's own tree and its dirt is nobody else's
+    # problem to surface here; the closer already holds on it with full information.
+    [ "$cwd" = "$PWD" ] || continue
+    msid="$(_resident_member_sid "$pane")" || continue
+    tp="$(_wl_find_transcript "$msid")" || continue
+    # shellcheck disable=SC2016   # single quotes deliberate: this is the CHILD shell's script,
+    # and $1..$3 are ITS positional parameters, passed after the `_` argv0 placeholder. Expanding
+    # them here would inline the paths into the program text — the same idiom, and the same
+    # disable, as the session-busy call below.
+    dirty="$(_bounded "${WRAP_RESIDENT_TIMEOUT_S:-5}" bash -c \
+             '. "$1" 2>/dev/null || exit 2; session_dirty_mine "$2" "$3"' _ "$sw_lib" "$tp" "$PWD" 2>/dev/null)" || continue
+    [ -n "$dirty" ] || continue
+    dirty="$(printf '%s' "$dirty" | tr '\n' ',' | sed 's/,$//')"
+    RESIDENT_DIRTY_FILES="${RESIDENT_DIRTY_FILES:+$RESIDENT_DIRTY_FILES; }${nm}=${dirty}"
+  done <<EOF
+$members
+EOF
+}
+
+# A member's own session id, from the session registry keyed on the pane the team config records
+# (the same join hooks/teammate-auto-shutdown.sh:1326-1328 makes). The config's own `sessionId`
+# field is null on every live config read on 2026-09-19, so the registry is the only source.
+_resident_member_sid() {
+  local pane="${1:-}" bin
+  [ -n "$pane" ] || return 1
+  case "$pane" in leader|*[!A-Za-z0-9_.-]*) return 1 ;; esac
+  command -v jq >/dev/null 2>&1 || return 1
+  bin="${CC_SESSIONS_BIN:-$(command -v cc-sessions 2>/dev/null || true)}"
+  [ -n "$bin" ] && [ -x "$bin" ] || return 1
+  _bounded "${WRAP_RESIDENT_TIMEOUT_S:-5}" "$bin" --json 2>/dev/null \
+    | jq -r --arg p "$pane" '.[] | select(.paneUUID==$p) | (.session_id // .sessionId) // empty' 2>/dev/null \
+    | head -1 | grep -E '^[A-Za-z0-9_.-]+$' || return 1
+}
+
 # ── LIVE LAYER — the ENFORCING store, one edge past trunk (the 🚀 rung; see the header) ──
 LIVE_REPO="${WRAP_LIVE_REPO:-$HOME/Development/claude-infrastructure}"
 # LIVE_ROOT = the tree of per-file symlinks the box actually executes from. It is the OTHER half of
@@ -1828,7 +2013,21 @@ else
   count_filed_undriven
   compute_close_floor
   sum_unconvicted
-  if [ "$FILED_MINE" -gt 0 ]; then
+  count_resident_members
+  if [ "$RESIDENT_MINE" -gt 0 ]; then
+    # RANKED BESIDE THE CUSTODY ARM ABOVE, and one step below it, for the reason custody gives:
+    # both name work that is NOT in this tree, so neither can be seen by DIRTY/REMAINDER/UNLANDED,
+    # and both are the originator's own debt. It sits below custody because a dispatched session is
+    # a whole wave whose RESULT is still owed, where a resident member is a process the lead can
+    # end in one message; and ABOVE FILED_MINE/UNCONVICTED because a filed row is a note about
+    # future work while this is a live process burning quota now, which only THIS session can end.
+    # It sits inside the ✅-eligible branch (never above the dirty/remainder/unlanded arms) so it
+    # costs nothing on a close that is already 🔧 or 📦 — the same cost discipline stated at the
+    # `else` above — and because on those paths it could not change the rung anyway.
+    RUNG="🔧"
+    READOUT="🔧 Loose ends — ${RESIDENT_MINE} teammate process(es) you started are STILL RUNNING and were never shut down (${RESIDENT_MINE_NAMES}); the vendor ends a member only when its LEAD says so, and this is the lead. Send each a shutdown_request, escalate to TaskStop after ~60s, and the rung clears when the PROCESS is gone."
+    [ -n "$RESIDENT_DIRTY_FILES" ] && READOUT="${READOUT} Their OWN files are dirty in this shared tree and only you can commit them: ${RESIDENT_DIRTY_FILES}."
+  elif [ "$FILED_MINE" -gt 0 ]; then
     # Outranks 🚀 and 👤 (both assert "my side is done"): a row you filed and could not say why you
     # did not drive is YOUR open work, whatever the tree says. Same rank as the custody 🔧 above.
     RUNG="🔧"; READOUT="🔧 Loose ends — ${FILED_MINE} backlog row(s) you filed this session are still open with no reason you could not drive them (cc-backlog list --open --json | jq '.[]|select(.filedBy==\"${SID}\")'); drive each (then \`cc-backlog done <id> --evidence …\`), drop it (\`done --evidence \"dropped: <why>\"\`), or hand it off by re-running the same add with \`--why-not-now \"needs-credential|needs-human|not-yet-true|no-capacity: <detail>\"\`."
@@ -2007,6 +2206,13 @@ emit_machine() {
   # that governs RUNG and CUSTODY_OPEN themselves. Both 0 when CUSTODY_SRC is none/error/skip.
   printf 'CUSTODY_MINE=%s\n' "$CUSTODY_MINE"
   printf 'CUSTODY_UNK=%s\n' "$CUSTODY_UNK"
+  # § RESIDENT MEMBERS. The NAMES are the field, not the count: "3 residents" tells the lead the
+  # kind and not the idea (§ the close message S6 — named, never counted), and a shutdown_request
+  # is addressed to a name. RESIDENT_SRC distinguishes "counted zero" from "never counted".
+  printf 'RESIDENT_MINE=%s\n' "$RESIDENT_MINE"
+  printf 'RESIDENT_MINE_NAMES=%s\n' "$RESIDENT_MINE_NAMES"
+  printf 'RESIDENT_SRC=%s\n' "$RESIDENT_SRC"
+  printf 'RESIDENT_DIRTY_FILES=%s\n' "$RESIDENT_DIRTY_FILES"
   printf 'YOURS=%s\n' "$YOURS"
   printf 'YOURS_SRC=%s\n' "$YOURS_SRC"
   printf 'FILED_MINE=%s\n' "$FILED_MINE"

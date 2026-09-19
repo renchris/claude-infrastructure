@@ -66,6 +66,13 @@ setup() {
   # suite-is-a-function-of-who-runs-it class). An empty roots dir = nothing to find = GOAL_SRC=none.
   unset CLAUDE_CODE_SESSION_ID
   export WRAP_PROJECT_ROOTS="$BATS_TEST_TMPDIR/projects"
+  # § RESIDENT MEMBERS (W3): the sixth store, and the same hermetic discipline. Unpinned, the arm
+  # globs the OPERATOR's real ~/.claude*/teams (419 team dirs on this box) looking for a config
+  # named after the fixture session id — harmless only because that id cannot exist there, which
+  # is luck, not hermeticity. An empty roots dir is a counted, fixtured "no team config", which is
+  # what every case in this file is asserting about anyway.
+  export CC_WF_TEAM_ROOTS="$BATS_TEST_TMPDIR/teams"
+  mkdir -p "$CC_WF_TEAM_ROOTS"
 }
 
 # goal_status transcript fixtures — the record dictionary is hooks/lib/goal-state.sh's header.

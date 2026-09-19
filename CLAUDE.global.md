@@ -487,6 +487,22 @@ gate can only ever REFUTE a false done and nothing ever AFFIRMED a true one):
   repo-identity keyed via `hooks/lib/dod-path.sh` (new captures) with lossless per-toplevel legacy
   fallback — so a successor on a fresh worktree inherits the real scope instead of a blank one.
 
+🚨 **A RESIDENT MEMBER IS YOUR LOOSE END, and only you can end it** (W3 / RC-2, 2026-09-19).
+The vendor ends a teammate when its LEAD says so and at no other time — and measured over 30 days,
+**58% of leads send nothing** (42/72), 44.7% of members get no signal, 82% of teammate sessions
+never see a `shutdown_request`, and 105 of the fleet closer's 124 reaps fired while the lead was
+still ALIVE: a janitor working behind an owner who was never told. So `scripts/wrap-ledger.sh` now
+computes `RESIDENT_MINE` — the members of THIS session's team config whose
+`--agent-id <name>@session-<team>` process is still running (the three-flag conjunction; never
+`pgrep -f <name>`, whose match on a brief that merely mentions a name would manufacture a permanent
+🔧) — and a non-empty one is a 🔧 naming them, plus, for a member sharing your cwd, the member's own
+dirty files (RC-8's correct-but-unresolvable hold: the closer is right to refuse, and you are the
+only party that can commit them). **Send each resident a `shutdown_request`; escalate to `TaskStop`
+after ~60 s; the rung clears when the PROCESS is gone, not when the pane closes.** It is a CHECK and
+nothing else — it kills nothing, sends nothing, and starts no timer — so the decision, including
+"this member is still working and I want it", stays yours: say so in the close and the 🔧 is a
+stated park like any other. Kill switch `WRAP_RESIDENT=off`.
+
 **Freeze the DoD at intake.** The first time a task will write tracked files, restate the user's
 ask as one line — **`Scope (frozen): …`** (in the plan, else inline). Close-time completeness is
 then a *diff against that contract*, never a fresh re-judgment — the brake on scope-metastasis.
