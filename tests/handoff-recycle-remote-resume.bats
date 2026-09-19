@@ -367,3 +367,119 @@ tx() { # $1 = ISO ts  $2 = json fields after "type"
   run resume_engaged "$TARGET_CFG" "$SESS" "2026-09-09T01:04:00"
   [ "$status" -eq 1 ]
 }
+
+# ── W1(b): THE ONE SILENT TERMINAL ARM ────────────────────────────────────────────────────────────
+#
+# `!! relaunch typed but no claude process appeared within 90s` is the watcher's LAST arm and, until
+# W1, the only terminal arm of the four that wrote NOTHING — no ledger row, no alarm, no goal
+# disposition (U04 §3, measured: 4 husks on 2026-09-19, `ls ~/.claude/handoff-alarms | grep 20260919`
+# empty all day). It also said "90s" unconditionally, and typed its fallback through
+# `it2 session run`, whose armed-pane branch writes a `.cmd` file instead of reaching the screen
+# (`handoff-fire.sh:1419-1431`) — the write path that raced on the morning of the incident.
+#
+# WHAT IS DRIVEN. The detached `__recycle` watcher, directly, with a phase-aware `ps` shim modelled
+# on tests/handoff-recycle-engagement.bats — except that the phase NEVER advances to `alive`, so the
+# pane reaches a confirmed shell (the relaunch IS typed), and then no claude ever appears. That is
+# exactly the 2026-09-19 shape: `lr-fire-resume` exits 9 at the capacity gate ~2 s after the launcher
+# line is typed, and the watcher polls a corpse for 90 s. RCY_PROC_TICKS/RCY_PROC_IVL_S are the seams
+# that make those two 45 s waits runnable in a test; they can only make the watcher give up SOONER.
+#
+# THE IDL JOIN. The cause of that exit-9 is on disk — `~/.claude/autonomy/idl.jsonl`,
+# `caller:"lr-fire-resume"`, `term:"load"|"active"|…` — and nothing joined it, so every husk read as
+# "no process appeared" with no why. The fixture below is the real row shape (capacity-admit.sh:418).
+# TTY_PATH is a plain FILE here: pane_cc_state only ever takes its basename (`${ptty##*/}`), so the
+# ps shim answers exactly as it would for a real pty, while the arm's `printf > "$TTY_PATH"` paint
+# becomes assertable.
+
+noproc_setup() { # → a watcher whose pane reaches a shell and never gets a claude back
+  export CC_HANDOFF_ALARM_DIR="$HOME/.claude/handoff-alarms"
+  export CC_NOTIFY_BIN="$HOME/.claude/bin/cc-notify"
+  mkdir -p "$HOME/.claude/bin" "$HOME/.claude/logs" "$HOME/.claude/autonomy"
+  cat > "$CC_NOTIFY_BIN" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$HOME/ccnotify-calls.log"
+STUB
+  chmod +x "$CC_NOTIFY_BIN"
+
+  WSHIM="$BATS_TEST_TMPDIR/wshim"; mkdir -p "$WSHIM"
+  # Phase-aware ps, pinned in the `shell` phase forever (PS_DEAD_CALLS is never reached).
+  cat > "$WSHIM/ps" <<'SH'
+#!/usr/bin/env bash
+args="$*"
+case "$args" in *pgid=*) printf '%s\n' "4242"; exit 0 ;; esac
+case "$args" in
+  *"-o pid= -t"*)    printf '100\n' ;;
+  *"-o tpgid= -t"*)  printf '100\n' ;;
+  *"-o comm= -t"*)   printf -- '-zsh\n' ;;
+  *pid=,ppid=*)      printf '100 1\n' ;;
+  *"pid=,comm= -g"*) printf '100 /bin/zsh\n' ;;
+  *"-p 100"*)        printf '/bin/zsh\n' ;;
+esac
+exit 0
+SH
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$WSHIM/osascript"
+  chmod +x "$WSHIM/ps" "$WSHIM/osascript"
+
+  WPANE="NOPROC-PANE"
+  export STUB_PANE="$WPANE"
+  cat > "$HOME/.claude/bin/it2" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$HOME/it2-calls.log"
+case "$1 $2" in
+  "session list")
+    if [ "${3:-}" = --json ]; then printf '[{"id": "%s", "tty": "/dev/ttys999"}]\n' "${STUB_PANE:-NOPROC-PANE}"
+    else printf '%s\n' "${STUB_PANE:-NOPROC-PANE}"; fi
+    exit 0 ;;
+  "session send") txt="${!#}"; [ "${#txt}" -gt 3 ] && printf '%s' "$txt" > "$HOME/it2-screen" ;;
+  "session read") cat "$HOME/it2-screen" 2>/dev/null ;;
+esac
+exit 0
+SH
+  chmod +x "$HOME/.claude/bin/it2"
+  WCMDF="$BATS_TEST_TMPDIR/relaunch.cmd"
+  printf 'cd /tmp && nocorrect bash /tmp/lr-launch-abcd1234.sh\n' > "$WCMDF"
+  WTTY="$BATS_TEST_TMPDIR/ttys999"; : > "$WTTY"
+  export CC_ADMIT_IDL="$HOME/.claude/autonomy/idl.jsonl"
+  : > "$CC_ADMIT_IDL"
+}
+
+idl_refusal() { # $1=sid $2=term $3=ts — one real-shaped lr-fire-resume refusal row
+  printf '{"ts":"%s","hook":"capacity-admit","sid":"?","disposition":"refused","reason":"capacity","gate":"capacity-admit","verdict":"refuse","basis":"measured","caller":"lr-fire-resume","what":"resume %s on next2","detail":"load 2.57/core > 2.0 (refusal 2 of budget 3)","term":"%s","terms":"load,headroom,segments,active"}\n' \
+    "$3" "$1" "$2" >> "$CC_ADMIT_IDL"
+}
+
+drive_noproc() { # the watcher, resume-mode positional argv ($10 cfg $11 sid $12 T0)
+  run env HOME="$HOME" PATH="$WSHIM:$PATH" \
+      RCY_PROC_TICKS=1 RCY_PROC_IVL_S=1 \
+      IT2_BIN="$HOME/.claude/bin/it2" \
+      bash "$HF" __recycle "$WPANE" "$WTTY" "$WCMDF" /tmp "$SESS" "" "" "" \
+                 "$TARGET_CFG" "$SESS" "2026-09-19T17:00:00"
+}
+
+@test "W1(b): the no-process arm writes a recycle-dead row whose detail carries the IDL term= for this sid" {
+  noproc_setup
+  idl_refusal "$SESS" load "2026-09-19T17:22:17Z"
+  drive_noproc
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [ -f "$HOME/.claude/logs/handoffs.jsonl" ] || { echo "NO LEDGER ROW AT ALL:"; echo "$output"; false; }
+  row="$(grep '"class":"recycle-dead"' "$HOME/.claude/logs/handoffs.jsonl" | tail -1)"
+  [ -n "$row" ] || { cat "$HOME/.claude/logs/handoffs.jsonl"; echo "$output"; false; }
+  printf '%s' "$row" | grep -q 'term=load' || { echo "$row"; echo "$output"; false; }
+  # the REAL elapsed, never the literal 90 — the seam ran the two waits in ~2s
+  ! printf '%s' "$row" | grep -q 'within 90s' || { echo "row still claims 90s: $row"; false; }
+}
+
+@test "W1(b): the no-process arm alarms and PAINTS the verdict to the tty — never it2 session run" {
+  noproc_setup
+  idl_refusal "$SESS" active "2026-09-19T17:22:17Z"
+  drive_noproc
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  alarm="$(cat "$CC_HANDOFF_ALARM_DIR"/* 2>/dev/null || true)"
+  printf '%s' "$alarm" | grep -q 'recycle-relaunch-refused' || { echo "NO ALARM: $alarm"; echo "$output"; false; }
+  printf '%s' "$alarm" | grep -q 'term=active' || { echo "$alarm"; false; }
+  # the pane is told, by a single printf to its own tty
+  grep -q 'RECYCLE FAILED' "$WTTY" || { echo "TTY NOT PAINTED:"; cat "$WTTY"; echo "$output"; false; }
+  grep -q 'lr-launch-abcd1234.sh' "$WTTY" || { cat "$WTTY"; false; }
+  # and NOT through it2's launch verb, whose armed-pane branch writes a .cmd file instead
+  ! grep -q 'session run' "$HOME/it2-calls.log" || { cat "$HOME/it2-calls.log"; false; }
+}
