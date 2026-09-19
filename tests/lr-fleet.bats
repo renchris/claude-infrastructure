@@ -543,4 +543,90 @@ SH
   # …and its verdict reaches the requester as mail carrying a verdict= token
   until [ -s "$BATS_TEST_TMPDIR/notify.log" ] || [ $(( $(date +%s) - t0 )) -gt 60 ]; do sleep 2; done
   grep -q 'verdict=' "$BATS_TEST_TMPDIR/notify.log" || { echo "no verdict mail:"; cat "$BATS_TEST_TMPDIR/notify.log" 2>/dev/null; cat "$logp" 2>/dev/null; false; }
+# ═══ W4 — the resolver stops guessing, and the in-place claim becomes falsifiable ═══════════════
+
+# ONE SESSION, TWO CENSUSES, COUNTED TWICE. lr_resume_procs already collapses the cc-close-attrib
+# WRAPPER onto its claude child, but nothing collapsed the registry row onto the SAME pid the argv
+# census reports — and after a recovery those are always the same process, because lr-handoff
+# relaunches with `--resume <sid>` and the SessionStart hook writes the row for that pid. So every
+# recovered session read DUPLICATE on the next census and was parked instead of recovered
+# (measured 2026-09-19 on 28f07827 and cb227486). The `--duplicates` arm has subtracted registry
+# pids from the resume set since it was written; lf_locate never did.
+@test "W4: a registry pid that IS the --resume process is ONE writer, not two — RECOVERABLE" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"          # row() writes pid $$, which is alive
+  mkdir -p "$BATS_TEST_TMPDIR/psbin"
+  cat > "$BATS_TEST_TMPDIR/psbin/ps" <<PS
+#!/bin/bash
+case "\$*" in
+  *lstart*) exec /bin/ps "\$@" ;;
+  *) printf '%s\n' " $$     1 claude --permission-mode auto --resume $SID" ;;
+esac
+PS
+  chmod +x "$BATS_TEST_TMPDIR/psbin/ps"
+  PATH="$BATS_TEST_TMPDIR/psbin:$PATH" run bash "$FLEET" --locate
+  [[ "$output" == *"RECOVERABLE"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"DUPLICATE"* ]] || { echo "$output"; false; }
+}
+
+# CONTROL for the case above — the subtraction must not disarm the real thing it guards. A resume
+# process that is NOT any registry pid is a second writer and still forces DUPLICATE.
+@test "W4 CONTROL: a --resume process that is NOT the registry pid is still a second writer" {
+  # the stub pid is 424242, never 1: lr_resume_procs keeps only LEAVES, and a pid that is another
+  # row's ppid is dropped as the cc-close-attrib wrapper — pid 1 is its own parent in a one-row
+  # stub, so it filtered itself out and this control passed for the wrong reason on its first run.
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  mkdir -p "$BATS_TEST_TMPDIR/psbin"
+  cat > "$BATS_TEST_TMPDIR/psbin/ps" <<PS
+#!/bin/bash
+case "\$*" in
+  *lstart*) exec /bin/ps "\$@" ;;
+  *) printf '%s\n' " 424242     1 claude --permission-mode auto --resume $SID" ;;
+esac
+PS
+  chmod +x "$BATS_TEST_TMPDIR/psbin/ps"
+  PATH="$BATS_TEST_TMPDIR/psbin:$PATH" run bash "$FLEET" --locate
+  [[ "$output" == *"DUPLICATE"* ]] || { echo "$output"; false; }
+}
+
+# THE CENSUS IS 99.8% OF THE IDENTIFICATION COST AND --one ALREADY HOLDS THE SID. U14 §0 measured
+# lf_locate at 40.3 / 64.5 / 86.1 s against a 0.007 s registry read, and the cheap resolver already
+# sat a few lines BELOW the census call as its miss path. The order is inverted here. The mutant is
+# the proof: an lf_locate that exits 99 the moment it is entered must never be reached.
+@test "W4: --one resolves from the registry and the store — the census is never reached" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  mut="$BATS_TEST_TMPDIR/fleet-nocensus.sh"
+  sed 's|^lf_locate() { # → TSV rows on stdout|lf_locate() { echo "CENSUS RAN" >\&2; exit 99|' "$FLEET" > "$mut"
+  grep -q 'CENSUS RAN' "$mut" || { echo "the lf_locate anchor moved — re-pin this mutant"; false; }
+  # the mutant is LIVE: --locate still walks straight into it. Without this the case below passes
+  # for a sed that matched nothing (memory: green-in-both-arms-is-an-equivalence-guard).
+  # The marker, not the exit code, is the oracle: every caller reads lf_locate through a COMMAND
+  # SUBSTITUTION, so `exit 99` ends the subshell and the parent carries on at rc 0. That is also
+  # why the assertion below is the marker's ABSENCE rather than a status.
+  run bash "$mut" --locate
+  [[ "$output" == *"CENSUS RAN"* ]] || { echo "$output"; false; }
+  run bash "$mut" --one "$SID" --target next3 --source-pane 616
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"CENSUS RAN"* ]] || { echo "$output"; false; }
+  grep -q -- "--sid $SID --config-dir $SEC --cwd $CWD --target next3 --launch --in-place --source-pane 616" "$LRH_LOG" || { cat "$LRH_LOG"; false; }
+}
+
+# `pane_after` was initialised to `pane` and only ever moved when lr-handoff ANNOUNCED a new pane,
+# so "recovered in the same pane id" was a claim the row could not fail: a relaunch that died
+# between /exit and SessionStart rendered identically to one that came back. Read it from the
+# registry AFTER the run instead — the row is rewritten on every SessionStart, so its absence is
+# exactly the failure this column exists to name.
+@test "W4: pane_after is read from the registry AFTER the run — an absent row is a NAMED gap" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  cat > "$LR_HANDOFF_BIN" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "${LRH_LOG:?}"
+rm -f "${CC_REGISTRY_DIR:?}"/616.json       # the relaunch that never re-registered
+echo "lr-handoff: recycled IN PLACE — pane X continues session Y" >&2
+echo "/bundle/path"
+SH
+  chmod +x "$LR_HANDOFF_BIN"
+  run bash "$FLEET" --recover
+  [[ "$output" == *"52e35019  616      ?"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"UNPROVEN"* ]] || { echo "$output"; false; }
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
 }
