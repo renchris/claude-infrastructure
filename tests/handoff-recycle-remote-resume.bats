@@ -449,12 +449,19 @@ idl_refusal() { # $1=sid $2=term $3=ts — one real-shaped lr-fire-resume refusa
     "$3" "$1" "$2" >> "$CC_ADMIT_IDL"
 }
 
-drive_noproc() { # the watcher, resume-mode positional argv ($10 cfg $11 sid $12 T0)
+# THE BOOT SEAMS CHANGED SHAPE IN W2, AND THIS DRIVER IS UPDATED RATHER THAN PATCHED AROUND.
+# W1 shrank two 45 s process waits with RCY_PROC_TICKS × RCY_PROC_IVL_S. W2 DELETES that loop —
+# and the retype it existed to bracket — and replaces it with a date-bounded wait on positive
+# discriminators (relaunch.rc · a fresh IDL refusal · claude on the pane), so the seams are now the
+# two BOUNDS: RCY_BOOT_WAIT_S (INDETERMINATE) and RCY_BOOT_STALE_S (terminal). W1's two cases below
+# are unchanged in what they assert; only the names of the knobs that make them run in seconds move.
+drive_noproc() { # the watcher, resume-mode positional argv ($10 cfg $11 sid $12 T0 $13 srctx $14 run dir)
   run env HOME="$HOME" PATH="$WSHIM:$PATH" \
-      RCY_PROC_TICKS=1 RCY_PROC_IVL_S=1 \
+      RCY_BOOT_WAIT_S="${BOOT_WAIT:-1}" RCY_BOOT_STALE_S="${BOOT_STALE:-2}" \
+      RCY_BOOT_IVL_S=0.2 RCY_BOOT_SLOW_IVL_S=1 RCY_BOOT_PANE_EVERY=2 \
       IT2_BIN="$HOME/.claude/bin/it2" \
       bash "$HF" __recycle "$WPANE" "$WTTY" "$WCMDF" /tmp "$SESS" "" "" "" \
-                 "$TARGET_CFG" "$SESS" "2026-09-19T17:00:00"
+                 "$TARGET_CFG" "$SESS" "2026-09-19T17:00:00" "" "${WRUN:-}"
 }
 
 @test "W1(b): the no-process arm writes a recycle-dead row whose detail carries the IDL term= for this sid" {
@@ -483,4 +490,116 @@ drive_noproc() { # the watcher, resume-mode positional argv ($10 cfg $11 sid $12
   grep -q 'lr-launch-abcd1234.sh' "$WTTY" || { cat "$WTTY"; false; }
   # and NOT through it2's launch verb, whose armed-pane branch writes a .cmd file instead
   ! grep -q 'session run' "$HOME/it2-calls.log" || { cat "$HOME/it2-calls.log"; false; }
+}
+
+# ══ W2 — THE BOOT WAIT: POSITIVE DISCRIMINATORS, NO RETYPE, AND A TIMEOUT THAT IS NOT A VERDICT ═══
+# WHAT THIS REPLACES. The watcher typed the relaunch, waited 15 × 3 s for a claude, RETYPED the
+# identical command, waited another 45 s, and called it "no process appeared within 90s". Measured
+# 2026-09-19 (U02 §2d, U05 §3.4): the launcher had already exited ~2 s in, refused by its own
+# capacity gate, so the 90 s was spent polling a corpse — and the retype re-ran the same command
+# against a refusal counter that had advanced by exactly one, i.e. it could not possibly succeed.
+#
+# The new arm reads three POSITIVE facts: `relaunch.rc` newer than the type, an lr-fire-resume
+# REFUSAL row newer than the type, and claude on the pane. A bound expiring is INDETERMINATE (a
+# state and an alarm, then more reading), and only the outer bound is terminal — STALE:boot.
+#
+# The fixture writes relaunch.rc FROM THE it2 STUB, i.e. at the moment the relaunch is typed, which
+# is the production shape: a stale rc must not be attributed to this attempt, and a rc written by
+# the test body before the watcher starts is exactly that stale case (drive_w2_stale below).
+
+w2_run_dir() { # → a run dir; RC_ON_TYPE=<n> makes the it2 stub write relaunch.rc when it types
+  WRUN="$BATS_TEST_TMPDIR/bundle-w2"; mkdir -p "$WRUN"
+  cat > "$HOME/.claude/bin/it2" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$HOME/it2-calls.log"
+case "\$1 \$2" in
+  "session list")
+    if [ "\${3:-}" = --json ]; then printf '[{"id": "%s", "tty": "/dev/ttys999"}]\n' "\${STUB_PANE:-NOPROC-PANE}"
+    else printf '%s\n' "\${STUB_PANE:-NOPROC-PANE}"; fi
+    exit 0 ;;
+  "session send")
+    txt="\${!#}"; [ "\${#txt}" -gt 3 ] && printf '%s' "\$txt" > "$HOME/it2-screen"
+    # the LAUNCHER's own fate, written where lr-fire-resume writes it, at the moment it is typed
+    case "\$txt" in *lr-launch*) [ -n "\${RC_ON_TYPE:-}" ] && printf '%s\n' "\$RC_ON_TYPE" > "$WRUN/relaunch.rc" ;; esac
+    ;;
+  "session read") cat "$HOME/it2-screen" 2>/dev/null ;;
+esac
+exit 0
+SH
+  chmod +x "$HOME/.claude/bin/it2"
+}
+
+@test "W2: relaunch.rc=9 is a FAILED:relaunch verdict in ≤3s, with the IDL term in the alarm" {
+  noproc_setup
+  w2_run_dir
+  idl_refusal "$SESS" load "2026-09-19T17:22:17Z"
+  export RC_ON_TYPE=9
+  # the DEFAULT bounds, deliberately: the 3 s property must not be an artifact of a tiny seam.
+  BOOT_WAIT=60 BOOT_STALE=180
+  t0=$(date +%s)
+  drive_noproc
+  t1=$(date +%s)
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  # THE WATCHER'S OWN CLOCK is the subject — its elapsed is measured from the moment it typed, so it
+  # excludes this fixture's arming and pane-probe overhead, which is not what the 3 s claim is about.
+  el="$(printf '%s\n' "$output" | sed -n 's/.*no claude process within \([0-9]*\)s.*/\1/p' | tail -1)"
+  [ -n "$el" ] && [ "$el" -le 3 ] \
+    || { echo "the watcher took ${el:-?}s to read an rc that was on disk before it looked: $output"; false; }
+  [ $((t1 - t0)) -le 15 ] || { echo "the whole run took $((t1 - t0))s: $output"; false; }
+  [[ "$output" == *"FAILED:relaunch:rc=9"* ]] || { echo "$output"; false; }
+  row="$(grep '"class":"recycle-dead"' "$HOME/.claude/logs/handoffs.jsonl" | tail -1)"
+  printf '%s' "$row" | grep -q 'FAILED:relaunch:rc=9' || { echo "$row"; false; }
+  alarm="$(cat "$CC_HANDOFF_ALARM_DIR"/* 2>/dev/null || true)"
+  printf '%s' "$alarm" | grep -q 'term=load' || { echo "NO TERM IN THE ALARM: $alarm"; false; }
+  # the run's own state log carries it too — the store a reader consults without the ledger
+  grep -q 'FAILED' "$WRUN/events.jsonl" || { cat "$WRUN/events.jsonl" 2>/dev/null; false; }
+}
+
+@test "W2: a relaunch.rc OLDER than the type is IGNORED — a previous attempt is not this evidence" {
+  # D1-safety R5. The watcher removes the file before typing AND compares mtime to typed_at; the
+  # unlink alone loses to a writer that recreated it in between, and the timestamp alone loses to a
+  # file nobody cleared. This drives the second half: the rc is pre-seeded, and back-dated.
+  noproc_setup
+  w2_run_dir
+  printf '9\n' > "$WRUN/relaunch.rc"
+  touch -t 202601010000 "$WRUN/relaunch.rc"
+  drive_noproc
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" != *"FAILED:relaunch:rc=9"* ]] \
+    || { echo "a STALE rc was attributed to this attempt: $output"; false; }
+  [[ "$output" == *"STALE:boot"* ]] || { echo "$output"; false; }
+}
+
+@test "W2: 60s with no evidence is INDETERMINATE:boot — an alarm and MORE reading, not a verdict" {
+  noproc_setup
+  w2_run_dir
+  drive_noproc
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"INDETERMINATE:boot"* ]] || { echo "$output"; false; }
+  alarm="$(cat "$CC_HANDOFF_ALARM_DIR"/* 2>/dev/null || true)"
+  printf '%s' "$alarm" | grep -q 'recycle-boot-indeterminate' || { echo "NO INDETERMINATE ALARM: $alarm"; false; }
+  printf '%s' "$alarm" | grep -q 'ABSTENTION, not a failure' || { echo "$alarm"; false; }
+  # …and the terminal state past the OUTER bound is STALE, which is a different word from FAILED
+  [[ "$output" == *"STALE:boot"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"FAILED:relaunch"* ]] || { echo "$output"; false; }
+}
+
+@test "W2: the relaunch is typed ONCE — the retype arm is gone, in the source and in the run" {
+  # THE SOURCE HALF, bounded by two anchors that must BOTH match (a stale range endpoint selects
+  # everything, docs/lessons/absent-range-endpoint-selects-everything).
+  start="$(grep -n 'shell-prompt settle after claude exits' "$HF" | head -1 | cut -d: -f1)"
+  end="$(grep -n 'THE ONE SILENT TERMINAL ARM' "$HF" | head -1 | cut -d: -f1)"
+  [ -n "$start" ] && [ -n "$end" ] && [ "$end" -gt "$start" ] \
+    || { echo "the boot region's anchors moved (start=$start end=$end) — re-pin this case"; false; }
+  n="$(awk -v a="$start" -v b="$end" 'NR>a && NR<b' "$HF" | grep -c 'it2_type_verified' || true)"
+  [ "$n" = 1 ] || { echo "the resume-mode boot region types $n times, not 1 — the retype is back"; false; }
+  ! awk -v a="$start" -v b="$end" 'NR>a && NR<b' "$HF" | grep -q 'retyping once' \
+    || { echo "the retype message survives in the boot region"; false; }
+  # THE BEHAVIOURAL HALF: one type, and no retype line, in a run that never gets a claude back.
+  noproc_setup
+  w2_run_dir
+  drive_noproc
+  # the TYPE line, not any line MENTIONING it: the terminal verdict quotes the same phrase.
+  [ "$(printf '%s\n' "$output" | grep -c '→ relaunch typed into')" = 1 ] || { echo "$output"; false; }
+  [[ "$output" != *"retyping once"* ]] || { echo "$output"; false; }
 }
