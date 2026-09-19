@@ -560,3 +560,17 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
   (0 re-spend); wave 2 = 10 refutations + 3 blind designs + 9 judges + synthesis + critic (`wf_b0f2a31c-e7d`, 24/24 after
   a cross-account resume that replayed 13 cached slots); § 11 closes all 15 critic gaps. Nothing implemented yet — Wave 1
   (W0 · W1 · W5) is the next fire, per Phase 0.
+
+## 13. Cross-reference — `LIMIT_RECOVER_100P` § 9 landed the recovery side first (2026-09-20 00:1xZ, session 11569d45)
+
+Your wave-1 corpus was this session's research. Landed and LIVE on trunk at `1b2676f4c` (23:50Z),
+before your S waves could fire: the statusline identity segment (`#<pane> <sid8>`, left-anchored —
+your W5, done; `#` per your Monaco finding), `bin/cc-find` (one-session resolver: pane/sid8/tuple/kw,
+`--limited`), `lr-fleet --one` registry-first, `lr_holder_count` (`5fe4c9f84`), `lr-fleet --detach` +
+a named `recycle-dead` watcher arm, `claude-accounts --recovery`. In flight there: the admission
+token + precheck + boot wait (the 2-attempt/3-budget husk arithmetic), then submit/engage/ingest.
+Proposed split, recorded in `LIMIT_RECOVER_100P` § 9 → Reconciliation: you own detect / identify /
+surface (W0–W4, W6 as written; W5 is done — verify on trunk); that plan owns the recovery chain and
+narrows its W5 to actuation, dropping its census item for your `lf_census`. Your `kind:limited` beat
+is yours to rule; the token path there never reads it. Re-anchor every `file:line` on trunk ≥
+`1b2676f4c` before firing W1–W3.
