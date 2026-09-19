@@ -226,3 +226,31 @@ Falsifier for (b) if chosen: residency p90 (H: 2.2 h) must not rise over the fol
 
 - 2026-09-19 — plan written from the register; W1–W5 unstarted. Next: land with the register, then
   `handoff-fire.sh --recycle` into the implementation lead that fires W1 ∥ W2 ∥ W4 ∥ W5-probes.
+- 2026-09-19 13:00–14:30 — implementation lead fired batch 1. **W1, W2 and W4 are live and have
+  committed; W5 is held on a capacity refusal; W3's brief is written and waits on W2's land.**
+  Briefs live at `/tmp/claude-501/fire-subagent-lifecycle/{W1,W2,W2-recover,W3,W4,W5}.txt`.
+  Three things were measured that the plan did not anticipate, and all three cost real time:
+  - **A cold `--worktree` fire under load reports `never-engaged` and is wrong.** 3 of 3 cold fires
+    expired their load-scaled window (223 s / 261 s / 480 s) while every one of those sessions was
+    working. Raising `FIRE_ENGAGE_TIMEOUT_BASE` did not help — W4 got the full 480 s cap and still
+    "expired". A warm `--cwd` fire engaged in **9 s** at the same load. Lesson landed as
+    `docs/lessons/cold-fire-under-load-duplicates-the-session.md` (c341a2987, hooked 0194d9cb1).
+  - **The INC-4 re-type duplicated W2 into its own worktree**, and separately `/tmp/fire-W2.txt`
+    collided with a *different* lead's plan file of the same name — their fire read our brief 5 s
+    after we wrote it and ran our W2 from their pane. The surviving duplicate stood itself down
+    correctly and left W2's work complete, green and **uncommitted**; `W2-recover.txt` was written to
+    give that orphaned work an owner, and it engaged in 9 s. Brief files no longer live on a shared
+    `/tmp` path.
+  - **Every expired fire leaves `goal-arm verdict=unreachable`.** W1 and W4 are therefore running
+    with no `/goal` blocking their Stop. They are driven by their briefs and their pings, not by a
+    goal — a successor must not assume the goal is what is holding them to the DoD.
+  W5 is held **deliberately, not only because the gate refused**: probe P1 measures whether the
+  vendor closes four panes inside its 2 000 ms race, and running it at `cc_sp_active` 9–11 with 32+
+  bats processes live would measure the box rather than the subject. Note for whoever fires it: the
+  capacity gate refuses **once** and then admits, so the next attempt is effectively unguarded and
+  the moment has to be chosen by hand.
+  A6 baseline captured for W2 before any fix landed: `grep -c 'rc=67'` on
+  `~/.claude/logs/teammate-lifecycle.log` = **166 all-time, 26 in the 14 d since 2026-09-05, 0 today**
+  (per-day 09-04:5 09-08:13 09-09:2 09-11:4 09-15:3 09-17:4) — matches axis F.
+  The research worktree `wt-research-subagent-lifecycle-2026-09-19` was verified 0-ahead/0-dirty with
+  no process cwd'd there, and removed.
