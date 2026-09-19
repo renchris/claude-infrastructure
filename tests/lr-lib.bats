@@ -181,3 +181,31 @@ ps_stub() { # $@ = literal `pid ppid command` lines the fake ps prints
   [ "$status" -eq 1 ]
   [ -z "$output" ]
 }
+
+# ── CONFIG DIRS: a symlinked store is ONE account, and it must be scanned ONCE ─────────────────
+# `~/.claude-next/projects` is a SYMLINK to `~/.claude/projects` on this box, so the census walked
+# 421 of 2,579 transcript files TWICE — 16.3% of the scan, paid on the hot path and deduped
+# afterwards at lr-fleet.sh:257-262 by row (U14 §1.1). A dedupe at the ROW is the wrong layer: it
+# corrects the output and cannot recover the work, and every OTHER consumer of lr_config_dirs pays
+# the full double walk with no dedupe at all. The identity that matters is the one the scan reads —
+# the resolved `projects/` dir — not the config dir's own name, so the key is `pwd -P` of it.
+@test "config dirs: two stores whose projects/ resolve to ONE directory are enumerated ONCE" {
+  mkdir -p "$HOME/.claude/projects" "$HOME/.claude-secondary/projects"
+  ln -s "$HOME/.claude/projects" "$HOME/.claude-next/projects" 2>/dev/null || {
+    mkdir -p "$HOME/.claude-next"; ln -s "$HOME/.claude/projects" "$HOME/.claude-next/projects"; }
+  run env -u LR_CONFIG_DIRS bash -c ". '$LIB'; lr_config_dirs"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" = 2 ] || { printf '%s\n' "$output" >&2; false; }
+  # the MIRROR is the one dropped, never the store it mirrors: lf_dedup_mirror keeps the row whose
+  # account is not the bare `.claude`, and every downstream account name is derived from this path.
+  [[ "$output" == *"/.claude"* ]] || { printf '%s\n' "$output" >&2; false; }
+  [[ "$output" != *".claude-next"* ]] || { printf '%s\n' "$output" >&2; false; }
+  [[ "$output" == *".claude-secondary"* ]] || { printf '%s\n' "$output" >&2; false; }
+}
+
+@test "config dirs CONTROL: two stores with genuinely SEPARATE projects/ dirs are both kept" {
+  mkdir -p "$HOME/.claude/projects" "$HOME/.claude-next/projects" "$HOME/.claude-tertiary/projects"
+  run env -u LR_CONFIG_DIRS bash -c ". '$LIB'; lr_config_dirs"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" = 3 ] || { printf '%s\n' "$output" >&2; false; }
+}
