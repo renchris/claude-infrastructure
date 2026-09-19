@@ -394,3 +394,51 @@ assert r["pid"]=="-", r
   [[ "$output" == *"RECOVERY PARTIAL — 1 named gap(s)"* ]] || { echo "$output"; false; }
   [[ "$output" == *"1 not owed"* ]] || { echo "$output"; false; }
 }
+
+# ── THE PHANTOM-ACTIVE CORRECTION (2026-09-19) ───────────────────────────────────────────────────
+# A usage-limit kill never runs the Stop hook, so the session's `kind:"prompt"` beat freezes while
+# its pid stays alive — and cc_sp_active counts it mid-turn forever. Measured that day: 8 blocked
+# panes inflated the census to 12 against a ceiling of 8, so the recovery of those very sessions was
+# refused for its whole budget. These pin the correction AND its two directions.
+_ph_setup() { # <kind: limit|network> <pid> → beat dir + transcript fixture; echoes the sid
+  local ekind="$1" pid="$2" sid="aaaaaaaa-1111-2222-3333-000000000000"
+  export CC_BEAT_DIR="$BATS_TEST_TMPDIR/beats-$ekind-$pid"; mkdir -p "$CC_BEAT_DIR"
+  printf '{"sid":"%s","pane":"9","cwd":"/x","pid":%s,"lstart":"Sat 19 Sep 00:00:00 2026","t":1,"kind":"prompt","who":"auto","seq":2}\n' \
+    "$sid" "$pid" > "$CC_BEAT_DIR/$sid.json"
+  local f="$SEC/projects/$SLUG/$sid.jsonl"
+  if [ "$ekind" = limit ]; then
+    printf '{"type":"assistant","timestamp":"2026-09-19T20:00:00.000Z","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 4:30pm"}]}}\n' > "$f"
+  else
+    printf '{"type":"assistant","timestamp":"2026-09-19T20:00:00.000Z","error":"server_error","isApiErrorMessage":true,"message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"API Error: Can'"'"'t reach the API server — check your internet or DNS (ENOTFOUND)"}]}}\n' > "$f"
+  fi
+  printf '%s' "$sid"
+}
+
+_ph_count() { # → lf_phantom_actives, with only the function under test loaded
+  sed -n '/^lf_phantom_actives() {/,/^}/p' "$FLEET" > "$BATS_TEST_TMPDIR/ph.sh"
+  bash -c '. "$1" 2>/dev/null; . "$2"; lf_phantom_actives' _ \
+    "$REPO/scripts/limit-recover/lr-lib.sh" "$BATS_TEST_TMPDIR/ph.sh"
+}
+
+@test "phantom: a LIVE pid whose frozen prompt beat ends in a usage-limit error is subtracted" {
+  _ph_setup limit "$$" >/dev/null          # $$ is this bats process: really alive, really ours
+  run _ph_count
+  [ "$status" -eq 0 ]
+  [ "$output" = "1" ]
+}
+
+@test "phantom CONTROL: a NETWORK death is NOT subtracted — its retry ladder may still be running" {
+  _ph_setup network "$$" >/dev/null
+  run _ph_count
+  [ "$status" -eq 0 ]
+  [ "$output" = "0" ]
+}
+
+@test "phantom CONTROL: a DEAD pid is not subtracted — the census already discards it" {
+  dead=$(bash -c 'echo $$')                # a pid that has certainly exited
+  while kill -0 "$dead" 2>/dev/null; do dead=$((dead + 1)); done
+  _ph_setup limit "$dead" >/dev/null
+  run _ph_count
+  [ "$status" -eq 0 ]
+  [ "$output" = "0" ]
+}
