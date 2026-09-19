@@ -36,6 +36,13 @@ setup() {
   export CC_NOTIFY_BIN="$D/bin/cc-notify"
   export TEAMMATE_CHECKPOINT_DISABLED=1   # the checkpoint is not a gate; skip its git plumbing in tests
   export TEAMMATE_CLOSE_GRACE_S=0         # detached pane close fires immediately (no 3s wait)
+  # RC-5c's survivor check reads the PROCESS TABLE, and unfixtured that is the operator's live box —
+  # ~20-40 concurrent sessions, several of them real teammates. A close arm here would then be a
+  # function of who else is running (HERMETIC: the suite must not be a function of who runs it). The
+  # default table carries no agent rows at all, so every pre-existing close arm keeps the disposition
+  # it was written against; the three RC-5c arms below override this seam with their own table.
+  printf '%s\n' "  4243     1 /bin/zsh -l" > "$D/pstable-default.txt"
+  export CC_WF_PSTABLE_FILE="$D/pstable-default.txt"
   LOGF="$HOME/.claude/logs/teammate-lifecycle.log"
 
   # ── PATH shims (each records its calls to a baked-in absolute path) ──
@@ -1338,4 +1345,193 @@ EOF
   run env WORKTREE="$G" bash -uo pipefail -c "$PRED"
   [ "$status" -ne 0 ]
   true
+}
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# RC-5a / RC-5c — W1 of docs/plans/SUBAGENT_LIFECYCLE_ROOT_CAUSE.md. Pinned pre-fix sha d88366d52.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+
+# An `attachment` record — what the runtime actually appends in the SAME SECOND as a tool_use.
+# Measured on the live stores 2026-09-19: of the 583 records immediately following an assistant
+# tool_use in one 2026-09 transcript, 229 are `attachment:hook_success`, 58 `last-prompt` and 6
+# `queue-operation` — i.e. `tail -n 1` sees a NON-assistant record on 57% of mid-call samples, and
+# the old predicate returns not-in-flight for every one of them.
+txattach() { printf '{"type":"attachment","timestamp":"%s.000Z","attachment":{"type":"hook_success"}}\n' "$(iso "$2")" >> "$D/proj/slug/$1.jsonl"; }
+# A Bash launched with run_in_background — the harness returns its tool_result IMMEDIATELY ("Command
+# running in background with ID: <bid>"), so even a correct last-assistant walk reads the turn as
+# finished while the job runs on. This is the lead-reported class ("the idle-teammate hook REAPS a
+# teammate that goes idle while a background job runs … killed their characterize runs").
+txbg()       { printf '{"type":"assistant","timestamp":"%s.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"%s","name":"Bash","input":{"command":"sleep 9999","run_in_background":true}}]}}\n' "$(iso "$2")" "${3:-bgtu1}" >> "$D/proj/slug/$1.jsonl"; }
+# the LAUNCH-CONFIRMING result. Its text is the discriminator: a background tool_use whose result is
+# a classifier deny / model-unavailable / empty NEVER RAN, so it must not read as in flight (9 of the
+# 27 unnotified launches measured on 2026-09-19 are exactly that shape).
+txbgresult() { printf '{"type":"user","timestamp":"%s.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"%s","content":"Command running in background with ID: %s. Output is being written to: /tmp/out.log"}]}}\n' "$(iso "$2")" "${3:-bgtu1}" "${4:-bsh1}" >> "$D/proj/slug/$1.jsonl"; }
+# a background tool_use the harness REFUSED — no shell id, so nothing is running
+txbgdeny()   { printf '{"type":"user","timestamp":"%s.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"%s","content":"Permission for this action was denied by the Claude Code auto mode classifier. Reason: Blocked by classifier."}]}}\n' "$(iso "$2")" "${3:-bgtu1}" >> "$D/proj/slug/$1.jsonl"; }
+# the task-notification the harness enqueues when the background job FINISHES (verified shape:
+# a `queue-operation` record whose content carries `<tool-use-id>…</tool-use-id>`)
+txtasknotif(){ printf '{"type":"queue-operation","operation":"enqueue","timestamp":"%s.000Z","content":"<task-notification>\\n<task-id>t1</task-id>\\n<tool-use-id>%s</tool-use-id>\\n</task-notification>"}\n' "$(iso "$2")" "${3:-bgtu1}" >> "$D/proj/slug/$1.jsonl"; }
+
+# (C3) RED PROOF for RC-5a. tool_use(Bash) → attachment → EOF. The tool has NOT returned; the
+#      teammate is mid-call. The pre-fix predicate reads `tail -n 1`, sees `.type=="attachment"`,
+#      returns not-in-flight, and the member is reaped mid-call — measured 4/4 P1 premature closes,
+#      with the calls returning 1 h 45 m and 3 h 29 m AFTER the close.
+@test "RC-5a: tool_use then an attachment record → still IN FLIGHT (the tail -n 1 defect)" {
+  local sid=sidA1 team=teamA1 member=wkrAttach pane=%201 wt="$D/wtA1"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-A1 "$wt" 3600
+  txtool "$sid" 30 tu-attach          # trailing tool_use, NO tool_result …
+  txattach "$sid" 30                  # … and the runtime's attachment lands on top of it
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'"continue": false'* ]] || false
+  grep -q "tool in flight" "$LOGF"
+  [ ! -e "$D/tmux-calls.log" ]
+  [ ! -e "$D/it2-calls.log" ]
+  [ ! -e "$D/notify-calls.log" ]
+}
+
+# (C4) EQUIVALENCE GUARD — GREEN BOTH SIDES OF THE FIX, and labelled as such: it proves the walk-back
+#      did not simply become "always in flight". Its power is proved by the mutant in (C4m) below,
+#      not by this arm passing.
+@test "RC-5a equivalence guard: tool_use → attachment → tool_result ⇒ NOT in flight (green both arms)" {
+  local sid=sidA2 team=teamA2 member=wkrAttachDone pane=%202 wt="$D/wtA2"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-A2 "$wt" 3600
+  txtool "$sid" 9000 tu-ok; txattach "$sid" 8950; txtoolresult "$sid" 8900 tu-ok
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  ! grep -q "tool in flight" "$LOGF" || false
+  grep -q "Auto-shutdown idle teammate: $member" "$LOGF"
+}
+
+# (C4m) THE MUTANT THAT GIVES (C4) POWER. A predicate that answers IN-FLIGHT unconditionally passes
+#       (C3) and every other RED arm here; only (C4) kills it. Built and executed rather than
+#       asserted, because a test green on both arms proves nothing by itself.
+@test "RC-5a mutant: an always-in-flight predicate is KILLED by the equivalence guard" {
+  local mut="$D/mutant-hook.sh"
+  # Replace the predicate BODY with `return 0` (always in flight), leaving every other gate intact.
+  awk '
+    /^_tool_in_flight\(\) \{/ { print; print "  return 0"; skip=1; next }
+    skip && /^\}$/            { print; skip=0; next }
+    skip                      { next }
+    { print }
+  ' "$H" > "$mut"
+  grep -q 'return 0' "$mut"
+  local sid=sidA2m team=teamA2m member=wkrMutant pane=%203 wt="$D/wtA2m"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-A2M "$wt" 3600
+  txtool "$sid" 9000 tu-ok; txattach "$sid" 8950; txtoolresult "$sid" 8900 tu-ok
+  run bash -c "printf '%s' '$(mkinput "$member" "$team" "$sid" "$wt")' | bash '$mut'"
+  [ "$status" -eq 0 ]
+  # the mutant defers where the real hook reaps ⇒ (C4) would go RED against it ⇒ (C4) has power
+  grep -q "tool in flight" "$LOGF"
+  ! grep -q "Auto-shutdown idle teammate: $member" "$LOGF" || false
+}
+
+# (C5) RED PROOF for the RC-5a background arm. A confirmed background launch with no task-notification
+#      is a job STILL RUNNING; its tool_result landed within the second, so the last-assistant walk
+#      alone still reads the turn as finished.
+@test "RC-5a: a launched background Bash with no task-notification → IN FLIGHT" {
+  local sid=sidA3 team=teamA3 member=wkrBg pane=%204 wt="$D/wtA3"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-A3 "$wt" 3600
+  tx "$sid" 9100
+  txbg "$sid" 9000 bg-live; txbgresult "$sid" 8990 bg-live bsh-live
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'"continue": false'* ]] || false
+  grep -q "tool in flight" "$LOGF"
+  [ ! -e "$D/tmux-calls.log" ]
+  [ ! -e "$D/it2-calls.log" ]
+}
+
+# (C6) The other direction — the notification landed, so the job is DONE and the member closes as
+#      before. Without this, (C5) passes against "any background launch ever ⇒ never close again".
+@test "RC-5a control: background Bash WITH its task-notification ⇒ NOT in flight" {
+  local sid=sidA4 team=teamA4 member=wkrBgDone pane=%205 wt="$D/wtA4"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-A4 "$wt" 3600
+  tx "$sid" 9100
+  txbg "$sid" 9000 bg-done; txbgresult "$sid" 8990 bg-done bsh-done; txtasknotif "$sid" 8800 bg-done
+  tx2() { :; }
+  printf '{"type":"assistant","timestamp":"%s.000Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}\n' "$(iso 8700)" >> "$D/proj/slug/$sid.jsonl"
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  ! grep -q "tool in flight" "$LOGF" || false
+  grep -q "Auto-shutdown idle teammate: $member" "$LOGF"
+}
+
+# (C7) THE OVER-HOLD GUARD, and it is the operator's "don't break what isn't broken" constraint made
+#      executable. A background tool_use the harness REFUSED never ran, so it has no notification by
+#      construction — 9 of the 27 unnotified launches measured across 941 live background launches
+#      on 2026-09-19 are this shape. Holding on them would convert a premature-close bug into a
+#      permanent-hold bug.
+@test "RC-5a over-hold guard: a DENIED background Bash never ran ⇒ NOT in flight" {
+  local sid=sidA5 team=teamA5 member=wkrBgDeny pane=%206 wt="$D/wtA5"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-A5 "$wt" 3600
+  tx "$sid" 9100
+  txbg "$sid" 9000 bg-deny; txbgdeny "$sid" 8990 bg-deny
+  printf '{"type":"assistant","timestamp":"%s.000Z","message":{"role":"assistant","content":[{"type":"text","text":"denied, moving on"}]}}\n' "$(iso 8700)" >> "$D/proj/slug/$sid.jsonl"
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  ! grep -q "tool in flight" "$LOGF" || false
+  grep -q "Auto-shutdown idle teammate: $member" "$LOGF"
+}
+
+# (C8) RED PROOF for RC-5c. `✓ closed pane` is verified by PANE ABSENCE only; 11 of 105 members kept
+#      writing after their ✓, including an 8-member wave that delivered two hours later. The close
+#      must ALSO ask whether the member's PROCESS is gone — by the three-flag `--agent-id` conjunction
+#      from hooks/lib/agent-identity.sh, never a bare `pgrep -f <name>` (memory:
+#      pgrep-f-matches-agent-briefs — a brief that merely MENTIONS the name matches).
+#      THIS IS AN INSTRUMENT: it logs and pages, it must NEVER kill and never retry the close.
+@test "RC-5c: a member whose PROCESS survives the pane close is logged (never killed)" {
+  local sid=sidS1 team=teamS1 member=wkrSurvive pane=%207 wt="$D/wtS1"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-S1 "$wt" 3600
+  tx "$sid" 9000
+  # A process table in which the member's own CC process is STILL RUNNING after the close.
+  printf '%s\n' \
+    "  4242     1 /usr/local/bin/claude.exe --agent-id ${member}@session-${team} --agent-name ${member} --team-name session-${team}" \
+    "  4243     1 /bin/zsh -l" > "$D/pstable-survive.txt"
+  export CC_WF_PSTABLE_FILE="$D/pstable-survive.txt"
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  grep -q "✗ process survived pane close ($member, pid 4242)" "$LOGF"
+  grep -q "cc-notify" "$D/notify-calls.log"
+  # NEVER A KILL: the remedy for a survivor is RC-4/RC-6 in W2, not a signal from here.
+  [ ! -e "$D/kill-calls.log" ]
+}
+
+# (C9) The other direction: a process table with NO surviving member ⇒ the ✓ stands alone, no ✗, no
+#      page. Without this, (C8) passes against a check that logs the line unconditionally.
+@test "RC-5c control: no surviving process ⇒ plain ✓, no survivor line, no page" {
+  local sid=sidS2 team=teamS2 member=wkrGone pane=%208 wt="$D/wtS2"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-S2 "$wt" 3600
+  tx "$sid" 9000
+  printf '%s\n' "  4243     1 /bin/zsh -l" > "$D/pstable-gone.txt"
+  export CC_WF_PSTABLE_FILE="$D/pstable-gone.txt"
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  ! grep -q "process survived pane close" "$LOGF" || false
+  [ ! -e "$D/notify-calls.log" ]
+}
+
+# (C10) THE pgrep TRAP, pinned. A table whose ONLY match is a brief that MENTIONS the member's
+#       agent-id (the shape `pgrep -f` returns 50 rows for when the truth is 1) must NOT be read as
+#       a survivor: the row is not the member's own claude.exe.
+@test "RC-5c: a brief that merely MENTIONS the agent-id is not a survivor" {
+  local sid=sidS3 team=teamS3 member=wkrBrief pane=%209 wt="$D/wtS3"
+  mkdir -p "$wt"; worktreetsv "$team" "$member" "$wt"; teamcfg "$team" "$member" "$pane"
+  reg "$sid" PANE-S3 "$wt" 3600
+  tx "$sid" 9000
+  printf '%s\n' \
+    "  4244     1 /bin/bash -c echo the closer greps for --agent-id ${member}@session-${team} which is wrong" \
+    > "$D/pstable-brief.txt"
+  export CC_WF_PSTABLE_FILE="$D/pstable-brief.txt"
+  run hookrun "$member" "$team" "$sid" "$wt"
+  [ "$status" -eq 0 ]
+  ! grep -q "process survived pane close" "$LOGF" || false
 }

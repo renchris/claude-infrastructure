@@ -1,6 +1,7 @@
 #!/bin/bash
 # TeammateIdle hook — graceful auto-shutdown with work preservation.
-# Fires (LEAD-side) when a teammate goes idle after finishing its turn.
+# Fires inside the TEAMMATE's OWN Stop pass when it goes idle after finishing its turn.
+# (Locus corrected 2026-09-19 — it is NOT lead-side; see § THE LOCUS below `export PATH`.)
 #
 # Design — checkpoint-first, defer-until-quiesced, then close the EXACT pane:
 #   1. CHECKPOINT FIRST via teammate-checkpoint.sh (synthetic TeammateIdle
@@ -27,12 +28,12 @@
 #      running-job panes REGARDLESS of the never-prompt profile; memory:
 #      it2-session-close-force-modal-2026-06-09) — or `tmux kill-pane -t <id>`.
 #
-# WHY NOT `kill -TERM $PPID` (the retired mechanism): a TeammateIdle hook runs
-# on the LEAD as  lead-claude → /bin/sh -c → bash, so $PPID is the /bin/sh shim,
-# already dead by the time the backgrounded kill fired — the signal then hit a
-# PID-RECYCLED process (intermittently the lead or an unrelated shell). That is
-# exactly the observed "closes too early / inconsistent" regression. Targeting
-# the recorded pane id is deterministic and hits only the teammate's pane.
+# WHY NOT `kill -TERM $PPID` (the retired mechanism) — KEPT AS HISTORY, cause corrected (RC-7,
+# see § THE LOCUS below): the hook runs in the TEAMMATE's own Stop pass as teammate-claude →
+# /bin/sh -c → bash, so $PPID is the /bin/sh shim, already dead by the time the backgrounded kill
+# fired, and the signal then hit a PID-RECYCLED process. That is the observed "closes too early /
+# inconsistent" regression. Targeting the recorded pane id is deterministic and hits only the
+# teammate's pane.
 #
 # Uses JSON {"continue": false} with exit 0 to stop the teammate's turn.
 #
@@ -54,6 +55,27 @@ set -uo pipefail
 # APPEND, never prepend: a session that already reaches these keeps its own resolution order.
 PATH="$PATH:$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin"
 export PATH
+
+# ── § THE LOCUS — this hook runs INSIDE THE TEAMMATE, not on the lead (RC-7, 2026-09-19) ─────────
+# The header said "(LEAD-side)" for this file's whole life and the design notes above reasoned from
+# it. Read from the binary, the TeammateIdle block runs in the MEMBER's own Stop pass and only when
+# the session is a team member (2.1.260 @19651537); 2,070 of 2,083 PPID-forensic lines in
+# ~/.claude/logs/teammate-lifecycle.log show the TEAMMATE's own claude.exe as this hook's ancestor.
+#
+# Two consequences the wrong locus hid, and both are load-bearing:
+#   · A blocking settings `Stop` hook evaluated EARLIER in the same pass returns before this block
+#     is ever reached — so no TeammateIdle fires, `isActive:false` is never written and no
+#     idle_notification goes out. That is how completion-assert's convictions over a shared-cwd
+#     assignee silently DISARMED this closer (register RC-3; fixed in hooks/completion-assert.sh).
+#   · `$PPID` here is the MEMBER's own `/bin/sh` shim, never the lead's — which is the corrected
+#     cause of the retired `kill -TERM $PPID` mechanism noted above.
+#
+# THIS COMMENT'S POSITION IS NOT COSMETIC. scripts/unattended-path-lint.sh honours a file's own PATH
+# hardening only when it appears in the opening section (`file_effective_path`, lines 1-60). The
+# first draft of this correction sat at the top of the file and pushed `PATH=` from line 55 to 68,
+# which silently un-hardened the file and turned five pre-existing bare-name sites (`timeout`,
+# `gtimeout`, `tmux`, `cc-sessions`, `yq`) RED at the land gate — a docs-only edit with a real
+# behavioural consequence. Prose goes BELOW the hardening; keep it that way.
 
 if [[ "${TEAMMATE_SHUTDOWN_DISABLED:-0}" == "1" ]]; then
   exit 0
@@ -263,6 +285,50 @@ retract_teardown_marker() { # $1=pane-uuid  $2=sid
   return 0
 }
 
+# ── RC-5c: DID THE PROCESS GO, OR ONLY THE PANE? (2026-09-19) ────────────────────────────────────
+# `✓ closed pane` is verified by pane ABSENCE, and a pane is not a process. Measured in the
+# register's L §5: 11 of 105 members kept WRITING after their `✓`, including an eight-member wave
+# that delivered two hours later — the pane was gone, the `claude --agent-id` process was not, and
+# the only outcome signal this subsystem emits said the close had succeeded.
+#
+# THIS IS AN INSTRUMENT, NOT AN ACTUATOR. It logs and pages; it never kills, never retries the close
+# and never changes a gate. The remedy for a survivor is the transport work in RC-4/RC-6, and a
+# signal that quietly reaped one would be exactly the general catch this wave is forbidden to write.
+#
+# THE THREE-FLAG CONJUNCTION, NOT `pgrep -f <name>` (memory: pgrep-f-matches-agent-briefs). `ps -o
+# command=` flattens argv, so a brief that merely MENTIONS a member's agent-id matches a single-flag
+# scan — read 50 rows where the truth was 1, and a live scan run while writing that hook returned a
+# bogus row off an awk command line. Required here, exactly as hooks/lib/agent-identity.sh requires
+# them: the row must be a `claude.exe`, carry all three of --agent-id/--agent-name/--team-name, and
+# be INTERNALLY CONSISTENT (the id is `<agent-name>@<team-name>`, which prose does not reproduce by
+# accident). The predicate is re-stated rather than sourced for the same reason _tool_in_flight is:
+# this hook already runs inside the member's Stop pass and must not take a library's side effects.
+# Seam: CC_WF_PSTABLE_FILE — the SAME name agent-identity.sh uses, so one fixture pins both.
+_surviving_member_pid() {  # <member-name> → echoes the pid of a still-running claude.exe for it
+  local who="${1:-}" tbl
+  [[ -n "$who" ]] || return 1
+  if [[ -n "${CC_WF_PSTABLE_FILE:-}" && -f "${CC_WF_PSTABLE_FILE}" ]]; then
+    tbl="$(cat "$CC_WF_PSTABLE_FILE" 2>/dev/null)"
+  else
+    tbl="$(ps -axo pid=,ppid=,command= 2>/dev/null)"
+  fi
+  [[ -n "$tbl" ]] || return 1
+  printf '%s\n' "$tbl" | awk -v who="$who" '
+    {
+      p = $1; c = ""; for (i = 3; i <= NF; i++) c = c " " $i; c = c " "
+      if (c !~ /claude\.exe/) next
+      if (c !~ / --agent-id / || c !~ / --agent-name / || c !~ / --team-name /) next
+      n = split(c, w, " "); id = ""; nm = ""; tm = ""
+      for (i = 1; i < n; i++) {
+        if (w[i] == "--agent-id"   && id == "") id = w[i + 1]
+        if (w[i] == "--agent-name" && nm == "") nm = w[i + 1]
+        if (w[i] == "--team-name"  && tm == "") tm = w[i + 1]
+      }
+      at = index(id, "@")
+      if (at > 1 && substr(id, 1, at - 1) == nm && substr(id, at + 1) == tm && nm == who) { print p; exit }
+    }' 2>/dev/null | head -1
+}
+
 # Close + log one pane (shared by the config-resolved AND implicit-team paths).
 close_and_log() {
   local pane="$1" who="$2"
@@ -305,6 +371,16 @@ close_and_log() {
         "teammate-auto-shutdown: pane $pane ($who) SURVIVED a close that reported success — the actuator lied. Pane is still standing; close it manually and treat the backend as suspect."
     else
       log "  ✓ closed pane $pane ($who)"
+      # …AND the pane going is not the process going (RC-5c). Read AFTER the ✓, so the log keeps
+      # both facts: the pane really did close, and the member really did not stop.
+      local _surv_pid; _surv_pid="$(_surviving_member_pid "$who")"
+      if [[ -n "$_surv_pid" ]]; then
+        log "  ✗ process survived pane close ($who, pid $_surv_pid)"
+        # Damped on (pane, who) — STATE, never a clock — like every other page in this file: a
+        # re-fire on the same survivor stays quiet while a NEW one is genuinely new news.
+        _page_desk_damped "PROC-SURVIVED:$pane:$who" \
+          "teammate-auto-shutdown: pane $pane closed but $who's process is STILL RUNNING (pid $_surv_pid). The member can keep writing with no pane to read it. NOT killed — this is an instrument; the transport fix is RC-4/RC-6."
+      fi
     fi
   elif [[ "$err" == *"not found"* || "$err" == *"find pane"* ]]; then
     log "  ~ pane $pane ($who) already gone (${err:-not found})"
@@ -521,26 +597,41 @@ _beat_or_hold() {  # <gap-description> → 0 = proceed; else pages the desk and 
 # rather than sourced: cc-classify is an executable with no library guard, so sourcing it would run
 # its main. Keep the two in step; tests/teammate-auto-shutdown.bats pins this copy's semantics.
 _tool_in_flight() {  # <session-id> → 0 if a tool call is outstanding
-  local sid="${1:-}" f last_rec tu_id
+  local sid="${1:-}" f last_asst tu_ids tu_id results bg_ids bg_id bg_launched
   [[ -n "$sid" && "$sid" != "unknown" ]] || return 1
   f="$(_find_transcript "$sid")" || return 1
   [[ -s "$f" ]] || return 1
-  last_rec="$(tail -n 1 "$f" 2>/dev/null)"
-  [[ -n "$last_rec" ]] || return 1
-  printf '%s' "$last_rec" \
-    | jq -e '.type=="assistant" and ((.message.content // []) | map(select(.type=="tool_use")) | length > 0)' \
-      >/dev/null 2>&1 || return 1
-  tu_id="$(printf '%s' "$last_rec" \
-    | jq -r '(.message.content // []) | map(select(.type=="tool_use")) | last | .id // empty' 2>/dev/null)"
-  if [[ -n "$tu_id" ]]; then
-    # a matching tool_result anywhere ⇒ the tool returned ⇒ not in flight
-    # DRAINED, not -q. Under the `set -uo pipefail` above, `grep -q` exits on the first match, the
-    # producer takes SIGPIPE, and pipefail hands the caller a non-zero — so a MATCH reads as NO
-    # MATCH. Here that means "the tool_result is absent" ⇒ the call reads as still in flight, so
-    # this site's failure direction is SAFE (a finished teammate is kept alive, never killed mid
-    # call). It is drained anyway because leaving one `-q` in a file whose siblings were drained
-    # for this exact reason is how the inline copy survives the class (the fix travels with the
-    # FILE, the defect travels with the FEED).
+
+  # ── (1) THE LAST *ASSISTANT* RECORD, NEVER `tail -n 1` (RC-5a, 2026-09-19) ────────────────────
+  # `tail -n 1` asked "is the newest record an assistant tool_use?", which is a question about the
+  # WRITER's most recent append, not about the model's turn. The runtime appends bookkeeping records
+  # in the SAME SECOND as the tool_use — `attachment` (hook_success), `last-prompt`,
+  # `queue-operation` — so the newest record is routinely NOT the assistant one. Measured on the
+  # live stores 2026-09-19, over the 583 records immediately following an assistant tool_use in one
+  # 2026-09 transcript: 229 `attachment`, 58 `last-prompt`, 6 `queue-operation` — 57% of mid-call
+  # samples answered NOT-in-flight while a Bash was running. Population: 4 of 4 P1 premature closes
+  # in the register's L §1, with the killed calls returning 1 h 45 m and 3 h 29 m AFTER the close.
+  # Walking back to the last ASSISTANT record asks the question the predicate always meant to ask,
+  # and it is strictly narrower than a time bound: no timer, no idle count, no age.
+  last_asst="$(jq -c 'select(.type=="assistant")' "$f" 2>/dev/null | tail -n 1)"
+  [[ -n "$last_asst" ]] || return 1
+
+  # EVERY trailing tool_use id, not just the last one: a parallel tool block emits several in ONE
+  # assistant record, and `last | .id` read only the final one — two of three still running read as
+  # finished. Any unmatched id ⇒ a tool is outstanding.
+  tu_ids="$(printf '%s' "$last_asst" \
+    | jq -r '(.message.content // []) | map(select(.type=="tool_use")) | .[] | .id // empty' 2>/dev/null)"
+  if [[ -n "$tu_ids" ]]; then
+    # a matching tool_result anywhere ⇒ that call returned
+    #
+    # DRAINED, NEVER `grep -q` — and now `case`, which is drained BY CONSTRUCTION. Under the
+    # `set -uo pipefail` above, `grep -q` exits on the first match, the producer takes SIGPIPE, and
+    # pipefail hands the caller a non-zero — so a MATCH reads as NO MATCH. Here that means "the
+    # tool_result is absent" ⇒ the call reads as still in flight, so this site's failure direction
+    # is SAFE (a finished teammate is kept alive, never killed mid call). It was drained anyway
+    # because leaving one `-q` in a file whose siblings were drained for this exact reason is how
+    # the inline copy survives the class (the fix travels with the FILE, the defect travels with
+    # the FEED).
     #
     # THE FLOOR HERE IS NOT THE PUBLISHED ONE, AND THAT IS THE POINT. The 37,121 B "safe to" figure
     # in this repo's other drained predicates was measured on `printf '%s\n' "$VAR"` — a producer
@@ -554,12 +645,59 @@ _tool_in_flight() {  # <session-id> → 0 if a tool call is outstanding
     # ALWAYS-INVERTED ≥30,000 B — under half the published builtin floor.
     # This feed is ~31 B per tool_result record: max 23,715 B over 3,344 transcripts across the two
     # PRESENT account stores (ranked by a monotone proxy, not by file bytes), with 4 already past
-    # the 16,500 B racy onset and none yet at 30,000. RACY TODAY, not latent.
-    jq -rc 'select(.type=="user") | (.message.content // []) | if type=="array" then .[] else empty end
-            | select(.type=="tool_result") | .tool_use_id // empty' "$f" 2>/dev/null \
-      | grep -xF "$tu_id" >/dev/null && return 1
+    # the 16,500 B racy onset and none yet at 30,000. RACY TODAY, not latent — which is why the
+    # match moved from the drained `grep -xF` to `case`, a BUILTIN with no pipe and therefore no
+    # race at any size. bin/cc-classify's mirror made the same move on 2026-08-28 for the same
+    # feed; the two are now byte-identical in this respect rather than merely both-safe.
+    results="$(jq -rc 'select(.type=="user") | (.message.content // []) | if type=="array" then .[] else empty end
+                       | select(.type=="tool_result") | .tool_use_id // empty' "$f" 2>/dev/null)"
+    while IFS= read -r tu_id; do
+      [[ -n "$tu_id" ]] || continue
+      case $'\n'"$results"$'\n' in
+        *$'\n'"$tu_id"$'\n'*) ;;      # returned
+        *) return 0 ;;                # outstanding ⇒ a tool is RUNNING
+      esac
+    done <<< "$tu_ids"
   fi
-  return 0
+
+  # ── (2) A BACKGROUND BASH IS STILL WORK, AND ITS tool_result LIES ABOUT THAT (RC-5a) ──────────
+  # `run_in_background` returns its tool_result within the second ("Command running in background
+  # with ID: <bid>"), so even arm (1) — correctly walked back to the last assistant record — reads
+  # the turn as FINISHED while the job runs on. This is the class the lead reported in its own
+  # words: "the idle-teammate hook REAPS a teammate that goes idle while a background job runs …
+  # killed their characterize runs". The completion signal is the harness's own task-notification,
+  # which carries `<tool-use-id>…</tool-use-id>`; its absence is what "still running" looks like.
+  #
+  # THE LAUNCH-CONFIRMATION TERM IS THE OVER-HOLD GUARD, and it is not decoration. Measured across
+  # 941 live background launches on 2026-09-19: 27 carry no task-notification, and 9 of those 27
+  # NEVER RAN — the tool_result is a classifier deny, a live-/goal refusal, a model-unavailable
+  # message or empty. Holding on those would convert a premature-close bug into a permanent-hold
+  # bug, which is the operator's "don't overfit and break what isn't broken" constraint made
+  # concrete. Requiring the result to carry a background shell id removes exactly that third.
+  # RESIDUAL, STATED RATHER THAN HIDDEN: the other 18 of 941 (1.9%) are launches that genuinely ran
+  # and were never notified — killed shells, or a notification the transcript never received. Those
+  # now read IN FLIGHT indefinitely, and that is the SAFE direction this predicate has always taken
+  # (unknown ⇒ keep the member alive; the lead resolves it, register RC-8). It is a hold, never a
+  # reap, and nothing here closes anything.
+  bg_ids="$(jq -r 'select(.type=="assistant") | (.message.content // [])[]?
+                   | select(.type=="tool_use" and (.input.run_in_background == true)) | .id // empty' "$f" 2>/dev/null)"
+  if [[ -n "$bg_ids" ]]; then
+    bg_launched="$(jq -rc 'select(.type=="user") | (.message.content // []) | if type=="array" then .[] else empty end
+                           | select(.type=="tool_result")
+                           | select((.content // "" | tostring) | test("running in background with ID:"))
+                           | .tool_use_id // empty' "$f" 2>/dev/null)"
+    while IFS= read -r bg_id; do
+      [[ -n "$bg_id" ]] || continue
+      # never actually launched (deny / unavailable / empty result) ⇒ nothing is running
+      case $'\n'"$bg_launched"$'\n' in *$'\n'"$bg_id"$'\n'*) ;; *) continue ;; esac
+      # the harness notified its completion ⇒ the job is done. `grep -qF` on a FILE, not a pipeline:
+      # no producer to take SIGPIPE, so pipefail cannot invert it here.
+      grep -qF "<tool-use-id>$bg_id</tool-use-id>" "$f" 2>/dev/null && continue
+      return 0                        # launched, unnotified ⇒ still running
+    done <<< "$bg_ids"
+  fi
+
+  return 1
 }
 
 INPUT=$(cat)
