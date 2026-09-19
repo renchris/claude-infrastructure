@@ -1,0 +1,368 @@
+#!/usr/bin/env bash
+# cc-find — resolve ONE live session from whatever the operator actually has in hand.
+# (LIMIT_RECOVER_100P W4, from U07 §6. Read-only: this script never types, kills, ships or deploys.)
+#
+# THE PROBLEM IT SOLVES. On 2026-09-19 a limit killed five sessions and the recovery spent its
+# first four turns on IDENTIFICATION, from screenshots. Measured that afternoon over 16 live
+# sessions (U07 §0, §4): panes 122 and 124 rendered the BYTE-IDENTICAL statusline, 6 of 16 shared
+# the cwd basename, all 6 of those shared the git sha because it is one checkout, and the sha MOVES
+# under a session that has done nothing. The shipped lookup, `cc-sessions`, took 30.4 s and 41.0 s
+# on two consecutive runs and printed no session id at all. A registry join does the same job in
+# 0.18 s with strictly more information — a 48-65x speedup — because the registry row IS the index:
+# its FILENAME is the pane id and it carries the sid, the account, the cwd, the pid and the pid's
+# own start time.
+#
+# THE FOUR INPUT SHAPES, in order of how much they can be trusted:
+#   cc-find 117              a pane id (`⌗117` and `#117` too — the statusline renders the mark)
+#   cc-find cb227486         a sid8 (what the statusline now renders beside the pane)
+#   cc-find --tuple '<line>' a statusline rendering, which is NOT a key — see the refusal below
+#   cc-find --kw '<text>'    a keyword, bounded, when the screenshot carries no key at all
+#   cc-find --limited        every session whose last assistant word is a usage-limit error
+#
+# THE REFUSAL IS THE FEATURE. A tuple is filtered on (account, cwd basename, effort) and ranked by
+# |pct − live pct|, and when the top two candidates are within CC_FIND_PCT_TIE (12) points it exits
+# 2 and prints BOTH. 12 is the p90 drift of the context % over the 30-50 minute band a screenshot
+# actually reaches an agent in (U07 §4, n=27). An ambiguous identification that silently picks one
+# is precisely how a wrong pane gets recycled, and the pair that forced this rule — 122 and 124 —
+# were at the same percentage as well as the same everything else.
+#
+# NEVER THE GIT SHA. It looks like the most specific field on the line and it is the worst: it is a
+# property of a CHECKOUT, not of a session, and it advanced b80f9408e → 0194d9cb1 inside one
+# 25-minute research window. A screenshot's sha ages out of agreement with the live pane without
+# the session having done anything, so filtering on it REFUSES THE CORRECT ANSWER.
+#
+# LIVENESS IS (pid, lstart). Not `kill -0`, which answers "is SOME process holding this pid" and
+# never "is THAT process still this session" — a registry row is retained for hours after its
+# session dies, so the recycled-pid window is real. Not telemetry age either: pane 126 was 52.5
+# minutes stale WHILE ALIVE, which is the blindness statusline.sh documents at its own writer.
+#
+# RULE 0 — A TEAMMATE IS NEVER A RECOVERY TARGET. `agentName` in the first 8 KB of the transcript
+# means the session is lead-owned; it is PRINTED, classed TEAMMATE, and excluded from every ranked
+# or filtered result, because nothing is owed by anyone on it.
+#
+# OUTPUT: one TSV row per answer —
+#   sid <TAB> pane <TAB> account <TAB> cfg <TAB> cwd <TAB> liveness <TAB> class
+# rc 0 = resolved (one row, or the --limited/--kw list) · 1 = nothing matched, nothing printed ·
+# 2 = AMBIGUOUS, every candidate printed · 3 = usage.
+set -uo pipefail
+
+REG_DIR="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
+TEL_DIR="${CC_TELEMETRY_DIR:-/tmp/cc-telemetry}"
+PCT_TIE="${CC_FIND_PCT_TIE:-12}"
+KW_BUDGET_S="${CC_FIND_KW_BUDGET_S:-2}"
+HEAD_BYTES="${CC_FIND_HEAD_BYTES:-8192}"
+
+# lr-lib.sh holds the ONE spelling of "the last assistant record is a usage-limit error"
+# (lr_last_api_error) and of "which config dirs exist" (lr_config_dirs). Re-deriving either here is
+# how two auditors end up disagreeing about one population — the defect lr-lib.sh was created to
+# end. Resolved through $0's REAL path first: ~/.claude/bin/cc-find is a symlink into the checkout,
+# so a `$0`-relative sibling lookup that skips readlink resolves against the LINK's directory.
+_CF_SELF="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+_CF_BIN="$(cd "$(dirname "$_CF_SELF")" && pwd)"
+for _cf_lib in "$_CF_BIN/../scripts/limit-recover/lr-lib.sh" \
+               "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-lib.sh" \
+               "$HOME/.claude/scripts/limit-recover/lr-lib.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved library ladder, same shape as lr-fleet.sh:33
+  [ -f "$_cf_lib" ] && { . "$_cf_lib"; break; }
+done
+command -v lr_config_dirs >/dev/null 2>&1 || {
+  echo "cc-find: FATAL — lr-lib.sh not found beside $_CF_BIN" >&2; exit 3; }
+
+usage() {
+  cat >&2 <<'USAGE'
+cc-find — one live session, from a pane id, a sid8, a statusline, a keyword, or a limit.
+
+  cc-find <pane>                 117 | ⌗117 | #117
+  cc-find <sid8|sid>             cb227486
+  cc-find --tuple '<statusline>' '(2) 27% · claude-infrastructure · xhigh'
+  cc-find --kw '<text>'          bounded keyword scan over registry cwds + transcript heads
+  cc-find --limited              every session sitting on a usage-limit error
+
+Output (TSV): sid  pane  account  cfg  cwd  liveness  class
+rc 0 resolved · 1 no match · 2 AMBIGUOUS (all candidates printed) · 3 usage
+USAGE
+}
+
+# ── the (pid,lstart) oracle ────────────────────────────────────────────────────────────────────
+# `ps -o lstart=` renders through LC_TIME *and* TZ, and the two axes are independent: this store
+# holds `Fri Aug 21 16:29:03 2026` (the canonical write, pinned at hooks/session-register.sh:278)
+# and `Fri 21 Aug 16:29:03 2026` (every row written before that pin). Both share TZ=UTC and differ
+# only in field ORDER, so normalising the order makes the compare locale-independent for one fork.
+# This is the same ladder bin/cc-sessions:252 and bin/cc-notify:353 already run.
+#
+# 🚨 IT DIVERGES FROM THOSE TWO DELIBERATELY, in the direction of convicting. They FAIL OPEN — an
+# unreadable start time returns "same process", because for them a hiccup must not read as a death.
+# Here the verdict IS the product, so an empty `ps` for a pid is reported as DEAD and a start time
+# that differs after normalisation is reported as STALE. Both are printed, never silently dropped:
+# a caller decides what to do with them, and a row it never sees is a row it cannot decide about.
+cf_lstart_norm() { # <rendering> -> "Dow Mon DD HH:MM:SS YYYY"
+  # shellcheck disable=SC2086  # word-splitting IS the field separation; the caller squeezed spaces
+  set -- $1
+  [ "$#" -eq 5 ] || { printf '%s' "$*"; return 0; }
+  case "$2" in
+    ''|*[!0-9]*) printf '%s %s %s %s %s' "$1" "$2" "$3" "$4" "$5" ;;   # already month-first
+    *)           printf '%s %s %s %s %s' "$1" "$3" "$2" "$4" "$5" ;;   # day-first -> swap
+  esac
+}
+cf_liveness() { # <pid> <recorded lstart> -> LIVE | STALE | DEAD | UNKNOWN
+  local pid="$1" want="$2" now
+  case "$pid" in ''|*[!0-9]*) printf 'UNKNOWN'; return 0 ;; esac
+  now="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null | tr -s ' ' | sed 's/^ *//;s/ *$//')"
+  [ -n "$now" ] || { printf 'DEAD'; return 0; }
+  # A row with no recorded start time cannot be convicted of pid reuse — say so rather than
+  # inventing either verdict. This is the only fail-open leg and it is named in the output.
+  [ -n "$want" ] && [ "$want" != "-" ] || { printf 'UNKNOWN'; return 0; }
+  [ "$now" = "$want" ] && { printf 'LIVE'; return 0; }
+  [ "$(cf_lstart_norm "$now")" = "$(cf_lstart_norm "$want")" ] && { printf 'LIVE'; return 0; }
+  printf 'STALE'
+}
+
+# ── the store side ─────────────────────────────────────────────────────────────────────────────
+cf_cfg_of() { # <account> <sid> -> config dir on stdout (empty when no store holds the transcript)
+  local acct="$1" sid="$2" c
+  # The row's `account` is `basename $CLAUDE_CONFIG_DIR` with the leading dot stripped
+  # (hooks/session-register.sh:178), so the dir is its exact inverse — one `[ -f ]`, no scan.
+  if [ -n "$acct" ] && [ "$acct" != "-" ]; then
+    for c in "$HOME/.$acct"/projects/*/"$sid".jsonl; do
+      [ -f "$c" ] && { printf '%s' "$HOME/.$acct"; return 0; }
+    done
+  fi
+  # ...and the fallback for a row whose account is absent or whose transcript was moved: ask the
+  # store list, which already dedupes the `.claude`/`.claude-next` symlink pair.
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    ls "$c"/projects/*/"$sid".jsonl >/dev/null 2>&1 && { printf '%s' "$c"; return 0; }
+  done <<EOF
+$(lr_config_dirs)
+EOF
+  return 1
+}
+cf_tx_of() { # <cfg> <sid> -> transcript path on stdout
+  local f
+  for f in "$1"/projects/*/"$2".jsonl "$1"/projects/*/"$2".jsonl.handed-off; do
+    [ -f "$f" ] && { printf '%s' "$f"; return 0; }
+  done
+  return 1
+}
+cf_is_teammate() { # <transcript> — rule 0, read from the HEAD: agentName is written at the top
+  head -c "$HEAD_BYTES" "$1" 2>/dev/null | grep -q '"agentName"'
+}
+cf_class() { # <transcript> -> TEAMMATE | LIMITED | SESSION
+  [ -n "$1" ] && [ -f "$1" ] || { printf 'UNKNOWN'; return 0; }
+  cf_is_teammate "$1" && { printf 'TEAMMATE'; return 0; }
+  local ekind
+  IFS=$'\t' read -r _ _ ekind _ <<<"$(lr_last_api_error "$1" 2>/dev/null)"
+  [ "$ekind" = limit ] && { printf 'LIMITED'; return 0; }
+  printf 'SESSION'
+}
+
+# ── one registry row -> one output row ─────────────────────────────────────────────────────────
+# ONE jq per row. The row is small and the field set is fixed, so a second read is pure fork cost
+# on the path whose entire justification is that it is cheap.
+cf_read() { # <regfile> -> "pane\tsid\taccount\tcwd\tpid\tlstart" on stdout, rc 1 when unusable
+  local out
+  out="$(jq -r '[(.paneUUID // ""), (.session_id // .sessionId // ""), (.account // "-"),
+                 (.cwd // "-"), ((.pid // "") | tostring), (.lstart // "-")] | @tsv' "$1" 2>/dev/null)" || return 1
+  case "$out" in ''|$'\t'*) return 1 ;; esac
+  printf '%s' "$out"
+}
+cf_emit() { # <regfile> — prints the TSV answer row; rc 1 when the row names no session
+  local pane sid acct cwd pid lstart cfg tx
+  IFS=$'\t' read -r pane sid acct cwd pid lstart <<<"$(cf_read "$1")" || return 1
+  [ -n "$sid" ] || return 1
+  cfg="$(cf_cfg_of "$acct" "$sid" || true)"
+  tx=""; [ -n "$cfg" ] && tx="$(cf_tx_of "$cfg" "$sid" || true)"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$sid" "${pane:--}" "$acct" "${cfg:--}" "$cwd" "$(cf_liveness "$pid" "$lstart")" "$(cf_class "$tx")"
+}
+
+# ── candidate enumeration (the ranked and filtered paths) ──────────────────────────────────────
+# ONE jq for the WHOLE directory, not one per file. `cc-find <sid8>` read 37 registry rows with 37
+# jq forks and measured 0.399 s on the live store — over the 0.3 s budget, and the budget is the
+# product. A single pass over the same files is 0.09 s. The per-file ladder survives as the
+# FALLBACK: jq aborts the whole invocation on one malformed document, and a corrupt row must cost
+# its own row, never every row.
+cf_bulk() { # <jq body> -> the body's output for every registry file; rc 1 when jq could not
+  local out
+  out="$(jq -r "$1" "$REG_DIR"/[!.]*.json 2>/dev/null)" && { printf '%s\n' "$out"; return 0; }
+  return 1
+}
+cf_all_rows() { # -> "regfile\tpane\tsid\taccount\tcwd\tpid\tlstart" per row, teammates EXCLUDED
+  local f r line sid acct cfg tx rows
+  rows="$(cf_bulk '[input_filename, (.paneUUID // ""), (.session_id // .sessionId // ""),
+                    (.account // "-"), (.cwd // "-"), ((.pid // "") | tostring),
+                    (.lstart // "-")] | @tsv')" || {
+    rows=""
+    for f in "$REG_DIR"/*.json; do
+      [ -f "$f" ] || continue
+      case "$(basename "$f")" in .*) continue ;; esac
+      r="$(cf_read "$f")" || continue
+      rows="$rows$f"$'\t'"$r"$'\n'
+    done
+  }
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    IFS=$'\t' read -r f _ sid acct _ _ _ <<<"$line"
+    [ -n "$sid" ] || continue
+    # RULE 0, applied at the CANDIDATE SET rather than at the answer: a lead-owned session must not
+    # be rankable at all, or a tie-break can hand a recovery driver a teammate's pane.
+    cfg="$(cf_cfg_of "$acct" "$sid" || true)"
+    if [ -n "$cfg" ] && tx="$(cf_tx_of "$cfg" "$sid" 2>/dev/null)"; then
+      cf_is_teammate "$tx" && continue
+    fi
+    printf '%s\n' "$line"
+  done <<EOF
+$rows
+EOF
+}
+
+# ── the statusline tuple ───────────────────────────────────────────────────────────────────────
+cf_acct_of_ord() { # <n> -> the account name the statusline's ordinal map means
+  case "$1" in
+    1) printf 'claude-next' ;;      2) printf 'claude-secondary' ;;
+    3) printf 'claude-tertiary' ;;  4) printf 'claude-quaternary' ;;
+    5) printf 'claude-quinary' ;;   6) printf 'claude-senary' ;;
+    *) printf '' ;;
+  esac
+}
+
+tuple_resolve() { # <statusline rendering>
+  local line="$1" ord acct pct dirbase effort rest key
+  # (a) IDENTITY FIRST. If the rendering carries the segment statusline.sh now emits — `⌗<pane>`
+  # and/or an 8-char sid8 — then the whole ranking problem is gone and none of it runs. That is the
+  # entire point of putting those two fields in the pixels: a tuple that carries one is a KEY.
+  key="$(printf '%s' "$line" | sed -n 's/.*[⌗#]\([0-9][0-9]*\).*/\1/p')"
+  if [ -n "$key" ] && [ -f "$REG_DIR/$key.json" ]; then cf_emit "$REG_DIR/$key.json"; return $?; fi
+  key="$(printf '%s' "$line" | sed -n 's/^.*[⌗#][0-9][0-9]* \([0-9a-f][0-9a-f-]\{7\}\) .*$/\1/p')"
+  if [ -n "$key" ]; then sid_resolve "$key"; return $?; fi
+
+  ord="$(printf '%s' "$line" | sed -n 's/^[^(]*(\([0-9][0-9]*\)).*/\1/p')"
+  acct="$(cf_acct_of_ord "${ord:-0}")"
+  pct="$(printf '%s' "$line" | sed -n 's/.*[^0-9]\([0-9][0-9]*\)%.*/\1/p')"
+  # The body is `<dir>[ (<sha>)][  <branch>][*][ · <effort>]`. Take the dir basename and the LAST
+  # ` · ` field as the effort; NEVER the sha — it is a property of the checkout and it moves.
+  rest="${line#*% · }"
+  dirbase="${rest%% *}"; dirbase="${dirbase%\*}"
+  effort="${line##* · }"
+  [ "$effort" = "$line" ] && effort=""
+
+  local f pane sid racct cwd pid lstart tel reff rpct d best="" bestd="" second="" secondd="" cands=""
+  while IFS=$'\t' read -r f pane sid racct cwd pid lstart; do
+    [ -n "$sid" ] || continue
+    [ -n "$acct" ] && [ "$racct" != "$acct" ] && continue
+    [ -n "$dirbase" ] && [ "$(basename "$cwd")" != "$dirbase" ] && continue
+    tel="$TEL_DIR/$sid.json"
+    reff=""; rpct=""
+    if [ -f "$tel" ]; then
+      IFS=$'\t' read -r reff rpct <<<"$(jq -r '[(.effort // ""), ((.used_pct // "") | tostring)] | @tsv' "$tel" 2>/dev/null)"
+    fi
+    [ -n "$effort" ] && [ -n "$reff" ] && [ "$reff" != "$effort" ] && continue
+    # rank by |screenshot% − live%|. An unknown live % sorts last rather than winning on a 0
+    # distance it never earned.
+    rpct="${rpct%%.*}"
+    case "${rpct:-x}" in ''|*[!0-9]*) d=999 ;; *) d=$(( ${pct:-0} - rpct )); [ "$d" -lt 0 ] && d=$(( -d )) ;; esac
+    cands="$cands$f"$'\n'
+    if [ -z "$bestd" ] || [ "$d" -lt "$bestd" ]; then
+      secondd="$bestd"; second="$best"; bestd="$d"; best="$f"
+    elif [ -z "$secondd" ] || [ "$d" -lt "$secondd" ]; then
+      secondd="$d"; second="$f"
+    fi
+  done <<EOF
+$(cf_all_rows)
+EOF
+
+  [ -n "$best" ] || return 1
+  if [ -n "$second" ] && [ $(( secondd - bestd )) -le "$PCT_TIE" ]; then
+    # REFUSE. Print every candidate, never the top one: the operator can read two rows and pick;
+    # a driver handed one row cannot tell it was a coin flip.
+    printf '%s' "$cands" | while IFS= read -r f; do [ -n "$f" ] && cf_emit "$f"; done
+    return 2
+  fi
+  cf_emit "$best"
+}
+
+# ── the direct keys ────────────────────────────────────────────────────────────────────────────
+pane_resolve() { # <pane id>
+  [ -f "$REG_DIR/$1.json" ] || return 1
+  cf_emit "$REG_DIR/$1.json"
+}
+sid_resolve() { # <sid or sid prefix>
+  local f sid hits="" n=0 rows
+  rows="$(cf_bulk '[input_filename, (.session_id // .sessionId // "")] | @tsv')" || {
+    rows=""
+    for f in "$REG_DIR"/*.json; do
+      [ -f "$f" ] || continue
+      case "$(basename "$f")" in .*) continue ;; esac
+      sid="$(jq -r '.session_id // .sessionId // empty' "$f" 2>/dev/null)" || continue
+      rows="$rows$f"$'\t'"$sid"$'\n'
+    done
+  }
+  while IFS=$'\t' read -r f sid; do
+    [ -n "$f" ] || continue
+    case "$sid" in "$1"*) [ -n "$sid" ] && { hits="$hits$f"$'\n'; n=$((n+1)); } ;; esac
+  done <<EOF
+$rows
+EOF
+  [ "$n" -eq 0 ] && return 1
+  if [ "$n" -gt 1 ]; then
+    printf '%s' "$hits" | while IFS= read -r f; do [ -n "$f" ] && cf_emit "$f"; done
+    return 2
+  fi
+  cf_emit "$(printf '%s' "$hits" | head -1)"
+}
+
+kw_resolve() { # <text> — bounded; the FTS index is a stub for live sessions (U07 §5), so this is
+  # a direct scan of the two surfaces that are always current: the registry row and the transcript
+  # head. Bounded by wall clock, not by row count, because the row count is not what varies.
+  local want="$1" f pane sid acct cwd pid lstart cfg tx hits="" n=0 deadline
+  deadline=$(( $(date +%s) + KW_BUDGET_S ))
+  while IFS=$'\t' read -r f pane sid acct cwd pid lstart; do
+    [ -n "$sid" ] || continue
+    [ "$(date +%s)" -gt "$deadline" ] && { echo "cc-find: --kw hit its ${KW_BUDGET_S}s budget — the answer below may be partial" >&2; break; }
+    if printf '%s' "$cwd" | grep -qiF -- "$want"; then hits="$hits$f"$'\n'; n=$((n+1)); continue; fi
+    cfg="$(cf_cfg_of "$acct" "$sid" || true)"; [ -n "$cfg" ] || continue
+    tx="$(cf_tx_of "$cfg" "$sid" 2>/dev/null)" || continue
+    head -c "$HEAD_BYTES" "$tx" 2>/dev/null | grep -qiF -- "$want" && { hits="$hits$f"$'\n'; n=$((n+1)); }
+  done <<EOF
+$(cf_all_rows)
+EOF
+  [ "$n" -eq 0 ] && return 1
+  printf '%s' "$hits" | while IFS= read -r f; do [ -n "$f" ] && cf_emit "$f"; done
+  [ "$n" -eq 1 ] || return 2
+  return 0
+}
+
+limited_resolve() {
+  local f pane sid acct cwd pid lstart cfg tx n=0
+  while IFS=$'\t' read -r f pane sid acct cwd pid lstart; do
+    [ -n "$sid" ] || continue
+    cfg="$(cf_cfg_of "$acct" "$sid" || true)"; [ -n "$cfg" ] || continue
+    tx="$(cf_tx_of "$cfg" "$sid" 2>/dev/null)" || continue
+    # lr_last_api_error is the ONE spelling of this predicate in the tree and it already encodes
+    # the tail rule: the limit must be the LAST assistant word, so a session that took a real turn
+    # since is not blocked. Re-deriving it here is how two auditors disagree about one population.
+    [ "$(cf_class "$tx")" = LIMITED ] || continue
+    cf_emit "$f"; n=$((n+1))
+  done <<EOF
+$(cf_all_rows)
+EOF
+  [ "$n" -gt 0 ]
+}
+
+# ── argv ───────────────────────────────────────────────────────────────────────────────────────
+[ $# -ge 1 ] || { usage; exit 3; }
+case "$1" in
+  -h|--help) usage; exit 0 ;;
+  --tuple) [ $# -ge 2 ] || { usage; exit 3; }; tuple_resolve "$2"; exit $? ;;
+  --kw)    [ $# -ge 2 ] || { usage; exit 3; }; kw_resolve "$2";    exit $? ;;
+  --limited) limited_resolve; exit $? ;;
+  --*) usage; exit 3 ;;
+esac
+
+# A bare argument. `⌗117` / `#117` are what the statusline renders, so they are accepted verbatim —
+# an identifier a tool PRINTS must be one it ACCEPTS (the D8 lesson from lr-fleet's own --one).
+ARG="${1#⌗}"; ARG="${ARG#\#}"
+case "$ARG" in
+  ''|*[!0-9]*) sid_resolve "$ARG"; exit $? ;;
+  *)           pane_resolve "$ARG"; exit $? ;;
+esac
