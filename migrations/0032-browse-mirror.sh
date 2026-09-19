@@ -3,7 +3,7 @@
 # migration-step: convert ~/Development/reso-management-app into a detached browse mirror (its files were 1,948 commits stale) and load com.claude.browse-mirror so it stays current — it installs a launchd plist, which is C10
 # migration-run: bash ~/Development/claude-infrastructure/migrations/0032-browse-mirror.sh
 # migration-subject: ~/.claude/scripts/browse-mirror-sync.sh
-# migration-verify: launchctl print "gui/$(id -u)/com.claude.browse-mirror" >/dev/null 2>&1 && [ "$(git -C "$HOME/Development/reso-management-app" rev-parse HEAD 2>/dev/null)" = "$(git -C "$HOME/Development/reso-management-app" rev-parse origin/main 2>/dev/null)" ]
+# migration-verify: launchctl print "gui/$(id -u)/com.claude.browse-mirror" 2>/dev/null | awk '/last exit code/{c=$NF} END{exit (c=="0")?0:1}' && git -C "$HOME/Development/reso-management-app" merge-base --is-ancestor HEAD origin/main 2>/dev/null
 # migration-conflict: [ -f "$HOME/Library/LaunchAgents/com.claude.browse-mirror.plist" ] && ! cmp -s "$HOME/Library/LaunchAgents/com.claude.browse-mirror.plist" "$HOME/Development/claude-infrastructure/launchd/com.claude.browse-mirror.plist"
 #
 # 0032 — the browse mirror.
@@ -32,11 +32,23 @@
 # settings.json, a launchd plist, or credentials declares c10 and waits for a human." So this
 # STAGES and never self-runs.
 #
-# WHY THE VERIFIER ASSERTS BOTH LOADED *AND* AT-TARGET. README.md § "Verify the EFFECT, not the
-# paperwork": a loaded job is not the effect. This exact job loaded over a mirror that is blocked on
-# an untracked collision heartbeats healthily forever while the folder shows stale files — the
-# failure it exists to prevent, wearing a pass. The oracle therefore requires the checkout to
-# actually equal origin/main.
+# WHY THE VERIFIER DOES NOT CHECK THAT THE JOB IS MERELY LOADED. README.md § "Verify the EFFECT, not
+# the paperwork": a loaded job is not the effect, and this one proved it the hard way. On the day it
+# shipped, the job was loaded and heartbeating while CRASHING on every trigger — /bin/bash is 3.2 and
+# the script had a construct only bash 5 parses, so `runs = 5, last exit code = 2` and the mirror
+# never advanced. A loaded-only oracle answers YES to that, forever. So the first arm reads the
+# job's own LAST EXIT CODE: it is the one field that distinguishes "runs" from "runs successfully",
+# and it is exactly the field that was non-zero.
+#
+# AND WHY IT NO LONGER ASSERTS HEAD == origin/main, which was the first thing it did. That oracle is
+# RACY on this repo and would have reported FAIL on a perfectly healthy system: origin/main moves
+# every 2-15 minutes (measured: six advances in sixteen minutes), while a full advance across reso's
+# 24 GB working tree takes ~3 minutes — so trunk routinely moves DURING a run and the mirror is a
+# commit behind the instant it finishes. A verifier that fails on a healthy system is the same
+# defect as one that passes on a broken one; it just fails in the direction that gets ignored.
+# `merge-base --is-ancestor HEAD origin/main` is the non-racy half of the same question: it proves
+# the mirror is TRACKING trunk rather than diverged or wedged, and stays true through a landing.
+# The lag bound itself is the cadence's guarantee, not something a point-in-time check can assert.
 #
 # WHAT THE OPERATOR SEES. The conversion runs in the FOREGROUND first, before the cadence is
 # installed, because it is the one interesting run: it advances the folder ~1,948 commits, which
