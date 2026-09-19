@@ -278,12 +278,82 @@ lf_print_census() { # stdin: TSV rows
   [ "$n" -gt 0 ] || echo "(no blocked session anywhere — no cap, no network/stall death)"
 }
 
+# ── THE PHANTOM-ACTIVE CORRECTION (2026-09-19) — why a recovery could never be admitted ─────────
+# A usage-limit kill ends the turn WITHOUT running the Stop hook, so hooks/session-beat.sh never
+# writes the `stop` beat and the session's `kind:"prompt"` beat freezes on disk. Its pid stays alive
+# (the TUI is sitting at its prompt), so cc_sp_active's liveness leg — which correctly discards a
+# DEAD session's frozen beat — has nothing to discard, and the blocked session is counted mid-turn
+# forever. spawn-presence.sh's own header calls this shape "a gate that tightens monotonically on
+# its own accidents"; the limit kill is the door its pid check cannot close.
+#
+# MEASURED 2026-09-19: eight panes blocked on one account's 5-hour limit held frozen `prompt` beats
+# aged 2360-4168 s with live pids. cc_sp_active read 12 against a ceiling of 8, so EVERY
+# `lr-fleet --recover` attempt was refused for its full 600 s budget. The census inflated BY the
+# blocked sessions was gating the recovery OF those blocked sessions — a deadlock with no supported
+# escape, since lr-reset-poller and `--from-daemon` take the same probe.
+#
+# THE CORRECTION LIVES HERE, NOT IN THE CENSUS, because this is the only caller that already knows
+# which sessions are blocked — it is the tool whose whole job is to census them. A general fix in
+# cc_sp_active needs a discriminator that separates "blocked" from "mid-turn" for EVERY caller, and
+# the obvious one is refuted: measured the same day, blocked sessions' transcripts are still being
+# written (mtime ages 201-2711 s), so file freshness does not separate the two populations. That
+# design call is filed, not guessed at here.
+#
+# DIRECTION: this only ever SUBTRACTS sessions proven blocked — a live pid whose beat is a frozen
+# `prompt` AND whose last assistant word is a usage-limit error. A session mid-retry after a network
+# error is NOT subtracted (its turn may genuinely still be running, 93-101 min measured), an
+# unreadable transcript is NOT subtracted, and the ceiling itself is untouched. Recovery is also
+# net-zero on process count: it /exits one TUI and relaunches the same uuid in the same pane.
+lf_phantom_actives() { # → count of live sessions whose mid-turn beat is a usage-limit corpse
+  local dir b sid pid kind cfg tx n=0 rest ekind
+  dir="${CC_BEAT_DIR:-$HOME/.claude/cc-beats}"
+  [ -d "$dir" ] || { printf '0'; return 0; }
+  for b in "$dir"/*.json; do
+    [ -f "$b" ] || continue
+    kind="$(jq -r 'if type=="object" then (.kind // "") else "" end' "$b" 2>/dev/null)" || continue
+    [ "$kind" = prompt ] || continue
+    pid="$(jq -r 'if type=="object" then (.pid // "") else "" end' "$b" 2>/dev/null)"
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$pid" 2>/dev/null || continue          # dead ⇒ the census already discards it
+    sid="$(jq -r 'if type=="object" then (.sid // "") else "" end' "$b" 2>/dev/null)"
+    case "$sid" in ''|*[!A-Za-z0-9-]*) continue ;; esac
+    while IFS= read -r cfg; do
+      [ -n "$cfg" ] || continue
+      for tx in "$cfg"/projects/*/"$sid".jsonl; do
+        [ -f "$tx" ] || continue
+        IFS=$'	' read -r _ _ ekind rest <<<"$(lr_last_api_error "$tx" 2>/dev/null)" || ekind=""
+        [ "$ekind" = limit ] && { n=$((n + 1)); break 3; }
+      done
+    done <<EOF
+$(lr_config_dirs)
+EOF
+  done
+  printf '%s' "$n"
+}
+
 # ── CAPACITY: wait on the NON-charging probe, never spend the budget ─────────────────────────────
 lf_capacity_wait() { # $1=what → 0 admitted / 1 parked at the cap
   local waited=0 max="${LR_FLEET_CAP_WAIT_S:-600}" ivl="${LR_FLEET_CAP_IVL_S:-20}"
   command -v cc_capacity_probe >/dev/null 2>&1 || { echo "lr-fleet: capacity probe unavailable — proceeding UNGATED" >&2; return 0; }
+  local raw ph corrected
   while :; do
-    if cc_capacity_probe lr-fleet "$1"; then return 0; fi
+    # Correct the ACTIVE term for limit-corpse beats before each probe (see the header above). Left
+    # unset on any unreadable leg, so the probe then sees exactly what it saw before this existed.
+    unset CC_SP_ACTIVE_OVERRIDE
+    if [ "${LR_FLEET_PHANTOM_CORRECTION:-on}" != off ] && command -v cc_sp_active >/dev/null 2>&1; then
+      raw="$(cc_sp_active 2>/dev/null || true)"
+      ph="$(lf_phantom_actives 2>/dev/null || true)"
+      case "${raw:-x}${ph:-x}" in
+        *[!0-9]*) : ;;
+        *) if [ "$ph" -gt 0 ]; then
+             corrected=$(( raw - ph )); [ "$corrected" -lt 0 ] && corrected=0
+             export CC_SP_ACTIVE_OVERRIDE="$corrected"
+             echo "lr-fleet: active census ${raw} includes ${ph} limit-corpse beat(s) — probing at ${corrected}" >&2
+           fi ;;
+      esac
+    fi
+    if cc_capacity_probe lr-fleet "$1"; then unset CC_SP_ACTIVE_OVERRIDE; return 0; fi
+    unset CC_SP_ACTIVE_OVERRIDE
     if [ "$waited" -ge "$max" ]; then echo "lr-fleet: PARKED on capacity after ${waited}s — $(cc_capacity_admit_reason)" >&2; return 1; fi
     echo "lr-fleet: capacity not admitted yet — $(cc_capacity_admit_reason); waiting ${ivl}s (${waited}/${max}s)" >&2
     sleep "$ivl"; waited=$((waited + ivl))
