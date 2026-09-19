@@ -239,12 +239,44 @@ print("OK")' || { echo "$output"; false; }
 @test "floor: it reads the REAL stores and produces a real machine floor on this box" {
   # The suite above proves the arithmetic on fixtures; this proves the thing actually answers on
   # the box's own data, which is the claim the plan record quotes.
+  #
+  # 🚨 THE DEPTH PRECONDITION IS ENVIRONMENTAL, AND IT MUST SKIP RATHER THAN RED (2026-09-19).
+  # `capacity-alarm.jsonl` ROTATES. Measured that day: it rotated at 08:16Z, leaving the live file
+  # holding 535 samples over 13.1 h — so `machine_samples > 1000` was unsatisfiable, and stayed so
+  # for roughly the next day. That is not a defect in pool-floor.sh and no diff can fix it, but
+  # ship-land selects this suite for any diff that merely REACHES it (`scripts/pool-floor.sh` reads
+  # `weekly_pct`), so the red landed on whoever shipped next — attribution by reachability, not by
+  # causation. A/B that day: identical `AssertionError: 535` on the lander's branch AND on its base
+  # `226b73888`, byte for byte.
+  #
+  # The skip is DISCRIMINATING, not a mute. A store can be short for two opposite reasons and only
+  # one is benign: it just rotated (the recorder is alive and refilling), or NOTHING IS WRITING IT
+  # (the real defect this test should catch). Freshness separates them, so a dead recorder still
+  # goes RED here while a rotation waits its day out. Never "fix" this by lowering the constant —
+  # that tunes the guard to one rotation's depth and re-arms the same false red at a shallower one.
+  local cap="$REAL_HOME/.claude/logs/capacity-alarm.jsonl"
   run env -u CC_CAP_LOG -u CC_UTIL_LOG HOME="$REAL_HOME" bash "$FLOOR" --json
   [ "$status" -eq 0 ] || [ "$status" -eq 3 ] || { echo "unexpected status $status: $output"; false; }
-  echo "$output" | python3 -c '
+  local out="$output"
+  if echo "$out" | python3 -c '
+import json,sys
+sys.exit(0 if json.load(sys.stdin)["machine_samples"] <= 1000 else 1)'; then
+    # Shallow. Benign ONLY if the recorder is demonstrably still writing: a rotated sibling exists
+    # AND the live file was touched inside the last hour. Anything else is a real red.
+    [ -f "$cap" ] || { echo "no capacity store at all — the recorder is gone, not rotated"; false; }
+    local age; age=$(( $(date +%s) - $(stat -f %m "$cap") ))
+    [ "$age" -lt 3600 ] || {
+      echo "capacity store is ${age}s stale AND shallow — nothing is writing it; that is the defect this test exists to catch:"
+      echo "$out"; false; }
+    ls "$cap".*.gz >/dev/null 2>&1 || {
+      echo "capacity store is shallow and FRESH but never rotated — depth should have accumulated:"
+      echo "$out"; false; }
+    skip "capacity store rotated recently (fresh, ${age}s old, shallow by rotation not by fault) — depth precondition is environmental"
+  fi
+  echo "$out" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
 assert d["machine_samples"] > 1000, d["machine_samples"]
 assert d["machine_floor_sessions"] > 0, d
-print("OK")' || { echo "$output"; false; }
+print("OK")' || { echo "$out"; false; }
 }
