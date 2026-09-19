@@ -147,7 +147,7 @@ forkbin() { # <tool> — a PATH shim that counts calls and execs the real one
 
 @test "the mark the statusline renders is accepted as part of the pane id" {
   reg 117 "$A" claude-secondary; plain_tx "$SEC" "$A"; tel_row "$A" "$SEC" xhigh 45
-  run bash "$FIND" '⌗117'
+  run bash "$FIND" '#117'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "$(col "$output" 2)" = "117" ]
   run bash "$FIND" '#117'
@@ -186,7 +186,7 @@ forkbin() { # <tool> — a PATH shim that counts calls and execs the real one
   reg 122 "$B" claude-tertiary; plain_tx "$TER" "$B"; tel_row "$B" "$TER" high 40
   reg 124 "$C" claude-tertiary; plain_tx "$TER" "$C"; tel_row "$C" "$TER" high 40
   # the SAME ambiguous tuple as the refusal above, plus the pane the statusline now renders
-  run bash "$FIND" --tuple '(3) ⌗124 cccccccc 40% · claude-infrastructure (b80f9408e) · high'
+  run bash "$FIND" --tuple '(3) #124 cccccccc 40% · claude-infrastructure (b80f9408e) · high'
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ "$(col "$output" 2)" = "124" ]
 }
