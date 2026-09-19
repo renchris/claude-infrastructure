@@ -345,6 +345,15 @@ So the real rule on this runtime is: **`name:` is the switch, not `team_name`.**
 persists and needs explicit teardown, whatever you meant it to be. Two consequences:
 - Naming a research agent is a *lifecycle* decision, not just a labelling convenience. Name it when
   you need to `SendMessage` it later; otherwise leave it unnamed and let it reap itself.
+  **Measured over 30 days: 904 Agent spawns, 419 of them named, 71% of the named briefs
+  research/read-only — and `0 of 338` named members ever received a non-shutdown message.** The
+  persistence that naming buys was used zero times, so on the present evidence a name on a research
+  agent is a pure liability. `hooks/agent-teams-enforce.sh` now says so at the spawn itself: a
+  `name:` on `deep-research`, `deep-research-sonnet`, `Explore` or `frontier-derivation` emits an
+  **advisory** (never a deny — the legitimate named case is real and a deny would wrap it).
+- **Do not pass `isolation:` or `cwd:` alongside `name:`** — either one SILENTLY DEMOTES the spawn to
+  a plain subagent: no pane, no member row, no warning, and the name you would shut down was never
+  registered. See § THE VENDOR CONTRACT ON 2.1.260 below.
 - **Tear down every agent you named**, research included, then **ps-verify** — this is the same
   discipline the Shutdown Protocol below already demands for teammates, and the audit is one line:
   `pgrep -f "agent-id <name>@"` (empty ⇒ actually gone).
@@ -374,12 +383,80 @@ finished — i.e. it is idle — which is exactly the state where the cooperativ
 dies), but it is a request; **`TaskStop` is the authoritative actuator**. A sent request is never a
 teardown.
 
+---
+
+### 🚨 THE VENDOR CONTRACT ON 2.1.260 — read from the binary, 2026-09-19
+
+Everything above is measured fleet behaviour and stands. This section says what the VENDOR actually
+built, because three of the beliefs the fleet operates on are not in the product, and one sentence
+just above this one is wrong.
+
+**1. IDLE ≠ DONE, and "finished" is not a completion signal.** There is **no idle timeout anywhere in
+the binary** (`idle_timeout` is constructed zero times) and **nothing ends a teammate on its own**. At
+every turn boundary the teammate's own `Stop` pass writes `isActive:false` to the team file and mails
+`idle_notification{idleReason:"available", summary, result}` to the lead, which the lead's panel
+renders **in green as `✓ Teammate @X finished`**. That green line fires at EVERY turn boundary, not at
+completion: `completedTaskId` is assigned nowhere in the binary, and `completedStatus` only on the
+in-process crash path. A teammate that has answered you and a teammate that has finished its work are
+indistinguishable from the outside — so a lead that waits for an agent to "finish" waits forever, and
+a lead that reads the green line as done tears down work in progress. **Only the LEAD ends a teammate.**
+
+**2. `shutdown_request` is model-mediated, and only a STRUCTURED response terminates.** It is delivered
+as an ordinary user message carrying an in-band instruction; approval is the teammate's model emitting
+`SendMessage{shutdown_response, approve:true}` — and there is **no timeout, no retry and no escalation**
+behind it. On approval the teammate exits its own process and its SessionEnd hooks run; the *lead's*
+inbox poller then closes the pane, removes the member row and unassigns its tasks. **A prose
+"shutting down" / "closing now" does NOTHING** — it is not the structured response, so the process
+lives on: measured, **22 of 25 prose acknowledgements still required a pane close**. Read the reply,
+do not read the sentiment.
+
+**3. CORRECTION — `TaskStop` is not "the authoritative actuator", and the sentence above overstates
+it.** `TaskStop` is an abort plus a `paneTeardown` (a backend `killPane`), a 10 s settle and a team-file
+edit. **It is never a message to the teammate's model**, and the binary carries its own warning that
+**the separate `claude --agent-id` process may still be running** after it returns. So `TaskStop`
+reliably removes the *pane and the member row* — which is why it looked authoritative on the idle
+survivors above — while the thing it cannot promise is the one you care about. This is the same defect
+step 4 of the protocol already half-names ("`TaskStop` de-registering *without* reaping"). **The rule
+is unchanged and the reason is stronger: `pgrep -f "agent-id <name>@"` is the verdict, `TaskStop`'s
+return is not.** Nothing in the product makes a teammate's process exit except its own model approving
+a shutdown, or a signal.
+
+**4. `isolation:` or `cwd:` beside `name:` SILENTLY DEMOTES the spawn** to a plain in-process subagent
+— no pane, no member row, no teammate, **and no warning**. Still true on 2.1.260. Two ways this bites:
+you believe you spawned an isolated teammate and got a subagent that writes into the LEAD's cwd, or you
+send `shutdown_request`/`TaskStop` to a name the runtime never registered. If you want worktree
+isolation for a teammate, provision the worktree and put the agent in it by other means — not by
+passing `isolation:` to a named `Agent()` call.
+
+**5. Nothing closes the pane on crash, `/exit`, `^C`, or the context wall.** The iTerm2 backend has no
+`remain-on-exit` equivalent — all three decorate methods are empty and it never polls — so the stock
+residue of a dead agent is a live shell sitting at a prompt in a pane that looks alive. (tmux differs:
+it respawns with `-k` and the pane closes on a clean exit.) A visible pane is not a live agent, just as
+a green `✓ finished` is not a finished one.
+
+**6. The lead's own graceful exit is raced.** `cleanupSessionTeams` kills each member's pane, then
+removes worktrees and the team dir — the whole registry under a **2 000 ms** timeout, each close a
+separate CLI round trip, result discarded, and skipped entirely on `forceExit`/SIGKILL. Do not rely on
+lead exit to clean up a wave; shut members down explicitly first.
+
+Source: `docs/research/SUBAGENT_LIFECYCLE_ROOT_CAUSE_2026-09-19.md` § 2.2 (binary read) and rows RC-7,
+RC-11. `TeamDelete` no longer exists on this runtime; the vendor's own docs list "Shutdown can be slow"
+as a known limitation and say a teammate "stays running and addressable while hidden".
+
+---
+
 **Shutdown Protocol:**
 1. Send `{"type": "shutdown_request"}` to EACH teammate individually (parallel OK)
-2. Plain text broadcasts do NOT close panes — only structured `shutdown_request` works
+2. Plain text broadcasts do NOT close panes — only structured `shutdown_request` works. **The same
+   is true of the REPLY**: what terminates the process is the teammate's structured
+   `SendMessage{shutdown_response, approve:true}`, never prose. A teammate that says "shutting down"
+   and sends nothing structured is still running (22 of 25 prose acks still needed a pane close).
 3. **Escalate on silence** — if no `shutdown_approved` / `teammate_terminated` comes back within
    ~60s, `TaskStop` it (bare agent name as `task_id`). An idle agent will never answer the request,
-   and no amount of waiting changes that; waiting only buys idle-notification turns.
+   and no amount of waiting changes that; waiting only buys idle-notification turns. **`TaskStop`
+   closes the pane and edits the team file; the binary's own warning says the separate
+   `claude --agent-id` process may still be running when it returns** — so step 4 is not optional
+   ceremony after a `TaskStop`, it is the only thing that has measured the process.
 4. **ps-verify EVERY agent**: `pgrep -f "agent-id <name>@"` (empty ⇒ actually gone). Silence is not
    death — [[shutdown-request-is-not-an-actuator]] measured `TaskStop` de-registering *without*
    reaping, after which the task API is exhausted and only `kill -TERM <pid>` remains.

@@ -573,6 +573,46 @@ emit_allow_ctx() {
 #                   near-certain crash (the exact FM2 wave-stall the guard exists to stop).
 # Line count via `grep -c ''` — exact even when the prompt has no trailing newline (wc -l undercounts
 # that case by one). Dynamic reasons are jq-built, never raw %s-interpolated (malformed-JSON class).
+# ── RC-1: NAMED-RESEARCH LIFECYCLE ADVISORY (2026-09-19) ──────────────────────────────────────
+# ADVISORY ONLY. It never denies, never asks, never blocks — on any path. That is not timidity, it
+# is the shape the evidence permits: the thing being flagged is a JUDGEMENT (will you message this
+# agent later?) that only the lead can make, and there IS a legitimate named case — a member the
+# lead will message or re-task. An advisory cannot wrap that case; a deny would. So this term adds
+# a sentence to an allow and changes no decision.
+#
+# WHAT IT IS ABOUT. On this runtime `name:` is the LIFECYCLE SWITCH, not a label (skills/agent-teams
+# § `name:` silently makes it a teammate). A NAMED Agent call becomes a real child CLI session in a
+# pane; read from the 2.1.260 binary, there is no idle timeout anywhere in it and nothing ends a
+# teammate on its own, so it persists until its lead sends `shutdown_request` AND its model answers
+# with a structured `shutdown_response`. An UNNAMED call runs in-process, returns through a task
+# notification, and reaps itself — nothing in that class lingers on the box.
+#
+# WHY THE FOUR TYPES AND NOT A HEURISTIC. Measured over 30 days: 904 Agent spawns, 419 named, 71% of
+# the named briefs research/read-only, and **0 of 338 named members ever received a non-shutdown
+# message** — the persistence a name buys was used zero times. The remedy could have been keyed on
+# the PROMPT (a research-looking brief), which is the general catch this repo keeps relearning not to
+# build: prompt-shape is a proxy that fails in both directions and would reach implementation
+# spawns. `subagent_type` is a declared fact about the agent, so the population is exactly the four
+# types whose definitions are read-only by construction. Adding a fifth type is a deliberate act,
+# not a drift.
+#
+# The list is spelled ONCE, here, so the suite's mutant M-c (widen the set to general-purpose) has a
+# single site to mutate and case (c) has something to kill.
+# Control: tests/agent-teams-lifecycle-advisory.bats. Rule: RC-1,
+# docs/research/SUBAGENT_LIFECYCLE_ROOT_CAUSE_2026-09-19.md.
+#
+# Keyed on $NAME, never on $TEAMMATE_ID: `team_name` is the classic shape and is not the lifecycle
+# switch on this runtime (0 of 1,251 calls carried it). No double quotes or backslashes in the text
+# — it is interpolated raw into JSON by emit_allow_ctx.
+LIFECYCLE_ADV=""
+if [ -n "$NAME" ]; then
+  case "$SUBAGENT_TYPE" in
+    deep-research|deep-research-sonnet|Explore|frontier-derivation)
+      LIFECYCLE_ADV=' 🚨 NAMED RESEARCH AGENT — naming is a LIFECYCLE decision here, not a label. On this runtime name: is the switch: a NAMED agent becomes a real child CLI session in its own pane that NEVER exits on its own. There is no idle timeout anywhere in the binary; its idle_notification renders in the lead panel as a green ✓ Teammate @X finished at EVERY turn boundary, which is a turn boundary and not a completion signal; and the only thing that terminates it is the structured shutdown_response its model must send back after YOU send shutdown_request (prose does nothing, and TaskStop closes the pane while the binary warns the agent process may survive it). Leave it UNNAMED and the identical work runs in-process, returns through a task notification, and reaps itself. MEASURED over 30 days: 904 Agent spawns, 419 named, 71% of named briefs research/read-only, and 0 of 338 named members ever received a non-shutdown message — the persistence a name buys was used ZERO times. So KEEP the name ONLY if you will actually message or re-task this agent; then its teardown is yours (agent-teams skill § Shutdown Protocol, then ps-verify: pgrep -f agent-id <name>@). Also: isolation: or cwd: beside name: silently demotes the spawn to a plain subagent — no pane, no member row, no warning. ADVISORY ONLY — this spawn is ALLOWED either way and nothing here is a refusal. Rule: RC-1, docs/research/SUBAGENT_LIFECYCLE_ROOT_CAUSE_2026-09-19.md.'
+      ;;
+  esac
+fi
+
 if [ -n "$TEAMMATE_ID" ]; then
   BRIEF_WARN="${AGENT_TEAMS_BRIEF_WARN_LINES:-150}"
   BRIEF_DENY="${AGENT_TEAMS_BRIEF_DENY_LINES:-250}"
@@ -591,17 +631,19 @@ if [ -n "$TEAMMATE_ID" ]; then
   fi
 
   if [ "$BRIEF_LINES" -gt "$BRIEF_WARN" ]; then
-    jq -n --arg n "$BRIEF_LINES" --arg warn "$BRIEF_WARN" --arg ptr "$SKILL_PTR" '{
+    jq -n --arg n "$BRIEF_LINES" --arg warn "$BRIEF_WARN" --arg ptr "$SKILL_PTR" --arg adv "$LIFECYCLE_ADV" '{
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "allow",
-        additionalContext: ("BRIEF OVER CAP: this teammate brief is \($n) lines, over the \($warn)-line Agent-Teams cap. Oversized briefs risk the GH #49593 /compact crash → wave stall. Prefer splitting into 2-3 teammates by domain (≤\($warn) lines each), pre-greping line ranges instead of pasting file bodies, and deferring visual verification to a separate Explore subagent. " + $ptr)
+        additionalContext: ("BRIEF OVER CAP: this teammate brief is \($n) lines, over the \($warn)-line Agent-Teams cap. Oversized briefs risk the GH #49593 /compact crash → wave stall. Prefer splitting into 2-3 teammates by domain (≤\($warn) lines each), pre-greping line ranges instead of pasting file bodies, and deferring visual verification to a separate Explore subagent. " + $ptr + $adv)
       }
     }'
     exit 0
   fi
 
-  emit_allow_ctx "$SKILL_PTR"
+  # $LIFECYCLE_ADV is empty on every spawn this term does not apply to, so this concatenation is a
+  # no-op there and the unchanged pointer is emitted byte-for-byte as before.
+  emit_allow_ctx "$SKILL_PTR$LIFECYCLE_ADV"
   exit 0
 fi
 

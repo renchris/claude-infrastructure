@@ -13,9 +13,29 @@ status: complete
 > acceptance metric A1 (`grep -c '✓ closed pane'`) has moved **680 → 1,061**, with closes on every
 > operating day 2026-08-04 → 2026-08-20 (most recent `pane 448 (S4-ship)` at 03:25:22 today) after
 > the 9-day cliff this plan was reopened for. Both falsifier arms are clear: 0 resident agent panes,
-> and `rc=67` has not recurred since 2026-08-17. The `rc=67` residue this document's last section
+> and `rc=67` has not recurred since 2026-08-17.  <!-- FALSIFIER FALSE — see the note below -->
+> The `rc=67` residue this document's last section
 > deliberately left unbuilt landed anyway — `d3951e5e3` (a subagent pane has no composer) and
 > `2a352788b` (a narrow pane hides its own footer).
+>
+> 🚨 **FALSIFIER CORRECTION 2026-09-19 — the second arm above is FALSE, and it was already false
+> when it was written as a falsifier rather than as an observation.** `rc=67` HAS recurred: **32
+> events since 2026-08-17**, on 2026-08-30 (1), 09-04 (5), 09-08 (13), 09-09 (2), 09-11 (4), 09-15
+> (3) and 09-17 (4), the most recent at `[2026-09-17 22:18:59]`. Re-derived this session from
+> `~/.claude/logs/teammate-lifecycle.log`:
+> `grep 'rc=67' ~/.claude/logs/teammate-lifecycle.log | sed 's/^\[\([0-9-]*\).*/\1/' | awk '$1>"2026-08-17"' | wc -l`
+> → `32` (166 lifetime, first `[2026-08-07 06:48:58]`). Every one is the same refusal class the
+> residual paragraph below names: the composer-state guard refusing to close a pane it cannot read
+> (`composer state is UNKNOWN`), which is a *correct* refusal that pages nobody.
+> **What this does and does not overturn.** It does NOT reopen the plan's answer — a teammate still
+> never self-closes by design, and external reaping is still the right remedy. It overturns the
+> *evidence* offered for closure: an arm stated as "has not recurred since <date>" is a claim with a
+> shelf life, and nothing re-ran it, so a quiet fortnight was recorded as a permanent property. A
+> falsifier must name the command that re-derives it (the one above) so the next reader can check
+> rather than inherit. Rule: `docs/research/SUBAGENT_LIFECYCLE_ROOT_CAUSE_2026-09-19.md` RC-7.
+> **Instrument warning for anyone re-running this**: that log is stamped in LOCAL time and this box
+> changed zone PDT→CDT on 2026-09-06, so the date-only grep above is safe but any join to UTC
+> transcripts is not — see RC-12 and the note in `scripts/utc-stamp-lint.sh`.
 >
 > **Why the front matter is the fix.** Backlog row `d4fa449e3895` is machine-minted from this file
 > by `scripts/plan-phase-scan.sh` (`source: "plan-open"`, title = this H1), and its stored falsifier

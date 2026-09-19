@@ -33,6 +33,34 @@
 # High precision beats high recall for a rule that BLOCKS lands: the tree currently has ZERO
 # violations, so this ships as a true ratchet with an EMPTY allowlist — nothing grandfathered.
 #
+# ── THE SIBLING DEFECT THIS LINTER CANNOT SEE, AND THE RULE FOR IT (note added 2026-09-19, RC-12) ──
+# This rule is PRODUCER-side: it catches a stamp that LIES about being UTC. The other half of the
+# same failure class is CONSUMER-side and lives in no single line, so nothing here will ever flag it:
+# a log that HONESTLY carries local time, with no Z and no offset — legitimate under the third bullet
+# above — being joined against UTC transcripts by a reader that assumes one fixed offset, or that
+# applies TODAY'S zone to yesterday's lines.
+#
+# THE LIVE SPECIMEN. `~/.claude/logs/teammate-lifecycle.log` is stamped in LOCAL time, and this box
+# changed zone **PDT → CDT on 2026-09-06** (read from `/etc/localtime` mtime) — two days after the
+# 2.1.260 binary cutover. So every line written before 2026-09-06 is UTC-7 and every line after is
+# UTC-5, and any parse that picks one offset, or that lets `date -j -f` resolve in the CURRENT zone,
+# is **2 h off on the pre-Sep-6 half**. That is not hypothetical: it manufactured a "2.1.260 delays
+# teammate closes by 120 min" headline on 2026-09-19 that had to be retracted, because the zone change
+# sat two days after the cutover and the shift landed on exactly the population being compared.
+# (`date -j -f` in the current zone IS correct for lines written after 2026-09-06.)
+#
+# THE RULE, stated so it is checkable rather than remembered: **a join between a local-stamped log
+# and UTC transcripts must first census the RAW offset over the WHOLE population and require it
+# unimodal.** Two modes exactly n hours apart are a CLOCK CHANGE — a zone edit, a DST boundary — and
+# never a behaviour of the subject under study. A median taken across both modes validates neither,
+# and the artefact will always look like whichever subject effect you went in expecting, because the
+# split is by DATE and so is every cutover you are trying to measure. Convert era-aware, or do not
+# convert at all. Rule: docs/research/SUBAGENT_LIFECYCLE_ROOT_CAUSE_2026-09-19.md RC-12; lesson
+# docs/lessons/two-modes-n-hours-apart-is-a-timezone.md.
+# NOTE ONLY — this adds no check. Era-aware conversion belongs in the tools that do the joining, not
+# in a single-line producer-side ratchet, and widening this rule to reach it would cost the zero-false-
+# positive property that lets it block lands.
+#
 # Exit: 0 = clean · 1 = violation · 2 = bad usage / unreadable scan dir (LOUD, never silent-green)
 #
 # Env seams: CC_UTC_ALLOWLIST overrides the embedded ratchet · CC_UTC_OWN scopes which violations may

@@ -577,6 +577,22 @@ positive control:
 | `TeammateIdle` | **NO — fires in the LEAD** | it is the lead's *trigger*, exactly as the rule requires; the teammate never sees it |
 | `SubagentStop` | not registered in settings at all | nothing fires; `hooks/subagent-stop.sh` is inert |
 
+🚨 **CORRECTION 2026-09-19 — the `TeammateIdle` row above has the LOCUS backwards, and the
+conclusion drawn from it does not follow.** The row says the hook fires in the LEAD and calls that
+"the lead's *trigger*". Read from the 2.1.260 binary, `TeammateIdle` fires **inside the teammate**,
+in the teammate's own `Stop` pass, and only when that session is a team member; the fleet's own
+forensics agree — 2,070 of 2,083 PPID-bearing lines in `~/.claude/logs/teammate-lifecycle.log`
+resolve to the teammate's own `claude.exe`, not the lead's.  <!-- pane-id-lint:allow -->
+Three consequences the original row cannot express, each of which changes what a fix may assume:
+(i) `exit 2` / `decision:"block"` from `TeammateIdle` makes the **teammate** take another turn and
+suppresses that cycle's `idle_notification` entirely; (ii) `{"continue": false}` ends the turn but
+the **process stays** and the notification still goes out; and (iii) a blocking settings `Stop` hook
+evaluated earlier in the same pass returns **before** the `TeammateIdle` block is reached — no
+`TeammateIdle`, no `isActive:false`, no `idle_notification` — so one of our own `Stop` hooks can
+silently mute the signal this whole document is about. The rest of the table is unaffected: every
+other row was measured from inside a teammate and still holds.
+Source: `docs/research/SUBAGENT_LIFECYCLE_ROOT_CAUSE_2026-09-19.md` § 2.2 and row RC-7.
+
 ⇒ Both halves of the receipt design are reachable: **assert-and-validate** in the teammate's `Stop`,
 **terminal fact** at its `SessionEnd`. Neither reads `idleReason`. (Indeed *nothing in the repo
 reads `idleReason` — grep returns one comment* — so the "no more detectors on that field"

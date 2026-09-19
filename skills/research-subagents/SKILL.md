@@ -22,6 +22,7 @@ runtime, reported, went idle, and held their panes ~1h16m until an explicit
 § Shutdown Protocol, not by this file — **tear down every agent you named, research
 included, then ps-verify** (`pgrep -f "agent-id <name>@"`, empty ⇒ actually gone).
 Leave it unnamed and it reaps itself; name it and you have taken on its teardown.
+`hooks/agent-teams-enforce.sh` now restates this at the spawn itself — an **advisory**, never a deny — when `name:` is set on `deep-research`, `deep-research-sonnet`, `Explore` or `frontier-derivation` (measured: 0 of 338 named members ever received a non-shutdown message; RC-1).
 
 The downward bias on research-subagent count is a **cognition** problem, not an
 **output** problem. Existing anti-cap rules ("if proposing ≤5, cite file:line")
