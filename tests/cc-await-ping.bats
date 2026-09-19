@@ -1193,6 +1193,11 @@ CC_AWAIT_PING_F5_PREFIX_SHA="${CC_AWAIT_PING_F5_PREFIX_SHA:-950328c8c}"
 #   N6 (make _sigrecord_arm ignore CC_AWAIT_PING_SIGRECORD) → R2
 #   N7 (drop _sigrecord_disarm from the EXIT trap)          → R6
 #   N8 (drop the honest "no sender was captured" fallback)  → R5
+# N8 WAS RE-RUN after R5's fixed `sleep 3` became a bounded poll (backlog 81b005992b30) and still
+# reds R5 — on the same assertion, and now for the right reason: the verdict HAS landed and does not
+# carry the phrase, where before the case could red merely because the verdict had not landed yet.
+# The map is unchanged; adding R5's anti-vacuity gate widened no other mutant's credit, because
+# every sibling mutant leaves `verdict=killed` intact and R5 stays credited by N8 alone.
 # R7 IS CREDITED BY NO MUTANT, and that is stated rather than hidden. Its subject is the
 # `command -v python3` fail-open guard, whose branch is unreachable here: /usr/bin/python3 exists on
 # this box, so PATH cannot be made python3-free without also removing the binaries the watcher needs.
@@ -1299,7 +1304,48 @@ recorder_pid() { # <watcher pid> -> pid of its python side-car, empty if none
   v="$(spawn_isolated "$u" "$cap")" || false
   assert_victim "$v"
   kill -TERM "$v" 2>/dev/null || true  # THIS PROCESS ALONE — deliberately not the group
-  sleep 3
+  # POLL FOR THE VERDICT, NEVER A FIXED SLEEP — and R5 is the one case in this block that cannot
+  # survive one. A fixed `sleep 3` here was a post-land RED (backlog 81b005992b30), and the mechanism
+  # is structural rather than unlucky: R5 is the ONLY case whose kill never reaches the recorder, so
+  # _sigrecord_sender spends its ENTIRE 10x0.05s bound — ten fork+exec `sleep`s — where every sibling
+  # breaks out of that loop on the first iteration. Add the trap deferral behind the poll `sleep`
+  # (spawn_isolated arms --interval 2, and bash defers a trap until the foreground command returns)
+  # and R5's verdict is systematically the last one in the block to land.
+  #
+  # MEASURED on 4 cpus, kill -> `verdict=killed` visible in the capture, this shape vs the group-TERM
+  # shape R3/R4 use:
+  #     idle          single-pid 1.68s   ·  group 0.13s     (13x, and the 3s budget looks generous)
+  #     loadavg ~16   single-pid 2.15s   ·  group 0.44s
+  #     loadavg ~45   single-pid 2.90s   ·  group 0.97s     <- the budget is gone
+  #
+  # Sweeping the budget ITSELF at loadavg ~58, on this case's own assertions, n=8 per rung — the
+  # controlled experiment, because it moves the one variable and leaves the subject alone:
+  #     budget 4.0s -> 7/8 green   (the one red is assert_victim, an unrelated shared-helper miss)
+  #     budget 3.0s -> 8/8 green   <- the SHIPPED value, and it is sitting on the edge
+  #     budget 2.5s -> 1/8 green   (7 reds, all on the assertion below)
+  #     budget 2.0s -> 2/8 green
+  # A CLIFF between 2.5s and 3.0s, not a slope: this case's verdict lands at ~2.5-3.0s here against
+  # a 3.0s budget. That is what makes the shipped value a defect rather than bad luck — the cliff's
+  # POSITION moves with load, so a machine busier than this one (the desk runs the whole corpus
+  # concurrently, not one case) puts it past 3.0s and the case reds, which is what postland saw.
+  # Do not "fix" a future red here by nudging the number up; the number is the bug.
+  #
+  # THE FAILING ASSERTION WAS THE SECOND ONE, and that is the part worth keeping. `sender was not
+  # captured` read 0 because the verdict had not been WRITTEN yet — which means the first assertion
+  # had just passed VACUOUSLY over the same empty capture. An `== 0` cannot tell "no sender was
+  # identified" from "the subject has not spoken yet" (memory: empty-vs-no-surface), so the absence
+  # it asserts needs the verdict's PRESENCE as its own precondition. The poll below IS that
+  # precondition, so this is strictly stronger than the sleep it replaces, not merely slower to give
+  # up — and it returns as soon as the verdict lands, so the common case gets FASTER (~1.7s idle,
+  # against a flat 3s), which matters to ship-land's 120s smoke budget (see #173 below).
+  for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 \
+            21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40; do
+    grep -qF 'verdict=killed' "$cap" 2>/dev/null && break
+    sleep 0.5
+  done
+  # ANTI-VACUITY, and the assertion the RED was really missing: the subject must have VERDICTED
+  # before an absence below can mean anything.
+  grep -qF 'verdict=killed' "$cap" || false
   # `run`, not $(...): grep -c prints 0 and EXITS 1 on no-match, which under bats errexit aborts the
   # assignment and reds the case before it ever asserts. Only a case expecting ZERO matches can trip
   # that — which is exactly this one.
