@@ -540,6 +540,19 @@ for f in "$REPO"/scripts/*.py;    do check_one "scripts/$(basename "$f")"   "$CF
 for f in "$REPO"/scripts/limit-recover/*; do
   check_one "scripts/limit-recover/$(basename "$f")" "$CFG/scripts/limit-recover/$(basename "$f")"
 done
+# THE THIRD INSTANCE OF THE DEFECT THE TWO COMMENTS ABOVE RECORD, and the first one caught by the
+# coverage arm BEFORE it could sit on trunk. `scripts/jev/` landed as a new install.sh class on
+# 2026-09-19 (the Jev evaluation shim). Its author extended install.sh AND
+# deploy-parity-assert.sh — and not this file, which is the THIRD auditor over the same state
+# model. tests/deploy-link-parity.bats case 42 went red on the next land and named the class.
+# That is memory `sibling-auditors-must-share-the-state-model` exactly: two of three checks agreed
+# about a population and the third had never heard of it.
+# Globbed `*`, matching install.sh: the directory holds evaluate.mjs beside pilot.sh, and a glob
+# keyed on an extension goes stale the moment a sibling with a different one lands — the
+# generator behind both comments above.
+for f in "$REPO"/scripts/jev/*; do
+  check_one "scripts/jev/$(basename "$f")" "$CFG/scripts/jev/$(basename "$f")"
+done
 # bin/ is THREE families, not one. install.sh:815 globs cc-*, desk-* and ms365-*, and the header
 # above calls install.sh the map of record — so a family it globs and this walk does not is a
 # restatement that has silently drifted. Measured 2026-08-31T01:39:00Z: this line globbed cc-*
