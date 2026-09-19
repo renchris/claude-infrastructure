@@ -392,3 +392,27 @@ work lands a *recovered* session's work.
   - Operational note for the next driver: `fleet --enqueue` writes requests the poller CONSUMES — five were drained and all five failed, after which nothing retries. A consumed request that failed looks identical to one never filed (`a-reader-that-cannot-prove-delivery-must-not-consume`). Re-enqueue is manual today.
   - Also landed from this session: `226b73888` (a limit-killed turn never writes its turn-end beat, so blocked panes counted mid-turn forever and inflated the very admission ceiling gating their own recovery — the deadlock had no supported escape, `--from-daemon` takes the same probe) and `362811da6` (the land gate's `command -v shellcheck` is a claim about PATH, not the host; it gate-killed a land on a box carrying a working `/opt/homebrew/bin/shellcheck`).
 - 2026-09-19 23:5xZ — **Round A LANDED** `1b2676f4c → origin/main` (16 commits, 20 paths content-verified, sweep clean). Four gate rounds to get there, each a different ratchet stopping at its first red: (1) rebase conflict with a sibling's `5fe4c9f84` — the same DUPLICATE defect W4 fixed, done better as the shared `lr_holder_count`; resolved in the sibling's favour, W4's three behaviour cases hold against it. (2) test-hermeticity: the two suites Round A EXTENDED each pinned one capacity gate and not the other (`b669e3aae`). (3) pipefail-SIGPIPE: two `grep -q` consumers in `bin/cc-find`'s keyword arm (`6e9b316af`). (4) `cc-lr.bats`' 0.3 s judge fired at 1.98/core, a hair inside a 2.0 band that is the capacity gate's refusal line, not a quiet-box line — judged band lowered to 1.0/core (`acebfcfc4`); then one DNS-only push failure, re-shipped on a two-green probe. Lesson filed: `docs/lessons/keep-both-on-appended-blocks-leaves-the-first-unterminated.md`. W2 returned with 5 commits while this landed.
+
+### Reconciliation with `docs/plans/LIMIT_DETECT_100P.md` (2026-09-20 00:1xZ)
+
+A sibling — session `7f533f05`, pane 150 — landed `LIMIT_DETECT_100P` at 23:44Z (`c62af4338`) with THIS
+plan's research corpus as its wave 1 and its own detection research (`docs/research/lr-detect-2026-09-19/`)
+as wave 2. It does not cite this § 9 and its waves assume nothing of Round A exists. Its scope line
+draws the boundary itself: *"nothing here types into a pane, drains a request, moves a session"*
+— detection, identification, surfacing; the recovery chain is "carried as R1–R11, not designed here".
+So the split is by construction, not negotiation:
+
+| theirs (`LIMIT_DETECT_100P`) | ours (this plan) |
+|---|---|
+| W0 predicate SSOT (`lr_predicate.py`) · W1 StopFailure hook arm (pane, `kind:limited` beat, one page per cause) · W2 `bin/cc-limited` + reaper + faults · W3 census consumers (`lf_census`, poller delegation) · W4 the twelve predicate copies · W6 drill | W2 admission token + `lrh_precheck` + boot wait (in flight) · W3 submit/engage/ingest · **W5 narrowed** to actuation: poller claim/drive-off-lock, custody lock, `bin/cc-lr` front, `scripts/lib/cc-tui.sh`, husk-sweep — the REAPER and the hook's request/page writer are theirs, W5 consumes their `faults/` · W6b pool · **W7 census item DROPPED** (their `lf_census`); W7 keeps the drill + doc |
+
+Already landed here that their waves assume absent — their lead re-anchors on trunk before firing:
+the statusline identity segment (`statusline.sh`, their W5 — done; glyph switched to `#` on their
+`fc-list` finding: Monaco carries no U+2317), `bin/cc-find` (resolves ONE session from pane/sid8/tuple/kw,
+plus `--limited` — their `cc-limited` enumerates the fleet; both stay, and `--limited` should consume
+their W0 predicate once it lands), `--one` registry-first, `lr_holder_count` (`5fe4c9f84`), `--detach`
++ the named `recycle-dead` arm, the `--recovery` lane. One design conflict, theirs to rule: their
+`kind:limited` beat vs this synthesis's drop of it (double-discount with `226b73888`); their § 4.3
+argues the shim cannot double-subtract and keeps both for a measured week — acceptable, provided the
+W2 token path never reads the beat (it does not). Message sent to `7f533f05` via cc-notify (drains when
+that session is recovered — it is one of the three next4 panes parked until 09:00Z).
