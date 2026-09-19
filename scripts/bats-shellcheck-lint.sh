@@ -188,6 +188,37 @@ sc_run() {
   shellcheck -f gcc -e "$exclude" "$@" 2>/dev/null
 }
 
+# ── RESOLVE SHELLCHECK — a bare-name lookup is a claim about PATH, never about the host ──────────
+# Measured 2026-09-19: a land GATE-KILLED here with "shellcheck not installed — NOT a clean verdict"
+# on a host carrying /opt/homebrew/bin/shellcheck 0.11.0, running fine. The session's PATH (a
+# kitty-launched one: kitty.app, /usr/bin, /bin, /usr/sbin, /sbin) simply had no Homebrew entry, so
+# `command -v` answered a question about PATH and its message answered a different one about the
+# machine. A reader who believes it installs a tool that is already there, and the gate stays dead.
+#
+# This is the repo's own `the-deployment-interpreter-is-not-the-one-on-your-path` class, and
+# ship-land already runs a gate named "bare-name binaries on unattended paths" for exactly it — the
+# gate enforcing that rule was itself bare-name. A gate invoked from launchd, a hook, or any session
+# whose PATH the operator did not curate has no reason to see Homebrew at all.
+#
+# DIRECTION: this only ever ADDS a resolution attempt. It cannot turn a real absence into a pass —
+# when nothing is found the caller still exits 2 with a NON-VERDICT, and the message now names the
+# two things that were actually searched instead of asserting a fact about the host.
+# CC_SHELLCHECK_PREFIXES uses ${VAR-default}, NOT ${VAR:-default}: an explicitly EMPTY value means
+# "search no prefixes", which is how the suite reproduces a genuinely toolless host. With the colon
+# form an empty value would silently fall back to the defaults and the missing-tool contract would
+# become untestable on any box that has Homebrew — the harness-default-collapses-the-states-under-test
+# shape, and the exact reason the two `nosc` cases below had to be re-armed with this seam.
+_bsl_shellcheck_path() { # → 0 and PATH extended iff a shellcheck binary is reachable
+  command -v shellcheck >/dev/null 2>&1 && return 0
+  local p
+  for p in ${CC_SHELLCHECK_PREFIXES-/opt/homebrew/bin /usr/local/bin /opt/local/bin}; do
+    [ -x "$p/shellcheck" ] || continue
+    PATH="$p:$PATH"; export PATH
+    return 0
+  done
+  return 1
+}
+
 # lint_files <exclude> <own-set-text> <own-scoped 0|1> <file>...
 #   0 = clean · 1 = a blocking finding · 2 = nothing scannable
 lint_files() {
@@ -310,8 +341,8 @@ fi
 
 # ── --selftest: every case proves a RED path fires or a GREEN path does not, both directions ──────
 if [ "${1:-}" = "--selftest" ]; then
-  command -v shellcheck >/dev/null 2>&1 || {
-    echo "bats-shellcheck-lint --selftest: ⛔ shellcheck not installed — cannot self-verify" >&2
+  _bsl_shellcheck_path || {
+    echo "bats-shellcheck-lint --selftest: ⛔ shellcheck not on PATH and not at the known prefixes — cannot self-verify" >&2
     exit 2
   }
   # an empty $d would make every downstream `git -C "$d/..."` a cwd-repo write, not an error
@@ -468,8 +499,10 @@ if [ "${1:-}" = "--selftest" ]; then
   exit 1
 fi
 
-command -v shellcheck >/dev/null 2>&1 || {
-  echo "bats-shellcheck-lint: ⛔ shellcheck not installed — NOT a clean verdict" >&2
+_bsl_shellcheck_path || {
+  echo "bats-shellcheck-lint: ⛔ shellcheck not on PATH and not at the known prefixes — NOT a clean verdict" >&2
+  echo "  searched: \$PATH, then [${CC_SHELLCHECK_PREFIXES-/opt/homebrew/bin /usr/local/bin /opt/local/bin}]" >&2
+  echo "  if it IS installed, the defect is the PATH this gate was invoked with, not the host." >&2
   exit 2
 }
 

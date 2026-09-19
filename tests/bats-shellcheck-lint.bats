@@ -479,7 +479,11 @@ mkrepo() {  # $1=dir → git tree with the lint at scripts/, dirty trunk suite, 
 # parses as a malformed directive (SC1073) and which stops analysis of the ENTIRE file (SC1072) —
 # so this suite went UNANALYZABLE and its 27 cases were checked by nothing. Caught by running this
 # very lint over the diff. It is the defect this file exists to ratchet, written into this file.
-nosc() { env PATH=/usr/bin:/bin "$@"; }
+# CC_SHELLCHECK_PREFIXES= (explicitly empty) is part of "no shellcheck": stripping PATH alone stopped
+# being sufficient on 2026-09-19, when the lint gained a prefix resolver that finds Homebrew's copy
+# regardless of PATH. Without this the two missing-tool cases below would pass for the wrong reason
+# on every box that has Homebrew — i.e. they would stop testing the contract they name.
+nosc() { env PATH=/usr/bin:/bin CC_SHELLCHECK_PREFIXES= "$@"; }
 # A DIRECT file test, not `command -v` under a modified PATH: bash hashes lookups and a builtin
 # with a temporary assignment is exactly the shape that answers from the cache. This asks the
 # filesystem the same question the stripped PATH will ask.
@@ -494,7 +498,7 @@ no_sc_on_stripped_path() {
   no_sc_on_stripped_path
   run nosc bash "$L" --selftest
   [ "$status" -eq 2 ]                       # 2 = could not run. NOT 0 (a lie) and NOT 1 (a verdict)
-  echo "$output" | grep -q 'shellcheck not installed' || false
+  echo "$output" | grep -q 'shellcheck not on PATH and not at the known prefixes' || false
   echo "$output" | grep -q 'cannot self-verify' || false
 }
 
@@ -517,4 +521,35 @@ no_sc_on_stripped_path() {
   cd "$REPO"
   run nosc bash "$L" --own-lines HEAD~1...HEAD
   [ "$status" -eq 0 ]
+}
+
+# ── THE PREFIX RESOLVER (2026-09-19) ─────────────────────────────────────────────────────────────
+# A land GATE-KILLED with "shellcheck not installed" on a host carrying a working
+# /opt/homebrew/bin/shellcheck 0.11.0; only the invoking PATH lacked Homebrew. `command -v` answers
+# a question about PATH, and the message answered a different one about the machine.
+@test "resolver: a shellcheck reachable only via a PREFIX is found, and the gate runs" {
+  mkdir -p "$D/pfx"
+  printf '#!/bin/bash\nexit 0\n' > "$D/pfx/shellcheck"; chmod +x "$D/pfx/shellcheck"
+  printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$D/ok.bats"
+  run env PATH=/usr/bin:/bin CC_SHELLCHECK_PREFIXES="$D/pfx" bash "$L" "$D/ok.bats"
+  [ "$status" -ne 2 ]
+! echo "$output" | grep -q 'not on PATH and not at the known prefixes' || false
+  true
+}
+
+@test "resolver CONTROL: with NO prefixes and no PATH copy it is still a NON-VERDICT, exit 2" {
+  no_sc_on_stripped_path
+  printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$D/ok2.bats"
+  run env PATH=/usr/bin:/bin CC_SHELLCHECK_PREFIXES= bash "$L" "$D/ok2.bats"
+  [ "$status" -eq 2 ]
+  echo "$output" | grep -q 'not on PATH and not at the known prefixes' || false
+}
+
+@test "resolver: the non-verdict names what it SEARCHED, never asserting the host lacks the tool" {
+  no_sc_on_stripped_path
+  printf '#!/usr/bin/env bats\n@test "x" { true; }\n' > "$D/ok3.bats"
+  run env PATH=/usr/bin:/bin CC_SHELLCHECK_PREFIXES= bash "$L" "$D/ok3.bats"
+  echo "$output" | grep -q 'searched:' || false
+! echo "$output" | grep -q 'not installed' || false
+  true
 }
