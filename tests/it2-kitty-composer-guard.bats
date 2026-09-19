@@ -336,6 +336,114 @@ narrow_screen() {
   [ "$(attempts)" = "0" ]
 }
 
+# ── the REFLOWED narrow pane, where the footer WRAPS and the rule is unreachable (RC-4) ───
+#
+# The residual hole the labelled-rule form above does NOT close, measured 2026-09-19 over the 844
+# refusal snapshots in ~/.claude/logs/composer-snapshots: 166 of 166 rc-67 refusals in
+# teammate-lifecycle.log are UNKNOWN (unreadability) and NOT ONE is NON-EMPTY, and 49 snapshots are
+# this one shape — an argv-proven agent pane, reflowed below 20 columns, painting a VISIBLE ❯ over
+# an EMPTY composer. Below 20 columns a bare `───` bottom rule carries fewer glyphs than the
+# `max(20, cols // 2)` floor can ever reach (the floor is 20 and the pane is narrower than 20), and
+# the labelled top rule WRAPS across two rows, so neither half of is_rule() can fire: `@band-hooks`
+# arrives as " @band-" then "hooks ─", whose label reads "hooks" and fails the @token form.
+# Zero rules ⇒ no body ⇒ UNKNOWN, while the glyph on screen blocks AGENT-NO-BOX. Every successful
+# close reflows the survivors narrower and manufactures the next refusal, so the fleet walked itself
+# into the state: terminal in 7 of 12 never-closed episodes in 14 d, twice for ~12 h.
+#
+# The new branch is a FIFTH positive proof, not a relaxation, and every conjunct has a control:
+# argv proof · the pane is narrower than the rule floor · the agent NAMES ITSELF in the wrapped
+# footer · exactly one ❯ · a bottom border that BOUNDS the composer region · and that region read by
+# the same scan the NON-EMPTY arm runs, finding nothing. Text anywhere in it still refuses.
+
+FIX="${BATS_TEST_DIRNAME}/fixtures/it2-kitty"
+fg_for() { printf '[{"cmdline":["/opt/claude/bin/claude.exe","--agent-id","%s@session-x","--agent-name","%s"]}]' "$1" "$1"; }
+
+@test "RC-4: the reflowed narrow agent pane resolves — win89, 14 columns, empty composer" {
+  # Verbatim kitty capture, window 89 / rc-consumer-audit, 2026-09-18 03:18:50Z — the snapshot the
+  # guard itself wrote as it refused. Its footer is "@rc-consumer-" + "audit ─" across two rows and
+  # its bottom rule is "──────────────" + "───────": 14 and 7 glyphs against a floor of 20.
+  ALT=true; WCOLS=14; FG_JSON="$(fg_for rc-consumer-audit)"
+  cp "$FIX/narrow-agent-pane.txt" "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 0 ]
+  closed
+}
+
+@test "RC-4: the same pane at its PRE-FIX width is unchanged — a wide pane never reaches the branch" {
+  # The branch is gated on the pane being narrower than the rule floor, not on the screen bytes. At
+  # 100 columns this identical screen is an unreadable pane and must still refuse, which is what
+  # keeps the fix from becoming a blanket "zero rules plus an argv closes".
+  ALT=true; WCOLS=100; FG_JSON="$(fg_for rc-consumer-audit)"
+  cp "$FIX/narrow-agent-pane.txt" "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
+@test "RC-4 CONTROL: the same reflowed screen WITHOUT an agent argv is refused" {
+  ALT=true; WCOLS=14; FG_JSON='[]'
+  cp "$FIX/narrow-agent-pane.txt" "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
+@test "RC-4 CONTROL: an argv naming a DIFFERENT agent than the wrapped footer is refused" {
+  # Proof 2 survives the wrap. The footer says @rc-consumer-audit; the process table must agree, or
+  # this is the stale-id hazard the identity pin exists for, one layer down.
+  ALT=true; WCOLS=14; FG_JSON="$(fg_for some-other-agent)"
+  cp "$FIX/narrow-agent-pane.txt" "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
+@test "RC-4 MUST-NOT-WRAP: a narrow pane holding UNSENT TEXT is still refused — win363" {
+  # THE TRUE POSITIVE, verbatim from kitty: window 363 / a1-arming-ui, 2026-09-14 16:40:55Z, 18
+  # columns, footer on one row, and "❯ ship the toggle" in the composer. This is the population the
+  # guard exists for and the fix must leave it exactly where it was. It refuses as UNKNOWN rather
+  # than NON-EMPTY — the NON-EMPTY arm is untouched by this change — but it refuses, and no close
+  # is attempted.
+  ALT=true; WCOLS=18; FG_JSON="$(fg_for a1-arming-ui)"
+  cp "$FIX/narrow-agent-pane-unsent.txt" "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
+@test "RC-4 MUST-NOT-WRAP: one typed character in the reflowed composer is enough to refuse" {
+  # The win89 screen with the composer no longer empty. Same width, same wrapped footer, same argv:
+  # the ONLY difference is a glyph after the ❯, and it must be decisive.
+  ALT=true; WCOLS=14; FG_JSON="$(fg_for rc-consumer-audit)"
+  # The glyph is followed by an NBSP, not a space — that is what CC actually paints, and a `^❯ $`
+  # pattern with an ordinary space matches nothing (it silently produced an UNCHANGED fixture, so
+  # this assertion was passing over the empty-composer screen and testing the opposite of its name).
+  # Append to whatever line carries the glyph instead of trying to spell its padding.
+  awk '/❯/ && !done { print $0 "x"; done=1; next } { print }' "$FIX/narrow-agent-pane.txt" > "$SCREEN"
+  grep -q '❯.*x' "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 67 ]
+  [ "$(attempts)" = "0" ]
+}
+
+@test "RC-4 HONEST NEGATIVE: band-hooks, a recorded TRUE POSITIVE, was a bare reflow and now closes" {
+  # W2 was briefed to pin one of the guard 20/24 measured true positives so the fix could not wrap
+  # it. Read at the source, it is not one: window 542 / band-hooks (session-dc73c0ce), refused twice
+  # on 2026-09-08, is a 7-column reflow whose composer is "❯ " and nothing else, on BOTH snapshots
+  # (20260908T062422Z, 20260908T073352Z). The guard held that pane for 69 minutes and there was
+  # never any text to hold. So it closes now, deliberately, and this test records that the refusal
+  # protected nothing rather than manufacturing a pass for it.
+  #
+  # What DOES protect that population is not this branch: it is W1 RC-5a and W3 RC-2. The real
+  # narrow true positives are pinned by the two MUST-NOT-WRAP tests above, from the 15 snapshots in
+  # the corpus whose composer genuinely holds text.
+  ALT=true; WCOLS=7; FG_JSON="$(fg_for band-hooks)"
+  cp "$FIX/narrow-agent-pane-band-hooks.txt" "$SCREEN"
+  run "$SHIM" session close -f -s 300
+  [ "$status" -eq 0 ]
+  closed
+}
+
 # ── the UNREADABLE pane, split on whether its CC process is still there ───────────────────
 #
 # A composer buffer lives ONLY in the CC process's memory (that is this whole file's premise), so
@@ -524,7 +632,11 @@ sys.exit(1 if bad else 0)' "$SHIM"
 @test "CONTROL: without the AGENT-PANE branch, the finished subagent pane is refused" {
   # The defect as it shipped: this exact mutant IS the pre-2026-08-10 script, and under it the ten
   # tri-* panes were refused 160 times while their processes held 5.9 GB.
-  local m; m="$(mutate 'passing = "AGENT-PANE" if agent_pane else ("AGENT-NO-BOX" if no_box else "")' 'passing = "AGENT-NO-BOX" if no_box else ""')"
+  # Anchor re-pointed 2026-09-19: RC-4 put `narrow_pane` in the same expression, so the old
+  # one-line form no longer exists in the shim. It is cut alone here — `narrow_pane` is False on
+  # this fixture anyway (100 columns, well clear of the rule floor), so the mutant still isolates
+  # exactly proof 1 + proof 2.
+  local m; m="$(mutate 'passing = ("AGENT-PANE" if (agent_pane or narrow_pane)' 'passing = ("AGENT-PANE" if narrow_pane')"
   ALT=true; FG_JSON="$AGENT_FG"; agent_screen
   run "$m" session close -f -s 300
   [ "$status" -eq 67 ]
@@ -534,7 +646,8 @@ sys.exit(1 if bad else 0)' "$SHIM"
 @test "CONTROL: without the zero-rule branch, the FINISHED agent pane is refused" {
   # The defect as it shipped TODAY: the labelled-rule branch landed 2026-08-10 and this mutant IS
   # that script, under which windows 98-112 were stranded holding ~6.2 GB.
-  local m; m="$(mutate 'passing = "AGENT-PANE" if agent_pane else ("AGENT-NO-BOX" if no_box else "")' 'passing = "AGENT-PANE" if agent_pane else ""')"
+  # Anchor re-pointed 2026-09-19 (see the control above): the no_box arm moved onto its own line.
+  local m; m="$(mutate '               else ("AGENT-NO-BOX" if no_box else ""))' '               else "")')"
   ALT=true; FG_JSON="$AGENT_FG"; finished_screen
   run "$m" session close -f -s 300
   [ "$status" -eq 67 ]
