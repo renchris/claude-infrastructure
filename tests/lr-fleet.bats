@@ -601,6 +601,14 @@ PS
   mut="$BATS_TEST_TMPDIR/fleet-nocensus.sh"
   sed 's|^lf_locate() { # → TSV rows on stdout|lf_locate() { echo "CENSUS RAN" >\&2; exit 99|' "$FLEET" > "$mut"
   grep -q 'CENSUS RAN' "$mut" || { echo "the lf_locate anchor moved — re-pin this mutant"; false; }
+  # THE MUTANT MUST RESOLVE THE REPO'S OWN lr-lib, NOT THE LIVE ONE (W2). lr-fleet.sh resolves its
+  # library script-relative FIRST and then falls back to $CLAUDE_CONFIG_DIR / $HOME/.claude — and a
+  # mutant in $BATS_TEST_TMPDIR misses the first entry, so it was silently loading the OPERATOR'S
+  # LIVE lr-lib.sh (an ambient CLAUDE_CONFIG_DIR survives the fixtured $HOME). That is a
+  # hermeticity leak this suite's header says it does not have, and it surfaced the moment the
+  # subject grew a function the live copy did not carry yet: the case then failed on the deploy
+  # lag rather than on its subject. Copying the sibling beside the mutant pins the FIRST entry.
+  cp "$REPO/scripts/limit-recover/lr-lib.sh" "$BATS_TEST_TMPDIR/lr-lib.sh"
   # the mutant is LIVE: --locate still walks straight into it. Without this the case below passes
   # for a sed that matched nothing (memory: green-in-both-arms-is-an-equivalence-guard).
   # The marker, not the exit code, is the oracle: every caller reads lf_locate through a COMMAND

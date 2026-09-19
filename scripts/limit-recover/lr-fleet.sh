@@ -281,57 +281,19 @@ lf_print_census() { # stdin: TSV rows
   [ "$n" -gt 0 ] || echo "(no blocked session anywhere — no cap, no network/stall death)"
 }
 
-# ── THE PHANTOM-ACTIVE CORRECTION (2026-09-19) — why a recovery could never be admitted ─────────
-# A usage-limit kill ends the turn WITHOUT running the Stop hook, so hooks/session-beat.sh never
-# writes the `stop` beat and the session's `kind:"prompt"` beat freezes on disk. Its pid stays alive
-# (the TUI is sitting at its prompt), so cc_sp_active's liveness leg — which correctly discards a
-# DEAD session's frozen beat — has nothing to discard, and the blocked session is counted mid-turn
-# forever. spawn-presence.sh's own header calls this shape "a gate that tightens monotonically on
-# its own accidents"; the limit kill is the door its pid check cannot close.
+# ── THE PHANTOM-ACTIVE CORRECTION — now lr-lib's, because a SECOND caller appeared (W2) ─────────
+# The correction, its measurement and its direction rule moved VERBATIM to scripts/limit-recover/
+# lr-lib.sh as `lr_phantom_actives`, inside `lr_capacity_probe_corrected`, when lr-handoff grew its
+# own pre-transplant probe (W2). Two spellings of one probe is exactly how the fleet and the
+# launcher came to measure different gates (U05 §3.3); this file keeps the NAME so its own callers
+# and tests are unchanged, and the body has one home.
 #
-# MEASURED 2026-09-19: eight panes blocked on one account's 5-hour limit held frozen `prompt` beats
-# aged 2360-4168 s with live pids. cc_sp_active read 12 against a ceiling of 8, so EVERY
-# `lr-fleet --recover` attempt was refused for its full 600 s budget. The census inflated BY the
-# blocked sessions was gating the recovery OF those blocked sessions — a deadlock with no supported
-# escape, since lr-reset-poller and `--from-daemon` take the same probe.
-#
-# THE CORRECTION LIVES HERE, NOT IN THE CENSUS, because this is the only caller that already knows
-# which sessions are blocked — it is the tool whose whole job is to census them. A general fix in
+# THE CORRECTION DOES NOT LIVE IN THE CENSUS, and that is still deliberate: a general fix in
 # cc_sp_active needs a discriminator that separates "blocked" from "mid-turn" for EVERY caller, and
-# the obvious one is refuted: measured the same day, blocked sessions' transcripts are still being
-# written (mtime ages 201-2711 s), so file freshness does not separate the two populations. That
-# design call is filed, not guessed at here.
-#
-# DIRECTION: this only ever SUBTRACTS sessions proven blocked — a live pid whose beat is a frozen
-# `prompt` AND whose last assistant word is a usage-limit error. A session mid-retry after a network
-# error is NOT subtracted (its turn may genuinely still be running, 93-101 min measured), an
-# unreadable transcript is NOT subtracted, and the ceiling itself is untouched. Recovery is also
-# net-zero on process count: it /exits one TUI and relaunches the same uuid in the same pane.
+# the obvious one is refuted — measured 2026-09-19, blocked sessions' transcripts are still being
+# written (mtime ages 201-2711 s), so file freshness does not separate the two populations.
 lf_phantom_actives() { # → count of live sessions whose mid-turn beat is a usage-limit corpse
-  local dir b sid pid kind cfg tx n=0 rest ekind
-  dir="${CC_BEAT_DIR:-$HOME/.claude/cc-beats}"
-  [ -d "$dir" ] || { printf '0'; return 0; }
-  for b in "$dir"/*.json; do
-    [ -f "$b" ] || continue
-    kind="$(jq -r 'if type=="object" then (.kind // "") else "" end' "$b" 2>/dev/null)" || continue
-    [ "$kind" = prompt ] || continue
-    pid="$(jq -r 'if type=="object" then (.pid // "") else "" end' "$b" 2>/dev/null)"
-    case "$pid" in ''|*[!0-9]*) continue ;; esac
-    kill -0 "$pid" 2>/dev/null || continue          # dead ⇒ the census already discards it
-    sid="$(jq -r 'if type=="object" then (.sid // "") else "" end' "$b" 2>/dev/null)"
-    case "$sid" in ''|*[!A-Za-z0-9-]*) continue ;; esac
-    while IFS= read -r cfg; do
-      [ -n "$cfg" ] || continue
-      for tx in "$cfg"/projects/*/"$sid".jsonl; do
-        [ -f "$tx" ] || continue
-        IFS=$'	' read -r _ _ ekind rest <<<"$(lr_last_api_error "$tx" 2>/dev/null)" || ekind=""
-        [ "$ekind" = limit ] && { n=$((n + 1)); break 3; }
-      done
-    done <<EOF
-$(lr_config_dirs)
-EOF
-  done
-  printf '%s' "$n"
+  lr_phantom_actives "$@"
 }
 
 # ── THE CAUSE, JOINED (W1, LIMIT_RECOVER_100P § 12.1) ────────────────────────────────────────────
@@ -363,28 +325,34 @@ lf_idl_cause() { # $1=sid [$2=ISO floor] → "term=<t> …" for its newest lr-fi
 }
 
 # ── CAPACITY: wait on the NON-charging probe, never spend the budget ─────────────────────────────
+# THE PARK BOUND IS 120 s, NOT 600 (W2; §11.5 of the reopen draft). Measured 2026-09-19: the 600 s
+# form cost one fire 658 s of wall clock in the lead's own foreground and recovered nothing (run
+# one-20260919T170450Z, U14 §1). With the load term off and the phantom correction applied, the
+# terms that can still refuse are headroom, segments and the reserves — states that either clear in
+# a couple of minutes or are not going to clear at all, so a longer wait buys nothing and holds a
+# worker. Past the bound the session is PARKED with the term named, nothing has moved, and the next
+# tick re-probes.
 lf_capacity_wait() { # $1=what → 0 admitted / 1 parked at the cap
-  local waited=0 max="${LR_FLEET_CAP_WAIT_S:-600}" ivl="${LR_FLEET_CAP_IVL_S:-20}"
+  local waited=0 max="${LR_FLEET_CAP_WAIT_S:-120}" ivl="${LR_FLEET_CAP_IVL_S:-20}"
   command -v cc_capacity_probe >/dev/null 2>&1 || { echo "lr-fleet: capacity probe unavailable — proceeding UNGATED" >&2; return 0; }
-  local raw ph corrected
+  # A MISSING FUNCTION IS NOT A CAPACITY REFUSAL. lr-lib.sh is resolved through a three-path ladder
+  # whose last two entries are the LIVE layer, so an lr-fleet.sh that has landed ahead of its
+  # sibling finds an lr-lib with no `lr_capacity_probe_corrected` — and `if <missing>; then` is
+  # simply false, which this loop would read as "the box is busy" and repeat until the park.
+  # Measured while writing W2: 120 s of waiting, then `parked | capacity` with an EMPTY reason.
+  # Say what is actually wrong, once, and park immediately.
+  # (The remedy is a converge of the live layer; the command itself is deliberately NOT spelled
+  # here — iron rule 7 forbids this file from naming a deploy verb at all, and the project
+  # CLAUDE.md § Standing-converge carries the one command.)
+  command -v lr_capacity_probe_corrected >/dev/null 2>&1 || {
+    LF_PARK_REASON="lr-lib.sh has no lr_capacity_probe_corrected — the live layer is BEHIND this script; converge it (project CLAUDE.md § Standing-converge names the one command) and re-run"
+    echo "lr-fleet: PARKED — $LF_PARK_REASON" >&2; return 1; }
   while :; do
-    # Correct the ACTIVE term for limit-corpse beats before each probe (see the header above). Left
-    # unset on any unreadable leg, so the probe then sees exactly what it saw before this existed.
-    unset CC_SP_ACTIVE_OVERRIDE
-    if [ "${LR_FLEET_PHANTOM_CORRECTION:-on}" != off ] && command -v cc_sp_active >/dev/null 2>&1; then
-      raw="$(cc_sp_active 2>/dev/null || true)"
-      ph="$(lf_phantom_actives 2>/dev/null || true)"
-      case "${raw:-x}${ph:-x}" in
-        *[!0-9]*) : ;;
-        *) if [ "$ph" -gt 0 ]; then
-             corrected=$(( raw - ph )); [ "$corrected" -lt 0 ] && corrected=0
-             export CC_SP_ACTIVE_OVERRIDE="$corrected"
-             echo "lr-fleet: active census ${raw} includes ${ph} limit-corpse beat(s) — probing at ${corrected}" >&2
-           fi ;;
-      esac
-    fi
-    if cc_capacity_probe lr-fleet "$1"; then unset CC_SP_ACTIVE_OVERRIDE; return 0; fi
-    unset CC_SP_ACTIVE_OVERRIDE
+    # ONE probe implementation, shared with lr-handoff's pre-transplant check (lr-lib.sh
+    # `lr_capacity_probe_corrected`): the phantom-active subtraction and the call-scoped
+    # CC_ADMIT_LOAD_TERM=off both live there now. The WAIT stays here — it is the fleet's policy,
+    # not the probe's — and the behaviour of --detach (W1) is unchanged.
+    if lr_capacity_probe_corrected lr-fleet "$1"; then return 0; fi
     # The park's REASON, carried out of this function rather than only printed. `LF_PARK_REASON` is
     # what the caller folds into the results row: a row reading `parked | capacity` said which gate
     # refused and never which TERM, so the one fact that decides the next action (shed load? close
