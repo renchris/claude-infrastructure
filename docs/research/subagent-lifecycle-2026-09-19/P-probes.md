@@ -147,3 +147,93 @@ Second, **that refusal is ambiguous by construction**: it reports a lookup miss 
 which is not absence (memory `lookup-miss-is-not-absence`). The member said so itself before idling.
 
 ---
+
+## 2. PROBE P1 — RC-10, the lead-exit cleanup budget
+
+### What it measures
+`cleanupSessionTeams` closes every member pane inside a **2 000 ms** race (`Qge=2000`, D §4), each
+close a separate CLI round trip through the it2 shim, result discarded. Whether that completes for
+N > 2 panes is undecidable from strings — hence a probe. A lead spawns **4** named teammates, waits
+for all four idle notifications, then exits gracefully; survivors are counted at **+30 s**.
+
+**Verdict rule, fixed before the first run:** survivors == 0 on both graceful exits ⇒ the vendor's
+cleanup is sufficient and **no fleet-side SessionEnd close is licensed**. survivors > 0 ⇒ the probe
+FAILED, and only then is a fleet-side change licensed — scoped to this fixture, with this probe as
+its control, and only after messaging the lead.
+
+### Why a busy box cannot be allowed to answer this
+The budget is **wall-clock**, so a loaded box makes the vendor miss it for reasons that have nothing
+to do with the vendor — and "survivors > 0" is precisely the direction that licenses a fleet-side
+change. The asymmetry is the whole point and it cuts one way only:
+
+* **survivors == 0 under load** is *stronger* than the same result on a quiet box — the cleanup
+  completed despite adverse conditions.
+* **survivors > 0 under load** licenses **nothing**, and must be re-run on a quiet box with both
+  readings printed side by side.
+
+`run-p1.sh` therefore records `uptime` and `top -l 2 -n 0 | grep '^CPU usage'` immediately **before**
+and **after** every run (`captures/p1-<run>/box-before.txt`, `box-after.txt`), and refuses to start
+until the box is quiet.
+
+### Attempt 1 — INVALID, and it is recorded because each defect is a finding
+
+The first attempt of run 1 produced `survivor_windows=1 survivor_procs=0` at
+`2026-09-19T21:07:57Z`. **That number is not a P1 result and is not reported as one**: the run never
+reached its own precondition (`idle_observed=0/4`, `spawned_procs=0` — nothing was ever spawned). It
+is discarded. It exposed four defects, three in the instrument and two in the environment:
+
+1. **The idle oracle matched its own instruction text.** The completion marker `P1-ALL-FOUR-IDLE` is
+   *in the lead's brief*, so the pane displays it the moment the prompt is echoed. The runner tested
+   for `>= 1` occurrence and fired `/exit` **10 seconds in**, before any teammate existed. The lead
+   printing it is the *second* occurrence; the test is now `>= 2` **and** `>= 4` live members.
+2. **`send-text` with a bare LF does not submit the composer** — it inserts a newline. `/exit` sat
+   unsent in the lead's composer for minutes. Only a **carriage return** submits.
+3. **A kitty-launched `/bin/bash` never reads `.zshrc`, so the lead could not create a teammate at
+   all.** The lead's own words: *"teammateMode is set to `iterm2` but this session is not running
+   inside iTerm2 … this session cannot create a named teammate at all."* Claude Code gates its iTerm2
+   pane backend on `ITERM_SESSION_ID` and `~/.zshrc:678-696` synthesises it as
+   `w0t0p0:$KITTY_WINDOW_ID` for exactly this reason; a non-interactive shell never runs that block.
+   The wrapper now reproduces the fleet's own synthesis verbatim. **This is not a `teammateMode`
+   change** — that is forbidden for this wave, and nothing here alters it.
+4. **The fleet's admission gate refused 3 of 3 spawns.** `hooks/agent-teams-enforce.sh` →
+   `cc_capacity_admit`: *"8 sessions mid-turn + 1 > active ceiling 8"*. The refusal is bounded — it
+   releases itself after `CC_ADMIT_BUDGET` consecutive refusals — and its own remedy is *"let the
+   running turns finish… shed first, then spawn"*.
+
+Defect 4 and the load addendum want the same thing, so the runner now has **one preflight for both**:
+`cc_sp_active <= 3` (a lead plus four members must stay under the ceiling of 8) **and** CPU idle
+`>= 40%`. It exits 3 rather than running on a box that cannot answer the question.
+
+**`CC_ADMIT_GATE=off` was available and was not used.** Overriding a protective gate in order to
+measure a race would buy a measurement of the box in exactly the state the gate exists to prevent.
+
+### Attempt 1's environmental findings are themselves results
+
+Two of the four defects above are facts about **this fleet**, not about the probe, and both belong in
+the register even though W5 changes nothing:
+
+* **A session that is not `ITERM_SESSION_ID`-tagged cannot create a named teammate at all** under
+  `teammateMode: "iterm2"`, and the failure is a clear refusal, not a silent demotion. It is
+  therefore a *different* failure mode from RC-11's `isolation`/`cwd` demotion, which is silent. Any
+  fleet automation that launches a Claude session from a non-interactive shell inside kitty — cron, a
+  `launchd` job, a wrapper that does not source `.zshrc` — gets a lead that cannot spawn teammates.
+  Proven in both directions by `captures/env-control/RESULT.txt`: unset before, `w0t0p0:171` after.
+* **The admission gate is reached by teammate spawns and is load-bound**, so a 4-member wave is not
+  schedulable on a box already at its ceiling. The plan anticipated this (*"the capacity gate refuses
+  once and then admits, so the next attempt is effectively unguarded and the moment has to be chosen
+  by hand"*), and this wave chose to **wait** rather than spend the release.
+
+### The fallback bar, declared BEFORE the runs, so it cannot be a post-hoc rationalisation
+
+The preflight above (`cc_sp_active <= 3`, idle `>= 40%`) may not be reachable while the sibling waves
+W1/W2/W3 are still running — readings during this wave ranged `cc_sp_active` 7→11 and idle 0.86%→37.8%.
+If it is not met inside the wait budget, this wave relaxes to `cc_sp_active <= 4` and idle `>= 25%`
+and runs anyway, **because the addendum's rule is asymmetric and applies at interpretation time, not
+at run time**:
+
+* a **survivors == 0** result stands at any load, and stands *more* strongly the busier the box was;
+* a **survivors > 0** result at any load below the 40% bar licenses **nothing**, and is re-run on a
+  quiet box with both readings printed side by side before any fleet-side change is even discussed.
+
+Every run below prints its own `uptime` and CPU idle immediately before and after, and the box state
+is stated **in the verdict sentence itself**.
