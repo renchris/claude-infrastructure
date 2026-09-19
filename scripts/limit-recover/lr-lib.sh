@@ -19,9 +19,25 @@ LR_LIB_LOADED=1
 # ── the four account stores ──────────────────────────────────────────────────────────────────────
 lr_config_dirs() { # → one config dir per line; ~/.claude and ~/.claude-next are ONE account (mirror)
   if [ -n "${LR_CONFIG_DIRS:-}" ]; then printf '%s\n' "$LR_CONFIG_DIRS" | tr ':' '\n'; return 0; fi
-  local h
+  # DEDUPED BY THE DIRECTORY THE SCAN ACTUALLY READS, not by the config dir's own name.
+  # `~/.claude-next/projects` is a SYMLINK to `~/.claude/projects` on this box, so every consumer
+  # walked 421 of 2,579 transcript files TWICE — 16.3% of the census, paid on the hot path
+  # (U14 §1.1, 2026-09-19). lr-fleet dedupes AFTERWARDS, by row, at lf_dedup_mirror; that corrects
+  # the OUTPUT and cannot recover the work, and every other caller pays the full double walk with
+  # no dedupe at all. The identity is `pwd -P` of `projects/`: two stores that resolve to one
+  # directory hold one population however they are spelled. FIRST spelling wins, so `.claude` beats
+  # its `.claude-next` mirror — the same direction lf_dedup_mirror already keeps, and the one the
+  # in-repo account map names.
+  local h key seen=""
   for h in "$HOME/.claude" "$HOME/.claude-next" "$HOME/.claude-secondary" "$HOME/.claude-tertiary" "$HOME/.claude-quaternary"; do
-    [ -d "$h/projects" ] && printf '%s\n' "$h"
+    [ -d "$h/projects" ] || continue
+    # `cd && pwd -P` is a builtin pair — no fork, and no dependency on a `realpath`/`readlink -f`
+    # that is not on every PATH this library is sourced from. An unreadable dir keeps its own path
+    # as the key rather than collapsing onto the empty string, which would drop every later store.
+    key="$(cd "$h/projects" 2>/dev/null && pwd -P)"; [ -n "$key" ] || key="$h/projects"
+    case "$seen" in *"|$key|"*) continue ;; esac
+    seen="$seen|$key|"
+    printf '%s\n' "$h"
   done
   return 0
 }
