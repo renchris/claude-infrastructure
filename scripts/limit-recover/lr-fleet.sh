@@ -212,9 +212,9 @@ sys.exit(0 if last else 1)' || continue
       else
         pane="-"; pid="-"; cwd="-"; tier="$(lr_tier_from_transcript "$cfg" "$sid" 2>/dev/null | tr ' ' '/' || true)"; [ -n "$tier" ] || tier="-"
         if rows="$(lr_registry_live_rows "$sid")"; then
-          n="$(printf '%s\n' "$rows" | grep -c .)"
           IFS=$'\t' read -r pane pid _ cwd <<<"$(printf '%s\n' "$rows" | head -1)"
-          if [ "$n" -gt 1 ] || lr_resume_procs "$sid" >/dev/null 2>&1; then disp=DUPLICATE; else disp=RECOVERABLE; fi
+          # DISTINCT holders, via the one shared predicate — see lr_holder_count in lr-lib.sh.
+          if [ "$(lr_holder_count "$sid")" -gt 1 ]; then disp=DUPLICATE; else disp=RECOVERABLE; fi
         elif _procs="$(lr_resume_procs "$sid" 2>/dev/null)"; then
           # D7 — THE REGISTRY HOLE, FILLED FROM THE ARGV LEAF. A session whose SessionStart hook
           # never wrote a row (or whose row went stale) has no registry pid, and this branch used to
@@ -562,11 +562,8 @@ EOF
       rows="$(lr_registry_live_rows "$sid" 2>/dev/null || true)"; [ -n "$rows" ] || continue
       procs="$(lr_resume_procs "$sid" 2>/dev/null || true)"
       nrows="$(printf '%s\n' "$rows" | grep -c .)"; nprocs="$(printf '%s' "$procs" | grep -c . || true)"
-      # a registry pid that IS a --resume process counts once
-      total=$((nrows + nprocs))
-      while IFS=$'\t' read -r pane pid _ _; do printf '%s\n' "$procs" | grep -x "$pid" >/dev/null && total=$((total-1)); done <<EOF
-$rows
-EOF
+      # a registry pid that IS a --resume process counts once — ONE predicate, shared with --locate
+      total="$(lr_holder_count "$sid")"
       [ "$total" -gt 1 ] || continue
       found=$((found+1))
       echo "DUPLICATE ${sid:0:8}: $nrows registry pane(s) + $nprocs --resume process(es)"

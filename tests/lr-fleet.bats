@@ -93,6 +93,37 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   run bash "$FLEET" --locate
   [[ "$output" == *"DUPLICATE"* ]] || { echo "$output"; false; }
 }
+@test "locate: a resumed session's OWN pid is ONE holder — RECOVERABLE, never DUPLICATE" {
+  # THE OVERLAP. A session resumed by the poller carries `--resume <sid>` in its own argv, so the
+  # single process holding it appears in BOTH censuses — the registry row AND the argv sweep. The
+  # un-deduped test (`[ $n -gt 1 ] || lr_resume_procs`) therefore called every singly-held resumed
+  # session DUPLICATE, and `--recover` parked it behind a prescription (`--duplicates`) that
+  # subtracts the overlap and so reported nothing to resolve. Measured 2026-09-19 on 09e64dcb:
+  # one registry row (pane 111, pid 37018), one resume pid — 37018 — and the pane was unrecoverable.
+  blocked_tx "$SEC" "$SID"
+  # A process whose ARGV carries the marker, standing in for the resumed session itself. `; :`
+  # defeats the shell's last-command exec optimisation, which would replace this argv with sleep's.
+  /bin/sh -c 'sleep 30; :' --resume "$SID" &
+  local holder=$!
+  row 616 "$SID" "$holder"
+  run bash "$FLEET" --locate
+  kill "$holder" 2>/dev/null || true
+  [[ "$output" != *"DUPLICATE"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"RECOVERABLE"* ]] || { echo "$output"; false; }
+}
+
+@test "duplicates: the two censuses agree — a single holder is a duplicate to NEITHER" {
+  # The CONTROL for the case above, and the divergence itself: --locate and --duplicates must
+  # return the same verdict over one population. Before the shared predicate they did not.
+  blocked_tx "$SEC" "$SID"
+  /bin/sh -c 'sleep 30; :' --resume "$SID" &
+  local holder=$!
+  row 616 "$SID" "$holder"
+  run bash "$FLEET" --duplicates
+  kill "$holder" 2>/dev/null || true
+  [[ "$output" == *"no session is held by more than one live process"* ]] || { echo "$output"; false; }
+}
+
 @test "locate --json emits one object per session with the same fields" {
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
   run bash "$FLEET" --locate --json
