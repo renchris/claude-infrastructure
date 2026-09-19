@@ -1044,6 +1044,11 @@ protected_branch() { # never deleted, whatever the evidence says
 N_REMOVED=0; N_KEPT=0; N_BR_DELETED=0; N_REFUSED=0; N_DISPOSED=0; N_DISPOSE_CAND=0; VERIFY_FAIL=0
 N_DIRT_CAND=0; N_DIRT_REMOVED=0
 N_UNOWNED=0; N_OWNER_ACTIVE=0
+# The PATHS behind N_UNOWNED, so the remedy below can name them instead of printing a literal
+# `<path>`. Safe to accumulate here: the porcelain loop is `done < <(...)` (process substitution),
+# not a pipe, so process_record runs in THIS shell and the assignment survives
+# (memory: assignment-inside-command-substitution-never-escapes — the trap this is not).
+UNOWNED_PATHS=""
 PREFIX=""; [ "$DRY_RUN" = "1" ] && PREFIX="would "
 
 dispose_record() { # <path> <canon> <branch> <base> <idle-hours> <n-unlanded> — the DISPOSE action
@@ -1117,6 +1122,7 @@ process_record() {
   base="$(basename "$path")"
 
   if   excluded "$cpath";                                    then reason="hard-excluded (CC_WTGC_EXCLUDE)"
+  elif [ ! -d "$path" ] && [ "$locked" = "1" ];              then reason="directory is gone AND the record is LOCKED — 'git worktree prune' SKIPS locked records, so this one is PERMANENT until unlocked: git worktree unlock '$path' && git worktree prune"
   elif [ ! -d "$path" ];                                     then reason="directory is gone (admin record only — 'git worktree prune' handles it)"
   elif [ "$locked" = "1" ];                                  then reason="locked worktree"
   elif [ -f "$path/.teammate-busy" ];                        then reason=".teammate-busy marker present"
@@ -1161,7 +1167,9 @@ process_record() {
           # describing, and `cc-backlog done` on a merely-blocked item would falsify the ledger
           # to reap a directory.
           if [ "$OWNER_ACTIVE" = "1" ]; then N_OWNER_ACTIVE=$((N_OWNER_ACTIVE + 1))
-          else                               N_UNOWNED=$((N_UNOWNED + 1)); fi
+          else                               N_UNOWNED=$((N_UNOWNED + 1))
+                                               UNOWNED_PATHS="${UNOWNED_PATHS}${path}
+"; fi
         else
           dispose_record "$path" "$cpath" "$branch" "$base" "$((age / 60))" "$n"
           return 0
@@ -1470,7 +1478,7 @@ GC_ELAPSED_S=$(( $(date +%s) - GC_T0 ))
 # numbers in every nightly row, silently, exit 0. A positional reader over a human sentence makes
 # ADDING A FIELD a breaking change to history, which is the defect, not the symptom.
 # Every value is ASCII and whitespace-free so `k=v` splitting is total.
-echo "worktree-gc: counts removed=$N_REMOVED disposed=$N_DISPOSED landed_dirt=$N_DIRT_REMOVED kept=$N_KEPT branches_deleted=$N_BR_DELETED refusals=$N_REFUSED elapsed=${GC_ELAPSED_S}s lock_staleness_window=3600s dry_run=$DRY_RUN maint_lock=$MAINT_LOCK_STATE maint_lock_age_min=$MAINT_LOCK_AGE_MIN loose_objects=$LOOSE_OBJECTS"
+echo "worktree-gc: counts removed=$N_REMOVED disposed=$N_DISPOSED landed_dirt=$N_DIRT_REMOVED kept=$N_KEPT branches_deleted=$N_BR_DELETED refusals=$N_REFUSED elapsed=${GC_ELAPSED_S}s lock_staleness_window=3600s dry_run=$DRY_RUN maint_lock=$MAINT_LOCK_STATE maint_lock_age_min=$MAINT_LOCK_AGE_MIN loose_objects=$LOOSE_OBJECTS unowned=$N_UNOWNED owner_active=$N_OWNER_ACTIVE"
 [ "$PRUNE_BRANCHES" = "0" ] && echo "worktree-gc: branches preserved (pass --prune-branches to delete landed, worktree-less ones)"
 # Absence must be LOUD: a dispose plan that cites this script has to see the class it asked about,
 # whether or not it passed the flag that acts on it.
@@ -1489,7 +1497,19 @@ fi
 # owned-and-blocked, i.e. the message was misprescribing for the majority of what it counted.
 if [ "$N_UNOWNED" -gt 0 ]; then
   echo "worktree-gc: $N_UNOWNED unlanded worktree(s) are past the ${ABANDON_HOURS}h horizon with NO ownership oracle at all — nothing will ever rule on them. Land the branch, record the owner terminal (cc-backlog done <id> / tear the team down), or warrant the path explicitly:"
-  echo "worktree-gc:   bash scripts/worktree-gc.sh --warrant <path> --reason '<why it is abandoned>'"
+  # The paths themselves, because a remedy the operator cannot paste is not a remedy. This line
+  # printed a literal `<path>` on 7 of 7 sweeps — resident CLAUDE.md § Manual-Command Delivery
+  # calls that out by name: the payload under an instruction must be executable as typed.
+  printf '%s\n' "$UNOWNED_PATHS" | while IFS= read -r _up; do
+    [ -n "$_up" ] || continue
+    echo "worktree-gc:     $_up"
+  done
+  # ONE command, with a REAL path substituted. The reason stays a placeholder because it is the
+  # operator's judgement and nothing here can supply it — which is precisely why this is shown as
+  # a shape to edit rather than a line to paste blind.
+  _u1="$(printf '%s\n' "$UNOWNED_PATHS" | sed -n '1p')"
+  echo "worktree-gc:   each needs one warrant carrying YOUR reason, e.g."
+  echo "worktree-gc:   bash scripts/worktree-gc.sh --warrant '$_u1' --reason 'superseded by <what>'"
 fi
 if [ "$N_OWNER_ACTIVE" -gt 0 ]; then
   echo "worktree-gc: $N_OWNER_ACTIVE unlanded worktree(s) are past the ${ABANDON_HOURS}h horizon but their owner is provably NOT terminal (an open/claimed/blocked item, or a live team) — this is owned, parked work, not residue. Land it or resolve the item; do NOT mark an item done to reap a directory."
