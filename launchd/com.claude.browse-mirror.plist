@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.browse-mirror — keeps the human-browsable checkouts at their upstream ref.
+
+  WHAT IT SERVES. Every session in a high-volume repo runs in a worktree, so the ORIGINAL checkout
+  is never worked in — and was therefore never advanced. Measured 2026-09-19,
+  ~/Development/reso-management-app had been showing files 1,948 commits old, and a tag from a
+  previous manual reconcile (archive/local-main-20260702, "169 ahead / 702 behind at retirement")
+  shows the same folder had already rotted and been hand-fixed once before. A one-time fix does not
+  hold; a cadence does. The subject is scripts/browse-mirror-sync.sh — every safety property lives
+  there, and this file is the missing cron and nothing else.
+
+  TWO TRIGGERS, AND BOTH ARE LOAD-BEARING.
+
+  WatchPaths is the fast path and it is nearly free. refs/remotes lives in the git COMMON dir, so
+  when any of that repo's 35 worktrees fetches, the root's own refs/remotes/origin/main is what
+  changes — the mirror's input and the watch target are literally the same file. The mirror
+  therefore advances within seconds of the fleet learning about a land, with no polling at all, and
+  a firing whose HEAD already equals the target costs two rev-parses and exits. packed-refs is
+  watched beside the loose refs because `git gc` moves a ref between those two representations; a
+  watch on only one goes quiet at an unpredictable moment and the failure is invisible.
+
+  StartInterval is the backstop, and it is the half that survives a quiet fleet. If nothing fetches
+  for a day, refs/remotes never changes, WatchPaths never fires, and a mirror pinned to a stale
+  origin/main would report itself perfectly current — exactly the silent-staleness failure this job
+  exists to end. The tick is also what drives the subject's rate-limited network fetch
+  (CC_BROWSE_MIRROR_FETCH_MIN, default 600s), so 600 here and 600 there are the same number on
+  purpose: at most one fetch per interval, never one per WatchPaths firing.
+
+  ThrottleInterval 30 (launchd's default is 10) because a busy afternoon can move origin/main
+  several times a minute and there is no value in advancing a browse folder more often than that.
+
+  RunAtLoad true, for the same reason deploy-live sets it: a login is exactly when a browse folder
+  is most likely to be stale, and an already-current tick is a rev-parse.
+
+  C10: the OPERATOR loads this. migrations/0032-browse-mirror.sh is the one command.
+  Kill switch (no unload needed): touch ~/.claude/autonomy/browse-mirror.disabled
+  Full stop:                      launchctl bootout gui/$(id -u)/com.claude.browse-mirror
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.browse-mirror</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>exec "$HOME/.claude/scripts/browse-mirror-sync.sh"</string>
+    </array>
+
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/chrisren/Development/reso-management-app/.git/refs/remotes/origin/main</string>
+        <string>/Users/chrisren/Development/reso-management-app/.git/refs/remotes/origin/release</string>
+        <string>/Users/chrisren/Development/reso-management-app/.git/packed-refs</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>600</integer>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/chrisren/.claude/logs/browse-mirror.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/chrisren/.claude/logs/browse-mirror.out.log</string>
+</dict>
+</plist>
