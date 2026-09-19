@@ -164,3 +164,97 @@ agent-written repo whose own external-validity check failed. The most-quoted acc
 | $/weekly pp | `python3 -c "b=334.0; w=4*200*12/52; print(w/b)"` — **tier is not on disk**; `accounts.json` has no plan/price field |
 | Jev real latency | OpenRouter reports `latency_last_30m: null`, `throughput_last_30m: null` — no traffic logged. 50x curl the endpoint and take the distribution. |
 | Jev accuracy on OUR task | does not exist; requires the pilot |
+
+---
+
+# Addendum — 2026-09-19: the integration, and three corrections to the above
+
+The §4 ranking was acted on. What landed is `d107b1a44`; what follows is only the parts that
+**change or correct** this document, not a restatement of it.
+
+## A. §4 rank 1 split in two — one confirmed, one REFUTED
+
+A 14-agent adversarial workflow (8 subsystem surveys → 32 candidates → 6 adversarially verified,
+2.4M tokens, 0 errors) was run against the whole repo rather than against this document's
+shortlist, so it could disagree with it. It did.
+
+| §4 target | Verdict | Why |
+|---|---|---|
+| `anti-deference-nudge` | **CONFIRMED** (semantic ✓, failure real ✓, latency ✓, fail-open safe ✓) | wired, off by default |
+| `completion-assert` kill-switch authorship | 🚨 **REFUTED** | the 89.7% false-positive rate is real, but **27 of the 28 false positives die to a literal envelope-prefix test plus a first-non-meta-record test** — both free, deterministic, offline, and derivable from the jq reader the hook already runs. Ship those and Jev is left adjudicating **~0.06 calls/day**. |
+
+**This is the correction that matters most**, because §4 sold the two together as one ~960/day
+population. They are not one population. The authorship half was never a capability gap — the
+hook was discarding structural evidence sitting in front of it, and buying a classifier to
+recover it would have been paying for a fix that a grep already performs. `N_sync ≈ 960/day`
+should be read as **~540/day** (anti-deference alone) until that structural fix lands.
+
+Also confirmed and **not** wired: `completion-assert` D1/D4 ungated deferral (its arms BLOCK a
+Stop, so an unmeasured classifier on the fleet's hottest surface can be a net regression — it
+waits on the pilot) and `cc-memory-rotate` durability_rank (offline, no latency risk, but half
+the moved set is *routed* rather than evicted, so the rank barely decides).
+
+## B. The headline number in §3 is an abstention rate, not a miss rate
+
+§3's table says `anti-deference-nudge … 5,111 = 94.7% no-tell — recognises nothing 19 times in
+20`. The arithmetic is right and the framing oversells it: the denominator is **all Stops**, and
+most closes are not deferrals at all, so silence on them is the hook working correctly.
+
+Re-derived against `conviction-close-2026-09-08.md` §2.2: ungated deferrals are 9.4% of closes at
+hand-read precision 30% (21/70, Wilson 20–42%) ⇒ a true population near **2.8% of closes, ~300 per
+30 days**, against **160 actual fires**. The honest claim is **"it catches about half of the
+deferrals that matter"**.
+
+That is a smaller claim and a better-aimed one, because it comes with a shape: what the hook
+misses is a **family, not a tail**. 447 of the 1,000 ungated hits are the *decision vocabulary* —
+`your call`, `policy call`, `the decision is yours` — which appears in **none** of the four
+alternations. The measured incident `(fseventsd saturation, your policy call)` passed every prose
+arm three times.
+
+## C. §4's privacy row is materially weaker on the **Gateway** route than on the direct API
+
+The row reads *"Anything with private data — transcripts, mailbox … Refused regardless of price.
+New sub-processor, US-only unbounded retention, enterprise-gated ZDR."* On `api.typesafe.ai`
+direct, that stands. On the **AI Gateway** route it does not, and the difference is checkable:
+
+- ZDR is a **per-request** flag, `providerOptions.gateway.zeroDataRetention`, not an enterprise
+  contract term — and it **fails closed**: "if no ZDR-compliant providers are available for the
+  requested model, the request fails with an error". It cannot silently downgrade.
+- Vercel's own Jev changelog states ZDR and No-Training support for this model explicitly.
+- Verified on the wire here, not assumed: `tests/jev-evaluate.bats` asserts the flag reaches the
+  request body, and a second test asserts that `CC_JEV_ZDR=0` is the only way it comes off.
+
+This does **not** reopen the mailbox or the 213,995-message `msg` corpus. It narrows the refusal
+to what it was actually protecting: the payload sent is one bounded closing message the model
+itself just wrote, capped mechanically at `CC_JEV_MAX_STATE_B`, with no transcript, path or
+history attached.
+
+## D. §5's gap is now instrumented — `cc-jev pilot`
+
+§5: *"Nobody has ever scored Jev against real labels. That is the state of the evidence."* Still
+true — **zero Jev calls have been made from this machine**, and every artifact shipped says so on
+its face. What changed is that the experiment now exists and has real labels:
+
+- **Arm A — recall on 85 genuine positives.** Closes the lexical matcher already fired on
+  (`deference` 41 + `false-done` 30 + `category-not-idea` 14), each joined to the exact assistant
+  message by the `tell` the hook recorded — 25/25 resolved on a trial join. `opaque-identifier`
+  (75) is deliberately excluded: it is a different defect and would score the arm on a question
+  nobody posed. **This arm can fail, and failure is disqualifying.**
+- **Arm B — discovery over the 5,131 `no-tell` rows.** No ground truth exists, so it reports a
+  **rate and a sample for hand-reading, never an accuracy**, and prints the ~2.8% calibration band
+  beside it so that over-firing cannot be read as discovery.
+
+The pilot **refuses to run** (exit 3) if arm A has zero labels rather than printing a friendly
+`n/a` — the vacuous-positive-control failure this repo keeps re-learning. Its first draft had
+exactly that bug two ways over: it read only the live `idl.jsonl` (39 sessions, 0 fires) and
+collapsed `group_by(.sid)|map(.[-1])`, which discards a fire whenever a session later abstains.
+It reported 0 of 160 labelled positives and would have looked like a clean run.
+
+## E. Re-derive, never re-quote — additions
+
+| Number | Command |
+|---|---|
+| arm A labels / arm B pool | `{ cat ~/.claude/autonomy/idl.jsonl; gunzip -c ~/.claude/autonomy/idl.jsonl.*.gz; } \| jq -rc 'select(.hook=="anti-deference-nudge")\|{disp:.disposition,reason:.reason}' \| sort \| uniq -c` — `gunzip -c`, never `zcat` |
+| whether the arm is live at all | `cc-jev status` |
+| Jev's route actually works | `cc-jev probe` |
+| Jev's accuracy on OUR corpus | `cc-jev pilot` — **still the only thing that can settle it** |
