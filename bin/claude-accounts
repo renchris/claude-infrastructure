@@ -10,6 +10,17 @@ rate-spread), with the Fable window read LIVE from ~/.claude/model-config.yaml f
 (never a hardcoded date — the reso-quota JUL7 bug: the operator extended the window Jul-9 and the
 hardcode silently killed all Fable routing).
 
+Network policy (read this before adding a call):
+  - The usage sweep is `/api/oauth/usage` and nothing else. It reports each window as an INTEGER
+    `percent` that ROUNDS UP and CLAMPS at 100, so `weekly 100%` is one rendering of three
+    different states (99% used and allowed · exactly full · 102% used and rejected).
+  - The WIRE (`anthropic-ratelimit-unified-*` response headers) carries the unclamped fraction and
+    the server's own allowed/allowed_warning/rejected verdict, and it rides ONLY on `/v1/messages`
+    — `count_tokens` carries none (measured). So this tool DOES make one minimal inference call
+    (`max_tokens: 1`, body discarded) per account, but only where the integer is ambiguous
+    (>= WIRE_NEAR_WALL), or on `--wire`. That is the tool's only inference, ~25 tokens against a
+    weekly pp worth ~500k, and `CC_ACCOUNTS_WIRE=off` removes it. See the fetch_wire_limits block.
+
 Auth policy (rotation-safe by construction):
   - NEVER mints or persists tokens itself. Staleness is read from the keychain payload's
     expiresAt (no network needed).
@@ -36,6 +47,14 @@ Auth policy (rotation-safe by construction):
 Usage:
   claude-accounts                     human table + route hints
   claude-accounts --json              machine-readable (rows + window + scores; tokens redacted)
+  claude-accounts --wire              force the WIRE read on every account, not only the ones
+      at the wall. The `/api/oauth/usage` percent is an INTEGER that rounds UP and clamps at 100,
+      so `weekly 100%` is one rendering of three different states — 99% used and `allowed`,
+      exactly full, and 102% used and `rejected`. The `anthropic-ratelimit-unified-*` response
+      headers carry the unclamped fraction AND the server's own allowed/allowed_warning/rejected
+      verdict, so they are what the router and the `ʷ`-suffixed cells use whenever present.
+      Cost: ONE `max_tokens: 1` call per account (~25 tokens; 1 weekly pp is ~500k). Un-forced it
+      fires only at/above WIRE_NEAR_WALL, where the integer is ambiguous. Kill: CC_ACCOUNTS_WIRE=off.
   claude-accounts --readout           the /accounts chat readout, as finished markdown.
       THE renderer for that surface — paste it, do not rebuild it. Every formatting rule
       (column set, Xd Yh relatives, the ➤ route marker, ⚠ on a login inside login_warn_h,
@@ -814,6 +833,166 @@ def fetch_usage(cfg, token, retries=2):
     return None, None
 
 
+
+# ---- the WIRE truth (anthropic-ratelimit-unified-* headers) ------------------------------------
+# WHY THIS EXISTS. `/api/oauth/usage` reports each window as an INTEGER `percent`, and that
+# integer is a THREE-WAY COLLAPSE at the top of the range: it rounds UP and it clamps at 100, so
+# `weekly 100%` is the single rendering of "99% used, ~1pp left, server says allowed", "exactly
+# 100%", and "102% used, in overage, server says rejected". Measured 2026-09-19 on all four
+# accounts at once: `next` read `percent: 100` from the endpoint while the wire read
+# `7d-utilization: 0.99  7d-status: allowed_warning` and a real request returned HTTP 200 — i.e.
+# the fleet was excluding a WORKING account as `weekly-exhausted`. `next4` read `percent: 100` on
+# the 5h window while the wire read `5h-utilization: 1.02  5h-status: rejected` (HTTP 429), which
+# is the OTHER end of the same collapse: the endpoint cannot represent overage either. The
+# binary's own SDK doc names both properties — "events are emitted when a window's ROUNDED
+# percentage ... moves" and "values above 1 occur when usage legitimately runs past a window's cap".
+#
+# 1pp of a weekly window is not a rounding nicety. At the fitted exchange rate (K_FROZEN = 0.192
+# weekly pp per session pp) it is ~5.2% of a whole 5-hour window — about one research subagent —
+# and it is worth MOST exactly when every meter reads 100 and there is nothing else to route to.
+# Measured over the recorded series, an account sits at a pinned `100` for a mean ~21 h before its
+# weekly reset (max 56.5 h on `next`, 2026-09-13), hard-excluded from routing that entire time.
+#
+# THE ONE COST, STATED PLAINLY. These headers ride only on `/v1/messages` responses; the usage
+# endpoint does not carry them and `/v1/messages/count_tokens` (measured) carries none either. So
+# reading them means ONE minimal inference call — `max_tokens: 1` on the cheapest model, body
+# discarded, headers kept. That is ~25 quota-bearing tokens against a weekly budget where 1pp is
+# ~500k, i.e. ~4e-6 pp. It is nevertheless the first inference this tool has ever made, so it is
+# GATED to the only band where the integer is ambiguous (WIRE_NEAR_WALL and up), forced only by
+# `--wire`, and killable with CC_ACCOUNTS_WIRE=off. Away from the wall it never fires and the
+# tool's cost is byte-identical to before.
+#
+# A 429 IS A SUCCESSFUL READ HERE, not a failure: the rejection carries the same headers and is
+# precisely the case worth knowing about. Only a transport failure or a missing header set is a
+# miss, and a miss degrades to exactly today's behaviour (the endpoint integer) — never to a
+# guess, and never to a more permissive verdict than the endpoint would have given.
+
+WIRE_MODEL = os.environ.get("CC_ACCOUNTS_WIRE_MODEL", "claude-haiku-4-5-20251001")
+WIRE_NEAR_WALL = 99.0      # endpoint percent at/above which the integer is ambiguous
+WIRE_TIMEOUT_S = float(os.environ.get("CC_ACCOUNTS_WIRE_TIMEOUT_S", "15"))
+WIRE_STATUSES = ("allowed", "allowed_warning", "rejected")
+# Set once on the main thread from --wire, before any fan-out; read-only thereafter.
+WIRE_FORCE = False
+WIRE_FIELD = {"session_pct": "5h_util", "weekly_pct": "7d_util"}
+
+
+def _wire_float(h, name):
+    try:
+        return float(h[name])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _wire_status(h, name):
+    v = (h.get(name) or "").strip().lower()
+    return v if v in WIRE_STATUSES else (v or None)
+
+
+def fetch_wire_limits(cfg, token, timeout=None):
+    """One minimal /v1/messages call -> the unified rate-limit headers, or None.
+
+    Returns a dict with `5h_util` / `7d_util` as UNCLAMPED fractions (1.02 is a real answer) and
+    `5h_status` / `7d_status` in {allowed, allowed_warning, rejected}. `status` is the account's
+    currently-limiting verdict and `claim` names which window produced it.
+
+    None means "could not read the wire" and callers MUST fall back to the endpoint integer. An
+    HTTP error is not None: its headers are read and returned like any other."""
+    if not token:
+        return None
+    global SSL_CTX
+    if SSL_CTX is None:
+        SSL_CTX = _ssl_ctx()
+    body = json.dumps({
+        "model": WIRE_MODEL, "max_tokens": 1,
+        "messages": [{"role": "user", "content": "."}],
+    }).encode()
+    req = urllib.request.Request(
+        cfg.get("messages_endpoint", "https://api.anthropic.com/v1/messages"), data=body,
+        headers={"Authorization": f"Bearer {token}",
+                 "anthropic-beta": "oauth-2025-04-20",
+                 "anthropic-version": "2023-06-01",
+                 "content-type": "application/json",
+                 "User-Agent": cfg.get("user_agent", "claude-cli")})
+    http = None
+    try:
+        with urllib.request.urlopen(req, timeout=timeout or WIRE_TIMEOUT_S,
+                                    context=SSL_CTX) as r:
+            http, hdrs = r.status, r.headers
+            r.read()
+    except urllib.error.HTTPError as e:
+        http, hdrs = e.code, e.headers
+        try:
+            e.read()
+        except Exception:
+            pass
+    except Exception:
+        return None
+    h = {k.lower(): v for k, v in (hdrs or {}).items()
+         if k.lower().startswith("anthropic-ratelimit-unified-")}
+    if not h:
+        return None                              # no header set == no reading, never a guess
+    w = {
+        "http": http,
+        "5h_util": _wire_float(h, "anthropic-ratelimit-unified-5h-utilization"),
+        "7d_util": _wire_float(h, "anthropic-ratelimit-unified-7d-utilization"),
+        "5h_status": _wire_status(h, "anthropic-ratelimit-unified-5h-status"),
+        "7d_status": _wire_status(h, "anthropic-ratelimit-unified-7d-status"),
+        "status": _wire_status(h, "anthropic-ratelimit-unified-status"),
+        "claim": (h.get("anthropic-ratelimit-unified-representative-claim") or None),
+        # the lower-priority ("fallback") lane the binary offers past a wall, and the overage
+        # channel. Both are recorded because either one can make a `rejected` window still
+        # serve work, and neither is visible from the usage endpoint at all.
+        "fallback": (h.get("anthropic-ratelimit-unified-fallback") or None),
+        "overage_status": _wire_status(h, "anthropic-ratelimit-unified-overage-status"),
+    }
+    if w["5h_util"] is None and w["7d_util"] is None and w["status"] is None:
+        return None
+    return w
+
+
+def wire_enabled():
+    return (os.environ.get("CC_ACCOUNTS_WIRE") or "").strip().lower() not in ("off", "0", "false")
+
+
+def wire_wanted(sp, wp, force=False):
+    """Is the endpoint integer AMBIGUOUS for this row? Only then is the probe worth its call."""
+    if not wire_enabled():
+        return False
+    if force:
+        return True
+    return any(v is not None and v >= WIRE_NEAR_WALL for v in (sp, wp))
+
+
+def weekly_used_frac(r):
+    """Best-known weekly utilization as a fraction — wire when we have it, endpoint otherwise.
+
+    UNCLAMPED on purpose: a wire 1.02 must stay 1.02 so `1 - used` is a real 0, not a rounded one."""
+    w = r.get("wire") or {}
+    if w.get("7d_util") is not None:
+        return w["7d_util"]
+    wp = r.get("weekly_pct")
+    return None if wp is None else wp / 100.0
+
+
+def weekly_headroom(r):
+    """Weekly headroom as a fraction, from the best-known used figure. `None` when unknowable.
+
+    The 0.98 target when usage credits are ON is unchanged and stays keyed on the same field; only
+    the USED side gains resolution. At the wall that is the whole difference between a routable
+    account and an excluded one: endpoint 100 gives 0.00 headroom and hard-excludes, while a wire
+    0.99 gives 0.01 — above WEEKLY_FLOOR (0.005) — and the account keeps its last ~1pp."""
+    used = weekly_used_frac(r)
+    if used is None:
+        return None
+    return max(0.0, (0.98 if r.get("credits_on") else 1.00) - used)
+
+
+def wire_rejects(r, window="7d"):
+    """True only when the SERVER said it would refuse this window. Absent wire -> False: this
+    predicate may only ever ADD a refusal the endpoint could not see, never invent one."""
+    w = r.get("wire") or {}
+    return w.get(f"{window}_status") == "rejected"
+
 # ---- heal (delegated to the official binary; rotation-safe) -----------------------------------
 
 def heal(cfg, acct, refresh_token, k_live):
@@ -1457,8 +1636,25 @@ def probe_account(cfg, acct, kc, k_live, ledger, prev, no_heal):
         "fable_pct": fp, "fable_reset_h": hrs_until(fr), "fable_reset_at": fr,
     })
     set_credits(row, eu.get("is_enabled"), eu.get("used_credits"))
+    # THE WIRE, only where the endpoint integer is ambiguous (see the fetch_wire_limits block).
+    # Never overwrites sp/wp/fp: the recorded series, the burn fit and `_rolled` all key on the
+    # ENDPOINT meter, and a mid-series provenance switch would read as a window roll. The wire
+    # rides beside them and is consumed by the router and the renderer, which want the truth.
+    if wire_wanted(sp, wp, force=WIRE_FORCE):
+        w = fetch_wire_limits(cfg, token)
+        if w:
+            row["wire"] = w
+            log_event(f"probe {name}: wire — 5h {w.get('5h_util')} {w.get('5h_status')} · "
+                      f"7d {w.get('7d_util')} {w.get('7d_status')} · claim {w.get('claim')} "
+                      f"(endpoint read 5h {sp} / 7d {wp})")
+        else:
+            row["wire_miss"] = True
     # capture last-good (weekly is the durable stranded-quota signal; skip data-less rows).
     # Absolute reset stamps are stored (NOT the decaying *_reset_h) — inherit re-derives them.
+    # THE WIRE IS DELIBERATELY NOT INHERITED. A `*_status` is a point-in-time verdict the SERVER
+    # gave about one request; replayed onto a row we could not poll it would assert "allowed" on
+    # an account that may have hit its wall since — the one direction this whole change refuses
+    # to fail in. A stale meter reads as a stale number; a stale verdict reads as a fresh fact.
     entry = None
     if wp is not None:
         entry = {
@@ -3177,7 +3373,19 @@ def _excluded(r, R, cliff=True, k_of=None):
         return r["error"]
     if r.get("session_pct") is None:
         return "no-session-data"
-    su = r["session_pct"] / 100.0
+    # THE SERVER'S OWN VERDICT OUTRANKS BOTH METERS, and it is the only thing here that can say
+    # "refused" as a FACT rather than as a threshold we chose. It can only ever ADD a refusal the
+    # endpoint integer could not see (`wire_rejects` is False whenever the wire is absent), so no
+    # account becomes routable through this branch and a missing probe degrades to today exactly.
+    if wire_rejects(r, "7d"):
+        return "weekly-exhausted"
+    if wire_rejects(r, "5h") and (r.get("session_reset_h") is None
+                                  or r.get("session_reset_h") >= R["EPS_H"]):
+        return "5h-cutoff"
+    # The 5h utilisation, unclamped where the wire carries it: the endpoint reports `percent: 100`
+    # for a window measured at 1.02, and a ratio that cannot exceed 1 cannot express overage.
+    wu5 = ((r.get("wire") or {}).get("5h_util"))
+    su = wu5 if wu5 is not None else r["session_pct"] / 100.0
     sr = r.get("session_reset_h")
     if su >= R["S_CUT"] and (sr is None or sr >= R["EPS_H"]):
         return "5h-cutoff"
@@ -3213,8 +3421,7 @@ def score_general(r, cfg, cliff=True):
         return None, reason
     if r.get("weekly_pct") is None:
         return None, "no-weekly-data"          # missing data is NOT headroom
-    wtgt = 0.98 if r.get("credits_on") else 1.00
-    w_rem = max(0.0, wtgt - r["weekly_pct"] / 100.0)
+    w_rem = weekly_headroom(r)
     if w_rem <= R["WEEKLY_FLOOR"]:
         return None, "weekly-exhausted"
     T = horizon(r.get("weekly_reset_h"), R)
@@ -3341,7 +3548,7 @@ def desk_keys(r, cfg):
     wp = r.get("weekly_pct")
     if wp is None:
         return su, None, DESK_TIER_ANY
-    w_rem = max(0.0, (0.98 if r.get("credits_on") else 1.00) - wp / 100.0)
+    w_rem = weekly_headroom(r)
     if su < desk_5h_floor(R):
         w_floor = desk_w_floor_at(R, r.get("weekly_reset_h"))
         return su, w_rem, (DESK_TIER_SAFE if w_rem >= w_floor else DESK_TIER_5H)
@@ -3477,7 +3684,7 @@ def score_fable(r, cfg, win, cliff=True):
             return None, "window-ended"
         if h_deadline <= 0:
             h_deadline = None                   # credits mode: no window pressure, CF deprioritizes
-    w_rem = max(0.0, (0.98 if r.get("credits_on") else 1.00) - r["weekly_pct"] / 100.0)
+    w_rem = weekly_headroom(r)
     f_eff = min(F["coupling"] * max(0.0, 1 - r["fable_pct"] / 100.0), w_rem)
     if f_eff <= R["FABLE_FLOOR"]:
         return None, "fable-exhausted"
@@ -3669,6 +3876,15 @@ def record_utilization(rows, path=None, min_interval_s=UTIL_MIN_INTERVAL_S):
                     "fable_pct": r.get("fable_pct"),
                     "session_reset_at": r.get("session_reset_at"),
                     "weekly_reset_at": r.get("weekly_reset_at"),
+                    # THE WIRE, recorded beside the endpoint meters and NEVER in place of
+                    # them: the replay tools key window-rolls on a meter going backwards, so a
+                    # mid-series provenance switch would read as a reset. These are the fields
+                    # that make "was that pinned 100 real?" answerable AFTER the fact, which is
+                    # the question this series could not answer for its first 30,926 rows.
+                    "wire_5h_util": ((r.get("wire") or {}).get("5h_util")),
+                    "wire_7d_util": ((r.get("wire") or {}).get("7d_util")),
+                    "wire_5h_status": ((r.get("wire") or {}).get("5h_status")),
+                    "wire_7d_status": ((r.get("wire") or {}).get("7d_status")),
                     "credits_on": r.get("credits_on"), "credits_used": r.get("credits_used"),
                     "auth": r.get("auth"),
                     # inherited/errored rows are KEPT and flagged, never dropped: a gap in the
@@ -4326,6 +4542,13 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
         Withheld (null) on a bucket whose window has ROLLED since that reading: reporting
         the last-known number there would state a figure the reset has already voided.
         """
+        # `ʷ` = read off the WIRE, and it is the number that decides. The endpoint's integer
+        # rounds UP and clamps at 100, so it renders "99% used, allowed" and "102% used,
+        # rejected" as the same `100%`; the wire carries both, unclamped. The suffix is what
+        # tells a reader that a `100%` WITHOUT it is a rounded ceiling, not a measured wall.
+        wv = (r.get("wire") or {}).get(WIRE_FIELD.get(key))
+        if wv is not None:
+            return f"{wv * 100:.0f}%ʷ"
         v = r.get(key)
         if v is None:
             return "—"
@@ -4429,11 +4652,39 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
         if r.get("rolled_since"):
             notes.append(f"↻ `{acct}` — {'/'.join(r['rolled_since'])} window(s) have RESET since "
                          f"that reading; those buckets read `—` and are likely fresh again")
-        sp = r.get("session_pct")
+        # The SAME number the table's 5h cell prints — wire first. Two renderings of one meter
+        # disagreeing by a point in one message is exactly the second renderer this file exists
+        # to delete, and here it would land beside a cell the operator is reading for precision.
+        wu5 = (r.get("wire") or {}).get("5h_util")
+        sp = wu5 * 100 if wu5 is not None else r.get("session_pct")
         if sp is not None and sp >= s_cut:
             notes.append(f"▲ `{acct}` — 5h at {sp:.0f}%, at/over the {s_cut:.0f}% routing cutoff")
-        if (r.get("weekly_pct") or 0) >= 100:
-            notes.append(f"○ `{acct}` — weekly **LIMITED** (100%)")
+        # THE THREE-WAY SPLIT THIS BULLET USED TO COLLAPSE. `weekly_pct >= 100` is not a fact
+        # about exhaustion — the endpoint rounds UP and clamps, so it covers "99% used and the
+        # server says allowed", "exactly full", and "102% used and rejected". Saying **LIMITED**
+        # over the first of those is a false refusal, and it is the one that costs: measured over
+        # the recorded series an account sits pinned at `100` for a mean ~21 h before its weekly
+        # reset (max 56.5 h), excluded from routing the whole time, and ~1pp of a weekly window
+        # is ~5.2% of a whole 5-hour one. So the bullet now states which of the three it is, and
+        # says so in the language of who decided: the SERVER, or a rounding we did.
+        wire = r.get("wire") or {}
+        w7, s7 = wire.get("7d_util"), wire.get("7d_status")
+        if s7 == "rejected":
+            notes.append(f"○ `{acct}` — weekly **EXHAUSTED** — the server is refusing it"
+                         + (f" (wire {w7 * 100:.0f}% used)" if w7 is not None else ""))
+        elif w7 is not None and (r.get("weekly_pct") or 0) >= 100:
+            notes.append(f"◐ `{acct}` — weekly meter reads 100% but the wire reads "
+                         f"**{w7 * 100:.0f}%, `{s7 or 'allowed'}`** — ~{max(0.0, 1 - w7) * 100:.0f}pp "
+                         f"left (~{max(0.0, 1 - w7) * 100 / K_FROZEN:.0f}% of a 5h window); "
+                         f"still routable")
+        elif (r.get("weekly_pct") or 0) >= 100:
+            notes.append(f"○ `{acct}` — weekly meter at **100%** — rounded and clamped, so the "
+                         f"true figure is 99–10x% and unverified; `--wire` reads the server's own verdict")
+        if wire.get("5h_status") == "rejected":
+            notes.append(f"○ `{acct}` — 5h **REFUSED** by the server"
+                         + (f" (wire {wire['5h_util'] * 100:.0f}% used"
+                            + (", lower-priority lane available" if wire.get("fallback") == "available" else "")
+                            + ")" if wire.get("5h_util") is not None else ""))
         if (r.get("route_reasons") or {}).get("fable") == "fable-exhausted":
             notes.append(f"○ `{acct}` — Fable exhausted")
         # ¢ keys on SPEND, not on the toggle: an account read credits_on=false with $176.91
@@ -5321,6 +5572,11 @@ def main():
     if "-h" in args or "--help" in args:
         print(__doc__)
         return
+    # --wire: force the unified-header read on EVERY account, not just the ones whose endpoint
+    # integer is ambiguous. Set here, on the main thread, before any fan-out reads it.
+    global WIRE_FORCE
+    if "--wire" in args:
+        WIRE_FORCE = True
     # --agents: the provider section ALONE, and deliberately the FIRST branch — it returns before
     # load_cfg(), before the keychain, before the usage endpoint and before the lock. Two reasons,
     # and the second is the one that bit: (1) asking "what else can I route to" must never block
