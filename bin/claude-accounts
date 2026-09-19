@@ -375,6 +375,9 @@ ROUTER_OPTIONAL_RANGES = {
     "DESK_HYST_MARGIN": (0.0, 1.0),     # fraction a rival must beat the incumbent by
     "DESK_HYST_TTL_MIN": (0.0, 10080.0),  # how long a launcher assignment names the incumbent
     "KMAX_RESIDENT": (1.0, 10000.0),    # resident-session cap (see k_cap); KMAX is the ACTIVE one
+    "RECOVERY_W_FLOOR": (0.0, 1.0),     # weekly headroom a recovery target must still hold
+    "RECOVERY_S_CEIL": (0.0, 1.0),      # projected 5h utilisation a recovery target must be UNDER
+    "RECOVERY_F_FLOOR": (0.0, 1.0),     # f_eff a fable recovery target must still hold
 }
 
 
@@ -409,6 +412,14 @@ def _validate_router(cfg):
             and not isinstance(R["KMAX_RESIDENT"], bool) and R["KMAX_RESIDENT"] < R["KMAX"]:
         problems.append(f"KMAX_RESIDENT ({R['KMAX_RESIDENT']}) must be >= KMAX ({R['KMAX']}): "
                         "every active session is also resident")
+    # A recovery 5h ceiling at or ABOVE S_CUT is a LOOSENING wearing a guard's name: `_excluded`
+    # already cuts every lane at S_CUT, so a "recovery 5h floor" of 0.90 would exclude strictly
+    # nothing that was not already excluded — and it would read, in the SSOT and in every close,
+    # as a survival guard that had been configured. Asserted at LOAD so a hand-tune cannot ship it.
+    if "RECOVERY_S_CEIL" in R and isinstance(R["RECOVERY_S_CEIL"], (int, float)) \
+            and not isinstance(R["RECOVERY_S_CEIL"], bool) and R["RECOVERY_S_CEIL"] >= R["S_CUT"]:
+        problems.append(f"RECOVERY_S_CEIL ({R['RECOVERY_S_CEIL']}) must be < S_CUT ({R['S_CUT']}): "
+                        "a recovery 5h ceiling at/above the shared cutoff excludes nothing")
     for key, (lo, hi) in ROUTER_OPTIONAL_RANGES.items():
         if key not in R:
             continue                    # optional by contract — the code default stands
@@ -2026,6 +2037,45 @@ def urgency_exp(R):
     return _cliff_env("CC_ROUTE_URGENCY_EXP", R.get("URGENCY_EXP", URGENCY_EXP_DEFAULT))
 
 
+# ---- the RECOVERY lane (LIMIT_RECOVER_100P W6a / research U13) ---------------------------------
+# A recovery is NOT a dispatch. A dispatch places a sizeable NEW unit that can be cut to fit the
+# quota; a recovery transplants an EXISTING long session that replays a cold, large context and
+# keeps burning, and a re-limit costs a whole second recovery cycle. The asymmetry is ~10:1
+# against a re-limit, so the recovery lane trades strand-avoidance for SURVIVAL.
+#
+# Measured 2026-09-19 (U13 §0-§1): `next` at weekly 98% scored 0.000068 against `next3` at weekly
+# 11% scoring 0.000071 — the T**2 urgency denominator paid a 40x bonus for `next`'s bucket
+# resetting in 11 h, almost exactly cancelling next3's 24x headroom lead. `next` was rank[0] of
+# the fable lane at 17:04Z and hit weekly 100% at 18:58Z, 1 h 54 m later. It cleared the one
+# weekly guard in that lane by a floating-point ULP: `f_eff <= FABLE_FLOOR` with
+# `1.0 - 98/100 == 0.020000000000000018`.
+#
+# The fix is NOT a fourth score. The strand objective is right AMONG accounts that can host the
+# session; only the eligible SET was wrong. So these are floors on ELIGIBILITY, and the modifier
+# rides the existing lanes (a `recovery` KIND would need a recovery-general and a recovery-fable
+# twin — the doubling is the tell).
+RECOVERY_W_FLOOR_DEFAULT = 0.10   # weekly headroom floor: excludes weekly >= 90
+RECOVERY_S_CEIL_DEFAULT = 0.60    # projected 5h ceiling: = DESK_5H_FLOOR, already argued
+RECOVERY_F_FLOOR_DEFAULT = 0.05   # f_eff floor: fable >= 90 at coupling 0.5
+
+
+def recovery_floors(R):
+    """-> (w_floor, s_ceil, f_floor) for the recovery lane: env override > SSOT > code default.
+
+    CC_ROUTE_RECOVERY=off NEUTRALISES all three (R8 kill-switch pattern, as cliff_enabled) so
+    `--recovery` becomes byte-identical to pre-U13 routing. The neutral ceiling is +inf rather
+    than 1.0 deliberately: a projected 5h of exactly 1.0 is reachable, and a DISABLED guard must
+    never be the thing that excludes a row."""
+    if not _term_on("CC_ROUTE_RECOVERY"):
+        return 0.0, float("inf"), 0.0
+    return (_cliff_env("CC_ROUTE_RECOVERY_W_FLOOR",
+                       R.get("RECOVERY_W_FLOOR", RECOVERY_W_FLOOR_DEFAULT)),
+            _cliff_env("CC_ROUTE_RECOVERY_S_CEIL",
+                       R.get("RECOVERY_S_CEIL", RECOVERY_S_CEIL_DEFAULT)),
+            _cliff_env("CC_ROUTE_RECOVERY_F_FLOOR",
+                       R.get("RECOVERY_F_FLOOR", RECOVERY_F_FLOOR_DEFAULT)))
+
+
 def k_eff(r):
     """Concurrency the router CHARGES an account: working sessions where the sweep could measure
     them, the pane census where it could not (an older cache, a walk past its budget — absence
@@ -3363,12 +3413,15 @@ def pace_line(rows):
     return "\n".join([head] + parts)
 
 
-def _excluded(r, R, cliff=True, k_of=None):
+def _excluded(r, R, cliff=True, k_of=None, recovery=False):
     """`k_of` selects the concurrency charge (default k_eff). The desk lane passes k_eff_desk so its
     own launcher phantom cannot lock it out of the account the operator is already in (W1.5); every
     other caller keeps k_eff, so eligibility for general/fable is unchanged. Eligibility otherwise
     stays SHARED across lanes — a different objective over the same eligibility (C6), never a
-    second opinion about who is eligible."""
+    second opinion about who is eligible.
+
+    `recovery` adds the SURVIVAL floors (recovery_floors / U13). It defaults False, so every
+    existing caller is byte-identical; it is a MODIFIER on the lanes, not a lane."""
     if "error" in r:
         return r["error"]
     if r.get("session_pct") is None:
@@ -3389,6 +3442,24 @@ def _excluded(r, R, cliff=True, k_of=None):
     sr = r.get("session_reset_h")
     if su >= R["S_CUT"] and (sr is None or sr >= R["EPS_H"]):
         return "5h-cutoff"
+    if recovery:
+        w_floor, s_ceil, _f_floor = recovery_floors(R)
+        # These are SURVIVAL facts, so they sit HERE (eligibility) and not in the score: the
+        # strand objective is correct among accounts that can host the session.
+        # PROJECTED 5h, the same input the desk lane and _soft already use — a recovered session
+        # resumes burning at once, so what matters is where the window is HEADING, not where it
+        # is. Placed AFTER 5h-cutoff so a genuinely capped account still reads as capped.
+        if _su_projected(r, R) >= s_ceil:
+            return "recovery-5h-thin"
+        wp = r.get("weekly_pct")
+        if wp is None:
+            # Unknown headroom is NOT headroom. DATA, not policy (DATA_UNAVAILABLE), so the
+            # caller may degrade to a proxy rather than reading a measurement gap as a refusal.
+            return "no-weekly-data"
+        # The credits target (0.98) is deliberately NOT applied: this is a survival floor, and
+        # 2pp of reserve is noise against a 10pp floor while the extra branch is not.
+        if max(0.0, 1.0 - wp / 100.0) < w_floor:
+            return "recovery-weekly-thin"
     # NEITHER instrument could measure this row's concurrency (ps failed AND the transcript walk
     # was unusable) AND no census was inheritable inside the grace. Refuse — but as DATA, not
     # policy, so it exits 3 and callers may degrade to a proxy rather than reading a measurement
@@ -3414,9 +3485,9 @@ def _excluded(r, R, cliff=True, k_of=None):
     return None
 
 
-def score_general(r, cfg, cliff=True):
+def score_general(r, cfg, cliff=True, recovery=False):
     R = cfg["router"]
-    reason = _excluded(r, R, cliff)
+    reason = _excluded(r, R, cliff, recovery=recovery)
     if reason:
         return None, reason
     if r.get("weekly_pct") is None:
@@ -3663,9 +3734,9 @@ def score_interactive(r, cfg, cliff=True):
     return tier + min(key, DESK_KEY_MAX), None
 
 
-def score_fable(r, cfg, win, cliff=True):
+def score_fable(r, cfg, win, cliff=True, recovery=False):
     R, F = cfg["router"], cfg["frontier"]
-    reason = _excluded(r, R, cliff)
+    reason = _excluded(r, R, cliff, recovery=recovery)
     if reason:
         return None, reason
     if win["active"] is None:
@@ -3686,8 +3757,16 @@ def score_fable(r, cfg, win, cliff=True):
             h_deadline = None                   # credits mode: no window pressure, CF deprioritizes
     w_rem = weekly_headroom(r)
     f_eff = min(F["coupling"] * max(0.0, 1 - r["fable_pct"] / 100.0), w_rem)
-    if f_eff <= R["FABLE_FLOOR"]:
-        return None, "fable-exhausted"
+    # The fable floor RISES for a recovery — max(), so it can only ever be stricter. This is the
+    # one recovery floor that cannot live in eligibility: f_eff is the coupled fable/weekly
+    # quantity `score_fable` itself computes. It also closes the float ULP at weekly 98
+    # (1.0 - 98/100 == 0.020000000000000018 > FABLE_FLOOR), independently of the weekly floor.
+    floor = max(R["FABLE_FLOOR"], recovery_floors(R)[2]) if recovery else R["FABLE_FLOOR"]
+    if f_eff <= floor:
+        # A genuinely exhausted bucket keeps its OWN reason — the recovery floor does not rename
+        # what was already refused, it only names what IT refused.
+        return None, ("recovery-fable-thin" if recovery and f_eff > R["FABLE_FLOOR"]
+                      else "fable-exhausted")
     T_fable = horizon(r.get("fable_reset_h"), R)
     H = max(min(T_fable, h_deadline), R["EPS_H"]) if h_deadline is not None else max(T_fable, R["EPS_H"])
     JB = R["JB_BONUS"] if (h_deadline is not None and T_fable > h_deadline) else 1.00
@@ -3695,12 +3774,14 @@ def score_fable(r, cfg, win, cliff=True):
     return (f_eff / (H ** urgency_exp(R))) * JB * _soft(r, R) * (_cliff_factor(r) if cliff else 1.0), None
 
 
-def _rank_pass(rows, cfg, win, kind, cliff):
+def _rank_pass(rows, cfg, win, kind, cliff, recovery=False):
     out, reasons = [], {}
     for r in rows:
-        s, why = (score_fable(r, cfg, win, cliff) if kind == "fable"
+        # The interactive lane takes no recovery modifier: it picks a HUMAN's desk, not a host
+        # for a transplanted session, and main() refuses the combination before reaching here.
+        s, why = (score_fable(r, cfg, win, cliff, recovery=recovery) if kind == "fable"
                   else score_interactive(r, cfg, cliff) if kind == "interactive"
-                  else score_general(r, cfg, cliff))
+                  else score_general(r, cfg, cliff, recovery=recovery))
         if s is not None and s > 0:
             out.append((s, r))
         else:
@@ -3709,8 +3790,14 @@ def _rank_pass(rows, cfg, win, kind, cliff):
     return out, reasons
 
 
-def ranked(rows, cfg, win, kind):
+def ranked(rows, cfg, win, kind, recovery=False):
     """Rank routable accounts, with the login-cliff term YIELDING rather than starving the fleet.
+
+    🚨 The RECOVERY floors are NEVER yielded the way the cliff is, and the asymmetry is the whole
+    argument: a cliff-drained account STILL WORKS, so refusing it is a preference; a THIN account
+    does not survive the session being placed on it, so refusing it is a fact. If the floors empty
+    the candidate set that is a real refusal — POLICY, exit 2 — and the caller must park loudly
+    rather than fire blind.
 
     A cliff-drained account STILL WORKS — the cliff has not passed. So refusing to route to it is
     a PREFERENCE, and a preference must never be reported as "no account has headroom": the drain
@@ -3726,7 +3813,7 @@ def ranked(rows, cfg, win, kind):
     reasons map: that map is account-keyed and its consumers count it (`route_line` renders
     "N excluded") and index it by account, so a non-account key would silently inflate a
     rendered count."""
-    out, reasons = _rank_pass(rows, cfg, win, kind, True)
+    out, reasons = _rank_pass(rows, cfg, win, kind, True, recovery=recovery)
     if out or not any(w == CLIFF_DRAIN_REASON for w in reasons.values()):
         return out, reasons
     # 🚨 The INTERACTIVE lane never yields the cliff term. Yielding is right for dispatch — a
@@ -3738,7 +3825,7 @@ def ranked(rows, cfg, win, kind):
     # fall back to its pinned account, which the operator can at least reason about.
     if kind == "interactive":
         return out, reasons
-    yielded, y_reasons = _rank_pass(rows, cfg, win, kind, False)
+    yielded, y_reasons = _rank_pass(rows, cfg, win, kind, False, recovery=recovery)
     if not yielded:
         # The cliff was NOT the binding constraint — something else would have excluded these rows
         # anyway. Report the reasons that actually BIND, never the drain that merely masked them.
@@ -5885,7 +5972,18 @@ def main():
         kind = args[i + 1] if i + 1 < len(args) else None
         if kind not in ("general", "fable", "interactive"):
             sys.exit(f"claude-accounts: {flag} requires general|fable|interactive (got {kind!r})")
-        cand, reasons = ranked(rows, cfg, win, kind)
+        # `--recovery` is a MODIFIER on the lane, never a fourth lane (U13 4b): a `recovery` KIND
+        # would need a recovery-general and a recovery-fable twin, and the doubling is the tell.
+        # Under it a target must SURVIVE the session being placed on it, not merely have room for
+        # a new one.
+        recovery = "--recovery" in args
+        if recovery and kind == "interactive":
+            # Refused, never silently ignored: the desk lane picks a HUMAN's account, not a host
+            # for a transplanted session, and a modifier that reads as applied while doing
+            # nothing is the exact failure shape this wave exists to remove.
+            sys.exit(f"claude-accounts: --recovery is not defined for {flag} interactive "
+                     "(the desk lane hosts no transplanted session)")
+        cand, reasons = ranked(rows, cfg, win, kind, recovery=recovery)
         # W2.6 — the desk decision goes on disk BEFORE either exit path, so an abstention is
         # recorded as faithfully as a pick. `--rank` is diagnostic and deliberately silent here:
         # only a `--route` is a decision something acts on.
@@ -5934,6 +6032,12 @@ def main():
                               f"quota_age_s={age if age is not None else '-'}",
                               f"cached={1 if cached else 0}",
                               f"yielded={1 if w.get('cliff_yielded') else 0}",
+                              # W6a — whether the SURVIVAL floors were in force for this
+                              # decision. Without it a recovery pick and a dispatch pick are
+                              # indistinguishable on disk, and "why was this account chosen for
+                              # a transplant" is unanswerable after the fact — the same
+                              # unfalsifiability route-meta itself exists to close.
+                              f"recovery={1 if recovery else 0}",
                               # W1.7 — WHICH INSTRUMENT charged concurrency for this decision.
                               # k_work is None whenever the sweep's walk went over budget, and the
                               # router then silently re-charges the PANE census: measured swing
