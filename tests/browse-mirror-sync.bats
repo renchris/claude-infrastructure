@@ -205,6 +205,24 @@ advance_origin() {
   grep -q 'packed-refs' "$plist" || { echo "plist does not watch packed-refs"; false; }
   grep -q 'migration-class: c10' "$REPO/migrations/0032-browse-mirror.sh" \
     || { echo "the migration must be c10 — it installs a launchd plist"; false; }
+
+  # The verifier must read the job's LAST EXIT CODE. "Is the job loaded" was the oracle this
+  # migration shipped with, and the job was loaded while crashing on every trigger (bash 3.2) —
+  # loaded-only answers YES to that forever.
+  verify="$(grep '^# migration-verify:' "$REPO/migrations/0032-browse-mirror.sh")"
+  echo "$verify" | grep -q 'last exit code' \
+    || { echo "verifier does not read the job's exit code, so a crashing job passes: $verify"; false; }
+  # …and must NOT re-introduce the racy HEAD==origin/main equality: reso's trunk moves every few
+  # minutes while a full advance takes ~3, so that arm reports FAIL on a healthy system.
+  # Block form, not `A && { …; false; }`: that spelling is errexit-ABSORBED and can never fail the
+  # test. scripts/bats-assert-liveness-lint.sh caught it at the land gate, and the fixer DECLINED to
+  # re-flow it across the line split rather than guess — so this is a hand-edit, mutant-verified in
+  # both directions (the condition is false today, which is exactly why a mutant is the only way to
+  # tell a live assertion from one that merely always passes).
+  if echo "$verify" | grep -q 'rev-parse HEAD.*=.*rev-parse origin/main'; then
+    echo "verifier re-introduced the racy HEAD==origin/main equality: $verify"
+    false
+  fi
 }
 
 @test "10: a branch CHECKED OUT in a worktree is never fast-forwarded" {
