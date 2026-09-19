@@ -618,7 +618,19 @@ if [[ $IN_PLACE -eq 1 ]]; then
   fi
   RCY_ARGS=(--recycle --transplanted-source --resume-launcher "$LAUNCHER" --resume-cfg "$TCFG" --resume-cwd "${WT_TOP:-$CWD}")
   if [[ -n "$SOURCE_PANE" ]]; then
-    RCY_ARGS+=(--source-pane "$SOURCE_PANE" --source-session "$SID" --await)
+    RCY_ARGS+=(--source-pane "$SOURCE_PANE" --source-session "$SID")
+    # `--await` blocks this process for up to 900 s (handoff-fire.sh:11788) and can return rc 3 over
+    # a watcher that is still running — a bound that does NOT cover the 180 s composer gate above it.
+    # That is the right trade for an INTERACTIVE caller, which wants the engagement verdict and has
+    # nothing else to do. It is the wrong one under `lr-fleet --one --detach`, where the driver is
+    # already a setsid'd process whose whole job is to return the verdict by mail: awaiting there
+    # buys nothing and converts a slow success into a reported failure at the 900 s mark. So the
+    # caller decides, and the DEFAULT is unchanged (LIMIT_RECOVER_100P § 12.1 / W1).
+    if [[ "${LR_INPLACE_AWAIT:-1}" != 0 ]]; then
+      RCY_ARGS+=(--await)
+    else
+      echo "lr-handoff: IN-PLACE — LR_INPLACE_AWAIT=0: NOT awaiting engagement (the caller is detached and reads the watcher's own row in ~/.claude/logs/handoffs.jsonl)" >&2
+    fi
     echo "lr-handoff: IN-PLACE — recycling pane $SOURCE_PANE (registry-bound to ${SID:0:8}) onto '$TARGET': same window, same uuid" >&2
   else
     echo "lr-handoff: IN-PLACE — recycling THIS pane onto '$TARGET': same window, same uuid ${SID:0:8} (the /exit ends this process; the watcher carries the relaunch)" >&2
