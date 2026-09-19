@@ -67,6 +67,38 @@ until a human logged in. So on a cliff:
    interactive `/login`. Surface the exact command and the deadline
    (`claude-accounts --relogin-status`), and salvage a bundle so nothing is lost while you wait.
 
+## The fast path — ONE Bash call, then END THE TURN
+
+Measured 2026-09-19 (`docs/research/lr100p-2026-09-19/research/U11-today-run-audit.md` §2): recovering
+five sessions cost **98.7 minutes**, of which **24.4 lead turn-minutes were foreground `until` polling
+loops** — 17 of them, every one exiting 1–5 s *after* a `task-notification` that would have woken the
+session anyway — and **86 min 52 s** of the operator's own screenshots queued behind those turns. The
+work itself is ~3 s. The polling was the cost.
+
+So the shape of a recovery is three steps and the third one is the load-bearing one:
+
+1. **Resolve** the session: `lr-fleet.sh --locate` (or `--locate --json`) names sid · pane · account ·
+   tier · disposition. A pane id you were handed is enough; do not re-census to confirm it.
+2. **Fire it, detached** — one call, returns in ≤3 s, prints the run dir and the driver's log path:
+
+   `bash ~/.claude/scripts/limit-recover/lr-fleet.sh --one <sid> --source-pane <P> --detach`
+
+3. **END THE TURN.** The verdict comes back as MAIL — a `cc-notify` line carrying
+   `verdict=RECOVERED|PARTIAL|PARKED|FAILED`, its note, and the evidence dir — which you read at your
+   next turn boundary like any other message. There is nothing to watch and nothing to wait for.
+
+**Banned on this path, by name.** Each of these is a measured defect, not a style preference:
+
+| banned | why (measured) |
+|---|---|
+| a foreground `while`/`until` loop polling for a file, a row or a pane state | the 24.4 lead-minutes above. The verdict is pushed to you; polling for it spends a turn to learn nothing sooner. |
+| `cc-pane send` to put text in a composer | its text path is iTerm2 AppleScript and iTerm2 is not running on this box: it returned **rc 0 and delivered nothing**, costing 13.1 min on pane 111 (U11 §3). |
+| `it2 session send` / `it2 session run` to deliver a MESSAGE | `send` types keystrokes — `it2 session send CR` typed the letters `C` and `R` into a live composer; `run` is the LAUNCH verb, whose armed-pane branch writes a `$CMD_DIR/<id>.cmd` file instead of reaching the screen (`handoff-fire.sh:1419-1431`). Messages go by `cc-notify`, which lands at a safe boundary. |
+| `kitty @ send-key` for control keys | Claude Code pushes the kitty keyboard protocol, so `ctrl+u` rendered as the literal text `^[[117;5u` in the composer (U08 §3). |
+
+If a pane genuinely must be told something, the one sanctioned write is a single `printf` to its own
+tty path — which is what `handoff-fire.sh`'s terminal recycle arm now does.
+
 ## Iron rules (bind every mode; quote back any you are about to break and STOP)
 
 1. **Disk truth outranks conversation memory.** The unit inventory comes from `lr-audit.py`
