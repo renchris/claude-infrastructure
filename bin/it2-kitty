@@ -1141,6 +1141,20 @@ case "$verb" in
       err "kitty launch failed (rc=$rc): $new"; exit 1
     fi
     command -v cc_log_pane_spawn >/dev/null 2>&1 && cc_log_pane_spawn split kitty "$new" "${PWD:-}" "it2-kitty session split anchor:${SESSION:-} loc:${loc:-} argv:${arm:-0}"
+    # EVEN OUT THE TAB THE PANE JUST ARRIVED IN. kitty's splits layout adds a window by HALVING the
+    # one it lands beside, so firing into an already-split window walks the columns down
+    # 114/57/28/28 and the oldest pane becomes unreadable — the operator was running ⌘⇧E by hand
+    # after every fire. The removal half needs no code (config/kitty.conf §1 sets
+    # `splits:equalize_on_window_close=yes`); kitty has no on_window_added hook, so arrival is ours.
+    #
+    # `--self` off KITTY_WINDOW_ID is the only form that aims at a specific tab: `equalize` is a
+    # TAB-level action routed through the FOCUSED tab, so a bare call would square up whatever the
+    # operator is sitting in and `--match` returns rc 0 while doing nothing (measured 2026-09-19,
+    # three-arm control — see the `map cmd+shift+e` note in config/kitty.conf). Subshell, not a
+    # `VAR=x kt …` prefix: kt is a shell FUNCTION, and in bash an assignment preceding a function
+    # call survives the call, which would leak a stale KITTY_WINDOW_ID into everything below.
+    # Non-fatal by construction — an uneven tab is cosmetic and must never fail a fire.
+    ( export KITTY_WINDOW_ID="$new"; kt action --self layout_action equalize ) >/dev/null 2>&1 || true
     if [ "$arm" = 1 ]; then
       # STAMPED WITH THE GENERATION, not merely touched — see § armed() above. A marker that cannot
       # name the kitty it belongs to can only be judged on age; one that can is refused outright the

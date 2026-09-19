@@ -322,11 +322,13 @@ while [ "$g" -lt "$NGROUPS" ]; do
   done
 
   if [ "$DRY_RUN" = 0 ] && [ -n "$head_win" ] && [ "$head_win" != dry ]; then
-    # EQUALIZE: `kitty @ action` acts on the ACTIVE window, not the one it was invoked from
-    # (config/kitty.conf:313-315), so the head must be focused first.
-    "$KITTY_BIN" @ focus-window --match "id:$head_win" >/dev/null 2>&1
-    sleep 1
-    "$KITTY_BIN" @ action layout_action equalize >/dev/null 2>&1 \
+    # EQUALIZE the group we just built. `equalize` is a TAB-level action and kitty routes those
+    # through the FOCUSED tab, so this used to focus the head and sleep 1s purely to aim a bare
+    # `kitty @ action`. `--self` aims it directly off KITTY_WINDOW_ID (measured 2026-09-19 — see
+    # the `map cmd+shift+e` note in config/kitty.conf for the three-arm control), which drops both
+    # the focus steal and the per-group second: recovering 5 groups no longer yanks the operator
+    # through 5 OS windows. `--match` is NOT the alternative — it returns rc 0 and does nothing.
+    KITTY_WINDOW_ID="$head_win" "$KITTY_BIN" @ action --self layout_action equalize >/dev/null 2>&1 \
       || note "  [$marker] equalize refused — panes may be uneven"
 
     # PLACE on this group's screen, by the marker title we own.
