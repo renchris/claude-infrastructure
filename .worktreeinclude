@@ -1,0 +1,20 @@
+# Files auto-copied into a new `git worktree` created via `claude --worktree`
+# (gitignore syntax). These are gitignored files a fresh worktree lacks but needs.
+# Newer Claude Code honors this file natively on WorktreeCreate; the cold path is
+# scripts/new-worktree.sh, which copies the SAME set explicitly (:95) — keep the
+# two in step, because only new-worktree.sh runs on the handoff-fire and
+# cc-dispatch lanes, which do not go through WorktreeCreate.
+#
+# Why this repo needs it at all: `.claude/settings.local.json` holds the
+# per-worktree permission grants. Absent, every fresh worktree re-prompts for
+# commands the operator already approved — and a worktree is created per session
+# here, so the cost is paid constantly. It must be COPIED, never symlinked:
+# a symlink would make every worktree mutate the shared file, which is the same
+# shared-state defect worktree isolation exists to prevent (new-worktree.sh:93).
+#
+# Absent from this repo until 2026-09-19 while six sibling repos on this machine
+# carried one (doc_classifier, reso-management-app, reso-management-app-release,
+# reso-qa-runner, dc-corpus, dc-wiring).
+.claude/settings.local.json
+.env
+.env.local
