@@ -6807,12 +6807,28 @@ if [ "${1:-}" = "__recycle" ]; then
   # slow-launching CC under a pty wrapper is not-yet-`cc` for several seconds, and the negative
   # would put a second launcher line into the composer it was just given. Only a pane still
   # positively at a prompt is one the launch demonstrably failed to leave.
-  up=0
-  for _ in $(seq 1 15); do sleep 3; if cc_alive; then up=1; break; fi; done
+  #
+  # THE ELAPSED IS MEASURED, NEVER ASSERTED (W1, LIMIT_RECOVER_100P § 12.1). The terminal arm at the
+  # bottom of this branch said "within 90s" unconditionally, and that is a lie in the commonest
+  # case: the retype below fires only when `at_shell` is AFFIRMATIVELY true, and `unknown` (seven
+  # branches of pane_cc_state) skips it — so an unreadable pane was reported as a 90 s failure
+  # after 45 s. Both waits are clocked and the real number is what the row, the alarm and the pane
+  # are handed.
+  #
+  # RCY_PROC_TICKS / RCY_PROC_IVL_S are SELFTEST SEAMS with the same safety argument as
+  # HF_RECYCLE_SHELL_WAIT_S above: they move only how long the watcher waits for a process to
+  # appear. They cannot make it send a key it would not otherwise send — the retype's gate is still
+  # `at_shell`, an affirmative shell verdict read from the pane itself. Shipped at 15 × 3 s, i.e.
+  # the 45 s + 45 s this file has always waited.
+  rcy_proc_ticks="${RCY_PROC_TICKS:-15}"; case "$rcy_proc_ticks" in ''|*[!0-9]*|0) rcy_proc_ticks=15 ;; esac
+  rcy_proc_ivl="${RCY_PROC_IVL_S:-3}";    case "$rcy_proc_ivl"   in ''|*[!0-9]*|0) rcy_proc_ivl=3   ;; esac
+  up=0; rcy_retyped=0; rcy_proc_t0="$(date +%s 2>/dev/null || echo 0)"
+  for _ in $(seq 1 "$rcy_proc_ticks"); do sleep "$rcy_proc_ivl"; if cc_alive; then up=1; break; fi; done
   if [ "$up" = 0 ] && at_shell; then
-    echo "⚠ no claude on $TTY_PATH 45s after relaunch — retyping once"
+    echo "⚠ no claude on $TTY_PATH $(( $(date +%s) - rcy_proc_t0 ))s after relaunch — retyping once"
     it2_type_verified "$IT2" "$RSID" "$(cat "$CMDFILE")" || true
-    for _ in $(seq 1 15); do sleep 3; if cc_alive; then up=1; break; fi; done
+    rcy_retyped=1
+    for _ in $(seq 1 "$rcy_proc_ticks"); do sleep "$rcy_proc_ivl"; if cc_alive; then up=1; break; fi; done
   fi
   if [ "$up" = 1 ] || cc_alive; then
     # CONVERGENCE of two parallel streams, both aimed at "birth is not engagement" on this path.
@@ -6875,8 +6891,55 @@ if [ "${1:-}" = "__recycle" ]; then
     hf_alarm recycle-dead "$RSID" "" "" "HANDOFF-RECYCLE-DEAD: pane $RSID relaunched but never engaged (no assistant turn in ${RCY_ENGAGE_TIMEOUT}s) — claude is alive at an empty composer, the continuation did NOT start. Re-send the brief or relaunch: $(cat "$CMDFILE")"
     exit 1
   fi
-  hf_bounded "$IT2" session run -s "$RSID" "# HANDOFF RELAUNCH FAILED — run manually: $(cat "$CMDFILE")" >/dev/null 2>&1 || true
-  echo "!! relaunch typed but no claude process appeared within 90s — fallback comment typed into pane" >&2
+  # ── THE ONE SILENT TERMINAL ARM, made to speak (W1, LIMIT_RECOVER_100P § 12.1) ─────────────────
+  #
+  # This branch is reached when the relaunch WAS typed and no claude ever appeared. It was the only
+  # terminal arm of the four with neither a ledger row nor an alarm nor a goal disposition — its
+  # three siblings (:6796 relaunch-write-failed, :6699 pane-vanished, :6873 never-engaged) have all
+  # three. Measured 2026-09-19 (U04 §3): 4 husks, 5 `recycle-intent` rows with no outcome row, and
+  # `ls ~/.claude/handoff-alarms | grep 20260919` EMPTY all day. Nothing on the box knew the panes
+  # were dead — the teardown marker says `mode:"recycle"`, a PLANNED teardown, so the crash watchdog
+  # correctly declined to page over it.
+  #
+  # AND THE CAUSE IS ALREADY ON DISK. `lr-fire-resume` re-gates the relaunch in the pane's own zsh,
+  # a process this watcher cannot parameterise, and writes its refusal to the IDL with the TERM that
+  # refused (`capacity-admit.sh:418`). 10/10 refusals on the morning of the incident were
+  # `term=load` — a term capacity-admit's own comment documents as WRONG INPUT and which is OFF for
+  # every other caller. Joining that row is the difference between "no process appeared" and "the
+  # launcher was refused on the load term 3 s after it was typed".
+  rcy_idl_cause() { # → "term=<t> …" for this sid's newest lr-fire-resume REFUSAL after T0, else ""
+    local idl row t0
+    idl="${CC_ADMIT_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+    [ -n "${RCY_RESUME_SID:-}" ] && [ -f "$idl" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    # The join key is the sid in `.what` ("resume <sid> on <acct>"): lr-fire-resume does not set
+    # CC_ADMIT_SID, so `.sid` is the literal "?" on every one of its rows. grep -F first so this
+    # stays O(matching lines) over a 91k-row ledger rather than O(ledger) through jq.
+    t0="${RCY_T0%Z}"
+    row="$(grep -F "${RCY_RESUME_SID}" "$idl" 2>/dev/null | jq -c --arg t0 "$t0" \
+             'select(.caller=="lr-fire-resume" and .verdict=="refuse")
+              | select($t0 == "" or ((.ts // "")|sub("Z$";"")) >= $t0)' 2>/dev/null | tail -1)" || row=""
+    [ -n "$row" ] || return 0
+    printf 'launcher REFUSED at %s: term=%s basis=%s — %s' \
+      "$(printf '%s' "$row" | jq -r '.ts // "?"' 2>/dev/null)" \
+      "$(printf '%s' "$row" | jq -r '.term // "?"' 2>/dev/null)" \
+      "$(printf '%s' "$row" | jq -r '.basis // "?"' 2>/dev/null)" \
+      "$(printf '%s' "$row" | jq -r '.detail // "?"' 2>/dev/null)"
+  }
+  rcy_elapsed=$(( $(date +%s 2>/dev/null || echo 0) - rcy_proc_t0 ))
+  rcy_cause="$(rcy_idl_cause || true)"
+  rcy_detail="relaunch typed into $RSID but NO claude process appeared within ${rcy_elapsed}s (retype: $([ "$rcy_retyped" = 1 ] && printf 'ran' || printf 'SKIPPED — the pane never read as an affirmative shell')); $(if [ -n "$rcy_cause" ]; then printf '%s' "$rcy_cause"; else printf '%s' 'no capacity refusal recorded for this sid — cause UNKNOWN, read the launcher log'; fi)"
+  emit_recycle_event recycle-dead 0 "$RSID" "$rcy_detail" || true
+  goal_unreachable recycle-dead || true
+  hf_alarm recycle-relaunch-refused "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-RELAUNCH-REFUSED: $rcy_detail. Pane $RSID now holds NO claude and its work is stranded. Relaunch manually in that pane: $(cat "$CMDFILE")" || true
+  # PAINT THE PANE — ONE printf to its own tty, opened by PATH. NOT `it2 session run`: that is the
+  # LAUNCH verb, whose armed-pane branch writes a `$CMD_DIR/<id>.cmd` file instead of typing
+  # (:1419-1431), so the "fallback comment typed into pane" this line used to claim was not
+  # guaranteed to reach the screen at all — and the it2 write path is the one that raced on
+  # 2026-09-19. A tty is writable by path from any context, including a setsid'd watcher with no
+  # controlling terminal (memory: a verdict goes WHERE THE OPERATOR LOOKS).
+  printf '\n!! HANDOFF RECYCLE FAILED — %s\n!!   run manually here: %s\n' "$rcy_detail" "$(cat "$CMDFILE")" > "$TTY_PATH" 2>/dev/null || true
+  echo "!! $rcy_detail — verdict painted to $TTY_PATH, row + alarm written" >&2
   exit 1
 fi
 
