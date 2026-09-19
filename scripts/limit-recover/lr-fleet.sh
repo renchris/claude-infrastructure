@@ -452,6 +452,24 @@ lf_one() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → rc of the recovery
     4) verdict="PARTIAL"; note="transplanted but the relaunch did not verify — source is a tombstoned husk; ${cause:-no launcher refusal in the IDL for this attempt — read the watcher log}; see $rdir/$sid.stderr" ;;
     *) verdict="FAILED"; note="lr-handoff rc=$rc${cause:+; $cause}; see $rdir/$sid.stderr" ;;
   esac
+  # A PROOF THAT CAN FAIL. `pane_after` was initialised to `pane` and only ever moved when
+  # lr-handoff ANNOUNCED a new pane, so the report's headline claim — "N in place (same pane id)" —
+  # was true by construction on the recycle path: a relaunch that died between `/exit` and
+  # SessionStart rendered byte-identically to one that came back. The registry row is REWRITTEN on
+  # every SessionStart (startup, resume, compact), so reading it back after the run is the one
+  # cheap check whose failure means exactly what it says. Only the recycle path is proved this way:
+  # the replace and spawn paths take the pane id from the successor's own announcement, and the
+  # registry read would overwrite a correct new pane with the SOURCE's stale row.
+  if [ "$mech" = recycle-in-place ]; then
+    local _after
+    _after="$(lr_registry_live_rows "$sid" 2>/dev/null | head -1 | cut -f1 || true)"
+    if [ -n "$_after" ]; then
+      pane_after="$_after"
+    else
+      pane_after="?"
+      [ "$note" = "-" ] && note="no live registry row names this session after the run — the in-place claim is UNPROVEN; see $rdir/$sid.stderr"
+    fi
+  fi
   lf_row "$sid" "$pane" "$pane_after" "$acct" "$target" "$mech/$verdict" "$note"
   return "$rc"
 }
@@ -466,7 +484,17 @@ lf_report() { # $1=run dir
   while IFS=$'\t' read -r sid pb pa ab aa mv note _ts; do
     [ -n "$sid" ] || continue; n=$((n+1))
     printf '%-9s %-8s %-8s %-7s %-7s %-26s %s\n' "${sid:0:8}" "${pb:--}" "${pa:--}" "$ab" "$aa" "$mv" "$note"
-    case "$mv" in *RECOVERED) [ "$pa" = "$pb" ] && inplace=$((inplace+1)) || newp=$((newp+1)) ;; *by-design) bydesign=$((bydesign+1)) ;; *dry-run) : ;; *) gaps=$((gaps+1)) ;; esac
+    # `?` is the recycle path's UNPROVEN pane (lf_one): lr-handoff returned 0 but no registry row
+    # names the session afterwards. Counting it as "replaced beside their source" would launder the
+    # one state this column was made able to report into a success.
+    case "$mv" in
+      *RECOVERED) if [ "$pa" = "?" ]; then gaps=$((gaps+1))
+                  elif [ "$pa" = "$pb" ]; then inplace=$((inplace+1))
+                  else newp=$((newp+1)); fi ;;
+      *by-design) bydesign=$((bydesign+1)) ;;
+      *dry-run) : ;;
+      *) gaps=$((gaps+1)) ;;
+    esac
   done < "$f"
   echo
   if [ "$gaps" -eq 0 ]; then
@@ -580,16 +608,41 @@ EOF
       echo "lr-fleet: --one $SID is AMBIGUOUS — it names more than one session; pass the full uuid" >&2; exit 2
     fi
     RUN="${LR_FLEET_RUN:-one-$(date -u +%Y%m%dT%H%M%SZ)}"; mkdir -p "$FLEET_DIR/$RUN"; : > "$FLEET_DIR/$RUN/results.tsv"
-    row="$(lf_locate | lf_dedup_mirror | awk -F'\t' -v s="$SID" '$1 == s { print; exit }')"
-    if [ -z "$row" ]; then
-      # not limit-blocked per the census — the caller may still know better (a request from a driver
-      # that audited it); fall back to the registry for the pane and the store for the cfg.
-      cfg=""; while IFS= read -r c; do [ -n "$c" ] && ls "$c"/projects/*/"$SID".jsonl >/dev/null 2>&1 && { cfg="$c"; break; }; done <<EOF
+    # ── REGISTRY AND STORE FIRST; THE CENSUS IS THE FALLBACK ────────────────────────────────────
+    # `--one` is HANDED the sid and then ran the full `lf_locate` census to find it — measured
+    # 40.3 / 64.5 / 86.1 s over 2,158 transcripts against a 0.007 s registry read and a 0.012 s
+    # store glob (U14 §0, 2026-09-19), i.e. 99.8% of the identification cost, unconditionally, on
+    # the path a driver takes when it has ALREADY audited the session. The cheap resolver below is
+    # not new: it sat a few lines further down as the census's own MISS path. Only the order is
+    # inverted, so the census now runs exactly when the store glob finds nothing.
+    #
+    # What the census contributed and how it is kept: `disp`, of which `--one` read only
+    # TRANSPLANTED — so lr_transplanted_to is called here directly (one file read), which is what
+    # lf_locate itself calls. `kind`/`kinds`/`err_age` were read by nobody on this path.
+    cfg=""; while IFS= read -r c; do [ -n "$c" ] && ls "$c"/projects/*/"$SID".jsonl >/dev/null 2>&1 && { cfg="$c"; break; }; done <<EOF
 $(lr_config_dirs)
 EOF
-      [ -n "$cfg" ] || { echo "lr-fleet: --one $SID — no transcript in any store" >&2; exit 2; }
-      acct="$(lf_acct_of_cfg "$cfg")"; pane="${SOURCE_PANE:--}"; cwd="$(grep -o '"cwd":"[^"]*"' "$cfg"/projects/*/"$SID".jsonl 2>/dev/null | tail -1 | cut -d'"' -f4)"; tier="$(lr_tier_from_transcript "$cfg" "$SID" 2>/dev/null | tr ' ' '/' || true)"
+    if [ -n "$cfg" ]; then
+      acct="$(lf_acct_of_cfg "$cfg")"
+      pane="-"; cwd=""
+      # The registry is the pane's own store — `paneUUID` IS the filename and the row is rewritten
+      # on every SessionStart. An explicit --source-pane still wins: the caller may be driving a
+      # pane whose row is stale or was never written (the D7 registry hole).
+      _rrow="$(lr_registry_live_rows "$SID" 2>/dev/null | head -1 || true)"
+      [ -n "$_rrow" ] && IFS=$'\t' read -r pane _ _ cwd <<<"$_rrow"
+      [ -n "$SOURCE_PANE" ] && pane="$SOURCE_PANE"
+      [ -n "$pane" ] || pane="-"
+      [ -n "$cwd" ] || cwd="$(grep -o '"cwd":"[^"]*"' "$cfg"/projects/*/"$SID".jsonl 2>/dev/null | tail -1 | cut -d'"' -f4)"
+      tier="$(lr_tier_from_transcript "$cfg" "$SID" 2>/dev/null | tr ' ' '/' || true)"
+      if _to="$(lr_transplanted_to "$SID" "$cfg")"; then
+        echo "lr-fleet: --one $SID — already TRANSPLANTED→$(lf_acct_of_cfg "$_to"); nothing to do" >&2; exit 0
+      fi
     else
+      # No store holds the transcript under that name. The census reads the same stores, so this is
+      # a near-certain miss too — but it also reads `.handed-off` copies and the mirror dedup, so it
+      # is run rather than guessed at, and its miss is the one that refuses.
+      row="$(lf_locate | lf_dedup_mirror | awk -F'\t' -v s="$SID" '$1 == s { print; exit }')"
+      [ -n "$row" ] || { echo "lr-fleet: --one $SID — no transcript in any store" >&2; exit 2; }
       IFS=$'\t' read -r _ cfg acct pane pid cwd tier disp kind kinds err_age <<<"$row"
       [ -n "$SOURCE_PANE" ] && pane="$SOURCE_PANE"
       case "$disp" in TRANSPLANTED*) echo "lr-fleet: --one $SID — already $disp; nothing to do" >&2; exit 0 ;; esac
