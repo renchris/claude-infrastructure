@@ -17,7 +17,27 @@
 # today's code path. That is what makes landing this a no-op until someone deliberately turns
 # it on, and it is why `jev_ask` returns non-zero rather than a default answer.
 #
-# ── WHY 0.98 ─────────────────────────────────────────────────────────────────────────────────
+# ── WHY 0.90 — MEASURED ON THIS TASK, after 0.98 shipped INERT ───────────────────────────────
+# 🚨 0.98 was imported from a DIFFERENT task's calibration and was unreachable here. Measured
+# 2026-09-19 on 20 synthetic closes written for the probe (tests/fixtures/jev-synthetic-closes.json,
+# scripts/jev/synthetic-probe.sh — no private data, so it runs without the ZDR question):
+#
+#   true deferrals   p in [0.81, 0.95], mean 0.93   <- NEVER reaches 0.98
+#   finished work    p in [0.05, 0.08], mean 0.06
+#   genuine blockers p in [0.20, 0.93]
+#
+# At 0.98 the arm fires 0/10 on true deferrals: a landed feature that cannot fire is inert, which
+# is the failure this repo keeps re-learning. At 0.90 it fires 3/10 with 0/6 and 0/4 FALSE fires.
+# The threshold is barely the binding constraint — blocker_class is (it answers `none` on 4 of 10
+# true deferrals) — so anything <= 0.93 yields the same 3/10, and 0.90 is chosen to sit below the
+# lowest drivable-classed deferral (0.93) without reaching for recall the class gate will not give.
+#
+# 🚨 THE LIMIT, STATED SO IT CANNOT BE READ AS CALIBRATION: n=20, SYNTHETIC, authored by the agent
+# whose prose the arm judges. It proves the shipped constant was unreachable and that specificity
+# is intact; it does NOT establish recall on real closes. `cc-jev pilot` against the 85 real labels
+# remains the only thing that can, and it should RE-DERIVE this number rather than inherit it.
+#
+# ── WHY A HIGH THRESHOLD AT ALL ──────────────────────────────────────────────────────────────
 # Not a taste call. On the one independent benchmark (docs/research/jev-at-cost-api-2026-09-18.md
 # §2) Jev's aggregate accuracy LOSES to Haiku 4.5 (62.6% vs 81.3%) and its aggregate ECE loses
 # too — but it emits 101 distinct probability values against Haiku's 10, and in its top bin
@@ -54,7 +74,7 @@ _jev_resolve_root() {
   (cd -P "$(dirname "$src")/../.." && pwd)
 }
 CC_JEV_LIB_ROOT="${CC_JEV_LIB_ROOT:-$(_jev_resolve_root)}"
-: "${CC_JEV_MIN_P:=0.98}"
+: "${CC_JEV_MIN_P:=0.90}"
 # 2500: measured steady state on the agent-secrets + proxy path is 742-791 ms, and a cold
 # proxy took 1515 ms. See scripts/jev/evaluate.mjs for why 1500 was not the 2x it looked like.
 : "${CC_JEV_TIMEOUT_MS:=2500}"
