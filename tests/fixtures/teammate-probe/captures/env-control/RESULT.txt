@@ -1,0 +1,8 @@
+# Control for P1 defect 3, run 2026-09-19T21:37Z in a throwaway kitty window (id 171).
+# NEGATIVE arm: a kitty-launched non-interactive shell has NO ITERM_SESSION_ID, which is why
+# Claude Code refused every named spawn with 'teammateMode is iterm2 but this session is not
+# running inside iTerm2'. POSITIVE arm: the wrapper preamble (the fleet's own synthesis,
+# ~/.zshrc:693-696) produces it. The window exited on its own; no residue.
+KITTY_WINDOW_ID=171
+ITERM_SESSION_ID_before=UNSET
+ITERM_SESSION_ID_after=w0t0p0:171
