@@ -75,8 +75,10 @@ handoffs don't collide):
   prerequisite commits. Point the paste at `handoff/<slug>`, NEVER your live working branch — it keeps
   moving as you work and would drag unrelated in-progress commits into the fork. Frozen = stable + inert.
 - **Unique `<slug>` per handoff** (topic, not "the plan"): bridge `/tmp/<slug>-resume.md`, branch
-  `handoff/<slug>`, worktree `/tmp/wt-<slug>`. Forks coexist without clobbering.
-- The fork runs in its OWN worktree (`git worktree add -b <slug> /tmp/wt-<slug> handoff/<slug>`); this
+  `handoff/<slug>`, worktree `~/Development/.worktrees/wt-<slug>`. Forks coexist without
+  clobbering. The bridge stays in `/tmp` because it is disposable; the WORKTREE must not — this box
+  wipes `/private/tmp` at boot, taking every uncommitted and gitignored byte with it.
+- The fork runs in its OWN worktree (`git worktree add -b <slug> ~/Development/.worktrees/wt-<slug> handoff/<slug>`); this
   session stays on its branch (CLAUDE.md concurrent-session isolation). Reuse the same source commit
   for several forks — each gets its own `handoff/<slug>`.
 
@@ -414,7 +416,7 @@ pane so parallel fires overlap. Read-only in the repo root → `--cwd <repo> --i
 auto-creates a `cc-<ts>` worktree). **Mode C/B fork:** `--worktree <slug> --base handoff/<slug>` (the
 spawner creates the branch AT the frozen ref) and DROP the payload's Step-0 `git checkout -b` line —
 the branch already exists; keep only the rebase/verify lines. `--wtroot` relocates the worktree parent
-if the bridge promised `/tmp/wt-<slug>`. **Mode A fire (single track) → RECYCLE this pane, not a new
+if the bridge promised a root other than `~/Development/.worktrees`. **Mode A fire (single track) → RECYCLE this pane, not a new
 pane:** `--recycle` = **EXIT + RELAUNCH**, never `/clear`+queued-payload (rebuilt 2026-07-03 after the
 catnav incident). **A fresh worktree no longer forces a new pane (2026-08-08):** `--recycle` composes
 with `--worktree <slug>` / `--cwd <dir>` — same pane, new dir, worktree provisioned by the ordinary
