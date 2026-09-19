@@ -3533,13 +3533,12 @@ _dup_ids() { # <store> → the distinct ids of the filed `needs` rows, one per l
 # 2026-08-13 on a live instance — row cdeb77e34952, `re-land claude/fire-20260812T172113Z-3600-1`,
 # ship-land exited 143/SIGTERM — filed with no probe and permanently live (item b15a2984d134).
 
-@test "P4 inbox: a REFUSED probe CLOSES the spurious row — it is never left unretractable" {
-  git checkout -q -b feat/inbox-refused main
+@test "P4 inbox: content already on trunk ⇒ NO row is filed at all (the trap can die next statement)" {
+  git checkout -q -b feat/inbox-contained main
   mkdir -p scripts
-  # The oracle answers LANDED (exit 0), which is what makes `falsify` refuse. Stubbed rather than
-  # staged through a real second land, because the subject here is the FILER's handling of the
-  # oracle's verdict; the oracle's own correctness is land-content-verify.bats's job, and the
-  # round trip over the real script is the retract test above.
+  # The oracle answers LANDED (exit 0) — the state a land killed AFTER its push has already reached.
+  # Stubbed for the same reason the race test below stubs it: the subject here is the FILER's
+  # ORDERING, not the oracle's correctness, which is land-content-verify.bats's job.
   printf '#!/usr/bin/env bash\nexit 0\n' > scripts/land-content-verify.sh
   chmod +x scripts/land-content-verify.sh
   printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad9.sh    # SC2164 → gate RED
@@ -3549,14 +3548,47 @@ _dup_ids() { # <store> → the distinct ids of the filed `needs` rows, one per l
       bash "$SHIPLAND" --trunk main
   [ "$status" -eq 6 ]
   bl="$BATS_TEST_TMPDIR/backlog.jsonl"
-  grep -q 're-land feat/inbox-refused' "$bl"
-  ! grep -q '"falsifier"' "$bl" || false         # the attach WAS refused — no probe was stored
-  # THE FIX, and it is the containment test the generator lacked: the refusal is acted on with the
-  # one oracle run `falsify` already pays for, so the row is closed at filing instead of joining
-  # the permanently-live population. cc-backlog's own refusal text prescribes exactly this.
-  grep -q '"event":"done"' "$bl"
-  grep -q 'land-content-verify' "$bl"            # the close names WHY, not just that
-  echo "$output" | grep -q 'CLOSED at filing'    # and it is REPORTED, not swallowed
+  # RED PRE-FIX, and this is the whole point of the 2026-09-19 reorder: the old order FILED the row
+  # and then closed it, so this ledger held a `re-land` row plus an `event:"done"`. A closed row is
+  # contained only if the handler SURVIVES to close it, and this handler runs from a TERM trap, so
+  # it can be killed between its own statements. Measured that day on row 582d1c03f334, one did:
+  # the add landed at 19:48:52Z, falsify never ran, and the probe-less row went on to burn a
+  # dispatched worker slot re-deriving a cure already six commits deep in trunk. Nothing filed is
+  # the only shape a dead trap cannot corrupt.
+  ! grep -q 're-land feat/inbox-contained' "$bl" 2>/dev/null || false
+  echo "$output" | grep -q 'no re-land row filed'   # REPORTED, never silently skipped
+  echo "$output" | grep -q 'land-content-verify'    # and it names WHICH oracle said so
+}
+
+@test "P4 inbox: the rc-5 close STAYS as the race backstop (a push that lands after the pre-check)" {
+  # The pre-check above contains the common case, but a push can still land in the window between
+  # it and the falsify screen, so the rc-5 arm remains load-bearing and is pinned here in ISOLATION:
+  # the oracle answers NOT-landed (exit 1) so the pre-check passes through and the row IS filed, and
+  # the STORE is what reports the retracting direction. This is an EQUIVALENCE GUARD across the
+  # reorder — it passes in both arms by construction — so its power is mutant-proved rather than
+  # assumed: deleting the `frc -eq 5` branch in land_failure_inbox turns it red.
+  git checkout -q -b feat/inbox-race main
+  mkdir -p scripts
+  printf '#!/usr/bin/env bash\nexit 1\n' > scripts/land-content-verify.sh
+  chmod +x scripts/land-content-verify.sh
+  printf '#!/usr/bin/env bash\ncd /tmp/nope\necho ok\n' > bad9b.sh
+  git add -A && git commit -q -m "feat: bad9b"
+
+  stub="$BATS_TEST_TMPDIR/cc-backlog-stub"
+  cat > "$stub" <<'STUB'
+#!/usr/bin/env bash
+case "${1:-}" in
+  add|needs) echo "raceid00beef" ;;
+  falsify)   echo "cc-backlog falsify: probe already exits 0 against a live row" >&2; exit 5 ;;
+  *)         exit 0 ;;
+esac
+STUB
+  chmod +x "$stub"
+
+  run env SHIP_LAND_FAILURE_INBOX=on CC_BACKLOG_BIN="$stub" bash "$SHIPLAND" --trunk main
+  [ "$status" -eq 6 ]
+  echo "$output" | grep -q 'CLOSED at filing'
+  echo "$output" | grep -q 'raceid00beef'           # names the row it closed
 }
 
 @test "P4 inbox: an attach that fails for ANY other reason is REPORTED, not swallowed" {

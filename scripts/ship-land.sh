@@ -1176,6 +1176,99 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   # rows, for a path guarded three ways. The ordering in (2) is the load-bearing arm and is pinned
   # as a test rather than left to this comment; a refactor that claims the marker first re-opens
   # this, and that is what goes red.
+  # ── CONTAINMENT IS TESTED BEFORE THE ROW PERSISTS (2026-09-19). The oracle resolution and the
+  # containment question below used to sit AFTER the `add`, paired with the falsify rc-5 arm, on the
+  # stated reasoning that containment is "paid for with the one oracle run `falsify` already makes,
+  # rather than a second pre-check ahead of the filing (this handler may be running under a signal;
+  # it must not double a fetch)". THE COST HALF OF THAT IS ANSWERED BY THE ORACLE'S OWN `--no-fetch`,
+  # which this block ALREADY stores in the probe string: the probe reads the local `origin/<trunk>`
+  # ref and makes no network call, so there is no fetch to double and never was.
+  #
+  # THE SIGNAL HALF IS WHAT THE OLD ORDER COULD NOT SURVIVE, AND IT IS MEASURED, NOT FEARED. This
+  # handler runs FROM a TERM/HUP/INT trap, so it can be killed between its own statements — the one
+  # hazard its own comment names and then orders itself against. With the `add` first and the
+  # containment test second, a handler that dies in that gap leaves a row that is filed, probe-less
+  # and WRONG: the permanently-live shape this whole arm exists to end. MEASURED 2026-09-19 on row
+  # 582d1c03f334 (`re-land fix/it2-kitty-composer-guard-narrow`, ship-land exit 143/SIGTERM). The
+  # push had already SUCCEEDED and content-verify was mid-run against origin/main when the kill
+  # landed — the dying session's transcript ends at 19:48:51Z on a captured
+  # `=== CONTENT-VERIFY on origin/main === 100755 blob 78c881bd0`, the branch's own blob, already on
+  # trunk — the trap filed the row at 19:48:52Z and never reached falsify. No probe, no rc-5 close,
+  # no warning: every COMPLETED path below leaves exactly one of those three traces and the store
+  # held none, which is what identifies the gap rather than a falsify that merely failed. The row
+  # then survived the falsifier sweep BY HAVING NO FALSIFIER, was dispatched to a worker, and spent
+  # that worker slot re-deriving a cure already six commits deep in trunk. It was the only
+  # probe-less row among the six live `re-land` rows that day.
+  #
+  # SO THE ORDER IS THE FIX, AND IT FAILS SAFE IN THE DIRECTION THE OLD ONE DID NOT: a handler killed
+  # BEFORE the `add` files nothing — the land is still attested by attest_land and a genuine strand
+  # is still recoverable from the pinned ref — whereas one killed after it had filed a lie that no
+  # lane could retract. No new trust is placed in the oracle: this is the SAME oracle answering the
+  # SAME question that the rc-5 arm below already acts on by CLOSING the row, asked one statement
+  # earlier. That arm STAYS, as the backstop for the genuine race — a push that lands in the window
+  # between this pre-check and the falsify screen — so the two are belt and braces, not duplicates.
+
+  # No ref ⇒ no probe: a falsifier over `<unrecorded>` could only ever answer "cannot tell", and a
+  # probe that cannot answer is worse than none (memory: sensor-default-off-makes-blindness-the-
+  # shipping-path). Same for a checkout that predates the oracle.
+  # 🚨 THE PATH STORED IN THE PROBE MUST OUTLIVE THE WORKTREE THAT STORES IT — and until 2026-09-04
+  # it did not, which killed this whole arm silently. `REPO_ROOT` (:698) is the DYING land's own
+  # checkout, so the stored probe read `bash /…/.worktrees/<branch>/scripts/land-content-verify.sh
+  # <ref>`; the moment that worktree was reaped the probe exited 127. cc-premise reads 126/127 as
+  # "the probe never ran" and fails OPEN (bin/cc-premise:266), so the row could never self-retract.
+  # The retraction arm therefore failed in the direction that PRESERVES the pile, for exactly the
+  # rows it was built to retire. MEASURED 2026-09-04 on the live store: 47 of the 48 probe-bearing
+  # live re-land rows exited 127; re-pointed at a durable copy of the SAME oracle against the SAME
+  # ref, 9 exit 0 — nine rows that had been moot for weeks and had no way to say so.
+  #
+  # This is the SAME worktree-ephemerality bug already fixed one line above for the project label
+  # (:989-995, "land_root is the durable checkout resolved in main_outer") and, before that, for the
+  # `--run` command (:900-915). The fix stopped one line short each time: row ed20da9f2023 carries
+  # `--run cd /Users/chrisren/Development/claude-infrastructure` beside a probe pointing into
+  # `.worktrees/backlog-telemetry`. Same handler, same variable available, two different answers.
+  #
+  # SO THE INVARIANT IS ENFORCED BY CONSTRUCTION, NOT BY THE ACCIDENT OF LAND_MAIN_ROOT BEING SET.
+  # `land_root` is durable whenever main_outer resolved it, but a land whose REPO_ROOT is already a
+  # `.worktrees/<branch>` path and which never reached main_outer would resolve `land_root` right
+  # back to that ephemeral path. A candidate under `/.worktrees/` is therefore REFUSED outright
+  # rather than ranked, because for this one field "ephemeral" is not a worse answer, it is a probe
+  # that is guaranteed to be dead before anyone reads it (memory: bound-must-fit-the-band). The
+  # deployed layer's own copy is the durable backstop: `$HOME/.claude/scripts/` is a per-file
+  # symlink into the shared checkout, so it survives even a checkout that moves.
+  #
+  # `--no-fetch` rides the stored string because the probe's RE-RUNNER is unattended — cc-premise's
+  # 6-hourly sweep runs up to 150 of them — and a probe that fetches is a network call on somebody
+  # else's schedule. It reads the local `origin/<trunk>` ref, so a stale checkout answers "not on
+  # trunk" (exit 1), which is the PRESERVING direction: a probe that cannot see the land keeps the
+  # row rather than retracting real work.
+  # 🚨 THE DEPLOYED COPY REPLACES AN EPHEMERAL PATH; IT NEVER INVENTS AN ORACLE THE CHECKOUT LACKS.
+  # That distinction is the whole ordering, and getting it wrong broke a NEGATIVE CONTROL that has
+  # been in this suite since the arm was built: "P4 inbox: the backlog row carries the EXACT re-land
+  # command" asserts that a fixture with NO scripts/land-content-verify.sh stores NO probe, which is
+  # this block's own stated rule two paragraphs up ("Same for a checkout that predates the oracle").
+  # Ranking $HOME/.claude ahead of the local candidates satisfied every re-land row and quietly made
+  # that rule unreachable — the fallback answered for a checkout that has no oracle at all. So the
+  # local candidates decide WHETHER there is a probe, and $HOME decides only WHICH PATH is stored
+  # once they have said yes and every one of them is ephemeral.
+  local _cand _local_present=0
+  oracle=""
+  for _cand in "${land_root}/scripts/land-content-verify.sh" \
+               "${REPO_ROOT}/scripts/land-content-verify.sh"; do
+    [[ -x "$_cand" ]] || continue
+    _local_present=1
+    case "$_cand" in */.worktrees/*) continue ;; esac
+    oracle="$_cand"; break
+  done
+  if [[ -z "$oracle" && "$_local_present" -eq 1 \
+        && -x "$HOME/.claude/scripts/land-content-verify.sh" ]]; then
+    oracle="$HOME/.claude/scripts/land-content-verify.sh"
+  fi
+  if [[ -n "$ref" && -n "$oracle" ]] && bash "$oracle" "$ref" --no-fetch >/dev/null 2>&1; then
+    printf '· ship-land: no re-land row filed — %s is already on trunk per %s, so this land died after its content landed.\n' \
+      "$ref" "${oracle##*/}" >&2
+    return 0
+  fi
+
   land_proj="$(basename "$land_root" 2>/dev/null || true)"
   local -a nargs
   # 🚨 THIS ROW IS AGENT WORK, SO IT IS FILED OPEN — `add`, NOT `needs` (2026-09-06, BACKLOG_ZERO §6).
@@ -1272,61 +1365,6 @@ land_failure_inbox() {  # $1=exit code $2=cause word
   # this runs from a trap handler, so every branch below returns 0 and a land must never fail
   # because a backlog row could not be annotated. Reading an rc is not touching one.
   #
-  # No ref ⇒ no probe: a falsifier over `<unrecorded>` could only ever answer "cannot tell", and a
-  # probe that cannot answer is worse than none (memory: sensor-default-off-makes-blindness-the-
-  # shipping-path). Same for a checkout that predates the oracle.
-  # 🚨 THE PATH STORED IN THE PROBE MUST OUTLIVE THE WORKTREE THAT STORES IT — and until 2026-09-04
-  # it did not, which killed this whole arm silently. `REPO_ROOT` (:698) is the DYING land's own
-  # checkout, so the stored probe read `bash /…/.worktrees/<branch>/scripts/land-content-verify.sh
-  # <ref>`; the moment that worktree was reaped the probe exited 127. cc-premise reads 126/127 as
-  # "the probe never ran" and fails OPEN (bin/cc-premise:266), so the row could never self-retract.
-  # The retraction arm therefore failed in the direction that PRESERVES the pile, for exactly the
-  # rows it was built to retire. MEASURED 2026-09-04 on the live store: 47 of the 48 probe-bearing
-  # live re-land rows exited 127; re-pointed at a durable copy of the SAME oracle against the SAME
-  # ref, 9 exit 0 — nine rows that had been moot for weeks and had no way to say so.
-  #
-  # This is the SAME worktree-ephemerality bug already fixed one line above for the project label
-  # (:989-995, "land_root is the durable checkout resolved in main_outer") and, before that, for the
-  # `--run` command (:900-915). The fix stopped one line short each time: row ed20da9f2023 carries
-  # `--run cd /Users/chrisren/Development/claude-infrastructure` beside a probe pointing into
-  # `.worktrees/backlog-telemetry`. Same handler, same variable available, two different answers.
-  #
-  # SO THE INVARIANT IS ENFORCED BY CONSTRUCTION, NOT BY THE ACCIDENT OF LAND_MAIN_ROOT BEING SET.
-  # `land_root` is durable whenever main_outer resolved it, but a land whose REPO_ROOT is already a
-  # `.worktrees/<branch>` path and which never reached main_outer would resolve `land_root` right
-  # back to that ephemeral path. A candidate under `/.worktrees/` is therefore REFUSED outright
-  # rather than ranked, because for this one field "ephemeral" is not a worse answer, it is a probe
-  # that is guaranteed to be dead before anyone reads it (memory: bound-must-fit-the-band). The
-  # deployed layer's own copy is the durable backstop: `$HOME/.claude/scripts/` is a per-file
-  # symlink into the shared checkout, so it survives even a checkout that moves.
-  #
-  # `--no-fetch` rides the stored string because the probe's RE-RUNNER is unattended — cc-premise's
-  # 6-hourly sweep runs up to 150 of them — and a probe that fetches is a network call on somebody
-  # else's schedule. It reads the local `origin/<trunk>` ref, so a stale checkout answers "not on
-  # trunk" (exit 1), which is the PRESERVING direction: a probe that cannot see the land keeps the
-  # row rather than retracting real work.
-  # 🚨 THE DEPLOYED COPY REPLACES AN EPHEMERAL PATH; IT NEVER INVENTS AN ORACLE THE CHECKOUT LACKS.
-  # That distinction is the whole ordering, and getting it wrong broke a NEGATIVE CONTROL that has
-  # been in this suite since the arm was built: "P4 inbox: the backlog row carries the EXACT re-land
-  # command" asserts that a fixture with NO scripts/land-content-verify.sh stores NO probe, which is
-  # this block's own stated rule two paragraphs up ("Same for a checkout that predates the oracle").
-  # Ranking $HOME/.claude ahead of the local candidates satisfied every re-land row and quietly made
-  # that rule unreachable — the fallback answered for a checkout that has no oracle at all. So the
-  # local candidates decide WHETHER there is a probe, and $HOME decides only WHICH PATH is stored
-  # once they have said yes and every one of them is ephemeral.
-  local _cand _local_present=0
-  oracle=""
-  for _cand in "${land_root}/scripts/land-content-verify.sh" \
-               "${REPO_ROOT}/scripts/land-content-verify.sh"; do
-    [[ -x "$_cand" ]] || continue
-    _local_present=1
-    case "$_cand" in */.worktrees/*) continue ;; esac
-    oracle="$_cand"; break
-  done
-  if [[ -z "$oracle" && "$_local_present" -eq 1 \
-        && -x "$HOME/.claude/scripts/land-content-verify.sh" ]]; then
-    oracle="$HOME/.claude/scripts/land-content-verify.sh"
-  fi
   if [[ -n "$id" && -n "$ref" && -n "$oracle" ]]; then
     fout="$("$bl" falsify "$id" --probe "bash ${oracle} ${ref} --no-fetch" 2>&1)"; frc=$?
     if [[ "$frc" -eq 5 ]]; then
