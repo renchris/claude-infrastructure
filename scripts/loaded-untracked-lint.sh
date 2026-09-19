@@ -56,6 +56,19 @@ DEFAULT_SCOPES=".claude CLAUDE.md CLAUDE.global.md"
 
 lint_repo() {
   local root="$1"
+  # SCRUB THE ROUTING ENV BEFORE THE VERDICT-PRODUCING CHILD READS IT. This lint's whole predicate
+  # is `git ls-files --others`, and "other" means "not in the index" — so ANY caller that exported
+  # GIT_INDEX_FILE hands us a different index and silently changes what this lint can see.
+  # That caller exists: scripts/ship-land.sh:5011 exports GIT_INDEX_FILE to a throwaway index and
+  # :5013-5016 `git add -N`s every untracked file into it, process-wide. Measured 2026-09-19 in a
+  # throwaway repo: `ls-files --others --exclude-standard` prints the file BEFORE `git add -N` and
+  # NOTHING after. So `--precheck --working` — the one mode built to bring untracked files into
+  # scope — was the one mode where this lint reported GREEN over its own population.
+  # GIT_DIR/GIT_WORK_TREE are scrubbed with it because either would override our own `git -C`.
+  # (The general rule: a tool that spawns git must scrub git's routing env, or it inherits a
+  # caller's plumbing as a silent change of subject. docs/lessons — git-forest src/git.rs:7-20
+  # does exactly this before every spawn, and it is the one idea of its worth porting verbatim.)
+  unset GIT_INDEX_FILE GIT_DIR GIT_WORK_TREE
   [ -n "$root" ] && [ -d "$root" ] || { echo "loaded-untracked-lint: CANNOT DETERMINE — no readable repo root '$root'"; return 2; }
   command -v git >/dev/null 2>&1 || { echo "loaded-untracked-lint: CANNOT DETERMINE — git(1) is not on PATH"; return 2; }
   git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
@@ -167,8 +180,29 @@ if [ "${1:-}" = "--selftest" ]; then
   lint_repo "$d/plain" >/dev/null 2>&1; [ "$?" -eq 2 ] \
     || { echo "SELFTEST FAIL: a non-repo directory did not exit 2 (LOUD)"; fails=1; }
 
+  # (vi) THE POISONED-INDEX RED-PROOF. A caller exporting GIT_INDEX_FILE with our finding already
+  #      `git add -N`'d into it must NOT be able to turn this lint green — that inversion is live
+  #      today on ship-land.sh's `--precheck --working` path, and it is silent in the one direction
+  #      that reads as compliance. Without the `unset` in lint_repo this case FAILS: the file stops
+  #      being "other" and the lint reports OK over the exact population it exists to police.
+  if [ -n "$ri" ]; then
+    poison="$d/poison-index"
+    rm -f "$poison"
+    GIT_INDEX_FILE="$poison" git -C "$ri" read-tree HEAD 2>/dev/null \
+      || GIT_INDEX_FILE="$poison" git -C "$ri" add -A 2>/dev/null || true
+    GIT_INDEX_FILE="$poison" git -C "$ri" add -N .claude/rules/loaded.md 2>/dev/null || true
+    # Positive control: the poison must actually BLIND a naive probe, else this case proves nothing.
+    if [ -z "$(GIT_INDEX_FILE="$poison" git -C "$ri" ls-files --others --exclude-standard -- .claude 2>/dev/null)" ]; then
+      if ( export GIT_INDEX_FILE="$poison"; lint_repo "$ri" ) >/dev/null 2>&1; then
+        echo "SELFTEST FAIL: an exported GIT_INDEX_FILE with the finding add -N'd into it turned the lint GREEN"; fails=1
+      fi
+    else
+      echo "SELFTEST FAIL: the poisoned-index control did NOT blind a naive ls-files — case (vi) proves nothing"; fails=1
+    fi
+  fi
+
   if [ "$fails" -eq 0 ]; then
-    echo "loaded-untracked-lint --selftest: 7/7 — RED on a loaded-but-untracked .claude/rules file; GREEN on that file TRACKED beside an untracked-but-IGNORED one, on an ignored file alone, and on an untracked file OUTSIDE the loaded scope; LOUD (exit 2) on a missing root, an empty scope set, and a non-repo directory."
+    echo "loaded-untracked-lint --selftest: 8/8 — RED on a loaded-but-untracked .claude/rules file; GREEN on that file TRACKED beside an untracked-but-IGNORED one, on an ignored file alone, and on an untracked file OUTSIDE the loaded scope; LOUD (exit 2) on a missing root, an empty scope set, and a non-repo directory; and RED still, not GREEN, under a caller-exported GIT_INDEX_FILE holding the finding."
     exit 0
   fi
   echo "loaded-untracked-lint --selftest: FAILED — the lint does not discriminate."
