@@ -110,7 +110,11 @@ fi
 printf 'Population: %s sessions with an anti-deference verdict.\n' "$TOTAL"
 printf 'Sampling %s (half FIRED = arm A labels, half no-tell = arm B discovery).\n' "$NS"
 printf 'Each sends ONE closing message to Vercel AI Gateway (ZDR on, fails closed).\n'
-printf 'Report -> %s\n\n' "$OUT"
+printf 'Report -> %s\n' "$OUT"
+printf 'PACING: the free tier allows ~4 calls before throttling (measured 2026-09-19), so this\n'
+printf '        run self-throttles with exponential backoff. Budget roughly %s-%s minutes for %s\n' \
+       "$(( NS / 4 ))" "$(( NS / 2 ))" "$NS"
+printf '        calls. Paid credits remove the limit; nothing else about the run changes.\n\n'
 if [ "$YES" -ne 1 ]; then
   printf 'Type yes to send real closing messages to a third party: '
   read -r ans; [ "$ans" = "yes" ] || { printf 'aborted\n'; exit 1; }
@@ -145,16 +149,24 @@ while IFS= read -r row; do
     }}')"
   out="$(printf '%s' "$spec" | jev_ask)" || true
 
-  # ── PACE, AND RETRY A 429 ONCE ──────────────────────────────────────────────────────────────
-  # Free-tier requests on this model are rate-limited (measured: HTTP 429 during a rapid burst,
-  # 2026-09-19). Unpaced, arm A would measure OUR REQUEST RATE and report it as Jev missing the
-  # labels — a confident wrong answer, and exactly the disqualifying direction. So: a gap between
-  # calls, and one backoff retry on the class that says "slow down" rather than "this is broken".
-  if [ "$(printf '%s' "$out" | jq -r '.reason // ""' 2>/dev/null)" = "rate-limited" ]; then
-    sleep "${CC_JEV_PILOT_BACKOFF:-5}"
+  # ── SELF-THROTTLE TO WHATEVER THE TIER ALLOWS ───────────────────────────────────────────────
+  # MEASURED 2026-09-19 on the free tier: roughly FOUR calls succeed, then HTTP 429, recovering
+  # after some minutes. A fixed gap cannot express that — at 3s the 5th call fails and every one
+  # after it. Unpaced or under-paced, arm A would report "Jev missed the labels" while actually
+  # measuring OUR REQUEST RATE: a confident wrong answer in the disqualifying direction.
+  #
+  # So back off EXPONENTIALLY and keep the run alive rather than poisoning its numbers. A call
+  # that never clears is counted as SKIPPED, never as a miss — the distinction is the whole point.
+  tries=0
+  while [ "$(printf '%s' "$out" | jq -r '.reason // ""' 2>/dev/null)" = "rate-limited" ] \
+        && [ "$tries" -lt "${CC_JEV_PILOT_RETRIES:-5}" ]; do
+    tries=$((tries+1))
+    wait_s=$(( ${CC_JEV_PILOT_BACKOFF:-10} * tries ))
+    printf '  … rate-limited, backing off %ss (retry %s/%s)\n' "$wait_s" "$tries" "${CC_JEV_PILOT_RETRIES:-5}" >&2
+    sleep "$wait_s"
     out="$(printf '%s' "$spec" | jev_ask)" || true
-  fi
-  sleep "${CC_JEV_PILOT_GAP:-1}"
+  done
+  sleep "${CC_JEV_PILOT_GAP:-3}"
   p=$(printf '%s' "$out" | jq -r '.answers.defers.probability // empty' 2>/dev/null)
   cls=$(printf '%s' "$out" | jq -r '.answers.blocker_class.choice // empty' 2>/dev/null)
   if [ -z "$p" ]; then skipped=$((skipped+1)); continue; fi
