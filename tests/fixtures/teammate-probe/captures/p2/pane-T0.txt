@@ -1,0 +1,47 @@
+    may exist beyond what
+    was searched." Note
+    the refusal is
+    ambiguous by
+    construction — it
+    cannot distinguish
+    "no such agent" from
+    "not searched far
+    enough".
+  - Payload delivered to
+    team-lead instead
+    (msg_id f4a54c5c…),
+    with the issue named,
+    per the
+    stop-on-issue clause.
+  - One deviation to
+    record: SendMessage
+    is a deferred tool
+    here, so one
+    ToolSearch call was
+    required to load its
+    schema before it
+    could be invoked at
+    all. Constraints
+    otherwise held — no
+    writes, no shell, no
+    git, no
+    self-shutdown, no
+    questions.
+  - My registered name in
+    the routing metadata
+    is probeR2, not P2 —
+    worth checking
+    against the probe
+    roster.
+
+  Idle now, taking no
+  further turns.
+
+✻ Cooked for 31s · done 
+  4:00 PM
+  ✘ Auto-update failed…
+────────────── @probeR2 ─
+❯ stay idle, wait for th…
+─────────────────────────
+  (2) 13% · teammate-l…
+  ⏵⏵ auto mode on

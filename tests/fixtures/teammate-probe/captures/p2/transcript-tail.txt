@@ -1,0 +1,35 @@
+=== assistant 2026-09-19T21:00:39.434Z role= assistant
+P2 control done, and it surfaced one real finding.
+
+- Read `tests/fixtures/teammate-probe/target.txt` — first line: `PROBE-TARGET-LINE-1 teammate-probe fixture`.
+- Send to `W5-probes-lead` was **refused**: *"No agent named 'W5-probes-lead' is reachable. Your session list was too long to check completely, so a session by that name may exist beyond what was searched."* Note the refusal is ambiguous 
+=== attachment 2026-09-19T21:00:40.252Z role= 
+{}
+=== system 2026-09-19T21:00:40.253Z role= 
+{'subtype': 'stop_hook_summary'}
+=== system 2026-09-19T21:00:40.646Z role= 
+{'subtype': 'turn_duration'}
+=== user 2026-09-19T21:01:35.468Z role= user
+<teammate-message teammate_id="team-lead">
+{"type":"shutdown_request","requestId":"shutdown-1789851695026@probeR2","from":"team-lead","reason":"P2 control (RC-11 / K R2): probe complete, shutting the team down.","timestamp":"2026-09-19T21:01:35.026Z"}
+
+This is a shutdown request. To approve it, call SendMessage with exactly this input, where "message" is a JSON object rather than a string: {"to":"team-lead","message":{"type":"shutdown_response","request_id":"shutdown-1789851695026@probeR2","approve":true}}. Approving ends your process; a plain-text acknowledgment does not shut you down. To decline, for example because you're mid-task, send the same input with "approve": false and a "reason".
+</teammate-message>
+=== last-prompt  role= 
+{}
+=== agent-setting  role= 
+{}
+=== mode  role= 
+{}
+=== permission-mode  role= 
+{}
+=== atis-latch  role= 
+{}
+=== bridge-session  role= 
+{}
+=== bridge-session  role= 
+{}
+=== cost-state  role= 
+{}
+=== cost-state  role= 
+{}

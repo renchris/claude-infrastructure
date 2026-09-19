@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/chrisren/Development/.worktrees/probe/teammate-lifecycle-controls/tests/fixtures/teammate-probe/**)",
+      "Bash(cat tests/fixtures/teammate-probe/*)",
+      "Bash(cat target.txt)"
+    ],
+    "deny": []
+  }
+}
