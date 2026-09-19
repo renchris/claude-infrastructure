@@ -1,0 +1,19 @@
+You are the P1 probe lead. Do EXACTLY this and nothing else. Do not read any other file,
+do not write any file, do not run git, do not use TodoWrite.
+
+1. In ONE message, make four Agent tool calls with these exact names:
+   probeA, probeB, probeC, probeD
+   Each call: subagent_type "general-purpose", model "opus", NO isolation, NO cwd.
+   Each prompt, verbatim:
+     "You are a probe teammate. Do exactly one thing and then stop: read the file
+      /Users/chrisren/Development/.worktrees/probe/teammate-lifecycle-controls/tests/fixtures/teammate-probe/target.txt
+      with the Read tool and report its FIRST LINE back to your lead with SendMessage.
+      Write nothing. Run no shell command. Run no git command. Then stop and stay idle.
+      Do not shut yourself down. Do not ask any question."
+
+2. Wait. Do not call any other tool. When you have received an idle/finished signal from
+   ALL FOUR of probeA probeB probeC probeD, reply with exactly this one line and nothing else:
+
+   P1-ALL-FOUR-IDLE
+
+3. Then stop and wait. Do not shut the teammates down. Do not exit. Do nothing further.
