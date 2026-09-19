@@ -319,10 +319,10 @@ kw_resolve() { # <text> — bounded; the FTS index is a stub for live sessions (
   while IFS=$'\t' read -r f pane sid acct cwd pid lstart; do
     [ -n "$sid" ] || continue
     [ "$(date +%s)" -gt "$deadline" ] && { echo "cc-find: --kw hit its ${KW_BUDGET_S}s budget — the answer below may be partial" >&2; break; }
-    if printf '%s' "$cwd" | grep -qiF -- "$want"; then hits="$hits$f"$'\n'; n=$((n+1)); continue; fi
+    if printf '%s' "$cwd" | grep -iF -- "$want" >/dev/null; then hits="$hits$f"$'\n'; n=$((n+1)); continue; fi
     cfg="$(cf_cfg_of "$acct" "$sid" || true)"; [ -n "$cfg" ] || continue
     tx="$(cf_tx_of "$cfg" "$sid" 2>/dev/null)" || continue
-    head -c "$HEAD_BYTES" "$tx" 2>/dev/null | grep -qiF -- "$want" && { hits="$hits$f"$'\n'; n=$((n+1)); }
+    head -c "$HEAD_BYTES" "$tx" 2>/dev/null | grep -iF -- "$want" >/dev/null && { hits="$hits$f"$'\n'; n=$((n+1)); }
   done <<EOF
 $(cf_all_rows)
 EOF
