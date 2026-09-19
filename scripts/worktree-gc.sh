@@ -11,7 +11,7 @@
 #
 # SAFETY MODEL — a worktree is removed ONLY when ALL of these hold; any miss ⇒ KEEP + reason:
 #   1. it is a linked worktree of THIS repo, read from `git worktree list --porcelain`
-#      (NEVER a directory glob: ~/Development/.worktrees is SHARED ACROSS 5 REPOS and hosts
+#      (NEVER a directory glob: ~/Development/.worktrees is SHARED ACROSS 7 REPOS and hosts
 #      other repos' live sessions — audit §6, the highest-severity finding),
 #   2. the directory exists and is not excluded (CC_WTGC_EXCLUDE) / locked / .teammate-busy,
 #   3. `git status --porcelain` is empty (dirty ⇒ removal would need --force ⇒ data loss),
@@ -77,7 +77,7 @@
 # A warrant is one TSV line in CC_WTGC_WARRANTS:   <canonical-path>\t<head-sha>\t<reason>
 # and it is the narrowest possible authorisation — it fails closed in five separate directions:
 #   · PATH-EXACT, on the CANONICAL path, never a basename and never a prefix: basenames collide
-#     across the 5 repos sharing ~/Development/.worktrees (audit §6), so a basename warrant could
+#     across the 7 repos sharing ~/Development/.worktrees (audit §6), so a basename warrant could
 #     authorise a DIFFERENT repo's worktree. Proximity is not evidence; the key is the identity.
 #   · SHA-PINNED to the branch tip the decision was made against (a ≥7-char prefix is accepted;
 #     anything shorter is malformed). If the tip MOVED, work resumed after the warrant was
@@ -308,7 +308,7 @@ if [ -n "$WARRANT_PATH" ]; then
     exit 2
   fi
   # Records come ONLY from `git worktree list` — never a directory test. A warrant must not be
-  # writable against a bare directory, and ~/Development/.worktrees is shared across 5 repos
+  # writable against a bare directory, and ~/Development/.worktrees is shared across 7 repos
   # (audit §6), so "the path exists" proves nothing about which repo owns it.
   W_FOUND=0; W_BRANCH=""; W_DETACHED=0; _p=""; _b=""; _d=0
   while IFS= read -r line; do
@@ -522,7 +522,7 @@ registry_live() { # <basename> <canon-path> → 0 iff ANY registered session PID
     rcwd="$(printf '%s' "$row" | cut -f3)"
     case "${pid:-}" in ''|*[!0-9]*) continue ;; esac
     kill -0 "$pid" 2>/dev/null || continue
-    # A bare basename can collide across the 5 repos sharing ~/Development/.worktrees (audit §6):
+    # A bare basename can collide across the 7 repos sharing ~/Development/.worktrees (audit §6):
     # only honour the row when its recorded cwd is this worktree (or was never recorded).
     if [ -z "$rcwd" ] || [ "$(canon "$rcwd")" = "$path" ]; then return 0; fi
   done
@@ -877,7 +877,7 @@ warrant_terminal() { # <canon-path> <branch> → 0 iff an explicit, path-exact, 
   [ -f "$WARRANTS_FILE" ] || { WARRANT_WHY="no dispose warrant recorded"; return 1; }
   # LAST match wins, so re-warranting a path supersedes an earlier record without an edit.
   # $1==p is an EXACT compare on the canonical path — never a basename (basenames collide across
-  # the 5 repos sharing ~/Development/.worktrees) and never a prefix.
+  # the 7 repos sharing ~/Development/.worktrees) and never a prefix.
   # A trailing slash is the one hand-edit slip forgiven here; everything else must match exactly.
   row="$(awk -F'\t' -v p="$cpath" '{k=$1; sub(/\/+$/,"",k)} k==p{r=$0} END{if (r != "") print r}' \
     "$WARRANTS_FILE" 2>/dev/null)"
