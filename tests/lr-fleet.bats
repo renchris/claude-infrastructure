@@ -543,6 +543,9 @@ SH
   # …and its verdict reaches the requester as mail carrying a verdict= token
   until [ -s "$BATS_TEST_TMPDIR/notify.log" ] || [ $(( $(date +%s) - t0 )) -gt 60 ]; do sleep 2; done
   grep -q 'verdict=' "$BATS_TEST_TMPDIR/notify.log" || { echo "no verdict mail:"; cat "$BATS_TEST_TMPDIR/notify.log" 2>/dev/null; cat "$logp" 2>/dev/null; false; }
+}
+
+
 # ═══ W4 — the resolver stops guessing, and the in-place claim becomes falsifiable ═══════════════
 
 # ONE SESSION, TWO CENSUSES, COUNTED TWICE. lr_resume_procs already collapses the cc-close-attrib
