@@ -101,7 +101,17 @@ log "=== P1 run '$RUN' — binary $CLAUDE_BIN ==="
 #  (b) the fleet's own admission gate (hooks/agent-teams-enforce.sh -> cc_capacity_admit) refuses a
 #      spawn when too many sessions are MID-TURN (ceiling 8). Run 1 was refused 3/3 on exactly this.
 # We WAIT rather than override: CC_ADMIT_GATE=off would defeat a protective gate to measure a race.
-PRE_MAX_ACTIVE="${PROBE_MAX_ACTIVE:-3}"     # +1 lead +4 members must stay under the ceiling of 8
+# CORRECTED 2026-09-19 after 77 minutes of one-minute samples proved this bar unreachable.
+# It was 3, reasoned as "a lead plus four members must stay under the ceiling of 8". That is
+# NOT the gate's condition. cc_capacity_admit refuses when `active + 1 > 8`, so it ADMITS at
+# active <= 7 — and it counts sessions MID-TURN, which probe members stop being seconds after
+# they spawn. Measured over the same 77 samples: active<=3 and active<=4 were met 0/77 (0.0%),
+# while the gate's own active<=7 held 64/77 (83.1%). The preflight was stricter than the gate
+# it existed to satisfy, so it blocked the probe on a self-imposed bar and not on the box —
+# the "blocker isn't the standard" failure: when two tools judge one population, adopt the
+# standard of the one that actually adjudicates. 6 keeps one slot of margin for the spawn
+# burst, during which the four members are briefly mid-turn themselves.
+PRE_MAX_ACTIVE="${PROBE_MAX_ACTIVE:-6}"
 PRE_MIN_IDLE="${PROBE_MIN_IDLE_PCT:-40}"    # the addendum's bar
 PRE_WAIT_S="${PROBE_PREFLIGHT_WAIT_S:-2400}"
 
