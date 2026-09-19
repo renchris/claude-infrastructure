@@ -177,6 +177,52 @@ ask() { printf '%s' "$SPEC" | env AI_GATEWAY_API_KEY=dummy CC_JEV_BASE_URL="http
   mkdir -p "$link"
   ln -s "$REPO/hooks/lib/jev.sh" "$link/jev.sh"
   run bash -c ". '$link/jev.sh'; echo \"\$CC_JEV_LIB_ROOT\""
-  [ "$output" = "$REPO" ]
+  # Compare PHYSICAL paths. The resolver uses `cd -P`, and a checkout under /tmp reaches it via
+  # /private/tmp on macOS — so a literal string compare fails on a correct resolution. Comparing
+  # logical paths here would make this guard fire on the harness rather than on the subject.
+  [ "$output" = "$(cd -P "$REPO" && pwd)" ]
   [ -d "$output/node_modules/ai" ]
+}
+
+# ── THE SECRET SOURCE ────────────────────────────────────────────────────────────────────────
+# This machine keeps secrets in `agent-secrets` (sops + age, names-only), whose golden rule 3 is
+# "to use a secret, inject it — don't read it". An `export AI_GATEWAY_API_KEY=…` in a shell
+# profile is the exact plaintext-on-disk leak that tool exists to prevent, so the library has to
+# resolve a key it will never see. These pin which path it picks, because picking the wrong one
+# is silent: `none` just reads as "not configured yet".
+# A stub `agent-secrets` whose `list` prints exactly what we want the resolver to see. Built as
+# a real file in the test body rather than inside a nested bash -c string: the nesting is what
+# broke the first draft of these two tests, and a fixture that is hard to read is a fixture whose
+# failures get misread.
+mkstub() {   # $1 = dir, $2 = the line `list` prints
+  mkdir -p "$1"
+  printf '#!/usr/bin/env bash\necho %s\n' "$(printf '%q' "$2")" > "$1/agent-secrets"
+  chmod +x "$1/agent-secrets"
+}
+
+@test "secret source: an env var already present is used directly — no extra fork" {
+  run bash -c ". '$REPO/hooks/lib/jev.sh'; export AI_GATEWAY_API_KEY=dummy; jev_secret_source"
+  [ "$output" = "env" ]
+}
+
+@test "secret source: none when there is no env var and no store entry" {
+  run env -u AI_GATEWAY_API_KEY PATH=/usr/bin:/bin bash -c ". '$REPO/hooks/lib/jev.sh'; jev_secret_source"
+  [ "$output" = "none" ]
+}
+
+@test "secret source: agent-secrets is chosen when the store HOLDS the name" {
+  mkstub "$BATS_TEST_TMPDIR/sb" "  * AI_GATEWAY_API_KEY"
+  run env -u AI_GATEWAY_API_KEY "PATH=$BATS_TEST_TMPDIR/sb:/usr/bin:/bin" \
+      bash -c ". '$REPO/hooks/lib/jev.sh'; jev_secret_source"
+  [ "$output" = "agent-secrets" ]
+}
+
+# The negative arm, and it is the one that matters: a store that exists but does NOT carry this
+# name must resolve to `none`, not to agent-secrets. Otherwise every call would pay the ~230 ms
+# wrapper and then abstain `no-key` anyway — a silent tax on a path that can never succeed.
+@test "secret source: a store WITHOUT the name is none, not agent-secrets" {
+  mkstub "$BATS_TEST_TMPDIR/sb2" "  * SOMETHING_ELSE"
+  run env -u AI_GATEWAY_API_KEY "PATH=$BATS_TEST_TMPDIR/sb2:/usr/bin:/bin" \
+      bash -c ". '$REPO/hooks/lib/jev.sh'; jev_secret_source"
+  [ "$output" = "none" ]
 }
