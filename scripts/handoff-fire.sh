@@ -164,6 +164,13 @@
 #                       P's tty in its ancestry. Needs --resume-launcher; refuses a brief, --account,
 #                       --cwd/--worktree and --session-id. Implies --allow-live-subagents (ingest
 #                       re-audits them).
+#   --probe-recycle-preconditions --source-pane P --source-session S   READ-ONLY (W2,
+#                       LIMIT_RECOVER_100P): print one line per refusable precondition of a remote
+#                       in-place recycle and change NOTHING. exit 0 all pass · 3 HELD:<check>
+#                       (a held draft, an unreadable composer — retry later) · 5 REFUSED:<check>
+#                       (not limited, a teammate, a pane not holding a claude, a binding that does
+#                       not hold). Its caller is lr-handoff's lrh_precheck, which runs it BEFORE the
+#                       transplant so a refusal costs a message instead of a tombstoned husk.
 #   --resume-launcher F --resume-cfg DIR [--resume-cwd D]   (with --recycle) RESUME MODE: the
 #                       relaunch typed into the surviving shell is `bash F` (the lr-launch-*.sh
 #                       lr-handoff minted: lr-fire-resume of the SAME uuid on the TARGET account,
@@ -6784,6 +6791,20 @@ if [ "${1:-}" = "__recycle" ]; then
     echo "⚠ recycle cwd VANISHED during exit: $RCWD (a harness-owned worktree is reaped on session exit) — the baked fallback cd now decides where the successor lands"
   fi
   sleep 2                                        # shell-prompt settle after claude exits
+  # ── THE RUN DIR, AND WHY THE STALE-rc GUARD IS A TIMESTAMP (W2) ──────────────────────────────
+  # $14 is the run's own dir (the bundle lr-handoff minted, which is also where the launcher lives),
+  # positional-last + optional like every argument above it. `relaunch.rc` in it is the launcher's
+  # PRE-expect exit code — the one fact this watcher cannot infer from outside the pane.
+  #
+  # A PREVIOUS ATTEMPT'S rc IS NOT THIS ATTEMPT'S EVIDENCE. The file is removed before typing and
+  # the typing instant is recorded, so an rc that predates `typed_at` is IGNORED rather than
+  # attributed to the relaunch just sent (D1-safety R5). Both halves are needed: the unlink alone
+  # loses to a writer that recreated the file between the unlink and the type.
+  RCY_RUN_DIR="${RCY_RUN_DIR:-${14:-}}"
+  if [ -n "$RCY_RUN_DIR" ]; then
+    rm -f "$RCY_RUN_DIR/relaunch.rc" 2>/dev/null || true
+  fi
+  rcy_typed_at="$(date +%s 2>/dev/null || echo 0)"
   ok=0
   for _ in 1 2; do
     if it2_type_verified "$IT2" "$RSID" "$(cat "$CMDFILE")"; then ok=1; break; fi
@@ -6797,38 +6818,109 @@ if [ "${1:-}" = "__recycle" ]; then
     hf_alarm recycle-relaunch-failed "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-RELAUNCH-FAILED: relaunch write into $RSID failed twice — the pane is at a bare shell with NO claude. Run manually in that pane: $(cat "$CMDFILE")" || true
     echo "!! it2 relaunch write failed twice — run manually in the pane: $(cat "$CMDFILE")" >&2; exit 1; }
   echo "→ relaunch typed into $RSID: $(cat "$CMDFILE")"
-  # Confirm the successor actually STARTS — a mistyped launcher, missing shell function, or
-  # auth bounce otherwise dies silently and strands the pane at a prompt. One guarded retype
-  # (skipped if claude appeared meanwhile — a late first launch must not get a second prompt
-  # typed into its composer), then scream INTO THE PANE via it2 (the one write path proven
-  # reliable detached) so a human at the pane sees the fallback even without the log.
+  # ══ THE BOOT WAIT — POSITIVE DISCRIMINATORS ONLY, AND NO RETYPE (W2, 2026-09-19) ═══════════════
+  # WHAT THIS REPLACES, and why the replacement is not a tuning. The old form waited 15 × 3 s for a
+  # claude to appear, RETYPED the identical command once, waited another 45 s, and called the result
+  # "no process appeared within 90s". Measured 2026-09-19 (U02 §2d, U05 §3.4): the launcher had
+  # already exited ~2 s in, refused by its own capacity gate, so the 90 s was spent polling a corpse
+  # — and the retype re-ran the same command against a refusal counter that had advanced by exactly
+  # one, i.e. it could not possibly succeed. Four husks. The retype is DELETED (plan § 14): with the
+  # admission token a refusal is REAL, and a real refusal is re-driven by the daemon with a fresh
+  # probe, never by sending the same keystroke twice.
   #
-  # The retype gate is `at_shell`, NOT `! cc_alive`, for the same reason as the first type: a
-  # slow-launching CC under a pty wrapper is not-yet-`cc` for several seconds, and the negative
-  # would put a second launcher line into the composer it was just given. Only a pane still
-  # positively at a prompt is one the launch demonstrably failed to leave.
+  # THREE POSITIVE DISCRIMINATORS, NEVER A HEURISTIC (D1-FT R2, D1-safety R6):
+  #   1. `relaunch.rc` in the run dir — the launcher's own pre-expect exit code, newer than
+  #      `typed_at` (a stale rc from a previous attempt is IGNORED, not attributed to this one);
+  #   2. an `lr-fire-resume` REFUSAL row in the IDL with ts > typed_at — the same fact by another
+  #      route, for a launcher too old to write the rc file;
+  #   3. the pane actually holding a claude.
+  # A BOUND EXPIRING IS NOT A VERDICT (I4). At 60 s with no evidence this says INDETERMINATE:boot —
+  # a state line and an alarm, not a failure — and keeps reading to 180 s, where STALE:boot is the
+  # honest terminal state. `shell-stable`, a 20 s bound and a `$_` loop floor were all refused for
+  # the same reason: each turns "I have not seen it yet" into "it is dead", and the action that
+  # follows a false FAILED is typing over a working session.
   #
-  # THE ELAPSED IS MEASURED, NEVER ASSERTED (W1, LIMIT_RECOVER_100P § 12.1). The terminal arm at the
-  # bottom of this branch said "within 90s" unconditionally, and that is a lie in the commonest
-  # case: the retype below fires only when `at_shell` is AFFIRMATIVELY true, and `unknown` (seven
-  # branches of pane_cc_state) skips it — so an unreadable pane was reported as a 90 s failure
-  # after 45 s. Both waits are clocked and the real number is what the row, the alarm and the pane
-  # are handed.
-  #
-  # RCY_PROC_TICKS / RCY_PROC_IVL_S are SELFTEST SEAMS with the same safety argument as
-  # HF_RECYCLE_SHELL_WAIT_S above: they move only how long the watcher waits for a process to
-  # appear. They cannot make it send a key it would not otherwise send — the retype's gate is still
-  # `at_shell`, an affirmative shell verdict read from the pane itself. Shipped at 15 × 3 s, i.e.
-  # the 45 s + 45 s this file has always waited.
-  rcy_proc_ticks="${RCY_PROC_TICKS:-15}"; case "$rcy_proc_ticks" in ''|*[!0-9]*|0) rcy_proc_ticks=15 ;; esac
-  rcy_proc_ivl="${RCY_PROC_IVL_S:-3}";    case "$rcy_proc_ivl"   in ''|*[!0-9]*|0) rcy_proc_ivl=3   ;; esac
-  up=0; rcy_retyped=0; rcy_proc_t0="$(date +%s 2>/dev/null || echo 0)"
-  for _ in $(seq 1 "$rcy_proc_ticks"); do sleep "$rcy_proc_ivl"; if cc_alive; then up=1; break; fi; done
-  if [ "$up" = 0 ] && at_shell; then
-    echo "⚠ no claude on $TTY_PATH $(( $(date +%s) - rcy_proc_t0 ))s after relaunch — retyping once"
-    it2_type_verified "$IT2" "$RSID" "$(cat "$CMDFILE")" || true
-    rcy_retyped=1
-    for _ in $(seq 1 "$rcy_proc_ticks"); do sleep "$rcy_proc_ivl"; if cc_alive; then up=1; break; fi; done
+  # THE CADENCE IS SPLIT ON PURPOSE. `pane_cc_state` is 0.5-0.6 s under load (D1-latency R2), so it
+  # cannot run every tick; the two file reads can. So the 0.5 s tick reads the rc and the IDL, and
+  # the pane is read every RCY_BOOT_PANE_EVERY ticks. The cheap `ps -o comm= -t` prefilter catches
+  # the non-expect case immediately and is deliberately NOT the oracle: a resumed session runs
+  # claude on expect's NESTED pty, where it is invisible to a tty-scoped ps and only
+  # pane_cc_state's descendant-closure walk finds it.
+  rcy_boot_wait="${RCY_BOOT_WAIT_S:-60}";        case "$rcy_boot_wait"  in ''|*[!0-9]*) rcy_boot_wait=60 ;; esac
+  rcy_boot_stale="${RCY_BOOT_STALE_S:-180}";     case "$rcy_boot_stale" in ''|*[!0-9]*) rcy_boot_stale=180 ;; esac
+  rcy_boot_ivl="${RCY_BOOT_IVL_S:-0.5}"
+  rcy_boot_slow_ivl="${RCY_BOOT_SLOW_IVL_S:-5}"
+  rcy_boot_pane_every="${RCY_BOOT_PANE_EVERY:-6}"; case "$rcy_boot_pane_every" in ''|*[!0-9]*|0) rcy_boot_pane_every=6 ;; esac
+  up=0; rcy_boot_state=""; rcy_boot_rc=""
+  rcy_proc_t0="$rcy_typed_at"
+  # The run's state log is lr-lib's ONE writer (append-only, ≤1 KB, per-run mutex). Sourced HERE
+  # rather than at the top of the file: only a resume-mode watcher with a run dir has anything to
+  # write, and a 12k-line script must not grow a load-time dependency for it. Absent ⇒ the states
+  # are still in the ledger row and the alarm; nothing is silently lost.
+  if [ -n "${RCY_RUN_DIR:-}" ] && ! command -v lr_state_append >/dev/null 2>&1; then
+    for _rcy_lib in "$(dirname "$0")/limit-recover/lr-lib.sh" \
+                    "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-lib.sh" \
+                    "$HOME/.claude/scripts/limit-recover/lr-lib.sh"; do
+      # shellcheck disable=SC1090  # runtime-resolved library ladder
+      [ -f "$_rcy_lib" ] && { . "$_rcy_lib" 2>/dev/null || true; break; }
+    done
+  fi
+  rcy_typed_at_iso="$(date -u -r "$rcy_typed_at" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
+
+  cc_up_cheap() { ps -o comm= -t "${TTY_PATH##*/}" 2>/dev/null | grep -qE '^-?(claude|node)'; }
+  rcy_boot_rc_read() { # → the rc lr-fire-resume wrote FOR THIS ATTEMPT, or nothing
+    local f mt
+    [ -n "${RCY_RUN_DIR:-}" ] || return 0
+    f="$RCY_RUN_DIR/relaunch.rc"
+    [ -f "$f" ] || return 0
+    mt="$(stat -f %m "$f" 2>/dev/null || echo 0)"
+    case "$mt" in ''|*[!0-9]*) mt=0 ;; esac
+    [ "$mt" -ge "$rcy_typed_at" ] || return 0          # older than the type = a previous attempt
+    tr -cd '0-9' < "$f" 2>/dev/null | cut -c1-5
+  }
+  rcy_boot_idl_refused() { # → 0 when lr-fire-resume refused AFTER this attempt was typed
+    local idl
+    idl="${CC_ADMIT_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+    [ -n "${RCY_RESUME_SID:-}" ] && [ -n "$rcy_typed_at_iso" ] && [ -f "$idl" ] || return 1
+    command -v jq >/dev/null 2>&1 || return 1
+    [ -n "$(grep -F "$RCY_RESUME_SID" "$idl" 2>/dev/null | jq -c --arg t0 "$rcy_typed_at_iso" \
+              'select(.caller=="lr-fire-resume" and .verdict=="refuse") | select((.ts // "") >= $t0)' \
+              2>/dev/null | tail -1)" ]
+  }
+  rcy_boot_tick=0
+  rcy_boot_deadline=$(( rcy_typed_at + rcy_boot_wait ))
+  while [ "$(date +%s)" -lt "$rcy_boot_deadline" ]; do
+    rcy_boot_tick=$((rcy_boot_tick + 1))
+    # THE CHEAP FACTS FIRST. Two stats and a bounded grep answer "the launcher already exited" in
+    # milliseconds; the pane read is the expensive one (0.5-0.6 s under load, D1-latency R2) and is
+    # also the one whose answer can only arrive LATER. Reading it first cost 4 s of latency on a
+    # refusal that was already on disk — the very delay this arm exists to delete.
+    rcy_boot_rc="$(rcy_boot_rc_read)"
+    if [ -n "$rcy_boot_rc" ] && [ "$rcy_boot_rc" != 0 ]; then
+      rcy_boot_state="FAILED:relaunch:rc=$rcy_boot_rc"; break
+    fi
+    if rcy_boot_idl_refused; then rcy_boot_state="FAILED:relaunch:gate"; break; fi
+    if cc_up_cheap || [ $(( rcy_boot_tick % rcy_boot_pane_every )) = 0 ]; then
+      if cc_alive; then up=1; break; fi
+    fi
+    sleep "$rcy_boot_ivl"
+  done
+  if [ "$up" = 0 ] && [ -z "$rcy_boot_state" ]; then
+    # INDETERMINATE — a state, an alarm, and then MORE READING. Never a verdict (I4).
+    rcy_boot_state="INDETERMINATE:boot"
+    echo "⚠ INDETERMINATE:boot — no claude on $TTY_PATH, no relaunch.rc and no launcher refusal $(( $(date +%s) - rcy_typed_at ))s after the relaunch was typed; NOT retyping (a second identical command cannot clear a real refusal). Reading on to ${rcy_boot_stale}s."
+    hf_alarm recycle-boot-indeterminate "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-BOOT-INDETERMINATE: pane $RSID showed no claude, no relaunch rc and no launcher refusal within ${rcy_boot_wait}s of the relaunch. This is an ABSTENTION, not a failure — the watcher is still reading. Manual command if you want it now: $(cat "$CMDFILE")" || true
+    rcy_boot_deadline=$(( rcy_typed_at + rcy_boot_stale ))
+    while [ "$(date +%s)" -lt "$rcy_boot_deadline" ]; do
+      if cc_alive; then up=1; rcy_boot_state=""; break; fi
+      rcy_boot_rc="$(rcy_boot_rc_read)"
+      if [ -n "$rcy_boot_rc" ] && [ "$rcy_boot_rc" != 0 ]; then
+        rcy_boot_state="FAILED:relaunch:rc=$rcy_boot_rc"; break
+      fi
+      if rcy_boot_idl_refused; then rcy_boot_state="FAILED:relaunch:gate"; break; fi
+      sleep "$rcy_boot_slow_ivl"
+    done
+    [ "$rcy_boot_state" = "INDETERMINATE:boot" ] && rcy_boot_state="STALE:boot"
   fi
   if [ "$up" = 1 ] || cc_alive; then
     # CONVERGENCE of two parallel streams, both aimed at "birth is not engagement" on this path.
@@ -6928,7 +7020,13 @@ if [ "${1:-}" = "__recycle" ]; then
   }
   rcy_elapsed=$(( $(date +%s 2>/dev/null || echo 0) - rcy_proc_t0 ))
   rcy_cause="$(rcy_idl_cause || true)"
-  rcy_detail="relaunch typed into $RSID but NO claude process appeared within ${rcy_elapsed}s (retype: $([ "$rcy_retyped" = 1 ] && printf 'ran' || printf 'SKIPPED — the pane never read as an affirmative shell')); $(if [ -n "$rcy_cause" ]; then printf '%s' "$rcy_cause"; else printf '%s' 'no capacity refusal recorded for this sid — cause UNKNOWN, read the launcher log'; fi)"
+  # THE STATE LEADS THE SENTENCE (W2). `FAILED:relaunch:rc=9` is a measured fact — the launcher
+  # exited before the TUI existed and said so — while `STALE:boot` is the honest name for a bound
+  # that expired with no evidence either way. They are the same terminal arm and the same row, and
+  # they must not read alike: one is re-drivable with a fresh probe, the other needs someone to look.
+  rcy_detail="${rcy_boot_state:-STALE:boot} — relaunch typed into $RSID, no claude process within ${rcy_elapsed}s (NO retype: a second identical command cannot clear a refusal); $(if [ -n "$rcy_cause" ]; then printf '%s' "$rcy_cause"; else printf '%s' 'no capacity refusal recorded for this sid — cause UNKNOWN, read the launcher log'; fi)"
+  [ -n "${RCY_RUN_DIR:-}" ] && command -v lr_state_append >/dev/null 2>&1 \
+    && { lr_state_append "$RCY_RUN_DIR" "${rcy_boot_state%%:*}" boot "$rcy_detail" || true; }
   emit_recycle_event recycle-dead 0 "$RSID" "$rcy_detail" || true
   goal_unreachable recycle-dead || true
   hf_alarm recycle-relaunch-refused "$RSID" "${RCY_OLD_SID:-}" "" "HANDOFF-RECYCLE-RELAUNCH-REFUSED: $rcy_detail. Pane $RSID now holds NO claude and its work is stranded. Relaunch manually in that pane: $(cat "$CMDFILE")" || true
@@ -7292,6 +7390,121 @@ if [ "${1:-}" = "stamp-peer" ]; then
   fi
   echo "→ fired-peer stamp written: $FIRED_DIR/$SP_PANE.json (cwd $SP_CWD)" >&2
   exit 0
+fi
+
+# ── --probe-recycle-preconditions — every REFUSABLE read, before anything moves (W2) ────────────
+# THE ORDERING DEFECT this exists to close (U02, D1-FT R5, D2-safety R2, D3-safety R3 — no design
+# had it). `lr-handoff --in-place` transplanted the transcript and THEN discovered the pane was
+# holding an operator draft, or was not at a claude prompt, or was a teammate, or had died on a
+# network error rather than a limit. By then the source is a tombstoned husk and the only exits are
+# a manual relaunch or a split brain. Every one of those facts is READABLE FIRST — this verb reads
+# them, prints one line per check, and changes nothing.
+#
+# IT IS THE SAME IMPLEMENTATION THE ACTUATOR USES, deliberately: hf_remote_source_bind (the
+# pane→session binding), pane_cc_state, composer_content, live_subagents_of. A predicate
+# re-implemented outside its actuator drifts from it (memory: sibling-auditors-must-share-the-state-
+# model), and the whole value of a pre-check is that it answers the SAME question the gate will.
+#
+#   exit 0  every check passed — the caller may proceed to the irreversible step
+#   exit 3  HELD:<check>     a transient, operator-owned state (a draft, an unreadable composer);
+#                            nothing is wrong, the recovery simply must not proceed YET
+#   exit 5  REFUSED:<check>  this session must not be recycled at all (not limited, a teammate,
+#                            a pane that is not holding a claude, a binding that does not hold)
+# The in-flight subagent count is RECORDED, never a refusal: the recycle's own subagent_gate owns
+# that decision, and duplicating it here would make one loss refuse at two different bars.
+if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
+  shift
+  PRP_PANE="" PRP_SESSION=""
+  while [ $# -gt 0 ]; do case "$1" in
+    --source-pane)    PRP_PANE="${2:?--source-pane needs a pane id}"; shift 2 ;;
+    --source-session) PRP_SESSION="${2:?--source-session needs a session uuid}"; shift 2 ;;
+    *) echo "!! unknown --probe-recycle-preconditions arg: $1" >&2; exit 2 ;;
+  esac; done
+  prp_verdict() { echo "verdict: $1"; exit "$2"; }
+
+  # 1. THE BINDING. Same function self-close and --recycle take; its refusal text is the one
+  #    tests/handoff-selfclose-transplanted-source.bats pins.
+  if ! hf_remote_source_bind "$PRP_PANE" "$PRP_SESSION" --probe-recycle-preconditions; then
+    echo "registry: REFUSED"
+    prp_verdict "REFUSED:registry" 5
+  fi
+  echo "registry: ok pane=$PRP_PANE session=${PRP_SESSION:0:8}"
+
+  # 2. WAS IT A LIMIT? A network death has a retry ladder that may still be running (93-101 min
+  #    measured), and a clean session is not owed a recovery at all — recycling either one spends a
+  #    transplant on a session that never needed it. lr-lib owns this predicate; an unreachable
+  #    library is LOUD and REFUSES, because "I could not read it" must never read as "it qualifies".
+  for _prp_lib in "$(dirname "$0")/limit-recover/lr-lib.sh" \
+                  "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-lib.sh" \
+                  "$HOME/.claude/scripts/limit-recover/lr-lib.sh"; do
+    # shellcheck disable=SC1090  # runtime-resolved library ladder
+    [ -f "$_prp_lib" ] && { . "$_prp_lib" 2>/dev/null || true; break; }
+  done
+  PRP_TX=""
+  # shellcheck disable=SC2231  # UNQUOTED ON PURPOSE: the default carries a `.claude*` wildcard
+  for _prp_f in ${CC_PROJECTS_DIRS:-$HOME/.claude*/projects}/*/"$PRP_SESSION".jsonl; do
+    [ -f "$_prp_f" ] && { PRP_TX="$_prp_f"; break; }
+  done
+  if [ -z "$PRP_TX" ]; then
+    echo "limit: NO TRANSCRIPT for ${PRP_SESSION:0:8} under \$CC_PROJECTS_DIRS"
+    prp_verdict "REFUSED:no-transcript" 5
+  fi
+  if ! command -v lr_last_api_error >/dev/null 2>&1; then
+    echo "limit: UNREADABLE — lr-lib.sh (lr_last_api_error) is not reachable from $0"
+    prp_verdict "REFUSED:limit-unreadable" 5
+  fi
+  PRP_ERR="$(lr_last_api_error "$PRP_TX" 2>/dev/null || true)"
+  PRP_KIND="$(printf '%s' "$PRP_ERR" | cut -f3)"
+  if [ "$PRP_KIND" != limit ]; then
+    echo "limit: NO — the last assistant record is ${PRP_KIND:-not an api error} ($PRP_TX)"
+    prp_verdict "REFUSED:not-limited" 5
+  fi
+  echo "limit: kind=limit at $(printf '%s' "$PRP_ERR" | cut -f4)"
+
+  # 3. A TEAMMATE IS NOT RECOVERABLE IN PLACE. Its pane belongs to its lead's team, its close is the
+  #    lead's harvest, and a transplant would orphan it (D2-safety R6, D3-safety R5 — teammate rule
+  #    0). The head of the transcript is where the harness records `agentName`; 8 KB is the bound
+  #    that keeps this cheap on a 200 MB file.
+  if head -c 8000 "$PRP_TX" 2>/dev/null | grep -q '"agentName"'; then
+    echo "teammate: YES — agentName in the first 8 KB of $PRP_TX"
+    prp_verdict "REFUSED:teammate" 5
+  fi
+  echo "teammate: no"
+
+  # 4. THE PANE MUST BE HOLDING A CLAUDE. `unknown` is an ABSTENTION, not a finding — seven branches
+  #    of pane_cc_state return it and not one means "there is no claude here" — and it REFUSES for
+  #    exactly that reason: a transplant justified by a pane read that never happened is the failure
+  #    this verb exists to prevent.
+  pin_term_verdict_for_watcher
+  PRP_TTY="$(as_tty "$PRP_PANE")"
+  PRP_STATE="$(pane_cc_state "$PRP_TTY")"
+  if [ "$PRP_STATE" != cc ]; then
+    echo "pane_state: $PRP_STATE (tty ${PRP_TTY:-<unresolved>})"
+    prp_verdict "REFUSED:pane:$PRP_STATE" 5
+  fi
+  echo "pane_state: cc (tty $PRP_TTY)"
+
+  # 5. AN OPERATOR DRAFT IS THEIRS. The /exit would MERGE with it into one text message. Today the
+  #    recycle's own composer gate catches this — 180 s AFTER the transplant. Reading it here turns a
+  #    tombstoned husk into a message.
+  PRP_IT2="${IT2_BIN:-$HOME/.claude/bin/it2}"
+  if PRP_COMPOSER="$(composer_content "$PRP_IT2" "$PRP_PANE")"; then
+    if [ -n "$PRP_COMPOSER" ]; then
+      echo "composer: held:$(printf '%s' "$PRP_COMPOSER" | cut -c1-80)"
+      prp_verdict "HELD:draft" 3
+    fi
+    echo "composer: empty"
+  else
+    echo "composer: unreadable"
+    prp_verdict "HELD:composer-unreadable" 3
+  fi
+
+  # 6. IN-FLIGHT SUBAGENTS — COUNTED, NEVER A REFUSAL (see the header).
+  PRP_SA_DIR="$(subagent_dir_for_sid "$PRP_SESSION")"
+  PRP_SA=0
+  [ -n "$PRP_SA_DIR" ] && PRP_SA="$(live_subagents_of "$PRP_SA_DIR" | grep -c . || true)"
+  echo "live_subagents: ${PRP_SA:-0}"
+  prp_verdict OK 0
 fi
 
 # self-close — arm the detached watcher that retires this session once the calling turn ends.
@@ -11783,7 +11996,16 @@ recycle_fire() {
   if [ -n "$RESUME_LAUNCHER" ] && [ -n "$HF_TS_TOMBSTONE" ]; then
     RCY_SRC_TX="${HF_TS_TOMBSTONE%.HANDOFF.json}.jsonl"
   fi
-  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" "$RESUME_CFG" "${RESUME_LAUNCHER:+${RCY_SOURCE_SESSION:-$rcy_old_sid}}" "$RCY_T0" "$RCY_SRC_TX")"
+  # $14: THE RUN DIR (W2) — the bundle lr-handoff minted, which is ALSO where the launcher lives
+  # (it was moved out of $TMPDIR, which this box wipes at boot). The watcher needs it for exactly
+  # two things: to clear and then read `relaunch.rc`, the one fact about the launcher's fate that
+  # cannot be seen from outside the pane, and to append the run's state lines. Derived from the
+  # launcher path rather than passed separately BECAUSE the two must agree — lr-fire-resume writes
+  # the rc into `$LR_RUN_DIR`, which the launcher exports as its own directory, so deriving it here
+  # cannot drift from what the writer uses. Empty for a non-resume recycle, which has no run.
+  RCY_RUN_DIR_ARG=""
+  [ -n "$RESUME_LAUNCHER" ] && RCY_RUN_DIR_ARG="$(dirname "$RESUME_LAUNCHER")"
+  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" "$RESUME_CFG" "${RESUME_LAUNCHER:+${RCY_SOURCE_SESSION:-$rcy_old_sid}}" "$RCY_T0" "$RCY_SRC_TX" "$RCY_RUN_DIR_ARG")"
   if ! await_armed "$log"; then
     kill "$WATCHER_PID" 2>/dev/null || true
     echo "!! recycle ABORTED: watcher heartbeat never appeared ($log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
@@ -11846,22 +12068,32 @@ recycle_fire() {
   fi
 }
 
+# THE OUTER BOUND MUST EXCEED THE SUM OF THE INNER ONES (W2; D2-FT R4, D2-latency R1, and repo
+# lesson inner-bound-outer-bound-starves-the-tail). It did not: 600 + 180 + 120 = 900 s against
+# inner stages that can legitimately consume 180 (composer gate) + 600 (shell wait) + 180 (boot) +
+# 180 (engage) = 1140 s, so a recycle that was still working could be reported as "no verdict"
+# — the same arithmetic that made the refusal budget unreachable inside the 90 s watcher window.
+# Every term below is READ FROM THE VARIABLE ITS OWN STAGE READS, never re-typed as a literal, so a
+# later constant edit moves this bound with it (tests/lr-relaunch-bound.bats asserts exactly that).
 recycle_await_verdict() { # $1=watcher log → 0 engaged / 1 dead-or-failed / 3 no verdict inside the window
-  local log="$1" t=0 max
-  max=$(( ${HF_RECYCLE_SHELL_WAIT_S:-600} + ${RCY_ENGAGE_TIMEOUT:-180} + 120 ))
-  while [ "$t" -lt "$max" ]; do
+  local log="$1" max deadline
+  max=$(( ${CC_RECYCLE_DRAFT_WAIT:-180} + ${HF_RECYCLE_SHELL_WAIT_S:-600} + ${RCY_BOOT_STALE_S:-180} + ${RCY_ENGAGE_TIMEOUT:-180} + ${HF_RECYCLE_AWAIT_SLACK:-60} ))
+  # DATE-BOUNDED, not a counter: the poll interval is 0.5 s and `t=$((t + 0.5))` is not arithmetic
+  # bash can do — a counter here would either have to keep the coarse 5 s tick or break outright.
+  deadline=$(( $(date +%s) + max ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
     if grep -q 'ENGAGEMENT CONFIRMED' "$log" 2>/dev/null; then
       echo "→ recycle VERIFIED: $(grep -m1 'ENGAGEMENT CONFIRMED' "$log")"
       return 0
     fi
-    if grep -qE 'RECYCLE FAILED|VANISHED|never reached a CONFIRMED shell|relaunch write failed|no claude process appeared|PROCESS-ALIVE' "$log" 2>/dev/null; then
+    if grep -qE 'RECYCLE FAILED|VANISHED|never reached a CONFIRMED shell|relaunch write failed|no claude process appeared|FAILED:relaunch|STALE:boot|PROCESS-ALIVE' "$log" 2>/dev/null; then
       echo "!! recycle did NOT verify — watcher verdict:" >&2
       # `| head -5` would SIGPIPE grep and, under pipefail, make this line's status the failure —
       # awk drains instead (pipefail-sigpipe ratchet).
       grep -E '^!!|PROCESS-ALIVE' "$log" 2>/dev/null | awk 'NR<=5' >&2
       return 1
     fi
-    sleep "${HF_RECYCLE_AWAIT_IVL:-5}"; t=$((t + ${HF_RECYCLE_AWAIT_IVL:-5}))
+    sleep "${HF_RECYCLE_AWAIT_IVL:-0.5}"
   done
   echo "!! recycle: no watcher verdict inside ${max}s (log: $log) — the pane may still be exiting; read the log before acting" >&2
   return 3
