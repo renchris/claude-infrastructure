@@ -1211,3 +1211,23 @@ derive_stray_sets() {  # $1 = the deploy-link-parity.sh to read (a seeded COPY i
   [ "$(printf '%s\n' "$output" | grep -c '^  STRAY .*scripts/backlog-consolidation/handplaced.py')" -eq 1 ]
   [ "$(printf '%s\n' "$output" | grep -c 'commands/handplaced.md')" -eq 0 ]
 }
+
+@test "a hand-placed unversioned file under scripts/jev is reported STRAY" {
+  # The BEHAVIOURAL half of the scripts/jev fix (2026-09-19), and the case above is why it is not
+  # optional: case 64 pins the TEXT of sweep_strays' loop header, so it goes green the instant the
+  # word `scripts/jev` appears in that line — including under a sweep that cannot actually reach the
+  # directory. sweep_strays globs "$CFG/$d"/* one level deep, so a nested member is reachable only
+  # because the caller passes the nested path; that is a property of the ARGUMENT, and a list-text
+  # assertion cannot see it. .mjs is the deliberate plant: scripts/jev is the one deployed class
+  # install.sh globs bare `*` precisely because .mjs appears in no deploy glob in the tree, so a
+  # sweep that had quietly grown an extension filter would pass the .py case above and fail here.
+  # commands/ stays as the discriminating control, for the same reason it is one above.
+  export CC_LINKPARITY_MANIFEST="$BATS_TEST_TMPDIR/manifest"; : >"$CC_LINKPARITY_MANIFEST"
+  mkdir -p "$CC_LINKPARITY_CONFIG/scripts/jev"
+  printf 'hand placed by a peer session\n' > "$CC_LINKPARITY_CONFIG/scripts/jev/handplaced.mjs"
+  printf 'hand placed by a peer session\n' > "$CC_LINKPARITY_CONFIG/commands/handplaced.md"
+  run "$LP"
+  [ "$status" -eq 1 ]
+  [ "$(printf '%s\n' "$output" | grep -c '^  STRAY .*scripts/jev/handplaced.mjs')" -eq 1 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'commands/handplaced.md')" -eq 0 ]
+}

@@ -647,7 +647,19 @@ for d in "$CFG"/skills/*/; do [ -d "$d" ] && sweep_orphans "$d"; done
 #                              link_file calls with no loop header, and it holds 338 real files
 #                              (settings.json and its backups, measured 2026-09-01T02:04Z), which is
 #                              what sweeping it would convict.
-for d in bin hooks hooks/lib scripts scripts/lib scripts/backlog-consolidation scripts/limit-recover lib; do sweep_strays "$d"; done
+#
+# AND IT RE-OPENED ON THE VERY NEXT WIDENING, WHICH IS THE ARM WORKING (2026-09-19). scripts/jev
+# was added to the FORWARD walk above by 5fea9387 — itself the fix for case 42 going red when
+# 0e5e2c3b taught install.sh the class and told neither auditor. That fix moved the gap one leg to
+# the right instead of closing it: a directory joins the forward walk, this list does not follow,
+# and the arm the paragraph above describes went red on the next land naming `scripts/jev`. The
+# generator is not "someone forgot install.sh" and never was — it is that ANY of the five
+# enumerations in this file can grow alone, so closing the gap in one of them buys exactly one
+# land. scripts/jev is swept rather than declared, on the same ground as scripts/lib whose deploy
+# leg it copies line for line (ensure_real_dir + per-file link_file/copy_file, install.sh:759-770):
+# it is an EXECUTED surface — evaluate.mjs and pilot.sh both run — so an unversioned real file
+# appearing there is the bin/cc-mail defect class, not the normal path that exempts commands/.
+for d in bin hooks hooks/lib scripts scripts/lib scripts/backlog-consolidation scripts/limit-recover scripts/jev lib; do sweep_strays "$d"; done
 
 # PROMPT-DOCUMENT surfaces. skills/ is NESTED where every executed surface is flat, so the sweep is
 # driven one level down — sweep_strays lists a single directory and skips subdirectories, so passing
