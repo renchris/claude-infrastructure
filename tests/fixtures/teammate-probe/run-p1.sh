@@ -17,8 +17,17 @@ set -uo pipefail
 
 RUN="${1:?usage: run-p1.sh <run-label>}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CAP="$HERE/captures/p1-$RUN"
-mkdir -p "$CAP"
+# The scratch lives OUTSIDE the repo and is PUBLISHED into captures/ only when the run ends.
+# Writing it in-tree makes the worktree dirty for the whole run, and scripts/ship-land.sh
+# fail-closes on a dirty tree — so an in-flight measurement blocked every land. Evidence is
+# committed; run state is not.
+CAP="${PROBE_SCRATCH:-/tmp/claude-501/teammate-probe}/$RUN"
+PUB="$HERE/captures/p1-$RUN"
+rm -rf "$CAP"; mkdir -p "$CAP"
+publish() {  # never publish an empty scratch (e.g. the --census self-test path)
+  [ -n "$(ls -A "$CAP" 2>/dev/null)" ] || return 0
+  mkdir -p "$PUB" && cp -R "$CAP"/. "$PUB"/ 2>/dev/null; echo "published -> $PUB"; }
+trap publish EXIT
 # The scratch project's own settings. `settings.local.json` is gitignored repo-wide and
 # force-adding a gitignored path is forbidden, so the fixture ships the .example and installs it
 # here — that keeps the probe re-runnable from a clean clone without an `add -f`.
