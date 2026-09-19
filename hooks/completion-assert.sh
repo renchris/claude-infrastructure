@@ -333,7 +333,7 @@ REMAINDER="$(lfield REMAINDER)"; case "$REMAINDER" in ''|*[!0-9]*) REMAINDER=0 ;
 # different policies is the same defect as two discriminators (MEMORY.md
 # sibling-auditors-must-share-the-state-model). Any failure to resolve ⇒ NOT an assignee ⇒ the
 # caller stays strict, so this can only ever narrow a conviction on positive evidence.
-_ca_assignee() {
+_ca_ai_source() {   # rc 0 sourced hooks/lib/agent-identity.sh · rc 1 no lib
   local lib
   # AGENT_IDENTITY_LIB, when set, is a HARD override — it is deliberately NOT the head of the
   # fallback chain. An override folded into a fallback list stops being an override (MEMORY.md
@@ -354,12 +354,77 @@ _ca_assignee() {
   # shellcheck source=lib/agent-identity.sh
   # shellcheck disable=SC1091
   . "$lib" 2>/dev/null || return 1
+}
+
+_ca_assignee() {
+  _ca_ai_source || return 1
   # The 0|2 rule and the id-grammar gate now live in the lib as agent_is_assignee (2026-08-02) —
   # five hooks ask this question and an inline copy each is how the policy rots apart. Delegating
   # also picks up the SHAPE GATE, which is strictly safer here: an argv match that yields a garbage
   # id used to reach agent_team_member_confirms, return 2 = UNKNOWN, and be TRUSTED as an assignee,
   # which is the one direction this guard must never fail (ignorance never exonerates).
   agent_is_assignee >/dev/null 2>&1
+}
+
+# ── RC-3: A CONFIRMED ASSIGNEE ON A SHARED CWD CANNOT COMMIT, BY CONSTRUCTION (2026-09-19) ───────
+# THE MEASURED CONVICTION. A teammate is a full session and runs this whole Stop chain. On a SHARED
+# worktree the LEAD commits by brief — `isolation` cannot give a named member its own cwd on 2.1.260
+# (register RC-11), so the member's only compliant act is to leave the files for its lead. This hook
+# convicted it anyway: 94 blocks across 53 of 334 teammate sessions since 2026-08-20, each costing a
+# forced turn. And the cost is not only the turn. By the vendor rule a BLOCKED Stop returns before
+# the TeammateIdle block is reached, so no TeammateIdle, no isActive:false and no idle_notification
+# go out — this hook was silently disarming the fleet's own closer on exactly those stops.
+#
+# hooks/session-continue.sh:874-884 and :1009-1012 ALREADY abstain for this population. Two arms,
+# one population, opposite policies is the two-oracles-disagreeing trap (MEMORY.md
+# sibling-auditors-must-share-the-state-model), and this closes it.
+#
+# BUT IT IS NARROWER THAN THOSE TWO, DELIBERATELY. session-continue abstains for ANY confirmed
+# assignee; copying that here would wrap R3 — an implementation teammate on its OWN branch must
+# still be convicted for uncommitted work (register RC-3 "must NOT wrap"). The discriminator is the
+# SHARED CWD, and it is the SAME oracle teammate-auto-shutdown.sh:784 uses to compute WORKTREE_OWNED
+# — a cwd more than one member records is shared, and the lead counts — plus the direct
+# `cwd == lead.cwd` reading for a config that records a cwd for the lead but not the member.
+# tests/completion-assert-assignee-shared-cwd.bats holds both directions and the mutant that proves
+# the narrowing is load-bearing rather than decorative.
+#
+# FAILS STRICT. No jq, no lib, no config, an argv match the config REFUTES, or a cwd the member owns
+# ⇒ rc 1 ⇒ the conviction stands exactly as it did before. This can only ever withdraw a demand on
+# positive evidence, never manufacture one.
+_ca_assignee_shared_cwd() {   # stdout: member=<n>,team=<t>,occupants=<N> · rc 0 shared · 1 otherwise
+  command -v jq >/dev/null 2>&1 || return 1
+  _ca_ai_source || return 1
+  local aid nm team root cfg occ leadcwd mycwd
+  aid="$(agent_is_assignee 2>/dev/null)" || return 1
+  [ -n "$aid" ] || return 1
+  case "$aid" in *@session-*) ;; *) return 1 ;; esac
+  nm="${aid%%@session-*}"; team="session-${aid##*@session-}"
+  # macOS hands /tmp paths back as /private/tmp from some readers and not others, and the closer
+  # already strips the prefix at :775 before comparing config cwds. Compare on the same footing.
+  mycwd="${CWD#/private}"
+  local roots=()
+  if [ -n "${CC_WF_TEAM_ROOTS:-}" ]; then
+    # shellcheck disable=SC2206  # deliberate split of a space-separated test seam, as the lib does
+    roots=( ${CC_WF_TEAM_ROOTS} )
+  else
+    [ -n "${CLAUDE_CONFIG_DIR:-}" ] && roots+=( "${CLAUDE_CONFIG_DIR}/teams" )
+    for root in "$HOME"/.claude*/teams; do [ -d "$root" ] && roots+=( "$root" ); done
+  fi
+  for root in "${roots[@]+"${roots[@]}"}"; do
+    [ -n "$root" ] || continue
+    cfg="$root/$team/config.json"
+    [ -f "$cfg" ] || continue
+    occ="$(jq -r --arg c "$mycwd" '[.members[]? | select(((.cwd // "") | sub("^/private";"")) == $c)] | length' "$cfg" 2>/dev/null)"
+    case "$occ" in ''|*[!0-9]*) occ=0 ;; esac
+    leadcwd="$(jq -r 'first(.members[]? | select(.tmuxPaneId == "leader" or .agentType == "team-lead") | .cwd // empty) // empty' "$cfg" 2>/dev/null)"
+    leadcwd="${leadcwd#/private}"
+    if [ "$occ" -ge 2 ] || { [ -n "$leadcwd" ] && [ "$leadcwd" = "$mycwd" ]; }; then
+      printf 'member=%s,team=%s,occupants=%s' "$nm" "$team" "$occ"
+      return 0
+    fi
+    return 1                       # the config spoke: this member OWNS its tree. R3 binds.
+  done
+  return 1                         # no config anywhere ⇒ cannot tell ⇒ stay strict
 }
 
 _ca_mine() { # $1=kind (dirty|unlanded) → rc 0 mine · 1 not mine · 2 cannot tell
@@ -565,10 +630,20 @@ _ca_source_close_shape() {   # rc 0 sourced · rc 1 no lib / unsourceable
 }
 
 contra=0; facts=""; _ca_exon=""
+# RC-3, computed ONCE for both terms: a confirmed assignee sharing its lead's cwd can neither commit
+# nor land, so the `dirty` and `unlanded` demands are addressed to the wrong session. Read here
+# rather than inside each block because the oracle shells out to `ps` and jq, and the two terms ask
+# the identical question. `set -uo pipefail` is on and errexit is not, so a non-zero read is safe.
+_ca_sc=""; _ca_sc_rc=1
+if _ca_sc="$(_ca_assignee_shared_cwd)" && [ -n "$_ca_sc" ]; then _ca_sc_rc=0; else _ca_sc=""; fi
 if [ "$DIRTY" -eq 1 ]; then
   _ca_mine dirty; _ca_d=$?
   _ca_dp=""; _ca_dx=""; _ca_du=""
-  if [ "$_ca_d" -eq 1 ]; then _ca_exon="${_ca_exon}dirty-not-mine "
+  # FIRST, and ahead of `_ca_mine`'s rc 0: the measured population is a member that PROVABLY wrote
+  # the dirty file. Positive self-evidence is exactly what it has, and it is still not its commit
+  # to make. Placing this arm after rc 0 would leave the 94 blocks in place.
+  if [ "$_ca_sc_rc" -eq 0 ]; then _ca_exon="${_ca_exon}dirty-assignee-shared-cwd:${_ca_sc} "
+  elif [ "$_ca_d" -eq 1 ]; then _ca_exon="${_ca_exon}dirty-not-mine "
   elif [ "$_ca_d" -eq 2 ] && _ca_dp="$(_ca_dirt_predates)" && [ -n "$_ca_dp" ]; then
     _ca_exon="${_ca_exon}dirty-predates-session:${_ca_dp} "
   elif [ "$_ca_d" -eq 2 ] && _ca_dx="$(_ca_dirt_outside_exec)" && [ -n "$_ca_dx" ]; then
@@ -591,6 +666,10 @@ _ca_ushare=""; _ca_ushas=""
 if [ "$UNLANDED" -eq 1 ]; then
   _ca_mine unlanded; _ca_u=$?
   _ca_peer=""
+  # RC-3 again, and for the same reason plus one more: on a SHARED checkout the land this term
+  # demands is the one .claude/CLAUDE.md forbids by name (incident 2026-07-11, dfacccd — five files
+  # rebase-dropped by a concurrent sibling land while `rev-list origin/main..HEAD` read 0). Telling
+  # a member to /ship from its lead's tree is not a remedy, it is the data-loss path.
   # LAND IN FLIGHT (land-architecture-100p §5 P4, defect 3) — CONSUMED from the ledger, never
   # re-derived (make-the-actuator-the-arbiter). Commits mid-land are unlanded by every git read, so
   # this term convicted a session whose land was already running and pushed it toward a SECOND
@@ -600,6 +679,8 @@ if [ "$UNLANDED" -eq 1 ]; then
   _ca_landing="$(lfield LANDING)"; case "$_ca_landing" in ''|*[!0-9]*) _ca_landing=0 ;; esac
   if [ "$_ca_landing" -eq 1 ]; then
     _ca_exon="${_ca_exon}unlanded-land-in-flight:$(lfield LANDING_PID) "
+  elif [ "$_ca_sc_rc" -eq 0 ]; then
+    _ca_exon="${_ca_exon}unlanded-assignee-shared-cwd:${_ca_sc} "
   elif [ "$_ca_u" -eq 1 ]; then
     _ca_exon="${_ca_exon}unlanded-not-mine "
   elif [ "$_ca_u" -eq 2 ] && _ca_peer="$(_ca_peer_owned)" && [ -n "$_ca_peer" ]; then

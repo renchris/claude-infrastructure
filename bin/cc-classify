@@ -383,20 +383,30 @@ handoff_fired() { # <jsonl> → 0 if the session actually FIRED a SELF-/handoff 
         END { exit(found ? 0 : 1) }'
 }
 
-tool_in_flight() { # <jsonl> → 0 if a tool is RUNNING: the transcript's LAST record is an assistant
-  # tool_use whose id has no matching tool_result anywhere (a18 L-13). "idle" must mean no-new-assistant
-  # AND no-tool-in-flight; a single long Bash/build/test call otherwise leaves the last record an
-  # assistant tool_use timestamped at call START, so IDLE crosses 300s mid-call and reads `finished`.
-  # In a real transcript a finished turn's last record is an assistant TEXT turn or a `user` tool_result
-  # (never a bare trailing tool_use) — so this fires ONLY for a genuine mid-call state.
-  local f="$1" last_rec tu_id ids
+tool_in_flight() { # <jsonl> → 0 if a tool is RUNNING: the LAST ASSISTANT record carries a tool_use
+  # whose id has no matching tool_result anywhere, OR a background Bash was launched and never
+  # notified (a18 L-13; RC-5a 2026-09-19). "idle" must mean no-new-assistant AND no-tool-in-flight;
+  # a single long Bash/build/test call otherwise leaves the last assistant record a tool_use
+  # timestamped at call START, so IDLE crosses 300s mid-call and reads `finished`.
+  #
+  # LAST *ASSISTANT*, NOT `tail -n 1` — the 2026-09-19 correction, and it is the whole defect. The
+  # runtime appends bookkeeping records in the SAME SECOND as the tool_use (`attachment`,
+  # `last-prompt`, `queue-operation`), so the newest record is routinely not the assistant one:
+  # measured over the 583 records immediately following an assistant tool_use in one 2026-09
+  # transcript, 229 `attachment` + 58 `last-prompt` + 6 `queue-operation` — 57% of mid-call samples
+  # answered NOT-in-flight while a Bash was running.
+  #
+  # KEPT IN STEP BY HAND with hooks/teammate-auto-shutdown.sh's _tool_in_flight() — same predicate,
+  # deliberately re-stated there rather than sourced (this file is an executable with no library
+  # guard, so sourcing it would run its main). Both were changed in ONE commit;
+  # tests/teammate-auto-shutdown.bats pins the hook copy's semantics.
+  local f="$1" last_asst tu_ids tu_id ids bg_ids bg_id bg_launched
   [ -f "$f" ] || return 1
-  last_rec="$(tail -n 1 "$f" 2>/dev/null)"
-  [ -n "$last_rec" ] || return 1
-  # last record must be an assistant message carrying at least one tool_use block
-  printf '%s' "$last_rec" | jq -e '.type=="assistant" and ((.message.content // []) | map(select(.type=="tool_use")) | length > 0)' >/dev/null 2>&1 || return 1
-  tu_id="$(printf '%s' "$last_rec" | jq -r '(.message.content // []) | map(select(.type=="tool_use")) | last | .id // empty' 2>/dev/null)"
-  if [ -n "$tu_id" ]; then
+  last_asst="$(jq -c 'select(.type=="assistant")' "$f" 2>/dev/null | tail -n 1)"
+  [ -n "$last_asst" ] || return 1
+  # EVERY trailing tool_use id, not just the last: a parallel tool block emits several in ONE record.
+  tu_ids="$(printf '%s' "$last_asst" | jq -r '(.message.content // []) | map(select(.type=="tool_use")) | .[] | .id // empty' 2>/dev/null)"
+  if [ -n "$tu_ids" ]; then
     # a matching tool_result (a `user` record block) anywhere ⇒ the tool returned ⇒ not in-flight
     #
     # DRAINED 2026-08-28. Was `jq … "$f" | grep -qxF "$tu_id" && return 1`. `grep -q` exits at the
@@ -414,9 +424,30 @@ tool_in_flight() { # <jsonl> → 0 if a tool is RUNNING: the transcript's LAST r
     # the feed grows by one id per tool call. `case` is a builtin: no pipe, so no race at any size.
     # `-qxF` was a WHOLE-LINE match, so the pattern is newline-delimited on both sides to match it.
     ids="$(jq -rc 'select(.type=="user") | (.message.content // []) | if type=="array" then .[] else empty end | select(.type=="tool_result") | .tool_use_id // empty' "$f" 2>/dev/null)"
-    case $'\n'"$ids"$'\n' in *$'\n'"$tu_id"$'\n'*) return 1 ;; esac
+    while IFS= read -r tu_id; do
+      [ -n "$tu_id" ] || continue
+      case $'\n'"$ids"$'\n' in *$'\n'"$tu_id"$'\n'*) ;; *) return 0 ;; esac
+    done <<< "$tu_ids"
   fi
-  return 0   # trailing tool_use with no (matching) result → a tool is running
+  # A BACKGROUND BASH IS STILL WORK. `run_in_background` returns its tool_result within the second
+  # ("Command running in background with ID: <bid>"), so the walk above reads the turn as finished
+  # while the job runs on. The completion signal is the harness's task-notification, carrying
+  # `<tool-use-id>…</tool-use-id>`. The launch-confirmation term is the OVER-HOLD GUARD: measured
+  # across 941 live background launches 2026-09-19, 27 carry no notification and 9 of those never
+  # ran at all (classifier deny, /goal refusal, model unavailable, empty) — those must not hold.
+  # Residual: 18 of 941 (1.9%) ran and were never notified; they now read in-flight indefinitely,
+  # which is this predicate's standing safe direction (unknown ⇒ active ⇒ never reap).
+  bg_ids="$(jq -r 'select(.type=="assistant") | (.message.content // [])[]? | select(.type=="tool_use" and (.input.run_in_background == true)) | .id // empty' "$f" 2>/dev/null)"
+  if [ -n "$bg_ids" ]; then
+    bg_launched="$(jq -rc 'select(.type=="user") | (.message.content // []) | if type=="array" then .[] else empty end | select(.type=="tool_result") | select((.content // "" | tostring) | test("running in background with ID:")) | .tool_use_id // empty' "$f" 2>/dev/null)"
+    while IFS= read -r bg_id; do
+      [ -n "$bg_id" ] || continue
+      case $'\n'"$bg_launched"$'\n' in *$'\n'"$bg_id"$'\n'*) ;; *) continue ;; esac
+      grep -qF "<tool-use-id>$bg_id</tool-use-id>" "$f" 2>/dev/null && continue
+      return 0
+    done <<< "$bg_ids"
+  fi
+  return 1   # no outstanding call, no unnotified background job
 }
 
 find_successor() { # <this-sid> <this-cwd> <since-epoch-SECONDS> <all-json> → candidate {paneUUID,pid} objects, one/line
