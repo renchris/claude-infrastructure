@@ -26,6 +26,7 @@
 
 setup() {
   export CC_FIRE_CAPACITY_GATE=off
+  export CC_ADMIT_GATE=off              # hermeticity: the launcher path reaches capacity-admit.sh
   export CC_FIRE_HEADROOM_GATE=off
   unset KITTY_WINDOW_ID
   export IT2_WRAPPER_NO_KITTY=1

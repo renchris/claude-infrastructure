@@ -10,6 +10,7 @@ setup() {
   export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
   export LR_STATE_DIR="$BATS_TEST_TMPDIR/state"; mkdir -p "$LR_STATE_DIR/locks"
   export CC_ADMIT_GATE=off
+  export CC_FIRE_CAPACITY_GATE=off      # hermeticity: --one fires through handoff-fire capacity_gate()
   export CC_ACCOUNT_MAP="$BATS_TEST_TMPDIR/absent-map"
   SEC="$HOME/.claude-secondary"; TER="$HOME/.claude-tertiary"
   SLUG="-Users-x-thing"; mkdir -p "$SEC/projects/$SLUG" "$TER/projects/$SLUG"
