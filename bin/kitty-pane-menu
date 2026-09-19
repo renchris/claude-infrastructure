@@ -245,6 +245,37 @@ def kitty(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
+def equalize_tab_of(wid: int) -> None:
+    """Give every pane in WID's tab an equal share — the ⌘⇧E gesture, aimed.
+
+    This is the ARRIVAL half of the evening-out. Removal is already automatic: config/kitty.conf
+    §1 sets `splits:equalize_on_window_close=yes`, so the tab a pane LEAVES re-equalizes inside
+    kitty with no process at all. kitty has no matching on_window_added hook, so the tab a pane
+    ARRIVES in is ours to square up — it lands next to the destination's active pane and halves
+    it (measured 2026-09-19: a 4-pane destination went 114/57/28/28 -> 45/45/45/45/45 columns).
+
+    🚨 `--self` IS THE ONLY FORM THAT WORKS, and `--match` is the trap it replaces. `equalize` is
+    a TAB-level action, and kitty routes tab actions through the focused tab, so
+    `kitty @ action --match id:N layout_action equalize` returns rc 0 with an empty stderr and
+    changes NOTHING — measured as a three-arm control where `--self` took the same tab from
+    spread 100 to spread 0 and left an untouched third tab alone. Since kitty also exits 0 on an
+    unknown action name, a return code proves nothing here and is deliberately not read; the
+    falsifier is the column widths in `kitty @ ls`, which tests/kitty-equalize-arrival.bats owns.
+
+    `--self` resolves the window from KITTY_WINDOW_ID, which we set explicitly rather than
+    inherit: this script runs as a `launch --type=background` child, and kitty hands those an
+    EMPTY KITTY_WINDOW_ID (measured the same day), so an inherited value would mean "no window".
+    It also does not move focus, which is what keeps a move to a window on another macOS Space
+    from dragging the operator across Spaces — a `focus-window` first would.
+    """
+    cmd = ["kitty", "@"]
+    if ADDRESS:
+        cmd += ["--to", ADDRESS]
+    cmd += ["action", "--self", "layout_action", "equalize"]
+    subprocess.run(cmd, capture_output=True, text=True,
+                   env={**os.environ, "KITTY_WINDOW_ID": str(wid)})
+
+
 def load(*match: str) -> list:
     r = kitty("ls", *match)
     if r.returncode != 0 or not r.stdout.strip():
@@ -1015,6 +1046,11 @@ def main() -> int:
                         f"{(r.stderr or '').strip() or 'no message'}",
                         file=sys.stderr,
                     )
+                else:
+                    # Gated on rc 0 on purpose: a destination that died between the pop and the
+                    # pick leaves the pane where it was, and equalizing then would square up the
+                    # SOURCE tab — a visible change from an action that did not happen.
+                    equalize_tab_of(wid)
                 break
 
     refocus()
