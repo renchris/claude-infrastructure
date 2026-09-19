@@ -254,3 +254,35 @@ Falsifier for (b) if chosen: residency p90 (H: 2.2 h) must not rise over the fol
   (per-day 09-04:5 09-08:13 09-09:2 09-11:4 09-15:3 09-17:4) — matches axis F.
   The research worktree `wt-research-subagent-lifecycle-2026-09-19` was verified 0-ahead/0-dirty with
   no process cwd'd there, and removed.
+- 2026-09-19 15:00–16:00 — **W1, W2 and W4 landed and content-verified; W3 and W5 are live.** The
+  lead was killed by a next3 session limit at 19:57Z and transplanted to next2 under the same uuid
+  (`lr-handoff --in-place`, bundle `bundle-20260919T204738Z`); the post-ingest `lr-audit` read
+  **NO GAPS** — delegation population Bash 2, settled 2, open 0 — so nothing in-process was lost.
+  - **W1 `3cdaa2552`** (RC-5a/RC-5c/RC-3/RC-7). RED at pinned `d88366d52`: 1..74 with 5 not-ok;
+    post-fix 1..212, 212 ok. Two mutants built and killed, so the equivalence guards are not
+    decorative. Two findings it surfaced: the RC-7 comment pushed the governed `PATH=` line past
+    `unattended-path-lint`'s 1-60 window and un-hardened the file (prose now sits below `export
+    PATH`); and the hook and `cc-classify` run under **bash 3.2** in production while bats runs 5.3,
+    so both predicates were re-verified under both. Stated residual: 18 of 941 measured background
+    launches were never notified and now read in-flight indefinitely — a hold, never a reap.
+  - **W2 `c9e70fcca`** (RC-4/RC-6). RED at `e6b212080`. The guard's supposed true positive
+    (`band-hooks`/`session-dc73c0ce`) hexdumps as glyph+NBSP+LF on both snapshots — **it was
+    protecting nothing**, confirmed by two independent reads, so the honest negative the plan
+    anticipated is the recorded outcome. RC-6 lands in `teammate-auto-shutdown.sh:309`'s existing
+    already-gone arm with zero edit to W1's file.
+  - **W4 `46ccdf23c`** (RC-1/RC-7/RC-11/RC-12). Advisory on every path, no deny/ask/block, keyed on
+    `subagent_type`. RED unwaived at `b80f9408e`; each equivalence guard names the mutant it kills.
+    Caveat it volunteered: the two GREEN runs used the runner's recorded `CC_BATS_MAX_ROOTS` waiver
+    after ~45 min deferral behind sibling suites at load 37-60 — **the RED arm ran unwaived**.
+  - **W3** fired warm onto next4; **W5** fired warm onto next2, its brief hardened first to record
+    box load before and after every P1 run and to state it in the verdict sentence — P1's 2 000 ms
+    budget is wall-clock, so a loaded box manufactures the "probe FAILED" reading that is the only
+    one licensing a fleet-side change.
+  - 🚨 **The capacity gate refused both fires for a measured-wrong reason, and the row is filed.**
+    `cc_sp_active` counted 11-12 mid-turn against a ceiling of 8 while the box sat at **61.75% idle,
+    load 5.7**. Cause (peer `wt-cc-100046-36511`, backlog `d20fb6d12810`): a usage-limit kill ends
+    the turn with an API error and writes **no Stop beat**, so the corpse's `kind:"prompt"` beat
+    counts forever — seven capped next3 sessions were 7 of the 9 counted, and the victims block
+    their own recovery. `spawn-presence.sh`'s own comment names this failure class and its liveness
+    check misses it, because the limit-killed TUI process **stays alive**. Both fires were admitted
+    through the gate's designed refuse-once-then-admit escalation, not by disabling the term.
