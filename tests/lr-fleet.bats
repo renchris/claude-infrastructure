@@ -473,3 +473,74 @@ _ph_count() { # → lf_phantom_actives, with only the function under test loaded
   [ "$status" -eq 0 ]
   [ "$output" = "0" ]
 }
+
+# ── W1(a)/(c): NON-BLOCKING INVOCATION, AND A NOTE THAT NAMES THE CAUSE ───────────────────────────
+#
+# (c) The rc-4 note said "transplanted but the relaunch did not verify" and nothing else, so every
+# PARTIAL read as an unexplained failure. The cause is on disk at the moment it happens — the
+# launcher's own capacity refusal, `~/.claude/autonomy/idl.jsonl` caller `lr-fire-resume`, carrying
+# `term=load|active|headroom|segments|reserve-active` (capacity-admit.sh:418). 10/10 refusals on the
+# morning of 2026-09-19 were `term=load`, a term the gate's own comment documents as WRONG INPUT and
+# which is OFF for every other caller. The note must carry it, or the operator re-derives it by hand.
+#
+# (a) `--one … --detach` returns to the caller in ≤3 s having spawned the driver under setsid. The
+# 2026-09-19 lead spent 24.4 turn-minutes in foreground `until` polls over exactly this call
+# (U11 §2). The stub below sleeps 10 s: a blocking invocation cannot pass.
+
+@test "W1(c): a PARTIAL (rc 4) names the launcher's own refusal — term= joined from the IDL" {
+  export CC_ADMIT_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  # The refusal is written DURING the attempt, by the launcher inside the pane — which is why the
+  # join has a floor at the attempt's own start. A pre-seeded row would be indistinguishable from a
+  # two-day-old refusal, and joining THAT is the defect (memory: work-item-next-step-inherits-its-
+  # store's-half-life). So the stub writes it, exactly where lr-fire-resume does.
+  cat > "$LR_HANDOFF_BIN" <<SH
+#!/bin/bash
+printf '%s\n' "\$*" >> "\${LRH_LOG:?}"
+printf '{"ts":"%s","hook":"capacity-admit","sid":"?","disposition":"refused","reason":"capacity","gate":"capacity-admit","verdict":"refuse","basis":"measured","caller":"lr-fire-resume","what":"resume $SID on next3","detail":"load 2.57/core > 2.0 (refusal 2 of budget 3)","term":"load","terms":"load,headroom,segments,active"}\n' "\$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$CC_ADMIT_IDL"
+echo "lr-handoff: --in-place: the recycle did NOT verify (handoff-fire rc=1)" >&2
+echo "/bundle/path"
+exit 4
+SH
+  chmod +x "$LR_HANDOFF_BIN"
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  run bash "$FLEET" --one "$SID" --target next3 --source-pane 616
+  [ "$status" -eq 4 ] || { echo "$output"; false; }
+  r="$(cat "$(cat "$LR_STATE_DIR/fleet/last")/results.tsv")"
+  printf '%s' "$r" | grep -q 'term=load' || { echo "$r"; echo "$output"; false; }
+  printf '%s' "$r" | grep -q 'PARTIAL' || { echo "$r"; false; }
+}
+
+@test "W1(a): --detach returns in ≤3s while the driver is still running, and prints its log path" {
+  export CC_ADMIT_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+  export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/cc-notify"
+  cat > "$CC_NOTIFY_BIN" <<SH
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/notify.log"
+SH
+  chmod +x "$CC_NOTIFY_BIN"
+  # a SLOW actuator: a blocking --one cannot return before this finishes
+  cat > "$LR_HANDOFF_BIN" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "${LRH_LOG:?}"
+sleep 10
+echo "lr-handoff: recycled IN PLACE — pane X continues session Y" >&2
+echo "/bundle/path"
+exit 0
+SH
+  chmod +x "$LR_HANDOFF_BIN"
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  t0=$(date +%s)
+  run bash "$FLEET" --one "$SID" --target next3 --source-pane 616 --detach
+  t1=$(date +%s)
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ $((t1 - t0)) -le 3 ] || { echo "took $((t1 - t0))s — the caller was BLOCKED: $output"; false; }
+  [[ "$output" == *"log="* ]] || { echo "no log path printed: $output"; false; }
+  logp="$(printf '%s' "$output" | tr ' ' '\n' | sed -n 's/^log=//p' | tail -1)"
+  [ -n "$logp" ] || { echo "$output"; false; }
+  # the driver is DETACHED, not skipped: the actuator is reached after the caller is already back
+  until [ -s "$LRH_LOG" ] || [ $(( $(date +%s) - t0 )) -gt 30 ]; do sleep 1; done
+  grep -q -- '--in-place' "$LRH_LOG" || { echo "the detached driver never ran the actuator"; cat "$logp" 2>/dev/null; false; }
+  # …and its verdict reaches the requester as mail carrying a verdict= token
+  until [ -s "$BATS_TEST_TMPDIR/notify.log" ] || [ $(( $(date +%s) - t0 )) -gt 60 ]; do sleep 2; done
+  grep -q 'verdict=' "$BATS_TEST_TMPDIR/notify.log" || { echo "no verdict mail:"; cat "$BATS_TEST_TMPDIR/notify.log" 2>/dev/null; cat "$logp" 2>/dev/null; false; }
+}

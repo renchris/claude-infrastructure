@@ -6,8 +6,9 @@
 # Usage: lr-fleet.sh --locate [--json]                 census: every limit-blocked session, its pane, tier, disposition
 #        lr-fleet.sh --recover [--target A|auto] [--dry-run] [--max N]
 #                                                     sequenced in-place recovery of every RECOVERABLE session
-#        lr-fleet.sh --one SID --target A [--source-pane P] [--from-daemon]
-#                                                     one session (the unit the poller's request drain runs)
+#        lr-fleet.sh --one SID --target A [--source-pane P] [--from-daemon] [--detach]
+#                                                     one session (the unit the poller's request drain runs);
+#                                                     --detach returns in ≤3s and mails the verdict back
 #        lr-fleet.sh --enqueue [--target A]           hand every RECOVERABLE session to the launchd poller
 #        lr-fleet.sh --duplicates [--mark SID --live PID]
 #                                                     sessions held by MORE than one live process; --mark writes
@@ -70,7 +71,8 @@ FLEET_DIR="$STATE/fleet"; mkdir -p "$FLEET_DIR" 2>/dev/null || true
 HANDOFF="${LR_HANDOFF_BIN:-$LR/lr-handoff.sh}"
 ACCOUNTS="${CC_ACCOUNTS_BIN:-$HOME/bin/claude-accounts}"
 
-MODE="" TARGET="auto" DRY=0 MAX=0 SID="" SOURCE_PANE="" FROM_DAEMON=0 JSON=0 MARK_SID="" LIVE_PID="" REPORT_DIR=""
+MODE="" TARGET="auto" DRY=0 MAX=0 SID="" SOURCE_PANE="" FROM_DAEMON=0 JSON=0 MARK_SID="" LIVE_PID="" REPORT_DIR="" DETACH=0
+LF_ARGV=("$@")                  # verbatim, for the --detach re-exec (the child re-parses, never a rebuild)
 while [ $# -gt 0 ]; do
   case "$1" in
     --locate) MODE=locate; shift ;;
@@ -82,6 +84,7 @@ while [ $# -gt 0 ]; do
     --target) TARGET="${2:?--target needs an account}"; shift 2 ;;
     --source-pane) SOURCE_PANE="${2:?--source-pane needs a pane id}"; shift 2 ;;
     --from-daemon) FROM_DAEMON=1; shift ;;
+    --detach) DETACH=1; shift ;;
     --dry-run) DRY=1; shift ;;
     --max) MAX="${2:?--max needs a number}"; shift 2 ;;
     --json) JSON=1; shift ;;
@@ -331,6 +334,34 @@ EOF
   printf '%s' "$n"
 }
 
+# ── THE CAUSE, JOINED (W1, LIMIT_RECOVER_100P § 12.1) ────────────────────────────────────────────
+# A PARTIAL's cause is already on disk at the moment it happens and nothing read it. The relaunch is
+# re-gated inside the pane by `lr-fire-resume`, a process this driver cannot parameterise, and its
+# refusal lands in the IDL carrying the TERM that refused (`capacity-admit.sh:418`). All 10 refusals
+# on the morning of 2026-09-19 were `term=load` — a term capacity-admit's own comment (`:149-160`)
+# documents as WRONG INPUT, and which is OFF for the Agent tool and for the operator's fire but ON
+# for exactly this caller. Without the join, every rc-4 row read as an unexplained failure and the
+# operator re-derived it by hand; with it, the note names the term and the next question is obvious.
+#
+# The join key is the sid inside `.what` ("resume <sid> on <acct>"), NOT `.sid`: lr-fire-resume does
+# not set CC_ADMIT_SID, so `.sid` is the literal "?" on every row it writes. grep -F first keeps this
+# O(matching lines) over a 91k-row ledger instead of O(ledger) through jq.
+lf_idl_cause() { # $1=sid [$2=ISO floor] → "term=<t> …" for its newest lr-fire-resume refusal, else ""
+  local idl row t0="${2:-}"
+  idl="${CC_ADMIT_IDL:-$HOME/.claude/autonomy/idl.jsonl}"
+  [ -n "${1:-}" ] && [ -f "$idl" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  row="$(grep -F "$1" "$idl" 2>/dev/null | jq -c --arg t0 "${t0%Z}" \
+           'select(.caller=="lr-fire-resume" and .verdict=="refuse")
+            | select($t0 == "" or ((.ts // "")|sub("Z$";"")) >= $t0)' 2>/dev/null | tail -1)" || row=""
+  [ -n "$row" ] || return 0
+  printf 'launcher REFUSED %s: term=%s basis=%s — %s' \
+    "$(printf '%s' "$row" | jq -r '.ts // "?"' 2>/dev/null)" \
+    "$(printf '%s' "$row" | jq -r '.term // "?"' 2>/dev/null)" \
+    "$(printf '%s' "$row" | jq -r '.basis // "?"' 2>/dev/null)" \
+    "$(printf '%s' "$row" | jq -r '.detail // "?"' 2>/dev/null)"
+}
+
 # ── CAPACITY: wait on the NON-charging probe, never spend the budget ─────────────────────────────
 lf_capacity_wait() { # $1=what → 0 admitted / 1 parked at the cap
   local waited=0 max="${LR_FLEET_CAP_WAIT_S:-600}" ivl="${LR_FLEET_CAP_IVL_S:-20}"
@@ -354,7 +385,14 @@ lf_capacity_wait() { # $1=what → 0 admitted / 1 parked at the cap
     fi
     if cc_capacity_probe lr-fleet "$1"; then unset CC_SP_ACTIVE_OVERRIDE; return 0; fi
     unset CC_SP_ACTIVE_OVERRIDE
-    if [ "$waited" -ge "$max" ]; then echo "lr-fleet: PARKED on capacity after ${waited}s — $(cc_capacity_admit_reason)" >&2; return 1; fi
+    # The park's REASON, carried out of this function rather than only printed. `LF_PARK_REASON` is
+    # what the caller folds into the results row: a row reading `parked | capacity` said which gate
+    # refused and never which TERM, so the one fact that decides the next action (shed load? close
+    # panes? wait for the 5-hour window?) was in a stderr line nobody keeps (U05 P4).
+    if [ "$waited" -ge "$max" ]; then
+      LF_PARK_REASON="$(cc_capacity_admit_reason 2>/dev/null || true)"
+      echo "lr-fleet: PARKED on capacity after ${waited}s — $LF_PARK_REASON" >&2; return 1
+    fi
     echo "lr-fleet: capacity not admitted yet — $(cc_capacity_admit_reason); waiting ${ivl}s (${waited}/${max}s)" >&2
     sleep "$ivl"; waited=$((waited + ivl))
   done
@@ -387,7 +425,15 @@ lf_one() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → rc of the recovery
     echo "lr-fleet: DRY — would recover ${sid:0:8}: pane ${pane:-<new>} on $acct → $target (tier ${tier:-default}) via: $HANDOFF --sid $sid --config-dir $cfg --cwd $cwd --target $target --launch --in-place${pane:+ --source-pane $pane}${model:+ --model $model}${effort:+ --effort $effort}"
     lf_row "$sid" "$pane" "$pane" "$acct" "$target" "dry-run" "-"; return 0
   fi
-  lf_capacity_wait "in-place recovery of ${sid:0:8} onto $target" || { lf_row "$sid" "$pane" "$pane" "$acct" "$target" "parked" "capacity"; return 1; }
+  local t0; t0="$(date -u +%Y-%m-%dT%H:%M:%SZ)"   # the IDL floor: only refusals from THIS attempt count
+  # The park now names the gate's own reason AND, when the launcher has already been refused for this
+  # sid, the term that refused it — the two facts that decide whether to shed load, close panes, or
+  # wait out a window. `capacity` alone said none of them.
+  LF_PARK_REASON=""
+  lf_capacity_wait "in-place recovery of ${sid:0:8} onto $target" || {
+    local pnote="capacity${LF_PARK_REASON:+ — $LF_PARK_REASON}" pcause
+    pcause="$(lf_idl_cause "$sid" "$t0" || true)"; [ -n "$pcause" ] && pnote="$pnote; $pcause"
+    lf_row "$sid" "$pane" "$pane" "$acct" "$target" "parked" "$pnote"; return 1; }
   local args=(--sid "$sid" --config-dir "$cfg" --cwd "$cwd" --target "$target" --launch --in-place)
   [ -n "$pane" ] && [ "$pane" != "-" ] && args+=(--source-pane "$pane")
   [ -n "$model" ] && args+=(--model "$model"); [ -n "$effort" ] && args+=(--effort "$effort")
@@ -400,10 +446,11 @@ lf_one() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → rc of the recovery
   elif grep -q 'fired split pane\|fired new kitty window' "$rdir/$sid.stderr" 2>/dev/null; then
     mech="spawn"; pane_after="new"
   fi
+  local cause; cause="$(lf_idl_cause "$sid" "$t0" || true)"
   case "$rc" in
     0) : ;;
-    4) verdict="PARTIAL"; note="transplanted but the relaunch did not verify — source is a tombstoned husk; see $rdir/$sid.stderr" ;;
-    *) verdict="FAILED"; note="lr-handoff rc=$rc; see $rdir/$sid.stderr" ;;
+    4) verdict="PARTIAL"; note="transplanted but the relaunch did not verify — source is a tombstoned husk; ${cause:-no launcher refusal in the IDL for this attempt — read the watcher log}; see $rdir/$sid.stderr" ;;
+    *) verdict="FAILED"; note="lr-handoff rc=$rc${cause:+; $cause}; see $rdir/$sid.stderr" ;;
   esac
   lf_row "$sid" "$pane" "$pane_after" "$acct" "$target" "$mech/$verdict" "$note"
   return "$rc"
@@ -486,6 +533,46 @@ EOF
     lf_report "$FLEET_DIR/$RUN" || worst=1
     exit "$worst" ;;
   one)
+    # ── --detach: the invoking session gets its turn back (W1, LIMIT_RECOVER_100P § 12.1) ─────────
+    #
+    # THE DEFECT. `--one` is a 115–658 s call (U14 §2.1) and it was always made in the FOREGROUND of
+    # a session's Bash tool. On 2026-09-19 that cost the lead 24.4 turn-minutes across 17 polls —
+    # every one of which exited 1–5 s AFTER a task-notification that would have woken it anyway —
+    # and queued 86 min 52 s of operator-visible screenshots behind those turns (U11 §2).
+    #
+    # THE FIX IS A PROCESS BOUNDARY, NOT A SHORTER WAIT. The driver is re-exec'd under setsid
+    # (scripts/lib/detach.sh, lifted from handoff-fire's own `detach`), so it survives the caller's
+    # tool-call process group being reaped, and the verdict comes back as MAIL — the transport that
+    # reaches a session at a safe boundary instead of racing its input line. The caller is handed the
+    # run dir and the log path and is expected to END ITS TURN (commands/limit-recover.md § The fast
+    # path); a foreground `until` poll over this log re-creates the very defect it closes.
+    #
+    # The child re-parses the SAME argv (LF_ARGV) with LR_FLEET_DETACHED=1 and an inherited RUN, so
+    # there is exactly one copy of the option semantics. Everything expensive — the census, the
+    # capacity park, the actuator — happens on the far side of this branch.
+    if [ "$DETACH" = 1 ] && [ "${LR_FLEET_DETACHED:-0}" != 1 ]; then
+      RUN="${LR_FLEET_RUN:-one-$(date -u +%Y%m%dT%H%M%SZ)}"; mkdir -p "$FLEET_DIR/$RUN"
+      _lf_log="$FLEET_DIR/$RUN/detached.log"; : > "$_lf_log"
+      _lf_det=""
+      for _d in "$LR/../lib/detach.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/detach.sh" "$HOME/.claude/scripts/lib/detach.sh"; do
+        # shellcheck disable=SC1090  # runtime-resolved library ladder, as everywhere else in this file
+        [ -f "$_d" ] && { . "$_d"; _lf_det="$_d"; break; }
+      done
+      [ -n "$_lf_det" ] || { echo "lr-fleet: --detach cannot reach scripts/lib/detach.sh — refusing to run BLOCKING under a flag that promises not to" >&2; exit 2; }
+      # The REQUESTER is resolved HERE, in the invoking session's own environment — the child has no
+      # way to re-derive it. Empty is legal: the notifier falls back to the desk ROLE, which
+      # cc-notify resolves at SEND time (a frozen uuid is a stale address the moment a pane recycles).
+      _lf_req="${LR_FLEET_NOTIFY_PANE:-}"
+      [ -n "$_lf_req" ] || { _lf_req="${ITERM_SESSION_ID:-}"; _lf_req="${_lf_req##*:}"; }
+      [ -n "$_lf_req" ] || _lf_req="${KITTY_WINDOW_ID:-}"
+      _lf_pid="$(detach "$_lf_log" /usr/bin/env \
+                   LR_FLEET_DETACHED=1 "LR_FLEET_RUN=$RUN" "LR_FLEET_REQUESTER=$_lf_req" LR_INPLACE_AWAIT=0 \
+                   bash "$_LF_SELF" "${LF_ARGV[@]}" || true)"
+      [ -n "$_lf_pid" ] || { echo "lr-fleet: --detach failed to spawn the driver — nothing was started" >&2; exit 2; }
+      echo "lr-fleet: DETACHED — driver pid $_lf_pid is recovering ${SID:0:8}; the verdict arrives as mail. END YOUR TURN; do not poll."
+      echo "run=$FLEET_DIR/$RUN log=$_lf_log"
+      exit 0
+    fi
     if _full="$(lf_resolve_sid "$SID")"; then
       [ "$_full" = "$SID" ] || echo "lr-fleet: --one ${SID} resolves to $_full" >&2
       SID="$_full"
@@ -510,6 +597,40 @@ EOF
     lf_one "$SID" "$cfg" "$acct" "$pane" "$cwd" "$tier"; rc=$?
     echo "$FLEET_DIR/$RUN" > "$FLEET_DIR/last"
     lf_report "$FLEET_DIR/$RUN" >&2 || true
+    # ── THE VERDICT REACHES SOMEONE ───────────────────────────────────────────────────────────────
+    # A detached run whose only record is a `results.tsv` under $HOME/.reso is a run nobody reads. The
+    # verdict is mailed to the requester as ONE line carrying a `verdict=` token, which is the token a
+    # consumer matches on (memory: claimed-outcome-vs-checked-outcome — a parseable verdict= is what
+    # makes a claim checkable). The token is derived from the ROW that was actually written, never
+    # from rc alone, so a `parked` row cannot read as a failure of the actuator.
+    if [ "${LR_FLEET_DETACHED:-0}" = 1 ]; then
+      _lf_mv="$(awk -F'\t' -v s="$SID" '$1 == s { m=$6; n=$7 } END { print m }' "$FLEET_DIR/$RUN/results.tsv" 2>/dev/null || true)"
+      _lf_note="$(awk -F'\t' -v s="$SID" '$1 == s { n=$7 } END { print n }' "$FLEET_DIR/$RUN/results.tsv" 2>/dev/null || true)"
+      case "$_lf_mv" in
+        *RECOVERED) _lf_v=RECOVERED ;;
+        *PARTIAL)   _lf_v=PARTIAL ;;
+        parked*)    _lf_v=PARKED ;;
+        '')         _lf_v=FAILED; _lf_note="${_lf_note:-no results row was written — the driver died before lf_one returned}" ;;
+        *)          _lf_v=FAILED ;;
+      esac
+      # HONEST QUALIFIER, not a fourth token. Under --detach the actuator is called WITHOUT --await
+      # (lr-handoff.sh:621 honours LR_INPLACE_AWAIT=0), so rc 0 means the recycle was ARMED — the
+      # /exit landed and the watcher took over — not that a turn was taken. W3 makes RECOVERED mean
+      # "submitted, then engaged"; until it does, the mail says which question was answered rather
+      # than letting the token overclaim.
+      _lf_qual=""
+      [ "${LR_INPLACE_AWAIT:-1}" = 0 ] && [ "$_lf_v" = RECOVERED ] && _lf_qual=" engagement=UNAWAITED (armed; the watcher's outcome lands in ~/.claude/logs/handoffs.jsonl)"
+      _lf_msg="lr-fleet --one ${SID:0:8}: verdict=$_lf_v rc=$rc pane=${pane:--} acct=$acct mech=${_lf_mv:-none}$_lf_qual — ${_lf_note:--}; evidence: $FLEET_DIR/$RUN"
+      printf '%s\n' "$_lf_msg" > "$FLEET_DIR/$RUN/verdict.txt"
+      _lf_notify="${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
+      if [ -x "$_lf_notify" ]; then
+        if [ -n "${LR_FLEET_REQUESTER:-}" ]; then "$_lf_notify" "$LR_FLEET_REQUESTER" "$_lf_msg" || echo "lr-fleet: cc-notify to ${LR_FLEET_REQUESTER} FAILED — the verdict is on disk only: $FLEET_DIR/$RUN/verdict.txt" >&2
+        else "$_lf_notify" --role desk "$_lf_msg" || echo "lr-fleet: no requester pane and the desk role did not take it — the verdict is on disk only: $FLEET_DIR/$RUN/verdict.txt" >&2
+        fi
+      else
+        echo "lr-fleet: cc-notify unreachable at $_lf_notify — the verdict is on disk only: $FLEET_DIR/$RUN/verdict.txt" >&2
+      fi
+    fi
     exit "$rc" ;;
   enqueue)
     mkdir -p "$STATE/requests"
