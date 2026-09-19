@@ -3042,9 +3042,12 @@ own_run() {
 # shellcheck disable=SC2329  # invoked from run_gate's bats-shellcheck arm below.
 bats_sc_nonverdict() {
   echo "⛔ gate: bats-shellcheck-lint could not RUN (exit 2) — a NON-VERDICT, not a claim about your tree." >&2
-  echo "  The usual cause is that shellcheck is not installed on this host. Landing anyway would" >&2
-  echo "  leave every .bats suite unlinted and SAY NOTHING, which is what this arm exists to stop." >&2
-  echo "  Install shellcheck and re-land." >&2
+  echo "  Landing anyway would leave every .bats suite unlinted and SAY NOTHING, which is what this" >&2
+  echo "  arm exists to stop. The lint prints what it searched — read THAT before concluding the" >&2
+  echo "  host lacks shellcheck: measured 2026-09-19, this fired on a box carrying a working" >&2
+  echo "  /opt/homebrew/bin/shellcheck, because the invoking PATH had no Homebrew entry. The lint" >&2
+  echo "  now resolves the known prefixes itself, so reaching here means it is genuinely absent" >&2
+  echo "  OR lives somewhere unusual — set CC_SHELLCHECK_PREFIXES to that directory, or install it." >&2
   GATE_KILLED=1
 }
 
