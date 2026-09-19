@@ -433,3 +433,71 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
     fi
   done
 }
+
+# ══ 30 — THE PROBE AND THE LAUNCHER MUST EVALUATE ONE GATE (W2, T3) ════════════════════════════
+# MEASURED 2026-09-19 (U05 §3.3). The fleet ran its probe with CC_ADMIT_LOAD_TERM=off in its OWN
+# process; the launcher — typed into the pane's shell, a fresh process tree that never saw that
+# variable — re-evaluated with the load term ON and refused 11-16 s later, five times out of five,
+# after the transplant. At 17:52:54 the probe read 33.33 GB reclaimable, 3.18% segments and 2
+# sessions mid-turn while the launcher refused at 4.15/core. A probe that measures a different gate
+# than the one it fronts is not a probe.
+#
+# EXECUTED ON BOTH SIDES, not grepped. The probe side RUNS lr_capacity_probe_corrected and reads the
+# term list off its own IDL row; the launcher side EVALUATES the gate invocation's env prefix,
+# lifted out of lr-fire-resume.sh, against a recording stub. Greps over two files would compare two
+# spellings and say nothing about what either process actually does (memory:
+# spec-named-mechanism-may-be-prose-only).
+@test "30 lr-fleet's probe and lr-fire-resume's admit enable the SAME term switches (T3)" {
+  LRLIB="$REPO/scripts/limit-recover/lr-lib.sh"
+  FIRE="$REPO/scripts/limit-recover/lr-fire-resume.sh"
+  idl="$BATS_TEST_TMPDIR/t3-idl.jsonl"; : > "$idl"
+  # ── probe side: what the driver actually evaluates
+  run env CC_ADMIT_IDL="$idl" CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/t3-state" \
+          CC_ADMIT_RESERVE_TERM=off CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_HEADROOM_OVERRIDE=64 \
+          CC_BEAT_DIR="$BATS_TEST_TMPDIR/t3-beats" \
+          bash -c '. "$1"; . "$2"; lr_capacity_probe_corrected lr-fleet "t3" || true' _ "$LIB" "$LRLIB"
+  probe_terms="$(jq -rs 'map(select(.caller=="lr-fleet"))|last|.terms // "?"' "$idl")"
+  [ -n "$probe_terms" ] && [ "$probe_terms" != "?" ] || { cat "$idl"; echo "the probe wrote no row"; false; }
+  # ── launcher side: the gate CALL's own env prefix, evaluated
+  # ANCHOR ON THE CALL, NOT ON THIS WAVE'S SPELLING OF ITS PREFIX. Taking the `if ! …` line that
+  # opens the invocation and everything down to the call itself works on the one-line form this
+  # replaces AND on the multi-line prefixed one, so the case can RED on the VALUE (which is the
+  # subject) instead of on a missing anchor (which would only say "the file changed").
+  ln="$(grep -n 'cc_capacity_admit lr-fire-resume' "$FIRE" | head -1 | cut -d: -f1)"
+  [ -n "$ln" ] || { echo "lr-fire-resume no longer calls cc_capacity_admit — re-pin this case"; false; }
+  call="$(awk -v n="$ln" 'NR >= n-6 && NR <= n' "$FIRE" | awk '/if ! /{p=1} p')"
+  [ -n "$call" ] || { echo "the gate invocation moved — re-pin this case on its new anchor"; false; }
+  run env CC_ADMIT_IDL="$idl" bash -c '
+      cc_capacity_admit() { printf "LOAD=%s\n" "${CC_ADMIT_LOAD_TERM:-<unset>}"; }
+      SID=t3 ACCT=next2 LR_RUN=/r/bundle-t3
+      eval "$(printf "%s" "$1" | sed "s/^ *if ! //; s/; then$//")"' _ "$call"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  launcher_load="$(printf '%s\n' "$output" | sed -n 's/^LOAD=//p' | tail -1)"
+  # the probe's row names the terms it had ENABLED; `load` absent from that list means the term was
+  # off, which is exactly what the launcher must also do.
+  case "$probe_terms" in
+    *load*) want=on ;;
+    *)      want=off ;;
+  esac
+  [ "$launcher_load" = "$want" ] \
+    || { echo "probe terms='$probe_terms' (load $want) but the launcher evaluates CC_ADMIT_LOAD_TERM='$launcher_load' — the probe fronts a DIFFERENT gate"; false; }
+}
+
+@test "30b NOTHING admission-related reaches the recovered session's environment (D1-safety R1)" {
+  # FATAL class: a variable exported into the launcher is inherited by lr-fire-resume, by the expect
+  # it runs, and by the claude process and EVERY HOOK IT EVER RUNS, for that session's whole life.
+  # That is why CC_ADMIT_NET_ZERO was dropped as a design (plan § 14) and why the launcher carries
+  # LR_* names that the spawn line then unsets. Keyed on the spawn line itself — the last place the
+  # environment can still be narrowed.
+  FIRE="$REPO/scripts/limit-recover/lr-fire-resume.sh"
+  n="$(grep -c 'spawn -noecho env -u' "$FIRE")"
+  [ "$n" -ge 1 ] || { echo "lr-fire-resume no longer spawns through \`env -u\`"; false; }
+  for v in LR_RUN LR_RUN_DIR LR_ADMIT_TOKEN LR_SUBMIT_TOKEN LR_LOAD_TERM CC_ADMIT_LOAD_TERM CC_ADMIT_BUDGET_KEY CC_ADMIT_TOKEN; do
+    [ "$(grep -c -- "-u $v " "$FIRE")" -ge "$n" ] \
+      || { echo "$v is NOT unset on every spawn line — it rides into the recovered session for its whole life"; false; }
+  done
+  # and the gate's own variables are CALL-SCOPED, never exported: an `export CC_ADMIT_` here would
+  # defeat the `env -u` above for every process between this script and the spawn.
+  ! grep -qE '^[^#]*export +CC_ADMIT_' "$FIRE" \
+    || { echo "lr-fire-resume EXPORTS a CC_ADMIT_* variable — it must be a call-scoped prefix"; false; }
+}

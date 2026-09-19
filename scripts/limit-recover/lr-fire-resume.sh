@@ -43,6 +43,50 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# ══ THE RUN'S STATE, AND THE ONE FACT THE WATCHER CANNOT INFER (W2, 2026-09-19) ════════════════
+# This script runs INSIDE the pane, in a shell the recycle watcher cannot reach. Every way it can
+# fail before `expect` — a refused capacity gate, an unresolvable binary, a worktree that will not
+# materialise — looks IDENTICAL from outside: no claude process ever appears. Measured 2026-09-19
+# (U04 §3): the watcher polled that silence for 90 s, retyped the same command into the same
+# refusal, and reported "no process appeared" with no cause. `relaunch.rc` is the positive
+# discriminator — an rc on disk, in the run's own dir, written BEFORE the exit — so the watcher
+# reads a fact in ~2 s (D1-FT R2 (a)).
+#
+# ABSENT RUN DIR ⇒ INERT, not fatal: this script is also run by hand, where there is no run.
+_LRF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || _LRF_DIR=""
+for _lrf_lib in "$_LRF_DIR/lr-lib.sh" \
+                "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-lib.sh" \
+                "$HOME/.claude/scripts/limit-recover/lr-lib.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved library ladder
+  [ -f "$_lrf_lib" ] && { . "$_lrf_lib" 2>/dev/null || true; break; }
+done
+lr_state() { # $1=state $2=stage $3=detail — always rc 0; the writer itself is loud on failure
+  [ -n "${LR_RUN_DIR:-}" ] || return 0
+  if ! command -v lr_state_append >/dev/null 2>&1; then
+    echo "!! lr-fire-resume: lr-lib.sh unreachable — state '$1' NOT recorded" >&2; return 0
+  fi
+  lr_state_append "$LR_RUN_DIR" "$1" "${2:-}" "${3:-}" || true
+  return 0
+}
+lr_relaunch_rc() { # $1=rc $2=why — write ONCE; the first cause is the real one
+  [ -n "${LR_RUN_DIR:-}" ] || return 0
+  [ -f "$LR_RUN_DIR/relaunch.rc" ] && return 0
+  lr_state FAILED "${3:-relaunch}" "rc=$1 — $2"
+  mkdir -p "$LR_RUN_DIR" 2>/dev/null || { echo "!! lr-fire-resume: cannot write $LR_RUN_DIR/relaunch.rc — the watcher will have to infer this failure from silence" >&2; return 0; }
+  printf '%s\n' "$1" > "$LR_RUN_DIR/relaunch.rc" 2>/dev/null \
+    || echo "!! lr-fire-resume: cannot write $LR_RUN_DIR/relaunch.rc — the watcher will have to infer this failure from silence" >&2
+  return 0
+}
+# EVERY pre-expect failure, not just the ones someone remembered. The trap is DISARMED immediately
+# before expect runs (`trap - EXIT`), so nothing after the TUI starts can write an rc — a post-expect
+# exit is the session ENDING, which is not a relaunch failure and must never be recorded as one.
+_lrf_exit_trap() {
+  local rc=$?
+  [ "$rc" -ne 0 ] && lr_relaunch_rc "$rc" "lr-fire-resume exited before the TUI started"
+  return 0
+}
+trap _lrf_exit_trap EXIT
+
 # ── the OPUS default is RESOLVED from the SSOT, never a local constant ────────────────────────────
 # This line read `model="claude-opus-4-8"` and the opus path never overrode it: lr-handoff appends
 # --model only on the fable branch, and the account map sets a model only when CC_ACCT_IS_FABLE=1.
@@ -318,18 +362,40 @@ for _d in "$_LR_DIR/../lib/capacity-admit.sh" \
           "$HOME/.claude/scripts/lib/capacity-admit.sh"; do
   [ -f "$_d" ] && { _LR_CA="$_d"; break; }
 done
+#
+# ── ONE ADMISSION DECISION (LIMIT_RECOVER_100P W2, 2026-09-19) ─────────────────────────────────
+# This gate is the SECOND evaluation of a net-zero operation the driver already evaluated, in a
+# process the driver cannot parameterise — the split that produced four husks on 2026-09-19
+# (U05 §3.3: probe ADMIT, launcher REFUSE 11-16 s later, transplant already done). The launcher
+# now carries the driver's decision as a one-shot token, and the four variables below are set
+# CALL-SCOPED — a `VAR=… cmd` prefix, never an `export` — because anything exported here rides
+# into the recovered session's environment for its whole life and every hook it ever runs
+# (D1-safety R1, FATAL). The `env -u` list on the spawn line is the second half of that rule.
+#   CC_ADMIT_TOKEN      the driver's admission, redeemed once (absent/expired ⇒ a FRESH evaluation)
+#   CC_ADMIT_WANT_SID   sid enforcement: a token minted for another session is refused, not replayed
+#   CC_ADMIT_LOAD_TERM  the SAME switch the driver's probe used, so this is not a different gate
+#   CC_ADMIT_BUDGET_KEY per-RUN refusal counter: one recovery's refusals cannot release another's
 if [ -n "$_LR_CA" ]; then
   # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
   . "$_LR_CA"
-  if ! cc_capacity_admit lr-fire-resume "resume $SID on $ACCT"; then
+  if ! CC_ADMIT_TOKEN="${LR_ADMIT_TOKEN:-}" CC_ADMIT_WANT_SID="$SID" \
+       CC_ADMIT_LOAD_TERM="${LR_LOAD_TERM:-off}" CC_ADMIT_BUDGET_KEY="${LR_RUN##*/}" \
+       cc_capacity_admit lr-fire-resume "resume $SID on $ACCT"; then
     echo "✗ $(cc_capacity_admit_reason)" >&2
     echo "  Shed load first (close finished panes / let the wave drain), then re-run this exact command." >&2
     echo "  Override for one resume: CC_ADMIT_GATE=off ; raise the bar: CC_ADMIT_MAX_LOAD_PER_CORE=<n>" >&2
+    # THE POSITIVE DISCRIMINATOR. The watcher outside this pane has no way to learn WHY no claude
+    # appeared — it polled a corpse for 90 s and reported "no process appeared". `relaunch.rc` is
+    # written BEFORE the exit, in the run's own dir, so the watcher reads a FACT (rc 9 = the gate
+    # refused) in ~2 s instead of inferring one from silence (D1-FT R2 (a)).
+    lr_relaunch_rc 9 "gate: $(cc_capacity_admit_reason)"
     exit 9
   fi
   echo "-- $(cc_capacity_admit_reason)" >&2
+  lr_state 'gate-admitted' gate "$(cc_capacity_admit_reason)"
 else
   echo "!! lr-fire-resume: capacity-admit: ABSENT (scripts/lib/capacity-admit.sh unreachable) — spawning UNGATED" >&2
+  lr_state 'gate-absent' gate "capacity-admit.sh unreachable — spawning UNGATED"
 fi
 
 # Single-line prompt only — the composer submits on CR; newlines are unsafe here.
@@ -426,6 +492,12 @@ export LR_WRAP
 # fall-through — the pane would still die on exactly the exits this change exists to survive.
 # A command on the left of `||` is exempt from errexit, which is what makes the rc readable.
 lr_rc=0
+# THE RELAUNCH-RC TRAP IS DISARMED HERE, and this line is the whole of its scope rule: everything
+# above is "the launcher failed before the TUI existed" (a relaunch failure the watcher must see);
+# everything below is the SESSION's own lifetime, whose end is not a relaunch failure and must never
+# be recorded as one (W2).
+trap - EXIT
+lr_state relaunch-typed expect "spawning $model/$effort on $(basename "$cfg")"
 # shellcheck disable=SC2016  # single quotes are REQUIRED: the body below is an expect(1) program,
 #   and its $env(...)/$bin references must reach expect uninterpreted. Bash expansion here would
 #   corrupt the script — the values are passed in via the LR_* environment exported above.
@@ -460,9 +532,9 @@ expect -c '
   # place, so the spawned pty, the process group and every pattern below are unchanged by it.
   set wrap $env(LR_WRAP)
   if {$wrap ne ""} {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid
   } else {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid
   }
 
   # Move the selector to option $steps+1 and CONFIRM it landed there before committing. Returns 1
