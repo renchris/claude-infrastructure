@@ -74,6 +74,26 @@ comm -23 <(grep -rhoE 'uidotsh://[A-Za-z0-9/_-]+' --include='*.md' . | sed 's|ui
          <(find . -name '*.md' | sed 's|^\./||; s|\.md$||' | sort -u)
 ```
 
+## Two names that are NOT here, and why that is correct
+
+Two skills are named in prose across the corpus but carry no `uidotsh://` URI, so
+they fall outside any link-following crawl. Both were probed explicitly; neither
+exists on the server:
+
+- **`imagegen`** (13 mentions — `brand-kit`, `dark-mode-image`, `add-dark-mode`,
+  and the dark-mode guideline in both trees) → `Skill resource not found`. It is a
+  **host-side** skill, not ui.sh content; the `$CODEX_HOME` save-path rules in
+  `dark-mode-image.md` place it in the Codex environment. Consequence worth
+  knowing: any ui.sh workflow that hands off to `imagegen` (all raster dark-mode
+  generation, and the whole `brand-kit` render step) is **not self-contained from
+  this mirror** — it needs an image-generation skill supplied by the host agent.
+- **`brand-kit-images`** (one mention, `brand-kit.md:40`, as a route *not* to take)
+  → `Skill resource not found`. Retired, or never public.
+
+*Positive control:* the server answers an absent URI with a distinct
+`Skill resource not found:` error, so both nulls are genuine absences rather than
+silent fetch failures — the instrument can say no.
+
 ## Using it
 
 These are verbatim vendor files, deliberately **not** installed as active skills —

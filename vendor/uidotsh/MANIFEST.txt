@@ -1,5 +1,8 @@
 # ui.sh mirror manifest
 # captured: 2026-09-19T17:21:22Z from https://ui.sh/mcp (MCP) + https://assets.ui.sh (HTTP)
+# SCOPE: the 176 VENDOR-CAPTURED files only. README.md and MANIFEST.txt are
+# authored locally, are deliberately NOT listed, and are therefore NOT covered
+# by a -c check — a clean verify says nothing about them.
 # sha256  size  path
 d98ebb2be4c7052a69123bb48d561c1aca2b2a960720aac882ccc34cacf9a9ba  3858  add-dark-mode.md
 bf4f673c85e866792ab944fbece15ca4465b44bbc465c35b6997919c9456eb76  171050  assets/avatars/1.webp
