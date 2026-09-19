@@ -254,6 +254,31 @@ lr_resume_procs() { # $1=sid → pids of `--resume <sid>` processes (the argv ce
   printf '%s\n' "$out"
 }
 
+lr_holder_count() { # $1=sid → number of DISTINCT live holders (registry panes + --resume leaves); overlap counted ONCE
+  # THE OVERLAP IS THE WHOLE POINT. A resumed session's own registry pid IS a `--resume <sid>`
+  # process, so `nrows + nprocs` double-counts a singly-held session. Measured 2026-09-19: sid
+  # 09e64dcb had ONE registry row (pane 111, pid 37018) and one resume pid — 37018, the same
+  # process — and `--locate`'s un-deduped `[ $n -gt 1 ] || lr_resume_procs` called it DUPLICATE,
+  # so `--recover` PARKED a live limit-blocked pane. Its printed prescription (`--duplicates`)
+  # already subtracted the overlap and answered "no session is held by more than one live
+  # process", leaving the session unrecoverable with no next action and no culprit. One predicate,
+  # one arithmetic, both callers — a second copy is how the two answers diverged in the first place.
+  local sid="${1:-}" rows procs total pid
+  [ -n "$sid" ] || { printf '0\n'; return 0; }
+  rows="$(lr_registry_live_rows "$sid" 2>/dev/null || true)"
+  procs="$(lr_resume_procs "$sid" 2>/dev/null || true)"
+  total=$(( $(printf '%s' "$rows" | grep -c . || true) + $(printf '%s' "$procs" | grep -c . || true) ))
+  # A heredoc, never a pipe: a `while` on the right of `|` runs in a subshell and its decrement
+  # never escapes (memory: assignment-inside-command-substitution-never-escapes).
+  while IFS=$'\t' read -r _ pid _ _; do
+    [ -n "$pid" ] || continue
+    printf '%s\n' "$procs" | grep -qx "$pid" && total=$((total - 1))
+  done <<EOF
+$rows
+EOF
+  printf '%s\n' "$total"
+}
+
 # ── TRANSPLANT: where did this session go? ───────────────────────────────────────────────────────
 # Reads the split-brain lock lr-transplant.sh writes. Prints the target config dir when the lock
 # names a target OTHER than $2 and that target still holds the transcript (the successor exists);
