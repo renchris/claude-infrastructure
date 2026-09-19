@@ -15,8 +15,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PROBE_PREFLIGHT_WAIT_S="${PROBE_PREFLIGHT_WAIT_S:-5400}"
 export PROBE_MAX_ACTIVE="${PROBE_MAX_ACTIVE:-4}"
 export PROBE_MIN_IDLE_PCT="${PROBE_MIN_IDLE_PCT:-25}"
-for r in "${@:-run1 run2}"; do :; done
-for r in ${*:-run1 run2}; do
+RUNS=("$@"); [ ${#RUNS[@]} -eq 0 ] && RUNS=(run1 run2)
+for r in "${RUNS[@]}"; do
   echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) starting $r ==="
   "$HERE/run-p1.sh" "$r"; echo "=== $r exited $? ==="
 done

@@ -15,7 +15,8 @@
 # Usage: ./run-p1.sh <run-label>
 set -uo pipefail
 
-RUN="${1:?usage: run-p1.sh <run-label>}"
+RUN="${1:?usage: run-p1.sh <run-label> | --census}"
+case "$RUN" in --census) ;; -*) echo "run-p1.sh: unknown option '$RUN' (expected a run label or --census)" >&2; exit 2 ;; esac
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The scratch lives OUTSIDE the repo and is PUBLISHED into captures/ only when the run ends.
 # Writing it in-tree makes the worktree dirty for the whole run, and scripts/ship-land.sh
@@ -138,7 +139,7 @@ cat > "$WRAP" <<EOF
 #!/bin/bash
 cd "$HERE" || exit 9
 # Claude Code gates its iTerm2 pane backend on ITERM_SESSION_ID (~/.zshrc:678-696); the ~/.claude/bin/it2
-# shim then translates each backend call into `kitty @`. A non-interactive shell never reads .zshrc, so
+# shim then translates each backend call into 'kitty @'. A non-interactive shell never reads .zshrc, so
 # without this the lead cannot create a named teammate AT ALL. This is the fleet's own synthesis,
 # reproduced verbatim — it is NOT a teammateMode change (that is forbidden for this wave).
 if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -x "$HOME/.claude/bin/cc-in-kitty" ] && "$HOME/.claude/bin/cc-in-kitty"; then
