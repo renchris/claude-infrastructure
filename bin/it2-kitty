@@ -629,11 +629,38 @@ unaddressed(){
 # exec'd. Widening the haystack can only cause a false MATCH on a window that genuinely carries the
 # caller's own `--agent-name <member>` string — i.e. the right pane — while narrowing it would cause
 # false REFUSALS, and a refusal here means a teammate pane is never reaped.
-identity_ok(){
-  local id="$1" _err rc _l
+identity_ok(){          # 0 = AFFIRMED  |  1 = not affirmed, REFUSE  |  2 = the window is GONE
+  local id="$1" _err _out rc ktrc _l
   # mktemp with TRAILING Xs — BSD mktemp only substitutes a trailing run (memory: prescribed-remedy-worse).
   _err="$(mktemp "${TMPDIR:-/tmp}/it2-kitty-idpin.XXXXXX" 2>/dev/null || printf '/tmp/it2-kitty-idpin.%s' "$$")"
-  kt ls --match "id:$id" 2>"$_err" | \
+  _out="$(mktemp "${TMPDIR:-/tmp}/it2-kitty-idout.XXXXXX" 2>/dev/null || printf '/tmp/it2-kitty-idout.%s' "$$")"
+  kt ls --match "id:$id" >"$_out" 2>"$_err"; ktrc=$?
+  # ── GONE IS A THIRD STATE, NOT A FLAVOUR OF UNREADABLE (RC-6, 2026-09-19) ─────────────────────
+  # kitty answers a VANISHED window with exactly this triple: rc 1, EMPTY stdout, and the single
+  # stderr line "No matching windows". Fed to the python below, that empty stdin fails json.load
+  # and reports "payload from kitty ls is unreadable" — the cannot-tell verdict — so the caller
+  # refuses to close a pane that does not exist. Measured over 30 d: 65 spurious refusals, and 42
+  # of the 51 in September were a SECOND fire against a pane the lifecycle log shows closed six
+  # lines earlier. An already-gone pane is the one case where there is provably nothing left to
+  # protect AND nothing left to destroy, so it is the one case that must not read as a refusal.
+  #
+  # ALL THREE parts are required, and each has its own control in tests/it2-kitty-identity-pin.bats:
+  #   · non-zero rc   — kitty rc 0 carrying this text on stderr is a warning, not a dead window;
+  #   · EMPTY stdout  — a truncated or corrupt payload is kitty answering BADLY, which stays a
+  #                     refusal; reading it as gone would close a pane on a parse failure;
+  #   · kitty SAYING so — rc 1 with silence is kitty failing to answer at all (socket gone,
+  #                     permission, crash). Absence of evidence stays a refusal
+  #                     (memory: probe-that-acts-on-absence-must-confirm-presence).
+  #
+  # The wording is load-bearing, not cosmetic. hooks/teammate-auto-shutdown.sh:309 routes a close
+  # whose stderr contains "not found" to `~ pane already gone`, matching on that STRING and not on
+  # the rc. Saying "not found" here therefore lands the new rc in the right log arm with NO edit to
+  # that file, which is wave W1 territory. Do not reword these two lines without reading :309.
+  if [ "$ktrc" != 0 ] && [ ! -s "$_out" ] && grep -qi 'No matching windows' "$_err" 2>/dev/null; then
+    err "  kitty: window $id not found — it is already gone."
+    rm -f "$_err" "$_out" 2>/dev/null
+    return 2
+  fi
     WANT_ID="$id" WANT_CMDLINE="$EXPECT_CMDLINE" WANT_GEN="$EXPECT_GENERATION" python3 -c '
 import json, os, sys
 want_id = os.environ["WANT_ID"]
@@ -665,12 +692,15 @@ if want:
         sys.stderr.write("cmdline mismatch: window %s runs %r, caller pinned %r\n"
                          % (want_id, " | ".join(h for h in hay if h), want))
         sys.exit(1)
-sys.exit(0)' 2>&1 | while IFS= read -r _l; do err "  identity: $_l"; done
-  rc="${PIPESTATUS[1]}"
+sys.exit(0)' <"$_out" 2>&1 | while IFS= read -r _l; do err "  identity: $_l"; done
+  # INDEX 0, not 1: the pipeline lost its leading `kt ls` when stdout moved to a file, and a stale
+  # [1] would read the `while` loop rc — always 0 — i.e. EVERY pin would affirm and the guard would
+  # be silently deleted. The gone branch above is the only reason this changed shape.
+  rc="${PIPESTATUS[0]}"
   # kitty's own stderr is RENDERED, never discarded — `kt ls 2>/dev/null` is exactly what hid the
   # bare-name binary defect for its entire life (see the `list` arm).
   if [ -s "$_err" ]; then while IFS= read -r _l; do err "  kitty: $_l"; done < "$_err"; fi
-  rm -f "$_err" 2>/dev/null
+  rm -f "$_err" "$_out" 2>/dev/null
   [ "${rc:-1}" = 0 ]
 }
 
@@ -882,6 +912,21 @@ def walk(s):
                 elif tok == "2": dim = True
         i = m.end()
     for ch in s[i:]: yield ch, dim
+def has_content(rows):
+    """Non-dim, non-space glyphs AFTER the ❯. This is the scan the NON-EMPTY arm has always
+    run, lifted verbatim into a function so the narrow-pane branch below can reuse it instead of
+    re-implementing it. Two readers of one composer must never disagree about what is in it."""
+    seen = False
+    for line in rows:
+        for ch, dim in walk(line):
+            if not seen:                   # the glyph itself is coloured but never dim — skip it
+                seen = ch == "❯"
+                continue
+            if ch.isspace() or ch == " ":  # NBSP follows the glyph, and pads continuations
+                continue
+            if not dim:
+                return True
+    return False
 try:
     cols = int(os.environ.get("COLS") or 0)
 except ValueError:
@@ -928,21 +973,46 @@ if not body or "❯" not in plain(body[0]):
     # rendered but whose rules fell under the max(20, cols//2) floor on a narrow pane still shows
     # its glyph, so this abstains there instead of destroying it.
     no_box = (agent != "-" and len(rules) == 0 and not any("❯" in l for l in flat))
-    passing = "AGENT-PANE" if agent_pane else ("AGENT-NO-BOX" if no_box else "")
+    # …and the REFLOWED form, the residual hole neither of the two above can reach (RC-4,
+    # 2026-09-19). Below 20 columns the floor `max(20, cols // 2)` is 20 while the widest line the
+    # pane can paint is narrower than that, so a bare bottom rule can never be counted; and the
+    # labelled top rule WRAPS, arriving as " @band-" then "hooks ─", whose label reads "hooks" and
+    # fails the @token form. Zero rules, so no body — while the ❯ on screen correctly blocks
+    # no_box. Measured over 844 refusal snapshots: 49 are exactly this, an argv-proven agent pane
+    # reflowed narrow over an EMPTY composer, and every successful close reflows the survivors and
+    # manufactures the next one. 166 of 166 rc-67 refusals in teammate-lifecycle.log are UNKNOWN.
+    #
+    # This is a FIFTH positive proof, never a relaxation, and it opens nothing the other four did
+    # not already open on a wider pane. Five conjuncts, each one falsifiable on its own:
+    #   · the argv proof, unchanged — no agent, no branch;
+    #   · the pane is genuinely narrower than the rule floor, so is_rule COULD NOT have fired.
+    #     A wide pane never reaches here, which is what stops this becoming the blanket
+    #     zero-rules rule §5.2 recommended and :764-770 deliberately refuses;
+    #   · the agent NAMES ITSELF in the footer — proof 2, read across the wrap by joining the
+    #     screen, since the name is split mid-token by the reflow and no single line carries it;
+    #   · EXACTLY one ❯. A modal draws its own borders and no glyph, so it lands at zero and stays
+    #     refused; two glyphs means the region is not identifiable and it stays refused;
+    #   · the composer region is BOUNDED BELOW by a real box run and, read by the same
+    #     has_content the NON-EMPTY arm runs, holds nothing. One typed character refuses.
+    # No bounding rule ⇒ the region cannot be delimited ⇒ abstain, which is the fail-closed
+    # direction (memory: probe-that-acts-on-absence-must-confirm-presence).
+    def _box_below(i):
+        for j in range(i + 1, len(flat)):
+            s = flat[j].strip()
+            if s and set(s) == set("─"):
+                return j
+        return -1
+    narrow_pane = False
+    glyph_rows = [i for i, l in enumerate(flat) if "❯" in l]
+    if (agent != "-" and cols and cols < thresh and len(glyph_rows) == 1
+            and ("@" + agent) in "".join(flat)):
+        _end = _box_below(glyph_rows[0])
+        narrow_pane = _end > glyph_rows[0] and not has_content(lines[glyph_rows[0]:_end])
+    passing = ("AGENT-PANE" if (agent_pane or narrow_pane)
+               else ("AGENT-NO-BOX" if no_box else ""))
     print(passing if (alt and passing) else ("UNKNOWN" if alt else "NO-TUI"))
     raise SystemExit
-seen = content = False
-for line in body:
-    for ch, dim in walk(line):
-        if not seen:                       # the glyph itself is coloured but never dim — skip it
-            seen = ch == "❯"
-            continue
-        if ch.isspace() or ch == " ": # NBSP follows the glyph and pads continuation lines
-            continue
-        if not dim:
-            content = True; break
-    if content: break
-print("NON-EMPTY" if content else "EMPTY")' 2>/dev/null || printf 'UNKNOWN'
+print("NON-EMPTY" if has_content(body) else "EMPTY")' 2>/dev/null || printf 'UNKNOWN'
 }
 
 case "$verb" in
@@ -1220,12 +1290,22 @@ else:
     # the caller supplied a pin, prove the TARGET before destroying it. Neither flag ⇒ this whole
     # branch is skipped and the close below is byte-for-byte today's.
     if [ -n "$EXPECT_CMDLINE" ] || [ -n "$EXPECT_GENERATION" ]; then
-      identity_ok "$SESSION" || {
-        err "refusing to close window $SESSION — it is not the window the caller pinned."
-        err "A kitty window id restarts at 1 with every kitty, so a stale id can name a LIVE"
-        err "unrelated window. Refusing is the only safe answer; re-derive the id and retry."
-        exit 66
-      }
+      identity_ok "$SESSION"; _idrc=$?
+      case "$_idrc" in
+        0) : ;;
+        # RC-6. The window is provably gone — kitty said so, in the one phrasing it uses. There is
+        # nothing to close and nothing to destroy, so this is a CLEAN terminal outcome and NOT a
+        # refusal. It gets its own code because 66 means "re-derive the id and retry" and this
+        # means "stop, you already succeeded": collapsing them is what produced 42 of September's
+        # 51 spurious refusals, every one a second fire on a pane closed moments earlier.
+        # Non-zero, so no caller that treats non-zero as "did not close" regresses.
+        2) err "window $SESSION is already gone — nothing to close."
+           exit 68 ;;
+        *) err "refusing to close window $SESSION — it is not the window the caller pinned."
+           err "A kitty window id restarts at 1 with every kitty, so a stale id can name a LIVE"
+           err "unrelated window. Refusing is the only safe answer; re-derive the id and retry."
+           exit 66 ;;
+      esac
     fi
     # THE COMPOSER GUARD (see composer_state above). Last gate before the pane dies, and deliberately
     # the LAST one: it is the only check here that reads what the pane actually holds rather than who
