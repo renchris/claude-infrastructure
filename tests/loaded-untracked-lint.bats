@@ -118,7 +118,16 @@ mkrepo() {  # $1 = name -> echoes the repo path. No remote is ever added, so the
 @test "--selftest passes and proves both directions" {
   run bash "$LINT" --selftest
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "7/7"
+  # ALL cases passed, not a hardcoded count. This asserted "7/7" until 2026-09-19, so 62efb6afc
+  # ("a caller's exported GIT_INDEX_FILE turned this lint green") — which ADDED the 8th case and
+  # correctly left the subject printing 8/8 — turned trunk red for every land in the repo, and the
+  # red named this test rather than the commit that caused it. A count here spans a population the
+  # test does not own (memory: assertion-span-must-equal-its-subject), so it is a tripwire on
+  # somebody else's next fix. Match passed==total instead, with a floor so a truncated run or an
+  # empty "0/0" cannot pass vacuously.
+  [[ "$output" =~ ([0-9]+)/([0-9]+) ]] || { echo "no N/M tally in: $output"; false; }
+  [ "${BASH_REMATCH[1]}" -eq "${BASH_REMATCH[2]}" ] || { echo "$output"; false; }
+  [ "${BASH_REMATCH[2]}" -ge 7 ] || { echo "tally shrank below the 7 cases that existed: $output"; false; }
 }
 
 # ── ENFORCEMENT LIVES AT THE CHOKEPOINT, and this is the assertion that pins it there ───────────
