@@ -124,7 +124,7 @@ if [ -n "$ID_PANE" ] || [ -n "$PAY_SID" ]; then
     # renders. `#` is also the zero-risk design the operator eyes-check may keep outright.
     _idmark='#'
     case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
-        *UTF-8*|*utf-8*|*UTF8*|*utf8*) _idmark='⌗' ;;
+        *UTF-8*|*utf-8*|*UTF8*|*utf8*) _idmark='#' ;;   # not ⌗: Monaco (kitty font_family) carries no U+2317 — fc-list ':charset=2317' => 0 Monaco; # needs no fallback font
     esac
     ID_SEG="${ID_PANE:+$_idmark$ID_PANE }${PAY_SID:+${PAY_SID:0:8} }"
     unset _idmark
