@@ -97,3 +97,25 @@ internal to kitty's `ask` kitten — no hook, and `combine` would fire a follow-
 immediately rather than after the picker resolves. Panes arriving that way are still uneven. Every
 other arrival route on this box is covered. Not filed: the menu supersedes that chord for exactly
 this gesture, and it is one ⌘⇧E away.
+
+## 7. Landed ≠ live, measured on this very change
+
+The land put `enabled_layouts splits:equalize_on_window_close=yes,stack` on trunk, and the shared
+checkout fast-forwarded to it, so `~/.config/kitty/kitty.conf` (a symlink into that checkout)
+carried the new line at lag 0. **The running kitty still reported `equalize_on_window_close: 'n'`
+on all 6 live tabs.** A tab's `layout_opts` is parsed once, at tab creation; advancing the file's
+bytes underneath a running process changes nothing it has already parsed, and the `__watch_conf__`
+reloader did not fire on a git checkout of the symlink target.
+
+`kitty @ load-config` cleared it — all 6 tabs then read `'y'`, verified by a `kitty @ ls` read-back
+rather than by the reloader's own exit code. So for any kitty.conf change, the converge has **two**
+steps: `deploy-live.sh` to advance the checkout, then `kitty @ load-config` to make the running
+process re-read it.
+
+Second half, also measured here: `deploy-live.sh` short-circuits at `nothing above the live layer to
+deploy` when the checkout is already at trunk tip, so it never reaches `install.sh` — a new tracked
+file added by that land gets no symlink from it. In this case that was correct anyway:
+`scripts/checks/` is **not a deployed class** (all four pre-existing siblings are equally absent
+from `~/.claude`, and `install.sh` globs `scripts/*.sh|*.py` top-level with explicit cases for
+`lib/` and `limit-recover/` but none for `checks/`), so `kitty-equalize-verify.py` is unlinked BY
+DESIGN. Check the siblings before forcing a link — the absence and the defect look identical.
