@@ -517,7 +517,11 @@ case "$rc" in
     # `n-a` (not 0) when the line is absent: an unmeasured duration is unknown, and unknown must
     # not read as "instantaneous" to whoever later thresholds this field.
     _el="$(_f elapsed)"
-    _eff="pop_before=$POP_BEFORE pop_after=$_pop_after pop_delta=$_delta elapsed=${_el:-n-a} dirt=$(_f landed_dirt)"
+    _eff="pop_before=$POP_BEFORE pop_after=$_pop_after pop_delta=$_delta elapsed=${_el:-n-a} dirt=$(_f landed_dirt) unowned=$(_f unowned) owner_active=$(_f owner_active)"
+    # unowned/owner_active are folded in HERE, not merely emitted by the janitor: this extractor is
+    # positional, so a field the producer prints but _eff never names is readable by `_f` and
+    # reaches NO surface. The adjacent `stranded_patches` field has read `n-a` on 7 of 7 rows ever
+    # written for exactly that reason — adding the field without this line builds another one.
     _owned_after="$(population_owned)"
     if [ "$OBSERVE" = "0" ] && [ "$_owned_after" -gt "$CEILING" ]; then
       verdict over-ceiling 3 "removed=${1:-0} disposed=${2:-0} kept=${3:-0} branches=${4:-0} refusals=${5:-0} $_eff"
