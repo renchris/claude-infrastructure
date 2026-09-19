@@ -54,7 +54,12 @@
 # relaunch did not verify (the source is a tombstoned husk — the guard blocks its prompts — and the
 # launcher path is printed for a manual relaunch).
 #
-# Output: bundle dir path on the last stdout line. Exit 0 ok, 2 error, 3 fired-but-not-closed.
+# Output: bundle dir path on the last stdout line. Exit 0 ok, 2 error, 3 fired-but-not-closed,
+# 4 transplanted-but-the-relaunch-did-not-verify, 5 the LIVE layer cannot run what this would mint,
+# 6 the PRE-CHECK refused BEFORE the transplant (W2) — a held operator draft, a pane not holding a
+# claude, a session that died on something other than a limit, a teammate, or a box with no
+# capacity. On 6 nothing has moved: no lock, no tombstone, no keystroke, and the state is in the
+# run's events.jsonl. LRH_PRECHECK=off skips it (and restores the previous ordering verbatim).
 set -euo pipefail
 
 # ---- PANE-SPAWN LOG (item 1467ea1dad4f) --------------------------------------------------------
@@ -507,6 +512,125 @@ if [[ -n "$_lrh_missing" ]]; then
   echo "lr-handoff: converge, then re-run:  bash \$HOME/Development/claude-infrastructure/scripts/deploy-live.sh" >&2
   exit 5
 fi
+# THE SAME CHECK, ONE LAYER DOWN (W2). The launcher now carries an ADMISSION TOKEN, and a live
+# layer that predates it would simply ignore the variable: the launcher would re-evaluate the gate
+# from scratch in the pane's shell — the exact split that produced four husks on 2026-09-19 —
+# while every line of this driver said the decision had already been made. A capability the
+# recovery DEPENDS on has to be asserted on the copy that will actually run, not on this worktree's.
+# Keyed on the redeeming function and on the variable the launcher exports, i.e. on both ends of
+# the wire. Same kill switch, same position: before the first irreversible step.
+if [[ $_lrh_skip_parser -eq 0 ]]; then
+  _lrh_tok_missing=""
+  grep -q 'LR_ADMIT_TOKEN' "$LR/lr-fire-resume.sh" 2>/dev/null || _lrh_tok_missing="$_lrh_tok_missing lr-fire-resume.sh:LR_ADMIT_TOKEN"
+  _lrh_live_ca=""
+  for _lrh_c in "$LR/../lib/capacity-admit.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/capacity-admit.sh" "$HOME/.claude/scripts/lib/capacity-admit.sh"; do
+    [[ -f "$_lrh_c" ]] && { _lrh_live_ca="$_lrh_c"; break; }
+  done
+  if [[ -z "$_lrh_live_ca" ]]; then
+    _lrh_tok_missing="$_lrh_tok_missing capacity-admit.sh:UNREACHABLE"
+  else
+    grep -q '_cc_admit_token_redeem' "$_lrh_live_ca" 2>/dev/null || _lrh_tok_missing="$_lrh_tok_missing capacity-admit.sh:_cc_admit_token_redeem"
+  fi
+  if [[ -n "$_lrh_tok_missing" ]]; then
+    echo "lr-handoff: REFUSING — the LIVE admission path cannot redeem this recovery's token:$_lrh_tok_missing" >&2
+    echo "lr-handoff: without it the relaunch re-evaluates the capacity gate inside the pane, in a" >&2
+    echo "lr-handoff: process this driver cannot parameterise — the split that left four tombstoned" >&2
+    echo "lr-handoff: husks on 2026-09-19. Nothing has been transplanted or typed." >&2
+    echo "lr-handoff: converge, then re-run:  bash \$HOME/Development/claude-infrastructure/scripts/deploy-live.sh" >&2
+    exit 5
+  fi
+fi
+
+# ══ EVERY REFUSABLE READ, BEFORE THE FIRST IRREVERSIBLE STEP (W2 — invariant I1) ═══════════════
+# THE ORDERING DEFECT. `--in-place` transplanted the transcript and only then discovered whatever
+# made the recycle impossible: an operator draft in the composer (the recycle's own gate, 180 s
+# LATER), a pane that was not holding a claude, a session that died on a network error rather than
+# a limit, a teammate. By then the source is a tombstoned husk and the cheapest exit is a manual
+# relaunch. Each of those facts is readable FIRST, and reading them costs ~1 s.
+#
+# NOTHING MOVES IN HERE. No lock, no tombstone, no keystroke — the reads are handoff-fire's own
+# (`--probe-recycle-preconditions`, which is the SAME pane_cc_state / composer_content / registry
+# binding the actuator will use) plus one capacity probe. The bundle and the audit above it are
+# reads and copies into a fresh directory; they are also where a refusal is RECORDED, which is why
+# they precede this rather than follow it.
+#
+# ON ADMIT IT MINTS THE TOKEN. That is the whole point of doing the probe here: the admission
+# decision belongs to the process that is about to transplant, and it is carried into the pane's
+# shell as a one-shot, TTL-bounded, sid-enforced file rather than re-derived there.
+#
+# KILL SWITCH LRH_PRECHECK=off (I9) — byte-identical to the previous behaviour, so an operator who
+# needs to drive a recovery the pre-check refuses can, deliberately and by name.
+lrh_hf_bin() {
+  local hf="${CC_HANDOFF_FIRE_BIN:-}"
+  [[ -n "$hf" ]] || hf="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/../handoff-fire.sh"
+  [[ -f "$hf" ]] || hf="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/handoff-fire.sh"
+  [[ -f "$hf" ]] || hf="$HOME/.claude/scripts/handoff-fire.sh"
+  printf '%s' "$hf"
+}
+# The capacity library, on the SAME three-path ladder every sibling uses. Absent ⇒ the pre-check
+# skips the capacity decision LOUDLY and the launcher evaluates its own, i.e. exactly today's
+# behaviour — a missing telemetry library must never be what stops a recovery.
+for _lrh_ca in "$(dirname "$_CC_KS")/../lib/capacity-admit.sh" "$(dirname "$0")/../lib/capacity-admit.sh" \
+               "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/capacity-admit.sh" \
+               "$HOME/.claude/scripts/lib/capacity-admit.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved library ladder
+  [[ -f "$_lrh_ca" ]] && { . "$_lrh_ca" 2>/dev/null || true; break; }
+done
+lrh_state() { # $1=state $2=stage $3=detail — the run's own append-only log; loud, never silent
+  command -v lr_state_append >/dev/null 2>&1 || return 0
+  lr_state_append "$BUNDLE" "$1" "$2" "$3" || true
+  return 0
+}
+LRH_ADMIT_TOKEN=""
+lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothing moved
+  local hf out rc state
+  hf="$(lrh_hf_bin)"
+  if [[ -n "$SOURCE_PANE" ]]; then
+    if [[ ! -x "$hf" ]]; then
+      echo "lr-handoff: PRECHECK cannot reach handoff-fire.sh — the pane reads (state, composer, subagents) cannot run. Set CC_HANDOFF_FIRE_BIN or LRH_PRECHECK=off to proceed without them." >&2
+      lrh_state REFUSED precheck "handoff-fire.sh unreachable"
+      return 6
+    fi
+    rc=0
+    out="$("$hf" --probe-recycle-preconditions --source-pane "$SOURCE_PANE" --source-session "$SID" 2>&1)" || rc=$?
+    printf '%s\n' "$out" | sed 's/^/lr-handoff: precheck /' >&2
+    state="$(printf '%s\n' "$out" | sed -n 's/^verdict: //p' | tail -1)"
+    if [[ $rc -ne 0 ]]; then
+      echo "lr-handoff: PRECHECK ${state:-REFUSED:unknown} — NOTHING has been transplanted, no lock and no tombstone were written, and the source session is untouched." >&2
+      lrh_state "${state%%:*}" precheck "${state:-REFUSED:unknown}"
+      return 6
+    fi
+  fi
+  # THE CAPACITY DECISION, TAKEN ONCE. One evaluation, no wait: the fleet driver owns the waiting
+  # (lf_capacity_wait) and an interactive caller wants a verdict now, not a 2-minute park.
+  if command -v lr_capacity_probe_corrected >/dev/null 2>&1; then
+    rc=0
+    lr_capacity_probe_corrected lr-handoff "in-place recovery of ${SID:0:8} onto $TARGET" || rc=$?
+    if [[ $rc -ne 0 ]]; then
+      echo "lr-handoff: PARKED on capacity — $(cc_capacity_admit_reason 2>/dev/null || true)" >&2
+      echo "lr-handoff: NOTHING has been transplanted; re-run when the box clears." >&2
+      lrh_state PARKED capacity "$(cc_capacity_admit_reason 2>/dev/null || true)"
+      return 6
+    fi
+    if command -v cc_capacity_token_mint >/dev/null 2>&1; then
+      LRH_ADMIT_TOKEN="$(cc_capacity_token_mint "$SID" 2>/dev/null || true)"
+      if [[ -n "$LRH_ADMIT_TOKEN" ]]; then
+        echo "lr-handoff: precheck admitted — admission token $LRH_ADMIT_TOKEN (one-shot, TTL ${CC_ADMIT_TOKEN_TTL_S:-300}s, sid ${SID:0:8})" >&2
+        lrh_state admitted gate "token $LRH_ADMIT_TOKEN"
+      else
+        # A mint that fails is NOT a refusal: the launcher then evaluates fresh, with the same term
+        # switches, and says so on its own row. Loud, because a silent miss re-creates the split.
+        echo "lr-handoff: WARNING — could not mint the admission token; the relaunch will evaluate the gate fresh in the pane" >&2
+      fi
+    fi
+  else
+    echo "lr-handoff: WARNING — lr-lib.sh has no lr_capacity_probe_corrected; proceeding with NO pre-transplant capacity decision (the launcher will evaluate its own)" >&2
+  fi
+  return 0
+}
+if [[ $IN_PLACE -eq 1 && "${LRH_PRECHECK:-on}" != off ]]; then
+  lrh_precheck || exit $?
+fi
 
 # --- transplant ------------------------------------------------------------
 if [[ $NO_TRANSPLANT -ne 1 ]]; then
@@ -537,12 +661,22 @@ lrh_tmpdir() {
   { [[ -n "$d" ]] && [[ -d "$d" ]] && [[ -w "$d" ]]; } || d="/tmp"
   printf '%s' "${d%/}"
 }
+# THE LAUNCHER LIVES IN THE RUN'S OWN BUNDLE, NOT IN $TMPDIR (W2). Same hardening argument, better
+# directory: the bundle is under $HOME/.reso/limit-recover/<sid>/, created by this process, owned by
+# this uid and not world-writable — so the CWE-377/CWE-59 property the lrh_tmpdir resolver was
+# written for holds a fortiori. What changes is DURABILITY: this box wipes the per-uid temp dir at
+# boot, and the launcher is the one artifact a stranded recovery is relaunched from BY HAND, hours
+# or days later, from a path this script printed into a log. A manual fallback that evaporates at
+# the next reboot is not a fallback. It is also what makes the run dir derivable FROM the launcher
+# path, which is how handoff-fire's watcher learns where to read `relaunch.rc`.
+# (lrh_tmpdir survives for the recycle's stderr capture below, which genuinely is scratch.)
+#
 # MINT THE UNIQUE NAME FIRST, ADD `.sh` AFTER: BSD mktemp only substitutes a TRAILING `XXXXXX`, so
 # a `…-XXXXXX.sh` template yields that LITERAL constant name and every mint after the first dies
 # `File exists`. The suffix is kept because --print-only hands this path to `cursor` and to the
 # operator as the manual fallback. ${SID:0:8} is a readability prefix, never the entropy.
-LAUNCHER="$(mktemp "$(lrh_tmpdir)/lr-launch-${SID:0:8}-XXXXXX")" || {
-  echo "lr-handoff: could not mint a launch script in a secure temp dir" >&2; exit 1; }
+LAUNCHER="$(mktemp "$BUNDLE/lr-launch-${SID:0:8}-XXXXXX")" || {
+  echo "lr-handoff: could not mint a launch script in the run's bundle dir ($BUNDLE)" >&2; exit 1; }
 mv "$LAUNCHER" "$LAUNCHER.sh" && LAUNCHER="$LAUNCHER.sh"
 # The launcher is GENERATED BASH that is then EXECUTED (`write text "exec /bin/bash $LAUNCHER"`
 # in both osascript branches below, and by hand on the manual-fallback path) — so every field
@@ -583,24 +717,41 @@ FIRE_ARGV+=(--prompt "$INGEST_PROMPT")
 # The launcher restores the two env vars lr-fire-resume's spawn whitelist would otherwise lose
 # (q-relaunch-command.md § env): the nested-subagent depth bound and the SOURCE's task board. It is
 # run as `bash <launcher>` — never `exec bash` — by every path below, so the pane's shell survives.
+#
+# ══ THE EXPORT BLOCK IS A CLOSED LIST, AND THAT IS A SAFETY PROPERTY (W2) ═════════════════════
+# Everything exported here is inherited by lr-fire-resume, by the expect it runs, and — unless
+# explicitly unset on the spawn line — BY THE RECOVERED CLAUDE SESSION AND EVERY HOOK IT EVER RUNS,
+# for the whole life of that session. D1-safety R1 rates that FATAL, and it is why the first design
+# of this wave (an exported CC_ADMIT_NET_ZERO) was dropped outright: a per-OPERATION admission flag
+# turned into a per-SESSION policy nobody could see.
+#
+# So: exactly five LR_* variables, all %q-rendered, and ZERO CC_ADMIT_* ones. The mapping from LR_*
+# to CC_ADMIT_* happens INSIDE lr-fire-resume, call-scoped on the one gate invocation, and the spawn
+# line then `env -u`s all of them. The names are deliberately in this script's own namespace so a
+# stray copy of one can never be mistaken for a library setting.
+#   LR_RUN / LR_RUN_DIR  the run's bundle dir — where relaunch.rc and events.jsonl are written
+#   LR_ADMIT_TOKEN       this recovery's one-shot admission (absent ⇒ the launcher evaluates fresh)
+#   LR_SUBMIT_TOKEN      the run token W3 will look for in the TARGET transcript to prove SUBMITTED
+#   LR_LOAD_TERM         the term switch the driver's probe used, so both ends evaluate one gate
+LR_SUBMIT_TOKEN="run:${SID:0:8}:$TS:$(printf '%04x' $((RANDOM % 65536)))$(printf '%04x' $((RANDOM % 65536)))"
 cat > "$LAUNCHER" <<EOF
 #!/bin/bash
 # Resume the handed-off session $(printf '%q' "$SID") on account $(printf '%q' "$TARGET") with the ingest prompt.
 # Regenerable: bundle at $(printf '%q' "$BUNDLE")
 export CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH="\${CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH:-1}"
 ${SRC_TASK_LIST:+export CLAUDE_CODE_TASK_LIST_ID=$(printf '%q' "$SRC_TASK_LIST")}
+export LR_RUN=$(printf '%q' "$BUNDLE")
+export LR_RUN_DIR=$(printf '%q' "$BUNDLE")
+export LR_ADMIT_TOKEN=$(printf '%q' "$LRH_ADMIT_TOKEN")
+export LR_SUBMIT_TOKEN=$(printf '%q' "$LR_SUBMIT_TOKEN")
+export LR_LOAD_TERM=$(printf '%q' "${LR_LOAD_TERM:-off}")
 exec $(printf '%q ' "${FIRE_ARGV[@]}")
 EOF
 chmod +x "$LAUNCHER"
 
 # handoff-fire.sh — the ONE actuator for both the in-place recycle and the close-source retirement.
-lrh_hf_bin() {
-  local hf="${CC_HANDOFF_FIRE_BIN:-}"
-  [[ -n "$hf" ]] || hf="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/../handoff-fire.sh"
-  [[ -f "$hf" ]] || hf="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/handoff-fire.sh"
-  [[ -f "$hf" ]] || hf="$HOME/.claude/scripts/handoff-fire.sh"
-  printf '%s' "$hf"
-}
+# lrh_hf_bin is defined ABOVE, beside lrh_precheck, which is its first caller (W2): a function must
+# be defined before execution reaches its first use, and the pre-check runs before the transplant.
 
 # ── IN-PLACE (LIMIT_RECOVER_100P): the pane IS the continuation ──────────────────────────────────
 # Ordering is load-bearing: the transplant above ALREADY wrote the lock + tombstone, so at this point

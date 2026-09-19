@@ -56,8 +56,18 @@ setup() {
 @test "each site allocates through mktemp rather than a composed name" {
   grep -q 'mktemp "\$launch_dir/lr-poller-launch-' "$POLLER" \
     || { echo "poller no longer mints via mktemp"; false; }
-  grep -q 'mktemp "\$(lrh_tmpdir)/lr-launch-' "$LRH" \
-    || { echo "lr-handoff no longer mints via mktemp"; false; }
+  # W2 (2026-09-19): lr-handoff's launcher moved from the per-uid TEMP dir to the run's own BUNDLE
+  # ($HOME/.reso/limit-recover/<sid>/bundle-<ts>/), and this assertion is updated rather than
+  # relaxed. The property this suite owns is unchanged and still holds: allocation through mktemp
+  # with a TRAILING XXXXXX, in a directory this uid owns and no other uid can pre-create a name in.
+  # What changed is DURABILITY — the box wipes the temp dir at boot, and the launcher is the one
+  # artifact a stranded recovery is relaunched from by hand, hours later, from a path printed into
+  # a log. lrh_tmpdir still exists and is still pinned by the resolver case below; it now serves the
+  # recycle's scratch stderr capture, which genuinely is scratch.
+  grep -q 'mktemp "\$BUNDLE/lr-launch-' "$LRH" \
+    || { echo "lr-handoff no longer mints its launcher via mktemp in the run bundle"; false; }
+  grep -qE '^\s*BUNDLE="\$HOME/\.reso/limit-recover/' "$LRH" \
+    || { echo "the bundle root moved — re-check that the launcher's new home is still uid-owned"; false; }
   grep -q 'mktemp "\${TMPDIR:-/tmp}/handoff-recycle-cmd-' "$HF" \
     || { echo "handoff-fire cmdfile no longer mints via mktemp"; false; }
   grep -q 'mktemp "\${TMPDIR:-/tmp}/handoff-recycle-\$SID' "$HF" \

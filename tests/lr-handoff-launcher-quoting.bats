@@ -338,8 +338,16 @@ EOF
 parser_stub() { # $@ = the flags the fake live parser accepts
   { echo '#!/bin/bash'; echo 'case "$1" in'
     for f in "$@"; do echo "  $f) ;;"; done
-    echo 'esac'; } > "$HOME/.claude/scripts/limit-recover/lr-fire-resume.sh"
+    echo 'esac'
+    # W2: the preflight now also asserts that the LIVE pair can REDEEM this recovery's admission
+    # token — a live layer that predates the token would ignore the variable and re-gate the
+    # relaunch inside the pane. This stub is the "live layer is current" fixture, so it carries
+    # both markers; the case below that REFUSES on the token overwrites the library afterwards.
+    echo '# LR_ADMIT_TOKEN is read by the real script'
+  } > "$HOME/.claude/scripts/limit-recover/lr-fire-resume.sh"
   chmod +x "$HOME/.claude/scripts/limit-recover/lr-fire-resume.sh"
+  mkdir -p "$HOME/.claude/scripts/lib"
+  printf '#!/bin/bash\n_cc_admit_token_redeem() { return 1; }\n' > "$HOME/.claude/scripts/lib/capacity-admit.sh"
 }
 @test "live-parser preflight: a live lr-fire-resume missing a flag REFUSES, before any transplant" {
   unset LRH_LIVE_PARSER_CHECK
@@ -359,4 +367,177 @@ parser_stub() { # $@ = the flags the fake live parser accepts
   run gen "lrhq0014-0000-0000-0000-000000000014" "$BATS_TEST_TMPDIR/repo"
   [ "$status" -ne 5 ]
   [ "$(grep -c 'does not parse' <<<"$output")" = 0 ]
+}
+
+# ══ W2 — EVERY REFUSABLE READ BEFORE THE TRANSPLANT, AND A LAUNCHER THAT LEAKS NOTHING ═════════
+# THE ORDERING DEFECT (U02; D1-FT R5, D2-safety R2, D3-safety R3). `--in-place` moved the transcript
+# FIRST and discovered only afterwards that the recycle could not proceed: an operator draft in the
+# composer (the recycle's own gate, 180 s later), a pane not holding a claude, a session that died
+# on a network error rather than a limit, a teammate. Each of those is readable in ~1 s, and after
+# the transplant the source is a tombstoned husk whose only exit is a manual relaunch.
+#
+# RED AT 6a6f9a129, all four: lrh_precheck does not exist, so every one of them TRANSPLANTS —
+# `[ ! -e "$MOVED_LOCK" ]` fails with the lock and the tombstone both on disk.
+#
+# The fixture's discriminator is the LOCK and the TOMBSTONE, not a log line: they are what the real
+# lr-transplant.sh writes and what makes the step irreversible.
+
+lrh_inplace_setup() { # → stubs for the irreversible step, the registry row and the fire actuator
+  MOVED_LOCK="$BATS_TEST_TMPDIR/moved.lock"
+  MOVED_TOMB="$BATS_TEST_TMPDIR/moved.HANDOFF.json"
+  cat > "$HOME/.claude/scripts/limit-recover/lr-transplant.sh" <<SH
+#!/bin/bash
+# stands in for the ONE irreversible step: it writes the split-brain lock and the tombstone
+printf '{"sid":"x"}\n' > "$MOVED_LOCK"
+printf '{"handed_off_to":"x"}\n' > "$MOVED_TOMB"
+printf '{"target_transcript":"/x/y.jsonl"}\n'
+SH
+  chmod +x "$HOME/.claude/scripts/limit-recover/lr-transplant.sh"
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  export CC_PROJECTS_DIRS="$HOME/.claude/projects"
+  mkdir -p "$HOME/.claude/projects/-x-y"
+  # the capacity gate is pinned OFF: this suite's subject is ORDERING, and a live probe would make
+  # every case here depend on the desk's mood (test-hermeticity RULE 4).
+  export CC_ADMIT_GATE=off
+  export CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/admit"
+  export CC_ADMIT_IDL="$BATS_TEST_TMPDIR/idl.jsonl"
+}
+lrh_row() { # $1=sid — the registry row that binds pane 616 to it
+  printf '{"paneUUID":"616","session_id":"%s","pid":%d,"cwd":"%s"}\n' "$1" "$$" "$BATS_TEST_TMPDIR" \
+    > "$CC_REGISTRY_DIR/616.json"
+}
+lrh_tx() { # $1=sid $2=limit|network|teammate — the SOURCE transcript the precheck reads
+  local f="$HOME/.claude/projects/-x-y/$1.jsonl"
+  case "$2" in
+    limit)   printf '{"type":"assistant","timestamp":"2026-09-19T20:00:00.000Z","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit"}]}}\n' > "$f" ;;
+    network) printf '{"type":"assistant","timestamp":"2026-09-19T20:00:00.000Z","error":"server_error","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"API Error: Can'"'"'t reach the API server (ENOTFOUND)"}]}}\n' > "$f" ;;
+    teammate) printf '{"type":"user","agentName":"reviewer","message":{"role":"user","content":"x"}}\n' > "$f"
+              printf '{"type":"assistant","timestamp":"2026-09-19T20:00:00.000Z","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit"}]}}\n' >> "$f" ;;
+  esac
+}
+gen_inplace() { # $1=sid $2=cwd [$3=handoff-fire bin] → the REAL --in-place path, stubbed at its edges
+  local sid="$1" cwd="$2" hf="${3:-$REPO/scripts/handoff-fire.sh}"
+  env PATH="$STUBBIN:$PATH" CLAUDE_CONFIG_DIR="$HOME/.claude" \
+      CC_HANDOFF_FIRE_BIN="$hf" CC_FIRE_CAPACITY_GATE=off \
+      HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/sweep.json" \
+      CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-accounts" CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-" \
+      IT2_BIN="$BATS_TEST_TMPDIR/absent-it2" \
+      "$HANDOFF" --sid "$sid" --target next2 --cwd "$cwd" --launch --in-place --source-pane 616
+}
+stub_hf() { # $1=verdict line $2=rc → a handoff-fire whose PROBE answers as told, and records a fire
+  cat > "$BATS_TEST_TMPDIR/hf-stub.sh" <<SH
+#!/bin/bash
+case "\$1" in
+  --probe-recycle-preconditions) echo "$1"; exit $2 ;;
+  *) echo "STUB FIRE: \$*" >> "$BATS_TEST_TMPDIR/fired.log"; echo "lr-handoff stub recycled" >&2; exit 0 ;;
+esac
+SH
+  chmod +x "$BATS_TEST_TMPDIR/hf-stub.sh"
+  printf '%s' "$BATS_TEST_TMPDIR/hf-stub.sh"
+}
+
+@test "W2: a session that died on a NETWORK error is REFUSED before the transplant" {
+  lrh_inplace_setup
+  sid="lrhw0001-0000-4000-8000-000000000001"
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  lrh_row "$sid"; lrh_tx "$sid" network
+  run gen_inplace "$sid" "$BATS_TEST_TMPDIR/repo"
+  [ "$status" -eq 6 ] || { echo "$output"; false; }
+  [[ "$output" == *"REFUSED:not-limited"* ]] || { echo "$output"; false; }
+  [ ! -e "$MOVED_LOCK" ] || { echo "THE TRANSPLANT RAN — a husk over a session that was never limited"; false; }
+  [ ! -e "$MOVED_TOMB" ]
+}
+
+@test "W2: a TEAMMATE session is REFUSED before the transplant" {
+  lrh_inplace_setup
+  sid="lrhw0002-0000-4000-8000-000000000002"
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  lrh_row "$sid"; lrh_tx "$sid" teammate
+  run gen_inplace "$sid" "$BATS_TEST_TMPDIR/repo"
+  [ "$status" -eq 6 ] || { echo "$output"; false; }
+  [[ "$output" == *"REFUSED:teammate"* ]] || { echo "$output"; false; }
+  [ ! -e "$MOVED_LOCK" ] || { echo "THE TRANSPLANT RAN — a teammate's pane belongs to its lead"; false; }
+  [ ! -e "$MOVED_TOMB" ]
+}
+
+@test "W2: a pane whose state cannot be READ is REFUSED before the transplant (unknown is an abstention)" {
+  # No terminal to resolve the pane's tty, so pane_cc_state abstains — and an abstention must not
+  # admit a transplant. This drives the REAL handoff-fire verb, not a stub of it.
+  lrh_inplace_setup
+  sid="lrhw0003-0000-4000-8000-000000000003"
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  lrh_row "$sid"; lrh_tx "$sid" limit
+  run gen_inplace "$sid" "$BATS_TEST_TMPDIR/repo"
+  [ "$status" -eq 6 ] || { echo "$output"; false; }
+  [[ "$output" == *"REFUSED:pane:"* ]] || { echo "$output"; false; }
+  [ ! -e "$MOVED_LOCK" ] || { echo "THE TRANSPLANT RAN on a pane nobody could read"; false; }
+  [ ! -e "$MOVED_TOMB" ]
+}
+
+@test "W2: a HELD operator draft stops the recovery before the transplant, not 180s after it" {
+  # rc 3 is the HOLD channel — nothing is wrong, the recovery simply must not proceed yet. The
+  # stub stands in for the composer read itself (that read has its own cases against the real verb);
+  # what this pins is that lr-handoff treats a HOLD as pre-transplant, exactly like a REFUSAL.
+  lrh_inplace_setup
+  sid="lrhw0004-0000-4000-8000-000000000004"
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  lrh_row "$sid"; lrh_tx "$sid" limit
+  run gen_inplace "$sid" "$BATS_TEST_TMPDIR/repo" "$(stub_hf 'verdict: HELD:draft' 3)"
+  [ "$status" -eq 6 ] || { echo "$output"; false; }
+  [[ "$output" == *"HELD:draft"* ]] || { echo "$output"; false; }
+  [ ! -e "$MOVED_LOCK" ] || { echo "THE TRANSPLANT RAN over an operator's unsent draft"; false; }
+  [ ! -e "$MOVED_TOMB" ]
+  [ ! -e "$BATS_TEST_TMPDIR/fired.log" ] || { echo "the recycle was FIRED after a HOLD"; false; }
+}
+
+@test "W2 CONTROL: when every precondition passes, the transplant DOES run" {
+  # Without this the four cases above pass for a script that refuses everything.
+  lrh_inplace_setup
+  sid="lrhw0005-0000-4000-8000-000000000005"
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  lrh_row "$sid"; lrh_tx "$sid" limit
+  run gen_inplace "$sid" "$BATS_TEST_TMPDIR/repo" "$(stub_hf 'verdict: OK' 0)"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -e "$MOVED_LOCK" ] || { echo "the transplant did NOT run on a clean precheck: $output"; false; }
+  [ -e "$BATS_TEST_TMPDIR/fired.log" ] || { echo "the recycle was never fired: $output"; false; }
+}
+
+@test "W2: the launcher exports exactly the five LR_* variables and ZERO CC_ADMIT_*" {
+  # D1-safety R1, FATAL: anything exported here is inherited by the recovered session and every hook
+  # it runs for the rest of its life. The mapping to CC_ADMIT_* happens call-scoped inside
+  # lr-fire-resume, and the spawn line unsets all of it.
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  run gen "lrhw0006-0000-4000-8000-000000000006" "$BATS_TEST_TMPDIR/repo"
+  [ "$status" -eq 0 ]
+  LAUNCHER="$(launcher_from_output)"
+  [ -n "$LAUNCHER" ] && [ -f "$LAUNCHER" ]
+  for v in LR_RUN LR_RUN_DIR LR_ADMIT_TOKEN LR_SUBMIT_TOKEN LR_LOAD_TERM; do
+    grep -qE "^export $v=" "$LAUNCHER" || { echo "missing export $v:"; cat "$LAUNCHER"; false; }
+  done
+  # the closed half of the list: no admission variable may reach the session's environment
+  ! grep -q 'CC_ADMIT' "$LAUNCHER" || { echo "a CC_ADMIT_* export LEAKS into the recovered session:"; cat "$LAUNCHER"; false; }
+  # and the launcher is DURABLE — in the run's bundle, not a temp dir this box wipes at boot
+  [[ "$LAUNCHER" == *"/.reso/limit-recover/"* ]] || { echo "launcher is not in the bundle: $LAUNCHER"; false; }
+}
+
+@test "W2: a LIVE capacity-admit that cannot redeem a token REFUSES (5) before the transplant" {
+  # The launcher carries an admission token; a live layer that predates it would ignore the variable
+  # and re-gate the relaunch inside the pane — the split that made four husks. Same position as the
+  # parser preflight: before the first irreversible step.
+  unset LRH_LIVE_PARSER_CHECK
+  lrh_inplace_setup
+  parser_stub --branch --model --effort --permission-mode --prompt   # knows every flag…
+  # …and then the LIBRARY is rolled back to one with no token support. That single variable is the
+  # whole subject: the parser preflight above it passes, and this still refuses.
+  # The rollback text must NOT NAME the function it lacks: the check is a grep, and a comment
+  # mentioning the symbol satisfies it (this repo's own prose-match hole — a lint convicting, or
+  # here ACQUITTING, on its own documentation).
+  printf '#!/bin/bash\n# an OLD library, before the admission token existed\n' > "$HOME/.claude/scripts/lib/capacity-admit.sh"
+  sid="lrhw0007-0000-4000-8000-000000000007"
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  lrh_row "$sid"; lrh_tx "$sid" limit
+  run gen_inplace "$sid" "$BATS_TEST_TMPDIR/repo" "$(stub_hf 'verdict: OK' 0)"
+  [ "$status" -eq 5 ] || { echo "$output"; false; }
+  [[ "$output" == *"cannot redeem this recovery's token"* ]] || { echo "$output"; false; }
+  [ ! -e "$MOVED_LOCK" ]
 }
