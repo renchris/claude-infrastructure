@@ -786,6 +786,7 @@ render_block() {
 
   # ── state line from the un-fakeable ledger (cwd repo; skipped cleanly outside a repo) ──
   local state="" wrap="" led="" branch ahead shas dirty_n gate remainder parts custody dact
+  local resident resident_names
   RUNG="?"
   if [ -n "$cwd" ] && [ -d "$cwd" ]; then
     wrap="${WRAP_LEDGER_BIN:-}"
@@ -884,13 +885,32 @@ render_block() {
         # decision rejected (await-with-armed-watcher is a LEGITIMATE end-of-turn). The custody
         # cause is rendered when the block renders on its own terms, never as a new reason to fire.
         custody="$(lf CUSTODY_OPEN)"; case "$custody" in ''|*[!0-9]*) custody=0 ;; esac
+        # § RESIDENT MEMBERS (W3 / RC-2) — the SECOND 🔧 cause invisible in this cwd's git state,
+        # and it arrives here exactly as the custody one does: DIRTY_N=0, GATE fresh, REMAINDER=0,
+        # every other `parts` term empty. The count is read through the same non-numeric guard as
+        # custody's, deliberately: BSD `wc -l` pads to width 8 and a naive digit test zeroes a TRUE
+        # count (docs/lessons/, a-digit-guard-destroys-the-value-it-is-hardening).
+        #
+        # THE NAMES ARE THE TERM, NOT THE COUNT. A shutdown_request is addressed to a name, so
+        # "2 teammate process(es)" tells the operator the kind and not the idea (§ the close
+        # message S6 — named, never counted). The count is kept only as the plural marker.
+        resident="$(lf RESIDENT_MINE)"; case "$resident" in ''|*[!0-9]*) resident=0 ;; esac
+        resident_names="$(lf RESIDENT_MINE_NAMES)"
         parts=""
-        [ "$custody" != "0" ] && parts="${custody} dispatched session(s) NOT returned"
+        [ "$resident" != "0" ] && parts="${resident} teammate process(es) you started STILL RUNNING: ${resident_names:-unnamed}"
+        [ "$custody" != "0" ] && parts="${parts:+$parts · }${custody} dispatched session(s) NOT returned"
         [ "${dirty_n:-0}" != "0" ] && parts="${parts:+$parts · }${dirty_n} file(s) uncommitted"
         [ "$gate" = "stale" ] && parts="${parts:+$parts · }gate stale on HEAD"
         [ "${remainder:-0}" != "0" ] && parts="${parts:+$parts · }${remainder} DoD item(s) open"
         state="🔧 in progress — ${parts:-loose ends}"
-        [ "$custody" != "0" ] && state="${state} → cc-custody list --open --cwd ." ;;
+        # ONE drivable action, and residents take it when they are present: the lead is the only
+        # party the vendor lets end a member, and the sentence has to say what to send. It names
+        # no command to RUN because there is none — this is a check, not an actuator.
+        if [ "$resident" != "0" ]; then
+          state="${state} → send each a shutdown_request (TaskStop after ~60s); clears when the process is gone"
+        elif [ "$custody" != "0" ]; then
+          state="${state} → cc-custody list --open --cwd ."
+        fi ;;
       "✅")
         # WRITE TURN + ✅ ⇒ say SAFE TO CLOSE, in those words. "✅ live on trunk" is a fact about
         # the repo; the operator's standing question is a fact about THEM — "is there anything left
