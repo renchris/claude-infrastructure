@@ -252,6 +252,34 @@ to what it was actually protecting: the payload sent is one bounded closing mess
 itself just wrote, capped mechanically at `CC_JEV_MAX_STATE_B`, with no transcript, path or
 history attached.
 
+🚨 **CORRECTION, 2026-09-19, measured — §C above is RIGHT about the mechanism and WRONG about
+availability, and the original §4 reading was closer to the truth.** The first real Jev calls ever
+made from this machine returned, verbatim, HTTP 403:
+
+> Zero Data Retention (ZDR) is only available for Pro and Enterprise plans. Current plan: **hobby**.
+
+So ZDR *is* a per-request flag and it *does* fail closed — both halves of §C's mechanism held, and
+the fail-closed behaviour is exactly what produced this refusal instead of a silent unprotected
+send. But it is **plan-gated**, which is what §4's "enterprise-gated ZDR" was reaching for. §C's
+conclusion — that the Gateway route materially weakens the privacy refusal — **does not hold on
+this account**. It would hold on Pro.
+
+**Everything else works.** With `zeroDataRetention` omitted the identical call succeeds:
+`P(build succeeded) = 0.01` on *"The build failed with exit code 1."* — correct, and inside the
+p ≥ 0.98 tail this whole design is built around. Key (minted, capped $5/mo, in `agent-secrets`),
+egress allowlist, model id, route, answer shape and calibration are all verified. ZDR is the sole
+blocker.
+
+**There is no middle ground at the call level:** `@ai-sdk/gateway` 4.0.87 exposes exactly one
+privacy option, `zeroDataRetention?: boolean`. No per-request no-training flag exists.
+
+That makes it a value call rather than an engineering one, and it is filed as decision packet
+`c3752f5fca96` at 80% conviction — the agent's recommendation is to buy the MEASUREMENT first
+(one bounded, operator-gated pilot run) rather than to spend either money or a standing data flow
+on a capability with zero measured value on our corpus. What the arm would send is only `$MSG`,
+the model's own closing message, capped at 24 KB — never a transcript, the mailbox, or the `msg`
+corpus.
+
 ## D. §5's gap is now instrumented — `cc-jev pilot`
 
 §5: *"Nobody has ever scored Jev against real labels. That is the state of the evidence."* Still
