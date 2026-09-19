@@ -209,3 +209,41 @@ ps_stub() { # $@ = literal `pid ppid command` lines the fake ps prints
   [ "$status" -eq 0 ]
   [ "$(printf '%s\n' "$output" | grep -c .)" = 3 ] || { printf '%s\n' "$output" >&2; false; }
 }
+
+# ── the run's state log (W2, LIMIT_RECOVER_100P) ──────────────────────────────────────────────────
+# Append-only, one ≤1 KB jq-encoded line per transition, in the run's OWN bundle dir. The properties
+# that matter are the ones a silent store cannot have: a failed append is LOUD (D3-FT R10 refused the
+# `|| true` form), the record is bounded at the WRITER so O_APPEND stays atomic (repo lesson
+# append-atomicity-ends-at-the-stdio-buffer), and the last line IS the state.
+
+@test "state: an append is one jq-encoded line, and the last one is the current state" {
+  run="$BATS_TEST_TMPDIR/bundle-1"
+  lr_state_append "$run" targeted rank "picked next3"
+  lr_state_append "$run" admitted gate "token minted"
+  [ "$(wc -l < "$run/events.jsonl" | tr -d ' ')" = 2 ]
+  run jq -rs 'length' "$run/events.jsonl"           # slurpable: no malformed line
+  [ "$output" = "2" ]
+  [ "$(lr_state_current "$run")" = "admitted" ]
+  [ "$(jq -r '.stage' < <(tail -1 "$run/events.jsonl"))" = "gate" ]
+  [ -n "$(jq -r '.writer' < <(tail -1 "$run/events.jsonl"))" ]
+}
+
+@test "state: a record is BOUNDED at the writer, so a concurrent append cannot splice into it" {
+  run="$BATS_TEST_TMPDIR/bundle-2"
+  big="$(head -c 4000 /dev/zero | tr '\0' 'x')"
+  lr_state_append "$run" FAILED gate "$big"
+  [ "$(wc -l < "$run/events.jsonl" | tr -d ' ')" = 1 ]
+  [ "$(wc -c < "$run/events.jsonl" | tr -d ' ')" -le 1024 ] \
+    || { wc -c < "$run/events.jsonl"; echo "a record over the stdio buffer is no longer an atomic append"; false; }
+}
+
+@test "state: a failed append is LOUD and non-zero — never a silent drop" {
+  # The store is unwritable: the run dir cannot be created. A `|| true` here would report success
+  # over a run whose whole state log is missing.
+  blocked="$BATS_TEST_TMPDIR/blocked"; : > "$blocked"      # a FILE where the dir must be
+  run lr_state_append "$blocked/bundle" FAILED gate "x"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"NOT recorded"* ]] || { echo "$output"; false; }
+  run lr_state_current "$blocked/bundle"
+  [ "$status" -eq 1 ]                                # a run with no log has no state, and says so
+}

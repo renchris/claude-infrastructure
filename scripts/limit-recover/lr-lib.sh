@@ -246,6 +246,153 @@ lr_registry_live_rows() { # $1=sid → rows on stdout; rc 0 when at least one is
   [ "$n" -gt 0 ]
 }
 
+# ══ THE CORRECTED CAPACITY PROBE — ONE function, two callers (W2, 2026-09-19) ══════════════════
+# Lifted VERBATIM out of lr-fleet.sh's lf_capacity_wait (226b73888) because a second caller appeared:
+# lr-handoff's pre-transplant check. Two spellings of one probe is how the fleet and the launcher
+# came to measure different gates in the first place (U05 §3.3) — the defect this whole wave is
+# about — so the probe lives HERE and both callers take it.
+#
+# ── THE PHANTOM-ACTIVE CORRECTION (2026-09-19) — why a recovery could never be admitted ─────────
+# A usage-limit kill ends the turn WITHOUT running the Stop hook, so hooks/session-beat.sh never
+# writes the `stop` beat and the session's `kind:"prompt"` beat freezes on disk. Its pid stays alive
+# (the TUI is sitting at its prompt), so cc_sp_active's liveness leg — which correctly discards a
+# DEAD session's frozen beat — has nothing to discard, and the blocked session is counted mid-turn
+# forever. spawn-presence.sh's own header calls this shape "a gate that tightens monotonically on
+# its own accidents"; the limit kill is the door its pid check cannot close.
+#
+# MEASURED 2026-09-19: eight panes blocked on one account's 5-hour limit held frozen `prompt` beats
+# aged 2360-4168 s with live pids. cc_sp_active read 12 against a ceiling of 8, so EVERY
+# `lr-fleet --recover` attempt was refused for its full 600 s budget. The census inflated BY the
+# blocked sessions was gating the recovery OF those blocked sessions.
+#
+# DIRECTION: this only ever SUBTRACTS sessions proven blocked — a live pid whose beat is a frozen
+# `prompt` AND whose last assistant word is a usage-limit error. A session mid-retry after a network
+# error is NOT subtracted (its turn may genuinely still be running, 93-101 min measured), an
+# unreadable transcript is NOT subtracted, and the ceiling itself is untouched.
+lr_phantom_actives() { # → count of live sessions whose mid-turn beat is a usage-limit corpse
+  local dir b sid pid kind cfg tx n=0 rest ekind
+  dir="${CC_BEAT_DIR:-$HOME/.claude/cc-beats}"
+  [ -d "$dir" ] || { printf '0'; return 0; }
+  for b in "$dir"/*.json; do
+    [ -f "$b" ] || continue
+    kind="$(jq -r 'if type=="object" then (.kind // "") else "" end' "$b" 2>/dev/null)" || continue
+    [ "$kind" = prompt ] || continue
+    pid="$(jq -r 'if type=="object" then (.pid // "") else "" end' "$b" 2>/dev/null)"
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$pid" 2>/dev/null || continue          # dead ⇒ the census already discards it
+    sid="$(jq -r 'if type=="object" then (.sid // "") else "" end' "$b" 2>/dev/null)"
+    case "$sid" in ''|*[!A-Za-z0-9-]*) continue ;; esac
+    while IFS= read -r cfg; do
+      [ -n "$cfg" ] || continue
+      for tx in "$cfg"/projects/*/"$sid".jsonl; do
+        [ -f "$tx" ] || continue
+        IFS=$'	' read -r _ _ ekind rest <<<"$(lr_last_api_error "$tx" 2>/dev/null)" || ekind=""
+        [ "$ekind" = limit ] && { n=$((n + 1)); break 3; }
+      done
+    done <<EOF
+$(lr_config_dirs)
+EOF
+  done
+  printf '%s' "$n"
+}
+
+# ONE evaluation, no waiting — the WAIT belongs to the caller (the fleet loops on it; lr-handoff
+# takes a single reading and parks). rc 0 = would admit, 9 = would refuse (CC_ADMIT_REASON set).
+#
+# THE LOAD TERM IS OFF, CALL-SCOPED. Not a weaker gate: it is the term whose INPUT is wrong
+# (capacity-admit.sh:149-156 — an additional RESIDENT session moves load1 by ~0, so no ceiling value
+# can make it correct). It is already OFF on the operator's own fire (handoff-fire.sh:6075) and on
+# the Agent tool (agent-teams-enforce.sh:229); leaving it ON here put the retracted term on exactly
+# the unattended path whose own header calls a standing refusal an outage. MEASURED 2026-09-19: 10
+# of 10 lr-fire-resume refusals were term=load, and at 17:52:54 the box read 33.33 GB reclaimable,
+# 3.18% segments and 2 active while this term refused at 4.15/core. An explicit CC_ADMIT_LOAD_TERM=on
+# restores the old behaviour verbatim, ceiling and all.
+#
+# A LIBRARY THAT CANNOT BE REACHED IS LOUD, NEVER SILENT: a recovery must not be blocked because a
+# telemetry library is missing, and it must never proceed without saying that it is ungated.
+lr_capacity_probe_corrected() { # $1=caller $2=what → 0 would-admit / 9 would-refuse
+  local caller="${1:-lr-recover}" what="${2:-recovery}" raw ph corrected rc=0
+  command -v cc_capacity_probe >/dev/null 2>&1 || {
+    echo "${caller}: capacity probe unavailable (scripts/lib/capacity-admit.sh not sourced) — proceeding UNGATED" >&2; return 0; }
+  # Left UNSET on any unreadable leg, so the probe then sees exactly what it saw before this existed.
+  unset CC_SP_ACTIVE_OVERRIDE
+  if [ "${LR_FLEET_PHANTOM_CORRECTION:-on}" != off ] && command -v cc_sp_active >/dev/null 2>&1; then
+    raw="$(cc_sp_active 2>/dev/null || true)"
+    ph="$(lr_phantom_actives 2>/dev/null || true)"
+    case "${raw:-x}${ph:-x}" in
+      *[!0-9]*) : ;;
+      *) if [ "$ph" -gt 0 ]; then
+           corrected=$(( raw - ph )); [ "$corrected" -lt 0 ] && corrected=0
+           export CC_SP_ACTIVE_OVERRIDE="$corrected"
+           echo "${caller}: active census ${raw} includes ${ph} limit-corpse beat(s) — probing at ${corrected}" >&2
+         fi ;;
+    esac
+  fi
+  CC_ADMIT_LOAD_TERM="${CC_ADMIT_LOAD_TERM:-off}" cc_capacity_probe "$caller" "$what" || rc=$?
+  unset CC_SP_ACTIVE_OVERRIDE
+  return "$rc"
+}
+
+# ══ THE RUN'S STATE — append-only, one line per transition (W2, 2026-09-19) ═════════════════════
+# The store is the run's OWN bundle dir, which the chain already mints, so there is no parallel tree
+# to keep in step (D2-FT #16 refused an `index.jsonl` upsert: an unlocked read-modify-write loses
+# updates). Readers compute the state as the LAST line; a terminal line is sticky against a later
+# non-terminal one from a stale writer.
+#
+# NO `|| true` ANYWHERE ON THE WRITE (D3-FT R10). A failed append is reported on stderr and returns
+# non-zero: a state log that silently drops lines is worse than none, because its silence reads as
+# "nothing happened". And every field is jq-encoded — ONE malformed line aborts a `jq -rs` slurp,
+# which then reads as "no records" (the same invariant capacity-admit's emitter keeps).
+#
+# ≤ 1 KB PER RECORD, ENFORCED AT THE WRITER. O_APPEND is atomic only up to the stdio buffer, so a
+# record longer than it goes out as several write() calls and a concurrent appender splices into the
+# middle of it (repo lesson: append-atomicity-ends-at-the-stdio-buffer). The detail is truncated
+# here rather than trusted to be short.
+#
+# THE MUTEX IS A BELT, NOT THE GUARANTEE: the size cap is what makes the append atomic. The lock is
+# bounded (2 s) and STOLEN when it is older than that, because a crashed writer must not be able to
+# silence every later transition of the run.
+lr_state_append() { # $1=run dir $2=state $3=stage $4=detail → 0 written / 1 LOUD failure
+  local run="${1:-}" state="${2:-}" stage="${3:-}" detail="${4:-}" lock f n=0
+  [ -n "$run" ] || { echo "lr_state_append: no run dir — state '$state' NOT recorded" >&2; return 1; }
+  [ -n "$state" ] || { echo "lr_state_append: no state — nothing recorded for $run" >&2; return 1; }
+  command -v jq >/dev/null 2>&1 || { echo "lr_state_append: jq is not on PATH — state '$state' NOT recorded (a raw append would risk a malformed line)" >&2; return 1; }
+  mkdir -p "$run" 2>/dev/null || { echo "lr_state_append: cannot create $run — state '$state' NOT recorded" >&2; return 1; }
+  detail="$(printf '%s' "$detail" | cut -c1-600)"
+  f="$run/events.jsonl"
+  lock="$run/.events.lock"
+  while ! mkdir "$lock" 2>/dev/null; do
+    n=$((n + 1))
+    if [ "$n" -ge 20 ]; then
+      echo "lr_state_append: $lock held for >2s — stealing it (a crashed writer must not silence a run)" >&2
+      rm -rf "$lock" 2>/dev/null || true
+      mkdir "$lock" 2>/dev/null || break
+      break
+    fi
+    sleep 0.1
+  done
+  if ! jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg run "$run" --arg st "$state" \
+            --arg stg "$stage" --arg d "$detail" --arg w "${0##*/}:$$" --arg a "${LR_ATTEMPT:-1}" \
+            '{ts:$ts,run:$run,state:$st,stage:$stg,detail:$d,writer:$w,attempt:$a}' >> "$f" 2>/dev/null; then
+    rmdir "$lock" 2>/dev/null || true
+    echo "lr_state_append: FAILED to append '$state' to $f — the run's state log is incomplete" >&2
+    return 1
+  fi
+  rmdir "$lock" 2>/dev/null || true
+  return 0
+}
+
+lr_state_current() { # $1=run dir → the last recorded state on stdout; rc 1 when the run has none
+  local run="${1:-}" f last
+  [ -n "$run" ] || return 1
+  f="$run/events.jsonl"
+  [ -s "$f" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  last="$(tail -1 "$f" 2>/dev/null | jq -r '.state // empty' 2>/dev/null)" || return 1
+  [ -n "$last" ] || return 1
+  printf '%s' "$last"
+}
+
 lr_resume_procs() { # $1=sid → pids of `--resume <sid>` processes (the argv census), one per line; rc 0 when any
   local sid="${1:-}" out
   [ -n "$sid" ] || return 1
