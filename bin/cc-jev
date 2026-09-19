@@ -42,8 +42,9 @@ ROOT="$(cd -P "$(dirname "$_self")/.." && pwd)"
 die() { printf '%s\n' "$*" >&2; exit 2; }
 
 cmd_status() {
-  local key deps node_ok arm
-  key=$([ -n "${AI_GATEWAY_API_KEY:-}" ] && echo yes || echo "NO")
+  local key deps node_ok arm src
+  src="$(jev_secret_source)"
+  key=$([ "$src" = none ] && echo "NO" || echo "yes (via $src)")
   deps=$([ -d "$ROOT/node_modules/ai" ] && echo yes || echo "NO")
   node_ok=$(command -v node >/dev/null && node --version || echo "NO")
   arm=$([ "${CC_JEV:-1}" = "0" ] && echo "off (CC_JEV=0)" || echo on)
@@ -56,6 +57,19 @@ cmd_status() {
   printf 'threshold   P(true) >= %s\n' "$CC_JEV_MIN_P"
   printf 'timeout     %s ms (maxRetries 0)\n' "$CC_JEV_TIMEOUT_MS"
   printf 'ZDR         %s\n' "$([ "${CC_JEV_ZDR:-1}" = 0 ] && echo OFF || echo "on, fails closed")"
+  # EGRESS — checked by NAME, never inferred from a failed call. `agent-secrets run` starts a
+  # CONNECT proxy whenever this file exists, and a host missing from it is blocked outright; at
+  # runtime that is indistinguishable from a network blip, so it has to be said here or it gets
+  # rediscovered the hard way. Reported, never written: an allowlist is an authorisation
+  # boundary and belongs to the operator.
+  if [ "$src" = "agent-secrets" ] && [ -f "$CC_JEV_EGRESS_ALLOW" ]; then
+    if grep -qF "$CC_JEV_GATEWAY_HOST" "$CC_JEV_EGRESS_ALLOW" 2>/dev/null; then
+      printf 'egress      %s allowlisted\n' "$CC_JEV_GATEWAY_HOST"
+    else
+      printf 'egress      🚨 %s NOT in %s — every call will be BLOCKED by the proxy\n' \
+             "$CC_JEV_GATEWAY_HOST" "$CC_JEV_EGRESS_ALLOW"
+    fi
+  fi
   echo
   if jev_available; then
     echo "ENABLED — the semantic arm in anti-deference-nudge.sh is live."
@@ -63,11 +77,13 @@ cmd_status() {
   else
     echo "DISABLED — every consumer falls through to today's behaviour. Nothing is degraded."
     [ "$deps" = "NO" ] && echo "  to fix deps: (cd $ROOT && npm install)"
-    [ "$key" = "NO" ] && cat <<'EOF'
-  to fix the key: create one at https://vercel.com/dashboard  ->  AI Gateway  ->  API Keys
-                  then export AI_GATEWAY_API_KEY=vck_...  in your shell profile.
-                  Jev is free on the Gateway until 2026-09-25.
-  This command deliberately does NOT write the key anywhere for you.
+    [ "$src" = none ] && cat <<'EOF'
+  to fix the key — in YOUR terminal, not through an agent:
+      1. create one at https://vercel.com/dashboard  ->  AI Gateway  ->  API Keys
+      2. agent-secrets add AI_GATEWAY_API_KEY      (paste at its prompt; the value never
+                                                    touches a transcript, a profile or argv)
+  Jev is free on the Gateway until 2026-09-25.
+  This command deliberately does NOT write the key, or any allowlist, for you.
 EOF
   fi
 }

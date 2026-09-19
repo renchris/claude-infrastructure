@@ -58,10 +58,43 @@ CC_JEV_LIB_ROOT="${CC_JEV_LIB_ROOT:-$(_jev_resolve_root)}"
 : "${CC_JEV_TIMEOUT_MS:=1500}"
 : "${CC_JEV_MAX_STATE_B:=24000}"   # well under Jev's 32k-TOKEN state ceiling; bytes are the cheap bound
 
-# jev_available — cheap, no fork of node. Answers "would a call have any chance of succeeding".
+# ── WHERE THE KEY COMES FROM: INJECTED, NEVER EXPORTED ───────────────────────────────────────
+# This machine runs `agent-secrets` (sops + age, names-only). Its golden rule 3 is "to use a
+# secret, inject it — don't read it", and an `export AI_GATEWAY_API_KEY=…` in a shell profile is
+# precisely the plaintext-on-disk leak that tool exists to prevent. So there are two paths, in
+# this order:
+#   1. the variable is ALREADY in our environment  → use it, fork nothing extra (the fast path,
+#      and what a session launched through ~/bin/claude-agent gets for free);
+#   2. otherwise, if an agent-secrets store exists → run evaluate.mjs under
+#      `agent-secrets run --`, which decrypts into the CHILD's environment for that run only and
+#      dies with it. Measured cost of the wrapper on this box: ~230 ms.
+# If neither holds, jev_available is false and every consumer falls through to today's behaviour.
+#
+# 🚨 EGRESS. `agent-secrets run` starts a loopback CONNECT proxy whenever
+# ~/.config/secrets/egress.allow exists, and sets the child's HTTPS_PROXY. A host missing from
+# that file is BLOCKED — which would surface here as a bare `http` abstain and look like a
+# network blip forever. `cc-jev status` checks the file by name and says so outright rather than
+# leaving it to be rediscovered. Adding a host to it is an AUTHORISATION change and is the
+# operator's alone; nothing here writes it.
+CC_JEV_EGRESS_ALLOW="${CC_JEV_EGRESS_ALLOW:-$HOME/.config/secrets/egress.allow}"
+CC_JEV_GATEWAY_HOST="${CC_JEV_GATEWAY_HOST:-ai-gateway.vercel.sh}"
+
+# jev_secret_source — env | agent-secrets | none. Computed once per process; a hook is one process.
+jev_secret_source() {
+  if [ -n "${_JEV_SRC:-}" ]; then printf '%s' "$_JEV_SRC"; return 0; fi
+  # Quoted literals: bare `_JEV_SRC=env` reads as a command substitution to shellcheck (SC2209),
+  # and `env` really is a binary on PATH — the one spelling where that warning is not pedantry.
+  if [ -n "${AI_GATEWAY_API_KEY:-}" ]; then _JEV_SRC='env'
+  elif command -v agent-secrets >/dev/null 2>&1 \
+       && agent-secrets list 2>/dev/null | grep -q 'AI_GATEWAY_API_KEY'; then _JEV_SRC='agent-secrets'
+  else _JEV_SRC='none'; fi
+  printf '%s' "$_JEV_SRC"
+}
+
+# jev_available — cheap. Answers "would a call have any chance of succeeding".
 jev_available() {
   [ "${CC_JEV:-1}" != "0" ] || return 1
-  [ -n "${AI_GATEWAY_API_KEY:-}" ] || return 1
+  [ "$(jev_secret_source)" != "none" ] || return 1
   [ -f "$CC_JEV_LIB_ROOT/scripts/jev/evaluate.mjs" ] || return 1
   [ -d "$CC_JEV_LIB_ROOT/node_modules/ai" ] || return 1
   command -v node >/dev/null 2>&1 || return 1
@@ -87,8 +120,15 @@ jev_ask() {
   # No `2>/dev/null` on the node call's stdout path: a suppressed stderr turns a failed command
   # into a clean zero (`suppressed-stderr-turns-a-failed-command-into-a-zero`). stderr goes to
   # the hook's own stderr, where the harness records it; only stdout is consumed.
-  out="$(printf '%s' "$spec" | CC_JEV_TIMEOUT_MS="$CC_JEV_TIMEOUT_MS" \
-        node "$CC_JEV_LIB_ROOT/scripts/jev/evaluate.mjs")"
+  if [ "$(jev_secret_source)" = "agent-secrets" ]; then
+    # `run --` decrypts into THIS child only. The value never lands in our environment, in a
+    # file, or in a transcript — which is the whole point of routing through the store.
+    out="$(printf '%s' "$spec" | CC_JEV_TIMEOUT_MS="$CC_JEV_TIMEOUT_MS" \
+          agent-secrets run -- node "$CC_JEV_LIB_ROOT/scripts/jev/evaluate.mjs")"
+  else
+    out="$(printf '%s' "$spec" | CC_JEV_TIMEOUT_MS="$CC_JEV_TIMEOUT_MS" \
+          node "$CC_JEV_LIB_ROOT/scripts/jev/evaluate.mjs")"
+  fi
   rc=$?
   # An empty capture is NOT "it printed nothing" — it is a killed or crashed child, and a
   # consumer that jq's it would read `null` and could mistake that for a verdict
