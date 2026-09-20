@@ -333,19 +333,62 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
   done
 }
 
-@test "27 BASIS PARITY — capacity_gate's vocabulary is a subset of capacity-admit's" {
-  # §9.5.1: "split on `basis` before believing any ratio computed here." That instruction only
-  # works if one split spans both gates. capacity-admit adds `headroom-only` and `budget-expired`;
-  # it may never DROP one of the originals, or a cross-gate query silently loses a population.
+@test "27 BASIS PARITY — capacity_gate's EMITTED vocabulary is a subset of capacity-admit's" {
+  # §9.5.1: "split on `basis` before believing any ratio computed here." That instruction only works
+  # if ONE split spans both gates. capacity-admit adds `headroom-only`, `budget-expired`, `probe`,
+  # `token` and `token-stale`; adding is the legal direction. It may never DROP one capacity_gate
+  # emits, or a cross-gate query silently loses a population.
   #
-  # `absent` joined the list on 2026-08-07 and is the one no gate can emit for itself — it means the
-  # LIBRARY was unreachable, so a caller writes it (this hook, and capacity_gate since the terms
-  # moved there). It has to be in the shared vocabulary for the same reason as the rest: an ungated
-  # window that reads back as a plain admit is the §9.5.1 population defect exactly.
-  for b in measured load-only fail-open gate-off absent; do
-    grep -q "emit_gate_admit capacity $b" "$HF" || grep -q "$b" "$HF"
-    grep -q "$b" "$LIB" || { echo "basis '$b' exists in capacity_gate but NOT in capacity-admit"; false; }
-  done
+  # THIS CASE USED TO GREP FIVE LITERAL STRINGS ANYWHERE IN EACH FILE, comments included — and both
+  # files are mostly comments. Measured 2026-09-19 (W2FA E4): renaming all nine `fail-open` basis
+  # VALUES in the library to `failopen` left this case GREEN, because the header prose still spelled
+  # `fail-open`. Worse, its `absent` leg had NEVER been an assertion about the library at all — the
+  # library emits no `absent` basis and never could, so that leg was passing on a comment for its
+  # whole life. Both sets are now extracted from CALL SITES — the 3rd word of
+  # `_cc_admit_emit <verdict> …` and the 3rd word of `emit_gate_admit capacity …`, with comment
+  # lines excluded by the `^[^#]*` anchor — so a value that exists only in prose is no longer a
+  # value, and the exemptions below have to be stated instead of accidentally satisfied.
+  local admit_set gate_set missing
+  admit_set="$(grep -oE '^[^#]*_cc_admit_emit[[:space:]]+(admit|refuse)[[:space:]]+[A-Za-z0-9_-]+' "$LIB" \
+                 | sed -E 's/.*(admit|refuse)[[:space:]]+//' | sort -u)"
+  gate_set="$(grep -oE '^[^#]*emit_gate_admit[[:space:]]+capacity[[:space:]]+[A-Za-z0-9_-]+' "$HF" \
+                 | sed -E 's/.*capacity[[:space:]]+//' | sort -u)"
+  # NOT VACUOUS: two EMPTY sets are a subset of each other, so a broken extractor is exactly how
+  # this case would go on passing over a library whose vocabulary had been renamed wholesale — the
+  # failure it is being rewritten to stop. Each extractor is therefore pinned to a value that must
+  # be in its output on any tree where these two gates exist at all.
+  [ -n "$admit_set" ] || { echo "no basis values extracted from the LIBRARY — the extractor is broken"; false; }
+  [ -n "$gate_set" ] || { echo "no basis values extracted from capacity_gate — the extractor is broken"; false; }
+  printf '%s\n' "$admit_set" | grep -x measured >/dev/null \
+    || { echo "the library's extracted set has no 'measured': $admit_set"; false; }
+  printf '%s\n' "$gate_set" | grep -x measured >/dev/null \
+    || { echo "capacity_gate's extracted set has no 'measured': $gate_set"; false; }
+
+  # TWO EXEMPTIONS, BOTH NAMED AND BOTH MEASURED. An exemption list is only honest while it is short
+  # and every line says why:
+  #   absent              NO gate can emit it for itself — it means the LIBRARY was unreachable, so
+  #                       a CALLER writes it (the Agent hook, and capacity_gate since the terms
+  #                       moved). It belongs in the shared vocabulary and cannot be in this set.
+  #   budget-untrackable  capacity_gate's spelling for the condition capacity-admit records as
+  #                       `fail-open` (an unusable caller id / an uncharged bound — HF:5878,5884
+  #                       against LIB:1300,1310). A standing divergence, not drift introduced here.
+  # Anything else capacity_gate emits and capacity-admit does not is a RED.
+  missing_of() { # $1=gate set  $2=admit set → prints the gate values absent from the admit set
+    local b out=""
+    for b in $1; do
+      case "$b" in absent|budget-untrackable) continue ;; esac
+      printf '%s\n' "$2" | grep -x "$b" >/dev/null || out="$out $b"
+    done
+    printf '%s' "$out"
+  }
+  missing="$(missing_of "$gate_set" "$admit_set")"
+  [ -z "$missing" ] || { echo "capacity_gate emits basis value(s) capacity-admit does not:$missing"; false; }
+
+  # MUTATION CONTROL — the comparison must be able to FAIL, or this case proves no more than the
+  # literal grep it replaces. The mutant is the exact one that survived the old form: a library that
+  # no longer emits `fail-open` at all.
+  missing="$(missing_of "$gate_set" "$(printf '%s\n' "$admit_set" | grep -v -x fail-open)")"
+  [ -n "$missing" ] || { echo "the comparison cannot see a dropped basis value — this case is decorative"; false; }
 }
 
 @test "28 every gated path is LOUD when the library is absent (§12.2: never a silent admit)" {
