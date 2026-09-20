@@ -2021,20 +2021,131 @@ hf_remote_source_bind() { # $1=pane $2=session $3=mode label → 0 bound / 2 ref
   return 0
 }
 
+# WHICH TERMINAL OWNS PANE P — the REMOTE-pane question, and it is not the one
+# pin_term_verdict_for_watcher answers (LIMIT_RECOVER_100P §10, measured 0 of 9).
+#
+# THE DEFECT THIS CLOSES. pin_term_verdict_for_watcher asks bin/cc-in-kitty "which terminal am I
+# in", i.e. it walks the DRIVER's own ancestry. That is the right question for every self- form and
+# the wrong one for the remote forms, which name somebody else's pane: a detached driver (`nohup … &`
+# from a Bash tool call, scripts/lib/detach.sh's start_new_session=True, or the launchd poller, which
+# has no kitty ancestor by construction) reaches launchd without meeting kitty, so cc-in-kitty
+# answers rc 1 — a DEFINITIVE not-kitty, correctly, about the DRIVER — and the pin exports
+# CC_TERM=iterm2. kitty_identity then goes false, _as_tty_query takes the iTerm2 osascript branch,
+# iTerm2 is not running, the answer is empty, and hf_remote_source_pin refuses "pane P resolved to no
+# tty" over a pane that is alive and enumerable. Measured: that identical refusal in 9 of 9 daemon-
+# or detached-driven in-place recycles on record (2026-09-10 ×3, 09-14 ×2, 09-19 ×4), each one a
+# tombstoned husk — the transplant had already completed, so the session moved and nothing recycled.
+#
+# bin/cc-in-kitty IS LEFT EXACTLY AS IT IS. Its definitive no is correct for the genuine-iTerm2 case
+# it was built for (2026-08-05) and softening it would re-open that misroute. The fix is a DIFFERENT
+# QUESTION asked of a different subject: enumerate the PANE. A kitty window id is an integer that a
+# live kitty control socket lists; an iTerm2 session id is a UUID. Neither answer involves the
+# driver's lineage, which is exactly the property the remote form needs.
+#
+# THREE RETURN CODES, because ABSENT and WEDGED have opposite remedies — the same rule
+# as_tty_classified imposes one layer down (:1517), and the 0c93f779ecfa conflation it was written
+# for. A socket that ANSWERS and does not list P is a definite negative about the pane (retry buys
+# nothing; the caller must refuse). No socket answering at all is a non-verdict about the RESOLVER
+# (the pane may be perfectly alive; the caller must PARK and retry, never conclude).
+#
+# kitty_sockets + kitty_socket_answers are called DIRECTLY and kitty_headless is NOT, deliberately:
+# kitty_headless is env-gated on `[ -z "$KITTY_WINDOW_ID" ]` and `[ -z "$ITERM_SESSION_ID" ]`
+# (:1127-1128) so that a genuine iTerm2 pane can never be diverted — which is the right gate for the
+# self question and the exact opposite of what this one needs, since the driver's env is irrelevant
+# to who owns P. kitty_socket_template is not called either: it is unsubstituted and cannot enumerate.
+#
+# THE EXPORT IS THE MECHANISM. pin_term_verdict_for_watcher's first line returns early once CC_TERM
+# is set (:1687), so calling this immediately before it makes this verdict win without touching that
+# function; and detach() passes no env= (:1615-1620), so the detached watcher — which is the process
+# that actually types into P — inherits both CC_TERM and the socket address it needs to reach it.
+# CC_TERM_KITTY_TO is load-bearing, not bookkeeping: `kitty @` with no --to reads KITTY_LISTEN_ON
+# from an environment this caller does not have (kitty_headless's header carries the measurement).
+hf_remote_pane_term() { # $1=remote pane id → 0 resolved · 1 REMOTE-PANE-ABSENT · 3 REMOTE-PANE-RESOLVER-UNAVAILABLE
+  # Kill switch FIRST: off ⇒ export nothing, and today's ancestry pin runs byte-identically.
+  [ "${CC_REMOTE_PANE_TERM:-on}" = off ] && return 0
+  # An explicit operator/test override already in force is never overwritten — the same contract
+  # pin_term_verdict_for_watcher's own first line carries, so the two cannot disagree.
+  [ -n "${CC_TERM:-}" ] && return 0
+  local pane="${1:-}"
+  pane="${pane##*:}"
+  # No pane named ⇒ this is not the remote form; leave the ancestry pin to answer as it does today.
+  [ -n "$pane" ] || return 0
+  # A UUID is iTerm2's id space and no kitty socket can ever list it. Answer from the SHAPE — the
+  # one case that needs no probe at all, and the one where a probe could only ever time out.
+  case "$pane" in *[!0-9]*) export CC_TERM=iterm2; return 0 ;; esac
+
+  local bin saved_to tried=" " cand id answered=0 qrc
+  bin="${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}"
+  saved_to="${CC_TERM_KITTY_TO:-}"
+  # An operator-named socket is explicit intent and is tried FIRST — the same precedence
+  # kitty_headless:1131-1134 gives it — but it is still VERIFIED below, never trusted, so a stale
+  # export cannot divert this onto a dead socket. It leads the stream; an empty one is just skipped.
+  while IFS= read -r cand; do
+    [ -n "$cand" ] || continue
+    case "$tried" in *" $cand "*) continue ;; esac
+    tried="$tried$cand "
+    # A socket FILE outlives a SIGKILLed kitty, so the arbiter is a real bounded `kitty @ … ls`.
+    # hf_bounded's 124 on expiry is a non-zero here, i.e. "does not answer" — the safe direction.
+    kitty_socket_answers "$bin" "$cand" || continue
+    # kt_window_field reads the address out of CC_TERM_KITTY_TO, so the candidate is installed before
+    # the query and rolled back below if no candidate ever resolves.
+    CC_TERM_KITTY_TO="$cand"; export CC_TERM_KITTY_TO
+    qrc=0; id="$(kt_window_field "$pane" id)" || qrc=$?
+    # rc 1 ⇒ the QUERY failed (wedged kitty, unparseable JSON). That is a resolver fault, not a fact
+    # about P, so it must NOT license the ABSENT verdict — only a clean enumeration may.
+    [ "$qrc" = 0 ] || continue
+    answered=1
+    [ -n "$id" ] && { export CC_TERM=kitty; return 0; }
+  done <<EOF
+$saved_to
+$(kitty_sockets)
+EOF
+
+  if [ -n "$saved_to" ]; then CC_TERM_KITTY_TO="$saved_to"; export CC_TERM_KITTY_TO
+  else unset CC_TERM_KITTY_TO; fi
+  # 1 = a socket enumerated the fleet and P is not in it (terminal). 3 = nothing enumerated anything
+  # (park / retry). Nothing is exported in either case, so the caller's own refusal text is the only
+  # verdict and a later attempt starts from a clean slate.
+  [ "$answered" = 1 ] && return 1
+  return 3
+}
+
+# The three verdicts, worded ONCE. Each caller decides its own exit code (a probe HOLDS where a
+# recycle REFUSES) but none of them may re-word which of the two negatives it got: ABSENT is a fact
+# about the pane and PARK is a fact about the resolver, and a caller that blurs them re-creates the
+# conflation the three-state contract exists to end.
+hf_remote_pane_term_say() { # $1=rc from hf_remote_pane_term  $2=pane  $3=mode label
+  case "$1" in
+    1) echo "!! $3 REFUSED: REMOTE-PANE-ABSENT — a terminal control socket ANSWERED and enumerates no window $2. That is a definite negative about the pane, not about the query: retrying cannot change it. Nothing was typed." >&2 ;;
+    3) echo "!! $3 PARKED: REMOTE-PANE-RESOLVER-UNAVAILABLE — no terminal control socket answered at all, so NOTHING is known about pane $2 either way; it may be perfectly alive. This is a non-verdict about the resolver — park and retry, never conclude the pane is gone. Nothing was typed." >&2 ;;
+  esac
+  return 0
+}
+
 hf_remote_source_pin() { # $1=pane $2=row pid $3=mode → 0 the row's process is alive with that pane's tty in its ancestry / 2 refused
   # A CLOSE may act on the row alone; a RECYCLE types into the pane, so the row must be pinned to a
   # process that is provably THERE. Kitty reuses window ids across restarts (:1660), so "the row for
   # pane P names session S" can be true of a window that no longer exists while P is somebody else.
   # Ancestry, not equality: a resumed session runs claude on expect's NESTED pty (:1669), so the
   # pane's real tty belongs to an ancestor of the recorded pid, exactly as pane_ownership reads it.
-  local pane="${1:-}" pid="${2:-}" mode="${3:-self-close}" ptty p t n=0
+  local pane="${1:-}" pid="${2:-}" mode="${3:-self-close}" ptty prc=0 p t n=0
   case "$pid" in ''|*[!0-9]*)
     echo "!! $mode REFUSED: the registry row for pane $pane carries no usable pid — a row that cannot be pinned to a live process cannot admit typing into that pane." >&2; return 2 ;;
   esac
   if ! kill -0 "$pid" 2>/dev/null; then
     echo "!! $mode REFUSED: the registry row for pane $pane names pid $pid, which is DEAD. The row is stale (the session ended, or kitty reused the window id after a restart); whatever is in that pane now is not the session the row describes. Nothing was typed." >&2; return 2
   fi
-  ptty="$(as_tty "$pane")" || ptty=""
+  # THREE STATES, NOT TWO (LIMIT_RECOVER_100P §10 W8). as_tty collapses "the terminal enumerated the
+  # fleet and P is not in it" with "the resolver never answered", and this gate then prints the
+  # FORMER over the latter — a definite claim about a pane nothing ever looked at. That text is what
+  # nine detached in-place recycles read as their cause of death while their panes were alive and
+  # enumerable. as_tty_classified already carries the split (rc 1 ABSENT / rc 3 CANNOT TELL); this
+  # only stops throwing it away. rc 2 stays the return code for EVERY refusal, so callers are
+  # unchanged — the difference is which action the operator (or the retry) is pointed at.
+  ptty="$(as_tty_classified "$pane")" || prc=$?
+  if [ "$prc" = 3 ]; then
+    echo "!! $mode REFUSED: RESOLVER-CANNOT-TELL — the terminal never answered when asked to enumerate pane $pane, so nothing is known about it either way. This says nothing about whether the pane is there; PARK and retry rather than treating it as gone. Nothing was typed." >&2; return 2
+  fi
   if [ -z "$ptty" ]; then
     echo "!! $mode REFUSED: pane $pane resolved to no tty — the terminal does not enumerate it, so nothing can be typed into it." >&2; return 2
   fi
@@ -7499,6 +7610,23 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   #    of pane_cc_state return it and not one means "there is no claude here" — and it REFUSES for
   #    exactly that reason: a transplant justified by a pane read that never happened is the failure
   #    this verb exists to prevent.
+  # WHICH TERMINAL OWNS PRP_PANE — asked of the PANE, before the ancestry pin gets to answer a
+  # different question about this process (W8). A detached or launchd driver has no kitty ancestor,
+  # so without this the probe pins iterm2 and reports REFUSED:pane:unknown over a live kitty pane.
+  PRP_TERM_RC=0; hf_remote_pane_term "$PRP_PANE" || PRP_TERM_RC=$?
+  if [ "$PRP_TERM_RC" != 0 ]; then
+    # The verdict keeps this verb's established `REFUSED:pane:<state>` / `HELD:pane:<state>` shape —
+    # lr-handoff's precheck reads only the part before the first colon (`${state%%:*}`), and
+    # tests/lr-handoff-launcher-quoting.bats pins the `REFUSED:pane:` prefix for the unreadable-pane
+    # class this gate now answers earlier and more precisely.
+    hf_remote_pane_term_say "$PRP_TERM_RC" "$PRP_PANE" --probe-recycle-preconditions
+    if [ "$PRP_TERM_RC" = 3 ]; then
+      echo "pane_state: UNKNOWN (REMOTE-PANE-RESOLVER-UNAVAILABLE)"
+      prp_verdict "HELD:pane:resolver-unavailable" 3
+    fi
+    echo "pane_state: absent (REMOTE-PANE-ABSENT)"
+    prp_verdict "REFUSED:pane:absent" 5
+  fi
   pin_term_verdict_for_watcher
   PRP_TTY="$(as_tty "$PRP_PANE")"
   PRP_STATE="$(pane_cc_state "$PRP_TTY")"
@@ -7581,6 +7709,17 @@ if [ "${1:-}" = "self-close" ]; then
   # Until this hoist the gate below accepted $ITERM_SESSION_ID and nothing else, so a fired peer on a
   # kitty box exited 1 having done nothing and could never obey its own self-retire instruction; its
   # pane and worktree leaked until an operator reaped them.
+  # REMOTE FORM FIRST (W8). --source-pane names somebody ELSE's pane, and the pin below asks
+  # cc-in-kitty about THIS process's ancestry — the wrong subject for that question. Resolving the
+  # pane's own terminal here makes the pin a no-op (it returns at its first line once CC_TERM is
+  # set) without touching the self- forms, which still get the ancestry answer they want.
+  if [ -n "$SC_SOURCE_PANE" ]; then
+    SC_TERM_RC=0; hf_remote_pane_term "$SC_SOURCE_PANE" || SC_TERM_RC=$?
+    if [ "$SC_TERM_RC" != 0 ]; then
+      hf_remote_pane_term_say "$SC_TERM_RC" "$SC_SOURCE_PANE" self-close
+      exit 2
+    fi
+  fi
   pin_term_verdict_for_watcher
   # ---- REMOTE TRANSPLANTED SOURCE (item c5d25ebe630b) — the husk cannot close ITSELF ------------
   # THE CASE THIS EXISTS FOR, measured 2026-08-10. Three sessions were transplanted off next3 while
@@ -9268,6 +9407,19 @@ if [ "$RECYCLE" = 1 ]; then
   # today's code either refuses outright (no $ITERM_SESSION_ID) or resolves the SAME value from the
   # synthetic one kitty-setup.sh:255 exports. There is no input for which this targets a pane the old
   # code targeted differently — only inputs for which the old code targeted nothing at all.
+  # …AND FOR THE REMOTE FORM THAT IS THE WRONG QUESTION (W8, LIMIT_RECOVER_100P §10, 0 of 9). The
+  # pin below walks THIS process's ancestry; --source-pane names a pane this process does not own,
+  # and every driver that matters here (detach()'s start_new_session=True, a `nohup … &` from a tool
+  # call, the launchd poller) has no kitty ancestor by construction. Enumerating the pane answers
+  # the question that is actually being asked, and CC_TERM + CC_TERM_KITTY_TO are then inherited by
+  # the detached watcher that does the typing.
+  if [ -n "$RCY_SOURCE_PANE" ]; then
+    RCY_TERM_RC=0; hf_remote_pane_term "$RCY_SOURCE_PANE" || RCY_TERM_RC=$?
+    if [ "$RCY_TERM_RC" != 0 ]; then
+      hf_remote_pane_term_say "$RCY_TERM_RC" "$RCY_SOURCE_PANE" --recycle
+      exit 2
+    fi
+  fi
   pin_term_verdict_for_watcher
   if [ -n "$RCY_SOURCE_PANE" ] || [ -n "$RCY_SOURCE_SESSION" ]; then
     # REMOTE FORM (LIMIT_RECOVER_100P) — the pane is somebody else's. The same evidence as

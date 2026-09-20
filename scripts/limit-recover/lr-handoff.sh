@@ -133,6 +133,30 @@ lrh_kitty() { # bounded `kitty @ …` — socket seam kept out of the call sites
   else lrh_bounded "${CC_KITTY_BIN:-${CC_TERM_KITTY:-kitty}}" @ "$@"; fi
 }
 
+# A LIVE kitty's control socket, resolved by the BOX rather than by this process's env — hoisted
+# out of the spawn section (it used to sit inline beside the split/os-window dispatch) so the
+# IN-PLACE path below reaches it too. That path runs FIRST and is the one the launchd poller takes:
+# a launchd job has no KITTY_WINDOW_ID at all, so without an address resolved before the recycle
+# the in-place actuator had no way to reach the pane it was about to type into. Gated exactly as it
+# was — only when this process names no kitty window of its own, and never over the A/B kill switch
+# — so an attached caller's env still wins and nothing about the spawn arms changes.
+# rc 0 ⇒ CC_TERM_KITTY_TO is exported and answers; rc 1 ⇒ no live socket was found.
+lrh_resolve_kitty_socket() {
+  [ -z "${KITTY_WINDOW_ID:-}" ]   || return 1
+  [ -z "${IT2_WRAPPER_NO_KITTY:-}" ] || return 1
+  [ -z "${CC_TERM_KITTY_TO:-}" ]  || return 0   # already addressed — explicit intent, left alone
+  local _sock="" _ksb
+  for _ksb in "$(dirname "$_CC_KS")/../../bin/cc-kitty-socket" \
+              "$(dirname "$0")/../../bin/cc-kitty-socket" \
+              "${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/bin/cc-kitty-socket" \
+              "${HOME:-}/.claude/bin/cc-kitty-socket"; do
+    [ -x "$_ksb" ] && { _sock="$(lrh_bounded "$_ksb" 2>/dev/null)" || _sock=""; break; }
+  done
+  [ -n "$_sock" ] || return 1
+  CC_TERM_KITTY_TO="$_sock"; export CC_TERM_KITTY_TO
+  return 0
+}
+
 # THE WINDOW IS NOT THE RESUME (measured 2026-09-08, on a real two-session limit recovery).
 # `kitty @ launch` exits 0 and prints the new id the moment the WINDOW exists — which is before the
 # launcher has run a single line. A launcher that then dies on its own gate leaves this file
@@ -760,8 +784,17 @@ chmod +x "$LAUNCHER"
 # registry binding + this tombstone). The relaunch is `bash <launcher>` — the same launcher the spawn
 # paths below hand to a NEW pane, typed into the OLD pane's surviving shell instead, and NOT exec'd,
 # so the shell outlives the resumed session and the pane stays recyclable next time.
+
+# ADDRESS THE TERMINAL BEFORE THE IN-PLACE RECYCLE, not after it. The resolution used to live ~130
+# lines down, INSIDE the spawn dispatch, which the in-place path never reaches — so the launchd arm
+# (a job with no KITTY_WINDOW_ID at all) drove the recycle with no socket in its environment.
+# Scoped to $IN_PLACE so every other path — spawn, --print-only — behaves byte-identically and keeps
+# resolving where it always did. Self-gated and failure-tolerant: an attached kitty caller returns
+# immediately, and no socket found changes nothing (handoff-fire's own hf_remote_pane_term resolves
+# the orphaned-driver arm from the pane itself and needs nothing from here).
 LRH_REPLACE=0
 if [[ $IN_PLACE -eq 1 ]]; then
+  lrh_resolve_kitty_socket || true
   HF="$(lrh_hf_bin)"
   if [[ ! -x "$HF" ]]; then
     echo "lr-handoff: --in-place cannot reach handoff-fire.sh (looked beside this script, in \$CLAUDE_CONFIG_DIR/scripts, and in ~/.claude/scripts). The transplant is DONE; relaunch by hand as a NEW pane's own command: exec /bin/bash $LAUNCHER" >&2
@@ -890,15 +923,11 @@ if [[ $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 ]]; then
   # invoking pane (OWN_PANE empty under launchd), the existing `elif IN_KITTY` arm below already
   # fires the right intent: a new kitty os-window through lrh_kitty/CC_TERM_KITTY_TO. Env still
   # wins when present; the resolver decides only the ABSENT case.
+  # Same resolution, now ONE implementation (lrh_resolve_kitty_socket, hoisted above so the in-place
+  # path reaches it too). It has normally already run by here and returns immediately; this arm is
+  # what turns a resolved address into this section's IN_KITTY dispatch decision.
   if [ "$IN_KITTY" = 0 ] && [ -z "${KITTY_WINDOW_ID:-}" ] && [ -z "${IT2_WRAPPER_NO_KITTY:-}" ]; then
-    _lrh_sock=""
-    for _lrh_ksb in "$(dirname "$_CC_KS")/../../bin/cc-kitty-socket" \
-                    "$(dirname "$0")/../../bin/cc-kitty-socket" \
-                    "${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}/bin/cc-kitty-socket" \
-                    "${HOME:-}/.claude/bin/cc-kitty-socket"; do
-      [ -x "$_lrh_ksb" ] && { _lrh_sock="$(lrh_bounded "$_lrh_ksb" 2>/dev/null)" || _lrh_sock=""; break; }
-    done
-    if [ -n "$_lrh_sock" ]; then CC_TERM_KITTY_TO="$_lrh_sock"; export CC_TERM_KITTY_TO; IN_KITTY=1; fi
+    if lrh_resolve_kitty_socket && [ -n "${CC_TERM_KITTY_TO:-}" ]; then IN_KITTY=1; fi
   fi
   if [[ -n "$LRH_ANCHOR" && $IN_KITTY -eq 1 ]]; then
     # A kitty window id is always an integer. A non-integer means the id came from a real-iTerm2
