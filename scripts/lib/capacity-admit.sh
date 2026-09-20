@@ -941,13 +941,24 @@ _cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usabl
   # makes the arithmetic below error and every comparison after it meaningless — the same fail-open
   # shape as the TTL, arriving from the other operand.
   now="$(date +%s 2>/dev/null || printf '')"
-  if ! cc_hw_is_int "$now"; then
+  # THE OPERAND TEST, not the charset one (W2FA A2/A4): `now` is the left operand of the same
+  # subtraction as `issued`, so a 21-digit clock wraps it exactly as a 21-digit epoch does.
+  if ! cc_hw_is_int_operand "$now"; then
     CC_ADMIT_TOKEN_NOTE="token NOT REDEEMED — the clock is unreadable (date +%s gave '${now}'), so age is unmeasurable; consumed, evaluating fresh${CC_ADMIT_TOKEN_UNLINK:+ [${CC_ADMIT_TOKEN_UNLINK}]}"
     return 1
   fi
   ttl="$CC_ADMIT_TOKEN_TTL_VALUE"
   age=$(( now - issued ))
-  if [ "$age" -lt 0 ] || [ "$age" -gt "$ttl" ]; then
+  # A NEGATIVE AGE IS ITS OWN STATE, NOT AN EXPIRY (W2FA A4). Both are terminal and both consume,
+  # but a record issued AHEAD of this clock is a skew or a forgery, and reporting it as
+  # "EXPIRED (-100000s old > TTL 1020s)" is a diagnosis that is arithmetically meaningless — the
+  # reader cannot tell it from a stale token and would go looking at the TTL. The arm itself is
+  # load-bearing either way: without it a future-dated record is never `-gt ttl`, so it ADMITS.
+  if [ "$age" -lt 0 ]; then
+    CC_ADMIT_TOKEN_NOTE="token issued in the FUTURE (${age}s, i.e. minted $(( 0 - age ))s ahead of this clock) — a skew or a forgery, never an admission; consumed, evaluating fresh${CC_ADMIT_TOKEN_UNLINK:+ [${CC_ADMIT_TOKEN_UNLINK}]}"
+    return 1
+  fi
+  if [ "$age" -gt "$ttl" ]; then
     CC_ADMIT_TOKEN_NOTE="token EXPIRED (${age}s old > TTL ${ttl}s) — consumed, evaluating fresh${CC_ADMIT_TOKEN_TTL_NOTE:+ [${CC_ADMIT_TOKEN_TTL_NOTE}]}${CC_ADMIT_TOKEN_UNLINK:+ [${CC_ADMIT_TOKEN_UNLINK}]}"
     return 1
   fi
