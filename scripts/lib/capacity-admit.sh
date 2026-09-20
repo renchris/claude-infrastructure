@@ -331,6 +331,40 @@ cc_hw_segment_verdict() { # $1=segment pct in use $2=ceiling pct → REFUSE | AD
 cc_hw_is_int() { case "${1:-}" in ''|*[!0-9]*)  return 1 ;; esac; return 0; }
 cc_hw_is_num() { case "${1:-}" in ''|*[!0-9.]*) return 1 ;; esac; return 0; }
 
+# ── AN INTEGER'S CHARSET IS NOT ITS RANGE (W2FA A2, 2026-09-20) ────────────────────────────────
+# `cc_hw_is_int` asks "is every character a digit", which is all a sysctl reading ever needed. It is
+# NOT enough for a value that becomes an OPERAND of `[ -gt ]` or `$(( ))`, and W2FA's own TTL
+# resolver inherited that gap one layer in. MEASURED 2026-09-20 — three readings of one unvalidated
+# value, in both failure directions and once fatally:
+#   · 21 DIGITS. CC_ADMIT_TOKEN_TTL_S=999999999999999999999 passes cc_hw_is_int, so the hardened
+#     resolver accepts it, and `[ "$age" -gt "$ttl" ]` then ERRORS rc 2 (`[: …: integer expected`
+#     on stderr) which `if` reads identically to a clean false. A 315,360,000 s token ADMITTED,
+#     rc 0, basis=token. The exact fail-open D2 closed — the resolver was hardened, the RANGE was
+#     not (docs/lessons/predicate-error-exit-is-indistinguishable-from-false.md).
+#   · OVERFLOW. A 20-digit stage wraps in `$(( ))`: CC_RECYCLE_DRAFT_WAIT=99999999999999999999
+#     yields TTL 7766279631452242759, and the int64 maximum yields TTL -9223372036854774969 — a
+#     NEGATIVE bound, under which EVERY token is instantly expired. One operand, an admit-everything
+#     and a refuse-everything failure a digit apart.
+#   · OCTAL. A leading zero re-reads the same digits: `$(( 0600 ))` is 384, so
+#     CC_RECYCLE_DRAFT_WAIT=0600 gives TTL 1224 instead of 1440 — silently 216 s short — and `0900`
+#     is not a valid octal literal at all, so bash aborts the arithmetic ("value too great for
+#     base") and, under a caller's `set -e` (lr-fire-resume sources this file), kills the process.
+# So an operand is validated on THREE properties and NORMALISED, never on charset alone. Ten digits
+# is 317 years in seconds — past any bound this file could want — and four of them summed stay four
+# orders of magnitude inside int64, so the derived sum cannot wrap either.
+CC_HW_INT_MAX_DIGITS=10
+CC_HW_INT_VALUE=""
+cc_hw_is_int_operand() { # $1 → 0 usable in `[ -gt ]` AND `$(( ))` · sets CC_HW_INT_VALUE (normalised)
+  local v="${1:-}"
+  CC_HW_INT_VALUE=""
+  cc_hw_is_int "$v" || return 1
+  v="${v#"${v%%[!0]*}"}"                     # the leading-zero RUN is what makes $(( )) read octal
+  [ -n "$v" ] || v=0                         # …and an all-zero value strips to nothing, not to 0
+  [ "${#v}" -le "$CC_HW_INT_MAX_DIGITS" ] || return 1
+  CC_HW_INT_VALUE="$v"
+  return 0
+}
+
 # ── THE BOUND, SHARED (2026-08-12, §W3 item 2) ─────────────────────────────────────────────────
 # Until now the bound was this file's alone, and that asymmetry WAS the defect §W3 exists to remove:
 # `capacity_gate()` in scripts/handoff-fire.sh — the OPERATOR's own `/handoff` path — was the only
@@ -666,8 +700,12 @@ _cc_admit_token_shape() { # $1=path $2=wanted sid $3=this uid → 0 well-formed 
     ''|*[!A-Za-z0-9._-]*)
       _CC_ADMIT_TOK_BAD="MALFORMED — sid field '${_CC_ADMIT_TOK_SID}' is not a usable session id"; return 1 ;;
   esac
-  if ! cc_hw_is_int "$_CC_ADMIT_TOK_ISSUED"; then
-    _CC_ADMIT_TOK_BAD="MALFORMED — issued field '${_CC_ADMIT_TOK_ISSUED}' is not an epoch integer"; return 1
+  # THE OTHER OPERAND OF THE SAME SUBTRACTION (W2FA A2). `age=$(( now - issued ))` reads this field,
+  # so charset alone is not enough here either: a 21-digit epoch wraps, and a decimal one aborts the
+  # arithmetic outright — leaving `age` EMPTY, which makes both expiry comparisons exit rc 2 and the
+  # token immortal. Same operand test, same normalisation.
+  if ! cc_hw_is_int_operand "$_CC_ADMIT_TOK_ISSUED"; then
+    _CC_ADMIT_TOK_BAD="MALFORMED — issued field '${_CC_ADMIT_TOK_ISSUED}' is not an epoch integer this shell can subtract"; return 1
   fi
   if [ "$_CC_ADMIT_TOK_UID" != "$3" ]; then
     _CC_ADMIT_TOK_BAD="MALFORMED — the record was minted by uid '${_CC_ADMIT_TOK_UID}', this process is uid '$3'"
@@ -724,7 +762,9 @@ CC_ADMIT_TOKEN_TTL_NOTE=""
 _cc_admit_token_stage() { # $1=env value $2=fallback → always 0 · prints an integer, never empty
   # if/else, never `cc_hw_is_int "$1" && printf …`: an && list whose left side is false makes the
   # whole statement rc 1, which is fatal under a caller's `set -e` (lr-fire-resume sources this).
-  if cc_hw_is_int "$1"; then printf '%s' "$1"; else printf '%s' "$2"; fi
+  # The value printed is the NORMALISED one, and the test is the OPERAND test: a stage goes straight
+  # into `$(( ))`, where an in-charset value can still overflow or be re-read as octal (W2FA A2).
+  if cc_hw_is_int_operand "$1"; then printf '%s' "$CC_HW_INT_VALUE"; else printf '%s' "$2"; fi
   return 0
 }
 _cc_admit_token_ttl() { # → always 0 · sets CC_ADMIT_TOKEN_TTL_VALUE (an integer) + _NOTE
@@ -738,8 +778,8 @@ _cc_admit_token_ttl() { # → always 0 · sets CC_ADMIT_TOKEN_TTL_VALUE (an inte
   slack="$(_cc_admit_token_stage "${CC_ADMIT_TOKEN_TTL_SLACK_S:-}" 60)"
   CC_ADMIT_TOKEN_TTL_VALUE=$(( draft + shell + boot + slack ))
   [ -n "$t" ] || return 0
-  if cc_hw_is_int "$t"; then CC_ADMIT_TOKEN_TTL_VALUE="$t"; return 0; fi
-  CC_ADMIT_TOKEN_TTL_NOTE="CC_ADMIT_TOKEN_TTL_S='${t}' is not an integer — bounded at ${CC_ADMIT_TOKEN_TTL_VALUE}s instead"
+  if cc_hw_is_int_operand "$t"; then CC_ADMIT_TOKEN_TTL_VALUE="$CC_HW_INT_VALUE"; return 0; fi
+  CC_ADMIT_TOKEN_TTL_NOTE="CC_ADMIT_TOKEN_TTL_S='${t}' is not an integer this shell can compare (charset, magnitude, or a leading zero) — bounded at ${CC_ADMIT_TOKEN_TTL_VALUE}s instead"
   return 0
 }
 
