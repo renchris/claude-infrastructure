@@ -787,6 +787,16 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
     "legacy bash is major 5, not 3.x" because its two-bash grid needs macOS's /bin/bash 3.2, and
     the manifest already says its off-box verdict "is a claim about the image's package set, never
     about our tree". None of these name a file this diff touches.
+  - **ONE SUITE IS NOT ADJUDICATED, and it is named rather than rounded up to green:**
+    `tests/cc-await-ping.bats` returned **4 failures on one run and 0 on the next, same tree, same
+    box** — it is FLAKY here, so neither arm is a verdict and running it again would only buy
+    another coin flip. What can be said without it: there is no mechanism by which this diff
+    reaches it. It was only ever in the candidate set because it mentions `cc-beats`, and this diff
+    adds a READER of that store inside `bin/cc-limited` while changing neither the beat writer
+    (`hooks/session-beat.sh`) nor the record format — and nothing in `bin/ scripts/ hooks/
+    commands/` invokes `cc-limited` at all yet (grepped; the only mention is a human-facing
+    "run: cc-limited" pointer at `stop-failure-marker.sh:200`). W3 is where the first programmatic
+    consumer lands, which is also why the `--tsv` arity and vocabulary were left untouched.
   - Dispatcher vintage: `origin/main:bin/cc-dispatch` == the blob that composed the brief
     (`dc913037`), so the dispatcher that fired this session IS trunk.
   - **STILL OPEN after this:** **W3** (consumers — `lf_census`, the poller's § 1 delegation) and
