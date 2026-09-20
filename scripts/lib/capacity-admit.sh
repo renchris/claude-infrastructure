@@ -806,12 +806,23 @@ _cc_admit_token_shape() { # $1=path $2=wanted sid $3=this uid → 0 well-formed 
 #   ── the launcher is typed HERE; this is where the token is redeemed ──
 #   boot + engagement                               after the redemption — not crossed
 #
-# READ BY NAME, NEVER RE-TYPED. The sibling pattern is handoff-fire's own recycle_await_verdict
-# (:12104), which sizes the whole recycle from five of these names rather than from a literal. A
-# literal here would go stale the first time one of those constants moved — silently, and in the
-# direction that expires tokens. RCY_BOOT_STALE_S is read as the allowance for the two UNBOUNDED
-# stages above: it is handoff-fire's own number for the longest a recycle phase may take, so
-# borrowing it leaves this expression with no magnitude of its own except the slack.
+# READ BY NAME WHERE A CALLER SUPPLIES THEM — AND IN PRODUCTION NOBODY DOES (corrected W2FA A3,
+# 2026-09-20). The original claim here was "READ BY NAME, NEVER RE-TYPED", and it is false in the
+# environment this library actually runs in. The four names are handoff-fire.sh's OWN locals,
+# expanded there as `${NAME:-<literal>}` and EXPORTED BY NOTHING in the tree — zero `export` of any
+# of them in handoff-fire.sh, in scripts/limit-recover/ or in bin/. MEASURED under `env -i`, which
+# is the floor of what a launcher heredoc and a launchd job provide: every read misses and the
+# value is the sum of THIS FILE'S OWN LITERALS, 180+600+180+60 = 1020 s. The SIZE is right; the
+# mechanism was not, and the case that appeared to prove it (15s) EXPORTS the names itself — a
+# fixture manufacturing the very environment production lacks.
+#
+# The reads STAY, because as an OVERRIDE they are honest and free: a caller that does parameterise
+# a stage gets a TTL that follows it. What replaces the false claim is a TRIPWIRE rather than a
+# hope — coverage case 31 reads handoff-fire.sh's own `:-<literal>` defaults and goes RED when they
+# move away from the literals below, and case 15ac pins the `env -i` value at 1020 so a literal
+# here cannot move alone either. RCY_BOOT_STALE_S is borrowed as the allowance for the two
+# UNBOUNDED stages above: it is handoff-fire's own number for the longest a recycle phase may take,
+# so this expression has no magnitude of its own except the slack.
 #
 # TWO-SIDED, which is what makes the size non-arbitrary rather than merely bigger:
 #   ≥ the stages it must cross (780 s), or a token cannot survive its own operation;

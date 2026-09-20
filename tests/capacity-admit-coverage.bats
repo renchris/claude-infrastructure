@@ -548,3 +548,61 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
   ! grep -qE '^[^#]*export +CC_ADMIT_' "$FIRE" \
     || { echo "lr-fire-resume EXPORTS a CC_ADMIT_* variable — it must be a call-scoped prefix"; false; }
 }
+
+@test "31 EQUIVALENCE GUARD, MUTANT-SCORED — STAGE PARITY: the TTL's literals are handoff-fire's own" {
+  # capacity-admit.sh sizes the admission token's TTL from the stages a recycle crosses, and reads
+  # them as `${CC_RECYCLE_DRAFT_WAIT:-180}`-style overrides. MEASURED 2026-09-20: none of those
+  # names is exported by anything in the tree — not by handoff-fire.sh, not by scripts/limit-recover
+  # and not by bin/ — so under the environment the library actually runs in (`env -i`) every read
+  # misses and the TTL is the sum of capacity-admit's OWN literals. The header claimed the opposite
+  # ("read by name, never re-typed"), and case 15s appeared to prove it only because the case
+  # exports the names itself.
+  #
+  # The reads are a legitimate override; a literal that nothing watches is not. This case is the
+  # watcher: it reads handoff-fire's own `:-<literal>` defaults out of handoff-fire.sh and fails
+  # when they move away from capacity-admit's. Same shape as case 26's TERM PARITY — a cross-file
+  # constant that nothing compares is drift waiting to happen.
+  #
+  # GREEN IN BOTH ARMS BY CONSTRUCTION (nothing was broken; the fix corrected a claim), so its only
+  # evidence of power is the death of its mutant, scored verbatim: capacity-admit's 600 literal for
+  # HF_RECYCLE_SHELL_WAIT_S changed to 900
+  #   → "HF_RECYCLE_SHELL_WAIT_S DRIFTED: handoff-fire says 600s, capacity-admit's literal says
+  #      900s — the TTL no longer sizes the stage it names".
+  # handoff-fire.sh is NOT mutated for this score: a sibling wave owns that file, and the in-case
+  # mutation control below already proves the grep can read a moved literal on that side.
+  local name hf_v lib_v hf_seen
+  for name in CC_RECYCLE_DRAFT_WAIT HF_RECYCLE_SHELL_WAIT_S RCY_BOOT_STALE_S; do
+    # handoff-fire's OWN default, and there must be exactly one distinct value — two spellings of
+    # one stage inside handoff-fire is itself the finding, and would make "which one" unanswerable.
+    hf_seen="$(grep -oE "\\\$\\{$name:-[0-9]+\\}" "$HF" | grep -oE '[0-9]+' | sort -u)"
+    [ -n "$hf_seen" ] || { echo "$name has no \${…:-<literal>} default in $HF — the stage moved or was renamed"; false; }
+    [ "$(printf '%s\n' "$hf_seen" | wc -l | tr -d ' ')" = 1 ] \
+      || { echo "$name carries MORE THAN ONE default inside handoff-fire.sh:"; printf '%s\n' "$hf_seen"; false; }
+    hf_v="$hf_seen"
+    # capacity-admit's fallback literal for the same stage
+    lib_v="$(grep -oE "_cc_admit_token_stage \"\\\$\\{$name:-\\}\" [0-9]+" "$LIB" | grep -oE '[0-9]+$')"
+    [ -n "$lib_v" ] || { echo "$name is not read by _cc_admit_token_stage in $LIB"; false; }
+    [ "$hf_v" = "$lib_v" ] \
+      || { echo "$name DRIFTED: handoff-fire says ${hf_v}s, capacity-admit's literal says ${lib_v}s — the TTL no longer sizes the stage it names"; false; }
+  done
+  # …and the derived TTL must still fit inside handoff-fire's OWN whole-recycle bound, computed
+  # from that file rather than re-typed here (recycle_await_verdict's `max` expression).
+  local hf_max
+  hf_max="$(grep -oE 'max=\$\(\( [^)]*RCY_ENGAGE_TIMEOUT[^)]*\)\)' "$HF" | head -1 | grep -oE ':-[0-9]+' | grep -oE '[0-9]+' \
+            | awk '{ n += $1 } END { print n }')"
+  # TWO assertions, never `[ ] && [ ] || { }`: the first test failing makes the && list rc 1, which
+  # bats's errexit cannot reach, and this file's own case 26 carries the history of that exact shape
+  # passing over two empty strings for months.
+  [ -n "$hf_max" ] || { echo "recycle_await_verdict's max expression could not be read from $HF"; false; }
+  [ "$hf_max" -gt 0 ] || { echo "recycle_await_verdict's max summed to $hf_max — the expression moved"; false; }
+  local lib_ttl
+  lib_ttl="$(env -i /bin/bash -c '. "$1"; _cc_admit_token_ttl; printf "%s" "$CC_ADMIT_TOKEN_TTL_VALUE"' _ "$LIB")"
+  [ "$lib_ttl" -le "$hf_max" ] \
+    || { echo "the token TTL (${lib_ttl}s) outlives the recycle that mints it (handoff-fire's bound: ${hf_max}s)"; false; }
+
+  # MUTATION CONTROL — the drift predicate must be able to FAIL, or every assertion above is an
+  # emptiness check. Same greps, run over a file carrying a MOVED default.
+  printf 'rcy_wait_max="${HF_RECYCLE_SHELL_WAIT_S:-900}"\n' > "$BATS_TEST_TMPDIR/moved.sh"
+  [ "$(grep -oE '\$\{HF_RECYCLE_SHELL_WAIT_S:-[0-9]+\}' "$BATS_TEST_TMPDIR/moved.sh" | grep -oE '[0-9]+')" = 900 ] \
+    || { echo "the stage-default predicate cannot read a moved literal — it proves nothing"; false; }
+}
