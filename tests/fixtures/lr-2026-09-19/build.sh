@@ -1,10 +1,13 @@
 #!/bin/bash
 # build.sh — the 5-session acceptance fixture for bin/cc-limited (LIMIT_DETECT_100P § 5).
 #
-# This is one real afternoon, frozen. Every row below was measured on 2026-09-19 on the live fleet
-# and is reproduced here with its real 8-char sid prefix (tail zeroed), its real timestamps and its
-# real account. It is the fixture because each of the five sessions is a DIFFERENT way the shipped
-# census was wrong, and a census that gets all five right cannot be getting them right by accident:
+# This is one real afternoon, DESIGNED — not a replay of it. The MARKER rows are measured: real
+# 8-char sid prefixes (tail zeroed), real timestamps, real accounts. The REGISTRY rows and the ps
+# table are SYNTHETIC: they pin a world as of NOW_ISO below, in which the panes that were alive at
+# that instant are still alive. That distinction is load-bearing and it is new — see § THE ONE
+# HAND-ASSERTED ROW at the bottom of this header. It is the fixture because each of the five
+# sessions is a DIFFERENT way the shipped census was wrong, and a census that gets all five right
+# cannot be getting them right by accident:
 #
 #   07e30aeb  the preferred copy is a 3-record STUB with 0 assistant records while a 1.1 MB frozen
 #             snapshot sits under another root. Ordering copies by size or mtime names the snapshot
@@ -17,6 +20,18 @@
 #   98f02458  a transplant CLAIMED it 21 minutes ago and the claimant is not running. The shipped
 #             census cannot see this state at all; it is the "recovery produced nothing" case.
 #   4bc1159f  the same, with no transcript copy anywhere.
+#
+# THE ONE HAND-ASSERTED ROW, named rather than left to be discovered (LIMIT_DETECT_100P § 11 #1).
+# `reg 147 07e30aeb-… claude-tertiary 84167` below is NOT a measured registry row. CAPTURE-RECEIPT.md
+# in this directory lists every registry pane present in a live capture and 147 is not among them —
+# nor does any row anywhere carry that sid. What the live stores DO hold is the sid-keyed BEAT
+# `~/.claude/cc-beats/07e30aeb-….json`, carrying `"pane":"147"` and `"pid":84167` verbatim: the two
+# values this line reconstructs. The registry row was overwritten by pane 147's next occupant (P5's
+# pane-keyed-overwrite class) while the beat survived, which is precisely why § 11 #2 makes the beat
+# a second liveness source. So the fixture below is a legitimate designed world and the registry row
+# is a legitimate way to build it — what was wrong was CLAIMING it was measured, and quoting the
+# state it produces (`#147 RECOVERABLE (stub)`) into § 5's drill as live truth. The live truth, with
+# that pid long dead, is NO-PANE; the receipt derives it rather than asserting it.
 #
 # Usage:  build.sh <dir>   then source <dir>/env.sh to get the seams.
 # Writes only under <dir>. Requires nothing but bash and coreutils.
@@ -95,7 +110,8 @@ JSON
 reg 111 cb29ae36-0000-4000-8000-000000000000 claude-secondary 12341 1789857366000 "$CWD_INFRA"
 # 65186f1f is alive on ANOTHER account (next2), started 20:48:39Z — after its 19:58:34Z death.
 reg 121 65186f1f-0000-4000-8000-000000000000 claude-secondary 59379 1789850919000 "$CWD_W0"
-# 07e30aeb is alive in place on next3.
+# 07e30aeb is alive in place on next3. SYNTHETIC — reconstructed from the live BEAT (pane 147,
+# pid 84167); there is no such registry row in any capture. See § THE ONE HAND-ASSERTED ROW above.
 reg 147 07e30aeb-0000-4000-8000-000000000000 claude-tertiary  84167 1789852000000 "$CWD_143039"
 {
   echo "12341 Fri Sep 19 12:00:00 2026"
