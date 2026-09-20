@@ -18,16 +18,29 @@ setup() {
   # per-test dir (never the real ~/.claude/autonomy/decisions or the 165MB live IDL).
   export CC_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"
   export CC_IDL="$BATS_TEST_TMPDIR/cc-idl.jsonl"
-  # PIN THE SEMANTIC ARM OFF. This suite tests the LEXICAL tells only; the Jev arm has its own
-  # suite (tests/jev-anti-deference-arm.bats), which isolates HOME and drives the mock gateway.
-  # Without this pin the arm's four preconditions (hooks/lib/jev.sh:118-121 — CC_JEV != 0, a key
-  # from env OR `agent-secrets`, scripts/jev/evaluate.mjs, node_modules/ai) are read from the
-  # AMBIENT machine, so the suite passes only on a box that happens to lack one of them. It went
-  # red fleet-wide the moment node_modules/ai was installed beside an agent-secrets key: the arm
-  # runs exactly on no-tell messages, which is precisely this suite's "silent on ..." population,
-  # so 8 assertions flipped with no code change on either side. CC_JEV=0 is the documented kill
-  # switch (jev.sh:56) and the sibling suite's test 5 proves it disables the arm even WITH a key
-  # and a reachable gateway.
+  # PIN THE SEMANTIC ARM OFF — and note WHAT the defect actually was, because the obvious reading
+  # is wrong. The hook is CORRECT on these inputs: measured 2026-09-20 on a no-tell fixture, its
+  # STDOUT is empty, it exits 0, and its IDL line reads disposition=abstained reason=no-tell. The
+  # arm never fires. What broke 8 "silent on ..." assertions is that the arm's node child writes
+  # `egress allowlist active (proxy 127.0.0.1:NNNNN; N rule(s))` to STDERR, and bats `run` MERGES
+  # stderr into $output, so `[ -z "$output" ]` fails over a hook that said nothing. That stderr
+  # pass-through is deliberate and documented at hooks/lib/jev.sh:142-144 (suppressing it in the
+  # lib is what memory lesson suppressed-stderr-turns-a-failed-command-into-a-zero forbids).
+  #
+  # So the assertion is over-broad relative to this suite's own stated intent — a Stop hook's
+  # channel is stdout — and narrowing it (`run --separate-stderr`) is the other live option; it is
+  # a test-contract call carried as backlog 7eb22985f778. CC_JEV=0 is chosen here because it makes
+  # the suite HERMETIC rather than merely quieter: the arm's four preconditions (jev.sh:118-121 —
+  # CC_JEV != 0, a key from env OR `agent-secrets`, scripts/jev/evaluate.mjs, node_modules/ai) are
+  # otherwise read from the AMBIENT machine, so this suite passed or failed on what happened to be
+  # installed. It went red the moment node_modules/ai appeared beside an agent-secrets key.
+  #
+  # MEASURED REFUTATION of the concern that this "trades 8 reds for 2": that was measured for a
+  # GLOBAL CC_JEV=0. This pin is scoped to THIS suite's setup(), so it cannot reach the arm's own
+  # suites, which set their own env — tests/jev-anti-deference-arm.bats (isolated HOME + mock
+  # gateway) and tests/jev-evaluate.bats ran 27/27 green beside this pin, and the land gated clean.
+  # That sibling suite's test 5 already proves CC_JEV=0 disables the arm with a key AND a reachable
+  # gateway, which is exactly the guarantee relied on here.
   export CC_JEV=0
 }
 
