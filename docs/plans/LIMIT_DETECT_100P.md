@@ -612,6 +612,45 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
     adapter) — held so `bin/cc-limited` has ONE owner while W2c extends it · **W3** — held on W2c · **W6** (lead) —
     after W1 + W2b + W2c + W3.
 
+- 2026-09-20T10:0xZ · **lead 540263da, second entry — W0 closed, W4 in flight after a triple-launch, and
+  three gaps the earlier waves left behind.** Full incident record (not repeated here):
+  `~/.reso/limit-recover/lr-research-2026-09-19/wave2/briefs/WAVE-STATE.md`.
+  - **W0 is DONE** — `b3f320fc5`, harvested BY CONTENT: branch empty vs trunk, `def is_teammate_head`
+    present, the shim carries `is-teammate-head` at 4 sites, and the transcript prints
+    `land-verify: 3 path(s) present + content-identical on origin/main`. **§ 11 #10 and § 11 #14 are
+    closed for W0** — and #14 closed by its FALSIFIER FIRING, not by labelling: 16 real
+    `monthly_spend` records were found in a corpus rebuilt from live stores, so F6 pins a MEASURED
+    wire format and the `SYNTHETIC` label was deliberately not applied.
+  - **W4 is IN FLIGHT**, sole owner session `0cd18d3a` in worktree `lr-detect-w4` (steps 1–2 landed
+    in its tree, 3–5 in hand). It was **triple-launched**: three fire attempts each reported a
+    surface failure and ran cleanup while sessions came up anyway — two of them inside the LEAD's own
+    worktree. The two duplicates were stood down with their work preserved as patches; nothing was
+    clobbered, and the only reason is that all three peers read the tree before writing.
+  - **THIRD GAP, and it is landed code: § 11 #10 is closed for W0 but NOT for W2a.**
+    `bin/cc-limited:71` imports `lr_predicate as PRED` and `bin/cc-limited:421` then runs its own
+    `if b'"agentName"' in head:` — the 13th predicate copy the amendment abolishes. It inherits the
+    measured defects of the raw form: `"agentName":null` answers TEAMMATE, so the census can mark an
+    ordinary live session lead-owned and refuse to recover it. Assigned to W2b-ii.
+  - **W6 PRE-MEASURED, and the numbers are NOT yet the drill's** — `bin/cc-limited` is live on PATH
+    and works: 5 runs at **0.27 · 0.32 · 0.25 · 0.22 · 0.23 s**, 4 of 5 inside the § 5 bar of 0.30 s,
+    screen 2,619 B, `29 sessions · 58 marker rows · 0 unaddressable · enumerator ok · exit 0`.
+    **Read the load before the numbers:** taken at load ~138 (≈7× the plan's `load ≤ 20`), so this is
+    a PESSIMISTIC bound, not a clean green. Re-measure on a quiet box before § 13 carries it as the
+    drill result. `deploy-parity-assert.sh` exits 0, no MISSING and no COPYSTALE across 20 classes.
+  - **§ 11 #1 STILL BLOCKS THE DRILL** (restated because it decides whether W6 can run at all): the
+    fixture hand-asserts registry row `147` for `07e30aeb`, which § 10 denies. Live `cc-limited`
+    renders that sid as `FAULT CLAIMED-NOT-LIVE` with no registry row — § 10's reading. **W6 must not
+    paste drill numbers until `capture.sh` + `CAPTURE-RECEIPT.md` exist.**
+  - **DISPATCH IS DEAD ON THIS BOX, and it is not load.** kitty pid 73832 runs at **PRI 4** (Darwin
+    background QoS) at 0.0% CPU — below even our deliberately `nice -19 taskpolicy -c background`
+    bats runs at PRI 20 — so every remote-control call returns rc 124 and every handoff-fire surface
+    fails. `taskpolicy -B -p` was tried and PRI **stayed 4**, reproducing `darwin-qos-band-mechanics`
+    ("a ONE-WAY RATCHET"). Only a kitty restart lifts it, which kills every live pane: **operator-only,
+    and unsafe while W1/W2c/W4/W5 hold uncommitted work.** W2b-ii and W3 cannot be fired until then.
+  - **THE LEDGER IS BLIND TO W4.** No custody row was created for any W4 fire (`cc-custody --open`
+    returns W1/W2c/W5 only), and `~/.claude/cc-fired/341.json` does not exist, so the W4 owner cannot
+    self-close either. A close here must assert W4 BY HAND; the certificate cannot see it.
+
 ## 13. Cross-reference — `LIMIT_RECOVER_100P` § 9 landed the recovery side first (2026-09-20 00:1xZ, session 11569d45)
 
 Your wave-1 corpus was this session's research. Landed and LIVE on trunk at `1b2676f4c` (23:50Z),
