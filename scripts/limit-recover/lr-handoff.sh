@@ -7,7 +7,7 @@
 #                      [--sid SID] [--config-dir DIR] [--cwd PATH]
 #                      [--context FILE] [--launch|--print-only]
 #                      [--no-transplant] [--keep-source] [--force] [--close-source]
-#                      [--source-pane PANE-ID] [--in-place]
+#                      [--source-pane PANE-ID] [--in-place] [--spawn]
 #
 # Defaults: sid/config from the live session env; --target auto routes via
 # claude-accounts; --print-only mints $TMPDIR/lr-launch-<sid8>-XXXXXX.sh instead of firing.
@@ -224,7 +224,7 @@ lrh_launch_tail() { lr_launch_tail "$LAUNCHER"; LRH_LAUNCH_TAIL=("${LR_LAUNCH_TA
 LRH_LAUNCH_TAIL=()
 LRH_SPAWN_SHAPE=""
 
-CWD="$(pwd)" CONTEXT="" LAUNCH=0 PRINT_ONLY=0 NO_TRANSPLANT=0 KEEP_SOURCE=0 FORCE=0 CLOSE_SOURCE=0 IN_PLACE=0
+CWD="$(pwd)" CONTEXT="" LAUNCH=0 PRINT_ONLY=0 NO_TRANSPLANT=0 KEEP_SOURCE=0 FORCE=0 CLOSE_SOURCE=0 IN_PLACE=0 SPAWN=0
 MODEL_EXPLICIT=0 EFFORT_EXPLICIT=0
 SOURCE_PANE=""
 while [[ $# -gt 0 ]]; do
@@ -244,10 +244,75 @@ while [[ $# -gt 0 ]]; do
     --close-source) CLOSE_SOURCE=1; shift ;;
     --source-pane) SOURCE_PANE="$2"; shift 2 ;;
     --in-place) IN_PLACE=1; shift ;;
+    --spawn) SPAWN=1; shift ;;
     *) echo "lr-handoff: unknown arg $1" >&2; exit 2 ;;
   esac
 done
 [[ -n "$SID" ]] || { echo "lr-handoff: no --sid and CLAUDE_CODE_SESSION_ID unset" >&2; exit 2; }
+
+# ══ THE DEFAULT IS IN PLACE (W11, LIMIT_RECOVER_100P § 10) ═══════════════════════════════════════
+# Operator's words: "recover split panes in place so we are never at this confused middle case of
+# untouched limited original sessions being resumed elsewhere in a new session." The pane IS the
+# continuation whenever there is a pane; the bare spawn survives only where there is NOT one.
+#
+# 🚨 THE ORDERING IS THE WHOLE SAFETY PROPERTY. The implied pane is resolved HERE — after argv
+# parsing, before the --in-place coherence checks below, before the --source-pane registry proof,
+# and a long way before lrh_precheck. lrh_precheck only probes the pane when SOURCE_PANE is SET
+# (the `if [[ -n "$SOURCE_PANE" ]]` at its head), so resolving later would flip the default ON while
+# leaving the reads W2 built to protect it switched OFF — a transplant with no precheck, which is
+# the one thing this wave must not ship. Everything downstream then treats an implied pane exactly
+# like a typed --source-pane, including every refusal.
+#
+# NEVER IMPLIED, each for its own reason: --spawn (the explicit opt-out), --print-only (mints a
+# launcher, fires nothing), --no-transplant (the recycle is admitted on a tombstone it never
+# writes), --close-source (a different disposition of the same pane), and without --launch (there
+# is no launch to recycle into). Kill switch LR_INPLACE_DEFAULT=off restores spawn-by-default.
+if [[ $IN_PLACE -eq 1 && $SPAWN -eq 1 ]]; then
+  echo "lr-handoff: --in-place and --spawn are the two dispositions of this recovery; --in-place is the default, --spawn opts out — pass one" >&2; exit 2
+fi
+LRH_IMPLIED_INPLACE=0
+lrh_resolve_implied_pane() { # → 0 a pane is resolvable (SOURCE_PANE may be set); 1 no pane
+  # (a) an explicitly named pane is already the answer.
+  [[ -n "$SOURCE_PANE" ]] && return 0
+  # (b) SELF. This process IS the session being recovered and it is sitting in a pane, so the
+  # recycle types into its own window and needs no pane id — the in-place block already spells that
+  # case `${SOURCE_PANE:-<this pane>}`. Both terminals are admitted by their own env var because
+  # this is the one question where the CALLER's env is the right subject: it is asking about itself.
+  if [[ "$SID" == "${CLAUDE_CODE_SESSION_ID:-}" ]] && [[ -n "${KITTY_WINDOW_ID:-}" || -n "${ITERM_SESSION_ID:-}" ]]; then
+    return 0
+  fi
+  # (c) DRIVER. Somebody else's session: its pane comes from the registry, which is the only thing
+  # tying a session to a window. More than one live row is NOT a pane to pick — it is the DUPLICATE
+  # state, and guessing there would recycle one live writer out from under another.
+  command -v lr_registry_live_rows >/dev/null 2>&1 || return 1
+  local _rows _n _pane
+  _rows="$(lr_registry_live_rows "$SID" 2>/dev/null)" || return 1
+  _n="$(printf '%s' "$_rows" | grep -c . || true)"
+  if [[ "${_n:-0}" -gt 1 ]]; then
+    echo "lr-handoff: REFUSED to imply a pane — session ${SID:0:8} has $_n live registry rows, so which pane holds it is ambiguous. Resolve it first (lr-fleet.sh --duplicates), or name the pane with --source-pane." >&2
+    return 1
+  fi
+  [[ "${_n:-0}" -eq 1 ]] || return 1
+  # NO PIPE. `$_rows` is already CAPTURED, so `printf | head -1 | cut -f1` spends two forks and a
+  # subshell to re-read a string the shell is holding — and `head -1` is an early-exit consumer,
+  # which under `set -o pipefail` makes the whole expression read FALSE the moment the producer is
+  # SIGPIPE'd. That is the class that made cc_up_cheap report a live pane as dead (bdb1a4553's
+  # parent). Parameter expansion has neither problem: first line, then first tab-separated field.
+  _pane="${_rows%%$'\n'*}"
+  _pane="${_pane%%$'\t'*}"
+  [[ -n "$_pane" ]] || return 1
+  SOURCE_PANE="$_pane"
+  return 0
+}
+if [[ $IN_PLACE -ne 1 && $SPAWN -ne 1 && $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 \
+      && $NO_TRANSPLANT -ne 1 && $CLOSE_SOURCE -ne 1 && "${LR_INPLACE_DEFAULT:-on}" != off ]]; then
+  if lrh_resolve_implied_pane; then
+    IN_PLACE=1; LRH_IMPLIED_INPLACE=1
+    echo "lr-handoff: IN-PLACE by default — ${SOURCE_PANE:+pane $SOURCE_PANE }holds session ${SID:0:8}; pass --spawn for a new pane beside it" >&2
+  else
+    echo "lr-handoff: no pane holds session ${SID:0:8} — spawning (this is the NO-PANE fallback, not a silent downgrade)" >&2
+  fi
+fi
 # --close-source retires THIS pane once the successor is carrying the session. Both of its
 # preconditions are decidable here, before any work is done, and both are incoherence rather than
 # bad luck — so refuse now rather than fire and fail at the end.
@@ -500,11 +565,13 @@ jq -n \
   --arg ingest "$INGEST_PROMPT" \
   --arg src_argv "$SRC_ARGV" --arg rt_model "$RT_MODEL" --arg rt_effort "${EFFORT:-$RT_EFFORT}" --arg perm "${SRC_PERM:-auto}" \
   --arg src_pane "${SOURCE_PANE:-}" --arg in_place "$IN_PLACE" \
+  --arg implied "${LRH_IMPLIED_INPLACE:-0}" \
   '{sid:$sid, source_cfg:$source_cfg, target:$target, target_cfg:$target_cfg, cwd:$cwd,
     worktree:$wt, branch:$branch, head:$head, ts:$ts, model:$model, task_list:$task_list,
     transcript_sha256:$sha, gaps_at_handoff:($gaps|tonumber), ingest_prompt:$ingest,
     source_argv:$src_argv, runtime_model:$rt_model, runtime_effort:$rt_effort, permission_mode:$perm,
-    source_pane:$src_pane, in_place:($in_place=="1")}' \
+    source_pane:$src_pane, in_place:($in_place=="1"),
+    in_place_implied:($implied=="1")}' \
   > "$BUNDLE/MANIFEST.json"
 
 # ── PREFLIGHT: THE LAUNCHER RUNS THE **LIVE** COPY, WHICH MAY PREDATE THE FLAGS WE PASS ──────────
@@ -840,8 +907,15 @@ if [[ $IN_PLACE -eq 1 ]]; then
     rm -f "$LRH_RCY_ERR" 2>/dev/null || true
   else
     { echo "lr-handoff: --in-place: the recycle did NOT verify (handoff-fire rc=$LRH_RCY_RC). The transplant is DONE — session ${SID:0:8} now lives under $TCFG and the source pane is a tombstoned husk (handed-off-session-guard blocks its prompts)."
-      echo "lr-handoff: relaunch it by hand as a NEW pane's own command:  exec /bin/bash $LAUNCHER"
-      [[ -n "$SOURCE_PANE" ]] && echo "lr-handoff: then retire the husk:  $HF self-close --successor <new-pane-id> --transplanted-source --source-pane $SOURCE_PANE --source-session $SID"
+      # RETRY, NOT A HAND-SPAWN (W11). This used to prescribe an improvised `recover-<sid8>`
+      # os-window. Four of those were made on 2026-09-19: no --var provenance, no registry row, no
+      # watcher — nothing on the box could prove or retire them. lr-transplant.sh is now idempotent
+      # on a same-target retry, so re-driving the recovery is the cheap, attributable move.
+      echo "lr-handoff: RETRY the recovery (the transplant is idempotent on a same-target re-run):"
+      echo "lr-handoff:   lr-fleet.sh --one $SID${SOURCE_PANE:+ --source-pane $SOURCE_PANE}"
+      echo "lr-handoff: if a successor is already carrying it, retire the husk instead:"
+      echo "lr-handoff:   lr-fleet.sh --retire-husks${SOURCE_PANE:+ --pane $SOURCE_PANE}"
+      echo "lr-handoff: do NOT hand-spawn a recover-${SID:0:8} window — it carries no provenance, gets no registry row, and nothing can retire it."
     } >&2
     rm -f "$LRH_RCY_ERR" 2>/dev/null || true
     echo "$BUNDLE"; exit 4

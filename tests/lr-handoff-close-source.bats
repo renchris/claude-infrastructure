@@ -392,10 +392,28 @@ reg_row() { # $1=pane · $2=session_id (omit for a row that names none)
   no_raw_teardown
 }
 
-@test "--source-pane without --close-source is refused: it names the pane the close would retire" {
+# ══ REPOINTED BY W11 — --source-pane ALONE now MEANS something (LIMIT_RECOVER_100P § 10) ════════
+# This refusal existed because `--source-pane` on its own was a NO-OP: it named a pane for a close
+# that had not been asked for, so accepting it silently would have done nothing to that pane. W11
+# makes in-place the DEFAULT, and a named pane is the first of the three ways the implied pane is
+# resolved — so `--source-pane P --launch` now means "recycle P in place", which is exactly what an
+# operator typing it expects. Refusing it today would refuse the default.
+#
+# The old refusal is NOT deleted: it is still correct wherever the default cannot apply, and the
+# second case below pins it there via the kill switch. A refusal nothing pins is a refusal a later
+# change removes for free.
+@test "--source-pane alone is now IN-PLACE by default — the pane it names is the one recycled" {
   reg_row "w0t0p9:HUSK" "clos0017-0000-0000-0000-000000000017"
   fire_tx "clos0017-0000-0000-0000-000000000017" --source-pane "w0t0p9:HUSK"
-  [ "$status" -eq 2 ]
+  [ "$status" -ne 2 ] || { echo "still refused under the new default: $output"; false; }
+  [[ "$output" != *"needs --close-source"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"IN-PLACE"* ]] || { echo "$output"; false; }
+}
+
+@test "--source-pane without --close-source IS still refused when LR_INPLACE_DEFAULT=off" {
+  reg_row "w0t0p9:HUSK" "clos0018-0000-0000-0000-000000000018"
+  LR_INPLACE_DEFAULT=off fire_tx "clos0018-0000-0000-0000-000000000018" --source-pane "w0t0p9:HUSK"
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
   [[ "$output" == *"needs --close-source"* ]] || { echo "$output"; false; }
   [ ! -s "$HF_LOG" ]
 }

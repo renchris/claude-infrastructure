@@ -2,7 +2,7 @@
 name: limit-recover
 description: Recover perfectly from ANY interruption to delegated work — disk-truth audit of every Dynamic Workflow slot, subagent, task, AND Agent-Team assignee session; re-run everything not provably COMPLETE (accepting partial results is banned); or continue with zero loss on another of the 4 accounts via validated transcript transplant + salvage bundle. Use when a session was killed by "You've hit your session/weekly limit", when teammates died mid-wave ("Teammate @x failed - You've hit your monthly spend limit"), when resuming after a limit ("continue, we hit our limit"), when workflow/subagent results came back null/partial/empty, or when the reset is too far away and work should continue NOW on another account. ALSO use when an account died on its LOGIN CLIFF rather than on quota — `invalid_grant` on every refresh, `auth: logged-out` / `token-invalid`, "Not logged in · Please run /login" — because the recovery is the same transplant and the alternative is losing the work (there is NO reset to wait for; see § A login cliff is not a quota limit). AND USE IT FOR EVERY NON-QUOTA INTERRUPTION TOO, because the audit engine was never limit-specific — only this description was: a network drop or reconnect ("reconnected to the internet, continue", "wifi came back", "API Error: Can't reach the API server", ENOTFOUND/ECONNRESET/socket hang up), a stalled workflow or agent ("agent stalled on all N attempts", "no progress for 180000ms", "stream watchdog did not recover"), a background task that came back failed/killed/stopped, a session that was RESUMED after a crash/reboot//exit and needs to know what its delegations were doing when the process died. Those select a different recovery MODE (resume-in-place or stall, never a transplant — the account is fine), not a different engine; see /recover for the class-named front door.
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Agent, Workflow, TaskList, TaskCreate, TaskUpdate, AskUserQuestion
-argument-hint: "[audit | handoff [next|next2|next3|next4|auto] [opus|fable] [--in-place] | fleet [--locate|--recover|--enqueue|--duplicates] | ingest <bundle-dir>] — bare = full same-session recovery"
+argument-hint: "[audit | handoff [next|next2|next3|next4|auto] [opus|fable] [--spawn] | fleet [--locate|--recover|--enqueue|--duplicates|--retire-husks] | ingest <bundle-dir>] — bare = full same-session recovery; handoff is IN-PLACE by default"
 ---
 
 # /limit-recover — limit-interruption recovery, no partial-result acceptance
@@ -445,11 +445,33 @@ conversational context; new turns land in the target account's store).
 4. **This session is now DONE.** Emit the handoff report (target account, bundle path, gaps
    handed over). Do not dispatch further delegated work here — the target session owns recovery
    (split-brain rule). Suggest the user close/park this pane.
-5. **`--in-place`** (2026-09-09): add `--in-place` to the fire and this pane recycles ITSELF onto
-   the target — same window, same uuid — instead of splitting a new pane and leaving this one as a
-   husk; a thinking session that can still run its own tool (a Fable-scoped limit, a login cliff
-   caught early) should prefer it. Driven from a third session for a pane that cannot think, it is
-   `--in-place --source-pane <P>`; the fleet mode below does that for every blocked session at once.
+5. 🚨 **IN-PLACE IS THE DEFAULT** (§ 10 W11, 2026-09-20; operator ruling: *"recover split panes in
+   place so we are never at this confused middle case of untouched limited original sessions being
+   resumed elsewhere in a new session"*). `--launch` recycles the pane that HOLDS the session —
+   same window id, same uuid, new account — whenever a pane is resolvable. Nothing needs passing.
+   The pane is found in one of three ways, in order: an explicit `--source-pane <P>`; SELF, when
+   `--sid` is this process's own session and it is sitting in a pane; otherwise the DRIVER path —
+   the session's live `cc-registry` row. **Two live rows is REFUSED, never guessed** — that is the
+   `DUPLICATE` state, and picking one would type `/exit` into a session somebody else is still
+   using; resolve it with `fleet --duplicates` first, or name the pane.
+
+   **`--spawn`** is the explicit opt-out: today's split-pane / os-window behaviour, for when you
+   want the limited pane's scrollback beside the successor. `--in-place` is still accepted and is
+   now a no-op. The default never fires under `--spawn`, `--print-only`, `--no-transplant`,
+   `--close-source`, or without `--launch`, and the automatic fallback to a spawn happens on exactly
+   two conditions — **NO-PANE**, and the launcher-rooted REPLACE class (an expect-rooted pane whose
+   `/exit` closes the window, so no shell survives to relaunch into). Every other refusal PARKS with
+   nothing moved. Kill switch `LR_INPLACE_DEFAULT=off`.
+
+   **When the recycle fails AFTER the transplant (`handoff-fire` rc 4), RETRY — do not hand-spawn.**
+   `lr-transplant.sh` is now idempotent on a same-target retry (the lock names this target and the
+   copy is present ⇒ rc 0, nothing moved), so `lr-fleet.sh --one <sid> --source-pane <P>` re-drives
+   the whole recovery. The old prescription was an improvised `recover-<sid8>` os-window; four were
+   made on 2026-09-19 and **none of them had `--var` provenance, a registry row, or a watcher — so
+   nothing on the box could prove or retire them.** That shape is forbidden. If a successor is
+   already carrying the session, the source pane is a `HUSK`: retire it with `fleet --retire-husks`.
+   A lock naming a *different* target still refuses, and now says so rather than reporting the
+   transcript missing.
 
 ## Mode: fleet [--locate | --recover [--target A] | --enqueue | --duplicates] — the pane IS the continuation
 
