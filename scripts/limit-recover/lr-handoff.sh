@@ -494,14 +494,34 @@ else
   # A DRIVER (or the poller) cannot author narrative — the source cannot be asked. Quote disk, mark
   # the rest UNRECONSTRUCTED (commands/limit-recover.md § ingest honours the marker: STOP-ASK before
   # assuming). Every field below is mechanically derived; none is a judgment.
-  _dod=""
+  # ── THE DoD IS QUOTED AS ITS LAST CAPTURE PLUS A POINTER, NEVER AS THE WHOLE STORE (W3) ────────
+  # `dod_read_content` concatenates EVERY lineage-matching capture. Measured on bundle
+  # 09e64dcb/bundle-20260919T172203Z: 110 captures, 86,888 of the file's 87,858 bytes — 98.6 % of a
+  # HANDOFF-CONTEXT.md whose only reader is an ingest turn that pays resident tokens for all of it.
+  # The frozen scope a successor must diff against is the LAST capture; the rest is history, and
+  # history has a durable home that the pointer below names. So: the last entry, capped, and the
+  # files — never the concatenation.
+  _dod="" _dod_all="" _dod_files="" _dod_store="" _dod_n=0
   for _dp in "$(dirname "$0")/../../hooks/lib/dod-path.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/dod-path.sh" "$HOME/.claude/hooks/lib/dod-path.sh"; do
     if [[ -f "$_dp" ]]; then
       # shellcheck disable=SC1090  # runtime-resolved library; fail-open
-      _dod="$( { . "$_dp" && dod_read_content "${WT_TOP:-$CWD}"; } 2>/dev/null || true)"
+      _dod_all="$( { . "$_dp" && dod_read_content "${WT_TOP:-$CWD}"; } 2>/dev/null || true)"
+      # shellcheck disable=SC1090  # same library, same fail-open contract
+      _dod_files="$( { . "$_dp" && dod_read_files "${WT_TOP:-$CWD}"; } 2>/dev/null | awk 'NR==1' || true)"
+      # the DIRECTORY, not the file list: two absolute paths cost 200 B of a 2 KB budget and the
+      # store is flat, so the dir plus the count is the same pointer at half the price.
+      [[ -n "$_dod_files" ]] && _dod_store="$(dirname "$_dod_files")"
       break
     fi
   done
+  if [[ -n "$_dod_all" ]]; then
+    _dod_n="$(printf '%s\n' "$_dod_all" | grep -c '^## ' || true)"
+    # The LAST `## <ts>` section. buf resets at each heading BEFORE that line is appended, so what
+    # survives END is the final capture WITH its heading — and a store carrying no heading at all
+    # (a legacy single-scope file) falls through as its whole content, which is the right answer.
+    _dod="$(printf '%s\n' "$_dod_all" | awk '/^## /{buf=""} {buf = buf $0 "\n"} END{printf "%s", buf}')"
+    [[ "${#_dod}" -gt 450 ]] && _dod="${_dod:0:450} …[truncated — full capture in the store named below]"
+  fi
   _last_msg="$(/usr/bin/python3 - "$CFG" "$SID" "$LR_LIB_DIR" <<'PY' 2>/dev/null || true
 import glob, json, sys
 cfg, sid = sys.argv[1], sys.argv[2]
@@ -553,27 +573,34 @@ for f in files:
         if txt.strip():
             texts.append((d.get("timestamp") or "", txt.strip()))
 pick = [t for t in texts if not last_limit or t[0] < last_limit]
-print((pick[-1][1] if pick else "")[:2000])
+# 500, not 2000 (W3): the HANDOFF-CONTEXT budget is 2 KB and the full record is one read away in
+# the transcript the section below names. A quote is an ORIENTATION, not an archive.
+# NO BACKTICKS IN THIS BLOCK: it is a quoted heredoc INSIDE a command substitution, and bash 3.2
+# (the /bin/bash this script declares) rescans that region and mis-parses a backtick there —
+# measured, as an "unexpected EOF while looking for matching" pointing 680 lines away.
+print((pick[-1][1] if pick else "")[:500])
 PY
 )"
-  { echo "# HANDOFF-CONTEXT — UNRECONSTRUCTED (written by the recovery driver, not by the session)"
+  { echo "# HANDOFF-CONTEXT — UNRECONSTRUCTED (quoted from disk, not authored)"
     echo
-    echo "The source session ${SID:0:8} could not be asked (limit-blocked). Everything below is QUOTED FROM DISK by lr-handoff.sh; treat scope as UNRECONSTRUCTED and STOP-ASK before assuming anything the audit does not prove."
+    echo "Session ${SID:0:8} was limit-blocked and could not be asked. Scope is UNRECONSTRUCTED: STOP-ASK before assuming what the audit does not prove."
     echo
-    echo "## Scope (frozen) — durable DoD store for this repo"
+    echo "## Scope (frozen) — LAST capture only"
     if [[ -n "$_dod" ]]; then printf '%s\n' "$_dod"; else echo "UNRECONSTRUCTED — no DoD capture for ${WT_TOP:-$CWD}"; fi
+    [[ "$_dod_n" -gt 1 ]] && echo "(${_dod_n} captures in the store; the older ones are NOT quoted — read them under ${_dod_store:-<store unresolved>})"
     echo
     echo "## Tier at the limit"
     echo "model ${RT_MODEL:-unknown} · effort ${RT_EFFORT:-unknown} · permission-mode ${SRC_PERM:-auto} · task list ${SRC_TASK_LIST:-none}"
     echo
-    echo "## Last assistant message before the limit"
+    echo "## Last assistant message before the limit (first 500 chars)"
     if [[ -n "$_last_msg" ]]; then printf '%s\n' "$_last_msg"; else echo "(none found)"; fi
+    echo "(full text: the last non-error assistant record in the transcript MANIFEST.json names)"
     echo
     echo "## Worktree"
     echo "cwd ${WT_TOP:-$CWD} · branch ${BRANCH:-?} · head ${HEAD:-?} · dirty paths ${DIRTY:-?} (git-status.txt / git-log.txt beside this file)"
     echo
     echo "## Next action"
-    echo "UNRECONSTRUCTED — run Step 0 (lr-audit) in the target and derive the next action from audit.md and the transcript; the driver did not guess one."
+    echo "UNRECONSTRUCTED — derive it from audit.md and the transcript; the driver did not guess one."
   } > "$BUNDLE/HANDOFF-CONTEXT.md"
 fi
 if git -C "$CWD" rev-parse --git-dir >/dev/null 2>&1; then
@@ -581,6 +608,13 @@ if git -C "$CWD" rev-parse --git-dir >/dev/null 2>&1; then
   git -C "$CWD" log --oneline -15 > "$BUNDLE/git-log.txt" || true
 fi
 
+# ── THE INGEST PROMPT IS NOW A PLACEHOLDER: THE LAUNCHER COMPOSES THE REAL ONE AT RUN TIME (W3) ──
+# This value is the FAIL-CLOSED form — today's full ingest, verbatim. The launcher substitutes the
+# one-line fast path only when lr-ingest-verify.sh returns 0 at relaunch, and it does so IN THE
+# PANE, seconds before the session resumes, so the decision rests on the state the session will
+# actually wake into rather than on the state at mint time (which can be minutes older, and on the
+# capacity-park path much older than that). MANIFEST.ingest_prompt therefore records the FALLBACK
+# — what the recovery degrades to — not a prediction of what will be typed.
 INGEST_PROMPT="/limit-recover ingest $BUNDLE"
 jq -n \
   --arg sid "$SID" --arg source_cfg "$CFG" --arg target "$TARGET" --arg target_cfg "$TCFG" \
@@ -589,16 +623,24 @@ jq -n \
   --arg sha "$(jq -r '.transcript_sha256' "$BUNDLE/audit.json")" \
   --arg gaps "$(jq -r '.counts.gaps' "$BUNDLE/audit.json")" \
   --arg ingest "$INGEST_PROMPT" \
-  --arg src_argv "$SRC_ARGV" --arg rt_model "$RT_MODEL" --arg rt_effort "${EFFORT:-$RT_EFFORT}" --arg perm "${SRC_PERM:-auto}" \
+  --arg rt_model "$RT_MODEL" --arg rt_effort "${EFFORT:-$RT_EFFORT}" --arg perm "${SRC_PERM:-auto}" \
   --arg src_pane "${SOURCE_PANE:-}" --arg in_place "$IN_PLACE" \
   --arg implied "${LRH_IMPLIED_INPLACE:-0}" \
   '{sid:$sid, source_cfg:$source_cfg, target:$target, target_cfg:$target_cfg, cwd:$cwd,
     worktree:$wt, branch:$branch, head:$head, ts:$ts, model:$model, task_list:$task_list,
     transcript_sha256:$sha, gaps_at_handoff:($gaps|tonumber), ingest_prompt:$ingest,
-    source_argv:$src_argv, runtime_model:$rt_model, runtime_effort:$rt_effort, permission_mode:$perm,
+    runtime_model:$rt_model, runtime_effort:$rt_effort, permission_mode:$perm,
     source_pane:$src_pane, in_place:($in_place=="1"),
     in_place_implied:($implied=="1")}' \
   > "$BUNDLE/MANIFEST.json"
+# `source_argv` IS DELIBERATELY ABSENT (W3). It was the source process's FULL `ps -Eww` line — argv
+# plus the entire inherited environment — and on bundle 09e64dcb/bundle-20260919T172203Z it was
+# 3,477 of the manifest's 4,379 bytes (79 %), dwarfing every field anything reads. The three facts it
+# was mined for are already their own fields: `runtime_model` and `runtime_effort` (parsed from the
+# transcript's own tier, which beats argv when the session switched model mid-run) and
+# `permission_mode`. What the rest of it carried was a verbatim copy of the source account's
+# environment — SSH_AUTH_SOCK, the kitty listen socket, every PATH entry — into a file the recovered
+# session reads. Dropping it is a size fix and an exposure fix in the same edit.
 
 # ── PREFLIGHT: THE LAUNCHER RUNS THE **LIVE** COPY, WHICH MAY PREDATE THE FLAGS WE PASS ──────────
 # $LR is $HOME/.claude/scripts/limit-recover ON PURPOSE (see its assignment above): the launcher
@@ -830,7 +872,11 @@ case "$MODEL" in
     ;;
 esac
 [[ -n "$SRC_PERM" ]] && FIRE_ARGV+=(--permission-mode "$SRC_PERM")
-FIRE_ARGV+=(--prompt "$INGEST_PROMPT")
+# NO `--prompt` PAIR HERE (W3). It is appended to the exec line below as "$LRP_PROMPT", a variable
+# the launcher assigns at RUN TIME from lr-ingest-verify's verdict. Everything before it is still
+# %q-rendered from this array, so the quoting property those cases pin is unchanged: the prompt is
+# the one argument that is a runtime value, and it is passed inside double quotes, so it stays ONE
+# argv element however many spaces it carries.
 # The launcher restores the two env vars lr-fire-resume's spawn whitelist would otherwise lose
 # (q-relaunch-command.md § env): the nested-subagent depth bound and the SOURCE's task board. It is
 # run as `bash <launcher>` — never `exec bash` — by every path below, so the pane's shell survives.
@@ -862,7 +908,39 @@ export LR_RUN_DIR=$(printf '%q' "$BUNDLE")
 export LR_ADMIT_TOKEN=$(printf '%q' "$LRH_ADMIT_TOKEN")
 export LR_SUBMIT_TOKEN=$(printf '%q' "$LR_SUBMIT_TOKEN")
 export LR_LOAD_TERM=$(printf '%q' "${LR_LOAD_TERM:-off}")
-exec $(printf '%q ' "${FIRE_ARGV[@]}")
+
+# ── THE PROMPT IS DECIDED HERE, IN THE PANE, SECONDS BEFORE THE SESSION WAKES (W3) ───────────────
+# Measured (U12 §3-§6): a /limit-recover ingest costs 6-9 model round trips, 6-8 tool calls and
+# ~26.5 K PERMANENTLY RESIDENT tokens, and on 24 of 24 of 2026-09-19's bundles it re-established a
+# precondition already on disk (gaps_at_handoff == 0 in every one). lr-ingest-verify.sh checks
+# that precondition as 13 shell predicates for 0 model tokens.
+# FAIL CLOSED, THREE WAYS: a non-zero rc, a verifier that is not on the live layer, and a rc-0
+# receipt whose last line is empty or is itself a FAIL all keep TODAY'S prompt verbatim, with the
+# reason appended so the degraded path is NAMED in the line the operator can read on the screen —
+# never taken silently. LRP_* is this launcher's own namespace and nothing here is exported: the
+# five LR_* above remain the whole of what the recovered session inherits.
+LRP_BUNDLE=$(printf '%q' "$BUNDLE")
+LRP_VERIFY=$(printf '%q' "$LR/lr-ingest-verify.sh")
+LRP_TCFG=$(printf '%q' "$TCFG")
+LRP_PROMPT=$(printf '%q' "$INGEST_PROMPT")
+LRP_WHY=""
+if [ -x "\$LRP_VERIFY" ]; then
+  if CLAUDE_CONFIG_DIR="\$LRP_TCFG" "\$LRP_VERIFY" "\$LRP_BUNDLE" > "\$LRP_BUNDLE/INGEST-VERIFIED.txt" 2>&1; then
+    LRP_LINE="\$(tail -1 "\$LRP_BUNDLE/INGEST-VERIFIED.txt" 2>/dev/null)"
+    case "\$LRP_LINE" in
+      ''|FAIL*|verdict:*) LRP_WHY="rc 0 but the receipt's last line is not a prompt" ;;
+      *) LRP_PROMPT="\$LRP_LINE" ;;
+    esac
+  else
+    LRP_WHY="\$(grep -m1 '^FAIL' "\$LRP_BUNDLE/INGEST-VERIFIED.txt" 2>/dev/null | cut -c1-160)"
+    [ -n "\$LRP_WHY" ] || LRP_WHY="no FAIL line in the receipt"
+  fi
+else
+  LRP_WHY="lr-ingest-verify.sh is not executable on the live layer (\$LRP_VERIFY)"
+fi
+[ -z "\$LRP_WHY" ] || LRP_PROMPT="\$LRP_PROMPT — lr-ingest-verify FAILED: \$LRP_WHY"
+
+exec $(printf '%q ' "${FIRE_ARGV[@]}")--prompt "\$LRP_PROMPT"
 EOF
 chmod +x "$LAUNCHER"
 
