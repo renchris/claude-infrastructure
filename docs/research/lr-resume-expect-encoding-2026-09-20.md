@@ -3,8 +3,9 @@
 **Row:** cc-backlog `137f29a38c10` — post-land RED,
 `tests/lr-resume-answer-width.bats::WIRING: with the source suppression FORCED OFF, the menu is
 answered AS-IS at every width` @ `cde5cbfa0a08`.
-**Verdict:** real defect, reproduced, cured, red-proven. Cure on this branch, not on trunk at the
-time of writing.
+**Verdict:** real defect, reproduced, cured, red-proven. Measured **still live on trunk tip
+`0bc63966`** (8 of 11) after the sibling `f6ae93ba` landed, so the cure is owed, not superseded.
+It is on this branch and not on trunk at the time of writing.
 **Run from:** an Anthropic cloud VM (Linux), not the desk. Every reading below states the env it
 was taken under, because the env IS the variable.
 
@@ -98,6 +99,33 @@ real captures, trunk vs branch:
 
 So: no behavioural change on the UTF-8 path, correct behaviour on the C path, and the readback's
 discrimination — the property that makes answering the menu safe at all — preserved at every width.
+
+### The suite A/B, run properly on the second attempt
+
+All 19 suites naming `lr-fire-resume` were run; the five carrying any red were then re-run as a
+sequential A/B with base = **trunk tip `0bc63966`** and treatment = this branch — one variable, no
+contention. Counts **and failing test NAMES** were compared, because equal counts can hide a swap:
+
+| suite | base (trunk tip) | this branch | |
+|---|---|---|---|
+| `lr-fleet` | ok 37 / not ok 4 | ok 37 / not ok 4 | same 4 names |
+| `lr-handoff-close-source` | ok 17 / not ok 1 | ok 17 / not ok 1 | same name |
+| `lr-reset-poller` | ok 28 / not ok 2 | ok 28 / not ok 2 | same 2 names |
+| `reso-resume-one` | ok 32 / not ok 3 | ok 32 / not ok 3 | same 3 names |
+| **`lr-resume-answer-width`** | **ok 3 / not ok 8** (`1..11`) | **ok 13 / not ok 0** (`1..13`) | **the row** |
+
+Every sibling red is identical in both arms and is machine-coupled to a macOS desk (iTerm2 window
+ids, an absolute `tmux`, pane/process census) — a property of this Linux VM, not of the diff. Each
+run emitted its `1..N` plan line, so none of these is a refusal being read as a pass.
+
+**And the row's own line is the load-bearing one: the defect is still live on trunk tip**, 8 of 11,
+after `f6ae93ba` landed. This cure is not superseded by that sibling and is still owed.
+
+The first attempt at this A/B was discarded as confounded, and both faults are worth naming because
+neither announces itself: `git clone --local <path>` resolves `origin/main` to the **clone
+source's** local branch — here a stale ref from the original shallow clone, not trunk — and running
+the two arms concurrently let them contend, which moved `ok` counts on suites the diff cannot
+reach. Check what `origin/main` resolves to inside a clone, and run A/B arms sequentially.
 
 ## 6. The suite could not see this, and now can
 
