@@ -601,3 +601,77 @@ EOF
 #   clean tree            -> rc 0, "no cap-text predicate outside the SSOT and its allowlist"
 #   plant in hooks/       -> rc 1, "REFUSED  hooks/net-recover-arm.sh  1 cap-text predicate(s), 0 allowed"
 #   2nd in bin/cc-classify-> rc 1, "REFUSED  bin/cc-classify           2 cap-text predicate(s), 1 allowed"
+
+# ── the THIRTEENTH copy: lr-handoff's recovery-bundle reader (W4, scope grown) ───────────────────
+# lr-handoff.sh builds the "Last assistant message before the limit" section of a recovery bundle by
+# walking the transcript for the last limit and taking the newest non-error turn BEFORE it. Its test
+# was `"hit your" in txt`, blind to every `reached your` cap — so on a Fable death it set NO
+# last_limit, the filter `t[0] < last_limit` passed everything, and the bundle quoted a message from
+# AFTER the death. On a rescued transcript that is the RESCUER's text, handed to a successor as the
+# source session's own last words.
+#
+# THE BLOCK IS EXTRACTED FROM THE SHIPPED FILE, never re-typed: a harness that re-implements its
+# subject certifies the harness (the same reason tests/fixtures/lr-predicate/red-proof.sh imports
+# lr-audit.py rather than copying classify_limit_text).
+lrh_block() {
+  sed -n '/_last_msg=/,/^PY$/p' "$REPO/scripts/limit-recover/lr-handoff.sh" | sed '1d;$d'
+}
+
+# THE EXTRACTION IS ASSERTED, not assumed. If the anchor above is ever renamed, sed prints nothing
+# and every row below would compare "" against "" for some other expectation and pass vacuously —
+# the harness certifying itself, which is exactly what extracting from the shipped file is meant to
+# prevent. So the shape is checked before it is executed.
+assert_block_real() {
+  local b; b="$(lrh_block)"
+  [ "$(printf '%s\n' "$b" | grep -c .)" -ge 10 ] || { echo "extraction EMPTY — the anchor moved"; false; }
+  printf '%s\n' "$b" | grep -q 'last_limit' || { echo "extraction does not contain last_limit"; false; }
+}
+
+fable_death_transcript() { # cfg/projects/p/<sid>.jsonl: turn · Fable cap · post-death rescuer turn
+  local cfg="$BATS_TEST_TMPDIR/cfg" sid="aaaa1111-0000-4000-8000-00000000f13d"
+  mkdir -p "$cfg/projects/p"
+  {
+    printf '%s\n' '{"type":"assistant","timestamp":"2026-09-12T15:00:00.000Z","message":{"role":"assistant","model":"claude-fable-5-1","content":[{"type":"text","text":"THE REAL LAST MESSAGE BEFORE THE CAP"}]}}'
+    printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","apiErrorStatus":429,"timestamp":"2026-09-12T15:26:49.089Z","message":{"model":"<synthetic>","content":[{"type":"text","text":"You'"'"'ve reached your Fable limit. Run /usage-credits to continue."}]}}'
+    printf '%s\n' '{"type":"assistant","timestamp":"2026-09-12T16:00:00.000Z","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"POST-DEATH NOISE FROM A RESCUER"}]}}'
+  } > "$cfg/projects/p/$sid.jsonl"
+  printf '%s %s' "$cfg" "$sid"
+}
+
+@test "13th copy: lr-handoff's bundle quotes the message before a FABLE cap, not the rescuer's" {
+  local cfg sid out
+  assert_block_real
+  read -r cfg sid <<<"$(fable_death_transcript)"
+  out="$(lrh_block | /usr/bin/python3 - "$cfg" "$sid" "$LR" 2>/dev/null)"
+  [ "$out" = "THE REAL LAST MESSAGE BEFORE THE CAP" ] || { printf 'got: %s\n' "$out"; false; }
+}
+
+# THE DEGRADED ARM, same polarity as lr-lib's: an unreachable module must fall back to the pre-W4
+# TEXT test, never leave last_limit unset — the pre-W4 answer is merely narrower, while no answer
+# at all quotes post-death noise. The fallback here is widened to `reached your` too, so even
+# degraded this site is no longer Fable-blind.
+@test "13th copy CONTROL: with the module unreachable the fallback still finds a Fable cap" {
+  local cfg sid out
+  assert_block_real
+  read -r cfg sid <<<"$(fable_death_transcript)"
+  out="$(lrh_block | /usr/bin/python3 - "$cfg" "$sid" "$BATS_TEST_TMPDIR/nowhere" 2>/dev/null)"
+  [ "$out" = "THE REAL LAST MESSAGE BEFORE THE CAP" ] || { printf 'got: %s\n' "$out"; false; }
+}
+
+# ── RED-PROOF (the 13th copy) ───────────────────────────────────────────────────────────────────
+# Against pristine trunk 113b2c661, whose lr-handoff.sh still carries `"hit your" in txt`, this
+# suite's rows copied in beside it, `bats -f "13th copy"`:
+#
+#   not ok 2 13th copy: lr-handoff's bundle quotes the message before a FABLE cap, not the rescuer's
+#   #   `[ "$out" = "THE REAL LAST MESSAGE BEFORE THE CAP" ]' failed
+#   # got: POST-DEATH NOISE FROM A RESCUER
+#   not ok 3 13th copy CONTROL: with the module unreachable the fallback still finds a Fable cap
+#   # got: POST-DEATH NOISE FROM A RESCUER
+#
+# The RED is the defect stated in the harness's own words: a Fable cap set no last_limit, so the
+# `t[0] < last_limit` filter admitted everything and the newest turn won — which on a rescued
+# transcript belongs to the RESCUER. That text was then handed to a successor as the source
+# session's own last words, inside a bundle whose header promises everything in it is quoted from
+# disk. Row 3 is red pre-fix too because the pre-W4 fallback was equally Fable-blind; it is green
+# post-fix because the degraded path was widened to `reached your` as well, so this site is no
+# longer Fable-blind even with the module absent.
