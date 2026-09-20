@@ -72,8 +72,20 @@
 # operator does the thing the board is asking them to do. Do not flip this row on a log-mtime
 # observation. The `runs` cursor named above is still the only sensor that would earn `auto`.
 #
-# A lint (§4.4) enforces manifest <-> launchd/*.plist <-> ~/Library/LaunchAgents three-way
-# coverage, so a new plist cannot land undeclared. `bin/cc-fleet --plist-parity` is that read.
+# COVERAGE IS ENFORCED IN TWO HALVES, and for six recurrences this paragraph described only the one
+# that did not exist. It used to read: "A lint (§4.4) enforces manifest <-> launchd/*.plist <->
+# ~/Library/LaunchAgents three-way coverage, so a new plist cannot land undeclared." No such lint was
+# ever written (memory: spec-named-mechanism-may-be-prose-only), so the sentence a reader trusted as
+# a net was the reason nobody built one — capacity-alarm, scratchpad-reaper, devserver-gc,
+# browser-spin-guard, permission-harvest and com.claude.browse-mirror each landed undeclared under it.
+# What is true now:
+#   TREE half   — `scripts/fleet-manifest-lint.sh`, run in ship-land's `run_gate`, so a committed
+#                 plist with no row here genuinely cannot land. It is a pure function of the commit,
+#                 which is what makes it admissible in a gate at all.
+#   HOST half   — `bin/cc-fleet --plist-parity` (LIVE-ONLY / REPO-ONLY / CONTENT-DRIFT against
+#                 ~/Library/LaunchAgents). This one reads the operator's own launchd and therefore
+#                 must NEVER gate a land: it would let one machine's state decide another author's
+#                 land. It is a board READ, and it is deliberately not enforced anywhere.
 #
 # ── THE THREE WATCHERS, and why only ONE is declared `run` (audit 2026-07-22 V6) ────────────────────
 # V6: "watcher daemons have no launchd KeepAlive — 'absence is the alarm' has no reader". The supervisor,

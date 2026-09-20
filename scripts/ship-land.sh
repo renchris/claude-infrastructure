@@ -4407,6 +4407,71 @@ run_gate() {  # $1=range → 0 green / 1 red
     fi
   fi
 
+  # ── fleet-manifest coverage (DAEMON_FLEET_V2 §4.4, backlog 62f54195c398) ──────────────────────
+  # THE RULE: a committed launchd/com.{claude,chrisren}.*.plist has a row in launchd/fleet.manifest.
+  # cc-fleet's unit of coverage is A LINE IN THAT MANIFEST (§4.1), so an undeclared label is not
+  # merely unalarmed — every leg of the tool is blind to it.
+  #
+  # WHY IT IS HERE AND NOT ONLY IN A SUITE — and this arm is the sixth answer to the same question.
+  # tests/cc-fleet.bats already carries the identical coverage loop and IS a `--direct` suite of any
+  # diff touching launchd/, so in principle the smoke above already ran it. In practice the smoke is
+  # LOAD-SHED on a busy box (R7), and the box was at load 244 for 438883e365ec — from the very wedge
+  # that plist existed to catch. The land most likely to add a plist is the one least able to afford
+  # a suite, so the rule kept landing broken and being found post-land: capacity-alarm,
+  # scratchpad-reaper, devserver-gc, browser-spin-guard, permission-harvest (c893ce32210b) and most
+  # recently com.claude.browse-mirror, which sat RED on trunk for 92 commits and tripped every lander
+  # after it until postland-verify bisected it and a dispatched worker repaired it forward (307f9749d).
+  # §4.4 specified this arm in those words — "the manifest lint runs in run_gate so an undeclared or
+  # unmirrored plist cannot land" — and fleet.manifest's header has asserted for months that it
+  # existed. It did not (memory: spec-named-mechanism-may-be-prose-only). A lint only its own suite
+  # runs is DETECTION, not enforcement (memory: enforcement-must-live-at-the-chokepoint); the event
+  # that IS the act is the land.
+  #
+  # WHY IT IS AFFORDABLE WHERE THE SUITE WAS NOT: one directory glob over ~27 paths plus one pass
+  # over a single manifest — no git spawn, no file reads beyond that manifest. Shedding it would
+  # never be the saving, which is precisely the property the suite lacked.
+  #
+  # WHY IT IS NOT DIFF-SCOPED. The population is ~27 paths and the check is a grep; own-scoping it
+  # would buy nothing and would reintroduce the blindness that makes these misses survive — the row
+  # can also go missing by EDITING the manifest, which a plist-scoped own-set never sees.
+  #
+  # WHAT IS DELIBERATELY *NOT* HERE. §4.4 also names LIVE-ONLY / CONTENT-DRIFT parity against
+  # ~/Library/LaunchAgents. That half reads HOST state, so it would let one machine's launchd decide
+  # whether another author's land passes — a gate whose verdict is not a statement about the tree.
+  # It stays a board read: `bin/cc-fleet --plist-parity`.
+  #
+  # WHY IT CANNOT BECOME A STANDING RED. The repo's baseline is ZERO offenders at the commit that
+  # adds this arm (307f9749d closed the last one, and tests/fleet-manifest-lint.bats pins that
+  # baseline). Both cures are one line in the author's own commit: add the row, or do not commit the
+  # plist. Release valve, auditable in land.log: SHIP_LAND_FLEETMAN_LINT=/nonexistent skips it whole.
+  FLEETMAN_LINT="${SHIP_LAND_FLEETMAN_LINT:-scripts/fleet-manifest-lint.sh}"
+  if [[ -x "$FLEETMAN_LINT" ]]; then
+    echo "→ gate: fleet-manifest coverage (a committed launchd plist with no row in fleet.manifest)" >&2
+    # gate_bounded: EVENT-ON-FIRST-LAND, SELF-CLEARING-IN-THIS-COMMIT — the budget is one land, not
+    # a clock, because neither refusal can survive the commit that triggers it. This fires only for
+    # the author who just broke the lint's own discrimination (the selftest is green on trunk), and
+    # the cure is in the same edit. Expiry: if it ever fires for someone who did not touch the lint,
+    # that is the lint rotting rather than a tree failing — drop the arm via
+    # SHIP_LAND_FLEETMAN_LINT=/nonexistent, which is attested in land.log, and fix the lint as its
+    # own commit rather than letting a standing refusal accumulate silent lands behind it.
+    if ! selftest_ok "$FLEETMAN_LINT"; then
+      echo "✗ gate: fleet-manifest-lint --selftest FAILED — the lint no longer discriminates, so its" >&2
+      echo "  clean verdict would mean nothing. Fix the lint before landing." >&2
+      gate_red fleet-manifest-selftest
+      return 1
+    fi
+    "$FLEETMAN_LINT" >&2; _arm_rc=$?
+    if (( _arm_rc == 2 )); then arm_nonverdict "fleet-manifest-lint"; return 1; fi
+    if (( _arm_rc != 0 )); then
+      echo "✗ gate: fleet-manifest coverage RED — this tree commits a launchd plist that fleet.manifest" >&2
+      echo "  does not declare, or a row cc-fleet cannot read. An undeclared label is invisible to every" >&2
+      echo "  leg of cc-fleet, so the job can be dark forever with nothing saying so. The label and the" >&2
+      echo "  cure are named above and are one line in THIS commit." >&2
+      gate_red fleet-manifest
+      return 1
+    fi
+  fi
+
   # ── off-box ADMISSION ratchet — the LAST arm, because it is the only expensive one ────────────
   # THE GENERATOR IT CLOSES. `scripts/offbox-partition.sh` makes the hermetic partition a SET
   # DIFFERENCE, so a suite joins it BY EXISTING rather than by being proven off-box-clean. One
