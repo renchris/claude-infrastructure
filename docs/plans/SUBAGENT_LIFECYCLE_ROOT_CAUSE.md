@@ -353,3 +353,27 @@ verdict.
   - **The windowed acceptance rows were given a home before this plan was closed**, so closing it
     deletes nothing: `2aa99648bd80` carries A5 and A6 with both commands and the post-land anchor,
     and deliberately stores **no** falsifier for the same inversion reason.
+
+- 2026-09-20 03:30Z — **D1 preflight landed; D1 itself PARKED, not decided.** A dispatch pass fired a worker at
+  `b1432e348362` 2 h 23 min after W3 (`f710200f8`) landed — against a rule whose deciding term needs two weeks.
+  The row is now `blocked` rather than open, so it stops drawing worker slots until **2026-10-03**; nothing about
+  the decision changed. What that pass produced is
+  `docs/research/subagent-lifecycle-2026-09-19/D1-preflight.md`:
+  - **W3's AXIS-H baseline REPLICATES** — 105 leads / 22.9 % EVERY / 67.6 % NONE / 502 members / 68.7 % nothing,
+    against W3's 101 / 22.8 % / 67.3 % / 490 / 68.2 %. Every cell moved as a sliding 30-day mtime window predicts,
+    so the instrument reproduces and the re-run command is verified to execute.
+  - 🚨 **A plausible argument for (b) is REFUTED.** "The closer erases the config rows `RESIDENT_MINE` reads, so
+    (a) suppresses W3's signal" is false: of 418 members spawned in 30 d, row survival is **1.9 %** for those the
+    closer did NOT reap, against **14.4 %** for those it did and **4.6 %** after a lead `shutdown_request`. The
+    un-reaped arm is the LOWEST, so the closer is not the eraser and this may not be used to choose (b).
+  - **What empties the configs is still unidentified, and it is (b)'s real risk.** No fleet code writes
+    `teams/*/config.json` (vendor-side), and removal is **not** age-dependent (flat 0–6 h through 14–30 d), so the
+    94.8 % lead-only figure cannot be age-corrected. (b)'s premise rests on how often `RESIDENT_MINE` fires, which
+    D1's rule does not price.
+  - **Two method warnings, both traps this pass walked into and backed out of:** the 94.8 % figure is **92 % dead
+    leads** while the arm fires at a LIVE lead's close (live-lead configs retain rows 12.5 % vs 4.2 %, n=8 —
+    directional, NOT a verdict); and `RESIDENT_SRC` reaches **no log on trunk**, so the obvious retrospective
+    fire-rate grep returns 0 for a reason unrelated to the phenomenon and was withdrawn rather than shipped.
+  - **No dispatcher mechanism was built.** A blanket park on the `not-yet-true` class would wrongly park the
+    re-land majority, whose precondition arrives in hours; and the plan's deliberate choice to keep the arming
+    date in `whyNotNow` prose (after removing an inverted falsifier) stands and was not reopened.
