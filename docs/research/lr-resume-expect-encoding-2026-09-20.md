@@ -130,12 +130,43 @@ missed match rather than as `DIED`.
 | bash cure still working | byte-identical `lr_wrap_re` output under C and C.utf8 |
 | lints | `shellcheck -S warning` clean (and clean on trunk's baseline) · `bats-shellcheck-lint` · `bats-kill-guard-lint` · `bats-testname-eval-lint` (711 suites) · `bats-assert-liveness.py` · `test-hermeticity-lint` (711 suites) — all clean |
 
-## 8. Dispatcher vintage
+## 8. A sibling cured a DIFFERENT defect in this same suite, in parallel
+
+While this was in flight, trunk gained `f6ae93ba` — *"lr-resume-answer-width was ambient-dependent
+on one env var"* — which adds `unset CLAUDE_CODE_RESUME_THRESHOLD_MINUTES` to `setup()`, because a
+session launched with resume-suppression exports that variable into every shell it spawns and the
+`--summary` arm then asserted `<unset>` against the desk rather than against the script.
+
+**It is not this defect and neither supersedes the other.** Different arm, different mechanism, no
+overlapping lines; the rebase applied cleanly and this branch now carries both. Two independent
+confirmations that they are disjoint:
+
+- Every reading in this document was taken under `env -i`, where that variable is absent — so it
+  was never active in any of them, and the 8-of-11 here is the encoding defect alone.
+- At `ab8c5c52` (before `f6ae93ba`), **this fix alone** takes the suite to 13/13. Nothing else in
+  the tree was broken at that commit.
+
+After rebasing onto trunk tip the suite is 13/13 in three env shapes, the third of which holds
+**both** hostile conditions at once:
+
+| shape | result |
+|---|---|
+| `env -i … LC_ALL=C` (offbox harness) | 13/13 |
+| `env -i … LC_ALL=C.utf8` (desk-like) | 13/13 |
+| `env -i …` no `LANG` **and** `CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999` | 13/13 |
+
+That commit's own closing line — *"a corrected instrument delivers you into the next false
+negative"* — is a fair description of this row too: it names a third `set -u` abort at `:381`,
+cured before `ab8c5c52`, that produced the same empty-keylog symptom from a third cause. Three
+distinct defects have now presented as *"the keylog is empty"* in this one suite. **The symptom is
+not diagnostic here; read the drive's stderr before attributing it.**
+
+## 9. Dispatcher vintage
 
 `git rev-parse origin/main:bin/cc-dispatch` = `dc9130372d6332940388c2a17da7c65c1af3c3bd`, **EQUAL**
 to the blob that composed the brief. The dispatcher that fired this work is trunk.
 
-## 9. Left open, deliberately
+## 10. Left open, deliberately
 
 - **No bash 3.2 run.** Off-box there is none and the source is unreachable through the egress
   policy. Argued from proven in-repo precedent instead (§4); the desk's `bash32-parse-lint` is the
