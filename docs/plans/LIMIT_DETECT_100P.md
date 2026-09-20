@@ -788,16 +788,22 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
     the manifest already says its off-box verdict "is a claim about the image's package set, never
     about our tree". None of these name a file this diff touches.
   - **ONE SUITE IS NOT ADJUDICATED, and it is named rather than rounded up to green:**
-    `tests/cc-await-ping.bats` is **4 red on the branch — tests 91-94, the same four on two
-    independent runs** — and its trunk arm has NOT been measured. An earlier draft of this entry
-    called the suite FLAKY on the strength of two runs that read 0. **Both zeroes were my own
-    instrument, not the suite**: each came from a shell whose cwd I had deleted underneath it (I
-    removed the A/B worktree while the job was still running), so the run never started and the
-    `grep '^not ok'` filter over its empty output returned nothing. **An empty filtered result is a
-    REFUSAL, not a green** — `a-gate-refusal-is-not-a-gate-result`, whose remedy is the one thing
-    that command lacked: assert the `1..N` plan line before believing a filtered verdict. The
-    re-measurement now includes it. Worth reading twice because the failure is silent and reads in
-    the direction you already expect: two "clean" runs, no error, and a wrong conclusion pushed.
+    `tests/cc-await-ping.bats` is **PRE-EXISTING RED like the rest, and it is NOT flaky** — both
+    arms re-measured with the plan line asserted read **`1..116`, not-ok 91 92 93 94**, identical
+    test-for-test: `W1: a sender that TOOK A TURN after the kill is (C) DEAF`, `W2: … STILL RUNNING
+    … even with a frozen beat`, `W2b: a (C) DEAF notice NAMES the mechanism`, `W3: … EXITED with a
+    frozen beat is (B) BENIGN`.
+  - **AN EARLIER DRAFT OF THIS ENTRY CALLED THAT SUITE FLAKY, AND WAS WRONG IN A WAY WORTH KEEPING.**
+    It rested on two runs that read 0 failures. **Both zeroes were the instrument, not the suite**:
+    each came from a shell whose cwd had been deleted underneath it — the A/B worktree was removed
+    while the job was still running — so the run never started, and a `grep '^not ok'` filter over
+    its empty output returned nothing. **An empty filtered result is a REFUSAL, not a green**
+    (`a-gate-refusal-is-not-a-gate-result`), and the remedy is exactly the thing that command
+    lacked: **assert the `1..N` plan line before believing a filtered verdict.** Read it twice,
+    because the failure is silent and lands in the direction the reader already expects — two
+    "clean" runs, no error message, one wrong conclusion written into this log and pushed. Every
+    A/B in the gate line above was taken with a `grep`-filtered count; the ones that ran against a
+    live cwd are sound, and this is the one that did not.
     What can be said independently of the number: there is no mechanism by which this diff
     reaches it. It was only ever in the candidate set because it mentions `cc-beats`, and this diff
     adds a READER of that store inside `bin/cc-limited` while changing neither the beat writer
