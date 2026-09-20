@@ -606,3 +606,31 @@ SH
   # …and the run does NOT record a re-CR it never sent
   [[ "$(states)" != *"SUBMIT-RECR"* ]] || { echo "states claim a re-CR was sent: $(states)"; false; }
 }
+
+# ── the refusal, one layer up: a predicate that REFUSES must not read as a clean "no" ─────────────
+
+@test "RED-PROOF an UNREADABLE transcript is NOT MEASURED in the expect program either, never 'none'" {
+  # Case 8 pins the shell probe's end of this: rc 3, empty stdout, a cause line on stderr. Nothing
+  # pinned the CONSUMER's mapping of it, and mapping `unreadable` to `none` in the Tcl survived the
+  # mutation pass — so the distinction the probe's own header calls load-bearing died one layer up,
+  # silently, exactly where it costs something.
+  #
+  # `none` is the one verdict that LICENSES A KEYSTROKE. Read a refusal as `none` and the program
+  # presses Enter into a pane whose transcript it could not read, and then records FAILED:submit —
+  # a measured negative for a question that was never answered. NOT MEASURED is neither a failure
+  # nor a success and must say so (memory predicate-refusal-is-not-a-negative;
+  # predicate-error-exit-is-indistinguishable-from-false).
+  exp_setup
+  screen 1 empty          # quiet arm: our prompt IS typed
+  screen 2 mine           # …and our own draft is sitting there, so a `none` reading WOULD re-CR
+  # The refusal, induced the way case 8 induces it: a sid with no transcript under $LR_CFG.
+  export LR_SID="no-such-session-for-the-probe"
+  lr_expect_run 90
+  [ "$(wc -l < "$LR_TEST_GOT" | tr -d ' ')" = 1 ] \
+    || { echo "a keystroke was sent on the strength of a refusal:"; cat "$LR_TEST_GOT"; false; }
+  [[ "$output" == *"submission NOT MEASURED"* ]] \
+    || { echo "the refusal was not reported as unmeasured: $output"; false; }
+  [[ "$(states)" == *"INDETERMINATE:submit"* ]] || { echo "states: $(states)"; false; }
+  [[ "$(states)" != *"FAILED:submit"* ]] \
+    || { echo "a refusal was recorded as a measured submission failure: $(states)"; false; }
+}
