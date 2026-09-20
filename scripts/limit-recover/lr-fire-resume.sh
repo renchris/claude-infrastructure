@@ -483,7 +483,14 @@ export LR_RE_MENU LR_RE_ASIS_STRONG LR_RE_ASIS LR_RE_TRUST LR_RE_TRUST_RB LR_RE_
 # The post-load "ready" signal gates --prompt injection. It lives in the status line, which wraps in
 # a narrow pane exactly like everything else — so a literal match here did not merely mis-answer a
 # menu, it silently DROPPED the injected prompt and left the recovered session sitting idle.
-LR_RE_READY="$(lr_wrap_re 'for shortcuts')|$(lr_wrap_re 'auto mode on')|$(lr_wrap_re 'shift+tab to cycle')"
+# The mode-cycling hint was the third alternative and is DELETED (W3): measured 0 hits across CC
+# 2.1.260's rendered status line, so it could only ever widen the pattern against a string the
+# binary no longer paints. (Its literal spelling is deliberately not written here — the acceptance
+# grep for this wave is a file-wide count, so a comment quoting the phrase would defeat it.)
+# A ready signal that cannot fire is not a belt — it is the reason the
+# 8 s QUIET arm below exists, because a READY phrase is version-coupled by construction and the
+# pty going silent is not.
+LR_RE_READY="$(lr_wrap_re 'for shortcuts')|$(lr_wrap_re 'auto mode on')"
 export LR_RE_READY
 export LR_ASIS="$(( SUMMARY == 0 ? 1 : 0 ))"
 case "$PERM_MODE" in
@@ -527,6 +534,79 @@ export LR_WRAP
 # bare `expect …` returning non-zero would abort the script under errexit and never reach the
 # fall-through — the pane would still die on exactly the exits this change exists to survive.
 # A command on the left of `||` is exempt from errexit, which is what makes the rc readable.
+# ══ WHAT THE EXPECT PROGRAM CAN ASK THE WORLD (W3, 2026-09-19) ════════════════════════════════
+# An expect(1) program has no shell functions and no library: everything it needs from this box it
+# must `exec`. Rather than spell shell pipelines inline as Tcl strings — where every quote is a new
+# way to corrupt the program — the three questions it asks are exported as WHOLE shell programs in
+# environment variables, which Tcl passes to `bash -c` as ONE argv element and therefore cannot
+# mangle. Same discipline as the LR_RE_* patterns above: composed in bash, consumed uninterpreted.
+#
+#   LR_PROBE      the submission probe (a FILE, not a program string) — the transcript oracle
+#   LR_SCREEN_SH  the screen verdict — EMPTY | DRAFT | DRAFT-MINE | MENU | UNKNOWN
+#   LR_NOTE_SH    one lr_state_append, for the states only the expect program can witness
+#
+# EVERY ONE OF THEM IS ALLOWED TO FAIL, AND EACH FAILURE HAS ITS OWN WORD. UNKNOWN is not EMPTY and
+# an unreadable transcript is not "not submitted": the action that follows a false EMPTY is typing
+# into a session whose screen was never read (memory predicate-refusal-is-not-a-negative).
+LR_PROBE=""
+for _lrf_probe in "$_LRF_DIR/lr-submit-probe.sh" \
+                  "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-submit-probe.sh" \
+                  "$HOME/.claude/scripts/limit-recover/lr-submit-probe.sh"; do
+  [ -x "$_lrf_probe" ] && { LR_PROBE="$_lrf_probe"; break; }
+done
+[ -n "$LR_PROBE" ] || echo "!! lr-fire-resume: lr-submit-probe.sh unreachable — SUBMISSION cannot be measured for this run" >&2
+LR_LIB_PATH="${_lrf_lib:-}"
+LR_IT2="$HOME/.claude/bin/it2"
+[ -x "$LR_IT2" ] || LR_IT2=""
+LR_PANE="${ITERM_SESSION_ID:-}"; LR_PANE="${LR_PANE##*:}"
+# The needle the composer must contain for a re-Enter to be allowed: the head of the prompt, printable
+# ASCII only and whitespace-stripped, because that is the exact shape the screen reader produces.
+LR_SCREEN_WANT="$(printf '%s' "$PROMPT" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]' | cut -c1-40)"
+LR_SCREEN_SH="$(cat <<'LRSCREENSH'
+# EMPTY | DRAFT | DRAFT-MINE | MENU | UNKNOWN — the composer, read out of band from the pane itself.
+# The box is found by its BORDER RUNS (a repeat of U+2500), never by a literal TUI phrase: a phrase
+# dies at the wrap, a border run is width-invariant by construction. This is composer_content()'s
+# parse (handoff-fire.sh), reproduced here because expect cannot call a bash function.
+[ -n "${LR_IT2:-}" ] && [ -n "${LR_PANE:-}" ] || { printf UNKNOWN; exit 0; }
+scr="$("$LR_IT2" session read -s "$LR_PANE" -n "${LR_SCREEN_LINES:-24}" 2>/dev/null)" || scr=""
+[ -n "$scr" ] || { printf UNKNOWN; exit 0; }
+# A SELECTOR LINE is `❯` followed by an ordinal — a parked menu. The composer box draws `❯` too, so
+# "contains ❯" would call every healthy screen a menu; the ordinal is what identifies an option.
+if LC_ALL=C grep -qE '❯[[:space:]]*[0-9]+\.' <<<"$scr"; then printf MENU; exit 0; fi
+body="$(LC_ALL=C awk -v b='────────────' '
+  { line[NR] = $0; if (index($0, b) > 0) { b2 = b1; b1 = NR } }
+  END { if (b1 == 0 || b2 == 0 || b1 - b2 < 2) exit 9; for (i = b2 + 1; i < b1; i++) print line[i] }' <<<"$scr")" \
+  || { printf UNKNOWN; exit 0; }
+# [:print:] drops the newlines AND the box ink, so an empty composer reduces to the empty string.
+body="$(printf '%s' "$body" | LC_ALL=C tr -cd '[:print:]')"
+# The never-typed-in placeholder, matched as a WHOLE row: a real draft that merely starts with
+# `Try "` must still read as a draft, because the cost of a loose match is typing over live text.
+if LC_ALL=C grep -qE '^[[:space:]]*Try "[^"]*("|\.\.\.)[[:space:]]*$' <<<"$body"; then body=""; fi
+body="$(printf '%s' "$body" | LC_ALL=C tr -d '[:space:]')"
+[ -n "$body" ] || { printf EMPTY; exit 0; }
+if [ -n "${LR_SCREEN_WANT:-}" ]; then
+  case "$body" in *"$LR_SCREEN_WANT"*) printf DRAFT-MINE; exit 0 ;; esac
+fi
+printf DRAFT
+LRSCREENSH
+)"
+LR_NOTE_SH="$(cat <<'LRNOTESH'
+# ONE lr_state_append, from inside the expect program. Inert without a run dir (this script is also
+# run by hand) and LOUD when the library is unreachable — a state log that drops lines silently is
+# worse than none, because its silence reads as "nothing happened".
+[ -n "${LR_RUN_DIR:-}" ] || exit 0
+for _n_lib in "${LR_LIB_PATH:-}" \
+              "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-lib.sh" \
+              "$HOME/.claude/scripts/limit-recover/lr-lib.sh"; do
+  [ -n "$_n_lib" ] && [ -f "$_n_lib" ] && { . "$_n_lib" 2>/dev/null || true; break; }
+done
+command -v lr_state_append >/dev/null 2>&1 || {
+  echo "!! lr-fire-resume: lr-lib.sh unreachable — state '${LR_ST_STATE:-}' NOT recorded" >&2; exit 0; }
+lr_state_append "$LR_RUN_DIR" "${LR_ST_STATE:-}" "${LR_ST_STAGE:-}" "${LR_ST_DETAIL:-}" || true
+LRNOTESH
+)"
+export LR_PROBE LR_LIB_PATH LR_IT2 LR_PANE LR_SCREEN_WANT LR_SCREEN_SH LR_NOTE_SH
+
 lr_rc=0
 # THE RELAUNCH-RC TRAP IS DISARMED HERE, and this line is the whole of its scope rule: everything
 # above is "the launcher failed before the TUI existed" (a relaunch failure the watcher must see);
@@ -549,6 +629,45 @@ expect -c '
   set injected 0
   set asis $env(LR_ASIS)
   set menu_answered 0
+  # THE QUIET BUDGET. `timeout` in expect means "no new output for N seconds", and a booting TUI
+  # paints continuously — so silence is the positive fact that the frame has settled. 8 s replaces
+  # the old 300 s `timeout {}`, which was not a wait but a silent give-up: a READY phrase the binary
+  # had stopped painting meant the prompt was simply never typed and nothing anywhere said so.
+  set quiet [expr {[info exists env(LR_QUIET_S)] ? $env(LR_QUIET_S) : 8}]
+  # ── THE THREE QUESTIONS THIS PROGRAM ASKS THE WORLD ───────────────────────────────────────────
+  # Each is one `exec` of a whole shell program handed over in the environment (see the LR_*_SH
+  # block in the bash above). Every one of them may fail, and each failure has its own WORD —
+  # never a fall-through to the answer that licenses typing.
+  proc lr_note {state stage detail} {
+    global env
+    if {![info exists env(LR_NOTE_SH)]} { return }
+    catch { exec env LR_ST_STATE=$state LR_ST_STAGE=$stage LR_ST_DETAIL=$detail \
+                 /bin/bash -c $env(LR_NOTE_SH) }
+  }
+  proc lr_screen {} {
+    global env
+    if {![info exists env(LR_SCREEN_SH)]} { return UNKNOWN }
+    set v ""
+    catch { set v [string trim [exec /bin/bash -c $env(LR_SCREEN_SH)]] }
+    if {$v eq ""} { return UNKNOWN }
+    return $v
+  }
+  # submitted <ts> | queued <ts> | none | unreadable | skip — `unreadable` and `skip` are NOT `none`.
+  proc lr_probe {t0} {
+    global env
+    if {![info exists env(LR_PROBE)] || $env(LR_PROBE) eq ""} { return {skip {}} }
+    if {![info exists env(LR_SUBMIT_TOKEN)] || $env(LR_SUBMIT_TOKEN) eq ""} { return {skip {}} }
+    set out ""
+    if {[catch { set out [exec $env(LR_PROBE) $env(LR_CFG) $env(LR_SID) $t0 \
+                               $env(LR_SUBMIT_TOKEN)] }]} { return {unreadable {}} }
+    set w [split [string trim $out]]
+    if {[llength $w] == 0} { return {unreadable {}} }
+    if {[lindex $w 0] eq "none"} { return {none {}} }
+    return [list [lindex $w 0] [lindex $w 1]]
+  }
+  # THE SUBMISSION BASELINE, captured BEFORE the spawn. Everything the probe accepts must be NEWER
+  # than this instant, which is what keeps the identical prompt of a PREVIOUS attempt out of the answer.
+  set t0 [clock format [clock seconds] -format {%Y-%m-%dT%H:%M:%S} -gmt 1]
   # A wrapped prompt spans far more bytes than expect buffers by default (2000): at 8 columns one
   # menu is several KB of text and cursor-move chrome. A width-invariant pattern that cannot fit in
   # the match buffer is not width-invariant at all.
@@ -615,6 +734,11 @@ expect -c '
     set cols [stty columns]
     stty rows $rows columns $cols < $spawn_out(slave,name)
   } WINCH
+  # THE MAIN LOOP RUNS ON THE QUIET BUDGET, not on 300 s. This one line is what makes the arm below
+  # a WAIT rather than a give-up: at 300 s the timeout arm was unreachable in practice — lr-handoff
+  # awaits the whole recycle inside 900 s and the watcher calls it dead at 180 s, so nothing ever
+  # observed it fire. Each answer_menu arm restores it explicitly, because answer_menu leaves 300.
+  set timeout $quiet
   expect {
     -re $env(LR_RE_MENU) {
       # The resume-return menu rendered anyway — the source suppression above did not take (an
@@ -634,11 +758,17 @@ expect -c '
           answer_menu 0 $env(LR_RE_MENU) $env(LR_RE_MENU) "resume from summary (--summary)" 1
         }
       }
+      # answer_menu leaves `timeout` at 300; re-entering the loop with it would restore the
+      # silent 300 s give-up this wave deleted.
+      set timeout $quiet
       exp_continue
     }
     -re $env(LR_RE_TRUST) {
       sleep 1
       answer_menu 0 $env(LR_RE_TRUST_RB) $env(LR_RE_TRUST_RB) "folder trust"
+      # answer_menu leaves `timeout` at 300; re-entering the loop with it would restore the
+      # silent 300 s give-up this wave deleted.
+      set timeout $quiet
       exp_continue
     }
     # informational overage NOTICE (Enter dismisses either way — safe). Opt-in upsells
@@ -652,40 +782,128 @@ expect -c '
     -re $env(LR_RE_FS) {
       sleep 1
       answer_menu 1 $env(LR_RE_FS_RB) $env(LR_RE_FS_RB) "fullscreen upsell (Not now)"
+      # answer_menu leaves `timeout` at 300; re-entering the loop with it would restore the
+      # silent 300 s give-up this wave deleted.
+      set timeout $quiet
       exp_continue
     }
     -re $env(LR_RE_READY) {
       if {$prompt ne "" && !$injected} {
         set injected 1
-        sleep 2
+        # 0.3/0.2/0.2, down from 2/1/1. The three sleeps exist to let the composer mount and to keep
+        # the ^U, the text and the CR from coalescing into one paste the TUI reads as a single
+        # keystroke — a settling delay, not a wait for a remote event. 4 s of the old budget was
+        # pure latency on every recovery, and the submit poll below now measures the outcome
+        # instead of guessing at it.
+        sleep 0.3
         send "\025"
-        sleep 1
+        sleep 0.2
         send -- $prompt
-        sleep 1
+        sleep 0.2
         send "\r"
       }
     }
-    timeout {}
+    timeout {
+      # ── THE QUIET ARM: WHAT USED TO BE `timeout {}` ─────────────────────────────────────────
+      # The pty has painted nothing for $quiet seconds, so the frame has settled and READY never
+      # matched. That is the version-coupling failure, and it is the one this file cannot prevent:
+      # the status-line wording belongs to the binary, not to us. The cure is to stop asking the SCREEN
+      # for a phrase and ask it for a SHAPE — an empty composer box between two border runs.
+      #
+      # 🚨 NEVER A BLIND CR INTO A QUIET PTY. A parked menu is quiet too, and Enter on one takes the
+      # highlighted default — which on the resume menu is "resume from summary" (spends usage,
+      # loses the goal) and on the trust prompt is worse. So the ONLY screen that licenses typing is
+      # one that affirmatively reads EMPTY; MENU, DRAFT and UNKNOWN all park and SAY SO. That is the
+      # 2026-08-06 rule this repo already runs on: typing needs the affirmative (memory
+      # probe-that-acts-on-absence-must-confirm-presence).
+      if {$prompt ne "" && !$injected} {
+        set sv [lr_screen]
+        if {$sv eq "EMPTY"} {
+          set injected 1
+          lr_note READY-QUIET inject "READY never matched; composer reads EMPTY after ${quiet}s quiet — typing"
+          send_user "\nlr-fire-resume: READY never matched, but the composer reads EMPTY after ${quiet}s of quiet — typing the prompt on that evidence.\n"
+          sleep 0.3
+          send "\025"
+          sleep 0.2
+          send -- $prompt
+          sleep 0.2
+          send "\r"
+        } else {
+          lr_note READY-NOT-SEEN inject "screen reads $sv after ${quiet}s quiet — prompt NOT typed"
+          send_user "\n✗ READY NEVER SEEN — prompt NOT typed: the pty went quiet for ${quiet}s and the screen reads $sv, not an empty composer. NOTHING was sent, because Enter on a parked menu takes its default. Type the prompt by hand in this pane.\n"
+        }
+      }
+    }
     eof { exit }
   }
   if {$injected} {
-    # VERIFY the submit. A leading-/ prompt opens the slash-command autocomplete,
-    # which can swallow the first CR (menu-select, not submit) — the prompt then
-    # sits in the composer forever (observed 2026-07-11, ingest prompt stranded).
-    # "esc to interrupt" renders only while a turn is actually running: the
-    # un-fakeable submitted signal. Re-send CR until seen (an extra CR on an empty
-    # composer is a no-op; on an open menu it closes/accepts it).
-    set timeout 6
-    set submitted 0
-    for {set i 0} {$i < 5 && !$submitted} {incr i} {
-      expect {
-        -re {esc to interrupt} { set submitted 1 }
-        timeout { send "\r" }
-        eof { exit }
+    # ══ SUBMISSION IS A RECORD IN THE TRANSCRIPT, NEVER A PHRASE ON THE SCREEN ══════════════════
+    # WHAT THIS REPLACES. The old verifier waited for the TUI chrome that renders while a turn is
+    # running, and re-sent CR up to five times until it appeared. It failed in both directions:
+    #   · it is a SCREEN PHRASE, so it is width- and version-coupled exactly like the READY
+    #     signal one block up — and when it stops rendering, the loop sends FIVE blind CRs;
+    #   · it renders while ANY turn is running, so a harness notification turn satisfies it while
+    #     the injected prompt is still sitting unsubmitted in the composer. That is the same
+    #     defect the engagement oracle carries and the reason 1 in 5 RECOVERED verdicts was false.
+    # The cure is the run TOKEN: lr-handoff puts it in the prompt text, so a user record carrying
+    # it is proof that THIS prompt reached THIS session, and nothing else can forge it.
+    #
+    # THREE ANSWERS, THREE ACTIONS, AND `none` IS THE ONLY ONE THAT LICENSES A KEYSTROKE.
+    #   submitted ⇒ done, and the ts is the engagement baseline the watcher will use.
+    #   queued    ⇒ typed and accepted, behind a running turn: keep polling to the engage bound.
+    #               A re-CR here would append a SECOND copy of the prompt to the queue.
+    #   none      ⇒ nothing reached the transcript. ONE more Enter, and only after the screen
+    #               affirmatively shows OUR prompt sitting in the composer (DRAFT-MINE) — that is
+    #               the 2026-07-11 stranded-ingest case, a leading-/ prompt whose first CR the
+    #               slash-command autocomplete swallowed as a menu-select.
+    #   unreadable/skip ⇒ NOT MEASURED. Never a keystroke, and never a green word in the log.
+    #
+    # 🚨 NOTHING BELOW MAY `exit`. expect exiting closes the master pty, which kills the resumed
+    # session — the husk this whole project exists to prevent. Every path falls through to
+    # `interact`, including the failures.
+    set poll [expr {[info exists env(LR_SUBMIT_POLL_S)] ? $env(LR_SUBMIT_POLL_S) : 30}]
+    set qmax [expr {[info exists env(RCY_ENGAGE_TIMEOUT)] ? $env(RCY_ENGAGE_TIMEOUT) : 180}]
+    if {$qmax < $poll} { set qmax $poll }
+    set deadline $poll
+    set verb skip
+    set ts ""
+    set recr 0
+    for {set t 0} {$t < $deadline} {incr t} {
+      set r [lr_probe $t0]
+      set verb [lindex $r 0]
+      set ts   [lindex $r 1]
+      if {$verb eq "submitted"} { break }
+      if {$verb eq "skip"} { break }
+      if {$verb eq "queued" && $deadline < $qmax} { set deadline $qmax }
+      if {$verb eq "none" && !$recr && $t >= [expr {$poll - 1}]} {
+        set recr 1
+        set sv [lr_screen]
+        if {$sv eq "DRAFT-MINE"} {
+          lr_note SUBMIT-RECR submit "prompt still in the composer after ${poll}s — one more CR"
+          send_user "\nlr-fire-resume: the prompt is still sitting in the composer after ${poll}s (nothing in the transcript) — sending ONE more Enter.\n"
+          send "\r"
+          set deadline [expr {$t + 10}]
+        } else {
+          send_user "\nlr-fire-resume: nothing in the transcript after ${poll}s and the composer reads $sv, not our prompt — NOT re-sending Enter.\n"
+          break
+        }
       }
+      sleep 1
     }
-    if {!$submitted} {
-      send_user "\nlr-fire-resume: WARNING — prompt may not have submitted; press Enter in the pane.\n"
+    if {$verb eq "submitted"} {
+      lr_note submitted submit "user record carrying the run token at $ts"
+      send_user "\nlr-fire-resume: SUBMITTED — the prompt is in the transcript at $ts.\n"
+    } elseif {$verb eq "queued"} {
+      lr_note queued submit "enqueued at $ts; still behind a running turn at the ${deadline}s bound"
+      send_user "\nlr-fire-resume: QUEUED — the prompt was accepted at $ts and is waiting behind a running turn. It has NOT started yet.\n"
+    } elseif {$verb eq "unreadable"} {
+      lr_note INDETERMINATE:submit submit "the target transcript could not be read — submission NOT measured"
+      send_user "\nlr-fire-resume: submission NOT MEASURED — the target transcript could not be read. This is not a failure and it is not a success; read the pane.\n"
+    } elseif {$verb eq "skip"} {
+      send_user "\nlr-fire-resume: submission not verified — this run carries no submit token (a by-hand run, or lr-submit-probe.sh is unreachable).\n"
+    } else {
+      lr_note FAILED:submit submit "no record of the prompt in the transcript within ${deadline}s"
+      send_user "\n✗ NOT SUBMITTED — the prompt never reached the transcript within ${deadline}s. The session is alive and TASK-LESS. Type the prompt by hand in this pane.\n"
     }
     set timeout 300
   }
