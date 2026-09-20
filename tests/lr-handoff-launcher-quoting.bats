@@ -561,7 +561,8 @@ SH
   run gen "lrhw0006-0000-4000-8000-000000000006" "$BATS_TEST_TMPDIR/repo"
   [ "$status" -eq 0 ]
   LAUNCHER="$(launcher_from_output)"
-  [ -n "$LAUNCHER" ] && [ -f "$LAUNCHER" ] || false
+  [ -n "$LAUNCHER" ] || { echo "no launcher path on stderr: $output"; false; }
+  [ -f "$LAUNCHER" ] || { echo "the launcher path names no file: $LAUNCHER"; false; }
   for v in LR_RUN LR_RUN_DIR LR_ADMIT_TOKEN LR_SUBMIT_TOKEN LR_LOAD_TERM; do
     grep -qE "^export $v=" "$LAUNCHER" || { echo "missing export $v:"; cat "$LAUNCHER"; false; }
   done
@@ -631,7 +632,8 @@ SH
   run gen "lrhq0013-0000-0000-0000-000000000013" "$BATS_TEST_TMPDIR/repo"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   LAUNCHER="$(launcher_from_output)"
-  [ -n "$LAUNCHER" ] && [ -f "$LAUNCHER" ]
+  [ -n "$LAUNCHER" ] || { echo "no launcher path on stderr: $output"; false; }
+  [ -f "$LAUNCHER" ] || { echo "the launcher path names no file: $LAUNCHER"; false; }
 
   cd "$BATS_TEST_TMPDIR"
   run /bin/bash "$LAUNCHER"
@@ -657,7 +659,8 @@ SH
   run gen "lrhq0014-0000-0000-0000-000000000014" "$BATS_TEST_TMPDIR/repo"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   LAUNCHER="$(launcher_from_output)"
-  [ -n "$LAUNCHER" ] && [ -f "$LAUNCHER" ]
+  [ -n "$LAUNCHER" ] || { echo "no launcher path on stderr: $output"; false; }
+  [ -f "$LAUNCHER" ] || { echo "the launcher path names no file: $LAUNCHER"; false; }
 
   cd "$BATS_TEST_TMPDIR"
   run /bin/bash "$LAUNCHER"
@@ -665,6 +668,10 @@ SH
   [[ "$output" == *"argc=7"* ]] || { echo "$output"; false; }
   [[ "$output" == *"argv[7]=</limit-recover ingest "* ]] || { echo "the fallback is not today's ingest: $output"; false; }
   [[ "$output" == *"lr-ingest-verify FAILED: FAIL C3"* ]] || { echo "the failing clause is NOT named: $output"; false; }
+  # …AND the run token (W3i D3). The degraded path is the one taken whenever something went wrong,
+  # so it is the path whose engagement most needs proving; without the token the submit probe is
+  # blind on exactly it, and the prompt cannot be tied back to its run by any later reader.
+  [[ "$output" == *"run:lrhq0014:"* ]] || { echo "NO RUN TOKEN ON THE FAIL-CLOSED PROMPT: $output"; false; }
   # still ONE argument despite the appended prose
   [[ "$output" != *"argv[8]="* ]] || { echo "the prompt was WELDED into two arguments: $output"; false; }
 }
@@ -684,6 +691,7 @@ SH
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"argv[7]=</limit-recover ingest "* ]] || { echo "$output"; false; }
   [[ "$output" == *"not executable on the live layer"* ]] || { echo "the absence is not named: $output"; false; }
+  [[ "$output" == *"run:lrhq0015:"* ]] || { echo "NO RUN TOKEN ON THE ABSENT-VERIFIER PROMPT: $output"; false; }
 }
 
 @test "W3 acceptance: HANDOFF-CONTEXT.md ≤ 2 KB and MANIFEST.json ≤ 1 KB on a generated bundle" {
