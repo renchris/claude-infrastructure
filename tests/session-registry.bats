@@ -85,7 +85,7 @@ deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null || true; wait "$p" 2>/de
   # reads KITTY_WINDOW_ID, so unsetting one variable no longer establishes "no address" — and a
   # suite inheriting a real KITTY_WINDOW_ID from the pane it runs in would silently start testing
   # the opposite of what it says.
-  printf '{"cwd":"/tmp/x"}' | env -u ITERM_SESSION_ID -u CC_PANE_ID -u KITTY_WINDOW_ID bash "$REG"
+  printf '{"cwd":"/tmp/x"}' | env -u ITERM_SESSION_ID -u KITTY_WINDOW_ID -u CC_PANE_ID -u KITTY_WINDOW_ID bash "$REG"
   run bash -c "ls '$CC_REGISTRY_DIR' 2>/dev/null | wc -l | tr -d ' '"
   [ "$output" = "0" ]
 }
@@ -96,7 +96,7 @@ deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null || true; wait "$p" 2>/de
   # A lead-launched successor was measured carrying KITTY_WINDOW_ID=186 with neither CC_PANE_ID nor
   # ITERM_SESSION_ID set; the operator registered that pane by hand.
   printf '{"cwd":"/tmp/kitty"}' \
-    | env -u ITERM_SESSION_ID -u CC_PANE_ID KITTY_WINDOW_ID=186 CC_SESSION_NAME=kt bash "$REG"
+    | env -u ITERM_SESSION_ID -u KITTY_WINDOW_ID -u CC_PANE_ID KITTY_WINDOW_ID=186 CC_SESSION_NAME=kt bash "$REG"
   [ -f "$CC_REGISTRY_DIR/186.json" ]
   run jq -r '.paneUUID' "$CC_REGISTRY_DIR/186.json"; [ "$output" = "186" ]
 
@@ -369,7 +369,7 @@ mkentry_headless() { # $1=id $2=name $3=pid
 
 @test "register: a headless address (CC_PANE_ID set, ITERM_SESSION_ID unset) writes a row" {
   printf '{"cwd":"/tmp/hl","session_id":"HL-SID","reason":"startup"}' \
-    | env -u ITERM_SESSION_ID CC_PANE_ID="$HDL" CC_SESSION_NAME="hl" bash "$REG"
+    | env -u ITERM_SESSION_ID -u KITTY_WINDOW_ID CC_PANE_ID="$HDL" CC_SESSION_NAME="hl" bash "$REG"
   [ -f "$CC_REGISTRY_DIR/$HDL.json" ]
   run jq -r '.paneUUID' "$CC_REGISTRY_DIR/$HDL.json";   [ "$output" = "$HDL" ]
   run jq -r '.session_id' "$CC_REGISTRY_DIR/$HDL.json"; [ "$output" = "HL-SID" ]
@@ -377,7 +377,7 @@ mkentry_headless() { # $1=id $2=name $3=pid
 
 @test "register: surface records WHICH variable supplied the address (headless vs pane)" {
   printf '{"cwd":"/tmp/hl","session_id":"HL-SID"}' \
-    | env -u ITERM_SESSION_ID CC_PANE_ID="$HDL" bash "$REG"
+    | env -u ITERM_SESSION_ID -u KITTY_WINDOW_ID CC_PANE_ID="$HDL" bash "$REG"
   run jq -r '.surface' "$CC_REGISTRY_DIR/$HDL.json"; [ "$output" = "headless" ]
   printf '%s' "$CHILD" | ITERM_SESSION_ID="w1t0p0:$PANE_T" bash "$REG"
   run jq -r '.surface' "$CC_REGISTRY_DIR/$PANE_T.json"; [ "$output" = "pane" ]
@@ -389,11 +389,20 @@ mkentry_headless() { # $1=id $2=name $3=pid
   # the registry empty. Failures are accumulated and asserted at the end rather than asserted inside
   # the loop, because a non-final bare assertion in a bats body is not trapped
   # (fleet memory: negated-assertion-dead-unless-final).
+  #
+  # KITTY_WINDOW_ID IS SEALED HERE, and that is load-bearing rather than tidy. session-register.sh
+  # gained it as a THIRD address, so on the empty case `${CC_PANE_ID:-${ITERM_SESSION_ID:-\
+  # ${KITTY_WINDOW_ID:-}}}` falls all the way through to whatever the RUNNER's terminal exports —
+  # and under kitty that is a real id, so a row is written and this control goes red for a reason
+  # that is a property of the box, not of the subject. Measured 2026-09-20 in kitty
+  # (KITTY_WINDOW_ID=334): red as `[->1]`, green with the var sealed. The hook is behaving
+  # correctly in both cases; only the fixture was under-sealed. tests/stop-failure-marker.bats,
+  # which tests the other consumer of that same third address, already seals all three.
   bad_kept=""
   for bad in "../evil" "/etc/passwd" ".hidden" "." ".." "not a uuid" "a/b" ""; do
     rm -rf "${CC_REGISTRY_DIR:?}" 2>/dev/null || true
     printf '{"cwd":"/tmp/x","session_id":"X"}' \
-      | env -u ITERM_SESSION_ID CC_PANE_ID="$bad" bash "$REG" || true
+      | env -u ITERM_SESSION_ID -u KITTY_WINDOW_ID CC_PANE_ID="$bad" bash "$REG" || true
     n="$(find "$CC_REGISTRY_DIR" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')"
     [ "${n:-0}" = 0 ] || bad_kept="$bad_kept [$bad->$n]"
   done
@@ -412,7 +421,7 @@ printf '{"paneUUID":"%s","name":"TENANT","cwd":"/tmp","account":"next","pid":%s,
 :
 OUT
   cat > "$BATS_TEST_TMPDIR/inner-h.sh" <<'IN'
-printf '%s' "$NR_PAYLOAD" | env -u ITERM_SESSION_ID CC_PANE_ID="$NR_PANE" bash "$NR_HOOK"
+printf '%s' "$NR_PAYLOAD" | env -u ITERM_SESSION_ID -u KITTY_WINDOW_ID CC_PANE_ID="$NR_PANE" bash "$NR_HOOK"
 :
 IN
   NR_PANE="$HDL" NR_PAYLOAD='{"cwd":"/tmp/child","session_id":"CHILD-SID","reason":"startup"}' \
@@ -448,7 +457,7 @@ IN
   # CC_REG_RETAIN_H with nothing able to remove it. This is why both moved in one diff.
   mkentry_headless "$HDL" "hl-agent" "$$"
   printf '{"session_id":"HL-SID","reason":"other"}' \
-    | env -u ITERM_SESSION_ID CC_PANE_ID="$HDL" bash "$DEREG"
+    | env -u ITERM_SESSION_ID -u KITTY_WINDOW_ID CC_PANE_ID="$HDL" bash "$DEREG"
   [ ! -f "$CC_REGISTRY_DIR/$HDL.json" ]
 }
 
