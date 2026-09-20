@@ -1,0 +1,23 @@
+== W5 FINAL CENSUS @ 2026-09-20T00:18:07Z ==
+
+-- member processes belonging to THIS wave (argv[0]-anchored, three-flag) --
+live members now:
+count=0
+
+-- every window this wave ever created, and whether it is still open --
+  161  closed
+  162  closed
+  171  closed
+  202  closed
+  203  closed
+  204  closed
+  205  closed
+  206  closed
+  207  closed
+  208  closed
+  209  closed
+  210  closed
+  211  closed
+
+-- probe shell runners --
+  (no rows above = none)

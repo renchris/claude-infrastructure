@@ -1,0 +1,10 @@
+live members now:
+  860 /Users/chrisren/.claude-260/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id probeC@session-d96051
+72354 /Users/chrisren/.claude-260/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id probeA@session-38a2d1
+74657 /Users/chrisren/.claude-260/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id probeB@session-38a2d1
+82166 /Users/chrisren/.claude-260/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id probeC@session-38a2d1
+84445 /Users/chrisren/.claude-260/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id probeD@session-38a2d1
+96581 /Users/chrisren/.claude-260/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id probeA@session-d96051
+97168 /Users/chrisren/.claude-260/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id probeB@session-d96051
+ 3229 /Users/chrisren/.claude-260/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id probeD@session-d96051
+count=8

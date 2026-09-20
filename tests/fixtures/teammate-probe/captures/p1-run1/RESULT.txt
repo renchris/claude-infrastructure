@@ -1,0 +1,7 @@
+run=run1
+measured_at=2026-09-20T00:10:45Z
+idle_observed=4/4
+spawned_windows=5
+spawned_procs=4
+survivor_windows=5
+survivor_procs=4
