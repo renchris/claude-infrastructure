@@ -157,7 +157,23 @@ if [ "$_t" = 0 ]; then clause PASS A5 "teams.led RUNNING members=0"; else clause
 # lr_state_append — three states in which nothing here can say what the recycle interrupted.
 # Consequence, stated rather than hidden: all 24 of 2026-09-19's bundles predate the state log and
 # therefore fail HERE and only here, which is exactly the fail-closed direction (they degrade to the
-# ingest they already ran). A record carrying killed_inflight=0 is a positive pass.
+# ingest they already ran).
+#
+# ── AND A PRESENT-BUT-SILENT LOG IS THE SAME VERDICT (W3i D2) ────────────────────────────────────
+# This clause used to PASS when the log EXISTED and no record carried the field ("state log ran;
+# nothing reported a kill"). That is the fail-open the whole file is written against, and it fails
+# open on exactly the state every bundle is in: NOTHING in the tree writes killed_inflight yet
+# (`grep -rn killed_inflight scripts hooks bin` finds only this reader), so the moment W2's
+# events.jsonl is being written, present-and-silent IS the shape of every bundle and A6 would clear
+# all of them having measured nothing. A log that never recorded the value does not say the value
+# was zero; it says the value is UNRECORDED — and this file's own contract settles the polarity: a
+# clause it cannot EVALUATE is a FAILURE, never a pass. Only an explicit killed_inflight=0 record
+# passes, because only that is a positive statement by a writer.
+#
+# The cost is named rather than hidden: until a writer lands (residual 1 of the W3i report — one
+# line in lrh_precheck, W2's function), A6 refuses every real recovery and the fast path stays
+# unreachable. That is the same direction the absent-file arm already took, and the alternative is a
+# gate that says yes on no evidence.
 EV="$B/events.jsonl"
 if [ ! -s "$EV" ]; then
   clause FAIL A6 "no events.jsonl in the bundle — the run's state log never ran; killed_inflight is unknowable"
@@ -169,7 +185,7 @@ else
     | if length == 0 then -1 else max end' "$EV" 2>/dev/null)"
   case "$_ki" in
     0)  clause PASS A6 "killed_inflight=0 (recorded in events.jsonl)" ;;
-    -1) clause PASS A6 "killed_inflight: no record in events.jsonl (state log ran; nothing reported a kill)" ;;
+    -1) clause FAIL A6 "events.jsonl carries no killed_inflight record — the value was never written, so what the recycle interrupted is UNRECORDED, not zero" ;;
     ''|*[!0-9-]*) clause FAIL A6 "events.jsonl is unparseable — killed_inflight cannot be read" ;;
     *)  clause FAIL A6 "killed_inflight=$_ki — the recycle interrupted in-flight work" ;;
   esac

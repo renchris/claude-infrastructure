@@ -90,9 +90,12 @@ fixture_ok() {
           session_dir:"/nonexistent", transcript_sha256:"deadbeef"}' \
     > "$BUNDLE/audit.json"
 
-  # W2's run state log. `admitted` is what lrh_precheck writes on the path that mints the token,
-  # so a healthy post-W2 bundle always has at least this line.
-  jq -cn '{ts:"2026-09-19T17:22:03Z", state:"admitted", stage:"gate", detail:"token abc"}' \
+  # W2's run state log. `admitted` is what lrh_precheck writes on the path that mints the token, so
+  # a healthy post-W2 bundle always has at least this line — and the line must STATE the value A6
+  # reads. This fixture used to carry only `detail:"token abc"`, i.e. the present-but-SILENT shape,
+  # which is what pinned A6's fail-open: silence read as zero, and the CONTROL certified it.
+  jq -cn '{ts:"2026-09-19T17:22:03Z", state:"admitted", stage:"gate",
+           detail:"token abc killed_inflight=0", killed_inflight:0}' \
     > "$BUNDLE/events.jsonl"
 
   # A transcript the REAL ledger can read: no spawns, so open=0 / nonsuccess=0 / spawned==settled.
@@ -345,4 +348,16 @@ sc_stat() { env CLAUDE_CONFIG_DIR="$1" \
   last="$(printf '%s\n' "$output" | tail -1)"
   [[ "$last" != *"auto-continue cleared"* ]] || { echo "the PROMPT claims a clear that did not happen: $last"; false; }
   [[ "$last" == *"pre-limit auto-continue left to its owner"* ]] || { echo "the prompt does not say what actually happened: $last"; false; }
+}
+
+@test "A6: a PRESENT but SILENT events.jsonl REFUSES — silence is not zero" {
+  # W3i D2, and the fail-open that mattered most: nothing in the tree writes killed_inflight yet, so
+  # once W2's state log is being written, present-and-silent is the shape of EVERY bundle. The old
+  # `-1 ⇒ PASS` arm would have cleared all of them while having measured nothing — and this suite's
+  # own CONTROL fixture was built to that shape, so it pinned the fail-open rather than catching it.
+  jq -cn '{ts:"2026-09-19T17:22:03Z", state:"admitted", stage:"gate", detail:"token abc"}' \
+    > "$BUNDLE/events.jsonl"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL A6 — events.jsonl carries no killed_inflight record"* ]] || { echo "$output"; false; }
 }
