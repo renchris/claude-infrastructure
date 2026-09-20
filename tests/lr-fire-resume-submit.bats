@@ -168,7 +168,7 @@ enqueue()   { printf '{"type":"queue-operation","operation":"enqueue","timestamp
   [ "$output" = 0 ] || { echo "post-inject exits: $output"; false; }
 }
 
-@test "RED-PROOF the expect program EXECUTES the probe, and asks it about THIS run" {
+@test "RED-PROOF the expect program EXECUTES the probe, and asks it about a baseline IT captured" {
   # WHAT THIS REPLACES, and why the replacement is a different kind of thing. The case here was two
   # string greps — `grep -c LR_PROBE >= 2` and `grep -c READY-NOT-SEEN >= 1` — under the title "the
   # expect program polls lr-submit-probe and never blind-CRs a quiet pty". Neither half was earned:
@@ -182,16 +182,50 @@ enqueue()   { printf '{"type":"queue-operation","operation":"enqueue","timestamp
   exp_setup
   screen 1 empty
   CALLS="$BATS_TEST_TMPDIR/probe-calls"
-  export LR_PROBE="$BATS_TEST_TMPDIR/probe-stub"
-  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nprintf "none\\n"\n' "$CALLS" > "$LR_PROBE"
+  export LR_PROBE="$BATS_TEST_TMPDIR/probe-stub" LR_PROBE_CALLS="$CALLS"
+  # ONE ARGUMENT PER LINE, with an argc header, because `"$*"` JOINS with spaces and an EMPTY
+  # argument then vanishes from the record — which is how `set t0 ""` read as a well-formed argv
+  # here for seven cases. A TAB separator does not fix it either: tab is IFS whitespace, so `read`
+  # collapses a run of them and the empty field disappears a second time.
+  cat > "$LR_PROBE" <<'STUB'
+#!/usr/bin/env bash
+{ printf 'argc=%s\n' "$#"; printf 'arg=%s\n' "$@"; } >> "$LR_PROBE_CALLS"
+printf 'none\n'
+STUB
   chmod +x "$LR_PROBE"
   : > "$TX"
+  # THE SUBMISSION BASELINE, WHICH THIS CASE USED TO WILDCARD AWAY. The argv pattern was
+  # "$CFG $SID "*" $TOK" — it pinned three of four fields and let `*` swallow t0, so `set t0 ""`
+  # survived it and every other case in this file (7/7). A blank baseline makes EVERY record in the
+  # transcript "after the prompt", which is precisely the false-RECOVERED this wave exists to
+  # prevent — measured on the real recoveries, 1 of 5 reported RECOVERED off a stale notification
+  # turn. The title claimed "about THIS run" and the assertion could not tell one run from any.
+  #
+  # Bracketed by the test's OWN clock reads, which is what makes it a baseline for THIS run rather
+  # than merely well-formed: t0 is captured inside the expect program between these two instants, so
+  # `before <= t0 <= after` is exact (ISO-8601 UTC is fixed-width, so a string compare IS a time
+  # compare) and load-invariant — a slow box widens the window, it never moves t0 out of it.
+  t_before="$(date -u +%FT%T)"
   lr_expect_run 90
+  t_after="$(date -u +%FT%T)"
   [ -s "$CALLS" ] || { echo "the program never executed the probe"; false; }
-  # …and it asked the documented question: <cfg> <sid> <t0> <token>, about OUR run.
-  first="$(sed -n 1p "$CALLS")"
-  [[ "$first" == "$CFG $SID "*" $TOK" ]] \
-    || { echo "the probe was called with the wrong argv: $first"; false; }
+  [ "$(sed -n 1p "$CALLS")" = "argc=4" ] \
+    || { echo "the probe was called with the wrong number of arguments:"; head -5 "$CALLS"; false; }
+  p_cfg="$(sed -n 2p "$CALLS")"; p_cfg="${p_cfg#arg=}"
+  p_sid="$(sed -n 3p "$CALLS")"; p_sid="${p_sid#arg=}"
+  p_t0="$(sed -n 4p "$CALLS")";  p_t0="${p_t0#arg=}"
+  p_tok="$(sed -n 5p "$CALLS")"; p_tok="${p_tok#arg=}"
+  [ "$p_cfg" = "$CFG" ] || { echo "the probe got the wrong config dir:"; head -5 "$CALLS"; false; }
+  [ "$p_sid" = "$SID" ] || { echo "the probe got the wrong session id:"; head -5 "$CALLS"; false; }
+  [ "$p_tok" = "$TOK" ] || { echo "the probe got the wrong run token:"; head -5 "$CALLS"; false; }
+  [ -n "$p_t0" ] \
+    || { echo "the probe was asked about a BLANK baseline — every record in the transcript is then 'after the prompt'"; false; }
+  [[ "$p_t0" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$ ]] \
+    || { echo "the baseline is not a UTC %FT%T instant: [$p_t0]"; false; }
+  ! [[ "$p_t0" < "$t_before" ]] \
+    || { echo "the baseline [$p_t0] predates this run (test clock $t_before) — it is not THIS run's"; false; }
+  ! [[ "$p_t0" > "$t_after" ]] \
+    || { echo "the baseline [$p_t0] is after this run finished (test clock $t_after)"; false; }
 }
 
 @test "RED-PROOF the probe and resume_engaged's token scan agree, fixture for fixture" {
@@ -543,6 +577,69 @@ watcher_argv() { # $1 = the submit token to hand over
   [[ "$output" == *"SUBMITTED in $PANE"* ]] || { echo "the token never reached the watcher: $output"; false; }
   grep -F '"class":"recycle-submitted"' "$HOME/.claude/logs/handoffs.jsonl" >/dev/null \
     || { echo "no recycle-submitted row"; cat "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null; false; }
+}
+
+# ── THE SUBMISSION BASELINE, WHICH THE WHOLE WAVE LEFT UNPINNED ──────────────────────────────────
+#
+# `t0` is the instant that decides which records count as "after the prompt". Blank it and EVERY
+# record in the transcript qualifies — a previous attempt's identical prompt, a notification turn
+# from before the relaunch, anything the transplanted transcript already held. That is exactly the
+# false-RECOVERED this wave exists to prevent, and it is how 1 of 5 real recoveries reported
+# RECOVERED off a stale notification turn. Three sites carry it and NONE was pinned: the expect
+# program's own capture (case above), the watcher's probe call, and the watcher's argv parse. Each
+# mutant below survived every suite on this branch.
+
+@test "RED-PROOF the watcher asks the probe about ITS OWN baseline, not about the whole transcript" {
+  # $RCY_T0 → "" at the probe call survived cases 22/23/25 because their only token record is newer
+  # than the baseline anyway — a fixture in which the baseline cannot matter. Here the ONLY record
+  # carrying this run's token is OLDER than the baseline: a previous attempt of the same run typed
+  # the same prompt, with the same token, before this relaunch. It is not this attempt's submission,
+  # and the probe must not report one.
+  watcher_setup
+  printf '%s\n' \
+    "{\"type\":\"user\",\"timestamp\":\"2026-09-19T20:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"/limit-recover ingest /x (submit token: $TOK)\"}}" \
+    > "$TX"
+  local -a argv; mapfile -t argv < <(watcher_argv "$TOK")
+  run env HOME="$HOME" PATH="$SHIM:$PATH" IT2_BIN="$HOME/.claude/bin/it2" \
+      PS_DEAD_CALLS=2 RCY_ENGAGE_TIMEOUT=3 RCY_ENGAGE_INTERVAL=1 \
+      RCY_BOOT_PANE_EVERY=1 RCY_BOOT_IVL_S=0.2 RCY_BOOT_WAIT_S=20 \
+      bash "$HF" "${argv[@]}"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  ! [[ "$output" == *"SUBMITTED in"* ]] \
+    || { echo "a PREVIOUS attempt's token record was reported as THIS run's submission: $output"; false; }
+  # …and the dead arm names the right one of its two failures, which is the whole point of the split:
+  # "never submitted" is re-typed, "submitted and never answered" is left alone and read.
+  [[ "$output" == *"NEVER REACHED the transcript"* ]] \
+    || { echo "the dead arm named the wrong failure: $output"; false; }
+  ! grep -F '"class":"recycle-submitted"' "$HOME/.claude/logs/handoffs.jsonl" >/dev/null 2>&1 \
+    || { echo "a recycle-submitted row was written for a record older than the baseline"; false; }
+}
+
+@test "RED-PROOF the watcher READS its baseline off argv position 12, and the clock oracle obeys it" {
+  # `RCY_T0="${12:-}"` → `RCY_T0=""` survived 3/3 submit cases AND 18/18 engagement cases. It is the
+  # parse, one layer above the case before this one, and it is pinned WITHOUT a token so the probe
+  # never runs: what is under test here is the argv position alone, and the clock oracle it feeds.
+  #
+  # The transcript holds one real, content-bearing, non-error assistant turn — and it is OLDER than
+  # the baseline. That is the pre-relaunch transcript a transplant carries with it, and the whole
+  # reason a baseline exists: with it, this is NOT engagement; without it, this session is reported
+  # as a working continuation having done nothing at all.
+  watcher_setup
+  printf '%s\n' \
+    '{"type":"assistant","timestamp":"2026-09-19T21:01:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"answering something from before the relaunch"}]}}' \
+    > "$TX"
+  local -a argv; mapfile -t argv < <(watcher_argv "")
+  [ "${argv[11]}" = "$T0" ] \
+    || { echo "the argv this suite builds no longer carries the baseline at position 12: ${argv[11]}"; false; }
+  run env HOME="$HOME" PATH="$SHIM:$PATH" IT2_BIN="$HOME/.claude/bin/it2" \
+      PS_DEAD_CALLS=2 RCY_ENGAGE_TIMEOUT=3 RCY_ENGAGE_INTERVAL=1 \
+      RCY_BOOT_PANE_EVERY=1 RCY_BOOT_IVL_S=0.2 RCY_BOOT_WAIT_S=20 \
+      bash "$HF" "${argv[@]}"
+  [ "$status" -eq 1 ] \
+    || { echo "a turn that predates the relaunch was accepted as engagement: $output"; false; }
+  ! [[ "$output" == *"ENGAGEMENT CONFIRMED"* ]] \
+    || { echo "an assistant turn OLDER than the baseline was reported as a working continuation: $output"; false; }
+  [[ "$output" == *"RECYCLE FAILED — never engaged"* ]] || { echo "$output"; false; }
 }
 
 # ── the ARMING side: the token has to be PUT on the argv, and only when the prompt can deliver it ──
