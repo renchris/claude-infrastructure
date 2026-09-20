@@ -40,6 +40,7 @@ setup() {
   # under $HOME point at absent paths inside the test dir.
   export CC_ADMIT_GATE=off
   export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/sweep.json"
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-accounts"
   export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
