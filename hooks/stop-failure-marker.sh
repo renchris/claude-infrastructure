@@ -130,10 +130,22 @@ fi
 # "wNtNpN:" prefix that must be stripped to the bare id.
 #
 # NEVER `${ITERM_SESSION_ID##*:}` on a possibly-unset variable: under `set -u` that is an unbound
-# variable error, not an empty string, and this hook runs on the death path. Two steps, both
-# defaulted, is the bash-3.2-safe idiom session-register.sh:127 already uses.
-PANE="${CC_PANE_ID:-${KITTY_WINDOW_ID:-}}"
-[ -n "$PANE" ] || { PANE="${ITERM_SESSION_ID:-}"; PANE="${PANE##*:}"; }
+# variable error, not an empty string, and this hook runs on the death path. A NESTED-DEFAULT CHAIN
+# on ONE line is the bash-3.2-safe idiom session-register.sh:127 already uses — every arm carries
+# its own `:-`, so no arm is ever read unset, and the strip runs once on whichever arm won.
+#
+# ONE LINE IS LOAD-BEARING, not cosmetic: tests/cc-pane.bats:352 ratchets that no file under
+# bin/ scripts/ hooks/ may take a bare `:-` default off ITERM_SESSION_ID on a line that does not
+# also name CC_PANE_ID, which is how the rename is stopped from silently un-doing itself. (That
+# ratchet is a plain grep for the literal and is COMMENT-BLIND, so this note states the shape
+# rather than quoting it — quoting it here was itself red, measured.) A two-step form
+# (`PANE=${CC_PANE_ID:-${KITTY_WINDOW_ID:-}}` then a separate ITERM fallback) puts the ITERM read
+# on a line of its own and is RED — measured here, ship-land exit 6, red=smoke:tests/cc-pane.bats.
+# The per-line `cc-pane-id-lint:allow` marker is NOT the escape for it: that belongs to bin/cc-pane's
+# own fallback DEFINITION, and a consumer taking it would blind the ratchet to a real bare read
+# added later. Collapsing is also semantically identical here — `##*:` is a no-op on a value with
+# no colon, which both CC_PANE_ID (bare id) and KITTY_WINDOW_ID (integer) are.
+PANE="${CC_PANE_ID:-${KITTY_WINDOW_ID:-${ITERM_SESSION_ID:-}}}"; PANE="${PANE##*:}"
 # The pane becomes a FILENAME in the registry lookup a reader does with it, so anything that is not
 # a plain id is dropped rather than sanitized — a half-cleaned address that resolves to the wrong
 # pane is worse than no address.
