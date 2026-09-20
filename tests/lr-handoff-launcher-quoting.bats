@@ -519,7 +519,7 @@ SH
   run gen "lrhw0006-0000-4000-8000-000000000006" "$BATS_TEST_TMPDIR/repo"
   [ "$status" -eq 0 ]
   LAUNCHER="$(launcher_from_output)"
-  [ -n "$LAUNCHER" ] && [ -f "$LAUNCHER" ]
+  [ -n "$LAUNCHER" ] && [ -f "$LAUNCHER" ] || false
   for v in LR_RUN LR_RUN_DIR LR_ADMIT_TOKEN LR_SUBMIT_TOKEN LR_LOAD_TERM; do
     grep -qE "^export $v=" "$LAUNCHER" || { echo "missing export $v:"; cat "$LAUNCHER"; false; }
   done

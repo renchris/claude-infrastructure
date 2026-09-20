@@ -330,7 +330,7 @@ mint() { # $1=sid [$2=explicit path] → prints the minted token path
                cc_capacity_admit c15 "in-place recycle"' _ "$LIB" "$tok"
   [ "$status" -eq 0 ] || { echo "$output"; cat "$CC_ADMIT_IDL"; false; }
   [ "$(idl_field 'select(.basis=="token")|.verdict')" = "admit" ]
-  [[ "$(idl_field 'select(.basis=="token")|.detail')" == *"sid-abc"* ]]
+  [[ "$(idl_field 'select(.basis=="token")|.detail')" == *"sid-abc"* ]] || false
   [ ! -f "$tok" ]                                   # ONE-SHOT: unlinked on redemption
   # …and the SECOND call, with the same (now absent) token, gets the real box: load 99 REFUSES.
   run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-abc \
@@ -349,7 +349,7 @@ mint() { # $1=sid [$2=explicit path] → prints the minted token path
                CC_ADMIT_WANT_SID=sid-abc cc_capacity_admit c15b "s"' _ "$LIB" "$tok"
   [ "$status" -eq 9 ]                               # FRESH evaluation, not a silent admit
   [ ! -f "$tok" ]                                   # consumed even though it was stale
-  [[ "$(idl_field 'select(.caller=="c15b")|.token')" == *"EXPIRED"* ]]
+  [[ "$(idl_field 'select(.caller=="c15b")|.token')" == *"EXPIRED"* ]] || false
   [ "$(idl_field 'select(.caller=="c15b")|.term')" = "load" ]
 }
 
