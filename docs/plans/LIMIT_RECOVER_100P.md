@@ -606,6 +606,77 @@ above; the ones that changed a DESIGN rather than an anchor are restated here so
   session (§10.1); waves W8–W12, DoD, switches and decisions written; receipts committed beside the corpus; stage 2
   fired as a same-pane recycle onto Opus 5 with `STAGE2_BRIEF.md`. The three husk panes were left standing for W10's
   live acceptance (`/tmp/husk-panes-retire.sh` remains the operator's manual path; `45cc39bf65c3` is `done`).
+- 2026-09-20 02:3x–12:3xZ — **STAGE 2 (Opus 5, Agent Teams in-pane). W8 · W9a · W9b · W10 · W11 landed and live; W10-actuator committed and BLOCKED on a trunk red that is not this diff's.**
+
+  **Round B (three teammates, own worktrees off trunk, merged smallest-diff-first).**
+  - **W8** `hf_remote_pane_term` — an integer pane a live kitty socket ENUMERATES is a kitty pane; a UUID is
+    iTerm2. THREE codes (0 resolved · 1 REMOTE-PANE-ABSENT terminal · 3 RESOLVER-UNAVAILABLE park), called from
+    the three remote entry points before `pin_term_verdict_for_watcher`, which then returns at its own first
+    line. `hf_remote_source_pin` reads `as_tty_classified`, so rc 3 refuses RESOLVER-CANNOT-TELL instead of
+    asserting "no tty". `bin/cc-in-kitty` untouched. Kill switch `CC_REMOTE_PANE_TERM=off`.
+    **Live receipt for the mechanism, taken this session:** `lr_kitty_socket` → `unix:/tmp/kitty-73832`, whose
+    `kitty @ ls` enumerates windows 110/126/150 — the panes the driver-ancestry pin called "no tty". The pane
+    was always resolvable; only the subject of the question was wrong.
+  - **W9a** `--mark` refuses a session already transplanted (the check was keyed on whichever store the
+    transcript search stopped in); `--duplicates` dedupes by sid.
+  - **W10-census** `HUSK` in `lf_locate`, plus the `LIMIT_DETECT_100P` amendment. Found a SECOND wall nobody
+    had named: `lr-transplant.sh` renames the source `<sid>.jsonl.handed-off`, which `*.jsonl` never matched —
+    so clearing only the last-assistant-word filter would have landed an inert arm.
+  - Merge defect, the Round A shape again: W9a and W10 both append to `tests/lr-fleet.bats` and git aligned
+    their shared closing lines as a common suffix. Rebuilt base+A-tail+B-tail after proving both diffs carry
+    zero deletion lines, verified with `bats --count`. One base assertion was REPOINTED, not deleted: *"a
+    session already transplanted … is TRANSPLANTED"* carried a LIVE source row, which is exactly the HUSK
+    definition, so it had become an inverted guard — split in two so both dispositions stay pinned.
+  - Two land-gate reds, both mine, both in gates that had **never run on a `.bats` file before**:
+    `bats-shellcheck` (4 findings on W10's new lines — annotated narrowly WITH the reason, not rewritten,
+    because `pgrep` self-excludes and would hide the very self-match hazard the subject guards against) and
+    `bats-kill-guard` (a teardown `kill` with `2>/dev/null` and no `|| true` — red only under load).
+
+  **Round C (lead-inline; `cc_capacity_probe` refused every teammate spawn, load 2.6–22/core all session).**
+  - **W9b** `pin_still_live` proves liveness by ANCESTRY. Red-proved as a controlled A/B over ONE stubbed
+    process table: the nested-pty successor (pane-186 class) reads rc 1 under the old predicate and rc 0 under
+    the new one; the unrelated-tty pid reads rc 1 in BOTH arms — an equivalence guard, and it is labelled as
+    one rather than counted as a red-proof. Nothing pinned either direction before (`grep -rn
+    'pin_still_live\|tty_now' tests/` = 0).
+  - **W11** in-place by DEFAULT, `--spawn` the opt-out. The implied pane resolves BEFORE `lrh_precheck`,
+    because that precheck only probes when `SOURCE_PANE` is set — resolving later would flip the default on
+    while leaving W2's reads off. Two live registry rows is REFUSED, never guessed.
+    `lr-transplant.sh` idempotent on a same-target retry — and **the plan named two refusal sites when there
+    are THREE**: after a successful transplant the source is already renamed, so an rc-4 retry reaches neither
+    refusal and dies at "no transcript". The check sits above the source lookup. The rc-4 text now prescribes
+    a retry instead of the improvised `recover-<sid8>` window.
+  - **W8 left a trunk red and this session fixed it**: `lr-handoff-launcher-quoting` asserted the pre-W8
+    collapsed `REFUSED:pane:` for an unreadable pane, which after W8 made the verdict a function of *whether a
+    real kitty happened to be running* — green in the lead worktree, red on trunk. Split into W8's two arms,
+    each pinned deterministically.
+
+  **Round D.** `--retire-husks` built with four positive-proof reads and a read-back from a FRESH `kitty @ ls`;
+  the poller arm writes a retire REQUEST rather than a second copy of those gates.
+  🚨 **W10-census shipped INERT and this round caught it.** `lr_husk_state` leg (b) read only the split-brain
+  LOCK. Measured on the live fleet: `~/.reso/limit-recover/locks` holds **ONE** lock for the whole box, for an
+  unrelated session; panes 110 and 126 each carry a tombstone, a retired `.handed-off` source and a live
+  successor copy under `~/.claude-tertiary`, and **no lock** — the tombstone even names a lock path that no
+  longer exists. Locks are transient here, tombstones durable, so the predicate returned "not a husk" for all
+  three panes it exists to find **with all 33 unit tests green**, because the fixtures were built to the
+  predicate's own assumption. `lr_transplant_target` reads lock-then-tombstone under the same DIFFERENT-store
+  test, which is what excluded the `--mark` case all along. After the fix `--locate` names both husks
+  (`c301b7a5` pane 126, `c0f857b6` pane 110) and the actuator's dry run passes all four gates on both.
+
+  **Blocked, and it is not this diff's.** The W10-actuator commit is gate-green on every suite it owns and
+  will not land: `tests/recover-inject.bats:6` ("a QUOTA api-error says the limit mode may apply") is RED ON
+  TRUNK — A/B controlled on a clean `origin/main` worktree with no diff of mine present — and ship-land
+  attributes a red suite by REACHABILITY, so a diff touching `lr-lib.sh` is told "1 mapped to YOUR diff". The
+  cause is `3bc63504a` (W4's predicate SSOT): a quota record renders as *"NOT a quota message, so the account
+  is probably fine"*, the exact collapse that test exists to prevent. Reported to `claude-infrastructure-127`
+  with the control.
+
+  **Also measured, for whoever reads this next.** The husk cases in `tests/lr-lib.bats` are LOAD-FLAKE: 4 of
+  40 failed at ~24/core and the same sha ran 40/40 minutes later, with a pure-trunk control green — they spawn
+  background sleeps and poll the process table on a 10x0.2 s readiness loop. Re-run before believing them.
+  And `tests/lr-drill.sh` **does not exist** — it was §9 W7's deliverable and W7 never landed, so W12's "drill
+  arms (f)/(g)" have no harness to extend; the arms were delivered as bats suites instead
+  (`tests/lr-transplant.bats`, `tests/lr-handoff-inplace-default.bats`, and the two deterministic probe arms).
+
 - 2026-09-20 02:2xZ — **land REFUSED on two trunk reds that are W2's, not this diff's** (docs-only commit; the gate
   said so). `tests/handoff-alarm-records.bats:323` pins six `hf_alarm` sites and W2 added a seventh
   (`recycle-boot-indeterminate`, `handoff-fire.sh:6923`, sha `eaf7c82da`) without raising the pin — the exact silent
