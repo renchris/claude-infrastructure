@@ -392,26 +392,70 @@ lf_capacity_wait() { # $1=what → 0 admitted / 1 parked at the cap
 }
 
 # ── ONE: the unit — one session, in place ────────────────────────────────────────────────────────
-lf_pick_target() { # $1=source account $2=tier → account name on stdout / rc 1
-  local kind=general t
+# _lf_target_holds_sid <acct> <sid> → 0 iff that account's store ALREADY holds this session.
+# A destination carrying `<sid>.jsonl` — or its `.handed-off` tombstone, which is what a PREVIOUS
+# transplant OUT of that account leaves behind — is refused by lr-transplant on arrival ("REFUSED —
+# … already exists"). Measured 2026-09-19/20: `07e30aeb` was transplanted next3 → next2 (its 1.1 MB
+# transcript lives on next2; next3 keeps a 5,339 B stub + tombstone), and every later retry routed
+# next2 → next3 and died on that refusal — three times, deterministically, because the router cannot
+# see what the destination holds. The refusal itself is CORRECT and protective: it stops a stub from
+# shadowing the real transcript. The defect is choosing that destination at all.
+_lf_target_holds_sid() {
+  local cfg f
+  while IFS= read -r cfg; do
+    [ -n "$cfg" ] || continue
+    [ "$(lf_acct_of_cfg "$cfg")" = "$1" ] || continue
+    for f in "$cfg"/projects/*/"$2".jsonl "$cfg"/projects/*/"$2".jsonl.handed-off; do
+      [ -e "$f" ] && return 0
+    done
+  done <<EOF
+$(lr_config_dirs)
+EOF
+  return 1
+}
+
+lf_pick_target() { # $1=source account $2=tier $3=sid → account name on stdout / rc 1
+  local kind=general cand
   case "$2" in claude-fable-*) kind=fable ;; esac
   [ "$TARGET" != auto ] && { printf '%s' "$TARGET"; return 0; }
   [ -x "$ACCOUNTS" ] || return 1
-  # --rank, then walk past the SOURCE account: the router may well rank the limited account first on
-  # weekly headroom while its 5-hour window is what just closed.
-  t="$("$ACCOUNTS" --rank "$kind" 2>/dev/null | awk -v s="$1" '$1 != s { print $1; exit }' || true)"
-  # `none` is the router's SENTINEL for "nothing is routable", not an account. Taken literally it
-  # passes the `!= source` test below, so the caller waited out the full capacity budget and then
-  # handed off to an account that does not exist -- observed 2026-09-10, the poller's own log reading
-  # "in-place recovery of 2d71c6d8 onto none" for 480s. An unroutable moment must PARK immediately.
-  [ "$t" = none ] && t=""
-  [ -n "$t" ] || return 1
-  printf '%s' "$t"
+  LF_PICK_SKIPPED_HOLDER=""
+  # Walk the ranked list rather than taking its first row: the FIRST acceptable account may not be
+  # the first RANKED one, because a candidate that already holds this sid cannot receive it.
+  while IFS= read -r cand; do
+    cand="${cand%% *}"
+    [ -n "$cand" ] || continue
+    # `none` is the router's SENTINEL for "nothing is routable", not an account. Taken literally it
+    # passes the `!= source` test, so the caller waited out the full capacity budget and then handed
+    # off to an account that does not exist -- observed 2026-09-10, the poller's own log reading
+    # "in-place recovery of 2d71c6d8 onto none" for 480s. An unroutable moment must PARK immediately.
+    [ "$cand" = none ] && break
+    # Walk past the SOURCE account: the router may well rank the limited account first on weekly
+    # headroom while its 5-hour window is what just closed.
+    [ "$cand" = "$1" ] && continue
+    if [ -n "${3:-}" ] && _lf_target_holds_sid "$cand" "$3"; then
+      LF_PICK_SKIPPED_HOLDER="${LF_PICK_SKIPPED_HOLDER}${LF_PICK_SKIPPED_HOLDER:+ }$cand"
+      continue
+    fi
+    printf '%s' "$cand"; return 0
+  done <<EOF
+$("$ACCOUNTS" --rank "$kind" 2>/dev/null || true)
+EOF
+  return 1
 }
 lf_one() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → rc of the recovery; prints the result row
   local sid="$1" cfg="$2" acct="$3" pane="$4" cwd="$5" tier="$6" target rc=0 out rdir="$FLEET_DIR/$RUN" model="" effort=""
   mkdir -p "$rdir"
-  target="$(lf_pick_target "$acct" "$tier")" || { echo "lr-fleet: $sid — no routable target account (claude-accounts --rank returned nothing past $acct)" >&2; lf_row "$sid" "$pane" "$pane" "$acct" "-" "parked" "no routable target"; return 1; }
+  target="$(lf_pick_target "$acct" "$tier" "$sid")" || {
+    if [ -n "${LF_PICK_SKIPPED_HOLDER:-}" ]; then
+      echo "lr-fleet: $sid — no routable target: every candidate past $acct already holds this session ($LF_PICK_SKIPPED_HOLDER) — transplanting there is refused on arrival" >&2
+      lf_row "$sid" "$pane" "$pane" "$acct" "-" "parked" "targets already hold this sid: $LF_PICK_SKIPPED_HOLDER"
+    else
+      echo "lr-fleet: $sid — no routable target account (claude-accounts --rank returned nothing past $acct)" >&2
+      lf_row "$sid" "$pane" "$pane" "$acct" "-" "parked" "no routable target"
+    fi
+    return 1
+  }
   [ "$target" != "$acct" ] || { lf_row "$sid" "$pane" "$pane" "$acct" "$target" "parked" "target is the limited account"; return 1; }
   case "$tier" in */*) model="${tier%%/*}"; effort="${tier#*/}" ;; esac
   if [ "$DRY" = 1 ]; then
