@@ -938,7 +938,11 @@ if [ -x "\$LRP_VERIFY" ]; then
 else
   LRP_WHY="lr-ingest-verify.sh is not executable on the live layer (\$LRP_VERIFY)"
 fi
-[ -z "\$LRP_WHY" ] || LRP_PROMPT="\$LRP_PROMPT — lr-ingest-verify FAILED: \$LRP_WHY"
+# THE RUN TOKEN RIDES BOTH PROMPTS, NOT JUST THE FAST ONE (W3i D3). The fast-path line carries it
+# because lr-ingest-verify appends it; the fallback is composed HERE, and without this append the
+# degraded path is the one case W3's submitted-vs-armed probe is blind to — precisely the path taken
+# whenever something went wrong, i.e. the path whose engagement most needs proving.
+[ -z "\$LRP_WHY" ] || LRP_PROMPT="\$LRP_PROMPT — lr-ingest-verify FAILED: \$LRP_WHY — \$LR_SUBMIT_TOKEN"
 
 exec $(printf '%q ' "${FIRE_ARGV[@]}")--prompt "\$LRP_PROMPT"
 EOF
