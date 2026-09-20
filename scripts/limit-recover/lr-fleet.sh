@@ -559,7 +559,12 @@ EOF
       # way to re-derive it. Empty is legal: the notifier falls back to the desk ROLE, which
       # cc-notify resolves at SEND time (a frozen uuid is a stale address the moment a pane recycles).
       _lf_req="${LR_FLEET_NOTIFY_PANE:-}"
-      [ -n "$_lf_req" ] || { _lf_req="${ITERM_SESSION_ID:-}"; _lf_req="${_lf_req##*:}"; }
+      # CC_PANE_ID FIRST, ITERM_SESSION_ID only as the fallback — the shape tests/cc-pane.bats
+      # ratchets ("no production file reads a BARE $ITERM_SESSION_ID without the CC_PANE_ID
+      # fallback"), and the one its class-B cases describe: a STALE ITERM_SESSION_ID can sit beside
+      # a live CC_PANE_ID after a transplant, and preferring the stale one addresses the wrong pane.
+      # The `##*:` strip is safe for either: a bare CC_PANE_ID carries no colon and survives it.
+      [ -n "$_lf_req" ] || { _lf_req="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; _lf_req="${_lf_req##*:}"; }
       [ -n "$_lf_req" ] || _lf_req="${KITTY_WINDOW_ID:-}"
       _lf_pid="$(detach "$_lf_log" /usr/bin/env \
                    LR_FLEET_DETACHED=1 "LR_FLEET_RUN=$RUN" "LR_FLEET_REQUESTER=$_lf_req" LR_INPLACE_AWAIT=0 \
