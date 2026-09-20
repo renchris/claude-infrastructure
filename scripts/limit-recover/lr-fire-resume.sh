@@ -173,15 +173,42 @@ lr_wrap_re() { # phrase → an expect(1)/Tcl regex that matches it at ANY termin
     probe='❯'
     [ "${#probe}" -eq 1 ] && break
   done
+  # 🚨 THE SECOND LOCALE SEAM, AND IT IS NOT THE ONE ABOVE. The block above pins the locale that
+  # BASH splits under. It cannot pin the locale that EXPECT decodes under, because expect is a
+  # third program this script spawns and Tcl reads the ambient LC_ALL for itself — `encoding
+  # system` is `utf-8` under a UTF-8 locale and `iso8859-1` under LC_ALL=C. That choice decides
+  # whether the pattern bytes bash just emitted are ONE character or THREE, and a backslash in
+  # front of them means opposite things in the two readings:
+  #     utf-8      `\❯`  → ❯ is not alphanumeric ⇒ a literal-escape ⇒ COMPILES
+  #     iso8859-1  `\â`  → â IS alphanumeric in Latin-1 ⇒ an unknown escape class ⇒ REFUSES with
+  #                        "couldn't compile regular expression pattern: invalid escape \ sequence"
+  # The refusal kills the expect program outright, so the arm never runs, the keylog stays EMPTY
+  # and the script still exits 0 — it fails OPEN and SILENT. Measured 2026-09-20 under the exact
+  # harness env (`env -i … LC_ALL=C`, scripts/offbox-run.sh): 8 of 11 in
+  # tests/lr-resume-answer-width.bats, the same count and the same suite as the 2026-08-12 byte-
+  # split, which is why it read as a relapse of a cure that is in fact still working.
+  # THE CURE: a backslash goes in front of ASCII PUNCTUATION ONLY. Every Tcl ARE metacharacter is
+  # ASCII, so nothing is lost; a non-ASCII character is always a literal and must be emitted bare,
+  # which matches under either encoding because the pattern and the input decode the same way.
+  # Membership is tested against a literal set rather than `[[:ascii:]]` or a range: a glob range
+  # is collation-dependent and a class table is interpreter-dependent, and this file runs under
+  # macOS /bin/bash 3.2.57. `${set#*"$ch"}` is plain POSIX expansion and needs neither.
+  local ASCII_PUNCT=' !"#$%&'\''()*+,-./:;<=>?@[\]^_`{|}~'
   # ANSI CSI (colour, cursor-move) | any whitespace incl. the wrap newline | box rules.
-  local SEP=$'(?:\033\\[[0-9;?]*[a-zA-Z]|[[:space:]]|│|┃|┆|╎)*' 
+  local SEP=$'(?:\033\\[[0-9;?]*[a-zA-Z]|[[:space:]]|│|┃|┆|╎)*'
   n=${#phrase}
   for (( i=0; i<n; i++ )); do
     ch="${phrase:$i:1}"
     [ "$ch" = " " ] && continue          # a wrapped space may be absent — never require it
     case "$ch" in
       [a-zA-Z0-9]) out+="$ch" ;;
-      *)           out+="\\$ch" ;;       # escape regex metacharacters: ( ) . - ' etc.
+      *)
+        if [ "${ASCII_PUNCT#*"$ch"}" != "$ASCII_PUNCT" ]; then
+          out+="\\$ch"                   # escape regex metacharacters: ( ) . - ' etc.
+        else
+          out+="$ch"                     # non-ASCII (❯, box rules): literal, never backslashed
+        fi
+        ;;
     esac
     out+="$SEP"
   done

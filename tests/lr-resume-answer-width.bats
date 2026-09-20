@@ -61,12 +61,42 @@ expect {
 }
 close $vf
 EXP
+
+  # A compile-only probe, so a pattern expect REFUSES is reported as the refusal it is rather than
+  # as a missed match. `regexp` is the same ARE engine `expect -re` compiles with.
+  cat > "$BATS_TEST_TMPDIR/compile.exp" <<'EXP'
+log_user 0
+set vf [open $env(LR_V) w]
+if {[catch {regexp -- $env(LR_RE) "x"} e]} {
+  puts $vf "COMPILE-FAIL \[[encoding system]\] $e"
+} else {
+  puts $vf "COMPILE-OK \[[encoding system]\]"
+}
+close $vf
+EXP
 }
 
-# → MATCH | NOMATCH | TIMEOUT
-match_in() { # regex file
-  LR_RE="$1" LR_FILE="$2" LR_V="$BATS_TEST_TMPDIR/v" expect -f "$BATS_TEST_TMPDIR/match.exp" >/dev/null 2>&1
-  cat "$BATS_TEST_TMPDIR/v"
+# → MATCH | NOMATCH | TIMEOUT | DIED. $3, when given, PINS the locale of the expect process — the
+# axis that decides `encoding system`, and therefore how the pattern's own bytes are read back.
+match_in() { # regex file [lc_all]
+  : > "$BATS_TEST_TMPDIR/v"
+  if [ -n "${3:-}" ]; then
+    env -u LANG -u LC_CTYPE LC_ALL="$3" \
+      LR_RE="$1" LR_FILE="$2" LR_V="$BATS_TEST_TMPDIR/v" expect -f "$BATS_TEST_TMPDIR/match.exp" >/dev/null 2>&1
+  else
+    LR_RE="$1" LR_FILE="$2" LR_V="$BATS_TEST_TMPDIR/v" expect -f "$BATS_TEST_TMPDIR/match.exp" >/dev/null 2>&1
+  fi
+  local v; v="$(cat "$BATS_TEST_TMPDIR/v")"
+  printf '%s' "${v:-DIED}"
+}
+
+# → COMPILE-OK [enc] | COMPILE-FAIL [enc] <tcl error> | DIED
+compile_in() { # regex lc_all
+  : > "$BATS_TEST_TMPDIR/cv"
+  env -u LANG -u LC_CTYPE LC_ALL="$2" \
+    LR_RE="$1" LR_V="$BATS_TEST_TMPDIR/cv" expect -f "$BATS_TEST_TMPDIR/compile.exp" >/dev/null 2>&1
+  local v; v="$(cat "$BATS_TEST_TMPDIR/cv")"
+  printf '%s' "${v:-DIED}"
 }
 
 # ── the matcher, against REAL rendered bytes ─────────────────────────────────────────────────────
@@ -125,6 +155,45 @@ match_in() { # regex file
       || { echo "width $w: model disagrees with the real capture on the negative readback"; false; }
     [ "$(match_in 'Dark mode \(colorblind-friendly\)' "$BATS_TEST_TMPDIR/model-$w.raw")" = NOMATCH ] \
       || { echo "width $w: model does not reproduce the literal-match failure"; false; }
+  done
+}
+
+@test "ENCODING PIN: every pattern compiles in expect under LC_ALL=C, not only under UTF-8" {
+  # THE THIRD DEFECT (cde5cbfa0a08's post-land RED, cured 2026-09-20). `lr_wrap_re` pins the locale
+  # BASH splits under — but expect is a THIRD program, and Tcl reads LC_ALL for itself to choose
+  # `encoding system`. Under LC_ALL=C that is iso8859-1, so ❯'s three UTF-8 bytes decode as three
+  # LATIN-1 characters and the builder's backslash lands in front of `â`, which IS alphanumeric in
+  # Latin-1 — an unknown escape class. Tcl then REFUSES the pattern outright, the expect program
+  # dies, the keylog stays empty and lr-fire-resume.sh still exits 0: fail-open and silent.
+  #
+  # 🚨 THIS ARM PINS THE LOCALE ITSELF, DELIBERATELY. scripts/offbox-run.sh already runs every
+  # suite under `env -i … LC_ALL=C`, so on the CI box the arms below would red without it — and
+  # that is exactly the trap its own § COROLLARY names: an axis supplied by the harness is an axis
+  # the suite is not testing, so the same red is INVISIBLE on the desk, where the ambient locale is
+  # UTF-8. A suite testing a locale-coupled invariant must set the hostile value itself.
+  for p in '❯1. Resume' '❯2. Resume full' '❯1. Yes, I trust' '❯2. Not now' 'Quick safety check'; do
+    re="$(lr_wrap_re "$p")"
+    for lc in C en_US.UTF-8 C.UTF-8; do
+      case "$(compile_in "$re" "$lc")" in
+        COMPILE-OK*) ;;
+        *) echo "LC_ALL=$lc, phrase <$p>: $(compile_in "$re" "$lc")"; false ;;
+      esac
+    done
+  done
+}
+
+@test "ENCODING PIN: the readback still discriminates when expect decodes as iso8859-1" {
+  # Compiling is necessary and not sufficient — a pattern can compile and match nothing. The
+  # readback is the assertion that makes answering the menu safe, so it is the one to re-run under
+  # the hostile encoding: it must still confirm the option the selector IS on and refuse the one it
+  # is NOT on, at the narrowest width, where only the ordinal survives truncation.
+  on2="$(lr_wrap_re '❯2. Dark mode')"
+  on1="$(lr_wrap_re '❯1. Auto')"
+  for w in 8 20 40 80; do
+    [ "$(match_in "$on2" "$FIX/real-select-$w.raw" C)" = MATCH ] \
+      || { echo "width $w under LC_ALL=C: $(match_in "$on2" "$FIX/real-select-$w.raw" C)"; false; }
+    [ "$(match_in "$on1" "$FIX/real-select-$w.raw" C)" = NOMATCH ] \
+      || { echo "width $w under LC_ALL=C: confirmed an option the selector is NOT on"; false; }
   done
 }
 
