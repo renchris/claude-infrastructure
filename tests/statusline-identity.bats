@@ -620,6 +620,143 @@ payload_nosid() {   # no session_id at all — the sid8 half must vanish, the pa
   [ "$(jq -r '.pane' "$CC_TELEMETRY_DIR/aaaa-bbbb-cccc.json")" = "null" ]
 }
 
+
+# ── W5 · LIMIT_DETECT_100P §3/§4 + §11 #13 (2026-09-20) ───────────────────────────────────────
+# The chip itself landed from the SIBLING plan (LIMIT_RECOVER_100P W4, 33a9563fb + aaedbf3dd) and
+# LIMIT_DETECT_100P §13 records it as done — so these rows do not re-prove that the field exists.
+# They close the cases the landed five do NOT reach, which are exactly the ones W5's DoD names:
+# the chip under CLIPPING (its whole reason for being left-anchored), BOTH sources absent at once,
+# and the fork-count gate §11 #13 makes the real gate for this wave.
+#
+# RED-PROOF DISCIPLINE: the cure is already on trunk, so none of these can go red against pristine
+# HEAD — a row that passes in both arms is an equivalence guard, not a proof (docs/lessons/
+# green-in-both-arms-...). Each row below therefore states the MUTANT of statusline.sh that kills
+# it, and every one of those mutants was executed; the footer carries the pasted red output.
+
+@test "live: at 30 columns the chip is INTACT while the sha and the effort are amputated" {
+  # This is the position argument, made falsifiable. U07 measured 9 of 16 live panes at <=38
+  # columns, so a right-anchored identity would be clipped in exactly the panes where a screenshot
+  # is the only way to ask which session this is. The terminal does the clipping, so the assertion
+  # is over the first 30 ANSI-STRIPPED columns of the rendered line.
+  mk_repo "$WORK/live-idclip" some-branch
+  local line clip
+  line=$(render payload_full "$WORK/live-idclip" KITTY_WINDOW_ID=117)
+  clip="${line:0:30}"
+  # (a) the whole chip — mark, pane and sid8 — survives the cut, with room to spare.
+  [[ "$clip" == *"#117 aaaa-bbb"* ]] || { printf 'clip: [%s]\n' "$clip" >&2; false; }
+  # (b) CONTROL, and it is what makes (a) mean anything: the fields the chip was placed AHEAD of
+  # are genuinely gone at this width. Without this the row would pass on a 200-column line.
+  [[ "$clip" != *"$(git -C "$WORK/live-idclip" rev-parse --short HEAD)"* ]] \
+    || { printf 'clip: [%s]\n' "$clip" >&2; false; }
+  [[ "$clip" != *"max"* ]] || { printf 'clip: [%s]\n' "$clip" >&2; false; }
+  # (c) and the line really is longer than the cut, so (b) is clipping rather than an empty render.
+  [ "${#line}" -gt 30 ]
+  # MUTANT: move ID_SEG to the right of ${OUTPUT} in the final echo -> (a) fails.
+}
+
+@test "live: with NEITHER source the segment is absent ENTIRELY — no mark, no orphan separator" {
+  # W5's DoD row says this case renders `#? <sid8>`. It does not, and that is the SIBLING's
+  # deliberate cure, argued in statusline.sh's own block comment: a placeholder identifies nothing
+  # and makes its own absence unfalsifiable. The DoD was written before that landed
+  # (docs/lessons/dod-can-demand-what-the-cure-removed). This row pins the LANDED semantics, and
+  # pins them as an exact head so a future `?` placeholder cannot creep back in unnoticed.
+  mk_repo "$WORK/live-idnone" some-branch
+  local head
+  # payload_nosid carries no session_id, and render() unsets BOTH pane spellings.
+  head=$(marker_of "$(render payload_nosid "$WORK/live-idnone")" live-idnone)
+  [ "$head" = "(3) 47% · " ] || { printf 'head: [%s]\n' "$head" >&2; false; }
+  # stated three ways, because the failure modes differ: no mark, no `?`, and no doubled space
+  # where the two omitted tokens used to be.
+  [[ "$head" != *"#"* ]] || { printf 'head: [%s]\n' "$head" >&2; false; }
+  [[ "$head" != *"?"* ]] || { printf 'head: [%s]\n' "$head" >&2; false; }
+  [[ "$head" != *"  "* ]] || { printf 'head: [%s]\n' "$head" >&2; false; }
+  # MUTANT: ID_SEG="${_idmark}${ID_PANE:-?} ${PAY_SID:0:8} " (the DoD's own spelling) -> all four fail.
+}
+
+@test "live: a SET-BUT-EMPTY KITTY_WINDOW_ID falls through to ITERM_SESSION_ID" {
+  # The input is real: a pane that left kitty, and every `env KITTY_WINDOW_ID=` wrapper, presents
+  # the variable SET and EMPTY. Rendering a session with NO pane while a pane id was available is
+  # the one failure the chip exists to prevent.
+  #
+  # ⚠️ MEASURED, and it corrects the obvious reading of this row — the protection is NOT the `:-`
+  # in `${KITTY_WINDOW_ID:-}`. Mutating that to `${KITTY_WINDOW_ID-}` leaves this row GREEN, because
+  # both spellings yield the empty string and the iTerm2 fallback is guarded on the resulting VALUE
+  # (`[ -z "$ID_PANE" ]`), not on whether the variable was set. That survivor is recorded in the
+  # footer. What this row therefore pins is the GUARD's shape, and the mutant below is the
+  # realistic defect it excludes: a fallback "tightened" to fire only when kitty's var is UNSET.
+  mk_repo "$WORK/live-idempty" some-branch
+  local head
+  head=$(marker_of "$(render payload_full "$WORK/live-idempty" KITTY_WINDOW_ID= ITERM_SESSION_ID=w0t0p0:901)" live-idempty)
+  [ "$head" = "(3) #901 aaaa-bbb 47% · " ] || { printf 'head: [%s]\n' "$head" >&2; false; }
+  # MUTANT: `if [ -z "${KITTY_WINDOW_ID+x}" ]` in place of `if [ -z "$ID_PANE" ]`
+  #         -> head becomes "(3) aaaa-bbb 47% · ", the pane silently lost.
+}
+
+@test "live: an ITERM_SESSION_ID with NO colon yields the whole value, as the registry reads it" {
+  # `${ID_PANE##*:}` on a colonless string is the string itself. That is not an accident of the
+  # idiom, it is the contract: hooks/session-register.sh keys the registry FILENAME on the SAME
+  # strip, so the statusline and the registry must agree on what a pane is called for either
+  # spelling. A `${ID_PANE#*:}` (single-#) mutant returns the whole string here too but breaks the
+  # w0t0p0: form, which the neighbouring case already pins — together they fix the operator.
+  mk_repo "$WORK/live-idbare" some-branch
+  local head
+  head=$(marker_of "$(render payload_full "$WORK/live-idbare" ITERM_SESSION_ID=773)" live-idbare)
+  [ "$head" = "(3) #773 aaaa-bbb 47% · " ] || { printf 'head: [%s]\n' "$head" >&2; false; }
+  # MUTANT: ID_PANE="${ID_PANE%%:*}" -> "#773" survives here but the w0t0p0:901 case above reddens.
+}
+
+@test "live: with NO instance marker the line STARTS with the chip — left-anchored at column 0" {
+  # `left-anchored` is asserted everywhere else RELATIVE to the instance chip, which means every
+  # one of those rows still passes if the segment silently moves to the end of a line that happens
+  # to have no chip. The stable config dir is the real render with an empty GLYPH_PREFIX, so this
+  # is the only case where the claim `column 0` is even expressible.
+  mk_repo "$WORK/live-idcol0" some-branch
+  local line
+  line=$(render payload_stable "$WORK/live-idcol0" KITTY_WINDOW_ID=117)
+  [ "${line:0:14}" = "#117 5555-555 " ] || { printf 'line: [%s]\n' "$line" >&2; false; }
+  # CONTROL: the stable payload really does suppress the ordinal, or the assertion above is
+  # measuring a chip that was there all along.
+  [[ "$line" != *"("[0-9]")"* ]] || { printf 'line: [%s]\n' "$line" >&2; false; }
+  # MUTANT: emit ${PCT_SEG}${ID_SEG} instead of ${ID_SEG}${PCT_SEG} -> line starts "47% · #117".
+}
+
+@test "§11 #13 GATE: the chip block creates ZERO subprocesses (fork count == baseline)" {
+  # THE gate for this wave, per LIMIT_DETECT_100P §11 #13 — the render rows above are a
+  # must-stay-green note, this is the thing that may not regress. P6's whole cost argument is that
+  # both halves are already in the script's hands: $KITTY_WINDOW_ID is inherited env and PAY_SID
+  # comes from the single jq extraction, so the block is pure parameter expansion at 0 forks.
+  #
+  # ⚠️ The amendment spells the test "contains no $(, no backtick and no |". Taken LITERALLY that
+  # is false against the landed block, which contains `||` (a list operator) and the locale
+  # `case`'s `*UTF-8*|*utf-8*` alternation — neither of which forks anything. Matching the
+  # SPELLING would redden on correct code and invite someone to "fix" a fork-free block
+  # (docs/lessons/... denylist-enumerates-spellings-not-the-class). So the class is matched
+  # instead, delete-then-match: remove the two non-forking uses of `|`, then any survivor is a
+  # pipeline.
+  local blk mut
+  blk="$BATS_TEST_TMPDIR/chipblock.sh"
+  # comment LINES go (they quote backticks in prose); a trailing comment is ` #<space>`, which
+  # cannot match the `_idmark='#'` literal.
+  awk '/^ID_PANE=/,/^fi$/' "$NEW" | sed -e '/^[[:space:]]*#/d' -e 's/ #[[:space:]].*$//' > "$blk"
+  # the extraction is real, not an empty file passing for free
+  [ "$(wc -l < "$blk")" -ge 8 ]
+  grep -q 'ID_SEG=' "$blk"
+
+  forks() { # <file> -> count of subprocess-creating constructs
+    sed -e 's/||//g' -e '/;;[[:space:]]*$/s/^[^)]*)//' "$1" \
+      | grep -cE '\$\(|`|\|' || true
+  }
+  [ "$(forks "$blk")" -eq 0 ] || { printf 'block:\n%s\n' "$(cat "$blk")" >&2; false; }
+
+  # POSITIVE CONTROL — a predicate that can only ever say zero is not a gate. The same function
+  # over the whole script must CONVICT (statusline.sh is full of $( ) and pipelines), and each of
+  # the three constructs must be caught individually when injected into a copy of the real block.
+  [ "$(forks "$NEW")" -gt 0 ]
+  for mut in 'ID_SEG="$(echo x)"' 'ID_SEG="`echo x`"' 'ID_SEG="$ID_SEG"; echo x | cat'; do
+    cp "$blk" "$blk.mut"; printf '%s\n' "$mut" >> "$blk.mut"
+    [ "$(forks "$blk.mut")" -gt 0 ] || { printf 'mutant NOT caught: %s\n' "$mut" >&2; false; }
+  done
+}
 @test "live: outside a git repo only the non-git fields render" {
   mkdir -p "$WORK/live-norepo"
   local line
@@ -696,3 +833,89 @@ payload_nowin() {  # the harness emitted NO window — it must be written as NOT
   [ -f "$BATS_TEST_TMPDIR/session-window.jsonl" ] || false
   [ ! -e "/Users/x/.claude-tertiary/autonomy/session-window.jsonl" ] || false
 }
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# RED-PROOF — the six W5 rows above (2026-09-20, LIMIT_DETECT_100P W5)
+#
+# ⚠️ WHY THESE ARE MUTANTS AND NOT A PRE-FIX RED. W5's brief asks each new row to be run RED
+# against pristine HEAD. That is unsatisfiable here and saying so is the point: the cure LANDED
+# FIRST, from the sibling plan (LIMIT_RECOVER_100P W4 — 33a9563fb, 'identity in the pixels'), so
+# pristine HEAD already renders the chip and every row below is green in both arms. A row green in
+# both arms is an equivalence guard, and the only evidence it has power is the death of a mutant
+# (docs/lessons/green-in-both-arms-is-an-equivalence-guard-not-a-red-proof.md). Each row therefore
+# names the mutant of statusline.sh that kills it; all six were EXECUTED, and the output is pasted
+# verbatim below. Reproduce: apply the diff shown, run the filter shown, restore.
+#
+# ── M1 · identity moved to the RIGHT of ${OUTPUT} ─────────────────────────────────────────────
+#   -echo -e "${GLYPH_PREFIX}${ID_SEG}${PCT_SEG}${OUTPUT}${RESET}"
+#   +echo -e "${GLYPH_PREFIX}${PCT_SEG}${OUTPUT}${ID_SEG}${RESET}"
+#   $ bats --filter "30 columns" tests/statusline-identity.bats
+#   1..1
+#   not ok 1 live: at 30 columns the chip is INTACT while the sha and the effort are amputated
+#   #   `[[ "$clip" == *"#117 aaaa-bbb"* ]] || { printf 'clip: [%s]\n' "$clip" >&2; false; }' failed
+#   # clip: [(3) 47% · live-idclip (dd63e18]
+#
+# ── M2 · the DoD's `#?` placeholder creeps back in ────────────────────────────────────────────
+#   -ID_SEG=""
+#   +ID_SEG="#? "
+#   $ bats --filter "NEITHER source" tests/statusline-identity.bats
+#   1..1
+#   not ok 1 live: with NEITHER source the segment is absent ENTIRELY — no mark, no orphan separator
+#   #   `[ "$head" = "(3) 47% · " ] || { printf 'head: [%s]\n' "$head" >&2; false; }' failed
+#   # head: [(3) #? 47% · ]
+#
+# ── M3 · the iTerm2 fallback tightened to fire only when kitty's var is UNSET ─────────────────
+#   -if [ -z "$ID_PANE" ]; then ID_PANE="${ITERM_SESSION_ID:-}"; ID_PANE="${ID_PANE##*:}"; fi
+#   +if [ -z "${KITTY_WINDOW_ID+x}" ]; then ID_PANE="${ITERM_SESSION_ID:-}"; ID_PANE="${ID_PANE##*:}"; fi
+#   $ bats --filter "SET-BUT-EMPTY" tests/statusline-identity.bats
+#   1..1
+#   not ok 1 live: a SET-BUT-EMPTY KITTY_WINDOW_ID falls through to ITERM_SESSION_ID
+#   #   `[ "$head" = "(3) #901 aaaa-bbb 47% · " ] || { printf 'head: [%s]\n' "$head" >&2; false; }' failed
+#   # head: [(3) aaaa-bbb 47% · ]
+#
+#   🚨 SURVIVOR, recorded rather than hidden — the mutant this row was FIRST written against did
+#   NOT kill it, and the row's stated rationale was wrong until this run corrected it:
+#       -ID_PANE="${KITTY_WINDOW_ID:-}"
+#       +ID_PANE="${KITTY_WINDOW_ID-}"
+#       1..1
+#       ok 1 live: a SET-BUT-EMPTY KITTY_WINDOW_ID falls through to ITERM_SESSION_ID
+#   Both spellings yield the empty string, and the fallback is guarded on the resulting VALUE, so
+#   the `:-` is not what protects this case. Anyone hardening that line should know the suite is
+#   BLIND to `:-` vs `-` here, and that the guard's shape is what carries the behaviour.
+#
+# ── M4 · a colonless ITERM_SESSION_ID treated as "no pane" ────────────────────────────────────
+#   -if [ -z "$ID_PANE" ]; then ID_PANE="${ITERM_SESSION_ID:-}"; ID_PANE="${ID_PANE##*:}"; fi
+#   +if [ -z "$ID_PANE" ]; then ID_PANE="${ITERM_SESSION_ID:-}"; if [ "${ID_PANE#*:}" = "$ID_PANE" ]; then ID_PANE=""; else ID_PANE="${ID_PANE##*:}"; fi; fi
+#   $ bats --filter "NO colon" tests/statusline-identity.bats
+#   1..1
+#   not ok 1 live: an ITERM_SESSION_ID with NO colon yields the whole value, as the registry reads it
+#   #   `[ "$head" = "(3) #773 aaaa-bbb 47% · " ] || { printf 'head: [%s]\n' "$head" >&2; false; }' failed
+#   # head: [(3) aaaa-bbb 47% · ]
+#
+# ── M5 · the two head segments swapped ────────────────────────────────────────────────────────
+#   -echo -e "${GLYPH_PREFIX}${ID_SEG}${PCT_SEG}${OUTPUT}${RESET}"
+#   +echo -e "${GLYPH_PREFIX}${PCT_SEG}${ID_SEG}${OUTPUT}${RESET}"
+#   $ bats --filter "column 0" tests/statusline-identity.bats
+#   1..1
+#   not ok 1 live: with NO instance marker the line STARTS with the chip — left-anchored at column 0
+#   #   `[ "${line:0:14}" = "#117 5555-555 " ] || { printf 'line: [%s]\n' "$line" >&2; false; }' failed
+#   # line: [47% · #117 5555-555 live-idcol0 (174d866)  some-branch · high]
+#
+# ── M6 · a $( ) inside the chip block (the §11 #13 gate) ──────────────────────────────────────
+#   +    ID_SEG="$(printf %s "$ID_SEG")"
+#   $ bats --filter "ZERO subprocesses" tests/statusline-identity.bats
+#   1..1
+#   not ok 1 §11 #13 GATE: the chip block creates ZERO subprocesses (fork count == baseline)
+#   #   `[ "$(forks "$blk")" -eq 0 ] || { printf 'block:\n%s\n' "$(cat "$blk")" >&2; false; }' failed
+#   # block:  ... ID_SEG="$(printf %s "$ID_SEG")" ...
+#
+# ── P6 timing, re-measured for the W5 DoD (same box, 30 renders x 3 reps per arm) ──────────────
+# Baseline = 09c0a7b1a:statusline.sh, the last revision before the chip landed. CPU = user+sys
+# from /usr/bin/time -p, so a saturated box inflates the variance but not the measure.
+#   baseline  user+sys 1.76 / 1.64 / 1.65 s  ->  mean 1.683 s  =  56.1 ms per render
+#   chip      user+sys 1.67 / 1.74 / 1.78 s  ->  mean 1.730 s  =  57.7 ms per render
+#   delta +1.6 ms/render — inside the DoD's ±3 ms band, and ALSO inside the 4 ms within-arm spread,
+#   i.e. the instrument cannot resolve the effect it is being asked about. That is precisely §11
+#   #13's finding ("the ±3 ms band is 15x the effect"), and why the GATE is the fork count above
+#   and this row is a recorded measurement rather than an assertion. Load at measurement: 14.7/core.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
