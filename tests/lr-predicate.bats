@@ -571,13 +571,58 @@ EOF
   git -C "$work" add -A >/dev/null 2>&1
   run bash "$work/scripts/lr-predicate-lint.sh"
   [ "$status" -eq 1 ]
-  printf '%s\n' "$output" | grep -q 'lr-predicate-lint: a NEW limit predicate'
+  printf '%s\n' "$output" | grep -q 'lr-predicate-lint: a NEW predicate'
 
   git -C "$work" checkout -- hooks/net-recover-arm.sh 2>/dev/null
   printf '\n_p2() { grep -qiE "session limit|weekly limit" "$1"; }\n' >> "$work/bin/cc-classify"
   git -C "$work" add -A >/dev/null 2>&1
   run bash "$work/scripts/lr-predicate-lint.sh"
   [ "$status" -eq 1 ]
+}
+
+# THE SECOND FAMILY (§ 11 #10). The rows above would all stay green with the teammate half of the
+# lint deleted, because every one of them plants CAP TEXT — so on its own the pair above certifies
+# a gate that is half decorative. That is not hypothetical here: bin/cc-limited carried a raw
+# `"agentName"` substring from W2a's land through W4's migration and through this lint's own
+# arrival, and nothing went red, because every gate in play was keyed on the other family.
+@test "lint: REFUSES a planted teammate predicate, and does NOT refuse the parsed field read" {
+  local work="$BATS_TEST_TMPDIR/tree-team"
+  git -C "$REPO" rev-parse --show-toplevel >/dev/null 2>&1 || skip "not a git tree"
+  mkdir -p "$work"
+  git -C "$REPO" archive HEAD scripts bin hooks 2>/dev/null | tar -x -C "$work" || skip "archive failed"
+  git -C "$work" init -q 2>/dev/null && git -C "$work" add -A >/dev/null 2>&1
+  cp "$REPO/scripts/lr-predicate-lint.sh" "$work/scripts/lr-predicate-lint.sh"
+  git -C "$work" add -A >/dev/null 2>&1
+  run bash "$work/scripts/lr-predicate-lint.sh"
+  [ "$status" -eq 0 ] || skip "copied tree is not clean to begin with; the planting arm needs a clean base"
+
+  # (a) a NEW file with no allowance
+  printf '\n_t13() { head -c 8000 "$1" | grep -q %s; }\n' "'\"agentName\"'" \
+    > "$work/scripts/zz-teammate-plant.sh"
+  git -C "$work" add -A >/dev/null 2>&1
+  run bash "$work/scripts/lr-predicate-lint.sh"
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | grep -q 'teammate predicate'
+  rm -f "$work/scripts/zz-teammate-plant.sh"
+
+  # (b) a SECOND one beside an allowed one — the per-file COUNT, same as the cap-text arm.
+  # RESTORED FROM A COPY, NEVER `git checkout --`: the plant is staged so the lint can see it
+  # (git grep reads only TRACKED files), which means the index now HOLDS the plant and a checkout
+  # from it restores the planted version. Arm (c) would then convict the wrong line.
+  cp "$work/bin/cc-find" "$BATS_TEST_TMPDIR/cc-find.orig"
+  printf '\n_t2() { head -c 8000 "$1" | grep -q %s; }\n' "'\"agentName\"'" >> "$work/bin/cc-find"
+  git -C "$work" add -A >/dev/null 2>&1
+  run bash "$work/scripts/lr-predicate-lint.sh"
+  [ "$status" -eq 1 ]
+  cp "$BATS_TEST_TMPDIR/cc-find.orig" "$work/bin/cc-find"
+
+  # (c) THE ACQUITTING ARM, and without it this row only ever convicts. The SANCTIONED shape is a
+  # parsed top-level field — it is what the SSOT itself does — so a gate that flagged it would
+  # refuse its own cure and be deleted within the week.
+  printf '\nname = obj.get("agentName")\n' >> "$work/scripts/limit-recover/lr-select.py"
+  git -C "$work" add -A >/dev/null 2>&1
+  run bash "$work/scripts/lr-predicate-lint.sh"
+  [ "$status" -eq 0 ]
 }
 
 # ── RED-PROOF (W4 step 5, the lint rows) ────────────────────────────────────────────────────────

@@ -729,6 +729,24 @@ PY
 # what catches liveness being weakened, because every other row's fixture has a pid that is
 # genuinely alive. A suite without C2 would accept pid-reuse blindness silently.
 #
+# THE § 11 BATTERY, rows 16-22, run the same way from a verified 0-not-ok baseline. Each mutant
+# reverts ONE amendment's rule and dies on exactly the row that owns it — no row is carried by a
+# neighbour, and none of the six survived:
+#
+#   M6  beats ignored; liveness is registry-only again       -> 16
+#   M7  adopt_parked is a no-op (parked/ enumerated, unused)  -> 17
+#   M8  a parked record is classified by TEXT, not by cap     -> 17
+#   M9  absent and unreadable optional stores both go silent  -> 21
+#   M10 sys.path from abspath(__file__), not realpath         -> 22
+#   M11 MARKER_CAP back to 5000                               -> 19
+#
+# Rows 18 and 20 carry their mutants INLINE instead, because each needs a fixture no other row
+# builds: 18 runs two (the shipped dedupe in full, then the inode pass alone) and 20 runs the
+# substring predicate that calls `agentName:null` a teammate. M10 is the one to read twice —
+# `abspath` differs from `realpath` ONLY through a symlink, so it passes every ordinary invocation
+# and fails exactly in the deployed shape. That is why § 11 #12 exists, and why row 22 builds a
+# second checkout with a sentinel predicate rather than asserting on a path string.
+#
 # NOT COVERED HERE, and named rather than left to be discovered: W2b row 14, the byte-for-byte
 # parity diff against `lf_locate` over tests/lr-fleet.bats's own locate:/D7:/D8: fixtures. It
 # belongs with W3, which is where `lf_census` and the --slow-scan path land; asserting parity

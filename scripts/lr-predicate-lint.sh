@@ -84,45 +84,88 @@ scripts/lib/cloud-create.sh 1
 scripts/limit-recover/lr-handoff.sh 1
 scripts/limit-recover/lr-reset-poller.sh 1"
 
-allowed_count() { printf '%s\n' "$ALLOW" | awk -v f="$1" '$1==f {print $2; found=1} END{if(!found) print 0}'; }
+# ── THE SECOND FAMILY: the TEAMMATE predicate (LIMIT_DETECT_100P § 11 #10) ───────────────────────
+# WHY A SECOND FAMILY AT ALL, and it is the same argument this file already makes for the first.
+# § 11 #10 abolishes the raw `"agentName"` substring exactly as W4 abolished the cap-text copies,
+# and `lr_predicate.is_teammate_head` is its one copy. Nothing gated it — this lint's CAP_RE cannot
+# see the teammate family, and the consequence is measured rather than hypothetical: bin/cc-limited
+# imported the SSOT at :71 and then ran its OWN `if b'"agentName"' in head:` at :421, a thirteenth
+# copy that sat on trunk through W2a's land, W4's migration AND this lint's arrival, because every
+# gate in play was keyed on the other family. A consolidation with no gate is a snapshot.
+#
+# THE DEFECT IT REFUSES IS SPECIFIC, not stylistic. A substring answers TRUE to `"agentName":null`
+# exactly as readily as to a real name. Consumers use this test to SKIP — a teammate is ended by
+# its lead, never by itself — so a false positive leaves an ordinary live session marked lead-owned
+# and unrecoverable, silently, with an authoritative-looking reason on screen.
+#
+# A PARSED FIELD READ IS NOT A COPY and is deliberately not flagged: `obj.get("agentName")` is the
+# SANCTIONED shape (it is what the SSOT itself does), and lr-audit.py:1298 uses it to ask a
+# different question entirely — whether a record belongs to a NAMED member of a named team.
+# Flagging that would refuse the cure, which is the failure mode the CAP_RE notes above warn about.
+TEAM_RE='"agentName"'
+TEAM_MATCH_RE="grep|=~| in line| in head| in txt| in data|\.startswith\(|re\.(compile|search|match)"
 
-hits="$(git grep -nE "$CAP_RE" -- scripts bin hooks 2>/dev/null \
-        | grep -vE '^scripts/limit-recover/lr_predicate\.py:|^scripts/limit-recover/lr-predicate\.sh:|^scripts/lr-predicate-lint\.sh:' \
-        | grep -vE ':[0-9]+: *#' \
-        | grep -E "$MATCH_RE")"
+# NOT YET MIGRATED (5). Every one is a genuine copy and none is in this wave's frozen scope; W4
+# migrated only the poller's two. They are allowlisted BY NAME with the reason, which is the same
+# treatment lr-handoff.sh gets above: it keeps the debt legible instead of silently permitted, and
+# it refuses a SIXTH. One-line migration each, onto `lr-predicate.sh is-teammate-head` (bash) or
+# `PRED.is_teammate_head` (python), for whoever owns each file.
+#   bin/cc-find · scripts/handoff-fire.sh · scripts/limit-recover/lr-fleet.sh (2) ·
+#   scripts/limit-recover/lr-select.py
+TEAM_ALLOW="bin/cc-find 1
+scripts/handoff-fire.sh 1
+scripts/limit-recover/lr-fleet.sh 2
+scripts/limit-recover/lr-select.py 1"
+
+allowed_count() { printf '%s\n' "$2" | awk -v f="$1" '$1==f {print $2; found=1} END{if(!found) print 0}'; }
+
+# One scan, two families. The exclusions are shared on purpose: the SSOT, its shim and this file
+# all QUOTE both families constantly, and a gate that flagged its own rationale would be deleted.
+scan() { # $1 = subject regex, $2 = predicate-shape regex
+  git grep -nE "$1" -- scripts bin hooks 2>/dev/null \
+    | grep -vE '^scripts/limit-recover/lr_predicate\.py:|^scripts/limit-recover/lr-predicate\.sh:|^scripts/lr-predicate-lint\.sh:' \
+    | grep -vE ':[0-9]+: *#' \
+    | grep -E "$2"
+}
 
 rc=0
-while IFS= read -r line; do
-  [ -n "$line" ] || continue
-  f="${line%%:*}"
-  n="$(printf '%s\n' "$hits" | grep -c "^$f:")"
-  want="$(allowed_count "$f")"
-  [ "$n" -le "$want" ] && continue
-  rc=1
-done < <(printf '%s\n' "$hits" | cut -d: -f1 | sort -u | sed 's/$/:/')
-
-if [ "$rc" -ne 0 ] || [ "${1:-}" = "--list" ]; then
-  printf '%s\n' "$hits" | cut -d: -f1 | sort | uniq -c | while read -r n f; do
-    want="$(allowed_count "$f")"
+report() { # $1 = hits  $2 = allowlist  $3 = family label
+  local hits="$1" allow="$2" label="$3" f n want
+  [ -n "$hits" ] || return 0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    n="$(printf '%s\n' "$hits" | grep -c "^$f:")"
+    want="$(allowed_count "$f" "$allow")"
     if [ "$n" -gt "$want" ]; then
-      printf 'REFUSED  %-46s %s cap-text predicate(s), %s allowed\n' "$f" "$n" "$want" >&2
-    else
-      printf 'ok       %-46s %s/%s\n' "$f" "$n" "$want"
+      printf 'REFUSED  %-46s %s %s predicate(s), %s allowed\n' "$f" "$n" "$label" "$want" >&2
+      rc=1
+    elif [ "${LIST:-0}" = 1 ]; then
+      printf 'ok       %-46s %s/%s  %s\n' "$f" "$n" "$want" "$label"
     fi
-  done
-fi
+  done < <(printf '%s\n' "$hits" | cut -d: -f1 | sort -u)
+}
+
+[ "${1:-}" = "--list" ] && LIST=1
+report "$(scan "$CAP_RE" "$MATCH_RE")"   "$ALLOW"      "cap-text"
+report "$(scan "$TEAM_RE" "$TEAM_MATCH_RE")" "$TEAM_ALLOW" "teammate"
 
 if [ "$rc" -ne 0 ]; then
   cat >&2 <<'EOF'
 
-lr-predicate-lint: a NEW limit predicate was added outside the SSOT.
-The limit predicate lives in ONE place: scripts/limit-recover/lr_predicate.py.
+lr-predicate-lint: a NEW predicate was added outside the SSOT.
+Both families live in ONE place: scripts/limit-recover/lr_predicate.py.
+  cap-text — is this session limit-blocked, and on which cap
   · python  — import lr_predicate; classify_record(rec) / classify_text(text, error=, api_error_status=)
   · bash    — bash scripts/limit-recover/lr-predicate.sh classify-tail <transcript>
+  teammate — is this session a named TEAMMATE (§ 11 #10)
+  · python  — import lr_predicate; lr_predicate.is_teammate_head(head_bytes)
+  · bash    — bash scripts/limit-recover/lr-predicate.sh is-teammate-head <transcript>
+A raw `"agentName"` substring is NOT equivalent: it answers TRUE to `"agentName":null`, which marks
+an ordinary live session lead-owned and stops it ever being recovered.
 If the new site really reads a CLI's STDOUT rather than transcript JSONL, it belongs in this
-script's allowlist WITH its reason, beside the three that are already there.
+script's allowlist WITH its reason, beside the ones already there.
 EOF
   exit 1
 fi
-printf 'lr-predicate-lint: clean — no cap-text predicate outside the SSOT and its allowlist.\n'
+printf 'lr-predicate-lint: clean — no cap-text or teammate predicate outside the SSOT and its allowlist.\n'
 exit 0
