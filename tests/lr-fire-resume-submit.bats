@@ -467,3 +467,31 @@ SH
   [[ "$output" == *"SUBMITTED in $PANE"* ]] \
     || { echo "the argv the arming side actually builds does not carry the token to the watcher: $output"; false; }
 }
+@test "RED-PROOF the arming gate SUPPRESSES a token the relaunch PROMPT cannot deliver" {
+  # The 2-occurrence precondition is what makes this half safe to land before lr-handoff's: the
+  # oracle reads "no user record carries this token" as NOT ENGAGED, so a token that lives only in
+  # the launcher's export block — never in the prompt, never in the transcript — would convict every
+  # healthy recycle. Lowering the gate to `-lt 1` survived the mutation pass in substance: nothing
+  # executed it. This does, on both sides of the boundary.
+  blk="$(sed -n '/^  RCY_SUBMIT_TOKEN_ARG=""$/,/^  fi$/p' "$HF")"
+  [ -n "$blk" ] || { echo "the arming block could not be located in $HF — the anchor is stale"; false; }
+  case "$blk" in *rcy_tok_n*) ;; *) echo "extracted the wrong span:"; printf '%s\n' "$blk"; false ;; esac
+
+  L="$BATS_TEST_TMPDIR/launcher.sh"
+  # ONE occurrence: the export only. The prompt cannot deliver it, so it must NOT be handed over.
+  printf 'export LR_SUBMIT_TOKEN=%s\nexec claude-x --model m\n' "$TOK" > "$L"
+  run bash -c 'RESUME_LAUNCHER="$1"; eval "$2"; printf "TOKEN=[%s]\n" "$RCY_SUBMIT_TOKEN_ARG"' _ "$L" "$blk"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"TOKEN=[]"* ]] \
+    || { echo "a token the prompt cannot deliver was handed to the oracle: $output"; false; }
+  [[ "$output" == *"does not carry this run's submit token"* ]] \
+    || { echo "the fallback to the wall-clock oracle was SILENT: $output"; false; }
+
+  # TWO occurrences — the export AND the prompt: the run is measured properly and says nothing.
+  printf 'export LR_SUBMIT_TOKEN=%s\nexec claude-x --model m --prompt "/limit-recover ingest /x %s"\n' "$TOK" "$TOK" > "$L"
+  run bash -c 'RESUME_LAUNCHER="$1"; eval "$2"; printf "TOKEN=[%s]\n" "$RCY_SUBMIT_TOKEN_ARG"' _ "$L" "$blk"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"TOKEN=[$TOK]"* ]] \
+    || { echo "a launcher carrying the token in BOTH places was still degraded: $output"; false; }
+  ! [[ "$output" == *"does not carry"* ]] || { echo "warned on a launcher that does carry it: $output"; false; }
+}
