@@ -561,6 +561,27 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
   a cross-account resume that replayed 13 cached slots); § 11 closes all 15 critic gaps. Nothing implemented yet — Wave 1
   (W0 · W1 · W5) is the next fire, per Phase 0.
 
+- 2026-09-20T09:2xZ · **status reconciled by lead 540263da (next4, pane 339).** The entry above is superseded on its
+  last clause only — "Nothing implemented yet" was written at plan-open and never updated, and four waves had landed
+  under it. It is preserved as written (plan conventions: integrate, never rewrite); a successor lead reading it alone
+  would re-fire landed work, which is the one failure this log exists to prevent. Landed state verified BY CONTENT
+  (`git ls-tree origin/main` + row counts), never by a ping:
+  - **W0 core** — `42b1eb874` (`lr_predicate.py` 612 · `lr-predicate.sh` 100 · `tests/lr-predicate.bats` 361 · fixtures).
+    RESIDUAL IN FLIGHT: `is_teammate_head` (§ 11 #10) on `lr-detect-w0`, pane 336.
+  - **W1** — `5d45af7f6` (hook arm + registry address + beat; 8 files). **GAP: it landed with `CAP=5000`** — § 9 D3's
+    value shipped over § 11 #7, the amendment that reverses it to 500 and binds. RESIDUAL IN FLIGHT on `lr-detect-w1`, pane 337.
+  - **W2a + W2b** — `d2c712d07` (`bin/cc-limited` 828 · `tests/cc-limited.bats` 406 · `tests/fixtures/lr-2026-09-19/build.sh`).
+    **GAP: W2b is PARTIAL** — rows 1–15 + C1/C2 = 17 tests; § 11 rows **16–22 are absent**.
+    **GAP: § 11 #3 (the `parked/` adapter, 95 %) is UNIMPLEMENTED** — `bin/cc-limited` has no `parked_at` / `reset_at_utc`,
+    so `parked_sids()` enumerates a source nothing adapts. Amendments #2, #4, #10 and #12 ARE present (grepped).
+  - **W5 chip** — landed from the sibling plan (`LIMIT_RECOVER_100P` W4); the cross-reference below already records it.
+    RESIDUAL IN FLIGHT: the clipping / both-absent / fork-count rows (§ 11 #13) on `lr-detect-w5`, pane 338.
+  - **W2c** — FIRED this turn: pane 340, next3, branch `lr-detect-w2c`, goal armed + verified.
+  - NOT YET FIRED, each with the reason it is held rather than forgotten: **W4** — held until W0's `is_teammate_head`
+    lands, because it migrates the five `grep '"agentName"'` sites onto that verb · **W2b-ii** (rows 16–22 + the § 11 #3
+    adapter) — held so `bin/cc-limited` has ONE owner while W2c extends it · **W3** — held on W2c · **W6** (lead) —
+    after W1 + W2b + W2c + W3.
+
 ## 13. Cross-reference — `LIMIT_RECOVER_100P` § 9 landed the recovery side first (2026-09-20 00:1xZ, session 11569d45)
 
 Your wave-1 corpus was this session's research. Landed and LIVE on trunk at `1b2676f4c` (23:50Z),
