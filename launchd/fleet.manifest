@@ -430,3 +430,36 @@ com.claude.permission-harvest      | run    | 604800 | ~/.claude/logs/permission
 # runs = 1, last exit code = (never exited) ⇒ P_EXIT parses empty ⇒ S4 cannot fire ⇒ S6 HEALTHY,
 # no row. The row appears only when the service actually breaks, which is the whole contract.
 homebrew.mxcl.postgresql@14        | run    | 0    | -    | 12 | 42-postgresql14-activate.sh
+
+# ── com.claude.browse-mirror (2026-09-19, backlog 62f54195c398) ─────────────────────────────────
+# The plist landed in bd016b0a0 WITHOUT a row here, so the coverage loop in tests/cc-fleet.bats went
+# RED on trunk for every lander after it and postland-verify bisected it to that commit. That is the
+# capacity-alarm / scratchpad-reaper / devserver-gc / browser-spin-guard / permission-harvest shape
+# for the SIXTH time, and the recurrence is not carelessness: nothing in the land gate reads this
+# file. cc-fleet.bats is a `--direct` suite of any diff touching launchd/, but the land's smoke is
+# load-shed on a busy box (R7), so the land most likely to add a plist is the one least able to test
+# it. Repaired FORWARD, as every entry above was — the auto-revert could not help here either
+# (rc 90, revert=none: a 32-file feature does not revert cleanly under the commits on top).
+#
+# FIELD CHOICES:
+#   expect   = `run`, not `staged`. The operator has already run migrations/0032-browse-mirror.sh;
+#              verified at land via `launchctl print gui/<uid>/com.claude.browse-mirror` — the job is
+#              loaded, runs = 46, last exit code = 0. `staged` would declare a decision that is made.
+#   interval = 600, matching StartInterval. WatchPaths is the fast path but cannot bound staleness
+#              (a quiet fleet never touches refs/remotes), so the backstop tick is the real cadence —
+#              which is the whole argument the plist's own comment block makes for having both.
+#   evidence = `auto`, and it is genuinely self-maintaining here rather than the deploy-live trap the
+#              header warns about. scripts/browse-mirror-sync.sh prints one `mirror=… verdict=…` line
+#              per mirror on EVERY invocation — the no-op path (`verdict=current`, :201) and the kill
+#              switch (`verdict=disabled`, :88) both print — so StandardOutPath is touched on every
+#              run regardless of outcome. That is the per-run durable product `-` exists for when it
+#              is absent, and it is present.
+#   owner_row= 11 (worktree & warm-pool management): the subject keeps the human-browsable ORIGINAL
+#              checkouts at their upstream ref, which is the same family as worktree-gc-infra and
+#              cc-gc, not the landing pipeline that moves the ref.
+#   activate = 18-fleet-activate.sh, NOT migrations/0032-browse-mirror.sh. This column is the row's
+#              paste-ready recover_cmd (a job that FELL OUT of launchd), not its first install, and
+#              cc-fleet resolves it under docs/activation/pending-activation/ where the migration does
+#              not live. 18-fleet-activate.sh reconciles every `expect = run` label straight from this
+#              manifest, so it is correct for this row by construction.
+com.claude.browse-mirror           | run    | 600  | auto | 11 | 18-fleet-activate.sh
