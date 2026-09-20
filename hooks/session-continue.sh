@@ -12,6 +12,7 @@
 # Agent interface (run from the session's worktree):
 #   session-continue.sh set "<the ONE next step>"   # arm — ONLY on the 🔧 state
 #   session-continue.sh clear                        # disarm — on ✅/📦/⛔/📤, read-only, or "...and stop"
+#   session-continue.sh clear --if-mine              # same, but REFUSE a sentinel this sid did not arm
 #   session-continue.sh status                       # inspect
 #
 # Claude Code calls it with NO args + the Stop JSON on stdin → actuation mode.
@@ -185,9 +186,38 @@ case "${1:-}" in
     # Without it, a sid-bearing agent running `clear` in an unarmed cwd would be REFUSED — a refusal
     # over nothing, and the budget never spent, which is the snooze-button state this verb exists to
     # avoid.
+    #
+    # ── AND THE GUARD IS OPT-IN, BECAUSE AN INHERITED SID IS NOT A CLAIM (W3i B1) ─────────────────
+    # Shipped ON BY DEFAULT it convicted callers that never claimed an identity at all.
+    # `CLAUDE_CODE_SESSION_ID` is exported into EVERY descendant of a Claude Code session, so the
+    # variable this guard read as "who is asking" was in fact "which pane happened to launch the
+    # process". Three measured consequences, each a different caller:
+    #   1. `tests/completion-assert.bats`' unchanged trunk control "double-block CONTROL: the marker
+    #      is per-STOP — a later silent Stop convicts again" went RED in any ordinary session and
+    #      GREEN under `env -u CLAUDE_CODE_SESSION_ID` — a one-variable A/B, re-run against the
+    #      origin/main copy of this file to pin the other arm. Its `clear` is the operator's
+    #      bare-shell gesture by intent, and the ambient sid made it a foreign agent.
+    #   2. A post-recycle successor in the same cwd could no longer clear its predecessor's
+    #      sentinel, which is the documented park lever (global CLAUDE.md § Auto-continue actuation).
+    #   3. Any in-session script or harness that runs the verb inherits the same false identity.
+    # The one caller that genuinely acts FOR another session — lr-ingest-verify's clause D, running
+    # in the launcher with CLAUDE_CODE_SESSION_ID set DELIBERATELY to the recovered sid — is also
+    # the only one that can SAY so, and the original design said exactly this: run it as
+    # `CLAUDE_CODE_SESSION_ID="$SID" session-continue.sh clear` and add a `.sid == $SID` gate
+    # (docs/research/lr-detect-2026-09-19/wave1/critique/D1-zero-touch--safety-blast-radius.md:248).
+    # So the gate is a FLAG THE CALLER PASSES, never a property of the environment it inherited;
+    # `clear` with no flag is exactly the verb trunk has always shipped. Residual, stated rather
+    # than hidden: a third party that does NOT pass the flag can still clear a sibling's chain, so
+    # this closes the recovery path that caused the 2026-09-19 incident and not the general shape.
+    _sc_ifmine=0
+    case "${2:-}" in
+      '')        : ;;
+      --if-mine) _sc_ifmine=1 ;;
+      *) echo "session-continue: unknown flag for clear: ${2} (accepted: --if-mine)" >&2; exit 2 ;;
+    esac
     _sc_cur="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
     _sc_owner="$(cat "${f}.sid" 2>/dev/null || true)"
-    if [ -f "$f" ] && [ -n "$_sc_cur" ] && [ "$_sc_owner" != "$_sc_cur" ]; then
+    if [ "$_sc_ifmine" = 1 ] && [ -f "$f" ] && [ -n "$_sc_cur" ] && [ "$_sc_owner" != "$_sc_cur" ]; then
       SC_SID="$_sc_cur"
       _sc_owner_label="${_sc_owner%%-*}"
       [ -n "$_sc_owner_label" ] || _sc_owner_label="an unidentified armer (no sid was recorded at arm time)"
@@ -245,7 +275,13 @@ case "${1:-}" in
   status)
     f=$(sentinel_for "$PWD")
     if [ -f "$f" ]; then
-      echo "ARMED ($(cat "${f}.count" 2>/dev/null || echo 0) continuations, sid=$(cat "${f}.sid" 2>/dev/null || echo '?')): $(cat "$f")"
+      # `unrecorded`, never `?` (W3i C3). `set` writes ${f}.sid only when the arming session HAS an
+      # id, so the no-sid state is ORDINARY — the operator's own bare-shell park — and a `?` there
+      # was read one layer up as a session literally named "?": lr-ingest-verify's clause D2 printed
+      # "session ? has an armed continuation", a sentence about a session that does not exist. The
+      # absence of the evidence needs its own token, because absence and a real owner demand
+      # different words even though they earn the same refusal.
+      echo "ARMED ($(cat "${f}.count" 2>/dev/null || echo 0) continuations, sid=$(cat "${f}.sid" 2>/dev/null || echo 'unrecorded')): $(cat "$f")"
     else echo "inactive"; fi
     exit 0 ;;
 esac
