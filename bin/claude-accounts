@@ -4821,6 +4821,21 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
                          + f"`{r.get('launcher') or '?'}` → `/login`"
                          + (f" · {r['email']} · Dia “{r['dia_profile']}”" if r.get("email") else ""))
 
+    # THE ʷ LEGEND — a marker nobody can decode is a marker that carries nothing. `*` at least
+    # travels with its own "last-known" bullet; `ʷ` shipped as a bare glyph and the operator had
+    # to ask what it meant, which is the whole defect (2026-09-20). It is a footnote about the
+    # TABLE, not about an account, so it goes here rather than in a per-row bullet.
+    #
+    # PRESENCE-GATED, and that is not thrift — it is alarm polarity. The probe fires only at the
+    # wall, so most readouts carry no `ʷ` at all; a legend printed under those would explain a
+    # glyph that is not on screen, at every invocation, forever. It appears exactly when there is
+    # something to decode.
+    if any("ʷ" in pctc(r, k) for r in rows for k in WIRE_FIELD):
+        footnotes.append("`ʷ` = read from the server's own rate-limit headers — unclamped, and "
+                         "carrying its `allowed`/`allowed_warning`/`rejected` verdict. A percent "
+                         "WITHOUT it is the usage endpoint's integer, which rounds UP and clamps "
+                         "at 100, so a bare `100%` is a ceiling we did not verify.")
+
     for n in notes + footnotes:
         # Same note text, both surfaces. Markdown is a list item in chat and plain wrapped prose
         # on the board; the SENTENCE is identical, which is the property that matters — an

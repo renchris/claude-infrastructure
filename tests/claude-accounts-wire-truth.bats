@@ -215,6 +215,35 @@ print("OK")'
   [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
 }
 
+# ---- W-9: the marker is decodable, and only when it is on screen -------------------------------
+# `ʷ` shipped as a bare glyph. The operator read a rendered table and had to ask what it meant —
+# a marker nobody can decode carries nothing, which is the same defect as no marker at all. The
+# legend is PRESENCE-GATED: the probe fires only at the wall, so printing it under the many
+# readouts that carry no `ʷ` would explain an absent glyph forever (alarm polarity).
+
+@test "W-9: the ʷ legend appears when a wire cell does, and never when none does" {
+  run python3 -c "$LOAD"'
+import io, contextlib
+WIN_OPEN = {"active": True, "end": "2099-12-31", "deadline": None, "permanent": True}
+def readout(lim, wire):
+    r = probe(lim, wire)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ca.render_readout([r], cfg, WIN_OPEN, False)
+    return buf.getvalue()
+marked = readout(limits(weekly=100),
+                 {"7d_util": 0.99, "7d_status": "allowed_warning", "5h_util": 0.05,
+                  "5h_status": "allowed", "status": "allowed_warning", "http": 200})
+assert "ʷ" in marked, marked
+assert "rate-limit headers" in marked, "a ʷ on screen with no legend is the defect itself"
+assert "rounds UP and clamps" in marked, marked
+plain = readout(limits(session=5, weekly=11), None)
+assert "ʷ" not in plain, plain
+assert "rate-limit headers" not in plain, "a legend for a glyph that is not on screen is noise"
+print("OK")'
+  [ "$status" -eq 0 ] && [[ "$output" == *OK* ]] || { echo "$output"; false; }
+}
+
 # ---- W-7: a MISS is not a permissive answer ----------------------------------------------------
 # Transport failure / missing header set. The verdict must be exactly what the endpoint alone
 # would have given — never softer, because "we could not read it" is not "the server allows it".
