@@ -628,10 +628,13 @@ EOF
   [ "$(idl_first 'select(.caller=="c15r")|.basis')" = "token" ]
 }
 
-@test "15s D5a2 the stage variables are READ, not re-typed — shrinking them shrinks the TTL" {
-  # The sibling pattern is recycle_await_verdict's max expression, which reads all four stage names
-  # so that a constant edit moves it. A re-typed literal would leave this case green while the real
-  # window changed underneath it, which is how the 300 s came to be wrong in the first place.
+@test "15s D5a2 the stage variables are READ as an OVERRIDE — exporting them moves the TTL" {
+  # SCOPE CORRECTED (W2FA A3): this case proves the names are READ, and nothing more. It EXPORTS
+  # them itself, so it says nothing about production, where none of the four is exported by anything
+  # in the tree and the derived value is the sum of the library's own literals (measured under
+  # `env -i`: 1020). Read alone it licensed the header's "never re-typed" claim over a fixture that
+  # manufactured the environment production lacks. The two cases that DO reach production are 15ac
+  # (the env -i value) and coverage 31 (the literals against handoff-fire's own defaults).
   local tok
   tok="$(mint sid-ttlvar)"
   printf '%s\t%s\t%s\t%s\n' "$(( $(date +%s) - 900 ))" sid-ttlvar "$(id -u)" load > "$tok"
@@ -952,4 +955,29 @@ EOF
   # …and the refusal is still RECORDED. A silenced alarm must never become a silent refusal.
   [ "$(idl_first 'select(.caller=="cA1c")|.basis')" = "token-stale" ] \
     || { echo "basis: $(idl_first 'select(.caller=="cA1c")|.basis')"; false; }
+}
+
+@test "15ac A3 EQUIVALENCE GUARD, MUTANT-SCORED — under env -i the TTL is the LITERAL sum" {
+  # The header claimed the TTL was "read by name, never re-typed" from handoff-fire's constants.
+  # MEASURED: none of the four names is exported by anything in the tree, so under `env -i` every
+  # read misses and the value is this file's own literals. That is not a defect — it is the honest
+  # production value — but it must be PINNED, because the claim that it tracks handoff-fire is what
+  # made nobody check. This case is half the tripwire; coverage case 31 is the other half.
+  #
+  # env -i, not `unset`: a bats process carries the operator's whole environment, so unsetting the
+  # four names proves nothing about a fifth arriving from somewhere. env -i is the floor.
+  #
+  # GREEN IN BOTH ARMS BY CONSTRUCTION — the A3 fix changed a CLAIM, not a value, so a run on the
+  # parent passes too and proves nothing on its own. Its only evidence of power is the death of its
+  # mutant (docs/lessons/green-in-both-arms-is-an-equivalence-guard-not-a-red-proof.md), scored
+  # verbatim: the slack literal 60 → 120 in _cc_admit_token_ttl
+  #   → "the production TTL is 1080, not the documented 1020 — a literal moved without its pin".
+  run env -i /bin/bash -c '. "$1"; _cc_admit_token_ttl; printf "%s" "$CC_ADMIT_TOKEN_TTL_VALUE"' _ "$LIB"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = 1020 ] \
+    || { echo "the production TTL is $output, not the documented 1020 — a literal moved without its pin"; false; }
+  # TWO-SIDED, which is what makes the size non-arbitrary rather than merely bigger. The lower bound
+  # is the stages it must cross (180+600 = 780); the upper is handoff-fire's whole-recycle bound.
+  [ "$output" -ge 780 ] || { echo "TTL $output cannot survive its own operation (780s of stages)"; false; }
+  [ "$output" -le 1200 ] || { echo "TTL $output outlives the recycle that minted it (1200s)"; false; }
 }
