@@ -148,6 +148,54 @@ all_lines() { cat "$STOP_FAILURE_MARKER_DIR"/*.jsonl 2>/dev/null | wc -l | tr -d
   grep -q '"disposition":"passed","reason":"marker-capped"' "$STOP_FAILURE_IDL" || false
 }
 
+@test "SA10: the CAP DEFAULT is 500 — the file caps with no STOP_FAILURE_CAP in the environment" {
+  # § 11 #7 REVERSES § 9 D3, which had proposed 5000. This row exists because the value is a
+  # RULING, not a tuning knob, and every other cap assertion in this file passes STOP_FAILURE_CAP
+  # explicitly — so all of them stay green at ANY default and none of them can see a drift in it.
+  #
+  # BEHAVIOURAL, not a grep. The marker is pre-filled to exactly the boundary with plain lines
+  # (the cap is `wc -l`, which does not parse), so the two arms cost one hook invocation each
+  # instead of 500. RED at pristine HEAD, where the default is 5000: arm A appends a 501st line
+  # and the marker-capped row is never written.
+  local f="$STOP_FAILURE_MARKER_DIR/authentication_failed__next.jsonl"
+  mkdir -p "$STOP_FAILURE_MARKER_DIR"
+
+  # arm A — AT the cap: no line is added, and the fact is logged as capped rather than dropped.
+  seq 1 500 | sed 's/^/{"filler":/; s/$/}/' > "$f"
+  [ "$(wc -l < "$f" | tr -d ' ')" -eq 500 ] || false
+  real_payload s1 | bash "$HOOK"
+  [ "$(wc -l < "$f" | tr -d ' ')" -eq 500 ] || false
+  grep -q '"disposition":"passed","reason":"marker-capped"' "$STOP_FAILURE_IDL" || false
+
+  # arm B — one BELOW it: the very same invocation appends, so arm A pinned the boundary and not
+  # merely a hook that had stopped writing for some other reason.
+  : > "$STOP_FAILURE_IDL"
+  seq 1 499 | sed 's/^/{"filler":/; s/$/}/' > "$f"
+  real_payload s2 | bash "$HOOK"
+  [ "$(wc -l < "$f" | tr -d ' ')" -eq 500 ] || false
+  ! grep -q '"reason":"marker-capped"' "$STOP_FAILURE_IDL" || false
+}
+
+@test "SA11: the TTL DEFAULT is the seven_day window — a 6-day-old marker survives, an 8-day one does not" {
+  # The other half of § 11 #7. EQUIVALENCE GUARD, not a red-proof: HEAD already carries 10080, so
+  # this row is green in both arms of THIS wave. It is here for the mutant it kills — restoring the
+  # pre-W1 `${STOP_FAILURE_TTL_MIN:-1440}` makes the 6-day arm go RED, which is the regression that
+  # silently blanked the census over a session that was still weekly-capped. Verified by running
+  # that mutant; see the RED-PROOF footer.
+  local f="$STOP_FAILURE_MARKER_DIR/authentication_failed__next.jsonl"
+  mkdir -p "$STOP_FAILURE_MARKER_DIR"
+
+  # 6 days old — inside the seven_day window, so the record of the block outlives nothing yet.
+  : > "$f"; touch -t "$(date -u -v-6d +%Y%m%d%H%M 2>/dev/null || date -u -d '6 days ago' +%Y%m%d%H%M)" "$f"
+  real_payload s1 usage_limit_reached | bash "$HOOK"
+  [ -f "$f" ] || false
+
+  # 8 days old — past it, and a cause that stopped recurring stops being a fact.
+  touch -t "$(date -u -v-8d +%Y%m%d%H%M 2>/dev/null || date -u -d '8 days ago' +%Y%m%d%H%M)" "$f"
+  real_payload s2 usage_limit_reached | bash "$HOOK"
+  [ ! -f "$f" ] || false
+}
+
 @test "a cause that stopped recurring self-retires at the TTL" {
   real_payload s1 | bash "$HOOK"
   [ "$(markers)" -eq 1 ] || false
@@ -473,3 +521,61 @@ JSON
 # fork for the cap (the census re-classifies anyway), `oi_origin_class` (3.17 s full-file grep on a
 # 230 MB transcript), `agent_assignee_argv` (0.19-0.23 s ancestry walk), and reading the tier from
 # the transcript (79 ms). The arm buys its latency with one fork it can justify and no reads at all.
+
+# ══ RED-PROOF (LIMIT_DETECT_100P W1) ═════════════════════════════════════════════════════════════
+# Every row W1 ADDS was run once against PRISTINE HEAD and its output is pasted verbatim. A row that
+# CANNOT go red at HEAD is labelled an EQUIVALENCE GUARD and names the mutant it does kill — a row
+# green in both arms proves nothing about the change it was written for, and saying so here is
+# cheaper than a future session re-deriving it.
+#
+# ── SA10 · the CAP default ───────────────────────────────────────────────────────────────────────
+# § 11 #7 REVERSES § 9 D3: the default STAYS 500, it does not rise to 5000. Pristine subject =
+# `git show 0bc639660:hooks/stop-failure-marker.sh` (CAP default 5000), swapped in and run filtered:
+#
+#   1..1
+#   not ok 1 SA10: the CAP DEFAULT is 500 — the file caps with no STOP_FAILURE_CAP in the environment
+#   # (in test file tests/stop-failure-marker.bats, line 167)
+#   #   `[ "$(wc -l < "$f" | tr -d ' ')" -eq 500 ] || false' failed
+#
+# Read it: at a 5000 default the hook appends a 501st line to a marker already at the boundary, so
+# the cap never engages and no `marker-capped` row is written. Armed subject: `ok 1`.
+#
+# ── SA11 · the TTL default ───────────────────────────────────────────────────────────────────────
+# EQUIVALENCE GUARD, stated as one. HEAD already carries 10080, so this row is green in both arms of
+# W1 and no pristine run can redden it. The mutant it kills is the pre-W1 default restored —
+# `sed 's|STOP_FAILURE_TTL_MIN:-10080|STOP_FAILURE_TTL_MIN:-1440|; s|TTL_MIN=10080 ;;|TTL_MIN=1440 ;;|'`:
+#
+#   1..1
+#   not ok 1 SA11: the TTL DEFAULT is the seven_day window — a 6-day-old marker survives, an 8-day one does not
+#   # (in test file tests/stop-failure-marker.bats, line 191)
+#   #   `[ -f "$f" ] || false' failed
+#
+# Read it: at 1440 the 6-day-old marker is GC'd while the weekly cap that wrote it is still in
+# force — the census going blank over a session that is still blocked, which is the whole failure
+# § 11 #7's TTL half exists to prevent. Armed subject: `ok 2`.
+#
+# ══ DEATH-PATH COST — the TWO arms § 11 #8 requires ══════════════════════════════════════════════
+# Measured 2026-09-20 on THIS box (Darwin 24.6, 10 cores, bash 3.2 via /bin/bash), `/usr/bin/time -p`,
+# WINNER path every run (the latch dir is cleared between runs, so each run also pays the page —
+# the worst case, not the typical one).
+#
+#   arm                                                        runs   readings / statistic
+#   (i)  beat writer STUBBED — the HOOK's own budget            3     0.29  0.15  0.13
+#   (ii) beat writer REAL (hooks/session-beat.sh)              20     min 0.17 · median 0.18 · p95 0.20 · max 0.31
+#   CONTROL authentication_failed — the arm is NOT entered       3     0.08  0.08  0.08
+#
+# 🚨 THE 0.30 s BAR BELONGS TO ARM (i), and arm (ii) is not judged against it — § 11 #8 makes (ii)'s
+# OWN p95 the recorded bar, which is **0.20 s**. Both clear 0.30 anyway. The first reading in each
+# arm is a cold-cache outlier (0.29, 0.31) and is kept rather than trimmed, because the death path
+# IS cold on the first session of a mass cap.
+#
+# 🚨 LOAD IS PART OF THE MEASUREMENT, and omitting it would have inverted this verdict. Taken at
+# 1-min load 7.96 on 10 cores. The SAME harness four hours earlier, at load 141 (eight concurrent
+# bats roots), read arm (i) as 0.47 / 0.34 / 0.32 — three clean breaches of the bar. What refutes
+# the obvious reading is the CONTROL, which does not enter the arm at all and still read 0.22 s
+# there against 0.08 s here: the box was ~3x inflated and the hook was never the subject. A latency
+# bar quoted without the load beside it is a fact about the machine wearing a verdict's clothes
+# (fleet memory: a-cure-is-verified-only-under-the-load-that-caused-it, inverted).
+#
+# What the arm costs, read off the rows: ~+0.10 s on the population it is FOR (page + beat + the
+# three sentinels) and ~+0.07 s on every other death, which is the sentinels and one extra GC find.

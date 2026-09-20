@@ -55,17 +55,25 @@ ACCOUNTS="${STOP_FAILURE_ACCOUNTS:-$HOME/.claude/accounts.json}"
 # and that choice is load-bearing — an env var cannot reach a pane that is ALREADY RUNNING, which
 # is the entire population during a mass cap. `[ -e ]` costs nothing on the death path.
 LIM="${STOP_FAILURE_LIMITED_DIR:-$HOME/.claude/autonomy/limited}"
-# TTL 10080 min = 7 days, and the number is not arbitrary: it is the SEVEN_DAY cap's own window.
-# At the old 1440 a weekly cap's marker was GC'd four days before the cap expired, so the census
-# lost the only record that the session was ever blocked while it was still blocked. A marker must
-# outlive the fact it reports. CAP 5000 for the same reason in the other direction — one account
-# capping kills ~30 sessions at once and a multi-fire sid re-caps repeatedly, so 500 lines is
-# reachable inside one bad afternoon, and a capped file is a DEGRADED enumerator (cc-limited
-# reports it in its footer and exits 6) rather than a resolved cause.
+# TTL 10080 min = 7 days — the SEVEN_DAY cap's own window. THE RATIONALE IS NARROWER THAN IT LOOKS,
+# and the narrow version is the true one (§ 11 #7): the GC below is keyed on the FILE's mtime, and
+# every death APPENDS, so a busy account's marker is touched continuously and never expires at ANY
+# TTL. 10080 buys exactly one thing — a QUIET account, capped once and then silent, keeps the record
+# that it was blocked for as long as the block itself can last. At 1440 that one record was GC'd
+# four days before the cap expired, which is the census going blank over a session still blocked.
+#
+# CAP STAYS 500, and this is a REVERSAL of § 9 D3's proposed 5000, ruled by § 11 #7 at 85 %. D3
+# argued 500 is reachable in one bad afternoon and therefore too low. It is reachable — and that
+# does not cost anything, because a capped file is NOT a lost fact: the marker stays in place, and
+# per-sid grouping at READ time already dedupes the re-fires that fill it (22 of 42 sessions
+# re-firing up to 30× produce 30 lines and ONE session in the census). What the cap actually bounds
+# is disk for a fact that was fully established at line 1, and the census reports the capped file in
+# its footer and exits 6 either way. 5000 bought ~350× the measured enumerate regime and no
+# information, so the cheaper bound wins.
 TTL_MIN="${STOP_FAILURE_TTL_MIN:-10080}"
-CAP="${STOP_FAILURE_CAP:-5000}"
+CAP="${STOP_FAILURE_CAP:-500}"
 case "$TTL_MIN" in ''|*[!0-9]*) TTL_MIN=10080 ;; esac
-case "$CAP"     in ''|*[!0-9]*) CAP=5000 ;; esac
+case "$CAP"     in ''|*[!0-9]*) CAP=500 ;; esac
 
 # ── IDL disposition writer (SSOT lib; degrades to a no-op, never to an error) ────────────────────
 _sfscd="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
