@@ -695,17 +695,63 @@ EOF
       [ -n "$tx" ] || { echo "lr-fleet: --mark $MARK_SID — no transcript in any store" >&2; exit 2; }
       live_pane="$(lr_registry_live_rows "$MARK_SID" 2>/dev/null | awk -F'\t' -v p="$LIVE_PID" '$2 == p { print $1; exit }' || true)"
       tomb="${tx%.jsonl}.HANDOFF.json"
-      [ -f "$tomb" ] && { echo "lr-fleet: $tomb already exists — refusing to overwrite a tombstone" >&2; exit 2; }
+      # THE CHECK IS OVER EVERY STORE, never only the one the transcript search stopped in. A
+      # session TRANSPLANTED to another account keeps its `handed_off_to` tombstone in the TARGET
+      # root, so a check keyed on `$tomb` alone cannot see it and --mark writes a SECOND one.
+      # Downstream that is worse than doing nothing: hf_transplant_evidence
+      # (scripts/handoff-fire.sh:2068-2078) REFUSES outright on finding two, so the stale pane the
+      # mark was supposed to retire becomes unretirable. Same shape as that block, resolved-path
+      # dedupe included — `~/.claude-next/projects` is a SYMLINK onto `~/.claude/projects`, so
+      # counting PATHS reads one physical tombstone as two and would mis-report a same-store
+      # tombstone as a transplant to somewhere else.
+      # `$tx` exists, so its resolved form is exact; `$tomb` may not exist yet, and `readlink -f`
+      # on an absent path prints NOTHING (rc 1) here, which would leave it unresolved and make a
+      # mirrored store read as a different one.
+      _mk_tomb_rp="$(readlink -f "$tx" 2>/dev/null || printf '%s' "$tx")"; _mk_tomb_rp="${_mk_tomb_rp%.jsonl}.HANDOFF.json"
+      _mk_seen=""; _mk_list=""; _mk_n=0; _mk_cross=0
+      # A heredoc, never a pipe: a `while` on the right of `|` runs in a subshell and none of these
+      # assignments would escape it (memory: assignment-inside-command-substitution-never-escapes).
+      while IFS= read -r c; do
+        [ -n "$c" ] || continue
+        for t in "$c"/projects/*/"$MARK_SID".HANDOFF.json; do
+          [ -f "$t" ] || continue
+          _mk_rp="$(readlink -f "$t" 2>/dev/null || printf '%s' "$t")"
+          case " $_mk_seen " in *" $_mk_rp "*) continue ;; esac
+          _mk_seen="$_mk_seen $_mk_rp"; _mk_n=$((_mk_n + 1)); _mk_list="${_mk_list}${t}
+"
+          [ "$_mk_rp" = "$_mk_tomb_rp" ] || _mk_cross=1
+        done
+      done <<EOF
+$(lr_config_dirs)
+EOF
+      if [ "$_mk_n" -gt 0 ]; then
+        if [ "$_mk_cross" -eq 0 ]; then
+          echo "lr-fleet: $tomb already exists — refusing to overwrite a tombstone" >&2
+        else
+          { echo "lr-fleet: --mark ${MARK_SID:0:8} REFUSED: a transplant tombstone for this session already exists:"
+            printf '%s' "$_mk_list" | sed 's/^/lr-fleet:   /'
+            echo "lr-fleet:   a TRANSPLANTED session is already disambiguated — that tombstone names where it went, so there is nothing for a duplicate-marker to decide. Retire the stale pane with: handoff-fire.sh self-close --transplanted-source --source-session $MARK_SID"
+          } >&2
+        fi
+        exit 2
+      fi
       jq -n --arg to "$cfg" --arg pid "$LIVE_PID" --arg pane "$live_pane" --arg ts "$(lf_now)" --arg by "${CLAUDE_CODE_SESSION_ID:-lr-fleet}" \
         '{handed_off_to:$to, superseded_by_pid:($pid|tonumber), superseded_by_pane:$pane, ts:$ts, reason:"same-account duplicate — the stale copy is retired; the guard blocks its prompts", written_by:$by}' > "$tomb"
       echo "lr-fleet: SUPERSEDED tombstone written: $tomb (live copy pid $LIVE_PID${live_pane:+, pane $live_pane}). Every OTHER process holding ${MARK_SID:0:8} now has its prompts blocked by handed-off-session-guard; retire its pane with: handoff-fire.sh self-close --transplanted-source --source-pane <stale pane> --source-session $MARK_SID --successor ${live_pane:-<live pane>}"
       exit 0
     fi
     # census: every sid held by more than one live process (registry rows + --resume argv + tmux)
-    found=0
+    found=0; _dup_seen=""
     for f in "${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"/*.json; do
       [ -f "$f" ] || continue
       sid="$(jq -r '.session_id // empty' "$f" 2>/dev/null)"; [ -n "$sid" ] || continue
+      # ONE BLOCK PER SID, never one per registry ROW. This loop iterates registry FILES, and a
+      # session with two rows is precisely the population the mode exists to report — so it was
+      # reached twice and printed its whole DUPLICATE block, panes and prescription included,
+      # twice (measured: sid 7f533f05). `found` counts DISTINCT sids, so the empty-census line
+      # below still fires when there are none. The arithmetic stays lr_holder_count's alone.
+      case " $_dup_seen " in *" $sid "*) continue ;; esac
+      _dup_seen="$_dup_seen $sid"
       rows="$(lr_registry_live_rows "$sid" 2>/dev/null || true)"; [ -n "$rows" ] || continue
       procs="$(lr_resume_procs "$sid" 2>/dev/null || true)"
       nrows="$(printf '%s\n' "$rows" | grep -c .)"; nprocs="$(printf '%s' "$procs" | grep -c . || true)"

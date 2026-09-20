@@ -642,3 +642,77 @@ SH
   [[ "$output" == *"UNPROVEN"* ]] || { echo "$output"; false; }
   [ "$status" -eq 1 ] || { echo "$output"; false; }
 }
+
+# ── W9a: --mark's tombstone check is over EVERY store, and --duplicates dedupes by sid ───────────
+# A backgrounded holder is reaped here rather than inline: an assertion that fails leaves the
+# inline `kill` unreached, and a stray `sleep` in the process table is exactly the kind of live
+# identifier a later fixture can collide with.
+teardown() {
+  local p
+  for p in ${W9A_REAP:-}; do kill "$p" 2>/dev/null || true; done
+}
+
+@test "W9a: --mark REFUSES a sid whose tombstone lives in ANOTHER store — a transplanted session is already disambiguated" {
+  # THE DEFECT. The transcript search `break 2`s on the FIRST store holding <sid>.jsonl and the
+  # existence check was keyed on that store alone, so a session transplanted to another account —
+  # whose `handed_off_to` tombstone is in the TARGET root — got a SECOND tombstone. Downstream
+  # hf_transplant_evidence refuses on finding two, so the stale pane becomes unretirable.
+  blocked_tx "$SEC" "$SID"                                  # transcript (and so `$tomb`) in SEC
+  other="$TER/projects/$SLUG/$SID.HANDOFF.json"             # the transplant's tombstone, elsewhere
+  printf '{"handed_off_to":"%s","ts":"2026-09-19T00:00:00Z"}\n' "$TER" > "$other"
+  before="$(find "$SEC/projects/$SLUG" -type f | wc -l | tr -d ' ')"
+  run bash "$FLEET" --duplicates --mark "$SID" --live "$$"
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"$other"* ]] || { echo "$output"; false; }            # it NAMES what it found
+  [[ "$output" == *"already disambiguated"* ]] || { echo "$output"; false; }
+  [ ! -f "$SEC/projects/$SLUG/$SID.HANDOFF.json" ] || { echo "second tombstone written"; false; }
+  [ "$(find "$SEC/projects/$SLUG" -type f | wc -l | tr -d ' ')" -eq "$before" ]
+}
+
+@test "W9a CONTROL: with no tombstone in ANY store --mark still writes exactly one" {
+  # The widening must not cost the happy path. Green in both arms by construction — this is an
+  # equivalence guard against the over-broad fix, not a red-proof of the defect above.
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  run bash "$FLEET" --duplicates --mark "$SID" --live "$$"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$SEC/projects/$SLUG/$SID.HANDOFF.json" ]
+  [ "$(find "$SEC/projects/$SLUG" "$TER/projects/$SLUG" -name "$SID.HANDOFF.json" | wc -l | tr -d ' ')" -eq 1 ]
+}
+
+@test "W9a: a MIRRORED store is ONE tombstone, not two — same-store stays the overwrite refusal, cross-store is named once" {
+  # `~/.claude-next/projects` is a SYMLINK onto `~/.claude/projects`, so a widening that compared
+  # PATHS would read one physical tombstone as two: same-store would mis-report as a transplant to
+  # somewhere else, and a cross-store refusal would name the same file twice. Resolved-path dedupe
+  # (the shape hf_transplant_evidence:2068-2078 already uses) is what keeps both honest.
+  MIR="$HOME/.claude-next"; mkdir -p "$MIR"; ln -s "$SEC/projects" "$MIR/projects"
+
+  # arm A — cross-store, seen through BOTH spellings: refused once, path printed once.
+  blocked_tx "$TER" "$SID"                                  # `$tomb` would be in TER
+  printf '{"handed_off_to":"%s"}\n' "$SEC" > "$SEC/projects/$SLUG/$SID.HANDOFF.json"
+  LR_CONFIG_DIRS="$TER:$SEC:$MIR" run bash "$FLEET" --duplicates --mark "$SID" --live "$$"
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c "$SID.HANDOFF.json$")" -eq 1 ] || { echo "$output"; false; }
+  [ ! -f "$TER/projects/$SLUG/$SID.HANDOFF.json" ] || { echo "second tombstone written"; false; }
+
+  # arm B — same store, reached through both spellings: the ORIGINAL overwrite refusal, never the
+  # transplant one. One physical file in one store is not evidence of a move.
+  blocked_tx "$SEC" "$SID"
+  LR_CONFIG_DIRS="$SEC:$MIR" run bash "$FLEET" --duplicates --mark "$SID" --live "$$"
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"refusing to overwrite a tombstone"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"already disambiguated"* ]] || { echo "$output"; false; }
+}
+
+@test "W9a: --duplicates prints a sid ONCE however many registry rows it has" {
+  # The census iterates registry FILES, so the very population this mode exists to report — a sid
+  # with two rows — was reached twice and printed its whole block twice (measured: 7f533f05).
+  # Both pids are REAL: a hardcoded 'impossible' pid is a claim about a wrapping namespace that a
+  # live process can answer (docs/lessons/a-fixture-s-pid-range-is-a-claim-about-a-shared-wrapping-namespa.md).
+  blocked_tx "$SEC" "$SID"
+  sleep 30 & holder=$!; W9A_REAP="$holder"
+  row 616 "$SID" "$$"; row 647 "$SID" "$holder"
+  run bash "$FLEET" --duplicates
+  [ "$(printf '%s\n' "$output" | grep -c '^DUPLICATE 52e35019')" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"DUPLICATE 52e35019: 2 registry pane(s)"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"no session is held by more than one live process"* ]] || { echo "$output"; false; }
+}
