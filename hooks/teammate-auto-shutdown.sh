@@ -317,7 +317,11 @@ _surviving_member_pid() {  # <member-name> → echoes the pid of a still-running
     {
       p = $1; c = ""; for (i = 3; i <= NF; i++) c = c " " $i; c = c " "
       if (c !~ /claude\.exe/) next
-      if (c !~ / --agent-id / || c !~ / --agent-name / || c !~ / --team-name /) next
+      # NO three-flag pre-filter here. It was redundant with the consistency test below — absent
+      # flags leave id/nm/tm empty, so index("", "@") is 0 and `at > 1` already rejects the row —
+      # and it was the SECOND copy of the discriminator regex, which tests/operator-surface-scope
+      # .bats forbids outside hooks/lib/agent-identity.sh (the six-copies-of-a-regex failure that
+      # lint exists to prevent). Deleting it is semantically inert and restores one definition.
       n = split(c, w, " "); id = ""; nm = ""; tm = ""
       for (i = 1; i < n; i++) {
         if (w[i] == "--agent-id"   && id == "") id = w[i + 1]
