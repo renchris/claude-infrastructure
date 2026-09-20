@@ -689,3 +689,96 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(idl_first 'select(.caller=="c15v")|.basis')" = "measured" ]
 }
+
+# ══ W2FA E1-E3 — THREE GUARDS THE SUITE NEVER TOUCHED ═══════════════════════════════════════════
+# Each guard below survived a mutation that DELETED it outright while every suite in the tree
+# stayed green. A guard with no test is a comment that happens to execute.
+#
+# HOW THESE THREE ARE SCORED, stated in the NAME so it cannot be mistaken for something stronger.
+# There is no fix here — the guards already exist — so a run on the unmodified tree is GREEN and
+# proves nothing about the case's power. The only evidence that a guard-test has any power at all
+# is THE DEATH OF ITS MUTANT
+# (docs/lessons/green-in-both-arms-is-an-equivalence-guard-not-a-red-proof.md), so each carries the
+# verbatim mutant it was scored against and each was executed under it:
+#   16   the mint's `case "$sid" in ''|*[!A-Za-z0-9._-]*) return 1` deleted
+#        → "a sid holding '../..' MINTED: …/state/tokens/../../pwn.rk1ctCNW"
+#   16b  the `[ ! -O "$t" ]` arm forced false
+#        → row read "token REFUSED: MALFORMED … this line has 1" instead of the ownership verdict
+#   16c  `case "$key" in *[!A-Za-z0-9._-]*) key="" ;;` deleted
+#        → "the budget counter was written OUTSIDE CC_ADMIT_STATE_DIR: …/escape.refusals"
+#
+# 16b's RESIDUAL, declared rather than hidden: its mutant dies on the DIAGNOSIS and the ORDERING,
+# not on the verdict. Deleting `-O` still refuses, because the record's uid FIELD is checked one
+# step later (case 15n) and /etc/hosts is not a 4-field record either way. The verdict-level
+# consequence of `-O` needs a file this uid does not own that IS a well-formed token for our sid,
+# and creating one requires root — unreachable from a test. What 16b therefore pins is that the
+# INODE question is asked, and asked BEFORE the record is parsed, which is the property a refactor
+# trusting the uid field would silently drop.
+
+@test "16 E1 MUTANT-SCORED — a hostile sid cannot shape the token FILENAME" {
+  # cc_capacity_token_mint composes the path as `mktemp "$dir/$sid.XXXXXXXX"`, so the sid IS a path
+  # fragment. The only thing standing between a caller-supplied sid and the filesystem is
+  # `case "$sid" in ''|*[!A-Za-z0-9._-]*) return 1`, and nothing pinned it: deleting that line left
+  # the suite green. `../..` from the tokens dir lands in $BATS_TEST_TMPDIR, which EXISTS — an
+  # escape that resolves nowhere would pass in both arms and prove nothing.
+  local out
+  mkdir -p "$CC_ADMIT_STATE_DIR/tokens"
+  run bash -c '. "$1"; cc_capacity_token_mint "$2"' _ "$LIB" '../../pwn'
+  [ "$status" -ne 0 ] || { echo "a sid holding '../..' MINTED: $output"; false; }
+  [ -z "$output" ] || { echo "the mint printed a path for a rejected sid: $output"; false; }
+  # the escape itself, by glob rather than by find: BSD find does not walk a symlinked start dir
+  # without -H, and $BATS_TEST_TMPDIR is one on this box — its null would read as absence.
+  set -- "$BATS_TEST_TMPDIR"/pwn.*
+  [ ! -e "$1" ] || { echo "the mint wrote OUTSIDE the tokens dir: $1"; false; }
+  # the other half of the same guard: an empty sid is a token nothing can be bound to
+  run bash -c '. "$1"; cc_capacity_token_mint ""' _ "$LIB"
+  [ "$status" -ne 0 ] || { echo "an EMPTY sid minted a token: $output"; false; }
+  # …and the guard is not a blanket refusal: the legitimate shape still mints.
+  out="$(mint sid-ok.1_2-3)"
+  [ -f "$out" ] || { echo "a well-formed sid was refused — the guard is over-wide"; false; }
+}
+
+@test "16b E2 MUTANT-SCORED — the -O check asks the INODE question, before the record is parsed" {
+  # The "uid-checked (-O)" claim had no test at all. 15n covers the record's own uid FIELD, which is
+  # a different question: a token copied out of another operator's state dir passes -O and fails the
+  # field, and a file we merely point at fails -O and never reaches the field. Both arms are needed.
+  #
+  # A file this uid does not own cannot be created without root, so the subject is a root-owned
+  # system file and every precondition is ASSERTED rather than assumed — an environment that
+  # falsifies the premise must SKIP, not go red about code that is fine
+  # (docs/lessons/environment-falsifiable-precondition-must-skip.md).
+  local t=/etc/hosts
+  [ -f "$t" ] || skip "no root-owned regular file available to test -O against"
+  [ ! -L "$t" ] || skip "$t is a symlink on this box — the -L arm fires first, not the -O one"
+  [ ! -O "$t" ] || skip "this process OWNS $t — the precondition for the -O arm does not hold here"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-own \
+               cc_capacity_admit cE2 "s"' _ "$LIB" "$t"
+  [ "$status" -eq 9 ] || { echo "rc=$status over a file this uid does not own"; echo "$output"; false; }
+  [[ "$(idl_first 'select(.caller=="cE2")|.token')" == *"not owned by uid"* ]] \
+    || { echo "row: $(idl_first 'select(.caller=="cE2")|.token')"; false; }
+  # AND it is not consumed. Without this, CC_ADMIT_TOKEN is a remove-anything primitive: point it at
+  # any path and the gate unlinks it.
+  [ -f "$t" ] || { echo "the gate DELETED a file it does not own"; false; }
+}
+
+@test "16c E3 MUTANT-SCORED — a hostile CC_ADMIT_BUDGET_KEY cannot escape the state dir" {
+  # `case "$key" in *[!A-Za-z0-9._-]*) key="" ;;` in _cc_admit_state_file is the ONLY thing stopping
+  # a run id from steering the refusal counter out of CC_ADMIT_STATE_DIR, and it was untested.
+  #
+  # THE ESCAPE NEEDS AN EXISTING DIRECTORY, so this case makes one. The path is composed as
+  # `$dir/$caller.$key.refusals`, i.e. the first component is always `<caller>.<something>` — a bare
+  # `../..` key resolves through a directory that does not exist, the write fails, and the case then
+  # passes in BOTH arms over a decorative absence. `x/../../escape` against caller cE3 resolves
+  # through the real `<state>/cE3.x/` and lands one level ABOVE the state dir.
+  mkdir -p "$CC_ADMIT_STATE_DIR/cE3.x"
+  run bash -c '. "$1"; CC_ADMIT_BUDGET=3 CC_ADMIT_LOADAVG_OVERRIDE=99 \
+               CC_ADMIT_BUDGET_KEY="x/../../escape" cc_capacity_admit cE3 "s"' _ "$LIB"
+  [ "$status" -eq 9 ] || { echo "rc=$status — the refusal never happened, so nothing was counted"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/escape.refusals" ] \
+    || { echo "the budget counter was written OUTSIDE CC_ADMIT_STATE_DIR: $BATS_TEST_TMPDIR/escape.refusals"; false; }
+  # …and it DEGRADES to the caller-only file rather than to no file at all. An untrackable bound is
+  # an UNBOUNDED gate (_cc_admit_spend's own comment), which is the failure a sanitizer must never
+  # manufacture out of a bad key.
+  [ -f "$CC_ADMIT_STATE_DIR/cE3.refusals" ] \
+    || { echo "the key was dropped AND the bound was lost"; ls -R "$CC_ADMIT_STATE_DIR"; false; }
+}
