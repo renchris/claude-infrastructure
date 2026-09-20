@@ -87,7 +87,6 @@ tests/capacity-alarm-launchd-path.bats
 # ⚠ RE-MEASURED AND KEPT (2026-08-21): green / RED / green across the censuses of 08-18, 08-19 and
 # 08-20 (21 ok, then 20 ok + 1 notok, then 21 ok). It is FLAKY off-box, not cured — and a list that
 # deletes on the run that happened to be green would be curating, not re-measuring.
-tests/capacity-admit.bats
 # run 31362043861: notok=4
 tests/idle-slope-sweep.bats
 # run 31362043861: notok=1

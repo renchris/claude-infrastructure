@@ -4846,13 +4846,24 @@ live_subagents_of() { # $1=transcript dir (…/projects/<slug>/<sid>) → "<id>\
 # about to DIE, not to its successor. Same idiom and same test seam shape as CC_SESSIONS_DIRS
 # (:3162). A session id is unique across roots, so the first hit is the only hit.
 subagent_dir_for_sid() { # $1=CC session id → echoes the transcript dir, or nothing
-  local _sid="${1:-}" _d
+  local _sid="${1:-}" _d _dd
   [ -n "$_sid" ] || return 0
+  # ONE GLOB PER DIRECTORY, and this is not a style choice. `${LIST}/*/x` is ONE word before field
+  # splitting, so the literal suffix attaches only to the LAST element of $LIST; every earlier
+  # element expands to a bare directory path that no [ -f ] / [ -d ] can ever match. Measured
+  # 2026-09-20 against the live layer: the probe searched only ~/.claude-quaternary/projects and
+  # answered REFUSED:no-transcript for a session whose transcript sat in ~/.claude-tertiary — i.e.
+  # four of the five config roots were invisible. The UNSET default hides it (`$HOME/.claude*/
+  # projects/*/x` is one word carrying TWO globs, which does expand across roots) and :399 always
+  # SETS the variable, so the broken arm is the only one that ever runs. A fixture with one config
+  # dir cannot see this at all: docs/lessons/fixture-shape-hides-address-bugs.md.
   # shellcheck disable=SC2231  # UNQUOTED ON PURPOSE: the default carries a `.claude*` wildcard that
   # must expand across the per-account config dirs; quoting it would make the glob a literal path.
-  for _d in ${CC_PROJECTS_DIRS:-$HOME/.claude*/projects}/*/"$_sid"; do
-    [ -d "$_d/subagents" ] || continue
-    printf '%s' "$_d"; return 0
+  for _dd in ${CC_PROJECTS_DIRS:-$HOME/.claude*/projects}; do
+    for _d in "$_dd"/*/"$_sid"; do
+      [ -d "$_d/subagents" ] || continue
+      printf '%s' "$_d"; return 0
+    done
   done
   return 0
 }
@@ -7441,9 +7452,22 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
     [ -f "$_prp_lib" ] && { . "$_prp_lib" 2>/dev/null || true; break; }
   done
   PRP_TX=""
+  # ONE GLOB PER DIRECTORY, and this is not a style choice. `${LIST}/*/x` is ONE word before field
+  # splitting, so the literal suffix attaches only to the LAST element of $LIST; every earlier
+  # element expands to a bare directory path that no [ -f ] / [ -d ] can ever match. Measured
+  # 2026-09-20 against the live layer: the probe searched only ~/.claude-quaternary/projects and
+  # answered REFUSED:no-transcript for a session whose transcript sat in ~/.claude-tertiary — i.e.
+  # four of the five config roots were invisible. The UNSET default hides it (`$HOME/.claude*/
+  # projects/*/x` is one word carrying TWO globs, which does expand across roots) and :399 always
+  # SETS the variable, so the broken arm is the only one that ever runs. A fixture with one config
+  # dir cannot see this at all: docs/lessons/fixture-shape-hides-address-bugs.md.
   # shellcheck disable=SC2231  # UNQUOTED ON PURPOSE: the default carries a `.claude*` wildcard
-  for _prp_f in ${CC_PROJECTS_DIRS:-$HOME/.claude*/projects}/*/"$PRP_SESSION".jsonl; do
-    [ -f "$_prp_f" ] && { PRP_TX="$_prp_f"; break; }
+  for _prp_d in ${CC_PROJECTS_DIRS:-$HOME/.claude*/projects}; do
+    for _prp_f in "$_prp_d"/*/"$PRP_SESSION".jsonl; do
+      [ -f "$_prp_f" ] || continue
+      PRP_TX="$_prp_f"; break
+    done
+    if [ -n "$PRP_TX" ]; then break; fi
   done
   if [ -z "$PRP_TX" ]; then
     echo "limit: NO TRANSCRIPT for ${PRP_SESSION:0:8} under \$CC_PROJECTS_DIRS"
