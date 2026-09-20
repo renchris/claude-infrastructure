@@ -767,6 +767,85 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
   distribution barely moved (max 0.32 / 0.32 / 0.27), so it is store-I/O bound, not CPU bound. A tail
   above 0.30 s will not be cured by a quieter machine.
 
+- 2026-09-20T17:1xZ · **W5 IS COMPLETE — ALL THREE LEGS, INCLUDING THE CONVERGE THE HANDOFF CALLED
+  IMPOSSIBLE. And W6's drill, re-run, now BREACHES § 5's timing bar for a measured reason.**
+  (successor session on `lr-detect-w5w6`, off `origin/main` @ `86eb2a6a6`.)
+
+  **THE HANDOFF'S W5 BLOCKER WAS REFUTED, and the refutation is one dry-run.** The brief recorded
+  W5's converge as unmeetable: `cc-blockers` reads `trunk-red PERSISTENT-NOT-GREEN` and
+  `deploy-wedged NO-GREEN-AHEAD` (green `c08dc78ae590` sits 205 commits behind live HEAD), so "the
+  live layer stays pinned until a green exists and a converge kick cannot clear it." **That is true
+  of T1 and false of the ladder.** `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh
+  --dry-run` — the degraded tier this repo's own `.claude/CLAUDE.md:41` grants standing — answered:
+  `!! DEGRADED deploy — no GREEN stamp among the newest 200 commits; taking the newest NOT-RED
+  commit instead` … `would fast-forward 6a0a05f8c344 → 7c7a5261b947`. T2's door is *absence of
+  evidence*, not presence of a green, so NO-GREEN-AHEAD never blocked it. **Lesson worth carrying:
+  an alarm names the tier it measured; read the ladder's own dry-run before believing a converge is
+  wedged.**
+
+  | W5 leg (§ 4 row) | result |
+  |---|---|
+  | `bats tests/statusline-identity.bats` | **34/34**, plan line `1..34` read not inferred, 0 failures, rc 0 |
+  | 30 renders under `getrusage`, CPU delta vs baseline (P6) | **+1.984 ms/render**, inside the ±3 ms bar. 30 renders × 3 interleaved blocks per side; baseline = `statusline.sh` at `33a9563fb^` (the commit before the chip landed), located by `git log -S`. Medians 2,176.9 ms vs 2,236.4 ms per 30 |
+  | `deploy-live.sh` shows an ADVANCE | **ADVANCE CONFIRMED BY CONTENT** — live layer HEAD moved `6a0a05f8c` → `7c7a5261b`, exactly the dry-run's predicted target |
+  | `deploy-parity-assert.sh` shows no COPYSTALE | **exit 0 · 0 MISSING · 0 COPYSTALE** across all classes; `statusline.sh 1 tracked · 1 live · 0 missing` |
+
+  **W5's CODE half was already landed and the handoff's absence-check was aimed at a path that does
+  not exist.** It ran `git show origin/main:scripts/statusline.sh | grep -c cc-limited` ⇒ 0 and read
+  that as W5 unshipped. Two independent faults: the file is **`statusline.sh` at the repo root**,
+  there is no `scripts/statusline.sh`, so the grep was over an empty stream; and the chip never
+  mentions `cc-limited`, so even against the right path the predicate could only ever return 0.
+  On trunk the chip is present (`statusline.sh:89-118`, `IDENTITY: the pane id and the sid8`) and so
+  are the § 11 #13 rows the earlier entry recorded as "RESIDUAL IN FLIGHT on `lr-detect-w5`, pane
+  338" — `:636` clipping at 30 columns, `:708` left-anchored with no instance marker, `:723` the
+  ZERO-subprocess fork-count gate. **They landed.** `lookup-miss-is-not-absence`, twice in one
+  command.
+
+  **W6 RE-RUN — 2 legs hold, the timing leg BREACHES, and the cause is now measured rather than
+  attributed to load.** This CORRECTS the entry above it.
+
+  | leg | 14:4xZ (lead, load 19.3) | 17:1xZ (this session, load 52.9) |
+  |---|---|---|
+  | `/usr/bin/time -p cc-limited` ×5 | 0.27 · 0.22 · 0.22 · 0.22 · 0.22 | **0.54 · 0.37 · 0.34 · 0.37 · 0.35** — 0/5 inside the 0.30 s bar |
+  | `bats tests/cc-limited.bats` | 24/24 | **23/24** — row 19 (`a 500-row marker file x3 … inside the 0.30 s budget`) red, 4/4 reruns, 429 / 372 / 542 ms |
+  | capture + receipt | derived, unchanged | unchanged |
+
+  **THE LOAD-INVARIANCE READING ABOVE IS WRONG, AND THE CORRECTION MATTERS MORE THAN THE NUMBER.**
+  That entry concluded the census "is store-I/O bound, not CPU bound" and advised "if a tail above
+  0.30 s ever matters, find the I/O." Measured with `getrusage(RUSAGE_CHILDREN)` around the live
+  binary, four runs: wall **395 / 414 / 386 / 428 ms** against CPU **280 / 284 / 287 / 278 ms** —
+  contention 1.34–1.54×. **The census burns ~280 ms of CPU against a 300 ms budget: 93 % of the bar
+  is consumed before any contention at all.** It is CPU-bound, not I/O-bound, and the earlier
+  invariance finding was an artifact of comparing three readings whose CORPUS also differed. The
+  corpus has since grown from the lead's `31 sessions · 60 marker rows` to **`34 sessions · 70
+  marker rows`**, and the synthetic row-19 workload (1,500 marker rows) measures **CPU 224–249 ms**
+  the same way. So the bar will be breached by corpus growth on an idle box, and pointing the next
+  session at the I/O would have cost it the search.
+
+  **DISPOSITION — this is NOT this session's to fix, and it is named rather than driven.**
+  `bin/cc-limited` and `tests/cc-limited.bats` belong to **W2b-ii, which is LIVE** (confirmed by
+  cwd via `lsof -a -d cwd -c node`, not by `pgrep -f`). Editing either would violate the wave's file
+  ownership. Handed to W2b-ii with the measurement. **The honest reading of row 19 is that it is a
+  WALL-CLOCK bound on a shared box with 7 % CPU headroom** — `bound-must-fit-the-band-not-the-bench`
+  — so the choice is theirs: widen it, measure CPU instead of wall, or make the census cheaper.
+
+  **METHOD, because two of these were nearly recorded as facts.** (1) Row 19 was NOT accepted as a
+  flake or as "pre-existing red" on inspection — the CONTROL ARM is that this worktree is pristine
+  `origin/main` with no edit of mine, and it was re-run 4× before any verdict. (2) `deploy-live`'s
+  real run returned a **0-byte** output file, which is the `| tail` buffering and not a dead
+  process; the advance was confirmed by reading the live checkout's HEAD, never by the exit code
+  (`a-0-byte-output-file-is-not-a-dead-process`). (3) Every bats run was written unpiped to its own
+  TAP file and the `1..N` plan line asserted, per `a-gate-refusal-is-not-a-gate-result`.
+
+  **ALSO LANDED THIS SESSION:** `docs/lessons/bash-32-counts-parens-inside-a-heredoc-it-never-runs.md`
+  + its hook (390 chars, budget-lint clean at 142 bullets) — bash 3.2 lexes the raw body of
+  `"$( … )"` INCLUDING a heredoc it never executes, so one unbalanced `(` in a comment reports
+  `unexpected EOF` hundreds of lines away while bash 5.3 parses it clean. Measured four-way: a paren
+  inside shell quotes is safe, a bare one is not. This is why
+  `scripts/limit-recover/lr-fire-resume.sh` does not parse under `/bin/bash` on trunk today and the
+  unattended recovery chain is dead on every launchd/off-box surface while green on the desk. That
+  file is **W3's and W3 is live** — handed over, not taken.
+
 ## 13. Cross-reference — `LIMIT_RECOVER_100P` § 9 landed the recovery side first (2026-09-20 00:1xZ, session 11569d45)
 
 Your wave-1 corpus was this session's research. Landed and LIVE on trunk at `1b2676f4c` (23:50Z),
