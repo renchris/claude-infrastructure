@@ -37,6 +37,14 @@ setup() {
 
   export CC_ADMIT_GATE=off
   export CC_FIRE_CAPACITY_GATE=off
+  export CC_FIRE_HEADROOM_GATE=off
+  # …and the three seams that reach the operator's LIVE box rather than a gate: the account sweep
+  # stamp, the accounts binary and the self-heal lock prefix. Each is pointed at a path that does
+  # not exist under $BATS_TEST_TMPDIR, because a fixture that reads the desk's mood for ANY reason
+  # is not a fixture — and an absent path is the only value that cannot be satisfied by accident.
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/absent-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/absent-heal-"
   export CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/admit"
   export CC_ADMIT_IDL="$BATS_TEST_TMPDIR/admit-idl.jsonl"
 
