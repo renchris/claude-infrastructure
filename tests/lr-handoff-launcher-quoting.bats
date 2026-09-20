@@ -561,6 +561,51 @@ SH
   [ -e "$BATS_TEST_TMPDIR/fired.log" ] || { echo "the recycle was never fired: $output"; false; }
 }
 
+# ── W3i B3 — THE ONLY WRITER OF killed_inflight ──────────────────────────────────────────────────
+# lr-ingest-verify's clause A6 refuses the fast-path ingest unless the run's own state log carries an
+# EXPLICIT killed_inflight record: present-and-silent is unevaluable, not zero. Measured read-only
+# over all 69 bundles under ~/.reso/limit-recover on 2026-09-20, A6 failed 68 of the 68 that reached
+# it and was the SOLE failure on one — because nothing in the tree had ever written the value, so the
+# clause was structurally unpassable and the wave's measured token saving could not materialise on a
+# single real recovery. The count already exists: the read-only precondition probe prints
+# `live_subagents: <n>` (handoff-fire.sh:7753), and those are exactly the in-flight units the recycle
+# is about to kill. These two cases pin the pair the gate depends on — the record when the probe
+# answers, and NO record (plus a loud warning) when it does not, because a zero nobody measured is
+# the fail-open A6 exists to refuse.
+
+@test "W3i: lrh_precheck records the probe's live_subagents count as killed_inflight" {
+  lrh_inplace_setup
+  sid="lrhw0012-0000-4000-8000-000000000012"
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  lrh_row "$sid"; lrh_tx "$sid" limit
+  run gen_inplace "$sid" "$BATS_TEST_TMPDIR/repo" "$(stub_hf 'live_subagents: 2
+verdict: OK' 0)"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  ev="$(ls -1 "$HOME/.reso/limit-recover/$sid"/bundle-*/events.jsonl 2>/dev/null | head -1)"
+  [ -n "$ev" ] || { echo "no events.jsonl was written at all"; ls -R "$HOME/.reso/limit-recover" || true; false; }
+  # the VALUE, not merely the key: a record carrying killed_inflight=0 over a probe that counted 2
+  # is the fail-open in its most dangerous form.
+  n="$(jq -rs '[.[] | (.detail // "") | capture("killed_inflight=(?<n>[0-9]+)") | .n] | .[0] // "NONE"' "$ev")"
+  [ "$n" = 2 ] || { echo "killed_inflight read back as $n, not 2:"; cat "$ev"; false; }
+  [[ "$output" == *"killed_inflight=2"* ]] || { echo "the precheck did not say what it measured: $output"; false; }
+}
+
+@test "W3i: a probe that prints NO live_subagents line writes NO killed_inflight, and says so" {
+  # The fail-closed half. A probe contract change in handoff-fire.sh must leave A6 refusing rather
+  # than seeding a zero, and it must be LOUD — the silence is otherwise indistinguishable from a
+  # measured zero one layer up.
+  lrh_inplace_setup
+  sid="lrhw0013-0000-4000-8000-000000000013"
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  lrh_row "$sid"; lrh_tx "$sid" limit
+  run gen_inplace "$sid" "$BATS_TEST_TMPDIR/repo" "$(stub_hf 'verdict: OK' 0)"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  ev="$(ls -1 "$HOME/.reso/limit-recover/$sid"/bundle-*/events.jsonl 2>/dev/null | head -1)"
+  [ -n "$ev" ] || { echo "no events.jsonl was written at all"; false; }
+  ! grep -q 'killed_inflight' "$ev" || { echo "a killed_inflight record was invented over a probe that counted nothing:"; cat "$ev"; false; }
+  [[ "$output" == *"killed_inflight is UNRECORDED"* ]] || { echo "the missing count was silent: $output"; false; }
+}
+
 @test "W2: the launcher exports exactly the five LR_* variables and ZERO CC_ADMIT_*" {
   # D1-safety R1, FATAL: anything exported here is inherited by the recovered session and every hook
   # it runs for the rest of its life. The mapping to CC_ADMIT_* happens call-scoped inside
