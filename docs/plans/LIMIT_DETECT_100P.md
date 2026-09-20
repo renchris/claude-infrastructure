@@ -789,8 +789,11 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
     about our tree". None of these name a file this diff touches.
   - **ONE SUITE IS NOT ADJUDICATED, and it is named rather than rounded up to green:**
     `tests/cc-await-ping.bats` returned **4 failures on one run and 0 on the next, same tree, same
-    box** — it is FLAKY here, so neither arm is a verdict and running it again would only buy
-    another coin flip. What can be said without it: there is no mechanism by which this diff
+    box**, with a trunk arm also reading 0 — it is FLAKY here, so neither arm is a verdict and
+    running it again would only buy another coin flip. It is NOT in the exclusion manifest, so
+    whoever next runs the partition should expect it to be a coin flip off-box too, and should
+    measure it over folds rather than convict a lander on one.
+    What can be said without it: there is no mechanism by which this diff
     reaches it. It was only ever in the candidate set because it mentions `cc-beats`, and this diff
     adds a READER of that store inside `bin/cc-limited` while changing neither the beat writer
     (`hooks/session-beat.sh`) nor the record format — and nothing in `bin/ scripts/ hooks/
