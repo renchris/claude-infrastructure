@@ -846,6 +846,106 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
   unattended recovery chain is dead on every launchd/off-box surface while green on the desk. That
   file is **W3's and W3 is live** — handed over, not taken.
 
+- 2026-09-20T18:0xZ · **THE ACTUATOR THAT COULD NOT START, AND THE CENSUS BUDGET DIAGNOSED BUT
+  DELIBERATELY NOT LANDED.** (successor session, worktree `lr-actuator-census`.) **This entry
+  CORRECTS the 17:1xZ entry above it on one number, and records a fix that was measured, worked,
+  and was still reverted.**
+
+  **CORRECTION FIRST, because a stale figure in a plan gets re-quoted.** The 17:1xZ entry cites the
+  synthetic row-19 workload at `CPU 224–249 ms` and infers **7 % headroom**. That figure is STALE.
+  It predates W2b-ii's `find_copies` hoist, which moved the slug-miss full walk from per-sid to
+  once-per-process (19,532 `listdir` calls) and took the synthetic workload 433 → ~140 ms;
+  post-hoist that path has ~50 % headroom. **Verify the hoist BY CONTENT, never by sha** —
+  `git show origin/main:bin/cc-limited | grep -c 'def full_index'` ⇒ 1. The sha first cited for it
+  was rebased away inside the land-lock (`cited-sha-may-not-survive-the-land`).
+
+  **What survives is the LIVE finding, confirmed twice independently.** The live census is a
+  different regime from the fixture — 34 sids WITH real transcript copies against 1,500 sids with
+  none — so the hoist bought it almost nothing. **CPU 280/284/287/278 ms** (this session) and
+  **246/250/245/238 ms** (W2b-ii) against a **300 ms** bar, wall already over on a loaded box. Row
+  19 cannot catch it by construction: a hermetic fixture is pinned, so it sits at ~150 ms while the
+  real corpus walks past the budget.
+
+  **THE CAUSE IS FOUND, AND BOTH STANDING SUSPECTS WERE WRONG.** `scan_copy`'s 128 KiB tail read
+  and `enumerate_deaths`' 70 `json.loads` were the candidates. `cProfile` over the LIVE census,
+  against a 0.409 s total:
+
+  | site | cumtime | share |
+  |---|---|---|
+  | `resume_leaves` — `ps -axo pid=,ppid=,command=` | **0.165 s** | 40 % |
+  | `ps_table` — `ps -eo pid=,lstart=` | **0.062 s** | 15 % |
+  | `scan_copy` (60 calls) | 0.074 s | 18 % |
+  | `enumerate_deaths` | did not appear | — |
+
+  **Over half the runtime is two walks of the whole process table, at two different instants.**
+  One `ps -eo pid=,ppid=,lstart=,command=` shared between both readers was implemented and
+  measured: **wall median 324 → 265 ms, CPU median 236 → 201 ms**, re-profiled total
+  **0.409 → 0.190 s**, with `scan_copy` leaving the top costs entirely. Output equivalence held —
+  default screen identical across 3 interleaved pairs, `--tsv` identical, `--json` identical after
+  dropping the `now` epoch field.
+
+  🚨 **IT WAS REVERTED ANYWAY, and the reason is the useful part.** The `ps` QUERY SHAPE is an
+  interface. `tests/lr-fleet.bats` stubs the `ps` binary on `PATH` and dispatches on it:
+
+  ```bash
+  case "$*" in
+    *lstart*) exec /bin/ps "$@" ;;    # real ps for the liveness query
+    *)        printf ' 77720  1 claude … --resume $SID' ;;   # injected leaf for the command query
+  esac
+  ```
+
+  A merged query contains BOTH `lstart` and `command`, so it takes the first arm, execs the real
+  `ps`, and the injected resume leaf disappears — `D7: THE REGISTRY HOLE` then reads `NO-PANE`
+  where the slow scan reads `RESUMING`, and the parity assertion breaks. **That is not a test
+  artifact; it is the merge changing what any `ps` interceptor can distinguish.** Enumerated before
+  deciding: **four** such arms in `tests/lr-fleet.bats` (`:421 :445 :657 :678`) and one in
+  `tests/watchdog-census.bats:360`. Rewriting five fixtures in a wave that closed today, so that
+  each injects into a merged stream, changes what those fixtures can express — an owner's call, not
+  a drive-by, and not worth 59 ms taken unilaterally. **The diagnosis, the working patch shape and
+  this obstacle are recorded here so the next owner starts from a measured problem rather than a
+  suspicion.**
+
+  **A CONTROL CAUGHT THE FIRST ATTEMPT, AND A SECOND TEST CAUGHT IT THE SAME WAY — one lesson,
+  twice in one session.** `C2 CONTROL stored_liveness_is_red` went RED on the merge, not because
+  the subject was wrong but because the control BUILDS its mutant by string-replacing the FIRST
+  `    return table`; a new earlier occurrence stole the anchor, so the mutant planted its cache on
+  a branch the fixture seam never takes and could no longer misbehave. Then
+  `tests/lr-fire-resume-submit.bats` failed **7 cases** with `helper-program extraction failed`,
+  because `exp_setup` extracts the two embedded programs by matching
+  `^LR_SCREEN_SH="$(cat <<'LRSCREENSH'$` — the exact assignment line the actuator fix had to
+  change. **A test that reads the subject's SOURCE has an anchor in it, and a behaviour-preserving
+  refactor can silently disarm or break it while every functional assertion passes.** Cure:
+  re-anchor on the heredoc TAG, which survives both spellings — verified to extract byte-identical
+  programs (1821 and 828 bytes) from the old AND new forms. Landed as
+  `docs/lessons/a-mutation-control-anchors-on-the-subjects-source-text.md`.
+
+  **THE ACTUATOR — `scripts/limit-recover/lr-fire-resume.sh` DID NOT PARSE UNDER `/bin/bash`.**
+  `line 965: unexpected EOF while looking for matching '"'` under bash 3.2, clean under 5.3. So
+  `bash -n` passed on the desk while **every launchd and off-box surface could not start it at
+  all** — detection healthy, the actuator behind it dead. Confirmed against the LIVE layer, not
+  just the repo. W3 raises the urgency: the poller references it 7 times and W3's just-landed
+  census pass (`7c7a5261b`) makes the poller park strictly MORE sessions, widening the funnel into
+  an actuator that could not run. Cause: bash 3.2 scans the RAW text of `"$( … )"` for its closing
+  paren INCLUDING heredoc bodies it never executes; **both bodies parse cleanly under 3.2 on their
+  own** and are a syntax error only while being SCANNED inside a substitution. A one-character
+  patch to the offending `case` arm was tried FIRST and did not work (multiple cancelling
+  imbalances), which is why the cure removes the construct rather than balancing it. **RED-PROOF,
+  both arms on the same box:** pristine trunk `bats tests/bash32-parse-lint.bats` ⇒ `1..7`, **1 not
+  ok**, row 1 naming `lr-fire-resume.sh` by path; with the fix ⇒ `1..7`, **7 ok**. Equivalence on
+  the real bodies: 1821 → 1822 and 828 → 829 bytes, byte-identical after stripping ONE trailing
+  newline, inert because both are consumed as `/bin/bash -c` and the reader `string trim`s them.
+
+  **OWNERSHIP, since four sessions were live in this area at once.** `lr-fire-resume.sh` was ceded
+  in writing by W3, which reproduced the parse failure independently before answering;
+  `bin/cc-limited` was ceded by W2b-ii after its tests-only land (`82fea5678`). Nothing was taken
+  from a live owner. **STILL UNOWNED and deliberately NOT driven here**, both handed over by W3 and
+  both real: `lr-lib.sh:474-497` `lr_holder_count` counts registry ROWS rather than DISTINCT
+  PROCESSES — reproduced executably here (two pane rows, one live pid, no resume leaf ⇒ returns
+  **2**, truth **1**), which is the DUPLICATE verdict that parks a recoverable pane; and
+  `tests/lr-fleet.bats` `D7 CONTROL: the reverse order` flips to DUPLICATE under load ~200–300
+  (1 in ~6 full runs, 5/5 green in isolation, reproduces on pristine HEAD). The first belongs with
+  the recovery chain in `LIMIT_RECOVER_100P` (§ 13), which owns `lr-lib.sh`'s consumers.
+
 ## 13. Cross-reference — `LIMIT_RECOVER_100P` § 9 landed the recovery side first (2026-09-20 00:1xZ, session 11569d45)
 
 Your wave-1 corpus was this session's research. Landed and LIVE on trunk at `1b2676f4c` (23:50Z),
