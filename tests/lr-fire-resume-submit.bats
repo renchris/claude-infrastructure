@@ -495,3 +495,42 @@ SH
     || { echo "a launcher carrying the token in BOTH places was still degraded: $output"; false; }
   ! [[ "$output" == *"does not carry"* ]] || { echo "warned on a launcher that does carry it: $output"; false; }
 }
+
+# ── the poll's DEFAULT interval, which no test could see because every test overrides it ──────────
+
+@test "RED-PROOF the watcher's DEFAULT poll interval polls once a second, not once per five" {
+  # RCY_ENGAGE_INTERVAL's default was 5 before W3 and is 1 now, and the mutation pass put it back
+  # without a single case noticing: every watcher case passes the variable as a knob, so the only
+  # value production ever uses is the one nothing executes. The default is not a tuning — it is the
+  # QUANTUM of `rcy_t`, the one number the recycle-engaged ledger row carries about how long
+  # engagement took, and it is also the latency added to every recovery before the first look.
+  #
+  # Asserted by COUNTING REAL POLLS, not by grepping the literal: a count is what the default MEANS,
+  # and it is load-invariant (a loop count, never a wall clock). The seam is `$0` — the probe is
+  # resolved as `$(dirname "$0")/limit-recover/lr-submit-probe.sh`, so invoking the real script
+  # THROUGH A SYMLINK re-points that one sibling at a counting stub while HF_DIR (which resolves the
+  # link) keeps every other sibling pointed at the real tree. Same mechanism as
+  # docs/lessons/symlinked-0-splits-sibling-sources.md, used deliberately.
+  watcher_setup
+  : > "$TX"                                   # nothing ever submits → the loop runs to its bound
+  HFLINK="$BATS_TEST_TMPDIR/hf"; mkdir -p "$HFLINK/limit-recover"
+  ln -s "$HF" "$HFLINK/handoff-fire.sh"
+  ln -s "$REPO/scripts/lib" "$HFLINK/lib"
+  ln -s "$REPO/scripts/limit-recover/lr-lib.sh" "$HFLINK/limit-recover/lr-lib.sh"
+  POLLS="$BATS_TEST_TMPDIR/probe-calls"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nprintf "none\\n"\n' "$POLLS" \
+    > "$HFLINK/limit-recover/lr-submit-probe.sh"
+  chmod +x "$HFLINK/limit-recover/lr-submit-probe.sh"
+
+  local -a argv; mapfile -t argv < <(watcher_argv "$TOK")
+  # RCY_ENGAGE_INTERVAL is UNSET here, deliberately — that is the whole subject of the case.
+  run env -u RCY_ENGAGE_INTERVAL HOME="$HOME" PATH="$SHIM:$PATH" IT2_BIN="$HOME/.claude/bin/it2" \
+      PS_DEAD_CALLS=2 RCY_ENGAGE_TIMEOUT=4 \
+      RCY_BOOT_PANE_EVERY=1 RCY_BOOT_IVL_S=0.2 RCY_BOOT_WAIT_S=20 \
+      bash "$HFLINK/handoff-fire.sh" "${argv[@]}"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }   # never engaged — the dead path, as intended
+  [ -s "$POLLS" ] || { echo "the probe was never resolved through the symlinked \$0 — the seam is stale"; false; }
+  local n; n="$(wc -l < "$POLLS" | tr -d ' ')"
+  # 4 s of window at one poll a second = 4 polls; at five seconds a poll it is exactly 1.
+  [ "$n" -ge 4 ] || { echo "the 4s engagement window was polled $n time(s) — the default interval is coarser than 1s"; false; }
+}
