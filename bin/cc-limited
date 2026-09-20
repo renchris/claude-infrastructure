@@ -88,6 +88,7 @@ REGISTRY_DIR = env("CC_REGISTRY_DIR", os.path.join(HOME, ".claude/cc-registry"))
 STATE_DIR = env("LR_STATE_DIR", os.path.join(HOME, ".reso/limit-recover"))
 ACCOUNTS = env("CC_LIMITED_ACCOUNTS", os.path.join(HOME, ".claude/accounts.json"))
 IDL = env("CC_LIMITED_IDL", os.path.join(HOME, ".claude/autonomy/idl.jsonl"))
+BEAT_DIR = env("CC_LIMITED_BEATS", os.path.join(HOME, ".claude/cc-beats"))
 CLAIM_GRACE_S = int(env("CC_LIMITED_CLAIM_GRACE_S", "120") or 120)
 MARKER_CAP = int(env("STOP_FAILURE_CAP", "5000") or 5000)
 
@@ -176,11 +177,15 @@ def load_accounts():
     override = env("CC_LIMITED_ROOTS", "")
     if override:
         roots = [r for r in override.split(":") if r]
-    # realpath dedupe: ~/.claude-next is a SYMLINK to ~/.claude on this fleet, so an undeduped
-    # walk counts every transcript twice and reports one session as two.
+    # DEDUPE AT THE DEPTH THE SYMLINK ACTUALLY SITS (§ 11 #4). This used to read
+    # `realpath(root)` on the belief that ~/.claude-next IS a symlink to ~/.claude. It is not:
+    # measured 2026-09-20, ~/.claude-next is a REAL directory and only its `projects/` is the
+    # link. So realpath(root) never collided, the dedupe was inert, and every `next` transcript
+    # was enumerated twice — one session reported as two copies. The join key is the one store
+    # this census actually walks.
     seen, out = set(), []
     for root in roots:
-        real = os.path.realpath(root)
+        real = os.path.realpath(os.path.join(root, "projects"))
         if real not in seen:
             seen.add(real)
             out.append(root)
@@ -268,6 +273,36 @@ def enumerate_deaths(names):
     return deaths, unaddressable, capped, marker_rows
 
 
+# § 11 #3, VERBATIM. A parked record is the poller's own promise to recover a session, and it is
+# the ONLY store that holds a sid the marker never recorded — six marker paths write nothing and
+# exit 0. Its field names are its own, so it is ADAPTED onto the death shape rather than special-
+# cased downstream, and the cap comes from the record's `kind` because a parked record carries no
+# assistant text at all: `last_assistant_message` is "" by construction, so a parked-only sid
+# MUST classify by cap and never by text. A text classification over "" returns `other`, which is
+# the one verdict that means "never parked" — the census would have contradicted the poller.
+PARKED_CAP = {"session": PRED.CAP_FIVE_HOUR,
+              "weekly": PRED.CAP_SEVEN_DAY,
+              "fable": PRED.MODEL_SCOPED_PREFIX + "Fable"}
+
+
+def adapt_parked(sid, rec, names):
+    """One parked record -> one death row. ts<-parked_at, resets_at<-reset_at_utc, cap<-kind."""
+    cap = PARKED_CAP.get(str(rec.get("kind") or ""), rec.get("kind") or None)
+    cfg = rec.get("cfg") or ""
+    return {
+        "sid": sid, "fires": 1, "_seen": [], "accts": [],
+        "ts": ts_epoch(rec.get("parked_at")) or 0, "ts_iso": rec.get("parked_at") or "",
+        "acct_death": acct_name(names, rec.get("acct") or cfg), "marker_file": "",
+        "cfg": cfg, "pane": "", "cwd": rec.get("cwd") or "", "tp": "",
+        "error": "rate_limit", "last": "",
+        "kind": "rate_limit", "cap": cap, "limit": None,
+        "resets_at": ts_epoch(rec.get("reset_at_utc")),
+        # A model-scoped cap is the one that no amount of waiting clears; everything else in this
+        # map is a window with an end, and the poller only ever parks a reset-bearing kind.
+        "recoverable_by_waiting": not str(cap or "").startswith(PRED.MODEL_SCOPED_PREFIX),
+    }
+
+
 def parked_sids():
     out = {}
     for name in listdir(os.path.join(STATE_DIR, "parked")):
@@ -336,6 +371,30 @@ def registry_rows(ps):
     return by_sid, by_pane
 
 
+def beat_of(sid, ps):
+    """The SECOND liveness source (§ 11 #2), read one sid at a time.
+
+    P5 REFUTED the registry's completeness: 3 of 14 rate_limit sids had no row at all, and the
+    cause is not addressing but pane-keyed OVERWRITE — the row is written, then replaced by the
+    pane's next occupant, while `~/.claude/cc-beats/<sid>.json` is sid-keyed and survives. It
+    carries the (pid, lstart) pair for every session that ever submitted a prompt
+    (session-beat.sh:87-93), which is the reaper's own identity pin and the same one the registry
+    arm uses here. So a session live ONLY in the beat is live, and calling it NO-PANE is the
+    false-calm class this tool exists to end.
+
+    READ BY PATH, NEVER ENUMERATED: the live dir holds 3,842 beats against ~31 deaths, so a
+    listdir would cost two orders of magnitude more than the lookups it serves. An absent dir or
+    an absent beat is simply EMPTY (§ 11 #11), which a failed read_json already returns.
+    """
+    rec = read_json(os.path.join(BEAT_DIR, sid + ".json"))
+    if not isinstance(rec, dict):
+        return {}
+    pid = str(rec.get("pid") or "")
+    stored = " ".join(str(rec.get("lstart") or "").split())
+    return {"pid": pid, "pane": str(rec.get("pane") or ""),
+            "live": bool(pid) and pid in ps and (not stored or ps[pid] == stored)}
+
+
 def resume_leaves():
     """{sid: [pid]} for `--resume <sid>` processes, wrapper parents removed.
 
@@ -382,6 +441,24 @@ def slug_of(cwd):
     return re.sub(r"[^A-Za-z0-9]", "-", cwd or "")
 
 
+def dedup_inodes(paths):
+    """§ 11 #4: `copies=N` counts INODES, not paths. `~/.claude-next/projects` is a symlink to
+    `~/.claude/projects`, so one file is reachable under two roots; an undeduped walk reports one
+    copy as two and the operator reads a salvage history that never happened. A path that cannot
+    be stat'd keys on itself — a file renamed mid-scan is not an error here."""
+    seen, out = set(), []
+    for path in paths:
+        try:
+            st = os.stat(path)
+            key = (st.st_dev, st.st_ino)
+        except OSError:
+            key = ("nostat", path)
+        if key not in seen:
+            seen.add(key)
+            out.append(path)
+    return out
+
+
 def find_copies(roots, sid, cwd):
     """Every copy of one session's transcript. 27 copies in 5.4 ms, against 121 ms for a full index."""
     hits, slug = [], slug_of(cwd)
@@ -392,7 +469,7 @@ def find_copies(roots, sid, cwd):
                 if name.startswith(sid) and ".jsonl" in name:
                     hits.append(os.path.join(base, name))
     if hits:
-        return hits
+        return dedup_inodes(hits)
     for root in roots:                    # slug miss only: the cwd moved or was never recorded
         pdir = os.path.join(root, "projects")
         for proj in listdir(pdir):
@@ -400,7 +477,7 @@ def find_copies(roots, sid, cwd):
             for name in listdir(base):
                 if name.startswith(sid) and ".jsonl" in name:
                     hits.append(os.path.join(base, name))
-    return hits
+    return dedup_inodes(hits)
 
 
 def scan_copy(path):
@@ -517,10 +594,17 @@ SETTLED = ("RE-ENGAGED", "CARCASS")
 
 
 def resolve(sid, death, ctx):
-    names, roots, reg_by_sid, reg_by_pane, leaves, parked = ctx
+    names, roots, reg_by_sid, reg_by_pane, leaves, parked, ps = ctx
     row = dict(death)
     live_rows = [r for r in reg_by_sid.get(sid, []) if r["live"]]
-    row["live"] = bool(live_rows)
+    # § 11 #2: liveness is the UNION of the registry row, the beat and the resume leaf, because
+    # the registry alone is incomplete by construction (pane-keyed overwrite). The beat carries no
+    # account, so it can establish that a session is ALIVE and never that it MOVED — `acct_now`
+    # stays empty and the row groups where it died, which is the honest answer.
+    beat = beat_of(sid, ps)
+    row["_beat_live"] = bool(beat.get("live"))
+    row["_beat_pane"] = beat.get("pane") or ""
+    row["live"] = bool(live_rows) or row["_beat_live"]
     row["acct_now"] = acct_name(names, live_rows[0]["account"]) if live_rows else ""
     row["pane_now"] = live_rows[0]["pane"] if live_rows else ""
     started = live_rows[0].get("startedAt") if live_rows else None
@@ -582,6 +666,8 @@ def resolve(sid, death, ctx):
     # `lr_resume_procs` instead of counting, so ONE process read as DUPLICATE and the session was
     # parked forever.
     pids = set(r["pid"] for r in live_rows if r["pid"]) | set(leaves.get(sid, []))
+    if row["_beat_live"]:
+        pids.add(beat["pid"])             # a UNION over pids: the beat usually names the same one
     row["procs"] = len(pids)
 
     # 7. CLAIMS  8. CWD, at THIS instant (1 -> 3 CWD-GONE in 20 minutes, measured).
@@ -668,7 +754,14 @@ def census():
     reg_by_sid, reg_by_pane = registry_rows(ps)
     leaves = resume_leaves()
     parked = parked_sids()
-    ctx = (names, roots, reg_by_sid, reg_by_pane, leaves, parked)
+    # § 11 #3: a parked record can be the ONLY evidence a session is blocked — the marker writer
+    # has six paths that write nothing and exit 0. Adapted here, at the END of enumeration, so a
+    # sid the marker DID record keeps its measured death (richer: text, pane, fires) and only the
+    # marker-less ones arrive through the adapter.
+    for psid, prec in parked.items():
+        if psid not in deaths:
+            deaths[psid] = adapt_parked(psid, prec, names)
+    ctx = (names, roots, reg_by_sid, reg_by_pane, leaves, parked, ps)
     rows = []
     for sid, death in deaths.items():
         death["_leaves"] = leaves.get(sid, [])
@@ -720,7 +813,11 @@ def render_screen(rows, unaddressable, degraded, sids, marker_rows, show_all):
         # a fault is a recovery that already failed, so the most overdue one is the most wrong.
         for m in sorted(attention, key=lambda r: -(r.get("ts") or 0)) + \
                 sorted(faults, key=lambda r: ((r.get("claim") or {}).get("ts") or 0)):
-            pane = ("#" + m["pane"]) if m.get("pane") else ""
+            # § 11 #2: a beat-only live session still has a pane to name — the beat carries it,
+            # and it is the only store that still does once the registry row is overwritten. `#?`
+            # is the honest rendering when it is live by beat and no store names the pane.
+            pane_id = m.get("pane") or m.get("_beat_pane") or ("?" if m.get("_beat_live") else "")
+            pane = ("#" + pane_id) if pane_id else ""
             out.append("  %-22s %-5s %-8s ×%-2d err %s  %-22s ← %s" % (
                 m["state"], pane, m["sid"][:8], m.get("fires") or 1,
                 iso(m.get("ts")), (m.get("title") or "")[:22], m["why"]))
