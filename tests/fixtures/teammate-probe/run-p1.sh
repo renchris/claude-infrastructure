@@ -27,7 +27,13 @@ PUB="$HERE/captures/p1-$RUN"
 rm -rf "$CAP"; mkdir -p "$CAP"
 publish() {  # never publish an empty scratch (e.g. the --census self-test path)
   [ -n "$(ls -A "$CAP" 2>/dev/null)" ] || return 0
-  mkdir -p "$PUB" && cp -R "$CAP"/. "$PUB"/ 2>/dev/null; echo "published -> $PUB"; }
+  mkdir -p "$PUB" && cp -R "$CAP"/. "$PUB"/ 2>/dev/null
+  # The captured lead wrapper is EVIDENCE, not source: it is heredoc-expanded, so
+  # ${KITTY_WINDOW_ID:-} is baked in as a literal and shellcheck rejects it (SC2157,
+  # "argument to -n is always true") at the land gate. Publish it under .txt so a
+  # generated artifact cannot masquerade as a shell script in the tree.
+  [ -f "$PUB/lead-wrapper.sh" ] && mv "$PUB/lead-wrapper.sh" "$PUB/lead-wrapper.sh.txt"
+  echo "published -> $PUB"; }
 trap publish EXIT
 # The scratch project's own settings. `settings.local.json` is gitignored repo-wide and
 # force-adding a gitignored path is forbidden, so the fixture ships the .example and installs it
