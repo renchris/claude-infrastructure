@@ -87,6 +87,20 @@ else
 fi
 STUB
   chmod +x "$HOME/bin/claude-accounts"
+  # ── the census pass (LIMIT_DETECT_100P W3) is OFF by default in this suite ──────────────────
+  # §1 now runs `cc-limited --all --json` once per tick before the transcript walk, and the walk
+  # stays as its backstop. These LR-a..LR-n cases are written about the WALK, so leaving the
+  # census on would put a second detector into every one of them — and against a hermetic $HOME
+  # the real binary exits 5 (no accounts.json), which is a correct answer to a question these
+  # cases are not asking. The census cases below turn it on with a stub.
+  export LR_POLLER_NO_CENSUS=1
+  # PIN THE ACCOUNT MAP. The ladder's second candidate is `$(dirname "$0")/../../lib/…`, so a case
+  # that runs the poller from a `cp -R` of scripts/limit-recover (LR-s does, to stub
+  # lr-fire-resume.sh) resolves it against a parent with no lib/ and finds no map at all. That was
+  # invisible while an undefined `cc_acct_name_for_dir_basename` merely made every store skip in
+  # silence; now that it is FATAL the dependency has to be named. Cases that want NO usable map
+  # override this.
+  export CC_ACCOUNT_MAP="$REPO/lib/account-map.generated.sh"
 }
 
 # A REAL-shape lead transcript: first line carries cwd; last line is the verbatim limit
@@ -809,3 +823,141 @@ FF_SID="aaaa000w-1111-2222-3333-444444444444"
   [ "$status" -ne 0 ]
   [ -f "$STATE/parked/$FF_SID.json" ]
 }
+
+# ══════════════════════════════════════════════════════════════════════════════
+# W3 (docs/plans/LIMIT_DETECT_100P.md § 3) — the tick's own observability, the
+# account map's usability, and the census pass that feeds §1 before the walk.
+# HERMETIC BY CONSTRUCTION: $HOME is the test's, and the census is a STUB in every
+# case below — this suite never asks the live fleet anything.
+# ══════════════════════════════════════════════════════════════════════════════
+
+@test "W3: a dry tick says TICK start — without it no rate, gap or duty cycle is computable" {
+  LR_POLLER_AUTOFIRE=0 run bash "$POLLER" --once
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$STATE/poller.log" 2>/dev/null; false; }
+  grep -q "TICK start" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
+}
+
+@test "W3: a tick held by a LIVE pid logs TICK-SKIP held by pid, instead of exiting in silence" {
+  # The guard WORKING and the LaunchAgent being DEAD both produced a gap in poller.log, and they
+  # want opposite responses. Holder identity is pid+lstart, so the lock must carry both.
+  export LR_POLLER_LOCK_DIR="$BATS_TEST_TMPDIR/tick.lock"
+  mkdir -p "$LR_POLLER_LOCK_DIR"
+  /bin/sh -c 'sleep 30; :' --lock-holder & local holder=$!
+  echo "$holder" > "$LR_POLLER_LOCK_DIR/pid"
+  ps -o lstart= -p "$holder" | tr -s ' ' > "$LR_POLLER_LOCK_DIR/lstart"
+  LR_POLLER_AUTOFIRE=0 run bash "$POLLER" --once
+  kill "$holder" 2>/dev/null || true
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q "TICK-SKIP held by pid $holder" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
+  # and it really did skip: a skipped tick starts nothing
+  ! grep -q "TICK start" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
+  [ ! -s "$OSA_LOG" ]
+}
+
+@test "W3: an account map that EXISTS but defines nothing is FATAL — never a tick that skips every store" {
+  # RED against the unguarded `break`: the old ladder stopped at the first file that existed, so a
+  # truncated map shadowed both good candidates, `cc_acct_name_for_dir_basename` stayed undefined,
+  # every `acct_of_cfg` returned empty and `[[ -n "$acct" ]] || continue` skipped EVERY store. A
+  # tick that detected nothing, parked nothing, and said nothing was wrong.
+  printf '# a half-written map — gen-account-map.sh crashed mid-write\nCC_ACCT_NAMES="next2"\n' \
+    > "$BATS_TEST_TMPDIR/broken-map.sh"
+  # ALL THREE CANDIDATES MUST MISS, or this measures the ladder's fallback instead of its floor.
+  # A `cp -R` of the real directory is what makes the $0-relative candidate miss (its parent has
+  # no lib/), and $HOME is hermetic, so the broken map is the only one left.
+  local lrcopy="$BATS_TEST_TMPDIR/lr-nomap"
+  cp -R "$REPO/scripts/limit-recover" "$lrcopy"
+  CC_ACCOUNT_MAP="$BATS_TEST_TMPDIR/broken-map.sh" LR_POLLER_AUTOFIRE=0 \
+    run bash "$lrcopy/lr-reset-poller.sh" --once
+  [ "$status" -eq 1 ] || { echo "status=$status"; echo "$output"; cat "$STATE/poller.log" 2>/dev/null; false; }
+  grep -q "FATAL account map unusable" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
+}
+
+@test "W3 CONTROL: a map that DOES define the function is used, and the tick proceeds" {
+  # Without this arm the case above passes under a poller that refuses every map.
+  printf 'cc_acct_name_for_dir_basename() { echo "next2"; }\n' > "$BATS_TEST_TMPDIR/good-map.sh"
+  CC_ACCOUNT_MAP="$BATS_TEST_TMPDIR/good-map.sh" LR_POLLER_AUTOFIRE=0 run bash "$POLLER" --once
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$STATE/poller.log"; false; }
+  ! grep -q "FATAL account map unusable" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
+  grep -q "TICK start" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
+}
+
+# A census stub: $1 is the JSON the `--all --json` pass returns, $2 the `--reaper` stdout.
+mk_census_stub() {
+  # THE PAYLOADS GO IN FILES, not into the stub's source. A JSON body carries `}`, and `}` closes
+  # a `${VAR:-default}` expansion at its FIRST occurrence — so an inlined default silently
+  # truncated the census to `{"rows":[` and every row-driven assertion failed with an empty log
+  # and no error. Files have no such grammar.
+  printf '%s' "${1:-\{"rows":[]\}}" > "$BATS_TEST_TMPDIR/census.json"
+  printf '%s\n' "${2:-}" > "$BATS_TEST_TMPDIR/reaper.txt"
+  cat > "$BATS_TEST_TMPDIR/stubs/cc-limited" <<STUB
+#!/bin/bash
+case "\$*" in
+  *--reaper*) cat "$BATS_TEST_TMPDIR/reaper.txt" ;;
+  *--json*)   cat "$BATS_TEST_TMPDIR/census.json" ;;
+esac
+exit 0
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/stubs/cc-limited"
+  export CC_LIMITED="$BATS_TEST_TMPDIR/stubs/cc-limited"
+  export LR_POLLER_NO_CENSUS=0
+}
+
+@test "W3: a cap with NO reset to wait for is LIMITED-NOWAIT and is NEVER parked" {
+  # A Fable / monthly-spend cap has nothing for §2 to wait on, so a parked record for it can never
+  # be discharged: it would sit in parked/ forever, counted as pending recovery, while the operator
+  # is never told why nothing happens. Say it once per tick and leave the ledger alone.
+  mk_census_stub '{"rows":[{"sid":"ffffffff-1111-2222-3333-444444444444","state":"RECOVERABLE","group":"next3","cap":"model_scoped:Fable","resets_at":0,"cwd":"'"$CWD"'","cfg":"'"$HOME"'/.claude-tertiary","recoverable_by_waiting":false,"teammate":false}]}'
+  LR_POLLER_AUTOFIRE=0 run bash "$POLLER" --once
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$STATE/poller.log"; false; }
+  grep -q "LIMITED-NOWAIT ffffffff" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
+  [ ! -e "$STATE/parked/ffffffff-1111-2222-3333-444444444444.json" ] \
+    || { echo "a cap with no reset was parked"; false; }
+}
+
+@test "W3 CONTROL: the same row WITH a reset to wait for IS parked, from the census alone" {
+  # One variable: recoverable_by_waiting. Without this arm the case above passes under a poller
+  # that parks nothing the census reports.
+  local reset; reset="$(python3 -c 'import time;print(int(time.time())+7200)')"
+  mk_census_stub '{"rows":[{"sid":"eeeeeeee-1111-2222-3333-444444444444","state":"RECOVERABLE","group":"next3","cap":"five_hour","resets_at":'"$reset"',"cwd":"'"$CWD"'","cfg":"'"$HOME"'/.claude-tertiary","recoverable_by_waiting":true,"teammate":false}]}'
+  LR_POLLER_AUTOFIRE=0 run bash "$POLLER" --once
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$STATE/poller.log"; false; }
+  [ -f "$STATE/parked/eeeeeeee-1111-2222-3333-444444444444.json" ] || { cat "$STATE/poller.log"; false; }
+  run jq -r '.kind + " " + .acct' "$STATE/parked/eeeeeeee-1111-2222-3333-444444444444.json"
+  [[ "$output" == "session next3" ]] || { echo "$output"; false; }
+  grep -q "PARKED eeeeeeee" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
+}
+
+@test "W3: a TEAMMATE row from the census writes teammate-skip and is never parked" {
+  mk_census_stub '{"rows":[{"sid":"dddddddd-1111-2222-3333-444444444444","state":"TEAMMATE","group":"next3","cap":"five_hour","resets_at":0,"cwd":"'"$CWD"'","cfg":"'"$HOME"'/.claude-tertiary","recoverable_by_waiting":true,"teammate":true}]}'
+  LR_POLLER_AUTOFIRE=0 run bash "$POLLER" --once
+  [ -f "$STATE/teammate-skip/dddddddd-1111-2222-3333-444444444444" ] || { cat "$STATE/poller.log"; false; }
+  [ ! -e "$STATE/parked/dddddddd-1111-2222-3333-444444444444.json" ] || false
+}
+
+@test "W3: the reaper's CLAIMED-NOT-LIVE rows reach poller.log, so a dead claim is visible" {
+  # A claim is this daemon's own promise that a recovery is in flight; one whose process is gone
+  # blocks the next attempt at that sid for as long as it sits there. --persist writes the fault;
+  # this line is what makes it visible without running the census by hand.
+  mk_census_stub '{"rows":[]}' 'FAULT CLAIMED-NOT-LIVE cccccccc-1111-2222-3333-444444444444 claimed 10:00:00Z by pid 999 (lr-fire.lock); no live process, 2h00m'
+  LR_POLLER_AUTOFIRE=0 run bash "$POLLER" --once
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$STATE/poller.log"; false; }
+  grep -q "CLAIMED-NOT-LIVE cccccccc" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RED-PROOF — W3 (LIMIT_DETECT_100P § 3), run 2026-09-20 against pristine 4ef1f2d66
+# with ONLY scripts/limit-recover/lr-reset-poller.sh (+ its two siblings) reverted:
+#
+#   $ bats tests/lr-reset-poller.bats
+#   1..38
+#   not ok 31 W3: a dry tick says TICK start — without it no rate, gap or duty cycle is computable
+#   not ok 32 W3: a tick held by a LIVE pid logs TICK-SKIP held by pid, instead of exiting in silence
+#   not ok 33 W3: an account map that EXISTS but defines nothing is FATAL — never a tick that skips every store
+#   not ok 34 W3 CONTROL: a map that DOES define the function is used, and the tick proceeds
+#   not ok 35 W3: a cap with NO reset to wait for is LIMITED-NOWAIT and is NEVER parked
+#   not ok 36 W3 CONTROL: the same row WITH a reset to wait for IS parked, from the census alone
+#   not ok 37 W3: a TEAMMATE row from the census writes teammate-skip and is never parked
+#   not ok 38 W3: the reaper's CLAIMED-NOT-LIVE rows reach poller.log, so a dead claim is visible
+#
+# Row 34 going red alongside 33 is the pair working as intended: against pristine source NEITHER
+# map is consulted for usability, so the control cannot distinguish itself from the case either.

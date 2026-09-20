@@ -27,6 +27,15 @@ setup() {
   NOTED="$STATE/engage-noted"
   FF="$STATE/fire-fail"
   LOG="$STATE/poller.log"
+  # ── W3 seams (LIMIT_DETECT_100P § 3) ────────────────────────────────────────────────────────
+  # PIN THE ACCOUNT MAP, and pin it HERE. The map's ladder has a `$(dirname "$0")/../../lib/…`
+  # candidate that `_orphan_poller`'s fake tree misses, and an unusable map is now FATAL rather
+  # than a tick that skips every store in silence — so an orphaned copy would exit 1 for a reason
+  # these cases are not about. It cannot live in `_orphan_poller`: that runs inside `$( )`, and an
+  # export in a command substitution dies with the subshell (the same trap `LR_SELECT_BIN` sits in
+  # one line below, surviving only because the poller tolerates its absence here).
+  export CC_ACCOUNT_MAP="$REPO/lib/account-map.generated.sh"
+  export LR_POLLER_NO_CENSUS=1    # the census is a second detector these cases are not about
   PROJ="$HOME/.claude/projects/slug"
   mkdir -p "$HOME/bin" "$STATE/parked" "$STATE/resumed" "$CLAIMS" "$PROJ"
 

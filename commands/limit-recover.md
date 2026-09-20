@@ -77,7 +77,10 @@ work itself is ~3 s. The polling was the cost.
 
 So the shape of a recovery is three steps and the third one is the load-bearing one:
 
-1. **Resolve** the session: `lr-fleet.sh --locate` (or `--locate --json`) names sid · pane · account ·
+1. **Resolve** the session: `cc-limited --json` is the machine surface (one process over the stores
+   that already hold the answer, against the 35 s transcript walk it replaces); `lr-fleet.sh --locate`
+   is its screen form and `--locate --json` execs into it. `LF_SLOW_SCAN=1` forces the old walk back,
+   which is what `--deep` means. Either names sid · pane · account ·
    tier · disposition. A pane id you were handed is enough; do not re-census to confirm it.
 2. **Fire it, detached** — one call, returns in ≤3 s, prints the run dir and the driver's log path:
 
@@ -526,7 +529,8 @@ no orphan, no ambiguity about which pane is which*). Script: `scripts/limit-reco
    acting on a live pane from inside a session — measured 401 denials in 30 days across shapes no
    rule predicts), write the same request for the **launchd reset poller**, which runs outside every
    session and every classifier and drains `~/.reso/limit-recover/requests/` on its next tick
-   (`launchctl kickstart -k gui/$(id -u)/com.reso.lr-reset-poller` runs it now). Results:
+   (`launchctl kickstart gui/$(id -u)/com.reso.lr-reset-poller` runs it now — no `-k`, which would
+   KILL a tick that may be mid-transplant). Results:
    `~/.reso/limit-recover/results/<sid>.json`. **The driver never hands the human a raw pane-close
    command** (operator ruling 2026-09-09); a `cc-do` row is minted only when the daemon itself cannot.
 5. **`fleet --duplicates`** — sessions held by MORE than one live process (the 2026-09-09 shape: the
