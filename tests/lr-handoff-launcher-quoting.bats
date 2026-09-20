@@ -47,8 +47,12 @@ setup() {
   # HERMETICITY (land ratchet): this suite drives fires, so it must not read live machine load,
   # and the three seams that do NOT resolve under $HOME must resolve inside the test dir. An ABSENT
   # path is the right default — these sensors fail open on one. Cases may still override per call.
+  # BOTH capacity gates OFF for the WHOLE suite, not only the --in-place block (test-hermeticity
+  # RULE 4); lrh_inplace_setup re-states these for its own cases and the two settings are identical.
   export CC_ADMIT_GATE=off
   export CC_FIRE_CAPACITY_GATE=off
+  export CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/admit"
+  export CC_ADMIT_IDL="$BATS_TEST_TMPDIR/admit-idl.jsonl"
   export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/sweep.json"
   export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-accounts"
   export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
@@ -587,4 +591,118 @@ SH
   [ "$status" -eq 5 ] || { echo "$output"; false; }
   [[ "$output" == *"cannot redeem this recovery's token"* ]] || { echo "$output"; false; }
   [ ! -e "$MOVED_LOCK" ]
+}
+
+# ── W3: the ingest prompt is composed IN THE PANE, at relaunch, not baked at mint time ───────────
+# Until W3 the launcher carried `--prompt "/limit-recover ingest <bundle>"` as a %q-rendered
+# constant decided when the bundle was cut — minutes, and on the capacity-park path far longer,
+# before the session actually woke. Measured (U12 §3): that prompt costs 6-9 model round trips,
+# 6-8 tool calls and ~26.5 K permanently resident tokens per recovered session, and across ALL 24 of
+# 2026-09-19's bundles it re-established `gaps_at_handoff == 0`, which was already on disk in every
+# one. The launcher now asks lr-ingest-verify.sh at run time and substitutes its one-line receipt.
+#
+# WHAT THESE TWO CASES PIN IS THE LAUNCHER, NOT THE VERIFIER. lr-ingest-verify has its own suite
+# (tests/lr-ingest-verify.bats) with the clause-by-clause cases; here it is a stub, because the
+# subject is the composition: does the launcher RUN the check, does it use the receipt's last line
+# on rc 0, and does a rc-1 keep today's prompt with the clause named in it.
+lrh_verify_stub() { # $1=rc  → a lr-ingest-verify.sh on the fixture's live layer that answers as told
+  cat > "$HOME/.claude/scripts/limit-recover/lr-ingest-verify.sh" <<SH
+#!/bin/bash
+# The receipt shape the real script writes: clause lines, a verdict, and — on rc 0 — the prompt LAST.
+echo "PASS A1 — gaps_at_handoff=0"
+if [ "$1" -eq 0 ]; then
+  echo "verdict: rc 0 (13 clauses PASS)"
+  # \$LR_SUBMIT_TOKEN is read from the ENVIRONMENT, which is the ordering this case also pins: the
+  # launcher must export it BEFORE it composes the prompt, or the run token can never reach the
+  # composer and W3's submitted-vs-armed discriminator has nothing to look for.
+  echo "Resumed in place on next2 — same pane, same session lrhq0013, after a session-limit 429 on next4. Continue the interrupted work from where you left off. — \${LR_SUBMIT_TOKEN:-NO-TOKEN-IN-ENV}"
+else
+  echo "FAIL C3 — lock /x/y.lock says to=/wrong/cfg, manifest target_cfg=/right/cfg"
+  echo "verdict: rc 1 (first failure: C3)"
+fi
+exit $1
+SH
+  chmod +x "$HOME/.claude/scripts/limit-recover/lr-ingest-verify.sh"
+}
+
+@test "W3: a PASSING lr-ingest-verify replaces the ingest with the one-line prompt, carrying run:" {
+  lrh_verify_stub 0
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  run gen "lrhq0013-0000-0000-0000-000000000013" "$BATS_TEST_TMPDIR/repo"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  LAUNCHER="$(launcher_from_output)"
+  [ -n "$LAUNCHER" ] && [ -f "$LAUNCHER" ]
+
+  cd "$BATS_TEST_TMPDIR"
+  run /bin/bash "$LAUNCHER"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # argv shape is unchanged — the prompt is still ONE element, still last
+  [[ "$output" == *"argc=7"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"argv[6]=<--prompt>"* ]] || { echo "$output"; false; }
+  # …and its VALUE is the receipt's last line, not the mint-time ingest command
+  [[ "$output" == *"argv[7]=<Resumed in place on next2"* ]] || { echo "PROMPT NOT SUBSTITUTED: $output"; false; }
+  [[ "$output" != *"argv[7]=</limit-recover ingest"* ]] || { echo "still the mint-time ingest: $output"; false; }
+  # the run token reached the composer, which is what makes SUBMITTED observable downstream
+  [[ "$output" == *"argv[7]="*"run:lrhq0013:"* ]] || { echo "NO RUN TOKEN IN THE PROMPT: $output"; false; }
+  [[ "$output" != *"NO-TOKEN-IN-ENV"* ]] || { echo "LR_SUBMIT_TOKEN is exported AFTER the prompt is composed: $output"; false; }
+  # the receipt is durable beside the bundle it verifies
+  [ -s "$(dirname "$LAUNCHER")/INGEST-VERIFIED.txt" ] || { echo "no receipt written"; false; }
+}
+
+@test "W3: a FAILING lr-ingest-verify keeps the full ingest prompt and NAMES the failing clause" {
+  # Fail closed: the degraded path is the one we already ship, and it must be NAMED in the line the
+  # operator can read on the screen rather than taken silently.
+  lrh_verify_stub 1
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  run gen "lrhq0014-0000-0000-0000-000000000014" "$BATS_TEST_TMPDIR/repo"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  LAUNCHER="$(launcher_from_output)"
+  [ -n "$LAUNCHER" ] && [ -f "$LAUNCHER" ]
+
+  cd "$BATS_TEST_TMPDIR"
+  run /bin/bash "$LAUNCHER"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"argc=7"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"argv[7]=</limit-recover ingest "* ]] || { echo "the fallback is not today's ingest: $output"; false; }
+  [[ "$output" == *"lr-ingest-verify FAILED: FAIL C3"* ]] || { echo "the failing clause is NOT named: $output"; false; }
+  # still ONE argument despite the appended prose
+  [[ "$output" != *"argv[8]="* ]] || { echo "the prompt was WELDED into two arguments: $output"; false; }
+}
+
+@test "W3: a verifier that is ABSENT from the live layer also fails closed, and says so" {
+  # The live-layer skew case: the launcher names a durable $HOME/.claude path, so a landed-but-not-
+  # deployed verifier is simply not there. An absent checker must never read as a passing one.
+  rm -f "$HOME/.claude/scripts/limit-recover/lr-ingest-verify.sh"
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  run gen "lrhq0015-0000-0000-0000-000000000015" "$BATS_TEST_TMPDIR/repo"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  LAUNCHER="$(launcher_from_output)"
+  [ -n "$LAUNCHER" ]
+
+  cd "$BATS_TEST_TMPDIR"
+  run /bin/bash "$LAUNCHER"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"argv[7]=</limit-recover ingest "* ]] || { echo "$output"; false; }
+  [[ "$output" == *"not executable on the live layer"* ]] || { echo "the absence is not named: $output"; false; }
+}
+
+@test "W3 acceptance: HANDOFF-CONTEXT.md ≤ 2 KB and MANIFEST.json ≤ 1 KB on a generated bundle" {
+  # The numbers W3 owes. Before: 87,858 B and 4,379 B on bundle 09e64dcb/bundle-20260919T172203Z —
+  # 98.6 % of the first was 110 concatenated DoD captures, 79 % of the second was the source
+  # process's full `ps -Eww` line (argv PLUS its whole inherited environment).
+  lrh_verify_stub 0
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  run gen "lrhq0016-0000-0000-0000-000000000016" "$BATS_TEST_TMPDIR/repo"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  LAUNCHER="$(launcher_from_output)"
+  B="$(dirname "$LAUNCHER")"
+  hc=$(wc -c < "$B/HANDOFF-CONTEXT.md"); mf=$(wc -c < "$B/MANIFEST.json")
+  echo "HANDOFF-CONTEXT.md=$hc B  MANIFEST.json=$mf B"
+  [ "$hc" -le 2048 ] || { echo "HANDOFF-CONTEXT.md is $hc B (> 2048)"; cat "$B/HANDOFF-CONTEXT.md"; false; }
+  [ "$mf" -le 1024 ] || { echo "MANIFEST.json is $mf B (> 1024)"; cat "$B/MANIFEST.json"; false; }
+  # and the field that carried 79 % of the manifest is gone, while the three facts mined from it stay
+  ! grep -q 'source_argv' "$B/MANIFEST.json" || { echo "source_argv is still in the manifest"; false; }
+  for k in runtime_model runtime_effort permission_mode; do
+    grep -q "\"$k\"" "$B/MANIFEST.json" || { echo "$k was dropped with source_argv"; cat "$B/MANIFEST.json"; false; }
+  done
 }
