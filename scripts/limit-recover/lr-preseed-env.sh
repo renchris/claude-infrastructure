@@ -111,11 +111,24 @@ try:
 
     # (b) best-effort suppression of one-time startup upsells that can render as blocking
     #     select-menus at resume (RAISE the seen-count gates; never lower — idempotent).
+    # fullscreenUpsellSeenCount / fullscreenDownsellSeenCount (W3): the FULLSCREEN pair is the one
+    # that matters most here, because a full-screen takeover at resume is not a line of noise above
+    # the composer — it owns the whole TUI, so the typed prompt lands in nothing and the recovery
+    # becomes a husk with a live process. Measured 2026-09-19 across all five config dirs:
+    # fullscreenUpsellSeenCount sits at 3 in .claude-next, .claude-secondary and .claude-tertiary
+    # (absent in the other two) and fullscreenDownsellSeenCount is absent in all five.
     UPSELL_FLOOR = 99
     for key in ("overageCreditUpsellSeenCount", "subscriptionNoticeCount",
                 "remoteControlUpsellSeenCount", "passesUpsellSeenCount",
-                "pushNotifUpsellSeenCount", "autoPermissionsNotificationCount"):
+                "pushNotifUpsellSeenCount", "autoPermissionsNotificationCount",
+                "fullscreenUpsellSeenCount", "fullscreenDownsellSeenCount"):
         v = d.get(key)
+        # RAISE-ONLY, and that is deliberate rather than an oversight: an ABSENT key is left absent.
+        # Writing a counter Claude Code has never written is a guess about a schema this script does
+        # not own, and the failure mode of a wrong guess (a key the product later reads with another
+        # meaning) is worse than the upsell. Consequence, stated: on a config dir where a counter has
+        # never appeared, this loop is a no-op for that counter — today that is every dir for
+        # fullscreenDownsellSeenCount. Seeding is a separate decision, with its own evidence.
         if isinstance(v, int) and v < UPSELL_FLOOR:
             d[key] = UPSELL_FLOOR; changed = True
 
