@@ -21,6 +21,13 @@ setup() {
   export CC_ADMIT_GATE=off
   export CC_FIRE_CAPACITY_GATE=off
   export CC_FIRE_HEADROOM_GATE=off
+  # Rule-5 seams: state that does NOT resolve under $HOME. Fixturing $HOME cannot redirect an
+  # absolute /tmp default, nor a BARE NAME the subject executes off the operator's PATH — so without
+  # these three the watcher cases below would read the operator's live account sweep and run their
+  # deployed claude-accounts. ABSENT paths: every one of these sensors fails open on one.
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/absent-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/absent-heal-"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   PROBE="$REPO/scripts/limit-recover/lr-submit-probe.sh"
   FIRE="$REPO/scripts/limit-recover/lr-fire-resume.sh"
@@ -156,11 +163,9 @@ enqueue()   { printf '{"type":"queue-operation","operation":"enqueue","timestamp
   [ "$output" -ge 1 ]
 }
 
-@test "handoff-fire's resume oracle takes a token and the watcher is handed one" {
+@test "handoff-fire's resume oracle takes a token" {
   run grep -c 'resume_engaged() { # \$1=target cfg  \$2=sid  \$3=baseline (UTC, %FT%T) \$4=submit token' "$HF"
   [ "$output" = 1 ] || { echo "resume_engaged signature: $output"; false; }
-  run grep -c 'RCY_SUBMIT_TOKEN="\${16:-}"' "$HF"
-  [ "$output" = 1 ] || { echo "watcher does not parse \$16: $output"; false; }
 }
 
 # ── the expect program, EXECUTED ──────────────────────────────────────────────────────────────────
@@ -301,4 +306,102 @@ states() { jq -r '.state' "$LR_RUN_DIR/events.jsonl" 2>/dev/null | tr '\n' ' '; 
   # for a by-hand resume that carries no token at all.
   run resume_engaged "$c" "$s" "2026-09-19T21:00:00"
   [ "$status" -eq 0 ]
+}
+
+# ── the __recycle watcher, EXECUTED: the token has to ARRIVE ───────────────────────────────────────
+#
+# WHY THIS IS NOT A GREP. The assertion this replaces was
+# `run grep -c 'RCY_SUBMIT_TOKEN="\${16:-}"' "$HF"` with an expected value of 1 — and the constant in
+# it WAS the bug. recycle_fire hands the token to `detach` as the 15th argument after `__recycle`, so
+# a watcher reading $16 read an argument nothing ever sends: the token arm was INERT on every run,
+# and correcting the source turned the suite RED ("watcher does not parse $16: 0"). A literal pinned
+# to a constant can only ever certify whatever is currently written — docs/lessons/
+# stale-assertion-becomes-an-inverted-guard.md, the guard that ends up protecting the defect.
+#
+# So this drives the REAL watcher over the REAL argv shape instead. The token is handed over at the
+# position the arming side writes it to, and the one line + ledger row that ONLY the token arm can
+# produce (`SUBMITTED`, class `recycle-submitted`) must appear. No constant to drift against.
+
+watcher_setup() {
+  # The phase-aware `ps`, the pane stub and the terminal pin are tests/handoff-recycle-engagement.bats
+  # :165-247's, trimmed to what a RESUME-mode watcher touches. Only the ROOT query (`-o pid= -t`)
+  # advances the phase, so one state read is never answered out of two process tables.
+  SHIM="$BATS_TEST_TMPDIR/shim"; mkdir -p "$SHIM"
+  export PS_COUNT_FILE="$BATS_TEST_TMPDIR/ps-count"; rm -f "$PS_COUNT_FILE"
+  cat > "$SHIM/ps" <<'SH'
+#!/usr/bin/env bash
+args="$*"
+case "$args" in *pgid=*) printf '%s\n' "4242"; exit 0 ;; esac
+c="${PS_COUNT_FILE:?}"
+if [ "${args#*-o pid= -t}" != "$args" ]; then
+  n=$(( $(cat "$c" 2>/dev/null || echo 0) + 1 )); printf '%s' "$n" > "$c"
+else
+  n=$(cat "$c" 2>/dev/null || echo 0)
+fi
+phase=alive; [ "$n" -le "${PS_DEAD_CALLS:-2}" ] && phase=shell
+case "$args" in
+  *"-o pid= -t"*)   printf '100\n'; [ "$phase" = alive ] && printf '200\n' ;;
+  *"-o tpgid= -t"*) printf '100\n'; [ "$phase" = alive ] && printf '100\n' ;;
+  *"-o comm= -t"*)  if [ "$phase" = alive ]; then printf 'claude\n'; else printf -- '-zsh\n'; fi ;;
+  *pid=,ppid=*)     printf '100 1\n'; [ "$phase" = alive ] && printf '200 100\n' ;;
+  *"pid=,comm= -g"*) printf '100 /bin/zsh\n' ;;
+  *"-p 200"*)       printf '/Users/chrisren/.claude-220/node_modules/.bin/claude\n' ;;
+  *"-p 100"*)       printf '/bin/zsh\n' ;;
+esac
+exit 0
+SH
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$SHIM/osascript"
+  chmod +x "$SHIM/ps" "$SHIM/osascript"
+  unset KITTY_WINDOW_ID; export IT2_WRAPPER_NO_KITTY=1; unset CC_TERM
+
+  mkdir -p "$HOME/.claude/bin"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$HOME/ccnotify-calls.log"\nexit 0\n' \
+    > "$HOME/.claude/bin/cc-notify"
+  PANE="RECY-PANE"; export STUB_PANE="$PANE"
+  cat > "$HOME/.claude/bin/it2" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$HOME/it2-calls.log"
+case "$1 $2" in
+  "session list")
+    if [ "${3:-}" = --json ]; then printf '[{"id": "%s", "tty": "/dev/ttys999"}]\n' "${STUB_PANE:-RECY-PANE}"
+    else printf '%s\n' "${STUB_PANE:-RECY-PANE}"; fi
+    exit 0 ;;
+  "session send") txt="${!#}"; [ "${#txt}" -gt 3 ] && printf '%s' "$txt" > "$HOME/it2-screen" ;;
+  "session read") cat "$HOME/it2-screen" 2>/dev/null ;;
+esac
+exit 0
+SH
+  chmod +x "$HOME/.claude/bin/cc-notify" "$HOME/.claude/bin/it2"
+  CMDF="$BATS_TEST_TMPDIR/cmd.sh"; printf 'cd /tmp && claude-x\n' > "$CMDF"
+  RUNDIR="$BATS_TEST_TMPDIR/run"; mkdir -p "$RUNDIR"
+  export CC_REGISTRY_DIR="$BATS_TEST_TMPDIR/reg"; mkdir -p "$CC_REGISTRY_DIR"
+  export CC_PROJECTS_DIRS="$BATS_TEST_TMPDIR/proj"; mkdir -p "$CC_PROJECTS_DIRS"
+  export CC_ADMIT_IDL="$BATS_TEST_TMPDIR/absent-idl.jsonl"
+}
+
+# The watcher's argv, written out in the SAME ORDER recycle_fire's `detach` line writes it, so the
+# position under test is stated once and read by every case that drives the watcher.
+watcher_argv() { # $1 = the submit token to hand over
+  printf '%s\n' __recycle "$PANE" /dev/ttys999 "$CMDF" /tmp OLD-SID "" "" "" \
+                "$CFG" "$SID" "$T0" "" "$RUNDIR" "$1"
+}
+
+@test "RED-PROOF the watcher PARSES the submit token off the argv the arming side actually sends" {
+  watcher_setup
+  # our prompt lands, and a turn answers it — so the token arm has something to find and the run
+  # ends CONFIRMED rather than on the dead path, keeping the assertion about the TOKEN.
+  printf '%s\n' \
+    "{\"type\":\"user\",\"timestamp\":\"2099-01-01T00:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"/limit-recover ingest /x $TOK\"}}" \
+    '{"type":"assistant","timestamp":"2099-01-01T00:01:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"reading the salvage bundle"}]}}' \
+    > "$TX"
+  local -a argv; mapfile -t argv < <(watcher_argv "$TOK")
+  run env HOME="$HOME" PATH="$SHIM:$PATH" IT2_BIN="$HOME/.claude/bin/it2" \
+      PS_DEAD_CALLS=2 RCY_ENGAGE_TIMEOUT=8 RCY_ENGAGE_INTERVAL=1 \
+      RCY_BOOT_PANE_EVERY=1 RCY_BOOT_IVL_S=0.2 RCY_BOOT_WAIT_S=20 \
+      bash "$HF" "${argv[@]}"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # the line and the row that ONLY the token arm can produce
+  [[ "$output" == *"SUBMITTED in $PANE"* ]] || { echo "the token never reached the watcher: $output"; false; }
+  grep -F '"class":"recycle-submitted"' "$HOME/.claude/logs/handoffs.jsonl" >/dev/null \
+    || { echo "no recycle-submitted row"; cat "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null; false; }
 }
