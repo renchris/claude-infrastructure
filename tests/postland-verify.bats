@@ -2159,6 +2159,13 @@ for i in 1 2 3 4 5 6 7 8; do sleep 1; printf 'ok %s s%s\n' \"\$i\" \"\$i\"; done
 # rule could drift from the rule and these would still pass.
 @test "stall_wait: the wait ends when the CHILD does, not when the period does" {
   eval "$(sed -n '/^stall_wait() {/,/^}/p' "$SUT")"
+  # NOT dead code: stall_wait reads $STALL_TICK_S as a global, and it arrived through the `eval`
+  # one line up — a seam shellcheck cannot follow, so SC2034 here is a false positive about the
+  # ANALYSIS, not about the variable. Annotated narrowly at each of the three sites rather than
+  # silenced file-wide, and deliberately not "fixed" by exporting it: an export would put the value
+  # in the environment of every command the test runs afterwards, which is a real behaviour change
+  # bought purely to quiet a linter.
+  # shellcheck disable=SC2034
   STALL_TICK_S=1
   ( sleep 1 ) & local child=$!                     # ...a child that outlives the first tick, then exits
   local t0 t1; t0="$(date +%s)"
@@ -2176,6 +2183,8 @@ for i in 1 2 3 4 5 6 7 8; do sleep 1; printf 'ok %s s%s\n' \"\$i\" \"\$i\"; done
   # wall seconds whenever the child is alive for all of it. Break this and the stall bound starts
   # cutting healthy corpora at a multiple of the rate it was calibrated for.
   eval "$(sed -n '/^stall_wait() {/,/^}/p' "$SUT")"
+  # read by the eval'd stall_wait — see the first arm above for why this is annotated, not exported
+  # shellcheck disable=SC2034
   STALL_TICK_S=1
   sleep 300 >/dev/null 2>&1 &
   echo "$!" > "$BATS_TEST_TMPDIR/live.pid"         # teardown kills it
@@ -2191,6 +2200,8 @@ for i in 1 2 3 4 5 6 7 8; do sleep 1; printf 'ok %s s%s\n' \"\$i\" \"\$i\"; done
   # the OUTSIDE, because its whole purpose is to put the pre-fix timing back if the slicing ever
   # turns out to cost something nobody priced.
   eval "$(sed -n '/^stall_wait() {/,/^}/p' "$SUT")"
+  # read by the eval'd stall_wait — see the first arm above for why this is annotated, not exported
+  # shellcheck disable=SC2034
   STALL_TICK_S=0
   ( sleep 1 ) & local child=$!
   local t0 t1; t0="$(date +%s)"
