@@ -981,3 +981,155 @@ EOF
   [ "$output" -ge 780 ] || { echo "TTL $output cannot survive its own operation (780s of stages)"; false; }
   [ "$output" -le 1200 ] || { echo "TTL $output outlives the recycle that minted it (1200s)"; false; }
 }
+
+# ══ W2FA A4 — FIVE GUARDS THE SUITE NEVER TOUCHED ══════════════════════════════════════════════
+# The class this wave was commissioned to close, re-created inside its own cure. Each guard below
+# was DELETED outright and all 60 cases of this suite and its coverage sibling stayed green — so
+# each is, until now, a comment that happens to execute. Two were named by the adversarial pass
+# (the NF count and the post-claim re-read); the other three came out of the same sweep run over
+# every arm the token code added.
+#
+# HOW THEY ARE SCORED, stated so it cannot be mistaken for something stronger: where the guard
+# already existed unchanged, a run on the parent tree is GREEN and proves nothing
+# (docs/lessons/green-in-both-arms-is-an-equivalence-guard-not-a-red-proof.md), so the case is
+# named EQUIVALENCE GUARD and carries the verbatim death of the mutant it was scored against. Two
+# of the five ALSO carry a red-before arm, because their fix changed behaviour, and say which arm.
+
+@test "15ad A4 EQUIVALENCE GUARD, MUTANT-SCORED — a FIVE-field record is not a token" {
+  # `cut -f1/-f2/-f4` became a shape test (D4) and 15m pins the 1-field case. But a 1-field record
+  # is caught by the sid charset guard one step later, so deleting `[ "$_CC_ADMIT_TOK_NF" != 4 ]`
+  # killed 0 of 60 — nothing reached it. A FIVE-field record is the discriminator: fields 1-4 are
+  # exactly right, so every other guard passes it, and only the count can refuse.
+  #
+  # MUTANT: `if [ "$_CC_ADMIT_TOK_NF" != 4 ]; then` → `if false; then`
+  #   → rc 0, row `redeemed a probe admission 0s old for sid-nf (TTL 1020s; minted under terms load)`
+  local tok
+  tok="$(mint sid-nf)"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" sid-nf "$(id -u)" load EXTRA > "$tok"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-nf \
+               cc_capacity_admit c15ad "s"' _ "$LIB" "$tok"
+  [ "$status" -ne 0 ] || { echo "a 5-field record ADMITTED — the field COUNT is not checked"; echo "$output"; false; }
+  [[ "$(idl_first 'select(.caller=="c15ad")|.token')" == *"this line has 5"* ]] \
+    || { echo "row: $(idl_first 'select(.caller=="c15ad")|.token')"; false; }
+  # …and the guard is not a blanket refusal: the shape the mint writes still redeems.
+  tok="$(mint sid-nf-ok)"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-nf-ok \
+               cc_capacity_admit c15ad2 "s"' _ "$LIB" "$tok"
+  [ "$status" -eq 0 ] || { echo "the count guard refuses the mint's OWN record — it is over-wide"; echo "$output"; false; }
+}
+
+@test "15ae A4 EQUIVALENCE GUARD, MUTANT-SCORED — the post-claim re-read is what the admission rests on" {
+  # The pre-claim read decides only whether the file is ours to TAKE; between that read and the
+  # rename anything may rewrite it. The library re-reads its own claim copy and grants on THOSE
+  # values. Deleting that re-read killed 0 of 60, because no case ever made the two reads differ.
+  #
+  # THE WINDOW IS OPENED DETERMINISTICALLY, not raced (same discipline as 15g): a PATH-shadowed
+  # `mv` performs the real rename and then rewrites the claim copy as a FOREIGN record, so the
+  # pre-claim and post-claim values differ by construction on every run.
+  #
+  # MUTANT: `if ! _cc_admit_token_shape "$claim" "$want" "$me"; then` → `if false; then`
+  #   → rc 0, row `redeemed a probe admission 0s old for sid-pc (TTL 1020s; minted under terms load)`
+  #     — i.e. the admission was granted on values that no longer existed anywhere.
+  local tok
+  tok="$(mint sid-pc)"
+  mkdir -p "$BATS_TEST_TMPDIR/mvbin"
+  cat > "$BATS_TEST_TMPDIR/mvbin/mv" <<'EOF'
+#!/bin/bash
+/bin/mv "$@" || exit $?
+last="${*: -1}"
+case "$last" in
+  *.claim.*) printf '%s\t%s\t%s\t%s\n' "$(/bin/date +%s)" sid-INTRUDER "$(/usr/bin/id -u)" load > "$last"
+             : > "$last.stubfired" ;;
+esac
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/mvbin/mv"
+  run env PATH="$BATS_TEST_TMPDIR/mvbin:$PATH" CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$tok" \
+      CC_ADMIT_WANT_SID=sid-pc bash -c '. "$1"; cc_capacity_admit c15ae "s"' _ "$LIB"
+  # POSITIVE CONTROL: without it the case passes vacuously whenever the stub never fired.
+  set -- "$tok".claim.*.stubfired
+  [ -e "$1" ] || { echo "the mv stub never fired — the two reads were never made to differ"; false; }
+  [ "$status" -ne 0 ] \
+    || { echo "the admission was granted on the PRE-claim values — the claim copy was never re-read"; echo "$output"; false; }
+  [[ "$(idl_first 'select(.caller=="c15ae")|.token')" == *"after the claim"* ]] \
+    || { echo "row: $(idl_first 'select(.caller=="c15ae")|.token')"; false; }
+  [[ "$(idl_first 'select(.caller=="c15ae")|.token')" == *"sid-INTRUDER"* ]] || false
+}
+
+@test "15af A4 the CLOCK is an input and is validated as an OPERAND — not merely as digits" {
+  # RED-BEFORE ARM (the 21-digit clock) and MUTANT-SCORED ARM (the decimal clock), named apart.
+  #
+  # RED BEFORE on the parent: the clock was charset-checked, so a 21-digit `date +%s` passed and
+  # the subtraction wrapped — row `token EXPIRED (7766279629662303279s old > TTL 1020s)`, a refusal
+  # for a reason that is arithmetically meaningless and points the reader at the TTL.
+  #
+  # MUTANT (scoring the guard's existence): `if ! cc_hw_is_int_operand "$now"; then` → `if false`
+  #   → with a DECIMAL clock the gate does not admit, it DIES: bash treats an arithmetic expansion
+  #     error as fatal in a non-interactive shell, so the process exits rc 1 having written NO row
+  #     and NO page. In production the library is SOURCED by lr-fire-resume, so that death is
+  #     lr-fire-resume's — before `relaunch.rc` is written, leaving the watcher polling a corpse,
+  #     which is the exact failure this wave exists to remove.
+  local tok
+  mkdir -p "$BATS_TEST_TMPDIR/clk"
+  cat > "$BATS_TEST_TMPDIR/clk/date" <<'EOF'
+#!/bin/bash
+for a in "$@"; do if [ "$a" = "+%s" ]; then printf '%s\n' "$CC_TEST_FAKE_NOW"; exit 0; fi; done
+exec /bin/date "$@"
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/clk/date"
+  tok="$(mint sid-clk)"
+  run env PATH="$BATS_TEST_TMPDIR/clk:$PATH" CC_TEST_FAKE_NOW=12.5 CC_ADMIT_LOADAVG_OVERRIDE=99 \
+      CC_ADMIT_TOKEN="$tok" CC_ADMIT_WANT_SID=sid-clk bash -c '. "$1"; cc_capacity_admit c15af "s"' _ "$LIB"
+  [ "$status" -eq 9 ] || { echo "rc=$status — a gate whose contract is 0/9 returned $status"; echo "$output"; false; }
+  [[ "$(idl_first 'select(.caller=="c15af")|.token')" == *"clock is unreadable"* ]] \
+    || { echo "row: $(idl_first 'select(.caller=="c15af")|.token')"; false; }
+  tok="$(mint sid-clk2)"
+  run env PATH="$BATS_TEST_TMPDIR/clk:$PATH" CC_TEST_FAKE_NOW=99999999999999999999 \
+      CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$tok" CC_ADMIT_WANT_SID=sid-clk2 \
+      bash -c '. "$1"; cc_capacity_admit c15af2 "s"' _ "$LIB"
+  [ "$status" -eq 9 ] || { echo "rc=$status"; echo "$output"; false; }
+  [[ "$(idl_first 'select(.caller=="c15af2")|.token')" == *"clock is unreadable"* ]] \
+    || { echo "a 21-digit clock wrapped the age instead of being refused: $(idl_first 'select(.caller=="c15af2")|.token')"; false; }
+}
+
+@test "15ag A4 a token issued in the FUTURE is its own state, and without the arm it ADMITS" {
+  # MUTANT-SCORED ARM: `if [ "$age" -lt 0 ]; then` → `if false; then`
+  #   → rc 0, row `redeemed a probe admission -100000s old for sid-fut` — a negative age is never
+  #     `-gt ttl`, so a forged or skewed record admits forever. Deleting it killed 0 of 60.
+  # RED-BEFORE ARM: the wording. The parent folded this into the expiry message and reported
+  #   `token EXPIRED (-100000s old > TTL 1020s)`, which reads as a stale token and sends the
+  #   operator to the TTL. Clock skew and forgery need a different look.
+  local tok
+  tok="$(mint sid-fut)"
+  printf '%s\t%s\t%s\t%s\n' "$(( $(date +%s) + 100000 ))" sid-fut "$(id -u)" load > "$tok"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-fut \
+               cc_capacity_admit c15ag "s"' _ "$LIB" "$tok"
+  [ "$status" -ne 0 ] || { echo "a token dated 100000s in the FUTURE ADMITTED"; echo "$output"; false; }
+  [[ "$(idl_first 'select(.caller=="c15ag")|.token')" == *"FUTURE"* ]] \
+    || { echo "row: $(idl_first 'select(.caller=="c15ag")|.token')"; false; }
+  [[ "$(idl_first 'select(.caller=="c15ag")|.token')" != *"EXPIRED"* ]] \
+    || { echo "a future-dated record is reported as EXPIRED, which sends the reader to the TTL"; false; }
+  [ ! -f "$tok" ] || { echo "the record was positively ours and was NOT consumed"; false; }
+}
+
+@test "15ah A4 EQUIVALENCE GUARD, MUTANT-SCORED — an EMPTY file says UNREADABLE, not 'has '" {
+  # MUTANT: `[ -n "$rec" ] || return 1` → `[ -n "$rec" ] || :`
+  #   → row `token REFUSED: MALFORMED — a token is a 4-field TAB record (issued/sid/uid/terms);
+  #     this line has  — not consumed` (the field count rendered EMPTY).
+  #
+  # RESIDUAL, DECLARED rather than hidden — the same shape as 16b's. This mutant dies on the
+  # DIAGNOSIS, not on the verdict: an empty file refuses either way, because the heredoc hands the
+  # loop one blank line and the NF guard then refuses on an empty count. What the case pins is that
+  # "there is no record" and "the record has the wrong shape" stay DIFFERENT sentences — a row
+  # reading `this line has ` invites the reader to go looking for a malformed line in a file that
+  # is empty.
+  local tok
+  tok="$(mint sid-empty)"
+  : > "$tok"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-empty \
+               cc_capacity_admit c15ah "s"' _ "$LIB" "$tok"
+  [ "$status" -ne 0 ] || { echo "an EMPTY file redeemed"; echo "$output"; false; }
+  [[ "$(idl_first 'select(.caller=="c15ah")|.token')" == *"UNREADABLE — no first line"* ]] \
+    || { echo "row: $(idl_first 'select(.caller=="c15ah")|.token')"; false; }
+  [[ "$(idl_first 'select(.caller=="c15ah")|.token')" != *"this line has "* ]] \
+    || { echo "an empty file is reported as a malformed LINE: $(idl_first 'select(.caller=="c15ah")|.token')"; false; }
+}
