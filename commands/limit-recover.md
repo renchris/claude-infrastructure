@@ -464,7 +464,23 @@ no orphan, no ambiguity about which pane is which*). Script: `scripts/limit-reco
    ran Fable/xhigh while its argv said Opus/high) · disposition — `RECOVERABLE` (a live pane holds
    it), `NO-PANE`, `TRANSPLANTED→acct` (already moved; nothing to do), `TEAMMATE` (lead-owned),
    `DUPLICATE` (more than one live process — resolve with `--duplicates` first, never recover over
-   two writers).
+   two writers), **`HUSK`** (§ 10 W10, 2026-09-20 — a LIVE pane on this store whose session has
+   already MOVED: the process is alive, the composer is empty, the limit error is still on its
+   screen, and the session is being worked on under another account. Neither this plan nor
+   `LIMIT_DETECT_100P` modelled it, because both state models are keyed on the SESSION and a
+   transplant makes one session into two objects with OPPOSITE dispositions. `bin/cc-husk-sweep`
+   models the OTHER husk — a bare shell where a session used to be; this one is the opposite shape,
+   the process is real and what is stale is its CLAIM on the session. Measured 2026-09-19: panes
+   110, 126 and 150 were all in that state and `--locate` listed none of them while `--duplicates`
+   found all three. The predicate is a three-part conjunction — a live registry row on THIS store's
+   account, a transplant LOCK naming another store whose successor copy is on disk, and NO recovery
+   in flight — and the third conjunct is what stops an in-progress recovery reading as a husk, since
+   the lock is never deleted and the source row stays live until the typed `/exit` lands. Kill
+   switch `LR_HUSK_RETIRE=off` returns the census to its pre-W10 output byte for byte).
+
+   🚨 `HUSK` outranks `TRANSPLANTED→acct` for the SOURCE row, and the discriminator is whether the
+   source pane is still alive: a live source row is a `HUSK` (something is standing and needs
+   retiring), no source row is `TRANSPLANTED→` (the move is complete; nothing to act on).
 2. **`fleet --recover`** — sequenced, one session at a time, each behind the NON-charging capacity
    probe (`cc_capacity_probe`: same terms as the admit gate, spends none of its 3-refusal budget — a
    pane is never `/exit`ed unless its relaunch can be admitted; at the wait cap the session stays
@@ -500,6 +516,16 @@ no orphan, no ambiguity about which pane is which*). Script: `scripts/limit-reco
    (it acquits only the copy whose own claude pid is the successor), and
    `self-close --transplanted-source --source-pane <stale> --source-session <sid> --successor <live
    pane>` retires it — the class admits a same-account tombstone iff its successor pid is alive.
+   **`--mark` refuses a session that has already been TRANSPLANTED** (§ 10 W9a, 2026-09-20): its
+   existence check used to be keyed on whichever store the transcript search stopped in, so a
+   session moved to another account kept its `handed_off_to` tombstone in the target root and the
+   check never saw it. The cost was worse than the duplicate itself — `hf_transplant_evidence`
+   refuses outright on finding two tombstones, so the stale pane the mark existed to retire became
+   UNRETIRABLE. The check now scans every `lr_config_dirs` root with a resolved-path dedupe, because
+   `~/.claude-next/projects` is a symlink onto `~/.claude/projects` and counting PATHS reads one
+   physical tombstone as two. `--duplicates` also prints each sid ONCE (it iterated registry files,
+   so the very population it exists to report — a session with two rows — printed its whole block
+   twice).
 
 Iron rules 1-7 bind unchanged: the fleet never lands a recovered session's work; every verdict is a disk
 read; a PARTIAL is reported as PARTIAL. The reset poller is the daemon half of the same design:
