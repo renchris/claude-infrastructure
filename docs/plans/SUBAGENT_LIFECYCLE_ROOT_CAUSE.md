@@ -1,5 +1,5 @@
 ---
-status: open
+status: complete
 ---
 
 # Spawned agents that do not close — implementation plan (one explicit fix per identified root cause)
@@ -68,7 +68,7 @@ pinned pre-fix sha before the fix is written · "never `it2 session close`, `kit
 
 ---
 
-## W1 — closer and completion-assert predicates (RC-5a, RC-5c, RC-3, RC-7)
+## W1 — closer and completion-assert predicates (RC-5a, RC-5c, RC-3, RC-7) — DONE 3cdaa2552
 
 **RC-5a · tool-in-flight predicate.** `hooks/teammate-auto-shutdown.sh:523-560` `_tool_in_flight()`
 reads `tail -n 1` and requires `.type=="assistant"`; the runtime writes an `attachment` record in
@@ -108,7 +108,7 @@ retired `kill -TERM $PPID` story stays as history with the corrected cause.
 `scripts/test-hermeticity-lint.sh` clean on the changed tests. **DoD:** both RED controls recorded
 red at the pinned pre-fix sha in the commit body.
 
-## W2 — `it2-kitty` composer guard and identity pin (RC-4, RC-6)
+## W2 — `it2-kitty` composer guard and identity pin (RC-4, RC-6) — DONE c9e70fcca
 
 **RC-4 · narrow-pane `UNKNOWN`.** `bin/it2-kitty:891-931` (`is_rule` at `:891-905` with
 `thresh = max(20, cols//2)`; `AGENT-NO-BOX` at `:925-931` blocked by `not any("❯")`). Fixture =
@@ -134,7 +134,7 @@ to that output → gone; stub it to a two-window payload → refused as today.
 **DoD:** rc 67 count in `~/.claude/logs/teammate-lifecycle.log` for the narrow-pane cause reads 0
 over the first week live (F's per-day table is the baseline: 26 in 14 d).
 
-## W3 — the lead is told it has residents (RC-2, resolves RC-8)
+## W3 — the lead is told it has residents (RC-2, resolves RC-8) — DONE f710200f8
 
 `scripts/wrap-ledger.sh`: new field `RESIDENT_MINE` = members listed in
 `~/.claude*/teams/session-<this-sid>/config.json` (excluding the lead) whose
@@ -150,7 +150,7 @@ CHECK: nothing in W3 closes anything. **Control:** fake config + fake ps table w
 every member over the following two weeks (H's baseline: 26.4% of leads; 44.7% of members got
 nothing), re-run with H's script.
 
-## W4 — spawn advisory and the contract stated correctly (RC-1, RC-7, RC-11, RC-12)
+## W4 — spawn advisory and the contract stated correctly (RC-1, RC-7, RC-11, RC-12) — DONE 46ccdf23c
 
 - `hooks/agent-teams-enforce.sh`: advisory `additionalContext` (never a deny) when an `Agent` call
   sets `name:` on a research `subagent_type` (`deep-research`, `deep-research-sonnet`, `Explore`,
@@ -167,7 +167,7 @@ nothing), re-run with H's script.
 - `scripts/utc-stamp-lint.sh`: note the 2026-09-06 PDT→CDT change and the rule that a join between
   a local-stamped log and UTC transcripts must census the raw offset and require it unimodal.
 
-## W5 — probes, then the one measured decision (RC-10, RC-11 control, RC-5b)
+## W5 — probes, then the one measured decision (RC-10, RC-11 control, RC-5b) — DONE dd070aaa1
 
 **Probe P1 (RC-10, lead-exit cleanup budget).** Scratch project under `tests/fixtures/teammate-probe/`
 with its own `settings.local.json`; a lead spawns 4 named teammates, waits for all four idle
@@ -204,6 +204,17 @@ Falsifier for (b) if chosen: residency p90 (H: 2.2 h) must not rise over the fol
 | A5 | `completion-assert` blocks inside shared-cwd assignees = 0 over 2 weeks | the register §4 census script |
 | A6 | rc 67 narrow-pane cause = 0 over 1 week | `/usr/bin/grep -c 'rc=67' ~/.claude/logs/teammate-lifecycle.log` per day |
 | A7 | P1 and P2 recorded with captures | `docs/research/subagent-lifecycle-2026-09-19/P-probes.md` |
+
+**Read at close-out (2026-09-20), and the split matters.** A1, A2, A3 and A7 are satisfied by
+artifacts on trunk and were content-verified when this plan was closed. **A4, A5 and A6 are
+WINDOWED and cannot be read yet** — every fix landed 2026-09-19, so A6's one week opens 2026-09-26
+and A5's two weeks open 2026-10-03; A4's 45 days feed D1. They are not dropped: A5 and A6 are filed
+as backlog **`2aa99648bd80`** (`not-yet-true`, both commands on the row) and A4 rides D1
+(**`b1432e348362`**). A6's post-land anchor, captured at close-out: `rc=67` all-time in
+`~/.claude/logs/teammate-lifecycle.log` = **166**, unchanged from this plan's own pre-fix baseline
+of 166, last occurrence **2026-09-17 22:18:59** (pane 89, `rc-consumer-audit`) — zero since W2
+landed, with the log confirmed live (last write 2026-09-19 21:47). One day is an anchor, not a
+verdict.
 
 ## Decisions and why
 
@@ -315,3 +326,30 @@ Falsifier for (b) if chosen: residency p90 (H: 2.2 h) must not rise over the fol
     limit-recover transplant relaunch, W3's `PATH` lacked `/opt/homebrew/bin`, so a gate run returned
     **exit 127 on every suite with ZERO `not ok`** — a non-verdict that reads as a pass unless the
     `1..N` plan line is asserted.
+
+- 2026-09-20 — **CLOSED. Frontmatter corrected from `open` to `complete`; the plan was finished and
+  said otherwise.** Verified at close-out against `origin/main` (tree 0 behind trunk, repo not
+  shallow, dispatcher blob EQUAL to trunk's `bin/cc-dispatch`): all five waves are ancestors of
+  trunk — W1 `3cdaa2552` · W2 `c9e70fcca` · W3 `f710200f8` · W4 `46ccdf23c` · W5 `dd070aaa1` — and
+  each was re-verified **by content**, not by sha: `RESIDENT_MINE` + the `WRAP_RESIDENT` kill switch
+  in `scripts/wrap-ledger.sh` with `hooks/operator-readout.sh` rendering it and the `CLAUDE.global.md`
+  paragraph present; the RC-5c `process survived pane close` instrument and the RC-5a walk-back in
+  `hooks/teammate-auto-shutdown.sh`; RC-6's gone-verdict at `bin/it2-kitty:1310-1317` (`exit 68`)
+  mapped to `~ pane … already gone` at `teammate-auto-shutdown.sh:386`; W4's advisory-only
+  `LIFECYCLE_ADV` keyed on `subagent_type`; and `P-probes.md` on trunk. Why the frontmatter mattered
+  rather than being cosmetic: `find-plan.sh --list-open` skips only `complete|superseded`, so an
+  open-but-finished plan keeps minting dispatch rows — this close-out was itself one
+  (`a0f1ddcb13b5`), and its brief listed 9 of 10 sections PENDING over work that had all landed.
+  W1–W5 headings now carry their landed shas so `plan-phase-scan.sh` clause (b) agrees independently
+  of whether `find-plan.sh` resolves.
+  - 🚨 **A defect found in this plan's OWN residual, and fixed here: D1's falsifier was inverted.**
+    `b1432e348362` stored `test $(date +%s) -ge $(date … 2026-10-03 …)`. A `--falsifier` asserts
+    *this row is no longer needed* and its consumer **closes on exit 0**, so that date gate would
+    have **deleted D1 at the instant D1 became actionable** — precisely
+    `docs/lessons/arming-and-mootness-cannot-share-one-falsifier.md`, already on file in this repo.
+    `cc-premise`'s filing-day ANTI-COVERAGE screen does not catch it, because the probe correctly
+    exits 1 on filing day. Cleared with `cc-backlog falsify b1432e348362 --clear`; the arming date
+    survives in the row's `whyNotNow`, which is where an arming condition belongs.
+  - **The windowed acceptance rows were given a home before this plan was closed**, so closing it
+    deletes nothing: `2aa99648bd80` carries A5 and A6 with both commands and the post-land anchor,
+    and deliberately stores **no** falsifier for the same inversion reason.
