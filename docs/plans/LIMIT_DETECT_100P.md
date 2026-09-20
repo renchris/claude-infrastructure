@@ -788,12 +788,17 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
     the manifest already says its off-box verdict "is a claim about the image's package set, never
     about our tree". None of these name a file this diff touches.
   - **ONE SUITE IS NOT ADJUDICATED, and it is named rather than rounded up to green:**
-    `tests/cc-await-ping.bats` returned **4 failures on one run and 0 on the next, same tree, same
-    box**, with a trunk arm also reading 0 — it is FLAKY here, so neither arm is a verdict and
-    running it again would only buy another coin flip. It is NOT in the exclusion manifest, so
-    whoever next runs the partition should expect it to be a coin flip off-box too, and should
-    measure it over folds rather than convict a lander on one.
-    What can be said without it: there is no mechanism by which this diff
+    `tests/cc-await-ping.bats` is **4 red on the branch — tests 91-94, the same four on two
+    independent runs** — and its trunk arm has NOT been measured. An earlier draft of this entry
+    called the suite FLAKY on the strength of two runs that read 0. **Both zeroes were my own
+    instrument, not the suite**: each came from a shell whose cwd I had deleted underneath it (I
+    removed the A/B worktree while the job was still running), so the run never started and the
+    `grep '^not ok'` filter over its empty output returned nothing. **An empty filtered result is a
+    REFUSAL, not a green** — `a-gate-refusal-is-not-a-gate-result`, whose remedy is the one thing
+    that command lacked: assert the `1..N` plan line before believing a filtered verdict. The
+    re-measurement now includes it. Worth reading twice because the failure is silent and reads in
+    the direction you already expect: two "clean" runs, no error, and a wrong conclusion pushed.
+    What can be said independently of the number: there is no mechanism by which this diff
     reaches it. It was only ever in the candidate set because it mentions `cc-beats`, and this diff
     adds a READER of that store inside `bin/cc-limited` while changing neither the beat writer
     (`hooks/session-beat.sh`) nor the record format — and nothing in `bin/ scripts/ hooks/
