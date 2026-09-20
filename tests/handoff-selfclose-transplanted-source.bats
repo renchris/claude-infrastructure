@@ -702,3 +702,73 @@ mk_superseded() { # $1=live pid
   [ "$status" -eq 2 ]
   [[ "$output" == *"THIS SAME config dir"* ]] || { echo "$output"; false; }
 }
+
+# ══ W9b — pin_still_live proves liveness by ANCESTRY (LIMIT_RECOVER_100P § 10) ═══════════════════
+# Two UNIT cases, deliberately, against this file's own "never a sed-extracted unit" rule: that rule
+# is about the GATE's control flow, which is what the cases above exercise. pin_still_live is a pure
+# predicate over the process table, and the only way to pin BOTH of its directions is to own that
+# table — a live nested-pty successor cannot be conjured inside a bats run, and `grep -rn
+# 'pin_still_live\|tty_now' tests/` returned ZERO before this block, so neither direction was pinned
+# at all. The subject is extracted with its two dependencies and run against a stubbed `ps`.
+#
+# THE SHAPE BEING MODELLED is pane 186: the pane's tty is ttys042 and claude runs on expect's NESTED
+# pty ttys043, so the recorded pid is one hop below the tty that owns the pane.
+_w9b_harness() { # $1 = pane tty, $2 = pinned pid → sources the subject with a stubbed process table
+  local stub="$BATS_TEST_TMPDIR/bin"; mkdir -p "$stub"
+  # The table travels in a FILE, never in the stub's argv — a stub that carries its own fixture on
+  # the command line is one `ps` away from matching itself (docs/lessons/census-matches-itself.md),
+  # and a heredoc'd table cannot be broken by an apostrophe the way an inlined printf can
+  # (docs/lessons/fixture-stub-cannot-carry-an-apostrophe.md).
+  cat > "$BATS_TEST_TMPDIR/pstable" <<'TABLE'
+5001 5000 ttys043 /Users/x/.claude/node_modules/.bin/claude
+5000 4999 ttys042 expect
+4999 1 ttys042 /bin/zsh
+6001 6000 ttys099 /Users/x/.claude/node_modules/.bin/claude
+6000 1 ttys098 /bin/zsh
+TABLE
+  cat > "$stub/ps" <<'PS'
+#!/usr/bin/env bash
+# Answers only the three forms pin_still_live and pid_is_cc use: -o tty= / -o ppid= / -o comm= /
+# -o args=, each with -p <pid>. Anything else is a fixture gap and must be LOUD, never a silent "".
+field=""; pid=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) field="$2"; shift 2 ;;
+    -p) pid="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+row="$(awk -v p="$pid" '$1 == p { print; exit }' "$PSTABLE")"
+[ -n "$row" ] || exit 1
+set -- $row
+case "$field" in
+  tty=)  printf '%s\n' "$3" ;;
+  ppid=) printf '%s\n' "$2" ;;
+  comm=|args=) printf '%s\n' "$4" ;;
+  *) echo "ps stub: unhandled -o '$field'" >&2; exit 64 ;;
+esac
+PS
+  chmod +x "$stub/ps"
+  export PSTABLE="$BATS_TEST_TMPDIR/pstable"
+  PATH="$stub:$PATH"
+  # Extract the subject plus pid_is_cc, which is the leg that must stay strict.
+  sed -n '/^pin_still_live() {/,/^}/p;/^pid_is_cc() {/,/^}/p' "$HF" > "$BATS_TEST_TMPDIR/subject.sh"
+  # shellcheck disable=SC1091
+  . "$BATS_TEST_TMPDIR/subject.sh"
+  pin_still_live "deadbeef $2" "$1"
+}
+
+@test "pin_still_live: a successor on expect's NESTED pty is LIVE — its ANCESTOR owns the pane tty" {
+  # The pane-186 class. Under the pre-W9b equality test this is DEAD (ttys043 != ttys042) and the
+  # self-close of its transplanted source is refused over a successor that is alive and engaged.
+  run _w9b_harness /dev/ttys042 5001
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "pin_still_live: a pid with NO ancestor on the pane tty is still DEAD — the widening is bounded" {
+  # THE HALF THAT MATTERS. Ancestry is strictly weaker than equality on a gate that admits a CLOSE,
+  # so a widening with only a now-passes case cannot show what it still refuses. 6001 -> 6000 -> 1,
+  # never touching ttys042.
+  run _w9b_harness /dev/ttys042 6001
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+}

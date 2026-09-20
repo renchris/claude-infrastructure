@@ -3571,13 +3571,33 @@ successor_pin() { # $1=pane-uuid $2=pane-tty → echoes "<sid> <pid>" · rc 0 li
 # satisfy a gate that proved the OLD session engaged. `ps -o tty=` prints the SHORT form (ttys020)
 # while as_tty yields a device path (/dev/ttys020), so compare basenames. The tty leg is what a bare
 # `kill -0`/pid check cannot express: a pid the OS recycled onto another pane fails here.
+# ANCESTRY, NOT EQUALITY (W9b, LIMIT_RECOVER_100P § 10). The tty leg used to demand that the pinned
+# pid sit DIRECTLY on the pane's tty. A resumed successor does not: it runs claude under expect, on a
+# NESTED pty, so the pane's real tty belongs to an ANCESTOR of the recorded pid. Measured on pane 186
+# — pane tty ttys042, the claude process on ttys043 — which made a PINNED, ALIVE, ENGAGED successor
+# read as DEAD and refused the self-close that should have retired its source.
+#
+# This is the same question hf_remote_source_pin already asks, with the same 12-hop walk, and the two
+# disagreeing about one population is how sibling auditors diverge (memory:
+# sibling-auditors-must-share-the-state-model). One state model, both callers.
+#
+# 🚨 ANCESTRY IS STRICTLY WEAKER THAN EQUALITY, and this gate PROTECTS A CLOSE — so the widening is
+# bounded on every other axis and nothing else is relaxed: pid_is_cc stays the convicting leg, the
+# hop count stays 12, and a pid with no ancestor on the pane's tty is still DEAD. The still-DEAD
+# fixture in tests/handoff-selfclose-transplanted-source.bats is what keeps that half honest; a
+# widening with only a now-passes test cannot show what it still refuses.
 pin_still_live() { # $1="<sid> <pid>" $2=pane-tty → 0 live / 1 gone
-  local pid="${1##* }" ptty="${2:-}" tty_now
+  local pid="${1##* }" ptty="${2:-}" p t n=0
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   pid_is_cc "$pid" || return 1
   [ -n "$ptty" ] || return 0            # no pane tty to compare → pid-liveness is all we can pin
-  tty_now="$(ps -o tty= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
-  [ -n "$tty_now" ] && [ "$tty_now" = "$(basename "$ptty")" ]
+  p="$pid"
+  while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ] && [ "$n" -lt 12 ]; do
+    t="$(ps -o tty= -p "$p" 2>/dev/null | tr -d '[:space:]' || true)"
+    [ "${t##*/}" = "${ptty##*/}" ] && return 0
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d '[:space:]' || true)"; n=$((n + 1))
+  done
+  return 1
 }
 
 # Is this pid a live CC (node/claude) process? TWO oracles, either sufficient, because macOS `ps -o
