@@ -2191,6 +2191,7 @@ for i in 1 2 3 4 5 6 7 8; do sleep 1; printf 'ok %s s%s\n' \"\$i\" \"\$i\"; done
   # the OUTSIDE, because its whole purpose is to put the pre-fix timing back if the slicing ever
   # turns out to cost something nobody priced.
   eval "$(sed -n '/^stall_wait() {/,/^}/p' "$SUT")"
+  # shellcheck disable=SC2034  # read by the stall_wait body eval'd in above, which shellcheck cannot see
   STALL_TICK_S=0
   ( sleep 1 ) & local child=$!
   local t0 t1; t0="$(date +%s)"
