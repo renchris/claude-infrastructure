@@ -27,6 +27,18 @@
 setup() {
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HF="$REPO/scripts/handoff-fire.sh"
+
+  # This suite only READS handoff-fire's source text, but the ratchet lints setup() shape, not
+  # behaviour — and rightly: a suite that grows a fire later would inherit the live box silently.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # HERMETICITY (land ratchet): this suite drives fires, so it must not read live machine load,
+  # and the three seams that do NOT resolve under $HOME must resolve inside the test dir. An ABSENT
+  # path is the right default — these sensors fail open on one. Cases may still override per call.
+  export CC_ADMIT_GATE=off
+  export CC_FIRE_CAPACITY_GATE=off
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
   # The `max=` line of recycle_await_verdict, extracted from the function's own body so a sibling
   # assignment elsewhere in a 12k-line file cannot answer for it.
   BODY="$(awk '/^recycle_await_verdict\(\) \{/{p=1} p{print} p&&/^\}$/{exit}' "$HF")"
