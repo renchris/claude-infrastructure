@@ -33,6 +33,10 @@ usage: lr-predicate.sh <subcommand>
   classify-tail <path>
         The last LR_TAIL_BYTES (default 131072) of a transcript, classified on its LAST assistant
         record. 6 of 77 capped sessions span two cap classes; the first record is not the answer.
+  is-teammate-head <path>
+        The first LR_HEAD_BYTES (default 8192) of a transcript -> {"teammate":true|false}. The one
+        copy of the test that five sites had each grown as `grep '"agentName"'`. A teammate is
+        ended by its lead and never resumed directly, so every recovery path has to ask this.
 EOF
 }
 
@@ -58,6 +62,8 @@ elif mode == "classify-record":
     out = P.classify_record(rec)
 elif mode == "classify-tail":
     out = P.classify_tail(sys.stdin.buffer.read())
+elif mode == "is-teammate-head":
+    out = {"teammate": P.is_teammate_head(sys.stdin.buffer.read())}
 else:
     sys.stderr.write("lr-predicate: unknown subcommand %r\n" % mode)
     sys.exit(2)
@@ -87,6 +93,15 @@ _lrp_main() {
       [ "$#" -ge 2 ] || { _lrp_usage; return 2; }
       [ -f "$2" ] || { printf 'lr-predicate: no such transcript: %s\n' "$2" >&2; return 4; }
       tail -c "${LR_TAIL_BYTES:-131072}" "$2" | _lrp_run classify-tail
+      ;;
+    is-teammate-head)
+      [ "$#" -ge 2 ] || { _lrp_usage; return 2; }
+      [ -f "$2" ] || { printf 'lr-predicate: no such transcript: %s\n' "$2" >&2; return 4; }
+      # EXIT 0 EVEN FOR false, exactly as the other verbs do. A grep-shaped `if ...; then` would
+      # read nicer at the five call sites, but it collapses "this is not a teammate" into "the
+      # predicate could not run" — the one distinction this file exists to keep, and the reason a
+      # broken install must never read as a fleet of ordinary sessions. Callers read .teammate.
+      head -c "${LR_HEAD_BYTES:-8192}" "$2" | _lrp_run is-teammate-head
       ;;
     -h|--help|help) _lrp_usage; return 0 ;;
     *) _lrp_usage; return 2 ;;
