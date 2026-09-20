@@ -683,3 +683,112 @@ mk_btel_tok() { # $1=sid $2=used_pct $3=input_tokens — the fill and the occupa
   [ "$status" -eq 0 ]; fired "$output"
   tail -1 "$CC_IDL" | jq -e 'select(.reason=="past-boundary") | .axis=="size" and .dirty=="not-mine"' >/dev/null
 }
+
+# ── S6b IN-FLIGHT WAVE HOLD — the second thing the git ledger provably cannot see ─────────────────
+# A Dynamic Workflow's agents are IN-PROCESS children. `handoff-fire.sh --recycle` replaces the
+# process and kills every one of them mid-tool, leaving commits but no report and no return value.
+# That is not hypothetical: LIMIT_RECOVER_100P's W2 implementer died exactly this way at its lead's
+# recycle and its wave report had to be reconstructed from six commit bodies by the next session.
+#
+# The FREE-WIN arm is the one that must yield, because its whole claim — "Nothing is in hand, so a
+# successor loses nothing" — is computed from the git ledger, and a lead mid-wave is clean, landed
+# and DoD-complete BY CONSTRUCTION (it landed its last merge and is now waiting). So the advisory
+# fires hardest at the moment acting on it costs most. Measured 2026-09-20 on the lead of this very
+# plan: `⟳ FREE WIN … Nothing is in hand` at 42% fill with THREE live waves.
+#
+# THE FIXTURE HAS TO CARRY THE REAL DIRECTORY SHAPE. Run dirs live at
+# <projects>/<slug>/<sid>/subagents/workflows/<runId>/, i.e. under the transcript path WITHOUT its
+# .jsonl extension — a sibling of the transcript, not a child of its parent. The first version of
+# this detector used `${tp%/*}` (the transcript's PARENT, which holds EVERY session's tree) and
+# counted 0 against three live runs. A fixture that put the runs anywhere else could not tell the
+# two apart: docs/lessons/fixture-shape-hides-address-bugs.md.
+mk_wave() { # $1=transcript path  $2=runId  $3=started  $4=result  [$5=agent file age in seconds]
+  local run="${1%.jsonl}/subagents/workflows/$2" i age="${5:-0}"
+  mkdir -p "$run"
+  : > "$run/journal.jsonl"
+  for ((i=0; i<$3; i++)); do printf '{"type":"started","agentId":"a%d"}\n' "$i" >> "$run/journal.jsonl"; done
+  for ((i=0; i<$4; i++)); do printf '{"type":"result","agentId":"a%d"}\n'  "$i" >> "$run/journal.jsonl"; done
+  printf '{"type":"assistant"}\n' > "$run/agent-a0.jsonl"
+  # Age it by EPOCH SECONDS, not through a formatted stamp. `touch -t` parses its argument in LOCAL
+  # time while `date -u` formats in UTC, so the obvious spelling put the "stale" file five hours in
+  # the FUTURE on this box — a negative age, which read as fresher than fresh and made the stale
+  # case suppress the very advisory it exists to prove still fires. The fixture was wrong, not the
+  # subject: control the instrument before indicting the diff.
+  if [ "$age" -gt 0 ]; then
+    python3 -c 'import os,sys; t=int(sys.argv[2]); os.utime(sys.argv[1],(t,t))' \
+      "$run/agent-a0.jsonl" "$(( $(date +%s) - age ))"
+  fi
+  printf '%s' "$run"
+}
+
+@test "wave-hold: a live wave SUPPRESSES the free-win — a recycle would kill it" {
+  export CC_BOUNDARY_T_FREEWIN=35
+  local tx; tx="$(mk_btx 99999)"          # no live exchange — the S6 hold must not be what fires
+  mk_wave "$tx" wf_live 3 1
+  mk_btel wv1 43
+  run drive wv1 "$tx"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "the free-win fired over a live wave: $output"; false; }
+  grep -q 'freewin-inflight-wave:1' "$CC_IDL" || { cat "$CC_IDL"; false; }
+}
+
+@test "wave-hold: a SETTLED wave does not suppress it — started == result is nothing in flight" {
+  # The guard must not become permanent: every finished run leaves its journal on disk forever.
+  export CC_BOUNDARY_T_FREEWIN=35
+  local tx; tx="$(mk_btx 99999)"
+  mk_wave "$tx" wf_done 3 3
+  mk_btel wv2 43
+  run drive wv2 "$tx"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "FREE WIN" || { echo "$output"; false; }
+}
+
+@test "wave-hold: a STALE wave does not suppress it — an abandoned run must not hold the arm down" {
+  export CC_BOUNDARY_T_FREEWIN=35
+  local tx; tx="$(mk_btx 99999)"
+  mk_wave "$tx" wf_stale 3 1 7200        # last agent write 2h ago, warm window 30min
+  mk_btel wv3 43
+  run drive wv3 "$tx"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "FREE WIN" || { echo "$output"; false; }
+}
+
+@test "wave-hold: a run with ZERO result rows still counts — grep -c prints 0 AND exits 1" {
+  # THE DEFECT THIS PINS, measured: the counter read `grep -c … || printf '0'`, so on a zero count
+  # grep printed "0" and exited 1 and the fallback printed "0" TOO. The substitution became "0\n0",
+  # `[ 3 -gt "0 0" ]` ERRORED, and `2>/dev/null || continue` read that error as a clean false — the
+  # guard silently disabled itself for exactly the freshest kind of wave, one that has produced
+  # nothing yet. A predicate whose ERROR exit is indistinguishable from a clean false:
+  # docs/lessons/predicate-error-exit-is-indistinguishable-from-false.md.
+  export CC_BOUNDARY_T_FREEWIN=35
+  local tx; tx="$(mk_btx 99999)"
+  mk_wave "$tx" wf_zero 3 0
+  mk_btel wv4 43
+  run drive wv4 "$tx"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "a just-started wave did not suppress the free-win: $output"; false; }
+  grep -q 'freewin-inflight-wave:1' "$CC_IDL" || { cat "$CC_IDL"; false; }
+}
+
+@test "wave-hold: the FORCED tier fires anyway and names the waves to collect first" {
+  # The opposite treatment, and the split is the point: at a real wall a recycle happens regardless,
+  # so the advisory must fire and tell the model to harvest first. Suppressing here would trade a
+  # lost wave for a lost session.
+  export CC_BOUNDARY_T_FREEWIN=35
+  local tx; tx="$(mk_btx 99999)"
+  mk_wave "$tx" wf_live2 2 0
+  mk_btel wv5 80                           # ≥ 73 — the ordinary boundary tier
+  run drive wv5 "$tx"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "STILL RUNNING in this process" || { echo "$output"; false; }
+  echo "$output" | grep -q "Collect them FIRST" || { echo "$output"; false; }
+}
+
+@test "wave-hold: no workflows directory at all is 0 waves, not an error (guard — green both arms)" {
+  export CC_BOUNDARY_T_FREEWIN=35
+  local tx; tx="$(mk_btx 99999)"
+  mk_btel wv6 43
+  run drive wv6 "$tx"
+  [ "$status" -eq 0 ]; fired "$output"
+  echo "$output" | grep -q "FREE WIN" || { echo "$output"; false; }
+}
