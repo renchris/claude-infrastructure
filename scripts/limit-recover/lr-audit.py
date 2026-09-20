@@ -64,42 +64,35 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:  # pragma: no cover
-    ZoneInfo = None
+# THE PREDICATE IS NOT OURS ANY MORE (LIMIT_DETECT_100P W4 step 1). This file used to carry its own
+# `startswith` copy, and P9 measured it answering `other_api_error` — the class that means NEVER
+# PARKED — for the two caps that carry no `quotaLimits` at all. Resolved from realpath(__file__), so
+# a worktree's audit imports the worktree's module and the live symlink's imports the live one
+# (§ 11 #12); the module is this file's SIBLING, not a package on sys.path.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import lr_predicate as _LP  # noqa: E402  (path must be set first)
 
 TAIL_BYTES = 128 * 1024
-LIMIT_PREFIXES = (
-    ("session", "You've hit your session limit"),
-    ("weekly", "You've hit your weekly limit"),
-    ("monthly_spend", "You've hit your monthly spend limit"),
-)
-SERVER_529 = "API Error: Server is temporarily limiting requests"
-RESET_RE = re.compile(
-    r"resets (?:([A-Z][a-z]{2} \d{1,2}) at )?(\d{1,2}(?::\d{2})?(?:am|pm)) \(([^)]+)\)"
-)
 RUNID_RE = re.compile(r"wf_[a-z0-9]{8}-[a-z0-9]{2,4}")
-MONTHS = {
-    m: i + 1
-    for i, m in enumerate(
-        [
-            "Jan",
-            "Feb",
-            "Mar",
-            "Apr",
-            "May",
-            "Jun",
-            "Jul",
-            "Aug",
-            "Sep",
-            "Oct",
-            "Nov",
-            "Dec",
-        ]
-    )
+
+# lr-audit's OWN kind vocabulary — session | weekly | fable | monthly_spend — which stays exactly
+# as it is. This file is a PRODUCER: lr-reset-poller.sh copies this kind verbatim into
+# `parked/<sid>.json`, tests/lr-team-audit.bats pins `monthly_spend`, and the poller's own filter
+# used to name `fable` — a spelling nothing could emit, which is precisely the bug. So the module's
+# vocabulary is translated here rather than leaked: a model-scoped cap becomes the bare model name
+# in lower case (`model_scoped:Fable` -> `fable`), which needs no edit when the next one ships.
+#
+# EVERY NON-LIMIT FOLDS BACK to `server_529` or `other_api_error` (see _audit_kind). The module
+# distinguishes network / auth_cliff / server_error and this file's consumers do not:
+# tests/lr-audit-nonlimit.bats pins an ENOTFOUND death at `other_api_error`, and letting the finer
+# kinds out here would redden a suite that no own-scope gate can see, because it is in no diff
+# that causes it.
+_AUDIT_KIND = {
+    _LP.CAP_FIVE_HOUR: "session",
+    _LP.CAP_SEVEN_DAY: "weekly",
+    _LP.CAP_MONTHLY_SPEND: "monthly_spend",
 }
 
 GAP_VERDICTS = {
@@ -206,48 +199,57 @@ def tail_records(path, n=6):
     return out
 
 
-def parse_reset(text, event_ts_iso):
-    m = RESET_RE.search(text)
-    if not m or ZoneInfo is None:
+def _iso_from_epoch(epoch):
+    """The module answers a reset as an epoch int; this file's JSON field is an ISO-8601 Z string."""
+    if epoch is None:
         return None
-    date_part, time_part, tzname = m.groups()
-    try:
-        tz = ZoneInfo(tzname)
-        base = datetime.fromisoformat(event_ts_iso.replace("Z", "+00:00")).astimezone(
-            tz
-        )
-        tm = time_part.replace("am", " am").replace("pm", " pm")
-        hh_mm, ampm = tm.rsplit(" ", 1)
-        hh, mm = (hh_mm.split(":") + ["0"])[:2]
-        hour = int(hh) % 12 + (12 if ampm == "pm" else 0)
-        if date_part:
-            mon, day = date_part.split()
-            cand = base.replace(
-                month=MONTHS[mon],
-                day=int(day),
-                hour=hour,
-                minute=int(mm),
-                second=0,
-                microsecond=0,
-            )
-            if cand < base:
-                cand = cand.replace(year=cand.year + 1)
-        else:
-            cand = base.replace(hour=hour, minute=int(mm), second=0, microsecond=0)
-            if cand <= base:
-                cand += timedelta(days=1)
-        return cand.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-    except (ValueError, KeyError, OSError):
-        return None
+    return (
+        datetime.fromtimestamp(epoch, timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
-def classify_limit_text(text):
-    if text.startswith(SERVER_529):
-        return "server_529"
-    for kind, prefix in LIMIT_PREFIXES:
-        if text.startswith(prefix):
-            return kind
-    return "other_api_error"
+def _audit_kind(v):
+    """One lr_predicate verdict -> lr-audit's kind string.
+
+    THE TWO NULLS ARE NOT THE SAME (the module's own docstring). `kind is None` means the record is
+    not an api-error record at all; `kind == "other"` means it is one whose class the module does
+    not recognise. Both read `other_api_error` here because that is what this file's callers already
+    filter on, but a LIMIT never does — including a limit whose cap could not be resolved, which
+    becomes the honest `limit` rather than being hidden in the non-limit bucket.
+    """
+    if not v["limit"]:
+        return "server_529" if v["kind"] == "server_529" else "other_api_error"
+    cap = v["cap"]
+    if cap is None:
+        # A limit whose cap no tier could resolve. It is still a LIMIT and must still be listed;
+        # hiding it in the non-limit bucket is the `other_api_error` fold this wave removes.
+        return "limit"
+    if cap.startswith(_LP.MODEL_SCOPED_PREFIX):
+        return cap[len(_LP.MODEL_SCOPED_PREFIX):].lower()
+    return _AUDIT_KIND.get(cap, cap)
+
+
+def classify_limit_record(obj):
+    """One transcript record -> (kind, resets_at_utc). The full three-tier read.
+
+    `quotaLimits.resetsAt` FIRST: it is an epoch, needs no timezone reasoning and cannot disagree
+    with itself. The prose parse this function replaced was the only source here, and it was
+    therefore the only source for the 17% of events that carry no `quotaLimits`.
+    """
+    v = _LP.classify_record(obj)
+    return _audit_kind(v), _iso_from_epoch(v["resets_at"])
+
+
+def classify_limit_text(text, error=None, status=None):
+    """Text-only entry, for a caller holding a reconstructed record rather than the record.
+
+    Pass the envelope back in whenever you have it: without it MEMBERSHIP is decided by the text,
+    which is the read the envelope gate exists to forbid (the limit-recover skill description quotes
+    both cap spellings into every session's skill_listing).
+    """
+    return _audit_kind(_LP.classify_text(text, error=error, api_error_status=status))
 
 
 def scan_agent_jsonl(path):
@@ -353,7 +355,10 @@ def slot_verdict(st, has_journal_result, result_obj):
             return "VACUOUS_SUSPECT", evid
         return "COMPLETE", evid
     if st.get("api_error"):
-        kind = classify_limit_text(st["api_error"].get("text", ""))
+        _ae = st["api_error"]
+        kind = classify_limit_text(
+            _ae.get("text", ""), error=_ae.get("error"), status=_ae.get("status")
+        )
         evid.append(f"api_error[{kind}]: {st['api_error'].get('text', '')[:140]}")
         return "NULL", evid
     if st["interrupted"]:
@@ -665,34 +670,28 @@ def scan_lead_transcript(path):
                     # DISCUSSING an error in prose (this repo does constantly) is
                     # not a synthetic api-error record and cannot match.
                     if obj.get("isApiErrorMessage"):
+                        text = text_of(msg)
+                        kind, resets = classify_limit_record(obj)
                         out["last_api_error"] = {
                             "error": obj.get("error"),
                             "status": obj.get("apiErrorStatus"),
-                            "text": text_of(msg)[:300],
-                            "kind": classify_limit_text(text_of(msg)),
+                            "text": text[:300],
+                            "kind": kind,
                             "timestamp": obj.get("timestamp"),
                             "uuid": obj.get("uuid"),
                             "line": out["line_count"],
                         }
-                    if (
-                        obj.get("isApiErrorMessage")
-                        and obj.get("error") == "rate_limit"
-                    ):
-                        text = text_of(msg)
-                        kind = classify_limit_text(text)
                         if kind not in ("server_529", "other_api_error"):
                             out["limit_events"].append(
                                 {
                                     "kind": kind,
                                     "text": text[:200],
                                     "timestamp": obj.get("timestamp"),
-                                    "resets_at_utc": parse_reset(
-                                        text, obj.get("timestamp") or ""
-                                    ),
+                                    "resets_at_utc": resets,
                                     "interrupted_model": last_model,
                                 }
                             )
-                        continue
+                            continue
                     mdl = msg.get("model")
                     if mdl and mdl != "<synthetic>":
                         last_model = mdl
@@ -1227,17 +1226,16 @@ def scan_teammate_jsonl(path):
                         st["api_errors"] += 1
                         st["last_api_error_text"] = text[:200]
                         st["last_kind"] = "api_error"
-                        if obj.get("error") == "rate_limit":
-                            kind = classify_limit_text(text)
-                            if kind not in ("server_529", "other_api_error"):
-                                st["limit_events"].append(
-                                    {
-                                        "kind": kind,
-                                        "timestamp": ts,
-                                        "resets_at_utc": parse_reset(text, ts or ""),
-                                        "text": text[:160],
-                                    }
-                                )
+                        kind, resets = classify_limit_record(obj)
+                        if kind not in ("server_529", "other_api_error"):
+                            st["limit_events"].append(
+                                {
+                                    "kind": kind,
+                                    "timestamp": ts,
+                                    "resets_at_utc": resets,
+                                    "text": text[:160],
+                                }
+                            )
                         continue
                     mdl = msg.get("model")
                     if mdl and mdl != "<synthetic>":

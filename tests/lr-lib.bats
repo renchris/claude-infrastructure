@@ -403,3 +403,83 @@ SH
   LR_HUSK_RETIRE=off run lr_husk_state "$SID" "$CFG"
   [ "$status" -eq 1 ]
 }
+
+# ── W4 step 3 (LIMIT_DETECT_100P): lr_last_api_error's kind comes from the SSOT ─────────────────
+# The verbatim 2.1.260 Fable record — quotaLimits ABSENT, errorDetails present. Receipt:
+# ~/.claude-quaternary/projects/-Users-chrisren-Development-hammerspoon-config/2d71c6d8-….jsonl:1252
+# (the same record tests/lr-predicate.bats pins as fable_record).
+f1_tail() { # -> a transcript whose LAST assistant record is a Fable cap
+  local f="$BATS_TEST_TMPDIR/f1.jsonl"
+  printf '%s\n' '{"type":"user","timestamp":"2026-09-12T15:20:00.000Z","message":{"role":"user","content":"go"}}' > "$f"
+  printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","apiErrorStatus":429,"uuid":"2d71c6d8-0000-4000-8000-000000000001","timestamp":"2026-09-12T15:26:49.089Z","entrypoint":"cli","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"You'"'"'ve reached your Fable limit. Run /usage-credits to continue or switch models with /model."}]}}' >> "$f"
+  printf '%s' "$f"
+}
+
+# THE SHAPE IS THE CONTRACT, not a tidiness rule. hooks/net-recover-arm.sh:195 strips everything up
+# to the LAST tab and feeds what is left to a string compare against a turn timestamp
+# (`_turn_ended_after`, :164/:175). A fifth column was measured turning that read into the literal
+# entrypoint value, after which the asyncRewake never fires (judge Da-latency FATAL 2). So this row
+# asserts the field COUNT and, separately, that the same suffix-strip that hook performs still
+# yields the timestamp — the assertion the hook actually depends on.
+@test "lr_last_api_error prints EXACTLY 4 tab fields, with the timestamp LAST" {
+  local f out
+  f="$(f1_tail)"
+  out="$(lr_last_api_error "$f")"
+  [ "$(printf '%s' "$out" | awk -F'\t' '{print NF}')" = 4 ]
+  [ "${out##*$'\t'}" = "2026-09-12T15:26:49.089Z" ]
+  [ "$(printf '%s' "$out" | cut -f1)" = "2d71c6d8-0000-4000-8000-000000000001" ]
+  [ "$(printf '%s' "$out" | cut -f2)" = "rate_limit" ]
+}
+
+# RED before W4: the kind was `"limit" if "You've hit your" in txt else "other"`, which is blind to
+# every `reached your` cap. hooks/recover-inject.sh:98 branches on this exact field, so a Fable
+# death was announced to the operator as "NOT a quota message".
+@test "F1: a Fable cap reads \`limit\` in field 3 — the model-scoped caps are no longer invisible" {
+  local f
+  f="$(f1_tail)"
+  [ "$(lr_last_api_error "$f" | cut -f3)" = limit ]
+}
+
+# THE DEGRADED ARM. An import error must degrade to the PRE-W4 text answer and never to rc 1: rc 1
+# from this function means "the last assistant record is not an api error", so an unreachable
+# module would report a CAPPED fleet as a healthy one — a fail-dangerous inversion, not a quiet
+# one. Forced here through the same LR_LIB_DIR lever tests/lr-lib.bats:117 already uses.
+#
+# NOT because the module is unconverged — it is not. Checked 2026-09-20: ~/.claude/scripts/
+# limit-recover/lr_predicate.py and lr-predicate.sh have been symlinked into the shared checkout
+# since 02:48 and the live shim answers. The reachable causes are a worktree binary whose sibling
+# is missing, a caller that exports LR_LIB_DIR somewhere else (three do export it), a future file
+# added beside these, and a half-installed layer.
+@test "module unreachable: the kind degrades to the pre-W4 answer, and NEVER to rc 1" {
+  local f out
+  f="$(f1_tail)"
+  LR_LIB_DIR="$BATS_TEST_TMPDIR/nowhere" run lr_last_api_error "$f"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | awk -F'\t' '{print NF}')" = 4 ]
+  [ "$(printf '%s' "$output" | cut -f3)" = other ]
+}
+
+# ── RED-PROOF (W4 step 3 rows) ──────────────────────────────────────────────────────────────────
+# Against pristine trunk e03e36eec with the UNMIGRATED lr-lib.sh, `bats -f "EXACTLY 4 tab
+# fields|F1: a Fable cap reads|module unreachable"`:
+#
+#   1..3
+#   ok 1 lr_last_api_error prints EXACTLY 4 tab fields, with the timestamp LAST
+#   not ok 2 F1: a Fable cap reads `limit` in field 3 — the model-scoped caps are no longer invisible
+#   # (in test file tests/lr-lib.bats, line 440)
+#   #   `[ "$(lr_last_api_error "$f" | cut -f3)" = limit ]' failed
+#   ok 3 module unreachable: the kind degrades to the pre-W4 answer, and NEVER to rc 1
+#
+# ROWS 1 AND 3 ARE GREEN IN BOTH ARMS BY DESIGN, and that is the point of them, not a weakness.
+# Row 1 pins the SHAPE the migration must not change — a fifth column here makes
+# net-recover-arm.sh:195 read the entrypoint instead of the timestamp and the asyncRewake never
+# fires — so it can only ever be green before and must stay green after. Row 3 pins the degraded
+# path, which on pristine trunk has no module to lose. BOTH WERE MUTATION-CHECKED, and these are
+# the runs, not a prediction of them:
+#   mutant: append a 5th column (entrypoint) ->
+#     not ok 1 lr_last_api_error prints EXACTLY 4 tab fields, with the timestamp LAST
+#     #   `[ "$(printf '%s' "$out" | awk -F'\t' '{print NF}')" = 4 ]' failed
+#   mutant: the unreachable-module branch `sys.exit(1)` instead of degrading ->
+#     not ok 1 module unreachable: the kind degrades to the pre-W4 answer, and NEVER to rc 1
+#     #   `[ "$status" -eq 0 ]' failed
+# Row 2 is the only behavioural red, and it is the one the DoD names.

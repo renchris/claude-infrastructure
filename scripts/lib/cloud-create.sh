@@ -171,6 +171,11 @@ cc_cloud_classify() { # stdin = NORMALISED output → one token on stdout
     echo refused-harness; return
   fi
   if printf '%s' "$t" | grep -qiE 'Bundle upload failed|Repo is too large'; then echo refused-bundle; return; fi
+  # DOMAIN: a CLI's own STDOUT, never transcript JSONL. This predicate is deliberately NOT
+  # delegated to the SSOT at scripts/limit-recover/lr_predicate.py: that module classifies
+  # transcript RECORDS and gates on an envelope (type/isApiErrorMessage) that a terminal
+  # capture does not have. Different input domain, different question; P9 R1 records why.
+  # scripts/lr-predicate-lint.sh allows this site by name and refuses a NEW one elsewhere.
   if printf '%s' "$t" | grep -qiE 'limit|quota|rate.?limit|exceeded'; then echo refused-quota; return; fi
   # A bare `session_…` with no "Created cloud session" banner reaches here rather than `created`.
   # cloud-bundle-probe.sh's classify accepted `*"session_"*` as a create, which also matches a

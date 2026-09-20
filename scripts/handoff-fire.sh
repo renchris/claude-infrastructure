@@ -9704,6 +9704,11 @@ probe_account() { # $1=account → 0 pass; prints rejection class on fail
     *'"is_error":false'*|*'"stop_reason":"end_turn"'*) return 0 ;;
   esac
   verdict="$(printf '%s' "$out" | grep -oE '"(subtype|is_error|api_error_status|result)":("[^"]{0,80}"|[^,}]{0,40})' | tr '\n' ' ')"
+  # DOMAIN: a CLI's own STDOUT, never transcript JSONL. This predicate is deliberately NOT
+  # delegated to the SSOT at scripts/limit-recover/lr_predicate.py: that module classifies
+  # transcript RECORDS and gates on an envelope (type/isApiErrorMessage) that a terminal
+  # capture does not have. Different input domain, different question; P9 R1 records why.
+  # scripts/lr-predicate-lint.sh allows this site by name and refuses a NEW one elsewhere.
   case "$out" in
     *"usage limit"*)                    echo "rate-limited" ;;
     *"may not exist"*|*"have access"*)  echo "model-unavailable ($probe_model)" ;;

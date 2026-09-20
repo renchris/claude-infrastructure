@@ -139,7 +139,11 @@ for tid in o.get("tool_results", []):
 for extra in o.get("extra_prompts", []):
     prompt(extra, 40)
 if o.get("api_error", True):
-    api_error(30, o.get("api_error_kind", "server_error"))
+    # `api_error_text` is optional and defaults to the ENOTFOUND string every existing row relies
+    # on; W4 needs the same envelope carrying a CAP text, which is the whole point of the envelope
+    # being the gate rather than the text.
+    _kw = {"text": o["api_error_text"]} if o.get("api_error_text") else {}
+    api_error(30, o.get("api_error_kind", "server_error"), **_kw)
 if o.get("turn_end", True):
     turn_end(29)
 if o.get("turn_end_then_prompt"):
@@ -918,3 +922,63 @@ PY
     echo "a clean session grew a wait ledger"; false
   fi
 }
+
+# ════════════════════════════════════════════════════════════════════════════
+# W4 (LIMIT_DETECT_100P step 1) — lr-audit delegates its predicate to the SSOT
+# ════════════════════════════════════════════════════════════════════════════
+# RED before W4: classify_limit_text was a `startswith` over three hard-coded prefixes, so a
+# model-scoped cap fell through to `other_api_error` — and that string is a FILTER, not a label:
+# `kind not in ("server_529","other_api_error")` is what decides whether a death reaches
+# `limit_events` at all. A Fable-capped session was therefore invisible to the whole recovery
+# chain, which is what left five sessions idle for 2 h 37 m on 2026-09-19.
+
+@test "W4 F1: a Fable cap is LISTED as kind \`fable\` with NO reset — so it parks nowhere" {
+  build '{"subagent":"partial","api_error_kind":"rate_limit","api_error_text":"You\u0027ve reached your Fable limit. Run /usage-credits to continue or switch models with /model."}'
+  register_pid "$(dead_pid)"
+  run_audit
+  python3 - "$BATS_TEST_TMPDIR/audit.json" <<'PYA'
+import json, sys
+d = json.load(open(sys.argv[1]))
+# LISTED: the old fold hid it here entirely.
+assert d["limit_events"], "a Fable cap must reach limit_events; it is a limit"
+e = d["limit_events"][-1]
+assert e["kind"] == "fable", e          # lr-audit's own vocabulary, which the poller copies verbatim
+assert e["resets_at_utc"] is None, e    # no reset exists anywhere in the record: a timer cannot help
+assert d["last_api_error"]["kind"] == "fable", d["last_api_error"]
+PYA
+}
+
+# THE BOUND, and it is the row an own-scope gate cannot see. The SSOT distinguishes network /
+# auth_cliff / server_error; this file's consumers do not, and D1-a above pins an ENOTFOUND death
+# at `other_api_error`. Letting the finer kinds out through lr-audit would redden that row from a
+# diff that does not contain it.
+@test "W4 CONTROL: the SSOT's finer non-limit kinds do NOT leak into lr-audit's vocabulary" {
+  build '{"subagent":"partial"}'
+  register_pid "$(dead_pid)"
+  run_audit
+  python3 - "$BATS_TEST_TMPDIR/audit.json" <<'PYB'
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["last_api_error"]["kind"] == "other_api_error", d["last_api_error"]
+assert d["limit_events"] == [], d["limit_events"]
+PYB
+}
+
+# ── RED-PROOF (W4 rows) ─────────────────────────────────────────────────────────────────────────
+# Run against pristine trunk e03e36eec, this suite's W4 rows copied in beside the UNMIGRATED
+# lr-audit.py, `bats -f "W4 F1|W4 CONTROL"`:
+#
+#   1..2
+#   not ok 1 W4 F1: a Fable cap is LISTED as kind `fable` with NO reset — so it parks nowhere
+#   # (in test file tests/lr-audit-nonlimit.bats, line 939)
+#   #   `python3 - "$BATS_TEST_TMPDIR/audit.json" <<'PYA'' failed
+#   # AssertionError: a Fable cap must reach limit_events; it is a limit
+#   ok 2 W4 CONTROL: the SSOT's finer non-limit kinds do NOT leak into lr-audit's vocabulary
+#
+# Row 2 is GREEN IN BOTH ARMS and is stated as such rather than claimed as a red-proof: it is an
+# EQUIVALENCE GUARD, and no pre/post arm can exercise it. What it guards against is a future edit
+# that lets the module's network / auth_cliff / server_error out through lr-audit's `kind` — which
+# would redden D1-a above, a row in no diff that could cause it. ITS POWER WAS MEASURED, not
+# assumed: the mutant `return v["kind"]` for non-limits kills this row —
+#   not ok 1 W4 CONTROL: the SSOT's finer non-limit kinds do NOT leak into lr-audit's vocabulary
+#   # AssertionError: {'error': 'server_error', ..., 'kind': 'network', ...}

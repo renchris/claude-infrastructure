@@ -119,6 +119,11 @@ fi
 
 LR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUDIT="$LR/lr-audit.py"
+# THE PREDICATE (LIMIT_DETECT_100P W4 step 2). Four copies of "is this a limit, and which cap" used
+# to live in this file; they disagreed with lr-audit and with each other, and the poller's copy was
+# the one blind to every model-scoped cap. One fork per CANDIDATE, never per transcript — the cheap
+# greps below stay exactly because this costs 0.09 s and the scan walks hundreds of files.
+LRPRED="$LR/lr-predicate.sh"
 STATE="$HOME/.reso/limit-recover"
 PARKED="$STATE/parked"; RESUMED="$STATE/resumed"; LOG="$STATE/poller.log"
 CLAIMS="$STATE/fire-claims"
@@ -659,6 +664,26 @@ for _rq in "$REQUESTS"/*.json; do
   log "REQUEST $_rq_sid — done rc=$_rq_rc (result $RESULTS/$_rq_sid.json)"
 done
 
+# ── the two predicate calls this loop makes, each ONE fork, both through the SSOT ───────────────
+# WHY A FUNCTION AND NOT AN INLINE `grep`. Both of these replace a raw `grep` whose exit 1 meant two
+# different things at once, and the poller read both as "no". The old `head -c 8000 | grep` for the
+# agentName key exits 1 for a session that is NOT a teammate and for a transcript that has been
+# rotated away — and the second reading pushed a live teammate into the lead's own respawn. The shim
+# REFUSES instead (rc 4, "the predicate could not run"), which is why the call sites branch on
+# UNREADABLE before they branch on the verdict. A refusal is never silently a "no".
+lrp_is_teammate() { # <transcript> → 0 teammate, 1 not a teammate, 2 UNREADABLE (caller must skip)
+  local out rc
+  out="$(bash "$LRPRED" is-teammate-head "$1" 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] || return 2
+  [ "$(printf '%s' "$out" | jq -r '.teammate')" = true ]
+}
+
+lrp_cap_of() { # <transcript> → the cap of the tail's LAST api-error record, empty when not a limit
+  local out
+  out="$(bash "$LRPRED" classify-tail "$1" 2>/dev/null)" || return 1
+  printf '%s' "$out" | jq -r 'if .limit then (.cap // "unknown") else "" end'
+}
+
 # ── 1. DETECT + LEDGER parked sessions ────────────────────────────────────────────────
 for cfg in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertiary "$HOME"/.claude-quaternary; do
   [[ -d "$cfg/projects" ]] || continue
@@ -715,7 +740,12 @@ for cfg in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertia
     # The site is safe TODAY only because the last stage is drained (`>/dev/null`, reads to EOF);
     # that spelling is what is load-bearing here, not any headroom.
     if printf '%s' "$tail_bytes" | grep -iE "$SPEND_RE" | grep '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true' >/dev/null; then
-      if head -c 8000 "$tx" 2>/dev/null | grep '"agentName"' >/dev/null; then
+      lrp_is_teammate "$tx"; _tm=$?
+      if [ "$_tm" -eq 2 ]; then
+        log "SKIP  $sid — teammate test UNREADABLE (predicate rc!=0); not resuming on a non-verdict"
+        continue
+      fi
+      if [ "$_tm" -eq 0 ]; then
         if [[ ! -f "$STATE/teammate-skip/$sid" ]]; then
           mkdir -p "$STATE/teammate-skip"; : > "$STATE/teammate-skip/$sid"
           log "SKIP  $sid — teammate session (lead-owned recovery)"
@@ -723,33 +753,39 @@ for cfg in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertia
         continue
       fi
       spend_cwd=$(cwd_of "$tx")
-      spend_aj=$(mktemp)
-      python3 "$AUDIT" --config-dir "$cfg" --session "$sid" --cwd "${spend_cwd:-$HOME}" \
-          --json "$spend_aj" --quiet >/dev/null 2>&1 || true
-      spend_ok=$(python3 -c "
-import json,sys
-try: es=json.load(open(sys.argv[1])).get('limit_events',[])
-except Exception: es=[]
-print('1' if any(e.get('kind')=='monthly_spend' for e in es) else '')
-" "$spend_aj" 2>/dev/null); rm -f "$spend_aj"
-      if [[ -n "$spend_ok" ]]; then
+      # AUTHORITATIVE, and one fork rather than two plus a whole session audit. lr-audit ruled here
+      # only because it owned the predicate; now that the predicate is its own module the shim
+      # answers the same question directly off the tail, and answers it about the LAST api-error
+      # record — which is the cap the session is actually sitting on.
+      if [[ "$(lrp_cap_of "$tx")" == "monthly_spend" ]]; then
         open_spend_packet "$sid" "$acct" "$spend_cwd"
         continue
       fi
-      log "SKIP  $sid ($acct) — spend envelope present but lr-audit found no monthly_spend event; falling through"
+      log "SKIP  $sid ($acct) — spend envelope present but the predicate found no monthly_spend cap; falling through"
     fi
     # cheap pre-filter: a genuine limit line near the tail (isApiErrorMessage confirmed by lr-audit).
     # The envelope conjunct is part of the PRE-filter, not just lr-audit's job (2026-07-25): the
     # limit-recover skill description quotes "You've hit your session/weekly limit" verbatim and
     # ships in every session's skill_listing, so the bare text matched universally and paid for an
     # lr-audit subprocess on EVERY session, EVERY tick. lr-audit still rules on the verdict below.
-    printf '%s' "$tail_bytes" | grep -E "You've hit your (session|weekly) limit" \
+    # STRUCTURAL, not textual (W4 step 2). `"error":"rate_limit"` is T1 — measured equivalent to
+    # apiErrorStatus 429 in both directions, 490/490 — and it is strictly BETTER than the prose
+    # grep it replaces in both directions at once: it sees the model-scoped and billing caps the
+    # `(session|weekly)` alternation was blind to, and it cannot match the limit-recover skill
+    # description, which quotes the TEXT into every session's skill_listing but carries no
+    # structured error field. The envelope conjunct stays: it is what keeps this a record test.
+    printf '%s' "$tail_bytes" | grep -E '"error"[[:space:]]*:[[:space:]]*"rate_limit"' \
       | grep '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true' >/dev/null || continue
     # teammate sessions (implicit-team assignees carry "agentName" on their early
     # records; leads never do) are recovered by their LEAD via the team-aware
     # lr-audit — a bare --resume here would detach them from team semantics
     # (inbox/agentName wiring) and duplicate the lead's respawn.
-    if head -c 8000 "$tx" 2>/dev/null | grep '"agentName"' >/dev/null; then
+    lrp_is_teammate "$tx"; _tm=$?
+    if [ "$_tm" -eq 2 ]; then
+      log "SKIP  $sid — teammate test UNREADABLE (predicate rc!=0); not resuming on a non-verdict"
+      continue
+    fi
+    if [ "$_tm" -eq 0 ]; then
       if [[ ! -f "$STATE/teammate-skip/$sid" ]]; then
         mkdir -p "$STATE/teammate-skip"; : > "$STATE/teammate-skip/$sid"
         log "SKIP  $sid — teammate session (lead-owned recovery)"
@@ -768,7 +804,12 @@ print('1' if any(e.get('kind')=='monthly_spend' for e in es) else '')
 import json,sys
 try: es=json.load(open(sys.argv[1])).get('limit_events',[])
 except Exception: es=[]
-es=[e for e in es if e.get('kind') in ('session','weekly','fable') and e.get('resets_at_utc')]
+# A KIND WITH A RESET, never an allowlist of kind names. The old tuple could not even be
+# satisfied by 'fable' — lr-audit never emitted that spelling — so it was a three-name list doing
+# the work of one question, and every cap it did not name was dropped in silence. A cap that
+# carries a reset is exactly the set a TIMER can recover; the others are handled above or by the
+# operator.
+es=[e for e in es if e.get('resets_at_utc')]
 if es: e=es[-1]; print(e['kind'], e['resets_at_utc'])
 " "$aj" 2>/dev/null); rm -f "$aj"
     [[ -n "${reset:-}" ]] || continue                        # no genuine reset-bearing limit

@@ -152,8 +152,19 @@ cap_stunned() { # <jsonl> → 0 if the transcript tail shows a cap/billing/class
   # /billing/classifier strings (a18 #4) precisely so this observer catches what the classifier cannot.
   local f="$1"
   [ -f "$f" ] || return 1
-  tail -n 80 "$f" 2>/dev/null | grep -qiE \
-    'monthly spend limit|spend limit|session limit|weekly limit|usage limit|limit ·|resets|cannot determine the safety|temporarily unavailable|billing'
+  tail -n 80 "$f" 2>/dev/null | grep -iE \
+    'monthly spend limit|spend limit|session limit|weekly limit|usage limit|limit ·|resets|cannot determine the safety|temporarily unavailable|billing' >/dev/null && return 0
+  # W4 step 4 (LIMIT_DETECT_100P): UNION with the predicate SSOT. The raw grep above STAYS -- it is
+  # deliberately wider than cc-classify's structured signal (it catches the classifier-outage stun,
+  # which is a tool error and carries no api-error envelope), and the SSOT cannot see that class at
+  # all. So neither subsumes the other and both are consulted. Runs only on the grep's misses; the
+  # case it adds is a model-scoped cap, which matches none of the strings above.
+  # Fails OPEN: no shim or a non-zero exit leaves the grep as the whole answer.
+  local sh="$SCRIPT_DIR/limit-recover/lr-predicate.sh" v
+  [ -r "$sh" ] || return 1
+  v="$(bash "$sh" classify-tail "$f" 2>/dev/null)" || return 1
+  case "$v" in *'"limit":true'*) return 0 ;; esac
+  return 1
 }
 
 fresh_wait_contract() { # <sid> <now> → 0 if sid owns a NOT-closed wait-contract with a future deadline

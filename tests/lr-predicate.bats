@@ -25,6 +25,13 @@ setup() {
   SH="$LR/lr-predicate.sh"
   PY="$LR/lr_predicate.py"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # Two seams that do NOT resolve under $HOME, so fixturing $HOME does not reach them: an absolute
+  # /tmp default and a BARE NAME the subject would execute off the operator's PATH. They arrived
+  # with W4's lint rows, which name bin/cc-classify. ABSENT paths are the right values — these
+  # sensors fail open on one — and the point is that no row here can read the operator's live
+  # pending approvals or run their deployed cc-sessions.
+  export CC_PERMPEND_DIR="$BATS_TEST_TMPDIR/permpend-absent"
+  export CC_CLASSIFY_SESSIONS_BIN="$BATS_TEST_TMPDIR/cc-sessions-absent"
 }
 
 # ── helpers ──────────────────────────────────────────────────────────────────────────────────────
@@ -532,3 +539,65 @@ EOF
 # records in an api-error envelope carrying two distinct texts — both URL variants, both now
 # asserted verbatim in the row, with file:line receipts in its body. F6 pins a measured wire
 # format, not a modelled one.
+
+# ── the GATE on a thirteenth copy (LIMIT_DETECT_100P W4 step 5) ─────────────────────────────────
+# A consolidation with no gate is a snapshot, not an invariant: nothing in the repo stopped the
+# seventeenth copy from being written next week. scripts/lr-predicate-lint.sh is that gate, and
+# these two rows are its two directions — a gate that only ever passes carries as little
+# information as one that only ever fails.
+
+@test "lint: the tree is CLEAN — every cap-text predicate is the SSOT or a named allowlist entry" {
+  run bash "$REPO/scripts/lr-predicate-lint.sh"
+  [ "$status" -eq 0 ] || { printf '%s\n' "$output"; false; }
+}
+
+# THE PLANT GOES IN A FILE WITH NO ALLOWANCE, which is the case that matters: a new predicate in a
+# new place. The second direction — a SECOND predicate inside an already-allowed file — is what the
+# per-file COUNT in the allowlist buys, and it is planted here too because a file-level allowlist
+# would pass it silently.
+@test "lint: REFUSES a planted 13th copy, both in a new file and beside an allowed one" {
+  local work="$BATS_TEST_TMPDIR/tree"
+  git -C "$REPO" rev-parse --show-toplevel >/dev/null 2>&1 || skip "not a git tree"
+  mkdir -p "$work"
+  git -C "$REPO" archive HEAD scripts bin hooks 2>/dev/null | tar -x -C "$work" || skip "archive failed"
+  git -C "$work" init -q 2>/dev/null && git -C "$work" add -A >/dev/null 2>&1
+  # the lint resolves its root from its own path, so it must run from inside the copied tree
+  cp "$REPO/scripts/lr-predicate-lint.sh" "$work/scripts/lr-predicate-lint.sh"
+  git -C "$work" add -A >/dev/null 2>&1
+  run bash "$work/scripts/lr-predicate-lint.sh"
+  [ "$status" -eq 0 ] || skip "copied tree is not clean to begin with; the planting arm needs a clean base"
+
+  printf '\n_p13() { printf %%s "$1" | grep -qE "You'"'"'ve hit your (session|weekly) limit"; }\n' >> "$work/hooks/net-recover-arm.sh"
+  git -C "$work" add -A >/dev/null 2>&1
+  run bash "$work/scripts/lr-predicate-lint.sh"
+  [ "$status" -eq 1 ]
+  printf '%s\n' "$output" | grep -q 'lr-predicate-lint: a NEW limit predicate'
+
+  git -C "$work" checkout -- hooks/net-recover-arm.sh 2>/dev/null
+  printf '\n_p2() { grep -qiE "session limit|weekly limit" "$1"; }\n' >> "$work/bin/cc-classify"
+  git -C "$work" add -A >/dev/null 2>&1
+  run bash "$work/scripts/lr-predicate-lint.sh"
+  [ "$status" -eq 1 ]
+}
+
+# ── RED-PROOF (W4 step 5, the lint rows) ────────────────────────────────────────────────────────
+# Against pristine trunk e03e36eec, where scripts/lr-predicate-lint.sh does not exist at all,
+# `bats -f "lint:"`:
+#
+#   1..2
+#   not ok 1 lint: the tree is CLEAN — every cap-text predicate is the SSOT or a named allowlist entry
+#   #   `[ "$status" -eq 0 ] || { printf '%s\n' "$output"; false; }' failed
+#   #   bash: .../scripts/lr-predicate-lint.sh: No such file or directory
+#   not ok 2 lint: REFUSES a planted 13th copy, both in a new file and beside an allowed one
+#   #   `cp "$REPO/scripts/lr-predicate-lint.sh" "$work/..."' failed
+#
+# THAT IS THE WEAK KIND OF RED — both rows fail because the subject is ABSENT, which is the same
+# reason every row of a new suite fails and carries no information about BEHAVIOUR (the argument
+# tests/fixtures/lr-predicate/red-proof.sh makes for W0). The load-bearing proof for row 2 is
+# therefore the PLANT it performs in-test against a copy of the CURRENT tree: it asserts the lint
+# exits 0 on that copy, then 1 with a predicate appended to a file with no allowance, then 1 again
+# with a SECOND predicate appended to an ALLOWED file — the case a file-level allowlist would pass
+# in silence. Measured directly on the worktree while the lint was written:
+#   clean tree            -> rc 0, "no cap-text predicate outside the SSOT and its allowlist"
+#   plant in hooks/       -> rc 1, "REFUSED  hooks/net-recover-arm.sh  1 cap-text predicate(s), 0 allowed"
+#   2nd in bin/cc-classify-> rc 1, "REFUSED  bin/cc-classify           2 cap-text predicate(s), 1 allowed"
