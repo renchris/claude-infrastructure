@@ -174,9 +174,12 @@ compile_in() { # regex lc_all
   for p in '❯1. Resume' '❯2. Resume full' '❯1. Yes, I trust' '❯2. Not now' 'Quick safety check'; do
     re="$(lr_wrap_re "$p")"
     for lc in C en_US.UTF-8 C.UTF-8; do
-      case "$(compile_in "$re" "$lc")" in
+      # Captured ONCE: re-running the probe to build the failure message would report a second
+      # verdict, not the one that failed.
+      v="$(compile_in "$re" "$lc")"
+      case "$v" in
         COMPILE-OK*) ;;
-        *) echo "LC_ALL=$lc, phrase <$p>: $(compile_in "$re" "$lc")"; false ;;
+        *) echo "LC_ALL=$lc, phrase <$p>: $v"; false ;;
       esac
     done
   done
@@ -190,10 +193,14 @@ compile_in() { # regex lc_all
   on2="$(lr_wrap_re '❯2. Dark mode')"
   on1="$(lr_wrap_re '❯1. Auto')"
   for w in 8 20 40 80; do
-    [ "$(match_in "$on2" "$FIX/real-select-$w.raw" C)" = MATCH ] \
-      || { echo "width $w under LC_ALL=C: $(match_in "$on2" "$FIX/real-select-$w.raw" C)"; false; }
-    [ "$(match_in "$on1" "$FIX/real-select-$w.raw" C)" = NOMATCH ] \
-      || { echo "width $w under LC_ALL=C: confirmed an option the selector is NOT on"; false; }
+    # Captured ONCE, for the same reason as the arm above: a verdict re-run to print it is a
+    # different measurement from the one that decided the assertion.
+    v2="$(match_in "$on2" "$FIX/real-select-$w.raw" C)"
+    v1="$(match_in "$on1" "$FIX/real-select-$w.raw" C)"
+    [ "$v2" = MATCH ] \
+      || { echo "width $w under LC_ALL=C: readback on the option it IS on returned $v2"; false; }
+    [ "$v1" = NOMATCH ] \
+      || { echo "width $w under LC_ALL=C: readback confirmed an option the selector is NOT on ($v1)"; false; }
   done
 }
 
