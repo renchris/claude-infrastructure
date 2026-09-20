@@ -242,7 +242,21 @@ STUB
   # So: one fixture set, both implementations, and the two must answer the same way. Every fixture
   # carries a far-future assistant turn, so "the scan found a baseline" is observable as rc 0 and
   # "it found none" as rc 1 — which is exactly the probe's submitted/none split.
+  # GUARDED, the shape tests/handoff-recycle-engagement.bats:381's resume_oracle() uses. A stale
+  # anchor makes `sed` print NOTHING and `eval ""` succeed, so every `run resume_engaged …` below
+  # then measures a command that does not exist.
+  #
+  # AN EQUIVALENCE GUARD ON TODAY'S ASSERTIONS, AND SAID SO RATHER THAN OVERSOLD. The finding this
+  # answers said an unguarded extraction would make these cases VACUOUS; measured here, with the
+  # guard removed and the anchor re-indented by one space, BOTH went `not ok` — rc 127 matches
+  # neither the `-eq 0` nor the `-eq 1` these cases expect. What the guard changes today is the
+  # MESSAGE: a named cause instead of a bare rc mismatch plus a bats BW01 "Command not found".
+  # What it guards against is one `-eq`→`-ne` edit away in the helper below — any assertion
+  # satisfied by a non-zero rc reads 127 as the oracle's own "not engaged" and passes over a
+  # function that was never extracted (memory predicate-refusal-is-not-a-negative).
   eval "$(sed -n '/^resume_engaged() {/,/^}/p' "$HF")"
+  command -v resume_engaged >/dev/null \
+    || { echo "resume_engaged did not extract from $HF — the anchor is stale, and no assertion below is measuring the oracle"; false; }
   local late='{"type":"assistant","timestamp":"2099-01-01T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"answering"}]}}'
   agree() { # $1 = label   $2 = the verdict BOTH must reach: submitted | none
     local want=1 verb
@@ -545,7 +559,21 @@ INNER
   # The failure mode that makes this a strict oracle rather than a filter: the prompt never
   # submitted, so there is nothing for any turn to be an answer TO. Falling back to the wall-clock
   # test here would re-open the hole on exactly the runs where it matters.
+  # GUARDED, the shape tests/handoff-recycle-engagement.bats:381's resume_oracle() uses. A stale
+  # anchor makes `sed` print NOTHING and `eval ""` succeed, so every `run resume_engaged …` below
+  # then measures a command that does not exist.
+  #
+  # AN EQUIVALENCE GUARD ON TODAY'S ASSERTIONS, AND SAID SO RATHER THAN OVERSOLD. The finding this
+  # answers said an unguarded extraction would make these cases VACUOUS; measured here, with the
+  # guard removed and the anchor re-indented by one space, BOTH went `not ok` — rc 127 matches
+  # neither the `-eq 0` nor the `-eq 1` these cases expect. What the guard changes today is the
+  # MESSAGE: a named cause instead of a bare rc mismatch plus a bats BW01 "Command not found".
+  # What it guards against is one `-eq`→`-ne` edit away in the helper below — any assertion
+  # satisfied by a non-zero rc reads 127 as the oracle's own "not engaged" and passes over a
+  # function that was never extracted (memory predicate-refusal-is-not-a-negative).
   eval "$(sed -n '/^resume_engaged() {/,/^}/p' "$HF")"
+  command -v resume_engaged >/dev/null \
+    || { echo "resume_engaged did not extract from $HF — the anchor is stale, and no assertion below is measuring the oracle"; false; }
   local slug="-Users-x-wt" s="resumed-sess" c="$BATS_TEST_TMPDIR/tgt"
   mkdir -p "$c/projects/$slug"
   printf '%s\n' \
