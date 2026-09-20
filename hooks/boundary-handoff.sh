@@ -585,6 +585,67 @@ if [ "$freewin" = 1 ] && [ -n "$conv_age" ] && [ "$conv_age" -lt "$CONV_S" ] 2>/
   abstain "freewin-conversation-hold:${conv_age}s<${CONV_S}s"
 fi
 
+# ── S6b IN-FLIGHT WAVE HOLD — the second thing the ledger provably cannot see ────────────────────
+# A Dynamic Workflow's agents are IN-PROCESS children of this session. They do not survive a recycle:
+# `handoff-fire.sh --recycle` replaces the process, and every running agent dies with it, mid-tool,
+# leaving its commits (if it made any) and NOTHING ELSE — no report, no return value, no journal
+# result row. That is not hypothetical here. LIMIT_RECOVER_100P's W2 implementer (`wf_3e1667c1-a38`)
+# died exactly this way at its lead's recycle; the wave's report had to be RECONSTRUCTED from its six
+# commit bodies by the next session, and its `reports/W2.md` still opens by saying so.
+#
+# WHY THE FREE-WIN ARM IS THE ONE THAT MUST YIELD. Its entire claim is "Nothing is in hand, so a
+# successor loses nothing" — and it computes that from the GIT ledger: clean tree, landed, no DoD
+# remainder. A lead mid-wave has all three by construction (it landed its last merge and is now
+# waiting), so the ledger reads ✅ at exactly the moment the most expensive possible thing is in
+# flight. The advisory is therefore not merely mistimed, it is inverted: it fires hardest when acting
+# on it costs most. Measured 2026-09-20 on this session: `⟳ FREE WIN … Nothing is in hand` at 42%
+# fill with THREE live waves — a 9-hour adversarial verifier and two hardening waves.
+#
+# The forced tiers (size / tokens / forecast / ≥T fill) do NOT yield: there the wall is real and a
+# recycle happens anyway, so the right treatment is to WARN — collect the waves first — which the
+# appended clause below does. Same split as S6, one axis over.
+#
+# EVIDENCE, and it is deliberately file-based. Workflow agents share the session's pid, so there is no
+# process to count. A run is LIVE when its journal has more `started` than `result` rows AND some
+# agent transcript under it was written within CC_BH_WAVE_WARM_S. The freshness leg is what keeps an
+# abandoned run from holding the arm down forever.
+CC_BH_WAVE_WARM_S="${CC_BH_WAVE_WARM_S:-1800}"
+bh_live_waves() { # → count of in-flight workflow runs for THIS session (0 when unknowable)
+  # The run dirs live BESIDE the transcript, in a directory named after it WITHOUT the extension:
+  # <projects>/<slug>/<sid>.jsonl  ->  <projects>/<slug>/<sid>/subagents/workflows/<runId>/.
+  # `${tp%/*}` (the transcript's PARENT) is the slug dir and holds every session's tree, so it
+  # counts nothing and reads as a clean "no waves" — measured 0 against three live runs before this
+  # line was corrected. A detector's own path is the first thing to falsify.
+  local _wdir="${tp%.jsonl}/subagents/workflows" _n=0 _j _st _rs _fresh _now
+  [ -d "$_wdir" ] || { printf '0'; return 0; }
+  _now="$(date +%s)"
+  for _j in "$_wdir"/*/journal.jsonl; do
+    [ -f "$_j" ] || continue
+    # `grep -c` PRINTS its count and EXITS 1 when that count is zero, so `grep -c … || printf '0'`
+    # emits BOTH — the substitution becomes "0\n0", `[ 1 -gt "0 0" ]` ERRORS, and `2>/dev/null ||
+    # continue` reads that error as a clean false. Measured: the guard counted 0 live waves against
+    # three, i.e. it silently disabled itself in the one direction nobody checks.
+    _st="$(grep -c '"type":"started"' "$_j" 2>/dev/null | tr -d ' ' || true)"
+    _rs="$(grep -c '"type":"result"'  "$_j" 2>/dev/null | tr -d ' ' || true)"
+    case "$_st" in ''|*[!0-9]*) _st=0 ;; esac
+    case "$_rs" in ''|*[!0-9]*) _rs=0 ;; esac
+    [ "$_st" -gt "$_rs" ] || continue
+    # freshest agent transcript in this run, in seconds of age
+    _fresh="$(find "${_j%/*}" -name 'agent-*.jsonl' -type f -print0 2>/dev/null \
+              | xargs -0 stat -f '%m' 2>/dev/null | sort -rn | head -1)"
+    [ -n "$_fresh" ] || continue
+    [ $(( _now - _fresh )) -le "$CC_BH_WAVE_WARM_S" ] 2>/dev/null || continue
+    _n=$(( _n + 1 ))
+  done
+  printf '%s' "$_n"
+}
+live_waves=0
+[ -n "${tp:-}" ] && live_waves="$(bh_live_waves 2>/dev/null || printf '0')"
+case "$live_waves" in *[!0-9]*) live_waves=0 ;; esac
+if [ "$freewin" = 1 ] && [ "$live_waves" -gt 0 ] 2>/dev/null; then
+  abstain "freewin-inflight-wave:${live_waves}"
+fi
+
 # ── FIRE — record the fill AND the size at fire-time (both re-arm baselines), log, then advise ──
 printf '%s %s' "$used" "$tx_mb" > "$latch" 2>/dev/null || true
 # Which axis actually fired? Size first where it is the reason: fill is what K02 proved blind, so a size
@@ -650,6 +711,10 @@ elif [ "$freewin" = 1 ]; then
   reason="⟳ FREE WIN — ${why} (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). Nothing is in hand, so a successor loses nothing and you stop carrying a rotting context: recycle now with \`handoff-fire.sh --recycle\`. (Advisory, not urgent: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
 else
   reason="⚑ Boundary reached — ${why} at a committed boundary (HEAD ${head:0:8}, gate-green: ${gate_state}${dirty_note}). Run the /handoff rails now to preserve state into a successor before auto-compaction. (Advisory: if you have a genuine reason to keep working, do so — this re-arms at +${REARM_DELTA}% fill.)"
+fi
+if [ "${live_waves:-0}" -gt 0 ] 2>/dev/null; then
+  reason="${reason}
+⚑ ${live_waves} Dynamic Workflow wave(s) are STILL RUNNING in this process and do NOT survive a recycle — their agents are in-process children and die mid-tool, leaving commits but no report and no return value (this is how LIMIT_RECOVER_100P's W2 lost its wave report). Collect them FIRST: wait for each task-notification, harvest the results, then recycle."
 fi
 if [ -n "$conv_age" ] && [ "$conv_age" -lt "$CONV_S" ] 2>/dev/null; then
   reason="${reason}
