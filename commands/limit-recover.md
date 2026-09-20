@@ -215,8 +215,13 @@ key five times into a live outage — 85 minutes, six attempts, nothing produced
 1. **Still limited?** Map this config dir → account (`~/.claude`+`~/.claude-next`→next,
    `-secondary`→next2, `-tertiary`→next3, `-quaternary`→next4) and check live headroom:
    `claude-accounts --json | jq '.rows[] | select(.acct=="<label>")'` (rows live under
-   `.rows` — a bare `.[]` iterates the top-level values and dies on the `cached` boolean;
-   resolve the binary from PATH, not `~/bin`). Treat a row carrying `error` or
+   `.rows` — a bare `.[]` iterates the top-level values and dies on the `cached` boolean).
+   🚨 **In a RECOVERED session the binary is NOT on PATH** (measured 2026-09-19: an
+   `lr-fire-resume.sh`/expect-launched successor inherits a PATH without `~/bin`, and
+   `claude-accounts` returned `command not found` — silently EMPTY through `2>/dev/null | jq`).
+   Call it by its repo path, `~/Development/claude-infrastructure/bin/claude-accounts`; this
+   bullet used to say "resolve the binary from PATH, not `~/bin`", which is wrong in exactly the
+   launch shape an ingesting session has. Treat a row carrying `error` or
    `stale_quota: true` as NOT a live reading — check `quota_as_of` before concluding
    anything about headroom, and note `poll_throttled` is a transient poll failure, never a
    cap. If `session_pct`/
@@ -244,11 +249,24 @@ key five times into a live outage — 85 minutes, six attempts, nothing produced
    - **`STALLED` slots: run the § Stall policy control FIRST** (two probe greens 30 s apart). The
      audit's run-level action for such a run reads `GATED RESUME`, not a bare resume, precisely so
      this step cannot be skipped by reading the run row instead of the slot row.
-   - **`resumeFromRunId` is same-session only.** The tool schema caches completed `agent()` calls
-     with unchanged `(prompt, opts)` — but only *inside the same process*. So it is available when
-     the lead is **IDLE (this very session)** and **unavailable once the process boundary has been
-     crossed**: a `DEAD` lead means a fresh run from the salvage, not a resume, however inviting the
-     `INCOMPLETE` action's wording is. Under `UNKNOWN` liveness, fire nothing and surface it.
+   - **`resumeFromRunId` is same-session-DIRECTORY, not same-process** (corrected 2026-09-19; this
+     bullet used to say "same-session only … unavailable once the process boundary has been
+     crossed"). The cache is the run's `journal.jsonl` under `<session dir>/subagents/workflows/<runId>/`,
+     and `lr-transplant.sh` copies that directory with the transcript — so an INGESTING session on
+     another account resumes the run it inherited: measured on `wf_b0f2a31c-e7d` (next4 → next3),
+     the resume wrote its new agents under the ORIGINAL run dir, replayed the 13 completed slots
+     from the journal at zero spend, and re-ran only the 10 dangling ones (24/24). What a resume
+     cannot do is replay a slot that has no `result` row — a `DEAD` lead's dangling slots are
+     re-run, never recovered, and the PREFIX rule below decides how many completed slots re-run
+     with them. Verify after the call that new `agent-*.jsonl` files appeared under the ORIGINAL
+     runId dir in YOUR session dir (ingest step 3); a fresh runId dir means the journal did not
+     carry. Under `UNKNOWN` liveness, fire nothing and surface it.
+   - 🚨 **At ingest, a run's delivered `<task-notification>` outranks `lr-audit`'s lead-liveness
+     verdict.** The ingest turn is itself mid-turn, so the audit reads the lead as `IN-FLIGHT` and
+     labels a SETTLED run's dead slots `UNSETTLED-INFLIGHT → do not touch` (measured 2026-09-19:
+     10 slots, `agents_error 10`, notification already in the transcript). A delivered notification
+     (or a run summary with a terminal status) means no retry ladder holds those slots: treat them
+     as NULL and resume/re-run. The wait-verdicts protect only runs with NO notification record.
    - 🚨 **…and its cache is a PREFIX, not a set** (corrected 2026-09-15; this bullet used to say
      "journaled results replay free, dangling slots re-run"). A resume replays completed calls only
      up to the FIRST call that is not a cache hit — an EDITED call (any change to prompt or opts),
