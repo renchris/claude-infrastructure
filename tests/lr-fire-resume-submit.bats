@@ -152,20 +152,94 @@ enqueue()   { printf '{"type":"queue-operation","operation":"enqueue","timestamp
   # project exists to prevent. The block is everything from the inject arm to `interact`.
   # Comments are stripped FIRST: the block's own 🚨 comment names the forbidden statement, and a
   # word-match would convict the warning that exists to prevent it.
-  run bash -c 'sed -n "/^  if {\$injected} {/,/^  interact\$/p" "$1" | grep -v "^[[:space:]]*#" | grep -cE "(^|[^_[:alnum:]])exit([^_[:alnum:]]|$)"' _ "$FIRE"
+  #
+  # THE SPAN IS ASSERTED BEFORE IT IS COUNTED. `sed -n '/a/,/b/p' ` whose START never matches emits
+  # NOTHING, and a count over nothing is 0 — so an indentation change on the anchor line would have
+  # made this case vacuously green over an empty block rather than red
+  # (docs/lessons/absent-range-endpoint-selects-everything.md is the same family: a range whose
+  # endpoint moved does not fail, it silently answers a different question).
+  blk="$(sed -n "/^  if {\$injected} {/,/^  interact\$/p" "$FIRE")"
+  [ -n "$blk" ] || { echo "the post-inject block could not be located in $FIRE — the anchor is stale"; false; }
+  case "$blk" in *lr_probe*) ;; *) echo "extracted a span that does not contain the submit poll:"; printf '%s\n' "$blk"; false ;; esac
+  [ "${blk##*$'\n'}" = "  interact" ] || { echo "the span does not END at interact: ${blk##*$'\n'}"; false; }
+  body="$(printf '%s\n' "$blk" | grep -v '^[[:space:]]*#')"
+  [ -n "$body" ] || { echo "the block is entirely comments — the extraction is wrong"; false; }
+  run bash -c 'printf "%s\n" "$1" | grep -cE "(^|[^_[:alnum:]])exit([^_[:alnum:]]|$)"' _ "$body"
   [ "$output" = 0 ] || { echo "post-inject exits: $output"; false; }
 }
 
-@test "the expect program polls lr-submit-probe and never blind-CRs a quiet pty" {
-  run grep -c 'LR_PROBE' "$FIRE"
-  [ "$output" -ge 2 ] || { echo "the probe is not wired into lr-fire-resume: $output"; false; }
-  run grep -c 'READY-NOT-SEEN' "$FIRE"
-  [ "$output" -ge 1 ]
+@test "RED-PROOF the expect program EXECUTES the probe, and asks it about THIS run" {
+  # WHAT THIS REPLACES, and why the replacement is a different kind of thing. The case here was two
+  # string greps — `grep -c LR_PROBE >= 2` and `grep -c READY-NOT-SEEN >= 1` — under the title "the
+  # expect program polls lr-submit-probe and never blind-CRs a quiet pty". Neither half was earned:
+  # a grep for a variable NAME passes on a program that never reaches the call, and the mutant that
+  # made the quiet arm type unconditionally left both strings in place, so this case stayed GREEN
+  # while case 18 died. The blind-CR half belongs to case 18 and is now asserted there on the verdict
+  # itself; what belongs HERE is the wiring, and the only way to know a program calls something is to
+  # let it call it.
+  #
+  # LR_PROBE is an env var the program execs, so the seam needs no fixture beyond a counting stub.
+  exp_setup
+  screen 1 empty
+  CALLS="$BATS_TEST_TMPDIR/probe-calls"
+  export LR_PROBE="$BATS_TEST_TMPDIR/probe-stub"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nprintf "none\\n"\n' "$CALLS" > "$LR_PROBE"
+  chmod +x "$LR_PROBE"
+  : > "$TX"
+  lr_expect_run 90
+  [ -s "$CALLS" ] || { echo "the program never executed the probe"; false; }
+  # …and it asked the documented question: <cfg> <sid> <t0> <token>, about OUR run.
+  first="$(sed -n 1p "$CALLS")"
+  [[ "$first" == "$CFG $SID "*" $TOK" ]] \
+    || { echo "the probe was called with the wrong argv: $first"; false; }
 }
 
-@test "handoff-fire's resume oracle takes a token" {
-  run grep -c 'resume_engaged() { # \$1=target cfg  \$2=sid  \$3=baseline (UTC, %FT%T) \$4=submit token' "$HF"
-  [ "$output" = 1 ] || { echo "resume_engaged signature: $output"; false; }
+@test "RED-PROOF the probe and resume_engaged's token scan agree, fixture for fixture" {
+  # WHAT THIS REPLACES. The case here grepped resume_engaged's COMMENT LINE verbatim — it could only
+  # ever fail on a doc edit, and the claim it made ("the oracle takes a token") is executed by case
+  # 21 and by the two oracle cases in tests/handoff-recycle-engagement.bats.
+  #
+  # What was genuinely unguarded is the DUPLICATION the wave deliberately accepted: the same scan is
+  # written twice, once in lr-submit-probe.sh (for the expect poll) and once inside resume_engaged
+  # (for the watcher), because the PY core must stay byte-identical with lr-lib.sh:lr_engaged_after.
+  # Two implementations of one rule with no test that they agree is the shape that drifts silently —
+  # and it drifts in the direction of the weaker one, since only the probe is directly asserted.
+  #
+  # So: one fixture set, both implementations, and the two must answer the same way. Every fixture
+  # carries a far-future assistant turn, so "the scan found a baseline" is observable as rc 0 and
+  # "it found none" as rc 1 — which is exactly the probe's submitted/none split.
+  eval "$(sed -n '/^resume_engaged() {/,/^}/p' "$HF")"
+  local late='{"type":"assistant","timestamp":"2099-01-01T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"answering"}]}}'
+  agree() { # $1 = label   $2 = the verdict BOTH must reach: submitted | none
+    local want=1 verb
+    if [ "$2" = submitted ]; then want=0; fi
+    run "$PROBE" "$CFG" "$SID" "$T0" "$TOK"
+    [ "$status" -eq 0 ] || { echo "$1: the probe refused (rc $status)"; false; }
+    verb="${output%% *}"
+    [ "$verb" = "$2" ] || { echo "$1: the probe said '$output', expected $2"; false; }
+    run resume_engaged "$CFG" "$SID" "$T0" "$TOK"
+    [ "$status" -eq "$want" ] \
+      || { echo "$1: the probe reads '$verb' and resume_engaged's own scan DISAGREES (rc $status, wanted $want)"; false; }
+  }
+
+  printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"2026-09-19T21:04:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"ingest $TOK\"}}" "$late" > "$TX"
+  agree "our own prompt, newer than t0" submitted
+
+  printf '%s\n' "{\"type\":\"user\",\"isSidechain\":true,\"timestamp\":\"2026-09-19T21:04:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"ingest $TOK\"}}" "$late" > "$TX"
+  agree "a subagent's sidechain record" none
+
+  printf '%s\n' "{\"type\":\"user\",\"timestamp\":\"2026-09-19T21:01:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"ingest $TOK\"}}" "$late" > "$TX"
+  agree "a PREVIOUS attempt's record, older than t0" none
+
+  printf '%s\n' "{\"type\":\"assistant\",\"timestamp\":\"2026-09-19T21:04:00.000Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"quoting $TOK back\"}]}}" "$late" > "$TX"
+  agree "the token echoed by an assistant turn" none
+
+  # The one fixture where the two implementations answer DIFFERENT WORDS and must still agree on the
+  # thing that matters: an ENQUEUED prompt has been typed but not yet accepted as a user record, so
+  # the probe says `queued` (keep waiting, do not re-CR) and the oracle must NOT take it as a
+  # baseline — a turn running ahead of it is answering something else.
+  printf '%s\n' "{\"type\":\"queue-operation\",\"operation\":\"enqueue\",\"timestamp\":\"2026-09-19T21:04:00.000Z\",\"content\":\"ingest $TOK\"}" "$late" > "$TX"
+  agree "typed but only ENQUEUED, behind a running turn" queued
 }
 
 # ── the expect program, EXECUTED ──────────────────────────────────────────────────────────────────
