@@ -86,6 +86,26 @@ runs inside the very corpus it tests. The net saw no TAP line from it for longer
 `POSTLAND_STALL_S`, cut the run, and filed a HUNG naming it. **The verdict was accurate and the
 attribution was correct — the subject was the watcher's own loop. The net convicted itself.**
 
+### It was never one suite — it is every caller of this script
+
+`tests/postland-verify.bats` is the one that got filed because it is the biggest. The same floor is
+paid by every suite that drives the SUT, and by the SUT's own `--selftest`:
+
+| `tests/postland-verify-passfloor.bats` (4 tests) | trunk | patched |
+|---|---|---|
+| `C31 control: last-green is the PRE-flaky commit …` | **121 130 ms** | **3 095 ms** |
+| `C31: a conviction whose file did not EXIST at last-green …` | **242 713 ms** | **6 551 ms** |
+| `C31 RED-PROOF: with the kill switch off, the identical tree is RED` | **242 879 ms** | **7 082 ms** |
+
+Whole sibling set — `postland-verify-bisect-bound.bats` + `postland-verify-passfloor.bats` +
+`postland-band-floor.bats`, **46 tests: 51 seconds, 0 failures** on the patched tree. On trunk the
+4-test `passfloor` file alone had not finished 3 of its 4 tests in 10 minutes.
+
+So the single-suite HUNG row was the loudest instance of a whole-population cost, not the
+population. Fixing it in the suite (an exported `POSTLAND_STALL_POLL_S`) would have cleared this
+row and left the next one to be filed against a sibling — the generator-fix rule
+(`a-generator-fix-needs-its-population-enumerated`). The cure is in the generator.
+
 ## 4. The cure
 
 `scripts/postland-verify.sh`:
@@ -151,14 +171,49 @@ unpatched trunk**:
 ```bash
 npm install -g bats                                   # bats 1.13.0, the version the stubs claim
 bats --count tests/postland-verify.bats               # 148 before, 152 after
-bats -T tests/postland-verify.bats                     # both arms, full file
+bats -T tests/postland-verify.bats                    # both arms, full file (§6 table)
+bats -T tests/postland-verify-bisect-bound.bats \
+        tests/postland-verify-passfloor.bats \
+        tests/postland-band-floor.bats                # 46 tests, 51s, 0 failures (patched)
+bash scripts/postland-verify.sh --selftest            # 68 passed, 1 failed
 bash -n scripts/postland-verify.sh
-bash scripts/rules-hook-budget-lint.sh                 # clean — 140 bullets, all bodied, ≤420 chars
+bash scripts/rules-hook-budget-lint.sh                # clean — 140 bullets, all bodied, ≤420 chars
+# and the repo lints this diff can reach, all rc 0:
+for l in test-walltime wait-contract bg-fd-inherit test-hermeticity bats-kill-guard \
+         bats-testname-eval subshell-cleanup pipefail-sigpipe self-path utc-stamp; do
+  bash scripts/$l-lint.sh; done
+# bash32-parse-lint is a NON-VERDICT here (/bin/bash is 5.x). stall_wait uses only `local`,
+# `case`, `[ ]` and arithmetic, and no `case` inside `$( )` — the bash 3.2 traps this repo records.
 ```
 
-Arm A (trunk, `POSTLAND_STALL_POLL_S=1`) and arm B (patched, default period) failure sets are
-recorded in the commit message. The claim this section supports is narrow and is the only one that
-matters for the land: **arm B introduces no red that arm A does not already have.**
+The single `--selftest` failure, `prelint denominator: stamp does not carry
+prelints:5,prelints_ran:1`, **reproduces identically on trunk's SUT** — it is a prelint-population
+assertion about a seam this VM cannot satisfy, and nothing in the diff is reachable from it.
+
+### The two arms, same box, same 152 tests
+
+Arm A is **trunk's `scripts/postland-verify.sh` verbatim** (`git show origin/main:…`) with the
+branch's `tests/postland-verify.bats`, run at `POSTLAND_STALL_POLL_S=1` ambient — which is what
+makes the pre-fix arm affordable at all, and is the honest control: it isolates *the period as a
+floor* from every other thing in the diff. Arm B is the patched tree at the **default** period.
+
+| | arm A (trunk SUT) | arm B (patched) |
+|---|---|---|
+| 14–20 · the C6/C6b/C33 mutex block | red | red |
+| 30 `C29: a VERDICT spends the candidates` | red | red |
+| 32 `C29b: the preserved candidacy CONVERGES` | red | red |
+| 56–57 · `C37` TAP-dir bound | red | red |
+| 74–77 · the four `stall_wait` arms | **red** (`stall_wait … exited with code 127, Command not found`) | **green** |
+| everything else | green | green |
+
+**Arm B introduces no red that arm A does not already have, and turns four reds green.** The
+four are the red-proof doing its job: on trunk the helper does not exist, so they fail 127.
+
+The eleven shared reds are box properties, not this branch's: 14–20 are the `stat -f %m` fault in
+§5.1 (every one of them pre-creates `run.lock.d`, so every one dies in ~170 ms before reaching the
+corpus), and 30/32/56–57 are `find`/mtime and second-granularity assertions that behave differently
+on this filesystem. None of them is reachable from the diff, and all of them reproduce on
+unpatched trunk.
 
 ## 7. Lesson filed
 
