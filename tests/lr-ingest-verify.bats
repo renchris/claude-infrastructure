@@ -361,3 +361,24 @@ sc_stat() { env CLAUDE_CONFIG_DIR="$1" \
   [ "$status" -eq 1 ] || { echo "$output"; false; }
   [[ "$output" == *"FAIL A6 — events.jsonl carries no killed_inflight record"* ]] || { echo "$output"; false; }
 }
+
+@test "C5: a NON-GIT worktree the manifest says WAS a repo is unevaluable, and fails" {
+  # W3i D5. `rev-parse --git-dir` returns one rc for "not a repo" and for "git could not answer",
+  # and passing on it contradicts this file's own contract. The manifest's `.branch` is the second
+  # source that separates the two.
+  rm -rf "$WT/.git"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL C5 — the manifest recorded branch feat/work but git cannot read"* ]] || { echo "$output"; false; }
+}
+
+@test "C5 CONTROL: a non-git worktree the manifest ALSO calls branchless passes — the two agree" {
+  # Without this, the case above is satisfiable by a C5 that refuses every non-repo, and the
+  # legitimate non-git cwd — lr-handoff emits no --branch for one — would take the expensive ingest
+  # forever. This is the arm that keeps the fix from being a blanket refusal.
+  rm -rf "$WT/.git"
+  jq 'del(.branch)' "$BUNDLE/MANIFEST.json" > "$BUNDLE/m.tmp" && mv "$BUNDLE/m.tmp" "$BUNDLE/MANIFEST.json"
+  run verify --no-clear
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"PASS C5 — $WT is not a git repo and the manifest recorded no branch"* ]] || { echo "$output"; false; }
+}
