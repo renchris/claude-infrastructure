@@ -914,14 +914,266 @@ def render_tsv(rows):
     return "\n".join(out)
 
 
+# ── W2c. THE REAPER: a claim that produced nothing, named ────────────────────────────────────────
+# IT DOES NOT READ THE MARKERS, and that is the design. The marker store is GC'd on file mtime, so
+# a reaper derived from census rows goes SILENT exactly when a fault gets old enough to matter — and
+# a Fable/monthly row, which is never parked, gets there first. The reaper enumerates the CLAIM
+# STORES themselves (locks/, and the faults/ it has written). Liveness is still DERIVED, from the
+# registry + ps + resume-leaf sources the census uses; nothing current is ever stored.
+LOCKS_DIR = os.path.join(STATE_DIR, "locks")
+FAULTS_DIR = os.path.join(STATE_DIR, "faults")
+
+
+def read_dir(path, label):
+    """(entries, note). ABSENT is EMPTY and named in the footer; EXISTS-but-unreadable is exit 5 —
+    "nothing was ever persisted" and "I cannot see what was" are opposite facts."""
+    if not os.path.isdir(path):
+        return [], "%s absent (%s)" % (label, path)
+    return listdir(path, required=True, label=label), ""
+
+
+def fault_log(sid):
+    """Where the recovery's own output would be — a pointer, never a promise that it exists."""
+    run = os.path.join(STATE_DIR, sid)
+    if os.path.isdir(run):
+        return run
+    poller = os.path.join(STATE_DIR, "poller.log")
+    return poller if os.path.exists(poller) else ""
+
+
+def reaper_rows():
+    """CLAIMED-NOT-LIVE claims, oldest claim first, plus the footer notes. (rows, notes)."""
+    names, _ = load_accounts()
+    ps = ps_table()
+    reg_by_sid, _ = registry_rows(ps)
+    leaves = resume_leaves()
+    rows, notes, seen = [], [], set()
+
+    faults, fnote = read_dir(FAULTS_DIR, "faults/")
+    acked = set(n[:-len(".acked.json")] for n in faults if n.endswith(".acked.json"))
+    locks, note = read_dir(LOCKS_DIR, "locks/")
+    if note:
+        notes.append(note)
+    for name in locks:
+        if not name.endswith(".lock"):
+            continue
+        sid = name[:-len(".lock")]
+        if sid in acked:                  # ack is the only exit, and it exits the LOCK too
+            continue
+        rec = read_json(os.path.join(LOCKS_DIR, name))
+        if not isinstance(rec, dict):
+            continue
+        ts = ts_epoch(rec.get("ts")) or 0
+        # GRACE FIRST: a live transplant holds its lock for the whole handoff, so naming a claim the
+        # instant it is taken reports every healthy recovery as a failure.
+        if NOW - ts <= CLAIM_GRACE_S:
+            continue
+        # Then: A TRUE CLAIM CLEARS ITSELF. The CLAIMANT's own pid is deliberately NOT consulted —
+        # pids are reissued, and a reaper that acquits on a recycled pid acquits at random.
+        if any(r["live"] for r in reg_by_sid.get(sid, [])) or leaves.get(sid):
+            continue
+        seen.add(sid)
+        rows.append({"sid": sid, "ts": ts,
+                     "claim": {"kind": "lock", "by": rec.get("to") or "?",
+                               "ts": rec.get("ts") or "", "path": os.path.join(LOCKS_DIR, name),
+                               "pid": str(rec.get("pid") or "?")}})
+
+    if fnote:
+        notes.append(fnote)
+    for name in faults:
+        # `ack` is the ONLY exit: an un-acked fault keeps rendering even once its lock is gone.
+        if not name.endswith(".json") or name.endswith(".acked.json"):
+            continue
+        rec = read_json(os.path.join(FAULTS_DIR, name))
+        if not isinstance(rec, dict) or not rec.get("sid") or rec["sid"] in seen:
+            continue
+        seen.add(rec["sid"])
+        # the CLAIM's own ts, not the sighting's: "age" must mean how overdue the recovery is.
+        rows.append({"sid": rec["sid"],
+                     "ts": ts_epoch((rec.get("claim") or {}).get("ts")) or rec.get("first_seen") or 0,
+                     "claim": dict(rec.get("claim") or {}, path=os.path.join(FAULTS_DIR, name))})
+    for row in rows:
+        row["acct"] = acct_name(names, os.path.basename((row["claim"].get("by") or "").rstrip("/")))
+    rows.sort(key=lambda r: (r.get("ts") or 0, r["sid"]))   # oldest claim first: the most overdue
+    return rows, notes
+
+
+def persist_faults(rows):
+    """FIRST SIGHTING ONLY, by O_EXCL; returns the notes for writes that FAILED. O_EXCL is the whole
+    mechanism — a poller re-writing `first_seen` every tick resets the age of every fault it renders
+    and nothing ever looks overdue."""
+    failed = []
+    try:
+        os.makedirs(FAULTS_DIR, exist_ok=True)
+    except OSError as exc:
+        return ["faults/ not writable (%s): %s" % (FAULTS_DIR, exc)]
+    for row in rows:
+        path = os.path.join(FAULTS_DIR, "%s.json" % row["sid"])
+        if os.path.exists(path) or os.path.exists(path[:-5] + ".acked.json"):
+            continue
+        rec = {"sid": row["sid"], "first_seen": NOW, "claim": row["claim"],
+               "log": fault_log(row["sid"])}
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            continue                      # another tick got there first; its first_seen stands
+        except OSError as exc:
+            failed.append("could not persist %s: %s" % (path, exc))
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh, sort_keys=True)
+            fh.write("\n")
+    return failed
+
+
+def render_reaper(rows, notes):
+    out = []
+    for r in rows:
+        c = r["claim"]
+        out.append("CLAIMED-NOT-LIVE  %-8s  claimed by %-22s pid %-7s %s  age %-8s %s" % (
+            r["sid"][:8], os.path.basename((c.get("by") or "?").rstrip("/")) or "?",
+            c.get("pid") or "?", c.get("ts") or "?", dur(NOW - (r.get("ts") or NOW)),
+            c.get("path") or ""))
+    out.append("%d claimed-not-live%s" % (len(rows), (" · " + " · ".join(notes)) if notes else ""))
+    return "\n".join(out)
+
+
+def do_ack(args):
+    """`cc-limited ack <sid> --why "<text>"` — the only exit from a persisted fault."""
+    sid, why = "", ""
+    i = 0
+    while i < len(args):
+        if args[i] == "--why" and i + 1 < len(args):
+            i += 1
+            why = args[i]
+        elif not args[i].startswith("-") and not sid:
+            sid = args[i]
+        else:
+            usage()
+            return RC_USAGE
+        i += 1
+    if not sid or not why:
+        sys.stderr.write('cc-limited: usage: cc-limited ack <sid> --why "<text>"\n')
+        return RC_USAGE
+    hits = [n for n in listdir(FAULTS_DIR)
+            if n.endswith(".json") and not n.endswith(".acked.json") and n.startswith(sid)]
+    if not hits:
+        sys.stderr.write("cc-limited: no un-acked fault matching %s in %s\n" % (sid, FAULTS_DIR))
+        return RC_NOMATCH
+    if len(hits) > 1:
+        for n in hits:
+            print(n)
+        return RC_AMBIG
+    src = os.path.join(FAULTS_DIR, hits[0])
+    rec = read_json(src) or {"sid": hits[0][:-5]}
+    rec["acked_at"] = NOW
+    rec["why"] = why
+    dst = src[:-len(".json")] + ".acked.json"
+    try:
+        with open(dst, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh, sort_keys=True)
+            fh.write("\n")
+        os.remove(src)
+    except OSError as exc:
+        sys.stderr.write("cc-limited: could not ack %s: %s\n" % (src, exc))
+        return RC_DEGRADED
+    print("acked %s → %s" % (rec.get("sid", "")[:8], dst))
+    return RC_OK
+
+
+# ── W2c. THE RESOLVER ────────────────────────────────────────────────────────────────────────────
+def resolve_query(rows, q):
+    """Exact pane or sid PREFIX wins outright; only on a miss does the title sweep run, and only on
+    a title miss does cwd — an identifier typed on purpose is never diluted by a substring sweep.
+    Two panes on two accounts genuinely share the title "limit-recover optimization" today, so
+    ambiguity is the NORMAL outcome of a title query: print every candidate, never pick one."""
+    ql = (q or "").lower()
+    exact = [r for r in rows if q and ((r.get("pane") or "") == q
+                                       or (r.get("pane_now") or "") == q
+                                       or r["sid"].startswith(q))]
+    if exact:
+        return exact
+    return [r for r in rows if ql and ql in (r.get("title") or "").lower()] or \
+           [r for r in rows if ql and ql in (r.get("cwd") or "").lower()]
+
+
+def render_candidates(rows):
+    return "\n".join("%-5s · %-8s · %-7s · %s" % (
+        ("#" + r["pane"]) if r.get("pane") else (("#" + r["pane_now"]) if r.get("pane_now") else ""),
+        r["sid"][:8], r.get("group") or "?", r.get("title") or "") for r in rows)
+
+
+# ── W2c. KITTY TITLES: ONE unmatched `kitten @ ls` ───────────────────────────────────────────────
+def kitty_titles():
+    """({window id: title}, note), or (None, note) when the payload cannot be trusted.
+
+    ONE call, ABSOLUTE binary, explicit `--to`, bounded 2 s: a `kitten` off PATH inherits the
+    calling pane's socket and answers about the wrong kitty, and a per-row call makes a census N
+    round trips. A truncated payload yields None and NEVER a partial parse — a regex over half a
+    JSON document returns SOME titles with no way to know which are missing, which is strictly
+    worse than `?` (the 10.06 s corrupt-payload case, U07 § 5).
+    """
+    binp = env("CC_LIMITED_KITTEN", "")
+    if not binp:
+        for cand in ("/Applications/kitty.app/Contents/MacOS/kitten",
+                     "/opt/homebrew/bin/kitten", "/usr/local/bin/kitten"):
+            if os.path.exists(cand):
+                binp = cand
+                break
+    if not binp or not os.path.exists(binp):
+        return None, "kitty: no kitten binary"
+    cmd = [binp, "@"]
+    to = env("KITTY_LISTEN_ON", "")
+    if to:
+        cmd += ["--to", to]
+    cmd.append("ls")
+    try:
+        raw = subprocess.run(cmd, timeout=2, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL).stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.SubprocessError):
+        return None, "kitty: `kitten @ ls` did not answer within 2s"
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None, "kitty: truncated/unparseable `kitten @ ls` payload (%d bytes)" % len(raw)
+    titles = {}
+    for osw in (data if isinstance(data, list) else []):
+        for tab in ((osw.get("tabs") if isinstance(osw, dict) else None) or []):
+            for win in ((tab.get("windows") if isinstance(tab, dict) else None) or []):
+                wid = str(win.get("id") or "") if isinstance(win, dict) else ""
+                if wid:
+                    titles[wid] = win.get("title") or ""
+    return titles, ""
+
+
+def apply_kitty(rows):
+    """The degraded note, if any. Titles go to `?` WHOLESALE on a bad payload: a row silently
+    keeping its transcript title is indistinguishable from one kitty actually answered."""
+    titles, note = kitty_titles()
+    if titles is None:
+        for r in rows:
+            r["title"] = "?"
+        return note
+    for r in rows:
+        t = titles.get(r.get("pane_now") or "") or titles.get(r.get("pane") or "")
+        if t:
+            r["title"] = t
+    return ""
+
+
 def usage(stream=sys.stderr):
     stream.write(__doc__.split("Seams")[0].strip() + "\n\nusage: cc-limited [--all|--json|--tsv]"
-                 " [--account NAME] [--since 24h] [--assert-clean] [--sid PREFIX]\n")
+                 " [--account NAME] [--since 24h] [--assert-clean] [--sid PREFIX] [--kitty]"
+                 " [<query>|--keyword TEXT]\n"
+                 "       cc-limited --reaper [--persist]\n"
+                 '       cc-limited ack <sid> --why "<text>"\n')
 
 
 def main(argv):
-    mode, account, since, sid_q = "screen", "", "24h", ""
-    show_all = assert_clean = False
+    if argv and argv[0] == "ack":
+        return do_ack(argv[1:])
+    mode, account, since, sid_q, query = "screen", "", "24h", "", ""
+    show_all = assert_clean = reaper = persist = want_kitty = False
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -945,10 +1197,35 @@ def main(argv):
         elif a == "--sid" and i + 1 < len(argv):
             i += 1
             sid_q = argv[i]
+        elif a == "--reaper":
+            reaper = True
+        elif a == "--persist":
+            persist = True
+        elif a == "--kitty":
+            want_kitty = True
+        elif a in ("--keyword", "--query") and i + 1 < len(argv):
+            i += 1
+            query = argv[i]
+        elif not a.startswith("-") and not query:
+            query = a
         else:
             usage()
             return RC_USAGE
         i += 1
+
+    if reaper:
+        try:
+            rrows, notes = reaper_rows()
+        except Unreadable as exc:
+            sys.stderr.write("cc-limited: instrument unreadable: %s\n" % exc)
+            return RC_INSTRUMENT
+        failed = persist_faults(rrows) if persist else []
+        print(render_reaper(rrows, notes + failed))
+        if failed:                       # a fault that could not be written is a fault that will
+            return RC_DEGRADED           # be forgotten; name the path and say so in the exit code
+        if assert_clean and rrows:
+            return RC_WORK
+        return RC_OK
 
     try:
         rows, unaddressable, degraded, sids, marker_rows, absent = census()
@@ -965,6 +1242,17 @@ def main(argv):
         rows = [r for r in rows if r["sid"].startswith(sid_q)]
         if not rows:
             return RC_NOMATCH
+    if want_kitty:                       # BEFORE the resolver: with --kitty the live window title
+        note = apply_kitty(rows)         # is the title, so it is what a title query must search
+        if note:
+            degraded = list(degraded) + [note]
+    if query:
+        rows = resolve_query(rows, query)
+        if not rows:
+            return RC_NOMATCH
+        if len(rows) > 1:
+            print(render_candidates(rows))
+            return RC_AMBIG
 
     if mode == "json":
         payload = {"now": NOW, "sessions": sids, "unaddressable": unaddressable,
