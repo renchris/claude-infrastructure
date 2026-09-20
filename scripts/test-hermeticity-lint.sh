@@ -922,7 +922,6 @@ handoff-fire-capacity-gate.bats
 iterm2-appname-lint.bats
 lr-fire-resume-model-ssot.bats
 lr-handoff-close-source.bats
-lr-handoff-launcher-quoting.bats
 lr-reset-poller.bats
 lr-resume-answer-width.bats
 lr-resume-tombstone-guard.bats
