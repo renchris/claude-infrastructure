@@ -727,6 +727,27 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
   the expected screen must be re-derived from a capture and `build.sh`'s fabricated registry row 147
   removed). That is W2b-ii's deliverable, and W2b-ii has never been dispatchable.
 
+- 2026-09-20T14:3xZ · **W2b-ii LANDED — and with it § 11 #1, #3, #10 and #11 are CLOSED.** Six
+  commits, `bf9533d97`…`05f8e2a09`, harvested by content: branch empty vs trunk; `tests/cc-limited.bats`
+  **17 → 24 `@test` rows** (rows 16–22 present, one per amendment that names a W2b row);
+  `bin/cc-limited` now carries `parked_at`/`reset_at_utc` (×2 each) and `is_teammate_head` (×2).
+  - **§ 11 #10 closed properly:** the raw `b'"agentName"' in head` is GONE; the only surviving
+    mentions are comments explaining its removal, and the state table's first arm now calls
+    `PRED.is_teammate_head(head)`.
+  - **§ 11 #1 closed BETTER than by deletion, and the shape is worth copying.** `reg 147` was not
+    removed — it was made LEGIBLE. `build.sh` now carries a header *"THE ONE HAND-ASSERTED ROW,
+    named rather than left to be discovered"* stating the row is NOT measured, citing
+    `CAPTURE-RECEIPT.md` (which lists every registry pane in a live capture; 147 is not among them),
+    and explaining that the row is **reconstructed from the live BEAT** — pane 147, pid 84167,
+    carried verbatim. The fixture keeps its five-way coverage, the synthesis is grounded in real
+    data, and it now DEMONSTRATES § 11 #2's own point: the live capture proves 07e30aeb's registry
+    row was overwritten by pane 147's next occupant **while its beat survived**. A hand-assertion
+    that names itself and cites its evidence is not the defect the amendment was written against.
+  - Also landed, neither of them asked for: a **dedupe that was INERT** (found while implementing
+    § 11 #4) and a perf fix — the full transcript index is now paid ONCE rather than once per sid.
+  - **W6's fixture half is therefore UNBLOCKED.** The live-census half is already recorded above
+    (5/5 inside 0.30 s at load 19.3).
+
 ## 13. Cross-reference — `LIMIT_RECOVER_100P` § 9 landed the recovery side first (2026-09-20 00:1xZ, session 11569d45)
 
 Your wave-1 corpus was this session's research. Landed and LIVE on trunk at `1b2676f4c` (23:50Z),
