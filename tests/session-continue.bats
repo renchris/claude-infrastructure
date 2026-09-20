@@ -15,6 +15,16 @@ setup() {
   # ABSOLUTE and so survives a fixtured $HOME untouched (rule 5). Measured, not assumed: 23/23 with
   # HOME pointed at an empty dir. Both are here so this suite can leave the host-suites partition.
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  # ── THE RUNNING PANE'S OWN SESSION ID IS IN THIS SUITE'S ENVIRONMENT (W3i D4) ───────────────────
+  # `CLAUDE_CODE_SESSION_ID` is exported into every Bash tool call, so `sc()` — which runs the hook
+  # with no identity of its own — handed the hook THIS session's id. Harmless until W3 taught `clear`
+  # to refuse a sentinel another session armed: a sentinel armed as `sidA` then met a clear running
+  # as `a4241557-…`, the refusal fired, and case 3 went red at line 101 in any ordinary session while
+  # staying green under `env -u CLAUDE_CODE_SESSION_ID`. A verdict that depends on who ran the suite
+  # is not a verdict. Every case that needs an identity now states it (`arm`, `sc_as`); the bare
+  # helpers are the OPERATOR's shell, which carries none — and that is the one caller the refusal is
+  # written to leave alone.
+  unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID
   export CC_TELEMETRY_DIR="$BATS_TEST_TMPDIR/tel"
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   HOOK="$REPO/hooks/session-continue.sh"
@@ -54,8 +64,11 @@ setup() {
 
 # arm the sentinel from $CWD as session $2 (default sidA)
 arm() { ( cd "$CWD" && CLAUDE_CODE_SESSION_ID="${2:-sidA}" bash "$HOOK" set "${1:-do the thing}" >/dev/null ); }
-# a CLI subcommand (clear/status) run from $CWD
+# a CLI subcommand (clear/status) run from $CWD with NO session identity — the operator's own shell
 sc()  { ( cd "$CWD" && bash "$HOOK" "$@" ); }
+# the same, run AS session $1 — an agent, or a recovery's clause D. The sid is what `clear` reads to
+# decide whether the sentinel in this cwd is the caller's to remove.
+sc_as() { local s="$1"; shift; ( cd "$CWD" && CLAUDE_CODE_SESSION_ID="$s" bash "$HOOK" "$@" ); }
 # actuation: Stop JSON on stdin. $1=session_id  $2=transcript_path.
 # The stop DECISION is on stdout (block JSON / cap systemMessage JSON); stderr carries only
 # human diagnostics (which bats would otherwise merge into $output) → drop it, assert on stdout.
@@ -96,9 +109,29 @@ mkuser_tx_string() {
 
 @test "base: set arms → status ARMED; clear disarms → status inactive" {
   arm "do the thing" sidA
-  run sc status; printf '%s\n' "$output" | grep -q "ARMED"
-  run sc clear;  printf '%s\n' "$output" | grep -q "cleared"
-  run sc status; printf '%s\n' "$output" | grep -q "inactive"
+  run sc status
+  [[ "$output" == *ARMED* ]] || { echo "status after set: $output"; false; }
+  # AS the arming session: the ordinary shape, and the one the foreign-sid refusal must let through.
+  run sc_as sidA clear
+  # ANCHORED, and NOT merely the substring `cleared`. The refusal text is
+  # "refused — … nothing was cleared: <cwd>", so a bare `grep -q cleared` passes on the very path
+  # this assertion exists to exclude — it went decorative the moment the refusal shipped.
+  [[ "$output" == "cleared → "* ]] || { echo "clear did not disarm: $output"; false; }
+  [[ "$output" != *refused* ]] || { echo "the arming session was REFUSED its own sentinel: $output"; false; }
+  run sc status
+  [[ "$output" == *inactive* ]] || { echo "the sentinel survived its own session's clear: $output"; false; }
+}
+
+@test "base DISCRIMINATOR: a clear from a FOREIGN sid refuses and the sentinel SURVIVES" {
+  # The other half of the case above, and what makes its `!= *refused*` a live assertion rather than
+  # a hope: same verb, same cwd, same sentinel — only the caller's identity differs.
+  arm "do the thing" sidA
+  run sc_as sidB clear
+  [ "$status" -eq 0 ] || { echo "a refusal is not an error: $output"; false; }
+  [[ "$output" == refused\ * ]] || { echo "a foreign session cleared another session's chain: $output"; false; }
+  run sc status
+  [[ "$output" == *ARMED* ]] || { echo "THE SIBLING'S CHAIN WAS DISARMED: $output"; false; }
+  [[ "$output" == *"do the thing"* ]] || { echo "the step text did not survive: $output"; false; }
 }
 
 # ── (a) KILL-SWITCH ───────────────────────────────────────────────────────────────
