@@ -627,8 +627,17 @@ STUB
   # every lander after it. A/B: green (1/1) at the parent 7a73a511c, red at 63734f039 and on trunk.
   # postland-verify caught it and its auto-revert FAILED rc=90 (a 32-file feature does not revert
   # cleanly under the commits on top), so forward was the only remedy — backlog c893ce32210b.
-  if [ "$n" != 34 ]; then
-    echo "manifest declares $n labels, expected 34 — if a plist was legitimately added or retired,"
+  # 35 since 2026-09-19: com.claude.browse-mirror (bd016b0a0, backlog 62f54195c398) — the capacity-
+  # alarm / browser-spin-guard shape a SIXTH time, and the second in a row where the plist landed with
+  # no manifest row at all, so this count was NOT the leg that noticed: the coverage loop below was,
+  # which is the split those two legs exist for. A/B: green at the parent, red at bd016b0a0 and on
+  # trunk for the 92 commits after it. postland-verify bisected it correctly and its auto-revert
+  # FAILED rc=90 (revert=none, nothing applied — a 32-file feature does not revert cleanly under the
+  # commits on top), exactly as it did for permission-harvest above, so forward was again the only
+  # remedy. The count moves WITH the repair. Declared `run`, not `staged`: migrations/0032 has been
+  # run and the job is loaded (runs=46, last exit 0) — see the manifest's own block for every field.
+  if [ "$n" != 35 ]; then
+    echo "manifest declares $n labels, expected 35 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1
