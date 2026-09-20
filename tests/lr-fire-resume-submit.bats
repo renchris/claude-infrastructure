@@ -238,7 +238,16 @@ screen() { # $1 = call ordinal, $2 = one of empty|menu|mine
   local b='────────────────────────────────' f="$LR_STUB_DIR/$1.txt"
   case "$2" in
     empty) printf '%s\n' "  chrome" "$b" " ❯ " "$b" " ? for shortcuts" > "$f" ;;
-    menu)  printf '%s\n' "  Resume a session" " ❯1. Resume from summary" "  2. Resume full as-is" > "$f" ;;
+    # A REAL resume menu, drawn inside the box the TUI actually paints. The border runs matter: the
+    # first version of this fixture had none, so the awk box parse exited 9 and the verdict was
+    # UNKNOWN whether or not the `❯<ordinal>` detector existed — the case proved "the screen is not
+    # EMPTY", never "a MENU was recognised", and deleting the detector survived. With the box
+    # present the parse SUCCEEDS and reads the option lines as a draft, so the detector is the only
+    # thing in the program that can produce MENU. Verified standalone on the extracted LR_SCREEN_SH:
+    #   no box:   detector present MENU · detector deleted UNKNOWN   (both park — mutant invisible)
+    #   this box: detector present MENU · detector deleted DRAFT     (the verdict changes)
+    menu)  printf '%s\n' "  Resume a session" "$b" "  ❯ 1. Resume from summary" \
+                         "    2. Resume full session as-is" "$b" "  ↑/↓ to select · enter to confirm" > "$f" ;;
     mine)  printf '%s\n' "  chrome" "$b" " ❯ $LR_PROMPT" "$b" " ? for shortcuts" > "$f" ;;
     # A composer holding text that is NOT ours — a human half-typed a command into this pane while
     # the recovery was in flight. Structurally identical to `mine`: same box, same border runs, same
@@ -247,6 +256,9 @@ screen() { # $1 = call ordinal, $2 = one of empty|menu|mine
   esac
 }
 states() { jq -r '.state' "$LR_RUN_DIR/events.jsonl" 2>/dev/null | tr '\n' ' '; }
+# The state alone cannot carry a verdict — READY-NOT-SEEN is the same word for MENU, DRAFT and
+# UNKNOWN, which is exactly how the MENU claim went unproven. The DETAIL is where $sv is written.
+details() { jq -r '.detail' "$LR_RUN_DIR/events.jsonl" 2>/dev/null | tr '\n' ' '; }
 
 # ── THE ONE PLACE THESE CASES MEET A WALL CLOCK ───────────────────────────────────────────────────
 #
@@ -312,6 +324,12 @@ lr_expect_run() { # $1 = the QUIET-BOX budget in seconds; scales it to the box t
   [ ! -s "$LR_TEST_GOT" ] || { echo "something was typed: $(cat "$LR_TEST_GOT")"; false; }
   [[ "$output" == *"READY NEVER SEEN"* ]] || { echo "$output"; false; }
   [[ "$(states)" == *"READY-NOT-SEEN"* ]] || { echo "states: $(states)"; false; }
+  # …and it parked because it RECOGNISED A MENU, which is a different fact from "not EMPTY". Without
+  # this pair the case was satisfied by UNKNOWN, i.e. by the screen reader failing — see the fixture.
+  [[ "$output" == *"the screen reads MENU"* ]] \
+    || { echo "parked without recognising the menu: $output"; false; }
+  [[ "$(details)" == *"screen reads MENU"* ]] \
+    || { echo "the state log did not record the verdict: $(details)"; false; }
 }
 
 @test "RED-PROOF submit poll: a user record carrying the run token → state 'submitted'" {
