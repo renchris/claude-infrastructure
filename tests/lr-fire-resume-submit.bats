@@ -240,6 +240,10 @@ screen() { # $1 = call ordinal, $2 = one of empty|menu|mine
     empty) printf '%s\n' "  chrome" "$b" " ❯ " "$b" " ? for shortcuts" > "$f" ;;
     menu)  printf '%s\n' "  Resume a session" " ❯1. Resume from summary" "  2. Resume full as-is" > "$f" ;;
     mine)  printf '%s\n' "  chrome" "$b" " ❯ $LR_PROMPT" "$b" " ? for shortcuts" > "$f" ;;
+    # A composer holding text that is NOT ours — a human half-typed a command into this pane while
+    # the recovery was in flight. Structurally identical to `mine`: same box, same border runs, same
+    # prompt glyph. Only the CONTENT differs, which is the whole of the DRAFT / DRAFT-MINE split.
+    other) printf '%s\n' "  chrome" "$b" " ❯ git status --porcelain # typed by someone else" "$b" " ? for shortcuts" > "$f" ;;
   esac
 }
 states() { jq -r '.state' "$LR_RUN_DIR/events.jsonl" 2>/dev/null | tr '\n' ' '; }
@@ -576,4 +580,29 @@ SH
   local n; n="$(wc -l < "$POLLS" | tr -d ' ')"
   # 4 s of window at one poll a second = 4 polls; at five seconds a poll it is exactly 1.
   [ "$n" -ge 4 ] || { echo "the 4s engagement window was polled $n time(s) — the default interval is coarser than 1s"; false; }
+}
+
+# ── deviation 3, executed: the re-Enter is gated on OUR draft, never on "a draft" ─────────────────
+
+@test "RED-PROOF re-CR gate: a composer holding SOMEONE ELSE'S text is never submitted on our behalf" {
+  # The author's own declared deviation from the spec — the spec says "a screen read shows the prompt
+  # text sitting in the composer", the implementation demands DRAFT-MINE — and the only safety
+  # property in this file that no case exercised: widening the gate to `DRAFT-MINE || DRAFT` survived
+  # the mutation pass, because every existing case shows the screen EMPTY, a MENU, or our own prompt.
+  #
+  # What the widened gate does is press Enter on a stranger's half-typed line. In the pane this runs
+  # in, that line is a shell command or a slash command someone was composing, and submitting it is a
+  # write into a live session on behalf of a person who never pressed the key.
+  exp_setup
+  screen 1 empty          # quiet arm: the composer is clear, so our prompt IS typed
+  screen 2 other          # at the poll bound: a human's text is sitting there instead
+  : > "$TX"               # …and nothing of ours ever reaches the transcript
+  lr_expect_run 90
+  # exactly ONE line reached the stub — our prompt. The re-Enter was NOT sent.
+  [ "$(wc -l < "$LR_TEST_GOT" | tr -d ' ')" = 1 ] \
+    || { echo "a CR was sent over someone else's composer text:"; cat "$LR_TEST_GOT"; false; }
+  [[ "$output" == *"the composer reads DRAFT, not our prompt — NOT re-sending Enter"* ]] \
+    || { echo "the refusal did not name what it saw: $output"; false; }
+  # …and the run does NOT record a re-CR it never sent
+  [[ "$(states)" != *"SUBMIT-RECR"* ]] || { echo "states claim a re-CR was sent: $(states)"; false; }
 }
