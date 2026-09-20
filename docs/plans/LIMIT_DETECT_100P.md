@@ -748,6 +748,25 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
   - **W6's fixture half is therefore UNBLOCKED.** The live-census half is already recorded above
     (5/5 inside 0.30 s at load 19.3).
 
+- 2026-09-20T14:4xZ · **W6 — THE ACCEPTANCE DRILL IS COMPLETE (lead 540263da). All three legs, run
+  and printed this session.**
+
+  | leg | result |
+  |---|---|
+  | live census, `/usr/bin/time -p cc-limited` ×5 | **0.27 · 0.22 · 0.22 · 0.22 · 0.22 s** — 5/5 inside § 5's 0.30 s bar, at **load 19.3** (inside § 5's own `load ≤ 20`) |
+  | fixture suite, `bats tests/cc-limited.bats` | **24/24**, plan line `1..24` read not inferred, 0 failures, rc 0 |
+  | capture + receipt, `tests/fixtures/lr-2026-09-19/capture.sh` | 7 markers · **63 registry rows** · 3,843 beats · 43 transcript tails; `EXPECTED.screen` (3,778 B) and `EXPECTED.tsv` (4,232 B) **DERIVED** by running the census against the snapshot, never asserted |
+
+  Live footer verbatim: `31 sessions · 60 marker rows · 0 unaddressable · enumerator ok`, exit 0
+  every run. `--tsv` 11 fields (§ 5's arity). Default screen 2,595 B; `--json` 26,761 B for 31 sids
+  (§ 5's 1,200 B / 6 KB budgets were written for 5).
+  **§ 10 vs § 5 is settled, twice, by fresh capture:** the receipt lists all 63 registry panes present
+  and **147 is not among them**. § 10 was right; the drill's row 1 was fabricated, and `build.sh` now
+  says so in its own header rather than hiding it.
+  **The load-invariance result stands and is the durable one:** across load 138 → 60 → 19 the census
+  distribution barely moved (max 0.32 / 0.32 / 0.27), so it is store-I/O bound, not CPU bound. A tail
+  above 0.30 s will not be cured by a quieter machine.
+
 ## 13. Cross-reference — `LIMIT_RECOVER_100P` § 9 landed the recovery side first (2026-09-20 00:1xZ, session 11569d45)
 
 Your wave-1 corpus was this session's research. Landed and LIVE on trunk at `1b2676f4c` (23:50Z),
