@@ -353,10 +353,15 @@ mint() { # $1=sid [$2=explicit path] → prints the minted token path
   printf '%s\t%s\t%s\t%s\n' "$(( $(date +%s) - 600 ))" sid-abc "$(id -u)" load > "$tok"
   run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN_TTL_S=60 CC_ADMIT_TOKEN="$2" \
                CC_ADMIT_WANT_SID=sid-abc cc_capacity_admit c15b "s"' _ "$LIB" "$tok"
-  [ "$status" -eq 9 ]                               # FRESH evaluation, not a silent admit
+  [ "$status" -eq 9 ]                               # never a silent admit
   [ ! -f "$tok" ]                                   # consumed even though it was stale
   [[ "$(idl_field 'select(.caller=="c15b")|.token')" == *"EXPIRED"* ]] || false
-  [ "$(idl_field 'select(.caller=="c15b")|.term')" = "load" ]
+  # W2FA D5 MOVED THIS ONE ASSERTION, and the move IS the fix. It read `= "load"`, i.e. the gate
+  # re-evaluated the box in the pane over a stale token — which is the second gate on one net-zero
+  # operation, after the transplant, and is the whole defect. The refusal is now terminal and names
+  # the token as the term that refused; 15t is the case that pins the rest of that state.
+  [ "$(idl_field 'select(.caller=="c15b")|.term')" = "token" ] \
+    || { echo "term: $(idl_field 'select(.caller=="c15b")|.term') — a stale token re-decided in the pane"; false; }
 }
 
 @test "15c a PROBE never redeems a token (it would spend the caller's admission)" {
@@ -601,4 +606,86 @@ EOF
   [ -f "$tok" ] || { echo "a record that is not ours was CONSUMED"; false; }
   [[ "$(idl_first 'select(.caller=="c15n")|.token')" == *"999999"* ]] \
     || { echo "row: $(idl_first 'select(.caller=="c15n")|.token')"; false; }
+}
+
+# ══ D5 — THE TTL WAS SMALLER THAN THE WINDOW IT MUST CROSS ════════════════════════════════════
+# The token is minted BEFORE the transplant and redeemed only after handoff-fire's composer gate
+# (CC_RECYCLE_DRAFT_WAIT, 180 s) plus its shell wait (HF_RECYCLE_SHELL_WAIT_S, 600 s), inside a boot
+# window (RCY_BOOT_STALE_S, 180 s); recycle_await_verdict sizes the whole recycle at 1200 s from
+# those same four names. A TTL of 300 s is shorter than ONE of those stages, so under exactly the
+# loaded conditions that produce limits the token was ALWAYS stale by the time the launcher ran —
+# and the fall-through then re-created the two-gate split, in the pane, AFTER the transplant.
+
+@test "15r D5a the TTL is SIZED FROM the stages it crosses, read by name from the same variables" {
+  # 900 s is longer than the old 300 s TTL and shorter than the derived window (180+600+180+60).
+  local tok
+  tok="$(mint sid-ttlwin)"
+  printf '%s\t%s\t%s\t%s\n' "$(( $(date +%s) - 900 ))" sid-ttlwin "$(id -u)" load > "$tok"
+  run bash -c 'unset CC_ADMIT_TOKEN_TTL_S; . "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" \
+               CC_ADMIT_WANT_SID=sid-ttlwin cc_capacity_admit c15r "s"' _ "$LIB" "$tok"
+  [ "$status" -eq 0 ] \
+    || { echo "a 900s-old token expired inside a recycle handoff-fire itself sizes at 1200s"; echo "$output"; false; }
+  [ "$(idl_first 'select(.caller=="c15r")|.basis')" = "token" ]
+}
+
+@test "15s D5a2 the stage variables are READ, not re-typed — shrinking them shrinks the TTL" {
+  # The sibling pattern is recycle_await_verdict's max expression, which reads all four stage names
+  # so that a constant edit moves it. A re-typed literal would leave this case green while the real
+  # window changed underneath it, which is how the 300 s came to be wrong in the first place.
+  local tok
+  tok="$(mint sid-ttlvar)"
+  printf '%s\t%s\t%s\t%s\n' "$(( $(date +%s) - 900 ))" sid-ttlvar "$(id -u)" load > "$tok"
+  run bash -c 'unset CC_ADMIT_TOKEN_TTL_S; . "$1"
+               CC_RECYCLE_DRAFT_WAIT=1 HF_RECYCLE_SHELL_WAIT_S=1 RCY_BOOT_STALE_S=1 \
+               CC_ADMIT_TOKEN_TTL_SLACK_S=1 CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" \
+               CC_ADMIT_WANT_SID=sid-ttlvar cc_capacity_admit c15s "s"' _ "$LIB" "$tok"
+  [ "$status" -ne 0 ] || { echo "the TTL ignored the stage variables — it is a re-typed literal"; false; }
+  [[ "$(idl_first 'select(.caller=="c15s")|.token')" == *"TTL 4s"* ]] \
+    || { echo "row: $(idl_first 'select(.caller=="c15s")|.token')"; false; }
+}
+
+@test "15t D5b an unredeemable token is a NAMED TERMINAL STATE, never a fresh in-pane evaluation" {
+  # A fresh evaluation in the pane IS the defect: it is the second gate, in the second process,
+  # after the transplant. Where the caller declared sid enforcement (CC_ADMIT_WANT_SID non-empty)
+  # the gate therefore stops at `token-stale` — no term evaluated, no budget charged, and a page —
+  # instead of re-deciding on numbers the driver already decided on.
+  local tok
+  tok="$(mint sid-term)"
+  printf '%s\t%s\t%s\t%s\n' "$(( $(date +%s) - 999999 ))" sid-term "$(id -u)" load > "$tok"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=0.01 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-term \
+               cc_capacity_admit c15t "s"' _ "$LIB" "$tok"
+  # the box is QUIET (0.01/core): a fresh evaluation would ADMIT, which is exactly what must not happen
+  [ "$status" -eq 9 ] || { echo "rc=$status — the launcher re-decided in the pane"; echo "$output"; false; }
+  [ "$(idl_first 'select(.caller=="c15t")|.basis')" = "token-stale" ] \
+    || { echo "basis: $(idl_first 'select(.caller=="c15t")|.basis')"; false; }
+  [ "$(idl_first 'select(.caller=="c15t")|.term')" = "token" ]
+  # the bound is NOT charged: this refusal is about the caller's own input, not about the box
+  [ ! -f "$CC_ADMIT_STATE_DIR/c15t.refusals" ] || { echo "a token refusal spent the box's budget"; false; }
+  # …and it is an EVENT, not a standing state
+  grep 'could not be redeemed' "$BATS_TEST_TMPDIR/pages.txt" >/dev/null \
+    || { echo "no page:"; cat "$BATS_TEST_TMPDIR/pages.txt" 2>/dev/null; false; }
+}
+
+@test "15u D5c EQUIVALENCE GUARD — CC_ADMIT_TOKEN_REQUIRED=off restores the fall-through verbatim" {
+  # EQUIVALENCE GUARD, labelled: this pins the pre-W2FA behaviour, so it is green in both arms by
+  # construction. Its power is over the SWITCH, not over the defect — the mutant it kills is one
+  # that ignores the kill switch.
+  local tok
+  tok="$(mint sid-ks)"
+  printf '%s\t%s\t%s\t%s\n' "$(( $(date +%s) - 999999 ))" sid-ks "$(id -u)" load > "$tok"
+  run bash -c '. "$1"; CC_ADMIT_TOKEN_REQUIRED=off CC_ADMIT_LOADAVG_OVERRIDE=0.01 CC_ADMIT_TOKEN="$2" \
+               CC_ADMIT_WANT_SID=sid-ks cc_capacity_admit c15u "s"' _ "$LIB" "$tok"
+  [ "$status" -eq 0 ] || { echo "the kill switch did not restore the fresh evaluation"; echo "$output"; false; }
+  [ "$(idl_first 'select(.caller=="c15u")|.basis')" = "measured" ]
+  [[ "$(idl_first 'select(.caller=="c15u")|.token')" == *"EXPIRED"* ]] || false
+}
+
+@test "15v D5d EQUIVALENCE GUARD — a caller presenting NO token keeps the fall-through untouched" {
+  # The terminal state may only reach a caller that PRESENTED a driver's decision. boot-resume.sh,
+  # reso-resume-one and the Agent hook set no CC_ADMIT_TOKEN at all, so nothing about their
+  # evaluation changes: there is no first gate for a second one to contradict.
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=0.01 CC_ADMIT_WANT_SID=sid-none \
+               cc_capacity_admit c15v "s"' _ "$LIB"
+  [ "$status" -eq 0 ]
+  [ "$(idl_first 'select(.caller=="c15v")|.basis')" = "measured" ]
 }
