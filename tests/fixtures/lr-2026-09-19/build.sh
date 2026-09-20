@@ -113,6 +113,21 @@ reg 121 65186f1f-0000-4000-8000-000000000000 claude-secondary 59379 178985091900
 # 07e30aeb is alive in place on next3. SYNTHETIC — reconstructed from the live BEAT (pane 147,
 # pid 84167); there is no such registry row in any capture. See § THE ONE HAND-ASSERTED ROW above.
 reg 147 07e30aeb-0000-4000-8000-000000000000 claude-tertiary  84167 1789852000000 "$CWD_143039"
+# ── 2b. the BEATS — the sid-keyed liveness source the registry cannot be trusted alone for ─────
+# § 11 #2. The live capture proves the point this fixture otherwise hides: 07e30aeb's registry row
+# is GONE (overwritten by pane 147's next occupant) while its beat survives, carrying pane 147 and
+# pid 84167 verbatim. Those are the two values reg 147 above reconstructs, so the beat is written
+# here as well — the generator and the capture then agree about WHERE this session's pane lives,
+# and differ only on the instant (this fixture pins one where the pid was still running).
+B="$H/.claude/cc-beats"; mkdir -p "$B"
+beat() { # sid pane pid
+  mk "$B/$1.json" <<JSON
+{"sid":"$1","pane":"$2","pid":$3,"lstart":"Fri Sep 19 12:00:00 2026","t":1789851164,
+ "kind":"prompt","who":"auto","seq":3}
+JSON
+}
+beat 07e30aeb-0000-4000-8000-000000000000 147 84167
+
 {
   echo "12341 Fri Sep 19 12:00:00 2026"
   echo "59379 Fri Sep 19 12:00:00 2026"
@@ -179,6 +194,7 @@ export CC_LIMITED_ACCOUNTS="$H/.claude/accounts.json"
 export CC_LIMITED_ROOTS="$H/.claude-next:$H/.claude-secondary:$H/.claude-tertiary:$H/.claude-quaternary"
 export CC_LIMITED_PS="$W/ps.txt"
 export CC_LIMITED_PROCS="$W/procs.txt"
+export CC_LIMITED_BEATS="$B"
 export CC_LIMITED_IDL="$W/idl.jsonl"
 export LR_NOW="$NOW_ISO"
 ENVSH

@@ -377,6 +377,248 @@ PY
   [ "$output" = 1 ]
 }
 
+# ── 16-22: the § 11 amendments ───────────────────────────────────────────────────────────────────
+# Seven rows, one per amendment that names a W2b row: #2 #3 #4 #7 #10 #11 #12. Each amendment is a
+# critic gap closed against the synthesis, so each row here is the executable form of a decision
+# that would otherwise live only in a table.
+
+@test "16 a beat with a live pid and NO registry row is RECOVERABLE, not NO-PANE" {
+  # § 11 #2. P5 REFUTED the registry's completeness: 3 of 14 rate_limit sids had no row at all,
+  # and the cause is pane-keyed OVERWRITE — the row is written and then replaced by the pane's
+  # next occupant. `cc-beats/<sid>.json` is sid-keyed and survives that, carrying the same
+  # (pid,lstart) pin. A census single-sourced on the registry calls this session dead and stops
+  # offering the one recovery that would work: nudging the pane it is still sitting in.
+  printf '{"ts":"2026-09-19T20:35:00Z","error":"rate_limit","config_dir":"%s","session_id":"beaa7e00-0000-4000-8000-000000000000","cwd":"%s","pane":"","transcript_path":"","last_assistant_message":"You'"'"'ve hit your session limit"}\n' \
+    "$W/home/.claude-tertiary" "$CWD_INFRA" >> "$M/rate_limit__next3.jsonl"
+  printf '{"sid":"beaa7e00-0000-4000-8000-000000000000","pane":"203","pid":55555,"lstart":"Fri Sep 19 12:00:00 2026"}\n' \
+    > "$CC_LIMITED_BEATS/beaa7e00-0000-4000-8000-000000000000.json"
+  echo "55555 Fri Sep 19 12:00:00 2026" >> "$CC_LIMITED_PS"
+  [ "$(jrow beaa7e00 state)" = RECOVERABLE ]
+  run cc
+  # the beat is also the only store that still names the pane, so it renders rather than blanking
+  printf '%s\n' "$output" | grep -q 'RECOVERABLE .*#203  beaa7e00' || false
+
+  # CONTROL (the amendment names it): the SAME beat with a DEAD pid must be NO-PANE. Without this
+  # the row above is satisfiable by a census that treats the mere EXISTENCE of a beat as life,
+  # which would resurrect every session that ever submitted a prompt.
+  grep -v '^55555 ' "$CC_LIMITED_PS" > "$CC_LIMITED_PS.new"
+  mv "$CC_LIMITED_PS.new" "$CC_LIMITED_PS"
+  [ "$(jrow beaa7e00 state)" = NO-PANE ]
+}
+
+@test "17 a parked-only sid — no marker row anywhere — is surfaced with its cap and its reset" {
+  # § 11 #3. The marker writer has six paths that write NOTHING and exit 0, so `parked/` is
+  # sometimes the ONLY evidence a session is blocked. Its fields are its own (parked_at, cfg,
+  # reset_at_utc, kind) and it carries no assistant text at all — so it must classify BY CAP.
+  # Classifying "" by TEXT returns `other`, the one verdict that means "never parked", and the
+  # census would then contradict the very poller that parked it.
+  printf '{"sid":"7a2ked00-0000-4000-8000-000000000000","acct":"next3","cfg":"%s","cwd":"%s","kind":"weekly","reset_at_utc":"2026-09-19T23:00:00Z","parked_at":"2026-09-19T21:05:00Z"}\n' \
+    "$W/home/.claude-tertiary" "$CWD_INFRA" > "$LR_STATE_DIR/parked/7a2ked00-0000-4000-8000-000000000000.json"
+  [ "$(jrow 7a2ked00 cap)" = seven_day ]
+  [ "$(jrow 7a2ked00 recoverable_by_waiting)" = True ]
+  [ "$(jrow 7a2ked00 group)" = next3 ]
+  run cc
+  printf '%s\n' "$output" | grep -q '7a2ked00' || false
+  printf '%s\n' "$output" | grep -q 'seven_day · resets 23:00:00Z' || false
+
+  # A 'fable' park is the same path and the opposite waitability — the cap map is the whole
+  # classification, so the row above must not be satisfiable by hard-coding one kind.
+  printf '{"sid":"fab1e000-0000-4000-8000-000000000000","acct":"next3","cfg":"%s","cwd":"%s","kind":"fable","reset_at_utc":"","parked_at":"2026-09-19T21:06:00Z"}\n' \
+    "$W/home/.claude-tertiary" "$CWD_INFRA" > "$LR_STATE_DIR/parked/fab1e000-0000-4000-8000-000000000000.json"
+  [ "$(jrow fab1e000 cap)" = "model_scoped:Fable" ]
+  [ "$(jrow fab1e000 recoverable_by_waiting)" = False ]
+}
+
+@test "18 one file reachable under two roots is ONE copy — the dedupe counts inodes" {
+  # § 11 #4. The dedupe read `realpath(root)` on the belief that ~/.claude-next IS a symlink to
+  # ~/.claude. It is not: ~/.claude-next is a REAL directory and only its `projects/` is the link.
+  # So the key never collided, the dedupe was inert, and every `next` transcript was enumerated
+  # once per root — one session reporting a salvage history it does not have.
+  #
+  # build.sh creates no ~/.claude-next at all, so this builds the real production shape from
+  # scratch: a REAL directory whose `projects/` ALONE is a link into ~/.claude/projects.
+  mkdir -p "$W/home/.claude/projects" "$W/home/.claude-next"
+  ln -s "$W/home/.claude/projects" "$W/home/.claude-next/projects"
+  local slug; slug="$(printf '%s' "$CWD_INFRA" | sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$W/home/.claude/projects/$slug"
+  printf '{"type":"system","subtype":"bridge-session"}\n' \
+    > "$W/home/.claude/projects/$slug/dedu9000-0000-4000-8000-000000000000.jsonl"
+  printf '{"ts":"2026-09-19T20:36:00Z","error":"rate_limit","config_dir":"%s","session_id":"dedu9000-0000-4000-8000-000000000000","cwd":"%s","pane":"","transcript_path":"","last_assistant_message":"You'"'"'ve hit your session limit"}\n' \
+    "$W/home/.claude-next" "$CWD_INFRA" >> "$M/rate_limit__next3.jsonl"
+  # BOTH roots are enumerated, and they reach the same inode by two different paths.
+  export CC_LIMITED_ROOTS="$W/home/.claude:$W/home/.claude-next:$W/home/.claude-secondary:$W/home/.claude-tertiary"
+  [ "$(jrow dedu9000 copies)" = 1 ]
+  # the correction is REAL, not a no-op: the same file is genuinely visible under both spellings.
+  run bash -c 'ls "$1/.claude/projects/$2/" "$1/.claude-next/projects/$2/" | grep -c dedu9000' _ "$W/home" "$slug"
+  [ "$output" = 2 ]
+}
+
+@test "19 a 500-row marker file x3 still renders inside the 0.30 s budget" {
+  # § 11 #7. D3 was amended to TTL 10080 / CAP 500 rather than the proposed CAP 5000, on the
+  # ground that per-sid grouping already dedupes at read. That is only true if the READ itself
+  # stays inside the hook's own budget AT the cap, so the cap is pinned by a measurement here
+  # rather than by the argument that motivated it.
+  python3 - "$M" "$W/home/.claude-tertiary" "$CWD_INFRA" <<'PY'
+import json, sys
+M, CFG, CWD = sys.argv[1], sys.argv[2], sys.argv[3]
+for f in ("bulk_a", "bulk_b", "bulk_c"):
+    with open("%s/rate_limit__%s.jsonl" % (M, f), "w") as fh:
+        for i in range(500):
+            fh.write(json.dumps({
+                "ts": "2026-09-19T2%d:%02d:%02dZ" % (i % 2, i % 60, i % 60),
+                "error": "rate_limit", "config_dir": CFG, "cwd": CWD, "pane": "",
+                "session_id": "%s%04d-0000-4000-8000-000000000000" % (f[-1] * 4, i),
+                "transcript_path": "",
+                "last_assistant_message": "You've hit your session limit"}) + "\n")
+PY
+  run cc --all
+  [ "$status" -eq 0 ]
+  # THE INSTRUMENT MEASURES THE CENSUS, NOT THE HARNESS. Bracketing a bats `run` with two
+  # `python3 -c` clock reads costs ~110 ms of interpreter startup that is not the subject's, and
+  # it read 260 ms against a 300 ms bar for a census that takes 140. One fork, timed from inside
+  # the timer's own process, so what is compared to the budget is one `cc-limited` and nothing else.
+  local ms
+  ms="$(python3 -c '
+import subprocess, sys, time
+t = time.time()
+subprocess.run([sys.executable, sys.argv[1], "--all"], stdout=subprocess.DEVNULL)
+print(int((time.time() - t) * 1000))' "$SUBJ")"
+  echo "# 1500 marker rows (3 files at the 500-row cap) rendered in ${ms} ms (budget 300)" >&3
+  [ "$ms" -le 300 ]
+}
+
+@test "20 TEAMMATE is decided by the SSOT predicate, and by EVERY copy — not by a substring" {
+  # § 11 #10. Two halves, and only the second can go red against the shipped subject.
+  # (a) EQUIVALENCE GUARD: the key lands on line 3-4 and a salvage copy can be truncated above
+  #     it, so the test must run over every copy, not only the preferred one. The shipped code
+  #     already ORs across scans — this half GUARDS that rule rather than proving it, and is
+  #     recorded as such in the RED-PROOF footer instead of being claimed as a red.
+  # setup() exports CWD_INFRA only; this row needs the 143039 worktree, spelled as build.sh does.
+  local slug; slug="$(printf '%s' "$W/Users/chrisren/Development/.worktrees/wt-cc-143039-68221" \
+    | sed 's/[^A-Za-z0-9]/-/g')"
+  printf '{"type":"user","agentName":"reviewer","teamName":"w2b"}\n' \
+    >> "$W/home/.claude-secondary/projects/$slug/07e30aeb-0000-4000-8000-000000000000.jsonl.handed-off"
+  [ "$(jrow 07e30aeb teammate)" = True ]
+  [ "$(jrow 07e30aeb state)" = TEAMMATE ]
+
+  # (b) THE RED HALF: a raw `"agentName" in head` answers TRUE to a NULL value and to a record
+  #     merely quoting the field name inside a text payload. TEAMMATE is the FIRST arm of the
+  #     state table, so a false positive is a session the census refuses to recover forever and
+  #     never mentions again. The SSOT requires a parsed TOP-LEVEL key with a NON-EMPTY string.
+  printf '{"type":"system","subtype":"queue-operation","op":"enqueue"}\n{"type":"user","agentName":null}\n{"type":"assistant","message":{"content":[{"type":"text","text":"the \\"agentName\\" field"}]}}\n' \
+    > "$W/home/.claude-tertiary/projects/$slug/07e30aeb-0000-4000-8000-000000000000.jsonl"
+  rm -f "$W/home/.claude-secondary/projects/$slug/07e30aeb-0000-4000-8000-000000000000.jsonl.handed-off"
+  [ "$(jrow 07e30aeb teammate)" = False ]
+}
+
+@test "21 an ABSENT optional store is an empty at exit 0; one it CANNOT READ is exit 5" {
+  # § 11 #11, the ONE disposition rule. `os.listdir` raises the same way for ENOENT and EACCES,
+  # so both arrived as the same empty list: a `locks/` the census could not read rendered as a
+  # census in which nobody had claimed anything, and every FAULT CLAIMED-NOT-LIVE row vanished
+  # silently. That is the false-calm shape this tool exists to end, wearing a different hat.
+  rmdir "$LR_STATE_DIR/faults"
+  run cc
+  [ "$status" -eq 0 ]
+  printf '%s\n' "$output" | grep -q 'absent (read as empty): faults' || false
+  printf '%s\n' "$output" | grep -q '98f02458' || false          # rows still rendered
+  # the claim rows the locks dir feeds are present, so the arm below is a REAL loss of content
+  printf '%s\n' "$output" | grep -q 'FAULT CLAIMED-NOT-LIVE' || false
+
+  local out rc=0
+  chmod 000 "$LR_STATE_DIR/locks"
+  out="$(cc 2>/dev/null)" || rc=$?
+  chmod 755 "$LR_STATE_DIR/locks"
+  [ "$rc" -eq 5 ]
+  [ -z "$out" ]
+  # …and stderr NAMES the store, so the operator is not left to guess which one went down
+  run bash -c 'chmod 000 "$2/locks"; python3 "$1" 2>&1 1>/dev/null; chmod 755 "$2/locks"' _ "$SUBJ" "$LR_STATE_DIR"
+  printf '%s\n' "$output" | grep -q 'locks' || false
+}
+
+@test "22 through a SYMLINK, the predicate imported is the one beside the binary that ran" {
+  # § 11 #12. `~/.claude/bin/cc-limited` is a per-file symlink into a checkout, and this fleet has
+  # several checkouts of this repo live at once. If sys.path were built from `__file__` the
+  # worktree's binary would import the LIVE checkout's predicate — a landed classification change
+  # would test green in its own worktree and run the old rule everywhere, with no diff to show
+  # for it. `os.path.realpath` pins the module to the binary that is actually executing.
+  local link="$BATS_TEST_TMPDIR/bin/cc-limited"
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  ln -sf "$SUBJ" "$link"
+  # the link is genuinely a link, into a DIFFERENT directory, or the row proves nothing
+  [ -L "$link" ]
+  [ "$(dirname "$link")" != "$(dirname "$SUBJ")" ]
+  # and it runs through the link WITHOUT a PYTHONPATH — which is the assertion: the import
+  # resolved, so the module was found relative to the REAL path, not the link's directory.
+  run env -u PYTHONPATH python3 "$link" --json
+  [ "$status" -eq 0 ]
+  # the module it resolves is the one under the same checkout as realpath(cc-limited)
+  run bash -c 'env -u PYTHONPATH python3 - "$1" <<'"'"'PY'"'"'
+import os, sys
+link = sys.argv[1]
+real = os.path.realpath(link)
+sys.path.insert(0, os.path.join(os.path.dirname(real), "..", "scripts", "limit-recover"))
+import lr_predicate
+want = os.path.join(os.path.dirname(os.path.dirname(real)), "scripts", "limit-recover")
+print(os.path.realpath(os.path.dirname(lr_predicate.__file__)) == os.path.realpath(want))
+PY' _ "$link"
+  [ "$output" = True ]
+
+  # THE MUTANT, because this row is GREEN IN BOTH ARMS. § 11 #12 was already satisfied on HEAD
+  # (`sys.path` has been built from realpath since :68 shipped), so there is no fix here to go
+  # red against — which makes this an equivalence guard, and an equivalence guard is worth
+  # nothing until the mutation it guards against is built and killed. Drop the `realpath` and
+  # the import resolves against the LINK's directory, where no `scripts/limit-recover` exists.
+  local mutant="$BATS_TEST_TMPDIR/mut-file.py"
+  sed 's|os.path.dirname(os.path.realpath(__file__))|os.path.dirname(__file__)|' "$SUBJ" > "$mutant"
+  grep -q 'os.path.dirname(__file__)' "$mutant"        # the mutation actually applied
+  local mlink="$BATS_TEST_TMPDIR/bin/mut-cc-limited"
+  ln -sf "$mutant" "$mlink"
+  local rc=0
+  env -u PYTHONPATH python3 "$mlink" --json >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 5 ]                                      # RED: it cannot find its own predicate
+}
+
+# ── RED-PROOF: rows 16-22 against PRISTINE HEAD (d4a47bd9c) ──────────────────────────────────────
+# Each row below was run once with `git checkout d4a47bd9c -- bin/cc-limited` in place and the
+# CURRENT fixture, so the only variable is the subject. Six went red; the seventh did not, and it
+# is recorded as what it is rather than as a red that was never observed.
+#
+#   not ok 18  16 a beat with a live pid and NO registry row is RECOVERABLE, not NO-PANE
+#              `[ "$(jrow beaa7e00 state)" = RECOVERABLE ]' failed      (§ 11 #2 unimplemented:
+#              `cc-beats` returns 0 hits in bin/cc-limited on HEAD — liveness was registry-only)
+#   not ok 19  17 a parked-only sid … is surfaced with its cap and its reset
+#              `[ "$(jrow 7a2ked00 cap)" = seven_day ]' failed          (§ 11 #3: parked_sids()
+#              enumerated a store nothing consumed; the sid never became a row at all)
+#   not ok 20  18 one file reachable under two roots is ONE copy
+#              `[ "$(jrow dedu9000 copies)" = 1 ]' failed               (§ 11 #4: read 2 — the
+#              dedupe was keyed on realpath(root), which never collides)
+#   not ok 21  19 a 500-row marker file x3 … inside the 0.30 s budget
+#              359 ms against the 300 ms bar                            (§ 11 #7: the slug-miss
+#              full walk was paid per sid — 19,532 listdir calls)
+#   not ok 22  20 TEAMMATE is decided by the SSOT predicate
+#              `[ "$(jrow 07e30aeb teammate)" = False ]' failed         (§ 11 #10: the raw
+#              substring answers TRUE to `"agentName":null`. NOTE the red is on the row's SECOND
+#              assertion; its first — apply the test to EVERY copy — passed pre-fix and is an
+#              equivalence guard, labelled as such in the row itself.)
+#   not ok 23  21 an ABSENT optional store is an empty at exit 0; one it CANNOT READ is exit 5
+#              the `absent (read as empty): faults` footer was missing  (§ 11 #11: listdir raises
+#              alike for ENOENT and EACCES, so both arrived as the same empty list)
+#   ---- ok 24 22 through a SYMLINK, the predicate imported is the one beside the binary that ran
+#              GREEN IN BOTH ARMS — NOT a red proof. § 11 #12 was already satisfied on HEAD
+#              (bin/cc-limited:68 has built sys.path from os.path.realpath(__file__) since it
+#              shipped), so there is no fix for this row to go red against. It is an EQUIVALENCE
+#              GUARD, and it is worth nothing on that evidence alone — so the row carries the
+#              mutation it guards against and kills it: dropping the `realpath` makes the import
+#              resolve against the LINK's directory and the subject exits 5. That mutant, not a
+#              pre-fix red, is this row's proof of power.
+#
+# THE FIXTURE'S OWN PROVENANCE, since three of these rows turn on it: tests/fixtures/lr-2026-09-19/
+# CAPTURE-RECEIPT.md records a live capture and derives § 5's row-1 state from it rather than
+# quoting the plan. Its finding: 07e30aeb has no registry row anywhere, no resume leaf, and a beat
+# whose pid is dead — so row 1's true state is NO-PANE, and the `#147 RECOVERABLE (stub)` the drill
+# asserted described one moment. build.sh still builds a world where that pid is alive, which is a
+# legitimate designed fixture; what it no longer does is call that registry row measured.
+
 # ── MEASUREMENTS AND THE MUTANT BATTERY ──────────────────────────────────────────────────────────
 # WALL CLOCK, three runs over the 5-session fixture on the cloud VM (Linux, python3 3.11):
 #   0.038 0.037 0.038 s.  Budget 0.30 s; the shipped `lr-fleet.sh --locate` it replaces measured 35.5 s.
