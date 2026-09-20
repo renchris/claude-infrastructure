@@ -578,7 +578,10 @@ ma_row() { grep -F "\"reason\":\"$1\"" "$CONTINUE_IDL" 2>/dev/null | tail -1; }
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"nothing to clear"* ]] || { echo "$output"; false; }
   [[ "$output" != refused* ]] || { echo "refused with no sentinel present: $output"; false; }
-  n="$(ls -1 "$CLAUDE_CONFIG_DIR/state"/continue-*.mech 2>/dev/null | wc -l | tr -d ' ')"
+  # Counted by GLOB, not `ls | wc -l` (SC2012) — and the repo prefers a glob over `find` here for a
+  # second reason: BSD find does not walk a symlinked start dir without -H, and $BATS_TEST_TMPDIR is
+  # one on this box, so find's null would read as "no files" rather than "did not look".
+  n=0; for _mech in "$CLAUDE_CONFIG_DIR/state"/continue-*.mech; do [ -e "$_mech" ] && n=$((n+1)); done
   [ "$n" -ge 1 ] || { echo "the mech budget was not spent"; ls -la "$CLAUDE_CONFIG_DIR/state"; false; }
 }
 
