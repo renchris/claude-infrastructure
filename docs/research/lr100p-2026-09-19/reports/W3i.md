@@ -403,3 +403,207 @@ the target-dir clear, `D2A6` restores the `-1 ⇒ PASS` arm, `D5C5` restores the
 and `D6OWN` restores the both-sids-required guard. `D6BUD` is what makes the `[ -f "$f" ]`
 equivalence guard a guard: it is green in both arms of the D6 change and dies on the mutation that
 removes the conjunct, which is the only evidence that assertion has power.
+
+## 7. W3i round 4 (2026-09-20) — B3's verdict, and the flag that failed open on the other side
+
+Round 3 died mid-run on an `ENOTFOUND` after three commits. This section (a) re-verifies those three
+by execution rather than inheriting their claims, (b) answers B3 — the question §6 left open —, and
+(c) records the one defect that survived both hardening passes.
+
+### 7.1 The three blockers, each re-measured on this tree
+
+| | claim | how it was re-checked | result |
+|---|---|---|---|
+| **B1** | an unchanged trunk suite is red from this branch's hook change | `bats -f "double-block" tests/completion-assert.bats`, run **with** an ambient `CLAUDE_CODE_SESSION_ID` (the condition that made it red) | **5/5 ok**, including `double-block CONTROL: the marker is per-STOP — a later silent Stop convicts again`. The control was not loosened: `clear`'s guard became opt-in, so the operator's bare verb — which that case drives — is trunk's verb again |
+| **B2** | pipefail | `bash scripts/pipefail-sigpipe-lint.sh` after `git rebase origin/main` | **rc 0**, `clean (allowlist honoured)`, 1395 verdicts carried / 39 proven fresh. The sibling's two `handoff-fire.sh` drains are on trunk and came in with the rebase |
+| **B3** | the gate admits nothing | full 69-bundle sweep re-run, plus a corrected counterfactual | §7.2, §7.3 |
+
+The twelve mutants §6.7 records were also re-run against this tree rather than quoted:
+**12/12 KILLED, survivors none**, subject sha256-verified restored after every row.
+
+### 7.2 B3 — the rc distribution per clause, over all 69 bundles, before and after
+
+Protocol both arms: `--no-clear`, `CLAUDE_CONFIG_DIR` taken from **each MANIFEST's own** `target_cfg`,
+every bundle under `~/.reso/limit-recover`. BEFORE = tree at ``a14f2edbd`` (round 3's starting point);
+AFTER = ``199261ca6`` rebased onto today's `origin/main`, re-run afterwards on ``a4bec3973`` and
+**bit-identical** — §7.6's fix cannot reach a `--no-clear` sweep, where clause D asks `status`.
+
+| clause | FAIL before | FAIL after | Δ |
+|---|---|---|---|
+| A0 | 1 | 1 | |
+| A1 | 17 | 17 | |
+| A2 | 42 | 42 | |
+| A3 | 35 | 35 | |
+| A4 | 35 | 35 | |
+| A5 | 6 | 6 | |
+| A6 | 68 | 68 | |
+| B1 | **50** | **46** | **−4** |
+| C1 | 0 | 0 | |
+| C2 | 25 | 25 | |
+| C3 | 67 | 67 | |
+| C4 | 7 | 7 | |
+| C5 | 24 | **25** | +1 |
+| D1 | 10 | **11** | +1 |
+| D2 | 10 | **11** | +1 |
+| **rc=1** | **69 / 69** | **69 / 69** | |
+
+**The three `+1`s are one bundle and they are the world moving, not the gate.** A per-bundle join of
+the two arms shows exactly five rows differing: the four B1 flips, and
+`7f533f05…_bundle-20260919T223034Z` going `A2,A6,C3` → `A2,A6,C3,C5,D1,D2` — its worktree was reaped
+between 11:57 and 16:05. That is C7's arms firing correctly on a live reap, and it is also why the
+figure is quoted with its timestamp: **a sweep of this store is a sample, not a constant.**
+
+**The four B1 flips are the fix.** `28f07827…174936Z`, `4101dbdf…153655Z`, `a99681dc…153937Z`,
+`c0f857b6…222337Z` — each a bundle whose nonsuccess notifications were already recorded in its own
+audit, i.e. the clause refusing a state it was cut from.
+
+**rc is 69/69 in both arms, and that is the honest headline.** Nothing in this wave made a single
+bundle on disk admit.
+
+### 7.3 Why 0/69 is not a verdict about the gate — and what the number actually is
+
+Two clauses account for the floor: **A6 fails 68 of 68 reached, C3 fails 67 of 69.** Both are gated
+on an artifact whose **writer is younger than the bundles**:
+
+* `killed_inflight` — the writer landed in this wave (``a44c45e0a``). `grep -rn killed_inflight
+  scripts hooks bin` found one reader and no writer before it.
+* the split-brain lock — `~/.reso/limit-recover/locks/` holds **one** lock, dated 2026-09-20 05:01,
+  against the **65 of 69** bundles that carry a `transplant.json`.
+
+For C3 that raises the question A6 already answered badly once: *is the clause passable at all, or is
+the lock removed on success?* Measured, not assumed — `grep -rn 'rm .*\.lock' scripts/limit-recover/`
+returns **nothing**, and `lrt_already_done` (`lr-transplant.sh:57-62`) reads the lock as a durable
+idempotency receipt. The lock persists; C3 is passable, and the single live lock is simply the only
+transplant performed since that writer landed.
+
+**The counterfactual.** For each of the 33 current-schema bundles, supply *only* those two artifacts
+and read everything else — transcripts, tombstones, worktrees, sentinels, the account map — live.
+Nothing under `~/.reso/limit-recover` is written; each bundle is copied first.
+
+| | over 33 current-schema bundles |
+|---|---|
+| **rc=0 (ADMITTED)** | **11** |
+| rc=1 | 22 |
+| A3 · A4 · A5 · A6 · C1 · C3 | **0 each** |
+| B1 | 15 |
+| A2 | 7 |
+| C4 · C5 | 5 each |
+| C2 | 3 |
+| A1 · D1 · D2 | 2 each |
+
+**So the fast path is not a feature that does not exist: it admits about a third of modern-schema
+recoveries.** A6 and C3 — **135 of the 396** clause failures the live sweep records — go to **zero**
+the moment their writers have run.
+
+⚠️ **That 33% is a PROJECTION, not a measurement, and must be quoted as one.** No bundle on disk was
+cut by today's writers, so no run of this gate has ever admitted anything. The falsifier is cheap and
+dated: **the first bundle cut after this wave.** If A6 or C3 fails on it, the writer is not reaching
+production and this whole paragraph is wrong.
+
+**A harness defect found on the way, worth recording because it inverted a number.** Round 3's
+counterfactual wrote the lock pointer with `jq '.lock=$l' "$work/transplant.json"` behind an
+`[ -f ... ]` guard. **Five of the 33 bundles carry a present-but-EMPTY `transplant.json`** (the
+second and later bundles of a repeatedly-bundled sid), and `jq` on empty input emits nothing, so the
+pointer went into a void, `mv` installed an empty file, and the gate fell back to the derived path —
+which the harness had not created. Those five were then charged a **C3 failure the gate never made**.
+Testing parseability instead of existence takes cf's C3 residual from 5 to **0**. The gate itself is
+unaffected: its three readers of that file (`.target_transcript`, `.lock`, `.tombstone`) each fall
+back to the canonical path, so an empty receipt changes no verdict — only the harness measuring it.
+
+### 7.4 Every residual refusal is a TRUE statement about its bundle
+
+Judged clause by clause over the 22 that still refuse under the counterfactual:
+
+| clause | n | the refusal, and why it is true |
+|---|---|---|
+| **B1** | 15 | 12 are `NEW-nonsuccess≥1`: a delegation genuinely failed **after** the bundle was cut. Spot-verified on `12e163a9…221703Z` — the one id B1 calls NEW is absent from that bundle's own `audit.json .delegations.notifications` (which recorded 2 others). Every failing bundle HAS a baseline, so none is the no-baseline arm. The other 3 are "no readable target transcript under `target_cfg`" — and C2 fails on the same 3 |
+| **A2** | 7 | real in-flight work: `counts.gaps` 17 and 7 on two bundles, `counts.waiting` 2-14 on five |
+| **C4** | 5 | two sids (`07e30aeb`, `4bc1159f`) with neither lock nor tombstone — transplants that never completed |
+| **C5** | 5 | 2 reaped worktrees, 2 `pool/slot-*` fleet branches, 1 manifest recording neither worktree nor cwd |
+| **D1/D2** | 2 | the same 2 reaped worktrees, now named as such rather than as `exited 97` |
+| **A1 · C2** | 2 · 3 | gaps at handoff; the 3 missing transcripts above |
+
+**Nothing here is the gate being wrong about the world.** There is no refusal left to loosen.
+
+### 7.5 What the gate should do instead
+
+1. **Loosen nothing.** Each of the 22 is a true statement, and 135 of the 396 live failures are
+   writer-age, not design. The work is landed; what remains is for the writers to run.
+2. **Quote the saving against 33%, never against 100%.** A token-saving claim computed over all
+   recoveries is the defect this project keeps finding — the fast path is a third of them, projected.
+3. **B1 at 15/33 is the binding constraint, and it is a freshness clause doing its job.** Its failure
+   rate is a function of how long a bundle sits before ingest, not of the gate. If the admit rate
+   matters, cut the latency; do not weaken the clause that catches a delegation dying under us.
+4. **Date the falsifier.** The first bundle cut after this wave settles A6 and C3 in one run. Until
+   it does, `0 of 69` is what this gate has actually achieved and the close should say so.
+
+### 7.6 The defect this round found: `--if-mine` failed open on an absent CALLER identity
+
+§6.1 D6 removed a refusal keyed on evidence **the arm** need not have written. The same shape
+survived on the other side of the call. The guard read
+
+```sh
+if [ "$_sc_ifmine" = 1 ] && [ -f "$f" ] && [ -n "$_sc_cur" ] && [ "$_sc_owner" != "$_sc_cur" ]; then
+```
+
+so a caller that **passed `--if-mine`** and carried no session id skipped the guard entirely.
+RED, reproduced by hand before anything was touched — a sentinel armed as `sidA`, then:
+
+```
+armed:  ARMED (0 continuations, sid=sidA): the owner's step
+rc=0  out=cleared → …/state/continue-57abbbbe85769147
+after:  inactive
+```
+
+`--if-mine` asks exactly one question — *did I arm this?* — and a caller with no identity has already
+answered it. The test is now positive proof of ownership rather than absence of a mismatch: proceed
+only when the caller names itself **and** that name is the one recorded at arm time. The bare verb is
+untouched — `_sc_ifmine` is 0 without the flag, so the operator's park gesture never reaches this
+test, and `clear CONTROL: the operator's OWN bare-shell clear still disarms an anonymous sentinel`
+holds.
+
+A second arm was needed for a second world: with the arm anonymous **and** the caller anonymous, both
+sides are `""`, `"" != ""` is false, and a bare inequality would clear on a **coincidence of
+absence**. Two unknowns are not a proof of identity.
+
+Suite 44 → 46. Both new cases were RED on the unmodified tree, verbatim:
+
+```
+not ok 1 clear --if-mine: a caller that recorded NO sid is refused — it cannot be the armer
+#   `[[ "$output" == refused\ * ]] || { … }' failed
+# an anonymous CALLER cleared sidA's chain: cleared → …/cfg/state/continue-2576ad07f60071fb
+not ok 2 clear --if-mine: neither side identified is still a refusal, not a match on two empty strings
+# two empty sids compared EQUAL and cleared: cleared → …/cfg/state/continue-c16b3a8d3002dd5e
+```
+
+This is latent rather than live for the shipped caller: `lr-ingest-verify` resolves
+`SID="$(mval '.sid // "ABSENT"')"`, which is never empty, so clause D always names itself. It is the
+contract of the flag that was wrong, and the next caller is the one that would have paid.
+
+### 7.7 Mutation score of this round's own additions
+
+Four mutants, each run against the ONE case named for it, subject restored and sha256-verified after
+every row (`scratchpad/w3i/mutants4.py`):
+
+| mutant | the arm it deletes | verdict |
+|---|---|---|
+| `CALLERID` | the widened test restored to `[ -n "$_sc_cur" ] && …` (the pre-fix guard) | **KILLED** |
+| `EMPTYMATCH` | the widened test reduced to the bare `[ "$_sc_owner" != "$_sc_cur" ]` | **KILLED** |
+| `CURLABEL` | the `a caller that recorded no sid` fallback label | **KILLED** |
+| `BLANKET` | the `[ "$_sc_ifmine" = 1 ]` conjunct — the control that the guard did not become unconditional | **KILLED** (3/19 red) |
+
+**SURVIVORS: none.** `EMPTYMATCH` is what makes the second case non-redundant: it leaves case 1 green
+(owner `sidA` ≠ caller `""` still refuses) and dies only on the anonymous/anonymous pair.
+
+### 7.8 Residuals
+
+* **A6 and C3 are unfalsified in production.** Both are now writer-backed and both read 0 under the
+  counterfactual, but neither has been observed passing on a real bundle. First bundle cut after this
+  wave settles it.
+* **The 33% admit rate is projected.** It rests on a counterfactual whose two synthesised artifacts
+  are named above; everything else in it is live.
+* **`transplant.json` is written empty on repeat bundles of one sid** (5 of 33). No gate verdict
+  depends on it — all three readers fall back — but the writer is in `lr-transplant.sh`, outside this
+  wave's file set, and nothing currently notices a truncated receipt.
+* **The `--if-mine` residual §6 stated is unchanged**: a third party that does not pass the flag can
+  still clear a sibling's chain. This wave closed the recovery path, not the general shape.
