@@ -38,7 +38,7 @@ and the oracle share a variable.
 measured output range, never an expression over the constant, and never a value picked by reading
 the constant's current default.
 
-## The two checks this makes routine
+## The three checks this makes routine
 
 1. **Range assertion before ship.** Run the subject on your own task's fixture, print
    `min/max/mean` per population, and assert `min(population) ≤ constant ≤ max(population)`. A
@@ -46,6 +46,13 @@ the constant's current default.
 2. **Decouple the oracle.** Grep the test for the constant's name. If the fixture value is computed
    from it — or was obviously chosen by looking at it — replace it with a measured literal and
    record where that literal came from.
+3. **Grep the OLD value across the whole tree.** A threshold's *documentation* is as distributed as
+   its callers, and prose does not move when the constant does. Correcting `CC_JEV_MIN_P` left two
+   comments still naming `0.98` as the live gate — in `hooks/anti-deference-nudge.sh` and
+   `tests/fixtures/jev-mock-gateway.mjs` — where a reader would have taken them for the shipped
+   behaviour. Nothing executes a comment, so no gate can catch this: `git grep` the retired literal
+   and read each hit, keeping the ones that describe the PAST and fixing the ones that claim the
+   PRESENT.
 
 ## What the same probe vindicated, so the lesson is not "the number was the bug"
 
