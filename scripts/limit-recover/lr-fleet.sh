@@ -80,6 +80,9 @@ while [ $# -gt 0 ]; do
     --one) MODE=one; SID="${2:?--one needs a sid}"; shift 2 ;;
     --enqueue) MODE=enqueue; shift ;;
     --duplicates) MODE=duplicates; shift ;;
+    --retire-husks) MODE=retire-husks; shift ;;
+    --pane) HUSK_PANE="${2:?--pane needs a pane id}"; shift 2 ;;
+    --yes) ASSUME_YES=1; shift ;;
     --report) MODE=report; [ -n "${2:-}" ] && [ "${2#-}" = "$2" ] && { REPORT_DIR="$2"; shift; }; shift ;;
     --target) TARGET="${2:?--target needs an account}"; shift 2 ;;
     --source-pane) SOURCE_PANE="${2:?--source-pane needs a pane id}"; shift 2 ;;
@@ -94,7 +97,8 @@ while [ $# -gt 0 ]; do
     *) echo "lr-fleet: unknown arg $1" >&2; exit 2 ;;
   esac
 done
-[ -n "$MODE" ] || { echo "lr-fleet: one of --locate | --recover | --one SID | --enqueue | --duplicates | --report is required" >&2; exit 2; }
+HUSK_PANE="${HUSK_PANE:-}"; ASSUME_YES="${ASSUME_YES:-0}"
+[ -n "$MODE" ] || { echo "lr-fleet: one of --locate | --recover | --one SID | --enqueue | --duplicates | --retire-husks | --report is required" >&2; exit 2; }
 
 lf_acct_of_cfg() { # $1=cfg dir → account name (next|next2|…) via the generated map, else the basename
   local n
@@ -967,6 +971,100 @@ EOF
     done
     [ "$found" -gt 0 ] || echo "(no session is held by more than one live process)"
     exit 0 ;;
+  retire-husks)
+    # ══ RETIRE A HUSK — a LIVE pane whose session has already MOVED (W10, § 10) ══════════════════
+    # POSITIVE PROOF, never absence of evidence. A husk looks exactly like live work in the
+    # operator's window, so closing one on a weak signal retires a session somebody is using. Four
+    # things must all be true, and each is READ, not assumed:
+    #   1. the census calls it HUSK (live row on this store + the move is recorded + nothing in
+    #      flight — lr_husk_state, which carries the in-flight conjunct)
+    #   2. the successor copy has a REAL assistant turn AFTER the move (lr_engaged_after) — the
+    #      successor is not merely present, it has spoken
+    #   3. a successor PROCESS is alive (registry row, or a --resume argv leaf)
+    #   4. the husk window still exists, read from the terminal itself
+    # Then the close is read back from a FRESH `kitty @ ls`, never from the close call's own return
+    # value: an action that destroys its target returns "invalid" ON SUCCESS
+    # (memory: action-return-read-off-a-destroyed-handle).
+    if [ "${LR_HUSK_RETIRE:-on}" = off ]; then
+      echo "lr-fleet: LR_HUSK_RETIRE=off — census only, nothing will be closed." >&2
+    fi
+    rows="$(lf_locate | lf_dedup_mirror | awk -F'\t' '$8 == "HUSK"')"
+    if [ -z "$rows" ]; then echo "(no HUSK — every live pane still holds its own session)"; exit 0; fi
+    n=0; closed=0; skipped=0
+    while IFS=$'\t' read -r sid cfg acct pane pid cwd tier disp kind kinds err_age; do
+      [ -n "$sid" ] || continue
+      [ -z "$HUSK_PANE" ] || [ "$HUSK_PANE" = "$pane" ] || continue
+      n=$((n+1))
+      echo "HUSK ${sid:0:8}  pane $pane  pid $pid  ($acct)  $cwd"
+      # (2)+(3): where did it go, has it spoken there, and is that process alive?
+      tgt=""; tgt="$(lr_transplant_target "$sid" "$cfg" 2>/dev/null || true)"
+      if [ -z "$tgt" ]; then echo "   SKIP — no transplant target on record"; skipped=$((skipped+1)); continue; fi
+      ts=""
+      for _t in "$cfg"/projects/*/"$sid".HANDOFF.json; do
+        [ -f "$_t" ] || continue
+        ts="$(sed -n '/"ts":"/{s/.*"ts":"\([^"]*\)".*/\1/p;q;}' "$_t")"; break
+      done
+      [ -n "$ts" ] || ts="1970-01-01T00:00:00Z"
+      if ! lr_engaged_after "$tgt" "$sid" "${ts%Z}" 2>/dev/null; then
+        echo "   SKIP — the successor under $(lf_acct_of_cfg "$tgt") has taken no turn since $ts; it is not proven to be carrying this session"
+        skipped=$((skipped+1)); continue
+      fi
+      suc_pane=""
+      suc_rows="$(lr_registry_live_rows "$sid" 2>/dev/null || true)"
+      while IFS=$'\t' read -r _p _pid _a _c; do
+        [ -n "$_p" ] || continue
+        [ "$_p" = "$pane" ] && continue          # that is the husk itself
+        suc_pane="$_p"; break
+      done <<ROWS
+$suc_rows
+ROWS
+      if [ -z "$suc_pane" ] && ! lr_resume_procs "$sid" >/dev/null 2>&1; then
+        echo "   SKIP — the successor has no live pane and no --resume process; nothing is proven to be carrying it"
+        skipped=$((skipped+1)); continue
+      fi
+      # (4) the husk window exists, per the terminal
+      sock="$(lr_kitty_socket 2>/dev/null || true)"
+      if [ -z "$sock" ]; then echo "   SKIP — no kitty control socket answered; the window cannot be read, so it must not be closed"; skipped=$((skipped+1)); continue; fi
+      kb="$(lr_kitty_bin 2>/dev/null || echo kitty)"
+      before="$("$kb" @ --to "$sock" ls 2>/dev/null | W="$pane" /usr/bin/python3 -c 'import json,sys,os
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(1)
+w=os.environ["W"]
+print("yes" if any(str(x["id"])==w for o in d for t in o["tabs"] for x in t["windows"]) else "no")' 2>/dev/null || true)"
+      if [ "$before" != yes ]; then echo "   SKIP — the terminal does not list window $pane (already gone, or not a kitty pane)"; skipped=$((skipped+1)); continue; fi
+      if [ "${LR_HUSK_RETIRE:-on}" = off ] || [ "${DRY:-0}" = 1 ]; then
+        echo "   WOULD RETIRE (successor ${suc_pane:-<resume process>} under $(lf_acct_of_cfg "$tgt"), engaged after $ts)"
+        continue
+      fi
+      if [ "$ASSUME_YES" != 1 ]; then
+        echo "   would retire — re-run with --yes to close it (successor ${suc_pane:-<resume process>} under $(lf_acct_of_cfg "$tgt"))"
+        continue
+      fi
+      # THE CLOSE. Prefer the sanctioned self-close, which announces into the successor and keeps the
+      # succession legible; the raw close-window is the fallback for a successor with no pane id.
+      hf=""
+      for c in "$(dirname "$0")/../handoff-fire.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/handoff-fire.sh" "$HOME/.claude/scripts/handoff-fire.sh"; do
+        [ -x "$c" ] && { hf="$c"; break; }
+      done
+      if [ -n "$suc_pane" ] && [ -n "$hf" ]; then
+        "$hf" self-close --transplanted-source --source-pane "$pane" --source-session "$sid" --successor "$suc_pane" >&2 || true
+      else
+        "$kb" @ --to "$sock" close-window --match "id:$pane" >/dev/null 2>&1 || true
+      fi
+      # READ BACK FROM A FRESH LS. Never the close's own return.
+      after="$("$kb" @ --to "$sock" ls 2>/dev/null | W="$pane" /usr/bin/python3 -c 'import json,sys,os
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(1)
+w=os.environ["W"]
+print("yes" if any(str(x["id"])==w for o in d for t in o["tabs"] for x in t["windows"]) else "no")' 2>/dev/null || true)"
+      if [ "$after" = no ]; then echo "   RETIRED — window $pane is gone (verified by a fresh kitty @ ls)"; closed=$((closed+1))
+      else echo "   STILL OPEN — window $pane survived the close; NOT counting it retired"; skipped=$((skipped+1)); fi
+    done <<HUSKS
+$rows
+HUSKS
+    echo "lr-fleet: $n husk(s) examined, $closed retired, $skipped left standing"
+    [ "$skipped" -eq 0 ]
+    exit $? ;;
   report)
     d="${REPORT_DIR:-$(cat "$FLEET_DIR/last" 2>/dev/null || true)}"
     [ -n "$d" ] && [ -d "$d" ] || { echo "lr-fleet: no run to report" >&2; exit 2; }

@@ -1080,7 +1080,32 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   # account and its successor is on disk, so THIS store's copy is retired. Re-firing it here would be
   # refused by lr-fire-resume's tombstone verdict every tick until the fire latch tripped — a loop
   # that reads as an outage. Retire the record instead, once, and say where the session went.
-  if command -v lr_transplanted_to >/dev/null 2>&1 && _lrp_to="$(lr_transplanted_to "$sid" "$cfg")"; then
+  if command -v lr_transplant_target >/dev/null 2>&1 && _lrp_to="$(lr_transplant_target "$sid" "$cfg")"; then
+    # ── HUSK (W10, § 10): the record is retired, but is the SOURCE PANE still standing? ──────────
+    # Retiring the parked record says the successor carries the session. It says nothing about the
+    # window the session LEFT, which is alive, shows the old limit error, and is indistinguishable
+    # from live work in the operator's display — the state § 10.1 measured on panes 110/126/150 and
+    # which `--locate` could not name. The daemon is the right actuator for it: a session's own Bash
+    # tool is REFUSED by auto mode's classifier when it acts on a live pane (measured 401 denials in
+    # 30 days), and this poller runs outside every session and every classifier.
+    #
+    # It writes a REQUEST rather than closing anything inline: the close has four proof gates of its
+    # own (lr-fleet --retire-husks) and this loop must not grow a second copy of them — two
+    # spellings of one predicate is how the fleet and the launcher came to measure different gates
+    # in the first place.
+    if [ "${LR_HUSK_RETIRE:-on}" != off ] && command -v lr_husk_state >/dev/null 2>&1 \
+       && lr_husk_state "$sid" "$cfg" 2>/dev/null; then
+      _lrp_hp=""
+      if command -v lr_registry_live_rows >/dev/null 2>&1; then
+        _lrp_rows="$(lr_registry_live_rows "$sid" 2>/dev/null || true)"
+        _lrp_hp="${_lrp_rows%%$'\n'*}"; _lrp_hp="${_lrp_hp%%$'\t'*}"
+      fi
+      log "HUSK $sid ($acct) — the session moved to $_lrp_to but its source pane ${_lrp_hp:-?} is still live; retire request written"
+      mkdir -p "$STATE/requests" 2>/dev/null || true
+      printf '{"kind":"retire-husk","sid":"%s","pane":"%s","cfg":"%s","to":"%s","ts":"%s"}\n' \
+        "$sid" "$_lrp_hp" "$cfg" "$_lrp_to" "$(date -u +%FT%TZ)" \
+        > "$STATE/requests/retire-husk-$sid.json" 2>/dev/null || true
+    fi
     log "TRANSPLANTED $sid ($acct) → $_lrp_to; parked record retired (the successor carries it)"
     mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; continue
   fi
