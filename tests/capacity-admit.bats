@@ -1133,3 +1133,47 @@ EOF
   [[ "$(idl_first 'select(.caller=="c15ah")|.token')" != *"this line has "* ]] \
     || { echo "an empty file is reported as a malformed LINE: $(idl_first 'select(.caller=="c15ah")|.token')"; false; }
 }
+
+@test "15ai A5 the abandoned claim copy is SWEPT, and a LIVE one is not" {
+  # THE LEAK, on the real path first: `rm` that silently no-ops is 15k's premise (an unwritable
+  # directory, an immutable flag, a full inode table) and is exactly what a process dying between
+  # the rename and the discard leaves behind. OBSERVED — one `<token>.claim.<pid>.<nonce>` file,
+  # 0600, in the directory the driver reads, for every crashed recovery, forever.
+  local dir tok leaked
+  dir="$BATS_TEST_TMPDIR/sweep"; mkdir -p "$dir"
+  tok="$(mint sid-leak "$dir/tok")"
+  mkdir -p "$BATS_TEST_TMPDIR/rmbin"
+  printf '#!/bin/bash\nexit 0\n' > "$BATS_TEST_TMPDIR/rmbin/rm"
+  chmod +x "$BATS_TEST_TMPDIR/rmbin/rm"
+  run env PATH="$BATS_TEST_TMPDIR/rmbin:$PATH" CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$tok" \
+      CC_ADMIT_WANT_SID=sid-leak bash -c '. "$1"; cc_capacity_admit c15ai "s"' _ "$LIB"
+  set -- "$dir"/tok.claim.*
+  [ -f "$1" ] || { echo "the leak is not reachable through the real path any more — this case is vacuous"; ls -la "$dir"; false; }
+  leaked="$1"
+  # …and it is invisible to the operator: 0600, in the tokens directory, named like a token.
+  [ "$(stat -f '%Lp' "$leaked")" = "600" ] || { stat -f '%Sp' "$leaked"; false; }
+
+  # THE SWEEP. Backdate the leak past a whole token lifetime; drop a FRESH claim beside it, a
+  # plain file, and a SYMLINK named like a claim. Only the leak may go.
+  touch -t 202001010000 "$leaked"
+  : > "$dir/tok.claim.99999.live"                 # a concurrent redeemer's claim, seconds old
+  : > "$dir/unrelated"
+  : > "$dir/real-target"
+  ln -sf "$dir/real-target" "$dir/tok.claim.7.link"
+  # BOTH THE LINK AND ITS TARGET ARE BACKDATED, and the two `touch` forms differ on purpose. `-f`
+  # and `-O` FOLLOW a link while BSD `stat -f %m` does NOT (it reports the link's own mtime, unlike
+  # `stat -L`), so a fresh link is refused by the age bound and `[ ! -L ]` is never reached — the
+  # arrangement below is the only one in which the symlink guard is the guard. `touch -h` sets the
+  # LINK's time; the plain form sets the TARGET's.
+  touch -t 202001010000 "$dir/real-target"
+  touch -h -t 202001010000 "$dir/tok.claim.7.link"
+  mint sid-sweeper "$dir/tok2" >/dev/null          # the driver's next mint is what sweeps
+  [ ! -e "$leaked" ] || { echo "the abandoned claim survived the mint: $leaked"; ls -la "$dir"; false; }
+  # THE AGE BOUND IS LOAD-BEARING, NOT TIDINESS: a live claim exists for the few statements between
+  # the rename and the discard, and sweeping one would re-open the hole D1 closed.
+  [ -e "$dir/tok.claim.99999.live" ] \
+    || { echo "a LIVE claim was swept — the sweep can now destroy a concurrent redeemer's one-shot"; false; }
+  [ -e "$dir/unrelated" ] || { echo "the sweep removed a file that is not a claim"; false; }
+  [ -L "$dir/tok.claim.7.link" ] || { echo "the sweep removed a SYMLINK named like a claim"; false; }
+  [ -e "$dir/real-target" ] || { echo "the sweep followed a symlink and removed its TARGET"; false; }
+}

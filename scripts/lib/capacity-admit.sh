@@ -618,6 +618,48 @@ cc_capacity_token_note() { printf '%s' "$CC_ADMIT_TOKEN_NOTE"; }
 # caller reaching into a global to learn that would be the coupling cc_capacity_token_note avoids.
 cc_capacity_token_repeat() { printf '%s' "$CC_ADMIT_TOKEN_REPEAT"; }
 
+# ── THE ABANDONED CLAIM COPY (W2FA A5, 2026-09-20) ─────────────────────────────────────────────
+# The atomic claim renames the token to `<token>.claim.<pid>.<nonce>` and discards it a few
+# statements later. A process that dies in between — the pane's shell killed, the box rebooted, an
+# `rm` that silently no-ops (15k's premise: an unwritable directory, an immutable flag, a full
+# inode table) — leaves that copy behind forever, at 0600, in the directory the driver reads.
+# OBSERVED. It is not a replay risk, because rename(2) has already made the ORIGINAL name (the one
+# CC_ADMIT_TOKEN points at) unreachable; it is litter that accumulates one file per crashed
+# recovery, and litter in an admission store is what makes the next reader distrust the store.
+#
+# THE MINT SWEEPS, NEVER THE REDEEMER. The mint is the DRIVER — once per recovery, in the process
+# that owns the directory — while the redeemer runs in the pane, under the token's own TTL, beside
+# concurrent siblings. AGE-BOUNDED AT THE TTL, and that bound is load-bearing rather than tidy: a
+# LIVE claim exists for the few statements between rename and discard, so a sweep without the bound
+# could delete a concurrent redeemer's claim and re-open the very hole D1 closed. Own-uid only,
+# regular files only, and a `for` glob rather than `find` — BSD find does not walk a symlinked start
+# dir without -H, and $BATS_TEST_TMPDIR is one on this box, where its null would read as "nothing
+# to sweep" (memory `symlinked-store-invisible-to-find`).
+_cc_admit_mtime() { # $1=path → epoch seconds on stdout, or nothing
+  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || printf ''
+}
+_cc_admit_token_sweep() { # $1=dir → always 0 · prints how many abandoned claims were removed
+  local d="${1:-}" f now mt n=0
+  [ -d "$d" ] || { printf '0'; return 0; }
+  now="$(date +%s 2>/dev/null || printf '')"
+  cc_hw_is_int_operand "$now" || { printf '0'; return 0; }
+  now="$CC_HW_INT_VALUE"
+  _cc_admit_token_ttl
+  for f in "$d"/*.claim.*; do
+    [ -f "$f" ] || continue                  # an unmatched glob stays literal; this also skips dirs
+    [ ! -L "$f" ] || continue                # `[ ! -L ]`, never `[ -L ] && continue`: a false && list
+                                             # is rc 1, which errexit kills mid-loop
+    [ -O "$f" ] || continue
+    mt="$(_cc_admit_mtime "$f")"
+    cc_hw_is_int_operand "$mt" || continue
+    [ $(( now - CC_HW_INT_VALUE )) -gt "$CC_ADMIT_TOKEN_TTL_VALUE" ] || continue
+    rm -f "$f" 2>/dev/null || true
+    [ -e "$f" ] || n=$(( n + 1 ))            # counted from a re-read, never from rm's own rc (D3)
+  done
+  printf '%s' "$n"
+  return 0
+}
+
 cc_capacity_token_mint() { # $1=sid [$2=explicit path] → prints the token path · rc 1 = not minted
   local sid="${1:-}" path="${2:-}" dir uid
   case "$sid" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
@@ -627,6 +669,7 @@ cc_capacity_token_mint() { # $1=sid [$2=explicit path] → prints the token path
     mkdir -p "$dir" 2>/dev/null || return 1
     : > "$path" 2>/dev/null || return 1
     chmod 600 "$path" 2>/dev/null || true
+    _cc_admit_token_sweep "$dir" >/dev/null
   else
     # The NONCE comes from mktemp, which creates the file atomically at mode 0600 — so two
     # concurrent recoveries of the same sid cannot collide on a name, and there is no window in
@@ -636,6 +679,7 @@ cc_capacity_token_mint() { # $1=sid [$2=explicit path] → prints the token path
     mkdir -p "$dir" 2>/dev/null || return 1
     path="$(mktemp "$dir/$sid.XXXXXXXX" 2>/dev/null)" || return 1
     chmod 600 "$path" 2>/dev/null || true
+    _cc_admit_token_sweep "$dir" >/dev/null
   fi
   # ONE line, tab-separated: issued · sid · uid · the TERM SWITCHES the minting evaluation ran with.
   # The terms are recorded because the T3 ratchet is about the pair agreeing: a token minted under a
