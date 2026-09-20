@@ -166,15 +166,32 @@ case "${1:-}" in
     # anywhere saying why.
     #
     # `set` already stamps the arming sid in `${f}.sid`, so the evidence exists — this is the reader.
-    # BOTH sids must be known: a bare shell `clear` (an operator at a terminal, the documented park
-    # gesture) carries no CLAUDE_CODE_SESSION_ID and must keep working exactly as before. rc stays 0
-    # — a refusal is not an error, it is the honest answer, and a non-zero here would turn every
-    # `|| true`-less caller into a failure.
+    # A bare shell `clear` (an operator at a terminal, the documented park gesture) carries no
+    # CLAUDE_CODE_SESSION_ID and must keep working exactly as before. rc stays 0 — a refusal is not
+    # an error, it is the honest answer, and a non-zero here would turn every `|| true`-less caller
+    # into a failure.
+    #
+    # ── THE EVIDENCE IS OPTIONAL AT THE ARM, SO REQUIRING IT HERE FAILED OPEN (W3i D6) ────────────
+    # This guard first read "both sids must be known". But `set` writes ${f}.sid only when the
+    # session HAS an id (:145), so the OPERATOR'S own park — armed from a bare shell, which carries
+    # none — records no owner at all, and requiring an owner let exactly those sentinels through.
+    # The guard was therefore strongest over agent-armed chains and absent over the operator's,
+    # which is the inverse of what it is for. A caller that HAS an identity and cannot show it owns
+    # this sentinel is not entitled to remove it — whether the recorded owner is a different session
+    # or no session at all. Unknown ownership is not consent.
+    #
+    # `[ -f "$f" ]` is load-bearing rather than defensive: clearing where NOTHING is armed is the
+    # ordinary shape of a deliberate park and must keep reaching the mech-budget write below.
+    # Without it, a sid-bearing agent running `clear` in an unarmed cwd would be REFUSED — a refusal
+    # over nothing, and the budget never spent, which is the snooze-button state this verb exists to
+    # avoid.
     _sc_cur="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
     _sc_owner="$(cat "${f}.sid" 2>/dev/null || true)"
-    if [ -n "$_sc_cur" ] && [ -n "$_sc_owner" ] && [ "$_sc_cur" != "$_sc_owner" ]; then
+    if [ -f "$f" ] && [ -n "$_sc_cur" ] && [ "$_sc_owner" != "$_sc_cur" ]; then
       SC_SID="$_sc_cur"
-      echo "refused — the sentinel armed for this cwd belongs to session ${_sc_owner%%-*} (you are ${_sc_cur%%-*}); nothing was cleared: $PWD"
+      _sc_owner_label="${_sc_owner%%-*}"
+      [ -n "$_sc_owner_label" ] || _sc_owner_label="an unidentified armer (no sid was recorded at arm time)"
+      echo "refused — the sentinel armed for this cwd belongs to session ${_sc_owner_label} (you are ${_sc_cur%%-*}); nothing was cleared: $PWD"
       log_idl refused "cli-clear-foreign-sid" "$(jq -cn --arg o "$_sc_owner" --arg c "$_sc_cur" --arg w "$PWD" \
         '{owner_sid:$o,session_sid:$c,cwd:$w}' 2>/dev/null)"
       exit 0

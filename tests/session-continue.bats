@@ -69,6 +69,9 @@ sc()  { ( cd "$CWD" && bash "$HOOK" "$@" ); }
 # the same, run AS session $1 — an agent, or a recovery's clause D. The sid is what `clear` reads to
 # decide whether the sentinel in this cwd is the caller's to remove.
 sc_as() { local s="$1"; shift; ( cd "$CWD" && CLAUDE_CODE_SESSION_ID="$s" bash "$HOOK" "$@" ); }
+# arm with NO session identity — the operator's own bare-shell park. `set` writes no .sid sidecar
+# on this path, which is exactly the evidence gap the ownership guard has to survive.
+arm_anon() { ( cd "$CWD" && bash "$HOOK" set "${1:-do the thing}" >/dev/null ); }
 # actuation: Stop JSON on stdin. $1=session_id  $2=transcript_path.
 # The stop DECISION is on stdout (block JSON / cap systemMessage JSON); stderr carries only
 # human diagnostics (which bats would otherwise merge into $output) → drop it, assert on stdout.
@@ -535,4 +538,44 @@ ma_row() { grep -F "\"reason\":\"$1\"" "$CONTINUE_IDL" 2>/dev/null | tail -1; }
   local row; row="$(ma_row mechanical-assignee)"
   [ -n "$row" ]
   [ "$(printf '%s' "$row" | jq -r '.confirm_rc')" = "2" ]
+}
+
+# ── W3i D6 — THE OWNERSHIP GUARD'S EVIDENCE IS OPTIONAL AT THE ARM ───────────────────────────────
+# `set` writes ${f}.sid only when the session HAS an id (:145), so the OPERATOR'S own park — armed
+# from a bare shell — records no owner at all. Requiring both sids to be known therefore made the
+# guard strongest over agent-armed chains and INERT over exactly the sentinels a recovery running in
+# a shared checkout is most likely to meet.
+
+@test "clear: an ANONYMOUSLY armed sentinel is still not a foreign session's to remove" {
+  arm_anon "the operator's parked step"
+  run sc_as sidZ clear
+  [ "$status" -eq 0 ] || { echo "a refusal is not an error: $output"; false; }
+  [[ "$output" == refused\ * ]] || { echo "an anonymous sentinel was cleared by a foreign session: $output"; false; }
+  [[ "$output" == *"an unidentified armer"* ]] || { echo "the refusal does not say WHY it cannot tell: $output"; false; }
+  run sc status
+  [[ "$output" == *"the operator's parked step"* ]] || { echo "THE OPERATOR'S PARK WAS DISARMED: $output"; false; }
+}
+
+@test "clear CONTROL: the operator's OWN bare-shell clear still disarms an anonymous sentinel" {
+  # The arm that keeps the fix from being a blanket refusal. A caller with no identity IS the
+  # documented park gesture and must behave exactly as it did before.
+  arm_anon "the operator's parked step"
+  run sc clear
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == "cleared → "* ]] || { echo "the operator's own park gesture was refused: $output"; false; }
+}
+
+@test "clear EQUIVALENCE GUARD: a sid-bearing clear over NOTHING is not a refusal, and spends the budget" {
+  # Green in BOTH arms by construction, and named as such. The `[ -f "$f" ]` half of the widened
+  # guard exists so that clearing where nothing is armed keeps reaching the mech-budget write:
+  # without it a sid-bearing agent parking deliberate dirt would be REFUSED over an empty cwd, the
+  # budget would never be spent, and the mechanical arm would re-block on the next Stop — the
+  # snooze-button state this verb exists to end.
+  d="$BATS_TEST_TMPDIR/never-armed-sid"; mkdir -p "$d"
+  run bash -c "cd '$d' && CLAUDE_CODE_SESSION_ID=sidQ bash '$HOOK' clear"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"nothing to clear"* ]] || { echo "$output"; false; }
+  [[ "$output" != refused* ]] || { echo "refused with no sentinel present: $output"; false; }
+  n="$(ls -1 "$CLAUDE_CONFIG_DIR/state"/continue-*.mech 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$n" -ge 1 ] || { echo "the mech budget was not spent"; ls -la "$CLAUDE_CONFIG_DIR/state"; false; }
 }
