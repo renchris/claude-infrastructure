@@ -229,3 +229,68 @@ mkstub() {   # $1 = dir, $2 = the line `list` prints
       bash -c ". '$REPO/hooks/lib/jev.sh'; jev_secret_source"
   [ "$output" = "none" ]
 }
+
+# ── `cc-jev status` — CONFIGURED IS NOT ANSWERING ────────────────────────────────────────────
+# Added 2026-09-20 after the arm was found 100% inert in production while every status field read
+# healthy. The old ENABLED branch asserted "the semantic arm ... is live" from CONFIGURATION alone,
+# and on a hobby plan that sentence was false on every call: ZDR is Pro/Enterprise-only and fails
+# closed, so the gateway returned HTTP 403 and the arm abstained every time. These pin the two
+# halves the fix added — the reachability verdict, and a free-window line that EXPIRES instead of
+# asserting a past date forever. Status must stay a STATIC read, so none of this spends egress.
+# REACHING THE ENABLED BRANCH IS THE WHOLE DIFFICULTY, and getting it wrong makes these vacuous.
+# setup() fixtures $HOME, so `agent-secrets` is absent, jev_secret_source returns `none`, and the
+# DISABLED branch renders. A first draft of these ran there: the "block is present" case failed
+# honestly, but the "block is ABSENT" case PASSED — a branch that renders nothing satisfies every
+# absence assertion. That is this repo's vacuous-control shape exactly, caught here only because
+# its sibling failed loudly. The seam is AI_GATEWAY_API_KEY, which jev_secret_source reads FIRST;
+# `status` makes no call, so a dummy value sends nothing anywhere. Every case below asserts the
+# ENABLED marker as a POSITIVE CONTROL, so falling back into DISABLED now FAILS instead of passing.
+# EVERY DATE HERE IS SEEDED RELATIVE TO NOW. The wall-clock ratchet refused this file's first
+# version for defaulting to the literal 2026-09-25, and it was right: the subject re-derives the
+# remaining days from that stamp, so an absolute future date silently changes what the fixture
+# MEANS as the clock advances, and the suite flips branch on a calendar boundary with no code
+# change. A past date is safe (it stays past); a future one must be computed.
+status_out() {
+  AI_GATEWAY_API_KEY=dummy-not-a-real-key \
+  CC_JEV_FREE_UNTIL="${CC_JEV_FREE_UNTIL:-$(date -u -v+30d +%Y-%m-%d)}" \
+  "$REPO/bin/cc-jev" status 2>&1
+}
+
+@test "cc-jev status: ZDR on never claims the arm is live, and names the plan as the blocker" {
+  run status_out
+  [ "$status" -eq 0 ]
+  grep -qF "CONFIGURED —" <<<"$output"   # positive control: we really are in the ENABLED branch
+  # The exact false sentence the fix removed. Its return is the regression this test exists for.
+  ! grep -qF "is live" <<<"$output" || { echo "status claimed liveness from configuration"; false; }
+  grep -qF "CONFIGURED IS NOT ANSWERING" <<<"$output"
+  grep -qF "403" <<<"$output"
+  # Both remedies must be named, and both must be marked as the operator's.
+  grep -qF "CC_JEV_ZDR=0" <<<"$output"
+  grep -qiF "Pro" <<<"$output"
+}
+
+@test "cc-jev status: CC_JEV_ZDR=0 removes the not-answering block (the blocker is gone)" {
+  CC_JEV_ZDR=0 run status_out
+  [ "$status" -eq 0 ]
+  grep -qF "CONFIGURED —" <<<"$output"   # positive control — without it this case is vacuous
+  ! grep -qF "CONFIGURED IS NOT ANSWERING" <<<"$output" \
+    || { echo "warned about a blocker that ZDR=0 removes"; false; }
+}
+
+@test "cc-jev status: the free window counts DOWN while it is open" {
+  local open; open="$(date -u -v+45d +%Y-%m-%d)"   # relative, per the wall-clock ratchet
+  CC_JEV_FREE_UNTIL="$open" run status_out
+  [ "$status" -eq 0 ]
+  grep -qF "Free on the Gateway until $open" <<<"$output"
+  grep -qF "day(s) left" <<<"$output"
+}
+
+# THE ARM THE OLD SENTENCE COULD NOT HAVE: a hardcoded "free until <date>" goes on claiming free
+# after the date passes. This is the falsifier for that whole class.
+@test "cc-jev status: a LAPSED free window says CLOSED and prices the metered rate" {
+  CC_JEV_FREE_UNTIL="2000-01-01" run status_out
+  [ "$status" -eq 0 ]
+  grep -qF "Free window CLOSED" <<<"$output"
+  ! grep -qF "day(s) left" <<<"$output" || { echo "counted down a window already closed"; false; }
+  grep -qF '$0.042/MTok' <<<"$output"
+}

@@ -72,8 +72,33 @@ cmd_status() {
   fi
   echo
   if jev_available; then
-    echo "ENABLED — the semantic arm in anti-deference-nudge.sh is live."
+    # CONFIGURED is not ABLE TO ANSWER, and reporting the first as "live" was measurably wrong.
+    # On 2026-09-19 every field above read healthy while EVERY call returned HTTP 403 and the arm
+    # abstained 100% of the time: ZDR is Pro/Enterprise-only and FAILS CLOSED, so on a hobby plan
+    # `ZDR on` is not a protection that is holding — it is a guarantee that no verdict can ever be
+    # produced. A status that reports CONFIGURATION and calls it LIVENESS is the same defect as a
+    # threshold shipped above the model's output range
+    # (docs/lessons/an-imported-threshold-can-sit-above-the-model-s-output-range.md): the feature
+    # lands inert and every green light stays green. So this branch states the one condition that
+    # decides whether a verdict is REACHABLE, and claims nothing it has not checked. It stays a
+    # STATIC read — no probe call — because a status command must not spend egress to render.
+    echo "CONFIGURED — the semantic arm in anti-deference-nudge.sh is wired in."
+    if [ "${CC_JEV_ZDR:-1}" != 0 ]; then
+      cat <<'EOF'
+
+🚨 CONFIGURED IS NOT ANSWERING. ZDR is Pro/Enterprise-only and fails closed, so on a hobby plan
+   every call returns HTTP 403 and the arm abstains 100% of the time — measured here, not
+   inferred. Nothing above is misconfigured; the PLAN is the blocker. Two ways out, and both are
+   the operator's to take, never an agent's:
+     · buy Vercel Pro (~$20/mo) and keep zero-data-retention, or
+     · run with CC_JEV_ZDR=0, which sends the model's own closing message (bounded by
+       CC_JEV_MAX_STATE_B — no transcript, no paths, no history) under STANDARD retention.
+   The measured trade is in decision packet c3752f5fca96.
+EOF
+    fi
+    echo
     echo "Next: cc-jev probe   (one real call), then cc-jev pilot (score it on real closes)."
+    jev_free_window
   else
     echo "DISABLED — every consumer falls through to today's behaviour. Nothing is degraded."
     [ "$deps" = "NO" ] && echo "  to fix deps: (cd $ROOT && npm install)"
@@ -82,10 +107,41 @@ cmd_status() {
       1. create one at https://vercel.com/dashboard  ->  AI Gateway  ->  API Keys
       2. agent-secrets add AI_GATEWAY_API_KEY      (paste at its prompt; the value never
                                                     touches a transcript, a profile or argv)
-  Jev is free on the Gateway until 2026-09-25.
   This command deliberately does NOT write the key, or any allowlist, for you.
 EOF
+    jev_free_window
   fi
+}
+
+# THE FREE WINDOW, RENDERED FROM A DATE RATHER THAN ASSERTED. It used to be one sentence in the
+# DISABLED branch — "Jev is free on the Gateway until 2026-09-25" — which is the branch an operator
+# who has ALREADY set everything up never sees, and it was a bare claim with no expiry behaviour:
+# on 2026-09-26 it would have gone on saying "free until" a date in the past. Both halves matter
+# here, because the whole reason this integration exists is to be exercised inside that window.
+# After it lapses the cost is not a cliff: $0.042/MTok in, $0 out, measured at ~960 calls/day
+# ≈ $2.45/mo for the production arm, against a key already capped at $5/mo.
+jev_free_window() {
+  # The prices are LITERAL dollar signs, not expansions. Carried in a variable rather than inline
+  # so the printf formats hold no `$` at all: a `# shellcheck disable=SC2016` would work, but this
+  # file's own corpus warns that a directive separated from its subject silently stops applying
+  # (marker-adjacency), and two future edits to these lines would each have to remember it.
+  local usd='$'
+  local until="${CC_JEV_FREE_UNTIL:-2026-09-25}" today days
+  today="$(date -u +%Y-%m-%d)"
+  if [ "$today" \> "$until" ]; then
+    printf '\nFree window CLOSED (ended %s). Metered now: %s0.042/MTok in, %s0 out —\n' \
+           "$until" "$usd" "$usd"
+    printf 'measured ~960 calls/day ≈ %s2.45/mo for the arm, under the %s5/mo key cap.\n' \
+           "$usd" "$usd"
+    return
+  fi
+  days=$(( ( $(date -u -j -f %Y-%m-%d "$until" +%s 2>/dev/null || echo 0) \
+             - $(date -u +%s) ) / 86400 ))
+  [ "$days" -ge 0 ] 2>/dev/null || days=0
+  printf '\nFree on the Gateway until %s — %s day(s) left. After that it is metered, not cut off:\n' \
+         "$until" "$days"
+  printf '%s0.042/MTok in, %s0 out ≈ %s2.45/mo at the measured ~960 calls/day, under the %s5/mo cap.\n' \
+         "$usd" "$usd" "$usd" "$usd"
 }
 
 cmd_probe() {
