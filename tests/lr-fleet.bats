@@ -1021,3 +1021,35 @@ SH
 # the census got wrong and nothing else would have noticed: TIER (`-`, a missing model field),
 # PID (carrying pane_now), KINDS (one class where the slow scan reports `limit+network`), and the
 # empty-field column shift that `IFS=$'\t' read` produces on a row with no pane and no pid.
+
+# ══ --retire-husks — POSITIVE PROOF, never absence of evidence (W10, LIMIT_RECOVER_100P § 10) ════
+# A husk looks exactly like live work in the operator's window, so the dangerous failure is not
+# "failed to close one" — it is "closed one that was still being used". Every gate below is a READ,
+# and the cases that matter are the REFUSALS.
+@test "retire-husks: with no HUSK anywhere it closes nothing and says so" {
+  run bash "$FLEET" --retire-husks
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"no HUSK"* ]] || { echo "$output"; false; }
+}
+
+@test "retire-husks: LR_HUSK_RETIRE=off is census-only — it must never close" {
+  blocked_tx "$SEC" "$SID"; husk_successor_turn; row HUSKP-9x7z "$SID"; husk_lock
+  LR_HUSK_RETIRE=off run bash "$FLEET" --retire-husks
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"census only"* || "$output" == *"no HUSK"* ]] || { echo "$output"; false; }
+}
+
+@test "retire-husks: without --yes it never closes, however complete the proof" {
+  # The confirmation gate. Everything else can be satisfied and the default is still to print, not
+  # to act — an actuator aimed at the operator's own visible windows does not get to be implicit.
+  blocked_tx "$SEC" "$SID"; husk_successor_turn; row HUSKP-9x7z "$SID"; husk_lock
+  run bash "$FLEET" --retire-husks
+  [[ "$output" != *"RETIRED"* ]] || { echo "it closed without --yes: $output"; false; }
+}
+
+@test "retire-husks: --pane narrows to one husk and ignores the others" {
+  blocked_tx "$SEC" "$SID"; husk_successor_turn; row HUSKP-9x7z "$SID"; husk_lock
+  run bash "$FLEET" --retire-husks --pane NOT-THIS-PANE
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"HUSKP-9x7z"* ]] || { echo "--pane did not narrow: $output"; false; }
+}

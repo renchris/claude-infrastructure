@@ -514,6 +514,47 @@ lr_transplanted_to() { # $1=sid $2=this cfg → target cfg on stdout / rc 1
   printf '%s' "$to"
 }
 
+# ── WHERE DID THIS SESSION GO — LOCK *OR* TOMBSTONE (W10b, 2026-09-20) ──────────────────────────
+# lr_transplanted_to above reads the split-brain LOCK and never a tombstone, and its header explains
+# why: a same-account `--mark` writes a SUPERSEDED tombstone and no lock, so reading tombstones
+# would make a same-account duplicate look like a transplant.
+#
+# 🚨 THAT IS CORRECT ABOUT THE FILES AND WRONG ABOUT THE FLEET. Measured 2026-09-20, on the exact
+# three panes W10 was written for: ~/.reso/limit-recover/locks held ONE lock for the whole box, and
+# it belonged to an unrelated session written two hours earlier. Panes 110 and 126 each had a
+# transplant tombstone, a retired `<sid>.jsonl.handed-off` source, and a live successor copy under
+# ~/.claude-tertiary — and NO lock. The tombstone even NAMES the lock path, and that path does not
+# exist. So locks are transient on this box and tombstones are durable, and a husk predicate keyed
+# only on the lock is INERT against its own motivating population: lr_husk_state returned 1 for all
+# three panes it exists to find, with every unit test green, because the fixtures were built to the
+# predicate's own assumption (memory: an-imported-threshold-can-sit-above-the-model-s-output-range).
+#
+# The discriminator that made the lock the right read is NOT the file — it is "does it name a
+# DIFFERENT store". A transplant tombstone carries handed_off_to = another config dir plus a
+# target_transcript; a `--mark` SUPERSEDED tombstone names THIS store (and carries
+# superseded_by_pid). Testing for a different store keeps the same-account case out, so the
+# tombstone can be read safely. Lock first — it is the stronger evidence when it exists.
+lr_transplant_target() { # $1=sid $2=this cfg → target cfg on stdout / rc 1
+  local sid="${1:-}" here="${2:-}" tomb to to_real here_real pd
+  [ -n "$sid" ] && [ -n "$here" ] || return 1
+  if to="$(lr_transplanted_to "$sid" "$here" 2>/dev/null)"; then printf '%s' "$to"; return 0; fi
+  here_real="$(cd "$here" 2>/dev/null && pwd -P || printf '%s' "$here")"
+  for tomb in "$here"/projects/*/"$sid".HANDOFF.json; do
+    [ -f "$tomb" ] || continue
+    to="$(sed -n '/"handed_off_to":"/{s/.*"handed_off_to":"\([^"]*\)".*/\1/p;q;}' "$tomb")"
+    [ -n "$to" ] || continue
+    to_real="$(cd "$to" 2>/dev/null && pwd -P || printf '%s' "$to")"
+    # SAME store ⇒ a same-account `--mark`, never a transplant. This is the whole safety property.
+    [ "$to_real" != "$here_real" ] || continue
+    # the successor must actually be there — a tombstone pointing at nothing is not a move
+    for pd in "$to"/projects/*/"$sid".jsonl; do
+      [ -f "$pd" ] || continue
+      printf '%s' "$to"; return 0
+    done
+  done
+  return 1
+}
+
 # ── HUSK: a LIVE pane on a store whose session has already MOVED (W10, LIMIT_RECOVER_100P § 10) ──
 # The state neither plan modelled. A transplant leaves the SOURCE pane standing — the process is
 # alive, the composer is empty, the last thing on its screen is the limit error — while the session
@@ -527,9 +568,11 @@ lr_transplanted_to() { # $1=sid $2=this cfg → target cfg on stdout / rc 1
 #   (a) a LIVE registry row for the sid whose ACCOUNT is this store's — without it a COMPLETED
 #       transplant whose source pane is already gone reads as a husk on the strength of the
 #       successor's own liveness, and the actuator would be aimed at the survivor.
-#   (b) `lr_transplanted_to` — the lock names a target other than this store AND the successor copy
-#       is on disk. It reads the LOCK, never a tombstone: a same-account `--mark` writes no lock and
-#       must not match.
+#   (b) `lr_transplant_target` — the LOCK or, when it is gone, the transplant TOMBSTONE names a
+#       target other than this store AND the successor copy is on disk. Locks proved transient on
+#       this box (1 fleet-wide, for an unrelated sid) while tombstones are durable, so a lock-only
+#       read was inert against the three panes W10 exists for; see that function's header. The
+#       same-account `--mark` case is excluded by the DIFFERENT-store test, not by the file kind.
 #   (c) NO recovery in flight for the sid. This is the conjunct the critic pass added (§ 10.3 item
 #       4) and it is what keeps every in-progress recovery from reading as a husk: lr-transplant.sh
 #       never deletes the lock, and the source row stays live until the typed `/exit` lands, so
@@ -555,7 +598,7 @@ lr_husk_state() { # $1=sid $2=this cfg → rc 0 when the sid on CFG is a HUSK, r
   # not a semantic one: `lr_transplanted_to` opens with a single `[ -f "$lock" ]`, so a sid with no
   # lock — which is nearly all of them — costs one stat. Leg (a) forks jq once per registry file.
   # lf_locate calls this per transcript over ~2,600 of them; the cheap leg has to be the gate.
-  lr_transplanted_to "$sid" "$here" >/dev/null 2>&1 || return 1
+  lr_transplant_target "$sid" "$here" >/dev/null 2>&1 || return 1
 
   # (a) hooks/session-register.sh:158 writes the account as `basename $CLAUDE_CONFIG_DIR` with the
   # leading dot stripped, so the row's account and this config dir's basename are the same string

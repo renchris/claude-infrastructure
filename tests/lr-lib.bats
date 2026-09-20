@@ -483,3 +483,58 @@ f1_tail() { # -> a transcript whose LAST assistant record is a Fable cap
 #     not ok 1 module unreachable: the kind degrades to the pre-W4 answer, and NEVER to rc 1
 #     #   `[ "$status" -eq 0 ]' failed
 # Row 2 is the only behavioural red, and it is the one the DoD names.
+
+
+# ══ W10b — the husk predicate reads the LOCK *or* the TOMBSTONE (2026-09-20) ═════════════════════
+# THE DEFECT THIS PINS. lr_husk_state's leg (b) went in reading only the split-brain lock, on the
+# stated ground that a same-account `--mark` writes a tombstone and no lock. That is true about the
+# FILES and false about the FLEET: measured on the three panes W10 was written for,
+# ~/.reso/limit-recover/locks held ONE lock for the whole box and it belonged to an unrelated
+# session. Each husk had a tombstone, a retired <sid>.jsonl.handed-off source and a live successor
+# copy — and NO lock; the tombstone even named a lock path that no longer existed. So the predicate
+# returned "not a husk" for all three panes it exists to find, with every unit test green, because
+# the fixtures had been built to the predicate's own assumption (memory:
+# an-imported-threshold-can-sit-above-the-model-s-output-range).
+#
+# The discriminator was never the file KIND — it is "does it name a DIFFERENT store". The third
+# case is the one that keeps that honest.
+hk_tomb() { # $1=target cfg → a TRANSPLANT tombstone in CFG pointing at it, and NO lock
+  printf '{"handed_off_to":"%s","target_transcript":"%s/projects/%s/%s.jsonl","ts":"2026-09-19T22:23:39Z"}\n' \
+    "$1" "$1" "$SLUG" "$SID" > "$CFG/projects/$SLUG/$SID.HANDOFF.json"
+}
+
+@test "husk: a TOMBSTONE with no lock still resolves the transplant target" {
+  mkdir -p "$OTHER/projects/$SLUG"; : > "$OTHER/projects/$SLUG/$SID.jsonl"
+  hk_tomb "$OTHER"
+  [ ! -e "$LR_STATE_DIR/locks/$SID.lock" ] || { echo "fixture leaked a lock — the point is that there is none"; false; }
+  run lr_transplant_target "$SID" "$CFG"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"$OTHER"* ]] || { echo "$output"; false; }
+}
+
+@test "husk: a live row + a tombstone-only transplant IS a husk" {
+  export CC_HANDOFF_LOG="$BATS_TEST_TMPDIR/handoffs.jsonl"; : > "$CC_HANDOFF_LOG"
+  mkdir -p "$OTHER/projects/$SLUG"; : > "$OTHER/projects/$SLUG/$SID.jsonl"
+  hk_tomb "$OTHER"
+  hk_row "$HKPANE" "$SID" cfg-a "$(hk_live)"
+  run lr_husk_state "$SID" "$CFG"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "husk: a SAME-STORE tombstone is NOT a transplant — the --mark case stays excluded" {
+  # THE SAFETY PROPERTY the lock-only read was protecting, now carried by the different-store test
+  # instead of by the file kind. A `--mark` SUPERSEDED tombstone names THIS store.
+  export CC_HANDOFF_LOG="$BATS_TEST_TMPDIR/handoffs.jsonl"; : > "$CC_HANDOFF_LOG"
+  hk_tomb "$CFG"
+  hk_row "$HKPANE" "$SID" cfg-a "$(hk_live)"
+  run lr_transplant_target "$SID" "$CFG"
+  [ "$status" -ne 0 ] || { echo "a same-store tombstone was read as a transplant: $output"; false; }
+  run lr_husk_state "$SID" "$CFG"
+  [ "$status" -ne 0 ] || { echo "a same-account duplicate was called a HUSK"; false; }
+}
+
+@test "husk: a tombstone whose successor copy is ABSENT is not a transplant" {
+  hk_tomb "$OTHER"          # deliberately no $OTHER copy
+  run lr_transplant_target "$SID" "$CFG"
+  [ "$status" -ne 0 ] || { echo "$output"; false; }
+}
