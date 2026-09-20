@@ -594,7 +594,7 @@ _cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usabl
   # CC_ADMIT_TOKEN is the library's own spelling; LR_ADMIT_TOKEN is the limit-recover launcher's,
   # accepted here so a launcher env that carries only the LR_ name still redeems. Both are read,
   # neither is exported by this library, and lr-fire-resume passes CC_ADMIT_TOKEN call-scoped.
-  local t="${CC_ADMIT_TOKEN:-${LR_ADMIT_TOKEN:-}}" want="${CC_ADMIT_WANT_SID:-}" line issued sid terms now age
+  local t="${CC_ADMIT_TOKEN:-${LR_ADMIT_TOKEN:-}}" want="${CC_ADMIT_WANT_SID:-}" line issued sid terms now age claim
   [ -n "$t" ] || return 1
   if [ ! -f "$t" ]; then CC_ADMIT_TOKEN_NOTE="token ABSENT ($t) — evaluating fresh"; return 1; fi
   if [ ! -O "$t" ]; then CC_ADMIT_TOKEN_NOTE="token not owned by uid $(id -u 2>/dev/null || printf '?') ($t) — evaluating fresh"; return 1; fi
@@ -609,7 +609,27 @@ _cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usabl
     CC_ADMIT_TOKEN_NOTE="token REFUSED: issued for '${sid:-<none>}' but this spawn is '${want}' — not consumed, evaluating fresh"
     return 1
   fi
-  rm -f "$t" 2>/dev/null || true                    # ONE-SHOT, even when it turns out to be stale
+  # ── THE ONE-SHOT, MADE ATOMIC (W2FA D1, 2026-09-20) ──────────────────────────────────────────
+  # This WAS `rm -f "$t" || true`, placed AFTER the awk read. Read-then-unlink is not one-shot: two
+  # processes redeeming the same token path with the same CC_ADMIT_WANT_SID on a refusing box (load
+  # override 99 on 10 cores) BOTH returned rc 0 in 40 of 40 trials, because both completed their
+  # read before either unlinked. One probe admission then grants as many spawns as there are
+  # concurrent readers — the exact regime this wave exists for (five concurrent recoveries on
+  # 2026-09-19), and handoff-fire's boot arm plus its watcher can hold the same launcher, hence the
+  # same token path, twice.
+  #
+  # rename(2) IS the atomic claim: of N concurrent redeemers exactly one `mv` succeeds and the rest
+  # get ENOENT, so the winner is decided by the kernel rather than by who finishes an awk first. The
+  # claim name lives in the token's OWN directory, never /tmp, so the rename cannot degrade into a
+  # cross-device copy+unlink (which is not atomic and would re-open this hole). A FAILED claim is
+  # never a silent fall-through to a fresh evaluation: a redeemer that cannot prove exclusivity has
+  # no admission to carry, and says so.
+  claim="$t.claim.$$.${RANDOM:-0}"
+  if ! mv "$t" "$claim" 2>/dev/null; then
+    CC_ADMIT_TOKEN_NOTE="token NOT CLAIMED ($t) — the atomic rename failed: a concurrent redeemer took it, or its directory is not writable. One-shot cannot be enforced, so this is not an admission"
+    return 1
+  fi
+  rm -f "$claim" 2>/dev/null || true                # the claim copy is ours alone and unreachable
   if ! cc_hw_is_int "$issued"; then
     CC_ADMIT_TOKEN_NOTE="token UNPARSEABLE (issued='${issued}') — consumed, evaluating fresh"; return 1
   fi

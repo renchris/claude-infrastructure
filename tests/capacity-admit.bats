@@ -406,3 +406,54 @@ mint() { # $1=sid [$2=explicit path] → prints the minted token path
   [ -f "$CC_ADMIT_STATE_DIR/c15f.refusals" ]
   [ "$(cat "$CC_ADMIT_STATE_DIR/c15f.refusals")" = "1" ]
 }
+
+# ══ W2FA — THE FIVE PROPERTIES AN ADVERSARIAL MUTATION PASS FALSIFIED BY EXECUTION ═════════════
+# The token above claims: one-shot · TTL-bounded · uid-checked · sid-enforced · probe-inert, with a
+# foreign token refused WITHOUT being consumed. Four of those were false in the tree on 2026-09-19.
+# Each case below was RED on the unmodified library and names the measurement that convicted it.
+
+@test "15g D1 ONE-SHOT UNDER CONCURRENCY — a rival inside the read-to-unlink window cannot also admit" {
+  # MEASURED: two processes redeeming ONE token with the same CC_ADMIT_WANT_SID on a refusing box
+  # (load override 99 on 10 cores) BOTH returned rc 0 in 40 of 40 trials. The record was read with
+  # awk and only THEN unlinked, so N concurrent redeemers of one token path all admit — one probe
+  # admission granting as many spawns as there are readers, in exactly the regime the wave was built
+  # for (five concurrent recoveries that day; handoff-fire's boot arm and its watcher can hold the
+  # same launcher, hence the same token path, twice).
+  #
+  # THE WINDOW IS OPENED DETERMINISTICALLY, NOT RACED. A PATH-shadowed `awk` snapshots the record,
+  # runs a RIVAL redemption to completion inside the window, and only then hands the snapshot back —
+  # so this case is a fact about the ORDERING, not about how fast the box happens to be. A
+  # sleep-and-hope race is a flake in one direction and a vacuous pass in the other.
+  local tok rival
+  tok="$(mint sid-race)"
+  [ -n "$tok" ] || { echo "mint printed nothing"; false; }
+  mkdir -p "$BATS_TEST_TMPDIR/awkbin"
+  cat > "$BATS_TEST_TMPDIR/awkbin/awk" <<EOF
+#!/bin/bash
+tok="$tok"; barrier="$BATS_TEST_TMPDIR/rival.done"
+for a in "\$@"; do
+  [ "\$a" = "\$tok" ] || continue
+  [ -e "\$barrier" ] && break
+  : > "\$barrier"
+  snap="\$(/usr/bin/awk "\$@")"
+  CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="\$tok" CC_ADMIT_WANT_SID=sid-race \
+    /bin/bash -c '. "\$1"; cc_capacity_admit rival "rival spawn"' _ "$LIB" \
+    > "$BATS_TEST_TMPDIR/rival.out" 2>&1
+  echo \$? > "$BATS_TEST_TMPDIR/rival.rc"
+  printf '%s\n' "\$snap"
+  exit 0
+done
+exec /usr/bin/awk "\$@"
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/awkbin/awk"
+  run env PATH="$BATS_TEST_TMPDIR/awkbin:$PATH" CC_ADMIT_LOADAVG_OVERRIDE=99 \
+      CC_ADMIT_TOKEN="$tok" CC_ADMIT_WANT_SID=sid-race \
+      bash -c '. "$1"; cc_capacity_admit holder "held spawn"' _ "$LIB"
+  # POSITIVE CONTROL: without this the case passes vacuously whenever the stub never fired.
+  [ -f "$BATS_TEST_TMPDIR/rival.rc" ] || { echo "the rival never ran — the window was never opened"; false; }
+  rival="$(cat "$BATS_TEST_TMPDIR/rival.rc")"
+  # EXACTLY ONE of the two may admit. WHICH one is immaterial; two is the defect.
+  [ $(( (status == 0 ? 1 : 0) + (rival == 0 ? 1 : 0) )) -eq 1 ] \
+    || { echo "holder rc=$status rival rc=$rival — ONE probe admission granted TWO spawns"; cat "$CC_ADMIT_IDL"; false; }
+}
+
