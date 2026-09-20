@@ -493,11 +493,21 @@ setup() {
     || { echo "the assertion did not run against the captured output: $output"; false; }
 }
 INNER
+  # `bats` on PATH is the cc-bats ADMISSION WRAPPER, and a shed (rc 75) emits no TAP at all while
+  # exiting in a way a `^ok` filter reads as "nothing failed" (docs/lessons/
+  # a-gate-refusal-is-not-a-gate-result.md). Two defences: the admission ceiling is disabled for this
+  # two-case harness, which is not a gate-corpus root; and the PLAN LINE is asserted before any
+  # verdict is read off the stream, so a refusal of any other kind is a NAMED red rather than a
+  # silent pass.
   run env -u BATS_TEST_TMPDIR -u BATS_TEST_FILENAME -u BATS_RUN_TMPDIR -u BATS_TMPDIR \
       SUBJECT="$BATS_TEST_FILENAME" FORCE_LPC=2.00 \
+      CC_BATS_MAX_ROOTS=0 \
+      CC_BATS_WAIVER_REASON='inner 2-case harness for the band, not a gate-corpus root' \
       STUB_SILENT="$IN/bin/expect-silent" STUB_NOISY="$IN/bin/expect-noisy" \
       bats --tap "$IN/band.bats"
   echo "# inner TAP:" >&3; printf '%s\n' "$output" | sed 's/^/#   /' >&3
+  printf '%s\n' "$output" | grep -qE '^1\.\.2$' \
+    || { echo "the inner run emitted no 1..2 plan line — it was refused or shed, so nothing below is a verdict"; false; }
 
   ! printf '%s\n' "$output" | grep -qE '^ok .*# skip' \
     || { echo "a killed case still renders as 'ok … # skip' — an audit grepping ^ok counts it as a pass"; false; }
