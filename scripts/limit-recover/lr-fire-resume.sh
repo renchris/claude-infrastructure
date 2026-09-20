@@ -378,8 +378,17 @@ done
 if [ -n "$_LR_CA" ]; then
   # shellcheck disable=SC1090  # runtime-resolved source; the ship gate runs shellcheck without -x
   . "$_LR_CA"
+  # LR_RUN is set only by the FLEET driver (lr-fleet.sh / lr-handoff.sh). This script's OTHER
+  # documented entry point is a direct invocation — § Usage says "run it in the terminal/pane that
+  # should own the resumed session" — and there LR_RUN is unset, so reading it bare under `set -u`
+  # aborted the whole script at this line. Its three siblings on the same prefix were all guarded
+  # (`${LR_ADMIT_TOKEN:-}`, `${LR_LOAD_TERM:-off}`), which is exactly what made the one unguarded
+  # read invisible. The fallback is NOT empty: the budget key carries a per-run isolation invariant
+  # ("one recovery's refusals cannot release another's"), and an empty key would pool every direct
+  # invocation into ONE shared counter — so the direct path keys on its own sid instead.
+  _lr_bkey="${LR_RUN:-}"; _lr_bkey="${_lr_bkey##*/}"; : "${_lr_bkey:=direct-$SID}"
   if ! CC_ADMIT_TOKEN="${LR_ADMIT_TOKEN:-}" CC_ADMIT_WANT_SID="$SID" \
-       CC_ADMIT_LOAD_TERM="${LR_LOAD_TERM:-off}" CC_ADMIT_BUDGET_KEY="${LR_RUN##*/}" \
+       CC_ADMIT_LOAD_TERM="${LR_LOAD_TERM:-off}" CC_ADMIT_BUDGET_KEY="$_lr_bkey" \
        cc_capacity_admit lr-fire-resume "resume $SID on $ACCT"; then
     echo "✗ $(cc_capacity_admit_reason)" >&2
     echo "  Shed load first (close finished panes / let the wave drain), then re-run this exact command." >&2
