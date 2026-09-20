@@ -1590,6 +1590,72 @@ case "${_pgw_rc:-absent}" in
 esac
 log_idl propose-goal-arm "$(jq -nc --arg rc "${_pgw_rc:-absent}" --arg v "$_pgw_verdict" '{propose_goal_rc:$rc, propose_goal_verdict:$v}')"
 
+sweep_yield 2b-iii-c-dated-park-arm
+
+# ── 2b-iii-c. THE DATED-PARK ARM — the other half of every park whose gate is a CLOCK ─────────────
+# A `not-yet-true` row whose only precondition is a DATE gets parked with
+# `cc-backlog block <id> --needs "On or after YYYY-MM-DD, ..."`. The block is correct and it is what
+# takes the row out of the wave: cc-dispatch filters `status=="open"` at step 1 and its own comment
+# calls `blocked` "the re-dispatch loop `blocked` exists to break". Measured on the row that
+# motivated this arm (`2aa99648bd80`, the SUBAGENT_LIFECYCLE A5/A6 acceptance read): left open over
+# a window unreadable for six more days, it took 2 dispatch claims in its first 103 minutes.
+#
+# THE BLOCK CREATES THE SECOND HALF OF THE PROBLEM AND THIS ARM IS IT. Nothing in the tree reads a
+# blocked row's `needs` prose, so a dated park is invisible on the day it becomes actionable — the
+# date passes, no sensor fires, and the row waits on a human with no reason to look. That is the
+# measured `filed-blocker-is-never-revalidated` class: a blocked row is filed once and never
+# re-checked. A detector with no owner is not an actuator, so the arming event gets an owner here.
+#
+# SAME DISPOSITION AS 2b-iii-b ABOVE, and for the same reason: it PAGES and touches no store. It
+# does NOT auto-unblock. Un-parking re-enters the dispatch wave, and a wrong date read would
+# recreate the exact loop the park exists to break — so the write stays with whoever reads the page.
+# The probe is NEVER stored as a row's `--falsifier`: exit 0 here means "this row just became
+# ACTIONABLE", which `cc-premise` would read as "close it"
+# (docs/lessons/arming-and-mootness-cannot-share-one-falsifier.md).
+#
+# ABOVE THE `nothing-new` EARLY EXIT, exactly as 2b-iii-b is: a date arriving produces no page, no
+# alarm and no ledger row of its own — the silence IS the failure — so below the gate it would run
+# only on sweeps that already had other news.
+#
+# ALARM BUDGET. Steady state is zero pages: the arm fires only on exit 0, and today there are two
+# dated parks, arming 2026-09-26 and 2026-10-03. Once armed a row STAYS armed until someone
+# unblocks it, so the page repeats — deliberately, because a park nobody acts on is the failure
+# mode — but is damped to ONE page per UTC day. rc 1 (nothing armed) and rc 2 (ledger unreadable —
+# a NON-VERDICT, never "nothing armed") are journalled and neither pages.
+_dpa="$_SWEEP_DIR/dated-park-arm.sh"
+_dpa_rc=""
+_dpa_ids=""
+if [ -x "$_dpa" ]; then
+  _dpa_f="${TMPDIR:-/tmp}/cc-dated-park-arm.$$"
+  # Redirect to a FILE rather than a command substitution: the rc has to survive, and an assignment
+  # made inside `$( )` never escapes it (memory: assignment-inside-command-substitution-never-escapes).
+  _bounded bash "$_dpa" --arm >"$_dpa_f" 2>/dev/null; _dpa_rc=$?
+  if [ "$_dpa_rc" -eq 0 ]; then
+    _dpa_ids="$(awk '{print $3}' "$_dpa_f" | tr '\n' ' ' | sed 's/ $//')"
+    _dpa_stamp="$_cc_cfg/autonomy/dated-park-arm.paged"
+    _dpa_today="$(date -u +%Y-%m-%d)"
+    if [ "$(cat "$_dpa_stamp" 2>/dev/null)" != "$_dpa_today" ]; then
+      CC_ROLES_DIR="$ROLES_DIR" sweep_bounded "$NOTIFY_TIMEOUT_S" "$NOTIFY" --role desk \
+        "⏰ DATED PARK ARMED — $_dpa_ids. The clock these rows were waiting on has arrived; each is BLOCKED and therefore invisible to cc-dispatch until it is released. Read the park (it carries the exact command and, where the row has a second window, how to re-park it): bash scripts/dated-park-arm.sh --report. Then for each id: cc-backlog unblock <id>. Do NOT close them as falsified — arming is the START of the work." \
+        >/dev/null 2>&1 || true
+      printf '%s' "$_dpa_today" >"$_dpa_stamp" 2>/dev/null || true
+    fi
+  fi
+  rm -f "$_dpa_f" 2>/dev/null || true
+fi
+# Journalled on EVERY sweep, quiet ones included: "the watcher is absent", "the bound cut it",
+# "the ledger was unreadable" and "nothing has armed" are four different facts, and collapsing them
+# would make a dead rail read exactly like a patient one. ONE jq, no `|| fallback` — the contract
+# tests/idl-record-size.bats enforces by re-running this block with ` > "$1"` appended.
+case "${_dpa_rc:-absent}" in
+  0)   _dpa_verdict="ARMED-paged" ;;
+  1)   _dpa_verdict="none-armed" ;;
+  2)   _dpa_verdict="non-verdict-ledger-unreadable" ;;
+  124) _dpa_verdict="bound-exceeded" ;;
+  *)   _dpa_verdict="watcher-absent" ;;
+esac
+log_idl dated-park-arm "$(jq -nc --arg rc "${_dpa_rc:-absent}" --arg v "$_dpa_verdict" --arg ids "$_dpa_ids" '{dated_park_rc:$rc, dated_park_verdict:$v, dated_park_ids:$ids}')"
+
 sweep_yield 2b-iv-ratchet-consumer
 
 # ── 2b-iv. THE RATCHET'S CONSUMER (W1 item 6) ─────────────────────────────────────────────────────
