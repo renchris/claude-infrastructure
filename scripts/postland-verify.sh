@@ -552,7 +552,17 @@ else
   # green — including the re-run command this file PRINTS, which uses a short /tmp/pv-repro and so
   # exonerates the very file it is meant to convict. Correct that a prelint red skips the corpus: a
   # corpus verdict under that condition is a statement about path lengths, not about the tree.
-  PRELINTS=(scripts/test-walltime-lint.sh scripts/test-hermeticity-lint.sh scripts/git-identity-lint.sh scripts/subshell-cleanup-lint.sh scripts/test-afunix-path-lint.sh)
+  # fleet-manifest-lint joined 2026-09-20 (backlog 62f54195c398) as DEFENCE IN DEPTH, not as the
+  # primary net: its primary home is ship-land's run_gate, where §4.4 put it, so a land carrying an
+  # undeclared launchd plist is refused outright. It is here because the one path that BYPASSES that
+  # gate is the one this verifier exists to catch — a commit made directly in the shared checkout
+  # never crosses a land gate at all (the project CLAUDE.md forbids it precisely because it happens),
+  # and every one of this defect's six recurrences was in fact found HERE, by tests/cc-fleet.bats,
+  # after a ~50-minute corpus plus a bisect. As a prelint the same fact costs one glob over ~27 paths
+  # and names the label directly. Correct that a prelint red skips the corpus: an undeclared plist
+  # makes cc-fleet blind to that label, so the fleet rows a corpus run would produce are already a
+  # statement about an incomplete declaration rather than about the tree.
+  PRELINTS=(scripts/test-walltime-lint.sh scripts/test-hermeticity-lint.sh scripts/git-identity-lint.sh scripts/subshell-cleanup-lint.sh scripts/test-afunix-path-lint.sh scripts/fleet-manifest-lint.sh)
 fi
 # 600s, raised from 60s (2026-07-30): a bound must fit what it BOUNDS, in the band it actually runs
 # in. 60s was sized for a foreground ~3s lint and left no room for the band the launchd job imposes,
