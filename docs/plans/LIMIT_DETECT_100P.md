@@ -186,7 +186,7 @@ Entry points: `classify_record(dict)`, `classify_text(str)` (T2 only — for the
 
 | anchor (verbatim today) | edit | Δ |
 |---|---|---|
-| `:41 TTL_MIN="${STOP_FAILURE_TTL_MIN:-1440}"` · `:42 CAP="${STOP_FAILURE_CAP:-500}"` | defaults `10080` and `5000` (§ 9 D3); bats `:108`/`:116` pin behaviour via the env seams, not the literals | 0 |
+| `:41 TTL_MIN="${STOP_FAILURE_TTL_MIN:-1440}"` · `:42 CAP="${STOP_FAILURE_CAP:-500}"` | defaults `10080` and **`500`** — § 11 #7 REVERSES § 9 D3's proposed `5000` and the amendment binds. Trunk shipped `5000` regardless until W1 corrected it at `200f94cd7`; no test caught it because every cap assertion passes `STOP_FAILURE_CAP` through the env seam and so stays green at ANY default. **Do not restore `5000` from this table**; bats `:108`/`:116` pin behaviour via the env seams, not the literals | 0 |
 | `:85-87` `select((.config_dir \| sub("^~"; $h) \| sub("/$"; "")) == $c)` | add `or ((.aliases // []) \| index($b) != null)` with `--arg b "$(basename "$CFG" \| sed 's/^\.//')"` — `.claude` ⇒ `claude` ⇒ `next`; `:89` basename fallback stays | +2 |
 | after `:89` | `PANE="${CC_PANE_ID:-${KITTY_WINDOW_ID:-}}"; [ -n "$PANE" ] \|\| { PANE="${ITERM_SESSION_ID:-}"; PANE="${PANE##*:}"; }; case "$PANE" in *[!A-Za-z0-9._-]*) PANE="" ;; esac` — the `session-register.sh:127` idiom (`:21` "bash 3.2-safe"); NEVER `${ITERM_SESSION_ID##*:}` on a possibly-unset var (measured: `unbound variable`, exit 127 under bash 5.3) | +3 |
 | `:100` GC `find … -mmin "+$TTL_MIN" -delete` | also prune `"$LIM/.paged"` with the same TTL | +1 |
