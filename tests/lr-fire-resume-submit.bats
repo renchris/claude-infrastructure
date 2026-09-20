@@ -410,9 +410,87 @@ lr_expect_run() { # $1 = the QUIET-BOX budget in seconds; scales it to the box t
       echo "the program did not finish inside ${bound}s on a QUIET box (load/core $lpc) — a hang, not contention"
       echo "$output"; return 1
     fi
-    skip "killed at the ${bound}s bound with load/core $lpc — above 1.0 a wall-clock verdict is a fact about the BOX, not the subject"
+    # ABOVE THE QUIET BAND THE CLOCK IS NOT JUDGED — AND THE CASE IS NOT SKIPPED EITHER.
+    #
+    # This used to `skip`, and bats renders a skipped case as `ok N <name> # skip <reason>`: a kill
+    # counted as a PASS in every audit that greps `^ok`, and on this box the >1.0/core band is the
+    # NORMAL state, so a run could report 29/29 ok over cases that ran no assertion at all. An alarm
+    # that abstains in the same shape as a success carries no information (memory
+    # alarm-polarity-and-attention-budget).
+    #
+    # Withholding the WALL-CLOCK verdict never required withholding the case. D10's own measurement
+    # is the reason: in the 242 s killed arm EVERY behavioural assertion was already satisfied in the
+    # captured output — `run` keeps $output across a SIGTERM — and the case failed only on
+    # `[ "$status" -eq 0 ]`. So the kill is announced, the timing is not judged, and the caller's
+    # assertions run unconditionally against what was captured. This is the shape tests/cc-lr.bats
+    # took in 1b2676f4c: print the timing outside the judged band, and keep the load-invariant half
+    # of the claim asserted.
+    #
+    # The one thing a kill CAN destroy is the evidence itself, and that is not an abstention either:
+    # a program killed having produced nothing leaves nothing to assert, so it is a RED that names
+    # the reason rather than an `ok` that hides it.
+    echo "# ⚠ KILLED at the ${bound}s bound at load/core $lpc — the WALL-CLOCK verdict is WITHHELD (above 1.0/core it is a fact about the box); the behavioural assertions below still run, against the output captured before the kill" >&3
+    [ -n "$output" ] \
+      || { echo "killed at the ${bound}s bound at load/core $lpc having produced NO output — nothing was captured, so no assertion in this case can be evaluated"; return 1; }
+    return 0
   fi
   [ "$status" -eq 0 ] || { echo "expect exited $status after ${elapsed}s at load/core $lpc"; echo "$output"; return 1; }
+}
+
+@test "RED-PROOF a KILLED expect case is not reported as a PASS, and its captured output is still asserted" {
+  # F3, ALARM POLARITY ON THE BAND ADDED ABOVE. The band was right to stop JUDGING a wall clock
+  # above 1.0/core; it was wrong about how to say so. `skip` renders in TAP as
+  # `ok N <name> # skip <reason>` — measured in the verifier's own arm A:
+  #     ok 1 RED-PROOF quiet arm … # skip killed at the 30s bound with load/core 3.00
+  # so a killed case counts as a PASS to every audit that greps `^ok`, and on this box the >1.0/core
+  # band is the NORMAL state: a whole run could report all-ok over cases that ran no assertion.
+  #
+  # HOW AN AUDITOR IS MEANT TO COUNT IT, now: by `^ok` and `^not ok`, with no third category. This
+  # file emits exactly ONE skip — `expect(1) not installed`, a missing dependency, not a verdict —
+  # and none at all from the band. A kill above the band is announced on a `# ⚠ KILLED` line, the
+  # timing is not judged, and the case is decided by its own assertions on the captured output.
+  #
+  # Proved by running the REAL helper, extracted from this file, inside its own bats file, over a
+  # program stubbed to outlive the bound. Two inner cases, because the fix has two halves that fail
+  # in opposite directions: a kill that captured NOTHING must go RED (nothing can be asserted), and
+  # a kill that captured its evidence must still be JUDGED on it rather than waved through.
+  command -v bats >/dev/null || skip "bats(1) not on PATH for the inner run"
+  IN="$BATS_TEST_TMPDIR/inner"; mkdir -p "$IN/bin"
+  printf '#!/bin/sh\nsleep 30\n' > "$IN/bin/expect-silent"
+  printf '#!/bin/sh\necho CAPTURED-BEFORE-THE-KILL\nsleep 30\n' > "$IN/bin/expect-noisy"
+  chmod +x "$IN/bin/expect-silent" "$IN/bin/expect-noisy"
+  cat > "$IN/band.bats" <<'INNER'
+setup() {
+  eval "$(sed -n '/^lr_load_per_core() {/,/^}/p' "$SUBJECT")"
+  eval "$(sed -n '/^lr_expect_run() {/,/^}/p' "$SUBJECT")"
+  [ -n "$(declare -f lr_expect_run)" ] || { echo "extraction of lr_expect_run failed" >&2; return 1; }
+  # redefined AFTER the extraction, so the band is exercised at a load this box need not be under
+  lr_load_per_core() { printf '%s\n' "${FORCE_LPC:?}"; }
+  EXP="$BATS_TEST_TMPDIR/prog"; : > "$EXP"
+}
+@test "killed having captured NOTHING" {
+  cp "$STUB_SILENT" "$BATS_TEST_TMPDIR/expect"; chmod +x "$BATS_TEST_TMPDIR/expect"
+  PATH="$BATS_TEST_TMPDIR:$PATH" lr_expect_run 1
+}
+@test "killed having captured its evidence" {
+  cp "$STUB_NOISY" "$BATS_TEST_TMPDIR/expect"; chmod +x "$BATS_TEST_TMPDIR/expect"
+  PATH="$BATS_TEST_TMPDIR:$PATH" lr_expect_run 1
+  [[ "$output" == *"CAPTURED-BEFORE-THE-KILL"* ]] \
+    || { echo "the assertion did not run against the captured output: $output"; false; }
+}
+INNER
+  run env -u BATS_TEST_TMPDIR -u BATS_TEST_FILENAME -u BATS_RUN_TMPDIR -u BATS_TMPDIR \
+      SUBJECT="$BATS_TEST_FILENAME" FORCE_LPC=2.00 \
+      STUB_SILENT="$IN/bin/expect-silent" STUB_NOISY="$IN/bin/expect-noisy" \
+      bats --tap "$IN/band.bats"
+  echo "# inner TAP:" >&3; printf '%s\n' "$output" | sed 's/^/#   /' >&3
+
+  ! printf '%s\n' "$output" | grep -qE '^ok .*# skip' \
+    || { echo "a killed case still renders as 'ok … # skip' — an audit grepping ^ok counts it as a pass"; false; }
+  printf '%s\n' "$output" | grep -qE '^not ok 1 killed having captured NOTHING' \
+    || { echo "a kill that captured nothing was not reported as a failure: $output"; false; }
+  printf '%s\n' "$output" | grep -qE '^ok 2 killed having captured its evidence' \
+    || { echo "a kill discarded a case whose evidence WAS captured — the over-correction: $output"; false; }
 }
 
 @test "RED-PROOF quiet arm: READY never matched, composer reads EMPTY → the prompt IS typed" {
