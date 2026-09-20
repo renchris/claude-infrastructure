@@ -52,7 +52,10 @@ beat() {
 
   cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
   [ -z "$cwd" ] && cwd="$PWD"
-  pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; pane="${pane##*:}"
+  # KITTY_WINDOW_ID last, for the same measured no-address class session-register.sh:127 carries:
+  # without it a kitty-hosted session's beat records pane "" while its stop-failure marker records
+  # a real pane, and a reader comparing the two sees a disagreement that is purely this gap.
+  pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-${KITTY_WINDOW_ID:-}}}"; pane="${pane##*:}"
 
   # kind: explicit arg wins (Stop passes `stop`); default is a prompt beat.
   kind="${1:-prompt}"

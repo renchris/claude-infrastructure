@@ -80,10 +80,34 @@ deadpid() { sleep 1 & local p=$!; kill "$p" 2>/dev/null || true; wait "$p" 2>/de
   [ "$output" = "myproj-DEADBEEF" ]
 }
 
-@test "register: no-op when ITERM_SESSION_ID is absent (not an iTerm2 pane)" {
-  printf '{"cwd":"/tmp/x"}' | env -u ITERM_SESSION_ID bash "$REG"
+@test "register: no-op when NO pane address is present at all" {
+  # All THREE must be unset, not just ITERM_SESSION_ID. Since LIMIT_DETECT_100P W1 this hook also
+  # reads KITTY_WINDOW_ID, so unsetting one variable no longer establishes "no address" — and a
+  # suite inheriting a real KITTY_WINDOW_ID from the pane it runs in would silently start testing
+  # the opposite of what it says.
+  printf '{"cwd":"/tmp/x"}' | env -u ITERM_SESSION_ID -u CC_PANE_ID -u KITTY_WINDOW_ID bash "$REG"
   run bash -c "ls '$CC_REGISTRY_DIR' 2>/dev/null | wc -l | tr -d ' '"
   [ "$output" = "0" ]
+}
+
+@test "register: KITTY_WINDOW_ID alone is an address, and it is the LAST fallback" {
+  # THE MEASURED NO-ROW CLASS. 14 of 44 of one day's sessions had no registry row, and 3 of 14
+  # rate_limit sids could not be enumerated at all — because this hook had no address for them.
+  # A lead-launched successor was measured carrying KITTY_WINDOW_ID=186 with neither CC_PANE_ID nor
+  # ITERM_SESSION_ID set; the operator registered that pane by hand.
+  printf '{"cwd":"/tmp/kitty"}' \
+    | env -u ITERM_SESSION_ID -u CC_PANE_ID KITTY_WINDOW_ID=186 CC_SESSION_NAME=kt bash "$REG"
+  [ -f "$CC_REGISTRY_DIR/186.json" ]
+  run jq -r '.paneUUID' "$CC_REGISTRY_DIR/186.json"; [ "$output" = "186" ]
+
+  # ORDER MATTERS, and this is the half that protects everything already working: KITTY is LAST, so
+  # a pane that resolves today must keep resolving to the SAME id even when a kitty id is also in
+  # the environment. Appending a fallback must not re-address an existing population.
+  printf '{"cwd":"/tmp/both"}' \
+    | env -u CC_PANE_ID ITERM_SESSION_ID="w1t0p0:BEEFBEEF-1111-2222-3333-444444444444" \
+          KITTY_WINDOW_ID=999 CC_SESSION_NAME=both bash "$REG"
+  [ -f "$CC_REGISTRY_DIR/BEEFBEEF-1111-2222-3333-444444444444.json" ]
+  [ ! -e "$CC_REGISTRY_DIR/999.json" ]
 }
 
 @test "register: no-op when ITERM_SESSION_ID is malformed (non-UUID)" {

@@ -560,6 +560,43 @@ EOF
   [ "$output" = 1 ]
 }
 
+@test "34 LIMITED — a limit-blocked session stops counting as ACTIVE, and the filter is an ALLOWLIST" {
+  # THE PHANTOM ACTIVE, and it is the term that refused a real recovery. Stop never fires on a
+  # limit turn, so a capped session's beat keeps its last kind:"prompt" forever and this census
+  # counts a corpse. Measured on one day's fleet: 12 of 14 rate_limit sids frozen that way,
+  # ACTIVE=10 against capacity-admit's ceiling of 8, and the poller parked a recovery at 9>8.
+  # Flipping four of them to `limited` took ACTIVE to 7 and the same gate admitted.
+  #
+  # LIMIT_DETECT_100P W1 makes hooks/stop-failure-marker.sh write that beat, through THIS producer,
+  # on every rate_limit death. Here the producer is driven directly, because what is under test is
+  # the CENSUS side of the contract: does a `limited` beat count.
+  printf '%s' '{"session_id":"lim","cwd":"/tmp"}' \
+    | env CC_BEAT_DIR="$CC_BEAT_DIR" /bin/bash "$REPO/hooks/session-beat.sh" limited
+  [ "$(jq -r '.kind' "$CC_BEAT_DIR/lim.json")" = limited ]
+  run env -u CC_SP_ACTIVE_OVERRIDE bash -c '. "$1"; cc_sp_active' _ "$SP"
+  [ "$status" -eq 0 ]
+  [ "$output" = 0 ]
+
+  # POSITIVE CONTROL, and it is what makes the row above mean anything: the SAME session, the same
+  # pid, the same everything, beaten as `prompt` instead — counts. So the 0 above is the kind
+  # filter deciding, not a fixture that was never countable in the first place.
+  printf '%s' '{"session_id":"lim","cwd":"/tmp","prompt":"hello"}' \
+    | env CC_BEAT_DIR="$CC_BEAT_DIR" /bin/bash "$REPO/hooks/session-beat.sh" prompt
+  run env -u CC_SP_ACTIVE_OVERRIDE bash -c '. "$1"; cc_sp_active' _ "$SP"
+  [ "$status" -eq 0 ]
+  [ "$output" = 1 ]
+
+  # AND THE FILTER IS AN ALLOWLIST, not a denylist of known-dead kinds. An unrecognized kind must
+  # not count. A denylist would need editing for every kind ever added and would fail OPEN — the
+  # direction that re-creates the phantom — whereas this can only ever fail closed.
+  printf '%s' '{"session_id":"lim","cwd":"/tmp"}' \
+    | env CC_BEAT_DIR="$CC_BEAT_DIR" /bin/bash "$REPO/hooks/session-beat.sh" zzz
+  [ "$(jq -r '.kind' "$CC_BEAT_DIR/lim.json")" = zzz ]
+  run env -u CC_SP_ACTIVE_OVERRIDE bash -c '. "$1"; cc_sp_active' _ "$SP"
+  [ "$status" -eq 0 ]
+  [ "$output" = 0 ]
+}
+
 # ══ RED-PROOF (recorded — a control that cannot fail proves nothing) ═════════════════════════════
 #
 # Run against PRISTINE origin/main (the tree BEFORE this wave), reproduce with:

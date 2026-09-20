@@ -160,3 +160,27 @@ emit() { # <json-stdin> <kind>
   [ "$got" = "$utc" ]
   if [ "$utc" != "$amb" ]; then [ "$got" != "$amb" ]; fi
 }
+
+@test "PANE: KITTY_WINDOW_ID is the last address fallback, so a kitty session beats with a pane" {
+  # Without this the beat's pane provenance DISAGREES with the stop-failure marker's for exactly
+  # the population that has no registry row: the marker (LIMIT_DETECT_100P W1) reads
+  # CC_PANE_ID -> KITTY_WINDOW_ID -> ITERM, and this writer read only the first and last. A reader
+  # comparing the two would see a conflict that is purely this gap, on the sessions least able to
+  # afford one.
+  printf '%s' '{"session_id":"kt","cwd":"/tmp","prompt":"hi"}' \
+    | env -u CC_PANE_ID -u ITERM_SESSION_ID KITTY_WINDOW_ID=186 /bin/bash "$BEAT" prompt
+  [ "$(jq -r '.pane' "$CC_BEAT_DIR/kt.json")" = 186 ]
+
+  # LAST, not first: a session that resolves today keeps the SAME pane when a kitty id is also in
+  # the environment. Appending a fallback must never re-address an existing population.
+  printf '%s' '{"session_id":"kb","cwd":"/tmp","prompt":"hi"}' \
+    | env -u CC_PANE_ID ITERM_SESSION_ID='w0t0p0:112' KITTY_WINDOW_ID=999 /bin/bash "$BEAT" prompt
+  [ "$(jq -r '.pane' "$CC_BEAT_DIR/kb.json")" = 112 ]
+
+  # and with no address at all the beat is still written — a missing pane must never cost a beat,
+  # because the beat is what keeps the session counted as alive.
+  printf '%s' '{"session_id":"kn","cwd":"/tmp","prompt":"hi"}' \
+    | env -u CC_PANE_ID -u ITERM_SESSION_ID -u KITTY_WINDOW_ID /bin/bash "$BEAT" prompt
+  [ -s "$CC_BEAT_DIR/kn.json" ]
+  [ "$(jq -r '.pane' "$CC_BEAT_DIR/kn.json")" = "" ]
+}
