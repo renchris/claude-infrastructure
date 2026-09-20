@@ -877,3 +877,79 @@ EOF
   [[ "$(idl_first 'select(.caller=="c15z2")|.token')" != *"-"*"s old"* ]] \
     || { echo "the row reports a NEGATIVE age: $(idl_first 'select(.caller=="c15z2")|.token')"; false; }
 }
+
+# ══ W2FA A1 — THE TERMINAL STATE REPEATS, AND IT PAGED EVERY TIME ══════════════════════════════
+# D5 made an unredeemable token a NAMED TERMINAL STATE that pages instead of re-deciding in the
+# pane, and 15t pins that. What neither pinned is that the state can REPEAT: the rename claim is
+# the only terminal path that leaves the record on disk (post-claim, clock and expiry all discard
+# it first), so an unclaimable token reaches the same refusal for as long as anyone runs the
+# launcher — and the launcher is durable in the run's bundle precisely so a human can re-run it
+# hours later. MEASURED on the parent: ten redemptions, ten rc-9 refusals, TEN BYTE-IDENTICAL
+# PAGES, on a box a fresh evaluation would have ADMITTED.
+
+@test "15aa A1 the terminal refusal is BOUNDED — ten of them are ONE page, and repeat 2..10 say so" {
+  local dir tok i rcs="" pages rows
+  dir="$BATS_TEST_TMPDIR/a1"; mkdir -p "$dir"
+  tok="$(mint sid-a1 "$dir/tok")"
+  [ -f "$tok" ] || { echo "mint did not create $dir/tok"; false; }
+  chmod 555 "$dir"                                  # neither the claim rename nor an unlink can land
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    # the REASON is what the operator reads, so it is captured rather than the rc alone — the
+    # gate's rc stays the subshell's (this is the admit() helper's contract, inlined because the
+    # helper cannot carry CC_ADMIT_TOKEN).
+    run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=0.01 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-a1 \
+                 cc_capacity_admit cA1 "in-place recycle"; rc=$?; cc_capacity_admit_reason; exit $rc' _ "$LIB" "$tok"
+    rcs="$rcs$status "
+  done
+  chmod 755 "$dir"
+  # THE VERDICT IS UNTOUCHED. Bounding an ALARM must never widen ADMISSION — the box here is QUIET
+  # (0.01/core), so a fall-through would admit, and that is the failure the terminal state exists
+  # to prevent. Ten refusals, still ten refusals.
+  [ "$rcs" = "9 9 9 9 9 9 9 9 9 9 " ] || { echo "verdicts changed: $rcs"; false; }
+  # …and the record is genuinely still there, which is what makes the repeat possible at all.
+  [ -f "$tok" ] || { echo "the token WAS consumed — this case is no longer testing a repeat"; false; }
+  pages="$(wc -l < "$BATS_TEST_TMPDIR/pages.txt" | tr -d ' ')"
+  [ "$pages" = 1 ] || { echo "$pages pages for one standing state — the alarm is unbounded"; cat "$BATS_TEST_TMPDIR/pages.txt"; false; }
+  # THE ROWS ARE NOT DAMPED, only the page is: the IDL is the audit surface and every occurrence
+  # must be selectable there. Damping the record instead would hide the storm rather than bound it.
+  rows="$(idl_field 'select(.basis=="token-stale" and .caller=="cA1")|.detail' | wc -l | tr -d ' ')"
+  [ "$rows" = 10 ] || { echo "$rows rows for 10 refusals — the record was damped, not the alarm"; false; }
+  [[ "$(idl_field 'select(.caller=="cA1")|.detail' | head -1)" == *"occurrence 1"* ]] \
+    || { echo "first row: $(idl_field 'select(.caller=="cA1")|.detail' | head -1)"; false; }
+  [[ "$(idl_field 'select(.caller=="cA1")|.detail' | tail -1)" == *"occurrence 10"* ]] \
+    || { echo "tenth row: $(idl_field 'select(.caller=="cA1")|.detail' | tail -1)"; false; }
+  # THE REPEAT IS DISTINGUISHABLE IN THE OPERATOR-FACING SENTENCE TOO, not only on the row: the
+  # advice for occurrence 1 ("re-fire") and for occurrence 10 ("re-running cannot help") differ.
+  [[ "$output" == *"REPEAT #10"* ]] || { echo "the tenth refusal reads identically to the first: $output"; false; }
+}
+
+@test "15ab A1b the page bound is a KNOB, and 0 silences the alarm without touching the refusal" {
+  # Without this the bound is a constant nobody can move: an operator watching a known-bad recovery
+  # must be able to silence the alarm, and a noisier tier must be reachable, WITHOUT either of them
+  # reaching the verdict. Both arms assert rc 9 for that reason.
+  local dir tok i rcs=""
+  dir="$BATS_TEST_TMPDIR/a1b"; mkdir -p "$dir"
+  tok="$(mint sid-a1b "$dir/tok")"
+  chmod 555 "$dir"
+  for i in 1 2 3 4 5; do
+    run bash -c '. "$1"; CC_ADMIT_TOKEN_TERMINAL_PAGES=3 CC_ADMIT_LOADAVG_OVERRIDE=0.01 \
+                 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-a1b cc_capacity_admit cA1b "s"' _ "$LIB" "$tok"
+    rcs="$rcs$status "
+  done
+  chmod 755 "$dir"
+  [ "$rcs" = "9 9 9 9 9 " ] || { echo "the knob reached the verdict: $rcs"; false; }
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/pages.txt" | tr -d ' ')" = 3 ] \
+    || { echo "PAGES=3 produced $(wc -l < "$BATS_TEST_TMPDIR/pages.txt") pages"; cat "$BATS_TEST_TMPDIR/pages.txt"; false; }
+  : > "$BATS_TEST_TMPDIR/pages.txt"
+  dir="$BATS_TEST_TMPDIR/a1c"; mkdir -p "$dir"
+  tok="$(mint sid-a1c "$dir/tok")"
+  chmod 555 "$dir"
+  run bash -c '. "$1"; CC_ADMIT_TOKEN_TERMINAL_PAGES=0 CC_ADMIT_LOADAVG_OVERRIDE=0.01 \
+               CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-a1c cc_capacity_admit cA1c "s"' _ "$LIB" "$tok"
+  chmod 755 "$dir"
+  [ "$status" -eq 9 ] || { echo "silencing the alarm changed the verdict to $status"; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/pages.txt" ] || { echo "PAGES=0 still paged:"; cat "$BATS_TEST_TMPDIR/pages.txt"; false; }
+  # …and the refusal is still RECORDED. A silenced alarm must never become a silent refusal.
+  [ "$(idl_first 'select(.caller=="cA1c")|.basis')" = "token-stale" ] \
+    || { echo "basis: $(idl_first 'select(.caller=="cA1c")|.basis')"; false; }
+}
