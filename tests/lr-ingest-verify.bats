@@ -137,6 +137,20 @@ sc_arm() { env CLAUDE_CONFIG_DIR="$1" CLAUDE_CODE_SESSION_ID="$2" \
 sc_stat() { env CLAUDE_CONFIG_DIR="$1" \
   bash -c "cd '$WT' && '$HOME/.claude/hooks/session-continue.sh' status"; }
 
+
+# A stable digest of a directory's ENTRY NAMES, by glob rather than `ls | …` (SC2012) — and
+# deliberately not `find`: BSD find does not walk a symlinked start dir without -H, and
+# $BATS_TEST_TMPDIR is one on this box, so find's null would read as "the directory is empty"
+# rather than "I did not look". These four call sites exist to prove a --no-clear run leaves both
+# state dirs UNTOUCHED, so a digest that silently collapses to the empty-input hash would assert
+# nothing at all, in both arms.
+state_digest() { # $1 = directory → sha of its sorted entry names ("" when absent/empty)
+  local d="${1:-}" f names=""
+  for f in "$d"/* "$d"/.[!.]*; do [ -e "$f" ] || continue; names="$names${f##*/}
+"; done
+  printf '%s' "$names" | sort | /usr/bin/shasum
+}
+
 @test "CONTROL: a clean post-W2 bundle passes every clause and emits the one-line prompt" {
   run verify --no-clear
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -315,8 +329,8 @@ sc_stat() { env CLAUDE_CONFIG_DIR="$1" \
   # own-sentinel clear are two separate writes.
   sc_arm "$SRC" "$SID" "still armed at the source key"
   sc_arm "$TGT" "$SID" "still armed at the target key"
-  before_s="$(ls -1 "$SRC/state" 2>/dev/null | sort | /usr/bin/shasum)"
-  before_t="$(ls -1 "$TGT/state" 2>/dev/null | sort | /usr/bin/shasum)"
+  before_s="$(state_digest "$SRC/state")"
+  before_t="$(state_digest "$TGT/state")"
   run verify --no-clear
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   # The --no-clear branch now CLASSIFIES what it read instead of blanket-reporting it (W3i C4), so
@@ -325,9 +339,9 @@ sc_stat() { env CLAUDE_CONFIG_DIR="$1" \
   [[ "$output" == *"NOT touched (--no-clear)"* ]] || { echo "$output"; false; }
   [[ "$output" == *"PASS D2 — this session's own sentinel is armed at the target key, NOT touched"* ]] \
     || { echo "$output"; false; }
-  [ "$before_s" = "$(ls -1 "$SRC/state" 2>/dev/null | sort | /usr/bin/shasum)" ] \
+  [ "$before_s" = "$(state_digest "$SRC/state")" ] \
     || { echo "the read-only mode WROTE into $SRC/state"; ls -la "$SRC/state"; false; }
-  [ "$before_t" = "$(ls -1 "$TGT/state" 2>/dev/null | sort | /usr/bin/shasum)" ] \
+  [ "$before_t" = "$(state_digest "$TGT/state")" ] \
     || { echo "the read-only mode WROTE into $TGT/state"; ls -la "$TGT/state"; false; }
   run sc_stat "$SRC"
   [[ "$output" == *"still armed at the source key"* ]] || { echo "the source sentinel was disarmed: $output"; false; }
