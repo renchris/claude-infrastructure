@@ -244,3 +244,162 @@ right. But the *non-refused* path still spends the mech budget on a cwd where no
 which is how my first (pre-`--no-clear`) sweep left four stray `.mech` markers across two config
 dirs. They were removed; the behaviour was not changed, because the argument for it is deliberate
 and predates this wave.
+
+---
+
+## 6. W3i hardening pass (2026-09-20) — what the mutation pass found, and what is true now
+
+An adversarial pass over `50b466066..7e899e090` returned **FAIL**: 7 defects and **11 of 37 mutants
+surviving a fully green suite**. Every item below was reproduced by execution before it was touched,
+and each fix carries a case that is RED on the unmodified tree. §§1-5 above are the record as the
+first pass left it; this section states where it was wrong.
+
+### 6.1 The seven defects
+
+| id | the defect, in one sentence | RED on the unmodified tree (verbatim) | commit |
+|---|---|---|---|
+| **D1** | Clause D ran its clear under the **TARGET** config dir. The sentinel is keyed on (config-dir \| cwd) and the key the PRE-LIMIT arm used is the **SOURCE** account's, so D could never reach the sentinel it exists for — and the only sentinel at the target key belongs to whoever else works in that cwd on the target account. | with the pre-limit sentinel armed under the source dir: `PASS D1 — auto-continue cleared: nothing to clear — no sentinel was armed for this cwd: …/wt` | ``6ca8a06f7`` |
+| **D2** | A6 returned `clause PASS A6` whenever `events.jsonl` existed and **no record carried the field** — and since nothing in the tree writes `killed_inflight`, that is the state of every post-W2 bundle. The suite's own CONTROL fixture was built to that shape, so it **pinned** the fail-open. | `PASS A6 — killed_inflight: no record in events.jsonl (state log ran; nothing reported a kill)` on the control fixture | ``9da1e2e10`` |
+| **D3** | The fail-closed prompt carried no run token, contradicting §3 deviation 4. | `argv[7]=</limit-recover ingest … — lr-ingest-verify FAILED: FAIL C3 — lock /x/y.lock says to=…>` — no `run:` anywhere | ``d66bd6c7f`` |
+| **D4** | `tests/session-continue.bats` was **36/37 in any ordinary session**, not 37/37: `sc()` handed the hook the RUNNING pane's `CLAUDE_CODE_SESSION_ID`, which the new foreign-sid refusal then correctly refused. Line 100's `grep -q "cleared"` had also gone decorative — the refusal text contains "nothing was **cleared**". | `not ok 1 base: set arms → status ARMED; clear disarms → status inactive` / `(in test file tests/session-continue.bats, line 101)` | ``bf2bc0428`` |
+| **D5** | C5 passed whenever `git rev-parse --git-dir` failed — one rc for "genuinely not a repo" and for "git could not answer". | (case) `FAIL C5 — the manifest recorded branch feat/work but git cannot read …` was absent; the tree printed `PASS C5 — … is not a git repo` | ``933d9a910`` |
+| **D6** | The sibling-sentinel refusal required BOTH sids to be known, and `set` writes `${f}.sid` only when the session HAS an id — so it was strongest over agent-armed chains and **inert over the operator's own** anonymous parks. | a sentinel armed with no sid was cleared by a foreign session | ``854454413`` |
+| **D7** | The receipt printed `PASS D1 — auto-continue cleared: <value>` for every non-error outcome, and the composed prompt asserted "auto-continue cleared" unconditionally. | `the PROMPT claims a clear that did not happen: Resumed in place on next2 … (config dir, session id, transcript path, lock target, source tombstone, branch, auto-continue cleared) …` | ``6ca8a06f7`` |
+
+**D1 and D7 are one hunk, and that is a deviation stated rather than hidden.** There is no version
+of clause D that both addresses the right config dir and keeps a label naming one outcome for four:
+the new clause reads its label off its value, and the prompt carries that value. Splitting them
+would have produced an intermediate commit whose own tests asserted the false label — the shape
+`stale-assertion-becomes-an-inverted-guard` warns about.
+
+### 6.2 The two polarity decisions, with the argument each needs
+
+The file's contract is *"a clause this script cannot EVALUATE is a FAILURE, never a pass"*, so a
+deviation from it needs an argument and so does a change that makes the gate stricter.
+
+**A6 (D2) — present-but-silent is UNEVALUABLE, not zero.** A log that never recorded the value does
+not say the value was zero. `grep -rn killed_inflight scripts hooks bin` still finds only this
+gate's reader, so "present and silent" is the shape of *every* bundle W2 writes, and the old arm
+would have cleared all of them having measured nothing. Cost, named: until a writer lands (residual
+1 — one line in `lrh_precheck`, W2's function) A6 refuses every real recovery and the fast path
+stays unreachable. That is the same direction the absent-file arm already took.
+
+**C5 (D5) — the manifest is the second source that makes a non-repo evaluable.** `rev-parse`'s rc
+cannot separate "not a repo" from "git could not answer", so the rc alone can never earn a pass.
+`lr-handoff` records `.branch` only when the cwd WAS a git checkout (it emits no `--branch` flag
+otherwise — `tests/lr-handoff-launcher-quoting.bats` case 5), so an ABSENT branch field is the
+bundle's own statement that this tree never was a repo. Two sources agreeing earns the pass; a
+`command -v git` arm covers the third world. The CONTROL case pins the pass so the fix cannot
+degrade into a blanket refusal.
+
+### 6.3 Clause D is now two clauses
+
+| | key it reads | what it may do |
+|---|---|---|
+| **D1** | `source_cfg \| worktree` — where the PRE-LIMIT continuation was armed | clears, as this session's own sid; ours to remove, which is why the ownership guard lets it through. An ABSENT `source_cfg` is a FAIL, never a "cleared" over a guessed directory |
+| **D2** | `target_cfg \| worktree` — what the RECOVERED session's Stop hook will read | **never clears a stranger.** Nothing armed ⇒ PASS · armed by this sid ⇒ cleared (a second recovery back onto an account this session has run under) · armed by anyone else ⇒ **FAIL**: `hooks/session-continue.sh:1176` would clear-and-ignore it on the recovered session's own first Stop, silently disarming a live sibling in the cwd it is resuming into |
+
+The verdict line's clause count is **counted**, not written down — the literal `13` would have
+survived the 14th clause landing.
+
+### 6.4 The eleven surviving mutants, and the case that now kills each
+
+A clause with no case that dies on its mutation is decorative: it can be deleted, inverted or forced
+true and every run still reads `ok`. Two of the eleven were not clause bugs but **fixture reach**
+failures — the acceptance case for the ≤2 KB budget was an equivalence guard on the axis it claimed
+to measure.
+
+| mutant | the arm it survived in | the case that kills it |
+|---|---|---|
+| **M1** | B1's predicate forced true — B1 had **no failing arm at all** | `M1: B1 refuses a re-audit that finds an OPEN delegation` (an `Agent` tool_use with no tool_result) |
+| **M2** | B1's unreadable-transcript arm | `M2: B1 fails CLOSED when the target transcript cannot be read` |
+| **M3** | C2's count — 0 copies and 5 copies both passed | `M3: C2 refuses BOTH counts it is written for — zero copies and two` |
+| **M4** | C5's detached-HEAD arm | `M4: C5 refuses a DETACHED HEAD` |
+| **M5** | C1's unset-`CLAUDE_CONFIG_DIR` arm — unreachable because every case passes one **on purpose** (correct hermeticity, and it made the arm dead) | `M5: C1 refuses an UNSET CLAUDE_CONFIG_DIR` (`env -u`) |
+| **M6** | A3's `spawned == settled` half — the existing case deletes only `.delegations.open` | `M6: A3 refuses spawned ≠ settled` (open=0, spawned=2, settled=1) |
+| **M7** | D's non-executable-hook arm | `M7: D fails closed when session-continue.sh is not EXECUTABLE` (both D clauses assert) |
+| **M8** | `clause()`'s `tr '\n\r\t' ' ' \| cut -c1-200` — the guard against a FAIL value injecting a newline into a prompt typed into a TUI composer | `M8: a clause VALUE carrying a newline is normalised to ONE line, and capped at 200` — the value is read out of the bundle's own JSON with `jq -r`, which emits a real newline for a `\n` |
+| **M9** | the launcher's THIRD fail-closed arm: rc 0 whose receipt does not end in a prompt. The report claimed "FAIL CLOSED, THREE WAYS" and two were tested | `M9: … all three shapes` — the `case` enumerates a verdict line, an empty line and a FAIL line, and each is driven, because deleting ONE pattern leaves the other two green |
+| **M10** | the 450-char DoD cap | `M10/M11: BOTH size caps are load-bearing` |
+| **M11** | the 500-char last-assistant cap | same case, its own marker |
+
+**Why M10/M11 survived, and what changed.** §2's equivalence-guard note said the `HANDOFF-CONTEXT.md
+≤ 2048` assertion was green in both arms because the fixture `$HOME` has an empty DoD store — and
+then left it there. An assertion green in both arms cannot pin a cap, so **both levers were
+removable with the suite green** and the 1,840 B number rested entirely on an out-of-band
+measurement no CI run repeats. The new case reaches the regime: a `WRAP_DOD_FILE` whose last capture
+is ~2.6 KB and a transcript whose last assistant message is ~3 KB, each carrying its **own** marker
+past its own cap (`DODTAILMARK` at +600 chars, `TAILMARK` at +495), so removing either cap is
+attributable to that cap. Two control assertions come first — both fixture sources are asserted
+oversized — so a green is a fact about the caps and not about an empty store.
+
+### 6.5 Suites after the pass
+
+| suite | before | after | note |
+|---|---|---|---|
+| `tests/lr-ingest-verify.bats` | 15 | **30** | +D1/D2 clause cases, +A6 silence, +C5 unevaluable + its control, +D7, +M1-M8 |
+| `tests/lr-handoff-launcher-quoting.bats` | 25 | **27** | +M9 (three shapes), +M10/M11; three `A && B` assertions split (the liveness linter reported them DEAD — `and-absorbed`) |
+| `tests/session-continue.bats` | 37 (36 in any ordinary session) | **41** | +foreign-sid discriminator, +D6 anonymous-owner case, +its control, +the `[ -f "$f" ]` equivalence guard |
+
+`shellcheck -S warning -x` clean on all three `.sh`; `bats --count` run on every bats file before
+running it; `python3 scripts/bats-assert-liveness.py` exit 0 on all three suites.
+
+**One standing red that is NOT this diff's**: `scripts/pipefail-sigpipe-lint.sh` reports
+`scripts/handoff-fire.sh 6 (was 4)`. That file is not in this diff (`git diff --stat HEAD --
+scripts/handoff-fire.sh` is empty and its last commit predates `50b466066`), it is owned by the
+sibling `lr100p/w3p` worktree, and the allowlist count is a pre-existing branch condition. Named
+here so the next reader does not attribute it.
+
+### 6.6 Residuals — what §4 said, and what is true now
+
+1. **A6 still has no writer, and D2 made that MORE binding, not less.** §4.1 was right: nothing
+   writes `killed_inflight`, and the one-line fix lives in `lrh_precheck` (W2's function, outside
+   this brief). Until it lands, A6 refuses every real recovery — which is now also true of the
+   present-but-silent state, i.e. of every post-W2 bundle. **This is the single highest-value line
+   left in the wave**, and W3i's own change is what makes it the only thing standing between the
+   gate and its measured saving.
+2. **D2 can refuse over a live sibling, and that is deliberate.** If any session on the TARGET
+   account has a continuation armed in the recovered session's worktree, the fast path refuses and
+   the recovery takes the full ingest. Safe direction, and rare — but it is a new refusal class the
+   status renderer (W5) should be able to name from `INGEST-VERIFIED.txt`.
+3. **The CLI `clear` is now stricter than the ACTUATOR, on purpose and asymmetrically.** Actuation
+   (`:1176`) clears-and-ignores a foreign sentinel; the CLI verb refuses one. The asymmetry is
+   right — the actuator IS the session whose Stop is being decided, while a CLI `clear` may be a
+   recovery, an operator, or a sibling — but it means a post-recycle successor in the same cwd can
+   no longer clear its predecessor's sentinel by hand. Its own first Stop still does.
+4. **§4.2's archive-on-clear is still not built.** The IDL remains the only reason the 2026-09-19
+   incident was recoverable, and nothing guarantees its retention window covers the next one.
+5. **B1 is still time-sensitive and still unbounded** (§4.4), and M1 now pins the direction it fails
+   in rather than the bound it lacks.
+
+### 6.7 How each kill was proved
+
+Every row below was produced by the harness at `/tmp/w3i-mutants.sh`: apply ONE exact-string mutation
+(the patcher exits 3 rather than silently no-op on an anchor miss), run the ONE case named for it,
+record the rc, restore the subject and verify its sha256 at the end. A row that comes back rc 0 means
+the case is decorative — the same verdict the adversarial pass returned, re-derived here.
+
+| mutant | the mutation applied | verdict |
+|---|---|---|
+| `M1` | `if [ "$_o" = 0 ] && … ; then` → `if true; then` (B1 always passes) | **KILLED** |
+| `M2` | B1's unreadable-transcript arm FAIL → PASS | **KILLED** |
+| `M3` | `if [ "$_hits" = 1 ]; then` → `if true; then` | **KILLED** |
+| `M4` | C5's detached-HEAD arm FAIL → PASS | **KILLED** |
+| `M5` | C1's unset-`CLAUDE_CONFIG_DIR` arm FAIL → PASS | **KILLED** |
+| `M6` | A3 drops the `[ "$_sp" = "$_se" ]` conjunct | **KILLED** |
+| `M7` | `if [ ! -x "$SC" ]; then` → `if false; then` | **KILLED** |
+| `M8` | the `tr … \| cut -c1-200` normaliser removed | **KILLED** |
+| `D2A6` | A6's `-1` arm restored to PASS (the pre-fix fail-open) | **KILLED** |
+| `D5C5` | C5's unevaluable-git arm restored to PASS (the pre-fix pass) | **KILLED** |
+| `D1CFG` | `sc_run "$SRC_CFG"` → `sc_run "$TCFG_M"` (the pre-fix config dir) | **KILLED** |
+| `M9` | the launcher's `''\|FAIL*\|verdict:*)` → `'')` | **KILLED** |
+| `M10` | the 450-char DoD cap removed | **KILLED** |
+| `M11` | the last-assistant cap 500 → 2000 (the pre-W3 value) | **KILLED** |
+| `D6OWN` | the clear guard restored to "both sids must be known" | **KILLED** |
+| `D6BUD` | the `[ -f "$f" ]` conjunct removed from the clear guard | **KILLED** |
+
+Three of the rows are the fixes' own RED proofs rather than mutants of new guards: `D1CFG` restores
+the target-dir clear, `D2A6` restores the `-1 ⇒ PASS` arm, `D5C5` restores the unevaluable-git pass,
+and `D6OWN` restores the both-sids-required guard. `D6BUD` is what makes the `[ -f "$f" ]`
+equivalence guard a guard: it is green in both arms of the D6 change and dies on the mutation that
+removes the conjunct, which is the only evidence that assertion has power.
