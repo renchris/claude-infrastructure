@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+"""cc-mail-images — pull every image out of an Outlook email, without screenshotting it.
+
+WHY: a newsletter's visual examples are the payload (design mockups, board
+renders, before/afters). Reading the mail in a browser and screenshotting the
+page loses resolution, crops, and costs a manual step every time. Graph already
+has the bytes: inline parts sit in the MIME, and remote <img> live at URLs in
+the HTML. This takes both and lays them out on one contact sheet.
+
+  cc-mail-images --search "Goodbye /ui"      find by KQL, take the newest hit
+  cc-mail-images --search "..." --list       just list the matches and stop
+  cc-mail-images --id <messageId>            exact message
+  cc-mail-images --search "..." --out DIR    where to write (default below)
+
+Default out: ~/Documents/mail-images/<yyyy-mm-dd>-<subject-slug>/
+Writes: every image, manifest.json, and index.html (the contact sheet).
+
+Remote images are fetched over plain HTTPS with no credential — they are public
+URLs in a newsletter. Inline parts never leave the machine.
+"""
+import argparse, base64, email, hashlib, json, os, re, sys, urllib.request
+from datetime import datetime
+from email import policy
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                                "..", "scripts", "lib"))
+sys.path.insert(0, os.path.expanduser("~/.claude/scripts/lib"))
+from ms365_stdio import MS365  # noqa: E402
+
+IMG_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
+           "image/webp": ".webp", "image/svg+xml": ".svg", "image/bmp": ".bmp",
+           "image/avif": ".avif", "image/tiff": ".tiff"}
+
+
+def slug(s, n=48):
+    s = re.sub(r"[^A-Za-z0-9]+", "-", (s or "untitled")).strip("-").lower()
+    return (s[:n] or "untitled").strip("-")
+
+
+def pick_message(m, args):
+    if args.id:
+        return m.call("get-mail-message", {"messageId": args.id})
+    q = {"search": f'"{args.search}"', "top": args.top,
+         "select": "id,subject,from,receivedDateTime,hasAttachments"}
+    res = m.call("list-mail-messages", q)
+    rows = res.get("value") or []
+    if not rows:
+        sys.exit(f"no message matched: {args.search}")
+    if args.list:
+        for r in rows:
+            frm = (r.get("from") or {}).get("emailAddress", {}).get("address", "?")
+            print(f"{r.get('receivedDateTime','?')}  {frm:32.32}  {r.get('subject','')}")
+            print(f"    id: {r.get('id')}")
+        sys.exit(0)
+    return rows[0]
+
+
+def fetch_mime(m, mid):
+    """Return the RFC822 bytes.
+
+    Fails LOUDLY on anything it cannot read. The tool wraps MIME in JSON under
+    `rawResponse`; an earlier version looked only for the non-JSON `_raw`
+    fallback, fell through to json.dumps(), and the email parser then found no
+    image parts — reporting "0 images" for a mail that has four. An
+    unparseable payload must never be indistinguishable from an empty one.
+    """
+    r = m.call("get-mail-message-mime", {"messageId": mid})
+    raw = None
+    if isinstance(r, str):
+        raw = r
+    elif isinstance(r, dict):
+        for key in ("rawResponse", "_raw", "value", "content"):
+            v = r.get(key)
+            if isinstance(v, str) and v.strip():
+                raw = v
+                break
+    if not raw:
+        keys = list(r)[:6] if isinstance(r, dict) else type(r).__name__
+        sys.exit(f"could not read MIME for {mid[:24]}... — payload keys: {keys}")
+    s = raw.strip()
+    if "\n" not in s[:200] and re.fullmatch(r"[A-Za-z0-9+/=\s]+", s[:400] or "x"):
+        try:
+            s = base64.b64decode(s, validate=False).decode("utf-8", "replace")
+        except Exception:
+            pass
+    if not re.search(r"^(Received|From|Content-Type|MIME-Version):", s[:4000], re.I | re.M):
+        sys.exit("payload does not look like RFC822 MIME — refusing to report 0 images")
+    return s.encode("utf-8", "replace")
+
+
+def main():
+    ap = argparse.ArgumentParser(description="extract every image from an Outlook email")
+    ap.add_argument("--search"); ap.add_argument("--id")
+    ap.add_argument("--out"); ap.add_argument("--top", type=int, default=10)
+    ap.add_argument("--list", action="store_true")
+    ap.add_argument("--no-remote", action="store_true",
+                    help="inline/MIME parts only; do not fetch remote <img> URLs")
+    args = ap.parse_args()
+    if not args.search and not args.id:
+        ap.error("need --search or --id")
+
+    with MS365() as m:
+        msg = pick_message(m, args)
+        mid = msg.get("id") or args.id
+        subject = msg.get("subject") or "untitled"
+        when = (msg.get("receivedDateTime") or "")[:10] or datetime.now().strftime("%Y-%m-%d")
+        out = args.out or os.path.expanduser(
+            f"~/Documents/mail-images/{when}-{slug(subject)}")
+        os.makedirs(out, exist_ok=True)
+        print(f"message: {subject}\n     to: {out}")
+        mime = fetch_mime(m, mid)
+
+    parsed = email.message_from_bytes(mime, policy=policy.default)
+    items, seen, html_parts = [], set(), []
+    for part in parsed.walk():
+        ctype = (part.get_content_type() or "").lower()
+        if ctype == "text/html":
+            try:
+                html_parts.append(part.get_content())
+            except Exception:
+                pass
+        if not ctype.startswith("image/"):
+            continue
+        try:
+            payload = part.get_payload(decode=True) or b""
+        except Exception:
+            continue
+        if not payload:
+            continue
+        h = hashlib.sha256(payload).hexdigest()
+        if h in seen:
+            continue
+        seen.add(h)
+        name = part.get_filename() or (part.get("Content-ID", "") or "").strip("<>") or f"inline-{len(items)+1}"
+        if not os.path.splitext(name)[1]:
+            name += IMG_EXT.get(ctype, ".bin")
+        path = os.path.join(out, slug(os.path.splitext(name)[0], 60) + os.path.splitext(name)[1])
+        with open(path, "wb") as f:
+            f.write(payload)
+        items.append({"source": "inline", "type": ctype, "bytes": len(payload),
+                      "file": os.path.basename(path), "cid": (part.get("Content-ID") or "").strip("<>")})
+
+    urls = []
+    for html in html_parts:
+        urls += re.findall(r'<img[^>]+src=["\'](https?://[^"\']+)["\']', html, re.I)
+        urls += re.findall(r'url\((?:["\'])?(https?://[^)"\']+)', html, re.I)
+    # de-dupe, drop 1x1 trackers by name, and skip Outlook's safelink wrapper
+    skip = re.compile(r'safelinks\.protection\.outlook\.com|/open\?|pixel|beacon|track', re.I)
+    urls = [u for u in dict.fromkeys(urls) if not skip.search(u)]
+    if not args.no_remote:
+        for n, u in enumerate(urls, 1):
+            try:
+                req = urllib.request.Request(u, headers={"User-Agent": "cc-mail-images/1"})
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    data = r.read()
+                    ct = (r.headers.get("Content-Type") or "").split(";")[0].lower()
+            except Exception as e:
+                items.append({"source": "remote", "url": u, "error": str(e)[:120]})
+                continue
+            if not data or not ct.startswith("image/"):
+                items.append({"source": "remote", "url": u, "error": f"not an image ({ct})"})
+                continue
+            h = hashlib.sha256(data).hexdigest()
+            if h in seen:
+                continue
+            seen.add(h)
+            # Name from the URL when it carries a real one; otherwise a short
+            # ordinal. The EXTENSION always comes from the served Content-Type,
+            # never from the URL — a CDN path often has none, and ".img" is not
+            # a type any viewer understands.
+            stem = slug(os.path.splitext(os.path.basename(u.split("?")[0]))[0], 40)
+            if not stem or len(stem) > 38:
+                stem = f"remote-{n:02d}"
+            ext = IMG_EXT.get(ct) or (os.path.splitext(u.split("?")[0])[1] or ".bin")
+            path = os.path.join(out, f"{stem}{ext}")
+            with open(path, "wb") as f:
+                f.write(data)
+            items.append({"source": "remote", "type": ct, "bytes": len(data),
+                          "file": os.path.basename(path), "url": u})
+
+    ok = [i for i in items if i.get("file")]
+    bad = [i for i in items if i.get("error")]
+    manifest = {"subject": subject, "messageId": mid, "received": msg.get("receivedDateTime"),
+                "out": out, "images": ok, "failed": bad,
+                "captured": datetime.now().astimezone().isoformat()}
+    with open(os.path.join(out, "manifest.json"), "w") as f:
+        json.dump(manifest, f, indent=2)
+
+    cells = "\n".join(
+        f'<figure><img src="{i["file"]}" loading="lazy">'
+        f'<figcaption>{i["file"]}<br><small>{i.get("type","")} · '
+        f'{i.get("bytes",0)//1024} KB · {i["source"]}</small></figcaption></figure>'
+        for i in ok)
+    html_doc = f"""<!doctype html><meta charset=utf-8><title>{subject}</title>
+<style>
+:root{{color-scheme:light dark}}
+body{{font:14px/1.5 system-ui,-apple-system,sans-serif;margin:0;padding:24px;
+background:Canvas;color:CanvasText}}
+h1{{font-size:18px;margin:0 0 4px}} p.sub{{margin:0 0 24px;opacity:.65}}
+.grid{{display:grid;gap:20px;grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}}
+figure{{margin:0}} img{{width:100%;height:auto;display:block;border-radius:6px;
+outline:1px solid color-mix(in oklch, CanvasText 12%, transparent);outline-offset:-1px}}
+figcaption{{margin-top:6px;font-size:12px;opacity:.7;word-break:break-all}}
+</style>
+<h1>{subject}</h1>
+<p class=sub>{len(ok)} image(s) · {msg.get('receivedDateTime','')} · {len(bad)} failed</p>
+<div class=grid>
+{cells}
+</div>"""
+    idx = os.path.join(out, "index.html")
+    with open(idx, "w") as f:
+        f.write(html_doc)
+
+    print(f"  images: {len(ok)}   failed: {len(bad)}")
+    for i in ok:
+        print(f"    {i['source']:6} {i.get('bytes',0)//1024:5} KB  {i['file']}")
+    for i in bad:
+        print(f"    FAILED {i.get('url','')[:70]} — {i['error']}")
+    print(f"\ncontact sheet: {idx}")
+
+
+if __name__ == "__main__":
+    main()
