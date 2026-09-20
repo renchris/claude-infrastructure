@@ -352,9 +352,17 @@ SH
   LR_SCREEN_WANT="$(printf '%s' "$LR_PROMPT" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]' | cut -c1-40)"
   export LR_SCREEN_WANT
   # The two exec'd shell programs, taken from the subject itself rather than re-typed here.
-  LR_SCREEN_SH="$(sed -n "/^LR_SCREEN_SH=\"\$(cat <<'LRSCREENSH'\$/,/^LRSCREENSH\$/p" "$FIRE" | sed '1d;$d')"
+  # ANCHORED ON THE HEREDOC TAG, never on the assignment syntax. These used to match
+  # `^LR_SCREEN_SH="$(cat <<'LRSCREENSH'$`, which welded the extractor to one spelling of the
+  # assignment. The subject then had to stop using `"$( … )"` at all — bash 3.2 scans the raw body
+  # of a command substitution, heredocs included, so an unbalanced paren in a COMMENT there made
+  # the whole file fail to PARSE under /bin/bash and the unattended resume could not start. With
+  # the anchor gone every case using exp_setup died at "helper-program extraction failed", which
+  # names the extractor and not the line that moved. The tag is the stable half: match on it and
+  # the assignment form is free to change.
+  LR_SCREEN_SH="$(sed -n "/<<'LRSCREENSH'/,/^LRSCREENSH\$/p" "$FIRE" | sed '1d;$d')"
   export LR_SCREEN_SH
-  LR_NOTE_SH="$(sed -n "/^LR_NOTE_SH=\"\$(cat <<'LRNOTESH'\$/,/^LRNOTESH\$/p" "$FIRE" | sed '1d;$d')"
+  LR_NOTE_SH="$(sed -n "/<<'LRNOTESH'/,/^LRNOTESH\$/p" "$FIRE" | sed '1d;$d')"
   export LR_NOTE_SH
   [ -n "$LR_SCREEN_SH" ] && [ -n "$LR_NOTE_SH" ] || { echo "helper-program extraction failed" >&2; return 1; }
   export LR_PROBE="$REPO/scripts/limit-recover/lr-submit-probe.sh"
