@@ -58,14 +58,25 @@ LIM="${STOP_FAILURE_LIMITED_DIR:-$HOME/.claude/autonomy/limited}"
 # TTL 10080 min = 7 days, and the number is not arbitrary: it is the SEVEN_DAY cap's own window.
 # At the old 1440 a weekly cap's marker was GC'd four days before the cap expired, so the census
 # lost the only record that the session was ever blocked while it was still blocked. A marker must
-# outlive the fact it reports. CAP 5000 for the same reason in the other direction — one account
-# capping kills ~30 sessions at once and a multi-fire sid re-caps repeatedly, so 500 lines is
-# reachable inside one bad afternoon, and a capped file is a DEGRADED enumerator (cc-limited
-# reports it in its footer and exits 6) rather than a resolved cause.
+# outlive the fact it reports.
+#
+# CAP STAYS 500 (LIMIT_DETECT_100P § 11 #7, which AMENDS § 9 D3's 5000 and binds over it). The
+# argument for 5000 was that one account capping kills ~30 sessions at once and a multi-fire sid
+# re-caps repeatedly, so 500 lines is reachable inside one bad afternoon. Both halves are true and
+# neither reaches the cap: the census groups PER SID at read time, so N re-caps of one session are
+# one row however many lines they occupy, and 5000 is ≈350× the measured enumerate regime — a
+# ceiling that far above the traffic is not a safety margin, it is an unbounded file with a number
+# written next to it. The TTL argument does not transfer either, because the GC is keyed on FILE
+# mtime (:197 below), so a busy account's marker never expires at ANY cap and a quiet one's is
+# already covered by TTL 10080.
+#
+# WHAT A CAPPED FILE COSTS IS BOUNDED AND VISIBLE: cc-limited reports it in the footer and exits 6
+# (DEGRADED), with the rows still printed. That is the designed disposition, not a failure — a
+# capped file has stopped recording, which is exactly the fact the operator needs said out loud.
 TTL_MIN="${STOP_FAILURE_TTL_MIN:-10080}"
-CAP="${STOP_FAILURE_CAP:-5000}"
+CAP="${STOP_FAILURE_CAP:-500}"
 case "$TTL_MIN" in ''|*[!0-9]*) TTL_MIN=10080 ;; esac
-case "$CAP"     in ''|*[!0-9]*) CAP=5000 ;; esac
+case "$CAP"     in ''|*[!0-9]*) CAP=500 ;; esac
 
 # ── IDL disposition writer (SSOT lib; degrades to a no-op, never to an error) ────────────────────
 _sfscd="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"

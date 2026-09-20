@@ -114,6 +114,11 @@ mk "$L/4bc1159f-0000-4000-8000-000000000000.lock" <<JSON
 {"to":"$H/.claude-secondary","ts":"2026-09-19T20:59:34Z","pid":44616}
 JSON
 mkdir -p "$H/.reso/limit-recover/parked" "$H/.reso/limit-recover/faults"
+# cc-beats EXISTS and is EMPTY. Both halves matter: the census names an absent optional store in
+# its footer (§ 11 #11), so a fixture that simply omitted the directory would make every row above
+# assert against a footer no production box prints. An empty store is the healthy shape here —
+# these five sessions are dead, and a beat is written on prompt submission.
+mkdir -p "$H/.claude/cc-beats"
 
 # ── 4. the transcript copies ────────────────────────────────────────────────────────────────────
 death() { printf '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","apiErrorStatus":429,"uuid":"d-%s","timestamp":"%s","message":{"model":"<synthetic>","content":[{"type":"text","text":"%s"}]},"quotaLimits":{"resetsAt":1789853400,"rateLimitType":"five_hour"}}\n' "$1" "$2" "$CAP5H"; }
@@ -164,6 +169,7 @@ export CC_LIMITED_ROOTS="$H/.claude-next:$H/.claude-secondary:$H/.claude-tertiar
 export CC_LIMITED_PS="$W/ps.txt"
 export CC_LIMITED_PROCS="$W/procs.txt"
 export CC_LIMITED_IDL="$W/idl.jsonl"
+export CC_BEAT_DIR="$H/.claude/cc-beats"
 export LR_NOW="$NOW_ISO"
 ENVSH
 : > "$W/idl.jsonl"

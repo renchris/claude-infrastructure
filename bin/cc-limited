@@ -55,6 +55,8 @@ Seams (tests; every one is a PATH or a VALUE, and set-but-empty is honoured verb
     CC_LIMITED_ROOTS (colon-separated, overrides the accounts-derived set) · CC_LIMITED_PS (a file
     holding `ps -eo pid=,lstart=` output) · CC_LIMITED_PROCS (a file holding `ps -axo
     pid=,ppid=,command=` output) · LR_NOW (epoch or ISO) · CC_LIMITED_CLAIM_GRACE_S · CC_LIMITED_IDL
+    · CC_BEAT_DIR (the second liveness source, § 11 #2) · STOP_FAILURE_CAP (the marker's own cap,
+    read here so the census and the writer cannot disagree about what "at cap" means)
 """
 
 import json
@@ -88,8 +90,12 @@ REGISTRY_DIR = env("CC_REGISTRY_DIR", os.path.join(HOME, ".claude/cc-registry"))
 STATE_DIR = env("LR_STATE_DIR", os.path.join(HOME, ".reso/limit-recover"))
 ACCOUNTS = env("CC_LIMITED_ACCOUNTS", os.path.join(HOME, ".claude/accounts.json"))
 IDL = env("CC_LIMITED_IDL", os.path.join(HOME, ".claude/autonomy/idl.jsonl"))
+BEAT_DIR = env("CC_BEAT_DIR", os.path.join(HOME, ".claude/cc-beats"))
 CLAIM_GRACE_S = int(env("CC_LIMITED_CLAIM_GRACE_S", "120") or 120)
-MARKER_CAP = int(env("STOP_FAILURE_CAP", "5000") or 5000)
+# § 11 #7. The default MUST track `hooks/stop-failure-marker.sh`'s: this is the reader's copy of
+# the writer's ceiling, and if the two disagree the census either calls a healthy file capped or
+# never notices a file that has stopped recording. Both defaults are 500; neither is independent.
+MARKER_CAP = int(env("STOP_FAILURE_CAP", "500") or 500)
 
 
 class Unreadable(Exception):
@@ -176,11 +182,18 @@ def load_accounts():
     override = env("CC_LIMITED_ROOTS", "")
     if override:
         roots = [r for r in override.split(":") if r]
-    # realpath dedupe: ~/.claude-next is a SYMLINK to ~/.claude on this fleet, so an undeduped
-    # walk counts every transcript twice and reports one session as two.
+    # § 11 #4 — THE DEDUPE IS AT `projects/`, NEVER AT THE ROOT, and the depth is the whole of it.
+    # The comment this replaced said "~/.claude-next is a SYMLINK to ~/.claude", and that sentence
+    # is FALSE: `~/.claude-next` is a REAL DIRECTORY holding its own settings, and only its
+    # `projects/` is the symlink. So `realpath(root)` returns two different paths, the dedupe never
+    # fires, and every transcript reachable through both roots is counted twice — measured on the
+    # § 5 fixture reshaped to production's form, `copies` for 07e30aeb read 5 where 3 exist.
+    # A belief about the subject that lives in a comment is executed by nothing and tested by
+    # nothing (memory `checker-population-rests-on-an-untested-belief`); this one had been wrong
+    # since the file was written and no row went red.
     seen, out = set(), []
     for root in roots:
-        real = os.path.realpath(root)
+        real = os.path.realpath(os.path.join(root, "projects"))
         if real not in seen:
             seen.add(real)
             out.append(root)
@@ -279,6 +292,67 @@ def parked_sids():
     return out
 
 
+# § 11 #3 — THE PARKED ADAPTER. `kind` is the poller's own vocabulary (lr-reset-poller.sh:828);
+# the values on the right are the SSOT's `rateLimitType` spellings, so the mapped record goes
+# through `classify_record` exactly as a real transcript record does. An unmapped kind is carried
+# VERBATIM rather than dropped, matching the predicate's rule for an unrecognized server enum: a
+# new class must surface as itself, never as "a limit with no cap".
+PARKED_CAP = {"session": PRED.CAP_FIVE_HOUR,
+              "weekly": PRED.CAP_SEVEN_DAY,
+              "fable": PRED.MODEL_SCOPED_PREFIX + "Fable"}
+
+
+def adopt_parked(deaths, parked, names):
+    """Give every parked-only sid a death-shaped record, so the census can see it at all.
+
+    THE BUG THIS CLOSES IS A SILENCE. `parked_sids()` enumerated `~/.reso/limit-recover/parked/`
+    and the only thing anyone did with it was set a boolean on rows that already existed — so a
+    session the POLLER had parked and the marker hook had never recorded was absent from the
+    census entirely. That is the worst shape a detection tool can have: the sessions missing from
+    the screen are exactly the ones a second system already knows are blocked.
+
+    The parked record has none of the fields step 1's formula reads — no `ts`, no `config_dir`, no
+    `error`, no `last_assistant_message` — which is why it needed an adapter rather than a cast.
+    The mapping is the critic's, verbatim: `ts←parked_at`, `config_dir←cfg`, `error←"rate_limit"`,
+    `resets_at←reset_at_utc`, `last_assistant_message←""`, and the cap from `kind`.
+
+    AND IT CLASSIFIES BY CAP, NEVER BY TEXT. `last_assistant_message` is empty by construction
+    here, so a text-driven read would resolve every parked session to `other_api_error` — not
+    parked, not waitable, not recoverable. The synthetic record below carries the cap and the
+    reset as STRUCTURE (`quotaLimits`), which is the channel the predicate trusts first anyway,
+    and routing it through `classify_record` is what keeps `recoverable_by_waiting` a single
+    definition instead of a fourteenth copy of it living here.
+
+    A sid that ALREADY has a marker is left untouched: the marker is the richer record (it carries
+    the pane, the transcript path and the death text) and the poller's park is downstream of it.
+    """
+    for sid, rec in parked.items():
+        if sid in deaths:
+            continue
+        cap = PARKED_CAP.get(rec.get("kind") or "", rec.get("kind") or "")
+        quota = {"rateLimitType": cap} if cap else {}
+        reset = ts_epoch(rec.get("reset_at_utc"))
+        if reset:
+            quota["resetsAt"] = reset
+        parked_at = rec.get("parked_at") or ""
+        verdict = PRED.classify_record({
+            "type": "assistant", "isApiErrorMessage": True, "error": "rate_limit",
+            "timestamp": parked_at, "quotaLimits": quota,
+            "message": {"model": "<synthetic>", "content": []},
+        })
+        acct = acct_name(names, rec.get("acct") or rec.get("cfg") or "")
+        deaths[sid] = {
+            "sid": sid, "fires": 1,
+            "ts": ts_epoch(parked_at) or 0, "ts_iso": parked_at, "acct_death": acct,
+            "marker_file": "", "cfg": rec.get("cfg") or "", "pane": "",
+            "cwd": rec.get("cwd") or "", "tp": "", "error": "rate_limit", "last": "",
+            "accts": [acct] if acct else [], "source": "parked",
+            "kind": verdict["kind"] or "other", "cap": verdict["cap"],
+            "limit": verdict["limit"], "resets_at": verdict["resets_at"],
+            "recoverable_by_waiting": verdict["recoverable_by_waiting"],
+        }
+
+
 # ── 2. LIVENESS: ONE ps table for the whole fleet ────────────────────────────────────────────────
 def ps_table():
     """{pid: lstart}, from ONE `ps`. The full table is 4x cheaper than `-p <37 pids>` (31.8 ms
@@ -336,6 +410,46 @@ def registry_rows(ps):
     return by_sid, by_pane
 
 
+def beat_rows(ps):
+    """{sid: {pid, pane, cwd, live}} from `~/.claude/cc-beats/<sid>.json` — the SECOND liveness source.
+
+    § 11 #2, and it closes a fatal. Liveness was single-sourced on the registry, whose completeness
+    P5 REFUTED: 3 of 14 rate_limit sids had no registry row at all, and the cause is that the
+    registry is PANE-KEYED, so a recycled pane overwrites the row of the session that held it. The
+    session is still alive; its row is simply gone. A census that reads liveness only there calls
+    it NO-PANE and hands it to a recovery path that duplicates a running session.
+
+    The beat is not a second guess at the same question — it is a different store with a different
+    key. `session-beat.sh:96` writes one file PER SID for every session that ever submitted a
+    prompt, and nothing recycles a sid. It carries the same identity the registry does, `(pid,
+    lstart)`, walked to the durable claude ancestor and rendered under `TZ=UTC` on both sides, so
+    the two sources are directly comparable and a DST flip cannot convict either.
+
+    THE ADDRESS CLASS AND THE OVERWRITE CLASS ARE DIFFERENT BUGS. W1's `KITTY_WINDOW_ID` fallback
+    closes sessions that could never be ADDRESSED (no `ITERM_SESSION_ID`, so no row was written).
+    This closes sessions whose row was written and then OVERWRITTEN. Neither fix reaches the
+    other's population, which is why § 7 DROPPED row 3's justification was rewritten rather than
+    re-used.
+    """
+    out = {}
+    for name in listdir(BEAT_DIR):
+        if not name.endswith(".json") or name.startswith("."):
+            continue
+        rec = read_json(os.path.join(BEAT_DIR, name))
+        if not isinstance(rec, dict):
+            continue
+        sid = rec.get("sid") or name[:-5]
+        pid = str(rec.get("pid") or "")
+        stored = " ".join(str(rec.get("lstart") or "").split())
+        # A beat with NO lstart is not trusted on pid alone: pids are reissued, and the whole
+        # reason this store is credible is that it pins the pair. Registry rows predate the field
+        # and are grandfathered (`not stored or ...`); beats never were, so they are not.
+        out[sid] = {"pid": pid, "pane": str(rec.get("pane") or ""),
+                    "cwd": rec.get("cwd") or "",
+                    "live": bool(pid) and bool(stored) and ps.get(pid) == stored}
+    return out
+
+
 def resume_leaves():
     """{sid: [pid]} for `--resume <sid>` processes, wrapper parents removed.
 
@@ -382,6 +496,30 @@ def slug_of(cwd):
     return re.sub(r"[^A-Za-z0-9]", "-", cwd or "")
 
 
+def _distinct_files(paths):
+    """§ 11 #4, second half: `copies=N` counts INODES, not path spellings.
+
+    The root dedupe above closes the case where two roots share one `projects/`. It cannot close
+    the rest: a hard link, a bind mount, or a root reached under a spelling the accounts file does
+    not list all hand the walk two paths to one file. `copies` is read by a human deciding whether
+    a session was transplanted, so an inflated count is not a cosmetic error — it is the census
+    inventing history. `(st_dev, st_ino)` is the only identity a filesystem actually guarantees;
+    a path that cannot be stat'd is kept, because dropping an unreadable copy would UNDERCOUNT,
+    and undercounting is the direction that makes a blocked session look recovered.
+    """
+    seen, out = set(), []
+    for path in paths:
+        try:
+            st = os.stat(path)
+            key = (st.st_dev, st.st_ino)
+        except OSError:
+            key = ("path", path)
+        if key not in seen:
+            seen.add(key)
+            out.append(path)
+    return out
+
+
 def find_copies(roots, sid, cwd):
     """Every copy of one session's transcript. 27 copies in 5.4 ms, against 121 ms for a full index."""
     hits, slug = [], slug_of(cwd)
@@ -392,7 +530,7 @@ def find_copies(roots, sid, cwd):
                 if name.startswith(sid) and ".jsonl" in name:
                     hits.append(os.path.join(base, name))
     if hits:
-        return hits
+        return _distinct_files(hits)
     for root in roots:                    # slug miss only: the cwd moved or was never recorded
         pdir = os.path.join(root, "projects")
         for proj in listdir(pdir):
@@ -400,7 +538,7 @@ def find_copies(roots, sid, cwd):
             for name in listdir(base):
                 if name.startswith(sid) and ".jsonl" in name:
                     hits.append(os.path.join(base, name))
-    return hits
+    return _distinct_files(hits)
 
 
 def scan_copy(path):
@@ -418,8 +556,15 @@ def scan_copy(path):
             tail = fh.read()
     except OSError:
         return out
-    if b'"agentName"' in head:
-        out["teammate"] = True            # lead-owned; never this census's to recover
+    # § 11 #10: THE TEAMMATE TEST IS THE SSOT'S, and the raw substring it replaces was the 13th
+    # predicate copy the amendment abolishes. `b'"agentName"' in head` answers TRUE to
+    # `"agentName":null` exactly as readily as to a real name, so an ordinary live session reads
+    # lead-owned and the census refuses to recover it — a false negative on the recovery path,
+    # which is the expensive direction. `is_teammate_head` parses the top-level field and requires
+    # a NON-EMPTY string, with the unescaped-key fallback that keeps parity on the 3-of-55 heads
+    # that run past the byte bound. Applied to EVERY copy (the caller loops scans), not only the
+    # preferred one: the key lands on line 3-4 and a salvage copy can be truncated above it.
+    out["teammate"] = PRED.is_teammate_head(head)
     for line in tail.decode("utf-8", "replace").splitlines():
         if '"aiTitle"' in line:
             m = re.search(r'"aiTitle"\s*:\s*"((?:[^"\\]|\\.)*)"', line)
@@ -469,6 +614,43 @@ def read_claim(sid):
     return None
 
 
+# ── the sources' own dispositions (§ 11 #11) ─────────────────────────────────────────────────────
+# ONE RULE, and the whole of it is that ABSENT and UNREADABLE are different facts that demand
+# opposite actions: an absent store is EMPTY and is named in the footer; a store that EXISTS but
+# cannot be read or parsed is exit 5 with stdout EMPTY and stderr naming it. Collapsing them is
+# the `empty-vs-no-surface` failure — a census that cannot tell "nobody is parked" from "I could
+# not open the parked directory" reports the healthy sentence for both.
+#
+# WHY THE LIST BELOW IS THE *OPTIONAL* SOURCES AND NOT EVERY SOURCE. The markers, the registry,
+# accounts.json and `ps` are REQUIRED: a fleet in which they are missing is not a fleet with
+# nothing to report, it is a census with no instrument, and row 10 pins exit 5 for exactly that.
+# The four below are legitimately absent on a healthy box — nothing has been parked, no recovery
+# has ever claimed a session, no fault has been persisted, no beat has been written — so their
+# absence is information about the FLEET and belongs in the footer, while their unreadability is
+# information about the BOX and belongs in exit 5.
+OPTIONAL_SOURCES = (
+    ("parked/", lambda: os.path.join(STATE_DIR, "parked")),
+    ("locks/", lambda: os.path.join(STATE_DIR, "locks")),
+    ("faults/", lambda: os.path.join(STATE_DIR, "faults")),
+    ("cc-beats/", lambda: BEAT_DIR),
+)
+
+
+def absent_sources():
+    """Names of the optional stores that do not exist. Raises Unreadable for one that does."""
+    notes = []
+    for label, path_of in OPTIONAL_SOURCES:
+        path = path_of()
+        if not os.path.exists(path):
+            notes.append(label)
+            continue
+        try:
+            os.listdir(path)
+        except OSError:
+            raise Unreadable("%s (%s)" % (label, path))
+    return notes
+
+
 # ── the enumerator's own health (exit 6) ─────────────────────────────────────────────────────────
 def enumerator_degraded(capped):
     """A silent enumerator is the failure this whole tool exists to end.
@@ -510,12 +692,23 @@ SETTLED = ("RE-ENGAGED", "CARCASS")
 
 
 def resolve(sid, death, ctx):
-    names, roots, reg_by_sid, reg_by_pane, leaves, parked = ctx
+    names, roots, reg_by_sid, reg_by_pane, leaves, parked, beats = ctx
     row = dict(death)
     live_rows = [r for r in reg_by_sid.get(sid, []) if r["live"]]
-    row["live"] = bool(live_rows)
+    # § 11 #2: the union of the two sources, NEVER the registry alone. A beat-only live session is
+    # the pane-overwrite class — alive, rowless, and invisible to a registry-only census.
+    beat = beats.get(sid) or {}
+    beat_live = bool(beat.get("live"))
+    row["beat_live"] = beat_live
+    row["live"] = bool(live_rows) or beat_live
     row["acct_now"] = acct_name(names, live_rows[0]["account"]) if live_rows else ""
-    row["pane_now"] = live_rows[0]["pane"] if live_rows else ""
+    # The beat has no account field, so a beat-only session's account stays UNKNOWN rather than
+    # being guessed from its cwd. That is load-bearing: `acct_now != acct_death` is what promotes
+    # a row to AWAITING-ENGAGE, and a guessed account would fabricate a transplant.
+    # `#?` is the pane, per the amendment — the beat's own `pane` when it set one, else literally
+    # unknown. It is never NO-PANE, which is the verdict this source exists to prevent.
+    row["pane_now"] = live_rows[0]["pane"] if live_rows else (
+        (beat.get("pane") or "?") if beat_live else "")
     started = live_rows[0].get("startedAt") if live_rows else None
     row["started_now"] = int(started / 1000 if isinstance(started, (int, float)) and started > 1e11
                              else (started or 0)) or None
@@ -567,6 +760,11 @@ def resolve(sid, death, ctx):
         row["resets_at"] = best[1]["resets_at"]
         row["resets_source"] = best[1]["resets_source"]
         row["recoverable_by_waiting"] = best[1]["recoverable_by_waiting"]
+    elif death.get("source") == "parked":
+        # NOT "prose": this reset came from the poller's `reset_at_utc`, which is an ISO instant,
+        # and mislabelling it would make a wrong reset unattributable — the one thing
+        # `resets_source` exists to prevent.
+        row["resets_source"] = "parked" if row.get("resets_at") else "none"
     else:
         row["resets_source"] = "prose" if row.get("resets_at") else "none"
     row["stub"] = preferred is not None and pscan.get("assistants", 0) == 0
@@ -574,7 +772,12 @@ def resolve(sid, death, ctx):
     # 6. PROCS — CARDINALITY, never the rc of a predicate. `lf_locate` tested the rc of
     # `lr_resume_procs` instead of counting, so ONE process read as DUPLICATE and the session was
     # parked forever.
+    # The beat's pid joins the UNION, it does not add a count: a beat and a registry row for one
+    # session name the SAME claude ancestor, so summing would report every ordinary live session
+    # as a DUPLICATE and park it. This is the same set-not-sum rule row 6 pins for resume leaves.
     pids = set(r["pid"] for r in live_rows if r["pid"]) | set(leaves.get(sid, []))
+    if beat_live and beat.get("pid"):
+        pids.add(beat["pid"])
     row["procs"] = len(pids)
 
     # 7. CLAIMS  8. CWD, at THIS instant (1 -> 3 CWD-GONE in 20 minutes, measured).
@@ -656,18 +859,22 @@ def dur(seconds):
 # ── the census ───────────────────────────────────────────────────────────────────────────────────
 def census():
     names, roots = load_accounts()
+    absent = absent_sources()
     deaths, unaddressable, capped, marker_rows = enumerate_deaths(names)
     ps = ps_table()
     reg_by_sid, reg_by_pane = registry_rows(ps)
     leaves = resume_leaves()
     parked = parked_sids()
-    ctx = (names, roots, reg_by_sid, reg_by_pane, leaves, parked)
+    beats = beat_rows(ps)
+    adopt_parked(deaths, parked, names)
+    ctx = (names, roots, reg_by_sid, reg_by_pane, leaves, parked, beats)
     rows = []
     for sid, death in deaths.items():
         death["_leaves"] = leaves.get(sid, [])
         rows.append(resolve(sid, death, ctx))
     rows.sort(key=lambda r: (r["group"], -(r.get("ts") or 0)))
-    return rows, unaddressable, enumerator_degraded(capped), len(deaths), marker_rows
+    return (rows, unaddressable, enumerator_degraded(capped), len(deaths),
+            marker_rows, absent)
 
 
 def in_window(row, since_s):
@@ -687,7 +894,8 @@ def parse_since(text):
 
 
 # ── renderers ────────────────────────────────────────────────────────────────────────────────────
-def render_screen(rows, unaddressable, degraded, sids, marker_rows, show_all):
+def render_screen(rows, unaddressable, degraded, sids, marker_rows, show_all,
+                  absent=()):
     out, groups = [], {}
     for row in rows:
         groups.setdefault((row["group"], row.get("cap") or "-",
@@ -713,18 +921,28 @@ def render_screen(rows, unaddressable, degraded, sids, marker_rows, show_all):
         # a fault is a recovery that already failed, so the most overdue one is the most wrong.
         for m in sorted(attention, key=lambda r: -(r.get("ts") or 0)) + \
                 sorted(faults, key=lambda r: ((r.get("claim") or {}).get("ts") or 0)):
-            pane = ("#" + m["pane"]) if m.get("pane") else ""
+            # The DEATH's pane when the marker recorded one; otherwise the beat's, which is the
+            # only address a pane-overwritten session has left (§ 11 #2). `#?` — literally
+            # unknown — rather than blank, because blank reads as "this session has no pane" and
+            # that is precisely the wrong conclusion about a session that is running.
+            pane = ("#" + m["pane"]) if m.get("pane") else (
+                ("#" + m["pane_now"]) if m.get("beat_live") and m.get("pane_now") else "")
             out.append("  %-22s %-5s %-8s ×%-2d err %s  %-22s ← %s" % (
                 m["state"], pane, m["sid"][:8], m.get("fires") or 1,
                 iso(m.get("ts")), (m.get("title") or "")[:22], m["why"]))
         for m in settled:
             out.append("settled: %s %s %s (%s)" % (
                 m["sid"][:8], ("#" + m["pane"]) if m.get("pane") else "", m["state"], m["why"]))
-    out.append("%d session%s · %d marker row%s · %d unaddressable · enumerator %s"
+    # An absent optional store is stated, never inferred from an empty result, and it does NOT
+    # move the exit code (§ 11 #11): "no fault has ever been persisted here" is a fact about the
+    # fleet, and a healthy box says it every time. Only a store that EXISTS and cannot be read is
+    # an instrument failure, and that never reaches this line — it left at exit 5.
+    out.append("%d session%s · %d marker row%s · %d unaddressable · enumerator %s%s"
                " · (-p sessions: run --deep)" % (
                    sids, "" if sids == 1 else "s", marker_rows, "" if marker_rows == 1 else "s",
                    unaddressable,
-                   "ok" if not degraded else "DEGRADED: " + "; ".join(degraded)))
+                   "ok" if not degraded else "DEGRADED: " + "; ".join(degraded),
+                   (" · absent: " + " ".join(absent)) if absent else ""))
     return "\n".join(out), actionable_total
 
 
@@ -781,7 +999,7 @@ def main(argv):
         i += 1
 
     try:
-        rows, unaddressable, degraded, sids, marker_rows = census()
+        rows, unaddressable, degraded, sids, marker_rows, absent = census()
     except Unreadable as exc:
         # EMPTY stdout. An empty list at exit 0 would be indistinguishable from a healthy fleet.
         sys.stderr.write("cc-limited: instrument unreadable: %s\n" % exc)
@@ -798,7 +1016,7 @@ def main(argv):
 
     if mode == "json":
         payload = {"now": NOW, "sessions": sids, "unaddressable": unaddressable,
-                   "degraded": degraded,
+                   "degraded": degraded, "absent": absent,
                    "rows": [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]}
         # Compact: this is machine-read by lr-fleet and the poller, and pretty-printing
         # spent ~1.3 KB of the 6 KB budget on whitespace alone.
@@ -811,7 +1029,7 @@ def main(argv):
         actionable = len(text.splitlines()) if text else 0
     else:
         text, actionable = render_screen(rows, unaddressable, degraded, sids,
-                                         marker_rows, show_all)
+                                         marker_rows, show_all, absent)
         print(text)
 
     if degraded:
