@@ -114,8 +114,10 @@ mkuser_tx_string() {
   arm "do the thing" sidA
   run sc status
   [[ "$output" == *ARMED* ]] || { echo "status after set: $output"; false; }
-  # AS the arming session: the ordinary shape, and the one the foreign-sid refusal must let through.
-  run sc_as sidA clear
+  # AS the arming session, WITH the guard asked for: the ordinary shape, and the one the
+  # foreign-sid refusal must let through. `--if-mine` is what engages the guard at all (W3i B1) —
+  # a bare `clear` is the unconditional verb trunk has always shipped, pinned by its own case below.
+  run sc_as sidA clear --if-mine
   # ANCHORED, and NOT merely the substring `cleared`. The refusal text is
   # "refused — … nothing was cleared: <cwd>", so a bare `grep -q cleared` passes on the very path
   # this assertion exists to exclude — it went decorative the moment the refusal shipped.
@@ -129,7 +131,7 @@ mkuser_tx_string() {
   # The other half of the case above, and what makes its `!= *refused*` a live assertion rather than
   # a hope: same verb, same cwd, same sentinel — only the caller's identity differs.
   arm "do the thing" sidA
-  run sc_as sidB clear
+  run sc_as sidB clear --if-mine
   [ "$status" -eq 0 ] || { echo "a refusal is not an error: $output"; false; }
   [[ "$output" == refused\ * ]] || { echo "a foreign session cleared another session's chain: $output"; false; }
   run sc status
@@ -548,7 +550,7 @@ ma_row() { grep -F "\"reason\":\"$1\"" "$CONTINUE_IDL" 2>/dev/null | tail -1; }
 
 @test "clear: an ANONYMOUSLY armed sentinel is still not a foreign session's to remove" {
   arm_anon "the operator's parked step"
-  run sc_as sidZ clear
+  run sc_as sidZ clear --if-mine
   [ "$status" -eq 0 ] || { echo "a refusal is not an error: $output"; false; }
   [[ "$output" == refused\ * ]] || { echo "an anonymous sentinel was cleared by a foreign session: $output"; false; }
   [[ "$output" == *"an unidentified armer"* ]] || { echo "the refusal does not say WHY it cannot tell: $output"; false; }
@@ -572,10 +574,53 @@ ma_row() { grep -F "\"reason\":\"$1\"" "$CONTINUE_IDL" 2>/dev/null | tail -1; }
   # budget would never be spent, and the mechanical arm would re-block on the next Stop — the
   # snooze-button state this verb exists to end.
   d="$BATS_TEST_TMPDIR/never-armed-sid"; mkdir -p "$d"
-  run bash -c "cd '$d' && CLAUDE_CODE_SESSION_ID=sidQ bash '$HOOK' clear"
+  run bash -c "cd '$d' && CLAUDE_CODE_SESSION_ID=sidQ bash '$HOOK' clear --if-mine"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"nothing to clear"* ]] || { echo "$output"; false; }
   [[ "$output" != refused* ]] || { echo "refused with no sentinel present: $output"; false; }
   n="$(ls -1 "$CLAUDE_CONFIG_DIR/state"/continue-*.mech 2>/dev/null | wc -l | tr -d ' ')"
   [ "$n" -ge 1 ] || { echo "the mech budget was not spent"; ls -la "$CLAUDE_CONFIG_DIR/state"; false; }
+}
+
+# ── W3i B1 — THE GUARD IS OPT-IN, BECAUSE AN INHERITED SID IS NOT A CLAIM ────────────────────────
+# `CLAUDE_CODE_SESSION_ID` is exported into EVERY descendant of a Claude Code session, so a guard
+# that reads it as "who is asking" convicts any script the session happens to run. Shipped ON by
+# default it turned `tests/completion-assert.bats`' unchanged trunk control "double-block CONTROL:
+# the marker is per-STOP — a later silent Stop convicts again" RED in any ordinary session, green
+# under `env -u CLAUDE_CODE_SESSION_ID` — the A/B that attributed it. These two cases are the pair
+# that keeps the flag load-bearing: without the first, `--if-mine` could be deleted everywhere and
+# the suite would stay green; without the second, the guard could be restored to default-on.
+
+@test "clear: the BARE verb is unconditional — trunk's shape, and what an inherited sid must not change" {
+  # THE DEFAULT-ON RED PROOF. Same state as the DISCRIMINATOR case above — a sidA sentinel met by a
+  # sidB caller — differing in one thing: no `--if-mine`. A guard restored to default-on turns this
+  # red, which is the only evidence the opt-in is real.
+  arm "do the thing" sidA
+  run sc_as sidB clear
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == "cleared → "* ]] || { echo "the bare verb refused, so the guard is still default-on: $output"; false; }
+  run sc status
+  [[ "$output" == *inactive* ]] || { echo "the bare verb did not disarm: $output"; false; }
+}
+
+@test "clear: an unknown flag is an ERROR, not a silently ignored word" {
+  # A misspelled `--if-mine` that fell through to the unconditional path would clear a stranger's
+  # sentinel while its caller believed it had asked for the guard — the fail-OPEN this flag makes
+  # possible. rc 2 is the CLI vocabulary the `set`/`clear`/`status` arms already use for a misconfig.
+  arm "do the thing" sidA
+  run sc_as sidB clear --if-mien
+  [ "$status" -eq 2 ] || { echo "an unknown flag did not refuse: rc=$status $output"; false; }
+  run sc status
+  [[ "$output" == *ARMED* ]] || { echo "the typo cleared the sentinel anyway: $output"; false; }
+}
+
+@test "status: an anonymously armed sentinel reports sid=unrecorded, never a session named ?" {
+  # W3i C3. `set` stamps ${f}.sid only when the arming session HAS an id, so the no-sid state is
+  # ORDINARY. `status` used to render it `sid=?`, and lr-ingest-verify's clause D2 read that one
+  # layer up as a session literally named "?" — it printed "session ? has an armed continuation",
+  # a sentence about a session that does not exist. Absence needs its own token.
+  arm_anon "the operator's parked step"
+  run sc status
+  [[ "$output" == *"sid=unrecorded"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"sid=?"* ]] || { echo "the ? is back: $output"; false; }
 }
