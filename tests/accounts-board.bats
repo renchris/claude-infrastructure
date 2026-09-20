@@ -222,13 +222,35 @@ plant_witness() {
 @test "14 the hook is fast enough to be nowhere near its 5s timeout" {
   mk_board
   local t0 t1
+  # THE BUDGET IS CALIBRATED TO THE BAND IT IS MEASURED IN (2026-09-20). A flat 1s was a fact
+  # about an idle foreground box, and this suite does not run on one: cc-bats wraps every run in
+  # `taskpolicy -c background` (PRI 4), and on a loaded machine that band is 10x slower. Measured
+  # at load ~70, the bracket's OWN instrument — two `python3` forks with no subject between them —
+  # cost 0.598s of the 1s, so the test failed on its own clock rather than on the hook. It was red
+  # on trunk for every lander whose diff merely reaches this suite, and A/B'd identical at
+  # `origin/main`, at `1dbb2d1a7`, and on the branch that found it.
+  #
+  # So measure the instrument in the SAME band and scale by it. On an idle box the control is
+  # ~50ms and the budget stays the original 1s, unchanged in strictness; under a loaded background
+  # band it grows with the thing making it slow. The defect this defends is a 5.33s inline
+  # `claude-accounts` sweep, which is ~100x the control and clears any of these ceilings — and it
+  # is ALSO caught structurally, without a clock, by test 13 (the hook forks no claude-accounts).
+  # That is why scaling here is safe: this test is the belt, 13 is the braces.
+  local c0 c1 ctl
+  c0="$(python3 -c 'import time;print(time.time())')"
+  c1="$(python3 -c 'import time;print(time.time())')"
+  ctl="$(python3 -c "import sys;print(float(sys.argv[2])-float(sys.argv[1]))" "$c0" "$c1")"
   t0="$(python3 -c 'import time;print(time.time())')"
   emit startup
   t1="$(python3 -c 'import time;print(time.time())')"
-  # 1s is a deliberately loose ceiling: measured cost is ~65ms (two jq forks). The bar this
-  # defends is the 5.33s inline call, not a performance-regression budget.
-  run python3 -c "import sys;sys.exit(0 if float(sys.argv[2])-float(sys.argv[1]) < 1.0 else 1)" "$t0" "$t1"
-  [ "$status" -eq 0 ] || { echo "hook took >1s — check it is not calling claude-accounts"; false; }
+  run python3 -c "
+import sys
+t0,t1,ctl = float(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3])
+budget = max(1.0, 8.0 * ctl)
+el = t1 - t0
+print('elapsed %.3fs · control %.3fs · budget %.3fs' % (el, ctl, budget))
+sys.exit(0 if el < budget else 1)" "$t0" "$t1" "$ctl"
+  [ "$status" -eq 0 ] || { echo "hook blew its band-scaled budget ($output) — check it is not calling claude-accounts"; false; }
 }
 
 # ── the narrow renderer ───────────────────────────────────────────────────────────────────────
