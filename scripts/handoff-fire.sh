@@ -12393,20 +12393,35 @@ recycle_fire() {
   # cannot drift from what the writer uses. Empty for a non-resume recycle, which has no run.
   RCY_RUN_DIR_ARG=""
   [ -n "$RESUME_LAUNCHER" ] && RCY_RUN_DIR_ARG="$(dirname "$RESUME_LAUNCHER")"
-  # ── $16: THE SUBMIT TOKEN, AND THE PRECONDITION THAT MAKES IT SAFE TO PASS (W3) ────────────────
-  # lr-handoff mints one token per run and writes it into the launcher twice: once as an export (for
-  # lr-fire-resume, which polls its own submission) and once INSIDE the ingest prompt, which is the
-  # only copy that can ever reach the target transcript. Read from the launcher rather than threaded
-  # from lr-handoff because the two must agree and the launcher is the file both ends already read.
+  # ── $15: THE SUBMIT TOKEN, AND THE PRECONDITION THAT MAKES IT SAFE TO PASS (W3) ────────────────
+  # lr-handoff mints one token per run and exports it from the launcher; lr-fire-resume appends it to
+  # the prompt it TYPES, which is the only copy that can ever reach the target transcript. Read from
+  # the launcher rather than threaded from lr-handoff because the two must agree and the launcher is
+  # the file both ends already read.
   #
-  # 🚨 ONE OCCURRENCE MEANS THE PROMPT DOES NOT CARRY IT, AND THE TOKEN MUST THEN NOT BE PASSED. The
-  # oracle treats "no user record carries this token" as NOT ENGAGED — correctly, because nothing was
-  # submitted — so handing it a token the prompt cannot deliver would convict every healthy recycle.
-  # This is exactly the half-landed state while the lr-handoff side of W3 is still in flight, and the
-  # count is what makes this change safe to land first and self-arming the moment that one lands.
-  # The fallback is the pre-W3 wall-clock oracle, announced rather than silent (memory
-  # claimed-outcome-vs-checked-outcome: a degraded verdict that does not say it is degraded is worse
-  # than the strong one it replaced).
+  # 🚨 A TOKEN THE PROMPT CANNOT DELIVER MUST NOT BE PASSED. The oracle treats "no user record carries
+  # this token" as NOT ENGAGED — correctly, because nothing was submitted — so arming one that will
+  # never be typed convicts every healthy recycle. That is what this gate is for, and it is why it
+  # degrades LOUDLY to the pre-W3 wall-clock oracle rather than silently (memory
+  # claimed-outcome-vs-checked-outcome).
+  #
+  # 🚨 THE GATE USED TO COUNT THE TOKEN'S OCCURRENCES IN THE LAUNCHER AND COULD NEVER REACH 2, SO THE
+  # WHOLE WAVE WAS INERT. The premise was that lr-handoff writes the token into the launcher twice,
+  # export plus prompt. It does not, on either of its two prompt paths: the launcher DECIDES its
+  # prompt at runtime in the pane (the fast path takes lr-ingest-verify's last line; the fail-closed
+  # path composes `… \$LR_SUBMIT_TOKEN` as a VARIABLE REFERENCE), so the token's VALUE appears in the
+  # generated file exactly once. Driven 2026-09-20 over the launcher lr-handoff.sh's own generator
+  # emits: `found 1 occurrence(s) … falls back to the WALL-CLOCK oracle`, token handed over empty.
+  # The premise lived in this comment and nothing executed it (memory
+  # checker-population-rests-on-an-untested-belief).
+  #
+  # So the gate now asks the question it actually needs answered — WILL THE TOKEN BE TYPED — of the
+  # two places that can answer it, and arms if either does:
+  #   ARM 1  the launcher's own text carries the token a second time (a statically composed prompt).
+  #   ARM 2  the program the launcher EXECS carries the append contract (LR_SUBMIT_TOKEN_IN_PROMPT).
+  # ARM 2 is checked on the file the launcher names, never on this worktree's copy: the launcher must
+  # name a durable path, so it runs the LIVE layer, which may predate this change — the same wire
+  # lr-handoff.sh:522 already asserts for LR_ADMIT_TOKEN (memory launcher-runs-the-live-layer).
   RCY_SUBMIT_TOKEN_ARG=""
   if [ -n "$RESUME_LAUNCHER" ] && [ -f "$RESUME_LAUNCHER" ]; then
     RCY_SUBMIT_TOKEN_ARG="$(sed -n 's/^export LR_SUBMIT_TOKEN=//p' "$RESUME_LAUNCHER" | tail -1)"
@@ -12416,10 +12431,24 @@ recycle_fire() {
     RCY_SUBMIT_TOKEN_ARG="${RCY_SUBMIT_TOKEN_ARG#\'}"; RCY_SUBMIT_TOKEN_ARG="${RCY_SUBMIT_TOKEN_ARG%\'}"
     RCY_SUBMIT_TOKEN_ARG="${RCY_SUBMIT_TOKEN_ARG#\"}"; RCY_SUBMIT_TOKEN_ARG="${RCY_SUBMIT_TOKEN_ARG%\"}"
     if [ -n "$RCY_SUBMIT_TOKEN_ARG" ]; then
+      rcy_tok_why=""
       rcy_tok_n="$(grep -c -F -- "$RCY_SUBMIT_TOKEN_ARG" "$RESUME_LAUNCHER" 2>/dev/null)" || rcy_tok_n=0
       case "$rcy_tok_n" in ''|*[!0-9]*) rcy_tok_n=0 ;; esac
       if [ "$rcy_tok_n" -lt 2 ]; then
-        echo "⚠ the relaunch prompt does not carry this run's submit token (found $rcy_tok_n occurrence(s) in the launcher, need the export AND the prompt) — engagement falls back to the WALL-CLOCK oracle, which a stale notification turn can satisfy"
+        # ARM 2. The launcher's argv is %q-rendered onto one `exec` line, so the program is its first
+        # word and any space inside that word is backslash-escaped. A word this crude parse cannot
+        # resolve to a readable file is NOT armed: an unproven delivery degrades, it never guesses.
+        rcy_tok_exec="$(sed -n 's/^exec[[:space:]]\{1,\}//p' "$RESUME_LAUNCHER" | tail -1)"
+        rcy_tok_exec="${rcy_tok_exec%% *}"
+        rcy_tok_exec="${rcy_tok_exec//\\/}"
+        if [ -z "$rcy_tok_exec" ] || [ ! -f "$rcy_tok_exec" ]; then
+          rcy_tok_why="the launcher's exec target is unreadable (${rcy_tok_exec:-<no exec line>})"
+        elif ! grep -q LR_SUBMIT_TOKEN_IN_PROMPT "$rcy_tok_exec" 2>/dev/null; then
+          rcy_tok_why="the LIVE $rcy_tok_exec does not put the token into the prompt it types — converge: bash \$HOME/Development/claude-infrastructure/scripts/deploy-live.sh"
+        fi
+      fi
+      if [ -n "$rcy_tok_why" ]; then
+        echo "⚠ the relaunch prompt does not carry this run's submit token ($rcy_tok_why; the launcher's own text holds it $rcy_tok_n time(s)) — engagement falls back to the WALL-CLOCK oracle, which a stale notification turn can satisfy"
         RCY_SUBMIT_TOKEN_ARG=""
       fi
     fi

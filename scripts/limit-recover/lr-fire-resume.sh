@@ -437,6 +437,39 @@ fi
 # Single-line prompt only — the composer submits on CR; newlines are unsafe here.
 PROMPT=${PROMPT//$'\n'/ }
 
+# ── THE RUN TOKEN RIDES THE PROMPT, AND THIS IS THE ONLY PLACE THAT CAN GUARANTEE IT (W3p F1) ────
+# The token's whole job is to be findable in the TARGET transcript, and it gets there iff it is in
+# the TEXT THIS SCRIPT TYPES. Every path ends here — lr-handoff's fast prompt, its fail-closed
+# fallback, and a by-hand `--prompt` with no launcher at all — so this is the chokepoint (memory
+# enforcement-must-live-at-the-chokepoint), and putting the append anywhere upstream leaves it
+# unverifiable: lr-handoff's launcher DECIDES its prompt at runtime in the pane, so the token's
+# VALUE appears in that file exactly once (the export) on both of its prompt paths. That is what
+# left this wave inert — handoff-fire's arming gate counted occurrences in the launcher, read
+# `found 1 occurrence(s)`, and handed the watcher no token on every real recycle.
+#
+# IDEMPOTENT ON PURPOSE: a prompt that already carries the token is left alone, so an upstream
+# append (lr-handoff's fail-closed path does one) composes with this instead of doubling it.
+# APPENDED, never prefixed: the re-CR's DRAFT-MINE needle is the prompt's first 40 characters, and
+# the composer's own echo is what it is compared against.
+#
+# LR_SUBMIT_TOKEN_IN_PROMPT is the CONTRACT IDENTIFIER handoff-fire.sh's arming gate greps for on
+# the copy the launcher will actually exec. The launcher names a durable path, i.e. the LIVE layer,
+# which may predate this change (memory launcher-runs-the-live-layer, and the same wire lr-handoff
+# already asserts for LR_ADMIT_TOKEN at lr-handoff.sh:522) — arming a token a live lr-fire-resume
+# will never type would convict every healthy recycle, which is the failure the gate exists for.
+LR_SUBMIT_TOKEN_IN_PROMPT=0
+if [ -n "${LR_SUBMIT_TOKEN:-}" ] && [ -n "$PROMPT" ]; then
+  case "$PROMPT" in
+    *"$LR_SUBMIT_TOKEN"*) LR_SUBMIT_TOKEN_IN_PROMPT=1 ;;
+    *) PROMPT="$PROMPT (submit token: $LR_SUBMIT_TOKEN)"; LR_SUBMIT_TOKEN_IN_PROMPT=1 ;;
+  esac
+fi
+if [ "$LR_SUBMIT_TOKEN_IN_PROMPT" = 1 ]; then
+  lr_state 'submit-token-armed' inject "the typed prompt carries $LR_SUBMIT_TOKEN"
+else
+  echo "-- lr-fire-resume: no submit token in the typed prompt — submission cannot be proved from the transcript for this run" >&2
+fi
+
 # ── THE AS-IS DEFAULT ────────────────────────────────────────────────────────────────────────────
 # THE DEFECT (backlog d1490376b963). This script pressed Enter on the HIGHLIGHTED DEFAULT of the
 # resume-return menu, which is option 1, `Resume from summary (recommended)`. That runs /compact:

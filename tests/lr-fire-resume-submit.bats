@@ -606,33 +606,175 @@ SH
   [[ "$output" == *"SUBMITTED in $PANE"* ]] \
     || { echo "the argv the arming side actually builds does not carry the token to the watcher: $output"; false; }
 }
-@test "RED-PROOF the arming gate SUPPRESSES a token the relaunch PROMPT cannot deliver" {
-  # The 2-occurrence precondition is what makes this half safe to land before lr-handoff's: the
-  # oracle reads "no user record carries this token" as NOT ENGAGED, so a token that lives only in
-  # the launcher's export block — never in the prompt, never in the transcript — would convict every
-  # healthy recycle. Lowering the gate to `-lt 1` survived the mutation pass in substance: nothing
-  # executed it. This does, on both sides of the boundary.
-  blk="$(sed -n '/^  RCY_SUBMIT_TOKEN_ARG=""$/,/^  fi$/p' "$HF")"
-  [ -n "$blk" ] || { echo "the arming block could not be located in $HF — the anchor is stale"; false; }
-  case "$blk" in *rcy_tok_n*) ;; *) echo "extracted the wrong span:"; printf '%s\n' "$blk"; false ;; esac
+# THE LAUNCHER lr-handoff.sh ACTUALLY GENERATES, built by ITS OWN generator rather than by a
+# fixture this file writes. The arming gate's whole job is a claim ABOUT THAT ARTIFACT, and the
+# previous form of the case below fed it `exec claude-x --model m --prompt "… $TOK"` — a launcher
+# shape lr-handoff has never emitted, in which the token was spelled into the prompt by hand. That
+# is docs/lessons/fixture-shape-hides-address-bugs.md exactly: the fixture satisfied the gate's
+# premise by construction, so the premise was never tested and the gate degraded on every real run.
+# Extracted by ANCHOR, never by line number, and both spans are asserted non-empty and shaped — a
+# range whose start never matches emits NOTHING, so a stale anchor fails loud instead of vacuous.
+real_launcher() { # $1 = bundle dir (it becomes $BUNDLE and holds the launcher), $2 = the LR dir
+  local b="$1" lrdir="${2:-$REPO/scripts/limit-recover}"
+  local LRH="$REPO/scripts/limit-recover/lr-handoff.sh" gen="$b/gen.sh" ip span
+  ip="$(sed -n '/^INGEST_PROMPT=/p' "$LRH")"
+  span="$(sed -n '/^FIRE_ARGV=(/,/^chmod +x "\$LAUNCHER"$/p' "$LRH")"
+  [ -n "$ip" ] && [ -n "$span" ] \
+    || { echo "the launcher generator could not be located in $LRH — the anchors are stale" >&2; return 1; }
+  case "$span" in
+    *'cat > "$LAUNCHER" <<EOF'*) ;;
+    *) echo "extracted the wrong span from $LRH:" >&2; printf '%s\n' "$span" >&2; return 1 ;;
+  esac
+  {
+    printf '%s\n' 'SID=aaaa1111-0000-4000-8000-000000000001' 'TS=20260919-210200' 'TARGET=next3' \
+                  'BRANCH=lr100p/w3p' 'MODEL=opus' 'EFFORT=high' 'SRC_PERM=' 'SRC_TASK_LIST=' \
+                  'LRH_ADMIT_TOKEN=admit-tok' 'LR_LOAD_TERM=off'
+    printf 'CWD=%q\nWT_TOP="$CWD"\nLR=%q\nTCFG=%q\nBUNDLE=%q\nLAUNCHER=%q\n' \
+           "$b" "$lrdir" "$CFG" "$b" "$b/launcher.sh"
+    printf '%s\n%s\n' "$ip" "$span"
+  } > "$gen"
+  bash "$gen" >&2 || return 1
+  [ -s "$b/launcher.sh" ] || { echo "the generator produced no launcher" >&2; return 1; }
+  printf '%s\n' "$b/launcher.sh"
+}
+# The arming block itself, taken from the subject. `rcy_tok_why` is the shape check: a span that
+# does not contain it is not this block.
+arming_block() {
+  local blk; blk="$(sed -n '/^  RCY_SUBMIT_TOKEN_ARG=""$/,/^  fi$/p' "$HF")"
+  [ -n "$blk" ] || { echo "the arming block could not be located in $HF — the anchor is stale" >&2; return 1; }
+  case "$blk" in
+    *rcy_tok_why*) ;;
+    *) echo "extracted the wrong span from $HF:" >&2; printf '%s\n' "$blk" >&2; return 1 ;;
+  esac
+  printf '%s\n' "$blk"
+}
+arm_over() { # $1 = launcher path — runs the REAL arming block and prints what it armed
+  bash -c 'RESUME_LAUNCHER="$1"; eval "$2"; printf "TOKEN=[%s]\n" "$RCY_SUBMIT_TOKEN_ARG"' \
+       _ "$1" "$(arming_block)"
+}
 
-  L="$BATS_TEST_TMPDIR/launcher.sh"
-  # ONE occurrence: the export only. The prompt cannot deliver it, so it must NOT be handed over.
-  printf 'export LR_SUBMIT_TOKEN=%s\nexec claude-x --model m\n' "$TOK" > "$L"
-  run bash -c 'RESUME_LAUNCHER="$1"; eval "$2"; printf "TOKEN=[%s]\n" "$RCY_SUBMIT_TOKEN_ARG"' _ "$L" "$blk"
+@test "RED-PROOF the arming gate ARMS over the launcher lr-handoff ACTUALLY generates, and that token reaches the watcher" {
+  # F1, and the reason this wave delivered nothing even after the watcher's $16→$15 fix landed.
+  # The gate demanded the token's VALUE appear TWICE in the launcher — the export plus a prompt
+  # carrying it. Run against the launcher lr-handoff's own generator emits, that count is 1 and
+  # cannot become 2: the launcher DECIDES its prompt at runtime in the pane (the fast path takes
+  # lr-ingest-verify's last line, the fail-closed path composes `\$LR_SUBMIT_TOKEN` as a VARIABLE
+  # REFERENCE), so only the export line ever holds the value. Measured 2026-09-20 on the shipped
+  # block over the real generated launcher:
+  #   ⚠ the relaunch prompt does not carry this run's submit token (found 1 occurrence(s) in the
+  #     launcher, need the export AND the prompt) — engagement falls back to the WALL-CLOCK oracle
+  #   ARMED_TOKEN=[]
+  # The premise lived in a comment and nothing executed it
+  # (docs/lessons/... memory checker-population-rests-on-an-untested-belief).
+  watcher_setup
+  B="$BATS_TEST_TMPDIR/bundle"; mkdir -p "$B"
+  L="$(real_launcher "$B")"
+  RT="$(sed -n 's/^export LR_SUBMIT_TOKEN=//p' "$L" | tail -1)"
+  [ -n "$RT" ] || { echo "the generated launcher exports no submit token:"; cat "$L"; false; }
+  n="$(grep -c -F -- "$RT" "$L")"
+  echo "# the real launcher holds the token's value $n time(s)" >&3
+  [ "$n" -ge 1 ] || { echo "the token is not in the launcher at all"; cat "$L"; false; }
+
+  run arm_over "$L"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"TOKEN=[$RT]"* ]] \
+    || { echo "the gate DEGRADED over the launcher lr-handoff actually generates: $output"; false; }
+  ! [[ "$output" == *"does not carry"* ]] \
+    || { echo "warned over a launcher whose exec target DOES deliver the token: $output"; false; }
+
+  # …and the armed token, handed to the REAL watcher on the REAL argv, is READ there — the half an
+  # arming assertion cannot make. The user record carries the token in the shape lr-fire-resume
+  # actually appends it, so both ends are proved against each other rather than against a constant.
+  printf '%s\n' \
+    "{\"type\":\"user\",\"timestamp\":\"2099-01-01T00:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"/limit-recover ingest $B (submit token: $RT)\"}}" \
+    '{"type":"assistant","timestamp":"2099-01-01T00:01:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"reading the salvage bundle"}]}}' \
+    > "$TX"
+  local -a argv; mapfile -t argv < <(watcher_argv "$RT")
+  run env HOME="$HOME" PATH="$SHIM:$PATH" IT2_BIN="$HOME/.claude/bin/it2" \
+      PS_DEAD_CALLS=2 RCY_ENGAGE_TIMEOUT=8 RCY_ENGAGE_INTERVAL=1 \
+      RCY_BOOT_PANE_EVERY=1 RCY_BOOT_IVL_S=0.2 RCY_BOOT_WAIT_S=20 \
+      bash "$HF" "${argv[@]}"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"SUBMITTED in $PANE"* ]] \
+    || { echo "the token the gate armed over the REAL launcher never reached the watcher: $output"; false; }
+  grep -F '"class":"recycle-submitted"' "$HOME/.claude/logs/handoffs.jsonl" >/dev/null \
+    || { echo "no recycle-submitted row"; cat "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null; false; }
+}
+
+@test "RED-PROOF the arming gate SUPPRESSES a token the program that TYPES the prompt cannot deliver" {
+  # The gate's reason for existing, restated on the axis that is actually load-bearing now. The
+  # oracle reads "no user record carries this token" as NOT ENGAGED, so arming a token nothing will
+  # type convicts every healthy recycle. What decides that is the program the launcher EXECS — and
+  # it is asserted on the file the LAUNCHER NAMES, never on this worktree's copy, because a launcher
+  # must name a durable path and therefore runs the LIVE layer, which may predate the append
+  # (docs/lessons/launcher-runs-the-live-layer.md; the same wire lr-handoff already asserts for
+  # LR_ADMIT_TOKEN). Three arms, each a different way the delivery can be unprovable.
+  B="$BATS_TEST_TMPDIR/stale"; mkdir -p "$B/lr"
+  # (a) a LIVE lr-fire-resume that predates the append: the real file with the contract stripped.
+  grep -v LR_SUBMIT_TOKEN_IN_PROMPT "$FIRE" > "$B/lr/lr-fire-resume.sh"
+  L="$(real_launcher "$B" "$B/lr")"
+  RT="$(sed -n 's/^export LR_SUBMIT_TOKEN=//p' "$L" | tail -1)"
+  [ -n "$RT" ] || { echo "the generated launcher exports no submit token"; false; }
+  run arm_over "$L"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"TOKEN=[]"* ]] \
-    || { echo "a token the prompt cannot deliver was handed to the oracle: $output"; false; }
-  [[ "$output" == *"does not carry this run's submit token"* ]] \
-    || { echo "the fallback to the wall-clock oracle was SILENT: $output"; false; }
+    || { echo "a token the live lr-fire-resume will never type was handed to the oracle: $output"; false; }
+  [[ "$output" == *"does not put the token into the prompt it types"* ]] \
+    || { echo "the fallback to the wall-clock oracle did not name its cause: $output"; false; }
 
-  # TWO occurrences — the export AND the prompt: the run is measured properly and says nothing.
-  printf 'export LR_SUBMIT_TOKEN=%s\nexec claude-x --model m --prompt "/limit-recover ingest /x %s"\n' "$TOK" "$TOK" > "$L"
-  run bash -c 'RESUME_LAUNCHER="$1"; eval "$2"; printf "TOKEN=[%s]\n" "$RCY_SUBMIT_TOKEN_ARG"' _ "$L" "$blk"
+  # (b) an exec target that is not a readable file at all — unproven delivery degrades, never guesses.
+  B2="$BATS_TEST_TMPDIR/absent"; mkdir -p "$B2"
+  printf 'export LR_SUBMIT_TOKEN=%s\nexec claude-x --model m\n' "$TOK" > "$B2/launcher.sh"
+  run arm_over "$B2/launcher.sh"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"TOKEN=[]"* ]] || { echo "armed over an unreadable exec target: $output"; false; }
+  [[ "$output" == *"exec target is unreadable"* ]] || { echo "$output"; false; }
+
+  # (c) ARM 1 is not decorative: a launcher whose OWN TEXT carries the token a second time arms even
+  # though its exec target is unreadable — that is a statically composed prompt, and it needs no
+  # contract on the program that types it. This is the arm the pre-F1 gate had, kept and executed.
+  printf 'export LR_SUBMIT_TOKEN=%s\nexec claude-x --model m --prompt "/limit-recover ingest /x %s"\n' \
+    "$TOK" "$TOK" > "$B2/launcher.sh"
+  run arm_over "$B2/launcher.sh"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"TOKEN=[$TOK]"* ]] \
-    || { echo "a launcher carrying the token in BOTH places was still degraded: $output"; false; }
+    || { echo "a launcher carrying the token in its own prompt text was still degraded: $output"; false; }
   ! [[ "$output" == *"does not carry"* ]] || { echo "warned on a launcher that does carry it: $output"; false; }
+}
+
+@test "RED-PROOF lr-fire-resume APPENDS the run token to the prompt it types — idempotently" {
+  # The other end of F1, and the reason the fix is HERE rather than in lr-handoff.sh: the token
+  # reaches the target transcript iff it is in the TEXT THIS SCRIPT TYPES, and every path — the fast
+  # prompt, the fail-closed fallback, a by-hand --prompt with no launcher at all — ends at this one
+  # block (memory enforcement-must-live-at-the-chokepoint). Executed, not grepped: the block is
+  # extracted from the subject by anchor and run, so a comment claiming the append cannot pass it.
+  blk="$(sed -n '/^LR_SUBMIT_TOKEN_IN_PROMPT=0$/,/^fi$/p' "$FIRE")"
+  [ -n "$blk" ] || { echo "the append block could not be located in $FIRE — the anchor is stale"; false; }
+  case "$blk" in *'case "$PROMPT" in'*) ;; *) echo "extracted the wrong span:"; printf '%s\n' "$blk"; false ;; esac
+  drive() { bash -c 'PROMPT="$1"; LR_SUBMIT_TOKEN="$2"; eval "$3"; printf "[%s][%s]\n" "$PROMPT" "$LR_SUBMIT_TOKEN_IN_PROMPT"' _ "$1" "$2" "$blk"; }
+
+  # appended, and the arming flag the gate greps for is SET by the same code path
+  run drive "/limit-recover ingest /x" "$TOK"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "[/limit-recover ingest /x (submit token: $TOK)][1]" ] || { echo "$output"; false; }
+
+  # IDEMPOTENT: a prompt an upstream already tokenised is left byte-identical, so lr-handoff's own
+  # fail-closed append composes with this instead of doubling the token in the operator's composer.
+  run drive "/limit-recover ingest /x — lr-ingest-verify FAILED: nope — $TOK" "$TOK"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "[/limit-recover ingest /x — lr-ingest-verify FAILED: nope — $TOK][1]" ] || { echo "$output"; false; }
+
+  # no token in the environment ⇒ nothing is appended AND the flag stays 0, so the gate cannot arm
+  # off a run whose prompt carries nothing to find.
+  run drive "/limit-recover ingest /x" ""
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "[/limit-recover ingest /x][0]" ] || { echo "$output"; false; }
+
+  # APPENDED, never prefixed: the re-CR's DRAFT-MINE needle is the prompt's first 40 characters, and
+  # a prefix would move it off the text the composer actually echoes.
+  run drive "/limit-recover ingest /some/quite/long/bundle/path/here" "$TOK"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == "[/limit-recover ingest /some/quite/long/bundle/path/here"* ]] || { echo "$output"; false; }
 }
 
 # ── the poll's DEFAULT interval, which no test could see because every test overrides it ──────────
