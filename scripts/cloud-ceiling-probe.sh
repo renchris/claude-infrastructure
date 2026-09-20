@@ -209,6 +209,11 @@ weekly_pct_for() { # → integer, or "?" when unreadable. NEVER 0 on failure: 0 
 classify_outcome() { # stdin = combined create output; echoes created|refused-quota|refused-other
   local out; out="$(cat)"
   if printf '%s' "$out" | grep -E 'session_[A-Za-z0-9]+' >/dev/null; then printf 'created'; return 0; fi
+  # DOMAIN: a CLI's own STDOUT, never transcript JSONL. This predicate is deliberately NOT
+  # delegated to the SSOT at scripts/limit-recover/lr_predicate.py: that module classifies
+  # transcript RECORDS and gates on an envelope (type/isApiErrorMessage) that a terminal
+  # capture does not have. Different input domain, different question; P9 R1 records why.
+  # scripts/lr-predicate-lint.sh allows this site by name and refuses a NEW one elsewhere.
   if printf '%s' "$out" | grep -iE 'usage limit|rate limit|quota|too many|weekly limit|limit reached|exceeded|429' >/dev/null; then
     printf 'refused-quota'; return 0
   fi

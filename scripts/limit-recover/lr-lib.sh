@@ -16,6 +16,12 @@
 [ -n "${LR_LIB_LOADED:-}" ] && return 0 2>/dev/null
 LR_LIB_LOADED=1
 
+# THE PREDICATE MODULE, for the two python readers below (LIMIT_DETECT_100P W4 step 3). BASH_SOURCE,
+# never $0: this file is SOURCED, so $0 is the caller — a hook, the poller, lr-fleet — and through
+# the ~/.claude per-file symlink farm its dirname is not where our sibling module sits. Both readers
+# already fork one python; the module is imported INSIDE that fork, so this costs no extra process.
+: "${LR_LIB_DIR:="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"}"
+
 # ── the four account stores ──────────────────────────────────────────────────────────────────────
 lr_config_dirs() { # → one config dir per line; ~/.claude and ~/.claude-next are ONE account (mirror)
   if [ -n "${LR_CONFIG_DIRS:-}" ]; then printf '%s\n' "$LR_CONFIG_DIRS" | tr ':' '\n'; return 0; fi
@@ -51,8 +57,30 @@ lr_tier_from_transcript() { # $1=cfg $2=sid → "model effort" on stdout / rc 1 
   local f
   for f in "$1"/projects/*/"$2".jsonl "$1"/projects/*/"$2".jsonl.handed-off; do
     [ -f "$f" ] || continue
-    /usr/bin/python3 - "$f" <<'PY' && return 0
+    /usr/bin/python3 - "$f" "$LR_LIB_DIR" <<'PY' && return 0
 import json, sys
+try:
+    sys.path.insert(0, sys.argv[2])
+    from lr_predicate import classify_text
+except Exception:                       # module unreachable: degrade to the pre-W4 test,
+    classify_text = None                # never to "this session never hit a limit"
+
+
+def _is_limit(d, m):
+    # classify_TEXT, not classify_record, and the difference is recall. This branch has ALREADY
+    # established the envelope (we are inside isApiErrorMessage), which is the exact case the
+    # module documents classify_text for: hand the envelope back and T1 decides, omit it and the
+    # text does. classify_record is T1-STRICT, so a record carrying the envelope and a cap
+    # sentence but no structured error field reads limit=False — and the tier read would then
+    # pick the LAST turn overall, which on a rescued transcript is the rescuer's tier. That is
+    # the exact incident this function exists to prevent.
+    c = m.get("content")
+    t = c if isinstance(c, str) else " ".join(
+        x.get("text", "") for x in (c or []) if isinstance(x, dict))
+    if classify_text is not None:
+        return classify_text(t, error=d.get("error"),
+                             api_error_status=d.get("apiErrorStatus"))["limit"]
+    return "hit your" in t or "reached your" in t
 last_limit = None; turns = []
 for line in open(sys.argv[1], errors="replace"):
     if '"assistant"' not in line:
@@ -66,9 +94,10 @@ for line in open(sys.argv[1], errors="replace"):
     ts = d.get("timestamp") or ""
     m = d.get("message") if isinstance(d.get("message"), dict) else {}
     if d.get("isApiErrorMessage"):
-        c = m.get("content")
-        txt = c if isinstance(c, str) else " ".join(x.get("text", "") for x in (c or []) if isinstance(x, dict))
-        if "hit your" in txt or "reached your" in txt:   # "reached" = the model-scoped Fable cap
+        # THE MODULE, not a substring pair. This site and lr_last_api_error below sat 97 lines apart
+        # in ONE file and disagreed about Fable: this one caught it (it tested "reached your") and
+        # that one did not, so the tier read and the kind read described different deaths.
+        if _is_limit(d, m):
             last_limit = ts
         continue
     model = m.get("model") or ""
@@ -147,6 +176,15 @@ lr_last_api_error() { # $1=transcript → "<uuid>\t<error>\t<kind>\t<timestamp>"
   [ -n "$f" ] && [ -f "$f" ] || return 1
   tail -c "$bytes" "$f" 2>/dev/null | /usr/bin/python3 -c '
 import hashlib, json, sys
+try:
+    sys.path.insert(0, sys.argv[1])
+    from lr_predicate import classify_text
+except Exception:
+    # THE MODULE IS UNREACHABLE. Degrade to the pre-W4 text test, never to rc 1: rc 1 from this
+    # function means "the last assistant record is NOT an api error", so an import failure would
+    # tell every caller that a capped fleet is a healthy one. The apostrophe is spelled with chr
+    # because this whole block is a single-quoted shell argument.
+    classify_text = None
 last = None
 for line in sys.stdin:
     if "\"assistant\"" not in line: continue
@@ -168,10 +206,26 @@ d, txt = last
 # life of the session and go silent on every later one.
 uid = d.get("uuid") or "sha-" + hashlib.sha256(
     ((d.get("timestamp") or "") + "\x00" + txt[:400]).encode("utf-8")).hexdigest()[:24]
-print("%s\t%s\t%s\t%s" % (uid, d.get("error") or "unknown",
-                          "limit" if "You'"'"'ve hit your" in txt else "other",
+# EXACTLY FOUR TAB FIELDS, and that is load-bearing rather than tidy. net-recover-arm.sh line 195
+# strips every character up to the last TAB and keeps what is left, so it takes the LAST field
+# whatever the last field happens to be, and feeds it to a string compare against a turn timestamp.
+# A fifth column was measured turning that read into the literal entrypoint value, after which the
+# asyncRewake never fires (judge Da-latency FATAL 2). So the module widens what field 3 KNOWS and
+# changes nothing about the shape: a Fable cap now prints limit, which is what stops
+# recover-inject.sh line 101 telling the operator it is NOT a quota message.
+# NOTE for the next editor: this block is a single-quoted python argument, so a dollar sign or a
+# backtick anywhere in these comments raises a NEW shellcheck SC2016 on a file that has none.
+if classify_text is not None:
+    # The envelope is already established above, so this is classify_text with the envelope
+    # handed back, exactly as the module documents. T1 rules when the record carries a
+    # structured error; the text rules when it does not, which keeps the pre-W4 recall.
+    kind = "limit" if classify_text(txt, error=d.get("error"),
+                                    api_error_status=d.get("apiErrorStatus"))["limit"] else "other"
+else:
+    kind = "limit" if ("You" + chr(39) + "ve hit your") in txt else "other"
+print("%s\t%s\t%s\t%s" % (uid, d.get("error") or "unknown", kind,
                           d.get("timestamp") or "-"))
-' || return 1
+' "$LR_LIB_DIR" || return 1
 }
 
 # ── Q3 predicate 3: a NON-SUCCESS task-notification in the tail ──────────────────────────────────

@@ -1157,3 +1157,42 @@ mk_ps_big() { local out="$1" live="${2:-}"
   run env CC_CLASSIFY_PERMPEND_BLIND_DISABLE=1 "$C" "$UP" --json
   [ "$(printf '%s' "$output" | jq -r '.cause')" = finished-teammate ]
 }
+
+# ── W4 step 4 (LIMIT_DETECT_100P): the UNION with the predicate SSOT ────────────────────────────
+# F2 `fable-no-reap`. recent_api_limit's regex names session / weekly / usage / monthly-spend and
+# names a MODEL-SCOPED cap NOWHERE, so before the union a Fable-capped session read NOT
+# rate-limited and lost its never-reap protection at bin/cc-classify:817 — reapable while it was
+# merely waiting. The record below is the verbatim 2.1.260 shape (quotaLimits ABSENT, errorDetails
+# present); receipt in tests/lr-predicate.bats fable_record.
+@test "rate-limited — F2: a model-scoped (Fable) cap, which the text regex alone cannot see" {
+  reg PANE-A "$LIVE" /repo sidA; tx sidA 9000
+  printf '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","apiErrorStatus":429,"message":{"role":"assistant","content":[{"type":"text","text":"You'\''ve reached your Fable limit. Run /usage-credits to continue or switch models with /model."}]}}\n' >> "$D/proj/slug/sidA.jsonl"
+  [ "$(cause PANE-A)" = rate-limited ]
+}
+
+# THE UNION MUST NOT WIDEN ONTO PROSE. The limit-recover skill description quotes both cap
+# spellings into every session's skill_listing; the SSOT refuses them because the record carries no
+# api-error envelope, and that refusal is what makes a text-widened read safe at all.
+@test "NOT rate-limited — an ordinary turn QUOTING both cap spellings (the union's bound)" {
+  reg PANE-A "$LIVE" /repo sidA; tx sidA 30
+  printf '{"type":"assistant","timestamp":"2001-09-08T00:00:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"You'\''ve hit your session limit and You'\''ve reached your Fable limit are the two strings."}]}}\n' >> "$D/proj/slug/sidA.jsonl"
+  [ "$(cause PANE-A)" != rate-limited ]
+}
+
+# ── RED-PROOF (W4 step 4 rows) ──────────────────────────────────────────────────────────────────
+# Against pristine trunk e03e36eec with the UN-UNIONed recent_api_limit, `bats -f "F2: a
+# model-scoped|the union's bound"`:
+#
+#   1..2
+#   not ok 1 rate-limited — F2: a model-scoped (Fable) cap, which the text regex alone cannot see
+#   # (in test file tests/cc-classify.bats, line 1170)
+#   #   `[ "$(cause PANE-A)" = rate-limited ]' failed
+#   ok 2 NOT rate-limited — an ordinary turn QUOTING both cap spellings (the union's bound)
+#
+# Row 2 is green in both arms and is the BOUND, not a red-proof: it says where the widening stops.
+# A union that reached it would park every session that ever printed a skill listing — the
+# limit-recover skill description quotes both cap spellings into every session's skill_listing.
+# MEASURED, not asserted: the mutant that swaps `classify-tail` for a `classify-text` over the same
+# 60 lines — i.e. the union without the envelope gate — kills it:
+#   not ok 1 NOT rate-limited — an ordinary turn QUOTING both cap spellings (the union's bound)
+#   #   `[ "$(cause PANE-A)" != rate-limited ]' failed

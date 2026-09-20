@@ -300,6 +300,25 @@ EOF
   printf '%s %s %s' "$n" "$distinct" "$span"
 }
 
+_ci_ssot_tail_limit() { # <jsonl> -> 0 if the predicate SSOT calls this tail a limit
+  # WHY THIS EXISTS, with the measurement: the regex in recent_api_limit matches session / weekly /
+  # usage / monthly-spend, and a MODEL-SCOPED cap matches none of them. Checked against the real
+  # 2.1.260 record (tests/lr-predicate.bats fable_record, "You've reached your Fable limit"): the
+  # regex returns NO MATCH while the SSOT returns limit:true cap:model_scoped:Fable. Before this
+  # union a Fable-capped session read NOT rate-limited and so lost the never-reap protection at the
+  # "structured usage-cap" branch below -- it was reapable while it was merely waiting.
+  #
+  # FAILS OPEN, deliberately: a missing, unreadable or erroring shim leaves the regex as the whole
+  # answer. A broken SSOT must never DELETE coverage that predates it.
+  local sh="$_CI_HERE/../scripts/limit-recover/lr-predicate.sh" v
+  [ -r "$sh" ] || return 1
+  v="$(bash "$sh" classify-tail "$1" 2>/dev/null)" || return 1
+  # A BARE `"limit":true` cannot be forged by transcript CONTENT: a quote inside a JSON string value
+  # arrives escaped, so this key:value pair appears only as the serializer wrote it.
+  case "$v" in *'"limit":true'*) return 0 ;; esac
+  return 1
+}
+
 recent_api_limit() { # <jsonl> → 0 if a structured USAGE-CAP api error is among the last records
   local f="$1"
   [ -f "$f" ] || return 1
@@ -309,7 +328,12 @@ recent_api_limit() { # <jsonl> → 0 if a structured USAGE-CAP api error is amon
   # old set missed entirely, so a spend-capped clean+landed session read `finished` and was reapable.
   tail -n 60 "$f" 2>/dev/null \
     | jq -rc 'select((.isApiErrorMessage//false)==true) | (.message.content // [] | map(.text // "") | join(" "))' 2>/dev/null \
-    | grep -qiE 'session limit|weekly limit|usage limit|limit ·|resets|monthly spend limit|spend limit|billing'
+    | grep -iE 'session limit|weekly limit|usage limit|limit ·|resets|monthly spend limit|spend limit|billing' >/dev/null && return 0
+  # W4 step 4 (LIMIT_DETECT_100P): UNION with the predicate SSOT, never a REPLACEMENT -- the wave's
+  # own words are "a veto must never LOSE coverage", so the regex above keeps its verdict and this
+  # only ever ADDS. It runs solely on the regex's MISSES, so the common path costs nothing and the
+  # one python fork (0.09 s, measured by W0) is paid only where the old set was silent.
+  _ci_ssot_tail_limit "$f"
 }
 
 parse_blocked_model() { # <refusal-text> → best-effort model name (e.g. "Fable 5"), empty if unparseable
