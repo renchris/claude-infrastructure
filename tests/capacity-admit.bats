@@ -71,6 +71,12 @@ idl_field() { # $1=jq path → newline-separated values, in order
   jq -r "$1" "$CC_ADMIT_IDL"
 }
 
+idl_first() { # $1=jq path → the FIRST non-null value, SLURPED rather than piped into a head
+  # A pipe whose right-hand side exits early SIGPIPEs its producer, and under pipefail the pipeline
+  # then reads FALSE ON A MATCH. jq slurps the file itself, so there is no pipeline to break.
+  jq -rs "map($1) | map(select(. != null)) | .[0] // \"\"" "$CC_ADMIT_IDL"
+}
+
 @test "01 healthy box ADMITS, and records basis=measured with BOTH terms' numbers" {
   run admit c1 "a spawn"
   [ "$status" -eq 0 ]
@@ -476,4 +482,72 @@ EOF
   # the shell-level symptom itself: nothing may reach stderr complaining about the operand
   [[ "$output" != *"integer expression expected"* ]] || { echo "$output"; false; }
   [[ "$output" != *"integer expected"* ]] || { echo "$output"; false; }
+}
+
+@test "15i D3a a token whose one-shot cannot be enforced NEVER admits — the unwritable directory" {
+  # MEASURED on the pre-W2FA library: a token in a chmod-555 directory was redeemed THREE
+  # consecutive times, all rc 0, and was still present after each — `rm -f … || true` discarded the
+  # one failure that mattered and the IDL rows read basis=token/verdict=admit, indistinguishable
+  # from one legitimate redemption. The cure is the rename claim (D1): a directory we cannot mutate
+  # is a directory in which one-shot cannot be enforced, so there is no admission to carry.
+  local dir tok first second
+  dir="$BATS_TEST_TMPDIR/ro"; mkdir -p "$dir"
+  tok="$(mint sid-ro "$dir/tok")"
+  [ -f "$tok" ] || { echo "mint did not create $dir/tok"; false; }
+  chmod 555 "$dir"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-ro \
+               cc_capacity_admit c15i "s"' _ "$LIB" "$tok"
+  first="$status"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-ro \
+               cc_capacity_admit c15i "s"' _ "$LIB" "$tok"
+  second="$status"
+  chmod 755 "$dir"
+  [ "$first" -ne 0 ] || { echo "redemption 1 ADMITTED a token that cannot be consumed"; false; }
+  [ "$second" -ne 0 ] || { echo "redemption 2 ADMITTED the SAME token — it is replayable forever"; false; }
+  [[ "$(idl_first 'select(.caller=="c15i")|.token')" == *"NOT CLAIMED"* ]] \
+    || { echo "row: $(idl_first 'select(.caller=="c15i")|.token')"; false; }
+}
+
+@test "15j D3b a SYMLINK is not a token — -f and -O follow it, so the target is never consumed" {
+  # MEASURED on the pre-W2FA library: with CC_ADMIT_TOKEN pointing at a symlink to a real record,
+  # `-f` and `-O` both followed the link and `rm -f` removed only the LINK, so the target survived
+  # and re-linking replayed the admission — three redemptions, all rc 0. A token IS an admission;
+  # it must be a regular file this uid owns, never a redirection to one.
+  local real link i rc
+  real="$BATS_TEST_TMPDIR/real-token"
+  mint sid-link "$real" >/dev/null
+  link="$BATS_TEST_TMPDIR/link-token"
+  for i in 1 2 3; do
+    ln -sf "$real" "$link"                          # the replayer owns the link, so re-create it
+    run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-link \
+                 cc_capacity_admit c15j "s"' _ "$LIB" "$link"
+    rc="$status"
+    [ "$rc" -ne 0 ] || { echo "redemption $i through a SYMLINK ADMITTED"; false; }
+  done
+  [ -f "$real" ] || { echo "the link's TARGET was consumed — a sibling's token would be destroyed"; false; }
+  [[ "$(idl_first 'select(.caller=="c15j")|.token')" == *"SYMLINK"* ]] \
+    || { echo "row: $(idl_first 'select(.caller=="c15j")|.token')"; false; }
+}
+
+@test "15k D3c the one-shot's unlink is VERIFIED, not assumed — a no-op rm cannot mint a replay" {
+  # `rm -f "$t" 2>/dev/null || true` discards the ONE result that decides whether the token is
+  # one-shot. The stub below makes every rm a silent no-op, which is what an unwritable directory,
+  # an immutable flag or a full inode table produce — and on the pre-W2FA library the token then
+  # survived and the next redemption admitted again, with no row saying so.
+  local tok first second
+  tok="$(mint sid-rm)"
+  mkdir -p "$BATS_TEST_TMPDIR/rmbin"
+  printf '#!/bin/bash\nexit 0\n' > "$BATS_TEST_TMPDIR/rmbin/rm"
+  chmod +x "$BATS_TEST_TMPDIR/rmbin/rm"
+  run env PATH="$BATS_TEST_TMPDIR/rmbin:$PATH" CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$tok" \
+      CC_ADMIT_WANT_SID=sid-rm bash -c '. "$1"; cc_capacity_admit c15k "s"' _ "$LIB"
+  first="$status"
+  run env PATH="$BATS_TEST_TMPDIR/rmbin:$PATH" CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$tok" \
+      CC_ADMIT_WANT_SID=sid-rm bash -c '. "$1"; cc_capacity_admit c15k "s"' _ "$LIB"
+  second="$status"
+  [ "$second" -ne 0 ] \
+    || { echo "rc1=$first rc2=$second — the token replayed because nothing checked the unlink"; false; }
+  # …and the surviving copy is NAMED, not assumed away: a discard that did not happen is a fact.
+  [[ "$(idl_first 'select(.caller=="c15k")|.token')" == *"NOT removed"* ]] \
+    || { echo "row: $(idl_first 'select(.caller=="c15k")|.token')"; false; }
 }

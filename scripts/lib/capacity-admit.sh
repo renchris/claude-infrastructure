@@ -560,6 +560,7 @@ CC_ADMIT_TOKEN_AGE=""
 CC_ADMIT_TOKEN_SID=""
 CC_ADMIT_TOKEN_TERMS=""
 CC_ADMIT_TOKEN_NOTE=""
+CC_ADMIT_TOKEN_UNLINK=""
 cc_capacity_token_note() { printf '%s' "$CC_ADMIT_TOKEN_NOTE"; }
 
 cc_capacity_token_mint() { # $1=sid [$2=explicit path] → prints the token path · rc 1 = not minted
@@ -614,12 +615,21 @@ _cc_admit_token_ttl() { # → always 0 · sets CC_ADMIT_TOKEN_TTL_VALUE (an inte
 }
 
 _cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usable token · sets the CC_ADMIT_TOKEN_* globals
-  CC_ADMIT_TOKEN_AGE=""; CC_ADMIT_TOKEN_SID=""; CC_ADMIT_TOKEN_TERMS=""; CC_ADMIT_TOKEN_NOTE=""
+  CC_ADMIT_TOKEN_AGE=""; CC_ADMIT_TOKEN_SID=""; CC_ADMIT_TOKEN_TERMS=""; CC_ADMIT_TOKEN_NOTE=""; CC_ADMIT_TOKEN_UNLINK=""
   # CC_ADMIT_TOKEN is the library's own spelling; LR_ADMIT_TOKEN is the limit-recover launcher's,
   # accepted here so a launcher env that carries only the LR_ name still redeems. Both are read,
   # neither is exported by this library, and lr-fire-resume passes CC_ADMIT_TOKEN call-scoped.
   local t="${CC_ADMIT_TOKEN:-${LR_ADMIT_TOKEN:-}}" want="${CC_ADMIT_WANT_SID:-}" line issued sid terms now age claim ttl
   [ -n "$t" ] || return 1
+  # A TOKEN IS AN ADMISSION, NEVER A REDIRECTION TO ONE (W2FA D3). `-f`, `-O` and `rm` ALL follow a
+  # symlink, so a link's target was validated, never consumed, and survived — measured on the
+  # pre-W2FA library as three rc-0 redemptions of one record, each row reading basis=token/admit.
+  # `-L` is tested FIRST because every check after it answers a question about the TARGET while the
+  # caller named the LINK, and the two are only the same file until someone makes them differ.
+  if [ -L "$t" ]; then
+    CC_ADMIT_TOKEN_NOTE="token is a SYMLINK ($t) — refused and NOT consumed: -f/-O/rm all follow the link, so its target would be validated and never spent"
+    return 1
+  fi
   if [ ! -f "$t" ]; then CC_ADMIT_TOKEN_NOTE="token ABSENT ($t) — evaluating fresh"; return 1; fi
   if [ ! -O "$t" ]; then CC_ADMIT_TOKEN_NOTE="token not owned by uid $(id -u 2>/dev/null || printf '?') ($t) — evaluating fresh"; return 1; fi
   line="$(awk 'NR==1' "$t" 2>/dev/null || true)"
@@ -653,25 +663,32 @@ _cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usabl
     CC_ADMIT_TOKEN_NOTE="token NOT CLAIMED ($t) — the atomic rename failed: a concurrent redeemer took it, or its directory is not writable. One-shot cannot be enforced, so this is not an admission"
     return 1
   fi
-  rm -f "$claim" 2>/dev/null || true                # the claim copy is ours alone and unreachable
+  # THE DISCARD IS VERIFIED, NEVER ASSUMED (W2FA D3). `rm -f … || true` throws away the one result
+  # that decides whether a token is one-shot; the `|| true` here is safe ONLY because the `-e` test
+  # below — a different call, not this one's exit code — is what actually renders the verdict. The
+  # rename already made the ORIGINAL name unreachable, so a surviving claim copy is hygiene rather
+  # than a replay; it is still a FACT and the row says so instead of asserting a removal that did
+  # not happen.
+  rm -f "$claim" 2>/dev/null || true
+  if [ -e "$claim" ]; then CC_ADMIT_TOKEN_UNLINK="the one-shot copy was NOT removed ($claim)"; fi
   if ! cc_hw_is_int "$issued"; then
-    CC_ADMIT_TOKEN_NOTE="token UNPARSEABLE (issued='${issued}') — consumed, evaluating fresh"; return 1
+    CC_ADMIT_TOKEN_NOTE="token UNPARSEABLE (issued='${issued}') — consumed, evaluating fresh${CC_ADMIT_TOKEN_UNLINK:+ [${CC_ADMIT_TOKEN_UNLINK}]}"; return 1
   fi
   # THE CLOCK IS AN INPUT AND IS VALIDATED LIKE ONE. An unreadable `date` leaves `now` empty, which
   # makes the arithmetic below error and every comparison after it meaningless — the same fail-open
   # shape as the TTL, arriving from the other operand.
   now="$(date +%s 2>/dev/null || printf '')"
   if ! cc_hw_is_int "$now"; then
-    CC_ADMIT_TOKEN_NOTE="token NOT REDEEMED — the clock is unreadable (date +%s gave '${now}'), so age is unmeasurable; consumed, evaluating fresh"
+    CC_ADMIT_TOKEN_NOTE="token NOT REDEEMED — the clock is unreadable (date +%s gave '${now}'), so age is unmeasurable; consumed, evaluating fresh${CC_ADMIT_TOKEN_UNLINK:+ [${CC_ADMIT_TOKEN_UNLINK}]}"
     return 1
   fi
   _cc_admit_token_ttl; ttl="$CC_ADMIT_TOKEN_TTL_VALUE"
   age=$(( now - issued ))
   if [ "$age" -lt 0 ] || [ "$age" -gt "$ttl" ]; then
-    CC_ADMIT_TOKEN_NOTE="token EXPIRED (${age}s old > TTL ${ttl}s) — consumed, evaluating fresh${CC_ADMIT_TOKEN_TTL_NOTE:+ [${CC_ADMIT_TOKEN_TTL_NOTE}]}"
+    CC_ADMIT_TOKEN_NOTE="token EXPIRED (${age}s old > TTL ${ttl}s) — consumed, evaluating fresh${CC_ADMIT_TOKEN_TTL_NOTE:+ [${CC_ADMIT_TOKEN_TTL_NOTE}]}${CC_ADMIT_TOKEN_UNLINK:+ [${CC_ADMIT_TOKEN_UNLINK}]}"
     return 1
   fi
-  CC_ADMIT_TOKEN_NOTE="${CC_ADMIT_TOKEN_TTL_NOTE}"
+  CC_ADMIT_TOKEN_NOTE="${CC_ADMIT_TOKEN_TTL_NOTE}${CC_ADMIT_TOKEN_TTL_NOTE:+ }${CC_ADMIT_TOKEN_UNLINK}"
   CC_ADMIT_TOKEN_AGE="$age"; CC_ADMIT_TOKEN_SID="$sid"; CC_ADMIT_TOKEN_TERMS="$terms"
   return 0
 }
