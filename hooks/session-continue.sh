@@ -155,6 +155,30 @@ case "${1:-}" in
     exit 0 ;;
   clear)
     f=$(sentinel_for "$PWD")
+    # ── A CLEAR NEVER REACHES ANOTHER SESSION'S SENTINEL (W3) ────────────────────────────────────
+    # The sentinel is keyed on (config-dir | cwd) and NOT on the session, so any process running in
+    # a directory clears whatever is armed there. That was tolerable while `clear` was only ever
+    # typed by the session that armed it; W3 makes a RECOVERY run it — lr-ingest-verify's clause D
+    # discharges the recovered session's pre-limit continuation from the launcher, in the pane,
+    # before the session wakes. Two sessions sharing one checkout (a lead and its own recovery, or
+    # any two panes in the same worktree) then give the recovery a lever over a sibling's armed
+    # chain, and a cleared chain is SILENT: the sibling simply stops being re-driven, with nothing
+    # anywhere saying why.
+    #
+    # `set` already stamps the arming sid in `${f}.sid`, so the evidence exists — this is the reader.
+    # BOTH sids must be known: a bare shell `clear` (an operator at a terminal, the documented park
+    # gesture) carries no CLAUDE_CODE_SESSION_ID and must keep working exactly as before. rc stays 0
+    # — a refusal is not an error, it is the honest answer, and a non-zero here would turn every
+    # `|| true`-less caller into a failure.
+    _sc_cur="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+    _sc_owner="$(cat "${f}.sid" 2>/dev/null || true)"
+    if [ -n "$_sc_cur" ] && [ -n "$_sc_owner" ] && [ "$_sc_cur" != "$_sc_owner" ]; then
+      SC_SID="$_sc_cur"
+      echo "refused — the sentinel armed for this cwd belongs to session ${_sc_owner%%-*} (you are ${_sc_cur%%-*}); nothing was cleared: $PWD"
+      log_idl refused "cli-clear-foreign-sid" "$(jq -cn --arg o "$_sc_owner" --arg c "$_sc_cur" --arg w "$PWD" \
+        '{owner_sid:$o,session_sid:$c,cwd:$w}' 2>/dev/null)"
+      exit 0
+    fi
     # DID IT ACTUALLY DISARM ANYTHING? The sentinel is $PWD-KEYED, and `rm -f` on an absent file
     # exits 0 — so the verb used to print "cleared" whether it disarmed a live chain or looked in the
     # wrong directory and touched nothing (claimed-outcome ≠ checked-outcome). MEASURED 2026-08-11
