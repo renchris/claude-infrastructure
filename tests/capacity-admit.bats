@@ -457,3 +457,23 @@ EOF
     || { echo "holder rc=$status rival rc=$rival — ONE probe admission granted TWO spawns"; cat "$CC_ADMIT_IDL"; false; }
 }
 
+@test "15h D2 a MALFORMED TTL cannot make every token immortal — an ERROR exit is not a clean false" {
+  # MEASURED: with CC_ADMIT_TOKEN_TTL_S='300s' the expiry test `[ "$age" -gt "$TTL" ]` ERRORS with
+  # rc 2 (`[: 300s: integer expected` on stderr) and `if` reads that identically to a clean false —
+  # so the gate returned rc 0 and ADMITTED a token 315,360,000 s (10 years) old on a box at
+  # 9.90 load/core. The TTL is the only thing bounding the stale-admission window and its guard
+  # failed OPEN. The recurring class: docs/lessons/predicate-error-exit-is-indistinguishable-from-false.md
+  local tok
+  tok="$(mint sid-ttl)"
+  printf '%s\t%s\t%s\t%s\n' "$(( $(date +%s) - 315360000 ))" sid-ttl "$(id -u)" load > "$tok"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN_TTL_S=300s CC_ADMIT_TOKEN="$2" \
+               CC_ADMIT_WANT_SID=sid-ttl cc_capacity_admit c15h "s"' _ "$LIB" "$tok"
+  [ "$status" -ne 0 ] \
+    || { echo "a 10-YEAR-OLD token ADMITTED: the TTL comparison errored and \`if\` read it as false"; echo "$output"; false; }
+  # …and the row must SAY the TTL was unusable. A refusal for an unrelated reason is not this fix.
+  [[ "$(idl_field 'select(.caller=="c15h")|.token')" == *"not an integer"* ]] \
+    || { echo "token note: $(idl_field 'select(.caller=="c15h")|.token')"; false; }
+  # the shell-level symptom itself: nothing may reach stderr complaining about the operand
+  [[ "$output" != *"integer expression expected"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"integer expected"* ]] || { echo "$output"; false; }
+}
