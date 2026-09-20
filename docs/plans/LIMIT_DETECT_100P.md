@@ -702,6 +702,31 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
     QoS-starved at PRI 4 — operator-owned, backlog `86f564bc7f4f`, driver at
     `/tmp/lr-detect-restore-dispatch.sh`.
 
+- 2026-09-20T14:2xZ · **W6 — THE LIVE CENSUS HALF OF THE DRILL, MEASURED AT THE PLAN'S OWN LOAD**
+  (lead 540263da). Earlier readings today were taken at load 138 and 60 and were recorded as
+  PESSIMISTIC bounds. The fleet has since quietened to **load 19.3**, inside § 5's own `load ≤ 20`
+  assumption for the first time, so this is the real number rather than a bound:
+
+  | run | 1 | 2 | 3 | 4 | 5 |
+  |---|---|---|---|---|---|
+  | `/usr/bin/time -p cc-limited` | **0.27 s** | **0.22** | **0.22** | **0.22** | **0.22** |
+
+  **5 of 5 inside the 0.30 s bar** (median 0.22, max 0.27), every run exit 0, against the LIVE
+  binary on PATH. Footer verbatim: `31 sessions · 60 marker rows · 0 unaddressable · enumerator ok`.
+  Default screen **2,595 B** (§ 5 budget 1,200 B was written for 5 sids; this is 31).
+  `--tsv` yields **11 fields**, matching § 5's stated arity. `--json` 26,761 B for 31 sids.
+  States rendered live: RE-ENGAGED ×20, NO-PANE ×4, CWD-GONE ×2.
+  **A LOAD-INVARIANCE FINDING WORTH MORE THAN THE NUMBER:** across load 138 → 60 → 19 the
+  distribution barely moved (max 0.32 / 0.32 / 0.27), so the census is dominated by store I/O rather
+  than CPU contention. The earlier ~0.32 tail was a property of the CENSUS, not of a busy box — and
+  it disappears only at genuinely low load. Do not re-run hoping for a quieter machine; if a tail
+  above 0.30 s ever matters, find the I/O.
+
+  **STILL OWED for W6 to be complete:** the FIXTURE half. § 5's five-session screen cannot be
+  asserted until § 11 #1's re-derivation lands (`capture.sh` exists and is landed at `82f12d5e2`;
+  the expected screen must be re-derived from a capture and `build.sh`'s fabricated registry row 147
+  removed). That is W2b-ii's deliverable, and W2b-ii has never been dispatchable.
+
 ## 13. Cross-reference — `LIMIT_RECOVER_100P` § 9 landed the recovery side first (2026-09-20 00:1xZ, session 11569d45)
 
 Your wave-1 corpus was this session's research. Landed and LIVE on trunk at `1b2676f4c` (23:50Z),
