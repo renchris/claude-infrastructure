@@ -299,6 +299,19 @@ PLIST_TARGET_ALT="${PLIST_TARGET_LAYERS// /|}"
 # the machine-wide wedge class it exists to prevent. Fixing THAT (resolve absolutely, per
 # bin/cc-kitty-bin / bin/cc-claude-bin) retires BOTH rows honestly. Retiring either one alone does
 # not, and the ratchet cannot see the difference because it counts names, not lines.
+# ── ADDED 2026-09-20: `hooks/stop-failure-marker.sh` — the SIXTH file carrying the bounded-fork
+#    ladder, and it shipped without its rows, which is what made this selftest's "GREEN on the real
+#    tree" arm red and refused the land of the limit-death path (branch
+#    claude/fire-20260920T054000Z-5144-1, ship-land exit 6, red=unattended-path-selftest). A/B on
+#    the same box: trunk 4e31f11f1 selftest 54/54 rc 0; the same blob + that branch rc 1, "the real
+#    tree is not clean under the shipped allowlist (want 0, got 1)" — so the red was CAUSED by the
+#    diff, not inherited from the box. The site is hooks/stop-failure-marker.sh:160, a verbatim copy
+#    of hooks/notify.sh:20-24: `command -v timeout` / `command -v gtimeout` inside `$( )`, each
+#    result screened by `[ -n ] && [ -x ]`, with /opt/homebrew and /usr/local absolute candidates in
+#    the SAME loop — so unlike scripts/autonomy-sweep.sh it does not fall through to an unguarded
+#    bare name, and per this header's own rule a `command -v`-guarded site KEEPS the bare name.
+#    PAIRED, per the 2026-08-29 note above: one source line names both binaries and the ratchet
+#    counts them separately, so an unpaired row would re-open that exact defect.
 EMBEDDED_ALLOWLIST="$(cat <<'ALLOW'
 bin/cc-dispatch:bun
 bin/cc-dispatch:cargo
@@ -323,6 +336,8 @@ hooks/pre-session-validate.sh:timeout
 hooks/session-register.sh:cc-backlog
 hooks/session-register.sh:timeout
 hooks/session-start.sh:agent-browser
+hooks/stop-failure-marker.sh:gtimeout
+hooks/stop-failure-marker.sh:timeout
 hooks/waiting-recycle.sh:gtimeout
 hooks/waiting-recycle.sh:timeout
 scripts/autonomy-sweep.sh:gtimeout
