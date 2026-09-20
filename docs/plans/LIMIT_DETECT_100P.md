@@ -757,6 +757,13 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
     allowlisted BY NAME with "NOT YET MIGRATED", one line each, for whoever owns them; a SIXTH is
     refused, and reverting `cc-limited:421` now turns the lint RED. `lr-audit.py:1298` is NOT a
     copy (a parsed field read asking a different question) and is deliberately not flagged.
+  - **THE FIVE ARE DELIBERATELY NOT MIGRATED HERE, and the reason is a gate, not appetite.** Two of
+    them live in `lr-fleet.sh` (`:211`, `:234`), and `tests/lr-fleet.bats` CANNOT be brought green
+    on this box — its `sed -i ''` fixture is BSD-only, so a migration there could not be validated,
+    only asserted. Changing a teammate predicate whose owning suite you cannot run is how a
+    detection wave ships a false negative on the recovery path. They belong to whoever next works
+    each file on a box where its suite runs; the gate now makes that verifiable and refuses a sixth
+    meanwhile. `lr-fleet.sh` is also **W3's** file, which is a second reason to leave it.
   - **SCOPE NOTE FOR THE LANDER — § 11 #7 is W1's row.** W1 was stalled in flight on the desk with
     uncommitted work when this was written, and it is taken here because row 19 binds to it and
     because the hook's constant and the census's mirror of it cannot be split without one of them
@@ -766,9 +773,20 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
   - **GATE, and both reds are A/B-CONTROLLED against trunk at the same sha, not assumed:**
     `cc-limited` 24/24 · `lr-predicate` 25/25 · `stop-failure-marker` 26/26 · `session-beat` 15/15 ·
     `capacity-admit-active` 22/22 · `capacity-admit-coverage` 17/17 · `lr-predicate-lint` clean and
-    red-proved four ways. `spawn-presence` 6 red and `lr-fleet` 4 red are **PRE-EXISTING** — the
-    identical tests, by number and name, fail on `origin/main` in a detached worktree
-    (`a-pre-existing-red-is-a-claim-not-a-measurement`, run both arms).
+    red-proved four ways. Every other suite reachable from this diff was run in BOTH arms and the
+    failing sets are identical test-for-test on `origin/main` in a detached worktree at the same
+    sha (`a-pre-existing-red-is-a-claim-not-a-measurement`): `lr-fleet` 4, `spawn-presence` 6,
+    `cc-teardown` 14, `session-busy` 2, `teammate-auto-shutdown` 2, `cc-reaper` 36.
+  - **AND THE REDS HAVE A NAMED CAUSE, WHICH IS THE BOX, NOT THE TREE** — worth recording because
+    "pre-existing" alone invites the next lander to re-derive it. This VM is **Linux running as
+    root**, and the hermetic workflow runs **macOS** for exactly this reason (its header: 312 of
+    376 suites plausible on macOS against 224 on Linux, the gap being BSD userland). Diagnosed:
+    `lr-fleet` dies on `sed -i ''`, which GNU sed reads as the SCRIPT and then cannot open the real
+    one — the 3-suite class the workflow header names. `bats-assert-liveness` (6) and `cc-reaper`
+    (36) are in `scripts/offbox-excluded.manifest` BY NAME with their causes; the first prints
+    "legacy bash is major 5, not 3.x" because its two-bash grid needs macOS's /bin/bash 3.2, and
+    the manifest already says its off-box verdict "is a claim about the image's package set, never
+    about our tree". None of these name a file this diff touches.
   - Dispatcher vintage: `origin/main:bin/cc-dispatch` == the blob that composed the brief
     (`dc913037`), so the dispatcher that fired this session IS trunk.
   - **STILL OPEN after this:** **W3** (consumers — `lf_census`, the poller's § 1 delegation) and

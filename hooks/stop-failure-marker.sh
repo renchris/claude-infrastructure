@@ -73,6 +73,15 @@ LIM="${STOP_FAILURE_LIMITED_DIR:-$HOME/.claude/autonomy/limited}"
 # WHAT A CAPPED FILE COSTS IS BOUNDED AND VISIBLE: cc-limited reports it in the footer and exits 6
 # (DEGRADED), with the rows still printed. That is the designed disposition, not a failure — a
 # capped file has stopped recording, which is exactly the fact the operator needs said out loud.
+#
+# AND THE PREDICTION THAT FALLS OUT OF PAIRING 500 WITH TTL 10080, stated now rather than
+# discovered later: P1's "peak 271/day fleet-wide, never breached" was measured against the OLD
+# 1440-minute TTL, where a file was pruned daily. At a 7-day TTL the GC is keyed on FILE mtime, so
+# a busy account's marker is never pruned at all and simply accumulates — 271/day into one
+# cause-keyed file reaches 500 in under two days. Expect DEGRADED to become the ORDINARY reading on
+# a busy account, not an alarm. If that proves too noisy the lever is the TTL or a per-sid prune,
+# never a higher ceiling: raising the cap buys silence by making the file unbounded again, which is
+# the trade § 11 #7 refused.
 TTL_MIN="${STOP_FAILURE_TTL_MIN:-10080}"
 CAP="${STOP_FAILURE_CAP:-500}"
 case "$TTL_MIN" in ''|*[!0-9]*) TTL_MIN=10080 ;; esac
