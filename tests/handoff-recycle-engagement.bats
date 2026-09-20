@@ -395,3 +395,46 @@ resume_oracle() { eval "$(sed -n '/^resume_engaged() {/,/^}/p' "$HF")"; command 
   run resume_engaged "$TCFG" "$TSID" "2026-09-19T21:00:00" "$TOK"
   [ "$status" -eq 0 ] || { echo "a genuine answer to the injected prompt was not recognised"; false; }
 }
+
+# ── the token scan's OWN filters: three conditions, each of which alone forges a baseline ─────────
+#
+# The scan that turns the baseline from a CLOCK into a RECORD has three conditions, and the two cases
+# above only ever exercise ONE of them ("a record carrying the token exists"). Measured by mutation:
+# dropping `ts <= t0` and dropping the `isSidechain` exclusion each left all three oracle cases GREEN.
+# Both are forgeries of the same shape — a user record that carries the token and is NOT this run's
+# prompt — and each one restores exactly the hole the token was introduced to close, because the
+# baseline then sits BEFORE a turn that was never an answer to us.
+
+@test "RED-PROOF token scan: a PREVIOUS run's token record is not THIS run's baseline" {
+  # A resume is re-driven: the same session, the same prompt shape, a NEW token — but the transplanted
+  # transcript still carries the last attempt's, and a `tail`-bounded read reaches it. Without the
+  # `ts <= t0` filter that stale record becomes the baseline, and the last attempt's own answering
+  # turn then reads as an answer to a prompt that has not been submitted yet.
+  resume_oracle
+  TCFG="$BATS_TEST_TMPDIR/target"; TSLUG="-Users-x-wt"; TSID="resumed-sess"
+  mkdir -p "$TCFG/projects/$TSLUG"
+  TOK="run:resumeds:20260919T2102:9f3c2b71"
+  printf '%s\n' \
+    "{\"type\":\"user\",\"timestamp\":\"2026-09-19T20:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"/limit-recover ingest /x $TOK\"}}" \
+    '{"type":"assistant","timestamp":"2026-09-19T20:30:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"the PREVIOUS attempt answering the PREVIOUS prompt"}]}}' \
+    > "$TCFG/projects/$TSLUG/$TSID.jsonl"
+  # baseline 21:00 — everything above it belongs to the attempt before this one
+  run resume_engaged "$TCFG" "$TSID" "2026-09-19T21:00:00" "$TOK"
+  [ "$status" -eq 1 ] || { echo "a token record OLDER than the baseline was accepted as this run's prompt"; false; }
+}
+
+@test "RED-PROOF token scan: a SIDECHAIN record carrying the token is a subagent's, not this session submitting" {
+  # A subagent reading the brief quotes the token into its OWN thread, and those records live in the
+  # same file with type:"user". Without the isSidechain exclusion the newest of them becomes the
+  # baseline — so the oracle certifies engagement off a thread the resumed session never ran.
+  resume_oracle
+  TCFG="$BATS_TEST_TMPDIR/target"; TSLUG="-Users-x-wt"; TSID="resumed-sess"
+  mkdir -p "$TCFG/projects/$TSLUG"
+  TOK="run:resumeds:20260919T2102:9f3c2b71"
+  printf '%s\n' \
+    "{\"type\":\"user\",\"isSidechain\":true,\"timestamp\":\"2026-09-19T21:04:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"read the brief: /limit-recover ingest /x $TOK\"}}" \
+    '{"type":"assistant","timestamp":"2026-09-19T21:05:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"a turn that answered the SUBAGENT, not us"}]}}' \
+    > "$TCFG/projects/$TSLUG/$TSID.jsonl"
+  run resume_engaged "$TCFG" "$TSID" "2026-09-19T21:00:00" "$TOK"
+  [ "$status" -eq 1 ] || { echo "a subagent's sidechain record was accepted as this session's submission"; false; }
+}
