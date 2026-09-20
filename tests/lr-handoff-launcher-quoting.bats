@@ -44,6 +44,15 @@ setup() {
   # printer with no parser arms, and the live-parser preflight is not this suite's subject.
   export LRH_LIVE_PARSER_CHECK=off
 
+  # HERMETICITY (land ratchet): this suite drives fires, so it must not read live machine load,
+  # and the three seams that do NOT resolve under $HOME must resolve inside the test dir. An ABSENT
+  # path is the right default — these sensors fail open on one. Cases may still override per call.
+  export CC_ADMIT_GATE=off
+  export CC_FIRE_CAPACITY_GATE=off
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-"
+
   # Fixture $HOME itself, not merely a $H we remember to pass through: lr-handoff derives
   # $LR, the account config dirs and the bundle root from $HOME, so anything reached without
   # an explicit `env HOME=` would otherwise run against the live ~/.
