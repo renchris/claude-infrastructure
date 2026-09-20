@@ -651,6 +651,57 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
     returns W1/W2c/W5 only), and `~/.claude/cc-fired/341.json` does not exist, so the W4 owner cannot
     self-close either. A close here must assert W4 BY HAND; the certificate cannot see it.
 
+- 2026-09-20T13:1xZ · **W4 LANDED — `3bc63504a`, harvested BY CONTENT by lead 540263da.**
+  `git log origin/main..lr-detect-w4` empty; transcript prints `land-verify: 13 path(s) present +
+  content-identical on origin/main`. Verified on trunk: `lr-audit.py` imports the SSOT and emits
+  `fable` as a code token (3); the new `scripts/lr-predicate-lint.sh` is present; the poller's raw
+  `agentName` greps drop 4 → 3 (its two sites migrated onto `is-teammate-head`); `lr-lib.sh`,
+  `bin/cc-classify` and `desk-invariant.sh` all reach the SSOT. **§ 11 #9 honoured** —
+  `LIMIT_RE`/`NET_RE`/`lf_kinds_of` survive in `lr-fleet.sh` (12 hits), so step 6 stayed dropped and
+  `lf_locate` remains the `--slow-scan` path. The lead's step-4 union (cc-classify + desk-invariant)
+  rode in with it, independently re-verified by W4 and mutation-killed on its envelope gate.
+  - **THREE FINDINGS FROM W4 THAT OUTLIVE THIS WAVE.** (1) `classify_record` is T1-STRICT: an
+    api-error ENVELOPE plus a cap SENTENCE but no structured `error` field reads `limit=False`, and
+    **two shipped fixtures are that shape**. Landed unfixed it would have broken lr-lib's
+    "last NON-ERROR turn before the limit wins" and lr-fleet's phantom row, so the tier read would
+    fall through to the LAST turn — on a rescued transcript, the RESCUER's tier. That is the exact
+    incident `lr_tier_from_transcript` exists to prevent and the one that made unattended Fable
+    recoveries land on Opus. Cured by handing the envelope back to `classify_text`. (2) A lint that
+    scans its own tree is BLIND UNTIL STAGED — `git grep` reads only TRACKED files, so the new lint's
+    first green was structurally false. (3) `lr-fleet` "W1(a) `--detach` returns in ≤3 s" is AMBIENT:
+    red at load 70, green at 32; a future lander must not adopt it as their own red.
+  - **A LEAD ERROR, recorded because it nearly landed broken code.** I inferred W4's gate was green
+    from the ABSENCE of a running bats process and told it to commit. Its run was
+    `timeout 1800 bats … | tail -25`; without `pipefail` the exit 0 belonged to TAIL, and the suite
+    had been KILLED at its 30-minute bound at 111 of 135 tests. Re-run unpiped it was RED with 4
+    failures. **Absence of a runner is not a verdict.** W4 refused the nudge and was right to.
+  - **W4's DoD, read rather than inferred: 14 suites / 390 tests / 0 failures**, every `1..N` plan
+    line checked (lr-predicate 24, lr-lib 36, net-recover-arm 21, lr-fleet 54, lr-audit-nonlimit 31,
+    lr-team-audit 3, cc-classify 102, desk-invariant 24, lr-reset-poller 30 + consolidate 10 +
+    engagement 14 + inplace 14 + overlap 9, lr-handoff-close-source 18). The lint is clean on the
+    tree and rc 1 on a plant in a NEW file AND on a second predicate inside an already-allowed file.
+    **`ship-land` exited 6 on its first two attempts while still printing progress** — the exit-code
+    trap, confirmed a second time; the land was accepted only on content.
+  - **THE LAND GATE CAUGHT A GATE THAT WOULD HAVE BEEN INERT FOREVER.** The new lint derived its ROOT
+    via `..` from an UNRESOLVED `BASH_SOURCE`. Through the `~/.claude` per-file symlink farm that
+    root resolves to `~/.claude` — no `.git`, no `tests/` — where `git grep` finds NOTHING and
+    reports a **clean tree forever, without erroring**. A gate that always passes is worse than no
+    gate, and it is exactly `fail-safe-default-mimics-the-healthy-state`. Fixed with ship-land's
+    canonical `_resolve_self` loop (BSD-safe, no `readlink -f`) and proven BOTH ways: through a
+    symlink it enumerates all 7 real files, while the unresolved control roots at `/tmp` and finds none.
+  - **A 13TH PREDICATE COPY EXISTS AND IS NAMED, NOT BLESSED:** `scripts/limit-recover/lr-handoff.sh:459`
+    tests `"hit your"` in text and is Fable-blind, exactly as `lr-lib.sh:172` was. It is outside W4's
+    frozen scope, so W4 allowlisted it in the lint **BY NAME with the reason "NOT YET MIGRATED"** —
+    which keeps the debt legible instead of silently permitted. One-line migration for whoever owns
+    that file. Separately, `desk-invariant.sh:409` trips the same pipefail census but is pre-existing
+    on trunk and outside any wave's diff.
+  - Anchor drift vs `a59b53e55`: `handoff-fire.sh:9236`→`:9688`; `lr-reset-poller.sh:752`→`:755`,
+    `:746`→`:777`; `lr-lib.sh:156`→`:172`, `:55`→`:71`. `lr-audit.py`'s 75/80/209/244 did NOT drift.
+  - STILL OPEN: W1, W2c and W5 are alive but STALLED (no turn in 15–55 min, uncommitted work, all
+    rescued to `briefs/RESCUE-*.patch`). W2b-ii, W3 and W6 cannot be dispatched while kitty is
+    QoS-starved at PRI 4 — operator-owned, backlog `86f564bc7f4f`, driver at
+    `/tmp/lr-detect-restore-dispatch.sh`.
+
 ## 13. Cross-reference — `LIMIT_RECOVER_100P` § 9 landed the recovery side first (2026-09-20 00:1xZ, session 11569d45)
 
 Your wave-1 corpus was this session's research. Landed and LIVE on trunk at `1b2676f4c` (23:50Z),
