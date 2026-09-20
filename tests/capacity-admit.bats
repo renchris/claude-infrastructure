@@ -972,6 +972,20 @@ EOF
   [ "$status" -eq 9 ] || { echo "rc=$status"; echo "$output"; false; }
   [ -s "$BATS_TEST_TMPDIR/pages.txt" ] \
     || { echo "a corrupt occurrence counter SILENCED the terminal alarm"; false; }
+  # AND SO MUST A GARBAGE KNOB. `[ "$occ" -le abc ]` exits rc 2, which `if` reads as a clean false
+  # — the same shape D2 closed on the TTL — so an unvalidated CC_ADMIT_TOKEN_TERMINAL_PAGES would
+  # silence the alarm outright. An unreadable bound fails TOWARD the alarm, never away from it.
+  : > "$BATS_TEST_TMPDIR/pages.txt"
+  dir="$BATS_TEST_TMPDIR/a1f"; mkdir -p "$dir"
+  tok="$(mint sid-a1f "$dir/tok")"
+  chmod 555 "$dir"
+  run bash -c '. "$1"; CC_ADMIT_TOKEN_TERMINAL_PAGES=abc CC_ADMIT_LOADAVG_OVERRIDE=0.01 \
+               CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-a1f cc_capacity_admit cA1f "s"' _ "$LIB" "$tok"
+  chmod 755 "$dir"
+  [ "$status" -eq 9 ] || { echo "rc=$status"; echo "$output"; false; }
+  [ -s "$BATS_TEST_TMPDIR/pages.txt" ] \
+    || { echo "a garbage CC_ADMIT_TOKEN_TERMINAL_PAGES SILENCED the terminal alarm"; false; }
+  [[ "$output" != *"integer expression expected"* ]] || { echo "$output"; false; }
 }
 
 @test "15ac A3 EQUIVALENCE GUARD, MUTANT-SCORED — under env -i the TTL is the LITERAL sum" {
