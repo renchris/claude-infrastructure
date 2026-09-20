@@ -742,7 +742,7 @@ lrh_state() { # $1=state $2=stage $3=detail — the run's own append-only log; l
 }
 LRH_ADMIT_TOKEN=""
 lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothing moved
-  local hf out rc state
+  local hf out rc state lrh_ki
   hf="$(lrh_hf_bin)"
   if [[ -n "$SOURCE_PANE" ]]; then
     if [[ ! -x "$hf" ]]; then
@@ -758,6 +758,31 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
       echo "lr-handoff: PRECHECK ${state:-REFUSED:unknown} — NOTHING has been transplanted, no lock and no tombstone were written, and the source session is untouched." >&2
       lrh_state "${state%%:*}" precheck "${state:-REFUSED:unknown}"
       return 6
+    fi
+    # ── THE ONLY WRITER OF killed_inflight (W3i B3) ──────────────────────────────────────────────
+    # lr-ingest-verify's clause A6 refuses a fast-path ingest unless the run's own state log carries
+    # an explicit `killed_inflight=<n>` record — "present and silent" is unevaluable, not zero. Read
+    # over every bundle under ~/.reso/limit-recover on 2026-09-20, A6 failed 68 of 68 that reached
+    # it and was the SOLE failure on one, because NOTHING in the tree ever wrote the value: the gate
+    # was structurally unpassable and the wave's measured token saving could not materialise on a
+    # single real recovery. The number already exists two lines up — the read-only probe prints
+    # `live_subagents: <n>` (handoff-fire.sh:7753), counted and never a refusal — and those are
+    # exactly the in-flight units the recycle is about to kill.
+    #
+    # WRITTEN HERE, NOT AT THE ADMIT LINE BELOW, AND THAT IS DELIBERATE. The admit record is only
+    # reached when the capacity library is present AND the token mint succeeds; a run that admits
+    # without a token would then carry no value and A6 would refuse a recovery whose probe had in
+    # fact measured zero. The probe is the thing that knows, so the probe's own success is the
+    # occasion. And when SOURCE_PANE is unset the probe never runs at all — no record is written,
+    # A6 stays closed, and that is the honest answer rather than a zero nobody measured.
+    lrh_ki="$(printf '%s\n' "$out" | sed -n 's/^live_subagents: \([0-9][0-9]*\)$/\1/p' | tail -1)"
+    if [[ -n "$lrh_ki" ]]; then
+      echo "lr-handoff: precheck measured ${lrh_ki} in-flight subagent(s) the recycle will kill (killed_inflight=$lrh_ki)" >&2
+      lrh_state probed precheck "killed_inflight=$lrh_ki"
+    else
+      # LOUD, because the silence is what A6 reads as a refusal. A probe that returned rc 0 without
+      # its own count line is a contract change in handoff-fire.sh, not a quiet degradation.
+      echo "lr-handoff: WARNING — the recycle precondition probe printed no 'live_subagents:' line, so killed_inflight is UNRECORDED and lr-ingest-verify's clause A6 will refuse the fast path" >&2
     fi
   fi
   # THE CAPACITY DECISION, TAKEN ONCE. One evaluation, no wait: the fleet driver owns the waiting
