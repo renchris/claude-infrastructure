@@ -6860,12 +6860,20 @@ if [ "${1:-}" = "__recycle" ]; then
   # Resume mode (LIMIT_RECOVER_100P): $10-$12 are the TARGET config dir, the sid being resumed and
   # the engagement baseline. Positional-last + optional, like every argument above them.
   RCY_RESUME_CFG="${10:-}"; RCY_RESUME_SID="${11:-}"; RCY_T0="${12:-}"
-  # $16: THIS RUN's submit token (W3), positional-last + optional like every argument above it. It is
+  # $15: THIS RUN's submit token (W3), positional-last + optional like every argument above it. It is
   # resolved in the FOREGROUND, out of the launcher the recycle is about to type, and handed over only
   # when the launcher provably carries it in the PROMPT as well as in its export block — see the
   # arming side. Empty here means "measure engagement on wall-clock alone", which is the pre-W3
   # behaviour and is strictly weaker: a stale notification turn satisfies it.
-  RCY_SUBMIT_TOKEN="${16:-}"
+  #
+  # 🚨 THE INDEX IS THE 15th ARG AFTER `__recycle`, AND IT WAS WRITTEN AS 16. Count the detach line:
+  # __recycle·SID·tty·cmdfile·LAUNCH_DIR·old_sid·MARKER·GOAL·prompt·RESUME_CFG·source_sid·T0·SRC_TX·
+  # RUN_DIR·TOKEN. Reading $16 read an argument nothing sends, so the token was ALWAYS empty and the
+  # whole token arm — the probe, the recycle-submitted row, the strict oracle — was INERT on every
+  # run while every test stayed green. tests/lr-fire-resume-submit.bats now EXECUTES this parse over
+  # that argv rather than grepping for the constant, because the grep that used to guard it pinned
+  # the wrong constant and went RED on the fix.
+  RCY_SUBMIT_TOKEN="${15:-}"
   IT2="$HOME/.claude/bin/it2"
   echo "→ armed: __recycle pid=$$ pgid=$(ps -o pgid= -p $$ | tr -d ' ') sid=$RSID tty=$TTY_PATH"
   pane_proof "$IT2" "$RSID" __recycle || exit 1
