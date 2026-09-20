@@ -216,6 +216,34 @@ of 166, last occurrence **2026-09-17 22:18:59** (pane 89, `rc-consumer-audit`) �
 landed, with the log confirmed live (last write 2026-09-19 21:47). One day is an anchor, not a
 verdict.
 
+**2026-09-20 — the two windowed rows are now DATED PARKS, and a watch owns their arming.** Read at
+the close-out's own dispatch wave, which fired a worker at `2aa99648bd80` six days before A6 can be
+read. The premise held exactly as filed — nothing was refuted — but the row's DISPOSITION was
+wrong: its sibling `b1432e348362` (D1) had been given a dated park at 03:40:23Z and this row was
+left `open` by omission, so it took 2 dispatch claims in its first 103 minutes (filed 03:16:09Z;
+claims 04:54:02Z and 04:59:30Z) over a window unreadable until 2026-09-26. `blocked` is what
+removes a row from the wave — `cc-dispatch` filters `status=="open"` at step 1 and its own comment
+calls it "the re-dispatch loop `blocked` exists to break" — and the park was verified by replaying
+that filter verbatim (`dispatchable_matches=0`), not by reading it.
+
+A6's ANCHOR IS EXTENDED, still short of its verdict: `rc=67` all-time = **166**, unchanged from the
+pre-fix baseline of 166; last occurrence still **2026-09-17 22:18:59**; **2026-09-18 and 2026-09-19
+both clean**; log live (last write 2026-09-19 21:47). Two clean days, not one — and not the week A6
+asks for.
+
+**The park created the other half of the problem, so it ships with its owner.** Nothing in the tree
+reads a blocked row's `needs` prose, so a dated park is invisible on the day it becomes actionable
+— the `filed-blocker-is-never-revalidated` class, and the reason a park can be an abandonment
+wearing a disposition's clothes. `scripts/dated-park-arm.sh` (+ `tests/dated-park-arm.bats`, 10
+cases, 4 of them mutants) is the standing watch, wired as `autonomy-sweep` **§2b-iii-c** above the
+`nothing-new` gate: it PAGES the desk when a park's date arrives and touches no store. It is NOT
+stored as a `--falsifier` and must never be — exit 0 means "this row just became ACTIONABLE", which
+`cc-premise` reads as "close it", which is the inversion D1 shipped and this plan's close-out
+cleared (`docs/lessons/arming-and-mootness-cannot-share-one-falsifier.md`). It covers D1 too.
+
+So A5 and A6 are not waiting on anyone's memory: `2aa99648bd80` arms 2026-09-26 (read A6, then
+re-park it for A5) and `b1432e348362` arms 2026-10-03.
+
 ## Decisions and why
 
 - **Why no actuator is added anywhere.** Every candidate actuator (timer, idle count, sweeper,
