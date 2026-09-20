@@ -119,3 +119,30 @@ file added by that land gets no symlink from it. In this case that was correct a
 from `~/.claude`, and `install.sh` globs `scripts/*.sh|*.py` top-level with explicit cases for
 `lib/` and `limit-recover/` but none for `checks/`), so `kitty-equalize-verify.py` is unlinked BY
 DESIGN. Check the siblings before forcing a link — the absence and the defect look identical.
+
+## 8. The fourth arrival route — the split chords (closes packet `acfef5ea0753`)
+
+`⌘D` / `⌘⇧D` were the one arrival path §2's three callers did not cover, and an open decision packet
+(`acfef5ea0753`, *"Should ⌘D also equalize every column, so splits never drift into uneven widths?"*)
+was asking exactly that. It is the CHEAPEST of the four: a keybinding already dispatches in the
+FOCUSED tab, so it needs none of the `--self` / `KITTY_WINDOW_ID` plumbing the out-of-band callers
+require. `combine` runs both actions in sequence on that tab:
+
+```
+map cmd+d       combine : launch --location=vsplit … : layout_action equalize
+map cmd+shift+d combine : launch --location=hsplit … : layout_action equalize
+```
+
+**Measured in the sandbox, dispatching the identical combine:** three panes at `114/57/57` →
+`57/57/57/57` — a pane added AND the columns equal, rc 0.
+
+Two parse facts worth keeping, both caught by running kitty's own loader rather than reading:
+
+- **kitty keeps `combine` as ONE action** whose `definition` is the whole string, resolving it at
+  dispatch time. An assertion that counted actions would read `1` and prove nothing, so the guard
+  matches the definition TEXT.
+- **`cmd+shift+d` carries two definitions** — kitty's own macOS `close_window` default and ours —
+  and ours wins only because a user config loads after the defaults. That is the same
+  last-one-wins hazard `tests/kitty-conf-bindings.bats` was written around; the guard here reads
+  `v[-1]` for exactly that reason.
+

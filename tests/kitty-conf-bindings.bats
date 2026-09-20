@@ -179,7 +179,11 @@ band_disarmed()  { grep -q '^# DISARMED-map cmd+' "$CONF"; }
   # -F, not a regex: the expected definition carries a literal ${HOME}. kitty stores the launch
   # definition VERBATIM and expands it only at launch time, so this stays independent of the
   # fixtured HOME — but it must be matched as text, and the single quotes stop the shell too.
-  echo "$output" | grep -qxF 'cmd_d_last=launch --location=vsplit --cwd=current ${HOME}/.claude/bin/kitty-split-cwd.sh' || { echo "$output"; false; }
+  # The chord is a `combine` since 2026-09-19: the split, then `layout_action equalize`, because a
+  # pane ARRIVING halves whatever it lands beside and kitty has no on_window_added hook. kitty keeps
+  # a combine as ONE action whose definition is the whole string (cmd_d_n stays 1) and resolves it at
+  # dispatch, so this still matches a single whole line — and still proves the launch half verbatim.
+  echo "$output" | grep -qxF 'cmd_d_last=combine : launch --location=vsplit --cwd=current ${HOME}/.claude/bin/kitty-split-cwd.sh : layout_action equalize' || { echo "$output"; false; }
 }
 
 @test "cmd+shift+d splits horizontally and NOT close_window — the last-wins inversion guard" {
@@ -191,7 +195,10 @@ band_disarmed()  { grep -q '^# DISARMED-map cmd+' "$CONF"; }
   # would be redundant — and the destructive case is proven positively by the MUTANT CONTROL below,
   # which is stronger evidence than a negative that can pass for the wrong reason.
   # The helper tail and the -F are load-bearing for the same reasons given on ⌘D above.
-  echo "$output" | grep -qxF 'cmd_shift_d_last=launch --location=hsplit --cwd=current ${HOME}/.claude/bin/kitty-split-cwd.sh' || { echo "$output"; false; }
+  # Combine form since 2026-09-19 (see ⌘D above). The inversion guard is UNWEAKENED: an exact
+  # whole-line match on a string beginning `combine : launch --location=hsplit` excludes
+  # close_window exactly as the bare launch form did, and the MUTANT CONTROL below still proves it.
+  echo "$output" | grep -qxF 'cmd_shift_d_last=combine : launch --location=hsplit --cwd=current ${HOME}/.claude/bin/kitty-split-cwd.sh : layout_action equalize' || { echo "$output"; false; }
 }
 
 @test "MUTANT CONTROL: dropping our cmd+shift+d line lets close_window win, and the guard sees it" {

@@ -175,3 +175,46 @@ sys.exit(1 if bad else 0)
 PY
   [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
+
+# The split CHORDS are the fourth arrival route and the cheapest: a keybinding already dispatches in
+# the FOCUSED tab, so it needs none of the --self/KITTY_WINDOW_ID plumbing the out-of-band callers do.
+# kitty keeps `combine` as ONE action whose definition is the whole string and resolves it at dispatch
+# time, so the assertion is on the definition TEXT, not on an action count.
+chord_defs() {
+  CC_TEST_CONF="$1" "$KITTY" +runpy '
+def main():
+    import os
+    from kitty.config import load_config
+    o = load_config(os.environ["CC_TEST_CONF"])
+    km = o.keyboard_modes[""].keymap
+    targets = (("cmd_d", 8, 100), ("cmd_shift_d", 9, 100))
+    for t in targets:
+        label = t[0]; mods = t[1]; key = t[2]
+        for k in km:
+            if getattr(k, "mods", None) == mods and getattr(k, "key", None) == key:
+                v = km[k]
+                # LAST definition wins — kitty ships a macOS default on cmd+shift+d and ours is last
+                # only because a user config loads after the defaults (see kitty-conf-bindings.bats).
+                print(label + "=" + getattr(v[-1], "definition", ""))
+main()'
+}
+
+@test "arrival: the split chords equalize too — the fourth route, and the only one on a keybinding" {
+  [ -x "$KITTY" ] || skip "kitty is not installed"
+  run chord_defs "$CONF"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -q '^cmd_d=combine .*--location=vsplit.*layout_action equalize' || { echo "$output"; false; }
+  echo "$output" | grep -q '^cmd_shift_d=combine .*--location=hsplit.*layout_action equalize' || { echo "$output"; false; }
+}
+
+@test "CONTROL: without the combine the chord carries only the launch — the guard can fail" {
+  [ -x "$KITTY" ] || skip "kitty is not installed"
+  MUT="$BATS_TEST_TMPDIR/chord-mutant.conf"
+  sed -e 's/^map cmd+d       combine : launch /map cmd+d       launch /' \
+      -e 's/ : layout_action equalize$//' "$CONF" > "$MUT"
+  grep -q '^map cmd+d       launch --location=vsplit' "$MUT" || { echo "mutation did not apply"; false; }
+  run chord_defs "$MUT"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  echo "$output" | grep -q '^cmd_d=launch ' || {
+    echo "CONTROL FAILED — the guard cannot distinguish the un-equalized chord:"; echo "$output"; false; }
+}
