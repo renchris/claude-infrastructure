@@ -457,7 +457,11 @@ calls_gate() { grep -qE '^[^#]*[^_a-zA-Z]cc_capacity_admit[[:space:]]' "$1"; }
           CC_BEAT_DIR="$BATS_TEST_TMPDIR/t3-beats" \
           bash -c '. "$1"; . "$2"; lr_capacity_probe_corrected lr-fleet "t3" || true' _ "$LIB" "$LRLIB"
   probe_terms="$(jq -rs 'map(select(.caller=="lr-fleet"))|last|.terms // "?"' "$idl")"
-  [ -n "$probe_terms" ] && [ "$probe_terms" != "?" ] || { cat "$idl"; echo "the probe wrote no row"; false; }
+  # SPLIT, one assertion per AND-OR list (bats-assert-liveness `and-absorbed`): a non-last
+  # element's failure is absorbed, and the two states demand different reads — NO row at all
+  # (the probe never ran) versus a row whose `terms` field is missing (it ran and said nothing).
+  [ -n "$probe_terms" ] || { cat "$idl"; echo "the probe wrote NO row at all"; false; }
+  [ "$probe_terms" != "?" ] || { cat "$idl"; echo "the probe wrote a row with no terms field"; false; }
   # ── launcher side: the gate CALL's own env prefix, evaluated
   # ANCHOR ON THE CALL, NOT ON THIS WAVE'S SPELLING OF ITS PREFIX. Taking the `if ! …` line that
   # opens the invocation and everything down to the call itself works on the one-line form this

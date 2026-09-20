@@ -543,8 +543,11 @@ SH
   # THE WATCHER'S OWN CLOCK is the subject — its elapsed is measured from the moment it typed, so it
   # excludes this fixture's arming and pane-probe overhead, which is not what the 3 s claim is about.
   el="$(printf '%s\n' "$output" | sed -n 's/.*no claude process within \([0-9]*\)s.*/\1/p' | tail -1)"
-  [ -n "$el" ] && [ "$el" -le 3 ] \
-    || { echo "the watcher took ${el:-?}s to read an rc that was on disk before it looked: $output"; false; }
+  # SPLIT (bats-assert-liveness `and-absorbed`): "the watcher printed no elapsed at all" and
+  # "it printed one and it was too big" are different failures — the first says the message
+  # shape moved, the second says the watcher was slow.
+  [ -n "$el" ] || { echo "the watcher printed no elapsed — its message shape moved: $output"; false; }
+  [ "$el" -le 3 ] || { echo "the watcher took ${el}s to read an rc that was on disk before it looked: $output"; false; }
   [ $((t1 - t0)) -le 15 ] || { echo "the whole run took $((t1 - t0))s: $output"; false; }
   [[ "$output" == *"FAILED:relaunch:rc=9"* ]] || { echo "$output"; false; }
   row="$(grep '"class":"recycle-dead"' "$HOME/.claude/logs/handoffs.jsonl" | tail -1)"
@@ -589,8 +592,12 @@ SH
   # everything, docs/lessons/absent-range-endpoint-selects-everything).
   start="$(grep -n 'shell-prompt settle after claude exits' "$HF" | head -1 | cut -d: -f1)"
   end="$(grep -n 'THE ONE SILENT TERMINAL ARM' "$HF" | head -1 | cut -d: -f1)"
-  [ -n "$start" ] && [ -n "$end" ] && [ "$end" -gt "$start" ] \
-    || { echo "the boot region's anchors moved (start=$start end=$end) — re-pin this case"; false; }
+  # SPLIT (bats-assert-liveness `and-absorbed`): each anchor names itself, so a re-pin knows
+  # WHICH end moved. An absent endpoint does not fail a range selection, it INVERTS it
+  # (docs/lessons/absent-range-endpoint-selects-everything), so both must be asserted.
+  [ -n "$start" ] || { echo "the boot region's START anchor moved — re-pin this case"; false; }
+  [ -n "$end" ] || { echo "the boot region's END anchor moved — re-pin this case"; false; }
+  [ "$end" -gt "$start" ] || { echo "the boot region's anchors crossed (start=$start end=$end) — re-pin this case"; false; }
   n="$(awk -v a="$start" -v b="$end" 'NR>a && NR<b' "$HF" | grep -c 'it2_type_verified' || true)"
   [ "$n" = 1 ] || { echo "the resume-mode boot region types $n times, not 1 — the retype is back"; false; }
   ! awk -v a="$start" -v b="$end" 'NR>a && NR<b' "$HF" | grep -q 'retyping once' \
