@@ -162,6 +162,28 @@ row() { printf '{"paneUUID":"%s","session_id":"%s"}\n' "$PANE" "$1" > "$REGDIR/$
 # on the tty — the pre-fix success condition — so these tests assert what the watcher does once
 # process-birth is already satisfied.
 
+# ── WALL CLOCK, BANDED ────────────────────────────────────────────────────────────────────────────
+#
+# The watcher cases below are driven with RCY_ENGAGE_TIMEOUT as a knob, and in one of them that knob
+# is a SUCCESS window: the case is green only if a positive verdict lands inside it. A window sized
+# on a quiet box can only convict the box on a contended one (docs/lessons/bound-must-fit-the-band-
+# not-the-bench.md), so it is scaled by measured load/core, and the load is PRINTED on every watcher
+# case so a red in this block can be attributed to a diff rather than to the morning.
+#
+# The dead-path windows are deliberately NOT scaled: there the budget decides how long the watcher
+# waits before giving up, and the verdict under test is what it says AFTERWARDS — widening it buys
+# nothing and costs the difference. Neither is there an outer `timeout` anywhere in this file, so
+# unlike the executed-expect block in tests/lr-fire-resume-submit.bats these cases can be slow but
+# cannot be KILLED mid-assertion.
+lr_load_per_core() {
+  /usr/bin/python3 -c 'import os; print("%.2f" % (os.getloadavg()[0] / (os.cpu_count() or 1)))' \
+    2>/dev/null || echo 0
+}
+lr_engage_window() { # $1 = the QUIET-BOX success window in seconds → the window for THIS box
+  LC_ALL=C awk -v b="$1" -v l="$(lr_load_per_core)" \
+    'BEGIN { m = int(l) + 1; if (m > 8) m = 8; printf "%d", b * m }'
+}
+
 watcher_setup() {
   SHIM="$BATS_TEST_TMPDIR/shim"; mkdir -p "$SHIM"
   # PHASE-AWARE ps. The watcher's real sequence is: wait until CC is GONE (the typed /exit landing),
@@ -181,6 +203,7 @@ watcher_setup() {
   # a zsh prompt, never at a tty with no processes at all. Every assertion below is unchanged.
   # Only the ROOT query (`-o pid= -t`) advances the phase — every other form must describe the SAME
   # instant, or one state read would be answered out of two different process tables.
+  echo "# watcher case at load/core $(lr_load_per_core)" >&3
   export PS_COUNT_FILE="$BATS_TEST_TMPDIR/ps-count"; rm -f "$PS_COUNT_FILE"
   cat > "$SHIM/ps" <<'SH'
 #!/usr/bin/env bash
@@ -266,7 +289,7 @@ SH
   printf '%s\n' \
     '{"type":"user","message":{"content":"brief <!-- handoff-fire recycle engagement marker: MK-9 (ignore) -->"}}' \
     '{"type":"assistant","message":{"content":"continuing"}}' > "$PROJDIR/$NEW_SID.jsonl"
-  run env HOME="$H" PATH="$SHIM:$PATH" RCY_ENGAGE_TIMEOUT=6 RCY_ENGAGE_INTERVAL=1 \
+  run env HOME="$H" PATH="$SHIM:$PATH" RCY_ENGAGE_TIMEOUT="$(lr_engage_window 6)" RCY_ENGAGE_INTERVAL=1 \
       IT2_BIN="$H/.claude/bin/it2" \
       bash "$HF" __recycle "$PANE" /dev/ttys999 "$CMDF" /tmp "$OLD_SID" "MK-9"
   [ "$status" -eq 0 ]
