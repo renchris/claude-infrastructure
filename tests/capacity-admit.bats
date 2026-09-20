@@ -955,6 +955,23 @@ EOF
   # …and the refusal is still RECORDED. A silenced alarm must never become a silent refusal.
   [ "$(idl_first 'select(.caller=="cA1c")|.basis')" = "token-stale" ] \
     || { echo "basis: $(idl_first 'select(.caller=="cA1c")|.basis')"; false; }
+  # A CORRUPT COUNTER MUST NOT SILENCE THE ALARM. The occurrence is read back from a file any
+  # process can scribble on, and the counter is an OPERAND of `$(( n + 1 ))`: a 20-digit value there
+  # wraps to 7766279631452241921, which is not `-le 1`, so the FIRST page — the one that matters —
+  # is suppressed and the terminal state becomes silent. Garbage must fail toward the alarm.
+  : > "$BATS_TEST_TMPDIR/pages.txt"
+  dir="$BATS_TEST_TMPDIR/a1d"; mkdir -p "$dir"
+  tok="$(mint sid-a1d "$dir/tok")"
+  mkdir -p "$CC_ADMIT_STATE_DIR/terminal"
+  set -- "$dir"/tok
+  printf '%s\n' 99999999999999999999 > "$CC_ADMIT_STATE_DIR/terminal/sid-a1d.$(cut -f1 "$1").terminal"
+  chmod 555 "$dir"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=0.01 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-a1d \
+               cc_capacity_admit cA1d "s"' _ "$LIB" "$tok"
+  chmod 755 "$dir"
+  [ "$status" -eq 9 ] || { echo "rc=$status"; echo "$output"; false; }
+  [ -s "$BATS_TEST_TMPDIR/pages.txt" ] \
+    || { echo "a corrupt occurrence counter SILENCED the terminal alarm"; false; }
 }
 
 @test "15ac A3 EQUIVALENCE GUARD, MUTANT-SCORED — under env -i the TTL is the LITERAL sum" {
@@ -1176,4 +1193,50 @@ EOF
   [ -e "$dir/unrelated" ] || { echo "the sweep removed a file that is not a claim"; false; }
   [ -L "$dir/tok.claim.7.link" ] || { echo "the sweep removed a SYMLINK named like a claim"; false; }
   [ -e "$dir/real-target" ] || { echo "the sweep followed a symlink and removed its TARGET"; false; }
+}
+
+@test "04d A2/§9 an OUT-OF-RANGE budget cannot make the bound UNBOUNDED — the law is case 4's" {
+  # Case 4 pins §9's law ("no gate on an actuation path may be unbounded") and this file's header
+  # calls it the central property under test. MEASURED 2026-09-20 on the parent:
+  # CC_ADMIT_BUDGET=999999999999999999999 is all digits, so the charset test passed, and
+  # `[ "$n" -gt "$budget" ]` then ERRORED rc 2 (`[: …: integer expected`) which `if` reads as a
+  # clean false — the counter climbed forever and the release NEVER fired. EIGHT consecutive
+  # refusals, against a control at budget 3 that released on the fourth. §9's law defeated by a
+  # typo, in the one gate whose whole justification is that law.
+  local i rcs=""
+  for i in 1 2 3 4 5 6 7 8; do
+    run bash -c '. "$1"; CC_ADMIT_BUDGET=999999999999999999999 CC_ADMIT_LOADAVG_OVERRIDE=99 \
+                 cc_capacity_admit c04d "s"' _ "$LIB"
+    rcs="$rcs$status "
+  done
+  [[ "$rcs" == *"0 "* ]] \
+    || { echo "eight refusals and no release ($rcs) — an unreadable budget made the gate UNBOUNDED"; false; }
+  # …and it is UNTRACKABLE ⇒ ADMIT, the documented direction, not a refusal on our own bad wiring.
+  [ "${rcs%% *}" = 0 ] || { echo "the first evaluation returned ${rcs%% *}, not the fail-open admit"; false; }
+  [ "$(idl_first 'select(.caller=="c04d")|.basis')" = "fail-open" ] \
+    || { echo "basis: $(idl_first 'select(.caller=="c04d")|.basis')"; false; }
+  # the shell-level symptom itself
+  [[ "$output" != *"integer expected"* ]] || { echo "$output"; false; }
+  # CONTROL — a sane budget still bounds exactly where case 4 says it does, so the range check has
+  # not simply disabled the bound it was meant to protect.
+  rcs=""
+  for i in 1 2 3 4; do
+    run bash -c '. "$1"; CC_ADMIT_BUDGET=3 CC_ADMIT_LOADAVG_OVERRIDE=99 cc_capacity_admit c04d2 "s"' _ "$LIB"
+    rcs="$rcs$status "
+  done
+  [ "$rcs" = "9 9 9 0 " ] || { echo "the bound moved: $rcs (expected 9 9 9 0)"; false; }
+  # THE COUNTER IN THE STATE FILE IS THE SAME OPERAND, and it is the one an outside process can
+  # corrupt. MEASURED on the parent with a 20-digit value seeded there: `$(( n + 1 ))` wrapped to
+  # 7766279631452241921, which is `-gt 3`, so the very FIRST refusal RELEASED — a spawn forced
+  # through on garbage state, plus a page, plus the counter reset to 3. rcs read `0 9 9 9`.
+  mkdir -p "$CC_ADMIT_STATE_DIR"
+  printf '%s
+' 99999999999999999999 > "$CC_ADMIT_STATE_DIR/c04d3.refusals"
+  rcs=""
+  for i in 1 2 3 4; do
+    run bash -c '. "$1"; CC_ADMIT_BUDGET=3 CC_ADMIT_LOADAVG_OVERRIDE=99 cc_capacity_admit c04d3 "s"' _ "$LIB"
+    rcs="$rcs$status "
+  done
+  [ "$rcs" = "9 9 9 0 " ] \
+    || { echo "a corrupt counter forced a spawn through: $rcs (expected 9 9 9 0)"; false; }
 }
