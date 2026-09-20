@@ -48,6 +48,31 @@ mksock() {
   [ -S "$1" ]
 }
 
+# A socket that ACCEPTS but never answers — a LIVE kitty too busy to reply, which is the fixture the
+# timeout sub-state is about (item e9bea40e7af8). The distinction from mksock above is exactly one
+# syscall: mksock binds and never listens, so connect(2) is REFUSED — measured on kitty 0.48.2 to be
+# byte-identical to what a SIGKILLed kitty's leftover socket file does. Held open by a BACKGROUND
+# process on purpose: the listener closes when python exits, and a closed socket refuses again.
+mklistener() {
+  /usr/bin/python3 -c '
+import os, socket, sys, time
+d, b = os.path.split(os.path.abspath(sys.argv[1]))
+os.chdir(d)
+s = socket.socket(socket.AF_UNIX)
+s.bind(b)
+s.listen(16)   # never accept() — connect still succeeds off the backlog, as a saturated kitty does
+time.sleep(600)
+' "$1" </dev/null >/dev/null 2>&1 &
+  LISTENER_PID=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -S "$1" ] && break; sleep 0.1; done
+  [ -S "$1" ]
+}
+
+teardown() {
+  [ -n "${LISTENER_PID:-}" ] && kill "$LISTENER_PID" 2>/dev/null || true
+  return 0
+}
+
 setup() {
   # test-hermeticity-lint rule 2: this file names handoff-fire, so the fire capacity gate is pinned
   # OFF — an unpinned suite goes red by LOAD rather than by its subject.
@@ -69,6 +94,12 @@ setup() {
   # hf_bounded passthrough — these tests extract INDIVIDUAL functions, so the real helper is not in
   # scope. Its own semantics live in tests/handoff-fire-it2-bound.bats.
   hf_bounded() { "$@"; }
+  # kitty_socket_accepting bounds itself by seconds, so the caller-named form needs a stub too.
+  hf_bounded_s() { shift; "$@"; }
+
+  # The retry's WALL CLOCK is not the subject of any case here, and a real backoff would add seconds
+  # per test for nothing. The COUNT of attempts is asserted instead, which is the load-bearing half.
+  export CC_REMOTE_PANE_TERM_BACKOFF_S=0
 
   STUB="$BATS_TEST_TMPDIR/bin"; mkdir -p "$STUB"
   KLOG="$BATS_TEST_TMPDIR/kitty.log"; : > "$KLOG"; export KLOG
@@ -98,7 +129,11 @@ if [ "$1" = "--to" ]; then
   shift 2
 fi
 case "$1" in
-  ls) [ "${KFAKE_KITTY_RC:-0}" = 0 ] || exit "$KFAKE_KITTY_RC"; cat "${KFAKE_LS:-/dev/null}" ;;
+  ls)
+    # KFAKE_FAIL_ONCE models a LOAD SPIKE: the first `ls` times out, the next one answers. It is the
+    # only fixture under which a retry can be shown to buy anything.
+    if [ -n "${KFAKE_FAIL_ONCE:-}" ] && [ ! -e "$KFAKE_FAIL_ONCE" ]; then : > "$KFAKE_FAIL_ONCE"; exit 1; fi
+    [ "${KFAKE_KITTY_RC:-0}" = 0 ] || exit "$KFAKE_KITTY_RC"; cat "${KFAKE_LS:-/dev/null}" ;;
   *)  exit 64 ;;
 esac
 FAKE
@@ -140,10 +175,13 @@ FAKE
   x_socks="$(sed -n '/^kitty_sockets() {/,/^}/p' "$HF")";                [ -n "$x_socks" ]
   x_tmpl="$(sed -n '/^kitty_socket_template() {/,/^}/p' "$HF")";         [ -n "$x_tmpl" ]
   x_ans="$(sed -n '/^kitty_socket_answers() {/,/^}/p' "$HF")";           [ -n "$x_ans" ]
+  x_acc="$(sed -n '/^kitty_socket_accepting() {/,/^}/p' "$HF")";         [ -n "$x_acc" ]
+  x_say="$(sed -n '/^hf_remote_pane_term_say() {/,/^}/p' "$HF")";        [ -n "$x_say" ]
   x_field="$(sed -n '/^kt_window_field() {/,/^}/p' "$HF")";              [ -n "$x_field" ]
   x_term="$(sed -n '/^hf_remote_pane_term() {/,/^}/p' "$HF")";           [ -n "$x_term" ]
   x_pin="$(sed -n '/^pin_term_verdict_for_watcher() {/,/^}/p' "$HF")";   [ -n "$x_pin" ]
   eval "$x_kt"; eval "$x_socks"; eval "$x_tmpl"; eval "$x_ans"; eval "$x_field"
+  eval "$x_acc"; eval "$x_say"
   eval "$x_term"; eval "$x_pin"
 
   clean_term
@@ -336,4 +374,162 @@ clean_term() { unset CC_TERM CC_TERM_KITTY_TO KITTY_WINDOW_ID ITERM_SESSION_ID I
   export ITERM_SESSION_ID="w0t0p0:E5D77446-0000-0000-0000-000000000000"
   hf_remote_pane_term 110 || false
   [ "$CC_TERM" = kitty ]
+}
+
+# ── the rc-3 SUB-STATES: a dead socket and a slow one (item e9bea40e7af8) ───────────────────────
+#
+# rc 3 stays ONE code — three states is the contract the callers and the sibling suites are written
+# against, and both sub-states below are still PARK. What splits is the SENTENCE, because the two
+# demand different operator actions: "there is no terminal here" versus "come back when the box is
+# quieter". THE INCIDENT, 2026-09-20: kitty pid 73832 alive 3d8h, allow_remote_control socket-only,
+# /tmp/kitty-73832 present and ACCEPTING, load 197 on 10 cores — and `kitty @ ls` returned
+# `read unix: i/o timeout` while the verdict read "no terminal control socket answered at all".
+# Two husk panes (110, 126) could not be retired behind it.
+#
+# THE DISCRIMINATOR IS connect(2), NOT THE MESSAGE TEXT. Measured on kitty 0.48.2 the same day: the
+# client exits 1 for BOTH causes, so the rc carries nothing; its wording differs but is a
+# version-drifting string (memory: error-wording-drifts-between-versions). The kernel's answer to
+# connect(2) cannot drift — refused for a leftover file, accepted for a live-but-silent server.
+#
+# WHICH OF THESE ARE RED-PROOFS, stated because "all ten went red against the pre-fix script" would
+# overclaim: measured against origin/main's handoff-fire.sh, four of them (the no-socket control, the
+# empty-ps case, the no-retry-on-a-dead-socket case, the happy-path ask count) assert behaviour that
+# is UNCHANGED by the fix and red only because setup cannot extract a function that does not exist
+# yet. Those are EQUIVALENCE GUARDS — they pin what must not move — and are labelled as such rather
+# than counted as evidence. The genuine red-proofs are the timeout classification, the two-wording
+# case and the retry.
+
+@test "THE ITEM: a socket that ACCEPTS but does not answer is a TIMEOUT, not an absent resolver" {
+  rm -f "$SOCKDIR/kitty-4242"; mklistener "$SOCKDIR/kitty-4242"
+  export KFAKE_KITTY_RC=1              # the client rc for BOTH causes — it cannot discriminate
+  export CC_REMOTE_PANE_TERM_TRIES=1   # the retry is its own case below; this one is the verdict
+  set +e; hf_remote_pane_term 110; rc=$?; set -e
+  [ "$rc" -eq 3 ]
+  [ "$HF_REMOTE_PANE_UNAVAIL_WHY" = timeout ]
+  [ "$HF_REMOTE_PANE_UNAVAIL_SOCK" = "unix:$SOCKDIR/kitty-4242" ]
+  # Invariant 3 is undisturbed: a parking caller still inherits no half-pinned terminal.
+  [ -z "${CC_TERM:-}" ]
+  [ -z "${CC_TERM_KITTY_TO:-}" ]
+}
+
+@test "RED-PROOF CONTROL: the same failure over a NON-listening socket stays no-socket" {
+  # setup's mksock binds without listen(), which is what a SIGKILLed kitty's leftover file does.
+  # If this ever reads `timeout` the case above proves nothing — the classifier would be answering
+  # "the query failed" rather than "the socket is alive".
+  export KFAKE_KITTY_RC=1
+  set +e; hf_remote_pane_term 110; rc=$?; set -e
+  [ "$rc" -eq 3 ]
+  [ "$HF_REMOTE_PANE_UNAVAIL_WHY" = no-socket ]
+  [ -z "$HF_REMOTE_PANE_UNAVAIL_SOCK" ]
+}
+
+@test "no live kitty at all still classifies as no-socket, never as a timeout" {
+  export KFAKE_PS=""
+  set +e; hf_remote_pane_term 110; rc=$?; set -e
+  [ "$rc" -eq 3 ]
+  [ "$HF_REMOTE_PANE_UNAVAIL_WHY" = no-socket ]
+}
+
+@test "the two rc-3 sub-states get DIFFERENT wording, and NEITHER of them says ABSENT" {
+  export CC_REMOTE_PANE_TERM_TRIES=1
+  export KFAKE_KITTY_RC=1
+
+  # (a) the leftover file — today's sentence, now also asserting connect(2) was consulted.
+  set +e; hf_remote_pane_term 110; set -e
+  run hf_remote_pane_term_say 3 110 self-close
+  [ "$status" -eq 0 ]
+  dead="$output"
+  run bash -c 'printf "%s" "$1" | grep -c "REMOTE-PANE-RESOLVER-UNAVAILABLE"' _ "$dead"
+  [ "$output" -ge 1 ]
+  run bash -c 'printf "%s" "$1" | grep -c "accept a connection"' _ "$dead"
+  [ "$output" -ge 1 ]
+
+  # (b) the item's own case — a live socket, a silent server.
+  rm -f "$SOCKDIR/kitty-4242"; mklistener "$SOCKDIR/kitty-4242"
+  clean_term
+  set +e; hf_remote_pane_term 110; set -e
+  run hf_remote_pane_term_say 3 110 self-close
+  [ "$status" -eq 0 ]
+  slow="$output"
+  run bash -c 'printf "%s" "$1" | grep -c "REMOTE-PANE-RESOLVER-TIMEOUT"' _ "$slow"
+  [ "$output" -ge 1 ]
+  run bash -c 'printf "%s" "$1" | grep -c "ACCEPTING"' _ "$slow"
+  [ "$output" -ge 1 ]
+
+  # The sentences must actually DIFFER — one wording for two states is the defect being cured.
+  [ "$dead" != "$slow" ]
+
+  # …and the PARK/ABSENT contract survives the split: neither sub-state may borrow the pane verdict,
+  # and both must still tell the reader not to conclude the pane is gone.
+  run bash -c 'printf "%s\n%s" "$1" "$2" | grep -c "REMOTE-PANE-ABSENT"' _ "$dead" "$slow"
+  [ "$output" = "0" ]
+  run bash -c 'printf "%s\n%s" "$1" "$2" | grep -c "never conclude the pane is gone"' _ "$dead" "$slow"
+  [ "$output" = "2" ]
+}
+
+# ── the retry: the second half of "should say TIMEOUT and be RETRYABLE" ─────────────────────────
+
+@test "THE RETRY: an accepting-but-silent socket is RE-ASKED, and a later answer RESOLVES it" {
+  # A load spike is a MOMENT, not a state: the same box that read 197 answered in 0.06 s at load 17
+  # four days later. Parking on the first timeout is what stranded the two husk panes.
+  rm -f "$SOCKDIR/kitty-4242"; mklistener "$SOCKDIR/kitty-4242"
+  export KFAKE_FAIL_ONCE="$BATS_TEST_TMPDIR/failonce"
+  hf_remote_pane_term 110 || false
+  [ "$CC_TERM" = kitty ]
+  [ "$CC_TERM_KITTY_TO" = "unix:$SOCKDIR/kitty-4242" ]
+  # …and it took more than one ask to get there, so the resolution IS the retry's doing.
+  n="$(grep -c ' ls$' "$KLOG")"
+  [ "$n" -ge 2 ]
+}
+
+@test "the retry is BOUNDED — it stops at CC_REMOTE_PANE_TERM_TRIES over a genuinely wedged kitty" {
+  rm -f "$SOCKDIR/kitty-4242"; mklistener "$SOCKDIR/kitty-4242"
+  export KFAKE_KITTY_RC=1
+  export CC_REMOTE_PANE_TERM_TRIES=3
+  set +e; hf_remote_pane_term 110; rc=$?; set -e
+  [ "$rc" -eq 3 ]
+  n="$(grep -c ' ls$' "$KLOG")"
+  [ "$n" -eq 3 ]
+  [ "$HF_REMOTE_PANE_UNAVAIL_TRIES" -eq 3 ]
+}
+
+@test "CC_REMOTE_PANE_TERM_TRIES=1 disables the retry outright — one ask, today's behaviour" {
+  rm -f "$SOCKDIR/kitty-4242"; mklistener "$SOCKDIR/kitty-4242"
+  export KFAKE_KITTY_RC=1
+  export CC_REMOTE_PANE_TERM_TRIES=1
+  set +e; hf_remote_pane_term 110; rc=$?; set -e
+  [ "$rc" -eq 3 ]
+  n="$(grep -c ' ls$' "$KLOG")"
+  [ "$n" -eq 1 ]
+  [ "$HF_REMOTE_PANE_UNAVAIL_TRIES" -eq 1 ]
+}
+
+@test "a NON-listening socket is never retried — retrying a leftover file can only ever waste time" {
+  export KFAKE_KITTY_RC=1
+  export CC_REMOTE_PANE_TERM_TRIES=3
+  set +e; hf_remote_pane_term 110; rc=$?; set -e
+  [ "$rc" -eq 3 ]
+  n="$(grep -c ' ls$' "$KLOG")"
+  [ "$n" -eq 1 ]
+}
+
+@test "REMOTE-PANE-ABSENT never retries — a definite negative about the pane must not be re-asked" {
+  # rc 1 is terminal by contract ("retrying cannot change it"), and a live socket is present here,
+  # so only the rc check keeps the retry off this path.
+  rm -f "$SOCKDIR/kitty-4242"; mklistener "$SOCKDIR/kitty-4242"
+  export CC_REMOTE_PANE_TERM_TRIES=3
+  set +e; hf_remote_pane_term 999; rc=$?; set -e
+  [ "$rc" -eq 1 ]
+  # exactly one round: the socket probe plus the one enumeration that answered.
+  n="$(grep -c ' ls$' "$KLOG")"
+  [ "$n" -eq 2 ]
+}
+
+@test "a resolvable pane costs NO connect(2) probe — the classifier is on the failure path only" {
+  # The happy path is the common one and must not grow a fork. kitty_socket_accepting is reached
+  # only after an ask has already failed.
+  hf_remote_pane_term 110 || false
+  [ "$CC_TERM" = kitty ]
+  n="$(grep -c ' ls$' "$KLOG")"
+  [ "$n" -eq 2 ]
 }
