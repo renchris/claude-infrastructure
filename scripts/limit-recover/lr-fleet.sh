@@ -106,7 +106,9 @@ lf_now() { date -u +%FT%TZ; }
 # ── LOCATE: the census, disk truth only ──────────────────────────────────────────────────────────
 # One line per limit-blocked session: sid · cfg · account · pane · pid · cwd · tier · disposition.
 # Dispositions: RECOVERABLE (live pane, not transplanted) · TRANSPLANTED (a successor exists elsewhere)
-# · NO-PANE (no live process holds it: the poller's spawn-at-reset domain, or --recover spawns a
+# · HUSK (a LIVE pane on a store the session has already LEFT — the source half of a transplant,
+# retired by --retire-husks and never resumed) · NO-PANE (no live process holds it: the poller's
+# spawn-at-reset domain, or --recover spawns a
 # visible pane for it) · TEAMMATE (lead-owned recovery) · DUPLICATE (more than one live process).
 LIMIT_RE="You've (hit|reached) your (session|weekly|fast|monthly spend|Fable)? ?limit"
 # 'reached'/'Fable' widen a predicate that was blind to the MODEL-SCOPED weekly cap: Fable
@@ -184,13 +186,31 @@ try:
 except Exception: print("-")'
 }
 lf_locate() { # → TSV rows on stdout
-  local cfg tx sid tail rows pane pid acct cwd tier disp n kind kinds err_age _procs
+  local cfg tx sid tail rows pane pid acct cwd tier disp n kind kinds err_age _procs _husk
   while IFS= read -r cfg; do
     [ -n "$cfg" ] || continue
-    for tx in "$cfg"/projects/*/*.jsonl; do
+    # ── the HUSK is enumerated from the `.handed-off` copy too (W10, LIMIT_RECOVER_100P § 10) ──
+    # lr-transplant.sh:98 renames the source transcript `<sid>.jsonl.handed-off` the moment it has
+    # copied it, so `*.jsonl` CANNOT match a transplanted session's SOURCE copy. Measured
+    # 2026-09-19 against all three live husks (panes 110/126/150): the only `.jsonl` left anywhere
+    # for those sids was the successor's, under the target store. THAT glob — not the
+    # last-assistant-word filter below — is the first reason `--locate` listed none of them; both
+    # walls are cleared here, and clearing only one would have landed an inert census arm.
+    # A `.handed-off` copy is enumerated for exactly ONE purpose and is dropped again unless it is
+    # a husk, so the 63 historical ones on this box (against 2,631 live transcripts) cost one lock
+    # stat each and change no other row in the census.
+    for tx in "$cfg"/projects/*/*.jsonl "$cfg"/projects/*/*.jsonl.handed-off; do
       [ -f "$tx" ] || continue
-      sid="$(basename "$tx" .jsonl)"
+      sid="$(basename "${tx%.handed-off}" .jsonl)"
       case "$sid" in agent-*|wf_*) continue ;; esac
+      # HUSK is decided BEFORE the last-assistant-word filter below, so a session that has already
+      # moved cannot drop out of the census the moment its successor takes a real turn. A TEAMMATE
+      # is never a husk: its lead ends it (the teammate close contract), not `--retire-husks`.
+      _husk=0
+      if lr_husk_state "$sid" "$cfg"; then
+        head -c 8000 "$tx" 2>/dev/null | grep '"agentName"' >/dev/null || _husk=1
+      fi
+      case "$tx" in *.handed-off) [ "$_husk" = 1 ] || continue ;; esac
       tail="$(tail -c 20000 "$tx" 2>/dev/null || true)"
       printf '%s' "$tail" | grep -E "$BLOCK_RE" | grep -q '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true' || continue
       IFS=$'\t' read -r kind kinds <<<"$(lf_kinds_of "$tail")"
@@ -209,7 +229,7 @@ for l in sys.stdin:
     c=m.get("content"); txt=c if isinstance(c,str) else " ".join(x.get("text","") for x in (c or []) if isinstance(x,dict))
     if txt.strip()=="No response requested.": continue
     last=bool(d.get("isApiErrorMessage"))
-sys.exit(0 if last else 1)' || continue
+sys.exit(0 if last else 1)' || [ "$_husk" = 1 ] || continue
       acct="$(lf_acct_of_cfg "$cfg")"
       if head -c 8000 "$tx" 2>/dev/null | grep '"agentName"' >/dev/null; then disp=TEAMMATE; pane="-"; pid="-"; cwd="-"; tier="-"
       else
@@ -244,6 +264,11 @@ sys.exit(0 if last else 1)' || continue
       # Naming the STATE rather than the remedy is also what stops the row reading as a standing
       # to-do after the session has already re-engaged, which every measured row did within ~40 min.
       [ "$kind" = network ] && [ "$disp" = RECOVERABLE ] && disp=IDLE-AFTER-ERROR
+      # HUSK outranks every disposition above it FOR THE SOURCE ROW — TRANSPLANTED→ included. The
+      # pane is live, the session is not here any more, and the only action the row names is
+      # retiring that pane. The TARGET row is untouched: lr_husk_state is rc 1 when it is asked
+      # from the successor's own store, exactly as lr_transplanted_to is.
+      [ "$_husk" = 1 ] && disp=HUSK
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$sid" "$cfg" "$acct" "$pane" "$pid" "$cwd" "$tier" "$disp" "$kind" "$kinds" "$err_age"
     done

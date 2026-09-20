@@ -235,6 +235,7 @@ State table (MECE, first match wins; the TSV column is the legacy `lf_locate` di
 |---|---|---|---|
 | UNADDRESSABLE | sid == `?` | (footer count) | — |
 | TEAMMATE | `"agentName"` in head-8 KB of the preferred copy | TEAMMATE | lead-owned (poller `:752`) |
+| HUSK | live row on acct_death ∧ (lock `to` ≠ acct_death ∨ a real assistant turn after death.ts under another account) ∧ no recovery in flight | HUSK | `--retire-husks` |
 | RE-ENGAGED | a real assistant turn after death.ts in any copy | (settled; `--all`) | none |
 | FAULT / CLAIMED-NOT-LIVE | blocked ∧ claim older than `CC_LIMITED_CLAIM_GRACE_S` (120) ∧ no live row for sid on the claimed account ∧ procs == 0 — or `faults/<sid>.json` present | NO-PANE + note | named with claimant · ts · lock/log path |
 | AWAITING-ENGAGE | blocked ∧ live row ∧ acct_now ≠ acct_death | TRANSPLANTED→<acct_now> | one prompt on the successor |
@@ -248,6 +249,35 @@ State table (MECE, first match wins; the TSV column is the legacy `lf_locate` di
 | CWD-GONE | as NO-PANE, cwd missing at read | CWD-GONE | recreate or drop (D8 `:394`) |
 | CARCASS | only `.handed-off` copies, nothing live, no claim | (settled) | history |
 | NO-TRANSCRIPT | no copy anywhere | (footer, named) | — |
+
+**HUSK is a BINDING AMENDMENT from `LIMIT_RECOVER_100P` § 10 W10 (2026-09-19), not a refinement of
+RE-ENGAGED.** It sits ABOVE it because the two describe the same moment from opposite ends and only
+one of them names an action: RE-ENGAGED is a verdict about the SESSION (it is alive somewhere, so
+nothing is owed) and settles the row, while HUSK is a verdict about the PANE the session left behind
+(alive, empty composer, still showing the limit error, holding a window and a worktree). First-match
+ordering would otherwise settle every husk as RE-ENGAGED and no reader would ever reach it.
+
+*Why neither plan modelled it.* Both state models are keyed on the SESSION, and a transplant makes
+one session into two objects with opposite dispositions. Measured 2026-09-19: panes 110 (pid 95369),
+126 (48984) and 150 (17221) were all live in exactly this state, and `--locate` listed none of the
+three while `--duplicates` found all three — a hole in both plans, not a bug in one tool.
+
+*It is NOT the husk `bin/cc-husk-sweep` models.* That one is a bare shell where a session used to be:
+the process is gone and the window remains. This one is the mirror image — the process is real and
+what is stale is its CLAIM on the session — so neither sweeper can see the other's population.
+
+*The in-flight conjunct is load-bearing* (§ 10.3 item 4). `lr-transplant.sh` never deletes the lock
+and the source row stays live until the typed `/exit` lands, so `live row ∧ moved` alone is true of
+every recovery during its own relaunch window. In flight = a live `__recycle` watcher for the pane,
+or a `handoffs.jsonl` row naming the sid younger than `LR_HUSK_MIN_AGE_S` (900 s, the `--await`
+bound). The lock's own mtime is NOT evidence: it is written once, at the start, and never touched.
+
+*Implementation note for the `--tsv` parity gate.* `lr_husk_state` (`lr-lib.sh`) reads the LOCK and
+never a tombstone — a same-account `--mark` writes no lock and must not match — and `lf_locate` also
+had to start enumerating `<sid>.jsonl.handed-off`, because `lr-transplant.sh:98` renames the source
+copy and `*.jsonl` cannot match it. For all three measured husks the only `.jsonl` left anywhere was
+the successor's, so the glob — not the last-assistant-word filter — was the FIRST wall. Kill switch
+`LR_HUSK_RETIRE=off` restores the pre-W10 census byte for byte.
 
 Modes: default per-account grouped screen (actionable rows; settled counted) · `--all` · `--json` · `--tsv` (the 11-field
 `sid cfg acct pane pid cwd tier disp kind kinds err_age` row, byte-compatible) · `--account A` · `--since 24h` (default; seven_day

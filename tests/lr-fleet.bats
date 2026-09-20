@@ -82,12 +82,31 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   [[ "$output" == *"52e35019"*"NO-PANE"* ]] || { echo "$output"; false; }
   [[ "$output" == *"9b9b9b9b"*"TEAMMATE"* ]] || { echo "$output"; false; }
 }
-@test "locate: a session already transplanted (lock names another store, successor on disk) is TRANSPLANTED" {
-  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+# REPOINTED BY THE W9a/W10 MERGE (LIMIT_RECOVER_100P § 10 W10). This test pinned ONE disposition
+# over a fixture that the HUSK state model splits in two, and the split is the whole point of W10:
+# a transplant makes one session into two objects with OPPOSITE dispositions, and which one a row
+# is depends on whether the SOURCE pane is still alive.
+#   live source row  → HUSK          (something is still standing and needs retiring)
+#   no source row    → TRANSPLANTED→ (the move is complete; nothing to act on)
+# The original fixture carried `row 616 "$SID"`, i.e. a LIVE source row, so it was the HUSK case
+# all along and the assertion became an inverted guard the moment the state existed. Both halves
+# are kept as separate tests so neither disposition is left unpinned — an unpinned disposition can
+# be deleted by a later change with every suite still green.
+@test "locate: a transplanted session whose SOURCE pane is gone is TRANSPLANTED" {
+  blocked_tx "$SEC" "$SID"
   printf '{"sid":"%s","from":"%s","to":"%s"}\n' "$SID" "$SEC" "$TER" > "$LR_STATE_DIR/locks/$SID.lock"
   : > "$TER/projects/$SLUG/$SID.jsonl"
   run bash "$FLEET" --locate
   [[ "$output" == *"TRANSPLANTED→"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"HUSK"* ]] || { echo "$output"; false; }
+}
+
+@test "locate: the SAME fixture with a live source row is HUSK, not TRANSPLANTED" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  printf '{"sid":"%s","from":"%s","to":"%s"}\n' "$SID" "$SEC" "$TER" > "$LR_STATE_DIR/locks/$SID.lock"
+  : > "$TER/projects/$SLUG/$SID.jsonl"
+  run bash "$FLEET" --locate
+  [[ "$output" == *"HUSK"* ]] || { echo "$output"; false; }
 }
 @test "locate: two live processes on one sid is DUPLICATE, never RECOVERABLE" {
   blocked_tx "$SEC" "$SID"; row 616 "$SID"; row 647 "$SID"
@@ -715,4 +734,66 @@ teardown() {
   [ "$(printf '%s\n' "$output" | grep -c '^DUPLICATE 52e35019')" -eq 1 ] || { echo "$output"; false; }
   [[ "$output" == *"DUPLICATE 52e35019: 2 registry pane(s)"* ]] || { echo "$output"; false; }
   [[ "$output" != *"no session is held by more than one live process"* ]] || { echo "$output"; false; }
+}
+
+# ══ HUSK — a LIVE pane on a store whose session has already MOVED (W10, LIMIT_RECOVER_100P § 10) ══
+# Measured 2026-09-19: panes 110 (pid 95369), 126 (48984) and 150 (17221) were all live, all still
+# showing the afternoon's weekly-limit error with an empty composer, and `--locate` listed NONE of
+# them while `--duplicates` found all three. TWO walls stood between that state and the census, and
+# clearing either one alone would have landed an inert arm:
+#   1. the GLOB. lr-transplant.sh:98 renames the source `<sid>.jsonl.handed-off`, and `*.jsonl`
+#      does not match it — for all three sids the only `.jsonl` left anywhere was the successor's.
+#   2. the LAST-ASSISTANT-WORD filter, which drops the row the moment the successor takes a turn.
+# The pane id here is unforgeable from outside the fixture: leg (c1) of lr_husk_state reads the REAL
+# process table, and a numeric pane could be named by an unrelated `__recycle` watcher on this box
+# (memory: hermetic-in-stubs-not-in-interpreter).
+husk_lock() { printf '{"sid":"%s","from":"%s","to":"%s"}\n' "$SID" "$SEC" "$TER" > "$LR_STATE_DIR/locks/$SID.lock"
+              : > "$TER/projects/$SLUG/$SID.jsonl"; }
+husk_successor_turn() { printf '{"type":"assistant","timestamp":"2026-09-09T00:52:00.000Z","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"the successor speaking"}]}}\n' >> "$SEC/projects/$SLUG/$SID.jsonl"; }
+
+@test "locate: a live pane whose session has MOVED is HUSK — even after a real turn follows the limit" {
+  blocked_tx "$SEC" "$SID"; husk_successor_turn; row HUSKP-9x7z "$SID"; husk_lock
+  run bash "$FLEET" --locate
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HUSK"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"52e35019"* ]] || { echo "$output"; false; }
+}
+
+# THE RED-PROOF for wall 2: the ONLY difference from the case above is the lock. Without it the row
+# is dropped by the last-assistant-word filter and never reaches a disposition at all, so the case
+# above passes because of the change and not because the fixture was visible anyway.
+@test "locate CONTROL: the same fixture with NO transplant lock prints no row at all" {
+  blocked_tx "$SEC" "$SID"; husk_successor_turn; row HUSKP-9x7z "$SID"
+  run bash "$FLEET" --locate
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"52e35019"* ]] || { echo "$output"; false; }
+}
+
+@test "locate: a source copy renamed .jsonl.handed-off is enumerated when — and only when — it is a HUSK" {
+  blocked_tx "$SEC" "$SID"
+  mv "$SEC/projects/$SLUG/$SID.jsonl" "$SEC/projects/$SLUG/$SID.jsonl.handed-off"
+  row HUSKP-9x7z "$SID"; husk_lock
+  run bash "$FLEET" --locate
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HUSK"* ]] || { echo "$output"; false; }
+}
+
+# THE RED-PROOF for wall 1, and the guard on its blast radius. 63 `.handed-off` copies sit on this
+# box against 2,631 live transcripts; enumerating them would flood the census with settled history
+# if any of them could reach a disposition. One is a husk or it is invisible — there is no third.
+@test "locate CONTROL: a .handed-off copy with a live row but NO lock stays invisible" {
+  blocked_tx "$SEC" "$SID"
+  mv "$SEC/projects/$SLUG/$SID.jsonl" "$SEC/projects/$SLUG/$SID.jsonl.handed-off"
+  row HUSKP-9x7z "$SID"
+  run bash "$FLEET" --locate
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"52e35019"* ]] || { echo "$output"; false; }
+}
+
+@test "locate: LR_HUSK_RETIRE=off returns BOTH arms to the pre-W10 census, byte for byte" {
+  blocked_tx "$SEC" "$SID"; husk_successor_turn; row HUSKP-9x7z "$SID"; husk_lock
+  LR_HUSK_RETIRE=off run bash "$FLEET" --locate
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"HUSK"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"52e35019"* ]] || { echo "$output"; false; }
 }
