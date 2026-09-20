@@ -215,13 +215,30 @@ case "${1:-}" in
       --if-mine) _sc_ifmine=1 ;;
       *) echo "session-continue: unknown flag for clear: ${2} (accepted: --if-mine)" >&2; exit 2 ;;
     esac
+    #
+    # ── AND THE FLAG FAILED OPEN ON AN ABSENT *CALLER* IDENTITY (W3i round 4) ─────────────────────
+    # D6 above removed a refusal keyed on evidence the ARM need not have written. The same shape
+    # survived on the other side of the call: this test also required `[ -n "$_sc_cur" ]`, so a
+    # caller that PASSED `--if-mine` and carried no sid skipped the guard outright and cleared a
+    # stranger's chain — measured, `cleared → …` over a sidA sentinel, `status` `inactive` after.
+    # That is the incident the flag exists to close, re-opened through a MISSING identity instead of
+    # a foreign one. `--if-mine` asks exactly one question — did I arm this? — and a caller with no
+    # identity has already answered it. So the test is now POSITIVE PROOF OF OWNERSHIP rather than
+    # absence of a mismatch: proceed only when the caller names itself AND that name is the one
+    # recorded at arm time. Two empty strings are not a match; `"" != ""` is false, and a bare
+    # inequality would have let an anonymous caller clear an anonymously armed sentinel on a
+    # coincidence of absence.
+    # The bare verb is untouched by all of this: `_sc_ifmine` is 0 without the flag, so the
+    # operator's own park gesture — which carries no sid by construction — never reaches this test.
     _sc_cur="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
     _sc_owner="$(cat "${f}.sid" 2>/dev/null || true)"
-    if [ "$_sc_ifmine" = 1 ] && [ -f "$f" ] && [ -n "$_sc_cur" ] && [ "$_sc_owner" != "$_sc_cur" ]; then
+    if [ "$_sc_ifmine" = 1 ] && [ -f "$f" ] && { [ -z "$_sc_cur" ] || [ "$_sc_owner" != "$_sc_cur" ]; }; then
       SC_SID="$_sc_cur"
       _sc_owner_label="${_sc_owner%%-*}"
       [ -n "$_sc_owner_label" ] || _sc_owner_label="an unidentified armer (no sid was recorded at arm time)"
-      echo "refused — the sentinel armed for this cwd belongs to session ${_sc_owner_label} (you are ${_sc_cur%%-*}); nothing was cleared: $PWD"
+      _sc_cur_label="${_sc_cur%%-*}"
+      [ -n "$_sc_cur_label" ] || _sc_cur_label="a caller that recorded no sid"
+      echo "refused — the sentinel armed for this cwd was armed by ${_sc_owner_label}, not by you (${_sc_cur_label}); nothing was cleared: $PWD"
       log_idl refused "cli-clear-foreign-sid" "$(jq -cn --arg o "$_sc_owner" --arg c "$_sc_cur" --arg w "$PWD" \
         '{owner_sid:$o,session_sid:$c,cwd:$w}' 2>/dev/null)"
       exit 0
