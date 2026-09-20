@@ -315,8 +315,8 @@ sc_stat() { env CLAUDE_CONFIG_DIR="$1" \
   # own-sentinel clear are two separate writes.
   sc_arm "$SRC" "$SID" "still armed at the source key"
   sc_arm "$TGT" "$SID" "still armed at the target key"
-  before_s="$(ls -1 "$SRC/state" 2>/dev/null | sort | md5)"
-  before_t="$(ls -1 "$TGT/state" 2>/dev/null | sort | md5)"
+  before_s="$(ls -1 "$SRC/state" 2>/dev/null | sort | /usr/bin/shasum)"
+  before_t="$(ls -1 "$TGT/state" 2>/dev/null | sort | /usr/bin/shasum)"
   run verify --no-clear
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   # The --no-clear branch now CLASSIFIES what it read instead of blanket-reporting it (W3i C4), so
@@ -325,9 +325,9 @@ sc_stat() { env CLAUDE_CONFIG_DIR="$1" \
   [[ "$output" == *"NOT touched (--no-clear)"* ]] || { echo "$output"; false; }
   [[ "$output" == *"PASS D2 — this session's own sentinel is armed at the target key, NOT touched"* ]] \
     || { echo "$output"; false; }
-  [ "$before_s" = "$(ls -1 "$SRC/state" 2>/dev/null | sort | md5)" ] \
+  [ "$before_s" = "$(ls -1 "$SRC/state" 2>/dev/null | sort | /usr/bin/shasum)" ] \
     || { echo "the read-only mode WROTE into $SRC/state"; ls -la "$SRC/state"; false; }
-  [ "$before_t" = "$(ls -1 "$TGT/state" 2>/dev/null | sort | md5)" ] \
+  [ "$before_t" = "$(ls -1 "$TGT/state" 2>/dev/null | sort | /usr/bin/shasum)" ] \
     || { echo "the read-only mode WROTE into $TGT/state"; ls -la "$TGT/state"; false; }
   run sc_stat "$SRC"
   [[ "$output" == *"still armed at the source key"* ]] || { echo "the source sentinel was disarmed: $output"; false; }
