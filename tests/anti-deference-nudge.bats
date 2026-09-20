@@ -18,6 +18,17 @@ setup() {
   # per-test dir (never the real ~/.claude/autonomy/decisions or the 165MB live IDL).
   export CC_DECISIONS_DIR="$BATS_TEST_TMPDIR/decisions"
   export CC_IDL="$BATS_TEST_TMPDIR/cc-idl.jsonl"
+  # PIN THE SEMANTIC ARM OFF. This suite tests the LEXICAL tells only; the Jev arm has its own
+  # suite (tests/jev-anti-deference-arm.bats), which isolates HOME and drives the mock gateway.
+  # Without this pin the arm's four preconditions (hooks/lib/jev.sh:118-121 — CC_JEV != 0, a key
+  # from env OR `agent-secrets`, scripts/jev/evaluate.mjs, node_modules/ai) are read from the
+  # AMBIENT machine, so the suite passes only on a box that happens to lack one of them. It went
+  # red fleet-wide the moment node_modules/ai was installed beside an agent-secrets key: the arm
+  # runs exactly on no-tell messages, which is precisely this suite's "silent on ..." population,
+  # so 8 assertions flipped with no code change on either side. CC_JEV=0 is the documented kill
+  # switch (jev.sh:56) and the sibling suite's test 5 proves it disables the arm even WITH a key
+  # and a reachable gateway.
+  export CC_JEV=0
 }
 
 # ── git fixtures for the P0-4 (b)/(c) ledger-aware paths (bare origin + working clone) ──
