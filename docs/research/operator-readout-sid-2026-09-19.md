@@ -54,8 +54,29 @@ A narrower alternative — a second, session-scoped `--busy` read purely for the
 read that ALREADY happens here … the reason this costs zero extra forks", under C19, *"no new fork
 may enter render_block"*.
 
-So the remedy is a design question about close-protocol machinery, not a test fix. The patch was
-reverted rather than landed half-verified.
+**RESOLVED the same session — the packet needed no ruling.** The blocker above was stated as "the
+bats ceiling refused the confirming run", which was never irreducible: the hermetic off-box runner
+was working throughout, and test 57's fixture reproduces by hand in one script. Measured inside it:
+
+| ledger call | RUNG | YOURS |
+|---|---|---|
+| `--machine` (as shipped) | `✅` | 0 |
+| `--machine --session S6` | **`👤`** | **1** |
+
+The close protocol defines `👤` as *"agent side complete AND landed, but operator-only step(s) THIS
+SESSION filed are unrun"* — which is that fixture exactly. So the unscoped read was emitting the
+precise false-done the `👤` rung exists to prevent, and the suite's `· ✅ live on trunk` assertion
+was **pinning the defect** (memory: `stale-assertion-becomes-an-inverted-guard`). The headline loses
+its rung clause because the renderer does not append "· 👤 …" when "1 step(s) are yours" already
+says it. Fix landed, assertion corrected, suite 114/114 green. Decision packet `a19269213ce1`
+closed on evidence rather than ruled on.
+
+One more self-inflicted method error on the way, the third of this session: the first controlled
+comparison showed the `--session` arm emitting NOTHING, which read as the ledger failing on an
+unresolvable id. That was the probe, not the subject — **zsh does not word-split an unquoted
+`$arg`**, so `--session S6` arrived as a single argument. Re-run through `bash -c` with `set --`,
+both arms produced clean output and the real answer. The repo already carries this one
+(`verification-harness-vacuous-pass-traps`: *zsh … never word-splits*).
 
 ## 3. The population correction this investigation produced
 

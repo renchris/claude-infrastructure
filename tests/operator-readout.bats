@@ -892,7 +892,13 @@ hookrun_sid() { # $1=session_id $2=cwd
   out="$(hookrun_sid S6 "$w")"
   [ -n "$out" ]
   msg="$(printf '%s' "$out" | jq -r '.systemMessage')"
-  printf '%s' "$msg" | head -1 | grep -q 'OPERATOR ▸ 1 step(s) are yours · ✅ live on trunk' || false
+  # The rung clause is DELIBERATELY absent now, and its former presence was the bug. Until the
+  # hook passed --session, wrap-ledger could not see that y-6 belongs to this session: YOURS read 0
+  # and the rung read ✅ — a false done over an unrun operator step, which is the exact state the 👤
+  # rung exists to catch. With the id passed the ledger reports `RUNG=👤 YOURS=1`, and the renderer
+  # does not append "· 👤 …" because "1 step(s) are yours" already says it. Asserting the old string
+  # here would re-pin the defect (memory: stale-assertion-becomes-an-inverted-guard).
+  printf '%s' "$msg" | head -1 | grep -qx 'OPERATOR ▸ 1 step(s) are yours' || { echo "$msg" | head -3; false; }
   printf '%s' "$msg" | grep -q '▶ claude --mcp auth motion-plus   \[this session y-6' || false
   # control: the SAME repo with no session-filed step is silent, so the fire came from `yours`
   _stub_backlog "[]"       # through the helper, so the store-append invariant holds (blg cache)
