@@ -1,0 +1,1 @@
+survivors: [] count: 0

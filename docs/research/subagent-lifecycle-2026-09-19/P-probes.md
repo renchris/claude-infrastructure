@@ -267,3 +267,123 @@ adjudicates, and read its refusal text for the predicate rather than deriving yo
 
 The corrected bar is `active <= 6` — one slot of margin below the gate's 7, because the spawn burst
 briefly makes the four members mid-turn themselves — with `idle >= 25%` retained for interpretation.
+
+### The finding that decided P1: a lead with live teammates CANNOT exit unattended
+
+Both runs reached their precondition cleanly — `idle notifications observed = 4/4` on each, with the
+lead printing its marker only after four members were live (`captures/p1-run1/run.log`,
+`captures/p1-run2/run.log`). Then `/exit` was typed into the lead's own composer, and **the lead did
+not exit.** It raised a confirmation modal:
+
+```
+  Background work is running
+  The following will stop when you exit:
+
+  subagent · You are a probe teammate. Do exactly one thing an…   (× 4)
+
+  ❯ 1. Exit and stop tasks
+    2. Move to background and exit
+    3. Stay
+
+  Enter to confirm · Esc to cancel
+```
+
+**`cleanupSessionTeams` sits behind an interactive confirmation whenever members are alive.** The
+first measurement at +30 s therefore read `survivor_windows=5, survivor_procs=4` — five windows for a
+lead plus four members, *including the lead's own window*, which is the tell: the lead was still
+there, so the cleanup path had never been entered. That number is **not** a P1 result and is not
+reported as one. It measures the probe's exit mechanism, not the vendor's cleanup.
+
+Two consequences beyond this probe, and the first is the one the register should carry:
+
+1. **An unattended lead exit never reaches the vendor's cleanup at all.** Any automation that ends a
+   lead non-interactively — a `-p` run, a cron job, a script sending `/exit` — leaves the modal
+   unanswered, and both the lead and its members stay alive indefinitely. This is the *lead-side*
+   twin of the member-side lesson already on file
+   (`docs/lessons/a-subagent-cannot-answer-a-permission-prompt-so-a-prompt-trigger.md`): the member
+   cannot answer a prompt, and neither can an unattended lead.
+2. **It is why run 2's census read 8 members for a 4-member probe.** Run 1's four survived into run 2's
+   window, so `spawned_procs=8` counted run 1's residue. The set-difference census was correct about
+   what was on the box; the *runs* were not independent. Each run's survivors are therefore scoped by
+   **team id** below, never by the raw count.
+
+### P1 result — both runs, after a genuine graceful exit
+
+The modal was answered with **option 1, "Exit and stop tasks"** (the pre-selected default, which is
+what a human pressing Enter gets), on each lead's own pane. Survivors were then counted at +30 s,
+scoped by team id so the two runs cannot contaminate each other.
+
+| | run 1 | run 2 |
+|---|---|---|
+| team | `session-38a2d14c` | `session-d9605166` |
+| idle notifications observed | **4/4** | **4/4** |
+| windows at spawn | 5 (202–206) | 5 (207–211) |
+| **survivor windows at +30 s** | **0** | **0** |
+| **survivor member processes at +30 s** | **0** | **0** |
+| box before (load / CPU idle) | 64.08 / **0.94%** | 115.19 / **0.0%** |
+| box after (load / CPU idle) | 109.21 / **1.58%** | 132.70 / **0.8%** |
+| capture | `captures/p1-run1-exitmodal/` | `captures/p1-run2-exitmodal/` |
+
+Fleet-wide check immediately afterwards: `./run-p1.sh --census` → `count=0`. No member of either team
+survived anywhere on the box.
+
+### Verdict — P1
+
+**PASS: survivors == 0 on both graceful lead exits — 0 windows and 0 member processes at +30 s for
+each of two teams — and the box was at 0.0–1.6% CPU idle with load 64→133 across both runs, which
+makes this the strong direction of the addendum's asymmetry rather than the weak one (the vendor
+closed five windows and four member processes inside its 2 000 ms race on a box with essentially no
+idle CPU); so the vendor's cleanup is sufficient and NO fleet-side SessionEnd close is licensed —
+and the arm that did NOT run is exit option 2, "Move to background and exit", which is a different
+code path that may well leave members alive and was never exercised here.**
+
+Two further arms not run, named rather than buried: a lead exiting with **no** live members (the
+modal does not appear, so the path differs), and a lead killed rather than exited (`forceExit`/SIGKILL,
+which D §4 already documents as skipping cleanup entirely).
+
+**Nothing about RC-10 licenses a fleet-side change.** The probe's verdict rule was fixed before the
+first run and it is met: `survivors == 0 on both graceful exits ⇒ the vendor's cleanup is sufficient`.
+W5 writes no fleet code.
+
+---
+
+## 3. What these two probes hand to decision D1
+
+D1 chooses between **(a)** keeping the closer as W1 left it and **(b)** restricting it to members whose
+lead is dead. Its stated condition is *"choose (b) only if W3 moves the shutdown rate above the
+closer's live-lead reap share (36.7%) AND P1 passes; otherwise (a)"*.
+
+**P1 passes.** So the P1 term of that conjunction is satisfied and D1 turns entirely on W3's number,
+which this wave does not measure and does not pre-empt.
+
+Both probes point the same way on the underlying question: **the vendor's own lifecycle works when it
+is actually reached.** P2 showed the `shutdown_request` path closing an idle member in under 10 s; P1
+showed the lead-exit path closing four members and five windows on a box with no idle CPU. What fails
+in both cases is *reaching* those paths — a blocked Stop hook that suppresses the idle notification
+(W1's subject), and now an exit modal that no unattended lead can answer.
+
+⚠️ **One caveat D1 must not skip:** P1's pass was obtained with a **human-equivalent keystroke**
+answering the exit modal. If the fleet's leads exit unattended, they never reach the cleanup that
+P1 just certified, and the 2 000 ms race is not the binding constraint — the modal is. That does not
+license a SessionEnd close (the operator's constraint stands, and no measured population of
+unattended lead exits was gathered here), but it does mean "the vendor cleans up on lead exit" is
+true only of *attended* exits on this build.
+
+---
+
+## 4. Census — nothing of this wave's is standing
+
+`captures/final-census.txt`, taken at `2026-09-20T00:18:07Z`:
+
+* **member processes belonging to this wave: 0** (`./run-p1.sh --census` → `count=0`, the
+  argv[0]-anchored three-flag matcher whose both-arm control is in §0).
+* **every window this wave ever created — 13 of them — is closed**: 161 (P2's member), 162 (the
+  discarded attempt-1 lead), 171 (the env control), 202–206 (run 1), 207–211 (run 2).
+* **no probe shell runner is alive.**
+
+Every close was performed by the session itself: P2's member exited on its own `shutdown_request`,
+both P1 leads exited through their own confirmation modal and took their members with them, and the
+env-control window ran a script that returned. **No `it2 session close`, no `kitty @ close-window`,
+no `TaskStop`, and no kill against any Claude session was used at any point in this wave.** The only
+`kill` calls in this wave's history targeted this wave's **own bash runner scripts** — pinned by pid
+*and* verified by command string immediately before acting — never a session, pane or agent.

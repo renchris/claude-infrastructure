@@ -1,0 +1,5 @@
+seen_idle=4
+all_four_marker=2
+mine_windows=5
+mine_procs=8
+team=session-d9605166
