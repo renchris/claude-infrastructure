@@ -32,6 +32,15 @@ setup() {
   # HOME here, LR_STATE_DIR per drive().
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
 
+  # …and the suite's SUBJECT is which threshold value the child is handed, so that variable must
+  # start UNSET or the assertion reads the desk instead of the script. A session launched with
+  # resume-suppression exports CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 into every shell it
+  # spawns, the child inherits it whatever lr-fire-resume decides, and the --summary arm then fails
+  # with the script behaving perfectly (measured 2026-09-20: red here, green under `env -u` on that
+  # ONE variable, with :436 provably taking the no-export branch for SUMMARY=1). HOME was fixtured
+  # and this seam was not, so the suite was ambient-dependent for exactly one env var.
+  unset CLAUDE_CODE_RESUME_THRESHOLD_MINUTES
+
   eval "$(sed -n '/^lr_wrap_re() {/,/^}/p' "$FIRE")"
   command -v lr_wrap_re >/dev/null || { echo "extraction of lr_wrap_re from $FIRE failed" >&2; return 1; }
 
