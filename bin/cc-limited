@@ -418,7 +418,14 @@ def scan_copy(path):
             tail = fh.read()
     except OSError:
         return out
-    if b'"agentName"' in head:
+    # THE SSOT, not a substring (§ 11 #10). `b'"agentName"' in head` was the 13th copy of this
+    # predicate, and it is wrong in the direction that costs: it answers TRUE to
+    # `"agentName":null` and to any record merely QUOTING the field name inside a text payload,
+    # and a false TEAMMATE is a session the census refuses to recover forever, silently, because
+    # TEAMMATE is the first arm of the state table. `is_teammate_head` requires a parsed
+    # TOP-LEVEL key with a non-empty string value, and falls back to an UNESCAPED-key regex only
+    # for the 3-of-55 real heads that run past the byte bound mid-string.
+    if PRED.is_teammate_head(head):
         out["teammate"] = True            # lead-owned; never this census's to recover
     for line in tail.decode("utf-8", "replace").splitlines():
         if '"aiTitle"' in line:
