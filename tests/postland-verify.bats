@@ -2140,6 +2140,75 @@ for i in 1 2 3 4 5 6 7 8; do sleep 1; printf 'ok %s s%s\n' \"\$i\" \"\$i\"; done
   [ "$output" = "green" ]
 }
 
+# ── THE POLL PERIOD IS A SAMPLING RATE, NOT A COST FLOOR ────────────────────────────────────────
+# `while kill -0 $cpid; do sleep $poll; …` entered its body unconditionally — the child is alive by
+# construction one line after `&` — so every corpus run paid one WHOLE poll (60s by default) after
+# bats had already exited, and nothing the corpus did could recover it. Invisible in production, one
+# 60s tail on a ~45-min run. Ruinous for the suites that DRIVE this script, whose fixture corpus is
+# two files: MEASURED 2026-09-20 on THIS file, tests 1-3 at 124ms / 60442ms / 60421ms, and
+# "C29: CC_POSTLAND_CONVICT=off restores the one-window red" A/B'd at 60831ms -> 2782ms with nothing
+# changed but the period. At ~2 SUT runs per test that is ~5h of sleep in one suite — which is what
+# the net reported as `post-land HUNG: tests/postland-verify.bats wedged at 11426/14327`
+# (cc-backlog 4f7bf7b75181). The filing blamed "an un-stubbed external seam"; the seam was stubbed
+# and bounded all along, and the subject was this loop.
+#
+# DRIVEN AS A UNIT, NOT THROUGH A CORPUS RUN, DELIBERATELY. A wall-clock assertion on a whole
+# --run-if-needed is a load sensor — the band this corpus runs in is measured at an 84x tax
+# (2514226e) — whereas stall_wait's cost is SLEEPS, which cost their wall time at any load. The
+# helper is READ OUT OF THE SUT rather than restated here (the C13f/cond_slug idiom): a copy of the
+# rule could drift from the rule and these would still pass.
+@test "stall_wait: the wait ends when the CHILD does, not when the period does" {
+  eval "$(sed -n '/^stall_wait() {/,/^}/p' "$SUT")"
+  STALL_TICK_S=1
+  ( sleep 1 ) & local child=$!                     # ...a child that outlives the first tick, then exits
+  local t0 t1; t0="$(date +%s)"
+  run stall_wait 20 "$child"
+  t1="$(date +%s)"
+  [ "$status" -eq 1 ]                              # rc 1 = "the child is gone", which BREAKS the loop
+  [ "$(( t1 - t0 ))" -lt 8 ]                       # pre-fix: 20 — the whole period, every single time
+  # A RECYCLED pid can only make this SLOWER (a stranger reads as live ⇒ the full 20s ⇒ RED). The
+  # failure direction is the safe one: this test cannot go green because a pid was re-issued.
+}
+
+@test "stall_wait: a LIVE child still costs the FULL period (so every clock above is unchanged)" {
+  # THE CONTROL, and the reason the fix is not a behaviour change: `still` and `preplan` advance by
+  # whole `poll` units once per completed outer iteration, and an outer iteration still takes `poll`
+  # wall seconds whenever the child is alive for all of it. Break this and the stall bound starts
+  # cutting healthy corpora at a multiple of the rate it was calibrated for.
+  eval "$(sed -n '/^stall_wait() {/,/^}/p' "$SUT")"
+  STALL_TICK_S=1
+  sleep 300 >/dev/null 2>&1 &
+  echo "$!" > "$BATS_TEST_TMPDIR/live.pid"         # teardown kills it
+  local t0 t1; t0="$(date +%s)"
+  run stall_wait 3 "$(cat "$BATS_TEST_TMPDIR/live.pid")"
+  t1="$(date +%s)"
+  [ "$status" -eq 0 ]                              # a live child is never reported gone...
+  [ "$(( t1 - t0 ))" -ge 3 ]                       # ...and the period is paid in full
+}
+
+@test "stall_wait: POSTLAND_STALL_TICK_S=0 restores the whole-poll sleep (the kill switch)" {
+  # A kill switch nothing exercises is a claim, not a switch — and this one has to be provable from
+  # the OUTSIDE, because its whole purpose is to put the pre-fix timing back if the slicing ever
+  # turns out to cost something nobody priced.
+  eval "$(sed -n '/^stall_wait() {/,/^}/p' "$SUT")"
+  STALL_TICK_S=0
+  ( sleep 1 ) & local child=$!
+  local t0 t1; t0="$(date +%s)"
+  run stall_wait 3 "$child"
+  t1="$(date +%s)"
+  [ "$status" -eq 0 ]                              # un-ticked, the wait cannot notice the death...
+  [ "$(( t1 - t0 ))" -ge 3 ]                       # ...and pays the period the fix exists to skip
+}
+
+@test "the watcher's wait is stall_wait, not a bare sleep (the site the fix has to reach)" {
+  # The two above prove the HELPER. This proves the CALLER, which is the half a helper-position bug
+  # leaves broken while the suite stays green (memory: helper-position-bounds-a-fixs-reach).
+  run grep -cE '^[[:space:]]*sleep "\$poll"' "$SUT"
+  [ "$output" = "0" ]                              # the unconditional whole-period sleep is GONE...
+  run grep -cE '^[[:space:]]*stall_wait "\$poll" "\$cpid" \|\| break' "$SUT"
+  [ "$output" = "1" ]                              # ...and exactly one site replaced it
+}
+
 # ── PRE-PLAN GRACE: the counting pass emits no TAP, so it cannot share the stall clock ──────────
 # `bats <N files>` runs bats-gather-tests over every file BEFORE printing `1..N`, and writes nothing
 # to the TAP stream while it does. tap_done is therefore 0 for a healthy run and a wedged one alike,
