@@ -65,6 +65,7 @@ __all__ = [
     "classify_record",
     "classify_text",
     "classify_tail",
+    "is_teammate_head",
     "CAP_FIVE_HOUR",
     "CAP_SEVEN_DAY",
     "CAP_MONTHLY_SPEND",
@@ -104,6 +105,12 @@ TEXT_RESET_RE = re.compile(
 TEXT_NET_RE = re.compile(
     r"(Can't reach the API server|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|socket hang up)"
 )
+
+# The teammate key, for the one branch of is_teammate_head() that cannot parse its line. Requires
+# an UNESCAPED opening quote and a non-empty value: inside a JSON string payload the field name
+# renders as \"agentName\", and the lookbehind is what keeps a record that merely QUOTES the key
+# from answering yes to being a teammate.
+_AGENT_NAME_KEY_RE = re.compile(r'(?<!\\)"agentName"\s*:\s*"([^"\\]{1,200})"')
 
 _MONTHS = {
     m: i + 1
@@ -396,6 +403,59 @@ def classify_tail(data):
     if last is None:
         return _blank_verdict()
     return classify_record(last)
+
+
+def is_teammate_head(data):
+    """The HEAD of a transcript (bytes or str) -> True iff the session is a named TEAMMATE.
+
+    ONE copy, which is the whole point of putting it here. Five sites had grown the same
+    `head -c 8000 "$tx" | grep '"agentName"'` — handoff-fire.sh:7492, lr-fleet.sh:214,
+    lr-reset-poller.sh:718 and :752, lr-select.py:127 — and a raw substring is a predicate copy
+    like any other (§ 11 #10).
+
+    WHY A TEAMMATE MUST BE ANSWERABLE AT ALL. A teammate is ended by its LEAD and never by itself,
+    so a recovery path that resumes one directly duplicates the lead's own respawn. The consumers
+    above use this to SKIP, which makes a false positive cheap (one session not auto-recovered) and
+    a false negative expensive (a double resume). The rule below is therefore built to be exact
+    rather than generous.
+
+    THE SHAPE, MEASURED, NOT ASSUMED (55 real teammate transcripts under ~/.claude/projects,
+    2026-09-20). `agentName` is a TOP-LEVEL key on a `type=user` record — not nested in `message`,
+    and not on line 1: it lands on line 3 or 4, the first record the harness writes after the
+    session header. `teamName` sits beside it in 52 of 55. So the authoritative test is a parsed
+    top-level field, and the value must be a NON-EMPTY string: presence is not content, and a
+    substring grep answers YES to `"agentName":null` just as readily as to a real name.
+
+    AND WHY THE UNPARSEABLE BRANCH IS NOT A SHORTCUT. 3 of those 55 heads do not parse at all
+    within the byte bound: that record carries an `attachment` holding the whole of CLAUDE.md, so
+    it runs past 8 KB and the head ends mid-string. A parse-only predicate returns False on all
+    three — a REGRESSION against the substring copies it replaces, on 5.5% of the real population.
+    The fallback is what keeps parity there, and it is narrowed to an UNESCAPED key so that a
+    record merely quoting the field name inside a text payload cannot satisfy it (JSON escaping
+    makes the quotes `\\"agentName\\"`, which is the seam the guard reads).
+
+    Measured on this corpus: 55/55 TRUE over every head carrying the key, 0/400 over heads that do
+    not. The caller applies it to EVERY copy of a session's transcript, not only the preferred one
+    (§ 11 #10): the key lands early, and a salvage copy can be truncated above it.
+    """
+    if isinstance(data, bytes):
+        data = data.decode("utf-8", "replace")
+    for line in (data or "").splitlines():
+        if '"agentName"' not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            # Truncated by the head bound — the 3-of-55 class above, not an error.
+            match = _AGENT_NAME_KEY_RE.search(line)
+            if match and match.group(1).strip():
+                return True
+            continue
+        if isinstance(rec, dict):
+            name = rec.get("agentName")
+            if isinstance(name, str) and name.strip():
+                return True
+    return False
 
 
 # ── selftest ─────────────────────────────────────────────────────────────────────────────────────

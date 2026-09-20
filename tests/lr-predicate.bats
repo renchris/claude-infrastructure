@@ -200,11 +200,37 @@ print(json.dumps([a["resets_at"], a["resets_source"], b["resets_at"], b["resets_
 }
 
 @test "F6: the monthly spend packet is a limit that waiting cannot clear" {
-  # Both shipped URL variants. lr-reset-poller.sh:746's pre-filter names only session|weekly, so
-  # spend is invisible to the poller; and it must NOT become visible as a reset-bearing row, because
-  # no reset exists — the fix is an operator raising a billing cap.
+  # lr-reset-poller.sh:746's pre-filter names only session|weekly, so spend is invisible to the
+  # poller; and it must NOT become visible as a reset-bearing row, because no reset exists — the
+  # fix is an operator raising a billing cap.
+  #
+  # § 11 #14 DIRECTED THIS ROW TO BE LABELLED `SYNTHETIC — modelled on lr-reset-poller.sh:566
+  # SPEND_RE`, with the falsifier "the first real monthly_spend record re-opens F6". THE FALSIFIER
+  # FIRED, so the label is not applied and this note stands in its place. Running it against the
+  # rebuilt corpus on 2026-09-20 — 622 unique api-error events, `error == "rate_limit"` AND
+  # "monthly spend" in an api-error envelope — returns 16 real records carrying two distinct texts,
+  # and the packet below is the second of them byte-for-byte, not a model of it:
+  #
+  #   .claude-secondary/projects/-Users-chrisren-Development--worktrees-wt-pool-8/
+  #     6d9899f6-0c4b-4b89-a5d7-0bda757d4f81.jsonl.handed-off:416   2026-07-11T07:56:48.903Z
+  #     "…raise it at claude.ai/settings/usage"                      uuid 0b7cb8a9-…
+  #   .claude-secondary/projects/-Users-chrisren-Development-claude-infrastructure/
+  #     076a1186-9eaa-4251-94c9-ba1cacb50549.jsonl.handed-off:713   2026-07-25T07:56:31.253Z
+  #     "…?from=cc_cli_limit_message"                                uuid 7d3a7c34-…
+  #
+  # Both carry apiErrorStatus 429, neither carries quotaLimits, and neither carries a reset in any
+  # field — which is the structural reason recoverable_by_waiting is false rather than a reading of
+  # the prose. Both variants are asserted below, because a predicate that matched only the longer
+  # URL would pass this row while missing every spend death before 2026-07-25.
   local r
   r="$(rec '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","apiErrorStatus":429,"uuid":"f6","timestamp":"2026-07-25T09:05:42.808Z","message":{"model":"<synthetic>","content":[{"type":"text","text":"You'"'"'ve hit your monthly spend limit · raise it at claude.ai/settings/usage?from=cc_cli_limit_message"}]}}')"
+  [ "$(fld "$r" limit)" = true ]
+  [ "$(fld "$r" cap)" = monthly_spend ]
+  [ "$(fld "$r" resets_at)" = null ]
+  [ "$(fld "$r" recoverable_by_waiting)" = false ]
+
+  # The 2026-07-11 variant, verbatim: same cap, same absence of a reset, bare URL.
+  r="$(rec '{"type":"assistant","isApiErrorMessage":true,"error":"rate_limit","apiErrorStatus":429,"uuid":"f6b","timestamp":"2026-07-11T07:56:48.903Z","message":{"model":"<synthetic>","content":[{"type":"text","text":"You'"'"'ve hit your monthly spend limit \u00b7 raise it at claude.ai/settings/usage"}]}}')"
   [ "$(fld "$r" limit)" = true ]
   [ "$(fld "$r" cap)" = monthly_spend ]
   [ "$(fld "$r" resets_at)" = null ]
@@ -297,6 +323,100 @@ print(json.dumps([a["resets_at"], a["resets_source"], b["resets_at"], b["resets_
   [ "$status" -eq 77 ]
 }
 
+# ── is_teammate_head — the SIXTH copy, deleted before it was written (§ 11 #10) ──────────────────
+# Five sites had each grown `head -c 8000 "$tx" | grep '"agentName"'`: handoff-fire.sh:7492,
+# lr-fleet.sh:214, lr-reset-poller.sh:718 and :752, lr-select.py:127. W0 does not migrate them —
+# that is W2a/W3's work — it puts the one answer where they can reach it, which is why the shim
+# grows a verb here rather than the module growing a private helper.
+#
+# THE SHAPE IS MEASURED, NOT ASSUMED. 55 real teammate transcripts under ~/.claude/projects on
+# 2026-09-20: `agentName` is a TOP-LEVEL key on a `type=user` record, landing on line 3 or 4, with
+# `teamName` beside it in 52 of 55. The predicate answers TRUE on 55/55 of those heads and FALSE on
+# 400 heads that do not carry it.
+
+teammate_head() {  # $1 = extra line(s) appended -> a realistic transcript head on stdout
+  cat <<EOF
+{"type":"summary","summary":"prior session","leafUuid":"0000-1"}
+{"parentUuid":null,"sessionId":"s-teammate","type":"user","message":{"role":"user","content":"boot"}}
+$1
+EOF
+}
+
+@test "is_teammate_head: a named teammate's head answers TRUE, and it is the VALUE that decides" {
+  local tx="$BATS_TEST_TMPDIR/teammate.jsonl"
+  teammate_head '{"parentUuid":"0000-1","isSidechain":false,"teamName":"session-ad311bcd","agentName":"t2-ollama-client","type":"user","message":{"role":"user","content":"your brief"}}' > "$tx"
+  run bash "$SH" is-teammate-head "$tx"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -e '.teammate == true' >/dev/null
+}
+
+@test "is_teammate_head: agentName present but EMPTY is not a teammate — presence is not content" {
+  # The five shipped copies test for the KEY. A substring grep answers YES to `"agentName":null`
+  # and to `"agentName":""` alike, and a session skipped on that basis is a session never
+  # recovered. This row is RED against every one of them and is the reason the branch parses.
+  local tx="$BATS_TEST_TMPDIR/empty.jsonl"
+  teammate_head '{"parentUuid":"0000-1","teamName":"session-ad311bcd","agentName":"","type":"user","message":{"role":"user","content":"x"}}' > "$tx"
+  run bash "$SH" is-teammate-head "$tx"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -e '.teammate == false' >/dev/null
+
+  teammate_head '{"parentUuid":"0000-1","teamName":"session-ad311bcd","agentName":null,"type":"user","message":{"role":"user","content":"x"}}' > "$tx"
+  run bash "$SH" is-teammate-head "$tx"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -e '.teammate == false' >/dev/null
+}
+
+@test "is_teammate_head: a head TRUNCATED mid-record still answers — the measured 3-of-55 class" {
+  # 3 of the 55 real heads do not parse at all inside the byte bound: that record carries an
+  # `attachment` holding the whole of CLAUDE.md, so it runs past 8 KB and the head ends mid-string.
+  # A parse-only predicate returns FALSE on all three — a REGRESSION against the substring copies
+  # this replaces, on 5.5% of the real population. This row is the one that forbids that shortcut;
+  # it goes red the moment the unparseable branch is deleted.
+  local tx="$BATS_TEST_TMPDIR/truncated.jsonl"
+  {
+    printf '%s\n' '{"type":"summary","summary":"prior","leafUuid":"0000-1"}'
+    printf '%s' '{"parentUuid":"0000-1","teamName":"session-ad311bcd","agentName":"t5-tests","attachment":{"type":"instructions","content":"'
+    head -c 9000 /dev/zero | tr '\0' 'x'
+  } > "$tx"
+  # No closing brace anywhere: the line cannot parse, exactly as the real ones cannot.
+  run bash "$SH" is-teammate-head "$tx"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -e '.teammate == true' >/dev/null
+}
+
+@test "is_teammate_head: the unparseable branch is not LOOSER than the parsed one" {
+  # The fallback reads a raw line, so it needs the same rule the parse branch has: a NON-EMPTY
+  # value, not the mere presence of the key. Without that it is a substring grep again, and the
+  # consolidation buys nothing on the one axis (`"agentName":""`) where the copies are wrong.
+  # Mutant M12 — fallback returns true on any unparseable line carrying the key — dies here and
+  # nowhere else.
+  #
+  # NOT AN ESCAPING TEST, deliberately. A record that merely QUOTES the field inside a text payload
+  # renders it as \"agentName\", and the backslash breaks the closing quote's adjacency, so the
+  # bare substring `"agentName"` does not occur — the shipped copies are already sound on that axis
+  # and this suite does not claim otherwise (memory: bare-json-key-is-unforgeable-by-content). The
+  # regex keeps its lookbehind as belt-and-braces; no fixture in this corpus can reach it.
+  local tx="$BATS_TEST_TMPDIR/trunc-empty.jsonl"
+  {
+    printf '%s\n' '{"type":"summary","summary":"prior","leafUuid":"0000-1"}'
+    printf '%s' '{"parentUuid":"0000-1","teamName":"session-ad311bcd","agentName":"","attachment":{"type":"instructions","content":"'
+    head -c 9000 /dev/zero | tr '\0' 'x'
+  } > "$tx"
+  run bash "$SH" is-teammate-head "$tx"
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -e '.teammate == false' >/dev/null
+}
+
+@test "is_teammate_head: an absent transcript is a REFUSAL, never a quiet 'not a teammate'" {
+  # Same rule the shim keeps for every other verb, and it matters more here: the consumers use a
+  # TRUE to SKIP recovery. A missing file that answered `false` would push a teammate down the
+  # lead's own respawn path — the double-resume § 11 #10 closes by construction.
+  local out rc=0
+  out="$(bash "$SH" is-teammate-head "$BATS_TEST_TMPDIR/absent.jsonl" 2>/dev/null)" || rc=$?
+  [ "$rc" -ne 0 ]
+  [ -z "$out" ]
+}
+
 # ── RED-PROOF ────────────────────────────────────────────────────────────────────────────────────
 # A NEW SSOT cannot be red-proofed against pristine trunk the usual way: the module does not exist
 # there, so every row errors identically and the run carries no information about which BEHAVIOUR
@@ -361,3 +481,54 @@ print(json.dumps([a["resets_at"], a["resets_source"], b["resets_at"], b["resets_
 # ENOTFOUND, so the TEXT fallback reaches `network` by itself and F8 stayed green with the
 # structural rule deleted — a case passing in both arms, pinning nothing. F8b uses ECONNRESET,
 # which lr-fleet.sh:125's NET_RE does not list, so only the structural arm can answer it.
+#
+# ── RED-PROOF — is_teammate_head (§ 11 #10), added 2026-09-20 ────────────────────────────────────
+# Same convention as above: the proof is against the predicates this one REPLACES, run rather than
+# read. All five are the same line — `head -c 8000 "$tx" | grep '"agentName"'` — at
+# handoff-fire.sh:7492, lr-fleet.sh:214, lr-reset-poller.sh:718, lr-reset-poller.sh:752 and
+# lr-select.py:127 (that last one bounded by `i < 40` instead of by bytes).
+#
+#   fixture        shipped head -c 8000 | grep   this module     row
+#   -----------    --------------------------   -------------   --------------------------------
+#   real           TEAMMATE                     TEAMMATE        equivalence guard (parity)
+#   empty          TEAMMATE                     not-teammate    RED — presence is not content
+#   null           TEAMMATE                     not-teammate    RED — presence is not content
+#   truncated      TEAMMATE                     TEAMMATE        equivalence guard (see M11)
+#   trunc-empty    TEAMMATE                     not-teammate    RED — the fallback's own bound
+#   absent file    not-teammate                 REFUSED rc 4    RED — a refusal, not a verdict
+#
+# TWO of those six are green in both arms and pin nothing on their own, so they were mutated:
+#
+#   M11 the unparseable branch deleted            -> truncated
+#   M12 that branch returns true on any key       -> trunc-empty
+#   M13 the parse branch tests presence, not value-> empty, null
+#
+# M11 is the one worth reading. 3 of the 55 real teammate heads DO NOT PARSE inside the byte bound
+# — the record carries an attachment holding the whole of CLAUDE.md and runs past 8 KB — so a
+# parse-only predicate is a REGRESSION against the substring copies on 5.5% of the population. The
+# fallback exists for exactly those three, and `truncated` is what stops a later reader deleting it
+# as redundant.
+#
+# The `absent file` row is the largest live defect and does not need a mutant: all five copies pipe
+# a missing path into grep, which exits 1, which every call site reads as "not a teammate". A
+# teammate whose transcript has been rotated is then pushed down the lead's own respawn path — the
+# double resume § 11 #10 exists to close.
+#
+# WHAT THIS DOES NOT CLAIM. On ESCAPING the shipped copies are already correct: a quoted mention
+# inside a text payload renders as \"agentName\", whose backslash breaks the closing quote's
+# adjacency, so the bare substring never occurs (memory: bare-json-key-is-unforgeable-by-content).
+# Two real transcripts carry such a mention today — .claude-quaternary/…/e442434c-…/subagents/
+# agent-a66b13fec27e8078c.jsonl and agent-a14a8631ad321a371.jsonl, both research subagents — and
+# BOTH arms answer not-teammate on them. The regex keeps its lookbehind, but no fixture reaches it
+# and this suite does not pretend one does.
+#
+# Population check behind the two parity rows, run 2026-09-20 against the live stores:
+# 55/55 TRUE over every head under ~/.claude/projects carrying the key, 0/400 over heads without.
+#
+# ── F6 — § 11 #14's falsifier FIRED, so the SYNTHETIC label is not applied ───────────────────────
+# The amendment directed F6 to be labelled `SYNTHETIC — modelled on lr-reset-poller.sh:566
+# SPEND_RE`, with the falsifier "the first real monthly_spend record re-opens F6". Running that
+# falsifier against the corpus rebuilt on 2026-09-20 (622 unique api-error events) returns 16 real
+# records in an api-error envelope carrying two distinct texts — both URL variants, both now
+# asserted verbatim in the row, with file:line receipts in its body. F6 pins a measured wire
+# format, not a modelled one.
