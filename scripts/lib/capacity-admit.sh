@@ -608,7 +608,15 @@ CC_ADMIT_TOKEN_UNLINK=""
 # Set by _cc_admit_token_redeem the moment the record is identified as THIS spawn's own admission.
 # Past that point a non-redemption may not fall through — see the header's two-outcomes block.
 CC_ADMIT_TOKEN_TERMINAL=""
+# The record's own identity (`<sid>.<issued>`) and how many times THIS record has reached the
+# terminal state. Both exist for one reason: the terminal state can REPEAT (W2FA A1 below).
+CC_ADMIT_TOKEN_IDENT=""
+CC_ADMIT_TOKEN_REPEAT=""
 cc_capacity_token_note() { printf '%s' "$CC_ADMIT_TOKEN_NOTE"; }
+# The terminal state's occurrence number, for a caller that prints operator-facing advice: the
+# advice for occurrence 1 ("re-fire") and for occurrence N ("re-running cannot help") differ, and a
+# caller reaching into a global to learn that would be the coupling cc_capacity_token_note avoids.
+cc_capacity_token_repeat() { printf '%s' "$CC_ADMIT_TOKEN_REPEAT"; }
 
 cc_capacity_token_mint() { # $1=sid [$2=explicit path] → prints the token path · rc 1 = not minted
   local sid="${1:-}" path="${2:-}" dir uid
@@ -682,6 +690,58 @@ _cc_admit_token_discard() { # $1=claim path → always 0 · sets CC_ADMIT_TOKEN_
   CC_ADMIT_TOKEN_UNLINK=""
   rm -f "$1" 2>/dev/null || true
   if [ -e "$1" ]; then CC_ADMIT_TOKEN_UNLINK="the one-shot copy was NOT removed ($1)"; fi
+  return 0
+}
+
+# ── THE TERMINAL STATE IS BOUNDED, AND A REPEAT SAYS SO (W2FA A1, 2026-09-20) ──────────────────
+# MEASURED 2026-09-20 on a QUIET, HEALTHY box (load override 0.01/core, i.e. a box a fresh
+# evaluation would ADMIT): a token whose directory is chmod 555 can be neither claimed nor
+# unlinked, so it stays on disk, and TEN redemptions produced ten rc-9 refusals and TEN
+# BYTE-IDENTICAL PAGES. The rename claim is the ONLY terminal path that leaves the record behind —
+# the post-claim, clock and expiry paths all discard it first, so they cannot repeat — and nothing
+# bounded it. A recovery path that pages without bound is worse than the replay it replaced.
+#
+# This is alarm polarity (memory `alarm-polarity-and-attention-budget`): an alarm that ALWAYS fires
+# carries as little as one that cannot. §9's law asks that a standing state be converted into an
+# EVENT, and ten identical pages are a standing state wearing an event's clothes.
+#
+# So the OCCURRENCE is counted, per RECORD — `<sid>.<issued>`, both fields already validated by
+# _cc_admit_token_shape before this can be reached (charset, and an operand-bounded epoch), so
+# neither can shape a path:
+#   · the FIRST occurrence pages, exactly as before,
+#   · every later one carries `REPEAT #N` on the reason and on the row, and does NOT page,
+#   · the REFUSAL is unchanged at every occurrence. Bounding an ALARM must never widen ADMISSION,
+#     and that trade is not taken here: rc 9 is returned identically at occurrence 1 and 100.
+# CC_ADMIT_TOKEN_TERMINAL_PAGES (default 1) is the bound; 0 silences the page outright.
+#
+# RESIDUAL, named rather than hidden: when the STATE dir is itself unwritable the counter cannot be
+# kept and the occurrence reads 1 every time — i.e. it degrades to exactly today's behaviour,
+# paging, and the row says `occurrence 1` while the note says the count is untrackable. For an
+# alarm that is the correct direction (an untrackable bound must not silently SUPPRESS), and it is
+# the mirror of the argument cc_hw_budget_charge makes for admitting on an untrackable bound.
+CC_ADMIT_TOKEN_OCC_NOTE=""
+_cc_admit_token_occurrence() { # $1=ident → prints the occurrence number (>=1) · always 0
+  local dir f n
+  CC_ADMIT_TOKEN_OCC_NOTE=""
+  case "${1:-}" in
+    ''|*[!A-Za-z0-9._-]*)
+      CC_ADMIT_TOKEN_OCC_NOTE="the record has no usable identity, so repeats cannot be counted"
+      printf '1'; return 0 ;;
+  esac
+  dir="${CC_ADMIT_STATE_DIR:-$HOME/.claude/autonomy/capacity-admit}/terminal"
+  if ! mkdir -p "$dir" 2>/dev/null; then
+    CC_ADMIT_TOKEN_OCC_NOTE="the state dir is unwritable, so repeats cannot be counted"
+    printf '1'; return 0
+  fi
+  f="$dir/$1.terminal"
+  n="$(cat "$f" 2>/dev/null || printf '0')"
+  cc_hw_is_int_operand "$n" || CC_HW_INT_VALUE=0
+  n=$(( CC_HW_INT_VALUE + 1 ))
+  if ! printf '%s\n' "$n" > "$f" 2>/dev/null; then
+    CC_ADMIT_TOKEN_OCC_NOTE="the occurrence counter could not be written, so repeats cannot be counted"
+    printf '1'; return 0
+  fi
+  printf '%s' "$n"
   return 0
 }
 
@@ -785,7 +845,7 @@ _cc_admit_token_ttl() { # → always 0 · sets CC_ADMIT_TOKEN_TTL_VALUE (an inte
 
 _cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usable token · sets the CC_ADMIT_TOKEN_* globals
   CC_ADMIT_TOKEN_AGE=""; CC_ADMIT_TOKEN_SID=""; CC_ADMIT_TOKEN_TERMS=""; CC_ADMIT_TOKEN_NOTE=""; CC_ADMIT_TOKEN_UNLINK=""
-  CC_ADMIT_TOKEN_TERMINAL=""
+  CC_ADMIT_TOKEN_TERMINAL=""; CC_ADMIT_TOKEN_IDENT=""; CC_ADMIT_TOKEN_REPEAT=""
   # Resolved HERE rather than beside the expiry test, so every note and every row this evaluation
   # writes names the TTL that was actually in force — including the ones that return long before
   # the age is computed.
@@ -830,6 +890,10 @@ _cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usabl
   # fresh evaluation over one of those is the second gate on one operation — the split. The flag is
   # the library's way of saying that to cc_capacity_admit, which owns the verdict.
   CC_ADMIT_TOKEN_TERMINAL=1
+  # The record's identity, captured HERE and not later: the post-claim re-read overwrites every
+  # _CC_ADMIT_TOK_* field, and one terminal path (a failed claim) never reaches that re-read at all.
+  # Both halves were validated two lines above, so neither can shape the counter's path.
+  CC_ADMIT_TOKEN_IDENT="${_CC_ADMIT_TOK_SID}.${_CC_ADMIT_TOK_ISSUED}"
   # ── THE ONE-SHOT, MADE ATOMIC (W2FA D1, 2026-09-20) ──────────────────────────────────────────
   # This WAS `rm -f "$t" || true`, placed AFTER the awk read. Read-then-unlink is not one-shot: two
   # processes redeeming the same token path with the same CC_ADMIT_WANT_SID on a refusing box (load
@@ -913,6 +977,7 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   local caller="${1:-unknown}" what="${2:-spawn}"
   local ncpu load ceiling lpc verdict floor head_gb sysctl_bin budget detail
   local seg_row seg_pct seg_segs seg_lim seg_ceiling act act_ceiling
+  local tok_occ tok_rep tok_pgmax
 
   # The enabled-term list for THIS evaluation, rebuilt every call. See _cc_admit_emit's header: once
   # the gate carries four terms, `basis` (shared with capacity_gate, which has two) can no longer say
@@ -937,7 +1002,7 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # capacity_gate's vocabulary to stay a SUBSET of this one, never the reverse).
   # The reset is the ordinary one: a redeemed admission ends a consecutive-refusal run exactly as a
   # measured admit does.
-  CC_ADMIT_TOKEN_NOTE=""; CC_ADMIT_TOKEN_TERMINAL=""
+  CC_ADMIT_TOKEN_NOTE=""; CC_ADMIT_TOKEN_TERMINAL=""; CC_ADMIT_TOKEN_IDENT=""; CC_ADMIT_TOKEN_REPEAT=""
   if [ "${_CC_ADMIT_PROBE:-0}" != 1 ] && [ -n "${CC_ADMIT_TOKEN:-${LR_ADMIT_TOKEN:-}}" ]; then
     if _cc_admit_token_redeem; then
       CC_ADMIT_REASON="capacity-admit: ADMIT (admission token, ${CC_ADMIT_TOKEN_AGE}s old, issued for ${CC_ADMIT_TOKEN_SID}) — one decision, redeemed once"
@@ -959,10 +1024,24 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
     # a re-typed relaunch over a CONSUMED token reads ABSENT and falls through as it always did.
     # Every occurrence pages, which is the law's "converts the standing state into an EVENT".
     if [ "$CC_ADMIT_TOKEN_TERMINAL" = 1 ] && [ "${CC_ADMIT_TOKEN_REQUIRED:-on}" != off ]; then
-      CC_ADMIT_REASON="capacity-admit: REFUSING ${what} — this spawn's OWN admission token could not be redeemed (${CC_ADMIT_TOKEN_NOTE}). Evaluating the box again HERE would be the second gate on one net-zero operation, in the pane, after the transplant. Re-fire (the driver mints a fresh token), or override this one refusal with CC_ADMIT_TOKEN_REQUIRED=off."
+      # BOUNDED, AND A REPEAT IS DISTINGUISHABLE FROM THE FIRST (W2FA A1 — see the counter's
+      # header). The verdict below is identical at occurrence 1 and occurrence 100; only the ALARM
+      # is bounded, and only the wording changes.
+      tok_occ="$(_cc_admit_token_occurrence "$CC_ADMIT_TOKEN_IDENT")"
+      CC_ADMIT_TOKEN_REPEAT="$tok_occ"
+      if [ "$tok_occ" -gt 1 ]; then
+        tok_rep=" THIS IS REPEAT #${tok_occ}: the same record has now failed to redeem ${tok_occ} times and is STILL on disk, so re-running this command cannot change the outcome — the driver must mint a new one."
+      else
+        tok_rep=""
+      fi
+      CC_ADMIT_REASON="capacity-admit: REFUSING ${what} — this spawn's OWN admission token could not be redeemed (${CC_ADMIT_TOKEN_NOTE}). Evaluating the box again HERE would be the second gate on one net-zero operation, in the pane, after the transplant. Re-fire (the driver mints a fresh token), or override this one refusal with CC_ADMIT_TOKEN_REQUIRED=off.${tok_rep}"
       _cc_admit_emit refuse token-stale "$caller" "$what" \
-        "the driver's admission for this spawn could not be redeemed — refusing rather than re-deciding in the pane (TTL ${CC_ADMIT_TOKEN_TTL_VALUE}s)" token
-      _cc_admit_page "⚠️ capacity-admit: ${caller} REFUSED '${what}' — this spawn's own admission token could not be redeemed (${CC_ADMIT_TOKEN_NOTE}). Nothing was spawned and no term was evaluated; re-fire to mint a fresh admission."
+        "the driver's admission for this spawn could not be redeemed — refusing rather than re-deciding in the pane (TTL ${CC_ADMIT_TOKEN_TTL_VALUE}s; occurrence ${tok_occ}${CC_ADMIT_TOKEN_OCC_NOTE:+ — ${CC_ADMIT_TOKEN_OCC_NOTE}})" token
+      tok_pgmax="${CC_ADMIT_TOKEN_TERMINAL_PAGES:-1}"
+      cc_hw_is_int_operand "$tok_pgmax" || CC_HW_INT_VALUE=1
+      if [ "$tok_occ" -le "$CC_HW_INT_VALUE" ]; then
+        _cc_admit_page "⚠️ capacity-admit: ${caller} REFUSED '${what}' — this spawn's own admission token could not be redeemed (${CC_ADMIT_TOKEN_NOTE}). Nothing was spawned and no term was evaluated; re-fire to mint a fresh admission."
+      fi
       return 9
     fi
     # Everything else falls through, and never silently: CC_ADMIT_TOKEN_NOTE rides on whatever row
