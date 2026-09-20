@@ -6867,7 +6867,7 @@ if [ "${1:-}" = "__recycle" ]; then
   fi
   rcy_typed_at_iso="$(date -u -r "$rcy_typed_at" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
 
-  cc_up_cheap() { ps -o comm= -t "${TTY_PATH##*/}" 2>/dev/null | grep -qE '^-?(claude|node)'; }
+  cc_up_cheap() { ps -o comm= -t "${TTY_PATH##*/}" 2>/dev/null | grep -E '^-?(claude|node)' >/dev/null; }
   rcy_boot_rc_read() { # → the rc lr-fire-resume wrote FOR THIS ATTEMPT, or nothing
     local f mt
     [ -n "${RCY_RUN_DIR:-}" ] || return 0
@@ -7465,7 +7465,7 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   #    lead's harvest, and a transplant would orphan it (D2-safety R6, D3-safety R5 — teammate rule
   #    0). The head of the transcript is where the harness records `agentName`; 8 KB is the bound
   #    that keeps this cheap on a 200 MB file.
-  if head -c 8000 "$PRP_TX" 2>/dev/null | grep -q '"agentName"'; then
+  if head -c 8000 "$PRP_TX" 2>/dev/null | grep '"agentName"' >/dev/null; then
     echo "teammate: YES — agentName in the first 8 KB of $PRP_TX"
     prp_verdict "REFUSED:teammate" 5
   fi
