@@ -547,8 +547,22 @@ SH
   # "it printed one and it was too big" are different failures — the first says the message
   # shape moved, the second says the watcher was slow.
   [ -n "$el" ] || { echo "the watcher printed no elapsed — its message shape moved: $output"; false; }
-  [ "$el" -le 3 ] || { echo "the watcher took ${el}s to read an rc that was on disk before it looked: $output"; false; }
-  [ $((t1 - t0)) -le 15 ] || { echo "the whole run took $((t1 - t0))s: $output"; false; }
+  # JUDGED ONLY ON A QUIET BOX. Both numbers below are WALL CLOCK, and a wall-clock verdict taken on
+  # a saturated machine is a fact about the BOX. Measured 2026-09-20 by an adversarial pass: on the
+  # UNMUTATED tree at 1-min load 62 this case failed twice consecutively, reading 5 s and 6 s
+  # against the ≤3 s bound — the identical defect 1b2676f4c fixed in tests/cc-lr.bats one day
+  # earlier, re-introduced here. Above the band the timings are PRINTED, never judged; the
+  # load-INVARIANT half of the claim — that the verdict is FAILED:relaunch:rc=9, that the ledger row
+  # and the alarm carry the refusing term, and that the run's own state log records it — is asserted
+  # unconditionally below and is what this case actually exists to pin. The band is 1.0/core, not
+  # 2.0: 2.0 is the capacity gate's REFUSAL line for net-new work, not a quiet-box line.
+  lpc="$(python3 -c 'import os;print("%.2f" % (os.getloadavg()[0]/(os.cpu_count() or 1)))')"
+  quiet="$(python3 -c "import sys;print(1 if float(sys.argv[1]) < float('${RCY_JUDGE_MAX_LPC:-1.0}') else 0)" "$lpc")"
+  echo "# watcher elapsed ${el}s, whole run $((t1 - t0))s, at load/core $lpc (judged: $quiet)" >&3
+  if [ "$quiet" = 1 ]; then
+    [ "$el" -le 3 ] || { echo "the watcher took ${el}s to read an rc that was on disk before it looked: $output"; false; }
+    [ $((t1 - t0)) -le 15 ] || { echo "the whole run took $((t1 - t0))s: $output"; false; }
+  fi
   [[ "$output" == *"FAILED:relaunch:rc=9"* ]] || { echo "$output"; false; }
   row="$(grep '"class":"recycle-dead"' "$HOME/.claude/logs/handoffs.jsonl" | tail -1)"
   printf '%s' "$row" | grep -q 'FAILED:relaunch:rc=9' || { echo "$row"; false; }
