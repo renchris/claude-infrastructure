@@ -795,7 +795,35 @@ render_block() {
         [ -f "$f" ] && { wrap="$f"; break; }
       done
     fi
-    [ -n "$wrap" ] && led="$( cd "$cwd" 2>/dev/null && bash "$wrap" --machine 2>/dev/null || true )"
+    # PASS THE SESSION ID WE ARE ALREADY HOLDING. wrap-ledger resolves it as
+    # `--session > WRAP_SESSION_ID > CLAUDE_SESSION_ID > CLAUDE_CODE_SESSION_ID > unresolvable`
+    # (scripts/wrap-ledger.sh:628-638). Withholding it cost two different things, and the second is
+    # the serious one:
+    #
+    #   1. hooks/lib/session-busy.sh:385 returns `UNKNOWN 0 0 none no-session-id` without an id, so
+    #      the ⏳ working-vs-idling line never rendered in any invocation where the env arm is not
+    #      ambient — a launchd job, a daemon, a hermetic `env -i` test.
+    #   2. YOURS is session-scoped, so an unresolvable id makes it 0 and the rung reads ✅ while a
+    #      step THIS session filed sits unrun. Measured in tests/operator-readout.bats's own YOURS
+    #      fixture: `RUNG=✅ YOURS=0` without the id, `RUNG=👤 YOURS=1` with it. The close protocol
+    #      defines 👤 as "landed, but operator-only step(s) THIS SESSION filed are unrun", which is
+    #      that fixture exactly — so the unscoped read was emitting the precise false-done the 👤
+    #      rung exists to prevent, and the suite's `· ✅ live on trunk` assertion was pinning it.
+    #
+    # wrap-ledger.sh:267 already noted that of its seven callers only completion-assert passes
+    # --session "and the resolved SID changes YOURS/BLOCKED". It does — in the correcting direction.
+    #
+    # Guarded on "?" because render mode (/wrap, tests) never parses stdin and leaves SID at its
+    # "?" default; passing that would assert a session that does not exist. Spelled as two explicit
+    # invocations rather than ${var:+…} so no word-splitting question arises in the substitution.
+    _wl_sid=""; case "${SID:-}" in ''|'?') ;; *) _wl_sid="$SID" ;; esac
+    if [ -n "$wrap" ]; then
+      if [ -n "$_wl_sid" ]; then
+        led="$( cd "$cwd" 2>/dev/null && bash "$wrap" --machine --session "$_wl_sid" 2>/dev/null || true )"
+      else
+        led="$( cd "$cwd" 2>/dev/null && bash "$wrap" --machine 2>/dev/null || true )"
+      fi
+    fi
   fi
   if [ -n "$led" ]; then
     lf() { printf '%s' "$led" | grep -E "^$1=" | head -1 | cut -d= -f2-; }
