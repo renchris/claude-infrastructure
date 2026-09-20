@@ -551,3 +551,54 @@ EOF
   [[ "$(idl_first 'select(.caller=="c15k")|.token')" == *"NOT removed"* ]] \
     || { echo "row: $(idl_first 'select(.caller=="c15k")|.token')"; false; }
 }
+
+@test "15l D4a a token is NOT redeemed without sid enforcement — an empty CC_ADMIT_WANT_SID" {
+  # MEASURED on the pre-W2FA library: a token minted for sid-AAA admitted a completely unrelated
+  # caller — rc 0, detail reading "issued for sid-AAA" — because the sid test was
+  # `[ -n "$want" ] && [ "$sid" != "$want" ]`, i.e. SKIPPED ENTIRELY when the caller set no sid.
+  # "SID-ENFORCED" was a caller CONVENTION, not a library property, and the caller that forgets it
+  # is exactly the caller that needed it. Unenforceable ⇒ not redeemed, and NOT consumed: nothing
+  # about the file was verified, so destroying it would take a sibling recovery's admission too.
+  local tok
+  tok="$(mint sid-AAA)"
+  run bash -c 'unset CC_ADMIT_WANT_SID; . "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" \
+               cc_capacity_admit c15l "s"' _ "$LIB" "$tok"
+  [ "$status" -ne 0 ] \
+    || { echo "a token minted for sid-AAA ADMITTED a caller that named no session at all"; echo "$output"; false; }
+  [ -f "$tok" ] || { echo "an unverified token was CONSUMED"; false; }
+  [[ "$(idl_first 'select(.caller=="c15l")|.token')" == *"sid enforcement"* ]] \
+    || { echo "row: $(idl_first 'select(.caller=="c15l")|.token')"; false; }
+}
+
+@test "15m D4b a bare integer in a file is NOT a token — cut -f2 without -s returns the whole line" {
+  # MEASURED on the pre-W2FA library: a file containing ONLY `date +%s` redeemed — rc 0, detail
+  # "issued for 1789862813", file consumed. `cut -f2` WITHOUT `-s` prints the WHOLE line when the
+  # delimiter is absent, so the sid field equalled the timestamp; name that number as the wanted sid
+  # and any such file is an admission. The record was never validated as the 4-field TAB record the
+  # mint writes, so the shape carried no information at all.
+  local f n
+  f="$BATS_TEST_TMPDIR/not-a-token"
+  n="$(date +%s)"
+  printf '%s\n' "$n" > "$f"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID="$3" \
+               cc_capacity_admit c15m "s"' _ "$LIB" "$f" "$n"
+  [ "$status" -ne 0 ] || { echo "a file holding one bare integer was redeemed as an admission"; echo "$output"; false; }
+  [ -f "$f" ] || { echo "an unidentified file was DELETED by the gate — point it anywhere and it is removed"; false; }
+  [[ "$(idl_first 'select(.caller=="c15m")|.token')" == *"MALFORMED"* ]] \
+    || { echo "row: $(idl_first 'select(.caller=="c15m")|.token')"; false; }
+}
+
+@test "15n D4c a record minted under ANOTHER uid is refused even when the file is ours" {
+  # The `-O` test answers a question about the INODE; the record's own uid field answers one about
+  # the MINT. A token copied out of another operator's state dir into ours passes -O and is not
+  # ours — so the two checks are complementary, not redundant, and the row names which one fired.
+  local tok
+  tok="$(mint sid-uid)"
+  printf '%s\t%s\t%s\t%s\n' "$(date +%s)" sid-uid 999999 load > "$tok"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-uid \
+               cc_capacity_admit c15n "s"' _ "$LIB" "$tok"
+  [ "$status" -ne 0 ] || { echo "a record minted by uid 999999 ADMITTED under ours"; false; }
+  [ -f "$tok" ] || { echo "a record that is not ours was CONSUMED"; false; }
+  [[ "$(idl_first 'select(.caller=="c15n")|.token')" == *"999999"* ]] \
+    || { echo "row: $(idl_first 'select(.caller=="c15n")|.token')"; false; }
+}
