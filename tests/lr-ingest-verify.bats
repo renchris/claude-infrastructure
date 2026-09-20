@@ -91,8 +91,11 @@ fixture_ok() {
       runtime_effort:"high", permission_mode:"auto", source_pane:"111", in_place:true}' \
     > "$BUNDLE/MANIFEST.json"
 
+  # `notifications` is ALWAYS emitted by lr-audit.py (:2306) and the fixture omitted it, so B1's
+  # baseline read as an ABSENT container over a bundle that in production always has one — a fixture
+  # unfaithful on exactly the axis clause B1 was being changed on.
   jq -n '{counts:{workflows:0, subagents:0, gaps:0, waiting:0},
-          delegations:{spawned:1, settled:1, open:0},
+          delegations:{spawned:1, settled:1, open:0, notifications:{}},
           last_api_error:{error:"rate_limit", status:429, kind:"session"},
           teams:{led:[{name:"t", members:[]}], other_team_dirs:[], wip_refs:[]},
           session_dir:"/nonexistent", transcript_sha256:"deadbeef"}' \
@@ -316,7 +319,10 @@ sc_stat() { env CLAUDE_CONFIG_DIR="$1" \
   before_t="$(ls -1 "$TGT/state" 2>/dev/null | sort | md5)"
   run verify --no-clear
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"PASS D1 — pre-limit sentinel NOT touched (--no-clear)"* ]] || { echo "$output"; false; }
+  # The --no-clear branch now CLASSIFIES what it read instead of blanket-reporting it (W3i C4), so
+  # the line names whose sentinel is armed at the source key as well as that it was left alone.
+  [[ "$output" == *"PASS D1 — this session's own pre-limit sentinel is armed at"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"NOT touched (--no-clear)"* ]] || { echo "$output"; false; }
   [[ "$output" == *"PASS D2 — this session's own sentinel is armed at the target key, NOT touched"* ]] \
     || { echo "$output"; false; }
   [ "$before_s" = "$(ls -1 "$SRC/state" 2>/dev/null | sort | md5)" ] \
@@ -355,7 +361,9 @@ sc_stat() { env CLAUDE_CONFIG_DIR="$1" \
   [[ "$output" != *"D1 — auto-continue cleared: refused"* ]] || { echo "the label still contradicts its value: $output"; false; }
   last="$(printf '%s\n' "$output" | tail -1)"
   [[ "$last" != *"auto-continue cleared"* ]] || { echo "the PROMPT claims a clear that did not happen: $last"; false; }
-  [[ "$last" == *"pre-limit auto-continue left to its owner"* ]] || { echo "the prompt does not say what actually happened: $last"; false; }
+  # The check list in the prompt is now ACCUMULATED at the clause calls (W3i C6), so D1's own
+  # outcome rides in as its subject rather than as a hand-written trailing clause.
+  [[ "$last" == *"pre-limit auto-continue: left to its owner"* ]] || { echo "the prompt does not say what actually happened: $last"; false; }
 }
 
 @test "A6: a PRESENT but SILENT events.jsonl REFUSES — silence is not zero" {
@@ -495,4 +503,190 @@ sc_stat() { env CLAUDE_CONFIG_DIR="$1" \
   a1="$(printf '%s\n' "$output" | grep '^FAIL A1 ' || true)"
   [ -n "$a1" ] || { echo "no A1 line at all: $output"; false; }
   [ "${#a1}" -le 215 ] || { echo "the A1 line is ${#a1} chars — the 200-char cap is gone: $a1"; false; }
+}
+
+# ══ W3i B3/C1-C7 — THE ARMS THAT FIRE ON REAL INPUT, AND THE ONES THE PASS ADDED ═════════════════
+# A read-only sweep of all 69 bundles under ~/.reso/limit-recover returned rc=1 on 69 of 69. Each
+# case below is either an arm that fired on those real bundles with no case at all (D's rc-97 pair
+# fired on 10 of 69), or an arm this hardening pass itself ADDED — a new guard with no mutant that
+# kills it is untested surface added at the same rate the old surface was pinned.
+
+# A transcript carrying ONE spawn whose only terminal word is a FAILED task-notification:
+# spawned=1, settled=1 (a terminal notification settles), open=0, nonsuccess=1.
+tx_one_failed_delegation() { # $1=tool_use_id
+  printf '%s\n' \
+    '{"type":"user","timestamp":"2026-09-19T17:00:00.000Z","message":{"role":"user","content":"go"}}' \
+    "{\"type\":\"assistant\",\"timestamp\":\"2026-09-19T17:00:01.000Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"$1\",\"name\":\"Agent\",\"input\":{\"description\":\"a delegation that failed\"}}]}}" \
+    "{\"type\":\"user\",\"timestamp\":\"2026-09-19T17:05:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"<task-notification><task-id>t1</task-id><tool-use-id>$1</tool-use-id><status>failed</status></task-notification>\"}}" \
+    > "$TGT/projects/$SLUG/$SID.jsonl"
+}
+
+@test "B1: a nonsuccess notification the BUNDLE already recorded is not a change" {
+  # THE MEASUREMENT THAT MOTIVATED THIS. B1's own heading is "nothing changed under us since the
+  # bundle was cut", and it asked `nonsuccess == 0` — an ABSOLUTE test over a re-derivation of the
+  # WHOLE transcript, so every delegation the session ever failed counted against a recovery that
+  # had changed nothing. Over the 33 current-schema bundles on disk B1 failed 19, `open=0` and
+  # `spawned==settled` in every one, so nonsuccess was the sole discriminator — while the bundle's
+  # own audit already held the same ids (a99681dc 8 and 8, 4101dbdf 1 and 1, c0f857b6 1 and 1).
+  tx_one_failed_delegation tu_ns_1
+  jq '.delegations.notifications = {"tu_ns_1":{"status":"failed","task_id":"t1"}}' "$BUNDLE/audit.json" \
+    > "$BUNDLE/a.tmp" && mv "$BUNDLE/a.tmp" "$BUNDLE/audit.json"
+  run verify --no-clear
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"PASS B1 — re-audit open=0"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"no NEW nonsuccess notification since the bundle (1 already recorded in its audit)"* ]] \
+    || { echo "$output"; false; }
+}
+
+@test "B1: a nonsuccess notification the bundle did NOT record IS a change, and refuses" {
+  # The other half, and what keeps the clause a gate rather than a formality: a delegation that
+  # failed BETWEEN the handoff and the relaunch is exactly an id absent from the bundle's baseline.
+  tx_one_failed_delegation tu_ns_2
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL B1 — re-audit open=0 NEW-nonsuccess=1 (of 1 total)"* ]] || { echo "$output"; false; }
+}
+
+@test "B1: a bundle with NO notifications baseline is unevaluable, not zero — but only when there is something to compare" {
+  # The absent-container arm (empty-vs-no-surface). An audit that predates the `delegations` field
+  # carries no baseline at all: with a nonsuccess to judge, that is unevaluable and fails; with none,
+  # nothing needs a baseline and the clause clears.
+  tx_one_failed_delegation tu_ns_3
+  jq 'del(.delegations)' "$BUNDLE/audit.json" > "$BUNDLE/a.tmp" && mv "$BUNDLE/a.tmp" "$BUNDLE/audit.json"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL B1 — re-audit open=0 NEW-nonsuccess=NO-BASELINE"* ]] || { echo "$output"; false; }
+
+  fixture_ok                                  # restore, then take the baseline away with no nonsuccess
+  jq 'del(.delegations)' "$BUNDLE/audit.json" > "$BUNDLE/a.tmp" && mv "$BUNDLE/a.tmp" "$BUNDLE/audit.json"
+  run verify --no-clear
+  [[ "$output" == *"PASS B1 —"* ]] || { echo "an absent baseline refused a re-audit with nothing to compare: $output"; false; }
+}
+
+@test "GITPATH: C5 with NO git on PATH is a FAILURE, not the not-a-repo pass" {
+  # W3i C2. C5's `command -v git` arm was decorative: deleting it leaves `git -C … rev-parse`
+  # exiting 127, which falls into the not-a-repo branch, and a manifest with no branch then PASSES —
+  # a gate clearing a question it could not ask. PATH is rebuilt from scratch so the absence is real
+  # rather than shadowed by a later directory that still holds git.
+  stub="$BATS_TEST_TMPDIR/nogit"; mkdir -p "$stub"
+  for t in bash sh env jq python3 sed cut tr date cat ls rm mkdir chmod shasum grep awk head tail sort wc dirname basename printf; do
+    real="$(command -v "$t" 2>/dev/null)" || continue
+    [ -n "$real" ] || continue
+    ln -sf "$real" "$stub/$t"
+  done
+  [ ! -e "$stub/git" ] || { echo "the stub PATH still carries git"; false; }
+  jq 'del(.branch)' "$BUNDLE/MANIFEST.json" > "$BUNDLE/m.tmp" && mv "$BUNDLE/m.tmp" "$BUNDLE/MANIFEST.json"
+  run env PATH="$stub" CLAUDE_CONFIG_DIR="$TGT" bash "$VERIFY" --no-clear "$BUNDLE"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL C5 — git is not on PATH"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"PASS C5"* ]] || { echo "C5 passed over a question it could not ask: $output"; false; }
+}
+
+@test "C5: a manifest with NEITHER worktree nor cwd says so, instead of naming an empty path" {
+  # 4 of the 69 live bundles printed "worktree  does not exist" — a sentence with a hole where its
+  # subject belongs, because `[ ! -d "" ]` renders "empty" and "missing" identically.
+  jq 'del(.worktree) | del(.cwd)' "$BUNDLE/MANIFEST.json" > "$BUNDLE/m.tmp" && mv "$BUNDLE/m.tmp" "$BUNDLE/MANIFEST.json"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL C5 — the manifest records neither worktree nor cwd"* ]] || { echo "$output"; false; }
+}
+
+@test "D1RC/D2RC: a worktree that no longer exists names the CAUSE, not an exit code" {
+  # W3i C7. These two arms fired on 10 of the 69 live bundles — every one whose worktree has since
+  # been removed — and printed `session-continue.sh status under <dir> exited 97: ` with an empty
+  # tail: an exit code where a cause belongs, from a number this script produces itself (its own
+  # `cd` guard), not one the hook ever returned.
+  gone="$BATS_TEST_TMPDIR/worktree-that-was-reaped"
+  jq --arg w "$gone" '.worktree = $w | .cwd = $w' "$BUNDLE/MANIFEST.json" \
+    > "$BUNDLE/m.tmp" && mv "$BUNDLE/m.tmp" "$BUNDLE/MANIFEST.json"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL D1 — the worktree $gone no longer exists"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL D2 — the worktree $gone no longer exists"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"exited 97"* ]] || { echo "the bare exit code is back: $output"; false; }
+}
+
+@test "D2NOCFG: an ABSENT target_cfg is its own D2 failure, not a key read from nothing" {
+  jq 'del(.target_cfg)' "$BUNDLE/MANIFEST.json" > "$BUNDLE/m.tmp" && mv "$BUNDLE/m.tmp" "$BUNDLE/MANIFEST.json"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL D2 — the manifest records no target_cfg"* ]] || { echo "$output"; false; }
+}
+
+@test "D1UNCLASS/D2UNCLASS: a hook line neither clause can classify fails CLOSED on both" {
+  # The `*)` arms. A session-continue that answers something this gate has no rule for is a contract
+  # change, and the only safe reading of an answer you cannot parse is "I do not know".
+  cat > "$HOME/.claude/hooks/session-continue.sh" <<'SH'
+#!/bin/bash
+echo "banana"
+exit 0
+SH
+  chmod +x "$HOME/.claude/hooks/session-continue.sh"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL D1 — session-continue.sh status"*"returned an outcome this gate cannot classify: banana"* ]] \
+    || { echo "$output"; false; }
+  [[ "$output" == *"FAIL D2 — session-continue.sh status"*"returned an unclassifiable line: banana"* ]] \
+    || { echo "$output"; false; }
+}
+
+@test "D2: an anonymously armed sentinel at the target key refuses, and is not called 'session ?'" {
+  # W3i C3, the D6 defect one layer down. `status` rendered the no-sid state `sid=?`, so D2 printed
+  # "session ? has an armed continuation" — a sentence about a session that does not exist. The
+  # VERDICT was always right (unknown ownership is not consent); the sentence invented a subject.
+  env CLAUDE_CONFIG_DIR="$TGT" bash -c "cd '$WT' && '$HOME/.claude/hooks/session-continue.sh' set 'an anonymous park'" >/dev/null
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL D2 — an armer that recorded NO sid has a continuation"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"session ? has"* ]] || { echo "the invented session is back: $output"; false; }
+  [[ "$output" != *"session unrecorded has"* ]] || { echo "the token leaked into the sentence: $output"; false; }
+}
+
+@test "C4: when source_cfg == target_cfg, D1 takes D2's verdict instead of contradicting it" {
+  # W3i C4. D1 and D2 used to take OPPOSITE verdicts on ONE state: a foreign sentinel at the source
+  # key read `PASS D1 — NOTHING WAS CLEARED` while the identical state at the target key read
+  # `FAIL D2`. When the two config dirs are equal those are THE SAME FILE — measured on 1 of the 69
+  # live bundles — so the contradiction is not hypothetical. The rule is one (never clear what this
+  # session did not arm); the VERDICT is a property of the key, and this key is the one the
+  # recovered session's own Stop hook will read.
+  jq --arg t "$TGT" '.source_cfg = $t' "$BUNDLE/MANIFEST.json" > "$BUNDLE/m.tmp" && mv "$BUNDLE/m.tmp" "$BUNDLE/MANIFEST.json"
+  sc_arm "$TGT" "9999ffff-0000-4000-8000-000000009999" "the SIBLING wave step"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL D1 — source_cfg == target_cfg, so this IS the key the recovered session reads"* ]] \
+    || { echo "$output"; false; }
+  [[ "$output" == *"FAIL D2 — session 9999ffff-0000-4000-8000-000000009999 has an armed continuation"* ]] \
+    || { echo "$output"; false; }
+}
+
+@test "C4 CONTROL: a DIFFERENT source key still passes D1 while D2 refuses the target key" {
+  # The arm that keeps the case above from being a blanket refusal. The transplant moves the session
+  # to $TCFG and its Stop resolves the sentinel there, so a stranger armed at the SOURCE key is a
+  # key the recovered session can never read — nothing of ours, and no risk of ours.
+  sc_arm "$SRC" "9999ffff-0000-4000-8000-000000009999" "a sibling on the source account"
+  run verify --no-clear
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"PASS D1 — NOTHING WAS CLEARED"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"the source key is NOT the key the recovered session reads"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"PASS D2 — nothing armed at the key the recovered session reads"* ]] || { echo "$output"; false; }
+}
+
+@test "C6: the prompt's check list is the clauses that PASSED, never a hand-written one" {
+  # W3i C6. The list used to be a literal — "(config dir, session id, transcript path, lock target,
+  # source tombstone, branch; …)" — and it had already drifted: "session id" is no clause of this
+  # gate, and NONE of the six A clauses that decide whether anything is owed appeared at all. It is
+  # accumulated at the clause calls now, which is the only place that knows a clause ran.
+  run verify --no-clear
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  last="$(printf '%s\n' "$output" | tail -1)"
+  for subj in "nothing owed at handoff" "every delegation settled" "died on a quota wall" \
+              "the recycle interrupted nothing" "config dir" "lock target" "branch"; do
+    [[ "$last" == *"$subj"* ]] || { echo "the check list does not name '$subj': $last"; false; }
+  done
+  [[ "$last" != *"session id"* ]] || { echo "the stale hand-written entry is back: $last"; false; }
+  # …and a clause that did NOT run contributes nothing: drop A5's container and its subject goes.
+  jq 'del(.teams)' "$BUNDLE/audit.json" > "$BUNDLE/a.tmp" && mv "$BUNDLE/a.tmp" "$BUNDLE/audit.json"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" != *"no running teammate"* ]] || { echo "a FAILED clause still described itself in the list: $output"; false; }
 }

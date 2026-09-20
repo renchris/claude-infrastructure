@@ -58,9 +58,16 @@ LRV_FIRST_FAIL=""
 # a fact the clause list already holds, and the two drift the moment a clause is added (W3i added
 # D2, and the literal would have kept saying 13 over 14 PASS lines).
 LRV_PASSES=0
+# …and the resume prompt's check list is ACCUMULATED at the clause calls for the same reason (W3i
+# C6). It used to be a hand-written parenthetical — "(config dir, session id, transcript path, lock
+# target, source tombstone, branch; pre-limit auto-continue …)" — and it had already drifted: it
+# named "session id", which is no clause, and it described NONE of the six A clauses that decide
+# whether anything is owed. A list written anywhere but the call site describes the clauses someone
+# remembered, not the ones that ran.
+LRV_SUBJECTS=""
 
-clause() { # $1=PASS|FAIL  $2=id  $3=one-line value
-  local v="$1" id="$2" txt="$3"
+clause() { # $1=PASS|FAIL  $2=id  $3=one-line value  [$4=the SUBJECT this clause settled]
+  local v="$1" id="$2" txt="$3" subj="${4:-}"
   # A clause line must be ONE line: the launcher folds a FAIL straight into a prompt that is typed
   # into a TUI composer, and an embedded newline there submits half a sentence.
   txt="$(printf '%s' "$txt" | tr '\n\r\t' '   ' | cut -c1-200)"
@@ -70,6 +77,13 @@ clause() { # $1=PASS|FAIL  $2=id  $3=one-line value
     [ -n "$LRV_FIRST_FAIL" ] || LRV_FIRST_FAIL="$id"
   else
     LRV_PASSES=$(( LRV_PASSES + 1 ))
+    # A clause added without a subject contributes its ID, which is visible in the prompt rather
+    # than silently missing from it — the failure a hand-written list makes invisible.
+    [ -n "$subj" ] || subj="$id"
+    case ", $LRV_SUBJECTS," in
+      *", $subj,"*) : ;;                      # two clauses may settle one subject (D1/D2, C1/C2)
+      *) LRV_SUBJECTS="${LRV_SUBJECTS:+$LRV_SUBJECTS, }$subj" ;;
+    esac
   fi
   return 0
 }
@@ -115,13 +129,13 @@ TS="$(mval '.ts // "ABSENT"')"
 
 # ── A — NOTHING IS OWED ──────────────────────────────────────────────────────────────────────────
 _v="$(mval '.gaps_at_handoff // "ABSENT"')"
-if [ "$_v" = 0 ]; then clause PASS A1 "gaps_at_handoff=0"; else clause FAIL A1 "gaps_at_handoff=$_v"; fi
+if [ "$_v" = 0 ]; then clause PASS A1 "gaps_at_handoff=0" "nothing owed at handoff"; else clause FAIL A1 "gaps_at_handoff=$_v"; fi
 
 _g="$(aval '.counts.gaps // "ABSENT"')"; _w="$(aval '.counts.waiting // "ABSENT"')"
 # `waiting` is the audit's own name for PENDING / UNSETTLED-INFLIGHT / RUNNING units (lr-audit.py
 # :2272-2278) — i.e. work that was IN FLIGHT when the bundle was cut. It is the clause that makes
 # A6 below a narrow residual rather than the only guard against killing a live delegation.
-if [ "$_g" = 0 ] && [ "$_w" = 0 ]; then clause PASS A2 "counts.gaps=0 counts.waiting=0"
+if [ "$_g" = 0 ] && [ "$_w" = 0 ]; then clause PASS A2 "counts.gaps=0 counts.waiting=0" "no gaps and nothing in flight"
 else clause FAIL A2 "counts.gaps=$_g counts.waiting=$_w"; fi
 
 _d="$(jq -r '
@@ -131,14 +145,14 @@ _d="$(jq -r '
        + "/" + (.delegations.spawned|tostring) + "/" + (.delegations.settled|tostring) end' "$AUD" 2>/dev/null)"
 _open="${_d%%/*}"; _rest="${_d#*/}"; _sp="${_rest%%/*}"; _se="${_rest#*/}"
 if [ "$_open" = 0 ] && [ -n "$_sp" ] && [ "$_sp" = "$_se" ]; then
-  clause PASS A3 "delegations open=0 spawned=$_sp settled=$_se"
+  clause PASS A3 "delegations open=0 spawned=$_sp settled=$_se" "every delegation settled"
 else clause FAIL A3 "delegations open=$_open spawned=$_sp settled=$_se"; fi
 
 # The session must have died on a QUOTA wall, not on a network error or a crash — a transplant is
 # the wrong cure for anything else, and handoff-fire's own precheck refuses those before the move.
 _k="$(aval '.last_api_error.kind // "ABSENT"')"
 case "$_k" in
-  session|weekly|monthly_spend) clause PASS A4 "last_api_error.kind=$_k" ;;
+  session|weekly|monthly_spend) clause PASS A4 "last_api_error.kind=$_k" "died on a quota wall, not a crash" ;;
   *) clause FAIL A4 "last_api_error.kind=$_k (expected session|weekly|monthly_spend)" ;;
 esac
 
@@ -148,7 +162,7 @@ esac
 _t="$(jq -r 'if (.teams|type) != "object" then "ABSENT"
              elif (.teams|has("led")|not) then "ABSENT"
              else ([.teams.led[]? | .members[]? | select(.verdict=="RUNNING")] | length | tostring) end' "$AUD" 2>/dev/null)"
-if [ "$_t" = 0 ]; then clause PASS A5 "teams.led RUNNING members=0"; else clause FAIL A5 "teams.led RUNNING members=$_t"; fi
+if [ "$_t" = 0 ]; then clause PASS A5 "teams.led RUNNING members=0" "no running teammate"; else clause FAIL A5 "teams.led RUNNING members=$_t"; fi
 
 # A6 — killed_inflight, read from THE RUN'S OWN state log (W2's lr_state_append, $B/events.jsonl).
 # THE ABSENCE OF THE FILE IS ITS OWN VERDICT AND IT IS A FAILURE. Post-W2 every admitted recovery
@@ -174,6 +188,16 @@ if [ "$_t" = 0 ]; then clause PASS A5 "teams.led RUNNING members=0"; else clause
 # line in lrh_precheck, W2's function), A6 refuses every real recovery and the fast path stays
 # unreachable. That is the same direction the absent-file arm already took, and the alternative is a
 # gate that says yes on no evidence.
+#
+# ── THE WRITER NOW EXISTS (W3i B3, lr-handoff.sh lrh_precheck) ───────────────────────────────────
+# The paragraph above described a gate that could not be passed by any real recovery, and a sweep of
+# all 69 bundles under ~/.reso/limit-recover proved it: rc 1 on 69 of 69, A6 failing on 68 of the 68
+# that reached it and being the SOLE failure on one. `lrh_precheck` now records the read-only
+# probe's own `live_subagents` count as `killed_inflight=<n>` the moment the probe succeeds, so a
+# recovery cut by today's lr-handoff carries the positive statement this clause asks for. It cannot
+# retroactively reach the 69 bundles already on disk — their state logs were written before the
+# writer existed — so the sweep's numbers change only for bundles cut from here on, and this comment
+# says so rather than letting a later reader mistake an unchanged sweep for an unfixed gate.
 EV="$B/events.jsonl"
 if [ ! -s "$EV" ]; then
   clause FAIL A6 "no events.jsonl in the bundle — the run's state log never ran; killed_inflight is unknowable"
@@ -184,7 +208,7 @@ else
         , ( (.detail // "") | capture("killed_inflight=(?<n>[0-9]+)") | .n | tonumber ) ) ]
     | if length == 0 then -1 else max end' "$EV" 2>/dev/null)"
   case "$_ki" in
-    0)  clause PASS A6 "killed_inflight=0 (recorded in events.jsonl)" ;;
+    0)  clause PASS A6 "killed_inflight=0 (recorded in events.jsonl)" "the recycle interrupted nothing" ;;
     -1) clause FAIL A6 "events.jsonl carries no killed_inflight record — the value was never written, so what the recycle interrupted is UNRECORDED, not zero" ;;
     ''|*[!0-9-]*) clause FAIL A6 "events.jsonl is unparseable — killed_inflight cannot be read" ;;
     *)  clause FAIL A6 "killed_inflight=$_ki — the recycle interrupted in-flight work" ;;
@@ -207,17 +231,49 @@ if [ -z "$TX" ] || [ ! -r "$TX" ]; then
 elif [ ! -r "$LRV_DIR/lr-audit.py" ]; then
   clause FAIL B1 "lr-audit.py is not beside this script ($LRV_DIR) — the ledger cannot be re-derived"
 else
+  # ── THE NONSUCCESS TEST IS RELATIVE TO THE BUNDLE, NOT TO ZERO (W3i B3) ────────────────────────
+  # This clause's job is in its own heading: NOTHING CHANGED UNDER US SINCE THE BUNDLE WAS CUT. It
+  # asked `nonsuccess_notifications == 0` — an ABSOLUTE test — over a re-derivation of the WHOLE
+  # transcript, so every failed delegation the session ever had counted against a recovery that had
+  # not changed anything at all. Measured over the 33 current-schema bundles under
+  # ~/.reso/limit-recover: B1 failed 19, and in every failing case `open=0` and `spawned==settled`
+  # held, so `nonsuccess` was the sole discriminator — while the bundle's OWN audit snapshot already
+  # recorded the same notifications (a99681dc: 8 at bundle time, 8 now; 4101dbdf: 1 and 1;
+  # c0f857b6: 1 and 1). Those three are the clause refusing a state it was cut from.
+  #
+  # The baseline is in the bundle, so no new store is needed: `audit.json .delegations.notifications`
+  # is the same map `--ledger-only` derives `nonsuccess_notifications` from, and a notification
+  # already terminal-but-not-completed there is not a change. What B1 must still catch — and this is
+  # its whole purpose — is a delegation that FAILED between the handoff and the relaunch, which is
+  # exactly an id absent from that baseline.
+  #
+  # A bundle whose audit predates the `delegations` field has NO baseline. That is unevaluable, not
+  # zero (this file's contract), so it fails — but only when there is something to compare: a
+  # re-audit with no nonsuccess at all needs no baseline to clear.
   _led="$(python3 "$LRV_DIR/lr-audit.py" --ledger-only --transcript "$TX" 2>/dev/null)"
-  _res="$(printf '%s' "$_led" | jq -r '
+  _res="$(printf '%s' "$_led" | jq -r --slurpfile snap "$AUD" '
+    def baseline:
+      (($snap[0] // {}) | .delegations) as $d
+      | if ($d | type) != "object" or ($d | has("notifications") | not) then null
+        else [ $d.notifications | to_entries[]
+               | select(((.value.status // "") != "running") and ((.value.status // "") != "completed"))
+               | .key ] end;
     if (type != "object") or (has("open_delegations")|not) or (has("nonsuccess_notifications")|not)
-       or (has("spawned")|not) or (has("settled")|not) then "ABSENT/ABSENT/ABSENT/ABSENT"
-    else ((.open_delegations|length)|tostring) + "/" + ((.nonsuccess_notifications|length)|tostring)
-         + "/" + (.spawned|tostring) + "/" + (.settled|tostring) end' 2>/dev/null)"
-  _o="${_res%%/*}"; _r1="${_res#*/}"; _n="${_r1%%/*}"; _r2="${_r1#*/}"; _s1="${_r2%%/*}"; _s2="${_r2#*/}"
+       or (has("spawned")|not) or (has("settled")|not) then "ABSENT/ABSENT/ABSENT/ABSENT/ABSENT"
+    else
+      baseline as $b
+      | [ .nonsuccess_notifications[]? | .tool_use_id ] as $now
+      | ( if $b == null then (if ($now|length) == 0 then "0" else "NO-BASELINE" end)
+          else ([ $now[] | select( . as $i | ($b | index($i)) == null ) ] | length | tostring) end ) as $new
+      | ((.open_delegations|length)|tostring) + "/" + $new + "/" + (.spawned|tostring)
+        + "/" + (.settled|tostring) + "/" + (($now|length)|tostring)
+    end' 2>/dev/null)"
+  _o="${_res%%/*}"; _r1="${_res#*/}"; _n="${_r1%%/*}"; _r2="${_r1#*/}"; _s1="${_r2%%/*}"
+  _r3="${_r2#*/}"; _s2="${_r3%%/*}"; _nall="${_r3#*/}"
   if [ "$_o" = 0 ] && [ "$_n" = 0 ] && [ -n "$_s1" ] && [ "$_s1" = "$_s2" ]; then
-    clause PASS B1 "re-audit open=0 nonsuccess=0 spawned=$_s1 settled=$_s2"
+    clause PASS B1 "re-audit open=0 spawned=$_s1 settled=$_s2, no NEW nonsuccess notification since the bundle ($_nall already recorded in its audit)" "the ledger re-derived now still agrees"
   else
-    clause FAIL B1 "re-audit open=$_o nonsuccess=$_n spawned=$_s1 settled=$_s2"
+    clause FAIL B1 "re-audit open=$_o NEW-nonsuccess=$_n (of $_nall total) spawned=$_s1 settled=$_s2"
   fi
 fi
 
@@ -247,12 +303,12 @@ elif [ -z "$_mapped" ]; then
 elif [ "$_mapped" != "$TCFG_M" ]; then
   clause FAIL C1 "account map says $TARGET → $_mapped, manifest says $TCFG_M"
 else
-  clause PASS C1 "config dir $TCFG_M agrees across env, manifest and the account map ($TARGET)"
+  clause PASS C1 "config dir $TCFG_M agrees across env, manifest and the account map ($TARGET)" "config dir"
 fi
 
 _hits=0; _tx_seen=""
 for _c in "$TCFG_M"/projects/*/"$SID".jsonl; do [ -r "$_c" ] || continue; _hits=$((_hits+1)); _tx_seen="$_c"; done
-if [ "$_hits" = 1 ]; then clause PASS C2 "transcript $_tx_seen"
+if [ "$_hits" = 1 ]; then clause PASS C2 "transcript $_tx_seen" "transcript path"
 elif [ "$_hits" = 0 ]; then clause FAIL C2 "no transcript $SID under $TCFG_M/projects"
 else clause FAIL C2 "$_hits copies of $SID under $TCFG_M/projects — ambiguous"; fi
 
@@ -265,7 +321,7 @@ LOCK=""
 if [ ! -r "$LOCK" ]; then clause FAIL C3 "no transplant lock at $LOCK"
 else
   _to="$(jq -r '.to // "ABSENT"' "$LOCK" 2>/dev/null)"
-  if [ "$_to" = "$TCFG_M" ]; then clause PASS C3 "lock $LOCK → $_to"
+  if [ "$_to" = "$TCFG_M" ]; then clause PASS C3 "lock $LOCK → $_to" "lock target"
   else clause FAIL C3 "lock $LOCK says to=$_to, manifest target_cfg=$TCFG_M"; fi
 fi
 
@@ -274,7 +330,7 @@ TOMB=""
 if [ -z "$TOMB" ]; then
   for _c in "$SRC_CFG"/projects/*/"$SID".HANDOFF.json; do [ -r "$_c" ] && { TOMB="$_c"; break; }; done
 fi
-if [ -n "$TOMB" ] && [ -r "$TOMB" ]; then clause PASS C4 "source tombstoned at $TOMB"
+if [ -n "$TOMB" ] && [ -r "$TOMB" ]; then clause PASS C4 "source tombstoned at $TOMB" "source tombstone"
 else clause FAIL C4 "no source tombstone for $SID under $SRC_CFG — the source may still be live"; fi
 
 # A pool worktree is a FLEET slot, not a session's own tree: resuming into one would hand the
@@ -289,13 +345,18 @@ else clause FAIL C4 "no source tombstone for $SID under $SRC_CFG — the source 
 # statement that this tree never was a repo. Two sources agreeing is what earns the pass; one
 # source's ambiguous rc never did.
 MAN_BR="$(mval '.branch // "ABSENT"')"
-if [ ! -d "$WT" ]; then
+if [ -z "$WT" ] || [ "$WT" = ABSENT ]; then
+  # An EMPTY path is not a missing directory, and `[ ! -d "" ]` renders the two identically —
+  # "worktree  does not exist" is what 4 of the 69 live bundles printed, a sentence with a hole in
+  # it where the subject belongs (empty-vs-no-surface, applied to the message rather than the test).
+  clause FAIL C5 "the manifest records neither worktree nor cwd — there is no tree to check against pool/*"
+elif [ ! -d "$WT" ]; then
   clause FAIL C5 "worktree $WT does not exist"
 elif ! command -v git >/dev/null 2>&1; then
   clause FAIL C5 "git is not on PATH — whether $WT is a fleet pool slot cannot be evaluated"
 elif ! git -C "$WT" rev-parse --git-dir >/dev/null 2>&1; then
   if [ "$MAN_BR" = ABSENT ] || [ -z "$MAN_BR" ]; then
-    clause PASS C5 "$WT is not a git repo and the manifest recorded no branch — the two agree, there is no pool slot to be"
+    clause PASS C5 "$WT is not a git repo and the manifest recorded no branch — the two agree, there is no pool slot to be" "branch"
   else
     clause FAIL C5 "the manifest recorded branch $MAN_BR but git cannot read $WT as a repo — C5 is unevaluable"
   fi
@@ -304,7 +365,7 @@ else
   case "$_br" in
     pool/*) clause FAIL C5 "branch $_br is a fleet pool slot" ;;
     "")     clause FAIL C5 "$WT is on a detached HEAD — no branch to check against pool/*" ;;
-    *)      clause PASS C5 "branch $_br" ;;
+    *)      clause PASS C5 "branch $_br" "branch" ;;
   esac
 fi
 
@@ -327,53 +388,103 @@ fi
 #        remove, and the `clear` verb's ownership guard lets it through precisely because it is ours.
 #   D2 — the sentinel the RECOVERED session will actually read, under the TARGET config dir. NEVER
 #        cleared from here: an armed one there belongs to another session and the launcher is not
-#        entitled to it. hooks/session-continue.sh:1176 already clears-and-ignores a foreign sentinel
+#        entitled to it. hooks/session-continue.sh already clears-and-ignores a foreign sentinel
 #        on the recovered session's own first Stop, so nothing is owed — but a live sibling armed in
 #        the very cwd this session is about to resume into is a state this gate must not license.
+#
+# ── ONE RULE, AND THE KEY SUPPLIES THE CONSEQUENCE (W3i C4) ──────────────────────────────────────
+# D1 and D2 used to take OPPOSITE verdicts on one state: a foreign sentinel at the source key read
+# `PASS D1 — NOTHING WAS CLEARED`, the identical state at the target key read `FAIL D2`. Two clauses
+# disagreeing about the same fact is a gate that cannot be reasoned about, so the rule is stated
+# once and the difference is derived:
+#
+#   THE RULE      never clear a sentinel this session did not arm. Both clauses obey it; that is why
+#                 D1 passes `--if-mine` and why D2 never clears a stranger at all.
+#   THE VERDICT   is a property of the KEY, not of the rule: FAIL iff the key is one the RECOVERED
+#                 session's own Stop hook will read. The target key always is. The source key is NOT
+#                 — the transplant moves the session to $TCFG and its Stop resolves the sentinel
+#                 under that config dir — so a stranger armed at the source key is neither our
+#                 business nor our risk, and D1 says so instead of claiming a clear.
+#   THE OVERLAP   when source_cfg == target_cfg the two keys are THE SAME FILE (measured: 1 of the
+#                 69 live bundles under ~/.reso/limit-recover). There the source key IS the key the
+#                 recovered session reads, so D1 applies the target verdict and the two agree by
+#                 construction rather than by coincidence.
 #
 # An ABSENT source_cfg is not a pass: it means the dir that keyed the arm is unknowable, and a
 # "cleared" printed over a directory we guessed is the false claim this whole script exists to
 # prevent. FAIL, and say which field was missing.
 SC="$HOME/.claude/hooks/session-continue.sh"
-_verb=clear; [ "$LRV_CLEAR" = 1 ] || _verb=status
 _scwd="${WT:-$PWD}"
-sc_run() { # $1=config dir  $2=verb → the hook's own line on stdout, the hook's rc
+# THE OWNERSHIP GUARD IS A FLAG THE CALLER PASSES (W3i B1). `clear` alone is the verb trunk has
+# always shipped — unconditional — because CLAUDE_CODE_SESSION_ID is inherited by every descendant
+# of a session and so cannot distinguish "the session is clearing" from "something the session ran
+# is clearing". This caller is the one that genuinely acts FOR another session, so it is the one
+# that says `--if-mine`.
+sc_run() { # $1=config dir  $2…=verb and flags → the hook's own line on stdout, the hook's rc
+  local _cfg="$1"; shift
   ( cd "$_scwd" 2>/dev/null || exit 97
-    CLAUDE_CONFIG_DIR="$1" CLAUDE_CODE_SESSION_ID="$SID" "$SC" "$2" 2>&1 )
+    CLAUDE_CONFIG_DIR="$_cfg" CLAUDE_CODE_SESSION_ID="$SID" "$SC" "$@" 2>&1 )
 }
+# The owner recorded at the key, read off `status`'s parenthesised HEADER — never off the line.
+# `status` prints `ARMED (<n> continuations, sid=<sid>): <step text>` and the step text is arbitrary
+# operator prose, so a greedy `.*sid=` would take the LAST occurrence, i.e. one the step supplied.
+# `unrecorded` is a real state, not a session (W3i C3): `set` stamps ${f}.sid only when the arming
+# session HAS an id, so the operator's own park records none.
+sc_owner_of() { printf '%s' "$1" | sed -n 's/^ARMED (\([^)]*\)).*/\1/p' | sed -n 's/.*sid=\(.*\)$/\1/p'; }
+_d_same_key=0
+[ -n "$SRC_CFG" ] && [ "$SRC_CFG" = "$TCFG_M" ] && _d_same_key=1
 D1_STATE="unknown"
 if [ ! -x "$SC" ]; then
   clause FAIL D1 "session-continue.sh is not executable at $SC — the armed continuation cannot be cleared"
   clause FAIL D2 "session-continue.sh is not executable at $SC — the target-side sentinel cannot be read"
 else
   # ── D1 — the pre-limit sentinel, under the SOURCE config dir ──────────────────────────────────
+  _verb=(clear --if-mine); [ "$LRV_CLEAR" = 1 ] || _verb=(status)
   if [ -z "$SRC_CFG" ] || [ "$SRC_CFG" = ABSENT ]; then
     clause FAIL D1 "the manifest records no source_cfg — the config dir the pre-limit continuation was armed under is unknowable"
   else
-    _cl="$(sc_run "$SRC_CFG" "$_verb")"
+    _cl="$(sc_run "$SRC_CFG" "${_verb[@]}")"
     _clrc=$?
-    if [ "$_clrc" -ne 0 ]; then
-      clause FAIL D1 "session-continue.sh $_verb under $SRC_CFG exited $_clrc: $_cl"
-    elif [ "$LRV_CLEAR" != 1 ]; then
-      D1_STATE="not touched (--no-clear)"
-      clause PASS D1 "pre-limit sentinel NOT touched (--no-clear) under $SRC_CFG; it reads: $_cl"
+    if [ "$_clrc" -eq 97 ]; then
+      # RC 97 IS THIS SCRIPT'S OWN `cd` FAILING, NOT THE HOOK'S EXIT (W3i C7). It fires on 10 of the
+      # 69 live bundles — every one whose worktree has since been removed — and it used to print a
+      # bare number with an empty tail, which names an exit code where a cause belongs.
+      clause FAIL D1 "the worktree $_scwd no longer exists — the (config dir | cwd) key the pre-limit continuation was armed under cannot be entered, so what is armed there is unreadable"
+    elif [ "$_clrc" -ne 0 ]; then
+      clause FAIL D1 "session-continue.sh ${_verb[*]} under $SRC_CFG exited $_clrc: $_cl"
     else
       # THE LABEL IS READ OFF THE VALUE, NEVER ASSUMED (W3i D7). This line used to say
       # "auto-continue cleared: <value>" for every non-error outcome, so the receipt could read
       # "auto-continue cleared: refused — … nothing was cleared" — a label contradicting its own
       # value is how a false claim survives review.
+      _d1_owner="$(sc_owner_of "$_cl")"
       case "$_cl" in
         "cleared → "*)
           D1_STATE="cleared"
-          clause PASS D1 "pre-limit auto-continue CLEARED under $SRC_CFG: $_cl" ;;
-        "nothing to clear"*)
+          clause PASS D1 "pre-limit auto-continue CLEARED under $SRC_CFG: $_cl" "pre-limit auto-continue: $D1_STATE" ;;
+        "nothing to clear"*|inactive*)
           D1_STATE="was not armed"
-          clause PASS D1 "no pre-limit auto-continue was armed under $SRC_CFG: $_cl" ;;
+          clause PASS D1 "no pre-limit auto-continue was armed under $SRC_CFG: $_cl" "pre-limit auto-continue: $D1_STATE" ;;
+        "ARMED "*)
+          # Only reachable under --no-clear, where D1 asks `status` instead of clearing.
+          if [ "$_d1_owner" = "$SID" ]; then
+            D1_STATE="not touched (--no-clear)"
+            clause PASS D1 "this session's own pre-limit sentinel is armed at $SRC_CFG, NOT touched (--no-clear): $_cl" "pre-limit auto-continue: $D1_STATE"
+          elif [ "$_d_same_key" = 1 ]; then
+            clause FAIL D1 "source_cfg == target_cfg, so this IS the key the recovered session reads, and it is not this session's: $_cl"
+          else
+            D1_STATE="left to its owner (nothing of ours is armed at the source key)"
+            clause PASS D1 "NOTHING WAS CLEARED — the source key is NOT the key the recovered session reads; ${_d1_owner:-an armer that recorded no sid} has one armed at $SRC_CFG|$_scwd: $_cl" "pre-limit auto-continue: $D1_STATE"
+          fi ;;
         refused*)
-          D1_STATE="left to its owner (nothing of ours was armed)"
-          clause PASS D1 "NOTHING WAS CLEARED — the sentinel at $SRC_CFG|$_scwd is not this session's: $_cl" ;;
+          if [ "$_d_same_key" = 1 ]; then
+            clause FAIL D1 "source_cfg == target_cfg, so this IS the key the recovered session reads, and the sentinel armed there is not this session's: $_cl"
+          else
+            D1_STATE="left to its owner (nothing of ours is armed at the source key)"
+            clause PASS D1 "NOTHING WAS CLEARED — the source key is NOT the key the recovered session reads, and the sentinel at $SRC_CFG|$_scwd is not this session's: $_cl" "pre-limit auto-continue: $D1_STATE"
+          fi ;;
         *)
-          clause FAIL D1 "session-continue.sh clear under $SRC_CFG returned an outcome this gate cannot classify: $_cl" ;;
+          clause FAIL D1 "session-continue.sh ${_verb[*]} under $SRC_CFG returned an outcome this gate cannot classify: $_cl" ;;
       esac
     fi
   fi
@@ -384,28 +495,32 @@ else
   else
     _tg="$(sc_run "$TCFG_M" status)"
     _tgrc=$?
-    # Anchored on the PARENTHESISED HEADER, not on the line: `status` prints
-    # `ARMED (<n> continuations, sid=<sid>): <step text>` and the step text is arbitrary operator
-    # prose — a greedy `.*sid=` would take the LAST occurrence, i.e. one the step text supplied.
-    _tghdr="$(printf '%s' "$_tg" | sed -n 's/^ARMED (\([^)]*\)).*/\1/p')"
-    _tgsid="$(printf '%s' "$_tghdr" | sed -n 's/.*sid=\(.*\)$/\1/p')"
-    if [ "$_tgrc" -ne 0 ]; then
+    _tgsid="$(sc_owner_of "$_tg")"
+    if [ "$_tgrc" -eq 97 ]; then
+      clause FAIL D2 "the worktree $_scwd no longer exists — the (config dir | cwd) key the recovered session will read cannot be entered, so what is armed there is unreadable"
+    elif [ "$_tgrc" -ne 0 ]; then
       clause FAIL D2 "session-continue.sh status under $TCFG_M exited $_tgrc: $_tg"
     else
       case "$_tg" in
         inactive*)
-          clause PASS D2 "nothing armed at the key the recovered session reads ($TCFG_M | $_scwd)" ;;
+          clause PASS D2 "nothing armed at the key the recovered session reads ($TCFG_M | $_scwd)" "the key the recovered session's Stop hook reads" ;;
         "ARMED "*)
+          # THE PASS NEEDS POSITIVE PROOF OF OWNERSHIP, AND `unrecorded` IS NOT IT (W3i C3). An
+          # armer that wrote no sid is refused for the same reason a DIFFERENT sid is — unknown
+          # ownership is not consent (the D6 rule) — but it is not a session, and saying
+          # "session ? has an armed continuation" invented one.
           if [ "$_tgsid" = "$SID" ] && [ "$LRV_CLEAR" = 1 ]; then
-            _tgc="$(sc_run "$TCFG_M" clear)"
+            _tgc="$(sc_run "$TCFG_M" clear --if-mine)"
             case "$_tgc" in
-              "cleared → "*) clause PASS D2 "this session's OWN stale sentinel at the target key was cleared: $_tgc" ;;
+              "cleared → "*) clause PASS D2 "this session's OWN stale sentinel at the target key was cleared: $_tgc" "the key the recovered session's Stop hook reads" ;;
               *)             clause FAIL D2 "the target-key sentinel is this session's but would not clear: $_tgc" ;;
             esac
           elif [ "$_tgsid" = "$SID" ]; then
-            clause PASS D2 "this session's own sentinel is armed at the target key, NOT touched (--no-clear): $_tg"
+            clause PASS D2 "this session's own sentinel is armed at the target key, NOT touched (--no-clear): $_tg" "the key the recovered session's Stop hook reads"
+          elif [ -z "$_tgsid" ] || [ "$_tgsid" = unrecorded ]; then
+            clause FAIL D2 "an armer that recorded NO sid has a continuation at the key the recovered session reads — ownership is unknown, and it would be inherited and silently disarmed: $TCFG_M | $_scwd"
           else
-            clause FAIL D2 "session ${_tgsid:-?} has an armed continuation at $TCFG_M | $_scwd — the recovered session would inherit and silently disarm it" ;
+            clause FAIL D2 "session $_tgsid has an armed continuation at $TCFG_M | $_scwd — the recovered session would inherit and silently disarm it"
           fi ;;
         *)
           clause FAIL D2 "session-continue.sh status under $TCFG_M returned an unclassifiable line: $_tg" ;;
@@ -436,7 +551,8 @@ RUNTOK="${LR_SUBMIT_TOKEN:-run:$SID8:$TS}"
 printf 'verdict: rc 0 (%s clauses PASS)\n' "$LRV_PASSES"
 # `%s` for the auto-continue half, never the word "cleared": D1 has four honest outcomes and only
 # one of them is a clear (W3i D7). A prompt the recovered session READS must not assert a side
-# effect that did not happen.
-printf 'Resumed in place on %s — same pane, same session %s, after a %s-limit %s on %s. lr-ingest-verify rc 0 (config dir, session id, transcript path, lock target, source tombstone, branch; pre-limit auto-continue %s) and the audit says gaps %s, waiting %s, %s open delegations — nothing is owed and nothing re-runs. Continue the interrupted work from where you left off. Full check list and receipt: cat %s/INGEST-VERIFIED.txt — re-derive with: bash ~/.claude/scripts/limit-recover/lr-ingest-verify.sh --no-clear %s — %s\n' \
-  "$TARGET" "$SID8" "$_k" "$STATUS" "$SRC_ACCT" "$D1_STATE" "$_g" "$_w" "$_open" "$B" "$B" "$RUNTOK"
+# effect that did not happen. The check list is $LRV_SUBJECTS — accumulated at the clause calls, so
+# it names the clauses that actually PASSED and nothing else (W3i C6).
+printf 'Resumed in place on %s — same pane, same session %s, after a %s-limit %s on %s. lr-ingest-verify rc 0 over %s: %s. The audit says gaps %s, waiting %s, %s open delegations — nothing is owed and nothing re-runs. Continue the interrupted work from where you left off. Full check list and receipt: cat %s/INGEST-VERIFIED.txt — re-derive with: bash ~/.claude/scripts/limit-recover/lr-ingest-verify.sh --no-clear %s — %s\n' \
+  "$TARGET" "$SID8" "$_k" "$STATUS" "$SRC_ACCT" "$LRV_PASSES clauses" "$LRV_SUBJECTS" "$_g" "$_w" "$_open" "$B" "$B" "$RUNTOK"
 exit 0
