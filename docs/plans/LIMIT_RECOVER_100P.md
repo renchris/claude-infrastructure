@@ -418,7 +418,198 @@ argues the shim cannot double-subtract and keeps both for a measured week — ac
 W2 token path never reads the beat (it does not). Message sent to `7f533f05` via cc-notify (drains when
 that session is recovered — it is one of the three next4 panes parked until 09:00Z).
 - 2026-09-20 00:3xZ — **SUCCESSION BRIDGE** (lead 11569d45 at 73 % fill, recycling in place). STATE ON DISK: trunk `1b2676f4c` = Round A, LIVE (`LIVE_SHA` matches, both ADDs linked, statusline copy current). Unlanded on `feat/limit-recover-100p` (worktree `~/Development/.worktrees/wt-lr-100p`, gates green): `460465f00` the keep-both lesson (hook lint clean), `775499d06` the LIMIT_DETECT_100P reconciliation (both plans), `aa4b2f924` the `#` glyph (statusline-identity 28/28, cc-lr 15/15). **W2** is on branch `lr100p/w2` (worktree `wt-lr-w2`, 6 commits from `6a6f9a129`: capacity-admit token + per-run key · lr-lib probe + state log · lr-handoff precheck + leak-free launcher · lr-fire-resume redeem + relaunch.rc + env -u · handoff-fire `--probe-recycle-preconditions` + positive-discriminator boot wait · a duplicate of the landed suite brace fix `15f8d5054` — DROP that one at rebase); its agent (`wf_3e1667c1-a38`) was writing `reports/W2.md` when the lead recycled — if the report is absent, derive it from the six commit bodies. **SUCCESSOR, in order:** (1) `git -C wt-lr-w2 rebase feat/limit-recover-100p` (conflict on `tests/lr-fleet.bats` ⇒ take feat's), ff-merge into `wt-lr-100p`; (2) gates: `bats tests/{capacity-admit,launcher-quoting,handoff-recycle-remote-resume,lr-relaunch-bound,lr-fleet,lr-lib}.bats` + `shellcheck -S warning` on every touched .sh (retry on rc 75; never the full suite); (3) `bash scripts/ship-land.sh` from `wt-lr-100p` (expect one ratchet at a time; the land gate is admission-exempt); (4) converge is kicked by the land — confirm `LIVE_SHA` via `wrap-ledger.sh --machine`, else `CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`; (5) **W2's real-world check = the three next4 panes** parked `kind:weekly` until 09:00Z: `lr-fleet.sh --one 7f533f05 --target next3 --source-pane 150 --detach` (the LIMIT_DETECT_100P lead — recover it FIRST so it can read the reconciliation mail), then `eb77ca3e`/pane 159 and `7730a605`/pane 167 — the verdict must arrive as peer mail with `verdict=`, no husk, no hand-typed prompt; a PARTIAL here is a W2 defect, not a flake; (6) fire **W3** per `PLAN_DRAFT.md § waves → W3` with anchors from `reports/W1.md` + `reports/W2.md`, Opus 5 xhigh, worktree off the merged tip, same rules block as W2; (7) W5 as NARROWED in the reconciliation. Open decisions unchanged (autorecover policy · thin-account policy). Do not touch `LIMIT_DETECT_100P`'s waves — theirs.
+
+- 2026-09-20 00:2x–00:5xZ — **A SIXTH cause, and it is the one that makes the other five invisible: the census cannot SEE a husk.** Session `c26162f3` (next3, pane 198) was asked "/limit-recover" and reported `0 RECOVERABLE … nothing owed`, which was true about owed WORK and false about the fleet the operator was looking at: three panes (110 `c0f857b6` reso-web-app · 126 `c301b7a5` claude-infrastructure · 150 `7f533f05` wt-cc-143333-63422) sat rendering afternoon `weekly limit` errors the whole time. Measured causes, in the order they bite:
+
+  **(6a) `lf_locate`'s predicate is keyed on the SESSION's last assistant word, and a husk's session has moved on.** `lr-fleet.sh:~205` requires the limit record to be the last non-`No response requested.` assistant turn — its own comment: *"a session that took a real turn since is not blocked."* All six transplants of 17:23–17:39 left successors that kept taking turns on next3, so every one of those sids drops out of the census **entirely**. The predicate answers *"did this session's last turn die at a limit?"*; the operator's question is *"can this pane do work?"*. A husk is precisely where those diverge: the pane is dead, the session is not. `--duplicates` uses a different predicate and found all three instantly — so the tool already HOLDS the evidence its own census discards. **Fix direction: `--locate` must enumerate PANES (registry × live pid), not only transcripts, and emit a `HUSK` disposition for a live pane whose session carries a `handed_off_to` tombstone pointing elsewhere.** A husk is not "not blocked" and not "recoverable" — it is *retirable*, a third state neither existing row models.
+
+  **(6b) the in-place contract was not merely skipped — the successors cannot satisfy its gate.** All six successors were spawned as bare `--resume` processes on fresh ttys under `bin/cc-close-attrib` (parents 9401/31972/41431), each as its own kitty window titled `recover-<sid8>` (181–186), rather than by recycling the source pane. So `handoff-fire.sh self-close --transplanted-source` ABORTS on every one, at the successor-liveness gate (`handoff-fire.sh:~6487`): for `7f533f05` it resolved successor pane 186 → pid 41639 → `/dev/ttys042`, while 41639 actually owns `ttys043` (`/dev/ttys042` belongs to an unrelated kitty shell). Pane 186's registry row carries `pid` and `session_id` but **no `tty` and no `pane` field at all**. The gate is RIGHT to refuse — closing on an unproven successor strands both panes — but it means the husk can never be retired by the sanctioned path, and nothing else is watching. **Fix direction: whatever writes the registry row must record the tty it actually owns, and the gate should prefer `pid → ps tty` over a pane→tty lookup that can name a different window's shell.**
+
+  **(6c) `--recover` would have parked them anyway.** At census time `--rank general` returned `none` (next/next4 weekly-exhausted; next2/next3 `kmax-concurrency` at `k_work` 16 and 13 against `KMAX=8`) — the same true-verdict class as (4) above. Worth recording that this is NOT the `KMAX`/`KMAX_RESIDENT` confusion `accounts.json` warns about: `k_src=work`, so the ACTIVE instrument was charged against the ACTIVE cap, correctly. It cleared on its own ~40 min later (`k_work` 6) without intervention.
+
+  **(6d) method warning — `--duplicates --mark` is the WRONG instrument on a transplanted session, and it BREAKS the retire path.** This session ran `--mark` on all three, believing it the fix. `--mark` writes a *same-account duplicate* tombstone into the TARGET dir; each session already had a correct cross-account transplant tombstone in its SOURCE dir (`handed_off_to`, `target_transcript`, `lock`; ts 22:23–22:30Z). Two tombstones then trip `self-close`'s own guard — *"more than one transplant tombstone … disambiguate by hand"* — so the mark converted a blocked retire into a refused one. Reverted by deleting only the three files carrying `written_by: c26162f3…`; verified back to exactly one tombstone per session, distinct inodes (NOT a config-dir mirror artifact — `.claude`/`.claude-next` mirror, `.claude-tertiary` does not). **Reserve `--mark` for the genuine two-live-processes-one-account case; a session with a `handed_off_to` tombstone is already disambiguated.**
+
+  **Residual left open:** the three husk panes are still up. Verified-safe retire program at `/tmp/husk-panes-retire.sh` (proves tombstone + successor-transcript freshness + successor window alive, then gated `kitty @ close-window --match id:N`, then reads back from a FRESH `kitty @ ls` rather than the close's own return). Backlog `45cc39bf65c3`. Filing note: that row was first filed with no `--run`, so `cc-do 45cc39bf65c3` failed with *"judgment, not a step"* — a worksheet handed over as if it were a program, the exact § Manual-Command-Delivery defect; `--run` added afterwards.
 - 2026-09-20 01:0xZ — **W2 LANDED** (`e364bed23`, then `bdb1a4553` for the defect below), converged, live-verified. Session `a4241557`, successor to `11569d45`. W2's own implementer (`wf_3e1667c1-a38`) died with its parent's recycle before writing a report; `reports/W2.md` is DERIVED from its six commit bodies, with every suite re-run by this lead on the merged tip rather than quoted. Rebase dropped its duplicate of the landed brace fix. Gates: capacity-admit 27/27 · coverage 17/17 · launcher-quoting 21/21 · handoff-recycle-remote-resume 36/36 · lr-relaunch-bound 4/4 · lr-fleet 41/41 · lr-lib 24/24 · launcher-temp-hardening 10/10 · probe-preconditions 5/5; shellcheck clean.
   - **Six land rounds, each one ratchet, and three of them were real defects rather than lint.** (1) test-hermeticity: both suites W2 added pinned neither capacity gate, and `lr-relaunch-bound` ran against the live `~/` — the same class as Round A's `984f3c7d1`. (2) the ratchet only shrinks: closing the gate obsoleted `launcher-quoting`'s own `EMBEDDED_ADMIT_ALLOWLIST` line. (3) **pipefail/SIGPIPE — a correctness defect, not a style one:** `cc_up_cheap()` (`ps … | grep -qE '^-?(claude|node)'`) and the probe's teammate test (`head -c 8000 … | grep -q '"agentName"'`) both read FALSE **on a match**, so the boot wait's one positive discriminator could never fire and a teammate transcript read as not-a-teammate. Every suite was green over both. (4) dead-assertion: six sites; the fixer revived three and DECLINED three `A && B || { diag; false; }` composites — those DO fail under errexit (measured), but each non-last conjunct's failure is absorbed into one shared diagnostic, so two states demanding opposite reads arrived identical; split, and verified in both directions with an anchor mutant. (5) a rebase conflict with a sibling's status entry, resolved keep-both.
   - 🚨 **THE HEADLINE DEFECT, found by running the thing rather than testing it.** W2's read-only probe answered `REFUSED:no-transcript` for pane 174 / `75c7e2a5` — a session `cc-find` had just resolved as LIMITED. Narrowing `CC_PROJECTS_DIRS` to the one root holding it produced the correct `limit: kind=limit … REFUSED:pane:unknown`. Cause: `for _f in ${CC_PROJECTS_DIRS:-…}/*/"$SID".jsonl` — `${LIST}/*/x` is ONE word before field splitting, so the literal suffix attaches only to the LAST element and every earlier root expands to a bare directory no `[ -f ]` can match. **Four of five config roots invisible ⇒ `lrh_precheck` refused ~80% of recoverable sessions.** It fails CLOSED, so it cost no data — it made recovery impossible, which is the husk's outcome reached from the safe side. **A SECOND site carries the identical idiom and is NOT W2's:** `subagent_dir_for_sid` (`:4849`), which the recycle gate asks whether the dying session still has live subagents — "none" for every session outside the last root would let a recycle proceed over in-flight work. Both fixed. **No suite could have caught it: with ONE config root the broken and correct forms are identical, and every fixture in the tree has one** (`docs/lessons/fixture-shape-hides-address-bugs.md`). `tests/handoff-probe-preconditions.bats` is new, fixtures TWO roots with the subject in the FIRST, and is also the probe verb's first direct test at all — the only thing naming it in `tests/` was a stub of the whole binary.
   - **Step 5's population had already moved, so it was re-measured rather than re-fired.** The bridge's three parked next4 panes are not recoverable subjects: `7f533f05` (the LIMIT_DETECT lead) recovered ITSELF onto next3 as pane 186 (one live claude, pid 41639, fable-5.1 xhigh), leaving pane 150 as a stale registry row that still reads LIVE — a shape their reaper should know about, and mailed to them. `cc-find --limited` now returns 5 sessions, **all DEAD**, and `claude-accounts --rank general` routes **nowhere** (next/next4 weekly-exhausted, next2/next3 kmax-concurrency), so `lf_one` parks at `lf_pick_target` before ever reaching the new precheck. What WAS driven is the check that needs no capacity and no target: the read-only probe against four real panes, live. After the fix it classifies `kind=limit` correctly on sessions in `.claude-tertiary` AND `.claude-next` and refuses at `pane_cc_state` with nothing moved, in **0.16 s**, tree byte-identical. The full in-place arm still owes a live limited session with a routable target.
+
+## 10. IN-PLACE BY DEFAULT — the root of cause 6b is measured, and it is not the successor gate (2026-09-20 01:1x–02:0xZ; stage 1 of a Fable 5.1 → Opus 5 ladder, session 59681f3c, worktree `lr-inplace`)
+
+Operator's words, verbatim: *"recover split panes in place so we are never at this confused middle case of
+untouched limited original sessions being resumed elsewhere in a new session."*
+
+`Scope (grown): +/limit-recover recovers a limit-blocked session IN ITS OWN PANE BY DEFAULT — same kitty window id,
+same session uuid, new account — from every driver (an attached session, a detached fleet run, the launchd poller);
+a pane whose session has moved is a named, retirable state; the bare spawn survives only where there is no pane.`
+Receipts for every claim below: `docs/research/lr100p-2026-09-19/inplace-default-2026-09-20.md` (commands + outputs,
+all read-only). Stage 1 wrote documents only; the stage-2 brief is `docs/research/lr100p-2026-09-19/STAGE2_BRIEF.md`.
+
+### 10.1 What stage 1 verified live — 6a–6d re-run, and the seventh cause underneath 6b
+
+- **6a CONFIRMED.** `lr-fleet.sh --locate` (16 rows) lists none of panes 110/126/150; `--duplicates` finds all three.
+  The three panes still render the afternoon's weekly-limit error with **empty composers**, and their **original
+  claude processes are alive** (pids 95369 / 48984 / 17221, registry rows intact) — so `/exit` was never typed into
+  any of them. The census predicate (`lr-fleet.sh:199`) is the reason, exactly as §6a says.
+- **6b — the in-place path WAS taken, and it was refused at a gate that has never once passed from a detached
+  driver.** The bundle manifests prove the request (`MANIFEST.json`: `source_pane:"110", in_place:true`, ts
+  22:23:37Z; likewise 126 at 22:26:57Z and 150 at 22:30:34Z), driver session `be39c489` (pane 178). The transplant
+  succeeded; the remote recycle then printed
+  `!! --recycle REFUSED: pane 110 resolved to no tty — the terminal does not enumerate it, so nothing can be typed into it.`
+  and `lr-handoff` exited 4 ("the transplant is DONE … tombstoned husk"). **Mechanism, traced and reproduced:**
+  `handoff-fire.sh:9247` runs `pin_term_verdict_for_watcher` BEFORE the remote pin (`:9260 hf_remote_source_pin`). Had `cc-in-kitty` answered rc 2 (UNVERIFIABLE) nothing would be pinned (`:1699`) and `kitty_identity` would fall through to `in_kitty`, which the orphan's inherited env satisfies — the failure is specific to the DEFINITIVE no, which is what makes W8's target exact.
+  That function (`:1686-1700`) asks `bin/cc-in-kitty` about the **driver's own ancestry**; the driver was
+  `nohup bash lr-handoff.sh … &` from a Bash tool call that returned at once, so it was reparented away from kitty;
+  `cc-in-kitty:101` reads "reached launchd without meeting kitty" as a DEFINITIVE not-kitty (rc 1) →
+  `export CC_TERM=iterm2` (`:1697`) → `kitty_identity` (`:991`) is false → `_as_tty_query` (`:1561`) takes the
+  iTerm2 osascript branch → iTerm2 is not running → empty → `hf_remote_source_pin` (`as_tty` at `:2037`, the refusal at `:2039`) reports "no tty".
+  Reproduced from this session: `cc-in-kitty` rc 0 attached; **rc 1 from a process reparented off kitty with
+  `KITTY_WINDOW_ID=198` and `KITTY_PID=73832` intact in its env.** Population: the identical refusal in **9 of 9**
+  daemon- or detached-driven in-place attempts on record (2026-09-10 ×3, 09-14 ×2, 09-19 ×4; `results/<sid>.json`
+  `requested_by` names the poller's drain for the first six), each rc 4 = a tombstoned husk before W2. The launchd
+  poller has no kitty ancestor by construction (`cc-in-kitty:75` → rc 1), and W1's `--detach`
+  (`scripts/lib/detach.sh`, `start_new_session=True`) orphans the **fleet** path by default. **So the in-place
+  recycle has never succeeded from the fleet or the daemon; the one measured success (pane 695, 2026-09-09) was
+  driven from an attached session's foreground Bash call.** W2's probe (`:7478-7483`) now runs the same pin before
+  the transplant, so post-W2 the fleet path refuses `REFUSED:pane:unknown (tty <unresolved>)` with nothing moved —
+  no husk, and no recovery either.
+- **6b, successor half, CONFIRMED as stated.** `pin_still_live` (`handoff-fire.sh:3463-3470`; `:3472-3493` is `pid_is_cc`, a different function) compares the pinned
+  pid's tty to the PANE's tty by **equality**; a resumed successor runs claude on expect's nested pty (pane 186: pane
+  tty `ttys042`, claude `ttys043`), so a PINNED successor is judged DEAD. `hf_remote_source_pin` (the walk at `:2041-2046`)
+  already walks **ancestry** for the same question. Registry rows carry no tty field at all (fields: paneUUID, name,
+  cwd, account, pid, startedAt, session_id, surface, lstart). Successor windows 181–185 have **no row** — they are
+  bare `kitty @ launch --type=os-window --hold --title recover-<sid8> bash -c 'for i in 1 2 3 4 5 6; …'` windows the
+  driver improvised at 22:35–22:39Z from lr-handoff's rc-4 manual-fallback line, after first running the launcher
+  from a Bash tool (which killed each session with the tool call — `docs/lessons/engaged-is-not-running.md`).
+  No `--var` provenance, no registry row, no watcher: nothing on the box can prove or retire them.
+- **6c CONFIRMED** as a true verdict: five `parked · no routable target` rows at 22:35–22:38Z and again at 00:24Z.
+- **6d CONFIRMED.** `--mark` writes `<tx>.HANDOFF.json` beside the TARGET copy (`lr-fleet.sh:692-695`); its only existence check
+  (`:693`) is keyed on that same target-store path, so a `handed_off_to` tombstone in the SOURCE store is never seen;
+  `hf_transplant_evidence` (`:2081`) refuses on two.
+- **Also measured.** `--duplicates` prints a sid once per registry row (7f533f05 twice). `LIMIT_DETECT_100P`'s state
+  table settles a re-engaged session as RE-ENGAGED → "none" and models AWAITING-ENGAGE only for the not-yet-engaged
+  transplant, so **the husk — a live row on the death account whose session is engaged elsewhere — is a hole in BOTH
+  plans' state models**; `bin/cc-husk-sweep` models the other husk (a bare shell over a dead session), not this one.
+
+### 10.2 The decision (conviction 93 %) and why the fix is not where 6b first pointed
+
+In-place becomes the **default** of every path that has a pane to recycle; the bare spawn survives only as the
+NO-PANE fallback and as an explicit `--spawn`. It is not deleted: a session with no live pane has nothing to
+recycle. The **remote pane's terminal is decided by enumerating the pane** — an integer id that a live kitty socket
+lists is a kitty pane; a UUID is iTerm2 — never by the driver's ancestry, which is the wrong subject: "which
+terminal am I in" and "which terminal owns pane P" are different questions, and the remote form only ever asks the
+second. `cc-in-kitty` is left exactly as it is: its DEFINITIVE-no is correct for the genuine-iTerm2 case it was
+built for (2026-08-05), and softening it would re-open that incident. The husk becomes a state with an actuator.
+The successor gate reads ancestry, as its sibling already does. `--mark` refuses what it cannot disambiguate.
+
+### Phase 0 — Agent orchestration (execution locus per wave; stage 2 is Opus 5 in THIS pane per the ladder brief)
+
+| wave | locus | why |
+|---|---|---|
+| W8 (Round B) | **T** — teammate under the stage-2 lead, `claude-opus-5`/high, own worktree off trunk | the ladder brief pins Agent Teams in this pane; W8 is the root fix and every later wave's precondition |
+| W9a ∥ W10-census (Round B, parallel with W8) | **T** | disjoint files (`lr-fleet.sh`, `lr-lib.sh`) — no writer shared with W8 |
+| W9b → W10-actuator ∥ W11 (Round C) | **T** | W9b edits `handoff-fire.sh` and must follow W8 (one writer on that file at a time, §9 rule); W10-actuator needs W9b's gate; W11 needs W8 to be true |
+| W12 (Round D) | **T**, or **L** for the live acceptance only | the drill is one command whose numbers the lead compares; retiring the three live husks is the lead's read-out |
+| fallback | **W** — workflow agents in pre-created worktrees, as Round A ran | `cc_capacity_probe` refused at plan time (load 39/46/44 on 10 cores against 2.0/core); re-measure at fire time — a refused teammate spawn is a PARK, never a retry |
+| lead | merges smallest-diff first, runs each wave's suites + `shellcheck -S warning` in its worktree, lands via the project `/ship` from its own worktree, converges (`CC_DEPLOY_MAX_LAG_COMMITS=0 bash scripts/deploy-live.sh`, never `--force`); **never the shared checkout** | context budget ≥ 50 % for merge judgment; succession point = after Round B lands (`--recycle`, same pane) |
+
+Brief discipline: ≤ 150 lines, anchors below re-grepped before editing, "Stop on issue, message lead" verbatim, no
+investigate/explore language. Iron rule 7 unchanged: nothing here lands a recovered session's work.
+
+### Waves (W8–W12 continue §9's numbering; anchors at `8b5db5947`, re-grep before editing)
+
+| wave | goal | files (anchor) | deps | est |
+|---|---|---|---|---|
+| **W8** | **remote-pane terminal identity.** New `hf_remote_pane_term P` in `handoff-fire.sh`: P integer ∧ a live kitty socket enumerates window P ⇒ `export CC_TERM=kitty CC_TERM_KITTY_TO=<sock>`; P a UUID ⇒ `CC_TERM=iterm2`. Sockets come from `kitty_sockets` (`:1181-1201`, substitutes per live kitty pid) + `kitty_socket_answers` called DIRECTLY — never `kitty_headless` (env-gated at `:1127-1128`, the opposite of "the driver's env is irrelevant") and never `kitty_socket_template` (unsubstituted). THREE return codes, because absent and wedged have opposite remedies (`:1500-1511`): 0 resolved · 1 `REMOTE-PANE-ABSENT` (a socket answered and lists no such window — terminal) · 3 `REMOTE-PANE-RESOLVER-UNAVAILABLE` (no socket answered / rc 124 — park, retry). The export is process-global and is inherited by the detached watcher (`detach()` passes no `env=`, `:1615-1620`), so the `__recycle` re-exec's own pin returns at `:1687`; `:11838` and `:11983` inside `recycle_fire` are therefore no-ops by inheritance — leave them. Invariant to assert, not inherit: every terminal write after `:9247` targets P. Called by the remote recycle form (`:9247`, before `pin_term_verdict_for_watcher`, which then returns at its first line), by `self-close --source-pane` (`:7560`) and by `--probe-recycle-preconditions` (`:7478`). The watcher inherits the pinned verdict (it types into P). `hf_remote_source_pin` (`:2036`) reads `as_tty_classified`, not `as_tty`: rc 3 refuses `RESOLVER-CANNOT-TELL` (park / retry), never "no tty". `lr-handoff.sh`: the socket-resolution block (`:893-901`) moves ABOVE the in-place call (`:764`) — this serves the launchd arm only (`:893` is gated on `KITTY_WINDOW_ID` being unset); the orphaned-driver arm (3 of the 9) is carried entirely by `hf_remote_pane_term`'s own export, since the orphan still inherits `KITTY_LISTEN_ON`. Brief constraints from the static judge in `tests/handoff-selfclose-terminal-pin-order.bats:109-126`: do not rename or reshape `SUC_TTY="$(as_tty …)"`, and `hf_remote_pane_term`'s body must not contain the literal `as_tty "` (use `as_tty_classified`). Kill switch `CC_REMOTE_PANE_TERM=off` (today's ancestry pin, byte-identical). | `scripts/handoff-fire.sh` (`:1686` pin · `:2024` remote pin · `:7415` probe · `:9247` recycle) · `scripts/limit-recover/lr-handoff.sh` (`:764`, `:893`) · `tests/handoff-remote-pane-term.bats` (new) | — | 150 |
+| **W9a** | `--mark`'s existing check (`:693`, target store only) widens to every `lr_config_dirs` root in the shape `hf_transplant_evidence:2068-2078` already uses, refusing when a `handed_off_to` tombstone exists anywhere for the sid (names it; "a transplanted session is already disambiguated"); `--duplicates` dedupes by sid | `scripts/limit-recover/lr-fleet.sh` (`:692-695`, `:699-716`) · `tests/lr-fleet.bats` | — | 30 |
+| **W9b** | `pin_still_live` proves liveness by **ancestry** — the pane's tty appears in the pid's ancestor chain (≤ 12 hops, the walk `:2041-2046` already uses) — keeping `pid_is_cc` and pid liveness strict. Two fixtures, because no suite pins either direction today (`grep -rn 'pin_still_live\|tty_now' tests/` = 0): LIVE — a pinned pid on a nested pty whose ancestor owns the pane tty (today DEAD); still-DEAD — a pid on an unrelated tty with no ancestor owning the pane tty. Callers that inherit the widening: `successor_pin:3455` (via `:2351` and the self-close gate `:8062`) and the `__selfclose` close-instant re-verify `:6482` | `scripts/handoff-fire.sh` (`:3463-3470`) · `tests/handoff-selfclose-transplanted-source.bats` (+2 cases) | W8 (file) | 40 |
+| **W10** | **HUSK is a state; retiring it is an actuator.** Census: `lf_locate` gains a pane-first pass (registry × live pid, `lr_registry_live_rows`) that emits `HUSK` for a live row on account A whose sid carries a transplant LOCK with `to` ≠ A (`lr_transplanted_to`, `lr-lib.sh:450-459`, reads `locks/<sid>.lock` and never a tombstone — a same-account `--mark` writes no lock and cannot match) AND no in-flight recycle for the sid (no live `__recycle` watcher for that pane, no `handoffs.jsonl` row younger than `LR_HUSK_MIN_AGE_S`, default 900 s = the `--await` bound; the lock is never deleted, so age alone is not the guard) — evaluated BEFORE the last-assistant-word filter, so a moved session cannot drop out, and gated on the in-flight conjunct so a recovery in its `/exit`→relaunch window is never read as a husk; the same row is proposed as a **binding amendment** to `LIMIT_DETECT_100P` § 3 W0's state table (HUSK above RE-ENGAGED: `live row on acct_death ∧ (tombstone to ≠ acct_death ∨ a real assistant turn after death.ts under another account)` → next action `--retire-husks`) and recorded in both plans. Actuator `lr-fleet.sh --retire-husks [--pane P] [--yes]`: lifts `/tmp/husk-panes-retire.sh` (tombstone present · successor copy has an assistant turn after the tombstone ts · successor process alive by registry row or `lr_resume_procs` leaf · the husk window exists) → when a successor PANE is known, `handoff-fire.sh self-close --transplanted-source --source-pane P --source-session S --successor <pane>`; when the successor is a bare resume window with no row, the direct gated `kitty @ close-window --match id:P` under the same proof → read back from a FRESH `kitty @ ls`, never the close's return. Poller: at the `TRANSPLANTED … parked record retired` arm (`lr-reset-poller.sh:~903`) a live source-account row for the sid logs `HUSK` and writes a retire request. Kill switch `LR_HUSK_RETIRE=off`. | `lr-fleet.sh` (`:186` lf_locate, new arm) · `lr-lib.sh` (`:226`, `:450`) · `lr-reset-poller.sh` (`:902-904`) · `commands/limit-recover.md` fleet section · `tests/lr-fleet.bats`, `tests/lr-lib.bats`, `tests/lr-reset-poller-inplace.bats`, `tests/handed-off-session-guard.bats` | W9b (self-close path) | 160 |
+| **W11** | **the default flip.** `lr-handoff.sh --launch` implies in-place whenever a pane is resolvable: self (`--sid` == `$CLAUDE_CODE_SESSION_ID` and `$KITTY_WINDOW_ID`/`$ITERM_SESSION_ID` present) or driver (`--source-pane`, else `lr_registry_live_rows $SID` → its pane, refusing on > 1). New `--spawn` = today's split/os-window path, explicit. The implied pane is resolved into `SOURCE_PANE` BETWEEN the end of argv parsing (`:225`) and `lrh_precheck` (`:631-633`), because the precheck probes the pane only when `SOURCE_PANE` is set (`:588`) — the ordering invariant that makes "nothing moved" true at all. Automatic fallback to spawn ONLY on NO-PANE and on the launcher-rooted REPLACE class (`:799-807`); every refusal from `lrh_precheck` (`:585-630`, called at `:632`, before the transplant at `:641`) parks with nothing moved — never a silent spawn. Stated honestly: REPLACE and the rc-4 arm (`:809-814`) both run AFTER `"$HF" "${RCY_ARGS[@]}"` at `:791`, so on either the session HAS moved and a tombstone exists; their disposition is a retry (`lr-fleet.sh --one <sid> --source-pane P`) or `--retire-husks`, never a park. `lr-transplant.sh` becomes idempotent on a same-target retry at BOTH refusal sites — `:55-57` (`$DST already exists`) and `:63-66` (`lock exists`) — returning rc 0 `already transplanted` when the lock's `to` == target ∧ the target copy's sha/size ≥ the source copy (`:97` is the source-retirement guard and is unrelated), so a retry after rc 4 / PARTIAL re-drives the recycle. The rc-4 text (`:809-812`) stops prescribing a hand-spawn and prescribes `lr-fleet.sh --one <sid> --source-pane P` (retry) plus `--retire-husks`; the improvised `recover-<sid8>` os-window is documented as forbidden. `--in-place` stays accepted (no-op); `--close-source` stays for `--spawn`. Kill switch `LR_INPLACE_DEFAULT=off`. Doc: handoff mode rewritten, default first. | `lr-handoff.sh` (`:203-240` flags, `:764-814`, `:830-1010` spawn) · `lr-transplant.sh` (`:55-57`, `:63-66`) · `commands/limit-recover.md` (`:420-452`) · `tests/lr-handoff-launcher-quoting.bats`, `tests/lr-handoff-close-source.bats`, `tests/lr-resume-tombstone-guard.bats`, `tests/lr-transplant.bats` (new) | W8 | 120 |
+| **W12** | drill arms (f) the recovery driven from a `detach`ed driver AND from `launchctl kickstart` of the poller — same window id, same uuid; (g) a seeded transplant-husk → `--locate` shows HUSK → `--retire-husks` closes it and a fresh `kitty @ ls` proves it. Live acceptance: panes 110/126/150 retired by the W10 actuator (or the seeded husk if the operator's script closed them first). | `tests/lr-drill.sh` (§9 W7) · `commands/limit-recover.md` | W10, W11 | 60 |
+
+### DoD (extends §9's; the drill is still the instrument)
+
+- an in-place recovery driven from a detached process, a Bash tool call, or the launchd poller recycles IN PLACE —
+  same kitty window id, same uuid, new account — **today 0 of 9**; the drill's arm (f) is the receipt
+- `--locate` names every live pane whose session has moved as `HUSK` in one pass; `--retire-husks` closes it and
+  proves it from a fresh `kitty @ ls`; the post-run census shows `0 HUSK` and `--duplicates` prints nothing (the
+  in-flight conjunct in W10 is what keeps this from flaking against arm (f) — a recovery mid-relaunch is not a husk)
+- `handoff` mode with no flags leaves no husk and spawns nothing when a pane holds the session
+- a PINNED successor on expect's nested pty is verified alive (the 186 class) — today refused
+- `--mark` on a transplanted session refuses with the reason; no session ever carries two tombstones
+- every negative control named in W8 stays byte-identical: `tests/handoff-selfclose-kitty-identity.bats:121-196`,
+  `tests/handoff-selfclose-terminal-pin-order.bats:140-219`, `tests/handoff-fire-kitty-daemon.bats:182-271`,
+  `tests/cc-in-kitty.bats`; iron rule 7 unchanged (`grep -c 'git \(commit\|push\|merge\|reset\|checkout\)'` over the
+  recovery scripts = 0)
+
+### Kill switches and backward compatibility
+
+| switch | restores |
+|---|---|
+| `CC_REMOTE_PANE_TERM=off` | the driver-ancestry pin for remote panes (today) |
+| `LR_INPLACE_DEFAULT=off` | spawn-by-default for `handoff` mode (today); `--in-place` still opts in |
+| `LR_HUSK_RETIRE=off` | census only — `HUSK` rows print, nothing closes |
+| `LRH_PRECHECK=off`, `LR_INPLACE_AWAIT`, `CC_TRANSPLANT_SOURCE_CLOSE` | unchanged from W2 / §8 |
+
+Compat: the fleet and poller paths already pass `--in-place`, so their flags do not change; `--in-place` is a no-op
+on the new default; `--close-source` keeps its meaning under `--spawn`; every existing tombstone, lock and guard is
+read, none is rewritten; the registry row gains no field (the ancestry walk needs none — and `session-register.sh`
+is `LIMIT_DETECT_100P` W1's file, single owner).
+
+### Open decisions (operator value-forks; everything else above is decided)
+
+1. **Should `--spawn` stay reachable on a session that HAS a live pane?** Conviction 75 % keep it (an operator may
+   want the limited pane's scrollback beside the successor for a while). Options: (a) keep as an explicit flag,
+   documented as the exception; (b) remove it, reachable only through `--close-source`. Below 90 %, so it is
+   theirs; the waves ship (a) and (b) is a one-line deletion.
+2. Unchanged from §9: auto-recover policy (spend) and thin-account policy.
+
+### Dropped, with reason
+
+- softening `cc-in-kitty`'s DEFINITIVE no for an orphan (it would re-open the 2026-08-05 genuine-iTerm2 misroute;
+  the orphan case is answered at the remote pane instead)
+- a `tty` / `pane_tty` field on the registry row as the gate's oracle (the ancestry walk needs none; the writer is
+  the sibling plan's file)
+- adopting a bare `--resume` window as a successor on argv alone (no row, no engaged turn ⇒ not proof; the gate's
+  positive-proof polarity stays; W10 requires the engaged turn)
+- a per-pane HUSK paint in the statusline (theirs — `LIMIT_DETECT_100P` W2c/W5 own the pixels; the census row is
+  what they consume)
+
+### 10.3 Critic pass (2026-09-20 02:0xZ) — 17 items, folded as BINDING amendments
+
+A read-only Opus 5 critic re-grepped every anchor and refuted 6 items, partially refuted 10, and let 1 stand
+(`docs/research/lr100p-2026-09-19/critique/inplace-default-critic.md`). Every correction is folded into the text
+above; the ones that changed a DESIGN rather than an anchor are restated here so stage 2 reads them with the table:
+
+1. **W8 resolver has THREE codes, not two** — absent (terminal) and resolver-unavailable (park) must never share a
+   verdict; the same rule W8 imposes on `as_tty` one layer down.
+2. **W8 uses `kitty_sockets` + `kitty_socket_answers` directly** — `kitty_headless` is env-gated the wrong way for a
+   remote pane, and `kitty_socket_template` cannot enumerate.
+3. **W8's static-judge constraints** — `SUC_TTY="$(as_tty …)"` keeps its shape; the new function body carries no
+   literal `as_tty "`; `:11838`/`:11983` are inheritance no-ops.
+4. **W10's HUSK needs the in-flight conjunct** — the transplant lock is never deleted and the source row stays live
+   until the typed `/exit` lands, so a bare lock-plus-live-row reads every in-progress recovery as a husk; the
+   predicate reads the LOCK, never a tombstone.
+5. **W11's "nothing moved" is the precheck's guarantee only** — anything refused after the recycle call is already
+   tombstoned; its disposition is retry or retire, and the plan says so instead of promising a park.
+6. **W11 resolves the implied pane before the precheck** — or the default flip transplants without the reads W2 built.
+7. **W11's transplant idempotence lands at both refusal sites** (`:55-57`, `:63-66`); `:97` was the wrong line.
+8. **W9b ships a still-DEAD fixture beside the LIVE one** — ancestry is strictly weaker than equality on a gate that
+   protects a close, and nothing pins either direction today.
+9. Four suites added to W10/W11's gates; `tests/lr-transplant.bats` is NEW, not an edit.
+
+### Status log (§10)
+
+- 2026-09-20 01:1x–02:0xZ — stage 1 (Fable 5.1, xhigh): the predecessor's 6a–6d entry applied from
+  `~/lr-plan-append.patch`; 6a–6d re-verified on the live fleet; the seventh cause found and reproduced from this
+  session (§10.1); waves W8–W12, DoD, switches and decisions written; receipts committed beside the corpus; stage 2
+  fired as a same-pane recycle onto Opus 5 with `STAGE2_BRIEF.md`. The three husk panes were left standing for W10's
+  live acceptance (`/tmp/husk-panes-retire.sh` remains the operator's manual path; `45cc39bf65c3` is `done`).
+- 2026-09-20 02:2xZ — **land REFUSED on two trunk reds that are W2's, not this diff's** (docs-only commit; the gate
+  said so). `tests/handoff-alarm-records.bats:323` pins six `hf_alarm` sites and W2 added a seventh
+  (`recycle-boot-indeterminate`, `handoff-fire.sh:6923`, sha `eaf7c82da`) without raising the pin — the exact silent
+  move that test's comment was written to catch; `tests/handoff-probe-preconditions.bats` lacks
+  `export CC_FIRE_HEADROOM_GATE=off`, so the capacity-gate pin-guard names it a new unpinned fire suite. Stage 1
+  may not edit code; both ≤ 5-line fixes are step 0 of `STAGE2_BRIEF.md`, and the sibling that landed W2
+  (`a4241557`, pane 127) was notified.
