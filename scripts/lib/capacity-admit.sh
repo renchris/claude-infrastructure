@@ -589,12 +589,36 @@ cc_capacity_token_mint() { # $1=sid [$2=explicit path] → prints the token path
   printf '%s' "$path"
 }
 
+# ── THE TTL, RESOLVED ONCE AND ALWAYS AN INTEGER (W2FA D2, 2026-09-20) ─────────────────────────
+# The expiry test used to read the env var directly: `[ "$age" -gt "${CC_ADMIT_TOKEN_TTL_S:-300}" ]`.
+# With a non-integer value (`300s`) `[` does not return false, it ERRORS with rc 2 — and `if` reads
+# rc 2 identically to a clean false. MEASURED 2026-09-20: bash printed `[: 300s: integer expected`
+# to stderr and the gate returned rc 0, ADMITTING a token 315,360,000 s old on a box at 9.90/core.
+# The TTL is the only thing bounding the stale-admission window and its guard failed OPEN — the
+# class in docs/lessons/predicate-error-exit-is-indistinguishable-from-false.md.
+#
+# SETS GLOBALS, NEVER PRINTS INTO `$( )`. A resolver called as `x="$(f)"` runs in a subshell, so any
+# note it sets about WHY it fell back is discarded with that subshell (memory
+# `assignment-inside-command-substitution-never-escapes`) — and a fallback nobody can see is how a
+# bad TTL stays invisible in the first place.
+CC_ADMIT_TOKEN_TTL_VALUE=300
+CC_ADMIT_TOKEN_TTL_NOTE=""
+_cc_admit_token_ttl() { # → always 0 · sets CC_ADMIT_TOKEN_TTL_VALUE (an integer) + _NOTE
+  local t="${CC_ADMIT_TOKEN_TTL_S:-}"
+  CC_ADMIT_TOKEN_TTL_NOTE=""
+  CC_ADMIT_TOKEN_TTL_VALUE=300
+  [ -n "$t" ] || return 0
+  if cc_hw_is_int "$t"; then CC_ADMIT_TOKEN_TTL_VALUE="$t"; return 0; fi
+  CC_ADMIT_TOKEN_TTL_NOTE="CC_ADMIT_TOKEN_TTL_S='${t}' is not an integer — bounded at ${CC_ADMIT_TOKEN_TTL_VALUE}s instead"
+  return 0
+}
+
 _cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usable token · sets the CC_ADMIT_TOKEN_* globals
   CC_ADMIT_TOKEN_AGE=""; CC_ADMIT_TOKEN_SID=""; CC_ADMIT_TOKEN_TERMS=""; CC_ADMIT_TOKEN_NOTE=""
   # CC_ADMIT_TOKEN is the library's own spelling; LR_ADMIT_TOKEN is the limit-recover launcher's,
   # accepted here so a launcher env that carries only the LR_ name still redeems. Both are read,
   # neither is exported by this library, and lr-fire-resume passes CC_ADMIT_TOKEN call-scoped.
-  local t="${CC_ADMIT_TOKEN:-${LR_ADMIT_TOKEN:-}}" want="${CC_ADMIT_WANT_SID:-}" line issued sid terms now age claim
+  local t="${CC_ADMIT_TOKEN:-${LR_ADMIT_TOKEN:-}}" want="${CC_ADMIT_WANT_SID:-}" line issued sid terms now age claim ttl
   [ -n "$t" ] || return 1
   if [ ! -f "$t" ]; then CC_ADMIT_TOKEN_NOTE="token ABSENT ($t) — evaluating fresh"; return 1; fi
   if [ ! -O "$t" ]; then CC_ADMIT_TOKEN_NOTE="token not owned by uid $(id -u 2>/dev/null || printf '?') ($t) — evaluating fresh"; return 1; fi
@@ -633,11 +657,21 @@ _cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usabl
   if ! cc_hw_is_int "$issued"; then
     CC_ADMIT_TOKEN_NOTE="token UNPARSEABLE (issued='${issued}') — consumed, evaluating fresh"; return 1
   fi
-  now="$(date +%s)"; age=$(( now - issued ))
-  if [ "$age" -lt 0 ] || [ "$age" -gt "${CC_ADMIT_TOKEN_TTL_S:-300}" ]; then
-    CC_ADMIT_TOKEN_NOTE="token EXPIRED (${age}s old > TTL ${CC_ADMIT_TOKEN_TTL_S:-300}s) — consumed, evaluating fresh"
+  # THE CLOCK IS AN INPUT AND IS VALIDATED LIKE ONE. An unreadable `date` leaves `now` empty, which
+  # makes the arithmetic below error and every comparison after it meaningless — the same fail-open
+  # shape as the TTL, arriving from the other operand.
+  now="$(date +%s 2>/dev/null || printf '')"
+  if ! cc_hw_is_int "$now"; then
+    CC_ADMIT_TOKEN_NOTE="token NOT REDEEMED — the clock is unreadable (date +%s gave '${now}'), so age is unmeasurable; consumed, evaluating fresh"
     return 1
   fi
+  _cc_admit_token_ttl; ttl="$CC_ADMIT_TOKEN_TTL_VALUE"
+  age=$(( now - issued ))
+  if [ "$age" -lt 0 ] || [ "$age" -gt "$ttl" ]; then
+    CC_ADMIT_TOKEN_NOTE="token EXPIRED (${age}s old > TTL ${ttl}s) — consumed, evaluating fresh${CC_ADMIT_TOKEN_TTL_NOTE:+ [${CC_ADMIT_TOKEN_TTL_NOTE}]}"
+    return 1
+  fi
+  CC_ADMIT_TOKEN_NOTE="${CC_ADMIT_TOKEN_TTL_NOTE}"
   CC_ADMIT_TOKEN_AGE="$age"; CC_ADMIT_TOKEN_SID="$sid"; CC_ADMIT_TOKEN_TERMS="$terms"
   return 0
 }
@@ -703,7 +737,7 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
     if _cc_admit_token_redeem; then
       CC_ADMIT_REASON="capacity-admit: ADMIT (admission token, ${CC_ADMIT_TOKEN_AGE}s old, issued for ${CC_ADMIT_TOKEN_SID}) — one decision, redeemed once"
       _cc_admit_emit admit token "$caller" "$what" \
-        "redeemed a probe admission ${CC_ADMIT_TOKEN_AGE}s old for ${CC_ADMIT_TOKEN_SID} (TTL ${CC_ADMIT_TOKEN_TTL_S:-300}s; minted under terms ${CC_ADMIT_TOKEN_TERMS:-?})"
+        "redeemed a probe admission ${CC_ADMIT_TOKEN_AGE}s old for ${CC_ADMIT_TOKEN_SID} (TTL ${CC_ADMIT_TOKEN_TTL_VALUE}s; minted under terms ${CC_ADMIT_TOKEN_TERMS:-?})"
       _cc_admit_reset "$caller"; return 0
     fi
     # NOT a refusal and NOT a silent fall-through: CC_ADMIT_TOKEN_NOTE now rides on whatever row
