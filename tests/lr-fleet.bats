@@ -797,3 +797,47 @@ husk_successor_turn() { printf '{"type":"assistant","timestamp":"2026-09-09T00:5
   [[ "$output" != *"HUSK"* ]] || { echo "$output"; false; }
   [[ "$output" != *"52e35019"* ]] || { echo "$output"; false; }
 }
+
+# ── THE ROUTER MUST NOT PICK A TARGET THAT ALREADY HOLDS THE SESSION (2026-09-20) ───────────────
+# `07e30aeb` was transplanted next3 → next2; next3 kept a 5,339 B stub + a `.jsonl.handed-off`
+# tombstone while next2 holds the 1.1 MB transcript. Every later retry routed next2 → next3 and died
+# on `lr-transplant: REFUSED — … already exists` — three times, deterministically. That refusal is
+# CORRECT (it stops a stub shadowing the real transcript); choosing that destination is the defect.
+_pick() { # <source acct> <tier> <sid> → lf_pick_target's answer, with only what it needs loaded
+  sed -n '/^lf_acct_of_cfg() {/,/^}/p;/^_lf_target_holds_sid() {/,/^}/p;/^lf_pick_target() {/,/^}/p' \
+    "$FLEET" > "$BATS_TEST_TMPDIR/pick.sh"
+  bash -c '
+    . "$1" 2>/dev/null
+    . "$2" 2>/dev/null || true
+    . "$3"
+    TARGET=auto; ACCOUNTS="$CC_ACCOUNTS_BIN"
+    lf_pick_target "$4" "$5" "$6"; rc=$?
+    printf "\nSKIPPED=%s\n" "${LF_PICK_SKIPPED_HOLDER:-}"
+    exit $rc' _ \
+    "$REPO/scripts/limit-recover/lr-lib.sh" "$REPO/lib/account-map.generated.sh" \
+    "$BATS_TEST_TMPDIR/pick.sh" "$1" "$2" "$3"
+}
+
+@test "router: a candidate holding this sid's .handed-off tombstone is SKIPPED, not chosen" {
+  mkdir -p "$TER/projects/$SLUG"
+  : > "$TER/projects/$SLUG/$SID.jsonl.handed-off"      # next3 = this session's retired source
+  run _pick next2 claude-opus-5 "$SID"
+  [ "$status" -eq 0 ]
+  [[ "$output" == next4* ]] || false                   # next3 skipped, next4 taken
+  [[ "$output" == *"SKIPPED=next3"* ]]
+}
+
+@test "router CONTROL: with no holder, the first ranked account past the source is still chosen" {
+  run _pick next2 claude-opus-5 "$SID"
+  [ "$status" -eq 0 ]
+  [[ "$output" == next3* ]]
+}
+
+@test "router CONTROL: every candidate holding the sid is rc 1 — park, never route into a refusal" {
+  mkdir -p "$TER/projects/$SLUG" "$HOME/.claude-quaternary/projects/$SLUG"
+  : > "$TER/projects/$SLUG/$SID.jsonl.handed-off"
+  : > "$HOME/.claude-quaternary/projects/$SLUG/$SID.jsonl"
+  LR_CONFIG_DIRS="$SEC:$TER:$HOME/.claude-quaternary" run _pick next2 claude-opus-5 "$SID"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"SKIPPED=next3 next4"* ]]
+}
