@@ -702,6 +702,81 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
     QoS-starved at PRI 4 — operator-owned, backlog `86f564bc7f4f`, driver at
     `/tmp/lr-detect-restore-dispatch.sh`.
 
+- 2026-09-20T14:0xZ · **W2b-ii DONE from a CLOUD VM, and three amendments recorded as landed were
+  not.** Branch `claude/fire-20260920T133703Z-8130-1` (off-box session; no `/ship`, the desk
+  reconciler lands it). This wave was held on `kitty` at PRI 4 (backlog `86f564bc7f4f`) — a cloud
+  session needs no kitty, which is the whole reason it could run at all. The 09:2xZ entry above is
+  superseded on ONE clause and preserved as written (plan conventions: integrate, never rewrite):
+  **"Amendments #2, #4, #10 and #12 ARE present (grepped)"** is false for #2 and #4, verified here
+  by CONTENT on trunk `e70b5d78`, not by a ping.
+  - **§ 11 #2 was ABSENT ENTIRELY.** `grep -i beat bin/cc-limited` returns exactly one hit and it
+    is the word "beats" inside the prose comment at `:557` ("structure **beats** prose"). The grep
+    was discharged by a STRING, not by the rule — `gate-on-presence-is-cleared-by-any-string`, in
+    the one place where the presence check WAS the verification. There was no beat source, no
+    `CC_BEAT_DIR` seam, and liveness was still single-sourced on the registry whose completeness
+    P5 refuted (3 of 14 rate_limit sids rowless). Now `beat_rows()`, with the beat's pid joining
+    the procs UNION rather than adding to it — summing would report every ordinary live session as
+    DUPLICATE — and a beat with no `lstart` is not trusted on pid alone.
+  - **§ 11 #4 was HALF present, and the live half is the one that mattered.** The shipped rule was
+    `realpath(root)` under a comment asserting "~/.claude-next is a SYMLINK to ~/.claude". **That
+    sentence is false** — `~/.claude-next` is a REAL directory and only its `projects/` is the
+    symlink, which is exactly what the amendment says and why it specifies `<root>/projects`. So
+    the two roots never compared equal and the dedupe never fired. MEASURED before the fix on the
+    § 5 fixture reshaped to production's form: `copies` for `07e30aeb` read **5 where 3 exist**;
+    after, 3. A belief about the subject living in a COMMENT is executed by nothing and tested by
+    nothing (`checker-population-rests-on-an-untested-belief`), and no row could go red over it.
+    The `(st_dev, st_ino)` half was absent too and is now in `find_copies`.
+  - **§ 11 #12 is genuinely present** and is now PINNED by row 22 rather than grepped — a second
+    checkout with a sentinel predicate, because `abspath` and `realpath` differ ONLY through a
+    symlink, so a path-string assertion passes every ordinary invocation.
+  - **CLOSED AS WRITTEN:** § 11 #3 (the `parked/` adapter — the store was enumerated and then used
+    only to set a boolean, so a session the POLLER knew was blocked was absent from the census
+    entirely), § 11 #10 for W2a (`:421`, the 13th copy), § 11 #11 (absent vs unreadable), and
+    § 11 #7 (**CAP 5000 → 500** in the hook AND in the census's mirror of it — see the scope note
+    below). Rows **16–22 land, suite 17 → 24 rows, `1..24`, 0 failures.**
+  - **EVERY NEW ROW IS RED-PROVED.** Six mutants, each reverting one amendment's rule, each dying
+    on exactly the row that owns it and no other: beats-ignored→16, adopt_parked-noop→17,
+    parked-by-text→17, absent≡unreadable→21, `abspath`→22, CAP-5000→19. Rows 18 and 20 carry
+    mutants inline. **Row 18 needed TWO**, and the first attempt was wrong in an instructive way:
+    a depth-only mutant SURVIVED, because the inode pass catches that fixture — the control would
+    have certified a rule it never exercised (`green-in-both-arms`).
+  - **ROW 21 USES ENOTDIR, NOT A PERMISSION BIT, and this was measured rather than assumed:** the
+    suite runs as **root** on the cloud VM, where `chmod 000` does not deny root and `os.listdir`
+    SUCCEEDS. A permission-based row would have passed there while testing nothing —
+    `harness-default-collapses-the-states-under-test`. **Any suite row that means "unreadable" must
+    not be written with permission bits while off-box runners are root.**
+  - **ROW 19's TIMING IS RECORDED, NOT GATED.** 500 rows / 498 sids: **110 / 150 / 95 ms**, exit 6
+    (correctly at cap). The § 5 bar of 0.30 s belongs to the W6 drill on a quiet box; a wall-clock
+    assertion inside bats is AMBIENT and this plan already carries one such casualty (W4's
+    `lr-fleet --detach ≤ 3 s`, red at load 70 and green at 32).
+  - **A SECOND GATE LANDED, because the one that should have caught `:421` was blind to it.**
+    `scripts/lr-predicate-lint.sh` gated only the CAP-TEXT family, so the teammate predicate had
+    no gate at all and the 13th copy survived W2a's land, W4's migration and the lint's own
+    arrival. It now scans TWO families. **FIVE genuine teammate copies remain on trunk** —
+    `bin/cc-find:148`, `handoff-fire.sh:7623`, `lr-fleet.sh:211` and `:234`, `lr-select.py:127` —
+    allowlisted BY NAME with "NOT YET MIGRATED", one line each, for whoever owns them; a SIXTH is
+    refused, and reverting `cc-limited:421` now turns the lint RED. `lr-audit.py:1298` is NOT a
+    copy (a parsed field read asking a different question) and is deliberately not flagged.
+  - **SCOPE NOTE FOR THE LANDER — § 11 #7 is W1's row.** W1 was stalled in flight on the desk with
+    uncommitted work when this was written, and it is taken here because row 19 binds to it and
+    because the hook's constant and the census's mirror of it cannot be split without one of them
+    lying about what "at cap" means. **If the W1 worktree also carries it, drop THIS side of the
+    conflict — it is four lines.** Nothing else here overlaps W1, W2c or W5: W2c owns `--reaper`,
+    `faults/` persistence, the resolver and `--kitty` titles, none of which this touches.
+  - **GATE, and both reds are A/B-CONTROLLED against trunk at the same sha, not assumed:**
+    `cc-limited` 24/24 · `lr-predicate` 25/25 · `stop-failure-marker` 26/26 · `session-beat` 15/15 ·
+    `capacity-admit-active` 22/22 · `capacity-admit-coverage` 17/17 · `lr-predicate-lint` clean and
+    red-proved four ways. `spawn-presence` 6 red and `lr-fleet` 4 red are **PRE-EXISTING** — the
+    identical tests, by number and name, fail on `origin/main` in a detached worktree
+    (`a-pre-existing-red-is-a-claim-not-a-measurement`, run both arms).
+  - Dispatcher vintage: `origin/main:bin/cc-dispatch` == the blob that composed the brief
+    (`dc913037`), so the dispatcher that fired this session IS trunk.
+  - **STILL OPEN after this:** **W3** (consumers — `lf_census`, the poller's § 1 delegation) and
+    **W6** (the drill). W3 was held on W2c, which is stalled rather than landed; W6 still blocks on
+    § 11 #1 — `capture.sh` EXISTS on trunk but `CAPTURE-RECEIPT.md` does not, and it cannot be
+    produced off-box because it copies from the LIVE stores. **W6 must still not paste drill
+    numbers.** The W2a timing above is a cloud-VM reading on a 5-session fixture, not the drill.
+
 ## 13. Cross-reference — `LIMIT_RECOVER_100P` § 9 landed the recovery side first (2026-09-20 00:1xZ, session 11569d45)
 
 Your wave-1 corpus was this session's research. Landed and LIVE on trunk at `1b2676f4c` (23:50Z),
