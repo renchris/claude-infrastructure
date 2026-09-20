@@ -66,22 +66,20 @@ MATCH_RE="grep|_RE=|=~| in t(xt)?[^A-Za-z_]|re\.(compile|search|match)|\.startsw
 # SSOT rules AFTER it, once per candidate. Replacing it with a fork per file is what it exists to
 # avoid.
 #   scripts/limit-recover/lr-reset-poller.sh
-# THE SSOT'S OWN DEGRADATION PATH (2) — lr-lib.sh's two python readers each carry a text test
-# reached ONLY when `import lr_predicate` raises. They are not copies competing with the module;
-# they are what stops an unreachable module reporting a CAPPED fleet as a healthy one, because rc 1
-# from lr_last_api_error means "not an api error". Allowed, and counted, so a THIRD one is refused.
-#   scripts/limit-recover/lr-lib.sh
-# NOT YET MIGRATED (1) — a genuine copy, found by this lint while it was being written, outside
-# W4's frozen scope. It is Fable-blind exactly as lr-lib.sh:172 was. Allowed so the lint can ship
-# green; it is named here so the debt is legible rather than blessed.
-#   scripts/limit-recover/lr-handoff.sh
+# THE SSOT'S OWN DEGRADATION PATH (2 + 1) — three python readers across two files each carry a
+# text test reached ONLY when `import lr_predicate` raises. They are not copies competing with the
+# module; they are what stops an unreachable module reporting a CAPPED fleet as a healthy one,
+# because rc 1 from lr_last_api_error means "not an api error". Allowed, and COUNTED, so one more
+# in either file is still refused.
+#   scripts/limit-recover/lr-lib.sh      (2: the tier read and lr_last_api_error)
+#   scripts/limit-recover/lr-handoff.sh  (1: the bundle's last-message-before-the-limit read)
 ALLOW="bin/cc-classify 1
+scripts/limit-recover/lr-handoff.sh 1
 scripts/limit-recover/lr-lib.sh 2
 scripts/cloud-ceiling-probe.sh 1
 scripts/desk-invariant.sh 1
 scripts/handoff-fire.sh 1
 scripts/lib/cloud-create.sh 1
-scripts/limit-recover/lr-handoff.sh 1
 scripts/limit-recover/lr-reset-poller.sh 1"
 
 allowed_count() { printf '%s\n' "$ALLOW" | awk -v f="$1" '$1==f {print $2; found=1} END{if(!found) print 0}'; }

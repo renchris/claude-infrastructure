@@ -502,9 +502,14 @@ else
       break
     fi
   done
-  _last_msg="$(/usr/bin/python3 - "$CFG" "$SID" <<'PY' 2>/dev/null || true
+  _last_msg="$(/usr/bin/python3 - "$CFG" "$SID" "$LR_LIB_DIR" <<'PY' 2>/dev/null || true
 import glob, json, sys
 cfg, sid = sys.argv[1], sys.argv[2]
+try:
+    sys.path.insert(0, sys.argv[3])
+    from lr_predicate import classify_text
+except Exception:                       # module unreachable: degrade to the pre-W4 text test
+    classify_text = None
 files = glob.glob(f"{cfg}/projects/*/{sid}.jsonl") + glob.glob(f"{cfg}/projects/*/{sid}.jsonl.handed-off")
 last_limit = None; texts = []
 for f in files:
@@ -521,7 +526,28 @@ for f in files:
         c = m.get("content")
         txt = c if isinstance(c, str) else " ".join(x.get("text", "") for x in (c or []) if isinstance(x, dict) and x.get("type") == "text")
         if d.get("isApiErrorMessage"):
-            if "hit your" in txt:
+            # THE THIRTEENTH COPY, retired (LIMIT_DETECT_100P W4, scope grown). The test here was
+            # `"hit your" in txt`, which is blind to every `reached your` cap — so a Fable-capped
+            # session set NO last_limit and this bundle then quoted a message from AFTER the death
+            # as "the last assistant message before the limit". classify_TEXT with the envelope
+            # handed back is the module's documented entry point for a caller that has already
+            # established the envelope, which this branch has: T1 rules when a structured error is
+            # present, the text rules when it is not, so pre-W4 recall is preserved.
+            #
+            # EVERY LINE BELOW IS PAREN-BALANCED ON PURPOSE. This heredoc sits inside a COMMAND
+            # SUBSTITUTION, and this file's shebang is /bin/bash — 3.2 on macOS, which matches
+            # parens across the raw text of $( ... ) including a heredoc body it will never
+            # execute. A single line carrying one more "(" than ")" makes 3.2 mis-locate the end
+            # of the substitution and report a syntax error ~500 lines away, at a line that is
+            # perfectly fine. `bash -n` under 5.x says OK, so the break is invisible until the
+            # script actually runs. Keep the call on one line, or split it across balanced ones.
+            if classify_text is not None:
+                _err = d.get("error")
+                _sta = d.get("apiErrorStatus")
+                _lim = classify_text(txt, error=_err, api_error_status=_sta)["limit"]
+            else:
+                _lim = "hit your" in txt or "reached your" in txt
+            if _lim:
                 last_limit = d.get("timestamp") or ""
             continue
         if txt.strip():
