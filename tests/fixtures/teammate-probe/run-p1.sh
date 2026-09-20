@@ -32,7 +32,14 @@ publish() {  # never publish an empty scratch (e.g. the --census self-test path)
   # ${KITTY_WINDOW_ID:-} is baked in as a literal and shellcheck rejects it (SC2157,
   # "argument to -n is always true") at the land gate. Publish it under .txt so a
   # generated artifact cannot masquerade as a shell script in the tree.
-  [ -f "$PUB/lead-wrapper.sh" ] && mv "$PUB/lead-wrapper.sh" "$PUB/lead-wrapper.sh.txt"
+  if [ -f "$PUB/lead-wrapper.sh" ]; then
+    mv "$PUB/lead-wrapper.sh" "$PUB/lead-wrapper.sh.txt"
+    # The .txt rename alone is NOT enough: the gate selects shell files by SHEBANG, not by
+    # extension (measured — it linted the .txt). Strip it so generated evidence cannot be
+    # mistaken for source.
+    sed -i '' '1s|^#!.*|# CAPTURED ARTIFACT (shebang stripped; was #!/bin/bash) — evidence, not a script.|' \
+      "$PUB/lead-wrapper.sh.txt" 2>/dev/null || true
+  fi
   echo "published -> $PUB"; }
 trap publish EXIT
 # The scratch project's own settings. `settings.local.json` is gitignored repo-wide and

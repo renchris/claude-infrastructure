@@ -1,4 +1,7 @@
-#!/bin/bash
+# CAPTURED ARTIFACT — this is evidence, not a script. The shebang is stripped because the
+# tree-wide shellcheck gate selects files by SHEBANG (not by extension), and a heredoc-
+# expanded capture legitimately contains things like [ -n "160" ] (SC2157). Original
+# first line was: #!/bin/bash
 cd "/Users/chrisren/Development/.worktrees/probe/teammate-lifecycle-controls/tests/fixtures/teammate-probe" || exit 9
 # Claude Code gates its iTerm2 pane backend on ITERM_SESSION_ID (~/.zshrc:678-696); the ~/.claude/bin/it2
 # shim then translates each backend call into 'kitty @'. A non-interactive shell never reads .zshrc, so
