@@ -289,7 +289,9 @@ print(json.dumps([a["resets_at"], a["resets_source"], b["resets_at"], b["resets_
   # claim that 596 events were checked.
   run /usr/bin/python3 "$PY" --selftest
   [ "$status" -eq 77 ]
-  [[ "$output" == *"vectors: 10/10"* ]]
+  # NOT a non-final `[[ ]]`: bash 3.2 exempts the conditional keyword from errexit, so mid-body it
+  # is evaluated and discarded — a dead assertion. tests/bats-assert-liveness.bats ratchets on it.
+  printf '%s\n' "$output" | grep -q 'vectors: 10/10' || false
 
   run env -u LR_PREDICATE_PY /usr/bin/python3 "$PY" --selftest --corpus "$BATS_TEST_TMPDIR/absent.json"
   [ "$status" -eq 77 ]

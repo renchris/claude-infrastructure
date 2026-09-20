@@ -124,7 +124,14 @@ command -v jq >/dev/null 2>&1 || return 0
 # "hex" was a proxy for it that has now been wrong twice. Inlined rather than sourced because this
 # hook runs on every SessionStart under a hard wall-clock budget (see the header) and the lib is
 # 824 lines; the shape is pinned against the lib by tests/session-registry.bats.
-pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; pane="${pane##*:}"
+# KITTY_WINDOW_ID is the THIRD address, and it is the one that closes the measured no-row class:
+# 14 of 44 of one day's sessions had no registry row at all, and a lead-launched successor was
+# measured carrying KITTY_WINDOW_ID=186 with neither CC_PANE_ID nor ITERM_SESSION_ID set — so this
+# line had no address for it and returned, and the operator registered that pane by hand.
+# It is ordered LAST so nothing that resolves today changes. The tenancy gate below applies to it
+# unchanged, so an inherited KITTY_WINDOW_ID in a nested `claude -p` is refused exactly as an
+# inherited CC_PANE_ID is.
+pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-${KITTY_WINDOW_ID:-}}}"; pane="${pane##*:}"
 case "$pane" in
   ''|.|..) return 0 ;;
   .*) return 0 ;;
