@@ -346,10 +346,16 @@ SH
   # Seconds, not minutes: every bound the program reads is a seam for exactly this reason.
   export LR_QUIET_S=1 LR_SUBMIT_POLL_S=2 RCY_ENGAGE_TIMEOUT=3
   export LR_IT2="$IT2" LR_PANE=1
-  export LR_SCREEN_WANT="$(printf '%s' "$LR_PROMPT" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]' | cut -c1-40)"
+  # Assigned then exported, never `export X="$(…)"`: that form takes the EXPORT's status, so a
+  # failed substitution reads as success (SC2155) — and these three are extractions whose failure
+  # is exactly what the guard below exists to catch.
+  LR_SCREEN_WANT="$(printf '%s' "$LR_PROMPT" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]' | cut -c1-40)"
+  export LR_SCREEN_WANT
   # The two exec'd shell programs, taken from the subject itself rather than re-typed here.
-  export LR_SCREEN_SH="$(sed -n "/^LR_SCREEN_SH=\"\$(cat <<'LRSCREENSH'\$/,/^LRSCREENSH\$/p" "$FIRE" | sed '1d;$d')"
-  export LR_NOTE_SH="$(sed -n "/^LR_NOTE_SH=\"\$(cat <<'LRNOTESH'\$/,/^LRNOTESH\$/p" "$FIRE" | sed '1d;$d')"
+  LR_SCREEN_SH="$(sed -n "/^LR_SCREEN_SH=\"\$(cat <<'LRSCREENSH'\$/,/^LRSCREENSH\$/p" "$FIRE" | sed '1d;$d')"
+  export LR_SCREEN_SH
+  LR_NOTE_SH="$(sed -n "/^LR_NOTE_SH=\"\$(cat <<'LRNOTESH'\$/,/^LRNOTESH\$/p" "$FIRE" | sed '1d;$d')"
+  export LR_NOTE_SH
   [ -n "$LR_SCREEN_SH" ] && [ -n "$LR_NOTE_SH" ] || { echo "helper-program extraction failed" >&2; return 1; }
   export LR_PROBE="$REPO/scripts/limit-recover/lr-submit-probe.sh"
   export LR_SUBMIT_TOKEN="$TOK"
