@@ -50,7 +50,20 @@ setup() {
   # real invocation flips — CC_RESUME_NO_SUPPRESS especially, which would silently turn every
   # suppression case into a fallback case and still look green. They are the SUBJECT of the cases at
   # the end of this file, so they are set explicitly there and absent everywhere else.
-  unset CC_RESUME_NO_SUPPRESS CC_RESUME_THRESHOLD_MINUTES
+  #
+  # CLAUDE_CODE_RESUME_THRESHOLD_MINUTES is a THIRD seam and is NOT one of the engine's own: it is
+  # the VENDOR variable the engine PASSES to the child (bin/reso-resume-one:554, as an `env NAME=v`
+  # prefix), and the assertion target is what the CHILD saw — stub_env, written at the top of
+  # mk_stub. A call-scoped prefix cannot unset an INHERITED one, so on the path where the engine
+  # deliberately withholds it (CC_RESUME_NO_SUPPRESS=1) the child inherits the desk's value anyway
+  # and "FALLBACK is reachable" fails with the engine behaving perfectly. A session launched with
+  # resume-suppression exports it as 999999999 into every shell it spawns, this suite included.
+  # Measured 2026-09-20, one variable moved and nothing else: `not ok 1 ... the knob is off but the
+  # variable still reached the process: 999999999` with it exported, `ok 1` under `env -u`.
+  # SAME seam and same remedy as f6ae93ba0 in tests/lr-resume-answer-width.bats, which cost a
+  # bisect, a conflicted AUTO-REVERT (rc 90) and two backlog rows before it was found. That suite
+  # was sealed and this one — its only sibling reading the same variable — was left ambient.
+  unset CC_RESUME_NO_SUPPRESS CC_RESUME_THRESHOLD_MINUTES CLAUDE_CODE_RESUME_THRESHOLD_MINUTES
   export CC_RR_STUB_ARGV="$BATS_TEST_TMPDIR/argv"
   export CC_RR_STUB_ENV="$BATS_TEST_TMPDIR/stub-env"
   export CC_RR_STUB_PATH="$BATS_TEST_TMPDIR/stub-path"
