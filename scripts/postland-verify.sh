@@ -320,6 +320,41 @@ SUITE_TO="${POSTLAND_SUITE_TIMEOUT_S:-10800}"  # wall BACKSTOP only — the prim
 # the kind of coupling that silently stops matching when the producer changes shape.
 PRE_PLAN_PER_SUITE_S="${POSTLAND_PRE_PLAN_PER_SUITE_S:-15}"
 PRE_PLAN_FLOOR_S="${POSTLAND_PRE_PLAN_FLOOR_S:-900}"
+# THE POLL PERIOD IS A SAMPLING RATE, NOT A COST FLOOR — and until this seam existed it was both.
+# `sleep "$poll"` was the FIRST statement of the watcher loop below, and the loop is entered
+# unconditionally (the child is alive by construction one line after `&`). So EVERY corpus run paid
+# one whole poll — 60s by default — after bats had already exited, and no amount of the corpus
+# finishing sooner could recover it. Invisible in production, where one 60s tail sits on a ~45-min
+# run; ruinous for the suites that DRIVE this script, whose fixture corpus is two files and whose
+# every `--run-if-needed` therefore cost 60s of pure sleep. MEASURED 2026-09-20 on
+# tests/postland-verify.bats (148 tests, 1-5 SUT runs each): tests 1-3 at 124ms / 60442ms / 60421ms,
+# and one test A/B'd at 60831ms -> 2782ms with nothing changed but this period. At ~2 SUT runs per
+# test that is ~5h of sleep in one suite, which is what the post-land net reported as
+# `wedged at 11426/14327` — a HUNG verdict whose subject was this loop, not the suite.
+# THE TICK IS THE FIX AND IT CHANGES NO CLOCK. `still` and `preplan` still advance by whole `poll`
+# units, once per completed outer iteration, and an outer iteration still takes `poll` wall seconds
+# whenever the child is alive for all of it — the stall and pre-plan predicates are byte-for-byte
+# the arithmetic they were. The tick only decides how soon a DEAD child ends the wait. At poll=1
+# (what the six watcher tests pin) tick clamps to the remainder and the loop is identical to the
+# pre-fix one, which is why those tests are the control here rather than the subject.
+STALL_TICK_S="${POSTLAND_STALL_TICK_S:-1}"     # 0 restores the old whole-poll sleep (kill switch)
+# stall_wait <poll> <cpid> — wait up to <poll>s, returning 1 the moment <cpid> is gone.
+# Defined at top level, beside the constant it reads, and NOT next to its single caller: a helper
+# parked beside its first call site is invisible to every site above it and the suite stays green
+# (memory: helper-position-bounds-a-fixs-reach).
+stall_wait() {
+  local left="$1" cpid="$2" tick="$STALL_TICK_S"
+  case "$tick" in ''|*[!0-9]*) tick=1 ;; esac
+  # 0 (or a value at/above the period) is the kill switch: one sleep, exactly as before.
+  if [ "$tick" -le 0 ] || [ "$tick" -ge "$left" ]; then sleep "$left"; return 0; fi
+  while [ "$left" -gt 0 ]; do
+    [ "$tick" -le "$left" ] || tick="$left"
+    sleep "$tick"
+    left=$(( left - tick ))
+    kill -0 "$cpid" 2>/dev/null || return 1
+  done
+  return 0
+}
 FILE_TO="${POSTLAND_FILE_TIMEOUT_S:-300}"      # per-TEST retry bound + the hang confirm
 RETRY_TO="${POSTLAND_RETRY_TIMEOUT_S:-5400}"   # WHOLE-FILE retry bound — only the fallback path
 # WHY THE LADDER NEEDS ITS OWN, LARGER BOUND (C23). Until 2026-07-29 the ladder re-ran the whole FILE
@@ -3770,7 +3805,9 @@ EOF
       cpid=$!; last=0; still=0; preplan=0; planned=0; cutby=""
       [ "$grace" -gt 0 ] || planned=1              # grace 0 = kill switch: one clock, from t=0
       while kill -0 "$cpid" 2>/dev/null; do
-        sleep "$poll"
+        # NOT `sleep "$poll"` — see STALL_TICK_S. A dead child ends the wait at once; a live one
+        # still costs the full period, so every clock below is unchanged.
+        stall_wait "$poll" "$cpid" || break
         if [ "$planned" -eq 0 ] && tap_planned "$tap"; then
           planned=1; still=0
           log "corpus: bats finished counting after ${preplan}s (plan $(tap_plan "$tap")) — stall clock starts"
