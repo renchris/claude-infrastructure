@@ -553,6 +553,28 @@ def read_claim(sid):
     return None
 
 
+def probe_source(path, label):
+    """§ 11 #11, the ONE disposition rule, applied to the optional stores.
+
+    AN ABSENT SOURCE IS EMPTY AND NAMED IN THE FOOTER; A SOURCE THAT EXISTS BUT CANNOT BE READ IS
+    EXIT 5. `os.listdir` cannot tell those apart — it raises for ENOENT and EACCES alike — and the
+    optional stores were all read through a swallow-everything `listdir(required=False)`. So a
+    `locks/` the census could not read rendered as a census in which nobody had claimed anything:
+    every FAULT CLAIMED-NOT-LIVE row silently disappears, which is the exact false-calm shape
+    (rule 2 in the header) this tool exists to end. Absent, by contrast, is a true and ordinary
+    fact about a fleet that has never parked anything, and must not be an error.
+
+    Returns True when the store is present and readable; False when absent (caller notes it).
+    """
+    if not os.path.exists(path):
+        return False
+    try:
+        os.listdir(path)
+    except OSError:
+        raise Unreadable("%s (%s)" % (label, path))
+    return True
+
+
 # ── the enumerator's own health (exit 6) ─────────────────────────────────────────────────────────
 def enumerator_degraded(capped):
     """A silent enumerator is the failure this whole tool exists to end.
@@ -753,6 +775,11 @@ def census():
     ps = ps_table()
     reg_by_sid, reg_by_pane = registry_rows(ps)
     leaves = resume_leaves()
+    # § 11 #11: the three optional state stores get an explicit disposition BEFORE they are read,
+    # because "nothing claimed" and "could not look" are the same empty list downstream.
+    absent = [label for label, sub in (("locks", "locks"), ("faults", "faults"),
+                                       ("parked", "parked"))
+              if not probe_source(os.path.join(STATE_DIR, sub), sub + " (%s)" % STATE_DIR)]
     parked = parked_sids()
     # § 11 #3: a parked record can be the ONLY evidence a session is blocked — the marker writer
     # has six paths that write nothing and exit 0. Adapted here, at the END of enumeration, so a
@@ -767,7 +794,8 @@ def census():
         death["_leaves"] = leaves.get(sid, [])
         rows.append(resolve(sid, death, ctx))
     rows.sort(key=lambda r: (r["group"], -(r.get("ts") or 0)))
-    return rows, unaddressable, enumerator_degraded(capped), len(deaths), marker_rows
+    return (rows, unaddressable, enumerator_degraded(capped), len(deaths), marker_rows,
+            absent)
 
 
 def in_window(row, since_s):
@@ -787,7 +815,7 @@ def parse_since(text):
 
 
 # ── renderers ────────────────────────────────────────────────────────────────────────────────────
-def render_screen(rows, unaddressable, degraded, sids, marker_rows, show_all):
+def render_screen(rows, unaddressable, degraded, sids, marker_rows, show_all, absent=()):
     out, groups = [], {}
     for row in rows:
         groups.setdefault((row["group"], row.get("cap") or "-",
@@ -829,6 +857,10 @@ def render_screen(rows, unaddressable, degraded, sids, marker_rows, show_all):
                    sids, "" if sids == 1 else "s", marker_rows, "" if marker_rows == 1 else "s",
                    unaddressable,
                    "ok" if not degraded else "DEGRADED: " + "; ".join(degraded)))
+    if absent:
+        # NAMED, never silent — and NOT degraded: a store that has never existed is a true
+        # empty, and exit 6 over it would fire on every clean fleet forever (alarm polarity).
+        out.append("absent (read as empty): %s" % ", ".join(sorted(absent)))
     return "\n".join(out), actionable_total
 
 
@@ -885,7 +917,7 @@ def main(argv):
         i += 1
 
     try:
-        rows, unaddressable, degraded, sids, marker_rows = census()
+        rows, unaddressable, degraded, sids, marker_rows, absent = census()
     except Unreadable as exc:
         # EMPTY stdout. An empty list at exit 0 would be indistinguishable from a healthy fleet.
         sys.stderr.write("cc-limited: instrument unreadable: %s\n" % exc)
@@ -902,7 +934,7 @@ def main(argv):
 
     if mode == "json":
         payload = {"now": NOW, "sessions": sids, "unaddressable": unaddressable,
-                   "degraded": degraded,
+                   "degraded": degraded, "absent": absent,
                    "rows": [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]}
         # Compact: this is machine-read by lr-fleet and the poller, and pretty-printing
         # spent ~1.3 KB of the 6 KB budget on whitespace alone.
@@ -915,7 +947,7 @@ def main(argv):
         actionable = len(text.splitlines()) if text else 0
     else:
         text, actionable = render_screen(rows, unaddressable, degraded, sids,
-                                         marker_rows, show_all)
+                                         marker_rows, show_all, absent)
         print(text)
 
     if degraded:
