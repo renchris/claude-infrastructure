@@ -506,14 +506,14 @@ INNER
       STUB_SILENT="$IN/bin/expect-silent" STUB_NOISY="$IN/bin/expect-noisy" \
       bats --tap "$IN/band.bats"
   echo "# inner TAP:" >&3; printf '%s\n' "$output" | sed 's/^/#   /' >&3
-  printf '%s\n' "$output" | grep -qE '^1\.\.2$' \
+  printf '%s\n' "$output" | grep -E '^1\.\.2$' >/dev/null \
     || { echo "the inner run emitted no 1..2 plan line — it was refused or shed, so nothing below is a verdict"; false; }
 
-  ! printf '%s\n' "$output" | grep -qE '^ok .*# skip' \
+  ! printf '%s\n' "$output" | grep -E '^ok .*# skip' >/dev/null \
     || { echo "a killed case still renders as 'ok … # skip' — an audit grepping ^ok counts it as a pass"; false; }
-  printf '%s\n' "$output" | grep -qE '^not ok 1 killed having captured NOTHING' \
+  printf '%s\n' "$output" | grep -E '^not ok 1 killed having captured NOTHING' >/dev/null \
     || { echo "a kill that captured nothing was not reported as a failure: $output"; false; }
-  printf '%s\n' "$output" | grep -qE '^ok 2 killed having captured its evidence' \
+  printf '%s\n' "$output" | grep -E '^ok 2 killed having captured its evidence' >/dev/null \
     || { echo "a kill discarded a case whose evidence WAS captured — the over-correction: $output"; false; }
 }
 
