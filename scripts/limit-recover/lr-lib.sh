@@ -460,6 +460,120 @@ lr_transplanted_to() { # $1=sid $2=this cfg → target cfg on stdout / rc 1
   printf '%s' "$to"
 }
 
+# ── HUSK: a LIVE pane on a store whose session has already MOVED (W10, LIMIT_RECOVER_100P § 10) ──
+# The state neither plan modelled. A transplant leaves the SOURCE pane standing — the process is
+# alive, the composer is empty, the last thing on its screen is the limit error — while the session
+# itself is being worked on somewhere else. Measured 2026-09-19: panes 110 (pid 95369), 126 (48984)
+# and 150 (17221) were all in exactly that state, and `--locate` listed none of the three.
+#
+# `bin/cc-husk-sweep` models the OTHER husk — a bare shell where a session used to be. This one is
+# the opposite shape: the process is real, and what is stale is its CLAIM on the session.
+#
+# THE CONJUNCTION IS THREE PARTS AND ALL THREE ARE REQUIRED:
+#   (a) a LIVE registry row for the sid whose ACCOUNT is this store's — without it a COMPLETED
+#       transplant whose source pane is already gone reads as a husk on the strength of the
+#       successor's own liveness, and the actuator would be aimed at the survivor.
+#   (b) `lr_transplanted_to` — the lock names a target other than this store AND the successor copy
+#       is on disk. It reads the LOCK, never a tombstone: a same-account `--mark` writes no lock and
+#       must not match.
+#   (c) NO recovery in flight for the sid. This is the conjunct the critic pass added (§ 10.3 item
+#       4) and it is what keeps every in-progress recovery from reading as a husk: lr-transplant.sh
+#       never deletes the lock, and the source row stays live until the typed `/exit` lands, so
+#       (a) ∧ (b) alone is true of every recovery during its own relaunch window.
+#
+# 🚨 AGE ALONE IS NOT THE GUARD, and the lock's own mtime is not evidence either way. The lock is
+# written once, at the START of the transplant, and never touched again — so a young lock does not
+# mean a watcher is running and an old lock does not mean one finished. The two signals below are
+# the ones that name a live actor: a `__recycle` watcher PROCESS, and a handoffs.jsonl row.
+#
+# ⚠️ Stated residual: lr-transplant.sh writes NO handoffs.jsonl row, so for a transplant-driven
+# recovery leg (c2) is silent by construction and (c1) is the only live-actor signal. Measured on
+# the three panes above: 0 handoffs.jsonl rows naming any of their sids. Leg (c2) covers the
+# recycle path (`prev_sid` / `firing_sid` on the recycle-* classes), which is the other carrier.
+lr_husk_state() { # $1=sid $2=this cfg → rc 0 when the sid on CFG is a HUSK, rc 1 otherwise
+  local sid="${1:-}" here="${2:-}" rows pane="" here_acct racct row_pane row_acct hlog min_age
+  [ -n "$sid" ] && [ -n "$here" ] || return 1
+  # The kill switch's OFF state IS the pre-W10 census, byte for byte: no row is ever a husk, so
+  # lf_locate's husk arm is unreachable and every disposition is the one it printed before.
+  [ "${LR_HUSK_RETIRE:-on}" != off ] || return 1
+
+  # (b) is tested FIRST although the contract lists it second, and the ordering is a cost decision,
+  # not a semantic one: `lr_transplanted_to` opens with a single `[ -f "$lock" ]`, so a sid with no
+  # lock — which is nearly all of them — costs one stat. Leg (a) forks jq once per registry file.
+  # lf_locate calls this per transcript over ~2,600 of them; the cheap leg has to be the gate.
+  lr_transplanted_to "$sid" "$here" >/dev/null 2>&1 || return 1
+
+  # (a) hooks/session-register.sh:158 writes the account as `basename $CLAUDE_CONFIG_DIR` with the
+  # leading dot stripped, so the row's account and this config dir's basename are the same string
+  # by construction — EXCEPT across the mirror. `~/.claude` and `~/.claude-next` are ONE account
+  # (lf_dedup_mirror says so), lr_config_dirs keeps the `.claude` spelling and drops `.claude-next`,
+  # and a session started under CLAUDE_CONFIG_DIR=~/.claude-next registers as `claude-next`. That is
+  # not a corner: 2 of the 3 measured husks (panes 110 and 126) carry account `claude-next` while
+  # their transcripts enumerate under `~/.claude`, so without this fold two thirds of the population
+  # this function exists for would still be invisible.
+  here_acct="$(basename "${here%/}")"; here_acct="${here_acct#.}"
+  case "$here_acct" in claude-next) here_acct=claude ;; esac
+  rows="$(lr_registry_live_rows "$sid" 2>/dev/null)" || return 1
+  # A heredoc, never a pipe: a `while` on the right of `|` runs in a subshell and its assignment
+  # never escapes (memory: assignment-inside-command-substitution-never-escapes).
+  while IFS=$'\t' read -r row_pane _ row_acct _; do
+    [ -n "$row_pane" ] || continue
+    racct="$row_acct"; case "$racct" in claude-next) racct=claude ;; esac
+    [ "$racct" = "$here_acct" ] || continue
+    pane="$row_pane"; break
+  done <<EOF
+$rows
+EOF
+  [ -n "$pane" ] || return 1
+
+  # (c1) a live `__recycle` watcher — handoff-fire.sh detaches one per recycle and its argv is
+  # `… __recycle <pane> <tty> <cmdfile> <launch-dir> <prev-sid> …`, so the pane is the field right
+  # after the verb and the retiring sid rides further along.
+  #
+  # 🚨 THE PATTERN MUST NOT RIDE IN ARGV. A hand-rolled `ps | awk` puts the very string it searches
+  # for into awk's OWN command line, which the concurrent `ps` PRINTS — so the census matches ITSELF
+  # and answers YES for every pane ever asked about (docs/lessons/census-matches-itself.md; the same
+  # receipt is written out at lr_resume_procs above). `pgrep` excludes itself; this does not. Both
+  # needles travel in the ENVIRONMENT, which ps does not print.
+  if ps -axo command= 2>/dev/null | LR_HK_SID="$sid" LR_HK_PANE="$pane" awk '
+      { for (i = 1; i < NF; i++)
+          if ($i == "__recycle" && ($(i+1) == ENVIRON["LR_HK_PANE"] || index($0, ENVIRON["LR_HK_SID"]))) f = 1 }
+      END { exit(f ? 0 : 1) }'; then
+    return 1
+  fi
+
+  # (c2) a handoffs.jsonl row naming the sid, younger than the `--await` bound. The recycle classes
+  # carry the retiring session as `prev_sid` and the driver as `firing_sid`; a substring test over
+  # the line covers both without pinning a key name a future emitter could rename.
+  hlog="${CC_HANDOFF_LOG:-$HOME/.claude/logs/handoffs.jsonl}"
+  min_age="${LR_HUSK_MIN_AGE_S:-900}"
+  if [ -f "$hlog" ] && grep -Fq "$sid" "$hlog" 2>/dev/null; then
+    LR_HK_SID="$sid" LR_HK_MIN="$min_age" /usr/bin/python3 -c '
+import json,os,sys
+from datetime import datetime,timezone
+sid=os.environ["LR_HK_SID"]
+try: win=float(os.environ.get("LR_HK_MIN") or 900)
+except Exception: win=900.0
+now=datetime.now(timezone.utc)
+rc=1
+try: fh=open(sys.argv[1])
+except OSError: sys.exit(1)
+with fh:
+    for l in fh:
+        if sid not in l: continue
+        try: d=json.loads(l)
+        except Exception: continue
+        ts=d.get("ts")
+        if not isinstance(ts,str): continue
+        try: t=datetime.fromisoformat(ts.replace("Z","+00:00"))
+        except Exception: continue
+        if (now-t).total_seconds() < win: rc=0; break
+sys.exit(rc)' "$hlog" && return 1
+  fi
+
+  return 0
+}
+
 # ── KITTY from ANY context (launchd has no $KITTY_WINDOW_ID) ─────────────────────────────────────
 lr_kitty_socket() { # → unix:/tmp/kitty-<pid> of a LIVE kitty, via bin/cc-kitty-socket; rc 1 when none
   [ -n "${CC_TERM_KITTY_TO:-}" ] && { printf '%s' "$CC_TERM_KITTY_TO"; return 0; }
