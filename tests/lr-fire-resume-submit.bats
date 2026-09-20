@@ -405,3 +405,65 @@ watcher_argv() { # $1 = the submit token to hand over
   grep -F '"class":"recycle-submitted"' "$HOME/.claude/logs/handoffs.jsonl" >/dev/null \
     || { echo "no recycle-submitted row"; cat "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null; false; }
 }
+
+# ── the ARMING side: the token has to be PUT on the argv, and only when the prompt can deliver it ──
+
+@test "RED-PROOF the arming side PUTS the token on the detach argv — captured, then FED to the watcher" {
+  # D1 fixed the watcher's END of the wire; nothing asserted the arming end. Removing
+  # "$RCY_SUBMIT_TOKEN_ARG" from recycle_fire's detach line survived 37 of 37 mutants, because every
+  # other case hands the watcher an argv the TEST wrote. This one executes the REAL detach line with
+  # a recorder in place of detach, then feeds the captured argv to the REAL watcher — so the two ends
+  # are proved against each other rather than each against a constant of its own.
+  watcher_setup
+  printf '%s\n' \
+    "{\"type\":\"user\",\"timestamp\":\"2099-01-01T00:00:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"/limit-recover ingest /x $TOK\"}}" \
+    '{"type":"assistant","timestamp":"2099-01-01T00:01:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"reading the salvage bundle"}]}}' \
+    > "$TX"
+  dl="$(sed -n '/^  WATCHER_PID="\$(detach "\$log"/p' "$HF")"
+  [ -n "$dl" ] || { echo "the detach invocation could not be located in $HF — the anchor is stale"; false; }
+  case "$dl" in *__recycle*) ;; *) echo "extracted the wrong line: $dl"; false ;; esac
+
+  ARGV="$BATS_TEST_TMPDIR/argv"
+  cat > "$BATS_TEST_TMPDIR/arm.sh" <<'SH'
+set -u
+# drop detach's own two leading arguments (the log and "$0"); what remains IS the watcher's argv
+detach() { shift 2; printf '%s\n' "$@" > "$ARGV_FILE"; echo 1234; }
+log=/dev/null
+tty=/dev/ttys999
+cmdfile="$A_CMDF"
+LAUNCH_DIR=/tmp
+SID="$A_PANE"
+rcy_old_sid=OLD-SID
+RECYCLE_MARKER=""
+FIRE_GOAL=""
+PROMPT_FILE=""
+RESUME_CFG="$A_CFG"
+RESUME_LAUNCHER="$A_RUNDIR/launcher.sh"
+RCY_SOURCE_SESSION="$A_SID"
+RCY_T0="$A_T0"
+RCY_SRC_TX=""
+RCY_RUN_DIR_ARG="$A_RUNDIR"
+RCY_SUBMIT_TOKEN_ARG="$A_TOK"
+eval "$A_DETACH_LINE"
+SH
+  run env ARGV_FILE="$ARGV" A_CMDF="$CMDF" A_PANE="$PANE" A_CFG="$CFG" A_SID="$SID" \
+      A_T0="$T0" A_RUNDIR="$RUNDIR" A_TOK="$TOK" A_DETACH_LINE="$dl" \
+      bash "$BATS_TEST_TMPDIR/arm.sh"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -s "$ARGV" ] || { echo "the detach recorder captured no argv"; false; }
+
+  local -a argv; mapfile -t argv < "$ARGV"
+  local seen=0 a
+  for a in "${argv[@]}"; do [ "$a" = "$TOK" ] && seen=$((seen + 1)); done
+  [ "$seen" = 1 ] || { echo "the token appears $seen time(s) on the detach argv:"; cat "$ARGV"; false; }
+
+  # …and the watcher, handed EXACTLY that argv, must read it. This is the half a position assertion
+  # cannot make: an index is only correct relative to what the other end writes.
+  run env HOME="$HOME" PATH="$SHIM:$PATH" IT2_BIN="$HOME/.claude/bin/it2" \
+      PS_DEAD_CALLS=2 RCY_ENGAGE_TIMEOUT=8 RCY_ENGAGE_INTERVAL=1 \
+      RCY_BOOT_PANE_EVERY=1 RCY_BOOT_IVL_S=0.2 RCY_BOOT_WAIT_S=20 \
+      bash "$HF" "${argv[@]}"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"SUBMITTED in $PANE"* ]] \
+    || { echo "the argv the arming side actually builds does not carry the token to the watcher: $output"; false; }
+}
