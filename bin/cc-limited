@@ -1,0 +1,828 @@
+#!/usr/bin/python3
+"""cc-limited — which sessions are limit-blocked RIGHT NOW, and what to do about each.
+
+LIMIT_DETECT_100P § 3 W2a. One process answers "which sessions are blocked, on which account,
+until when, at which pane, and which claimed recovery produced nothing" — with no screenshot.
+
+WHY IT IS A NEW PROCESS AND NOT A PATCH TO --locate. The shipped census takes 35.5 s over 2,591
+transcripts (real 35.46 / user 18.03 / sys 18.83) and spends almost all of it forking: python x3
+plus jq x37 plus a ps, PER HIT. That is not slow, it is WRONG — the fleet changes state faster
+than the census can finish describing it. Measured: a transplant completed 32 s before one
+`--locate` began and its `.handed-off` rename landed INSIDE the scan, so the census reported a
+world that had never existed at any instant. A census whose window exceeds its subject's
+state-change interval cannot be made correct by making it more careful.
+
+THE ARCHITECTURE, in one line: THE CENSUS IS A PURE FUNCTION OF STORES THAT ALREADY EXIST,
+COMPUTED BY ONE PROCESS AT READ TIME.
+
+THE INVARIANT THAT FALLS OUT OF THAT, and it is the whole design:
+
+    NOTHING RENDERED AS CURRENT IS EVER STORED. Only CLAIMS are stored.
+
+`alive`, `pane owner`, `moved`, `engaged`, `reset_in`, `cwd_ok` are derived on every read, from
+`ps`, the registry and the filesystem. A stored state machine was designed for this job and
+rejected on five measured fatals, every one of them a property of HAVING a stored state machine:
+its arm sat below the marker's cap exit; every re-cap wiped the `claim` field (8 of 10 multi-fire
+sids re-cap, one of them 4 times in 4 seconds); a bogus latch key froze `cap=unknown` forever;
+six writers shared one document with no serialization; and a stale `.done` sibling deleted a live
+document. The one irreplaceable idea in it — a claim plus a reaper that names it — survives here
+as an append-only `faults/` DIRECTORY, which is a record of claims, not a state store.
+
+THE TWO THINGS THAT ARE EASY TO GET BACKWARDS, both measured:
+
+  1. LIVENESS COMES FROM THE REGISTRY; BLOCKED-NESS COMES FROM THE UNION OVER ALL COPIES.
+     A session's transcript exists in several places at once (a `.jsonl`, its `.handed-off` twin,
+     salvage copies — median 2, max 4). The obvious rule "the biggest/newest copy is the live one"
+     is WRONG and produced a real misdiagnosis: sid 07e30aeb had a 1,157,520-byte copy frozen at
+     15:32 under one root and a 5,339-byte copy still growing under another, and `cp -p` makes
+     size AND mtime identical across a copy anyway. So there is no "live copy" concept here.
+     Blocked means NO COPY holds a real assistant turn after the death record. Nothing is ordered
+     by size or mtime, ever.
+
+  2. AN EMPTY LIST AT EXIT 0 IS A LIE WHEN THE INSTRUMENT IS BROKEN. If the registry dir, the
+     marker dir, accounts.json or `ps` cannot be read, this exits 5 with EMPTY stdout and says
+     why on stderr. It never prints "no limit-blocked session anywhere" because it could not
+     look — that sentence is indistinguishable from the healthy answer, and the shipped census
+     printed exactly it during a six-pane DNS outage.
+
+EXIT CODES ARE COMPOSABLE — severity and work-present are deliberately NOT multiplexed:
+    0 rendered            3 ambiguous query (every candidate printed)   5 instrument unreadable
+    1 rows/faults exist   4 no match                                    6 degraded enumerator
+    2 usage                                                              (rows ARE printed at 6)
+
+Seams (tests; every one is a PATH or a VALUE, and set-but-empty is honoured verbatim):
+    CC_LIMITED_MARKER_DIR · CC_REGISTRY_DIR · LR_STATE_DIR · CC_LIMITED_ACCOUNTS ·
+    CC_LIMITED_ROOTS (colon-separated, overrides the accounts-derived set) · CC_LIMITED_PS (a file
+    holding `ps -eo pid=,lstart=` output) · CC_LIMITED_PROCS (a file holding `ps -axo
+    pid=,ppid=,command=` output) · LR_NOW (epoch or ISO) · CC_LIMITED_CLAIM_GRACE_S · CC_LIMITED_IDL
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                                "..", "scripts", "limit-recover"))
+try:
+    import lr_predicate as PRED
+except ImportError as _exc:  # the predicate IS the classification; without it there is no census
+    sys.stderr.write("cc-limited: cannot import lr_predicate (%s)\n" % _exc)
+    sys.exit(5)
+
+RC_OK, RC_WORK, RC_USAGE, RC_AMBIG, RC_NOMATCH, RC_INSTRUMENT, RC_DEGRADED = 0, 1, 2, 3, 4, 5, 6
+
+HOME = os.path.expanduser("~")
+
+
+def env(name, default):
+    """`${VAR+set}` semantics: a seam that cannot be set to EMPTY is not a seam."""
+    return os.environ[name] if name in os.environ else default
+
+
+MARKER_DIR = env("CC_LIMITED_MARKER_DIR", os.path.join(HOME, ".claude/autonomy/stop-failure"))
+REGISTRY_DIR = env("CC_REGISTRY_DIR", os.path.join(HOME, ".claude/cc-registry"))
+STATE_DIR = env("LR_STATE_DIR", os.path.join(HOME, ".reso/limit-recover"))
+ACCOUNTS = env("CC_LIMITED_ACCOUNTS", os.path.join(HOME, ".claude/accounts.json"))
+IDL = env("CC_LIMITED_IDL", os.path.join(HOME, ".claude/autonomy/idl.jsonl"))
+CLAIM_GRACE_S = int(env("CC_LIMITED_CLAIM_GRACE_S", "120") or 120)
+MARKER_CAP = int(env("STOP_FAILURE_CAP", "5000") or 5000)
+
+
+class Unreadable(Exception):
+    """An INSTRUMENT failed. Never raised for an empty-but-readable store."""
+
+
+def now_epoch():
+    raw = env("LR_NOW", "")
+    if not raw:
+        return int(time.time())
+    try:
+        return int(raw)
+    except ValueError:
+        pass
+    try:
+        return int(datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return int(time.time())
+
+
+NOW = now_epoch()
+
+
+def ts_epoch(iso):
+    if not isinstance(iso, str) or not iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
+
+
+def read_json(path):
+    """None on ANY per-file failure. A transplant renames files mid-scan; that is not an error."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def listdir(path, required=False, label=""):
+    try:
+        return sorted(os.listdir(path))
+    except OSError:
+        if required:
+            # NAME THE INSTRUMENT, not just the path. "cc-registry (/x/y)" tells the operator which
+            # store is down; a bare path tells them a string they then have to recognize.
+            raise Unreadable("%s (%s)" % (label or os.path.basename(path.rstrip("/")), path))
+        return []
+
+
+# ── 0. ACCOUNTS: the name map and the roots ──────────────────────────────────────────────────────
+def load_accounts():
+    """{basename -> account name}, and the set of config roots, deduped by realpath.
+
+    Keyed on the BASENAME of the config dir AND on every alias, because three different stores
+    spell the same account three ways: the marker row carries a config_dir, the registry row
+    carries an account NAME, and ~/.claude is reachable only through an alias. A census that
+    grouped by any one spelling would split one account into three.
+    """
+    data = read_json(ACCOUNTS)
+    if data is None:
+        raise Unreadable("accounts.json (%s)" % ACCOUNTS)
+    names, roots = {}, []
+    for acct in (data.get("accounts") or []):
+        if not isinstance(acct, dict):
+            continue
+        name = acct.get("name") or ""
+        cfg = (acct.get("config_dir") or "").rstrip("/")
+        if cfg.startswith("~"):
+            cfg = HOME + cfg[1:]
+        if cfg:
+            names[os.path.basename(cfg)] = name
+            names[os.path.basename(cfg).lstrip(".")] = name
+            roots.append(cfg)
+        for alias in (acct.get("aliases") or []):
+            names[str(alias)] = name
+            names["." + str(alias)] = name
+        names[name] = name
+    override = env("CC_LIMITED_ROOTS", "")
+    if override:
+        roots = [r for r in override.split(":") if r]
+    # realpath dedupe: ~/.claude-next is a SYMLINK to ~/.claude on this fleet, so an undeduped
+    # walk counts every transcript twice and reports one session as two.
+    seen, out = set(), []
+    for root in roots:
+        real = os.path.realpath(root)
+        if real not in seen:
+            seen.add(real)
+            out.append(root)
+    return names, out
+
+
+def acct_name(names, spelling):
+    """Resolve any of the three spellings to one account name; fall back to the spelling itself."""
+    if not spelling:
+        return ""
+    return names.get(spelling) or names.get(os.path.basename(spelling.rstrip("/"))) \
+        or names.get(os.path.basename(spelling.rstrip("/")).lstrip(".")) or spelling
+
+
+# ── 1. ENUMERATE: markers (ALL causes) and parked records ────────────────────────────────────────
+def enumerate_deaths(names):
+    """{sid: death}, plus the enumerator's own health.
+
+    ALL cause files, not just rate_limit: a session killed by a DNS outage is just as blocked and
+    the shipped census was blind to every one of them (six panes, one outage, "no limit-blocked
+    session anywhere"). The cause is read from the ROW's config_dir, never from the FILENAME —
+    grouping by filename welds a session that MOVED to the account it died on.
+    """
+    deaths, unaddressable, capped, marker_rows = {}, 0, [], 0
+    for name in listdir(MARKER_DIR, required=True, label="stop-failure marker dir"):
+        if not name.endswith(".jsonl") or "__" not in name:
+            continue
+        path = os.path.join(MARKER_DIR, name)
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()
+        except OSError:
+            continue
+        if len(lines) >= MARKER_CAP:
+            capped.append(name)
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            marker_rows += 1
+            sid = row.get("session_id") or "?"
+            if sid == "?":
+                unaddressable += 1
+                continue
+            stamp = ts_epoch(row.get("ts")) or 0
+            rec = deaths.setdefault(sid, {"sid": sid, "fires": 0, "accts": [], "_seen": [],
+                                          "ts": -1})
+            rec["fires"] += 1
+            acct = acct_name(names, row.get("config_dir") or "")
+            if acct:
+                rec["_seen"].append((stamp, acct))
+            if stamp >= rec["ts"]:          # the LAST death is the one the session sits on
+                rec.update({
+                    "ts": stamp, "ts_iso": row.get("ts") or "", "acct_death": acct,
+                    "marker_file": name, "cfg": row.get("config_dir") or "",
+                    "pane": row.get("pane") or "", "cwd": row.get("cwd") or "",
+                    "tp": row.get("transcript_path") or "", "error": row.get("error") or "",
+                    "last": row.get("last_assistant_message") or "",
+                })
+    for sid, rec in deaths.items():
+        # CHRONOLOGICAL, not directory order: a session that capped on next4 and then on next3 is
+        # telling the operator it MOVED, and the sequence is the whole content of that. Ordering
+        # by marker filename would report the same history as "next3, next4".
+        seen = []
+        for _, acct in sorted(rec.pop("_seen", [])):
+            if acct not in seen:
+                seen.append(acct)
+        rec["accts"] = seen
+        # ts is the DEATH's own timestamp, and it is load-bearing: the prose form says "resets
+        # 4:30pm", which is a different instant depending on which day it was said. Anchoring on
+        # now() would silently move every reset forward by a day for any death read after 4:30pm.
+        verdict = PRED.classify_text(rec.get("last", ""), error=rec.get("error") or None,
+                                     ts=rec.get("ts_iso"))
+        rec["kind"] = verdict["kind"] or "other"
+        rec["cap"] = verdict["cap"]
+        rec["limit"] = verdict["limit"]
+        rec["resets_at"] = verdict["resets_at"]
+        rec["recoverable_by_waiting"] = verdict["recoverable_by_waiting"]
+    return deaths, unaddressable, capped, marker_rows
+
+
+def parked_sids():
+    out = {}
+    for name in listdir(os.path.join(STATE_DIR, "parked")):
+        if not name.endswith(".json"):
+            continue
+        rec = read_json(os.path.join(STATE_DIR, "parked", name))
+        if isinstance(rec, dict) and rec.get("sid"):
+            out[rec["sid"]] = rec
+    return out
+
+
+# ── 2. LIVENESS: ONE ps table for the whole fleet ────────────────────────────────────────────────
+def ps_table():
+    """{pid: lstart}, from ONE `ps`. The full table is 4x cheaper than `-p <37 pids>` (31.8 ms
+    against 123.8 ms), and one table taken once is also the only way every row in the census is
+    judged against the SAME instant."""
+    path = env("CC_LIMITED_PS", "")
+    if path:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                raw = fh.read()
+        except OSError:
+            raise Unreadable("ps table (%s)" % path)
+    else:
+        e = dict(os.environ, TZ="UTC", LC_ALL="C")
+        try:
+            raw = subprocess.run(["ps", "-eo", "pid=,lstart="], env=e, timeout=10,
+                                 stdout=subprocess.PIPE).stdout.decode("utf-8", "replace")
+        except (OSError, subprocess.SubprocessError):
+            raise Unreadable("ps")
+    table = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        pid, _, rest = line.partition(" ")
+        if pid.isdigit():
+            table[pid] = " ".join(rest.split())
+    return table
+
+
+def registry_rows(ps):
+    """Live registry rows, by sid and by pane.
+
+    Liveness is the EXACT (pid, lstart) pair, never `kill -0` alone: pids are reissued, and a
+    recycled pid reads as the session still being alive. `lstart` is rendered under TZ=UTC on both
+    sides — an unpinned pair convicts every row on a DST flip.
+    """
+    by_sid, by_pane = {}, {}
+    for name in listdir(REGISTRY_DIR, required=True, label="cc-registry"):
+        if not name.endswith(".json") or name.startswith("."):
+            continue
+        row = read_json(os.path.join(REGISTRY_DIR, name))
+        if not isinstance(row, dict):
+            continue
+        pane = row.get("paneUUID") or name[:-5]
+        pid = str(row.get("pid") or "")
+        stored = " ".join(str(row.get("lstart") or "").split())
+        live = bool(pid) and pid in ps and (not stored or ps[pid] == stored)
+        rec = {"pane": pane, "pid": pid, "sid": row.get("session_id") or "",
+               "account": row.get("account") or "", "cwd": row.get("cwd") or "",
+               "startedAt": row.get("startedAt"), "live": live}
+        by_pane[pane] = rec
+        if rec["sid"]:
+            by_sid.setdefault(rec["sid"], []).append(rec)
+    return by_sid, by_pane
+
+
+def resume_leaves():
+    """{sid: [pid]} for `--resume <sid>` processes, wrapper parents removed.
+
+    The pattern travels in the ENVIRONMENT, not in argv: a concurrent `ps` prints the searching
+    process's own command line, so a pattern in argv matches ITSELF and the census answers YES for
+    every sid ever asked. And only LEAVES count — a resume is launched through a wrapper that
+    stays alive as the parent, so counting the chain reported one session as a split brain and
+    prescribed retiring a live pane.
+    """
+    path = env("CC_LIMITED_PROCS", "")
+    if path:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                raw = fh.read()
+        except OSError:
+            return {}
+    else:
+        try:
+            raw = subprocess.run(["ps", "-axo", "pid=,ppid=,command="], timeout=10,
+                                 stdout=subprocess.PIPE).stdout.decode("utf-8", "replace")
+        except (OSError, subprocess.SubprocessError):
+            return {}
+    rows, parents = [], set()
+    for line in raw.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3 or not parts[0].isdigit():
+            continue
+        pid, ppid, cmd = parts[0], parts[1], parts[2]
+        m = re.search(r"--resume\s+([0-9A-Za-z-]+)", cmd)
+        if not m:
+            continue
+        rows.append((pid, ppid, m.group(1)))
+        parents.add(ppid)
+    out = {}
+    for pid, _, sid in rows:
+        if pid in parents:
+            continue                      # a wrapper, not the session
+        out.setdefault(sid, []).append(pid)
+    return out
+
+
+# ── 4. COPIES: slug-directed, then the full index only on a miss ─────────────────────────────────
+def slug_of(cwd):
+    return re.sub(r"[^A-Za-z0-9]", "-", cwd or "")
+
+
+def find_copies(roots, sid, cwd):
+    """Every copy of one session's transcript. 27 copies in 5.4 ms, against 121 ms for a full index."""
+    hits, slug = [], slug_of(cwd)
+    if slug:
+        for root in roots:
+            base = os.path.join(root, "projects", slug)
+            for name in listdir(base):
+                if name.startswith(sid) and ".jsonl" in name:
+                    hits.append(os.path.join(base, name))
+    if hits:
+        return hits
+    for root in roots:                    # slug miss only: the cwd moved or was never recorded
+        pdir = os.path.join(root, "projects")
+        for proj in listdir(pdir):
+            base = os.path.join(pdir, proj)
+            for name in listdir(base):
+                if name.startswith(sid) and ".jsonl" in name:
+                    hits.append(os.path.join(base, name))
+    return hits
+
+
+def scan_copy(path):
+    """{last_real_turn_ts, assistant_records, title} for one copy. Reads the tail only."""
+    out = {"last_turn": None, "assistants": 0, "title": None, "teammate": False,
+           "err": None, "err_ts": None}
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            head = fh.read(8192)
+            if size > 131072:
+                fh.seek(-131072, os.SEEK_END)
+            else:
+                fh.seek(0)
+            tail = fh.read()
+    except OSError:
+        return out
+    if b'"agentName"' in head:
+        out["teammate"] = True            # lead-owned; never this census's to recover
+    for line in tail.decode("utf-8", "replace").splitlines():
+        if '"aiTitle"' in line:
+            m = re.search(r'"aiTitle"\s*:\s*"((?:[^"\\]|\\.)*)"', line)
+            if m:
+                out["title"] = m.group(1)
+        if '"assistant"' not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict) or rec.get("type") != "assistant":
+            continue
+        if rec.get("isApiErrorMessage"):
+            # THE STRUCTURED RESET LIVES HERE, not in the marker. The marker stores only
+            # `last_assistant_message`, so a marker-only census can read the reset from PROSE
+            # alone — and prose says "resets 7am", never WHICH 7am. A weekly cap read that way
+            # resolves to the morning after the death and then looks long expired, so the row
+            # silently drops out of the default window while the session is still blocked.
+            # `quotaLimits.resetsAt` is an epoch and has no such ambiguity.
+            stamp = ts_epoch(rec.get("timestamp")) or 0
+            if out["err_ts"] is None or stamp >= out["err_ts"]:
+                out["err_ts"] = stamp
+                out["err"] = PRED.classify_record(rec)
+            continue                      # an error record is not a turn
+        out["assistants"] += 1
+        stamp = ts_epoch(rec.get("timestamp"))
+        if stamp and (out["last_turn"] is None or stamp > out["last_turn"]):
+            out["last_turn"] = stamp
+    return out
+
+
+# ── 7. CLAIMS ────────────────────────────────────────────────────────────────────────────────────
+def read_claim(sid):
+    """A claim is a STORED fact — someone said they would recover this. Whether it worked is
+    DERIVED, by asking whether the claimant is still alive."""
+    lock = os.path.join(STATE_DIR, "locks", "%s.lock" % sid)
+    rec = read_json(lock)
+    if isinstance(rec, dict):
+        return {"kind": "lock", "to": rec.get("to") or "", "ts": ts_epoch(rec.get("ts")) or 0,
+                "pid": str(rec.get("pid") or ""), "path": lock}
+    fault = os.path.join(STATE_DIR, "faults", "%s.json" % sid)
+    rec = read_json(fault)
+    if isinstance(rec, dict):
+        return {"kind": "fault", "to": "", "ts": rec.get("first_seen") or 0,
+                "pid": str((rec.get("claim") or {}).get("ts") or ""), "path": fault}
+    return None
+
+
+# ── the enumerator's own health (exit 6) ─────────────────────────────────────────────────────────
+def enumerator_degraded(capped):
+    """A silent enumerator is the failure this whole tool exists to end.
+
+    stop-failure-marker.sh has six paths that write NO marker and exit 0. Each logs an IDL
+    disposition; none is visible in a census that only reads markers. So the IDL's recent rows are
+    read for this hook's own abstentions, and a marker file sitting at CAP is reported too — a
+    capped file has stopped recording, which looks exactly like a cause that resolved.
+    """
+    notes = list("%s at cap" % c for c in capped)
+    try:
+        with open(IDL, "r", encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()[-20000:]
+    except OSError:
+        return notes
+    abstains = 0
+    for line in lines:
+        if '"stop-failure-marker"' not in line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if row.get("hook") != "stop-failure-marker":
+            continue
+        if row.get("disposition") in ("abstained",):
+            stamp = ts_epoch(row.get("ts"))
+            if stamp and NOW - stamp <= 86400:
+                abstains += 1
+    if abstains:
+        notes.append("%d IDL abstain(s) in 24h" % abstains)
+    return notes
+
+
+# ── 9. THE STATE TABLE — MECE, first match wins ──────────────────────────────────────────────────
+# The `tsv` column is the legacy lf_locate disposition each state maps to, so `--tsv` stays
+# byte-compatible with the consumer that reads it today.
+SETTLED = ("RE-ENGAGED", "CARCASS")
+
+
+def resolve(sid, death, ctx):
+    names, roots, reg_by_sid, reg_by_pane, leaves, parked = ctx
+    row = dict(death)
+    live_rows = [r for r in reg_by_sid.get(sid, []) if r["live"]]
+    row["live"] = bool(live_rows)
+    row["acct_now"] = acct_name(names, live_rows[0]["account"]) if live_rows else ""
+    row["pane_now"] = live_rows[0]["pane"] if live_rows else ""
+    started = live_rows[0].get("startedAt") if live_rows else None
+    row["started_now"] = int(started / 1000 if isinstance(started, (int, float)) and started > 1e11
+                             else (started or 0)) or None
+
+    # 3. PANE OWNER — the in-place recycle case a pane-keyed census lies about.
+    owner = reg_by_pane.get(death.get("pane") or "")
+    row["pane_reused_by"] = ""
+    row["pane_reused_since"] = None
+    if owner and owner["sid"] and owner["sid"] != sid:
+        row["pane_reused_by"] = owner["sid"]
+        started = owner.get("startedAt")
+        if isinstance(started, (int, float)):
+            row["pane_reused_since"] = int(started / 1000 if started > 1e11 else started)
+
+    # 4-5. COPIES and BLOCKED.
+    copies = find_copies(roots, sid, death.get("cwd") or "")
+    scans = [(p, scan_copy(p)) for p in copies]
+    row["copies"] = len(copies)
+    row["teammate"] = any(s["teammate"] for _, s in scans)
+    last_turn = max([s["last_turn"] for _, s in scans if s["last_turn"]] or [0])
+    row["blocked"] = not (last_turn and last_turn > (death.get("ts") or 0))
+
+    preferred = None
+    if live_rows:
+        for path, _ in scans:
+            if any(os.path.realpath(path).startswith(os.path.realpath(r)) for r in roots
+                   if acct_name(names, os.path.basename(r.rstrip("/"))) == row["acct_now"]):
+                preferred = path
+                break
+    if preferred is None and death.get("tp") and os.path.exists(death["tp"]):
+        preferred = death["tp"]
+    if preferred is None and scans:
+        preferred = scans[0][0]
+    row["tp"] = preferred or ""
+    pscan = dict(scans[[p for p, _ in scans].index(preferred)][1]) if preferred and \
+        preferred in [p for p, _ in scans] else {"assistants": 0, "title": None}
+    row["title"] = pscan.get("title") or os.path.basename((death.get("cwd") or "").rstrip("/"))
+
+    # Prefer the newest api-error record found in ANY copy over the marker's text: structure beats
+    # prose wherever it exists, and `resets_source` carries which one answered so a wrong reset is
+    # attributable rather than merely wrong.
+    best = None
+    for _, sc in scans:
+        if sc.get("err") and sc["err"].get("limit"):
+            if best is None or (sc["err_ts"] or 0) >= best[0]:
+                best = ((sc["err_ts"] or 0), sc["err"])
+    if best and best[1].get("resets_at") is not None:
+        row["cap"] = best[1]["cap"] or row.get("cap")
+        row["resets_at"] = best[1]["resets_at"]
+        row["resets_source"] = best[1]["resets_source"]
+        row["recoverable_by_waiting"] = best[1]["recoverable_by_waiting"]
+    else:
+        row["resets_source"] = "prose" if row.get("resets_at") else "none"
+    row["stub"] = preferred is not None and pscan.get("assistants", 0) == 0
+
+    # 6. PROCS — CARDINALITY, never the rc of a predicate. `lf_locate` tested the rc of
+    # `lr_resume_procs` instead of counting, so ONE process read as DUPLICATE and the session was
+    # parked forever.
+    pids = set(r["pid"] for r in live_rows if r["pid"]) | set(leaves.get(sid, []))
+    row["procs"] = len(pids)
+
+    # 7. CLAIMS  8. CWD, at THIS instant (1 -> 3 CWD-GONE in 20 minutes, measured).
+    row["claim"] = read_claim(sid)
+    row["cwd_ok"] = bool(death.get("cwd")) and os.path.isdir(death["cwd"])
+    row["parked"] = sid in parked
+
+    row["state"], row["tsv"], row["why"] = classify_state(sid, row)
+    # GROUPED BY WHERE THE SESSION IS, NEVER BY WHICH FILE RECORDED ITS DEATH. The marker is
+    # cause-keyed, so one session that capped on two accounts has rows in two files; keying on the
+    # filename renders it twice and files a transplanted session under the account it LEFT.
+    row["group"] = row["acct_now"] if (row["acct_now"] and
+                                       row["acct_now"] != row.get("acct_death")) \
+        else (row.get("acct_death") or "?")
+    return row
+
+
+def classify_state(sid, r):
+    claim = r.get("claim")
+    claim_stale = bool(claim) and (NOW - (claim.get("ts") or 0)) > CLAIM_GRACE_S
+
+    if r.get("teammate"):
+        return "TEAMMATE", "TEAMMATE", "lead-owned"
+    if not r["blocked"]:
+        moved = r.get("acct_now") and r["acct_now"] != r.get("acct_death")
+        return ("RE-ENGAGED", "",
+                ("moved %s->%s, registry %s > death %s" % (
+                    r.get("acct_death"), r["acct_now"],
+                    iso(r.get("started_now")), iso(r.get("ts"))) if moved
+                 else "a real assistant turn after the death"))
+    if claim_stale and not r["live"] and r["procs"] == 0:
+        age = NOW - (claim.get("ts") or 0)
+        return ("FAULT CLAIMED-NOT-LIVE", "NO-PANE",
+                "claimed %s by pid %s (%s); no live process, %s" %
+                (iso(claim.get("ts")), claim.get("pid") or "?",
+                 os.path.basename(claim.get("path") or ""), dur(age)))
+    if r["live"] and r["acct_now"] and r["acct_now"] != r.get("acct_death"):
+        return ("AWAITING-ENGAGE", "TRANSPLANTED->%s" % r["acct_now"],
+                "moved %s->%s; needs one prompt" % (r.get("acct_death"), r["acct_now"]))
+    if r["procs"] > 1:
+        return "DUPLICATE", "DUPLICATE", "%d live processes hold this session" % r["procs"]
+    if not r["live"] and len(r.get("_leaves") or []) == 1:
+        return "RESUMING", "RESUMING", "a resume is in flight"
+    if r.get("kind") == "network" and r["live"]:
+        return ("IDLE-AFTER-ERROR", "IDLE-AFTER-ERROR",
+                "network death, pane alive; resume IN PLACE, never a transplant")
+    if r["live"] and r.get("resets_at") and r["resets_at"] <= NOW:
+        return "RESET-PASSED", "RECOVERABLE", "the reset has passed; nudge in place"
+    if r["live"] and r["procs"] == 1 and not r["pane_reused_by"]:
+        return (("RECOVERABLE (stub)" if r["stub"] else "RECOVERABLE"), "RECOVERABLE",
+                "preferred copy has 0 assistant records" if r["stub"] else "live pane, in place")
+    if r["pane_reused_by"] and not r["live"]:
+        return ("PANE-REUSED", "NO-PANE",
+                "pane %s held by %s since %s" % (r.get("pane") or "?",
+                                                 r["pane_reused_by"][:8],
+                                                 iso(r["pane_reused_since"])))
+    if not r["live"] and not r["cwd_ok"]:
+        return "CWD-GONE", "CWD-GONE", "cwd is gone: %s" % (r.get("cwd") or "?")
+    if not r["live"]:
+        return "NO-PANE", "NO-PANE", "no live process holds it"
+    return "NO-PANE", "NO-PANE", "no live process holds it"
+
+
+def iso(epoch):
+    if not epoch:
+        return "?"
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%H:%M:%SZ")
+
+
+def dur(seconds):
+    seconds = int(seconds or 0)
+    if seconds < 60:
+        return "%ds" % seconds
+    if seconds < 3600:
+        return "%dm%02ds" % (seconds // 60, seconds % 60)
+    return "%dh%02dm" % (seconds // 3600, (seconds % 3600) // 60)
+
+
+# ── the census ───────────────────────────────────────────────────────────────────────────────────
+def census():
+    names, roots = load_accounts()
+    deaths, unaddressable, capped, marker_rows = enumerate_deaths(names)
+    ps = ps_table()
+    reg_by_sid, reg_by_pane = registry_rows(ps)
+    leaves = resume_leaves()
+    parked = parked_sids()
+    ctx = (names, roots, reg_by_sid, reg_by_pane, leaves, parked)
+    rows = []
+    for sid, death in deaths.items():
+        death["_leaves"] = leaves.get(sid, [])
+        rows.append(resolve(sid, death, ctx))
+    rows.sort(key=lambda r: (r["group"], -(r.get("ts") or 0)))
+    return rows, unaddressable, enumerator_degraded(capped), len(deaths), marker_rows
+
+
+def in_window(row, since_s):
+    """seven_day rows are always shown for their whole window: a weekly cap outlives any sane
+    --since and hiding it is how a blocked session becomes invisible for six days."""
+    if row.get("cap") == PRED.CAP_SEVEN_DAY and (row.get("resets_at") or 0) > NOW:
+        return True
+    return (NOW - (row.get("ts") or 0)) <= since_s
+
+
+def parse_since(text):
+    m = re.match(r"^(\d+)([hdm])$", text or "24h")
+    if not m:
+        return 86400
+    n, unit = int(m.group(1)), m.group(2)
+    return n * {"m": 60, "h": 3600, "d": 86400}[unit]
+
+
+# ── renderers ────────────────────────────────────────────────────────────────────────────────────
+def render_screen(rows, unaddressable, degraded, sids, marker_rows, show_all):
+    out, groups = [], {}
+    for row in rows:
+        groups.setdefault((row["group"], row.get("cap") or "-",
+                           row.get("resets_at") or 0), []).append(row)
+    actionable_total = 0
+    for (group, cap, resets), members in sorted(groups.items()):
+        faults = [m for m in members if m["state"].startswith("FAULT")]
+        attention = [m for m in members if m["state"] not in SETTLED and m not in faults]
+        settled = [m for m in members if m["state"] in SETTLED]
+        actionable_total += len(attention) + len(faults)
+        if not (attention or faults) and not show_all and not settled:
+            continue
+        if attention or faults:
+            when = "resets %s (in %s)" % (iso(resets), dur(resets - NOW)) if resets > NOW \
+                else ("resets %s (passed)" % iso(resets) if resets else "no reset")
+            tail = " · ".join(filter(None, [
+                "%d need attention" % len(attention) if attention else "",
+                "%d faults" % len(faults) if faults else "",
+                "%d settled" % len(settled) if settled else ""]))
+            out.append("%-7s %s · %-28s   %s" % (group, cap, when, tail))
+        # Attention first, newest death first — the operator reads top-down and the freshest
+        # blocked session is the one still worth a pane. FAULTS go last and OLDEST CLAIM FIRST:
+        # a fault is a recovery that already failed, so the most overdue one is the most wrong.
+        for m in sorted(attention, key=lambda r: -(r.get("ts") or 0)) + \
+                sorted(faults, key=lambda r: ((r.get("claim") or {}).get("ts") or 0)):
+            pane = ("#" + m["pane"]) if m.get("pane") else ""
+            out.append("  %-22s %-5s %-8s ×%-2d err %s  %-22s ← %s" % (
+                m["state"], pane, m["sid"][:8], m.get("fires") or 1,
+                iso(m.get("ts")), (m.get("title") or "")[:22], m["why"]))
+        for m in settled:
+            out.append("settled: %s %s %s (%s)" % (
+                m["sid"][:8], ("#" + m["pane"]) if m.get("pane") else "", m["state"], m["why"]))
+    out.append("%d session%s · %d marker row%s · %d unaddressable · enumerator %s"
+               " · (-p sessions: run --deep)" % (
+                   sids, "" if sids == 1 else "s", marker_rows, "" if marker_rows == 1 else "s",
+                   unaddressable,
+                   "ok" if not degraded else "DEGRADED: " + "; ".join(degraded)))
+    return "\n".join(out), actionable_total
+
+
+def render_tsv(rows):
+    """The 11-field legacy row, byte-compatible with what lf_locate emits today."""
+    out = []
+    for r in rows:
+        if r["state"] in SETTLED or not r["tsv"]:
+            continue
+        out.append("\t".join([
+            r["sid"], r.get("cfg") or "", r["group"], r.get("pane") or "",
+            (r.get("pane_now") and next((p for p in [r.get("pane_now")]), "")) or "",
+            r.get("cwd") or "", "-", r["tsv"],
+            "limit" if r.get("limit") else (r.get("kind") or "other"),
+            r.get("kind") or "other", str(NOW - (r.get("ts") or NOW)),
+        ]))
+    return "\n".join(out)
+
+
+def usage(stream=sys.stderr):
+    stream.write(__doc__.split("Seams")[0].strip() + "\n\nusage: cc-limited [--all|--json|--tsv]"
+                 " [--account NAME] [--since 24h] [--assert-clean] [--sid PREFIX]\n")
+
+
+def main(argv):
+    mode, account, since, sid_q = "screen", "", "24h", ""
+    show_all = assert_clean = False
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--json":
+            mode = "json"
+        elif a == "--tsv":
+            mode = "tsv"
+        elif a == "--all":
+            show_all = True
+        elif a == "--assert-clean":
+            assert_clean = True
+        elif a in ("-h", "--help"):
+            usage(sys.stdout)
+            return RC_OK
+        elif a == "--account" and i + 1 < len(argv):
+            i += 1
+            account = argv[i]
+        elif a == "--since" and i + 1 < len(argv):
+            i += 1
+            since = argv[i]
+        elif a == "--sid" and i + 1 < len(argv):
+            i += 1
+            sid_q = argv[i]
+        else:
+            usage()
+            return RC_USAGE
+        i += 1
+
+    try:
+        rows, unaddressable, degraded, sids, marker_rows = census()
+    except Unreadable as exc:
+        # EMPTY stdout. An empty list at exit 0 would be indistinguishable from a healthy fleet.
+        sys.stderr.write("cc-limited: instrument unreadable: %s\n" % exc)
+        return RC_INSTRUMENT
+
+    window = parse_since(since)
+    rows = [r for r in rows if show_all or in_window(r, window)]
+    if account:
+        rows = [r for r in rows if r["group"] == account]
+    if sid_q:
+        rows = [r for r in rows if r["sid"].startswith(sid_q)]
+        if not rows:
+            return RC_NOMATCH
+
+    if mode == "json":
+        payload = {"now": NOW, "sessions": sids, "unaddressable": unaddressable,
+                   "degraded": degraded,
+                   "rows": [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]}
+        # Compact: this is machine-read by lr-fleet and the poller, and pretty-printing
+        # spent ~1.3 KB of the 6 KB budget on whitespace alone.
+        print(json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str))
+        actionable = len([r for r in rows if r["state"] not in SETTLED])
+    elif mode == "tsv":
+        text = render_tsv(rows)
+        if text:
+            print(text)
+        actionable = len(text.splitlines()) if text else 0
+    else:
+        text, actionable = render_screen(rows, unaddressable, degraded, sids,
+                                         marker_rows, show_all)
+        print(text)
+
+    if degraded:
+        return RC_DEGRADED
+    if assert_clean and actionable:
+        return RC_WORK
+    return RC_OK
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except BrokenPipeError:
+        sys.exit(RC_OK)
