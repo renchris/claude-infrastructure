@@ -279,10 +279,26 @@ else clause FAIL C4 "no source tombstone for $SID under $SRC_CFG — the source 
 
 # A pool worktree is a FLEET slot, not a session's own tree: resuming into one would hand the
 # recovered session a checkout another recovery is entitled to reclaim.
+# ── AND AN UNEVALUABLE GIT IS A FAILURE, NOT A PASS (W3i D5) ─────────────────────────────────────
+# `rev-parse --git-dir` returns ONE non-zero rc for two opposite worlds — "this genuinely is not a
+# repo" and "git could not answer" (no binary on PATH, an unreadable .git, a corrupt object store) —
+# and passing on that rc contradicts this file's own contract three lines from where it is stated.
+# The MANIFEST settles it without asking git a second question: lr-handoff records `.branch` only
+# when the cwd WAS a git checkout, emitting no --branch flag otherwise
+# (tests/lr-handoff-launcher-quoting.bats case 5), so an ABSENT branch field is the bundle's own
+# statement that this tree never was a repo. Two sources agreeing is what earns the pass; one
+# source's ambiguous rc never did.
+MAN_BR="$(mval '.branch // "ABSENT"')"
 if [ ! -d "$WT" ]; then
   clause FAIL C5 "worktree $WT does not exist"
+elif ! command -v git >/dev/null 2>&1; then
+  clause FAIL C5 "git is not on PATH — whether $WT is a fleet pool slot cannot be evaluated"
 elif ! git -C "$WT" rev-parse --git-dir >/dev/null 2>&1; then
-  clause PASS C5 "$WT is not a git repo — no branch to be a pool slot"
+  if [ "$MAN_BR" = ABSENT ] || [ -z "$MAN_BR" ]; then
+    clause PASS C5 "$WT is not a git repo and the manifest recorded no branch — the two agree, there is no pool slot to be"
+  else
+    clause FAIL C5 "the manifest recorded branch $MAN_BR but git cannot read $WT as a repo — C5 is unevaluable"
+  fi
 else
   _br="$(git -C "$WT" branch --show-current 2>/dev/null || true)"
   case "$_br" in
