@@ -544,23 +544,36 @@ _cc_admit_reset() { local f; [ "${_CC_ADMIT_PROBE:-0}" = 1 ] && return 0; f="$(_
 #   · minted only by a caller whose probe ADMITTED (the mint is a separate verb; the gate never
 #     mints, so a refusal can never leave a token behind),
 #   · ONE-SHOT — unlinked on read, whatever the verdict, so it grants at most one spawn,
-#   · TTL-bounded (CC_ADMIT_TOKEN_TTL_S, 300 s — the composer gate's 180 s + shell wait + boot,
-#     with margin; past it the launcher evaluates fresh and says so),
+#   · TTL-bounded, and the bound is DERIVED from the stages the token must cross rather than
+#     guessed (see _cc_admit_token_ttl; CC_ADMIT_TOKEN_TTL_S still overrides outright),
 #   · uid-checked (`-O`) — another uid's file is never honoured,
 #   · SID-ENFORCED — a token names the session it was issued for and cannot be replayed onto a
 #     different spawn (D3-safety R13),
 #   · PROBE-INERT — cc_capacity_probe never redeems, or the token would turn the probe's
 #     never-spend contract into a spend (U05 T1's 15c is the case that keeps this honest).
 #
-# IT CANNOT ADMIT ANYTHING THE GATE DID NOT ALREADY ADMIT for that sid ≤ TTL ago. And a token that
-# is missing, expired, foreign or unreadable is NEVER a silent refuse either: the gate falls through
-# to a FRESH evaluation and the reason rides on that row's `token` field (CC_ADMIT_TOKEN_NOTE), so a
-# stale-admission window is greppable rather than invisible.
+# IT CANNOT ADMIT ANYTHING THE GATE DID NOT ALREADY ADMIT for that sid ≤ TTL ago. And no outcome
+# here is ever a SILENT one: the reason rides on that row's `token` field (CC_ADMIT_TOKEN_NOTE)
+# whichever way the evaluation goes.
+#
+# ── THE TWO OUTCOMES BELOW AN ADMIT, AND WHY THEY DIFFER (W2FA D5, 2026-09-20) ──────────────
+# A token that is missing, a symlink, another uid's, unenforceable or FOREIGN falls through to a
+# fresh evaluation, because no first gate was ever found FOR THIS SPAWN — there is no decision to
+# contradict, and refusing would convict a caller that merely named a path.
+#
+# A token this library has POSITIVELY IDENTIFIED as this spawn's own (well-formed, our uid, our
+# sid) and then cannot use — expired, or lost to a concurrent claim — is the opposite case, and
+# falling through there is the defect itself: a fresh evaluation in the pane IS the second gate, in
+# the second process, after the transplant. So that is a NAMED TERMINAL STATE (`token-stale`, rc 9,
+# term `token`), not a re-decision. CC_ADMIT_TOKEN_REQUIRED=off restores the old fall-through.
 CC_ADMIT_TOKEN_AGE=""
 CC_ADMIT_TOKEN_SID=""
 CC_ADMIT_TOKEN_TERMS=""
 CC_ADMIT_TOKEN_NOTE=""
 CC_ADMIT_TOKEN_UNLINK=""
+# Set by _cc_admit_token_redeem the moment the record is identified as THIS spawn's own admission.
+# Past that point a non-redemption may not fall through — see the header's two-outcomes block.
+CC_ADMIT_TOKEN_TERMINAL=""
 cc_capacity_token_note() { printf '%s' "$CC_ADMIT_TOKEN_NOTE"; }
 
 cc_capacity_token_mint() { # $1=sid [$2=explicit path] → prints the token path · rc 1 = not minted
@@ -678,12 +691,52 @@ _cc_admit_token_shape() { # $1=path $2=wanted sid $3=this uid → 0 well-formed 
 # note it sets about WHY it fell back is discarded with that subshell (memory
 # `assignment-inside-command-substitution-never-escapes`) — and a fallback nobody can see is how a
 # bad TTL stays invisible in the first place.
-CC_ADMIT_TOKEN_TTL_VALUE=300
+#
+# ── AND IT IS SIZED FROM THE STAGES IT MUST CROSS (W2FA D5, 2026-09-20) ────────────────────────
+# The flat 300 s was SHORTER THAN ONE of those stages. MEASURED 2026-09-20: a token minted before
+# the transplant is already stale when the launcher redeems it, is silently consumed, and the gate
+# falls through to a FRESH in-pane evaluation returning rc 9 — i.e. under exactly the loaded
+# conditions that produce limits, the fall-through re-created the two-gate split this token exists
+# to close, after the transplant had already run.
+#
+# The window, read off the one rail that crosses it (lr-handoff.sh:616 mints, lr-fire-resume.sh:381
+# redeems, and everything between is handoff-fire --recycle):
+#
+#   the transplant, then handoff-fire's preamble    NO named constant bounds either
+#   composer gate                                   CC_RECYCLE_DRAFT_WAIT      180 s
+#   /exit, then the ps-poll for a shell             HF_RECYCLE_SHELL_WAIT_S    600 s
+#   ── the launcher is typed HERE; this is where the token is redeemed ──
+#   boot + engagement                               after the redemption — not crossed
+#
+# READ BY NAME, NEVER RE-TYPED. The sibling pattern is handoff-fire's own recycle_await_verdict
+# (:12104), which sizes the whole recycle from five of these names rather than from a literal. A
+# literal here would go stale the first time one of those constants moved — silently, and in the
+# direction that expires tokens. RCY_BOOT_STALE_S is read as the allowance for the two UNBOUNDED
+# stages above: it is handoff-fire's own number for the longest a recycle phase may take, so
+# borrowing it leaves this expression with no magnitude of its own except the slack.
+#
+# TWO-SIDED, which is what makes the size non-arbitrary rather than merely bigger:
+#   ≥ the stages it must cross (780 s), or a token cannot survive its own operation;
+#   ≤ handoff-fire's whole-recycle bound (1200 s), or a token outlives the recycle that minted it.
+# The derived default lands at 1020 s, inside both. CC_ADMIT_TOKEN_TTL_S still overrides outright.
+CC_ADMIT_TOKEN_TTL_VALUE=""
 CC_ADMIT_TOKEN_TTL_NOTE=""
+_cc_admit_token_stage() { # $1=env value $2=fallback → always 0 · prints an integer, never empty
+  # if/else, never `cc_hw_is_int "$1" && printf …`: an && list whose left side is false makes the
+  # whole statement rc 1, which is fatal under a caller's `set -e` (lr-fire-resume sources this).
+  if cc_hw_is_int "$1"; then printf '%s' "$1"; else printf '%s' "$2"; fi
+  return 0
+}
 _cc_admit_token_ttl() { # → always 0 · sets CC_ADMIT_TOKEN_TTL_VALUE (an integer) + _NOTE
-  local t="${CC_ADMIT_TOKEN_TTL_S:-}"
+  local t="${CC_ADMIT_TOKEN_TTL_S:-}" draft shell boot slack
   CC_ADMIT_TOKEN_TTL_NOTE=""
-  CC_ADMIT_TOKEN_TTL_VALUE=300
+  # Recomputed EVERY call, never cached: a stage constant that moves must move this with it, and a
+  # value resolved once at source time would freeze whichever environment happened to load us.
+  draft="$(_cc_admit_token_stage "${CC_RECYCLE_DRAFT_WAIT:-}" 180)"
+  shell="$(_cc_admit_token_stage "${HF_RECYCLE_SHELL_WAIT_S:-}" 600)"
+  boot="$(_cc_admit_token_stage "${RCY_BOOT_STALE_S:-}" 180)"
+  slack="$(_cc_admit_token_stage "${CC_ADMIT_TOKEN_TTL_SLACK_S:-}" 60)"
+  CC_ADMIT_TOKEN_TTL_VALUE=$(( draft + shell + boot + slack ))
   [ -n "$t" ] || return 0
   if cc_hw_is_int "$t"; then CC_ADMIT_TOKEN_TTL_VALUE="$t"; return 0; fi
   CC_ADMIT_TOKEN_TTL_NOTE="CC_ADMIT_TOKEN_TTL_S='${t}' is not an integer — bounded at ${CC_ADMIT_TOKEN_TTL_VALUE}s instead"
@@ -692,6 +745,11 @@ _cc_admit_token_ttl() { # → always 0 · sets CC_ADMIT_TOKEN_TTL_VALUE (an inte
 
 _cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usable token · sets the CC_ADMIT_TOKEN_* globals
   CC_ADMIT_TOKEN_AGE=""; CC_ADMIT_TOKEN_SID=""; CC_ADMIT_TOKEN_TERMS=""; CC_ADMIT_TOKEN_NOTE=""; CC_ADMIT_TOKEN_UNLINK=""
+  CC_ADMIT_TOKEN_TERMINAL=""
+  # Resolved HERE rather than beside the expiry test, so every note and every row this evaluation
+  # writes names the TTL that was actually in force — including the ones that return long before
+  # the age is computed.
+  _cc_admit_token_ttl
   # CC_ADMIT_TOKEN is the library's own spelling; LR_ADMIT_TOKEN is the limit-recover launcher's,
   # accepted here so a launcher env that carries only the LR_ name still redeems. Both are read,
   # neither is exported by this library, and lr-fire-resume passes CC_ADMIT_TOKEN call-scoped.
@@ -726,6 +784,12 @@ _cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usabl
     CC_ADMIT_TOKEN_NOTE="token REFUSED: ${_CC_ADMIT_TOK_BAD} — not consumed, evaluating fresh"
     return 1
   fi
+  # ── PAST THIS LINE A FALL-THROUGH IS THE DEFECT (W2FA D5) ────────────────────────────────────
+  # The record is now positively identified as THIS spawn's own admission: 4-field, our uid, our
+  # sid. Every refusal from here on is therefore about an admission we HAVE and cannot use, and a
+  # fresh evaluation over one of those is the second gate on one operation — the split. The flag is
+  # the library's way of saying that to cc_capacity_admit, which owns the verdict.
+  CC_ADMIT_TOKEN_TERMINAL=1
   # ── THE ONE-SHOT, MADE ATOMIC (W2FA D1, 2026-09-20) ──────────────────────────────────────────
   # This WAS `rm -f "$t" || true`, placed AFTER the awk read. Read-then-unlink is not one-shot: two
   # processes redeeming the same token path with the same CC_ADMIT_WANT_SID on a refusing box (load
@@ -766,7 +830,7 @@ _cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usabl
     CC_ADMIT_TOKEN_NOTE="token NOT REDEEMED — the clock is unreadable (date +%s gave '${now}'), so age is unmeasurable; consumed, evaluating fresh${CC_ADMIT_TOKEN_UNLINK:+ [${CC_ADMIT_TOKEN_UNLINK}]}"
     return 1
   fi
-  _cc_admit_token_ttl; ttl="$CC_ADMIT_TOKEN_TTL_VALUE"
+  ttl="$CC_ADMIT_TOKEN_TTL_VALUE"
   age=$(( now - issued ))
   if [ "$age" -lt 0 ] || [ "$age" -gt "$ttl" ]; then
     CC_ADMIT_TOKEN_NOTE="token EXPIRED (${age}s old > TTL ${ttl}s) — consumed, evaluating fresh${CC_ADMIT_TOKEN_TTL_NOTE:+ [${CC_ADMIT_TOKEN_TTL_NOTE}]}${CC_ADMIT_TOKEN_UNLINK:+ [${CC_ADMIT_TOKEN_UNLINK}]}"
@@ -833,7 +897,7 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # capacity_gate's vocabulary to stay a SUBSET of this one, never the reverse).
   # The reset is the ordinary one: a redeemed admission ends a consecutive-refusal run exactly as a
   # measured admit does.
-  CC_ADMIT_TOKEN_NOTE=""
+  CC_ADMIT_TOKEN_NOTE=""; CC_ADMIT_TOKEN_TERMINAL=""
   if [ "${_CC_ADMIT_PROBE:-0}" != 1 ] && [ -n "${CC_ADMIT_TOKEN:-${LR_ADMIT_TOKEN:-}}" ]; then
     if _cc_admit_token_redeem; then
       CC_ADMIT_REASON="capacity-admit: ADMIT (admission token, ${CC_ADMIT_TOKEN_AGE}s old, issued for ${CC_ADMIT_TOKEN_SID}) — one decision, redeemed once"
@@ -841,7 +905,27 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
         "redeemed a probe admission ${CC_ADMIT_TOKEN_AGE}s old for ${CC_ADMIT_TOKEN_SID} (TTL ${CC_ADMIT_TOKEN_TTL_VALUE}s; minted under terms ${CC_ADMIT_TOKEN_TERMS:-?})"
       _cc_admit_reset "$caller"; return 0
     fi
-    # NOT a refusal and NOT a silent fall-through: CC_ADMIT_TOKEN_NOTE now rides on whatever row
+    # ── THE TERMINAL STATE (W2FA D5) ───────────────────────────────────────────────────────────
+    # Reached only when the record was THIS spawn's own admission and could not be used. Evaluating
+    # the box fresh here is precisely the failure the wave closes: the driver already decided, this
+    # process cannot see that decision, and 11-16 s later it renders a contradictory one — in the
+    # pane, after the transplant. Four husks on 2026-09-19. So the gate stops, names the state, and
+    # pages; it does not re-decide.
+    #
+    # NOT a spend, deliberately: `_cc_admit_spend` bounds refusals that are about the BOX, and this
+    # one is about the caller's own input. Charging it would let three stale tokens release a spawn
+    # — a silent admit on exactly the evidence that just failed. §9's law is still satisfied,
+    # because this state cannot stand: the token is one-shot, so the next fire mints a new one, and
+    # a re-typed relaunch over a CONSUMED token reads ABSENT and falls through as it always did.
+    # Every occurrence pages, which is the law's "converts the standing state into an EVENT".
+    if [ "$CC_ADMIT_TOKEN_TERMINAL" = 1 ] && [ "${CC_ADMIT_TOKEN_REQUIRED:-on}" != off ]; then
+      CC_ADMIT_REASON="capacity-admit: REFUSING ${what} — this spawn's OWN admission token could not be redeemed (${CC_ADMIT_TOKEN_NOTE}). Evaluating the box again HERE would be the second gate on one net-zero operation, in the pane, after the transplant. Re-fire (the driver mints a fresh token), or override this one refusal with CC_ADMIT_TOKEN_REQUIRED=off."
+      _cc_admit_emit refuse token-stale "$caller" "$what" \
+        "the driver's admission for this spawn could not be redeemed — refusing rather than re-deciding in the pane (TTL ${CC_ADMIT_TOKEN_TTL_VALUE}s)" token
+      _cc_admit_page "⚠️ capacity-admit: ${caller} REFUSED '${what}' — this spawn's own admission token could not be redeemed (${CC_ADMIT_TOKEN_NOTE}). Nothing was spawned and no term was evaluated; re-fire to mint a fresh admission."
+      return 9
+    fi
+    # Everything else falls through, and never silently: CC_ADMIT_TOKEN_NOTE rides on whatever row
     # this evaluation writes, so "the launcher evaluated fresh" always carries WHY.
     :
   fi
