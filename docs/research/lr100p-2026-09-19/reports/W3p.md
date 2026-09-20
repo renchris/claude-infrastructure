@@ -450,3 +450,183 @@ is empty for the nine test-only commits.
 5. **Untouched, per the brief:** `lr-ingest-verify.sh`, `lr-handoff.sh`'s launcher prompt and
    `tests/lr-handoff-launcher-quoting.bats` belong to `lr100p/w3i`. Residuals 1–7 of the original
    report stand unchanged; residual 5 is now discharged by § 4's third row.
+
+---
+
+# W3p F1–F4 — the second inert cause, and three tests that could not fail
+
+**Appended 2026-09-20, five commits on `48c6313e0`.** Nothing above this line was changed.
+
+**The headline, in one sentence:** the hardening pass fixed the watcher's end of the token wire
+(`$16`→`$15`) and the wave was **still inert on every real recycle**, because the ARMING side's
+precondition — "the token's value appears TWICE in the launcher" — is a claim about an artifact
+that cannot satisfy it.
+
+## 1. F1 — the second inert cause, driven rather than grepped
+
+The gate read the token out of `$RESUME_LAUNCHER`, counted its occurrences, and refused to hand it
+over below 2. Run against the launcher **lr-handoff.sh's own generator emits** — its
+`INGEST_PROMPT=` line plus its `FIRE_ARGV=(` → `chmod +x "$LAUNCHER"` span, extracted by anchor and
+executed:
+
+```
+=== THE REAL GENERATED LAUNCHER ===
+export LR_SUBMIT_TOKEN=run:aaaabbbb:20260920-101500:1ad26928
+exec …/lr-fire-resume.sh next3 … --prompt /limit-recover\ ingest\ …/bundle
+=== REAL ARMING BLOCK OVER THE REAL LAUNCHER ===
+⚠ the relaunch prompt does not carry this run's submit token (found 1 occurrence(s) in the
+  launcher, need the export AND the prompt) — engagement falls back to the WALL-CLOCK oracle,
+  which a stale notification turn can satisfy
+ARMED_TOKEN=[]
+```
+
+**The count is 1 and cannot become 2.** On this branch the prompt is composed at `lr-handoff.sh:469`
+and the token minted at `:736`. On `lr100p/w3i` the launcher **decides its prompt at runtime in the
+pane**: the fast path takes `lr-ingest-verify`'s last line, and the fail-closed path composes
+`… \$LR_SUBMIT_TOKEN` as a *variable reference*. Neither writes the token's VALUE into the file a
+second time — verified by generating the w3i launcher the same way: still 1 occurrence. The premise
+lived in the gate's own comment and nothing executed it (memory
+`checker-population-rests-on-an-untested-belief`).
+
+**The fix is at the chokepoint, which is why it is in W3p's files and not in lr-handoff.sh.** The
+token reaches the target transcript iff it is in the text that gets TYPED, and every path — the fast
+prompt, the fail-closed fallback, and a by-hand `--prompt` with no launcher at all — ends at
+`lr-fire-resume.sh`. It now appends `(submit token: <tok>)` to the prompt it types, **idempotently**
+(an upstream append composes instead of doubling) and **appended, never prefixed** (the re-CR's
+`DRAFT-MINE` needle is the prompt's first 40 characters). This also discharges the original report's
+**residual 3**: a by-hand resume now carries a token and gets submit verification.
+
+The gate then asks the question it needs answered — *will the token be typed* — of the two places
+that can answer it, arming if either does:
+
+| | arm | what it reads |
+|---|---|---|
+| ARM 1 | the launcher's own text carries the token a second time | a statically composed prompt — the pre-F1 test, kept and still executed |
+| ARM 2 | the program the launcher EXECS carries `LR_SUBMIT_TOKEN_IN_PROMPT` | the file **the launcher names**, i.e. the LIVE layer, never this worktree's copy |
+
+ARM 2 is the `launcher-runs-the-live-layer` wire `lr-handoff.sh:522` already runs for
+`LR_ADMIT_TOKEN`: a launcher must name a durable path, so it execs a live copy that may predate the
+append, and arming a token nothing will type convicts every healthy recycle. An exec target the
+parse cannot resolve to a readable file degrades and says which — unproven delivery never guesses.
+
+**The acceptance was not a grep.** The case generates the real launcher, runs the real arming block
+over it, and then hands the armed token to the **real watcher on the real argv**:
+
+```
+# the real launcher holds the token's value 1 time(s)
+ok 24 RED-PROOF the arming gate ARMS over the launcher lr-handoff ACTUALLY generates,
+      and that token reaches the watcher
+```
+
+with `TOKEN=[run:aaaa1111:…]`, `→ SUBMITTED in RECY-PANE`, and a `recycle-submitted` ledger row.
+RED with ARM 2 deleted (the shipped predicate restored), and RED on the whole shipped tree.
+
+**Why the previous case could not see it:** it fed the gate
+`exec claude-x --model m --prompt "… $TOK"` — a launcher shape lr-handoff has never emitted, with
+the token spelled into the prompt by hand. The fixture satisfied the premise by construction
+(`docs/lessons/fixture-shape-hides-address-bugs.md`).
+
+**Forward check for the rebase:** the same arming block, run over the launcher `lr100p/w3i`'s
+generator emits, arms — `ARMED=[run:aaaa1111:20260919-210200:45816aa1]`. The fix survives the lead's
+rebase without an edit.
+
+## 2. F2 — the submission baseline was pinned nowhere
+
+`t0` decides which records count as *after the prompt*. Blank it and every record qualifies — a
+previous attempt's identical prompt, a notification turn from before the relaunch, anything the
+transplanted transcript already held. Three sites carry it; all three mutants survived every suite.
+
+| site | mutant | survived | what now kills it |
+|---|---|---|---|
+| `lr-fire-resume.sh:673` | `set t0 ""` | 7/7 | the probe's argv, with t0 bracketed by the test's own clock reads |
+| `handoff-fire.sh:7044` | probe call `"$RCY_T0"` → `""` | 22/23/25 | the only token record is OLDER than the baseline |
+| `handoff-fire.sh:6645` | `RCY_T0="${12:-}"` → `""` | 3/3 + 18/18 | one stale assistant turn, no token, argv position 12 alone |
+
+The first survived because the case claiming to ask the probe *"about THIS run"* wildcarded the one
+field that says which run: `"$CFG $SID "*" $TOK"`. **The title is now true rather than trimmed** —
+`before <= t0 <= after` against the test's own `date -u +%FT%T` reads, which is exact (ISO-8601 UTC
+is fixed width, so a string compare is a time compare) and load-invariant: a slow box widens the
+window, it never moves t0 out of it.
+
+The probe stub had to change too, and the reason generalises: it recorded `"$*"`, which **joins with
+spaces, so an EMPTY argument vanishes from the record entirely**. A tab separator does not fix it —
+tab is IFS whitespace and `read` collapses a run of them. It records argc plus one argument per line.
+
+## 3. F3 — a killed case was an `ok`
+
+bats renders a skipped case as `ok N <name> # skip <reason>`, so the load band the hardening pass
+added counted a **kill as a PASS** to every audit that greps `^ok` — and on this box the >1.0/core
+band is the normal state, so a whole run could report all-ok over cases that ran no assertion. The
+pass's own residual 3 named this and left it.
+
+Withholding the **wall-clock verdict** never required withholding the **case**, and D10's own
+measurement is why: in the 242 s killed arm every behavioural assertion was already satisfied in the
+captured output (`run` keeps `$output` across the SIGTERM) and the case failed only on
+`[ "$status" -eq 0 ]`. A kill above the band now prints `# ⚠ KILLED …`, does not judge the timing,
+and lets the caller's assertions run. A kill that captured **nothing** is a RED that names the
+reason — that is not an abstention either.
+
+> **How an auditor counts this suite:** by `^ok` and `^not ok`, with no third category. It emits
+> exactly one skip — `expect(1) not installed`, a missing dependency rather than a verdict — and
+> none at all from the band.
+
+Proved by running the real helper, extracted from the suite, inside its own bats file over a program
+stubbed to outlive the bound. Two inner cases, because the fix has two halves that fail in opposite
+directions: a kill that captured nothing must go RED, and a kill that captured its evidence must
+still be JUDGED on it rather than waved through.
+
+That inner run needed its own hardening, and it is the same lesson one level down: `bats` on PATH is
+the **cc-bats admission wrapper**, so a shed (rc 75) would emit no TAP while exiting in a way a `^ok`
+filter reads as "nothing failed" (`docs/lessons/a-gate-refusal-is-not-a-gate-result.md`). The inner
+harness now runs with the admission ceiling disabled — it is a two-case file in `$BATS_TEST_TMPDIR`,
+not a gate-corpus root — and its **plan line `1..2` is asserted before any verdict is read off the
+stream**, so any other refusal is a named red. Verified with the outer waiver and on a plain `bats`
+run with none.
+
+## 4. F4 — the guard, and the rationale that did not reproduce
+
+Both unguarded `eval "$(sed -n '/^resume_engaged() {/,/^}/p' …)"` sites now carry
+`command -v resume_engaged >/dev/null`, the shape `handoff-recycle-engagement.bats:381` uses.
+
+**The stated rationale did not reproduce and is recorded rather than inherited.** The finding said an
+unguarded extraction would make these cases VACUOUS rather than red. Measured — guard removed AND the
+anchor re-indented by one space — **both went `not ok`**: rc 127 matches neither the `-eq 0` nor the
+`-eq 1` these cases expect. So on today's assertions this is an **equivalence guard**, named as one in
+its comment. What it changes today is the message (a named cause instead of a bare rc mismatch plus a
+bats `BW01: Command not found` pointing at the `run` line). What it guards against is one `-eq`→`-ne`
+edit away in the `agree` helper: any assertion satisfied by a non-zero rc reads 127 as the oracle's
+own *"not engaged"* and passes over a function that was never extracted.
+
+## 5. Suites and gates
+
+| suite | result |
+|---|---|
+| `tests/lr-fire-resume-submit.bats` (27 → **32**) | 32/32 |
+| `tests/handoff-recycle-engagement.bats` | 18/18 |
+
+`shellcheck -S warning -x` clean on `handoff-fire.sh`, `lr-fire-resume.sh`, `lr-submit-probe.sh`;
+`scripts/bats-assert-liveness.py` exits 0 on both suites (it caught one `A && B && C || {…}` chain in
+the rewritten argv check as *and-absorbed*, split into three assertions); `bats --count` before every
+run. Two runs used `CC_BATS_MAX_ROOTS=0` with a reason — the land gate is admission-exempt.
+
+`tests/handoff-alarm-records.bats` is red on this branch (pin 6, file has 7); that pin was raised to 7
+on trunk in `793b4c118` and resolves on the lead's rebase. Not touched.
+
+## 6. Residuals
+
+1. **`lr-handoff.sh` was NOT edited and does not need to be for the feature to work**, but its
+   `LR_SUBMIT_TOKEN` export is now load-bearing in a way its own file does not state: `lr-fire-resume`
+   reads it and appends it, and `handoff-fire`'s ARM 2 verifies that append on the live copy. If W3i
+   later puts the token into `INGEST_PROMPT` as well, ARM 1 arms first and the append is a no-op — the
+   two compose, they do not collide.
+2. **The exec-target parse is crude by design.** It takes the first whitespace word of the `exec` line
+   and strips backslashes, so a launcher path containing a space degrades rather than arming. That is
+   the safe direction and it is announced, but it is a real (if unreachable-today) blind spot: bundles
+   live under `$HOME/.claude/…`.
+3. **The append changes what the operator sees in their own composer** — the ingest prompt now ends
+   `… (submit token: run:…)`. That was flagged as the cost of this route in the original report's
+   residual 3; it is paid here deliberately, because the alternative is a feature that does nothing.
+4. **F4's finding is refuted, not fixed.** If the verifier's vacuity claim was based on a different
+   assertion shape than the one on this branch, that shape is not in these two cases today.
+5. **`--separate-stderr` BW02 warnings** remain on both suites (harmless on bats-core 1.13); a
+   `bats_require_minimum_version 1.5.0` header would silence them. Unchanged from the prior pass.
