@@ -113,6 +113,16 @@ fixture_ok() {
 # Run the verifier the way the launcher does: CLAUDE_CONFIG_DIR = the TARGET account.
 verify() { env CLAUDE_CONFIG_DIR="$TGT" bash "$VERIFY" "$@" "$BUNDLE"; }
 
+# Arm a continuation sentinel in $WT, keyed on config dir $1, as session $2, with step $3.
+# The KEY is the whole point of clause D: the sentinel the pre-limit session armed is keyed on the
+# config dir it was running under — the SOURCE account's — and the recovered session reads a
+# different key entirely under the target's.
+sc_arm() { env CLAUDE_CONFIG_DIR="$1" CLAUDE_CODE_SESSION_ID="$2" \
+  bash -c "cd '$WT' && '$HOME/.claude/hooks/session-continue.sh' set '$3'" >/dev/null; }
+# What `status` reads at that same key.
+sc_stat() { env CLAUDE_CONFIG_DIR="$1" \
+  bash -c "cd '$WT' && '$HOME/.claude/hooks/session-continue.sh' status"; }
+
 @test "CONTROL: a clean post-W2 bundle passes every clause and emits the one-line prompt" {
   run verify --no-clear
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -123,7 +133,11 @@ verify() { env CLAUDE_CONFIG_DIR="$TGT" bash "$VERIFY" "$@" "$BUNDLE"; }
     || { echo "PROMPT: $last"; false; }
   [[ "$last" == *"INGEST-VERIFIED.txt"* ]] || { echo "$last"; false; }
   [[ "$last" == *"gaps 0, waiting 0, 0 open delegations"* ]] || { echo "$last"; false; }
-  [ "$(printf '%s\n' "$output" | grep -c '^PASS ')" -eq 13 ] || { echo "$output"; false; }
+  # The verdict names its own count; asserting the two agree pins the pair without putting a third
+  # copy of the number in the suite (W3i: the literal 13 survived a 14th clause landing).
+  n="$(printf '%s\n' "$output" | grep -c '^PASS ')"
+  [[ "$output" == *"verdict: rc 0 ($n clauses PASS)"* ]] || { echo "PASS lines=$n but: $output"; false; }
+  [ "$n" -ge 14 ] || { echo "only $n clauses ran: $output"; false; }
 }
 
 @test "the run token from LR_SUBMIT_TOKEN is appended, and a standalone run still self-identifies" {
@@ -219,43 +233,87 @@ verify() { env CLAUDE_CONFIG_DIR="$TGT" bash "$VERIFY" "$@" "$BUNDLE"; }
   [[ "$output" == *"FAIL C4 — no source tombstone"* ]] || { echo "$output"; false; }
 }
 
-@test "D: the clear runs from the session's OWN worktree and discharges its own sentinel" {
-  env CLAUDE_CONFIG_DIR="$TGT" CLAUDE_CODE_SESSION_ID="$SID" \
-    bash -c "cd '$WT' && '$HOME/.claude/hooks/session-continue.sh' set 'the pre-limit step'" >/dev/null
+@test "D1: the PRE-LIMIT sentinel is keyed on the SOURCE config dir, and that is the one D clears" {
+  # THE DEFECT THIS PINS (W3i D1). The sentinel is keyed on (config-dir | cwd), and the config dir
+  # that keyed the pre-limit arm is the account the session was running under WHEN IT ARMED — the
+  # SOURCE. Clause D used to run its clear under the TARGET, where this session has never run: it
+  # could not reach the sentinel it exists for, and the only sentinel at that key belongs to
+  # somebody else. Nothing is armed under the target here, so the target key is empty and only the
+  # source-side clear can produce a "cleared".
+  sc_arm "$SRC" "$SID" "the pre-limit step"
   run verify                      # clearing mode — the launcher's own occasion
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"PASS D1 — auto-continue cleared: cleared →"* ]] || { echo "$output"; false; }
-  run env CLAUDE_CONFIG_DIR="$TGT" bash -c "cd '$WT' && '$HOME/.claude/hooks/session-continue.sh' status"
-  [[ "$output" == "inactive" ]] || { echo "the sentinel survived its own session's ingest: $output"; false; }
+  [[ "$output" == *"PASS D1 — pre-limit auto-continue CLEARED under $SRC"* ]] || { echo "$output"; false; }
+  run sc_stat "$SRC"
+  [[ "$output" == "inactive" ]] || { echo "the pre-limit sentinel survived the ingest: $output"; false; }
 }
 
-@test "D: a SIBLING session's armed sentinel in the same worktree is NOT cleared" {
-  # The defect this pins is not hypothetical: building this suite, a read-only sweep of the live
-  # bundles ran clause D 24 times and disarmed two working sessions' continuations — one armed
-  # 45 seconds earlier and driving a wave. The sentinel is keyed on (config-dir | cwd), so any
-  # process in the directory clears whatever is armed there. `set` stamps the arming sid; `clear`
-  # now reads it.
-  env CLAUDE_CONFIG_DIR="$TGT" CLAUDE_CODE_SESSION_ID="9999ffff-0000-4000-8000-000000009999" \
-    bash -c "cd '$WT' && '$HOME/.claude/hooks/session-continue.sh' set 'the SIBLING wave step'" >/dev/null
+@test "D1: an ABSENT source_cfg FAILS — a 'cleared' over a guessed directory is the false claim" {
+  jq 'del(.source_cfg)' "$BUNDLE/MANIFEST.json" > "$BUNDLE/m.tmp" && mv "$BUNDLE/m.tmp" "$BUNDLE/MANIFEST.json"
+  run verify
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL D1 — the manifest records no source_cfg"* ]] || { echo "$output"; false; }
+}
+
+@test "D2: this session's OWN stale sentinel at the TARGET key is cleared, and named as its own" {
+  # The one case where the target key legitimately carries something of ours — a second recovery
+  # back onto an account this session has run under before.
+  sc_arm "$TGT" "$SID" "a stale target-side step"
   run verify
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"PASS D1 — auto-continue cleared: refused — the sentinel armed for this cwd belongs to session 9999ffff"* ]] \
+  [[ "$output" == *"PASS D2 — this session's OWN stale sentinel at the target key was cleared"* ]] \
     || { echo "$output"; false; }
-  run env CLAUDE_CONFIG_DIR="$TGT" bash -c "cd '$WT' && '$HOME/.claude/hooks/session-continue.sh' status"
+  run sc_stat "$TGT"
+  [[ "$output" == "inactive" ]] || { echo "our own stale sentinel survived: $output"; false; }
+}
+
+@test "D2: a SIBLING armed at the TARGET key REFUSES the fast path, and is NOT touched" {
+  # The defect this pins is not hypothetical: building this suite, a read-only sweep of the live
+  # bundles ran clause D 24 times and disarmed two working sessions' continuations — one armed
+  # 45 seconds earlier and driving a wave. Two things must hold, and they are separate facts: the
+  # sibling's chain SURVIVES (the steal is gone), and the gate REFUSES (a live sibling armed in the
+  # very cwd this session is about to resume into is a state the fast path must not license — the
+  # recovered session's own first Stop would clear-and-ignore it, silently).
+  sc_arm "$TGT" "9999ffff-0000-4000-8000-000000009999" "the SIBLING wave step"
+  run verify
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL D2 — session 9999ffff-0000-4000-8000-000000009999 has an armed continuation"* ]] \
+    || { echo "$output"; false; }
+  run sc_stat "$TGT"
   [[ "$output" == *"the SIBLING wave step"* ]] || { echo "THE SIBLING'S CHAIN WAS DISARMED: $output"; false; }
 }
 
-@test "--no-clear writes nothing into the sentinel store" {
+@test "D1: a SIBLING armed at the SOURCE key is left alone, and D1 says NOTHING WAS CLEARED" {
+  # The source-side twin of the case above. Here the refusal comes from session-continue's own
+  # ownership guard, and the receipt must report the refusal as a refusal — see the D7 case below.
+  sc_arm "$SRC" "9999ffff-0000-4000-8000-000000009999" "the SIBLING wave step"
+  run verify
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"PASS D1 — NOTHING WAS CLEARED"* ]] || { echo "$output"; false; }
+  run sc_stat "$SRC"
+  [[ "$output" == *"the SIBLING wave step"* ]] || { echo "THE SIBLING'S CHAIN WAS DISARMED: $output"; false; }
+}
+
+@test "--no-clear writes nothing into EITHER sentinel store" {
   # The prompt the launcher composes advertises a re-derive command, and a re-derive that clears
-  # the sentinel the session armed AFTER its ingest is a write wearing a read's clothes.
-  env CLAUDE_CONFIG_DIR="$TGT" CLAUDE_CODE_SESSION_ID="$SID" \
-    bash -c "cd '$WT' && '$HOME/.claude/hooks/session-continue.sh' set 'still armed'" >/dev/null
-  before="$(ls -1 "$TGT/state" 2>/dev/null | sort | md5)"
+  # the sentinel the session armed AFTER its ingest is a write wearing a read's clothes. Both keys
+  # are armed here, because --no-clear has to hold on BOTH sides: D1's source-side clear and D2's
+  # own-sentinel clear are two separate writes.
+  sc_arm "$SRC" "$SID" "still armed at the source key"
+  sc_arm "$TGT" "$SID" "still armed at the target key"
+  before_s="$(ls -1 "$SRC/state" 2>/dev/null | sort | md5)"
+  before_t="$(ls -1 "$TGT/state" 2>/dev/null | sort | md5)"
   run verify --no-clear
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"PASS D1 — auto-continue NOT touched (--no-clear); sentinel reads: ARMED"* ]] || { echo "$output"; false; }
-  after="$(ls -1 "$TGT/state" 2>/dev/null | sort | md5)"
-  [ "$before" = "$after" ] || { echo "the read-only mode WROTE into $TGT/state"; ls -la "$TGT/state"; false; }
+  [[ "$output" == *"PASS D1 — pre-limit sentinel NOT touched (--no-clear)"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"PASS D2 — this session's own sentinel is armed at the target key, NOT touched"* ]] \
+    || { echo "$output"; false; }
+  [ "$before_s" = "$(ls -1 "$SRC/state" 2>/dev/null | sort | md5)" ] \
+    || { echo "the read-only mode WROTE into $SRC/state"; ls -la "$SRC/state"; false; }
+  [ "$before_t" = "$(ls -1 "$TGT/state" 2>/dev/null | sort | md5)" ] \
+    || { echo "the read-only mode WROTE into $TGT/state"; ls -la "$TGT/state"; false; }
+  run sc_stat "$SRC"
+  [[ "$output" == *"still armed at the source key"* ]] || { echo "the source sentinel was disarmed: $output"; false; }
 }
 
 @test "the checker's own preconditions fail closed: no bundle, no MANIFEST, unparseable JSON" {
@@ -271,4 +329,20 @@ verify() { env CLAUDE_CONFIG_DIR="$TGT" bash "$VERIFY" "$@" "$BUNDLE"; }
   run verify --no-clear
   [ "$status" -eq 1 ]
   [[ "$output" == *"FAIL A0 — audit.json is not parseable JSON"* ]] || { echo "$output"; false; }
+}
+
+@test "D7: the receipt and the composed prompt never claim a clear that did not happen" {
+  # A label that contradicts its own value is how a false claim survives review. Measured on the
+  # unmodified tree, the receipt read
+  #   PASS D1 — auto-continue cleared: refused — the sentinel armed for this cwd belongs to session
+  #   9999ffff (you are 4be91f00); nothing was cleared: <cwd>
+  # and the PROMPT THE RECOVERED SESSION READS asserted "auto-continue cleared" unconditionally.
+  # Both are read off the outcome now.
+  sc_arm "$SRC" "9999ffff-0000-4000-8000-000000009999" "the SIBLING wave step"
+  run verify
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"D1 — auto-continue cleared: refused"* ]] || { echo "the label still contradicts its value: $output"; false; }
+  last="$(printf '%s\n' "$output" | tail -1)"
+  [[ "$last" != *"auto-continue cleared"* ]] || { echo "the PROMPT claims a clear that did not happen: $last"; false; }
+  [[ "$last" == *"pre-limit auto-continue left to its owner"* ]] || { echo "the prompt does not say what actually happened: $last"; false; }
 }
