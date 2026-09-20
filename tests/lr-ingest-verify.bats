@@ -390,3 +390,109 @@ sc_stat() { env CLAUDE_CONFIG_DIR="$1" \
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"PASS C5 — $WT is not a git repo and the manifest recorded no branch"* ]] || { echo "$output"; false; }
 }
+
+# ══ ONE CASE PER SURVIVING MUTANT (W3i M1-M8) ════════════════════════════════════════════════════
+# An adversarial pass built 37 mutants of this gate and 11 SURVIVED a fully green suite. A clause
+# with no case that dies on its mutation is decorative: it can be deleted, inverted or forced true
+# and every run still reads `ok`. Each case below is named for the arm it kills.
+
+@test "M1: B1 refuses a re-audit that finds an OPEN delegation" {
+  # B1's whole point: the bundle's audit is a SNAPSHOT, and B1 re-derives the ledger from the
+  # transcript the recovered session is about to resume. Until now B1 had NO failing arm at all, so
+  # its predicate could be replaced by `true` with the suite green.
+  printf '%s\n' \
+    '{"type":"user","timestamp":"2026-09-19T17:00:00.000Z","message":{"role":"user","content":"go"}}' \
+    '{"type":"assistant","timestamp":"2026-09-19T17:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_open_1","name":"Agent","input":{"description":"a delegation nobody settled"}}]}}' \
+    > "$TGT/projects/$SLUG/$SID.jsonl"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL B1 — re-audit open=1"* ]] || { echo "$output"; false; }
+}
+
+@test "M2: B1 fails CLOSED when the target transcript cannot be read" {
+  # The unevaluable arm: transplant.json names a transcript that is not there and the glob finds
+  # none either, so the ledger cannot be re-derived — a FAILURE, never a pass.
+  rm -f "$TGT/projects/$SLUG/$SID.jsonl"
+  jq --arg t "$BATS_TEST_TMPDIR/gone.jsonl" '.target_transcript = $t' "$BUNDLE/transplant.json" \
+    > "$BUNDLE/t.tmp" && mv "$BUNDLE/t.tmp" "$BUNDLE/transplant.json"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL B1 — no readable target transcript"* ]] || { echo "$output"; false; }
+}
+
+@test "M3: C2 refuses BOTH counts it is written for — zero copies and two" {
+  # A count clause needs both failing arms, or either side of the comparison can be replaced by
+  # `true` and nothing notices. 0 and 2 are the two directions.
+  mv "$TGT/projects/$SLUG/$SID.jsonl" "$BATS_TEST_TMPDIR/held.jsonl"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL C2 — no transcript $SID"* ]] || { echo "$output"; false; }
+
+  mkdir -p "$TGT/projects/-second-copy"
+  cp "$BATS_TEST_TMPDIR/held.jsonl" "$TGT/projects/$SLUG/$SID.jsonl"
+  cp "$BATS_TEST_TMPDIR/held.jsonl" "$TGT/projects/-second-copy/$SID.jsonl"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL C2 — 2 copies of $SID"* ]] || { echo "$output"; false; }
+}
+
+@test "M4: C5 refuses a DETACHED HEAD — there is no branch to check against pool/*" {
+  git -C "$WT" checkout -q --detach
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL C5 — $WT is on a detached HEAD"* ]] || { echo "$output"; false; }
+}
+
+@test "M5: C1 refuses an UNSET CLAUDE_CONFIG_DIR — the arm every other case passes explicitly" {
+  # Every case here hands the verifier a config dir ON PURPOSE, because C1's own input must never be
+  # this session's ambient one. That correct hermeticity left C1's unset arm unreachable by the
+  # entire suite — the arm could be deleted and nothing would go red.
+  run env -u CLAUDE_CONFIG_DIR bash "$VERIFY" --no-clear "$BUNDLE"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL C1 — CLAUDE_CONFIG_DIR is unset"* ]] || { echo "$output"; false; }
+}
+
+@test "M6: A3 refuses spawned ≠ settled, not only a non-zero open count" {
+  # The existing absent-field case deletes `.delegations.open` and so drives only the FIRST half of
+  # A3's conjunction. This drives the second: open IS zero and the two totals still disagree, which
+  # is a session that spawned something the ledger never saw settle.
+  jq '.delegations = {spawned:2, settled:1, open:0}' "$BUNDLE/audit.json" > "$BUNDLE/a.tmp" \
+    && mv "$BUNDLE/a.tmp" "$BUNDLE/audit.json"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL A3 — delegations open=0 spawned=2 settled=1"* ]] || { echo "$output"; false; }
+}
+
+@test "M7: D fails closed when session-continue.sh is not EXECUTABLE" {
+  # The live-layer skew arm: a landed-but-not-deployed hook is PRESENT and unrunnable, and a clause
+  # that cannot run its own side effect has not performed it. Both D clauses depend on the hook, so
+  # both must say so — a single FAIL would leave the other free to claim a reading it never took.
+  chmod -x "$HOME/.claude/hooks/session-continue.sh"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL D1 — session-continue.sh is not executable"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL D2 — session-continue.sh is not executable"* ]] || { echo "$output"; false; }
+}
+
+@test "M8: a clause VALUE carrying a newline is normalised to ONE line, and capped at 200" {
+  # The guard that stops a FAIL value injecting a second line into a prompt TYPED INTO A TUI
+  # COMPOSER, where a newline submits half a sentence. The value is attacker-adjacent by
+  # construction — it is read out of the bundle's own JSON with `jq -r`, which emits a real newline
+  # for a \n in a string — and the normaliser had no case at all.
+  jq '.gaps_at_handoff = "3\nINJECTED-SECOND-LINE"' "$BUNDLE/MANIFEST.json" > "$BUNDLE/m.tmp" \
+    && mv "$BUNDLE/m.tmp" "$BUNDLE/MANIFEST.json"
+  run verify --no-clear
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"FAIL A1 — gaps_at_handoff=3 INJECTED-SECOND-LINE"* ]] || { echo "$output"; false; }
+  orphan="$(printf '%s\n' "$output" | grep -c '^INJECTED-SECOND-LINE' || true)"
+  [ "$orphan" -eq 0 ] || { echo "the value broke out onto its own line: $output"; false; }
+
+  # …and the 200-char cap, the other half of the same normaliser.
+  long="$(printf 'A%.0s' $(seq 1 600))"
+  jq --arg v "$long" '.gaps_at_handoff = $v' "$BUNDLE/MANIFEST.json" > "$BUNDLE/m.tmp" \
+    && mv "$BUNDLE/m.tmp" "$BUNDLE/MANIFEST.json"
+  run verify --no-clear
+  a1="$(printf '%s\n' "$output" | grep '^FAIL A1 ' || true)"
+  [ -n "$a1" ] || { echo "no A1 line at all: $output"; false; }
+  [ "${#a1}" -le 215 ] || { echo "the A1 line is ${#a1} chars — the 200-char cap is gone: $a1"; false; }
+}

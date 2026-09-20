@@ -614,13 +614,21 @@ SH
 # (tests/lr-ingest-verify.bats) with the clause-by-clause cases; here it is a stub, because the
 # subject is the composition: does the launcher RUN the check, does it use the receipt's last line
 # on rc 0, and does a rc-1 keep today's prompt with the clause named in it.
-lrh_verify_stub() { # $1=rc  → a lr-ingest-verify.sh on the fixture's live layer that answers as told
+lrh_verify_stub() { # $1=rc  [$2=rc-0 receipt shape: prompt (default) | verdict | empty | fail]
+  # $2 drives the THIRD fail-closed arm: a checker can exit 0 and still not have produced a prompt —
+  # it can end on its own verdict line, on a blank line, or on a FAIL. The launcher tails the last
+  # line, so each of those would otherwise be TYPED INTO THE COMPOSER as the session's first prompt.
   cat > "$HOME/.claude/scripts/limit-recover/lr-ingest-verify.sh" <<SH
 #!/bin/bash
 # The receipt shape the real script writes: clause lines, a verdict, and — on rc 0 — the prompt LAST.
 echo "PASS A1 — gaps_at_handoff=0"
 if [ "$1" -eq 0 ]; then
-  echo "verdict: rc 0 (13 clauses PASS)"
+  echo "verdict: rc 0 (14 clauses PASS)"
+  case "${2:-prompt}" in
+    verdict) exit 0 ;;
+    empty)   echo "" ; exit 0 ;;
+    fail)    echo "FAIL C3 — a clause line as the last line" ; exit 0 ;;
+  esac
   # \$LR_SUBMIT_TOKEN is read from the ENVIRONMENT, which is the ordering this case also pins: the
   # launcher must export it BEFORE it composes the prompt, or the run token can never reach the
   # composer and W3's submitted-vs-armed discriminator has nothing to look for.
@@ -721,4 +729,78 @@ SH
   for k in runtime_model runtime_effort permission_mode; do
     grep -q "\"$k\"" "$B/MANIFEST.json" || { echo "$k was dropped with source_argv"; cat "$B/MANIFEST.json"; false; }
   done
+}
+
+@test "M9: rc 0 whose receipt does NOT end in a prompt is the THIRD fail-closed arm, all three shapes" {
+  # The report claimed "FAIL CLOSED, THREE WAYS" and two were tested. This is the third, and it has
+  # three distinct last-line shapes the launcher's `case` enumerates — a verdict line, an empty
+  # line, and a FAIL line. Each is tested, because deleting ONE pattern from that case leaves the
+  # other two green and the deleted shape lands in the composer as the session's first prompt.
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  local i=0
+  for shape in verdict empty fail; do
+    i=$((i+1))
+    lrh_verify_stub 0 "$shape"
+    run gen "lrhq002$i-0000-0000-0000-00000000002$i" "$BATS_TEST_TMPDIR/repo"
+    [ "$status" -eq 0 ] || { echo "$shape: $output"; false; }
+    LAUNCHER="$(launcher_from_output)"
+    [ -n "$LAUNCHER" ] || { echo "$shape: no launcher"; false; }
+    cd "$BATS_TEST_TMPDIR"
+    run /bin/bash "$LAUNCHER"
+    [ "$status" -eq 0 ] || { echo "$shape: $output"; false; }
+    [[ "$output" == *"argv[7]=</limit-recover ingest "* ]] \
+      || { echo "$shape: the receipt's last line became the PROMPT: $output"; false; }
+    [[ "$output" == *"rc 0 but the receipt's last line is not a prompt"* ]] \
+      || { echo "$shape: the reason is not named: $output"; false; }
+  done
+}
+
+@test "M10/M11: BOTH size caps are load-bearing — a real DoD store and a real last message" {
+  # THE ACCEPTANCE CASE ABOVE IS AN EQUIVALENCE GUARD ON THIS AXIS, and that is why both levers
+  # survived mutation: its fixture $HOME has an EMPTY DoD store and a two-line transcript, so
+  # HANDOFF-CONTEXT.md comes out around 1 KB whether the 450-char DoD cap and the 500-char
+  # last-assistant cap are there or not. This fixture reaches the regime the caps were written for —
+  # measured on bundle 09e64dcb/bundle-20260919T172203Z, 110 captures and 86,888 B of DoD in an
+  # 87,858 B file. Each cap is pinned by its OWN marker — DODCAPMARK at +600 chars of the last
+  # capture, TAILMARK at +495 of the last message — and the two strings are deliberately DISJOINT,
+  # because a marker that is a substring of the other would fire for the other's mutation and the
+  # attribution this case exists for would be gone.
+  export WRAP_DOD_FILE="$BATS_TEST_TMPDIR/dod.md"
+  { echo "## 2026-09-18T00:00:00Z"; printf 'OLD%.0s' $(seq 1 200); echo
+    echo "## 2026-09-19T00:00:00Z"; printf 'D%.0s' $(seq 1 600); printf 'DODCAPMARK'
+    printf 'E%.0s' $(seq 1 2000); echo; } > "$WRAP_DOD_FILE"
+
+  local sid="lrhq0030-0000-0000-0000-000000000030"
+  mkdir -p "$HOME/.claude/projects/-fix"
+  { printf '{"type":"user","timestamp":"2026-09-19T17:00:00.000Z","message":{"role":"user","content":"go"}}\n'
+    python3 -c "
+import json,sys
+msg = 'B'*495 + 'TAILMARK' + 'C'*2500
+sys.stdout.write(json.dumps({'type':'assistant','timestamp':'2026-09-19T17:00:01.000Z',
+  'message':{'role':'assistant','content':[{'type':'text','text':msg}]}})+chr(10))
+"; } > "$HOME/.claude/projects/-fix/$sid.jsonl"
+
+  lrh_verify_stub 0
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  run gen "$sid" "$BATS_TEST_TMPDIR/repo"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  LAUNCHER="$(launcher_from_output)"
+  B="$(dirname "$LAUNCHER")"
+  hc=$(wc -c < "$B/HANDOFF-CONTEXT.md")
+  echo "HANDOFF-CONTEXT.md=$hc B with a 3.2 KB DoD capture and a 3.0 KB last message"
+
+  # CONTROL first: the fixture really reaches the regime — both sources are genuinely oversized, so
+  # a green below is a fact about the caps and not about an empty store.
+  [ "$(wc -c < "$WRAP_DOD_FILE")" -gt 2048 ] || { echo "the DoD fixture is not oversized"; false; }
+  [ "$(wc -c < "$HOME/.claude/projects/-fix/$sid.jsonl")" -gt 2048 ] || { echo "the transcript fixture is not oversized"; false; }
+  grep -q 'Scope (frozen)' "$B/HANDOFF-CONTEXT.md" >/dev/null || { echo "no DoD section at all"; cat "$B/HANDOFF-CONTEXT.md"; false; }
+
+  # M10 — the 450-char DoD cap.
+  ! grep -q 'DODCAPMARK' "$B/HANDOFF-CONTEXT.md" >/dev/null \
+    || { echo "the 450-char DoD cap is gone — the whole capture was quoted ($hc B)"; false; }
+  # M11 — the 500-char last-assistant cap (the pre-W3 value was 2000, which reaches TAILMARK).
+  ! grep -q 'TAILMARK' "$B/HANDOFF-CONTEXT.md" >/dev/null \
+    || { echo "the 500-char last-message cap is gone ($hc B)"; false; }
+  # …and the budget the two of them buy.
+  [ "$hc" -le 2048 ] || { echo "HANDOFF-CONTEXT.md is $hc B (> 2048)"; cat "$B/HANDOFF-CONTEXT.md"; false; }
 }
