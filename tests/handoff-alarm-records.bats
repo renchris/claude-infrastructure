@@ -319,6 +319,11 @@ site_is_converted() { # $1=file $2=class-token $3=hf_alarm class
   # it forces a NEW alarm site to be a decision somebody writes down. Both of those commits moved it
   # without saying so and left this suite red on trunk for ~23h; the number is not the defect, the
   # silent move is. If you add a site, add its sha and its class to this comment and raise the count.
+  # SEVENTH added 2026-09-20 by eaf7c82da (W2 of LIMIT_RECOVER_100P), class recycle-boot-
+  # indeterminate: the boot wait's 60 s ABSTENTION arm, raised when a pane shows no claude, no
+  # relaunch rc and no launcher refusal — a state that is deliberately NOT recycle-relaunch-failed,
+  # because one is re-drivable with a fresh probe and the other needs someone to look. It moved this
+  # count silently and left trunk red; found by a sibling's docs-only land, not by its own wave.
   [ "$(grep -c 'if \[ -x "\$HOME/.claude/bin/cc-notify" \]' "$FIRE")" -eq 1 ]
-  [ "$(grep -c '^    hf_alarm ' "$FIRE")" -eq 6 ]
+  [ "$(grep -c '^    hf_alarm ' "$FIRE")" -eq 7 ]
 }
