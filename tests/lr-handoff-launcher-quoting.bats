@@ -469,17 +469,55 @@ SH
   [ ! -e "$MOVED_TOMB" ]
 }
 
-@test "W2: a pane whose state cannot be READ is REFUSED before the transplant (unknown is an abstention)" {
-  # No terminal to resolve the pane's tty, so pane_cc_state abstains — and an abstention must not
-  # admit a transplant. This drives the REAL handoff-fire verb, not a stub of it.
+# ══ W8 SPLIT THIS CASE IN TWO, and the original assertion had become BOX-DEPENDENT ══════════════
+# This was ONE test asserting `REFUSED:pane:` for "a pane whose state cannot be READ". W8
+# (LIMIT_RECOVER_100P § 10) gave the remote-pane resolver THREE codes, because absent and wedged
+# have opposite remedies:
+#     a resolver ANSWERED and lists no such window  → REMOTE-PANE-ABSENT      → REFUSED (terminal)
+#     no resolver answered at all                   → RESOLVER-UNAVAILABLE    → HELD    (park/retry)
+# After W8 this test's verdict depended on WHETHER A REAL KITTY HAPPENED TO BE RUNNING ON THE BOX:
+# with a live control socket the probe said REFUSED and it passed; with none it said HELD and it
+# failed. It passed on a developer box and went red on trunk for a reason that was not in the diff
+# (docs/lessons/a-suite-red-can-belong-to-the-box-not-the-branch.md). Both arms are now PINNED, and
+# the invariant both of them share — an abstention never admits a transplant — is asserted in each.
+@test "W2: a pane the resolver ANSWERS about and cannot find is REFUSED before the transplant" {
+  # CC_REMOTE_PANE_TERM=off is the deterministic lever for this arm: with W8's resolver disabled the
+  # pin falls back to the ancestry verdict, the iTerm2 branch answers "" for a pane it does not
+  # enumerate, and an ANSWERED-and-empty query is the ABSENT verdict — a definite negative.
   lrh_inplace_setup
   sid="lrhw0003-0000-4000-8000-000000000003"
   mkrepo "$BATS_TEST_TMPDIR/repo" main
   lrh_row "$sid"; lrh_tx "$sid" limit
+  # `run env VAR=x gen_inplace` cannot work: gen_inplace is a bats FUNCTION, and env execs a BINARY.
+  # Each bats test body is its own subshell, so an export here leaks nowhere.
+  export CC_REMOTE_PANE_TERM=off
   run gen_inplace "$sid" "$BATS_TEST_TMPDIR/repo"
   [ "$status" -eq 6 ] || { echo "$output"; false; }
   [[ "$output" == *"REFUSED:pane:"* ]] || { echo "$output"; false; }
   [ ! -e "$MOVED_LOCK" ] || { echo "THE TRANSPLANT RAN on a pane nobody could read"; false; }
+  [ ! -e "$MOVED_TOMB" ]
+}
+
+@test "W2: a pane NO resolver can answer about is HELD, not refused — and still transplants nothing" {
+  # The arm W8 added. A non-verdict about the RESOLVER says nothing about the pane, so concluding
+  # "the pane is gone" would tombstone a live session — the 9-of-9 husk class § 10.1 measured. It
+  # must PARK. Determinism: point the socket discovery at an empty directory and the kitty binary at
+  # a path that does not exist, so no candidate socket can answer whatever is running on the box.
+  lrh_inplace_setup
+  sid="lrhw0003-0000-4000-8000-000000000003"
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  lrh_row "$sid"; lrh_tx "$sid" limit
+  mkdir -p "$BATS_TEST_TMPDIR/no-sockets"
+  export CC_FIRE_KITTY_SOCK_DIR="$BATS_TEST_TMPDIR/no-sockets"
+  export CC_KITTY_CONF="$BATS_TEST_TMPDIR/absent-kitty.conf"
+  export CC_KITTY_BIN="$BATS_TEST_TMPDIR/absent-kitty"
+  export CC_TERM_KITTY_TO=""
+  run gen_inplace "$sid" "$BATS_TEST_TMPDIR/repo"
+  [ "$status" -eq 6 ] || { echo "$output"; false; }
+  [[ "$output" == *"HELD:pane:"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"RESOLVER-UNAVAILABLE"* ]] || { echo "$output"; false; }
+  # THE INVARIANT, identical in both arms: an abstention must not admit a transplant.
+  [ ! -e "$MOVED_LOCK" ] || { echo "THE TRANSPLANT RAN on a HELD verdict"; false; }
   [ ! -e "$MOVED_TOMB" ]
 }
 
