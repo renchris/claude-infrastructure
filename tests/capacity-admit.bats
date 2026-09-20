@@ -1240,3 +1240,31 @@ EOF
   [ "$rcs" = "9 9 9 0 " ] \
     || { echo "a corrupt counter forced a spawn through: $rcs (expected 9 9 9 0)"; false; }
 }
+
+@test "15aj A1c the declared residual is REAL — an untrackable counter degrades to paging, and says so" {
+  # The A1 counter's header declares a residual: when the STATE dir itself is unwritable the
+  # occurrence cannot be kept, so it reads 1 every time and the alarm reverts to today's behaviour.
+  # A declared residual nothing executes is a sentence, not a property — this is the case that
+  # makes it one, in the direction the declaration claims: an untrackable bound must not silently
+  # SUPPRESS an alarm (the mirror of cc_hw_budget_charge admitting on an untrackable bound).
+  local dir tok i pages
+  dir="$BATS_TEST_TMPDIR/a1e"; mkdir -p "$dir"
+  tok="$(mint sid-a1e "$dir/tok")"
+  # the state dir is created lazily by the first writer, so it is made HERE — chmod 555 on a path
+  # that does not exist is an error, and the case would then never reach its subject.
+  mkdir -p "$CC_ADMIT_STATE_DIR"
+  chmod 555 "$dir"
+  chmod 555 "$CC_ADMIT_STATE_DIR"
+  for i in 1 2 3; do
+    run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=0.01 CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-a1e \
+                 cc_capacity_admit cA1e "s"' _ "$LIB" "$tok"
+  done
+  chmod 755 "$CC_ADMIT_STATE_DIR"
+  chmod 755 "$dir"
+  [ "$status" -eq 9 ] || { echo "rc=$status"; echo "$output"; false; }
+  pages="$(wc -l < "$BATS_TEST_TMPDIR/pages.txt" | tr -d ' ')"
+  [ "$pages" = 3 ] || { echo "the residual is not what the header declares: $pages pages, not 3"; false; }
+  # …and the row NAMES the degradation, so a reader is never left inferring it from a page count.
+  [[ "$(idl_first 'select(.caller=="cA1e")|.detail')" == *"repeats cannot be counted"* ]] \
+    || { echo "row: $(idl_first 'select(.caller=="cA1e")|.detail')"; false; }
+}

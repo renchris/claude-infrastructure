@@ -773,19 +773,23 @@ _cc_admit_token_discard() { # $1=claim path → always 0 · sets CC_ADMIT_TOKEN_
 # paging, and the row says `occurrence 1` while the note says the count is untrackable. For an
 # alarm that is the correct direction (an untrackable bound must not silently SUPPRESS), and it is
 # the mirror of the argument cc_hw_budget_charge makes for admitting on an untrackable bound.
+# SETS GLOBALS, NEVER PRINTS INTO `$( )` — the same rule _cc_admit_token_ttl's header states, and
+# re-learned here: called as `x="$(f)"` this runs in a SUBSHELL, so the note about WHY the count
+# degraded is discarded with it and every row reads `occurrence 1` with no explanation. Caught by
+# 15aj, which is the case that executes the residual rather than restating it.
 CC_ADMIT_TOKEN_OCC_NOTE=""
-_cc_admit_token_occurrence() { # $1=ident → prints the occurrence number (>=1) · always 0
+_cc_admit_token_occurrence() { # $1=ident → always 0 · sets CC_ADMIT_TOKEN_REPEAT (>=1) + _OCC_NOTE
   local dir f n
-  CC_ADMIT_TOKEN_OCC_NOTE=""
+  CC_ADMIT_TOKEN_OCC_NOTE=""; CC_ADMIT_TOKEN_REPEAT=1
   case "${1:-}" in
     ''|*[!A-Za-z0-9._-]*)
       CC_ADMIT_TOKEN_OCC_NOTE="the record has no usable identity, so repeats cannot be counted"
-      printf '1'; return 0 ;;
+      return 0 ;;
   esac
   dir="${CC_ADMIT_STATE_DIR:-$HOME/.claude/autonomy/capacity-admit}/terminal"
   if ! mkdir -p "$dir" 2>/dev/null; then
     CC_ADMIT_TOKEN_OCC_NOTE="the state dir is unwritable, so repeats cannot be counted"
-    printf '1'; return 0
+    return 0
   fi
   f="$dir/$1.terminal"
   n="$(cat "$f" 2>/dev/null || printf '0')"
@@ -793,9 +797,9 @@ _cc_admit_token_occurrence() { # $1=ident → prints the occurrence number (>=1)
   n=$(( CC_HW_INT_VALUE + 1 ))
   if ! printf '%s\n' "$n" > "$f" 2>/dev/null; then
     CC_ADMIT_TOKEN_OCC_NOTE="the occurrence counter could not be written, so repeats cannot be counted"
-    printf '1'; return 0
+    return 0
   fi
-  printf '%s' "$n"
+  CC_ADMIT_TOKEN_REPEAT="$n"
   return 0
 }
 
@@ -1103,8 +1107,8 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
       # BOUNDED, AND A REPEAT IS DISTINGUISHABLE FROM THE FIRST (W2FA A1 — see the counter's
       # header). The verdict below is identical at occurrence 1 and occurrence 100; only the ALARM
       # is bounded, and only the wording changes.
-      tok_occ="$(_cc_admit_token_occurrence "$CC_ADMIT_TOKEN_IDENT")"
-      CC_ADMIT_TOKEN_REPEAT="$tok_occ"
+      _cc_admit_token_occurrence "$CC_ADMIT_TOKEN_IDENT"
+      tok_occ="$CC_ADMIT_TOKEN_REPEAT"
       if [ "$tok_occ" -gt 1 ]; then
         tok_rep=" THIS IS REPEAT #${tok_occ}: the same record has now failed to redeem ${tok_occ} times and is STILL on disk, so re-running this command cannot change the outcome — the driver must mint a new one."
       else
