@@ -54,6 +54,10 @@ set -uo pipefail
 
 LRV_RC=0
 LRV_FIRST_FAIL=""
+# The verdict line's clause count is COUNTED, never written down: a literal `13` is a second copy of
+# a fact the clause list already holds, and the two drift the moment a clause is added (W3i added
+# D2, and the literal would have kept saying 13 over 14 PASS lines).
+LRV_PASSES=0
 
 clause() { # $1=PASS|FAIL  $2=id  $3=one-line value
   local v="$1" id="$2" txt="$3"
@@ -64,6 +68,8 @@ clause() { # $1=PASS|FAIL  $2=id  $3=one-line value
   if [ "$v" = FAIL ]; then
     LRV_RC=1
     [ -n "$LRV_FIRST_FAIL" ] || LRV_FIRST_FAIL="$id"
+  else
+    LRV_PASSES=$(( LRV_PASSES + 1 ))
   fi
   return 0
 }
@@ -272,19 +278,108 @@ fi
 
 # ── D — THE ONE SIDE EFFECT THE INGEST STEP PERFORMED, MOVED TO THE SHELL ────────────────────────
 # `/limit-recover ingest` step 1 clears the auto-continue sentinel: a pre-limit armed continuation
-# would otherwise re-drive a step the recovered session has no context for. Run it HERE, under the
-# TARGET config dir and the session's OWN sid, from the session's worktree — the sentinel is keyed
-# on (config-dir|cwd), so running it from anywhere else clears nothing and says "cleared" anyway.
+# would otherwise re-drive a step the recovered session has no context for.
+#
+# ── AND THE CONFIG DIR IT RUNS UNDER IS *NOT* THE TARGET'S (W3i D1) ──────────────────────────────
+# The sentinel is keyed on (config-dir | cwd) — hooks/lib/continue-sentinel.sh:23-27 — and the
+# config dir that keyed the PRE-LIMIT arm is the one the session was running under WHEN IT ARMED:
+# the SOURCE account's, because that is the account the limit was hit on. The transplant then moves
+# the session to the target, so the recovered session's own Stop hook reads a DIFFERENT key
+# entirely. Running the clear under $TCFG therefore discharges nothing this clause exists to
+# discharge, and the only sentinel it CAN reach at that key was armed by whoever else works in this
+# cwd on the target account — which is exactly the steal measured on 2026-09-19, when a read-only
+# sweep disarmed two live sessions' continuations, one armed 45 s earlier and driving a wave.
+#
+# So D is TWO clauses, and neither is satisfiable by the other:
+#   D1 — the PRE-LIMIT sentinel, under the SOURCE config dir, as this session's OWN sid. Ours to
+#        remove, and the `clear` verb's ownership guard lets it through precisely because it is ours.
+#   D2 — the sentinel the RECOVERED session will actually read, under the TARGET config dir. NEVER
+#        cleared from here: an armed one there belongs to another session and the launcher is not
+#        entitled to it. hooks/session-continue.sh:1176 already clears-and-ignores a foreign sentinel
+#        on the recovered session's own first Stop, so nothing is owed — but a live sibling armed in
+#        the very cwd this session is about to resume into is a state this gate must not license.
+#
+# An ABSENT source_cfg is not a pass: it means the dir that keyed the arm is unknowable, and a
+# "cleared" printed over a directory we guessed is the false claim this whole script exists to
+# prevent. FAIL, and say which field was missing.
 SC="$HOME/.claude/hooks/session-continue.sh"
 _verb=clear; [ "$LRV_CLEAR" = 1 ] || _verb=status
+_scwd="${WT:-$PWD}"
+sc_run() { # $1=config dir  $2=verb → the hook's own line on stdout, the hook's rc
+  ( cd "$_scwd" 2>/dev/null || exit 97
+    CLAUDE_CONFIG_DIR="$1" CLAUDE_CODE_SESSION_ID="$SID" "$SC" "$2" 2>&1 )
+}
+D1_STATE="unknown"
 if [ ! -x "$SC" ]; then
   clause FAIL D1 "session-continue.sh is not executable at $SC — the armed continuation cannot be cleared"
+  clause FAIL D2 "session-continue.sh is not executable at $SC — the target-side sentinel cannot be read"
 else
-  _cl="$(cd "${WT:-$PWD}" 2>/dev/null && CLAUDE_CONFIG_DIR="$TCFG_M" CLAUDE_CODE_SESSION_ID="$SID" "$SC" "$_verb" 2>&1)"
-  _clrc=$?
-  if [ "$_clrc" -ne 0 ]; then clause FAIL D1 "session-continue.sh $_verb exited $_clrc: $_cl"
-  elif [ "$LRV_CLEAR" = 1 ]; then clause PASS D1 "auto-continue cleared: $_cl"
-  else clause PASS D1 "auto-continue NOT touched (--no-clear); sentinel reads: $_cl"; fi
+  # ── D1 — the pre-limit sentinel, under the SOURCE config dir ──────────────────────────────────
+  if [ -z "$SRC_CFG" ] || [ "$SRC_CFG" = ABSENT ]; then
+    clause FAIL D1 "the manifest records no source_cfg — the config dir the pre-limit continuation was armed under is unknowable"
+  else
+    _cl="$(sc_run "$SRC_CFG" "$_verb")"
+    _clrc=$?
+    if [ "$_clrc" -ne 0 ]; then
+      clause FAIL D1 "session-continue.sh $_verb under $SRC_CFG exited $_clrc: $_cl"
+    elif [ "$LRV_CLEAR" != 1 ]; then
+      D1_STATE="not touched (--no-clear)"
+      clause PASS D1 "pre-limit sentinel NOT touched (--no-clear) under $SRC_CFG; it reads: $_cl"
+    else
+      # THE LABEL IS READ OFF THE VALUE, NEVER ASSUMED (W3i D7). This line used to say
+      # "auto-continue cleared: <value>" for every non-error outcome, so the receipt could read
+      # "auto-continue cleared: refused — … nothing was cleared" — a label contradicting its own
+      # value is how a false claim survives review.
+      case "$_cl" in
+        "cleared → "*)
+          D1_STATE="cleared"
+          clause PASS D1 "pre-limit auto-continue CLEARED under $SRC_CFG: $_cl" ;;
+        "nothing to clear"*)
+          D1_STATE="was not armed"
+          clause PASS D1 "no pre-limit auto-continue was armed under $SRC_CFG: $_cl" ;;
+        refused*)
+          D1_STATE="left to its owner (nothing of ours was armed)"
+          clause PASS D1 "NOTHING WAS CLEARED — the sentinel at $SRC_CFG|$_scwd is not this session's: $_cl" ;;
+        *)
+          clause FAIL D1 "session-continue.sh clear under $SRC_CFG returned an outcome this gate cannot classify: $_cl" ;;
+      esac
+    fi
+  fi
+
+  # ── D2 — the key the RECOVERED session will actually read, under the TARGET config dir ────────
+  if [ -z "$TCFG_M" ] || [ "$TCFG_M" = ABSENT ]; then
+    clause FAIL D2 "the manifest records no target_cfg — the key the recovered session will read is unknowable"
+  else
+    _tg="$(sc_run "$TCFG_M" status)"
+    _tgrc=$?
+    # Anchored on the PARENTHESISED HEADER, not on the line: `status` prints
+    # `ARMED (<n> continuations, sid=<sid>): <step text>` and the step text is arbitrary operator
+    # prose — a greedy `.*sid=` would take the LAST occurrence, i.e. one the step text supplied.
+    _tghdr="$(printf '%s' "$_tg" | sed -n 's/^ARMED (\([^)]*\)).*/\1/p')"
+    _tgsid="$(printf '%s' "$_tghdr" | sed -n 's/.*sid=\(.*\)$/\1/p')"
+    if [ "$_tgrc" -ne 0 ]; then
+      clause FAIL D2 "session-continue.sh status under $TCFG_M exited $_tgrc: $_tg"
+    else
+      case "$_tg" in
+        inactive*)
+          clause PASS D2 "nothing armed at the key the recovered session reads ($TCFG_M | $_scwd)" ;;
+        "ARMED "*)
+          if [ "$_tgsid" = "$SID" ] && [ "$LRV_CLEAR" = 1 ]; then
+            _tgc="$(sc_run "$TCFG_M" clear)"
+            case "$_tgc" in
+              "cleared → "*) clause PASS D2 "this session's OWN stale sentinel at the target key was cleared: $_tgc" ;;
+              *)             clause FAIL D2 "the target-key sentinel is this session's but would not clear: $_tgc" ;;
+            esac
+          elif [ "$_tgsid" = "$SID" ]; then
+            clause PASS D2 "this session's own sentinel is armed at the target key, NOT touched (--no-clear): $_tg"
+          else
+            clause FAIL D2 "session ${_tgsid:-?} has an armed continuation at $TCFG_M | $_scwd — the recovered session would inherit and silently disarm it" ;
+          fi ;;
+        *)
+          clause FAIL D2 "session-continue.sh status under $TCFG_M returned an unclassifiable line: $_tg" ;;
+      esac
+    fi
+  fi
 fi
 
 # ── VERDICT + THE ONE LINE THAT REPLACES THE INGEST ──────────────────────────────────────────────
@@ -306,7 +401,10 @@ fi
 # manifest's own run coordinates stand in, so the line is still self-identifying.
 RUNTOK="${LR_SUBMIT_TOKEN:-run:$SID8:$TS}"
 
-printf 'verdict: rc 0 (13 clauses PASS)\n'
-printf 'Resumed in place on %s — same pane, same session %s, after a %s-limit %s on %s. lr-ingest-verify rc 0 (config dir, session id, transcript path, lock target, source tombstone, branch, auto-continue cleared) and the audit says gaps %s, waiting %s, %s open delegations — nothing is owed and nothing re-runs. Continue the interrupted work from where you left off. Full check list and receipt: cat %s/INGEST-VERIFIED.txt — re-derive with: bash ~/.claude/scripts/limit-recover/lr-ingest-verify.sh --no-clear %s — %s\n' \
-  "$TARGET" "$SID8" "$_k" "$STATUS" "$SRC_ACCT" "$_g" "$_w" "$_open" "$B" "$B" "$RUNTOK"
+printf 'verdict: rc 0 (%s clauses PASS)\n' "$LRV_PASSES"
+# `%s` for the auto-continue half, never the word "cleared": D1 has four honest outcomes and only
+# one of them is a clear (W3i D7). A prompt the recovered session READS must not assert a side
+# effect that did not happen.
+printf 'Resumed in place on %s — same pane, same session %s, after a %s-limit %s on %s. lr-ingest-verify rc 0 (config dir, session id, transcript path, lock target, source tombstone, branch; pre-limit auto-continue %s) and the audit says gaps %s, waiting %s, %s open delegations — nothing is owed and nothing re-runs. Continue the interrupted work from where you left off. Full check list and receipt: cat %s/INGEST-VERIFIED.txt — re-derive with: bash ~/.claude/scripts/limit-recover/lr-ingest-verify.sh --no-clear %s — %s\n' \
+  "$TARGET" "$SID8" "$_k" "$STATUS" "$SRC_ACCT" "$D1_STATE" "$_g" "$_w" "$_open" "$B" "$B" "$RUNTOK"
 exit 0
