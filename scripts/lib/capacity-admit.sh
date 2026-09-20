@@ -391,13 +391,23 @@ cc_hw_is_int_operand() { # $1 → 0 usable in `[ -gt ]` AND `$(( ))` · sets CC_
 #   rc 10 = RELEASED; the budget is spent and reset — the caller must ADMIT and page
 #   rc 1  = the bound is UNTRACKABLE (no state file, bad budget) — the caller must ADMIT, because an
 #           untracked bound is an unbounded gate, and it must never convict on its own bad wiring.
+# THE BOUND'S OWN OPERANDS ARE RANGE-CHECKED (W2FA A2, third site, 2026-09-20). MEASURED
+# 2026-09-20: with CC_ADMIT_BUDGET=999999999999999999999 — all digits, so the charset test passed —
+# `[ "$n" -gt "$budget" ]` ERRORS rc 2 (`[: …: integer expected`) and `if` reads it as a clean
+# false, so the counter climbs forever and the release NEVER fires. Eight consecutive refusals, no
+# release, against a control at budget 3 that released on the fourth. That is §9's law — "no gate
+# on an actuation path may be unbounded" — defeated by a typo, and case 4 of this suite calls that
+# law the central property under test. The state file's own counter is bounded for the same reason:
+# a 21-digit value there wraps `$((n + 1))`. Rejecting either is rc 1, i.e. UNTRACKABLE ⇒ the caller
+# must ADMIT, which is the direction that keeps the gate bounded — unchanged, and the safe one.
 cc_hw_budget_charge() { # $1=state-file (may be empty) $2=budget → 0 charged / 10 released / 1 untrackable
   local sf="${1:-}" budget="${2:-}" n
   [ -n "$sf" ] || return 1
-  cc_hw_is_int "$budget" || return 1
+  cc_hw_is_int_operand "$budget" || return 1
+  budget="$CC_HW_INT_VALUE"
   n="$(cat "$sf" 2>/dev/null || echo 0)"
-  case "$n" in ''|*[!0-9]*) n=0 ;; esac
-  n=$((n + 1))
+  cc_hw_is_int_operand "$n" || CC_HW_INT_VALUE=0
+  n=$(( CC_HW_INT_VALUE + 1 ))
   if [ "$n" -gt "$budget" ]; then
     : > "$sf" 2>/dev/null || true
     return 10
