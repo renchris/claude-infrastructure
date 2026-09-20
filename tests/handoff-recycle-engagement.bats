@@ -340,3 +340,58 @@ SH
   ! [[ "$output" == *"handoff-prompt-nb"* ]] || { echo "a dry recycle made a copy"; false; }
   ! grep -q 'recycle engagement marker' "$PF" || { echo "the caller's own file was modified"; false; }
 }
+
+# ── resume_engaged + the SUBMIT TOKEN: "armed" is not "engaged" (W3, LIMIT_RECOVER_100P) ──────────
+#
+# THE DEFECT THESE TWO PIN. The resume-mode oracle asked "is there a content-bearing, non-error
+# assistant turn newer than $RCY_T0 in the target's copy?" — a question about the CLOCK. A resumed
+# session answers it for reasons that have nothing to do with the prompt we typed: a background-task
+# notification, a peer message drained at a turn boundary, a Stop-hook continuation. Each is a real
+# turn newer than the baseline, so each satisfies the oracle while the ingest prompt sits UNSUBMITTED
+# in the composer. Measured on the LIMIT_RECOVER_100P runs: 1 in 5 `RECOVERED` verdicts was false,
+# and the pane it certified was alive, task-less, and reported as a working continuation.
+#
+# THE CURE is a per-run token that lr-handoff writes into the prompt itself. The baseline stops being
+# a clock and becomes a RECORD — the newest user record carrying that token — so a turn that arrived
+# BEFORE our prompt is behind the baseline by construction and can no longer be read as an answer.
+
+resume_oracle() { eval "$(sed -n '/^resume_engaged() {/,/^}/p' "$HF")"; command -v resume_engaged >/dev/null; }
+
+@test "RED-PROOF token oracle: a notification turn BEFORE the submitted prompt is NOT engagement" {
+  resume_oracle
+  TCFG="$BATS_TEST_TMPDIR/target"; TSLUG="-Users-x-wt"; TSID="resumed-sess"
+  mkdir -p "$TCFG/projects/$TSLUG"
+  TOK="run:resumeds:20260919T2102:9f3c2b71"
+  # The harness answers a task notification at :05 — a real, content-bearing, non-error turn, newer
+  # than the baseline. THEN, at :06, our prompt finally lands. Nothing has answered it yet.
+  printf '%s\n' \
+    '{"type":"user","timestamp":"2026-09-19T21:05:00.000Z","message":{"role":"user","content":"<task-notification>a background task finished</task-notification>"}}' \
+    '{"type":"assistant","timestamp":"2026-09-19T21:05:30.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Noted. No response requested for that task."}]}}' \
+    "{\"type\":\"user\",\"timestamp\":\"2026-09-19T21:06:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"/limit-recover ingest /x $TOK\"}}" \
+    > "$TCFG/projects/$TSLUG/$TSID.jsonl"
+  # the pre-W3 question — "any turn after the clock baseline?" — says ENGAGED, and is wrong
+  run resume_engaged "$TCFG" "$TSID" "2026-09-19T21:00:00"
+  [ "$status" -eq 0 ]
+  # the W3 question — "any turn after OUR prompt?" — says no, and is right
+  run resume_engaged "$TCFG" "$TSID" "2026-09-19T21:00:00" "$TOK"
+  [ "$status" -eq 1 ] || { echo "a stale notification turn still satisfies the oracle"; false; }
+}
+
+@test "EQUIVALENCE GUARD token oracle: a turn AFTER the submitted prompt IS engagement" {
+  # LABELLED, because it is green in BOTH arms and is therefore not a red-proof: the pre-W3 oracle
+  # ignores a 4th argument, so this fixture passed before the change too. What it guards is the
+  # over-correction — a token arm that refuses everything, or one whose baseline is off by a record
+  # — which no pre/post arm can exercise. Verified by mutation: replacing the token arm with an
+  # unconditional `return 1` turns this case RED while the case above it stays green.
+  resume_oracle
+  TCFG="$BATS_TEST_TMPDIR/target"; TSLUG="-Users-x-wt"; TSID="resumed-sess"
+  mkdir -p "$TCFG/projects/$TSLUG"
+  TOK="run:resumeds:20260919T2102:9f3c2b71"
+  printf '%s\n' \
+    '{"type":"assistant","timestamp":"2026-09-19T21:05:30.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Noted."}]}}' \
+    "{\"type\":\"user\",\"timestamp\":\"2026-09-19T21:06:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"/limit-recover ingest /x $TOK\"}}" \
+    '{"type":"assistant","timestamp":"2026-09-19T21:06:40.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Reading the salvage bundle now."}]}}' \
+    > "$TCFG/projects/$TSLUG/$TSID.jsonl"
+  run resume_engaged "$TCFG" "$TSID" "2026-09-19T21:00:00" "$TOK"
+  [ "$status" -eq 0 ] || { echo "a genuine answer to the injected prompt was not recognised"; false; }
+}

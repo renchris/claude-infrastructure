@@ -3890,15 +3890,69 @@ EOF
 # launch-time copy and never echoed, but the caller of a recycle IS the session being recycled, so if
 # the token ever reached its own stream the check would pass on the predecessor's turns — the exact
 # false-positive this function exists to prevent. Cheap belt, no cost when the leak never happens.
-resume_engaged() { # $1=target cfg  $2=sid  $3=baseline (UTC, %FT%T) → 0 a content-bearing, NON-ERROR assistant turn newer than the baseline exists in the TARGET's copy / 1 not
+resume_engaged() { # $1=target cfg  $2=sid  $3=baseline (UTC, %FT%T) $4=submit token → 0 a content-bearing, NON-ERROR assistant turn newer than the baseline exists in the TARGET's copy / 1 not
   # The resume-mode oracle (LIMIT_RECOVER_100P). recycle_engaged's two signals do not apply here: the
   # sid does not change (same uuid), and no marker rides the payload (the launcher carries the ingest
   # prompt). What proves engagement is the one thing a husk can never produce — a fresh, non-error
   # assistant turn in the config dir the session was transplanted TO. An `isApiErrorMessage` turn is
   # the limit hitting AGAIN on the target, and the synthetic "No response requested." a resume
   # inserts is not a turn either; both are excluded so this cannot read a dead relaunch as alive.
-  local cfg="${1:-}" sid="${2:-}" t0="${3:-}" f
+  #
+  # ══ $4: WHY A BASELINE IN WALL-CLOCK WAS NOT ENOUGH (W3, 2026-09-19) ═════════════════════════════
+  # A resumed session produces assistant turns for reasons that have NOTHING to do with the prompt we
+  # typed: a background-task notification, a peer message drained at a turn boundary, a Stop-hook
+  # continuation. Each is a real, content-bearing, non-error turn newer than $RCY_T0, so each one
+  # satisfies the baseline test while the ingest prompt sits unsubmitted in the composer. That is an
+  # ARMED session reported as an ENGAGED one, and it is the residual this whole wave exists to close.
+  #
+  # With a token the baseline stops being a CLOCK and becomes a RECORD: the newest user record that
+  # carries this run token — i.e. the moment OUR prompt was accepted — and the qualifying assistant
+  # turn must be newer than THAT. A notification turn that arrived first is then behind the baseline
+  # by construction, and cannot be mistaken for an answer.
+  #
+  # NO TOKEN RECORD ⇒ rc 1, DELIBERATELY. It means the prompt is not in the transcript at all, so
+  # there is nothing for a turn to be an answer TO. Falling back to the weaker clock test here would
+  # re-open the exact hole, and silently, on the runs where the prompt failed to submit — the only
+  # runs where the distinction matters. The CALLER decides whether a token is trustworthy enough to
+  # pass (see the arming side: it passes one only when the relaunch prompt provably carries it).
+  #
+  # The scan below is its own heredoc, NOT an edit of the PY core: tests/lr-lib.bats pins that core
+  # byte-identical against lr-lib.sh:lr_engaged_after, and the two must stay one implementation.
+  local cfg="${1:-}" sid="${2:-}" t0="${3:-}" tok="${4:-}" f sub="" sub_f=""
   { [ -n "$cfg" ] && [ -n "$sid" ]; } || return 1
+  if [ -n "$tok" ]; then
+    for f in "$cfg"/projects/*/"$sid".jsonl; do
+      [ -f "$f" ] || continue
+      sub_f="$(/usr/bin/python3 - "$f" "$t0" "$tok" <<'TOK'
+import json, sys
+f, t0, tok = sys.argv[1], sys.argv[2], sys.argv[3]
+best = ""
+for line in open(f, errors="replace"):
+    if tok not in line:
+        continue
+    try:
+        d = json.loads(line)
+    except Exception:
+        continue
+    if d.get("type") != "user" or d.get("isSidechain"):
+        continue
+    ts = d.get("timestamp") or ""
+    if ts <= t0:
+        continue
+    m = d.get("message") if isinstance(d.get("message"), dict) else {}
+    c = m.get("content")
+    txt = c if isinstance(c, str) else (json.dumps(c) if c else "")
+    if tok in txt and ts > best:
+        best = ts
+print(best)
+TOK
+)" || sub_f=""
+      sub_f="${sub_f%%$'\n'*}"
+      [ -n "$sub_f" ] && [ "$sub_f" \> "$sub" ] && sub="$sub_f"
+    done
+    [ -n "$sub" ] || return 1
+    t0="$sub"
+  fi
   for f in "$cfg"/projects/*/"$sid".jsonl; do
     [ -f "$f" ] || continue
     /usr/bin/python3 - "$f" "$t0" <<'PY' && return 0
@@ -6806,6 +6860,12 @@ if [ "${1:-}" = "__recycle" ]; then
   # Resume mode (LIMIT_RECOVER_100P): $10-$12 are the TARGET config dir, the sid being resumed and
   # the engagement baseline. Positional-last + optional, like every argument above them.
   RCY_RESUME_CFG="${10:-}"; RCY_RESUME_SID="${11:-}"; RCY_T0="${12:-}"
+  # $16: THIS RUN's submit token (W3), positional-last + optional like every argument above it. It is
+  # resolved in the FOREGROUND, out of the launcher the recycle is about to type, and handed over only
+  # when the launcher provably carries it in the PROMPT as well as in its export block — see the
+  # arming side. Empty here means "measure engagement on wall-clock alone", which is the pre-W3
+  # behaviour and is strictly weaker: a stale notification turn satisfies it.
+  RCY_SUBMIT_TOKEN="${16:-}"
   IT2="$HOME/.claude/bin/it2"
   echo "→ armed: __recycle pid=$$ pgid=$(ps -o pgid= -p $$ | tr -d ' ') sid=$RSID tty=$TTY_PATH"
   pane_proof "$IT2" "$RSID" __recycle || exit 1
@@ -7003,7 +7063,10 @@ if [ "${1:-}" = "__recycle" ]; then
   RCY_MARKER="${7:-}"                              # token embedded in the relaunch prompt copy
   FIRE_GOAL="${8:-}"                               # --goal condition to re-arm as MESSAGE 2
   RCY_ENGAGE_TIMEOUT="${RCY_ENGAGE_TIMEOUT:-180}"  # env-overridable so tests run in seconds
-  RCY_ENGAGE_INTERVAL="${RCY_ENGAGE_INTERVAL:-5}"
+  # 1 s, down from 5 (W3). The poll is now two cheap local file scans — a tail-bounded probe and the
+  # oracle — not an it2 round trip, so the old spacing bought nothing and cost up to 5 s of latency
+  # on EVERY recovery plus a 5 s-quantised `within ${rcy_t}s` figure in the ledger row.
+  RCY_ENGAGE_INTERVAL="${RCY_ENGAGE_INTERVAL:-1}"
   if [ -n "$RCWD" ] && [ ! -d "$RCWD" ]; then
     echo "⚠ recycle cwd VANISHED during exit: $RCWD (a harness-owned worktree is reaped on session exit) — the baked fallback cd now decides where the successor lands"
   fi
@@ -7080,6 +7143,17 @@ if [ "${1:-}" = "__recycle" ]; then
                     "$HOME/.claude/scripts/limit-recover/lr-lib.sh"; do
       # shellcheck disable=SC1090  # runtime-resolved library ladder
       [ -f "$_rcy_lib" ] && { . "$_rcy_lib" 2>/dev/null || true; break; }
+    done
+  fi
+  # The submission probe, resolved on the same ladder as the library and for the same reason: the
+  # watcher is a re-exec of this file and may be running from the deployed copy while the checkout is
+  # ahead. Unreachable ⇒ the submitted EVENT is simply not emitted; the oracle still has the token.
+  rcy_submit_probe=""
+  if [ -n "${RCY_SUBMIT_TOKEN:-}" ]; then
+    for _rcy_pb in "$(dirname "$0")/limit-recover/lr-submit-probe.sh" \
+                   "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-submit-probe.sh" \
+                   "$HOME/.claude/scripts/limit-recover/lr-submit-probe.sh"; do
+      [ -x "$_rcy_pb" ] && { rcy_submit_probe="$_rcy_pb"; break; }
     done
   fi
   rcy_typed_at_iso="$(date -u -r "$rcy_typed_at" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')"
@@ -7167,8 +7241,27 @@ if [ "${1:-}" = "__recycle" ]; then
     fi
     echo "→ relaunch process up in $RSID (claude on tty) — verifying ENGAGEMENT"
     rcy_t=0
+    rcy_submit_ts=""
     while [ "$rcy_t" -lt "$RCY_ENGAGE_TIMEOUT" ]; do
-      if { [ -n "$RCY_RESUME_SID" ] && resume_engaged "$RCY_RESUME_CFG" "$RCY_RESUME_SID" "$RCY_T0"; } \
+      # ── SUBMISSION IS ITS OWN QUESTION, ASKED FIRST AND RECORDED SEPARATELY (W3) ───────────────
+      # `armed` and `engaged` are different states with different remedies — a prompt that never left
+      # the composer is re-typed, a prompt that landed and is waiting is left alone — and a single
+      # engaged/dead verdict cannot express either. So the moment the prompt appears in the
+      # transcript it gets its own ledger row, whether or not a turn ever follows: on the dead path
+      # below, "submitted at T and never answered" and "never submitted at all" then read apart.
+      if [ -n "${RCY_SUBMIT_TOKEN:-}" ] && [ -z "$rcy_submit_ts" ] && [ -n "$rcy_submit_probe" ]; then
+        rcy_p="$("$rcy_submit_probe" "$RCY_RESUME_CFG" "$RCY_RESUME_SID" "$RCY_T0" "$RCY_SUBMIT_TOKEN" 2>/dev/null)" || rcy_p=""
+        case "$rcy_p" in
+          "submitted "*)
+            rcy_submit_ts="${rcy_p#submitted }"
+            echo "→ SUBMITTED in $RSID — the relaunch prompt is in the transcript at $rcy_submit_ts (${rcy_t}s); engagement is measured from THAT record, not from the clock"
+            emit_recycle_event recycle-submitted "" "$RSID" "the relaunch prompt reached the transcript at $rcy_submit_ts after ${rcy_t}s" || true
+            [ -n "${RCY_RUN_DIR:-}" ] && command -v lr_state_append >/dev/null 2>&1 \
+              && { lr_state_append "$RCY_RUN_DIR" submitted engage "prompt in the transcript at $rcy_submit_ts" || true; }
+            ;;
+        esac
+      fi
+      if { [ -n "$RCY_RESUME_SID" ] && resume_engaged "$RCY_RESUME_CFG" "$RCY_RESUME_SID" "$RCY_T0" "${RCY_SUBMIT_TOKEN:-}"; } \
          || { [ -z "$RCY_RESUME_SID" ] && recycle_engaged "$RSID" "$RCY_OLD_SID" "$RCY_MARKER"; }; then
         echo "→ relaunched + ENGAGEMENT CONFIRMED in $RSID (a real assistant turn, not just a process)"
         # MESSAGE 2, re-armed. A recycle mints a NEW session id, and a goal is a SESSION-SCOPED Stop
@@ -7189,7 +7282,18 @@ if [ "${1:-}" = "__recycle" ]; then
     # plus a durable alarm record is worth more than a blind retry (the audit's complaint was the
     # FALSE success, not
     # the absence of a recovery). The session is left exactly as it is, for inspection.
-    echo "!! RECYCLE FAILED — never engaged: claude is running in $RSID but showed no assistant turn within ${RCY_ENGAGE_TIMEOUT}s. The relaunch booted and then idled: the brief was consumed or rejected (a slash-command-headed payload, or a /goal over the 4000-char cap). The pane is LIVE but TASK-LESS — do NOT trust it as a working continuation." >&2
+    # WHICH failure this is, when the token can tell them apart. "Never submitted" and "submitted and
+    # never answered" have opposite remedies — re-type the prompt, versus leave the session alone and
+    # read its transcript — and the pre-W3 message could only ever describe the second one.
+    rcy_dead_why="the brief was consumed or rejected (a slash-command-headed payload, or a /goal over the 4000-char cap)"
+    if [ -n "${RCY_SUBMIT_TOKEN:-}" ] && [ -n "$rcy_submit_probe" ]; then
+      if [ -n "$rcy_submit_ts" ]; then
+        rcy_dead_why="the prompt WAS submitted (transcript record at $rcy_submit_ts) and no turn ever answered it — read the transcript before re-typing anything"
+      else
+        rcy_dead_why="the prompt NEVER REACHED the transcript — it was not submitted at all, so nothing was there to answer"
+      fi
+    fi
+    echo "!! RECYCLE FAILED — never engaged: claude is running in $RSID but showed no assistant turn within ${RCY_ENGAGE_TIMEOUT}s. The relaunch booted and then idled: $rcy_dead_why. The pane is LIVE but TASK-LESS — do NOT trust it as a working continuation." >&2
     echo "!!   recover: re-send the brief into the pane (cc-notify $RSID '<re-engage prompt>'), or relaunch manually: $(cat "$CMDFILE")" >&2
     # engaged FALSE here, and it is a real measurement: the window expired with a live claude and no
     # assistant turn. This is the "asked, answered no" half of the tri-state above.
@@ -12281,7 +12385,38 @@ recycle_fire() {
   # cannot drift from what the writer uses. Empty for a non-resume recycle, which has no run.
   RCY_RUN_DIR_ARG=""
   [ -n "$RESUME_LAUNCHER" ] && RCY_RUN_DIR_ARG="$(dirname "$RESUME_LAUNCHER")"
-  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" "$RESUME_CFG" "${RESUME_LAUNCHER:+${RCY_SOURCE_SESSION:-$rcy_old_sid}}" "$RCY_T0" "$RCY_SRC_TX" "$RCY_RUN_DIR_ARG")"
+  # ── $16: THE SUBMIT TOKEN, AND THE PRECONDITION THAT MAKES IT SAFE TO PASS (W3) ────────────────
+  # lr-handoff mints one token per run and writes it into the launcher twice: once as an export (for
+  # lr-fire-resume, which polls its own submission) and once INSIDE the ingest prompt, which is the
+  # only copy that can ever reach the target transcript. Read from the launcher rather than threaded
+  # from lr-handoff because the two must agree and the launcher is the file both ends already read.
+  #
+  # 🚨 ONE OCCURRENCE MEANS THE PROMPT DOES NOT CARRY IT, AND THE TOKEN MUST THEN NOT BE PASSED. The
+  # oracle treats "no user record carries this token" as NOT ENGAGED — correctly, because nothing was
+  # submitted — so handing it a token the prompt cannot deliver would convict every healthy recycle.
+  # This is exactly the half-landed state while the lr-handoff side of W3 is still in flight, and the
+  # count is what makes this change safe to land first and self-arming the moment that one lands.
+  # The fallback is the pre-W3 wall-clock oracle, announced rather than silent (memory
+  # claimed-outcome-vs-checked-outcome: a degraded verdict that does not say it is degraded is worse
+  # than the strong one it replaced).
+  RCY_SUBMIT_TOKEN_ARG=""
+  if [ -n "$RESUME_LAUNCHER" ] && [ -f "$RESUME_LAUNCHER" ]; then
+    RCY_SUBMIT_TOKEN_ARG="$(sed -n 's/^export LR_SUBMIT_TOKEN=//p' "$RESUME_LAUNCHER" | tail -1)"
+    # `printf %q` leaves a [a-z0-9:] token bare, but strip a surrounding quote pair if a future
+    # spelling adds one — parameter expansion, because a `tr` of both quote characters is three
+    # layers of shell quoting deep and is how this line broke the file the first time.
+    RCY_SUBMIT_TOKEN_ARG="${RCY_SUBMIT_TOKEN_ARG#\'}"; RCY_SUBMIT_TOKEN_ARG="${RCY_SUBMIT_TOKEN_ARG%\'}"
+    RCY_SUBMIT_TOKEN_ARG="${RCY_SUBMIT_TOKEN_ARG#\"}"; RCY_SUBMIT_TOKEN_ARG="${RCY_SUBMIT_TOKEN_ARG%\"}"
+    if [ -n "$RCY_SUBMIT_TOKEN_ARG" ]; then
+      rcy_tok_n="$(grep -c -F -- "$RCY_SUBMIT_TOKEN_ARG" "$RESUME_LAUNCHER" 2>/dev/null)" || rcy_tok_n=0
+      case "$rcy_tok_n" in ''|*[!0-9]*) rcy_tok_n=0 ;; esac
+      if [ "$rcy_tok_n" -lt 2 ]; then
+        echo "⚠ the relaunch prompt does not carry this run's submit token (found $rcy_tok_n occurrence(s) in the launcher, need the export AND the prompt) — engagement falls back to the WALL-CLOCK oracle, which a stale notification turn can satisfy"
+        RCY_SUBMIT_TOKEN_ARG=""
+      fi
+    fi
+  fi
+  WATCHER_PID="$(detach "$log" "$0" __recycle "$SID" "$tty" "$cmdfile" "$LAUNCH_DIR" "$rcy_old_sid" "$RECYCLE_MARKER" "$FIRE_GOAL" "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" "$RESUME_CFG" "${RESUME_LAUNCHER:+${RCY_SOURCE_SESSION:-$rcy_old_sid}}" "$RCY_T0" "$RCY_SRC_TX" "$RCY_RUN_DIR_ARG" "$RCY_SUBMIT_TOKEN_ARG")"
   if ! await_armed "$log"; then
     kill "$WATCHER_PID" 2>/dev/null || true
     echo "!! recycle ABORTED: watcher heartbeat never appeared ($log) — /exit NOT typed, session stays alive. Run manually: $CMD" >&2
