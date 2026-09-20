@@ -473,17 +473,40 @@ for f in ("bulk_a", "bulk_b", "bulk_c"):
 PY
   run cc --all
   [ "$status" -eq 0 ]
-  # THE INSTRUMENT MEASURES THE CENSUS, NOT THE HARNESS. Bracketing a bats `run` with two
-  # `python3 -c` clock reads costs ~110 ms of interpreter startup that is not the subject's, and
-  # it read 260 ms against a 300 ms bar for a census that takes 140. One fork, timed from inside
-  # the timer's own process, so what is compared to the budget is one `cc-limited` and nothing else.
-  local ms
-  ms="$(python3 -c '
-import subprocess, sys, time
+  # THE INSTRUMENT MEASURES THE CENSUS, NOT THE HARNESS, AND NOT THE BOX.
+  #
+  # Two corrections, the second found by this row going red on trunk. (1) Bracketing a bats `run`
+  # with two `python3 -c` clock reads charges the subject ~110 ms of interpreter startup it never
+  # spent — 260 ms measured for a 140 ms census. So it is ONE fork, timed inside the timer's own
+  # process. (2) WALL CLOCK ON A SHARED BOX IS A FACT ABOUT THE BOX. This suite runs beside up to
+  # three other bats roots; measured at load 84 on 10 cores, the same census read 479 ms against
+  # its 300 ms bar while a direct run of it took 141. A timing assertion that a sibling's load can
+  # flip is not a budget, it is a flake that reddens trunk for whoever lands next.
+  #
+  # So the ASSERTION is child CPU (user+sys), which contention does not inflate — 130-146 ms
+  # across every load this box has shown. The WALL arm is kept, because the hook's budget really
+  # is wall clock from the operator's side, but it SKIPS rather than reds when the box is too
+  # loaded for the number to mean anything: an environment-falsifiable precondition must skip.
+  local ms cpu load percore
+  read -r ms cpu <<<"$(python3 -c '
+import resource, subprocess, sys, time
+b = resource.getrusage(resource.RUSAGE_CHILDREN)
 t = time.time()
 subprocess.run([sys.executable, sys.argv[1], "--all"], stdout=subprocess.DEVNULL)
-print(int((time.time() - t) * 1000))' "$SUBJ")"
-  echo "# 1500 marker rows (3 files at the 500-row cap) rendered in ${ms} ms (budget 300)" >&3
+a = resource.getrusage(resource.RUSAGE_CHILDREN)
+cpu = (a.ru_utime - b.ru_utime) + (a.ru_stime - b.ru_stime)
+print(int((time.time() - t) * 1000), int(cpu * 1000))' "$SUBJ")"
+  load="$(uptime | sed 's/.*averages*: *//' | awk '{print $1}' | tr -d ,)"
+  percore="$(python3 -c "import os,sys;print(float(sys.argv[1])/(os.cpu_count() or 1))" "$load")"
+  echo "# 1500 marker rows (3 files at the 500-row cap): cpu ${cpu} ms · wall ${ms} ms" \
+       "(budget 300) · load/core ${percore}" >&3
+  # THE LOAD-INVARIANT BAR, always asserted.
+  [ "$cpu" -le 300 ]
+  # THE WALL BAR, only where wall clock is measurable. 2.0/core is the ceiling cc-bats itself
+  # uses to decide the box cannot give a trustworthy answer, so it is the same line here.
+  if [ "$(python3 -c "print(1 if float('$percore') >= 2.0 else 0)")" = 1 ]; then
+    skip "load/core ${percore} >= 2.0 — wall clock here measures the box, not the census (cpu was ${cpu} ms)"
+  fi
   [ "$ms" -le 300 ]
 }
 
@@ -593,8 +616,12 @@ PY' _ "$link"
 #              `[ "$(jrow dedu9000 copies)" = 1 ]' failed               (§ 11 #4: read 2 — the
 #              dedupe was keyed on realpath(root), which never collides)
 #   not ok 21  19 a 500-row marker file x3 … inside the 0.30 s budget
-#              359 ms against the 300 ms bar                            (§ 11 #7: the slug-miss
-#              full walk was paid per sid — 19,532 listdir calls)
+#              cpu 438 ms against the 300 ms bar                        (§ 11 #7: the slug-miss
+#              full walk was paid per sid — 19,532 listdir calls). RE-PROVED against pristine
+#              AFTER this row was made load-invariant, at load/core 6.5, where the fixed subject
+#              reads 164 ms: a 2.7x effect the box cannot manufacture. The original proof was a
+#              WALL number (359 ms) and it was the weaker one — see the row's own comment for why
+#              a wall assertion on this box reddened trunk at load 84 for a 141 ms census.
 #   not ok 22  20 TEAMMATE is decided by the SSOT predicate
 #              `[ "$(jrow 07e30aeb teammate)" = False ]' failed         (§ 11 #10: the raw
 #              substring answers TRUE to `"agentName":null`. NOTE the red is on the row's SECOND
