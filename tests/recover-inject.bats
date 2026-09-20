@@ -43,16 +43,31 @@ prompt_and_spawn() {
   } > "$TP"
 }
 
-add_api_error() { # $1=uuid [$2=text]
+add_api_error() { # $1=uuid [$2=text] [$3=error field] [$4=apiErrorStatus]
   # The default text is assigned separately, NOT as a ${2:-...} default: an
   # apostrophe inside a ${var:-word} expansion within double quotes opens a quote
   # as far as bash is concerned, and the file stops parsing. Inside plain double
   # quotes it is just a character.
   local txt="${2:-}"
   [ -n "$txt" ] || txt="API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)"
+  # THE ENVELOPE IS PART OF THE RECORD CLASS, and this helper used to hardcode `server_error` for
+  # BOTH classes it serves — so a QUOTA fixture and a NETWORK-DEATH fixture were byte-identical
+  # except for their prose. That collapse was invisible while the predicate read only the TEXT; W4
+  # made the structured `error` field authoritative (lr_predicate T1) and the quota case started
+  # failing, correctly: a record carrying `server_error` is not a quota record.
+  # MEASURED 2026-09-20 across 2,612 transcripts on this box: 103 of 103 api-error records whose
+  # text carries a cap sentence have error=`rate_limit` and apiErrorStatus=429. ZERO carry a
+  # generic error field. So the shape below is the real one, and the old fixture described a
+  # record that does not occur. docs/lessons/fixture-identifier-shape-collapses-two-spaces.md.
+  local err="${3:-server_error}" st="${4:-}"
   {
-    printf '{"type":"assistant","timestamp":"2026-09-09T15:12:15.000Z","uuid":"%s","error":"server_error","isApiErrorMessage":true,"message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"%s"}]},"version":"2.1.260"}\n' \
-      "$1" "$txt"
+    if [ -n "$st" ]; then
+      printf '{"type":"assistant","timestamp":"2026-09-09T15:12:15.000Z","uuid":"%s","error":"%s","apiErrorStatus":%s,"isApiErrorMessage":true,"message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"%s"}]},"version":"2.1.260"}\n' \
+        "$1" "$err" "$st" "$txt"
+    else
+      printf '{"type":"assistant","timestamp":"2026-09-09T15:12:15.000Z","uuid":"%s","error":"%s","isApiErrorMessage":true,"message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"%s"}]},"version":"2.1.260"}\n' \
+        "$1" "$err" "$txt"
+    fi
     printf '{"type":"system","subtype":"turn_duration","durationMs":5601349,"timestamp":"2026-09-09T15:12:16.000Z"}\n'
   } >> "$TP"
 }
@@ -156,7 +171,7 @@ for v in ("PENDING","UNSETTLED-INFLIGHT","RUNNING"):
 
 @test "W2-B c3: a QUOTA api-error says the limit mode may apply — the two classes are not collapsed" {
   prompt_and_spawn
-  add_api_error "err-uuid-q" "You've hit your session limit · resets 7:50pm (America/Los_Angeles)"
+  add_api_error "err-uuid-q" "You've hit your session limit · resets 7:50pm (America/Los_Angeles)" rate_limit 429
   run fire
   echo "$output" | python3 -c '
 import json,sys
