@@ -251,3 +251,34 @@ the three worth building, which are RC-4, RC-8→RC-2 and RC-2 above, each with 
 - 2026-09-19 11:27 — operator screenshot of team `session-d02d8feb` captured as the live specimen (§2.1); operator instruction recorded: *"ensure we don't overfit break something that isn't broken either if there isn't a problem identified"*.
 - 2026-09-19 ~12:40 — G's "2.1.260 delays closes by 120 min" headline refuted by J and by a 12-sample re-measure; G retracted (§ RETRACTION): the box's zone changed PDT→CDT on 2026-09-06. Incident table's "closer closed 0" corrected (join on member name).
 - 2026-09-19 — register written; plan at `docs/plans/SUBAGENT_LIFECYCLE_ROOT_CAUSE.md`.
+
+- 2026-09-19 (W5 probes, landed `dd070aaa1`) — **RC-10 is ANSWERED and RC-11's open question is
+  closed; both probes ran and neither licensed a fleet-side change.**
+  - **P1 (RC-10): survivors 0 over 2 runs**, 4/4 idle notifications both runs, at 0.0–1.6% CPU idle
+    and load 64→133. The vendor's `cleanupSessionTeams` race is **sufficient**, and a clean sweep on
+    a saturated box is the *strong* direction of the asymmetry, not the weak one. **No fleet-side
+    SessionEnd close is licensed and none was written.** Unrun arm, named in the verdict: exit
+    option 2 *"Move to background and exit"*, a different path that may leave members alive.
+  - 🚨 **The finding P1 produced on the way is bigger than P1's own verdict.** A lead with LIVE
+    teammates **cannot exit unattended**: `/exit` raises a confirmation modal (*"Background work is
+    running… 1. Exit and stop tasks / 2. Move to background and exit / 3. Stay"*), so
+    `cleanupSessionTeams` sits **behind an interactive confirmation**. The tell was P1's first
+    reading — `survivor_windows=5`, **including the lead's own window**, i.e. the exit never
+    happened. Any automation ending a lead non-interactively (`claude -p`, cron, a script sending
+    `/exit`) leaves **both lead and members alive indefinitely**, logging nothing. This is the
+    lead-side twin of "a subagent cannot answer a permission prompt", and it means **"the vendor
+    cleans up on lead exit" is true only of ATTENDED exits on this build** — a qualifier D1 must
+    carry rather than skip.
+  - **P2 (RC-11): outcome (c), a clean exit.** An idle named teammate consumed a structured
+    `shutdown_request` and was gone — pane, pid and member row — inside 10 s; delivery proven from
+    the **member's** transcript at 442 ms, and its tail shows **no assistant turn**, so the runtime
+    terminated it without a model turn. The 2026-08-26 "idle 0/4" episode was therefore
+    **environment, not vendor**, and nothing is filed upstream. W5 also identified *why* that
+    episode looked like a refusal: a blocking settings `Stop` hook returns before the `TeammateIdle`
+    block, so a member whose Stop pass is blocked emits **no idle notification at all** — it reads
+    as "ignored the request" and is in fact "never went idle". **W1 (`3cdaa2552`) fixed that class;
+    the 0/4 predates it.** Unrun arm: the modal arm — the member used only `Read` and `SendMessage`,
+    so outcome (a) was never exercised.
+  - **For D1:** P1's term is satisfied, so RC-5b now turns entirely on W3's two-week number.
+  - Census: 0 stranded; all 13 windows the wave created were closed by the sessions themselves, with
+    no `it2 session close`, `kitty @ close-window`, `TaskStop` or `kill` against any Claude session.
