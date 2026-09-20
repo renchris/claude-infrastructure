@@ -459,6 +459,47 @@ def dedup_inodes(paths):
     return out
 
 
+_FULL_INDEX = None
+
+
+def full_index(roots):
+    """{sid: [path]} over every transcript in the fleet, built ONCE per process.
+
+    THE SLUG MISS IS O(project dirs), AND IT WAS BEING PAID PER SID. This file's own docstring
+    prices it — "27 copies in 5.4 ms, against 121 ms for a full index" — but the fallback ran
+    inside the per-sid loop, so a marker file at its 500-row cap walked every project dir under
+    every root 500 times. Measured at the cap (§ 11 #7's row): 19,532 `listdir` calls, 0.264 s of
+    a 0.433 s census, against a 0.30 s budget. Hoisted, the same census pays the walk once.
+
+    NOT a cache of anything RENDERED — this is enumeration, the same class as the one `ps` table,
+    and it is rebuilt by every process. The invariant in the header is about derived STATE
+    (alive, pane owner, moved); a list of paths on disk is an input, not a verdict.
+    """
+    global _FULL_INDEX
+    if _FULL_INDEX is None:
+        idx = {}
+        for root in roots:
+            pdir = os.path.join(root, "projects")
+            for proj in listdir(pdir):
+                base = os.path.join(pdir, proj)
+                for name in listdir(base):
+                    if ".jsonl" in name:
+                        idx.setdefault(name.split(".", 1)[0], []).append(
+                            os.path.join(base, name))
+        _FULL_INDEX = idx
+    return _FULL_INDEX
+
+
+def _index_prefix(roots, sid):
+    """The old fallback matched on `startswith`, so a truncated sid still resolved. Preserved as
+    an in-memory scan over the index's keys: a few thousand string compares, and no syscalls."""
+    out = []
+    for stem, paths in full_index(roots).items():
+        if stem.startswith(sid):
+            out.extend(paths)
+    return out
+
+
 def find_copies(roots, sid, cwd):
     """Every copy of one session's transcript. 27 copies in 5.4 ms, against 121 ms for a full index."""
     hits, slug = [], slug_of(cwd)
@@ -470,14 +511,7 @@ def find_copies(roots, sid, cwd):
                     hits.append(os.path.join(base, name))
     if hits:
         return dedup_inodes(hits)
-    for root in roots:                    # slug miss only: the cwd moved or was never recorded
-        pdir = os.path.join(root, "projects")
-        for proj in listdir(pdir):
-            base = os.path.join(pdir, proj)
-            for name in listdir(base):
-                if name.startswith(sid) and ".jsonl" in name:
-                    hits.append(os.path.join(base, name))
-    return dedup_inodes(hits)
+    return dedup_inodes(full_index(roots).get(sid) or _index_prefix(roots, sid))
 
 
 def scan_copy(path):
