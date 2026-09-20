@@ -624,3 +624,36 @@ ma_row() { grep -F "\"reason\":\"$1\"" "$CONTINUE_IDL" 2>/dev/null | tail -1; }
   [[ "$output" == *"sid=unrecorded"* ]] || { echo "$output"; false; }
   [[ "$output" != *"sid=?"* ]] || { echo "the ? is back: $output"; false; }
 }
+
+# ── W3i ROUND 4 — THE FLAG FAILED OPEN ON AN ABSENT CALLER IDENTITY ──────────────────────────────
+# D6 removed a refusal keyed on evidence the ARM need not have written. The same shape survived on
+# the other side of the call: the guard additionally required `[ -n "$CLAUDE_CODE_SESSION_ID" ]`, so
+# a caller that PASSED `--if-mine` and carried no identity skipped the guard entirely and cleared a
+# stranger's chain — the incident this flag closes, re-opened through a MISSING identity rather than
+# a foreign one. `--if-mine` asks one question, "did I arm this?", and a caller with no sid has
+# already answered it: no. Unknown ownership is not consent, on either side.
+
+@test "clear --if-mine: a caller that recorded NO sid is refused — it cannot be the armer" {
+  arm "the owner's step" sidA
+  run bash -c "cd '$CWD' && env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_SESSION_ID bash '$HOOK' clear --if-mine"
+  [ "$status" -eq 0 ] || { echo "a refusal is not an error: rc=$status $output"; false; }
+  [[ "$output" == refused\ * ]] || { echo "an anonymous CALLER cleared sidA's chain: $output"; false; }
+  # and it must say WHICH side is unidentified — "not by you ()" names nothing, and this refusal is
+  # read by a human deciding whether their own park was just taken away.
+  [[ "$output" == *"a caller that recorded no sid"* ]] || { echo "the refusal does not name the caller's missing identity: $output"; false; }
+  # the message is not the outcome — the chain must still be armed (claimed ≠ checked)
+  run sc status
+  [[ "$output" == *"the owner's step"* ]] || { echo "SIDA'S CHAIN WAS DISARMED: $output"; false; }
+}
+
+@test "clear --if-mine: neither side identified is still a refusal, not a match on two empty strings" {
+  # The arm a bare `[ "$_sc_owner" != "$_sc_cur" ]` cannot make: with the arm anonymous AND the
+  # caller anonymous both sides are "", the inequality is FALSE, and the clear proceeds on a
+  # coincidence of absence. Two unknowns are not a proof of identity.
+  arm_anon "the operator's parked step"
+  run bash -c "cd '$CWD' && env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_SESSION_ID bash '$HOOK' clear --if-mine"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == refused\ * ]] || { echo "two empty sids compared EQUAL and cleared: $output"; false; }
+  run sc status
+  [[ "$output" == *"the operator's parked step"* ]] || { echo "THE OPERATOR'S PARK WAS DISARMED: $output"; false; }
+}
