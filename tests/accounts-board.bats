@@ -222,35 +222,52 @@ plant_witness() {
 @test "14 the hook is fast enough to be nowhere near its 5s timeout" {
   mk_board
   local t0 t1
-  # THE BUDGET IS CALIBRATED TO THE BAND IT IS MEASURED IN (2026-09-20). A flat 1s was a fact
-  # about an idle foreground box, and this suite does not run on one: cc-bats wraps every run in
-  # `taskpolicy -c background` (PRI 4), and on a loaded machine that band is 10x slower. Measured
-  # at load ~70, the bracket's OWN instrument — two `python3` forks with no subject between them —
-  # cost 0.598s of the 1s, so the test failed on its own clock rather than on the hook. It was red
-  # on trunk for every lander whose diff merely reaches this suite, and A/B'd identical at
-  # `origin/main`, at `1dbb2d1a7`, and on the branch that found it.
+  # A WALL-CLOCK BUDGET IS ONLY A VERDICT WHERE ITS OWN INSTRUMENT IS QUIET (2026-09-20).
   #
-  # So measure the instrument in the SAME band and scale by it. On an idle box the control is
-  # ~50ms and the budget stays the original 1s, unchanged in strictness; under a loaded background
-  # band it grows with the thing making it slow. The defect this defends is a 5.33s inline
-  # `claude-accounts` sweep, which is ~100x the control and clears any of these ceilings — and it
-  # is ALSO caught structurally, without a clock, by test 13 (the hook forks no claude-accounts).
-  # That is why scaling here is safe: this test is the belt, 13 is the braces.
-  local c0 c1 ctl
-  c0="$(python3 -c 'import time;print(time.time())')"
-  c1="$(python3 -c 'import time;print(time.time())')"
-  ctl="$(python3 -c "import sys;print(float(sys.argv[2])-float(sys.argv[1]))" "$c0" "$c1")"
+  # First this test asserted a flat 1s. Then it asserted `max(1.0, 8 * control)`, on the theory
+  # that the band could be calibrated away. Both are wrong, and the second is wrong in the more
+  # instructive way: the multiplier was fitted to ONE sample and the next run refuted it
+  # (elapsed 4.827s · control 0.447s · budget 3.578s).
+  #
+  # THE MEASUREMENT THAT SETTLES IT. cc-bats wraps every run in `taskpolicy -c background`
+  # (PRI 4). Sampled three times each in that band at load ~71:
+  #     hook        4.10s · 12.78s · 39.01s
+  #     2x jq       2.96s · 12.69s · 35.18s      (the hook's own fork shape)
+  #     2x python3 45.22s · 64.74s · 121.56s     (the control the k=8 version used)
+  # The spread is 10-40x BETWEEN CONSECUTIVE RUNS, in the subject and in every candidate control
+  # alike. There is no multiplier that separates "the hook got slow" from "the scheduler starved
+  # a background process", because at this load the second term is an order of magnitude larger
+  # than the first. A fitted constant here is not a loose bound, it is a coin flip with a number
+  # written on it.
+  #
+  # So the test measures its own instrument first and only renders a verdict when that instrument
+  # is quiet enough for the verdict to mean something. On an idle box the control is ~60ms and the
+  # ORIGINAL flat 1s applies, undiluted — strictness is restored, not relaxed. In a starved band it
+  # SKIPS, naming the control that disqualified it, rather than convicting whoever landed next.
+  # The bar this defends — a 5.33s inline `claude-accounts` sweep — is also caught structurally and
+  # without any clock by test 13, which is why abstaining here loses no coverage.
+  local ctl_max=0 c0 c1 one
+  for _ in 1 2 3; do
+    c0="$(python3 -c 'import time;print(time.time())')"
+    jq -n 1 >/dev/null 2>&1; jq -n 1 >/dev/null 2>&1
+    c1="$(python3 -c 'import time;print(time.time())')"
+    one="$(python3 -c "import sys;print('%.4f' % (float(sys.argv[2])-float(sys.argv[1])))" "$c0" "$c1")"
+    ctl_max="$(python3 -c "import sys;print('%.4f' % max(float(sys.argv[1]),float(sys.argv[2])))" "$ctl_max" "$one")"
+  done
+  # A quarter of the budget. Above that the instrument's own noise is a material share of the
+  # thing being measured, and the answer would be about the scheduler, not about the hook.
+  if python3 -c "import sys;sys.exit(0 if float(sys.argv[1]) > 0.25 else 1)" "$ctl_max"; then
+    skip "instrument is not quiet enough to time anything — a 2x-jq control peaked at ${ctl_max}s against a 1.000s budget (background QoS band under load); test 13 carries the structural bar"
+  fi
   t0="$(python3 -c 'import time;print(time.time())')"
   emit startup
   t1="$(python3 -c 'import time;print(time.time())')"
   run python3 -c "
 import sys
-t0,t1,ctl = float(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3])
-budget = max(1.0, 8.0 * ctl)
-el = t1 - t0
-print('elapsed %.3fs · control %.3fs · budget %.3fs' % (el, ctl, budget))
-sys.exit(0 if el < budget else 1)" "$t0" "$t1" "$ctl"
-  [ "$status" -eq 0 ] || { echo "hook blew its band-scaled budget ($output) — check it is not calling claude-accounts"; false; }
+el = float(sys.argv[2]) - float(sys.argv[1])
+print('elapsed %.3fs - control peak %ss - budget 1.000s' % (el, sys.argv[3]))
+sys.exit(0 if el < 1.0 else 1)" "$t0" "$t1" "$ctl_max"
+  [ "$status" -eq 0 ] || { echo "hook took >1s with a quiet instrument ($output) — check it is not calling claude-accounts"; false; }
 }
 
 # ── the narrow renderer ───────────────────────────────────────────────────────────────────────
