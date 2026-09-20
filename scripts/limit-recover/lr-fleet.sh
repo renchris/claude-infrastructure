@@ -286,6 +286,98 @@ lf_dedup_mirror() { awk -F'\t' '
     if (!(sid in seen)) { ord[++k]=sid; seen[sid]=$0; sacct[sid]=acct }
     else if (sacct[sid]==".claude" && acct!=".claude") { seen[sid]=$0; sacct[sid]=acct } }
   END { for (i=1;i<=k;i++) print seen[ord[i]] }' ; }
+
+# ── THE CENSUS, DELEGATED TO ONE PROCESS (LIMIT_DETECT_100P § 3 W3) ──────────────────────────────
+# `bin/cc-limited` answers the same question from the stores that already hold it, so the 35.5 s
+# walk over 2,591 transcripts becomes one read. `lf_locate` is NOT retired (§ 11 #9, 88%): it stays
+# permanently as `--slow-scan`, which is `--deep`'s only implementation for the no-transcript
+# class, and the suite diffs the two paths on every fixture. An empty diff is what earns the
+# delegation; this function exists to make that diff possible, not to assert it.
+#
+# `--all`, NEVER the default window. cc-limited defaults to `--since 24h`; `lf_locate` has no
+# window at all. A session that capped 30 hours ago with a live pane is still recoverable and
+# still in the slow scan, so anything narrower drops rows the consumer is here to act on.
+lf_census() { # → the 11-field TSV on stdout; rc 0 ok · 5 instrument unreadable (stdout EMPTY) · 6 degraded
+  local _cl _rows _rc _err
+  _cl="${CC_LIMITED:-$LR/../../bin/cc-limited}"
+  if [ "${LF_SLOW_SCAN:-0}" = 1 ] || [ ! -x "$_cl" ]; then
+    [ "${LF_SLOW_SCAN:-0}" = 1 ] \
+      || echo "lr-fleet: census — no executable cc-limited at $_cl; falling back to the slow scan (lf_locate)" >&2
+    lf_locate | lf_dedup_mirror
+    return 0
+  fi
+  _err="$(mktemp "${TMPDIR:-/tmp}/lf-census.XXXXXX")"
+  # CAPTURED, not streamed: rc 5 means the instrument could not look, and its contract is EMPTY
+  # stdout. Streaming would let a stub — or a future partial write — put bytes on stdout that a
+  # caller then stores as a census, and an empty-or-partial census.tsv reads as a clean fleet.
+  _rows="$("$_cl" --all --tsv 2>"$_err")"; _rc=$?
+  [ -s "$_err" ] && sed 's/^/lr-fleet: /' "$_err" >&2
+  rm -f "$_err"
+  case "$_rc" in
+    0) : ;;
+    6) echo "lr-fleet: census DEGRADED (cc-limited rc 6) — rows below are incomplete; see the stderr above" >&2 ;;
+    *) # 5 by contract, and any code --all --tsv cannot legally return is treated the same way:
+       # refusing is the only answer that is not indistinguishable from a healthy empty fleet.
+       echo "lr-fleet: census INSTRUMENT UNREADABLE (cc-limited rc $_rc) — refusing to report an empty fleet" >&2
+       return 5 ;;
+  esac
+  [ -n "$_rows" ] && printf '%s\n' "$_rows" | lf_census_fill
+  return "$_rc"
+}
+# TWO COLUMNS ARE FILLED HERE, and neither is cosmetic. Measured 2026-09-20 against one fixture
+# carrying a marker, a live registry row and a transcript: `render_tsv` (bin/cc-limited:901-912)
+# emits `-` in field 7 (TIER) because no tier exists anywhere in its model, and `pane_now` in
+# field 5 (PID) — the census printed pane `616` where the slow scan printed live pid `42621`.
+# TIER IS LOAD-BEARING: `lf_one` splits it into `--model`/`--effort` and hands it to
+# `lf_pick_target`, so consuming a `-` would silently drop the model and effort pin on every
+# transplant this driver performs. The fill is per ROW — a census returns a handful — never per
+# TRANSCRIPT, so the walk the delegation removes does not come back.
+# It also normalises EMPTY to `-`: the two producers spell an absent pane/pid/cwd differently, and
+# for a TEAMMATE the slow scan zeroes all four columns (a teammate is lead-owned; its pane is not
+# this driver's to name). Reported upstream for W2a to absorb; this stays until it does.
+lf_census_fill() { # stdin: census TSV → the same rows, fields 4/5/6/7 in lf_locate's own spelling
+  local sid cfg acct pane pid cwd tier disp kind kinds age _p _tx _k _ks
+  # EMPTY FIELDS ARE FILLED IN awk, BEFORE any `read` SEES THEM — this repo's TSV field-collapse
+  # convention (docs/research/TSV_FIELD_COLLAPSE_2026-07-25.md, chokepoint scripts/tsv-pad-lint.sh,
+  # locked by tests/tsv-field-collapse.bats). That convention pads AT THE EMITTER, because "the
+  # read side cannot be repaired"; here the emitter is bin/cc-limited, which this consumer does
+  # not own, so the pad happens at the only place left. TAB is IFS *whitespace*, so
+  # `IFS=$'\t' read` collapses a RUN of tabs into one separator and drops leading/trailing
+  # empties. The census emits empty panes and pids where the
+  # slow scan emits `-`, so a NO-PANE row arrived two columns short and every field shifted left —
+  # measured, the cwd rendered in the PANE column and the disposition fell off the end. `awk
+  # -F'\t'` is the only reader in this file that can see an empty field at all. (This is the same
+  # trap the `--json` width gate at the locate site is commented against, from the other side.)
+  while IFS=$'\t' read -r sid cfg acct pane pid cwd tier disp kind kinds age; do
+    [ -n "$sid" ] || continue
+    if [ "$disp" = TEAMMATE ]; then pane="-"; pid="-"; cwd="-"; tier="-"
+    else
+      [ -n "$tier" ] && [ "$tier" != "-" ] \
+        || tier="$(lr_tier_from_transcript "$cfg" "$sid" 2>/dev/null | tr ' ' '/' || true)"
+      # KINDS IS THE THIRD MISSING FIELD, and it is D7's whole point. The census reads ONE marker
+      # row — the last death — so it can only ever report one class, while `lf_kinds_of` reports
+      # EVERY class in the tail joined by '+'. A session that hit a cap and then lost the network
+      # renders `limit+network` in the slow scan and a bare `network` here, which is exactly the
+      # collapse D7 added the column to make visible. Backfilled only when a transcript is
+      # findable: where none is, the census's single class is the honest answer and the slow scan
+      # has no row to disagree with (it enumerates transcripts).
+      if [ -z "$kinds" ] || [ "$kinds" = "-" ] || [ "$kinds" = "$kind" ]; then
+        for _tx in "$cfg"/projects/*/"$sid".jsonl; do
+          [ -f "$_tx" ] || continue
+          IFS=$'\t' read -r _k _ks <<<"$(lf_kinds_of "$(tail -c 20000 "$_tx" 2>/dev/null)")"
+          [ -n "$_ks" ] && { kind="$_k"; kinds="$_ks"; }
+          break
+        done
+      fi
+      _p="$(lr_registry_live_rows "$sid" 2>/dev/null | head -1 | cut -f2 || true)"
+      [ -n "$_p" ] || _p="$(lr_resume_procs "$sid" 2>/dev/null | head -1 || true)"
+      pid="${_p:--}"
+      [ -n "$pane" ] || pane="-"; [ -n "$cwd" ] || cwd="-"; [ -n "$tier" ] || tier="-"
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$sid" "$cfg" "$acct" "$pane" "$pid" "$cwd" "$tier" "$disp" "$kind" "$kinds" "$age"
+  done < <(awk -F'\t' -v OFS='\t' 'NF { for (i = 1; i <= 11; i++) if ($i == "") $i = "-"; print }')
+}
 lf_print_census() { # stdin: TSV rows
   local sid cfg acct pane pid cwd tier disp n=0 kind kinds err_age agec
   printf '%-9s %-6s %-6s %-7s %-22s %-17s %-14s %-7s %s\n' \
@@ -544,7 +636,17 @@ lf_report() { # $1=run dir
 
 case "$MODE" in
   locate)
-    rows="$(lf_locate | lf_dedup_mirror)"
+    # `--json` is the machine surface, and the census's own `--json` is RICHER than the 11-field
+    # projection this driver could re-emit (state, why, cap, resets_at, claims, copies, faults).
+    # exec, not a pipe: there is nothing for this process to add, and a consumer reading the
+    # census's schema directly cannot be desynchronised from it by a re-render here.
+    if [ "$JSON" = 1 ] && [ "${LF_SLOW_SCAN:-0}" != 1 ] && [ -x "${CC_LIMITED:-$LR/../../bin/cc-limited}" ]; then
+      exec "${CC_LIMITED:-$LR/../../bin/cc-limited}" --all --json
+    fi
+    # rc 6 IS NOT A REFUSAL. The contract says rows ARE printed at 6 — it means "this census is
+    # incomplete", not "this census is absent" — so discarding them here would be the opposite
+    # error to the one rc 5 guards, and just as silent. Only a refusal aborts.
+    rows="$(lf_census)" || { rc=$?; [ "$rc" = 6 ] || exit "$rc"; }
     if [ "$JSON" = 1 ]; then
       printf '%s\n' "$rows" | /usr/bin/python3 -c '
 import sys,json
@@ -565,7 +667,12 @@ print(json.dumps(out,indent=1))'
     exit 0 ;;
   recover)
     RUN="$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$FLEET_DIR/$RUN"; : > "$FLEET_DIR/$RUN/results.tsv"
-    rows="$(lf_locate | lf_dedup_mirror)"; printf '%s\n' "$rows" > "$FLEET_DIR/$RUN/census.tsv"
+    # THE CENSUS IS READ BEFORE census.tsv EXISTS, and that order is the whole point. An unreadable
+    # instrument (rc 5) must leave NO file: an EMPTY census.tsv is indistinguishable from a clean
+    # fleet to every later reader of this run dir, and this driver's own `--report` is one of them.
+    rows="$(lf_census)" || { rc=$?
+      [ "$rc" = 6 ] || { echo "lr-fleet: --recover REFUSED — the census could not be taken (rc $rc); $FLEET_DIR/$RUN/census.tsv left ABSENT rather than empty" >&2; exit "$rc"; }; }
+    printf '%s\n' "$rows" > "$FLEET_DIR/$RUN/census.tsv"
     printf '%s\n' "$rows" | lf_print_census >&2
     n=0; worst=0
     while IFS=$'\t' read -r sid cfg acct pane pid cwd tier disp kind kinds err_age; do
@@ -683,7 +790,23 @@ EOF
       # No store holds the transcript under that name. The census reads the same stores, so this is
       # a near-certain miss too — but it also reads `.handed-off` copies and the mirror dedup, so it
       # is run rather than guessed at, and its miss is the one that refuses.
-      row="$(lf_locate | lf_dedup_mirror | awk -F'\t' -v s="$SID" '$1 == s { print; exit }')"
+      # THE CENSUS IS ASKED ABOUT ONE SID FIRST. `--sid` is a prefix query answered from the
+      # marker/parked stores without a transcript walk, and rc 4 is its "no match" — the ONLY code
+      # that earns the full census below. rc 5/6 are the instrument's, and are propagated verbatim.
+      _cl="${CC_LIMITED:-$LR/../../bin/cc-limited}"; row=""; _q=4
+      if [ "${LF_SLOW_SCAN:-0}" != 1 ] && [ -x "$_cl" ]; then
+        row="$("$_cl" --all --sid "$SID" --tsv 2>/dev/null)"; _q=$?
+        case "$_q" in
+          3) echo "lr-fleet: --one $SID — the census calls this prefix AMBIGUOUS; pass the full uuid" >&2; exit 2 ;;
+          5|6) echo "lr-fleet: --one $SID — census instrument rc $_q; not falling through to the slow scan over a broken instrument" >&2; exit "$_q" ;;
+        esac
+        [ "$_q" = 4 ] && row=""
+        [ -z "$row" ] || row="$(printf '%s\n' "$row" | lf_census_fill | head -1)"
+      fi
+      # rc 4 (no match) is the ONE code that earns the full census: `--sid` is answered from the
+      # marker and parked stores, and the slow scan additionally reads `.handed-off` copies and the
+      # mirror dedupe, so its miss — not the query's — is the one that refuses.
+      [ -n "$row" ] || row="$(lf_census | awk -F'\t' -v s="$SID" '$1 == s { print; exit }')"
       [ -n "$row" ] || { echo "lr-fleet: --one $SID — no transcript in any store" >&2; exit 2; }
       IFS=$'\t' read -r _ cfg acct pane pid cwd tier disp kind kinds err_age <<<"$row"
       [ -n "$SOURCE_PANE" ] && pane="$SOURCE_PANE"
@@ -729,6 +852,11 @@ EOF
     exit "$rc" ;;
   enqueue)
     mkdir -p "$STATE/requests"
+    # READ BEFORE THE LOOP. `done <<EOF\n$(lf_census)\nEOF` discards the census's exit status
+    # entirely, so an unreadable instrument would drain zero rows and print "nothing to enqueue" —
+    # the healthy answer, from a census that never happened.
+    _eq_rows="$(lf_census)" || { rc=$?
+      [ "$rc" = 6 ] || { echo "lr-fleet: --enqueue REFUSED — the census could not be taken (rc $rc); nothing was enqueued" >&2; exit "$rc"; }; }
     n=0
     while IFS=$'\t' read -r sid cfg acct pane pid cwd tier disp kind kinds err_age; do
       [ -n "$sid" ] || continue
@@ -743,11 +871,14 @@ EOF
         '{sid:$sid, target:$target, source_pane:$pane, requested_by:$by, ts:$ts}' > "$STATE/requests/$sid.json"
       echo "lr-fleet: enqueued ${sid:0:8} (pane ${pane}, $acct → $TARGET) for the reset poller: $STATE/requests/$sid.json"; n=$((n+1))
     done <<EOF
-$(lf_locate | lf_dedup_mirror)
+$_eq_rows
 EOF
     if [ "$n" -gt 0 ]; then
       echo "lr-fleet: $n request(s) written. The poller drains them on its next tick (≤10 min); to run it now:"
-      echo "  launchctl kickstart -k gui/$(id -u)/com.reso.lr-reset-poller"
+      # NO `-k`: kickstart -k KILLS a running poller first, and a tick that is mid-transplant is
+      # exactly the one a caller has just enqueued work for. Plain kickstart starts it if idle and
+      # is a no-op if it is already draining — which is the behaviour this line is asking for.
+      echo "  launchctl kickstart gui/$(id -u)/com.reso.lr-reset-poller"
       echo "lr-fleet: results land in $STATE/results/<sid>.json"
     else echo "lr-fleet: nothing to enqueue"; fi
     exit 0 ;;

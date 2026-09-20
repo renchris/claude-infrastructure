@@ -59,8 +59,13 @@ _seed_parked() {
   _lstart_of "$HOLDER_PID" > "$LR_POLLER_LOCK_DIR/lstart"
   run bash "$POLLER" --dry-run
   [ "$status" -eq 0 ]
-  # the discriminator: an UNLOCKED tick logs CONSOLIDATED/LISTED for the seeded session
-  [ ! -s "$LOG" ]
+  # the discriminator: an UNLOCKED tick logs CONSOLIDATED/LISTED for the seeded session.
+  # A SKIP NOW SAYS SO (LIMIT_DETECT_100P W3), so "did no work" can no longer be spelled as an
+  # EMPTY log — and it never should have been: an empty log is also what a dead LaunchAgent
+  # leaves, and the two want opposite responses. Assert the skip line and the ABSENCE of work.
+  grep -q "TICK-SKIP held by pid $HOLDER_PID" "$LOG" || { cat "$LOG"; false; }
+  ! grep -q "TICK start" "$LOG" || { cat "$LOG"; false; }
+  ! grep -qE "CONSOLIDATED|LISTED" "$LOG" || { cat "$LOG"; false; }
   [ -f "$LR_POLLER_LOCK_DIR/pid" ]                  # holder's lock left intact
   [ "$(cat "$LR_POLLER_LOCK_DIR/pid")" = "$HOLDER_PID" ]
 }

@@ -126,6 +126,9 @@ AUDIT="$LR/lr-audit.py"
 LRPRED="$LR/lr-predicate.sh"
 STATE="$HOME/.reso/limit-recover"
 PARKED="$STATE/parked"; RESUMED="$STATE/resumed"; LOG="$STATE/poller.log"
+# DEFINED HERE, not beside its other callers 160 lines below: the tick lock is the FIRST thing that
+# needs to say something, and a `log` that is not yet a function there is a silent skip.
+log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
 CLAIMS="$STATE/fire-claims"
 # The audit's once-per-fire damping marker dir. Declared HERE rather than beside the audit block
 # below because claim_sid() re-arms it (see there), and a fire-lifecycle helper must not depend on
@@ -187,6 +190,11 @@ if ! mkdir "$LOCKD" 2>/dev/null; then
   _hp=$(cat "$LOCKD/pid" 2>/dev/null || echo "")
   _hl=$(cat "$LOCKD/lstart" 2>/dev/null || echo "")
   if [[ "$_hp" =~ ^[0-9]+$ ]] && kill -0 "$_hp" 2>/dev/null && [[ "$(_lstart_of "$_hp")" == "$_hl" ]]; then
+    # A SKIP SAYS SO. This branch exited silently, so a poller.log with a gap in it could not be
+    # told from one whose ticks never fired at all — and those want opposite responses (a held
+    # lock is the guard WORKING; an absent tick is a dead LaunchAgent).
+    mkdir -p "$STATE" 2>/dev/null || true
+    log "TICK-SKIP held by pid $_hp"
     exit 0                                   # a genuine live tick holds it — skip this one
   fi
   rm -rf "$LOCKD" 2>/dev/null || true         # stale (dead or pid recycled) — steal it
@@ -194,6 +202,8 @@ if ! mkdir "$LOCKD" 2>/dev/null; then
 fi
 echo $$ > "$LOCKD/pid"; _lstart_of $$ > "$LOCKD/lstart"
 trap 'rm -rf "$LOCKD" 2>/dev/null || true' EXIT INT TERM
+mkdir -p "$STATE" 2>/dev/null || true
+log "TICK start"        # the denominator: without it no rate, gap or duty cycle is computable
 
 # ── FIRE CLAIM (closes the pgrep race) ─────────────────────────────────────────────────
 # The "already running" guard is `pgrep -f "resume <sid>"` — it looks for the claude CHILD.
@@ -293,11 +303,21 @@ MAX_PER_RUN=4                       # runaway guard (per TICK — see consolidat
 SELECT="${LR_SELECT_BIN:-$LR/lr-select.py}"
 MAX_PER_WT="${LR_POLLER_MAX_PER_WORKTREE:-1}"
 
-log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
 # shellcheck source=/dev/null
+# PRESENT IS NOT USABLE. The old loop broke on the first file that EXISTED, so a truncated or
+# half-written map — `gen-account-map.sh` wrote its output in place, so a crash mid-write left
+# exactly that — satisfied the ladder, shadowed the two good candidates below it, and left
+# `cc_acct_name_for_dir_basename` undefined. Every `acct_of_cfg` then failed under `set -u`-ish
+# conditions or returned empty, and `[[ -n "$acct" ]] || continue` silently skipped EVERY store:
+# a tick that detected nothing, parked nothing and logged nothing wrong. Require the FUNCTION.
 for _CC_AM in "${CC_ACCOUNT_MAP:-}" "$(dirname "$0")/../../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
-  [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && { source "$_CC_AM"; break; }
+  [ -n "$_CC_AM" ] && [ -f "$_CC_AM" ] && source "$_CC_AM" 2>/dev/null \
+    && declare -F cc_acct_name_for_dir_basename >/dev/null 2>&1 && break
 done
+if ! declare -F cc_acct_name_for_dir_basename >/dev/null 2>&1; then
+  log "FATAL account map unusable — no candidate defined cc_acct_name_for_dir_basename; refusing a tick that would skip every store in silence"
+  exit 1
+fi
 acct_of_cfg() { cc_acct_name_for_dir_basename "${1##*/}"; }
 
 # ── ENGAGEMENT AUDIT — did the sessions this daemon fired actually START? (DETECT-ONLY) ─────────
@@ -684,7 +704,127 @@ lrp_cap_of() { # <transcript> → the cap of the tail's LAST api-error record, e
   printf '%s' "$out" | jq -r 'if .limit then (.cap // "unknown") else "" end'
 }
 
-# ── 1. DETECT + LEDGER parked sessions ────────────────────────────────────────────────
+# ── 1. DETECT — ONE census per tick, then the transcript walk as backstop ──────────────
+# THE CENSUS IS ASKED ONCE, FOR ALL ACCOUNTS. Per-account calls were the obvious shape and are
+# the wrong one: the census memoizes `ps`, the registry and the marker read across every account
+# in a single process, so four calls pay that four times AND can disagree with each other — a
+# session that moved between two of them appears twice or not at all. One call, one instant.
+#
+# THE TRANSCRIPT WALK BELOW STAYS, for one release. It is the backstop while this path earns its
+# place: the census is marker- and parked-driven, so a session whose marker was GC'd (file-mtime
+# keyed) but whose transcript is still on disk is seen only by the walk. Both write the SAME
+# `$PARKED/<sid>.json` shape and both guard on `[[ ! -f ]]`, so whichever runs first wins and the
+# other is a no-op — they cannot double-park.
+CC_LIMITED_BIN="${CC_LIMITED:-$LR/../../bin/cc-limited}"
+if [[ -x "$CC_LIMITED_BIN" && "${LR_POLLER_NO_CENSUS:-0}" != 1 ]]; then
+  _cj=$(mktemp "${TMPDIR:-/tmp}/lrp-census.XXXXXX")
+  if "$CC_LIMITED_BIN" --all --json > "$_cj" 2>/dev/null; then
+    # `-` FOR EMPTY, from the emitter, because TAB is IFS *whitespace*: `IFS=$'\t' read` collapses
+    # a run of tabs and drops trailing empties, so a row with no cap and no reset would shift every
+    # column left of it and this loop would park the wrong session at the wrong account.
+    while IFS=$'\t' read -r sid state acct cap reset_iso reset_ep cwd cfg wait_ok; do
+      [[ -n "$sid" ]] || continue
+      for _f in cap reset_iso reset_ep cwd cfg; do
+        [[ "${!_f}" == "-" ]] && printf -v "$_f" '%s' ""
+      done
+      [[ "$reset_ep" == "0" ]] && reset_ep=""
+      case "$state" in
+        TEAMMATE)
+          if [[ ! -f "$STATE/teammate-skip/$sid" ]]; then
+            mkdir -p "$STATE/teammate-skip"; : > "$STATE/teammate-skip/$sid"
+            log "SKIP  $sid — teammate session (lead-owned recovery) [census]"
+          fi
+          continue ;;
+      esac
+      # NOT RECOVERABLE BY WAITING is a different fact from "not yet resettable", and only the
+      # census carries it. A Fable / monthly-spend cap has no reset to wait for, so parking one
+      # creates a record §2 can never discharge — it would sit in `parked/` forever, counted as
+      # pending recovery, and the operator would never be told why nothing happened. Say it once
+      # per tick instead and leave the record unwritten.
+      if [[ "$wait_ok" != "1" ]]; then
+        log "LIMITED-NOWAIT $sid ($acct, cap=${cap:-unknown}) — no reset to wait for; not parked${reset_iso:+, resets $reset_iso}"
+        continue
+      fi
+      case "$state" in
+        RECOVERABLE*|NO-PANE|PANE-REUSED|RESET-PASSED) : ;;
+        *) continue ;;                      # RE-ENGAGED, DUPLICATE, RESUMING, CWD-GONE, … : §2's or nobody's
+      esac
+      [[ -n "$reset_iso" && -n "$cwd" && -d "$cwd" ]] || continue
+      # the poller's own cap vocabulary — `kind` is what §2 and lr-select read
+      case "$cap" in
+        five_hour) kind=session ;; seven_day) kind=weekly ;;
+        model_scoped:*) kind=fable ;; *) kind="${cap:-session}" ;;
+      esac
+      if [[ -f "$RESUMED/$sid.json" ]]; then
+        prev=$(jq -r '.reset_at_utc // ""' "$RESUMED/$sid.json" 2>/dev/null || echo "")
+        if [[ -n "$prev" && ! "$reset_iso" > "$prev" ]]; then continue; fi
+        rm -f "$RESUMED/$sid.json"
+        log "REPARK $sid — new limit event (resets $reset_iso > handled ${prev:-unknown}) [census]"
+      fi
+      if [[ ! -f "$PARKED/$sid.json" ]]; then
+        printf '{"sid":"%s","acct":"%s","cfg":"%s","cwd":"%s","kind":"%s","reset_at_utc":"%s","parked_at":"%s"}\n' \
+          "$sid" "$acct" "$cfg" "$cwd" "$kind" "$reset_iso" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$PARKED/$sid.json"
+        log "PARKED $sid ($acct, $kind) resets $reset_iso  cwd=$cwd [census]"
+      fi
+      printf '%s\t%s\t%s\n' "$acct" "${cap:-unknown}" "${reset_ep:-0}" >> "$_cj.groups"
+    done < <(python3 - "$_cj" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+# The census carries `resets_at` as an EPOCH and the parked record's `reset_at_utc` is ISO-8601,
+# compared LEXICOGRAPHICALLY by the repark rule below. Render it here, once, in UTC: a shell-side
+# `date -r` would be the second spelling of one conversion and the two would drift.
+try:
+    rows = json.load(open(sys.argv[1])).get("rows") or []
+except Exception:
+    rows = []
+for r in rows:
+    state = "TEAMMATE" if r.get("teammate") else (r.get("state") or "")
+    ep = r.get("resets_at")
+    ep = int(ep) if isinstance(ep, (int, float)) and ep else 0
+    iso = datetime.fromtimestamp(ep, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if ep else ""
+    print("\t".join([(x or "-") for x in
+                     (str(r.get("sid") or ""), state, str(r.get("group") or ""),
+                      str(r.get("cap") or ""), iso, str(ep or ""),
+                      str(r.get("cwd") or ""), str(r.get("cfg") or ""))]
+                    + ["1" if r.get("recoverable_by_waiting") else "0"]))
+PY
+    )
+    # THE RE-SURFACE PAGE, damped on STATE and never on a log grep. One page per
+    # (account, cap, resetsAt, count): the same cap still holding an hour later is the same
+    # fingerprint and is suppressed until page-damp's TTL lets it re-assert (a condition that
+    # stops re-asserting is indistinguishable from a resolved one), while a NEW cap or a changed
+    # count is a new fingerprint and pages at once. A `grep poller.log` would have keyed on the
+    # log's own history, which is a record of what we SAID, not of what is TRUE.
+    if [[ -s "$_cj.groups" ]] && [[ -f "$LR/../../hooks/lib/page-damp.sh" ]]; then
+      # shellcheck source=/dev/null
+      . "$LR/../../hooks/lib/page-damp.sh" 2>/dev/null || true
+      if declare -F damp_should_send >/dev/null 2>&1; then
+        while IFS=$'\t' read -r g_acct g_cap g_ep g_n; do
+          [[ -n "$g_acct" ]] || continue
+          if CC_PAGE_DAMP_TTL_S="${CC_PAGE_DAMP_TTL_S:-1800}" \
+             damp_should_send "lr-limited" "$g_acct:$g_cap:$g_ep:$g_n"; then
+            log "PAGE  $g_n session(s) on $g_acct still held by $g_cap (resets $g_ep)"
+            lrp_bounded osascript -e "display notification \"$g_acct: $g_n session(s) held by $g_cap\" with title \"lr-reset-poller\"" >/dev/null 2>&1 || true
+          fi
+        done < <(sort "$_cj.groups" | uniq -c | awk '{ print $2 "\t" $3 "\t" $4 "\t" $1 }')
+      fi
+    fi
+  else
+    log "CENSUS-SKIP cc-limited exited non-zero — this tick runs on the transcript walk alone"
+  fi
+  rm -f "$_cj" "$_cj.groups"
+  # ── THE REAPER: a claim that produced nothing, NAMED ─────────────────────────────────
+  # A claim is this daemon's own promise that a recovery is in flight, and a claim whose process
+  # is gone blocks the next attempt at that sid for as long as it sits there. `--persist` writes
+  # the fault; the log line is what makes it visible without running the census by hand.
+  # `|| [ -n "$_fl" ]`: `read` returns non-zero on a final line with no trailing newline, so the
+  # plain form DROPS it — and a reaper reporting exactly one dead claim emits exactly that shape.
+  while IFS= read -r _fl || [ -n "$_fl" ]; do
+    case "$_fl" in *CLAIMED-NOT-LIVE*) log "CLAIMED-NOT-LIVE ${_fl#*CLAIMED-NOT-LIVE }" ;; esac
+  done < <("$CC_LIMITED_BIN" --reaper --persist 2>/dev/null || true)
+fi
+
+# ── 1a. DETECT (BACKSTOP) + LEDGER parked sessions — the transcript walk ───────────────
 for cfg in "$HOME"/.claude-next "$HOME"/.claude-secondary "$HOME"/.claude-tertiary "$HOME"/.claude-quaternary; do
   [[ -d "$cfg/projects" ]] || continue
   acct=$(acct_of_cfg "$cfg"); [[ -n "$acct" ]] || continue

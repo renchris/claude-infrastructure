@@ -114,6 +114,13 @@ N="$(jq '.accounts | length' "$ACCOUNTS_JSON")"
   echo '}'
   echo
   printf 'CC_ACCT_NAMES="%s"\n' "$(jq -r '[.accounts[].name] | join(" ")' "$ACCOUNTS_JSON")"
-} > "$OUT"
-chmod +x "$OUT"
+# ATOMIC. `> "$OUT"` truncates the live map the instant the redirect opens and only then starts
+# writing it, so any failure inside the block above — a jq error, a full disk, a kill — leaves a
+# TRUNCATED but PRESENT file on the path every consumer sources. lr-reset-poller's ladder used to
+# break on the first file that merely existed, so that half-map shadowed its own fallbacks and the
+# daemon skipped every account store in silence. Write beside it, then rename: a reader sees the
+# old map or the new one, never a partial.
+} > "$OUT.tmp"
+chmod +x "$OUT.tmp"
+mv -f "$OUT.tmp" "$OUT"
 echo "gen-account-map: wrote lib/account-map.generated.sh ($N accounts)" >&2

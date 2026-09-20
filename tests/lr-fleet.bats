@@ -44,6 +44,48 @@ SH
 case "$*" in *--rank*) printf 'next2 0.9\nnext3 0.8\nnext4 0.5\n' ;; esac
 SH
   chmod +x "$CC_ACCOUNTS_BIN"
+  # ── the census's own seams (LIMIT_DETECT_100P W3) ───────────────────────────────────────────
+  # THE SLOW SCAN STAYS THE DEFAULT IN THIS SUITE, deliberately. `lf_census` delegates to
+  # bin/cc-limited, whose `--json` is a RICHER schema than the 11-field list these cases assert on
+  # (`--locate --json` execs straight into it), so making the census the default here would be
+  # testing a different surface in 30 cases that were written about this one. The census path is
+  # entered explicitly, by `parity` and by the cases named for it.
+  export LF_SLOW_SCAN=1
+  export CC_LIMITED="$REPO/bin/cc-limited"
+  export CC_LIMITED_MARKER_DIR="$BATS_TEST_TMPDIR/markers"; mkdir -p "$CC_LIMITED_MARKER_DIR"
+  export CC_LIMITED_ROOTS="$SEC:$TER"
+  export CC_LIMITED_ACCOUNTS="$BATS_TEST_TMPDIR/accounts.json"
+  cat > "$CC_LIMITED_ACCOUNTS" <<JSON
+{"accounts":[{"name":"next2","config_dir":"$SEC","aliases":["secondary"]},
+             {"name":"next3","config_dir":"$TER","aliases":["tertiary"]}]}
+JSON
+}
+# The stop-failure marker row the census enumerates, DERIVED FROM THE TRANSCRIPT rather than
+# hand-written beside it. The two producers read different stores, so a fixture that states the
+# death twice can hand them different facts, and the parity diff would then be measuring the
+# fixture. Pane comes from the caller: it is the REGISTRY's fact, which the slow scan reads there
+# and the census reads here.
+mark() { # $1=store $2=sid [$3=pane]
+  mkdir -p "$CC_LIMITED_MARKER_DIR"
+  python3 "$REPO/tests/helpers/lr-mark.py" "$1/projects/$SLUG/$2.jsonl" "$2" "$1" "$CWD" "${3:-}" \
+    >> "$CC_LIMITED_MARKER_DIR/rate_limit__fixture.jsonl"
+}
+# ── THE BOTH-PATHS DIFF — what EARNS the delegation (§ 11 #9) ─────────────────────────────────
+# `lf_locate` is not retired; it stays permanently as `--slow-scan`, so the census is only allowed
+# to stand in for it while the two describe the same fleet. This diffs the RENDERED census, which
+# is lossless for every column (printf pads, it never truncates).
+# ERR-AGE IS EXCLUDED, AND THAT IS NOT A LOOPHOLE: it is a clock read taken by two processes at
+# two instants, so no implementation could make it byte-equal — and at display resolution the two
+# runs straddle a minute boundary about once in sixty, which would be a flake rather than a
+# finding. Every column that describes the SESSION — sid, account, pane, pid, tier, disposition,
+# kind(s), cwd — is compared byte for byte.
+parity() {
+  local slow census
+  slow="$(LF_SLOW_SCAN=1 bash "$FLEET" --locate 2>/dev/null | tr -s ' ' | awk '{ $8=""; print }')"
+  census="$(LF_SLOW_SCAN=0 bash "$FLEET" --locate 2>/dev/null | tr -s ' ' | awk '{ $8=""; print }')"
+  [ -n "$slow" ] || { echo "PARITY: the slow scan rendered nothing — the fixture never reached it"; return 1; }
+  diff <(printf '%s\n' "$slow") <(printf '%s\n' "$census") \
+    || { echo "PARITY BROKEN — slow scan (<) vs census (>)"; return 1; }
 }
 blocked_tx() { # $1=store $2=sid [$3=model $4=effort]
   local f="$1/projects/$SLUG/$2.jsonl"
@@ -54,7 +96,7 @@ blocked_tx() { # $1=store $2=sid [$3=model $4=effort]
 row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-secondary","cwd":"%s"}\n' "$1" "$2" "${3:-$$}" "$CWD" > "$CC_REGISTRY_DIR/$1.json"; }
 
 @test "locate: a limit-blocked session with a live registry pane is RECOVERABLE, with its pane and transcript tier" {
-  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"; mark "$SEC" "$SID" 616
   run bash "$FLEET" --locate
   [ "$status" -eq 0 ]
   # ACCT is the account NAME, not the config-dir basename: lr-fleet resolves it through the repo's
@@ -65,6 +107,7 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   [[ "$(printf '%s' "$output" | tr -s ' ')" == *"52e35019 next2 616"* ]] || { echo "$output"; false; }
   [[ "$output" == *"claude-fable-5-1/xhigh"* ]] || { echo "$output"; false; }
   [[ "$output" == *"RECOVERABLE"* ]] || { echo "$output"; false; }
+  parity
 }
 @test "locate: a session that took a real turn since its limit error is NOT blocked (the tail rule)" {
   blocked_tx "$SEC" "$SID"
@@ -75,12 +118,14 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   [[ "$output" == *"(no blocked session anywhere"* ]] || { echo "$output"; false; }
 }
 @test "locate: no live process holding it is NO-PANE; a teammate transcript is TEAMMATE" {
-  blocked_tx "$SEC" "$SID"
+  blocked_tx "$SEC" "$SID"; mark "$SEC" "$SID"
   tm="9b9b9b9b-0000-4000-8000-000000000002"; blocked_tx "$SEC" "$tm"
   sed -i '' '1s/{"type":"user",/{"type":"user","agentName":"w1",/' "$SEC/projects/$SLUG/$tm.jsonl"
+  mark "$SEC" "$tm"
   run bash "$FLEET" --locate
   [[ "$output" == *"52e35019"*"NO-PANE"* ]] || { echo "$output"; false; }
   [[ "$output" == *"9b9b9b9b"*"TEAMMATE"* ]] || { echo "$output"; false; }
+  parity
 }
 # REPOINTED BY THE W9a/W10 MERGE (LIMIT_RECOVER_100P § 10 W10). This test pinned ONE disposition
 # over a fixture that the HUSK state model splits in two, and the split is the whole point of W10:
@@ -109,9 +154,18 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   [[ "$output" == *"HUSK"* ]] || { echo "$output"; false; }
 }
 @test "locate: two live processes on one sid is DUPLICATE, never RECOVERABLE" {
-  blocked_tx "$SEC" "$SID"; row 616 "$SID"; row 647 "$SID"
+  # TWO PROCESSES, not two rows over one process — the distinction the case name makes and the
+  # fixture used to elide by letting both rows default to `$$`. One pid under two pane rows is the
+  # pane-keyed-overwrite artifact (§ 11 #2): ONE holder, and the census says so. The parity diff
+  # is what surfaced it, and `lr_holder_count` (lr-lib.sh:474) still counts ROWS there — reported.
+  /bin/sh -c 'sleep 30; :' --holder-a & local h1=$!
+  /bin/sh -c 'sleep 30; :' --holder-b & local h2=$!
+  blocked_tx "$SEC" "$SID"; row 616 "$SID" "$h1"; row 647 "$SID" "$h2"
+  mark "$SEC" "$SID" 616
   run bash "$FLEET" --locate
   [[ "$output" == *"DUPLICATE"* ]] || { echo "$output"; false; }
+  parity
+  kill "$h1" "$h2" 2>/dev/null || true
 }
 @test "locate: a resumed session's OWN pid is ONE holder — RECOVERABLE, never DUPLICATE" {
   # THE OVERLAP. A session resumed by the poller carries `--resume <sid>` in its own argv, so the
@@ -121,15 +175,17 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   # subtracts the overlap and so reported nothing to resolve. Measured 2026-09-19 on 09e64dcb:
   # one registry row (pane 111, pid 37018), one resume pid — 37018 — and the pane was unrecoverable.
   blocked_tx "$SEC" "$SID"
+  mark "$SEC" "$SID" 616
   # A process whose ARGV carries the marker, standing in for the resumed session itself. `; :`
   # defeats the shell's last-command exec optimisation, which would replace this argv with sleep's.
   /bin/sh -c 'sleep 30; :' --resume "$SID" &
   local holder=$!
   row 616 "$SID" "$holder"
   run bash "$FLEET" --locate
-  kill "$holder" 2>/dev/null || true
   [[ "$output" != *"DUPLICATE"* ]] || { echo "$output"; false; }
   [[ "$output" == *"RECOVERABLE"* ]] || { echo "$output"; false; }
+  parity                                  # BEFORE the kill: a dead holder is a different fixture
+  kill "$holder" 2>/dev/null || true
 }
 
 @test "duplicates: the two censuses agree — a single holder is a duplicate to NEITHER" {
@@ -209,7 +265,10 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   [ "$status" -eq 0 ]
   [ -f "$LR_STATE_DIR/requests/$SID.json" ]
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["source_pane"]=="616" and d["target"]=="next4", d' "$LR_STATE_DIR/requests/$SID.json"
-  [[ "$output" == *"launchctl kickstart -k gui/"* ]] || { echo "$output"; false; }
+  # NO `-k` (LIMIT_DETECT_100P W3). `kickstart -k` KILLS a running poller before restarting it,
+  # and the tick a caller has just enqueued work for is exactly the one that may be mid-transplant.
+  [[ "$output" == *"launchctl kickstart gui/"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"kickstart -k"* ]] || { echo "$output"; false; }
 }
 
 @test "duplicates: a sid held by two live registry panes is listed with both, and --mark writes the SUPERSEDED tombstone" {
@@ -263,11 +322,13 @@ mixed_tx() { # $1=store $2=sid
 
 @test "D7: a network-blocked session with a live pane is IDLE-AFTER-ERROR — the state, not an instruction to the operator" {
   net_tx "$SEC" "$SID"; row 616 "$SID"
+  mark "$SEC" "$SID" 616
   run bash "$FLEET" --locate
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   echo "$output" | grep -q 'IDLE-AFTER-ERROR' || { echo "$output"; false; }
   # The old name was a to-do addressed to a human; it must be gone from the display.
   if echo "$output" | grep -q 'RESUME-IN-PLACE'; then echo "old disposition name still rendered"; false; fi
+  parity
 }
 
 @test "D7: the census carries the ERROR RECORD's AGE, so a row cannot read as a standing to-do after the session re-engaged" {
@@ -294,6 +355,7 @@ assert 900 < age < 2400, age
   # network drop is the death the session is sitting on, so `limit` would send a
   # transplant to fix a problem that no longer exists.
   mixed_tx "$SEC" "$SID"; row 616 "$SID"
+  mark "$SEC" "$SID" 616
   run bash "$FLEET" --locate --json
   echo "$output" | python3 -c '
 import json,sys
@@ -305,6 +367,7 @@ assert r["disposition"]=="IDLE-AFTER-ERROR", r
 '
   run bash "$FLEET" --locate
   echo "$output" | grep -q 'limit+network' || { echo "$output"; false; }
+  parity
 }
 
 @test "D7 CONTROL: the reverse order — network first, cap LAST — is a real cap and stays RECOVERABLE" {
@@ -317,7 +380,7 @@ assert r["disposition"]=="IDLE-AFTER-ERROR", r
     printf '{"type":"assistant","timestamp":"2026-09-09T13:20:00.000Z","error":"server_error","isApiErrorMessage":true,"message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"API Error: Can'"'"'t reach the API server (ENOTFOUND)"}]}}\n'
     printf '{"type":"assistant","timestamp":"2026-09-09T13:30:00.000Z","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 7:50pm"}]}}\n'
   } > "$f"
-  row 616 "$SID"
+  row 616 "$SID"; mark "$SEC" "$SID" 616
   run bash "$FLEET" --locate --json
   echo "$output" | python3 -c '
 import json,sys
@@ -326,6 +389,7 @@ assert r["kind"]=="limit", r
 assert r["kinds"]=="network+limit", r
 assert r["disposition"]=="RECOVERABLE", r
 '
+  parity
 }
 
 @test "D7: enqueue refuses a MIXED row whose latest death is the network — an account move must not be spent on a cured problem" {
@@ -347,6 +411,7 @@ assert r["disposition"]=="RECOVERABLE", r
   # census asserted RESUMING with no pid at all, which is a live process reported as
   # an unlocatable one.
   net_tx "$SEC" "$SID"
+  mark "$SEC" "$SID"
   # No registry row at all. A stub `ps` is the only honest way to put a --resume leaf
   # in the process table without launching a real claude.
   mkdir -p "$BATS_TEST_TMPDIR/psbin"
@@ -365,10 +430,14 @@ r=json.load(sys.stdin)[0]
 assert r["disposition"]=="RESUMING", r
 assert r["pid"]=="77720", r
 '
+  # UNDER THE SAME STUB. Without the prefix this would compare the two paths over a world with no
+  # resume leaf at all — a green diff about a fixture the case is not testing.
+  PATH="$BATS_TEST_TMPDIR/psbin:$PATH" parity
 }
 
 @test "D7 CONTROL: with no registry row AND no argv leaf the row is NO-PANE and the pid stays '-'" {
   net_tx "$SEC" "$SID"
+  mark "$SEC" "$SID"
   mkdir -p "$BATS_TEST_TMPDIR/psbin"
   cat > "$BATS_TEST_TMPDIR/psbin/ps" <<'PS'
 #!/bin/bash
@@ -385,6 +454,7 @@ r=json.load(sys.stdin)[0]
 assert r["disposition"]=="NO-PANE", r
 assert r["pid"]=="-", r
 '
+  PATH="$BATS_TEST_TMPDIR/psbin:$PATH" parity
 }
 
 # ─── 2026-09-12 · four defects measured during a live two-pane recovery ───────────────────────
@@ -415,11 +485,14 @@ assert r["pid"]=="-", r
   blocked_tx "$SEC" "$SID"
   gone="$BATS_TEST_TMPDIR/reaped-worktree"
   sed -i '' "s#\"cwd\":\"$CWD\"#\"cwd\":\"$gone\"#" "$SEC/projects/$SLUG/$SID.jsonl"
+  CWD="$gone" mark "$SEC" "$SID"   # AFTER the reap: a marker naming the live cwd would be a
+                                   # fixture disagreement, and the diff would measure that
   run bash "$FLEET" --locate
   [[ "$output" == *"52e35019"*"CWD-GONE"* ]] || { echo "$output"; false; }
   run bash "$FLEET" --recover
   [[ "$output" == *"CWD-GONE"* ]] || { echo "$output"; false; }
   [ ! -s "$LRH_LOG" ] || { cat "$LRH_LOG"; false; }
+  parity
 }
 
 # 20 teammate rows made `--recover` report PARTIAL on every possible run: a verdict that cannot be
@@ -841,3 +914,110 @@ _pick() { # <source acct> <tier> <sid> → lf_pick_target's answer, with only wh
   [ "$status" -eq 1 ]
   [[ "$output" == *"SKIPPED=next3 next4"* ]]
 }
+
+# ══════════════════════════════════════════════════════════════════════════════
+# W3 (docs/plans/LIMIT_DETECT_100P.md § 3) — THE CENSUS AS A CONSUMER SEES IT.
+# `lf_census` delegates to bin/cc-limited and must honour its exit-code contract
+# rather than its stdout: 0 rendered · 5 instrument unreadable (stdout EMPTY by
+# contract) · 6 degraded (rows ARE printed). The failure these cases exist to
+# prevent is the one the census itself was built against — an empty list at exit
+# 0 is indistinguishable from a healthy fleet.
+# ══════════════════════════════════════════════════════════════════════════════
+
+@test "W3: rc 5 REFUSES the run and leaves census.tsv ABSENT — an empty file reads as a clean fleet" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  printf '#!/bin/sh\necho "cc-limited: instrument unreadable: accounts.json" >&2\nexit 5\n' \
+    > "$BATS_TEST_TMPDIR/cc-limited-5"; chmod +x "$BATS_TEST_TMPDIR/cc-limited-5"
+  CC_LIMITED="$BATS_TEST_TMPDIR/cc-limited-5" LF_SLOW_SCAN=0 run bash "$FLEET" --recover
+  [ "$status" -ne 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"INSTRUMENT UNREADABLE"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"left ABSENT rather than empty"* ]] || { echo "$output"; false; }
+  # THE FILE ITSELF, not the message. A run dir carrying a 0-byte census.tsv is what every later
+  # reader — this driver's own --report included — would read as "the fleet was clean".
+  run bash -c 'ls "$LR_STATE_DIR"/fleet/*/census.tsv 2>/dev/null'
+  [ -z "$output" ] || { echo "census.tsv exists: $output"; false; }
+  # and the actuator was never reached
+  [ ! -s "$LRH_LOG" ] || { cat "$LRH_LOG"; false; }
+}
+
+@test "W3 CONTROL: rc 6 is DEGRADED, not unreadable — the rows are delivered and the run proceeds" {
+  # The contract's own words: rows ARE printed at 6. Treating 6 like 5 would discard a census that
+  # is merely incomplete, which is the opposite error and just as silent.
+  blocked_tx "$SEC" "$SID"
+  cat > "$BATS_TEST_TMPDIR/cc-limited-6" <<SH
+#!/bin/sh
+echo "cc-limited: degraded: marker file capped" >&2
+printf '$SID\t$SEC\tnext2\t-\t-\t$CWD\t-\tNO-PANE\tlimit\tlimit\t99\n'
+exit 6
+SH
+  chmod +x "$BATS_TEST_TMPDIR/cc-limited-6"
+  CC_LIMITED="$BATS_TEST_TMPDIR/cc-limited-6" LF_SLOW_SCAN=0 run bash "$FLEET" --locate
+  [[ "$output" == *"census DEGRADED"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"52e35019"*"NO-PANE"* ]] || { echo "$output"; false; }
+}
+
+@test "W3: with no executable cc-limited the fallback is the slow scan, and it SAYS so" {
+  # Silence here would make a permanently-degraded fleet look like a fast one.
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  CC_LIMITED="$BATS_TEST_TMPDIR/does-not-exist" LF_SLOW_SCAN=0 run bash "$FLEET" --locate
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"falling back to the slow scan"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"RECOVERABLE"* ]] || { echo "$output"; false; }
+}
+
+@test "W3: --one resolves from the store and NEVER invokes the census (the 40-86 s it used to cost)" {
+  # W4 measured 40.3 / 64.5 / 86.1 s of census on a path that had already been handed the sid.
+  # The store resolver still runs first; this pins that the delegation did not quietly re-add it.
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  cat > "$BATS_TEST_TMPDIR/cc-limited-spy" <<SH
+#!/bin/sh
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/census-calls"
+exit 4
+SH
+  chmod +x "$BATS_TEST_TMPDIR/cc-limited-spy"; : > "$BATS_TEST_TMPDIR/census-calls"
+  CC_LIMITED="$BATS_TEST_TMPDIR/cc-limited-spy" LF_SLOW_SCAN=0 LRH_RC=0 \
+    run bash "$FLEET" --one "${SID:0:8}" --target next3
+  [ ! -s "$BATS_TEST_TMPDIR/census-calls" ] || { cat "$BATS_TEST_TMPDIR/census-calls"; false; }
+  grep -q -- "--sid $SID" "$LRH_LOG" || grep -q -- "$SID" "$LRH_LOG" || { cat "$LRH_LOG"; false; }
+}
+
+@test "W3: --enqueue writes one request per RECOVERABLE row, through the census" {
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"; mark "$SEC" "$SID" 616
+  LF_SLOW_SCAN=0 run bash "$FLEET" --enqueue --target next3
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$LR_STATE_DIR/requests/$SID.json" ] || { echo "$output"; ls -R "$LR_STATE_DIR"; false; }
+  run bash -c 'set -- "$1"/requests/*.json; echo $#' _ "$LR_STATE_DIR"
+  [ "$output" = 1 ] || { echo "$output"; false; }
+  [[ "$output" != *"kickstart -k"* ]] || { echo "$output"; false; }
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RED-PROOF — W3 (LIMIT_DETECT_100P § 3), run 2026-09-20 against pristine 4ef1f2d66
+# with ONLY the three source files reverted (tests and tests/helpers kept):
+#
+#   $ git checkout HEAD -- scripts/limit-recover/lr-fleet.sh \
+#       scripts/limit-recover/lr-reset-poller.sh scripts/gen-account-map.sh
+#   $ bats tests/lr-fleet.bats
+#   1..59
+#   not ok 17 enqueue: a request per RECOVERABLE session lands in the poller's requests dir and names the kickstart
+#   not ok 55 W3: rc 5 REFUSES the run and leaves census.tsv ABSENT — an empty file reads as a clean fleet
+#   not ok 56 W3 CONTROL: rc 6 is DEGRADED, not unreadable — the rows are delivered and the run proceeds
+#   not ok 57 W3: with no executable cc-limited the fallback is the slow scan, and it SAYS so
+#   not ok 59 W3: --enqueue writes one request per RECOVERABLE row, through the census
+#
+# ⚠️ THE `parity` ROWS ARE NOT IN THAT LIST, AND THAT IS HONEST RATHER THAN A GAP. Against
+# pristine source `lf_census` does not exist and `LF_SLOW_SCAN` is read by nobody, so BOTH arms of
+# every `parity` call resolve to `lf_locate` and the diff is empty by construction — green in both
+# arms, which is an equivalence guard and never a red-proof. Their power was demonstrated by
+# MUTATION instead, the only thing that can show it:
+#
+#   $ # delete the `kinds` backfill from lf_census_fill, keep everything else
+#   $ bats tests/lr-fleet.bats -f "classes MIX|reverse order"
+#   1..2
+#   not ok 1 D7: classes MIX in one session — kind is the LAST death, kinds reports both
+#   not ok 2 D7 CONTROL: the reverse order — network first, cap LAST — is a real cap and stays RECOVERABLE
+#
+# and by what they caught while this wave was being written — four divergences, each one a column
+# the census got wrong and nothing else would have noticed: TIER (`-`, a missing model field),
+# PID (carrying pane_now), KINDS (one class where the slow scan reports `limit+network`), and the
+# empty-field column shift that `IFS=$'\t' read` produces on a row with no pane and no pid.

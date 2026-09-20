@@ -98,7 +98,9 @@ unchanged and remain the deep runbook.
 ### `resume-in-place` — the account is FINE
 A network death, a crash, a reboot, an `/exit`. The pane is usually still alive and the session
 resumes where it stood; **a transplant would spend an account move on a problem that no longer
-exists.** Read `KIND` per unit from `lr-fleet.sh --locate` (`network` rows are resume-in-place;
+exists.** Read `KIND` per unit from `cc-limited --json` (one process, sub-second, and it carries
+`state` · `cap` · `resets_at` · `why` beside the legacy columns; `lr-fleet.sh --locate` renders the
+same census and `--locate --json` now execs straight into it). `network` rows are resume-in-place;
 `limit` rows are transplant) and note the error record's AGE — a census snapshot of "blocked" rows
 expires within the hour, because every one of the six panes measured on 2026-09-09 was re-engaged
 within ~40 minutes.
