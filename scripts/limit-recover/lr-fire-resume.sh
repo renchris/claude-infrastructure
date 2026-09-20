@@ -595,7 +595,7 @@ LR_PANE="${ITERM_SESSION_ID:-}"; LR_PANE="${LR_PANE##*:}"
 # The needle the composer must contain for a re-Enter to be allowed: the head of the prompt, printable
 # ASCII only and whitespace-stripped, because that is the exact shape the screen reader produces.
 LR_SCREEN_WANT="$(printf '%s' "$PROMPT" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]' | cut -c1-40)"
-LR_SCREEN_SH="$(cat <<'LRSCREENSH'
+IFS='' read -r -d '' LR_SCREEN_SH <<'LRSCREENSH' || true
 # EMPTY | DRAFT | DRAFT-MINE | MENU | UNKNOWN — the composer, read out of band from the pane itself.
 # The box is found by its BORDER RUNS (a repeat of U+2500), never by a literal TUI phrase: a phrase
 # dies at the wrap, a border run is width-invariant by construction. This is composer_content()'s
@@ -622,8 +622,7 @@ if [ -n "${LR_SCREEN_WANT:-}" ]; then
 fi
 printf DRAFT
 LRSCREENSH
-)"
-LR_NOTE_SH="$(cat <<'LRNOTESH'
+IFS='' read -r -d '' LR_NOTE_SH <<'LRNOTESH' || true
 # ONE lr_state_append, from inside the expect program. Inert without a run dir (this script is also
 # run by hand) and LOUD when the library is unreachable — a state log that drops lines silently is
 # worse than none, because its silence reads as "nothing happened".
@@ -637,7 +636,6 @@ command -v lr_state_append >/dev/null 2>&1 || {
   echo "!! lr-fire-resume: lr-lib.sh unreachable — state '${LR_ST_STATE:-}' NOT recorded" >&2; exit 0; }
 lr_state_append "$LR_RUN_DIR" "${LR_ST_STATE:-}" "${LR_ST_STAGE:-}" "${LR_ST_DETAIL:-}" || true
 LRNOTESH
-)"
 export LR_PROBE LR_LIB_PATH LR_IT2 LR_PANE LR_SCREEN_WANT LR_SCREEN_SH LR_NOTE_SH
 
 lr_rc=0
