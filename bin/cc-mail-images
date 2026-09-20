@@ -18,7 +18,54 @@ Writes: every image, manifest.json, and index.html (the contact sheet).
 Remote images are fetched over plain HTTPS with no credential — they are public
 URLs in a newsletter. Inline parts never leave the machine.
 """
-import argparse, base64, email, hashlib, json, os, re, sys, urllib.request
+import argparse, base64, email, hashlib, json, os, re, ssl, subprocess, sys, urllib.request
+
+
+def _ssl_context():
+    """A context that actually verifies.
+
+    python.org builds ship no system trust store, so urlopen raises
+    CERTIFICATE_VERIFY_FAILED on hosts curl fetches fine. Prefer certifi's
+    bundle; fall back to the stdlib default rather than ever disabling
+    verification.
+    """
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        try:
+            return ssl.create_default_context()
+        except Exception:
+            return None
+
+
+_SSL_CTX = _ssl_context()
+
+
+def fetch_url(u, timeout=30):
+    """(bytes, content_type). Tries urlopen, then curl.
+
+    curl carries its own trust store, so it succeeds on boxes where the
+    interpreter's is missing or stale. Without this second leg a working URL
+    reports as a dead one and the whole extraction returns zero images.
+    """
+    req = urllib.request.Request(u, headers={"User-Agent": "cc-mail-images/1"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX) as r:
+            return r.read(), (r.headers.get("Content-Type") or "").split(";")[0].lower()
+    except Exception as e:
+        first = e
+    try:
+        out = subprocess.run(
+            ["curl", "-sSL", "--max-time", str(timeout),
+             "-A", "cc-mail-images/1", "-w", "\n%{content_type}", u],
+            capture_output=True, timeout=timeout + 10)
+        if out.returncode == 0 and out.stdout:
+            body, _, ct = out.stdout.rpartition(b"\n")
+            return body, ct.decode("utf-8", "replace").split(";")[0].strip().lower()
+        raise RuntimeError(f"curl rc={out.returncode}")
+    except Exception as e2:
+        raise RuntimeError(f"urlopen: {str(first)[:80]} | curl: {str(e2)[:60]}")
 from datetime import datetime
 from email import policy
 
@@ -150,10 +197,7 @@ def main():
     if not args.no_remote:
         for n, u in enumerate(urls, 1):
             try:
-                req = urllib.request.Request(u, headers={"User-Agent": "cc-mail-images/1"})
-                with urllib.request.urlopen(req, timeout=30) as r:
-                    data = r.read()
-                    ct = (r.headers.get("Content-Type") or "").split(";")[0].lower()
+                data, ct = fetch_url(u, timeout=30)
             except Exception as e:
                 items.append({"source": "remote", "url": u, "error": str(e)[:120]})
                 continue
@@ -218,6 +262,13 @@ figcaption{{margin-top:6px;font-size:12px;opacity:.7;word-break:break-all}}
         print(f"    FAILED {i.get('url','')[:70]} — {i['error']}")
     print(f"\ncontact sheet: {idx}")
 
+    # Exit code must separate "this email has no images" from "every fetch
+    # failed". Both print 0 images; only one is a working run, and a caller
+    # that reads rc alone would treat a total fetch failure as success.
+    if not ok and bad:
+        return 5
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)
