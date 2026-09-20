@@ -257,8 +257,9 @@ has_id=0; { [ "$n_ids" -ge 2 ] && [ "$n_gloss" -eq 0 ]; } && has_id=1
 #   · ANY abstain (no key, no deps, timeout, HTTP, CC_JEV=0, oversize) falls through to exactly
 #     today's `abstain "no-tell"`. With no key configured this block forks nothing and the hook
 #     is byte-for-byte the hook it was.
-# Threshold is the calibrated tail (p>=0.98) — hooks/lib/jev.sh documents why that number and
-# why a mid-band probability is maximum UNCERTAINTY rather than a weak yes.
+# Threshold is CC_JEV_MIN_P, measured on THIS task (0.90) — hooks/lib/jev.sh documents how it was
+# derived, why the imported 0.98 sat above Jev's whole output range here and landed the arm INERT,
+# and why a mid-band probability is maximum UNCERTAINTY rather than a weak yes.
 # The bias rule at the top of this file still governs: false-negative over false-positive.
 has_jev=0; JEV_P=""
 if [ "$has_tell" -eq 0 ] && [ "$has_done" -eq 0 ] && [ "$has_cat" -eq 0 ] && [ "$has_id" -eq 0 ]; then

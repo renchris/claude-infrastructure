@@ -34,8 +34,12 @@ const server = createServer((req, res) => {
     const answers = {};
     for (const [id, q] of Object.entries(body.questions || {})) {
       if (q.type === 'boolean') {
-        // `lowp` is the ABSTAIN-BAND arm: 0.40 is a real answer that must NOT cross the
-        // 0.98 gate. Without it the suite could only ever prove the firing direction.
+        // `lowp` is the ABSTAIN-BAND arm: 0.40 is a real answer that must NOT cross
+        // CC_JEV_MIN_P. Without it the suite could only ever prove the firing direction.
+        // Both values are chosen against Jev's MEASURED range, deliberately far from any
+        // plausible gate — a fixture picked as "just under the default" re-derives itself
+        // when the default moves and can only ever confirm it (docs/lessons/
+        // an-imported-threshold-can-sit-above-the-model-s-output-range.md).
         answers[id] = { type: 'boolean', probability: mode === 'lowp' ? 0.40 : 0.99 };
       } else if (q.type === 'choice') {
         // MOCK_CHOICE steers the choice answer. Without it the mock would always return the
