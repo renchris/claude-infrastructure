@@ -272,3 +272,181 @@ correctly: keylog `DOWN` → `SUBMIT:1:Resume full session as-is`.
    of the D1-safety R1 class W2 named — a launch-time switch that becomes a permanent property of
    the recovered session's environment. It cannot simply be `env -u`'d on the spawn line: reaching
    the child is its entire purpose.
+
+---
+
+# W3p hardening — what a 9-hour mutation pass found, and what now kills each survivor
+
+**Appended 2026-09-20, ten commits on `8a9a812cc`** (`691b6f105` was already on the branch when this
+pass began; the other nine are this pass). Nothing above this line was changed.
+
+**The headline, in one sentence:** the wave's central feature was **INERT on every run** — the
+watcher parsed `${16:-}` for a token the arming side sends as argv **15** — and the suite was
+*defending* the defect, because its assertion pinned the wrong constant as its expected value.
+
+**The shape of everything else:** 21 mutants ran against W3p; the ones that died were dying against
+cases that EXECUTE the subject, and every one that survived was guarded by a case that reads the
+subject's TEXT — a grep for a literal, a grep for a variable name, a grep for a comment — or by a
+fixture the parser refuses to read. Nine of this pass's ten commits add no source change at all.
+
+## 1. The defect that made the wave inert, and the guard that protected it
+
+`handoff-fire.sh:6651` read `RCY_SUBMIT_TOKEN="${16:-}"`. `recycle_fire`'s detach line is
+
+```
+__recycle·SID·tty·cmdfile·LAUNCH_DIR·old_sid·MARKER·GOAL·prompt·RESUME_CFG·source_sid·T0·SRC_TX·RUN_DIR·TOKEN
+```
+
+— fifteen arguments. So `RCY_SUBMIT_TOKEN` was **always empty**: no submit probe ever ran, no
+`recycle-submitted` row was ever written, and `resume_engaged` fell back to the wall-clock oracle a
+stale notification turn satisfies — the exact hole § 1 above says this wave closes. The feature
+shipped dead in the manner
+`docs/lessons/an-imported-threshold-can-sit-above-the-model-s-output-range.md` describes.
+
+**And correcting it turned the suite RED**, because `tests/lr-fire-resume-submit.bats:162` asserted
+`grep -c 'RCY_SUBMIT_TOKEN="\${16:-}"' == 1`:
+
+```
+not ok 1 handoff-fire's resume oracle takes a token and the watcher is handed one
+#   `[ "$output" = 1 ] || { echo "watcher does not parse \$16: $output"; false; }' failed
+# watcher does not parse $16: 0
+```
+
+The expected value **was** the bug (`docs/lessons/stale-assertion-becomes-an-inverted-guard.md`).
+Both ends of the wire are now proved by execution instead:
+
+| commit | what it now executes |
+|---|---|
+| `691b6f105` | the watcher, over the real argv shape, demanding the `SUBMITTED` line and `recycle-submitted` row only the token arm can produce |
+| `c65659458` | the real `detach` line, with a recorder in place of `detach`, and the **captured** argv fed to the real watcher — the two ends proved against each other, never each against a constant of its own |
+
+`c65659458`'s red arm (token removed from the detach line) is the measurement that matters:
+`691b6f105`'s case stays **green** in it, because a case that hands the watcher an argv the TEST
+wrote cannot see the arming end. An index is only ever correct relative to what the other end writes.
+
+## 2. Survivor-by-survivor
+
+| # | what survived 21 mutants | the mutant that now kills it | commit |
+|---|---|---|---|
+| D2 | `resume_engaged`'s token scan had **one** of its three filters pinned | drop `ts <= t0`; drop `isSidechain` — each alone forges a baseline | `67f9c1bab` |
+| D3 | nothing asserted the token reaches the watcher at all | delete `"$RCY_SUBMIT_TOKEN_ARG"` from the detach argv (survived 37/37) | `c65659458` |
+| D4 | the 2-occurrence arming gate was never executed | `-lt 2` → `-lt 1` (hand over a token the prompt cannot deliver) | `5c29a0782` |
+| D5 | every case passes `RCY_ENGAGE_INTERVAL` as a knob, so its **default** is unguarded | `:-1` → `:-5` (survived 37/37) | `0c3135417` |
+| D6 | deviation 3 — the re-CR is gated on `DRAFT-MINE`, not "a draft" | widen to `DRAFT-MINE \|\| DRAFT` and Enter is pressed on a stranger's text | `27ffe3898` |
+| D7 | the probe's refusal is pinned; the **consumer's mapping** of it was not | Tcl `lr_probe` returns `none` for an unreadable transcript | `a43c55cc2` |
+| D8 | case 18's MENU claim was unreachable *for a fixture reason* | delete the `❯<ordinal>` detector | `7899250f3` |
+| D9 | three assertions that could only fail on a doc edit or an indentation change | see § 4 — each measured new-RED / old-GREEN under one mutant | `6180dceb4` |
+| D10 | four executed-expect cases with no load discipline | see § 3 — the cause was not load | `54de05d84` |
+
+Two of these are worth their own paragraph.
+
+**D5 is counted, never grepped.** The default is not a tuning — it is the QUANTUM of `rcy_t`, the one
+number the `recycle-engaged` row carries about how long engagement took. The case drives the real
+watcher through a **symlinked `$0`**: the probe resolves as `$(dirname "$0")/limit-recover/…`, so a
+symlink re-points that one sibling at a counting stub while `HF_DIR` (which resolves the link) keeps
+every other sibling on the real tree. `docs/lessons/symlinked-0-splits-sibling-sources.md`, used
+deliberately. 4 s of window at one poll a second = 4 polls; at five seconds a poll it is 1.
+
+**D8 was a fixture defect, not a missing assertion**, and the difference is provable. The old menu
+fixture had no U+2500 border runs, so the awk box parse exited 9 and the verdict was `UNKNOWN`
+whether or not the detector existed — both park, both print `READY NEVER SEEN`, both record
+`READY-NOT-SEEN`. Measured standalone on the extracted `LR_SCREEN_SH`, one variable:
+
+```
+no box:    detector present MENU · detector deleted UNKNOWN   (both park — the mutant is invisible)
+with box:  detector present MENU · detector deleted DRAFT     (the verdict moves)
+```
+
+The assertion **could not have been written** against a screen the parser refuses to read. The
+fixture is now the box the TUI actually paints, and the verdict is asserted in both places `$sv` is
+written — the operator-facing line and the state log's `detail`, since `READY-NOT-SEEN` is the same
+word for `MENU`, `DRAFT` and `UNKNOWN`.
+
+## 3. D10 — the four expect cases were decided by bats' stdin, not by load
+
+The brief called this load fragility. It is not, and the correction is worth more than the fix.
+
+The program ends **every** path at `interact` — an `exit` there closes the master pty and kills the
+resumed session, which is the husk this project exists to prevent, and case 14 pins that count at 0.
+`interact` returns only on **EOF of stdin**. So under bats these cases terminated if and only if
+whatever stdin the runner happened to be invoked with was already at EOF. Measured this session, one
+case, one variable:
+
+```
+ELAPSED=242s STATUS=124   (outer bound 240 s, no redirect)
+ELAPSED=70s  STATUS=0     (identical case, stdin </dev/null)
+```
+
+and in the 242 s arm **every behavioural assertion was already satisfied in the captured output** —
+the refusal line, the keylog, the state. It failed at `[ "$status" -eq 0 ]`, before any of them ran.
+That is the whole of the reported *"green 4/4 in isolation, 16 reds across three contended runs"*
+signature: the verdict was a property of the invocation, and no bound could have fixed it.
+
+`</dev/null` is the cure and it is load-invariant. The **residual** — the program's own wall clock, a
+quiet arm plus a 1 s poll loop with an `exec` per tick — is then banded the way `tests/cc-lr.bats`
+was banded in `1b2676f4c`: the outer bound is SCALED by measured load/core, the elapsed time is
+printed on every run, and a kill is JUDGED only below 1.0/core — above that line it skips with the
+number, because a timeout there says nothing about the subject.
+
+`tests/handoff-recycle-engagement.bats` gets the same discipline **where it applies and no more**:
+its one SUCCESS window is scaled and the load is printed on every watcher case so a red there is
+attributable. Its dead-path windows are deliberately left alone — there the budget only decides how
+long the watcher waits before giving up — and it has no outer `timeout` anywhere, so unlike the
+expect block its cases can be slow but can never be killed mid-assertion.
+
+## 4. D9 — three assertions replaced, each measured BOTH ways
+
+The evidence that a replacement was *needed* rather than merely different is the same mutant run
+against both forms:
+
+| replaced | mutant | new form | old form |
+|---|---|---|---|
+| case 14 — a `sed -n` span never asserted non-empty | re-indent the anchor by ONE space (invisible in Tcl) | `not ok … the anchor is stale` | `ok 1 OLD form of case 14, verbatim` |
+| case 15 — `grep -c LR_PROBE >= 2` under a title claiming two things | `set r [lr_probe $t0]` → `set r {none {}}` | `not ok … the program never executed the probe` | `ok 1 OLD form of case 15, verbatim` |
+| case 16 — a verbatim COMMENT grep | the ORACLE drops `isSidechain`, the probe keeps it | `not ok … the probe reads 'none' and resume_engaged's own scan DISAGREES` | `ok 1 OLD form of case 16, verbatim` |
+
+Case 15's title over-claimed by exactly one half: *"never blind-CRs a quiet pty"* was never its to
+assert — the mutant that made the quiet arm type unconditionally left both of its strings in place
+and it stayed green while case 18 died. That half now lives in case 18, on the verdict itself.
+
+Case 16's replacement is the guard **residual § 5 above asked for**: the token scan is written twice
+— once in `lr-submit-probe.sh` for the expect poll, once inside `resume_engaged` for the watcher,
+because the `PY` core must stay byte-identical with `lr-lib.sh:lr_engaged_after` — and nothing
+asserted the two agree. Five fixtures, both implementations, one verdict each. The fifth is the one
+nothing else asserts: an **enqueued** prompt is `queued` to the probe and is **not a baseline** to
+the oracle.
+
+## 5. Suites and gates, final state
+
+| suite | result |
+|---|---|
+| `tests/lr-fire-resume-submit.bats` (21 → **27**) | 27/27 |
+| `tests/handoff-recycle-engagement.bats` (16 → **18**) | 18/18 |
+
+`shellcheck -S warning -x` clean on `handoff-fire.sh`, `lr-fire-resume.sh`, `lr-submit-probe.sh`;
+`scripts/bats-assert-liveness.py` exits 0 on both suites; `bats --count` run before every execution.
+Every mutant in this report was applied to a working copy and reverted — `git diff HEAD -- scripts/`
+is empty for the nine test-only commits.
+
+## 6. Residuals this pass hands on
+
+1. **`scripts/test-hermeticity-lint.sh tests` is RED on trunk's population, and not from this diff.**
+   It names `lr-handoff-launcher-quoting.bats` (AMBIENT + SEAM) and `lr-relaunch-bound.bats` (LEAK +
+   AMBIENT + SEAM). Both arrived with W1/W3i (`94c18dcea`) and W2 (`cc424132a`), both are owned by
+   other waves, and neither of this pass's two suites is flagged. A whole-tree gate attributes a red
+   to whoever lands (`memory gate-attributes-by-reachability-not-causation`), so **whoever lands
+   `lr100p/w3p` will be handed this** — it is a two-line fix per suite (fixture `$HOME`, pin the
+   three rule-5 seams) but it belongs to the files' owners.
+2. **`--separate-stderr` warnings.** Both suites emit `BW02: Using flags on 'run' requires at least
+   BATS_VERSION=1.5.0`. Harmless today (bats-core 1.13 honours the flag); a
+   `bats_require_minimum_version 1.5.0` at the top of each file would silence it.
+3. **The D10 skip is a real abstention, and it should be counted.** Above 1.0 load/core a killed
+   expect case now SKIPS rather than reds. On this box that band is the normal state, so a run can
+   report `ok` counts that hide N skips. W7's audit should read skips, not just failures — an
+   alarm that abstains silently is the `alarm-polarity` failure.
+4. **The agreement guard is a cross-check, not full coverage.** Cases 5–7 pin the probe's filters and
+   the two new D2 cases pin the oracle's; § 4's fixture set catches drift in EITHER implementation
+   with one set of inputs, but it cannot see a change made identically to both.
+5. **Untouched, per the brief:** `lr-ingest-verify.sh`, `lr-handoff.sh`'s launcher prompt and
+   `tests/lr-handoff-launcher-quoting.bats` belong to `lr100p/w3i`. Residuals 1–7 of the original
+   report stand unchanged; residual 5 is now discharged by § 4's third row.
