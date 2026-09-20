@@ -590,6 +590,82 @@ cc_capacity_token_mint() { # $1=sid [$2=explicit path] → prints the token path
   printf '%s' "$path"
 }
 
+# ── THE RECORD IS A SHAPE, NOT A STRING (W2FA D4, 2026-09-20) ──────────────────────────────────
+# The record used to be pulled apart with `cut -f1/-f2/-f4`, and `cut` WITHOUT `-s` prints the WHOLE
+# LINE when the delimiter is absent. MEASURED: a file containing only `date +%s` redeemed — rc 0,
+# "issued for 1789862813", file consumed — because the sid field equalled the timestamp, so naming
+# that number as the wanted sid made any such file an admission. The mint writes exactly four
+# TAB-separated fields; nothing checked that, so the shape carried no information at all.
+#
+# ONE awk pass yields NF AND the fields, so the count and the values cannot disagree, and the loop
+# below reads them through a heredoc rather than a pipe — a `while read` on the right of a pipe runs
+# in a subshell and its assignments never escape it.
+_CC_ADMIT_TOK_NF=0
+_CC_ADMIT_TOK_ISSUED=""
+_CC_ADMIT_TOK_SID=""
+_CC_ADMIT_TOK_UID=""
+_CC_ADMIT_TOK_TERMS=""
+_CC_ADMIT_TOK_BAD=""
+_cc_admit_token_parse() { # $1=path → 0 first line read (fields set) / 1 unreadable
+  local rec line i=0
+  _CC_ADMIT_TOK_NF=0; _CC_ADMIT_TOK_ISSUED=""; _CC_ADMIT_TOK_SID=""; _CC_ADMIT_TOK_UID=""; _CC_ADMIT_TOK_TERMS=""
+  rec="$(awk -F'\t' 'NR==1{printf "%s\n%s\n%s\n%s\n%s\n", NF, $1, $2, $3, $4; exit}' "$1" 2>/dev/null)" || return 1
+  [ -n "$rec" ] || return 1
+  while IFS= read -r line; do
+    case "$i" in
+      0) _CC_ADMIT_TOK_NF="$line" ;;
+      1) _CC_ADMIT_TOK_ISSUED="$line" ;;
+      2) _CC_ADMIT_TOK_SID="$line" ;;
+      3) _CC_ADMIT_TOK_UID="$line" ;;
+      4) _CC_ADMIT_TOK_TERMS="$line" ;;
+    esac
+    i=$(( i + 1 ))
+  done <<TOKREC
+$rec
+TOKREC
+  return 0
+}
+
+# THE DISCARD IS VERIFIED, NEVER ASSUMED (W2FA D3). `rm -f … || true` throws away the one result
+# that decides whether a token is one-shot; the `|| true` here is safe ONLY because the `-e` test
+# after it — a DIFFERENT call, not this one's exit code — is what renders the verdict. The rename
+# has already made the ORIGINAL name unreachable, so a surviving claim copy is hygiene rather than a
+# replay; it is still a FACT, and the row says so instead of asserting a removal that did not happen.
+_cc_admit_token_discard() { # $1=claim path → always 0 · sets CC_ADMIT_TOKEN_UNLINK if it survives
+  CC_ADMIT_TOKEN_UNLINK=""
+  rm -f "$1" 2>/dev/null || true
+  if [ -e "$1" ]; then CC_ADMIT_TOKEN_UNLINK="the one-shot copy was NOT removed ($1)"; fi
+  return 0
+}
+
+# Every property a redeemable record must have, in ONE predicate so the pre-claim gate and the
+# post-claim authoritative re-read cannot drift apart. The reason rides on _CC_ADMIT_TOK_BAD.
+_cc_admit_token_shape() { # $1=path $2=wanted sid $3=this uid → 0 well-formed AND ours / 1 not
+  _CC_ADMIT_TOK_BAD=""
+  if ! _cc_admit_token_parse "$1"; then
+    _CC_ADMIT_TOK_BAD="UNREADABLE — no first line"; return 1
+  fi
+  if [ "$_CC_ADMIT_TOK_NF" != 4 ]; then
+    _CC_ADMIT_TOK_BAD="MALFORMED — a token is a 4-field TAB record (issued/sid/uid/terms); this line has ${_CC_ADMIT_TOK_NF}"
+    return 1
+  fi
+  case "$_CC_ADMIT_TOK_SID" in
+    ''|*[!A-Za-z0-9._-]*)
+      _CC_ADMIT_TOK_BAD="MALFORMED — sid field '${_CC_ADMIT_TOK_SID}' is not a usable session id"; return 1 ;;
+  esac
+  if ! cc_hw_is_int "$_CC_ADMIT_TOK_ISSUED"; then
+    _CC_ADMIT_TOK_BAD="MALFORMED — issued field '${_CC_ADMIT_TOK_ISSUED}' is not an epoch integer"; return 1
+  fi
+  if [ "$_CC_ADMIT_TOK_UID" != "$3" ]; then
+    _CC_ADMIT_TOK_BAD="MALFORMED — the record was minted by uid '${_CC_ADMIT_TOK_UID}', this process is uid '$3'"
+    return 1
+  fi
+  if [ "$_CC_ADMIT_TOK_SID" != "$2" ]; then
+    _CC_ADMIT_TOK_BAD="FOREIGN — issued for '${_CC_ADMIT_TOK_SID}' but this spawn is '$2'"; return 1
+  fi
+  return 0
+}
+
 # ── THE TTL, RESOLVED ONCE AND ALWAYS AN INTEGER (W2FA D2, 2026-09-20) ─────────────────────────
 # The expiry test used to read the env var directly: `[ "$age" -gt "${CC_ADMIT_TOKEN_TTL_S:-300}" ]`.
 # With a non-integer value (`300s`) `[` does not return false, it ERRORS with rc 2 — and `if` reads
@@ -619,7 +695,8 @@ _cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usabl
   # CC_ADMIT_TOKEN is the library's own spelling; LR_ADMIT_TOKEN is the limit-recover launcher's,
   # accepted here so a launcher env that carries only the LR_ name still redeems. Both are read,
   # neither is exported by this library, and lr-fire-resume passes CC_ADMIT_TOKEN call-scoped.
-  local t="${CC_ADMIT_TOKEN:-${LR_ADMIT_TOKEN:-}}" want="${CC_ADMIT_WANT_SID:-}" line issued sid terms now age claim ttl
+  local t="${CC_ADMIT_TOKEN:-${LR_ADMIT_TOKEN:-}}" want="${CC_ADMIT_WANT_SID:-}" issued sid terms now age claim ttl me
+  me="$(id -u 2>/dev/null || printf '?')"
   [ -n "$t" ] || return 1
   # A TOKEN IS AN ADMISSION, NEVER A REDIRECTION TO ONE (W2FA D3). `-f`, `-O` and `rm` ALL follow a
   # symlink, so a link's target was validated, never consumed, and survived — measured on the
@@ -631,16 +708,22 @@ _cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usabl
     return 1
   fi
   if [ ! -f "$t" ]; then CC_ADMIT_TOKEN_NOTE="token ABSENT ($t) — evaluating fresh"; return 1; fi
-  if [ ! -O "$t" ]; then CC_ADMIT_TOKEN_NOTE="token not owned by uid $(id -u 2>/dev/null || printf '?') ($t) — evaluating fresh"; return 1; fi
-  line="$(awk 'NR==1' "$t" 2>/dev/null || true)"
-  issued="$(printf '%s' "$line" | cut -f1)"
-  sid="$(printf '%s' "$line" | cut -f2)"
-  terms="$(printf '%s' "$line" | cut -f4)"
-  # THE SID CHECK RUNS BEFORE THE UNLINK, and that ordering is deliberate. A token for ANOTHER sid
-  # is not ours to consume: unlinking it would destroy a sibling recovery's admission and turn one
-  # wiring bug into two failures. Everything that IS ours is consumed below, whatever the verdict.
-  if [ -n "$want" ] && [ "$sid" != "$want" ]; then
-    CC_ADMIT_TOKEN_NOTE="token REFUSED: issued for '${sid:-<none>}' but this spawn is '${want}' — not consumed, evaluating fresh"
+  if [ ! -O "$t" ]; then CC_ADMIT_TOKEN_NOTE="token not owned by uid ${me} ($t) — refused, not consumed, evaluating fresh"; return 1; fi
+  # SID ENFORCEMENT IS THE LIBRARY'S PROPERTY, NOT THE CALLER'S CONVENTION (W2FA D4). The old test
+  # was `[ -n "$want" ] && [ "$sid" != "$want" ]`, i.e. SKIPPED ENTIRELY when the caller set no sid
+  # — and MEASURED, a token minted for sid-AAA then admitted a completely unrelated caller, rc 0,
+  # detail "issued for sid-AAA". The caller that forgets to name its session is precisely the caller
+  # that needed the check, so an unenforceable token is not an admission at all.
+  if [ -z "$want" ]; then
+    CC_ADMIT_TOKEN_NOTE="token NOT REDEEMED — sid enforcement unavailable (CC_ADMIT_WANT_SID is empty); a token that cannot be bound to a session is not an admission. Refused, NOT consumed"
+    return 1
+  fi
+  # EVERY PRE-CLAIM REFUSAL LEAVES THE FILE ALONE. We only consume a file we have positively
+  # identified as OUR token: a foreign one is a sibling recovery's admission (destroying it turns
+  # one wiring bug into two failures), and an unidentified one is just a path the caller named —
+  # deleting that would make CC_ADMIT_TOKEN a remove-anything primitive.
+  if ! _cc_admit_token_shape "$t" "$want" "$me"; then
+    CC_ADMIT_TOKEN_NOTE="token REFUSED: ${_CC_ADMIT_TOK_BAD} — not consumed, evaluating fresh"
     return 1
   fi
   # ── THE ONE-SHOT, MADE ATOMIC (W2FA D1, 2026-09-20) ──────────────────────────────────────────
@@ -663,17 +746,18 @@ _cc_admit_token_redeem() { # → 0 redeemed (the caller must ADMIT) / 1 no usabl
     CC_ADMIT_TOKEN_NOTE="token NOT CLAIMED ($t) — the atomic rename failed: a concurrent redeemer took it, or its directory is not writable. One-shot cannot be enforced, so this is not an admission"
     return 1
   fi
-  # THE DISCARD IS VERIFIED, NEVER ASSUMED (W2FA D3). `rm -f … || true` throws away the one result
-  # that decides whether a token is one-shot; the `|| true` here is safe ONLY because the `-e` test
-  # below — a different call, not this one's exit code — is what actually renders the verdict. The
-  # rename already made the ORIGINAL name unreachable, so a surviving claim copy is hygiene rather
-  # than a replay; it is still a FACT and the row says so instead of asserting a removal that did
-  # not happen.
-  rm -f "$claim" 2>/dev/null || true
-  if [ -e "$claim" ]; then CC_ADMIT_TOKEN_UNLINK="the one-shot copy was NOT removed ($claim)"; fi
-  if ! cc_hw_is_int "$issued"; then
-    CC_ADMIT_TOKEN_NOTE="token UNPARSEABLE (issued='${issued}') — consumed, evaluating fresh${CC_ADMIT_TOKEN_UNLINK:+ [${CC_ADMIT_TOKEN_UNLINK}]}"; return 1
+  # AUTHORITATIVE RE-READ, ON OUR OWN COPY, AND BEFORE THE DISCARD. The pre-claim read decided only
+  # whether the file was ours to take; between that read and the rename anything could have
+  # rewritten it. Past the claim no other process can reach this inode, so these are the values the
+  # admission is granted on — and they must be read while the copy still exists, which is the one
+  # ordering constraint the discard imposes.
+  if ! _cc_admit_token_shape "$claim" "$want" "$me"; then
+    _cc_admit_token_discard "$claim"
+    CC_ADMIT_TOKEN_NOTE="token REFUSED after the claim: ${_CC_ADMIT_TOK_BAD} — consumed${CC_ADMIT_TOKEN_UNLINK:+ [${CC_ADMIT_TOKEN_UNLINK}]}"
+    return 1
   fi
+  issued="$_CC_ADMIT_TOK_ISSUED"; sid="$_CC_ADMIT_TOK_SID"; terms="$_CC_ADMIT_TOK_TERMS"
+  _cc_admit_token_discard "$claim"
   # THE CLOCK IS AN INPUT AND IS VALIDATED LIKE ONE. An unreadable `date` leaves `now` empty, which
   # makes the arithmetic below error and every comparison after it meaningless — the same fail-open
   # shape as the TTL, arriving from the other operand.
