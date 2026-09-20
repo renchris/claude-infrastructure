@@ -285,10 +285,21 @@ EOF
 # (measured 2026-09-09: 3 of 6 network-blocked live panes appeared twice, once as acct `.claude`).
 # The resume-sessions skill has always stated the rule -- "a session in BOTH = one next session" --
 # and this census never applied it. Keep the row whose account is NOT the bare mirror.
+# 🚨 A HUSK ROW IS NEVER THE MIRROR'S DUPLICATE (W10b, 2026-09-20). This collapses `~/.claude` and
+# `~/.claude-next`, which are ONE account behind a symlink, and it is keyed on the sid alone. After a
+# TRANSPLANT that is the wrong key: the session exists under TWO accounts as two objects with
+# OPPOSITE dispositions — the husk on the source store and the live successor on the target — and
+# preferring "any account that is not .claude" hands the slot to the SUCCESSOR and silently discards
+# the husk. Measured 2026-09-20 on panes 110 and 126: `lf_locate` emitted both HUSK rows, both panes
+# were live and enumerable, `lr_husk_state` said HUSK for both, and `--locate` printed NEITHER —
+# a 0-HUSK census over two standing husks, which is the exact false green this wave exists to end.
+# So HUSK wins the slot outright, in both directions. Everything else keeps the mirror rule verbatim.
 lf_dedup_mirror() { awk -F'\t' '
-  { sid=$1; acct=$3
-    if (!(sid in seen)) { ord[++k]=sid; seen[sid]=$0; sacct[sid]=acct }
-    else if (sacct[sid]==".claude" && acct!=".claude") { seen[sid]=$0; sacct[sid]=acct } }
+  { sid=$1; acct=$3; disp=$8
+    if (!(sid in seen)) { ord[++k]=sid; seen[sid]=$0; sacct[sid]=acct; sdisp[sid]=disp }
+    else if (disp=="HUSK" && sdisp[sid]!="HUSK") { seen[sid]=$0; sacct[sid]=acct; sdisp[sid]=disp }
+    else if (sdisp[sid]=="HUSK") { }
+    else if (sacct[sid]==".claude" && acct!=".claude") { seen[sid]=$0; sacct[sid]=acct; sdisp[sid]=disp } }
   END { for (i=1;i<=k;i++) print seen[ord[i]] }' ; }
 
 # ── THE CENSUS, DELEGATED TO ONE PROCESS (LIMIT_DETECT_100P § 3 W3) ──────────────────────────────

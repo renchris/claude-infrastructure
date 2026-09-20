@@ -1053,3 +1053,30 @@ SH
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" != *"HUSKP-9x7z"* ]] || { echo "--pane did not narrow: $output"; false; }
 }
+
+@test "dedupe: a HUSK row is never the mirror's duplicate — the successor must not take its slot" {
+  # THE FALSE GREEN THIS ENDS. lf_dedup_mirror collapses ~/.claude and ~/.claude-next, which are ONE
+  # account behind a symlink, and it was keyed on the SID alone. After a transplant that is the wrong
+  # key: the session exists under two accounts as two objects with OPPOSITE dispositions — the husk on
+  # the source store, the live successor on the target — and "prefer any account that is not .claude"
+  # handed the slot to the SUCCESSOR and discarded the husk. Measured 2026-09-20 on panes 110 and 126:
+  # lf_locate emitted both HUSK rows, both panes were live and enumerable, lr_husk_state said HUSK for
+  # both, and --locate printed NEITHER. A 0-HUSK census over two standing husks.
+  run bash -c '
+    printf "sid1\t/c/.claude\t.claude\t110\t99\t/w\t-\tHUSK\tlimit\tlimit\t-\n"   >  "$BATS_TEST_TMPDIR/rows"
+    printf "sid1\t/c/.claude-tertiary\tnext3\t999\t98\t/w\t-\tRECOVERABLE\tlimit\tlimit\t-\n" >> "$BATS_TEST_TMPDIR/rows"
+    sed -n "/^lf_dedup_mirror()/,/^}/p" "'"$FLEET"'" > "$BATS_TEST_TMPDIR/d.sh"; . "$BATS_TEST_TMPDIR/d.sh"
+    lf_dedup_mirror < "$BATS_TEST_TMPDIR/rows"'
+  [[ "$output" == *"HUSK"* ]] || { echo "the successor took the husk's slot: $output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ] || { echo "dedupe stopped deduping: $output"; false; }
+}
+
+@test "dedupe CONTROL: the plain mirror rule is unchanged — non-HUSK still prefers the real account" {
+  run bash -c '
+    printf "sid2\t/c/.claude\t.claude\t110\t99\t/w\t-\tRECOVERABLE\tlimit\tlimit\t-\n"  >  "$BATS_TEST_TMPDIR/rows"
+    printf "sid2\t/c/.claude-next\tnext\t110\t99\t/w\t-\tRECOVERABLE\tlimit\tlimit\t-\n" >> "$BATS_TEST_TMPDIR/rows"
+    sed -n "/^lf_dedup_mirror()/,/^}/p" "'"$FLEET"'" > "$BATS_TEST_TMPDIR/d.sh"; . "$BATS_TEST_TMPDIR/d.sh"
+    lf_dedup_mirror < "$BATS_TEST_TMPDIR/rows"'
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"next"* ]] || { echo "the mirror rule changed: $output"; false; }
+}
