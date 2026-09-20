@@ -782,3 +782,98 @@ EOF
   [ -f "$CC_ADMIT_STATE_DIR/cE3.refusals" ] \
     || { echo "the key was dropped AND the bound was lost"; ls -R "$CC_ADMIT_STATE_DIR"; false; }
 }
+
+# ══ W2FA A2 — AN INTEGER'S CHARSET IS NOT ITS RANGE ════════════════════════════════════════════
+# D2 hardened the TTL RESOLVER: `[ "$age" -gt "${CC_ADMIT_TOKEN_TTL_S:-300}" ]` became a resolved
+# integer, because `[` does not return false on a non-integer, it ERRORS rc 2 and `if` reads that
+# as a clean false. The fix validated the CHARSET only, so the identical fail-open survived one
+# layer in — and the derived TTL added two more readings of the same characters. All four cases
+# below were RED on the parent commit and each carries its measured red.
+
+@test "15w A2a an IN-CHARSET but OUT-OF-RANGE TTL cannot make a token immortal either" {
+  # MEASURED on the parent: CC_ADMIT_TOKEN_TTL_S=999999999999999999999 is all digits, so the D2
+  # resolver accepted it verbatim; bash then printed `[: 999999999999999999999: integer expected`
+  # and the gate returned rc 0 over a 10-YEAR-OLD token on a box at 9.90 load/core. Identical
+  # symptom to 15h, one validator further in.
+  local tok
+  tok="$(mint sid-range)"
+  printf '%s\t%s\t%s\t%s\n' "$(( $(date +%s) - 315360000 ))" sid-range "$(id -u)" load > "$tok"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN_TTL_S=999999999999999999999 \
+               CC_ADMIT_TOKEN="$2" CC_ADMIT_WANT_SID=sid-range cc_capacity_admit c15w "s"' _ "$LIB" "$tok"
+  [ "$status" -ne 0 ] \
+    || { echo "a 10-YEAR-OLD token ADMITTED on a 21-digit TTL — the comparison errored and \`if\` read it as false"; echo "$output"; false; }
+  [[ "$(idl_first 'select(.caller=="c15w")|.token')" == *"not an integer"* ]] \
+    || { echo "row: $(idl_first 'select(.caller=="c15w")|.token')"; false; }
+  # the shell-level symptom itself — nothing may reach stderr complaining about the operand
+  [[ "$output" != *"integer expression expected"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"integer expected"* ]] || { echo "$output"; false; }
+}
+
+@test "15x A2b an out-of-range STAGE cannot wrap the derived TTL — including to a NEGATIVE bound" {
+  # The derived default is `$(( draft + shell + boot + slack ))`, and `$(( ))` wraps silently at
+  # int64. MEASURED on the parent: CC_RECYCLE_DRAFT_WAIT=99999999999999999999 → TTL
+  # 7766279631452242759 (a token nothing can ever expire) and CC_RECYCLE_DRAFT_WAIT=int64-max →
+  # TTL -9223372036854774969 (every token instantly expired). One unvalidated operand, both
+  # failure directions — so this case asserts the VALUE, not merely a verdict.
+  run bash -c 'unset CC_ADMIT_TOKEN_TTL_S; . "$1"
+               CC_RECYCLE_DRAFT_WAIT=9223372036854775807 _cc_admit_token_ttl
+               printf "%s" "$CC_ADMIT_TOKEN_TTL_VALUE"' _ "$LIB"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" -gt 0 ] || { echo "the derived TTL is $output — a NEGATIVE bound expires every token"; false; }
+  [ "$output" = 1020 ] || { echo "the out-of-range stage was not rejected: TTL=$output (expected the 180 fallback ⇒ 1020)"; false; }
+  run bash -c 'unset CC_ADMIT_TOKEN_TTL_S; . "$1"
+               CC_RECYCLE_DRAFT_WAIT=99999999999999999999 _cc_admit_token_ttl
+               printf "%s" "$CC_ADMIT_TOKEN_TTL_VALUE"' _ "$LIB"
+  [ "$output" = 1020 ] || { echo "a 20-digit stage wrapped the TTL to $output"; false; }
+}
+
+@test "15y A2c a LEADING ZERO is decimal, not octal — and never aborts the arithmetic" {
+  # `$(( 0600 ))` is OCTAL 384. MEASURED on the parent: CC_RECYCLE_DRAFT_WAIT=0600 gave TTL 1224
+  # instead of 1440 — silently 216 s short, in the direction that expires tokens mid-recycle — and
+  # CC_RECYCLE_DRAFT_WAIT=0900 is not a valid octal literal at all, so bash aborted with
+  # `0900: value too great for base` and, under `set -e`, took the whole process with it. The
+  # second arm is run under `set -e` BECAUSE lr-fire-resume sources this library that way.
+  run bash -c 'unset CC_ADMIT_TOKEN_TTL_S; . "$1"
+               CC_RECYCLE_DRAFT_WAIT=0600 _cc_admit_token_ttl
+               printf "%s" "$CC_ADMIT_TOKEN_TTL_VALUE"' _ "$LIB"
+  [ "$output" = 1440 ] || { echo "0600 was read as octal 384: TTL=$output (expected 600+600+180+60=1440)"; false; }
+  run bash -c 'set -e; unset CC_ADMIT_TOKEN_TTL_S; . "$1"
+               CC_RECYCLE_DRAFT_WAIT=0900 _cc_admit_token_ttl
+               printf "%s" "$CC_ADMIT_TOKEN_TTL_VALUE"' _ "$LIB"
+  [ "$status" -eq 0 ] \
+    || { echo "the arithmetic aborted under set -e — a caller that sources this library DIES: $output"; false; }
+  [ "$output" = 1740 ] || { echo "0900 did not resolve to decimal 900: TTL=$output"; false; }
+  [[ "$output" != *"value too great for base"* ]] || { echo "$output"; false; }
+}
+
+@test "15z A2d the RECORD'S OWN issued field is the other operand, and is bounded the same way" {
+  # `age=$(( now - issued ))` has TWO operands and D2 hardened neither. The record's epoch field is
+  # attacker- and corruption-reachable, all-digits, and feeds a subtraction that wraps at int64.
+  #
+  # MEASURED on the parent, verdict-level: with issued = 2^64 + now - 5 — twenty digits, every one
+  # a digit, so cc_hw_is_int passes it — the subtraction wraps to an age of 5 SECONDS and the gate
+  # returned rc 0 on a box at 9.90 load/core. A token dated 584 years into the future admitted as
+  # if it had been minted five seconds ago.
+  command -v python3 >/dev/null 2>&1 || skip "python3 is needed to compose an operand past int64"
+  local tok issued
+  issued="$(python3 -c 'import time;print(18446744073709551616 + int(time.time()) - 5)')"
+  [ "${#issued}" -eq 20 ] || { echo "the wrap operand is ${#issued} digits, not 20 — the premise moved"; false; }
+  tok="$(mint sid-issued)"
+  printf '%s\t%s\t%s\t%s\n' "$issued" sid-issued "$(id -u)" load > "$tok"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" \
+               CC_ADMIT_WANT_SID=sid-issued cc_capacity_admit c15z "s"' _ "$LIB" "$tok"
+  [ "$status" -ne 0 ] \
+    || { echo "a token dated 2^64 s in the future ADMITTED — the age subtraction wrapped to 5s"; echo "$output"; false; }
+  [[ "$(idl_first 'select(.caller=="c15z")|.token')" == *"epoch integer"* ]] \
+    || { echo "row: $(idl_first 'select(.caller=="c15z")|.token')"; false; }
+  # …and the SAME field one digit shorter must not merely produce a nonsense diagnosis either: on
+  # the parent a 20-digit epoch wrapped NEGATIVE and the row read "EXPIRED (-7766279629662303726s
+  # old)", which refuses for a reason that is arithmetically meaningless.
+  tok="$(mint sid-issued2)"
+  printf '%s\t%s\t%s\t%s\n' 99999999999999999999 sid-issued2 "$(id -u)" load > "$tok"
+  run bash -c '. "$1"; CC_ADMIT_LOADAVG_OVERRIDE=99 CC_ADMIT_TOKEN="$2" \
+               CC_ADMIT_WANT_SID=sid-issued2 cc_capacity_admit c15z2 "s"' _ "$LIB" "$tok"
+  [ "$status" -ne 0 ] || { echo "$output"; false; }
+  [[ "$(idl_first 'select(.caller=="c15z2")|.token')" != *"-"*"s old"* ]] \
+    || { echo "the row reports a NEGATIVE age: $(idl_first 'select(.caller=="c15z2")|.token')"; false; }
+}
