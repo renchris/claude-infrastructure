@@ -244,11 +244,57 @@ screen() { # $1 = call ordinal, $2 = one of empty|menu|mine
 }
 states() { jq -r '.state' "$LR_RUN_DIR/events.jsonl" 2>/dev/null | tr '\n' ' '; }
 
+# ── THE ONE PLACE THESE CASES MEET A WALL CLOCK ───────────────────────────────────────────────────
+#
+# Two different problems live here and conflating them is what made this block unreliable.
+#
+# 1. `interact` NEVER RETURNS UNLESS STDIN IS AT EOF, and that is not a property of the subject.
+#    The program deliberately ends EVERY path at `interact` — an `exit` there closes the master pty
+#    and kills the resumed session, which is the husk this project exists to prevent (case 14 pins
+#    the count at 0). So under bats the program terminates only if whatever stdin the RUNNER was
+#    invoked with happens to be at EOF. Measured 2026-09-20 at load/core ~10: the same case ran to a
+#    242 s outer bound and was killed — status 124 — with every behavioural assertion ALREADY
+#    satisfied in its output, and returned in 70 s with status 0 once stdin was /dev/null. That is
+#    the whole of the "green 4/4 in isolation, 16 reds across three contended runs" signature: the
+#    verdict was decided by how bats was invoked. `</dev/null` is the cure, and it is load-invariant.
+#
+# 2. The program's own budget IS a wall clock — a quiet arm, a 1 s poll loop, and an `exec` per tick
+#    — so on a contended box it legitimately takes minutes. A bound sized on a quiet box can only
+#    ever convict the box (docs/lessons/bound-must-fit-the-band-not-the-bench.md, and the same
+#    correction tests/cc-lr.bats took in 1b2676f4c). So the bound is SCALED by measured load/core,
+#    and a kill is JUDGED only below 1.0/core — above that line the elapsed time is printed and the
+#    case skips, because a timeout there carries no information about the subject
+#    (docs/lessons/environment-falsifiable-precondition-must-skip.md).
+#
+# Every behavioural assertion stays in the CALLER and unconditional: they run whenever the program
+# completed, at any load. Only the wall-clock verdict is banded.
+lr_load_per_core() {
+  /usr/bin/python3 -c 'import os; print("%.2f" % (os.getloadavg()[0] / (os.cpu_count() or 1)))' \
+    2>/dev/null || echo 0
+}
+lr_expect_run() { # $1 = the QUIET-BOX budget in seconds; scales it to the box this is actually on
+  local base="$1" lpc bound t0 t1 elapsed
+  lpc="$(lr_load_per_core)"
+  bound="$(LC_ALL=C awk -v b="$base" -v l="$lpc" 'BEGIN { m = int(l) + 1; if (m > 8) m = 8; printf "%d", b * m }')"
+  t0="$(date +%s)"
+  run timeout "$bound" expect -f "$EXP" </dev/null
+  t1="$(date +%s)"
+  elapsed=$((t1 - t0))
+  echo "# expect: ${elapsed}s of a ${bound}s bound at load/core $lpc (quiet-box budget ${base}s)" >&3
+  if [ "$status" -eq 124 ]; then
+    if [ "$(LC_ALL=C awk -v l="$lpc" 'BEGIN { print (l < 1.0) ? 1 : 0 }')" = 1 ]; then
+      echo "the program did not finish inside ${bound}s on a QUIET box (load/core $lpc) — a hang, not contention"
+      echo "$output"; return 1
+    fi
+    skip "killed at the ${bound}s bound with load/core $lpc — above 1.0 a wall-clock verdict is a fact about the BOX, not the subject"
+  fi
+  [ "$status" -eq 0 ] || { echo "expect exited $status after ${elapsed}s at load/core $lpc"; echo "$output"; return 1; }
+}
+
 @test "RED-PROOF quiet arm: READY never matched, composer reads EMPTY → the prompt IS typed" {
   exp_setup
   screen 1 empty
-  run timeout 60 expect -f "$EXP"
-  [ "$status" -eq 0 ]
+  lr_expect_run 60
   grep -qF "GOT:[/limit-recover ingest /x $TOK]" "$LR_TEST_GOT" || { cat "$LR_TEST_GOT"; false; }
 }
 
@@ -258,8 +304,7 @@ states() { jq -r '.state' "$LR_RUN_DIR/events.jsonl" 2>/dev/null | tr '\n' ' '; 
   # could never survive.
   exp_setup
   screen 1 menu
-  run timeout 60 expect -f "$EXP"
-  [ "$status" -eq 0 ]
+  lr_expect_run 60
   [ ! -s "$LR_TEST_GOT" ] || { echo "something was typed: $(cat "$LR_TEST_GOT")"; false; }
   [[ "$output" == *"READY NEVER SEEN"* ]] || { echo "$output"; false; }
   [[ "$(states)" == *"READY-NOT-SEEN"* ]] || { echo "states: $(states)"; false; }
@@ -271,8 +316,7 @@ states() { jq -r '.state' "$LR_RUN_DIR/events.jsonl" 2>/dev/null | tr '\n' ' '; 
   # The record the probe must find. Dated far ahead so it is unambiguously newer than the t0 the
   # program captures at spawn — the test is about the TOKEN, not about clock resolution.
   printf '{"type":"user","timestamp":"2099-01-01T00:00:00.000Z","message":{"role":"user","content":"ingest %s"}}\n' "$TOK" > "$TX"
-  run timeout 60 expect -f "$EXP"
-  [ "$status" -eq 0 ]
+  lr_expect_run 60
   [[ "$output" == *"SUBMITTED"* ]] || { echo "$output"; false; }
   [[ "$(states)" == *"submitted"* ]] || { echo "states: $(states)"; false; }
 }
@@ -282,8 +326,7 @@ states() { jq -r '.state' "$LR_RUN_DIR/events.jsonl" 2>/dev/null | tr '\n' ' '; 
   screen 1 empty          # quiet arm: safe to type
   screen 2 mine           # poll at the bound: our prompt is still sitting in the composer
   : > "$TX"               # …and nothing ever reaches the transcript
-  run timeout 90 expect -f "$EXP"
-  [ "$status" -eq 0 ]
+  lr_expect_run 90
   # exactly TWO lines reached the stub: the prompt, and the single re-Enter (an empty line).
   [ "$(wc -l < "$LR_TEST_GOT" | tr -d ' ')" = 2 ] || { cat "$LR_TEST_GOT"; false; }
   [[ "$output" == *"NOT SUBMITTED"* ]] || { echo "$output"; false; }
