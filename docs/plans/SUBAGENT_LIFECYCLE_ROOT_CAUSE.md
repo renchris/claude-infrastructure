@@ -286,3 +286,32 @@ Falsifier for (b) if chosen: residency p90 (H: 2.2 h) must not rise over the fol
     their own recovery. `spawn-presence.sh`'s own comment names this failure class and its liveness
     check misses it, because the limit-killed TUI process **stays alive**. Both fires were admitted
     through the gate's designed refuse-once-then-admit escalation, not by disabling the term.
+- 2026-09-20 — **PLAN COMPLETE. All five waves landed, content-verified and live.** W1 `3cdaa2552` ·
+  W2 `c9e70fcca` · W3 `f710200f8` · W4 `46ccdf23c` · W5 `dd070aaa1`, every one an ancestor of trunk;
+  live layer at `f710200f8`, `LIVE_LAG=0`, `LIVE_ADDS=0`; custody all returned. Nothing on the
+  forbidden list was added anywhere, and **both probes declined to license a change** — the plan's
+  central bet (fix what was measured, wrap nothing) held end to end.
+  - **W3 (RC-2)** shipped `RESIDENT_MINE`/`_NAMES`/`_SRC`/`_DIRTY_FILES` as a 🔧 that NAMES live
+    members, ranked one below the custody arm, kill switch `WRAP_RESIDENT=off`. RED 19/19 at pinned
+    `3cdaa2552`; its anti-false-positive fixture kills **four** one-line mutants (pgrep-f/name
+    substring, single-flag, co-presence-without-cross-field, team-blind) and a fifth case proves all
+    four still read 1 on a REAL member. No-team-config ⇒ 0 and nothing changes.
+  - 🚨 **D1's baseline is NOT the register's, and the difference is not cosmetic.** W3 re-derived it
+    today: 101 leads spawned a named member in 30 d; **23 (22.8%) sent `shutdown_request` to EVERY
+    member, 68 (67.3%) to NONE, and 334 of 490 named members (68.2%) got nothing.** These are not
+    comparable to §4's 26.4%/44.7% — that script no longer exists, and W3's counts `Agent` `tool_use`
+    `name:` spawns, the durable record. D1 must re-run W3's verbatim heredoc (`git show f710200f8`)
+    on BOTH ends; its window is transcript mtime and **slides**, so re-run, never re-quote.
+  - **A named residual W3 deliberately did not wrap:** Claude Code MUTATES the team config, removing
+    a member row on shutdown completion (91 of 95 30-day configs list only the lead, against ~490
+    spawns), so a member whose row was removed while its PROCESS survived (RC-11 — `TaskStop` may
+    leave the process) is **invisible** to `RESIDENT_MINE`. Closing that needs a different fact and
+    was correctly kept out of this wave.
+  - **D1 is filed, not dropped:** backlog `b1432e348362`, `not-yet-true` with a falsifier that fires
+    2026-10-03. P1's term is already satisfied, so D1 turns entirely on the post-W3 lead-side rate.
+  - **Two recovery-machinery findings this wave paid for.** A cold `--worktree` fire under load
+    reports `never-engaged` and is wrong (3 of 3; the INC-4 re-type then duplicated W2 into its own
+    worktree) — fire warm with `--cwd`, which engaged in 9 s at the same load. And after a
+    limit-recover transplant relaunch, W3's `PATH` lacked `/opt/homebrew/bin`, so a gate run returned
+    **exit 127 on every suite with ZERO `not ok`** — a non-verdict that reads as a pass unless the
+    `1..N` plan line is asserted.
