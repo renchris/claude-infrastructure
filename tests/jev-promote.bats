@@ -21,6 +21,26 @@ teardown() {
   return 0
 }
 
+# need_deps — the call-reaching tests here rest on a precondition THE ENVIRONMENT CAN FALSIFY.
+#
+# 🚨 WHY A SKIP AND NOT A RED (post-land RED at 53c02dc4f980, backlog 963c7af699c9). Nine tests in
+# this file drive `promote` / `jev-batch.sh` far enough to reach `jev_available`, which requires
+# $REPO/node_modules/ai. node_modules is gitignored, so a runner that has not done an `npm install`
+# fails that check and the run exits 2 at scripts/jev/promote-memory.sh:300 — BEFORE the preflight
+# those tests are about. The suite then reports nine assertion failures naming exit codes (4, 0, 3)
+# and an unconsumed arm, and not one of them is the defect: the subject was never reached. That is
+# verbatim what the nightly regression runner recorded — the same nine tests, in this order, while
+# the same tree runs 34/34 green with deps present.
+#
+# The two sibling files already guard exactly this way (jev-evaluate.bats:30,
+# jev-anti-deference-arm.bats:35); this file was the one that did not. A precondition the
+# environment can break must SKIP, never RED, or the verdict is a property of the box rather than
+# of the diff — and a red nobody can attribute is a red everybody learns to ignore.
+need_deps() {
+  [ -d "$REPO/node_modules/ai" ] || \
+    skip "deps not installed (npm install) — jev_available is false, so the run exits 2 before the preflight"
+}
+
 start_mock() {
   node "$REPO/tests/fixtures/jev-mock-gateway.mjs" "${1:-ok}" > "$BATS_TEST_TMPDIR/port" 2>&1 &
   MOCKPID=$!
@@ -86,6 +106,7 @@ runp() {
 }
 
 @test "promote: a dead route aborts at the preflight, naming the reason, before the batch" {
+  need_deps
   mkcorpus
   run runp CC_JEV_ZDR=0 CC_JEV_BASE_URL="http://127.0.0.1:1" -- --yes
   [ "$status" -eq 4 ]
@@ -94,6 +115,7 @@ runp() {
 }
 
 @test "promote: a full run emits a swap list and never touches the index" {
+  need_deps
   mkcorpus
   # cp + cmp rather than md5: the bats corpus runs under com.claude.nightly-regression, whose PATH
   # does not carry /sbin, so `md5` is simply unreachable there — and a byte comparison says WHICH
@@ -305,6 +327,7 @@ runp() {
 
 # The whole path, as launchd invokes it: armed token in, rows out, token gone.
 @test "batch: an ARMED run produces rows and consumes the token" {
+  need_deps
   mkcorpus
   A="$BATS_TEST_TMPDIR/go.arm"
   EXP="$(date -u -v+30M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)"
@@ -380,6 +403,7 @@ runp() {
 # still skips it — splicing a verdict about five OTHER files into this run, with an identical row
 # shape and a real filename as the winner. Nothing downstream could detect it.
 @test "promote: a fresh run stamps the population and seed it is a run OF" {
+  need_deps
   mkcorpus
   export MOCK_CHOICE_ROTATE=1
   start_mock ok
@@ -391,6 +415,7 @@ runp() {
 }
 
 @test "promote --resume: REFUSES a run of a different population rather than splicing it" {
+  need_deps
   mkcorpus
   R="$BATS_TEST_TMPDIR/old.jsonl"
   # stamped for 99 orphans; the live corpus has 12. Same seed, different population.
@@ -404,6 +429,7 @@ runp() {
 }
 
 @test "promote --resume: a MATCHING run is continued, and paid-for rows are not re-bought" {
+  need_deps
   mkcorpus
   export MOCK_CHOICE_ROTATE=1
   start_mock ok
@@ -460,6 +486,7 @@ runp() {
 }
 
 @test "promote: a mock-routed run stamps every row, meta included" {
+  need_deps
   mkcorpus
   export MOCK_CHOICE_ROTATE=1
   start_mock ok
@@ -516,6 +543,7 @@ armed_home() {   # → a HOME with a live arm, a corpus, and an anchor run
 }
 
 @test "batch: under a TTY the pass STREAMS, and the out-file still gets its copy" {
+  need_deps
   mkcorpus
   AH="$(armed_home)"
   export MOCK_CHOICE_ROTATE=1
@@ -535,6 +563,7 @@ armed_home() {   # → a HOME with a live arm, a corpus, and an anchor run
 # — so every failure on the interactive path would have been recorded as a clean `run rc=0`. Same
 # class as this repo's standing lesson that a suppressed stderr turns a failed command into a zero.
 @test "batch: a failure under a TTY survives the tee and is logged non-zero" {
+  need_deps
   mkcorpus
   AH="$(armed_home)"
   run env HOME="$AH" AI_GATEWAY_API_KEY=dummy CC_JEV_BASE_URL="http://127.0.0.1:1" \
