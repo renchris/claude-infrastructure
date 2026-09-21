@@ -631,3 +631,15 @@ pstatus() { env HOME="$1" AI_GATEWAY_API_KEY=dummy CC_JEV_ARM_FILE="$1/.claude/a
   grep -qF "armed       YES" <<<"$output"
   grep -qF "133 call(s)" <<<"$output"
 }
+
+@test "cc-jev status: rows from a LOCAL MOCK are not reported as a pass" {
+  H="$(pass_home)"
+  printf '%s\n' '{"id":"meta","round":"meta","orphans":10,"seed":"s","plan":4,"anchors":1,"mock":true}' \
+                '{"id":"h1","round":"heat","winner":"a.md","mock":true}' \
+    > "$H/.claude/autonomy/jev-promote-20260921T010101Z.jsonl"
+  run pstatus "$H"
+  grep -qF "LOCAL MOCK" <<<"$output"
+  grep -qF "no real pass has run" <<<"$output"
+  ! grep -qE 'promotion +(COMPLETE|PARTIAL)' <<<"$output" \
+    || { echo "counted mock rows as a pass"; false; }
+}

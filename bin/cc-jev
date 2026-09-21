@@ -69,6 +69,15 @@ cmd_status() {
   if [ -z "$_pass_rows" ]; then
     printf 'promotion   never run — one armed window does a full pass (cc-jev arm)\n'
   else
+    # A mock run is not a pass. It writes the same filename shape into the same directory, so the
+    # only way to tell is the marker the row carries (hooks/lib/jev.sh::jev_is_mock).
+    if [ "$(jq -r 'select(.mock==true)|.id' "$_pass_rows" 2>/dev/null | head -1)" != "" ]; then
+      printf 'promotion   last rows are from a LOCAL MOCK (%s) — no real pass has run\n' "$(basename "$_pass_rows")"
+      printf '            arm a window to make a real one:  cc-jev arm\n'
+      _pass_rows=""
+    fi
+  fi
+  if [ -n "$_pass_rows" ]; then
     _pp="$(jq -r 'select(.round=="meta")|.plan // empty' "$_pass_rows" 2>/dev/null | head -1)"
     _pv="$(jq -r 'select(.round!="meta")|.id' "$_pass_rows" 2>/dev/null | wc -l | tr -d ' ')"
     _pn="$(basename "$_pass_rows")"

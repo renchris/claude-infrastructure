@@ -268,6 +268,9 @@ fi
 printf 'Preflight OK — the route answers. Proceeding.\n\n'
 
 CAP="${CC_JEV_RANK_CAP_B:-3000}"
+# Stamped from the ROUTE at write time, so a run against the local mock can never be mistaken for
+# a verdict about this repo's real lessons. hooks/lib/jev.sh::jev_is_mock.
+MOCKED=false; jev_is_mock && MOCKED=true
 done_n=0; skipped=0; consec=0
 while IFS= read -r f; do
   body="$(head -c "$CAP" "$MEM/$f" 2>/dev/null)"
@@ -337,7 +340,8 @@ while IFS= read -r f; do
   done_n=$((done_n+1))
   hook="$(grep -F "($f)" "$IDX" | head -1 | sed 's/^- //' | cut -c1-120)"
   jq -nc --arg f "$f" --arg lvl "$lvl" --arg brd "${brd:-}" --arg sup "${sup:-}" --arg hook "$hook" \
-     '{file:$f, level:$lvl, breadth:(if $brd=="" then null else $brd end), superseded:($sup|tonumber? // null), hook:$hook}' >> "$OUT"
+     --argjson mk "$MOCKED" \
+     '{file:$f, level:$lvl, breadth:(if $brd=="" then null else $brd end), superseded:($sup|tonumber? // null), hook:$hook, mock:$mk}' >> "$OUT"
   printf '.'
 done < "$ROWS"
 printf '\n\n'
