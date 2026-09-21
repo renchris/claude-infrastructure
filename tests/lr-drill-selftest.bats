@@ -558,3 +558,117 @@ mk_results() { # <verdict-for-every-row> → path
   [ ! -e "$LR_DRILL_STATE_DIR/live.log" ]
   [ ! -e "$BATS_TEST_TMPDIR/live-attempts.log" ]
 }
+
+# ══ THE ROW↔ARM MAP AND THE TWO MEASURED ROWS ══════════════════════════════════════════════════
+
+mk_run() { # → a run dir with one verdict file per arm, from "arm=verdict" pairs
+  local d="$BATS_TEST_TMPDIR/run-$RANDOM" a v
+  mkdir -p "$d"
+  for a in "$@"; do
+    v="${a#*=}"; a="${a%%=*}"
+    mkdir -p "$d/$a"
+    printf '%s\n' "$v" > "$d/$a/verdict"
+  done
+  printf '%s' "$d"
+}
+
+@test "row 3 PASSES only when all five arms reached their named verdict" {
+  local d
+  # EVERY PAIR QUOTED. `queued=queued->engaged` unquoted is a REDIRECTION: bash reads the `>` and
+  # creates a file called `engaged`, the argument never reaches mk_run, and the arm silently has no
+  # verdict file. It cost three of these cases a red before the cause was visible.
+  d="$(mk_run gate=FAILED:gate:headroom watcher=STALE:watcher draft=HELD:draft \
+              "queued=queued->engaged" router=PARKED:no-target)"
+  run bash -c 'eval "$(sed -n "/^row_verdict() {/,/^}$/p" "$1")"; row_verdict "$2" 3' _ "$SUBJ" "$d"
+  [ "$status" -eq 0 ]
+  [[ "$output" == PASS\|* ]] || false
+}
+
+@test "row 3 FAILS when ONE arm came back wrong — the other four cannot carry it" {
+  local d
+  d="$(mk_run gate=FAILED:gate:headroom watcher=FAILED:watcher:not-stale:RECOVERED \
+              draft=HELD:draft "queued=queued->engaged" router=PARKED:no-target)"
+  run bash -c 'eval "$(sed -n "/^row_verdict() {/,/^}$/p" "$1")"; row_verdict "$2" 3' _ "$SUBJ" "$d"
+  [[ "$output" == FAIL\|*watcher=FAILED* ]] || false
+}
+
+@test "row 3 is UNMEASURED, not FAIL, when an arm never recorded anything" {
+  # The two must not collapse: one says the drill did not look, the other says the surface
+  # misbehaved, and they send a reader to different places.
+  local d
+  d="$(mk_run gate=FAILED:gate:headroom watcher=UNMEASURED:no-reaper-state draft=HELD:draft \
+              "queued=queued->engaged" router=PARKED:no-target)"
+  run bash -c 'eval "$(sed -n "/^row_verdict() {/,/^}$/p" "$1")"; row_verdict "$2" 3' _ "$SUBJ" "$d"
+  [[ "$output" == UNMEASURED\|* ]] || false
+}
+
+@test "row 3 does not accept a gate arm that was too slow" {
+  local d
+  d="$(mk_run gate=FAILED:gate:headroom:slow:4500ms watcher=STALE:watcher draft=HELD:draft \
+              "queued=queued->engaged" router=PARKED:no-target)"
+  run bash -c 'eval "$(sed -n "/^row_verdict() {/,/^}$/p" "$1")"; row_verdict "$2" 3' _ "$SUBJ" "$d"
+  [[ "$output" == FAIL\|*slow* ]] || false
+}
+
+@test "row 11 takes the WORST fire latency, not the average" {
+  local d a
+  d="$BATS_TEST_TMPDIR/lat"; mkdir -p "$d"
+  for a in gate watcher draft queued; do mkdir -p "$d/$a"; echo 100 > "$d/$a/fire.elapsed_ms"; done
+  mkdir -p "$d/router"; echo 5000 > "$d/router/fire.elapsed_ms"
+  run bash -c 'eval "$(sed -n "/^row_verdict() {/,/^}$/p" "$1")"; row_verdict "$2" 11' _ "$SUBJ" "$d"
+  [[ "$output" == FAIL\|*5000ms* ]] || false
+}
+
+@test "row 11 is UNMEASURED when fewer than five fires were timed" {
+  local d a
+  d="$BATS_TEST_TMPDIR/lat2"; mkdir -p "$d"
+  for a in gate watcher draft; do mkdir -p "$d/$a"; echo 100 > "$d/$a/fire.elapsed_ms"; done
+  run bash -c 'eval "$(sed -n "/^row_verdict() {/,/^}$/p" "$1")"; row_verdict "$2" 11' _ "$SUBJ" "$d"
+  [[ "$output" == UNMEASURED\|*"only 3 of 5"* ]] || false
+}
+
+@test "every row this drill cannot measure names its missing instrument" {
+  # Not omitted, not defaulted to a pass: the gap must be legible in the results file.
+  local d n
+  d="$BATS_TEST_TMPDIR/empty"; mkdir -p "$d"
+  for n in 1 2 4 5 6 7 8 9 10 12; do
+    run bash -c 'eval "$(sed -n "/^row_verdict() {/,/^}$/p" "$1")"; row_verdict "$2" "$3"' _ "$SUBJ" "$d" "$n"
+    [[ "$output" == UNMEASURED\|operator-verified:* ]] || { echo "row $n: $output"; false; }
+  done
+}
+
+# ══ `--drill last` — what makes the handed command PASTEABLE ═══════════════════════════════════
+
+@test "--check-manifest last resolves the newest manifest this drill wrote" {
+  local mf a b
+  mf="$(mk_manifest)"
+  mkdir -p "$LR_DRILL_STATE_DIR/drill-20260101T000000Z" "$LR_DRILL_STATE_DIR/drill-20260202T000000Z"
+  a="$LR_DRILL_STATE_DIR/drill-20260101T000000Z/manifest.tsv"
+  b="$LR_DRILL_STATE_DIR/drill-20260202T000000Z/manifest.tsv"
+  cp "$mf" "$a"
+  # The newer one is deliberately BROKEN, so a pass would prove the older was chosen.
+  printf 'not a manifest\n' > "$b"
+  run "$SUBJ" --check-manifest last
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"manifest magic"* ]] || false
+}
+
+@test "--drill last with no manifest at all REFUSES rather than falling through" {
+  run "$SUBJ" --drill last
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"found no manifest"* ]] || false
+}
+
+@test "a real file named 'last' beats the magic word" {
+  # A magic string that shadowed a real path would surprise a reader about WHICH sessions are
+  # about to be typed into, which is the one thing this tool may never do.
+  local mf
+  mf="$(mk_manifest)"
+  mkdir -p "$LR_DRILL_STATE_DIR/drill-20260101T000000Z"
+  cp "$mf" "$LR_DRILL_STATE_DIR/drill-20260101T000000Z/manifest.tsv"
+  cd "$BATS_TEST_TMPDIR"
+  printf 'not a manifest\n' > last
+  run "$SUBJ" --check-manifest last
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"manifest magic"* ]] || false
+}
