@@ -968,6 +968,58 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
   met today; the § 5 timing leg should be read WITH its load, and a future census that adds work will
   cross it on an ordinary busy box long before it does on a quiet one.
 
+- 2026-09-20T19:0xZ · **`lr_holder_count` — ATTEMPTED, MEASURED, AND REVERTED. The naive fix is
+  wrong, and finding out why is worth more than the fix would have been.** W3 handed this over as a
+  one-line predicate error; it is not. Ownership was re-checked by cwd first (`lsof -a -d cwd -c
+  node`, never `pgrep -f`): W3 and W2b-ii both at **0 live sessions**, so `lr-lib.sh` and
+  `tests/lr-fleet.bats` were unowned and this was taken rather than filed — *a defect named only in
+  a plan rots, because nothing reads a plan for unfinished work.*
+
+  **THE DEFECT IS REAL, and was reproduced executably before any edit.** `lr_holder_count`
+  (`lr-lib.sh:474-497`) computes `rows + procs` then subtracts the row/proc OVERLAP — correct for a
+  registry row and a `--resume` leaf naming the SAME process, and blind to the other way one process
+  appears twice. The registry is PANE-keyed, so a session that changed panes leaves TWO live rows
+  carrying ONE pid (§ 11 #2). With no resume leaf there is nothing to subtract against: **two pane
+  rows over one live pid returned 2 where the truth is 1**, `--locate` said `DUPLICATE`, and
+  `--recover` PARKED a recoverable pane.
+
+  **The cure was implemented (distinct pids over `{row pids} ∪ {resume leaves}`) and RED-PROOFED both
+  arms** — a new case `locate: ONE pid under TWO pane rows is ONE holder` is `not ok` against
+  pristine `lr-lib.sh` and `ok` with the fix. Then the full suite was run, and that is where it died:
+  **`tests/lr-fleet.bats` 63/66 with THREE failures**, all caused by the change.
+
+  🚨 **THE REASON IS A DESIGN FACT, NOT A TEST TO BE ADJUSTED: two consumers of one predicate want
+  DIFFERENT CARDINALITIES.**
+
+  | consumer | what it must count | fixture | verdict on the naive fix |
+  |---|---|---|---|
+  | `--locate` / `--recover` | distinct live **PROCESSES** | `row 616; row 647` (one pid) | fix is RIGHT |
+  | `--duplicates` | live registry **PANE ROWS** | same fixture | fix is WRONG — asserts `DUPLICATE 52e35019: 2 registry pane(s)`, and 2 panes is TRUE |
+
+  `--duplicates` exists to list stale pane rows for `--mark`, so pane cardinality is its correct
+  question and test 19 is an honest test. One predicate cannot answer both; **the fix is to SPLIT it**
+  — a holder count for the recovery path, a pane-row count for `--duplicates` — across several
+  `lr-fleet.sh` call sites. That is a design change in the recovery chain, which
+  `LIMIT_RECOVER_100P` owns, and not something to land unilaterally at the end of a wave.
+
+  **A SECOND, LATENT DEFECT FOUND BY THE ATTEMPT — and it is in the suite.** Test 16 is
+  `recover: a DUPLICATE is parked and named, never recovered over two live processes`. Its fixture is
+  `row 616 "$SID"; row 647 "$SID"`, and `row()` defaults its pid to `$$` — so it has **ONE** process,
+  while its name says two and its assertion string says `DUPLICATE — more than one live process`.
+  **The test passes today only because the predicate has the bug**; it asserts a message that is
+  false of its own fixture. This is the exact elision that the neighbouring `locate:` test's comment
+  already complains about ("the fixture used to elide by letting both rows default to `$$`") — fixed
+  in one test and left in another. Whoever splits the predicate must give test 16 two real processes,
+  as `locate: two live processes on one sid` already does.
+
+  **What a future session should NOT have to re-derive:** the defect is real and reproduced; the
+  naive fix is red-proofed and breaks exactly 3 tests; the cause is consumer divergence, not a bad
+  test; the correct shape is two predicates; and test 16's fixture is independently wrong.
+
+  **Still open from W3's handover and not driven:** `D7 CONTROL: the reverse order` flips to
+  `DUPLICATE` under load ~200–300 (1 in ~6 full runs, 5/5 green in isolation, reproduces on pristine
+  HEAD). A flake hunt needing repeated full-suite runs at load, genuinely separable from the above.
+
 ## 13. Cross-reference — `LIMIT_RECOVER_100P` § 9 landed the recovery side first (2026-09-20 00:1xZ, session 11569d45)
 
 Your wave-1 corpus was this session's research. Landed and LIVE on trunk at `1b2676f4c` (23:50Z),
