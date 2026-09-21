@@ -480,3 +480,39 @@ bash ~/jev-pilot.sh --yes            # the whole run, gated on the flag
 jq -r '.p' ~/.claude/autonomy/jev-pilot-*.jsonl | awk '$1>=0.90{n++} END{print n+0}'
 jq -r '.class' ~/.claude/autonomy/jev-pilot-*.jsonl | sort | uniq -c | sort -rn
 ```
+
+## Correction to this addendum: arm B's 0/18 is UNINFORMATIVE, not a finding
+
+Written an hour after the above, and it materially changes how the headline should be read. The
+table says "arm B 0/18" and the prose treats zero new fires as a result. **It is not one.** Arm B
+draws from the `no-tell` population, and this repo's own census puts real ungated deferrals at
+**~2.8%** of closes. So:
+
+| arm B size | expected true deferrals | P(zero) **with a perfect detector** |
+|---|---|---|
+| **18 (what ran)** | 0.5 | **60.0%** |
+| 128 (`-n 200`) | 3.6 | 2.6% |
+| 200 | 5.6 | 0.3% |
+| 300 | 8.4 | 0.03% |
+
+At n=18 a flawless detector returns zero **three times in five**. The run cannot distinguish "Jev
+finds nothing" from "there was nothing to find", and reporting 0/18 beside arm A's 0/20 invites
+exactly the wrong inference. `(1-0.028)**18 = 0.600` — one line of arithmetic that should have been
+run before the number was written down, not after.
+
+**What survives the correction, because it does not depend on arm B at all:** real closes score far
+below the synthetic corpus the 0.90 threshold was calibrated on (arm B max 0.51; clean
+deference-only labels 0.07–0.41), and the AND-gate has zero overlap on 38 real closes. That is a
+statement about the *reachability of the gate*, which needs no base rate to be true.
+
+**What does NOT survive:** any reading of this pilot as evidence that Jev fails to find real
+deferrals. Only a run of n≥128 on arm B can address that, and it is cheap (free until 2026-09-25,
+then about a nickel) — the binding cost is wall-clock, because the free tier throttles after ~4
+calls.
+
+🚨 **The general form, and it is the third instance in this document of the same family.** Addendum 2
+shipped a threshold calibrated on an unrepresentative population. Addendum 3 above quoted a count
+from an underpowered one. **Both are the denominator going unexamined while the numerator gets all
+the attention** — and in both cases the arithmetic that would have caught it was one line long. A
+count of zero is not a measurement until you have asked what count a working instrument would have
+produced.
