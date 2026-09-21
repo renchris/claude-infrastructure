@@ -126,3 +126,45 @@ mk_successor() { : > "$DST/projects/$SLUG/$SID.jsonl"; }
   [ "$status" -eq 2 ]
   [[ "$output" != *"REFUSED"* ]] || { echo "$output"; false; }
 }
+
+# ══ W5-B — THE GUARD MUST FOLLOW A SESSION THAT MOVED TWICE ══════════════════════════════════════
+# A re-limited target can now be moved again: lr-transplant.sh accepts `--from B --to C` when the
+# lock's owner IS B, and REWRITES the lock in place. That rewrite is what keeps this guard pointing
+# at the session's current home. After A→B→C the dangerous resume is at B — the store that held the
+# session five minutes ago, whose pane is still standing with the limit error on it — and a lock
+# still naming B would have read "this IS the transplant target" and licensed the second live copy.
+#
+# These two cases drive the REAL lr-transplant.sh rather than mk_tombstone, deliberately: the
+# property under test is that the writer and this reader agree after a hop, and a hand-written
+# fixture would only restate my own assumption about what the writer produces (which is how
+# mk_tombstone above came to describe a record shape — no owner, no chain — that is now the
+# PRE-W5-B one. It is kept exactly as it is: every lock on disk today has that shape, and the
+# fallback that reads it is worth pinning.)
+THIRD="" # set by hop_twice
+
+hop_twice() { # A(SRC) → B(DST) → C(THIRD), through the real script
+  THIRD="$BATS_TEST_TMPDIR/.claude-next"
+  mkdir -p "$THIRD/projects/$SLUG"
+  printf '{"type":"assistant","message":{"role":"assistant"}}\n' > "$SRC/projects/$SLUG/$SID.jsonl"
+  run env LR_STATE_DIR="$LR_STATE_DIR" bash "$REPO/scripts/limit-recover/lr-transplant.sh" \
+      --sid "$SID" --from "$SRC" --to "$DST"
+  [ "$status" -eq 0 ] || { echo "hop 1 failed: $output"; false; }
+  run env LR_STATE_DIR="$LR_STATE_DIR" bash "$REPO/scripts/limit-recover/lr-transplant.sh" \
+      --sid "$SID" --from "$DST" --to "$THIRD"
+  [ "$status" -eq 0 ] || { echo "hop 2 failed: $output"; false; }
+}
+
+@test "W5-B: after a second hop the guard refuses the INTERMEDIATE store, not only the origin" {
+  hop_twice
+  run lr_tombstone_verdict "$SID" "$DST"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"REFUSED"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"$THIRD"* ]] || { echo "the refusal does not name where it actually went: $output"; false; }
+}
+
+@test "W5-B: and the store the second hop landed on still resumes itself" {
+  hop_twice
+  run lr_tombstone_verdict "$SID" "$THIRD"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"transplant target"* ]] || { echo "$output"; false; }
+}
