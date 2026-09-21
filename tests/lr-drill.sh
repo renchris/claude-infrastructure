@@ -992,18 +992,31 @@ row_verdict() {
 # be the second thing that happens.
 MODE="" MANIFEST="" ARM="" STAGE="" RESULTS="" ACCOUNT="" OUT="" WANT_ALL=0
 STAMP_ARGS=()
+# 🚨 `shift N` IS A NO-OP WHEN FEWER THAN N ARGUMENTS REMAIN, and in an argv loop that is an
+# INFINITE SPIN, not a usage error. Measured 2026-09-21: `lr-drill.sh --assert` (the flag last, its
+# value absent) held $# at 1 forever — 2 h 19 m at ~100% CPU, 138 min of CPU time, zero output,
+# before it was killed by hand. Every two-arg option here had it: --drill, --check-manifest,
+# --assert, --account, --out all reproduced at rc 124 under `timeout 3`, and --verdict shifts 3.
+# The consumers were blameless — assert_results already refuses an empty path — because control
+# never reached them.
+# So the value's PRESENCE is checked before the shift, and a missing one REFUSES. `${2:-}` alone
+# is not that check: it defends the expansion and says nothing about $#.
+need_val() {  # $1=flag $2=how many argv slots the flag consumes (itself included) $3...=the live argv
+  local flag="$1" want="$2"; shift 2
+  [ "$#" -ge "$want" ] || { d_say "$flag needs a value"; usage; exit 3; }
+}
 while [ $# -gt 0 ]; do
   case "$1" in
-    --drill)          MODE=drill;    MANIFEST="${2:-}"; shift 2 ;;
+    --drill)          need_val --drill 2 "$@";          MODE=drill;    MANIFEST="$2"; shift 2 ;;
     --all)            WANT_ALL=1;    shift ;;
     --seed)           MODE=seed;     shift ;;
     --rows)           MODE=rows;     shift ;;
-    --check-manifest) MODE=check;    MANIFEST="${2:-}"; shift 2 ;;
-    --verdict)        MODE=verdict;  ARM="${2:-}"; STAGE="${3:-}"; shift 3 ;;
-    --assert)         MODE=assert;   RESULTS="${2:-}"; shift 2 ;;
+    --check-manifest) need_val --check-manifest 2 "$@"; MODE=check;    MANIFEST="$2"; shift 2 ;;
+    --verdict)        need_val --verdict 3 "$@";        MODE=verdict;  ARM="$2"; STAGE="$3"; shift 3 ;;
+    --assert)         need_val --assert 2 "$@";         MODE=assert;   RESULTS="$2"; shift 2 ;;
     --stamp)          MODE=stamp;    shift; STAMP_ARGS=("$@"); set -- ;;
-    --account)        ACCOUNT="${2:-}"; shift 2 ;;
-    --out)            OUT="${2:-}"; shift 2 ;;
+    --account)        need_val --account 2 "$@";        ACCOUNT="$2"; shift 2 ;;
+    --out)            need_val --out 2 "$@";            OUT="$2"; shift 2 ;;
     -h|--help)        usage; exit 3 ;;
     *) d_say "unknown argument '$1'"; usage; exit 3 ;;
   esac
