@@ -339,13 +339,17 @@ status_out() {
 # so every append is already an eviction decision — taken today on structural proxies because
 # nothing could read the entries themselves.
 #
-# 🚨 IT USES `choice`, NOT `score`, AND THAT IS A MEASURED CONSTRAINT. `score` is declared in the
-# SDK's own types with exactly the answer shape tests/fixtures/jev-mock-gateway.mjs returns
-# ({type:'score', score:<index>}), and the round trip is STILL rejected `invalid-response` while a
-# boolean through the identical path succeeds — so the runtime schema is stricter than the
-# published type. `choice` over ORDERED keys carries the same ordinal and is the primitive already
-# exercised by 198 real calls. If `score` ever starts validating, the ordering must stay in the
-# script rather than move into the model.
+# 🚨 IT USES `choice`, NOT `score` — AND THE REASON WRITTEN HERE UNTIL 2026-09-21 WAS FALSE.
+# It claimed `score` was "rejected invalid-response … so the runtime schema is stricter than the
+# published type", i.e. a fact about the vendor. That round trip never left 127.0.0.1: the SDK's
+# client-side validateEvaluationAnswers demands a COMPLETE probability distribution over every
+# level index, and this file's own mock emitted ONE key for score while emitting the full map for
+# choice. A local A/B settles it — one key -> invalid-response, complete map -> ok, through
+# evaluate.mjs unmodified. `score` is not blocked; our test double was.
+# `choice` stays anyway, and for a reason that survives: the score QUESTION shape (criteria as an
+# ARRAY) has still never been sent to the real route, while `choice` over an ordered MAP is what
+# 198 real calls have exercised. The ordering lives in rank_order() either way, never in the model.
+# Receipt: docs/research/jev-100p-2026-09-21/a9-operating-envelope.md §5.
 mkmem() {  # → a throwaway memory dir; nothing real is ever read or sent
   MEMD="$BATS_TEST_TMPDIR/mem"; mkdir -p "$MEMD"
   printf -- '- [Alpha](alpha.md) — durable\n- [Beta](beta.md) — one-off\n' > "$MEMD/MEMORY.md"
@@ -523,7 +527,7 @@ mkmem5() {  # 5 entries, so a 4-key rotation produces a real spread
       "$REPO/bin/cc-jev" rank --report "$R"
   [ "$status" -eq 0 ]
   grep -qF "No call is made" <<<"$output"
-  grep -qE '^ +bite +100% in `often`' <<<"$output"        # flat, and named as such
+  grep -qE '^ +bite +100% in \[often\]' <<<"$output"        # flat, and named as such
   grep -qE '^ +breadth .*discriminates' <<<"$output"      # 3 distinct keys over 3 rows
 }
 
@@ -544,4 +548,24 @@ mkmem5() {  # 5 entries, so a 4-key rotation produces a real spread
   run env -u AI_GATEWAY_API_KEY "$REPO/bin/cc-jev" rank --report "$BATS_TEST_TMPDIR/nope.jsonl"
   [ "$status" -eq 3 ]
   grep -qF "no rows at" <<<"$output"
+}
+
+# 🚨 THE `score` CORRECTION, pinned so it cannot silently revert (2026-09-21).
+# Three places in this repo recorded that `score` is "rejected invalid-response by the runtime, so
+# the published type is a lie" — a claim about the VENDOR, traced to a round trip that never left
+# 127.0.0.1. The cause was this suite's own mock: its score branch emitted ONE probability key
+# while its choice branch emitted the complete map, and the SDK's client-side
+# validateEvaluationAnswers requires hasExactKeys over every level index. One branch of a test
+# double failing while its sibling passes indicts the double, not the subject.
+@test "score round-trips through evaluate.mjs unmodified — the mock was the blocker, not the route" {
+  start_mock ok
+  run env AI_GATEWAY_API_KEY=dummy CC_JEV_BASE_URL="http://127.0.0.1:$PORT" CC_JEV_ZDR=0 \
+      node "$REPO/scripts/jev/evaluate.mjs" <<<'{"state":"x","questions":{"s":{"type":"score","instructions":"lvl","criteria":["a","b","c","d"]}}}'
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.ok' <<<"$output")" = "true" ]
+  [ "$(jq -r '.answers.s.type' <<<"$output")" = "score" ]
+  # The red-proof: a COMPLETE distribution is what the SDK validates on. Assert every level index
+  # is present — reverting the mock to one key puts this back to 1 and fails here rather than
+  # re-minting a finding about the vendor.
+  [ "$(jq -r '.answers.s.probabilities | keys | length' <<<"$output")" -eq 4 ]
 }

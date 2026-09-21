@@ -76,7 +76,19 @@ const server = createServer((req, res) => {
         const top = q.criteria.length - 1;
         const want = Number(process.env.MOCK_SCORE);
         const pick = Number.isInteger(want) && want >= 0 && want <= top ? want : top;
-        answers[id] = { type: 'score', score: pick, probabilities: { [String(pick)]: 1 } };
+        // 🚨 A COMPLETE DISTRIBUTION, over EVERY level index. This emitted `{[pick]: 1}` — one key
+        // — until 2026-09-21, and that single missing detail manufactured a false finding about
+        // the VENDOR. The SDK's validateEvaluationAnswers (node_modules/ai/dist/index.js:14503)
+        // runs CLIENT-SIDE and requires hasExactKeys(probabilities, criteria.map((_,i)=>String(i)));
+        // the one-key form fails it, evaluate.mjs maps that to `invalid-response`, and three places
+        // in this repo went on to record "score is rejected by the runtime, the published type is a
+        // lie" — about a round trip that never left 127.0.0.1. The choice branch above always
+        // emitted the full map, which is exactly why choice "worked" and score "didn't".
+        // The lesson is the fixture's, not the vendor's: when one branch of a test double fails and
+        // its sibling passes, suspect the double before the subject. docs/research/
+        // jev-100p-2026-09-21/a9-operating-envelope.md §5 carries the A/B.
+        answers[id] = { type: 'score', score: pick,
+                        probabilities: Object.fromEntries(q.criteria.map((_, i) => [String(i), i === pick ? 1 : 0])) };
       }
     }
     res.writeHead(200, { 'content-type': 'application/json' });
