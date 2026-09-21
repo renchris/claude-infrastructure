@@ -66,6 +66,10 @@ echo "/bundle/path"
 exit "${LRH_RC:-0}"
 SH
   chmod +x "$LR_HANDOFF_BIN"; export LRH_LOG="$BATS_TEST_TMPDIR/lrh.log"; : > "$LRH_LOG"
+  # Exported HERE, not inside the cases that use it: shellcheck models a @test body as a subshell,
+  # so an `export` in one is SC2030/SC2031 — and the two facts a case needs (the path, and an empty
+  # file) are both available from setup without one.
+  export LRH_SEQ="$BATS_TEST_TMPDIR/lrh.seq"; : > "$LRH_SEQ"
   export CC_ACCOUNTS_BIN="$HOME/bin/claude-accounts"
   cat > "$CC_ACCOUNTS_BIN" <<'SH'
 #!/bin/bash
@@ -1306,7 +1310,6 @@ overlapped() { # <log> <start-token> — 0 when the log DOES overlap (the pool a
 @test "W6b: the ACTUATOR half is a POOL — two recoveries overlap, they are not queued" {
   acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
   s2="66660000-0000-4000-8000-00000000b002"; blocked_tx "$SEC" "$s2"; row 632 "$s2"
-  export LRH_SEQ="$BATS_TEST_TMPDIR/lrh.seq"; : > "$LRH_SEQ"
   LR_RECOVER_MAX_CONCURRENT=2 LRH_SLEEP=1 run bash "$FLEET" --recover
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   run overlapped "$LRH_SEQ" HF
@@ -1316,7 +1319,6 @@ overlapped() { # <log> <start-token> — 0 when the log DOES overlap (the pool a
 @test "W6b CONTROL: LR_RECOVER_MAX_CONCURRENT=1 is a queue again — the actuator never overlaps" {
   acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
   s2="66660000-0000-4000-8000-00000000b003"; blocked_tx "$SEC" "$s2"; row 633 "$s2"
-  export LRH_SEQ="$BATS_TEST_TMPDIR/lrh.seq"; : > "$LRH_SEQ"
   LR_RECOVER_MAX_CONCURRENT=1 LRH_SLEEP=1 run bash "$FLEET" --recover
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   run no_overlap "$LRH_SEQ" HF
