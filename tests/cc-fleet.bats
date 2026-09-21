@@ -636,8 +636,24 @@ STUB
   # commits on top), exactly as it did for permission-harvest above, so forward was again the only
   # remedy. The count moves WITH the repair. Declared `run`, not `staged`: migrations/0032 has been
   # run and the job is loaded (runs=46, last exit 0) — see the manifest's own block for every field.
-  if [ "$n" != 35 ]; then
-    echo "manifest declares $n labels, expected 35 — if a plist was legitimately added or retired,"
+  # 36 since 2026-09-21: com.claude.jev-batch (82f08302a3f1, backlog 83b1c0fbe234) — the qos-census /
+  # accounts-keepwarm / permission-harvest shape again: plist and manifest row landed in ONE commit,
+  # correctly, and only this count was left behind. The split therefore ran the OTHER way from
+  # browse-mirror directly above: the coverage loop below was GREEN (the row is there) and this
+  # hand-copied count was the only leg that could notice. A/B: 35 labels at the parent c20ef874243e
+  # (green), 36 at 82f08302a3f1 and on trunk for every lander after it (red). postland-verify
+  # bisected it correctly and its auto-revert FAILED rc=90 (revert=none, nothing applied — a 9-file
+  # 1028-insertion feature does not revert cleanly under the commits on top), the third consecutive
+  # rc=90 after permission-harvest and browse-mirror, so forward was again the only remedy.
+  # One thing here is NEW and must not be mis-read as another entry for the staged-out-of-glob
+  # argument: this is the first row declared `staged` whose plist lives in launchd/ rather than
+  # launchd/staged/. Every prior staged row (relogin, cc-gc, scratchpad-reaper, accounts-keepwarm)
+  # sits outside the coverage glob, which is what the block above cites twice for refusing to derive
+  # `n` from disk. That argument does not reach this entry: `staged` here is the manifest LIFECYCLE
+  # field — the job is not loaded, and activation 44-jev-batch-activate.sh is the operator's C10
+  # step, still pending — not a claim about where the plist sits. The coverage loop did cover it.
+  if [ "$n" != 36 ]; then
+    echo "manifest declares $n labels, expected 36 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1
