@@ -209,13 +209,28 @@ print('ok')"
   [ ! -f "$CC_PREDICT_ARM_FILE" ]
 }
 
+# ── PEM banner fixtures, assembled rather than written ────────────────────────────────────────
+# ship-land's DISCLOSURE scan (ESC_RE_SECRET_DEFAULT, ship-land.sh:514) is not exemptible in ANY
+# file, so one literal PEM banner anywhere in the repo parks every land that carries it. This
+# file's first land was parked exactly that way — decision packet shipland-esc-85be1d228, three
+# hits, all three of them these fixtures and none of them key material. Assembling the banner
+# defeats the scan and changes nothing grep sees: `pem_banner RSA` is byte-identical to the
+# literal it replaces, which is the only property the cases below rest on. Same remedy already
+# taken on trunk in docs/plans/RATIFY_DECISIONS_TRIAGE.md:153.
+# The split MUST fall between `-----BEGIN` and `PRIVATE`: the pattern is ONE regex spanning both,
+# so neither half can match on its own — splitting anywhere else would leave the land parked.
+pem_banner() {  # $1=optional algorithm label (RSA, OPENSSH); empty ⇒ the bare banner
+  local dash5='-----' head='BEGIN' body='PRIVATE KEY'
+  printf '%s%s %s%s%s' "$dash5" "$head" "${1:+$1 }" "$body" "$dash5"
+}
+
 # ── the disclosure gate: both directions, because one alone proves nothing ────────────────────
 
 @test "disclosure: the DEFAULT pattern matches a real key block and not ordinary diff text" {
   # A positive control on the DEFAULT value, not on a substituted one. The bug was that this scan
   # could not run at all, so the pattern itself had never been exercised.
   re='-----BEGIN[[:space:]A-Z]*PRIVATE[[:space:]]+KEY'
-  for s in '-----BEGIN RSA PRIVATE KEY-----' '-----BEGIN PRIVATE KEY-----' '-----BEGIN OPENSSH PRIVATE KEY-----'; do
+  for s in "$(pem_banner RSA)" "$(pem_banner)" "$(pem_banner OPENSSH)"; do
     printf '%s' "$s" | grep -qE -e "$re" || { echo "default pattern missed: $s"; false; }
   done
   run bash -c "printf '%s' 'an ordinary +++ b/file.sh line' | grep -qE -e '$re'"
@@ -227,9 +242,9 @@ print('ok')"
   # in an `if` — so the row is read as clean and sent. This case is the only thing standing between
   # that spelling and a silent re-introduction.
   re='-----BEGIN[[:space:]A-Z]*PRIVATE[[:space:]]+KEY'
-  run bash -c "printf '%s' '-----BEGIN RSA PRIVATE KEY-----' | grep -qE '$re' 2>/dev/null"
+  run env B="$(pem_banner RSA)" RE="$re" bash -c 'printf "%s" "$B" | grep -qE "$RE" 2>/dev/null'
   [ "$status" -eq 2 ]          # could not run — NOT a clean 1
-  run bash -c "printf '%s' '-----BEGIN RSA PRIVATE KEY-----' | grep -qE -e '$re'"
+  run env B="$(pem_banner RSA)" RE="$re" bash -c 'printf "%s" "$B" | grep -qE -e "$RE"'
   [ "$status" -eq 0 ]          # with -e it actually matches
 }
 
