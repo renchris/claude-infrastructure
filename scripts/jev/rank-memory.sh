@@ -111,9 +111,9 @@ for q in breadth bite; do
     continue
   fi
   if [ "$_pct" -ge "$FLAT" ]; then
-    printf '  %-11s %s%% in `%s` (%s/%s)   <- NEAR-CONSTANT: carried almost no information\n' "$q" "$_pct" "$_lab" "$_cnt" "$done_n"
+    printf '  %-11s %s%% in [%s] (%s/%s)   <- NEAR-CONSTANT: carried almost no information\n' "$q" "$_pct" "$_lab" "$_cnt" "$done_n"
   else
-    printf '  %-11s %s%% in `%s` (%s/%s)   <- discriminates\n' "$q" "$_pct" "$_lab" "$_cnt" "$done_n"
+    printf '  %-11s %s%% in [%s] (%s/%s)   <- discriminates\n' "$q" "$_pct" "$_lab" "$_cnt" "$done_n"
   fi
 done
 # `superseded` is a boolean, so its analogue of a max bucket is its SPREAD. A posterior whose whole
@@ -131,10 +131,10 @@ read -r _slab _scnt _spct <<<"$(jq -r 'select(.superseded!=null)|.superseded
          | awk -v n="$done_n" 'NF{printf "%s %d %d", $2, $1, int($1*100/n + 0.5)}')"
 if [ -n "$SUP_Q" ] && [ -n "${_spct:-}" ]; then
   if [ "$_spct" -ge "$FLAT" ]; then
-    printf '  %-11s %s%% in band `%s` · %s · %s of %s above 0.70   <- NEAR-CONSTANT: carried almost no information\n' \
+    printf '  %-11s %s%% in band [%s] · %s · %s of %s above 0.70   <- NEAR-CONSTANT: carried almost no information\n' \
            superseded "$_spct" "$_slab" "$SUP_Q" "$SUP_HI" "$done_n"
   else
-    printf '  %-11s %s%% in band `%s` · %s · %s of %s above 0.70   <- discriminates\n' \
+    printf '  %-11s %s%% in band [%s] · %s · %s of %s above 0.70   <- discriminates\n' \
            superseded "$_spct" "$_slab" "$SUP_Q" "$SUP_HI" "$done_n"
   fi
 fi
@@ -292,11 +292,24 @@ while IFS= read -r f; do
     sleep "$wait_s"; out="$(printf '%s' "$spec" | jev_ask)" || true
   done
   sleep "${CC_JEV_RANK_GAP:-3}"
-  # CHOICE, not SCORE, and that is a MEASURED choice rather than a stylistic one. `score` is
-  # declared in the SDK types with exactly the shape our mock returns, and the identical round trip
-  # is still rejected `invalid-response` while a boolean through the same path succeeds — so the
-  # runtime schema is stricter than the published type and the primitive is not usable from here
-  # today. `choice` over ORDERED keys carries the same ordinal signal and is the primitive 198 real
+  # CHOICE, not SCORE. 🚨 CORRECTED 2026-09-21 — the reason this comment used to give was FALSE,
+  # and it was false in the most expensive way: it named the VENDOR for a defect in our own fixture.
+  # It read "`score` is declared in the SDK types with exactly the shape our mock returns, and the
+  # identical round trip is still rejected invalid-response … so the runtime schema is stricter than
+  # the published type and the primitive is not usable from here today." Every word after "our mock"
+  # describes a call that never left 127.0.0.1. `validateEvaluationAnswers` (node_modules/ai/dist/
+  # index.js:14503-14530) runs CLIENT-SIDE and demands a COMPLETE probability distribution over
+  # every level index; tests/fixtures/jev-mock-gateway.mjs emitted ONE key for score while its
+  # choice branch eight lines above emitted the full map. That asymmetry is the entire finding.
+  # A local A/B through evaluate.mjs unmodified: one key -> invalid-response; complete map -> ok.
+  # So `score` is NOT blocked, and the shape of the error was a fact about our test double.
+  # WE STILL USE `choice`, for a reason that survives the correction: refuting the objection
+  # establishes ¬objection, never the claim. The score QUESTION shape — `criteria` as an ARRAY of
+  # ordered levels — has still never been sent to the real route, while `choice` over an ordered
+  # MAP is the primitive 198 real calls have exercised. Switching would trade a measured path for
+  # an unmeasured one to gain an ordinal we already hold. Receipt, and the one probe that would
+  # settle it: docs/research/jev-100p-2026-09-21/a9-operating-envelope.md §5.
+  # `choice` over ORDERED keys carries the same ordinal signal and is the primitive 198 real
   # calls have already exercised. Ordering lives in the caller - the literal key order in
   # rank_order() below - never in the model. (That sentence cited a `rank_of()` that was never
   # written; the ordering was real but the named function was not. A comment is prose nothing
