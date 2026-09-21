@@ -24,11 +24,17 @@
   bootstrapping gives the operator an immediate log line confirming the wiring works, rather than
   a 30-minute wait to find out it does not.
 
-  IT INVOKES `cc-jev batch`, NOT the script directly, and that is not a style choice: install.sh
-  globs scripts/*.sh at the TOP LEVEL only, so scripts/jev/ is never deployed to ~/.claude and a
-  plist naming $HOME/.claude/scripts/jev/jev-batch.sh would point at a file that does not exist.
-  bin/ IS symlinked, and cc-jev resolves its own $ROOT through the symlink into the checkout, so
-  one deployed path reaches every subcommand. (That symlink trails origin/main until the live
+  IT INVOKES `cc-jev batch`, NOT the script directly. 🚨 The reason first written here was FALSE
+  and is corrected rather than deleted, because the false version is the more tempting one: it
+  said scripts/jev/ "is never deployed to ~/.claude" because install.sh globs scripts/*.sh at the
+  top level only. The glob claim is true and the conclusion does not follow — install.sh carries a
+  DEDICATED scripts/jev/ block (install.sh:759), written precisely because hooks/lib/jev.sh
+  resolves evaluate.mjs relative to its own source dir and jev_available returns false without it.
+  Verified after the fact: ~/.claude/scripts/jev/jev-batch.sh is a live symlink. Either spelling
+  would therefore work.
+  The real reason to prefer cc-jev is smaller and survives: ONE deployed entry point reaches every
+  subcommand, so adding a subcommand never needs this plist edited again, and cc-jev resolves its
+  own $ROOT through the symlink into the checkout. (That symlink trails origin/main until the live
   layer converges — the com.claude.dispatcher bleed — so a land here still needs deploy-live.)
 
   StartInterval 1800: the armed window is 180 minutes by default, so a single arming is picked up
