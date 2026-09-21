@@ -1346,11 +1346,22 @@ overlapped() { # <log> <start-token> — 0 when the log DOES overlap (the pool a
   [[ "$output" == *"which is DEAD — stealing it"* ]] || { echo "$output"; false; }
 }
 
-@test "W6b: --dry-run reserves NO run claim — a preview must not block the real recovery" {
+@test "W6b: --dry-run neither TAKES a run claim nor OBEYS one — a preview must still preview" {
+  # THE FIRST WRITING OF THIS CASE ASSERTED `[ ! -d …active ]` AFTER THE RUN AND SURVIVED ITS OWN
+  # MUTANT. The pool's reaper releases the claim when the worker exits, so the directory is gone at
+  # the end whether or not the dry run took it — an assertion that cannot separate the two arms.
+  # What IS separable is the observable harm: with the guard removed, `--dry-run` over a sid the
+  # poller or cc-lr is already driving prints `skipped` instead of the preview it was asked for.
   acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  mkdir -p "$LR_STATE_DIR/runs/by-sid/$SID.active"
+  printf '{"sid":"%s","pid":%d,"by":"cc-lr"}\n' "$SID" "$$" > "$LR_STATE_DIR/runs/by-sid/$SID.active/holder"
   run bash "$FLEET" --recover --dry-run
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [ ! -d "$LR_STATE_DIR/runs/by-sid/$SID.active" ] || { ls -R "$LR_STATE_DIR/runs"; false; }
+  [[ "$output" == *"would recover 52e35019"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"a live run already holds"* ]] || { echo "$output"; false; }
+  # …and it wrote nothing: the foreign holder is byte-for-byte what cc-lr left.
+  grep -q '"by":"cc-lr"' "$LR_STATE_DIR/runs/by-sid/$SID.active/holder" \
+    || { cat "$LR_STATE_DIR/runs/by-sid/$SID.active/holder"; false; }
 }
 
 @test "W6b: a completed pool worker RELEASES its claim — the next run is not locked out" {
