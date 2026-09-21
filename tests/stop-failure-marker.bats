@@ -779,6 +779,45 @@ JSON
   [ -z "$output" ] || { echo "stderr: $output"; false; }
 }
 
+@test "SB18: with NO transcript the latch key still tracks the death, never a constant" {
+  # The degraded twin of SB10. When the transcript is gone the latch key falls back to the payload,
+  # and the fallback may NOT be a constant: a constant would latch the FIRST death for the life of
+  # the session and go silent on every later one — a session capped twice recovers once, forever.
+  # The cap message carries the reset time, so it moves when the death does.
+  rq_payload f1 "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit "hit your session limit resets 2:40pm" | bash "$HOOK"
+  [ "$(requests)" -eq 1 ]
+  rm -f "$(rqf f1)"                                    # the poller drains and deletes
+  rq_payload f1 "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit "hit your session limit resets 2:40pm" | bash "$HOOK"
+  [ "$(requests)" -eq 0 ]                              # same death — latched
+  rq_payload f1 "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit "hit your weekly limit resets Tuesday" | bash "$HOOK"
+  [ "$(requests)" -eq 1 ]                              # a DIFFERENT death — requested again
+  [ "$(latches)" -eq 2 ]
+}
+
+@test "SB19: the enrichment survives a tail that starts MID-RECORD and carries junk" {
+  # A tail ALWAYS starts mid-record on a real transcript, and a naive `jq -s` slurp fails the whole
+  # stream on that first fragment — which reads as "this session has no death record" on exactly
+  # the long-running sessions most likely to be capped. Measured: the slurp shape returns nothing
+  # here; the per-line shape returns the death. The fixture also carries a bare scalar line and an
+  # api-error record whose `quotaLimits` is a STRING, both before the real one.
+  local tx total cut
+  tx="$BATS_TEST_TMPDIR/tx/g1.jsonl"; mkdir -p "$(dirname "$tx")"
+  {
+    printf '{"type":"user","pad":"%s"}\n' "$(head -c 600 /dev/zero | tr '\0' 'x')"
+    printf '123\n'
+    printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"uuid":"u3","quotaLimits":"rejected"}'
+    printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"uuid":"u4","timestamp":"2026-09-19T20:29:28.332Z","quotaLimits":{"resetsAt":1789853400,"rateLimitType":"five_hour"},"message":{"model":"<synthetic>","content":[]}}'
+  } > "$tx"
+  total="$(wc -c < "$tx" | tr -d ' ')"
+  cut=$(( total - 300 ))                               # 300 bytes into the 600-byte first record
+  rq_payload g1 "$tx" rate_limit "" | STOP_FAILURE_TAIL_BYTES="$cut" bash "$HOOK"
+  [ "$(requests)" -eq 1 ]
+  local f; f="$(rqf g1)"
+  jq -e '.death_uuid == "u4"' "$f" >/dev/null || { cat "$f"; false; }
+  jq -e '.reset_at_epoch == "1789853400"' "$f" >/dev/null || { cat "$f"; false; }
+  jq -e '.rate_limit_type == "five_hour"' "$f" >/dev/null || { cat "$f"; false; }
+}
+
 @test "SB16: ANCHOR — requested_by is the exact literal W5-A's poller gate matches" {
   # 🚨 THIS IS A SAFETY ANCHOR, not a style pin. The poller's policy gate (LIMIT_RECOVER_100P W5-A)
   # refuses to drain a HOOK-ORIGINATED request unless the operator's `autorecover.on` flag exists,
