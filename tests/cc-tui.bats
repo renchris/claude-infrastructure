@@ -35,7 +35,7 @@ setup() {
   RPC_LOG="$BATS_TEST_TMPDIR/rpc.log"; : > "$RPC_LOG"
   LS_JSON="$BATS_TEST_TMPDIR/ls.json"
   printf '%s' '[{"tabs":[{"windows":[{"id":42}]}]}]' > "$LS_JSON"
-  LS_RC=0; SEND_RC=0; CR_RC=0; CR_APPEND=""
+  LS_RC=0; SEND_RC=0; CR_RC=0; CR_APPEND=""; CR_REPLACE=""
   TRANS="$BATS_TEST_TMPDIR/session.jsonl"
   export CC_TUI_TRANSCRIPT="$TRANS"
 
@@ -78,6 +78,7 @@ setup() {
           $'\x7f') printf 'DEL\n'    >> "$RPC_LOG"; return "${SEND_RC:-0}" ;;
           $'\r')   printf 'CR\n'     >> "$RPC_LOG"
                    [ -n "${CR_APPEND:-}" ] && [ -f "$CR_APPEND" ] && cat "$CR_APPEND" >> "$TRANS"
+                   [ -n "${CR_REPLACE:-}" ] && [ -f "$CR_REPLACE" ] && cp "$CR_REPLACE" "$TRANS"
                    return "${CR_RC:-0}" ;;
           *)       printf 'TEXT\n'   >> "$RPC_LOG"; return "${SEND_RC:-0}" ;;
         esac
@@ -269,16 +270,48 @@ sent()          { grep -c "^$1\$" "$RPC_LOG" 2>/dev/null || true; }
   [ "$(sent CR)" -eq 1 ]
 }
 
-@test "cc_tui_record_after re-reads from zero when the transcript SHRANK below the offset" {
+@test "a transcript that SHRANK below the offset is re-read from zero, not skipped" {
+  # The baseline is large; the CR rotates a SMALLER file into place carrying the record. Without
+  # the shrink guard the stale offset sits past EOF and the real record is invisible forever.
+  screen_empty "$SDIR/1"; screen_paste "$SDIR/default" "$PAY"
+  i=0; : > "$TRANS"
+  while [ "$i" -lt 60 ]; do printf '{"type":"assistant","message":{"content":"filler turn"}}\n' >> "$TRANS"; i=$((i + 1)); done
+  [ "$(_cc_tui_size "$TRANS")" -gt 2000 ]
+  CR_REPLACE="$BATS_TEST_TMPDIR/rotated.jsonl"
+  printf '{"type":"user","message":{"content":"%s"}}\n' "$MARK" > "$CR_REPLACE"
+  run cc_tui_submit 42 "$PAY"
+  [ "$status" -eq 0 ]
+}
+
+@test "cc_tui_record_after finds nothing past the end of a file and says so rather than erroring" {
   printf '{"type":"user","message":{"content":"%s"}}\n' "$MARK" > "$TRANS"
   run cc_tui_record_after "$TRANS" 999999 "$MARK"
   [ "$status" -eq 1 ]
-  screen_empty "$SDIR/1"; screen_paste "$SDIR/default" "$PAY"
-  # submit captures a 0 offset (file absent), the CR "rotates" a smaller file into place
-  rm -f "$TRANS"
+}
+
+@test "cc_tui_type on a PROVABLY absent pane refuses and sends nothing" {
+  run cc_tui_type 99 "$PAY"
+  [ "$status" -eq 1 ]
+  [ "$(sent PASTE)" -eq 0 ]
+}
+
+@test "the content walk goes through .text — a JSON dump would escape a quote out of the needle" {
+  Q="$BATS_TEST_TMPDIR/quoted.txt"
+  printf '%s\n' 'he said "resume the recovered session now" and then left the pane' > "$Q"
+  screen_empty "$SDIR/1"; screen_paste "$SDIR/default" "$Q"
+  : > "$TRANS"
+  run cc_tui_marker "$Q"
+  [ "$status" -eq 0 ]
+  QMARK="$output"
   CR_APPEND="$BATS_TEST_TMPDIR/append.jsonl"
-  printf '{"type":"user","message":{"content":"%s"}}\n' "$MARK" > "$CR_APPEND"
-  run cc_tui_submit 42 "$PAY"
+  QMARK="$QMARK" /usr/bin/python3 -c '
+import json, os, sys
+print(json.dumps({"type": "user",
+                  "message": {"content": [{"type": "text", "text": os.environ["QMARK"]}]}}))' > "$CR_APPEND"
+  # the control: the JSON dump of that same record does NOT contain the needle verbatim
+  n="$(grep -cF -- "$QMARK" "$CR_APPEND" || true)"
+  [ "$n" -eq 0 ]
+  run cc_tui_submit 42 "$Q"
   [ "$status" -eq 0 ]
 }
 
