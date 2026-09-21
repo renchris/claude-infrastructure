@@ -285,18 +285,80 @@ PY
   [ "$output" = 0 ]
 
   # Budgets, because this is read on a 30-column pane and piped into a poller tick.
+  #
+  # THE SCREEN BUDGET CARRIES NO CORRECTION, so state WHY rather than leave it to be discovered:
+  # the default screen renders BASENAMES, never stored paths, so the fixture root reaches it in
+  # no spelling at all. That is asserted below, not assumed — the day a row starts printing a
+  # path, this bar silently becomes a measurement of BATS_TEST_TMPDIR's depth.
   run bash -c 'python3 "$1" | wc -c' _ "$SUBJ"
   [ "$output" -le 1200 ]
+
   # THE BUDGET IS ABOUT PRODUCTION PATH LENGTHS, and the fixture root is a bats tmpdir that is
   # far longer than a real one AND appears inside every stored path. Left raw, this assertion
   # would measure the harness rather than the tool, and it would pass or fail depending on how
   # deep BATS_TEST_TMPDIR happens to sit. So the inflation is subtracted explicitly: each
   # occurrence of the fixture root is re-priced at the length of a real one ("/Users/chrisren").
-  local raw occ adj
-  raw="$(cc --json | wc -c | tr -d ' ')"
-  occ="$(cc --json | grep -o "$W" | wc -l | tr -d ' ')"
-  adj=$(( raw - occ * ${#W} + occ * 15 ))
-  [ "$occ" -gt 0 ]                       # the correction is real, not a no-op
+  #
+  # THE CORRECTION HAS TO COVER EVERY SPELLING, AND THIS ROW IS HERE BECAUSE IT DID NOT — the
+  # post-land RED at 6a0a05f8c (a commit that touches nothing this suite reads; whole-tree
+  # attribution). `tp` names a Claude Code PROJECT DIRECTORY, whose basename is the cwd with
+  # every NON-ALPHANUMERIC character mapped to `-` — the subject's own `slug_of`
+  # (bin/cc-limited:440) and the fixture's (build.sh:69), quoted here rather than guessed at,
+  # because a narrower guess (`/` and `.` only) reads socc=0 on a tmpdir carrying `_`. So the
+  # fixture root is in the JSON in TWO spellings, and a
+  # `grep -o "$W"` sees only one: the four `tp` values each carried an uncounted copy, which is
+  # 4 x |W| of inflation subtracted from nothing. Measured on this fixture, adj read 5880 at
+  # |W|=31 and 6432 at |W|=169 — the same census, the same bytes, one side of a 6144 bar and
+  # then the other. |W| ~ 78 for a hand-run `bats`, but postland-verify hands the corpus a
+  # NESTED private TMPDIR (scripts/postland-verify.sh:260, `$TMPDIR/postland-run.XXXXXX`),
+  # which is what pushes it past ~97 and is why this red never reproduced standalone.
+  local raw occ slug socc tot adj tok leaked
+  cc --json > "$BATS_TEST_TMPDIR/shape.json"
+  raw="$(wc -c < "$BATS_TEST_TMPDIR/shape.json" | tr -d ' ')"
+  slug="$(printf '%s' "$W" | sed 's/[^A-Za-z0-9]/-/g')"
+  # -F, because $W is a PATH being handed to a tool that reads a REGEX: a `.` in the tmpdir is
+  # `any character` to BRE, and the one thing a correction may never do is over-count itself.
+  occ="$(grep -oF -- "$W"    < "$BATS_TEST_TMPDIR/shape.json" | wc -l | tr -d ' ')"
+  socc="$(grep -oF -- "$slug" < "$BATS_TEST_TMPDIR/shape.json" | wc -l | tr -d ' ')"
+  tot=$(( occ + socc ))
+  # |slug| == |W| by construction (the substitution is 1:1), and 15 is the same production
+  # re-pricing both spellings get: "/Users/chrisren" and "-Users-chrisren" are the same length.
+  adj=$(( raw - tot * ${#W} + tot * 15 ))
+  [ "$occ"  -gt 0 ]                      # the correction is real, not a no-op
+  [ "$socc" -gt 0 ]                      # …and the slug spelling is PRESENT, not hypothetical
+
+  # …and the promise made at the 1200 B bar, now that both spellings are in hand.
+  cc > "$BATS_TEST_TMPDIR/shape.screen"
+  [ "$(grep -cF -- "$W"    "$BATS_TEST_TMPDIR/shape.screen" || true)" = 0 ]
+  [ "$(grep -cF -- "$slug" "$BATS_TEST_TMPDIR/shape.screen" || true)" = 0 ]
+
+  # INVARIANCE, ASSERTED RATHER THAN HOPED FOR — the durable half of this fix. Strip both
+  # spellings and nothing derived from the fixture root may survive: the run tmpdir's own random
+  # token (`bats-run-XXXXXX`) is alphanumerics and dashes, both of which slug_of maps to
+  # themselves, so it reads identically in EVERY spelling of a path that contains it — which is
+  # what makes it a detector rather than a fourth guess. A non-zero count means a THIRD spelling
+  # is inflating `raw` uncorrected and this budget has quietly gone back to being a fact about
+  # the harness.
+  tok="$(basename "$BATS_RUN_TMPDIR")"
+  [ -n "$tok" ]
+  [ "$(grep -oF -- "$tok" < "$BATS_TEST_TMPDIR/shape.json" | wc -l | tr -d ' ')" -gt 0 ]
+  # THE HEREDOC IS NOT INSIDE A `$( … )`, and that is deliberate rather than a style choice:
+  # /bin/bash on the desk is 3.2, and 3.2 scans for the `)` that closes a command substitution
+  # across the RAW TEXT of the body INCLUDING a heredoc it never executes. A `(` inside this
+  # program would then be counted, and the file reports `unexpected EOF` hundreds of lines away.
+  # Written to a file first, the heredoc is at statement level and nothing is counting.
+  cat > "$BATS_TEST_TMPDIR/leak.py" <<'PY'
+import sys
+d = open(sys.argv[1], encoding="utf-8").read()
+for spelling in (sys.argv[2], sys.argv[3]):
+    d = d.replace(spelling, "")
+print(d.count(sys.argv[4]))
+PY
+  leaked="$(python3 "$BATS_TEST_TMPDIR/leak.py" "$BATS_TEST_TMPDIR/shape.json" "$W" "$slug" "$tok")"
+  [ "$leaked" -eq 0 ]
+
+  echo "# --json ${raw} B raw · ${tot} fixture-root occurrences (${occ} literal, ${socc} slug)" \
+       "at |W|=${#W} · ${adj} B re-priced (budget 6144)" >&3
   [ "$adj" -le 6144 ]
 
   run cc --sid zzzzzzzz
@@ -653,7 +715,22 @@ PY' _ "$link"
 # old census's window was longer than the fleet's own state-change interval, so it described a
 # world that had never existed at any instant.
 #
-# SIZE, same fixture: default screen 896 B (budget 1,200), --json 5.3 KB (budget 6 KB).
+# SIZE, same fixture: default screen 896 B (budget 1,200), --json 5,816 B re-priced (budget 6,144).
+#
+# AND THE ONLY NUMBER IN THIS FILE THAT IS WORTH MORE THAN ITS VALUE — that 5,816 is now
+# INVARIANT, measured by running row 15 under three deliberately different harness depths:
+#
+#   |W| = 31   raw 6,168 B   -> re-priced 5,816     (TMPDIR=/tmp)
+#   |W| = 139  raw 8,544 B   -> re-priced 5,816
+#   |W| = 169  raw 9,204 B   -> re-priced 5,816
+#
+# The PREVIOUS correction read 5,880 / 6,336 / 6,432 over the same three — the same census, the
+# same bytes, one side of the 6,144 bar and then the other. It subtracted the literal fixture root
+# and not its `slug_of` transliteration, which `tp` carries once per row. That is the post-land RED
+# at 6a0a05f8c, and it is invisible to a hand-run `bats` (|W| ~ 78) because the breach needs
+# |W| >= ~97 — which is what postland-verify's NESTED private TMPDIR supplies. Row 15 now asserts
+# the invariance instead of relying on it, and that guard has power: strip one spelling instead of
+# two and `[ "$leaked" -eq 0 ]` fails.
 #
 # MUTANT BATTERY. The rows above are only worth their comments if the suite notices when the rule
 # changes, so each load-bearing rule was mutated in bin/cc-limited and the suite re-run from a
