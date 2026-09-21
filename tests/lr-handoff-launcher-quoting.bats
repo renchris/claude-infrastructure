@@ -581,7 +581,12 @@ SH
   run gen_inplace "$sid" "$BATS_TEST_TMPDIR/repo" "$(stub_hf 'live_subagents: 2
 verdict: OK' 0)"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  ev="$(ls -1 "$HOME/.reso/limit-recover/$sid"/bundle-*/events.jsonl 2>/dev/null | head -1)"
+  # By GLOB: `ls -1 … | head -1` is two defects in one line — SC2012, and `head -N` on the RIGHT of
+  # a pipe exits early, SIGPIPEs `ls`, and under pipefail the assignment's status reads FALSE on a
+  # MATCH (the repo has a land ratchet for exactly that shape).
+  ev=""; for _ev in "$HOME/.reso/limit-recover/$sid"/bundle-*/events.jsonl; do
+    [ -e "$_ev" ] || continue; ev="$_ev"; break
+  done
   [ -n "$ev" ] || { echo "no events.jsonl was written at all"; ls -R "$HOME/.reso/limit-recover" || true; false; }
   # the VALUE, not merely the key: a record carrying killed_inflight=0 over a probe that counted 2
   # is the fail-open in its most dangerous form.
@@ -600,7 +605,12 @@ verdict: OK' 0)"
   lrh_row "$sid"; lrh_tx "$sid" limit
   run gen_inplace "$sid" "$BATS_TEST_TMPDIR/repo" "$(stub_hf 'verdict: OK' 0)"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  ev="$(ls -1 "$HOME/.reso/limit-recover/$sid"/bundle-*/events.jsonl 2>/dev/null | head -1)"
+  # By GLOB: `ls -1 … | head -1` is two defects in one line — SC2012, and `head -N` on the RIGHT of
+  # a pipe exits early, SIGPIPEs `ls`, and under pipefail the assignment's status reads FALSE on a
+  # MATCH (the repo has a land ratchet for exactly that shape).
+  ev=""; for _ev in "$HOME/.reso/limit-recover/$sid"/bundle-*/events.jsonl; do
+    [ -e "$_ev" ] || continue; ev="$_ev"; break
+  done
   [ -n "$ev" ] || { echo "no events.jsonl was written at all"; false; }
   ! grep -q 'killed_inflight' "$ev" || { echo "a killed_inflight record was invented over a probe that counted nothing:"; cat "$ev"; false; }
   [[ "$output" == *"killed_inflight is UNRECORDED"* ]] || { echo "the missing count was silent: $output"; false; }
