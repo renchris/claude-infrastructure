@@ -81,6 +81,8 @@ lr-drill — the five-session DoD drill for the limit-recovery surface.
   OPERATOR-ONLY (spends quota, types into real panes):
     tests/lr-drill.sh --seed  [--account A] [--out MANIFEST]   provision 5 throwaway sessions
     tests/lr-drill.sh --drill MANIFEST [--out DIR]             run the arms against that manifest
+                                                               MANIFEST may be the word `last`:
+                                                               the newest one --seed wrote
     tests/lr-drill.sh --all                                    REFUSED beside --drill (see below)
 
   PURE (safe for anyone, touches no pane, no account, no process):
@@ -111,7 +113,7 @@ drill_rows() { # PURE → row<TAB>metric<TAB>expected  (one line per assertion)
   cat <<'ROWS'
 1	identify	pane id 0.007s / sid8 0.012s / tuple 0.18s and REFUSES a tie / keyword <= 2s
 2	one-command	exactly 1 tool call per fire (cc-lr recover <ref>)
-3	gate-named	a refused gate is named within 3s via relaunch.rc, then re-driven
+3	failures-named	every one of the five fault arms reaches its named verdict (gate/watcher/draft/queued/router)
 4	target-spread	targets spread across >= 2 accounts inside one 90s TTL
 5	idle-p50	p50 time-to-engaged <= 45s on an idle box
 6	idle-max	max time-to-engaged <= 90s on an idle box
@@ -119,7 +121,7 @@ drill_rows() { # PURE → row<TAB>metric<TAB>expected  (one line per assertion)
 8	husks	husks = 0 across all five sessions
 9	intents	every recycle-intent has a terminal row; kitty window count unchanged
 10	loaded	loaded: ENGAGED <= 300s, or a NAMED PARKED:capacity:<term> with nothing moved
-11	detached	the fire call returns <= 3s; the verdict arrives by mailbox <= 15s
+11	detached	every fire call returns <= 3s (the mailbox leg is operator-verified)
 12	tokens	lead resident <= 0.2K tokens and 1 round trip on the gaps-0 path
 ROWS
 }
@@ -144,6 +146,23 @@ is_uuid() { case "$1" in
     [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# resolve_manifest <arg> → a manifest path. The literal `last` resolves to the newest manifest
+# THIS drill wrote, which is what makes the operator's handed command PASTEABLE: a hand-off whose
+# command still carries a `<manifest>` placeholder is a worksheet, and cc-backlog says so in as
+# many words when you file one.
+#
+# THE MAGIC WORD LOSES TO A REAL FILE. If a file literally named `last` exists, that file wins —
+# a magic string that shadowed a real path would be a surprise in the one tool that must never
+# surprise anyone about WHICH sessions it is about to type into.
+resolve_manifest() {
+  local arg="${1:-}" g last=""
+  [ "$arg" = last ] || { printf '%s' "$arg"; return 0; }
+  [ ! -e last ] || { printf '%s' "$arg"; return 0; }
+  for g in "$DRILL_STATE"/drill-*/manifest.tsv; do [ -f "$g" ] && last="$g"; done
+  [ -n "$last" ] || { d_say "REFUSED: --drill last found no manifest under $DRILL_STATE — run --seed first"; return 2; }
+  printf '%s' "$last"
 }
 
 # check_manifest <path> → prints the accepted sid rows on stdout; rc 0 accepted / 2 REFUSED.
@@ -640,6 +659,18 @@ EOF
 # arm_run <arm> <sid> <pane> <cwd> <dir> — inject one fault and record what the shipped surface did.
 # Each arm's own fault is the ONLY thing this function introduces; every later stage is the
 # production one, reached through `cc-lr recover`.
+# fire <sid> <dir> — the recovery, TIMED. The stopwatch is here and not in each arm because
+# § 13's detached row is a claim about EVERY fire, so a fire that is not timed must be visible as
+# an untimed one rather than quietly left out of the maximum.
+fire() {
+  local sid="$1" d="$2" t0 t1
+  t0="$(now_ms)"
+  live_do fire-recover "$sid" "$d" || true
+  t1="$(now_ms)"
+  printf '%s\n' "$((t1 - t0))" > "$d/fire.elapsed_ms"
+  return 0
+}
+
 arm_run() {
   local arm="$1" sid="$2" pane="$3" cwd="$4" d="$5" t0 t1
   case "$arm" in
@@ -655,27 +686,43 @@ arm_run() {
       # would turn four honest arms into four gate refusals. handoff-fire's own pane splitter
       # records the same hazard at its own call site.
       ( export CC_ADMIT_HEADROOM_OVERRIDE=0.01 CC_ADMIT_MIN_HEADROOM_GB=4096
-        live_do fire-recover "$sid" "$d" ) || true
+        fire "$sid" "$d" ) || true
       wait_for_file "$d/relaunch.rc" "${LR_DRILL_GATE_S:-30}" || true
       t1="$(now_ms)"; printf '%s\n' "$((t1 - t0))" > "$d/gate.elapsed_ms"
       collect_run_state "$sid" "$d"
       ;;
     watcher)
-      # (b) SIGKILL THE WATCHER after `transplanted`, and record the window so the mapper can prove no
-      # keystroke landed inside it. The armed/killed stamps bracket the fixture watcher's life.
-      live_do fire-recover "$sid" "$d" || true
+      # (b) SIGKILL THE WATCHER after `transplanted`.
+      #
+      # 🚨 HALF OF THIS ARM IS NOT SATISFIABLE ON THIS TREE, AND THE DRILL SAYS SO RATHER THAN
+      # PRETENDING. § 12 W7 expects "reaper STALE next tick". Verified 2026-09-21:
+      # scripts/limit-recover/lr-reset-poller.sh:709 states in its own words that "the run REAPER
+      # is the sibling plan's and is out of scope", and the only stale marker that exists is a
+      # 30-MINUTE TTL on the run claim (`RUN_CLAIM_TTL_MIN`, :714) logged as `RUN-CLAIM-STALE`.
+      # There is no next-tick reaper to observe. So `reaper.state` is read from the poller's own
+      # log if it ever appears and the arm records UNMEASURED when it does not — which is the
+      # honest verdict for a mechanism that has not landed.
+      #
+      # THE OTHER HALF IS REAL AND IS THE ONE THAT MATTERS: no keystroke while a watcher pid is
+      # still alive. Two actuators on one pane is the failure D3's critique calls fatal. The window
+      # OPENS BEFORE THE FIRE — a window that opened at the moment of the kill would be an instant
+      # wide and the assertion would be vacuous — and the keystrokes compared against it are the
+      # SURFACE's own typing records out of the run log, not the drill's.
+      date -u +%s > "$d/watcher.armed_at"
+      fire "$sid" "$d"
       wait_for_state "$sid" "$d" transplanted "${LR_DRILL_TRANSPLANT_S:-300}" || true
       collect_run_state "$sid" "$d"
       if [ -s "$d/watcher.pid" ]; then
-        date -u +%s > "$d/watcher.armed_at"
         live_do proc-kill "$(cat "$d/watcher.pid")" || true
         date -u +%s > "$d/watcher.killed_at"
         live_do daemon-kick || true
-        sleep "${LR_DRILL_TICK_S:-30}"
+        sleep "${LR_DRILL_TICK_S:-60}"
         collect_run_state "$sid" "$d"
       else
         d_say "arm watcher: no watcher pid was recorded for ${sid:0:8} — the arm is UNMEASURED, not passed"
       fi
+      collect_keystrokes "$d"
+      collect_reaper_state "$sid" "$d"
       ;;
     draft)
       # (c) THE HELD DRAFT — the arm that could not pass in any of the three designs. A draft is
@@ -683,7 +730,7 @@ arm_run() {
       # NOTHING may move. `moved.txt` is written unconditionally, even when empty, because an
       # emptiness gate cannot tell "nothing moved" from "nobody looked".
       live_do pane-draft "$pane" "$DRILL_DRAFT_TEXT" || true
-      live_do fire-recover "$sid" "$d" || true
+      fire "$sid" "$d"
       collect_run_state "$sid" "$d"
       probe_movement "$sid" "$d"
       ;;
@@ -691,7 +738,7 @@ arm_run() {
       # (d) A TURN ALREADY RUNNING. The submit lands behind it, so the run log must read `queued`
       # and never FAILED:submit, and engagement is then asked of the shipped predicate.
       live_do pane-type "$pane" "$DRILL_BUSY_PROMPT" || true
-      live_do fire-recover "$sid" "$d" || true
+      fire "$sid" "$d"
       collect_run_state "$sid" "$d"
       probe_engagement "$sid" "$d"
       ;;
@@ -699,7 +746,7 @@ arm_run() {
       # (e) ALL-THIN ACCOUNTS. The ranker is pointed at a seeded fixture in which every account is
       # thin, so the pick must PARK carrying the router's own reasons and transplant nothing.
       ( export CC_ACCOUNTS_BIN="${LR_DRILL_THIN_ACCOUNTS:-$DRILL_STATE/thin-accounts}"
-        live_do fire-recover "$sid" "$d" ) || true
+        fire "$sid" "$d" ) || true
       collect_run_state "$sid" "$d"
       probe_movement "$sid" "$d"
       ;;
@@ -756,6 +803,47 @@ collect_run_state() {
   return 0
 }
 
+# collect_keystrokes <dir> — the SURFACE's own typing records, epoch-stamped, from the run log.
+#
+# NOT THE DRILL'S KEYSTROKES. The drill types a draft and a prompt and knows when; what arm (b)
+# needs to know is when the RECOVERY typed, and the run's append-only log is where that is
+# recorded: the three typing stages are `inject` and `submit` (lr-fire-resume's expect program) and
+# the `relaunch-typed` state. Its `ts` fields are UTC ISO-8601 and are converted here rather than
+# compared as strings, because a string compare against an epoch silently never matches.
+collect_keystrokes() {
+  local d="$1"
+  [ -s "$d/events.jsonl" ] || return 0
+  /usr/bin/python3 - "$d/events.jsonl" > "$d/keystrokes.log" <<'PYK' || true
+import calendar, json, sys, time
+TYPING_STAGES = {"inject", "submit", "relaunch"}
+TYPING_STATES = {"relaunch-typed", "SUBMIT-RECR", "READY-QUIET"}
+for line in open(sys.argv[1]):
+    try:
+        r = json.loads(line)
+    except Exception:
+        continue                      # one malformed line is not a verdict about the others
+    if r.get("stage") not in TYPING_STAGES and r.get("state") not in TYPING_STATES:
+        continue
+    ts = r.get("ts") or ""
+    try:
+        epoch = calendar.timegm(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))
+    except Exception:
+        continue
+    print("%d\t%s/%s" % (epoch, r.get("state", "?"), r.get("stage", "?")))
+PYK
+  return 0
+}
+
+# collect_reaper_state <sid> <dir> — whatever the poller said about this run, if anything.
+collect_reaper_state() {
+  local sid="$1" d="$2" log hit
+  log="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/poller.log"
+  [ -s "$log" ] || return 0
+  hit="$(grep "RUN-CLAIM-STALE $sid" "$log" | tail -1)"
+  [ -n "$hit" ] && printf 'STALE:run-claim\n' > "$d/reaper.state"
+  return 0
+}
+
 # probe_movement <sid> <dir> — enumerate, ALWAYS, the artifacts a transplant leaves behind.
 #
 # 🚨 THE THREE PATHS ARE THE TREE'S, NOT A GUESS, and the first draft of this function had two of
@@ -808,34 +896,82 @@ $(drill_rows)
 EOF
 }
 
-# row_verdict <rundir> <row> → "VERDICT|detail". Every row that this drill cannot measure from what
-# it recorded says so BY NAME. The three arms whose rows are read straight off a mapper are 3, 10
-# and the two movement rows; the rest read the artifacts the arms collected.
+# row_verdict <rundir> <row> → "VERDICT|detail".
+#
+# 🚨 THE ARMS ARE ONE ROW, NOT FIVE, and the first draft of this function had them scattered across
+# rows 8-11 — so the watcher arm's verdict was being reported under "husks = 0" and the router
+# arm's under "loaded: ENGAGED <= 300s". § 13's own table says it plainly: the row proved by
+# "fault arms (a)-(e)" is the ONE row "every failure named in a status view within 30 s and
+# re-drivable". Rows 8-11 are proved by other instruments entirely (a husk census, the
+# recycle-intent ledger, an engaged-latency distribution), and labelling an arm's verdict with
+# another row's name is a drill claiming a measurement it did not take.
+#
+# TWO ROWS ARE MEASURED HERE (3 and 11). The other ten name the instrument they would need and
+# resolve UNMEASURED, which is what makes `--assert` exit 4 rather than green.
 row_verdict() {
-  local out="$1" n="$2" got
+  local out="$1" n="$2" arm want got bad="" seen=0 ms worst=0
   case "$n" in
-    3)  got="$(cat "$out/gate/verdict" 2>/dev/null)"
-        case "$got" in FAILED:gate:*:slow:*) echo "FAIL|$got" ;; FAILED:gate:*) echo "PASS|$got" ;;
-          UNMEASURED*|'') echo "UNMEASURED|${got:-no verdict recorded for the gate arm}" ;; *) echo "FAIL|$got" ;; esac ;;
-    9)  got="$(cat "$out/draft/verdict" 2>/dev/null)"
-        case "$got" in 'HELD:draft') echo "PASS|nothing moved under a held draft" ;;
-          UNMEASURED*|'') echo "UNMEASURED|${got:-no verdict recorded for the draft arm}" ;; *) echo "FAIL|$got" ;; esac ;;
-    10) got="$(cat "$out/router/verdict" 2>/dev/null)"
-        case "$got" in 'PARKED:no-target') echo "PASS|parked with the router's reasons, nothing moved" ;;
-          UNMEASURED*|'') echo "UNMEASURED|${got:-no verdict recorded for the router arm}" ;; *) echo "FAIL|$got" ;; esac ;;
-    8)  got="$(cat "$out/watcher/verdict" 2>/dev/null)"
-        case "$got" in 'STALE:watcher') echo "PASS|stale on the next tick, no keystroke while the watcher lived" ;;
-          UNMEASURED*|'') echo "UNMEASURED|${got:-no verdict recorded for the watcher arm}" ;; *) echo "FAIL|$got" ;; esac ;;
-    11) got="$(cat "$out/queued/verdict" 2>/dev/null)"
-        case "$got" in 'queued->engaged') echo "PASS|queued behind a running turn, then engaged" ;;
-          UNMEASURED*|'') echo "UNMEASURED|${got:-no verdict recorded for the queued arm}" ;; *) echo "FAIL|$got" ;; esac ;;
-    # 🚨 THE ROWS THIS DRILL DOES NOT YET MEASURE, NAMED ONE BY ONE. Rows 1, 2, 4, 5, 6, 7 and 12
-    # need instruments that are not in this file — a timed `cc-find` sweep, a per-fire tool-call
-    # count out of the lead's own transcript, the ranker's spread across one TTL, the engaged-latency
-    # distribution, the identity triple, and the lead's resident-token accounting. Each is
-    # OPERATOR-VERIFIED for now and says so in its own row rather than being silently omitted, which
-    # is what makes `--assert` exit 4 instead of a green.
-    *)  echo "UNMEASURED|operator-verified: this drill records no instrument for row $n" ;;
+    3)
+      # Every arm, each against its OWN expected verdict. `gate:` is a PREFIX match because the
+      # refusing term is part of the verdict and the drill does not dictate which term fires; the
+      # other four are exact.
+      for arm in gate watcher draft queued router; do
+        case "$arm" in
+          gate)    want='FAILED:gate:' ;;
+          watcher) want='STALE:watcher' ;;
+          draft)   want='HELD:draft' ;;
+          queued)  want='queued->engaged' ;;
+          router)  want='PARKED:no-target' ;;
+        esac
+        got="$(cat "$out/$arm/verdict" 2>/dev/null)"
+        if [ -z "$got" ]; then bad="$bad $arm=<none>"; continue; fi
+        seen=$((seen + 1))
+        case "$got" in
+          UNMEASURED*)           bad="$bad $arm=$got" ;;
+          FAILED:gate:*:slow:*)  [ "$arm" = gate ] && bad="$bad $arm=$got" ;;
+          "$want"*)              [ "$arm" = gate ] || [ "$got" = "$want" ] || bad="$bad $arm=$got" ;;
+          *)                     bad="$bad $arm=$got" ;;
+        esac
+      done
+      if [ "$seen" -eq 0 ]; then echo "UNMEASURED|no arm recorded a verdict"; return 0; fi
+      if [ -n "$bad" ]; then
+        # An arm that came back UNMEASURED makes the ROW unmeasured; an arm that came back wrong
+        # makes it a FAIL. The two must not collapse: one says the drill did not look, the other
+        # says the surface misbehaved.
+        case "$bad" in *UNMEASURED*|*'=<none>'*) echo "UNMEASURED|${bad# }" ;; *) echo "FAIL|${bad# }" ;; esac
+        return 0
+      fi
+      echo "PASS|all five arms reached their named verdict"
+      ;;
+    11)
+      # THE FIRE'S OWN LATENCY, over every arm that recorded one. The WORST is the verdict: "the
+      # call returns in <= 3s" is a claim about every fire, not about their average.
+      for arm in gate watcher draft queued router; do
+        [ -s "$out/$arm/fire.elapsed_ms" ] || continue
+        ms="$(cat "$out/$arm/fire.elapsed_ms")"
+        case "$ms" in ''|*[!0-9]*) continue ;; esac
+        seen=$((seen + 1))
+        [ "$ms" -gt "$worst" ] && worst="$ms"
+      done
+      if [ "$seen" -eq 0 ]; then echo 'UNMEASURED|no arm recorded a fire latency'; return 0; fi
+      if [ "$seen" -lt 5 ]; then echo "UNMEASURED|only $seen of 5 fires were timed"; return 0; fi
+      if [ "$worst" -gt 3000 ]; then echo "FAIL|slowest fire took ${worst}ms, the bound is 3000ms"; return 0; fi
+      echo "PASS|slowest of 5 fires ${worst}ms"
+      ;;
+    # 🚨 THE TEN ROWS THIS DRILL DOES NOT MEASURE, EACH NAMING WHAT IT WOULD NEED. Not omitted and
+    # not defaulted to a pass: each resolves UNMEASURED and carries its own missing instrument, so
+    # `--assert` exits 4 and the gap is legible in the results file rather than in a report.
+    1)  echo 'UNMEASURED|operator-verified: needs a timed cc-find sweep over pane / sid8 / tuple / keyword' ;;
+    2)  echo 'UNMEASURED|operator-verified: needs a per-fire tool-call count out of the lead transcript' ;;
+    4)  echo 'UNMEASURED|operator-verified: needs the ranker spread across >= 2 accounts in one 90s TTL' ;;
+    5)  echo 'UNMEASURED|operator-verified: needs the engaged-latency distribution over five HEALTHY fires; three arms here are designed to fail' ;;
+    6)  echo 'UNMEASURED|operator-verified: needs the engaged-latency distribution over five HEALTHY fires; three arms here are designed to fail' ;;
+    7)  echo 'UNMEASURED|operator-verified: needs the kitty window id / session uuid / registry account triple' ;;
+    8)  echo 'UNMEASURED|operator-verified: the husk predicate lr_is_husk exists only in the D3 design doc, in no shipped file' ;;
+    9)  echo 'UNMEASURED|operator-verified: needs a recycle-intent to terminal-row join over handoffs.jsonl' ;;
+    10) echo 'UNMEASURED|operator-verified: needs a loaded box and a NAMED PARKED:capacity:<term>, which no arm here produces' ;;
+    12) echo 'UNMEASURED|operator-verified: needs the lead resident-token accounting, deduped by message.id' ;;
+    *)  echo "UNMEASURED|no instrument and no declared owner for row $n" ;;
   esac
 }
 
@@ -866,6 +1002,10 @@ if [ "$WANT_ALL" = 1 ] && [ "$MODE" = drill ]; then
 fi
 if [ "$WANT_ALL" = 1 ]; then
   d_die 'REFUSED:all-unimplemented — the drill only ever runs an explicit manifest it wrote itself (--drill). --all exists so that asking for both can be REFUSED.' 2
+fi
+
+if [ "$MODE" = drill ] || [ "$MODE" = check ]; then
+  MANIFEST="$(resolve_manifest "$MANIFEST")" || exit 2
 fi
 
 case "$MODE" in
