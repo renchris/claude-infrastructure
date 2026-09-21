@@ -872,3 +872,55 @@ above; the ones that changed a DESIGN rather than an anchor are restated here so
     `1640f2fb6a85` (may a rate-limited session be re-homed onto another account unattended — 85%,
     shipped default OFF) and `e84adb4d1737` (park vs. spend the last of a thin account — 80%,
     shipped default PARK). Neither blocks the build; both defaults ship safe.
+- 2026-09-21 08:xxZ — **W6b AND W7 LANDED (`e6dad006b`, 10 paths content-verified). W1–W7 ARE ALL IN.**
+  Merged-tip gate before the land: 442 assertions / 12 suites / 0 failures, all eight ratchets clean.
+  The land's own smoke ran **3569 assertions, 0 failures** — ~7× the earlier rounds, because a diff
+  touching `handoff-fire.sh` and `lr-fleet.sh` widens the gate to every suite that reaches them.
+  - **W6b: 197/197 green, 23/23 mutants killed — and it found a defect that had LANDED WITH A
+    PASSING TEST.** `lf_one` read the picker as `target="$(lf_pick_target …)"` — a SUBSHELL — so every
+    global the picker set died there. The `targets already hold this sid: …` park note landed
+    2026-09-20 with its own green case over a DIRECT-call harness (`_pick`), and **could never once
+    fire from `lf_one`**; every real park printed the generic `no routable target`. This is
+    `assignment-inside-command-substitution-never-escapes` (already in memory) alive in shipped code,
+    and only a case routed through `--recover` end-to-end could see it. Fixed the house way:
+    `lf_pick_target` sets `LF_PICK_TARGET` and prints nothing. Mutant M17 restores the old shape and
+    dies.
+  - **The spec asked for something UNBUILDABLE.** § W6b says `flock "$STATE/admit.lock"`. There is no
+    `flock(1)` on this box (`command -v flock` rc 1); the tree's atomic primitive is `mkdir`, which
+    `bin/cc-dispatch:1604` states in as many words and which the tick lock, `lr_state_append`'s event
+    lock and cc-lr's mutex all use. The PATH was honoured, the primitive was not.
+  - **W6b DECLINED a guard I briefed, and was right to.** I told it to pick one owner for the
+    `--assign` charge. It measured the control flow instead: lr-fleet reaches handoff-fire only as
+    `--recycle --transplanted-source --resume-launcher …`, a non-empty RESUME_LAUNCHER takes the
+    explicit arm and never enters the `auto` arm where `recycle_repick` lives, and the fire path's
+    charge is gated on `RECYCLE = 0`. **handoff-fire charges ZERO times on the recovery path**, so a
+    conditional keyed on "lr-fleet already charged" is unreachable — untested surface by
+    construction. It shipped a comment recording the decision at the site. A brief's premise is a
+    claim, and an implementer that measures it beats one that obeys it.
+  - **W7: 60 cases, 47/47 mutants killed — and its best output is a REFUSAL.** Ten of the drill's
+    twelve rows carry no instrument in the file, so `--assert` resolves them `UNMEASURED` **and exits
+    4, not 0**. It could have written twelve passing rows. `UNMEASURED` is a third verdict beside
+    pass and fail, and collapsing it into either is how a drill certifies what it never measured.
+  - **Three states § 12/13 name do not exist in the tree**: `engaged` (the submit stage writes
+    submitted | queued | FAILED:submit — three siblings of ONE decision; engagement is a different
+    question answered by `hooks/lib/engagement.sh`), `PARKED:no-target` (lr-fleet writes mech
+    `parked` + note `no routable target`), and **`lr_is_husk`**, which § 13 cites as the PROOF of its
+    "zero silent husks" row and which exists only in `design/D3-identity-observability.md`. A DoD row
+    proved by a function that was never built.
+  - 🚨 **THREE LANDS AGAIN, ONE ROOT CAUSE, AND IT IS NOW A RULE IN THE ALWAYS-LOADED TIER.** The gate
+    runs `shellcheck "${sc_todo[@]}"` — **BARE** (`ship-land.sh:3258`), no `-S`, no `-x`. I briefed
+    `-S warning -x`. Two failures from one mismatch: `-S warning` hides `info` (SC2016, twice), and
+    — the half no existing lesson covered — **`-x` SUPPRESSES `SC1091`**, because that code *is*
+    "not following: file was not specified as input". Turning the deeper analysis ON deletes the
+    finding. `tests/lr-drill.sh:574` carried `disable=SC1090`, passed `shellcheck -x`, failed the
+    bare gate with SC1091: two codes for one line, selected by a flag, and a partially-constant path
+    sits exactly on that boundary. **More-thorough is not a superset of findings.** Written up at
+    `docs/lessons/a-gates-invocation-is-part-of-its-contract.md` with a hook in the always-loaded
+    rules. Cost across both waves: ~3 h of gate time.
+  - **A near-miss worth recording because the SHAPE is the dangerous part.** The first merged diff
+    read `22 files, 1433 deletions`, including six `jev` files this session never touched.
+    `git diff origin/main..HEAD` renders files TRUNK HAS AND YOUR BRANCH LACKS as `D` — a sibling had
+    landed `jev` work mid-wave and I was 3 commits behind. Nothing was being deleted. But that is
+    byte-for-byte the screen `soft-reset-onto-a-moved-ref` produces when it IS real (477 deletions
+    across 11 files of siblings' landed work), and the only thing between the two readings is
+    **reading the file list before acting**. After rebasing: 10 files, +3350/−29.
