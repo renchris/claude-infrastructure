@@ -414,3 +414,134 @@ mkmem() {  # → a throwaway memory dir; nothing real is ever read or sent
   grep -qF "reason: http" <<<"$output"      # the reason, not a generic failure
   grep -qF "Nothing has been sent" <<<"$output"
 }
+
+# ── the BREADTH question, added 2026-09-21 ───────────────────────────────────────────────────
+# WHY A THIRD QUESTION RATHER THAN A REPLACEMENT RUBRIC. The first real run scored 140 rules and
+# put 118 of them (84%) in `often`, with `superseded` at p90 0.39 and 2 rows above 0.70. Every
+# verdict was defensible and the RANKING was worthless: a question returning one answer for 84% of
+# a population has not ranked it. Swapping `bite` out for a new rubric would have traded one
+# unvalidated question for another, so `breadth` runs BESIDE it and the run reports the max-bucket
+# share of each — one pass measures whether the fix worked. Same disease as Addendum 4's arm
+# (a property of the population, not of the model), caught this time by the run itself.
+mkmem5() {  # 5 entries, so a 4-key rotation produces a real spread
+  MEMD="$BATS_TEST_TMPDIR/mem5"; mkdir -p "$MEMD"; : > "$MEMD/MEMORY.md"
+  for n in a b c d e; do
+    printf -- '- [%s](%s.md) — hook for %s\n' "$n" "$n" "$n" >> "$MEMD/MEMORY.md"
+    printf 'body of %s\n' "$n" > "$MEMD/$n.md"
+  done
+}
+
+@test "cc-jev rank: breadth is asked BESIDE bite and both land in the row, steered apart" {
+  mkmem
+  # Disjoint key sets are the point: a single global MOCK_CHOICE would match bite and silently
+  # fall back to keys[0] for breadth, so this asserts the per-question knob really separates them.
+  export MOCK_CHOICE_BITE=nearly-always MOCK_CHOICE_BREADTH=one-tool
+  start_mock ok
+  run env AI_GATEWAY_API_KEY=dummy CC_JEV_BASE_URL="http://127.0.0.1:$PORT" \
+      CC_JEV_ZDR=0 CC_JEV_RANK_GAP=0 "$REPO/bin/cc-jev" rank --mem "$MEMD" --yes
+  [ "$status" -eq 0 ]
+  ROWS_FILE=$(grep -o '/.*jev-rank-.*\.jsonl' <<<"$output" | tail -1)
+  [ -s "$ROWS_FILE" ]
+  # BOTH fields, with the values each was steered to — not one value appearing twice.
+  [ "$(jq -r '.breadth' "$ROWS_FILE" | sort -u)" = "one-tool" ]
+  [ "$(jq -r '.level'   "$ROWS_FILE" | sort -u)" = "nearly-always" ]
+}
+
+@test "cc-jev rank: a NEAR-CONSTANT question is named as such in the output" {
+  mkmem5
+  export MOCK_CHOICE_BITE=often MOCK_CHOICE_BREADTH=one-domain     # 100% one bucket, both
+  start_mock ok
+  run env AI_GATEWAY_API_KEY=dummy CC_JEV_BASE_URL="http://127.0.0.1:$PORT" \
+      CC_JEV_ZDR=0 CC_JEV_RANK_GAP=0 "$REPO/bin/cc-jev" rank --mem "$MEMD" --yes
+  [ "$status" -eq 0 ]
+  grep -qF "RUBRIC DISCRIMINATION" <<<"$output"
+  [ "$(grep -c 'NEAR-CONSTANT' <<<"$output")" -ge 3 ]   # breadth, bite AND superseded, all flat
+  ! grep -qF "<- discriminates" <<<"$output" || { echo "flat run claimed discrimination"; false; }
+  # RED-PROOF for the field-mapping bug: `bite`'s answer is stored as `level`, and a report that
+  # reads `.bite` finds null on every row and prints "no answers" over perfectly good verdicts.
+  ! grep -q 'bite .*no answers' <<<"$output" || { echo "bite read the wrong JSONL field"; false; }
+}
+
+# THE OTHER ARM. Without it the `discriminates` branch would ship having never executed, and the
+# section could only ever say one thing — the vacuous control this file already names twice.
+@test "cc-jev rank: a SPREAD question is reported as discriminating, not near-constant" {
+  mkmem5
+  export MOCK_CHOICE_ROTATE=1
+  start_mock ok
+  run env AI_GATEWAY_API_KEY=dummy CC_JEV_BASE_URL="http://127.0.0.1:$PORT" \
+      CC_JEV_ZDR=0 CC_JEV_RANK_GAP=0 "$REPO/bin/cc-jev" rank --mem "$MEMD" --yes
+  [ "$status" -eq 0 ]
+  # Assert on the BREADTH line, not on any line: `superseded` sits in this output too and a bare
+  # grep would pass on its verdict while breadth was flat — the assertion would then be about a
+  # question this test is not testing.
+  grep -qE '^ +breadth .*discriminates' <<<"$output"
+  # 5 rows over 4 rotating keys: max bucket is 2/5 = 40%, well under the 80% flat threshold.
+  ! grep -q 'breadth.*NEAR-CONSTANT' <<<"$output" || { echo "spread called near-constant"; false; }
+}
+
+@test "cc-jev rank: the demotion list sorts on breadth FIRST, and the run states its disagreement" {
+  mkmem5
+  export MOCK_CHOICE_ROTATE=1
+  start_mock ok
+  run env AI_GATEWAY_API_KEY=dummy CC_JEV_BASE_URL="http://127.0.0.1:$PORT" \
+      CC_JEV_ZDR=0 CC_JEV_RANK_GAP=0 "$REPO/bin/cc-jev" rank --mem "$MEMD" --yes
+  [ "$status" -eq 0 ]
+  grep -qF "narrowest scope first" <<<"$output"
+  # The narrowest key leads the list — the ordinal lives in rank_order(), not in the model.
+  grep -A2 'DEMOTION CANDIDATES' <<<"$output" | grep -q 'one-tool'
+  # One run must SAY whether the new question changed anything, rather than leaving it to a later
+  # read of the JSONL. This is the line that makes a single pass a test of the fix.
+  grep -qE "DISAGREEMENT with the old bite-only rule: [0-9]+ row" <<<"$output"
+}
+
+@test "cc-jev rank: rank_order names every key the rubric can return, in both directions" {
+  # A key the model returns that rank_order does not know sorts to 99 and silently lands at the
+  # BOTTOM of a demotion list — the worst direction for a wrong answer. Pin both sets equal.
+  for pair in "bite:almost-never occasionally often nearly-always" \
+              "breadth:one-tool one-domain cross-domain universal"; do
+    q="${pair%%:*}"; want="${pair#*:}"
+    got=$(bash -c '. '"$REPO"'/scripts/jev/rank-memory.sh --help >/dev/null 2>&1; true'; \
+          sed -n "/^rank_order()/,/^}/p" "$REPO/scripts/jev/rank-memory.sh" \
+            | grep -F "$q)" | sed "s/.*printf '//;s/'.*//")
+    [ "$got" = "$want" ] || { echo "$q: rank_order has [$got], rubric expects [$want]"; false; }
+    # and the criteria block in the spec must carry exactly those keys
+    for k in $want; do
+      grep -qF "\"$k\":" "$REPO/scripts/jev/rank-memory.sh" \
+        || { echo "$q key $k missing from the spec criteria"; false; }
+    done
+  done
+}
+
+@test "cc-jev rank --report: re-reads a past run with no key, no route and no call" {
+  R="$BATS_TEST_TMPDIR/rows.jsonl"
+  printf '%s\n' \
+    '{"file":"a.md","level":"often","breadth":"one-tool","superseded":0.2,"hook":"- [A](a.md) — h"}' \
+    '{"file":"b.md","level":"often","breadth":"one-domain","superseded":0.3,"hook":"- [B](b.md) — h"}' \
+    '{"file":"c.md","level":"often","breadth":"cross-domain","superseded":0.2,"hook":"- [C](c.md) — h"}' > "$R"
+  # No AI_GATEWAY_API_KEY and an unroutable base URL: a local re-read must not touch either.
+  run env -u AI_GATEWAY_API_KEY CC_JEV_BASE_URL="http://127.0.0.1:1" \
+      "$REPO/bin/cc-jev" rank --report "$R"
+  [ "$status" -eq 0 ]
+  grep -qF "No call is made" <<<"$output"
+  grep -qE '^ +bite +100% in `often`' <<<"$output"        # flat, and named as such
+  grep -qE '^ +breadth .*discriminates' <<<"$output"      # 3 distinct keys over 3 rows
+}
+
+# TWO DIFFERENT NOTHINGS. A run that never ASKED a question and a run whose model never ANSWERED it
+# both leave the field absent, and they demand opposite reactions — re-run vs escalate. Reporting a
+# pre-breadth JSONL as "the model returned none" would indict the route for our own schema change.
+@test "cc-jev rank --report: a pre-breadth run says NOT ASKED, not 'the model returned none'" {
+  R="$BATS_TEST_TMPDIR/old.jsonl"
+  printf '%s\n' '{"file":"a.md","level":"often","superseded":0.2,"hook":"- [A](a.md) — h"}' > "$R"
+  run env -u AI_GATEWAY_API_KEY "$REPO/bin/cc-jev" rank --report "$R"
+  [ "$status" -eq 0 ]
+  grep -qF "not asked in this run" <<<"$output"
+  ! grep -qF "the model returned no answer" <<<"$output" \
+    || { echo "blamed the route for our own schema change"; false; }
+}
+
+@test "cc-jev rank --report: an empty or missing rows file refuses rather than reporting on nothing" {
+  run env -u AI_GATEWAY_API_KEY "$REPO/bin/cc-jev" rank --report "$BATS_TEST_TMPDIR/nope.jsonl"
+  [ "$status" -eq 3 ]
+  grep -qF "no rows at" <<<"$output"
+}

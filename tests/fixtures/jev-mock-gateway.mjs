@@ -17,6 +17,13 @@ import { createServer } from 'node:http';
 import { writeFileSync } from 'node:fs';
 
 const mode = process.argv[2] || 'ok';
+// MOCK_CHOICE_ROTATE=1 walks each choice question through its OWN criteria keys, one per request.
+// It exists because every other knob here is CONSTANT across a run, so a consumer that reports on
+// the SPREAD of its answers (cc-jev rank's rubric-discrimination section) could only ever be shown
+// the flat case — and its "discriminates" branch would ship having never executed. Per-question
+// counters, because two questions in one request must advance independently.
+const rotate = process.env.MOCK_CHOICE_ROTATE === '1';
+const rotN = Object.create(null);
 const server = createServer((req, res) => {
   let raw = '';
   req.on('data', (c) => (raw += c));
@@ -46,9 +53,18 @@ const server = createServer((req, res) => {
         // FIRST criteria key, which for the anti-deference arm is "none" — so every firing test
         // would pass for the wrong reason (silence) and the suite could never exercise the fire
         // path at all. A fixture that can only produce one branch is a vacuous control.
+        // Steering is PER-QUESTION first (MOCK_CHOICE_<ID>), then global (MOCK_CHOICE). The
+        // per-question form exists because a consumer may ask two choice questions over DISJOINT
+        // key sets in one call — `cc-jev rank` asks `bite` and `breadth`. Under the global-only
+        // form, a value naming a bite level matches bite and silently falls through to keys[0]
+        // for breadth, so any assertion on breadth passes for the wrong reason (the default) and
+        // that branch is never exercised. Same defect this block's own comment already names one
+        // question up: a fixture that can only produce one branch is a vacuous control.
         const keys = Object.keys(q.criteria);
-        const want = process.env.MOCK_CHOICE;
-        const pick = want && keys.includes(want) ? want : keys[0];
+        const want = process.env['MOCK_CHOICE_' + id.toUpperCase()] || process.env.MOCK_CHOICE;
+        let pick;
+        if (rotate) { const i = (rotN[id] = (rotN[id] === undefined ? 0 : rotN[id] + 1)); pick = keys[i % keys.length]; }
+        else { pick = want && keys.includes(want) ? want : keys[0]; }
         answers[id] = { type: 'choice', choice: pick, probabilities: Object.fromEntries(keys.map((k) => [k, k === pick ? 1 : 0])) };
       } else {
         // MOCK_SCORE steers the ordinal, for the same reason MOCK_CHOICE steers the choice: without
