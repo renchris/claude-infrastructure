@@ -76,6 +76,12 @@ start_mock() {
   [ -n "$PORT" ] || { echo "mock failed to bind"; return 1; }
   export AI_GATEWAY_API_KEY=dummy
   export CC_JEV_BASE_URL="http://127.0.0.1:$PORT"
+  # 🚨 REVIVE THE ARM EXPLICITLY. It is RETIRED by default since 2026-09-21 (packet c3752f5fca96,
+  # answered `off` by measurement), and the retirement is enforced at the call site. Without this,
+  # every test below that asserts SILENCE — 3, 7, 8 — would pass because the arm never ran, not
+  # because its logic held: a suite testing a disabled feature and reporting green. The one test
+  # that must NOT set it is the default-off test at the bottom, which is this line's red-proof.
+  export CC_JEV_RETIRED=0
 }
 runhook() { printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s"}' "sid-$RANDOM" "$1" "$2" | bash "$HOOK"; }
 
@@ -161,4 +167,31 @@ runhook() { printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s"}' "sid-
   local w f; w="$(mkrepo n8)"; f="$(mkfix "$TELLFREE")"
   run runhook "$f" "$w"
   [ -z "$output" ]
+}
+
+# THE RED-PROOF FOR THE LINE ABOVE. Deliberately does NOT set CC_JEV_RETIRED, and deliberately
+# stands up a mock that WOULD fire: if the retirement were ever lifted at the call site this test
+# goes red, which is exactly what the other eight can no longer tell you.
+#
+# Why the arm is off: over 160 real closes its two halves were ANTI-CORRELATED — the 4 rows at
+# p>=0.90 were classed value_fork/none/credential, not one was `drivable`, and the 6 `drivable`
+# rows topped out at 0.75. The conjunction is empty on real data at every operating point. It went
+# on spending a full round trip per no-tell close regardless: 372 calls in 25 h, every one a 403.
+@test "9. the arm is RETIRED by default — no key is read, no call is made, on a firing fixture" {
+  start_mock ok drivable
+  unset CC_JEV_RETIRED                      # the default, stated by removing the revival
+  # $TELLFREE, the same fixture test 2 fires on — a message carrying NO lexical tell, i.e. exactly
+  # the population this arm exists to serve. An improvised sentence with obvious deference
+  # vocabulary is caught by a lexical arm instead and blocks for a reason that has nothing to do
+  # with the retirement, so the assertion would read "retired arm still fired" over an arm that
+  # never ran.
+  local w f; w="$(mkrepo n9)"; f="$(mkfix "$TELLFREE")"
+  # `run runhook`, not `run bash -c "runhook …"`: runhook is a shell FUNCTION and is not exported,
+  # so the subshell cannot see it and exits 127 — which an exit-status assertion reads as the
+  # subject failing rather than as the harness never reaching it.
+  run runhook "$f" "$w"
+  [ "$status" -eq 0 ]
+  # It must be SILENT, and silent because the arm never ran rather than because it declined.
+  [[ "$output" != *'"decision":"block"'* ]] || { echo "retired arm still fired"; false; }
+  [[ "$output" != *'jev'* ]] || { echo "retired arm still reported a jev verdict"; false; }
 }

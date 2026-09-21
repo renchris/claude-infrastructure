@@ -261,8 +261,24 @@ has_id=0; { [ "$n_ids" -ge 2 ] && [ "$n_gloss" -eq 0 ]; } && has_id=1
 # derived, why the imported 0.98 sat above Jev's whole output range here and landed the arm INERT,
 # and why a mid-band probability is maximum UNCERTAINTY rather than a weak yes.
 # The bias rule at the top of this file still governs: false-negative over false-positive.
+#
+# 🚨 RETIRED 2026-09-21, AND THE RETIREMENT IS NOW HONOURED HERE RATHER THAN ONLY DESCRIBED
+# ELSEWHERE. Decision packet c3752f5fca96 was answered `off` by measurement, not by preference:
+# over 160 real closes the gate's two halves proved ANTI-CORRELATED — the 4 rows at p>=0.90 were
+# classed value_fork/none/credential, NOT ONE was `drivable`, and the 6 rows classed `drivable`
+# topped out at p=0.75. The conjunction this block requires is EMPTY on real data at every
+# operating point, and lowering the threshold to 0.70 fires twice in 160, both on closes the
+# lexical arms had already caught: zero marginal detections, which is the arm's entire reason to
+# exist. `cc-jev status` has said RETIRED since — but only `cc-jev status` did. The CALL SITE
+# never read the flag, so the arm went on spending a full round trip on every no-tell close:
+# measured 372 calls in 25 hours, every one of them a 403 (ZDR is Pro/Enterprise-only on this
+# plan), each costing ~0.5s of a Stop hook that runs on the operator's closes.
+# A decision recorded in a status printer and not at the call site is not a decision, it is a
+# note — the same shape as CC_JEV_FREE_UNTIL, which was read at exactly one line, inside a printf.
+# Revival is one env var, and it restores the code path byte for byte: CC_JEV_RETIRED=0.
 has_jev=0; JEV_P=""
-if [ "$has_tell" -eq 0 ] && [ "$has_done" -eq 0 ] && [ "$has_cat" -eq 0 ] && [ "$has_id" -eq 0 ]; then
+if [ "${CC_JEV_RETIRED:-1}" = 0 ] \
+   && [ "$has_tell" -eq 0 ] && [ "$has_done" -eq 0 ] && [ "$has_cat" -eq 0 ] && [ "$has_id" -eq 0 ]; then
   _ad_jev_lib="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/jev.sh"
   if [ -r "$_ad_jev_lib" ]; then
     # shellcheck source=/dev/null
