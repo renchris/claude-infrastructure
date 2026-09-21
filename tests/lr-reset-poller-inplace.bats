@@ -31,8 +31,49 @@ STUB
   cat > "$BATS_TEST_TMPDIR/stubs/tmux" <<'STUB'
 printf '%s\n' "$*" >> "${TMUX_LOG:?}"; exit 0
 STUB
-  chmod +x "$BATS_TEST_TMPDIR/stubs/osascript" "$BATS_TEST_TMPDIR/stubs/tmux"
+  # SEAL THE ARGV CENSUS — the one seam in this suite that read the REAL process table (2026-09-20).
+  # `pgrep -f "resume <sid>"` is consulted TWICE per tick, from two different programs, and neither
+  # was fixtured: lr-reset-poller.sh:1139,1281 call it bare, and lr-select.py's is_running() runs
+  # os.environ["LR_SELECT_PGREP_BIN"] defaulting to bare `pgrep`. Both resolve through PATH, so ONE
+  # stub here seals the class rather than either spelling of it. Unsealed, any process anywhere on
+  # the box whose argv holds `resume <SID>` answers YES and the poller retires the fixture's record
+  # before the case's own assertion is reached — lr-select filters it `already-running`, the tick
+  # logs `CONSOLIDATED 1 ready → 0 winner(s)`, and the failure surfaces as a missing NO-GUI/tmux
+  # line, naming a DIFFERENT set of cases on every run (measured in ship-land: one run named the
+  # TRANSPLANTED case, the next named both D2 cases, while the same suite ran green locally in BOTH
+  # A/B arms of the diff in flight). Two arms of the class, one PATH entry (memory:
+  # denylist-enumerates-spellings-not-the-class).
+  #
+  # rc 1 = "no process holds this sid", which is the state every case here means and the state the
+  # real pgrep happened to return on a quiet box. LR_TEST_PGREP_RC makes the other arm reachable on
+  # purpose — it was never testable before, because the only way to drive it was to have a real
+  # process outside the fixture. The log is the seal's own liveness control: a case can assert the
+  # census was CONSULTED, so this stub cannot rot into decoration if the call site moves.
+  #
+  # `ps -axo command=` (lr-lib.sh:493,673) is the other real-table census in this tree and is
+  # deliberately NOT stubbed: probed 2026-09-21 with a matching line carrying a LIVE pid (pid 1 — a
+  # dead pid is a blind instrument here, since the census filters on kill -0), the suite stayed
+  # 19/19. It is not on any path these cases assert over. Re-probe rather than re-quote that.
+  # THE SHEBANG IS LOAD-BEARING, and it is why this stub is not written like its two neighbours
+  # above. A shebang-less file is executable by BASH, which falls back to running it as a script —
+  # which is all the osascript/tmux stubs ever needed, since only bash invokes those. CPython does
+  # not: execve returns ENOEXEC and subprocess treats that like "not executable here" and KEEPS
+  # WALKING PATH, landing on /usr/bin/pgrep. So a shebang-less stub seals the bash arm, leaves the
+  # python arm reading the real process table, and looks sealed — measured here on 2026-09-21, the
+  # log carried exactly one line and it said `caller=bash`. Note the instrument trap on the way:
+  # probing this with a pattern that matches nothing cannot see it, because the stub and the real
+  # pgrep BOTH return 1 (memory: uniform-error-ratio-indicts-the-model — control the instrument).
+  cat > "$BATS_TEST_TMPDIR/stubs/pgrep" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "${PGREP_LOG:?}"; exit "${LR_TEST_PGREP_RC:-1}"
+STUB
+  chmod +x "$BATS_TEST_TMPDIR/stubs/osascript" "$BATS_TEST_TMPDIR/stubs/tmux" "$BATS_TEST_TMPDIR/stubs/pgrep"
+  # Belt and braces: lr-select.py documents LR_SELECT_PGREP_BIN as its test seam (its own § Env
+  # (tests)). Naming the stub by ABSOLUTE PATH does not depend on PATH order surviving whatever the
+  # poller, or a future wrapper between them, does to the environment.
+  export LR_SELECT_PGREP_BIN="$BATS_TEST_TMPDIR/stubs/pgrep"
   export OSA_LOG="$BATS_TEST_TMPDIR/osa.log" TMUX_LOG="$BATS_TEST_TMPDIR/tmux.log"; : > "$OSA_LOG"; : > "$TMUX_LOG"
+  export PGREP_LOG="$BATS_TEST_TMPDIR/pgrep.log"; : > "$PGREP_LOG"
   export PATH="$BATS_TEST_TMPDIR/stubs:$PATH"
   cat > "$HOME/bin/claude-accounts" <<'STUB'
 echo '{"rows":[{"acct":"next4","session_pct":12,"weekly_pct":40}]}'
@@ -294,4 +335,70 @@ STUB
   LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once --dry-run
   [ -f "$STATE/requests/$SID.json" ]
   grep -qE "DRY +request $SID.json would be executed" "$STATE/poller.log"
+}
+
+# ── HERMETICITY: the argv census may not read the real machine (2026-09-20) ────────────────────
+# The seal itself, proven both ways. These two cases are the reason setup() stubs `pgrep`, and they
+# are written so that deleting that stub reddens them — a fixture nobody tests is a fixture that
+# rots back out (memory: control-rots-silently).
+teardown() {
+  local p
+  [ -f "${BATS_TEST_TMPDIR:-}/decoy.pid" ] || return 0
+  p="$(cat "$BATS_TEST_TMPDIR/decoy.pid" 2>/dev/null)"
+  case "$p" in ''|*[!0-9]*) return 0 ;; esac
+  # NEVER signal a bare recorded pid. Pids are REISSUED, so a decoy that has already exited leaves
+  # this holding a number the kernel may since have handed to a bystander — the refusal reads as
+  # honoured while pointing at the wrong process (memory: a-stale-pid-does-not-decay-into-
+  # harmlessness-it-decays-into-a-gu). Confirm the process is still OURS by its argv first.
+  /bin/ps -o command= -p "$p" 2>/dev/null | grep -q -- "$SID" || return 0
+  # `|| true` is mandatory, not defensive: under bats' errexit a kill on an exited-AND-REAPED child
+  # returns 1 and aborts the body, a window that only opens under LOAD (scripts/bats-kill-guard-lint.sh).
+  kill "$p" 2>/dev/null || true
+  return 0
+}
+
+@test "HERMETIC: a REAL live process carrying --resume <SID> cannot reach this suite's verdict" {
+  # THE RED PROOF. Without the setup() stub this case fails exactly as ship-land did: the live
+  # decoy answers `pgrep -f "resume <sid>"`, lr-select filters the candidate `already-running`, the
+  # tick logs `CONSOLIDATED 1 ready → 0 winner(s)` and retires the record — so the D2 verdict below
+  # is never written. The decoy is a stand-in for whatever the real fleet happened to be running;
+  # the point is that NO process outside this fixture may vote.
+  mk_parked "$SID"
+  printf '#!/bin/bash\nsleep "$1"\n' > "$BATS_TEST_TMPDIR/decoy.sh"; chmod +x "$BATS_TEST_TMPDIR/decoy.sh"
+  bash "$BATS_TEST_TMPDIR/decoy.sh" 30 --resume "$SID" & echo $! > "$BATS_TEST_TMPDIR/decoy.pid"
+  # POSITIVE CONTROL, via the REAL pgrep by absolute path: assert the decoy is genuinely visible to
+  # an unsealed census AT THE MOMENT OF THE READING. Without this the case passes on a box where the
+  # decoy never came up, certifying a seal it never loaded (memory: a-cure-is-verified-only-under-
+  # the-load-that-caused-it).
+  local i=0
+  until /usr/bin/pgrep -f "resume $SID" >/dev/null 2>&1; do
+    i=$((i + 1)); [ "$i" -lt 50 ] || { echo "decoy never became visible to the real pgrep"; false; }
+    sleep 0.1
+  done
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  grep -qE "NO-GUI +$SID — no reachable kitty/iTerm2; NOT spawned" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
+  ! grep -q 'CONSOLIDATED' "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
+  [ -f "$STATE/parked/$SID.json" ]
+}
+
+@test "HERMETIC CONTROL: the sealed census is LOAD-BEARING — rc 0 still retires the record" {
+  # The mutation control for the case above. If the stub were never consulted — the call site moved,
+  # or a future edit dropped the PATH entry — forcing a match would change nothing and the seal would
+  # be decoration that certifies itself. Driving the other arm is also new capability: before the
+  # stub, `already-running` could only be reached by having a real process outside the fixture, which
+  # is precisely what made this suite non-hermetic in the first place.
+  mk_parked "$SID"
+  LR_TEST_PGREP_RC=0 LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  [ -s "$PGREP_LOG" ] || { echo "the argv census was never consulted — the seal is decoration"; false; }
+  grep -q -- "resume $SID" "$PGREP_LOG" || { cat "$PGREP_LOG"; false; }
+  # This line is what reddens if the stub ever loses its shebang. `already-running` is lr-select's
+  # own word, written to ITS OWN triage file — only the PYTHON arm can put it there — so it proves
+  # the seam reached the caller that a shebang-less stub silently leaks past. The bash arm is
+  # already covered by the log assertion above. It is asserted HERE and not in poller.log because
+  # the poller's own arm (:1281) also matches under rc 0 and retires the record first, so the
+  # LISTED line never gets written — the verdict is real, the place it surfaces is not poller.log.
+  grep -q "already-running" "$STATE/last-triage.txt" || { cat "$STATE/last-triage.txt"; false; }
+  [ ! -f "$STATE/parked/$SID.json" ]; [ ! -s "$TMUX_LOG" ]
 }
