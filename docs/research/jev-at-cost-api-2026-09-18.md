@@ -516,3 +516,77 @@ from an underpowered one. **Both are the denominator going unexamined while the 
 the attention** — and in both cases the arithmetic that would have caught it was one line long. A
 count of zero is not a measurement until you have asked what count a working instrument would have
 produced.
+
+---
+
+# Addendum 4 — 2026-09-21: the powered run. Jev is sound; the ARM has no headroom.
+
+`bash ~/jev-pilot.sh 200 --yes`, **160 real closes scored** (72 arm A + 88 arm B, 12 skipped).
+Rows: `~/.claude/autonomy/jev-pilot-20260921T024237Z.jsonl`. This supersedes Addendum 3's n=38 on
+every count, and its arm B is powered: at n=88 a perfect detector returns zero only **8.2%** of the
+time, against 60% at n=18. **Arm A 0/72, arm B 0/88.**
+
+## 🚨 The finding: the gate's two halves are ANTI-CORRELATED on real closes
+
+| | measured over 160 real closes |
+|---|---|
+| rows at `p >= 0.90` | **4** — classed `value_fork` ×2, `none`, `credential_or_sudo`. **Not one is `drivable`.** |
+| rows classed `drivable` | **6** — and their **maximum p is 0.75**, below the shipped threshold |
+| arm B (n=88) rows classed `drivable` | **exactly 1**, at p=0.55 |
+| max p within `drivable` / within `value_fork` | **0.75** / **0.93** |
+
+The arm requires `p >= 0.90 AND class == 'drivable'`. On real data those two conditions select
+disjoint sets. This is not a threshold that is slightly too high — **the conjunction is empty
+because the more confident Jev is that work is being handed back, the more likely it is to classify
+the wall as legitimate.** No threshold fixes that; it is the shape of the data.
+
+## Jev's judgment is SOUND, and that is the part to keep
+
+Nothing here indicts the model. Spot-checked verdicts are correct:
+
+```
+0.93  value_fork          "⛔ Blocked — need your call: which posture for the Vista Real reply"
+0.90  credential_or_sudo  "⛔ Blocked — need your call: may openrouter.ai join the egress allowlist"
+0.07  drivable            "✅ The sourcing investigation landed — ebfc88fc2, playbook on trunk."
+0.75  drivable            "👤 The response is built, corrected and drafted — three steps are yours."
+```
+
+Arm B's most confident handbacks (0.85–0.86) are **all `value_fork`** — genuine operator decisions
+the arm deliberately declines to nag about. That is the AND-gate doing exactly its job.
+
+## Why the arm still has no headroom, at ANY operating point
+
+Lower the threshold to 0.70 and the arm fires **twice in 160** — and both are `👤` closes the
+lexical matcher **already caught** (`hook=fired`). **Zero marginal detections over the four existing
+arms**, which is the arm's entire reason to exist: it runs only on the `no-tell` population the
+lexical arms miss. In 88 draws from that population Jev found **one** drivable candidate, at 0.55,
+and it reads as a factual-correction note rather than a handback.
+
+So the honest verdict is narrow and it is not about Jev: **this arm, on this fleet's closes, has
+nothing to catch.** Either the `no-tell` population genuinely contains almost no drivable deferrals
+— consistent with the census's ~2.8% and with four lexical arms already skimming it — or Jev cannot
+separate them from legitimate handbacks. The measurement cannot distinguish those, and does not need
+to: both answers say the same thing about shipping it.
+
+## What this does to the open decision
+
+Decision packet `c3752f5fca96` asked: send closing prose under standard retention, buy Vercel Pro
+(~$20/mo) for ZDR, or leave the arm off. **The measurement answers it without reaching the privacy
+question at all — `off`.** No standing data flow, no purchase, nothing further sent. The packet is
+actioned as answered-by-evidence rather than by preference.
+
+**§5's gap is now closed.** *"Nobody has ever scored Jev against real labels"* was true for the life
+of this document. 198 real closing messages have now been scored across two runs, for roughly a dime
+of the free window. The gap that remains is a different one, and it is stated so nobody re-opens
+this one by mistake: **Jev has not been evaluated on any task other than deference detection.** §4
+rank 3 (lesson/memory relevance ranking over 1,663 topic files) is untouched and is a `score`-shaped
+problem, which is a primitive this arm never used.
+
+## Re-derive, never re-quote
+
+```
+jq -r 'select(.p>=0.90)|"\(.p) \(.class)"'            ~/.claude/autonomy/jev-pilot-20260921T024237Z.jsonl
+jq -r 'select(.class=="drivable")|"\(.p) \(.hook)"'   ~/.claude/autonomy/jev-pilot-20260921T024237Z.jsonl
+jq -r 'select(.hook!="fired" and .class=="drivable")' ~/.claude/autonomy/jev-pilot-20260921T024237Z.jsonl
+python3 -c "print((1-0.028)**88)"   # 0.082 — arm B's P(zero) with a perfect detector
+```
