@@ -202,6 +202,7 @@ case "${1:-status}" in
   probe)  cmd_probe ;;
   ask)    shift; cmd_ask "${1:--}" ;;
   pilot)  shift; exec "$ROOT/scripts/jev/pilot.sh" "$@" ;;
+  rank)   shift; exec "$ROOT/scripts/jev/rank-memory.sh" "$@" ;;
   -h|--help|help) usage ;;
   *) usage; exit 2 ;;
 esac

@@ -332,3 +332,57 @@ status_out() {
   ! grep -qF "THE ARM IS RETIRED" <<<"$output" \
     || { echo "claimed retired while revived"; false; }
 }
+
+# ── `cc-jev rank` — the memory-index ranker ──────────────────────────────────────────────────
+# Added 2026-09-21. This is the FIRST consumer of Jev that is not the retired deference arm, and
+# it exists because MEMORY.md is at a hard cap where the loader silently drops the newest entries,
+# so every append is already an eviction decision — taken today on structural proxies because
+# nothing could read the entries themselves.
+#
+# 🚨 IT USES `choice`, NOT `score`, AND THAT IS A MEASURED CONSTRAINT. `score` is declared in the
+# SDK's own types with exactly the answer shape tests/fixtures/jev-mock-gateway.mjs returns
+# ({type:'score', score:<index>}), and the round trip is STILL rejected `invalid-response` while a
+# boolean through the identical path succeeds — so the runtime schema is stricter than the
+# published type. `choice` over ORDERED keys carries the same ordinal and is the primitive already
+# exercised by 198 real calls. If `score` ever starts validating, the ordering must stay in the
+# script rather than move into the model.
+mkmem() {  # → a throwaway memory dir; nothing real is ever read or sent
+  MEMD="$BATS_TEST_TMPDIR/mem"; mkdir -p "$MEMD"
+  printf -- '- [Alpha](alpha.md) — durable\n- [Beta](beta.md) — one-off\n' > "$MEMD/MEMORY.md"
+  printf 'alpha body\n' > "$MEMD/alpha.md"; printf 'beta body\n' > "$MEMD/beta.md"
+}
+
+@test "cc-jev rank: refuses to send without --yes, and sends nothing" {
+  mkmem
+  run env AI_GATEWAY_API_KEY=dummy "$REPO/bin/cc-jev" rank --mem "$MEMD"
+  [ "$status" -eq 3 ]
+  grep -qF "Re-run with --yes" <<<"$output"
+  grep -qF "Nothing has been sent" <<<"$output"
+}
+
+@test "cc-jev rank: ranks every resolvable entry and writes rows" {
+  mkmem
+  # MOCK_CHOICE must be exported BEFORE start_mock: it steers the MOCK PROCESS, and a first draft
+  # passed it to the CLIENT instead, where it did nothing. The run still printed "SCORED 2 of 2",
+  # so only the level assertion caught it — a fixture knob set on the wrong side of the wire fails
+  # silently, in the direction of "the default was fine".
+  export MOCK_CHOICE=occasionally
+  start_mock ok
+  run env AI_GATEWAY_API_KEY=dummy CC_JEV_BASE_URL="http://127.0.0.1:$PORT" \
+      CC_JEV_RANK_GAP=0 "$REPO/bin/cc-jev" rank --mem "$MEMD" --yes
+  [ "$status" -eq 0 ]
+  grep -qF "SCORED 2 of 2" <<<"$output"
+  grep -qF "occasionally" <<<"$output"
+  # It must never edit the index — the whole safety case is that eviction stays a human read.
+  grep -qF "Nothing was edited" <<<"$output"
+  run grep -c 'alpha.md' "$MEMD/MEMORY.md"
+  [ "$output" = "1" ]
+}
+
+@test "cc-jev rank: an index whose targets are all MISSING refuses rather than ranking nothing" {
+  MEMD="$BATS_TEST_TMPDIR/mem2"; mkdir -p "$MEMD"
+  printf -- '- [Ghost](ghost.md) — target does not exist\n' > "$MEMD/MEMORY.md"
+  run env AI_GATEWAY_API_KEY=dummy "$REPO/bin/cc-jev" rank --mem "$MEMD" --yes
+  [ "$status" -eq 3 ]
+  grep -qF "REFUSING" <<<"$output"
+}

@@ -51,8 +51,16 @@ const server = createServer((req, res) => {
         const pick = want && keys.includes(want) ? want : keys[0];
         answers[id] = { type: 'choice', choice: pick, probabilities: Object.fromEntries(keys.map((k) => [k, k === pick ? 1 : 0])) };
       } else {
+        // MOCK_SCORE steers the ordinal, for the same reason MOCK_CHOICE steers the choice: without
+        // it this branch can only ever return the TOP level, so any consumer that RANKS on the
+        // score sees one value for every input and its sort is untested — a fixture that can only
+        // produce one branch is a vacuous control. Read as an INDEX into criteria (which is what
+        // the gateway returns — a level, never the label text), clamped so a bad value cannot
+        // silently become the top again.
         const top = q.criteria.length - 1;
-        answers[id] = { type: 'score', score: top, probabilities: { [String(top)]: 1 } };
+        const want = Number(process.env.MOCK_SCORE);
+        const pick = Number.isInteger(want) && want >= 0 && want <= top ? want : top;
+        answers[id] = { type: 'score', score: pick, probabilities: { [String(pick)]: 1 } };
       }
     }
     res.writeHead(200, { 'content-type': 'application/json' });
