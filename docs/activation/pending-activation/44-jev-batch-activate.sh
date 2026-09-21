@@ -68,6 +68,26 @@ Arming authorises ONE bounded window of Jev calls:
 
 It cannot be undone once the calls are made.
 EOF
+# 🚨 A CONSENT PROMPT MUST NOT BE ANSWERABLE BY SILENCE. Run non-interactively — through a tool
+# call, a pipe, a cron — `read` gets EOF immediately, `$ans` is empty, and the test below reads
+# that as a decline. Measured 2026-09-21: the operator ran this exact script, saw the terms, and
+# got "Not armed" without ever being asked. The default is the SAFE direction, so nothing was sent
+# and nothing broke — but "you declined" and "you were never asked" are different states, and
+# printing the first over the second is how a step gets recorded as refused when it was skipped.
+if [ ! -t 0 ]; then
+  cat >&2 <<'EOF'
+
+⚠ STDIN IS NOT A TERMINAL, so the consent question cannot be asked and has NOT been answered.
+  The job is loaded and INERT. Nothing was sent.
+
+  Arming is a decision, so it is not something this script will infer from silence. Either run
+  this script from a terminal, or arm explicitly — the terms are printed above:
+
+      cc-jev arm && cc-jev batch
+
+EOF
+  exit 0
+fi
 printf '\nArm one window now? [yes/N] '
 read -r ans
 if [ "$ans" != "yes" ]; then

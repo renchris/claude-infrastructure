@@ -636,28 +636,32 @@ STUB
   # commits on top), exactly as it did for permission-harvest above, so forward was again the only
   # remedy. The count moves WITH the repair. Declared `run`, not `staged`: migrations/0032 has been
   # run and the job is loaded (runs=46, last exit 0) — see the manifest's own block for every field.
-  # 36 since 2026-09-21: com.claude.jev-batch (82f08302a3f1, backlog 83b1c0fbe234) — the qos-census /
-  # accounts-keepwarm / permission-harvest shape again: plist and manifest row landed in ONE commit,
-  # correctly, and only this count was left behind. The split therefore ran the OTHER way from
-  # browse-mirror directly above: the coverage loop below was GREEN (the row is there) and this
-  # hand-copied count was the only leg that could notice. A/B: 35 labels at the parent c20ef874243e
-  # (green), 36 at 82f08302a3f1 and on trunk for every lander after it (red). postland-verify
-  # bisected it correctly and its auto-revert FAILED rc=90 (revert=none, nothing applied — a 9-file
-  # 1028-insertion feature does not revert cleanly under the commits on top), the third consecutive
-  # rc=90 after permission-harvest and browse-mirror, so forward was again the only remedy.
-  # One thing here is NEW and must not be mis-read as another entry for the staged-out-of-glob
-  # argument: this is the first row declared `staged` whose plist lives in launchd/ rather than
-  # launchd/staged/. Every prior staged row (relogin, cc-gc, scratchpad-reaper, accounts-keepwarm)
-  # sits outside the coverage glob, which is what the block above cites twice for refusing to derive
-  # `n` from disk. That argument does not reach this entry: `staged` here is the manifest LIFECYCLE
-  # field — the job is not loaded, and activation 44-jev-batch-activate.sh is the operator's C10
-  # step, still pending — not a claim about where the plist sits. The coverage loop did cover it.
+  # 36 since 2026-09-21: com.claude.jev-batch (82f08302a, backlog n/a — landed with its row) — the
+  # SEVENTH instance of this shape, and the first where the plist and the manifest row landed in ONE
+  # commit *and* the coverage loop was satisfied, so this count was the ONLY leg that could notice.
+  # That is the split working as designed: ship-land's gate is own-scope and cannot see an assertion
+  # elsewhere that COUNTS occurrences in a file the diff touches, so the land was green and trunk
+  # went red for the next lander. postland-verify bisected it to 82f08302a correctly and its
+  # auto-revert FAILED rc=90, exactly as for permission-harvest and browse-mirror above — forward is
+  # again the only remedy. The count moves WITH the repair.
   if [ "$n" != 36 ]; then
     echo "manifest declares $n labels, expected 36 — if a plist was legitimately added or retired,"
     echo "move this count and say why (see the block above); if not, a row is missing. Declared:"
     grep -vE '^[[:space:]]*(#|$)' "$M" | cut -d'|' -f1 | sed 's/[[:space:]]//g; s/^/  /'
     return 1
   fi
+
+  # 🚨 CORRECTION to the jev-batch entry above, same day (2026-09-21): it reasons from "the job is
+  # not loaded, and activation 44-jev-batch-activate.sh is the operator's C10 step". That was true
+  # when written and is now false — the operator RAN that script, and `launchctl print` shows the
+  # job loaded with run interval 1800, runatload fired, last exit 0. The row therefore moved
+  # `staged` -> `run` in the same commit as this note. The lifecycle argument above is still the
+  # right argument; only its premise expired, which is what a lifecycle field is FOR.
+  # Its evidence moved too, and not cosmetically: `auto` reads StandardOutPath, and the job's normal
+  # (unarmed) path writes nothing to stdout — every line goes through _log to jev-batch.log — so
+  # `auto` would point the staleness sensor at a file that never changes and S5 would claim STALLED
+  # on a healthy job ticking every 30 minutes. Evidence is now that log, the durable product that
+  # actually proves execution.
 
   # three-way coverage: every committed plist is declared (the lint §4.4 enforces at the chokepoint)
   for f in "$ROOT"/launchd/com.claude.*.plist "$ROOT"/launchd/com.chrisren.*.plist; do
