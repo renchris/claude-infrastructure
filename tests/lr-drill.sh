@@ -570,7 +570,10 @@ mode_seed() {
   local acct="$1" out="$2" run slot pane sid cwd role arm launcher anchor rows="" wt1 wt2
   DRILL_ARMED=1
   [ -n "$acct" ] || d_die 'REFUSED: --seed needs --account (the ONE account all five sessions share)' 2
-  # shellcheck disable=SC1090  # runtime-resolved library ladder, the shape every lr-* tool uses
+  # shellcheck disable=SC1090,SC1091  # runtime-resolved library ladder, the shape every lr-*
+  # tool uses. BOTH codes: $DRILL_REPO is partially constant, so a BARE `shellcheck` (which is
+  # what the land gate runs — scripts/ship-land.sh:3258, no -x and no -S) resolves the path and
+  # emits SC1091 rather than SC1090. Disabling only SC1090 passes `shellcheck -x` and fails the gate.
   . "$DRILL_REPO/lib/account-map.generated.sh" 2>/dev/null || d_die 'cannot source lib/account-map.generated.sh' 2
   launcher="$(cc_acct_launcher_for_name "$acct")" || d_die "REFUSED: '$acct' is not one of $CC_ACCT_NAMES" 2
   wt1="${LR_DRILL_WT1:-}"; wt2="${LR_DRILL_WT2:-}"
