@@ -496,7 +496,7 @@ state_digest() { # $1 = directory → sha of its sorted entry names ("" when abs
   [[ "$output" == *"FAIL D2 — session-continue.sh is not executable"* ]] || { echo "$output"; false; }
 }
 
-@test "M8: a clause VALUE carrying a newline is normalised to ONE line, and capped at 200" {
+@test "M8: a clause VALUE carrying a newline is normalised to ONE line, and is bounded" {
   # The guard that stops a FAIL value injecting a second line into a prompt TYPED INTO A TUI
   # COMPOSER, where a newline submits half a sentence. The value is attacker-adjacent by
   # construction — it is read out of the bundle's own JSON with `jq -r`, which emits a real newline
@@ -509,14 +509,23 @@ state_digest() { # $1 = directory → sha of its sorted entry names ("" when abs
   orphan="$(printf '%s\n' "$output" | grep -c '^INJECTED-SECOND-LINE' || true)"
   [ "$orphan" -eq 0 ] || { echo "the value broke out onto its own line: $output"; false; }
 
-  # …and the 200-char cap, the other half of the same normaliser.
-  long="$(printf 'A%.0s' $(seq 1 600))"
+  # …and the runaway bound, the other half of the same normaliser. The NUMBER moved from 200 to
+  # 400 on 2026-09-21 and the case moved with it, deliberately: at 200 the cap was not bounding a
+  # runaway, it was DESTROYING real messages, and which half it destroyed depended on which end it
+  # cut from — a left-anchored cut lost the unclassifiable VALUE (D1UNCLASS went red off-box, where
+  # the sandbox's longer $HOME pushed `banana` past the cap and it arrived as `bana`), and a
+  # both-ended cut lost the MIDDLE that C1/C3/D1/D1RC match on. The launcher does its own budgeting
+  # when it folds a FAIL into the prompt, so this is a runaway backstop and nothing more. What the
+  # case still pins is the PROPERTY — one line, and bounded — not the constant.
+  long="$(printf 'A%.0s' $(seq 1 900))"
   jq --arg v "$long" '.gaps_at_handoff = $v' "$BUNDLE/MANIFEST.json" > "$BUNDLE/m.tmp" \
     && mv "$BUNDLE/m.tmp" "$BUNDLE/MANIFEST.json"
   run verify --no-clear
   a1="$(printf '%s\n' "$output" | grep '^FAIL A1 ' || true)"
   [ -n "$a1" ] || { echo "no A1 line at all: $output"; false; }
-  [ "${#a1}" -le 215 ] || { echo "the A1 line is ${#a1} chars — the 200-char cap is gone: $a1"; false; }
+  [ "${#a1}" -le 420 ] || { echo "the A1 line is ${#a1} chars — the runaway bound is gone: $a1"; false; }
+  # and it must still be SHORTER than the input, or "bounded" is satisfied by doing nothing
+  [ "${#a1}" -lt 900 ] || { echo "the value passed through unbounded: ${#a1} chars"; false; }
 }
 
 # ══ W3i B3/C1-C7 — THE ARMS THAT FIRE ON REAL INPUT, AND THE ONES THE PASS ADDED ═════════════════
