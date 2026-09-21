@@ -333,7 +333,18 @@ LOCK=""
 if [ ! -r "$LOCK" ]; then clause FAIL C3 "no transplant lock at $LOCK"
 else
   _to="$(jq -r '.to // "ABSENT"' "$LOCK" 2>/dev/null)"
+  _chain="$(jq -r '(.chain // []) | if type=="array" then join(" → ") else "" end' "$LOCK" 2>/dev/null || true)"
+  # ── AND A SECOND HOP IS NOT A SPLIT BRAIN (W5-B) ───────────────────────────────────────────────
+  # A re-limited target can now be moved again, and lr-transplant.sh rewrites this lock IN PLACE
+  # when it happens — `to` names the CURRENT owner. Exact equality alone therefore fails a bundle
+  # cut at the FIRST hop forever, though it was correct when it was cut. The lock records the whole
+  # chain of stores this session has passed through, so a manifest target found anywhere in it is an
+  # earlier hop of this same session. A target in NO chain entry is still the split brain C3 exists
+  # to catch. (`jq -e` exits non-zero for false AND for an unparseable lock; both fail closed here,
+  # which is the direction C3 already takes on a lock it cannot read.)
   if [ "$_to" = "$TCFG_M" ]; then clause PASS C3 "lock $LOCK → $_to" "lock target"
+  elif jq -e --arg t "$TCFG_M" '(.chain // []) | (type=="array") and (index($t) != null)' "$LOCK" >/dev/null 2>&1; then
+    clause PASS C3 "lock $LOCK → $_to, and manifest target $TCFG_M is an EARLIER hop of the same session (chain: $_chain)" "lock target"
   else clause FAIL C3 "lock $LOCK says to=$_to, manifest target_cfg=$TCFG_M"; fi
 fi
 
