@@ -16,7 +16,12 @@
 set -uo pipefail
 
 TTL="${CC_JEV_ARM_TTL_MIN:-180}"
-CALLS=60; CAPB="${CC_JEV_PROMO_CAP_B:-1200}"; CORPUS="memory-orphans"
+# CALLS is DERIVED from the live corpus, not chosen. It was a hardcoded 60, which at the batch's
+# own arithmetic buys 26 heats — 130 of 278 orphans. One arming produced HALF a swap list, and the
+# shortfall was invisible because a partial pass prints exactly the summary a complete one prints.
+# 0 here means "ask promote-memory.sh", which owns the definition of the population; an explicit
+# --calls still overrides, and a failed probe falls back to a number that is honest about being one.
+CALLS=0; CAPB="${CC_JEV_PROMO_CAP_B:-1200}"; CORPUS="memory-orphans"
 ARM="${CC_JEV_ARM_FILE:-$HOME/.claude/autonomy/jev-batch.arm}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -48,6 +53,17 @@ ARM_ROOT="$(cd "$(dirname "$ARM_SELF")/../.." && pwd)"
 . "$ARM_ROOT/hooks/lib/jev.sh"
 jev_window_open || exit 4
 
+if [ "$CALLS" -eq 0 ]; then
+  CALLS="$("$ARM_ROOT/scripts/jev/promote-memory.sh" --plan-calls 2>/dev/null)"
+  case "$CALLS" in
+    ''|*[!0-9]*)
+      printf '⚠ could not size the window from the corpus (is there a cc-jev rank run on disk?).\n' >&2
+      printf '  Falling back to 133 calls — the budget measured for 278 orphans on 2026-09-21.\n' >&2
+      printf '  Size it yourself with --calls N, or run: cc-jev promote   (it prints the plan)\n' >&2
+      CALLS=133 ;;
+  esac
+fi
+
 mkdir -p "$(dirname "$ARM")" || { printf 'cannot create %s\n' "$(dirname "$ARM")" >&2; exit 3; }
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 EXP="$(date -u -v"+${TTL}M" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "+${TTL} minutes" +%Y-%m-%dT%H:%M:%SZ)"
@@ -61,7 +77,8 @@ ARMED until $EXP (${TTL} min).
              always-loaded rules file. Our own engineering lessons. Never a transcript,
              never the mailbox, never the msg corpus.
   sends      the frontmatter description + the first $CAPB bytes of the body, per file
-  ceiling    $CALLS calls, this window only
+  ceiling    $CALLS calls, this window only — sized for ONE COMPLETE pass over the corpus
+             (~$(( CALLS / 15 + 1 ))-$(( CALLS / 5 + 1 )) min at the measured 14.8 calls/min)
   retention  STANDARD (ZDR is Pro/Enterprise-only and 403s on this plan)
 
 The scheduled job consumes this BEFORE its first call, so it fires at most once.

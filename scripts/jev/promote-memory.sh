@@ -51,7 +51,7 @@ RULES="${CC_JEV_RULES_FILE:-$ROOT/.claude/rules/agent-operating-lessons.md}"
 RANKROWS="${CC_JEV_RANK_ROWS:-}"
 CAP="${CC_JEV_PROMO_CAP_B:-1200}"
 SEED="${CC_JEV_PROMO_SEED:-20260921}"
-YES=0; HEATS=0; BIAS="${CC_JEV_PROMO_BIAS_N:-20}"; RESUME=""; REPORT=""
+YES=0; HEATS=0; BIAS="${CC_JEV_PROMO_BIAS_N:-20}"; RESUME=""; REPORT=""; PLANONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --yes) YES=1; shift ;;
@@ -60,8 +60,9 @@ while [ $# -gt 0 ]; do
     --mem) MEM="${2:?--mem needs a dir}"; shift 2 ;;
     --resume) RESUME="${2:?--resume needs a .jsonl}"; shift 2 ;;
     --report) REPORT="${2:?--report needs a .jsonl from a previous run}"; shift 2 ;;
-    -h|--help) printf 'usage: cc-jev promote [--heats N] [--bias-n N] [--mem DIR] [--resume F.jsonl] [--report F.jsonl] [--yes]\n'; exit 0 ;;
-    *) printf 'usage: cc-jev promote [--heats N] [--bias-n N] [--mem DIR] [--resume F.jsonl] [--report F.jsonl] [--yes]\n' >&2; exit 2 ;;
+    --plan-calls) PLANONLY=1; shift ;;
+    -h|--help) printf 'usage: cc-jev promote [--heats N] [--bias-n N] [--mem DIR] [--resume F.jsonl] [--report F.jsonl] [--plan-calls] [--yes]\n'; exit 0 ;;
+    *) printf 'usage: cc-jev promote [--heats N] [--bias-n N] [--mem DIR] [--resume F.jsonl] [--report F.jsonl] [--plan-calls] [--yes]\n' >&2; exit 2 ;;
   esac
 done
 
@@ -189,17 +190,35 @@ N_ORPH=$(wc -l < "$ORPH" | tr -d ' ')
 # silently substituting an arbitrary incumbent: a swap list built against a strong incumbent would
 # recommend evicting a rule that is holding its slot correctly.
 ANCH="$(mktemp)"
-if [ -z "$RANKROWS" ]; then
-  # Newest NON-EMPTY run, chosen by NAME rather than by mtime: the filename carries a UTC stamp
-  # (jev-rank-YYYYMMDDTHHMMSSZ.jsonl) set at process start, so a lexical sort is chronological and
-  # is not perturbed by a later touch, a copy, or a restore. `-H` because ~/.claude is commonly a
-  # symlink and BSD find skips a symlinked start dir without it — the null would read as "no runs".
-  RANKROWS="$(find -H "$HOME/.claude/autonomy" -maxdepth 1 -name 'jev-rank-*.jsonl' -size +0c \
-              2>/dev/null | sort -r | head -1)"
-fi
+# 🚨 PICK THE NEWEST RUN THAT YIELDS RESOLVABLE ANCHORS — not the newest NON-EMPTY one.
+# Those are different predicates and the difference is not hypothetical: a 5-row run left behind by
+# a hand repro sat beside the real 140-row run in the same directory, newer by name, non-empty, and
+# every one of its rows named a FIXTURE file (alpha.md, beta.md) that does not exist in the memory
+# dir. "Newest non-empty" selected it, all 5 rows failed the -f test, and the tool refused with
+# "no weak-incumbent anchors" — a true sentence about the file it chose and a false one about the
+# machine, which held 22 perfectly good anchors one file down.
+# So: walk the runs newest-first and take the FIRST that actually produces an anchor. Selection by
+# the property you need, never by a proxy that correlates with it.
+_anchors_from() {  # $1=rows file → resolvable weak-incumbent basenames, one per line
+  jq -r 'select((.level//"")|test("almost-never|occasionally"))|.file' "$1" 2>/dev/null \
+    | _basenames | while read -r f; do [ -n "$f" ] && [ -f "$MEM/$f" ] && printf '%s\n' "$f"; done
+}
 if [ -n "$RANKROWS" ] && [ -s "$RANKROWS" ]; then
-  jq -r 'select((.level//"")|test("almost-never|occasionally"))|.file' "$RANKROWS" \
-    | _basenames | while read -r f; do [ -f "$MEM/$f" ] && printf '%s\n' "$f"; done > "$ANCH"
+  # An EXPLICIT --rank-rows / CC_JEV_RANK_ROWS is honoured as given: the caller named a file, so a
+  # silent fallback to a different one would answer a question nobody asked.
+  _anchors_from "$RANKROWS" > "$ANCH"
+else
+  # The filename carries a UTC stamp set at process start, so a lexical reverse sort is
+  # chronological and is not perturbed by a later touch, copy or restore. `-H` because ~/.claude is
+  # commonly a symlink and BSD find skips a symlinked start dir without it.
+  RANKROWS=""
+  while IFS= read -r _cand; do
+    [ -n "$_cand" ] || continue
+    _anchors_from "$_cand" > "$ANCH"
+    if [ -s "$ANCH" ]; then RANKROWS="$_cand"; break; fi
+  done <<EOF
+$(find -H "$HOME/.claude/autonomy" -maxdepth 1 -name 'jev-rank-*.jsonl' -size +0c 2>/dev/null | sort -r)
+EOF
 fi
 N_ANCH=$(wc -l < "$ANCH" | tr -d ' ')
 [ "$N_ANCH" -gt 0 ] || { cat >&2 <<EOF
@@ -217,6 +236,13 @@ exit 3; }
 [ "$HEATS" -gt 0 ] || HEATS=$(( (N_ORPH + 4) / 5 ))
 R2=$HEATS
 TOTAL=$(( 1 + HEATS + R2 + BIAS ))
+
+# --plan-calls: print the call budget for a FULL pass over the live corpus and stop. It exists so
+# that `cc-jev arm` can size a window from the population rather than from a constant — ONE
+# definition of "the orphans", here, where it already lives. The first default was a hardcoded 60,
+# which covered 130 of 278 orphans: one arming produced half a swap list and the shortfall was
+# invisible, because a partial pass prints exactly the same summary as a complete one.
+if [ "$PLANONLY" -eq 1 ]; then printf '%s\n' "$TOTAL"; exit 0; fi
 
 OUT="${RESUME:-$HOME/.claude/autonomy/jev-promote-$(date -u +%Y%m%dT%H%M%SZ).jsonl}"
 mkdir -p "$(dirname "$OUT")" || { printf 'cannot create %s\n' "$(dirname "$OUT")" >&2; exit 3; }

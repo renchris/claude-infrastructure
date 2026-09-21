@@ -322,3 +322,52 @@ runp() {
   [ -s "$ROWS" ]                                    # and it actually decided something
   [ "$(jq -r '.round' "$ROWS" | sort -u | head -1)" = "h2h" ]
 }
+
+# ── sizing the armed window FROM THE CORPUS ──────────────────────────────────────────────────
+# The ceiling was a hardcoded 60, which at the batch's own arithmetic buys 26 heats — 130 of 278
+# orphans. One arming produced HALF a swap list, and the shortfall was invisible because a partial
+# pass prints exactly the summary a complete one prints.
+@test "promote --plan-calls: prints a full-pass budget, makes no call, needs no key" {
+  mkcorpus
+  run env -u AI_GATEWAY_API_KEY CC_JEV_BASE_URL="http://127.0.0.1:1" CC_JEV_RULES_FILE=/dev/null \
+      CC_JEV_RANK_ROWS="$RANKF" "$REPO/bin/cc-jev" promote --mem "$MEMD" --plan-calls
+  [ "$status" -eq 0 ]
+  # 12 orphans -> ceil(12/5)=3 heats, 3 head-to-head, +1 preflight, +20 bias = 27
+  [ "$output" = "27" ]
+}
+
+@test "arm: sizes its ceiling from the corpus, not from a constant" {
+  mkcorpus
+  A="$BATS_TEST_TMPDIR/sz.arm"
+  run env CC_JEV_ARM_FILE="$A" CC_JEV_MEM_DIR="$MEMD" CC_JEV_RULES_FILE=/dev/null \
+      CC_JEV_RANK_ROWS="$RANKF" "$REPO/bin/cc-jev" arm
+  [ "$status" -eq 0 ]
+  [ "$(jq -r '.max_calls' "$A")" = "27" ]          # the corpus's number, not 60
+  grep -qF "ONE COMPLETE pass" <<<"$output"
+  # and an explicit --calls still wins
+  run env CC_JEV_ARM_FILE="$A" CC_JEV_MEM_DIR="$MEMD" CC_JEV_RULES_FILE=/dev/null \
+      CC_JEV_RANK_ROWS="$RANKF" "$REPO/bin/cc-jev" arm --calls 7
+  [ "$(jq -r '.max_calls' "$A")" = "7" ]
+}
+
+# 🚨 SELECT BY THE PROPERTY YOU NEED, NOT BY A PROXY THAT CORRELATES WITH IT.
+# A 5-row run left by a hand repro sat beside the real 140-row run: newer by name, NON-EMPTY, and
+# every row naming a fixture file absent from the memory dir. "Newest non-empty" chose it, all 5
+# rows failed the -f test, and the tool refused with "no weak-incumbent anchors" — true about the
+# file it picked, false about the machine, which held 22 good anchors one file down.
+@test "promote: skips a newer rank run whose anchors do not RESOLVE, and uses the older one" {
+  mkcorpus
+  AUT="$BATS_TEST_TMPDIR/aut"; mkdir -p "$AUT"
+  # older: real, resolvable.           newer: non-empty, weak rows, none of which exist.
+  printf '%s\n' '{"file":"inc1.md","level":"occasionally"}' > "$AUT/jev-rank-20260101T000000Z.jsonl"
+  printf '%s\n' '{"file":"ghost.md","level":"occasionally"}' > "$AUT/jev-rank-20260202T000000Z.jsonl"
+  run env -u AI_GATEWAY_API_KEY -u CC_JEV_RANK_ROWS HOME="$BATS_TEST_TMPDIR" \
+      CC_JEV_RULES_FILE=/dev/null "$REPO/bin/cc-jev" promote --mem "$MEMD"
+  mkdir -p "$BATS_TEST_TMPDIR/.claude"; cp -R "$AUT" "$BATS_TEST_TMPDIR/.claude/autonomy" 2>/dev/null || true
+  run env -u AI_GATEWAY_API_KEY -u CC_JEV_RANK_ROWS HOME="$BATS_TEST_TMPDIR" \
+      CC_JEV_RULES_FILE=/dev/null "$REPO/bin/cc-jev" promote --mem "$MEMD"
+  [ "$status" -eq 3 ]                                   # no --yes, so it stops after planning
+  grep -qF "jev-rank-20260101T000000Z.jsonl" <<<"$output"   # the OLDER one, because it resolves
+  ! grep -qF "jev-rank-20260202T000000Z.jsonl" <<<"$output" \
+    || { echo "chose the newer run whose anchors do not resolve"; false; }
+}

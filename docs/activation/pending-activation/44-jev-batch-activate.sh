@@ -59,9 +59,10 @@ printf '  It is INERT: with no armed window it writes one log line per tick and 
 cat <<EOF
 Arming authorises ONE bounded window of Jev calls:
 
-  corpus     278 memory topic files reachable from neither the index nor the rules file
+  corpus     the 278 memory topic files reachable from neither the index nor the rules file
   sends      the frontmatter description + first 1200 B of body, per file
-  ceiling    60 calls, expiring in 180 minutes, consumed before the first call
+  ceiling    sized from the live corpus for ONE COMPLETE pass (133 calls today, ~9-27 min),
+             expiring in 180 minutes, consumed before the first call
   retention  STANDARD — the vendor keeps what is sent; ZDR is not available on this plan
   reverses   cc-jev arm --revoke  (before the job next ticks)
 
