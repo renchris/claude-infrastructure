@@ -535,9 +535,9 @@ reg_sid_for_pane_any() { # $1=sid → 0 when some live registry row holds it
 
 # ── SEED ───────────────────────────────────────────────────────────────────────────────────────
 # Five throwaway sessions on ONE account: three in the shared checkout, two in worktrees the
-# OPERATOR supplies (`--worktree` twice). The drill does not create worktrees — that is a source
-# control operation, this file performs none, and a drill that provisions its own repo state is a
-# drill whose failures are ambiguous between the tree and itself.
+# OPERATOR supplies as LR_DRILL_WT1 / LR_DRILL_WT2. The drill creates no worktree — that is a
+# source-control operation, this file performs none of those, and a drill that provisions its own
+# repo state has failures that are ambiguous between the tree and itself.
 mode_seed() {
   local acct="$1" out="$2" run slot pane sid cwd role arm launcher anchor rows="" wt1 wt2
   DRILL_ARMED=1
@@ -615,7 +615,7 @@ wait_for_transcript() { # $1=sid — a transcript with at least one assistant re
 # whose arms interleave cannot attribute a keystroke to an arm, and arm (b)'s whole assertion is
 # about WHEN a keystroke happened.
 mode_drill() {
-  local mf="$1" out="$2" sid role cwd pane arm rundir rc=0
+  local mf="$1" out="$2" sid role cwd pane arm rundir
   check_manifest "$mf" >/dev/null || return 2
   preflight "$mf" || return 5
   DRILL_ARMED=1
@@ -626,7 +626,8 @@ mode_drill() {
     [ -n "$sid" ] || continue
     rundir="$out/$arm"; mkdir -p "$rundir" || d_die "cannot create $rundir"
     printf '%s\t%s\t%s\t%s\t%s\n' "$sid" "$role" "$cwd" "$pane" "$arm" > "$rundir/subject.tsv"
-    arm_run "$arm" "$sid" "$pane" "$cwd" "$rundir" || rc=1
+    arm_run "$arm" "$sid" "$pane" "$cwd" "$rundir" || \
+      d_say "arm $arm returned non-zero; its row will read from whatever it managed to record"
     printf '%s\n' "$(verdict_of "$arm" "$rundir")" > "$rundir/verdict" 2>/dev/null || true
   done <<EOF
 $(check_manifest "$mf")
@@ -648,8 +649,13 @@ arm_run() {
       # starts) refuses on a NAMED term. If the override does not reach it the term will not be
       # `headroom` and map_gate FAILS the row — the arm cannot pass for the wrong reason.
       t0="$(now_ms)"
-      CC_ADMIT_HEADROOM_OVERRIDE=0.01 CC_ADMIT_MIN_HEADROOM_GB=4096 \
-        live_do fire-recover "$sid" "$d" || true
+      # EXPORTED INSIDE A SUBSHELL, never as a `VAR=v func` prefix. With a shell FUNCTION on the
+      # right-hand side that form's persistence is shell- and POSIX-mode-dependent, and a value
+      # that leaked past this call would apply the headroom override to every LATER arm — which
+      # would turn four honest arms into four gate refusals. handoff-fire's own pane splitter
+      # records the same hazard at its own call site.
+      ( export CC_ADMIT_HEADROOM_OVERRIDE=0.01 CC_ADMIT_MIN_HEADROOM_GB=4096
+        live_do fire-recover "$sid" "$d" ) || true
       wait_for_file "$d/relaunch.rc" "${LR_DRILL_GATE_S:-30}" || true
       t1="$(now_ms)"; printf '%s\n' "$((t1 - t0))" > "$d/gate.elapsed_ms"
       collect_run_state "$sid" "$d"
@@ -692,8 +698,8 @@ arm_run() {
     router)
       # (e) ALL-THIN ACCOUNTS. The ranker is pointed at a seeded fixture in which every account is
       # thin, so the pick must PARK carrying the router's own reasons and transplant nothing.
-      CC_ACCOUNTS_BIN="${LR_DRILL_THIN_ACCOUNTS:-$DRILL_STATE/thin-accounts}" \
-        live_do fire-recover "$sid" "$d" || true
+      ( export CC_ACCOUNTS_BIN="${LR_DRILL_THIN_ACCOUNTS:-$DRILL_STATE/thin-accounts}"
+        live_do fire-recover "$sid" "$d" ) || true
       collect_run_state "$sid" "$d"
       probe_movement "$sid" "$d"
       ;;
@@ -751,13 +757,30 @@ collect_run_state() {
 }
 
 # probe_movement <sid> <dir> — enumerate, ALWAYS, the artifacts a transplant leaves behind.
+#
+# 🚨 THE THREE PATHS ARE THE TREE'S, NOT A GUESS, and the first draft of this function had two of
+# them wrong. scripts/limit-recover/lr-transplant.sh:78-80 puts the split-brain lock at
+# `$LR_STATE_DIR/locks/<sid>.lock`; :267 puts the TOMBSTONE beside the SOURCE TRANSCRIPT as
+# `<projects>/<slug>/<sid>.HANDOFF.json`, not under the state dir; and :272 retires the source by
+# renaming it to `<sid>.jsonl.handed-off`. A probe looking in the wrong place finds nothing and
+# reports "nothing moved" — the fail-OPEN direction, on the one arm whose whole content is that
+# nothing moved.
+#
+# THE FILE IS WRITTEN EVEN WHEN EMPTY. Its absence means the probe did not run, which the mappers
+# read as UNMEASURED; emptiness means it ran and found nothing.
 probe_movement() {
-  local sid="$1" d="$2" state="${LR_STATE_DIR:-$HOME/.reso/limit-recover}" tx
+  local sid="$1" d="$2" state="${LR_STATE_DIR:-$HOME/.reso/limit-recover}" pd f
   : > "$d/moved.txt"
   [ -f "$state/locks/$sid.lock" ] && printf 'lock\t%s\n' "$state/locks/$sid.lock" >> "$d/moved.txt"
-  ls "$state/$sid"/*.tombstone >/dev/null 2>&1 && printf 'tombstone\t%s/%s\n' "$state" "$sid" >> "$d/moved.txt"
-  tx="$(transcript_of "$sid")" || tx=""
-  [ -z "$tx" ] && printf 'transcript-renamed\t%s\n' "$sid" >> "$d/moved.txt"
+  # shellcheck disable=SC2231  # UNQUOTED ON PURPOSE: the default carries a `.claude*` wildcard
+  for pd in ${CC_PROJECTS_DIRS:-$HOME/.claude*/projects}; do
+    for f in "$pd"/*/"$sid".HANDOFF.json; do
+      [ -f "$f" ] && printf 'tombstone\t%s\n' "$f" >> "$d/moved.txt"
+    done
+    for f in "$pd"/*/"$sid".jsonl.handed-off; do
+      [ -f "$f" ] && printf 'source-retired\t%s\n' "$f" >> "$d/moved.txt"
+    done
+  done
   return 0
 }
 
