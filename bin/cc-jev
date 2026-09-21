@@ -87,17 +87,10 @@ cmd_status() {
       cat <<'EOF'
 
 🚨 CONFIGURED IS NOT ANSWERING. ZDR is Pro/Enterprise-only and fails closed, so on a hobby plan
-   every call returns HTTP 403 and the arm abstains 100% of the time — measured here, not
-   inferred. Nothing above is misconfigured; the PLAN is the blocker. Two ways out, and both are
-   the operator's to take, never an agent's:
-     · buy Vercel Pro (~$20/mo) and keep zero-data-retention, or
-     · run with CC_JEV_ZDR=0, which sends the model's own closing message (bounded by
-       CC_JEV_MAX_STATE_B — no transcript, no paths, no history) under STANDARD retention.
-   The measured trade is in decision packet c3752f5fca96.
+   every call returns HTTP 403 and the arm abstains 100% of the time.
 EOF
     fi
-    echo
-    echo "Next: cc-jev probe   (one real call), then cc-jev pilot (score it on real closes)."
+    jev_verdict
     jev_free_window
   else
     echo "DISABLED — every consumer falls through to today's behaviour. Nothing is degraded."
@@ -120,6 +113,36 @@ EOF
 # here, because the whole reason this integration exists is to be exercised inside that window.
 # After it lapses the cost is not a cliff: $0.042/MTok in, $0 out, measured at ~960 calls/day
 # ≈ $2.45/mo for the production arm, against a key already capped at $5/mo.
+# THE VERDICT — because a status that advertises an experiment already run is a LIE of the same
+# family as the one this branch was fixed for on 2026-09-20. That fix stopped `status` claiming
+# liveness it had not checked; within a day the SAME command was telling the operator "Next: cc-jev
+# pilot (score it on real closes)" and citing decision packet c3752f5fca96 as a live trade — after
+# the pilot had run TWICE (198 real closes) and the packet had been actioned. Stale guidance is not
+# a smaller defect than a stale assertion: it spends the reader's time on a decision that is closed.
+# So the terminal state is stated here, with the receipt, and the "next step" is whatever is
+# actually next. Flip CC_JEV_RETIRED=0 if the arm is ever revived — the text below is then wrong and
+# should be re-derived from a fresh run, never edited to taste.
+jev_verdict() {
+  [ "${CC_JEV_RETIRED:-1}" != 0 ] || { printf '\nNext: cc-jev probe (one real call), then cc-jev pilot (score it on real closes).\n'; return; }
+  cat <<'EOF'
+
+MEASURED 2026-09-21 — THE ARM IS RETIRED. It is not waiting on a decision; the decision was taken.
+  198 real closes scored over two pilots: arm A 0/72, arm B 0/88 (arm B powered — a perfect
+  detector returns zero only 8.2% of the time at n=88).
+  The gate's two halves are ANTI-CORRELATED on real data: of 160 closes, 4 reach p>=0.90 and NOT
+  ONE is `drivable`, while the 6 `drivable` rows top out at 0.75. Relaxed to 0.70 it fires twice,
+  both on closes the lexical matcher ALREADY caught — zero marginal detections over the four
+  existing arms, which is the arm's entire purpose.
+  Jev itself is NOT indicted: 0.93 value_fork on a real blocked-need-your-call, 0.07 on a
+  landed-and-done close. It is untested on every task EXCEPT deference detection.
+  Record: docs/research/jev-at-cost-api-2026-09-18.md Addendum 4. Packet c3752f5fca96 actioned.
+
+🚨 RETIRED IS NOT OFF, AND THIS ONE COSTS YOU. The arm is still wired in and still reached on every
+   no-tell close, where it spends a doomed round-trip (~0.5s) that can only ever return 403.
+   To actually stop it, set CC_JEV=0 — that is a settings change, so it is the operator's.
+EOF
+}
+
 jev_free_window() {
   # The prices are LITERAL dollar signs, not expansions. Carried in a variable rather than inline
   # so the printf formats hold no `$` at all: a `# shellcheck disable=SC2016` would work, but this

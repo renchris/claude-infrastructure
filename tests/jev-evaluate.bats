@@ -264,9 +264,12 @@ status_out() {
   ! grep -qF "is live" <<<"$output" || { echo "status claimed liveness from configuration"; false; }
   grep -qF "CONFIGURED IS NOT ANSWERING" <<<"$output"
   grep -qF "403" <<<"$output"
-  # Both remedies must be named, and both must be marked as the operator's.
-  grep -qF "CC_JEV_ZDR=0" <<<"$output"
-  grep -qiF "Pro" <<<"$output"
+  # 2026-09-21: this case used to require the TWO REMEDIES be named — "buy Pro" and "run with
+  # CC_JEV_ZDR=0". Both were removed deliberately, and the removal is the point: they were the
+  # options of decision packet c3752f5fca96, which the pilot ANSWERED and which is now actioned.
+  # A status offering a closed decision's options is the stale-guidance defect the verdict block
+  # below was added to fix, so asserting their presence would pin the bug in place. The remaining
+  # assertions are the durable ones: no liveness claim, and the blocker named with its symptom.
 }
 
 @test "cc-jev status: CC_JEV_ZDR=0 removes the not-answering block (the blocker is gone)" {
@@ -293,4 +296,39 @@ status_out() {
   grep -qF "Free window CLOSED" <<<"$output"
   ! grep -qF "day(s) left" <<<"$output" || { echo "counted down a window already closed"; false; }
   grep -qF '$0.042/MTok' <<<"$output"
+}
+
+# ── `cc-jev status` — THE VERDICT, and why a stale "next step" is a real defect ───────────────
+# Added 2026-09-21. The 2026-09-20 fix stopped `status` asserting liveness it had not checked.
+# Within a day the same command was advertising "Next: cc-jev pilot (score it on real closes)" and
+# citing decision packet c3752f5fca96 as a live trade — after the pilot had run TWICE over 198 real
+# closes and the packet had been actioned. The operator ran it and was handed a closed decision as
+# an open one. Stale GUIDANCE is the same family as a stale ASSERTION, so it gets the same pinning.
+@test "cc-jev status: states the RETIRED verdict and stops advertising the pilot as next" {
+  run status_out
+  [ "$status" -eq 0 ]
+  grep -qF "CONFIGURED —" <<<"$output"                       # positive control: ENABLED branch
+  grep -qF "THE ARM IS RETIRED" <<<"$output"
+  grep -qF "Addendum 4" <<<"$output"                          # the receipt, not just the claim
+  # The exact stale guidance this test exists to keep out.
+  ! grep -qF "then cc-jev pilot" <<<"$output" \
+    || { echo "still advertising a pilot that has already run twice"; false; }
+}
+
+@test "cc-jev status: RETIRED is not OFF — it names the per-close cost and the lever" {
+  run status_out
+  [ "$status" -eq 0 ]
+  grep -qF "RETIRED IS NOT OFF" <<<"$output"
+  grep -qF "CC_JEV=0" <<<"$output"
+}
+
+# THE REVIVAL ARM. Without it the verdict text is unconditional and a future session that revives
+# the arm would have to DELETE a block rather than flip a switch — and would likely leave it.
+@test "cc-jev status: CC_JEV_RETIRED=0 restores the pilot guidance and drops the verdict" {
+  CC_JEV_RETIRED=0 run status_out
+  [ "$status" -eq 0 ]
+  grep -qF "CONFIGURED —" <<<"$output"                       # positive control
+  grep -qF "then cc-jev pilot" <<<"$output"
+  ! grep -qF "THE ARM IS RETIRED" <<<"$output" \
+    || { echo "claimed retired while revived"; false; }
 }
