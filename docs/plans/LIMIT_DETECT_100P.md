@@ -946,6 +946,28 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
   (1 in ~6 full runs, 5/5 green in isolation, reproduces on pristine HEAD). The first belongs with
   the recovery chain in `LIMIT_RECOVER_100P` (§ 13), which owns `lr-lib.sh`'s consumers.
 
+- 2026-09-20T18:2xZ · **W6 DRILL — THE CLOSING NUMBER, taken at § 5's own load assumption. This
+  completes the picture the two entries above give at high load, and it is the one that answers the
+  DoD.** Live binary on PATH, post-land, **load 23.2** (§ 5 assumes `load ≤ 20`):
+
+  | run | 1 | 2 | 3 | 4 | 5 |
+  |---|---|---|---|---|---|
+  | `/usr/bin/time -p cc-limited` | 0.32 s | **0.21** | **0.21** | **0.21** | **0.22** |
+
+  **4 of 5 inside the 0.30 s bar, median 0.21 s**, exit 0 every run. Footer verbatim:
+  `35 sessions · 71 marker rows · 0 unaddressable · enumerator ok`. `--tsv` 11 fields (§ 5's arity).
+  Fixture leg `bats tests/cc-limited.bats` **1..24, 24 ok** (plan line read, not inferred); capture +
+  receipt present on trunk.
+
+  **So the budget IS met under the plan's own stated conditions, and the breach recorded above is a
+  LOAD statement, not a corpus one.** Both readings are true and neither alone is honest: 0/5 inside
+  the bar at load 52.9, 4/5 at load 23.2, on a corpus that GREW across the two (34→35 sids, 70→71
+  marker rows). What survives from the high-load measurement is the profile, which is load-invariant
+  in the way the timing is not: **two full `ps` walks are ~55 % of the runtime at any load**, so the
+  headroom under the bar is smaller than the median suggests and shrinks with the corpus. The bar is
+  met today; the § 5 timing leg should be read WITH its load, and a future census that adds work will
+  cross it on an ordinary busy box long before it does on a quiet one.
+
 ## 13. Cross-reference — `LIMIT_RECOVER_100P` § 9 landed the recovery side first (2026-09-20 00:1xZ, session 11569d45)
 
 Your wave-1 corpus was this session's research. Landed and LIVE on trunk at `1b2676f4c` (23:50Z),
