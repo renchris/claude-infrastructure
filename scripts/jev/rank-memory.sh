@@ -82,8 +82,43 @@ if [ "$YES" -ne 1 ]; then
   printf 'Re-run with --yes to send. Nothing has been sent.\n'; exit 3
 fi
 
+# ── PREFLIGHT: ONE CALL, BEFORE COMMITTING 146 ──────────────────────────────────────────────
+# THIS EXISTS BECAUSE ITS ABSENCE COST A RUN. The first version went straight into the loop with
+# ZDR at its default (ON), every call 403'd, `lvl` came back empty, and each one incremented
+# `skipped` SILENTLY. It would have ground through all 146 over ~70 minutes and reported
+# "SCORED 0 of 146" — a confident, well-formatted verdict over a path that never worked, and
+# indistinguishable at a glance from "Jev had no opinion about any of them".
+#
+# Two guards, cheapest first. The static one names the known blocker; the probe catches everything
+# else (dead key, revoked allowlist, gateway down, model renamed) by ASKING rather than assuming.
+if [ "${CC_JEV_ZDR:-1}" != 0 ]; then
+  cat <<EOF
+✗ REFUSING before the first call. ZDR is ON and it is Pro/Enterprise-only, so on this plan every
+  one of the $TOT calls returns HTTP 403 and this run would score exactly nothing.
+
+  To send under STANDARD retention (bounded topic-file excerpts — our own engineering lessons,
+  never a transcript, the mailbox, or the msg corpus):
+
+      CC_JEV_ZDR=0 cc-jev rank --yes
+
+  Nothing has been sent.
+EOF
+  exit 4
+fi
+
+printf 'Preflight: one call before committing to %s...\n' "$TOT"
+_pf="$(jq -n '{state:"ok", questions:{p:{type:"boolean",instructions:"Is this text non-empty?"}}}' | jev_ask)" || true
+if [ -z "$(printf '%s' "$_pf" | jq -r '.answers.p.probability // empty' 2>/dev/null)" ]; then
+  printf '✗ REFUSING: the preflight call produced no verdict (reason: %s).\n' "$(jev_reason "$_pf")" >&2
+  printf '  Scoring %s rules would have taken ~%s minutes and reported 0 of %s over a dead path.\n' \
+         "$TOT" "$(( TOT / 6 ))" "$TOT" >&2
+  printf '  Nothing has been sent. Diagnose with: cc-jev status\n' >&2
+  exit 4
+fi
+printf 'Preflight OK — the route answers. Proceeding.\n\n'
+
 CAP="${CC_JEV_RANK_CAP_B:-3000}"
-done_n=0; skipped=0
+done_n=0; skipped=0; consec=0
 while IFS= read -r f; do
   body="$(head -c "$CAP" "$MEM/$f" 2>/dev/null)"
   [ -n "$body" ] || { skipped=$((skipped+1)); continue; }
@@ -112,7 +147,23 @@ while IFS= read -r f; do
   # calls have already exercised. Ordering lives in rank_of() below, never in the model.
   lvl=$(printf '%s' "$out" | jq -r '.answers.bite.choice // empty' 2>/dev/null)
   sup=$(printf '%s' "$out" | jq -r '.answers.superseded.probability // empty' 2>/dev/null)
-  if [ -z "$lvl" ]; then skipped=$((skipped+1)); continue; fi
+  if [ -z "$lvl" ]; then
+    # VISIBLE, not silent. A skip that prints nothing is how 146 dead calls looked like progress.
+    skipped=$((skipped+1))
+    printf 'x'
+    # A RUN THAT IS ALL-SKIP IS BROKEN, NOT UNOPINIONATED. Bail once it is statistically certain
+    # rather than completing a doomed pass: 10 consecutive misses after a GREEN preflight means the
+    # route died mid-run (rate-limit exhaustion, revoked key), and the remaining calls cannot inform.
+    consec=$((consec+1))
+    if [ "$consec" -ge "${CC_JEV_RANK_MAX_CONSEC_SKIP:-10}" ]; then
+      printf '\n✗ ABORTING: %s consecutive calls produced no verdict (last reason: %s).\n' \
+             "$consec" "$(jev_reason "$out")" >&2
+      printf '  %s scored before the route stopped answering; rows kept at %s\n' "$done_n" "$OUT" >&2
+      break
+    fi
+    continue
+  fi
+  consec=0
   done_n=$((done_n+1))
   hook="$(grep -F "($f)" "$IDX" | head -1 | sed 's/^- //' | cut -c1-120)"
   jq -nc --arg f "$f" --arg lvl "$lvl" --arg sup "${sup:-}" --arg hook "$hook" \
