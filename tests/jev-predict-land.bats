@@ -25,6 +25,11 @@
 # ~/.claude/land.log and an operator-armed run, neither of which exists in a test or off-box. A
 # green suite here means "the instrument is correct", never "the candidate works".
 
+bats_require_minimum_version 1.5.0   # `run --separate-stderr` in the score arms: this SUT
+                                     # puts its machine-readable JSON on stdout and its human
+                                     # verdict lines on stderr, and a merged `run` makes the
+                                     # JSON unparseable — see the score cases below.
+
 setup() {
   # Fixture $HOME first: the subject's defaults point at ~/.claude/{land.log,autonomy}, so an
   # unfixtured run would read the operator's live store and write beside it. The land gate's
@@ -323,11 +328,12 @@ SH
     printf '{"head":"h%s","base":"b%s","ts":"2026-08-0%sT00:00:00Z","class":"%s","exit":%s,"arm":null,"red_bucket":"no_arm_went_red","jev":{"ok":true,"answers":{"q_refuse":{"type":"boolean","probability":0.99},"q_smoke":{"type":"boolean","probability":0.99}}}}\n' \
       "$i" "$i" "$i" "$cl" "$ex" >> "$a"
   done
-  run bash "$SUT" score --baseline "$b" --ask "$a"
+  run --separate-stderr bash "$SUT" score --baseline "$b" --ask "$a"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"(a) FAIL"* ]] || false
-  [[ "$output" == *"(b) FAIL"* ]] || false
-  [[ "$output" == *"(c) FAIL"* ]] || false
+  # The three conditions are the HUMAN verdict and are written to stderr; the JSON below is stdout.
+  [[ "$stderr" == *"(a) FAIL"* ]] || false
+  [[ "$stderr" == *"(b) FAIL"* ]] || false
+  [[ "$stderr" == *"(c) FAIL"* ]] || false
   [ "$(jq -r '.definitions["any-nonzero"].rollup.auroc' <<<"$output")" = "0.5" ]
   [ "$(jq -r '.definitions["any-nonzero"].rollup.best_at_min_recall.precision' <<<"$output")" \
     = "$(jq -r '.definitions["any-nonzero"].rollup.prevalence' <<<"$output")" ]
@@ -347,11 +353,11 @@ SH
     printf '{"head":"h%s","base":"b%s","class":"%s","exit":%s,"arm":null,"red_bucket":"no_arm_went_red","jev":{"ok":false,"reason":"timeout"}}\n' \
       "$i" "$i" "$cl" "$ex" >> "$a"
   done
-  run bash "$SUT" score --baseline "$b" --ask "$a"
+  run --separate-stderr bash "$SUT" score --baseline "$b" --ask "$a"
   [ "$status" -eq 0 ]
   [ "$(jq -r '.definitions["any-nonzero"].jev_abstained' <<<"$output")" = 4 ]
   [ "$(jq -r '.definitions["any-nonzero"].jev_answered' <<<"$output")" = 0 ]
-  [[ "$output" == *"NO JEV ARM"* ]] || false
+  [[ "$stderr" == *"NO JEV ARM"* ]] || false
 }
 
 @test "score: AUROC on a single-class corpus is null, never 0.5" {
@@ -375,7 +381,7 @@ print('ok')"
     printf '{"head":"h%s","base":"b%s","class":"%s","exit":%s,"arm":null,"red_bucket":"x","baseline":{"score":0,"shellcheck":0,"bash_n":0,"dead_assertion":0,"shell_files":0,"bats_files":0}}\n' \
       "$i" "$i" "$cl" "$ex" >> "$b"
   done
-  run bash "$SUT" score --baseline "$b"
+  run --separate-stderr bash "$SUT" score --baseline "$b"
   [ "$status" -eq 0 ]
   [ "$(jq -r '.comparator.shellcheck' <<<"$output")" = "9.9.9" ]
   [ "$(jq -r '.definitions["any-nonzero"].baseline.n' <<<"$output")" = 2 ]
