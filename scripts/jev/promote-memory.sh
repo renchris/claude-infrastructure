@@ -67,8 +67,18 @@ while [ $# -gt 0 ]; do
 done
 
 emit_promo_report() {  # reads globals OUT, done_n, TOTAL, skipped, ABORTED
-printf 'DECIDED %s of %s call(s)  (no verdict: %s)\n' "$done_n" "$TOTAL" "$skipped"
-[ "$done_n" -gt 0 ] || { printf 'No verdicts — nothing to promote.\n'; exit 1; }
+# NEW decisions and TOTAL ON DISK are different numbers, and conflating them makes a COMPLETE
+# resumed pass look like a failed one. `done_n` counts what THIS pass bought; a resume that finds
+# every id already present buys nothing and is FINISHED, not empty. The original guard printed
+# `No verdicts — nothing to promote` and exited 1 on exactly that case — the success state of the
+# feature it was guarding. The denominator every percentage below is computed against is what the
+# FILE holds, never what this invocation happened to add.
+HAVE_N=$(jq -r 'select(.round!="meta")|.id' "$OUT" 2>/dev/null | wc -l | tr -d ' ')
+printf 'DECIDED %s new of %s call(s); %s verdict(s) on disk  (no verdict: %s)\n' \
+       "$done_n" "$TOTAL" "${HAVE_N:-0}" "$skipped"
+if [ "${HAVE_N:-0}" -eq 0 ]; then printf 'No verdicts at all — nothing to promote.\n'; exit 1; fi
+if [ "$done_n" -eq 0 ]; then printf 'Nothing new to buy — this pass was already complete.\n'; fi
+done_n="$HAVE_N"
 
 # ── THE BIAS VERDICT COMES FIRST, because it governs whether the rest may be read at all ─────
 BN=$(jq -r 'select(.round=="h2h" and .swapped==true)|.id' "$OUT" | wc -l | tr -d ' ')
@@ -153,7 +163,12 @@ printf 'Nothing was edited. No file was moved, no index line was written, cc-mem
 # arithmetic is tested, on hand-built rows, with no call.
 if [ -n "$REPORT" ]; then
   [ -s "$REPORT" ] || { printf 'no rows at %s\n' "$REPORT" >&2; exit 3; }
-  OUT="$REPORT"; done_n=$(wc -l < "$REPORT" | tr -d ' '); TOTAL="$done_n"; skipped=0; ABORTED=0
+  # The meta row stamps WHAT the run was a run of; it is not a verdict, so it must not inflate the
+  # denominator every percentage in the report is computed against.
+  OUT="$REPORT"
+  done_n=$(jq -r 'select(.round!="meta")|.id' "$REPORT" 2>/dev/null | wc -l | tr -d ' ')
+  [ "${done_n:-0}" -gt 0 ] || done_n=$(wc -l < "$REPORT" | tr -d ' ')
+  TOTAL="$done_n"; skipped=0; ABORTED=0
   printf 'Re-reading %s row(s) from a PREVIOUS run. No call is made.\n' "$done_n"
   emit_promo_report
   exit 0
@@ -278,6 +293,33 @@ EOF
 fi
 jev_window_open || exit 4
 jev_available || { printf 'not available — run: cc-jev status\n' >&2; exit 2; }
+
+# ── THE RUN IS AN EXPERIMENT, AND A RESUME MUST BE THE SAME ONE ──────────────────────────────
+# The heats are a DETERMINISTIC shuffle of the orphan list (CC_JEV_PROMO_SEED), so "h7" names a
+# specific five files only while the population and the seed are unchanged. Add or remove a lesson
+# and h7 is a different heat — but `_have h7` would still skip it, silently splicing a verdict
+# about five OTHER files into this run's rows. Nothing downstream could detect that: the row shape
+# is identical and the winner is a real filename.
+# So every run stamps what it was a run OF, and a resume that does not match starts fresh instead.
+_meta_row() { jq -nc --arg id meta --arg r meta --argjson o "$N_ORPH" --arg sd "$SEED" \
+                  --argjson pl "$TOTAL" --argjson a "$N_ANCH" \
+                  '{id:$id, round:$r, orphans:$o, seed:$sd, plan:$pl, anchors:$a}'; }
+if [ -n "$RESUME" ] && [ -s "$OUT" ]; then
+  _prev="$(jq -c 'select(.round=="meta")' "$OUT" 2>/dev/null | head -1)"
+  _po="$(printf '%s' "$_prev" | jq -r '.orphans // empty' 2>/dev/null)"
+  _ps="$(printf '%s' "$_prev" | jq -r '.seed // empty' 2>/dev/null)"
+  if [ -z "$_prev" ] || [ "$_po" != "$N_ORPH" ] || [ "$_ps" != "$SEED" ]; then
+    printf '✗ REFUSING to resume %s — it is a run of a DIFFERENT population.\n' "$OUT" >&2
+    printf '  then: %s orphans, seed %s      now: %s orphans, seed %s\n' \
+           "${_po:-unstamped}" "${_ps:-unstamped}" "$N_ORPH" "$SEED" >&2
+    printf '  Heat ids are positions in a seeded shuffle, so reusing them would splice verdicts\n' >&2
+    printf '  about other files into this run. Start a fresh run (drop --resume).\n' >&2
+    exit 3
+  fi
+  printf 'Resuming %s — %s row(s) already paid for.\n' "$OUT" "$(wc -l < "$OUT" | tr -d ' ')"
+else
+  _meta_row >> "$OUT"
+fi
 
 printf 'Preflight: one call before committing to %s...\n' "$TOTAL"
 _pf="$(jq -n '{state:"ok", questions:{p:{type:"boolean",instructions:"Is this text non-empty?"}}}' | jev_ask)" || true

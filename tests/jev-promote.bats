@@ -371,3 +371,71 @@ runp() {
   ! grep -qF "jev-rank-20260202T000000Z.jsonl" <<<"$output" \
     || { echo "chose the newer run whose anchors do not resolve"; false; }
 }
+
+# ── RESUME, AND THE GUARD THAT MAKES IT SAFE ─────────────────────────────────────────────────
+# An arming is a scarce human act. Without resume, a second one restarts a 133-call pass and
+# re-buys every verdict already on disk. With resume but WITHOUT the compatibility stamp, it is
+# worse than restarting: heat ids are positions in a seeded shuffle, so "h7" names five specific
+# files only while the population and seed are unchanged. Add or remove one lesson and `_have h7`
+# still skips it — splicing a verdict about five OTHER files into this run, with an identical row
+# shape and a real filename as the winner. Nothing downstream could detect it.
+@test "promote: a fresh run stamps the population and seed it is a run OF" {
+  mkcorpus
+  export MOCK_CHOICE_ROTATE=1
+  start_mock ok
+  run runp CC_JEV_ZDR=0 CC_JEV_BASE_URL="http://127.0.0.1:$PORT" -- --bias-n 2 --yes
+  [ "$status" -eq 0 ]
+  ROWS=$(grep -o '/.*jev-promote-.*\.jsonl' <<<"$output" | tail -1)
+  [ "$(jq -r 'select(.round=="meta")|.orphans' "$ROWS")" = "12" ]
+  [ -n "$(jq -r 'select(.round=="meta")|.plan' "$ROWS")" ]
+}
+
+@test "promote --resume: REFUSES a run of a different population rather than splicing it" {
+  mkcorpus
+  R="$BATS_TEST_TMPDIR/old.jsonl"
+  # stamped for 99 orphans; the live corpus has 12. Same seed, different population.
+  printf '%s\n' '{"id":"meta","round":"meta","orphans":99,"seed":"20260921","plan":50,"anchors":2}' \
+                '{"id":"h1","round":"heat","winner":"ghost.md","members":["ghost.md"]}' > "$R"
+  run runp CC_JEV_ZDR=0 -- --resume "$R" --yes
+  [ "$status" -eq 3 ]
+  grep -qF "REFUSING to resume" <<<"$output"
+  grep -qF "99 orphans" <<<"$output"          # it names BOTH sides, so the mismatch is inspectable
+  grep -qF "12 orphans" <<<"$output"
+}
+
+@test "promote --resume: a MATCHING run is continued, and paid-for rows are not re-bought" {
+  mkcorpus
+  export MOCK_CHOICE_ROTATE=1
+  start_mock ok
+  run runp CC_JEV_ZDR=0 CC_JEV_BASE_URL="http://127.0.0.1:$PORT" -- --bias-n 2 --yes
+  [ "$status" -eq 0 ]
+  ROWS=$(grep -o '/.*jev-promote-.*\.jsonl' <<<"$output" | tail -1)
+  before=$(jq -r 'select(.round!="meta")|.id' "$ROWS" | wc -l | tr -d ' ')
+  [ "$before" -gt 0 ]
+  # Re-run against the SAME rows: every id is already present, so each is skipped, not re-asked.
+  run runp CC_JEV_ZDR=0 CC_JEV_BASE_URL="http://127.0.0.1:$PORT" -- --resume "$ROWS" --bias-n 2 --yes
+  [ "$status" -eq 0 ]
+  grep -qF "Resuming" <<<"$output"
+  after=$(jq -r 'select(.round!="meta")|.id' "$ROWS" | wc -l | tr -d ' ')
+  [ "$after" = "$before" ] || { echo "resume re-bought rows: $before -> $after"; false; }
+}
+
+# The batch must NOT resume a run stamped before the meta row existed — it cannot prove that run
+# was the same experiment, and "cannot prove" is not "is".
+@test "batch: an UNSTAMPED partial run is not resumed" {
+  mkcorpus
+  H="$BATS_TEST_TMPDIR/bh"; mkdir -p "$H/.claude/autonomy"
+  printf '%s\n' '{"id":"h1","round":"heat","winner":"o1.md","members":["o1.md"]}' \
+    > "$H/.claude/autonomy/jev-promote-20260921T000000Z.jsonl"
+  A="$H/.claude/autonomy/jev-batch.arm"
+  EXP="$(date -u -v+30M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+  jq -n --arg e "$EXP" '{created:"x", expires:$e, max_calls:9, cap_b:400, corpus:"memory-orphans"}' > "$A"
+  export MOCK_CHOICE_ROTATE=1
+  start_mock ok
+  run env AI_GATEWAY_API_KEY=dummy CC_JEV_BASE_URL="http://127.0.0.1:$PORT" HOME="$H" \
+      CC_JEV_ARM_FILE="$A" CC_JEV_BATCH_LOG="$H/b.log" CC_JEV_MEM_DIR="$MEMD" \
+      CC_JEV_RULES_FILE=/dev/null CC_JEV_RANK_ROWS="$RANKF" CC_JEV_PROMO_GAP=0 \
+      "$REPO/scripts/jev/jev-batch.sh"
+  [ "$status" -eq 0 ]
+  ! grep -qF "RESUMING" "$H/b.log" || { echo "resumed an unstamped run"; false; }
+}
