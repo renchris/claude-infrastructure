@@ -125,3 +125,141 @@ transcript() { # <store> <cwd> <sid> <last-close: yes|no|none>
   run "$SWEEP" --resume --yes --pane 10
   if grep -q 'eeeeeeee-0000-0000-0000-000000000011' "$CC_HUSK_IT2_LOG"; then echo "typed a live session's resume line"; false; fi
 }
+
+# ── W5-C · TRANSPLANT ────────────────────────────────────────────────────────────────────────────
+# A transplanted session keeps the SAME sid and moves to another account's store. Its source pane
+# is left at a bare shell, which is exactly a husk — so the sweep would resolve it, name the SOURCE
+# account, and type that account's resume line while the work is live somewhere else: two writers
+# on one transcript. Every case below holds the successor NON-LIVE (an EMPTY CC_HUSK_LIVE_SIDS),
+# because is_live_sid (:121/:136) already suppresses a live successor and would make a naive
+# red-proof pass for the wrong reason. LR_STATE_DIR is pinned rather than left to the tmp HOME, so
+# the lock store is sealed on purpose and not by accident.
+tombstone() { # <store> <cwd> <sid> <target cfg> — what lr-transplant.sh leaves in the SOURCE store
+  local d; d="$1/projects/$(slug "$2")"; mkdir -p "$d"
+  printf '{"sid":"%s","handed_off_to":"%s","target_transcript":"%s/projects/x/%s.jsonl"}\n' \
+    "$3" "$4" "$4" "$3" > "$d/$3.HANDOFF.json"
+}
+xplant_seals() {
+  export CC_HUSK_LIVE_SIDS="$T/live-none.txt"; : > "$CC_HUSK_LIVE_SIDS"
+  export LR_STATE_DIR="$T/lrstate"; mkdir -p "$LR_STATE_DIR/locks"
+}
+xplant_registry_fixture() { # <sid> — pane 10 resolves from the registry to .claude-tertiary
+  printf '{"paneUUID":"10","session_id":"%s","account":"claude-tertiary","cwd":"%s"}\n' \
+    "$1" "$CWD_A" > "$CC_REGISTRY_DIR/10.json"
+  transcript "$T/.claude-tertiary"  "$CWD_A" "$1" no      # the source copy, still on disk
+  tombstone  "$T/.claude-tertiary"  "$CWD_A" "$1" "$T/.claude-secondary"
+  transcript "$T/.claude-secondary" "$CWD_B" "$1" none    # the successor — present, NOT live
+}
+
+@test "TRANSPLANTED: a registry-resolved sid whose own store holds a transplant tombstone is classified, not RESUME" {
+  xplant_seals
+  xplant_registry_fixture 11111111-0000-0000-0000-000000000001
+  run "$SWEEP" --json --pane 10
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"source":"registry"'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"verdict":"TRANSPLANTED→next2"'* ]] || { echo "$output"; false; }
+  [[ "$output" != *'"verdict":"RESUME"'* ]] || { echo "$output"; false; }
+}
+
+@test "TRANSPLANTED is never resumed from the sweep — not even with --all --yes" {
+  xplant_seals
+  xplant_registry_fixture 22222222-0000-0000-0000-000000000002
+  run "$SWEEP" --resume --all --yes --pane 10
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"nothing to resume"* ]] || { echo "$output"; false; }
+  [ ! -s "$CC_HUSK_IT2_LOG" ]
+}
+
+@test "TRANSPLANTED: the scrollback arm derives its store from the LAUNCHER it read" {
+  xplant_seals
+  unset CC_HUSK_PANES_JSON
+  SID=33333333-0000-0000-0000-000000000003
+  printf '%s\n' '  $ claude3 --strict-mcp-config --model claude-opus-5' \
+                '  ... work ...' \
+                "  Resume this session with: claude --resume $SID" > "$T/sb.txt"
+  printf '[{"id":"10","pid":100,"cwd":"%s"}]\n' "$CWD_A" > "$T/sb-panes.json"
+  export CC_HUSK_SB_PANES="$T/sb-panes.json" CC_HUSK_SB_TEXT="$T/sb.txt"
+  cat > "$T/it2-sb" <<'IT2'
+#!/bin/bash
+log="${CC_HUSK_IT2_LOG:?}"
+case "$1 $2" in
+  "session list") cat "${CC_HUSK_SB_PANES:?}" ;;
+  "session send") printf 'SEND %s %s\n' "$4" "$5" >> "$log" ;;
+  "session read")
+    if grep -q "^SEND $4 " "$log" 2>/dev/null; then grep "^SEND $4 " "$log" | tail -1 | sed 's/^SEND [^ ]* //'
+    else cat "${CC_HUSK_SB_TEXT:?}"; fi ;;
+esac
+exit 0
+IT2
+  chmod +x "$T/it2-sb"; export CC_HUSK_IT2="$T/it2-sb"
+  tombstone  "$T/.claude-tertiary"  "$CWD_A" "$SID" "$T/.claude-secondary"
+  transcript "$T/.claude-secondary" "$CWD_B" "$SID" none
+  run "$SWEEP" --json --pane 10
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"source":"scrollback"'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"verdict":"TRANSPLANTED→next2"'* ]] || { echo "$output"; false; }
+}
+
+@test "TRANSPLANTED: the transcript arm uses the store the jsonl was FOUND in" {
+  xplant_seals
+  SID=44444444-0000-0000-0000-000000000004
+  transcript "$T/.claude-tertiary"  "$CWD_A" "$SID" no     # found here, under the pane's own cwd
+  tombstone  "$T/.claude-tertiary"  "$CWD_A" "$SID" "$T/.claude-secondary"
+  transcript "$T/.claude-secondary" "$CWD_B" "$SID" none   # successor under a DIFFERENT cwd slug
+  run "$SWEEP" --json --pane 10
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"source":"transcript"'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"verdict":"TRANSPLANTED→next2"'* ]] || { echo "$output"; false; }
+}
+
+@test "the mirror is ONE store: a tombstone naming ~/.claude-next from ~/.claude is not a transplant" {
+  xplant_seals
+  mkdir -p "$T/.claude/projects" "$T/.claude-next"
+  ln -s "$T/.claude/projects" "$T/.claude-next/projects"
+  export CC_HUSK_STORES="$T/.claude:$T/.claude-next"
+  SID=55555555-0000-0000-0000-000000000005
+  printf '{"paneUUID":"10","session_id":"%s","account":"claude-next","cwd":"%s"}\n' "$SID" "$CWD_A" \
+    > "$CC_REGISTRY_DIR/10.json"
+  transcript "$T/.claude" "$CWD_A" "$SID" no
+  tombstone  "$T/.claude" "$CWD_A" "$SID" "$T/.claude-next"   # one store, the other spelling
+  run "$SWEEP" --json --pane 10
+  [ "$status" -eq 0 ]
+  [[ "$output" != *TRANSPLANTED* ]] || { echo "folded the mirror wrong: $output"; false; }
+  [[ "$output" == *'"verdict":"RESUME"'* ]] || { echo "$output"; false; }
+}
+
+@test "a transplant tombstone in an account this session never ran under does not convict it" {
+  xplant_seals
+  SID=66666666-0000-0000-0000-000000000006
+  printf '{"paneUUID":"10","session_id":"%s","account":"claude-tertiary","cwd":"%s"}\n' "$SID" "$CWD_A" \
+    > "$CC_REGISTRY_DIR/10.json"
+  transcript "$T/.claude-tertiary"   "$CWD_A" "$SID" no
+  tombstone  "$T/.claude-secondary"  "$CWD_A" "$SID" "$T/.claude-quaternary"   # a foreign store's row
+  transcript "$T/.claude-quaternary" "$CWD_B" "$SID" none
+  run "$SWEEP" --json --pane 10
+  [ "$status" -eq 0 ]
+  [[ "$output" != *TRANSPLANTED* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"verdict":"RESUME"'* ]] || { echo "$output"; false; }
+}
+
+@test "the LOCK half of the superset reaches the sweep too, with no tombstone on disk" {
+  xplant_seals
+  SID=77777777-0000-0000-0000-000000000007
+  printf '{"paneUUID":"10","session_id":"%s","account":"claude-tertiary","cwd":"%s"}\n' "$SID" "$CWD_A" \
+    > "$CC_REGISTRY_DIR/10.json"
+  transcript "$T/.claude-tertiary"  "$CWD_A" "$SID" no
+  printf '{"sid":"%s","to":"%s"}\n' "$SID" "$T/.claude-secondary" > "$LR_STATE_DIR/locks/$SID.lock"
+  transcript "$T/.claude-secondary" "$CWD_B" "$SID" none
+  run "$SWEEP" --json --pane 10
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"verdict":"TRANSPLANTED→next2"'* ]] || { echo "$output"; false; }
+}
+
+@test "lr-lib unreachable is FATAL, never fail-open — a guard that PREVENTS a resume may not vanish quietly" {
+  xplant_seals
+  export CC_HUSK_LR_LIB="$T/no-such-lr-lib.sh"
+  transcript "$T/.claude-secondary" "$CWD_A" "88888888-0000-0000-0000-000000000008" no
+  run "$SWEEP" --json --pane 10
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"lr-lib.sh"* ]] || { echo "$output"; false; }
+}
