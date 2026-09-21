@@ -70,7 +70,19 @@ clause() { # $1=PASS|FAIL  $2=id  $3=one-line value  [$4=the SUBJECT this clause
   local v="$1" id="$2" txt="$3" subj="${4:-}"
   # A clause line must be ONE line: the launcher folds a FAIL straight into a prompt that is typed
   # into a TUI composer, and an embedded newline there submits half a sentence.
-  txt="$(printf '%s' "$txt" | tr '\n\r\t' '   ' | cut -c1-200)"
+  txt="$(printf '%s' "$txt" | tr '\n\r\t' '   ')"
+  # THE REAL CONSTRAINT IS "ONE LINE", NOT "200 CHARACTERS" — the launcher does its own budgeting
+  # when it folds a FAIL into the prompt, so this cap only ever needed to stop a runaway. At 200 it
+  # was ALSO destroying the message, and destroying a different half depending on which end you cut
+  # from: left-anchored lost the VALUE (case D1UNCLASS), both-ended lost the MIDDLE (cases C1, C3,
+  # D1, D1RC, whose assertions match a phrase between the path and the tail). Raised to 400, which
+  # every real clause fits, with a both-ended bound kept purely as a runaway backstop. A clause's text is `<predictable path> … <the finding>`,
+  # so `cut -c1-200` spends the budget on the path and truncates the value. Measured 2026-09-21: the
+  # D1UNCLASS case passed on this box and went RED off-box, where the sandbox's longer $HOME
+  # (/var/folders/…/bats-run-…/test/38/home) pushed the unclassifiable value past the cap and
+  # `banana` arrived as `bana`. A green here and a red in a clean environment is the signature of a
+  # fixed-width budget being spent by a variable-length prefix.
+  if [ "${#txt}" -gt 400 ]; then txt="${txt:0:240}…${txt: -158}"; fi
   printf '%s %s — %s\n' "$v" "$id" "$txt"
   if [ "$v" = FAIL ]; then
     LRV_RC=1
