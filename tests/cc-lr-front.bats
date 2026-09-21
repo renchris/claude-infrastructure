@@ -127,6 +127,16 @@ nlines() { printf '%s\n' "$1" | grep -c '[^[:space:]]'; }
   [ ! -e "$BATS_TEST_TMPDIR/fleet.argv" ]
 }
 
+@test "recover relays cc-find's rc 1 — nothing matched is not a refusal and not a recovery" {
+  # rc 1 and rc 2 mean different things to the caller (retype the ref vs. disambiguate it), and
+  # collapsing them is how a typo reads as an ambiguity forever.
+  find_stub 1
+  run bash "$LR" recover 404
+  [ "$status" -eq 1 ]
+  [ ! -d "$MUTEX" ]
+  [ ! -e "$BATS_TEST_TMPDIR/fleet.argv" ]
+}
+
 @test "recover on a LIMITED session takes the mutex, fires --one … --detach, prints three lines" {
   find_stub 0 "$(row "$SID" 117 LIMITED)"
   run bash "$LR" recover 117 --target next3
@@ -321,6 +331,24 @@ JUDGE
   # write-then-rename: the poller globs $REQUESTS/*.json and must never read a half-written file,
   # so no temp may survive — and the temp is a DOTFILE with a .tmp suffix, which that glob cannot
   # match on either axis.
+  local t leftover=""
+  for t in "$REQ"/.*.tmp "$REQ"/*.tmp; do [ -e "$t" ] && leftover="$leftover $t"; done
+  [ -z "$leftover" ] || { echo "left behind:$leftover"; false; }
+}
+
+@test "repair leaves NO request behind when the write itself fails" {
+  # WRITE-THEN-RENAME is the property, and a leftover-tmp check cannot see its absence: a mutant
+  # that writes straight to the destination also leaves no tmp. Break the write instead — the
+  # destination must not exist, because the poller's drain globs it the moment it does and a
+  # half-written request is one it renames .malformed.json and LOSES.
+  local b; b="$(bundle "$SID" 20260919T170000Z probed)"
+  { echo '#!/usr/bin/env bash'
+    echo 'printf "{\"sid\":\"trunc" ; exit 1'
+  } > "$STUBBIN/jq"
+  chmod +x "$STUBBIN/jq"
+  run bash "$LR" repair "$b"
+  [ "$status" -eq 2 ]
+  [ ! -e "$REQ/cc-lr-repair-$SID.json" ]
   local t leftover=""
   for t in "$REQ"/.*.tmp "$REQ"/*.tmp; do [ -e "$t" ] && leftover="$leftover $t"; done
   [ -z "$leftover" ] || { echo "left behind:$leftover"; false; }
