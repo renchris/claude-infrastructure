@@ -108,6 +108,10 @@ while IFS= read -r _c; do
   # find -mtime is coarse; compare stamps directly so the bound means what it says.
   _age=$(( ( $(date -u +%s) - $(stat -f %m "$_c" 2>/dev/null || echo 0) ) / 3600 ))
   [ "$_age" -le "$MAXAGE_H" ] || break          # older than the bound: everything below is older too
+  # A mock run must never be resumed into a real one: the rows would be a real pass carrying
+  # verdicts that were never about this repo's lessons, and every consumer downstream reads the
+  # file as one artifact. The marker is written from the route at call time.
+  if [ "$(jq -r 'select(.mock==true)|.id' "$_c" 2>/dev/null | head -1)" != "" ]; then continue; fi
   _plan="$(_plan_of "$_c")"; _have_n="$(_verdicts_in "$_c")"
   case "$_plan" in ''|*[!0-9]*) continue ;; esac   # unstamped: predates the meta row, cannot resume
   if [ "$_have_n" -lt "$_plan" ]; then

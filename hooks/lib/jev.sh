@@ -212,3 +212,26 @@ jev_window_open() {
   fi
   return 0
 }
+
+# jev_is_mock — rc 0 when the configured route is a LOCAL TEST DOUBLE, not the vendor.
+#
+# 🚨 IT EXISTS SO THAT MOCK-PRODUCED ROWS CANNOT BE READ AS REAL VERDICTS. Every consumer in this
+# subsystem discovers its input by globbing ~/.claude/autonomy for jev-*.jsonl, and a hand repro
+# run against the local mock writes there exactly like a real run does — same filename shape, same
+# row schema, same timestamp ordering. Measured 2026-09-21: six such files accumulated in a single
+# afternoon, one of them newer than the real 140-row run, and two separate consumers read them.
+# The anchor picker chose a 5-row mock whose every row named a fixture absent from disk and then
+# refused with "no weak-incumbent anchors" — true about the file it picked, false about the machine.
+# `cc-jev status` reported "8 verdict(s)" over a mock pass.
+#
+# Sorting them out by eye works once and does not scale: the discriminator was "do these filenames
+# look like alpha.md" — a judgment, applied by hand, to a store that grows. So the ROW says what it
+# is, at the moment it is written, from the one fact that settles it: the URL the call went to.
+# A file that predates this marker is UNMARKED, never assumed real — consumers treat "no marker"
+# as unknown provenance and say so rather than guessing.
+jev_is_mock() {
+  case "${CC_JEV_BASE_URL:-}" in
+    *127.0.0.1*|*localhost*|*'[::1]'*|*0.0.0.0*) return 0 ;;
+    *) return 1 ;;
+  esac
+}

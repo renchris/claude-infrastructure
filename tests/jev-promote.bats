@@ -439,3 +439,62 @@ runp() {
   [ "$status" -eq 0 ]
   ! grep -qF "RESUMING" "$H/b.log" || { echo "resumed an unstamped run"; false; }
 }
+
+# ── MOCK PROVENANCE, STAMPED ON THE ROW ──────────────────────────────────────────────────────
+# Every consumer here discovers its input by globbing ~/.claude/autonomy, and a hand repro against
+# the local mock writes there exactly like a real run: same filename shape, same schema, same
+# ordering. Measured 2026-09-21 — six such files accumulated in one afternoon, one NEWER than the
+# real 140-row run, and two consumers read them. The anchor picker chose a 5-row mock whose every
+# row named an absent fixture and then refused "no weak-incumbent anchors" (true about the file it
+# picked, false about the machine); `cc-jev status` reported "8 verdict(s)" over a mock pass.
+# Sorting by eye worked once. The row now says what it is, from the URL the call went to.
+@test "jev_is_mock: loopback is a test double, the vendor and an unset URL are not" {
+  run bash -c ". '$REPO/hooks/lib/jev.sh'; CC_JEV_BASE_URL=http://127.0.0.1:9 jev_is_mock"
+  [ "$status" -eq 0 ]
+  run bash -c ". '$REPO/hooks/lib/jev.sh'; CC_JEV_BASE_URL='http://[::1]:9' jev_is_mock"
+  [ "$status" -eq 0 ]
+  run bash -c ". '$REPO/hooks/lib/jev.sh'; CC_JEV_BASE_URL=https://ai-gateway.vercel.sh jev_is_mock"
+  [ "$status" -eq 1 ]
+  run bash -c ". '$REPO/hooks/lib/jev.sh'; unset CC_JEV_BASE_URL; jev_is_mock"
+  [ "$status" -eq 1 ]
+}
+
+@test "promote: a mock-routed run stamps every row, meta included" {
+  mkcorpus
+  export MOCK_CHOICE_ROTATE=1
+  start_mock ok
+  run runp CC_JEV_ZDR=0 CC_JEV_BASE_URL="http://127.0.0.1:$PORT" -- --bias-n 2 --yes
+  [ "$status" -eq 0 ]
+  ROWS=$(grep -o '/.*jev-promote-.*\.jsonl' <<<"$output" | tail -1)
+  [ "$(jq -r '.mock' "$ROWS" | sort -u)" = "true" ]      # EVERY row, not just the meta
+}
+
+# The -f resolution test is NOT a sufficient filter: a mock row naming a file that happens to
+# exist would pass it silently. Provenance has to be its own check.
+@test "promote: a mock rank run supplies NO anchors even when its files resolve" {
+  mkcorpus
+  # names inc1.md, which DOES exist — so only the mock marker can disqualify it.
+  printf '%s\n' '{"file":"inc1.md","level":"occasionally","mock":true}' > "$RANKF"
+  run runp CC_JEV_ZDR=0 -- --yes
+  [ "$status" -eq 3 ]
+  grep -qF "no weak-incumbent anchors" <<<"$output"
+}
+
+@test "batch: a mock partial run is never resumed into a real pass" {
+  mkcorpus
+  H="$BATS_TEST_TMPDIR/mh"; mkdir -p "$H/.claude/autonomy"
+  printf '%s\n' '{"id":"meta","round":"meta","orphans":12,"seed":"20260921","plan":27,"anchors":2,"mock":true}' \
+                '{"id":"h1","round":"heat","winner":"o1.md","mock":true}' \
+    > "$H/.claude/autonomy/jev-promote-20260921T000000Z.jsonl"
+  A="$H/.claude/autonomy/jev-batch.arm"
+  EXP="$(date -u -v+30M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+  jq -n --arg e "$EXP" '{created:"x", expires:$e, max_calls:9, cap_b:400, corpus:"memory-orphans"}' > "$A"
+  export MOCK_CHOICE_ROTATE=1
+  start_mock ok
+  run env AI_GATEWAY_API_KEY=dummy CC_JEV_BASE_URL="http://127.0.0.1:$PORT" HOME="$H" \
+      CC_JEV_ARM_FILE="$A" CC_JEV_BATCH_LOG="$H/b.log" CC_JEV_MEM_DIR="$MEMD" \
+      CC_JEV_RULES_FILE=/dev/null CC_JEV_RANK_ROWS="$RANKF" CC_JEV_PROMO_GAP=0 \
+      "$REPO/scripts/jev/jev-batch.sh"
+  [ "$status" -eq 0 ]
+  ! grep -qF "RESUMING" "$H/b.log" || { echo "resumed a mock run into a real pass"; false; }
+}

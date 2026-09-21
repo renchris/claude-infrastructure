@@ -215,7 +215,12 @@ ANCH="$(mktemp)"
 # So: walk the runs newest-first and take the FIRST that actually produces an anchor. Selection by
 # the property you need, never by a proxy that correlates with it.
 _anchors_from() {  # $1=rows file → resolvable weak-incumbent basenames, one per line
-  jq -r 'select((.level//"")|test("almost-never|occasionally"))|.file' "$1" 2>/dev/null \
+  # `.mock != true` first: a run against the local test double must never supply an anchor, and
+  # the -f test below is NOT a sufficient filter for that — a mock row naming a file that happens
+  # to exist would pass it silently. Rows without the field predate the marker and are allowed
+  # through, then still have to resolve; unknown provenance is weaker evidence, not a refusal.
+  jq -r 'select((.mock // false) != true)
+         | select((.level//"")|test("almost-never|occasionally"))|.file' "$1" 2>/dev/null \
     | _basenames | while read -r f; do [ -n "$f" ] && [ -f "$MEM/$f" ] && printf '%s\n' "$f"; done
 }
 if [ -n "$RANKROWS" ] && [ -s "$RANKROWS" ]; then
@@ -301,9 +306,12 @@ jev_available || { printf 'not available — run: cc-jev status\n' >&2; exit 2; 
 # about five OTHER files into this run's rows. Nothing downstream could detect that: the row shape
 # is identical and the winner is a real filename.
 # So every run stamps what it was a run OF, and a resume that does not match starts fresh instead.
+# MOCK is stamped from the ROUTE, at write time — the one fact that settles whether a row is a
+# verdict about the world or about a test double. See hooks/lib/jev.sh::jev_is_mock.
+MOCKED=false; jev_is_mock && MOCKED=true
 _meta_row() { jq -nc --arg id meta --arg r meta --argjson o "$N_ORPH" --arg sd "$SEED" \
-                  --argjson pl "$TOTAL" --argjson a "$N_ANCH" \
-                  '{id:$id, round:$r, orphans:$o, seed:$sd, plan:$pl, anchors:$a}'; }
+                  --argjson pl "$TOTAL" --argjson a "$N_ANCH" --argjson m "$MOCKED" \
+                  '{id:$id, round:$r, orphans:$o, seed:$sd, plan:$pl, anchors:$a, mock:$m}'; }
 if [ -n "$RESUME" ] && [ -s "$OUT" ]; then
   _prev="$(jq -c 'select(.round=="meta")' "$OUT" 2>/dev/null | head -1)"
   _po="$(printf '%s' "$_prev" | jq -r '.orphans // empty' 2>/dev/null)"
@@ -403,7 +411,7 @@ while [ "$h" -lt "$HEATS" ]; do
   w=$(printf '%s\n' "$members" | sed -n "${idx}p")
   printf '%s\n' "$w" >> "$WIN"
   jq -nc --arg id "$id" --arg r heat --arg w "$w" --argjson m "$(printf '%s\n' "$members" | jq -R . | jq -sc .)" \
-     '{id:$id, round:$r, winner:$w, members:$m}' >> "$OUT"
+     --argjson mk "$MOCKED" '{id:$id, round:$r, winner:$w, members:$m, mock:$mk}' >> "$OUT"
   printf '.'
 done
 printf '\n'
@@ -436,8 +444,8 @@ _h2h() {
   consec=0; done_n=$((done_n+1))
   jq -nc --arg id "$id" --arg r h2h --arg a "$fa" --arg b "$fb" --arg w "$win" \
      --arg sm "${same:-}" --argjson sw "$sw" \
-     '{id:$id, round:$r, block_a:$a, block_b:$b, winner:$w,
-       same_rule:($sm|tonumber? // null), swapped:($sw==1)}' >> "$OUT"
+     --argjson mk "$MOCKED" '{id:$id, round:$r, block_a:$a, block_b:$b, winner:$w,
+       same_rule:($sm|tonumber? // null), swapped:($sw==1), mock:$mk}' >> "$OUT"
   printf '.'
 }
 
