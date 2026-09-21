@@ -265,8 +265,20 @@ nlines() { printf '%s\n' "$1" | grep -c '[^[:space:]]'; }
   [[ "$output" != *" probed "* ]] || false
 }
 
+# A live registry row for $1, owned by a pid that is certainly alive (this test's own shell).
+# lr_registry_live_rows keys on session_id + a kill -0'able pid, and HOME is fixtured, so this
+# writes into the suite's own registry and never sees the operator's.
+reg_live() {
+  mkdir -p "$HOME/.claude/cc-registry"
+  printf '{"session_id":"%s","pid":%s,"paneUUID":"%s","account":"next","cwd":"%s"}\n' \
+    "$1" "$$" "pane-$1" "$BATS_TEST_TMPDIR" > "$HOME/.claude/cc-registry/$1.json"
+}
+
 @test "status: NEXT names cc-lr repair for a failed or parked run, and nothing for a healthy one" {
   local b
+  # Both sids must be LIVE: repair TYPES into a pane, so the NEXT column only offers it for a
+  # session that still exists (see the dead-session case below).
+  reg_live "$SID"; reg_live "$SID2"
   b="$(bundle "$SID" 20260919T170000Z probed "FAILED:relaunch:gate")"
   bundle "$SID2" 20260919T171000Z probed PARKED >/dev/null
   bundle "$SID2" 20260919T172000Z probed submitted >/dev/null
@@ -275,6 +287,36 @@ nlines() { printf '%s\n' "$1" | grep -c '[^[:space:]]'; }
   [[ "$output" == *"→ cc-lr repair $b"* ]] || false
   [[ "$output" == *"→ cc-lr repair $LR_STATE_DIR/$SID2/bundle-20260919T171000Z"* ]] || false
   [ "$(printf '%s\n' "$output" | grep -c 'cc-lr repair')" -eq 2 ]
+}
+
+@test "status: a DEAD session is never offered cc-lr repair — repair types, and there is nothing to type into" {
+  # RED-PROOF for the defect measured on the live store 2026-09-21: run
+  # 83c4f1b8/bundle-20260920T224329Z sat at FAILED:submit for 5h42m with its session DEAD, and
+  # status recommended `cc-lr repair` anyway. A NEXT naming a doomed command costs a round trip.
+  local b
+  b="$(bundle "$SID" 20260919T170000Z probed "FAILED:submit")"   # no reg_live ⇒ the sid is dead
+  run bash "$LR" status --all
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"source session is gone"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"cc-lr repair $b"* ]] || { echo "$output"; false; }
+}
+
+@test "status: CONTROL — when liveness is UNKNOWABLE the repair suggestion is KEPT, not suppressed" {
+  # FAIL-OPEN, and it is the load-bearing direction. An instrument that cannot tell must not
+  # SUPPRESS a suggestion that may well be right; unknown must degrade to the prior behaviour.
+  # Proven by making lr-lib unreachable, which is the only state that clears CL_LIVE_KNOWN.
+  local b
+  b="$(bundle "$SID" 20260919T170000Z probed "FAILED:submit")"   # dead, as above
+  # Make the library ladder genuinely miss, rather than adding a production seam for a test:
+  # copy the binary somewhere with no sibling scripts/ tree and point both config roots at empty
+  # dirs, so all three candidates in cc-lr's ladder fail. This is the real shape of the failure.
+  mkdir -p "$BATS_TEST_TMPDIR/lonely/bin" "$BATS_TEST_TMPDIR/emptycfg"
+  cp "$LR" "$BATS_TEST_TMPDIR/lonely/bin/cc-lr"
+  run env HOME="$BATS_TEST_TMPDIR/emptycfg" CLAUDE_CONFIG_DIR="$BATS_TEST_TMPDIR/emptycfg" \
+      LR_STATE_DIR="$LR_STATE_DIR" bash "$BATS_TEST_TMPDIR/lonely/bin/cc-lr" status --all
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"cc-lr repair $b"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"source session is gone"* ]] || { echo "$output"; false; }
 }
 
 @test "status is rc 1 and prints no table when the store holds no matching run" {

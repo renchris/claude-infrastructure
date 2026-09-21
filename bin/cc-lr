@@ -333,7 +333,24 @@ EOF
     done
     [ -n "$out" ] || { echo "cc-lr: $n run(s) found and none holds a readable state" >&2; return 2; }
   fi
-  printf '%s\n' "$out" | CL_NOW="$(date +%s)" CL_MT="$mt" awk -F'\t' '
+  # LIVENESS FOR THE `NEXT` COLUMN. `cc-lr repair` re-types a prompt INTO A PANE, so it cannot
+  # apply to a run whose session is gone — and a NEXT that names a doomed command is worse than an
+  # empty one, because the operator spends a round trip discovering it. Measured 2026-09-21 on the
+  # live store: run 83c4f1b8/bundle-20260920T224329Z sat at FAILED:submit for 5h42m with the
+  # session DEAD, and status recommended repair anyway.
+  # FAIL-OPEN, deliberately: when lr-lib is unreachable we cannot tell, and an instrument that
+  # cannot tell must not SUPPRESS a suggestion that may well be right. Unknown ⇒ today's behaviour.
+  cl_live=""
+  if command -v lr_registry_live_rows >/dev/null 2>&1; then
+    cl_live=$'\n'
+    for _cl_f in "${FILES[@]}"; do
+      _cl_bd="$(dirname "$_cl_f")"; _cl_sid="$(basename "$(dirname "$_cl_bd")")"
+      case "$cl_live" in *$'\n'"$_cl_sid"$'\n'*) continue ;; esac
+      lr_registry_live_rows "$_cl_sid" >/dev/null 2>&1 && cl_live="$cl_live$_cl_sid"$'\n'
+    done
+  fi
+  printf '%s\n' "$out" | CL_NOW="$(date +%s)" CL_MT="$mt" CL_LIVE="$cl_live" \
+    CL_LIVE_KNOWN="$(command -v lr_registry_live_rows >/dev/null 2>&1 && echo 1 || echo 0)" awk -F'\t' '
     function klass(s) {
       if (s == "RECOVERED" || s == "DONE" || s == "ENGAGED" || s == "engaged") return "ok"
       if (s ~ /^FAILED/ || s ~ /^REFUSED/ || s ~ /^STALE/ || s ~ /^INDETERMINATE/ || s ~ /^PARKED/) return "bad"
@@ -371,7 +388,12 @@ EOF
         sid = bdir; sub("/[^/]*$", "", sid); sub(".*/", "", sid)
         id = substr(sid, 1, 8) "/" base
         k = klass(s)
-        nextcmd = (k == "bad") ? " → cc-lr repair " bdir : ""
+        # A dead session cannot be repaired: repair TYPES, and there is nothing to type into.
+        livek = (ENVIRON["CL_LIVE_KNOWN"] == "1")
+        alive = (index(ENVIRON["CL_LIVE"], "\n" sid "\n") > 0)
+        if (k != "bad")            nextcmd = ""
+        else if (!livek || alive)  nextcmd = " → cc-lr repair " bdir
+        else                       nextcmd = " → source session is gone; repair types into a pane and cannot apply"
         cause = (d == "-" || d == "") ? "—" : d
         a = (f in mtime) ? age(now - mtime[f]) : "?"
         printf "%-36s %-18s %-7s %s%s\n", id, s, a, cause, nextcmd
