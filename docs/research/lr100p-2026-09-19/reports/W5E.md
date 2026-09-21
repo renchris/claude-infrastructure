@@ -112,8 +112,12 @@ reading it out of `origin/main` so the number is not a property of my own edits:
 
 ## 4. The three hazards, and what I did about each
 
-**(a) Nothing was moved out of `handoff-fire.sh`.** `scripts/handoff-fire.sh` is byte-identical to
-`origin/main` in this worktree (`git diff --name-only origin/main` lists only `bin/it2-kitty`).
+**(a) Nothing was moved out of `handoff-fire.sh`.** Measure it against the **merge-base**, not
+against `origin/main` — trunk moves under a wave and a bare `git diff origin/main` will list every
+sibling's landed file as though it were mine:
+`git diff --name-only $(git merge-base origin/main HEAD)..HEAD` → exactly `bin/it2-kitty`,
+`scripts/lib/cc-tui.sh`, `tests/cc-tui.bats`, and this report; and
+`git diff --stat $(git merge-base origin/main HEAD)..HEAD -- scripts/handoff-fire.sh` is empty.
 `composer_content`, `paste_readback_ok`, `composer_scrub_verified` and the three
 `composer_residue_*` helpers are **copied** into `cc-tui.sh` under `cc_tui_` names.
 **I accept the duplication, and it is pinned rather than hoped at**: `tests/cc-tui.bats` extracts
@@ -140,7 +144,7 @@ a refusal, but *no call at all*.
 **(f) `typed-send-lint.sh`.** Run: it reports **one** site, `scripts/handoff-fire.sh:6941`, and
 **nothing about any file of mine** — as the brief predicted, its detector matches `session send` /
 `async_send_text` / `send-keys` / the AppleScript verbs and does not match `kitty @ send-text`.
-That site is **pre-existing on trunk**, not my diff: `git show origin/main:scripts/handoff-fire.sh |
+That site is **pre-existing on trunk**, not my diff: `git show ea5012b30:scripts/handoff-fire.sh |
 sed -n '6941p'` is byte-identical to the working copy, and my diff touches no `.sh` under `scripts/`
 except the new lib. Re-measure with `bash scripts/typed-send-lint.sh` (real rc 1).
 
@@ -363,5 +367,7 @@ mutant and sent me to write a case for an arm that was never exercised.
    yes.
 2. **The signature W5-A is coding against is unchanged**: `cc_tui_submit <pane-id> <payload-file>`
    → rc 0..5. Nothing about it moved during the wave.
-3. **`handoff-fire.sh` was not touched.** `git diff --name-only origin/main` in this worktree lists
-   exactly `bin/it2-kitty`.
+3. **`handoff-fire.sh` was not touched.**
+   `git diff --name-only $(git merge-base origin/main HEAD)..HEAD` lists exactly `bin/it2-kitty`,
+   `scripts/lib/cc-tui.sh`, `tests/cc-tui.bats` and this report — and nothing else. Against a bare
+   `origin/main` it lists every sibling's landed file too, which is trunk moving, not my diff.
