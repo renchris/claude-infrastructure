@@ -135,14 +135,84 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-qu
   grep -qE "PARKED $sid \(next, session\)" "$STATE/poller.log" || { echo "$output"; cat "$STATE/poller.log"; false; }
 }
 
-@test "TRANSPLANTED: a parked sid whose lock names ANOTHER store with the successor on disk is retired, nothing fired" {
-  mk_parked "$SID"
+# ── the transplant fixture, split in two (W5-A, 2026-09-20) ────────────────────────────────────
+# This case used to end at the lock: a tombstone/lock naming another store retired the record, full
+# stop. W5-A gates the retire on the SUCCESSOR being real, because the move and the recovery are two
+# different facts and the record is the only thing that re-fires the second one. `mk_transplanted`
+# builds the move; each case then supplies — or withholds — the successor evidence.
+mk_transplanted() { # → sets $other
   other="$HOME/.claude-tertiary"; mkdir -p "$other/projects/x"; : > "$other/projects/x/$SID.jsonl"
   printf '{"sid":"%s","from":"%s","to":"%s"}\n' "$SID" "$HOME/.claude-quaternary" "$other" > "$STATE/locks/$SID.lock"
+}
+row_on() { # $1=pane $2=sid $3=account — the `row` helper above is hardwired to claude-quaternary
+  printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"%s","cwd":"%s"}\n' \
+    "$1" "$2" "$$" "$3" "$CWD" > "$CC_REGISTRY_DIR/$1.json"
+}
+
+@test "TRANSPLANTED: a lock to ANOTHER store + a LIVE row there retires the record, nothing fired" {
+  mk_parked "$SID"; mk_transplanted
+  row_on 701 "$SID" claude-tertiary            # the successor is a PROCESS, not a claim
   LR_POLLER_SPAWN=tmux LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
   [ "$status" -eq 0 ]
   grep -qE "TRANSPLANTED $SID \(next4\) → $other; parked record retired" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
   [ -f "$STATE/resumed/$SID.json" ]; [ ! -s "$TMUX_LOG" ]
+}
+
+@test "TRANSPLANTED CONTROL: the move alone does NOT retire — no successor evidence ⇒ LEFT PARKED" {
+  # The defect W5-A closes: the `mv` was unconditional on the transplant READ, and the HUSK branch
+  # logged HUSK and then fell through to it — the poller retired the very records its own log said
+  # it was not retiring. A tombstone says the session MOVED; nothing here says it came up.
+  mk_parked "$SID"; mk_transplanted
+  LR_POLLER_SPAWN=tmux LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  [ "$status" -eq 0 ]
+  grep -qE "HUSK $SID \(run .* state .*\) — moved to $other but the successor has neither RECOVERED nor a live row there; record LEFT PARKED" "$STATE/poller.log" \
+    || { cat "$STATE/poller.log"; false; }
+  [ -f "$STATE/parked/$SID.json" ]; [ ! -f "$STATE/resumed/$SID.json" ]; [ ! -s "$TMUX_LOG" ]
+}
+
+@test "TRANSPLANTED: a run whose own state log reads RECOVERED retires WITHOUT any registry row" {
+  # lr_state_current's FIRST production caller in the tree. Leg (1) of the gate, on its own.
+  mk_parked "$SID"; mk_transplanted
+  mkdir -p "$STATE/$SID/bundle-20260920T000000Z"
+  printf '{"ts":"x","run":"r","state":"RECOVERED","stage":"s","detail":"d","writer":"w","attempt":1}\n' \
+    > "$STATE/$SID/bundle-20260920T000000Z/events.jsonl"
+  LR_POLLER_SPAWN=tmux LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  grep -qE "TRANSPLANTED $SID \(next4\) → $other; parked record retired \(the successor carries it: RECOVERED\)" "$STATE/poller.log" \
+    || { cat "$STATE/poller.log"; false; }
+  [ -f "$STATE/resumed/$SID.json" ]
+}
+
+@test "TRANSPLANTED CONTROL: a NON-RECOVERED state log is not a recovery — the newest bundle wins" {
+  # The same leg, the other way round: without this the case above passes for a predicate that
+  # merely checks that events.jsonl EXISTS. `relaunch-typed` is a real value from the live store.
+  mk_parked "$SID"; mk_transplanted
+  mkdir -p "$STATE/$SID/bundle-20260919T000000Z" "$STATE/$SID/bundle-20260920T000000Z"
+  printf '{"ts":"x","run":"r","state":"RECOVERED","stage":"s","detail":"d","writer":"w","attempt":1}\n' \
+    > "$STATE/$SID/bundle-20260919T000000Z/events.jsonl"
+  printf '{"ts":"x","run":"r","state":"relaunch-typed","stage":"s","detail":"d","writer":"w","attempt":1}\n' \
+    > "$STATE/$SID/bundle-20260920T000000Z/events.jsonl"
+  LR_POLLER_SPAWN=tmux LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  grep -q "state relaunch-typed" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
+  [ -f "$STATE/parked/$SID.json" ]; [ ! -f "$STATE/resumed/$SID.json" ]
+}
+
+@test "TRANSPLANTED CONTROL: a live row on the SOURCE account is the HUSK, never the successor" {
+  # Why lr_registry_live_rows (sid only) cannot serve this gate: the same yes means the opposite
+  # thing depending on WHICH store answered, and the source-side yes is the state W10 exists for.
+  mk_parked "$SID"; mk_transplanted
+  row_on 616 "$SID" claude-quaternary
+  LR_POLLER_SPAWN=tmux LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  grep -q "record LEFT PARKED" "$STATE/poller.log" || { cat "$STATE/poller.log"; false; }
+  [ ! -f "$STATE/resumed/$SID.json" ]
+}
+
+@test "TRANSPLANTED: the LEFT-PARKED line is said ONCE per record, not once per tick" {
+  # This arm is reached on every tick for as long as the record sits here. 1,800 identical lines is
+  # a shape this daemon has already produced once (§ the fire-failure latch).
+  mk_parked "$SID"; mk_transplanted
+  LR_POLLER_SPAWN=tmux LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  LR_POLLER_SPAWN=tmux LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  [ "$(grep -c 'record LEFT PARKED' "$STATE/poller.log")" = 1 ] || { cat "$STATE/poller.log"; false; }
 }
 
 @test "D2: auto with no reachable GUI is NOT SPAWNED and loud — tmux is never reached for" {
@@ -195,7 +265,12 @@ STUB
   ! grep -q -- '--model' "$l"
 }
 
-@test "REQUESTS: a driver's request is drained through lr-fleet --one, the result recorded, the request removed" {
+@test "REQUESTS: a driver's request is drained through lr-fleet --one, the result recorded, the request MOVED to claimed/" {
+  # W5-A extended this case in two places rather than replacing it. (a) the drain is now DETACHED —
+  # `--one` is a 115-658 s call and was held inside the tick lock; (b) the request is MOVED, not
+  # `rm -f`'d, because a consumed request that reached nobody is indistinguishable from one that was
+  # never written. The original assertion — that requests/ no longer holds it — is kept verbatim and
+  # joined by the one that says where it went.
   mkdir -p "$STATE/requests"
   printf '{"sid":"%s","target":"next3","source_pane":"616","requested_by":"driver-abc","ts":"x"}\n' "$SID" > "$STATE/requests/$SID.json"
   export LR_FLEET_BIN="$BATS_TEST_TMPDIR/stubs/lr-fleet"
@@ -206,10 +281,11 @@ STUB
   chmod +x "$LR_FLEET_BIN"; export FLEET_LOG="$BATS_TEST_TMPDIR/fleet.log"; : > "$FLEET_LOG"
   LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
   [ "$status" -eq 0 ]
-  grep -q -- "--one $SID --target next3 --source-pane 616 --from-daemon" "$FLEET_LOG" || { cat "$FLEET_LOG"; false; }
+  grep -q -- "--one $SID --target next3 --source-pane 616 --from-daemon --detach" "$FLEET_LOG" || { cat "$FLEET_LOG"; false; }
   [ ! -f "$STATE/requests/$SID.json" ]
+  [ -f "$STATE/claimed/$SID.json" ] || { ls -la "$STATE/claimed" 2>&1; false; }
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["rc"]==0 and d["requested_by"]=="driver-abc", d' "$STATE/results/$SID.json"
-  grep -qE "REQUEST $SID — done rc=0" "$STATE/poller.log"
+  grep -qE "REQUEST $SID — dispatched rc=0" "$STATE/poller.log"
 }
 @test "REQUESTS: --dry-run only reports the request; it is not executed" {
   mkdir -p "$STATE/requests"

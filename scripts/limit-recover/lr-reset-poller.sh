@@ -157,7 +157,15 @@ if [[ -n "$LRP_LIB" ]]; then
   # shellcheck disable=SC1091
   . "$LRP_LIB"
 fi
-REQUESTS="$STATE/requests"; RESULTS="$STATE/results"; mkdir -p "$REQUESTS" "$RESULTS"
+REQUESTS="$STATE/requests"; RESULTS="$STATE/results"
+# CLAIMED and RUN_CLAIMS are the request lane's two new stores (W5-A, 2026-09-20), created HERE
+# beside the other two because the loop that uses them must never be the thing that decides whether
+# they exist: a `mkdir` folded into the consuming branch is a store that appears only on the happy
+# path, and its absence then reads as "nothing was ever claimed".
+#   CLAIMED     a drained request, MOVED not deleted — the evidence that it reached this daemon
+#   RUN_CLAIMS  <sid>.active, one atomic `mkdir` per in-flight run — the reservation `: >` is not
+CLAIMED="$STATE/claimed"; RUN_CLAIMS="$STATE/runs/by-sid"
+mkdir -p "$REQUESTS" "$RESULTS" "$CLAIMED" "$RUN_CLAIMS"
 # Parse EVERY argument, not just $1. Until 2026-07-30 this read `[[ "${1:-}" == "--dry-run" ]] && DRY=1`,
 # so `--once --dry-run` silently ran FOR REAL and spawned live sessions — a preview flag that is
 # silently ignored is worse than no preview flag at all, because the operator has already decided it is
@@ -667,22 +675,217 @@ nudge_in_place() { # $1=sid $2=cfg $3=registry rows ("pane<TAB>pid<TAB>acct<TAB>
 # session) it writes a request here and kickstarts this job. A LaunchAgent runs outside every session
 # and every classifier, so this is the locus that cannot be refused. Executed under the same overlap
 # lock as everything below; one request at a time; the result is a file the driver can read back.
+#
+# ══ THE SCHEMA THIS LOOP READS — fixed HERE, by the CONSUMER (W5-A, 2026-09-20) ═════════════════
+#   .sid          REQUIRED. Absent/unreadable ⇒ parked as `<name>.malformed.json` and NEVER retried.
+#   .kind         ""|"recovery" (default) · "retire-husk" = a BREADCRUMB, filed, never executed
+#   .mode         ""|"relaunch" (default) · "prompt" (the C14 repair: re-type into a live composer)
+#   .target       account for lr-fleet --target (default "auto")          [relaunch]
+#   .source_pane  the pane to act in    [relaunch: --source-pane, optional · prompt: REQUIRED]
+#   .requested_by free text. "stop-failure-marker" is POLICY-GATED — see the autorecover gate below.
+#   .prompt_file  an existing path to type                                [prompt]
+#   .prompt       inline text to type, used when .prompt_file is absent   [prompt, default
+#                 /limit-recover]. Read with its OWN jq -r so newlines survive verbatim.
+#
+# ══ THE FOUR DEFECTS THIS LOOP CARRIED, all live before this wave ═══════════════════════════════
+# (1) THE WORKER RAN IN THE FOREGROUND, INSIDE THE TICK LOCK. lr-fleet prices `--one` at 115-658 s
+#     (lr-fleet.sh:725), so one request held LOCKD for minutes and every concurrent tick TICK-SKIPped
+#     — the self-overlap guard doing its job over a lock that should never have been held that long.
+#     `--detach` (lr-fleet.sh:739-768) re-execs the driver under setsid, returns in <= 3 s, and sends
+#     the verdict as mail. It REFUSES rather than silently blocking when it cannot reach detach.sh,
+#     so passing it can never quietly degrade back to the foreground. (`--detach-inner`, which the
+#     plan draft prescribes, exists NOWHERE in this tree.)
+# (2) NOTHING RESERVED THE SID. `mkdir` is the atomic reservation that `: >` never was — claim_sid at
+#     :225 is `: > "$CLAIMS/$1" || true`, where two writers both "win"; that one guards the SPAWN
+#     path and is left alone, and this lane gets a real one.
+# (3) THE GLOB IS `*.json` AND THE TRANSPLANT ARM BELOW WRITES INTO THIS VERY DIRECTORY. A
+#     `retire-husk-<sid>.json` breadcrumb carries a `.sid`, so it was driven straight through
+#     `lr-fleet --one` as if it were a recovery. Dispatch is on the record's SHAPE now, never on the
+#     glob — a directory is not a type.
+# (4) A DRAINED REQUEST WAS `rm -f`'d. A consumed request that reached nobody then looks exactly like
+#     one that was never written; claimed/ is the evidence that closes that gap.
 FLEET="${LR_FLEET_BIN:-$LR/lr-fleet.sh}"
+HUSK_REQS="$STATE/husk-requests"
+# The run claim has no reaper here — the run REAPER is the sibling plan's and is out of scope — so it
+# is TTL-bounded, exactly as the fire claim above is and for the same reason: a driver that died
+# mid-run must not wedge its sid out of recovery forever. 30 min is ~2.7x lr-fleet's own worst-case
+# `--one` (658 s) and ~3 ticks. Junk falls back rather than letting an unattended daemon do
+# arithmetic on it (0 would make every claim instantly stale and re-drive every live run).
+RUN_CLAIM_TTL_MIN="${LR_RUN_CLAIM_TTL_MIN:-30}"
+[[ "$RUN_CLAIM_TTL_MIN" =~ ^[1-9][0-9]*$ ]] || RUN_CLAIM_TTL_MIN=30
+run_claim_take() { # $1=sid → 0 this tick owns the run, 1 a live run already holds it
+  local d="$RUN_CLAIMS/${1:?run_claim_take needs a sid}.active"
+  mkdir "$d" 2>/dev/null && return 0
+  # `-maxdepth 0`: the claim is a DIRECTORY, and without it find descends and tests the (empty)
+  # contents instead of the claim's own mtime. mkdir stamps it once and nothing writes inside, so
+  # that mtime is the moment the run was claimed.
+  if [[ -n $(find "$d" -maxdepth 0 -mmin "+$RUN_CLAIM_TTL_MIN" 2>/dev/null) ]]; then
+    rm -rf "$d" 2>/dev/null || true
+    if mkdir "$d" 2>/dev/null; then
+      log "RUN-CLAIM-STALE $1 — the previous claim aged past ${RUN_CLAIM_TTL_MIN}m with no terminal state; retaken"
+      return 0
+    fi
+  fi
+  return 1
+}
+run_claim_release() { rm -rf "$RUN_CLAIMS/${1:?run_claim_release needs a sid}.active" 2>/dev/null || true; }
+_rq_held=0; _rq_held_sids=""
 for _rq in "$REQUESTS"/*.json; do
   [[ -e "$_rq" ]] || continue
-  if [[ $DRY -eq 1 ]]; then log "DRY   request $(basename "$_rq") would be executed via $FLEET"; continue; fi
-  _rq_sid="$(jq -r '.sid // empty' "$_rq" 2>/dev/null || true)"
-  if [[ -z "$_rq_sid" ]]; then log "REQUEST-SKIP $(basename "$_rq") — no sid; parked as malformed"; mv "$_rq" "$RESULTS/$(basename "$_rq" .json).malformed.json" 2>/dev/null || true; continue; fi
-  if [[ ! -x "$FLEET" ]]; then log "REQUEST-SKIP $_rq_sid — lr-fleet.sh not executable at $FLEET (request left in place)"; continue; fi
-  _rq_target="$(jq -r '.target // "auto"' "$_rq")"; _rq_pane="$(jq -r '.source_pane // empty' "$_rq")"; _rq_by="$(jq -r '.requested_by // "?"' "$_rq")"
-  log "REQUEST $_rq_sid — executing the in-place recovery (target $_rq_target${_rq_pane:+, pane $_rq_pane}) for $_rq_by"
-  _rq_rc=0
-  "$FLEET" --one "$_rq_sid" --target "$_rq_target" ${_rq_pane:+--source-pane "$_rq_pane"} --from-daemon > "$RESULTS/$_rq_sid.log" 2>&1 || _rq_rc=$?
-  jq -n --arg sid "$_rq_sid" --arg rc "$_rq_rc" --arg ts "$(date -u +%FT%TZ)" --arg log "$RESULTS/$_rq_sid.log" --arg by "$_rq_by" \
-    '{sid:$sid, rc:($rc|tonumber), ts:$ts, log:$log, requested_by:$by}' > "$RESULTS/$_rq_sid.json" 2>/dev/null || true
-  rm -f "$_rq"
-  log "REQUEST $_rq_sid — done rc=$_rq_rc (result $RESULTS/$_rq_sid.json)"
+  _rq_name="$(basename "$_rq")"
+  if [[ $DRY -eq 1 ]]; then log "DRY   request $_rq_name would be executed via $FLEET"; continue; fi
+  # ONE reader, NUL-delimited, no interpreter in the path — the same shape as the parked-record
+  # reader in § 2 and for the same reason: a JSON string may hold any byte EXCEPT NUL, so `read -d ''`
+  # cannot mis-split a value, and a short read is a FAIL-CLOSED skip rather than half-assigned
+  # fields. (The four `jq -r` forks it replaces also silently turned an unparseable file into a
+  # record with every field at its default.)
+  _rqf=()
+  while IFS= read -r -d '' _v; do _rqf+=("$_v"); done < <(python3 -c '
+import json,sys
+d=json.load(open(sys.argv[1]))
+if not isinstance(d,dict): raise SystemExit(1)
+sys.stdout.write("".join(str(d.get(k) or "")+"\0"
+  for k in ("sid","kind","mode","target","source_pane","requested_by","prompt_file")))
+' "$_rq" 2>/dev/null)
+  if (( ${#_rqf[@]} != 7 )) || [[ -z "${_rqf[0]}" ]]; then
+    log "REQUEST-SKIP $_rq_name — unreadable or no sid; parked as malformed"
+    mv "$_rq" "$RESULTS/${_rq_name%.json}.malformed.json" 2>/dev/null || true; continue
+  fi
+  _rq_sid="${_rqf[0]}"; _rq_kind="${_rqf[1]}"; _rq_mode="${_rqf[2]}"; _rq_target="${_rqf[3]}"
+  _rq_pane="${_rqf[4]}"; _rq_by="${_rqf[5]}"; _rq_pfile="${_rqf[6]}"
+  [[ -n "$_rq_target" ]] || _rq_target=auto
+  [[ -n "$_rq_by" ]] || _rq_by='?'
+
+  # ── THE HOOK-ORIGIN POLICY GATE — SAFETY-CRITICAL, AND IT FAILS CLOSED ────────────────────────
+  # hooks/stop-failure-marker.sh writes a request on every rate-limit death. ROUGHLY 30 SESSIONS DIE
+  # AT ONCE on one cap, so draining that cohort unattended would transplant thirty sessions onto
+  # other accounts with nobody in the loop — and whether this fleet does that is an OPEN OPERATOR
+  # DECISION standing at 85% conviction whose shipped default is OFF
+  # (docs/plans/LIMIT_RECOVER_100P.md:384). This gate is what makes that hook arm safe to ship.
+  #
+  # ABSENT FILE ⇒ DO NOT DRAIN. The request is LEFT IN PLACE — not claimed, not moved, not deleted:
+  # it is the breadcrumb `cc-find --limited` reads, and the operator's own `touch` is what releases
+  # the whole cohort at once. THIS DAEMON MUST NEVER CREATE $STATE/autorecover.on; its absence is
+  # the shipped default and creating it here would be the daemon granting itself the permission.
+  if [[ "$_rq_by" == "stop-failure-marker" ]] && [[ ! -e "$STATE/autorecover.on" ]]; then
+    _rq_held=$(( _rq_held + 1 ))
+    # ONE summary line per tick, after the loop — never one per request per tick. A thirty-strong
+    # held cohort at a 10-minute cadence is 4,320 identical lines a day, and this daemon has already
+    # proved what that costs (1,800 of them, § the fire-failure latch).
+    (( ${#_rq_held_sids} < 72 )) && _rq_held_sids="${_rq_held_sids:+$_rq_held_sids,}${_rq_sid:0:8}"
+    continue
+  fi
+
+  # ── DISPATCH ON THE RECORD'S SHAPE, NEVER ON THE GLOB (defect 3) ──────────────────────────────
+  case "$_rq_kind" in
+    ''|recovery) : ;;
+    retire-husk)
+      # NOT a recovery: the transplant arm in § 2 writes this to say a SOURCE PANE is still standing
+      # after its session moved. Nothing in the tree consumes it from $REQUESTS (verified by grep,
+      # 2026-09-20 — zero readers), and leaving it here means re-logging it on every tick forever,
+      # so it is FILED into its own lane where `lr-fleet --retire-husks` can find it.
+      mkdir -p "$HUSK_REQS" 2>/dev/null || true
+      log "HUSK-REQUEST $_rq_sid — filed to $HUSK_REQS for lr-fleet --retire-husks; a breadcrumb is not a recovery"
+      mv "$_rq" "$HUSK_REQS/$_rq_name" 2>/dev/null || true
+      continue ;;
+    *)
+      log "REQUEST-SKIP $_rq_sid — unknown kind '$_rq_kind'; parked (this loop executes recoveries only)"
+      mv "$_rq" "$RESULTS/${_rq_name%.json}.unknown-kind.json" 2>/dev/null || true
+      continue ;;
+  esac
+
+  [[ -n "$_rq_mode" ]] || _rq_mode=relaunch
+  case "$_rq_mode" in
+    relaunch|prompt) : ;;
+    *) log "REQUEST-SKIP $_rq_sid — unknown mode '$_rq_mode'; parked"
+       mv "$_rq" "$RESULTS/${_rq_name%.json}.unknown-mode.json" 2>/dev/null || true; continue ;;
+  esac
+
+  # EVERY precondition is tested BEFORE the claim, so a refusal can never wedge the sid for the
+  # claim's TTL over a run that was never started.
+  _rq_tui=""
+  if [[ "$_rq_mode" == relaunch ]]; then
+    if [[ ! -x "$FLEET" ]]; then
+      log "REQUEST-SKIP $_rq_sid — lr-fleet.sh not executable at $FLEET (request left in place)"; continue
+    fi
+  else
+    # scripts/lib/cc-tui.sh is an ADD from this same wave, so it is INERT on the live symlink layer
+    # until a converge runs install.sh — a landed-but-unlinked file is absent, not stale, and every
+    # `[ -f x ] && . x` guard over one is a SILENT skip. This one is loud.
+    # LR_CC_TUI_LIB, when SET, is the whole ladder: a test must be able to name an ABSENT path.
+    if [[ -n "${LR_CC_TUI_LIB+x}" ]]; then
+      [[ -f "${LR_CC_TUI_LIB:-}" ]] && _rq_tui="${LR_CC_TUI_LIB:-}"
+    else
+      for _t in "$LR/../lib/cc-tui.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cc-tui.sh" \
+                "${HOME:-}/.claude/scripts/lib/cc-tui.sh"; do
+        [[ -f "$_t" ]] && { _rq_tui="$_t"; break; }
+      done
+    fi
+    if [[ -z "$_rq_tui" ]]; then
+      log "REQUEST-SKIP $_rq_sid — mode:prompt needs scripts/lib/cc-tui.sh and this layer does not carry it yet; request left in place for the next tick"
+      continue
+    fi
+    if [[ -z "$_rq_pane" ]]; then
+      log "REQUEST-SKIP $_rq_sid — mode:prompt has no .source_pane; parked as malformed"
+      mv "$_rq" "$RESULTS/${_rq_name%.json}.malformed.json" 2>/dev/null || true; continue
+    fi
+  fi
+
+  # ── THE PER-SID RUN CLAIM (defect 2) ──────────────────────────────────────────────────────────
+  if ! run_claim_take "$_rq_sid"; then
+    log "SUPERSEDED-BY-LIVE-RUN $_rq_sid — $RUN_CLAIMS/$_rq_sid.active is held by a run already in flight; this request is dropped"
+    rm -f "$_rq"; continue
+  fi
+
+  _rq_rc=0; _rq_verdict=""
+  case "$_rq_mode" in
+    relaunch)
+      log "REQUEST $_rq_sid — dispatching the in-place recovery DETACHED (target $_rq_target${_rq_pane:+, pane $_rq_pane}) for $_rq_by"
+      # shellcheck disable=SC2086  # deliberate: ${var:+--flag "val"} must word-split into 0 or 2 args
+      "$FLEET" --one "$_rq_sid" --target "$_rq_target" ${_rq_pane:+--source-pane "$_rq_pane"} --from-daemon --detach \
+        > "$RESULTS/$_rq_sid.log" 2>&1 || _rq_rc=$?
+      _rq_verdict=dispatched
+      # rc != 0 from --detach means NOTHING was started (it refuses rather than blocking), so the
+      # claim guards no run and must not hold the sid out of recovery until the TTL.
+      (( _rq_rc == 0 )) || { run_claim_release "$_rq_sid"; _rq_verdict=dispatch-failed; }
+      ;;
+    prompt)
+      # C14: the pane is up with an EMPTY composer and nothing was ever submitted, so the repair is
+      # to re-type, not to relaunch. `.prompt` is read by its own `jq -r` so a multi-line prompt
+      # survives verbatim — the NUL reader above deliberately does not carry it.
+      _rq_pf="$_rq_pfile"
+      if [[ -z "$_rq_pf" || ! -f "$_rq_pf" ]]; then
+        _rq_pf="$RESULTS/$_rq_sid.prompt.txt"
+        jq -r '.prompt // "/limit-recover"' "$_rq" > "$_rq_pf" 2>/dev/null || printf '/limit-recover\n' > "$_rq_pf"
+      fi
+      log "REQUEST $_rq_sid — mode:prompt, re-typing into pane $_rq_pane via $_rq_tui for $_rq_by"
+      # SOURCED IN A SUBSHELL. cc-tui.sh is another wave's file and this daemon already defines
+      # `log`, `lrp_bounded` and a dozen more at global scope; a sibling library that happened to
+      # define any of them would silently replace the poller's for the rest of the tick.
+      # shellcheck disable=SC1090  # runtime-resolved sibling, as with every other library here
+      ( . "$_rq_tui" && cc_tui_submit "$_rq_pane" "$_rq_pf" ) > "$RESULTS/$_rq_sid.log" 2>&1 || _rq_rc=$?
+      case "$_rq_rc" in
+        0) _rq_verdict=submitted ;;          1) _rq_verdict=no-such-pane ;;
+        2) _rq_verdict=unreadable-or-modal ;; 3) _rq_verdict=composer-occupied ;;
+        4) _rq_verdict=paste-not-echoed ;;   5) _rq_verdict=sent-but-no-record ;;
+        *) _rq_verdict="rc-$_rq_rc" ;;
+      esac
+      # Synchronous by construction: whatever happened, no run is left in flight and the sid is free.
+      run_claim_release "$_rq_sid"
+      ;;
+  esac
+  jq -n --arg sid "$_rq_sid" --arg rc "$_rq_rc" --arg ts "$(date -u +%FT%TZ)" --arg log "$RESULTS/$_rq_sid.log" \
+        --arg by "$_rq_by" --arg mode "$_rq_mode" --arg verdict "$_rq_verdict" \
+    '{sid:$sid, rc:($rc|tonumber), ts:$ts, log:$log, requested_by:$by, mode:$mode, verdict:$verdict}' \
+    > "$RESULTS/$_rq_sid.json" 2>/dev/null || true
+  # MOVED, NEVER DELETED (defect 4). `|| rm -f` only for a store that cannot be written at all —
+  # leaving the record here under a held claim would re-log SUPERSEDED-BY-LIVE-RUN every tick.
+  mv "$_rq" "$CLAIMED/$_rq_name" 2>/dev/null || rm -f "$_rq"
+  log "REQUEST $_rq_sid — $_rq_verdict rc=$_rq_rc (result $RESULTS/$_rq_sid.json)"
 done
+if (( _rq_held > 0 )); then
+  log "HOOK-HELD $_rq_held hook-originated request(s) NOT drained — $STATE/autorecover.on is absent (sids: $_rq_held_sids); creating that file is the operator's call and releases the whole cohort"
+fi
 
 # ── the two predicate calls this loop makes, each ONE fork, both through the SSOT ───────────────
 # WHY A FUNCTION AND NOT AN INLINE `grep`. Both of these replace a raw `grep` whose exit 1 meant two
@@ -1081,6 +1284,51 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
   # refused by lr-fire-resume's tombstone verdict every tick until the fire latch tripped — a loop
   # that reads as an outage. Retire the record instead, once, and say where the session went.
   if command -v lr_transplant_target >/dev/null 2>&1 && _lrp_to="$(lr_transplant_target "$sid" "$cfg")"; then
+    # ── RETIRE ONLY ON RECOVERED (W5-A, 2026-09-20) ───────────────────────────────────────────────
+    # THE DEFECT. The `mv` below was UNCONDITIONAL on the transplant READ, and the HUSK branch under
+    # it logged `HUSK … retire request written` and then FELL THROUGH to that same `mv` — so this
+    # daemon retired the very records its own log said it was not retiring. A tombstone or lock says
+    # the session MOVED. It says nothing whatever about whether the successor ever took a turn, and
+    # a move that produced nothing is exactly the case where the parked record is the only thing
+    # that would re-fire the recovery. Retiring on the move alone discards it.
+    #
+    # TWO INDEPENDENT POSITIVES, EITHER SUFFICIENT, both about the SUCCESSOR and never about the move:
+    #   (1) the run's own state log reads RECOVERED — lr_state_current (lr-lib.sh:439), read from the
+    #       newest bundle for this sid. This is that function's FIRST production caller in the tree.
+    #   (2) a LIVE registry row under the TARGET cfg — lr_registry_live_rows_in_cfg (lr-lib.sh, added
+    #       by this wave). The unscoped lr_registry_live_rows cannot serve here: it takes only a sid,
+    #       and a live row on the SOURCE account is the HUSK, i.e. the same answer meaning the
+    #       opposite thing.
+    #
+    # ⚠ MEASURED 2026-09-20, AND IT IS A DISAGREEMENT WITH THE PLAN, NOT A BUG HERE: no writer in
+    # this tree ever appends the state `RECOVERED`. The live vocabulary is admitted / gate-admitted /
+    # submit-token-armed / relaunch-typed / FAILED / FAILED:submit, and only 4 of ~140 sid dirs carry
+    # an events.jsonl at all. So leg (1) is INERT today and leg (2) carries the whole gate. Leg (1)
+    # stays because it is the predicate the plan specifies and it goes live the day a writer emits
+    # it; re-measure with:
+    #   jq -r .state $(find ~/.reso/limit-recover -name events.jsonl) | sort -u
+    _lrp_recovered=0; _lrp_bundle=""; _lrp_st=""
+    # bundle-<ISO8601> sorts lexically == chronologically, so the last glob hit is the newest run.
+    for _lrp_b in "$STATE/$sid"/bundle-*; do [ -d "$_lrp_b" ] && _lrp_bundle="$_lrp_b"; done
+    if [[ -n "$_lrp_bundle" ]] && command -v lr_state_current >/dev/null 2>&1; then
+      _lrp_st="$(lr_state_current "$_lrp_bundle" 2>/dev/null || true)"
+      [[ "$_lrp_st" == RECOVERED ]] && _lrp_recovered=1
+    fi
+    if (( _lrp_recovered == 0 )) && command -v lr_registry_live_rows_in_cfg >/dev/null 2>&1 \
+       && lr_registry_live_rows_in_cfg "$sid" "$_lrp_to" >/dev/null 2>&1; then
+      _lrp_recovered=1; _lrp_st="live-row-on-target${_lrp_st:+ (log says $_lrp_st)}"
+    fi
+    if (( _lrp_recovered == 0 )); then
+      # LEFT PARKED — and said ONCE per record, not once per tick. This arm is reached on every tick
+      # for as long as the record sits here, and an undamped line is the 1,800-identical-lines shape
+      # the fire-failure latch above was built to end. The marker is cleared with `.notified` when
+      # the record is finally retired, so a later genuine retire still says so.
+      if [[ ! -e "$PARKED/$sid.husk-noted" ]]; then
+        log "HUSK $sid (run ${_lrp_bundle:-none} state ${_lrp_st:-none}) — moved to $_lrp_to but the successor has neither RECOVERED nor a live row there; record LEFT PARKED"
+        : > "$PARKED/$sid.husk-noted" 2>/dev/null || true
+      fi
+      continue
+    fi
     # ── HUSK (W10, § 10): the record is retired, but is the SOURCE PANE still standing? ──────────
     # Retiring the parked record says the successor carries the session. It says nothing about the
     # window the session LEFT, which is alive, shows the old limit error, and is indistinguishable
@@ -1106,8 +1354,8 @@ sys.stdout.write("".join(str(d.get(k,""))+"\0" for k in ("sid","acct","cfg","cwd
         "$sid" "$_lrp_hp" "$cfg" "$_lrp_to" "$(date -u +%FT%TZ)" \
         > "$STATE/requests/retire-husk-$sid.json" 2>/dev/null || true
     fi
-    log "TRANSPLANTED $sid ($acct) → $_lrp_to; parked record retired (the successor carries it)"
-    mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified"; continue
+    log "TRANSPLANTED $sid ($acct) → $_lrp_to; parked record retired (the successor carries it: ${_lrp_st:-RECOVERED})"
+    mv "$pf" "$RESUMED/$(basename "$pf")" 2>/dev/null; rm -f "$PARKED/$sid.notified" "$PARKED/$sid.husk-noted"; continue
   fi
   # LATCHED — leave it PARKED and say nothing. Silence per tick is deliberate: the one LATCHED line
   # at the crossing and the UNLATCHED line at expiry are the whole story, and this daemon has

@@ -300,6 +300,38 @@ lr_registry_live_rows() { # $1=sid → rows on stdout; rc 0 when at least one is
   [ "$n" -gt 0 ]
 }
 
+# ── LIVENESS, SCOPED TO ONE STORE (W5-A, 2026-09-20) ─────────────────────────────────────────────
+# lr_registry_live_rows above answers "is a process holding this sid", full stop — it takes ONLY a
+# sid and cannot say WHICH store answered. The poller's transplant arm needs the other question:
+# "did the SUCCESSOR, on the target store, actually come up?" A row on the SOURCE account answers
+# that with a yes that means the opposite (that row IS the husk), so the unscoped predicate is not
+# merely imprecise there, it is inverted.
+#
+# THE ACCOUNT FOLD IS NOT OPTIONAL, and it is lifted from lr_husk_state's own derivation for the
+# same measured reason: hooks/session-register.sh writes `.account` as `basename $CLAUDE_CONFIG_DIR`
+# with the leading dot stripped, and `~/.claude` and `~/.claude-next` are ONE account — a session
+# started under CLAUDE_CONFIG_DIR=~/.claude-next registers as `claude-next` while its transcripts
+# enumerate under `~/.claude`. Two of the three husks W10 measured carried exactly that mismatch, so
+# a literal string compare would answer "no successor" for a common transplant target on this box.
+lr_registry_live_rows_in_cfg() { # $1=sid $2=cfg dir → matching rows on stdout; rc 0 when >=1 is live
+  local sid="${1:-}" cfg="${2:-}" want rows r_pane r_pid r_acct r_cwd n=0
+  [ -n "$sid" ] && [ -n "$cfg" ] || return 1
+  want="$(basename "${cfg%/}")"; want="${want#.}"
+  case "$want" in claude-next) want=claude ;; esac
+  rows="$(lr_registry_live_rows "$sid" 2>/dev/null)" || return 1
+  # A heredoc, never a pipe: a `while` on the right of `|` runs in a subshell and its counter never
+  # escapes (memory: assignment-inside-command-substitution-never-escapes).
+  while IFS=$'\t' read -r r_pane r_pid r_acct r_cwd; do
+    [ -n "$r_pane" ] || continue
+    case "$r_acct" in claude-next) r_acct=claude ;; esac
+    [ "$r_acct" = "$want" ] || continue
+    printf '%s\t%s\t%s\t%s\n' "$r_pane" "$r_pid" "$r_acct" "$r_cwd"; n=$((n + 1))
+  done <<EOF
+$rows
+EOF
+  [ "$n" -gt 0 ]
+}
+
 # ══ THE CORRECTED CAPACITY PROBE — ONE function, two callers (W2, 2026-09-19) ══════════════════
 # Lifted VERBATIM out of lr-fleet.sh's lf_capacity_wait (226b73888) because a second caller appeared:
 # lr-handoff's pre-transplant check. Two spellings of one probe is how the fleet and the launcher
