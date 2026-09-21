@@ -358,6 +358,8 @@ _sf_rq_enrich() { # $1=transcript → "<uuid>\t<reset_at_epoch>\t<rate_limit_typ
     [ -n "$c" ] && [ -x "$c" ] && { tb="$c"; break; }
   done
   if [ -n "$tb" ]; then
+    # shellcheck disable=SC2016  # DELIBERATE: this is the INNER shell's program text, so
+    # $1/$2/$3 must reach it unexpanded — they are the positional args passed after the `_`.
     "$tb" -k 2 "${STOP_FAILURE_ENRICH_TIMEOUT_S:-4}" /bin/bash -c \
       'tail -c "$2" "$1" 2>/dev/null | jq -Rr "$3" 2>/dev/null | tail -1' \
       _ "$f" "${STOP_FAILURE_TAIL_BYTES:-131072}" "$_SF_RQ_JQ" 2>/dev/null || true

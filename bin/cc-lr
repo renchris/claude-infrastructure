@@ -311,6 +311,9 @@ $(cl_bundles "$ref" | LC_ALL=C sort)
 EOF
   n="${#FILES[@]}"
   if [ "$n" -eq 0 ]; then
+    # shellcheck disable=SC2016  # the single quotes are DISPLAY characters inside a
+    # double-quoted string; $ref does expand. Quoting the ref is what makes an empty or
+    # space-bearing ref legible in the refusal.
     echo "cc-lr: no runs under $STATE${ref:+ for '$ref'}" >&2
     return 1
   fi
