@@ -75,4 +75,24 @@ if [ "$ans" != "yes" ]; then
   exit 0
 fi
 "$CCJEV" arm || exit 1
-printf '\nWatch it:  tail -f ~/.claude/autonomy/jev-batch.log\n'
+
+# ── STEP 3: RUN IT NOW, rather than leaving you to wait for a tick ────────────────────────────
+# No second gate: the arming you just typed IS the authorisation, and this consumes that exact
+# window — the same one the timer would have consumed, just sooner. Waiting up to 1800s to find
+# out whether the route even answers is the kind of delay that turns a working feature into one
+# nobody is sure about, and the preflight inside the batch fails in ~2s if the route is dead.
+printf '\nRunning the pass now (the timer would otherwise pick this up within 30 min)...\n\n'
+"$CCJEV" batch
+printf '\n'
+"$CCJEV" status 2>/dev/null | grep -E '^(promotion|armed)' || true
+
+# Name the artifact explicitly. The batch logs the path, but a run that ends by printing WHERE
+# the verdicts are is the difference between a feature and a thing you have to go looking for.
+_rows="$(find -H "$HOME/.claude/autonomy" -maxdepth 1 -name 'jev-promote-*.jsonl' -size +0c \
+         2>/dev/null | sort -r | head -1)"
+if [ -n "$_rows" ]; then
+  printf '\nVerdicts: %s (%s row(s))\n' "$_rows" "$(wc -l < "$_rows" | tr -d ' ')"
+  printf 'Read the swap list again, free, any time:\n    cc-jev promote --report %s\n' "$_rows"
+else
+  printf '\nNo verdict rows were written. The batch log says why:\n    tail ~/.claude/autonomy/jev-batch.log\n'
+fi

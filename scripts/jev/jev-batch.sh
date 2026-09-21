@@ -125,10 +125,25 @@ EOF
 
 OUTLOG="$HOME/.claude/autonomy/jev-batch-$(date -u +%Y%m%dT%H%M%SZ).out"
 # CC_JEV_ZDR=0 is what the operator authorised by arming; the ceiling and cap ride with it.
-env CC_JEV_ZDR=0 ${CAPB:+CC_JEV_PROMO_CAP_B="$CAPB"} \
-    "$ROOT/scripts/jev/promote-memory.sh" --heats "$HEATS" --bias-n "$BIAS" ${RESUME_ARG[@]+"${RESUME_ARG[@]}"} --yes \
-    > "$OUTLOG" 2>&1
-rc=$?
+# STREAM TO THE TERMINAL WHEN A HUMAN IS WATCHING, file-only when launchd runs it.
+# The pass is 133 calls and ~9-27 minutes. Writing only to a file meant an operator who ran this
+# by hand got a blank terminal for the whole run — and quiet is what every liveness surface on
+# this box, and every person, reads as stuck. `[ -t 1 ]` is the discriminator that needs no flag:
+# launchd hands the job a file descriptor that is not a terminal, so it keeps exactly today's
+# behaviour there, and nothing about the scheduled path changes.
+# PIPESTATUS, not $?, because with `| tee` the shell reports TEE's status — which is 0 whether the
+# pass succeeded or died, and would have turned every failure into a clean `run rc=0`.
+if [ -t 1 ]; then
+  env CC_JEV_ZDR=0 ${CAPB:+CC_JEV_PROMO_CAP_B="$CAPB"} \
+      "$ROOT/scripts/jev/promote-memory.sh" --heats "$HEATS" --bias-n "$BIAS" ${RESUME_ARG[@]+"${RESUME_ARG[@]}"} --yes \
+      2>&1 | tee "$OUTLOG"
+  rc=${PIPESTATUS[0]}
+else
+  env CC_JEV_ZDR=0 ${CAPB:+CC_JEV_PROMO_CAP_B="$CAPB"} \
+      "$ROOT/scripts/jev/promote-memory.sh" --heats "$HEATS" --bias-n "$BIAS" ${RESUME_ARG[@]+"${RESUME_ARG[@]}"} --yes \
+      > "$OUTLOG" 2>&1
+  rc=$?
+fi
 ROWS="$(grep -o '/.*jev-promote-.*\.jsonl' "$OUTLOG" 2>/dev/null | tail -1)"
 _log "run rc=$rc rows=${ROWS:-none} out=$OUTLOG"
 exit 0
