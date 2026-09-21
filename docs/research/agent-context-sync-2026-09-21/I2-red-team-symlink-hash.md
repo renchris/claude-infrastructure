@@ -1,0 +1,46 @@
+# I2 — Red team: "symlink docs-source to OneDrive" and "hash everything each run"
+
+Measured 2026-09-21 on this Mac (macOS 24.6.0, APFS, ripgrep 15.2.0, BSD grep 2.6.0, Claude Code 2.1.114 bundle). No OneDrive client is installed here (`~/Library/CloudStorage` empty), so every File-Provider claim below is from Apple/Microsoft docs + SDK headers, not a live placeholder — marked **[T]** theoretical or **[E]** empirical.
+
+## Verdict 1 — Mechanism: symlink `/docs-source` → `~/Library/CloudStorage/OneDrive-…` and let the agent read live
+
+**Fails when:** the agent's own search tools walk the repo (always), the source is a Files-On-Demand placeholder (always on macOS ≥12.1), or the pipeline needs a change signal (always).
+
+**Evidence**
+- **[E] The agent is blind through the link.** In a scratch repo with `docs-source -> ../real-src`: `rg NEEDLE .` → rc 1, zero hits; `rg --follow` finds all 4; BSD `find .` lists nothing under the link (`find -L` does); `/usr/bin/grep -r` AND `-R` → rc 1. ripgrep GUIDE: "Symbolic links aren't followed" unless `-L/--follow`. Local lessons: recursive grep saw 1.7% of a symlinked tree (`recursive-grep-cannot-walk-the-symlink-layer.md`); BSD `find` on a symlinked start dir listed 0 of 123 (`symlinked-store-invisible-to-find.md`).
+- **[E] Claude Code's Glob tool cannot follow it.** Bundle 2.1.114 builds Glob argv as `["--files","--glob",A,"--sort=modified", --no-ignore, --hidden]` (offset 79596575) — no `--follow`. The literal `"--follow"` occurs exactly 3× in the whole binary, all inside Bash `safeFlags` allowlists (git log / docker logs / rg), never in a tool's argv builder. So Glob and Grep see the symlink entry, never its contents. Watchman likewise: "Watchman does not follow symlinks… the since generator does not consider the targets of symlinks" — so an L1 watcher on the repo emits nothing for source changes.
+- **[E] Even with `--follow`, gitignore kills it.** `.gitignore: docs-source` → `rg --follow` returns only the direct-file link; `--follow --no-ignore` needed. And git stores the link itself (mode `120000`), so L5 "git diff of docs" never contains source content.
+- **[T→doc] Every read is a download, and it blocks.** Microsoft: "From macOS 12.1, Files On Demand is part of macOS and cannot be turned off"; "When you open an online-only file, it downloads to your device and becomes a locally available file." Apple `fetchContents`: "When the user accesses the item, the system needs to download the full contents from your remote store." SDK: `SF_DATALESS 0x40000000 /* file is dataless object */`; `setiopolicy_np(3)` default is `IOPOL_MATERIALIZE_DATALESS_FILES_OFF` at process scope, and `open(2)` then returns `EDEADLK` for a dataless directory. So `cat`/`rg -L` over a 100 GB library is either a full hydration (disk + bandwidth + SharePoint throttling: "429 or 503… Retry-After") or an errno the agent misreads as absence.
+- **[T] No change signal, no identity.** A symlink carries no "since" token; deletes and renames are invisible without a prior manifest; the File-Provider tree also holds sync-conflict twins ("MyFile-ComputerName.txt"), which an agent reads as two authoritative documents. APFS is case- and normalization-insensitive here **[E]**: `Report.md`/`report.md` and NFC/NFD `Résumé.md` collapsed to one inode each — so a manifest keyed on Graph's NFC names vs local readdir bytes flags phantom renames.
+
+**Instead:** never point the agent at the sync root. Materialize only the changed subset into `docs-source/` (a real directory) via L1 (Graph delta, or a watcher on the CloudStorage path that copies changed files through, with `IOPOL_MATERIALIZE_DATALESS_FILES_OFF`-style stat-first probing), and let L2–L5 own identity.
+
+## Verdict 2 — Mechanism: detect changes by hashing every file on every run
+
+**Fails when:** the corpus is ≥ tens of GB, lives behind Files On-Demand, or is being written while you read it.
+
+**Evidence**
+- **[E] Cost.** 1 GiB (200×5 MiB, page-cache-warm) SHA-256 = 3.5 s wall / 3.3 s user, CPU-bound single-thread ≈ 290 MB/s → 100 GB ≈ 6 min CPU per run on an M-series laptop, plus the full NVMe read if cold; on battery that is minutes of a saturated core per poll. A `stat` walk of the same 200 files ×50 = 0.31 s → ~30 µs/file, i.e. 10,000 files in 0.3 s. rsync's default quick-check exists for this reason: "rsync will skip any files that are already the same size and have the same modification timestamp"; `--checksum` "will expend a lot of disk I/O reading all the data… so this can slow things down significantly."
+- **[T→doc] Hydration.** Under File Provider a hash IS a download: there is no "hash of the placeholder" — the read either materializes the full file (defeating Files On-Demand, consuming 100 GB local disk and tenant bandwidth, inviting 429s) or fails `EDEADLK` under the off policy. A hash-everything loop is a full re-pull with extra steps.
+- **[E] False exactness.** Hashing a file while a writer appended: mid-write `9,437,184 B → 91f8f642…`, final `41,943,040 B → 09a421c5…`. The manifest records a "content hash" for content that never existed; the next run sees a "change" that is really completion. Same for Finder drag-and-drop into `docs-source` (progressive copy) and in-place Office saves. Apple's downloads are atomic ("the system can clone it to provide the content for the dataless item") — so the hazard is the *manual inbox* and in-place editors, not the FP hydration itself.
+- **[E] The cheap check has its own hole.** Overwrite with mtime restored → `stat` reads identical size+mtime over changed bytes (`c1.txt` demo). Sync clients set mtime from the server's `fileSystemInfo.lastModifiedDateTime` (client-writable), so a re-upload of an older file can carry an older mtime.
+
+**Instead:** stat-diff first (size, mtime_ns, inode/ctime), hash only the survivors, and prefer the server's hash when one exists: Graph `file.hashes.quickXorHash` "is the only value that is guaranteed to be available for both OneDrive for work or school and OneDrive for home"; `cTag` "isn't changed if only the metadata is changed" — scan-guidance: "use the cTag property to determine if the contents of the file have changed since the last time you downloaded it."
+
+## Steelman — when each IS right
+
+- **Symlink is right** when the agent must *reach* the tree but never *enumerate* it: a link to a directory you address by explicit path (`Read docs-source/x.pdf`), the target is already materialized ("Always keep on this device"), and no tool walk, gitignore or watcher is expected to cross it. Also right *inside* a converter sandbox where `rg -L --no-ignore` is invoked deliberately. Never right as the agent's default search root.
+- **Full hashing is acceptable** (a) once, to seed the manifest, ideally off-peak ("Throttling… higher tendency to occur during peak hours"); (b) per-file after a stat-diff has already selected it — you were going to read it anyway to convert it, so the hash is free; (c) when the server supplies it (Graph `quickXorHash`/`cTag`, rclone `--checksum`: "For all types of OneDrive you can use the --checksum flag"), which is a hash with zero local I/O; (d) after any sync-client full resync (Graph `410 Gone` → `resyncChangesApplyDifferences`), to re-anchor the manifest. Cursor's Merkle-tree model is the same shape: hash cheaply, upload only changed subtrees (docs page redirected; not re-quoted).
+
+## What the agent silently misses / downloads / trusts
+- **Misses:** everything under a directory symlink (Glob, Grep, rg, find, BSD grep, watchman, git); gitignored links even with `--follow`; deletes/renames (no token); NFC/NFD twins.
+- **Downloads:** every dataless file any read touches — `cat`, `rg -L`, `shasum`, converters — one full hydration per file, throttled by SharePoint.
+- **Trusts:** a "-ComputerName" conflict twin as a document; a hash of a half-written file; a size+mtime match over a re-uploaded older file; `rg` rc 1 as "nothing there".
+
+## Sources
+- https://github.com/BurntSushi/ripgrep/blob/master/GUIDE.md · https://facebook.github.io/watchman/docs/file-query
+- https://support.microsoft.com/en-us/onedrive/save-disk-space-with-onedrive-files-on-demand-for-mac · https://support.microsoft.com/en-us/office/fix-onedrive-files-on-demand-issues-on-macos-12-1-or-later-8c99b82e-bf6e-4bb1-a3df-d0cc5bcbff93
+- Apple: developer.apple.com/documentation/fileprovider/nsfileproviderreplicatedextension/fetchcontents(for:version:request:completionhandler:) and …/nsfileprovidermanager/evictitem(identifier:completionhandler:); SDK `sys/stat.h:359`, `setiopolicy_np(3)`, `open(2)`
+- https://learn.microsoft.com/en-us/graph/api/driveitem-delta · https://learn.microsoft.com/en-us/graph/api/resources/hashes · https://learn.microsoft.com/en-us/graph/api/resources/driveitem · https://learn.microsoft.com/en-us/onedrive/developer/rest-api/concepts/scan-guidance
+- https://rclone.org/onedrive/ · https://download.samba.org/pub/rsync/rsync.1
+- Local: `~/.claude/projects/-Users-chrisren-Development-claude-infrastructure/memory/{recursive-grep-cannot-walk-the-symlink-layer,symlinked-store-invisible-to-find}.md`; experiments in `scratchpad/symlink-exp`, `scratchpad/hash-exp`; Claude bundle `~/.claude-versions/2.1.114/node_modules/@anthropic-ai/claude-code-darwin-arm64/claude` (Glob argv at byte offset 79596575).
