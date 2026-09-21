@@ -1,0 +1,478 @@
+#!/usr/bin/env bash
+# cc-lr — ONE command for the limit-recovery surface: find · recover · status · repair.
+# (LIMIT_RECOVER_100P W5-D, from D2 §1.2/§4 C1. This front end COMPOSES the shipped tools; it
+# re-implements none of them.)
+#
+# WHY A FRONT END AND NOT A FIFTH ACTUATOR. Measured 2026-09-19 (U11 §2), recovering five sessions
+# cost 98.7 minutes of which 24.4 were the LEAD's own foreground polling. The parts that do the
+# work were already correct and already fast — `cc-find` resolves a session in 0.18 s, `lr-fleet.sh
+# --one … --detach` returns in ≤3 s and mails its verdict. What was missing was a surface that puts
+# them in one order, and three REFUSALS that live nowhere else:
+#
+#   RULE 0 — a TEAMMATE is never a recovery target. cc-find already CLASSES one (column 7) and
+#   excludes it from every ranked result, but `lr-fleet.sh --one <sid>` has NO teammate guard at
+#   all: handed a teammate's sid directly it will recover it. Verified 2026-09-20 on the tree — the
+#   only precondition `--one` checks is "already TRANSPLANTED" (lr-fleet.sh:800-803, :828).
+#   RULE 1 — an AMBIGUOUS ref is refused, never resolved by coin flip (cc-find's rc 2 is the fact;
+#   this tool's job is to STOP on it rather than pass the first row down).
+#   RULE 2 — a session that is not actually LIMITED is not recovered. `--one` does not check.
+#
+# None of the three is enforced downstream, so they are enforced HERE, and each refuses with rc 2
+# BEFORE any mutex is created — a refusal that leaves a lock behind is a refusal that blocks the
+# next correct attempt.
+#
+# WHAT THIS TOOL MAY NEVER DO. It is reached from a screenshot, i.e. from the one moment an
+# operator can least audit what happens next (the same argument tests/cc-lr.bats:270-276 makes for
+# cc-find). It never types into a pane, never kills a process, and never touches git. `repair`
+# WRITES A REQUEST and kicks the daemon; the daemon is the only thing that acts. The one exception
+# to "no launchctl" is `kickstart` with NO `-k`, which starts an idle job and leaves a running one
+# alone — never `load`/`unload`/`bootout`/`bootstrap`. tests/cc-lr-front.bats ratchets all of it.
+#
+#   cc-lr find <ref…>                 exec into bin/cc-find, verbatim argv
+#   cc-lr recover <ref> [--target A] [--source-pane P]
+#   cc-lr status [ref | --all]
+#   cc-lr repair <bundle|ref> [--mode relaunch|prompt] [--target A] [--source-pane P]
+#
+# rc 0 ok · 1 nothing matched · 2 REFUSED (and nothing was created) · 3 usage
+set -uo pipefail
+
+# ── the store ──────────────────────────────────────────────────────────────────────────────────
+# `${LR_STATE_DIR:-…}` is the spelling lr-fleet.sh:69, lr-fire-resume.sh:244, lr-lib.sh:511 and
+# bin/cc-limited:88 all use, so it is the one honoured here. TWO CONSUMERS DISAGREE WITH IT and the
+# divergence is real, not a bug this file may fix (both are outside this wave's file set):
+# lr-handoff.sh:479 mints `$HOME/.reso/limit-recover/$SID/bundle-$TS` and lr-reset-poller.sh:127
+# sets `STATE="$HOME/.reso/limit-recover"`, both hardcoded. So under a NON-default LR_STATE_DIR the
+# bundles and the request lane are written where this tool does not look. Stated rather than
+# papered over: a front end that silently scanned two roots would hide a split store.
+STATE="${LR_STATE_DIR:-$HOME/.reso/limit-recover}"
+MUTEX_DIR="$STATE/runs/by-sid"
+REQ_DIR="$STATE/requests"
+MUTEX_TTL_S="${CC_LR_MUTEX_TTL_S:-1800}"
+POLLER_LABEL="${CC_LR_POLLER_LABEL:-com.reso.lr-reset-poller}"
+
+# ── who we are, and the siblings we call ───────────────────────────────────────────────────────
+# READLINK FIRST. `~/.claude/bin/cc-lr` is a PER-FILE symlink into the checkout, so a `$0`-relative
+# sibling lookup that skips readlink resolves against the LINK's directory and finds nothing (the
+# shape bin/cc-find:60-61 already uses, and the repo lesson symlinked-$0-splits-sibling-sources).
+_CL_SELF="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+_CL_BIN="$(cd "$(dirname "$_CL_SELF")" && pwd)"
+FIND_BIN="${CC_LR_FIND_BIN:-$_CL_BIN/cc-find}"
+FLEET_BIN="${CC_LR_FLEET_BIN:-}"
+if [ -z "$FLEET_BIN" ]; then
+  for _cl_f in "$_CL_BIN/../scripts/limit-recover/lr-fleet.sh" \
+               "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-fleet.sh" \
+               "$HOME/.claude/scripts/limit-recover/lr-fleet.sh"; do
+    [ -f "$_cl_f" ] && { FLEET_BIN="$_cl_f"; break; }
+  done
+fi
+# lr-lib.sh is OPTIONAL here and is loaded for exactly one function: `lr_state_current`, the
+# SSOT spelling of "the last recorded state of a run". It is the per-file FALLBACK of the status
+# reader below — the fast path is one bulk jq, because one fork per bundle blows the 0.1 s budget
+# at 20 bundles. Re-deriving the predicate instead of calling it is how two readers of one store
+# end up disagreeing (repo lesson: sibling-auditors-must-share-the-state-model).
+for _cl_lib in "$_CL_BIN/../scripts/limit-recover/lr-lib.sh" \
+               "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-lib.sh" \
+               "$HOME/.claude/scripts/limit-recover/lr-lib.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved library ladder, same shape as cc-find:62-68
+  [ -f "$_cl_lib" ] && { . "$_cl_lib"; break; }
+done
+
+usage() {
+  cat >&2 <<'USAGE'
+cc-lr — find · recover · status · repair, for a limit-blocked session.
+
+  cc-lr find <ref…>          exec bin/cc-find (pane id | sid8 | --tuple | --kw | --limited)
+  cc-lr recover <ref> [--target A] [--source-pane P]
+                             refuse a teammate / an ambiguous ref / a non-limited session,
+                             else take the mutex and fire lr-fleet --one … --detach
+  cc-lr status [ref|--all]   one row per run's events.jsonl, with CAUSE / NEXT
+  cc-lr repair <bundle|ref> [--mode relaunch|prompt] [--target A] [--source-pane P]
+                             write a poller request and kick the daemon — NEVER types
+
+rc 0 ok · 1 no match · 2 REFUSED (nothing created) · 3 usage
+USAGE
+}
+
+cl_die() { echo "cc-lr: $1" >&2; exit "${2:-2}"; }
+
+# THE REQUESTER, ratcheted. CC_PANE_ID FIRST and ITERM_SESSION_ID only as the fallback — copied
+# from lr-fleet.sh:757-762, whose class-B cases name the failure: a STALE ITERM_SESSION_ID can sit
+# beside a live CC_PANE_ID after a transplant, and preferring the stale one addresses the WRONG
+# pane. The `##*:` strip is safe for either; a bare CC_PANE_ID carries no colon and survives it.
+cl_this_pane() {
+  local p
+  p="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"
+  p="${p##*:}"
+  [ -n "$p" ] || p="${KITTY_WINDOW_ID:-}"
+  printf '%s' "$p"
+}
+
+# ── the mutex: one actuator per session ────────────────────────────────────────────────────────
+# `mkdir` is the atomic primitive (the same one lr_state_append uses for its event lock). A held
+# mutex is read, never assumed: the holder file names the pid that owns it, so
+#   holder pid ALIVE       → REFUSE. A second driver on one pane is the split brain W10 exists for.
+#   holder pid DEAD        → STEAL, loudly. The holder proved itself dead; waiting out a TTL for a
+#                            corpse is how a crashed driver silences every later attempt.
+#   no holder file at all  → steal only past CC_LR_MUTEX_TTL_S (1800 s ≈ 3× the 658 s worst
+#                            measured `--one`, U14 §2.1), because an unlabelled lock might be a
+#                            driver that has not written its holder yet.
+# Never `kill -0` alone as the liveness oracle for a LONG-lived holder — but a recovery driver's
+# whole life is minutes, so the recycled-pid window cc-find worries about does not open here.
+cl_mutex_age_s() { # <dir> → age in seconds, or 999999 when unreadable
+  local m now
+  now="$(date +%s)"
+  m="$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || true)"
+  case "${m:-x}" in ''|*[!0-9]*) printf '999999' ;; *) printf '%s' $(( now - m )) ;; esac
+}
+
+cl_mutex_take() { # <sid> <pane> → 0 taken (path on stdout), 2 refused
+  local sid="$1" pane="$2" dir hpid age
+  dir="$MUTEX_DIR/$sid.active"
+  mkdir -p "$MUTEX_DIR" 2>/dev/null || { echo "cc-lr: cannot create $MUTEX_DIR" >&2; return 2; }
+  if mkdir "$dir" 2>/dev/null; then
+    printf '{"sid":"%s","pane":"%s","pid":%d,"ts":"%s","by":"cc-lr"}\n' \
+      "$sid" "$pane" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$dir/holder" 2>/dev/null || true
+    printf '%s' "$dir"; return 0
+  fi
+  hpid="$(sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p' "$dir/holder" 2>/dev/null | head -1)"
+  if [ -n "$hpid" ]; then
+    if kill -0 "$hpid" 2>/dev/null; then
+      echo "cc-lr: REFUSED — ${sid:0:8} is already being recovered by pid $hpid (mutex $dir). One actuator per session; nothing was started." >&2
+      return 2
+    fi
+    echo "cc-lr: mutex $dir was held by pid $hpid, which is DEAD — stealing it" >&2
+    rm -rf "$dir" 2>/dev/null || true
+  else
+    age="$(cl_mutex_age_s "$dir")"
+    if [ "$age" -lt "$MUTEX_TTL_S" ]; then
+      echo "cc-lr: REFUSED — mutex $dir is held and names no pid; it is ${age}s old, under the ${MUTEX_TTL_S}s steal bound. Nothing was started." >&2
+      return 2
+    fi
+    echo "cc-lr: mutex $dir is ${age}s old with no holder — stealing it" >&2
+    rm -rf "$dir" 2>/dev/null || true
+  fi
+  mkdir "$dir" 2>/dev/null || { echo "cc-lr: REFUSED — could not take $dir after the steal" >&2; return 2; }
+  printf '{"sid":"%s","pane":"%s","pid":%d,"ts":"%s","by":"cc-lr"}\n' \
+    "$sid" "$pane" "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$dir/holder" 2>/dev/null || true
+  printf '%s' "$dir"; return 0
+}
+
+# ── resolve a ref to ONE session row, or refuse ────────────────────────────────────────────────
+# cc-find is the resolver and its rc IS the verdict: 2 is AMBIGUOUS with every candidate printed,
+# 1 is nothing matched. Re-deriving either here would be a second auditor over one population.
+cl_resolve() { # <ref> → the one TSV row on stdout; rc 0 ok · 1 no match · 2 refused
+  local ref="$1" out rc n
+  [ -x "$FIND_BIN" ] || [ -f "$FIND_BIN" ] || { echo "cc-lr: cannot reach cc-find at $FIND_BIN" >&2; return 2; }
+  out="$(bash "$FIND_BIN" "$ref" 2>/dev/null)"; rc=$?
+  case "$rc" in
+    2) echo "cc-lr: REFUSED — '$ref' is AMBIGUOUS; cc-find named more than one session and this tool will not pick. Candidates:" >&2
+       printf '%s\n' "$out" >&2
+       echo "cc-lr: pass a pane id or the full sid. Nothing was started and no mutex was created." >&2
+       return 2 ;;
+    1) echo "cc-lr: '$ref' matched no live session." >&2; return 1 ;;
+    0) ;;
+    *) echo "cc-lr: cc-find exited $rc for '$ref'" >&2; return 2 ;;
+  esac
+  n="$(printf '%s\n' "$out" | grep -c '[^[:space:]]')"
+  if [ "${n:-0}" -ne 1 ]; then
+    echo "cc-lr: REFUSED — '$ref' resolved to ${n:-0} rows at rc 0; a recovery target must be exactly one. Nothing was started." >&2
+    printf '%s\n' "$out" >&2
+    return 2
+  fi
+  printf '%s\n' "$out"
+}
+
+# ── recover ────────────────────────────────────────────────────────────────────────────────────
+cmd_recover() {
+  local ref="" target="auto" pane_arg="" row rc sid pane acct cfg cwd live klass mutex out fpid run
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --target) [ $# -ge 2 ] || { usage; exit 3; }; target="$2"; shift 2 ;;
+      --source-pane) [ $# -ge 2 ] || { usage; exit 3; }; pane_arg="$2"; shift 2 ;;
+      -h|--help) usage; exit 0 ;;
+      --*) echo "cc-lr recover: unknown option $1" >&2; usage; exit 3 ;;
+      *) [ -z "$ref" ] || { echo "cc-lr recover: one ref, not two ('$ref' and '$1')" >&2; exit 3; }
+         ref="$1"; shift ;;
+    esac
+  done
+  [ -n "$ref" ] || { usage; exit 3; }
+
+  row="$(cl_resolve "$ref")"; rc=$?
+  [ "$rc" -eq 0 ] || exit "$rc"
+  IFS=$'\t' read -r sid pane acct cfg cwd live klass <<EOF
+$row
+EOF
+  [ -n "$sid" ] || cl_die "cc-find returned a row naming no session for '$ref'" 2
+
+  # RULE 0 FIRST, and named separately from RULE 2 even though TEAMMATE is also not LIMITED: the
+  # two refusals mean different things to the operator and the teammate one is the unrecoverable
+  # mistake (recovering a lead-owned session hands a driver someone else's pane).
+  if [ "$klass" = TEAMMATE ]; then
+    echo "cc-lr: REFUSED — ${sid:0:8} (pane ${pane}) is a TEAMMATE: lead-owned, nothing is owed by anyone on it. lr-fleet --one has no teammate guard, so this refusal is the only one. No mutex was created and nothing was started." >&2
+    exit 2
+  fi
+  if [ "$klass" != LIMITED ]; then
+    echo "cc-lr: REFUSED — ${sid:0:8} (pane ${pane}) is class ${klass:-UNKNOWN}, not LIMITED: its last assistant word is not a usage-limit error, so there is nothing to recover. No mutex was created and nothing was started." >&2
+    exit 2
+  fi
+
+  [ -n "$pane_arg" ] && pane="$pane_arg"
+  mutex="$(cl_mutex_take "$sid" "${pane:--}")" || exit 2
+
+  [ -n "$FLEET_BIN" ] && [ -f "$FLEET_BIN" ] || {
+    rmdir "$mutex" 2>/dev/null || rm -rf "$mutex" 2>/dev/null || true
+    cl_die "cannot reach lr-fleet.sh (set CC_LR_FLEET_BIN); the mutex was released and nothing was started" 2; }
+
+  set -- --one "$sid" --target "$target"
+  case "${pane:--}" in -|'') ;; *) set -- "$@" --source-pane "$pane" ;; esac
+  out="$(bash "$FLEET_BIN" "$@" --detach 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    rmdir "$mutex" 2>/dev/null || rm -rf "$mutex" 2>/dev/null || true
+    printf '%s\n' "$out" >&2
+    cl_die "lr-fleet --one exited $rc; the mutex was released and nothing is running" 2
+  fi
+  fpid="$(printf '%s\n' "$out" | sed -n 's/.*driver pid \([0-9][0-9]*\).*/\1/p' | head -1)"
+  run="$(printf '%s\n' "$out" | sed -n 's/^run=\([^ ]*\).*/\1/p' | head -1)"
+  # Re-stamp the holder with the DRIVER's pid: this process is about to exit, and a mutex naming a
+  # dead pid is stolen by the next caller (above) — which for a live recovery is the split brain.
+  [ -n "$fpid" ] && printf '{"sid":"%s","pane":"%s","pid":%s,"ts":"%s","by":"lr-fleet --one --detach"}\n' \
+    "$sid" "${pane:--}" "$fpid" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$mutex/holder" 2>/dev/null || true
+
+  # THE THREE LINES (D2 §1.2). Line 3 names the ONE command to run next.
+  #
+  # THE ID IS THE BUNDLE, AND AT FIRE TIME THE BUNDLE DOES NOT EXIST YET. lr-handoff.sh:479 mints
+  # `$HOME/.reso/limit-recover/$SID/bundle-$TS` with ITS OWN timestamp, inside the detached driver,
+  # AFTER the precheck and the capacity park — which on a parked run is minutes later and on a
+  # refused run never. Printing a path this process invented would be a guess the store never
+  # confirms. So line 3 prints what IS known (the bundle ROOT, which is keyed on the sid alone, and
+  # any bundle a previous attempt already left) and hands over `cc-lr status <sid8>`, which
+  # resolves the newest bundle at READ time, when it exists.
+  local broot bprev
+  broot="$STATE/$sid"
+  bprev="$(cl_newest_bundle "$sid" || true)"
+  printf 'cc-lr: %s → %s (%s · %s · %s) class %s, liveness %s\n' \
+    "$ref" "${sid:0:8}" "${acct:--}" "${cfg:--}" "${cwd:--}" "$klass" "${live:--}"
+  printf 'cc-lr: target %s  pane %s  mutex %s  run %s\n' \
+    "$target" "${pane:--}" "$mutex" "${run:-?}"
+  printf 'cc-lr: fired  %s  → cc-lr status %s\n' \
+    "${bprev:-$broot/bundle-* (the driver mints it; not on disk yet)}" "${sid:0:8}"
+  return 0
+}
+
+# ── the run store's reader ─────────────────────────────────────────────────────────────────────
+cl_bundles() { # [sid|sid8|bundle path] → one events.jsonl path per line, unsorted
+  local ref="${1:-}" d
+  if [ -n "$ref" ] && [ -d "$ref" ]; then
+    [ -f "$ref/events.jsonl" ] && printf '%s\n' "$ref/events.jsonl"
+    return 0
+  fi
+  if [ -n "$ref" ] && [ -f "$ref" ]; then printf '%s\n' "$ref"; return 0; fi
+  # A sid8 is a PREFIX of a session directory; a bare `--all` is every session. Both are one glob,
+  # and an unmatched glob expands to itself, which the `-f` test discards.
+  for d in "$STATE"/"${ref:-}"*/bundle-*/events.jsonl; do
+    [ -f "$d" ] && printf '%s\n' "$d"
+  done
+}
+
+cl_newest_bundle() { # <sid|sid8> → the newest bundle DIR for it, rc 1 when none
+  local f last=""
+  while IFS= read -r f; do [ -n "$f" ] && last="$f"; done <<EOF
+$(cl_bundles "$1" | LC_ALL=C sort)
+EOF
+  [ -n "$last" ] || return 1
+  printf '%s' "$(dirname "$last")"
+}
+
+# ONE jq for the WHOLE set, not one per bundle. Measured shape copied from cc-find's cf_bulk
+# (:180-186) and for the same reason: 20 bundles × (tail + jq) is ~40 forks and the budget is
+# 0.1 s. The per-file ladder survives as the FALLBACK, through lr_state_current — jq aborts the
+# whole invocation on ONE malformed document, and a corrupt run must cost its own row, never
+# every row.
+cl_events_bulk() { # <file…> → "file\tts\tstate\tstage\tdetail" per LINE
+  jq -r '[input_filename, (.ts // "-"), (.state // "-"), (.stage // "-"), (.detail // "-")] | @tsv' "$@" 2>/dev/null
+}
+
+cmd_status() {
+  local ref="" f n out mt st
+  local FILES
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all) ref=""; shift ;;
+      -h|--help) usage; exit 0 ;;
+      --*) echo "cc-lr status: unknown option $1" >&2; usage; exit 3 ;;
+      *) ref="$1"; shift ;;
+    esac
+  done
+  # An ARRAY, never a word-split string: $HOME and $LR_STATE_DIR may hold a space, and a split on
+  # IFS would hand jq two halves of one path and read neither.
+  FILES=()
+  while IFS= read -r f; do [ -n "$f" ] && FILES+=("$f"); done <<EOF
+$(cl_bundles "$ref" | LC_ALL=C sort)
+EOF
+  n="${#FILES[@]}"
+  if [ "$n" -eq 0 ]; then
+    echo "cc-lr: no runs under $STATE${ref:+ for '$ref'}" >&2
+    return 1
+  fi
+  # ONE stat for every file: the mtime of events.jsonl IS the time of the last transition, and a
+  # `date` fork per row would cost more than the whole render.
+  mt="$(stat -f '%m %N' "${FILES[@]}" 2>/dev/null || stat -c '%Y %n' "${FILES[@]}" 2>/dev/null || true)"
+  out="$(cl_events_bulk "${FILES[@]}")"
+  if [ -z "$out" ]; then
+    # FALLBACK — the SSOT per-file reader. Reached when jq refused the bulk read (one malformed
+    # line aborts it) or when a run holds no parsable record at all.
+    command -v lr_state_current >/dev/null 2>&1 || {
+      echo "cc-lr: could not read any run state and lr-lib.sh is not reachable for the per-file fallback" >&2; return 2; }
+    out=""
+    for f in "${FILES[@]}"; do
+      st="$(lr_state_current "$(dirname "$f")" 2>/dev/null || true)"
+      [ -n "$st" ] && out="$out$f"$'\t'"-"$'\t'"$st"$'\t'"-"$'\t'"(read through lr_state_current)"$'\n'
+    done
+    [ -n "$out" ] || { echo "cc-lr: $n run(s) found and none holds a readable state" >&2; return 2; }
+  fi
+  printf '%s\n' "$out" | CL_NOW="$(date +%s)" CL_MT="$mt" awk -F'\t' '
+    function klass(s) {
+      if (s == "RECOVERED" || s == "DONE" || s == "ENGAGED" || s == "engaged") return "ok"
+      if (s ~ /^FAILED/ || s ~ /^REFUSED/ || s ~ /^STALE/ || s ~ /^INDETERMINATE/ || s ~ /^PARKED/) return "bad"
+      return "run"
+    }
+    function age(sec,   m,h) {
+      if (sec < 0) sec = 0
+      if (sec < 60) return sec "s"
+      if (sec < 3600) { m = int(sec/60); return m "m" (sec - m*60) "s" }
+      h = int(sec/3600); m = int((sec - h*3600)/60); return h "h" (m<10?"0":"") m "m"
+    }
+    BEGIN {
+      now = ENVIRON["CL_NOW"] + 0
+      nmt = split(ENVIRON["CL_MT"], mtl, "\n")
+      for (i = 1; i <= nmt; i++) { p = index(mtl[i], " "); if (p) mtime[substr(mtl[i], p+1)] = substr(mtl[i], 1, p-1) + 0 }
+    }
+    {
+      f = $1
+      if (!(f in seen)) { seen[f] = 1; order[++nf] = f }
+      lastS[f] = $3; lastD[f] = $5
+      # TERMINAL STICKINESS, the contract lr-lib.sh:393-394 states: readers take the LAST line, and
+      # a terminal line is sticky against a later NON-terminal one from a stale writer. A later
+      # TERMINAL line still replaces an earlier one — a run that failed and then recovered has
+      # recovered.
+      if (klass($3) != "run") { termS[f] = $3; termD[f] = $5 }
+    }
+    END {
+      printf "%-36s %-18s %-7s %s\n", "RUN", "STATE", "AGE", "CAUSE / NEXT"
+      for (i = nf; i >= 1; i--) {
+        f = order[i]
+        s = lastS[f]; d = lastD[f]
+        if (klass(s) == "run" && (f in termS)) { s = termS[f]; d = termD[f] }
+        bdir = f; sub("/events\\.jsonl$", "", bdir)
+        base = bdir; sub(".*/", "", base)
+        sid = bdir; sub("/[^/]*$", "", sid); sub(".*/", "", sid)
+        id = substr(sid, 1, 8) "/" base
+        k = klass(s)
+        nextcmd = (k == "bad") ? " → cc-lr repair " bdir : ""
+        cause = (d == "-" || d == "") ? "—" : d
+        if (k == "ok" && nextcmd == "") cause = (d == "-" || d == "") ? "—" : d
+        a = (f in mtime) ? age(now - mtime[f]) : "?"
+        printf "%-36s %-18s %-7s %s%s\n", id, s, a, cause, nextcmd
+      }
+      printf "%d run%s under the state store\n", nf, (nf == 1 ? "" : "s")
+    }'
+  return 0
+}
+
+# ── repair ─────────────────────────────────────────────────────────────────────────────────────
+# WRITES A REQUEST. IT NEVER TYPES. The daemon (lr-reset-poller.sh § 0) is the only thing that
+# acts, and it acts outside every session and every classifier — which is the whole reason the
+# request lane exists.
+#
+# THE SCHEMA IS FIXED BY ITS CONSUMER, verified 2026-09-20 at lr-reset-poller.sh:674-679:
+#   .sid          REQUIRED — absent, the file is renamed `<name>.malformed.json` into results/ and
+#                 is LOST, not retried. So a request whose sid cannot be derived is REFUSED here.
+#   .target       default "auto"      .source_pane  optional     .requested_by  default "?"
+#   .mode         W5-A is adding the consumer this wave. NOT READ BY THE POLLER ON THIS TREE — it
+#                 is written per the W5 spec so the field is there when W5-A's reader lands, and
+#                 an unread extra key is inert to jq. Re-check lr-reset-poller.sh before relying
+#                 on it: `grep -n "'\''.mode'\''" scripts/limit-recover/lr-reset-poller.sh`.
+# WRITE-THEN-RENAME: the poller's drain globs `$REQUESTS/*.json` and would otherwise be free to
+# read a half-written file. The temp name is a DOTFILE with a .tmp suffix, which that glob cannot
+# match on either axis.
+cmd_repair() {
+  local bundle="" mode="relaunch" target="auto" pane="" sid tmp dest by rc
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --mode) [ $# -ge 2 ] || { usage; exit 3; }; mode="$2"; shift 2 ;;
+      --target) [ $# -ge 2 ] || { usage; exit 3; }; target="$2"; shift 2 ;;
+      --source-pane) [ $# -ge 2 ] || { usage; exit 3; }; pane="$2"; shift 2 ;;
+      -h|--help) usage; exit 0 ;;
+      --*) echo "cc-lr repair: unknown option $1" >&2; usage; exit 3 ;;
+      *) [ -z "$bundle" ] || { echo "cc-lr repair: one bundle, not two" >&2; exit 3; }
+         bundle="$1"; shift ;;
+    esac
+  done
+  [ -n "$bundle" ] || { usage; exit 3; }
+  case "$mode" in
+    relaunch|prompt) ;;
+    *) cl_die "REFUSED — --mode '$mode' is neither 'relaunch' nor 'prompt'; nothing was written" 2 ;;
+  esac
+  # A bare sid/sid8 is accepted and resolves to that session's NEWEST bundle (D2 §1.3: an
+  # identifier a tool PRINTS must be one it ACCEPTS, and `cc-lr status` prints the sid8).
+  if [ ! -d "$bundle" ]; then
+    local resolved
+    resolved="$(cl_newest_bundle "$bundle" || true)"
+    [ -n "$resolved" ] || cl_die "REFUSED — '$bundle' is neither a bundle directory nor a sid with a run under $STATE; nothing was written" 2
+    bundle="$resolved"
+  fi
+  # THE SID IS THE BUNDLE'S PARENT DIRECTORY NAME (lr-handoff.sh:479 — `<state>/$SID/bundle-$TS`).
+  # Refuse anything that is not a full session uuid: a short or malformed sid produces a request
+  # the poller cannot execute, and its failure mode is LOSS (renamed .malformed.json), not a retry.
+  sid="$(basename "$(dirname "$bundle")")"
+  case "$sid" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-*-*-*-*) ;;
+    *) cl_die "REFUSED — '$bundle' does not sit under a session-uuid directory (read '$sid'), so .sid cannot be derived. The poller DISCARDS a request with no sid (lr-reset-poller.sh:675), so nothing was written" 2 ;;
+  esac
+  command -v jq >/dev/null 2>&1 || cl_die "jq is not on PATH; a hand-built request risks a malformed line and nothing was written" 2
+
+  by="$(cl_this_pane)"
+  mkdir -p "$REQ_DIR" 2>/dev/null || cl_die "cannot create $REQ_DIR" 2
+  tmp="$REQ_DIR/.cc-lr-repair-$sid.$$.tmp"
+  dest="$REQ_DIR/cc-lr-repair-$sid.json"
+  jq -n --arg sid "$sid" --arg target "$target" --arg pane "$pane" --arg by "${by:-?}" \
+        --arg mode "$mode" --arg bundle "$bundle" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+     '{sid:$sid, target:$target, source_pane:$pane, requested_by:$by, mode:$mode, bundle:$bundle, ts:$ts, origin_class:"cc-lr-repair"}' \
+     > "$tmp" 2>/dev/null || { rm -f "$tmp" 2>/dev/null || true; cl_die "could not write the request; nothing was queued" 2; }
+  mv -f "$tmp" "$dest" 2>/dev/null || { rm -f "$tmp" 2>/dev/null || true; cl_die "could not place $dest; nothing was queued" 2; }
+  echo "cc-lr: queued $dest  (sid ${sid:0:8} · mode $mode · target $target · requested_by ${by:-?})"
+
+  # THE KICK IS NON-FATAL, AND IT IS A `kickstart` WITH NO `-k`. `-k` KILLS a running poller first,
+  # and a tick that is mid-transplant is exactly the one a caller has just enqueued work for
+  # (lr-fleet.sh:893-896 makes the same argument and only ECHOES the command; bin/cc-fleet:56 says
+  # it deliberately holds no launchctl verb). The request is already on disk and the poller's
+  # StartInterval will drain it regardless, so a failed kick delays the work, it does not lose it —
+  # print the command and let the operator run it.
+  if command -v launchctl >/dev/null 2>&1; then
+    rc=0; launchctl kickstart "gui/$(id -u)/$POLLER_LABEL" >/dev/null 2>&1 || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      echo "cc-lr: the kick failed (rc $rc) — the request is queued and the poller's own interval will drain it. To run it now:" >&2
+      echo "  launchctl kickstart gui/$(id -u)/$POLLER_LABEL" >&2
+    fi
+  else
+    echo "cc-lr: launchctl(1) is unavailable — the request is queued; kick it with:" >&2
+    echo "  launchctl kickstart gui/$(id -u)/$POLLER_LABEL" >&2
+  fi
+  return 0
+}
+
+# ── argv ───────────────────────────────────────────────────────────────────────────────────────
+[ $# -ge 1 ] || { usage; exit 3; }
+CMD="$1"; shift
+case "$CMD" in
+  -h|--help) usage; exit 0 ;;
+  # A PASSTHROUGH, verbatim argv. `exec` so there is no second process and no second copy of
+  # cc-find's option semantics — this verb must never become a re-spelling of the resolver.
+  find) [ -f "$FIND_BIN" ] || cl_die "cannot reach cc-find at $FIND_BIN" 3
+        exec bash "$FIND_BIN" "$@" ;;
+  recover) cmd_recover "$@"; exit $? ;;
+  status)  cmd_status  "$@"; exit $? ;;
+  repair)  cmd_repair  "$@"; exit $? ;;
+  *) echo "cc-lr: unknown subcommand '$CMD' — expected find | recover | status | repair" >&2
+     usage; exit 3 ;;
+esac
