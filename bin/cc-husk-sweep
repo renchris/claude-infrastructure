@@ -58,7 +58,7 @@ done
 command -v jq >/dev/null 2>&1 || { echo "cc-husk-sweep: jq is required" >&2; exit 2; }
 
 # lr-lib.sh owns the ONE spelling of "where did this session go" (lr_transplant_target). Resolved
-# through $0's REAL path first — the shape bin/cc-find:59-69 already uses — because
+# through $0's REAL path first — the shape bin/cc-find:60-69 already uses — because
 # ~/.claude/bin/cc-husk-sweep is a per-file symlink into the checkout: a `$0`-relative sibling
 # lookup that skips readlink resolves against the LINK's directory and the source is a SILENT no-op.
 # CC_HUSK_LR_LIB is a SEAL, not a hint: when it is set it is the ONLY candidate, so a test can make
@@ -71,14 +71,14 @@ else _hs_libs="$_HS_BIN/../scripts/limit-recover/lr-lib.sh
 ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-lib.sh
 $HOME/.claude/scripts/limit-recover/lr-lib.sh"; fi
 while IFS= read -r _hs_lib; do
-  # shellcheck disable=SC1090  # runtime-resolved library ladder, same shape as bin/cc-find:59-69
+  # shellcheck disable=SC1090  # runtime-resolved library ladder, same shape as bin/cc-find:60-69
   [ -f "$_hs_lib" ] && { . "$_hs_lib"; break; }
 done <<<"$_hs_libs"
 # FATAL, never fail-open, and the direction is the whole argument: this guard's only job is to
 # PREVENT an action, so a missing library would silently restore the pre-guard behaviour — type a
 # transplanted session's resume line into its dead source pane. cc-find:68-69 exits for the same
-# reason; the poller and lr-fleet guard with `command -v … ||` because their lr-lib use is ADDITIVE
-# and degrading it loses information rather than taking an action. Exit 2 is this file's own
+# reason (cc-find:68-69); the poller (lr-reset-poller.sh:1083) guards with `command -v … ||`
+# because its lr-lib use is ADDITIVE — degrading it loses information rather than taking an action. Exit 2 is this file's own
 # spelling for "a hard dependency is absent" (the jq check above); 3 is already the typed-yes abort.
 command -v lr_transplant_target >/dev/null 2>&1 || {
   echo "cc-husk-sweep: FATAL — lr-lib.sh (lr_transplant_target) not found beside $_HS_BIN" >&2
@@ -134,7 +134,7 @@ same_store() {  # <cfg a> <cfg b> → 0 iff they are ONE store
 }
 transplant_target_of() {  # <sid> <the cfg it was found in> → target cfg on stdout / rc 1
   # lr_transplant_target, NOT lr_transplanted_to. The spec named the second; it is LOCK-ONLY, and
-  # lr-lib.sh:519-541 records the measurement that kills it — on this box the lock store held ONE
+  # lr-lib.sh:527-542 records the measurement that kills it — on this box the lock store held ONE
   # lock fleet-wide, belonging to an unrelated sid, while the three panes the predicate exists to
   # find each carried a transplant tombstone and no lock at all. A lock-only read is inert against
   # its own motivating population. lr_transplant_target is the superset: lock first, then a
@@ -287,9 +287,11 @@ while IFS=$'\t' read -r pane pid cwd; do
   [ -z "$ONLY" ] || [ "$pane" = "$ONLY" ] || continue
   has_claude_under "$pid" && continue
   resolve "$pane" "$cwd" || { rows="$rows$pane"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"UNKNOWN"$'\t'"$cwd"$'\t'"unresolved"$'\n'; continue; }
-  # THE TRANSPLANT GATE, on its OWN channel. Never a resolve() rc: :196 collapses every resolve
-  # failure into the literal row `unresolved`, which already throws R_SRC=live-elsewhere away and
-  # would erase both the sid and the target here too (memory: lookup-miss-is-not-absence).
+  # THE TRANSPLANT GATE, on its OWN channel. Never a resolve() rc: the `|| { rows=…unresolved… }`
+  # arm on the line above collapses EVERY resolve failure into one literal row, which already
+  # throws R_SRC=live-elsewhere away and would erase both the sid and the target here too
+  # (memory: lookup-miss-is-not-absence). Line numbers are deliberately not cited: this very patch
+  # moved them (memory: insertions break line citations).
   xplant=""
   [ -z "$R_STORE" ] || xplant="$(transplant_target_of "$R_SID" "$R_STORE" || true)"
   tp="$(transcript_for "$R_SID" || true)"
