@@ -867,6 +867,51 @@ JSON
   [ "$(kicks)" -le 1 ] || { echo "kicks=$(kicks)"; cat "$LC_LOG"; false; }
 }
 
+@test "SB23: an unwritable teammate-skip dir is a lost breadcrumb, never a stray byte" {
+  # `mkdir -p` exits 0 on a directory that already exists, so the guard above the breadcrumb cannot
+  # fire for one that is merely READ-ONLY — and a trailing `2>/dev/null` on the writing command is
+  # applied AFTER the shell has already reported the failed redirection. Same class as SB15/SB17;
+  # this is the third and last site in the arm that writes by redirection.
+  mk_teammate_transcript "$BATS_TEST_TMPDIR/tx/h4.jsonl"
+  mkdir -p "$STOP_FAILURE_LR_STATE/teammate-skip"
+  chmod 500 "$STOP_FAILURE_LR_STATE/teammate-skip"
+  rq_payload h4 "$BATS_TEST_TMPDIR/tx/h4.jsonl" rate_limit "" > "$BATS_TEST_TMPDIR/p-h4.json"
+  run bash -c 'bash "$1" < "$2" 2>&1 1>/dev/null' _ "$HOOK" "$BATS_TEST_TMPDIR/p-h4.json"
+  chmod 700 "$STOP_FAILURE_LR_STATE/teammate-skip"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "stderr: $output"; false; }
+  # the SKIP itself still holds — losing the breadcrumb must never turn into requesting a teammate
+  [ "$(requests)" -eq 0 ]
+}
+
+@test "SB24: a transcript that is not a REGULAR FILE can never stall the death path" {
+  # The enrichment reads the transcript, and `transcript_path` is a value from the payload. A FIFO,
+  # a device or a socket there would block `tail` on open for as long as the bound allows, on the
+  # one path where a stall costs every session on the box. `[ -f ]` refuses all three before the
+  # read is even attempted, which is why the bound is defence in depth rather than the guard.
+  local tb c
+  tb=""
+  # An `if`, not a `cmd && cmd && { … }` chain: scripts/bats-assert-liveness.py reads the
+  # and-absorbed form in a .bats file as a DEAD assertion and blocks the land gate on it.
+  for c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+           /opt/homebrew/bin/timeout /usr/local/bin/timeout; do
+    if [ -n "$c" ] && [ -x "$c" ]; then tb="$c"; break; fi
+  done
+  # An ENVIRONMENT-falsifiable precondition SKIPS rather than reds: with no timeout(1) this row
+  # could only be written as an unbounded wait, which is the very failure it is testing for.
+  [ -n "$tb" ] || skip "no timeout(1) on this box"
+  mkdir -p "$BATS_TEST_TMPDIR/tx"; mkfifo "$BATS_TEST_TMPDIR/tx/h5.fifo"
+  rq_payload h5 "$BATS_TEST_TMPDIR/tx/h5.fifo" rate_limit "" > "$BATS_TEST_TMPDIR/p-h5.json"
+  # the ENRICHMENT bound is set far ABOVE the outer one, so only the `[ -f ]` refusal can make this
+  # finish in time — a subject relying on the bound alone would be killed by the outer timeout
+  run "$tb" -k 2 8 env STOP_FAILURE_ENRICH_TIMEOUT_S=60 bash -c 'bash "$1" < "$2"' _ "$HOOK" "$BATS_TEST_TMPDIR/p-h5.json"
+  [ "$status" -eq 0 ] || { echo "status=$status (124 = the outer bound fired: the hook stalled)"; false; }
+  [ -z "$output" ]
+  # and the request is still written, with the enrichment simply absent
+  [ "$(requests)" -eq 1 ]
+  jq -e '.reset_at_epoch == ""' "$(rqf h5)" >/dev/null || false
+}
+
 @test "SB16: ANCHOR — requested_by is the exact literal W5-A's poller gate matches" {
   # 🚨 THIS IS A SAFETY ANCHOR, not a style pin. The poller's policy gate (LIMIT_RECOVER_100P W5-A)
   # refuses to drain a HOOK-ORIGINATED request unless the operator's `autorecover.on` flag exists,
