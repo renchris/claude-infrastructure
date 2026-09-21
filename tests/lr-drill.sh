@@ -3,10 +3,13 @@
 # may not run. (W7, from PLAN_DRAFT § 12 W7 + § 13.)
 #
 # WHAT IT IS. A five-session drill on ONE account: three sessions in the shared checkout, two in
-# worktrees, one of the five carrying an in-flight subagent, with the box held under
-# `nice -n 19 taskpolicy -c background bats` load. It fires the shipped recovery surface at each of
-# them, injects one named fault per session, and writes § 13's expected-numbers table to its own
-# results.tsv as twelve PASS/FAIL rows.
+# worktrees, one of the five carrying an in-flight subagent. It fires the shipped recovery surface
+# at each of them, injects one named fault per session, and writes § 13's expected-numbers table to
+# its own results.tsv as twelve PASS / FAIL / UNMEASURED rows.
+#
+# THE LOAD IS A PRECONDITION THE OPERATOR SUPPLIES, not something this file creates: § 12 W7 wants
+# the box held under `nice -n 19 taskpolicy -c background bats`, and a drill that generated its own
+# load would be measuring a machine nobody else will ever run.
 #
 # 🚨 WHY NO AGENT MAY RUN IT, AND WHY THAT IS THE POINT. The real path launches throwaway Claude
 # sessions (quota), TYPES INTO REAL PANES, and kills real processes. None of that is auditable
@@ -230,8 +233,9 @@ EOF
 # `PARKED:no-target`. Verified against the tree 2026-09-21: only `HELD:draft` is a literal the code
 # emits (scripts/handoff-fire.sh, prp_verdict "HELD:draft" with exit 3). The others are COMPOSED
 # here from what the tree actually records — a relaunch.rc of 9 plus the refusing term parsed out
-# of the gate's own reason text; the reaper's stale marker; lr-fleet's `parked` mechanism cell with
-# the router's reasons beside it. A mapper that invented a string the tree never writes would be
+# of the IDL row the gate files; the poller's `RUN-CLAIM-STALE` line (see arm (b) — the next-tick
+# reaper § 12 W7 assumes does not exist on this tree); lr-fleet's `parked` mechanism cell with the
+# router's reasons beside it. A mapper that invented a string the tree never writes would be
 # asserting its own vocabulary back to itself.
 #
 # EVERY MAPPER FAILS LOUD. An absent or unreadable input yields `UNMEASURED:<why>` and rc 4, never
@@ -357,11 +361,16 @@ map_router() { # arm (e) — seeded all-thin accounts ⇒ PARKED:no-target carry
   mech="$(m_read "$d" fleet.mech)" || { echo 'UNMEASURED:no-fleet-mech'; return 4; }
   note="$(m_read "$d" fleet.note)" || note=''
   [ -f "$d/moved.txt" ] || { echo 'UNMEASURED:nothing-probed-for-movement'; return 4; }
-  reasons="$(m_read "$d" rank.stderr)" || { echo 'UNMEASURED:no-router-reasons'; return 4; }
+  # ABSENT AND EMPTY ARE DIFFERENT ANSWERS AND m_read CANNOT TELL THEM APART — it returns rc 1 for
+  # both (`[ -s ]`). Read through m_read, the `[ -n "$reasons" ]` line below was DEAD CODE: an empty
+  # capture had already become UNMEASURED one line earlier, so the clause could never fire and its
+  # mutant survived the whole suite. The distinction is real and the two verdicts are opposite:
+  # NO FILE means the drill never captured the router's stderr (UNMEASURED, retry); an EMPTY file
+  # means the router was asked and named nothing (FAIL — a park with no term is a park nobody can
+  # act on, which is exactly what § 12 W6b's acceptance forbids). docs/lessons/empty-vs-no-surface.
+  [ -f "$d/rank.stderr" ] || { echo 'UNMEASURED:no-router-reasons'; return 4; }
+  reasons="$(cat "$d/rank.stderr")"
   case "$mech" in parked*) : ;; *) echo "FAILED:router:not-parked:$mech"; return 1 ;; esac
-  # THE REASONS ARE THE POINT. § 12 W6b's own acceptance says the park must carry the router's own
-  # reasons rather than "returned nothing past" — a park with no named term is a park nobody can act
-  # on, and `grep -c .` over an empty capture is how that goes unnoticed.
   [ -n "$reasons" ] || { echo 'FAILED:router:no-reasons'; return 1; }
   [ "$(grep -c . "$d/moved.txt")" -eq 0 ] || { echo 'FAILED:router:transplanted-anyway'; return 1; }
   case "$note" in *thin*|*"no routable target"*) : ;;
