@@ -12,6 +12,18 @@ setup() {
   export CC_ADMIT_GATE=off
   export CC_FIRE_CAPACITY_GATE=off      # hermeticity: --one fires through handoff-fire capacity_gate()
   export CC_ACCOUNT_MAP="$BATS_TEST_TMPDIR/absent-map"
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/sweep.stamp"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-lock"
+  unset CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE CC_PANE_CMD
+  # W6b MADE `--recover` A POOL, and the default is 2. Every case written before this wave was
+  # written against a driver that ran ONE lf_one at a time, so the suite's default is pinned to the
+  # serial shape and the pool cases name the axis they exercise. A default that silently changed 30
+  # cases' concurrency would make any flake among them unattributable.
+  export LR_RECOVER_MAX_CONCURRENT=1
+  export LR_POOL_POLL_S=0.05            # the pool's claim latency; the CASES assert on ordering logs
+  # The admit lock's steal bound. Nothing in this suite should ever reach it — a case that does is
+  # reporting a real wedge, not waiting one out.
+  export LR_ADMIT_LOCK_WAIT_S=20
   SEC="$HOME/.claude-secondary"; TER="$HOME/.claude-tertiary"
   SLUG="-Users-x-thing"; mkdir -p "$SEC/projects/$SLUG" "$TER/projects/$SLUG"
   export LR_CONFIG_DIRS="$SEC:$TER"
@@ -42,6 +54,10 @@ setup() {
   cat > "$LR_HANDOFF_BIN" <<'SH'
 #!/bin/bash
 printf '%s\n' "$*" >> "${LRH_LOG:?}"
+# ORDERING LOG, NOT A CLOCK. A walltime assertion in this repo has to carry the sibling suites'
+# load guard and two rounds have already been lost to load-fragile timing; an interleaving written
+# by the subject itself is load-independent. Inert unless LRH_SLEEP is set.
+[ -n "${LRH_SLEEP:-}" ] && { printf 'HF-START %s\n' "$$" >> "${LRH_SEQ:?}"; sleep "$LRH_SLEEP"; printf 'HF-END   %s\n' "$$" >> "$LRH_SEQ"; }
 case "${LRH_MODE:-inplace}" in
   inplace) echo "lr-handoff: recycled IN PLACE — pane X continues session Y" >&2 ;;
   replace) echo "lr-handoff: REPLACED in place — successor pane 701 fired beside source pane 616 on 'next3'" >&2 ;;
@@ -288,7 +304,11 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   parity                                  # BEFORE the kill: a dead holder is a different fixture
   kill "$h" 2>/dev/null || true
 }
-@test "recover: sessions are sequenced one at a time and --max bounds a run" {
+# RENAMED BY W6b. It used to read "sessions are sequenced one at a time", which is no longer true
+# of the driver: `--recover` is a POOL of LR_RECOVER_MAX_CONCURRENT workers. What this case actually
+# pins — and always did — is that --max bounds how many are STARTED, which is orthogonal to how
+# many run at once. Setup pins the pool at 1, so this runs the shape it was written against.
+@test "recover: --max bounds how many sessions a run starts" {
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
   s2="66660000-0000-4000-8000-000000000003"; blocked_tx "$SEC" "$s2"; row 630 "$s2"
   run bash "$FLEET" --recover --max 1
@@ -929,15 +949,24 @@ husk_successor_turn() { printf '{"type":"assistant","timestamp":"2026-09-09T00:5
 # on `lr-transplant: REFUSED — … already exists` — three times, deterministically. That refusal is
 # CORRECT (it stops a stub shadowing the real transcript); choosing that destination is the defect.
 _pick() { # <source acct> <tier> <sid> → lf_pick_target's answer, with only what it needs loaded
-  sed -n '/^lf_acct_of_cfg() {/,/^}/p;/^_lf_target_holds_sid() {/,/^}/p;/^lf_pick_target() {/,/^}/p' \
+  # W6b: lf_pick_target now calls lf_charge_assign and lf_rank_why, and writes the rank's stderr
+  # under $FLEET_DIR/$RUN. An extraction that omits either helper does not test a smaller program,
+  # it tests a DIFFERENT one — `command not found` is rc 127, which `|| true` would launder.
+  sed -n '/^lf_acct_of_cfg() {/,/^}/p;/^_lf_target_holds_sid() {/,/^}/p;/^lf_rank_why() {/,/^}/p;/^lf_charge_assign() {/,/^}/p;/^lf_pick_target() {/,/^}/p' \
     "$FLEET" > "$BATS_TEST_TMPDIR/pick.sh"
   bash -c '
     . "$1" 2>/dev/null
     . "$2" 2>/dev/null || true
     . "$3"
-    TARGET=auto; ACCOUNTS="$CC_ACCOUNTS_BIN"
+    TARGET=auto; DRY=0; ACCOUNTS="$CC_ACCOUNTS_BIN"
+    FLEET_DIR="$BATS_TEST_TMPDIR/pickfleet"; RUN=pick
     lf_pick_target "$4" "$5" "$6"; rc=$?
+    # It SETS a global now rather than printing — the harness prints it, so every case written
+    # against the old stdout contract reads byte-identically.
+    printf "%s" "${LF_PICK_TARGET:-}"
     printf "\nSKIPPED=%s\n" "${LF_PICK_SKIPPED_HOLDER:-}"
+    printf "REJECTED=%s\n" "${LF_PICK_REJECTED:-}"
+    printf "WHY=%s\n" "${LF_RANK_WHY:-}"
     exit $rc' _ \
     "$REPO/scripts/limit-recover/lr-lib.sh" "$REPO/lib/account-map.generated.sh" \
     "$BATS_TEST_TMPDIR/pick.sh" "$1" "$2" "$3"
@@ -1131,4 +1160,303 @@ SH
     lf_dedup_mirror < "$BATS_TEST_TMPDIR/rows"'
   [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ] || { echo "$output"; false; }
   [[ "$output" == *"next"* ]] || { echo "the mirror rule changed: $output"; false; }
+}
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# W6b (docs/research/lr100p-2026-09-19/PLAN_DRAFT.md § W6b) — RANK → ASSIGN → PROBE, SERIALIZED;
+# AND A POOL INSTEAD OF A QUEUE.
+#
+# Four things are new and each is a separate failure if it goes untested: the rank is asked in the
+# RECOVERY lane (W6a's survival floors, not a dispatch's), the pick CHARGES the router so a burst
+# spreads, the admit section is SERIALIZED so N workers cannot read one census N times, and the
+# actuator half is a POOL so five recoveries do not cost five serial 115-658 s runs.
+#
+# EVERY CASE ASSERTS ON AN ORDERING LOG, NEVER ON A CLOCK. Two rounds of this plan have been lost
+# to load-fragile timing cases, and a walltime assertion here would need the sibling suites' load
+# guard to mean anything. An interleaving written by the SUBJECT (the stub's own log) is load-
+# independent: under any load, a serialized section cannot produce two STARTs in a row.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+
+# The argv-recording, configurable claude-accounts. One stub, driven by environment, because the
+# cases differ only in what the router SAYS. `--assign` is answered with a bare exit 0 (the real
+# one is a write-and-exit, dispatched before any sweep — bin/claude-accounts:5830), so no case can
+# reach a live router or a live ledger.
+acct_stub() {
+  cat > "$CC_ACCOUNTS_BIN" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "${ACC_LOG:?}"
+case "$*" in
+  *--rank*)
+    [ -n "${ACC_RANK_SLEEP:-}" ] && { printf 'RANK-START %s\n' "$$" >> "${ACC_SEQ:?}"; sleep "$ACC_RANK_SLEEP"; }
+    [ -n "${ACC_RANK_ERR:-}" ] && printf '%b\n' "$ACC_RANK_ERR" >&2
+    [ -n "${ACC_RANK_OUT:-}" ] && printf '%b' "$ACC_RANK_OUT"
+    [ -n "${ACC_RANK_SLEEP:-}" ] && printf 'RANK-END   %s\n' "$$" >> "${ACC_SEQ:?}"
+    exit "${ACC_RANK_RC:-0}" ;;
+esac
+exit 0
+SH
+  chmod +x "$CC_ACCOUNTS_BIN"
+  export ACC_LOG="$BATS_TEST_TMPDIR/acct.argv"; : > "$ACC_LOG"
+  export ACC_SEQ="$BATS_TEST_TMPDIR/acct.seq"; : > "$ACC_SEQ"
+  # EVERY knob is exported HERE, empty, even the ones no case sets by default. A `VAR=x run …`
+  # prefix on a bats FUNCTION only reaches the subprocess when VAR is already in the environment —
+  # otherwise it is a plain shell variable and the stub never sees it. Measured on this file: the
+  # empty-rank case silently exercised the no-reason arm instead of the reasons arm and PASSED a
+  # weaker assertion, which is the fixture-quoting failure shape in reverse.
+  export ACC_RANK_OUT='next2 0.9\nnext3 0.8\nnext4 0.5\n'
+  export ACC_RANK_ERR=""
+  export ACC_RANK_RC=0
+  export ACC_RANK_SLEEP=""
+}
+# A section is SERIALIZED iff no START is reached while another is open. Reads the subject's own
+# log; `n` guards against the vacuous pass where the log holds fewer than two entries.
+no_overlap() { # <log> <start-token> — 0 when the log never overlaps AND holds ≥2 starts
+  awk -v tok="$2" '
+    $0 ~ tok"-START" { if (open) { print "OVERLAP at line " NR; bad = 1 } open = 1; n++ }
+    $0 ~ tok"-END"   { open = 0 }
+    END { if (n < 2) { print "VACUOUS: only " n+0 " start(s) — the case never ran two workers"; exit 1 }
+          exit (bad ? 1 : 0) }' "$1"
+}
+overlapped() { # <log> <start-token> — 0 when the log DOES overlap (the pool actually ran two at once)
+  awk -v tok="$2" '
+    $0 ~ tok"-START" { if (open) { ov = 1 } open = 1; n++ }
+    $0 ~ tok"-END"   { open = 0 }
+    END { if (n < 2) { print "VACUOUS: only " n+0 " start(s)"; exit 1 }
+          if (!ov) { print "NO OVERLAP: the two workers never ran together" ; exit 1 }
+          exit 0 }' "$1"
+}
+
+@test "W6b: the rank is asked in the RECOVERY lane, bounded, and its stderr is kept" {
+  # blocked_tx's DEFAULT model is claude-fable-5-1, which selects the fable lane — so the general
+  # lane has to be asked for explicitly or this case silently asserts about the wrong one.
+  acct_stub; blocked_tx "$SEC" "$SID" claude-opus-5 high; row 616 "$SID"
+  run bash "$FLEET" --recover
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # A recovery is not a dispatch: the modifier is what turns on the SURVIVAL floors, so a target
+  # with room for a fire but not for a transplant is excluded here rather than two hours later.
+  grep -q -- '--rank general --recovery --max-wait 3' "$ACC_LOG" || { cat "$ACC_LOG"; false; }
+  # The router's own words are kept on disk, which is what makes the park note re-derivable.
+  ls "$LR_STATE_DIR"/fleet/*/rank.general.stderr >/dev/null 2>&1 || { ls -R "$LR_STATE_DIR/fleet"; false; }
+}
+
+@test "W6b: the fable tier asks the FABLE lane in recovery mode, not general" {
+  acct_stub; blocked_tx "$SEC" "$SID" claude-fable-5-1 xhigh; row 616 "$SID"
+  run bash "$FLEET" --recover
+  grep -q -- '--rank fable --recovery --max-wait 3' "$ACC_LOG" || { cat "$ACC_LOG"; false; }
+}
+
+@test "W6b: --assign is charged exactly ONCE per pick, naming lr-fleet as the source" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  run bash "$FLEET" --recover
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(grep -c -- '--assign' "$ACC_LOG")" = 1 ] || { cat "$ACC_LOG"; false; }
+  grep -q -- '--assign next3 --src lr-fleet' "$ACC_LOG" || { cat "$ACC_LOG"; false; }
+}
+
+@test "W6b: --dry-run charges NOTHING — a phantom with no body decays only on its TTL" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  run bash "$FLEET" --recover --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(grep -c -- '--assign' "$ACC_LOG")" = 0 ] || { cat "$ACC_LOG"; false; }
+  [[ "$output" == *"not charging --assign"* ]] || { echo "$output"; false; }
+}
+
+@test "W6b: an empty rank parks carrying the ROUTER's own reasons, never 'returned nothing past'" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  # The recovery lane's all-thin shape: stdout `none`, exit 2 (POLICY), and the reasons on stderr.
+  ACC_RANK_OUT='none\n' ACC_RANK_RC=2 \
+  ACC_RANK_ERR='claude-accounts: no routable account for general: next2=recovery-weekly-thin; next3=recovery-5h-thin; next4=no-weekly-data' \
+    run bash "$FLEET" --recover
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"recovery-weekly-thin"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"recovery-5h-thin"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"returned nothing past"* ]] || { echo "$output"; false; }
+  [ ! -s "$LRH_LOG" ]
+}
+
+@test "W6b CONTROL: with no reason on stderr the park says the router printed none, and names the file" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  ACC_RANK_OUT='none\n' ACC_RANK_RC=2 ACC_RANK_ERR='' run bash "$FLEET" --recover
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"printed no reason"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"rank.*.stderr"* ]] || { echo "$output"; false; }
+}
+
+@test "W6b: the router naming an account the map does not declare is WALKED PAST, never fired at" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  ACC_RANK_OUT='nxet9 0.9\nnext3 0.8\n' run bash "$FLEET" --recover
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q -- '--target next3' "$LRH_LOG" || { cat "$LRH_LOG"; false; }
+  [[ "$output" == *"does not declare"* ]] || { echo "$output"; false; }
+  # …and it is never charged either: a charge against a name nothing resolves is a lost phantom.
+  [ "$(grep -c -- '--assign nxet9' "$ACC_LOG")" = 0 ] || { cat "$ACC_LOG"; false; }
+}
+
+@test "W6b: two workers SERIALIZE the admit section — the rank stub's own log shows no overlap" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  s2="66660000-0000-4000-8000-00000000b001"; blocked_tx "$SEC" "$s2"; row 631 "$s2"
+  # 1 s, not the draft's 3 s: the assertion is on the ORDERING, which a 1 s window makes just as
+  # unambiguous while keeping the suite's own walltime honest.
+  LR_RECOVER_MAX_CONCURRENT=2 ACC_RANK_SLEEP=1 run bash "$FLEET" --recover
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run no_overlap "$ACC_SEQ" RANK
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$ACC_SEQ"; false; }
+}
+
+@test "W6b: the ACTUATOR half is a POOL — two recoveries overlap, they are not queued" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  s2="66660000-0000-4000-8000-00000000b002"; blocked_tx "$SEC" "$s2"; row 632 "$s2"
+  export LRH_SEQ="$BATS_TEST_TMPDIR/lrh.seq"; : > "$LRH_SEQ"
+  LR_RECOVER_MAX_CONCURRENT=2 LRH_SLEEP=1 run bash "$FLEET" --recover
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run overlapped "$LRH_SEQ" HF
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$LRH_SEQ"; false; }
+}
+
+@test "W6b CONTROL: LR_RECOVER_MAX_CONCURRENT=1 is a queue again — the actuator never overlaps" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  s2="66660000-0000-4000-8000-00000000b003"; blocked_tx "$SEC" "$s2"; row 633 "$s2"
+  export LRH_SEQ="$BATS_TEST_TMPDIR/lrh.seq"; : > "$LRH_SEQ"
+  LR_RECOVER_MAX_CONCURRENT=1 LRH_SLEEP=1 run bash "$FLEET" --recover
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run no_overlap "$LRH_SEQ" HF
+  [ "$status" -eq 0 ] || { echo "$output"; cat "$LRH_SEQ"; false; }
+}
+
+@test "W6b: a sid a LIVE run already claims is skipped and SAID, never driven twice" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  # The shape lr-reset-poller.sh:716 and bin/cc-lr:128 both write. $$ is this bats process: really
+  # alive, really ours — never an id that could belong to a stranger (the pid-namespace-wraps rule).
+  mkdir -p "$LR_STATE_DIR/runs/by-sid/$SID.active"
+  printf '{"sid":"%s","pid":%d,"by":"cc-lr"}\n' "$SID" "$$" > "$LR_STATE_DIR/runs/by-sid/$SID.active/holder"
+  run bash "$FLEET" --recover
+  [ ! -s "$LRH_LOG" ] || { cat "$LRH_LOG"; false; }
+  [[ "$output" == *"a live run already holds"* ]] || { echo "$output"; false; }
+  [ -d "$LR_STATE_DIR/runs/by-sid/$SID.active" ]      # someone else's claim is left exactly as found
+}
+
+@test "W6b CONTROL: a claim held by a DEAD pid is stolen — a corpse must not wedge a sid forever" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  /bin/sh -c ':' & local dead=$!; wait "$dead" 2>/dev/null || true
+  mkdir -p "$LR_STATE_DIR/runs/by-sid/$SID.active"
+  printf '{"sid":"%s","pid":%d,"by":"cc-lr"}\n' "$SID" "$dead" > "$LR_STATE_DIR/runs/by-sid/$SID.active/holder"
+  run bash "$FLEET" --recover
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q -- '--in-place' "$LRH_LOG" || { cat "$LRH_LOG"; echo "$output"; false; }
+  [[ "$output" == *"which is DEAD — stealing it"* ]] || { echo "$output"; false; }
+}
+
+@test "W6b: --dry-run reserves NO run claim — a preview must not block the real recovery" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  run bash "$FLEET" --recover --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -d "$LR_STATE_DIR/runs/by-sid/$SID.active" ] || { ls -R "$LR_STATE_DIR/runs"; false; }
+}
+
+@test "W6b: a completed pool worker RELEASES its claim — the next run is not locked out" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  run bash "$FLEET" --recover
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -d "$LR_STATE_DIR/runs/by-sid/$SID.active" ] || { ls -R "$LR_STATE_DIR/runs"; false; }
+  [ ! -d "$LR_STATE_DIR/admit.lock" ] || { ls -R "$LR_STATE_DIR"; false; }
+}
+
+@test "W6b: --one does NOT take the run claim — lr-reset-poller and cc-lr already hold it" {
+  # THE REGRESSION THIS GUARDS. Both callers of `--one` reserve the sid BEFORE invoking it
+  # (lr-reset-poller.sh:835, bin/cc-lr:220). A claim taken inside `--one` too would make the daemon
+  # and cc-lr refuse every recovery they themselves had just reserved.
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  mkdir -p "$LR_STATE_DIR/runs/by-sid/$SID.active"
+  printf '{"sid":"%s","pid":%d,"by":"cc-lr"}\n' "$SID" "$$" > "$LR_STATE_DIR/runs/by-sid/$SID.active/holder"
+  run bash "$FLEET" --one "$SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q -- '--in-place' "$LRH_LOG" || { cat "$LRH_LOG"; echo "$output"; false; }
+}
+
+@test "W6b: an admit lock left by a DEAD holder is stolen AT ONCE, not waited out" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  /bin/sh -c ':' & local dead=$!; wait "$dead" 2>/dev/null || true
+  mkdir -p "$LR_STATE_DIR/admit.lock"; printf '%s\n' "$dead" > "$LR_STATE_DIR/admit.lock/pid"
+  # 60 s: long enough that a time-based steal cannot be what rescues this run inside the case's
+  # own life, so the assertion below is about the DEAD-holder arm and nothing else.
+  LR_ADMIT_LOCK_WAIT_S=60 run bash "$FLEET" --recover
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"admit lock"*"which is DEAD — stealing it"* ]] || { echo "$output"; false; }
+  grep -q -- '--in-place' "$LRH_LOG" || { cat "$LRH_LOG"; false; }
+}
+
+@test "W6b: an admit lock held by a LIVE holder is waited out and then stolen, LOUDLY" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  mkdir -p "$LR_STATE_DIR/admit.lock"; printf '%s\n' "$$" > "$LR_STATE_DIR/admit.lock/pid"
+  LR_ADMIT_LOCK_WAIT_S=1 run bash "$FLEET" --recover
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # A steal past a LIVE holder can double-admit, and that is a fact the operator gets to read.
+  [[ "$output" == *"STEALING it"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"a second recovery may be admitted against one capacity reading"* ]] || { echo "$output"; false; }
+}
+
+@test "W6b: lf_row BOUNDS its note — the pool made results.tsv a concurrent file" {
+  sed -n '/^lf_now() {/,/^}/p;/^lf_row() {/,/^}/p' "$FLEET" > "$BATS_TEST_TMPDIR/row.sh"
+  mkdir -p "$BATS_TEST_TMPDIR/rowfleet/r"
+  long="$(python3 -c 'print("x"*5000)')"
+  FLEET_DIR="$BATS_TEST_TMPDIR/rowfleet" RUN=r LONG="$long" \
+    bash -c '. "$1"; lf_row s p p a b mech "$LONG"' _ "$BATS_TEST_TMPDIR/row.sh"
+  n="$(awk 'NR==1 { print length($0) }' "$BATS_TEST_TMPDIR/rowfleet/r/results.tsv")"
+  [ "$n" -lt 1024 ] || { echo "row is $n bytes — O_APPEND is no longer atomic for it"; false; }
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/rowfleet/r/results.tsv" | tr -d ' ')" = 1 ]
+}
+
+@test "W6b: lf_row keeps a tab or newline in a note from re-columning the row" {
+  sed -n '/^lf_now() {/,/^}/p;/^lf_row() {/,/^}/p' "$FLEET" > "$BATS_TEST_TMPDIR/row.sh"
+  mkdir -p "$BATS_TEST_TMPDIR/rowfleet2/r"
+  FLEET_DIR="$BATS_TEST_TMPDIR/rowfleet2" RUN=r \
+    bash -c '. "$1"; lf_row s p p a b mech "$(printf "one\ttwo\nthree")"' _ "$BATS_TEST_TMPDIR/row.sh"
+  [ "$(wc -l < "$BATS_TEST_TMPDIR/rowfleet2/r/results.tsv" | tr -d ' ')" = 1 ]
+  [ "$(awk -F'\t' 'NR==1 { print NF }' "$BATS_TEST_TMPDIR/rowfleet2/r/results.tsv")" = 8 ]
+}
+
+@test "W6b: the holder-skip park note reaches the ROW — before this wave it died in a subshell" {
+  # THE REPAIR, END TO END. `targets already hold this sid: …` landed 2026-09-20 with a passing
+  # case over the DIRECT-call harness (_pick) and was unreachable from lf_one, which read the
+  # function through `$( )`. Only a case that goes through --recover can see the difference.
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  QUA="$HOME/.claude-quaternary"; mkdir -p "$TER/projects/$SLUG" "$QUA/projects/$SLUG"
+  : > "$TER/projects/$SLUG/$SID.jsonl.handed-off"     # next3 holds its retired source
+  : > "$QUA/projects/$SLUG/$SID.jsonl"                # next4 holds the real transcript
+  LR_CONFIG_DIRS="$SEC:$TER:$QUA" run bash "$FLEET" --recover
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"already holds this session (next3 next4)"* ]] || { echo "$output"; false; }
+  [ ! -s "$LRH_LOG" ]
+}
+
+@test "W6b: a junk LR_RECOVER_MAX_CONCURRENT falls back rather than wedging the pool" {
+  # `0` and a non-numeric both make the slot test "fewer than N in flight" unsatisfiable — 0 by
+  # arithmetic, junk by `[: integer expression expected` — and an unsatisfiable slot test is not a
+  # slow pool, it is a driver that never starts a worker and never returns. The fallback is what
+  # keeps a typo in a launchd environment from wedging the daemon's whole request drain.
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  LR_RECOVER_MAX_CONCURRENT=nonsense run bash "$FLEET" --recover
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q -- '--in-place' "$LRH_LOG" || { cat "$LRH_LOG"; false; }
+}
+
+@test "W6b CONTROL: a zero LR_RECOVER_MAX_CONCURRENT falls back too" {
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  LR_RECOVER_MAX_CONCURRENT=0 run bash "$FLEET" --recover
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  grep -q -- '--in-place' "$LRH_LOG" || { cat "$LRH_LOG"; false; }
+}
+
+@test "W6b: route-meta is not a REASON — a park must not quote the router's input dump at the operator" {
+  # A REAL shape, not a hypothetical: bin/claude-accounts' CacheOnlyUnavailable handler prints
+  # `none` on stdout and `route-meta: cache=absent mode=cache-only waited_ms=0` on stderr. That
+  # line is the decision's INPUTS, never its reason, and folding it into the park note would put
+  # `k_eff`/`cliff_band` tokens in front of an operator who asked why nothing was routable.
+  acct_stub; blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  ACC_RANK_OUT='none\n' ACC_RANK_RC=3 \
+  ACC_RANK_ERR='route-meta: cache=absent mode=cache-only waited_ms=0' \
+    run bash "$FLEET" --recover
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" != *"route-meta"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"printed no reason"* ]] || { echo "$output"; false; }
 }

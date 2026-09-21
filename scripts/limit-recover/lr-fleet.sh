@@ -70,6 +70,16 @@ STATE="${LR_STATE_DIR:-$HOME/.reso/limit-recover}"
 FLEET_DIR="$STATE/fleet"; mkdir -p "$FLEET_DIR" 2>/dev/null || true
 HANDOFF="${LR_HANDOFF_BIN:-$LR/lr-handoff.sh}"
 ACCOUNTS="${CC_ACCOUNTS_BIN:-$HOME/bin/claude-accounts}"
+# The admit section's mutex and W5's per-sid run claim. Both are DIRECTORIES created by `mkdir`,
+# which is the atomic primitive on this box — there is no flock(1) on Darwin (bin/cc-dispatch:1604
+# says so in as many words, and lr-reset-poller's tick lock, lr_state_append's event lock and
+# cc-lr's per-session mutex are all mkdir). The PLAN DRAFT prescribes `flock "$STATE/admit.lock"`;
+# that command does not exist here, so the path is honoured and the primitive is not.
+LF_ADMIT_LOCK="$STATE/admit.lock"
+# THE SAME STORE lr-reset-poller.sh:167 and bin/cc-lr:48 use, by the same name, on purpose: a sid
+# already being driven by the daemon or by `cc-lr recover` must not be driven a second time by a
+# fleet pool worker. Three writers, one reservation.
+RUN_CLAIMS="$STATE/runs/by-sid"
 
 MODE="" TARGET="auto" DRY=0 MAX=0 SID="" SOURCE_PANE="" FROM_DAEMON=0 JSON=0 MARK_SID="" LIVE_PID="" REPORT_DIR="" DETACH=0
 LF_ARGV=("$@")                  # verbatim, for the --detach re-exec (the child re-parses, never a rebuild)
@@ -498,6 +508,95 @@ lf_capacity_wait() { # $1=what → 0 admitted / 1 parked at the cap
   done
 }
 
+# ── THE ADMIT SECTION'S MUTEX (W6b) ─────────────────────────────────────────────────────────────
+# rank -> assign -> capacity probe is ONE decision, and running it concurrently makes every term it
+# reads stale in the SAME direction: N pool workers rank the same <=90 s-cached rows, pick the same
+# winner, and N probes taken at one census all admit (D3-safety R2, "N probes mint N"). The lock is
+# what makes worker 2's rank see worker 1's `--assign` phantom, and worker 2's probe see the seat
+# worker 1 just took.
+#
+# IT SERIALIZES THE COST, IT DOES NOT HIDE IT. Warm the section is ~1-2 s; a COLD `cc_sp_active` is
+# 7.2 s (U05 section 4.3), and a capacity park holds it for up to LR_FLEET_CAP_WAIT_S (120 s) —
+# deliberately, because admitting a SECOND recovery while the box is refusing the first is exactly
+# the over-admission this lock exists to prevent. 🚨 Do NOT "optimise" it down to the rank alone:
+# the probe is the term that goes stale, and a rank-only lock would serialize the cheap half and
+# leave the expensive one racing.
+#
+# The holder names its PID, so a dead holder is stolen AT ONCE rather than waited out — a driver
+# that died mid-section must not be able to silence every later recovery (the same rule
+# lr_state_append's 2 s steal and cc-lr's mutex both keep). The time-based steal is the backstop
+# for a holder that is alive but wedged; it is loud, because a steal past a LIVE holder can
+# double-admit and that is a fact the operator gets to read.
+lf_admit_lock_take() { # → 0 this process owns $LF_ADMIT_LOCK · 1 could not take it at all
+  local t=0 maxt hp
+  maxt=$(( ${LR_ADMIT_LOCK_WAIT_S:-300} * 5 ))          # ticks of 0.2 s
+  [ "$maxt" -gt 0 ] 2>/dev/null || maxt=1500
+  mkdir -p "$STATE" 2>/dev/null || true
+  while :; do
+    if mkdir "$LF_ADMIT_LOCK" 2>/dev/null; then
+      printf '%s\n' "$$" > "$LF_ADMIT_LOCK/pid" 2>/dev/null || true
+      return 0
+    fi
+    hp="$(cat "$LF_ADMIT_LOCK/pid" 2>/dev/null || true)"
+    case "${hp:-x}" in
+      ''|*[!0-9]*) : ;;
+      *) kill -0 "$hp" 2>/dev/null || {
+           echo "lr-fleet: admit lock $LF_ADMIT_LOCK was held by pid $hp, which is DEAD — stealing it" >&2
+           rm -rf "$LF_ADMIT_LOCK" 2>/dev/null || true; } ;;
+    esac
+    if [ "$t" -ge "$maxt" ]; then
+      echo "lr-fleet: admit lock $LF_ADMIT_LOCK held by pid ${hp:-?} for >$(( maxt / 5 ))s — STEALING it; a second recovery may be admitted against one capacity reading" >&2
+      rm -rf "$LF_ADMIT_LOCK" 2>/dev/null || true
+      mkdir "$LF_ADMIT_LOCK" 2>/dev/null || return 1
+      printf '%s\n' "$$" > "$LF_ADMIT_LOCK/pid" 2>/dev/null || true
+      return 0
+    fi
+    sleep 0.2; t=$(( t + 1 ))
+  done
+}
+# RELEASE ONLY WHAT IS STILL OURS. If a peer stole the lock from under us (the time-based steal
+# above), the directory now belongs to that peer and removing it would hand a THIRD worker the
+# section while two are inside it. An unconditional `rm -rf` here is the bug this guard names.
+lf_admit_lock_release() {
+  [ "$(cat "$LF_ADMIT_LOCK/pid" 2>/dev/null || true)" = "$$" ] || return 0
+  rm -rf "$LF_ADMIT_LOCK" 2>/dev/null || true
+}
+
+# ── W5'S PER-SID RUN CLAIM, AS A POOL WORKER SEES IT ────────────────────────────────────────────
+# lr-reset-poller.sh:716 and bin/cc-lr:128 both reserve `$STATE/runs/by-sid/<sid>.active` before
+# driving a recovery. A fleet POOL is the third writer, and without taking the same reservation two
+# processes would type into one pane. Semantics are cc-lr's, because they are the stricter pair:
+#   holder pid ALIVE  → REFUSE (a live run owns this sid)
+#   holder pid DEAD   → steal, loudly (a corpse must not wedge a sid out of recovery)
+#   no holder file    → the poller's shape; steal only past LR_RUN_CLAIM_TTL_MIN, which is what the
+#                       poller itself uses and for the same reason.
+lf_run_claim_take() { # $1=sid → 0 this worker owns the run · 1 a live run already holds it
+  local d="$RUN_CLAIMS/${1:?lf_run_claim_take needs a sid}.active" hp ttl
+  ttl="${LR_RUN_CLAIM_TTL_MIN:-30}"; case "$ttl" in ''|*[!0-9]*|0) ttl=30 ;; esac
+  mkdir -p "$RUN_CLAIMS" 2>/dev/null || true
+  if mkdir "$d" 2>/dev/null; then
+    printf '{"sid":"%s","pid":%d,"ts":"%s","by":"lr-fleet --recover"}\n' "$1" "$$" "$(lf_now)" \
+      > "$d/holder" 2>/dev/null || true
+    return 0
+  fi
+  hp="$(sed -n 's/.*"pid":\([0-9][0-9]*\).*/\1/p' "$d/holder" 2>/dev/null | sed -n '1p')"
+  if [ -n "$hp" ]; then
+    kill -0 "$hp" 2>/dev/null && return 1
+    echo "lr-fleet: run claim $d was held by pid $hp, which is DEAD — stealing it" >&2
+  else
+    # `-maxdepth 0`, exactly as lr-reset-poller.sh:722: the claim IS the directory and nothing is
+    # written inside it by the poller, so without it find descends and tests the empty contents.
+    [ -n "$(find "$d" -maxdepth 0 -mmin "+$ttl" 2>/dev/null)" ] || return 1
+    echo "lr-fleet: run claim $d aged past ${ttl}m with no holder — stealing it" >&2
+  fi
+  rm -rf "$d" 2>/dev/null || true
+  mkdir "$d" 2>/dev/null || return 1
+  printf '{"sid":"%s","pid":%d,"ts":"%s","by":"lr-fleet --recover"}\n' "$1" "$$" "$(lf_now)" \
+    > "$d/holder" 2>/dev/null || true
+  return 0
+}
+lf_run_claim_release() { rm -rf "$RUN_CLAIMS/${1:?lf_run_claim_release needs a sid}.active" 2>/dev/null || true; }
+
 # ── ONE: the unit — one session, in place ────────────────────────────────────────────────────────
 # _lf_target_holds_sid <acct> <sid> → 0 iff that account's store ALREADY holds this session.
 # A destination carrying `<sid>.jsonl` — or its `.handed-off` tombstone, which is what a PREVIOUS
@@ -521,12 +620,64 @@ EOF
   return 1
 }
 
-lf_pick_target() { # $1=source account $2=tier $3=sid → account name on stdout / rc 1
-  local kind=general cand
+# ── THE ROUTER'S OWN REASONS, NEVER OUR PROSE (W6b) ────────────────────────────────────────────
+# A park reading `no routable target` named the OUTCOME and never the CAUSE, so the one fact that
+# decides the next action — shed load? re-login? wait out a 5-hour window? — lived only in a stderr
+# stream nobody kept. claude-accounts already prints exactly that fact, in two shapes, and this
+# lifts whichever one it printed rather than inventing a third.
+#   "claude-accounts: no routable account for general: next=5h-cutoff; next2=recovery-weekly-thin"
+#   "claude-accounts: general excluded — next3=kmax-concurrency"
+# The FILE is read directly (never a pipe into an early-exiting reader): awk's `exit` over a file
+# signals no producer, so this cannot become the pipefail-SIGPIPE shape the land gate flags.
+lf_rank_why() { # $1=the rank's stderr file → the router's own reason text on stdout
+  [ -s "${1:-}" ] || return 0
+  awk '
+    /^claude-accounts: no routable account for / {
+      sub(/^claude-accounts: no routable account for [a-z]*: /, ""); print; exit }
+    /^claude-accounts: [a-z]* excluded/ {
+      if (ex == "") { ex = $0; sub(/^claude-accounts: [a-z]* excluded[^A-Za-z0-9]*/, "", ex) }; next }
+    /^route-meta:/ { next }
+    NF { if (raw == "") raw = $0 }
+    END { if (ex != "") print ex; else if (raw != "") print raw }
+  ' "$1" 2>/dev/null | cut -c1-300
+}
+# `--assign` is a WRITE to the router's ledger (bin/claude-accounts:5830, M7): it charges the chosen
+# account one PHANTOM working session so the next pick inside the same <=90 s cache TTL walks DOWN
+# the ranking instead of stacking every recovery onto one winner. lr-fleet is the OWNER of this
+# charge on the recovery path — see the report's section on handoff-fire, which cannot reach either
+# of its own `--assign` sites from here.
+# Advisory, never fatal: a lost append costs one phantom, never a recovery. But it is SAID, because
+# a silent loss degrades spread with nothing on disk naming why.
+# 🚨 A DRY RUN CHARGES NOTHING. It launches nothing, so a charge would tell the router about a
+# session that will never exist — a phantom with no body, decaying only on ASSIGN_TTL_MIN.
+lf_charge_assign() { # $1=account → always 0; the stderr line IS the record when it does not land
+  [ "${DRY:-0}" = 1 ] && { echo "lr-fleet: DRY — not charging --assign $1 (nothing is launching)" >&2; return 0; }
+  [ -x "$ACCOUNTS" ] || return 0
+  "$ACCOUNTS" --assign "$1" --src lr-fleet >/dev/null 2>&1 \
+    || echo "lr-fleet: --assign $1 was NOT recorded — the router cannot see this recovery until it burns; a concurrent pick may stack onto the same account" >&2
+  return 0
+}
+# 🚨 IT SETS A GLOBAL AND PRINTS NOTHING, and that is a BUG FIX, not a style change. The caller
+# read this function as `target="$(lf_pick_target …)"` — a COMMAND SUBSTITUTION, i.e. a subshell —
+# so every one of the four facts it carries OUT of the loop (`LF_PICK_SKIPPED_HOLDER` and, new in
+# W6b, `LF_PICK_REJECTED` and `LF_RANK_WHY`) died with that subshell (repo memory:
+# assignment-inside-command-substitution-never-escapes). Measured while writing this wave: the
+# `targets already hold this sid: …` park note, landed 2026-09-20 with its own passing case over
+# the direct-call harness, could NEVER fire from lf_one — every real park printed the generic
+# `no routable target` instead. The house pattern is lib/account-map.generated.sh's
+# `cc_acct_dir_for_name`, whose header says exactly this in exactly these words.
+lf_pick_target() { # $1=source account $2=tier $3=sid → 0 and LF_PICK_TARGET set / rc 1
+  local kind=general cand rdir rankerr
   case "$2" in claude-fable-*) kind=fable ;; esac
-  [ "$TARGET" != auto ] && { printf '%s' "$TARGET"; return 0; }
-  [ -x "$ACCOUNTS" ] || return 1
-  LF_PICK_SKIPPED_HOLDER=""
+  LF_PICK_TARGET=""; LF_PICK_SKIPPED_HOLDER=""; LF_PICK_REJECTED=""; LF_RANK_WHY=""
+  # An EXPLICIT --target is the caller's decision, not a pick — but the account still hosts a real
+  # session, so it is charged exactly like a ranked one. The alternative is a fleet whose explicit
+  # targets are invisible to the router's spread.
+  [ "$TARGET" != auto ] && { lf_charge_assign "$TARGET"; LF_PICK_TARGET="$TARGET"; return 0; }
+  [ -x "$ACCOUNTS" ] || { LF_RANK_WHY="claude-accounts is not executable at $ACCOUNTS"; return 1; }
+  rdir="${FLEET_DIR:-${TMPDIR:-/tmp}}/${RUN:-adhoc}"; mkdir -p "$rdir" 2>/dev/null || true
+  rankerr="$rdir/rank.$kind.stderr"
+  : > "$rankerr" 2>/dev/null || rankerr=/dev/null
   # Walk the ranked list rather than taking its first row: the FIRST acceptable account may not be
   # the first RANKED one, because a candidate that already holds this sid cannot receive it.
   while IFS= read -r cand; do
@@ -540,44 +691,99 @@ lf_pick_target() { # $1=source account $2=tier $3=sid → account name on stdout
     # Walk past the SOURCE account: the router may well rank the limited account first on weekly
     # headroom while its 5-hour window is what just closed.
     [ "$cand" = "$1" ] && continue
+    # NEVER TRUST A BARE STRING FROM A ROUTER. Everything downstream — launcher_for, cfg_dir, the
+    # transplant's destination — resolves this token through lib/account-map.generated.sh, and a
+    # token the map does not declare becomes a HALTED fire minutes later, AFTER the source pane has
+    # already been /exit'd. Ask the map HERE, where the answer is a cheap `continue`.
+    # FAILS OPEN when the map is not loaded: an unavailable validator bounds ITSELF, never the
+    # world, and refusing every candidate over a missing library would park a routable fleet.
+    if command -v cc_acct_dir_for_name >/dev/null 2>&1 && ! cc_acct_dir_for_name "$cand" >/dev/null 2>&1; then
+      LF_PICK_REJECTED="${LF_PICK_REJECTED}${LF_PICK_REJECTED:+ }$cand"
+      echo "lr-fleet: the router named '$cand', which lib/account-map.generated.sh does not declare — walking on rather than firing at a name nothing can resolve" >&2
+      continue
+    fi
     if [ -n "${3:-}" ] && _lf_target_holds_sid "$cand" "$3"; then
       LF_PICK_SKIPPED_HOLDER="${LF_PICK_SKIPPED_HOLDER}${LF_PICK_SKIPPED_HOLDER:+ }$cand"
       continue
     fi
-    printf '%s' "$cand"; return 0
+    lf_charge_assign "$cand"
+    LF_PICK_TARGET="$cand"; return 0
   done <<EOF
-$("$ACCOUNTS" --rank "$kind" 2>/dev/null || true)
+$("$ACCOUNTS" --rank "$kind" --recovery --max-wait 3 2>"$rankerr" || true)
 EOF
+  # THE RANK IS ASKED IN THE RECOVERY LANE, AND THAT IS NOT A STYLE CHOICE (W6a). A recovery is not
+  # a dispatch: a dispatch places a NEW unit that can be cut to fit the quota, a recovery
+  # transplants an EXISTING long session that replays a cold context and keeps burning, and a
+  # re-limit costs a whole second recovery cycle. `--recovery` turns on the SURVIVAL floors
+  # (bin/claude-accounts `recovery_floors`), so an account with room for a fire but not for a
+  # transplant is excluded HERE rather than discovered two hours later.
+  # `--max-wait 3` is the ROUTER's own wall-clock bound. No outer timeout is wrapped around it: a
+  # bound you guess can only convict a healthy call, and this one already bounds itself.
+  LF_RANK_WHY="$(lf_rank_why "$rankerr")"
   return 1
 }
-lf_one() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → rc of the recovery; prints the result row
-  local sid="$1" cfg="$2" acct="$3" pane="$4" cwd="$5" tier="$6" target rc=0 out rdir="$FLEET_DIR/$RUN" model="" effort=""
-  mkdir -p "$rdir"
-  target="$(lf_pick_target "$acct" "$tier" "$sid")" || {
-    if [ -n "${LF_PICK_SKIPPED_HOLDER:-}" ]; then
-      echo "lr-fleet: $sid — no routable target: every candidate past $acct already holds this session ($LF_PICK_SKIPPED_HOLDER) — transplanting there is refused on arrival" >&2
-      lf_row "$sid" "$pane" "$pane" "$acct" "-" "parked" "targets already hold this sid: $LF_PICK_SKIPPED_HOLDER"
-    else
-      echo "lr-fleet: $sid — no routable target account (claude-accounts --rank returned nothing past $acct)" >&2
-      lf_row "$sid" "$pane" "$pane" "$acct" "-" "parked" "no routable target"
-    fi
+# ── THE ADMIT SECTION — everything under the lock, and NOTHING ELSE ─────────────────────────────
+# Returns 0 = admitted and LF_ADMIT_TARGET / LF_ADMIT_T0 are set · 1 = parked, the row is already
+# written · 3 = dry run, the row is already written and the caller stops at rc 0.
+# The three-way return is what lets lf_one hold the lock across the WHOLE section with exactly ONE
+# release: a section with five `return` sites and a release beside each is a release site waiting
+# to be missed.
+lf_admit_section() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → 0 admitted · 1 parked · 3 dry
+  local sid="$1" cfg="$2" acct="$3" pane="$4" cwd="$5" tier="$6" target model="" effort=""
+  LF_ADMIT_TARGET=""; LF_ADMIT_T0=""
+  # CALLED DIRECTLY, never through `$( )` — see lf_pick_target's header. A subshell here is what
+  # made three of its four outputs unreachable.
+  lf_pick_target "$acct" "$tier" "$sid" || {
+    # THE PARK CARRIES THE ROUTER'S OWN REASONS. Each clause is a different cause with a different
+    # next action, so they are joined rather than collapsed: destinations that already hold the
+    # session (a transplant there is refused on arrival), names the account map does not declare,
+    # and the router's own exclusion text. `no routable target` alone said none of them.
+    local pwhy=""
+    [ -n "${LF_PICK_SKIPPED_HOLDER:-}" ] && pwhy="every candidate past $acct already holds this session ($LF_PICK_SKIPPED_HOLDER) — transplanting there is refused on arrival"
+    [ -n "${LF_PICK_REJECTED:-}" ] && pwhy="${pwhy:+$pwhy; }the router named account(s) the map does not declare: $LF_PICK_REJECTED"
+    [ -n "${LF_RANK_WHY:-}" ] && pwhy="${pwhy:+$pwhy; }router: $LF_RANK_WHY"
+    [ -n "$pwhy" ] || pwhy="the recovery lane returned no account and printed no reason — read $FLEET_DIR/$RUN/rank.*.stderr"
+    echo "lr-fleet: $sid — no routable target: $pwhy" >&2
+    lf_row "$sid" "$pane" "$pane" "$acct" "-" "parked" "no routable target: $pwhy"
     return 1
   }
+  target="$LF_PICK_TARGET"
   [ "$target" != "$acct" ] || { lf_row "$sid" "$pane" "$pane" "$acct" "$target" "parked" "target is the limited account"; return 1; }
   case "$tier" in */*) model="${tier%%/*}"; effort="${tier#*/}" ;; esac
   if [ "$DRY" = 1 ]; then
     echo "lr-fleet: DRY — would recover ${sid:0:8}: pane ${pane:-<new>} on $acct → $target (tier ${tier:-default}) via: $HANDOFF --sid $sid --config-dir $cfg --cwd $cwd --target $target --launch --in-place${pane:+ --source-pane $pane}${model:+ --model $model}${effort:+ --effort $effort}"
-    lf_row "$sid" "$pane" "$pane" "$acct" "$target" "dry-run" "-"; return 0
+    lf_row "$sid" "$pane" "$pane" "$acct" "$target" "dry-run" "-"; return 3
   fi
-  local t0; t0="$(date -u +%Y-%m-%dT%H:%M:%SZ)"   # the IDL floor: only refusals from THIS attempt count
+  LF_ADMIT_T0="$(date -u +%Y-%m-%dT%H:%M:%SZ)"   # the IDL floor: only refusals from THIS attempt count
   # The park now names the gate's own reason AND, when the launcher has already been refused for this
   # sid, the term that refused it — the two facts that decide whether to shed load, close panes, or
   # wait out a window. `capacity` alone said none of them.
   LF_PARK_REASON=""
   lf_capacity_wait "in-place recovery of ${sid:0:8} onto $target" || {
     local pnote="capacity${LF_PARK_REASON:+ — $LF_PARK_REASON}" pcause
-    pcause="$(lf_idl_cause "$sid" "$t0" || true)"; [ -n "$pcause" ] && pnote="$pnote; $pcause"
+    pcause="$(lf_idl_cause "$sid" "$LF_ADMIT_T0" || true)"; [ -n "$pcause" ] && pnote="$pnote; $pcause"
     lf_row "$sid" "$pane" "$pane" "$acct" "$target" "parked" "$pnote"; return 1; }
+  LF_ADMIT_TARGET="$target"
+  return 0
+}
+lf_one() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → rc of the recovery; prints the result row
+  local sid="$1" cfg="$2" acct="$3" pane="$4" cwd="$5" tier="$6" target rc=0 out rdir="$FLEET_DIR/$RUN" model="" effort="" arc=0
+  mkdir -p "$rdir"
+  # ONE TAKE, ONE RELEASE. The actuator below is DELIBERATELY outside the lock: it is the 115-658 s
+  # half, and serializing it would turn the pool back into the queue this wave replaced.
+  lf_admit_lock_take || {
+    lf_row "$sid" "$pane" "$pane" "$acct" "-" "parked" "the admit lock $LF_ADMIT_LOCK could not be taken or stolen — nothing was ranked, charged or probed"
+    return 1; }
+  lf_admit_section "$sid" "$cfg" "$acct" "$pane" "$cwd" "$tier"; arc=$?
+  lf_admit_lock_release
+  case "$arc" in
+    0) : ;;
+    3) return 0 ;;              # dry run: the row is written, nothing is owed
+    *) return 1 ;;
+  esac
+  target="$LF_ADMIT_TARGET"
+  local t0="$LF_ADMIT_T0"
+  case "$tier" in */*) model="${tier%%/*}"; effort="${tier#*/}" ;; esac
   local args=(--sid "$sid" --config-dir "$cfg" --cwd "$cwd" --target "$target" --launch --in-place)
   [ -n "$pane" ] && [ "$pane" != "-" ] && args+=(--source-pane "$pane")
   [ -n "$model" ] && args+=(--model "$model"); [ -n "$effort" ] && args+=(--effort "$effort")
@@ -617,8 +823,18 @@ lf_one() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → rc of the recovery
   lf_row "$sid" "$pane" "$pane_after" "$acct" "$target" "$mech/$verdict" "$note"
   return "$rc"
 }
+# THE RECORD IS BOUNDED AT THE WRITER, because the pool made this file CONCURRENT (W6b). O_APPEND
+# is atomic only up to the writer's stdio buffer: a record longer than it goes out as several
+# write() calls and a second worker's row splices into the middle of one (repo lesson:
+# append-atomicity-ends-at-the-stdio-buffer, and lr_state_append keeps the same rule for the same
+# reason). The note is the only unbounded field — a park now carries the router's own reason text —
+# so it is cut here rather than trusted to be short. TAB and newline are stripped for the same
+# class of reason: this is a TSV whose readers name eight variables, and a stray separator inside a
+# value silently re-columns the row.
 lf_row() { # sid pane_before pane_after acct_before acct_after mechanism/verdict note → appended to the run's results.tsv
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$(lf_now)" >> "$FLEET_DIR/$RUN/results.tsv"
+  local note
+  note="$(printf '%s' "$7" | tr '\t\n' '  ' | cut -c1-600)"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$note" "$(lf_now)" >> "$FLEET_DIR/$RUN/results.tsv"
 }
 lf_report() { # $1=run dir
   local d="$1" f="$1/results.tsv" sid pb pa ab aa mv note n=0 inplace=0 newp=0 gaps=0 bydesign=0
@@ -647,6 +863,65 @@ lf_report() { # $1=run dir
     echo "RECOVERY PARTIAL — $gaps named gap(s) above ($inplace in place, $newp replaced, $bydesign not owed; evidence: $d)"
   fi
   [ "$gaps" -eq 0 ]
+}
+
+# ── THE POOL (W6b) — a pool, not a queue ───────────────────────────────────────────────────────
+# `--recover` ran one lf_one at a time, so five sessions cost five SERIAL 115-658 s recoveries. A
+# pool of LR_RECOVER_MAX_CONCURRENT workers runs them together and claims the next the moment ONE
+# exits — deliberately NOT a group `wait`, which idles the whole pool behind its slowest member and
+# is the difference this wave is buying.
+#
+# NO `wait -n`: /bin/bash on this box is 3.2, and 3.2 does not have it. That is not a portability
+# nicety — lr-reset-poller.sh is a LaunchAgent and launchd's interpreter is /bin/bash, so anything
+# this file does on the poller's path must run under 3.2 (repo lesson: the deployment interpreter is
+# not the one on your PATH). The reaper therefore polls `kill -0`, which goes FALSE as soon as bash
+# has reaped the child (measured on both 3.2 and 5.x; `wait` still returns the remembered status).
+#
+# THE POLL IS A CEILING ON CLAIM LATENCY, NEVER A FLOOR ON THE RUN. The wait loop's guard is "the
+# pool is FULL", which is false whenever a slot is free, so a caller with room never enters the
+# body — the shape the poll-period-as-a-cost-floor lesson warns about is the one where the guard is
+# "the child is alive", and it is not this one.
+#
+# The ADMIT SECTION inside each worker is still serialized by $LF_ADMIT_LOCK, so the concurrency
+# bought here is in the ACTUATOR — where the 115-658 s actually live — and never in the routing
+# decision, which must stay one-at-a-time or every worker picks the same account.
+LF_PIDS=""                 # space-separated "<pid>:<sid>" for the workers still in flight
+lf_pool_max() { # → the configured concurrency, junk falling back rather than to 0 (which never runs)
+  local m="${LR_RECOVER_MAX_CONCURRENT:-2}"
+  case "$m" in ''|*[!0-9]*|0) m=2 ;; esac
+  printf '%s' "$m"
+}
+lf_pool_count() { local e n=0; for e in $LF_PIDS; do [ -n "$e" ] && n=$((n+1)); done; printf '%s' "$n"; }
+# Reap every worker bash has already collected, release its per-sid run claim, and fold its rc into
+# $LF_POOL_WORST. The claim is released HERE and nowhere else: a worker that released its own claim
+# would have to do it before its last line, leaving a window where the sid is free while the run is
+# still typing into the pane.
+lf_pool_reap() { # → 0 always; prunes $LF_PIDS
+  local e p sd keep="" wrc
+  for e in $LF_PIDS; do
+    [ -n "$e" ] || continue
+    p="${e%%:*}"; sd="${e#*:}"
+    if kill -0 "$p" 2>/dev/null; then keep="$keep $p:$sd"; continue; fi
+    wrc=0; wait "$p" 2>/dev/null || wrc=$?
+    [ "$wrc" = 0 ] || LF_POOL_WORST=1
+    lf_run_claim_release "$sd"
+  done
+  LF_PIDS="$keep"
+  return 0
+}
+lf_pool_wait_slot() { # $1=max → returns once fewer than $1 workers are in flight
+  while :; do
+    lf_pool_reap
+    [ "$(lf_pool_count)" -lt "$1" ] && return 0
+    sleep "${LR_POOL_POLL_S:-0.2}"
+  done
+}
+lf_pool_drain() { # → returns once every worker has exited
+  while :; do
+    lf_pool_reap
+    [ "$(lf_pool_count)" -eq 0 ] && return 0
+    sleep "${LR_POOL_POLL_S:-0.2}"
+  done
 }
 
 case "$MODE" in
@@ -689,7 +964,7 @@ print(json.dumps(out,indent=1))'
       [ "$rc" = 6 ] || { echo "lr-fleet: --recover REFUSED — the census could not be taken (rc $rc); $FLEET_DIR/$RUN/census.tsv left ABSENT rather than empty" >&2; exit "$rc"; }; }
     printf '%s\n' "$rows" > "$FLEET_DIR/$RUN/census.tsv"
     printf '%s\n' "$rows" | lf_print_census >&2
-    n=0; worst=0
+    n=0; worst=0; LF_POOL_WORST=0; POOL_MAX="$(lf_pool_max)"
     while IFS=$'\t' read -r sid cfg acct pane pid cwd tier disp kind kinds err_age; do
       [ -n "$sid" ] || continue
       case "$disp" in
@@ -711,11 +986,29 @@ print(json.dumps(out,indent=1))'
         *) lf_row "$sid" "$pane" "$pane" "$acct" "-" "skipped" "$disp"; continue ;;
       esac
       [ "$MAX" -gt 0 ] && [ "$n" -ge "$MAX" ] && { lf_row "$sid" "$pane" "$pane" "$acct" "-" "parked" "--max $MAX reached"; worst=1; continue; }
+      # W5'S PER-SID RUN CLAIM, TAKEN BEFORE THE FORK. lr-reset-poller and cc-lr both reserve the
+      # same directory before driving a sid, so a pool worker that skipped it would be the third
+      # writer typing into one pane. Refused here is a ROW, not a silent skip: a session the fleet
+      # declined to touch because someone else already has it is exactly the thing a reader of the
+      # report needs told.
+      # A DRY RUN RESERVES NOTHING. `--dry-run` writes no state anywhere else, and a claim left in
+      # $RUN_CLAIMS by a preview would block the real recovery of that sid for the claim's TTL.
+      if [ "$DRY" = 0 ] && ! lf_run_claim_take "$sid"; then
+        lf_row "$sid" "$pane" "$pane" "$acct" "-" "skipped" "a live run already holds $RUN_CLAIMS/$sid.active (lr-reset-poller, cc-lr, or a sibling pool worker) — not driven twice"
+        continue
+      fi
       n=$((n+1))
-      lf_one "$sid" "$cfg" "$acct" "$pane" "$cwd" "$tier" || worst=1
+      lf_pool_wait_slot "$POOL_MAX"
+      # The worker is a SUBSHELL, not a setsid'd process: this driver stays alive until every
+      # worker is done (it still has a report to render), so the detach `--one` needs — surviving
+      # a tool call's process group being reaped — buys nothing here and would cost the rc.
+      lf_one "$sid" "$cfg" "$acct" "$pane" "$cwd" "$tier" &
+      LF_PIDS="$LF_PIDS $!:$sid"
     done <<EOF
 $rows
 EOF
+    lf_pool_drain
+    [ "${LF_POOL_WORST:-0}" = 0 ] || worst=1
     echo "$FLEET_DIR/$RUN" > "$FLEET_DIR/last"
     lf_report "$FLEET_DIR/$RUN" || worst=1
     exit "$worst" ;;
