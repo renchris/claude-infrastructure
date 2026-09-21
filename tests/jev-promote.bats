@@ -126,7 +126,7 @@ runp() {
   run runp CC_JEV_ZDR=0 CC_JEV_BASE_URL="http://127.0.0.1:$PORT" -- --bias-n 2 --yes
   [ "$status" -eq 0 ]
   grep -qF "SWAP LIST" <<<"$output"
-  grep -qE "swap\(s\) proposed" <<<"$output"
+  grep -qE "executable swap\(s\)" <<<"$output"
   grep -qF "Nothing was edited" <<<"$output"
   cmp -s "$BATS_TEST_TMPDIR/index.before" "$MEMD/MEMORY.md" \
     || { echo "the run MUTATED the index — the entire safety case is that it does not"; false; }
@@ -572,4 +572,30 @@ armed_home() {   # → a HOME with a live arm, a corpus, and an anchor run
   rc_line="$(grep -o 'run rc=[0-9]*' "$AH/.claude/autonomy/jev-batch.log" | tail -1)"
   [ -n "$rc_line" ]
   [ "$rc_line" != "run rc=0" ] || { echo "tee masked the failure: $rc_line"; false; }
+}
+
+# ── ONE SLOT, ONE SWAP ───────────────────────────────────────────────────────────────────────
+# The swap list is a MATCHING, not a list of wins. Anchors cycle — 22 weak incumbents against 56
+# challengers — so the same incumbent is beaten several times, and a naive dump proposes evicting
+# it repeatedly. Measured on the first real pass (2026-09-21): 45 "swaps" over 21 DISTINCT
+# incumbents, five named three times. An operator working it top-down would reach a line telling
+# them to demote a rule that is already gone. The output looked actionable and was not.
+@test "swap list: an incumbent beaten twice yields ONE swap, and the surplus is a runner-up" {
+  R="$BATS_TEST_TMPDIR/dup.jsonl"
+  printf '%s\n' \
+   '{"id":"meta","round":"meta","orphans":9,"seed":"s","plan":3,"anchors":1,"mock":false}' \
+   '{"id":"r2-1","round":"h2h","block_a":"near.md","block_b":"inc.md","winner":"a","same_rule":0.80,"swapped":false}' \
+   '{"id":"r2-2","round":"h2h","block_a":"far.md","block_b":"inc.md","winner":"a","same_rule":0.05,"swapped":false}' \
+   '{"id":"r2-3","round":"h2h","block_a":"x.md","block_b":"other.md","winner":"b","same_rule":0.10,"swapped":false}' > "$R"
+  run env -u AI_GATEWAY_API_KEY "$REPO/bin/cc-jev" promote --report "$R"
+  [ "$status" -eq 0 ]
+  grep -qF "1 executable swap(s)" <<<"$output"
+  grep -qF "2 win(s) total" <<<"$output"
+  grep -qF "1 further challenger(s)" <<<"$output"
+  # `inc.md` must be named exactly once in the list, however many challengers beat it.
+  [ "$(grep -c '^  - inc\.md$' <<<"$output")" -eq 1 ]
+  # The tiebreak is an argument: where two beat the same incumbent, the one stating a MORE
+  # DIFFERENT rule (lower same_rule) wins the slot, because a capped index gains more from it.
+  grep -qF "+ far.md" <<<"$output"
+  ! grep -qF "+ near.md" <<<"$output" || { echo "picked the restating challenger for the slot"; false; }
 }

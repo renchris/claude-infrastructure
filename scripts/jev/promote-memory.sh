@@ -126,13 +126,32 @@ fi
 # ── THE SWAP LIST — the consumer. A promotion that names no demotion is not executable. ───────
 # The index is FULL. "This orphan is good" changes nothing; "this orphan beats that incumbent"
 # is an edit a human can make. Every line names both halves, and NOTHING here is applied.
-printf '\nSWAP LIST — challengers that BEAT the weak incumbent they were matched against:\n'
-printf '  (promote the first, demote the second, one slot each. Read both before editing.)\n'
-jq -r 'select(.round=="h2h" and .swapped==false and .winner=="a")
-       | "  + \(.block_a)\n  - \(.block_b)\n"' "$OUT" | head -90
-SWAPS=$(jq -r 'select(.round=="h2h" and .swapped==false and .winner=="a")|.id' "$OUT" | wc -l | tr -d ' ')
+# 🚨 ONE SLOT, ONE SWAP — the list is a MATCHING, not a list of wins. Anchors cycle (22 weak
+# incumbents against 56 challengers), so the same incumbent is beaten by several challengers and a
+# naive dump proposes evicting it repeatedly. Measured on the first real pass: 45 "swaps" over
+# **21 distinct incumbents**, five of them named three times. At most 21 are executable, and an
+# operator working the list top-down would reach a line telling them to demote a rule that is
+# already gone. The output looked actionable and was not — which is the failure this whole consumer
+# exists to avoid, one level in.
+# The tiebreak is `same_rule` ASC, and it is an argument rather than a convenience: where two
+# challengers both beat the same incumbent, the one stating a MORE DIFFERENT rule adds more to a
+# capped index than the one restating it. Surplus challengers are reported as runners-up, honestly
+# counted, never as swaps.
+printf '\nSWAP LIST — one slot, one swap. Each incumbent appears AT MOST ONCE:\n'
+printf '  (promote the first, demote the second. Read both before editing.)\n'
+jq -r 'map(select(.round=="h2h" and .swapped==false and .winner=="a"))
+       | group_by(.block_b)
+       | map(sort_by(.same_rule // 1) | .[0])
+       | sort_by(.same_rule // 1)
+       | .[] | "  + \(.block_a)\n  - \(.block_b)\n"' -s "$OUT" | head -90
+SWAPS=$(jq -rs 'map(select(.round=="h2h" and .swapped==false and .winner=="a"))
+                | group_by(.block_b) | length' "$OUT")
+WINS=$(jq -r 'select(.round=="h2h" and .swapped==false and .winner=="a")|.id' "$OUT" | wc -l | tr -d ' ')
+RUNNERS=$(( WINS - SWAPS ))
+[ "$RUNNERS" -gt 0 ] && printf '  %s further challenger(s) also beat an incumbent that is already being displaced above —\n  runners-up, not extra slots. Re-run after editing the index to re-match them.\n' "$RUNNERS"
 HELD=$(jq -r 'select(.round=="h2h" and .swapped==false and .winner=="b")|.id' "$OUT" | wc -l | tr -d ' ')
-printf '  %s swap(s) proposed; %s incumbent(s) held their slot.\n' "$SWAPS" "$HELD"
+printf '  %s executable swap(s); %s incumbent(s) held their slot; %s win(s) total.\n' \
+       "$SWAPS" "$HELD" "$WINS"
 if [ "$SWAPS" = 0 ] && [ "$HELD" -gt 0 ]; then
   printf '  EVERY incumbent won. Either the index is already correct, or the contest is degenerate —\n'
   printf '  the same failure shape as an 84%%-one-bucket scale, wearing a different form. Say so.\n'
