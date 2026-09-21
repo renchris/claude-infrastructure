@@ -57,6 +57,43 @@ cmd_status() {
   printf 'threshold   P(true) >= %s\n' "$CC_JEV_MIN_P"
   printf 'timeout     %s ms (maxRetries 0)\n' "$CC_JEV_TIMEOUT_MS"
   printf 'ZDR         %s\n' "$([ "${CC_JEV_ZDR:-1}" = 0 ] && echo OFF || echo "on, fails closed")"
+
+  # ── THE PROMOTION PASS: complete, partial, or never run ───────────────────────────────────
+  # A batch run's own output cannot answer "is there more to do?" — a PARTIAL pass prints exactly
+  # the summary a complete one prints, same DECIDED line, same distributions, same swap list, just
+  # over fewer orphans. Without this the operator has no way to tell whether to arm another window
+  # short of counting JSONL rows by hand, so the honest default answer would be a round-trip.
+  # It reads only local files: no key, no route, no call.
+  _pass_rows="$(find -H "$HOME/.claude/autonomy" -maxdepth 1 -name 'jev-promote-*.jsonl' -size +0c \
+                2>/dev/null | sort -r | head -1)"
+  if [ -z "$_pass_rows" ]; then
+    printf 'promotion   never run — one armed window does a full pass (cc-jev arm)\n'
+  else
+    _pp="$(jq -r 'select(.round=="meta")|.plan // empty' "$_pass_rows" 2>/dev/null | head -1)"
+    _pv="$(jq -r 'select(.round!="meta")|.id' "$_pass_rows" 2>/dev/null | wc -l | tr -d ' ')"
+    _pn="$(basename "$_pass_rows")"
+    case "$_pp" in
+      ''|*[!0-9]*)
+        # Unstamped: it predates the meta row, so its plan is unknowable. Say UNKNOWN rather than
+        # guessing a denominator — a made-up completeness is worse than an admitted gap.
+        printf 'promotion   %s verdict(s) in %s; completeness UNKNOWN (run predates the plan stamp)\n' "$_pv" "$_pn" ;;
+      *)
+        if [ "$_pv" -ge "$_pp" ]; then
+          printf 'promotion   COMPLETE — %s of %s verdict(s) in %s\n' "$_pv" "$_pp" "$_pn"
+          printf '            read it free:  cc-jev promote --report %s\n' "$_pass_rows"
+        else
+          printf 'promotion   PARTIAL — %s of %s verdict(s) in %s\n' "$_pv" "$_pp" "$_pn"
+          printf '            arm again and the batch RESUMES it (paid-for rows are not re-bought)\n'
+        fi ;;
+    esac
+  fi
+  if [ -f "${CC_JEV_ARM_FILE:-$HOME/.claude/autonomy/jev-batch.arm}" ]; then
+    printf 'armed       YES — expires %s, ceiling %s call(s)\n' \
+      "$(jq -r '.expires // "?"' "${CC_JEV_ARM_FILE:-$HOME/.claude/autonomy/jev-batch.arm}" 2>/dev/null)" \
+      "$(jq -r '.max_calls // "?"' "${CC_JEV_ARM_FILE:-$HOME/.claude/autonomy/jev-batch.arm}" 2>/dev/null)"
+  else
+    printf 'armed       no — the scheduled batch will make no call\n'
+  fi
   # EGRESS — checked by NAME, never inferred from a failed call. `agent-secrets run` starts a
   # CONNECT proxy whenever this file exists, and a host missing from it is blocked outright; at
   # runtime that is indistinguishable from a network blip, so it has to be said here or it gets

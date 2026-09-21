@@ -569,3 +569,65 @@ mkmem5() {  # 5 entries, so a 4-key rotation produces a real spread
   # re-minting a finding about the vendor.
   [ "$(jq -r '.answers.s.probabilities | keys | length' <<<"$output")" -eq 4 ]
 }
+
+# ── `cc-jev status`: is there more of the promotion pass to do? ──────────────────────────────
+# A batch run's own output cannot answer this. A PARTIAL pass prints exactly the summary a
+# complete one prints — same DECIDED line, same distributions, same swap list, just over fewer
+# orphans — so without this the only way to tell is counting JSONL rows by hand, and the honest
+# default answer to "did it finish?" would be a round-trip. Local files only: no key, no call.
+pass_home() {   # → an isolated HOME whose autonomy dir holds exactly the rows the caller writes
+  PH="$BATS_TEST_TMPDIR/ph-$RANDOM"; mkdir -p "$PH/.claude/autonomy"; printf '%s' "$PH"
+}
+pstatus() { env HOME="$1" AI_GATEWAY_API_KEY=dummy CC_JEV_ARM_FILE="$1/.claude/autonomy/jev-batch.arm" \
+                 CC_JEV_FREE_UNTIL="$(date -u -v+30d +%Y-%m-%d)" "$REPO/bin/cc-jev" status 2>&1; }
+
+@test "cc-jev status: no promotion rows at all says NEVER RUN and names the lever" {
+  H="$(pass_home)"
+  run pstatus "$H"
+  grep -qF "promotion   never run" <<<"$output"
+  grep -qF "cc-jev arm" <<<"$output"
+}
+
+@test "cc-jev status: a PARTIAL pass says so, and says arming again resumes it" {
+  H="$(pass_home)"
+  { printf '%s\n' '{"id":"meta","round":"meta","orphans":278,"seed":"20260921","plan":133,"anchors":22}'
+    for i in 1 2 3; do printf '{"id":"h%s","round":"heat","winner":"a.md"}\n' "$i"; done
+  } > "$H/.claude/autonomy/jev-promote-20260921T010101Z.jsonl"
+  run pstatus "$H"
+  grep -qF "promotion   PARTIAL — 3 of 133" <<<"$output"
+  grep -qF "RESUMES it" <<<"$output"
+}
+
+@test "cc-jev status: a COMPLETE pass says so, and offers the free re-read" {
+  H="$(pass_home)"
+  { printf '%s\n' '{"id":"meta","round":"meta","orphans":10,"seed":"s","plan":2,"anchors":1}'
+    printf '%s\n' '{"id":"h1","round":"heat","winner":"a.md"}' '{"id":"r2-1","round":"h2h","winner":"a"}'
+  } > "$H/.claude/autonomy/jev-promote-20260921T020202Z.jsonl"
+  run pstatus "$H"
+  grep -qF "promotion   COMPLETE — 2 of 2" <<<"$output"
+  grep -qF "cc-jev promote --report" <<<"$output"
+}
+
+# An UNKNOWN denominator must be ADMITTED, never guessed. A run predating the plan stamp cannot
+# say how much of itself is left, and inventing a completeness would be a confident wrong answer
+# in the direction of "nothing more to do" — the one direction that costs the operator the corpus.
+@test "cc-jev status: an UNSTAMPED run reports UNKNOWN rather than guessing a denominator" {
+  H="$(pass_home)"
+  printf '%s\n' '{"id":"h1","round":"heat","winner":"a.md"}' \
+    > "$H/.claude/autonomy/jev-promote-20260921T030303Z.jsonl"
+  run pstatus "$H"
+  grep -qF "completeness UNKNOWN" <<<"$output"
+  ! grep -qE 'promotion +(COMPLETE|PARTIAL)' <<<"$output" \
+    || { echo "guessed a completeness for an unstamped run"; false; }
+}
+
+@test "cc-jev status: reports whether a window is armed, and its terms" {
+  H="$(pass_home)"
+  run pstatus "$H"
+  grep -qF "armed       no" <<<"$output"
+  jq -n '{created:"x", expires:"2099-01-01T00:00:00Z", max_calls:133, cap_b:1200, corpus:"memory-orphans"}' \
+    > "$H/.claude/autonomy/jev-batch.arm"
+  run pstatus "$H"
+  grep -qF "armed       YES" <<<"$output"
+  grep -qF "133 call(s)" <<<"$output"
+}
