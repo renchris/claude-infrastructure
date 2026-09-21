@@ -480,19 +480,25 @@ lr_holder_count() { # $1=sid → number of DISTINCT live holders (registry panes
   # already subtracted the overlap and answered "no session is held by more than one live
   # process", leaving the session unrecoverable with no next action and no culprit. One predicate,
   # one arithmetic, both callers — a second copy is how the two answers diverged in the first place.
-  local sid="${1:-}" rows procs total pid
+  local sid="${1:-}" rows procs total
   [ -n "$sid" ] || { printf '0\n'; return 0; }
   rows="$(lr_registry_live_rows "$sid" 2>/dev/null || true)"
   procs="$(lr_resume_procs "$sid" 2>/dev/null || true)"
-  total=$(( $(printf '%s' "$rows" | grep -c . || true) + $(printf '%s' "$procs" | grep -c . || true) ))
-  # A heredoc, never a pipe: a `while` on the right of `|` runs in a subshell and its decrement
-  # never escapes (memory: assignment-inside-command-substitution-never-escapes).
-  while IFS=$'\t' read -r _ pid _ _; do
-    [ -n "$pid" ] || continue
-    printf '%s\n' "$procs" | grep -qx "$pid" && total=$((total - 1))
-  done <<EOF
-$rows
-EOF
+  # DISTINCT PIDS — the cardinality of {registry live pids} UNION {resume leaves}, which is what
+  # "holder" means. The previous form was `rows + procs` minus the row/proc OVERLAP, and that is
+  # right ONLY for the overlap it was written for (a row and a leaf naming the SAME process). It
+  # was blind to the other way one process appears twice: the registry is PANE-keyed, so a session
+  # that changed panes leaves TWO live rows carrying ONE pid (§ 11 #2, pane-keyed overwrite). With
+  # no resume leaf there is nothing to subtract against, so that counted 2, `--locate` said
+  # DUPLICATE, and `--recover` PARKED a recoverable pane — the same failure the overlap fix was
+  # written to end, reached through the other door. Measured before this change: two pane rows over
+  # one live pid and no leaf returned 2 where the truth is 1.
+  # `bin/cc-limited:724` has always taken a pid SET, which is why the both-paths `parity` diff is
+  # what surfaced the disagreement. A set makes BOTH overlaps one arithmetic, so no subtraction is
+  # left to get wrong — and the documented contract this serves is processes, not rows:
+  # `--duplicates` is "sessions held by MORE than one live process" (lr-fleet.sh:13-15).
+  total="$( { printf '%s\n' "$rows" | awk -F'\t' 'NF && $2 != "" { print $2 }'
+              printf '%s\n' "$procs"; } | grep -E '^[0-9]+$' | sort -u | grep -c . || true )"
   printf '%s\n' "$total"
 }
 
