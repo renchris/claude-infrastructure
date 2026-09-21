@@ -590,3 +590,88 @@ jq -r 'select(.class=="drivable")|"\(.p) \(.hook)"'   ~/.claude/autonomy/jev-pil
 jq -r 'select(.hook!="fired" and .class=="drivable")' ~/.claude/autonomy/jev-pilot-20260921T024237Z.jsonl
 python3 -c "print((1-0.028)**88)"   # 0.082 — arm B's P(zero) with a perfect detector
 ```
+
+---
+
+# Addendum 5 — 2026-09-21: the 100th-percentile wave. Three of this document's own facts were wrong.
+
+Ten parallel research agents, two adversarial by design, against one question: what are Jev's
+primitives actually worth pointing at in this fleet. **Nine of the ten refuted their own family.**
+Full record and the loser list: `docs/research/jev-100p-2026-09-21/VERDICT.md`.
+
+The corrections matter more than the winner, because each one is a sentence **in this document**
+that a future session would otherwise re-inherit as measured.
+
+## 🚨 C1. §2's "three primitives, `score` unusable" — REFUTED, and it was our own mock
+
+Three places recorded `score` as rejected `invalid-response` "so the runtime schema is stricter than
+the published type". **That round trip never left 127.0.0.1.** The SDK's `validateEvaluationAnswers`
+(`node_modules/ai/dist/index.js:14503-14530`) runs CLIENT-SIDE and requires
+`hasExactKeys(probabilities, criteria.map((_, i) => String(i)))` — a COMPLETE distribution over
+every level index. `tests/fixtures/jev-mock-gateway.mjs` emitted **one key** for `score` while its
+`choice` branch eight lines above emitted the full map. That asymmetry is the entire finding, and it
+is exactly why boolean and choice "worked" and score "didn't".
+
+A/B through `scripts/jev/evaluate.mjs` unmodified: one key → `invalid-response`; complete map → ok.
+Fixed in `c20ef8742`, pinned by a test.
+
+**What this does NOT establish** — the correction inherits the original claim's burden: the score
+**question** shape (`criteria` as an ARRAY of ordered levels) has still never been sent to the real
+route. `choice` over an ordered MAP is what 198 real calls have exercised, so the shipped tools keep
+it; switching would trade a measured path for an unmeasured one to gain an ordinal we already hold.
+One operator-run probe would settle it.
+
+## C2. §3/§4's call-rate budget — the real figure is ~14.8/min, not ~4–6
+
+Measured over 146 consecutive calls in 593 s (`jev-rank-20260921T050814Z.jsonl`). The "~4 calls
+before throttling" traces to `9ee09166e`: **n=6, one burst, 2026-09-19** — the day the account made
+its *first ever* Gateway request. It propagated into `pilot.sh` as N/4–N/2 minutes and into
+`rank-memory.sh` as TOT/6–TOT/2, and **the two scripts already disagreed with each other**. A run
+budgeted at 24–73 minutes took **9.9**. Build against `TOT x 4.1s`; the observed limit is
+gap-bound, not throttle-bound.
+
+## C3. §2's 32k-vs-64k "unresolved" — resolved, and the cliff has no guard
+
+32,000 binds on the Gateway route we use (64k is the direct API). `CC_JEV_MAX_STATE_B` measures
+CHARACTERS over the whole spec, so the safe cap on `state` is **16,000 bytes**.
+
+And the one with a deadline: **the 2026-09-25 cliff is METERED, not a cut-off.** `typesafe-ai/jev`
+stays on the free-tier-eligible list and simply starts billing at $0.042/MTok input. No guard existed
+— `CC_JEV_FREE_UNTIL` was read at exactly ONE line in the tree, inside a `printf`: displayed, never
+enforced. Now `hooks/lib/jev.sh::jev_window_open`, failing **closed** on an unreadable clock, because
+a wrong refusal costs a re-run and a wrong approval costs a bill. Override is `CC_JEV_PAID=1`.
+
+## What Addendum 4's arm was still doing, five days after being retired
+
+Addendum 4 answered packet `c3752f5fca96` as `off`. `cc-jev status` printed RETIRED. **The call site
+never read the flag**: measured **372 calls in 25 hours**, every one an HTTP 403, each ~0.5s inside a
+Stop hook that runs on the operator's closes. Gated at the call site in `c0d42c885`.
+
+A decision recorded in a status printer and not at the point of use is not a decision, it is a note —
+the same shape as C3's `CC_JEV_FREE_UNTIL`. Two instances in one subsystem is a pattern worth naming.
+
+## The gap §5 named is now closed differently than expected
+
+*"Jev has not been evaluated on any task other than deference detection"* was true until today.
+`cc-jev rank` evaluated 146 memory rules — and **saturated**: 118 of 140 came back `often` on a
+four-level scale that never used its top level, while `superseded` returned zero rows in the only
+actionable band. Sound verdicts, worthless ordering. That is Addendum 4's lesson one level up: a
+property of the POPULATION, invisible until the answers are crosstabbed. The rule is now
+`docs/lessons/a-rubric-that-saturates-has-not-ranked-anything.md`.
+
+## What shipped
+
+A comparative promotion pass (`cc-jev promote`) over the 278 memory lessons reachable from neither
+always-loaded surface — heats of five, then head-to-head against a weak incumbent, with a free
+`same_rule` dedup passenger and a position-bias control that can refute the whole design. Run by
+`launchd/com.claude.jev-batch.plist`, which ships UNLOADED and is inert until the operator arms one
+bounded window. Whether it should ever call out on its own is decision packet **`ea7a241bdf78`**
+(conviction 88%).
+
+## Re-derive, never re-quote
+
+```
+bash bin/cc-jev rank --report ~/.claude/autonomy/jev-rank-20260921T050814Z.jsonl   # the saturation
+bash bin/cc-jev promote --report <any jev-promote-*.jsonl>                          # the bias control
+git show c20ef8742    # the score A/B          git show c0d42c885   # the retirement at the call site
+```
