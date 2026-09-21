@@ -24,7 +24,19 @@ setup() {
 # it could nudge. A fixture may never name an identifier that can exist outside it (memory:
 # hermetic-in-stubs-not-in-interpreter). The `52e35019` prefix is kept — it is what the display
 # assertions match on, and it is how this suite stays legible against the incident it was written from.
-  SID="52e35019-17e8-40f6-a54f-000000000000"
+#
+# 🚨 …AND THE ZEROED TAIL WAS STILL AN IDENTIFIER THAT EXISTS OUTSIDE THIS FIXTURE — in every OTHER
+# CONCURRENT RUN OF THIS SAME FILE. The rule above was applied against the fleet and not against the
+# suite itself. `:181` and `:195` spawn REAL `--resume "$SID"` processes that live 30 s, and
+# `lr_resume_procs` (lr-lib.sh:461) greps the REAL process table with no seam, so run A's sleeper is
+# a second holder to run B: `--locate` says DUPLICATE where the case pins RECOVERABLE. Measured
+# 2026-09-20 by running this file twice at once — **16 of 65 tests fail in BOTH runs**, led by
+# `locate: a resumed session's OWN pid is ONE holder` and `duplicates: the two censuses agree`. That
+# is the "1 in ~6 full runs under load" flake W3 reported: load means concurrency, and two bats roots
+# are allowed (ship-land's gate runs at CC_BATS_MAX_ROOTS=0 regardless), so a lander can be convicted
+# for a sibling's sleeper. The tail is therefore derived PER TEST — unique by construction, while the
+# `52e35019` prefix the display assertions match on is untouched.
+  SID="52e35019-17e8-40f6-a54f-$(printf '%012d' "$(printf '%s' "$BATS_TEST_TMPDIR" | cksum | cut -d' ' -f1)")"
   # lr-handoff stub: records argv, exits per LRH_RC, prints the announcements the fleet parses
   export LR_HANDOFF_BIN="$BATS_TEST_TMPDIR/lr-handoff"
   cat > "$LR_HANDOFF_BIN" <<'SH'
