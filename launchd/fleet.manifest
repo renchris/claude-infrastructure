@@ -153,6 +153,11 @@ com.claude.team-orphan-reaper     | staged | 600  | auto | 11 | 18-fleet-activat
 # pointed at a script that cannot load the job. 06 remains the right companion for wiring the desk
 # itself; it is not this row's activator.
 com.claude.desk-invariant         | staged | 300  | auto | 5  | 18-fleet-activate.sh
+# Ships UNLOADED like com.claude.dispatcher: the agent never loads launchd. `staged` is the honest
+# expect — built, activation pending — and it is not a fault row. Loading it schedules nothing that
+# sends: unarmed, `cc-jev batch` logs one line and exits 0. The SECOND act (cc-jev arm) is the
+# consent, and it is per-window by construction.
+com.claude.jev-batch              | staged | 1800 | auto | 5  | 44-jev-batch-activate.sh
 com.claude.boot-resume            | staged | 300  | auto | 2  | 18-fleet-activate.sh
 com.claude.lead-supervisor        | run    | 0    | ~/.claude/autonomy/supervisor.log | 2 | 18-fleet-activate.sh
 com.claude.nightly-regression     | staged | 0    | auto | 1  | 18-fleet-activate.sh

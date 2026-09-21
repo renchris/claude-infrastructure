@@ -175,3 +175,40 @@ jev_bool_confident() {
   [ -n "$p" ] || return 1
   awk -v p="$p" -v t="$minp" 'BEGIN{exit !(p+0 >= t+0)}'
 }
+
+# jev_window_open — REFUSE to spend money the operator never authorised.
+#   rc 0 → the free Gateway window is open (or an explicit override is set); callers may proceed.
+#   rc 1 → the window has lapsed; a loud refusal naming the override has been printed to stderr.
+#
+# 🚨 THIS GUARD DID NOT EXIST UNTIL 2026-09-21, AND ITS ABSENCE WAS A LIVE HAZARD. The free window
+# ends 2026-09-25, and on that date `typesafe-ai/jev` does not stop answering — it becomes METERED
+# at $0.042/MTok input. So every batch consumer written this week would have gone on calling, on
+# the operator's card, with nothing in the code path aware that anything had changed. Until now
+# `CC_JEV_FREE_UNTIL` was read at exactly ONE line in the whole tree (`bin/cc-jev`, inside a
+# printf), i.e. it was a thing we DISPLAYED and never a thing we ENFORCED — the same shape as a
+# limit that lives in a comment.
+#
+# It fails CLOSED on an unreadable clock: a date command that cannot answer leaves the window shut
+# rather than open, because the failure it is guarding is spending, and the cost of a wrong refusal
+# is a re-run while the cost of a wrong approval is a bill.
+#
+# `CC_JEV_PAID=1` is the deliberate override, and it is deliberately an ENV VAR rather than a flag:
+# authorising spend is the operator's act, and it should have to be typed.
+jev_window_open() {
+  local until="${CC_JEV_FREE_UNTIL:-2026-09-25}" today
+  [ "${CC_JEV_PAID:-0}" = 1 ] && return 0
+  today="$(date -u +%Y-%m-%d 2>/dev/null)"
+  if [ -z "$today" ]; then
+    printf '✗ REFUSING: cannot read the clock, so the free-window check cannot be made.\n' >&2
+    printf '  Failing closed — past %s these calls are billed. Override: CC_JEV_PAID=1\n' "$until" >&2
+    return 1
+  fi
+  # String comparison is correct and intentional for ISO-8601 dates: they sort lexically.
+  if [ "$today" \> "$until" ]; then
+    printf '✗ REFUSING: the free AI Gateway window closed on %s (today is %s).\n' "$until" "$today" >&2
+    printf '  Calls past it are BILLED at 0.042 USD per MTok input — they do not fail, they charge.\n' >&2
+    printf '  If that is intended, authorise it explicitly:  CC_JEV_PAID=1 <command>\n' >&2
+    return 1
+  fi
+  return 0
+}

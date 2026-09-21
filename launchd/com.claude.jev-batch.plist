@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.claude.jev-batch — runs `cc-jev batch` on a timer. The batch makes a Jev call ONLY when the
+  operator has armed it (`cc-jev arm`); in every other state it writes one line to its log and
+  exits 0. Loading this plist therefore schedules nothing that sends anything.
+
+  ⚠️  SHIPS UNLOADED, like com.claude.dispatcher, and for the same house reason: the agent never
+  loads launchd. The operator bootstraps it by hand.
+
+      launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.claude.jev-batch.plist
+      launchctl bootout   gui/$UID/com.claude.jev-batch        # kill switch
+
+  WHY THE SCHEDULE AND THE CONSENT ARE SEPARATE, which is the whole design:
+  a launchd job is NOT bound by the session permission classifier — it is a daemon with no Claude
+  Code process in the loop — so a bare timer here would silently convert "the operator ran one
+  command" into "our engineering lessons leave this machine on a clock, forever, under standard
+  retention". Nobody decided that, and it is a genuine value fork (decision packet, see
+  docs/research/jev-100p-2026-09-21/a8-consent-and-scheduling.md). The sentinel keeps the SCHEDULE
+  durable and the CONSENT per-window: armed once, consumed before the first call, expiring on a
+  clock, carrying the corpus / byte cap / call ceiling it consents to.
+
+  RunAtLoad is TRUE and that is safe precisely because the unarmed path sends nothing — it means
+  bootstrapping gives the operator an immediate log line confirming the wiring works, rather than
+  a 30-minute wait to find out it does not.
+
+  IT INVOKES `cc-jev batch`, NOT the script directly, and that is not a style choice: install.sh
+  globs scripts/*.sh at the TOP LEVEL only, so scripts/jev/ is never deployed to ~/.claude and a
+  plist naming $HOME/.claude/scripts/jev/jev-batch.sh would point at a file that does not exist.
+  bin/ IS symlinked, and cc-jev resolves its own $ROOT through the symlink into the checkout, so
+  one deployed path reaches every subcommand. (That symlink trails origin/main until the live
+  layer converges — the com.claude.dispatcher bleed — so a land here still needs deploy-live.)
+
+  StartInterval 1800: the armed window is 180 minutes by default, so a single arming is picked up
+  well inside it without the job waking often enough to matter. There is nothing to be timely about
+  — the corpus it reads changes on the order of days.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude.jev-batch</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>export PATH="$HOME/.claude/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; B="$HOME/.claude/bin/cc-jev"; [ -x "$B" ] || B="$HOME/Development/claude-infrastructure/bin/cc-jev"; exec "$B" batch</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>1800</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/chrisren/.claude/autonomy/jev-batch.launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/chrisren/.claude/autonomy/jev-batch.launchd.log</string>
+</dict>
+</plist>
