@@ -610,12 +610,39 @@ print(int((time.time() - t) * 1000), int(cpu * 1000))' "$SUBJ")"
   printf '%s\n' "$output" | grep -q 'FAULT CLAIMED-NOT-LIVE' || false
 
   local out rc=0
+
+  # ARM 1 — ENOTDIR, and it is the arm that runs EVERYWHERE. A regular file where the store's
+  # directory belongs is `exists() == True` + `listdir()` raises, which is precisely the state the
+  # rule above is about, reached through the same `probe_source` line as EACCES. It is used as the
+  # unconditional arm because no uid can bypass ENOTDIR, where EACCES has a privilege precondition
+  # (arm 2). Measured 2026-09-21: `NotADirectoryError` errno 20 raises for uid 0.
+  mv "$LR_STATE_DIR/locks" "$LR_STATE_DIR/locks.d"
+  : > "$LR_STATE_DIR/locks"
+  rc=0; out="$(cc 2>/dev/null)" || rc=$?
+  [ "$rc" -eq 5 ]
+  [ -z "$out" ]
+  # …and stderr NAMES the store, so the operator is not left to guess which one went down
+  run bash -c 'python3 "$1" 2>&1 1>/dev/null' _ "$SUBJ"
+  printf '%s\n' "$output" | grep -q 'locks' || false
+  rm -f "$LR_STATE_DIR/locks"
+  mv "$LR_STATE_DIR/locks.d" "$LR_STATE_DIR/locks"
+
+  # ARM 2 — EACCES, THE ORIGINAL, AND IT IS SKIPPED ONLY WHERE IT CANNOT FAIL. root holds
+  # CAP_DAC_OVERRIDE, so `chmod 000` denies it nothing: `listdir` SUCCEEDS, the census exits 0, and
+  # this arm goes red having tested the uid rather than the subject. That red is not free — it
+  # convicts the diff of whoever is landing, and this repo now lands from cloud VMs that run as
+  # root (measured 2026-09-21: uid 0 ⇒ `not ok 23`, uid 1001 ⇒ `ok`, one variable). The skip is
+  # therefore a PRECONDITION, not a quarantine: arm 1 above holds the same rule unconditionally, so
+  # no coverage of § 11 #11 is lost where this is skipped — only the EACCES spelling of it.
+  if [ "$(id -u)" -eq 0 ]; then
+    skip "EACCES arm needs an unprivileged uid; root bypasses DAC. Arm 1 (ENOTDIR) covered the rule."
+  fi
+  rc=0
   chmod 000 "$LR_STATE_DIR/locks"
   out="$(cc 2>/dev/null)" || rc=$?
   chmod 755 "$LR_STATE_DIR/locks"
   [ "$rc" -eq 5 ]
   [ -z "$out" ]
-  # …and stderr NAMES the store, so the operator is not left to guess which one went down
   run bash -c 'chmod 000 "$2/locks"; python3 "$1" 2>&1 1>/dev/null; chmod 755 "$2/locks"' _ "$SUBJ" "$LR_STATE_DIR"
   printf '%s\n' "$output" | grep -q 'locks' || false
 }
@@ -750,3 +777,26 @@ PY' _ "$link"
 # parity diff against `lf_locate` over tests/lr-fleet.bats's own locate:/D7:/D8: fixtures. It
 # belongs with W3, which is where `lf_census` and the --slow-scan path land; asserting parity
 # before that plumbing exists would pin this tool against a caller it does not yet have.
+#
+# ── RED-PROOF: row 21's ENOTDIR arm (added 2026-09-21, off-box verification of LIMIT_DETECT_100P) ─
+#
+# Row 21 asserted § 11 #11's "exists but cannot be read" through `chmod 000` ALONE. That spelling
+# has an unstated precondition — an unprivileged uid — and it convicts the wrong party when it is
+# unmet: root holds CAP_DAC_OVERRIDE, so `listdir` succeeds, the census exits 0, and the row goes
+# red having measured the UID rather than the subject. Measured both arms, one variable:
+#
+#   uid 0    (cloud VM, this repo now lands from one)  ->  not ok 23 … `[ "$rc" -eq 5 ]' failed
+#   uid 1001 (ccprobe, same box, same tree, same bats) ->  ok 23
+#
+# The cure is an arm no uid can bypass, reaching the SAME `probe_source` line: a regular file where
+# the store's directory belongs is `exists() == True` + `listdir()` raising NotADirectoryError
+# (errno 20, confirmed raising for uid 0). It runs unconditionally; the EACCES arm is kept and now
+# states its precondition with `skip`, so the rule keeps full coverage on the desk and does not
+# fabricate a red anywhere else.
+#
+# IT CONVICTS — the arm is not decorative. M6, run as ROOT so ONLY the new arm was live:
+#
+#   M6  probe_source returns False instead of raising Unreadable   -> 21
+#       (i.e. the pre-§ 11 #11 defect itself: the swallow that made an unreadable locks/ render as
+#        a fleet in which nobody had claimed anything)
+#       vs mutant: `not ok 1 21 …` at `[ "$rc" -eq 5 ]`;  vs pristine: `ok 1 21`.
