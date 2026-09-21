@@ -231,26 +231,77 @@ def main():
         json.dump(manifest, f, indent=2)
 
     cells = "\n".join(
-        f'<figure><img src="{i["file"]}" loading="lazy">'
-        f'<figcaption>{i["file"]}<br><small>{i.get("type","")} · '
-        f'{i.get("bytes",0)//1024} KB · {i["source"]}</small></figcaption></figure>'
+        f'  <figure><img src="{i["file"]}" alt="" loading="lazy">'
+        f'<figcaption><div class=name>{i["file"]}</div>'
+        f'<div class=facts><span class=src data-s="{i["source"]}">{i["source"]}</span>'
+        f'<span>{i.get("bytes",0)//1024} KB</span>'
+        f'<span>{i.get("type","").replace("image/","")}</span></div></figcaption></figure>'
         for i in ok)
+    frm = ((msg.get("from") or {}).get("emailAddress", {}) or {}).get("address", "")
+    # DIRECTION: instrument panel, not gallery. This is a forensic surface read
+    # beside a terminal, so every number is full-contrast (operator standing rule:
+    # never dim data — no opacity on text anywhere) and one signal hue is reserved
+    # for the single judgement the sheet supports: did this arrive IN the message
+    # or from a remote server.
+    #
+    # Built by running the mirrored ui.sh corpus for real rather than describing
+    # it. The rules it fixed in the previous version, each traceable to a file:
+    #   typography      14px body / 12px captions were below the text-base floor;
+    #                   no InterVariable; no text-balance on the heading
+    #   heading-groups  no per-element max-w-[*ch]
+    #   section-layout  no two-element pattern — content ran full-bleed at any width
+    #   surfaces        kept (images on the ground, no cards — lightest separation)
+    #   images          kept (outline, never border)
+    # and one from frontend-design's named-cliché list: the old subtitle was
+    # "N image(s) · date · N failed" — middle-dot-joined meta strings are template
+    # chrome that appears whatever the subject.
+    #
+    # Two defects only a RENDER showed, fixed after screenshotting it: varying
+    # aspect ratios pushed every caption to a different baseline (a contact sheet's
+    # convention is identical frames), and the signal colour was being spent on a
+    # constant when every image shares one source.
     html_doc = f"""<!doctype html><meta charset=utf-8><title>{subject}</title>
+<link rel=preconnect href="https://rsms.me/"><link rel=stylesheet href="https://rsms.me/inter/inter.css">
 <style>
-:root{{color-scheme:light dark}}
-body{{font:14px/1.5 system-ui,-apple-system,sans-serif;margin:0;padding:24px;
-background:Canvas;color:CanvasText}}
-h1{{font-size:18px;margin:0 0 4px}} p.sub{{margin:0 0 24px;opacity:.65}}
-.grid{{display:grid;gap:20px;grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}}
-figure{{margin:0}} img{{width:100%;height:auto;display:block;border-radius:6px;
-outline:1px solid color-mix(in oklch, CanvasText 12%, transparent);outline-offset:-1px}}
-figcaption{{margin-top:6px;font-size:12px;opacity:.7;word-break:break-all}}
+:root{{
+  --ground:#16181C; --raised:#1E2126; --line:#2C3037;
+  --ink:#F2F4F7; --ink-2:#AEB6C2;
+  --inline:#7FD1AE; --remote:#E0A458;
+  --font-sans:"InterVariable","Inter",system-ui,sans-serif;
+  --font-mono:ui-monospace,"SF Mono",Menlo,monospace;
+  color-scheme:dark;
+}}
+*{{box-sizing:border-box}}
+body{{margin:0;background:var(--ground);color:var(--ink);font-family:var(--font-sans);
+  font-size:1rem;line-height:1.5;font-feature-settings:"cv02","cv03","cv04","cv11";
+  -webkit-font-smoothing:antialiased}}
+.band{{padding:40px 24px 64px}} .inner{{max-width:1400px;margin-inline:auto}}
+h1{{margin:0;font-size:1.5rem;font-weight:600;letter-spacing:-.02em;text-wrap:balance;max-width:40ch}}
+.meta{{margin:10px 0 0;display:flex;flex-wrap:wrap;gap:0 28px;font-family:var(--font-mono);
+  font-size:.875rem;color:var(--ink-2)}}
+.meta b{{color:var(--ink);font-weight:500}}
+.rule{{height:1px;background:var(--line);margin:28px 0 32px}}
+.grid{{display:grid;gap:32px 28px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}}
+figure{{margin:0}}
+img{{width:100%;aspect-ratio:16/10;object-fit:contain;display:block;border-radius:4px;
+  background:var(--raised);padding:6px;outline:1px solid rgb(255 255 255 / .10);outline-offset:-1px}}
+figcaption{{margin-top:10px;font-size:.875rem;line-height:1.45}}
+.name{{font-family:var(--font-mono);color:var(--ink);word-break:break-all}}
+.facts{{margin-top:3px;font-family:var(--font-mono);color:var(--ink-2);display:flex;gap:14px;align-items:baseline}}
+.src{{font-weight:500;font-size:.8125rem;letter-spacing:.01em}}
+.src[data-s=inline]{{color:var(--inline)}} .src[data-s=remote]{{color:var(--remote)}}
+.none{{color:var(--ink-2);font-family:var(--font-mono)}}
+@media (max-width:640px){{ body{{font-size:1.0625rem}} .band{{padding:28px 18px 48px}} }}
 </style>
-<h1>{subject}</h1>
-<p class=sub>{len(ok)} image(s) · {msg.get('receivedDateTime','')} · {len(bad)} failed</p>
-<div class=grid>
-{cells}
-</div>"""
+<div class=band><div class=inner>
+  <h1>{subject}</h1>
+  <p class=meta><span><b>{len(ok)}</b> images</span><span><b>{len(bad)}</b> failed</span>
+    <span>{(msg.get('receivedDateTime') or '')[:10]}</span><span>{frm}</span></p>
+  <div class=rule></div>
+  <div class=grid>
+{cells or '  <p class=none>no images in this message</p>'}
+  </div>
+</div></div>"""
     idx = os.path.join(out, "index.html")
     with open(idx, "w") as f:
         f.write(html_doc)
