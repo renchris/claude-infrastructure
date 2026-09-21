@@ -30,9 +30,16 @@
 # otherwise (and UNKNOWN is resumed with --resume, because a session that cannot be shown done is
 # not done — memory: lookup-miss-is-not-absence).
 #
+# TRANSPLANTED is the verdict none of that reaches: a limit transplant keeps the SAME sid and moves
+# the session to ANOTHER account's store, leaving the source pane at a bare shell — a husk by every
+# test above. Resolve it and you name the SOURCE account, and typing that account's resume line puts
+# a second writer on a transcript that is live work somewhere else. So before a row commits to an
+# account, the sid is asked of lr-lib's lr_transplant_target against the store it was found in; a
+# hit is classed TRANSPLANTED→<account> and is NEVER resumed, --all included.
 # Seams (tests): CC_HUSK_PANES_JSON (file, the `it2 session list --json` shape) · CC_HUSK_PS_FILE
 # (`ps -axo pid=,ppid=,command=` capture) · CC_REGISTRY_DIR · CC_HUSK_STORES (colon-separated
-# account config dirs) · CC_HUSK_CRASH_LOG · CC_HUSK_IT2 (the it2 binary) · CC_HUSK_LOG.
+# account config dirs) · CC_HUSK_CRASH_LOG · CC_HUSK_IT2 (the it2 binary) · CC_HUSK_LOG ·
+# CC_HUSK_LR_LIB (a SEAL — see the ladder below) · LR_STATE_DIR (read by lr-lib's lock arm).
 set -u
 IT2="${CC_HUSK_IT2:-$HOME/.claude/bin/it2}"
 REG="${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"
@@ -50,6 +57,33 @@ while [ $# -gt 0 ]; do
 done
 command -v jq >/dev/null 2>&1 || { echo "cc-husk-sweep: jq is required" >&2; exit 2; }
 
+# lr-lib.sh owns the ONE spelling of "where did this session go" (lr_transplant_target). Resolved
+# through $0's REAL path first — the shape bin/cc-find:59-69 already uses — because
+# ~/.claude/bin/cc-husk-sweep is a per-file symlink into the checkout: a `$0`-relative sibling
+# lookup that skips readlink resolves against the LINK's directory and the source is a SILENT no-op.
+# CC_HUSK_LR_LIB is a SEAL, not a hint: when it is set it is the ONLY candidate, so a test can make
+# the library genuinely unreachable. Falling through to the ladder would leave the seam unsealable
+# and the fatal arm below untestable.
+_HS_SELF="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+_HS_BIN="$(cd "$(dirname "$_HS_SELF")" && pwd)"
+if [ -n "${CC_HUSK_LR_LIB:-}" ]; then _hs_libs="$CC_HUSK_LR_LIB"
+else _hs_libs="$_HS_BIN/../scripts/limit-recover/lr-lib.sh
+${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-lib.sh
+$HOME/.claude/scripts/limit-recover/lr-lib.sh"; fi
+while IFS= read -r _hs_lib; do
+  # shellcheck disable=SC1090  # runtime-resolved library ladder, same shape as bin/cc-find:59-69
+  [ -f "$_hs_lib" ] && { . "$_hs_lib"; break; }
+done <<<"$_hs_libs"
+# FATAL, never fail-open, and the direction is the whole argument: this guard's only job is to
+# PREVENT an action, so a missing library would silently restore the pre-guard behaviour — type a
+# transplanted session's resume line into its dead source pane. cc-find:68-69 exits for the same
+# reason; the poller and lr-fleet guard with `command -v … ||` because their lr-lib use is ADDITIVE
+# and degrading it loses information rather than taking an action. Exit 2 is this file's own
+# spelling for "a hard dependency is absent" (the jq check above); 3 is already the typed-yes abort.
+command -v lr_transplant_target >/dev/null 2>&1 || {
+  echo "cc-husk-sweep: FATAL — lr-lib.sh (lr_transplant_target) not found beside $_HS_BIN" >&2
+  exit 2; }
+
 launcher_for_dir() {  # <config dir or account label> → launcher name
   case "${1##*/}" in
     .claude-secondary|claude-secondary|next2) echo claude2 ;;
@@ -57,6 +91,60 @@ launcher_for_dir() {  # <config dir or account label> → launcher name
     .claude-quaternary|claude-quaternary|next4) echo claude4 ;;
     *) echo claude ;;
   esac
+}
+acct_for_dir() {  # <config dir> → the account name lr-fleet.sh:261 prints (next|next2|next3|next4)
+  # lib/account-map.generated.sh is NOT used here on purpose: it hardcodes $HOME/.claude-* and so
+  # cannot see CC_HUSK_STORES, the seam every test in this file resolves stores through. Same
+  # basenames and same direction as launcher_for_dir above — one table, two renderings.
+  local b; b="${1%/}"
+  case "${b##*/}" in
+    .claude-secondary|claude-secondary|next2)   echo next2 ;;
+    .claude-tertiary|claude-tertiary|next3)     echo next3 ;;
+    .claude-quaternary|claude-quaternary|next4) echo next4 ;;
+    *) echo next ;;
+  esac
+}
+store_for_launcher() {  # <launcher name> → the STORES entry that names that account / rc 1
+  # THE DERIVATION THE SPEC COULD NOT EXPRESS. lr_transplant_target wants a config DIRECTORY, and
+  # resolve() never produces one: the registry arm has an account LABEL, the scrollback arm a
+  # launcher NAME. The only place either becomes a directory is this table, read BACKWARDS through
+  # launcher_for_dir so the two spellings can never drift apart.
+  # STORES puts .claude LAST while lr_config_dirs (lr-lib.sh:26-49) puts it FIRST, so `claude`
+  # matches ~/.claude-next here and ~/.claude there. Harmless, because those are ONE store — their
+  # `projects` is the same directory, so every glob below reads the same population and same_store()
+  # folds the comparison. Never assume the two orders agree about anything else.
+  local want="$1" store
+  [ -n "$want" ] || return 1
+  for store in $(printf '%s' "$STORES" | tr ':' ' '); do
+    [ "$(launcher_for_dir "$store")" = "$want" ] || continue
+    printf '%s' "$store"; return 0
+  done
+  return 1
+}
+same_store() {  # <cfg a> <cfg b> → 0 iff they are ONE store
+  # ~/.claude-next is a REAL directory whose `projects` is a SYMLINK to ~/.claude/projects, so the
+  # cfg ROOTS resolve to two different paths for one store — and lr_transplant_target compares the
+  # roots, so it reads the mirror as a move. The identity is `projects`, exactly as lr_config_dirs
+  # keys its dedupe. An unreadable dir keeps its own path rather than collapsing onto the empty
+  # string, which would make every such pair compare EQUAL and silently disarm the guard.
+  local a b
+  a="$(cd "$1/projects" 2>/dev/null && pwd -P)"; [ -n "$a" ] || a="$1/projects"
+  b="$(cd "$2/projects" 2>/dev/null && pwd -P)"; [ -n "$b" ] || b="$2/projects"
+  [ "$a" = "$b" ]
+}
+transplant_target_of() {  # <sid> <the cfg it was found in> → target cfg on stdout / rc 1
+  # lr_transplant_target, NOT lr_transplanted_to. The spec named the second; it is LOCK-ONLY, and
+  # lr-lib.sh:519-541 records the measurement that kills it — on this box the lock store held ONE
+  # lock fleet-wide, belonging to an unrelated sid, while the three panes the predicate exists to
+  # find each carried a transplant tombstone and no lock at all. A lock-only read is inert against
+  # its own motivating population. lr_transplant_target is the superset: lock first, then a
+  # tombstone that names a DIFFERENT store, which is what keeps a same-account `--mark` out.
+  local sid="$1" here="$2" to
+  [ -n "$sid" ] && [ -n "$here" ] || return 1
+  to="$(lr_transplant_target "$sid" "$here" 2>/dev/null)" || return 1
+  [ -n "$to" ] || return 1
+  same_store "$here" "$to" && return 1
+  printf '%s' "$to"
 }
 panes_json() {
   if [ -n "${CC_HUSK_PANES_JSON:-}" ]; then cat "$CC_HUSK_PANES_JSON"; else "$IT2" session list --json 2>/dev/null; fi
@@ -94,15 +182,18 @@ live_sids() {
 LIVE_SIDS="$(live_sids)"
 is_live_sid() { [ -n "${1:-}" ] && printf '%s\n' "$LIVE_SIDS" | LC_ALL=C /usr/bin/grep -qxF -- "$1"; }
 
-resolve() {  # <pane> <cwd> → sets R_SID R_LAUNCHER R_CWD R_SRC (empty sid = unresolved)
+resolve() {  # <pane> <cwd> → sets R_SID R_LAUNCHER R_CWD R_SRC R_STORE (empty sid = unresolved)
+  # R_STORE is the config dir THIS arm committed to — the answer to "whose copy is this?", which the
+  # transplant gate needs and which none of the other four fields carries.
   local pane="$1" cwd="$2" row sb store d f
-  R_SID=""; R_LAUNCHER=""; R_CWD="$cwd"; R_SRC=""
+  R_SID=""; R_LAUNCHER=""; R_CWD="$cwd"; R_SRC=""; R_STORE=""
   row="$REG/$pane.json"
   if [ -f "$row" ]; then
     R_SID="$(jq -r '.session_id // .sessionId // empty' "$row" 2>/dev/null)"
     if [ -n "$R_SID" ]; then
       R_LAUNCHER="$(launcher_for_dir "$(jq -r '.account // empty' "$row")")"
       d="$(jq -r '.cwd // empty' "$row")"; [ -n "$d" ] && R_CWD="$d"
+      R_STORE="$(store_for_launcher "$R_LAUNCHER" || true)"
       R_SRC=registry; return 0
     fi
   fi
@@ -124,6 +215,7 @@ resolve() {  # <pane> <cwd> → sets R_SID R_LAUNCHER R_CWD R_SRC (empty sid = u
     if [ -n "$R_SID" ]; then
       R_LAUNCHER="$(printf '%s\n' "$sb" | LC_ALL=C sed -n 's/.*[[:space:]]\(claude[0-9]\{0,1\}\) --strict-mcp-config.*/\1/p' | tail -1)"
       [ -n "$R_LAUNCHER" ] || R_LAUNCHER=claude
+      R_STORE="$(store_for_launcher "$R_LAUNCHER" || true)"
       R_SRC=scrollback; return 0
     fi
   fi
@@ -141,6 +233,7 @@ resolve() {  # <pane> <cwd> → sets R_SID R_LAUNCHER R_CWD R_SRC (empty sid = u
   [ -n "$best" ] || return 1
   R_SID="$(basename "$best" .jsonl)"
   store="${best%/projects/*}"; R_LAUNCHER="$(launcher_for_dir "$store")"; R_SRC=transcript
+  R_STORE="$store"   # this arm READ its store off disk — there is no derivation to get wrong
   return 0
 }
 transcript_for() {  # <sid> → path or empty
@@ -194,9 +287,15 @@ while IFS=$'\t' read -r pane pid cwd; do
   [ -z "$ONLY" ] || [ "$pane" = "$ONLY" ] || continue
   has_claude_under "$pid" && continue
   resolve "$pane" "$cwd" || { rows="$rows$pane"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"UNKNOWN"$'\t'"$cwd"$'\t'"unresolved"$'\n'; continue; }
+  # THE TRANSPLANT GATE, on its OWN channel. Never a resolve() rc: :196 collapses every resolve
+  # failure into the literal row `unresolved`, which already throws R_SRC=live-elsewhere away and
+  # would erase both the sid and the target here too (memory: lookup-miss-is-not-absence).
+  xplant=""
+  [ -z "$R_STORE" ] || xplant="$(transplant_target_of "$R_SID" "$R_STORE" || true)"
   tp="$(transcript_for "$R_SID" || true)"
   death="$(death_of "$R_SID")"; close="$(close_of "$tp")"; work="$(work_of "$R_CWD")"
   v="$(verdict_of "$close" "$work")"
+  [ -z "$xplant" ] || v="TRANSPLANTED→$(acct_for_dir "$xplant")"
   rows="$rows$pane"$'\t'"$R_SID"$'\t'"$R_LAUNCHER"$'\t'"$death"$'\t'"$close"$'\t'"$work"$'\t'"$v"$'\t'"$R_CWD"$'\t'"$R_SRC"$'\n'
 done < <(panes_json | jq -r '.[] | [(.id // .uuid // ""), (.pid // 0), (.cwd // "")] | @tsv')
 
@@ -212,6 +311,10 @@ fi
 plan=""
 while IFS=$'\t' read -r pane sid launcher death close work v cwd _; do
   [ -n "$pane" ] && [ "$sid" != "-" ] || continue
+  # --all means "the DONE ones too", never "the ones that MOVED". A TRANSPLANTED session is live
+  # work in another account's store; typing its resume line into this dead source pane is the
+  # two-writers-one-transcript failure the gate above exists to prevent.
+  case "$v" in TRANSPLANTED*) continue ;; esac
   if [ "$ALL" = 1 ] || [ "$v" != DONE ]; then plan="$plan$pane"$'\t'"$sid"$'\t'"$launcher"$'\t'"$cwd"$'\n'; fi
 done <<<"$rows"
 [ -n "$plan" ] || { echo "cc-husk-sweep: nothing to resume (every resolved husk is DONE; --all resumes those too)"; exit 0; }
