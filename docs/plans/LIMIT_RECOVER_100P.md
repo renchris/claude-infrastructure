@@ -797,3 +797,22 @@ above; the ones that changed a DESIGN rather than an anchor are restated here so
     bridge's residual 7 said all five were dead and the precheck therefore refused them all by design;
     that residual is now discharged by the world, and this pane is the drill's fault-arm (c) fixture
     (a held draft ⇒ `HELD:draft` with nothing moved).
+  - ⚠️ **CORRECTION to the bullet above, 40 minutes later, and it is the plan's own last lesson
+    landing on the session that quoted it.** I wrote *"`07e30aeb` (pane 410) is LIVE and LIMITED …
+    that residual is now discharged by the world."* Re-read before acting on it: `cc-find` now
+    returns `DEAD`, `lr-fleet --locate` returns `CWD-GONE`, and
+    `/Users/chrisren/Development/.worktrees/wt-cc-143039-68221` **does not exist** — the session died
+    and its worktree was reaped between the two reads. **Residual 7 is NOT discharged**: every
+    limited session on the box is dead again (`07e30aeb` next3 · `0e2567ee` next4 · `fff83638` next4,
+    all `CWD-GONE`), so the precheck still refuses them all at `pane_cc_state` by design and the
+    full in-place recovery check is still owed a live subject.
+    The immediately preceding §9 entry (2026-09-20 21:4xZ) says *"a residual is a measurement with a
+    timestamp — re-run it at the moment you file it, not at the moment you were told it."* I read
+    that entry, wrote the bullet from a read taken ~40 minutes earlier, and committed it. The rule is
+    now carried twice in this file by two different sessions; what it needs is a mechanism, not a
+    third restatement.
+  - **The census disagreement was real and `lr-fleet --locate` was the correct instrument.** At
+    02:5xZ `cc-find --limited` said `LIVE` while `--locate` said `CWD-GONE`; the discriminator is
+    that `--locate` tests the cwd and `cc-find`'s liveness column did not. Both were right at their
+    own moment — this is not a defect in either — but when two auditors over one population disagree,
+    the one that reads the *scarcer* fact wins, and a session's cwd is scarcer than its registry row.
