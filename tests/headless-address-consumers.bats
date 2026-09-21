@@ -198,7 +198,14 @@ assert_site() {
 }
 
 @test "consumers: scripts/handoff-fire.sh mark_fired_peer stamps a headless peer" {
-  assert_site scripts/handoff-fire.sh pane 1
+  # TWO blocks, not one, since handoff-fire.sh:4439-4442 grew the ADDRESS-SHAPE arm — the `case
+  # "$pane" in ''|.|..|.*|*[!A-Za-z0-9._-]*)` guard whose own comment cites bin/cc-pane-headless:124
+  # for `hdl-<hex>` being a real pane address that the hex spelling refused. That arm is precisely
+  # what this suite exists to check, so it is CENSUSED rather than hidden: raising the count puts
+  # both blocks under the uuid/hdl/evil arm checks below. Trunk was red on this before the raise
+  # (A/B: the identical BLOCK CENSUS failure on a clean origin/main worktree), so the gate was
+  # naming it against whoever landed next by reachability rather than by cause.
+  assert_site scripts/handoff-fire.sh pane 2
 }
 
 @test "consumers: scripts/lead-supervisor.sh sweeps a headless fired peer" {
