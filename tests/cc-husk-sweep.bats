@@ -299,3 +299,19 @@ stub_lr_lib() { # <body of lr_transplant_target>
   [[ "$output" != *TRANSPLANTED* ]] || { echo "fabricated a transplant from an empty target: $output"; false; }
   [[ "$output" == *'"verdict":"RESUME"'* ]] || { echo "$output"; false; }
 }
+
+@test "a target cfg recorded with a trailing slash still names the right account" {
+  # lr_transplant_target prints the target EXACTLY as the lock or tombstone recorded it, and a
+  # writer is free to record "…/.claude-secondary/". Unstripped, ${1##*/} is the empty string and
+  # every such row renders TRANSPLANTED→next — a confident wrong account, not an error.
+  xplant_seals
+  SID=bbbb0000-0000-0000-0000-00000000000b
+  printf '{"paneUUID":"10","session_id":"%s","account":"claude-tertiary","cwd":"%s"}\n' "$SID" "$CWD_A" \
+    > "$CC_REGISTRY_DIR/10.json"
+  transcript "$T/.claude-tertiary"  "$CWD_A" "$SID" no
+  tombstone  "$T/.claude-tertiary"  "$CWD_A" "$SID" "$T/.claude-secondary/"
+  transcript "$T/.claude-secondary" "$CWD_B" "$SID" none
+  run "$SWEEP" --json --pane 10
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"verdict":"TRANSPLANTED→next2"'* ]] || { echo "$output"; false; }
+}
