@@ -31,6 +31,25 @@ setup() {
   export CC_TUI_READBACK_TRIES=2 CC_TUI_RECORD_TRIES=2 CC_TUI_RECORD_IVL=0.01
   export CC_TUI_SCRUB_ROUNDS=2
 
+  # HERMETICITY (test-hermeticity-lint, all four of its classes). This suite sources cc-tui.sh,
+  # which lifts its composer logic from handoff-fire.sh, so it inherits that file's ambient
+  # sensors even though it never fires anything. Pinned rather than allowlisted, per the lint's
+  # own instruction on each class.
+  #  · the fire capacity gate refuses above 2.0/core, so the suite would go red-by-LOAD;
+  #  · capacity-admit refuses on load, reclaimable memory AND a live `ps` session census, so it
+  #    would go red-by-DESK — a different machine state, same false verdict;
+  #  · three seams do not resolve under $HOME, so fixturing HOME alone does not redirect them:
+  #    an ABSENT path is the right value, since each sensor fails open on one;
+  #  · this repo injects CC_PANE_CMD* into every pane it launches, so a bats run started from a
+  #    fired pane INHERITS them and goes red exactly there — the worst shape, since it reads as
+  #    a genuine trunk red everywhere it is reproduced.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_ADMIT_GATE=off
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/handoff-account-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/claude-acc"
+  unset CC_PANE_CMD_DIR CC_PANE_CMD_INTERACTIVE CC_PANE_CMD
+
   SDIR="$BATS_TEST_TMPDIR/screens"; mkdir -p "$SDIR"
   RPC_LOG="$BATS_TEST_TMPDIR/rpc.log"; : > "$RPC_LOG"
   LS_JSON="$BATS_TEST_TMPDIR/ls.json"
