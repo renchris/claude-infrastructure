@@ -131,8 +131,8 @@ transcript() { # <store> <cwd> <sid> <last-close: yes|no|none>
 # is left at a bare shell, which is exactly a husk — so the sweep would resolve it, name the SOURCE
 # account, and type that account's resume line while the work is live somewhere else: two writers
 # on one transcript. Every case below holds the successor NON-LIVE (an EMPTY CC_HUSK_LIVE_SIDS),
-# because is_live_sid (:121/:136) already suppresses a live successor and would make a naive
-# red-proof pass for the wrong reason. LR_STATE_DIR is pinned rather than left to the tmp HOME, so
+# because is_live_sid (the two call sites inside resolve(), on the scrollback and transcript arms)
+# already suppresses a live successor and would make a naive red-proof pass for the wrong reason. LR_STATE_DIR is pinned rather than left to the tmp HOME, so
 # the lock store is sealed on purpose and not by accident.
 tombstone() { # <store> <cwd> <sid> <target cfg> — what lr-transplant.sh leaves in the SOURCE store
   local d; d="$1/projects/$(slug "$2")"; mkdir -p "$d"
@@ -262,4 +262,40 @@ IT2
   run "$SWEEP" --json --pane 10
   [ "$status" -eq 2 ]
   [[ "$output" == *"lr-lib.sh"* ]] || { echo "$output"; false; }
+}
+
+# The two cases below drive transplant_target_of at its CONTRACT BOUNDARY with lr-lib, through the
+# same CC_HUSK_LR_LIB seam the FATAL case uses. Both arms they cover survived a mutation pass as
+# "equivalence guards" against the real library, which is precisely the reading that lets a defence
+# rot: lr-lib is a sibling that changes, and these pin what this tool must do when it answers oddly.
+stub_lr_lib() { # <body of lr_transplant_target>
+  printf '%s\n' '#!/usr/bin/env bash' "lr_transplant_target() { $1 }" > "$T/lr-stub.sh"
+  export CC_HUSK_LR_LIB="$T/lr-stub.sh"
+}
+
+@test "two UNRESOLVABLE config dirs are not 'the same store' — the fold may not swallow the guard" {
+  xplant_seals
+  SID=99999999-0000-0000-0000-000000000009
+  # $T/.claude-tertiary is in STORES but has no projects/ in this test, and the target does not
+  # exist at all: BOTH sides are unresolvable, and a fold that collapses them onto the empty string
+  # would call them equal and silently disarm every transplant on this box.
+  printf '{"paneUUID":"10","session_id":"%s","account":"claude-tertiary","cwd":"%s"}\n' "$SID" "$CWD_A" \
+    > "$CC_REGISTRY_DIR/10.json"
+  stub_lr_lib 'printf "%s" "/nope/target-store";'
+  run "$SWEEP" --json --pane 10
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"verdict":"TRANSPLANTED→next"'* ]] || { echo "$output"; false; }
+}
+
+@test "an EMPTY target on rc 0 fabricates no transplant" {
+  xplant_seals
+  SID=aaaa0000-0000-0000-0000-00000000000a
+  printf '{"paneUUID":"10","session_id":"%s","account":"claude-tertiary","cwd":"%s"}\n' "$SID" "$CWD_A" \
+    > "$CC_REGISTRY_DIR/10.json"
+  transcript "$T/.claude-tertiary" "$CWD_A" "$SID" no
+  stub_lr_lib 'return 0;'          # rc 0, nothing on stdout
+  run "$SWEEP" --json --pane 10
+  [ "$status" -eq 0 ]
+  [[ "$output" != *TRANSPLANTED* ]] || { echo "fabricated a transplant from an empty target: $output"; false; }
+  [[ "$output" == *'"verdict":"RESUME"'* ]] || { echo "$output"; false; }
 }
