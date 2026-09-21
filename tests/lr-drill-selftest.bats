@@ -760,3 +760,32 @@ for t in ("2026-09-21T00:00:10Z","2026-09-21T00:00:20Z"): print(calendar.timegm(
   # the gate record and the malformed line are absent: two lines, not four
   [ "$(grep -c . "$d/keystrokes.log")" -eq 2 ]
 }
+
+# ── a trailing two-arg flag must REFUSE, never spin ────────────────────────────────────────────
+# RED-PROOF for a defect measured on the live tree 2026-09-21: `lr-drill.sh --assert` with its
+# value absent held $# at 1 forever, because `shift 2` is a NO-OP when fewer than 2 arguments
+# remain. 2 h 19 m at ~100% CPU, 138 min of CPU time, zero output. Every two-arg flag had it.
+# The bound is the assertion: `timeout` returns 124 on a wedge, and 124 is the failure.
+@test "argv: every flag that takes a value REFUSES when it is the trailing argument" {
+  local opt rc
+  for opt in --drill --check-manifest --verdict --assert --account --out; do
+    run timeout 5 bash "$SUBJ" "$opt"
+    rc="$status"
+    [ "$rc" -ne 124 ] || { echo "$opt WEDGED (timeout 124) — shift N past the end is a no-op"; false; }
+    [ "$rc" -eq 3 ] || { echo "$opt exited $rc, expected 3 (usage)"; false; }
+    [[ "$output" == *"needs a value"* ]] || { echo "$opt did not NAME the missing value: $output"; false; }
+  done
+}
+
+@test "argv: CONTROL — a flag WITH its value is unaffected, and --stamp still swallows the rest" {
+  # Guards against 'fix the wedge by refusing everything'. --rows takes no value and must work;
+  # --assert with a value must reach its own consumer's refusal (rc 3, naming the path), not the
+  # argv refusal; --stamp deliberately consumes the remainder and must not trip need_val.
+  run timeout 20 bash "$SUBJ" --rows
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"identify"* ]] || false
+
+  run timeout 20 bash "$SUBJ" --assert "$BATS_TEST_TMPDIR/nope.tsv"
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+  [[ "$output" == *"no such results.tsv"* ]] || { echo "$output"; false; }
+}
