@@ -157,7 +157,15 @@ com.claude.desk-invariant         | staged | 300  | auto | 5  | 18-fleet-activat
 # expect — built, activation pending — and it is not a fault row. Loading it schedules nothing that
 # sends: unarmed, `cc-jev batch` logs one line and exits 0. The SECOND act (cc-jev arm) is the
 # consent, and it is per-window by construction.
-com.claude.jev-batch              | staged | 1800 | auto | 5  | 44-jev-batch-activate.sh
+# Declared `run` since 2026-09-21: the operator ran 44-jev-batch-activate.sh and the job is loaded
+# (launchctl print: run interval 1800, runatload fired, last exit 0). `staged` was correct only
+# while activation was pending; leaving it there would render UNDECIDED forever over a live job.
+# EVIDENCE IS THE EXPLICIT PATH, NOT `auto`, and that is load-bearing: `auto` reads StandardOutPath,
+# and this job's normal (unarmed) path writes NOTHING to stdout — every line goes through _log to
+# jev-batch.log. So `auto` would point the staleness sensor at a file that never changes and S5
+# would claim STALLED on a perfectly healthy job ticking every 30 minutes. The durable product that
+# actually proves execution is the log.
+com.claude.jev-batch              | run    | 1800 | ~/.claude/autonomy/jev-batch.log | 5  | 44-jev-batch-activate.sh
 com.claude.boot-resume            | staged | 300  | auto | 2  | 18-fleet-activate.sh
 com.claude.lead-supervisor        | run    | 0    | ~/.claude/autonomy/supervisor.log | 2 | 18-fleet-activate.sh
 com.claude.nightly-regression     | staged | 0    | auto | 1  | 18-fleet-activate.sh
