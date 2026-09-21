@@ -22,7 +22,7 @@ note — landed 2026-09-20 with its own passing case — could never once fire f
 
 | anchor (post-change) | change |
 |---|---|
-| `:76-82` | `LF_ADMIT_LOCK="$STATE/admit.lock"` and `RUN_CLAIMS="$STATE/runs/by-sid"` — the same store, by the same name, that `lr-reset-poller.sh:167` and `bin/cc-lr:48` use |
+|  `:78` + `:82` | `LF_ADMIT_LOCK="$STATE/admit.lock"` and `RUN_CLAIMS="$STATE/runs/by-sid"` — the same store, by the same name, that `lr-reset-poller.sh:167` and `bin/cc-lr:48` use |
 | `lf_admit_lock_take` / `lf_admit_lock_release` (new) | the admit section's mutex: `mkdir`, holder names its pid, dead holder stolen at once, live holder waited out to `LR_ADMIT_LOCK_WAIT_S` (300 s) then stolen LOUDLY; release only what is still ours |
 | `lf_run_claim_take` / `lf_run_claim_release` (new) | W5's per-sid run claim as a third writer sees it — cc-lr's semantics (pid-alive ⇒ refuse, pid-dead ⇒ steal) with the poller's TTL fallback for its holder-less shape |
 | `lf_rank_why` (new) | lifts the ROUTER's own reason text out of the rank's stderr; `route-meta:` is excluded — it is the decision's inputs, not its reason |
@@ -36,7 +36,7 @@ note — landed 2026-09-20 with its own passing case — could never once fire f
 
 ### `scripts/handoff-fire.sh`
 
-One comment block above the `recycle_repick` charge (`:9553-9568`). **No conditional.** § 5.
+One comment block above the `recycle_repick` charge (`:9554-9567`). **No conditional.** § 5.
 
 ### `tests/lr-fleet.bats`
 
@@ -62,7 +62,7 @@ Every anchor below was read on this base before it was cited; the plan draft's o
 | the account map returns 1 on an undeclared name and sets globals rather than echoing | `lib/account-map.generated.sh:11-26` and its header |
 | the per-sid run claim's store, semantics and TTL | `lr-reset-poller.sh:167`, `:716-731`, `:835`; `bin/cc-lr:48`, `:128-158`, `:220` |
 | `-maxdepth 0` on the claim directory | `lr-reset-poller.sh:719-722` |
-| `bin/cc-lr` shells out to `lr-fleet --one … --detach` and `tests/cc-lr-front.bats` stubs it | `bin/cc-lr:227`, `tests/cc-lr-front.bats:48-57` |
+| `bin/cc-lr` shells out to `lr-fleet --one … --detach` and `tests/cc-lr-front.bats` stubs it | `bin/cc-lr:228`, `tests/cc-lr-front.bats:48-56` |
 | lr-fleet reaches handoff-fire only as a resume-launcher recycle | `lr-handoff.sh:1003` |
 | a non-empty `RESUME_LAUNCHER` takes the explicit arm before `recycle_repick` | `handoff-fire.sh:9701` vs `:9706`, `:9714` |
 | the fire path's `--assign` is gated on `RECYCLE = 0` | `handoff-fire.sh:9975` |
