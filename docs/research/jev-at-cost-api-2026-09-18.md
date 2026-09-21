@@ -368,3 +368,115 @@ establish recall on real closes. `cc-jev pilot` against the 85 genuine labels re
 instrument that can, and it should **re-derive** this threshold rather than inherit it.
 
 Re-run: `bash scripts/jev/synthetic-probe.sh` (needs a key; sends no private data).
+
+---
+
+# Addendum 3 — 2026-09-21: the first REAL labels, and the arm is inert on real traffic
+
+§5 said *"Nobody has ever scored Jev against real labels."* That is no longer true. `cc-jev pilot`
+ran with `CC_JEV_ZDR=0` (operator-authorised, `bash ~/jev-pilot.sh --yes`), 38 real closing messages
+scored, report `~/.claude/autonomy/jev-pilot-20260921T022258Z.jsonl`.
+
+**The route is proven.** A synthetic probe returned `ok:true, P(passed)=0.01, 469ms` — correct, and
+inside the tail the design is built around. Every prior HTTP 403 was ZDR alone (Pro/Enterprise-only,
+fails closed, this account is hobby). Key, egress allowlist, gateway, model, request assembly and
+answer parsing all verified end to end.
+
+## The headline: 0 fires on 38 real closes, and the gate is unreachable by construction
+
+| gate component | on 38 real closes |
+|---|---|
+| `p >= 0.90` | **1 of 38** (0.93, and it is `value_fork`) |
+| `blocker_class == 'drivable'` | **3 of 38** (p = 0.07, 0.21, 0.77) |
+| **both** (the shipped AND-gate) | **0 of 38** |
+
+Arm A 0/20, arm B 0/18. **The two conditions have zero overlap on real data**, so removing the ZDR
+blocker changes nothing: the arm goes from inert-by-403 to inert-by-threshold.
+
+## 🚨 The synthetic corpus was wildly unrepresentative, and this is Addendum 2's lesson one level up
+
+| population | source | P(defers) on true deferrals |
+|---|---|---|
+| Addendum 2, n=20 | **synthetic**, agent-authored | **0.81 – 0.95**, mean 0.93 |
+| this pilot, n=38 | **real closes** | arm B max **0.51**; clean arm-A labels **0.07 – 0.41** |
+
+Addendum 2 stated its own limit — *"n=20, SYNTHETIC, authored by the agent whose prose the arm
+judges — the most favourable possible population"* — and that warning was exactly right. A threshold
+of 0.90 chosen against 0.81–0.95 sits **above the entire real range**. This is
+`an-imported-threshold-can-sit-above-the-model-s-output-range` recurring one level up: yesterday the
+constant was imported from another TASK; today it was calibrated on an unrepresentative POPULATION of
+the right task. **The failure mode is the corpus, not the arithmetic, and a synthetic corpus written
+by the judged party is the most seductive form of it.**
+
+## Arm A cannot disqualify Jev, because its labels are a regex's output and some are wrong
+
+Arm A's design premise: *"a Jev that misses closes a regex caught is disqualified outright."* That
+premise treats lexical fires as ground truth. Inspection refutes it. Of the 7 `deference`-only rows —
+the only subset testing the question Jev was actually asked — several are closes that plainly do not
+hand work back:
+
+```
+p=0.08  "✅ Wake path re-armed; nothing of mine is open."
+p=0.07  "✅ The sourcing investigation landed — ebfc88fc2, playbook + reusable workflow on trunk."
+p=0.08  "No. Those three Fable sessions all ran on `next`, so they only explain `next` ..."
+```
+
+**Jev's low score is CORRECT on these and the regex was wrong.** Scoring Jev against them measures
+disagreement with a known-noisy matcher, not accuracy.
+
+⚠️ **A claim I made here first, and had to withdraw — recorded because the withdrawal is the
+lesson.** I read the 20 arm-A rows as contaminated with `opaque-identifier`, the class the pilot's
+own comment excludes for *"scoring the arm on a question nobody posed"*. **That was false, and it was
+my instrument, not the pilot's.** The pilot iterates per FIRE RECORD and locates the judged message
+by that record's own `tell` (`pilot.sh:124-136`), so the exclusion is delivered exactly as promised.
+My join was keyed on `sid`, and a session fires many times for different reasons — so it recovered
+*a* reason for each session rather than *the* reason for the judged record, and manufactured an
+overlap that is not in the data.
+
+**The real defect it exposed is smaller and worth fixing: the output row records
+`{sid, hook, p, class, jev_fire, close_head}` and NOT the fire reason**, so a finished run cannot be
+stratified by defect class without re-deriving it — and re-deriving it from `sid` is precisely the
+unsound join I just made. One extra field would make arm A readable per class and would have made
+this paragraph unnecessary. Filed.
+
+What survives, on the subset where sid IS unambiguous (7 sessions whose only fire reason is
+`deference`, so whichever record was judged was a deference fire): **p = 0.07 – 0.41, max 0.41**.
+That is the cleanest read available of Jev on the question it was actually asked, and it is far below
+the gate.
+
+## What actually binds, confirmed on real data
+
+`blocker_class` returns `none` on **28 of 38** (73.7%). Addendum 2 predicted this — *"recall is
+capped by blocker_class, not the threshold"* — at 30% `drivable` on synthetic; real data gives
+**7.9%**. Tuning the probability threshold cannot fix an AND-gate whose other half answers `none`
+three times out of four. **The choice question's criteria are the thing to fix, and they are fixable
+offline.**
+
+## Where this leaves the decision
+
+Nothing here disqualifies Jev *as a model*: its probability spread is wide and well-behaved, the one
+case built to trap it (a destructive-migration blocker) was correctly suppressed by `blocker_class`
+in Addendum 2, and on the three closes above it was right where our regex was wrong. What is
+disqualified is **this arm at this configuration**: it cannot fire on real traffic.
+
+Three honest options, none of them "turn it on":
+1. **Re-derive both constants on real closes** — but specificity was only ever measured on the
+   synthetic set, so a threshold near 0.4–0.5 must have its false-fire rate re-measured on real data
+   before it could ship. That is another pilot, not a config edit.
+2. **Fix the choice question first.** 73.7% `none` is the binding constraint; its criteria wording is
+   testable offline and costs nothing.
+3. **Leave the arm off.** It is off today by virtue of being unreachable, at no cost.
+
+**Cost is not what decides this.** Free on the Gateway until 2026-09-25; metered after at
+$0.042/MTok in, $0 out ≈ $2.45/mo at ~960 calls/day, under the $5/mo key cap. The 38-call pilot cost
+about a cent. Vercel Pro (~$20/mo) buys ZDR — roughly 8x the price of the workload it protects —
+and is orthogonal to the rate limit, which is keyed on purchased credits: **credits buy speed, Pro
+buys privacy, and neither buys recall.**
+
+## Re-derive, never re-quote
+
+```
+bash ~/jev-pilot.sh --yes            # the whole run, gated on the flag
+jq -r '.p' ~/.claude/autonomy/jev-pilot-*.jsonl | awk '$1>=0.90{n++} END{print n+0}'
+jq -r '.class' ~/.claude/autonomy/jev-pilot-*.jsonl | sort | uniq -c | sort -rn
+```
