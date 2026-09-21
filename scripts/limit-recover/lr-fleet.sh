@@ -595,7 +595,21 @@ lf_run_claim_take() { # $1=sid → 0 this worker owns the run · 1 a live run al
     > "$d/holder" 2>/dev/null || true
   return 0
 }
-lf_run_claim_release() { rm -rf "$RUN_CLAIMS/${1:?lf_run_claim_release needs a sid}.active" 2>/dev/null || true; }
+# 🚨 RELEASE ONLY WHAT THIS PROCESS TOOK. The pool's reaper runs once per worker, and a worker can
+# reach it WITHOUT ever having taken a claim — a `--dry-run` takes none by design. An unconditional
+# `rm -rf` there deletes whatever claim is at that path, which on a dry run is the claim cc-lr or
+# the poller is holding over a LIVE recovery: the fleet would hand a second driver the same pane.
+# Caught by `--dry-run neither TAKES a run claim nor OBEYS one` on the full-suite pass, having been
+# invisible to the same case run alone. The holder file is this process's own receipt, so matching
+# on it is the check; a claim with no holder (the poller's shape) was never ours and is left alone.
+lf_run_claim_release() { # $1=sid → removes the claim IFF this process's holder names it
+  local d="$RUN_CLAIMS/${1:?lf_run_claim_release needs a sid}.active"
+  [ -d "$d" ] || return 0
+  case "$(cat "$d/holder" 2>/dev/null || true)" in
+    *"\"pid\":$$,"*) rm -rf "$d" 2>/dev/null || true ;;
+  esac
+  return 0
+}
 
 # ── ONE: the unit — one session, in place ────────────────────────────────────────────────────────
 # _lf_target_holds_sid <acct> <sid> → 0 iff that account's store ALREADY holds this session.
