@@ -263,8 +263,9 @@ runp() {
   P="$REPO/launchd/com.claude.jev-batch.plist"
   run plutil -lint "$P"
   [ "$status" -eq 0 ]
-  # bin/ is symlinked by install.sh; scripts/jev/ is NOT (the installer globs scripts/*.sh at the
-  # top level only), so a plist naming the script path directly would point at a missing file.
+  # Both paths are in fact deployed (install.sh:759 has a dedicated scripts/jev/ block), so this
+  # is not a reachability assertion — it pins the SINGLE ENTRY POINT, so adding a subcommand never
+  # requires editing this plist again.
   # Scope to what launchd EXECUTES. A whole-file grep also reads the comment that EXPLAINS the
   # undeployed path, so it convicts the documentation for describing the trap it avoids — the
   # assertion has to span exactly its subject.
@@ -272,4 +273,52 @@ runp() {
   grep -qF 'cc-jev' <<<"$EXEC"
   ! grep -qF '.claude/scripts/jev/' <<<"$EXEC" || { echo "plist EXECUTES an undeployed path"; false; }
   grep -qF 'launchctl bootout' "$P"          # the kill switch is written down beside the job
+}
+
+# 🚨 AN ARMING IS A SCARCE HUMAN ACT AND MUST NOT BE SPENT ON A LOCAL PRECONDITION.
+# consume-before-call is about CALLS: once bytes have left, the authorisation must already be
+# gone so a crash cannot leave a live one behind. It is NOT a reason to burn the token on a check
+# that makes no call. Measured 2026-09-21: the first version consumed first and then exited 2 at
+# jev_available because no key was present — window gone, nothing sent, log reading `run rc=2`
+# over an empty rows file.
+@test "batch: a missing key PRESERVES the arm — nothing was sent, so nothing was spent" {
+  A="$BATS_TEST_TMPDIR/k.arm"
+  EXP="$(date -u -v+30M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+  jq -n --arg e "$EXP" '{created:"x", expires:$e, max_calls:12, cap_b:1200, corpus:"memory-orphans"}' > "$A"
+  run env -u AI_GATEWAY_API_KEY CC_JEV_ARM_FILE="$A" CC_JEV_BATCH_LOG="$BATS_TEST_TMPDIR/b.log" \
+      "$REPO/scripts/jev/jev-batch.sh"
+  [ "$status" -eq 0 ]
+  [ -f "$A" ]                                       # THE POINT: still armed
+  grep -qF "arm PRESERVED" "$BATS_TEST_TMPDIR/b.log"
+}
+
+@test "batch: a lapsed free window PRESERVES the arm too, and says so" {
+  A="$BATS_TEST_TMPDIR/w.arm"
+  EXP="$(date -u -v+30M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+  jq -n --arg e "$EXP" '{created:"x", expires:$e, max_calls:12, cap_b:1200, corpus:"memory-orphans"}' > "$A"
+  run env AI_GATEWAY_API_KEY=dummy CC_JEV_FREE_UNTIL=2020-01-01 CC_JEV_ARM_FILE="$A" \
+      CC_JEV_BATCH_LOG="$BATS_TEST_TMPDIR/b.log" "$REPO/scripts/jev/jev-batch.sh"
+  [ "$status" -eq 0 ]
+  [ -f "$A" ]
+  grep -qF "free window has lapsed" "$BATS_TEST_TMPDIR/b.log"
+}
+
+# The whole path, as launchd invokes it: armed token in, rows out, token gone.
+@test "batch: an ARMED run produces rows and consumes the token" {
+  mkcorpus
+  A="$BATS_TEST_TMPDIR/go.arm"
+  EXP="$(date -u -v+30M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+  jq -n --arg e "$EXP" '{created:"x", expires:$e, max_calls:9, cap_b:400, corpus:"memory-orphans"}' > "$A"
+  export MOCK_CHOICE_ROTATE=1
+  start_mock ok
+  run env AI_GATEWAY_API_KEY=dummy CC_JEV_BASE_URL="http://127.0.0.1:$PORT" \
+      CC_JEV_ARM_FILE="$A" CC_JEV_BATCH_LOG="$BATS_TEST_TMPDIR/b.log" \
+      CC_JEV_MEM_DIR="$MEMD" CC_JEV_RULES_FILE=/dev/null CC_JEV_RANK_ROWS="$RANKF" \
+      CC_JEV_PROMO_GAP=0 "$REPO/scripts/jev/jev-batch.sh"
+  [ "$status" -eq 0 ]
+  [ ! -f "$A" ]                                     # consumed
+  grep -qF "run rc=0" "$BATS_TEST_TMPDIR/b.log"
+  ROWS="$(grep -o '/.*jev-promote-.*\.jsonl' "$BATS_TEST_TMPDIR/b.log" | tail -1)"
+  [ -s "$ROWS" ]                                    # and it actually decided something
+  [ "$(jq -r '.round' "$ROWS" | sort -u | head -1)" = "h2h" ]
 }

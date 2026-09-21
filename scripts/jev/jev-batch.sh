@@ -59,7 +59,27 @@ if [ -z "$EXP_S" ] || [ "$NOW" -ge "$EXP_S" ]; then
   rm -f "$ARM"; exit 0
 fi
 
-# ── CONSUME FIRST. Everything below runs with no authorisation left on disk. ─────────────────
+# ── LOCAL PRECONDITIONS ARE CHECKED BEFORE THE TOKEN IS SPENT ────────────────────────────────
+# The consume-before-call rule is about CALLS: once bytes have left the machine the authorisation
+# must already be gone, so a crash cannot leave a live one behind. It is NOT a reason to spend the
+# token on a precondition that makes no call. Measured 2026-09-21: the first version consumed
+# first, then exited 2 at `jev_available` because no key was present — the operator's armed window
+# was gone, nothing had been sent, and the log said `run rc=2` over an empty rows file. An arming
+# is a scarce human act; burning one on a missing env var is the cheapest possible waste.
+# Both checks below are pure local reads — an env var, a secrets-store lookup, a date — and
+# neither touches the network.
+# shellcheck source=/dev/null
+. "$ROOT/hooks/lib/jev.sh"
+if ! jev_window_open 2>/dev/null; then
+  _log "REFUSED — the free window has lapsed; arm PRESERVED (authorise with CC_JEV_PAID=1)"
+  exit 0
+fi
+if ! jev_available; then
+  _log "REFUSED — jev not available (no key, or CC_JEV=0); arm PRESERVED, nothing spent"
+  exit 0
+fi
+
+# ── CONSUME. Everything below runs with no authorisation left on disk. ───────────────────────
 rm -f "$ARM" || { _log "REFUSED — cannot consume the arm file; refusing to call"; exit 0; }
 _log "ARMED — expires=${EXPIRES} max_calls=${MAXC} cap_b=${CAPB:-default} corpus=${CORPUS:-memory-orphans}"
 
