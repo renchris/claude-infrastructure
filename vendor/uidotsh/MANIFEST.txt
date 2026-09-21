@@ -1,8 +1,7 @@
 # ui.sh mirror manifest
-# captured: 2026-09-19T17:21:22Z from https://ui.sh/mcp (MCP) + https://assets.ui.sh (HTTP)
-# SCOPE: the 176 VENDOR-CAPTURED files only. README.md and MANIFEST.txt are
-# authored locally, are deliberately NOT listed, and are therefore NOT covered
-# by a -c check — a clean verify says nothing about them.
+# captured: 2026-09-21T04:11:38Z from https://ui.sh/mcp (MCP) + https://assets.ui.sh (HTTP)
+# SCOPE: the VENDOR-CAPTURED files only. README.md, VISUAL-KIT.md and MANIFEST.txt are
+# authored locally, are deliberately NOT listed, and are NOT covered by a -c check.
 # sha256  size  path
 d98ebb2be4c7052a69123bb48d561c1aca2b2a960720aac882ccc34cacf9a9ba  3858  add-dark-mode.md
 bf4f673c85e866792ab944fbece15ca4465b44bbc465c35b6997919c9456eb76  171050  assets/avatars/1.webp
@@ -31,6 +30,18 @@ c909399c5c92523efd157977aa6d373f02c2680b66f3392eee7b7281e707fbc3  5515  assets/l
 4e411b8e412731f2b67cb8c9a30b94233183e28fdc529f6b9e3ea1138f0c3391  4558  assets/logos/quirk.svg
 efb4bb5b97746c97484c14ff34e6fed2ecff122a865a53b34893b652ee64b265  2222  assets/logos/relay.svg
 75cbd3364c874f88b98303ead40395460f9c192e1ffd389fe9ef9c23d130724c  234  assets/marks/1.svg
+61dd5d1c2f0f7d8f704a5b38e635de3ff91c61ce03ead1bdd8f51bc22642232f  7638  assets/marks/mark-sample-dm-sans.svg
+38d5848539eea795376422486df92e49e81575decba15646c589502347d3d972  6683  assets/marks/mark-sample-instrument-sans.svg
+6d5df8cde0931c5d9eb08f234b9d5f95b1a902b0fbbf988b57a5fafbd6271dcc  7985  assets/marks/mark-sample-inter.svg
+555bb6fb9464853e912b19e753907b79f09c6af079fad8c9489e116bf56b7810  7561  assets/marks/mark-sample-outfit.svg
+934ae1ce13b06dcac34977c4424d028597e33bc993ba63c269bf20848ba7bf46  8011  assets/marks/mark-sample-sora.svg
+bb51981f39d7f0c11006151014dfbaa1e27a2d1005c08f6a3956626c3319b1ac  7218  assets/marks/mark-sample-space-grotesk.svg
+e942aa80a48801f117ebc28410b3e4341c4bda76653979c25f126c3a378a47c4  20578  assets/screenshots/1-crop-agent-header.webp
+ff0c90e60e6d7fe6aa983ff99594103baabeb5c2bb36ff8502618417737128bb  43538  assets/screenshots/1-crop-agent-panel.webp
+e8fc68db1aecc60714d9f75a265570948a942f541da0167fdec10906a1a0ba5d  102200  assets/screenshots/1-crop-email-conversation.webp
+be9b5a0d162f024801ef83fe8a0ea91e81907c42acaa846b86f9723eba1a8d11  91434  assets/screenshots/1-crop-overview.webp
+f93b51e85d697baa807b1cefb971126f1b4ad67a2f42f13868ab41630127c452  53150  assets/screenshots/1-crop-sidebar-inbox.webp
+5018fc8bc3ce4134fc9fa4aa48d22e5e0fa1951b32de1ace8bf103b4ec128825  134966  assets/screenshots/1-crop-wide-overview.webp
 6c5ef244864a4194bcfdcf89481da66beb0fcc26f849cff9a7aee646b0adaa80  513902  assets/screenshots/1-mauve.webp
 9fdd1d02546b4811a280f4f5142abe7aed0232007b46158e341f8832018086bf  525404  assets/screenshots/1-mist.webp
 080a4b419a0c3f8adba95150dc8fd106b05b3d7f85e9d5b5f9e1bce9de371b97  506678  assets/screenshots/1-olive.webp
@@ -131,6 +142,10 @@ ae0be9a1b70c9f471a85cebb1a4de2eb313c9099b20ece067e4242d3ef7c49b7  1453  design/g
 1dab4cd6fae67e4f3979db94ee355a3d2a6083b08473c61166c7a92a176160e8  7743  ideas.md
 74d608efd2322795a938764b47f797f09d1b6cbb9582709d915c7a1de26c2d54  6409  make-responsive.md
 9a5fd3699069f97129fe82c685195d03eba24eaa661a8524a3a7f2ca931bcaf8  7247  markup-from-image.md
+d38e31d8ae27a5d9a65a4ae51970d6cb5afa9468102b8bdbdf986ee8b3ab1aba  164023  reference/emails-2026-06/add-dark-mode.jpg
+4d6316aa986bb87589634053cb0975c462c651d2e1dd5e5f5d7464021f3e24fe  191525  reference/emails-2026-06/brand-kit.jpg
+779c228c73cca872b99191ebfac9184a52a3717939a67b1074e3ffc8e17f646b  94411  reference/emails-2026-06/ideas.jpg
+c094c49175a02ecead87be8fbb9ab1f5033e240133667f195fa90131cff6638b  179417  reference/emails-2026-06/skills.jpg
 e55947c6fce0404a257c0cbaa717fdbed79f88d25403d787b0199b53893a6b46  12659  ui-picker.js
 3966f8de92b5ee37af26d63558aca2f3faf3eb12947aecf48fabe8886fa20dba  6407  ui.md
 602088bc988e3600483f9b92cef96933a52894fe501f23616ab3f26392352e97  1565  ui/add-dark-mode.md

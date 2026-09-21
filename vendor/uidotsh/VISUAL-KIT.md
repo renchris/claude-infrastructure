@@ -71,6 +71,27 @@ the renderer is whatever image model you have.
   soft charcoal grey"*). Read as prose it is a named palette library; the matching
   images are in `assets/wallpapers/`.
 
+## What could NOT be mirrored, and what that costs
+
+One surface is a **generator**, not a set of files, so no crawl can hold it: the marks
+endpoint composes a wordmark from arbitrary text and bakes the glyphs into **vector
+paths server-side** (measured — the response is `<path>` data, not `<text>`). Its
+parameter space is any brand name x 6 fonts x weights x colours, so it is infinite by
+construction.
+
+**Mitigation, and why this is re-implementable rather than lost:** the mark glyph
+itself is `assets/marks/1.svg` and is trivially recolourable, all six fonts are
+publicly obtainable (Google Fonts / Fontshare, sourcing URLs in
+`design/guidelines/font-recommendations.md`), and `assets/marks/mark-sample-*.svg`
+holds one specimen per font so the lockup's proportions, spacing and baseline are on
+record. Setting the text locally in the real typeface and converting to outlines
+reproduces the same artifact. What dies is the convenience, not the capability.
+
+Everything else in the parameter space IS derivable locally from what is here: logo
+`color`/`accent-color` are fill swaps on SVGs we hold; avatar `size`/`w`/`h`/`grayscale`
+are transforms of originals we hold; wallpaper `variant` was enumerable and all 45 are
+captured.
+
 ## Reference images
 
 `reference/emails-2026-06/` — the four embeds from the 2026-06-10 announcement,
