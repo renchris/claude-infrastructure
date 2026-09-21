@@ -1077,6 +1077,29 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
   rows that legitimately carry that pid. That is a concrete hazard, not a vague risk, and it is why
   this one is the operator's rather than mine.
 
+  **AND THERE IS A FAILED LAND REF CARRYING IT — DO NOT RE-LAND IT.**
+  `refs/land/failed/20260920T225014Z-2f6e7e93-209e-46fc-80e8-14b95ceefc03-lr-actuator-census`
+  (tip `f2f43b131`) is the 17:38Z attempt whose gate this decision came out of. `land-content-verify`
+  reports **3 of 3 paths hold content trunk lacks**, which is true byte-wise and is NOT a claim that
+  anything is owed — the three paths have three different dispositions, and two of them would
+  REVERT trunk (`superseded-stranded-and-the-falsifier-cannot-tell-them-apart`):
+
+  | path | disposition | re-landing it would |
+  |---|---|---|
+  | `scripts/limit-recover/lr-fire-resume.sh` | **cure already on trunk** as `d92244ac5` (same `read -r -d ''` cure; trunk parses clean under `/bin/bash` 3.2) | revert 44 lines — trunk has **two later fixes** the ref predates: `bdf38553c` (EMPTY/UNKNOWN is not a negative) and `b24e31325` (`CC_PANE_ID` before `ITERM_SESSION_ID`) |
+  | `docs/plans/LIMIT_DETECT_100P.md` | **superseded** by `7060319c4` + 3 later, this entry among them | delete 236 lines (ref 948 lines vs trunk 1094) |
+  | `bin/cc-limited` | genuinely absent — and **deliberately**, per the paragraph above | re-introduce the D7 break |
+
+  **The `bin/cc-limited` half re-measured independently 2026-09-21, one variable, both arms run:**
+  trunk `tests/lr-fleet.bats` is `1..66`, 66 ok, rc 0; with the ref's `bin/cc-limited` dropped on
+  otherwise-identical trunk it is 65 ok, **`not ok 28 D7: THE REGISTRY HOLE`**, failing in `parity`
+  at `:100` with `PARITY BROKEN — slow scan RESUMING vs census NO-PANE` — verbatim the failure
+  `7060319c4` predicted. `tests/watchdog-census.bats` is `1..29` green in both arms, which is the
+  independent confirmation of this section's own "4, not 5" correction. So the revert decision is
+  **right**, and the ref is a trap for any future session that reads only the falsifier's
+  NOT-REFUTED. Re-land nothing from it; the one open question (who rewrites the four fixtures and
+  changes the census contract) is already parked with the operator as backlog `3d9943ec9e87`.
+
 ## 13. Cross-reference — `LIMIT_RECOVER_100P` § 9 landed the recovery side first (2026-09-20 00:1xZ, session 11569d45)
 
 Your wave-1 corpus was this session's research. Landed and LIVE on trunk at `1b2676f4c` (23:50Z),
