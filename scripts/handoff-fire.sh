@@ -9569,6 +9569,21 @@ recycle_repick() { # $1 = the pane's CURRENT account → replacement account on 
   # walks DOWN the ranking instead of all reading the same ≤90s-cached rows and stacking onto one
   # winner — the exact defect --assign was built for. Advisory: a lost append costs one phantom.
   # A dry run launches nothing, so it charges nothing.
+  #
+  # ── OWNERSHIP vs lr-fleet (LR100P W6b, 2026-09-21) ────────────────────────────────────────────
+  # lr-fleet.sh's `lf_pick_target` also charges `--assign … --src lr-fleet` for a recovery it
+  # routes, and the wave asked which of the two owns that charge so a session is never charged
+  # twice. THE ANSWER IS THAT THEY CANNOT BOTH FIRE, and the reason is control flow, not a guard:
+  # the fleet reaches handoff-fire only as `--recycle --transplanted-source --resume-launcher …`
+  # (lr-handoff.sh:1003), and RESUME_LAUNCHER non-empty takes the explicit arm at :9701 — which
+  # sets LAUNCHER=bash and ACCOUNT="(resume)" and never enters the `auto` arm at :9706 where this
+  # function is called. The fire path's own charge at :9975 is gated on `RECYCLE = 0`. So on the
+  # recovery path handoff-fire charges ZERO times and lr-fleet charges exactly once; on an
+  # ORDINARY recycle this site charges once and lr-fleet is not in the picture.
+  # NO GUARD IS ADDED HERE ON PURPOSE. A conditional keyed on "lr-fleet already charged" would be
+  # unreachable code on every measured path — an added arm with no case that can die on it — and
+  # the equality test above (`[ "$new" = "$cur" ]`, :9474) already implements the
+  # other half the wave named: a recycle that STAYS on its account charges nothing.
   if [ "${DRY:-0}" = 0 ]; then
     "$bin" --assign "$new" --src recycle-repick >/dev/null 2>&1 || true
   fi
