@@ -88,10 +88,41 @@ _log "ARMED — expires=${EXPIRES} max_calls=${MAXC} cap_b=${CAPB:-default} corp
 BIAS=$(( MAXC / 10 )); [ "$BIAS" -lt 2 ] && BIAS=2
 HEATS=$(( (MAXC - 1 - BIAS) / 2 )); [ "$HEATS" -lt 1 ] && HEATS=1
 
+# ── RESUME AN UNFINISHED PASS RATHER THAN RE-BUYING IT ───────────────────────────────────────
+# An arming is a scarce human act, and without this a second one starts the corpus over: the run
+# is 133 calls and any abort — rate-limit exhaustion, a revoked key, a reboot — leaves it partial,
+# so arming again would re-pay for every verdict already on disk and still not finish.
+# The compatibility check lives in promote-memory.sh (the meta row stamps the population and the
+# seed, and a mismatch REFUSES rather than splicing verdicts about other files into this run), so
+# all that is needed here is to nominate a candidate: the newest promote rows that are recent
+# enough to plausibly be the same corpus and that fall short of their own recorded plan.
+# An ARRAY, not a string: two arguments must stay two arguments, and an unquoted string that
+# happens to be empty would pass a stray empty arg. `${a[@]+"${a[@]}"}` is the expansion that is
+# safe under `set -u` on bash 3.2, which is what launchd resolves via /usr/bin/env.
+RESUME_ARG=()
+_plan_of() { jq -r 'select(.round=="meta")|.plan // empty' "$1" 2>/dev/null | head -1; }
+_verdicts_in() { jq -r 'select(.round!="meta")|.id' "$1" 2>/dev/null | wc -l | tr -d ' '; }
+MAXAGE_H="${CC_JEV_BATCH_RESUME_MAX_AGE_H:-48}"
+while IFS= read -r _c; do
+  [ -n "$_c" ] || continue
+  # find -mtime is coarse; compare stamps directly so the bound means what it says.
+  _age=$(( ( $(date -u +%s) - $(stat -f %m "$_c" 2>/dev/null || echo 0) ) / 3600 ))
+  [ "$_age" -le "$MAXAGE_H" ] || break          # older than the bound: everything below is older too
+  _plan="$(_plan_of "$_c")"; _have_n="$(_verdicts_in "$_c")"
+  case "$_plan" in ''|*[!0-9]*) continue ;; esac   # unstamped: predates the meta row, cannot resume
+  if [ "$_have_n" -lt "$_plan" ]; then
+    RESUME_ARG=(--resume "$_c")
+    _log "RESUMING $_c — $_have_n of $_plan verdict(s) already on disk (${_age}h old)"
+    break
+  fi
+done <<EOF
+$(find -H "$HOME/.claude/autonomy" -maxdepth 1 -name 'jev-promote-*.jsonl' -size +0c 2>/dev/null | sort -r)
+EOF
+
 OUTLOG="$HOME/.claude/autonomy/jev-batch-$(date -u +%Y%m%dT%H%M%SZ).out"
 # CC_JEV_ZDR=0 is what the operator authorised by arming; the ceiling and cap ride with it.
 env CC_JEV_ZDR=0 ${CAPB:+CC_JEV_PROMO_CAP_B="$CAPB"} \
-    "$ROOT/scripts/jev/promote-memory.sh" --heats "$HEATS" --bias-n "$BIAS" --yes \
+    "$ROOT/scripts/jev/promote-memory.sh" --heats "$HEATS" --bias-n "$BIAS" ${RESUME_ARG[@]+"${RESUME_ARG[@]}"} --yes \
     > "$OUTLOG" 2>&1
 rc=$?
 ROWS="$(grep -o '/.*jev-promote-.*\.jsonl' "$OUTLOG" 2>/dev/null | tail -1)"
