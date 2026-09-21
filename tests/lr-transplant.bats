@@ -290,6 +290,7 @@ PY
 # non-empty, so a refactor of that block fails loudly here instead of silently testing nothing.
 _c3() { # $1 = the manifest's target_cfg → the clause line the SHIPPED C3 block prints for $LOCK
   {
+    # shellcheck disable=SC2028  # the \n is the GENERATED STUB's own printf escape and must reach the file literally; expanding it here would emit a real newline into the stub's source
     echo 'clause() { printf "%s %s %s\n" "$1" "$2" "$3"; }'
     printf 'LOCK=%q\nTCFG_M=%q\n' "$LOCK" "$1"
     sed -n '/^if \[ ! -r "\$LOCK" \]; then clause FAIL C3/,/^fi$/p' "$IV"
