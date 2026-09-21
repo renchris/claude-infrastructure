@@ -1223,14 +1223,33 @@ kitty_socket_answers() { # $1=kitty binary  $2=socket (unix:/path)
 # A `tcp:` listener and a Linux abstract `unix:@name` are not probed — they have no such address to
 # hand AF_UNIX — and report "cannot tell", which the caller reads as the conservative no-socket
 # wording rather than inventing a timeout it did not observe.
+#
+# THE CONNECT IS RELATIVE, and it is the same 104-byte cap this repo already pays for on the bind
+# side (postland RED 2026-08-06, item e1d43f93da19; scripts/test-afunix-path-lint.sh is the ratchet
+# that cures it for fixtures). Darwin caps sun_path at 104 bytes against THE STRING HANDED TO the
+# syscall, and that is as true of connect(2) as of bind(2) — the ratchet only ever read binds, and
+# only ever inside tests/, so this CONNECT, in the subject, was the uncured half of the same class.
+# Polarity is what makes it expensive: production sockets are short (`/tmp/kitty-<pid>`), so an
+# absolute connect is green on every box and every hand-check, and fails ONLY under the long TMPDIR
+# of the one gate that judges this tree — measured 107 bytes vs the cap under
+# `$TMPDIR/postland-run.XXXXXX`, where connect() raised `AF_UNIX path too long`. The fail-closed
+# `except` below then spent that as a clean "not accepting", so the classifier reported no-socket
+# over a socket it had never actually reached, and the timeout sub-state this function exists to
+# name became unreachable there (item 8dc9ff906d4b, 4 tests). chdir + connect the basename spends
+# 10 bytes instead of 107 and changes nothing else: same socket, same address, same verdicts.
 kitty_socket_accepting() { # $1=socket (unix:/path) → 0 accepting / 1 not, or unprovable
   case "${1:-}" in unix:/*) ;; *) return 1 ;; esac
   hf_bounded_s "${CC_KITTY_CONNECT_TIMEOUT_S:-3}" /usr/bin/python3 -c '
-import socket, sys
+import os, socket, sys
+d, b = os.path.split(os.path.abspath(sys.argv[1]))
+try:
+    os.chdir(d)
+except Exception:
+    sys.exit(1)
 s = socket.socket(socket.AF_UNIX)
 s.settimeout(2.0)
 try:
-    s.connect(sys.argv[1])
+    s.connect(b)
 except Exception:
     sys.exit(1)
 finally:

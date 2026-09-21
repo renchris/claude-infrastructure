@@ -430,6 +430,39 @@ clean_term() { unset CC_TERM CC_TERM_KITTY_TO KITTY_WINDOW_ID ITERM_SESSION_ID I
   [ "$HF_REMOTE_PANE_UNAVAIL_WHY" = no-socket ]
 }
 
+@test "POSITIVE CONTROL: an accepting socket OVER the 104-byte cap is still a TIMEOUT" {
+  # The red-proof for kitty_socket_accepting's RELATIVE connect, and the only case here that can
+  # see it (item 8dc9ff906d4b). Darwin caps sun_path at 104 bytes against THE STRING HANDED TO the
+  # syscall, and that binds connect(2) exactly as it binds bind(2) — but mksock/mklistener already
+  # chdir, so the FIXTURE is immune and only the SUBJECT's absolute connect could be charged for
+  # the prefix. setup()'s own socket is well under the cap beneath a session TMPDIR, so a pre-fix
+  # absolute connect is green in every hand-check and fails ONLY beneath postland-verify's corpus
+  # TMPDIR (`$TMPDIR/postland-run.XXXXXX`) — measured 107 bytes there, where connect() raised
+  # `AF_UNIX path too long`, the fail-closed `except` spent it as a clean "not accepting", and four
+  # tests in this file reported no-socket over a socket nothing had reached. That is the polarity
+  # trap this repo keeps paying for: invisible everywhere except inside the one gate that judges
+  # this tree. Pre-fix this test reads `no-socket`.
+  #
+  # The pad is COMPUTED off the live prefix, never fixed at some depth, so this stays a genuine
+  # >104-byte path on any box and a LONGER $BATS_TEST_TMPDIR strengthens it instead of voiding it.
+  local deep="$SOCKDIR"
+  while [ "${#deep}" -lt 100 ]; do deep="$deep/pad"; done
+  mkdir -p "$deep"
+  local s="$deep/kitty-4242"
+  [ "${#s}" -gt 104 ]   # the control proves nothing unless it is genuinely over the cap
+
+  # Retune the conf, which is the SSOT kitty_socket_template reads and which outranks the dir seam.
+  printf 'listen_on unix:%s/kitty-{kitty_pid}\n' "$deep" > "$HOME/.config/kitty/kitty.conf"
+  mklistener "$s"       # …and mklistener asserts the socket EXISTS at that absolute path
+
+  export KFAKE_KITTY_RC=1            # the client rc for BOTH causes — it cannot discriminate
+  export CC_REMOTE_PANE_TERM_TRIES=1 # the retry has its own cases; this one is the verdict
+  set +e; hf_remote_pane_term 110; rc=$?; set -e
+  [ "$rc" -eq 3 ]
+  [ "$HF_REMOTE_PANE_UNAVAIL_WHY" = timeout ]
+  [ "$HF_REMOTE_PANE_UNAVAIL_SOCK" = "unix:$s" ]
+}
+
 @test "the two rc-3 sub-states get DIFFERENT wording, and NEITHER of them says ABSENT" {
   export CC_REMOTE_PANE_TERM_TRIES=1
   export KFAKE_KITTY_RC=1
