@@ -256,11 +256,37 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
   [[ "$output" == *"recycle-in-place/PARTIAL"*"transplanted but the relaunch did not verify"* ]] || { echo "$output"; false; }
 }
 @test "recover: a DUPLICATE is parked and named, never recovered over two live processes" {
-  blocked_tx "$SEC" "$SID"; row 616 "$SID"; row 647 "$SID"
+  # TWO REAL PROCESSES, because that is what the case name and the asserted message both say. The
+  # fixture used to be `row 616; row 647` with row()'s default pid, i.e. ONE process under two pane
+  # rows — so it asserted "more than one live process" over a world containing one, and passed only
+  # because lr_holder_count counted ROWS. It is the pane-keyed-overwrite shape, which now has its
+  # own case below and must NOT be what proves this one.
+  /bin/sh -c 'sleep 30; :' --holder-a & local h1=$!
+  /bin/sh -c 'sleep 30; :' --holder-b & local h2=$!
+  blocked_tx "$SEC" "$SID"; row 616 "$SID" "$h1"; row 647 "$SID" "$h2"
   run bash "$FLEET" --recover
   [ "$status" -eq 1 ]
   [ ! -s "$LRH_LOG" ]
   [[ "$output" == *"DUPLICATE — more than one live process"* ]] || { echo "$output"; false; }
+  kill "$h1" "$h2" 2>/dev/null || true
+}
+
+@test "locate: ONE pid under TWO pane rows is ONE holder — the pane-keyed-overwrite artifact" {
+  # THE OTHER DOOR TO THE SAME FAILURE. The registry is PANE-keyed, so a session that changes panes
+  # leaves TWO live rows carrying ONE pid (§ 11 #2). lr_holder_count used to compute rows + procs
+  # and subtract only the row/proc OVERLAP — empty here, because there is no resume leaf — so it
+  # returned 2, `--locate` said DUPLICATE, and `--recover` PARKED a pane that was recoverable. That
+  # is the outcome the overlap fix was written to end, reached the other way. `bin/cc-limited` took
+  # a pid SET and got it right, which is why `parity` is the assertion that surfaces it.
+  # RED-PROOF: against pristine lr-lib.sh this prints DUPLICATE and the assertion below fails.
+  /bin/sh -c 'sleep 30; :' --one-process & local h=$!
+  blocked_tx "$SEC" "$SID"; row 616 "$SID" "$h"; row 647 "$SID" "$h"
+  mark "$SEC" "$SID" 616
+  run bash "$FLEET" --locate
+  [[ "$output" != *"DUPLICATE"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"RECOVERABLE"* ]] || { echo "$output"; false; }
+  parity                                  # BEFORE the kill: a dead holder is a different fixture
+  kill "$h" 2>/dev/null || true
 }
 @test "recover: sessions are sequenced one at a time and --max bounds a run" {
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
@@ -284,16 +310,24 @@ row() { printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"claude-se
 }
 
 @test "duplicates: a sid held by two live registry panes is listed with both, and --mark writes the SUPERSEDED tombstone" {
-  blocked_tx "$SEC" "$SID"; row 616 "$SID"; row 647 "$SID"
+  # TWO REAL PROCESSES, one per pane. `--duplicates` is documented as "sessions held by MORE than
+  # one live process" (lr-fleet.sh:13-15) and its gate is lr_holder_count, so the old fixture —
+  # two rows over row()'s default pid — was ONE holder dressed as two and listed only because the
+  # predicate counted rows. `--mark --live` must also name a pid that HOLDS a row, since the
+  # tombstone records the live successor and lr-fleet.sh:911 finds its pane by matching that pid.
+  /bin/sh -c 'sleep 30; :' --holder-a & local h1=$!
+  /bin/sh -c 'sleep 30; :' --holder-b & local h2=$!
+  blocked_tx "$SEC" "$SID"; row 616 "$SID" "$h1"; row 647 "$SID" "$h2"
   run bash "$FLEET" --duplicates
   [[ "$output" == *"DUPLICATE 52e35019: 2 registry pane(s)"* ]] || { echo "$output"; false; }
-  run bash "$FLEET" --duplicates --mark "$SID" --live "$$"
+  run bash "$FLEET" --duplicates --mark "$SID" --live "$h2"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   tomb="$SEC/projects/$SLUG/$SID.HANDOFF.json"
   [ -f "$tomb" ]
-  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["superseded_by_pid"]==int(sys.argv[2]) and d["handed_off_to"].endswith(".claude-secondary"), d' "$tomb" "$$"
-  run bash "$FLEET" --duplicates --mark "$SID" --live "$$"
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["superseded_by_pid"]==int(sys.argv[2]) and d["handed_off_to"].endswith(".claude-secondary"), d' "$tomb" "$h2"
+  run bash "$FLEET" --duplicates --mark "$SID" --live "$h2"
   [ "$status" -eq 2 ]                                      # never overwrites a tombstone
+  kill "$h1" "$h2" 2>/dev/null || true
 }
 @test "duplicates --mark refuses a dead --live pid: a SUPERSEDED tombstone must name a live successor" {
   blocked_tx "$SEC" "$SID"; row 616 "$SID"
@@ -524,11 +558,17 @@ assert r["pid"]=="-", r
 @test "D8 CONTROL: a genuine gap still reports PARTIAL even when a by-design skip sits beside it" {
   tm="9b9b9b9b-0000-4000-8000-000000000002"; blocked_tx "$SEC" "$tm"
   sed -i '' '1s/{"type":"user",/{"type":"user","agentName":"w1",/' "$SEC/projects/$SLUG/$tm.jsonl"
-  blocked_tx "$SEC" "$SID"; row 616 "$SID"; row 617 "$SID"
+  # The gap this control needs is a DUPLICATE park, and DUPLICATE now means what it says: TWO
+  # PROCESSES. The old fixture made it with two rows over row()'s default pid, which is one process
+  # and no longer a duplicate — so the gap has to be built honestly or this control proves nothing.
+  /bin/sh -c 'sleep 30; :' --holder-a & local h1=$!
+  /bin/sh -c 'sleep 30; :' --holder-b & local h2=$!
+  blocked_tx "$SEC" "$SID"; row 616 "$SID" "$h1"; row 617 "$SID" "$h2"
   run bash "$FLEET" --recover
   [ "$status" -eq 1 ] || { echo "$output"; false; }
   [[ "$output" == *"RECOVERY PARTIAL — 1 named gap(s)"* ]] || { echo "$output"; false; }
   [[ "$output" == *"1 not owed"* ]] || { echo "$output"; false; }
+  kill "$h1" "$h2" 2>/dev/null || true
 }
 
 # ── THE PHANTOM-ACTIVE CORRECTION (2026-09-19) ───────────────────────────────────────────────────
