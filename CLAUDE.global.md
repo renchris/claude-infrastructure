@@ -126,6 +126,37 @@ The operator's **entire iPhone message history — 213,995 messages, 2016-06 →
 
 ---
 
+## Email — reading a message means reading its IMAGES, by default
+
+🚨 **Whenever you read an email (any `mcp__ms365__*` mail read, or any task that turns on what a
+message SAYS), you also extract and LOOK AT its images. Unasked, every time.** A newsletter, a
+vendor announcement, a design hand-off, a scanned invoice, a screenshot a customer pasted — the
+payload is routinely *in the picture*, and a text-only read of it is a partial read reported as a
+complete one. Same standard as reading the full text of anything you were asked to read: you do not
+ask permission to finish reading.
+
+```bash
+cc-mail-images --search "<subject fragment>"      # or --id <messageId>
+```
+
+Then **`Read` the image files it writes** — extraction alone puts bytes on disk and nothing in your
+context, and the images are the whole point. It prints every path, plus `index.html` (a contact
+sheet) and `manifest.json`.
+
+**Why this is a standing rule rather than a tool you offer** (operator ruling 2026-09-20): it was
+first handed over as a CLI for the human, who answered *"No way I'm going to memorize that. The
+human NEVER extracts emails via cli — it's solely for you, zero human in the loop."* An agent
+capability gated on the operator remembering to ask for it is not a capability.
+
+Three objections are already handled — do not re-raise them as reasons to skip: trackers and
+beacons are filtered by pattern (`pixel|beacon|track|/open?|safelinks`) rather than fetched; inline
+MIME parts never leave the machine; and it drives `ms-365-mcp-server` over **stdio with its own
+cached token**, so it works when the ms365 MCP link is down — measured `CONNECTION_CLOSED` for a
+whole session while `verify-login` still succeeded. Skip it only when the message provably has no
+images, or the operator says not to.
+
+---
+
 ## Agent Teams Reinforcement (All Projects)
 
 **Agent Teams are the DEFAULT for all implementation work.** This applies globally.
