@@ -247,6 +247,10 @@ verb="${1:-}"; shift 2>/dev/null || true
 SESSION=""; VERTICAL=0; JSON=0
 # The close-target identity pins. Empty = not supplied = today's unchecked close (see the header).
 EXPECT_CMDLINE=""; EXPECT_GENERATION=""
+# `session tui-submit` payload. Parsed in the SHARED loop for the same reason --json is: an
+# unparsed flag falls through to `*)` and lands in ARGS, which for send/run is THE TEXT TYPED
+# AT THE PANE — a payload path that silently became keystrokes would be worse than no flag.
+FROM_FILE=""
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -266,6 +270,7 @@ while [ $# -gt 0 ]; do
     # in the close arm, for the same reason --json is: an unparsed flag falls through to `*)` and
     # lands in ARGS, which for send/run is the TEXT TYPED AT THE PANE. A pin that silently became
     # keystrokes would be worse than no pin.
+    --from-file)  FROM_FILE="${2:-}"; shift 2 ;;
     --expect-cmdline-match) EXPECT_CMDLINE="${2:-}"; shift 2 ;;
     --expect-generation)    EXPECT_GENERATION="${2:-}"; shift 2 ;;
     # -f is ACCEPTED AND DISCARDED, deliberately — not stored, because nothing downstream can use
@@ -1379,6 +1384,55 @@ else:
       focus) kt focus-window --match "id:$SESSION" || exit 1 ;;
       read)  kt get-text     --match "id:$SESSION" || exit 1 ;;
     esac
+    ;;
+
+  # ── tui-submit: type a prompt into a LIVE CLAUDE CODE COMPOSER and PROVE it landed on disk ──
+  # LIMIT_RECOVER_100P W5-E. The contract, the rc table and every measurement live in
+  # scripts/lib/cc-tui.sh; this arm is only the seam, so there is still ONE of them.
+  #
+  #   it2 session tui-submit -s <window-id> --from-file <payload>
+  #   rc 0 landed (a user record carrying the payload is in the session transcript)
+  #      1 no such pane, or the send failed      2 unreadable / blocking modal — nothing typed
+  #      3 composer occupied — nothing typed     4 paste not echoed — CR withheld, composer scrubbed
+  #      5 sent, no record inside the window — CANNOT TELL (never "failed")
+  #
+  # 🚨 IT IS NOT BUILT ON `send`, AND THAT IS THE WHOLE REASON IT IS A VERB. `send` short-circuits
+  # on `armed` (see that arm above: `armed "$SESSION" && exit 0`) and returns 0 WITHOUT DELIVERING.
+  # That is right for an armed runner pane — there is no line editor to type at — and fatal for a
+  # message into a live composer, which is never armed but CAN carry a stale marker: U08 §6 found
+  # three leaked `.armed` files on this box, all past their 360 s TTL. This arm consults no marker
+  # and reaches kitty only through the lib's own bounded, socket-pinned RPC.
+  tui-submit)
+    if [ -z "$SESSION" ]; then
+      err "session tui-submit: no pane id. This shim takes it as a FLAG, never as a positional:"
+      err "  it2 session tui-submit -s <window-id> --from-file <payload>"
+      exit 64
+    fi
+    valid_id "$SESSION" || reject_id "$SESSION" tui-submit
+    if [ -z "$FROM_FILE" ]; then
+      err "session tui-submit: --from-file <payload> is required. The payload is a FILE and never"
+      err "an argument: kitty's send-text interprets PYTHON ESCAPES in a text argument, so a brief"
+      err "carrying \\n, \\e, \\u, \\x or a lone backslash is silently rewritten on the wire."
+      exit 64
+    fi
+    [ -f "$FROM_FILE" ] || { err "session tui-submit: no such payload file: $FROM_FILE"; exit 64; }
+    _tui_lib=""
+    for _tl in "${CC_TUI_LIB:-}" \
+               "$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")/../scripts/lib/cc-tui.sh" \
+               "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/cc-tui.sh" \
+               "$HOME/.claude/scripts/lib/cc-tui.sh"; do
+      [ -n "$_tl" ] && [ -f "$_tl" ] && { _tui_lib="$_tl"; break; }
+    done
+    if [ -z "$_tui_lib" ]; then
+      err "session tui-submit: scripts/lib/cc-tui.sh is not reachable from $0 (set CC_TUI_LIB)."
+      err "Refusing rather than falling back to a blind send: an unverified paste into a live"
+      err "composer is the failure this verb exists to end."
+      exit 69
+    fi
+    # shellcheck source=/dev/null
+    . "$_tui_lib" || { err "session tui-submit: could not source $_tui_lib"; exit 69; }
+    _tui_rc=0; cc_tui_submit "$SESSION" "$FROM_FILE" || _tui_rc=$?
+    exit "$_tui_rc"
     ;;
 
   *) err "unsupported subcommand: session $verb"; exit 64 ;;
