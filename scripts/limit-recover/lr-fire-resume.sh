@@ -914,6 +914,46 @@ expect -c '
           send_user "\nlr-fire-resume: the prompt is still sitting in the composer after ${poll}s (nothing in the transcript) — sending ONE more Enter.\n"
           send "\r"
           set deadline [expr {$t + 10}]
+        } elseif {$sv eq "EMPTY" || $sv eq "UNKNOWN"} {
+          # NOT MEASURED — and it must not share an action with DRAFT/MENU, which SETTLE the
+          # question. EMPTY is the composer state a SUCCESSFUL submit LEAVES BEHIND, and UNKNOWN is
+          # the oracle reporting that it read no pane at all (its first guard returns UNKNOWN
+          # before any read when LR_PANE — `${ITERM_SESSION_ID##*:}` — is empty). Neither is a
+          # negative; breaking on them convicts a submit that worked.
+          #
+          # NO APOSTROPHE MAY APPEAR ANYWHERE IN THIS BLOCK, and not as a style rule: every line
+          # here lives inside `expect -c ...`, a SINGLE-QUOTED bash string, so one of them CLOSES
+          # that string and the whole file stops PARSING — the same class as the bash-3.2 paren
+          # trap the header records. Measured twice on 2026-09-21: first by two possessives in
+          # this very comment, then again by the warning against them, which quoted the character.
+          # The check is `/bin/bash -n` on this file.
+          #
+          # A CURLY BRACE IS THE SAME HAZARD ONE LAYER IN, and it bit this comment too: Tcl counts
+          # braces LEXICALLY across a braced block and does not exempt a line starting with `#`,
+          # so an unbalanced one written inside a comment closes the enclosing block early. The
+          # third red of the day was this paragraph naming the else-branch in literal Tcl. Keep
+          # every brace in this block balanced, comments included; `expect -f` is the check.
+          #
+          # Measured 2026-09-21 on the /limit-recover ingest of session 83c4f1b8: this branch broke
+          # the poll at t=29 and wrote `FAILED:submit "within 30s"` at 00:18:35Z — and that prompt
+          # user record is in the transcript at 00:18:35.510Z. The submit had WORKED; a resumed TUI on
+          # this box takes ~30s to boot (~94KB of always-loaded instructions, the SessionStart
+          # hooks, 6 MCP servers) before its first record lands, so a 30s bound sits below the
+          # latency it is judging. The honest window is the one the queued path and handoff-fire
+          # already use for this same question: RCY_ENGAGE_TIMEOUT.
+          #
+          # WHICH of the two values it was on that run is NOT recoverable — both take this branch
+          # and the old FAILED note dropped $sv (the sibling READY-NOT-SEEN note records it; this
+          # one did not). That gap is why the note below writes $sv. Do not read the incident as
+          # evidence for one value over the other; the fix is correct for both.
+          #
+          # Neither reading licenses a keystroke, so: no CR, and poll the transcript — the only
+          # instrument that can settle it — to the engagement budget.
+          # (memory: predicate-refusal-is-not-a-negative · empty-vs-no-surface ·
+          #  gate-default-decides-failure-direction)
+          if {$deadline < $qmax} { set deadline $qmax }
+          lr_note SUBMIT-UNMEASURED submit "screen reads $sv after ${poll}s — not a negative; polling the transcript to ${deadline}s"
+          send_user "\nlr-fire-resume: nothing in the transcript after ${poll}s and the screen reads $sv — NOT a measured failure (an EMPTY composer is what a successful submit leaves, and UNKNOWN means no pane was read). No keystroke sent; polling the transcript to ${deadline}s.\n"
         } else {
           send_user "\nlr-fire-resume: nothing in the transcript after ${poll}s and the composer reads $sv, not our prompt — NOT re-sending Enter.\n"
           break

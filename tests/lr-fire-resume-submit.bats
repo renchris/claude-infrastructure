@@ -389,6 +389,12 @@ screen() { # $1 = call ordinal, $2 = one of empty|menu|mine
     # the recovery was in flight. Structurally identical to `mine`: same box, same border runs, same
     # prompt glyph. Only the CONTENT differs, which is the whole of the DRAFT / DRAFT-MINE split.
     other) printf '%s\n' "  chrome" "$b" " ❯ git status --porcelain # typed by someone else" "$b" " ? for shortcuts" > "$f" ;;
+    # NO BORDER RUNS, so the awk box parse exits 9 and the oracle returns UNKNOWN — the same
+    # verdict its first guard returns when LR_PANE is empty, which is the shape that cannot be
+    # fixtured here (the stub IS the pane read). The helper's own note above records that a
+    # box-less fixture reads UNKNOWN; this arm uses that property deliberately rather than by
+    # accident.
+    unknown) printf '%s\n' "  a frame with no composer box yet" "  still booting" > "$f" ;;
   esac
 }
 states() { jq -r '.state' "$LR_RUN_DIR/events.jsonl" 2>/dev/null | tr '\n' ' '; }
@@ -577,6 +583,53 @@ INNER
   [ "$(wc -l < "$LR_TEST_GOT" | tr -d ' ')" = 2 ] || { cat "$LR_TEST_GOT"; false; }
   [[ "$output" == *"NOT SUBMITTED"* ]] || { echo "$output"; false; }
   [[ "$(states)" == *"FAILED:submit"* ]] || { echo "states: $(states)"; false; }
+}
+
+@test "RED-PROOF submit poll: a screen that MEASURES NOTHING is not a negative — the record lands late and is still SUBMITTED" {
+  # THE INCIDENT THIS REPLAYS (session 83c4f1b8, 2026-09-21, its own /limit-recover ingest):
+  # `FAILED:submit "no record of the prompt in the transcript within 30s"` was written at
+  # 00:18:35Z, and that prompt's user record is in the transcript at 00:18:35.510Z. The submit had
+  # worked. The poll did not merely expire — it BROKE EARLY, because the screen read neither
+  # DRAFT-MINE nor anything else it could act on, and the one `else` sent EMPTY and UNKNOWN down
+  # the same path as DRAFT and MENU. Those two settle the question; these two do not measure it.
+  #
+  # WHY IT BITES HERE AND NOT ON A BENCH: a resumed TUI on this box needs ~30s to boot (~94KB of
+  # always-loaded instructions, the SessionStart hooks, six MCP servers) before its first record
+  # lands, so a 30s bound sits BELOW the latency it is judging — the constant was never measured
+  # against this subject's own range (memory an-imported-threshold-can-sit-above-the-model-s-
+  # output-range, mirrored: below the range reads as failure instead of as inert).
+  #
+  # THE MUTANT THIS KILLS is the code as it shipped: restore the single `else … break` and the
+  # poll gives up at LR_SUBMIT_POLL_S with the record not yet written, so `submitted` never
+  # appears and FAILED:submit does. The margin is deliberate — the record is written well after
+  # the old bound and well before the new one, so neither verdict can be reached by timing luck.
+  exp_setup
+  screen 1 empty          # quiet arm: safe to type, so the prompt IS sent
+  screen 2 unknown        # at the poll bound: the oracle measured nothing
+  : > "$TX"               # …and the transcript is still empty at that moment
+  # The bounds this case needs, overriding exp_setup's 2/3: the old code breaks at ~2s, the record
+  # appears at ~5s, the new deadline runs to 20s. Both verdicts are unreachable by a second's slip.
+  export LR_SUBMIT_POLL_S=2 RCY_ENGAGE_TIMEOUT=20
+  # The late record, written by a detached writer so the expect program is the only thing on the
+  # clock. `$!` is the subshell, which is what must be reaped — killing the sleep would orphan it
+  # (memory kill-the-leaf-not-the-wrapper, inverted: here the WRAPPER is the thing we own).
+  ( sleep 5; printf '{"type":"user","timestamp":"2099-01-01T00:00:00.000Z","message":{"role":"user","content":"ingest %s"}}\n' "$TOK" > "$TX" ) &
+  local writer=$!
+  lr_expect_run 60
+  kill "$writer" 2>/dev/null || true; wait "$writer" 2>/dev/null || true
+  # 1 — it did not act on a reading that measured nothing: the prompt, and no second keystroke.
+  [ "$(wc -l < "$LR_TEST_GOT" | tr -d ' ')" = 1 ] \
+    || { echo "a keystroke was sent on a screen that measured nothing:"; cat "$LR_TEST_GOT"; false; }
+  # 2 — it said so, naming the value, which the old FAILED note dropped entirely.
+  [[ "$(states)" == *"SUBMIT-UNMEASURED"* ]] \
+    || { echo "the unmeasured screen was not recorded as such: $(states)"; false; }
+  [[ "$(details)" == *"screen reads UNKNOWN"* ]] \
+    || { echo "the state log did not carry WHICH value it was: $(details)"; false; }
+  # 3 — the load-bearing half: the late record is found, and the run is a SUBMIT, not a failure.
+  [[ "$(states)" == *"submitted"* ]] \
+    || { echo "the record landed after the old bound and was still missed: $(states)"; false; }
+  [[ "$(states)" != *"FAILED:submit"* ]] \
+    || { echo "a submit that WORKED was recorded as a measured failure: $(states)"; false; }
 }
 
 @test "RED-PROOF token oracle: a token that never reached the transcript is NOT engagement" {
