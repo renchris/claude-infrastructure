@@ -268,6 +268,9 @@ sent()          { grep -c "^$1\$" "$RPC_LOG" 2>/dev/null || true; }
   run cc_tui_submit 42 "$SHORT"
   [ "$status" -eq 5 ]
   [ "$(sent CR)" -eq 1 ]
+  # …and it says WHY, rather than falling through into a poll for an empty needle
+  n="$(printf '%s' "$output" | grep -cF 'no printable-ASCII run' || true)"
+  [ "$n" -ge 1 ]
 }
 
 @test "a transcript that SHRANK below the offset is re-read from zero, not skipped" {
@@ -293,6 +296,20 @@ sent()          { grep -c "^$1\$" "$RPC_LOG" 2>/dev/null || true; }
   run cc_tui_type 99 "$PAY"
   [ "$status" -eq 1 ]
   [ "$(sent PASTE)" -eq 0 ]
+}
+
+@test "cc_tui_type refuses a payload file that does not exist, on its own" {
+  run cc_tui_type 42 "$BATS_TEST_TMPDIR/no-such-payload"
+  [ "$status" -eq 1 ]
+  [ "$(sent PASTE)" -eq 0 ]
+}
+
+@test "cc_tui_record_after refuses an EMPTY needle — contains(\"\") is true of every record" {
+  printf '{"type":"user","message":{"content":"anything at all"}}\n' > "$TRANS"
+  run cc_tui_record_after "$TRANS" 0 ""
+  [ "$status" -eq 1 ]
+  run cc_tui_record_after "$TRANS" 0 "anything at all"
+  [ "$status" -eq 0 ]
 }
 
 @test "the content walk goes through .text — a JSON dump would escape a quote out of the needle" {
@@ -514,4 +531,36 @@ SH
   n="$(grep -c -- '--from-file' "$KLOG" || true)"
   [ "$n" -eq 0 ]
   [ -s "$KLOG" ]
+}
+
+@test "the THIRD composer parse (lr-fire-resume.sh) still agrees with this one, fixture for fixture" {
+  # There are three copies of this parse in the tree now: handoff-fire.sh:2585, this lib, and the
+  # one lr-fire-resume.sh embeds in its `expect -c` program (~:599-618) because expect cannot call
+  # a bash function. Nothing pinned the third. Two spellings of one predicate is how sibling
+  # auditors end up disagreeing about one population — so this runs lr-fire-resume's OWN block,
+  # extracted from the script, over the same screens and maps its vocabulary onto ours.
+  LRF="$REPO/scripts/limit-recover/lr-fire-resume.sh"
+  BLK="$BATS_TEST_TMPDIR/lr-screen.sh"
+  awk '/<<.LRSCREENSH./ { f = 1; next } /^LRSCREENSH$/ { f = 0 } f' "$LRF" > "$BLK"
+  [ -s "$BLK" ]
+  bash -n "$BLK" || false
+  export LR_IT2="$BATS_TEST_TMPDIR/lr-it2"
+  printf '#!/usr/bin/env bash\ncat "$LRSCREEN"\n' > "$LR_IT2"; chmod +x "$LR_IT2"
+  export LR_PANE=42 LR_SCREEN_WANT="" LRSCREEN="$SDIR/default"
+  for fx in empty draft nobox placeholder; do
+    rm -f "$SDIR/.n"
+    case "$fx" in
+      empty)       screen_empty "$SDIR/default" ;;
+      draft)       screen_draft "$SDIR/default" "a live draft here" ;;
+      nobox)       screen_nobox "$SDIR/default" ;;
+      placeholder) printf 'x\n%s\n Try "fix the tests" \n%s\n' "$B" "$B" > "$SDIR/default" ;;
+    esac
+    lrv="$(bash "$BLK")"
+    crc=0; cv="$(cc_tui_composer 42)" || crc=$?
+    case "$fx" in
+      empty|placeholder) [ "$lrv" = EMPTY ]   && [ "$crc" -eq 0 ] && [ -z "$cv" ] || false ;;
+      draft)             [ "$lrv" = DRAFT ]   && [ "$crc" -eq 0 ] && [ -n "$cv" ] || false ;;
+      nobox)             [ "$lrv" = UNKNOWN ] && [ "$crc" -eq 1 ] || false ;;
+    esac
+  done
 }
