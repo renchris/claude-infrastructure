@@ -816,3 +816,59 @@ above; the ones that changed a DESIGN rather than an anchor are restated here so
     that `--locate` tests the cwd and `cc-find`'s liveness column did not. Both were right at their
     own moment — this is not a defect in either — but when two auditors over one population disagree,
     the one that reads the *scarcer* fact wins, and a session's cwd is scarcer than its registry row.
+- 2026-09-21 06:xxZ — **W5 LANDED (`0e471ba63`, 28 paths content-verified) AND CONVERGED; both ADDs
+  linked and content-identical on the live layer.** Six disjoint writers, 27 files, +6449/−68,
+  merged serially with zero conflicts. Suites on the MERGED tip: **472 assertions across 16 suites,
+  0 failures**, every `1..N` plan line asserted — including five unchanged controls the wave must
+  not break (`lr-reset-poller` 38, cc-find's `cc-lr` 15, `it2-kitty` 24, `it2-kitty-composer-guard`
+  54, the two lead-crash suites). `bats --count` on all nine touched suites matched every agent's
+  own figure, so Round A's keep-both brace defect did not recur.
+  - 🚨 **MUTATION: 182 built / 168 killed / 14 survived — and this is the FIRST wave in this project
+    that did not TRADE survivors.** Every one of the 14 is an argued equivalence guard that names
+    the PAIRED mutation it does die on (W5A's `M15c`/`M15d` reader-desync pair is the model: the
+    field-count arm is what makes a desync a parked record instead of a dead daemon). Several
+    agents converted their own first-pass survivors into cases rather than into excuses — W5C:
+    *"three mutants were survivors first and each bought a test, not an excuse."* The rule that
+    produced this was one line in every brief: **mutation-score your OWN additions**.
+  - **THE HEADLINE, and it is this project's signature defect for the fourth time.**
+    `lr_state_current "$bundle" == RECOVERED` — § W5's own headline retire predicate — is **INERT**.
+    No writer in the tree ever appends `RECOVERED`; the live vocabulary measured off every
+    `events.jsonl` on this box is admitted / gate-admitted / submit-token-armed / relaunch-typed /
+    FAILED / FAILED:submit. And only **4 of ~140** sid dirs carry an `events.jsonl` at all, so for
+    ~97% of parked records the leg cannot even be evaluated. The retire gate is carried ENTIRELY by
+    its second disjunct (a live registry row under the TARGET cfg — a predicate that did not exist
+    and that W5A had to add, `lr_registry_live_rows` taking only a sid). Leg 1 ships red-proved
+    anyway, because it is the specified predicate and goes live the day a writer emits the value.
+    Re-derive, never re-quote: `jq -r .state $(find ~/.reso/limit-recover -name events.jsonl) | sort -u`
+  - **The narrowing's other half was wrong and the wave grew by one item.** `Scope (grown): +hook
+    ARM 2 request writer` — LIMIT_DETECT_100P DROPPED it in its own §7, so the lane's only producer
+    was a human typing `lr-fleet --enqueue`. It ships COUPLED to W5A's `autorecover.on` origin gate:
+    ~30 sessions die on one cap, and without that gate the arm re-homes the fleet unattended, which
+    is the operator's open decision, not ours. Both halves in one land; the gate fails CLOSED.
+  - **THREE LANDS WERE NEEDED AND EVERY RED WAS REAL** — none was flake, and two were my brief's
+    fault. (1) Two `SC2016` findings in `bin/cc-lr` and `hooks/stop-failure-marker.sh`: **I briefed
+    `shellcheck -S warning` and the land gate runs it at a severity that includes `info`.** That is
+    `docs/lessons/prescribed-repro-weaker-than-the-harness.md` — *"a milder repro EXONERATES ⇒ match
+    the INVOCATION"* — already in this fleet's memory, and I briefed the milder invocation anyway.
+    (2) Three `SC2028` findings in a **`.bats` shellcheck ratchet that had never linted a test file
+    before**; all three write a generated stub's source text where `\n` must stay literal.
+    (3) `tests/cc-tui.bats` was unfixtured against all four hermeticity classes — the nastiest being
+    `CC_PANE_CMD*`, which this repo injects into every pane it launches, so the suite would go red
+    exactly when run from a fired pane and green everywhere else. **I now run all eight ratchets
+    locally before firing a land**; the three that blocked cost ~2.5 h of gate time to discover.
+  - **`typed-send-lint` is RED on trunk at `scripts/handoff-fire.sh:6941`** and my diff touches ZERO
+    lines of that file. Attributed, not driven — not mine. Re-measure: `bash scripts/typed-send-lint.sh`
+  - **FIRST END-TO-END EXERCISE OF THE NEW TOOLING, and it found a defect in itself.** W5D's
+    residual R8 was *"nothing here has been run end-to-end against the real actuator."* Running
+    `cc-lr status --all` on the live layer against the REAL store rendered three runs correctly —
+    and recommended `→ cc-lr repair` for `83c4f1b8/bundle-20260920T224329Z`, which has sat at
+    `FAILED:submit` for 5h42m with its **session DEAD**. Repair TYPES into a pane; there is nothing
+    to type into. Fixed (`ea18f8f75`): the NEXT column is gated on a live registry row, FAIL-OPEN
+    when lr-lib is unreachable (an instrument that cannot tell must not SUPPRESS a suggestion that
+    may be right). 3 cases, 3 mutants, 3/3 killed each by a different case; the pre-existing NEXT
+    case was EXTENDED with a live-registry fixture, never weakened. **A status view that names a
+    doomed command costs the round trip it exists to prevent.**
+  - Filed this session, both genuine operator SPEND forks, both with conviction + receipt:
+    `1640f2fb6a85` (may a rate-limited session be re-homed onto another account unattended — 85%,
+    shipped default OFF) and `e84adb4d1737` (park vs. spend the last of a thin account — 80%,
+    shipped default PARK). Neither blocks the build; both defaults ship safe.
