@@ -400,17 +400,6 @@ live_do_range() { # → "first last" line numbers of live_do's body
   [ "$output" = "PARKED:no-target" ]
 }
 
-@test "arm (e) router: a park with NO reasons FAILS — a park nobody can act on is not the target state" {
-  local d; d="$(stage r2)"
-  echo 'parked' > "$d/fleet.mech"
-  echo 'no routable target' > "$d/fleet.note"
-  : > "$d/rank.stderr"
-  : > "$d/moved.txt"
-  run "$SUBJ" --verdict router "$d"
-  [ "$status" -eq 4 ]
-  [[ "$output" == *no-router-reasons* ]] || false
-}
-
 @test "arm (e) router: a transplant that happened anyway FAILS" {
   local d; d="$(stage r3)"
   echo 'parked' > "$d/fleet.mech"
@@ -610,9 +599,21 @@ mk_run() { # → a run dir with one verdict file per arm, from "arm=verdict" pai
   [[ "$output" == FAIL\|*slow* ]] || false
 }
 
-@test "row 11 takes the WORST fire latency, not the average" {
+@test "row 11 takes the WORST fire latency wherever it sits — maximum FIRST" {
+  # THE MAXIMUM IS IN THE FIRST SLOT ON PURPOSE. The first version of this case put it last, where
+  # "take the maximum" and "take the last value you saw" agree — so the mutant that replaced the
+  # comparison with a bare assignment survived the whole suite. Order is now covered from both ends.
   local d a
   d="$BATS_TEST_TMPDIR/lat"; mkdir -p "$d"
+  mkdir -p "$d/gate"; echo 5000 > "$d/gate/fire.elapsed_ms"
+  for a in watcher draft queued router; do mkdir -p "$d/$a"; echo 100 > "$d/$a/fire.elapsed_ms"; done
+  run bash -c 'eval "$(sed -n "/^row_verdict() {/,/^}$/p" "$1")"; row_verdict "$2" 11' _ "$SUBJ" "$d"
+  [[ "$output" == FAIL\|*5000ms* ]] || false
+}
+
+@test "row 11 takes the WORST fire latency wherever it sits — maximum LAST" {
+  local d a
+  d="$BATS_TEST_TMPDIR/lat3"; mkdir -p "$d"
   for a in gate watcher draft queued; do mkdir -p "$d/$a"; echo 100 > "$d/$a/fire.elapsed_ms"; done
   mkdir -p "$d/router"; echo 5000 > "$d/router/fire.elapsed_ms"
   run bash -c 'eval "$(sed -n "/^row_verdict() {/,/^}$/p" "$1")"; row_verdict "$2" 11' _ "$SUBJ" "$d"
@@ -671,4 +672,91 @@ mk_run() { # → a run dir with one verdict file per arm, from "arm=verdict" pai
   run "$SUBJ" --check-manifest last
   [ "$status" -eq 2 ]
   [[ "$output" == *"manifest magic"* ]] || false
+}
+
+# ══ CASES ADDED TO KILL MUTATION SURVIVORS ═════════════════════════════════════════════════════
+# Each of the four below was written because a mutant of the clause it covers survived the suite as
+# it stood. They are the wave's evidence that those four clauses are not decoration.
+
+@test "a STAMPED sid that is not uuid-shaped is REFUSED — the stamp writer will stamp anything" {
+  # `--stamp` is a FORMAT writer, not a capability check: it happily stamps the string `notauuid`.
+  # So the stamp check does not shadow the shape check in general — my fixtures simply never
+  # produced the combination, and the shape check's mutant survived because of it. Without the
+  # shape check this manifest is ACCEPTED and a garbage sid is handed to the arms.
+  local mf row
+  mf="$(mk_manifest)"
+  row="$("$SUBJ" --stamp "$RUN" notauuid shared /tmp/x 106 gate)"
+  grep -v '^aaaaaaaa' "$mf" > "$mf.x"
+  mv "$mf.x" "$mf"
+  printf '%s\n' "$row" >> "$mf"
+  run "$SUBJ" --check-manifest "$mf"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not a session uuid"* ]] || false
+}
+
+@test "arm (d) queued: a fire that went straight through is NOT this arm's pass" {
+  # `submitted` and `queued` are sibling branches of ONE decision in lr-fire-resume. A fire that
+  # was never enqueued is a healthy recovery and a FAILED drill arm: the queueing path this arm
+  # exists to exercise was not exercised, and calling that a pass is the vacuous green in miniature.
+  local d; d="$(stage q5)"
+  ev "$d" submitted "user record carrying the run token"
+  echo 1 > "$d/engaged.verdict"
+  run "$SUBJ" --verdict queued "$d"
+  [ "$status" -eq 1 ]
+  [ "$output" = "FAILED:queued:never-queued" ]
+}
+
+@test "arm (e) router: an EMPTY reasons capture FAILS, an ABSENT one is UNMEASURED" {
+  # The two are opposite answers and the first draft could not tell them apart, which made the
+  # FAIL clause dead code (its mutant survived the whole suite). No file = the drill never captured
+  # the router's stderr; an empty file = the router was asked and named nothing.
+  local d; d="$(stage r5)"
+  echo 'parked' > "$d/fleet.mech"
+  echo 'no routable target' > "$d/fleet.note"
+  : > "$d/moved.txt"
+  : > "$d/rank.stderr"
+  run "$SUBJ" --verdict router "$d"
+  [ "$status" -eq 1 ]
+  [ "$output" = "FAILED:router:no-reasons" ]
+
+  rm -f "$d/rank.stderr"
+  run "$SUBJ" --verdict router "$d"
+  [ "$status" -eq 4 ]
+  [[ "$output" == *no-router-reasons* ]] || false
+}
+
+@test "arm (e) router: a fire that actually RECOVERED is not the park this arm is testing" {
+  # `parked` is the mechanism cell lr-fleet writes when the pick found nowhere to go. Any other
+  # mechanism means the seeded all-thin fixture did not take, and reporting that as the arm's pass
+  # would certify a router decision that never happened.
+  local d; d="$(stage r6)"
+  echo 'in-place/RECOVERED' > "$d/fleet.mech"
+  echo 'recovered on next2' > "$d/fleet.note"
+  echo 'next: recovery-weekly-thin' > "$d/rank.stderr"
+  : > "$d/moved.txt"
+  run "$SUBJ" --verdict router "$d"
+  [ "$status" -eq 1 ]
+  [[ "$output" == FAILED:router:not-parked:* ]] || false
+}
+
+@test "collect_keystrokes lifts the SURFACE's typing records, epoch-stamped, and nothing else" {
+  # The instrument arm (b)'s safety half rests on. It must select the three typing stages and
+  # convert their ISO timestamps to epochs — a string compare against an epoch silently never
+  # matches, which would make the whole window assertion vacuous in the passing direction.
+  local d out
+  d="$(stage ks)"
+  ev "$d" gate-admitted gate "nothing typed here"
+  { printf '{"ts":"2026-09-21T00:00:10Z","state":"relaunch-typed","stage":"relaunch","detail":"x"}\n'
+    printf '{"ts":"2026-09-21T00:00:20Z","state":"queued","stage":"submit","detail":"x"}\n'
+    printf 'this line is not json\n'
+  } >> "$d/events.jsonl"
+  bash -c 'eval "$(sed -n "/^collect_keystrokes() {/,/^}$/p" "$1")"; collect_keystrokes "$2"' _ "$SUBJ" "$d"
+  [ -s "$d/keystrokes.log" ]
+  out="$(cut -f1 "$d/keystrokes.log" | tr '\n' ' ')"
+  # 2026-09-21T00:00:10Z and :20Z as UTC epochs — computed, never hardcoded, so this case does not
+  # go stale and does not encode my own arithmetic as the oracle.
+  [ "$out" = "$(/usr/bin/python3 -c 'import calendar,time
+for t in ("2026-09-21T00:00:10Z","2026-09-21T00:00:20Z"): print(calendar.timegm(time.strptime(t,"%Y-%m-%dT%H:%M:%SZ")), end=" ")')" ]
+  # the gate record and the malformed line are absent: two lines, not four
+  [ "$(grep -c . "$d/keystrokes.log")" -eq 2 ]
 }
