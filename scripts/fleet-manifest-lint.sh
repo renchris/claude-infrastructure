@@ -48,7 +48,8 @@
 # own commit rather than accumulating silent lands behind a standing refusal.
 #
 # THE COUNT TRIPWIRE IS NOT HERE, DELIBERATELY. tests/cc-fleet.bats pins the expected number of rows
-# (`[ "$n" != 35 ]`) as a HUMAN-moved tripwire whose comment block records why each row was added.
+# (`[ "$n" != <N> ]` — the literal moves with each row, so it is not restated here) as a HUMAN-moved
+# tripwire whose comment block records why each row was added.
 # That is a judgment ratchet and belongs in a suite a person reads. This lint is structural only, so
 # a legitimate row addition does not have to argue with two enforcers at once.
 #
