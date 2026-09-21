@@ -746,3 +746,54 @@ above; the ones that changed a DESIGN rather than an anchor are restated here so
   - **Five ratchet rounds were spent getting W3i through the gate and every one named a real defect, not lint:** a bare `md5` unreachable on the nightly launchd job's PATH · `ls | wc` and `ls | head -1` counts (the second also a `head -N` under pipefail, which reads FALSE on a match) · an `export X="$(…)"` masking its substitution's status · and **the one worth carrying: `tests/lr-ingest-verify.bats` was 42/42 HERE and RED off-box**, because `clause()`'s `cut -c1-200` is LEFT-anchored and the sandbox's longer `$HOME` spent the budget on the path — `banana` arrived as `bana`, truncating exactly the value the assertion matched. **A green on this box and a red in a clean environment is the signature of a fixed-width budget consumed by a variable-length prefix.**
   - ⚠️ **My first fix for that made it WORSE (1 red → 4), and that is the more useful half.** Truncating from BOTH ends merely moved which half died: C1/C3/D1/D1RC match a phrase in the MIDDLE. Cutting from either end destroys something. The error was upstream of the choice — treating 200 as the requirement when the requirement was only ONE LINE (the launcher does its own budgeting when it folds a FAIL into the prompt). Raised to 400 with a both-ended bound kept purely as a runaway backstop, and the wave's own M8 case re-pinned on the PROPERTY — one line, bounded, AND strictly shorter than its 900-char input, that last clause because "bounded" is otherwise satisfied by doing nothing.
   - **One red on this branch was NOT mine and the A/B proves it:** `tests/headless-address-consumers.bats` case 9 fails identically on a detached clean `origin/main` worktree, and my diff does not touch `handoff-fire.sh` at all. ship-land maps a red suite to whoever's diff REACHES it, so it was blocking every land that came near. Fixed rather than routed (the second `$pane` block is the `hdl-<hex>` address-shape arm this suite exists to check, so it is CENSUSED, never hidden).
+- 2026-09-21 03:5xZ — **W3i LANDED (`ea5012b30`, 27 commits), converged; and a 6-agent read-only recon
+  refutes half the premise W5 was narrowed on.** Session `d90959db`, successor to `a4241557`.
+  - **The land the predecessor started did not die at its recycle — it was SIGTERM'd two hours later.**
+    `land.log` records `exit 143` with an EMPTY `red` field at 02:36:20Z, nine seconds before this
+    session's own fire read `exit 11` ("a land is ALREADY IN FLIGHT, pid 37525, 7657 s"). That pair is
+    the harness-reap signature (memory: `harness-kills-background-work-under-memory-pressure`), not a
+    gate failure: the re-fire under `scripts/lib/detach.sh` ran the same gate to **533 `ok` / 0
+    `not ok`** and pushed `23974cc92..ea5012b30`, land-verify 10 paths content-identical. **A
+    backgrounded `ship-land` must be detached, not merely `run_in_background`.**
+  - **B3 is answered and the answer is honest rather than favourable** (`de08869cd`): the W3i gate
+    returns rc=1 on **69 of 69** real bundles in BOTH arms, because A6 and C3 are gated on artifacts
+    whose WRITERS are younger than every bundle on disk. The counterfactual supplying only those two
+    artifacts over the 33 current-schema bundles admits **11**. That is a PROJECTION with a named
+    falsifier — *the first bundle cut after this wave* — and it is now due.
+  - 🚨 **THE NARROWING'S PREMISE IS HALF REFUTED, and the half that fails is the one that leaves a
+    lane with no producer.** The reconciliation (§ line 408) hands the REAPER and *the hook's
+    request/page writer* to `LIMIT_DETECT_100P`. Measured against the tree, not the plan: the reaper
+    **is built and landed** (`bin/cc-limited` `reaper_rows`:944 / `persist_faults`:1001 / `--reaper`
+    :1200, landed `4ef1f2d66`) and has a live caller (`lr-reset-poller.sh:824`, once per tick) — so
+    narrowing it out was right. But `LIMIT_DETECT_100P`'s own §7 **DROPPED** the request writer, every
+    one of its waves W0–W6 is landed, and its lead is dead. `hooks/stop-failure-marker.sh` is
+    byte-identical to trunk and writes no request. **The recovery lane's only producer today is a
+    human typing `lr-fleet.sh --enqueue`.** W5 therefore grows by one item — `Scope (grown): +hook
+    ARM 2 request writer` — and it ships coupled to the poller's `autorecover.on` origin gate, which
+    is what keeps ~30 simultaneous deaths from auto-transplanting the fleet.
+  - **Every line anchor in `PLAN_DRAFT.md § W5` is stale.** Verified replacements: MAX_PER_WT `:289`→
+    `:304` *(and it is already spawn-only — item satisfied, do not touch)*; the request loop
+    `:639-661`→`:664-685`; the retire `:896/:902-905`→`:1083-1110` and `:1150-1170`; lr-transplant's
+    `:59-69` is the lock **reader** `lrt_already_done`:57-82, the writer is `:133-135`, and the refusal
+    has **TWO** sites (`:88-98` and `:129-132`) where the spec names one; `:97` is a bare `fi` and the
+    `mv …handed-off` guard the spec says must stay is at `:162-166`; every `handoff-fire.sh` anchor in
+    U08 §4 is ~190 lines low. Full delta table in the wave briefs.
+  - **Five live defects the recon found that the spec does not mention.** (1) The poller's tick runs
+    `lr-fleet --one` in the FOREGROUND inside its own lock (`:680`) and lr-fleet prices that call at
+    115–658 s, so every concurrent tick TICK-SKIPs — and `--detach` already exists (`:90`, impl
+    `:723-763`) while the spec's `--detach-inner` exists nowhere. (2) The transplant retire at `:1110`
+    is unconditional and **the HUSK branch falls through to the same `mv`**, so the poller retires the
+    records its own `HUSK` log line says it is keeping. (3) `lr_state_current` (lr-lib.sh:439) has been
+    inert since it was written — its only callers are two bats cases, so no production code has ever
+    read a run's state. (4) `claim_sid()` is `: > "$CLAIMS/$1"` with `|| true` (`:225-226`) — two
+    writers both win. (5) `:1105-1107` writes `kind:retire-husk` breadcrumbs into `$REQUESTS`, which
+    the loop at `:671` globs and **drives through `lr-fleet --one` as recoveries**.
+  - **Two naming traps that would have cost a round each.** `tests/cc-lr.bats` is **cc-find's** suite
+    (15 cases, `FIND="$REPO/bin/cc-find"`) — the plan's own log calling it "cc-lr 15/15" is how the
+    name got reused; W5's front-end suite is `tests/cc-lr-front.bats`. And
+    `tests/handoff-composer-gate.bats:53-66` sed-extracts 14 functions BY NAME out of
+    `handoff-fire.sh`, so `cc-tui.sh` must COPY that logic and never relocate it.
+  - **`07e30aeb` (pane 410) is LIVE and LIMITED** — the first live limited session on the box. The
+    bridge's residual 7 said all five were dead and the precheck therefore refused them all by design;
+    that residual is now discharged by the world, and this pane is the drill's fault-arm (c) fixture
+    (a held draft ⇒ `HELD:draft` with nothing moved).
