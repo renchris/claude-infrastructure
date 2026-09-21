@@ -86,6 +86,70 @@ limit() { printf '{"type":"assistant","timestamp":"%s","isApiErrorMessage":true,
   run lr_registry_live_rows "$SID"; [ "$status" -eq 1 ]
 }
 
+# ── liveness SCOPED TO ONE STORE (W5-A, 2026-09-20) ──────────────────────────────────────────────
+# The poller's transplant arm asks "did the SUCCESSOR, on the TARGET store, come up?" — and the
+# unscoped predicate above cannot answer it: a live row on the SOURCE account returns the same yes
+# while meaning the opposite (that row is the HUSK). Each leg below is red-proved on its own.
+rc_row() { # $1=pane $2=account [$3=pid] — one registry row naming $SID
+  printf '{"paneUUID":"%s","session_id":"%s","pid":%d,"account":"%s","cwd":"/x"}\n' \
+    "$1" "$SID" "${3:-$$}" "$2" > "$CC_REGISTRY_DIR/$1.json"
+}
+
+@test "registry-in-cfg: a live row on the NAMED store is a hit; one on another store is not" {
+  rc_row 701 cfg-b
+  run lr_registry_live_rows_in_cfg "$SID" "$OTHER"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c .)" = 1 ]
+  [[ "$output" == 701$'\t'$$$'\t'cfg-b$'\t'/x ]] || { echo "$output"; false; }
+  run lr_registry_live_rows_in_cfg "$SID" "$CFG"        # the SAME row, asked about the other store
+  [ "$status" -eq 1 ] || { echo "a source-account row answered for the target: $output"; false; }
+}
+
+@test "registry-in-cfg: it FILTERS, it does not merely pass lr_registry_live_rows through" {
+  # Without the account compare this case is indistinguishable from the unscoped predicate: two
+  # live rows on two stores, and the answer for each store must name exactly ONE of them.
+  rc_row 701 cfg-b
+  rc_row 616 cfg-a
+  run lr_registry_live_rows_in_cfg "$SID" "$OTHER"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" = 1 ] || { echo "$output"; false; }
+  [[ "$output" == 701* ]] || { echo "$output"; false; }
+}
+
+@test "registry-in-cfg: a DEAD pid on the named store is not a successor" {
+  rc_row 701 cfg-b 4194102
+  run lr_registry_live_rows_in_cfg "$SID" "$OTHER"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+}
+
+@test "registry-in-cfg: the .claude / .claude-next MIRROR is ONE account, in both directions" {
+  # NOT a nicety. hooks/session-register.sh writes `.account` as basename $CLAUDE_CONFIG_DIR with
+  # the dot stripped, and a session started under CLAUDE_CONFIG_DIR=~/.claude-next registers as
+  # `claude-next` while its transcripts enumerate under `~/.claude`. Two of the three husks W10
+  # measured carried exactly that mismatch, so a literal compare answers "no successor" for a
+  # common transplant target on this box.
+  mkdir -p "$HOME/.claude" "$HOME/.claude-next"
+  rc_row 701 claude-next
+  run lr_registry_live_rows_in_cfg "$SID" "$HOME/.claude"
+  [ "$status" -eq 0 ] || { echo "row account=claude-next vs cfg ~/.claude: $output"; false; }
+  rm -f "$CC_REGISTRY_DIR/701.json"
+  rc_row 702 claude
+  run lr_registry_live_rows_in_cfg "$SID" "$HOME/.claude-next"
+  [ "$status" -eq 0 ] || { echo "row account=claude vs cfg ~/.claude-next: $output"; false; }
+}
+
+@test "registry-in-cfg: a missing argument is rc 1, never a wildcard match" {
+  rc_row 701 cfg-b
+  run lr_registry_live_rows_in_cfg "$SID" ""; [ "$status" -eq 1 ]
+  run lr_registry_live_rows_in_cfg "" "$OTHER"; [ "$status" -eq 1 ]
+}
+
+@test "registry-in-cfg: a trailing slash on the cfg path does not change the account it names" {
+  rc_row 701 cfg-b
+  run lr_registry_live_rows_in_cfg "$SID" "$OTHER/"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
 # ── transplant read ──────────────────────────────────────────────────────────────────────────────
 @test "transplanted_to: a lock naming ANOTHER store whose copy exists prints that store" {
   printf '{"sid":"%s","from":"%s","to":"%s"}\n' "$SID" "$CFG" "$OTHER" > "$LR_STATE_DIR/locks/$SID.lock"
