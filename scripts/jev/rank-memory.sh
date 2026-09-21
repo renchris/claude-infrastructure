@@ -7,6 +7,17 @@
 # read the ENTRIES THEMSELVES. That is the gap this fills: a semantic read of every indexed rule,
 # ranked by how often it would actually change what an agent does.
 #
+# 🚨 THE FIRST REAL RUN RANKED NOTHING, AND THAT IS WHY THERE ARE NOW THREE QUESTIONS.
+# 140 rules scored, 118 of them (84%) `often`, `superseded` p90 0.39 with 2 rows above 0.70. Every
+# verdict was defensible and the ORDERING was worthless: a question that returns one answer for 84%
+# of a population has not ranked it. That is Addendum 4's lesson in this script's own shape — the
+# deference arm died of a property of its POPULATION, not of the model, and nobody saw it until the
+# answers were crosstabbed. So `breadth` was added BESIDE `bite` rather than replacing it (a swap
+# would trade one unvalidated rubric for another), and the run now reports the max-bucket share of
+# every question, so ONE pass says whether the new one discriminates. `--report FILE.jsonl` re-reads
+# any past run and prints the same section for free, which is how this was checked against the real
+# 140 rows without spending a call.
+#
 # WHY JEV RATHER THAN A CLAUDE TURN. 146 bounded, independent, typed judgments with a thresholdable
 # ordinal is exactly the shape §4 rank 3 identified and the shape `score` exists for — the one
 # primitive the retired deference arm never used. It is ~146 calls, free on the Gateway until
@@ -35,16 +46,155 @@ ROOT="$(cd "$(dirname "$SELF")/../.." && pwd)"
 . "$ROOT/hooks/lib/jev.sh"
 
 MEM="${CC_JEV_MEM_DIR:-$HOME/.claude-secondary/projects/-Users-chrisren-Development-claude-infrastructure/memory}"
-N=0; YES=0
+N=0; YES=0; REPORT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --yes) YES=1; shift ;;
+    --report) REPORT="${2:?--report needs a .jsonl from a previous run}"; shift 2 ;;
     -n) N="${2:?-n needs a count}"; shift 2 ;;
     --mem) MEM="${2:?--mem needs a dir}"; shift 2 ;;
-    -h|--help) printf 'usage: cc-jev rank [-n N] [--mem DIR] [--yes]\n'; exit 0 ;;
-    *) printf 'usage: cc-jev rank [-n N] [--mem DIR] [--yes]\n' >&2; exit 2 ;;
+    -h|--help) printf 'usage: cc-jev rank [-n N] [--mem DIR] [--yes] [--report FILE.jsonl]\n'; exit 0 ;;
+    *) printf 'usage: cc-jev rank [-n N] [--mem DIR] [--yes] [--report FILE.jsonl]\n' >&2; exit 2 ;;
   esac
 done
+
+emit_report() {  # reads globals OUT (rows) and done_n (denominator)
+# ── rank_order — THE ONLY PLACE THE ORDINAL LIVES ────────────────────────────────────────────
+# The model returns an unordered key; the ordering is OURS. Keeping it here rather than in the
+# prompt means it can be read, tested and changed without spending a single call, and it is what
+# `choice` buys us over the unusable `score`.
+rank_order() {
+  case "$1" in
+    bite)    printf 'almost-never occasionally often nearly-always' ;;
+    breadth) printf 'one-tool one-domain cross-domain universal' ;;
+    *)       return 1 ;;
+  esac
+}
+_ord_json() { local k i=0; printf '{'; for k in $(rank_order "$1"); do
+  [ "$i" -gt 0 ] && printf ','; printf '"%s":%d' "$k" "$i"; i=$((i+1)); done; printf '}'; }
+
+# ── RUBRIC DISCRIMINATION ────────────────────────────────────────────────────────────────────
+# 🚨 THIS SECTION IS THE POINT OF THE RUN, AND IT EXISTS BECAUSE OF A MEASURED FAILURE ONE LEVEL UP.
+# The deference arm died not because Jev judged badly but because its gate's two halves selected
+# DISJOINT sets on real data — a property of the POPULATION, invisible until somebody crosstabbed
+# it (docs/research/jev-at-cost-api-2026-09-18.md Addendum 4). The first real run of THIS ranker
+# has the same disease in its own shape: 118 of 140 rules came back `often`, and `superseded` had
+# a p90 of 0.39 with 2 rows above 0.70. Every individual verdict was defensible and the RANKING
+# was worthless, because a question returning one answer for 84% of a population has not ranked it.
+# So the run now reports its own discriminating power. A near-constant question is named as such
+# HERE, in the output, instead of being discovered by hand a week later.
+_maxshare() {  # $1=field → "<label> <count> <pct>"; empty when no row carries the field
+  jq -r --arg f "$1" 'select(.[$f]!=null)|.[$f]' "$OUT" | sort | uniq -c | sort -rn | head -1 \
+    | awk -v n="$done_n" 'NF{printf "%s %d %d", $2, $1, int($1*100/n + 0.5)}'
+}
+FLAT="${CC_JEV_RANK_FLAT_PCT:-80}"
+# QUESTION NAME -> JSONL FIELD, and they are NOT the same string. `bite`'s answer is stored as
+# `level`, which predates this section; reading `.bite` returned null for every row and the report
+# said "no answers — the model returned none" over 5 perfectly good verdicts. A confident wrong
+# answer in the safe-looking direction, and the only reason it was caught is that the section was
+# RUN rather than reviewed. The pairs are written out here so the mismatch cannot recur silently.
+_field_of() { case "$1" in bite) printf 'level' ;; *) printf '%s' "$1" ;; esac; }
+printf '\nRUBRIC DISCRIMINATION — did each question separate THIS population?\n'
+printf 'A question whose answers pile into one bucket ranked nothing, however sound each verdict was.\n'
+for q in breadth bite; do
+  read -r _lab _cnt _pct <<<"$(_maxshare "$(_field_of "$q")")"
+  # TWO DIFFERENT NOTHINGS, and they demand opposite reactions: a question the run never ASKED
+  # (an older JSONL, read back with --report) versus one it asked and the model never answered.
+  # Collapsing them would report a pre-breadth run as a model failure — the emptiness-vs-absence
+  # trap this repo already has a lesson about (docs/lessons/empty-vs-no-surface.md).
+  if [ -z "${_pct:-}" ]; then
+    if [ "$(jq -r --arg f "$(_field_of "$q")" 'has($f)' "$OUT" | sort -u | tr -d '\n')" = "false" ]; then
+      printf '  %-11s (not asked in this run — these rows predate the question)\n' "$q"
+    else
+      printf '  %-11s (asked, but the model returned no answer on any row)\n' "$q"
+    fi
+    continue
+  fi
+  if [ "$_pct" -ge "$FLAT" ]; then
+    printf '  %-11s %s%% in `%s` (%s/%s)   <- NEAR-CONSTANT: carried almost no information\n' "$q" "$_pct" "$_lab" "$_cnt" "$done_n"
+  else
+    printf '  %-11s %s%% in `%s` (%s/%s)   <- discriminates\n' "$q" "$_pct" "$_lab" "$_cnt" "$done_n"
+  fi
+done
+# `superseded` is a boolean, so its analogue of a max bucket is its SPREAD. A posterior whose whole
+# mass sits below the gate separates nothing either, and reporting only a median hides exactly that.
+# `superseded` is a boolean, so it gets the SAME max-bucket test over coarse bands rather than a
+# bespoke one. The first version asked only "how many are above 0.70" and therefore called a run
+# where all five answers were an IDENTICAL 0.99 "discriminating" — a one-sided test cannot see a
+# distribution pinned at the top, which is the same blindness in the mirror. Bands, then one rule.
+SUP_HI=$(jq -r 'select(.superseded!=null and .superseded>=0.70)|.file' "$OUT" | wc -l | tr -d ' ')
+SUP_Q=$(jq -r 'select(.superseded!=null)|.superseded' "$OUT" | sort -n \
+        | awk '{a[NR]=$1} END{if(NR)printf "p50 %.2f / p90 %.2f", a[int(NR*.5)+1], a[int(NR*.9)+1]}')
+read -r _slab _scnt _spct <<<"$(jq -r 'select(.superseded!=null)|.superseded
+                | if . >= 0.70 then "hi" elif . >= 0.40 then "mid" else "lo" end' "$OUT" \
+         | sort | uniq -c | sort -rn | head -1 \
+         | awk -v n="$done_n" 'NF{printf "%s %d %d", $2, $1, int($1*100/n + 0.5)}')"
+if [ -n "$SUP_Q" ] && [ -n "${_spct:-}" ]; then
+  if [ "$_spct" -ge "$FLAT" ]; then
+    printf '  %-11s %s%% in band `%s` · %s · %s of %s above 0.70   <- NEAR-CONSTANT: carried almost no information\n' \
+           superseded "$_spct" "$_slab" "$SUP_Q" "$SUP_HI" "$done_n"
+  else
+    printf '  %-11s %s%% in band `%s` · %s · %s of %s above 0.70   <- discriminates\n' \
+           superseded "$_spct" "$_slab" "$SUP_Q" "$SUP_HI" "$done_n"
+  fi
+fi
+
+printf '\nDISTRIBUTIONS (this is a RANKING, not a verdict on any one rule):\n'
+for q in breadth bite; do
+  _d=$(jq -r --arg f "$(_field_of "$q")" 'select(.[$f]!=null)|.[$f]' "$OUT" | sort | uniq -c | sort -rn)
+  [ -n "$_d" ] || continue      # an empty header under a question nobody asked is noise, not data
+  printf '  %s:\n' "$q"; printf '%s\n' "$_d" | sed 's/^/    /'
+done
+
+# ── DEMOTION CANDIDATES — narrowest scope first, then lowest bite ────────────────────────────
+# WHY BREADTH LEADS THE SORT, AND IT IS AN ARGUMENT ABOUT THE INDEX RATHER THAN ABOUT THE RULES.
+# MEMORY.md is the always-loaded surface a session scans BEFORE it knows what it is looking for;
+# the topic file is what it opens once it is already IN the situation. A one-tool rule is served
+# by being FINDABLE — a grep away in docs/lessons/ — because you will be holding that tool at the
+# moment you need it. A cross-domain rule has to be RESIDENT, because nothing about the task will
+# tell you to go looking for it. `bite` asks how OFTEN a rule fires, which on a corpus of lessons
+# that already survived a rotation is near-constant by construction; breadth asks how WIDE its
+# trigger is, which is the axis a scan surface is actually selecting on.
+printf '\nDEMOTION CANDIDATES — narrowest scope first, then lowest bite. READ THEM before evicting any:\n'
+jq -r --argjson bo "$(_ord_json bite)" --argjson ro "$(_ord_json breadth)" '
+  select(.breadth!=null or .level!=null)
+  | [ ($ro[.breadth // ""] // 99), ($bo[.level // ""] // 99),
+      (.breadth // "-"), (.level // "-"), (.superseded // 0), .hook ]
+  | @tsv' "$OUT" \
+  | sort -t"$(printf '\t')" -k1,1n -k2,2n -k5,5nr | head -25 | cut -f3- | sed 's/^/  /'
+
+# ── DID THE NEW QUESTION CHANGE ANYTHING? ────────────────────────────────────────────────────
+# ONE RUN TESTS THE FIX, instead of swapping one unvalidated rubric for another. If both numbers
+# below are 0, `breadth` reproduced `bite` exactly and bought nothing — a real outcome, and one
+# that has to be visible in the run rather than inferred from the JSONL a week later.
+NEWONLY=$(jq -r 'select((.breadth=="one-tool") and (((.level//"")|test("almost-never|occasionally"))|not))|.file' "$OUT" | wc -l | tr -d ' ')
+OLDONLY=$(jq -r 'select(((.level//"")|test("almost-never|occasionally")) and (.breadth!=null) and (.breadth!="one-tool"))|.file' "$OUT" | wc -l | tr -d ' ')
+printf '\nDISAGREEMENT with the old bite-only rule: %s row(s) breadth demotes that bite kept; %s the reverse.\n' "$NEWONLY" "$OLDONLY"
+if [ "$NEWONLY" = 0 ] && [ "$OLDONLY" = 0 ]; then
+  printf '  Both zero — breadth reproduced bite on this population and added nothing. Say so; do not keep it.\n'
+fi
+
+printf '\nrows -> %s\n' "$OUT"
+printf 'Nothing was edited. Eviction is a human read of the list above.\n'
+}
+
+
+# ── --report: RE-READ A PAST RUN, SPENDING NOTHING ───────────────────────────────────────────
+# It sits HERE, immediately below the function it calls and ABOVE every network check, for two
+# reasons. (1) Position: a dispatch placed after the run loop would be below its own helper for
+# the live path and unreachable before it — the helper-position trap this repo has a standing rule
+# about. (2) Scope: re-reading rows off disk needs no key, no route and no plan, so gating it
+# behind jev_available would refuse a purely local read whenever the vendor is down.
+# It is also how the discrimination report gets validated on REAL data: the 140-row run of
+# 2026-09-21 is on disk, its flatness is known, and checking the report against it costs no calls.
+if [ -n "$REPORT" ]; then
+  [ -s "$REPORT" ] || { printf 'no rows at %s\n' "$REPORT" >&2; exit 3; }
+  OUT="$REPORT"; done_n=$(wc -l < "$REPORT" | tr -d ' ')
+  printf 'Re-reading %s row(s) from a PREVIOUS run. No call is made.\n' "$done_n"
+  printf 'Rows: %s\n' "$REPORT"
+  emit_report
+  exit 0
+fi
 
 jev_available || { printf 'not available — run: cc-jev status\n' >&2; exit 2; }
 IDX="$MEM/MEMORY.md"
@@ -72,7 +222,7 @@ OUT="$HOME/.claude/autonomy/jev-rank-$(date -u +%Y%m%dT%H%M%SZ).jsonl"
 mkdir -p "$(dirname "$OUT")" || { printf 'cannot create %s\n' "$(dirname "$OUT")" >&2; exit 3; }
 : >> "$OUT" || { printf 'cannot write %s\n' "$OUT" >&2; exit 3; }
 printf 'Index: %s\n' "$IDX"
-printf 'Scoring %s indexed rule(s) with the Jev choice primitive' "$TOT"
+printf 'Scoring %s indexed rule(s) on breadth + bite (choice) and superseded (boolean)' "$TOT"
 [ "$MISSING" -gt 0 ] && printf ' (%s index line(s) point at a MISSING file — listed at the end)' "$MISSING"
 printf '.\nEach sends ONE bounded topic-file excerpt to Vercel AI Gateway.\n'
 printf 'Report -> %s\n' "$OUT"
@@ -123,6 +273,9 @@ while IFS= read -r f; do
   body="$(head -c "$CAP" "$MEM/$f" 2>/dev/null)"
   [ -n "$body" ] || { skipped=$((skipped+1)); continue; }
   spec="$(jq -n --arg s "$body" '{ state:$s, questions:{
+    breadth: { type:"choice",
+      instructions:"How WIDE is the set of situations in which an engineer would need this rule? Judge the rule'"'"'s SCOPE, not its importance and not how often it fires - a rule can be critical and still be narrow.",
+      criteria:{ "one-tool":"it is about the behaviour of one specific command, flag, file or API - you would only ever need it while using that exact thing", "one-domain":"it generalises across a family of tools or one subsystem - shell scripting, git, the test harness, a scheduler", "cross-domain":"it is about a failure of reasoning or measurement that recurs regardless of which tool is involved", "universal":"it would change how you approach any investigation at all, before you know what the subject is" } },
     bite: { type:"choice",
       instructions:"How often would this rule change what an engineer or agent actually DOES on a future task in this codebase? Judge the RULE, not how well it is written.",
       criteria:{ "almost-never":"it restates something obvious, or is so specific to one past incident that it can never recur", "occasionally":"it applies to a narrow situation that does come up", "often":"it applies to a recurring class of work here", "nearly-always":"it would change behaviour on most tasks in this repo" } },
@@ -144,8 +297,12 @@ while IFS= read -r f; do
   # is still rejected `invalid-response` while a boolean through the same path succeeds — so the
   # runtime schema is stricter than the published type and the primitive is not usable from here
   # today. `choice` over ORDERED keys carries the same ordinal signal and is the primitive 198 real
-  # calls have already exercised. Ordering lives in rank_of() below, never in the model.
+  # calls have already exercised. Ordering lives in the caller - the literal key order in
+  # rank_order() below - never in the model. (That sentence cited a `rank_of()` that was never
+  # written; the ordering was real but the named function was not. A comment is prose nothing
+  # executes, so a citation in one is worth exactly one grep.)
   lvl=$(printf '%s' "$out" | jq -r '.answers.bite.choice // empty' 2>/dev/null)
+  brd=$(printf '%s' "$out" | jq -r '.answers.breadth.choice // empty' 2>/dev/null)
   sup=$(printf '%s' "$out" | jq -r '.answers.superseded.probability // empty' 2>/dev/null)
   if [ -z "$lvl" ]; then
     # VISIBLE, not silent. A skip that prints nothing is how 146 dead calls looked like progress.
@@ -166,19 +323,13 @@ while IFS= read -r f; do
   consec=0
   done_n=$((done_n+1))
   hook="$(grep -F "($f)" "$IDX" | head -1 | sed 's/^- //' | cut -c1-120)"
-  jq -nc --arg f "$f" --arg lvl "$lvl" --arg sup "${sup:-}" --arg hook "$hook" \
-     '{file:$f, level:$lvl, superseded:($sup|tonumber? // null), hook:$hook}' >> "$OUT"
+  jq -nc --arg f "$f" --arg lvl "$lvl" --arg brd "${brd:-}" --arg sup "${sup:-}" --arg hook "$hook" \
+     '{file:$f, level:$lvl, breadth:(if $brd=="" then null else $brd end), superseded:($sup|tonumber? // null), hook:$hook}' >> "$OUT"
   printf '.'
 done < "$ROWS"
 printf '\n\n'
 
 printf 'SCORED %s of %s  (skipped %s)\n' "$done_n" "$TOT" "$skipped"
 [ "$done_n" -gt 0 ] || { printf 'No verdicts — nothing to rank.\n'; exit 1; }
-printf '\nLEVEL DISTRIBUTION (this is a RANKING, not a verdict on any one rule):\n'
-jq -r '.level' "$OUT" | sort | uniq -c | sort -rn | sed 's/^/  /'
-printf '\nDEMOTION CANDIDATES — lowest bite, highest obsolescence. READ THEM before evicting any:\n'
-jq -r 'select(.level|test("almost-never|occasionally")) | "\(.level)\t\(.superseded // 0)\t\(.hook)"' "$OUT" \
-  | sort -t"$(printf '\t')" -k1,1 -k2,2nr | head -25 | sed 's/^/  /'
-printf '\nrows -> %s\n' "$OUT"
-printf 'Nothing was edited. Eviction is a human read of the list above.\n'
+emit_report
 rm -f "$ROWS"
