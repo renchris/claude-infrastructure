@@ -2,7 +2,7 @@
 name: limit-recover
 description: Recover perfectly from ANY interruption to delegated work — disk-truth audit of every Dynamic Workflow slot, subagent, task, AND Agent-Team assignee session; re-run everything not provably COMPLETE (accepting partial results is banned); or continue with zero loss on another of the 4 accounts via validated transcript transplant + salvage bundle. Use when a session was killed by "You've hit your session/weekly limit", when teammates died mid-wave ("Teammate @x failed - You've hit your monthly spend limit"), when resuming after a limit ("continue, we hit our limit"), when workflow/subagent results came back null/partial/empty, or when the reset is too far away and work should continue NOW on another account. ALSO use when an account died on its LOGIN CLIFF rather than on quota — `invalid_grant` on every refresh, `auth: logged-out` / `token-invalid`, "Not logged in · Please run /login" — because the recovery is the same transplant and the alternative is losing the work (there is NO reset to wait for; see § A login cliff is not a quota limit). AND USE IT FOR EVERY NON-QUOTA INTERRUPTION TOO, because the audit engine was never limit-specific — only this description was: a network drop or reconnect ("reconnected to the internet, continue", "wifi came back", "API Error: Can't reach the API server", ENOTFOUND/ECONNRESET/socket hang up), a stalled workflow or agent ("agent stalled on all N attempts", "no progress for 180000ms", "stream watchdog did not recover"), a background task that came back failed/killed/stopped, a session that was RESUMED after a crash/reboot//exit and needs to know what its delegations were doing when the process died. Those select a different recovery MODE (resume-in-place or stall, never a transplant — the account is fine), not a different engine; see /recover for the class-named front door.
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Agent, Workflow, TaskList, TaskCreate, TaskUpdate, AskUserQuestion
-argument-hint: "[audit | handoff [next|next2|next3|next4|auto] [opus|fable] [--spawn] | fleet [--locate|--recover|--enqueue|--duplicates|--retire-husks] | ingest <bundle-dir>] — bare = full same-session recovery; handoff is IN-PLACE by default"
+argument-hint: "[<ref> | audit | handoff [next|next2|next3|next4|auto] [opus|fable] [--spawn] | fleet [--locate|--recover|--enqueue|--duplicates|--retire-husks] | ingest <bundle-dir>] — <ref> (a pane id, a sid8) is the fast path: cc-lr recover <ref>, then END THE TURN; bare = full same-session recovery; handoff is IN-PLACE by default"
 ---
 
 # /limit-recover — limit-interruption recovery, no partial-result acceptance
@@ -67,28 +67,55 @@ until a human logged in. So on a cliff:
    interactive `/login`. Surface the exact command and the deadline
    (`claude-accounts --relogin-status`), and salvage a bundle so nothing is lost while you wait.
 
-## The fast path — ONE Bash call, then END THE TURN
+## The fast path — `cc-lr recover <ref>`, then END THE TURN
 
-Measured 2026-09-19 (`docs/research/lr100p-2026-09-19/research/U11-today-run-audit.md` §2): recovering
-five sessions cost **98.7 minutes**, of which **24.4 lead turn-minutes were foreground `until` polling
-loops** — 17 of them, every one exiting 1–5 s *after* a `task-notification` that would have woken the
-session anyway — and **86 min 52 s** of the operator's own screenshots queued behind those turns. The
-work itself is ~3 s. The polling was the cost.
+**`/limit-recover <ref>` is ONE command and one turn.** `<ref>` is whatever you have in hand — a
+pane id (`117`, `⌗117`, `#117`) or a sid8 (`cb227486`):
 
-So the shape of a recovery is three steps and the third one is the load-bearing one:
+```bash
+cc-lr recover <ref>            # add --target next3 to pin the account; --source-pane P if you have it
+```
 
-1. **Resolve** the session: `cc-limited --json` is the machine surface (one process over the stores
-   that already hold the answer, against the 35 s transcript walk it replaces); `lr-fleet.sh --locate`
-   is its screen form and `--locate --json` execs into it. `LF_SLOW_SCAN=1` forces the old walk back,
-   which is what `--deep` means. Either names sid · pane · account ·
-   tier · disposition. A pane id you were handed is enough; do not re-census to confirm it.
-2. **Fire it, detached** — one call, returns in ≤3 s, prints the run dir and the driver's log path:
+Print its three lines verbatim and **END THE TURN**. Do not poll, do not confirm, do not re-census
+to check the pane id you were handed. The verdict comes back as MAIL — a `cc-notify` line carrying
+`verdict=RECOVERED|PARTIAL|PARKED|FAILED`, its note and the evidence dir — which `mailbox-drain`
+delivers at your next turn boundary like any other message.
 
-   `bash ~/.claude/scripts/limit-recover/lr-fleet.sh --one <sid> --source-pane <P> --detach`
+Measured 2026-09-19 (`docs/research/lr100p-2026-09-19/research/U11-today-run-audit.md` §2):
+recovering five sessions cost **98.7 minutes**, of which **24.4 lead turn-minutes were foreground
+`until` polling loops** — 17 of them, every one exiting 1–5 s *after* a `task-notification` that
+would have woken the session anyway — and **86 min 52 s** of the operator's own screenshots queued
+behind those turns. The work itself is ~3 s. The polling was the cost.
 
-3. **END THE TURN.** The verdict comes back as MAIL — a `cc-notify` line carrying
-   `verdict=RECOVERED|PARTIAL|PARKED|FAILED`, its note, and the evidence dir — which you read at your
-   next turn boundary like any other message. There is nothing to watch and nothing to wait for.
+### What `cc-lr recover` does, so you do not re-do any of it
+
+1. **Resolves** the ref through `cc-find` (0.18 s registry join, against the 30.4–41.0 s
+   `cc-sessions` walk that printed no session id at all — U07 §0, §6b).
+2. **REFUSES**, rc 2, creating no mutex, on any of three things — and these are enforced NOWHERE
+   ELSE, so do not route around them:
+
+   | refusal | why it is cc-lr's alone |
+   |---|---|
+   | a **TEAMMATE** | lead-owned; nothing is owed by anyone on it. `lr-fleet.sh --one` has no teammate guard at all — its one precondition is "already TRANSPLANTED". |
+   | an **AMBIGUOUS** ref | panes 122 and 124 rendered the byte-identical statusline (U07 §4). An identification that silently picks one is how the wrong pane gets recycled. |
+   | a session that is **not LIMITED** | its last assistant word is not a usage-limit error, so there is nothing to recover. |
+
+3. **Takes the one-actuator-per-session mutex** (`~/.reso/limit-recover/runs/by-sid/<sid>.active`),
+   then fires `lr-fleet.sh --one <sid> --target … --source-pane … --detach`, which re-execs the
+   driver under `setsid` and returns in ≤3 s.
+
+### The other three verbs
+
+```bash
+cc-lr status [<ref>|--all]     # one row per run's events.jsonl: STATE, AGE, CAUSE / NEXT
+cc-lr repair <bundle|sid8>     # queue a poller request (mode relaunch|prompt) and kick the daemon
+cc-lr find <ref…>              # the bare resolver: pane | sid8 | --tuple | --kw | --limited
+```
+
+`cc-lr status` is where a run's verdict is read back; its NEXT column names the ONE command for a
+failed or parked run, which is always `cc-lr repair <bundle>`. `repair` writes a request and kicks
+the LaunchAgent — **it never types into a pane**, because the daemon runs outside every session
+and every classifier, which is the whole reason the request lane exists.
 
 **Banned on this path, by name.** Each of these is a measured defect, not a style preference:
 
@@ -101,6 +128,13 @@ So the shape of a recovery is three steps and the third one is the load-bearing 
 
 If a pane genuinely must be told something, the one sanctioned write is a single `printf` to its own
 tty path — which is what `handoff-fire.sh`'s terminal recycle arm now does.
+
+### When you have no ref at all
+
+`cc-lr find --limited` lists every session sitting on a usage-limit error; `cc-limited --json` is the
+machine surface over the same stores, and `lr-fleet.sh --locate` is its screen form
+(`--locate --json` execs into it). `LF_SLOW_SCAN=1` forces the old 35 s transcript walk back, which
+is what `--deep` means. Then hand the sid or the pane to `cc-lr recover`.
 
 ## Iron rules (bind every mode; quote back any you are about to break and STOP)
 
