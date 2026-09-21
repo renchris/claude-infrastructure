@@ -591,7 +591,11 @@ done
 LR_LIB_PATH="${_lrf_lib:-}"
 LR_IT2="$HOME/.claude/bin/it2"
 [ -x "$LR_IT2" ] || LR_IT2=""
-LR_PANE="${ITERM_SESSION_ID:-}"; LR_PANE="${LR_PANE##*:}"
+# CC_PANE_ID FIRST, ITERM_SESSION_ID only as the fallback — the order lr-fleet.sh:758 already
+# uses and tests/cc-pane.bats ratchets. A STALE ITERM_SESSION_ID can sit beside a live
+# CC_PANE_ID after a transplant, and this file runs INSIDE a transplanted pane, which is
+# exactly the population that inverts. The `##*:` strip is safe for either spelling.
+LR_PANE="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; LR_PANE="${LR_PANE##*:}"
 # The needle the composer must contain for a re-Enter to be allowed: the head of the prompt, printable
 # ASCII only and whitespace-stripped, because that is the exact shape the screen reader produces.
 LR_SCREEN_WANT="$(printf '%s' "$PROMPT" | LC_ALL=C tr -cd '[:print:]' | LC_ALL=C tr -d '[:space:]' | cut -c1-40)"
