@@ -48,6 +48,7 @@ find_stub() { # <rc> <TSV rows…>  — cc-find's contract: rc 0 resolved · 1 n
 fleet_stub() { # <rc> — records its argv; prints the two lines lr-fleet.sh:764-765 prints
   local rc="$1"
   { echo '#!/usr/bin/env bash'
+    # shellcheck disable=SC2028  # the \n is the GENERATED STUB's own printf escape and must reach the file literally; expanding it here would emit a real newline into the stub's source
     echo "printf '%s\\n' \"\$*\" >> \"$BATS_TEST_TMPDIR/fleet.argv\""
     echo 'echo "lr-fleet: DETACHED — driver pid 424242 is recovering aaaaaaaa; the verdict arrives as mail. END YOUR TURN; do not poll."'
     echo "echo \"run=$LR_STATE_DIR/fleet/one-20260919T175207Z log=$LR_STATE_DIR/fleet/one-20260919T175207Z/detached.log\""
@@ -57,6 +58,7 @@ fleet_stub() { # <rc> — records its argv; prints the two lines lr-fleet.sh:764
 }
 launchctl_stub() { # <rc>
   { echo '#!/usr/bin/env bash'
+    # shellcheck disable=SC2028  # the \n is the GENERATED STUB's own printf escape and must reach the file literally; expanding it here would emit a real newline into the stub's source
     echo "printf '%s\\n' \"\$*\" >> \"$BATS_TEST_TMPDIR/launchctl.argv\""
     echo "exit $1"
   } > "$STUBBIN/launchctl"
