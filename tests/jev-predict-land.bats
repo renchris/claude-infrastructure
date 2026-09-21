@@ -39,6 +39,34 @@ setup() {
   command -v python3 >/dev/null || skip "python3 not installed"
 }
 
+# ── THE TWO STREAMS ARE CAPTURED SEPARATELY, AND THIS IS A BUG FIX, NOT TIDINESS ──────────────
+# bats' `run` MERGES stderr into $output. `predict-land.sh score` prints machine JSON on stdout and
+# the human verdict on stderr, so `jq <<<"$output"` was handed a stream with prose in it — and
+# `$(jq …)` inside `[ … ]` DISCARDS jq's exit code, which is what hid it. On this author's shell
+# stdout flushed first: jq printed the right answer, THEN errored on the trailing prose, and the
+# comparison passed. **The test was green while jq was failing.** Under scripts/offbox-run.sh's
+# hermetic env (`env -i`, fresh empty HOME, TERM=dumb, LC_ALL=C) stderr flushed first, jq hit prose
+# at line 1, printed nothing, and three cases went red — the honest result, and the only reason the
+# defect was ever seen. Measured with cat -A on both: hermetic $output line 1 is the verdict line.
+#
+# Files rather than `run --separate-stderr`, which needs bats >= 1.5 and would make this suite's
+# greenness depend on the runner's version — the exact class of thing the off-box gate exists to
+# catch. A redirect works on every bats, and it turns the stdout/stderr CONTRACT into an assertion
+# (JSON is parseable ALONE; the verdict really is on stderr) instead of an accident of buffering.
+#
+# Scoped deliberately to the subjects that write BOTH streams (`score`, `baseline`). The census and
+# null cases below invoke predict_land_corpus.py directly, which writes stdout only, so they are not
+# in this class and are left as they are rather than churned on a cycle-2 land.
+_split() {            # _split <out-file> <err-file> <cmd...>
+  local o="$1" e="$2"; shift 2
+  "$@" >"$o" 2>"$e"
+}
+# jq WITH ITS RC VISIBLE. Called through `run`, so a parse error becomes a failing status the case
+# asserts on, instead of an empty string a comparison silently blames on the value.
+_jqf() {              # _jqf <file> <filter>
+  jq -r "$2" "$1"
+}
+
 # A store whose rows exercise every class, every `red` state, a stage:"round" row, a
 # placeholder-sha row, a lock row and an unparseable line. Written as a function rather than a
 # fixture file so the shapes stay beside the assertions that read them.
@@ -310,10 +338,13 @@ SH
   # what identifies WHICH comparator condition (c) was measured against.
   echo '{"head":"aaa1","base":"bbb1","ts":"2026-07-01T10:00:00Z","class":"LANDED","exit":0,"arm":null,"red_bucket":"no_arm_went_red"}' \
     > "$BATS_TEST_TMPDIR/s.jsonl"
-  run bash "$SUT" baseline --sample "$BATS_TEST_TMPDIR/s.jsonl"
+  run _split "$BATS_TEST_TMPDIR/o.jsonl" "$BATS_TEST_TMPDIR/e.txt" \
+      bash "$SUT" baseline --sample "$BATS_TEST_TMPDIR/s.jsonl"
   [ "$status" -eq 0 ]
-  [ -n "$(jq -r 'select(.analyzers)|.analyzers.shellcheck' <<<"$output")" ]
-  [ "$(jq -r 'select(.analyzers)|.analyzers.shellcheck' <<<"$output")" != "ABSENT" ]
+  run _jqf "$BATS_TEST_TMPDIR/o.jsonl" 'select(.analyzers)|.analyzers.shellcheck'
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
+  [ "$output" != "ABSENT" ]
 }
 
 # ── the scorer ────────────────────────────────────────────────────────────────────────────────
@@ -332,14 +363,24 @@ SH
     printf '{"head":"h%s","base":"b%s","ts":"2026-08-0%sT00:00:00Z","class":"%s","exit":%s,"arm":null,"red_bucket":"no_arm_went_red","jev":{"ok":true,"answers":{"q_refuse":{"type":"boolean","probability":0.99},"q_smoke":{"type":"boolean","probability":0.99}}}}\n' \
       "$i" "$i" "$i" "$cl" "$ex" >> "$a"
   done
-  run bash "$SUT" score --baseline "$b" --ask "$a"
+  o="$BATS_TEST_TMPDIR/o.json"; e="$BATS_TEST_TMPDIR/e.txt"
+  run _split "$o" "$e" bash "$SUT" score --baseline "$b" --ask "$a"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"(a) FAIL"* ]] || false
-  [[ "$output" == *"(b) FAIL"* ]] || false
-  [[ "$output" == *"(c) FAIL"* ]] || false
-  [ "$(jq -r '.definitions["any-nonzero"].rollup.auroc' <<<"$output")" = "0.5" ]
-  [ "$(jq -r '.definitions["any-nonzero"].rollup.best_at_min_recall.precision' <<<"$output")" \
-    = "$(jq -r '.definitions["any-nonzero"].rollup.prevalence' <<<"$output")" ]
+  # The human verdict is on STDERR — asserted there, so the contract is tested rather than assumed.
+  grep -q '(a) FAIL' "$e"
+  grep -q '(b) FAIL' "$e"
+  grep -q '(c) FAIL' "$e"
+  # …and the machine JSON is on STDOUT, parseable ON ITS OWN. Through `run`, so a jq parse error is
+  # a failing status this case reports instead of an empty string it blames on the value.
+  run _jqf "$o" '.definitions["any-nonzero"].rollup.auroc'
+  [ "$status" -eq 0 ]
+  [ "$output" = "0.5" ]
+  run _jqf "$o" '.definitions["any-nonzero"].rollup.best_at_min_recall.precision'
+  [ "$status" -eq 0 ]
+  prec="$output"
+  run _jqf "$o" '.definitions["any-nonzero"].rollup.prevalence'
+  [ "$status" -eq 0 ]
+  [ "$prec" = "$output" ]
 }
 
 @test "score: an ABSTAINED call is not scored as a confident negative" {
@@ -356,11 +397,16 @@ SH
     printf '{"head":"h%s","base":"b%s","class":"%s","exit":%s,"arm":null,"red_bucket":"no_arm_went_red","jev":{"ok":false,"reason":"timeout"}}\n' \
       "$i" "$i" "$cl" "$ex" >> "$a"
   done
-  run bash "$SUT" score --baseline "$b" --ask "$a"
+  o="$BATS_TEST_TMPDIR/o.json"; e="$BATS_TEST_TMPDIR/e.txt"
+  run _split "$o" "$e" bash "$SUT" score --baseline "$b" --ask "$a"
   [ "$status" -eq 0 ]
-  [ "$(jq -r '.definitions["any-nonzero"].jev_abstained' <<<"$output")" = 4 ]
-  [ "$(jq -r '.definitions["any-nonzero"].jev_answered' <<<"$output")" = 0 ]
-  [[ "$output" == *"NO JEV ARM"* ]] || false
+  run _jqf "$o" '.definitions["any-nonzero"].jev_abstained'
+  [ "$status" -eq 0 ]
+  [ "$output" = 4 ]
+  run _jqf "$o" '.definitions["any-nonzero"].jev_answered'
+  [ "$status" -eq 0 ]
+  [ "$output" = 0 ]
+  grep -q 'NO JEV ARM' "$e"
 }
 
 @test "score: AUROC on a single-class corpus is null, never 0.5" {
@@ -384,10 +430,15 @@ print('ok')"
     printf '{"head":"h%s","base":"b%s","class":"%s","exit":%s,"arm":null,"red_bucket":"x","baseline":{"score":0,"shellcheck":0,"bash_n":0,"dead_assertion":0,"shell_files":0,"bats_files":0}}\n' \
       "$i" "$i" "$cl" "$ex" >> "$b"
   done
-  run bash "$SUT" score --baseline "$b"
+  o="$BATS_TEST_TMPDIR/o.json"; e="$BATS_TEST_TMPDIR/e.txt"
+  run _split "$o" "$e" bash "$SUT" score --baseline "$b"
   [ "$status" -eq 0 ]
-  [ "$(jq -r '.comparator.shellcheck' <<<"$output")" = "9.9.9" ]
-  [ "$(jq -r '.definitions["any-nonzero"].baseline.n' <<<"$output")" = 2 ]
+  run _jqf "$o" '.comparator.shellcheck'
+  [ "$status" -eq 0 ]
+  [ "$output" = "9.9.9" ]
+  run _jqf "$o" '.definitions["any-nonzero"].baseline.n'
+  [ "$status" -eq 0 ]
+  [ "$output" = 2 ]
 }
 
 # ── the sampler ───────────────────────────────────────────────────────────────────────────────
