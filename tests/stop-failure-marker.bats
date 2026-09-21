@@ -818,6 +818,55 @@ JSON
   jq -e '.rate_limit_type == "five_hour"' "$f" >/dev/null || { cat "$f"; false; }
 }
 
+@test "SB20: WRITE-THEN-LATCH — a latch may never exist without its request" {
+  # The plan's own acceptance row SF-i. A latch taken BEFORE the write, followed by a failed write,
+  # is a PERMANENT suppression of a request nobody ever made — the strongest possible wrong answer
+  # on this path, because every later re-fire of that death then reads as already-requested.
+  # Order is not directly observable, so the INVARIANT is asserted instead, on the one state that
+  # separates the two orders: the request cannot be written and the latch dir can.
+  mkdir -p "$STOP_FAILURE_LR_STATE/requests" "$STOP_FAILURE_LR_STATE/requests-latch"
+  chmod 500 "$STOP_FAILURE_LR_STATE/requests"
+  rq_payload h1 "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit "" | bash "$HOOK"
+  chmod 700 "$STOP_FAILURE_LR_STATE/requests"
+  [ "$(requests)" -eq 0 ]
+  [ "$(latches)" -eq 0 ] || { find "$STOP_FAILURE_LR_STATE/requests-latch" -type f; false; }
+  grep -q '"disposition":"abstained","reason":"request-encode-failed"' "$STOP_FAILURE_IDL" || false
+
+  # POSITIVE CONTROL: with the directory writable again the same payload yields BOTH, so the row
+  # above is measuring the ordering and not a permanently dead arm.
+  rq_payload h1 "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit "" | bash "$HOOK"
+  [ "$(requests)" -eq 1 ]
+  [ "$(latches)" -eq 1 ]
+}
+
+@test "SB21: a stale temp artifact from a dead writer cannot block the next request" {
+  # The temp path carries the writer's pid. With a fixed `.<sid>.tmp` it is a SHARED name: two
+  # concurrent re-fires of one sid interleave into it and the rename then publishes the result
+  # atomically, and any stale artifact a killed writer left behind blocks that sid forever. Nothing
+  # cleans this directory but the poller, and the poller only removes `*.json`.
+  mkdir -p "$STOP_FAILURE_LR_STATE/requests/.h2.tmp"      # exactly what a fixed name would reuse
+  rq_payload h2 "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit "" | bash "$HOOK"
+  [ "$(requests)" -eq 1 ]
+  jq -e '.sid == "h2"' "$(rqf h2)" >/dev/null || false
+}
+
+@test "SB22: 30 concurrent re-fires of ONE sid kick the poller at most once" {
+  # The latch is O_EXCL, not check-then-write. The `[ -e ]` short-circuit above it handles the
+  # SEQUENTIAL re-fire and cannot handle this one: 30 processes pass it together, and without the
+  # atomic create every one of them would wake the daemon for a single death. One-sided by
+  # construction — the armed subject can only ever produce one winner, so this row cannot flake red.
+  : > "$STOP_FAILURE_LR_STATE/autorecover.on" 2>/dev/null \
+    || { mkdir -p "$STOP_FAILURE_LR_STATE"; : > "$STOP_FAILURE_LR_STATE/autorecover.on"; }
+  local i
+  for i in $(seq 1 30); do
+    rq_payload h3 "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit "one cause, thirty re-fires" | bash "$HOOK" &
+  done
+  wait
+  [ "$(requests)" -eq 1 ]
+  [ "$(latches)" -eq 1 ]
+  [ "$(kicks)" -le 1 ] || { echo "kicks=$(kicks)"; cat "$LC_LOG"; false; }
+}
+
 @test "SB16: ANCHOR — requested_by is the exact literal W5-A's poller gate matches" {
   # 🚨 THIS IS A SAFETY ANCHOR, not a style pin. The poller's policy gate (LIMIT_RECOVER_100P W5-A)
   # refuses to drain a HOOK-ORIGINATED request unless the operator's `autorecover.on` flag exists,
