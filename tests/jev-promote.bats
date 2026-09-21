@@ -599,3 +599,41 @@ armed_home() {   # → a HOME with a live arm, a corpus, and an anchor run
   grep -qF "+ far.md" <<<"$output"
   ! grep -qF "+ near.md" <<<"$output" || { echo "picked the restating challenger for the slot"; false; }
 }
+
+# ── OPERATOR DIRECTIVES ARE NOT ENGINEERING LESSONS ──────────────────────────────────────────
+# A `feedback-*` rule is a standing instruction the operator set deliberately; its value does not
+# come from how often it fires, which is exactly what the rubric weighs. Measured on the first real
+# pass (2026-09-21): Jev put feedback-handoff-splitright-default.md up for demotion and it lost all
+# three times it was judged. 13 of 146 indexed rules are directives, so this is not a corner case —
+# and demoting one is the worst wrong demotion available, invisible until an agent quietly stops
+# following something the operator believes is in force.
+@test "swap list: an operator directive is HELD OUT, named, and not counted as a swap" {
+  R="$BATS_TEST_TMPDIR/prot.jsonl"
+  printf '%s\n' \
+   '{"id":"meta","round":"meta","orphans":9,"seed":"s","plan":2,"anchors":2,"mock":false}' \
+   '{"id":"r2-1","round":"h2h","block_a":"lesson.md","block_b":"feedback-a-directive.md","winner":"a","same_rule":0.1,"swapped":false}' \
+   '{"id":"r2-2","round":"h2h","block_a":"other.md","block_b":"plain-lesson.md","winner":"a","same_rule":0.2,"swapped":false}' > "$R"
+  run env -u AI_GATEWAY_API_KEY "$REPO/bin/cc-jev" promote --report "$R"
+  [ "$status" -eq 0 ]
+  grep -qF "HELD OUT" <<<"$output"
+  grep -qF "feedback-a-directive.md   <- OPERATOR DIRECTIVE" <<<"$output"
+  # ONE executable swap, not two: the directive is a decision, not a line item.
+  grep -qF "1 executable swap(s)" <<<"$output"
+  # and it must not also appear in the ordinary list below
+  [ "$(grep -c 'feedback-a-directive' <<<"$output")" -eq 1 ]
+}
+
+# The split is a DEFAULT, not a law: the operator may genuinely want a directive retired, and an
+# empty prefix restores the undivided list. Without this arm the protection could only ever be on,
+# and a knob nothing exercises is a knob nobody can trust.
+@test "swap list: CC_JEV_PROMO_PROTECT= restores the undivided list" {
+  R="$BATS_TEST_TMPDIR/prot2.jsonl"
+  printf '%s\n' \
+   '{"id":"meta","round":"meta","orphans":9,"seed":"s","plan":2,"anchors":2,"mock":false}' \
+   '{"id":"r2-1","round":"h2h","block_a":"lesson.md","block_b":"feedback-a-directive.md","winner":"a","same_rule":0.1,"swapped":false}' \
+   '{"id":"r2-2","round":"h2h","block_a":"other.md","block_b":"plain-lesson.md","winner":"a","same_rule":0.2,"swapped":false}' > "$R"
+  run env -u AI_GATEWAY_API_KEY CC_JEV_PROMO_PROTECT= "$REPO/bin/cc-jev" promote --report "$R"
+  [ "$status" -eq 0 ]
+  ! grep -qF "HELD OUT" <<<"$output" || { echo "still split with protection disabled"; false; }
+  grep -qF "2 executable swap(s)" <<<"$output"
+}

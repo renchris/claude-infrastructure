@@ -137,17 +137,43 @@ fi
 # challengers both beat the same incumbent, the one stating a MORE DIFFERENT rule adds more to a
 # capped index than the one restating it. Surplus challengers are reported as runners-up, honestly
 # counted, never as swaps.
+# 🚨 OPERATOR DIRECTIVES ARE HELD OUT OF THE LIST, NOT SILENTLY RANKED INTO IT.
+# A `feedback-*` rule is not an engineering lesson the model can weigh on "how often would this
+# change what an engineer DOES" — it is a standing instruction the operator gave deliberately, and
+# its value does not come from how often it fires. Measured on the first real pass: Jev put
+# `feedback-handoff-splitright-default.md` up for demotion and it lost all 3 times it was judged.
+# 13 of the 146 indexed rules are directives, so this is not a corner case.
+# Demoting one is the worst wrong demotion available: it is invisible until an agent quietly stops
+# following something the operator believes is in force. So they are separated, named, and made a
+# decision rather than a line item — refusing outright would be wrong too, since the operator may
+# genuinely want one retired. CC_JEV_PROMO_PROTECT changes the prefix; empty disables the split.
+PROTECT="${CC_JEV_PROMO_PROTECT-feedback-}"
+_swaps_jq='map(select(.round=="h2h" and .swapped==false and .winner=="a"))
+           | group_by(.block_b) | map(sort_by(.same_rule // 1) | .[0]) | sort_by(.same_rule // 1)'
+if [ -n "$PROTECT" ]; then
+  _DIRECTIVE=$(jq -rs --arg p "$PROTECT" "$_swaps_jq"' | map(select(.block_b|startswith($p)))
+               | .[] | "  + \(.block_a)\n  - \(.block_b)   <- OPERATOR DIRECTIVE\n"' "$OUT")
+  if [ -n "$_DIRECTIVE" ]; then
+    printf '\n🚨 HELD OUT — these displace an OPERATOR DIRECTIVE, not an engineering lesson:\n'
+    printf '%s\n' "$_DIRECTIVE"
+    printf '  A directive is not weighed on how often it fires; the operator set it deliberately.\n'
+    printf '  Decide these one at a time, or not at all. They are NOT counted in the list below.\n'
+  fi
+fi
+
 printf '\nSWAP LIST — one slot, one swap. Each incumbent appears AT MOST ONCE:\n'
 printf '  (promote the first, demote the second. Read both before editing.)\n'
-jq -r 'map(select(.round=="h2h" and .swapped==false and .winner=="a"))
-       | group_by(.block_b)
-       | map(sort_by(.same_rule // 1) | .[0])
-       | sort_by(.same_rule // 1)
-       | .[] | "  + \(.block_a)\n  - \(.block_b)\n"' -s "$OUT" | head -90
-SWAPS=$(jq -rs 'map(select(.round=="h2h" and .swapped==false and .winner=="a"))
-                | group_by(.block_b) | length' "$OUT")
+jq -rs --arg p "$PROTECT" "$_swaps_jq"' | map(select($p=="" or ((.block_b|startswith($p))|not)))
+       | .[] | "  + \(.block_a)\n  - \(.block_b)\n"' "$OUT" | head -90
+# `((X)|not)`, fully parenthesised: jq's `|` binds LOOSER than `or`, so `$p=="" or X|not` is
+# `($p=="" or X) | not` — the negation of the whole disjunction. With an empty prefix that made
+# every row false and printed `0 executable swap(s)` over a list that had them.
+SWAPS=$(jq -rs --arg p "$PROTECT" "$_swaps_jq"' | map(select($p=="" or ((.block_b|startswith($p))|not))) | length' "$OUT")
+# A HELD-OUT directive is neither a swap nor a runner-up — it is its own decision. Counting it as
+# a runner-up overstated the surplus by exactly the number of directives held out.
+HELDN=$(jq -rs --arg p "$PROTECT" "$_swaps_jq"' | map(select($p!="" and (.block_b|startswith($p)))) | length' "$OUT")
 WINS=$(jq -r 'select(.round=="h2h" and .swapped==false and .winner=="a")|.id' "$OUT" | wc -l | tr -d ' ')
-RUNNERS=$(( WINS - SWAPS ))
+RUNNERS=$(( WINS - SWAPS - HELDN ))
 [ "$RUNNERS" -gt 0 ] && printf '  %s further challenger(s) also beat an incumbent that is already being displaced above —\n  runners-up, not extra slots. Re-run after editing the index to re-match them.\n' "$RUNNERS"
 HELD=$(jq -r 'select(.round=="h2h" and .swapped==false and .winner=="b")|.id' "$OUT" | wc -l | tr -d ' ')
 printf '  %s executable swap(s); %s incumbent(s) held their slot; %s win(s) total.\n' \
