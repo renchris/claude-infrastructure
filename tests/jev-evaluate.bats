@@ -368,8 +368,10 @@ mkmem() {  # → a throwaway memory dir; nothing real is ever read or sent
   # silently, in the direction of "the default was fine".
   export MOCK_CHOICE=occasionally
   start_mock ok
+  # CC_JEV_ZDR=0 is REQUIRED here now, and that is the point of the guard added 2026-09-21: with
+  # ZDR at its default the run refuses before the first call rather than scoring nothing 146 times.
   run env AI_GATEWAY_API_KEY=dummy CC_JEV_BASE_URL="http://127.0.0.1:$PORT" \
-      CC_JEV_RANK_GAP=0 "$REPO/bin/cc-jev" rank --mem "$MEMD" --yes
+      CC_JEV_ZDR=0 CC_JEV_RANK_GAP=0 "$REPO/bin/cc-jev" rank --mem "$MEMD" --yes
   [ "$status" -eq 0 ]
   grep -qF "SCORED 2 of 2" <<<"$output"
   grep -qF "occasionally" <<<"$output"
@@ -385,4 +387,30 @@ mkmem() {  # → a throwaway memory dir; nothing real is ever read or sent
   run env AI_GATEWAY_API_KEY=dummy "$REPO/bin/cc-jev" rank --mem "$MEMD" --yes
   [ "$status" -eq 3 ]
   grep -qF "REFUSING" <<<"$output"
+}
+
+# THE GUARDS THAT THE FIRST REAL RUN EARNED. `cc-jev rank --yes` was shipped and run against the
+# live index with ZDR at its default: every one of 146 calls returned HTTP 403, `lvl` came back
+# empty, and each was counted as a SILENT skip. It would have run ~70 minutes and printed
+# "SCORED 0 of 146" — a well-formatted verdict over a path that never worked, and unreadable
+# against "Jev had no opinion". Killed at 224 calls, 0 rows. Both arms below are that incident.
+@test "cc-jev rank: ZDR on refuses BEFORE the first call and names the exact command" {
+  mkmem
+  run env AI_GATEWAY_API_KEY=dummy "$REPO/bin/cc-jev" rank --mem "$MEMD" --yes
+  [ "$status" -eq 4 ]
+  grep -qF "REFUSING before the first call" <<<"$output"
+  grep -qF "CC_JEV_ZDR=0 cc-jev rank --yes" <<<"$output"   # the command, runnable as printed
+  grep -qF "Nothing has been sent" <<<"$output"
+}
+
+# The static guard names ONE known blocker; this catches every other way the route can be dead —
+# revoked key, gateway down, allowlist change — by ASKING once instead of assuming.
+@test "cc-jev rank: a dead route aborts at the preflight, naming the reason" {
+  mkmem
+  run env AI_GATEWAY_API_KEY=dummy CC_JEV_ZDR=0 CC_JEV_BASE_URL="http://127.0.0.1:1" \
+      CC_JEV_RANK_GAP=0 "$REPO/bin/cc-jev" rank --mem "$MEMD" --yes
+  [ "$status" -eq 4 ]
+  grep -qF "preflight call produced no verdict" <<<"$output"
+  grep -qF "reason: http" <<<"$output"      # the reason, not a generic failure
+  grep -qF "Nothing has been sent" <<<"$output"
 }
