@@ -498,3 +498,49 @@ runp() {
   [ "$status" -eq 0 ]
   ! grep -qF "RESUMING" "$H/b.log" || { echo "resumed a mock run into a real pass"; false; }
 }
+
+# ── STREAMING WHEN A HUMAN IS WATCHING ───────────────────────────────────────────────────────
+# The pass is 133 calls and 9-27 minutes. File-only output meant an operator running this by hand
+# got a blank terminal for the whole run, and quiet is what every liveness surface on this box —
+# and every person — reads as stuck. `[ -t 1 ]` is the discriminator, so launchd (not a terminal)
+# keeps exactly today's behaviour. That branch is unreachable from bats, which pipes stdout, so
+# these two use a real pty (tests/fixtures/pty-run.py).
+armed_home() {   # → a HOME with a live arm, a corpus, and an anchor run
+  AH="$BATS_TEST_TMPDIR/ah-$RANDOM"; mkdir -p "$AH/.claude/autonomy"
+  printf '%s\n' '{"file":"inc1.md","level":"occasionally"}' \
+    > "$AH/.claude/autonomy/jev-rank-20260101T000000Z.jsonl"
+  E="$(date -u -v+30M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+  jq -n --arg e "$E" '{created:"x",expires:$e,max_calls:9,cap_b:400,corpus:"memory-orphans"}' \
+    > "$AH/.claude/autonomy/jev-batch.arm"
+  printf '%s' "$AH"
+}
+
+@test "batch: under a TTY the pass STREAMS, and the out-file still gets its copy" {
+  mkcorpus
+  AH="$(armed_home)"
+  export MOCK_CHOICE_ROTATE=1
+  start_mock ok
+  run env HOME="$AH" AI_GATEWAY_API_KEY=dummy CC_JEV_BASE_URL="http://127.0.0.1:$PORT" \
+      CC_JEV_MEM_DIR="$MEMD" CC_JEV_RULES_FILE=/dev/null CC_JEV_PROMO_GAP=0 \
+      python3 "$REPO/tests/fixtures/pty-run.py" "$REPO/scripts/jev/jev-batch.sh"
+  [ "$status" -eq 0 ]
+  grep -qF "DECIDED" <<<"$output"          # it reached the terminal
+  grep -qF "SWAP LIST" <<<"$output"
+  # tee, not redirect: the durable copy must survive too, or the scheduled path loses its record.
+  ls "$AH"/.claude/autonomy/jev-batch-*.out >/dev/null
+  grep -qF "run rc=0" "$AH/.claude/autonomy/jev-batch.log"
+}
+
+# 🚨 PIPESTATUS, NOT $?. With `| tee`, `$?` is TEE's status — 0 whether the pass succeeded or died
+# — so every failure on the interactive path would have been recorded as a clean `run rc=0`. Same
+# class as this repo's standing lesson that a suppressed stderr turns a failed command into a zero.
+@test "batch: a failure under a TTY survives the tee and is logged non-zero" {
+  mkcorpus
+  AH="$(armed_home)"
+  run env HOME="$AH" AI_GATEWAY_API_KEY=dummy CC_JEV_BASE_URL="http://127.0.0.1:1" \
+      CC_JEV_MEM_DIR="$MEMD" CC_JEV_RULES_FILE=/dev/null CC_JEV_PROMO_GAP=0 \
+      python3 "$REPO/tests/fixtures/pty-run.py" "$REPO/scripts/jev/jev-batch.sh"
+  rc_line="$(grep -o 'run rc=[0-9]*' "$AH/.claude/autonomy/jev-batch.log" | tail -1)"
+  [ -n "$rc_line" ]
+  [ "$rc_line" != "run rc=0" ] || { echo "tee masked the failure: $rc_line"; false; }
+}
