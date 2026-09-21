@@ -189,6 +189,13 @@ PY
   run bash "$LRT" --sid "$SID" --from "$T/to-link" --to "$T/third"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ -f "$THIRD" ] || { echo "the hop through the symlink copied nothing"; false; }
+  # AND the custody record must not keep the alias. The chain is compared BY STRING — by the hop
+  # test on the next move, and by lr-ingest-verify's C3 — so an alias recorded here is a store the
+  # next reader cannot match. This is the assertion that makes `pwd -P` at :30 load-bearing: the
+  # comparison itself is already sound (both sides go through lrt_rp), so without this the binding
+  # could be reverted and the whole suite would stay green.
+  [ "$(_lockf from)" = "$(cd "$T/to" && pwd -P)" ] \
+    || { echo "the lock recorded a symlink alias as the source store: $(_lockf from)"; false; }
 }
 
 @test "transplant: a STRANGER --from is still refused, and the refusal names the hop that would work" {
@@ -240,6 +247,39 @@ PY
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *'"source_retired":0'* ]] || { echo "$output"; false; }
   [ -f "$SRC" ] || { echo "the LIVE session's own transcript was renamed under it"; false; }
+}
+
+# ── --force AND CUSTODY: the hop test is a fact about the lock, --force is a claim about staleness
+# The two are deliberately independent (lr-transplant.sh, the comment above SECOND_HOP), and the
+# pair below is what makes that decision falsifiable rather than a preference in a comment.
+
+@test "transplant: --force off a store the lock does NOT name rebuilds custody from this move" {
+  # Here the lock and the invocation disagree — it says the session is at the third store, the
+  # caller says it is moving off the second. --force overrides the refusal, and the custody record
+  # is rebuilt from what this move actually knows rather than extended from a record just
+  # contradicted. The cost is real and is the reason it is pinned: a bundle cut at an earlier hop
+  # goes back to failing lr-ingest-verify C3, exactly as it did before W5-B.
+  _transplant; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  _hop2;       [ "$status" -eq 0 ] || { echo "$output"; false; }
+  mv "$DST.handed-off" "$DST"          # give --force a source to copy
+  run bash "$LRT" --sid "$SID" --from "$T/to" --to "$T/third" --force
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$(_lockchain)" != *"/from"* ]] \
+    || { echo "custody was extended from a lock this move contradicts: $(_lockchain)"; false; }
+  [[ "$(_lockchain)" == *"/to "*"/third" ]] || { echo "chain: $(_lockchain)"; false; }
+}
+
+@test "transplant: --force off the store the lock DOES name keeps the chain — nothing disagreed" {
+  # The other half, and the one the mutation pass found missing. A forced move off the store the
+  # lock already names is a hop the caller happened to force; discarding the chain there would drop
+  # the earlier hops' bundles out of C3 for no safety gained, because nothing the lock says was
+  # contradicted. --force still does what --force does (it overrides both refusals and the
+  # idempotence path); it just has no opinion about custody history.
+  _transplant; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run bash "$LRT" --sid "$SID" --from "$T/to" --to "$T/third" --force
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$(_lockchain)" == *"/from "*"/to "*"/third" ]] \
+    || { echo "--force dropped a chain that agreed with it: $(_lockchain)"; false; }
 }
 
 # ── THE LOCK'S CONSUMER: lr-ingest-verify clause C3 ───────────────────────────────────────────────

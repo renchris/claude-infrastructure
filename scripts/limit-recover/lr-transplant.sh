@@ -115,8 +115,17 @@ LRT_OWNER_REAL=""
 [[ -z "$LRT_OWNER" ]] || LRT_OWNER_REAL="$(lrt_rp "$LRT_OWNER")"
 # THE HOP TEST. A lock whose owner is the store we are moving OFF is custody being handed on, not a
 # split brain. (FROM ≠ TO is already guaranteed: the same-projects-store refusal above exits first.)
+#
+# IT DOES NOT CONSULT $FORCE, deliberately. This is a FACT about the lock, and --force is an
+# assertion about the lock being stale; the two refusals below already carry their own `$FORCE -ne
+# 1`, so nothing here gates the override. The only thing a FORCE conjunct would change is that a
+# forced move off the store the lock ALREADY names would throw away a chain that agrees with it —
+# losing the earlier hops' bundles from C3 for no safety gained. A forced move off some OTHER store
+# still rebuilds the record, which is right: there the lock and reality disagree. (Found by the
+# mutation pass: with the conjunct, the mutant that removed it survived the whole suite, and the
+# only case that could have killed it was one asserting the worse behaviour.)
 SECOND_HOP=0
-if [[ $FORCE -ne 1 && -n "$LRT_OWNER_REAL" && "$LRT_OWNER_REAL" == "$FROM_REAL" ]]; then
+if [[ -n "$LRT_OWNER_REAL" && "$LRT_OWNER_REAL" == "$FROM_REAL" ]]; then
   SECOND_HOP=1
 fi
 
