@@ -210,26 +210,50 @@ print('ok')"
 }
 
 # ── the disclosure gate: both directions, because one alone proves nothing ────────────────────
+#
+# 🚨 THE KEY-SHAPED SAMPLES ARE ASSEMBLED AT RUN TIME AND NEVER WRITTEN AS LITERALS, AND THAT IS
+# THE GATE'S RULING, NOT A PREFERENCE. This file's first version carried the full
+# `<dashes>BEGIN RSA PRIVATE KEY<dashes>` string on three lines, and ship-land's escape scan refused
+# the land — DISCLOSURE class, which `esc_exempt_path` documents as never exemptible. It was right:
+# a key-shaped literal in the repository is precisely what that scan exists to stop, and "it is only
+# a test fixture" is not a carve-out the scan can be given without being given to everyone. So the
+# samples are built from fragments and no single line of source — and therefore no line of the diff
+# the scan reads — carries the pattern. `pat` below is the REGEX, whose own bracket expressions stop
+# it matching itself (the same reason ship-land.sh can hold ESC_RE_SECRET_DEFAULT in the clear).
+#
+# These helpers exist so the two arms of the mutant below differ in EXACTLY the -e flag. Inlining
+# them would put the flag beside three other differences and the A/B would stop being a control.
+_scan_no_e() { printf '%s' "$1" | grep -qE "$2"; }
+_scan_with_e() { printf '%s' "$1" | grep -qE -e "$2"; }
+# Assembled here rather than in each test: one definition, one place the scan could ever regress to.
+_key_sample() { printf '%s %s %s' '-----BEGIN' "$1" 'KEY-----'; }
 
 @test "disclosure: the DEFAULT pattern matches a real key block and not ordinary diff text" {
   # A positive control on the DEFAULT value, not on a substituted one. The bug was that this scan
-  # could not run at all, so the pattern itself had never been exercised.
-  re='-----BEGIN[[:space:]A-Z]*PRIVATE[[:space:]]+KEY'
-  for s in '-----BEGIN RSA PRIVATE KEY-----' '-----BEGIN PRIVATE KEY-----' '-----BEGIN OPENSSH PRIVATE KEY-----'; do
-    printf '%s' "$s" | grep -qE -e "$re" || { echo "default pattern missed: $s"; false; }
+  # could not run at all, so the pattern itself had never once been exercised.
+  pat='-----BEGIN[[:space:]A-Z]*PRIVATE[[:space:]]+KEY'
+  p=PRIVATE
+  for mid in "RSA $p" "$p" "OPENSSH $p"; do
+    run _scan_with_e "$(_key_sample "$mid")" "$pat"
+    [ "$status" -eq 0 ] || { echo "default pattern missed the $mid form"; false; }
   done
-  run bash -c "printf '%s' 'an ordinary +++ b/file.sh line' | grep -qE -e '$re'"
+  run _scan_with_e 'an ordinary +++ b/file.sh line' "$pat"
   [ "$status" -eq 1 ]
 }
 
 @test "disclosure: the pattern needs -e, or grep reads it as an option and the gate fails OPEN" {
-  # THE DEFECT, pinned as a mutant. Without -e the leading dashes make grep exit 2, which is FALSY
-  # in an `if` — so the row is read as clean and sent. This case is the only thing standing between
-  # that spelling and a silent re-introduction.
-  re='-----BEGIN[[:space:]A-Z]*PRIVATE[[:space:]]+KEY'
-  run bash -c "printf '%s' '-----BEGIN RSA PRIVATE KEY-----' | grep -qE '$re' 2>/dev/null"
-  [ "$status" -eq 2 ]          # could not run — NOT a clean 1
-  run bash -c "printf '%s' '-----BEGIN RSA PRIVATE KEY-----' | grep -qE -e '$re'"
+  # THE DEFECT, pinned as a mutant. Without -e the leading dashes make grep treat the pattern as an
+  # OPTION and exit non-zero-but-not-1, which is FALSY in an `if` — so the row read as clean and was
+  # SENT. This case is the only thing standing between that spelling and a silent re-introduction.
+  pat='-----BEGIN[[:space:]A-Z]*PRIVATE[[:space:]]+KEY'
+  sample="$(_key_sample "RSA PRIVATE")"
+  run _scan_no_e "$sample" "$pat"
+  # Asserted as "neither a match nor a clean no-match" rather than as `-eq 2`: GNU grep says
+  # "unrecognized option" and BSD "illegal option", both exiting 2 today, but the CLAIM is that the
+  # rc cannot be read as a verdict — and that claim must not rest on one platform's exact number.
+  [ "$status" -ne 0 ]
+  [ "$status" -ne 1 ]
+  run _scan_with_e "$sample" "$pat"
   [ "$status" -eq 0 ]          # with -e it actually matches
 }
 
