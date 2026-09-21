@@ -91,7 +91,13 @@ nlines() { printf '%s\n' "$1" | grep -c '[^[:space:]]'; }
   find_stub 0 "$(row "$SID" 130 TEAMMATE)"
   run bash "$LR" recover 130
   [ "$status" -eq 2 ]
-  [[ "$output" == *TEAMMATE* ]] || false
+  # ASSERT RULE 0's OWN MESSAGE, not just "TEAMMATE appears somewhere". A teammate is also not
+  # LIMITED, so deleting RULE 0 leaves RULE 2 refusing the same ref with the same rc and the same
+  # word in its text — measured: that mutant SURVIVED a `*TEAMMATE*` assertion. The two refusals
+  # mean different things to the operator and only one of them is the unrecoverable mistake, so
+  # the message is the discriminator and RULE 0 must be the arm that speaks.
+  [[ "$output" == *"lead-owned"* ]] || false
+  [[ "$output" != *"not LIMITED"* ]] || false
   [ ! -d "$MUTEX" ]
   [ ! -e "$BATS_TEST_TMPDIR/fleet.argv" ]
 }
@@ -244,6 +250,19 @@ nlines() { printf '%s\n' "$1" | grep -c '[^[:space:]]'; }
   [[ "$output" != *"FAILED:submit"* ]] || false
 }
 
+@test "status: with a stale line trailing TWO terminals, the LAST terminal is the one that shows" {
+  # The case above cannot see a "first terminal sticks" defect: its last line IS terminal, so the
+  # stickiness branch never runs — measured, that mutant SURVIVED it. Only a trailing NON-terminal
+  # line forces the branch to choose between the two terminals, and the answer is the later one:
+  # a run that failed and then recovered has recovered.
+  bundle "$SID" 20260919T170000Z "FAILED:submit" RECOVERED probed >/dev/null
+  run bash "$LR" status "$SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *RECOVERED* ]] || false
+  [[ "$output" != *"FAILED:submit"* ]] || false
+  [[ "$output" != *" probed "* ]] || false
+}
+
 @test "status: NEXT names cc-lr repair for a failed or parked run, and nothing for a healthy one" {
   local b
   b="$(bundle "$SID" 20260919T170000Z probed "FAILED:relaunch:gate")"
@@ -336,6 +355,29 @@ JUDGE
   [ -z "$leftover" ] || { echo "left behind:$leftover"; false; }
 }
 
+@test "repair's destination is placed ONLY by a rename from a dotfile temp" {
+  # A STRUCTURAL ARM, and it is here because the property is about an INTERVAL no external test can
+  # sample: "no partially written file ever matches the poller's $REQUESTS/*.json glob". Measured —
+  # a mutant that writes straight to the destination SURVIVES every behavioural arm, because the
+  # error path's own `rm -f "$tmp"` then cleans the destination too. So assert the shape: the temp
+  # is a DOTFILE with a .tmp suffix (unmatched by that glob on either axis) and `mv` is what places
+  # the destination. Residual: a rename of $tmp/$dest disarms this without changing behaviour
+  # (repo lesson: a-mutation-control-anchors-on-the-subjects-source-text).
+  grep -qE 'tmp="\$REQ_DIR/\.cc-lr-repair-' "$LR"
+  grep -qE 'mv -f "\$tmp" "\$dest"' "$LR"
+  ! grep -qE '^\s*tmp="\$dest"' "$LR" || false
+}
+
+@test "repair REFUSES and RELEASES nothing when lr-fleet is unreachable — recover's mutex is freed" {
+  # The sibling of the "lr-fleet refuses" case: here the binary cannot be reached at all, which is
+  # a different branch and takes the mutex before it finds out.
+  find_stub 0 "$(row "$SID" 117 LIMITED)"
+  run env CC_LR_FLEET_BIN="$BATS_TEST_TMPDIR/does-not-exist" bash "$LR" recover 117
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"cannot reach lr-fleet.sh"* ]] || false
+  [ ! -d "$MUTEX" ]
+}
+
 @test "repair leaves NO request behind when the write itself fails" {
   # WRITE-THEN-RENAME is the property, and a leftover-tmp check cannot see its absence: a mutant
   # that writes straight to the destination also leaves no tmp. Break the write instead — the
@@ -391,6 +433,12 @@ JUDGE
   [[ "$output" == *"neither 'relaunch' nor 'prompt'"* ]] || false
   run bash "$LR" repair ffffffff
   [ "$status" -eq 2 ]
+  # ASSERT THE ARM'S OWN MESSAGE. Deleting this refusal lets an unresolvable ref fall through to
+  # the sid-uuid guard one line below, which refuses it too, with the same rc — measured, that
+  # mutant SURVIVED a bare rc-2 assertion. The messages tell the operator different things
+  # ("that ref names no run here" vs "that path is not under a session dir"), so the message is
+  # the only discriminator the arm has.
+  [[ "$output" == *"neither a bundle directory nor a sid"* ]] || false
   [ ! -d "$REQ" ] || [ -z "$(ls -A "$REQ")" ]
 }
 

@@ -370,7 +370,6 @@ EOF
         k = klass(s)
         nextcmd = (k == "bad") ? " → cc-lr repair " bdir : ""
         cause = (d == "-" || d == "") ? "—" : d
-        if (k == "ok" && nextcmd == "") cause = (d == "-" || d == "") ? "—" : d
         a = (f in mtime) ? age(now - mtime[f]) : "?"
         printf "%-36s %-18s %-7s %s%s\n", id, s, a, cause, nextcmd
       }
