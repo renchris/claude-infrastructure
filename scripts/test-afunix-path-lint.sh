@@ -49,6 +49,25 @@
 # (the corpus has no such site today — checked 2026-08-09). Do not read a green here as "no
 # oversized socket path anywhere".
 #
+# …AND IT READS `bind(` ONLY, IN tests/ ONLY — WHICH IS TWO AXES, NOT ONE, AND THE SECOND ONE HAS
+# ALREADY COST A DISPATCH WAVE (item 8dc9ff906d4b, 2026-09-21). The cap is a property of the STRING
+# HANDED TO THE SYSCALL, so it binds connect(2) exactly as it binds bind(2) — and the party that
+# connects is normally the SUBJECT, which does not live under tests/. Measured: scripts/handoff-
+# fire.sh's kitty_socket_accepting connected by absolute path, so beneath postland's corpus TMPDIR
+# it was handed 107 bytes, connect() raised `AF_UNIX path too long` over a socket that was listening
+# and reachable, and its fail-closed `except` spent that as a clean "not accepting" — four tests in
+# tests/handoff-remote-pane-term.bats then reported no-socket over a socket nothing had reached.
+# THE FIXTURE WAS NOT THE VICTIM AND THIS LINT WAS GREEN THROUGHOUT: mksock/mklistener already
+# chdir, so the only absolute-capable address in play was the subject's. Cured by 7a8e2d85ee8b with
+# the same chdir-and-use-the-basename shape prescribed above; the population of absolute AF_UNIX
+# connects in the tree was 1 and is now 0 (the other, scripts/kitty-pane-title-overlay.py:111,
+# resolves to 57 bytes off $HOME and never sees a TMPDIR — re-census, never re-quote).
+#
+# The scan was deliberately NOT widened to production connects when that was cured: the population
+# is zero, the value is prospective, and this lint BLOCKS a land for every session on the box. That
+# is a real cost against a speculative benefit, so it is recorded here rather than enforced. If a
+# second production site ever appears, that is the signal to widen — not this paragraph.
+#
 # Exit: 0 = clean · 1 = violation · 2 = bad usage / unreadable scan dir (LOUD, never silent-green)
 #
 # Env seams: CC_AFUNIX_ALLOWLIST overrides the embedded ratchet · CC_AFUNIX_OWN scopes which
