@@ -46,6 +46,12 @@ JSON
   printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$OSA_LOG"\n' > "$STOP_FAILURE_OSASCRIPT"
   printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "$LC_LOG"\n' > "$STOP_FAILURE_LAUNCHCTL"
   chmod +x "$STOP_FAILURE_OSASCRIPT" "$STOP_FAILURE_LAUNCHCTL"
+  # ── ARM 2's seam (LIMIT_RECOVER_100P W5-F) ──
+  # OUTSIDE $HOME for the same reason the four above are: the two footprint pins diff $HOME, and a
+  # seam defaulting under it would make this arm invisible to them instead of pinned by them. Its
+  # PRODUCTION default is under $HOME ($HOME/.reso/limit-recover), which is precisely why the seam
+  # had to exist before the arm did.
+  export STOP_FAILURE_LR_STATE="$BATS_TEST_TMPDIR/lrstate"
 }
 
 # The verbatim 2.1.260 five-hour cap text, held in a variable rather than written inline as a
@@ -80,6 +86,42 @@ JSON
 
 markers() { find "$STOP_FAILURE_MARKER_DIR" -type f -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' '; }
 all_lines() { cat "$STOP_FAILURE_MARKER_DIR"/*.jsonl 2>/dev/null | wc -l | tr -d ' '; }
+
+# ── ARM 2 helpers (LIMIT_RECOVER_100P W5-F) ──────────────────────────────────────────────────────
+requests()  { find "$STOP_FAILURE_LR_STATE/requests" -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' '; }
+tmpfiles()  { find "$STOP_FAILURE_LR_STATE/requests" -type f -name '.*' 2>/dev/null | wc -l | tr -d ' '; }
+latches()   { find "$STOP_FAILURE_LR_STATE/requests-latch" -type f 2>/dev/null | wc -l | tr -d ' '; }
+rqf()       { echo "$STOP_FAILURE_LR_STATE/requests/$1.json"; }
+
+# A transcript whose LAST assistant record is a real cap death. The shape is not invented: it is
+# the one tests/lr-predicate.bats:166 and tests/cc-limited.bats:257 already carry — `quotaLimits`
+# is a TOP-LEVEL sibling of `message`, never nested inside it.
+mk_transcript() {  # $1 = path  $2 = death uuid
+  mkdir -p "$(dirname "$1")"
+  printf '%s\n' '{"type":"user","message":{"role":"user","content":"hi"}}' > "$1"
+  jq -cn --arg u "$2" \
+    '{type:"assistant", isApiErrorMessage:true, error:"rate_limit", apiErrorStatus:429, uuid:$u,
+      timestamp:"2026-09-19T20:29:28.332Z",
+      quotaLimits:{status:"rejected", resetsAt:1789853400, rateLimitType:"five_hour"},
+      message:{model:"<synthetic>", content:[{type:"text", text:"capped"}]}}' >> "$1"
+}
+
+# A teammate transcript: `agentName` is a TOP-LEVEL key on an early `user` record, which is why the
+# first 8 KB answers the question (lr_predicate.py:423).
+mk_teammate_transcript() {  # $1 = path
+  mkdir -p "$(dirname "$1")"
+  printf '%s\n' '{"type":"user","agentName":"w5f","message":{"role":"user","content":"brief"}}' > "$1"
+}
+
+# The death payload with an explicit transcript and error — the shape every ARM 2 row needs.
+rq_payload() {  # $1 = sid  $2 = transcript path  $3 = error  $4 = last_assistant_message
+  local sid="$1" tp="$2" err="$3" msg="$4"
+  [ -n "$err" ] || err="rate_limit"
+  [ -n "$msg" ] || msg="$LIMIT_TEXT_5H"
+  jq -cn --arg sid "$sid" --arg tp "$tp" --arg err "$err" --arg msg "$msg" \
+    '{session_id:$sid, transcript_path:$tp, cwd:"/private/tmp/hs/scratch",
+      hook_event_name:"StopFailure", error:$err, last_assistant_message:$msg}'
+}
 
 # ---- the fact it records ------------------------------------------------------------------------
 @test "one death opens one marker carrying the error and the resolved account" {
@@ -237,6 +279,12 @@ all_lines() { cat "$STOP_FAILURE_MARKER_DIR"/*.jsonl 2>/dev/null | wc -l | tr -d
   find "$HOME" -type f 2>/dev/null | sort > "$after"
   # nothing written under HOME at all: markers + IDL are on their own env seams here
   diff -q "$before" "$after" >/dev/null || false
+  # W5-F WIDENS this pin rather than weakening it. ARM 2 writes a recovery request, and a request
+  # for a NON-CAP death would hand the poller a transplant for a session whose account is fine —
+  # spending an account move on a problem that no longer exists. This is an authentication_failed
+  # death, so the request arm must not be entered at all.
+  [ "$(requests)" -eq 0 ] || false
+  [ "$(latches)" -eq 0 ] || false
   # POSITIVE CONTROL: the detector can see a write under HOME when there is one.
   : > "$HOME/canary"
   find "$HOME" -type f 2>/dev/null | sort > "$after"
@@ -437,11 +485,14 @@ JSON
   jq -e 'select(.session_id=="k3")' "$STOP_FAILURE_MARKER_DIR"/rate_limit__next.jsonl >/dev/null || false
 }
 
-@test "SA9: the armed footprint is marker + IDL + beat + latch, and nothing else" {
+@test "SA9: the armed footprint is marker + IDL + beat + latch + request + request-latch, nothing else" {
   # The original pin said the hook's entire footprint was the marker and the IDL, and enforced
   # "it is not a pager" by pinning that. The arm makes it a pager — exactly once per cause — so the
-  # pin is WIDENED rather than deleted: it now names the four things the arm may touch, and still
-  # fails on a fifth. Every seam points outside $HOME, so a write under $HOME is still a violation.
+  # pin is WIDENED rather than deleted: it now names the things the arm may touch, and still
+  # fails on one more. Every seam points outside $HOME, so a write under $HOME is still a violation.
+  # W5-F widens it AGAIN, by the same rule and for the same reason: ARM 2 adds a request and a
+  # request-latch, so they are NAMED here. This pin is the only thing standing between this hook
+  # and an unreviewed write on the death path — it may be widened, never deleted or relaxed.
   local before after
   before="$BATS_TEST_TMPDIR/fp-before"; after="$BATS_TEST_TMPDIR/fp-after"
   find "$HOME" -type f 2>/dev/null | sort > "$before"
@@ -449,17 +500,294 @@ JSON
   find "$HOME" -type f 2>/dev/null | sort > "$after"
   diff -q "$before" "$after" >/dev/null || false
 
-  # the four permitted surfaces, each present and each on its own seam
+  # the six permitted surfaces, each present and each on its own seam
   [ -s "$STOP_FAILURE_MARKER_DIR/rate_limit__next.jsonl" ]
   [ -s "$STOP_FAILURE_IDL" ]
   [ -s "$(beatf fp1)" ]
   [ "$(find "$STOP_FAILURE_LIMITED_DIR/.paged" -type f | wc -l | tr -d ' ')" -eq 1 ]
+  [ "$(requests)" -eq 1 ]
+  [ "$(latches)" -eq 1 ]
+  # and NOTHING is left half-written: the temp file is published by rename or removed, never kept
+  [ "$(tmpfiles)" -eq 0 ]
 
   # POSITIVE CONTROL: the detector can still see a write under HOME when there is one.
   : > "$HOME/canary"
   find "$HOME" -type f 2>/dev/null | sort > "$after"
   run diff -q "$before" "$after"
   [ "$status" -ne 0 ]
+}
+
+# ══ ARM 2 · THE RECOVERY REQUEST (LIMIT_RECOVER_100P W5-F) ═══════════════════════════════════════
+# Until this arm landed the recovery lane had exactly ONE producer — a human running
+# `lr-fleet.sh --enqueue` — so the hook's detection (right on 126 of 128 real rate_limit deaths)
+# started nothing. The rows below pin what the arm writes, and, with at least equal weight, what it
+# must NOT do: request for a non-cap death, request for a teammate or a handed-off session,
+# re-request a death it already requested, kick the poller unasked, or ever create the operator's
+# `autorecover.on` flag itself.
+
+@test "SB1: a cap death writes ONE request carrying the four keys the poller actually reads" {
+  # THE CONSUMER FIXES THE SHAPE, not our plan. lr-reset-poller.sh:674 reads `.sid` and DESTROYS a
+  # request without one (renamed `.malformed.json` into results/, never retried); :677 reads
+  # `.target`, `.source_pane` and `.requested_by`. A key missing there is a request destroyed on
+  # arrival, which is why these four are asserted by name and by non-emptiness.
+  mk_transcript "$BATS_TEST_TMPDIR/tx/b1.jsonl" f4dead
+  rq_payload b1 "$BATS_TEST_TMPDIR/tx/b1.jsonl" rate_limit "" | CC_PANE_ID=427 bash "$HOOK"
+  [ "$(requests)" -eq 1 ]
+  local f; f="$(rqf b1)"
+  jq -e '.sid == "b1"' "$f" >/dev/null || false
+  jq -e '.target == "auto"' "$f" >/dev/null || false
+  jq -e '.source_pane == "427"' "$f" >/dev/null || false
+  jq -e '.requested_by == "stop-failure-marker"' "$f" >/dev/null || false
+  # and every one of the four is non-empty, which is the property the poller depends on
+  jq -e '[.sid, .target, .requested_by] | map(length > 0) | all' "$f" >/dev/null || false
+}
+
+@test "SB2: the request carries the enrichment the poller cannot re-derive from the payload" {
+  # `resetsAt` and `rateLimitType` live ONLY in the transcript's death record; nothing in the
+  # StopFailure payload names either. They ride the request so a later wave can schedule the
+  # recovery at the reset rather than polling blind.
+  mk_transcript "$BATS_TEST_TMPDIR/tx/b2.jsonl" f4dead
+  rq_payload b2 "$BATS_TEST_TMPDIR/tx/b2.jsonl" rate_limit "" | bash "$HOOK"
+  local f; f="$(rqf b2)"
+  jq -e '.reset_at_epoch == "1789853400"' "$f" >/dev/null || false
+  jq -e '.rate_limit_type == "five_hour"' "$f" >/dev/null || false
+  jq -e '.death_uuid == "f4dead"' "$f" >/dev/null || false
+  jq -e '.account == "next"' "$f" >/dev/null || false
+  jq -e '.transcript_path | test("b2.jsonl")' "$f" >/dev/null || false
+}
+
+@test "SB3: the enrichment DEGRADES, never blocks — no transcript still produces a valid request" {
+  # The hook is fail-open by construction. A transcript that is absent, rotated or unreadable must
+  # cost the session its scheduling hint, never its recovery.
+  rq_payload b3 "$BATS_TEST_TMPDIR/tx/does-not-exist.jsonl" rate_limit "" | bash "$HOOK"
+  [ "$(requests)" -eq 1 ]
+  local f; f="$(rqf b3)"
+  jq -e '.sid == "b3"' "$f" >/dev/null || false
+  jq -e '.reset_at_epoch == ""' "$f" >/dev/null || false
+  jq -e '.rate_limit_type == ""' "$f" >/dev/null || false
+  # the latch still has a key, derived from the payload — never a constant, which would latch the
+  # FIRST death for the life of the session and go silent on every later one
+  [ "$(latches)" -eq 1 ]
+}
+
+@test "SB4: rate_limit_error — the second spelling of one fact — also earns a request" {
+  rq_payload b4 "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit_error "" | bash "$HOOK"
+  [ "$(requests)" -eq 1 ]
+  jq -e '.error == "rate_limit_error"' "$(rqf b4)" >/dev/null || false
+}
+
+@test "SB5: a NON-cap death writes no request, and a near-miss spelling is not a cap" {
+  # A request for a non-cap death hands the poller a transplant for a session whose ACCOUNT is
+  # fine — an account move spent on a problem that no longer exists (lr-fleet.sh:880-884 refuses
+  # exactly that). The last two are near misses on purpose: the gate is an EXACT match on two
+  # spellings, so a substring or prefix test would let them through.
+  local e
+  for e in authentication_failed usage_limit_reached network_error rate_limited limit; do
+    rm -rf "$STOP_FAILURE_LR_STATE"
+    rq_payload "b5-$e" "$BATS_TEST_TMPDIR/tx/none.jsonl" "$e" "" | bash "$HOOK"
+    [ "$(requests)" -eq 0 ] || { echo "requested on error=$e"; false; }
+  done
+  # POSITIVE CONTROL: the same harness DOES produce a request for a real cap, so the five rows
+  # above are measuring the gate and not a broken fixture.
+  rm -rf "$STOP_FAILURE_LR_STATE"
+  rq_payload b5-ok "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit "" | bash "$HOOK"
+  [ "$(requests)" -eq 1 ]
+}
+
+@test "SB6: the KICK is gated on the operator flag, and the hook never creates that flag" {
+  # 🚨 THE SAFETY PROPERTY OF THIS WHOLE ARM. `autorecover.on` is an OPEN OPERATOR DECISION
+  # (LIMIT_RECOVER_100P:384, 85 % conviction, shipped default OFF) and it is what W5-A's poller
+  # gate reads before draining anything this hook wrote. A hook that created it would decide the
+  # operator's question for them and auto-transplant a whole fleet.
+  rq_payload b6 "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit "" | bash "$HOOK"
+  [ "$(requests)" -eq 1 ]
+  [ "$(kicks)" -eq 0 ]
+  [ ! -e "$STOP_FAILURE_LR_STATE/autorecover.on" ]
+
+  # with the flag present the poller is woken — bare `kickstart`, never `-k` (which KILLS a running
+  # job, aborting the very tick this is asking for), and never load/unload
+  : > "$STOP_FAILURE_LR_STATE/autorecover.on"
+  rq_payload b6b "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit "a different cause entirely" | bash "$HOOK"
+  [ "$(kicks)" -eq 1 ]
+  grep -q 'kickstart gui/[0-9]*/com.reso.lr-reset-poller' "$LC_LOG" || { cat "$LC_LOG"; false; }
+  ! grep -q -- '-k ' "$LC_LOG" || { cat "$LC_LOG"; false; }
+  ! grep -qE '(^| )(load|unload|bootout)( |$)' "$LC_LOG" || { cat "$LC_LOG"; false; }
+}
+
+@test "SB7: a TEAMMATE is skipped — a breadcrumb and nothing else" {
+  # Its lead owns its life: an assignee is woken over the teammate channel, and transplanting it
+  # would put a second writer on one transcript.
+  mk_teammate_transcript "$BATS_TEST_TMPDIR/tx/b7.jsonl"
+  rq_payload b7 "$BATS_TEST_TMPDIR/tx/b7.jsonl" rate_limit "" | bash "$HOOK"
+  [ "$(requests)" -eq 0 ]
+  [ "$(latches)" -eq 0 ]
+  [ -e "$STOP_FAILURE_LR_STATE/teammate-skip/b7" ]
+  grep -q '"disposition":"passed","reason":"request-skip-teammate"' "$STOP_FAILURE_IDL" || false
+  # the MARKER still records the death — the skip is about the recovery lane, not about the record
+  [ "$(markers)" -eq 1 ]
+}
+
+@test "SB8: a HANDED-OFF session is skipped, and the tomb is read BESIDE ITS OWN TRANSCRIPT" {
+  # The tomb is per-session — lr-transplant writes `<sid>.HANDOFF.json` into the session's own
+  # project dir. A global path here would let one handed-off session mute the whole fleet, which
+  # during a mass cap is every session on the account.
+  mk_transcript "$BATS_TEST_TMPDIR/tx/b8.jsonl" f8
+  printf '%s\n' '{"ts":"2026-09-20T00:00:00Z"}' > "$BATS_TEST_TMPDIR/tx/b8.HANDOFF.json"
+  rq_payload b8 "$BATS_TEST_TMPDIR/tx/b8.jsonl" rate_limit "" | bash "$HOOK"
+  [ "$(requests)" -eq 0 ]
+  grep -q '"disposition":"passed","reason":"request-skip-handed-off"' "$STOP_FAILURE_IDL" || false
+
+  # a tomb for a DIFFERENT sid, in the same directory, must not mute this one
+  mk_transcript "$BATS_TEST_TMPDIR/tx/b8b.jsonl" f8b
+  rq_payload b8b "$BATS_TEST_TMPDIR/tx/b8b.jsonl" rate_limit "" | bash "$HOOK"
+  [ "$(requests)" -eq 1 ]
+  [ -f "$(rqf b8b)" ]
+}
+
+@test "SB9: a RE-FIRE of the same death does not re-request after the poller drained it" {
+  # StopFailure re-fires for one sid — 22 of 42 sessions, up to 30 times (this file's own header).
+  # The poller DELETES a request when it drains it, so without the latch every re-fire would
+  # re-enqueue a recovery that already ran: a transplant loop with no bound.
+  mk_transcript "$BATS_TEST_TMPDIR/tx/b9.jsonl" f9
+  rq_payload b9 "$BATS_TEST_TMPDIR/tx/b9.jsonl" rate_limit "" | bash "$HOOK"
+  [ "$(requests)" -eq 1 ]
+  rm -f "$(rqf b9)"                                     # the poller drains and deletes
+  rq_payload b9 "$BATS_TEST_TMPDIR/tx/b9.jsonl" rate_limit "" | bash "$HOOK"
+  [ "$(requests)" -eq 0 ]
+  grep -q '"disposition":"passed","reason":"request-latched"' "$STOP_FAILURE_IDL" || false
+}
+
+@test "SB10: a NEW death of the same session DOES re-request — the latch key is per death" {
+  # The mirror of SB9, and the reason the latch may never key on the sid alone: a session capped
+  # again next week must be recoverable again. lr-lib.sh:203-206 names the same trap.
+  mk_transcript "$BATS_TEST_TMPDIR/tx/ba.jsonl" fa1
+  rq_payload ba "$BATS_TEST_TMPDIR/tx/ba.jsonl" rate_limit "" | bash "$HOOK"
+  [ "$(requests)" -eq 1 ]
+  rm -f "$(rqf ba)"
+  mk_transcript "$BATS_TEST_TMPDIR/tx/ba.jsonl" fa2     # a DIFFERENT death record
+  rq_payload ba "$BATS_TEST_TMPDIR/tx/ba.jsonl" rate_limit "" | bash "$HOOK"
+  [ "$(requests)" -eq 1 ]
+  jq -e '.death_uuid == "fa2"' "$(rqf ba)" >/dev/null || false
+  [ "$(latches)" -eq 2 ]
+}
+
+@test "SB11: a sid that cannot address a recovery produces no request at all" {
+  # `.sid` is passed straight to `lr-fleet.sh --one`, and the poller DESTROYS a request with an
+  # absent one. A sid that is missing, unknown or not path-safe is dropped, never sanitized — the
+  # same rule the PANE guard follows, for the same reason: a half-cleaned address is worse than none.
+  local p
+  for p in '{"hook_event_name":"StopFailure","error":"rate_limit","last_assistant_message":"x"}' \
+           '{"session_id":"?","error":"rate_limit","last_assistant_message":"x"}' \
+           '{"session_id":"../../etc/passwd","error":"rate_limit","last_assistant_message":"x"}' \
+           '{"session_id":"a b","error":"rate_limit","last_assistant_message":"x"}'; do
+    rm -rf "$STOP_FAILURE_LR_STATE"
+    run bash -c "printf '%s' '$p' | bash '$HOOK'"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+    [ "$(requests)" -eq 0 ] || { echo "requested for $p"; false; }
+  done
+  grep -q '"disposition":"passed","reason":"request-skip-bad-sid"' "$STOP_FAILURE_IDL" || false
+}
+
+@test "SB12: 30 CONCURRENT cap deaths write 30 parseable requests and leave no temp file" {
+  # A per-sid request path is naturally collision-free; a shared temp name is NOT. 30 writers
+  # arrive at once, so the temp file carries the pid and the publish is a rename.
+  local i
+  for i in $(seq 1 30); do
+    rq_payload "c$i" "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit "" | bash "$HOOK" &
+  done
+  wait
+  [ "$(requests)" -eq 30 ]
+  [ "$(latches)" -eq 30 ]
+  [ "$(tmpfiles)" -eq 0 ]
+  for i in $(seq 1 30); do
+    jq -e --arg s "c$i" '.sid == $s and .requested_by == "stop-failure-marker"' "$(rqf "c$i")" >/dev/null \
+      || { echo "bad request c$i"; false; }
+  done
+}
+
+@test "SB13: three kill switches, each of which alone stops the request" {
+  # CC_SF_REQUEST is the briefed switch and is honoured. The two FILE sentinels are not redundant
+  # with it: this file's own header records why an env var is the weak form here — it cannot reach
+  # a pane that is ALREADY RUNNING, and during a mass cap that is the entire population.
+  rq_payload d1 "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit "" | CC_SF_REQUEST=off bash "$HOOK"
+  [ "$(requests)" -eq 0 ]
+
+  mkdir -p "$STOP_FAILURE_LIMITED_DIR"; : > "$STOP_FAILURE_LIMITED_DIR/.off"
+  rq_payload d2 "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit "" | bash "$HOOK"
+  [ "$(requests)" -eq 0 ]
+  rm -f "$STOP_FAILURE_LIMITED_DIR/.off"
+
+  mkdir -p "$STOP_FAILURE_LR_STATE"; : > "$STOP_FAILURE_LR_STATE/.request-off"
+  rq_payload d3 "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit "" | bash "$HOOK"
+  [ "$(requests)" -eq 0 ]
+  rm -f "$STOP_FAILURE_LR_STATE/.request-off"
+
+  # POSITIVE CONTROL: with every switch clear the same payload DOES produce a request, so the
+  # three rows above are measuring the switches and not a permanently dead arm.
+  rq_payload d4 "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit "" | bash "$HOOK"
+  [ "$(requests)" -eq 1 ]
+}
+
+@test "SB14: the request latches expire on the marker clock, so a cause can recur" {
+  # Without this a latch from last week permanently suppresses this week's recurrence, and a
+  # permanently latched arm reads exactly like an arm with nothing to do. Same rule as the page
+  # latches, which expire on the same TTL.
+  mkdir -p "$STOP_FAILURE_LR_STATE/requests-latch"
+  : > "$STOP_FAILURE_LR_STATE/requests-latch/stale.oldkey"
+  touch -t 202501010000 "$STOP_FAILURE_LR_STATE/requests-latch/stale.oldkey"
+  rq_payload e1 "$BATS_TEST_TMPDIR/tx/none.jsonl" rate_limit "" | STOP_FAILURE_TTL_MIN=60 bash "$HOOK"
+  [ ! -e "$STOP_FAILURE_LR_STATE/requests-latch/stale.oldkey" ]
+  [ "$(requests)" -eq 1 ]
+}
+
+@test "SB15: the request path is SILENT — exit 0, empty stdout, empty stderr" {
+  # Stop-family. A stray byte here is not untidy, it can be read as a directive — and this arm runs
+  # on the same death path as everything above it. The payload goes through a FILE, never inlined
+  # into a `bash -c` string: it carries an apostrophe and a middle dot, and quoting it inline is
+  # the class of mistake that silently changes what is under test.
+  mk_transcript "$BATS_TEST_TMPDIR/tx/e2.jsonl" fe2
+  rq_payload e2 "$BATS_TEST_TMPDIR/tx/e2.jsonl" rate_limit "" > "$BATS_TEST_TMPDIR/p-e2.json"
+  run bash -c 'bash "$1" < "$2"' _ "$HOOK" "$BATS_TEST_TMPDIR/p-e2.json"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  [ "$(requests)" -eq 1 ]
+
+  # STDERR specifically, on the path that actually reaches a failed write: the requests directory
+  # EXISTS but is not writable, so `mkdir -p` exits 0 and the abstain above it never fires. A
+  # trailing `2>/dev/null` on the redirecting command does NOT cover this — the shell reports a
+  # failed redirection itself, before the command runs — which is why the subject uses a group.
+  rq_payload e3 "$BATS_TEST_TMPDIR/tx/e2.jsonl" rate_limit "" > "$BATS_TEST_TMPDIR/p-e3.json"
+  chmod 500 "$STOP_FAILURE_LR_STATE/requests"
+  run bash -c 'bash "$1" < "$2" 2>&1 1>/dev/null' _ "$HOOK" "$BATS_TEST_TMPDIR/p-e3.json"
+  chmod 700 "$STOP_FAILURE_LR_STATE/requests"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "stderr: $output"; false; }
+}
+
+@test "SB17: an EXISTING but unwritable marker dir is still silent on the death path" {
+  # PRE-EXISTING, found by W5-F and fixed in the same file. `mkdir -p` exits 0 on a directory that
+  # already exists, so the abstain guarding the marker dir cannot fire for one that is merely
+  # READ-ONLY, and the append then leaked the shell's own `Permission denied` to the real stderr.
+  # Reproduced 2026-09-20; this row is the regression pin. It is a NON-cap death on purpose, so it
+  # exercises the inherited marker write and nothing of ARM 2.
+  chmod 500 "$STOP_FAILURE_MARKER_DIR" 2>/dev/null || { mkdir -p "$STOP_FAILURE_MARKER_DIR"; chmod 500 "$STOP_FAILURE_MARKER_DIR"; }
+  real_payload s1 > "$BATS_TEST_TMPDIR/p-ro.json"
+  run bash -c 'bash "$1" < "$2" 2>&1 1>/dev/null' _ "$HOOK" "$BATS_TEST_TMPDIR/p-ro.json"
+  chmod 700 "$STOP_FAILURE_MARKER_DIR"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "stderr: $output"; false; }
+}
+
+@test "SB16: ANCHOR — requested_by is the exact literal W5-A's poller gate matches" {
+  # 🚨 THIS IS A SAFETY ANCHOR, not a style pin. The poller's policy gate (LIMIT_RECOVER_100P W5-A)
+  # refuses to drain a HOOK-ORIGINATED request unless the operator's `autorecover.on` flag exists,
+  # and it identifies one by this string. Rename it and the gate stops matching — the requests then
+  # look human-originated and drain unconditionally, auto-transplanting the fleet. The literal is
+  # pinned in the SUBJECT as well as in the output, because a test asserting only the output would
+  # go green against a subject that computed the same string a second way.
+  [ "$(grep -c 'stop-failure-marker' "$HOOK")" -ge 2 ] || false
+  grep -q -- '--arg by "stop-failure-marker"' "$HOOK" || false
 }
 
 # ---- the control that must be able to FAIL ------------------------------------------------------

@@ -41,12 +41,19 @@
 # rule necessary. The collapsing moved from "do not page" to "page on the same key the marker is
 # already collapsed on".
 #
+# THE REQUEST ARM (LIMIT_RECOVER_100P W5-F) adds a fourth thing on the same limit path: the
+# recovery REQUEST the reset poller drains. Until it landed the recovery lane had exactly one
+# producer — a human running `lr-fleet.sh --enqueue` — so detection that was already right on 126
+# of 128 real rate_limit deaths started nothing. See § ARM 2 below for why it is inert, by
+# construction, until the operator creates `$STATE/autorecover.on`.
+#
 # Env seams (tests): STOP_FAILURE_MARKER_DIR · STOP_FAILURE_IDL · STOP_FAILURE_ACCOUNTS ·
 #                    STOP_FAILURE_TTL_MIN · STOP_FAILURE_CAP · STOP_FAILURE_LIMITED_DIR ·
 #                    STOP_FAILURE_BEAT · STOP_FAILURE_OSASCRIPT · STOP_FAILURE_OSA_TIMEOUT_S ·
-#                    STOP_FAILURE_LAUNCHCTL
+#                    STOP_FAILURE_LAUNCHCTL · STOP_FAILURE_LR_STATE · STOP_FAILURE_TAIL_BYTES
 # Kill switches are FILES under $LIM, not env vars: .off (the whole arm) · .page-off (the page) ·
-# .kick-on (the kick, which is OFF unless the file exists).
+# .kick-on (the kick, which is OFF unless the file exists) · .request-off (the request arm).
+# ARM 2 also honours the env switch CC_SF_REQUEST=off, which is the WEAK form — see § ARM 2.
 set -uo pipefail
 
 MARKER_DIR="${STOP_FAILURE_MARKER_DIR:-$HOME/.claude/autonomy/stop-failure}"
@@ -285,6 +292,208 @@ if [ "$ERR" = rate_limit ] && [ ! -e "$LIM/.off" ]; then
   fi
 fi
 
+# ── ARM 2 — THE RECOVERY REQUEST (LIMIT_RECOVER_100P W5-F) ───────────────────────────────────────
+# WHY IT IS HERE AT ALL. LIMIT_RECOVER_100P:408 handed "the hook's request writer" to the sibling
+# plan LIMIT_DETECT_100P, whose own § 7 then DROPPED it — so the item was ORPHANED, not owned, and
+# the recovery lane kept its single human producer. This arm is the automatic one.
+#
+# 🚨 IT IS UNSAFE WITHOUT THE POLLER'S POLICY GATE (W5-A). ~30 sessions die at once on one cap, so
+# this writes ~30 requests at once, and a poller that drained them unconditionally would transplant
+# a whole fleet onto other accounts with no human in the loop. TWO things hold that shut and both
+# are load-bearing:
+#   · `requested_by` is the exact literal `stop-failure-marker`. W5-A's gate matches THAT STRING
+#     and refuses a hook-originated request unless `$STATE/autorecover.on` exists. Renaming it
+#     silently un-gates the fleet, which is why there is an ANCHOR row on the literal in the suite.
+#   · the KICK below is gated on that same flag, so at the shipped default (flag ABSENT) the
+#     requests accumulate as breadcrumbs and the poller meets them on its own 600 s StartInterval,
+#     having already refused them at W5-A's gate.
+# THIS HOOK NEVER CREATES `autorecover.on`. That file is an operator decision
+# (docs/plans/LIMIT_RECOVER_100P.md:384, 85 % conviction, shipped default OFF) and nothing here may
+# pre-empt it.
+#
+# WIDER THAN THE ARM ABOVE, deliberately: `rate_limit_error` is the second spelling of the same
+# fact, and a recovery missed on a spelling is a session that stays dead. The beat/page arm keeps
+# its narrower `rate_limit` gate untouched — widening a shipped, measured behaviour is not this
+# wave's subject.
+#
+# THREE KILL SWITCHES, and the file ones are not redundant with the env one. `CC_SF_REQUEST=off` is
+# honoured, but :55-56 above already records why an env var is the WEAK form here — it cannot reach
+# a pane that is ALREADY RUNNING, and during a mass cap that is the entire population. `$LIM/.off`
+# (inherited, whole-arm) and `$LIM/.request-off` (this arm alone) are the ones that can stop it
+# mid-event.
+#
+# DEATH-PATH BUDGET, and what was REJECTED to hold it. NO python fork and NO process-table walk:
+# the suite's own cost block already priced and rejected `agent_assignee_argv` (0.19-0.23 s
+# ancestry walk), `oi_origin_class` (3.17 s full-file grep) and the transcript tier read (79 ms);
+# and `lr_last_api_error` costs 50-70 ms of python while supplying NEITHER `resetsAt` NOR
+# `rateLimitType`, which are two of the three fields this arm actually needs. What it does instead
+# is one bounded `tail -c | jq` pass that yields all three — measured 0.01 s on a 4 MB transcript.
+_SF_RQ_STATE="${STOP_FAILURE_LR_STATE:-${LR_STATE_DIR:-$HOME/.reso/limit-recover}}"
+
+# The death record's three identifying fields in ONE bounded pass. `jq -Rr` + `fromjson?` is the
+# per-line try/except a tail needs: a tail starts mid-record, and `jq -s` over a stream whose FIRST
+# line is a fragment fails the WHOLE slurp, which would read as "no death record" on every long
+# transcript. Shape verified in-tree: tests/lr-predicate.bats:166 and tests/cc-limited.bats:257 both
+# carry `quotaLimits:{resetsAt:<epoch>, rateLimitType:"five_hour"|"seven_day"}` as a TOP-LEVEL
+# sibling of `message`. `objects` guards the access so a malformed `quotaLimits` yields "" rather
+# than aborting the program.
+_SF_RQ_JQ='fromjson?
+  | select(type == "object")
+  | select(.type == "assistant" and (.isApiErrorMessage == true))
+  | [ (.uuid // ""),
+      (((.quotaLimits | objects | .resetsAt) // "") | tostring),
+      (((.quotaLimits | objects | .rateLimitType) // "") | tostring) ]
+  | @tsv'
+
+_sf_rq_enrich() { # $1=transcript → "<uuid>\t<reset_at_epoch>\t<rate_limit_type>"; EMPTY on anything else
+  local f="${1:-}" tb c
+  [ -n "$f" ] && [ -f "$f" ] || return 0
+  # The same bounded-fork ladder _sf_page walks, and for the same reason: hooks run without
+  # Homebrew on PATH. Duplicated rather than factored out of _sf_page — that function is inherited
+  # law from another wave and a refactor of it would need its own red-proof.
+  tb=""
+  for c in "$(command -v timeout 2>/dev/null || true)" "$(command -v gtimeout 2>/dev/null || true)" \
+           /opt/homebrew/bin/timeout /usr/local/bin/timeout \
+           /opt/homebrew/bin/gtimeout /usr/local/bin/gtimeout; do
+    [ -n "$c" ] && [ -x "$c" ] && { tb="$c"; break; }
+  done
+  if [ -n "$tb" ]; then
+    "$tb" -k 2 "${STOP_FAILURE_ENRICH_TIMEOUT_S:-4}" /bin/bash -c \
+      'tail -c "$2" "$1" 2>/dev/null | jq -Rr "$3" 2>/dev/null | tail -1' \
+      _ "$f" "${STOP_FAILURE_TAIL_BYTES:-131072}" "$_SF_RQ_JQ" 2>/dev/null || true
+  else
+    /bin/bash -c 'tail -c "$2" "$1" 2>/dev/null | jq -Rr "$3" 2>/dev/null | tail -1' \
+      _ "$f" "${STOP_FAILURE_TAIL_BYTES:-131072}" "$_SF_RQ_JQ" 2>/dev/null || true
+  fi
+  return 0
+}
+
+_sf_request() {
+  local rqdir latchdir tmp dest enrich uuid reset rlt duuid
+  rqdir="$_SF_RQ_STATE/requests"; latchdir="$_SF_RQ_STATE/requests-latch"
+
+  # A REQUEST IS ADDRESSED BY ITS SID, so a sid that is absent, unknown, or not path-safe cannot
+  # produce one: the poller passes `.sid` straight to `lr-fleet.sh --one`, and lr-reset-poller.sh
+  # :674-675 DESTROYS a request with no `.sid` (renamed `.malformed.json`, never retried) rather
+  # than parking it. Same shape as the PANE guard above — drop, never sanitize.
+  case "$SID" in ''|'?'|*[!A-Za-z0-9._-]*) log_idl passed "request-skip-bad-sid"; return 0 ;; esac
+
+  mkdir -p "$rqdir" "$latchdir" 2>/dev/null || { log_idl abstained "request-dir-unwritable"; return 0; }
+  # The latches expire on the marker's own clock, exactly as the page latches at :209 do. Without
+  # this a latch from last week permanently suppresses this week's recurrence of the same cause,
+  # and a permanently latched arm reads exactly like an arm with nothing to do.
+  find "$latchdir" "$_SF_RQ_STATE/teammate-skip" -type f -mmin "+$TTL_MIN" -delete 2>/dev/null || true
+
+  # SKIP 1 — A TEAMMATE. Its lead owns its life: an assignee is woken over the teammate channel,
+  # and transplanting it would put a second writer on one transcript. The test is the house idiom
+  # (handoff-fire.sh:7810, lr-fleet.sh:215) — `agentName` is a top-level key on an early `user`
+  # record, so the first 8 KB answers it. `grep` is DRAINED, never `-q`: an early-exiting consumer
+  # under `set -o pipefail` promotes the producer's SIGPIPE to the pipeline status and the `if`
+  # reads FALSE on a match (scripts/pipefail-sigpipe-lint.sh). The known false positive —
+  # `"agentName":null` also matches — errs toward SKIPPING, which is the safe direction here.
+  if [ -n "$TP" ] && [ -f "$TP" ] \
+     && head -c 8192 "$TP" 2>/dev/null | grep '"agentName"' >/dev/null 2>&1; then
+    mkdir -p "$_SF_RQ_STATE/teammate-skip" 2>/dev/null || return 0
+    # `( … ) 2>/dev/null`, never `: > f 2>/dev/null`. A FAILED REDIRECTION is reported by the shell
+    # BEFORE the command runs, so a trailing `2>/dev/null` on the same simple command is applied
+    # too late and the error reaches the real stderr — measured here, same trap as :211-213. A
+    # group or subshell redirect is applied to the whole thing and does suppress it.
+    ( : > "$_SF_RQ_STATE/teammate-skip/$(_sf_slug "$SID")" ) 2>/dev/null || true
+    log_idl passed "request-skip-teammate"
+    return 0
+  fi
+
+  # SKIP 2 — ALREADY HANDED OFF. The tomb sits BESIDE THIS TRANSCRIPT, never at the global lock:
+  # the tomb is per-session (lr-transplant writes `<sid>.HANDOFF.json` into the session's own
+  # project dir), so a global path would let one handed-off session mute the whole fleet.
+  if [ -n "$TP" ] && [ -e "$(dirname "$TP")/$SID.HANDOFF.json" ]; then
+    log_idl passed "request-skip-handed-off"
+    return 0
+  fi
+
+  # IDEMPOTENCE, before the write. StopFailure RE-FIRES for one sid (22 of 42 sessions, up to 30x —
+  # the header's own measurement), and the poller DELETES a request when it drains it, so without
+  # this a re-fire after a drain re-enqueues a recovery that already ran. This is not the race gate
+  # — the O_EXCL create below is — and it cannot be: under concurrency both writers would produce
+  # the identical per-sid request, which is benign. What it bounds is the SEQUENTIAL re-fire.
+  enrich="$(_sf_rq_enrich "$TP")"
+  uuid=""; reset=""; rlt=""
+  IFS="$(printf '\t')" read -r uuid reset rlt <<EOF
+$enrich
+EOF
+  duuid="$(_sf_slug "$uuid")"
+  # NEVER a constant fallback: that would latch the FIRST death for the life of the session and go
+  # silent on every later one (lr-lib.sh:203-206 names the same trap). The payload-derived key is
+  # what the page latch at :261 already uses, and the cap message carries the reset time, so it
+  # changes when the death does.
+  [ -n "$duuid" ] || duuid="p-$(_sf_slug "$(printf '%s' "$LAST" | cut -c1-64)")"
+  [ "$duuid" = "p-" ] && duuid="p-nokey"
+  if [ -e "$latchdir/$SID.$duuid" ]; then
+    log_idl passed "request-latched"
+    return 0
+  fi
+
+  # THE RECORD. The four keys the consumer actually reads are `sid` `target` `source_pane`
+  # `requested_by` (lr-reset-poller.sh:674,677) and all four are present and non-empty except
+  # `source_pane`, which the poller itself passes conditionally (`${_rq_pane:+--source-pane …}`).
+  # `tier` and `origin_class` are deliberately UNSET rather than derived — see the budget note
+  # above; the poller re-derives the tier through lr-lib, which is the one spelling that may exist.
+  tmp="$rqdir/.$SID.$$.tmp"; dest="$rqdir/$SID.json"
+  # `$$` in the temp name, which the brief did not ask for: `.<sid>.tmp` alone is a SHARED path for
+  # two concurrent re-fires of one sid, and two interleaved writers there produce a corrupt request
+  # that the `mv` then publishes atomically. Still dot-prefixed and still `.tmp`, so the poller's
+  # `"$REQUESTS"/*.json` glob cannot see it either way.
+  # THE BRACES ARE LOAD-BEARING, exactly as at the teammate breadcrumb above: a failed OUTPUT
+  # redirection is the shell's own message, emitted before jq runs, so `jq … > f 2>/dev/null`
+  # leaks it to the real stderr. `{ …; } 2>/dev/null` is applied to the redirection too.
+  { jq -cn --arg sid "$SID" --arg target auto --arg pane "$PANE" \
+           --arg by "stop-failure-marker" \
+           --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')" \
+           --arg acct "$ACCOUNT" --arg cwd "$CWD" --arg tp "$TP" --arg err "$ERR" \
+           --arg reset "$reset" --arg rlt "$rlt" --arg duuid "$uuid" \
+      '{sid:$sid, target:$target, source_pane:$pane, requested_by:$by, ts:$ts,
+        account:$acct, cwd:$cwd, tier:"", transcript_path:$tp, error:$err,
+        reset_at_epoch:$reset, rate_limit_type:$rlt, death_uuid:$duuid,
+        origin_class:"unknown"}' > "$tmp"; } 2>/dev/null \
+    || { rm -f "$tmp" 2>/dev/null || true; log_idl abstained "request-encode-failed"; return 0; }
+  [ -s "$tmp" ] || { rm -f "$tmp" 2>/dev/null || true; log_idl abstained "request-encode-empty"; return 0; }
+  mv -f "$tmp" "$dest" 2>/dev/null \
+    || { rm -f "$tmp" 2>/dev/null || true; log_idl abstained "request-publish-failed"; return 0; }
+
+  # WRITE-THEN-LATCH, in that order and not the reverse. A latch taken FIRST that is then followed
+  # by a failed write is a permanent suppression of a request nobody ever made — the strongest
+  # possible wrong answer on this path. Taken second, the worst case is a duplicate request for one
+  # sid, which is the same file. O_EXCL, never check-then-write, for the reason :251-255 gives.
+  if ( set -C; : > "$latchdir/$SID.$duuid" ) 2>/dev/null; then
+    log_idl fired "request-written" \
+      "$(jq -cn --arg s "$SID" --arg r "$reset" '{sid:$s,reset_at_epoch:$r}' 2>/dev/null || printf '{}')"
+  else
+    # A concurrent writer won the create. The request it published is ours to the byte, so there is
+    # nothing to undo — we abstain from the KICK only, so one death produces at most one kick.
+    log_idl passed "request-latch-lost"
+    return 0
+  fi
+
+  # THE KICK, gated on the operator's flag and on nothing else. Bare `kickstart`, never `-k`: `-k`
+  # KILLS a running job, and a tick that is mid-transplant is exactly the one this is asking for.
+  # Never `load`/`unload` — this stays on the safe side of hooks/validate-bash.sh, which has no
+  # launchctl rule at all.
+  if [ -e "$_SF_RQ_STATE/autorecover.on" ]; then
+    "${STOP_FAILURE_LAUNCHCTL:-/bin/launchctl}" kickstart \
+      "gui/$(id -u 2>/dev/null || echo 0)/com.reso.lr-reset-poller" >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
+case "$ERR" in
+  rate_limit|rate_limit_error)
+    if [ "${CC_SF_REQUEST:-on}" != off ] \
+       && [ ! -e "$LIM/.off" ] \
+       && [ ! -e "$_SF_RQ_STATE/.request-off" ]; then
+      _sf_request
+    fi ;;
+esac
+
 # Bounded: past the cap the FACT is long established and further lines only cost disk. The marker
 # stays in place — capping the file must never look like the cause resolved.
 if [ "$LINES" -ge "$CAP" ]; then
@@ -294,13 +503,21 @@ fi
 
 # One short jq-encoded line. jq-encoded for the same reason the IDL is: a value carrying a quote or
 # a newline must never be able to emit a malformed line that makes a reader's slurp read as EMPTY.
-jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')" \
-       --arg err "$ERR" --arg acct "$ACCOUNT" --arg cfg "$CFG" --arg sid "$SID" \
-       --arg cwd "$CWD" --arg tp "$TP" --arg event "$EVENT" --arg pane "$PANE" \
-       --arg last "$(printf '%s' "$LAST" | cut -c1-200)" \
-  '{ts:$ts,error:$err,account:$acct,config_dir:$cfg,session_id:$sid,cwd:$cwd,
-    transcript_path:$tp,hook_event_name:$event,pane:$pane,last_assistant_message:$last}' \
-  >> "$MARKER" 2>/dev/null || true
+#
+# THE BRACES (W5-F). `… >> "$MARKER" 2>/dev/null` does NOT silence a failed APPEND: a failed
+# redirection is the SHELL's own message, emitted before jq ever runs, so the trailing `2>/dev/null`
+# is applied too late — the same trap :211-213 already names for the input side. Reproduced here on
+# 2026-09-20 with an EXISTING but unwritable marker dir (mkdir -p exits 0 on it, so the abstain at
+# :201 never fires): the hook printed `…/authentication_failed__next.jsonl: Permission denied` to
+# the real stderr on the death path, against this suite's own SILENCE contract. A group redirect is
+# applied to the redirection too, which is what makes the contract true rather than merely stated.
+{ jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '?')" \
+         --arg err "$ERR" --arg acct "$ACCOUNT" --arg cfg "$CFG" --arg sid "$SID" \
+         --arg cwd "$CWD" --arg tp "$TP" --arg event "$EVENT" --arg pane "$PANE" \
+         --arg last "$(printf '%s' "$LAST" | cut -c1-200)" \
+    '{ts:$ts,error:$err,account:$acct,config_dir:$cfg,session_id:$sid,cwd:$cwd,
+      transcript_path:$tp,hook_event_name:$event,pane:$pane,last_assistant_message:$last}' \
+    >> "$MARKER"; } 2>/dev/null || true
 
 log_idl fired "marker-$([ "$FIRST" = yes ] && echo opened || echo appended)" \
   "$(jq -cn --arg p "$PANE" '{pane:$p}' 2>/dev/null || printf '{}')"
