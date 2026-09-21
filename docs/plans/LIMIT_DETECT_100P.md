@@ -1020,6 +1020,63 @@ onto next3. Its own recovery is a live specimen of the classes above; full recei
   `DUPLICATE` under load ~200–300 (1 in ~6 full runs, 5/5 green in isolation, reproduces on pristine
   HEAD). A flake hunt needing repeated full-suite runs at load, genuinely separable from the above.
 
+- 2026-09-20T19:5xZ · **BOTH OF W3'S HANDOVERS ARE NOW FIXED, and my own 19:0xZ entry above was
+  WRONG about the first one.** Asked for a conviction number per open decision, I researched all
+  three and two crossed 90 %, so they were implemented rather than handed back.
+
+  **`lr_holder_count` — the "two consumers want different cardinalities" reading is REFUTED.** The
+  19:0xZ entry concluded the naive fix was wrong because `--duplicates` legitimately wants PANE-row
+  cardinality, and that the cure was to split the predicate — a design change for
+  `LIMIT_RECOVER_100P`. The header settles it the other way: `--duplicates` is **"sessions held by
+  MORE than one live process"** (`lr-fleet.sh:13-15`), its gate at `:974` IS `lr_holder_count`, and
+  its message at `:977` prints `$nrows` SEPARATELY. So there was never a second requirement and no
+  gate change: all three failing tests were fixtures coupled to the bug, each using `row X; row Y`
+  with `row()`'s default pid — one process dressed as two. Landed: the predicate is now the
+  cardinality of `{registry live pids} ∪ {resume leaves}`; the three fixtures spawn two REAL
+  processes (the idiom the neighbouring `locate: two live processes` case already used); and the
+  pane-overwrite case has its own row. **`bats tests/lr-fleet.bats` 1..66, 66 ok**, with the new
+  case `not ok` against pristine `lr-lib.sh` — a genuine red-proof. The three corrected fixtures
+  pass under BOTH predicates, so they are **equivalence guards, not red-proofs**; recorded because
+  their green must not later be read as coverage of this defect.
+  **What I got wrong and why it is worth recording:** I read three red tests as expressing a
+  requirement, when they were expressing a dependency on a bug. The discriminator was one
+  documented sentence in the file's own header, and I reached for the tests' behaviour before the
+  contract's text.
+
+  🚨 **THE D7 "FLAKE" WAS THE SUITE COLLIDING WITH ITSELF, and it is 25 % of the file, not 1 run in
+  6.** W3 reported `D7 CONTROL: the reverse order` flipping to `DUPLICATE` at load ~200–300, 1 in ~6
+  full runs, green in isolation, reproducing on pristine HEAD — suspect `lr_resume_procs` under
+  churn. The mechanism was right and the cause was not: nothing races, and **"load" means
+  CONCURRENCY.** Three facts compose: `SID` is a **suite-wide constant** (`:27`); `:181`/`:195` spawn
+  REAL `--resume "$SID"` processes that live **30 s**; and `lr_resume_procs` (`lr-lib.sh:461`) greps
+  the **real process table with no seam**. So run A's sleeper is a second holder to run B. Two bats
+  roots are allowed and ship-land's gate runs at `CC_BATS_MAX_ROOTS=0` regardless, so **a lander can
+  be convicted for a sibling's sleeper.**
+
+  | two runs of this file at once | run A | run B |
+  |---|---|---|
+  | before | **49 ok / 16 not ok** | **49 ok / 16 not ok** |
+  | after | **65 ok / 0 not ok** | **65 ok / 0 not ok** |
+
+  One variable changed. The first two failures were both holder-count cases, which is what named the
+  cause. **THE RULE WAS ALREADY IN THE FILE, twelve lines above the constant** — *"A fixture may
+  never name an identifier that can exist outside it"* — written by an author who hit this class and
+  zeroed the sid tail to cure it. A CONSTANT zeroed tail is still an identifier that exists outside
+  the fixture: **in every other concurrent run of the same fixture.** The cure was applied against
+  the fleet and never against the suite itself. The tail is now derived per test from
+  `BATS_TEST_TMPDIR`; the `52e35019` prefix 16 display assertions match on is untouched.
+
+  **THE CENSUS `ps` MERGE STAYS UNLANDED — recommendation, with the number: don't, 85 %.** Three
+  things moved it DOWN on re-examination. W6's bar is met (4/5 inside 0.30 s at load 23.2), so no
+  requirement is failing and the value is headroom only. **Lazy `resume_leaves` is a dead end** —
+  `leaves` feeds EVERY row's `procs` union (`bin/cc-limited:724`), so there is no run that skips it,
+  and a per-sid version would cost one `ps` per sid. And the fixture population is **4, not 5**:
+  `tests/watchdog-census.bats:360` is not a `cc-limited` consumer at all (it stubs a shell function
+  for `lead_alive`). Of the four, `tests/lr-fleet.bats:657` injects **`$$`** — giving it a
+  fabricated `lstart` in the merged table would corrupt registry liveness (`ps[pid] == stored`) for
+  rows that legitimately carry that pid. That is a concrete hazard, not a vague risk, and it is why
+  this one is the operator's rather than mine.
+
 ## 13. Cross-reference — `LIMIT_RECOVER_100P` § 9 landed the recovery side first (2026-09-20 00:1xZ, session 11569d45)
 
 Your wave-1 corpus was this session's research. Landed and LIVE on trunk at `1b2676f4c` (23:50Z),
