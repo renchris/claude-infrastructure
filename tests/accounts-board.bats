@@ -313,12 +313,19 @@ PY
 # Display CELLS, not characters, and deliberately re-implemented here rather than imported from
 # the subject: a width check that calls the subject's own measure agrees with it by construction
 # and would certify a broken one.
+# SGR-BLIND since 2026-09-22: the board carries its own colour (measured — the harness paints
+# a SessionStart systemMessage flat #999 and any SGR the payload carries overrides it), and an
+# escape sequence occupies ZERO columns. Counting the raw string would charge ~11 phantom cells
+# per coloured cell and fail every row on a board that renders perfectly. Stripping here rather
+# than calling the subject's own stripper keeps the re-implementation rule above intact.
 WIDTH_CHECK='
-import sys, unicodedata
+import sys, re, unicodedata
+sgr = re.compile("\x1b\\[[0-9;]*m")
 bad = []
 for i, l in enumerate(sys.stdin.read().splitlines(), 1):
-    w = sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in l)
-    if w > 76: bad.append((i, w, l))
+    p = sgr.sub("", l)
+    w = sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in p)
+    if w > 76: bad.append((i, w, p))
 for i, w, l in bad: print(f"BREACH line {i}: {w} cells: {l!r}")
 sys.exit(1 if bad else 0)'
 
@@ -441,4 +448,65 @@ json.dump({
   ],
 }, open(out, "w"))
 PY
+}
+
+# ── 2026-09-22: the board carries its own colour ────────────────────────────────────────────
+# Measured against the live CC 2.1.260 binary under a pty (docs/research/board-render-2026-09-22.md):
+# the harness paints a SessionStart `systemMessage` flat #999 grey, and ANY SGR the payload
+# carries survives and overrides it. The board was 18 rows of numbers, labels, prose and alarms
+# at one single weight, which is what the operator called "relatively unreadable". These four
+# tests pin the fix AND its escape hatch — the one failure worse than flat grey is a harness that
+# starts ESCAPING the sequences instead of rendering them, and `CC_BOARD_COLOR=off` is the lever
+# for that day. A kill switch nobody tests is a kill switch nobody can rely on.
+
+@test "22 narrow carries truecolor by default — the readability fix is ON without being asked" {
+  export CLAUDE_ACCOUNTS_JSON="$D/acct.json"; mk_cfg
+  run bash -c "cd '$REPO' && $(declare -f render_narrow); NARROW_FIXTURE='$NARROW_FIXTURE' \
+    render_narrow --readout --narrow --max-wait 0"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *$'\x1b[38;2;'* ]] || { echo "no truecolor in the board: $output"; false; }
+}
+
+@test "23 CC_BOARD_COLOR=off emits ZERO escapes — the kill switch actually kills" {
+  export CLAUDE_ACCOUNTS_JSON="$D/acct.json"; mk_cfg
+  run bash -c "cd '$REPO' && $(declare -f render_narrow); NARROW_FIXTURE='$NARROW_FIXTURE' \
+    CC_BOARD_COLOR=off render_narrow --readout --narrow --max-wait 0"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *$'\x1b'* ]] || { echo "escape survived the kill switch: $output"; false; }
+}
+
+@test "24 NO_COLOR is honoured — the standard outranks our own default" {
+  export CLAUDE_ACCOUNTS_JSON="$D/acct.json"; mk_cfg
+  run bash -c "cd '$REPO' && $(declare -f render_narrow); NARROW_FIXTURE='$NARROW_FIXTURE' \
+    NO_COLOR=1 render_narrow --readout --narrow --max-wait 0"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *$'\x1b'* ]] || { echo "NO_COLOR ignored: $output"; false; }
+}
+
+@test "25 narrow: colour does not shift a column — cells are padded PLAIN, then coloured" {
+  # RE-AIMED after its first form passed its own mutant (2026-09-22). Swapping two cells in
+  # `_nrow` moves the header WITH the row, because one builder emits both — so a column-order
+  # mutation is structurally undetectable and a test hunting it is an equivalence guard.
+  # The defect this layout can actually suffer is `f"{coloured:<8}"`: padding a string that
+  # already carries ~11 escape bytes pads to nothing, every column right of it collapses, and
+  # NOTHING else sees it — the width check only ever gets SHORTER, and a colour-off run is
+  # byte-identical to a correct one. So this runs with colour ON, strips the SGR, and requires
+  # the stripped rows to align with the stripped header. Mutant-verified: `_cell` returning
+  # `bc(txt, rgb).ljust(w)` reddens this test and this test alone.
+  export CLAUDE_ACCOUNTS_JSON="$D/acct.json"; mk_cfg
+  run bash -c "cd '$REPO' && $(declare -f render_narrow); NARROW_FIXTURE='$NARROW_FIXTURE' \
+    render_narrow --readout --narrow --max-wait 0 | python3 -c '
+import sys, re
+sgr = re.compile(chr(27) + r\"\\[[0-9;]*m\")
+lines = [sgr.sub(\"\", l) for l in sys.stdin.read().splitlines()]
+hdr = next((l for l in lines if \"account\" in l and \"strand\" in l), None)
+assert hdr, \"no header row carrying account+strand\"
+end = hdr.index(\"strand\") + len(\"strand\")
+rows = [l for l in lines if l is not hdr and (\"\u2591\" in l or \"\u2588\" in l)]
+assert rows, \"no data rows found\"
+for l in rows:
+    cell = l[end-6:end]
+    assert re.fullmatch(r\"\\s*(-|—|[0-9]+pp)\", cell), \"strand cell misaligned in %r: %r\" % (l, cell)
+'"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
 }
