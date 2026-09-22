@@ -47,7 +47,8 @@
 #   --launcher L        Explicit launcher name (e.g. claude3, or claude-prev for the stable
 #                       track). Overrides --account/--model launcher composition; still gets
 #                       --effort/--model/--extra args appended.
-#   --model M           opus|claude-opus-4-8 (launcher default) | fable|claude-fable-5 | other.
+#   --model M           opus (fresh fire → versions.opus_latest; --recycle → the bare alias, which the
+#                       pane's own binary resolves) | fable (→ frontier_access.model) | other: verbatim.
 #                       Since the 2026-08-01 consolidation FABLE IS A MODEL, NOT A NAME — there is
 #                       no claude-fableN launcher any more, so fable fires the SAME claudeN
 #                       entrypoint with `--model claude-fable-5` appended (this script prints the
@@ -9499,8 +9500,10 @@ case "$MODEL" in
     # the binary that actually runs — measured the same day, `--model opus` answers from
     # claude-opus-5 on 2.1.260 and from claude-opus-5-5 on 2.1.280 — so it cannot name a model its
     # own binary lacks. A fresh fire opens a NEW shell and keeps the SSOT's full id. Deliberately
-    # NOT extended to `fable`: FABLE_EFFECTIVE and the frontier spawn budget key on the full
-    # claude-fable-5* id, so an alias there would fire the tier uncounted.
+    # NOT extended to `fable`: this script's own frontier detectors (the recycle re-pick's
+    # exclusion, the fable account lane, probe_account, FABLE_EFFECTIVE) key on the resolved
+    # claude-fable-5* id, so an alias would fire the frontier tier as the general tier. The spawn
+    # budget is unaffected either way — frontier-spawn-gate counts `--model fable` from the command.
     if [ "$RECYCLE" = 1 ]; then
       MODEL=opus
     else
