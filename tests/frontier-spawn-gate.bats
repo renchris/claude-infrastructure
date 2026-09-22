@@ -149,7 +149,10 @@ count_of() { cat "$TMPDIR/frontier-gate-$1.count" 2>/dev/null || echo 0; }
   run bash -c "$(declare -f bash_call); bash_call M 'handoff-fire.sh --model fable' | bash '$HOOK' 2>&1"
   [ "$status" -eq 2 ]
   [[ "$output" == *"cap reached (6/6"* ]] || false
-  [[ "$output" == *"--model claude-opus-5"* ]] || false
+  # The FAMILY ALIAS, not a full id: handoff-fire resolves it per path (SSOT on a fresh fire, the
+  # running binary's alias on a recycle), so the advice cannot name a model an old pane refuses.
+  [[ "$output" == *"--model opus "* ]] || false
+  [[ "$output" != *"--model claude-opus-"* ]] || false
   # It must NOT tell a SESSION fire to "re-spawn this agent" — that names a tool the caller
   # did not use, and the agent then looks for a defect in the wrong place.
   [[ "$output" != *"Re-spawn this agent"* ]]

@@ -135,7 +135,7 @@ if [ "${active:-}" = "true" ] && [ -n "${end:-}" ] && [ ! "$today" \> "$end" ]; 
   case "$cnt" in ''|*[!0-9]*) cnt=0 ;; esac
   if [ "$cnt" -ge "$cap" ]; then
     if [ "$path" = session ]; then
-      echo "frontier-spawn-gate: per-session frontier cap reached ($cnt/$cap — SSOT frontier_discovery_budget.max_fable_spawns_per_session; Agent spawns and frontier session FIRES share one budget). Do NOT retry: fire this session on the default tier instead (--model claude-opus-5), or park the remaining hole(s) in docs/research/FRONTIER_HOLES.md for a later session's wrap-up batch." >&2
+      echo "frontier-spawn-gate: per-session frontier cap reached ($cnt/$cap — SSOT frontier_discovery_budget.max_fable_spawns_per_session; Agent spawns and frontier session FIRES share one budget). Do NOT retry: fire this session on the default tier instead (--model opus — handoff-fire resolves it to versions.opus_latest, and to the binary's own alias on a recycle), or park the remaining hole(s) in docs/research/FRONTIER_HOLES.md for a later session's wrap-up batch." >&2
     else
       echo "frontier-spawn-gate: per-session frontier-spawn cap reached ($cnt/$cap — SSOT frontier_discovery_budget.max_fable_spawns_per_session). Do NOT retry: park the remaining hole(s) in docs/research/FRONTIER_HOLES.md; a later session's wrap-up batch runs them." >&2
     fi
