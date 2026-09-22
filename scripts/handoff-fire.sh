@@ -9490,7 +9490,22 @@ _ssot_scalar() { # <block> <key> → value, or empty. Same anchored awk the fron
 }
 case "$MODEL" in
   fable) MODEL="$(_ssot_scalar frontier_access model)"; MODEL="${MODEL:-claude-fable-5-1}" ;;
-  opus)  MODEL="$(_ssot_scalar versions opus_latest)";  MODEL="${MODEL:-claude-opus-5-5}" ;;
+  opus)
+    # A --recycle types its launcher into the pane's EXISTING shell, which runs the claude() body
+    # it sourced at birth — not today's ~/.zshrc. Measured 2026-09-22, hours after the launcher
+    # moved to 2.1.280: 14 live panes still exec'd 2.1.260, which refuses claude-opus-5-5 BY NAME
+    # (400 unrecognized_model). Resolving the SSOT's full id here would therefore relaunch every
+    # such pane into a dead session the moment opus_latest moves. The family alias is resolved by
+    # the binary that actually runs — measured the same day, `--model opus` answers from
+    # claude-opus-5 on 2.1.260 and from claude-opus-5-5 on 2.1.280 — so it cannot name a model its
+    # own binary lacks. A fresh fire opens a NEW shell and keeps the SSOT's full id. Deliberately
+    # NOT extended to `fable`: FABLE_EFFECTIVE and the frontier spawn budget key on the full
+    # claude-fable-5* id, so an alias there would fire the tier uncounted.
+    if [ "$RECYCLE" = 1 ]; then
+      MODEL=opus
+    else
+      MODEL="$(_ssot_scalar versions opus_latest)"; MODEL="${MODEL:-claude-opus-5-5}"
+    fi ;;
 esac
 
 # ---- account maps + activity proxy ---------------------------------------------------------
