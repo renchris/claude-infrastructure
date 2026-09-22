@@ -1,0 +1,19 @@
+---
+source_system: sharepoint
+source_id: 01BYE5RZ6QN3ZWBTUFOFD3GSPGOHDJD36K
+source_path: /sites/acme/Shared Documents/Finance/FY26 Budget.xlsx
+source_web_url: https://contoso.sharepoint.com/:x:/r/sites/acme/Shared%20Documents/Finance/FY26%20Budget.xlsx?d=w4f2a1b3c5d6e7f809a1b2c3d4e5f6071
+source_etag: "{4F2A1B3C-5D6E-7F80-9A1B-2C3D4E5F6071},7"
+source_modified: 2026-09-14T09:12:00Z
+source_modified_by: jane.doe@contoso.com
+source_version: 7
+content_sha256: 0000000000000000000000000000000000000000000000000000000000000001
+canonical_sha256: 0000000000000000000000000000000000000000000000000000000000000001
+rendered_sha256: 0000000000000000000000000000000000000000000000000000000000000001
+part: {kind: sheet, name: "Q3 Budget", index: 1, of: 2}
+converter: xlsx-native@1.2.0
+options_hash: sha256:0000000000000000000000000000000000000000000000000000000000000001
+sensitivity_label: General
+status: current
+aliases: [FY26 budget, FY-26 budget, PO forecast, purchase order forecast]
+---

@@ -1,0 +1,31 @@
+term|main-doc hits|axis-report hits
+OneNote|2|4
+Loop|2|11
+Planner|0|0
+Forms|0|8
+Whiteboard|0|0
+Viva|0|0
+Copilot|0|7
+shared mailbox|0|0
+sharedWithMe|0|0
+remoteItem|0|1
+hostedContent|0|0
+recording|0|2
+zip|1|21
+onboard|0|3
+retire|2|2
+alert|0|1
+alerting|0|0
+observab|1|4
+SLO|1|33
+Windows|0|5
+secret|0|1
+credential|1|2
+keychain|0|0
+gitignore|0|7
+migration|0|5
+worktree|0|3
+cwd|0|2
+heartbeat|0|0
+liveness|0|0
+deltashowremovedasdeleted|0|5

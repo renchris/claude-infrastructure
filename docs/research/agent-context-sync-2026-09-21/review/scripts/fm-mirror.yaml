@@ -1,0 +1,29 @@
+source_system: sharepoint
+source_id: 01ABCDEF…                  # Graph driveItem id — the only rename-stable identity
+source_path: /sites/acme/Shared Documents/Finance/FY26 Budget.xlsx
+source_web_url: https://contoso.sharepoint.com/:x:/r/sites/acme/…
+source_etag: "{4F2A…},7"
+source_modified: 2026-09-14T09:12:00Z
+source_modified_by: jane.doe@contoso.com
+source_version: 7                     # cTag counter where present, else version-history ordinal
+content_sha256: 9f2c1d…               # downloaded bytes
+canonical_sha256: 51e0b3…             # normalized parts / extracted text — the dedup key
+rendered_sha256: 3ab77e…              # this markdown — what L4 pins
+part: {kind: sheet, name: "Q3 Budget", index: 1, of: 2}
+converter: xlsx-native@1.2.0
+options_hash: sha256:…
+sensitivity_label: General
+status: current                       # current | deleted | superseded | unreadable
+aliases: [FY26 budget, FY-26 budget, PO forecast, purchase order forecast]
+---
+
+**Quiescence gate:** convert only when `lastModifiedDateTime` is older than N minutes, `pendingOperations` is absent and (SharePoint) `publication.level` is `published` — otherwise autosave, check-out and half-uploaded states get mirrored. **Unreadable sources become explicit `UNREADABLE` stub pages**, never empty conversions: Graph `/content` returns sensitivity-label-encrypted files as encrypted bytes, and a converter fed those produces an empty page with exit 0.
+
+**Converter contract, enforced at the land gate:** version pinned and recorded by *running* `--version`; idempotent (delta may return the same item twice; write whole files, never append); a double-conversion CI check that quarantines any converter whose two runs differ; NFC for identity with raw bytes in provenance; slugifier strips `[ ] ( ) # { }`, maps dashes, collapses whitespace, strips diacritics, and **checks case-insensitive collisions** (APFS silently overwrote `API-Spec.md` with `api-spec.md`, measured) disambiguating with the source id, never a counter.
+
+### 4.5 L4 — curation, incrementally
+
+Two tiers with a hard boundary: `docs/mirror/` is a pure function of the source and is never hand-edited (a hand edit makes `rendered_sha256` meaningless and forces a three-way merge nobody maintains); `docs/topics/` is the answer layer, organized by **entity** (client / workstream / decision / person) because corporate queries are entity-shaped, with every claim citing a mirror path.
+
+Curated-page frontmatter carries the dependency edges:
+
