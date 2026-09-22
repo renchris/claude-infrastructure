@@ -62,6 +62,26 @@ _resolve() {
   [[ "$output" == *"pane=[]"* ]] || { echo "$output"; false; }
 }
 
+@test "resolve: SELF also exports LRH_SELF_PANE — the probe's pane, never the recycle's" {
+  # SOURCE_PANE stays empty (the case above pins that, and downstream reads it as "recycle
+  # yourself"). But killed_inflight is measured by a probe gated on a pane id, so with NO id at all
+  # the SELF path recorded nothing and lr-ingest-verify clause A6 refused every self-recovery.
+  # Two names, two jobs: SOURCE_PANE selects the RECYCLE mechanics, LRH_SELF_PANE only lets the
+  # read-only probe name a subject.
+  run bash -c 'set -e; . "$1"; SID=s; CLAUDE_CODE_SESSION_ID=s; KITTY_WINDOW_ID=198; SOURCE_PANE=""; LRH_SELF_PANE=""; lrh_resolve_implied_pane; echo "src=[$SOURCE_PANE] self=[$LRH_SELF_PANE]"' _ "$BATS_TEST_TMPDIR/resolver.sh"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"src=[]"* ]] || { echo "SOURCE_PANE must stay empty on SELF: $output"; false; }
+  [[ "$output" == *"self=[198]"* ]] || { echo "$output"; false; }
+}
+
+@test "resolve: SELF under iTerm2 strips the wNtNpN prefix from ITERM_SESSION_ID" {
+  # ITERM_SESSION_ID is 'w0t0p0:<uuid>' and the pane id is only the tail; handing the probe the
+  # whole string would name no pane and silently reproduce the unrecorded-count bug.
+  run bash -c 'set -e; . "$1"; SID=s; CLAUDE_CODE_SESSION_ID=s; unset KITTY_WINDOW_ID; ITERM_SESSION_ID="w0t0p0:505"; SOURCE_PANE=""; LRH_SELF_PANE=""; lrh_resolve_implied_pane; echo "self=[$LRH_SELF_PANE]"' _ "$BATS_TEST_TMPDIR/resolver.sh"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"self=[505]"* ]] || { echo "$output"; false; }
+}
+
 @test "resolve: DRIVER — exactly one live registry row names the pane" {
   run bash -c 'set -e; . "$1"; SID=s; SOURCE_PANE=""; lr_registry_live_rows() { printf "126\t4242\tclaude-next\t/w\n"; }; lrh_resolve_implied_pane; echo "pane=$SOURCE_PANE"' _ "$BATS_TEST_TMPDIR/resolver.sh"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
