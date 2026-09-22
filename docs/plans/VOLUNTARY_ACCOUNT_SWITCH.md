@@ -346,7 +346,7 @@ not fold them into a teammate's diff.
 | `verdict="RECOVERED"` is an initialiser set before any outcome is read | `lr-fleet.sh:807` | **DRIVEN**, with its limit stated: now empty-initialised and assigned explicitly in `0)`, so it is fail-closed. **No red proof** — every arm assigns today, so no input separates the two versions; the defect is a claim about the arm nobody has written yet. |
 | Nothing ever reaps a transplant lock — no TTL, no release verb | tree-wide absence | **FILED** `4f8c73bbdb35` — needs a TTL policy and a release verb, not an edit. |
 | A lock-less second hop erases the first hop from custody | `lr-transplant.sh:218-231` | **FILED** `ac7bdd4b2f9d`. |
-| The ingest verifier has never returned clean — 3 of 3 read `rc 1`, first failure A6 | `INGEST-VERIFIED.txt` census | **FILED** `1c4905d6b2ff` — an investigation (is the verifier wrong, or the ingest?), not a fix. |
+| The ingest verifier has never returned clean — 3 of 3 read `rc 1`, first failure A6 | `INGEST-VERIFIED.txt` census | **FILED** `1c4905d6b2ff` — an investigation (is the verifier wrong, or the ingest?), not a fix. **ANSWERED 2026-09-22: the INGEST was wrong.** No writer ran on the self/explicit-`--in-place` paths, and every bundle came from one of those (0 `probed` records in 7 state logs). Cured by `a30670d8` + `e508b234` + `22ae2a1f`, all on trunk. Verdict, evidence and residuals: `docs/research/lr-ingest-verify-a6-verdict-2026-09-22.md`. |
 
 ## 10. Definition of done
 
