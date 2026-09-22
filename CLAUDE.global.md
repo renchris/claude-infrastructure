@@ -711,8 +711,9 @@ work.** Everything else the agent drives:
 
   | | Test | Action |
   |---|---|---|
-  | **♻️ Recycle** | Everything of value is already on disk (committed · plan · memory · packet). The context holds no judgment a successor could not re-derive. **A different worktree does NOT disqualify this** — see below. | `handoff-fire.sh --recycle` — same pane, fresh context. The cheapest case and the common one. A new worktree/dir rides along: `--recycle --worktree <name>` (or `--cwd`). |
-  | **📤 Handoff** | Work remains AND it needs a setup THIS PANE CANNOT BECOME — a different **account** or **model** (both are launch-time identity), or this pane should retire. | `Skill(handoff)` — build the bridge, then fire. Never hand-type the chain. |
+  | **♻️ Recycle** | Everything of value is already on disk (committed · plan · memory · packet). The context holds no judgment a successor could not re-derive. **Neither a different worktree NOR a different ACCOUNT disqualifies this** — see below. | `handoff-fire.sh --recycle` — same pane, fresh context. The cheapest case and the common one. A new worktree/dir rides along: `--recycle --worktree <name>` (or `--cwd`); a new **account** rides along the same way: `--recycle --account <acct>`. |
+  | **🔀 Switch in place** | Work remains, the context IS still the asset, and the only thing wrong is WHICH ACCOUNT is paying for it (this one is walled, or about to be, or a peer's weekly resets sooner). | `cc-lr switch` — moves THIS pane's session to another account, same session uuid, full transcript preserved. Not a recycle: nothing is re-derived, because nothing is lost. |
+  | **📤 Handoff** | Work remains AND it needs a setup THIS PANE CANNOT BECOME — a different **model** (launch-time identity), or this pane should retire. | `Skill(handoff)` — build the bridge, then fire. Never hand-type the chain. |
   | **⏸ Hold** | The context IS the asset: a live exchange, a half-formed judgment, an investigation whose *dead ends* are the value and are nowhere on disk. | **Do not cut.** Finish the thought, PERSIST it, then recycle at the natural seam. |
 
   **The Hold test, stated so it cannot become an excuse:** ask *"what would a successor reading only
@@ -732,7 +733,31 @@ work.** Everything else the agent drives:
   756`, was correctly refused, and sat idle from 05:39 on while the work finished elsewhere.
   `--recycle --worktree <name>` now provisions the worktree through the ordinary fire machinery and
   relaunches THE SAME PANE into it. **Reach for Recycle first; Handoff is for what a pane cannot
-  become** — a different account or model, which are fixed at launch.
+  become** — a different MODEL, which is fixed at launch.
+
+  🚨 **"It needs a different ACCOUNT" is NOT a reason to Handoff either — and unlike the worktree
+  clause above, that half was never a tool limit, it was simply FALSE** (corrected 2026-09-22). The
+  row used to read *"a different **account** or **model** (both are launch-time identity)"*. The
+  model half is true. The account half was refuted by the same sentence that settled the model half
+  and nobody carried the refutation across: `docs/plans/NONLIMIT_RESUME_LADDER.md:707-711` — *"A
+  recycle is exit-then-relaunch in the same pane — a NEW process — so launch-time identity is
+  honoured, not violated."* Launch-time identity is honoured by **relaunching**, and a recycle
+  relaunches; the pane is not the process. **Why this one mattered more than an ordinary stale
+  line:** no hook can outrank an instruction the model reads every turn, so for as long as it stood,
+  every session on this machine was told at every turn that its own account could not change, and
+  none ever tried. Two verbs, and the choice between them is whether the CONTEXT is worth keeping:
+
+  - **Fresh context ⇒ RECYCLE.** `handoff-fire.sh --recycle --account <acct>` — an explicit
+    `--account` is honoured and never second-guessed (`handoff-fire.sh:8847`); with no `--account`,
+    `recycle_repick()` (`:9436`, wired `:9742`, `tests/handoff-recycle-repick.bats` 25 tests) routes
+    it. This has shipped and been tested the whole time the row said it was impossible.
+  - **Context preserved ⇒ `cc-lr switch`.** Moves THIS pane's session to another account keeping the
+    same session uuid and the full transcript — the case a recycle cannot serve, because ~75% of
+    post-idle work is continuation a fresh session cannot reproduce.
+
+  **Do not restore the old wording.** If a future session finds an account change refused, that is a
+  bug in the verb or a genuine gate — read the refusal, name it, and fix it there; a refusal bounds
+  the TOOL, never the world.
 - **✅ is a safe-to-close assertion, not a vibe.** Claim it only with: clean tree · landed on trunk,
   verified BY CONTENT (`git ls-tree` present + `git diff` empty on your paths — a count reads 0
   after a sibling rebase and proves nothing) · your diff's gates run green *this turn* · frozen-DoD
