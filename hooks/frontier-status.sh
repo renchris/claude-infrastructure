@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # frontier-status.sh — SessionStart one-liner: frontier-window + holes-ledger nudge.
 #
-# Routing guidance for the Fable-opt-in discipline (2026-06-09): default model is
-# Opus 4.8 (lead_default in model-config.yaml); the frontier tier is opt-in only.
+# Routing guidance (discipline dates from 2026-06-09): the default model is
+# roles.lead_default in model-config.yaml; the frontier tier (versions.frontier_latest)
+# is not opt-in — it is Follow-On Gate F2's third branch (CLAUDE.global.md § Frontier Tier Routing).
 # Prints AT MOST one line:
 #   - window open  → status + open-hole count + the two skills + launcher
 #   - window closed but OPEN holes exist in this project → parked-holes reminder
