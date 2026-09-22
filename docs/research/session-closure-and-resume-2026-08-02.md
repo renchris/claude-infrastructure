@@ -216,3 +216,43 @@ nothing:
   `set -euo pipefail` would have aborted handoff-fire outright on the **iTerm2** path, because
   `cc-in-kitty`'s normal answer for "not kitty" is exit 1 — a probe whose honest negative verdict kills
   its caller.
+
+---
+
+## Addendum — 2026-09-22: still identical 7 weeks on, and the HOLD GUARD now works
+
+One data point, added so the next session does not re-derive it: **`--recycle` still fails the same
+way**, 51 days after this document was written and after the pane-proof fix above.
+
+Observed on pane 111 (kitty), a clean `✅` recycle at the end of a completed mandate:
+
+```
+→ recycle armed for 111: watcher pid 30480 (session-detached, heartbeat verified)
+→ pane-reachable: 111 enumerated by 'it2 session list --json' (shape=json, CC_TERM=kitty)
+→ nudge@60s  HELD (unknown): composer is not a stranded /exit — a CR here would submit someone else's buffer
+→ nudge@150s HELD (unknown): composer is not a stranded /exit — …
+→ nudge@300s HELD (unknown): composer is not a stranded /exit — …
+```
+
+The pane was reachable, the watcher's heartbeat verified, the relaunch command correct — and the
+`/exit` never reached the composer. The session stayed alive; the watcher parked until killed.
+
+**The new part, and it is good news: the guard held instead of corrupting the pane.** The three
+`nudge … HELD (unknown)` lines are the watcher REFUSING to press Enter because it could not confirm
+the composer holds a stranded `/exit`. That is exactly the failure `sigterm-forensics-2026-08-25.md`
+§191 recorded from the other side — pane 30's `/exit` submitted **corrupted**, with a kitty
+shell-probe token prepended to the payload. So the corruption path has been closed even though the
+recycle path has not: the mechanism now fails SAFE (session survives, nothing submitted) rather than
+fails DIRTY (a CR into someone else's buffer).
+
+**What this changes for a caller.** A `--recycle` under kitty should be treated as *best-effort*:
+arm it, then CHECK. `handoff-fire.sh` reports `watcher pid … heartbeat verified`, which is a fact
+about the WATCHER and not about the exit — the same shape as
+`docs/lessons/a-gate-refusal-is-not-a-gate-result.md`. If the pane is still alive a minute later,
+the recycle did not happen; kill the parked watcher (it can never fire on its own) and either
+continue or let the operator close the pane. **Do not hand-type `/exit`** to force it — that is the
+teardown path CLAUDE.md forbids, and it is what the guard above exists to prevent.
+
+Not filed as a backlog row: the diagnosis is already in this document plus
+`kitty-selfclose-chain-2026-08-04.md` (L13: zero close paths have ever reached the kitty close leg)
+and `sigterm-forensics-2026-08-25.md`. What is missing is not analysis.
