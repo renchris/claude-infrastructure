@@ -9490,7 +9490,7 @@ _ssot_scalar() { # <block> <key> → value, or empty. Same anchored awk the fron
 }
 case "$MODEL" in
   fable) MODEL="$(_ssot_scalar frontier_access model)"; MODEL="${MODEL:-claude-fable-5-1}" ;;
-  opus)  MODEL="$(_ssot_scalar versions opus_latest)";  MODEL="${MODEL:-claude-opus-5}" ;;
+  opus)  MODEL="$(_ssot_scalar versions opus_latest)";  MODEL="${MODEL:-claude-opus-5-5}" ;;
 esac
 
 # ---- account maps + activity proxy ---------------------------------------------------------
