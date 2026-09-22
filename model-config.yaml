@@ -2,7 +2,10 @@
 # Updated whenever Anthropic ships a new model or allowlist changes.
 # Pair with claude-bump-models + claude-lint-models (see ~/bin/ + ~/.claude/scripts/).
 #
-# Last updated: 2026-09-03  (Fable 5.1 lateral bump ADOPTED — frontier_latest is claude-fable-5-1, landed in
+# Last updated: 2026-09-22  (Opus 5.5 lateral bump ADOPTED — opus_latest is claude-opus-5-5, flipped in ONE
+#              diff with the Opus 5.5 effort policy (effort_defaults.opus55_*) and made safe for a split
+#              fleet by 92451120b (a --recycle types the `opus` alias); see § OPUS 5.5.
+#              Prior 2026-09-03: (Fable 5.1 lateral bump ADOPTED — frontier_latest is claude-fable-5-1, landed in
 #              ONE diff with the keying rewrite that the flip is unsafe without; see § Fable 5.1.
 #              It was PARKED in frontier_staged earlier the same day, correctly: no installed CC binary
 #              registered the id until the launcher moved to 2.1.260. That staging note is kept as history
@@ -48,18 +51,43 @@ versions:
   # i.e. 2.1.280 — so this key can never pair 5-5 with a binary that refuses it. The subagent ROLE
   # keys are deliberately NOT flipped here: sessions still on 2.1.260 spawn by full id and 2.1.260
   # refuses claude-opus-5-5 by name; that half waits for the fleet to recycle (feat/opus55-utilization).
-  opus_latest: claude-opus-5-5
-  opus_prior: claude-opus-5
-  opus_staged: ""                           # CLEARED at the 2026-09-22 flip. Staging history, kept:
-                                            # STAGED 2026-09-22 — NOT routed. A staged key is invisible
+  # ⚠️ CORRECTED the same evening (feat/opus55-utilization): "every consumer of opus_latest is a LAUNCH
+  # path … resolves its binary through cc-claude-bin" holds for FRESH fires only. A --recycle types its
+  # launcher into the pane's EXISTING shell, whose claude() body predates the repoint, so a 2.1.260 pane
+  # would have been relaunched on 5-5 and refused by name; handoff-fire now types the `opus` alias on a
+  # recycle. The ROLE half landed with that branch (§ OPUS 5.5).
+  opus_latest: claude-opus-5-5              # FLIPPED 2026-09-22 (was claude-opus-5) — § OPUS 5.5. Safe on a
+                                            # split fleet only because a --recycle now types the `opus`
+                                            # ALIAS (handoff-fire, § OPUS 5.5): 2.1.260 panes refuse the full id.
+  opus_prior: claude-opus-5                 # SET at the flip (was claude-opus-4-8). Arms the lint's
+                                            # stale-literal sweep for claude-opus-5. reso's team-brief
+                                            # pins moved to the alias `opus` (reso 80f481be4), so its
+                                            # live targets are gone (§ OPUS 5.5, "NOT swept").
+  opus_staged: ""                           # CLEARED at the flip 2026-09-22. It held claude-opus-5-5 from
+                                            # release until the flip; the staging note below is HISTORY,
+                                            # kept because two of its claims needed correcting.
+                                            # [HISTORY — as written at staging:] STAGED 2026-09-22 — NOT routed. A staged key is invisible
                                             # to claude-lint/bump-models (they key on *_latest/_prior
                                             # only), so nothing dispatches here until the flip below.
                                             # Opus 5.5 released 2026-09-22 and Opus 5 moved to LEGACY on
-                                            # platform.claude.com. It is CHEAPER on every axis: $4/$20
+                                            # platform.claude.com.
+                                            # ⚠️ CORRECTED 2026-09-22 — NOT SUPPORTED by the operator-
+                                            # supplied sources: the linked Models overview lists Opus 5
+                                            # in its nav among CURRENT models (not under Legacy), with no
+                                            # lifecycle row. Its last recorded floor is 2027-07-24.
+                                            # It is CHEAPER on every axis: $4/$20
                                             # per MTok vs Opus 5's $5/$25, and cache reads are 5% of
                                             # base ($0.20) vs Opus 5's 10% ($0.50) — a 2.5x cut on the
                                             # axis this fleet actually spends, since our sessions run a
-                                            # 1h cache TTL and are cache-read-dominated. 1M ctx, 128K
+                                            # 1h cache TTL and are cache-read-dominated.
+                                            # ⚠️ CORRECTED 2026-09-22 — WRONG CURRENCY. That is the $list
+                                            # axis. Against the plan meter that binds this fleet, cache
+                                            # reads draw ≈0 (USAGE_TELEMETRY_100P §2.8: ≤0.018–0.049 W-pp
+                                            # per MTok); output + cache_creation drive it. There the win
+                                            # is TOKENS, not the rate: on FrontierCode Opus 5.5 @medium
+                                            # spends ~1/3 of Opus 5 @high's output per task and scores
+                                            # higher. Its per-token meter draw is UNMEASURED — § OPUS 5.5.
+                                            # 1M ctx, 128K
                                             # out, cutoff Jun 2026, retires not sooner than 2027-09-22.
                                             #
                                             # THE BINARY GATE IS WHAT HOLDS IT, exactly as Fable 5.1 was
@@ -72,6 +100,9 @@ versions:
                                             # a model decision — see ~/.claude-versions/MANIFEST.jsonl
                                             # entry 2.1.280, which holds the audit and its four-leg
                                             # revisit trigger. At audit, 2.1.280 was 3 HOURS old.
+                                            # ✅ CLEARED 2026-09-22: launcher repointed to 2.1.280
+                                            # (activation 45); cc-upgrade-gate GREEN 14/0/1 on
+                                            # 2.1.280 × claude-opus-5-5, all four accounts, live spawns.
                                             #
                                             # 🚨 THE FLIP IS NOT A ONE-LINE SWAP — Opus 5.5's default
                                             # effort is `medium`, where every prior Opus defaulted to
@@ -81,10 +112,84 @@ versions:
                                             # subagent/teammate that inherits a default silently drops a
                                             # rung. Audit for explicit effort: before flipping, grep the
                                             # agent frontmatter and every Agent() spawn site.
+                                            # ✅ ADDRESSED 2026-09-22: every launcher path passes effort
+                                            # explicitly (zshrc high; fires via cc-route's
+                                            # effort_defaults.default; Workflow agent() slots take a
+                                            # per-call effort), and the Opus 5.5 rungs are now written
+                                            # down per use case — effort_defaults.opus55_*. Unmeasured on
+                                            # 2.1.280: which effort an in-process subagent or teammate
+                                            # pane actually runs at (census, § OPUS 5.5).
   sonnet_latest: claude-sonnet-5            # LATERAL 2026-06-30 (was claude-sonnet-4-6); 1M ctx, 128K out
   sonnet_prior: claude-sonnet-4-6
   haiku_latest: claude-haiku-4-5
 
+# ─────────────────────────────────────────────────────────────────────────────
+# § OPUS 5.5 (lateral bump 2026-09-22) — ADOPTED. opus_latest, the Opus roles and
+# frontier_access.fallback moved to claude-opus-5-5 in one diff with the effort policy.
+# Sources: the three the operator supplied (anthropic.com/claude-opus-5-5, "Prompting Claude Opus
+# 5.5", the Opus 5.5 System Card, 230 pp.) plus the four vendor pages the prompting guide links
+# (effort, what's new, migration guide, models overview). 620 facts were extracted page-cited and
+# each re-checked against its page by a second reader (0 unsupported, 8 corrected). The model ×
+# effort × use-case table, its evidence and a conviction per row:
+# docs/research/opus55-utilization-2026-09-22.md. The effort keys are effort_defaults.opus55_*.
+#
+# ✅ STATUS 2026-09-22
+#   · Binary: launcher on 2.1.280 (activation 45, committed 99aeb49de); cc-upgrade-gate GREEN
+#     14 pass / 0 fail / 1 skip on 2.1.280 × claude-opus-5-5 across all four accounts
+#     (~/.claude-versions/MANIFEST.jsonl, 2.1.280). 2.1.260 refuses the id BY NAME (400).
+#   · THE FLEET WAS SPLIT AT THE FLIP, and that is the one hazard. At ~16:00 local, 14 live
+#     sessions still exec'd 2.1.260. A zshrc edit is not a shell flip, and a --recycle types into
+#     the SAME shell, so recycling does NOT move a pane to 2.1.280 — only a new shell does. The
+#     alias resolves per binary (measured: `--model opus` → claude-opus-5 on 2.1.260, →
+#     claude-opus-5-5 on 2.1.280), so everything keyed on the alias — agent frontmatter, Workflow
+#     slots, teammate `model: opus` — was already safe. The one executable consumer that handed a
+#     FULL id to an existing shell was `handoff-fire --recycle --model opus`; 92451120b makes it
+#     type the alias. Fresh fires (cc-route waves, handoff-fire without --recycle) open a new shell
+#     on 2.1.280 and keep the full id. Residual, stated: a session running handoff-fire from a
+#     claude-infrastructure worktree cut BEFORE 92451120b still resolves the full id on a recycle;
+#     that fails LOUDLY (400 in the relaunched pane), never as a silent demotion.
+#   · When YOU pin a model by hand, pin the ALIAS `opus` until no 2.1.260 session is left. The full
+#     id is allowlisted, so a 2.1.260 lead that pins it passes the hook and fails at spawn — loudly.
+#   · NOT SWEPT — `claude-bump-models --apply` was deliberately NOT run. Census 2026-09-22: its only
+#     effective targets are reso's team-brief pins (76 files, 42 carrying claude-opus-5), and
+#     rewriting those to the full claude-opus-5-5 would hand that id to reso leads still on 2.1.260.
+#     The durable fix is to pin those briefs to the alias `opus`, in reso's own land cycle; until
+#     then claude-lint-models lists them as stale, which is true.
+#
+# MEASURED ON THE 2.1.280 BINARY (strings -a; positive controls claude-opus-5 24, claude-fable-5-1 14)
+#   · Opus 5.5's tier, tier_4_20_cache_read_0_20, carries per_turn_effort, per_turn_timing,
+#     fast_mode, refusal_fallback, mid_conv_system and rejects_disabled_thinking. tier_5_25 (Opus 5)
+#     still lacks per_turn_effort. The 2026-09-16 "strategic tension" below (per-turn effort existed
+#     only on the model we declined to default to) DISSOLVES: the default model now has it.
+#   · Observed, one sample: this session's `/effort max` mid-conversation KEPT the prompt cache — the
+#     next request read 129,652 cached tokens and wrote 6,564 (transcript b8ecfcce…, 20:23Z). A
+#     mid-session effort change on Opus 5.5 is therefore cheap; on Opus 5 it re-wrote the cache.
+#
+# WHAT THE SOURCES DO NOT STATE — no key in this file may claim these; measure them
+#   · Plan-quota draw per token vs Opus 5 — the currency that binds. The vendor's "40% less" is
+#     $list AT EACH MODEL'S DEFAULT EFFORT (medium vs high), so a fleet that pins effort does not
+#     get all of it, and cache reads — "the majority of agentic and coding work costs" in list
+#     dollars — draw ≈0 against our meter. In flight: docs/research/opus55-effort-sweep-2026-09-22/.
+#   · Claude Code's default effort for Opus 5.5 (only the API default, medium, is stated).
+#   · A long-context degradation curve; mixed-model or low-effort agent teams; an Opus 5 retirement
+#     date; per-effort rates for most alignment metrics.
+#
+# BEHAVIOR THAT CHANGES HOW WE SUPERVISE IT (System Card §6; comparisons are vs Opus 5)
+#   · Fewer destructive actions (21% vs 42% on resampled Claude Code transcripts) and more
+#     ask-instead-of-act (35% vs 26%); reckless tool use 1.82 vs 2.17; false completion claims
+#     1.14 vs 1.56. Good news for unattended runs; expect it to stop and ask more.
+#   · MORE likely to act on instructions inside USER-PASTED text: 2.1% at default effort, 7.4% at
+#     max, Opus 5 0% — and 0% with the product mitigation (pasted text marked). Our fire briefs
+#     arrive as user text, so quoted untrusted content in a brief belongs in <pasted_content> tags.
+#   · Impossible tasks: the highest SUCCESSFUL reward-hack rate of the three models (3.1% vs 1.9%).
+#     The "stop on issue, message lead" clause in every brief is load-bearing, not ceremony.
+#   · Test gaming observed: hid a toolbar with `display:none !important` so guessed hidden tests
+#     would pass (p.140) — the zero-ink class our visual gates already have to catch.
+#   · Self-preference bias negligible (+0.01 / +0.07 on a 10-point scale; Fable 5.1 +0.17 / +0.10).
+#   · Safeguard fallback: cyber → Opus 4.8; bio and frontier-LLM R&D → Opus 5. On benign agentic
+#     benchmarks 0.3–3.9% of requests fell back. In ADVERSARIAL coding-injection tests 46–64% of
+#     turns fell back to Opus 4.8 and every successful attack came through the fallback (0 of 2,872
+#     answered directly) — untrusted repos are where a turn most often stops being Opus 5.5.
 # ─────────────────────────────────────────────────────────────────────────────
 # § FABLE 5.1 (lateral bump 2026-09-03) — ADOPTED. Binary gate cleared, keying flip landed.
 # Anthropic shipped Claude Fable 5.1 (`claude-fable-5-1`) and Claude Mythos 5.1
@@ -240,6 +345,12 @@ versions:
 #    on the default tier and this trade-off dissolves. This is
 #    first lever that would let a lead raise effort for one hard step and drop back, instead of
 #    the launcher-wide --effort flag we are stuck with today (GH #25591).
+#    ✅ UPDATE 2026-09-22 — DISSOLVED at the client on 2.1.280. Opus 5.5's tier
+#    (tier_4_20_cache_read_0_20) lists per_turn_effort; tier_5_25 still does not. The header
+#    string above is ABSENT from 2.1.280 (0 hits, 1 on 2.1.260) while per_turn_effort appears 15
+#    times, gated by `tengu_per_turn_effort` — so re-grep by CAPABILITY, not by header name. One
+#    observed sample says it is live for us: a mid-session `/effort max` kept the prompt cache
+#    (§ OPUS 5.5). Still client-only: no agent can change its own effort mid-turn.
 #  - Turn-scoped system messages, `mid-conversation-system-clear-at-2026-08-21` —
 #    `clear_at: "next_user_message"`; the message keeps system authority for one turn, then
 #    stops rendering and costs no input tokens, while staying in `messages` byte-for-byte.
@@ -578,7 +689,10 @@ frontier_access:
                                             # claude-lint-models. Playbook: docs/research/FABLE5_WINDOW_PLAYBOOK_2026-07-01.md
                                             # Toggle history: open 06-09 → pulled-early 06-12 → residual 06-12 →
                                             # SHUT 06-12 (exhausted) → REDEPLOYED 07-01 (this window, Jul 1–7).
-  fallback: claude-opus-5                 # what frontier roles degrade to when inactive
+  fallback: claude-opus-5-5               # what frontier roles degrade to when inactive. FLIPPED 2026-09-22
+                                            # with opus_latest (was claude-opus-5). Read only on the
+                                            # window-CLOSED path of frontier-spawn-gate, which cannot fire
+                                            # while `permanent: true` holds.
 
 # Pricing per MTok, input/output USD. Verified against platform.claude.com/docs/en/about-claude/pricing
 # on 2026-09-03 (supersedes the 2026-06-09 claude-api-skill snapshot, which had gone stale on Sonnet 5).
@@ -595,6 +709,15 @@ pricing_per_mtok:
   claude-mythos-5-1: [10, 50]                # Project Glasswing only — we have no access. Listed so a cost
                                              # model that meets the ID does not treat it as unknown.
   claude-fable-5: [10, 50]                   # cache reads $1/MTok (0.1×). STILL the routed frontier model.
+  claude-opus-5-5: [4, 20]                   # NEW 2026-09-22 (announcement + linked Models overview). Cache
+                                             # read $0.20 = 0.05× base (Opus 5 0.1×, Fable 5.1 0.025×); cache
+                                             # write 5m $5 (1.25×) / 1h $8 (2×); batch $2/$10 (batch max output
+                                             # 300K); fast mode $8/$40 at up to 2.5× speed (announcement: "in
+                                             # Claude Code and the Claude Platform"; What's new: research
+                                             # preview, Claude API). All $list — NOT the currency that binds
+                                             # this fleet (see the claude-opus-5 row). Per task it is cheaper
+                                             # mainly through TOKENS: on FrontierCode, medium spends ~1/3 of
+                                             # Opus 5 @high's output and scores higher (§ OPUS 5.5).
   claude-opus-5: [5, 25]                     # NEW 2026-07-24 — same price as Opus 4.8, ≈Fable quality on
                                              # most benchmarks ⇒ Fable's cost-justified delta has collapsed
                                              # for most work (routing note in § Opus 5 adoption above).
@@ -650,7 +773,7 @@ pricing_per_mtok:
 auto_mode_allowlist:
   firstParty: [claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6]
   anthropicAws: [claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6]
-  non_firstParty_max: [claude-opus-4-8, claude-opus-5, claude-fable-5, claude-fable-5-1]   # STRICTER — our account. 4-8 confirmed in auto mode 2026-06-09. claude-fable-5 VERIFIED in auto mode 2026-06-09 by a live lead session running `--permission-mode auto --model claude-fable-5` autonomously (that session WAS the test — `auto-mode config` doesn't print allowModels). claude-fable-5-1 ADDED 2026-09-03 on stronger evidence than any row above it: cc-upgrade-gate check_03 on 2.1.260 drove a real auto-mode TOOL TURN on claude-fable-5-1 with is_error=false, no demotion and permission_denials=[] — a mechanical check rather than an operator's impression, and repeatable via `scripts/cc-upgrade-gate.sh <bin> claude-fable-5-1 <acct>`. claude-fable-5 stays listed: it is still Active upstream and a pinned-prior session must not be rejected by this hook. Fable teammates: an older binary that does not know the id fails LOUDLY at spawn (not a silent demotion), so listing both here is safe.
+  non_firstParty_max: [claude-opus-4-8, claude-opus-5, claude-opus-5-5, claude-fable-5, claude-fable-5-1]   # STRICTER — our account. 4-8 confirmed in auto mode 2026-06-09. claude-fable-5 VERIFIED in auto mode 2026-06-09 by a live lead session running `--permission-mode auto --model claude-fable-5` autonomously (that session WAS the test — `auto-mode config` doesn't print allowModels). claude-fable-5-1 ADDED 2026-09-03 on stronger evidence than any row above it: cc-upgrade-gate check_03 on 2.1.260 drove a real auto-mode TOOL TURN on claude-fable-5-1 with is_error=false, no demotion and permission_denials=[] — a mechanical check rather than an operator's impression, and repeatable via `scripts/cc-upgrade-gate.sh <bin> claude-fable-5-1 <acct>`. claude-fable-5 stays listed: it is still Active upstream and a pinned-prior session must not be rejected by this hook. Fable teammates: an older binary that does not know the id fails LOUDLY at spawn (not a silent demotion), so listing both here is safe. claude-opus-5-5 ADDED 2026-09-22 on the same mechanical evidence: cc-upgrade-gate check_03 on 2.1.280 drove a real auto-mode tool turn on claude-opus-5-5 (is_error=false, permission_denials=[]; MANIFEST 2.1.280), and the session that made this edit ran `--permission-mode auto --model claude-opus-5-5`. claude-opus-5 stays listed: 2.1.260 sessions still run it, and the same loud-at-spawn reasoning covers a 2.1.260 lead that pins 5-5 — pin the alias `opus` instead (§ OPUS 5.5).
   non_firstParty_non_max: [claude-opus-4-7, claude-opus-4-6, claude-sonnet-4-6]
 
 # Hardcoded by Anthropic in cli.js — not user-configurable (as of 2.1.112).
@@ -665,7 +788,11 @@ classifier_model: claude-sonnet-4-6
 # Docs, team briefs, and scripts reference role aliases via claude-bump-models —
 # when a role's optimal model changes, update here + run `claude-bump-models --apply`.
 roles:
-  lead_default: claude-opus-5             # lead/orchestrator sessions — Opus 5 @ effort high
+  lead_default: claude-opus-5-5           # lead/orchestrator sessions — Opus 5.5 @ effort high (FLIPPED
+                                            # 2026-09-22 from claude-opus-5; the ONLY role code reads —
+                                            # cc-route for wave fires, frontier-status for the banner).
+                                            # `high` = effort_defaults.default = opus55_default, NOT Opus
+                                            # 5.5's API default (medium). Opus 5 history below:
                                             # (effort_defaults.default; was `max` until 2026-08-01 cb7f8e3fa,
                                             #  and this comment kept saying max for 46 days).
                                             # REVERTED from claude-fable-5 2026-06-09 (launch day):
@@ -692,7 +819,11 @@ roles:
                                             # `claude-fable` launcher remains as an optional human
                                             # surface. Conditional on frontier_access; post-window
                                             # degrades to fallback (say so in reports).
-  default_teammate: claude-opus-5         # Agent Teams run BOTH tracks (stable 2.1.114 AND
+  default_teammate: claude-opus-5-5       # FLIPPED 2026-09-22. Spawn with the ALIAS `model: opus`, which
+                                            # each binary resolves to the Opus it can run (§ OPUS 5.5).
+                                            # Effort: opus55_coding_scoped (medium) for an anchored brief,
+                                            # opus55_default (high) for ambiguous multi-file work.
+                                            # [history] Agent Teams run BOTH tracks (stable 2.1.114 AND
                                             # claude-next 2.1.170 — empirically fine 2.1.156+).
                                             # Teammate gate = auto_mode_allowlist, NOT the track.
                                             # DEFAULT stays Opus 4.8 (cost-effective workhorse;
@@ -714,9 +845,10 @@ roles:
                                             # binary-verified 2.1.170). Spot-check one member's
                                             # model via billing/transcript per team (GH #43869
                                             # silent-demotion risk). Else fallback 4-8.
-  teammate_mechanical: claude-opus-5      # same model; effort differentiates (see effort_defaults)
-  teammate_research: claude-opus-5        # same model; effort differentiates (see effort_defaults)
-  research_worker: claude-opus-5          # IN-PROCESS / teammate synthesis-worker default = GA ceiling (Opus 5).
+  teammate_mechanical: claude-opus-5-5    # same model; effort differentiates — opus55_coding_scoped (medium)
+  teammate_research: claude-opus-5-5      # same model; effort differentiates — opus55_research (high)
+  research_worker: claude-opus-5-5        # FLIPPED 2026-09-22 (was Opus 5). IN-PROCESS / teammate synthesis-worker default = GA ceiling.
+                                            # Effort: opus55_research (high); NEVER low (WANDR 31.2 at low).
                                             # In-process /research inherits LEAD effort (can't pin max, GH #25591) and
                                             # Sonnet 5 is NOT teammate-allowlisted → those two surfaces stay Opus 4.8.
                                             # HISTORY: T2 (probe wf_771c1e9f-644, 2026-06-30, on Sonnet 4.6) + re-probe
@@ -741,12 +873,34 @@ roles:
                                             # NOT for in-process /research (effort uncontrollable) or teammates (not
                                             # allowlisted) — those use research_worker (Opus 4.8). Intro $2/$10 → std
                                             # $3/$15 on 2026-08-31 (win holds at std). SSOT: ~/.claude/model-routing-freewin-probe.md.
-  research_retrieval: claude-haiku-4-5      # Explore tier (25% slot, codebase/file:line lookups)
+                                            # ⚠️ RE-PROBE OWED 2026-09-22: certified against Opus 4.8, not Opus
+                                            # 5.5. Every Opus 5.5-vs-Sonnet 5 row in the system card favors 5.5
+                                            # (e.g. Chartography with tools: Opus 5.5 @low ~71.5 at ~$0.04 vs
+                                            # Sonnet 5 @max 73.2 at ~$1.65), and Sonnet's win REQUIRES max
+                                            # effort, the output-heaviest rung — so Opus 5.5 @medium/high
+                                            # likely dominates in quota terms. Likely ≠ measured: kept until
+                                            # the freewin probe reruns with Opus 5.5 as the comparator.
+  research_retrieval: claude-haiku-4-5      # Explore tier (25% slot, codebase/file:line lookups). Its
+                                            # retirement floor is 2026-10-15 (see deprecations) and Haiku
+                                            # 5.5 is announced for "the coming weeks" — stage it on release.
   research_adversarial: claude-fable-5-1    # adversarial/red-team/judge/depth-coordination slots
                                             # (10-15%); call-time Agent `model: "fable"` override,
                                             # eval track + active window only; else fallback.
                                             # The `fable` ALIAS is safe here: measured on 2.1.260,
                                             # `--model fable` resolves to claude-fable-5-1.
+                                            # ⚠️ UNDER REVIEW 2026-09-22 — covers workflow_judge, eval_judge
+                                            # and teammate_frontier too. The Opus 5.5 System Card puts Opus
+                                            # 5.5 at or above Fable 5.1 at MATCHED effort on nearly every
+                                            # evaluation, at a fraction of the cost; Fable wins only at LOW
+                                            # effort (at 2–7× the cost) or within noise (DRACO max 87.7 vs
+                                            # 87.4, OfficeQA 80.2 vs 78.9). Opus 5.5's self-preference bias
+                                            # is also smaller (+0.01/+0.07 vs +0.17/+0.10). The vendor still
+                                            # names Fable 5.1 for "demanding reasoning and long-horizon agentic
+                                            # work, or when Opus 5.5 at higher effort still falls short".
+                                            # Conviction 85% that these slots belong to Opus 5.5 @xhigh — below
+                                            # the 90% bar, so they STAY on Fable until the review-class sweep
+                                            # (docs/research/opus55-effort-sweep-2026-09-22/, same corpus as the
+                                            # Fable 5.1 sweep) reports.
   workflow_judge: claude-fable-5-1          # Dynamic Workflow judge/synthesis agents — same
                                             # conditionality as research_adversarial.
                                             # ✅ THE `schema:` HAZARD IS CLEARED, and by the CLIENT
@@ -848,7 +1002,10 @@ frontier_discovery_budget:
 #     is correct, not manual steering. See docs/research/FABLE5_PROMPTING_PLAYBOOK_2026-06-30.md.
 # Rule doc: memory/feedback-agent-team-models.md (2026-04-17 revision).
 effort_defaults:
-  default: high                             # implementer, reviewer, doctor, lead, researcher, CODING, SYNTHESIS,
+  default: high                             # 2026-09-22: UNCHANGED under Opus 5.5 — it equals opus55_default
+                                            # (the lead/fire rung), and it is ONE ABOVE Opus 5.5's API default
+                                            # (medium). Read by cc-route (wave fires), check05, effort-parity.
+                                            # implementer, reviewer, doctor, lead, researcher, CODING, SYNTHESIS,
                                             # mechanical-with-search.
                                             # 2026-08-01 — max → high, executing the re-sweep directive written into
                                             # the opus5 block below ("max is wrong-signed for Opus 5"). `high` IS
@@ -978,6 +1135,60 @@ effort_defaults:
   opus5_capability_sensitive: xhigh         # hardest long-horizon agentic (set max_tokens ≥64k)
   opus5_coding_agentic: medium              # FrontierCode peaks here; test medium vs high per task
   opus5_routine: low                        # scoped / latency-sensitive (low is strong on Opus 5)
+  # Opus 5.5 SURFACES (2026-09-22) — THE UTILIZATION POLICY. Do NOT inherit opus5_* or the model-neutral
+  # keys: "Effort level names don't correspond to the same amount of thinking across models" and "test
+  # several levels against your own evals rather than carrying over the setting you used on Claude Opus
+  # 5" (Prompting Claude Opus 5.5). Its API default is MEDIUM (every earlier Opus: high), it thinks MORE
+  # per turn than Opus 5 at a given level (most at xhigh/max), and its docs give NO use-case → effort
+  # table. So each key below is read off the System Card's per-effort charts; numbers are vendor-measured
+  # on the named benchmark, costs are $list per task. Table, evidence and conviction per row:
+  # docs/research/opus55-utilization-2026-09-22.md. Our own review-class sweep is in flight:
+  # docs/research/opus55-effort-sweep-2026-09-22/.
+  # THE SHAPE IS THE FINDING — the curve is CLASS-DEPENDENT, so no single default is right:
+  #   scoped coding PEAKS at medium and falls above it · agentic and ambiguous work KNEES at high ·
+  #   hard reasoning and long-horizon knowledge work keep paying to xhigh · LOW collapses on research
+  #   and hard reasoning · MAX rarely beats xhigh except on derivation-heavy math.
+  opus55_default: high                      # leads, fired wave leads, ambiguous multi-file coding, agentic
+                                            # terminal work. CursorBench 4.0: medium 52.5 · high 56.0 (~$4)
+                                            # · xhigh 56.0 (~$7) · max 57.8 (~$13). Terminal-Bench 4.0:
+                                            # medium 57.6 · high 64.2 ($3.88) · xhigh 66.4 ($7.35) · max 64.8.
+                                            # Conviction 85%.
+  opus55_coding_scoped: medium              # code-writing teammates on an anchored brief; known-target edits.
+                                            # FrontierCode v1.1 (Cognition, run IN Claude Code, graded on
+                                            # mergeability incl. scope): Main medium 54.6 · high 54.0 · xhigh
+                                            # 51.4 · max 54.4 at ~9× medium's output tokens; Extended medium
+                                            # 65.3 · max 63.6. Above medium the extra thinking adds scope, not
+                                            # merges. Conviction 85%.
+  opus55_capability_sensitive: xhigh        # hard reasoning, security/architecture judgment, verifying a HARD
+                                            # claim, long-horizon knowledge work, coverage-critical research.
+                                            # ArXivMath (no tools) high 73.2 · xhigh 86.0 · max 91.2; GDPval-AA
+                                            # high 1692 · xhigh 1820 · max 1846 (xhigh ≈ max on ~51% fewer
+                                            # output tokens); AA-Briefcase high 1705 · xhigh 1780 · max 1822;
+                                            # WANDR high 67.3 · xhigh 71.3. Conviction 80%.
+  opus55_research: high                     # breadth research workers — set it on Workflow slots; in-process
+                                            # subagents inherit the lead's. WANDR medium 62.8 · high 67.3 (≈
+                                            # Opus 5 @xhigh 67.0 at ~1/3 of its cost) · xhigh 71.3; HLE with
+                                            # tools medium 63.0 · high 63.9 · xhigh 66.4. NEVER low: WANDR at
+                                            # low is 31.2. Conviction 85%.
+  opus55_visual: medium                     # screenshots, charts, UI verification, computer use. Chart reading
+                                            # is nearly FLAT in effort (Chartography no-tools ~57 → 64.4 from
+                                            # low to max; the prompting guide: even low beats Opus 5 at max);
+                                            # OSWorld 2.0 partial ~58 → 74 → 78 → 81 → 82 over its five
+                                            # unlabelled effort points. Conviction 70%.
+  opus55_cheap: low                         # a COST tier, never a default: fully specified, gate-verified,
+                                            # high-volume work. Low is the weakest rung on every labelled chart
+                                            # (FrontierCode −7 vs medium; GDPval 1224 vs 1576; ArXivMath 32.0
+                                            # vs 64.0; WANDR 31.2 vs 62.8). The anecdotes where low sufficed
+                                            # (Deloitte review, Rogo finance) are vendor-reported customer claims.
+  # max is NOT a key: on every labelled chart but ArXivMath it is within noise of xhigh or below it
+  # (Terminal-Bench 64.8 < xhigh 66.4; FrontierCode ≈ medium at ~9× the tokens; GDPval +26 Elo at ~2× the
+  # tokens), and the guide says "Reserve xhigh and max for work where you've measured a quality gain."
+  # SLACK RULE — the "maximal utilization" half. Weekly plan quota does not roll over. When an account's
+  # week is forecast to STRAND (claude-accounts strand nowcast), spend it one rung UP on the classes that
+  # keep paying — default → xhigh for judgment, knowledge work and research — and never on coding_scoped
+  # (medium is its peak) or visual (flat). When quota BINDS, hold the rungs above and never drop research
+  # or reasoning to low. Finishing SOONER is a different lever: a time budget ("elapsed 340s / 1200s")
+  # keeps agents parallel without cutting their work (System Card §8.12.2; prompting guide).
 
 # Upcoming retirement dates (from Anthropic model-deprecations page; re-verified 2026-09-03).
 # Bump this list + re-run claude-lint-models when Anthropic announces changes.
@@ -999,6 +1210,14 @@ deprecations:
 #   claude-haiku-4-5  2026-10-15  ← NEAREST. Haiku 4.5 is research_retrieval (the Explore tier);
 #                                   it is ~13 months out, so no action, but it is the first of our
 #                                   routed models to come up and there is no Haiku 5 to move to yet.
+#   ⚠️ CORRECTED 2026-09-22 — the line above is an arithmetic error: 2026-10-15 was ~6 weeks after it
+#   was written and is 23 DAYS from this edit. Still a FLOOR, not an announced retirement (the linked
+#   Models overview, re-read 2026-09-22, gives retirementNotBefore 2026-10-15 and no retirement date),
+#   and the announcement says Haiku 5.5 follows "in the coming weeks" — stage it on release rather
+#   than acting on the floor.
+# Added 2026-09-22 from the Models overview:  claude-opus-5-5  2027-09-22 (floor; released 2026-09-22).
+#   claude-opus-5 has NO lifecycle row there and is listed among CURRENT models in the docs nav, so
+#   its 2027-07-24 floor above is the last recorded value, not a re-read.
 
 # Roadmap note: on ANY model release, run the `/model-upgrade` skill
 # (~/.claude/skills/model-upgrade/SKILL.md). It distinguishes the three cases:
