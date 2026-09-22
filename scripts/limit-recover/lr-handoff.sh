@@ -1044,6 +1044,23 @@ if [[ $NO_TRANSPLANT -ne 1 ]]; then
   # (§5 DEC-3). It is recorded so an artifact read weeks later says which kind of move this was —
   # the one thing a lock and a tombstone otherwise cannot tell you apart.
   TARGS+=(--cause "$LRH_CAUSE")
+  # THE PHASE IS THE D2 SPLIT, AND THE IN-PLACE ARM MUST NOT CONFIRM HERE (§3 D2). `admit` copies,
+  # sha-verifies, locks and tombstones, and NEVER retires; `confirm` re-copies, re-verifies and THEN
+  # retires. The in-place disposition is confirmed LATER, by handoff-fire's recycle_fire, immediately
+  # before it writes /exit — which is the only moment the source is provably quiesced. Confirming
+  # HERE would re-introduce the exact defect this wave removes: a healthy source keeps appending
+  # until /exit lands (after a composer gate that can wait up to 180s), so a snapshot taken now is
+  # stale by the time the successor resumes it, and the sha check passes because it already ran.
+  #
+  # Every OTHER disposition confirms here, because nothing later will: --spawn and --close-source
+  # fire no recycle, so there is no second phase to run. That is safe for them and not for in-place
+  # for the same reason stated the other way round — those paths carry a limit-blocked source, which
+  # by construction cannot take another turn and therefore cannot append after the copy.
+  #
+  # Without this the limit path silently stops retiring at all: lr-transplant's legacy no---phase
+  # arm no longer infers quiesce from driver identity (§3 D3), so it keeps the source and reports
+  # reason "unasserted-quiesce".
+  if [[ $IN_PLACE -eq 1 ]]; then TARGS+=(--phase admit); else TARGS+=(--phase confirm); fi
   _lrh_txrc=0
   "$LR/lr-transplant.sh" "${TARGS[@]}" > "$BUNDLE/transplant.json" || _lrh_txrc=$?
   if [[ $_lrh_txrc -ne 0 ]]; then
