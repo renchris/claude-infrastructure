@@ -4530,6 +4530,112 @@ NARROW_W = 76
 # test all have to agree, and a header that disagrees with its rows is the classic silent drift.
 _NW_MARK, _NW_NAME, _NW_PCT, _NW_WKR = 3, 13, 5, 6
 
+# Column widths, as constants rather than literals in three places: the header, the rows and the
+# test all have to agree, and a header that disagrees with its rows is the classic silent drift.
+# The 2026-09-22 layout adds two columns the prose block used to carry (`bar`, `strand`) and
+# narrows `name`, which `_clip` already guards. Every cell is padded as PLAIN text and coloured
+# afterwards (`_cell`), because `f"{s:<8}"` counts escape bytes as columns and would silently
+# shred the alignment the colour was added to sharpen.
+_NW_BAR, _NW_STR = 8, 6
+
+
+# ── BOARD COLOUR ──────────────────────────────────────────────────────────────────────────────
+# MEASURED 2026-09-22 against the live CC 2.1.260 binary under a real pty (the probe is
+# docs/research/R5b-sessionstart-render-probe.py, re-run with an SGR payload; raw capture and
+# verdicts in docs/research/board-render-2026-09-22.md). Three facts, none of them inferred:
+#
+#   · the harness paints a SessionStart `systemMessage` in FLAT #999 GREY — literally
+#     `\x1b[38;2;153;153;153m` at the head of every rendered row, and NOT the dim attribute.
+#     That grey is the entire reason the board read as "relatively unreadable" (operator,
+#     2026-09-22): eighteen rows of numbers, labels, prose and alarms at one single weight.
+#   · ANY SGR the payload carries SURVIVES VERBATIM and OVERRIDES that grey — truecolor
+#     foreground, truecolor background and bold all rendered, as did box-drawing and block
+#     glyphs. The channel was never monochrome; nothing had ever asked it for colour.
+#   · usable width is PANE − 5 (a 5-column continuation indent), so the ≤76 budget stays right
+#     for the 80-column floor. Line 1 alone also carries the harness's ~31-column
+#     `⎿ SessionStart:startup says: ` prefix, which is why the header line below is SHORT —
+#     at 80 columns the old 46-character header wrapped, and a wrapped line 1 is the worst
+#     one to lose.
+#
+# Gated separately from `COLOR`, and ON by default, for a mechanical reason: the board is
+# written to a FILE by the `com.claude.accounts-keepwarm` launchd producer, whose stdout is
+# never a tty, so `_color_on()` is False in exactly the one caller that must emit colour.
+# `NO_COLOR` still wins (the standard), and `CC_BOARD_COLOR=off` is the kill switch for the day
+# a harness starts ESCAPING these sequences instead of rendering them — the one failure mode
+# that would be worse than the flat grey.
+BOARD_LABEL = (125, 133, 144)      # column labels, rules, subordinated prose
+BOARD_TEXT = (230, 237, 243)       # the values a reader acts on
+BOARD_MUTE = (110, 118, 129)       # an account that cannot be routed to at all
+BOARD_ACCENT = (88, 166, 255)      # the ➤ picks — the one thing on the board that is a verdict
+BOARD_TRACK = (48, 54, 61)         # the unfilled half of a bar
+
+_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def board_color_on():
+    return (not os.environ.get("NO_COLOR")) and \
+        os.environ.get("CC_BOARD_COLOR", "on").lower() not in ("off", "0", "false", "no")
+
+
+def bc(txt, rgb=None, bold=False):
+    """Colour ONE board cell. Independent of `COLOR` — see the block comment above."""
+    if not board_color_on() or (rgb is None and not bold):
+        return txt
+    seq = ["1"] if bold else []
+    if rgb:
+        seq.append("38;2;%d;%d;%d" % tuple(rgb))
+    return "\x1b[" + ";".join(seq) + "m" + txt + "\x1b[0m"
+
+
+def _cell(txt, w, align="<", rgb=None, bold=False):
+    """Pad to w cells as PLAIN text, THEN colour. Never the other way round."""
+    return bc(_clip(str(txt), w).ljust(w) if align == "<" else _clip(str(txt), w).rjust(w),
+              rgb, bold)
+
+
+def strand_rgb(pp):
+    """A strand is percentage points that DIE unspent at the reset, so high is BAD — the same
+    polarity as usage_rgb, but keyed on a loss rather than on a fill."""
+    return RED if pp >= 50 else AMBER if pp >= 20 else BOARD_LABEL
+
+
+def board_bar(pct, width=_NW_BAR):
+    """Magnitude the eye reads without parsing digits — the single largest readability win
+    available on a monochrome-by-default surface, and the reason `weekly` gets one and the other
+    two columns do not: weekly is the bucket the strand nowcast is about."""
+    if pct is None:
+        return bc("·" * width, BOARD_TRACK)
+    p = max(0.0, min(100.0, float(pct)))
+    filled = int(round(p / 100.0 * width))
+    return bc("█" * filled, usage_rgb(p)) + bc("░" * (width - filled), BOARD_TRACK)
+
+
+def _bpct(r, key):
+    """One percentage cell: right-aligned, coloured by usage, `*` INSIDE the coloured run.
+
+    The `*` stays welded to the digits (`11%*`, never `11% *`) because it is the
+    inherited-reading suffix and tests/accounts-board.bats asserts that exact token — and
+    because a reader scanning a column must not have to decide whether a floating asterisk
+    belongs to the row above. Right-aligning the value-plus-suffix as ONE string is what keeps
+    the digits in a column while the suffix comes and goes."""
+    v = r.get(key)
+    if v is None:
+        return _cell("—", _NW_PCT + 1, ">", BOARD_MUTE)
+    star = "*" if (r.get("stale_quota") or r.get("error")) else ""
+    return bc((f"{v:.0f}%" + star).rjust(_NW_PCT + 1), usage_rgb(v))
+
+
+def _nrow(mark, name, p5, bar, pwk, pfb, strand, resets, login):
+    """The ONE place the narrow table's column order and spacing live.
+
+    Header and data rows both go through it, which is the drift the width constants were
+    already trying to prevent and could not: they pinned the widths and left two independent
+    format strings free to disagree about the ORDER and the gaps."""
+    # `login` arrives UNPADDED on purpose: padding inside a coloured run leaves the spaces
+    # before the reset sequence, where .rstrip() cannot see them, and they ride into every
+    # copy-paste as invisible trailing ink.
+    return " ".join([mark + name, p5, bar, pwk, pfb, strand, resets, login]).rstrip()
+
 
 def _disp_w(s):
     """Display CELLS, not characters — the one measure the width budget can be stated in.
@@ -4540,7 +4646,11 @@ def _disp_w(s):
     a Western terminal renders them as — `➤`, `↻`, `—` and the lane superscripts are all in that
     class, so the table rows measure identically either way and only prose with emoji differs.
     """
-    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in s)
+    # SGR-BLIND since 2026-09-22: a colour sequence occupies ZERO columns, so measuring the raw
+    # string would count ~11 phantom cells per coloured cell and the wrap/clip budget — the thing
+    # this function exists to enforce — would shred exactly the rows it was protecting.
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+               for ch in _SGR_RE.sub("", s))
 
 
 def _demark(s):
@@ -4649,11 +4759,23 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
         # the second axis (how old the pre-rendered FILE is); this is the first (how old the
         # QUOTA reading is), and they are genuinely different failures.
         age = _quota_age_s(cfg)
-        out = ["Claude Max accounts · " + ("cached" if cached else "live")
-               + (f" {age}s" if age is not None else "")
-               + " · " + datetime.now().strftime("%a %H:%M"),
-               f"{'':<{_NW_MARK}} {'account':<{_NW_NAME}} {'5h':>{_NW_PCT}} {'wk':>{_NW_PCT}} "
-               f"{'Fbl':>{_NW_PCT}}  {'wk ↻':<{_NW_WKR}} login"]
+        # LINE 1 IS SHORT ON PURPOSE. It is the ONE row that also carries the harness's
+        # `⎿ SessionStart:startup says: ` prefix (~31 columns, measured), so its own budget is
+        # pane−31 rather than pane−5: the previous 46-character header wrapped at an 80-column
+        # pane, and a wrapped line 1 costs the reader the age of the very numbers below it.
+        out = [bc("CLAUDE MAX", BOARD_TEXT, bold=True)
+               + bc(" · " + datetime.now().strftime("%a %H:%M")
+                    + " · " + ("cached" if cached else "live")
+                    + (f" {age}s" if age is not None else ""), BOARD_LABEL),
+               _nrow(_cell("", _NW_MARK, "<", BOARD_LABEL),
+                     _cell("account", _NW_NAME, "<", BOARD_LABEL),
+                     _cell("5h", _NW_PCT + 1, ">", BOARD_LABEL),
+                     _cell("", _NW_BAR, "<", BOARD_LABEL),
+                     _cell("weekly", _NW_PCT + 1, ">", BOARD_LABEL),
+                     _cell("fable", _NW_PCT + 1, ">", BOARD_LABEL),
+                     _cell("strand", _NW_STR, ">", BOARD_LABEL),
+                     _cell("resets", _NW_WKR, ">", BOARD_LABEL),
+                     bc("login", BOARD_LABEL))]
     else:
         out = ["| account | live | 5h used | 5h resets | weekly used | Fable used "
                "| weekly resets | login expires |",
@@ -4714,10 +4836,24 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
                 login_n = "⚠ " + login_n
             nm = _clip(acct + (" ←" if r.get("is_self") else ""), _NW_NAME)
             wk_n = fmt_h(r.get("weekly_reset_h")) if r.get("weekly_reset_h") is not None else "—"
-            out.append(
-                f"{marks.strip():<{_NW_MARK}} {nm:<{_NW_NAME}} "
-                f"{pctc(r, 'session_pct'):>{_NW_PCT}} {pctc(r, 'weekly_pct'):>{_NW_PCT}} "
-                f"{pctc(r, 'fable_pct'):>{_NW_PCT}}  {wk_n:<{_NW_WKR}} {login_n}".rstrip())
+            # An account that cannot be routed to is MUTED rather than dropped: its row is still
+            # a fact the reader needs (its quota is real, and stranding on it is the loudest
+            # number on the board), but it must not read as a candidate.
+            usable = a not in ("login-required", "logged-out", "keychain-error") \
+                and not r.get("auth_broken")
+            sp = wk_strand_pp(r)
+            st = "—" if not sp or sp <= 0 else f"{sp:.0f}pp"
+            out.append(_nrow(
+                _cell(marks.strip(), _NW_MARK, "<", BOARD_ACCENT, bold=True),
+                _cell(nm, _NW_NAME, "<", BOARD_TEXT if usable else BOARD_MUTE,
+                      bold=bool(marks.strip())),
+                _bpct(r, "session_pct"),
+                board_bar(r.get("weekly_pct")),
+                _bpct(r, "weekly_pct"),
+                _bpct(r, "fable_pct"),
+                _cell(st, _NW_STR, ">", BOARD_MUTE if st == "—" else strand_rgb(sp)),
+                _cell(wk_n, _NW_WKR, ">", BOARD_TEXT if usable else BOARD_MUTE),
+                bc(login_n, RED if login_n.startswith(("⊘", "⚠")) else BOARD_LABEL)))
         else:
             out.append("| " + " | ".join([
                 name, k_shown(r), pctc(r, "session_pct"),
@@ -4854,8 +4990,15 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
         # read to answer. Narrow puts the clause on its own indented line rather than truncating
         # it — the clause is the desk lane's reasoning, and a half-clause reads as a wrong one.
         if narrow:
-            out.append(f"➤ desk (bare claude) → {pick_i}")
-            out.extend(_wrap_narrow(desk_why(rank_i[0][1], cfg), first="   "))
+            # The one line on this surface that is a VERDICT rather than a reading, so it is the
+            # one that gets the accent. `desk (bare claude)` stays a contiguous run — the suite
+            # asserts that literal, and a colour boundary inside a phrase is the classic way to
+            # break a substring assertion without changing a visible character.
+            out.append(bc("➤ ", BOARD_ACCENT, bold=True)
+                       + bc("desk (bare claude) → ", BOARD_LABEL)
+                       + bc(pick_i, BOARD_TEXT, bold=True))
+            out.extend(bc(x, BOARD_LABEL)
+                       for x in _wrap_narrow(desk_why(rank_i[0][1], cfg), first="   "))
         else:
             out.append(f"➤ desk (bare `claude`) → **{pick_i}** — earliest weekly reset among "
                        f"5h-safe accounts · {desk_why(rank_i[0][1], cfg)}")
@@ -4870,15 +5013,32 @@ def readout_lines(rows, cfg, win, cached, narrow=False):
             out.append("➤ desk (bare `claude`) → **none** — no account routable; "
                        "the launcher falls back to its pinned account")
     if narrow:
-        out.append(f"  general → {pick_g or 'none'} · fable → {pick_f or 'none'}")
+        out.append(bc(f"  general → {pick_g or 'none'} · fable → {pick_f or 'none'}",
+                      BOARD_LABEL))
     else:
         out.append(f"➤ general → **{pick_g or 'none'}** · ➤ fable → **{pick_f or 'none'}**")
     pl = pace_line(rows)
     if pl:
         # S3: the weekly-drain block is now one row PER ACCOUNT, sorted by pp at risk. Still one
         # renderer (L3) — pace_line owns every word of it; this splits what it produced.
-        for _pln in pl.split("\n"):
-            out.extend(_wrap_narrow(_demark(_pln)) if narrow else [_pln])
+        #
+        # NARROW COLLAPSES IT, and only narrow (2026-09-22). The board now carries a `strand`
+        # COLUMN fed by `wk_strand_pp` — the same function pace_line computes from — so four of
+        # these five rows restated, in a sentence each, a number already sitting beside the
+        # account it belongs to. That is ~28% of the board's rows spent on a repeat, on the one
+        # surface read at a glance by someone who did not ask for it. What the column CANNOT
+        # carry is the wall alarm, so an alarming row is kept verbatim and the rest become one
+        # legend line. This is a PRESENTATION split of one producer's output — the same rule
+        # `narrow` already follows everywhere else — never a second strand calculation.
+        _alarm = [x for x in pl.split("\n") if "⚠" in x] if narrow else []
+        if narrow:
+            out.append(bc("· strand = points that DIE unspent at the reset (last-48h pace)",
+                          BOARD_LABEL))
+            for _pln in _alarm:
+                out.extend(_wrap_narrow(_demark(_pln)))
+        else:
+            for _pln in pl.split("\n"):
+                out.append(_pln)
     if win.get("permanent"):
         # permanent means NO expiry — never quote a countdown off the sentinel `end` date
         wl = "Fable window: **permanent** (no expiry)."
