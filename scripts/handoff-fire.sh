@@ -162,8 +162,16 @@
 #                       S must carry a transplant tombstone (handed_off_to ≠ P's config dir) with
 #                       its split-brain lock still held, and the row's process must be alive with
 #                       P's tty in its ancestry. Needs --resume-launcher; refuses a brief, --account,
-#                       --cwd/--worktree and --session-id. Implies --allow-live-subagents (ingest
-#                       re-audits them).
+#                       --cwd/--worktree and --session-id.
+#   --transplant-cause limit|voluntary   (with --recycle --transplanted-source) WHY the source
+#                       moved — and the only input that decides whether this recycle may kill the
+#                       source's in-flight Agent-tool subagents. `limit`: the source could not take
+#                       a turn, so its subagents are ALREADY dead with no terminus in their
+#                       transcripts; --allow-live-subagents is implied and the /limit-recover ingest
+#                       re-audits them. `voluntary`: the source is HEALTHY and its subagents are
+#                       genuinely running, so nothing is implied and the L1-b gate may refuse.
+#                       ABSENT = the safe branch (never implied), so an ungated caller gets a loud
+#                       refusal naming this flag instead of a silent SIGKILL. Bad value ⇒ exit 3.
 #   --probe-recycle-preconditions --source-pane P --source-session S   READ-ONLY (W2,
 #                       LIMIT_RECOVER_100P): print one line per refusable precondition of a remote
 #                       in-place recycle and change NOTHING. exit 0 all pass · 3 HELD:<check>
@@ -215,6 +223,14 @@
 #                       successor's brief then INHERITS those paths, so an abandoned subagent is at
 #                       worst legible rather than invisible. Kill switch for blind (hook/daemon)
 #                       callers that cannot read a refusal: CC_RECYCLE_SUBAGENT_GATE=off.
+#                       On a --transplanted-source recycle this is implied by --transplant-cause
+#                       limit and by NOTHING else — see that flag.
+#
+# Env kill switches (each default-ON; `=off` restores the prior behaviour):
+#   CC_TRANSPLANT_CONFIRM=off   skip lr-transplant.sh --phase confirm, the re-copy + re-verify a
+#                       --transplanted-source recycle runs immediately before /exit. ON, a stale
+#                       destination transcript ABORTS the recycle and leaves the source alive; OFF,
+#                       the admit-time sha stands and a healthy source's tail can be orphaned.
 #
 # Subcommand:
 #   self-close (--successor UUID | --terminal) [--session-id UUID] [--no-notify]
@@ -472,6 +488,15 @@ RCY_SUBAGENT_SID=""                              # L1-b: the PREDECESSOR's sid, 
 # into `bash <launcher>` (lr-fire-resume of the SAME uuid on the TARGET account) and the engagement
 # oracle into "a new assistant turn in the target's copy" — same window id, same uuid, new account.
 RCY_SOURCE_PANE="" RCY_SOURCE_SESSION="" RCY_TRANSPLANTED_SOURCE=0 RCY_REMOTE=0
+# --transplant-cause limit|voluntary — WHY the source moved, and the ONLY input that decides whether
+# this recycle may SIGKILL the source's in-flight subagents (D1, VOLUNTARY_ACCOUNT_SWITCH §3). The
+# empty default is the SAFE branch: an ungated caller gets the gate's loud refusal, never a silent
+# kill. See the forcing block at the L1-b gate for why the class alone cannot answer this.
+RCY_TRANSPLANT_CAUSE=""
+# The session uuid the transplant evidence is keyed on: $RCY_SOURCE_SESSION on the remote form,
+# $CLAUDE_CODE_SESSION_ID on the SELF form. One variable so the confirm step below reads ONE name
+# instead of re-deciding which arm it is on.
+RCY_TS_SID=""
 RESUME_LAUNCHER="" RESUME_CFG="" RESUME_CWD="" RECYCLE_AWAIT=0 RCY_CWD="" RCY_T0=""
 HF_REMOTE_ROW_SID="" HF_REMOTE_CWD="" HF_REMOTE_ROW_PID=""
 HF_TS_TOMBSTONE="" HF_TS_TO="" HF_TS_LOCK="" HF_TS_CFG=""
@@ -5190,6 +5215,15 @@ subagent_gate() {
       echo "!!   --allow-live-subagents   deliberate abandonment — their results are forfeit; the partial"
       echo "!!                            transcripts above are named in the successor's brief"
       echo "!!   CC_RECYCLE_SUBAGENT_GATE=off   disable the check entirely (blind callers only)"
+      # D1: a transplanted-source recycle used to be auto-allowed here, unconditionally. It now
+      # forces only on --transplant-cause limit, so a caller caught by the safe default must be told
+      # the exact flag rather than left to infer it from a refusal that never mentions it.
+      if [ "${RCY_TRANSPLANTED_SOURCE:-0}" = 1 ]; then
+        echo "!!   --transplant-cause limit   THIS source could not take a turn, so those subagents are"
+        echo "!!                            already dead and the /limit-recover ingest re-audits them."
+        echo "!!                            NEVER pass it for a VOLUNTARY move: a healthy source's"
+        echo "!!                            subagents are genuinely running and would be SIGKILLed."
+      fi
     } >&2
     emit_fire_refusal live-subagents "$_n in-flight subagent(s) of ${_sid:0:8} would be killed by $_act"
     return 4
@@ -8897,6 +8931,13 @@ while [ $# -gt 0 ]; do case "$1" in
   --source-pane)    RCY_SOURCE_PANE="${2:?--source-pane needs a pane id}"; shift 2 ;;
   --source-session) RCY_SOURCE_SESSION="${2:?--source-session needs a session uuid}"; shift 2 ;;
   --transplanted-source) RCY_TRANSPLANTED_SOURCE=1; shift ;;
+  --transplant-cause)
+    RCY_TRANSPLANT_CAUSE="${2:?--transplant-cause needs limit|voluntary}"
+    case "$RCY_TRANSPLANT_CAUSE" in
+      limit|voluntary) ;;
+      *) echo "!! --transplant-cause: unknown cause '$RCY_TRANSPLANT_CAUSE' — the only two are 'limit' (the source could not take a turn, so its subagents are already dead) and 'voluntary' (the source is HEALTHY and its subagents are genuinely running)." >&2; exit 3 ;;
+    esac
+    shift 2 ;;
   --resume-launcher) RESUME_LAUNCHER="${2:?--resume-launcher needs a path}"; shift 2 ;;
   --resume-cfg)      RESUME_CFG="${2:?--resume-cfg needs a config dir}"; shift 2 ;;
   --resume-cwd)      RESUME_CWD="${2:?--resume-cwd needs a directory}"; shift 2 ;;
@@ -9737,6 +9778,35 @@ if [ "$RECYCLE" = 1 ]; then
     verify_self_pane "$SID" "$([ -n "$SESSION_ID" ] && echo 1 || echo 0)" --recycle || exit 2
     SID="$HF_VERIFIED_PANE"
   fi
+  # ── THE SELF FORM OF --transplanted-source READS ITS OWN EVIDENCE (lead ruling, 2026-09-22) ─────
+  # The remote pre-pass above was hf_transplant_evidence's ONLY caller on this path, so the SELF arm
+  # — --transplanted-source with no --source-pane, which is the PRIMARY form of the voluntary switch
+  # (VOLUNTARY_ACCOUNT_SWITCH §5 DEC-2: the subject IS the actor, so there is no source pane) — left
+  # every HF_TS_* global empty, and D2's confirm step in recycle_fire would then abort on unresolved
+  # operands instead of running. Nothing new is looked up here: this is the same function the remote
+  # arm calls, with the argument shape self-close's LOCAL arm already uses (:8218-8223) — sid from
+  # $CLAUDE_CODE_SESSION_ID, roots from THIS config dir, and the local cfg passed explicitly so
+  # ".handed_off_to ≠ this pane's config dir" is judged against the right dir rather than against
+  # the dir the tombstone happens to sit in.
+  #
+  # It is also the class check this arm never had. A --transplanted-source recycle whose session has
+  # no tombstone is not a husk, it is an ORIGIN session; that now refuses here (rc 2), before any
+  # side effect, rather than being discovered at the irreversible keystroke — or not at all.
+  RCY_TS_SID="$RCY_SOURCE_SESSION"
+  if [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] && [ "$RCY_REMOTE" = 0 ]; then
+    RCY_TS_SID="${CLAUDE_CODE_SESSION_ID:-}"
+    hf_transplant_evidence "$RCY_TS_SID" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects" --recycle "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" || exit 2
+    # The same consistency check the remote arm runs immediately after its own tombstone read, and
+    # it binds here for the same reason: the ONLY thing a transplanted source may be relaunched into
+    # is its own uuid on the transplant TARGET. Without it the confirm below would re-verify into
+    # HF_TS_TO while the relaunch resumed a DIFFERENT --resume-cfg — two live copies of one session,
+    # which is the state this whole path exists to prevent.
+    if [ -n "$RESUME_CFG" ] && [ "${HF_TS_TO%/}" != "${RESUME_CFG%/}" ]; then
+      echo "!! --recycle REFUSED: the tombstone hands session ${RCY_TS_SID:0:8} to $HF_TS_TO but --resume-cfg names $RESUME_CFG — a relaunch anywhere but the transplant target is a second live copy (lr-fire-resume would refuse it too). Nothing was typed." >&2
+      exit 2
+    fi
+    echo "→ in-place resume: session ${RCY_TS_SID:0:8} is a transplanted source by its OWN tombstone ($HF_TS_TOMBSTONE) — handed off to $HF_TS_TO, lock $HF_TS_LOCK still held" >&2
+  fi
   # ---- L1-b — IN-FLIGHT SUBAGENT GATE (blocking) ------------------------------------------------
   # HERE, and not one line later: this is the original FOREGROUND process, $SID is verified, and
   # nothing has side-effected yet. The point of no return is the `as_write "$SID" "/exit"` inside
@@ -9745,11 +9815,20 @@ if [ "$RECYCLE" = 1 ]; then
   # to has already been SIGKILLed. RCY_SUBAGENT_SID is kept for the successor-brief trailer below,
   # which needs the PREDECESSOR's sid after $SID has been reused by the new session.
   RCY_SUBAGENT_SID="$(cc_sid_for_pane "$SID")"
-  if [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] && [ "$ALLOW_LIVE_SA" = 0 ]; then
-    # A limit-blocked lead's subagents died with it — their transcripts have no terminus, so the
-    # gate would read them as IN FLIGHT and refuse the one recovery that re-audits exactly those
-    # units (/limit-recover ingest, iron rules 1-5). The class states the abandonment the gate asks
-    # to be stated; the ingest audit, not this gate, is where their partial results are judged.
+  # THE CAUSE, NOT THE CLASS, DECIDES THIS (D1, VOLUNTARY_ACCOUNT_SWITCH §3). Until 2026-09-22 the
+  # forcing below was unconditional on --transplanted-source, justified by "A limit-blocked lead's
+  # subagents died with it": their transcripts have no terminus, so the gate reads them as IN FLIGHT
+  # and refuses the one recovery that re-audits exactly those units (/limit-recover ingest, iron
+  # rules 1-5). That is TRUE of a limit and FALSE of a VOLUNTARY move, whose source is healthy: its
+  # subagents are genuinely running, and forcing here SIGKILLs them with no ingest to re-audit them.
+  # The class names a transplant; only the cause says which kind, so only the cause may force.
+  #
+  # ABSENT is the SAFE branch, deliberately, and it is fail-CLOSED: an ungated caller that used to
+  # be auto-allowed now meets subagent_gate's ordinary refusal, which NAMES this flag. A loud refusal
+  # a caller can fix is strictly better than a silent kill nothing observes.
+  if [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] && [ "$ALLOW_LIVE_SA" = 0 ] && [ "$RCY_TRANSPLANT_CAUSE" = limit ]; then
+    # The cause states the abandonment the gate asks to be stated; the ingest audit, not this gate,
+    # is where those partial results are judged.
     ALLOW_LIVE_SA=1
     echo "→ transplanted-source: in-flight subagents of ${RCY_SUBAGENT_SID:0:8} (if any) are re-audited by the ingest, not protected here" >&2
   fi
@@ -12255,7 +12334,7 @@ spawn() {
 # turn end; keystrokes MUST be foreground, detached AppleEvents fail silently), then a detached
 # watcher (__recycle) that ps-polls until claude exits and it2-types the relaunch into the shell.
 recycle_fire() {
-  local tty cmdfile log ts wrote rcy_state
+  local tty cmdfile log ts wrote rcy_state rcy_tp rcy_tp_c rcy_tp_rc
   # ── THE INTENT ROW (2026-08-17, backlog 112d13aa0018 arm (c)) ───────────────────────────────────
   # Every other recycle class — recycle-engaged / recycle-unverified / recycle-dead — is emitted from
   # inside the detached `__recycle` re-exec (:4828, :4844, :4861). So the ONLY recycles that appear in
@@ -12565,6 +12644,64 @@ recycle_fire() {
       exit 1
     fi
   fi
+  # ── D2 — CONFIRM THE TRANSPLANT SNAPSHOT, HERE, BEFORE THE IRREVERSIBLE KEYSTROKE ─────────────
+  # lr-transplant's `--phase admit` does `cp -p` then sha-verifies source against destination. That
+  # proves the copy was faithful AT COPY TIME, which has always sufficed because the source was
+  # LIMIT-BLOCKED: a session that cannot take a turn cannot append after the copy. A VOLUNTARY
+  # move's source is HEALTHY and keeps appending until /exit lands — and /exit lands on the very
+  # next lines, after a composer gate that can wait up to CC_RECYCLE_DRAFT_WAIT (180s). The
+  # successor would resume a stale transcript with its tail orphaned, and the sha check that should
+  # have caught it passed minutes earlier.
+  #
+  # HERE and not earlier: this is the first point at which the source is PROVABLY quiesced — the
+  # composer gate and its freshness re-read have both cleared, and nothing types until the loop
+  # below. `--phase confirm` re-copies, re-verifies, and retires the source; it is idempotent (rc 0
+  # again when the source was already retired).
+  #
+  # rc != 0 is FATAL and NOTHING is typed. The source is still live and still correct at that point;
+  # stranding it — a husk on a dead transcript with no live copy anywhere — is the one outcome worse
+  # than not moving at all. An unreachable lr-transplant.sh is treated identically: a snapshot that
+  # cannot be proven current is not a snapshot.
+  #
+  # Kill switch, never an enable flag: CC_TRANSPLANT_CONFIRM=off restores the pre-2026-09-22 path.
+  if [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] && [ "${CC_TRANSPLANT_CONFIRM:-on}" != off ]; then
+    rcy_tp="" rcy_tp_rc=0
+    # The three operands are globals the pre-pass set on BOTH arms: RCY_TS_SID (the caller's
+    # --source-session on the remote form, $CLAUDE_CODE_SESSION_ID on the self form) and the two
+    # config dirs hf_transplant_evidence derived (HF_TS_CFG = the SOURCE dir = FROM; HF_TS_TO = its
+    # .handed_off_to = TO). Every input that reaches this line has already had its tombstone read
+    # and admitted, so empty here means the two halves have drifted apart, never that a caller
+    # omitted a flag. Nothing is guessed and nothing is looked up: an unresolvable operand gets the
+    # same verdict as a failed confirm, because a snapshot that cannot be proven current is not a
+    # snapshot.
+    if [ -z "$RCY_TS_SID" ] || [ -z "$HF_TS_CFG" ] || [ -z "$HF_TS_TO" ]; then
+      kill "$WATCHER_PID" 2>/dev/null || true
+      emit_recycle_event recycle-held-transplant "" "$SID" "confirm operands unresolved: sid='${RCY_TS_SID}' from='${HF_TS_CFG}' to='${HF_TS_TO}'" || true
+      echo "!! recycle ABORTED: --transplanted-source, but the transplant operands are unresolved (sid='${RCY_TS_SID}' from='${HF_TS_CFG}' to='${HF_TS_TO}') — BOTH arms of the pre-pass read the tombstone, so reaching this line is an inconsistency, not a caller error. Nothing typed, watcher disarmed, session stays alive. CC_TRANSPLANT_CONFIRM=off accepts the admit-time sha instead." >&2
+      exit 1
+    fi
+    # Same three-path ladder every sibling lookup in this file uses, but rooted at HF_DIR (this
+    # file resolved THROUGH its symlink, :422-423) rather than `dirname "$0"`: ~/.claude/scripts is
+    # a per-file symlink farm, so $0's dir has no limit-recover/ sibling when invoked from there.
+    for rcy_tp_c in "$HF_DIR/limit-recover/lr-transplant.sh" \
+                    "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-transplant.sh" \
+                    "$HOME/.claude/scripts/limit-recover/lr-transplant.sh"; do
+      [ -f "$rcy_tp_c" ] && { rcy_tp="$rcy_tp_c"; break; }
+    done
+    if [ -z "$rcy_tp" ]; then
+      kill "$WATCHER_PID" 2>/dev/null || true
+      emit_recycle_event recycle-held-transplant "" "$SID" "lr-transplant.sh unreachable on all three paths — --phase confirm could not run" || true
+      echo "!! recycle ABORTED: lr-transplant.sh is UNREACHABLE — looked at $HF_DIR/limit-recover/lr-transplant.sh, ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-transplant.sh and $HOME/.claude/scripts/limit-recover/lr-transplant.sh. The destination transcript cannot be proven current, so /exit was NOT typed, the watcher is disarmed and the session stays alive. Re-run: $CMD" >&2
+      exit 1
+    fi
+    bash "$rcy_tp" --phase confirm --sid "$RCY_TS_SID" --from "$HF_TS_CFG" --to "$HF_TS_TO" || rcy_tp_rc=$?
+    if [ "$rcy_tp_rc" != 0 ]; then
+      kill "$WATCHER_PID" 2>/dev/null || true
+      emit_recycle_event recycle-held-transplant "" "$SID" "lr-transplant --phase confirm rc $rcy_tp_rc for ${RCY_TS_SID:0:8}" || true
+      echo "!! recycle ABORTED: lr-transplant.sh --phase confirm REFUSED (rc $rcy_tp_rc) for session ${RCY_TS_SID:0:8} — the destination transcript is NOT provably identical to the source, so resuming it would orphan the tail. Nothing typed, watcher disarmed, the source session stays alive and correct. Re-run: $CMD" >&2
+      exit 1
+    fi
+  fi
   wrote=0
   for _ in 1 2 3; do
     if as_write "$SID" "/exit" 2>/dev/null; then wrote=1; break; fi
@@ -12648,6 +12785,17 @@ if [ "$DRY" = 1 ]; then
       echo "subagents: $(printf '%s\n' "$SUBAGENT_INFLIGHT" | grep -c .) IN FLIGHT — WOULD BE KILLED (--allow-live-subagents asserted); their partial transcripts are named in the successor's brief"
     else
       echo "subagents: none in flight"
+    fi
+    # D2: the confirm step is an ABORT point of the real run, so a dry run that stayed silent about
+    # it would "describe a different decision than the real run" — the rule this block's own
+    # subagents line was added for. Both branches are printed because the kill switch changes what
+    # the real run RISKS, not merely what it does.
+    if [ "$RCY_TRANSPLANTED_SOURCE" = 1 ]; then
+      if [ "${CC_TRANSPLANT_CONFIRM:-on}" != off ]; then
+        echo "transplant: --phase confirm runs immediately before /exit — re-copy + re-verify ${RCY_TS_SID:0:8} into $(basename "${HF_TS_TO:-<unknown>}"), then retire the source; rc != 0 ABORTS (nothing typed, source stays alive)"
+      else
+        echo "transplant: confirm SKIPPED (CC_TRANSPLANT_CONFIRM=off) — the admit-time sha stands, so a healthy source's tail written after the copy is orphaned"
+      fi
     fi
     echo "chain:    composer gate (refuse /exit over a held OPERATOR draft — ≤${CC_RECYCLE_DRAFT_WAIT:-180}s wait; this rail's OWN abandoned paste is scrubbed instead of deferred) → arm watcher (setsid-detached, heartbeat-verified) → freshness re-read → FOREGROUND /exit (interrupts any in-flight turn, exits in seconds — emit report/fallback BEFORE firing) → detached ps-poll ≤600s (content-gated nudges @60/150/300s: CR only onto a proven stranded /exit) → it2-typed relaunch into the shell → confirm claude on tty (guarded retype, pane-visible fallback on failure)"
   else

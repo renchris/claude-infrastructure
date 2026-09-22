@@ -107,6 +107,23 @@ recycle() { # the remote resume form under test, with whatever extra args a case
   run bash "$HF" --recycle --dry-run --transplanted-source --source-pane "$SRC_PANE" --source-session "$SESS" \
       --resume-launcher "$LAUNCHER" --resume-cfg "$TARGET_CFG" "$@"
 }
+recycle_self() { # the SELF form: --transplanted-source with NO --source-pane/--source-session.
+  # This is the shape `cc-lr switch` fires (VOLUNTARY_ACCOUNT_SWITCH §5 DEC-2 — the subject IS the
+  # actor), and it names its pane through $ITERM_SESSION_ID, never --session-id: resume mode refuses
+  # --session-id outright. The sid the tombstone is keyed on arrives as $CLAUDE_CODE_SESSION_ID, and
+  # $CLAUDE_CONFIG_DIR is the SOURCE account, because that is where its own tombstone sits.
+  run env ITERM_SESSION_ID="w0t0p0:$SRC_PANE" CLAUDE_CODE_SESSION_ID="$SESS" CLAUDE_CONFIG_DIR="$SRC_CFG" \
+      bash "$HF" --recycle --dry-run --transplanted-source \
+      --resume-launcher "$LAUNCHER" --resume-cfg "$TARGET_CFG" "$@"
+}
+
+# EQUIVALENCE GUARDS, said plainly (2026-09-22, VOLUNTARY_ACCOUNT_SWITCH D1/D2). Every case in this
+# file OUTSIDE the two blocks headed "D1 —" and "D2 —" passes against BOTH the pre-2026-09-22
+# subject and the post-fix one. That is not a claim of coverage: a test green on subject and mutant
+# alike proves nothing about the mutation — it only guards the admission, binding, pin and refusal
+# behaviour AROUND the change against regression. The nine cases inside the blocks headed "D1 —",
+# "D2 —" and "THE SELF FORM" are the evidence: every one of them FAILS against the unfixed subject
+# (verified by reverting scripts/handoff-fire.sh to HEAD and re-running). Everything else is fence.
 
 # ── ADMISSION ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -144,11 +161,112 @@ recycle() { # the remote resume form under test, with whatever extra args a case
   [[ "$output" == *"remote:   pane $SRC_PANE bound to ${SESS:0:8}"* ]] || { echo "$output"; false; }
 }
 
-@test "the class implies --allow-live-subagents: a limit-blocked lead's dead subagents are the ingest's to re-audit" {
+# ── D1 — THE CAUSE, NOT THE CLASS, DECIDES WHETHER LIVE SUBAGENTS MAY BE KILLED ──────────────────
+#
+# Until 2026-09-22 --transplanted-source forced ALLOW_LIVE_SA=1 unconditionally, and the first case
+# below asserted that POSITIVELY — i.e. it pinned the defect. The justification ("a limit-blocked
+# lead's subagents died with it") is true of a LIMIT and false of a VOLUNTARY move, whose source is
+# healthy and whose subagents are genuinely running. The pin is un-pinned here deliberately: the
+# limit path keeps its behaviour, now behind an explicit --transplant-cause limit, and the cases
+# after it are the RED PROOF — against the unfixed subject, which forces on the CLASS, the
+# voluntary and absent cases see the auto-allow line that must not be there.
+
+@test "--transplant-cause limit implies --allow-live-subagents: a limit-blocked lead's dead subagents are the ingest's to re-audit" {
+  mk_transplant; src_row
+  recycle --transplant-cause limit
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"re-audited by the ingest, not protected here"* ]] || { echo "$output"; false; }
+}
+
+@test "RED PROOF (D1): --transplant-cause voluntary NEVER implies --allow-live-subagents — a healthy source's subagents are running" {
+  mk_transplant; src_row
+  recycle --transplant-cause voluntary
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"re-audited by the ingest, not protected here"* ]] || {
+    echo "the auto-allow fired for a VOLUNTARY move — live subagents would be SIGKILLed with no ingest to re-audit them:"; echo "$output"; false; }
+}
+
+@test "RED PROOF (D1): an ABSENT --transplant-cause takes the SAFE branch — fail-closed, never a silent kill" {
   mk_transplant; src_row
   recycle
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"re-audited by the ingest, not protected here"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"re-audited by the ingest, not protected here"* ]] || {
+    echo "the class alone still forced the override; an ungated caller must meet the gate, not bypass it:"; echo "$output"; false; }
+}
+
+@test "--transplant-cause rejects an unknown cause with the usage rc (3), before any side effect" {
+  mk_transplant; src_row
+  recycle --transplant-cause maybe
+  [ "$status" -eq 3 ] || { echo "status=$status"; echo "$output"; false; }
+  [[ "$output" == *"unknown cause 'maybe'"* ]] || { echo "$output"; false; }
+}
+
+# ── D2 — THE PRE-/exit TRANSPLANT CONFIRM ────────────────────────────────────────────────────────
+#
+# The call site itself lives past `as_write "$SID" "/exit"`'s guard rails and is therefore
+# unreachable under --dry-run (the DRY arm returns before recycle_fire). What IS assertable here is
+# the readout contract: a dry run must not describe a different decision than the real run. These
+# two cases pin that the confirm step is ANNOUNCED and that its kill switch is honoured; the
+# behaviour of `--phase confirm` itself belongs to lr-transplant.sh's own suite, and the ABORT
+# branches belong to an e2e that can reach recycle_fire.
+
+@test "RED PROOF (D2): the dry run announces the pre-/exit transplant confirm as an ABORT point" {
+  mk_transplant; src_row
+  recycle --transplant-cause voluntary
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"--phase confirm runs immediately before /exit"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"rc != 0 ABORTS"* ]] || { echo "$output"; false; }
+}
+
+@test "kill switch: CC_TRANSPLANT_CONFIRM=off names the risk it restores instead of going quiet" {
+  mk_transplant; src_row
+  export CC_TRANSPLANT_CONFIRM=off      # exported, not a `VAR=x fn` prefix: the subject is the
+                                        # `bash "$HF"` CHILD inside recycle(), not the function
+  recycle --transplant-cause voluntary
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"confirm SKIPPED (CC_TRANSPLANT_CONFIRM=off)"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"--phase confirm runs immediately before /exit"* ]] || { echo "$output"; false; }
+}
+
+# ── THE SELF FORM — --transplanted-source WITHOUT --source-pane ──────────────────────────────────
+#
+# The primary path of the voluntary switch, and the one this file could not see until 2026-09-22:
+# the remote pre-pass was hf_transplant_evidence's only caller, so the self arm resolved NO
+# HF_TS_* operand and D2's confirm step would have aborted on every real `cc-lr switch`. These
+# cases are the evidence that the self arm now reads its own tombstone. Both are RED PROOFS — the
+# first sees `<unknown>` on the unfixed subject, the second is not refused by it at all.
+
+@test "RED PROOF (self form): --transplanted-source with no --source-pane resolves its confirm operands from its OWN tombstone" {
+  mk_transplant; src_row
+  recycle_self --transplant-cause voluntary
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # The class is admitted on evidence this arm read for itself …
+  [[ "$output" == *"session ${SESS:0:8} is a transplanted source by its OWN tombstone"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"handed off to $TARGET_CFG"* ]] || { echo "$output"; false; }
+  # … and the confirm step's OPERANDS are what the readout renders, so a resolved sid and a resolved
+  # target here IS the proof they are non-empty at the call site. An unresolved run renders the
+  # empty sid and the literal <unknown> basename instead of aborting invisibly in a dry run.
+  [[ "$output" == *"re-copy + re-verify ${SESS:0:8} into $(basename "$TARGET_CFG")"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"re-verify  into"* ]] || { echo "the sid operand is EMPTY: $output"; false; }
+  [[ "$output" != *"<unknown>"* ]] || { echo "the --to operand is EMPTY: $output"; false; }
+}
+
+@test "CONTROL (self form): no tombstone means this pane is an ORIGIN, not a husk — REFUSED before any side effect" {
+  src_row                                    # deliberately NO mk_transplant
+  recycle_self --transplant-cause voluntary
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"has NO transplant tombstone"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"--phase confirm runs immediately before /exit"* ]] || { echo "it got as far as announcing the confirm: $output"; false; }
+}
+
+@test "CONTROL (self form): --resume-cfg that is not the tombstone's target is a second live copy — REFUSED" {
+  mk_transplant; src_row
+  other="$BATS_TEST_TMPDIR/cfg-somewhere-else"; mkdir -p "$other"
+  run env ITERM_SESSION_ID="w0t0p0:$SRC_PANE" CLAUDE_CODE_SESSION_ID="$SESS" CLAUDE_CONFIG_DIR="$SRC_CFG" \
+      bash "$HF" --recycle --dry-run --transplanted-source \
+      --resume-launcher "$LAUNCHER" --resume-cfg "$other" --transplant-cause voluntary
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"a relaunch anywhere but the transplant target is a second live copy"* ]] || { echo "$output"; false; }
 }
 
 # ── THE PANE↔SESSION BINDING (the registry row) ───────────────────────────────────────────────────
