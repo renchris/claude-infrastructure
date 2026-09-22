@@ -87,6 +87,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-22 — recycle #333 (lane infra):** closed 52e837e8f22d, 77e107e67523 · blocked none ·
+  released none · landed (docs entry only; both rows were MOOT, no code change). Both were re-land
+  rows whose content was already on trunk: 52e837e8f22d's pinned ref is an ANCESTOR of origin/main
+  (`git merge-base --is-ancestor` rc 0), and 77e107e67523's 25 paths all verify present
+  (`land-content-verify --no-fetch` => LANDED, 1 amended) with 0 ref-only lines on a 3-path spot
+  check — re-landing either would REVERT trunk's own later commits. Queue then read eligible=0
+  (only d6d7edef60a3 remains, thrash-held at 386 claims).
+  `closed=2 closed_pre=2 closed_other=0 filed=0 net=2 blocked=0 min=2 lane=local-drain project=claude-infrastructure floor=MET`
+
 - **2026-09-09 — recycle #332 (lane infra):** closed 77fbb8be90b0 (lead-supervisor self-check now
   JOINS cc-sessions to $TEL_DIR/<session_id>.json and names the uncovered; the old ps-vs-file-count Δ was
   two denominators — e2e 135/0 vs 128/7 pre-fix), af096c5107b6 (cc-do's non-TTY refusals hand over
