@@ -151,6 +151,31 @@ def iso_to_epoch(s):
     return d.timestamp()
 
 
+# A genuine weekly reset moves weekly_reset_at by about SEVEN DAYS. The endpoint, however,
+# restates the SAME reset instant with per-sample sub-second jitter — measured 2026-09-22 on
+# ~/.claude/logs/account-utilization.jsonl: 221 distinct weekly_reset_at strings for ONE
+# account-day, every one of them identical to the second (03:59:58.881605 / .884407 / .888520).
+# A raw string compare therefore reads almost every adjacent pair as a reset boundary, and
+# buckets() drops the bucket — 625 of 690 dropped as "reset-changed", leaving 0 moving buckets
+# and an ABSTAIN on every window. This tolerance is five minutes: four orders of magnitude below
+# a real reset's seven-day step, and far above any observed jitter.
+RESET_TOLERANCE_S = 300
+
+
+def same_reset(a, b):
+    """True when two weekly_reset_at stamps name the SAME reset.
+
+    Compared with a tolerance rather than quantised to a key on purpose: a key built by floor
+    division puts a boundary somewhere, and two stamps microseconds apart that straddle it would
+    compare unequal — reintroducing the very defect this replaces. Unparseable stamps fall back to
+    the raw string compare, which is still a usable identity and keeps the old behaviour for them.
+    """
+    ea, eb = iso_to_epoch(a), iso_to_epoch(b)
+    if ea is None or eb is None:
+        return a == b
+    return abs(ea - eb) <= RESET_TOLERANCE_S
+
+
 # ── L1: the deduped token census ──────────────────────────────────────────────────────────────
 def transcript_roots():
     """[(dir, acct)] — CC_QP_ROOTS overrides. An override entry is 'path' or 'path=acct'."""
@@ -322,7 +347,7 @@ def buckets(urows, bucket_h, max_gap_s):
             a, b = members[0], members[-1]
             if b["ts"] - a["ts"] > max_gap_s * len(members):
                 continue
-            if a["reset"] != b["reset"]:
+            if not same_reset(a["reset"], b["reset"]):
                 continue                      # a reset boundary fell inside this bucket
             gapped = any(members[i + 1]["ts"] - members[i]["ts"] > max_gap_s
                          for i in range(len(members) - 1))
@@ -749,6 +774,40 @@ def selftest():
               rc7 == 0 and d7["buckets"]["moving"] == d4["buckets"]["moving"],
               f"before={d4 and d4['buckets']['moving']} after={d7 and d7['buckets']['moving']}")
 
+        # ── case 7b: SUB-SECOND JITTER in weekly_reset_at is NOT a reset ────────────────────────
+        # The live endpoint restates one reset instant with per-sample microseconds (measured
+        # 2026-09-22: 221 distinct strings for a single account-day, all equal to the second).
+        # A raw string compare read each pair as a boundary and dropped the bucket, so every
+        # window ABSTAINed with 0 moving buckets. This fixture reproduces production's SHAPE —
+        # every other fixture here passes a CONSTANT reset string, which is exactly why the
+        # suite was green while the tool was blind. RED-PROOF: revert same_reset() to
+        # `a["reset"] != b["reset"]` and this case fails.
+        with open(util, "a") as uh:
+            t0 = (T // BW - 3) * BW
+            jb = "2026-08-23T00:00:00"
+            for s_ in range(12):
+                uh.write(_util_line(_iso(t0 + s_ * 1800), "next3", 10.0 + s_ * 0.5,
+                                    reset=f"{jb}.{100000 + s_ * 3331:06d}+00:00"))
+            uh.write(_util_line(_iso(t0 + 5 * 3600 + 3000), "next3", 17.0,
+                                reset=f"{jb}.999999+00:00"))
+        rc7b, d7b, _ = _run(["--json", "--since", "10d"], base_env)
+        check("7b sub-second jitter in weekly_reset_at does NOT drop the bucket",
+              rc7b == 0 and d7b["buckets"]["moving"] > d7["buckets"]["moving"],
+              f"with-jitter={d7b and d7b['buckets']['moving']} baseline={d7 and d7['buckets']['moving']}")
+
+        # ── case 7c: a REAL reset still drops the bucket (the fix must not blind the detector) ──
+        with open(util, "a") as uh:
+            t0 = (T // BW - 4) * BW
+            for s_ in range(12):
+                uh.write(_util_line(_iso(t0 + s_ * 1800), "next4", 10.0 + s_ * 0.5,
+                                    reset="2026-08-23T00:00:00+00:00"))
+            uh.write(_util_line(_iso(t0 + 5 * 3600 + 3000), "next4", 17.0,
+                                reset="2026-08-30T00:00:00+00:00"))   # +7d = a genuine reset
+        rc7c, d7c, _ = _run(["--json", "--since", "10d"], base_env)
+        check("7c a genuine (7-day) reset step is STILL detected and dropped",
+              rc7c == 0 and d7c["buckets"]["moving"] == d7b["buckets"]["moving"],
+              f"after-real-reset={d7c and d7c['buckets']['moving']} before={d7b and d7b['buckets']['moving']}")
+
         # ── case 8: stale rows are excluded — "could not measure" != "nothing happened" ──
         with open(util, "a") as uh:
             t0 = (T // BW - 2) * BW
@@ -756,8 +815,12 @@ def selftest():
                 uh.write(_util_line(_iso(t0 + s * 1800), "next2", 95.0, stale=True))
             uh.write(_util_line(_iso(t0 + 5 * 3600 + 3000), "next2", 99.0, stale=True))
         rc8, d8, _ = _run(["--json", "--since", "10d"], base_env)
+        # baseline is d7c — the state IMMEDIATELY before this case — not d4. The fixture file is
+        # CUMULATIVE, so "unchanged" can only mean "unchanged since the previous case"; pinning it
+        # to d4 silently required every case in between to add zero moving buckets, which stopped
+        # being true when 7b landed.
         check("8  stale utilization rows never enter a bucket",
-              rc8 == 0 and d8["buckets"]["moving"] == d4["buckets"]["moving"],
+              rc8 == 0 and d8["buckets"]["moving"] == d7c["buckets"]["moving"],
               f"{d8 and d8['buckets']}")
 
         # ── case 9: too few moving buckets ⇒ ABSTAIN naming the count and the floor ──
