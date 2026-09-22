@@ -87,6 +87,15 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
+- **2026-09-22 — recycle #335 (lane infra):** closed 9cf6afcb5a32, d6d7edef60a3 · blocked none ·
+  released none · landed e5c1929f0 + this entry · `closed=2 closed_pre=2 closed_other=11 filed=2
+  net=0 blocked=1 min=2 lane=local-drain project=claude-infrastructure floor=MET` (filed/blocked
+  are two OTHER sessions' rows inside the window; this link filed nothing). d6d7edef60a3 was open
+  since 2026-08-22 and claimed/released **390 times** with no note — its coupling warning is now
+  MEASURED on the 1,185 real recycle payloads, which is what unblocked it: enforcing the payload
+  gates on --recycle would refuse 35 (pane-id, all false positives, chain links #295-#301) and
+  290 = 24.5% (payload-lint), so both arms landed ADVISORY and the coverage hole is no longer silent.
+
 - **2026-09-22 — recycle #334 (lane infra):** closed ee1ac85c6ff6, 41d05eae511c, 5511ea906e2e ·
   blocked none · released none · landed cdabea521 + this entry · `closed=3 closed_pre=3
   closed_other=0 filed=0 net=3 blocked=0 min=2 lane=local-drain project=claude-infrastructure
