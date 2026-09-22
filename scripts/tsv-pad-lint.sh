@@ -69,8 +69,15 @@
 #
 # KNOWN LIMITS, stated rather than hidden. It scans bin/ hooks/ scripts/ only — the same population
 # the §3 guard scans; a .bats fixture reading TSV is test code and out of scope. It keys on the
-# literal `IFS=<tab> read` spelling, so `IFS="$(printf '\t')" read` and friends are invisible (the
-# corpus has no such site — checked 2026-08-10). And a padded emitter is not proof the padding is
+# literal `IFS=<tab> read` spelling, so `IFS="$(printf '\t')" read` and friends are invisible — and
+# that population is NOT empty. It read "the corpus has no such site — checked 2026-08-10" here
+# until 2026-09-22, when the measurement was 23 files / 59 read sites (21 of them carrying no
+# padding def), including scripts/autonomy-sweep.sh and hooks/operator-readout.sh. Widening the
+# recognizer would red lands on that inherited debt, so the hole is CENSUSED AND RATCHETED out of
+# band instead — tests/tsv-field-collapse.bats §3, which pins the count and fires when it grows.
+# Re-measure, never re-quote: the pin in that case is the live number.
+#
+# And a padded emitter is not proof the padding is
 # CORRECT: only tests/tsv-field-collapse.bats §2's per-site regressions assert that.
 #
 # Exit: 0 = clean · 1 = violation (blocking, own-scoped) · 2 = NON-VERDICT — bad usage, no scan dir,

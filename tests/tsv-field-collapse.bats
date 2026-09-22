@@ -571,6 +571,62 @@ JSON
   printf '%s' "$output" | grep -q "clean — $mine reader(s)"
 }
 
+# The recognizer above is deliberately ONE literal spelling, and that is a real hole with a real
+# population. tsv-pad-lint's own header carried "the corpus has no such site — checked 2026-08-10"
+# until this case was written; measured 2026-09-22 the corpus has 23 files / 59 read sites spelling
+# the same tab IFS as `IFS="$(printf '\t')" read` or via a `$TAB`/`$TABC` variable — among them
+# scripts/autonomy-sweep.sh, hooks/operator-readout.sh and scripts/handoff-fire.sh. They carry the
+# IDENTICAL field-collapse hazard (the spelling changes nothing about how bash splits) and the
+# blocking lint cannot see one of them.
+#
+# Widening the recognizer is NOT the fix this case makes, and the reason is measured rather than
+# squeamish: 21 of those files carry no padding def, so a widened blocking gate reds lands on
+# inherited debt for whoever next touches cc-notify, operator-readout or handoff-fire — the same
+# chain-breaker objection that parks the handoff-fire payload-gate row. What a stale comment
+# asserting an EMPTY population cannot do is grow silently; a pinned census can only grow loudly.
+# So this is a DOWNWARD ratchet over the invisible population: new alternate-spelling readers red
+# here, and remediating one is rewarded by lowering the pin.
+@test "guard: the spellings the recognizer cannot see are censused and ratcheted, not assumed absent" {
+  cd "$REPO"
+  local alt sites
+  # LITERAL -F greps, deliberately, for the reason the case above gives: a pattern built out of
+  # escapes (or out of printf) is a CONSTRUCTION, and a construction can be wrong in the direction
+  # that reads clean. These hold the searched-for bytes verbatim — assembled only by shell quoting,
+  # which cannot silently produce a different string — so they cannot match without the spelling
+  # really being there. tests/ is outside bin/ hooks/ scripts/, so holding it here is safe.
+  alt="$( { grep -rlF 'IFS="$(printf '"'"'\t'"'"')" read' bin hooks scripts 2>/dev/null
+            grep -rlF 'IFS="$TAB" read'  bin hooks scripts 2>/dev/null
+            grep -rlF 'IFS="$TABC" read' bin hooks scripts 2>/dev/null
+          } | sort -u | grep -c . )"
+  sites="$( { grep -rhF 'IFS="$(printf '"'"'\t'"'"')" read' bin hooks scripts 2>/dev/null
+              grep -rhF 'IFS="$TAB" read'  bin hooks scripts 2>/dev/null
+              grep -rhF 'IFS="$TABC" read' bin hooks scripts 2>/dev/null
+            } | grep -c . )"
+
+  # A census that finds NOTHING is this case's own broken-marker state, never a clean tree — the
+  # same non-verdict discipline the lint applies to its own empty scan.
+  [ "$alt" -gt 0 ]
+  [ "$sites" -gt 0 ]
+
+  # THE RATCHET. Pinned 2026-09-22 at the measured population (cc-backlog ee1ac85c6ff6).
+  if [ "$alt" -gt 23 ] || [ "$sites" -gt 59 ]; then
+    echo "the population the blocking lint CANNOT see has grown: $alt file(s) / $sites site(s), pinned 23/59."
+    echo "A new reader spelled IFS=\"\$(printf …)\" or IFS=\"\$TAB\" is invisible to scripts/tsv-pad-lint.sh."
+    echo "Spell it IFS=\$'<tab>' read so the gate can judge it, or pad at the emitter and raise the pin here."
+    { grep -rlF 'IFS="$(printf '"'"'\t'"'"')" read' bin hooks scripts 2>/dev/null
+      grep -rlF 'IFS="$TAB" read'  bin hooks scripts 2>/dev/null
+      grep -rlF 'IFS="$TABC" read' bin hooks scripts 2>/dev/null
+    } | sort -u | sed 's/^/  /'
+    false
+  fi
+
+  # Downward half: remediation must be banked, or the pin rots into a ceiling nobody lowers.
+  if [ "$alt" -lt 23 ] || [ "$sites" -lt 59 ]; then
+    echo "the invisible population SHRANK to $alt file(s) / $sites site(s) — lower the pin (23/59) here."
+    false
+  fi
+}
+
 @test "guard: WIRED — ship-land's gate block invokes the lint" {
   # Enforcement by this suite alone is the post-hoc detection this whole change exists to replace,
   # so the wiring IS part of the claim, not an implementation detail
