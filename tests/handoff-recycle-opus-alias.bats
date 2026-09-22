@@ -23,6 +23,11 @@ setup() {
   export CC_FIRE_CAPACITY_GATE=off
   export CC_FIRE_HEADROOM_GATE=off
   export HANDOFF_ACCOUNT_SWEEP=off
+  # Seams the hermeticity ratchet names for handoff-fire: an ABSOLUTE /tmp default and a BARE
+  # tool name, neither redirected by a fixtured $HOME. ABSENT paths — these sensors fail open.
+  export HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/handoff-account-sweep.json"
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/claude-accounts"
+  export CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/claude-accounts-heal-"
   local real_home="$HOME"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
   [ -e "$real_home/.claude" ] && ln -s "$real_home/.claude" "$HOME/.claude"
