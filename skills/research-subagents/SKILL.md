@@ -44,8 +44,12 @@ Then emit verbatim:
 
 **What the never-cap rule governs — and what it does not** (scoping, added 2026-08-01; it changes
 no number below). Anthropic's Opus 5 guide warns that Opus 5 *delegates more readily* than prior
-models and says to keep spawn counts low. That does **not** contradict the operator's never-cap
-directive, because the two speak to different failure modes on different axes:
+models and says to keep spawn counts low. (That is dated Opus 5 guidance. The Opus 5.5 prompting
+guide — the model `versions.opus_latest` names as of 2026-09-22 — does not repeat the caution; it
+describes long autonomous runs "with parallel subagents", `prompting.txt` L39, fact
+`c8-effort-prompting#F5` in `docs/research/opus55-utilization-2026-09-22/facts.json`.) That does
+**not** contradict the operator's never-cap directive, because the two speak to different failure
+modes on different axes:
 
 | Axis | Rule | Failure it prevents |
 |---|---|---|
@@ -56,7 +60,8 @@ So: *decide to research → fan wide, uncapped.* The guide's caution applies **b
 the work is a research wave at all. A single-fact lookup was already `N=1` in the table below —
 that row is the guide's point, and it predates the guide.
 
-The one genuinely open question is whether the **numbers** below should move for Opus 5. That is
+The one genuinely open question is whether the **numbers** below should move for the current
+`versions.opus_latest`. That is
 not settleable from a doc: the guide's own instruction is to re-run a sweep on *your own* evals.
 Until such a sweep exists, the measured local defaults stand. Ledger: `cc-decide` packet
 `264154f10d1a`.
@@ -392,10 +397,12 @@ On a Max plan the binding constraint on a 10–100-agent wave is the **5-hour + 
 usage quota**, not dollars — and Opus draws it down ~5× faster than Sonnet/Haiku.
 Objective = **maximal actionable yield within the weekly cap** (SSOT + full rationale:
 `~/.claude/model-routing-freewin-probe.md` § Quota-constrained refinement). The reasoning
-WORKER slot is floor-pinned on the **effort** axis (= max per probe T1 + the T2 effort grid —
-low/med/high/xhigh all fall below the open-ended-grounding floor, for BOTH Opus and Sonnet).
-On the **model** axis it is pinned to Opus 4.8 ONLY in-process/teammate surfaces; **in a
-Workflow it is NOT** (see the free-win bullet below). Quota is managed at the WAVE level:
+WORKER slot was floor-pinned on the **effort** axis (= max per probe T1 + the T2 effort grid,
+2026-06-30/07-01, measured on Opus 4.8 and Sonnet — low/med/high/xhigh all fell below the
+open-ended-grounding floor, for BOTH). The CURRENT worker rung is `effort_defaults.opus55_research`
+in `~/.claude/model-config.yaml`; that 2026-07-01 floor has not been re-measured on the current model.
+On the **model** axis it is pinned to `roles.research_worker` ONLY in-process/teammate surfaces;
+**in a Workflow it is NOT** (see the free-win bullet below). Quota is managed at the WAVE level:
 
 - **Decomposition discipline is the primary lever.** Spawn exactly the orthogonal axes; the
   OASIS stop kills the redundant tail. The "never under-spawn / default 10–30" rule guards
@@ -410,10 +417,12 @@ Workflow it is NOT** (see the free-win bullet below). Quota is managed at the WA
   for the decisive slots. HARD requirements: effort MUST be `max` (Sonnet@xhigh drops below the
   floor — wrong-file citations on hard grounding), AND the brief MUST carry a saturation bound
   (~15-25 tool calls; unbounded max-effort Sonnet overflowed context once). In-process `/research`
-  can't pin effort → those workers stay Opus 4.8 (`workflow_synthesis_worker` role in
-  `~/.claude/model-config.yaml`).
-- **Tier-mix down.** Route every genuinely-retrieval axis to Haiku; reserve Fable for the
-  sharp 10–15%; the inferential axes take Sonnet-5@max in Workflows / Opus-4.8@max in-process.
+  can't pin effort → those workers stay on `roles.research_worker` (the Workflow slot is
+  `roles.workflow_synthesis_worker`, both in `~/.claude/model-config.yaml`). ⚠️ The free win is
+  certified vs Opus 4.8 only; the re-probe against the current `versions.opus_latest` is pending.
+- **Tier-mix down.** Route every genuinely-retrieval axis to `roles.research_retrieval`; reserve
+  `roles.research_adversarial` for the sharp 10–15%; the inferential axes take
+  `roles.workflow_synthesis_worker` in Workflows / `roles.research_worker` in-process.
 - **Prefer Workflows for waves >~10 agents** — the only surface where per-slot model+effort is
   pinnable (in-process subagents inherit lead effort, GH #25591), AND the only surface where the
   Sonnet-5@max worker free win above is realizable.
@@ -445,7 +454,8 @@ cost inflation on long-running waves vs the naive calculation.
 
 **Calibrated cost (Opus 4.8 $5/$25 pricing, ~600K input per subagent at
 80% input / 20% output split; Fable 5 slots — `claude-fable-5`, $10/$50 —
-cost 2× the corresponding row)**:
+cost 2× the corresponding row)**. Dollars are not this fleet's binding currency — weekly plan
+quota is (see CLAUDE.global.md § Frontier Tier Routing); read the table as a historical scale proxy:
 
 | N subagents | No-cache | 70% cache hit | Batch | Cache + batch |
 |---|---|---|---|---|
@@ -512,7 +522,7 @@ window is nominal, not effective — empirical measurements:
 **Per-subagent depth target (task-class-conditional)**:
 
 - **Synthesis / reasoning workers** (multi-hop inference, citation-and-bullet
-  synthesis — the typical `deep-research` (Opus 4.8) worker): **150K modal,
+  synthesis — the typical `deep-research` (`roles.research_worker`) worker): **150K modal,
   256K ceiling, 30K floor.** 180K is the modal sweet spot — well below the
   256K reasoning cliff. Hard ceiling: 500K.
 - **Retrieval workers** (pure lookup + extraction, no inferential synthesis —
@@ -523,7 +533,7 @@ window is nominal, not effective — empirical measurements:
 
 > Depth-cliff evidence: LongSWE-Bench 29%→3% (32K→256K) is reasoning-specific; retrieval is robust (MRCR v2 Opus 4.6 76% at 1M; Gemini 2.5 Pro 91.5%→83.1% across 128K→1M). Full benchmarks: `~/.claude/memory/research-subagents-validation-log.md § V2 R2`.
 
-**Routing implication**: a `deep-research` (Opus 4.8) worker brief that includes any
+**Routing implication**: a `deep-research` (`roles.research_worker`) worker brief that includes any
 inferential synthesis falls under "synthesis" budget (cap at 256K). The
 `Explore` Haiku tier is retrieval by definition. If a brief sits ambiguously
 between — *"extract these claims from this source set AND reason about
@@ -581,9 +591,9 @@ track at all; `frontier_access.tracks` is a stale label with no code consumer.
 Agent-definition frontmatter stays `model: opus` so the definitions remain
 valid on both tracks — the override is always call-time. Agent TEAMS run on
 both tracks too; teammate models are gated by the auto-mode allowlist in
-the SSOT, not by the track — default Opus 4.8; `claude-fable-5` verified
+the SSOT, not by the track — default `versions.opus_latest`; `claude-fable-5` verified
 in auto mode 2026-06-09 and allowlisted, so eval-track teams may pin
-`teammate_frontier` (Fable 5) per-member where judgment density warrants
+`roles.teammate_frontier` per-member where judgment density warrants
 the 2× cost. **Lead/default sessions do NOT ride the frontier tier**
 (`lead_default` reverted to Opus 4.8 on 2026-06-09 — Fable-by-default burned
 5-hour plan windows). Panel frontier work runs AGENT-INITIATED
@@ -595,28 +605,28 @@ inline, queued holes batch at wrap-up; capture via `/frontier-hole`. The
 (baseline-blind; frontmatter `opus`, call-time `model: "fable"`).
 
 > **⚠️ QUALITY-FIRST ROUTING OVERRIDE (2026-06-30) — READ FIRST; governs this whole
-> tier-selection section.** The breadth-first **worker slot defaults to Opus 4.8**
-> (`deep-research`), NOT Sonnet. The Sonnet-worker default + the "$/insight" cost-win math
+> tier-selection section.** The breadth-first **worker slot defaults to `roles.research_worker`**
+> (`deep-research`, the Opus tier), NOT Sonnet. The Sonnet-worker default + the "$/insight" cost-win math
 > below (MALBO ~47%, "pure Opus overpays") were a COST-first optimization valid when Sonnet
 > was cheaper at iso-quality. **Sonnet 5 broke that**: ≤ Opus 4.8 quality AND ~15% MORE
 > $/task at max effort (Artificial Analysis 2026-06-30) — neither a quality nor (at
 > inherited-max) a cost win. Under the operator's quality-first objective (100th percentile;
 > cost only breaks ties among equal-quality configs), every reasoning-sensitive worker takes
-> the GA ceiling (Opus 4.8); Fable 5 is the availability-gated tier above. Reinterpret the
-> section below: "Sonnet worker" / "deep-research-sonnet" = the **Opus 4.8** worker slot; the
-> "re-spawn on Opus" escalation becomes **re-spawn on the frontier (Fable 5, window-gated)**;
+> the GA ceiling (`versions.opus_latest`); `versions.frontier_latest` is the tier above. Reinterpret the
+> section below: "Sonnet worker" / "deep-research-sonnet" = the **`roles.research_worker`** slot; the
+> "re-spawn on Opus" escalation becomes **re-spawn on the frontier (`versions.frontier_latest`)**;
 > the cost-win math is retained (historical) but SUPERSEDED for worker selection. Sonnet 5
 > re-enters the worker slot ONLY via a probe-certified free win (iso-quality AND cheaper/task
 > at pinned low/med effort in a Workflow) — spec: `~/.claude/model-routing-freewin-probe.md`.
 
 **Type-mix pin for typical complex research wave (model-tier-aware)**:
 
-- 60% `deep-research` (Opus 4.8) — multi-axis breadth-first worker  [worker slot; was `deep-research-sonnet`/Sonnet — see override]
+- 60% `deep-research` (`roles.research_worker`) — multi-axis breadth-first worker  [worker slot; was `deep-research-sonnet`/Sonnet — see override]
 - 25% `Explore` (Haiku 4.5 on stable-114; **inherits lead model, capped opus,
   on eval ≥2.1.198 — re-price this slice, it is no longer the cheap tier there**)
   — codebase lookups, file:line discovery
-- 10% `deep-research` (frontier: Fable 5 via `model: "fable"` during the
-  access window on the eval track; otherwise Opus 4.8) — adversarial /
+- 10% `deep-research` (frontier: `roles.research_adversarial` via `model: "fable"` while
+  `frontier_access.active`; otherwise `frontier_access.fallback`) — adversarial /
   red-team briefs only
 - 5% `deep-research` (frontier, same routing) — rare multi-hop
   depth-coordination (>5 inferential steps, non-decomposable); usually
@@ -626,9 +636,9 @@ inline, queued holes batch at wrap-up; capture via `/frontier-hole`. The
 ≈ $16.50 — ~47% reduction at iso-performance (Anthropic prod pattern; MALBO
 arxiv 2511.11788; X-MAS arxiv 2505.16997).
 
-**When the lead picks tier per subagent**: default to `deep-research` (Opus 4.8)
+**When the lead picks tier per subagent**: default to `deep-research` (`roles.research_worker`)
 for the worker slot (quality-first — see override). Escalate to the frontier
-(Fable 5 via call-time `model: "fable"` during the access window) only on explicit trigger:
+(`versions.frontier_latest` via call-time `model: "fable"` while `frontier_access.active`) only on explicit trigger:
 
 1. Brief is adversarial / red-team / devil's advocate (sharpness > cost)
 2. Sub-question requires multi-hop reasoning chain >5 steps AND lead is
@@ -650,7 +660,7 @@ trigger automatic re-routing:
 
 Pure Opus for a typical wave overpays ~47%; pure Sonnet underperforms on adversarial briefs; pure Explore misses synthesis. The mix wins on $/insight when ≥20% of sub-questions are pure retrieval — almost always true for codebase-adjacent research. Full V2 R3 routing rationale: `~/.claude/memory/research-subagents-validation-log.md § V2 R3`.
 
-**Highly-canonical retrieval exception**: for retrieval briefs targeting specific line ranges of *highly-canonical* sources (Anthropic cookbook, published research papers with file:line citations, vendor docs at named anchors), route to `deep-research` (Opus 4.8), NOT `Explore`. Haiku's retrieval lacks the reasoning to disambiguate version-drift / line-shift in canonical sources. The 25% Explore allocation contracts to ~20% when canonical retrieval briefs surface; the freed slot goes to the Opus 4.8 worker. Full V2 E1 derivation: `~/.claude/memory/research-subagents-validation-log.md § V2 E1`.
+**Highly-canonical retrieval exception**: for retrieval briefs targeting specific line ranges of *highly-canonical* sources (Anthropic cookbook, published research papers with file:line citations, vendor docs at named anchors), route to `deep-research` (`roles.research_worker`), NOT `Explore`. Haiku's retrieval lacks the reasoning to disambiguate version-drift / line-shift in canonical sources. The 25% Explore allocation contracts to ~20% when canonical retrieval briefs surface; the freed slot goes to the `roles.research_worker` slot. Full V2 E1 derivation: `~/.claude/memory/research-subagents-validation-log.md § V2 E1`.
 
 ## Banned Phrases (Cognition Tells)
 
@@ -801,7 +811,7 @@ B, single-agent.
 
 ## Synthesis Bottleneck Threshold
 
-Lead's effective working context (frontier lead — Fable 5 / Opus 4.8 — 1M nominal, ~400K usable post-rot)
+Lead's effective working context (lead on `roles.lead_default` — 1M nominal, ~400K usable post-rot)
 accommodates subagent returns up to a ceiling that the rule must respect.
 
 **Lead-context budget at synthesis time**:
