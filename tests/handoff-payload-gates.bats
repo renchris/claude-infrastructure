@@ -290,3 +290,76 @@ setup() {
   run jq -rs 'map(select(.class=="refused"))|length' "$LOG"
   [ "$output" = "1" ]
 }
+
+# ── M-11 advise: the THIRD fire path (--recycle) finally runs the payload gates ─────────────────
+#
+# backlog d6d7edef60a3, open since 2026-08-22, claimed 390 times and released 390 times with no
+# note. handoff-fire has three fire paths; the payload gates ran on the dry-run arm (preview) and
+# the cold-fire arm (enforce) and on --recycle they ran on NEITHER — while --recycle is this
+# fleet's dominant succession path (the drain chain alone is 335 links deep on it), and it is the
+# path where a botched brief has no second reader, because the successor is the SAME pane.
+#
+# WHY ADVISORY AND NOT ENFORCING — measured on the real population, not argued. Over the 1,185
+# surviving recycle payloads under ~/.claude*/autonomy/*recycle*.txt:
+#   pane-id      35 would be REFUSED = 7 distinct briefs x 5 config dirs, and all 7 are FALSE
+#                POSITIVES on a `stat` dev:inode pair quoted in prose (16777234:745521400,
+#                1535747925:3929360201) — and those 7 briefs are the drain chain's OWN
+#                CONSECUTIVE links #295-#301. A fail-closed arm here breaks the chain's lifeline
+#                for seven links running, over a benign pure-decimal pair.
+#   payload-lint 290 of 1,185 = 24.5% are RED *with* back-channel intent, i.e. exit 4. A gate that
+#                refuses one recycle in four is not a gate, it is an outage.
+# Re-derive both with the loop in the commit body; do not re-quote these numbers, re-measure them.
+
+@test "M-11 advise: a refused payload is REPORTED on the recycle path and the fire is NOT aborted" {
+  printf 'ping the orchestrator pane 99261468 when done\n' > "$PF"
+  run payload_pane_id_gate "$PF" advise
+  # THE WHOLE POINT: 0, not 3. Pre-change `advise` was an unrecognised mode and fell through to
+  # enforce, so this assertion is the red-proof — it failed with status 3 before the call site existed.
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"99261468"* ]] || false
+  # and it must say the fire CONTINUES, so a reader cannot mistake the advisory for a refusal
+  [[ "$output" == *"does NOT refuse"* ]] || false
+  # …and it must NOT borrow the dry-run's wording, which promises an exit 3 that will never happen here
+  [[ "$output" != *"WOULD REFUSE"* ]] || false
+}
+
+@test "M-11 advise: an ADMITTED payload is silent — the advisory is not unconditional" {
+  # The control that can fail: an arm that printed on every recycle would be alarm-polarity noise,
+  # and 1,150 of the 1,185 measured payloads are clean, so this is the COMMON path.
+  printf 'fired by 71B42B48-1331-4F60-8DA3-6849F2682CA2 (historical fact)\n' > "$PF"
+  run payload_pane_id_gate "$PF" advise
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "M-11 advise: the --recycle branch actually CALLS both gates, in the cold-fire order" {
+  # The hole this row named is a CALL-SITE hole, and a unit test of the mode cannot see it: the
+  # gate could grow a perfect advise mode that nothing on the recycle path ever invokes — which is
+  # precisely the state scripts/pane-id-lint.sh was in for months (orphaned detection, no gate).
+  # So assert the wiring itself, in the span between the recycle branch's pre_trust and recycle_fire.
+  local span
+  span="$(awk '/^  pre_trust "\$LAUNCH_DIR" "\$RCY_TRUST_CFG"$/{f=1} f{print} /^  recycle_fire$/{if(f)exit}' "$HF")"
+  [ -n "$span" ]
+  [[ "$span" == *'payload_pane_id_gate "$PROMPT_FILE" advise'* ]] || false
+  [[ "$span" == *'payload_lint_gate    "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" advise'* ]] || false
+  # order: pane-id before back-channel, the same order the enforcing arm refuses in, so a recycle's
+  # advisories and a cold fire's refusals cannot name different "first" problems on one payload.
+  local pid_at lint_at
+  pid_at=$(printf '%s\n' "$span" | grep -n 'payload_pane_id_gate' | head -1 | cut -d: -f1)
+  lint_at=$(printf '%s\n' "$span" | grep -n 'payload_lint_gate'    | head -1 | cut -d: -f1)
+  [ "$pid_at" -lt "$lint_at" ]
+}
+
+@test "M-11 advise: advise NEVER returns non-zero — a recycle cannot be aborted by its own advisory" {
+  # handoff-fire runs under `set -euo pipefail` and both advise calls sit in plain statement
+  # position, so a single non-zero return on ANY branch of advise mode kills the recycle outright —
+  # the exact chain-breaker the measurement above rules out. Sweep every branch the mode can reach.
+  printf 'pane 99261468\n'                      > "$PF"; run payload_pane_id_gate "$PF" advise; [ "$status" -eq 0 ]
+  printf 'clean prose, nothing id-shaped here\n' > "$PF"; run payload_pane_id_gate "$PF" advise; [ "$status" -eq 0 ]
+  : > "$PF";                                            run payload_pane_id_gate "$PF" advise; [ "$status" -eq 0 ]
+  run payload_pane_id_gate "$BATS_TEST_TMPDIR/does-not-exist.md" advise; [ "$status" -eq 0 ]
+  printf 'pane 99261468\n' > "$PF"
+  CC_PANE_ID_GATE=0 run payload_pane_id_gate "$PF" advise; [ "$status" -eq 0 ]
+  # and the kill switch must still be silent when it admits
+  [ -z "$output" ]
+}
