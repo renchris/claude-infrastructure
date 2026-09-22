@@ -447,7 +447,11 @@ live_do() { # $1=recipe, rest = its arguments
     # A DRAFT IS THE SAME VERB WITHOUT THE SUBMIT, and it is a separate recipe rather than a flag
     # because the whole of arm (c) turns on the difference between typing and submitting.
     pane-draft)  "${IT2_BIN:-$HOME/.claude/bin/it2}" session send -s "$1" --no-newline -- "$2" ;;
-    pane-read)   "${IT2_BIN:-$HOME/.claude/bin/it2}" session text -s "$1" ;;
+    # `read`, NOT `text`. MEASURED 2026-09-21: `it2 session text -s <pane>` returns
+    # "it2-kitty: unsupported subcommand: session text" — this backend's verb is `read`
+    # (bin/it2-kitty:1385). pane-read had never been executed, so the wrong verb survived every
+    # gate: the selftest stubs it, and --seed reaches pane-open/pane-type only.
+    pane-read)   "${IT2_BIN:-$HOME/.claude/bin/it2}" session read -s "$1" ;;
     # THE FIRE ITSELF IS LIVE. cc-lr owns the three refusals (teammate / ambiguous / not-limited)
     # and returns in seconds; the drill never re-implements any of them, and never types the
     # recovery itself.
