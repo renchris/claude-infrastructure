@@ -1,0 +1,200 @@
+{
+ "brief": "T4-stop-arms",
+ "judge": "J1",
+ "model": "claude-opus-5",
+ "effort": "xhigh",
+ "label_map": {
+  "X": "C",
+  "Y": "A",
+  "Z": "B"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6",
+     "k7",
+     "k8",
+     "k9",
+     "k10",
+     "k11",
+     "k12",
+     "k13",
+     "k14",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 42,
+    "citations_bad": [
+     {
+      "cite": "hooks/session-continue.sh:432 — \"mailbox_promote_acked (:213)\"",
+      "problem": "off-by-one in X's own stale-citation table: the comment carrying \"(:213)\" is on line 433, not 432. The correction X gives (:467) is exact."
+     },
+     {
+      "cite": "scripts/wrap-ledger.sh:386 — \"wrap-ledger keys on WRAP_SESSION_ID and CLAUDE_SESSION_ID\"",
+      "problem": "line 386 is the MEMO key and does contain both names, but X's inference in §9 ('if the hook environment lacks CLAUDE_SESSION_ID then ⛔/filed/unconvicted read as none') is refuted by the actual SID ladder at :636-641, which has a FOURTH arm, CLAUDE_CODE_SESSION_ID (:640) — the very variable a tool-call shell carries (comment :631-633). X flags the section as unverified, but the premise was resolvable by reading 10 more lines."
+     },
+     {
+      "cite": "scripts/wrap-ledger.sh:1878-1897 for LIVE_BREACH",
+      "problem": "covers only 3 of the 5 assignment sites (migration :1879, diverged :1886, adds :1896); the budget arms are at :1912/:1914, outside the range. X does name 'the budget arms' in prose, so substance is right, range is short."
+     },
+     {
+      "cite": "hooks/session-continue.sh:178 — \"(:145)\" listed as a citation that checks out",
+      "problem": "the '(:145)' text is on line 177, and the .sid WRITE is at :146 (:145 only computes csid). Listed under 'these citations check out' when it is marginally off."
+     }
+    ],
+    "wrong_claims": [
+     "§9: the conditional that a missing CLAUDE_SESSION_ID makes ⛔/FILED_MINE/UNCONVICTED_MINE read as 'none' — wrap-ledger.sh:640 adds CLAUDE_CODE_SESSION_ID as a further fallback, so the premise is incomplete (hedged as 'not verified from code').",
+     "mailbox_wake_armed described as requiring 'its pid is alive' without the legacy branch at mailbox-pending.sh:296-297 where NO recorded pid returns 0 (armed)."
+    ],
+    "extra_correct": [
+     "VERIFIED, unique: the 📦 rung includes LANDING=1 (wrap-ledger.sh:1985-1986, emitted as LANDING= at :2176) and ship_floor greps only RUNG/TRUNK/AHEAD/SHAS — so the floor says '/ship it NOW' while the ledger's own readout says 'do NOT fire a second /ship on this worktree'. Confirmed byte-for-byte.",
+     "VERIFIED, unique: wrap-ledger.sh:25's comment ('🔧 = dirty ∨ gate ran-but-stale-on-HEAD ∨ remainder') is STALE — the ladder at :1941-1961 deliberately removed gate-staleness as a rung source, and the ✅-eligible branch adds six further 🔧 sources (:1997-2052). This directly refutes Output Y.",
+     "VERIFIED, unique: the wake floor's .wakefloor state file is keyed on $CC_MAILBOX_DIR/<mailbox key> (:610-611), NOT on the config dir, unlike .count/.mech/.ship.",
+     "VERIFIED, unique: `stop_hook_active` is never consulted; the only payload fields read are .cwd (:309), .session_id (:312) and .transcript_path (:353, :695, :930) — grep confirms zero occurrences.",
+     "VERIFIED, unique: `set` keys the sentinel on the shell's $PWD (:140) while actuation keys on the payload's .cwd (:309-311), so a `set` from another directory arms a sentinel the Stop never sees.",
+     "VERIFIED: neither CLAUDE_CONTINUE_MAX (:1255) nor CC_MECH_MAX (:1053) is digit-guarded (only the counters are, :1257/:1058), so a non-numeric value makes the -ge test error→false and the bound never binds.",
+     "VERIFIED: all three floors call raw agent_assignee_argv + agent_team_member_confirms and exempt on rc 0|2; none uses agent_is_assignee (agent-identity.sh:133-150), whose *@session-* shape gate would refuse a garbage id that otherwise returns rc 2 = exempt.",
+     "VERIFIED: the in-file comment at :963-966 claiming the wake floor's assignee policy differs is FALSE in code — :780-784, :970 and :1105 are all rc 0|2 exempt, rc 1 not.",
+     "VERIFIED, unique: negative controls — CC_TEARDOWN_DIR (:553 vs lead-crash-watchdog.sh:251) and CC_MAILBOX_DIR (:610 vs mailbox-pending.sh:110) use identical defaults; only CC_MECH_MAX diverges.",
+     "VERIFIED, unique: :1082-1083 quotes the mechanical header as saying '📦 must NOT fire…' and that text exists nowhere in :897-929 (grep: single hit, at :1082 itself).",
+     "VERIFIED: the block emits only if jq runs — :1332/:1334 are `jq … && _emitted=1`, so without jq .count still increments (:1270) and nothing blocks.",
+     "VERIFIED: the only exit 2 sites are :116, :130, :216 (CLI/--why); every actuation path exits 0.",
+     "VERIFIED: session-writes.sh:420-422 asserts session-continue.sh 'sets pipefail' — false; the file sets no shell options (:36-37, :364-366 says so itself). And :423-425's 'sibling at :269 still has that shape' is stale: session_dirty_mine uses a herestring at :354.",
+     "VERIFIED: lead-crash-watchdog.sh has no classify_death at :255-278 (it is at :402) and no marker_owns_sid at :112-118 (it is at :207); the real reader is retired_by_desk :249-263, which greps '\"mode\":\"teardown\"' at :258 — a check wf_teardown_marked (:551-568) does not make."
+    ],
+    "score_1_10": 9
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6",
+     "k7",
+     "k8",
+     "k9",
+     "k10",
+     "k11",
+     "k12",
+     "k13",
+     "k14",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 31,
+    "citations_bad": [
+     {
+      "cite": "hooks/hook-chain.sh:78 — \"line 78 of the current snapshot literally reads '3. EVERY MEMBER ALWAYS RUNS. The harness runs every hook in a matcher group even when one blocks, so this does too — …'\"",
+      "problem": "the quoted text spans lines 77 AND 78; line 78 alone begins 'blocks, so this does too — …'. Claimed as a byte-for-byte single-line read."
+     },
+     {
+      "cite": "scripts/wrap-ledger.sh:25",
+      "problem": "the line exists and says what Y quotes, but Y asserts its CONTENT as the code's behaviour. The code (ladder :1979-1982 plus the explicit removal rationale at :1941-1961) shows gate-staleness no longer produces 🔧. The brief specifically forbade grounding claims in comments."
+     },
+     {
+      "cite": "hooks/session-continue.sh:1301-1345",
+      "problem": "the file is 1344 lines; line 1345 does not exist. Y also states it 'read hooks/session-continue.sh in full (1345 lines)'."
+     },
+     {
+      "cite": "settings.example.json 'not found at the repo root'",
+      "problem": "the file exists at settings-templates/settings.example.json and confirms the Stop-chain position claim (session-continue.sh at :466, completion-assert.sh at :476). Y honestly flags the claim as unverified rather than asserting it false, so this is an incomplete search, not a fabrication."
+     }
+    ],
+    "wrong_claims": [
+     "MATERIAL: '${f}.count — Reset to absent only by an explicit CLI set (rm -f \"${f}.count\", :142)'. False: the no-sentinel branch removes .count on EVERY unarmed Stop (:1206), and the cap path removes it too (:1260). This is precisely the mechanism that makes the mechanical bound a PRODUCT (each arming starts a fresh 8-chain) — which Y quotes from the :1046-1048 comment without reconciling against its own claim.",
+     "MATERIAL: defines RUNG=🔧 from the stale header comment at wrap-ledger.sh:25 as 'dirty tree ∨ gate ran-but-stale-on-HEAD ∨ DoD remainder > 0'. The gate term was deliberately removed (:1941-1961) and the ✅-eligible branch carries six further 🔧 sources (:1997-2052).",
+     "Ship-floor 📦 section omits the TRUNK non-empty/non-'none' gate at :1148-1149, which is a hard precondition for the session_unlanded_mine call."
+    ],
+    "extra_correct": [
+     "VERIFIED, unique: names CONTINUE_IDL (default $HOME/.claude/autonomy/idl.jsonl, :82) and CONTINUE_LOG (default $HOME/.claude/logs/session-continue.log, :83) as telemetry destinations rather than bounds — the brief asked for EVERY env var.",
+     "VERIFIED: CC_WATCH_FRESH_S default 90 cited at mailbox-pending.sh:297 — exact line.",
+     "VERIFIED: SESSION_WRITES_TIMEOUT_S default 5 at session-writes.sh:171 — exact.",
+     "VERIFIED: the cross-hook double-block (this hook + completion-assert.sh can each emit a block on one Stop) with the caveat that hook-chain.sh is itself 'deliberately NOT wired into settings.json' (:23-24), so it is cited as harness documentation, not a runtime component.",
+     "VERIFIED: the mailbox_wake_armed predicate stated precisely — fresh heartbeat AND, if a pid is recorded, that pid alive (mailbox-pending.sh:291-301).",
+     "VERIFIED: flags lead-crash-watchdog.sh's classify_death/marker_owns_sid citations as stale while noting the SUBSTANCE (mode marker + 30-min window via find -mmin -30 at :257) does exist nearby."
+    ],
+    "score_1_10": 6
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6",
+     "k7",
+     "k8",
+     "k9",
+     "k10",
+     "k11",
+     "k12",
+     "k13",
+     "k14",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 38,
+    "citations_bad": [
+     {
+      "cite": "hooks/hook-chain.sh:24-25 — \"that dispatcher is not wired into settings.json\"",
+      "problem": "the sentence spans :23-24 ('deliberately NOT wired into settings.json' ends on :24). Off by roughly one line; substance correct."
+     },
+     {
+      "cite": "hooks/session-continue.sh:426-469 — \"Before any arm runs, mailbox_promote_acked runs on every Stop\"",
+      "problem": "it is conditional on the mailbox lib sourcing, jq being present, and a safe key (:426, :467). The cited range shows the guards, so the prose 'every Stop' slightly overstates the cited code."
+     },
+     {
+      "cite": "bin/cc-custody:45-49 — \"Stale rows count\"",
+      "problem": "those lines are a header COMMENT describing the policy, not executable code. The substance is correct and the brief's 'ground in code' rule makes this a weak citation rather than a false one."
+     }
+    ],
+    "wrong_claims": [],
+    "extra_correct": [
+     "VERIFIED: the in-file comment at :963-966 claiming the wake floor's assignee semantics differ is FALSE in code — all three arms exempt on rc 0|2 and refuse rc 1 (:780-783, :970, :1105).",
+     "VERIFIED: none of the three arms uses agent_is_assignee's shape gate (agent-identity.sh:143-147), so an argv match whose id is not *@session-* returns rc 2 (agent-identity.sh:95) and is EXEMPT in all three.",
+     "VERIFIED, unique precision: `clear`'s SC_SID falls back to '?' (:260), so a bare-shell clear writes sid '?' into .mech and, because :1060 resets mcnt when msid≠cur_sid, does NOT spend a real session's budget.",
+     "VERIFIED: wf_teardown_marked (:551-568) has no '\"mode\":\"teardown\"' check while the watchdog it claims to mirror does (lead-crash-watchdog.sh:258, beside find -mmin -30 at :257) — presented as a second divergence between two readers of one marker.",
+     "VERIFIED: 'SELF-CLEARING' (:922-923) is true only of the ARMING predicate; the armed path never re-checks the tree, so the sentinel keeps replaying the stale 'Commit the N file(s)…' step (:1070) until clear/set/cap.",
+     "VERIFIED: neither CLAUDE_CONTINUE_MAX (:1255) nor CC_MECH_MAX (:1053) is sanitised, so a non-numeric value makes the bound inert.",
+     "VERIFIED: exhaustive rc-2 source enumeration for session_dirty_mine/session_unlanded_mine with exact lines (:279, :282, :285-286, :318-321, :377-383, :414-417; _sw_paths :137-139, :188).",
+     "VERIFIED: 'A missing function also abstains silently (:1147, :1153)' — exact.",
+     "VERIFIED: log_idl writes only to files (:85-95), which is what makes 'at most one JSON object per Stop' hold.",
+     "VERIFIED: mailbox_wake_armed also returns armed when NO pid is recorded (legacy marker) — mailbox-pending.sh:296-297.",
+     "VERIFIED: the same stale-citation set as X (:425 vs :197, :467 vs :213, :441/:821, :944→:1101/:850-854, :952→:1103-1109/:776-798, :965→:778-785, :974 pointing at itself→:1106, :1327/:502, mailbox-pending.sh:151→:559, session-writes.sh:421 pipefail claim false), with the line numbers correct where X had an off-by-one."
+    ],
+    "score_1_10": 8
+   }
+  ],
+  "xy": "X",
+  "xz": "X",
+  "yz": "Z",
+  "pair_reasons": "X vs Y — X wins on two material wrong claims in Y that I refuted against the code. (1) Y says `${f}.count` is \"Reset to absent only by an explicit CLI `set` (:142)\"; `hooks/session-continue.sh:1206` removes `.count` on every unarmed Stop before `mechanical_arm` is called, and `:1260` removes it at the cap — which is exactly why the mechanical bound is the PRODUCT Y itself quotes from `:1046-1048`. (2) Y defines RUNG=🔧 by quoting the header comment at `scripts/wrap-ledger.sh:25` (\"dirty ∨ gate ran-but-stale-on-HEAD ∨ remainder\") as the code's behaviour; the ladder at `:1979-1982` has no gate term and `:1941-1961` is a long rationale for having removed it, while the ✅-eligible branch adds six further 🔧 sources (`:1997-2052`). X flags exactly that comment as stale. Y also attributes a two-line hook-chain.sh quote to line 78 alone (it spans :77-78), cites a nonexistent line 1345, and omits the TRUNK gate at `:1148-1149`. X additionally carries verified findings Y lacks entirely (LANDING vs ship_floor, the `:963-966` assignee-asymmetry refutation, the agent_is_assignee bypass, unsanitised caps). Y's real extras — CONTINUE_IDL/CONTINUE_LOG at `:82-83`, CC_WATCH_FRESH_S at `mailbox-pending.sh:297` — do not offset two wrong mechanism claims.\n\nX vs Z — very close; X wins narrowly on specific verified material insights Z lacks, not on length. The decisive one: X found that the 📦 rung is set even when LANDING=1 (`wrap-ledger.sh:1985-1986`, emitted as `LANDING=` at `:2176`) while `ship_floor` greps only RUNG/TRUNK/AHEAD/SHAS — so the floor instructs \"/ship it NOW\" while the ledger's own readout says \"do NOT fire a second /ship on this worktree\". I confirmed both halves. X also uniquely establishes that `wrap-ledger.sh:25`'s 🔧 definition is stale, that the wake floor's `.wakefloor` file is keyed on the mailbox dir and NOT the config dir (unlike `.count`/`.mech`/`.ship`), that `stop_hook_active` is never read (grep: zero hits), that `set` keys on `$PWD` while actuation keys on the payload `.cwd`, and it runs negative controls on CC_TEARDOWN_DIR (`:553` vs `lead-crash-watchdog.sh:251`) and CC_MAILBOX_DIR (`:610` vs `mailbox-pending.sh:110`). Against that, X has one off-by-one inside its own stale-citation table (`:432` for a comment on `:433`) and one hedged inference error in its \"not verified\" section — it reasons from the memo key at `:386` and misses the four-arm SID ladder at `:636-641`, whose fourth arm is CLAUDE_CODE_SESSION_ID (`:640`). Z is essentially error-free and matches X on the assignee-comment refutation, the agent_is_assignee bypass and the bare-shell-`clear` `?` sid, and is more precise on mailbox_wake_armed's no-pid branch — but its unique additions are smaller than X's four.\n\nY vs Z — Z wins. Z carries no material wrong claim I could find over ~38 checked citations; its only blemishes are a one-line-off cite on hook-chain.sh `:24-25` and two comment-rather-than-code citations. Y carries the two mechanism errors above (`.count` reset, and the gate-stale 🔧 definition taken from a comment the code explicitly repudiates). Z also verifies things Y does not: that the arms' assignee policies are identical despite the in-file comment, that none uses agent_is_assignee's shape gate, that a bare-shell `clear` cannot spend a real session's mech budget, that CLAUDE_CONTINUE_MAX/CC_MECH_MAX are unsanitised, and that wf_teardown_marked omits the `\"mode\":\"teardown\"` check its own comment claims to copy verbatim."
+ }
+}

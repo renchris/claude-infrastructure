@@ -1,0 +1,147 @@
+{
+ "brief": "T1-custody",
+ "judge": "J1",
+ "model": "claude-opus-5",
+ "effort": "xhigh",
+ "label_map": {
+  "X": "A",
+  "Y": "C",
+  "Z": "B"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "M1",
+     "M3",
+     "M5"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 24,
+    "citations_bad": [],
+    "wrong_claims": [
+     "Claims the marker-less fallback key can collapse to a degenerate `s:|` and calls it 'a real collision surface'. Unreachable: `open` refuses without `--target` (bin/cc-custody:176), so no open row can carry an empty targetPane. Z states this correctly ('Because targetPane is mandatory on open, an unmarked row with no slug keys as s:|<target>').",
+     "Says session-continue's 'budget exhaustion, TTL, or the kill switch' are 'all checked earlier in the function'. They are checked at :836-854, i.e. AFTER the :805 gate it is describing (still before the block is emitted, so the conclusion survives; the ordering statement does not).",
+     "Did not answer the brief's 'how its filename is derived from what' from code — explicitly declines to open hooks/lib/origin-identity.sh and flags the doc's 'hash' wording as unconfirmed. (Honest, but the answer — sha256 of `cd && pwd -P`, first 32 hex chars, origin-identity.sh:68-77 — was one read away.)",
+     "Consumer list is presented as exhaustive ('Every producer I found' / 'Others found') but omits hooks/lib/session-busy.sh:302, where CC_BUSY_CUSTODY_OPEN (injected at wrap-ledger.sh:2143) makes custody one of the four idle ARMS. Y and Z both name it."
+    ],
+    "extra_correct": [
+     "bin/cc-custody:254 is `files=\"$(_files_for \"$CWD\")\"` — independently confirms docs/plans/STOPHOOK_MESSAGE_TIERING.md:361's claim that the 'awaiting ARMED' carve-out is NOT there. Both the doc line and the code line check out byte-for-byte.",
+     "docs/plans/STOP_CHAIN_WAVE2.md:220 cites bin/cc-custody:35-38 for POLARITY; verified the block is 36-39 (line 35 is the tail of the CONSUMERS sentence).",
+     "`abandon --stale` has ZERO callers anywhere outside bin/cc-custody's own usage string — verified by repo-wide grep (only bin/cc-custody:56,183,268 and tests/cc-custody.bats). Stronger than Y's 'I found no caller in the code I read' and Z's 'I cannot rule that out'.",
+     "Only output to read scripts/custody-deathwatch.sh itself: CUSTODY_BIN appears exactly twice (:277 existence check, :282 store-wide `list --open --json`), no return/abandon anywhere, remedy text at :353 and the aggregated backlog needs row at :388. All four verified — this is K11 adjudicated from the component's own code rather than from other files' prose.",
+     "Only output to find scripts/cloud-retire-terminal.sh settle_custody (:204, :206-207) — the verdict-splitting discharge path (landed⇒return, everything else⇒abandon --why).",
+     "Only output to find cloud-return.sh:536-537, the abandon-on-superseded discharge.",
+     "NB_ARMED_TARGET is assigned at handoff-fire.sh:10728, inside the block that actually appends the back-channel trailer, with the stand-down paths at :10711-10718 blanking NOTIFY_BACK. Verified; Y and Z both list this as unverified.",
+     "ENGAGE_VERIFY is set at handoff-fire.sh:10662 by `[ \"$RECYCLE\" = 0 ] && [ \"$DRY\" = 0 ]` — verified verbatim; Y and Z both list this as unverified.",
+     "hooks/lib/why-tier.sh:210-212 carries the `--why custody` explainer (an omitted consumer the key's traps name) and hooks/validate-bash.sh:633,713 exempt cc-custody from the duplicate-worker write gate. Both verified.",
+     "docs/plans/CLOSE_INTEGRITY_2026-08-10.md:96 and docs/plans/CLOUD_BACKLOG_PIPELINE.md:200,244 quoted exactly as cited."
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "M1",
+     "M3",
+     "M4",
+     "M5",
+     "M6",
+     "M7"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 30,
+    "citations_bad": [],
+    "wrong_claims": [
+     "Defect 4 ('Probably discharges cloud debt that cloud-return deliberately keeps open') does not hold. The cloud openers write `--slug \"cloud-$sid\"` (bin/cc-offload:748, bin/cc-dispatch:905,933) while the ping token is `cloud/<id>` (cloud-return.sh:844,1001) — hyphen vs slash, so `select(.marker == $t or .slug == $t)` (bin/cc-custody:216) matches neither. Y explicitly hedges it on the unread opener, but it is filed under 'Defects found (from the code)'.",
+     "Discharge inventory is not exhaustive as the brief demands: 'three automated paths' misses scripts/cloud-retire-terminal.sh:206-207 entirely (K9) and misses cloud-return.sh:537's abandon-on-superseded arm."
+    ],
+    "extra_correct": [
+     "VERIFIED DEFECT, unique to Y and material: the custody `return` at handoff-fire.sh:8707 runs BEFORE the `if [ \"$SC_DRY\" = 1 ]` exit at :8709-8736 and before the M3 mail-disposition abort at :8748-8755 (`exit 6`). I grepped SC_DRY: it is initialised at :7967, parsed at :7985 and tested ONLY at :8709 — so `self-close --dry-run` appends a real return row, contradicting the block's own stated rule at :8668-8672.",
+     "bin/cc-custody:22-23's own PRODUCERS line says handoff-fire '`return`s from sc_announce_before_retire' — verified false: that function spans :4344-4469 and contains no custody call; the return is at :8707, after the announce call at :8652-8653. Z repeats the header's claim uncorrected.",
+     "Four stale cross-file citations verified beyond the key's list: handoff-fire.sh:12729→:4104 (fired-peer marker header, not the self-close twin), :4411→:5598-5610 (tail of hf_alarm + start of check_goal_length), :3558→:9064 (the fire-time freshness comment, not fire_cleanup's 'KEPT'), and the M6(a) mailbox-drain.sh:523→:8936 (which is `RCY_TRANSPLANT_CAUSE=...`, exactly as Y says — the key's own traps paragraph misstates this line as `--source-pane` parsing).",
+     "mark_fired_peer runs only on rc 0 and only when WANT_SELF_RETIRE=1 (handoff-fire.sh:13268-13270) — which is why a non-self-retiring peer carries no marker and the drain's slug path is the only route to its discharge. Verified.",
+     "Per-rc process exits recorded: :13273 continues, :13289-13290 exit 1, :13301-13302 exit 1, :13323-13324 exit 6, :13365-13366 exit 1, with the row written first. All verified.",
+     "A row with neither marker nor slug can never be discharged by token (`select(.marker == $t or .slug == $t)`, :216) — only the bulk stale abandon reaches it. Verified.",
+     "C7: hf_ledger_stamp reads the ledger's RUNG (:4225-4227), custody is one of the terms that make it 🔧 (:4277-4278), the stamp becomes D1's `--why` (:8666→:8707), and the --terminal refusal keys on UNLANDED/REMAINDER only (:4303,:4309,:4312) — never on custody. Verified; unique to Y.",
+     "_hf_custody swallows output AND exit code (:4155) so the fire can never see a failed open; silent no-op when the binary is absent (:4152-4154). Verified.",
+     "`--notify-back` with no value becomes `__self__` and `--no-notify-back` opts out (:8948-8949). Verified.",
+     "completion-assert can be muted by the double-block yield at :849-870 (contra=0 at :869). Verified."
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K7",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "M1",
+     "M4",
+     "M5",
+     "M6",
+     "M7"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 26,
+    "citations_bad": [],
+    "wrong_claims": [
+     "Never located the primary discharge site. Self-close is listed as 'Not verified: I could not locate that code in the 13k-line file', so K6 rests on bin/cc-custody:22-23 — the very header line Y proved inaccurate — and misses the load-bearing ordering fact (the discharge sits after the W3-B1 terminal refusal at :8676-8702, deliberately, per :8669-8672).",
+     "Never read scripts/cloud-return.sh, so K8 is asserted from mailbox-drain prose only: the content-verified condition (`landed_ok -eq 0`, :977-979), the deliberate 'left $custody OPEN' at :982, and the abandon-on-superseded at :536-537 are all absent.",
+     "Missed scripts/cloud-retire-terminal.sh:204-207 entirely (K9) — a whole discharge site whose verb splits on the retire verdict.",
+     "Section 3e: 'I did not find the line that reads it' for operator-readout. The brief names the operator-facing readouts explicitly; the read is hooks/operator-readout.sh:915 inside the 🔧 arm (:896), rendered at :929, with the drivable action at :940. Both X and Y found it."
+    ],
+    "extra_correct": [
+     "Unique and verified: the `*)` fail-open arm of engage_rc_consequence is unreachable from the fire path. The dispatcher is `if ENGAGE_RC=0 … elif 2 … elif 4 … elif 5 … else engage_apply_consequences 1 never-engaged` (handoff-fire.sh:13249-13367), so an undocumented rc is passed as literal 1 (custody yes, goal no) and never reaches :3593-3595. X and Y both present the `*)` row as a live fire outcome.",
+     "wrap-ledger's memo key includes CC_CUSTODY_BIN/CC_CUSTODY_DIR (:388) and the pane id (:396), so a resumed session with a renumbered pane is not served its predecessor's attributed count. Verified; unique to Z.",
+     "hooks/operator-readout.sh's cheap_stamp (:1468-1482) covers ACT_DIR/DEC_DIR/BLG_FILE, the cwd's HEAD and dirty count, and trunk — the custody store is not in it. Verified; Z correctly flags the downstream consequence as unverified rather than asserting it.",
+     "return/abandon writers pass 8 arguments to _row, so provenance is omitted and notifyBack is written empty on discharge rows (:195-199, :223-227). Verified; unique to Z.",
+     "Test-suite grounding, all verified: the second-granular tie is untested because tests/cc-custody.bats:54 sleeps 1 to avoid it; :75-79 pins symlink cwd normalisation; :116-117 pins that a bare `count --open` still counts stale rows; :139-151 pins the bulk stale abandon and its --why refusal; :59-65 pins rc 0 + stderr on an unmatched token.",
+     "More precise than X on the fallback key: because targetPane is mandatory on `open` (:176), an unmarked, slug-less row keys as `s:|<target>`, not a degenerate `s:|`.",
+     "handoff-fire.sh:3520's '(:10715)' / '(:10723)' citations verified stale against the real sites :13219-13223 and :13232-13233."
+    ],
+    "score_1_10": 7
+   }
+  ],
+  "xy": "tie",
+  "xz": "X",
+  "yz": "Y",
+  "pair_reasons": "X vs Y — tie; the material advantages are real on both sides and roughly offset. X wins the exhaustiveness axis the brief stresses hardest: it is the only output to find scripts/cloud-retire-terminal.sh:204-207 (K9, the disposition-splitting discharge) and cloud-return.sh:536-537's abandon arm, and the only one to adjudicate the deathwatch from its own code (K11) rather than from other files' prose — I confirmed CUSTODY_BIN appears only at :277 and :282 with no return/abandon in the file. X also verified two assignment sites (NB_ARMED_TARGET at :10728, ENGAGE_VERIFY at :10662) that Y lists as unverified, proved `abandon --stale` has zero callers repo-wide, and found the why-tier.sh:210-212 / validate-bash.sh:633,713 surfaces. Y wins the citation-audit axis the brief also states explicitly, and by a wide margin: it verified all four of the key's M6 stale citations (mailbox-drain :523→8936, :534→7100, :545→7087, wrap-ledger :1018→session-continue:608-612) plus four more I confirmed independently (:12729→4104, :4411→5598-5610, :3558→9064, and cc-custody:22-23's false attribution of the return to sc_announce_before_retire), where X checked only two, neither of them in the key. Y also answered the filename-derivation question from code (sha256 prefix, origin-identity.sh:68-77) that X explicitly left open, stated K8's content-verified condition and :982 precisely where X gave only 'success/landed path', named the session-busy consumer X missed, and produced the single best finding in the set: the custody return at :8707 fires before the SC_DRY exit at :8709 and before the M3 abort at :8754 — I grepped SC_DRY and it is tested at exactly one line, :8709, so a --dry-run self-close really does append a return row against the block's own stated rule. Against that, Y missed two discharge sites and carries one false (though hedged) defect claim, the cloud-ping/slug collision, which the actual openers refute (`cloud-<sid>` vs `cloud/<id>`). Neither output has a single bad citation. No decisive edge either way.\n\nX vs Z — X. Z never located the self-close discharge ('could not locate that code'), so its K6 rests on bin/cc-custody:22-23, the header line whose attribution is itself inaccurate, and it loses the ordering fact (discharge placed after the W3-B1 refusal at :8676-8702); X cites :8657, :8676-8702, :8700 and :8707 and gets it right. Z never read cloud-return, so K8's landed_ok condition, the deliberate 'left $custody OPEN' at :982 and the :537 abandon are all absent; X has both sites. Z missed cloud-retire-terminal entirely, and — on a consumer the brief names by name — says 'I did not find the line that reads it' for operator-readout, where X quotes :915, :929 and :940 correctly. Z's genuine unique wins (the `*)` arm being unreachable because the final else hard-codes `engage_apply_consequences 1 never-engaged` at :13365; the memo key's pane component at :396; the cheap_stamp gap at :1468-1482; the test-suite grounding) are all verified and valuable, but they do not offset four substantive coverage failures against zero bad citations on either side.\n\nY vs Z — Y. Y's coverage is a near-superset of Z's on everything the brief demanded. Y verified the self-close discharge Z could not find, read cloud-return and stated its condition and its deliberate leave-open, found operator-readout:915 that Z missed, and its citation audit contains Z's two findings (the wrap-ledger→session-continue:608-612 shift and the cc-custody:35-38/44-46 off-by-one) plus the three mailbox-drain citations Z explicitly left unchecked plus four more. Y additionally found the dry-run discharge defect and the terminal-refusal-ignores-custody loop (verified at :4303-4312), neither of which Z has. Z's compensating unique findings — chiefly the `*)` unreachability, which is correct and which Y's table papers over with a '—' in its call-site column — are real but narrower. Both are honest about their limits and neither has a bad citation; Y is simply further along on the same map."
+ }
+}
