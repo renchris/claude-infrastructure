@@ -610,6 +610,13 @@ INNER
   # The bounds this case needs, overriding exp_setup's 2/3: the old code breaks at ~2s, the record
   # appears at ~5s, the new deadline runs to 20s. Both verdicts are unreachable by a second's slip.
   export LR_SUBMIT_POLL_S=2 RCY_ENGAGE_TIMEOUT=20
+  # THIS CASE IS ABOUT THE SUBMIT POLL, NOT THE INJECT. Since 2026-09-22 the inject waits for the
+  # composer to paint our draft before sending the CR, which both consumes the scripted screen
+  # answers below and delays the keystroke past the late record this fixture writes — so the poll
+  # would never reach its unmeasured arm and this red-proof would certify by accident. 0 is the
+  # documented opt-out and restores the inject this case was written against, byte for byte; the
+  # paint behaviour has its own red-proofs in tests/lr-submit-cr-landing.bats.
+  export LR_SUBMIT_PAINT_S=0
   # The late record, written by a detached writer so the expect program is the only thing on the
   # clock. `$!` is the subshell, which is what must be reaped — killing the sleep would orphan it
   # (memory kill-the-leaf-not-the-wrapper, inverted: here the WRAPPER is the thing we own).
