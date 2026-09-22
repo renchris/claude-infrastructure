@@ -74,7 +74,7 @@ emit_promo_report() {  # reads globals OUT, done_n, TOTAL, skipped, ABORTED
 # `No verdicts — nothing to promote` and exited 1 on exactly that case — the success state of the
 # feature it was guarding. The denominator every percentage below is computed against is what the
 # FILE holds, never what this invocation happened to add.
-HAVE_N=$(jq -r 'select(.round!="meta" and .round!="complete")|.id' "$OUT" 2>/dev/null | wc -l | tr -d ' ')
+HAVE_N=$(jq -r 'select(.round!="meta" and .round!="complete" and .round!="attempt")|.id' "$OUT" 2>/dev/null | wc -l | tr -d ' ')
 printf 'DECIDED %s new of %s call(s); %s verdict(s) on disk  (no verdict: %s)\n' \
        "$done_n" "$TOTAL" "${HAVE_N:-0}" "$skipped"
 if [ "${HAVE_N:-0}" -eq 0 ]; then printf 'No verdicts at all — nothing to promote.\n'; exit 1; fi
@@ -88,12 +88,47 @@ if [ "${HAVE_N:-0}" -eq 0 ]; then printf 'No verdicts at all — nothing to prom
 # The signal that cannot drift is the one the run itself observes: a pass that BOUGHT NOTHING has
 # nothing left to buy. It stamps that, once, and every consumer reads the stamp instead of doing
 # arithmetic against a forecast.
+# 🚨 THE RESUME LOOP IS BOUNDED, because "bought nothing" is not the only way a pass ends.
+# Measured live 2026-09-22, with unattended on: a pass sat 9 rows short of its plan because a
+# handful of calls returned no verdict, and each resume bought one or two more — 121, 123, ...
+# Every tick made progress, so `done_n == 0` never fired, so the stamp never landed, so the
+# scheduler ran again. An id that can NEVER buy (an excerpt that always abstains, a file that
+# always trips a limit) would tick forever at 1800s, and "it is converging" is not a bound.
+# So a run also terminates on ATTEMPTS: after CC_JEV_MAX_RESUMES passes that fail to fill it, the
+# gaps are declared permanent and the run is stamped complete WITH its shortfall recorded. That is
+# the honest terminal state — this is as far as this pass gets — and it is strictly better than a
+# scheduler that cannot stop.
+ATTEMPTS=$(( $(jq -r 'select(.round=="attempt")|.id' "$OUT" 2>/dev/null | wc -l | tr -d ' ') ))
+if [ -n "$RESUME" ]; then
+  ATTEMPTS=$((ATTEMPTS+1))
+  jq -nc --argjson n "$ATTEMPTS" --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson b "$done_n" \
+     '{id:("attempt-"+($n|tostring)), round:"attempt", at:$t, bought:$b}' >> "$OUT"
+fi
+MAXR="${CC_JEV_MAX_RESUMES:-3}"
+_stamp() {  # $1=reason
+  jq -e 'select(.round=="complete")' "$OUT" >/dev/null 2>&1 && return 0
+  # GAPS IS MEASURED AGAINST THE PLAN THE RUN RECORDED, not against a recomputed TOTAL. On a
+  # resume, TOTAL is derived from the corpus AS IT IS NOW and can differ from what this pass set
+  # out to buy — so using it reported `gaps: 0` on a pass that was demonstrably short. The run's
+  # own meta is the only budget it was ever measured against.
+  local _pl _g
+  _pl="$(jq -r 'select(.round=="meta")|.plan // empty' "$OUT" 2>/dev/null | head -1)"
+  case "$_pl" in ''|*[!0-9]*) _pl=$(( TOTAL - 1 )) ;; esac
+  _g=$(( _pl - HAVE_N )); [ "$_g" -gt 0 ] || _g=0
+  jq -nc --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson v "$HAVE_N" \
+     --argjson g "$_g" --argjson pl "$_pl" --arg r "$1" \
+     '{id:"complete", round:"complete", at:$t, verdicts:$v, planned:$pl, gaps:$g, reason:$r}' >> "$OUT"
+}
 if [ "$done_n" -eq 0 ]; then
   printf 'Nothing new to buy — this pass was already complete.\n'
-  if ! jq -e 'select(.round=="complete")' "$OUT" >/dev/null 2>&1; then
-    jq -nc --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson v "$HAVE_N" \
-       '{id:"complete", round:"complete", at:$t, verdicts:$v}' >> "$OUT"
-  fi
+  _stamp bought-nothing
+elif [ -n "$RESUME" ] && [ "$ATTEMPTS" -ge "$MAXR" ]; then
+  printf '\nSTAMPED COMPLETE WITH GAPS — %s resume attempt(s) did not fill this pass.\n' "$ATTEMPTS"
+  printf '  %s verdict(s) of the %s this pass planned. The shortfall is calls that returned no\n' \
+         "$HAVE_N" "$(jq -r 'select(.round=="meta")|.plan // empty' "$OUT" 2>/dev/null | head -1)"
+  printf '  verdict; retrying them further is unbounded, so they are permanent for this corpus.\n'
+  printf '  A changed corpus starts a fresh pass. Raise CC_JEV_MAX_RESUMES to try harder.\n'
+  _stamp attempts-exhausted
 fi
 done_n="$HAVE_N"
 
@@ -228,7 +263,7 @@ if [ -n "$REPORT" ]; then
   # The meta row stamps WHAT the run was a run of; it is not a verdict, so it must not inflate the
   # denominator every percentage in the report is computed against.
   OUT="$REPORT"
-  done_n=$(jq -r 'select(.round!="meta" and .round!="complete")|.id' "$REPORT" 2>/dev/null | wc -l | tr -d ' ')
+  done_n=$(jq -r 'select(.round!="meta" and .round!="complete" and .round!="attempt")|.id' "$REPORT" 2>/dev/null | wc -l | tr -d ' ')
   [ "${done_n:-0}" -gt 0 ] || done_n=$(wc -l < "$REPORT" | tr -d ' ')
   TOTAL="$done_n"; skipped=0; ABORTED=0
   printf 'Re-reading %s row(s) from a PREVIOUS run. No call is made.\n' "$done_n"

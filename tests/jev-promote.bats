@@ -438,7 +438,9 @@ runp() {
   ROWS=$(grep -o '/.*jev-promote-.*\.jsonl' <<<"$output" | tail -1)
   # exclude the `complete` stamp: a resume that buys nothing ADDS that marker, which is the
   # point of it, so counting it as a verdict reads a correct no-op resume as re-bought rows.
-  _vcount() { jq -r 'select(.round!="meta" and .round!="complete")|.id' "$1" | wc -l | tr -d ' '; }
+  # meta, complete AND attempt are all bookkeeping; a resume legitimately adds an attempt row,
+  # so counting it reads a correct no-op resume as re-bought verdicts.
+  _vcount() { jq -r 'select(.round!="meta" and .round!="complete" and .round!="attempt")|.id' "$1" | wc -l | tr -d ' '; }
   before=$(_vcount "$ROWS")
   [ "$before" -gt 0 ]
   # Re-run against the SAME rows: every id is already present, so each is skipped, not re-asked.
@@ -781,4 +783,60 @@ unatt_on() { jq -n '{enabled:true,authorized:"x",decision:"ea7a241bdf78"}' > "$1
   grep -qF "corpus unchanged" "$UH/b.log"
   ! grep -qF "run rc=" "$UH/b.log" || { echo "re-ran a stamped pass — the live bug"; false; }
   ! grep -qF "RESUMING" "$UH/b.log" || { echo "resumed into a stamped pass"; false; }
+}
+
+# ── THE RESUME LOOP IS BOUNDED BY ATTEMPTS, NOT ONLY BY "BOUGHT NOTHING" ─────────────────────
+# Measured live 2026-09-22 with unattended on: a pass sat 9 rows short because a handful of calls
+# returned no verdict, and each resume bought one or two more — 121, 123, ... Every tick made
+# progress, so `done_n == 0` never fired, so the stamp never landed, so the scheduler ran again.
+# An id that can NEVER buy would tick forever at 1800s. "It is converging" is not a bound.
+@test "resume: exhausting the attempt budget stamps COMPLETE WITH GAPS" {
+  mkcorpus
+  R="$BATS_TEST_TMPDIR/gappy.jsonl"
+  SHA="x"
+  # A pass whose plan it can never fill: 99 planned, 1 row, and the mock will add a few more.
+  printf '%s\n' \
+   '{"id":"meta","round":"meta","orphans":12,"seed":"20260921","plan":99,"anchors":2,"mock":false,"corpus_sha":"x"}' \
+   '{"id":"h1","round":"heat","winner":"orph1.md"}' > "$R"
+  export MOCK_CHOICE_ROTATE=1
+  start_mock ok
+  # Budget of 1: the very first resume exhausts it, so the stamp must land on this pass.
+  run runp CC_JEV_ZDR=0 CC_JEV_BASE_URL="http://127.0.0.1:$PORT" CC_JEV_MAX_RESUMES=1 \
+      -- --resume "$R" --bias-n 2 --yes
+  [ "$status" -eq 0 ]
+  grep -qF "STAMPED COMPLETE WITH GAPS" <<<"$output"
+  [ "$(jq -r 'select(.round=="complete")|.reason' "$R")" = "attempts-exhausted" ]
+  [ "$(jq -r 'select(.round=="complete")|.gaps' "$R")" -gt 0 ]
+}
+
+# ...and once stamped for that reason it must stop the scheduler, exactly like a clean completion.
+# This is the arm that would have caught the live loop.
+@test "unattended: a GAPS-stamped pass stops the scheduler dead" {
+  mkcorpus
+  UH="$(unatt_home)"; unatt_on "$UH"
+  SHA="$(env CC_JEV_MEM_DIR="$MEMD" CC_JEV_RULES_FILE=/dev/null CC_JEV_RANK_ROWS="$RANKF" \
+         "$REPO/scripts/jev/promote-memory.sh" --mem "$MEMD" --corpus-sha)"
+  { jq -nc --arg s "$SHA" '{id:"meta",round:"meta",orphans:12,seed:"20260921",plan:132,anchors:1,mock:false,corpus_sha:$s}'
+    printf '%s\n' '{"id":"h1","round":"heat","winner":"o1.md"}'
+    printf '%s\n' '{"id":"attempt-3","round":"attempt","at":"x","bought":1}'
+    printf '%s\n' '{"id":"complete","round":"complete","at":"x","verdicts":1,"gaps":130,"reason":"attempts-exhausted"}'
+  } > "$UH/.claude/autonomy/jev-promote-20260921T000000Z.jsonl"
+  run env AI_GATEWAY_API_KEY=dummy HOME="$UH" CC_JEV_ARM_FILE="$UH/none.arm" \
+      CC_JEV_BATCH_LOG="$UH/b.log" CC_JEV_MEM_DIR="$MEMD" CC_JEV_RULES_FILE=/dev/null \
+      CC_JEV_RANK_ROWS="$RANKF" "$REPO/scripts/jev/jev-batch.sh"
+  [ "$status" -eq 0 ]
+  grep -qF "corpus unchanged" "$UH/b.log"
+  ! grep -qF "run rc=" "$UH/b.log" || { echo "re-ran a gaps-stamped pass — the live loop"; false; }
+}
+
+@test "attempt rows are bookkeeping and never counted as verdicts" {
+  R="$BATS_TEST_TMPDIR/att.jsonl"
+  printf '%s\n' \
+   '{"id":"meta","round":"meta","orphans":9,"seed":"s","plan":9,"anchors":1,"mock":false,"corpus_sha":"a"}' \
+   '{"id":"r2-1","round":"h2h","block_a":"x.md","block_b":"y.md","winner":"a","same_rule":0.1,"swapped":false}' \
+   '{"id":"attempt-1","round":"attempt","at":"x","bought":1}' \
+   '{"id":"attempt-2","round":"attempt","at":"x","bought":0}' > "$R"
+  run env -u AI_GATEWAY_API_KEY "$REPO/bin/cc-jev" promote --report "$R"
+  [ "$status" -eq 0 ]
+  grep -qF "1 verdict(s) on disk" <<<"$output"
 }
