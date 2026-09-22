@@ -14,8 +14,8 @@ unknown unknowns the default tier is *blind to* — never already-identified
 problems or routine work. Standing agent duties, every session:
 
 1. **Never select or propose the frontier model for identified/routine work** —
-   including subagent spawns outside the SSOT's conditional slots
-   (`research_adversarial` / `workflow_judge` / `eval_judge` / `teammate_frontier`).
+   including subagent spawns outside the `roles.*` the SSOT pins to
+   `versions.frontier_latest` (read the list there live; it is not restated here).
 2. **Capture frontier holes proactively (agent-initiated).** The moment work hits
    a qualifying wall — behavior unexplained after a real investigation, an
    adversarial verify that cannot decide, or a never-derivation-swept seam
