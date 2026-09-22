@@ -37,11 +37,60 @@ _log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
 # ── INERT BY DEFAULT ─────────────────────────────────────────────────────────────────────────
 # Exit 0, not 1. A scheduled job that exits non-zero on its NORMAL state trains everyone to ignore
 # its failures, and launchd would throttle it. "Not armed" is not an error; it is the resting state.
-if [ ! -f "$ARM" ]; then
-  _log "not-armed — no call made (arm with: cc-jev arm)"
-  exit 0
-fi
+# ── UNATTENDED MODE ──────────────────────────────────────────────────────────────────────────
+# Authorised by the operator on 2026-09-21, decision packet ea7a241bdf78: the job may call out on
+# its own. Recorded as a FILE rather than an env var because launchd never sees this agent's
+# environment, and absence means OFF — a lost or corrupted record must fail to the state that
+# sends nothing, never to the one that sends.
+#
+# 🚨 IT IS GATED ON THE CORPUS HAVING CHANGED, and that gate is not optional. The timer fires every
+# 1800s; the pass is 133 calls. Re-running a COMPLETED pass on every tick is ~6,384 calls/day over
+# a population whose verdicts are already on disk — it would exhaust any budget within a day and
+# learn nothing. The decision authorised unattended CALLS, not unattended WASTE, so the job asks
+# "is there anything new to judge?" first: it compares the live corpus identity (orphans + anchors,
+# hashed) against what the last completed pass recorded. Unchanged ⇒ one log line, no call.
+UNATT="${CC_JEV_UNATTENDED_FILE:-$HOME/.claude/autonomy/jev-unattended.json}"
+_unattended_ok() { [ -f "$UNATT" ] && [ "$(jq -r '.enabled // false' "$UNATT" 2>/dev/null)" = true ]; }
 
+if [ ! -f "$ARM" ]; then
+  if ! _unattended_ok; then
+    _log "not-armed — no call made (arm with: cc-jev arm)"
+    exit 0
+  fi
+  _live_sha="$("$ROOT/scripts/jev/promote-memory.sh" --corpus-sha 2>/dev/null)"
+  if [ -z "$_live_sha" ]; then
+    _log "unattended: cannot read the live corpus identity — no call made"
+    exit 0
+  fi
+  # The newest COMPLETED pass, by its own recorded plan. An incomplete one is left to the resume
+  # path below, which is the whole reason a partial run is not treated as "already done".
+  _last_sha=""
+  while IFS= read -r _c; do
+    [ -n "$_c" ] || continue
+    _p="$(jq -r 'select(.round=="meta")|.plan // empty' "$_c" 2>/dev/null | head -1)"
+    _v="$(jq -r 'select(.round!="meta")|.id' "$_c" 2>/dev/null | wc -l | tr -d ' ')"
+    case "$_p" in ''|*[!0-9]*) continue ;; esac
+    if [ "$_v" -ge "$_p" ]; then
+      _last_sha="$(jq -r 'select(.round=="meta")|.corpus_sha // empty' "$_c" 2>/dev/null | head -1)"
+      break
+    fi
+  done <<EOF
+$(find -H "$HOME/.claude/autonomy" -maxdepth 1 -name 'jev-promote-*.jsonl' -size +0c 2>/dev/null | sort -r)
+EOF
+  if [ -n "$_last_sha" ] && [ "$_last_sha" = "$_live_sha" ]; then
+    _log "unattended: corpus unchanged since the last completed pass ($_live_sha) — no call made"
+    exit 0
+  fi
+  # Synthesise the same bounded terms an arming would have carried, from the same source of truth.
+  MAXC="$("$ROOT/scripts/jev/promote-memory.sh" --plan-calls 2>/dev/null)"
+  case "$MAXC" in ''|*[!0-9]*) MAXC=133 ;; esac
+  CAPB="${CC_JEV_PROMO_CAP_B:-1200}"; EXPIRES="n/a (unattended)"; CORPUS="memory-orphans"
+  _log "UNATTENDED — corpus ${_live_sha} differs from last completed (${_last_sha:-none}); max_calls=${MAXC}"
+  UNATTENDED_RUN=1
+fi
+UNATTENDED_RUN="${UNATTENDED_RUN:-0}"
+
+if [ "$UNATTENDED_RUN" -eq 0 ]; then
 _field() { jq -r --arg k "$1" '.[$k] // empty' "$ARM" 2>/dev/null; }
 EXPIRES="$(_field expires)"; MAXC="$(_field max_calls)"; CAPB="$(_field cap_b)"; CORPUS="$(_field corpus)"
 NOW="$(date -u +%s 2>/dev/null)"
@@ -58,6 +107,7 @@ if [ -z "$EXP_S" ] || [ "$NOW" -ge "$EXP_S" ]; then
   _log "EXPIRED at ${EXPIRES} — consuming, no call made"
   rm -f "$ARM"; exit 0
 fi
+fi
 
 # ── LOCAL PRECONDITIONS ARE CHECKED BEFORE THE TOKEN IS SPENT ────────────────────────────────
 # The consume-before-call rule is about CALLS: once bytes have left the machine the authorisation
@@ -68,20 +118,36 @@ fi
 # is a scarce human act; burning one on a missing env var is the cheapest possible waste.
 # Both checks below are pure local reads — an env var, a secrets-store lookup, a date — and
 # neither touches the network.
+# 🚨 THESE TWO GATE **BOTH** PATHS, and that is why they sit outside the armed-only block.
+# A first draft left them inside it, so the unattended path — the one the operator had just
+# authorised — skipped the BILLING GUARD entirely and would have gone on calling past the free
+# window on 2026-09-25 at 0.042 USD/MTok, unattended, with nothing in the loop to notice. The
+# operator authorised unattended CALLS; they did not authorise unattended SPEND, and the whole
+# point of jev_window_open is that the distinction is enforced rather than remembered.
 # shellcheck source=/dev/null
 . "$ROOT/hooks/lib/jev.sh"
+# The message names what is actually at stake on THIS path: an arming is a scarce human act and
+# saying it survived is the useful half, while on the unattended path there is no arm to preserve
+# and claiming one would be false.
+if [ "$UNATTENDED_RUN" -eq 0 ]; then _KEPT="arm PRESERVED, nothing spent"; else _KEPT="nothing spent"; fi
 if ! jev_window_open 2>/dev/null; then
-  _log "REFUSED — the free window has lapsed; arm PRESERVED (authorise with CC_JEV_PAID=1)"
+  _log "REFUSED — the free window has lapsed; $_KEPT (authorise with CC_JEV_PAID=1)"
   exit 0
 fi
 if ! jev_available; then
-  _log "REFUSED — jev not available (no key, or CC_JEV=0); arm PRESERVED, nothing spent"
+  _log "REFUSED — jev not available (no key, or CC_JEV=0); $_KEPT"
   exit 0
 fi
 
-# ── CONSUME. Everything below runs with no authorisation left on disk. ───────────────────────
-rm -f "$ARM" || { _log "REFUSED — cannot consume the arm file; refusing to call"; exit 0; }
-_log "ARMED — expires=${EXPIRES} max_calls=${MAXC} cap_b=${CAPB:-default} corpus=${CORPUS:-memory-orphans}"
+# ── CONSUME, armed path only. Below this line no authorisation is left on disk. ──────────────
+if [ "$UNATTENDED_RUN" -eq 0 ]; then
+  rm -f "$ARM" || { _log "REFUSED — cannot consume the arm file; refusing to call"; exit 0; }
+  _log "ARMED — expires=${EXPIRES} max_calls=${MAXC} cap_b=${CAPB:-default} corpus=${CORPUS:-memory-orphans}"
+fi
+
+# Both paths converge here, and the guards below are the ones that SURVIVE the operator's yes:
+# the billing cliff, the call ceiling, the byte cap. Unattended changes who decides to call, not
+# what a call is allowed to be.
 
 # The call ceiling the token consented to, honoured by construction rather than by intention:
 # heats and head-to-heads are 2 calls per challenger, plus the preflight and the bias sample.

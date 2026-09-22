@@ -29,9 +29,29 @@ while [ $# -gt 0 ]; do
     --ttl)   TTL="${2:?--ttl needs minutes}"; shift 2 ;;
     --cap-b) CAPB="${2:?--cap-b needs bytes}"; shift 2 ;;
     --revoke) rm -f "$ARM" && printf 'Revoked. %s is gone; the scheduled batch is inert again.\n' "$ARM"; exit 0 ;;
+    # UNATTENDED — the operator's standing answer, recorded durably because launchd never sees an
+    # agent's environment. Absence means OFF: a lost or corrupted record must fail to the state
+    # that sends nothing. `--unattended off` is the whole kill switch.
+    --unattended)
+      _u="${CC_JEV_UNATTENDED_FILE:-$HOME/.claude/autonomy/jev-unattended.json}"
+      case "${2:-}" in
+        on)  mkdir -p "$(dirname "$_u")"
+             jq -n --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+               '{enabled:true, authorized:$t, decision:"ea7a241bdf78",
+                 note:"operator answered YES 2026-09-21; gated on the corpus having changed, and the billing guard still refuses past the free window"}' > "$_u"
+             printf 'UNATTENDED: ON. The scheduled job may now call without an arming.\n'
+             printf '  it runs ONLY when the corpus changed since the last completed pass\n'
+             printf '  it still refuses past the free window (override: CC_JEV_PAID=1)\n'
+             printf '  turn it off:  cc-jev arm --unattended off\n'; exit 0 ;;
+        off) rm -f "$_u"; printf 'UNATTENDED: OFF. The job is inert again unless armed.\n'; exit 0 ;;
+        *)   if [ -f "$_u" ] && [ "$(jq -r '.enabled // false' "$_u" 2>/dev/null)" = true ]; then
+               printf 'UNATTENDED: ON (since %s, decision %s)\n' \
+                 "$(jq -r '.authorized // "?"' "$_u")" "$(jq -r '.decision // "?"' "$_u")"
+             else printf 'UNATTENDED: OFF — the job calls only when armed.\n'; fi; exit 0 ;;
+      esac ;;
     --status) if [ -f "$ARM" ]; then printf 'ARMED:\n'; cat "$ARM"; else printf 'not armed — the scheduled batch will make no call.\n'; fi; exit 0 ;;
-    -h|--help) printf 'usage: cc-jev arm [--calls N] [--ttl MIN] [--cap-b N] | --status | --revoke\n'; exit 0 ;;
-    *) printf 'usage: cc-jev arm [--calls N] [--ttl MIN] [--cap-b N] | --status | --revoke\n' >&2; exit 2 ;;
+    -h|--help) printf 'usage: cc-jev arm [--calls N] [--ttl MIN] [--cap-b N] | --status | --revoke | --unattended on|off\n'; exit 0 ;;
+    *) printf 'usage: cc-jev arm [--calls N] [--ttl MIN] [--cap-b N] | --status | --revoke | --unattended on|off\n' >&2; exit 2 ;;
   esac
 done
 

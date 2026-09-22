@@ -637,3 +637,88 @@ armed_home() {   # → a HOME with a live arm, a corpus, and an anchor run
   ! grep -qF "HELD OUT" <<<"$output" || { echo "still split with protection disabled"; false; }
   grep -qF "2 executable swap(s)" <<<"$output"
 }
+
+# ── UNATTENDED MODE (operator decision ea7a241bdf78, answered YES 2026-09-21) ────────────────
+unatt_home() {
+  UH="$BATS_TEST_TMPDIR/uh-$RANDOM"; mkdir -p "$UH/.claude/autonomy"
+  printf '%s\n' '{"file":"inc1.md","level":"occasionally"}' \
+    > "$UH/.claude/autonomy/jev-rank-20260101T000000Z.jsonl"
+  printf '%s' "$UH"
+}
+unatt_on() { jq -n '{enabled:true,authorized:"x",decision:"ea7a241bdf78"}' > "$1/.claude/autonomy/jev-unattended.json"; }
+
+@test "unattended: OFF by default — absence of the record means the job stays inert" {
+  mkcorpus
+  UH="$(unatt_home)"
+  run env AI_GATEWAY_API_KEY=dummy HOME="$UH" CC_JEV_ARM_FILE="$UH/none.arm" \
+      CC_JEV_BATCH_LOG="$UH/b.log" CC_JEV_MEM_DIR="$MEMD" CC_JEV_RULES_FILE=/dev/null \
+      "$REPO/scripts/jev/jev-batch.sh"
+  [ "$status" -eq 0 ]
+  grep -qF "not-armed" "$UH/b.log"
+  ! grep -qF "UNATTENDED" "$UH/b.log" || { echo "ran unattended with no record"; false; }
+}
+
+# 🚨 THE GATE THAT MAKES THE OPERATOR'S YES SAFE. The timer fires every 1800s and the pass is 133
+# calls; re-running a COMPLETED pass on every tick is ~6,384 calls/day over verdicts already on
+# disk. The decision authorised unattended CALLS, not unattended WASTE.
+@test "unattended: an UNCHANGED corpus makes no call, however many times the timer fires" {
+  mkcorpus
+  UH="$(unatt_home)"; unatt_on "$UH"
+  SHA="$(env CC_JEV_MEM_DIR="$MEMD" CC_JEV_RULES_FILE=/dev/null CC_JEV_RANK_ROWS="$RANKF" \
+         "$REPO/scripts/jev/promote-memory.sh" --mem "$MEMD" --corpus-sha)"
+  [ -n "$SHA" ]
+  # a COMPLETED pass recording exactly that corpus
+  { jq -nc --arg s "$SHA" '{id:"meta",round:"meta",orphans:12,seed:"20260921",plan:2,anchors:1,mock:false,corpus_sha:$s}'
+    printf '%s\n' '{"id":"h1","round":"heat","winner":"o1.md"}' '{"id":"r2-1","round":"h2h","winner":"a"}'
+  } > "$UH/.claude/autonomy/jev-promote-20260921T000000Z.jsonl"
+  run env AI_GATEWAY_API_KEY=dummy HOME="$UH" CC_JEV_ARM_FILE="$UH/none.arm" \
+      CC_JEV_BATCH_LOG="$UH/b.log" CC_JEV_MEM_DIR="$MEMD" CC_JEV_RULES_FILE=/dev/null \
+      CC_JEV_RANK_ROWS="$RANKF" "$REPO/scripts/jev/jev-batch.sh"
+  [ "$status" -eq 0 ]
+  grep -qF "corpus unchanged" "$UH/b.log"
+  ! grep -qF "run rc=" "$UH/b.log" || { echo "spent calls on an unchanged corpus"; false; }
+}
+
+@test "unattended: a CHANGED corpus does run, and produces rows" {
+  mkcorpus
+  UH="$(unatt_home)"; unatt_on "$UH"
+  # a completed pass recording a DIFFERENT corpus
+  { printf '%s\n' '{"id":"meta","round":"meta","orphans":12,"seed":"20260921","plan":2,"anchors":1,"mock":false,"corpus_sha":"deadbeefdeadbeef"}'
+    printf '%s\n' '{"id":"h1","round":"heat","winner":"o1.md"}' '{"id":"r2-1","round":"h2h","winner":"a"}'
+  } > "$UH/.claude/autonomy/jev-promote-20260921T000000Z.jsonl"
+  export MOCK_CHOICE_ROTATE=1
+  start_mock ok
+  run env AI_GATEWAY_API_KEY=dummy CC_JEV_BASE_URL="http://127.0.0.1:$PORT" HOME="$UH" \
+      CC_JEV_ARM_FILE="$UH/none.arm" CC_JEV_BATCH_LOG="$UH/b.log" CC_JEV_MEM_DIR="$MEMD" \
+      CC_JEV_RULES_FILE=/dev/null CC_JEV_RANK_ROWS="$RANKF" CC_JEV_PROMO_GAP=0 \
+      "$REPO/scripts/jev/jev-batch.sh"
+  [ "$status" -eq 0 ]
+  grep -qF "UNATTENDED —" "$UH/b.log"
+  grep -qF "run rc=0" "$UH/b.log"
+}
+
+# 🚨 THE ARM THAT BROKE WHILE BUILDING THIS. A first draft left the billing guard inside the
+# armed-only branch, so the unattended path — the one just authorised — skipped it and would have
+# gone on calling past the free window, unattended, at 0.042 USD/MTok. The operator authorised
+# unattended CALLS; they did not authorise unattended SPEND.
+@test "unattended: the BILLING GUARD still refuses past the free window" {
+  mkcorpus
+  UH="$(unatt_home)"; unatt_on "$UH"
+  run env AI_GATEWAY_API_KEY=dummy HOME="$UH" CC_JEV_FREE_UNTIL=2020-01-01 \
+      CC_JEV_ARM_FILE="$UH/none.arm" CC_JEV_BATCH_LOG="$UH/b.log" CC_JEV_MEM_DIR="$MEMD" \
+      CC_JEV_RULES_FILE=/dev/null CC_JEV_RANK_ROWS="$RANKF" "$REPO/scripts/jev/jev-batch.sh"
+  [ "$status" -eq 0 ]
+  grep -qF "free window has lapsed" "$UH/b.log"
+  ! grep -qF "run rc=" "$UH/b.log" || { echo "billed past the free window, unattended"; false; }
+}
+
+@test "promote --corpus-sha: identifies the population, changes when it changes, costs nothing" {
+  mkcorpus
+  A="$(env -u AI_GATEWAY_API_KEY CC_JEV_RULES_FILE=/dev/null CC_JEV_RANK_ROWS="$RANKF" \
+       "$REPO/bin/cc-jev" promote --mem "$MEMD" --corpus-sha)"
+  [ -n "$A" ]
+  printf -- '---\nname: new\ndescription: a new orphan\n---\n\nbody\n' > "$MEMD/orph99.md"
+  B="$(env -u AI_GATEWAY_API_KEY CC_JEV_RULES_FILE=/dev/null CC_JEV_RANK_ROWS="$RANKF" \
+       "$REPO/bin/cc-jev" promote --mem "$MEMD" --corpus-sha)"
+  [ "$A" != "$B" ] || { echo "corpus sha did not move when an orphan was added"; false; }
+}
