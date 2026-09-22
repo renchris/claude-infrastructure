@@ -58,7 +58,23 @@ driven for that reason; they are named in the verdict doc under § Three fixes a
 lead 11 closes twice over if it is off everywhere. `venue-authz.ts:63-64` asserts it is off in a
 comment — a claim with a shelf life, not a measurement.
 
-### The correction this programme owes its own source of record
+### What is left, and what blocks it
+
+*Recorded 2026-09-22 by the cloud worker on backlog item `0c82f0811877`.* Section headings below were marked from the table above (they all read PENDING because only the
+table carried state). **No remaining unit can be advanced by a claude-infrastructure worker.** Every
+open unit edits reso, and each one waits on one of two operator acts:
+
+1. **Operator ruling on calibration note 5 for the 13 CONFIRMED leads** (auth/authz/sync class).
+   It releases W4a-1, W4a-2, W4a-3, W4a-6 and W4a-7b, and the three landable-now fixes (leads 12
+   second half, 13, 17). W4a-4 and W4a-5 are not auth-class, but they carry leads 16 and 5, so they
+   need a reso-scoped session.
+2. **The live `tenant_config.enable_venue_scoping` read per tenant DB, plus the W4b go/no-go**
+   (username → id re-key plus backfill across 8 live tenant DBs, G2).
+
+Until one of those happens, re-dispatching this plan finds nothing to do. Park it with
+`cc-backlog block`. Do not reopen it.
+
+### The correction this programme owes its own source of record — DONE (W4a re-scoped to the build census; § W4a — Phase 0 decomposition)
 
 Structural fact #1 — every export of a `'use server'` module is a network-reachable POST endpoint —
 is directionally right and **too strong**. Next registers only what its build graph reaches, and
@@ -71,9 +87,9 @@ control. It refuted the stated attack vector of leads 3, 4 and 14 and confirmed 
 
 ---
 
-## Phase 0 — Agent Team Orchestration
+## Phase 0 — Agent Team Orchestration — SUPERSEDED (overtaken as recorded in § Status; W4a carries its own Phase 0 block)
 
-### Execution locus per wave
+### Execution locus per wave — SUPERSEDED (see § Status)
 
 | Wave | Locus | Why (T and L only) |
 |---|---|---|
@@ -86,13 +102,13 @@ control. It refuted the stated attack vector of leads 3, 4 and 14 and confirmed 
 **Locus S recipe** (every S wave, verbatim):
 `scripts/handoff-fire.sh --prompt-file <brief> --worktree <branch> --notify-back <lead-uuid> --account auto --split-right --goal '<end state> — proven by <command the session prints>; do not <constraint>'`, lead arms `cc-await-ping` in background.
 
-### Task size band
+### Task size band — SUPERSEDED (see § Status)
 
 Every brief is written to **40–150K output ≈ 30–75 min ≈ 60–110 turns ≈ 3–6 files**. Never below
 20K. Split above 300K or 10 files. The band is a sizing target and does NOT relax the agent-teams
 caps: ≤150-line brief body, reading list ≤5 files, split any deliverable >500 LOC.
 
-### Team roster, dependency graph, worktrees
+### Team roster, dependency graph, worktrees — SUPERSEDED (see § Status)
 
 **Single owner per file is the hard constraint here** — three of the six confirmed findings live in
 ONE file (`operationBuilder.ts`), so they cannot be three units.
@@ -117,7 +133,7 @@ everything W1 touched, so they must rebase onto landed W1.
 each gated by `pnpm typecheck` + `pnpm lint` + `pnpm test:unit`. `git rerere` is on. W1b owns the
 migration journal alone; W4b's migration lands only after W1b's.
 
-### Lead context budget + succession point
+### Lead context budget + succession point — SUPERSEDED (see § Status)
 
 - **Reserved for leading: ≥50%.** The lead writes briefs, adjudicates verdicts and merges; it does
   not implement. W3 is the single exception and is deliberately small.
@@ -128,12 +144,12 @@ migration journal alone; W4b's migration lands only after W1b's.
 
 ---
 
-## Wave 1 — the 6 confirmed findings
+## Wave 1 — the 6 confirmed findings — DONE (all six on reso trunk, § Status)
 
 Each unit: fix, add a regression test that FAILS on the pre-fix code (prove it by running it against
 `git stash`ed source or the parent commit), run the three gates, land.
 
-### W1a — `operationBuilder.ts`, three findings, one owner
+### W1a — `operationBuilder.ts`, three findings, one owner — DONE `6e5465a4e` `04157d23f` `c8999cbce`
 
 1. **#3 (high) — guest erasure redacts unrelated audit rows tenant-wide.**
    `operationBuilder.ts:1599-1605` passes the client's guest id into a SQLite `instr()` substring
@@ -152,7 +168,7 @@ Each unit: fix, add a regression test that FAILS on the pre-fix code (prove it b
    auto-tier thresholds. Three sibling modules already declare the column server-derived — follow
    that precedent; the repo already classed the identical shape on the adjacent column as a defect.
 
-### W1b — `deleteUser`, and the only migration in W1
+### W1b — `deleteUser`, and the only migration in W1 — DONE route (a) `1e07c9035`; route (b) is W4b
 
 **#2 (high).** `databaseActions.ts:581` deletes the user and credential rows only. No migration
 declares FK or `ON DELETE` for the identity-keyed tables, so a removed member keeps live push
@@ -164,7 +180,7 @@ migration on a live multi-tenant fleet** — it is a G2 escalation surface, so W
 before any `DROP`/destructive step. (a) is landable now and is the safe first increment. Do both in
 order, never (b) alone.
 
-### W1c — revocation fails open
+### W1c — revocation fails open — DONE `88c951bf9`
 
 **#1 (medium).** `lib/auth/session.ts:159`
 `if (row && (user.credentialsVersion ?? 0) < row.credentialsVersion)` — `row` is absent in exactly
@@ -172,7 +188,7 @@ the case the check exists for, so a deleted user (including a deleted platform o
 signed in for the cookie's life. Fix: absent row ⇒ revoked. The audit searched for a legitimate flow
 depending on the fail-open and found none — re-run that search before landing, and record it.
 
-### W1d — admin gate reads the sealed cookie role
+### W1d — admin gate reads the sealed cookie role — DONE `4a6457901`
 
 **#5 (medium).** Four actions authorize on the cookie's sealed role, not the live DB role:
 `tenantConfigActions.ts:37,:78` and `venueRoleActions.ts:67,:127`. A just-demoted admin keeps
@@ -184,7 +200,7 @@ sites.** No new mechanism.
 
 ---
 
-## Wave 2 / Wave 3 — the 20 leads, each to a verdict
+## Wave 2 / Wave 3 — the 20 leads, each to a verdict — IN PROGRESS (20/20 verdicts in; 13 CONFIRMED fixes held for the operator ruling)
 
 A lead is not a finding. Each resolves to **CONFIRMED → fix (W1 discipline)** or **REJECTED → the
 evidence that rejects it**, recorded in the audit doc. Dropping one is out of scope of this plan.
@@ -217,7 +233,7 @@ confirms, it is a stop-surface-now, ahead of the rest of this plan.
 
 ---
 
-## Wave 4 — the two structural facts
+## Wave 4 — the two structural facts — IN PROGRESS (W4a-7a + W4a-8 landed `ae0edbf6d`; rest ruling-gated)
 
 **W4a — no runtime schema validation anywhere in the action surface.** No zod, no valibot; every
 server-action parameter type is erased at runtime. Finding #6 is downstream of this. Introduce
@@ -225,7 +241,7 @@ validation at the action boundary, starting with the actions W1 touched, then th
 `src/app/actions/`. Sized to split: this is >500 LOC and >10 files, so it is a wave of units, not
 one unit — decompose it in its own Phase 0 block before firing.
 
-### W4a — Phase 0 decomposition (added 2026-09-22, after the registered-action census)
+### W4a — Phase 0 decomposition (added 2026-09-22, after the registered-action census) — IN PROGRESS
 
 The plan sized W4a as *">500 LOC and >10 files, so it is a wave of units, not one unit — decompose
 it in its own Phase 0 block before firing."* This is that block.
@@ -283,7 +299,7 @@ data backfill on a live fleet — G2, operator-gated, and it lands only after W1
 
 ---
 
-## Wave 5 — the 19 surfaces this run did not cover
+## Wave 5 — the 19 surfaces this run did not cover — DONE `fa6539057`
 
 Not a fix wave: a Cloudflare enumeration over the recorded `out_of_scope` units so a later whole-repo
 pass turns them into current work rather than inheriting a false "covered" (P2). The 17 include
