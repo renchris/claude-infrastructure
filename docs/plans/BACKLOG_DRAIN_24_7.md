@@ -87,16 +87,19 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 
 ## §2.1 Execution log (INTEGRATE-only; newest first)
 
-- **2026-09-22 — recycle #336 (lane infra):** closed 60e0ff25076d 2774c65e21e8 2ddf545a61f6
-  03e65f3558cd 2329ec3143aa 7928d41eb516 b0004d07df16 3fe2c31b6fb5 6dee50cd65db 75fe1032bbc2
-  05669deba7a7 b9a46f92109b f5d2d4d18265 e2791d6ff235 20c5d4b18d20 c0e7b1128788 8365f6c8b37e
-  7fb4e8a86c7c 2c2de133a296 dbb994e2878e 1a612e3bac98 437eff711c8c 78290b95a07d 861e48eeaec9
-  e594b1560a67 f36bc0986c43 4043f0515a18 9a83be41311c 3aac8393d7ba 19e28a3a5741 4959010a5a4e
-  084e3f5a7dd2 cd0ba52ad33e d6416dde4c08 d47d2958c20f · blocked none · released none · landed
-  this entry · `closed=35 closed_pre=35 closed_other=0 filed=0 net=35 blocked=0 min=2
-  lane=local-drain project=claude-infrastructure floor=MET`. One open row (a re-land whose
-  falsifier passed); the other 34 were BLOCKED rows whose premise had died — all 27 blocked
-  falsifiers still exit 1, so every one of these was adjudicated by hand against live state.
+- **2026-09-22 — recycle #336 (lane infra):** closed 60e0ff25076d 2774c65e21e8 2ddf545a61f6 03e65f3558cd
+  2329ec3143aa 7928d41eb516 b0004d07df16 3fe2c31b6fb5 6dee50cd65db 75fe1032bbc2 05669deba7a7 b9a46f92109b
+  f5d2d4d18265 e2791d6ff235 20c5d4b18d20 c0e7b1128788 8365f6c8b37e 7fb4e8a86c7c 2c2de133a296 dbb994e2878e
+  1a612e3bac98 437eff711c8c 78290b95a07d 861e48eeaec9 e594b1560a67 f36bc0986c43 4043f0515a18 9a83be41311c
+  3aac8393d7ba 19e28a3a5741 4959010a5a4e 084e3f5a7dd2 cd0ba52ad33e d6416dde4c08 d47d2958c20f · blocked none ·
+  released none · landed a5bb14422 · `closed=35 closed_pre=35 closed_other=0 filed=0 net=35 blocked=0 min=2
+  lane=local-drain project=claude-infrastructure floor=MET`. 34 were BLOCKED rows with dead premises (11
+  converge-wedge, 9 dead panes, 9 cloud rows with closed parents, 3 machine-fact); all 27 blocked falsifiers
+  still exit 1, so each was adjudicated by hand. PING UNRESOLVABLE: `cc-notify --role drain-lead` →
+  `verdict=unresolvable enqueued=0 uuid= reason=role-unset`; `cc-roles list` reads `drain-lead ABSENT
+  dead-target`, and the push fallback is inert (PUSHOVER_* unset) — the lane has had no reachable lead since
+  #334 recorded the same. stranded-sweep NO VERDICT on ship/backup-cfcdea5d2 was an instrument artifact: the
+  ref is gone locally and on origin, and its only path model-config.yaml is content-identical on trunk.
 
 - **2026-09-22 — recycle #335 (lane infra):** closed 9cf6afcb5a32, d6d7edef60a3 · blocked none ·
   released none · landed e5c1929f0 + this entry · `closed=2 closed_pre=2 closed_other=11 filed=2
