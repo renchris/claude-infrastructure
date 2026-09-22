@@ -537,6 +537,80 @@ body_of()   { local m; m=$(marker_of "$1" "$2"); printf '%s' "${1#"$m"}"; }
   [[ "$mov" != *next* ]] || { printf 'marker: %s\n' "$mov" >&2; false; }
 }
 
+# ── UNKNOWN IS ITS OWN STATE (VOLUNTARY_ACCOUNT_SWITCH §8a, 2026-09-22) ───────────────────────
+# A blank marker meant two opposite things: "the STABLE launcher, which has no ordinal by design"
+# and "I could not work out which account this is". Identical pixels, opposite meanings, and no
+# assertion in this suite could tell them apart — `[ -z "$mstable" ]` above is satisfied by both.
+# The measurement that makes this worth a case rather than a comment: 60.6% of substantial
+# post-idle work lands on a non-perishable account, because the operator types into whichever
+# pane is in front of him and cannot see whose quota he is spending. An ABSENT label reads as
+# "nothing to see", so silence was the worst available rendering of "unknown".
+#
+# Both arms are pinned because the two UNKNOWN sources are independent: an unmapped config dir
+# (an 11th instance added to ~/.zshrc and not to the ordinal map) and NO config dir at all (no
+# transcript_path and no $CLAUDE_CONFIG_DIR — $render pins the latter empty for every case here).
+payload_unmapped() {     # a config dir the ordinal map has never heard of
+  jq -nc '{session_id:"7777-7777-7777",
+           transcript_path:"/Users/x/.claude-undecennary/projects/-Users-x-p/7777.jsonl",
+           model:{id:"claude-opus-4-8"}, effort:{level:"high"},
+           context_window:{context_window_size:1000000, used_percentage:47},
+           cwd:"/Users/x/p"}'
+}
+payload_nocfg() {        # no transcript_path at all ⇒ CFG is empty and nothing can be inferred
+  jq -nc '{session_id:"8888-8888-8888",
+           model:{id:"claude-opus-4-8"}, effort:{level:"high"},
+           context_window:{context_window_size:1000000, used_percentage:47},
+           cwd:"/Users/x/p"}'
+}
+
+@test "live: an UNRESOLVABLE account renders UNKNOWN — never blank, never a guessed ordinal" {
+  mk_repo "$WORK/live-unk" some-branch
+  local munmapped mnocfg mstable m3
+  munmapped=$(chip_of "$(render payload_unmapped "$WORK/live-unk")" live-unk)
+  mnocfg=$(chip_of   "$(render payload_nocfg    "$WORK/live-unk")" live-unk)
+  mstable=$(chip_of  "$(render payload_stable   "$WORK/live-unk")" live-unk)
+  m3=$(chip_of       "$(render payload_full     "$WORK/live-unk")" live-unk)   # .claude-tertiary → 3
+
+  # 1. THE WHOLE POINT: unknown is not silence. This is the assertion the pre-change script fails.
+  [ -n "$munmapped" ] || { printf 'unmapped chip was BLANK — indistinguishable from stable\n' >&2; false; }
+  [ -n "$mnocfg" ]    || { printf 'no-config chip was BLANK — indistinguishable from stable\n' >&2; false; }
+  # 2. …and stable is still silence, because that account IS known and blank is its answer.
+  [ -z "$mstable" ] || { printf 'stable chip: %s\n' "$mstable" >&2; false; }
+  # 3. Both unknown sources are ONE state, so they render ONE way.
+  [ "$munmapped" = "$mnocfg" ]
+  # 4. It is never mistaken for a known instance.
+  [ "$munmapped" != "$m3" ]
+  # 5. NEVER A GUESS: no digit (that would name an account) and no account name.
+  [[ "$munmapped" != *[0-9]* ]] || { printf 'unknown chip carries a digit: %s\n' "$munmapped" >&2; false; }
+  [[ "$munmapped" != *claude* ]] || { printf 'unknown chip carries a name: %s\n' "$munmapped" >&2; false; }
+  [[ "$munmapped" != *next* ]]   || { printf 'unknown chip carries a name: %s\n' "$munmapped" >&2; false; }
+  # 6. The per-terminal gate exists to draw a NUMBER in one cell; there is no number here, so
+  #    iTerm2 must take the same rendering as everything else.
+  local miterm
+  miterm=$(chip_of "$(render payload_unmapped "$WORK/live-unk" TERM_PROGRAM=iTerm.app TERM=xterm-256color)" live-unk)
+  [ "$miterm" = "$munmapped" ]
+}
+
+@test "live: RED ARM — deleting the UNKNOWN arm puts the two states back to identical" {
+  # Positive control (A07 item 38): a case asserting a DIFFERENCE passes trivially if the
+  # difference is drawn by something else on the line, so mutate the one arm that draws it and
+  # require this suite's own claim to break. Without this, case 1 above is unfalsified.
+  mk_repo "$WORK/live-unk-red" some-branch
+  local mutant; mutant="$WORK/statusline-mutant.sh"
+  sed 's/^            \*)                    NUNK=1 ;;$/            *) : ;;/' "$NEW" > "$mutant"
+  # the mutation must actually have landed — a sed that matched nothing would pass vacuously
+  ! diff -q "$NEW" "$mutant" >/dev/null || { printf 'mutation did not apply — the arm moved\n' >&2; false; }
+
+  local saved_new; saved_new="$NEW"
+  NEW="$mutant"
+  local mu ms
+  mu=$(chip_of "$(render payload_unmapped "$WORK/live-unk-red")" live-unk-red)
+  ms=$(chip_of "$(render payload_stable   "$WORK/live-unk-red")" live-unk-red)
+  NEW="$saved_new"
+  [ "$mu" = "$ms" ] || { printf 'mutant still distinguished them: [%s] vs [%s]\n' "$mu" "$ms" >&2; false; }
+  [ -z "$mu" ] || { printf 'mutant chip was not blank: %s\n' "$mu" >&2; false; }
+}
+
 # ── W4 · IDENTITY IN THE PIXELS (U07 2026-09-19) ──────────────────────────────────────────────
 # Measured that day on 16 live sessions: panes 122 and 124 rendered the BYTE-IDENTICAL statusline,
 # 6 of 16 shared the cwd basename and all 6 shared the git sha (one checkout), and the sha MOVES
