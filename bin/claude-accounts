@@ -651,7 +651,8 @@ def concurrency(cfg):
     return counts
 
 
-KWORK_BUDGET_S = 5.0       # was 2.0 — see the budget note in working_concurrency's docstring
+KWORK_BUDGET_S = 15.0      # was 5.0, was 2.0 — see the budget note in working_concurrency's
+                           # docstring, and docs/research/routing-policy-ruling-2026-09-22.md §4
 KWORK_TIMEOUTS = 0         # per-process count, surfaced on route-meta as kwork_to=
 
 
@@ -687,6 +688,26 @@ def working_concurrency(cfg, window_min=None, budget_s=None):
     Returns None — not {} — when the walk cannot finish inside budget_s: a partial count reads
     as 'nothing working', which is the dangerous direction (it would ADMIT a pile-on), so the
     consumer (k_eff) falls back to the stricter pane census instead.
+
+    THE BUDGET, 5.0 -> 15.0 (2026-09-22, docs/research/routing-policy-ruling-2026-09-22.md §4).
+    The 5.0 s sizing below reasons from the FOREGROUND walk and is correct about it — re-measured
+    today it stats 4,269 transcripts across 3,706 dirs in 1.21 s. The walk does not run in the
+    foreground. Its only caller is `com.claude.accounts-keepwarm`, a launchd job with
+    `ProcessType Background`, and in that band the SAME walk measured 5.63 / 8.30 / 11.29 s —
+    every sample over the old budget. So the bound was not ~70x the normal case, it was BELOW it:
+    the walk timed out on 101 of 220 utilisation samples in 24 h (46%), and on each of those the
+    active-concurrency gate silently vanished for that sweep and the router named the most-loaded
+    account FIRST by 25x. A budget sized in the wrong QoS band is the repo's own
+    `bound-must-fit-the-band-not-the-bench` lesson, arrived at independently.
+
+    WHY 15 AND NOT MORE. The recycle's `--rank` call is bounded by `perl -e 'alarm 25'`
+    (scripts/handoff-fire.sh), and this walk runs in a thread beside the four account probes, so a
+    sweep costs ~max(probes 3-5 s, this budget). 15 keeps a >=10 s margin under that alarm; 30
+    would trip it on a starved box and turn every loaded-hour recycle into a silent no-repick —
+    i.e. it would break the very re-pick path this budget exists to feed. RESIDUAL: the extreme
+    tail (walks reaching <500 dirs in 5 s) is the QoS band, not the budget. If the unmeasured
+    fraction stays above 30%, the next lever is the plist's ProcessType — a launchd edit, operator-
+    owned — never a router constant.
 
     THE BUDGET, 2.0 -> 5.0 (W1.7, and it is not a "just raise the timeout" — the number was
     sized against the wrong distribution). The measured walk is 0.04-0.07 s over 826 transcripts,
