@@ -51,7 +51,7 @@ RULES="${CC_JEV_RULES_FILE:-$ROOT/.claude/rules/agent-operating-lessons.md}"
 RANKROWS="${CC_JEV_RANK_ROWS:-}"
 CAP="${CC_JEV_PROMO_CAP_B:-1200}"
 SEED="${CC_JEV_PROMO_SEED:-20260921}"
-YES=0; HEATS=0; BIAS="${CC_JEV_PROMO_BIAS_N:-20}"; RESUME=""; REPORT=""; PLANONLY=0
+YES=0; HEATS=0; BIAS="${CC_JEV_PROMO_BIAS_N:-20}"; RESUME=""; REPORT=""; PLANONLY=0; SHAONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --yes) YES=1; shift ;;
@@ -61,8 +61,9 @@ while [ $# -gt 0 ]; do
     --resume) RESUME="${2:?--resume needs a .jsonl}"; shift 2 ;;
     --report) REPORT="${2:?--report needs a .jsonl from a previous run}"; shift 2 ;;
     --plan-calls) PLANONLY=1; shift ;;
-    -h|--help) printf 'usage: cc-jev promote [--heats N] [--bias-n N] [--mem DIR] [--resume F.jsonl] [--report F.jsonl] [--plan-calls] [--yes]\n'; exit 0 ;;
-    *) printf 'usage: cc-jev promote [--heats N] [--bias-n N] [--mem DIR] [--resume F.jsonl] [--report F.jsonl] [--plan-calls] [--yes]\n' >&2; exit 2 ;;
+    --corpus-sha) SHAONLY=1; shift ;;
+    -h|--help) printf 'usage: cc-jev promote [--heats N] [--bias-n N] [--mem DIR] [--resume F.jsonl] [--report F.jsonl] [--plan-calls] [--corpus-sha] [--yes]\n'; exit 0 ;;
+    *) printf 'usage: cc-jev promote [--heats N] [--bias-n N] [--mem DIR] [--resume F.jsonl] [--report F.jsonl] [--plan-calls] [--corpus-sha] [--yes]\n' >&2; exit 2 ;;
   esac
 done
 
@@ -308,6 +309,12 @@ TOTAL=$(( 1 + HEATS + R2 + BIAS ))
 # which covered 130 of 278 orphans: one arming produced half a swap list and the shortfall was
 # invisible, because a partial pass prints exactly the same summary as a complete one.
 if [ "$PLANONLY" -eq 1 ]; then printf '%s\n' "$TOTAL"; exit 0; fi
+# --corpus-sha prints the identity of the population as it stands RIGHT NOW, spending nothing, so
+# the scheduler can compare it against what the last completed pass recorded.
+if [ "$SHAONLY" -eq 1 ]; then
+  printf '%s\n' "$( { sort "$ORPH"; printf -- '--\n'; sort "$ANCH"; } | shasum -a 256 2>/dev/null | cut -c1-16)"
+  exit 0
+fi
 
 OUT="${RESUME:-$HOME/.claude/autonomy/jev-promote-$(date -u +%Y%m%dT%H%M%SZ).jsonl}"
 mkdir -p "$(dirname "$OUT")" || { printf 'cannot create %s\n' "$(dirname "$OUT")" >&2; exit 3; }
@@ -354,9 +361,17 @@ jev_available || { printf 'not available — run: cc-jev status\n' >&2; exit 2; 
 # MOCK is stamped from the ROUTE, at write time — the one fact that settles whether a row is a
 # verdict about the world or about a test double. See hooks/lib/jev.sh::jev_is_mock.
 MOCKED=false; jev_is_mock && MOCKED=true
+# CORPUS_SHA identifies the POPULATION this run judged, not merely how big it was. A count is a
+# weak key: evict one lesson and promote another and it is unchanged while every heat has shifted.
+# The unattended scheduler uses it to answer "is there anything new to judge?" — without that it
+# would re-run a COMPLETED 133-call pass on every 1800s tick, ~6,384 calls/day over rows it already
+# has. Orphans AND anchors, because a change in either makes the contest a different contest.
+CORPUS_SHA="$( { sort "$ORPH"; printf -- '--\n'; sort "$ANCH"; } | shasum -a 256 2>/dev/null | cut -c1-16)"
+[ -n "$CORPUS_SHA" ] || CORPUS_SHA="unknown"
 _meta_row() { jq -nc --arg id meta --arg r meta --argjson o "$N_ORPH" --arg sd "$SEED" \
                   --argjson pl "$TOTAL" --argjson a "$N_ANCH" --argjson m "$MOCKED" \
-                  '{id:$id, round:$r, orphans:$o, seed:$sd, plan:$pl, anchors:$a, mock:$m}'; }
+                  --arg cs "$CORPUS_SHA" \
+                  '{id:$id, round:$r, orphans:$o, seed:$sd, plan:$pl, anchors:$a, mock:$m, corpus_sha:$cs}'; }
 if [ -n "$RESUME" ] && [ -s "$OUT" ]; then
   _prev="$(jq -c 'select(.round=="meta")' "$OUT" 2>/dev/null | head -1)"
   _po="$(printf '%s' "$_prev" | jq -r '.orphans // empty' 2>/dev/null)"
