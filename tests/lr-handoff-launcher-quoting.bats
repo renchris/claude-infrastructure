@@ -445,6 +445,16 @@ gen_inplace() { # $1=sid $2=cwd [$3=handoff-fire bin] → the REAL --in-place pa
       IT2_BIN="$BATS_TEST_TMPDIR/absent-it2" \
       "$HANDOFF" --sid "$sid" --target next2 --cwd "$cwd" --launch --in-place --source-pane 616
 }
+gen_inplace_self() { # $1=sid $2=cwd $3=handoff-fire bin → the SELF path: NO --source-pane, own-env pane
+  local sid="$1" cwd="$2" hf="$3"
+  env PATH="$STUBBIN:$PATH" CLAUDE_CONFIG_DIR="$HOME/.claude" \
+      CC_HANDOFF_FIRE_BIN="$hf" CC_FIRE_CAPACITY_GATE=off \
+      HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/sweep.json" \
+      CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/absent-accounts" CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-" \
+      IT2_BIN="$BATS_TEST_TMPDIR/absent-it2" \
+      CLAUDE_CODE_SESSION_ID="$sid" KITTY_WINDOW_ID=505 \
+      "$HANDOFF" --sid "$sid" --target next2 --cwd "$cwd" --launch
+}
 stub_hf() { # $1=verdict line $2=rc → a handoff-fire whose PROBE answers as told, and records a fire
   cat > "$BATS_TEST_TMPDIR/hf-stub.sh" <<SH
 #!/bin/bash
@@ -593,6 +603,48 @@ verdict: OK' 0)"
   n="$(jq -rs '[.[] | (.detail // "") | capture("killed_inflight=(?<n>[0-9]+)") | .n] | .[0] // "NONE"' "$ev")"
   [ "$n" = 2 ] || { echo "killed_inflight read back as $n, not 2:"; cat "$ev"; false; }
   [[ "$output" == *"killed_inflight=2"* ]] || { echo "the precheck did not say what it measured: $output"; false; }
+}
+
+@test "SELF: a session recovering ITSELF records killed_inflight (the mirror verb of W3i)" {
+  # The whole probe block was gated on SOURCE_PANE, which the SELF branch deliberately leaves
+  # empty — so the commonest in-place recovery there is, a session moving itself to a fresher
+  # account, wrote no killed_inflight and clause A6 refused it every time. Measured 2026-09-22 on
+  # a real recovery: A6 was the SOLE failure of 14 clauses.
+  lrh_inplace_setup
+  sid="lrhw0014-0000-4000-8000-000000000014"
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  lrh_tx "$sid" limit
+  run gen_inplace_self "$sid" "$BATS_TEST_TMPDIR/repo" "$(stub_hf 'live_subagents: 3
+verdict: OK' 0)"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  ev=""; for _ev in "$HOME/.reso/limit-recover/$sid"/bundle-*/events.jsonl; do
+    [ -e "$_ev" ] || continue; ev="$_ev"; break
+  done
+  [ -n "$ev" ] || { echo "no events.jsonl was written at all"; echo "$output"; false; }
+  n="$(jq -rs '[.[] | (.detail // "") | capture("killed_inflight=(?<n>[0-9]+)") | .n] | .[0] // "NONE"' "$ev")"
+  [ "$n" = 3 ] || { echo "killed_inflight read back as $n, not 3:"; cat "$ev"; false; }
+}
+
+@test "SELF: a probe REFUSAL records nothing and still transplants — rc is never a veto here" {
+  # THE CONTROL, and the reason the SELF arm ignores the probe's rc. Its other clauses adjudicate a
+  # REMOTE recycle; a perfectly healthy session probes REFUSED:not-limited and exits 5. Letting
+  # that reach the SOURCE_PANE branch's `rc -ne 0 → return 6` would refuse every self-recovery of a
+  # session being moved for context or account reasons — which is most of them. This arm may only
+  # ADD a record, never withhold the transplant.
+  lrh_inplace_setup
+  sid="lrhw0015-0000-4000-8000-000000000015"
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  lrh_tx "$sid" limit
+  run gen_inplace_self "$sid" "$BATS_TEST_TMPDIR/repo" "$(stub_hf 'verdict: REFUSED:not-limited' 5)"
+  [ "$status" -eq 0 ] || { echo "a probe refusal must NOT veto a self-recovery: $output"; false; }
+  ev=""; for _ev in "$HOME/.reso/limit-recover/$sid"/bundle-*/events.jsonl; do
+    [ -e "$_ev" ] || continue; ev="$_ev"; break
+  done
+  [ -n "$ev" ] || { echo "no events.jsonl was written at all"; false; }
+  ! grep -q 'killed_inflight' "$ev" || { echo "a count was invented over a probe that printed none:"; cat "$ev"; false; }
+  # LIVENESS: without this the case passes vacuously whenever the SELF arm never runs at all —
+  # which is exactly how it passed while the arm was dead (LRH_SELF_PANE clobbered to empty).
+  [[ "$output" == *"self probe on pane 505"* ]] || { echo "the SELF arm never ran, so this proved nothing: $output"; false; }
 }
 
 @test "W3i: a probe that prints NO live_subagents line writes NO killed_inflight, and says so" {

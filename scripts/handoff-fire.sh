@@ -7806,6 +7806,20 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
     done
     if [ -n "$PRP_TX" ]; then break; fi
   done
+  # IN-FLIGHT SUBAGENTS — COUNTED, NEVER A REFUSAL, AND NOW ACTUALLY REACHABLE.
+  # This block used to sit at the END of the probe, after every gate. `prp_verdict` exits, so
+  # "never a refusal" described the LINE while its POSITION made it unreachable on every refusal
+  # path — the repo lesson "a helper defined beside its first caller keeps every site above it
+  # broken". Measured 2026-09-22: a probe of a live NOT-LIMITED pane exits 5 at the limit gate
+  # below, so `live_subagents:` never printed, so lr-handoff could never record killed_inflight,
+  # so lr-ingest-verify clause A6 refused — on a recovery whose in-flight count was plainly zero.
+  # The count depends on the SESSION ID alone (not on the transcript, the limit verdict, the
+  # composer or the teammate test), so it is a fact about the pane that no verdict conditions.
+  # Emitting it here makes it true of every path, which is what the old comment already claimed.
+  PRP_SA_DIR="$(subagent_dir_for_sid "$PRP_SESSION")"
+  PRP_SA=0
+  [ -n "$PRP_SA_DIR" ] && PRP_SA="$(live_subagents_of "$PRP_SA_DIR" | grep -c . || true)"
+  echo "live_subagents: ${PRP_SA:-0}"
   if [ -z "$PRP_TX" ]; then
     echo "limit: NO TRANSCRIPT for ${PRP_SESSION:0:8} under \$CC_PROJECTS_DIRS"
     prp_verdict "REFUSED:no-transcript" 5
@@ -7877,11 +7891,6 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
     prp_verdict "HELD:composer-unreadable" 3
   fi
 
-  # 6. IN-FLIGHT SUBAGENTS — COUNTED, NEVER A REFUSAL (see the header).
-  PRP_SA_DIR="$(subagent_dir_for_sid "$PRP_SESSION")"
-  PRP_SA=0
-  [ -n "$PRP_SA_DIR" ] && PRP_SA="$(live_subagents_of "$PRP_SA_DIR" | grep -c . || true)"
-  echo "live_subagents: ${PRP_SA:-0}"
   prp_verdict OK 0
 fi
 

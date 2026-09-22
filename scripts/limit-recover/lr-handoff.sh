@@ -227,6 +227,10 @@ LRH_SPAWN_SHAPE=""
 CWD="$(pwd)" CONTEXT="" LAUNCH=0 PRINT_ONLY=0 NO_TRANSPLANT=0 KEEP_SOURCE=0 FORCE=0 CLOSE_SOURCE=0 IN_PLACE=0 SPAWN=0
 MODEL_EXPLICIT=0 EFFORT_EXPLICIT=0
 SOURCE_PANE=""
+# Set by lrh_resolve_implied_pane branch (b) and read by lrh_precheck. It MUST be initialised
+# here, above that resolver's call site — declared beside its consumer instead, the empty
+# assignment re-runs after the resolver and silently clobbers the pane id.
+LRH_SELF_PANE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target) TARGET="$2"; shift 2 ;;
@@ -279,6 +283,12 @@ lrh_resolve_implied_pane() { # → 0 a pane is resolvable (SOURCE_PANE may be se
   # case `${SOURCE_PANE:-<this pane>}`. Both terminals are admitted by their own env var because
   # this is the one question where the CALLER's env is the right subject: it is asking about itself.
   if [[ "$SID" == "${CLAUDE_CODE_SESSION_ID:-}" ]] && [[ -n "${KITTY_WINDOW_ID:-}" || -n "${ITERM_SESSION_ID:-}" ]]; then
+    # SOURCE_PANE STAYS EMPTY — that is the contract downstream reads as "recycle yourself", and
+    # tests/lr-handoff-inplace-default.bats pins it. But the probe that COUNTS in-flight subagents
+    # is gated on SOURCE_PANE, so leaving self with no pane id at all made killed_inflight
+    # unrecordable on the commonest in-place case there is: a session recovering itself. Export the
+    # id under its OWN name, for the read-only probe and nothing else.
+    LRH_SELF_PANE="${KITTY_WINDOW_ID:-${ITERM_SESSION_ID##*:}}"
     return 0
   fi
   # (c) DRIVER. Somebody else's session: its pane comes from the registry, which is the only thing
@@ -783,6 +793,32 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
       # LOUD, because the silence is what A6 reads as a refusal. A probe that returned rc 0 without
       # its own count line is a contract change in handoff-fire.sh, not a quiet degradation.
       echo "lr-handoff: WARNING — the recycle precondition probe printed no 'live_subagents:' line, so killed_inflight is UNRECORDED and lr-ingest-verify's clause A6 will refuse the fast path" >&2
+    fi
+  elif [[ -n "$LRH_SELF_PANE" ]]; then
+    # ── SELF: THE OTHER VERB OF THE SAME CLASS (2026-09-22) ──────────────────────────────────────
+    # Everything above is gated on SOURCE_PANE, which the SELF branch of lrh_resolve_implied_pane
+    # deliberately leaves empty — so a session recovering ITSELF ran no probe, wrote no
+    # killed_inflight, and clause A6 refused it every single time. The writer that landed to make
+    # A6 reachable cured the DRIVER verb only; this is the mirror verb, and its caller is the
+    # commonest in-place recovery on the box.
+    #
+    # RECORD-ONLY, AND THE RC IS DELIBERATELY IGNORED. The probe's other clauses adjudicate a
+    # REMOTE recycle — is the pane limited, is it a teammate, is its composer clear — and none of
+    # them is a precondition of a self-recycle, which types into its own window. In particular a
+    # healthy session probes `REFUSED:not-limited` and exits 5: letting that rc reach the branch
+    # above would refuse every self-recovery of a session that is merely low on context or being
+    # moved to a fresher account. So this arm can only ADD a record, never withhold the transplant.
+    # The probe writes nothing (tests/handoff-probe-preconditions.bats pins the tree byte-identical).
+    local self_out=""
+    if [[ -x "$hf" ]]; then
+      self_out="$("$hf" --probe-recycle-preconditions --source-pane "$LRH_SELF_PANE" --source-session "$SID" 2>&1 || true)"
+      lrh_ki="$(printf '%s\n' "$self_out" | sed -n 's/^live_subagents: \([0-9][0-9]*\)$/\1/p' | tail -1)"
+    fi
+    if [[ -n "$lrh_ki" ]]; then
+      echo "lr-handoff: precheck (self, pane $LRH_SELF_PANE) measured ${lrh_ki} in-flight subagent(s) the recycle will kill (killed_inflight=$lrh_ki)" >&2
+      lrh_state probed precheck "killed_inflight=$lrh_ki"
+    else
+      echo "lr-handoff: WARNING — the self probe on pane $LRH_SELF_PANE printed no 'live_subagents:' line, so killed_inflight is UNRECORDED and lr-ingest-verify's clause A6 will refuse the fast path" >&2
     fi
   fi
   # THE CAPACITY DECISION, TAKEN ONCE. One evaluation, no wait: the fleet driver owns the waiting
