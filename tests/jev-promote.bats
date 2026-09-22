@@ -436,13 +436,16 @@ runp() {
   run runp CC_JEV_ZDR=0 CC_JEV_BASE_URL="http://127.0.0.1:$PORT" -- --bias-n 2 --yes
   [ "$status" -eq 0 ]
   ROWS=$(grep -o '/.*jev-promote-.*\.jsonl' <<<"$output" | tail -1)
-  before=$(jq -r 'select(.round!="meta")|.id' "$ROWS" | wc -l | tr -d ' ')
+  # exclude the `complete` stamp: a resume that buys nothing ADDS that marker, which is the
+  # point of it, so counting it as a verdict reads a correct no-op resume as re-bought rows.
+  _vcount() { jq -r 'select(.round!="meta" and .round!="complete")|.id' "$1" | wc -l | tr -d ' '; }
+  before=$(_vcount "$ROWS")
   [ "$before" -gt 0 ]
   # Re-run against the SAME rows: every id is already present, so each is skipped, not re-asked.
   run runp CC_JEV_ZDR=0 CC_JEV_BASE_URL="http://127.0.0.1:$PORT" -- --resume "$ROWS" --bias-n 2 --yes
   [ "$status" -eq 0 ]
   grep -qF "Resuming" <<<"$output"
-  after=$(jq -r 'select(.round!="meta")|.id' "$ROWS" | wc -l | tr -d ' ')
+  after=$(_vcount "$ROWS")
   [ "$after" = "$before" ] || { echo "resume re-bought rows: $before -> $after"; false; }
 }
 
@@ -670,6 +673,9 @@ unatt_on() { jq -n '{enabled:true,authorized:"x",decision:"ea7a241bdf78"}' > "$1
   # a COMPLETED pass recording exactly that corpus
   { jq -nc --arg s "$SHA" '{id:"meta",round:"meta",orphans:12,seed:"20260921",plan:2,anchors:1,mock:false,corpus_sha:$s}'
     printf '%s\n' '{"id":"h1","round":"heat","winner":"o1.md"}' '{"id":"r2-1","round":"h2h","winner":"a"}'
+    # COMPLETE is the run's own stamp now, not rows-vs-plan — see the block below on why plan
+    # overcounts and made "incomplete" permanent.
+    printf '%s\n' '{"id":"complete","round":"complete","at":"x","verdicts":2}'
   } > "$UH/.claude/autonomy/jev-promote-20260921T000000Z.jsonl"
   run env AI_GATEWAY_API_KEY=dummy HOME="$UH" CC_JEV_ARM_FILE="$UH/none.arm" \
       CC_JEV_BATCH_LOG="$UH/b.log" CC_JEV_MEM_DIR="$MEMD" CC_JEV_RULES_FILE=/dev/null \
@@ -721,4 +727,58 @@ unatt_on() { jq -n '{enabled:true,authorized:"x",decision:"ea7a241bdf78"}' > "$1
   B="$(env -u AI_GATEWAY_API_KEY CC_JEV_RULES_FILE=/dev/null CC_JEV_RANK_ROWS="$RANKF" \
        "$REPO/bin/cc-jev" promote --mem "$MEMD" --corpus-sha)"
   [ "$A" != "$B" ] || { echo "corpus sha did not move when an orphan was added"; false; }
+}
+
+# ── COMPLETENESS IS A STAMP, NOT ARITHMETIC AGAINST A FORECAST ───────────────────────────────
+# `plan` is computed BEFORE the corpus is walked and assumes every heat is a contest. A heat with
+# fewer than two members has no contest — no call, no row — so rows can NEVER reach plan.
+# Measured live 2026-09-21: plan 132, a finished pass tops out at 125, "incomplete" was permanent,
+# and the unattended scheduler re-ran a completed pass on three consecutive ticks before it was
+# caught. The signal that cannot drift is the one the run observes: a pass that BOUGHT NOTHING has
+# nothing left to buy.
+@test "promote: a pass that buys nothing STAMPS itself complete, once" {
+  mkcorpus
+  export MOCK_CHOICE_ROTATE=1
+  start_mock ok
+  run runp CC_JEV_ZDR=0 CC_JEV_BASE_URL="http://127.0.0.1:$PORT" -- --bias-n 2 --yes
+  [ "$status" -eq 0 ]
+  ROWS=$(grep -o '/.*jev-promote-.*\.jsonl' <<<"$output" | tail -1)
+  [ "$(jq -r 'select(.round=="complete")|.id' "$ROWS" | wc -l | tr -d ' ')" -eq 0 ]  # not yet
+  run runp CC_JEV_ZDR=0 CC_JEV_BASE_URL="http://127.0.0.1:$PORT" -- --resume "$ROWS" --bias-n 2 --yes
+  [ "$status" -eq 0 ]
+  [ "$(jq -r 'select(.round=="complete")|.id' "$ROWS" | wc -l | tr -d ' ')" -eq 1 ]
+  # and stamping is idempotent — a third pass must not add a second marker
+  run runp CC_JEV_ZDR=0 CC_JEV_BASE_URL="http://127.0.0.1:$PORT" -- --resume "$ROWS" --bias-n 2 --yes
+  [ "$(jq -r 'select(.round=="complete")|.id' "$ROWS" | wc -l | tr -d ' ')" -eq 1 ]
+}
+
+@test "completeness: the stamp is not a verdict and never inflates a denominator" {
+  R="$BATS_TEST_TMPDIR/stamped.jsonl"
+  printf '%s\n' \
+   '{"id":"meta","round":"meta","orphans":9,"seed":"s","plan":99,"anchors":1,"mock":false,"corpus_sha":"abc"}' \
+   '{"id":"r2-1","round":"h2h","block_a":"x.md","block_b":"y.md","winner":"a","same_rule":0.1,"swapped":false}' \
+   '{"id":"complete","round":"complete","at":"x","verdicts":1}' > "$R"
+  run env -u AI_GATEWAY_API_KEY "$REPO/bin/cc-jev" promote --report "$R"
+  [ "$status" -eq 0 ]
+  grep -qF "1 verdict(s) on disk" <<<"$output"      # the stamp is not counted as one
+}
+
+# 🚨 THE REGRESSION ARM. A STAMPED run must stop the unattended scheduler dead, even though its
+# rows fall short of the plan it recorded — that gap is exactly the bug.
+@test "unattended: a STAMPED pass short of its plan still makes NO call" {
+  mkcorpus
+  UH="$(unatt_home)"; unatt_on "$UH"
+  SHA="$(env CC_JEV_MEM_DIR="$MEMD" CC_JEV_RULES_FILE=/dev/null CC_JEV_RANK_ROWS="$RANKF" \
+         "$REPO/scripts/jev/promote-memory.sh" --mem "$MEMD" --corpus-sha)"
+  { jq -nc --arg s "$SHA" '{id:"meta",round:"meta",orphans:12,seed:"20260921",plan:132,anchors:1,mock:false,corpus_sha:$s}'
+    printf '%s\n' '{"id":"h1","round":"heat","winner":"o1.md"}'
+    printf '%s\n' '{"id":"complete","round":"complete","at":"x","verdicts":1}'
+  } > "$UH/.claude/autonomy/jev-promote-20260921T000000Z.jsonl"
+  run env AI_GATEWAY_API_KEY=dummy HOME="$UH" CC_JEV_ARM_FILE="$UH/none.arm" \
+      CC_JEV_BATCH_LOG="$UH/b.log" CC_JEV_MEM_DIR="$MEMD" CC_JEV_RULES_FILE=/dev/null \
+      CC_JEV_RANK_ROWS="$RANKF" "$REPO/scripts/jev/jev-batch.sh"
+  [ "$status" -eq 0 ]
+  grep -qF "corpus unchanged" "$UH/b.log"
+  ! grep -qF "run rc=" "$UH/b.log" || { echo "re-ran a stamped pass — the live bug"; false; }
+  ! grep -qF "RESUMING" "$UH/b.log" || { echo "resumed into a stamped pass"; false; }
 }
