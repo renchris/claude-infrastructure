@@ -617,10 +617,30 @@ INNER
   # documented opt-out and restores the inject this case was written against, byte for byte; the
   # paint behaviour has its own red-proofs in tests/lr-submit-cr-landing.bats.
   export LR_SUBMIT_PAINT_S=0
-  # The late record, written by a detached writer so the expect program is the only thing on the
-  # clock. `$!` is the subshell, which is what must be reaped — killing the sleep would orphan it
+  # THE LATE RECORD'S CLOCK MUST BE THE POLL'S, NOT THE TEST'S (2026-09-22).
+  # This was a flat `sleep 5` measured from HERE, which is a different origin from the one the
+  # margin is stated against. The poll does not start until expect has booted and the quiet arm has
+  # typed the prompt, and under load that prelude alone outlasts 5s — so the record was already in
+  # the transcript when the poll took its FIRST look, lr_probe returned `submitted` at t=0, and the
+  # loop broke before ever reaching the unmeasured arm this case exists to pin. It then certified
+  # NOTHING while reporting a pass. Measured on this box: 5 of 5 failures at load 91, 0 of 5 at
+  # load/core 7.6, the state log reading `READY-QUIET submitted` with SUBMIT-UNMEASURED simply
+  # absent. The flake PREDATES this branch — postland recorded it 1-of-3 at 0e471ba63 on
+  # 2026-09-21, an ancestor of both trunk and this work — so it is a timing defect in the fixture,
+  # never a verdict on the subject (memory: a-cure-is-verified-only-under-the-load-that-caused-it).
+  #
+  # So anchor on the EVENT that starts the poll rather than on a duration. The prompt reaching the
+  # stub is the last thing the inject does, so both clocks now share one origin and the 6s margin
+  # is real at any load: the record lands well after the look at t=1 and well inside the deadline
+  # the look extends to (qmax = RCY_ENGAGE_TIMEOUT = 20). The counter bounds a never-typed prompt,
+  # which must not hang the writer.
+  #
+  # `$!` is the subshell, which is what must be reaped — killing the sleep would orphan it
   # (memory kill-the-leaf-not-the-wrapper, inverted: here the WRAPPER is the thing we own).
-  ( sleep 5; printf '{"type":"user","timestamp":"2099-01-01T00:00:00.000Z","message":{"role":"user","content":"ingest %s"}}\n' "$TOK" > "$TX" ) &
+  ( i=0
+    while [ "$i" -lt 300 ] && [ ! -s "$LR_TEST_GOT" ]; do sleep 0.2; i=$((i + 1)); done
+    sleep 6
+    printf '{"type":"user","timestamp":"2099-01-01T00:00:00.000Z","message":{"role":"user","content":"ingest %s"}}\n' "$TOK" > "$TX" ) &
   local writer=$!
   lr_expect_run 60
   kill "$writer" 2>/dev/null || true; wait "$writer" 2>/dev/null || true
