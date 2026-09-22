@@ -1473,3 +1473,77 @@ overlapped() { # <log> <start-token> — 0 when the log DOES overlap (the pool a
   [[ "$output" != *"route-meta"* ]] || { echo "$output"; false; }
   [[ "$output" == *"printed no reason"* ]] || { echo "$output"; false; }
 }
+
+# ═══ §9 — THE DETACHED VERDICT NAMED THE ACTUATOR'S EXIT, NOT THE ACTION'S OUTCOME ══════════════
+#
+# VOLUNTARY_ACCOUNT_SWITCH.md §9 filed this beside §6's verdict work, and it is the same defect one
+# layer down. `lf_row` writes `dry-run` (lr-fleet.sh:769) and `skipped` / `skipped/by-design`
+# (`:990`, `:998-1000`, `:1011`) into the mechanism column, and the detached mail's mapping knew
+# only RECOVERED / PARTIAL / parked — so all three fell through `*)` to FAILED. A `--dry-run
+# --detach` therefore MAILED `verdict=FAILED` for a run that did precisely what it was asked, and a
+# TEAMMATE session correctly left alone reported as a failure of the tool.
+#
+# ONE RED PROOF AND ONE EQUIVALENCE GUARD, named apart because §7 forbids letting the second wear
+# the first's clothes. The red proof dies against the unfixed subject with the defect printed in its
+# own failure message — measured 2026-09-22: `verdict=FAILED rc=0 ... mech=dry-run`. The guard passes
+# in BOTH arms by construction and proves nothing about the fix; it exists only to kill the careless
+# mutant (`*) _lf_v=SKIPPED`) that would buy the red proof by swallowing genuine failures too.
+#
+# Why this is worth a test rather than a comment: FAILED is the only token here that should ever
+# page a human, and a token that fires on the two most common no-op paths is one nobody reads.
+
+@test "RED PROOF (§9): a --dry-run --detach mails verdict=DRYRUN, never FAILED" {
+  export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/cc-notify"
+  cat > "$CC_NOTIFY_BIN" <<SH
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/notify.log"
+SH
+  chmod +x "$CC_NOTIFY_BIN"
+  # The actuator must never be reached at all on this path; if it is, the dry run is not dry and
+  # this test is measuring something else.
+  cat > "$LR_HANDOFF_BIN" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "${LRH_LOG:?}"
+exit 0
+SH
+  chmod +x "$LR_HANDOFF_BIN"
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  t0=$(date +%s)
+  run bash "$FLEET" --one "$SID" --target next3 --source-pane 616 --dry-run --detach
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  until [ -s "$BATS_TEST_TMPDIR/notify.log" ] || [ $(( $(date +%s) - t0 )) -gt 60 ]; do sleep 2; done
+  [ -s "$BATS_TEST_TMPDIR/notify.log" ] || { echo "no verdict mail was sent at all"; false; }
+  m="$(cat "$BATS_TEST_TMPDIR/notify.log")"
+  grep -q 'verdict=DRYRUN' <<<"$m" || { echo "expected verdict=DRYRUN, got: $m"; false; }
+  ! grep -q 'verdict=FAILED' <<<"$m" || { echo "a dry run reported as a FAILURE: $m"; false; }
+  # POSITIVE CONTROL on the dryness itself — without it, an actuator that silently never ran would
+  # make the token correct for the wrong reason.
+  [ ! -s "$LRH_LOG" ] || { echo "the dry run REACHED the actuator: $(cat "$LRH_LOG")"; false; }
+}
+
+@test "EQUIVALENCE GUARD (§9): FAILED still means attempted-and-broken — a real actuator failure keeps it" {
+  export CC_NOTIFY_BIN="$BATS_TEST_TMPDIR/cc-notify"
+  cat > "$CC_NOTIFY_BIN" <<SH
+#!/bin/bash
+printf '%s\n' "\$*" >> "$BATS_TEST_TMPDIR/notify.log"
+SH
+  chmod +x "$CC_NOTIFY_BIN"
+  cat > "$LR_HANDOFF_BIN" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "${LRH_LOG:?}"
+echo "lr-handoff: exploded" >&2
+exit 1
+SH
+  chmod +x "$LR_HANDOFF_BIN"
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  t0=$(date +%s)
+  run bash "$FLEET" --one "$SID" --target next3 --source-pane 616 --detach
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  until [ -s "$BATS_TEST_TMPDIR/notify.log" ] || [ $(( $(date +%s) - t0 )) -gt 60 ]; do sleep 2; done
+  [ -s "$BATS_TEST_TMPDIR/notify.log" ] || { echo "no verdict mail was sent at all"; false; }
+  m="$(cat "$BATS_TEST_TMPDIR/notify.log")"
+  # THE EQUIVALENCE GUARD, labelled as such per §7: this case passes before AND after the fix. It
+  # does not prove the fix; it proves the fix did not widen the no-op arms over a genuine failure,
+  # which is the mutation a careless `*) _lf_v=SKIPPED` would introduce.
+  grep -q 'verdict=FAILED' <<<"$m" || { echo "a broken actuator no longer reports FAILED: $m"; false; }
+}

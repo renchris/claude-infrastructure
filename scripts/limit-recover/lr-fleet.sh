@@ -804,7 +804,15 @@ lf_one() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → rc of the recovery
   echo "lr-fleet: recovering ${sid:0:8} — pane ${pane:-<new>} on $acct → $target (tier ${tier:-default})$([ "$FROM_DAEMON" = 1 ] && printf ' [daemon-run: lr-reset-poller request drain]')" >&2
   out="$("$HANDOFF" "${args[@]}" 2> >(tee "$rdir/$sid.stderr" >&2))" || rc=$?
   printf '%s\n' "$out" > "$rdir/$sid.stdout"
-  local pane_after="$pane" mech="recycle-in-place" verdict="RECOVERED" note="-"
+  # THE VERDICT IS FAIL-CLOSED, NOT FAIL-SUCCESS (VOLUNTARY_ACCOUNT_SWITCH.md §9). This read
+  # `verdict="RECOVERED"` — set BEFORE the actuator's rc was looked at — so success was what a
+  # path reached by NOT assigning would report. Every arm of the case below does assign today,
+  # which is exactly why the defect was invisible: it is a claim about the arm nobody has
+  # written yet. Empty here, assigned explicitly in `0)`, and an empty one renders as `mech/`
+  # which the detached mapping already sends to FAILED. No red proof accompanies this: with
+  # every arm assigning there is no input that separates the two versions, and a test that
+  # cannot fail against the unfixed subject would be decoration (§7).
+  local pane_after="$pane" mech="recycle-in-place" verdict="" note="-"
   if grep -q 'REPLACED in place' "$rdir/$sid.stderr" 2>/dev/null; then
     mech="replace-in-place"; pane_after="$(grep -o 'successor pane [0-9]*' "$rdir/$sid.stderr" | head -1 | awk '{print $3}')"; [ -n "$pane_after" ] || pane_after="?"
   elif grep -q 'fired split pane\|fired new kitty window' "$rdir/$sid.stderr" 2>/dev/null; then
@@ -812,7 +820,7 @@ lf_one() { # $1=sid $2=cfg $3=acct $4=pane $5=cwd $6=tier → rc of the recovery
   fi
   local cause; cause="$(lf_idl_cause "$sid" "$t0" || true)"
   case "$rc" in
-    0) : ;;
+    0) verdict="RECOVERED" ;;
     4) verdict="PARTIAL"; note="transplanted but the relaunch did not verify — source is a tombstoned husk; ${cause:-no launcher refusal in the IDL for this attempt — read the watcher log}; see $rdir/$sid.stderr" ;;
     *) verdict="FAILED"; note="lr-handoff rc=$rc${cause:+; $cause}; see $rdir/$sid.stderr" ;;
   esac
@@ -1146,12 +1154,25 @@ EOF
     if [ "${LR_FLEET_DETACHED:-0}" = 1 ]; then
       _lf_mv="$(awk -F'\t' -v s="$SID" '$1 == s { m=$6; n=$7 } END { print m }' "$FLEET_DIR/$RUN/results.tsv" 2>/dev/null || true)"
       _lf_note="$(awk -F'\t' -v s="$SID" '$1 == s { n=$7 } END { print n }' "$FLEET_DIR/$RUN/results.tsv" 2>/dev/null || true)"
+      # PARTITIONED ON WHAT HAPPENED, NEVER ON "did the actuator run" (VOLUNTARY_ACCOUNT_SWITCH.md
+      # §9, §6). `dry-run`, `skipped` and `skipped/by-design` are mechanism tokens lf_row genuinely
+      # writes (`:769`, `:990`, `:998-1000`, `:1011`), and until 2026-09-22 all three fell through
+      # `*)` to FAILED — so a --dry-run mailed `verdict=FAILED` for a run that did exactly what it
+      # was asked, and a TEAMMATE/RESUMING session correctly left alone reported as a failure of the
+      # tool. Both are the §6 defect in miniature: a verdict naming the ACTOR's exit rather than the
+      # ACTION's outcome. FAILED must keep meaning "this was attempted and it did not work",
+      # otherwise the one token that should page somebody is the one that fires constantly.
       case "$_lf_mv" in
-        *RECOVERED) _lf_v=RECOVERED ;;
-        *PARTIAL)   _lf_v=PARTIAL ;;
-        parked*)    _lf_v=PARKED ;;
-        '')         _lf_v=FAILED; _lf_note="${_lf_note:-no results row was written — the driver died before lf_one returned}" ;;
-        *)          _lf_v=FAILED ;;
+        *RECOVERED)  _lf_v=RECOVERED ;;
+        *PARTIAL)    _lf_v=PARTIAL ;;
+        parked*)     _lf_v=PARKED ;;
+        dry-run*)    _lf_v=DRYRUN ;;
+        # `skipped/by-design` is matched by this same arm and deliberately does NOT get a token of
+        # its own: the caller's question is "was anything done to this session", and by-design is a
+        # REASON, carried in the note that rides beside it.
+        skipped*)    _lf_v=SKIPPED ;;
+        '')          _lf_v=FAILED; _lf_note="${_lf_note:-no results row was written — the driver died before lf_one returned}" ;;
+        *)           _lf_v=FAILED ;;
       esac
       # HONEST QUALIFIER, not a fourth token. Under --detach the actuator is called WITHOUT --await
       # (lr-handoff.sh:621 honours LR_INPLACE_AWAIT=0), so rc 0 means the recycle was ARMED — the
