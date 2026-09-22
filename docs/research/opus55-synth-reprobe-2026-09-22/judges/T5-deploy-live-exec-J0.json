@@ -1,0 +1,134 @@
+{
+ "brief": "T5-deploy-live-exec",
+ "judge": "J0",
+ "model": "claude-opus-5",
+ "effort": "xhigh",
+ "label_map": {
+  "X": "A",
+  "Y": "B",
+  "Z": "C"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "S1",
+     "S1r",
+     "S2",
+     "S2a",
+     "S2r",
+     "S3",
+     "S3r",
+     "S4",
+     "S5",
+     "S5r",
+     "N1",
+     "N2",
+     "N3",
+     "M3"
+    ],
+    "key_contradicted": [
+     "M1",
+     "M2",
+     "N4"
+    ],
+    "citations_checked": 34,
+    "citations_bad": [
+     {
+      "cite": "hooks/operator-readout.sh:871",
+      "problem": "X groups :871 with \":536,543,871,887\" as \"printfs that render the operator board's rows\"; :871 is a comment line inside an explanatory block (a quoted example of past board output), not a printf. The line exists and does contain the string, so this is a mis-characterisation, not a fabrication."
+     }
+    ],
+    "wrong_claims": [
+     "(a) \"Total distinct execution sites in scope: 5\" stated as a definitive, exhaustive census. The real in-scope set is at least 6 (key M1): bin/cc-premise:1392 runs `subprocess.run([\"/bin/sh\",\"-c\",cmd])` on a stored falsifier that scripts/deploy-live.sh itself mints at :960 and files at :1046/:1261 — verified. X never opened cc-premise.",
+     "X's own framing \"(A sixth candidate mechanism — bin/cc-do's generic step-runner — turned out to contain two separate sites, listed as #3 and #4)\" implies cc-do was exhausted; bin/cc-do:454 (`bash -c \"$cmd\" </dev/null` in run_backlog_row) is a second generic dispatcher in that same file that reaches deploy-live.sh via the `needs --run` rows deploy-live.sh files at :811-812 with commands built at :708/:728/:731/:734/:743/:746 (verified). X lists those `run=` strings as near-misses whose destination is a backlog row, but never adjudicates the executor of that row.",
+     "(c) \"Where does the only unattended/scheduled entry point live? Outside the three scoped trees\" plus \"None of the five in-scope sites is itself timer/schedule-driven\". Contradicted by key N4 and verified independently: launchd/com.chrisren.autonomy-sweep.plist runs scripts/autonomy-sweep.sh, whose :1488 runs `python3 \"$_premise\" sweep --json --record --close-falsified` every CC_PREMISE_PASS_EVERY_S=21600s ($_premise resolved at :1427 to <repo>/bin/cc-premise), and cc-premise:1392 then executes deploy-live.sh's stored --falsify-host string. A second, indirect scheduled executor does sit inside the scoped trees."
+    ],
+    "extra_correct": [
+     "scripts/deploy-now.sh:33 \"THERE IS NO RAW-FF FALLBACK, deliberately\" and :6 \"every flag is passed straight through\" — both verbatim correct.",
+     "scripts/ship-land.sh site fully and correctly traced: the guard at :1731, the `git cherry` ancestry check at :1732-1733, the kill switch SHIP_LAND_CONVERGE at :1727, the log path at :1734, the degraded-tier env at :1723-1725, and the correct reading that `2>/dev/null || true` at :1741 suppresses only python3's own failure, not the detached child's. All verified.",
+     "bin/cc-do:358's CONFIRM=1 branch is never taken for the deploy row because its cmd begins `bash ` (:187) — verified.",
+     "bin/cc-do:369-373 swallows a non-zero deploy exit as SKIPPED/return 0 while :374-376 propagates for other classes — verified.",
+     "scripts/deploy-parity-assert.sh:1389-1391 explicitly refuses to call deploy-live --dry-run because deploy-live calls THIS script for link_refresh and it would recurse — verified verbatim.",
+     "scripts/permission-gate-lint.sh:563/:589 are `mk unbounded|declared scripts/deploy-live.sh '…'` fixture builders inside the file's own self-test, and :169 is a ratchet-table row `scripts/deploy-live.sh 8` — all verified.",
+     "scripts/deploy-link-parity.sh:509 is `fix \"bash …deploy-live.sh…\"` and `fix()` at :159 is `fix() { FIXES=\"${FIXES}  ▶ $1\"$'\\n'; }` — X read the function definition to prove it only appends to a report string. Verified verbatim.",
+     "~120 near-miss adjudications spanning hooks/, scripts/ and bin/. I sampled 20 at random (session-continue.sh:1191/:1197, why-tier.sh:249, completion-assert.sh:782/:784, validate-bash.sh:1425/:1432, activation-watch.sh:471/:492, wrap-ledger.sh:2403, kitty-title-band-deploy.sh:193, cc-blockers:642, cc-eligible:169, backlog-consolidation/group.py:143-148, deploy-parity-assert.sh:1459/:1504/:1081/:1382, cc-fleet:296, cc-kitty-reload:32/:55, cc-cannot:188, test-hermeticity-lint.sh:428/:486, postland-verify.sh:1571/:2110, nightly-regression.sh:81, cc-common.sh:87, cc-memory-rotate:75, cc-owner:8, new-worktree.sh:9, offbox-green-pull.sh:11, bats-assert-liveness.py:200, cc-backlog:355, browse-mirror-sync.sh:103, deploy-migrations.sh:15, growth-coverage-lint.sh:57, offbox-admission-lint.sh:21, test-walltime-lint.sh:153, test-afunix-path-lint.sh:22, kitty-setup.sh:57) — every one is real and correctly classified. This is materially the most complete answer to brief part (b)."
+    ],
+    "score_1_10": 7
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "S1",
+     "S1r",
+     "S3",
+     "S3r",
+     "S4",
+     "S5",
+     "S5r",
+     "N1",
+     "N2",
+     "N4",
+     "M1",
+     "M2"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 24,
+    "citations_bad": [],
+    "wrong_claims": [
+     "No wrong claim found. The gaps are disclosed: Y states up front that Grep/Glob were unavailable, that its six sites are a LOWER BOUND, and names scripts/ship-land.sh among the files it did not read — which is exactly where key S2/S2a/S2r live (scripts/ship-land.sh:1739 `subprocess.Popen([\"bash\", sys.argv[1]], …, start_new_session=True)`, path resolved at :1730, arguments handed over at :1741). So the miss is real but never asserted as absence.",
+     "Near-miss table has 15 rows and so answers brief part (b) — \"list EVERY near-miss you rejected\" — over roughly a tenth of the real population; it omits hooks/activation-watch.sh:471/:492, hooks/completion-assert.sh:782/:784, hooks/lib/why-tier.sh:249, hooks/validate-bash.sh:1425/:1432, scripts/wrap-ledger.sh:2068/:2403, bin/cc-blockers:642, scripts/handoff-fire.sh:9153/:12619, scripts/deploy-parity-assert.sh:1459, scripts/deploy-link-parity.sh:509, scripts/limit-recover/lr-handoff.sh:802/:829, scripts/kitty-title-band-deploy.sh:193, bin/cc-eligible:169, bin/cc-reaper:878 and scripts/permission-gate-lint.sh:169 and its fixtures — all of which I verified exist. Key N3 (hooks/session-continue.sh:1191) is also never adjudicated."
+    ],
+    "extra_correct": [
+     "Five stale cross-file citations, all verified against the snapshot: deploy-live.sh:14 cites hooks/validate-bash.sh:1352 as \"the arm that DOES deny an ungated advance\", but :1352 is `_ffg_resolve`'s `case \"$n\" in *'$'*|*'`'*) return 0 ;;` runtime-expansion fail-open; deploy-live.sh:2567-2568 says host_checks() is \"at 151, called at 391\" while it is defined at :1050 and called at :2723; deploy-live.sh:1679 cites checkout-not-a-worktree at \":540\" while it is at :660; the plist comment at :16 cites operator-readout.sh:238-246 for the fallback which is at :517-518; cc-do:152 cites operator-readout \"§152-258\" while the deploy leg is at :503-548. This directly discharges the brief's closing instruction to verify cited file:line.",
+     "bin/cc-do:359 does NOT set DEPLOY_REPO although the probe at :184 does, so with CC_SHARED_CHECKOUT overridden the probe and the real run can address different checkouts (deploy-live.sh:122 defaults DEPLOY_REPO to $HOME/Development/claude-infrastructure) — verified and material.",
+     "The cc-premise falsifier exit contract: rc 0 ⇒ \"falsified\" and in BLOCKING (:236); rc in {2,124,126,127} ⇒ \"clear / could not ask\" (_FALSIFIER_UNASKABLE_RCS at :266, branch at :1444-1452); other non-zero ⇒ \"clear / not refuted\"; exception or timeout ⇒ None (:1397-1399); FALSIFIER_TIMEOUT_S default 20 (:241); kill switch CC_PREMISE_FALSIFIER (:246). All verified verbatim.",
+     "deploy-live.sh's --falsify-host branch returns before any fetch, merge or write (:337-409) — verified.",
+     "Honest caveat that run_falsifier's def line was outside the range read and was inferred from the reference at :1464 — the function is in fact `def run_falsifier(item_id, ent)` at :1362, so the inference was right and correctly flagged.",
+     "The only shell `$0` in deploy-live.sh is the help `sed` at :419 (the other `$0`, at :554, is inside a single-quoted awk program) — verified."
+    ],
+    "score_1_10": 7
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "S1",
+     "S1r",
+     "S3",
+     "S3r",
+     "S4",
+     "S5",
+     "S5r",
+     "N1",
+     "N2",
+     "N4",
+     "M1",
+     "M2"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 28,
+    "citations_bad": [],
+    "wrong_claims": [
+     "No wrong claim found. Like Y, Z misses scripts/ship-land.sh:1739 (key S2/S2a/S2r) but names scripts/ship-land.sh explicitly in its \"Not opened\" list and labels its count as verified-not-guaranteed-complete, so absence is never asserted.",
+     "Minor citation imprecision, not a wrong claim: \"Non-zero is advisory 'not refuted' (:1412-1419)\" points at the explanatory comment block; the actual return is bin/cc-premise:1453-1460. The comment does state the contract, so the claim is true at the cited span.",
+     "Near-miss list (~20 entries) is materially short of brief part (b)'s \"every near-miss\": it omits hooks/activation-watch.sh:471/:492, hooks/completion-assert.sh:782/:784, hooks/lib/why-tier.sh:249, bin/cc-blockers:642, scripts/handoff-fire.sh:9153/:12619, scripts/deploy-parity-assert.sh:1459, scripts/deploy-link-parity.sh:509, scripts/limit-recover/lr-handoff.sh:802/:829, scripts/kitty-title-band-deploy.sh:193, bin/cc-eligible:169, bin/cc-reaper:878 and scripts/permission-gate-lint.sh:169 plus its fixtures. Key N3 (hooks/session-continue.sh:1191) is not adjudicated."
+    ],
+    "extra_correct": [
+     "\"Dry runs are not write-free\": --offline forces DRY_RUN=1 (deploy-live.sh:429), but link_refresh is called UNCONDITIONALLY at :1952, ahead of the --offline decision block at :1959; it runs deploy-parity-assert at :1483 and then copy_drift_notice at :1493, which writes $PAGES_DIR/deploy-copy-drift.page at :1422 and a signature marker at :1423 with no DRY_RUN check. I traced every one of those lines: the claim that sites 2 and 3 can write a page is correct, and it is a materially non-obvious finding neither of the other two outputs has.",
+     "Best answer to brief (c): Z states that the only scheduled entry point performing a REAL advance is outside scope (the plist), and separately that inside the scoped trees deploy-live still runs unattended in decision-only modes — site 2's --dry-run --offline from the Stop hook and site 6's --falsify-host from claim/sweep — while correctly flagging that the sweep/claim callers are asserted only in bin/cc-premise:9-11 and :431-437 comments. This is substantively the key's N4 correction.",
+     "--falsify-host's own exit contract verified: 0 = every named suite gone (:405-408), 1 = a survivor short-circuits (:406), 2 = could-not-ask (:339-340 and the per-argument shape validation at :372-375).",
+     "bin/cc-backlog never executes a stored falsifier at filing time: --falsifier is only captured at :1898 and written at :2273-2285, and the update arm refuses to write one at all (:2221-2227) — verified.",
+     "bin/cc-premise plumbing verified line-for-line: cmd = ent[\"falsifier\"] (:1387), folded last-write-wins at :523-524, store path at :98-100, output truncated to 300 chars (:1401), FALSIFIER_TIMEOUT_S default 20 (:241), kill switch (:246, :1385), sweep --close-falsified reaching `cc-backlog done` at :2914 within :2904-2926, assess called at :2904 and :3122, and the honest note that assess's body was not read.",
+     "Four stale cross-file citations verified (validate-bash.sh:1352 — and Z additionally names the real denying arm at :1432; host_checks \"151/391\" vs :1050/:2723; plist:16; cc-do:152).",
+     "The disambiguation \"if operator-confirmed dispatch is excluded, the count is 5\" correctly separates the run_backlog_row path, which requires a typed `yes` (:450-452) or CC_DO_ASSUME_YES=1 (:435), from the unattended ones."
+    ],
+    "score_1_10": 8
+   }
+  ],
+  "xy": "tie",
+  "xz": "Z",
+  "yz": "Z",
+  "pair_reasons": "X vs Y — tie, because the verified material differences run in both directions and roughly cancel. X uniquely finds the site the key rates hardest: scripts/ship-land.sh:1739's detached `subprocess.Popen([\"bash\", sys.argv[1]], …, start_new_session=True)` inside a single-quoted `python3 -c`, with the path resolved at :1730 and handed over at :1741 — I confirmed every line, including the guard at :1731-1733, the kill switch at :1727 and X's correct reading that `2>/dev/null || true` suppresses only python3's own failure. X also answers brief part (b) at roughly ten times Y's coverage (~120 adjudicated near-misses vs 15); I sampled 20 of X's and every one is a real line, correctly classified. Against that, Y finds two in-scope sites X misses, both of them the \"generic dispatcher handed the path at runtime\" case the brief explicitly named: bin/cc-premise:1392 (`[\"/bin/sh\",\"-c\",cmd]` on a falsifier deploy-live.sh mints at :960 and files at :1046/:1261) and bin/cc-do:454 (`bash -c \"$cmd\"` on a `needs --run` row deploy-live.sh files at :811-812 with commands built at :708/:734/:746). Consequently X states two wrong headline answers — \"Total … 5\" asserted as exhaustive, and (c)'s claim that the only unattended entry point is outside the scoped trees, which I refuted directly (launchd com.chrisren.autonomy-sweep → scripts/autonomy-sweep.sh:1488 → bin/cc-premise sweep → :1392) — while Y asserts nothing false and names scripts/ship-land.sh in its own unread list. Y adds five verified stale-citation findings the brief's closing paragraph asks for. Neither side's advantage dominates.\n\nX vs Z — Z. Z has the same two-site census advantage as Y (cc-premise:1392 and cc-do:454, both verified), and unlike X it gets brief question (c) right in substance: it states that the only scheduled path performing a real advance is the out-of-scope plist while an in-scope unattended executor also exists via claim/sweep, which is the key's N4 correction that X flatly contradicts. Z also lands a material finding neither X nor the key has, and I traced it end to end: --offline forces DRY_RUN=1 at deploy-live.sh:429, yet `link_refresh` is called unconditionally at :1952 ahead of the --offline block at :1959, runs deploy-parity-assert at :1483, and calls copy_drift_notice at :1493 which writes $PAGES_DIR/deploy-copy-drift.page at :1422 with no DRY_RUN check — so the \"read-only probe\" at operator-readout.sh:534 and cc-do:184 can write. X's near-miss list is far richer and its ship-land trace is excellent, but that does not offset a definitively-wrong site total plus a wrong answer to an explicitly-asked question.\n\nY vs Z — Z. Same six sites, same disclosed ship-land gap, same zero wrong claims, so the split is on verified extras. Z alone has the dry-run-is-not-write-free finding above. Z's answer to (c) is the stronger one: Y offers the in-scope unattended path only as \"one unverified possibility\", whereas Z names both in-scope unattended modes and cites the exact comments (bin/cc-premise:9-11, :431-437) that are its only evidence. Z read cc-premise's run_falsifier region including the definition and adds the --falsify-host exit contract (:405-408, :406, :339-340, :372-375) and the fact that cc-backlog only stores a falsifier and never runs it at filing (:1898, :2221-2227, :2273-2285) — all of which I verified — where Y had to caveat that it never saw the function header. Y's one clear edge is a fifth stale citation (deploy-live.sh:1679's \":540\" vs the real :660) and a slightly longer stale-citation audit; that is smaller than Z's set of verified extras."
+ }
+}

@@ -1,0 +1,160 @@
+{
+ "brief": "T4-stop-arms",
+ "judge": "J0",
+ "model": "claude-fable-5-1",
+ "effort": "high",
+ "label_map": {
+  "X": "B",
+  "Y": "C",
+  "Z": "A"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6",
+     "k7",
+     "k8",
+     "k9",
+     "k10",
+     "k11",
+     "k12",
+     "k13",
+     "k14",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 60,
+    "citations_bad": [
+     {
+      "cite": "hooks/session-continue.sh:424 (listed with :724 as saying `_opane` is 'captured at :197')",
+      "problem": "line 424 reads 'Captured here, at the one place the pane uuid is still the pane uuid' — the ':197' claim exists only at :724"
+     },
+     {
+      "cite": "hooks/session-continue.sh:318 ('hook-chain.sh:78 says every member always runs')",
+      "problem": "off by one: the hook-chain.sh:78 reference is on line 317 (comment spans 316-318)"
+     }
+    ],
+    "wrong_claims": [],
+    "extra_correct": [
+     "The comment at :963-966 claiming the wake floor's assignee semantics differ is false in code: all three floors exempt on confirms rc 0 or 2 and not on rc 1 (:780-783, :970, :1105) — verified; this also refutes the key's own trap on that point",
+     "wf_teardown_marked (:551-568) does not check \"mode\":\"teardown\" while the watchdog it claims to mirror does (lead-crash-watchdog.sh:258), and uses tunable CC_WF_TEARDOWN_FRESH_S:-1800 vs the watchdog's hardcoded -mmin -30",
+     "CLAUDE_CONTINUE_MAX (:1255) and CC_MECH_MAX (:1053) have no digit guard, so a non-numeric value makes the -ge test false and the cap/budget never binds",
+     "A bare-shell `clear` writes sid `?` into .mech (:260-261); at Stop, `?` ≠ a non-empty cur_sid resets the count to 0 (:1060), so it does not spend a real session's mechanical budget",
+     "Once mechanically armed the sentinel persists and the armed path never re-checks the tree, so the 'Commit the N file(s)' block repeats after the commit until clear/cap — 'SELF-CLEARING' (:922-923) is true only of the arming predicate",
+     "SID-mismatch (:1246-1247) deletes a sibling's armed sentinel; a sentinel armed with no sid blocks any session in that cwd",
+     "All three floors call the raw agent_assignee_argv+agent_team_member_confirms pair, never agent_is_assignee's shape gate (agent-identity.sh:143-147), so a non-`*@session-*` id returns rc 2 and is exempt",
+     "Stale self-citations correctly flagged: :433 '(:213)' → :467; :441 '(:416)' → :821; :545-546 classify_death → retired_by_desk at :249-263; :944/:952/:965/:974; :1327 '(:502)'; mailbox-pending.sh:151 '(:328)' → :559; session-writes.sh:420-421 pipefail claim false; :423-424 ':269' now herestring at :354"
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6",
+     "k7",
+     "k8",
+     "k9",
+     "k10",
+     "k11",
+     "k12",
+     "k13",
+     "k14",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 70,
+    "citations_bad": [
+     {
+      "cite": "hooks/session-continue.sh:432 ('mailbox_promote_acked (:213)')",
+      "problem": "off by one: the '(:213)' text is on line 433"
+     },
+     {
+      "cite": "hooks/session-continue.sh:178 ('(:145)')",
+      "problem": "off by one: the '(:145)' text is on line 177; and Y calls it 'checks out' while the .sid write is at :146 (:145 computes csid)"
+     }
+    ],
+    "wrong_claims": [],
+    "extra_correct": [
+     "`set` keys the sentinel on the shell's $PWD (:140-141) while actuation keys on the payload's .cwd (:309-311), so a `set` run from another directory arms a sentinel the Stop never sees",
+     "The ledger's 📦 rung includes LANDING=1 (wrap-ledger.sh:1985-1986) and ship_floor never reads LANDING (it greps only RUNG/TRUNK/AHEAD/SHAS), so it can say '/ship it NOW' while the ledger readout says do NOT fire a second /ship",
+     "The wake floor never reads the ledger rung, so it can block a fully ✅ session on its first idle",
+     "🚀 attribution via session_writes_paths (:200) is not repo-scoped — any Write/Edit anywhere (e.g. /tmp) satisfies it",
+     "Gate staleness no longer produces 🔧 (wrap-ledger.sh:1941-1961), and 🔧 has six further sources (:2006-2052) — the :25 header comment is stale",
+     "session-continue.sh:1082-1083 quotes a '📦 must NOT fire' mechanical header that no longer exists in :897-929",
+     "CC_SHIP_FLOOR_MAX=0 disables the ship floor (pcnt 0 ≥ 0 at :1174); ship-floor-not-mine log does not distinguish rc 1 from rc 2",
+     "The .wakefloor state file is keyed on the canonical mailbox key, not the config dir, unlike .count/.mech/.ship; the wake floor checks the kill switch LAST (:850)",
+     "stop_hook_active is never read; the only payload fields read are .cwd/.session_id/.transcript_path; .count reset sites enumerated (:142, :1206, :1229, :1247, :1260, :253)",
+     "Comment :963-966 is wrong in substance: the wake floor exempts exactly rc 0 and 2 like the other floors (:780-784)",
+     "wf_teardown_marked has no mode check and keys on sid+pane while retired_by_desk requires \"mode\":\"teardown\" (:258) — not 'verbatim'"
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6",
+     "k7",
+     "k8",
+     "k9",
+     "k10",
+     "k11",
+     "k12",
+     "k13",
+     "k14",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 65,
+    "citations_bad": [],
+    "wrong_claims": [
+     "'`${f}.count` … Reset to absent only by an explicit CLI `set` (:142) — the mechanical arm's own re-arm does not touch .count' — false: the no-sentinel branch deletes .count on every unarmed Stop at :1206 (immediately before mechanical_arm runs), and `clear` (:253), the kill-switch (:1229), SID-mismatch (:1247) and cap (:1260) exits all delete it too",
+     "'RUNG= field is exactly 🔧 (:1016-1017) — per scripts/wrap-ledger.sh:25 that means \"dirty tree ∨ gate ran-but-stale-on-HEAD ∨ DoD remainder > 0\"' — repeats a stale header comment as fact: the ladder (:1962-2052) assigns 🔧 for DIRTY, REMAINDER, open custody, resident members, filed-undriven rows, unconvicted asks, the close floor and no trunk, and gate staleness explicitly no longer yields 🔧 (:1941-1961); the brief demanded code-grounding, not comments"
+    ],
+    "extra_correct": [
+     "The ship-floor sha latch means pcnt accumulates across distinct HEAD shas up to CC_SHIP_FLOOR_MAX (:1170-1179) — exact-sha match abstains regardless of count",
+     "hook-chain.sh:77-78 quote verified byte-accurate, with the :24-26 'deliberately NOT wired into settings.json' caveat",
+     "The unconditional mailbox_promote_acked at :467 runs regardless of sentinel, advancing .acked to .seen only",
+     "Stale :545-547 citation correctly diagnosed (retired_by_desk at :249-263, no marker_owns_sid at :111-129)",
+     "Honest 'unverified' on the Stop-chain position claim (:323) — the template is at settings-templates/settings.example.json:466/:476, which Z did not find but did not contradict"
+    ],
+    "score_1_10": 6
+   }
+  ],
+  "xy": "Y",
+  "xz": "X",
+  "yz": "Y",
+  "pair_reasons": "X vs Y: both hit all 20 key items with no wrong claims, and both correctly refute the :963-966 comment (and the key's own trap) by showing all three floors share the rc 0|2 exemption at :780-784/:970/:1105. Y wins narrowly on verified material insights X lacks: the LANDING=1 conflict (wrap-ledger.sh:1985-1986 vs ship_floor reading only RUNG/TRUNK/AHEAD/SHAS), `set` keying on $PWD (:140) versus actuation on payload .cwd (:309-311), the wake floor being rung-blind, 🚀 attribution not being repo-scoped, and gate-stale no longer producing 🔧 (:1941-1961). X's one substantive bad cite (:424 for the ':197' claim) roughly offsets Y's two off-by-one cites in its stale-cite table. X vs Z: Z carries two verified wrong claims — that .count is reset only by `set` (refuted by :1206 rm -f on every unarmed Stop plus :253/:1229/:1247/:1260) and that 🔧 means 'dirty ∨ gate-stale ∨ remainder' per wrap-ledger.sh:25, a stale comment the code contradicts (no gate-stale 🔧; six other 🔧 sources) — the exact comment-trusting failure the brief warned against. X has none, so X wins. Y vs Z: same two Z defects; Y additionally identified the stale wrap-ledger:25 comment and the :1082-1083 phantom quote that Z repeated. Y wins."
+ }
+}

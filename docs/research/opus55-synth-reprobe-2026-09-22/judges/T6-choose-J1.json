@@ -1,0 +1,158 @@
+{
+ "brief": "T6-choose",
+ "judge": "J1",
+ "model": "claude-opus-5",
+ "effort": "xhigh",
+ "label_map": {
+  "X": "C",
+  "Y": "A",
+  "Z": "B"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "S1",
+     "S2",
+     "S3",
+     "S7",
+     "S8",
+     "S9",
+     "S10",
+     "T1",
+     "T2",
+     "T5"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 35,
+    "citations_bad": [
+     {
+      "cite": "hooks/completion-assert.sh:663 cited as the line that cites ':101'",
+      "problem": "the citing line is 662 ('`set -uo pipefail` (:101)'); 663 is 'abort, and the envelope below reads $_ca_ushare...'. Off-by-one on the citing line; the target claim (:101 = set -uo pipefail) is correct."
+     },
+     {
+      "cite": "hooks/completion-assert.sh:695 cited as the line that cites ':431' (LIVE-PEER-OWNED)",
+      "problem": "the citing line is 694 ('...which the LIVE-PEER-OWNED comment at :431 already spells out'); 695 is the next sentence. Target claims (:431 = 'local lib rc', real comment at :503-528) verified correct."
+     },
+     {
+      "cite": "hooks/completion-assert.sh:724 cited as the line that says \"D1 `:774`\"",
+      "problem": "the citing line is 723; 724 is the continuation ('handoff-prose close legal...'). Target claims (:774 = 🚀/LIVE_ADDS comment, D1 at :926) verified correct."
+     },
+     {
+      "cite": "hooks/completion-assert.sh:171 cited as the line citing session-continue :971/:745/:656/:863",
+      "problem": "the citing line is 170; 171 reads 'hook had NO kill-switch check anywhere in 962 lines'. The drift itself is real (971/745/656/863 all point elsewhere; real KILL_RE at 348)."
+     }
+    ],
+    "wrong_claims": [
+     "Q4 is answered flatly as 'All four files are registered, so none is missing' — the true answer names two qualifying files that are NOT in the template Stop array (hooks/dispatch-assert.sh, hooks/handoff-claim-assert.sh), registered only via docs/activation/pending-activation/11-dispatch-assert-activate.sh and migrations/0027-handoff-claim-registration.sh.",
+     "Site list omits hooks/dispatch-assert.sh:225, :258 and hooks/handoff-claim-assert.sh:127 — 3 of the 10 qualifying sites (the brief calls the site list THE answer). X's coverage note concedes files were unopened, but the flat Q4 answer is not similarly hedged."
+    ],
+    "extra_correct": [
+     "completion-assert.sh:177 cites session-continue.sh:187-208 for the ported kill-switch regex/reader — verified drifted: KILL_RE is at session-continue.sh:348 and last_user_msg/kill_switch_active at ~351-395, exactly as X says.",
+     "completion-assert.sh:189's ':157-160 already uses this shape' is drifted — 158-160 are the SID/TP/CWD `jq -r` reads, while the jq -c-then-decode MSG extractor X names is at :243-246. Verified.",
+     "Exclusion census verified in full: operator-readout.sh emits only {systemMessage} at 1577/1623/1663 with header :12; teammate-checkpoint.sh exits bare at 38/105/112/140/297/347/365/381 and writes no stdout JSON; subagent-stop.sh writes only to files (63-67, 114-119) per :39-42; cache-expiry-tracker.sh:8 writes a timestamp; session-beat.sh:127 sends output to /dev/null; hook-chain.sh:24-25 'deliberately NOT wired', rank_of() at 154-162 ranks permissionDecision only, :239 relays best_out; relay-verbatim.sh:35-44 emits hookSpecificOutput/PostToolUse with no decision field.",
+     "mailbox-wake-arm.sh:5 does say it is registered on Stop (migration 0012) — a real Stop hook outside the template that emits no JSON (stderr + exit 2 at 211-213). Verified and a genuinely useful boundary case.",
+     "All ~14 drift findings verified true in substance: sc:1327→:502, sc:724→:197 (real capture :425), sc:944→:969/:732-736, sc:952→:865-869/:587-608, sc:965→:589-594, sc:974 self-reference (sibling at :1106), CA:378→sc:874-884/:1009-1012, CA:837→BH:415-428 (compose-guard at 437-450), BH:403→:103 (_bscd at :171), BH:70→:201 (read at :295), BH:85→:353 (demotion at :502+).",
+     "Line 502 of session-continue.sh quoted byte-exactly ('handoff-fire (self-close), cc-teardown (delegated close) and teammate-auto-shutdown') — the key item T5's evidence, which Z got wrong."
+    ],
+    "score_1_10": 6
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "S1",
+     "S2",
+     "S3",
+     "S4",
+     "S5",
+     "S6",
+     "S7",
+     "S8",
+     "S9",
+     "S10",
+     "T1",
+     "T2",
+     "T3",
+     "T4",
+     "T5"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 26,
+    "citations_bad": [
+     {
+      "cite": "hooks/dispatch-assert.sh:222-224 as the log_idl fired \"undischarged-obligation\" call",
+      "problem": "the log_idl call spans 221-223; 224 is the reason= assignment. Off by one, immaterial — the emission at :225 and its enclosing `if [ -f \"$PENDING\" ]` block are correct."
+     },
+     {
+      "cite": "migrations/0027-handoff-claim-registration.sh:30-52 as where it jq-appends onto .hooks.Stop[0].hooks",
+      "problem": "the append is at 45-52 (jq starts at :46); line 30 is `CFG=\"${CC_CLAUDE_DIR:-$HOME/.claude}\"`. The cited range contains the real code but starts ~16 lines early."
+     }
+    ],
+    "wrong_claims": [
+     "'all 94 files matching hooks/*.sh/hooks/*.py' — the actual count at this sha is 92. Immaterial to any finding.",
+     "Q5 is materially thinner than the other two: it reports 4 drift items and misses several that sit directly in or beside qualifying emission code — session-continue.sh:724→:197, :965→:589-594, :974 (self-referential), anti-deference-nudge.sh:472→:353, boundary-handoff.sh:403→:103, completion-assert.sh:694→:431 (all independently verified as genuine drifts)."
+    ],
+    "extra_correct": [
+     "Only output to find hooks/dispatch-assert.sh:225 and :258 and hooks/handoff-claim-assert.sh:127 — verified verbatim `jq -nc --arg r \"$reason\" '{decision:\"block\",reason:$r}'` at all three, with :225 correctly placed inside the `if [ -f \"$PENDING\" ]` re-check arm and :258 at top level.",
+     "Q4 answered correctly and with verified receipts: docs/activation/pending-activation/11-dispatch-assert-activate.sh:21-22 quoted byte-exactly ('WHY C10 (agent stages; operator runs): step 2 mutates live settings.json and activates a / BLOCKING Stop hook. The agent never self-activates hooks.'), and migrations/0027-handoff-claim-registration.sh:2 = '# migration-class: c10'.",
+     "Found a drift neither other output found: hooks/dispatch-assert.sh:41 cites 'house pattern: completion-assert.sh:22-26', but 22-26 is the attribution/fire-predicate discussion while the near-verbatim fail-safe text is at completion-assert.sh:89-91. Verified exactly as described, ~65 lines off.",
+     "Correctly excluded the four variable-driven `decision` writers with verified reasoning: reset-hard-shadow-allow.sh:164 (printf into $LOG_FILE, decision ∈ {would-allow, allow}), curl-gate.py:174 (inside log_record, decisions allow/deny/ask), model-permission-decider.py:515 (inside log({...}); its stdout emit() at :456 writes hookSpecificOutput.permissionDecision, never a top-level decision), validate-bash.sh:137 (printf into a log).",
+     "Correctly traced the capture-and-forward indirection for sites 893/1197 (ship_floor captured at :1208 printed at :1210; wake_floor captured at :1213 printed at :1215/:1217) and flagged that the strict reading would change the Q3 answer — verified accurate, and it names the one genuinely ambiguous reading in the task.",
+     "mechanical_arm() correctly located at :938 with a bare call at :1207 and no emission in its 938-1097 body — verified."
+    ],
+    "score_1_10": 9
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "S1",
+     "S2",
+     "S3",
+     "S7",
+     "S8",
+     "S9",
+     "S10",
+     "T1",
+     "T2",
+     "T5"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 31,
+    "citations_bad": [
+     {
+      "cite": "hooks/waiting-recycle.sh:1186 'says \":480 abstains no-jq first\"'; 'Line 480 is rsspaged_for(); the no-jq abstain is at :723'",
+      "problem": "INVERTED, and the drift is fabricated. The citing line is 723 ('jq is guaranteed present here: :480 abstains no-jq first'), line 480 IS `command -v jq >/dev/null 2>&1 || { SID=\"?\"; abstain \"no-jq\"; }` — so the citation is CORRECT, not stale — and 1186 is `rsspaged_for() { ... }`. Z swapped the two line numbers and reported a non-existent stale citation."
+     },
+     {
+      "cite": "hooks/session-continue.sh:502 quoted as '(B) TERMINATING — a fresh teardown marker naming THIS session…'",
+      "problem": "that text is line 501; line 502 reads 'handoff-fire (self-close), cc-teardown (delegated close) and teammate-auto-shutdown'. Wrong quote for the one line the key's T5 turns on (the conclusion — no systemMessage at :502 — still holds)."
+     },
+     {
+      "cite": "hooks/memory-nudge.sh:26 quoted as 'Three manual compaction passes each re-inflated within days…'",
+      "problem": "that is line 25; line 26 reads 'measured the budget at the moment of APPEND; the \"<=200-char\" line in the nudge'. The substantive claim (no GC at :26; the real reap is at memory-nudge.sh:61) is correct."
+     }
+    ],
+    "wrong_claims": [
+     "Site list omits hooks/dispatch-assert.sh:225, :258 and hooks/handoff-claim-assert.sh:127 — 3 of the 10 qualifying sites.",
+     "Q4 concludes 'All four are. None of the files I found is missing' — wrong as the answer to the question (two qualifying files are absent from the template Stop array), though Z hedges it explicitly to the files it opened and warns the answer could change.",
+     "Reports a stale citation in waiting-recycle.sh that does not exist (see citations_bad) — an invented finding, and outside the brief's Q5 scope (it is not adjacent to qualifying emission code)."
+    ],
+    "extra_correct": [
+     "session-continue.sh:990 cites 'hooks/completion-assert.sh:99-105' for the $0-symlink lib resolution — verified drifted exactly as Z says: 99-100 are PEER_OWNED_LIB/env-seam header notes, 101 is `set -uo pipefail`, 103-105 opens the `--why` comment; the real readlink resolution is at completion-assert.sh:142-143. X and Y both missed this.",
+     "completion-assert.sh:1048 cites 'the comment at :705' — verified drifted: :705 is the `facts=…authorship UNRESOLVED` assignment, and the '<<EOF is doubled' comment is at :1010-1011, exactly as Z reports. X and Y both missed this.",
+     "anti-deference-nudge.sh:481 and completion-assert.sh:1188 both say 'mirrors memory-nudge.sh:26' — verified stale: memory-nudge.sh's latch GC is `find \"$STATE_DIR\" -name 'nudge-*.count' -mtime +1 -delete` at line 61, and :26 is prose. Two real drifts neither other output found.",
+     "waiting-recycle.sh:17 quoted correctly ('PostToolUse:Bash, the heartbeat of a polling desk') — the key's T2 verbatim; X and Y proved the same point from other lines.",
+     "'.claude/settings.json in this repo registers no hooks at all (lines 1-57)' — verified: the file is 57 lines and contains no hooks block.",
+     "Gets completion-assert.sh's citing lines right where X is off by one: :662 for the (:101) citation, :694 for the :431 citation, :723 for the D1 :774 citation.",
+     "Coverage disclaimer is the most honest and specific of the three (names files read in full vs in part, and the two unread lines of waiting-recycle)."
+    ],
+    "score_1_10": 6
+   }
+  ],
+  "xy": "Y",
+  "xz": "tie",
+  "yz": "Y",
+  "pair_reasons": "X vs Y — Y wins on verified substance. Y is the only output that found hooks/dispatch-assert.sh:225, hooks/dispatch-assert.sh:258 and hooks/handoff-claim-assert.sh:127 (I confirmed the byte-identical `jq -nc --arg r \\\"$reason\\\" '{decision:\\\"block\\\",reason:$r}'` at all three, :225 inside the `if [ -f \\\"$PENDING\\\" ]` re-check arm), and consequently the only one that answers Q4 correctly — X states flatly 'All four files are registered, so none is missing', which is false: both files are absent from every JSON in the repo and are wired only by docs/activation/pending-activation/11-dispatch-assert-activate.sh (Y quotes :21-22 byte-exactly) and migrations/0027-handoff-claim-registration.sh (Y cites :2 = '# migration-class: c10'). That is a 5-item key deficit on the part of the brief that says 'the site list IS the answer'. X's compensating strength — a much fuller Q5 (~14 drifts, every one of which I verified true, including two I checked independently: completion-assert.sh:177's session-continue :187-208 pointer, real KILL_RE at :348, and :189's ':157-160' pointer, real extractor at :243-246) — is real but does not outweigh missing three sites and mis-answering Q4. X also carries four off-by-one citing-line errors, all in completion-assert.sh (663/695/724/171 should be 662/694/723/170).\\n\\nX vs Z — tie. Both enumerate the same 7 sites, miss the same 3, and answer Q4 the same wrong way (Z hedges it to 'the files I found', X does not). Their error profiles are comparable in size and opposite in kind: X has four off-by-one citing-line numbers that each still point within a line of a real, verified drift; Z has one fabricated finding — it reports waiting-recycle.sh ':1186 says \\\":480 abstains no-jq first\\\"' and calls the citation stale, when in fact the citing line is 723, line 480 IS the no-jq abstain (the citation is correct), and 1186 is `rsspaged_for()` — plus two verbatim misquotes, one of them on line 502, the exact evidence line for key item T5 (Z quotes line 501's text; X quotes 502 byte-exactly). Each found genuine drifts the other missed: Z found session-continue.sh:990→completion-assert.sh:99-105 (real resolution at :142-143), completion-assert.sh:1048→:705 (real comment at :1010-1011), and the memory-nudge.sh:26 pointer in two files (real GC at :61); X found completion-assert.sh:177 and :189, plus a fully verified exclusion census (operator-readout 1577/1623/1663, teammate-checkpoint's eight bare exits, subagent-stop's file-only writes, hook-chain's unwired rank_of, relay-verbatim's PostToolUse-only object) and the correct observation that mailbox-wake-arm.sh:5 is a Stop hook registered outside the template with no qualifying site. No single difference is decisive in either direction.\\n\\nY vs Z — Y wins. Same 5-item key gap as X vs Y (three sites plus T3 and T4, with Y's staged-registration citations verified verbatim), and Y carries no fabricated findings while Z asserts a stale citation in waiting-recycle.sh that I confirmed is correct, having swapped its two line numbers. Y additionally verified the exclusion of the four variable-driven `decision` writers (reset-hard-shadow-allow.sh:164, curl-gate.py:174, model-permission-decider.py:515, validate-bash.sh:137 — all log-file writes, values never 'block'; model-permission-decider's stdout emit() at :456 writes permissionDecision under PreToolUse), which I checked and which no other output attempted, and found one drift nobody else did (dispatch-assert.sh:41's 'house pattern: completion-assert.sh:22-26', real text at :89-91). Z's advantage is a broader Q5 with three drifts Y missed; that is real but smaller than the site-list and Q4 deficit plus the invented finding."
+ }
+}

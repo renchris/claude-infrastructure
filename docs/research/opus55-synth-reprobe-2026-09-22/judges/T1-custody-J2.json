@@ -1,0 +1,146 @@
+{
+ "brief": "T1-custody",
+ "judge": "J2",
+ "model": "claude-opus-5",
+ "effort": "xhigh",
+ "label_map": {
+  "X": "B",
+  "Y": "A",
+  "Z": "C"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K7",
+     "K10",
+     "K11 (verdict only — stated correctly but explicitly unverified; never opened scripts/custody-deathwatch.sh)",
+     "K12",
+     "K13",
+     "K14",
+     "M4 (partial — identifies wrap-ledger.sh:2143 CC_BUSY_CUSTODY_OPEN injection as a consumer; did not read hooks/lib/session-busy.sh)",
+     "M5 (partial — has the ENGAGE_VERIFY=1 gate at handoff-fire.sh:13239 and the recycle/dry reasoning at :13213-13218; never found the assignment at :10662)"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 24,
+    "citations_bad": [
+     {
+      "cite": "bin/cc-custody:22-23 used to place the self-close discharge inside `sc_announce_before_retire`",
+      "problem": "The cited header text exists, but the claim it is used to support is false and the brief asked for exactly this check. sc_announce_before_retire spans scripts/handoff-fire.sh:4344-4469 and contains no custody call; the discharge is `_hf_custody return \"$_sc_cmk\"` at :8707, after the announce call at :8652. X repeated the stale header as the site name instead of checking it."
+     }
+    ],
+    "wrong_claims": [
+     "Names the self-close discharge site as 'sc_announce_before_retire in handoff-fire.sh' — verified false (that function, :4344-4469, makes no custody call; the site is :8707).",
+     "Section 2 item 3 asserts cloud-return.sh does 'a store-wide return by marker' but sources it only from bin/cc-custody:26-27 and mailbox-drain.sh:543-544; the real condition (return only when landed_ok=0, i.e. a content-verified land — scripts/cloud-return.sh:977-983) and the abandon arm (:536-537) are absent, so K8 is asserted rather than established.",
+     "Misses scripts/cloud-retire-terminal.sh:204-207 entirely (K9) — a whole discharge site, against a brief that demands 'EVERY code path … exhaustive'.",
+     "Section 3e states 'I did not find the line that reads it' for operator-readout — the read is hooks/operator-readout.sh:915, inside the 🔧 arm at :896, rendered at :929 and actioned at :940 (M3 missed)."
+    ],
+    "extra_correct": [
+     "The `*)` fail-open arm of engage_rc_consequence is unreachable from the fire path: all five call sites pass a hard-coded literal (scripts/handoff-fire.sh:13273/13289/13301/13323/13365), and the final `else` passes 1, so an undocumented rc is treated as rc 1 (custody yes, goal no) rather than getting `*)` treatment. Verified by grep — those are the only five call sites.",
+     "hooks/operator-readout.sh's cheap_stamp (:1468-1482) covers only ACT_DIR/DEC_DIR/BLG_FILE, the cwd's HEAD and dirty count, and trunk — the custody store is not in it, so a custody open or return alone cannot invalidate the damping stamp. Verified byte-for-byte.",
+     "wrap-ledger's memo key includes CC_CUSTODY_BIN/CC_CUSTODY_DIR (:388) and the pane id (:396), so a resumed session with a renumbered pane is not served its predecessor's attributed count. Verified.",
+     "The `return`/`abandon` writers call _row with 8 args, so $9 (provenance) is empty and omitted, and notifyBack is passed empty (bin/cc-custody:223-227). Verified.",
+     "Correctly flags the wrap-ledger.sh:1016-1018 → bin/cc-custody:35-38 / :44-46 and → hooks/session-continue.sh:608-612 citations as off (real spans :36-39, :45-49, ~:726-730) and the handoff-fire.sh:3520 → :10715/:10723 citation as stale. All verified.",
+     "Test-suite grounding is accurate: tests/cc-custody.bats:54 (the `sleep 1` that avoids the same-second tie), :59-65, :75-79, :116-117, :139-151 all contain what X says."
+    ],
+    "score_1_10": 6
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "K1 (substance stated — store, one append-only JSONL per originator cwd, cwd-key from _fired_cwd_key; honestly flags that it did not open origin-identity.sh to confirm the sha256)",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8 (partial — both sites found, scope and verbs right; the load-bearing `landed_ok -eq 0` content-verification condition is not stated, only 'its own success/landed path')",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "M3",
+     "M5"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 22,
+    "citations_bad": [
+     {
+      "cite": "scripts/handoff-fire.sh:8656 for 'a marker-less (schema-1) stamp discharges nothing'",
+      "problem": "Trivial off-by-one: :8656 is the tail of the comment; the marker read is the jq at :8657 (which Y also cites correctly elsewhere). No material effect."
+     }
+    ],
+    "wrong_claims": [
+     "'Grepping the whole tree … turns up exactly one call site' for openers — false as a conclusion: bin/cc-offload:747 and bin/cc-dispatch:904 and :932 all call `open --cwd \"$PWD\" --target \"cloud:$sid\" --marker \"$sid\" --slug \"cloud-$sid\"`. Y hedges it immediately as an unverified doc claim, so it is a miss with a caveat rather than a flat denial, but the sentence as written is wrong.",
+     "Says an explicit `--notify-back` with no resolvable id 'stands down and leaves NOTIFY_BACK/NB_ARMED_TARGET empty' (:10711-10718) — for the explicit case the code hard-errors and `exit 1`s at :10713; only the defaulted case stands down.",
+     "Misses hooks/lib/session-busy.sh:302 entirely (M4) — the fourth idle ARM, fed by CC_BUSY_CUSTODY_OPEN from wrap-ledger.sh:2143, and the one consumer that does not re-read the store. Y's consumer list has no equivalent.",
+     "Performs only four citation checks and none of the four stale cross-file citations the brief's check-what-a-comment-cites instruction targets (mailbox-drain.sh:523→handoff-fire:8936, :534→:7100, :545→:7087, wrap-ledger:1018→session-continue:608-612), nor the wrap-ledger:1058 / session-continue:724 pane-key contradiction."
+    ],
+    "extra_correct": [
+     "Only output to find scripts/cloud-retire-terminal.sh settle_custody (:204, :206-207) — verified: `landed) return \"$marker\"` else `abandon \"$marker\" --why \"$why\"`, marker key, no --cwd.",
+     "Only output to adjudicate the deathwatch from its own code: scripts/custody-deathwatch.sh invokes CUSTODY_BIN exactly twice (:277 existence check, :282 store-wide `list --open --json`), with no return/abandon anywhere; it only composes escalation text (:353) and a cc-backlog needs row (:388). Verified.",
+     "Found the ENGAGE_VERIFY assignment: `[ \"$RECYCLE\" = 0 ] && [ \"$DRY\" = 0 ] && ENGAGE_VERIFY=1` at scripts/handoff-fire.sh:10662, and NB_ARMED_TARGET=\"$BACK_SID\" set at :10728 at the point the trailer is actually appended. Both verified.",
+     "Both cloud-return arms found: the superseded/already-done `abandon` at :537 (guard :536) and the `return` at :979 (guard :977). Verified.",
+     "hooks/lib/why-tier.sh:210-212 (the --why custody explainer's three commands) and hooks/validate-bash.sh:633, :713 (cc-custody exempted from the duplicate-worker gate) — both verified exactly.",
+     "Independently confirmed docs/plans/STOPHOOK_MESSAGE_TIERING.md:361's finding that the 'awaiting ARMED' carve-out is not at bin/cc-custody:254 (that line is `files=\"$(_files_for \"$CWD\")\"`), and STOP_CHAIN_WAVE2.md:220's cc-custody:35-38 citation being one line off. Both verified.",
+     "Quotes of completion-assert.sh:718-719 and session-continue.sh:879 are verbatim-accurate."
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8 (partial — the `landed_ok -eq 0` content-verification condition and the deliberately-OPEN cases at :843/:982 are exactly right; the :536-537 abandon-when-superseded arm is missing)",
+     "K10",
+     "K11 (verdict correct and correctly labelled as not confirmed from the file's own code)",
+     "K12",
+     "K13",
+     "K14",
+     "M3",
+     "M4 (partial — identifies the busy probe as a consumer and the wrap-ledger.sh:2143 injection; did not read the lib)",
+     "M5",
+     "M6",
+     "M7 (partial — surfaces the wrap-ledger:1058 / session-continue:724 contradiction but does not resolve it to the real capture at :420)"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 26,
+    "citations_bad": [],
+    "wrong_claims": [
+     "Defect 4 ('probably discharges cloud debt that cloud-return deliberately keeps open') rests on a false premise: cloud openers write `--slug \"cloud-$sid\"` with a hyphen (bin/cc-offload:748, bin/cc-dispatch:905, :933) and `--marker \"$sid\"`, while the ping is `HANDOFF-PING cloud/$id:` (scripts/cloud-return.sh:844, :1001), so the drain's token matches neither marker nor slug. Z hedges it ('Probably', 'If cloud rows carry…', 'the cloud opener's code was not read'), so it is a flagged speculation rather than an assertion.",
+     "Misses scripts/cloud-retire-terminal.sh:204-207 entirely (K9) and cloud-return's abandon arm at :536-537 — two discharge behaviours against a brief demanding an exhaustive per-site list."
+    ],
+    "extra_correct": [
+     "VERIFIED DEFECT: the self-close discharge at scripts/handoff-fire.sh:8707 runs BEFORE the `if [ \"$SC_DRY\" = 1 ]` dry-run exit (:8709-8736) and before the M3 mail-disposition abort (`exit 6`, :8748-8755) — so `self-close --dry-run` appends a real return row, contradicting the block's own rule at :8669-8672. Verified line-for-line; nobody else found it.",
+     "VERIFIED: hf_selfclose_ledger_refusal (:4294-4317) keys only on UNLANDED and REMAINDER and never on custody, while the stamp it reads (:4225-4252) carries the rung and :4277-4278 names custody as one of 🔧's compound terms — so a custody-driven 🔧 cannot refuse a --terminal close, and the stamp becomes the discharge's `--why` at :8666/:8707.",
+     "VERIFIED: the drain discharges on ANY `HANDOFF-PING <slug>:` (hooks/mailbox-drain.sh:558, :585), including the blocker/decision-gate pings the back-channel trailer itself invites (:10733), not only completion pings.",
+     "VERIFIED: the completion-assert blind spot developed concretely — on a 🔧-dirty/📦/⛔ turn CUSTODY_OPEN stays 0/skip (wrap-ledger.sh:1047, :1979-1997), and if completion-assert then exonerates that same term as not-mine (:646, :679-687) the done-claim passes over open custody.",
+     "Seven independently verified stale-citation refutations, all correct: bin/cc-custody:22-23 → sc_announce_before_retire (that function, :4344-4469, has no custody call); handoff-fire.sh:12729 → :4104 (fired-peer marker header); :4411 → :5598-5610 (hf_alarm tail + check_goal_length); :3557 → :9064 (fire-time freshness comment); mailbox-drain.sh:523 → :8936 (--transplant-cause parsing); :534/:545 → :7100/:7087 (both in the recycle dead-watcher); wrap-ledger.sh:1018 → session-continue.sh:608-612 (wake-floor state-file setup).",
+     "Establishes the recycle/dry exclusion structurally rather than by quoting the comment: dry at :12787, recycle at :12915-12964 → recycle_fire, and only the cold-fire `else` at :12965 reaches the ENGAGE_VERIFY block at :13239.",
+     "mark_fired_peer — the stamp self-close later reads for its marker — is written only on rc 0 and only when WANT_SELF_RETIRE=1 (:13268-13270). Verified.",
+     "Per-branch exit codes (2→exit 1, 4→exit 1, 5→exit 6, 1→exit 1) all verified, and the row is written before the exit."
+    ],
+    "score_1_10": 9
+   }
+  ],
+  "xy": "Y",
+  "xz": "Z",
+  "yz": "Z",
+  "pair_reasons": "X vs Y — Y. Y verifies the self-close discharge at scripts/handoff-fire.sh:8707 with its ordering after the W3-B1 refusal (K6); X cannot locate it and instead repeats bin/cc-custody:22-23's stale header, naming sc_announce_before_retire as the site — I opened :4344-4469 and that function makes no custody call, so X's attribution is verifiably wrong. Y also finds scripts/cloud-retire-terminal.sh:204-207 (K9), which X never mentions; adjudicates the deathwatch from scripts/custody-deathwatch.sh's own code (:277, :282, :353, :388 — only two CUSTODY_BIN invocations, neither a discharge verb) where X reasons from prose; finds hooks/operator-readout.sh:915/:929/:940 (M3), where X states outright it could not find the line; and finds the ENGAGE_VERIFY assignment at :10662 and NB_ARMED_TARGET at :10728. X's genuine edges — the verified observation that the `*)` fail-open arm is unreachable because all five engage_apply_consequences call sites pass literals, and that operator-readout's cheap_stamp (:1468-1482) cannot see the custody store — are real but do not offset four missed brief-mandated items.\n\nX vs Z — Z. Z has everything X has on the store internals, attribution and the rung ladder, plus K6 verified at :8707 with the full gate chain, K8's load-bearing `landed_ok -eq 0` condition (cloud-return.sh:977-983, with :843/:982 leaving the row OPEN), operator-readout as a consumer (M3), and a systematic citation audit where X checked three and skipped the rest: I confirmed all seven of Z's refutations, including the three mailbox-drain cross-file citations (:523→8936, :534→7100, :545→7087) that X explicitly listed as unchecked. Z also contributes three verified defects X lacks, chiefly that the :8707 discharge precedes both the SC_DRY exit (:8709-8736) and the M3 abort (:8748-8755). Z's one wrong item (defect 4, whose premise that cloud rows carry `cloud/<id>` as slug/marker is false — the openers write `cloud-$sid`) is hedged and does not close the gap.\n\nY vs Z — Z, narrowly. Both are accurate and well-cited; the difference is coverage of two explicit brief demands. Z performed and correctly resolved four stale cross-file citations plus three more (M6, all verified by me) that Y never checked — Y's audit is four items, two of them confirmations — and surfaced the wrap-ledger:1058 / session-continue:724 pane-key contradiction (M7) Y omits. Z finds the session-busy consumer via wrap-ledger.sh:2143 (M4); Y's consumer list has no equivalent. Z states cloud-return's content-verification condition; Y reduces it to 'its own success/landed path'. And Z's verified defects (the self-close discharge running before the dry-run exit and the M3 abort; hf_selfclose_ledger_refusal at :4294-4317 never reading custody while :4277-4278 names it as a 🔧 term; the drain discharging on any HANDOFF-PING) are findings, not restatements. Y's real counterweights are genuine — it is the only output with cloud-retire-terminal.sh:206 (K9) and the only one to adjudicate the deathwatch from its own code, plus the :10662 ENGAGE_VERIFY assignment — but on the aggregate of verified, brief-demanded content Z is ahead."
+ }
+}

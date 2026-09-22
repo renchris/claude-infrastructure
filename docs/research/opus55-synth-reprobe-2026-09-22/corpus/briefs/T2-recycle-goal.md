@@ -1,0 +1,15 @@
+Explain, with `path:line` cited for EVERY claim, exactly how `scripts/handoff-fire.sh --recycle` carries a predecessor session's live `/goal` condition onto the successor session. Work only from the read-only repository snapshot at /tmp/o55probe-repo-47c3317eb (pinned sha 47c3317eb); read nothing outside it and edit nothing.
+
+Ground every statement in CODE you have read, not in comments, headers, plan docs or research docs. Where a comment or a doc in this repo cites a line number for any of this machinery, CHECK that citation against the file and say explicitly whether it still resolves — several do not, and pointing at a stale one as if it were the code is a wrong answer.
+
+Cover all of the following, each with its own citation(s):
+
+1. **The read.** Which function performs the inheritance decision, where it is defined, and what its return contract is. Which oracle it calls to obtain the predecessor's condition, and what that oracle actually reads — name the store: how the PREDECESSOR's identity is obtained on the recycle path, which directory roots are searched, how a transcript file is located inside them, which record type/shape inside that file is treated as the answer, and which record wins when there are several.
+2. **Which library is and is not involved.** `hooks/lib/goal-state.sh` ships a goal-liveness predicate. State precisely whether the recycle path uses it, and if not, what it uses instead and how the two differ in interface and in implementation (including any hardening present in one and absent in the other, and what that difference does or does not change).
+3. **Precedence vs an explicit `--goal`.** How the "explicit wins" rule is implemented mechanically, and what else — besides the flag — can trip that same rule.
+4. **The opt-out.** Its exact name, its default, and the exact comparison used, including which values do and do not actually turn inheritance off.
+5. **Terminal or absent predecessor goals.** What the oracle returns for a goal that was met, failed, or never armed, how that decision is made, and what the search does at that point (does it keep looking or stop?).
+6. **Validation of an inherited condition.** Which validator runs, how it is invoked (what it reads), what it rejects and why, what happens to the condition and to the recycle when it refuses, where that refusal is announced and who can actually read it, and whether any record of the refusal is written anywhere.
+7. **Where in the recycle flow the call sits.** The single call site, what runs immediately before and after it, the branch that deliberately skips inheritance and why, and then the full transport path by which the inherited condition actually reaches the successor — how it is handed off, how it is read back, and at what moment in the successor's life it is armed.
+
+Be exhaustive and exact: file, 1-based line, and enough of the line quoted that a reader can find it. Where two plausible readings exist, say which one the code supports and cite the line that settles it.

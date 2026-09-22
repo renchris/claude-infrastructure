@@ -1,0 +1,1150 @@
+[
+ {
+  "id": "T1-custody",
+  "brief": "Repository snapshot (read-only, pinned): a shell/hook infrastructure repo for Claude Code session orchestration. Work only from the checkout you were given; read code, not prose, and verify any line number a comment or doc cites before repeating it.\n\nQUESTION \u2014 Explain the full lifecycle of a \"custody debt\" in this repo, citing `path:line` for every single claim you make:\n\n1. RECORDING. When a session fires a dispatched peer with a back-channel armed (`--notify-back`), a custody DEBT is recorded. Say exactly where the store lives on disk, what one physical file corresponds to (and how its filename is derived from what), what fields a row carries, and how the *open set* is computed from that file at read time (including what the join key is, what happens when the primary key field is missing, and which row wins when several rows share a key). State the precise boolean condition that decides whether a fire opens a row at all, which directory the row is keyed on (the fired peer's worktree or something else), and what happens when the fire's engagement check returns each of its non-success outcomes \u2014 be specific about which outcomes still open a debt and which do not, and whether the same rule governs the /goal arm. Also name EVERY producer that opens rows, not just the obvious one.\n\n2. DISCHARGING. Find EVERY code path that discharges an open row \u2014 one item per site, exhaustive \u2014 and for each say: which verb it calls, which join key it uses (and why it can only use that one), whether it is scoped to a directory or runs store-wide, and what condition must hold before it discharges. Include the bulk/age-driven path if one exists, and state whether anything in the repo ever expires or deletes a row automatically. Explicitly adjudicate whether the deathwatch/reaper component discharges anything.\n\n3. CONSUMING. Find EVERY consumer that reads the open set and say what each does with it: the close-ledger rung computation (including at what point in the rung ladder the count is taken, what that implies for turns whose rung is decided earlier, how attribution splits the count into named fields, and what identity spellings count as \"yours\"), the done-claim/completion gate, the Stop/wake floor, the operator-facing readouts, and any others you find. For each, quote the line that actually reads the count.\n\nGround every statement in code. Where a header comment, a doc, or a cross-file citation states a line number or a fact, check it against the file it points at and say so when it does not hold. Cite `path:line` for every claim.",
+  "files_spanned": [
+   "bin/cc-custody",
+   "scripts/handoff-fire.sh",
+   "hooks/mailbox-drain.sh",
+   "scripts/cloud-return.sh",
+   "scripts/cloud-retire-terminal.sh",
+   "scripts/custody-deathwatch.sh",
+   "scripts/wrap-ledger.sh",
+   "hooks/completion-assert.sh",
+   "hooks/session-continue.sh",
+   "hooks/operator-readout.sh",
+   "hooks/lib/session-busy.sh",
+   "hooks/lib/why-tier.sh",
+   "hooks/lib/origin-identity.sh",
+   "bin/cc-offload",
+   "bin/cc-dispatch"
+  ],
+  "traps": [
+   "STALE CITATION: scripts/wrap-ledger.sh:1016-1018 cites `bin/cc-custody:35-38` for the POLARITY note and `:44-46` for the TTL rule, and `hooks/session-continue.sh:608-612` for the 'unattributable row still counts' rule. All three are off: the POLARITY block is cc-custody:36-39, the 'NOT expiry' bullet is cc-custody:45-49, and session-continue:608-612 is wake-floor state-file setup, not the attribution note (that is ~726-729).",
+   "STALE CITATION: scripts/custody-deathwatch.sh:333 cites `scripts/wrap-ledger.sh:1020` and `hooks/session-continue.sh:655` as where `known`/`mine` are defined as the disjunction of originatorPane and notifyBack. The real jq is wrap-ledger.sh:1066-1069 and session-continue.sh:749-752; line 1020 is a comment and line 655 is an unrelated abstain branch.",
+   "STALE CITATION: hooks/mailbox-drain.sh:523 defers to `scripts/handoff-fire.sh:8936` for the self-retire restriction, :534 cites `(:7100)` for the `HANDOFF-PING <slug>` recipe and :545 cites `(:7087)` for the slug being a prompt-file basename. In this snapshot 8936 is `--source-pane` argv parsing, and the real sites are handoff-fire.sh:10721 (NB_SLUG=basename) and :10734 (the printf that arms `HANDOFF-PING %s`).",
+   "STALE CITATION: scripts/handoff-fire.sh:3520 says the custody debt sits at `:10715` and the /goal arm at `:10723`. Both moved: the custody open is at 13219-13223 and the goal arm at 13232-13233; 10715 is inside the --notify-back stand-down branch.",
+   "INCOMPLETE HEADER: bin/cc-custody:22-24 names only handoff-fire.sh and mailbox-drain.sh as PRODUCERS. bin/cc-offload:747 and bin/cc-dispatch:905,932 also open rows (cloud lane: --target cloud:<sid>, --marker <sid>, --slug cloud-<sid>). A worker who trusts the header will miss them.",
+   "INCOMPLETE HEADER: bin/cc-custody:33-35 names four CONSUMERS (wrap-ledger, completion-assert, session-continue wake floor, operator-readout). It omits hooks/lib/session-busy.sh:302 (custody is an idle ARM, injected via CC_BUSY_CUSTODY_OPEN from wrap-ledger.sh:2143), hooks/lib/why-tier.sh:203-216 (the `--why custody` explainer), and scripts/custody-deathwatch.sh:282 (the only store-wide reader, no --cwd).",
+   "THE DEATHWATCH DOES NOT DISCHARGE. scripts/custody-deathwatch.sh:66 states in its own words that it can only ADD a notification; its two addresses are a direct cc-notify to a live originator (:350-359, trying originatorPane THEN notifyBack) and one aggregated cc-backlog needs row plus a TSV manifest (:387-390). It is also INERT unless it is the deployed copy (:269-275).",
+   "FAIL-OPEN RC TABLE: engage_rc_consequence (handoff-fire.sh:3547-3597) is asymmetric. rc 1 (brief never ingested) STILL opens custody (:3574) while the goal arm stays fail-closed (:3577); rc 2 (pane parked, no session at all) opens neither (:3583); rc 4 (wedged) and rc 5 (cannot tell) open both (:3586, :3589); an UNDOCUMENTED rc fails OPEN and warns (:3592-3595). Reading `if rc = 0` is the pre-2026-09-07 bug the table replaced.",
+   "NO DEBT ON A RECYCLE OR A DRY RUN: the whole consequence arm runs only when ENGAGE_VERIFY=1, set at handoff-fire.sh:10662 iff RECYCLE=0 and DRY=0. A `--recycle` is same-pane, so a row there would be self-custody nothing could discharge (:13213-13218).",
+   "ORDERING INSIDE SELF-CLOSE: the W3-B1 terminal-close refusal (handoff-fire.sh:8677-8704) sits BETWEEN the marker read (:8657) and the discharge (:8707), deliberately \u2014 a refused close must not discharge the originator's row. A marker-less (schema-1) stamp discharges nothing.",
+   "COUNT IS TAKEN LATE: scripts/wrap-ledger.sh:1997 calls count_open_custody only inside the \u2705-eligible branch, after DIRTY / REMAINDER / UNLANDED / BLOCKED have been ruled out. On a dirty or unlanded turn CUSTODY_SRC stays `skip` and CUSTODY_OPEN=0, so hooks/completion-assert.sh:718-719 cannot fire its custody contradiction there. 'counted zero' and 'not counted' are different states.",
+   "ATTRIBUTION SPELLINGS: ownership is originatorPane OR notifyBack, and notifyBack may be `<worktree>-<pane>` \u2014 hence `endswith(\"-\" + $p)` (wrap-ledger.sh:1068, session-continue.sh:752). A bare suffix match would let pane 15 claim pane 415's row. An UNATTRIBUTABLE row (neither field) is deliberately KEPT, not dropped, and only the WORDING changes (wrap-ledger.sh:2006-2009, session-continue.sh:878-883).",
+   "BOTH GATES USE THE SUM, NOT 'MINE': completion-assert.sh:718 reads CUSTODY_OPEN (mine+unattributable), and the wake-floor re-fire predicate session-continue.sh:805 tests `$cust` (also mine+unattributable). Only the message text distinguishes them.",
+   "DISCHARGE IS BEST-EFFORT AND RC-0: an unmatched token prints to stderr and exits 0 (bin/cc-custody:232). mailbox-drain.sh:579 exploits exactly that \u2014 it reads the verdict off STDERR (`2>&1 >/dev/null`), never off the exit code.",
+   "NOTHING EVER EXPIRES: the TTL (CC_CUSTODY_TTL_HOURS, default 24, bin/cc-custody:66) only classifies rows as stale/fresh; `count --open` still counts stale rows (:256-263). The only age-driven discharge is the explicit bulk `abandon --stale --why` (:186-210), which appends one abandon row per stale row.",
+   "MALFORMED-TOKEN GUARD: bin/cc-custody:146-149 refuses to adopt a leading `--flag` as the discharge token, because `return --cwd X` used to take '--cwd' as the token and exit 0 having discharged nothing.",
+   "CLOUD DISCHARGE IS CONDITIONAL: scripts/cloud-return.sh:977-983 returns ONLY when the land was content-verified (landed_ok=0) and otherwise leaves the row OPEN on purpose; :536-537 abandons instead when the backlog item was already done elsewhere. scripts/cloud-retire-terminal.sh:200-208 splits the other way: `landed` returns, every other terminal verdict abandons with a reason."
+  ],
+  "key": [
+   {
+    "id": "K1",
+    "claim": "The custody store is one append-only JSONL file per originator-cwd under ~/.claude/autonomy/custody (overridable with CC_CUSTODY_DIR); the filename is the cwd-key from _fired_cwd_key (a sha256 prefix of the resolved physical path, hooks/lib/origin-identity.sh:68-77).",
+    "file": "bin/cc-custody",
+    "line": 65,
+    "quote": "CUSTODY_DIR=\"${CC_CUSTODY_DIR:-$HOME/.claude/autonomy/custody}\""
+   },
+   {
+    "id": "K2",
+    "claim": "The OPEN set is derived at read time from the append-only log: rows are keyed on the marker when present and on \"slug|targetPane\" otherwise, the latest row per key by ts wins, and only a surviving kind==\"open\" row counts as an open debt.",
+    "file": "bin/cc-custody",
+    "line": 111,
+    "quote": "group_by(.k) | map(sort_by(.ts) | last) | map(select(.kind == \"open\"))"
+   },
+   {
+    "id": "K3",
+    "claim": "handoff-fire opens a custody row only when the back-channel trailer was actually written (NB_ARMED_TARGET non-empty) AND a pane was spawned AND the engagement-rc consequence table says so \u2014 the test is 'was a return owed', not 'did the peer self-retire'.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 13219,
+    "quote": "if [ -n \"${NB_ARMED_TARGET:-}\" ] && [ -n \"${SPAWNED_PANE:-}\" ] && engage_rc_consequence \"$rc\" custody; then"
+   },
+   {
+    "id": "K4",
+    "claim": "The debt is keyed on the FIRING session's own cwd ($PWD), not on the fired peer's worktree, so the originator's ledger can count it; the target is the spawned pane, plus --marker/--slug/--notify-back/--originator-pane/--provenance.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 13220,
+    "quote": "_hf_custody open --cwd \"$PWD\" --target \"$SPAWNED_PANE\""
+   },
+   {
+    "id": "K5",
+    "claim": "engage_rc_consequence is asymmetric: verify_engagement rc 1 (booted but brief never ingested) STILL opens the custody debt (fail-open, because an unreturned live wave is a silent strand), while the same rc refuses the /goal arm; only rc 2 (pane parked, no session at all) opens no debt.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 3574,
+    "quote": "1:custody)         return 0 ;;"
+   },
+   {
+    "id": "K6",
+    "claim": "Discharge path 1 \u2014 the fired peer's own `handoff-fire.sh self-close` returns the row by MARKER read off its fired-peer stamp, and the call is placed AFTER the terminal-close ledger refusal so a refused close discharges nothing.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 8707,
+    "quote": "_hf_custody return \"$_sc_cmk\" --why \"$SC_LEDGER_STAMP\""
+   },
+   {
+    "id": "K7",
+    "claim": "Discharge path 2 \u2014 hooks/mailbox-drain.sh discharges on receipt of a `HANDOFF-PING <slug>` by SLUG (the only custody field ever echoed to the peer) and is deliberately --cwd-scoped; because cc-custody returns rc 0 either way, the discharge verdict is read off STDERR. Deduped and capped at 8 per drain; kill switch CC_DRAIN_CUSTODY_RETURN=0.",
+    "file": "hooks/mailbox-drain.sh",
+    "line": 579,
+    "quote": "\"$_cust_bin\" return \"$_slug\" --cwd \"$_cust_cwd\" 2>&1 >/dev/null"
+   },
+   {
+    "id": "K8",
+    "claim": "Discharge path 3 \u2014 scripts/cloud-return.sh returns the row by MARKER (store-wide, no --cwd) only when the cloud branch's land was content-verified; on an unverified/refused land it deliberately leaves the row OPEN, and it abandons instead when the backlog item was already done elsewhere (:536-537).",
+    "file": "scripts/cloud-return.sh",
+    "line": 982,
+    "quote": "left $custody OPEN \u2014 the result is not verified on trunk"
+   },
+   {
+    "id": "K9",
+    "claim": "Discharge path 4 \u2014 scripts/cloud-retire-terminal.sh settle_custody splits on the retire verdict: `landed` RETURNS the marker, every other terminal verdict (gone/superseded/conflict) ABANDONS it with a reason, and the discharge can never be amended afterwards.",
+    "file": "scripts/cloud-retire-terminal.sh",
+    "line": 206,
+    "quote": "landed) \"$CUSTODY_BIN\" return  \"$marker\""
+   },
+   {
+    "id": "K10",
+    "claim": "Discharge path 5 \u2014 the only age-driven discharge is the explicit bulk `cc-custody abandon --stale --why <text>`, which appends one abandon row per stale open row; the TTL (CC_CUSTODY_TTL_HOURS, default 24) otherwise only classifies rows, and nothing in the store ever expires, deletes or rewrites a row.",
+    "file": "bin/cc-custody",
+    "line": 186,
+    "quote": "if [ \"$cmd\" = abandon ] && [ -z \"$TOKEN\" ] && [ \"$WANT_STALE\" -eq 1 ]; then"
+   },
+   {
+    "id": "K11",
+    "claim": "scripts/custody-deathwatch.sh is NOT a discharge path: it reads the open set store-wide (no --cwd) and can only ADD a notification \u2014 a direct cc-notify to a live originatorPane/notifyBack, or one aggregated cc-backlog row plus a manifest.",
+    "file": "scripts/custody-deathwatch.sh",
+    "line": 66,
+    "quote": "can only ever ADD a notification. It cannot discharge custody"
+   },
+   {
+    "id": "K12",
+    "claim": "Consumer 1 \u2014 scripts/wrap-ledger.sh counts open custody ONLY inside the \u2705-eligible branch (after BLOCKED/DIRTY/REMAINDER/UNLANDED are ruled out), so on a \ud83d\udd27/\ud83d\udce6 turn CUSTODY_SRC stays 'skip' and CUSTODY_OPEN=0; when it is >0 it forces RUNG=\ud83d\udd27 ahead of resident members, filed rows, no-trunk, \ud83d\ude80 and \ud83d\udc64, making the \u2705 certificate mechanically unreachable.",
+    "file": "scripts/wrap-ledger.sh",
+    "line": 1997,
+    "quote": "count_open_custody"
+   },
+   {
+    "id": "K13",
+    "claim": "Consumer 2 \u2014 hooks/completion-assert.sh consumes the ledger's CUSTODY_OPEN field (the unattributed sum of mine + unattributable, never CUSTODY_MINE) and treats any open row as a contradiction of a done-claim.",
+    "file": "hooks/completion-assert.sh",
+    "line": 718,
+    "quote": "CUSTODY=\"$(lfield CUSTODY_OPEN)\""
+   },
+   {
+    "id": "K14",
+    "claim": "Consumer 3 \u2014 hooks/session-continue.sh's wake floor re-fires on any idle while attributed-or-unattributable custody is open (alongside first-idle and pending mail), because the discharging ping arrives through the same inbox; the count is re-derived in-hook with the same originatorPane/notifyBack jq, not read from the ledger.",
+    "file": "hooks/session-continue.sh",
+    "line": 805,
+    "quote": "[ \"$cnt\" -eq 0 ] || [ \"$pend\" -gt 0 ] || [ \"$cust\" -gt 0 ] || return 0"
+   },
+   {
+    "claim": "PRODUCER 2 (omitted): bin/cc-offload opens a custody row at cloud-session creation, keyed on the firing $PWD, target 'cloud:<sid>', marker = the session id, slug 'cloud-<sid>'. It resolves the originator pane as CC_PANE_ID first then ITERM_SESSION_ID (:746) \u2014 the fix for the measured 347-row unattributed-cloud cohort. Custody opens AT THE FIRE, not at the return (:728-730). The key's brief explicitly demands 'name EVERY producer that opens rows, not just the obvious one' and names only handoff-fire.",
+    "file": "bin/cc-offload",
+    "line": 747,
+    "quote": "\"$CUSTODY_BIN\" open --cwd \"$PWD\" --target \"cloud:$sid\" --marker \"$sid\" \\",
+    "id": "M1",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "PRODUCERS 3 and 4 (omitted): bin/cc-dispatch opens a row on BOTH of its cloud-adoption arms \u2014 the legacy-leg adoption path at :904 (no notify-back available; the leg delivers no brief) and the normal declare path at :932 (adds --notify-back from ~/.claude/cc-roles/desk, read at :922). Both are keyed on $PWD with marker=slug-bearing session id, and both report 'custody NOT OPENED' rather than failing the dispatch.",
+    "file": "bin/cc-dispatch",
+    "line": 932,
+    "quote": "if [ -n \"$cbin\" ] && \"$cbin\" open --cwd \"$PWD\" --target \"cloud:$sid\" --marker \"$sid\" \\",
+    "id": "M2",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "CONSUMER (omitted): hooks/operator-readout.sh reads the ledger's CUSTODY_OPEN inside the \ud83d\udd27 arm and makes it the LEADING term of the rendered state line (:929), plus the one drivable action `cc-custody list --open --cwd .` at :940 when no resident members are present. Its own header (:898-905) records why: a custody-driven \ud83d\udd27 arrives with DIRTY_N=0/GATE fresh/REMAINDER=0, so before this term the renderer printed the contentless '\ud83d\udd27 in progress \u2014 loose ends'. The brief names 'the operator-facing readouts' explicitly; the key has no item for this file even though it is in the brief's file list.",
+    "file": "hooks/operator-readout.sh",
+    "line": 915,
+    "quote": "custody=\"$(lf CUSTODY_OPEN)\"; case \"$custody\" in ''|*[!0-9]*) custody=0 ;; esac",
+    "id": "M3",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "CONSUMER (omitted): hooks/lib/session-busy.sh treats open custody as one of the four idle ARMS (goal \u00b7 continue sentinel \u00b7 undrained mail \u00b7 custody), so an originator with an open debt is reported BUSY rather than idle-deaf. Uniquely among consumers it does NOT re-read the store \u2014 the count is INJECTED as CC_BUSY_CUSTODY_OPEN by scripts/wrap-ledger.sh:2143, deliberately, because 'a second reader of one store is the drift this repo has paid for before' (:279-281). This file is in the brief's file list and the key has no item for it.",
+    "file": "hooks/lib/session-busy.sh",
+    "line": 302,
+    "quote": "case \"${CC_BUSY_CUSTODY_OPEN:-0}\" in ''|0|*[!0-9]*) : ;; *) arms=\"$arms custody\" ;; esac",
+    "id": "M4",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "OPENING CONDITION, missing conjunct: the brief asks for 'the precise boolean condition that decides whether a fire opens a row at all'. K3 gives the three-term `if`, but that `if` lives inside engage_apply_consequences, which a fire only reaches when ENGAGE_VERIFY=1 \u2014 i.e. a --recycle or --dry fire NEVER opens a row regardless of rc, because a recycle is same-pane (net-zero panes) and would mint self-custody the originator owed itself. This is a separate gate from engage_rc_consequence's rc table and is not implied by 'only rc 2 opens no debt'.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 13215,
+    "quote": "# ENGAGE_VERIFY is 0 iff RECYCLE or DRY. A dry run fires nothing, and --recycle is \"same pane",
+    "id": "M5",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "STALE CROSS-FILE CITATIONS (the brief explicitly asks for this check, and the key never performs it). Four cited line numbers in this subsystem do not hold: (a) hooks/mailbox-drain.sh:523 cites scripts/handoff-fire.sh:8936 for the deferred self-retire restriction \u2014 :8936 is `RCY_TRANSPLANT_CAUSE=...`; the real site is :13203-13211. (b) mailbox-drain.sh:534 cites `(:7100)` for the `cc-notify <originator> \"HANDOFF-PING <slug>\"` recipe \u2014 :7100 is recycle-dead prose; the real site is :10734. (c) mailbox-drain.sh:545 cites `(:7087)` for the slug being a prompt-file basename \u2014 the real site is :10721 (`NB_SLUG=\"$(basename \"${PROMPT_FILE%.*}\")\"`). (d) scripts/wrap-ledger.sh:1018 cites hooks/session-continue.sh:608-612 for the 'unattributable row still counts / the message HEDGES' ruling \u2014 that text is at :726-729.",
+    "file": "hooks/mailbox-drain.sh",
+    "line": 523,
+    "quote": "# and scripts/handoff-fire.sh:8936 defers a restriction to \"custody v1.1 adds the ping-receipt",
+    "id": "M6",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "STALE CROSS-FILE CITATION (second instance, same class): both wrap-ledger.sh:1058 and hooks/session-continue.sh:724 cite a line number for where the RAW pane key is captured \u2014 wrap-ledger says 'hooks/session-continue.sh:302' and session-continue's own comment says ':197'. Neither holds: :302 is `else echo \"inactive\"; fi` and :197 sits inside an unrelated CLAUDE_CODE_SESSION_ID comment. The real capture is `_ouid=\"${CC_PANE_ID:-${ITERM_SESSION_ID:-}}\"; _ouid=\"${_ouid##*:}\"` at :420, aliased to `_opane` at :425 \u2014 which is the value the custody jq at :748 actually reads.",
+    "file": "hooks/session-continue.sh",
+    "line": 420,
+    "quote": "_ouid=\"${CC_PANE_ID:-${ITERM_SESSION_ID:-}}\"; _ouid=\"${_ouid##*:}\"",
+    "id": "M7",
+    "added_by_refuter": true
+   }
+  ]
+ },
+ {
+  "id": "T2-recycle-goal",
+  "brief": "Explain, with `path:line` cited for EVERY claim, exactly how `scripts/handoff-fire.sh --recycle` carries a predecessor session's live `/goal` condition onto the successor session. Work only from the read-only repository snapshot at /tmp/o55probe-repo-47c3317eb (pinned sha 47c3317eb); read nothing outside it and edit nothing.\n\nGround every statement in CODE you have read, not in comments, headers, plan docs or research docs. Where a comment or a doc in this repo cites a line number for any of this machinery, CHECK that citation against the file and say explicitly whether it still resolves \u2014 several do not, and pointing at a stale one as if it were the code is a wrong answer.\n\nCover all of the following, each with its own citation(s):\n\n1. **The read.** Which function performs the inheritance decision, where it is defined, and what its return contract is. Which oracle it calls to obtain the predecessor's condition, and what that oracle actually reads \u2014 name the store: how the PREDECESSOR's identity is obtained on the recycle path, which directory roots are searched, how a transcript file is located inside them, which record type/shape inside that file is treated as the answer, and which record wins when there are several.\n2. **Which library is and is not involved.** `hooks/lib/goal-state.sh` ships a goal-liveness predicate. State precisely whether the recycle path uses it, and if not, what it uses instead and how the two differ in interface and in implementation (including any hardening present in one and absent in the other, and what that difference does or does not change).\n3. **Precedence vs an explicit `--goal`.** How the \"explicit wins\" rule is implemented mechanically, and what else \u2014 besides the flag \u2014 can trip that same rule.\n4. **The opt-out.** Its exact name, its default, and the exact comparison used, including which values do and do not actually turn inheritance off.\n5. **Terminal or absent predecessor goals.** What the oracle returns for a goal that was met, failed, or never armed, how that decision is made, and what the search does at that point (does it keep looking or stop?).\n6. **Validation of an inherited condition.** Which validator runs, how it is invoked (what it reads), what it rejects and why, what happens to the condition and to the recycle when it refuses, where that refusal is announced and who can actually read it, and whether any record of the refusal is written anywhere.\n7. **Where in the recycle flow the call sits.** The single call site, what runs immediately before and after it, the branch that deliberately skips inheritance and why, and then the full transport path by which the inherited condition actually reaches the successor \u2014 how it is handed off, how it is read back, and at what moment in the successor's life it is armed.\n\nBe exhaustive and exact: file, 1-based line, and enough of the line quoted that a reader can find it. Where two plausible readings exist, say which one the code supports and cite the line that settles it.",
+  "files_spanned": [
+   "scripts/handoff-fire.sh",
+   "hooks/lib/goal-state.sh",
+   "hooks/goal-inert-watch.sh",
+   "tests/handoff-goal-arm.bats",
+   "CLAUDE.global.md",
+   "docs/plans/NONLIMIT_RESUME_LADDER.md"
+  ],
+  "traps": [
+   "Every in-repo citation of `inherit_recycle_goal` is STALE. The function is defined at scripts/handoff-fire.sh:5840 and called exactly once at :12540, but CLAUDE.global.md:223 says `scripts/handoff-fire.sh:4676-4684`, hooks/goal-inert-watch.sh:36 says `4671-4688`, handoff-fire.sh's OWN comment at :4824 says `(:5089, called at :11070)`, docs/plans/NONLIMIT_RESUME_LADDER.md:753 says `:4994-5009`, docs/research/backlog-pipeline-recon-2026-08-12/recon-wave.md:35 says `3778-3800`, and docs/research/voluntary-inplace-switch-2026-09-22/A03-precheck-healthy-source.md:96 says `handoff-fire.sh:5805, called :11070`. A worker who quotes any of these has cited a comment, not the code.",
+   "The recycle path does NOT use hooks/lib/goal-state.sh. handoff-fire.sh never sources that lib for this; it carries a deliberate twin, `goal_live_for_sid` (:5809), whose header at :5801-5808 says so. The interfaces differ: `goal_live_condition` (goal-state.sh:60) takes a transcript PATH, the twin takes a SID and resolves the file itself with `find` across CC_PROJECTS_DIRS. Saying 'it calls goal_live_condition' is wrong.",
+   "The twin also lacks goal-state.sh's `_goal_grep` wrapper (goal-state.sh:52), which exists precisely to keep grep's no-match rc 1 from being laundered into 'unreadable' under pipefail. The fire-path copy uses a bare `grep | jq` with `|| continue` (:5818-5819), so grep-no-match and grep-error collapse into the same outcome. That is harmless here only because both directions mean 'do not inherit' \u2014 but it is not the lib's three-outcome contract, and a careful answer names the difference instead of asserting the two are identical.",
+   "The opt-out comparison is literal string inequality against `0` (`[ \"${CC_RECYCLE_GOAL_INHERIT:-1}\" != 0 ]`, :5843). `CC_RECYCLE_GOAL_INHERIT=false`, `=off`, `=no` do NOT opt out \u2014 only the exact value `0` does.",
+   "Precedence is implemented as an early return on a NON-EMPTY `FIRE_GOAL` (:5842), not as a check of the `--goal` flag. `FIRE_GOAL` is also seeded from the environment (:508), so an exported FIRE_GOAL suppresses inheritance just as the flag does.",
+   "A terminal predecessor goal makes the oracle `return 1` from INSIDE the loop (:5827) rather than `continue` \u2014 the comment at :5821-5822 states last-record-wins in BOTH directions and that the search stops either way, so the first CC_PROJECTS_DIRS root (order pinned at :416) holding a transcript for that sid decides, and the remaining per-account roots are never consulted.",
+   "The validator is re-run by calling `check_goal_arm` (:5848) with NO argument \u2014 it reads the global `FIRE_GOAL` (:5735), which is why assigning the inherited condition first (:5847) makes it run the identical pre-fire validation that a passed `--goal` gets at :9015. A worker who thinks a separate/weaker validation path exists for inherited conditions is wrong.",
+   "The refusal is NOT purely local: `check_goal_arm` calls `emit_fire_refusal payload-goal-arm-multiline|-slash|-cap` (:5748, :5756, :5763), so a refused INHERITED condition still writes a `class:\"refused\"` row into the handoffs ledger even though the recycle is not refused and `inherit_recycle_goal` returns 0.",
+   "'Loudly' means stderr only (:5851). On a `--recycle` that stderr belongs to the very session the recycle is about to `/exit` \u2014 the same readership problem the suite header at tests/handoff-goal-arm.bats:400-405 records for arm_goal \u2014 so the operator may see nothing.",
+   "Inheritance can never fail a recycle: every branch returns 0 (:5840 contract, :5842-5846 guards, :5854), and on validation refusal FIRE_GOAL is blanked (:5852) and the successor simply runs goal-less. Test `inherit: never fails the recycle` (tests/handoff-goal-arm.bats:394-398) pins it.",
+   "The `--resume-launcher` arm deliberately does NOT inherit and blanks FIRE_GOAL instead (:12535-12538), because a same-uuid `--resume` already carries the unmet goal; docs/research/voluntary-inplace-switch-2026-09-22/A03-precheck-healthy-source.md:96 and :348 name this as UNMEASURED/uncertain, while the code answers it outright \u2014 a doc-led answer will hedge where the code is explicit.",
+   "The inherited condition is not armed in the foreground call. It rides `$FIRE_GOAL` into the detached `__recycle` watcher's argv (:12628), is read back as positional `$8` (:7158; the argv order is spelled out at :6956), and only reaches `arm_goal` after engagement is confirmed (:7365) \u2014 after the `/exit` that kills the predecessor.",
+   "The predecessor SID is resolved in the FOREGROUND via `cc_sid_for_pane \"$SID\"` (:12524), i.e. from the cc-registry row `$CC_REGISTRY_DIR/<pane>.json` with a `$CLAUDE_CONFIG_DIR/sessions/<pid>.json` fallback (:4955-4990) \u2014 not from an env var and not from the transcript directly."
+  ],
+  "key": [
+   {
+    "id": "K1",
+    "claim": "The inheritance decision lives in one function, `inherit_recycle_goal`, defined in scripts/handoff-fire.sh; it takes the predecessor sid and its contract is to ALWAYS return 0 (inheritance may never fail a recycle).",
+    "file": "scripts/handoff-fire.sh",
+    "line": 5840,
+    "quote": "inherit_recycle_goal() { # $1=predecessor-sid"
+   },
+   {
+    "id": "K2",
+    "claim": "Precedence is an early return on a non-empty FIRE_GOAL: an explicit --goal (or an exported FIRE_GOAL) wins and the predecessor's transcript is never even read.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 5842,
+    "quote": "[ -z \"${FIRE_GOAL:-}\" ] || return 0"
+   },
+   {
+    "id": "K3",
+    "claim": "The opt-out is the env var CC_RECYCLE_GOAL_INHERIT, defaulting to 1, compared literally against the string 0 \u2014 only the exact value 0 disables inheritance.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 5843,
+    "quote": "[ \"${CC_RECYCLE_GOAL_INHERIT:-1}\" != 0 ] || return 0"
+   },
+   {
+    "id": "K4",
+    "claim": "The predecessor's condition is obtained from the fire-path oracle `goal_live_for_sid`; any non-zero rc (no goal, terminal goal, unreadable, no jq) makes the function a silent no-op that still returns 0.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 5845,
+    "quote": "_inh_cond=\"$(goal_live_for_sid \"$1\")\" || return 0"
+   },
+   {
+    "id": "K5",
+    "claim": "`goal_live_for_sid` resolves the predecessor's transcript itself \u2014 a `find` for <sid>.jsonl beneath each CC_PROJECTS_DIRS root (the nested per-cwd project dir layout), not a direct path join.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 5829,
+    "quote": "$(find \"$pdir\" -name \"$sid.jsonl\" -type f"
+   },
+   {
+    "id": "K6",
+    "claim": "Liveness is decided from the LAST goal_status attachment in that transcript: it is live only if neither .met nor .failed is true, so a met/failed/cleared (terminal) goal inherits nothing. [PRECISION NOTE: Claim is true of the code but :5823 holds only the met/failed test. The LAST-record selection (and the type==\"attachment\" prose filter) is on the previous line \u2014 scripts/handoff-fire.sh:5819 `[ .[] | select(.type==\"attachment\") | .attachment | select(.type==\"goal_status\") ] | last // empty' 2>/dev/null)\" || continue`. An answer citing only 5823 has not cited where \"last wins\" is implemented.]",
+    "file": "scripts/handoff-fire.sh",
+    "line": 5823,
+    "quote": "jq -r '(.met // false) or (.failed // false)'",
+    "corrected": true
+   },
+   {
+    "id": "K7",
+    "claim": "An inherited condition is re-validated by calling check_goal_arm \u2014 the same validator the fire path runs \u2014 after FIRE_GOAL has been assigned.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 5848,
+    "quote": "if check_goal_arm; then"
+   },
+   {
+    "id": "K8",
+    "claim": "check_goal_arm takes no argument: it reads the global FIRE_GOAL (and caps it at GOAL_MAX_CHARS, default 4000), which is why assigning FIRE_GOAL first re-runs the identical pre-arm validation on the inherited condition.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 5735,
+    "quote": "local cond=\"${FIRE_GOAL:-}\" limit=\"${GOAL_MAX_CHARS:-4000}\""
+   },
+   {
+    "id": "K9",
+    "claim": "If validation refuses the inherited condition, it is NOT armed: the function warns on stderr, blanks FIRE_GOAL, and the recycle proceeds goal-less (still rc 0).",
+    "file": "scripts/handoff-fire.sh",
+    "line": 5851,
+    "quote": "predecessor holds a LIVE goal but its condition fails pre-arm validation"
+   },
+   {
+    "id": "K10",
+    "claim": "On the recycle path the predecessor session id is resolved in the foreground from the pane via cc_sid_for_pane (the cc-registry row, with a sessions/<pid>.json fallback).",
+    "file": "scripts/handoff-fire.sh",
+    "line": 12524,
+    "quote": "rcy_old_sid=\"$(cc_sid_for_pane \"$SID\")\""
+   },
+   {
+    "id": "K11",
+    "claim": "There is exactly one call site: inside the recycle flow, after the composer-clear gate and the sid resolution and before the watcher is detached and /exit is typed, passing the predecessor sid.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 12540,
+    "quote": "inherit_recycle_goal \"$rcy_old_sid\""
+   },
+   {
+    "id": "K12",
+    "claim": "Resume mode is the deliberate exception: when RESUME_LAUNCHER is set the code skips inheritance entirely and blanks FIRE_GOAL, because a same-uuid --resume already carries the unmet goal and inheriting would arm it twice.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 12535,
+    "quote": "if [ -n \"$RESUME_LAUNCHER\" ]; then"
+   },
+   {
+    "id": "K13",
+    "claim": "The inherited condition reaches the successor by being passed as a positional argument to the detached __recycle watcher re-exec, which reads it back as $8.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 7158,
+    "quote": "FIRE_GOAL=\"${8:-}\""
+   },
+   {
+    "id": "K14",
+    "claim": "The watcher arms it with arm_goal only after the successor's engagement is confirmed (a real assistant turn), i.e. after the predecessor has exited.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 7365,
+    "quote": "arm_goal \"$IT2\" \"$RSID\" \"$FIRE_GOAL\""
+   },
+   {
+    "id": "K15",
+    "claim": "hooks/lib/goal-state.sh's goal_live_condition is the SSOT twin but takes a transcript PATH, not a sid \u2014 the fire path does not source it and duplicates the predicate instead.",
+    "file": "hooks/lib/goal-state.sh",
+    "line": 60,
+    "quote": "goal_live_condition() { # $1 = transcript path"
+   },
+   {
+    "id": "K16",
+    "claim": "goal-state.sh hardens its read with a _goal_grep wrapper that separates grep-no-match from grep-error under pipefail; the fire-path twin has no such wrapper.",
+    "file": "hooks/lib/goal-state.sh",
+    "line": 52,
+    "quote": "_goal_grep() { # $1 = transcript path"
+   },
+   {
+    "id": "K17",
+    "claim": "hooks/goal-inert-watch.sh documents the inheritance and the opt-out but cites a line range for inherit_recycle_goal that no longer resolves (4671-4688 vs the real 5840).",
+    "file": "hooks/goal-inert-watch.sh",
+    "line": 36,
+    "quote": "scripts/handoff-fire.sh:4671-4688"
+   },
+   {
+    "id": "K18",
+    "claim": "handoff-fire.sh's own self-retire comment cites inherit_recycle_goal at :5089 called at :11070 \u2014 both stale against the real 5840 / 12540.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 4824,
+    "quote": "inherit_recycle_goal (:5089, called at :11070)"
+   },
+   {
+    "claim": "The hand-off half of the transport is uncited: the inherited condition is written into the detached watcher's argv as the 8th positional after `__recycle` (script \u00b7 __recycle \u00b7 SID \u00b7 tty \u00b7 cmdfile \u00b7 LAUNCH_DIR \u00b7 old_sid \u00b7 MARKER \u00b7 FIRE_GOAL), which is what makes the $8 read-back at :7158 resolve. The key cites only the read side.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 12628,
+    "quote": "WATCHER_PID=\"$(detach \"$log\" \"$0\" __recycle \"$SID\" \"$tty\" \"$cmdfile\" \"$LAUNCH_DIR\" \"$rcy_old_sid\" \"$RECYCLE_MARKER\" \"$FIRE_GOAL\"",
+    "id": "M1",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "Brief item 5 explicitly asks whether the search keeps looking or stops on a terminal goal: it STOPS. The `return 1` sits inside the per-hit `while` loop, so the first transcript found for that sid is the answer in both directions \u2014 a met/failed record ends the function without trying the remaining CC_PROJECTS_DIRS roots.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 5827,
+    "quote": "      return 1",
+    "id": "M2",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "A durable record of a refused inherited condition IS written, which the key omits entirely (it says only 'warns on stderr'). check_goal_arm calls emit_fire_refusal on each of its three refusal arms; emit_fire_refusal \u2192 emit_fire_event appends a JSON row to ~/.claude/logs/handoffs.jsonl (:683 `local log=\"$HOME/.claude/logs/handoffs.jsonl\"`) with class:\"refused\", refuse_reason:\"payload-goal-arm-multiline|-slash|-cap\" and gate:\"payload\" (_fire_gate_of :742). So the stderr line at :5851 \u2014 which on a self-recycle reaches only the process about to be /exit'd \u2014 is not the only trace.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 5748,
+    "quote": "    emit_fire_refusal payload-goal-arm-multiline \"--goal condition is multi-line\"",
+    "id": "M3",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "Brief item 1 asks which directory roots are searched; the key names the variable but never cites its definition or default. CC_PROJECTS_DIRS defaults to five per-account projects roots, space-separated and deliberately unquoted at the loop (:5814, `# shellcheck disable=SC2086`).",
+    "file": "scripts/handoff-fire.sh",
+    "line": 416,
+    "quote": "CC_PROJECTS_DIRS=\"${CC_PROJECTS_DIRS:-$HOME/.claude/projects $HOME/.claude-next/projects $HOME/.claude-secondary/projects $HOME/.claude-tertiary/projects $HOME/.claude-quaternary/projects}\"",
+    "id": "M4",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "Brief item 2 asks what the missing _goal_grep hardening does OR DOES NOT change; the key stops at 'has no such wrapper'. handoff-fire.sh runs `set -euo pipefail` (:343), so in the twin a grep NO-MATCH (rc 1) fails the whole pipeline and fires the `|| continue` on the same line \u2014 but that lands on `continue` inside the per-hit loop, i.e. exactly where an empty `$rec` would land anyway (:5820). The fire twin therefore collapses 'grep found nothing' and 'grep errored' into one outcome, and it changes nothing here because inherit_recycle_goal's only two outcomes are 'a condition' or 'no inheritance' \u2014 unlike goal-state.sh's consumers, which must report `absent` apart from `unreadable`.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 5819,
+    "quote": "        [ .[] | select(.type==\"attachment\") | .attachment | select(.type==\"goal_status\") ] | last // empty' 2>/dev/null)\" || continue",
+    "id": "M5",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "Two further stale citations of this machinery exist in files the brief names, and the key finds only two (K17/K18). The always-resident global instructions cite inherit_recycle_goal at handoff-fire.sh:4676-4684 \u2014 that range is inside cc_sid_for_pane/self-retire territory, not the function (real: 5840-5855).",
+    "file": "CLAUDE.global.md",
+    "line": 223,
+    "quote": "successor (`inherit_recycle_goal`, `scripts/handoff-fire.sh:4676-4684`; `CC_RECYCLE_GOAL_INHERIT`",
+    "id": "M6",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "Third stale citation, in the plan doc the brief lists: NONLIMIT_RESUME_LADDER cites the function at :4994-5009 (real: 5840-5855). (Research docs carry two more \u2014 docs/research/voluntary-inplace-switch-2026-09-22/A03 and A05 cite `:5805` and `:12406-12412`, and backlog-pipeline-recon-2026-08-12 cites `:3778-3800`; none resolve.)",
+    "file": "docs/plans/NONLIMIT_RESUME_LADDER.md",
+    "line": 753,
+    "quote": "(`inherit_recycle_goal`, `:4994-5009`) and re-validates it, printing a refusal rather than dropping",
+    "id": "M7",
+    "added_by_refuter": true
+   }
+  ]
+ },
+ {
+  "id": "T3-frontier-budget",
+  "brief": "Repository snapshot (read-only, pinned sha 47c3317eb): /tmp/o55probe-repo-47c3317eb. Read ONLY files under that path; do not edit anything.\n\nExplain, end to end and grounded in CODE rather than prose, how this repo bounds a single session's use of the FRONTIER (Fable) model tier. Cite `path:line` (repo-root-relative) for EVERY claim you make \u2014 including claims about what is *absent*, where you should cite the file you searched and say what you grepped for.\n\nCover all of the following:\n\n1. **The enforcer.** Which hook file(s) actually implement the per-session frontier budget, and which PreToolUse tool surface(s) each arm reads. There are two distinct carriers of frontier spend \u2014 an in-process Agent-tool spawn and a fired *session* (`handoff-fire.sh`/launcher invoked from Bash). Show the exact code that distinguishes them and the exact code that decides \"this request is on the frontier tier\" in each case. Quote the predicate; do not paraphrase it.\n\n2. **Where the number comes from, and what it is.** Identify the SSOT file and key the cap is read from, the literal value there today, the exact parsing expression used to read it (note its scoping), and what value is used when the read fails or is non-numeric. Also cover any mechanism that MODIFIES the cap at runtime, its SSOT key, that key's current value, and the exact arithmetic.\n\n3. **Counting and storage.** Where per-session state lives (full path expression), what it is keyed on, what happens when that key cannot be resolved, exactly when the counter is written relative to the allow decision, and whether a refused or failed spawn is refunded. State whether the two carriers share one budget or have separate ones, and cite the code and the test that pin it.\n\n4. **At and over the cap.** Exit code, which stream the message goes to, and how (and why) the two carriers' refusal texts differ. Quote the distinguishing clause of each.\n\n5. **The window.** The `frontier_access` fields the gate reads, the exact comparison it performs, what it does when the window is shut, and \u2014 reading the SSOT's current values \u2014 whether that branch is reachable in production today. Check what the refusal on that branch advises the caller to use, and compare it against the SSOT.\n\n6. **Kill switches and bypasses.** Enumerate every env var, flag, config state, or command shape that makes the gate not count or not refuse. For each, cite the line that implements it. Separately: the always-resident operator instructions name a kill switch by an env-var name for this ladder \u2014 determine whether any executable file in the repo reads it, and say so with the evidence of your search.\n\n7. **Registration \u2014 is the session arm actually live?** Determine, from the repo's own config artifacts and migration machinery, whether the Bash (session-fire) arm is wired up by default or is inert. Name the file and matcher group that registers the gate today, name the artifact that would register the other arm, its class, what preconditions it asserts before touching anything, which config directories it writes, and what it verifies afterwards. State the one command a reader should run to establish which state a live machine is in.\n\n8. **Stale/contradicting cross-references.** Several comments and docs cite `path:line` into these files. Check each citation you encounter against the file it points at, and report any that no longer land on the code they describe, plus any doc sentence whose claim is true of the CODE but false of the LIVE WIRING.\n\nBe exhaustive and precise. Where a comment asserts something about behaviour, verify it against the executable line rather than repeating it. A correct answer spans at least four distinct files.",
+  "files_spanned": [
+   "hooks/frontier-spawn-gate.sh",
+   "model-config.yaml",
+   "settings-templates/settings.example.json",
+   "migrations/0029-frontier-gate-session-path.sh",
+   "scripts/handoff-fire.sh",
+   "tests/frontier-spawn-gate.bats",
+   "CLAUDE.global.md",
+   "hooks/agent-teams-enforce.sh",
+   "skills/frontier-routing/SKILL.md",
+   "docs/plans/NONLIMIT_RESUME_LADDER.md"
+  ],
+  "traps": [
+   "`CC_LADDER=off` is named as the ladder's kill switch in the always-resident CLAUDE.global.md:334 (and in docs/plans/NONLIMIT_RESUME_LADDER.md:840, as a *proposal*), but it is read by NO executable file: `grep -rn CC_LADDER bin/ scripts/ hooks/ lib/ commands/ skills/ tests/` returns 0 hits in the snapshot. A lazy answer will list it as a working bypass.",
+   "The gate's OWN header comment cites `scripts/handoff-fire.sh:9303-9311` (hooks/frontier-spawn-gate.sh:27) as the `--model` sole-source-of-truth it mirrors. Those lines are `hf_inflight_key()` (in-flight claim key resolution) and have nothing to do with model keying; the real sites are ~9492-9512 (alias resolution) and 10146-10147 (`FABLE_EFFECTIVE`).",
+   "hooks/agent-teams-enforce.sh:366 cites `hooks/frontier-spawn-gate.sh:52-63` for \"per-session cap, hard refusal\". 52-63 is `is_frontier_model()` / the top of `frontier_fire_model()`; the cap block is 117-145.",
+   "model-config.yaml:545 cites `hooks/frontier-spawn-gate.sh:30` as the line containing `fable|\"$fmodel\")` and asserts THAT LINE CONTAINS NO MODEL LITERAL. Line 30 is a comment; the case arms are 52-53, and line 52 now DOES carry a model literal (`claude-fable-5*`).",
+   "The window-CLOSED branch (gate 148-153) is effectively unreachable in production: model-config.yaml:687 `active: true`, :682 `end: \"2099-12-31\"` (sentinel), :676 `permanent: true`. Answering 'the gate blocks when the window closes' as the live behaviour is a near-miss; in practice only the cap branch can fire.",
+   "The two window-closed refusals carry DIFFERENT hardcoded fallback defaults, and both are stale against the SSOT: session path uses `${fallback:-claude-opus-5}` (:149), agent path `${fallback:-claude-opus-4-8}` (:151), while model-config.yaml:699 now says `fallback: claude-opus-5-5`. (The defaults only fire if the SSOT read yields nothing.)",
+   "`frontier_access` fields are read block-scoped via `sed -n '/^frontier_access:/,/^[a-z_]/p'` (:39), but the CAP and RESERVE reads are NOT block-scoped \u2014 `grep -m1 'max_fable_spawns_per_session:' \"$CFG\"` (:120) and `grep -m1 'reserve_dates:' \"$CFG\"` (:125) scan the WHOLE file and take the first match anywhere. It happens to be correct today only because no earlier line in model-config.yaml spells either key with a trailing colon (the prose mention at :517 has a backtick, not a colon).",
+   "PreToolUse charges ATTEMPTS, not admissions: the counter is incremented at :144 before the tool runs and is never decremented \u2014 model-config.yaml:690 says a premature spawn would 'burn a per-session spawn-count slot the gate can't refund'. A refusal at cap (:136-142) does NOT increment.",
+   "State is a plain file under `$TMPDIR`, not a durable store: `${TMPDIR:-/tmp}/frontier-gate-${sid}.count` (:133). If `session_id` is missing (or jq is absent) the sid collapses to the literal `nosid` (:130), so all such calls share ONE bucket; and a differing `TMPDIR` yields a fresh counter.",
+   "`--dry-run` anywhere in the command exempts the whole command (`case \"$c\" in *--dry-run*) return 1 ;; esac`, :62), and the session arm additionally requires a session-launcher entrypoint WORD (:67) \u2014 so `grep claude-fable-5-1 \u2026` and a `cc-backlog add \"\u2026 --model claude-fable-5-1\"` row are deliberately uncounted (tests 9, 9b, 10).",
+   "The gate deliberately does NOT sniff launcher NAMES (no `claude-fable*` arm) \u2014 one predicate only, `--model` (:25-32). An answer claiming a `claude-fableN` launcher is detected is wrong.",
+   "Detection is a PREFIX on the family (`fable|claude-fable-5*`, :52), plus an SSOT-id arm (:53). Equality-only would silently stop counting the still-Active PRIOR id `claude-fable-5` \u2014 that is mutant test 21 (tests/frontier-spawn-gate.bats:223-228).",
+   "skills/frontier-routing/SKILL.md:41 flatly says 'The cap now counts that fire too (hooks/frontier-spawn-gate.sh session arm)' with no registration caveat \u2014 true of the CODE, false of the LIVE WIRING until migrations/0029 runs. docs/plans/NONLIMIT_RESUME_LADDER.md:866 still carries the older, now-inverted claim that the gate 'does not yet see the SESSION path'.",
+   "settings-templates/settings.example.json registers the gate ONLY in the `\"matcher\": \"Agent\"` group (:151-162, entry at :160, timeout 5). The `\"matcher\": \"Bash\"` group (:102-128) does NOT contain it, so the session arm is landed-but-inert by default; migrations/0029 is class c10 (:2) and waits for the operator (docs/plans/NONLIMIT_RESUME_LADDER.md:18, :930).",
+   "migrations/0029 refuses to register a no-op: it greps the LIVE hook for `frontier_fire_model` (:78) rather than trusting a lag counter, requires the config to already own a PreToolUse Bash group (:92), writes FIVE config dirs (:86), and post-verifies by content that the new entry is present exactly once, synchronous (`asyncRewake == false`), timeout 5, AND that the Agent entry survived (:121-125).",
+   "The topic's 'both carriers share one budget' is pinned by exactly one counter file and by tests/frontier-spawn-gate.bats:107-110 (an Agent spawn plus a fire advance the same counter to 2) \u2014 not by any separate per-path accounting."
+  ],
+  "key": [
+   {
+    "id": "K1",
+    "claim": "The gate reads its SSOT from $HOME/.claude/model-config.yaml, overridable by the FRONTIER_GATE_CFG env var (the only config-source lever, used by the hermetic test suite).",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 36,
+    "quote": "${FRONTIER_GATE_CFG:-$HOME/.claude/model-config.yaml}"
+   },
+   {
+    "id": "K2",
+    "claim": "The gate fails OPEN when the SSOT is missing/unreadable \u2014 it exits 0 silently, which is also the de-facto bypass (point FRONTIER_GATE_CFG at a nonexistent path). [PRECISION NOTE: The \"unreadable\" half is false \u2014 it fails CLOSED there. `[ -f \"$CFG\" ]` is true for an existing-but-unreadable file, so line 37 does not fire; the sed at :39 returns nothing, `active` is empty, the window test at :117 is false, and the gate exits 2. Measured on the snapshot with a chmod-200 config: stderr `frontier-spawn-gate: frontier window is CLOSED (frontier_access active=unset, end=unset) \u2014 'fable' is not routable...`, rc=2. Correct claim: a MISSING (or non-regular-file) SSOT is the silent allow / de-facto bypass; an unreadable one is a hard refusal.]",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 37,
+    "quote": "[ -f \"$CFG\" ] || exit 0",
+    "corrected": true
+   },
+   {
+    "id": "K3",
+    "claim": "Frontier detection is a PREFIX match on the model family (plus a second arm matching the SSOT's frontier_access.model), so the prior id claude-fable-5 is still counted; equality-only is mutant test 21.",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 52,
+    "quote": "fable|claude-fable-5*) return 0 ;;"
+   },
+   {
+    "id": "K4",
+    "claim": "A `--dry-run` anywhere in the Bash command means the command fires nothing, so it consumes no slot \u2014 an explicit uncounted probe path.",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 62,
+    "quote": "*--dry-run*) return 1 ;;"
+   },
+   {
+    "id": "K5",
+    "claim": "The SESSION arm only fires when the command word-matches a session-launching entrypoint (handoff-fire.sh or a claude launcher), which is what keeps it from becoming a substring gate over any command that merely names the tier. [PRECISION NOTE: The quoted alternation is truncated mid-expression and drops the arm that covers the per-account launchers. Line 67 reads `(handoff-fire\\.sh|claude|claude-latest|claude-next[0-9]*|claude[0-9]+)` \u2014 `claude[0-9]+` is what gates `claude3 --model fable` / `claude4 --model fable`, the shape handoff-fire actually composes (scripts/handoff-fire.sh:9929-9930). Quote the full group, including the leading `(^|[[:space:]]|[;&|(])([A-Za-z0-9_./~$\"{}-]*/)?` prefix and the trailing `([[:space:]]|$)`, since the word-anchoring is the claim.]",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 67,
+    "quote": "handoff-fire\\.sh|claude|claude-latest|claude-next[0-9]*",
+    "corrected": true
+   },
+   {
+    "id": "K6",
+    "claim": "The cap number is read out of the SSOT with a whole-file (NOT block-scoped) grep for the frontier_discovery_budget.max_fable_spawns_per_session key, taking the first match's second field.",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 120,
+    "quote": "grep -m1 'max_fable_spawns_per_session:' \"$CFG\""
+   },
+   {
+    "id": "K7",
+    "claim": "If the cap read is empty or non-numeric the gate falls back to a hardcoded cap of 6.",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 121,
+    "quote": "''|*[!0-9]*) cap=6 ;;"
+   },
+   {
+    "id": "K8",
+    "claim": "On a date listed in frontier_discovery_budget.reserve_dates the cap is HALVED by integer division, floored at 1 (production-support reserve).",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 127,
+    "quote": "cap=$(( cap / 2 )); [ \"$cap\" -lt 1 ] && cap=1"
+   },
+   {
+    "id": "K9",
+    "claim": "Per-session state is one plain count file under $TMPDIR (default /tmp), keyed on the tool call's session_id, which collapses to the literal 'nosid' when jq is absent or session_id is missing.",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 133,
+    "quote": "${TMPDIR:-/tmp}/frontier-gate-${sid}.count"
+   },
+   {
+    "id": "K10",
+    "claim": "Under the cap the gate increments the SAME single counter (shared by the Agent and session paths) and then allows \u2014 i.e. attempts are charged at PreToolUse time, before the tool runs, and are never refunded.",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 144,
+    "quote": "echo $((cnt + 1)) > \"$cnt_file\""
+   },
+   {
+    "id": "K11",
+    "claim": "At or over the cap the gate refuses: it prints a 'cap reached (cnt/cap)' message to stderr and exits 2 (a hard PreToolUse deny, with no increment on the refused call).",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 136,
+    "quote": "if [ \"$cnt\" -ge \"$cap\" ]; then"
+   },
+   {
+    "id": "K12",
+    "claim": "The session-path refusal text differs deliberately from the Agent-path one: it names the shared budget and tells the caller to re-fire on the default tier with the family alias --model opus, rather than to 're-spawn this agent'.",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 138,
+    "quote": "Agent spawns and frontier session FIRES share one budget"
+   },
+   {
+    "id": "K13",
+    "claim": "The window gate is frontier_access.active == true AND today not lexically greater than frontier_access.end; a shut/expired window exits 2 without counting.",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 117,
+    "quote": "[ \"${active:-}\" = \"true\" ] && [ -n \"${end:-}\" ] && [ ! \"$today\" \\> \"$end\" ]"
+   },
+   {
+    "id": "K14",
+    "claim": "The live cap value in the SSOT is 6 (frontier_discovery_budget.max_fable_spawns_per_session), tightened from 8.",
+    "file": "model-config.yaml",
+    "line": 939,
+    "quote": "max_fable_spawns_per_session: 6"
+   },
+   {
+    "id": "K15",
+    "claim": "reserve_dates is currently the empty string, so the halving branch never fires in production today.",
+    "file": "model-config.yaml",
+    "line": 949,
+    "quote": "reserve_dates: \"\""
+   },
+   {
+    "id": "K16",
+    "claim": "The settings template registers hooks/frontier-spawn-gate.sh ONLY under the PreToolUse \"Agent\" matcher group (timeout 5); the \"Bash\" matcher group does not contain it, so the session-fire arm is inert by default.",
+    "file": "settings-templates/settings.example.json",
+    "line": 160,
+    "quote": "~/.claude/hooks/frontier-spawn-gate.sh"
+   },
+   {
+    "id": "K17",
+    "claim": "migrations/0029-frontier-gate-session-path.sh is the artifact that registers the gate under the PreToolUse Bash matcher, and it is class c10 \u2014 it edits settings.json, so it is STAGED and waits for the operator rather than self-running.",
+    "file": "migrations/0029-frontier-gate-session-path.sh",
+    "line": 2,
+    "quote": "# migration-class: c10"
+   },
+   {
+    "id": "K18",
+    "claim": "Before touching any config the migration re-derives its precondition by grepping the LIVE hook file for frontier_fire_model \u2014 refusing to register a landed-but-not-live no-op rather than trusting a lag counter.",
+    "file": "migrations/0029-frontier-gate-session-path.sh",
+    "line": 78,
+    "quote": "grep -q 'frontier_fire_model' \"$HOOK_FILE\""
+   },
+   {
+    "id": "K19",
+    "claim": "handoff-fire.sh resolves the `--model fable` alias from the same SSOT key the gate reads (frontier_access.model), so alias and full id are the same tier \u2014 and its own comment notes the spawn budget is counted from the command string either way.",
+    "file": "scripts/handoff-fire.sh",
+    "line": 9493,
+    "quote": "fable) MODEL=\"$(_ssot_scalar frontier_access model)\""
+   },
+   {
+    "id": "K20",
+    "claim": "The always-resident operator instructions state that the session arm is landed but LIVE only once migrations/0029 is run, and give the jq one-liner to check the live registration state before claiming the budget is enforced.",
+    "file": "CLAUDE.global.md",
+    "line": 334,
+    "quote": "The session arm is LANDED, and it is LIVE only once"
+   },
+   {
+    "claim": "Brief item 6 asks by name whether any executable reads the CLAUDE.md-named kill switch `CC_LADDER`. Answer: NO executable in the snapshot reads it. `grep -rn CC_LADDER` over the whole tree returns exactly two hits, both prose \u2014 this plan line and CLAUDE.global.md:334 \u2014 and `grep -rln CC_LADDER bin scripts hooks commands skills lib tools` returns nothing. The plan line asserts it is 'read by the fire path', which is a proposal, not an implementation: `grep -n CC_LADDER scripts/handoff-fire.sh` is empty. The key omits this sub-question entirely.",
+    "file": "docs/plans/NONLIMIT_RESUME_LADDER.md",
+    "line": 840,
+    "quote": "1. **`CC_LADDER=off`** \u2014 one env var, read by the fire path, refusing the stage-1\u21922 recycle. The",
+    "id": "M1",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "Largest omitted bypass: with jq absent the SESSION arm counts nothing at all. `.tool_name` cannot be read (:84-86) so `tool_name` stays empty and `path` stays `agent`; the Bash branch is never entered, and the agent-path grep fallback at :104 looks for a JSON `\"model\": \"...\"` pair that a Bash payload does not carry, so :106 exits 0. Measured on the snapshot with a jq-free PATH: `handoff-fire.sh --model claude-fable-5-1` \u2192 rc=0, no counter file written. The Bash-branch guard at :96 is the same fail-open for an unreadable command.",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 96,
+    "quote": "  [ -n \"$cmd\" ] || exit 0",
+    "id": "M2",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "The `nosid` collapse (K9) has an unstated consequence that inverts the gate's unit: without jq every session on the box shares ONE counter file, so the 'per-session' cap becomes a machine-wide cap across concurrent sessions. Measured: two Agent calls with distinct session_ids (K2, K3) under a jq-free PATH both wrote `$TMPDIR/frontier-gate-nosid.count`, which read 2.",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 132,
+    "quote": "  sid=\"${sid:-nosid}\"",
+    "id": "M3",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "K4 states only the benign half of the `--dry-run` arm. It is a glob over the ENTIRE command string, not an argument test, so any occurrence anywhere makes a real fire free. Measured: `handoff-fire.sh --model fable --recycle # --dry-run in the comment` \u2192 rc=0, counter never created. That is an uncounted command shape brief item 6 asks to enumerate.",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 62,
+    "quote": "  case \"$c\" in *--dry-run*) return 1 ;; esac",
+    "id": "M4",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "A second uncounted command shape the key misses: the model extractor's character class excludes quote marks, so the ordinary quoted spelling escapes the gate. `--model[= ]+` must be followed by at least one `[A-Za-z0-9._-]` character; `--model \"claude-fable-5-1\"` presents `\"` and matches nowhere, so frontier_fire_model returns 1 and :97 exits 0. Measured: `handoff-fire.sh --model \\\"claude-fable-5-1\\\" --effort xhigh` \u2192 rc=0, uncounted. The same line is why only a literal `--model` spelling is seen at all (an env-var or launcher-default spelling is deliberately out of scope per the comment at :25-32).",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 75,
+    "quote": "$(printf '%s' \"$c\" | grep -oE -- '--model[= ]+[A-Za-z0-9._-]+' | sed -E 's/^--model[= ]+//')",
+    "id": "M5",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "Brief item 6 asks for every env var that makes the gate not count: `TMPDIR` is one, and the key does not say so. The whole budget is a single unprotected plain-text file under `${TMPDIR:-/tmp}`, so a per-call `TMPDIR=$(mktemp -d)`, an `rm`, or an `echo 0 >` over the file resets the cap; nothing checks the file's provenance, age, or ownership (:134-135 only sanitise it to 0 if non-numeric).",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 133,
+    "quote": "  cnt_file=\"${TMPDIR:-/tmp}/frontier-gate-${sid}.count\"",
+    "id": "M6",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "Brief item 5 asks to compare the closed-window refusal's advice against the SSOT; the key omits the result. Both refusal texts hardcode STALE fallback defaults and disagree with each other: the agent arm defaults to `claude-opus-4-8` and the session arm (:149) to `claude-opus-5`, while model-config.yaml:699 reads `fallback: claude-opus-5-5`. The literal is only reached when `fallback` cannot be parsed \u2014 which is exactly the degraded case, and it was the text actually emitted in the unreadable-SSOT probe above ('\u2192 claude-opus-4-8').",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 151,
+    "quote": "model: \\\"opus\\\" \u2192 ${fallback:-claude-opus-4-8}) and note the degradation in your report.",
+    "id": "M7",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "Stale `path:line` INSIDE the enforcer (brief item 8). The comment cites handoff-fire's `--model` keying at 9303-9311; those lines are `hf_inflight_key()` \u2014 the in-flight-claim directory hashing \u2014 and contain no model logic. The real keying sites are scripts/handoff-fire.sh:9492-9493 (the `fable` alias case) and the `claude-fable-5*` prefix detectors at :9565, :9896, :10023, :10147.",
+    "file": "hooks/frontier-spawn-gate.sh",
+    "line": 27,
+    "quote": "# (scripts/handoff-fire.sh:9303-9311). That file used to ALSO sniff the launcher NAME",
+    "id": "M8",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "Second stale citation, in a sibling hook (brief item 8). Lines 52-63 of the gate are `is_frontier_model`'s case arms and the opening of `frontier_fire_model`; the per-session cap, the hard refusal and the 'Do NOT retry' string live at hooks/frontier-spawn-gate.sh:117-145.",
+    "file": "hooks/agent-teams-enforce.sh",
+    "line": 366,
+    "quote": "# hooks/frontier-spawn-gate.sh:52-63 (per-session cap, hard refusal, \"do NOT retry\"). Attempts",
+    "id": "M9",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "A doc sentence true of the CODE and false of the LIVE WIRING (brief item 8) \u2014 the skill tells the reader the stage-2 lead recycle onto Fable is already bounded, but with migrations/0029 unrun the Bash matcher is unregistered and that fire is uncounted. The gate's own header line 2 ('PreToolUse (Agent + Bash matchers)') has the same defect.",
+    "file": "skills/frontier-routing/SKILL.md",
+    "line": 41,
+    "quote": "   now counts that fire too (hooks/frontier-spawn-gate.sh session arm), so the carve-out",
+    "id": "M10",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "The converse case, also omitted: a plan sentence false of the CODE but still true of the live wiring, telling a reader to treat the budget as advisory. (The same section at :585 cites `~/.claude/settings.json:490-503`, an off-repo line citation no snapshot reader can check.)",
+    "file": "docs/plans/NONLIMIT_RESUME_LADDER.md",
+    "line": 866,
+    "quote": "`hooks/frontier-spawn-gate.sh` counts Agent-tool spawns; **it does not yet see the SESSION path**",
+    "id": "M11",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "Brief item 3 asks for 'the code AND the test that pin' the single shared budget; K10 cites only the code. The pinning test fires one Agent spawn and one session fire under the same session id and asserts the counter reads 2.",
+    "file": "tests/frontier-spawn-gate.bats",
+    "line": 107,
+    "quote": "@test \"8 the two paths share ONE budget \u2014 an agent spawn and a fire both advance the same counter\" {",
+    "id": "M12",
+    "added_by_refuter": true
+   }
+  ]
+ },
+ {
+  "id": "T4-stop-arms",
+  "brief": "Repository snapshot (read-only, pinned sha 47c3317eb): /tmp/o55probe-repo-47c3317eb. Read only files under that path; change nothing.\n\nExplain exhaustively every condition under which `hooks/session-continue.sh` BLOCKS a Stop \u2014 i.e. every path that ends with the hook handing the harness a decision that forces the model to take another turn instead of letting the session go idle. Seeds: `hooks/session-continue.sh` and `hooks/lib/session-writes.sh`, but follow every library, helper and sibling file they source or shell out to.\n\nEnumerate EACH distinct arm (the agent-armed sentinel, the mechanical uncommitted-writes arm, the ship floor, the wake/mail/custody floor, and anything else you find). For each arm give:\n(a) the exact trigger predicate \u2014 what must be true of the session, the working tree, the ledger rung, the mailbox and any dispatched-work state before it can fire;\n(b) the counter/latch/budget that bounds it: which file it is stored in, what that file is keyed on, and EVERY environment variable that tunes it together with the literal default as written in the code;\n(c) how the code decides the work in question belongs to THIS session rather than a sibling sharing the checkout \u2014 name the library file and the function, and say what each of its return codes means and which of them permits a block;\n(d) every exemption, abstain and kill switch that suppresses it \u2014 identity (team assignee), teardown/terminating, headless, live-`/goal`, operator phrasing \u2014 and the single env var that disables the arm outright.\n\nAlso answer, explicitly:\n- In what order are the arms evaluated within one Stop, and under what single condition are they reached at all?\n- How many block payloads can this one hook print in one Stop invocation?\n- Which arm never prints a block of its own yet still causes one, and which bounds it therefore inherits?\n- Does unread peer mail by itself block a Stop? Say via which arm, and what the mail-folding code at the end of the file does and does not do.\n- Name any environment variable for which two code paths in this tree use DIFFERENT literal defaults, and say which path uses which.\n\nGround every claim in CODE, not in comments or docs. This tree's comments and research docs are full of in-file line citations, and many no longer point at what they name \u2014 verify any line number before you repeat it, and flag the stale ones you relied on checking. Cite path:line for every claim, with paths relative to the repo root.",
+  "files_spanned": [
+   "hooks/session-continue.sh",
+   "hooks/lib/session-writes.sh",
+   "hooks/lib/agent-identity.sh",
+   "hooks/lib/goal-state.sh",
+   "hooks/lib/continue-sentinel.sh",
+   "hooks/lib/mailbox-pending.sh",
+   "scripts/wrap-ledger.sh",
+   "hooks/completion-assert.sh",
+   "settings-templates/settings.example.json"
+  ],
+  "traps": [
+   "The mechanical uncommitted-writes arm never emits a block itself: mechanical_arm() WRITES the sentinel file (hooks/session-continue.sh:1070) and returns 0, then control falls through to the shared armed path which emits the block (:1334). A lazy answer calls it a fourth emitter, or misses that it therefore inherits the kill-switch (:1228), SID-BIND (:1246) and the CLAUDE_CONTINUE_MAX cap (:1255) rather than having its own.",
+   "CC_MECH_MAX has TWO different literal defaults inside one file: the reader uses ${CC_MECH_MAX:-2} (:1053) while the `clear` verb writes ${CC_MECH_MAX:-3} into the .mech sidecar (:261) \u2014 and that write is UNCONDITIONAL, so `clear` SPENDS the mechanical budget rather than deleting it (an off switch, not a snooze button).",
+   "All three floors are reachable only when NO sentinel file exists (`if [ ! -f \"$f\" ]` at :1205). A Stop on an already-armed sentinel skips mechanical/ship/wake entirely and goes straight to the kill-switch \u2192 SID-BIND \u2192 cap \u2192 block chain.",
+   "Within the floor branch the arms short-circuit: if mechanical_arm arms (:1207) the ship floor and wake floor are never called on that Stop, and ship_floor blocking (:1208) means wake_floor never runs. At most ONE JSON object is ever printed per Stop invocation.",
+   "The hook's OWN comments carry stale self-citations: :943-945 cites \"ship_floor :969, wake_floor :732-736\" (real kill-switch sites are :1101 and :850), :952-953 cites \":865-869\"/\":587-608\" for the peer exemptions (real: :1103-1109 and :778-785), :724-725 says $_opane is \"captured at :197\" (real: :425), :434 cites mailbox_promote_acked \"(:213)\" (real: :467), :178 cites \":145\" for the .sid write (real: :146), :1327 cites \"precedent at :502\". Docs are worse: docs/research/exhaustive-drive-2026-09-08/A07-caps-and-latches.md:89-90 cites :149/:921 and docs/research/jcode-due-diligence-2026-08-11/coupling-census.md cites :816/:637 for the same two constants. NOT every citation is stale, though \u2014 the \":322-326\" claim that session-continue sits at Stop position 4 and completion-assert at position 6 checks out against settings-templates/settings.example.json:466 and :476, so the discipline is to verify, not to assume rot.",
+   "The three arms do NOT share one exemption policy, and the code says so at :963-966: the mechanical arm and the ship floor exempt a team assignee when agent_team_member_confirms returns 0 (confirmed) OR 2 (cannot tell) (:970, :1105), whereas the wake floor additionally stands down on argv-only evidence and treats rc 1 (REFUTED) as non-exempt (:778-785).",
+   "Unread peer mail does not block by itself through the mail FOLD at :1284-1299 \u2014 that fold only decorates a block that is already happening on the armed path, and it peeks/commits rather than taking (emit-then-commit, :1337-1339). Mail causes a block only through the wake floor's fire predicate (:805).",
+   "The wake floor's custody term is pane-ATTRIBUTED via originatorPane / notifyBack (:748-754), not a bare `cc-custody count --open --cwd` \u2014 a sibling's row in a shared checkout cannot fire it; an unattributable row still counts but the wording hedges (:881-882). The cwd-only count survives only as the no-pane-identity fallback (:762).",
+   "A live /goal does NOT generally suppress the wake floor: it only swaps the instructed command to the `--idle-scoped` form (:827-833), still budgeted, TTL'd and kill-switched. The goal causes an ABSTAIN only in the conjunction goal-live AND pending mail (:697).",
+   "The headless abstain keys on the WRITER's environment \u2014 CC_PANE_ID set AND ITERM_SESSION_ID empty (:656) \u2014 deliberately NOT on an empty pane id nor on the `hdl-` id shape, because cc-pane-headless mints a perfectly ordinary non-empty address that sails past the id-shape guard at :607.",
+   "rc 2 (\"cannot tell\") never buys a block anywhere: the mechanical arm requires session_dirty_mine rc 0 exactly (:1023), and the ship floor treats ANY non-zero from session_unlanded_mine / session_writes_paths as an abstain (:1150-1156), so rc 1 and rc 2 are the same disposition there \u2014 a point the session-writes.sh header calls out at :404-408.",
+   "Hitting the cap does NOT block: at n >= CLAUDE_CONTINUE_MAX the hook deletes the sentinel, prints a systemMessage naming the re-arm lever, and exits 0 (:1258-1267). Likewise the wake-floor budget exhaustion (:836-843) and the ship-floor budget/sha latch (:1172-1178) all ALLOW the stop.",
+   "session-writes.sh names its own coverage residue at :39-44: a file written only through Bash (sed -i, a heredoc, git checkout) is invisible to the transcript oracle, so the mechanical arm silently misses it \u2014 the miss is fail-green, never a false block.",
+   "`clear` refuses a foreign sentinel only when the caller passes --if-mine (:212-217, :235); the bare `clear` still removes whatever is armed in that cwd, and the guard demands POSITIVE proof of ownership, so a caller with --if-mine and no session id is refused too.",
+   "The wake floor has two silent pre-exits that are easy to miss as exemptions: an invalid/absent inbox key (:607) and an already-live watcher, which additionally RESETS the attempt budget by deleting the sidecar (:614) \u2014 compliance clearing the cap is the documented reason the teardown state gate had to exist at all."
+  ],
+  "key": [
+   {
+    "id": "k1",
+    "claim": "The three floors (mechanical arm, ship floor, wake floor) are evaluated only on a Stop where NO continuation sentinel file exists for this cwd; an already-armed sentinel bypasses all of them and goes directly to the kill-switch/SID-BIND/cap chain.",
+    "file": "hooks/session-continue.sh",
+    "line": 1205,
+    "quote": "if [ ! -f \"$f\" ]; then"
+   },
+   {
+    "id": "k2",
+    "claim": "The agent-armed (and mechanically-armed) sentinel path is what actually prints the continuation block: a single-line JSON object carrying decision:\"block\" plus the next-step reason, after which the hook itself exits 0.",
+    "file": "hooks/session-continue.sh",
+    "line": 1334,
+    "quote": "{decision:\"block\",reason:$r}"
+   },
+   {
+    "id": "k3",
+    "claim": "The sentinel loop's hard cap is CLAUDE_CONTINUE_MAX with a literal default of 8, counted in the ${f}.count sidecar; a fresh `set` zeroes that counter, so a compliant re-arming chain never reaches it.",
+    "file": "hooks/session-continue.sh",
+    "line": 1255,
+    "quote": "MAX=\"${CLAUDE_CONTINUE_MAX:-8}\""
+   },
+   {
+    "id": "k4",
+    "claim": "The mechanical arm fires only when scripts/wrap-ledger.sh --machine reports RUNG=\ud83d\udd27; any other rung (including \ud83d\udce6 and \ud83d\ude80, which belong to the ship floor) returns without arming.",
+    "file": "hooks/session-continue.sh",
+    "line": 1017,
+    "quote": "[ \"$rung\" = \"\ud83d\udd27\" ] || return 1"
+   },
+   {
+    "id": "k5",
+    "claim": "The mechanical arm's own budget is CC_MECH_MAX, default 2, read from the ${f}.mech sidecar keyed by session id; it is deliberately not deleted when the sentinel is cleared, so the worst case is CC_MECH_MAX \u00d7 CLAUDE_CONTINUE_MAX forced turns.",
+    "file": "hooks/session-continue.sh",
+    "line": 1053,
+    "quote": "mmax=\"${CC_MECH_MAX:-2}\""
+   },
+   {
+    "id": "k6",
+    "claim": "The `clear` verb unconditionally writes the mechanical budget as spent using a DIFFERENT literal default for the same variable \u2014 ${CC_MECH_MAX:-3} \u2014 so `clear` is an off switch rather than a snooze button, and the two defaults (3 here, 2 in the reader) disagree.",
+    "file": "hooks/session-continue.sh",
+    "line": 261,
+    "quote": "\"${CC_MECH_MAX:-3}\" > \"${f}.mech\""
+   },
+   {
+    "id": "k7",
+    "claim": "The ship floor only proceeds when the ledger rung is \ud83d\udce6 (committed-but-unlanded) or \ud83d\ude80 (landed-but-not-live); every other rung returns silently.",
+    "file": "hooks/session-continue.sh",
+    "line": 1128,
+    "quote": "case \"$rung\" in \"\ud83d\udce6\"|\"\ud83d\ude80\") : ;; *) return 0 ;; esac"
+   },
+   {
+    "id": "k8",
+    "claim": "The ship floor is bounded by CC_SHIP_FLOOR_MAX (default 2) per session plus a one-shot-per-HEAD-sha latch, both stored in the single ${f}.ship sidecar keyed on (sid, sha, count); a different session id resets the count.",
+    "file": "hooks/session-continue.sh",
+    "line": 1162,
+    "quote": "maxs=\"${CC_SHIP_FLOOR_MAX:-2}\""
+   },
+   {
+    "id": "k9",
+    "claim": "For the \ud83d\udce6 rung the ship floor demands positive attribution from session_unlanded_mine (hooks/lib/session-writes.sh); any non-zero rc \u2014 both \"not mine\" (1) and \"cannot tell\" (2) \u2014 logs ship-floor-not-mine and abstains rather than nudging over a sibling's commits.",
+    "file": "hooks/session-continue.sh",
+    "line": 1150,
+    "quote": "session_unlanded_mine \"$TP_MECH\" \"$cwd\" \"$trunk\""
+   },
+   {
+    "id": "k10",
+    "claim": "The wake floor evaluates further only on the FIRST idle of the session (count 0), or any idle with pending inbox mail, or any idle with open dispatched-work (custody) rows attributed to this pane; otherwise a session that already declined once is left alone. [PRECISION NOTE: $cust is NOT 'rows attributed to this pane': hooks/session-continue.sh:758 'cust=$(( cust_mine + cust_unk ))' adds the rows that carry NEITHER originatorPane nor notifyBack (jq 'map(select(known | not)) | length', :753), and the no-pane-id / no-jq fallback at :762-764 sets cust to the bare cwd count ('cust_unk=\"$(\"$_cb\" count --open --cwd \"$cwd\" ...)\"; cust=\"$cust_unk\"'). So UNATTRIBUTABLE custody also re-opens the wake floor; only the message wording hedges (:881-882), not the predicate.]",
+    "file": "hooks/session-continue.sh",
+    "line": 805,
+    "quote": "[ \"$cnt\" -eq 0 ] || [ \"$pend\" -gt 0 ] || [ \"$cust\" -gt 0 ] || return 0",
+    "corrected": true
+   },
+   {
+    "id": "k11",
+    "claim": "The wake floor is bounded by CC_WAKE_FLOOR_MAX attempts per session (default 2), recorded with sid+count+ts in $CC_MAILBOX_DIR/<key>.wakefloor, and re-attempts are damped by CC_WAKE_FLOOR_TTL_S (default 600 s) at :808.",
+    "file": "hooks/session-continue.sh",
+    "line": 807,
+    "quote": "maxa=\"${CC_WAKE_FLOOR_MAX:-2}\""
+   },
+   {
+    "id": "k12",
+    "claim": "One shared kill_switch_active() predicate, built on the KILL_RE regex over the last non-isMeta user transcript record, releases every arm: the mechanical arm (:950), the ship floor (:1101), the wake floor (:850) and the armed sentinel path (:1228).",
+    "file": "hooks/session-continue.sh",
+    "line": 348,
+    "quote": "no[ _-]?auto[ _-]?continue"
+   },
+   {
+    "id": "k13",
+    "claim": "Authorship of uncommitted work is decided by session_dirty_mine in hooks/lib/session-writes.sh \u2014 the intersection of git status porcelain with the Write/Edit/MultiEdit/NotebookEdit paths recorded in this session's transcript \u2014 returning rc 0 mine / 1 none / 2 cannot-tell, and only rc 0 permits the mechanical arm to arm.",
+    "file": "hooks/lib/session-writes.sh",
+    "line": 277,
+    "quote": "session_dirty_mine() {"
+   },
+   {
+    "id": "k14",
+    "claim": "The assignee exemption consulted by all three arms comes from agent_assignee_argv in hooks/lib/agent-identity.sh, which walks this hook's own process ancestry and requires a three-flag conjunction (--agent-id, --agent-name, --team-name) plus cross-field consistency, then is cross-confirmed trichotomously by agent_team_member_confirms against the team config.",
+    "file": "hooks/lib/agent-identity.sh",
+    "line": 53,
+    "quote": "/ --agent-id / && c ~ / --agent-name / && c ~ / --team-name /"
+   },
+   {
+    "claim": "Each arm has its OWN single disable env var, which the key never names even though the brief asks for it per arm: mechanical arm CC_MECH_CONTINUE (default 1, '0' disables), ship floor CC_SHIP_FLOOR (default 1), wake floor CC_WAKE_FLOOR (default 1); additionally CC_WAKE_FLOOR_TEARDOWN (default 1) disables BOTH the assignee and teardown abstains of the wake floor at :776.",
+    "file": "hooks/session-continue.sh",
+    "line": 939,
+    "quote": "  [ \"${CC_MECH_CONTINUE:-1}\" = \"0\" ] && return 1",
+    "id": "M1",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "The brief's 'which arm never prints a block of its own yet still causes one' is the MECHANICAL arm: it only WRITES the sentinel file and returns 0, and the top-level `if ! mechanical_arm` falls through to the armed path, so its block is emitted by the sentinel emitter at :1332/:1334 and it inherits that path's kill-switch (:1228), SID-BIND (:1246) and CLAUDE_CONTINUE_MAX cap (:1255) \u2014 which is exactly why the bound is the product CC_MECH_MAX x CLAUDE_CONTINUE_MAX.",
+    "file": "hooks/session-continue.sh",
+    "line": 1070,
+    "quote": "  printf '%s' \"Commit the ${n_files} file(s) you edited this turn that are still uncommitted: ${shown}.",
+    "id": "M2",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "Exactly ONE block payload can be printed per Stop invocation: the ship floor prints and exits 0, the wake floor prints and exits 0, and the armed/sentinel path is the only other emitter and ends the script \u2014 there is no path on which two JSON objects are written.",
+    "file": "hooks/session-continue.sh",
+    "line": 1211,
+    "quote": "      exit 0      # decision:block travels in the JSON; the hook itself always exits 0",
+    "id": "M3",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "Unread peer mail NEVER creates a block by itself: the mail fold at the end runs only AFTER the no-sentinel branch has exited, i.e. only on an already-armed sentinel Stop, where it PREPENDS the mail to the existing reason and adds a systemMessage; with no sentinel, mail can only re-open the wake floor (:805) whose block demands arming cc-await-ping. The fold also peeks under a drain claim and calls mailbox_commit_seen only after the jq write (:1337-1340), so a lost emit re-shows the mail.",
+    "file": "hooks/session-continue.sh",
+    "line": 1309,
+    "quote": "if [ -n \"$mail\" ]; then",
+    "id": "M4",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "The wake floor carries five abstains the key omits, all placed BEFORE the state-file write so they never spend a budget attempt: already-armed watcher (which also deletes the budget file), a pane id that is not a safe filename component (:607), headless (CC_PANE_ID set while ITERM_SESSION_ID empty, :656), a live /goal WITH pending mail (:697, via goal_live_condition from hooks/lib/goal-state.sh), and the TTL backoff (:845). A live goal with NO pending mail does not abstain \u2014 it swaps the instructed command to `cc-await-ping --idle-scoped --sid` (:829).",
+    "file": "hooks/session-continue.sh",
+    "line": 614,
+    "quote": "  if mailbox_wake_armed \"$_ouid\"; then rm -f \"$sf\" 2>/dev/null; return 0; fi",
+    "id": "M5",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "The ship floor's attribution oracle differs by rung: only \ud83d\udce6 uses session_unlanded_mine; the \ud83d\ude80 branch demands merely that this session wrote SOMETHING (session_writes_paths, rc!=0 => abstain with the same ship-floor-not-mine row), so a \ud83d\ude80 block needs no commit-level attribution at all.",
+    "file": "hooks/session-continue.sh",
+    "line": 1154,
+    "quote": "    session_writes_paths \"$TP_MECH\" >/dev/null 2>&1 || {",
+    "id": "M6",
+    "added_by_refuter": true
+   }
+  ]
+ },
+ {
+  "id": "T5-deploy-live-exec",
+  "brief": "In the read-only repository snapshot at /tmp/o55probe-repo-47c3317eb (pinned sha 47c3317eb), find EVERY site that actually EXECUTES `scripts/deploy-live.sh` \u2014 every line of shell or Python that causes that script to run as a process, whether it names the path literally or reaches it through a variable, an environment-seam default, a fallback assignment, or a generic dispatcher that is handed the path at runtime.\n\nSearch scope: `hooks/` (including `hooks/lib/`), `scripts/` (including `scripts/lib/`), and `bin/`. Ignore `tests/`, `docs/`, `vendor/`, and anything outside those three trees.\n\nWhat does NOT count as a site \u2014 and for each near-miss you reject, say in one line why:\n- a mention inside a comment;\n- a command that only ends up in front of a human: help text, a banner, a page/escalation record, a hook \"reason\" blob, a rendered operator-board row, an advisory string stored in a work item;\n- a grep/lint pattern, a ratchet-table entry, or a test-fixture literal;\n- a bare path assignment that is never invoked;\n- `deploy-live.sh` referring to itself, unless it genuinely re-execs itself as a new process.\n\nFor each execution site, report:\n1. the file path and 1-based line number of the line that performs the invocation;\n2. how the target path is resolved at that line \u2014 name every intermediate variable and give its own path:line, including any default/fallback;\n3. the arguments or flags passed;\n4. whether it runs in the foreground, inside a command substitution, or detached/backgrounded;\n5. what the caller does with the exit status.\n\nThen, separately: (a) state the total number of distinct execution sites in scope; (b) list every near-miss you rejected, with its path:line and the one-line reason; (c) answer whether `scripts/deploy-live.sh` ever re-execs itself, and whether the only unattended/scheduled entry point that runs it lives inside the three scoped trees or outside them.\n\nGround every claim in code you have actually read, never in a comment's summary of other code: this tree's comments cite `file:line` into other files constantly and several of those citations are stale against this snapshot \u2014 verify any you lean on. Cite path:line for every claim.",
+  "files_spanned": [
+   "scripts/deploy-now.sh",
+   "scripts/ship-land.sh",
+   "hooks/operator-readout.sh",
+   "bin/cc-do",
+   "scripts/deploy-live.sh",
+   "hooks/session-continue.sh",
+   "launchd/com.claude.deploy-live.plist"
+  ],
+  "traps": [
+   "Grep noise dominates: `deploy-live` appears ~150 times across hooks/, scripts/ and bin/, and the overwhelming majority are comments or human-facing strings (hooks/activation-watch.sh:471 and :492, hooks/validate-bash.sh:1425 and :1432, hooks/completion-assert.sh:782 and :784, hooks/lib/why-tier.sh:249, scripts/wrap-ledger.sh:2403, scripts/handoff-fire.sh:9153 and :12619, scripts/deploy-parity-assert.sh:1459, scripts/deploy-link-parity.sh:509, scripts/kitty-title-band-deploy.sh:193, bin/cc-blockers:642). The lazy answer reports these as sites.",
+   "One genuine site never contains the string `deploy-live` at all: bin/cc-do:359 (`else bash \"$1\" </dev/null`) inside run_one, reached from run_steps at :389 with the deploy row's `path` field, which bin/cc-do:187 sets to \"$dscript\". A pure grep for the filename misses it entirely \u2014 and cc-do's own comment at :148-149 says the path is kept as its own field precisely so \"execution never has to re-parse `cmd`, i.e. never needs eval\".",
+   "bin/cc-do and hooks/operator-readout.sh are near-clones (cc-do:152 says it mirrors operator-readout \"exactly\"), but they are NOT symmetric on execution: both run the same `--dry-run --offline` probe (cc-do:184, operator-readout:534), yet only cc-do ever runs the platter's rows. operator-readout only renders (printf at :536 and the `dact=\" \u2192 bash scripts/deploy-live.sh\"` at :887). A model reasoning from the mirroring will either drop cc-do:359 or invent an operator-readout runner.",
+   "The printed command and the executed command are different objects in bin/cc-do: field 4 of the emit at :187 is the display string `bash $(tildify \"$dscript\")` (a tilde-abbreviated path that would not even resolve as typed in all contexts), while field 6 \u2014 the last `\"$dscript\"` on that same line \u2014 is the real path run_one execs.",
+   "scripts/deploy-live.sh:708, 728, 731, 734, 743 and 746 all assign `run=\"... bash $DEPLOY_REPO/scripts/deploy-live.sh ...\"`. These look like self-invocation and are not: they are strings written into an escalation page (the `$PAGES_DIR/deploy-refusal-escalation-*.page` block just below). deploy-live.sh contains no `exec` of itself and never re-execs.",
+   "scripts/deploy-live.sh:960 `printf '\"$HOME/.claude/scripts/deploy-live.sh\" --falsify-host'` is a command GENERATOR, not an invocation \u2014 it mints a stored falsifier string that a different tool later runs through `/bin/sh -c`, which is why $HOME is deliberately left unexpanded (the SC2016 disable at :956 says so). The `--falsify-host` verb is handled by deploy-live.sh itself at :337, so this reads like self-execution and is not.",
+   "The only unattended executor is launchd/com.claude.deploy-live.plist:38, which is OUTSIDE the three scoped trees; nothing in hooks/, scripts/ or bin/ does a `launchctl kickstart` on the `com.claude.deploy-live` label. Answers that count the plist as an in-scope site, or that claim a scheduler hook fires it, are wrong.",
+   "scripts/ship-land.sh's converge kick hides the invocation inside a single-quoted `python3 -c` program: the invoking line (:1739) contains neither `deploy-live` nor `bash <path>` in greppable form \u2014 the path arrives as sys.argv[1], handed over on the continuation line :1741, and resolved at :1730. A line-oriented grep attributes this site to :1730, which is assignment only.",
+   "scripts/deploy-now.sh is only 89 lines and its exec is the very last line; its own comment at :69 asserts it \"has NO unattended caller\", which tempts a reader into dismissing it. It is still a real exec site (:89), reached through $DEPLOY_LIVE set at :56 with a `-` (not `:-`) default so a caller may deliberately blank it.",
+   "Stale cross-file citations are live traps here: scripts/ship-land.sh:1703 says \"deploy-live.sh:2543 dies DIVERGED\" but :2543 is `printf '%s\\n' \"$UNTRACKED\"` \u2014 the DIVERGED die is at :2601; scripts/wrap-ledger.sh:1454 cites `merge --ff-only \"$TARGET\"` at scripts/deploy-live.sh:1969, but that call is at :2593. By contrast ship-land.sh:1719's citation of deploy-live.sh:180 (\"no run lock\") IS accurate \u2014 so the citations cannot be dismissed wholesale either; each must be checked.",
+   "Directory-scope edge: scripts/limit-recover/lr-handoff.sh:802 and :829 name the converge command, but that directory is neither the scripts/ top level nor scripts/lib, and both lines are echoed messages regardless."
+  ],
+  "key": [
+   {
+    "id": "S1",
+    "claim": "scripts/deploy-now.sh executes deploy-live.sh by replacing its own process, passing through all of its own arguments.",
+    "file": "scripts/deploy-now.sh",
+    "line": 89,
+    "quote": "exec \"$DEPLOY_LIVE\" \"$@\""
+   },
+   {
+    "id": "S1r",
+    "claim": "The path exec'd by deploy-now.sh is resolved into $DEPLOY_LIVE from the CC_DEPLOY_LIVE seam, defaulting to $REPO/scripts/deploy-live.sh, using `-` rather than `:-` so a deliberately blanked value is honoured.",
+    "file": "scripts/deploy-now.sh",
+    "line": 56,
+    "quote": "DEPLOY_LIVE=\"${CC_DEPLOY_LIVE-$REPO/scripts/deploy-live.sh}\""
+   },
+   {
+    "id": "S2",
+    "claim": "scripts/ship-land.sh executes deploy-live.sh after a successful land by spawning `bash <path>` as a detached child (start_new_session) via an inline python3 program, logging to converge-edge.log.",
+    "file": "scripts/ship-land.sh",
+    "line": 1739,
+    "quote": "subprocess.Popen([\"bash\", sys.argv[1]], cwd=sys.argv[2], env=env,"
+   },
+   {
+    "id": "S2a",
+    "claim": "The deploy-live.sh path reaches that Popen as sys.argv[1]: ship-land.sh passes \"$dl_script\" (plus the repo dir and log path) as arguments to the python3 -c program, and swallows any failure with `|| true`.",
+    "file": "scripts/ship-land.sh",
+    "line": 1741,
+    "quote": "start_new_session=True)' \"$dl_script\" \"$dl_repo\" \"$dl_log\""
+   },
+   {
+    "id": "S2r",
+    "claim": "ship-land.sh resolves $dl_script to $dl_repo/scripts/deploy-live.sh, where $dl_repo is DEPLOY_REPO defaulting to $HOME/Development/claude-infrastructure.",
+    "file": "scripts/ship-land.sh",
+    "line": 1730,
+    "quote": "dl_script=\"$dl_repo/scripts/deploy-live.sh\""
+   },
+   {
+    "id": "S3",
+    "claim": "hooks/operator-readout.sh executes deploy-live.sh as a read-only probe inside a command substitution \u2014 `bash \"$dscript\" --dry-run --offline` with DEPLOY_REPO pinned to the shared checkout \u2014 and branches the rendered row on its exit code.",
+    "file": "hooks/operator-readout.sh",
+    "line": 534,
+    "quote": "dout=\"$(DEPLOY_REPO=\"$SHARED\" bash \"$dscript\" --dry-run --offline 2>&1)\""
+   },
+   {
+    "id": "S3r",
+    "claim": "operator-readout.sh resolves that probe's path from the CC_DEPLOY_SCRIPT seam defaulting to $HOME/.claude/scripts/deploy-live.sh, with a fallback to $SHARED/scripts/deploy-live.sh when that path does not exist.",
+    "file": "hooks/operator-readout.sh",
+    "line": 314,
+    "quote": "DEPLOY_SCRIPT=\"${CC_DEPLOY_SCRIPT:-$HOME/.claude/scripts/deploy-live.sh}\""
+   },
+   {
+    "id": "S4",
+    "claim": "bin/cc-do executes deploy-live.sh as the same `--dry-run --offline` runnability probe inside a command substitution before deciding whether to emit the deploy row as runnable.",
+    "file": "bin/cc-do",
+    "line": 184,
+    "quote": "dout=\"$(DEPLOY_REPO=\"$SHARED\" bash \"$dscript\" --dry-run --offline 2>&1)\""
+   },
+   {
+    "id": "S5",
+    "claim": "bin/cc-do also executes deploy-live.sh for real, through its generic step runner run_one, which invokes `bash \"$1\"` on the step's path field with stdin from /dev/null; a non-zero exit from the deploy class is downgraded to SKIPPED rather than halting the run.",
+    "file": "bin/cc-do",
+    "line": 359,
+    "quote": "else bash \"$1\" </dev/null; rc=$?; fi"
+   },
+   {
+    "id": "S5r",
+    "claim": "The path that run_one executes for the deploy step is \"$dscript\" \u2014 the last argument of cc-do's emit call, i.e. the emit's 6th field, documented as \"the script to exec\" kept separate so execution never needs eval.",
+    "file": "bin/cc-do",
+    "line": 187,
+    "quote": "\"live layer $behind behind origin/$sbr\" \"$dscript\""
+   },
+   {
+    "id": "N1",
+    "claim": "NOT a site: scripts/deploy-live.sh's `run=` assignments (and its siblings at 728, 731, 734, 743, 746) build advisory command strings written into an escalation page, so deploy-live.sh never re-execs itself.",
+    "file": "scripts/deploy-live.sh",
+    "line": 708,
+    "quote": "run=\"CC_DEPLOY_SCAN=$(( depth + 50 )) bash $DEPLOY_REPO/scripts/deploy-live.sh --dry-run --offline\" ;;"
+   },
+   {
+    "id": "N2",
+    "claim": "NOT a site: scripts/deploy-live.sh printf-mints a STORED falsifier string naming itself with --falsify-host, deliberately leaving $HOME unexpanded because a different tool runs the string later through /bin/sh -c.",
+    "file": "scripts/deploy-live.sh",
+    "line": 960,
+    "quote": "printf '\"$HOME/.claude/scripts/deploy-live.sh\" --falsify-host'"
+   },
+   {
+    "id": "N3",
+    "claim": "NOT a site: hooks/session-continue.sh's converge command sits inside the ship-floor block `reason` text that is fed back to the model/operator, with the `$` escaped so it is never expanded or run.",
+    "file": "hooks/session-continue.sh",
+    "line": 1191,
+    "quote": "bash \\$(git rev-parse --show-toplevel)/scripts/deploy-live.sh"
+   },
+   {
+    "id": "N4",
+    "claim": "CORRECTED: The plist quote and its fallback logic are verbatim correct, but the exclusivity claim is false and it is exactly what brief question (c) turns on. A SECOND scheduled/unattended path reaches deploy-live.sh and it lives INSIDE the scoped trees: launchd com.chrisren.autonomy-sweep (StartInterval 300) runs scripts/autonomy-sweep.sh, which every CC_PREMISE_PASS_EVERY_S=21600 seconds runs `_bounded python3 \"$_premise\" sweep --json --record --limit ... --close-falsified ...` (scripts/autonomy-sweep.sh:1488, $_premise resolved at :1427 to <repo>/bin/cc-premise), and cc-premise executes each row's STORED falsifier through `[\"/bin/sh\", \"-c\", cmd]` (bin/cc-premise:1392) \u2014 which for the rows deploy-live.sh itself files is `\"$HOME/.claude/scripts/deploy-live.sh\" --falsify-host <suites>`. Correct claim: the only scheduled entry point that runs deploy-live.sh DIRECTLY is the launchd job outside the scope; a second, indirect scheduled executor sits inside it.",
+    "file": "launchd/com.claude.deploy-live.plist",
+    "line": 38,
+    "quote": "exec \"$D\" --auto",
+    "corrected": true
+   },
+   {
+    "claim": "MISSING EXECUTION SITE (6th): bin/cc-premise executes deploy-live.sh through a generic /bin/sh -c dispatcher handed the path at runtime \u2014 exactly the case the brief calls out. `cmd` comes from ent[\"falsifier\"] (bin/cc-premise:1387), folded from the backlog store, whose value for deploy-live's own rows is minted by fals_host at scripts/deploy-live.sh:960 and stored via `\"$BACKLOG_BIN\" add --falsifier \"$(fals_host \"$1\")\"` at scripts/deploy-live.sh:1046 and `--falsifier \"$(fals_host_set \"$red\")\"` at :1261. It runs in the FOREGROUND with capture_output=True, FALSIFIER_TIMEOUT_S, cwd=REPO; exit 0 is read as 'falsified' and instructs/performs closing the backlog row (:1402-1410), non-zero is read as 'not refuted'. The key's own N2 names this consumer ('a different tool runs the string later through /bin/sh -c') and never lists it as a site, so the answer's site total of 5 should be 6.",
+    "file": "bin/cc-premise",
+    "line": 1392,
+    "quote": "            [\"/bin/sh\", \"-c\", cmd],",
+    "id": "M1",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "UNADJUDICATED SECOND DISPATCHER in a file the key already names: cc-do's run_backlog_row executes a blocked backlog row's stored `.run` string (bin/cc-do:415) via `bash -c` after a typed `yes`, and the repo's own emitter renders exactly such a deploy-live command string (bin/cc-blockers:642: recover_cmd \"bash %s/.claude/scripts/deploy-live.sh ; tail -20 %s/deploy.log\"). A complete answer must either count it or reject it explicitly as data-dependent \u2014 the key does neither, while it does count the sibling dispatcher run_one at bin/cc-do:359.",
+    "file": "bin/cc-do",
+    "line": 454,
+    "quote": "  bash -c \"$cmd\" </dev/null; rc=$?",
+    "id": "M2",
+    "added_by_refuter": true
+   },
+   {
+    "claim": "NEAR-MISS LIST IS MATERIALLY INCOMPLETE against brief part (b), which asks for EVERY rejected near-miss. Non-comment occurrences in scope that the key never adjudicates include hooks/activation-watch.sh:471 and :492 (hook advisory blobs), hooks/completion-assert.sh:782 and :784 (facts string), hooks/validate-bash.sh:1425 and :1432 (deny text), hooks/lib/why-tier.sh:249 (help text), hooks/operator-readout.sh:536/:887, scripts/wrap-ledger.sh:2068 and :2403 (rendered readout), bin/cc-blockers:642 (recover_cmd), scripts/handoff-fire.sh:9153 and :12619, scripts/deploy-parity-assert.sh:1459, scripts/deploy-link-parity.sh:509, scripts/limit-recover/lr-handoff.sh:802 and :829, scripts/kitty-title-band-deploy.sh:193, bin/cc-eligible:169 and bin/cc-reaper:878 (regex patterns), scripts/permission-gate-lint.sh:169 (ratchet-table entry) plus its fixtures at :563/:589/:720-722/:745-747, and bin/cc-do:196-198 (the \u2298 emit, which stores $dscript in the same path field but is never executed because run_steps keys on \u25b6 at bin/cc-do:386).",
+    "file": "scripts/permission-gate-lint.sh",
+    "line": 169,
+    "quote": "scripts/deploy-live.sh 8",
+    "id": "M3",
+    "added_by_refuter": true
+   }
+  ]
+ },
+ {
+  "id": "T6-choose",
+  "brief": "Repository: a frozen, read-only snapshot of `claude-infrastructure` pinned at sha 47c3317eb, mounted at /tmp/o55probe-repo-47c3317eb. Read only files under that path; change nothing.\n\nTASK \u2014 find every site: enumerate EVERY Stop-blocking hook decision emitted by the top-level hooks tree.\n\nScope: files matching `hooks/*.sh` and `hooks/*.py` only. Exclude `hooks/lib/` and `hooks/tests/` entirely.\n\nA site qualifies only if ALL THREE hold:\n (a) the line sits on a RUNTIME code path that writes to stdout \u2014 not a comment, not a file-header sentence, not a doc line, not a string used only for comparison, and not a fixture inside a self-test function;\n (b) the JSON object written has a TOP-LEVEL field `decision` whose value is `\"block\"`;\n (c) that same printed object does NOT declare itself a PostToolUse payload \u2014 i.e. it does not set `hookSpecificOutput.hookEventName` to `\"PostToolUse\"`.\n\nDeliver:\n 1. The exhaustive list of qualifying sites, one per line, as `path:line`, each with a short note on where in the file it sits (top level, or the name of the enclosing shell function). The site list IS the answer \u2014 a missed site and an invented site both count against you.\n 2. Which in-scope file(s) write a `decision:\"block\"` object that fails test (c)? Name the file, cite one such emission line, say how many such emissions it has, and cite the code or header line that proves which hook event it actually runs on.\n 3. Which in-scope file carries the most qualifying sites, and exactly how many?\n 4. For each file that carries at least one qualifying site: is that file registered under the `Stop` array of `settings-templates/settings.example.json`? Name every one that is NOT, and for each cite where in this repository its Stop registration actually lives.\n 5. Inside or immediately adjacent to the qualifying emission code, flag any in-code line citation (a `:NNN`-style pointer written in a comment) that no longer points at what it claims. Cite both the citing line and what actually sits at the line it cites.\n\nGround every claim in CODE, not in prose. Comments, headers, READMEs and docs in this repo frequently describe emissions that are not there and cite line numbers that have drifted \u2014 where a comment or doc asserts a line number or a behaviour, open the line and check it. Cite `path:line` (paths relative to the repository root) for every claim you make.",
+  "files_spanned": [
+   "hooks/anti-deference-nudge.sh",
+   "hooks/boundary-handoff.sh",
+   "hooks/completion-assert.sh",
+   "hooks/dispatch-assert.sh",
+   "hooks/handoff-claim-assert.sh",
+   "hooks/session-continue.sh",
+   "hooks/waiting-recycle.sh",
+   "settings-templates/settings.example.json",
+   "migrations/0027-handoff-claim-registration.sh",
+   "docs/activation/pending-activation/11-dispatch-assert-activate.sh"
+  ],
+  "traps": [
+   "COMMENTS VASTLY OUTNUMBER EMISSIONS. A bare `grep -rn 'decision.*block' hooks/` returns ~30 hits, of which only 18 are emissions and only 10 qualify. Pure-comment mentions that must NOT be listed: anti-deference-nudge.sh:44; completion-assert.sh:89 and :817; boundary-handoff.sh:21 and :31; dispatch-assert.sh:35 and :42; handoff-claim-assert.sh:17; session-continue.sh:46, :66, :316, :404, :1211, :1278, :1281, :1326; waiting-recycle.sh:67 and :123; enforce-email-formatting.py:229.",
+   "THREE FILES SAY 'decision:\\\"block\\\"' ONLY TO DISCLAIM IT. hooks/operator-readout.sh:12 and hooks/goal-inert-watch.sh:113 both say 'NEVER {decision:\\\"block\\\"}' (they are pure-advisory systemMessage hooks), and hooks/subagent-stop.sh:40 warns that a block here would be harmful. All three are Stop-family hooks, so a grep filtered to 'Stop hooks' still catches them. None emits anything; none belongs in the list.",
+   "WAITING-RECYCLE IS THE BIG FALSE POSITIVE. hooks/waiting-recycle.sh has EIGHT real decision:\\\"block\\\" emissions (1112, 1321, 1352, 1493, 1498, 1520, 1552, 1592) \u2014 nearly half of all emissions in the tree \u2014 but every one of them tags hookSpecificOutput.hookEventName:\\\"PostToolUse\\\" in the same jq expression, and the file's own header (waiting-recycle.sh:17) says it fires on 'PostToolUse:Bash'. settings-templates/settings.example.json registers it under PostToolUse|Bash, never under Stop. Including these sites roughly doubles the list and is wrong.",
+   "THE SETTINGS TEMPLATE IS AN INCOMPLETE ORACLE FOR 'IS THIS A STOP HOOK'. settings-templates/settings.example.json's Stop array (line 445 onward) lists only notify.sh, cache-expiry-tracker.sh, teammate-checkpoint.sh, session-continue.sh, anti-deference-nudge.sh, completion-assert.sh, operator-readout.sh, session-beat.sh and boundary-handoff.sh. hooks/dispatch-assert.sh and hooks/handoff-claim-assert.sh appear in NO .json file anywhere in the repo, yet both declare themselves Stop hooks on their own line 2 and both emit qualifying blocks. A worker who keys 'Stop hook' on the settings template drops 3 of the 10 sites (dispatch-assert:225, dispatch-assert:258, handoff-claim-assert:127). Their Stop registration lives in staged scripts instead: migrations/0027-handoff-claim-registration.sh and docs/activation/pending-activation/11-dispatch-assert-activate.sh.",
+   "SESSION-CONTINUE HAS FOUR EMISSIONS, NOT ONE, AND TWO ARE BURIED IN FUNCTIONS. :893 sits inside wake_floor() and its jq command starts on the PRECEDING line (892) with a backslash continuation, so the JSON literal is alone on :893; :1197 sits inside ship_floor(); :1332 and :1334 are the two arms of a top-level if/else on `$_sysmsg`. Reporting only the last one, or only the top-level pair, under-counts the file. session-continue.sh also has six systemMessage-only emitters (660, 700, 793, 840, 851, 1264) that must NOT be listed \u2014 they carry no `decision` field.",
+   "STALE IN-CODE LINE CITATION. hooks/session-continue.sh:1327 justifies riding systemMessage alongside the block with 'a universal top-level field, precedent at :502'. Line 502 of that file is unrelated prose about TERMINATING teardown markers and contains no systemMessage at all; the nearest real systemMessage-only emitters are :660/:700/:793/:840/:851/:1264. The citation has drifted and cannot be taken on trust.",
+   "DISPATCH-ASSERT HAS TWO SITES ON DIFFERENT PATHS. :225 is the re-check/undischarged-obligation arm inside an `if` block; :258 is the fresh-fire arm at top level. They are byte-identical lines, so a de-duplicating reader can easily collapse them into one.",
+   "ADJACENT-LOOKING NON-QUALIFIERS IN THE SAME TREE. hooks/hook-chain.sh:157-159 and :280-282 contain literal permissionDecision JSON, but as a precedence comparator and as self-test fixtures, and they are permissionDecision (PreToolUse), never a top-level `decision`. hooks/validate-bash.sh:8 says 'Exit 2 for blocking errors' and hooks/frontier-spawn-gate.sh:142/:153 refuse with a bare `exit 2` \u2014 a real block, but not a JSON `decision` field, so neither qualifies under (b).",
+   "hooks/lib/ and hooks/tests/ are excluded by the brief but do mention the string: hooks/lib/session-writes.sh:158 and hooks/lib/continue-sentinel.sh:8. Both are comments and both are out of scope twice over."
+  ],
+  "key": [
+   {
+    "id": "S1",
+    "claim": "hooks/anti-deference-nudge.sh emits a qualifying Stop-blocking decision at top level, line 527 (the file's only emission).",
+    "file": "hooks/anti-deference-nudge.sh",
+    "line": 527,
+    "quote": "jq -nc --arg r \"$reason\" '{decision:\"block\",reason:$r}'"
+   },
+   {
+    "id": "S2",
+    "claim": "hooks/boundary-handoff.sh emits a qualifying Stop-blocking decision at top level, line 723, carrying systemMessage alongside the block (the file's only emission).",
+    "file": "hooks/boundary-handoff.sh",
+    "line": 723,
+    "quote": "'{decision:\"block\",reason:$r,systemMessage:$r}'"
+   },
+   {
+    "id": "S3",
+    "claim": "hooks/completion-assert.sh emits a qualifying Stop-blocking decision at top level, line 1286 (the file's only emission, despite two comment mentions at :89 and :817).",
+    "file": "hooks/completion-assert.sh",
+    "line": 1286,
+    "quote": "jq -nc --arg r \"$reason\" '{decision:\"block\",reason:$r}'"
+   },
+   {
+    "id": "S4",
+    "claim": "hooks/dispatch-assert.sh emits a qualifying Stop-blocking decision at line 225 \u2014 the undischarged-obligation re-check arm, inside an if block.",
+    "file": "hooks/dispatch-assert.sh",
+    "line": 225,
+    "quote": "jq -nc --arg r \"$reason\" '{decision:\"block\",reason:$r}'"
+   },
+   {
+    "id": "S5",
+    "claim": "hooks/dispatch-assert.sh emits a SECOND qualifying Stop-blocking decision at line 258 \u2014 the fresh narrated-not-dispatched fire arm, at top level.",
+    "file": "hooks/dispatch-assert.sh",
+    "line": 258,
+    "quote": "jq -nc --arg r \"$reason\" '{decision:\"block\",reason:$r}'"
+   },
+   {
+    "id": "S6",
+    "claim": "hooks/handoff-claim-assert.sh emits a qualifying Stop-blocking decision at top level, line 127 (the file's only emission).",
+    "file": "hooks/handoff-claim-assert.sh",
+    "line": 127,
+    "quote": "jq -nc --arg r \"$reason\" '{decision:\"block\",reason:$r}'"
+   },
+   {
+    "id": "S7",
+    "claim": "hooks/session-continue.sh emits a qualifying Stop-blocking decision at line 893, inside the wake_floor() function; the jq invocation begins on line 892 with a backslash continuation.",
+    "file": "hooks/session-continue.sh",
+    "line": 893,
+    "quote": "'{decision:\"block\",reason:$r,systemMessage:$m}'"
+   },
+   {
+    "id": "S8",
+    "claim": "hooks/session-continue.sh emits a qualifying Stop-blocking decision at line 1197, inside the ship_floor() function.",
+    "file": "hooks/session-continue.sh",
+    "line": 1197,
+    "quote": "jq -nc --arg r \"$reason\" '{decision:\"block\",reason:$r}'"
+   },
+   {
+    "id": "S9",
+    "claim": "hooks/session-continue.sh emits a qualifying Stop-blocking decision at line 1332 \u2014 the top-level continuation arm taken when a mail systemMessage is present.",
+    "file": "hooks/session-continue.sh",
+    "line": 1332,
+    "quote": "'{decision:\"block\",reason:$r,systemMessage:$s}' && _emitted=1"
+   },
+   {
+    "id": "S10",
+    "claim": "hooks/session-continue.sh emits a qualifying Stop-blocking decision at line 1334 \u2014 the else arm of the same top-level if, taken when there is no systemMessage; session-continue.sh therefore carries 4 qualifying sites, more than any other in-scope file.",
+    "file": "hooks/session-continue.sh",
+    "line": 1334,
+    "quote": "'{decision:\"block\",reason:$r}' && _emitted=1"
+   },
+   {
+    "id": "T1",
+    "claim": "hooks/waiting-recycle.sh is the disqualified near-miss: it writes decision:\"block\" eight times (1112, 1321, 1352, 1493, 1498, 1520, 1552, 1592) but each object sets hookSpecificOutput.hookEventName to \"PostToolUse\", so none qualifies under test (c).",
+    "file": "hooks/waiting-recycle.sh",
+    "line": 1112,
+    "quote": "hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:$a}"
+   },
+   {
+    "id": "T2",
+    "claim": "hooks/waiting-recycle.sh's own header states it fires on the PostToolUse:Bash event rather than on Stop, and settings-templates/settings.example.json registers it under PostToolUse|Bash accordingly.",
+    "file": "hooks/waiting-recycle.sh",
+    "line": 17,
+    "quote": "MONITORING CADENCE \u2014 PostToolUse:Bash"
+   },
+   {
+    "id": "T3",
+    "claim": "hooks/dispatch-assert.sh declares itself a Stop hook in its own header yet appears in no JSON file in the repository \u2014 it is absent from settings-templates/settings.example.json's Stop array and is wired only by the staged activation script docs/activation/pending-activation/11-dispatch-assert-activate.sh (which appends it to .hooks.Stop[0].hooks).",
+    "file": "hooks/dispatch-assert.sh",
+    "line": 2,
+    "quote": "dispatch-assert.sh \u2014 Stop hook"
+   },
+   {
+    "id": "T4",
+    "claim": "hooks/handoff-claim-assert.sh likewise declares itself a Stop hook but is absent from settings-templates/settings.example.json; its Stop registration lives in migrations/0027-handoff-claim-registration.sh, whose migration-verify asserts the command is present in .hooks.Stop.",
+    "file": "migrations/0027-handoff-claim-registration.sh",
+    "line": 6,
+    "quote": "[.hooks.Stop[].hooks[]? | select(.command == \"~/.claude/hooks/handoff-claim-assert.sh\")]"
+   },
+   {
+    "id": "T5",
+    "claim": "The comment justifying the systemMessage-beside-block shape in session-continue.sh carries a stale in-code citation: it cites ':502' as precedent, but line 502 of that same file is unrelated prose about TERMINATING teardown markers and contains no systemMessage (the real systemMessage-only emitters are at 660, 700, 793, 840, 851 and 1264).",
+    "file": "hooks/session-continue.sh",
+    "line": 1327,
+    "quote": "a universal top-level field, precedent at :502"
+   }
+  ]
+ }
+]

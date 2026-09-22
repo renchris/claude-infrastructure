@@ -1,0 +1,547 @@
+{
+ "arm:T1-custody:A": {
+  "agentId": "a9013b411b6912e34",
+  "cache_creation": 205670,
+  "cache_read": 3774695,
+  "input": 50,
+  "models": [
+   "claude-sonnet-5"
+  ],
+  "output": 29349,
+  "tools": {
+   "Bash": 12,
+   "Glob": 1,
+   "Grep": 1,
+   "Read": 12
+  },
+  "turns": 25
+ },
+ "arm:T1-custody:B": {
+  "agentId": "a00a93fe6a162d128",
+  "cache_creation": 342955,
+  "cache_read": 5281541,
+  "input": 50,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 23366,
+  "tools": {
+   "Read": 25
+  },
+  "turns": 25
+ },
+ "arm:T1-custody:C": {
+  "agentId": "a6c22fe61d7c95bd1",
+  "cache_creation": 396158,
+  "cache_read": 4915605,
+  "input": 48,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 52068,
+  "tools": {
+   "Read": 26
+  },
+  "turns": 24
+ },
+ "arm:T2-recycle-goal:A": {
+  "agentId": "a0d0074c3af1b3f33",
+  "cache_creation": 176310,
+  "cache_read": 1540114,
+  "input": 24,
+  "models": [
+   "claude-sonnet-5"
+  ],
+  "output": 32009,
+  "tools": {
+   "Bash": 12,
+   "Grep": 2,
+   "Read": 11,
+   "ToolSearch": 1
+  },
+  "turns": 12
+ },
+ "arm:T2-recycle-goal:B": {
+  "agentId": "a7554fcc96ca6cc62",
+  "cache_creation": 350342,
+  "cache_read": 4146139,
+  "input": 40,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 24119,
+  "tools": {
+   "Read": 20
+  },
+  "turns": 20
+ },
+ "arm:T2-recycle-goal:C": {
+  "agentId": "ab83cdfe72d2ac385",
+  "cache_creation": 424602,
+  "cache_read": 5367123,
+  "input": 46,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 47513,
+  "tools": {
+   "Read": 23
+  },
+  "turns": 23
+ },
+ "arm:T3-frontier-budget:A": {
+  "agentId": "aed11f75449c78b41",
+  "cache_creation": 173520,
+  "cache_read": 3378489,
+  "input": 52,
+  "models": [
+   "claude-sonnet-5"
+  ],
+  "output": 43190,
+  "tools": {
+   "Bash": 14,
+   "Glob": 2,
+   "Read": 9,
+   "ToolSearch": 1
+  },
+  "turns": 26
+ },
+ "arm:T3-frontier-budget:B": {
+  "agentId": "a2b601efc856490b7",
+  "cache_creation": 213977,
+  "cache_read": 2704101,
+  "input": 32,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 19431,
+  "tools": {
+   "Read": 24
+  },
+  "turns": 16
+ },
+ "arm:T3-frontier-budget:C": {
+  "agentId": "a14bcbc40b4534bc9",
+  "cache_creation": 230110,
+  "cache_read": 4940735,
+  "input": 54,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 37634,
+  "tools": {
+   "Read": 26
+  },
+  "turns": 27
+ },
+ "arm:T4-stop-arms:A": {
+  "agentId": "a16e81b735548d2f4",
+  "cache_creation": 242745,
+  "cache_read": 4247268,
+  "input": 44,
+  "models": [
+   "claude-sonnet-5"
+  ],
+  "output": 57459,
+  "tools": {
+   "Bash": 1,
+   "Read": 19,
+   "ToolSearch": 1
+  },
+  "turns": 22
+ },
+ "arm:T4-stop-arms:B": {
+  "agentId": "a9d4e39115db6e998",
+  "cache_creation": 229162,
+  "cache_read": 3087524,
+  "input": 36,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 22872,
+  "tools": {
+   "Read": 18
+  },
+  "turns": 18
+ },
+ "arm:T4-stop-arms:C": {
+  "agentId": "af1603417f95fd00a",
+  "cache_creation": 285161,
+  "cache_read": 2707249,
+  "input": 28,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 49775,
+  "tools": {
+   "Read": 20
+  },
+  "turns": 14
+ },
+ "arm:T5-deploy-live-exec:A": {
+  "agentId": "a04b27be605bf1308",
+  "cache_creation": 210521,
+  "cache_read": 1825569,
+  "input": 26,
+  "models": [
+   "claude-sonnet-5"
+  ],
+  "output": 24719,
+  "tools": {
+   "Bash": 6,
+   "Grep": 3,
+   "Read": 15,
+   "ToolSearch": 1
+  },
+  "turns": 13
+ },
+ "arm:T5-deploy-live-exec:B": {
+  "agentId": "a4b4c0b436388f1f7",
+  "cache_creation": 286674,
+  "cache_read": 4153518,
+  "input": 44,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 16656,
+  "tools": {
+   "Read": 20,
+   "ToolSearch": 1
+  },
+  "turns": 22
+ },
+ "arm:T5-deploy-live-exec:C": {
+  "agentId": "a78c4b7f063d009be",
+  "cache_creation": 385904,
+  "cache_read": 4814946,
+  "input": 40,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 37515,
+  "tools": {
+   "Read": 25,
+   "ToolSearch": 1
+  },
+  "turns": 20
+ },
+ "arm:T6-choose:A": {
+  "agentId": "a393c3d60c70361cd",
+  "cache_creation": 244021,
+  "cache_read": 2875087,
+  "input": 34,
+  "models": [
+   "claude-sonnet-5"
+  ],
+  "output": 20782,
+  "tools": {
+   "Bash": 12,
+   "Read": 3,
+   "ToolSearch": 1
+  },
+  "turns": 17
+ },
+ "arm:T6-choose:B": {
+  "agentId": "ad1bea94e9fa58869",
+  "cache_creation": 373189,
+  "cache_read": 6559513,
+  "input": 50,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 17488,
+  "tools": {
+   "Read": 24
+  },
+  "turns": 25
+ },
+ "arm:T6-choose:C": {
+  "agentId": "aceb2e226eed17c00",
+  "cache_creation": 446253,
+  "cache_read": 2125425,
+  "input": 18,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 29730,
+  "tools": {
+   "Read": 25
+  },
+  "turns": 9
+ },
+ "judge:T1-custody:J0": {
+  "agentId": "a9a6feb45ea2891fe",
+  "cache_creation": 224646,
+  "cache_read": 1489201,
+  "input": 290,
+  "models": [
+   "claude-fable-5-1"
+  ],
+  "output": 6765,
+  "tools": {
+   "Bash": 7,
+   "Read": 2,
+   "StructuredOutput": 1
+  },
+  "turns": 10
+ },
+ "judge:T1-custody:J1": {
+  "agentId": "a63152e8d756e3f0e",
+  "cache_creation": 261046,
+  "cache_read": 7819707,
+  "input": 80,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 11626,
+  "tools": {
+   "Bash": 39,
+   "StructuredOutput": 1
+  },
+  "turns": 40
+ },
+ "judge:T1-custody:J2": {
+  "agentId": "a5cf0e3805ee843c5",
+  "cache_creation": 248334,
+  "cache_read": 7842534,
+  "input": 82,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 12357,
+  "tools": {
+   "Bash": 40,
+   "StructuredOutput": 1
+  },
+  "turns": 41
+ },
+ "judge:T2-recycle-goal:J0": {
+  "agentId": "adb7684e96406ac98",
+  "cache_creation": 218586,
+  "cache_read": 5496456,
+  "input": 62,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 11341,
+  "tools": {
+   "Bash": 30,
+   "StructuredOutput": 1
+  },
+  "turns": 31
+ },
+ "judge:T2-recycle-goal:J1": {
+  "agentId": "a1abb62769311d328",
+  "cache_creation": 170796,
+  "cache_read": 1072209,
+  "input": 226,
+  "models": [
+   "claude-fable-5-1"
+  ],
+  "output": 5490,
+  "tools": {
+   "Bash": 7,
+   "StructuredOutput": 1
+  },
+  "turns": 8
+ },
+ "judge:T2-recycle-goal:J2": {
+  "agentId": "a402daa7480ffbd79",
+  "cache_creation": 224352,
+  "cache_read": 5986377,
+  "input": 68,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 6039,
+  "tools": {
+   "Bash": 33,
+   "StructuredOutput": 1
+  },
+  "turns": 34
+ },
+ "judge:T3-frontier-budget:J0": {
+  "agentId": "aeb7cb4698c3fc7d0",
+  "cache_creation": 224566,
+  "cache_read": 5002282,
+  "input": 58,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 5455,
+  "tools": {
+   "Bash": 28,
+   "StructuredOutput": 1
+  },
+  "turns": 29
+ },
+ "judge:T3-frontier-budget:J1": {
+  "agentId": "aeaa38e32db3b3dd9",
+  "cache_creation": 216701,
+  "cache_read": 3033484,
+  "input": 36,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 5945,
+  "tools": {
+   "Bash": 17,
+   "StructuredOutput": 1
+  },
+  "turns": 18
+ },
+ "judge:T3-frontier-budget:J2": {
+  "agentId": "afa452a8043069d50",
+  "cache_creation": 164905,
+  "cache_read": 770774,
+  "input": 162,
+  "models": [
+   "claude-fable-5-1"
+  ],
+  "output": 5974,
+  "tools": {
+   "Bash": 12,
+   "Read": 2,
+   "StructuredOutput": 1
+  },
+  "turns": 6
+ },
+ "judge:T4-stop-arms:J0": {
+  "agentId": "a273387c33b532610",
+  "cache_creation": 212298,
+  "cache_read": 2276088,
+  "input": 418,
+  "models": [
+   "claude-fable-5-1"
+  ],
+  "output": 8767,
+  "tools": {
+   "Bash": 13,
+   "StructuredOutput": 1
+  },
+  "turns": 14
+ },
+ "judge:T4-stop-arms:J1": {
+  "agentId": "a22ec30e7f4fbb60a",
+  "cache_creation": 255007,
+  "cache_read": 6686610,
+  "input": 66,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 7662,
+  "tools": {
+   "Bash": 32,
+   "StructuredOutput": 1
+  },
+  "turns": 33
+ },
+ "judge:T4-stop-arms:J2": {
+  "agentId": "af12683fe602766f0",
+  "cache_creation": 269537,
+  "cache_read": 7707397,
+  "input": 74,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 5779,
+  "tools": {
+   "Bash": 36,
+   "StructuredOutput": 1
+  },
+  "turns": 37
+ },
+ "judge:T5-deploy-live-exec:J0": {
+  "agentId": "a7addb93d61693604",
+  "cache_creation": 201391,
+  "cache_read": 4927574,
+  "input": 62,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 6971,
+  "tools": {
+   "Bash": 29,
+   "Read": 2,
+   "StructuredOutput": 1
+  },
+  "turns": 31
+ },
+ "judge:T5-deploy-live-exec:J1": {
+  "agentId": "a5dd0756f31ca6d55",
+  "cache_creation": 158231,
+  "cache_read": 1166982,
+  "input": 258,
+  "models": [
+   "claude-fable-5-1"
+  ],
+  "output": 7776,
+  "tools": {
+   "Bash": 8,
+   "StructuredOutput": 1
+  },
+  "turns": 9
+ },
+ "judge:T5-deploy-live-exec:J2": {
+  "agentId": "a1c9bf51b6c88b636",
+  "cache_creation": 189883,
+  "cache_read": 3911205,
+  "input": 50,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 5543,
+  "tools": {
+   "Bash": 26,
+   "StructuredOutput": 1
+  },
+  "turns": 25
+ },
+ "judge:T6-choose:J0": {
+  "agentId": "a789400d14a6574f5",
+  "cache_creation": 185010,
+  "cache_read": 3026775,
+  "input": 40,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 8510,
+  "tools": {
+   "Bash": 30,
+   "Read": 2,
+   "StructuredOutput": 1
+  },
+  "turns": 20
+ },
+ "judge:T6-choose:J1": {
+  "agentId": "a1134626fcb942501",
+  "cache_creation": 182499,
+  "cache_read": 4282517,
+  "input": 56,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 10142,
+  "tools": {
+   "Bash": 26,
+   "Read": 2,
+   "StructuredOutput": 1
+  },
+  "turns": 28
+ },
+ "judge:T6-choose:J2": {
+  "agentId": "a9419aa404faf4c61",
+  "cache_creation": 161094,
+  "cache_read": 1755437,
+  "input": 386,
+  "models": [
+   "claude-fable-5-1"
+  ],
+  "output": 4285,
+  "tools": {
+   "Bash": 12,
+   "StructuredOutput": 1
+  },
+  "turns": 13
+ }
+}

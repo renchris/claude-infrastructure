@@ -1,0 +1,172 @@
+{
+ "brief": "T3-frontier-budget",
+ "judge": "J1",
+ "model": "claude-opus-5",
+ "effort": "xhigh",
+ "label_map": {
+  "X": "A",
+  "Y": "C",
+  "Z": "B"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K17",
+     "K18",
+     "K20",
+     "M1",
+     "M2",
+     "M3",
+     "M7",
+     "M9",
+     "M11",
+     "M12"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 34,
+    "citations_bad": [
+     {
+      "cite": "migrations/0029-frontier-gate-session-path.sh:6 — \"the identical one-liner CLAUDE.global.md:334 itself hands the reader\"",
+      "problem": "The line exists and is the migration-verify oracle, but it is NOT identical to CLAUDE.global.md:334's. :6 is `jq -e '[... | select(.command == \"...\")] | length == 1'`; CLAUDE.global.md:334 is `jq '[...|.hooks[]?.command]|any(.==\"...\")'`. Different flag, different jq shape, different predicate."
+     },
+     {
+      "cite": "hooks/frontier-spawn-gate.sh (absence claim) — \"the only file that ever touches frontier-gate-*.count\"",
+      "problem": "Refuted by tests/frontier-spawn-gate.bats:61,140,148,163, which read and write `$TMPDIR/frontier-gate-<sid>.count`. X named migrations/0029 as the only other match but missed the test file. The downstream conclusion (no refund path) is still correct."
+     }
+    ],
+    "wrong_claims": [
+     "§6 item 1: \"Missing/unreadable SSOT — … Total bypass, both carriers.\" MEASURED FALSE on the unreadable half: `[ -f \"$CFG\" ]` (:37) is true for an existing-but-unreadable file, so line 37 does not fire; the sed at :39 yields nothing, `active` is unset, :117 is false and the gate exits 2. I ran it (chmod 200 config, Agent/fable payload): stderr `frontier window is CLOSED (frontier_access active=unset, end=unset)`, rc=2. A hard refusal, not a bypass. Y and Z both state this correctly.",
+     "§1 opening: \"It is registered under two different `PreToolUse` matchers.\" False of the repo's own wiring — settings-templates/settings.example.json registers it once, at :160, inside the `\"matcher\": \"Agent\"` group (:151-163); the Bash groups (:102, :203, :607, :704) carry no such entry. X's own §7 says exactly this, so the answer contradicts itself at its most load-bearing claim.",
+     "Misses four uncounted command shapes the brief's item 6 asks to enumerate: `--dry-run` as a glob over the whole string (a real fire with `# --dry-run` in a trailing comment is free — measured rc=0, no counter), the quoted model value (`--model \"claude-fable-5-1\"` does not match the `[A-Za-z0-9._-]+` class at :75 — measured uncounted), `TMPDIR` as a per-call reset of the entire budget (:133), and the gate's own stale citation at :27."
+    ],
+    "extra_correct": [
+     "Five stale `path:line` cross-references beyond the key, each verified: docs/research/desk-audit-2026-07-18/p15-escalation.md:44 cites gate:59-67 for the exit-2 refusal (59-67 is the --dry-run guard + entrypoint regex; the refusals are 136-153); fable51-vs-opus5-routing-2026-09-16/A5-harness.md:357 cites gate:37-69 for \"caps at 6 … frontier-hole message\" (the 6 is :120, the message :138/:140); A6-mechanics.md:245 cites gate:26-38 for the predicate (26-38 is header prose + set/input/CFG/-f check; the predicate is 42-56); A6-mechanics.md:500 cites gate:23 for \"exits 0 when tool_input.model is absent\" and marks it measured-this-session (line 23 is comment prose; the real check is :106); docs/research/frontier-track-gate-2026-09-04.md:74 cites model-config.yaml:467 for \"Fable exists ONLY on the claude-next eval track\" (467 today is the DETECTORS census).",
+     "Positive control on its own citation method: docs/research/opus55-utilization-2026-09-22/census/L1-census.md:62-63 does cite gate:138 and gate:149 for the cap refusal and the dormant closed-window fallback, with the \"(closed-window only; dormant)\" annotation — verified verbatim.",
+     "The definitive CC_LADDER answer with the search stated: exactly two hits repo-wide, both prose (CLAUDE.global.md:334, docs/plans/NONLIMIT_RESUME_LADDER.md:840), and the five `ladder` hits in scripts/handoff-fire.sh (7238, 7242, 7848, 7855, 12701) are an unrelated library ladder and a network-retry ladder. I reproduced all of this exactly.",
+     "Complete, verified answer to brief item 7: the Agent-matcher group at settings-templates/settings.example.json:150-164 with the single entry at :160; migration class c10 (:2); preconditions jq (:65), executable live hook (:73-77), content-grep for `frontier_fire_model` (:78-83); five config dirs (:86); skip when no PreToolUse Bash group (:92-95); post-verify that the new entry is present exactly once with asyncRewake false and timeout 5 AND that the Agent entry survived (:121-125) before `mv` (:126).",
+     "hooks/agent-teams-enforce.sh:366 cites gate:52-63 for \"per-session cap, hard refusal, 'do NOT retry'\" — 52-63 is the tail of is_frontier_model plus the top of frontier_fire_model; the refusal text is at 138/140. Only X found this one."
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K17",
+     "K18",
+     "K20",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6",
+     "M7",
+     "M8",
+     "M12"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 30,
+    "citations_bad": [],
+    "wrong_claims": [
+     "Leaves brief item 7 largely unanswered and says so: does not open settings-templates/settings.example.json, so never names the matcher group that registers the gate today (K16), and does not read migrations/0029 — its class, preconditions, five config dirs and post-write verification are reported second-hand from the plan or as \"not verified\".",
+     "Leaves brief item 6's named sub-question open: \"I cannot confirm that any executable implements [CC_LADDER]. Treat it as unverified.\" The answer is a clean NO (two prose hits repo-wide), which X establishes."
+    ],
+    "extra_correct": [
+     "The gate's own stale citation: hooks/frontier-spawn-gate.sh:27 cites scripts/handoff-fire.sh:9303-9311 as the `--model` source of truth; those lines are a comment tail and `hf_inflight_key()` (9304-9318), a worktree-claim hasher with no model logic. Verified.",
+     "A real false POSITIVE the code's own comment (:63-66) denies: the entrypoint guard is word-anchored, not head-anchored, so `cc-backlog add \"re-fire: handoff-fire.sh --model fable\"` matches :67 and spends a slot. I ran it — counter = 1, rc 0. Test 9b passes only because its quoted text carries no launcher word.",
+     "Two more uncounted shapes, both confirmed by running the hook: a quoted launcher path (`\"$HOME/.claude/scripts/handoff-fire.sh\" --model fable` → uncounted, because `\"` is neither a boundary char nor allowed at the end of the `/`-terminated prefix class) and `bash -c '…handoff-fire.sh…'` (leading `'` is not a boundary). Y correctly notes test 4 (bats:84) uses the unquoted form.",
+     "Why install.sh can neither add nor detect the missing Bash arm — all three legs verified: it merges only when there is no settings file, `--wire-hooks` is passed, or `.hooks` is absent (:1232-1236), else it asserts only (:1287); the within-event union skips a template hook whose command string is already present under ANY matcher (:1269), so an Agent-registered command is never appended to Bash; and the post-install assert keys on `\"\\($e)|\\(.command)\"` with the matcher absent from the key (:1292-1295), so an Agent-only registration reads as complete.",
+     "Test-suite gaps: tests/frontier-spawn-gate.bats:38's comment claims \"exactly-2-space children\" but `grep -m1 '  model:'` is a substring match; bats:11-12 calls case 13 part of the Agent control arm when :147 is a session case; test 15 asserts `*\"--model claude-opus-5\"*` (bats:175) against a fixture whose fallback is literally `claude-opus-5` (bats:47), and that substring also matches `claude-opus-5-5`, so the alias-vs-full-id question is unpinned on the closed-window branch.",
+     "Correct fail-open/fail-closed split the key flags as a precision trap: missing SSOT is a silent allow (:37, bats:186-192), but a malformed/unparseable block fails CLOSED via the window test at :117 — which is where X goes wrong.",
+     "The gate's `grep -m1 '  active:'` also matches a commented `active: false` inside a sed recipe at model-config.yaml:692; line 687 simply comes first, so today's parse is order-dependent. Verified.",
+     "An internal SSOT contradiction: model-config.yaml:975-976 says settings.json is \"symlinked into every CLAUDE_CONFIG_DIR\" while :1055-1056 says they are \"NOT symlinked — five independent real files\" (migrations/0029:52-55 agrees with the latter)."
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K17",
+     "K18",
+     "K20",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6",
+     "M7",
+     "M8",
+     "M11",
+     "M12"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 28,
+    "citations_bad": [],
+    "wrong_claims": [
+     "Brief item 7 is essentially unanswered: Z never locates settings-templates/settings.example.json (six guessed paths failed), so it cannot name the matcher group that registers the gate (K16), and it never finds migrations/0029 — its filename, config-dir loop and post-write verification are all marked UNVERIFIED. It asserts \"the fleet-wide settings template that currently registers the gate under the Agent matcher\" without a citation.",
+     "Brief item 6's named sub-question is left open: CC_LADDER is marked UNVERIFIED for every executable outside the gate and model-config.yaml. The answer is a clean NO."
+    ],
+    "extra_correct": [
+     "The gate's own stale citation at hooks/frontier-spawn-gate.sh:27 → scripts/handoff-fire.sh:9304-9318 is `hf_inflight_key()`, a worktree-claim key hasher. Verified, and Z pins the function's true span exactly.",
+     "The sed block range at :39 runs from model-config.yaml:662 to the next column-0 key, `pricing_per_mtok:` at :712 — verified; a precise detail neither sibling supplies.",
+     "model-config.yaml:700-702's mechanism is wrong even though its conclusion is right: the gate never reads `permanent`; the branch is unreachable because of `active: true` (:687) plus the `end` sentinel (:682), so flipping `permanent` alone would change nothing.",
+     "model-config.yaml:944-945 (\"hard cap, all fable spawns\") overstates the gate's reach: only spawns carrying an explicit `tool_input.model` that matches the predicate are seen (:106, :51-54); frontmatter or inherited models are uncounted.",
+     "The counter is keyed on the FIRING session's id, so a fired session starts with a fresh budget of 6 — the cap is per session, not per chain.",
+     "NONLIMIT_RESUME_LADDER.md:691-692 (\"frontier-spawn-gate.sh cannot see a handoff-fire --model fable\") is superseded by the W4 table at :900, and the :866 paragraph was deliberately not landed in that form (:904-909). Verified; Z is the only output that reads the plan's own superseding note."
+    ],
+    "score_1_10": 7
+   }
+  ],
+  "xy": "X",
+  "xz": "X",
+  "yz": "Y",
+  "pair_reasons": "X vs Y — X, narrowly, on two whole brief requirements Y concedes it cannot meet. Item 7 asks seven specific things; X answers all seven and every one checks out byte-for-byte (the Agent-only registration at settings-templates/settings.example.json:151-163 with the single entry at :160; class c10 at migrations/0029:2; the jq/executable/`grep -q 'frontier_fire_model'` preconditions at :65, :73-77, :78-83; the five config dirs at :86; the post-write verify at :121-125 before `mv` at :126). Y opens neither file and reports the migration second-hand. Item 6's named sub-question is the same shape: X runs the search and settles it (CC_LADDER appears in exactly two prose files; the five `ladder` hits in handoff-fire.sh at 7238/7242/7848/7855/12701 are unrelated — I reproduced this), while Y says \"treat it as unverified\". X also uniquely catches the stale citation inside a sibling hook (agent-teams-enforce.sh:366 → gate:52-63) and five stale doc citations I verified individually. Against that, Y is cleaner where it does reach: it carries four uncounted command shapes X omits (dry-run-as-glob, the quoted `--model` value, TMPDIR, plus the gate's own stale :27 citation), and X has one measured-false claim — \"missing/unreadable SSOT … total bypass\" — which I refuted by running the hook against a chmod-200 config (rc=2, hard refusal), plus a self-contradicting §1 line calling the gate \"registered under two different PreToolUse matchers\". Those are real but peripheral next to a brief item delivered versus not delivered.\n\nX vs Z — X, on the same axis and by a wider margin. Z's item 7 is almost entirely UNVERIFIED: it never finds migrations/0029 (six wrong guesses), never finds the settings template, and asserts the Agent-matcher registration with no citation, while X supplies the file, the line, the class, the preconditions, the five dirs and the post-verify predicate, all confirmed. Z likewise leaves CC_LADDER unresolved where X settles it with the search evidence the brief demanded. Z's genuine edges — the gate's own :27 citation, the quoted-model and TMPDIR bypasses, the `permanent`-vs-`active` mechanism correction at model-config.yaml:700-702, and NONLIMIT:866/904-909 — do not offset a brief item answered versus one declared unreachable, and Z has no tool-independent find comparable to X's five verified stale doc citations.\n\nY vs Z — Y, on specific verified findings Z lacks. Y alone explains why the live wiring cannot self-heal, and all three legs check out: install.sh:1232-1236 merges only in three narrow cases and otherwise asserts (:1287); the within-event union at :1269 skips any template hook whose command string is already registered under ANY matcher, so the Agent entry structurally blocks the Bash append; and the post-install assert at :1292-1295 keys on event+command with the matcher absent, so Agent-only registration reads as \"all template hooks present\". Y also finds a real false POSITIVE the code's own comment (:63-66) denies — `cc-backlog add \"re-fire: handoff-fire.sh --model fable\"` matches the entrypoint guard and spends a slot, which I confirmed by running the hook (count=1) — plus two more uncounted shapes I confirmed (quoted launcher path, `bash -c '…'`), and three test-suite defects (bats:38's \"exactly-2-space\" claim against a substring grep, bats:11-12 misfiling case 13, and test 15's `*\"--model claude-opus-5\"*` assertion at :175 being satisfied by `claude-opus-5-5` given the :47 fixture). Z's unique contributions are fewer: the :39 block range endpoint (:662→:712), the :944-945 scope overstatement, and M11 (NONLIMIT:866 read together with its superseding note at :904-909). Both are error-free on citations; Y simply produces more verified, material findings."
+ }
+}

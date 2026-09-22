@@ -1,0 +1,126 @@
+{
+ "brief": "T5-deploy-live-exec",
+ "judge": "J1",
+ "model": "claude-fable-5-1",
+ "effort": "high",
+ "label_map": {
+  "X": "A",
+  "Y": "C",
+  "Z": "B"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "S1",
+     "S1r",
+     "S2",
+     "S2a",
+     "S2r",
+     "S3",
+     "S3r",
+     "S4",
+     "S5",
+     "S5r",
+     "N1",
+     "N2",
+     "N3",
+     "M3"
+    ],
+    "key_contradicted": [
+     "N4"
+    ],
+    "citations_checked": 46,
+    "citations_bad": [],
+    "wrong_claims": [
+     "Total of 5 execution sites; bin/cc-premise:1392 (`/bin/sh -c cmd` over deploy-live's own stored `--falsify-host` falsifier, minted at deploy-live.sh:960 and filed at :1046/:1261) is a real in-scope generic-dispatcher site X never mentions, even though X read the surrounding deploy-live.sh block (:956-959 states 'cc-premise later runs through /bin/sh -c').",
+     "(c) 'the only unattended/scheduled entry point lives outside the three scoped trees' and 'none of the five in-scope sites is timer-driven' — scripts/autonomy-sweep.sh:1488 (launchd, every 300s) runs bin/cc-premise sweep (`_premise` resolved at :1427), which executes the stored deploy-live falsifier; a second, indirect scheduled executor sits inside scope.",
+     "bin/cc-do:454 (`bash -c \"$cmd\"` in run_backlog_row over a blocked row's stored `.run`, which deploy-live.sh itself files at :812 with a `bash $DEPLOY_REPO/scripts/deploy-live.sh …` string) is neither counted nor rejected."
+    ],
+    "extra_correct": [
+     "scripts/deploy-link-parity.sh:509 is a near-miss because fix() at :159 only appends to a FIXES report string (verified).",
+     "scripts/permission-gate-lint.sh:563/:589 build synthetic fixture files named deploy-live.sh inside the lint's own self-test (mk/green/red at :720-722,:745-747) — verified.",
+     "scripts/deploy-parity-assert.sh:1389-1391 explicitly refuses to call deploy-live --dry-run to avoid recursion (verified).",
+     "ship-land.sh's `2>/dev/null || true` at :1741 suppresses only python3's own failure, never the detached child's exit; the Popen is never waited (verified :1736-1741).",
+     "cc-do run_one: the `$cmd` display string built at :187 is printed at :388 and never eval'd; :148-149 documents the path field kept separate for that reason (verified)."
+    ],
+    "score_1_10": 6
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "S1",
+     "S1r",
+     "S3",
+     "S3r",
+     "S4",
+     "S5",
+     "S5r",
+     "N1",
+     "N2",
+     "N4",
+     "M1",
+     "M2"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 40,
+    "citations_bad": [],
+    "wrong_claims": [
+     "Total stated as 6 with the wrong composition: scripts/ship-land.sh:1739 (detached `subprocess.Popen([\"bash\", sys.argv[1]])` with dl_script from :1730, CC_DEPLOY_MAX_LAG_COMMITS=0, start_new_session) is a real in-scope site Y never read (self-disclosed), so the census misses a site and the count is wrong."
+    ],
+    "extra_correct": [
+     "`--dry-run --offline` probes are not write-free: --offline forces DRY_RUN=1 (:429) but link_refresh (:1478, called unconditionally at :1952) still runs deploy-parity-assert (:1483) and copy_drift_notice (:1350, called :1493), which writes a page and signature marker (:1397-1423) with no DRY_RUN guard — verified.",
+     "bin/cc-backlog `add --falsifier` only stores the string (:1898 → jq at :2273-2285); the update arm refuses to write a falsifier (:2221-2227), so deploy-live's own filings never execute the probe at filing time — verified.",
+     "bin/cc-do:359 does not pin DEPLOY_REPO (unlike :184), so the real run falls back to deploy-live.sh:122's default — verified.",
+     "cc-premise: rc 2/124/126/127 are 'unaskable' (:266, :1444), timeout/exception returns None fail-open (:1397-1399), exit 0 → 'falsified' which is in BLOCKING (:236) — verified.",
+     "Stale-citation table: deploy-live.sh:14 cites validate-bash.sh:1352 but the deny is at :1432; plist:16 cites operator-readout.sh:238-246 but the fallback is at :517-518; deploy-live.sh:2567-2568 says host_checks at 151/391 but it is defined :1050 and called :2723 — all verified."
+    ],
+    "score_1_10": 7
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "S1",
+     "S1r",
+     "S3",
+     "S3r",
+     "S4",
+     "S5",
+     "S5r",
+     "N1",
+     "N2",
+     "N4",
+     "M1",
+     "M2"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 38,
+    "citations_bad": [
+     {
+      "cite": "bin/cc-do:162-183 (listed as 'comments')",
+      "problem": "range includes code at :165 (dscript=\"$DEPLOY_SCRIPT\"), :166 (fallback assignment) and :167 (`if [ \"$behind\" -gt 0 ]`); only a sloppy range — Z cites those three lines correctly elsewhere"
+     },
+     {
+      "cite": "scripts/deploy-live.sh 'all 2730 lines'",
+      "problem": "file is 2729 lines (trivial)"
+     }
+    ],
+    "wrong_claims": [
+     "Total stated as 6 (as a lower bound) with the wrong composition: scripts/ship-land.sh:1739 detached Popen converge kick is a real in-scope site Z never read (self-disclosed)."
+    ],
+    "extra_correct": [
+     "deploy-live.sh:1679 cites checkout-not-a-worktree at ':540' but it is at :658-661 — verified.",
+     "bin/cc-do:359 does not set DEPLOY_REPO while the :184 probe does, so with CC_SHARED_CHECKOUT overridden the probe and the real run can refer to different checkouts — verified.",
+     "cc-do ⊘ reason truncated to 110 chars (:195) vs operator-readout's 96 (:542) — verified.",
+     "Same stale-citation findings as Y (validate-bash 1352→1432, plist:16→:517-518, host_checks 151/391→1050/2723) — verified."
+    ],
+    "score_1_10": 6
+   }
+  ],
+  "xy": "Y",
+  "xz": "Z",
+  "yz": "Y",
+  "pair_reasons": "X vs Y: differences run both ways. X alone found scripts/ship-land.sh:1739 (key S2/S2a/S2r, all verified), hooks/session-continue.sh:1191 (N3), and produced a near-exhaustive, byte-accurate near-miss census (M3; 46 citations checked, 0 bad). Y alone found bin/cc-premise:1392 (key M1, the generic /bin/sh -c dispatcher the brief explicitly calls out, whose pointer X had in hand at deploy-live.sh:957 and still missed), adjudicated bin/cc-do:454 (M2), and answered (c) correctly in substance — direct scheduled entry outside scope, indirect scheduled executor (autonomy-sweep → cc-premise) inside it — where X flatly asserts exclusivity, which the key marks false. Both miss one real site and both state a wrong total; Y found six verified sites to X's five and got the (c) question right, so Y narrowly, on the primary deliverable. X vs Z: same shape as X vs Y — Z has cc-premise, cc-do:454 and the hedged in-scope unattended path; X has ship-land, N3 and the near-miss census. Z's two citation slips (the :162-183 'comments' range containing code at :165-167; '2730 lines') are trivial. Z narrowly for the same reason. Y vs Z: near-identical site sets, coverage and stale-citation findings. Y adds two verified material insights Z lacks — the dry-run/offline probe still writes a page via copy_drift_notice (:1350/:1493/:1397-1423, no DRY_RUN guard) and cc-backlog add stores a falsifier without running it (:1898/:2273-2285/:2221-2227) — while Z's sole extra (the :1679 stale cite) is minor and Z carries the sloppy :162-183 range. Y narrowly."
+ }
+}

@@ -1,0 +1,158 @@
+{
+ "brief": "T2-recycle-goal",
+ "judge": "J1",
+ "model": "claude-fable-5-1",
+ "effort": "high",
+ "label_map": {
+  "X": "C",
+  "Y": "A",
+  "Z": "B"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K18",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 42,
+    "citations_bad": [],
+    "wrong_claims": [],
+    "extra_correct": [
+     "The `shell)` arm of the pane-state switch types the relaunch and returns at :12441-12446 before :12540, so on that path neither an inherited nor an explicit --goal is ever armed and goal_unreachable is not called (verified).",
+     "An exported FIRE_GOAL also passes through `check_goal_arm || exit 1` at :9015, so a malformed explicit/env goal ABORTS the recycle while a malformed inherited one is only dropped (:5852) — verified asymmetry.",
+     "Resume mode (:12535-12538) blanks even an explicit --goal after :9015 has validated it (verified).",
+     "The `recycle-intent` row (:12378) is emitted before inheritance (:12540) and its goal_requested is computed from FIRE_GOAL at :870, so it never reflects an inherited goal (verified).",
+     "goal_live_for_sid's find (:5829) has no depth limit whereas transcript_for_sid uses -mindepth 2 -maxdepth 2 (:4690) (verified).",
+     "The remote --recycle form requires --resume-launcher (:9775, :8990-8991) and therefore takes the skip branch; inheritance runs only in the self form (verified).",
+     "Failure arms that call goal_unreachable (:7333, :7397, :7446) vs those that make no goal call (:7070-7079, :7081-7131, :7187-7193) (verified).",
+     "arm_goal returns at `[ -n \"$cond\" ] || return 0` (:5867) on an empty $8, so no goal-arm row is written after a refused inheritance (verified).",
+     "Opt-out accepts only literal 0, unlike the sibling gate's `off|0|false|no` at :5185-5186 and the usage header's `=off` convention at :230 (verified).",
+     "Fourteen in-file stale line citations (e.g. :6942→:5686, :859/:12358→:4828/:4844/:4861, :855→:8747, :860→:8827, :862-864 contradicted by $9 at :6945/:12628, :663-665, :7404-7405, :5163/:7865→:399, :10697/:11341→:197, :12552→:8543, :644→:7416-7417, :840→:5884) — all verified stale with correct real targets."
+    ],
+    "score_1_10": 9
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K17",
+     "K18",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M6",
+     "M7"
+    ],
+    "key_contradicted": [
+     "K10"
+    ],
+    "citations_checked": 30,
+    "citations_bad": [
+     {
+      "cite": "scripts/handoff-fire.sh:4994 (described as extracting sessionId 'out of its transcript file')",
+      "problem": "line reads `$_f`, which is a `${CC_SESSIONS_DIRS:-$HOME/.claude*/sessions}/*.json` per-pid session file (:4984), not the transcript"
+     }
+    ],
+    "wrong_claims": [
+     "States cc_sid_for_pane 'reads the predecessor's identity off its own live process, not off a stored pointer' — the FIRST source (:4959-4962) is the stored cc-registry row `$CC_REGISTRY_DIR/<pane>.json`; the live-process/ITERM_SESSION_ID scan is only the fallback (Y read only the tail :4988-4997).",
+     "Claims the `[ -n \"$rec\" ]` guard is 'a second line of defense the goal_live_condition call sites don't uniformly have' — goal_live_condition itself has `[ -n \"$rec\" ] || return 1` at goal-state.sh:69; unsupported.",
+     "Explains the missing _goal_grep as harmless via 'jq --slurp still receives valid (empty) input and exits 0' while admitting it did not check pipefail; under `set -euo pipefail` (:343) grep rc 1 fails the pipeline and `|| continue` fires — the conclusion (same outcome) is right but the stated mechanism is not what the code does."
+    ],
+    "extra_correct": [
+     "Verified in-snapshot the cross-file stale citations at docs/research/backlog-pipeline-recon-2026-08-12/recon-wave.md:35 (:3778-3800 → pane_cc_state) and docs/research/voluntary-inplace-switch-2026-09-22 A03:96,348 / A05:106 (:5805, :11070, :12406-12412), with correct descriptions of what is actually at each.",
+     "tests/handoff-goal-arm.bats:45 extracts inherit_recycle_goal by pattern (`sed -n '/^inherit_recycle_goal() {/,/^}/p'`), immune to line drift (verified).",
+     "`:34` documents `Env equivalent: FIRE_GOAL` for the --goal flag (verified).",
+     "Correctly notes the refusal record cannot distinguish an inherited condition from an explicit --goal (detail strings say '--goal condition …') (verified :5748/:5756/:5763)."
+    ],
+    "score_1_10": 7
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K18",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 45,
+    "citations_bad": [],
+    "wrong_claims": [],
+    "extra_correct": [
+     "A live record with an empty condition returns rc 0 with empty output and is dropped by `[ -n \"$_inh_cond\" ] || return 0` (:5846) (verified).",
+     "cc_sid_for_pane always returns 0, so an empty sid silently means no inheritance via :5844 (verified).",
+     "The same pane→sid lookup already ran as RCY_SUBAGENT_SID at :9835 and is re-read rather than reused (verified).",
+     "`sentinel` is never consulted by either predicate; only .met/.failed/.condition are read (verified :5823-5824, goal-state.sh:70-71).",
+     "The `shell)` arm (:12441-12446) is an implicit second skip: relaunch typed and return 0 before :12540, no watcher, so no goal (inherited or explicit) is armed (verified).",
+     "Explicit --goal / exported FIRE_GOAL is validated at :9015 with `|| exit 1`, refusing the whole recycle, unlike the inherited path (verified).",
+     "Dry run takes :12787 and never reaches recycle_fire (:12915-12964); resume-mode dry-run text at :12796 says goal inheritance is off (verified).",
+     "Sibling switches CC_RECYCLE_REPICK (:9554) and CC_RECYCLE_SUBAGENT_GATE (:5185-5186) accept `off|0|false|no`; this one does not (verified).",
+     "Extended stale-citation table beyond the key, all verified: :9678-9686 (→ :9858-9863, :10132-10134, :9593), :11232/:11237 (→ :9735/:10617), :12729 :4104 (→ :8894-8902), :644-648 payload_lint_gate :8973/:9021 (→ :12908/:12963/:12974), :662-670, :12357-12358/:12372 (→ :8788), :6942, :7404-7405, :5162-5163, :10697/:11341, :12552."
+    ],
+    "score_1_10": 9
+   }
+  ],
+  "xy": "X",
+  "xz": "tie",
+  "yz": "Z",
+  "pair_reasons": "X vs Y: X wins on a verified material defect in Y. Brief item 1 asks how the predecessor's identity is obtained; Y describes cc_sid_for_pane as reading the sid 'off its own live process, not off a stored pointer' and says :4994 reads the transcript — the code's first source is the stored cc-registry row (:4959-4962) and :4994 reads a sessions/<pid>.json file, so Y contradicts K10's mechanism. Y also never verified pipefail (:343) and missed the :9015 call site, both of which X cited. Y's advantage — finding hooks/goal-inert-watch.sh:36 (K17) and NONLIMIT_RESUME_LADDER.md:753 (M7) plus the research-doc citations, which X missed — is real but is doc-audit coverage, not a wrong statement about the mechanism; a wrong claim on a required item outweighs two missed stale citations. X vs Z: no verified material difference. Both hit the same 23 key items, both miss K17/M7, both have zero wrong claims and zero bad citations across ~40 spot-checks each. Their extras differ but are of comparable weight (X: recycle-intent goal_requested skew, remote-form skip, failure-arm classification; Z: empty-condition drop at :5846, RCY_SUBAGENT_SID, broader stale-citation table). Tie. Y vs Z: Z wins for the same reason X does — Z states K10 correctly (registry row first, sessions/<pid>.json fallback, always rc 0), cites :343 pipefail and :9015, and has no wrong claims, while Y carries the cc_sid_for_pane misdescription and the unsupported 'call sites don't uniformly have' claim. Y's K17/M7 coverage does not offset a wrong mechanism claim on a brief-required point."
+ }
+}

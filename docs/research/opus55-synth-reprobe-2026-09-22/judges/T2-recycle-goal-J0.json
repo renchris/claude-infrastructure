@@ -1,0 +1,163 @@
+{
+ "brief": "T2-recycle-goal",
+ "judge": "J0",
+ "model": "claude-opus-5",
+ "effort": "xhigh",
+ "label_map": {
+  "X": "B",
+  "Y": "C",
+  "Z": "A"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K18",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 42,
+    "citations_bad": [],
+    "wrong_claims": [
+     "Under the 'what the difference changes' heading for the missing _goal_grep, X writes 'What does change is search termination.' That is a difference between the twin's loop and goal_live_condition's single-path contract, not an effect of the absent hardening: with _goal_grep in place a no-match would still land on the same `continue` (empty $rec at :5820). Framing looseness rather than a false statement, but it slightly misattributes the cause."
+    ],
+    "extra_correct": [
+     "The shell-arm early return at :12441-12446 (pane_cc_state = shell) types the relaunch and returns before :12540, so on that path neither an inherited nor an explicit goal is ever armed — verified at :12441-12446.",
+     "The pane→sid lookup already ran earlier as RCY_SUBAGENT_SID at :9835; the inheritance path re-reads it rather than reusing it — verified.",
+     "`--goal \"\"` cannot be used to suppress inheritance because of the `${2:?...}` at :8950 — verified.",
+     "An exported FIRE_GOAL is validated by `check_goal_arm || exit 1` at :9015 and therefore ABORTS the recycle, whereas an inherited bad condition is merely dropped at :5852 — both lines verified.",
+     "The refused row is misleading: it records a refused fire while the recycle was not refused (emit_fire_event :683/:702-703/:711, gate :742, skip on CC_FIRE_REFUSAL_LOG=0 :684 / no jq :686) — all verified.",
+     "Readership analysis of the :5851 warning: foreground process, before detach at :12628, after the brief copy finished at :10668-10848, and /exit typed into the same pane at :12723-12727 — all verified.",
+     "A large table of further stale citations inside handoff-fire.sh (:10697/:11341 → ':197' vs real :343; :5162-5163 → ':399' vs real :416; :12552 → ':8543' vs real :10846-10847; :644-648 → ':7416-7417'/':8973,:9021' vs real :10846-10847 and payload_lint_gate :12908/:12963/:12974; :662-670 → ':6241'/':6248'/':11062' vs real :6938/:6945/:12378; :6942 → ':5686'; :7404-7405 → ':6796/:6699/:6873' vs real :7191-7192/:7076-7077/:7396-7398; :12357-12372 → ':4828,:4844,:4861',':8788'; :9678-9686 → ':9701/:9706/:9975/:9474' vs real :9858-9862/:9863/:10132-10134/:9593; :11232/:11237 → ':6690'/':7358' vs real :9735/:10617; :12729 → ':4104' vs real :8894-8902). Every row I checked resolves exactly as X states. Off-brief (not 'this machinery') but correct."
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K18",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 44,
+    "citations_bad": [],
+    "wrong_claims": [
+     "Calls handoff-fire.sh a '13,381-line file'; `wc -l` reports 13,380. Immaterial."
+    ],
+    "extra_correct": [
+     "Denominator skew: the `recycle-intent` row is emitted at :12378, BEFORE inheritance at :12540, and its `goal_requested` is computed from FIRE_GOAL at emit time (:870, key `goal_requested:$gr` at :876) — so that row can never reflect an inherited goal. Verified.",
+     "The remote `--recycle` form requires `--resume-launcher` (:9775, :8990-8991), which takes the RESUME_LAUNCHER skip branch, so `inherit_recycle_goal` only ever runs in the SELF form — verified; this settles who can read the :5851 stderr line.",
+     "Read `goal_unreachable`'s body (:801-806, `verdict=unreachable`) and separated the three watcher arms that call it (:7333, :7397, :7446) from the three that make NO goal call at all (:7070-7079 pane vanished, :7081-7131 never reached a shell, :7187-7193 relaunch write failed) — all verified; an inherited goal can vanish with no goal-arm row.",
+     "The _goal_grep three-outcome distinction only matters to `goal_liveness` (:104-144, :120, :140-141), not to `goal_live_condition`, which returns 1 in both directions (:62-69) — verified, and a sharper statement of 'what the difference does not change' than the key requires.",
+     "An empty $8 makes `arm_goal` return at `[ -n \"$cond\" ] || return 0` (:5867) and write no goal-arm row — verified.",
+     "handoff-fire.sh's own comment at :862-864 claims a positional for the brief was deliberately NOT added, contradicted by `$9` at :6945 / :12628 — verified.",
+     "Further verified stale-citation rows X lacks: :855 ('recycle-intent at :8747' vs real :12378), :860 (':8827' vs :12628), :840 ('FIRING_SID at :5884' vs real :11279).",
+     "Predecessor-state table including the re-armed-after-met case (a later sentinel:true met:false record is last, therefore live) against the record dictionary at goal-state.sh:18-22 — verified.",
+     "Notes the :414-415 comment explaining why ~/.claude/projects is first in CC_PROJECTS_DIRS, and explicitly labels the mirrored-copy consequence as inferred rather than observed."
+    ],
+    "score_1_10": 9
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K17",
+     "K18",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M6",
+     "M7"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 38,
+    "citations_bad": [
+     {
+      "cite": "scripts/handoff-fire.sh:4994 — \"extracts that process's own \\\"sessionId\\\" field out of its transcript file\"",
+      "problem": ":4994 seds `\"sessionId\"` out of `$_f`, which the loop at :4984 binds to `${CC_SESSIONS_DIRS:-$HOME/.claude*/sessions}/*.json` — Claude Code's per-pid SESSION REGISTRY file, not a transcript. The cited line does not do what the output says."
+     },
+     {
+      "cite": "scripts/handoff-fire.sh:5837 — quoted as \"# inherited condition re-runs the SAME pre-arm validation as a passed one … CC_RECYCLE_GOAL_INHERIT=0 opts out\"",
+      "problem": "The quote splices :5838 text ahead of :5837 text under a single :5837 citation. :5837 reads `# --goal wins · CC_RECYCLE_GOAL_INHERIT=0 opts out · terminal/absent predecessor goal → no-op · an`; the 're-runs the SAME pre-arm validation' clause is on :5838."
+     }
+    ],
+    "wrong_claims": [
+     "\"it reads the predecessor's identity off its *own live process*, not off a stored pointer\" — false. cc_sid_for_pane's PRIMARY source is a stored pointer: it greps `\"session_id\"` out of `${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}/$_pane.json` and returns immediately on a hit (:4959-4962). Z never mentions the cc-registry row at all, so it misnames the store the brief explicitly asked it to name.",
+     "\"the caller's own `[ -n \\\"$rec\\\" ]` check is a second line of defense the `goal_live_condition` call sites don't uniformly have\" — false. goal_live_condition carries the identical check itself at hooks/lib/goal-state.sh:69 (`[ -n \"$rec\" ] || return 1`).",
+     "The stated mechanism for the missing _goal_grep is wrong as written: \"jq --slurp still receives valid (empty) input and exits 0 … rec then reaches `[ -n \"$rec\" ]` at :5820 regardless of whether the preceding `|| continue` at :5819 fired first.\" handoff-fire.sh runs `set -euo pipefail` (:343), so a grep no-match makes the pipeline rc 1 and `|| continue` fires FIRST; $rec never reaches :5820. Z self-declares it did not check pipefail — the one fact that decides brief item 2's 'what does the difference change' question.",
+     "Did not locate check_goal_arm's other call site (`check_goal_arm || exit 1`, :9015) and instead says \"the comment implies a second, general call site … which I did not independently locate\" — the brief forbade grounding on comments, and the missing line is what makes 'the same validator the fire path runs' a code fact."
+    ],
+    "extra_correct": [
+     "The only complete repo-wide sweep of in-repo citations of this machinery, every row verified: CLAUDE.global.md:223 (4676-4684), hooks/goal-inert-watch.sh:36 (4671-4688), handoff-fire.sh:4824 (:5089/:11070), docs/plans/NONLIMIT_RESUME_LADDER.md:753 (:4994-5009), docs/research/backlog-pipeline-recon-2026-08-12/recon-wave.md:35 (:3778-3800), docs/research/voluntary-inplace-switch-2026-09-22/A03:96,348 and A05:106 (:5805, :11070, :12406-12412). I re-grepped the tree for `inherit_recycle_goal`: Z's list is exhaustive and each 'what is actually there' description is correct.",
+     "tests/handoff-goal-arm.bats:45 uses `sed -n '/^inherit_recycle_goal() {/,/^}/p'` — a pattern-based reference immune to the line drift that stranded every numeric citation. Verified verbatim.",
+     "Verbatim quoting of the load-bearing lines (5818-5819, 5823-5827, 5840-5855, 12535-12541, 416, 508, 7158, 7365) makes the core mechanism checkable without opening the file; all quotes match byte-for-byte.",
+     "The ordering rule at :12508 ('ORDER IS LOAD-BEARING: watcher FIRST (heartbeat-verified), /exit LAST') and the detach-not-nohup rationale at :12511-12515 — both verified."
+    ],
+    "score_1_10": 7
+   }
+  ],
+  "xy": "Y",
+  "xz": "X",
+  "yz": "Y",
+  "pair_reasons": "X vs Y — Y. Same key coverage (both hit 23/25, both miss K17 hooks/goal-inert-watch.sh:36 and M7 NONLIMIT_RESUME_LADDER.md:753), both clean on citations, but Y carries four verified material insights X lacks: (1) the recycle-intent row's `goal_requested` is computed at :870/:876 when the row is emitted at :12378, i.e. before inheritance at :12540, so it can never record an inherited goal; (2) the remote `--recycle` form is refused without `--resume-launcher` (:9775, :8990-8991), which takes the skip branch, so `inherit_recycle_goal` only ever runs in the self form — the fact that actually settles brief item 6's \"who can read the refusal\"; (3) Y read `goal_unreachable`'s body (:801-806) and separated the three watcher arms that log `verdict=unreachable` (:7333/:7397/:7446) from the three that make no goal call at all (:7070-7079, :7081-7131, :7187-7193), where X says outright \"I did not read that function's body\"; (4) Y states correctly that the `_goal_grep` three-outcome contract matters only to `goal_liveness` (goal-state.sh:104-144), not to `goal_live_condition`, which returns 1 either way (:62-69). X's only unique in-scope extras are small (the redundant RCY_SUBAGENT_SID read at :9835) plus a large but off-brief table of stale citations elsewhere in handoff-fire.sh. X also slightly misattributes \"search termination\" to the absent hardening when it is really a twin-vs-library interface difference; Y states that cleanly and separately. Narrow, but specific and verified.\n\nX vs Z — X. Z uniquely nails the brief's citation-audit instruction (it is the only output that sweeps the whole repo: it finds K17 hooks/goal-inert-watch.sh:36 and M7 NONLIMIT_RESUME_LADDER.md:753 plus the recon-wave and A03/A05 rows, and I confirmed by grep that its list is exhaustive and every \"what is actually there\" is right). Against that, Z carries three verified falsehoods on brief-named requirements while X carries none. Brief item 1 says \"name the store\": Z says cc_sid_for_pane reads the sid \"out of its transcript file\" and \"off its own live process, not off a stored pointer\", when :4959-4962 shows the primary source IS a stored pointer, the cc-registry row `$CC_REGISTRY_DIR/<pane>.json`, which Z never mentions. Brief item 2 asks what the missing `_goal_grep` hardening does or does not change: Z reaches the right conclusion by a mechanism that is wrong (it says jq exits 0 and `$rec` reaches :5820 \"regardless\", but handoff-fire.sh runs `set -euo pipefail` at :343 so `|| continue` fires first), self-declares it never checked pipefail, and props the argument on a false claim that goal_live_condition's call sites lack the `[ -n \"$rec\" ]` check — goal-state.sh:69 has it. Z also failed to locate `check_goal_arm || exit 1` at :9015 and leans on a comment for it, the exact move the brief forbade. Omissions lose to falsehoods under default-to-refute, and X's misses are omissions of secondary audit rows while X's substantive answer is fully code-grounded and clean.\n\nY vs Z — Y. Y has everything X has over Z plus more: it hits M5 completely (pipefail at :343 cited, all three failure modes enumerated to the same `continue`), states K10's store correctly with both sources (:4959-4962 registry row, :4984-4994 sessions/<pid>.json fallback), and states precisely the point Z gets wrong — that the three-outcome `_goal_grep` distinction is consequential only for `goal_liveness` (:104-144), not for `goal_live_condition`, which returns 1 in both directions. Z's compensating advantage is the complete stale-citation sweep (K17 + M7 + the research docs), real and verified, but it is two audit items against three wrong claims concentrated on the brief's own numbered questions plus a miscited line (:4994 described as a transcript file when it is a sessions registry file) and a spliced :5837 quote. Y also spends its extra verification on this machinery's own transport (the :862-864 self-contradiction about the watcher argv, the :855/:860/:840 stale rows) rather than on unrelated code."
+ }
+}
