@@ -6615,7 +6615,7 @@ capacity_gate() {
 # caller must hand this the SAME artifact the enforce caller lints ($PROMPT_FILE, NOT
 # ${PROMPT_FILE_ORIG:-…} as payload_lint_gate's preview does) — otherwise the two arms judge two
 # different spans and the preview is faithfully reporting on a file the real fire never reads.
-payload_pane_id_gate() { # $1=prompt-file $2=mode(enforce|preview) → 0 ok / 3 refuse
+payload_pane_id_gate() { # $1=prompt-file $2=mode(enforce|preview|advise) → 0 ok / 3 refuse
   local pf="${1:-}" mode="${2:-enforce}" lint out d
   [ "${CC_PANE_ID_GATE:-1}" != 0 ] || return 0
   [ -f "$pf" ] || return 0
@@ -6639,6 +6639,27 @@ payload_pane_id_gate() { # $1=prompt-file $2=mode(enforce|preview) → 0 ok / 3 
     echo "pane-id:  ⛔ WOULD REFUSE — the payload carries a truncated pane id; the real fire exits 3."
     printf '%s\n' "$out" | sed 's/^/          /'
     echo "          Fix before firing, or override with CC_PANE_ID_GATE=0."
+    return 0
+  fi
+  # THE THIRD MODE — `advise`: report on stderr, NEVER refuse (backlog d6d7edef60a3). This exists for
+  # the --recycle path, which ran neither payload gate at all: the fire that most needs a legible
+  # payload (the successor is the SAME pane, so a botched brief has no second reader) was the one arm
+  # with no coverage. It is advisory rather than enforcing because that was MEASURED, not assumed —
+  # over the 1,185 surviving recycle payloads on this box, a fail-closed pane-id gate would have
+  # refused 35 of them (7 distinct briefs × 5 config dirs), and all 7 are FALSE POSITIVES on a
+  # `stat` dev:inode reading quoted in prose (`16777234:745521400`, `1535747925:3929360201`) — and
+  # those 7 are the drain chain's OWN consecutive links #295–#301, i.e. enforcing here would have
+  # broken the chain's lifeline for seven links running over a benign pure-decimal pair. So the
+  # deliverable is coverage that cannot break the chain: the hole stops being SILENT, and a real
+  # truncation in a recycled brief is named at fire time instead of handed to the successor.
+  # An unrecognised mode still falls through to enforce — see the typo-fails-closed test.
+  if [ "$mode" = advise ]; then
+    { echo "⚠ pane-id (recycle, advisory): this brief carries a TRUNCATED pane id — the recycle path does NOT refuse, so the fire continues."
+      printf '%s\n' "$out" | sed 's/^/⚠   /'
+      echo "⚠   A truncated id hard-fails unresolvable (cc-notify exit 3) for whoever reads this brief next."
+      echo "⚠   Use a ROLE token for an operational address and the FULL uuid for a historical fact;"
+      echo "⚠   a deliberate counter-example takes  pane-id-lint:allow  on that line."
+    } >&2
     return 0
   fi
   { echo "!! handoff-fire ABORTED: the payload carries TRUNCATED pane id(s) — a landmine for the successor."
@@ -6666,6 +6687,17 @@ payload_lint_gate() {
       printf '%s\n' "$out" >&2
       echo "!! Fix the payload: a real back-channel — cc-notify <desk-uuid>, or the desk ROLE (cc-notify \"\$(cat ~/.claude/cc-roles/desk)\" / --role desk) — and NEVER prescribe SendMessage for a desk/terminal announce. For a deliberate one-way fire, drop the cc-notify reference." >&2
       return 4
+    fi
+    # `advise` (the --recycle arm, backlog d6d7edef60a3) must not claim a block that will not happen:
+    # the recycle path never enforces this gate, so "WOULD BLOCK this fire" would be false there. It
+    # is advisory for the same MEASURED reason the pane-id arm is — of the 1,185 surviving recycle
+    # payloads on this box, 290 (24.5%) are RED *with* back-channel intent, i.e. a fail-closed gate
+    # here would have exited 4 on close to one recycle in four. A quarter of the fleet's dominant
+    # succession path is not a gate, it is an outage.
+    if [ "$mode" = advise ]; then
+      echo "⚠ payload-lint (recycle, advisory): the recycled brief's back-channel is RED — it names cc-notify but no resolvable target, so whoever reads this brief next may be unable to announce. The recycle path does NOT refuse; the fire continues." >&2
+      printf '%s\n' "$out" >&2
+      return 0
     fi
     echo "payload-lint (preview): WOULD BLOCK this fire — RED, back-channel intended but malformed:" >&2
     printf '%s\n' "$out" >&2
@@ -12750,6 +12782,19 @@ elif [ "$RECYCLE" = 1 ]; then
   RCY_TRUST_CFG="$(config_dir_for_launcher "$LAUNCHER" 2>/dev/null || true)"
   [ -n "$RESUME_LAUNCHER" ] && RCY_TRUST_CFG="$RESUME_CFG"
   pre_trust "$LAUNCH_DIR" "$RCY_TRUST_CFG"
+  # THE THIRD FIRE PATH FINALLY GETS ITS PAYLOAD GATES (backlog d6d7edef60a3, open 2026-08-22, 390
+  # claims and never once adjudicated). handoff-fire has three fire paths; the pane-id and
+  # back-channel gates ran on the dry-run arm (preview, recycle #121) and the cold-fire arm
+  # (enforce), and on --recycle they ran on NEITHER — while --recycle is this fleet's dominant
+  # succession path (this very chain is 335 links deep on it). ADVISORY, not enforcing, and the
+  # choice is measured on the real population rather than argued: see the two gate bodies for the
+  # 35/1185 (pane-id, all false positives, consecutive chain links #295–#301) and 290/1185 = 24.5%
+  # (payload-lint RED-with-intent) refusal rates a fail-closed arm would have produced here. Both
+  # calls are `|| true`-free because both return 0 in advise mode by construction; they are ordered
+  # pane-id-then-back-channel so the recycle's advisories read in the same order a cold fire's
+  # refusals do, and both take the SAME spans their enforcing counterparts lint.
+  payload_pane_id_gate "$PROMPT_FILE" advise
+  payload_lint_gate    "${PROMPT_FILE_ORIG:-$PROMPT_FILE}" advise
   recycle_fire
 else
   # T-P2-5 (F3): gate the MATERIALIZED payload's back-channel before a successor fires (the W5 root).
