@@ -224,6 +224,56 @@ validation at the action boundary, starting with the actions W1 touched, then th
 `src/app/actions/`. Sized to split: this is >500 LOC and >10 files, so it is a wave of units, not
 one unit — decompose it in its own Phase 0 block before firing.
 
+### W4a — Phase 0 decomposition (added 2026-09-22, after the registered-action census)
+
+The plan sized W4a as *">500 LOC and >10 files, so it is a wave of units, not one unit — decompose
+it in its own Phase 0 block before firing."* This is that block.
+
+**The boundary is 92 registered actions, not "every export of 35 `'use server'` modules".** That
+number is measured, re-derivable in one command, and roughly a third smaller than the surface the
+plan assumed: `pnpm build && node scripts/audit-server-actions.mjs` (landed reso `ed145bc7d`).
+**64 inside `src/app/actions/`, 28 outside it** — and those two halves need *opposite* repairs.
+
+🚨 **For the 28 outside, validation is the WRONG fix.** A library module published as a POST
+endpoint should stop being an endpoint; adding runtime validation to it hardens a surface that
+should not exist and leaves the surface. `setGuestSession` is the worked example: the repair was
+deleting the directive and adding `server-only`, not validating its two arguments. reso has already
+run this de-actioning sweep three times on its own — `sessionWrite.ts`, `authQueries.ts`,
+`credentialDbWrites.ts` are shipped siblings — so this is following an in-repo precedent, not
+inventing one.
+
+| Unit | Owns (single owner per file) | Registered actions | Note |
+|---|---|---|---|
+| **W4a-1** | `auth/databaseActions.ts` | 14 | The largest single file and the invitation/user surface. Alone. Sequence AFTER the lead-8 ruling — that fix lands in `sendInvitation`, in this file |
+| **W4a-2** | `auth/cookieActions.ts` | 11 | ⚠️ **Blocked on the lead-1 ruling**, which *moves six of these out* of the module. Validating them first is work the move discards |
+| **W4a-3** | `auth/provisionActions.ts` · `auth/domainActions.ts` · `auth/lambdaActions.ts` | 12 | Provisioning + tenant resolution. Carries lead 7's target-vs-branch fix |
+| **W4a-4** | `notifications/notificationActions.ts` · `notificationHistoryActions.ts` | 5 | Carries lead 16: lift `api/notifications/subscribe/route.ts:13-40`'s validators into a shared module — this unit's validation already exists, in the sibling writer |
+| **W4a-5** | `homeStateActions.ts` · `recapSeedActions.ts` · `listsSeedActions.ts` · `loginHistoryActions.ts` · `navWarmActions.ts` · `operationalHistoryActions.ts` | 10 | The SSR seed/read surface. Carries lead 5 and the one `deferred` unit from W5 |
+| **W4a-6** | `tenantConfigActions.ts` · `venueRoleActions.ts` · `auth/accessActions.ts` · `auth/platformActions.ts` · `auth/tenantContext.ts` | 12 | The authz/config surface. Carries leads 2, 18 and 19 |
+| **W4a-7a** | `drizzle/rp.ts` · `lib/feature-flags.ts` · `lib/tenant-display.ts` · `lib/venue-resolution.ts` · `(app)/bottle-service/.../_data/seed.ts` | 8 | **De-action, do not validate** — and these five are NOT auth/session class, so they are drivable without a ruling. Per module: confirm no `'use client'` importer, drop `'use server'`, add `server-only`, prove it by the manifest |
+| **W4a-7b** | `drizzle/db.ts` · `lib/auth/{aaguid,login,register,session,upgrade}.ts` | 20 | Same repair, but these ARE auth/session class, so calibration note 5 binds and they wait on the ruling. `drizzle/db.ts` alone publishes 7 exports including `getOpenedDatabaseURL` and `getNamedDB` — the sink lead 4 names |
+| **W4a-8** | the ratchet | — | Extend `eslint-rules/no-ungated-db-export.mjs`, which is **structurally blind** here: it fires on a DB-ACCESS signal, so a cookie write, a returned handle and a `migrate()` call all evade it. The exact-path list in `lib/auth/guest-session.test.ts` is the interim ratchet |
+
+**Sequencing.** W4a-7a and W4a-8 are independent of every operator ruling and fire first — they
+remove surface rather than harden it, and neither touches an auth module. W4a-4 and W4a-5 follow. W4a-1, -2, -3, -6 and -7b each carry a
+CONFIRMED lead or an auth module and must wait on the ruling that releases it, or they will be
+rewritten by it.
+
+⚠️ **The split above is the correction of a first draft of this very block**, which put all 28
+outside-exports in one drivable unit. Five of those modules are `lib/auth/*` and one is
+`drizzle/db.ts` — de-actioning them is exactly the auth/session change note 5 exists to hold. A
+unit list is a claim about risk class, not just about file count.
+
+**Red-proof for every unit in this wave is the same instrument**, and it is cheap:
+`node scripts/audit-server-actions.mjs --assert-absent <export>` for a de-action, plus the unit's
+own validation tests. Its positive control is mandatory — every result here is a negative.
+
+**W4b is unchanged and remains operator-gated**: re-keying authorization off `user.username` onto
+`user.id` is a SQLite table rebuild plus backfill across 8 live tenant DBs. It is already filed as
+"route (b), PENDING AN OPERATOR RULING" in `1e07c9035`'s own commit body, and leads 6 and 10 are
+cured-in-the-forward-direction only — no backfill shipped, so handles freed before 2026-09-22 still
+carry orphan grant rows in live tenants.
+
 **W4b — authorization tables key on `user.username`, a recyclable TEXT handle.** Findings #2 and
 leads 6 and 10 are downstream. Re-key to the immutable `user.id`. This is a schema migration plus a
 data backfill on a live fleet — G2, operator-gated, and it lands only after W1b's migration.
