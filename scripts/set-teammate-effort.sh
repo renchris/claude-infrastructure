@@ -12,6 +12,16 @@
 #   project-local `effortLevel` deterministically sets that teammate's effort.
 #   Precedence: cli flag > project-local settings > user settings (xhigh floor).
 #
+# ⚠️ SUPERSEDED FROM 2.1.220 ON (2026-09-22). The paragraph above is the 2.1.170 record and stays
+#   true of that build only. From 2.1.220 the teammate pane builder pushes `--effort <lead's live
+#   level>` onto every member's argv (recorded in skills/agent-teams on 2.1.220, re-read on the
+#   2.1.280 binary), and by the precedence line above that flag outranks the file this script
+#   writes. So on every binary this fleet runs, a member runs at its LEAD's effort and this script
+#   does not change it. It still writes the file (harmless, and correct on a pre-2.1.220 build),
+#   but it says so instead of claiming the file binds. To run members at another rung, fire that
+#   wave's own session at it: `handoff-fire.sh --effort medium` (rungs: model-config.yaml
+#   effort_defaults.opus55_*).
+#
 # SCOPE: teammate PANES only. In-process subagents (Agent tool, no team_name)
 #   inherit the lead's live effort with NO override surface (AgentInput has no
 #   effort field; frontmatter `effort` is not parsed — GH #25591/#25669/#31536/
@@ -50,4 +60,5 @@ else
   printf '{\n  "effortLevel": "%s"\n}\n' "$level" > "$f"
 fi
 
-echo "set-teammate-effort: $f → effortLevel=$level (binds the pane spawned in this worktree; lead unaffected)"
+echo "set-teammate-effort: ⚠ on Claude Code 2.1.220+ this file does NOT set the member's effort — the pane builder passes the lead's --effort, which outranks it. For another rung, fire the wave's own session: handoff-fire.sh --effort $level" >&2
+echo "set-teammate-effort: $f → effortLevel=$level (binds a pane only on a pre-2.1.220 build; lead unaffected)"

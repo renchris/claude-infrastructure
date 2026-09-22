@@ -851,7 +851,11 @@ roles:
                                             # Effort per member: ~/.claude/scripts/
                                             # set-teammate-effort.sh <worktree> high|xhigh
                                             # (panes re-resolve worktree settings.local.json —
-                                            # binary-verified 2.1.170). Spot-check one member's
+                                            # binary-verified 2.1.170). ⚠️ Not on 2.1.220+: the
+                                            # pane gets the LEAD's --effort on argv, which outranks
+                                            # that file, so a member runs at its lead's rung — fire
+                                            # the wave's session at the rung (2026-09-22, see the
+                                            # versions block). Spot-check one member's
                                             # model via billing/transcript per team (GH #43869
                                             # silent-demotion risk). Else fallback 4-8.
   teammate_mechanical: claude-opus-5-5    # same model; effort = the lead's (a medium wave for opus55_coding_scoped)
@@ -989,6 +993,10 @@ frontier_discovery_budget:
 #     `~/.claude/scripts/set-teammate-effort.sh <worktree> low|medium|high|xhigh`
 #     run during worktree setup, before spawn. Capped at xhigh (settings schema);
 #     user-settings floor (xhigh) applies when no worktree override is written.
+#     ⚠️ SUPERSEDED on 2.1.220+ (re-read on 2.1.280, 2026-09-22): the pane builder now
+#     passes `--effort <lead's live level>` on argv, which outranks the worktree file,
+#     so this class is now "inherits the lead" too. Per-member effort = a per-WAVE
+#     session fired at the rung (`handoff-fire.sh --effort <level>`). The script says so.
 #   - In-process SUBAGENTS (Agent tool, no team_name): inherit the lead's LIVE
 #     effort with NO override surface (AgentInput has no effort field; frontmatter
 #     `effort` not parsed — GH #25591/#25669/#31536/#65598 open). Fable panels
