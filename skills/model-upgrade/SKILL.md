@@ -9,6 +9,34 @@ allowed-tools: Read, Edit, Write, Bash, AskUserQuestion, Skill
 **Step -1 (always):** invoke the `claude-api` skill first for authoritative model IDs,
 pricing, and capability facts. Never answer model facts from memory.
 
+**Step -1b — fetch the release materials YOURSELF; there is no human step.** (Added 2026-09-22,
+operator ruling: the agent does this via tools, not the operator via a web UI.) The set is the
+announcement, the System Card PDF it links, "Prompting Claude <Model>", and the pages that guide
+links: effort, what's new, migration guide, models overview.
+
+```bash
+curl -sSL -A "Mozilla/5.0" -o card.pdf "<system-card-url>"   # born-digital: PDF page N == printed N
+pdftotext -layout card.pdf card.txt                          # exact text layer
+pdfimages -png -p card.pdf figs/fig                          # every chart at NATIVE resolution
+pandoc -f html -t plain --wrap=none page.html -o page.txt    # each vendor page
+```
+
+The per-effort evidence the effort policy needs lives in CHARTS with no data labels, so read the
+native figures with vision. Then fan out page-range readers that extract page-cited facts, with a
+second reader per range re-checking each fact at its page. Opus 5.5 run: 462 extracted, 8
+corrected, 0 unsupported, 158 added — `docs/research/opus55-utilization-2026-09-22/`.
+**Do not OCR a born-digital card.** Measured on the Opus 5.5 card (`…/mistral-ocr-eval.md`):
+- Mistral's text matched `pdftotext`, except 15 numbers came back LaTeX-wrapped (`\(33\%\)`
+  defeats a grep for `33%`).
+- Its chart crops were 613×359 px against the PDF's native 2000×1300.
+- It moved a table's group header onto the wrong model column.
+
+OCR is for SCANNED pages only. Detect them per page: `pdffonts` shows no fonts, or `pdftotext`
+yields under ~50 characters over a page-spanning image. Read those pages with Claude vision. The
+Mistral OCR API (`mistral-ocr-latest`, key in the keychain as `MISTRAL_API_KEY`) is the
+purpose-built alternative, but its workspace allowed **0 OCR requests/min** on 2026-09-22 (the key
+itself authenticates). That is a plan setting to re-check, not a property of the product.
+
 **Step 0 — THE BINARY GATE. Run this BEFORE classifying, every time, no exceptions.**
 
 🚨 **We pin Claude Code. Therefore a model release is never only a model event — it is ALWAYS
@@ -178,6 +206,20 @@ for another, so the *next* bump in that family does not re-create the whole prob
 0. **Binary gate cleared?** (Step 0). If NOT: write ONLY `<family>_staged: <new-id>` plus the
    pricing row and any deprecation change, leave `_latest`/`_prior` alone, and stop here — the rest
    of this case is gated. Everything below assumes the id is dispatchable.
+0b. **The binary gate clears for NEW shells only — census the fleet before the flip.** (Measured
+   2026-09-22, Opus 5.5.) A `~/.zshrc` repoint reaches shells started after it. A `--recycle` types
+   into the pane's EXISTING shell, which keeps its old `claude()` body, so recycling does not move a
+   pane to the new binary. Hours after the repoint, 14 sessions still ran 2.1.260, which refuses
+   the new id by name.
+   - **Census:** list each live session's binary with
+     `ps -axo pid=,command= | awk '$2 ~ /\.claude-[0-9]+\//'`.
+   - **Hazard class:** any consumer that hands the NEW full id to a process started by an old shell
+     (type ii in the census). The family alias (`opus`, `fable`) is resolved by whichever binary
+     runs, so it is safe across the split.
+   - **What 2026-09-22 did:** made `handoff-fire --recycle --model opus` type the alias
+     (92451120b), and did NOT run step 2's `--apply`. Its only effective targets were reso
+     team-brief pins that 2.1.260 leads read.
+   - Record in the SSOT section which consumers are safe and why.
 1. `model-config.yaml`: set `<family>_prior` = old latest, `<family>_latest` = new ID, and CLEAR
    `<family>_staged`. Update `pricing_per_mtok` + `deprecations` from claude-api skill facts.
    ⚠️ `pricing_per_mtok` pairs are `[input, output]` BASE rates and consumers index them
