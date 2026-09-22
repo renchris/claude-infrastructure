@@ -90,11 +90,11 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
 - **2026-09-22 — recycle #334 (lane infra):** closed ee1ac85c6ff6, 41d05eae511c, 5511ea906e2e ·
   blocked none · released none · landed cdabea521 + this entry · `closed=3 closed_pre=3
   closed_other=0 filed=0 net=3 blocked=0 min=2 lane=local-drain project=claude-infrastructure
-  floor=MET`. The open queue read eligible=0 again, so the pre-existing pile IS the blocked pile:
-  all 27 blocked falsifiers ran (0 fired), then a path/marker/state sweep found three dead
-  premises. ee1ac85c6ff6 was real — tsv-pad-lint's header asserted the non-literal tab-IFS
-  spellings were an empty set; measured 23 files / 59 sites, so cdabea521 censuses and ratchets
-  them out of band (widening the blocking recognizer would red lands on 21 files of inherited debt).
+  floor=MET`. Open queue read eligible=0, so the pre-existing pile IS the blocked pile: all 27
+  blocked falsifiers ran (0 fired), then a path/marker/state sweep found 3 dead premises.
+  ee1ac85c6ff6 was real — tsv-pad-lint's header asserted the non-literal tab-IFS spellings were an
+  empty set; measured 23 files / 59 sites, so cdabea521 censuses and ratchets them out of band.
+  PING UNDELIVERED, 2nd report: `verdict=unresolvable reason=role-unset` + `fallback=phone-unwired`.
 
 - **2026-09-22 — recycle #333 (lane infra):** closed 52e837e8f22d, 77e107e67523 · blocked none ·
   released none · landed (docs entry only; both rows were MOOT, no code change). Both were re-land
