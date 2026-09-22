@@ -423,7 +423,16 @@ with `--worktree <slug>` / `--cwd <dir>` — same pane, new dir, worktree provis
 fire machinery (pool-claim / cold-create / dep install / pre-trust). Before this, a wave-to-wave
 succession needing a fresh worktree could only be a new-pane fire, and the predecessor was left idle
 holding nothing — an ORIGIN session cannot self-close into its successor. Recycle first; spawn a new
-pane only for what a pane cannot BECOME (a different account or model). CC's queue is TYPE-ASYMMETRIC: plain text typed mid-turn is STEERED into the
+pane only for what a pane cannot BECOME (a different **model**). **A different ACCOUNT does not force
+a new pane either, and never did (corrected 2026-09-22)** — this line used to say "account or model",
+which was false for the same reason the worktree clause above it was: a recycle is EXIT + RELAUNCH in
+the same pane, a NEW process, so launch-time identity is honoured rather than violated
+(`docs/plans/NONLIMIT_RESUME_LADDER.md:707-711`, written about the model half; the account half was
+never corrected, and cost every session on this machine the belief that its own account was fixed).
+`--recycle --account <acct>` is honoured verbatim and never second-guessed (`handoff-fire.sh:8847`);
+with no `--account`, `recycle_repick()` (`:9436`, wired `:9742`) routes it. Where the CONTEXT must
+survive the move, the verb is not a recycle at all — it is `cc-lr switch`, which moves this pane's
+session to another account keeping the same uuid and the full transcript. CC's queue is TYPE-ASYMMETRIC: plain text typed mid-turn is STEERED into the
 still-running turn at the next tool-result boundary (arrives as a `queued_command` attachment) — and the
 fire script's own Bash call guarantees that boundary — while `/clear` holds until turn end. So the old
 design deterministically ran the payload INLINE in the old context with `/clear` armed behind it to wipe
