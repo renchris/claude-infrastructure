@@ -390,6 +390,7 @@ fi
 # with $CLAUDE_CONFIG_DIR as fallback.
 if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     NIDX=""
+    NUNK=""
     # Route 1: explicit override — accepted only if numeric (else ignored, so a
     # malformed value falls through to the dir map rather than blanking the glyph).
     if [ -n "${CLAUDE_INSTANCE_N:-}" ] && [ "${CLAUDE_INSTANCE_N}" -ge 1 ] 2>/dev/null; then
@@ -410,6 +411,22 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
             */.claude-octonary)   NIDX=8 ;;
             */.claude-nonary)     NIDX=9 ;;
             */.claude-denary)     NIDX=10 ;;
+            # ── UNKNOWN IS ITS OWN STATE (2026-09-22) ────────────────────────────────────
+            # A blank marker used to mean two opposite things at once: "this is the STABLE
+            # launcher, which deliberately has no ordinal" and "I could not work out which
+            # account this is". Same pixels, opposite meanings — and the second is the one
+            # that matters, because the whole point of the marker is that the operator types
+            # into whichever pane is in front of him and cannot otherwise see whose quota he
+            # is spending. Measured (A12, VOLUNTARY_ACCOUNT_SWITCH §8a): 60.6% of substantial
+            # post-idle work lands on a non-perishable account. An absent label is read as
+            # "nothing to see", so silence was the worst available rendering of "unknown".
+            # `*/.claude` stays blank — that one IS known, and blank is its answer.
+            # Everything else — an empty CFG (no transcript_path AND no $CLAUDE_CONFIG_DIR),
+            # or a config dir this map has never heard of (an 11th instance added to ~/.zshrc
+            # and not to the map above) — renders `(?)`: never a guess, never a default
+            # account name, and visibly not the stable launcher.
+            */.claude|*/.claude/) : ;;
+            *)                    NUNK=1 ;;
         esac
     fi
     # n -> PER TERMINAL: the circled glyph ①..⑳ under iTerm2 (where it renders at natural
@@ -479,6 +496,12 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
             # Ring muted, digit bright: the number is what gets read, the ring only frames it.
             GLYPH_PREFIX="${NEXT_RING}(${NEXT_NUM}${NIDX}${NEXT_RING})${RESET} "
         fi
+    elif [ -n "$NUNK" ]; then
+        # UNKNOWN. Same ring, same 3 columns, same colours — ring muted, payload bright —
+        # so it reads as "this field, unanswered" rather than as a new field. Deliberately
+        # the ASCII ring on EVERY terminal including iTerm2: the per-terminal gate above
+        # exists to draw a NUMBER inside one cell, and there is no number here.
+        GLYPH_PREFIX="${NEXT_RING}(${NEXT_NUM}?${NEXT_RING})${RESET} "
     fi
 fi
 
