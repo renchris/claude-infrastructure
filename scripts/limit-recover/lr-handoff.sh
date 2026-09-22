@@ -751,8 +751,60 @@ lrh_state() { # $1=state $2=stage $3=detail — the run's own append-only log; l
   return 0
 }
 LRH_ADMIT_TOKEN=""
+# ── IS THE NAMED TARGET ONE THE ROUTER WOULD ACTUALLY PICK? (2026-09-22) ────────────────────────
+# `--target auto` consults claude-accounts --route; an EXPLICIT --target consults nothing, so every
+# health check the router had already computed went unread. Measured that day: a transplant was
+# fired at `--target next2` while the readout on screen said "next2 — auth stale · not polled this
+# sweep, excluded from routing". The relaunched session answered `authentication_failed — Login
+# expired · Please run /login`, the submit failed, and the session sat stranded until a human
+# logged in by hand. The exclusion was computed, printed, and never consulted.
+#
+# ASK THE ROUTER, NEVER RE-DERIVE. The obvious version of this check tests the row's auth field —
+# and `stale` is NOT in claude-accounts' ACTIONABLE_AUTH, so that check would have PASSED the very
+# incident it was written for. `--rank <kind>` is the authority (repo memory: make-the-actuator-the
+# -arbiter), its stdout is `<acct> <score>` best-first, and its exclusions go to stderr.
+#
+# FAIL-OPEN ON AN UNREADABLE INSTRUMENT. A router we cannot run says nothing about the account, and
+# a recovery must not be blocked by our own blindness — that is the difference between "excluded"
+# and "unknown", and only the first is evidence.
+lrh_target_routable() { # → 0 routable / 1 the router excludes it (reason printed)
+  [[ "${LRH_TARGET_ROUTABLE:-on}" == off ]] && return 0
+  local ab kind ranked
+  ab="${CC_ACCOUNTS_BIN:-$HOME/bin/claude-accounts}"
+  [[ -x "$ab" ]] || return 0
+  kind="general"; case "$MODEL" in fable|claude-fable-*) kind="fable" ;; esac
+  # NO PIPELINE ON THE MEMBERSHIP TEST. `… | awk | grep -qx` pipes a streaming producer into an
+  # EARLY-EXIT consumer: grep -q exits on the first match, SIGPIPEs awk, and under `set -o pipefail`
+  # the whole expression then reads FALSE *because* it matched — so the gate would refuse exactly
+  # the targets it should admit, intermittently, depending on whether awk had finished first. The
+  # land gate caught this; the bats cases did NOT, because a 2-line ranked list drains before grep
+  # can exit. Newline-delimited `case` needs no fork and cannot race.
+  lrh_ranked_has() { # $1=ranked stdout $2=acct → 0 present
+    local names; names="$(printf '%s\n' "$1" | awk 'NF{print $1}')"
+    case $'\n'"$names"$'\n' in *$'\n'"$2"$'\n'*) return 0 ;; esac
+    return 1
+  }
+  ranked="$("$ab" --rank "$kind" 2>/dev/null)" || return 0
+  [[ -n "$ranked" ]] || return 0
+  lrh_ranked_has "$ranked" "$TARGET" && return 0
+  # A "not polled this sweep" exclusion is CACHE STALENESS, which is curable rather than arguable:
+  # re-read once before refusing, so the verdict describes the account and not our cache.
+  ranked="$("$ab" --rank "$kind" --fresh 2>/dev/null)" || return 0
+  [[ -n "$ranked" ]] || return 0
+  lrh_ranked_has "$ranked" "$TARGET" && return 0
+  echo "lr-handoff: REFUSED — the router does not rank '$TARGET' for $kind, so a session moved there may not be able to take a turn. NOTHING has been transplanted." >&2
+  "$ab" --rank "$kind" >/dev/null || true   # its own reasons, on stderr, in its own words
+  echo "lr-handoff: override with LRH_TARGET_ROUTABLE=off, or pass --target auto to let the router choose." >&2
+  return 1
+}
+
 lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothing moved
   local hf out rc state lrh_ki
+  # FIRST, because it is the cheapest refusal and the one that costs a whole session when skipped.
+  if ! lrh_target_routable; then
+    lrh_state REFUSED precheck "target $TARGET not ranked by the router"
+    return 6
+  fi
   hf="$(lrh_hf_bin)"
   if [[ -n "$SOURCE_PANE" ]]; then
     if [[ ! -x "$hf" ]]; then

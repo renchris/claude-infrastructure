@@ -605,6 +605,91 @@ verdict: OK' 0)"
   [[ "$output" == *"killed_inflight=2"* ]] || { echo "the precheck did not say what it measured: $output"; false; }
 }
 
+# ── the explicit --target was never checked against the router (2026-09-22) ─────────────────────
+# `--target auto` routes; an explicit target consulted NOTHING, so a transplant fired into an
+# account the router had already excluded, and the relaunched session died on an expired login.
+# These pin the three answers: ranked ⇒ proceed, excluded ⇒ refuse with nothing moved, instrument
+# unreadable ⇒ proceed (blindness is not evidence).
+stub_accounts() { # $1..= acct names --rank prints; "--bulk N" as the LAST arg appends N filler rows
+  local bulk=0
+  if [ "${*: -2:1}" = "--bulk" ]; then bulk="${*: -1}"; set -- "${@:1:$#-2}"; fi
+  { echo '#!/usr/bin/env bash'
+    echo 'case " $* " in *" --rank "*) :;; *) exit 0;; esac'
+    for a in "$@"; do echo "echo '$a 0.0001'"; done
+    # BULK MUST EXCEED THE PIPE BUFFER (64 KiB on Darwin), not merely be "long". The first attempt
+    # at this red-proof used 400 short rows — ~4 KB, which fits the buffer whole, so the producer
+    # finished before the early-exit consumer could ever SIGPIPE it and the MUTANT SURVIVED. A
+    # fixture that cannot reach the regime is an equivalence guard wearing a red-proof's name.
+    [ "$bulk" -gt 0 ] && echo "seq 1 $bulk | awk '{print \"filler-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" \$1 \" 0.0001\"}'"
+    echo 'exit 0'
+  } > "$BATS_TEST_TMPDIR/acct-stub.sh"
+  chmod +x "$BATS_TEST_TMPDIR/acct-stub.sh"
+  printf '%s' "$BATS_TEST_TMPDIR/acct-stub.sh"
+}
+gen_inplace_acct() { # $1=sid $2=cwd $3=hf $4=accounts-bin
+  env PATH="$STUBBIN:$PATH" CLAUDE_CONFIG_DIR="$HOME/.claude" \
+      CC_HANDOFF_FIRE_BIN="$3" CC_FIRE_CAPACITY_GATE=off \
+      HANDOFF_ACCOUNT_SWEEP_STAMP="$BATS_TEST_TMPDIR/sweep.json" \
+      CC_ACCOUNTS_BIN="$4" CC_HEAL_LOCK_PREFIX="$BATS_TEST_TMPDIR/heal-" \
+      IT2_BIN="$BATS_TEST_TMPDIR/absent-it2" \
+      CLAUDE_CODE_SESSION_ID="$1" KITTY_WINDOW_ID=505 \
+      "$HANDOFF" --sid "$1" --target next2 --cwd "$2" --launch
+}
+
+@test "TARGET: the router excluding the named account REFUSES, and nothing is transplanted" {
+  lrh_inplace_setup
+  sid="lrhw0016-0000-4000-8000-000000000016"
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  lrh_tx "$sid" limit
+  # next2 is NOT in the ranked list — exactly next2's state at 15:40 on 2026-09-22.
+  run gen_inplace_acct "$sid" "$BATS_TEST_TMPDIR/repo" "$(stub_hf 'live_subagents: 0
+verdict: OK' 0)" "$(stub_accounts next4 next3)"
+  [ "$status" -ne 0 ] || { echo "an excluded target must REFUSE: $output"; false; }
+  [[ "$output" == *"does not rank 'next2'"* ]] || { echo "$output"; false; }
+  # NOTHING MOVED is the whole contract of a precheck refusal.
+  [ ! -f "$HOME/.reso/limit-recover/locks/$sid.lock" ] || { echo "a lock was written on a refusal"; false; }
+}
+
+@test "TARGET: a ranked account proceeds — the gate is not a blanket refusal" {
+  lrh_inplace_setup
+  sid="lrhw0017-0000-4000-8000-000000000017"
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  lrh_tx "$sid" limit
+  run gen_inplace_acct "$sid" "$BATS_TEST_TMPDIR/repo" "$(stub_hf 'live_subagents: 0
+verdict: OK' 0)" "$(stub_accounts next2 next4)"
+  [ "$status" -eq 0 ] || { echo "a ranked target must proceed: $output"; false; }
+  [[ "$output" != *"does not rank"* ]] || { echo "$output"; false; }
+}
+
+@test "TARGET: a LONG ranked list still admits its FIRST entry (pipefail-SIGPIPE red-proof)" {
+  # THE CASE THE SHORT FIXTURES COULD NOT REACH. The membership test was `… | awk | grep -qx`:
+  # grep -q exits on the first match, SIGPIPEs awk, and under pipefail the expression reads FALSE
+  # *because* it matched. A 2-line list drains before grep can exit, so every case above passed
+  # over the bug and the LAND GATE caught it instead. A long list with the target FIRST maximises
+  # the window in which the producer is still writing when the consumer leaves.
+  lrh_inplace_setup
+  sid="lrhw0019-0000-4000-8000-000000000019"
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  lrh_tx "$sid" limit
+  # ~20000 rows x ~48 B = ~960 KB AFTER the match, i.e. many times the 64 KiB pipe buffer, so the
+  # producer is provably still writing when an early-exit consumer would leave. VERIFIED to kill
+  # the mutant (`… | awk | grep -qx`) and to pass on the drained form.
+  run gen_inplace_acct "$sid" "$BATS_TEST_TMPDIR/repo" "$(stub_hf 'live_subagents: 0
+verdict: OK' 0)" "$(stub_accounts next2 --bulk 20000)"
+  [ "$status" -eq 0 ] || { echo "a ranked target must proceed however long the list: $output"; false; }
+  [[ "$output" != *"does not rank"* ]] || { echo "$output"; false; }
+}
+
+@test "TARGET: an unreadable router proceeds — blindness is not evidence of exclusion" {
+  lrh_inplace_setup
+  sid="lrhw0018-0000-4000-8000-000000000018"
+  mkrepo "$BATS_TEST_TMPDIR/repo" main
+  lrh_tx "$sid" limit
+  run gen_inplace_acct "$sid" "$BATS_TEST_TMPDIR/repo" "$(stub_hf 'live_subagents: 0
+verdict: OK' 0)" "$BATS_TEST_TMPDIR/no-such-accounts-bin"
+  [ "$status" -eq 0 ] || { echo "an absent router must not block a recovery: $output"; false; }
+}
+
 @test "SELF: a session recovering ITSELF records killed_inflight (the mirror verb of W3i)" {
   # The whole probe block was gated on SOURCE_PANE, which the SELF branch deliberately leaves
   # empty — so the commonest in-place recovery there is, a session moving itself to a fresher
