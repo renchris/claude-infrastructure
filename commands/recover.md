@@ -1,8 +1,8 @@
 ---
 name: recover
-description: Recover perfectly from ANY interruption to delegated work — not just a usage cap. Use when a session comes back from a network drop or reconnect ("reconnected to the internet, continue", "wifi came back", "API Error: Can't reach the API server", ENOTFOUND/ECONNRESET/socket hang up), when a workflow or agent STALLED ("agent stalled on all N attempts", "no progress for 180000ms", "stream watchdog did not recover"), when a background task came back failed/killed/stopped, when a session was RESUMED and you need to know what its delegations were doing when the process died, when workflow/subagent/teammate results came back null/partial/empty, or after a crash, a reboot or an /exit. Also covers the quota classes (5-hour / weekly / model-scoped Fable / monthly-spend cap) and the auth login cliff — those select a different recovery MODE, not a different engine. Modes: limit | resume-in-place | stall.
+description: Recover perfectly from ANY interruption to delegated work — not just a usage cap. Use when a session comes back from a network drop or reconnect ("reconnected to the internet, continue", "wifi came back", "API Error: Can't reach the API server", ENOTFOUND/ECONNRESET/socket hang up), when a workflow or agent STALLED ("agent stalled on all N attempts", "no progress for 180000ms", "stream watchdog did not recover"), when a background task came back failed/killed/stopped, when a session was RESUMED and you need to know what its delegations were doing when the process died, when workflow/subagent/teammate results came back null/partial/empty, or after a crash, a reboot or an /exit. Also covers the quota classes (5-hour / weekly / model-scoped Fable / monthly-spend cap) and the auth login cliff — those select a different recovery MODE, not a different engine. Also covers the one VOLUNTARY move — mode `switch`, where nothing is broken and a healthy session relocates itself to a better-quota account in place ("switch accounts", "move this session to next3", "this account is about to wall"). Modes: limit | resume-in-place | stall | switch.
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, Agent, Workflow, TaskList, TaskCreate, TaskUpdate, AskUserQuestion
-argument-hint: "[audit | limit | resume-in-place | stall | fleet [--locate] ] — bare = audit, then the mode the audit's own evidence selects"
+argument-hint: "[audit | limit | resume-in-place | stall | switch | fleet [--locate] ] — bare = audit, then the mode the audit's own evidence selects; switch is voluntary and selects itself"
 ---
 
 # /recover — interrupted-work recovery, no partial-result acceptance
@@ -87,7 +87,8 @@ modes.** Execute it, do not re-judge it. The three wait verdicts are the ones th
 
 ## Step 2 — the mode the evidence selects
 
-The mode is chosen by the audit's evidence, not by the phrase the human typed.
+The mode is chosen by the audit's evidence, not by the phrase the human typed. The one exception is
+`switch`, the voluntary mode: nothing failed, so no evidence points at it and it selects itself.
 
 ### `limit` — the account is the problem
 Quota (`rate_limit` + a "You've hit your…" text) or the auth login cliff. Headroom check,
@@ -132,6 +133,37 @@ view of the same outage seen through three ladders (an 18-minute watchdog, a 51.
 
 Receipt for why a blind re-fire is not free: the harness re-issued one journal key five times into a
 live outage — **85 minutes, six attempts, nothing produced**.
+
+### `switch` — nothing is wrong, and that is the point
+The one **voluntary** mode: the session is healthy, usually idle, and the only thing worth changing
+is *which account is paying for it* — this one is walled or about to be, or a peer's weekly window
+resets sooner. There is no error record, so no audit evidence selects this mode; **you** do, and the
+trigger is a non-event. That is the whole reason it needs a front door at all.
+
+```bash
+cc-lr switch            # moves THIS pane's session; same uuid, full transcript
+```
+
+**SELF-only in v1, and that is a design decision rather than a missing feature.** It is the exact
+mirror of `recover`: recover's subject *cannot act* — it is quota-blocked or dead — so a detached
+driver is the only form that works. Switch's subject **is** the actor, so the driver is unnecessary,
+and it is also unbuildable today: there is no idle/busy predicate anywhere in this subsystem
+(`pane_cc_state` returns `cc` for mid-turn, idle, modal and wedged alike), so a driver cannot
+establish that a *peer* is safe to move, while a session establishes it about itself trivially — it
+is the one taking the turn. The driver form is filed as its own decision, gated on an idle oracle
+existing. Do not reach for `--source-pane` or `--detach` here; they are not the verb's shape.
+
+**Which verb, and the test is whether the CONTEXT is worth keeping:**
+
+| | When | Verb |
+|---|---|---|
+| **fresh context** | everything of value is on disk; a successor re-derives nothing | `handoff-fire.sh --recycle --account <acct>` — same pane, new process, new context |
+| **context preserved** | the transcript IS the asset; ~75% of post-idle work is continuation a fresh session cannot reproduce | `cc-lr switch` |
+
+Two rules carry over from the modes above and bind here unchanged: **never move a pane holding a
+live delegation** (iron rule 3 — PENDING / UNSETTLED-INFLIGHT / RUNNING are verdicts, not delays),
+and **read the refusal rather than the folklore** — an account change is not blocked by launch-time
+identity, and any refusal you do hit names something real.
 
 ## Iron rules (unchanged, and they were never quota-specific)
 
