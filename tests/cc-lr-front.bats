@@ -32,6 +32,17 @@ setup() {
   PATH="$STUBBIN:$PATH"; export PATH
   fleet_stub 0
   launchctl_stub 0
+  # `switch` composes lr-handoff.sh DIRECTLY (never lr-fleet), so it gets its own pinned stub for
+  # the same reason the two above have one: a case that reached the real lr-handoff would TRANSPLANT
+  # A LIVE SESSION off this box.
+  export CC_LR_HANDOFF_BIN="$BATS_TEST_TMPDIR/lr-handoff.sh"
+  handoff_stub 0
+  # THE SELF IDENTITY IS AN AMBIENT SEAM, so the suite must own it (test-hermeticity RULE 6,
+  # INHERITED VALUES). `cc-lr switch` takes its subject from CLAUDE_CODE_SESSION_ID and
+  # cl_this_pane(), and a bats run inherits BOTH from the session running it — so a case meaning
+  # to test "no session id" would silently be handed the operator's live one and pass for the
+  # wrong reason. Each switch case supplies what it needs via self_env().
+  unset CLAUDE_CODE_SESSION_ID CC_PANE_ID ITERM_SESSION_ID KITTY_WINDOW_ID
 }
 
 # ── stubs ──────────────────────────────────────────────────────────────────────────────────────
@@ -55,6 +66,14 @@ fleet_stub() { # <rc> — records its argv; prints the two lines lr-fleet.sh:764
     echo "exit $rc"
   } > "$CC_LR_FLEET_BIN"
   chmod +x "$CC_LR_FLEET_BIN"
+}
+handoff_stub() { # <rc> — records its argv, one line per invocation
+  { echo '#!/usr/bin/env bash'
+    # shellcheck disable=SC2028  # the \n is the GENERATED STUB's own printf escape and must reach the file literally
+    echo "printf '%s\\n' \"\$*\" >> \"$BATS_TEST_TMPDIR/handoff.argv\""
+    echo "exit $1"
+  } > "$CC_LR_HANDOFF_BIN"
+  chmod +x "$CC_LR_HANDOFF_BIN"
 }
 launchctl_stub() { # <rc>
   { echo '#!/usr/bin/env bash'
@@ -630,4 +649,187 @@ iron_rule() { # <file> → rc 0 clean, rc 1 a banned verb is present
   [ ! -e "$BATS_TEST_TMPDIR/fleet.argv" ]
   run bash "$LR"
   [ "$status" -eq 3 ]
+}
+
+# ══ switch — THIS pane moves itself to another account (VOLUNTARY_ACCOUNT_SWITCH §4) ═══════════
+#
+# 🚨 READ THIS BEFORE ADDING A CASE HERE. Almost everything in this block is a RED PROOF — it fails
+# against the pre-change bin/cc-lr, which answers `unknown subcommand 'switch'` with rc 3 — so the
+# cases are genuinely measuring the subject. The EQUIVALENCE GUARDS are labelled individually where
+# they sit; there are two, and both exist to catch a future refactor rather than to prove this one.
+#
+# THE STRUCTURAL CASE IS "never through cc-find". Everything else here is argv and refusal text; the
+# cc-find case is the one that pins the design decision, because routing switch through cl_resolve
+# is the obvious implementation and it refuses every session the verb exists for (a healthy session
+# is BY DEFINITION not LIMITED, so cc-find answers rc 2 and cc-lr's RULE 2 answers rc 2 after it).
+
+# The SELF identity switch takes its subject from. Both halves are required and they fail apart, so
+# each has its own case below.
+self_env() { # → the env a session running `cc-lr switch` in its own pane actually has
+  printf '%s' "CLAUDE_CODE_SESSION_ID=$SID CC_PANE_ID=417 CLAUDE_CONFIG_DIR=$HOME/.claude"
+}
+no_mutex() { [ ! -e "$MUTEX" ]; }
+never_fired() { [ ! -e "$BATS_TEST_TMPDIR/handoff.argv" ]; }
+
+@test "switch does NOT route through cc-find — the LIMITED gate would refuse every session it is for" {
+  # THE DESIGN CASE. cc-find resolves only rows whose class is LIMITED (cc-find:150-155) and cc-lr's
+  # own RULE 2 repeats the test, so a `switch` built on cl_resolve is refused for exactly the
+  # healthy sessions it exists to move. The find stub is ARMED to record argv and to answer rc 2
+  # (AMBIGUOUS) — so an implementation that consulted it would both leave a log AND be refused.
+  find_stub 2 "someone-else	999	next	$HOME/.claude	/x	live	LIMITED"
+  run env $(self_env) bash "$LR" switch --target next3
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/find.argv" ] || { echo "switch consulted cc-find: $(cat "$BATS_TEST_TMPDIR/find.argv")"; false; }
+  [ -s "$BATS_TEST_TMPDIR/handoff.argv" ]
+}
+
+@test "switch fires lr-handoff with THIS session's identity, in place, and marked voluntary" {
+  run env $(self_env) bash "$LR" switch --target next3
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  local argv; argv="$(cat "$BATS_TEST_TMPDIR/handoff.argv")"
+  [[ "$argv" == *"--sid $SID"* ]] || { echo "$argv"; false; }
+  [[ "$argv" == *"--target next3"* ]] || { echo "$argv"; false; }
+  [[ "$argv" == *"--launch"* ]] || { echo "$argv"; false; }
+  [[ "$argv" == *"--voluntary"* ]] || { echo "$argv"; false; }
+  # THE COUNTED PIN, RE-MEASURED AT THE COMPOSER. tests/lr-fleet.bats:320 requires exactly one
+  # `--in-place` in lr-handoff's emitted argv; the voluntary flag must therefore not spell itself
+  # with that substring. Asserting the COUNT here rather than the absence of a name catches a
+  # future flag (`--in-place-voluntary`) that would redden the sibling suite instead of this one.
+  [ "$(printf '%s\n' "$argv" | grep -o -- '--in-place' | grep -c .)" -eq 1 ] || { echo "$argv"; false; }
+  # never lr-fleet: switch is foreground and self-driven, so the detached fleet driver is not in it
+  [ ! -e "$BATS_TEST_TMPDIR/fleet.argv" ] || { echo "switch called lr-fleet"; false; }
+  no_mutex                       # released on the success path too
+}
+
+@test "switch REFUSES --source-pane with rc 3, names the missing idle oracle, and creates no mutex" {
+  run env $(self_env) bash "$LR" switch --source-pane 500
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"SELF-only"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"idle oracle"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"DEC-2"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }
+  no_mutex
+  never_fired
+}
+
+@test "switch REFUSES --detach with rc 3: the mover IS the subject, so there is no driver to detach" {
+  run env $(self_env) bash "$LR" switch --detach
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"FOREGROUND"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }
+  no_mutex
+  never_fired
+}
+
+@test "switch REFUSES a target that cannot be an account name, and does not enumerate the roster" {
+  # The account roster is PERISHABLE (lib/account-map.generated.sh, re-derived from accounts.json),
+  # so this refuses only what cannot BE a name and leaves `is next9 routable` to the router. Both
+  # arms are asserted: a malformed target is rc 3, a well-formed unknown one is passed THROUGH.
+  run env $(self_env) bash "$LR" switch --target 'next3; rm -rf /'
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"cannot be an account name"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }
+  no_mutex
+  never_fired
+  # the other arm — a well-formed name this file has never heard of still reaches the actuator
+  run env $(self_env) bash "$LR" switch --target next9
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$(cat "$BATS_TEST_TMPDIR/handoff.argv")" == *"--target next9"* ]] || false
+}
+
+@test "switch REFUSES when CLAUDE_CODE_SESSION_ID is unset: the subject is unnamable, rc 2" {
+  run env -u CLAUDE_CODE_SESSION_ID CC_PANE_ID=417 CLAUDE_CONFIG_DIR="$HOME/.claude" bash "$LR" switch --target next3
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"CLAUDE_CODE_SESSION_ID is unset"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }
+  no_mutex
+  never_fired
+}
+
+@test "switch REFUSES when no pane holds this process — it will not downgrade to a spawn" {
+  # lr-handoff HAS a no-pane fallback and it SPAWNS, which is the one thing `switch` is defined not
+  # to do: the pane IS the continuation. So the refusal must happen here, in the front door, and it
+  # must name the other rail rather than dead-ending (RULE 2's own lesson, one verb along).
+  run env CLAUDE_CODE_SESSION_ID="$SID" CLAUDE_CONFIG_DIR="$HOME/.claude" \
+      CC_PANE_ID= ITERM_SESSION_ID= KITTY_WINDOW_ID= bash "$LR" switch --target next3
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"no terminal pane"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"handoff"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }
+  no_mutex
+  never_fired
+}
+
+@test "switch takes no ref: a ref names somebody ELSE's session and is rc 3, never a silent move" {
+  run env $(self_env) bash "$LR" switch 500
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"takes no ref"* ]] || { echo "$output"; false; }
+  never_fired
+}
+
+@test "switch --dry-run prints the command, executes nothing, and leaves NO mutex behind" {
+  # A dry run that left a lock behind would block the very attempt it was rehearsing — the header's
+  # own rule ("a refusal that leaves a lock behind blocks the next correct attempt"), which is why
+  # the dry-run arm returns BEFORE cl_mutex_take rather than after it.
+  run env $(self_env) bash "$LR" switch --target next3 --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"DRY RUN"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"--voluntary"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"--target next3"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }
+  never_fired
+  no_mutex
+}
+
+@test "switch RELEASES the mutex when lr-handoff fails, and does not mint a second verdict" {
+  # The actuator that knows whether the transplant ran has already emitted its own verdict= line;
+  # a token minted here from an rc alone would be a second auditor over one population — the defect
+  # the repo lesson sibling-auditors-must-share-the-state-model names.
+  handoff_stub 4
+  run env $(self_env) bash "$LR" switch --target next3
+  [ "$status" -eq 4 ]
+  no_mutex
+  [ "$(printf '%s\n' "$output" | grep -c 'verdict=')" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "switch REFUSES a second mover while the first holds the mutex: one actuator per session" {
+  # EQUIVALENCE GUARD in shape only — cl_mutex_take is unchanged by this wave and this case cannot
+  # fail on any mutant of the mutex, which has its own cases above. What it DOES pin is that the new
+  # verb reaches the same mutex as `recover` instead of minting a private one, which a refactor
+  # could break silently: two movers of ONE session race a transcript copy against a typed /exit.
+  mkdir -p "$MUTEX"
+  printf '{"sid":"%s","pane":"417","pid":%d,"ts":"x","by":"other"}\n' "$SID" "$$" > "$MUTEX/holder"
+  run env $(self_env) bash "$LR" switch --target next3
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"already being recovered by pid $$"* ]] || { echo "$output"; false; }
+  never_fired
+}
+
+@test "the usage block and the unknown-subcommand line both name switch" {
+  # EQUIVALENCE GUARD against a dispatch that works while the surface never mentions the verb — a
+  # verb nobody can discover is a verb nobody uses, which is precisely §2's diagnosis of why no
+  # session has ever done this move.
+  run bash "$LR" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"cc-lr switch"* ]] || { echo "$output"; false; }
+  run bash "$LR" nosuchverb
+  [ "$status" -eq 3 ]
+  [[ "$output" == *"find | recover | switch | status | repair"* ]] || { echo "$output"; false; }
+}
+
+@test "RULE 2's refusal no longer claims the downstream rails are gated on quota" {
+  # TASK B / §4. The old text — "every downstream rail (recycle, transplant, tombstone, self-close)
+  # is gated on the quota predicate" — was FALSE (lr-transplant.sh carries no limit predicate at
+  # all; lr-handoff's SELF arm discards the probe rc on purpose) and was the same defect the header
+  # above it corrects: a refusal bounding the TOOL, read as a fact about the WORLD. RED PROOF: the
+  # sentence is present verbatim in the pre-change file.
+  # SCOPED TO NON-COMMENT LINES, and that is not a loophole: the file's own record of the
+  # correction QUOTES the old sentence verbatim, exactly as the 2026-09-22 correction above it
+  # does, and a whole-file grep would convict the record instead of the defect. What must be gone
+  # is the sentence the operator READS — the echo.
+  local body; body="$(grep -vE '^[[:space:]]*#' "$LR")"
+  [ "$(printf '%s\n' "$body" | grep -c 'every downstream rail' || true)" -eq 0 ] || { echo "the false sentence is still in the refusal text"; false; }
+  [ "$(printf '%s\n' "$body" | grep -c 'WHAT IS GATED ON QUOTA IS THIS ADMISSION RULE AND NOTHING BELOW IT' || true)" -eq 1 ]
+  # and the record of the correction IS kept, in a comment, because a fix with no record rots back
+  [ "$(grep -c 'THE SECOND CORRECTION, 2026-09-22' "$LR")" -eq 1 ]
 }
