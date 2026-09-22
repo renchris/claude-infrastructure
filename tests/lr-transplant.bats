@@ -342,6 +342,64 @@ _cause_normalise() { # strip the arm's own fixture path and the three fields tha
   [[ "$output" == *'"hop":3'* ]] || { echo "$output"; false; }
 }
 
+# ══ A LOCK-LESS SECOND HOP (VOLUNTARY_ACCOUNT_SWITCH §9, backlog ac7bdd4b2f9d) ════════════════════
+# Nothing reaps a lock, but locks proved transient on the live box while tombstones are durable. With
+# the lock gone, `--from B --to C` saw no owner, was not a hop, and minted `chain=[B,C]` — the A→B
+# hop erased. The subject now rebuilds custody from the tombstones before it writes the lock.
+
+@test "transplant: RED PROOF — a lock-less second hop rebuilds the FIRST hop from the tombstone" {
+  # A RED PROOF. Against the pre-fix subject the chain reads "…/to …/third" and hop is 1.
+  export LR_CONFIG_DIRS="$T/from:$T/to:$T/third"
+  _transplant; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  TS_A="$(sed -n 's/.*"ts":"\([^"]*\)".*/\1/p' "$T/from/projects/slug/$SID.HANDOFF.json")"
+  rm -f "$LOCK"
+  _hop2
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ -f "$THIRD" ] || { echo "the second hop copied nothing"; false; }
+  [ "$(_lockchain)" = "$T/from $T/to $T/third" ] || { echo "the first hop was erased: $(_lockchain)"; false; }
+  [ "$(_lockf ts_first)" = "$TS_A" ] || { echo "ts_first=$(_lockf ts_first), first tombstone says $TS_A"; false; }
+  [[ "$output" == *'"hop":2'* ]] || { echo "$output"; false; }
+  [[ "$output" == *"custody rebuilt from 1 tombstone"* ]] || { echo "the rebuild is not reported: $output"; false; }
+}
+
+@test "transplant: a lock-less FIRST move with no tombstone anywhere is unchanged — chain [from,to]" {
+  # EQUIVALENCE GUARD — green in both arms; kills a mutant that invents a predecessor.
+  export LR_CONFIG_DIRS="$T/from:$T/to:$T/other:$T/third"
+  _transplant
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(_lockchain)" = "$T/from $T/to" ] || { echo "chain: $(_lockchain)"; false; }
+  [[ "$output" == *'"hop":1'* ]] || { echo "$output"; false; }
+  [[ "$output" != *"custody rebuilt"* ]] || { echo "$output"; false; }
+}
+
+@test "transplant: a lock-less hop over an AMBIGUOUS tombstone history refuses; --force records from --from" {
+  export LR_CONFIG_DIRS="$T/from:$T/to:$T/other:$T/third"
+  _transplant; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  rm -f "$LOCK"
+  # a second store ALSO claims to have handed this session to $T/to
+  printf '{"handed_off_to":"%s","target_transcript":"x","ts":"2020-01-01T00:00:00Z","lock":"x"}\n' \
+    "$T/to" > "$T/other/projects/slug/$SID.HANDOFF.json"
+  _hop2
+  [ "$status" -eq 2 ] || { echo "status=$status $output"; false; }
+  [[ "$output" == *"cannot be rebuilt"* && "$output" == *"$T/other"* ]] || { echo "$output"; false; }
+  [ ! -e "$LOCK" ] || { echo "a refused move wrote a lock"; false; }
+  [ ! -e "$THIRD" ] || { echo "a refused move copied"; false; }
+  run bash "$LRT" --sid "$SID" --from "$T/to" --to "$T/third" --force
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(_lockchain)" = "$T/to $T/third" ] || { echo "chain: $(_lockchain)"; false; }
+}
+
+@test "transplant: a lock-less hop after A→B→A records the revisit and terminates" {
+  export LR_CONFIG_DIRS="$T/from:$T/to:$T/third"
+  _transplant; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  run bash "$LRT" --sid "$SID" --from "$T/to" --to "$T/from" --force
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  rm -f "$LOCK" "$THIRD"
+  run bash "$LRT" --sid "$SID" --from "$T/from" --to "$T/third" --force
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(_lockchain)" = "$T/from $T/to $T/from $T/third" ] || { echo "chain: $(_lockchain)"; false; }
+}
+
 @test "transplant: the hop keeps ts_first and REFRESHES ts — a fresh claim is not born stale" {
   # EQUIVALENCE GUARD — green against the pre-fix subject too; it pins custody/idempotence, not D2 or D3.
   # bin/cc-limited:969 reads `ts` as the age of the claim (NOW - ts <= CLAIM_GRACE_S ⇒ in grace).

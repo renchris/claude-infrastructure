@@ -330,7 +330,7 @@ not fold them into a teammate's diff.
 | `verdict="RECOVERED"` is an initialiser set before any outcome is read | `lr-fleet.sh:807` |
 | `dry-run` / `skipped` fall through `*)` to `verdict=FAILED` | `lr-fleet.sh:1154` |
 | Nothing ever reaps a transplant lock — no TTL, no release verb | tree-wide absence |
-| A lock-less second hop erases the first hop from custody | `lr-transplant.sh:218-231` |
+| ~~A lock-less second hop erases the first hop from custody~~ — FIXED (backlog `ac7bdd4b2f9d`): with no lock, custody is rebuilt from the `handed_off_to` tombstones before the lock is written; an ambiguous history refuses without `--force` | `lr-transplant.sh` `lrt_rebuild_custody`; `tests/lr-transplant.bats` "lock-less" cases |
 | The ingest verifier has never returned clean — 3 of 3 read `rc 1`, first failure A6 | `INGEST-VERIFIED.txt` census |
 | `claude-accounts:84-88` documents the pre-2026-08-11 survival score, refuted at `:3652-3682` | — |
 

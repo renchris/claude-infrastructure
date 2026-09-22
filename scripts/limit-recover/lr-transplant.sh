@@ -146,6 +146,75 @@ if isinstance(d, dict) and isinstance(d.get("chain"), list):
             print(x)
 PY
 }
+lrt_custody_stores() { # → every account store a tombstone for this sid could sit in, one per line
+  # The ONE spelling of "the account stores" is lr-lib's lr_config_dirs (LR_CONFIG_DIRS honoured,
+  # mirrors deduped). It is sourced in a SUBSHELL so none of the library's names leak into this
+  # script, and resolved via readlink -f because $0 is a per-file symlink in the live layer. --from
+  # and --to are always added: a walk that cannot see the two stores it is moving between is blind.
+  local _self _d _lib
+  _self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+  _d="$(cd "$(dirname "$_self")" && pwd)"
+  for _lib in "$_d/lr-lib.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-lib.sh" \
+              "$HOME/.claude/scripts/limit-recover/lr-lib.sh"; do
+    # shellcheck disable=SC1090  # runtime-resolved library ladder
+    [[ -f "$_lib" ]] && { ( set +eu; . "$_lib" && lr_config_dirs ) || true; break; }
+  done
+  printf '%s\n%s\n' "$FROM" "$TO"
+}
+lrt_tomb_preds() { # $1=store → "<store>\t<ts>" for each OTHER store whose tombstone hands $SID to $1
+  local _want _s _k _seen="" _tomb _to _ts
+  _want="$(lrt_rp "$1/projects")"
+  while IFS= read -r _s; do
+    [[ -n "$_s" && -d "$_s/projects" ]] || continue
+    _k="$(lrt_rp "$_s/projects")"
+    case "$_seen" in *"|$_k|"*) continue ;; esac
+    _seen="$_seen|$_k|"
+    [[ "$_k" != "$_want" ]] || continue                  # a store never precedes itself
+    for _tomb in "$_s"/projects/*/"$SID".HANDOFF.json; do
+      [[ -f "$_tomb" ]] || continue
+      _to="$(sed -n '/"handed_off_to":"/{s/.*"handed_off_to":"\([^"]*\)".*/\1/p;q;}' "$_tomb")"
+      [[ -n "$_to" ]] || continue
+      # Compared by the projects/ dir each resolves to, so the ~/.claude-next mirror is ~/.claude.
+      [[ "$(lrt_rp "$_to/projects")" == "$_want" ]] || continue
+      _ts="$(sed -n '/"ts":"/{s/.*"ts":"\([^"]*\)".*/\1/p;q;}' "$_tomb")"
+      printf '%s\t%s\n' "$(lrt_rp "$_s")" "$_ts"
+      break
+    done
+  done < <(lrt_custody_stores)
+}
+lrt_rebuild_custody() { # → sets LRT_CHAIN (predecessors of --from, oldest first) and LRT_TS_FIRST
+  # One predecessor per step, bounded. AMBIGUOUS (two stores both claim to have handed the session
+  # to the same store) refuses without --force — the tombstones disagree about the history and
+  # picking one would be inventing custody. A REVISITED store is a legitimate A→B→A, not an error:
+  # it is recorded once more and the walk stops, since its older tombstone was overwritten.
+  local _cur="$FROM" _visited _preds _n _s _ts _k _i=0 _prefix=""
+  _visited="|$(lrt_rp "$FROM/projects")|"
+  while [[ $_i -lt 32 ]]; do
+    _i=$((_i+1))
+    _preds="$(lrt_tomb_preds "$_cur")"
+    [[ -n "$_preds" ]] || break
+    _n="$(printf '%s\n' "$_preds" | wc -l | tr -d ' ')"
+    if [[ "$_n" -gt 1 ]]; then
+      if [[ $FORCE -ne 1 ]]; then
+        echo "lr-transplant: REFUSED — no lock for $SID, and more than one store's tombstone says it handed this session to $_cur, so its custody chain cannot be rebuilt:" >&2
+        printf '%s\n' "$_preds" | sed 's/\t.*//; s/^/  /' >&2
+        echo "  disambiguate by hand, or pass --force to record the chain from --from onward only" >&2
+        exit 2
+      fi
+      echo "lr-transplant: --force over an ambiguous tombstone history for $SID; the chain starts at $_cur" >&2
+      break
+    fi
+    _s="${_preds%%$'\t'*}"; _ts="${_preds#*$'\t'}"
+    _prefix="$_s"$'\n'"$_prefix"
+    [[ -z "$_ts" ]] || LRT_TS_FIRST="$_ts"
+    _k="$(lrt_rp "$_s/projects")"
+    case "$_visited" in *"|$_k|"*) break ;; esac
+    _visited="$_visited|$_k|"
+    _cur="$_s"
+  done
+  LRT_CHAIN="$_prefix"
+  [[ -z "$_prefix" ]] || echo "lr-transplant: no lock for $SID — custody rebuilt from $(printf '%s' "$_prefix" | grep -c .) tombstone(s)" >&2
+}
 lrt_lock_owner() { # who holds the session NOW: `owner`, falling back to `to` for a pre-W5-B lock
   local _o
   _o="$(lrt_lock_str owner)"
@@ -373,6 +442,15 @@ if [[ $SECOND_HOP -eq 1 ]]; then
     [[ -z "$LRT_PREV_FROM" ]] || LRT_CHAIN+="$LRT_PREV_FROM"$'\n'
     LRT_CHAIN+="$LRT_OWNER"$'\n'
   fi
+elif [[ -z "$LRT_OWNER" ]]; then
+  # A LOCK-LESS MOVE MAY STILL BE A HOP (VOLUNTARY_ACCOUNT_SWITCH §9, backlog ac7bdd4b2f9d). Nothing
+  # reaps a lock, yet locks proved transient on this box (lr-lib.sh:605-613: one fleet-wide against
+  # three tombstoned husks) while tombstones are durable. With the lock gone, A→B then B→C used to
+  # mint a FRESH `chain=[B,C]` — the A hop erased from custody, and lr-ingest-verify C3 then fails
+  # every older bundle whose target was A. So custody is rebuilt from the tombstones before the
+  # lock is written: walk `handed_off_to` BACKWARDS from --from, one predecessor per step.
+  lrt_rebuild_custody
+  LRT_CHAIN+="$FROM"$'\n'
 else
   LRT_CHAIN="$FROM"$'\n'
 fi
