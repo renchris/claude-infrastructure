@@ -782,6 +782,26 @@ assert url == "https://claude.ai/oauth/authorize?code_challenge=MANUAL&state=s1"
 PY
 }
 
+@test "await_oauth_url(): OSC 8 hyperlink → the URI alone, never the doubled uri+label" {
+  # Replays the REAL transcript shape from /tmp/cc-relogin-next2.out (2026-09-22): the login CLI
+  # emits the URL as an OSC 8 hyperlink, ESC]8;;<uri>BEL<visible uri>ESC]8;;BEL. BEL and ESC are
+  # non-whitespace, so a \S-based tail concatenated the two copies into one doubled URL whose
+  # login_hint carried a literal %07. Driven to claude.ai that answers /login regardless of
+  # session warmth -- cc-relogin then reported exit 6 (cold session) over a live instrument fault.
+  pyt <<'PY'
+import tempfile
+p = os.path.join(tempfile.mkdtemp(), "out")
+uri = ("https://claude.com/cai/oauth/authorize?code=true&state=s1"
+       "&login_hint=chris.swe%2Bclaude%40outlook.com")
+open(p, "w").write("Opening browser to sign in\u2026\n"
+                   "If the browser didn't open, visit: "
+                   "\x1b]8;;" + uri + "\x07" + uri + "\x1b]8;;\x07\n")
+url = ccr.await_oauth_url(p, 2.0, FakeChild(None))
+assert url == uri, url
+assert "\x07" not in url and url.count("https://") == 1, url
+PY
+}
+
 @test "await_oauth_url(): child dies without printing a url → None (no 30s stall)" {
   pyt <<'PY'
 import tempfile

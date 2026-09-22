@@ -389,7 +389,14 @@ POLL_S = 1.0
 # The login CLI prints a MANUAL authorize URL and also auto-opens a localhost variant in the
 # default browser. Drive the manual one only: the auto-opened tab lives in a different browser
 # with different PKCE/session state, so clicking it authorizes nothing we can observe.
-OAUTH_URL_RE = re.compile(r"https://\S*?(?:oauth/authorize|/authorize\?)\S*")
+# `\S` would match the C0 controls the terminal escapes are built from. The login CLI prints
+# its URL as an OSC 8 hyperlink — ESC]8;;<uri>BEL<visible uri>ESC]8;;BEL — so the real URI and
+# the visible copy of it are separated only by BEL. Matching across it yields ONE doubled URL
+# carrying a literal %07 inside login_hint, which claude.ai answers with /login whatever the
+# session's warmth: a cold-session verdict (exit 6) manufactured by the instrument. Excluding
+# every control char ends the match at the BEL, so the first group is the URI alone.
+OAUTH_URL_RE = re.compile(
+    r"https://[^\s\x00-\x20\x7f]*?(?:oauth/authorize|/authorize\?)[^\s\x00-\x20\x7f]*")
 CODE_STATE_RE = re.compile(r"\b[A-Za-z0-9_-]{16,}#[A-Za-z0-9_-]{8,}\b")
 AUTHORIZE_JS = """(() => {
   const els = [...document.querySelectorAll('button,a,input[type=submit],[role=button]')];
