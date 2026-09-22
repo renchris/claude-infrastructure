@@ -4,16 +4,28 @@
 #
 # Usage: lr-transplant.sh --sid SID --from CFGDIR --to CFGDIR
 #                         [--task-list ID] [--keep-source] [--force]
+#                         [--phase admit|confirm] [--cause limit|voluntary]
 #
 # Copies: <slug>/<sid>.jsonl + <slug>/<sid>/ (subagents, workflows, journals)
 #         + tasks/<task-list>/ when given.
 # Safety: split-brain lock at ~/.reso/limit-recover/locks/<sid>.lock, tombstone
-#         JSON next to the source transcript, source transcript renamed to
-#         *.jsonl.handed-off (skipped for the LIVE session or --keep-source).
-# Output: one JSON object on stdout. Exit 0 ok, 2 refused/error.
+#         JSON next to the source transcript, and — only once a caller has
+#         ASSERTED the source is quiesced — the source transcript renamed to
+#         *.jsonl.handed-off.
+#
+# TWO PHASES, because a HEALTHY source keeps appending after the copy:
+#   --phase admit    copy + sha-verify + lock + tombstone, and NEVER retire.
+#   --phase confirm  re-copy + re-verify + retire. Run it immediately before the
+#                    source is told to /exit. Idempotent, and it runs UNDER the
+#                    admit's lock (it never re-acquires one).
+#   no --phase       the legacy single-shot run. It copies and verifies exactly
+#                    as before and does NOT retire: nothing asserted quiescence.
+#
+# Output: one JSON object on stdout.
+# Exit: 0 ok · 2 REFUSED / FATAL (nothing further attempted) · 3 usage.
 set -euo pipefail
 
-SID="" FROM="" TO="" TASK_LIST="" KEEP_SOURCE=0 FORCE=0
+SID="" FROM="" TO="" TASK_LIST="" KEEP_SOURCE=0 FORCE=0 PHASE="" CAUSE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --sid) SID="$2"; shift 2 ;;
@@ -22,10 +34,43 @@ while [[ $# -gt 0 ]]; do
     --task-list) TASK_LIST="$2"; shift 2 ;;
     --keep-source) KEEP_SOURCE=1; shift ;;
     --force) FORCE=1; shift ;;
+    # `--phase` and `--cause` answer to the USAGE rc (3), not to the REFUSED rc (2): a bad value is
+    # the caller mistyping a flag, not this script declining to act on a real request. The pre-existing
+    # arg errors below keep their rc 2 — changing them would move a contract nothing asked to move.
+    --phase)
+      [[ $# -ge 2 ]] || { echo "lr-transplant: --phase needs a value (admit|confirm)" >&2; exit 3; }
+      PHASE="$2"
+      case "$PHASE" in
+        admit|confirm) ;;
+        *) echo "lr-transplant: --phase must be admit or confirm (got '$PHASE')" >&2; exit 3 ;;
+      esac
+      shift 2 ;;
+    # A FIELD, never a state token (DEC-3). It is recorded on the lock and the tombstone so an
+    # artifact read weeks later says WHY the session moved; nothing in this script branches on it,
+    # and no state/klass predicate anywhere may — a new STATE value would fall into klass()'s
+    # permissive `return "run"` default and render as in-flight forever.
+    --cause)
+      [[ $# -ge 2 ]] || { echo "lr-transplant: --cause needs a value (limit|voluntary)" >&2; exit 3; }
+      CAUSE="$2"
+      case "$CAUSE" in
+        limit|voluntary) ;;
+        *) echo "lr-transplant: --cause must be limit or voluntary (got '$CAUSE')" >&2; exit 3 ;;
+      esac
+      shift 2 ;;
     *) echo "lr-transplant: unknown arg $1" >&2; exit 2 ;;
   esac
 done
 [[ -n "$SID" && -n "$FROM" && -n "$TO" ]] || { echo "lr-transplant: --sid/--from/--to required" >&2; exit 2; }
+
+# OPTIONAL FIELDS, ABSENT WHEN UNASKED — not defaulted. Both fragments carry their own leading comma
+# and are appended immediately before a closing brace, so with neither flag every record this script
+# writes (receipt, lock, tombstone) is byte-identical to the pre-change one. That is what keeps the
+# tombstone/lock shapes the rest of the fleet matches on (`"to":"` by literal string, in three
+# readers) unchanged, and it is why an absent `cause` is omitted rather than written as "".
+LRT_CAUSE_JSON=""
+[[ -z "$CAUSE" ]] || LRT_CAUSE_JSON=",\"cause\":\"$CAUSE\""
+LRT_PHASE_JSON=""
+[[ -z "$PHASE" ]] || LRT_PHASE_JSON=",\"phase\":\"$PHASE\""
 
 # `pwd -P`, not `pwd`. Every comparison this script makes against $FROM resolves the OTHER side
 # physically (`pwd -P` below, python realpath on the next two lines), so a LOGICAL $FROM compares a
@@ -108,6 +153,108 @@ lrt_lock_owner() { # who holds the session NOW: `owner`, falling back to `to` fo
   printf '%s' "$_o"
 }
 
+# ══ `--phase confirm` — THE SECOND HALF OF A TWO-PHASE TRANSPLANT (D2) ══════════════════════════
+# THE ASYMMETRY THIS EXISTS FOR. A quota-blocked source cannot append to its transcript after the
+# copy, which is why one `cp -p` plus a sha check has always sufficed. A HEALTHY source appends right
+# up until `/exit` lands — and `/exit` comes LATER, after a composer gate that can wait up to 180s
+# (handoff-fire.sh). The sha check still passes, because it already ran; the successor then resumes a
+# transcript missing its tail and the appended bytes are orphaned in the retired store.
+#
+# So the snapshot is split, and the second half runs when the source is provably quiesced rather than
+# when the move was decided. Confirm runs UNDER the admit's lock: it must never try to re-acquire
+# one, must never refuse on the `$DST already exists` ground admit itself created, and must be safe
+# to re-run — a source already retired is the state confirm was asked to produce, not an error.
+#
+# It sits HERE, above every refusal site, for that reason. It still inherits the same-projects-store
+# refusal above it, which is a fact about the arguments and is wrong for every phase.
+#
+#   rc 0  the destination is byte-identical to the source AND the source is retired (or already was)
+#   rc 2  REFUSED / FATAL — sha mismatch after the re-copy, or the source vanished mid-flight
+#   rc 3  usage
+if [[ "$PHASE" == confirm ]]; then
+  CONFIRM_HITS=()
+  while IFS= read -r line; do [[ -n "$line" ]] && CONFIRM_HITS+=("$line"); done \
+    < <(ls "$FROM"/projects/*/"$SID".jsonl 2>/dev/null || true)
+  if [[ ${#CONFIRM_HITS[@]} -gt 1 ]]; then
+    echo "lr-transplant: REFUSED — multiple copies of $SID under $FROM/projects; disambiguate manually:" >&2
+    printf '  %s\n' "${CONFIRM_HITS[@]}" >&2
+    exit 2
+  fi
+  if [[ ${#CONFIRM_HITS[@]} -eq 0 ]]; then
+    # THE SHAPE A RE-RUN ACTUALLY HAS. Confirm's own success renames the source, so a second call
+    # finds no `<sid>.jsonl` at all — the same trap the W11 idempotence check was written for. A
+    # `.handed-off` copy beside it is confirm reporting its own completed work, not a lost transcript.
+    CONFIRM_RETIRED=""
+    for _c in "$FROM"/projects/*/"$SID".jsonl.handed-off; do
+      [[ -f "$_c" ]] && { CONFIRM_RETIRED="$_c"; break; }
+    done
+    if [[ -n "$CONFIRM_RETIRED" ]]; then
+      CONFIRM_DST=""
+      for _c in "$TO"/projects/*/"$SID".jsonl; do [[ -f "$_c" ]] && { CONFIRM_DST="$_c"; break; }; done
+      printf '{"ok":true,"already_confirmed":true,"sid":"%s","target_transcript":"%s","retired_source":"%s","source_retired":1,"source_retired_reason":"confirm","lock":"%s"%s%s}\n' \
+        "$SID" "$CONFIRM_DST" "$CONFIRM_RETIRED" "$LOCK" "$LRT_PHASE_JSON" "$LRT_CAUSE_JSON"
+      exit 0
+    fi
+    echo "lr-transplant: FATAL — --phase confirm found no transcript $SID under $FROM/projects and no retired copy beside it; the source vanished between admit and confirm" >&2
+    exit 2
+  fi
+  SRC="${CONFIRM_HITS[0]}"
+  SRC_DIR=$(dirname "$SRC")
+  SLUG=$(basename "$SRC_DIR")
+  DST_DIR="$TO/projects/$SLUG"
+  DST="$DST_DIR/$SID.jsonl"
+  mkdir -p "$DST_DIR"
+  # OVERWRITE, deliberately: the whole point of this phase is that the admit-time copy is stale.
+  cp -p "$SRC" "$DST"
+  SESSION_DIR_COPIED=0
+  if [[ -d "$SRC_DIR/$SID" ]]; then
+    # The session dir grows too — subagent transcripts, workflow journals — and for the same reason.
+    rsync -a "$SRC_DIR/$SID/" "$DST_DIR/$SID/"
+    SESSION_DIR_COPIED=1
+  fi
+  TASKS_COPIED=0
+  if [[ -n "$TASK_LIST" && -d "$FROM/tasks/$TASK_LIST" ]]; then
+    mkdir -p "$TO/tasks/$TASK_LIST"
+    rsync -a "$FROM/tasks/$TASK_LIST/" "$TO/tasks/$TASK_LIST/"
+    TASKS_COPIED=1
+  fi
+  SHA_SRC=$(shasum -a 256 "$SRC" | cut -d' ' -f1)
+  SHA_DST=$(shasum -a 256 "$DST" | cut -d' ' -f1)
+  if [[ "$SHA_SRC" != "$SHA_DST" ]]; then
+    echo "lr-transplant: FATAL — sha mismatch after the confirm re-copy (src=$SHA_SRC dst=$SHA_DST); the source was NOT retired" >&2
+    exit 2
+  fi
+  NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  TOMBSTONE="$SRC_DIR/$SID.HANDOFF.json"
+  printf '{"handed_off_to":"%s","target_transcript":"%s","ts":"%s","lock":"%s"%s}\n' \
+    "$TO" "$DST" "$NOW" "$LOCK" "$LRT_CAUSE_JSON" > "$TOMBSTONE"
+  SOURCE_RETIRED=0
+  SOURCE_RETIRED_REASON="keep-source"
+  if [[ $KEEP_SOURCE -ne 1 ]]; then
+    mv "$SRC" "$SRC.handed-off"
+    SOURCE_RETIRED=1
+    SOURCE_RETIRED_REASON="confirm"
+  fi
+  # The receipt keeps the SAME SHAPE as the legacy one — lr-handoff.sh redirects this stdout verbatim
+  # into the bundle's transplant.json, and lr-ingest-verify reads it there. Custody is read back off
+  # the admit's lock rather than recomputed: confirm is the same move, not a new one.
+  CONFIRM_CHAIN_JSON=""
+  CONFIRM_HOPS=0
+  while IFS= read -r _line; do
+    [[ -n "$_line" ]] || continue
+    CONFIRM_CHAIN_JSON="${CONFIRM_CHAIN_JSON:+$CONFIRM_CHAIN_JSON,}\"$_line\""
+    CONFIRM_HOPS=$((CONFIRM_HOPS+1))
+  done < <(lrt_lock_chain)
+  [[ $CONFIRM_HOPS -eq 0 ]] || CONFIRM_HOPS=$((CONFIRM_HOPS-1))
+  CONFIRM_TS_FIRST="$(lrt_lock_str ts_first)"
+  [[ -n "$CONFIRM_TS_FIRST" ]] || CONFIRM_TS_FIRST="$NOW"
+  printf '{"ok":true,"sid":"%s","slug":"%s","target_transcript":"%s","sha256":"%s","session_dir_copied":%s,"tasks_copied":%s,"source_retired":%s,"source_retired_reason":"%s","lock":"%s","tombstone":"%s","hop":%d,"ts_first":"%s","chain":[%s]%s%s}\n' \
+    "$SID" "$SLUG" "$DST" "$SHA_DST" "$SESSION_DIR_COPIED" "$TASKS_COPIED" "$SOURCE_RETIRED" \
+    "$SOURCE_RETIRED_REASON" "$LOCK" "$TOMBSTONE" "$CONFIRM_HOPS" "$CONFIRM_TS_FIRST" \
+    "$CONFIRM_CHAIN_JSON" "$LRT_PHASE_JSON" "$LRT_CAUSE_JSON"
+  exit 0
+fi
+
 FROM_REAL="$(lrt_rp "$FROM")"
 TO_REAL="$(lrt_rp "$TO")"
 LRT_OWNER="$(lrt_lock_owner)"
@@ -176,8 +323,8 @@ if [[ $FORCE -ne 1 && -e "$LOCK" && $SECOND_HOP -ne 1 ]]; then
 fi
 if [[ $FORCE -ne 1 ]]; then
   if LRT_DONE="$(lrt_already_done)"; then
-    printf '{"ok":true,"already_transplanted":true,"sid":"%s","target_transcript":"%s","lock":"%s","note":"same-target retry — the lock names this target and the copy is present; nothing was moved"}\n' \
-      "$SID" "$LRT_DONE" "$LOCK"
+    printf '{"ok":true,"already_transplanted":true,"sid":"%s","target_transcript":"%s","lock":"%s","note":"same-target retry — the lock names this target and the copy is present; nothing was moved"%s%s}\n' \
+      "$SID" "$LRT_DONE" "$LOCK" "$LRT_PHASE_JSON" "$LRT_CAUSE_JSON"
     exit 0
   fi
 fi
@@ -239,8 +386,9 @@ while IFS= read -r _line; do
   LRT_HOPS=$((LRT_HOPS+1))
 done <<< "$LRT_CHAIN"
 LRT_HOPS=$((LRT_HOPS-1))
-printf '{"sid":"%s","from":"%s","to":"%s","ts":"%s","pid":%d,"host":"%s","owner":"%s","ts_first":"%s","chain":[%s]}\n' \
-  "$SID" "$FROM" "$TO" "$NOW" "$$" "$(hostname -s)" "$TO" "$LRT_TS_FIRST" "$LRT_CHAIN_JSON" > "$LOCK"
+printf '{"sid":"%s","from":"%s","to":"%s","ts":"%s","pid":%d,"host":"%s","owner":"%s","ts_first":"%s","chain":[%s]%s}\n' \
+  "$SID" "$FROM" "$TO" "$NOW" "$$" "$(hostname -s)" "$TO" "$LRT_TS_FIRST" "$LRT_CHAIN_JSON" \
+  "$LRT_CAUSE_JSON" > "$LOCK"
 
 mkdir -p "$DST_DIR"
 cp -p "$SRC" "$DST"
@@ -262,17 +410,39 @@ if [[ "$SHA_SRC" != "$SHA_DST" ]]; then
   echo "lr-transplant: FATAL — sha mismatch after copy (src=$SHA_SRC dst=$SHA_DST)" >&2; exit 2
 fi
 
-# Tombstone + source retirement (never rename the LIVE session's transcript —
-# the running harness still appends to it by path).
+# ══ TOMBSTONE + RETIREMENT — THE CALLER ASSERTS IT, THIS SCRIPT NEVER INFERS IT (D3) ════════════
+# The guard here used to be `KEEP_SOURCE -ne 1 && "${CLAUDE_CODE_SESSION_ID:-}" != "$SID"` — the
+# DRIVER's session id. It is correct exactly once: a session driving its own move recognises itself
+# and keeps its transcript. It is WRONG for every OTHER driver, because "the driver is not the
+# subject" was being read as "the subject is not live". A third pane moving a HEALTHY session passes
+# that guard and renames, BY PATH, a transcript the harness is still appending to.
+#
+# There is no repair available at this level and none may be invented here: this subsystem has no
+# idle/busy predicate (`pane_cc_state` returns `cc` for mid-turn, idle, modal and wedged alike), and
+# a `pgrep -f <sid>` census matches any session whose argv merely MENTIONS the sid — including the
+# agent briefs that quote it. So the retirement stops guessing and waits to be ASSERTED:
+# `--phase confirm` IS the caller saying the subject has stopped writing. An unasserted run keeps the
+# source and says so, on stderr and in the receipt.
+#
+# THE ASYMMETRY IS THE WHOLE ARGUMENT: a kept source costs one husk row, which lr-fleet already
+# enumerates and the tombstone below already blocks from resuming; a renamed live transcript costs
+# the tail of a working session, silently, with the sha check passing.
 TOMBSTONE="$SRC_DIR/$SID.HANDOFF.json"
-printf '{"handed_off_to":"%s","target_transcript":"%s","ts":"%s","lock":"%s"}\n' \
-  "$TO" "$DST" "$NOW" "$LOCK" > "$TOMBSTONE"
+printf '{"handed_off_to":"%s","target_transcript":"%s","ts":"%s","lock":"%s"%s}\n' \
+  "$TO" "$DST" "$NOW" "$LOCK" "$LRT_CAUSE_JSON" > "$TOMBSTONE"
 SOURCE_RETIRED=0
-if [[ $KEEP_SOURCE -ne 1 && "${CLAUDE_CODE_SESSION_ID:-}" != "$SID" ]]; then
-  mv "$SRC" "$SRC.handed-off"
-  SOURCE_RETIRED=1
+if [[ $KEEP_SOURCE -eq 1 ]]; then
+  SOURCE_RETIRED_REASON="keep-source"
+elif [[ "$PHASE" == admit ]]; then
+  SOURCE_RETIRED_REASON="admit-phase"
+elif [[ "${CLAUDE_CODE_SESSION_ID:-}" == "$SID" ]]; then
+  SOURCE_RETIRED_REASON="live-self"
+else
+  SOURCE_RETIRED_REASON="unasserted-quiesce"
+  echo "lr-transplant: the source transcript was NOT retired — nothing has asserted that $SID has stopped writing, and this driver is not that session. The copy, the lock and the tombstone are in place; re-run with --phase confirm once the source is quiesced (that call retires it and is safe to repeat)." >&2
 fi
 
-printf '{"ok":true,"sid":"%s","slug":"%s","target_transcript":"%s","sha256":"%s","session_dir_copied":%s,"tasks_copied":%s,"source_retired":%s,"lock":"%s","tombstone":"%s","hop":%d,"ts_first":"%s","chain":[%s]}\n' \
-  "$SID" "$SLUG" "$DST" "$SHA_DST" "$SESSION_DIR_COPIED" "$TASKS_COPIED" "$SOURCE_RETIRED" "$LOCK" "$TOMBSTONE" \
-  "$LRT_HOPS" "$LRT_TS_FIRST" "$LRT_CHAIN_JSON"
+printf '{"ok":true,"sid":"%s","slug":"%s","target_transcript":"%s","sha256":"%s","session_dir_copied":%s,"tasks_copied":%s,"source_retired":%s,"source_retired_reason":"%s","lock":"%s","tombstone":"%s","hop":%d,"ts_first":"%s","chain":[%s]%s%s}\n' \
+  "$SID" "$SLUG" "$DST" "$SHA_DST" "$SESSION_DIR_COPIED" "$TASKS_COPIED" "$SOURCE_RETIRED" \
+  "$SOURCE_RETIRED_REASON" "$LOCK" "$TOMBSTONE" \
+  "$LRT_HOPS" "$LRT_TS_FIRST" "$LRT_CHAIN_JSON" "$LRT_PHASE_JSON" "$LRT_CAUSE_JSON"
