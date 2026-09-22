@@ -180,6 +180,28 @@ desk; nothing about it becomes a background host). Below 90 after this session's
 residue is a framing question, not a missing fact — so it is the operator's, filed as a class-C
 packet with both readings and the live measurement attached.
 
+**RULED 2026-09-22 by the operator: the desk rule, SAFE accounts only.** Decision packet
+`25d3ac950a9e` (superseding `c616443c9616`, conviction 85%). Research between the two packets
+changed the options rather than just the number:
+
+- The objection to the desk rule protected a label, not a check. `claude-accounts` refuses
+  `--rank interactive --recovery` because "the desk lane hosts no transplanted session", but
+  recovery's survival ceiling is `RECOVERY_S_CEIL = 0.60`, which accounts.json says *reuses*
+  `DESK_5H_FLOOR`'s 0.60. Dropping the modifier loses no survival check.
+- It exposed a real flaw instead: the desk rule never refuses. When no account is safe it degrades
+  and still names one, correct for a fresh launch that must land somewhere, wrong for an OPTIONAL
+  move whose alternative is staying put. Hence the gate: accept only tier 2 (5-hour AND weekly
+  safe), otherwise `NOTMOVED`, rc 1.
+- The lanes still disagreed live at ruling time: desk → next2, general → next4.
+
+Implementation, `bin/cc-lr` `cl_switch_auto_target`: `--rank` (writes nothing, unlike `--route`,
+which records a desk decision the desk hysteresis reads), `CC_ROUTE_DESK_HYST=off` (that stickiness
+answers "keep the desk where it is", a different question), source account dropped by name and
+refused again as a second fence. Limit recovery is untouched and still asks the general rule.
+Residual, unmeasured: the 0.6% replay was on freshly launched sessions; a moved session's first,
+uncached turn on the target is a 5-hour burst neither rule models. Measured move cost (0.1–0.3 pp
+weekly) suggests it fits inside the 60%→85% margin, but that is an estimate.
+
 ### DEC-2 — SELF-only in v1, driver form deferred
 
 There is **no idle/busy predicate in this subsystem**. `pane_cc_state` returns `cc` for mid-turn,

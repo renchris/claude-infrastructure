@@ -111,7 +111,10 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
   cc-lr switch [--target A|auto] [--dry-run]
                              move THIS pane's session to another account, in place: same
                              window, same uuid, new account. SELF only — no ref, no
-                             --source-pane, no --detach; foreground.
+                             --source-pane, no --detach; foreground. `auto` picks the
+                             soonest-resetting account that is safe on BOTH the 5-hour and
+                             weekly limits, never this one; if none is safe it stays put
+                             (verdict=NOTMOVED, rc 1).
   cc-lr status [ref|--all]   one row per run's events.jsonl, with CAUSE / NEXT
   cc-lr repair <bundle|ref> [--mode relaunch|prompt] [--target A] [--source-pane P]
                              write a poller request and kick the daemon — NEVER types
@@ -405,6 +408,65 @@ cl_verdict() { # <TOKEN> <to> <note>
     "$1" "$(cl_from_acct)" "${2:--}" "$3" >&2
 }
 
+# ── `--target auto`: the desk rule, SAFE accounts only (operator ruling 2026-09-22) ─────────────
+# Decision packet 25d3ac950a9e, which superseded c616443c9616. A voluntary switch moves a LONG-LIVED
+# session the operator keeps typing into, which is the object the desk rule (`--rank interactive`)
+# was built for; the general rule is built for short dispatched fires. On the 324-sweep replay in
+# claude-accounts' score_interactive docstring the desk rule left a session near a 5-hour wall 0.6%
+# of the time against 3.4% for the general rule, and it is the operator's own sentence: soonest
+# weekly reset, low 5-hour use.
+#
+# ONLY TIER 2, NEVER A DEGRADED PICK. The desk rule's score is `tier + key` with the key in (0,1),
+# so int(score) IS the tier: 2 = safe on both the 5-hour and weekly keys, 1 = 5-hour only, 0 =
+# neither. For a fresh launch the desk must always land somewhere, so the rule degrades rather than
+# answer "none". A switch is OPTIONAL — staying put is always available — so a degraded pick would
+# move a healthy session onto a thin account, which is strictly worse than not moving. That is the
+# whole difference from the rule as it stands, and why this is not `--route interactive`.
+#
+# The 60% 5-hour ceiling behind tier 2 is the same number `--recovery` uses (accounts.json:
+# RECOVERY_S_CEIL "reuses DESK_5H_FLOOR's already-argued 0.60"), which is why skipping that
+# modifier — which the desk rule refuses — loses no survival check.
+#
+# Three further choices, each deliberate:
+#   --rank, not --route: --rank is diagnostic and writes nothing, where --route records a DESK
+#     decision that the desk hysteresis later reads. A switch must not rewrite which account the
+#     operator's own desk sticks to.
+#   CC_ROUTE_DESK_HYST=off: that hysteresis exists to stop the operator's DESK flapping between
+#     accounts. It answers a different question, and left on it would bias this pick toward the
+#     desk's account instead of the soonest-resetting safe one.
+#   The source account is dropped by NAME (cl_from_acct resolves through the same generated
+#     account map the ranker prints from), and a pick equal to the source is refused again below
+#     as a second fence. lr-handoff then re-checks the pick against the general rule's eligible
+#     set (lrh_target_routable), so an account the desk rule admits but the stricter concurrency
+#     count excludes is refused there, loudly, rather than moved onto.
+CL_DESK_SAFE_TIER="${CL_SWITCH_SAFE_TIER:-2}"
+# stdout carries the ACCOUNT on rc 0 and the REASON otherwise: it runs inside `$( … )`, so a global
+# set in here would die with the subshell (memory: assignment-inside-command-substitution).
+cl_switch_auto_target() { # → stdout: account (rc 0) · why (rc 1 none safe, rc 2 could not ask)
+  local ab src out rc=0 best
+  ab="${CC_ACCOUNTS_BIN:-$HOME/bin/claude-accounts}"
+  [ -x "$ab" ] || { printf 'the ranker is not executable at %s' "$ab"; return 2; }
+  src="$(cl_from_acct)"
+  out="$(CC_ROUTE_DESK_HYST=off "$ab" --rank interactive 2>/dev/null)" || rc=$?
+  # The ranker's own taxonomy: 2 = it answered and every account is excluded by POLICY, 3 = it has
+  # no DATA. The first is a real "nothing is safe"; the second is our blindness, not a verdict.
+  case "$rc" in
+    0) ;;
+    2) printf 'the ranker excludes every account'; return 1 ;;
+    *) printf 'the ranker could not answer (rc %s)' "$rc"; return 2 ;;
+  esac
+  best="$(printf '%s\n' "$out" | awk -v src="$src" -v tier="$CL_DESK_SAFE_TIER" '
+    NF == 2 && $2 ~ /^[0-9]+(\.[0-9]+)?$/ && $1 != src && int($2) >= tier {
+      if (!seen || $2 + 0 > bs + 0) { b = $1; bs = $2; seen = 1 }
+    }
+    END { if (seen) print b }')"
+  if [ -z "$best" ] || [ "$best" = "$src" ]; then
+    printf 'no account other than %s is safe on both the 5-hour and weekly limits' "$src"
+    return 1
+  fi
+  printf '%s' "$best"
+}
+
 cmd_switch() {
   local target="auto" dry=0 sid pane cfg rc
   while [ $# -gt 0 ]; do
@@ -470,6 +532,21 @@ cmd_switch() {
   fi
   [ -n "$HANDOFF_BIN" ] && [ -f "$HANDOFF_BIN" ] || {
     cl_die "cannot reach lr-handoff.sh (set CC_LR_HANDOFF_BIN); nothing was started and no mutex was created" 2; }
+
+  # RESOLVED HERE, BEFORE the dry run and BEFORE the mutex: the dry run then shows the account a
+  # real run would pick, and a "nothing is safe" answer leaves no lock behind to block the next try.
+  if [ "$target" = auto ]; then
+    local picked arc=0
+    picked="$(cl_switch_auto_target)" || arc=$?
+    if [ "$arc" -ne 0 ]; then
+      echo "cc-lr switch: staying put — ${picked:-no safe account}. Nothing was started; no mutex was created. Name an account with --target to move anyway." >&2
+      cl_verdict NOTMOVED auto "${picked:-no safe account}"
+      [ "$arc" -eq 1 ] && exit 1
+      exit 2
+    fi
+    target="$picked"
+    echo "cc-lr switch: auto picked $target (soonest weekly reset among accounts safe on both limits)" >&2
+  fi
 
   cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
   set -- --sid "$sid" --config-dir "$cfg" --cwd "$PWD" --target "$target" \
