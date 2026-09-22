@@ -1,10 +1,13 @@
 ---
-status: open
+status: complete
 ---
 
 # VOLUNTARY ACCOUNT SWITCH — a healthy session moves itself to better quota, in place
 
-**Status:** plan frozen 2026-09-22, implementation not started.
+**Status:** plan frozen 2026-09-22; **implementation COMPLETE, landed and live 2026-09-22.**
+Every §10 item is on trunk — see §11 for the per-deliverable shas and the test evidence.
+The original "implementation not started" is kept in the line above only as the freeze date it
+was written beside; it stopped being true the same day.
 **Research:** `docs/research/voluntary-inplace-switch-2026-09-22/` (A01–A12, 12 axes).
 **Scope (frozen):** a healthy, usually-idle session moves ITSELF to a better-quota account without
 leaving its pane — same window id, same session uuid, new account — fired from inside that session.
@@ -322,17 +325,28 @@ plan should be built on that hope.
 
 ## 9. Out of scope, filed not driven
 
+> **DISPOSITION, 2026-09-22 (closing session).** This section named six defects and said *"each
+> needs its own row"* — and **no row existed for any of them** until this record was written, so §9
+> asserted a disposition nobody had executed. That is the §9 failure mode in miniature: a table of
+> real findings is not a queue, and nothing on this machine reads a plan for unfinished work.
+>
+> Three were small enough that filing them would have cost more than fixing them, so they were
+> **DRIVEN** — in their own commit, never folded into a teammate's feature diff, which is what this
+> section actually forbids. Three are genuine design work and are now **FILED** with ids. The
+> per-item verdict is in the right-hand column below.
+
+
 Live defects this research surfaced that are independent of the feature. Each needs its own row; do
 not fold them into a teammate's diff.
 
-| Defect | Evidence |
-|---|---|
-| `verdict="RECOVERED"` is an initialiser set before any outcome is read | `lr-fleet.sh:807` |
-| `dry-run` / `skipped` fall through `*)` to `verdict=FAILED` | `lr-fleet.sh:1154` |
-| Nothing ever reaps a transplant lock — no TTL, no release verb | tree-wide absence |
-| A lock-less second hop erases the first hop from custody | `lr-transplant.sh:218-231` |
-| The ingest verifier has never returned clean — 3 of 3 read `rc 1`, first failure A6 | `INGEST-VERIFIED.txt` census |
-| `claude-accounts:84-88` documents the pre-2026-08-11 survival score, refuted at `:3652-3682` | — |
+| Defect | Evidence | Disposition (2026-09-22) |
+|---|---|---|
+| `dry-run` / `skipped` fall through `*)` to `verdict=FAILED` | `lr-fleet.sh:1154` | **DRIVEN.** Confirmed live, and it is §6's defect one layer down — a verdict naming the ACTUATOR's exit rather than the ACTION's outcome. Unfixed, a `--dry-run --detach` mailed `verdict=FAILED rc=0 … mech=dry-run` (that string is the red proof's own failure output). `DRYRUN` and `SKIPPED` now have arms; FAILED keeps meaning *attempted and broken*. Red proof + a labelled equivalence guard in `tests/lr-fleet.bats`. |
+| `claude-accounts:84-88` documents the pre-2026-08-11 survival score, refuted at `:3652-3682` | — | **DRIVEN.** The help text reproduced the refuted **C4** argument verbatim while the function's own docstring calls it MEASURED FALSE. It matters here specifically: the operator ruling **DEC-1** would naturally read this text about the very lane in question. Also added `interactive` to the `--rank` help line — a real, working lane that line omitted. |
+| `verdict="RECOVERED"` is an initialiser set before any outcome is read | `lr-fleet.sh:807` | **DRIVEN**, with its limit stated: now empty-initialised and assigned explicitly in `0)`, so it is fail-closed. **No red proof** — every arm assigns today, so no input separates the two versions; the defect is a claim about the arm nobody has written yet. |
+| Nothing ever reaps a transplant lock — no TTL, no release verb | tree-wide absence | **FILED** `4f8c73bbdb35` — needs a TTL policy and a release verb, not an edit. |
+| A lock-less second hop erases the first hop from custody | `lr-transplant.sh:218-231` | **FILED** `ac7bdd4b2f9d`. |
+| The ingest verifier has never returned clean — 3 of 3 read `rc 1`, first failure A6 | `INGEST-VERIFIED.txt` census | **FILED** `1c4905d6b2ff` — an investigation (is the verifier wrong, or the ingest?), not a fix. |
 
 ## 10. Definition of done
 
@@ -344,3 +358,58 @@ not fold them into a teammate's diff.
 - Land gate green on the closing commit; landed via the project-local `/ship`; converged to the live
   layer (`scripts/deploy-live.sh`).
 - DEC-1 filed as a class-C packet with its conviction, receipt and two measured options.
+
+---
+
+## 11. Completion record (2026-09-22) — every §10 item, with the sha that carries it
+
+Verified from trunk by a dispatched session on 2026-09-22, tree at `origin/main` (`HEAD..origin/main
+= 0`, not shallow). **Nothing in this section was re-derived** — each row was read out of
+`origin/main` and each suite was RUN this turn, not recalled.
+
+| §10 DoD item | State | Evidence |
+|---|---|---|
+| `cc-lr switch` moves this pane's session, preserving the uuid, verdict by mail | **DONE** | `cmd_switch` `bin/cc-lr:408`, dispatched `:759`; `22ae2a1f3` |
+| Verdict vocabulary with mandatory `from=`/`to=`/`proven=` | **DONE** | `lrh_verdict` `lr-handoff.sh:531`, tokens documented `:494-508`; `22ae2a1f3`, follow-up `9f72d0b52` |
+| **D1** subagent gate no longer force-disabled by a voluntary move | **DONE** | `handoff-fire.sh:9829` gates the forcing on `RCY_TRANSPLANT_CAUSE = limit`; `eb7bcc87e` |
+| **D2** snapshot after quiesce (two-phase `admit`/`confirm`) | **DONE** | `lr-transplant.sh` `--phase admit\|confirm`, confirm block `:174`; `d219d4eec`, `eb7bcc87e` |
+| **D3** retirement keyed on the SUBJECT, not on the driver | **DONE** | `lr-transplant.sh:413-438` — the old `CLAUDE_CODE_SESSION_ID != $SID` guard is named and replaced; `d219d4eec` |
+| D1/D2/D3 each have a test that fails on the unfixed subject | **DONE** | `RED PROOF (D1)` ×2 + `RED PROOF (D2)` `tests/handoff-recycle-remote-resume.bats:181,189,213`; `D3 RED PROOF` `tests/lr-transplant.bats:88` |
+| `CLAUDE.global.md` + `commands/handoff.md` no longer say an account change needs a new pane | **DONE** | `CLAUDE.global.md:716` now names only the **model** as launch-time identity; `commands/handoff.md:429`; `0812e878e` |
+| §8a — the account made visible on the pane (replaces the cut advisory) | **DONE** | `statusline.sh:417-427`, which cites A12's "60.6% of post-idle work lands on a non-perishable account" as its reason; `bbf753d0e` |
+| DEC-1 filed as a class-C packet with conviction, receipt and two measured options | **DONE** | packet `c616443c9616`, `status: open`, `conviction: 72`, receipt carries the live `--rank interactive` vs `--rank general` inversion. **Still the operator's — correctly so; the DoD asked that it be FILED, not answered.** |
+| Land gate green; landed via project-local `/ship`; converged to the live layer | **DONE** | all shas above are ancestors of `origin/main`; `wrap-ledger.sh --machine` reads `LIVE=1 LIVE_SRC=ok LIVE_LAG=0 LIVE_ADDS=0` |
+
+**Suites run this turn** — plan line asserted on each, because a gate that refuses to run emits no
+TAP and exits 0 (§7):
+
+```
+tests/cc-lr.bats                          1..15   0 not ok
+tests/cc-lr-front.bats                    1..50   0 not ok
+tests/lr-transplant.bats                  1..28   0 not ok
+tests/handoff-recycle-remote-resume.bats  1..44   0 not ok
+tests/handed-off-session-guard.bats       1..15   0 not ok
+```
+
+### Why this section exists at all — the stale-frontmatter defect it closes
+
+This plan's frontmatter read `status: open` and its body read *"implementation not started"* while
+all four teammates' work sat on trunk. That is not cosmetic: `find-plan.sh:108` excludes only
+`complete`/`superseded` from the open list, and `plan-phase-scan.sh --falsify` retracts a
+`plan-open` backlog row on that same frontmatter (arm (a), `:96-102`). So the record's staleness was
+**re-minting this row into the dispatch wave** — a worker was spent re-reading landed work, which is
+the `a50e6ab779e8` shape ("advance README hero banner", twelve days after the banner landed) the
+dispatcher's own brief warns about. The lesson generalises: **a plan's completion is a fact its
+frontmatter holds, and nothing else on the machine updates it** — the land does not, the gate does
+not, `/ship` does not. Marking it is the last step of the work, not bookkeeping after it.
+
+### Residue, stated rather than hidden
+
+- **DEC-1 (`c616443c9616`) is open and stays the operator's.** `switch` therefore routes on the lane
+  every existing consumer asks (`general`). If the operator rules for `interactive`, the change is
+  one argument at the `claude-accounts --rank` call site — no structural work is waiting on it.
+- **§9 is now discharged, three driven and three filed** — see its own table for the per-item
+  verdict. None of the six had a row before this session, so §9 had been asserting a disposition
+  nobody executed.
+- **`verdict=""` in `lf_one` carries no red proof** and is flagged as such above rather than
+  dressed up with a test that cannot fail.
