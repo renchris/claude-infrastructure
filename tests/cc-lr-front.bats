@@ -37,6 +37,12 @@ setup() {
   # A LIVE SESSION off this box.
   export CC_LR_HANDOFF_BIN="$BATS_TEST_TMPDIR/lr-handoff.sh"
   handoff_stub 0
+  # THE RANKER IS PINNED TOO (2026-09-22, `--target auto` now consults it). Unpinned, cc-lr falls
+  # back to $HOME/bin/claude-accounts — a tmpdir path today, but a case must never depend on HOME
+  # happening to hide the operator's live router. The default stub exits 97 and logs, so an
+  # unexpected consultation is visible rather than silently answered.
+  export CC_ACCOUNTS_BIN="$BATS_TEST_TMPDIR/claude-accounts"
+  ranker_stub 97
   # THE SELF IDENTITY IS AN AMBIENT SEAM, so the suite must own it (test-hermeticity RULE 6,
   # INHERITED VALUES). `cc-lr switch` takes its subject from CLAUDE_CODE_SESSION_ID and
   # cl_this_pane(), and a bats run inherits BOTH from the session running it — so a case meaning
@@ -66,6 +72,17 @@ fleet_stub() { # <rc> — records its argv; prints the two lines lr-fleet.sh:764
     echo "exit $rc"
   } > "$CC_LR_FLEET_BIN"
   chmod +x "$CC_LR_FLEET_BIN"
+}
+ranker_stub() { # <rc> <stdout lines…> — records argv AND the desk-hysteresis switch it was handed
+  local rc="$1"; shift
+  { echo '#!/usr/bin/env bash'
+    # shellcheck disable=SC2028  # the \n is the GENERATED STUB's own printf escape and must reach the file literally
+    echo "printf '%s|HYST=%s\\n' \"\$*\" \"\${CC_ROUTE_DESK_HYST:-unset}\" >> \"$BATS_TEST_TMPDIR/ranker.argv\""
+    local r
+    for r in "$@"; do printf 'printf %s\n' "'$r\n'"; done
+    echo "exit $rc"
+  } > "$CC_ACCOUNTS_BIN"
+  chmod +x "$CC_ACCOUNTS_BIN"
 }
 handoff_stub() { # <rc> — records its argv, one line per invocation
   { echo '#!/usr/bin/env bash'
@@ -841,4 +858,77 @@ never_fired() { [ ! -e "$BATS_TEST_TMPDIR/handoff.argv" ]; }
   [ "$(printf '%s\n' "$body" | grep -c 'WHAT IS GATED ON QUOTA IS THIS ADMISSION RULE AND NOTHING BELOW IT' || true)" -eq 1 ]
   # and the record of the correction IS kept, in a comment, because a fix with no record rots back
   [ "$(grep -c 'THE SECOND CORRECTION, 2026-09-22' "$LR")" -eq 1 ]
+}
+
+# ── `switch --target auto`: the desk rule, SAFE accounts only (decision 25d3ac950a9e) ────────────
+# The session sits on .claude-secondary, which the generated account map resolves to next2 — a
+# REAL account name, so the source-exclusion arm is exercised. (A bare .claude resolves to no name,
+# and a case run there would drop nothing and pass for the wrong reason.)
+auto_run() { # rest = argv for `cc-lr switch`
+  run env CLAUDE_CODE_SESSION_ID="$SID" CC_PANE_ID=417 CLAUDE_CONFIG_DIR="$HOME/.claude-secondary" \
+      bash "$LR" switch "$@"
+}
+
+@test "switch auto RED PROOF: picks the soonest-reset SAFE account and never the one it is on" {
+  # next2 is THIS session's account and ranks FIRST, so a pick that did not drop the source would
+  # move the session onto itself; next4 is tier 1 (5-hour safe only) and must never be picked.
+  ranker_stub 0 "next2 2.300000" "next3 2.200000" "next4 1.900000"
+  auto_run --target auto
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  local argv; argv="$(cat "$BATS_TEST_TMPDIR/handoff.argv")"
+  [[ "$argv" == *"--target next3"* ]] || { echo "$argv"; false; }
+  [[ "$argv" != *"--target auto"* ]] || { echo "auto reached lr-handoff unresolved: $argv"; false; }
+}
+
+@test "switch auto RED PROOF: stays put when nothing but the source is safe on both limits" {
+  ranker_stub 0 "next2 2.300000" "next3 1.400000" "next4 0.800000"
+  auto_run --target auto
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"no account other than next2 is safe"* ]] || { echo "$output"; false; }
+  never_fired
+  no_mutex
+}
+
+@test "switch auto asks the desk rule by --rank with the desk hysteresis off, never --route" {
+  # --route would record a DESK decision the operator's own desk stickiness reads later; --rank
+  # writes nothing. The hysteresis answers "keep the desk where it is", a different question.
+  ranker_stub 0 "next3 2.100000"
+  auto_run --target auto
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(cat "$BATS_TEST_TMPDIR/ranker.argv")" = "--rank interactive|HYST=off" ] || { cat "$BATS_TEST_TMPDIR/ranker.argv"; false; }
+}
+
+@test "switch auto: a ranker with no data is our blindness, not a verdict, so rc 2 and nothing fired" {
+  ranker_stub 3
+  auto_run --target auto
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"could not answer (rc 3)"* ]] || { echo "$output"; false; }
+  never_fired
+  no_mutex
+}
+
+@test "switch auto: a ranker that excludes every account is a real none-safe, so rc 1 and nothing fired" {
+  ranker_stub 2 "none"
+  auto_run --target auto
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"excludes every account"* ]] || { echo "$output"; false; }
+  never_fired
+}
+
+@test "switch auto --dry-run names the account a real run would pick, and fires nothing" {
+  ranker_stub 0 "next4 2.050000" "next3 2.010000"
+  auto_run --target auto --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"→ next4"* ]] || { echo "$output"; false; }
+  never_fired
+  no_mutex
+}
+
+@test "switch with an explicit --target never consults the ranker" {
+  # EQUIVALENCE GUARD, not a red proof: an explicit target was never ranked, before or after this
+  # change. It fences the fix out of the path the operator uses to override it.
+  auto_run --target next3
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$BATS_TEST_TMPDIR/ranker.argv" ] || { cat "$BATS_TEST_TMPDIR/ranker.argv"; false; }
 }
