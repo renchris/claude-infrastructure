@@ -73,6 +73,7 @@ BAK="$HOME/.claude/autonomy/backups/opus55-cc280-$(date -u +%Y%m%dT%H%M%SZ)"
 
 # ---------- --undo -----------------------------------------------------------------------------
 if [ "${1:-}" = "--undo" ]; then
+  # shellcheck disable=SC2012  # backup dirs are timestamps this script names; ls -1d sorts them
   last="$(ls -1d "$HOME"/.claude/autonomy/backups/opus55-cc280-* 2>/dev/null | tail -1)"
   [ -n "$last" ] && [ -f "$last/zshrc" ] || { echo "✗ no backup to undo from" >&2; exit 1; }
   cp -a "$last/zshrc" "$ZSHRC" || exit 1
