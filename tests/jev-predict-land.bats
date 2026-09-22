@@ -183,23 +183,87 @@ print('ok')"
 }
 
 # ── the consent gate ──────────────────────────────────────────────────────────────────────────
+#
+# phase_ask checks THREE gates, in this order: the free-spend window (hooks/lib/jev.sh:197), then
+# jev_available (jev.sh:117), then the arm token. Both cases below are about the THIRD, and neither
+# sealed the first two — so both asserted on a gate they never reached. seal_jev_preconditions
+# closes that; the reasoning is on the helper, because it is the whole content of this fix.
+
+# seal_jev_preconditions — make the two earlier gates PASS, hermetically, so a refusal below is the
+# consent gate's and not the box's.
+#
+# 🚨 POST-LAND RED (backlog 187ee2cb4252, filed at 63a0584e). Reproduced here 24/24 with exactly
+# these two cases red: jev_available requires `$CC_JEV_LIB_ROOT/node_modules/ai`, which is
+# gitignored (.gitignore:50) and so is absent from every worktree, every fresh clone and every
+# dispatched worker — the land gate's own worktree included. Both cases exited 3 with "jev is not
+# available" and failed on `[ "$status" -eq 6 ]`, a verdict about the RUNNER wearing the shape of a
+# verdict about the subject (docs/lessons/a-suite-red-can-belong-to-the-box-not-the-branch.md).
+#
+# WHY SEALED AND NOT SKIPPED, unlike the three sibling files that guard this same precondition
+# (jev-evaluate.bats:30, jev-anti-deference-arm.bats:35, jev-promote.bats:40). Those cases need a
+# CALL to succeed, and no fixture can grant that — a skip is the honest verdict. These two need a
+# REFUSAL, which needs no deps at all. Skipping them would retire the consent gate standing between
+# a never-pushed diff and STANDARD retention on precisely the runners that lack node_modules, and
+# this file's own baseline case already fixes the standard: a safety refusal that only ever skips
+# has never been falsified.
+#
+# THE SECOND, INDEPENDENT RED, closed in the same pass because it is the same unsealed seam.
+# CC_JEV_FREE_UNTIL defaults to 2026-09-25 (jev.sh:198), so from 2026-09-26 both cases go red on a
+# box WITH deps installed — the desk included — for a reason that is neither the subject nor the
+# box but the calendar. Measured by running the arm at CC_JEV_FREE_UNTIL=2026-09-21: exit 3,
+# "the free AI Gateway window closed". Pinned far forward here, which seals the clock comparison
+# and nothing else. Deliberately NOT `CC_JEV_PAID=1`: that override authorises SPEND, and a test
+# must not carry an authorisation it has no use for.
+#
+# The gate ORDER is not what was wrong. Checking the window first is deliberate and argued at
+# predict-land.sh:422 — the window is the one refusal whose cost is a BILL rather than a re-run — so
+# the instrument is what had to be fixtured, not the subject reordered.
+#
+# The stub `node` is here so the fourth precondition is not ambient either, and it exits non-zero
+# and loudly: nothing on these two paths may reach a call, so if a future edit lets the seal
+# over-reach past the refusal it exists to expose, the stub names that instead of quietly running
+# the real runtime.
+seal_jev_preconditions() {
+  local r="$BATS_TEST_TMPDIR/jevroot" b="$BATS_TEST_TMPDIR/stubbin"
+  mkdir -p "$r/scripts/jev" "$r/node_modules/ai" "$b"
+  : > "$r/scripts/jev/evaluate.mjs"
+  cat > "$b/node" <<'STUB'
+#!/bin/bash
+echo "FIXTURE node stub: the subject reached a CALL, which these cases must refuse before." >&2
+exit 97
+STUB
+  chmod +x "$b/node"
+  export CC_JEV_LIB_ROOT="$r"
+  export CC_JEV=1                         # an ambient CC_JEV=0 exits 3 by the same door
+  export CC_JEV_FREE_UNTIL=2099-01-01     # pin the clock; do NOT authorise spend
+  export PATH="$b:$PATH"
+}
 
 @test "ask: refuses with no arm token, and names the command instead of running it" {
   mkstore
+  seal_jev_preconditions
   rm -f "$CC_PREDICT_ARM_FILE"
   echo '{"head":"aaa1","base":"bbb1"}' > "$BATS_TEST_TMPDIR/s.jsonl"
   run env AI_GATEWAY_API_KEY=dummy bash "$SUT" ask --sample "$BATS_TEST_TMPDIR/s.jsonl"
   [ "$status" -eq 6 ]
-  [[ "$output" == *"NOT ARMED"* ]]
+  [[ "$output" == *"NOT ARMED"* ]] || false
+  # And NOT a pre-empting refusal. Both earlier gates also exit non-zero and print a ⛔/✗ line, so
+  # naming their text is what separates "the consent gate refused" from "the consent gate was never
+  # reached" — the exact confusion this case shipped with, and the one an un-sealing would restore.
+  [[ "$output" != *"jev is not available"* ]] || false
+  [[ "$output" != *"free AI Gateway window"* ]] || false
 }
 
 @test "ask: a token naming another corpus is refused AND left intact for its own consumer" {
   mkstore
+  seal_jev_preconditions
   jq -n '{created:"2026-09-21T00:00:00Z",expires:"2099-01-01T00:00:00Z",max_calls:5,corpus:"memory-orphans"}' \
     > "$CC_PREDICT_ARM_FILE"
   echo '{"head":"aaa1","base":"bbb1"}' > "$BATS_TEST_TMPDIR/s.jsonl"
   run env AI_GATEWAY_API_KEY=dummy bash "$SUT" ask --sample "$BATS_TEST_TMPDIR/s.jsonl"
   [ "$status" -eq 6 ]
+  # `not land-diffs` is unique to the corpus gate, so this one string already proves which refusal
+  # was reached — no absence assertion needed beside it.
   [[ "$output" == *"not land-diffs"* ]] || false
   # NOT consumed: the token belongs to jev-batch.sh's corpus, and eating another consumer's
   # authorisation would silently disarm it.
