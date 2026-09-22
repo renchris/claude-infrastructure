@@ -217,7 +217,7 @@ for another, so the *next* bump in that family does not re-create the whole prob
      (type ii in the census). The family alias (`opus`, `fable`) is resolved by whichever binary
      runs, so it is safe across the split.
    - **What 2026-09-22 did:** made `handoff-fire --recycle --model opus` type the alias
-     (92451120b), and did NOT run step 2's `--apply`. Its only effective targets were reso
+     (feat/opus55-utilization), and did NOT run step 2's `--apply`. Its only effective targets were reso
      team-brief pins that 2.1.260 leads read.
    - Record in the SSOT section which consumers are safe and why.
 1. `model-config.yaml`: set `<family>_prior` = old latest, `<family>_latest` = new ID, and CLEAR

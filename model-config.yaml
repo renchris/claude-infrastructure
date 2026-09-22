@@ -4,7 +4,7 @@
 #
 # Last updated: 2026-09-22  (Opus 5.5 lateral bump ADOPTED — opus_latest is claude-opus-5-5, flipped in ONE
 #              diff with the Opus 5.5 effort policy (effort_defaults.opus55_*) and made safe for a split
-#              fleet by 92451120b (a --recycle types the `opus` alias); see § OPUS 5.5.
+#              fleet by the handoff-fire recycle fix (a --recycle types the `opus` alias); see § OPUS 5.5.
 #              Prior 2026-09-03: (Fable 5.1 lateral bump ADOPTED — frontier_latest is claude-fable-5-1, landed in
 #              ONE diff with the keying rewrite that the flip is unsafe without; see § Fable 5.1.
 #              It was PARKED in frontier_staged earlier the same day, correctly: no installed CC binary
@@ -138,7 +138,7 @@ versions:
 # docs/research/opus55-utilization-2026-09-22/README.md. The effort keys are effort_defaults.opus55_*.
 #
 # ✅ STATUS 2026-09-22
-#   · Binary: launcher on 2.1.280 (activation 45, committed 99aeb49de); cc-upgrade-gate GREEN
+#   · Binary: launcher on 2.1.280 (activation 45, now committed under docs/activation/pending-activation/); cc-upgrade-gate GREEN
 #     14 pass / 0 fail / 1 skip on 2.1.280 × claude-opus-5-5 across all four accounts
 #     (~/.claude-versions/MANIFEST.jsonl, 2.1.280). 2.1.260 refuses the id BY NAME (400).
 #   · THE FLEET WAS SPLIT AT THE FLIP, and that is the one hazard. At ~16:00 local, 14 live
@@ -147,10 +147,10 @@ versions:
 #     alias resolves per binary (measured: `--model opus` → claude-opus-5 on 2.1.260, →
 #     claude-opus-5-5 on 2.1.280), so everything keyed on the alias — agent frontmatter, Workflow
 #     slots, teammate `model: opus` — was already safe. The one executable consumer that handed a
-#     FULL id to an existing shell was `handoff-fire --recycle --model opus`; 92451120b makes it
+#     FULL id to an existing shell was `handoff-fire --recycle --model opus`; the recycle fix makes it
 #     type the alias. Fresh fires (cc-route waves, handoff-fire without --recycle) open a new shell
 #     on 2.1.280 and keep the full id. Residual, stated: a session running handoff-fire from a
-#     claude-infrastructure worktree cut BEFORE 92451120b still resolves the full id on a recycle;
+#     claude-infrastructure worktree cut before that fix still resolves the full id on a recycle;
 #     that fails LOUDLY (400 in the relaunched pane), never as a silent demotion.
 #   · When YOU pin a model by hand, pin the ALIAS `opus` until no 2.1.260 session is left. The full
 #     id is allowlisted, so a 2.1.260 lead that pins it passes the hook and fails at spawn — loudly.
