@@ -52,6 +52,13 @@ cmd_line() { ( cd "$MAIN" && bash "$HF" "$@" --dry-run --prompt-file "$PF" --lau
 }
 
 @test "fresh fire: --model opus still resolves to a full claude-opus-* id (non-regression)" {
+  # A FRESH fire composes its launcher from the ~/.claude account/launcher layout that setup()
+  # links in; off-box (empty HOME) there is none and the script exits before printing a command.
+  # That is an absent PRECONDITION, not a regression, so it skips. Test 1 — the red-proof — needs
+  # no layout and runs everywhere.
+  if [ ! -e "$HOME/.claude" ]; then
+    skip "fresh fire needs the ~/.claude launcher/account layout (absent off-box)"
+  fi
   run cmd_line --cwd "$MAIN" --model opus
   [ -n "$output" ] || false
   echo "$output" | grep -qE -- '--model claude-opus-[0-9]' || false
