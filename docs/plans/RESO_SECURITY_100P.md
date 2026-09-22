@@ -28,6 +28,48 @@ cites it by absolute path. If the consolidation programme later opens a slot, mo
 
 ---
 
+## Status — updated 2026-09-22 (INTEGRATE-only; nothing below is deleted)
+
+| Wave | State | Evidence |
+|---|---|---|
+| **W1 — the 6 confirmed** | ✅ **DONE, all six landed on reso trunk** | #1 `88c951bf9` · #2 `1e07c9035` · #3 `6e5465a4e` · #4 `04157d23f` · #5 `4a6457901` · #6 `c8999cbce` |
+| **W2/W3 — the 20 leads** | ✅ **all 20 adjudicated to verdicts** — 13 CONFIRMED · 5 REJECTED · 2 split. Fixes NOT driven, deliberately (below) | `docs/research/cf-audit-reso-lead-verdicts-2026-09-22.md` |
+| **W4 — the 2 structural facts** | ⛔ not started; W4b is operator-gated (migration + backfill on a live fleet) | — |
+| **W5 — the 19 uncovered** | ✅ **DONE, landed** | `fa6539057`, `docs/research/cf-audit-reso-uncovered-surfaces-2026-09-22.md` |
+| **W5 follow-on** | ✅ one confirmed hole from W5's own candidate set CLOSED on trunk: `setGuestSession` is no longer a registered Server Action | reso `sec-w3a-tenantctx` |
+
+**The plan's own Phase 0 was overtaken and that is recorded rather than hidden.** W1 ran as four
+dispatched sessions as written, and W5 ran in parallel as written. W2/W3 did **not** need the
+planned 3 dispatched sessions plus a lead-inline pass: an 8-axis read-only adjudication wave settled
+all 20 in one pass, because a lead needs a *verdict*, not an owner — the owner is only needed once a
+verdict says CONFIRMED. The W2/W3 split by "source-settleable vs deployment-fact" also did not
+survive contact: the decisive instrument turned out to be a **build**, not a deployment read.
+
+🚨 **Why 13 CONFIRMED leads landed 0 fixes, and why that is compliance rather than timidity.**
+reso's own calibration note 5 (`.claude/commands/exhaust-improvements.md`) reads verbatim:
+*"Auth/sync findings → queue + escalate, never silently land mid-sweep."* Every remaining CONFIRMED
+lead is auth-, authz- or sync-class. This plan's § Known issues already said the same thing in its
+own words. Three of them have fixes that are byte-identical on the normal path and were still not
+driven for that reason; they are named in the verdict doc under § Three fixes are landable-now.
+
+**The one measurement that closes or arms four leads at once** is the live value of
+`tenant_config.enable_venue_scoping` per tenant DB. Leads 5, 14 and 15 arm the moment it flips on;
+lead 11 closes twice over if it is off everywhere. `venue-authz.ts:63-64` asserts it is off in a
+comment — a claim with a shelf life, not a measurement.
+
+### The correction this programme owes its own source of record
+
+Structural fact #1 — every export of a `'use server'` module is a network-reachable POST endpoint —
+is directionally right and **too strong**. Next registers only what its build graph reaches, and
+`reso scripts/audit-server-actions.mjs` now reads that off the build with a mandatory positive
+control. It refuted the stated attack vector of leads 3, 4 and 14 and confirmed leads 1 and 18.
+**W4a should be re-scoped against that census**: the action boundary needing runtime validation is
+92 registered exports, not every export of 35 modules.
+
+---
+
+---
+
 ## Phase 0 — Agent Team Orchestration
 
 ### Execution locus per wave

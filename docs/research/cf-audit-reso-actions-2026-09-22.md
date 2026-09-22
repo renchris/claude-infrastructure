@@ -115,6 +115,30 @@ environment, whether Next 16.3.5 admits a Server Action POST of a given shape, a
 
 ---
 
+## The 20 leads have since been adjudicated — 2026-09-22
+
+Every lead above now carries a verdict in
+[`cf-audit-reso-lead-verdicts-2026-09-22.md`](cf-audit-reso-lead-verdicts-2026-09-22.md).
+**13 CONFIRMED · 5 REJECTED · 2 split** (4 and 18 confirm the defect and refute the stated
+impact); lead 7's impact half is BLOCKED on an IAM policy not in this repo.
+
+🚨 **One correction lands on this document's own § Method.** Structural fact #1 — *"in the App
+Router that directive makes every export a network-reachable POST endpoint"* — is directionally
+right and **too strong**, and five leads inherited it as a premise. Next registers only the exports
+its build graph reaches, and that is readable off a build rather than argued:
+`pnpm build && node scripts/audit-server-actions.mjs` (landed in reso this wave, with a mandatory
+positive control, because every interesting result is a negative). Measured on `next@16.3.5`:
+**92 registered actions**, and `initializeDB`, `consumeInvitationAndRegister`, `createEvent`,
+`migrateDB` and `initializeDatabase` are **not** among them — which refutes the stated attack
+vector of leads 3, 4 and 14. It does not make those functions unreachable; both `/api/register` and
+the Replicache push path still reach them. What it refutes is the *direct-action* POST.
+
+The sharpest item is **not** one of the 6 confirmed: lead 8 is a tenant-admin → org-wide
+control-plane escalation, and the raw invite token is returned to its caller, so no mailbox control
+is needed.
+
+---
+
 ## Method, and the one constraint that shaped every verdict
 
 **No target code was executed, and that is the skill's contract rather than a shortfall.** Measured
