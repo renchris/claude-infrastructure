@@ -34,6 +34,7 @@ cites it by absolute path. If the consolidation programme later opens a slot, mo
 |---|---|---|
 | **W1 — the 6 confirmed** | ✅ **DONE, all six landed on reso trunk** | #1 `88c951bf9` · #2 `1e07c9035` · #3 `6e5465a4e` · #4 `04157d23f` · #5 `4a6457901` · #6 `c8999cbce` |
 | **W2/W3 — the 20 leads** | ✅ **all 20 adjudicated to verdicts** — 13 CONFIRMED · 5 REJECTED · 2 split. Fixes NOT driven, deliberately (below) | `docs/research/cf-audit-reso-lead-verdicts-2026-09-22.md` |
+| **W4a-7a — de-action the non-auth published modules** | ✅ **DONE, landed** — 6 endpoints removed + the exact-path ratchet | reso `ae0edbf6d` |
 | **W4 — the 2 structural facts** | ⛔ not started; W4b is operator-gated (migration + backfill on a live fleet) | — |
 | **W5 — the 19 uncovered** | ✅ **DONE, landed** | `fa6539057`, `docs/research/cf-audit-reso-uncovered-surfaces-2026-09-22.md` |
 | **W5 follow-on** | ✅ one confirmed hole from W5's own candidate set CLOSED on trunk: `setGuestSession` is no longer a registered Server Action | reso `sec-w3a-tenantctx` |
@@ -250,12 +251,14 @@ inventing one.
 | **W4a-4** | `notifications/notificationActions.ts` · `notificationHistoryActions.ts` | 5 | Carries lead 16: lift `api/notifications/subscribe/route.ts:13-40`'s validators into a shared module — this unit's validation already exists, in the sibling writer |
 | **W4a-5** | `homeStateActions.ts` · `recapSeedActions.ts` · `listsSeedActions.ts` · `loginHistoryActions.ts` · `navWarmActions.ts` · `operationalHistoryActions.ts` | 10 | The SSR seed/read surface. Carries lead 5 and the one `deferred` unit from W5 |
 | **W4a-6** | `tenantConfigActions.ts` · `venueRoleActions.ts` · `auth/accessActions.ts` · `auth/platformActions.ts` · `auth/tenantContext.ts` | 12 | The authz/config surface. Carries leads 2, 18 and 19 |
-| **W4a-7a** | `drizzle/rp.ts` · `lib/feature-flags.ts` · `lib/tenant-display.ts` · `lib/venue-resolution.ts` · `(app)/bottle-service/.../_data/seed.ts` | 8 | **De-action, do not validate** — and these five are NOT auth/session class, so they are drivable without a ruling. Per module: confirm no `'use client'` importer, drop `'use server'`, add `server-only`, prove it by the manifest |
+| **W4a-7a** | `lib/venue-resolution.ts` · `lib/tenant-display.ts` · `(app)/bottle-service/.../_data/seed.ts` | 6 | ✅ **DONE — landed `ae0edbf6d`.** Six live endpoints removed; registered actions 89 → 83. `drizzle/rp.ts` and `lib/feature-flags.ts` were dropped from this unit on measurement: both carry the directive but have **zero registered exports** (tree-shaken), so de-actioning them is hygiene with no live endpoint behind it |
 | **W4a-7b** | `drizzle/db.ts` · `lib/auth/{aaguid,login,register,session,upgrade}.ts` | 20 | Same repair, but these ARE auth/session class, so calibration note 5 binds and they wait on the ruling. `drizzle/db.ts` alone publishes 7 exports including `getOpenedDatabaseURL` and `getNamedDB` — the sink lead 4 names |
 | **W4a-8** | the ratchet | — | Extend `eslint-rules/no-ungated-db-export.mjs`, which is **structurally blind** here: it fires on a DB-ACCESS signal, so a cookie write, a returned handle and a `migrate()` call all evade it. The exact-path list in `lib/auth/guest-session.test.ts` is the interim ratchet |
 
-**Sequencing.** W4a-7a and W4a-8 are independent of every operator ruling and fire first — they
-remove surface rather than harden it, and neither touches an auth module. W4a-4 and W4a-5 follow. W4a-1, -2, -3, -6 and -7b each carry a
+**Sequencing.** W4a-7a and W4a-8 were independent of every operator ruling and fired first — they
+remove surface rather than harden it, and neither touches an auth module. **Both are now landed**
+(`ae0edbf6d`): six endpoints gone, and the ratchet pins the exact remaining set of 13 `'use server'`
+modules outside `src/app/actions/` (10 debt, 3 legitimately client-called). W4a-4 and W4a-5 follow. W4a-1, -2, -3, -6 and -7b each carry a
 CONFIRMED lead or an auth module and must wait on the ruling that releases it, or they will be
 rewritten by it.
 
