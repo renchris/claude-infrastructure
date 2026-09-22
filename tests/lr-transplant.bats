@@ -545,3 +545,124 @@ _c3() { # $1 = the manifest's target_cfg → the clause line the SHIPPED C3 bloc
   [[ "$output" == PASS\ C3\ * ]] || { echo "$output"; false; }
   [[ "$output" != *"EARLIER hop"* ]] || { echo "the plain arm was bypassed: $output"; false; }
 }
+
+# ══ RELEASE / REAP — an abandoned move no longer holds custody for ever (VOLUNTARY_ACCOUNT_SWITCH § 9)
+# Before --release/--reap there was no exit from a lock but --force. The RED PROOFS below are the two
+# cases whose premise is that exit existing; every refusal case is the SAFETY half — a lock that
+# records a real move must survive both verbs untouched.
+_release() { run bash "$LRT" --release --sid "$SID" "$@"; }
+_reap()    { run bash "$LRT" --reap "$@"; }
+_age_lock() { # rewrite the lock's ts N seconds into the past
+  python3 - "$LOCK" "$1" <<'PY'
+import json, sys, time
+p, n = sys.argv[1], int(sys.argv[2])
+d = json.load(open(p)); d["ts"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - n))
+open(p, "w").write(json.dumps(d) + "\n")
+PY
+}
+
+@test "release: RED PROOF — an abandoned admit is rolled back, and the session can move somewhere ELSE" {
+  _admit
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # the abandoned state: the second store is refused as a split brain, for ever
+  run bash "$LRT" --sid "$SID" --from "$T/from" --to "$T/third"
+  [ "$status" -eq 2 ] || { echo "precondition: expected the split-brain refusal, got $status: $output"; false; }
+  _release
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *'"released":true'* ]] || { echo "$output"; false; }
+  [ ! -e "$LOCK" ] || { echo "a first move's lock must be set aside"; cat "$LOCK"; false; }
+  ls "$LOCK".released-* >/dev/null || { echo "the lock was deleted, not set aside"; false; }
+  [ ! -e "$DST" ] || { echo "the target copy is still live"; false; }
+  ls "$DST".released-* >/dev/null || { echo "the target copy was deleted, not set aside"; false; }
+  [ ! -e "$T/from/projects/slug/$SID.HANDOFF.json" ] || { echo "the tombstone still blocks the live source"; false; }
+  [ -f "$SRC" ] || { echo "the source was touched"; false; }
+  run bash "$LRT" --sid "$SID" --from "$T/from" --to "$T/third"
+  [ "$status" -eq 0 ] || { echo "the session still cannot move after release: $output"; false; }
+}
+
+@test "release: a CONFIRMED move is real custody — refused, and nothing moves" {
+  _admit; _confirm
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  before="$(cat "$LOCK")"
+  _release
+  [ "$status" -eq 2 ] || { echo "expected refusal, got $status: $output"; false; }
+  [[ "$output" == *'"refused":"confirmed"'* ]] || { echo "$output"; false; }
+  [ "$(cat "$LOCK")" = "$before" ] && [ -f "$DST" ] || { echo "a refused release changed something"; false; }
+}
+
+@test "release: a target a successor has WRITTEN to is refused — the successor's bytes are not rolled back" {
+  _admit
+  printf '{"type":"user","successor":1}\n' >> "$DST"
+  _release
+  [ "$status" -eq 2 ] || { echo "expected refusal, got $status: $output"; false; }
+  [[ "$output" == *'"refused":"target-diverged"'* ]] || { echo "$output"; false; }
+  [ -f "$LOCK" ] && [ -f "$DST" ] || { echo "a refused release moved something"; false; }
+}
+
+@test "release: a SOURCE that kept appending after admit still rolls back — the target is a prefix" {
+  # EQUIVALENCE GUARD for the prefix arm's direction: a live source growing past the admit-time copy
+  # is the ordinary abandoned-healthy-session shape, and the byte-equality mutant refuses it.
+  _admit
+  printf '{"type":"user","later":1}\n' >> "$SRC"
+  _release
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *'"released":true'* ]] || { echo "$output"; false; }
+}
+
+@test "release: an abandoned SECOND hop restores the FIRST hop's custody instead of erasing it" {
+  _admit; _confirm
+  run bash "$LRT" --phase admit --sid "$SID" --from "$T/to" --to "$T/third"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  _release
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(_lockf owner)" = "$T/to" ] || { echo "owner is $(_lockf owner)"; false; }
+  [[ "$(_lockchain)" == *"/from "*"/to" ]] || { echo "chain: $(_lockchain)"; false; }
+  [[ "$(_lockchain)" != *third* ]] || { echo "the released hop is still in the chain: $(_lockchain)"; false; }
+  [ -f "$T/from/projects/slug/$SID.HANDOFF.json" ] || { echo "the FIRST hop's tombstone was released too"; false; }
+  [ ! -e "$T/to/projects/slug/$SID.HANDOFF.json" ] || { echo "the abandoned hop's tombstone survived"; false; }
+}
+
+@test "release: no lock is rc 0 — the verb is idempotent" {
+  _release
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *'"no_lock":true'* ]] || { echo "$output"; false; }
+}
+
+@test "release: --dry-run reports the verdict and moves nothing" {
+  _admit
+  _release --dry-run
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *'"would_release":true'* ]] || { echo "$output"; false; }
+  [ -f "$LOCK" ] && [ -f "$DST" ] && [ -f "$T/from/projects/slug/$SID.HANDOFF.json" ] || { echo "dry-run moved something"; false; }
+}
+
+@test "reap: RED PROOF — the sweep releases an OLD abandoned move and leaves a young one in flight" {
+  _admit
+  _reap
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *'"refused":"too-young"'* ]] || { echo "the age floor did not hold: $output"; false; }
+  [ -f "$LOCK" ] || { echo "a move still in flight was reaped"; false; }
+  _age_lock 7200
+  _reap
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *'"released":true'* ]] || { echo "$output"; false; }
+  [ ! -e "$LOCK" ] || { echo "the abandoned lock survived the sweep"; false; }
+}
+
+@test "reap: a CONFIRMED move's lock survives the sweep at any age, and the sweep still exits 0" {
+  _admit; _confirm
+  _age_lock 999999
+  _reap
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *'"refused":"confirmed"'* ]] || { echo "$output"; false; }
+  [ -f "$LOCK" ] || { echo "the sweep reaped real custody"; false; }
+}
+
+@test "release/reap: usage errors answer rc 3" {
+  run bash "$LRT" --release
+  [ "$status" -eq 3 ] || { echo "$status: $output"; false; }
+  run bash "$LRT" --reap --sid "$SID"
+  [ "$status" -eq 3 ] || { echo "$status: $output"; false; }
+  run bash "$LRT" --reap --older-than soon
+  [ "$status" -eq 3 ] || { echo "$status: $output"; false; }
+}

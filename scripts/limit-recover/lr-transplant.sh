@@ -21,13 +21,27 @@
 #   no --phase       the legacy single-shot run. It copies and verifies exactly
 #                    as before and does NOT retire: nothing asserted quiescence.
 #
-# Output: one JSON object on stdout.
+#        lr-transplant.sh --release --sid SID [--older-than S] [--dry-run]
+#        lr-transplant.sh --reap [--older-than S] [--dry-run]
+#   Roll back a move that was ABANDONED before it was confirmed (see the RELEASE block below).
+#   --release acts on one sid (age floor default 0); --reap sweeps every lock older than S
+#   (default 3600) and releases only those that pass the same predicate. Both are no-ops on a
+#   lock that records a real move.
+#
+# Output: one JSON object on stdout (--reap: one per lock examined).
 # Exit: 0 ok · 2 REFUSED / FATAL (nothing further attempted) · 3 usage.
 set -euo pipefail
 
 SID="" FROM="" TO="" TASK_LIST="" KEEP_SOURCE=0 FORCE=0 PHASE="" CAUSE=""
+RELEASE_MODE="" OLDER_THAN="" DRY_RUN=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --release) RELEASE_MODE=release; shift ;;
+    --reap) RELEASE_MODE=reap; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    --older-than)
+      [[ $# -ge 2 && "${2:-}" =~ ^[0-9]+$ ]] || { echo "lr-transplant: --older-than needs a whole number of seconds" >&2; exit 3; }
+      OLDER_THAN="$2"; shift 2 ;;
     --sid) SID="$2"; shift 2 ;;
     --from) FROM="$2"; shift 2 ;;
     --to) TO="$2"; shift 2 ;;
@@ -60,6 +74,160 @@ while [[ $# -gt 0 ]]; do
     *) echo "lr-transplant: unknown arg $1" >&2; exit 2 ;;
   esac
 done
+
+# ══ RELEASE / REAP — THE EXIT THE LOCK NEVER HAD (VOLUNTARY_ACCOUNT_SWITCH § 9) ══════════════════
+# Before this, nothing in the tree deleted, expired or released a transplant lock, so a move
+# abandoned after the lock was written — admit ran and nobody confirmed or relaunched, or the copy
+# died on a sha mismatch AFTER the lock was already on disk — held custody for ever. Every later
+# move of that sid to any other store then refused as a split brain, and the only way out was a
+# blind `--force`.
+#
+# 🚨 WHY NOT A TTL. The lock records CUSTODY, and custody of a COMPLETED move is a standing fact:
+# the session lives at the target for as long as it lives, and expiring that record by age is how
+# a second store gets to claim a uuid that is still running somewhere. Age cannot tell "abandoned"
+# from "old and fine". So the discriminator is the STATE the move left, and age is only a floor
+# that keeps the sweep off moves still in flight. A move is ABANDONED — safe to roll back — iff
+#   (a) the store it left (`from`) still holds the LIVE `<sid>.jsonl`: nothing confirmed the move,
+#       because confirm renames that file to `.handed-off`; and
+#   (b) the target's copy is absent or a BYTE-PREFIX of that source: nothing has written at the
+#       target that the source does not already hold, so no successor ever ran there.
+# Rolling back then loses no byte of the session. Either conjunct failing refuses, naming which.
+#
+# Rollback is NON-DESTRUCTIVE: the lock, the target copy and the tombstone the move wrote are each
+# renamed to `<name>.released-<stamp>`, which every reader's exact-name lookup (and cc-limited's
+# `*.lock` census) stops matching. A hop's lock is rewritten to the custody it replaced — owner =
+# the store we returned to, chain minus its last entry, ts_first kept — rather than deleted, so the
+# earlier hops stay recorded; a first move's lock is simply set aside.
+#
+# Residual, stated: a successor launched at the target but not yet past its first append passes
+# (b). The age floor is what keeps `--reap` off that window; an explicit `--release` is an operator
+# assertion and takes no floor unless given one.
+if [[ -n "$RELEASE_MODE" ]]; then
+  # Same resolution as the canonical LOCK_DIR below — every reader of the lock honours LR_STATE_DIR.
+  REL_LOCK_DIR="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks"
+  if [[ "$RELEASE_MODE" == release ]]; then
+    [[ -n "$SID" ]] || { echo "lr-transplant: --release needs --sid" >&2; exit 3; }
+    REL_SIDS=("$SID")
+    REL_FLOOR="${OLDER_THAN:-0}"
+  else
+    [[ -z "$SID" ]] || { echo "lr-transplant: --reap sweeps every lock; use --release --sid for one" >&2; exit 3; }
+    REL_SIDS=()
+    for _l in "$REL_LOCK_DIR"/*.lock; do
+      [[ -f "$_l" ]] || continue
+      _b="${_l##*/}"; REL_SIDS+=("${_b%.lock}")
+    done
+    REL_FLOOR="${OLDER_THAN:-3600}"
+  fi
+  REL_RC=0
+  for _sid in ${REL_SIDS[@]+"${REL_SIDS[@]}"}; do
+    _rc=0
+    python3 - "$REL_LOCK_DIR" "$_sid" "$REL_FLOOR" "$DRY_RUN" "$$" "$(hostname -s)" <<'PY' || _rc=$?
+import calendar, glob, json, os, sys, time
+
+lock_dir, sid, floor, dry, pid, host = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4] == "1", int(sys.argv[5]), sys.argv[6]
+lock = os.path.join(lock_dir, sid + ".lock")
+now = int(time.time())
+stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now))
+out = {"sid": sid, "lock": lock}
+
+def emit(rc, **kw):
+    out.update(kw)
+    print(json.dumps(out, separators=(",", ":")))
+    sys.exit(rc)
+
+def refuse(reason, why):
+    sys.stderr.write("lr-transplant: RELEASE REFUSED — %s (%s): %s\n" % (sid, reason, why))
+    emit(2, ok=False, released=False, refused=reason)
+
+if not os.path.isfile(lock):
+    emit(0, ok=True, released=False, no_lock=True)
+try:
+    with open(lock) as fh:
+        rec = json.load(fh)
+    assert isinstance(rec, dict)
+except Exception:
+    refuse("unparseable-lock", "the lock is not a JSON object; inspect it and move it aside by hand")
+
+src_store = rec.get("from") or ""
+owner = rec.get("owner") or rec.get("to") or ""
+if not src_store or not owner:
+    refuse("incomplete-lock", "the lock names no from/owner, so the store to return to is unknown")
+try:
+    ts = calendar.timegm(time.strptime(rec.get("ts") or "", "%Y-%m-%dT%H:%M:%SZ"))
+except ValueError:
+    ts = 0  # unreadable age reads as OLD: the state predicate below still has to pass
+age = now - ts
+out.update({"from": src_store, "owner": owner, "age_s": age})
+if age < floor:
+    refuse("too-young", "claimed %ds ago, under the %ds floor — the move may still be in flight" % (age, floor))
+
+srcs = [p for p in glob.glob(os.path.join(src_store, "projects", "*", sid + ".jsonl")) if os.path.isfile(p)]
+if not srcs:
+    if glob.glob(os.path.join(src_store, "projects", "*", sid + ".jsonl.handed-off")):
+        refuse("confirmed", "the source at %s is retired (.handed-off) — the move COMPLETED and this lock is real custody" % src_store)
+    refuse("source-missing", "no live transcript under %s, so nothing proves the session can return there" % src_store)
+if len(srcs) > 1:
+    refuse("source-ambiguous", "multiple copies under %s: %s" % (src_store, " ".join(srcs)))
+src = srcs[0]
+with open(src, "rb") as fh:
+    src_bytes = fh.read()
+
+if os.path.realpath(owner) == os.path.realpath(src_store):
+    refuse("owner-is-source", "the lock names the source as its owner; there is no move to roll back")
+dsts = [p for p in glob.glob(os.path.join(owner, "projects", "*", sid + ".jsonl")) if os.path.isfile(p)]
+for d in dsts:
+    with open(d, "rb") as fh:
+        db = fh.read()
+    if len(db) > len(src_bytes) or src_bytes[:len(db)] != db:
+        refuse("target-diverged", "%s holds bytes the source does not — a successor has run there" % d)
+
+tomb = os.path.join(os.path.dirname(src), sid + ".HANDOFF.json")
+tomb_ours = False
+if os.path.isfile(tomb):
+    try:
+        with open(tomb) as fh:
+            t = json.load(fh)
+        tomb_ours = os.path.realpath(t.get("handed_off_to") or "") == os.path.realpath(owner)
+    except Exception:
+        tomb_ours = False
+
+chain = rec.get("chain") if isinstance(rec.get("chain"), list) else []
+chain = [c for c in chain if isinstance(c, str) and c]
+restore = None
+if len(chain) >= 3:
+    prev = chain[:-1]
+    restore = {"sid": sid, "from": prev[-2], "to": prev[-1], "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+               "pid": pid, "host": host, "owner": prev[-1], "ts_first": rec.get("ts_first") or rec.get("ts") or "",
+               "chain": prev, "released_hop": owner}
+
+plan = {"target_copies": dsts, "tombstone": tomb if tomb_ours else "", "restored_owner": restore["owner"] if restore else ""}
+if dry:
+    emit(0, ok=True, released=False, would_release=True, **plan)
+
+aside = lock + ".released-" + stamp
+os.rename(lock, aside)
+if restore is not None:
+    tmp = lock + ".tmp-%d" % pid
+    with open(tmp, "w") as fh:
+        fh.write(json.dumps(restore, separators=(",", ":")) + "\n")
+    os.rename(tmp, lock)
+for d in dsts:
+    os.rename(d, d + ".released-" + stamp)
+if tomb_ours:
+    os.rename(tomb, tomb + ".released-" + stamp)
+emit(0, ok=True, released=True, lock_set_aside=aside, **plan)
+PY
+    if [[ "$RELEASE_MODE" == release ]]; then
+      REL_RC=$_rc
+    elif [[ $_rc -ne 0 && $_rc -ne 2 ]]; then
+      REL_RC=$_rc  # the sweep broke (a rename failed, python died) — never report that as a clean sweep
+    fi
+  done
+  # --release reports its one verdict's rc. --reap's rc-2 refusals are ordinary verdicts about locks
+  # that record real moves (each is on stdout), so only a verdict that could not be REACHED fails it.
+  exit "$REL_RC"
+fi
+
 [[ -n "$SID" && -n "$FROM" && -n "$TO" ]] || { echo "lr-transplant: --sid/--from/--to required" >&2; exit 2; }
 
 # OPTIONAL FIELDS, ABSENT WHEN UNASKED — not defaulted. Both fragments carry their own leading comma

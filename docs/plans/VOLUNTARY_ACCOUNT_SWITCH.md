@@ -329,7 +329,7 @@ not fold them into a teammate's diff.
 |---|---|
 | `verdict="RECOVERED"` is an initialiser set before any outcome is read | `lr-fleet.sh:807` |
 | `dry-run` / `skipped` fall through `*)` to `verdict=FAILED` | `lr-fleet.sh:1154` |
-| Nothing ever reaps a transplant lock — no TTL, no release verb | tree-wide absence |
+| ~~Nothing ever reaps a transplant lock — no TTL, no release verb~~ **CURED (4f8c73bbdb35):** `lr-transplant.sh --release --sid` / `--reap [--older-than S]` roll back an UNCONFIRMED move (live source + target a byte-prefix of it); a confirmed move is refused as real custody. Deliberately no TTL — age cannot tell abandoned from old-and-fine | tree-wide absence |
 | A lock-less second hop erases the first hop from custody | `lr-transplant.sh:218-231` |
 | The ingest verifier has never returned clean — 3 of 3 read `rc 1`, first failure A6 | `INGEST-VERIFIED.txt` census |
 | `claude-accounts:84-88` documents the pre-2026-08-11 survival score, refuted at `:3652-3682` | — |
