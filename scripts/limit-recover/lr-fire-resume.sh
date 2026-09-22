@@ -687,6 +687,52 @@ expect -c '
     if {$v eq ""} { return UNKNOWN }
     return $v
   }
+  # THE CR IS SENT ONLY ONCE THE COMPOSER HAS AFFIRMATIVELY PAINTED OUR TEXT (2026-09-22).
+  # The three settle sleeps around the inject were cut from 2/1/1 to 0.3/0.2/0.2 in ba5e3c1e1, whose
+  # own comment names the hazard they exist for: keeping the text and the CR from coalescing into
+  # one paste the TUI reads as a single keystroke. At 0.2s into a TUI still loading ~94KB of
+  # instructions, its SessionStart hooks and 6 MCP servers, they coalesced — and a trailing CR
+  # inside a paste is a literal NEWLINE, not a submit. The signature is on the pane: an empty Claude
+  # Code composer renders exactly ONE body row, and both stranded panes rendered the wrapped prompt
+  # PLUS a trailing blank row, which is the CR sitting in the composer as text.
+  #
+  # A FIXED SLEEP CANNOT FIX THIS, because the quantity it must outlast is the TUI event loop under
+  # a boot it does not control. So wait for the EVIDENCE instead: poll the composer until it reads
+  # DRAFT-MINE, which is proof the TUI consumed our text as its own event and that a CR after it is
+  # a separate keystroke. The bound falls through to the pre-2026-09-22 behaviour, so a screen
+  # oracle that cannot read the pane can never make this worse than it already was.
+  #
+  # MENU IS THE ONE ANSWER THAT FORBIDS THE KEYSTROKE, keeping the rule the rest of this file runs
+  # on: Enter on a parked menu takes its highlighted default (memory
+  # probe-that-acts-on-absence-must-confirm-presence).
+  proc lr_submit_cr {} {
+    global env
+    set bound [expr {[info exists env(LR_SUBMIT_PAINT_S)] ? $env(LR_SUBMIT_PAINT_S) : 8}]
+    # LR_SUBMIT_PAINT_S=0 is the EXPLICIT OPT-OUT — send the CR the moment the text is typed, which
+    # is the pre-2026-09-22 behaviour exactly. It is a kill switch and a test seam, not a degraded
+    # path, so it records nothing: a CR-UNCONFIRMED note here would say the composer was unreadable
+    # when in fact it was never asked.
+    if {$bound <= 0} { send -- "\r"; return }
+    for {set i 0} {$i < $bound} {incr i} {
+      set sv [lr_screen]
+      if {$sv eq "DRAFT-MINE"} {
+        lr_note composer-painted inject "composer shows our draft after ${i}s — the CR is a separate keystroke"
+        send -- "\r"
+        return
+      }
+      if {$sv eq "MENU"} {
+        lr_note CR-WITHHELD inject "a menu is parked over the composer — Enter would take its default, so NOTHING was sent"
+        send_user "\nlr-fire-resume: CR WITHHELD — a menu is parked over the composer. Enter would take its highlighted default, so nothing was sent. Read the pane.\n"
+        return
+      }
+      sleep 1
+    }
+    # NOT MEASURED, so fall through rather than withhold: our own text is already typed, so a CR
+    # here can only submit it or be swallowed exactly as before — it cannot answer a menu we would
+    # have read. Withholding would strand every run whose pane is unreadable.
+    lr_note CR-UNCONFIRMED inject "composer never read DRAFT-MINE within ${bound}s — sending the CR unconfirmed, as before"
+    send -- "\r"
+  }
   # submitted <ts> | queued <ts> | none | unreadable | skip — `unreadable` and `skip` are NOT `none`.
   proc lr_probe {t0} {
     global env
@@ -834,8 +880,7 @@ expect -c '
         send "\025"
         sleep 0.2
         send -- $prompt
-        sleep 0.2
-        send "\r"
+        lr_submit_cr
       }
     }
     timeout {
@@ -861,8 +906,7 @@ expect -c '
           send "\025"
           sleep 0.2
           send -- $prompt
-          sleep 0.2
-          send "\r"
+          lr_submit_cr
         } else {
           lr_note READY-NOT-SEEN inject "screen reads $sv after ${quiet}s quiet — prompt NOT typed"
           send_user "\n✗ READY NEVER SEEN — prompt NOT typed: the pty went quiet for ${quiet}s and the screen reads $sv, not an empty composer. NOTHING was sent, because Enter on a parked menu takes its default. Type the prompt by hand in this pane.\n"
@@ -902,7 +946,21 @@ expect -c '
     set deadline $poll
     set verb skip
     set ts ""
+    # recr COUNTS KEYSTROKES SENT, NOT SCREEN READS ATTEMPTED (2026-09-22).
+    # It used to be a one-shot latch set BEFORE the branch, so the NOT-MEASURED arm below spent the
+    # whole re-CR budget without sending anything: at t=29 a still-booting TUI reads EMPTY, the
+    # latch closed, the deadline stretched to qmax, and the screen was never consulted again for the
+    # remaining 150s. Measured on panes 503 and 480 (sessions b6125384, 2825e1e5): both sat with the
+    # prompt in the composer and a trailing newline where the CR landed, both wrote FAILED:submit,
+    # and re-running this oracle against pane 503 afterwards returned DRAFT-MINE — the evidence that
+    # licenses the re-CR was there, just not at t=29. 4 of 4 runs reaching this stage ended
+    # FAILED:submit; the two that recovered did so because a human pressed Enter.
+    # So: EMPTY/UNKNOWN reschedules the LOOK, DRAFT-MINE spends a SEND, and the two are now separate
+    # budgets (memory: predicate-refusal-is-not-a-negative, empty-vs-no-surface).
     set recr 0
+    set recrmax [expr {[info exists env(LR_SUBMIT_RECR_MAX)] ? $env(LR_SUBMIT_RECR_MAX) : 2}]
+    set nextlook [expr {$poll - 1}]
+    set unmeasured 0
     for {set t 0} {$t < $deadline} {incr t} {
       set r [lr_probe $t0]
       set verb [lindex $r 0]
@@ -910,14 +968,18 @@ expect -c '
       if {$verb eq "submitted"} { break }
       if {$verb eq "skip"} { break }
       if {$verb eq "queued" && $deadline < $qmax} { set deadline $qmax }
-      if {$verb eq "none" && !$recr && $t >= [expr {$poll - 1}]} {
-        set recr 1
+      if {$verb eq "none" && $recr < $recrmax && $t >= $nextlook} {
+        set nextlook [expr {$t + 15}]
         set sv [lr_screen]
         if {$sv eq "DRAFT-MINE"} {
+          incr recr
           lr_note SUBMIT-RECR submit "prompt still in the composer after ${poll}s — one more CR"
           send_user "\nlr-fire-resume: the prompt is still sitting in the composer after ${poll}s (nothing in the transcript) — sending ONE more Enter.\n"
           send "\r"
-          set deadline [expr {$t + 10}]
+          # EXTEND, NEVER SHRINK. This used to be an unconditional `set deadline [expr {$t + 10}]`,
+          # which on a run whose deadline had already been stretched to qmax CUT it back to 10s and
+          # threw away both the remaining engage budget and the second re-CR the fix above buys.
+          if {$deadline < [expr {$t + 15}]} { set deadline [expr {$t + 15}] }
         } elseif {$sv eq "EMPTY" || $sv eq "UNKNOWN"} {
           # NOT MEASURED — and it must not share an action with DRAFT/MENU, which SETTLE the
           # question. EMPTY is the composer state a SUCCESSFUL submit LEAVES BEHIND, and UNKNOWN is
@@ -956,8 +1018,14 @@ expect -c '
           # (memory: predicate-refusal-is-not-a-negative · empty-vs-no-surface ·
           #  gate-default-decides-failure-direction)
           if {$deadline < $qmax} { set deadline $qmax }
-          lr_note SUBMIT-UNMEASURED submit "screen reads $sv after ${poll}s — not a negative; polling the transcript to ${deadline}s"
-          send_user "\nlr-fire-resume: nothing in the transcript after ${poll}s and the screen reads $sv — NOT a measured failure (an EMPTY composer is what a successful submit leaves, and UNKNOWN means no pane was read). No keystroke sent; polling the transcript to ${deadline}s.\n"
+          # ONCE, not per look. The look is now rescheduled every 15s rather than latched off after
+          # the first one, so an unguarded note here would write ten identical lines into the state
+          # log and bury the verdict that follows them.
+          if {!$unmeasured} {
+            set unmeasured 1
+            lr_note SUBMIT-UNMEASURED submit "screen reads $sv after ${poll}s — not a negative; re-reading the composer every 15s and polling the transcript to ${deadline}s"
+            send_user "\nlr-fire-resume: nothing in the transcript after ${poll}s and the screen reads $sv — NOT a measured failure (an EMPTY composer is what a successful submit leaves, and UNKNOWN means no pane was read). No keystroke sent; re-reading the composer every 15s and polling the transcript to ${deadline}s.\n"
+          }
         } else {
           send_user "\nlr-fire-resume: nothing in the transcript after ${poll}s and the composer reads $sv, not our prompt — NOT re-sending Enter.\n"
           break
