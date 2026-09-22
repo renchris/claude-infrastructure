@@ -10,9 +10,11 @@ effort curve has a different shape per task class:
 - **low** only for gate-verified bulk work, never for research or reasoning.
 
 **max** buys little over xhigh: usually 1–2 points at up to ~2× the output. The exception is
-derivation-heavy math (ArXivMath +5.2); on Terminal-Bench 4.0 max scores below xhigh. Fable 5.1
-stays as the escalation tier, and the four judge slots it holds today stay on it until our own
-sweep reports.
+derivation-heavy math (ArXivMath +5.2); on Terminal-Bench 4.0 max scores below xhigh. On our own
+review sweep max was unfit: it lost 2 of 9 cells to the output cap. Fable 5.1 stays as the
+escalation tier. Of the four judge slots it held, our review sweep moved the two Workflow judges to
+Opus 5.5 @xhigh (parity at ~0.4× the quota). The adversarial and review-gate slots stay on Fable,
+because they run at the lead's effort and exist to catch what the Opus 5.5 worker misses.
 
 **The rungs are ADVISORY: no code reads them yet.** The policy lives in `model-config.yaml` →
 `effort_defaults.opus55_*`. Code reads only `effort_defaults.default` (high), `verify_judge` and
@@ -52,9 +54,9 @@ anything below 90% is research still owed; the last column says what would move 
 | Scoped coding wave (anchored briefs) | Opus 5.5 | **medium** — fire the wave's session with `--effort medium`; its teammates inherit it | none, medium is the peak | FrontierCode v1.1 (Cognition, run in Claude Code, graded on mergeability incl. scope): Main med 54.6 · high 54.0 · xhigh 51.4 · max 54.4 at ~9× medium's output tokens; Extended med 65.3 · max 63.6. A teammate spawned inside a `high` lead runs at high (54.0, within noise, ~1.4× the output) | 85% | — |
 | Code-writing teammate, ambiguous multi-file | Opus 5.5 | **high** (the lead's) | max, only if measured | CursorBench: med 52.5 → high 56.0 | 80% | — |
 | Mechanical, known-target edit | Opus 5.5 | **medium** (low only behind a gate) | none | FrontierCode low 47.3 vs med 54.6; CursorBench low 43.7 ≈ Opus 5 @medium at ~1/6 the cost | 75% | — |
-| Code review / bug finding | Opus 5.5 (a `teammate_frontier` review-gate slot stays on Fable 5.1 until the sweep) | **high** | xhigh | Guide: more bugs, fewer false alarms than Opus 5. Customer (Deloitte): at low, 72% of known bugs vs Opus 5 @high 56% | 70% | **our sweep, in flight** |
-| Bounded verifier ("does p. X say Y") | Opus 5.5 | **high** | xhigh | This fact base: Opus 5.5 @high verifiers re-checked 462 claims at their cited pages, corrected 8 and added 158 missed ones. Its self-preference bias is +0.01 / +0.07 on a 10-pt scale | 75% | our sweep |
-| Judge of HARD reasoning (derivation, architecture, proofs) | **Fable 5.1, held** in the `workflow_judge` / `eval_judge` / `research_adversarial` slots; Opus 5.5 @xhigh elsewhere, and in those slots once the sweep reports | **xhigh** | max for math-like work | ArXivMath no tools: high 73.2 · xhigh 86.0 · max 91.2; with tools: high 79.4 · xhigh 94.7 · max 96.9. At **high** Opus 5.5 is BELOW both comparators here (with tools: Fable 87.7, Opus 5 88.6) and retakes the lead only at xhigh (94.7 vs 93.0). HLE no tools: high 59.6 · xhigh 62.8 | 80% | our sweep |
+| Code review / bug finding | Opus 5.5 (the `teammate_frontier` review-gate slot stays on Fable 5.1: it runs at the lead's effort, where Fable recalled 10 v 8) | **high** | xhigh | **Our review sweep** (recall /36, one sample, no pair distinguishable): low 6 · medium 8 · high 8 · xhigh 10 · max 9, and max is unfit (2/9 cells hit the output cap after 512K tokens). High costs ≈0.4× xhigh's quota. Guide: more bugs, fewer false alarms than Opus 5. Customer (Deloitte): at low, 72% of known bugs vs Opus 5 @high 56% | 80% | the repeated-sample follow-up (in flight) |
+| Bounded verifier ("does p. X say Y") | Opus 5.5 | **high** | xhigh | This fact base: Opus 5.5 @high verifiers re-checked 462 claims at their cited pages, corrected 8 and added 158 missed ones. Its self-preference bias is +0.01 / +0.07 on a 10-pt scale. Our review sweep: xhigh ties Fable 5.1 @high (10 v 10) at ~0.4× its quota | 80% | the repeated-sample follow-up |
+| Judge of HARD reasoning (derivation, architecture, proofs) | Opus 5.5 @xhigh, including the `workflow_judge` / `eval_judge` slots since 2026-09-22. **Fable 5.1 held** in `research_adversarial` and in `cc-route`'s judgment-dense and adversarial wave slots (see "Where Fable 5.1 still fits") | **xhigh** | max for math-like work | ArXivMath no tools: high 73.2 · xhigh 86.0 · max 91.2; with tools: high 79.4 · xhigh 94.7 · max 96.9. At **high** Opus 5.5 is BELOW both comparators here (with tools: Fable 87.7, Opus 5 88.6) and retakes the lead only at xhigh (94.7 vs 93.0). HLE no tools: high 59.6 · xhigh 62.8. **Our review sweep:** xhigh 10 = Fable 5.1 @high 10 (3 v 3 discordant items) at ~0.4× its quota | 85% | the repeated-sample follow-up: Opus 5 @max scored 13 in two panels, both judged by Opus 5 only |
 | Breadth research worker (web) | Opus 5.5 | **high** | xhigh | WANDR (ann., $/attempt): med 62.8 · high 67.3 (≈ Opus 5 @xhigh 67.0 at ~1/3 its cost) · xhigh 71.3 · max 72.3; **low 31.2**. HLE with tools: med 63.0 · high 63.9 · xhigh 66.4 | 85% | — |
 | Deep research / report synthesis | Opus 5.5 | **high** | xhigh | DRACO (n=100): med 83.9 · high 85.0 · xhigh 86.7 · max 87.4 — high→xhigh is +1.7 at ~2.5× the cost. Opus 5 LEADS at every rung from medium up (85.6 · 87.3 · 87.4 · 88.3), and Opus 5 @high (87.3, ~$8.5) beats Opus 5.5 @xhigh (86.7, ~$9) | 65% | a deep-research A/B: Opus 5.5 @high vs Opus 5 @high |
 | Long-horizon knowledge work (analysis, docs, spreadsheets) | Opus 5.5 | **xhigh** | max | GDPval-AA (high from the ann. chart): high 1692 · xhigh 1820 · max 1846 (xhigh ≈ max on ~51% fewer output tokens). AA-Briefcase: high 1705 · xhigh 1780 · max 1822 | 80% | — |
@@ -94,10 +96,30 @@ defaults and never drop research or reasoning to low.
 - **So Fable is an escalation, not a tier above the default.** What it buys now is a *different
   model's* blind spots. That matches the frontier ladder's T-a condition: still below 90%
   conviction after exhaustive research.
-- **Judge slots.** `research_adversarial`, `workflow_judge`, `eval_judge` and `teammate_frontier`
-  stay on Fable 5.1 at **85% conviction** that they belong to Opus 5.5 @xhigh. That's below the
-  bar, so the review-class sweep decides. It runs on the same corpus as the Fable 5.1 sweep, which
-  makes the head-to-head direct.
+- **Judge slots — decided by our review sweep, 2026-09-22**
+  ([`../opus55-effort-sweep-2026-09-22/`](../opus55-effort-sweep-2026-09-22/README.md): the same
+  corpus and the same Opus 5 judge panel as the Fable 5.1 sweep; recall /36; one sample; no pair
+  distinguishable). What decided each slot is the effort it can actually run at, and whether its
+  job is to catch what the Opus 5.5 worker misses.
+  - **`workflow_judge` and `eval_judge` moved to Opus 5.5 @xhigh (90%).** A Workflow `agent()`
+    pins its own effort. At xhigh Opus 5.5 ties Fable 5.1 @high 10 v 10, with 3 discordant items
+    each way, at ~0.4× the quota. The move also takes these slots off Fable's sub-cap.
+  - **`research_adversarial` and `teammate_frontier` stay on Fable 5.1 (90%).** Both run at the
+    LEAD's effort: in-process spawns and teammate panes inherit it. At high, Opus 5.5 recalls 8 to
+    Fable's 10 (1 v 3 discordant). Both slots exist to catch what the Opus 5.5 @high worker misses,
+    and the same model at the same effort is redundancy by construction.
+  - **`cc-route`'s wave slots still route to Fable 5.1** (`frontier_access.model` @xhigh). The
+    adversarial wave is a different-model check, like `research_adversarial`. The judgment-dense
+    wave does the hard work itself. Our evals don't cover that class, and the vendor names Fable
+    5.1 for "demanding reasoning", so it stays. Conviction that Opus 5.5 @xhigh would match it:
+    85%. Only a judgment-dense probe would move that, and the payoff would be quota, not quality.
+  - **Open, and measured on one sample only.**
+    - Opus 5 @max was the best arm in two panels (12, 13). Every panel was Opus 5 judges, so an
+      own-model lean is not excluded.
+    - Opus 5 @high complements the Opus 5.5 worker exactly as much as Fable 5.1 @high does: each
+      adds 3 items, union 11 either way. It does so at roughly a third of the quota.
+    - A repeated-sample follow-up with a mixed-model panel decides both.
+    (`docs/research/review-judge-followup-2026-09-22/`, in flight).
 
 ## Multi-agent economics (System Card §8.12)
 
@@ -132,9 +154,13 @@ defaults and never drop research or reasoning to low.
   TURN the guide points the other way, at every level: "At a given level, Claude Opus 5.5 tends to
   think more per turn than Claude Opus 5, especially at xhigh and max." Fewer turns per task can
   reconcile the two, so neither settles our draw at a pinned `high`. The meter read below does.
-- **Opus 5.5's plan-quota draw per token is NOT STATED anywhere.** The sweep session is measuring
-  it on account `next4`: a meter read around a single-model interval, compared against the
-  Opus 5 price-list predictor.
+- **Opus 5.5's plan-quota draw per token is not stated by any source. We measured it on
+  2026-09-22: ≈1.1× Opus 5, bounded [0.78, 1.72].** The review sweep read account `next4`'s meters
+  around a single-model interval, against an in-situ Opus 5 control
+  ([`../opus55-effort-sweep-2026-09-22/`](../opus55-effort-sweep-2026-09-22/README.md) § Quota
+  draw per token). That bound EXCLUDES a Fable-like draw (3.2–3.7×), so Opus 5.5 is an Opus-class
+  spend. It CANNOT tell 1.0 from the 0.8 list ratio, and the weekly meter alone resolves nothing
+  at that volume. So, per task, what we save is output TOKENS (above), not a cheaper token.
 
 ## Applying the rungs in this harness
 
@@ -144,7 +170,7 @@ defaults and never drop research or reasoning to low.
 | Mid-session change | `/effort <level>`. Opus 5.5's tier carries `per_turn_effort` in 2.1.280, and one observed switch kept the prompt cache (129,652 tokens read, 6,564 written) | ✅ cheap on 5.5; on Opus 5 it re-wrote the cache |
 | Waves planned by `cc-wave-plan` | `cc-route` → `effort_defaults.default` (high) | ✅ for wave leads. A scoped-coding or xhigh-class wave needs its `--effort` passed by hand, because nothing picks an `opus55_*` rung per slot |
 | `/handoff` fires and `--recycle` (`handoff-fire.sh`) | the caller's `--effort` if passed, else the typed launcher's zshrc default (`CLAUDE_EFFORT`, high); no SSOT key is read | ✅, and pass `--effort medium` / `xhigh` to fire a wave at another rung |
-| Teammate panes | the LEAD's live effort, as a CLI flag: 2.1.280's pane builder pushes `--effort <lead's level>` onto every teammate command line (read off the binary), outranking both the worktree `settings.local.json` that `scripts/set-teammate-effort.sh` writes and the config dir's `effortLevel` | ⚠️ `set-teammate-effort.sh` has no effect on 2.1.280. Per-teammate effort therefore means a per-WAVE session fired at that rung |
+| Teammate panes | the LEAD's live effort, as a CLI flag: 2.1.280's pane builder pushes `--effort <lead's level>` onto every teammate command line (read off the binary), outranking both the worktree `settings.local.json` that `scripts/set-teammate-effort.sh` writes and the config dir's `effortLevel` | ⚠️ `set-teammate-effort.sh` has no effect on 2.1.280 (and since 2026-09-22 the script says so on stderr instead of claiming the file binds). Per-teammate effort therefore means a per-WAVE session fired at that rung |
 | Any xhigh/max session or slot | `CLAUDE_CODE_MAX_OUTPUT_TOKENS` (unset here) | ✅ measured 2026-09-22: with it unset, the client reports `maxOutputTokens: 128000` for claude-opus-5-5, the model maximum the guide recommends. A harness that caps output lower (the 09-10 sweep used 64000, and Fable 5.1 lost xhigh/max cells to it) must raise it: high→xhigh is ~2.3× the output on 5.5 |
 | In-process subagents | inherit the lead's live effort (GH #25591) | ✅ high under a high lead |
 | Workflow `agent()` | per-call `effort:` | ⚠️ always pass it; omitted = unmeasured on 2.1.280 |
@@ -178,7 +204,8 @@ defaults and never drop research or reasoning to low.
 
 ## Not stated by the sources — measure, don't assume
 
-- Plan-quota draw per token (sweep in flight).
+- Plan-quota draw per token. We measured it instead: ≈1.1× Opus 5, bounded [0.78, 1.72] (see
+  "Currency").
 - Claude Code's own default effort for Opus 5.5 (only the API default, medium, is stated).
 - Long-context degradation curves.
 - Mixed-model or below-max-effort agent teams.
@@ -188,16 +215,30 @@ defaults and never drop research or reasoning to low.
 
 ## Open items
 
-1. **Review-class effort sweep + quota-draw read** — dispatched session, branch
-   `feat/opus55-effort-sweep`. It decides the four Fable-held judge slots and the review and
-   verifier rows.
+1. ✅ **Review-class effort sweep + quota-draw read — DONE 2026-09-22** (landed `501e4490e`,
+   [`../opus55-effort-sweep-2026-09-22/`](../opus55-effort-sweep-2026-09-22/README.md)). It
+   decided the four Fable-held slots (see "Judge slots"), fed the review and verifier rows, and
+   measured the draw (see "Currency").
 2. ✅ **reso team-brief pins — DONE 2026-09-22 (reso 80f481be4).** 62 member pins in 40 files now
    read `model: opus`, which each lead's binary resolves. `claude-bump-models --apply` was
-   deliberately not run: it would have written the full id where 2.1.260 leads read it.
-3. **Freewin re-probe for the Sonnet 5 synthesis slot**, with Opus 5.5 as the comparator.
+   deliberately not run: it would have written the full id where 2.1.260 leads read it. The team
+   brief schema's `model:` comment was the last full-id pin. It now names the alias and the
+   allowlist key (reso `d86ac7610`), which leaves `claude-lint-models.sh --all` with nothing to flag.
+3. **Freewin re-probe for the Sonnet 5 synthesis slot**, with Opus 5.5 as the comparator. IN
+   FLIGHT: a dispatched session on branch `feat/opus55-synth-reprobe` is running a judged A/B of
+   Sonnet 5 @max vs Opus 5.5 @high and @xhigh
+   (`docs/research/opus55-synth-reprobe-2026-09-22/`).
 4. **Settings effort drift** (`next`, `next4` at low). It reaches only non-wrapped surfaces (IDE,
    bare `claude -p`), never a teammate on 2.1.280. It is an authority-ceiling surface, realigned by
    the operator via migration.
 5. **Stage Sonnet 5.5 / Haiku 5.5 on release**, through the `/model-upgrade` Step 0 binary gate.
-6. **`scripts/set-teammate-effort.sh`'s premise is false on 2.1.280.** The lead's `--effort` CLI
-   flag outranks the settings file it writes, so it no longer sets a teammate's effort.
+6. ✅ **`scripts/set-teammate-effort.sh`'s premise is false on 2.1.280 — CORRECTED 2026-09-22.**
+   The lead's `--effort` CLI flag outranks the settings file it writes, so it no longer sets a
+   teammate's effort. The script now warns and names the lever that does work: fire the wave's
+   own session at the rung. The two SSOT comments that presented it as the per-member lever carry
+   the same dated correction.
+7. **Review-class follow-up** — repeated samples and a mixed-model judge panel, IN FLIGHT on
+   branch `feat/review-judge-followup`. It asks two questions.
+   - Q1: is Opus 5 @max genuinely the best judge config (13 v 10, one sample, Opus-5 judges)?
+   - Q2: is Opus 5 @high a better adversarial complement to the Opus 5.5 worker than Fable 5.1?
+   Either answer can move `workflow_judge` / `eval_judge` / `research_adversarial` again.
