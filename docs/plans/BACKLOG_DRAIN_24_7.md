@@ -93,7 +93,10 @@ standing dispatcher was pointed at the ~14% cloud-eligible slice and wedged even
   (`git merge-base --is-ancestor` rc 0), and 77e107e67523's 25 paths all verify present
   (`land-content-verify --no-fetch` => LANDED, 1 amended) with 0 ref-only lines on a 3-path spot
   check — re-landing either would REVERT trunk's own later commits. Queue then read eligible=0
-  (only d6d7edef60a3 remains, thrash-held at 386 claims).
+  (only d6d7edef60a3 remains, thrash-held at 386 claims). Landed a0b7f6f19 (this entry) +
+  62c8137bf (recycle #332's own entry, stranded on the branch since 09-09 and rescued here).
+  `cc-notify --role drain-lead` => `verdict=unresolvable reason=role-unset` (pane 7's claimant is
+  dead) and the push fallback is inert (PUSHOVER unset) — THE LEAD WAS NOT REACHED.
   `closed=2 closed_pre=2 closed_other=0 filed=0 net=2 blocked=0 min=2 lane=local-drain project=claude-infrastructure floor=MET`
 
 - **2026-09-09 — recycle #332 (lane infra):** closed 77fbb8be90b0 (lead-supervisor self-check now
