@@ -124,6 +124,67 @@ nlines() { printf '%s\n' "$1" | grep -c '[^[:space:]]'; }
   [ ! -e "$BATS_TEST_TMPDIR/fleet.argv" ]
 }
 
+# ── RULE 2 must say WHY, because a dead-end refusal is what makes a caller improvise ───────────
+# Both arms below refuse identically (rc 2, no mutex, no fleet call) and differ only in what they
+# CLAIM about the session. That is the whole point: the pre-fix text asserted "there is nothing to
+# recover" on every non-LIMITED session, which on 2026-09-22 was false for a pane killed by the
+# CONTEXT ceiling — dead in place, 29 delegated units on disk — and the driver that read it
+# hand-rolled a recovery. A `*"not LIMITED"*` assertion cannot tell the two arms apart, so it
+# survives the mutant that deletes the routing; each arm is pinned on its OWN discriminator.
+transcript() { # <sid> <json line…> — a fixture transcript where cc-lr's cfg column points
+  local sid="$1"; shift
+  local d="$HOME/.claude-next/projects/-fixture"; mkdir -p "$d"
+  printf '%s\n' "$@" > "$d/$sid.jsonl"
+}
+
+@test "recover REFUSES a context-death session by NAMING the api error and the next command" {
+  # The specimen: kind=other (a terminal api error that is not a quota cap). It must NOT claim the
+  # session is healthy, and it must hand over a runnable lr-audit line rather than dead-ending.
+  transcript "$SID" '{"type":"assistant","isApiErrorMessage":true,"error":"invalid_request","uuid":"u1","timestamp":"2026-09-22T06:15:51.646Z","message":{"role":"assistant","content":[{"type":"text","text":"API Error: 400 Prompt is too long"}]}}'
+  find_stub 0 "$(row "$SID" 500 SESSION)"
+  run bash "$LR" recover 500
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not LIMITED"* ]] || false
+  # the discriminator: it names the terminal error instead of asserting health
+  [[ "$output" == *"terminal api error"* ]] || false
+  [[ "$output" == *"invalid_request"* ]] || false
+  [[ "$output" != *"there is nothing to recover"* ]] || false
+  # and it routes — a refusal with no next command is a detector with no owner
+  [[ "$output" == *"lr-audit.py"* ]] || false
+  [[ "$output" == *"$SID"* ]] || false
+  [ ! -d "$MUTEX" ]
+  [ ! -e "$BATS_TEST_TMPDIR/fleet.argv" ]
+}
+
+@test "recover REFUSES a genuinely working session with the plain 'nothing to recover' text" {
+  # The negative control. A session whose last record is NOT an api error really has nothing owed,
+  # so the honest claim survives here and the routing block must NOT appear — otherwise the new
+  # arm has widened into every refusal and stopped discriminating.
+  transcript "$SID" '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done — landed and green."}]}}'
+  find_stub 0 "$(row "$SID" 117 SESSION)"
+  run bash "$LR" recover 117
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not LIMITED"* ]] || false
+  [[ "$output" == *"nothing to recover"* ]] || false
+  [[ "$output" != *"terminal api error"* ]] || false
+  [[ "$output" != *"lr-audit.py"* ]] || false
+  [ ! -d "$MUTEX" ]
+  [ ! -e "$BATS_TEST_TMPDIR/fleet.argv" ]
+}
+
+@test "CC_LR_ROUTE_REFUSAL=off restores the pre-routing refusal byte-for-byte" {
+  # The escape is a KILL SWITCH, not an enable flag: the correct behaviour is the DEFAULT and this
+  # is the named way out. Pinning it proves the classify fork cannot wedge the refusal shut.
+  transcript "$SID" '{"type":"assistant","isApiErrorMessage":true,"error":"invalid_request","uuid":"u1","timestamp":"2026-09-22T06:15:51.646Z","message":{"role":"assistant","content":[{"type":"text","text":"API Error: 400 Prompt is too long"}]}}'
+  find_stub 0 "$(row "$SID" 500 SESSION)"
+  CC_LR_ROUTE_REFUSAL=off run bash "$LR" recover 500
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not LIMITED"* ]] || false
+  [[ "$output" == *"there is nothing to recover"* ]] || false
+  [[ "$output" != *"terminal api error"* ]] || false
+  [ ! -d "$MUTEX" ]
+}
+
 @test "recover REFUSES two rows at rc 0 — a recovery target is exactly one session" {
   # cc-find's bare-ref paths return rc 2 for a tie, but --kw and --limited return a LIST at rc 0.
   # A front end that read row 1 of a list would recover whichever session sorted first.

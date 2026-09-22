@@ -160,6 +160,57 @@ cl_mutex_take() { # <sid> <pane> → 0 taken (path on stdout), 2 refused
 # ── resolve a ref to ONE session row, or refuse ────────────────────────────────────────────────
 # cc-find is the resolver and its rc IS the verdict: 2 is AMBIGUOUS with every candidate printed,
 # 1 is nothing matched. Re-deriving either here would be a second auditor over one population.
+# ── RULE 2's refusal — a refusal bounds THIS TOOL, never the world ─────────────────────────────
+# The text this replaces ended "so there is nothing to recover": a claim about the SESSION
+# inferred from a predicate about QUOTA. On 2026-09-22 it was simply false. Pane 500 held a
+# session killed by the CONTEXT ceiling ("Prompt is too long") — dead in place, unable to execute
+# another turn, with 29 delegated units complete on disk — and the driver that read that sentence
+# hand-rolled a whole recovery rather than being routed to one. Two repo lessons name the defect
+# exactly: a refusal bounds the TOOL and gets believed as a fact about the WORLD
+# (reference-a-refusal-bounds-the-tool-not-the-world), and a detector with no owner is not an
+# actuator — a dead-end refusal is what makes a caller improvise.
+#
+# The cure is NOT to widen admission: that is `bin/cc-limited`'s census contract, which belongs to
+# LIMIT_DETECT_100P and is an OPEN OPERATOR CALL (that plan is unowned; its lead died). This stays
+# strictly a REFUSAL, admits nothing new, starts nothing, and takes no mutex. It only stops lying
+# about why, and names the next command — which costs one classify call on the arm that was going
+# to refuse anyway. Root diagnosis: docs/plans/LIMIT_RECOVER_100P.md sections 6a and 10.
+cl_refuse_not_limited() { # <sid> <pane> <klass> <cfg> <cwd> → always rc 2
+  local sid="$1" pane="${2:--}" klass="${3:-UNKNOWN}" cfg="$4" cwd="$5"
+  local f tx="" row="" err="" kind=""
+  # KILL SWITCH, never an ENABLE flag. A behaviour gated on a flag somebody must remember to pass
+  # is the repo lesson "a branch gated on a flag no automation passes is permanent inaction" — the
+  # default has to BE the correct behaviour, with the escape explicit and named. `=off` restores
+  # the pre-2026-09-22 text byte-for-byte, which is what the negative control in
+  # tests/cc-lr-front.bats pins, so the classify fork below can never wedge this refusal shut.
+  if [ "${CC_LR_ROUTE_REFUSAL:-on}" = off ]; then
+    echo "cc-lr: REFUSED — ${sid:0:8} (pane ${pane}) is class ${klass}, not LIMITED: its last assistant word is not a usage-limit error, so there is nothing to recover. No mutex was created and nothing was started." >&2
+    return 2
+  fi
+  for f in "$cfg"/projects/*/"$sid".jsonl; do [ -f "$f" ] && { tx="$f"; break; }; done
+  # FAIL-QUIET, never fail-wrong: an unreachable lr-lib or an unreadable transcript leaves row
+  # empty and we fall to the generic arm, which claims nothing about the api error either way.
+  if [ -n "$tx" ] && command -v lr_last_api_error >/dev/null 2>&1; then
+    row="$(lr_last_api_error "$tx" 2>/dev/null || true)"
+  fi
+  [ -n "$row" ] && { err="$(printf '%s' "$row" | cut -f2)"; kind="$(printf '%s' "$row" | cut -f3)"; }
+
+  if [ -n "$row" ] && [ "$kind" != limit ]; then
+    { echo "cc-lr: REFUSED — ${sid:0:8} (pane ${pane}) is class ${klass}, not LIMITED. These rails admit a QUOTA limit only. No mutex was created and nothing was started."
+      echo "cc-lr:   BUT IT IS NOT HEALTHY: its last assistant record IS a terminal api error — kind=${kind:-unknown}: ${err:-<no text>}"
+      echo "cc-lr:   so that pane cannot execute another turn. 'Not recoverable by this command' is a different statement from 'nothing to recover', and the difference is the whole reason this line exists."
+      echo "cc-lr:   NO in-place recycle exists for this class — every downstream rail (recycle, transplant, tombstone, self-close) is gated on the quota predicate. Do this instead:"
+      echo "cc-lr:     python3 ~/.claude/scripts/limit-recover/lr-audit.py --config-dir ${cfg} --session ${sid} --cwd ${cwd:-<its cwd>}"
+      echo "cc-lr:   read its gap ledger, fire a successor with scripts/handoff-fire.sh, and leave the source pane to the operator (it cannot be retired by the sanctioned path). Diagnosis: docs/plans/LIMIT_RECOVER_100P.md sections 6a, 10."
+    } >&2
+    return 2
+  fi
+
+  { echo "cc-lr: REFUSED — ${sid:0:8} (pane ${pane}) is class ${klass}, not LIMITED: its last assistant record is not an api error at all, so this session is live and working and there is nothing to recover. No mutex was created and nothing was started."
+  } >&2
+  return 2
+}
+
 cl_resolve() { # <ref> → the one TSV row on stdout; rc 0 ok · 1 no match · 2 refused
   local ref="$1" out rc n
   [ -x "$FIND_BIN" ] || [ -f "$FIND_BIN" ] || { echo "cc-lr: cannot reach cc-find at $FIND_BIN" >&2; return 2; }
@@ -212,7 +263,7 @@ EOF
     exit 2
   fi
   if [ "$klass" != LIMITED ]; then
-    echo "cc-lr: REFUSED — ${sid:0:8} (pane ${pane}) is class ${klass:-UNKNOWN}, not LIMITED: its last assistant word is not a usage-limit error, so there is nothing to recover. No mutex was created and nothing was started." >&2
+    cl_refuse_not_limited "$sid" "$pane" "${klass:-UNKNOWN}" "$cfg" "$cwd"
     exit 2
   fi
 
