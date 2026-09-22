@@ -42,9 +42,36 @@ versions:
   # routing analysis: docs/research/OPUS5_ADOPTION_AND_PROMPTING_2026-07-24.md · § Opus 5 adoption below.
   opus_latest: claude-opus-5
   opus_prior: claude-opus-4-8
-  opus_staged: ""                           # empty = nothing staged. A future lateral bump parks its
-                                            # candidate here (ignored by claude-lint/bump-models — not a
-                                            # *_latest/_prior key) until its auto-mode test passes.
+  opus_staged: claude-opus-5-5              # STAGED 2026-09-22 — NOT routed. A staged key is invisible
+                                            # to claude-lint/bump-models (they key on *_latest/_prior
+                                            # only), so nothing dispatches here until the flip below.
+                                            # Opus 5.5 released 2026-09-22 and Opus 5 moved to LEGACY on
+                                            # platform.claude.com. It is CHEAPER on every axis: $4/$20
+                                            # per MTok vs Opus 5's $5/$25, and cache reads are 5% of
+                                            # base ($0.20) vs Opus 5's 10% ($0.50) — a 2.5x cut on the
+                                            # axis this fleet actually spends, since our sessions run a
+                                            # 1h cache TTL and are cache-read-dominated. 1M ctx, 128K
+                                            # out, cutoff Jun 2026, retires not sooner than 2027-09-22.
+                                            #
+                                            # THE BINARY GATE IS WHAT HOLDS IT, exactly as Fable 5.1 was
+                                            # held. `claude-opus-5-5` requires Claude Code >= 2.1.280;
+                                            # our pin is 2.1.260 and the API refuses it by NAME with
+                                            # 400 [claude-code:unrecognized_model] "Claude Code 2.1.260
+                                            # does not support this model; version 2.1.280 or newer is
+                                            # required" (measured 2026-09-22, both before and after the
+                                            # public release). So this is a BINARY advance decision, not
+                                            # a model decision — see ~/.claude-versions/MANIFEST.jsonl
+                                            # entry 2.1.280, which holds the audit and its four-leg
+                                            # revisit trigger. At audit, 2.1.280 was 3 HOURS old.
+                                            #
+                                            # 🚨 THE FLIP IS NOT A ONE-LINE SWAP — Opus 5.5's default
+                                            # effort is `medium`, where every prior Opus defaulted to
+                                            # `high`, and 2.1.280 also stops a saved /effort level from
+                                            # applying to newly released models. Our launcher passes
+                                            # --effort high EXPLICITLY so a lead is unaffected, but any
+                                            # subagent/teammate that inherits a default silently drops a
+                                            # rung. Audit for explicit effort: before flipping, grep the
+                                            # agent frontmatter and every Agent() spawn site.
   sonnet_latest: claude-sonnet-5            # LATERAL 2026-06-30 (was claude-sonnet-4-6); 1M ctx, 128K out
   sonnet_prior: claude-sonnet-4-6
   haiku_latest: claude-haiku-4-5
