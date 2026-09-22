@@ -40,9 +40,18 @@ versions:
   # the LIVE config on 2026-07-25 but was never committed back; this file is now the single versioned
   # SSOT (see the header) so the activation state can no longer live only on disk. Behavioral +
   # routing analysis: docs/research/OPUS5_ADOPTION_AND_PROMPTING_2026-07-24.md · § Opus 5 adoption below.
-  opus_latest: claude-opus-5
-  opus_prior: claude-opus-4-8
-  opus_staged: claude-opus-5-5              # STAGED 2026-09-22 — NOT routed. A staged key is invisible
+  # Opus 5.5 ACTIVATED 2026-09-22 (evening) — the binary gate cleared: the operator ran
+  # 45-opus55-cc280-activate.sh (~/.zshrc _bin → ~/.claude-280, launcher --model → claude-opus-5-5)
+  # after cc-upgrade-gate 2.1.280 × claude-opus-5-5 read GREEN 14/0/1. Every consumer of opus_latest
+  # is a LAUNCH path (handoff-fire --model opus, lr-fire-resume, lr-handoff, reso-resume-one,
+  # cc-upgrade-gate check05) and each resolves its binary through cc-claude-bin → the launcher pin,
+  # i.e. 2.1.280 — so this key can never pair 5-5 with a binary that refuses it. The subagent ROLE
+  # keys are deliberately NOT flipped here: sessions still on 2.1.260 spawn by full id and 2.1.260
+  # refuses claude-opus-5-5 by name; that half waits for the fleet to recycle (feat/opus55-utilization).
+  opus_latest: claude-opus-5-5
+  opus_prior: claude-opus-5
+  opus_staged: ""                           # CLEARED at the 2026-09-22 flip. Staging history, kept:
+                                            # STAGED 2026-09-22 — NOT routed. A staged key is invisible
                                             # to claude-lint/bump-models (they key on *_latest/_prior
                                             # only), so nothing dispatches here until the flip below.
                                             # Opus 5.5 released 2026-09-22 and Opus 5 moved to LEGACY on
