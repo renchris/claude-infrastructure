@@ -915,7 +915,26 @@ SH
   hc=$(wc -c < "$B/HANDOFF-CONTEXT.md"); mf=$(wc -c < "$B/MANIFEST.json")
   echo "HANDOFF-CONTEXT.md=$hc B  MANIFEST.json=$mf B"
   [ "$hc" -le 2048 ] || { echo "HANDOFF-CONTEXT.md is $hc B (> 2048)"; cat "$B/HANDOFF-CONTEXT.md"; false; }
-  [ "$mf" -le 1024 ] || { echo "MANIFEST.json is $mf B (> 1024)"; cat "$B/MANIFEST.json"; false; }
+  # THE MANIFEST CAP MOVED 1024 → 1088, DELIBERATELY AND BY A MEASURED AMOUNT
+  # (VOLUNTARY_ACCOUNT_SWITCH §5 DEC-3). The plan requires two new scalar fields on this file,
+  # `trigger` and `reason`, so that a bundle read weeks later says which KIND of move it was —
+  # the one thing a lock and a tombstone cannot tell apart. Measured, not estimated:
+  #   `  "trigger": "limit",`          21 B + newline
+  #   `  "reason": "limit recovery"`   27 B + newline
+  #   + the comma the previous last field gained    1 B   ⇒ 52 B total
+  #   this fixture read 1007 B before (17 B of headroom under the old cap) and 1059 B after.
+  # 1088 restores ~29 B of headroom and NOTHING ELSE fits in it. What the cap is for is unchanged
+  # and is stated above: keeping a `source_argv`-class field — 3,477 B, 79 % of the manifest — from
+  # coming back. It was never a price on two 25-byte scalars, and a ratchet that cannot admit a
+  # field the frozen plan mandates is a ratchet measuring the wrong thing.
+  #
+  # ⚠️ AND READ THE NUMBER FOR WHAT IT IS: 365 of these 1059 B are the HARNESS's own
+  # $BATS_TEST_TMPDIR prefix (73 B, repeated across source_cfg, target_cfg, cwd, worktree and
+  # ingest_prompt), so this cap is partly a measurement of how deep bats put its scratch dir. The
+  # content a production bundle actually carries is ~694 B. Do not quote 1088 as a fact about the
+  # real artifact, and if this ever needs tightening, subtract the prefix first rather than
+  # shaving fields (repo lesson: a-path-length-correction-must-cover-every-spelling).
+  [ "$mf" -le 1088 ] || { echo "MANIFEST.json is $mf B (> 1088)"; cat "$B/MANIFEST.json"; false; }
   # and the field that carried 79 % of the manifest is gone, while the three facts mined from it stay
   ! grep -q 'source_argv' "$B/MANIFEST.json" || { echo "source_argv is still in the manifest"; false; }
   for k in runtime_model runtime_effort permission_mode; do

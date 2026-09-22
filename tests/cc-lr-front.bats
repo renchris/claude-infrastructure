@@ -41,7 +41,7 @@ setup() {
   # INHERITED VALUES). `cc-lr switch` takes its subject from CLAUDE_CODE_SESSION_ID and
   # cl_this_pane(), and a bats run inherits BOTH from the session running it — so a case meaning
   # to test "no session id" would silently be handed the operator's live one and pass for the
-  # wrong reason. Each switch case supplies what it needs via self_env().
+  # wrong reason. Each switch case supplies what it needs via self_run().
   unset CLAUDE_CODE_SESSION_ID CC_PANE_ID ITERM_SESSION_ID KITTY_WINDOW_ID
 }
 
@@ -665,8 +665,17 @@ iron_rule() { # <file> → rc 0 clean, rc 1 a banned verb is present
 
 # The SELF identity switch takes its subject from. Both halves are required and they fail apart, so
 # each has its own case below.
-self_env() { # → the env a session running `cc-lr switch` in its own pane actually has
-  printf '%s' "CLAUDE_CODE_SESSION_ID=$SID CC_PANE_ID=417 CLAUDE_CONFIG_DIR=$HOME/.claude"
+#
+# A HELPER THAT RUNS THE COMMAND, not one that returns a STRING of env assignments. The first
+# draft built the assignments as one string and interpolated it UNQUOTED into the run line, which
+# works only because of the word splitting `bats-shellcheck-lint` blocks on (SC2046) — and which
+# would break outright the day one of those values contained a space. Passing them as real argv
+# words has neither problem. `run` sets $status/$output as globals, so they read in the caller
+# exactly as if `run` had been typed there (the shape tests/lr-handoff-close-source.bats uses for
+# its own `fire` helper).
+self_run() { # rest = argv for `cc-lr switch`, run with the env a session in its own pane has
+  run env CLAUDE_CODE_SESSION_ID="$SID" CC_PANE_ID=417 CLAUDE_CONFIG_DIR="$HOME/.claude" \
+      bash "$LR" switch "$@"
 }
 no_mutex() { [ ! -e "$MUTEX" ]; }
 never_fired() { [ ! -e "$BATS_TEST_TMPDIR/handoff.argv" ]; }
@@ -677,14 +686,14 @@ never_fired() { [ ! -e "$BATS_TEST_TMPDIR/handoff.argv" ]; }
   # healthy sessions it exists to move. The find stub is ARMED to record argv and to answer rc 2
   # (AMBIGUOUS) — so an implementation that consulted it would both leave a log AND be refused.
   find_stub 2 "someone-else	999	next	$HOME/.claude	/x	live	LIMITED"
-  run env $(self_env) bash "$LR" switch --target next3
+  self_run --target next3
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ ! -e "$BATS_TEST_TMPDIR/find.argv" ] || { echo "switch consulted cc-find: $(cat "$BATS_TEST_TMPDIR/find.argv")"; false; }
   [ -s "$BATS_TEST_TMPDIR/handoff.argv" ]
 }
 
 @test "switch fires lr-handoff with THIS session's identity, in place, and marked voluntary" {
-  run env $(self_env) bash "$LR" switch --target next3
+  self_run --target next3
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   local argv; argv="$(cat "$BATS_TEST_TMPDIR/handoff.argv")"
   [[ "$argv" == *"--sid $SID"* ]] || { echo "$argv"; false; }
@@ -702,7 +711,7 @@ never_fired() { [ ! -e "$BATS_TEST_TMPDIR/handoff.argv" ]; }
 }
 
 @test "switch REFUSES --source-pane with rc 3, names the missing idle oracle, and creates no mutex" {
-  run env $(self_env) bash "$LR" switch --source-pane 500
+  self_run --source-pane 500
   [ "$status" -eq 3 ]
   [[ "$output" == *"SELF-only"* ]] || { echo "$output"; false; }
   [[ "$output" == *"idle oracle"* ]] || { echo "$output"; false; }
@@ -713,7 +722,7 @@ never_fired() { [ ! -e "$BATS_TEST_TMPDIR/handoff.argv" ]; }
 }
 
 @test "switch REFUSES --detach with rc 3: the mover IS the subject, so there is no driver to detach" {
-  run env $(self_env) bash "$LR" switch --detach
+  self_run --detach
   [ "$status" -eq 3 ]
   [[ "$output" == *"FOREGROUND"* ]] || { echo "$output"; false; }
   [[ "$output" == *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }
@@ -725,14 +734,14 @@ never_fired() { [ ! -e "$BATS_TEST_TMPDIR/handoff.argv" ]; }
   # The account roster is PERISHABLE (lib/account-map.generated.sh, re-derived from accounts.json),
   # so this refuses only what cannot BE a name and leaves `is next9 routable` to the router. Both
   # arms are asserted: a malformed target is rc 3, a well-formed unknown one is passed THROUGH.
-  run env $(self_env) bash "$LR" switch --target 'next3; rm -rf /'
+  self_run --target 'next3; rm -rf /'
   [ "$status" -eq 3 ]
   [[ "$output" == *"cannot be an account name"* ]] || { echo "$output"; false; }
   [[ "$output" == *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }
   no_mutex
   never_fired
   # the other arm — a well-formed name this file has never heard of still reaches the actuator
-  run env $(self_env) bash "$LR" switch --target next9
+  self_run --target next9
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$(cat "$BATS_TEST_TMPDIR/handoff.argv")" == *"--target next9"* ]] || false
 }
@@ -761,7 +770,7 @@ never_fired() { [ ! -e "$BATS_TEST_TMPDIR/handoff.argv" ]; }
 }
 
 @test "switch takes no ref: a ref names somebody ELSE's session and is rc 3, never a silent move" {
-  run env $(self_env) bash "$LR" switch 500
+  self_run 500
   [ "$status" -eq 3 ]
   [[ "$output" == *"takes no ref"* ]] || { echo "$output"; false; }
   never_fired
@@ -771,7 +780,7 @@ never_fired() { [ ! -e "$BATS_TEST_TMPDIR/handoff.argv" ]; }
   # A dry run that left a lock behind would block the very attempt it was rehearsing — the header's
   # own rule ("a refusal that leaves a lock behind blocks the next correct attempt"), which is why
   # the dry-run arm returns BEFORE cl_mutex_take rather than after it.
-  run env $(self_env) bash "$LR" switch --target next3 --dry-run
+  self_run --target next3 --dry-run
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"DRY RUN"* ]] || { echo "$output"; false; }
   [[ "$output" == *"--voluntary"* ]] || { echo "$output"; false; }
@@ -786,7 +795,7 @@ never_fired() { [ ! -e "$BATS_TEST_TMPDIR/handoff.argv" ]; }
   # a token minted here from an rc alone would be a second auditor over one population — the defect
   # the repo lesson sibling-auditors-must-share-the-state-model names.
   handoff_stub 4
-  run env $(self_env) bash "$LR" switch --target next3
+  self_run --target next3
   [ "$status" -eq 4 ]
   no_mutex
   [ "$(printf '%s\n' "$output" | grep -c 'verdict=')" -eq 0 ] || { echo "$output"; false; }
@@ -799,7 +808,7 @@ never_fired() { [ ! -e "$BATS_TEST_TMPDIR/handoff.argv" ]; }
   # could break silently: two movers of ONE session race a transcript copy against a typed /exit.
   mkdir -p "$MUTEX"
   printf '{"sid":"%s","pane":"417","pid":%d,"ts":"x","by":"other"}\n' "$SID" "$$" > "$MUTEX/holder"
-  run env $(self_env) bash "$LR" switch --target next3
+  self_run --target next3
   [ "$status" -eq 2 ]
   [[ "$output" == *"already being recovered by pid $$"* ]] || { echo "$output"; false; }
   never_fired
