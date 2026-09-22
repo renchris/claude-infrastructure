@@ -8,6 +8,7 @@
 #                      [--context FILE] [--launch|--print-only]
 #                      [--no-transplant] [--keep-source] [--force] [--close-source]
 #                      [--source-pane PANE-ID] [--in-place] [--spawn]
+#                      [--voluntary] [--reason TEXT]
 #
 # Defaults: sid/config from the live session env; --target auto routes via
 # claude-accounts; --print-only mints $TMPDIR/lr-launch-<sid8>-XXXXXX.sh instead of firing.
@@ -53,6 +54,21 @@
 # --close-source (the recycle IS the retirement). Exit 0 recycled or replaced; 4 transplanted but the
 # relaunch did not verify (the source is a tombstoned husk — the guard blocks its prompts — and the
 # launcher path is printed for a manual relaunch).
+#
+# --voluntary (VOLUNTARY_ACCOUNT_SWITCH §5 DEC-3): this move is a CHOICE, not a recovery. The
+# source is HEALTHY and can still take a turn, which is the whole engineering difference — every
+# safety property that is vacuous against a quota-blocked source is live against this one. It
+# records the disposition as a FIELD (MANIFEST.trigger / .reason, `--cause` on the transplant lock
+# and tombstone) and threads `--transplant-cause` to handoff-fire, whose in-flight-subagent gate is
+# forced OFF for a limit (a limit-blocked lead's subagents died with it) and must NOT be for this.
+# It is deliberately NOT a new STATE value: a state token would fall into klass()'s permissive
+# `return "run"` default and render as in-flight forever (A06). NOTHING downstream branches on it
+# except that one gate — a state predicate that reads it is the negative invariant this wave pins.
+# 🚨 THE NAME MAY NOT CONTAIN `--in-place`: tests/lr-fleet.bats:320 counts occurrences of that
+# substring in this script's emitted argv and requires exactly 1.
+#
+# --reason TEXT: free text recorded beside the trigger, so a bundle read weeks later says WHY.
+# Never parsed, never branched on.
 #
 # Output: bundle dir path on the last stdout line. Exit 0 ok, 2 error, 3 fired-but-not-closed,
 # 4 transplanted-but-the-relaunch-did-not-verify, 5 the LIVE layer cannot run what this would mint,
@@ -225,6 +241,7 @@ LRH_LAUNCH_TAIL=()
 LRH_SPAWN_SHAPE=""
 
 CWD="$(pwd)" CONTEXT="" LAUNCH=0 PRINT_ONLY=0 NO_TRANSPLANT=0 KEEP_SOURCE=0 FORCE=0 CLOSE_SOURCE=0 IN_PLACE=0 SPAWN=0
+VOLUNTARY=0 REASON=""
 MODEL_EXPLICIT=0 EFFORT_EXPLICIT=0
 SOURCE_PANE=""
 # Set by lrh_resolve_implied_pane branch (b) and read by lrh_precheck. It MUST be initialised
@@ -249,10 +266,40 @@ while [[ $# -gt 0 ]]; do
     --source-pane) SOURCE_PANE="$2"; shift 2 ;;
     --in-place) IN_PLACE=1; shift ;;
     --spawn) SPAWN=1; shift ;;
+    --voluntary) VOLUNTARY=1; shift ;;
+    --reason) REASON="$2"; shift 2 ;;
     *) echo "lr-handoff: unknown arg $1" >&2; exit 2 ;;
   esac
 done
 [[ -n "$SID" ]] || { echo "lr-handoff: no --sid and CLAUDE_CODE_SESSION_ID unset" >&2; exit 2; }
+
+# ── THE CAUSE IS ONE VALUE, DERIVED ONCE, AND IT IS A FIELD (§5 DEC-3) ──────────────────────────
+# Two consumers read it and they are peers landing the other half of this contract:
+#   handoff-fire.sh --transplant-cause limit|voluntary  — `limit` implies --allow-live-subagents
+#     (the source was dead anyway); `voluntary` implies nothing, so the in-flight subagent gate may
+#     refuse. ABSENT is the SAFE branch and answers an ungated caller with a loud refusal, which is
+#     exactly why the LIMIT path below must pass it explicitly rather than rely on a default.
+#   lr-transplant.sh --cause limit|voluntary — recorded on the lock and the tombstone, and NOTHING
+#     in that engine branches on it.
+# `limit` stays the default because every existing caller (lr-fleet --one, the reset poller,
+# cc-lr recover) is a limit recovery and none of them passes a flag.
+LRH_CAUSE=limit
+[[ $VOLUNTARY -eq 1 ]] && LRH_CAUSE=voluntary
+# TWO WORDS, AND THE BUDGET IS WHY. `tests/lr-handoff-launcher-quoting.bats` caps MANIFEST.json at
+# 1 KB — the W3 number, won by deleting a 3,477-byte `source_argv` field — so a verbose default
+# reason spends a scarce budget on a sentence nobody needs. It went red at 1,041 B on the first
+# draft of this line. A CALLER with something to say passes --reason; the default only has to name
+# the kind. It also does not call a voluntary move a "recovery", for the same reason §6 refuses
+# `RECOVERED`: that word is false for something that was never broken.
+#
+# BRANCHED ON THE FLAG, NEVER ON $LRH_CAUSE — deliberately, and the ratchet in
+# tests/lr-handoff-voluntary.bats enforces it. The cause is a FIELD: the moment any code reads it
+# as a predicate, the next author has a precedent for a STATE that branches on it too, which is
+# what §5 DEC-3 forbids (a new state value falls into klass()'s permissive `return "run"` default
+# and renders as in-flight forever). Cheap here, so it costs nothing to hold the line.
+if [[ -z "$REASON" ]]; then
+  if [[ $VOLUNTARY -eq 1 ]]; then REASON="voluntary switch"; else REASON="limit recovery"; fi
+fi
 
 # ══ THE DEFAULT IS IN PLACE (W11, LIMIT_RECOVER_100P § 10) ═══════════════════════════════════════
 # Operator's words: "recover split panes in place so we are never at this confused middle case of
@@ -322,6 +369,20 @@ if [[ $IN_PLACE -ne 1 && $SPAWN -ne 1 && $LAUNCH -eq 1 && $PRINT_ONLY -ne 1 \
   else
     echo "lr-handoff: no pane holds session ${SID:0:8} — spawning (this is the NO-PANE fallback, not a silent downgrade)" >&2
   fi
+fi
+# AN EXPLICIT --in-place SKIPS THE RESOLVER, AND THE SELF PROBE LOSES ITS SUBJECT WITH IT
+# (2026-09-22). lrh_resolve_implied_pane runs only on the IMPLIED path — its guard is `IN_PLACE -ne
+# 1` — and its SELF branch is the sole writer of LRH_SELF_PANE. So a caller that states --in-place
+# outright (cc-lr switch does, because `switch` IS in-place by definition and must not inherit
+# LR_INPLACE_DEFAULT=off) left the probe with no pane to name, killed_inflight unrecorded, and
+# lr-ingest-verify clause A6 refusing the fast path — the exact bug the SELF arm was landed to cure,
+# reintroduced through the other door. Same two names, same two jobs: SOURCE_PANE stays EMPTY (that
+# is what downstream reads as "recycle yourself"), LRH_SELF_PANE only lets the read-only probe name
+# a subject.
+if [[ $IN_PLACE -eq 1 && -z "$SOURCE_PANE" && -z "$LRH_SELF_PANE" ]] \
+   && [[ "$SID" == "${CLAUDE_CODE_SESSION_ID:-}" ]] \
+   && [[ -n "${KITTY_WINDOW_ID:-}" || -n "${ITERM_SESSION_ID:-}" ]]; then
+  LRH_SELF_PANE="${KITTY_WINDOW_ID:-${ITERM_SESSION_ID##*:}}"
 fi
 # --close-source retires THIS pane once the successor is carrying the session. Both of its
 # preconditions are decidable here, before any work is done, and both are incoherence rather than
@@ -427,6 +488,64 @@ if [[ "$SRC_REAL" == "$TGT_REAL" && $FORCE -ne 1 ]]; then
   echo "lr-handoff: REFUSED — target '$TARGET' shares the source account's session store (use --force to override)" >&2
   exit 2
 fi
+
+# ── THE VERDICT VOCABULARY (VOLUNTARY_ACCOUNT_SWITCH §6) ────────────────────────────────────────
+# PARTITIONED ON ACTION, NEVER ON A RECOVERY WORD. `RECOVERED` is false for something that was
+# never broken, and the load-bearing split it hides is NOTMOVED vs STRANDED: today both fall inside
+# lr-fleet's PARKED/PARTIAL, and they demand OPPOSITE actions — retry versus rescue.
+#
+#   SWITCHED           the successor took a turn on the new account. proven=yes.
+#   SWITCHED-UNPROVEN  the /exit landed and the watcher owns the relaunch; no turn observed yet.
+#   NOTMOVED           the SOURCE IS UNTOUCHED — refused before the first irreversible step. RETRY.
+#   STRANDED           the source is retired (tombstoned husk) and no successor is carrying it. RESCUE.
+#   FAILED             an outcome this process cannot classify; the tombstone is the discriminator.
+#
+# NOTMOVED IS CLAIMED ONLY WHERE IT IS PROVABLE. It is emitted at the precheck refusal and at a
+# lr-transplant that exits non-zero having created nothing — never from an rc alone, because
+# "REFUSED" and "FATAL mid-copy" share rc 2 in that engine's taxonomy and only the first leaves the
+# source untouched. Anything else this process cannot separate is FAILED, which overclaims nothing.
+#
+# `from=`/`to=`/`proven=` ARE MANDATORY ON EVERY TOKEN so a reader never infers any of the three.
+#
+# NOTE, and do NOT copy the pattern: lr-fleet.sh:807 sets verdict="RECOVERED" as an INITIALISER,
+# before any outcome is read, so its recycle path is true by construction. That defect is filed
+# separately (plan §9) and lr-fleet.sh is not this file's to edit. Here the variable does not exist
+# until an outcome is in hand.
+LRH_FROM_ACCT=""
+if command -v cc_acct_name_for_dir_basename >/dev/null 2>&1; then
+  _lrh_cfgb="${CFG%/}"; _lrh_cfgb="${_lrh_cfgb##*/}"
+  LRH_FROM_ACCT="$(cc_acct_name_for_dir_basename "$_lrh_cfgb" 2>/dev/null || true)"
+  [[ -n "$LRH_FROM_ACCT" ]] || LRH_FROM_ACCT="$_lrh_cfgb"
+fi
+# ONE MAIL PER RUN, AND ONLY ON THE VOLUNTARY PATH. On a LIMIT recovery lr-fleet.sh already mails
+# the verdict to the requester (:1163-1172); a second mailer would be a second auditor over one
+# population, disagreeing the first time the two derive differently. A voluntary switch has no
+# fleet driver above it — cc-lr switch calls this script directly, in the foreground — so nothing
+# else would ever send it.
+#
+# 🚨 THE MAIL IS PANE-KEYED, NEVER SID-KEYED. mailbox-drain.sh:36 addresses an inbox by PANE, and
+# every account's mailbox/ is a symlink to one directory, so the successor on the NEW account
+# drains the same inbox the source was reading. The recycle changes the sid by construction, so a
+# sid-keyed lane would deliver a voluntary switch's verdict to an address that no longer exists.
+lrh_verdict() { # <TOKEN> <proven yes|no> <note>
+  local tok="$1" proven="$2" note="${3:--}" msg to notify
+  msg="lr-handoff ${SID:0:8}: verdict=$tok from=${LRH_FROM_ACCT:--} to=${TARGET:--} proven=$proven trigger=$LRH_CAUSE — $note"
+  printf '%s\n' "$msg" >&2
+  [[ $VOLUNTARY -eq 1 ]] || return 0
+  to="${LRH_SELF_PANE:-$SOURCE_PANE}"
+  if [[ -z "$to" ]]; then
+    echo "lr-handoff: the verdict names no pane to mail (neither a self pane nor --source-pane), so it is stderr-only: $msg" >&2
+    return 0
+  fi
+  notify="${CC_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
+  if [[ -x "$notify" ]]; then
+    "$notify" "$to" "$msg" >/dev/null 2>&1 \
+      || echo "lr-handoff: cc-notify to pane $to FAILED — the verdict is stderr-only: $msg" >&2
+  else
+    echo "lr-handoff: cc-notify unreachable at $notify — the verdict is stderr-only: $msg" >&2
+  fi
+  return 0
+}
 
 # --- repo guards -----------------------------------------------------------
 BRANCH="" HEAD="" WT_TOP=""
@@ -636,12 +755,14 @@ jq -n \
   --arg rt_model "$RT_MODEL" --arg rt_effort "${EFFORT:-$RT_EFFORT}" --arg perm "${SRC_PERM:-auto}" \
   --arg src_pane "${SOURCE_PANE:-}" --arg in_place "$IN_PLACE" \
   --arg implied "${LRH_IMPLIED_INPLACE:-0}" \
+  --arg trigger "$LRH_CAUSE" --arg reason "$REASON" \
   '{sid:$sid, source_cfg:$source_cfg, target:$target, target_cfg:$target_cfg, cwd:$cwd,
     worktree:$wt, branch:$branch, head:$head, ts:$ts, model:$model, task_list:$task_list,
     transcript_sha256:$sha, gaps_at_handoff:($gaps|tonumber), ingest_prompt:$ingest,
     runtime_model:$rt_model, runtime_effort:$rt_effort, permission_mode:$perm,
     source_pane:$src_pane, in_place:($in_place=="1"),
-    in_place_implied:($implied=="1")}' \
+    in_place_implied:($implied=="1"),
+    trigger:$trigger, reason:$reason}' \
   > "$BUNDLE/MANIFEST.json"
 # `source_argv` IS DELIBERATELY ABSENT (W3). It was the source process's FULL `ps -Eww` line — argv
 # plus the entire inherited environment — and on bundle 09e64dcb/bundle-20260919T172203Z it was
@@ -901,7 +1022,16 @@ lrh_precheck() { # → 0 admitted (token minted) / 6 HELD|REFUSED|PARKED, nothin
   return 0
 }
 if [[ $IN_PLACE -eq 1 && "${LRH_PRECHECK:-on}" != off ]]; then
-  lrh_precheck || exit $?
+  # `lrh_precheck || exit $?` was correct and stays correct; the rc is captured into a variable
+  # first only so the verdict can be emitted between the refusal and the exit. NOTMOVED is
+  # PROVABLE here and nowhere richer: every arm of lrh_precheck returns 6 before the transplant
+  # runs, so no lock, no tombstone and no keystroke exist when this line is reached.
+  _lrh_prc=0
+  lrh_precheck || _lrh_prc=$?
+  if [[ $_lrh_prc -ne 0 ]]; then
+    lrh_verdict NOTMOVED no "the precheck refused (rc $_lrh_prc) before the first irreversible step — no lock, no tombstone, no keystroke; the source session is untouched and a retry is safe"
+    exit "$_lrh_prc"
+  fi
 fi
 
 # --- transplant ------------------------------------------------------------
@@ -910,7 +1040,19 @@ if [[ $NO_TRANSPLANT -ne 1 ]]; then
   [[ -n "$SRC_TASK_LIST" ]] && TARGS+=(--task-list "$SRC_TASK_LIST")   # the SOURCE's board, never the driver's
   [[ $KEEP_SOURCE -eq 1 ]] && TARGS+=(--keep-source)
   [[ $FORCE -eq 1 ]] && TARGS+=(--force)
-  "$LR/lr-transplant.sh" "${TARGS[@]}" > "$BUNDLE/transplant.json"
+  # THE CAUSE IS A FIELD ON THE LOCK AND THE TOMBSTONE, AND NOTHING IN THAT ENGINE BRANCHES ON IT
+  # (§5 DEC-3). It is recorded so an artifact read weeks later says which kind of move this was —
+  # the one thing a lock and a tombstone otherwise cannot tell you apart.
+  TARGS+=(--cause "$LRH_CAUSE")
+  _lrh_txrc=0
+  "$LR/lr-transplant.sh" "${TARGS[@]}" > "$BUNDLE/transplant.json" || _lrh_txrc=$?
+  if [[ $_lrh_txrc -ne 0 ]]; then
+    # rc 2 IS "REFUSED/FATAL" IN THAT ENGINE'S TAXONOMY — one code for two dispositions — so this
+    # cannot claim NOTMOVED, which asserts the source is untouched. FAILED names the tombstone as
+    # the discriminator instead of guessing (repo lesson: two-causes-one-rc-ask-a-lower-layer).
+    lrh_verdict FAILED no "lr-transplant exited $_lrh_txrc; its rc 2 covers REFUSED and FATAL alike, so whether the source moved is decided by the tombstone, not by this code — read $BUNDLE/transplant.json and the target store before retrying"
+    exit "$_lrh_txrc"
+  fi
   echo "lr-handoff: transplant ok -> $(jq -r '.target_transcript' "$BUNDLE/transplant.json")" >&2
 fi
 
@@ -1089,6 +1231,18 @@ if [[ $IN_PLACE -eq 1 ]]; then
     echo "$BUNDLE"; exit 4
   fi
   RCY_ARGS=(--recycle --transplanted-source --resume-launcher "$LAUNCHER" --resume-cfg "$TCFG" --resume-cwd "${WT_TOP:-$CWD}")
+  # ── THREAD THE CAUSE, AND THREAD IT ON BOTH PATHS (D1) ─────────────────────────────────────────
+  # handoff-fire forces ALLOW_LIVE_SA=1 on a --transplanted-source recycle, justified by "a
+  # limit-blocked lead's subagents died with it" — TRUE of a limit, FALSE of a voluntary move,
+  # where a healthy lead's subagents are genuinely running and would be reaped with no ingest to
+  # re-audit them. The gate now keys on this flag, and its ABSENT case is the SAFE branch that
+  # implies nothing and answers an ungated caller with a loud refusal.
+  #
+  # 🚨 SO THE LIMIT PATH MUST PASS IT TOO, EXPLICITLY. This one line is what keeps every existing
+  # recovery working: `limit` is this script's default cause, so lr-fleet --one, the reset poller
+  # and cc-lr recover all reach that safe default and would meet the refusal if the flag were
+  # emitted only under --voluntary. It is appended unconditionally for exactly that reason.
+  RCY_ARGS+=(--transplant-cause "$LRH_CAUSE")
   if [[ -n "$SOURCE_PANE" ]]; then
     RCY_ARGS+=(--source-pane "$SOURCE_PANE" --source-session "$SID")
     # `--await` blocks this process for up to 900 s (handoff-fire.sh:11788) and can return rc 3 over
@@ -1107,6 +1261,15 @@ if [[ $IN_PLACE -eq 1 ]]; then
   else
     echo "lr-handoff: IN-PLACE — recycling THIS pane onto '$TARGET': same window, same uuid ${SID:0:8} (the /exit ends this process; the watcher carries the relaunch)" >&2
   fi
+  # MAIL THE ARMED VERDICT *BEFORE* FIRING, BECAUSE THIS PROCESS IS EXPECTED TO DIE INSIDE THE
+  # CALL BELOW. On the SELF form the recycle types /exit into this pane's own TUI and Claude Code
+  # reaps the whole process group of the in-flight tool call — so any verdict emitted AFTER the
+  # fire is unreachable on the commonest voluntary path there is. lrh_verdict is a no-op mailer on
+  # the limit path (lr-fleet owns the mail there), so this costs that path one stderr line.
+  # Consequence stated rather than hidden: a SELF switch mails exactly ONE verdict, the armed one,
+  # and the terminal SWITCHED/STRANDED lines below are reached only when the process survives —
+  # i.e. the driver form, or a recycle that refused before typing anything.
+  lrh_verdict SWITCHED-UNPROVEN no "armed: the transplant is done and the recycle is firing on pane ${SOURCE_PANE:-<this pane>}; the watcher carries the relaunch and its outcome lands in ~/.claude/logs/handoffs.jsonl"
   LRH_RCY_ERR="$(mktemp "$(lrh_tmpdir)/lr-inplace-XXXXXX")" || LRH_RCY_ERR=/dev/null
   set +e
   "$HF" "${RCY_ARGS[@]}" 2> >(tee "$LRH_RCY_ERR" >&2)
@@ -1114,6 +1277,13 @@ if [[ $IN_PLACE -eq 1 ]]; then
   set -e
   if [[ $LRH_RCY_RC -eq 0 ]]; then
     echo "lr-handoff: recycled IN PLACE — pane ${SOURCE_PANE:-<this pane>} continues session ${SID:0:8} on '$TARGET' (same window id, same uuid; engagement verified by a new assistant turn in $TCFG's copy)" >&2
+    # PROVEN IS THE AWAIT, NOT THE rc. Without --await, rc 0 means the /exit landed and the watcher
+    # took over — ARMED, not engaged — which is a different claim and gets a different token.
+    if [[ -n "$SOURCE_PANE" && "${LR_INPLACE_AWAIT:-1}" != 0 ]]; then
+      lrh_verdict SWITCHED yes "pane $SOURCE_PANE continues session ${SID:0:8} on '$TARGET' — same window id, same uuid; a new assistant turn was observed in $TCFG's copy"
+    else
+      lrh_verdict SWITCHED-UNPROVEN no "pane ${SOURCE_PANE:-<this pane>} was recycled onto '$TARGET' and the /exit landed, but engagement was NOT awaited — the watcher's outcome lands in ~/.claude/logs/handoffs.jsonl"
+    fi
     rm -f "$LRH_RCY_ERR" 2>/dev/null || true
     echo "$BUNDLE"; exit 0
   fi
@@ -1127,6 +1297,11 @@ if [[ $IN_PLACE -eq 1 ]]; then
     [[ -n "$SOURCE_PANE" ]] && CLOSE_SOURCE=1
     rm -f "$LRH_RCY_ERR" 2>/dev/null || true
   else
+    # STRANDED, AND IT IS THE LOAD-BEARING TOKEN. The source is RETIRED — a tombstoned husk whose
+    # prompts the handed-off-session-guard blocks — and no successor is carrying the session. That
+    # demands a RESCUE, where NOTMOVED demands a RETRY, and today both hide inside lr-fleet's
+    # PARKED/PARTIAL where a reader cannot tell which one they are looking at.
+    lrh_verdict STRANDED no "the recycle did not verify (handoff-fire rc=$LRH_RCY_RC): the transplant is DONE, session ${SID:0:8} now lives under $TCFG, and the source pane ${SOURCE_PANE:-<this pane>} is a tombstoned husk with no successor carrying it — RESCUE, do not retry blind: lr-fleet.sh --one $SID"
     { echo "lr-handoff: --in-place: the recycle did NOT verify (handoff-fire rc=$LRH_RCY_RC). The transplant is DONE — session ${SID:0:8} now lives under $TCFG and the source pane is a tombstoned husk (handed-off-session-guard blocks its prompts)."
       # RETRY, NOT A HAND-SPAWN (W11). This used to prescribe an improvised `recover-<sid8>`
       # os-window. Four of those were made on 2026-09-19: no --var provenance, no registry row, no

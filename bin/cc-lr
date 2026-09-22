@@ -30,6 +30,8 @@
 #
 #   cc-lr find <ref…>                 exec into bin/cc-find, verbatim argv
 #   cc-lr recover <ref> [--target A] [--source-pane P]
+#   cc-lr switch [--target A|auto] [--dry-run]
+#                                     move THIS pane's session to another account, in place
 #   cc-lr status [ref | --all]
 #   cc-lr repair <bundle|ref> [--mode relaunch|prompt] [--target A] [--source-pane P]
 #
@@ -65,6 +67,27 @@ if [ -z "$FLEET_BIN" ]; then
     [ -f "$_cl_f" ] && { FLEET_BIN="$_cl_f"; break; }
   done
 fi
+# `switch` calls lr-handoff.sh DIRECTLY, not lr-fleet.sh, and that is the mirror of the note above
+# cmd_switch: lr-fleet is the DETACHED fleet driver whose whole shape is "the subject cannot act".
+# A voluntary switch is foreground and self-driven, so it composes the one tool that does the move.
+HANDOFF_BIN="${CC_LR_HANDOFF_BIN:-}"
+if [ -z "$HANDOFF_BIN" ]; then
+  for _cl_h in "$_CL_BIN/../scripts/limit-recover/lr-handoff.sh" \
+               "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/limit-recover/lr-handoff.sh" \
+               "$HOME/.claude/scripts/limit-recover/lr-handoff.sh"; do
+    [ -f "$_cl_h" ] && { HANDOFF_BIN="$_cl_h"; break; }
+  done
+fi
+# The account map, for the `from=` field of a verdict line and NOTHING else. OPTIONAL and
+# fail-quiet: an unreachable map degrades `from=` to the config dir's basename, which is still a
+# true statement about where the session lives — it is never allowed to refuse a switch.
+for _cl_am in "${CC_ACCOUNT_MAP:-}" "$_CL_BIN/../lib/account-map.generated.sh" \
+              "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/lib/account-map.generated.sh" \
+              "$HOME/.claude/lib/account-map.generated.sh"; do
+  # shellcheck disable=SC1090  # runtime-resolved library ladder, same shape as the two below
+  [ -n "$_cl_am" ] && [ -f "$_cl_am" ] && { . "$_cl_am" 2>/dev/null || true; break; }
+done
+
 # lr-lib.sh is OPTIONAL here and is loaded for exactly one function: `lr_state_current`, the
 # SSOT spelling of "the last recorded state of a run". It is the per-file FALLBACK of the status
 # reader below — the fast path is one bulk jq, because one fork per bundle blows the 0.1 s budget
@@ -85,6 +108,10 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
   cc-lr recover <ref> [--target A] [--source-pane P]
                              refuse a teammate / an ambiguous ref / a non-limited session,
                              else take the mutex and fire lr-fleet --one … --detach
+  cc-lr switch [--target A|auto] [--dry-run]
+                             move THIS pane's session to another account, in place: same
+                             window, same uuid, new account. SELF only — no ref, no
+                             --source-pane, no --detach; foreground.
   cc-lr status [ref|--all]   one row per run's events.jsonl, with CAUSE / NEXT
   cc-lr repair <bundle|ref> [--mode relaunch|prompt] [--target A] [--source-pane P]
                              write a poller request and kick the daemon — NEVER types
@@ -175,6 +202,16 @@ cl_mutex_take() { # <sid> <pane> → 0 taken (path on stdout), 2 refused
 # strictly a REFUSAL, admits nothing new, starts nothing, and takes no mutex. It only stops lying
 # about why, and names the next command — which costs one classify call on the arm that was going
 # to refuse anyway. Root diagnosis: docs/plans/LIMIT_RECOVER_100P.md sections 6a and 10.
+# ── THE SECOND CORRECTION, 2026-09-22 (VOLUNTARY_ACCOUNT_SWITCH §4) ───────────────────────────
+# The line below used to read "every downstream rail (recycle, transplant, tombstone, self-close)
+# is gated on the quota predicate." It was FALSE, and it was the SAME defect as the one the header
+# above corrects, one paragraph later: a refusal bounding THIS TOOL, written as a fact about the
+# WORLD. Verified on the tree — lr-transplant.sh contains no limit predicate anywhere, and
+# lr-handoff.sh's SELF arm deliberately DISCARDS the probe rc, its own comment naming a session
+# "being moved to a fresher account" as the case it protects. The quota predicate lives in exactly
+# two places, both of them admission: RULE 2 in this file, and cf_class == LIMITED in cc-find.
+# Consequence the old sentence hid: a healthy session CAN move accounts in place, which is what
+# `cc-lr switch` below does. What a context-dead session still lacks is not a gate but a driver.
 cl_refuse_not_limited() { # <sid> <pane> <klass> <cfg> <cwd> → always rc 2
   local sid="$1" pane="${2:--}" klass="${3:-UNKNOWN}" cfg="$4" cwd="$5"
   local f tx="" row="" err="" kind=""
@@ -199,7 +236,7 @@ cl_refuse_not_limited() { # <sid> <pane> <klass> <cfg> <cwd> → always rc 2
     { echo "cc-lr: REFUSED — ${sid:0:8} (pane ${pane}) is class ${klass}, not LIMITED. These rails admit a QUOTA limit only. No mutex was created and nothing was started."
       echo "cc-lr:   BUT IT IS NOT HEALTHY: its last assistant record IS a terminal api error — kind=${kind:-unknown}: ${err:-<no text>}"
       echo "cc-lr:   so that pane cannot execute another turn. 'Not recoverable by this command' is a different statement from 'nothing to recover', and the difference is the whole reason this line exists."
-      echo "cc-lr:   NO in-place recycle exists for this class — every downstream rail (recycle, transplant, tombstone, self-close) is gated on the quota predicate. Do this instead:"
+      echo "cc-lr:   WHAT IS GATED ON QUOTA IS THIS ADMISSION RULE AND NOTHING BELOW IT — RULE 2 here, plus cc-find's LIMITED class (cc-find:150-155); the transplant engine carries no limit predicate at all and lr-handoff.sh's SELF arm discards the probe rc on purpose, so the rails can move a session that is not limited. What that leaves missing for THIS class is not a gate but a DRIVER: the pane cannot type its own /exit. Do this instead:"
       echo "cc-lr:     python3 ~/.claude/scripts/limit-recover/lr-audit.py --config-dir ${cfg} --session ${sid} --cwd ${cwd:-<its cwd>}"
       echo "cc-lr:   read its gap ledger, fire a successor with scripts/handoff-fire.sh, and leave the source pane to the operator (it cannot be retired by the sanctioned path). Diagnosis: docs/plans/LIMIT_RECOVER_100P.md sections 6a, 10."
     } >&2
@@ -307,6 +344,179 @@ EOF
     "$target" "${pane:--}" "$mutex" "${run:-?}"
   printf 'cc-lr: fired  %s  → cc-lr status %s\n' \
     "${bprev:-$broot/bundle-* (the driver mints it; not on disk yet)}" "${sid:0:8}"
+  return 0
+}
+
+# ── switch ─────────────────────────────────────────────────────────────────────────────────────
+# THIS PANE MOVES ITSELF TO ANOTHER ACCOUNT, IN PLACE (VOLUNTARY_ACCOUNT_SWITCH §4, A01, 88%).
+#
+# THE MIRROR OF `recover`, AND THE MIRROR IS THE ENTIRE DESIGN. `recover`'s subject cannot execute
+# a turn, so a DETACHED driver is right and the subject arrives as a REF. `switch`'s subject IS the
+# actor — it is the session taking this turn — so the subject is this process's own identity and
+# the run is FOREGROUND. Three consequences, each deliberate, none of them a shortcut:
+#
+#   NO REF, AND DELIBERATELY NOT THROUGH cc-find. cl_resolve routes every ref through cc-find,
+#   which resolves only rows whose class is LIMITED and answers rc 2 for everything else
+#   (cc-find:150-155, and RULE 2 above repeats it). A healthy session is BY DEFINITION not LIMITED,
+#   so a `switch` routed through that gate would refuse exactly the sessions it exists for. The
+#   subject is $CLAUDE_CODE_SESSION_ID plus cl_this_pane(), never a lookup — which is also the only
+#   honest source, because the question being asked is "who am I".
+#
+#   NO --source-pane AND NO --detach. Moving somebody ELSE's HEALTHY session requires knowing it is
+#   idle, and this subsystem has no idle oracle at all: pane_cc_state answers `cc` for mid-turn,
+#   idle, modal and wedged alike. A session establishes it about ITSELF trivially — it is the one
+#   taking the turn. So the driver form is a separate decision packet gated on that oracle existing
+#   (plan §5 DEC-2), and the refusal below says so rather than pretending the flag is unimplemented.
+#
+#   NO WIDENING OF bin/cc-limited's CENSUS. The SELF path never enters the class filter, so no flag
+#   threads cc-lr → lr-fleet → lr-handoff → probe and the open operator call the header above warns
+#   about is left exactly as it stands. The census is an enumerator, not a gate.
+#
+# NO KILL SWITCH, and that is not an oversight: A07 item 7 governs a CHANGE to an existing
+# behaviour, which needs a byte-for-byte escape. This is a new verb, and its `=off` is not passing
+# it. The one behaviour change in this diff — RULE 2's corrected text — already has one
+# (CC_LR_ROUTE_REFUSAL=off).
+#
+# WHICH LANE `--target auto` ASKS IS NOT SETTLED HERE. It is passed straight through to
+# lr-handoff.sh, which asks `claude-accounts --route general` exactly as every other consumer does.
+# Whether a VOLUNTARY move should instead ask the `interactive` lane (the operator's stated rule:
+# soonest weekly reset with headroom) is an OPEN operator decision at 72% conviction — plan §5
+# DEC-1, packet c616443c9616 — and this verb must not settle it by changing what it asks.
+cl_from_acct() { # → the account name this session is running on, else the config dir's basename
+  local cfg base name
+  cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  base="${cfg%/}"; base="${base##*/}"
+  if command -v cc_acct_name_for_dir_basename >/dev/null 2>&1; then
+    name="$(cc_acct_name_for_dir_basename "$base" 2>/dev/null || true)"
+  fi
+  printf '%s' "${name:-${base:--}}"
+}
+
+# ── the verdict vocabulary, cc-lr's half (plan §6) ─────────────────────────────────────────────
+# PARTITIONED ON ACTION, NEVER ON A RECOVERY WORD. Everything this file can emit is NOTMOVED: each
+# of cmd_switch's refusals happens before lr-handoff is ever executed, so the source session is
+# provably untouched — no bundle, no lock, no tombstone, no keystroke. The tokens that describe a
+# move which HAS begun (SWITCHED · SWITCHED-UNPROVEN · STRANDED · FAILED) are lr-handoff.sh's to
+# emit, because only it knows whether the transplant ran. `from=`/`to=`/`proven=` are mandatory on
+# every token so a consumer never has to infer any of the three (memory: claimed-outcome-vs-checked
+# -outcome — a parseable `verdict=` is what makes a claim checkable).
+cl_verdict() { # <TOKEN> <to> <note>
+  printf 'cc-lr: verdict=%s from=%s to=%s proven=no — %s\n' \
+    "$1" "$(cl_from_acct)" "${2:--}" "$3" >&2
+}
+
+cmd_switch() {
+  local target="auto" dry=0 sid pane cfg rc
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --target) [ $# -ge 2 ] || { usage; exit 3; }; target="$2"; shift 2 ;;
+      --dry-run) dry=1; shift ;;
+      # NAMED REFUSALS, not "unknown option". Both flags are things a reader of `cc-lr recover`
+      # would reasonably try here, and a bare usage dump would leave them believing the verb is
+      # merely unfinished. Each says what is missing and whose call it is.
+      --source-pane)
+        { echo "cc-lr switch: REFUSED — switch is SELF-only and has no --source-pane. Moving somebody else's HEALTHY session needs an idle oracle, and this subsystem has none (pane_cc_state answers 'cc' for mid-turn, idle, modal and wedged alike), so a driver cannot establish that a peer is safe to move; a session establishes it about itself trivially."
+          echo "cc-lr switch:   The driver form is its own decision packet, gated on that oracle existing — VOLUNTARY_ACCOUNT_SWITCH.md §5 DEC-2. Nothing was started."
+          echo "cc-lr switch:   To move a session that is LIMIT-BLOCKED (which needs no idle oracle — it cannot take a turn), that is the other verb: cc-lr recover <ref> --source-pane <P>"
+        } >&2
+        cl_verdict NOTMOVED "$target" "--source-pane is not a flag of this verb; nothing was started"
+        exit 3 ;;
+      --detach)
+        { echo "cc-lr switch: REFUSED — switch is FOREGROUND and has no --detach. The mover IS the subject here, so there is no second process for a driver to be: the /exit that starts the recycle ends this one."
+          echo "cc-lr switch:   --detach is cc-lr recover's, where the subject cannot act and something else has to. Nothing was started."
+        } >&2
+        cl_verdict NOTMOVED "$target" "--detach is not a flag of this verb; nothing was started"
+        exit 3 ;;
+      -h|--help) usage; exit 0 ;;
+      --*) echo "cc-lr switch: unknown option $1" >&2; usage; exit 3 ;;
+      *) echo "cc-lr switch: takes no ref — it moves THIS session, and '$1' names another one. For somebody else's limit-blocked session: cc-lr recover $1" >&2; exit 3 ;;
+    esac
+  done
+
+  # THE SHAPE, NOT THE ROSTER. The set of account names is a PERISHABLE fact that lives in
+  # lib/account-map.generated.sh and is re-derived from accounts.json; enumerating it here would
+  # mint a second copy that goes stale silently. So this refuses only what cannot BE an account
+  # name, and `lrh_target_routable` — which asks the router rather than re-deriving its rule — is
+  # the arbiter of whether a well-formed name is one a session can actually take a turn on
+  # (memory: make-the-actuator-the-arbiter).
+  case "$target" in
+    auto) ;;
+    ''|-*|*[!A-Za-z0-9_-]*)
+      echo "cc-lr switch: REFUSED — '$target' cannot be an account name (expected 'auto' or a bare name like next3). Nothing was started; no mutex was created." >&2
+      cl_verdict NOTMOVED "$target" "target is not a well-formed account name; nothing was started"
+      exit 3 ;;
+    *) ;;
+  esac
+
+  # WHO AM I — and both halves must answer, because both are load-bearing and they fail apart.
+  sid="${CLAUDE_CODE_SESSION_ID:-}"
+  if [ -z "$sid" ]; then
+    { echo "cc-lr switch: REFUSED — CLAUDE_CODE_SESSION_ID is unset, so this process cannot name the session it would move. switch takes its subject from this session's own identity and never from a ref lookup, so there is nothing to fall back to."
+      echo "cc-lr switch:   Run it from inside the Claude Code session you want moved. Nothing was started; no mutex was created."
+    } >&2
+    cl_verdict NOTMOVED "$target" "no CLAUDE_CODE_SESSION_ID; the subject is unnamable"
+    exit 2
+  fi
+  pane="$(cl_this_pane)"
+  if [ -z "$pane" ]; then
+    # NOT A DOWNGRADE TO A SPAWN. lr-handoff's NO-PANE fallback spawns a new pane, which is the one
+    # thing this verb is defined not to do: `switch` means the pane IS the continuation. With no
+    # pane there is no in-place move to make, so refuse and name the tool that does the other thing.
+    { echo "cc-lr switch: REFUSED — no terminal pane holds this process (neither CC_PANE_ID, ITERM_SESSION_ID nor KITTY_WINDOW_ID is set), so there is no window to recycle in place. switch is an IN-PLACE move by definition; it will not quietly downgrade to spawning a new pane."
+      echo "cc-lr switch:   For a fresh-context move to another account, that is the other rail: /handoff, or scripts/handoff-fire.sh --recycle --account <acct>. Nothing was started; no mutex was created."
+    } >&2
+    cl_verdict NOTMOVED "$target" "no pane holds this process; an in-place move has no subject window"
+    exit 2
+  fi
+  [ -n "$HANDOFF_BIN" ] && [ -f "$HANDOFF_BIN" ] || {
+    cl_die "cannot reach lr-handoff.sh (set CC_LR_HANDOFF_BIN); nothing was started and no mutex was created" 2; }
+
+  cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  set -- --sid "$sid" --config-dir "$cfg" --cwd "$PWD" --target "$target" \
+         --launch --in-place --voluntary \
+         --reason "cc-lr switch from pane $pane"
+
+  # --dry-run PRINTS AND STOPS, AND IT STOPS *BEFORE* THE MUTEX. A dry run that left a lock behind
+  # would block the real attempt it was rehearsing — the same argument the three refusals above the
+  # mutex make (header: "a refusal that leaves a lock behind is a refusal that blocks the next
+  # correct attempt"). It is also why the verdict here is NOTMOVED and not a fourth token: nothing
+  # moved, and a dry run is not a distinct OUTCOME, it is the absence of one.
+  if [ "$dry" -eq 1 ]; then
+    printf 'cc-lr: DRY RUN — session %s (pane %s) would move %s → %s. Nothing was started; no mutex was created. The command:\n' \
+      "${sid:0:8}" "$pane" "$(cl_from_acct)" "$target"
+    printf '  bash %s' "$HANDOFF_BIN"
+    printf ' %s' "$@"
+    printf '\n'
+    cl_verdict NOTMOVED "$target" "dry run: the command above was printed and nothing was executed"
+    return 0
+  fi
+
+  # THE MUTEX IS TAKEN LAST, after every refusal that can be decided without it. One actuator per
+  # session is the same invariant `recover` holds, and it binds harder here: two movers of ONE
+  # session race a transcript copy against a /exit.
+  local mutex
+  mutex="$(cl_mutex_take "$sid" "$pane")" || exit 2
+
+  # FOREGROUND, AND THE PROCESS IS EXPECTED TO DIE INSIDE THIS CALL. The recycle types /exit into
+  # this pane's own TUI, and Claude Code reaps the whole process group of the in-flight tool call —
+  # so lr-handoff's own `verdict=` MAIL, sent before it fires the recycle, is the durable record,
+  # not this function's return. The mailbox is PANE-keyed (mailbox-drain.sh:36) and every account's
+  # mailbox/ is a symlink to one directory, so the successor on the NEW account drains the same
+  # inbox. Never key that lane on the sid — a recycle changes it by construction.
+  printf 'cc-lr: switching %s (pane %s) %s → %s — in place: same window, same uuid. The verdict arrives as MAIL; do not poll.\n' \
+    "${sid:0:8}" "$pane" "$(cl_from_acct)" "$target"
+  rc=0
+  bash "$HANDOFF_BIN" "$@" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # RELEASE ON EVERY FAILURE PATH, exactly as cmd_recover does — but do NOT re-verdict here.
+    # lr-handoff has already emitted the one that knows whether the transplant ran, and a second
+    # token minted from an rc alone is a second auditor over one population. The message below
+    # deliberately does not spell the `verdict=` token either: a consumer greps for it, so putting
+    # it in PROSE mints a row that names no outcome (memory: claimed-outcome-vs-checked-outcome).
+    rmdir "$mutex" 2>/dev/null || rm -rf "$mutex" 2>/dev/null || true
+    cl_die "lr-handoff exited $rc; the mutex was released — read the verdict line it printed above for what actually moved" "$rc"
+  fi
+  rmdir "$mutex" 2>/dev/null || rm -rf "$mutex" 2>/dev/null || true
   return 0
 }
 
@@ -546,8 +756,9 @@ case "$CMD" in
   find) [ -f "$FIND_BIN" ] || cl_die "cannot reach cc-find at $FIND_BIN" 3
         exec bash "$FIND_BIN" "$@" ;;
   recover) cmd_recover "$@"; exit $? ;;
+  switch)  cmd_switch  "$@"; exit $? ;;
   status)  cmd_status  "$@"; exit $? ;;
   repair)  cmd_repair  "$@"; exit $? ;;
-  *) echo "cc-lr: unknown subcommand '$CMD' — expected find | recover | status | repair" >&2
+  *) echo "cc-lr: unknown subcommand '$CMD' — expected find | recover | switch | status | repair" >&2
      usage; exit 3 ;;
 esac
