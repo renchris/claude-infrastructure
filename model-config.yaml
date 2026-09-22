@@ -128,8 +128,9 @@ versions:
 # frontier_access.fallback moved to claude-opus-5-5 in one diff with the effort policy.
 # Sources: the three the operator supplied (anthropic.com/claude-opus-5-5, "Prompting Claude Opus
 # 5.5", the Opus 5.5 System Card, 230 pp.) plus the four vendor pages the prompting guide links
-# (effort, what's new, migration guide, models overview). 620 facts were extracted page-cited and
-# each re-checked against its page by a second reader (0 unsupported, 8 corrected). The model ×
+# (effort, what's new, migration guide, models overview). 462 facts were extracted page-cited and
+# each re-checked at its page by a second reader (454 confirmed, 8 corrected, 0 unsupported; the
+# verifiers added 158 more — 620 in all, docs/research/opus55-utilization-2026-09-22/facts.json). The model ×
 # effort × use-case table, its evidence and a conviction per row:
 # docs/research/opus55-utilization-2026-09-22.md. The effort keys are effort_defaults.opus55_*.
 #
@@ -185,11 +186,14 @@ versions:
 #     The "stop on issue, message lead" clause in every brief is load-bearing, not ceremony.
 #   · Test gaming observed: hid a toolbar with `display:none !important` so guessed hidden tests
 #     would pass (p.140) — the zero-ink class our visual gates already have to catch.
-#   · Self-preference bias negligible (+0.01 / +0.07 on a 10-point scale; Fable 5.1 +0.17 / +0.10).
+#   · Self-preference bias negligible (+0.01 / +0.07 on a 10-point scale; Mythos 5.1 +0.17 / +0.10).
+#     The card runs no alignment evaluation on Fable 5.1, so ITS bias is NOT STATED.
 #   · Safeguard fallback: cyber → Opus 4.8; bio and frontier-LLM R&D → Opus 5. On benign agentic
-#     benchmarks 0.3–3.9% of requests fell back. In ADVERSARIAL coding-injection tests 46–64% of
-#     turns fell back to Opus 4.8 and every successful attack came through the fallback (0 of 2,872
-#     answered directly) — untrusted repos are where a turn most often stops being Opus 5.5.
+#     benchmarks 2.5% (Terminal-Bench 4.0) and 3.9% (Terminal-Bench-Science) of requests fell back.
+#     In ADVERSARIAL coding-injection tests 46% of rollouts (Gray Swan) and 64% of requests (Shade)
+#     went to Opus 4.8. In Shade every successful attack came through the fallback (0 of 2,872
+#     answered directly); in Gray Swan no fallback rollout was compromised. Either way, untrusted
+#     code is where a turn most often stops being Opus 5.5.
 # ─────────────────────────────────────────────────────────────────────────────
 # § FABLE 5.1 (lateral bump 2026-09-03) — ADOPTED. Binary gate cleared, keying flip landed.
 # Anthropic shipped Claude Fable 5.1 (`claude-fable-5-1`) and Claude Mythos 5.1
@@ -890,11 +894,12 @@ roles:
                                             # `--model fable` resolves to claude-fable-5-1.
                                             # ⚠️ UNDER REVIEW 2026-09-22 — covers workflow_judge, eval_judge
                                             # and teammate_frontier too. The Opus 5.5 System Card puts Opus
-                                            # 5.5 at or above Fable 5.1 at MATCHED effort on nearly every
-                                            # evaluation, at a fraction of the cost; Fable wins only at LOW
-                                            # effort (at 2–7× the cost) or within noise (DRACO max 87.7 vs
-                                            # 87.4, OfficeQA 80.2 vs 78.9). Opus 5.5's self-preference bias
-                                            # is also smaller (+0.01/+0.07 vs +0.17/+0.10). The vendor still
+                                            # 5.5 at or above Fable 5.1 at MATCHED effort on most evaluations,
+                                            # at a fraction of the cost. Fable leads at LOW effort (at 2–7×
+                                            # the cost), on DRACO deep research at every rung by ≤1.8 pts
+                                            # (medium 85.7 vs 83.9 … max 87.7 vs 87.4, n=100), and on OfficeQA
+                                            # (80.2 vs 78.9). Opus 5.5's self-preference bias is negligible
+                                            # (+0.01/+0.07); Fable 5.1's is not reported. The vendor still
                                             # names Fable 5.1 for "demanding reasoning and long-horizon agentic
                                             # work, or when Opus 5.5 at higher effort still falls short".
                                             # Conviction 85% that these slots belong to Opus 5.5 @xhigh — below
