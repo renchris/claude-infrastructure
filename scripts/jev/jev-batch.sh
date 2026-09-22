@@ -67,10 +67,11 @@ if [ ! -f "$ARM" ]; then
   _last_sha=""
   while IFS= read -r _c; do
     [ -n "$_c" ] || continue
-    _p="$(jq -r 'select(.round=="meta")|.plan // empty' "$_c" 2>/dev/null | head -1)"
-    _v="$(jq -r 'select(.round!="meta")|.id' "$_c" 2>/dev/null | wc -l | tr -d ' ')"
-    case "$_p" in ''|*[!0-9]*) continue ;; esac
-    if [ "$_v" -ge "$_p" ]; then
+    # COMPLETE is the run's own stamp, not rows-vs-plan. `plan` assumes every heat is a contest
+    # and overcounts by the heats with fewer than two members, so rows can never reach it and the
+    # comparison calls a finished pass unfinished — forever. That is what re-ran a completed pass
+    # on three consecutive ticks before it was caught.
+    if jq -e 'select(.round=="complete")' "$_c" >/dev/null 2>&1; then
       _last_sha="$(jq -r 'select(.round=="meta")|.corpus_sha // empty' "$_c" 2>/dev/null | head -1)"
       break
     fi
@@ -178,6 +179,8 @@ while IFS= read -r _c; do
   # verdicts that were never about this repo's lessons, and every consumer downstream reads the
   # file as one artifact. The marker is written from the route at call time.
   if [ "$(jq -r 'select(.mock==true)|.id' "$_c" 2>/dev/null | head -1)" != "" ]; then continue; fi
+  # Same rule on the resume side: a STAMPED run is finished and must not be resumed into.
+  if jq -e 'select(.round=="complete")' "$_c" >/dev/null 2>&1; then continue; fi
   _plan="$(_plan_of "$_c")"; _have_n="$(_verdicts_in "$_c")"
   case "$_plan" in ''|*[!0-9]*) continue ;; esac   # unstamped: predates the meta row, cannot resume
   if [ "$_have_n" -lt "$_plan" ]; then

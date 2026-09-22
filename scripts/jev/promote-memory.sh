@@ -74,11 +74,27 @@ emit_promo_report() {  # reads globals OUT, done_n, TOTAL, skipped, ABORTED
 # `No verdicts — nothing to promote` and exited 1 on exactly that case — the success state of the
 # feature it was guarding. The denominator every percentage below is computed against is what the
 # FILE holds, never what this invocation happened to add.
-HAVE_N=$(jq -r 'select(.round!="meta")|.id' "$OUT" 2>/dev/null | wc -l | tr -d ' ')
+HAVE_N=$(jq -r 'select(.round!="meta" and .round!="complete")|.id' "$OUT" 2>/dev/null | wc -l | tr -d ' ')
 printf 'DECIDED %s new of %s call(s); %s verdict(s) on disk  (no verdict: %s)\n' \
        "$done_n" "$TOTAL" "${HAVE_N:-0}" "$skipped"
 if [ "${HAVE_N:-0}" -eq 0 ]; then printf 'No verdicts at all — nothing to promote.\n'; exit 1; fi
-if [ "$done_n" -eq 0 ]; then printf 'Nothing new to buy — this pass was already complete.\n'; fi
+# 🚨 COMPLETENESS IS A FACT THE RUN RECORDS, NEVER A COMPARISON AGAINST `plan`.
+# `plan` is computed BEFORE the corpus is walked: it assumes every heat is a contest. A heat with
+# fewer than two members has no contest, so it makes no call and writes no row — the last heat of
+# an uneven corpus, plus every anchor-less tail. Measured 2026-09-21: plan 132, and a genuinely
+# finished pass tops out at 125. `rows >= plan` is therefore NEVER true, "incomplete" is permanent,
+# and the unattended scheduler — whose whole job is to ask "is there more to do?" — re-ran a
+# finished pass every 1800s. Caught live, three ticks in, after the operator's yes.
+# The signal that cannot drift is the one the run itself observes: a pass that BOUGHT NOTHING has
+# nothing left to buy. It stamps that, once, and every consumer reads the stamp instead of doing
+# arithmetic against a forecast.
+if [ "$done_n" -eq 0 ]; then
+  printf 'Nothing new to buy — this pass was already complete.\n'
+  if ! jq -e 'select(.round=="complete")' "$OUT" >/dev/null 2>&1; then
+    jq -nc --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson v "$HAVE_N" \
+       '{id:"complete", round:"complete", at:$t, verdicts:$v}' >> "$OUT"
+  fi
+fi
 done_n="$HAVE_N"
 
 # ── THE BIAS VERDICT COMES FIRST, because it governs whether the rest may be read at all ─────
@@ -212,7 +228,7 @@ if [ -n "$REPORT" ]; then
   # The meta row stamps WHAT the run was a run of; it is not a verdict, so it must not inflate the
   # denominator every percentage in the report is computed against.
   OUT="$REPORT"
-  done_n=$(jq -r 'select(.round!="meta")|.id' "$REPORT" 2>/dev/null | wc -l | tr -d ' ')
+  done_n=$(jq -r 'select(.round!="meta" and .round!="complete")|.id' "$REPORT" 2>/dev/null | wc -l | tr -d ' ')
   [ "${done_n:-0}" -gt 0 ] || done_n=$(wc -l < "$REPORT" | tr -d ' ')
   TOTAL="$done_n"; skipped=0; ABORTED=0
   printf 'Re-reading %s row(s) from a PREVIOUS run. No call is made.\n' "$done_n"
