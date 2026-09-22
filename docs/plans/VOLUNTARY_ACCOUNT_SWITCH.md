@@ -34,7 +34,7 @@ merges, `/handoff` the remainder rather than riding it down.
 | T1 | `sa-gate` | `scripts/handoff-fire.sh`, `tests/handoff-recycle-remote-resume.bats` | Gate the `ALLOW_LIVE_SA` forcing on cause; un-pin the test that asserts the bug |
 | T2 | `transplant-order` | `scripts/limit-recover/lr-transplant.sh` + its suites | Snapshot-after-quiesce; fix the wrong-session rename guard; add `cause` to lock + tombstone |
 | T3 | `switch-verb` | `bin/cc-lr`, `scripts/limit-recover/lr-handoff.sh` + their suites | `cc-lr switch` (SELF-only), `--voluntary`, MANIFEST `trigger`/`reason`, verdict vocabulary |
-| T4 | `resident-docs` | `CLAUDE.global.md`, `commands/handoff.md`, `commands/recover.md`, `hooks/boundary-handoff.sh` | Correct the false "cannot become" rule; `switch` mode; the turn-boundary advisory |
+| T4 | `resident-docs` | `CLAUDE.global.md`, `commands/handoff.md`, `commands/recover.md`, the statusline/pane-title surface | Correct the false "cannot become" rule; `switch` mode; **make the account visible on the pane** (§8a) — NOT a Stop-hook nudge |
 
 Max 6 concurrent; we use 4. Every brief ≤150 lines, pre-greped line ranges embedded, verbatim
 "stop on issue, message lead" clause, no "investigate/explore/audit" language.
@@ -279,6 +279,46 @@ unattended switching loop stays the operator's.
 > If it does not, the *advisory* is unjustified and T4 ships the docs correction without it. The
 > verb and the safety fixes stand either way: they are correctness work on a path that is already
 > reachable and already used.
+>
+> **RESOLVED 2026-09-22 — PREMISE FAILS. The advisory is CUT.** Gate text kept verbatim above
+> because the reasoning is what justifies the cut. See §8a.
+
+### 8a. The advisory is cut, and what replaces it (A12, measured)
+
+| Measurement | Value |
+|---|---|
+| Whole addressable population, 6 weeks, **perfect foresight** | **66 bursts / 35.5 pp ≈ 1.5%** of fleet weekly capacity |
+| Strand with **no donor account** (nothing walled anywhere in the final 72 h) | **290 of 335 pp = 86.6%** — relocation is arithmetically incapable there |
+| A10's own check (idle @T−6h → >50k tokens) | 17 / 435 = **3.9%**, and all 17 were *already on* the expiring account |
+| Strand vs demand | stranding windows moved **85.6 M** tokens vs **142.4 M** in windows that reset at 100%; `corr = −0.602`, n=19 |
+
+**Strand is a demand problem, not a distribution problem.** The fleet oscillates between nobody
+working (all four accounts strand together) and everybody walled (221.8 account-hours at 100%, 126
+genuine weekly-limit refusals). The middle state — where a mover could help — is the 13.4% minority.
+An automatic advisory optimising a 1.5% ceiling, against a leader that changes every 6.5 h with a
+median dwell of 1.3 h, would fire constantly and chase its own tail.
+
+**Two things A12 refutes in A10, both in the feature's favour:**
+- The cost objection is wrong by ~100×. A move costs **0.109 pp** median (0.315 pp at the largest
+  transcript seen), because any session idle over an hour pays the cache-cold re-ingest **in place**
+  anyway — cold-share is 0.3% under 1 h and 93.7% over it (`ephemeral_1h` TTL).
+- "It could have been started fresh on the target" fails: **~75% of post-idle work is continuation**
+  a new session cannot reproduce. That is precisely what the context-preserving verb buys, and it is
+  why §4 survives this gate.
+
+**What replaces the advisory — T4's revised deliverable.** A12's keeper finding is not about moving
+anything: **60.6% of substantial post-idle work lands on a non-perishable account**, because the
+operator types into whichever pane is in front of him and cannot see which account it is on. That is
+a *labelling* defect, and it is addressable where he is already looking.
+
+T4 therefore ships: the resident-instruction correction (§2), the `switch` mode in
+`commands/recover.md`, and **the account made visible on the pane itself** — statusline or pane
+title, whichever the existing surface supports without a `c10` migration. It does **not** ship a
+Stop-hook nudge to switch.
+
+*Kept as the honest residual:* whether a moved pane *creates* demand is UNDECIDABLE without the
+randomized arm A10 asked for. If it does, the 1.5% ceiling is a floor instead — but nothing in this
+plan should be built on that hope.
 
 ## 9. Out of scope, filed not driven
 
