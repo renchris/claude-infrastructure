@@ -203,6 +203,38 @@ settled coverage. Two further codex `no_issue_found` surfaces are contradicted b
 `check-edit-boundary.sh:137`) and `surface_path_handling` (codex checked `backup-before-write.sh`'s
 destination path, which is sound; cloudflare found the defect on a different axis, the prune's glob).
 
+### The coverage critic found gaps my own 40-unit ledger had, after both validators passed
+
+The post-wave coverage critic is a mandatory reserved invocation in this skill, and it earned the
+slot. It returned `stop: false`, `reassign_ids: []`, and **8 source-backed `missing_units`** — on a
+ledger that had already passed `validate-coverage-ledger.cjs`. Three of its results are worth
+stating because two of them are **parent errors it caught**:
+
+- **`hooks/lib/page-damp.sh` appears in NO unit's `starting_paths` and NO check's `reviewed_paths`
+  across all 40 units** — the only in-scope file reviewed by nothing. It is a control, not plumbing:
+  it decides whether an automated page reaches the operator, and `architecture.md` names the
+  operator's attention as a protected resource.
+- **Two SELECTED companion classes were seeded with zero units** — `AI-AND-LLM#Persistent memory
+  poisoning` (the session index re-emits rows written from every transcript on the machine as
+  SessionStart `additionalContext`, with no provenance label — a textbook instance of the class) and
+  `AI-AND-LLM#Tool-schema and dispatcher disagreement` (every gate reads one field spelling with a
+  `// ""` default that collapses missing, null and wrong-typed into the same "nothing to gate").
+- **Two of my exclusions were wrong on the source.** I dropped DATA-ISOLATION-AND-LIFECYCLE saying
+  there is "no export/backup/restore/migration/retention subsystem under hooks/"; the critic
+  refuted it — `backup-before-write.sh:67-90` *is* a backup store with a retention path,
+  `migrate-plans-index.sh` *is* a migration. And I redirected launchd to the desktop companion, but
+  **no unit had a launchd surface**, so the redirect was never honoured: all 40 units carry a
+  `settings.example.json#<event>` surface while `com.claude.session-search-sweep.plist` runs every
+  60s under no session and no harness timeout.
+
+This is the strongest single argument in the experiment for cloudflare's coverage machinery over a
+flat surface-disposition table: **one reserved agent invocation mechanically found an unreviewed
+file, two unused selected classes, an unmapped scheduled entry point, and two bad exclusions.**
+Codex has no equivalent stage, and its one false surface disposition went uncaught into a sealed
+bundle marked `complete`. The gaps are recorded in the run dir
+(`parent-notes/critic-wave1-summary.md`); under the budget rule they are accepted as `deferred`
+rather than hunted, which is itself disclosed rather than hidden.
+
 So on coverage honesty the two tools fail in opposite directions, and the asymmetry is not
 symmetric in cost: **cloudflare under-claims and names its gaps; codex over-claims and one
 over-claim was wrong.** Cloudflare's structural protection here is a rule, not a habit — "Never
