@@ -171,3 +171,78 @@ default and is the *only* path for this repo. Before the refusal, Path B did emi
 against that hook — the known `-rf` gap plus **6 of one unmodelled family: shell token concatenation
 defeats raw-text matchers** (`drizzle-kit pu''sh` executes as `push`). Those are unvalidated leads;
 running them down on Path A is free.
+
+---
+
+# Cloudflare `security-audit-skill` scan ledger
+
+**A separate producer, a separate ledger — these rows do NOT inherit from the codex-security rows
+above and the codex rows do not inherit from these.** Tool identity, version and attack-class roster
+together are the options-hash; move any of them and every coverage record the other producer wrote is
+stale for this one. That is rule **P3** in reso's `.claude/commands/exhaust-improvements.md`. Rule
+**P2** binds too: a `no_issue_found` or `not_applicable` record derived from a *negative search* may
+not suppress a unit here — so codex's four `no_issue_found` surfaces on reso
+(`surface_dev_bypass_routes`, `surface_debug_secret_exposure`, `surface_route_authn`,
+`surface_cookie_config`) suppress nothing below.
+
+Tool: `cloudflare/security-audit-skill` @ `c1c8a8c` (MIT), cloned at
+`~/Development/.tools/cf-security-audit-skill`, not installed into any `skills/` directory.
+Artifacts live OUTSIDE the target, at `~/security-audit-skill/<repo>/run-<N>/`, as the skill requires.
+
+## Coverage by repo
+
+### reso-management-app
+
+| Scan | Revision | Scope | Profile | Enumeration | Confirmed | Needs validation |
+|---|---|---|---|---|---|---|
+| `reso-src-app-actions/run-1` | `f87d878d0` | `src/app/actions/` (112 files: 41 source / 18,481 lines + 71 test / 18,061 lines) | `standard` | **complete for the scope · partial for the repository** | **6** (2 high, 4 medium) | **20** |
+
+**`enumeration_complete[cloudflare, reso]` was `false` before this run** — lens G had never run on
+this repo, so by rule **P1** this was a full first enumeration of its scope, and absence may only be
+counted inside it.
+
+**Covered.** 69 ledger units, all terminal: 37 `candidate`, 13 `covered`, 17 `out_of_scope`, 1
+`deferred`, 1 `blocked`. All **41 of 41** in-scope source files were opened (cross-checked
+independently of the critics by intersecting the ledger's `starting_paths` / `reviewed_paths` against
+`find src/app/actions -type f`). Both independent coverage critics returned `stop: true` with no
+missing units and no reassignments. All 34 candidates carry a verifier verdict — 6 confirmed, 20
+needs_validation, 8 rejected — so nothing is unvalidated and `validation_budget_exhausted` does not
+apply. Both skill validators PASS: `validate-findings.cjs` → *34 findings valid*;
+`validate-coverage-ledger.cjs` → *69 coverage units valid*. 29 agents spent against a budget of 45.
+
+**NOT covered — the remainder, by unit.** 17 out-of-scope surfaces discovered during the run and
+recorded as `out_of_scope` rather than `covered`, so a later whole-repo pass turns them into current
+work: `amplify.yml#build pipeline` · `drizzle/db.ts#getDBAndGroupForSessionTenant` ·
+`drizzle/db.ts#getNamedDB` · `drizzle/rp.ts#getRelayingPartySettings` ·
+`lib/auth/**#module 'use server' exports` · `lib/auth/credential-change-notifier.ts#notifyCredentialAdded` ·
+`lib/auth/session.ts#getValidatedSessionCached` · `lib/auth/venue-authz.ts#getScopingFlag` ·
+`lib/messaging/guest-message-outbox.ts#enqueue and drain` · `lib/venue-resolution.ts#getInitialVenues` ·
+`src/app/(app)/**#SSR seed consumers of resolveActiveVenueRow` ·
+`src/app/(app)/admin/(settings)/deviceActions.ts#module exports` ·
+`src/app/(guest)/t/[claimToken]/_actions#guest claim surface` ·
+`src/app/api/notifications/subscribe/route.ts#POST` · `src/app/api/replicache-push/route.ts#POST` (×2) ·
+`src/middleware.ts#request middleware`. Plus **1 deferred** unit
+(`operationalHistoryActions.ts#getOperatorShiftDetail` × `lib/operational-detail.ts#formatOperationalDetail`,
+reason `late_uncovered_no_remaining_wave`) and **1 blocked** unit
+(`replicache/pullActions.ts#pull entrypoint` × `DATA-ISOLATION-AND-LIFECYCLE.md#Missing tenant or
+owner enforcement`). The 71 test files were discharged by **sweep**, not per-file citation (34 cited
+individually). **Coverage is per UNIT — a surface × boundary × class tuple — not per file: a file
+opened under one attack class was not thereby examined under all of them.**
+
+**Execution policy — read this before trusting any "no issue" here.** The run executed **no target
+code at all**. Measured on the audit host, not assumed: nested `sandbox-exec` is refused
+(`Operation not permitted`), the Docker daemon is down, there is no podman/lima/colima/bwrap/firejail/
+nsjail, the checkout is not read-only mounted, and macOS cannot enforce a memory ceiling
+(`ulimit -v` → `setrlimit failed: invalid argument`). Independently the target worktree has no
+`node_modules/`. So every ledger check is `method: "source"` with `artifact: null`, and anything whose
+decisive fact needed execution is `needs_validation` carrying that blocker rather than a verdict —
+19 of the 20 leads carry it, alongside a deployment-, data-state- or third-party fact.
+**A later run on a host with a real sandbox can claim something this one structurally cannot.**
+
+**No finding overturns reso's own by-design list.** Four sit adjacent to one (two at the boundary of
+Decision 4's share-graph exemption, one at FP-exclusion 5's host-control carve-out, one clearing
+FP-exclusion 1 through its stated operator-owned-spend exception) and each carries the distinguishing
+evidence in its record rather than an assertion.
+
+Full report: `~/security-audit-skill/reso-src-app-actions/run-1/REPORT.md`.
+Write-up: [`../cf-audit-reso-actions-2026-09-22.md`](../cf-audit-reso-actions-2026-09-22.md).
