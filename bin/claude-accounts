@@ -81,11 +81,13 @@ Usage:
       where the arithmetic has already converged to the truth, and duly scored 8/8.
   claude-accounts --route general|fable|interactive   best account name (bare, on stdout)
       general      dispatch lane: headroom/T**2, deadline-DOMINANT — spend quota before it strands.
-      interactive  a HUMAN's long-lived desk: maximise runway (absolute weekly headroom x projected
-                   5h headroom), NO urgency term, and the login cliff is never yielded. Reusing
-                   `general` here would place the operator nearest exhaustion and manufacture the
-                   very 5-hour wall the lane exists to avoid.
-  claude-accounts --rank general|fable    ranked "name score" lines for wave spread (handoff)
+      interactive  a HUMAN's long-lived desk: a TWO-KEY rule — among 5h-safe accounts, take the
+                   EARLIEST WEEKLY RESET — and the login cliff is never yielded. It is the same
+                   spend-before-it-strands objective as `general`, with a 5-hour guard in front of
+                   it; the lanes differ in the shape of that guard, not in their direction.
+  claude-accounts --rank general|fable|interactive   ranked "name score" lines for wave spread
+      (handoff). `interactive` is a real lane here and ranks by the desk rule above — it was
+      absent from this line while being the lane a reader comparing the two would reach for.
   claude-accounts --assign ACCT [--src S] record one fire-time assignment (M7). Called by the
       consumer that COMMITS to launching a NEW session (handoff-fire, post-pick): the account
       is charged one phantom working session for ASSIGN_TTL_MIN, so fires inside the 90s cache
