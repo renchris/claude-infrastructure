@@ -246,3 +246,82 @@ evidence in its record rather than an assertion.
 
 Full report: `~/security-audit-skill/reso-src-app-actions/run-1/REPORT.md`.
 Write-up: [`../cf-audit-reso-actions-2026-09-22.md`](../cf-audit-reso-actions-2026-09-22.md).
+
+#### The uncovered remainder, enumerated — W5, 2026-09-22
+
+**The 19 uncovered units above are now enumerated per unit and ranked, and the enumeration found
+three things this ledger did not say.** Not an audit of them: a record of *absence of coverage*,
+read against reso `origin/main` (`d10b8c1cc`, 6 commits ahead of the audit sha `f87d878d0`, and
+**no file named by any of the 19 changed between them** — only three bottle-catalog files did, so
+every line cited is true at both). Full document:
+[`../cf-audit-reso-uncovered-surfaces-2026-09-22.md`](../cf-audit-reso-uncovered-surfaces-2026-09-22.md).
+
+**C1 — 17 of the 19 were never opened.** Every `out_of_scope` unit carries `reviewed_paths: []`, so
+its `reason` is the parent's pre-hunt hypothesis rather than a reading. Only the **blocked** unit has
+a reviewed set (9 files); the **deferred** one was read by a sibling unit under a different class.
+Demonstrated rather than asserted: unit `amplify.yml#build pipeline`'s reason cites *"amplify.yml:32
+curls a jq binary over the network"* — at the **audit sha itself** the curl is at `:35`, is
+SHA256-pinned per architecture with `sha256sum -c -` gating the `chmod +x`, and line `:32` is part of
+the comment that says so. **Read every `reason` on those 17 as a lead to check, never as a finding to
+inherit.** The surfaces remain uncovered regardless.
+
+**C2 — one path in the set does not exist.** `src/middleware.ts` is not a file; it is `middleware.ts`
+at the repository root. It does CSP-nonce + `x-pathname` work only — no authentication, no tenant
+resolution, **no Host or `x-forwarded-host` validation** — and its matcher excludes `api`, so every
+API surface in the set runs with no middleware at all. A later pass handed the recorded class *Host
+and forwarded-header trust* at that path finds nothing and is at risk of recording a false
+`not_applicable`; the class is live in `domainActions.getSubdomain`, `drizzle/db.ts`, `drizzle/rp.ts`
+and `pokeTenantFromHost` instead. Separately: **neither of this ledger's two
+`parent_boundary_correction`s falls inside the 19** — both sit on units that reached a verdict — but
+the corrected push limiter (`lib/rate-limit/durable-limiter.ts:237`) does govern unit
+`replicache-push/route.ts#POST`, so it is carried. **One boundary inside the 19 is wrong and W5
+corrects it:** `guest-message-outbox.ts#enqueue and drain` is recorded against
+`guest-message-consent-gate.ts#consent gate`, and the consent gate governs **enqueue only** —
+`drainGuestMessages` performs no send-time consent re-read (the only consent calls in the file are at
+`:371-389`), its sole per-row gate before `send` being `staleAfter` (`:582`, default 1 h). Read that
+unit as `guest-message-outbox.ts#staleAfter`.
+
+**C3 — the uncovered SET is incomplete: three network-reachable surfaces carry no unit at all.** A
+repo-wide census of modules whose first line is `'use server'` returns **35** (18 in
+`src/app/actions/`, matching the run's own endpoint count; 17 outside, of which 15 appear in the 19).
+Missing: **`src/app/api/replicache-pull/route.ts#POST`** — the push route got *two* units, the pull
+route *none*, while unit 18's own text says *"the sibling pull route likely shares it"*, and codex
+recorded it `deferred_replicache_pull` in July, which under P3 transfers nothing; plus
+**`drizzle/migrate.ts`** (0 mentions) and **`drizzle/initializeDatabase.ts`** (surface of 0). The
+pull route also carries **0** `checkSameOrigin`/`requireJsonContentType` call sites against the push
+route's **4**, with the session cookie `SameSite=none` in production.
+
+**Ranking.** The 19 are ranked by downstream relevance to the 6 confirmed findings and 20 leads, not
+by recorded status — two `out_of_scope` units outrank the `blocked` one. Top five:
+`guest-message-outbox.ts#enqueue and drain` (the store **confirmed #4**'s erasure gap persists in) ·
+`lib/auth/**#module 'use server' exports` · `drizzle/db.ts#getNamedDB` ·
+`drizzle/db.ts#getDBAndGroupForSessionTenant` · `replicache-push/route.ts#POST` × header tenant and
+venue selection (the entry point above **leads 9, 12, 13, 17**). Lowest:
+`admin/(settings)/deviceActions.ts#module exports` — one session-gated export with the ownership
+predicate inside the UPDATE, **which is a scope statement and not a clean verdict** (P2).
+
+**Seven CANDIDATES, none a finding.** This pass executed no target code either, so nothing below is
+verified and nothing in the 19 is called clean. Three match the *unauthenticated / privileged-export*
+shape and were escalated to the programme lead as they were found: `lib/auth/guest-session.ts:107`
+`setGuestSession` — a `'use server'` export minting a guest session from two caller-supplied
+arguments, whose docblock *"called ONLY after a claim token has been verified"* governs its internal
+callers and is silent on the caller a `'use server'` export has by construction;
+`drizzle/db.ts:215` `getNamedDB` / `:267` `getDBAndGroupForSessionTenant`, where the second's stated
+control is *"the parameter is the session tenant OBJECT, never a string, so passing a HOST-DERIVED
+tenant is a compile error"* (`:260-263`) — **a compile-time type on a runtime POST endpoint**, which
+is this run's own structural fact #1; and `drizzle/migrate.ts:7` `migrateDB`, an ungated migration
+runner against a caller-named database sitting in zero units. **`eslint-rules/no-ungated-db-export.mjs`
+is structurally blind to all three**: it fires only on a DB-ACCESS signal, and a cookie write, a
+returned handle and a `migrate()` call each evade it.
+
+**The decisive fact is a build, and the programme lead owns it** (ruling 2026-09-22): whether Next
+registers these exports is readable from `.next/server/server-reference-manifest.json`, which needs a
+`pnpm build` that would contend with the wave-1 land queue. W5 ran no build and entered no reso
+repo. The document carries a § Manifest lookup keys hand-off — export name, `file:line`, and the one
+question each answers — with the two-step recipe (**the manifest keys actions by hashed id, not by
+export name**, so grepping the name proves nothing) and a **positive control**, `updateTenantConfig`,
+a known-live action by virtue of confirmed #5: if the recipe cannot find *it*, every negative is an
+instrument artifact rather than a fact.
+
+**`enumeration_complete[cloudflare, reso]` is unchanged by this row.** Enumerating uncovered units is
+not auditing them, and nothing here may be counted as absence of a defect.
