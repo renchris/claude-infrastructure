@@ -207,6 +207,14 @@ effort IS settable, at worktree setup time:
 ~/.claude/scripts/set-teammate-effort.sh <worktree> low|medium|high|xhigh
 ```
 
+> ⚠️ **SUPERSEDED on 2.1.220+, re-read on the 2.1.280 binary 2026-09-22.** The teammate pane
+> builder now pushes `--effort <lead's live level>` onto every member's command line (this skill
+> already records it for 2.1.220 below), and a CLI flag outranks the worktree settings file this
+> script writes. So a member runs at its LEAD's effort, and the script no longer sets it. For a
+> different rung, fire that wave's session at the rung (`handoff-fire.sh --effort medium`).
+> Opus 5.5 rungs are in `effort_defaults.opus55_*`: anchored-brief coding medium, ambiguous
+> multi-file high. The paragraph below is the 2.1.170-era record.
+
 Run it during Setup (after worktree creation, BEFORE spawn). Defaults per SSOT
 `effort_defaults`: mechanical/routine → `high`; judgment-dense or `teammate_frontier`
 (Fable) members → `xhigh`. Without an override, panes resolve the user-settings floor

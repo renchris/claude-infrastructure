@@ -387,9 +387,11 @@ with `HANDOFF_ACCOUNT_SWEEP=off`. Run it standalone any time with `handoff-fire.
 
 | Receiver's work | Fire flags | Session runs |
 |---|---|---|
-| Implementation / research / synthesis lead (THE DEFAULT) | *(none)* | `versions.opus_latest` @ **high** (`effort_defaults.default` — certified: xhigh regresses on grounding-heavy work) |
+| Implementation / research / synthesis lead (THE DEFAULT) | *(none)* | `versions.opus_latest` @ **high** (`effort_defaults.default` = `opus55_default`; the old "xhigh regresses on grounding-heavy work" certification was made on Opus 4.8 and does not transfer to Opus 5.5) |
+| Scoped coding wave (anchored briefs) | `--effort medium` | `opus_latest` @ medium (`opus55_coding_scoped` — FrontierCode peaks there and falls above it; the wave's teammates inherit the lead's effort, so this flag is how they get it) |
+| Hard reasoning / long-horizon knowledge work | `--effort xhigh` | `opus_latest` @ xhigh (`opus55_capability_sensitive` — at high, Opus 5.5 trails Fable 5.1 and Opus 5 on ArXivMath; it leads from xhigh) |
 | ultracode / Dynamic Workflows lead | *(none)* + `ultracode` keyword in the payload | same `opus_latest` @ default effort — the keyword changes ORCHESTRATION, not effort; workflow slots pin their own per-agent model/effort (`workflow_judge`, `workflow_synthesis_worker`) |
-| Bounded verify / judge-only session | `--effort xhigh` | Opus @ xhigh (`verify_judge` — ties max at lower cost ONLY for bounded-grounding work) |
+| Bounded verify / judge-only session | *(none)* for claim-vs-source checks; `--effort xhigh` for judging HARD reasoning | Opus @ high for bounded grounding, xhigh for hard reasoning (Opus 5.5 policy row; the older `verify_judge: xhigh` was certified on Opus 4.8) |
 | Fable frontier (derivation panels, judgment) | `--model fable --probe` | `frontier_access.model` @ **high** (`fable51_default` — NOT max: Fable@high ≈ Opus@max; max over-deliberates + burns the window) |
 | Fable capability-sensitive (security/arch judgment) | `--model fable --probe` | `frontier_access.model` @ **high** (`fable51_capability_sensitive` — was xhigh until the 2026-09-10 re-sweep: xhigh found no more defects than high at 2.5× the cost, and ran past a 64K output cap on 3 of 9 briefs) |
 | Fable routine | `--model fable --effort medium --probe` | `frontier_access.model` @ medium (`fable51_routine` — measured ≈ high, and above Fable 5 @xhigh) |
