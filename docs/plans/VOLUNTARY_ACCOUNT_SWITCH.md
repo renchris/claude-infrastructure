@@ -211,6 +211,54 @@ establish it about itself trivially — it is the one taking the turn.
 
 Driver-form voluntary switch is its own decision packet, gated on an idle oracle existing.
 
+**DEC-2 RESOLVED (2026-09-23) — the precondition is met, and the driver form is built.** The idle
+oracle now exists: `scripts/limit-recover/lr-upgrade.sh` (2026-09-22) — `lru_at_rest`,
+`lru_live_subagents` (handoff-fire's own predicate), the teammate/lead team predicates,
+`lru_bg_kind` (a real background job vs a `cc-await-ping` watcher), `lru_composer`, plus duplicate,
+stale-row and self. `cc-lr switch --pane P | --sid S | --from A --all-idle --target B` REUSES it
+through `lr-upgrade.sh --switch-census` — no second oracle was written. The driver form is the
+**poller prompt lane → SELF verb**: each `move` row becomes a `kind:"switch"` request, the poller
+queues it for the one serial drainer shared with `upgrade`, the drainer RE-JUDGES the session at
+execution time (a session that went busy is reported, never typed into), releases the per-sid mutex,
+and types one line — `[operator-ruling cc-lr-switch req=<id>] Run in Bash now: cc-lr switch --target
+B` — via `cc_tui_submit`. **DEC-2's core argument is kept intact:** the SUBJECT still performs the
+move itself through the SELF verb, so the SELF verb's own gates (in-flight subagents, composer,
+routability, capacity) still run inside the subject. The verdict is the registry row's `.account`
+flipping to the target with the transcript present under the target config (SWITCHED, proven=yes);
+NOTMOVED when nothing was submitted or the subject took its turn and stayed (its reply quoted);
+FAILED when nothing classifiable happened inside the bound. Result files + a cc-notify mail to the
+requester. An explicit target is required (`auto` would be resolved from each subject's own view).
+A teammate never moves, nor does a lead with a live teammate (the SELF verb's /exit runs
+cleanupSessionTeams, which kills the members).
+
+**The incident that forced it (2026-09-23, operator: "move idle next3 panes to next2 ... zero human
+in the loop").** Five attempts, ~8 h wall, to move two panes: (1) `lr-handoff.sh --voluntary
+--source-pane P` → `REFUSED:not-limited` rc 6 at the precheck, because
+`--probe-recycle-preconditions`' limit gate is unconditional — a flag combination that can never
+succeed, discovered only after the driver waited hours for the pane to settle; (2) `cc-lr recover`
+refuses non-LIMITED, `switch` was SELF-only, `upgrade` is same-account — no verb existed; (3)
+`LRH_PRECHECK=off lr-handoff.sh … --launch` from a session → auto-mode classifier DENY; (4)
+`cc-notify` to the idle peers was delivered and never read (no wake watcher armed), and one peer
+(564), on taking a turn, DECLINED the relayed ask on its own quota reading — a relayed ask carried no
+authority marker; (5) what worked: a hand-written poller request `{kind:"recovery", mode:"prompt",
+prompt:"… cc-lr switch --target next2"}` + `launchctl kickstart` (no `-k`) — both sessions
+self-switched in place within minutes. The driver form is (5) made a verb, with (1)'s combination
+now refused up front (lr-handoff exits 6 and names `cc-lr switch --pane P --target A`; the probe's
+refusal names it too) and (4)'s missing authority supplied by the marker, documented in
+`commands/limit-recover.md` § Mode: switch as the operator's ruling relayed by the poller, not a
+peer's opinion.
+
+Two defects on the same rail, found on this incident's successors: (a) kitty's
+terminal replies (XTVERSION, kitty-kbd, DA1, SGR mouse reports) queued on the outer tty during
+lr-fire-resume's pre-`interact` phase and were forwarded into the resumed composer as typed text —
+now drained and dropped before `interact`; (b) `lr-ingest-verify.sh` clause A4 failed every
+voluntary switch (no api error to classify ⇒ kind ABSENT), costing one wasted ingest turn per switch
+— a sibling session landed that cure first (`c097b7cd0`: PASS only on trigger=voluntary AND kind
+ABSENT, so a voluntary move over a network death still refuses — stricter than this wave's draft,
+which was dropped at the rebase). (a) landed with this wave. A4 is a verify clause, so DEC-3's
+negative invariant is untouched. Tests: `tests/lr-switch-driver.bats`, `tests/lr-handoff-voluntary.bats` §5,
+`tests/lr-fire-resume-reply-drain.bats`.
+
 ### DEC-3 — cause is a FIELD, never a state token
 
 `MANIFEST.trigger` + `MANIFEST.reason`, beside the existing `in_place` flags
