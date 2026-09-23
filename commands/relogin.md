@@ -82,6 +82,21 @@ web session, so there is nothing to click Authorize on. Use the **account-relogi
 the plus-address folds into. A first-ever 6 for an account usually just means its profile was
 never warmed.
 
+**On a 6, reach for `cc-relogin <acct> --dia` first** — one click, no emailed code. It focuses the
+account's own Dia profile (the `dia_profile` column of `accounts.json`), runs the login, and the
+operator clicks **Authorize** once; the CLI's localhost callback finishes it and the usual
+effect check proves it. It refuses — before touching Dia or starting a login — when Dia is not
+the default browser or the profile will not take focus, and hands the operator back the profile
+they were in either way.
+
+*Why a 6 is now expected rather than rare (measured 2026-09-22).* The dedicated Chrome profiles
+are browsers nobody uses, so their claude.ai sessions only age. `next`'s was signed in as the right
+account and still bounced to `/login?reauth=1`; the operator's Dia — same account, same URL, same
+minute — rendered Authorize. "Warm it once, reuse forever" does not hold for a session nothing
+exercises. Dia cannot be clicked unattended today (its `--enable-applescript-javascript` launch
+flag and its remote-debugging port are both off, and both are the operator's browser settings), so
+`--dia` automates everything except the one click.
+
 ## The cadence layer — built, staged, NOT running
 
 `cc-relogin-poll` is the unattended trigger: one tick per hour, at most ONE account per tick,
