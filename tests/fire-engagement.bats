@@ -128,6 +128,30 @@ STUB
   [ "$status" -eq 0 ]
 }
 
+# ACCOUNT `next`'s SHAPE (2026-09-22): its projects store is a SYMLINK to ~/.claude/projects, and the
+# fire hands engagement_seen that symlinked path. Without `find -H` BSD find enumerates nothing under
+# a symlinked start path, so an engaged session read as "never engaged" on every fire to `next`.
+# Both oracles are pinned — the marker scan (a) and the registry-sid lookup (b) each had the bare find.
+@test "engagement_seen: SYMLINKED projects store (account next) — marker path still engages (0)" {
+  mkdir -p "$HOMEDIR/real-projects/proj"
+  { printf '{"type":"user","message":{"role":"user","content":"hi MARKER-XYZ ok"}}\n'
+    printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"on it"}]}}\n'
+  } > "$HOMEDIR/real-projects/proj/s.jsonl"
+  mkdir -p "$HOMEDIR/.claude-next"; ln -s "$HOMEDIR/real-projects" "$HOMEDIR/.claude-next/projects"
+  run engagement_seen "$HOMEDIR/.claude-next/projects" "MARKER-XYZ" "$REG" "$PANE"
+  [ "$status" -eq 0 ]
+}
+
+@test "engagement_seen: SYMLINKED projects store (account next) — registry-sid path still engages (0)" {
+  mkdir -p "$HOMEDIR/real-projects/proj"
+  printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}\n' \
+    > "$HOMEDIR/real-projects/proj/sid-456.jsonl"
+  printf '{"paneUUID":"%s","session_id":"sid-456"}\n' "$PANE" > "$REG/$PANE.json"
+  mkdir -p "$HOMEDIR/.claude-next"; ln -s "$HOMEDIR/real-projects" "$HOMEDIR/.claude-next/projects"
+  run engagement_seen "$HOMEDIR/.claude-next/projects" "MARKER-ABSENT" "$REG" "$PANE"
+  [ "$status" -eq 0 ]
+}
+
 # The registry row is written by the SessionStart hook — pure birth. On its own it must not engage.
 @test "engagement_seen: registry session_id with NO assistant turn in its transcript -> not engaged (1)" {
   mkdir -p "$PROJ/proj"
