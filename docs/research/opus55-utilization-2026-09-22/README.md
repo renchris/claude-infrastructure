@@ -142,6 +142,12 @@ defaults and never drop research or reasoning to low.
   appended to each turn, a 5-agent team at 0.5× the single agent's latency matched its quality
   about 2.8× faster. Lower effort does less work; a budget keeps more agents working in parallel.
   Under tight budgets, async leads collapse to a single agent, while fixed rosters stay parallel.
+  - **Our own A/B did not reproduce it, so the budget line is NOT adopted (75%).** Six Opus 5.5
+    @high Workflow agents per arm, judged blind by Opus 5.5 @xhigh: with an `elapsed Xs / 20s` line
+    they finished 1.29× sooner but lost 4–1 (1 tie), completeness 47 vs 56 of 60. They dropped
+    secondary paths, not accuracy. It was a short task with one sample and a mis-stamped `t0`, so a
+    long-task re-probe could still move it
+    ([feature-adoption § Lever 2](../opus55-feature-adoption-2026-09-22/README.md)).
 - **Team size is a wall-clock lever.** Going from 1 to 10 agents is the big quality step: +0.17 on
   the knowledge-base task, +0.27 on Lean. Going from 10 to 100 adds +0.02–0.04 but reaches it hours
   earlier.
@@ -180,7 +186,8 @@ defaults and never drop research or reasoning to low.
 | Teammate panes | the LEAD's live effort, as a CLI flag: 2.1.280's pane builder pushes `--effort <lead's level>` onto every teammate command line (read off the binary), outranking both the worktree `settings.local.json` that `scripts/set-teammate-effort.sh` writes and the config dir's `effortLevel` | ⚠️ `set-teammate-effort.sh` has no effect on 2.1.280 (and since 2026-09-22 the script says so on stderr instead of claiming the file binds). Per-teammate effort therefore means a per-WAVE session fired at that rung |
 | Any xhigh/max session or slot | `CLAUDE_CODE_MAX_OUTPUT_TOKENS` (unset here) | ✅ measured 2026-09-22: with it unset, the client reports `maxOutputTokens: 128000` for claude-opus-5-5, the model maximum the guide recommends. A harness that caps output lower (the 09-10 sweep used 64000, and Fable 5.1 lost xhigh/max cells to it) must raise it: high→xhigh is ~2.3× the output on 5.5 |
 | In-process subagents | the agent definition's `effort:` if set, else the lead's LIVE effort (GH #25591). Measured 2026-09-22: an unpinned probe ran at the lead's high, and one with `effort: medium` in its definition ran at medium | ✅ high under a high lead; a definition can pin its own rung ([feature-adoption § Lever 1](../opus55-feature-adoption-2026-09-22/README.md)) |
-| Workflow `agent()` | per-call `effort:` | ⚠️ always pass it; omitted = unmeasured on 2.1.280 |
+| Workflow `agent()` | per-call `effort:` | ⚠️ always pass it; omitted = unmeasured on 2.1.280. Concurrency is a separate gate, per RUN: `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS`, default min(16, max(2, ncpu−2)) = 8 on this box, so a default 10-agent wave queues 2. Migration `0035` (c10, staged for the operator) raises it to 12 ([feature-adoption § Lever 4](../opus55-feature-adoption-2026-09-22/README.md)) |
+| Research agent definitions | `omitClaudeMd: true` on `deep-research`, `deep-research-sonnet`, `frontier-derivation`, `research-decomposition-critic` | ✅ 85,704 fewer first-turn tokens per spawn, about 30% of a spawn's quota draw. The operating contract moved into each agent's body. Workflow `agent()` with an `agentType` is unmeasured ([feature-adoption § Lever 3](../opus55-feature-adoption-2026-09-22/README.md)) |
 | Hand-pinned model ids | use the alias `opus` | while any 2.1.260 session lives, a full `claude-opus-5-5` pin 400s there |
 
 ## Supervision changes that come with it (System Card §6; vs Opus 5)
@@ -252,7 +259,10 @@ defaults and never drop research or reasoning to low.
    - `roles.workflow_synthesis_worker` is `claude-opus-5-5` @xhigh as of this change.
 4. **Settings effort drift** (`next`, `next4` at low). It reaches only non-wrapped surfaces (IDE,
    bare `claude -p`), never a teammate on 2.1.280. It is an authority-ceiling surface, realigned by
-   the operator via migration.
+   the operator via migration. **Likely mechanism, found 2026-09-22:** a typed `/effort
+   low|medium|high|xhigh` in an interactive pane saves `effortLevel` to that account's settings.json,
+   which fits the medium / low / high / medium / low spread across the five config dirs. A one-time
+   realignment will drift again until that write stops.
 5. **Stage Sonnet 5.5 / Haiku 5.5 on release**, through the `/model-upgrade` Step 0 binary gate.
 6. ✅ **`scripts/set-teammate-effort.sh`'s premise is false on 2.1.280 — CORRECTED 2026-09-22.**
    The lead's `--effort` CLI flag outranks the settings file it writes, so it no longer sets a
@@ -262,3 +272,11 @@ defaults and never drop research or reasoning to low.
 7. ✅ **Review-class follow-up — DONE 2026-09-22** (landed `b039afa84`). The judge slots stay on
    Opus 5.5 @xhigh, the adversarial slot stays on Fable 5.1, and code review moves from high to
    xhigh (see "Judge slots" and the table).
+8. ✅ **CC 2.1.280 / Opus 5.5 feature adoption — DONE 2026-09-22** (landed through `8396e2faa`,
+   [`../opus55-feature-adoption-2026-09-22/`](../opus55-feature-adoption-2026-09-22/README.md)).
+   Adopted: `omitClaudeMd` on the four research agents, and Workflow concurrency 12 (migration
+   `0035`, the operator's to run). Per-turn effort is on for all four accounts, but no actuator was
+   built, because a typed `/effort` writes settings. Time budgets are not adopted. Three probes are
+   still open, each named in the record: `omitClaudeMd` through a Workflow `agentType`, a subagent
+   spawned after a lead's `/effort` switch (the capacity gate refused it twice), and a long-task
+   time-budget re-run with a correct `t0`.
