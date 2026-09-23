@@ -24,6 +24,10 @@
 
 setup() {
   command -v jq >/dev/null || skip "jq required"
+  # The real gates are never this suite's subject (case D stubs capacity-admit via LRU_CA_LIB), and
+  # the poller cases reach code that could read live load — pin both off, one export per term.
+  export CC_FIRE_CAPACITY_GATE=off
+  export CC_ADMIT_GATE=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   LRU="$REPO/scripts/limit-recover/lr-upgrade.sh"
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
