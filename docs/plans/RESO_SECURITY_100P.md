@@ -384,6 +384,38 @@ smallest diff first.
 
 ---
 
+## Wave 7 — lead 9, the realtime publish secret — RULED 2026-09-23, IN FLIGHT
+
+**Operator ruling, 2026-09-23, verbatim:** "Proceed as you recommend for the long-horizon end-game
+100th percentile absolute perfection implementation." Decision packet `bf9093e859b8` (conviction 88%
+after research: the secret is Soketi's documented default and the client bundle ships the matching
+default `app-key`, so it is guessable without the repo; impact is disruption only — forged
+`deployment-event` reloads capped at 3 per device per 5 min by `lib/reload-guard.ts:18-19`, forged
+pokes cause pull storms, no data read or written; a botched switch degrades to 60 s polling, never an
+outage).
+
+**Design (ruled):** a random 32-byte key PER REGION, source of truth SSM SecureString
+`/amplify/djnbdqpvc08g4/main/SOKETI_APP_SECRET_<STEM>`; never in a tracked file or `.env.local` (a
+laptop needing prod pokes resolves it from SSM at run time, as `resolveGroupToken` does for DB tokens).
+Enforcement keys on "is this a deployed server" (`FLY_APP_NAME || AWS_LAMBDA_FUNCTION_NAME`), never
+`NODE_ENV`, so `pnpm dev`, `pnpm build`, and a local `pnpm build && pnpm start` keep working. This
+supersedes the "code half lands only after the rotation" line above: dual-secret signing makes the
+code safe to land FIRST.
+
+| Phase | What | Locus | State |
+|---|---|---|---|
+| **1** | send-poke signs with `SOKETI_APP_SECRET_<STEM>`, retries once with `_PREVIOUS` on 401/403 (fallback family too); every other publisher (`scripts/notify-deployment.sh`, qa, load, firedrill, smoke) env-sourced; Oregon `soketi-config.json` templated from SSM; bootstrap guard ALLOWS a non-default key, refuses `app-secret`; `scripts/rotate-soketi-secret.sh <region>` with typed-yes gates, `--dry-run`, re-run safety | S — pane 635, brief `/tmp/fire-sec-lead9-rotation.txt` | ▶ in flight |
+| **2** | Operator runs the script per region, in that region's daytime: SSM → app side (new + `_PREVIOUS`=old, incl. apps whose `_FALLBACK` targets this server) → server side → verify by effect (new 200, old 401) → clear `_PREVIOUS`. **Oregon stops mid-script for one `/deploy`** (Amplify env is baked at build) | operator | waits on Phase 1 |
+| **3** | Remove the literal fallback on deployed servers (fail loud at send time), bootstrap guard REQUIRES a non-default key, drop `_PREVIOUS` handling if unused | S — fire after Phase 2 reports all 5 regions | waits on Phase 2 |
+
+Found during the ruling's research, recorded so it is not rediscovered: the checkout's `.env.local`
+points Oregon, Los Angeles and Singapore at the PRODUCTION Soketi hosts with the default secret, so a
+laptop running against a production tenant can nudge real staff devices today. After Phase 2 those
+local nudges are refused (local sync falls back to polling) — deliberately; do not copy the new keys
+into `.env.local`.
+
+---
+
 ## Wave 5 — the 19 surfaces this run did not cover — DONE `fa6539057`
 
 Not a fix wave: a Cloudflare enumeration over the recorded `out_of_scope` units so a later whole-repo
