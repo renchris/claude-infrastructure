@@ -231,3 +231,23 @@ load_rest() {
   run hf_transcript_at_rest "$TX"
   [ "$status" -eq 2 ]
 }
+
+# ── DEFECT 6 — a resume-mode recycle never needs --no-self-retire ─────────────────────────────────
+
+@test "[RED] a fired peer's SELF resume-mode recycle does not die on the prompt trailer" {
+  # The fired-peer stamp that made hf_recycle_inherits_peer true: valid, open, at the pane's cwd.
+  jq -n --arg p "$SRC_PANE" --arg c "$(cd "$CWD_DIR" && pwd -P)" \
+    '{paneUUID:$p, cwd:$c, firedBy:"ORIGIN-77", firedAt:"2026-09-22T00:00:00Z", selfRetire:true,
+      schema:2, originClass:"fired-peer", originator:"ORIGIN-77", notifyBack:"ORIGIN-77",
+      marker:"HANDOFF-ENGAGE-1-2-3", closedAt:null, succession:null}' > "$CC_FIRED_DIR/$SRC_PANE.json"
+  # A transplanted self form, as `cc-lr switch` fires it — the shape that carried the trailer.
+  TCFG="$OTHER_CFG"; LOCKDIR="$HOME/.reso/limit-recover/locks"; mkdir -p "$LOCKDIR"
+  printf '{"handed_off_to":"%s","lock":"%s"}\n' "$TCFG" "$LOCKDIR/$SESS.lock" > "$SRC_CFG/projects/$SLUG/$SESS.HANDOFF.json"
+  printf '{"sid":"%s"}\n' "$SESS" > "$LOCKDIR/$SESS.lock"
+  row
+  run bash -c 'cd "$1" && shift && exec env ITERM_SESSION_ID="w0t0p0:$1" CLAUDE_CODE_SESSION_ID="$2" CLAUDE_CONFIG_DIR="$3" \
+      bash "$4" --recycle --dry-run --transplanted-source --transplant-cause voluntary \
+      --resume-launcher "$5" --resume-cfg "$6"' _ "$CWD_DIR" "$SRC_PANE" "$SESS" "$SRC_CFG" "$HF" "$LAUNCHER" "$TCFG"
+  [[ "$output" != *"prompt trailer: prompt file not found"* ]] || { echo "defect 6 is back: $output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
