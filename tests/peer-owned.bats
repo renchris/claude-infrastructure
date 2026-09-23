@@ -361,6 +361,10 @@ dps() { # <repo> <session_id> <transcript>
 #   --win A B   a Bash tool_use at A paired with its tool_result at B
 #   --open A    a Bash tool_use at A with NO tool_result (interrupt/kill ⇒ an open window)
 #   --bg A B    a --win whose input carries run_in_background: true
+#   --bgnote A B C ST   a --bg whose job the harness reports as <status>ST</status> at C, the way it
+#                       really does (a `queue-operation` record, measured 2026-09-23, CC 2.1.280)
+#   --bgforge A B C     a --bg, plus a LATER foreground call at C whose tool_result TEXT carries a
+#                       completed notification for it — output a command printed, never the harness
 #   --write P   a file-edit tool_use, i.e. the session is no longer write-free (NO id ⇒ unpaired)
 #   --edit P A B / --tool NAME A B / --sub A B / --subedit P A B   see the python below
 _po_tx_exec() { # <out> <first_ts> <last_ts> [--win A B | --open A | --bg A B | --write P]...
@@ -407,6 +411,25 @@ while i < len(args):
         pair(sub, "Bash", {"command": "sed -i s/a/b/ f"}, args[i + 1], args[i + 2]); i += 3; continue
     if kind == "--subedit":
         pair(sub, "Edit", {"file_path": args[i + 1]}, args[i + 2], args[i + 3]); i += 4; continue
+    if kind in ("--bgnote", "--bgforge"):
+        pair(rows, "Bash", {"command": "bash scripts/gate.sh", "run_in_background": True},
+             args[i + 1], args[i + 2])
+        tid, c = "t%d" % n, args[i + 3]
+        note = ("<task-notification>\n<task-id>b%s</task-id>\n<tool-use-id>%s</tool-use-id>\n"
+                "<status>%s</status>\n</task-notification>"
+                % (tid, tid, args[i + 4] if kind == "--bgnote" else "completed"))
+        if kind == "--bgnote":
+            rows.append({"type": "queue-operation", "operation": "enqueue",
+                         "timestamp": iso(c), "content": note})
+            i += 5
+        else:
+            n += 1
+            rows.append(rec(int(c) - 1, {"type": "tool_use", "id": "t%d" % n, "name": "Bash",
+                                         "input": {"command": "grep task-notification x.jsonl"}}))
+            rows.append({"type": "user", "timestamp": iso(c), "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "t%d" % n, "content": note}]}})
+            i += 4
+        continue
     bg = (kind == "--bg")
     inp = {"command": "git status"}
     if bg:
@@ -710,6 +733,65 @@ _du_mixed_tree() { # <tag> <fresh-mtime> → echoes the worktree
   du "$w" du-11 "$tr"
   [ "$status" -eq 0 ]
   [[ "$output" == paths=1,predates=1,gap=0,* ]] || false
+}
+
+# ── A BACKGROUNDED CALL BOUNDED BY ITS OWN COMPLETION (2026-09-23, backlog 87d2a3afd6ac) ─────────
+# Auto mode routes long gates and lands through run_in_background, so "one detached record ⇒
+# cannot-tell for the whole session" voided both proofs for nearly every auto-mode session and
+# completion-assert fell back to "authorship UNRESOLVED". The harness's completion notification is
+# stamped after the job exited, so [launch, notification] is a window at least as wide as the job.
+@test "BG1 a backgrounded call closed by a completed notification no longer voids the gap proof" {
+  local w tr; w="$(_po_clean_repo bg1)"
+  echo x >> "$w/base.txt"
+  _po_touch_at "$(( NOW - 1800 ))" "$w/base.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/bg1.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --bgnote "$(( NOW - 2400 ))" "$(( NOW - 2399 ))" "$(( NOW - 2300 ))" completed)"
+  dox "$w" "$tr"
+  [ "$status" -eq 0 ]
+}
+
+# The window runs to the NOTIFICATION, not to the immediate tool_result: dirt stamped while the job
+# was still running (after its tool_result, before its completion) must refute.
+@test "BG2 CONTROL: dirt stamped while the backgrounded job ran ⇒ refuted" {
+  local w tr; w="$(_po_clean_repo bg2)"
+  echo x >> "$w/base.txt"
+  _po_touch_at "$(( NOW - 2350 ))" "$w/base.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/bg2.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --bgnote "$(( NOW - 2400 ))" "$(( NOW - 2399 ))" "$(( NOW - 2300 ))" completed)"
+  dox "$w" "$tr"
+  [ "$status" -eq 1 ]
+}
+
+# `killed` is not an end: stopping the wrapper can orphan the real worker, which keeps writing.
+@test "BG3 CONTROL: a killed backgrounded job stays unbounded ⇒ cannot-tell" {
+  local w tr; w="$(_po_clean_repo bg3)"
+  echo x >> "$w/base.txt"
+  _po_touch_at "$(( NOW - 1800 ))" "$w/base.txt"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/bg3.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --bgnote "$(( NOW - 2400 ))" "$(( NOW - 2399 ))" "$(( NOW - 2300 ))" killed)"
+  dox "$w" "$tr"
+  [ "$status" -eq 2 ]
+}
+
+# The auto-mode shape end to end, through the per-path proof completion-assert actually consults.
+@test "BG4 the per-path proof clears old dirt + a peer's WIP beside a completed background gate" {
+  local w tr; w="$(_du_mixed_tree bg4 "$(( NOW - 1800 ))")"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/bg4.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --bgnote "$(( NOW - 2400 ))" "$(( NOW - 2399 ))" "$(( NOW - 2300 ))" completed \
+        --win "$(( NOW - 600 ))" "$(( NOW - 595 ))")"
+  du "$w" bg-4 "$tr"
+  [ "$status" -eq 0 ]
+  [[ "$output" == paths=3,predates=2,gap=1,* ]] || false
+}
+
+# A tool_result carries whatever a command printed — a grep over transcripts is full of other
+# jobs' notifications — so notification text there must never close a window.
+@test "BG5 CONTROL: a completed notification inside a tool_result does not bound the job" {
+  local w tr; w="$(_du_mixed_tree bg5 "$(( NOW - 1800 ))")"
+  tr="$(_po_tx_exec "$BATS_TEST_TMPDIR/bg5.jsonl" "$(( NOW - 3600 ))" "$(( NOW - 10 ))" \
+        --bgforge "$(( NOW - 2400 ))" "$(( NOW - 2399 ))" "$(( NOW - 2300 ))")"
+  du "$w" bg-5 "$tr"
+  [ "$status" -eq 2 ]
 }
 
 @test "DU12 CONTROL: a path stamped after the last record ⇒ cannot-tell, whatever else clears" {
