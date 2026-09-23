@@ -706,6 +706,8 @@ nudge_in_place() { # $1=sid $2=cfg $3=registry rows ("pane<TAB>pid<TAB>acct<TAB>
 #     one that was never written; claimed/ is the evidence that closes that gap.
 FLEET="${LR_FLEET_BIN:-$LR/lr-fleet.sh}"
 HUSK_REQS="$STATE/husk-requests"
+UPG_QUEUE="$STATE/upgrade-queue"
+UPG_BIN="${LR_UPGRADE_BIN:-$LR/lr-upgrade.sh}"
 # The run claim has no reaper here — the run REAPER is the sibling plan's and is out of scope — so it
 # is TTL-bounded, exactly as the fire claim above is and for the same reason: a driver that died
 # mid-run must not wedge its sid out of recovery forever. 30 min is ~2.7x lr-fleet's own worst-case
@@ -787,6 +789,20 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
       mkdir -p "$HUSK_REQS" 2>/dev/null || true
       log "HUSK-REQUEST $_rq_sid — filed to $HUSK_REQS for lr-fleet --retire-husks; a breadcrumb is not a recovery"
       mv "$_rq" "$HUSK_REQS/$_rq_name" 2>/dev/null || true
+      continue ;;
+    upgrade)
+      # cc-lr upgrade (2026-09-22): move an IDLE session onto the current binary + model, in place.
+      # NOT executed inside this tick: an upgrade /exits and relaunches a live pane and can take
+      # minutes, and the tick lock must never be held that long (defect 1 above). The request is
+      # QUEUED, and one serial drainer (lr-upgrade.sh --drain, kicked below) takes the queue one
+      # session at a time — re-judging the selection predicate and probing capacity at EXECUTION
+      # time, before anything is typed. No run claim here: the drainer takes the per-sid mutex itself.
+      mkdir -p "$UPG_QUEUE" 2>/dev/null || true
+      if mv "$_rq" "$UPG_QUEUE/$_rq_name" 2>/dev/null; then
+        log "UPGRADE-QUEUED $_rq_sid (pane ${_rq_pane:-?}) for $_rq_by"
+      else
+        log "UPGRADE-SKIP $_rq_sid — could not move the request into $UPG_QUEUE (left in place)"
+      fi
       continue ;;
     *)
       log "REQUEST-SKIP $_rq_sid — unknown kind '$_rq_kind'; parked (this loop executes recoveries only)"
@@ -886,6 +902,31 @@ done
 if (( _rq_held > 0 )); then
   log "HOOK-HELD $_rq_held hook-originated request(s) NOT drained — $STATE/autorecover.on is absent (sids: $_rq_held_sids); creating that file is the operator's call and releases the whole cohort"
 fi
+
+# ── the upgrade drainer: ONE, detached, kicked whenever the queue holds work ────────────────────
+# Keyed on the QUEUE, not on "a request arrived this tick": a drainer that died with work left is
+# restarted by the next tick rather than stranding the queue until someone writes another request.
+# The drainer's own lock (upgrade-drain.lock/pid) makes a second start a no-op, so this check is a
+# fast path, not the guarantee. Detached through scripts/lib/detach.sh (start_new_session) so it
+# outlives this tick; its output goes to upgrade-drain.log, its verdicts to results/upgrade-<sid>.json.
+lrp_upgrade_kick() {
+  local hp det="" d pid
+  compgen -G "$UPG_QUEUE/*.json" >/dev/null 2>&1 || return 0
+  hp="$(cat "$STATE/upgrade-drain.lock/pid" 2>/dev/null || true)"
+  if [[ "$hp" =~ ^[0-9]+$ ]] && kill -0 "$hp" 2>/dev/null; then
+    log "UPGRADE-DRAIN already running (pid $hp)"; return 0
+  fi
+  if [[ $DRY -eq 1 ]]; then log "DRY   upgrade drainer would start: $UPG_BIN --drain"; return 0; fi
+  if [[ ! -f "$UPG_BIN" ]]; then log "UPGRADE-SKIP drainer not found at $UPG_BIN (queue left in place)"; return 0; fi
+  for d in "$LR/../lib/detach.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/detach.sh" "$HOME/.claude/scripts/lib/detach.sh"; do
+    [[ -f "$d" ]] && { det="$d"; break; }
+  done
+  if [[ -z "$det" ]]; then log "UPGRADE-SKIP scripts/lib/detach.sh unreachable — will not run the drainer inside the tick lock"; return 0; fi
+  # shellcheck disable=SC1090  # runtime-resolved sibling
+  pid="$( . "$det" && detach "$STATE/upgrade-drain.log" /bin/bash "$UPG_BIN" --drain 2>/dev/null )" || pid=""
+  log "UPGRADE-DRAIN started${pid:+ pid $pid} ($UPG_BIN --drain)"
+}
+lrp_upgrade_kick
 
 # ── the two predicate calls this loop makes, each ONE fork, both through the SSOT ───────────────
 # WHY A FUNCTION AND NOT AN INLINE `grep`. Both of these replace a raw `grep` whose exit 1 meant two
