@@ -35,7 +35,7 @@ question about *the human's consent*. A shell can `DROP TABLE` and `git push --f
   reports "declined" for an answer nobody typed. On EOF without `--confirm`, stop and print the
   exact `--confirm` form — never call it a refusal. The dry run is how they read the resolved
   commands first; `--confirm` is them consenting to what they read. Measured 2026-09-23 on reso
-  `scripts/rotate-soketi-key.sh` (fixed `b5ccc273a`).
+  `scripts/rotate-soketi-key.sh` (fixed `ff98573c2`).
 
 🚨 **Those five are the ONLY gate classes, and the list is EXHAUSTIVE — not a starting set.** If you
 are reaching for a sixth, you are deferring, not gating. The failure has a tell: you invent an axis
