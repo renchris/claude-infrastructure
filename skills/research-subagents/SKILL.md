@@ -448,8 +448,20 @@ On the **model** axis it is pinned to `roles.research_worker` ONLY in-process/te
   Why the adversarial slot stays on Fable although Opus 5.5 scores higher alone: it adds the defects
   the Opus 5.5 worker misses, and a same-model check at the same effort is redundancy.
 - **Prefer Workflows for waves >~10 agents** — the only surface where per-slot model+effort is
-  pinnable (in-process subagents inherit lead effort, GH #25591), AND the only surface where the
-  `roles.workflow_synthesis_worker` rung above (xhigh) is realizable.
+  pinnable per CALL, AND the only surface where the `roles.workflow_synthesis_worker` rung above
+  (xhigh) is realizable.
+- **In-process effort is pinnable per AGENT DEFINITION** (measured 2026-09-22 on 2.1.280,
+  `docs/research/opus55-feature-adoption-2026-09-22/README.md` § Lever 1). A subagent resolves its
+  effort per request as `definition.effort ?? the lead's LIVE session effort`. An unpinned probe
+  under a `high` lead ran at high; the same probe with `effort: medium` in its frontmatter (or
+  `--agents` JSON) ran at medium. So "in-process subagents inherit lead effort" (GH #25591) holds
+  only for definitions that do not pin one. They also follow the lead's LIVE level, so a lead
+  switched mid-session spawns at the new rung. Do not switch a lead by hand-typed `/effort` for
+  this: in an interactive pane it also saves `effortLevel` into that account's settings.json.
+- **The four research agents run with `omitClaudeMd: true`** (same record, § Lever 3): 85,704
+  fewer first-turn tokens per spawn in this repo, ~30% of a spawn's quota draw. So a brief must
+  carry every rule a worker needs. Name the rule inside the brief; never assume the worker saw
+  CLAUDE.md or the project rules.
 
 **Do NOT put a projected quota/$ number in the 15-second abort manifest** (decided via item-3
 probe wf_b0f4b091-172, 2026-07-01): the manifest can compute *draw* but not *remaining* cap

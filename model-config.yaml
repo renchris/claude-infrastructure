@@ -204,6 +204,13 @@ versions:
 #     went to Opus 4.8. In Shade every successful attack came through the fallback (0 of 2,872
 #     answered directly); in Gray Swan no fallback rollout was compromised. Either way, untrusted
 #     code is where a turn most often stops being Opus 5.5.
+#   · NOTE 2026-09-22 (feature adoption, docs/research/opus55-feature-adoption-2026-09-22/):
+#     per_turn_effort is enabled by the model CATALOG for claude-opus-5-5 and claude-fable-5-1 on
+#     all four accounts, and does not depend on `tengu_per_turn_effort`. An interactive `/effort`
+#     SAVES effortLevel to settings.json. An agent definition's `effort:` pins an in-process
+#     subagent's rung, so the "subagents inherit lead effort" rule applies only to unpinned
+#     definitions. The four research agents now run with omitClaudeMd (85,704 fewer first-turn
+#     tokens per spawn). No role or effort key here was changed.
 # ─────────────────────────────────────────────────────────────────────────────
 # § FABLE 5.1 (lateral bump 2026-09-03) — ADOPTED. Binary gate cleared, keying flip landed.
 # Anthropic shipped Claude Fable 5.1 (`claude-fable-5-1`) and Claude Mythos 5.1
