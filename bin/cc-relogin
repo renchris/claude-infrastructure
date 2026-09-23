@@ -92,6 +92,8 @@ def _env(name: str, default: str) -> str:
 
 ACCOUNTS_BIN = _env("CC_RELOGIN_ACCOUNTS_BIN", "claude-accounts")
 AUTHBROWSER_BIN = _env("CC_RELOGIN_AUTHBROWSER_BIN", "cc-authbrowser")
+OSASCRIPT_BIN = _env("CC_RELOGIN_OSASCRIPT_BIN", "osascript")
+DIA_BUNDLE_ID = "company.thebrowser.dia"
 TMP = _env("CC_RELOGIN_TMP", "/tmp")
 PS_BIN = _env("CC_RELOGIN_PS_BIN", "ps")
 SECURITY_BIN = _env("CC_RELOGIN_SECURITY_BIN", "/usr/bin/security")
@@ -533,7 +535,8 @@ def drive(cdp: Any, session: str, child: Any, fifo_fd: int,
                 f"landed on {href} — the claude.ai web session is cold and the email-code leg is "
                 f"NOT automated. REMAINING HUMAN STEP: open that URL, sign in as "
                 f"{info.get('email')}, take the emailed code from mailbox {mailbox}, "
-                "then re-run this command.")
+                "then re-run this command — or finish with ONE click in your own Dia, whose "
+                f"session is the one you actually use: cc-relogin {info.get('name')} --dia")
         m = CODE_STATE_RE.search(body)
         if m:
             os.write(fifo_fd, (m.group(0) + "\n").encode())
@@ -630,6 +633,125 @@ def phase2(info: dict[str, Any], url_timeout: float) -> tuple[int, str]:
             pass
         return code, detail
     return code, f"{detail} [login transcript kept: {outp}]"
+
+
+# ---- phase 2, Dia variant: the operator's own warm browser, ONE human click ------------------
+#
+# WHY THIS EXISTS (measured 2026-09-22). The dedicated Chrome profiles are browsers nobody uses, so
+# their claude.ai sessions only age: `next`'s was signed in as the RIGHT account and still bounced
+# to /login?reauth=1, while the operator's Dia — same account, same URL, same minute — rendered
+# Authorize. A substrate whose session must stay fresh but is never exercised fails by design.
+# Dia is exercised daily. It cannot be CLICKED unattended here (execute-javascript needs a Dia
+# launch flag, and its remote-debugging port is off — both the operator's browser settings), so
+# this route asks for exactly one click and automates everything around it: profile routing,
+# the login child, and proof by effect in run(). The CLI auto-opens its LOCALHOST callback URL in
+# the default browser, so an Authorize click completes the login with no code to paste.
+
+DIA_TIMEOUT_S = 300.0
+
+
+def osa(script: str) -> tuple[int, str]:
+    """One AppleScript call. Never raises: an unreachable Dia is a result, not a traceback."""
+    try:
+        p = subprocess.run([OSASCRIPT_BIN, "-e", script], capture_output=True, text=True,
+                           timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 1, f"{type(exc).__name__}: {exc}"
+    return p.returncode, (p.stdout if p.returncode == 0 else p.stderr).strip()
+
+
+def dia_active_profile() -> str | None:
+    rc, out = osa('tell application "Dia" to get name of active profile of window 1')
+    return out if rc == 0 and out else None
+
+
+def dia_focus(profile: str) -> bool:
+    """Focus a Dia profile (Dia's Space) BY NAME, then read it back — a claim is not a focus."""
+    safe = profile.replace("\\", "\\\\").replace('"', '\\"')
+    rc, _ = osa('tell application "Dia" to focus '
+                f'(first profile of window 1 whose name is "{safe}")')
+    return rc == 0 and dia_active_profile() == profile
+
+
+def default_https_handler() -> str | None:
+    """Bundle id macOS opens https:// links with — the browser the login CLI will auto-open."""
+    plist = os.path.expanduser("~/Library/Preferences/com.apple.LaunchServices/"
+                               "com.apple.launchservices.secure.plist")
+    try:
+        p = subprocess.run(["plutil", "-convert", "json", "-o", "-", plist],
+                           capture_output=True, text=True, timeout=10)
+        for h in json.loads(p.stdout).get("LSHandlers", []):
+            if h.get("LSHandlerURLScheme") == "https":
+                return str(h.get("LSHandlerRoleAll") or "") or None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+    return None
+
+
+def phase2_dia(info: dict[str, Any], timeout: float) -> tuple[int, str]:
+    """Route the login into the account's Dia profile and wait for ONE Authorize click."""
+    acct = str(info.get("name") or "")
+    prof = str(info.get("dia_profile") or "")
+    if not prof:
+        return EXIT_BROWSER_FAILED, f"accounts.json names no dia_profile for {acct!r}"
+    cbin = os.path.expanduser(info.get("claude_bin") or "")
+    if not cbin or not os.path.exists(cbin):
+        return EXIT_BROWSER_FAILED, f"claude binary missing at {cbin!r}"
+    handler = default_https_handler()
+    if handler != DIA_BUNDLE_ID:
+        # The CLI opens its callback URL in the DEFAULT browser; anywhere else, the click that
+        # matters happens in a browser that is not signed in as this account.
+        return EXIT_BROWSER_FAILED, (f"default browser is {handler or 'UNKNOWN'}, not Dia — the "
+                                     "login would open outside the account's Dia profile")
+    prev = dia_active_profile()
+    if prev is None:
+        return EXIT_BROWSER_FAILED, "Dia did not answer over AppleScript — is it running?"
+    if not dia_focus(prof):
+        return EXIT_BROWSER_FAILED, f"could not focus Dia profile {prof!r}"
+    fifo = os.path.join(TMP, f"cc-relogin-{acct}.in")
+    outp = os.path.join(TMP, f"cc-relogin-{acct}.out")
+    child = out_fh = None
+    fifo_fd = None
+    try:
+        if os.path.exists(fifo):
+            os.unlink(fifo)
+        os.mkfifo(fifo, 0o600)
+        fifo_fd = os.open(fifo, os.O_RDWR)     # stdin that never EOFs and never sends a byte
+        out_fh = open(outp, "w+")
+        env = os.environ.copy()
+        env["CLAUDE_CONFIG_DIR"] = os.path.expanduser(info.get("config_dir") or "")
+        env["CLAUDE_CODE_OAUTH_SCOPES"] = info.get("oauth_scopes") or ""   # verbatim
+        child = subprocess.Popen(
+            [cbin, "auth", "login", "--claudeai", "--email", str(info.get("email") or "")],
+            env=env, stdin=fifo_fd, stdout=out_fh, stderr=subprocess.STDOUT)
+        sys.stderr.write(f"cc-relogin: click Authorize in Dia (profile {prof}, signed in as "
+                         f"{info.get('email')}) — waiting up to {timeout:g}s\n")
+        sys.stderr.flush()
+        try:
+            rc = child.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return EXIT_BROWSER_FAILED, (f"no Authorize click within {timeout:g}s "
+                                         f"[login transcript kept: {outp}]")
+        if rc == 0:
+            return EXIT_PROVEN, f"login completed after the Authorize click in Dia ({prof})"
+        return EXIT_BROWSER_FAILED, f"login child exited {rc} [login transcript kept: {outp}]"
+    finally:
+        if child is not None and child.poll() is None:
+            child.kill()
+            try:
+                child.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+        if fifo_fd is not None:
+            os.close(fifo_fd)
+        if out_fh is not None:
+            out_fh.close()
+        try:
+            os.unlink(fifo)
+        except OSError:
+            pass
+        if prev and prev != prof:
+            dia_focus(prev)                    # hand the operator back the profile they were in
 
 
 # ---- verify by EFFECT --------------------------------------------------------------------------
@@ -738,6 +860,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("acct", help="account name (next | next2 | next3 | next4)")
     p.add_argument("--dry-run", action="store_true", help="gate + phase plan only; mutate nothing")
     p.add_argument("--no-browser", action="store_true", help="phase 1 only; never open a browser")
+    p.add_argument("--dia", action="store_true",
+                   help="phase 2 in the account's own Dia profile: ONE Authorize click, no code")
+    p.add_argument("--dia-timeout", type=float, default=DIA_TIMEOUT_S, metavar="N")
     p.add_argument("--json", action="store_true", help="emit the result object on stdout")
     p.add_argument("--url-timeout", type=float, default=30.0, metavar="N")
     p.add_argument("--debug", action="store_true", help="progress to stderr")
@@ -778,6 +903,8 @@ def run(acct: str, o: argparse.Namespace, state: dict[str, Any]) -> int:
         state["plan"] = [f"phase1: SKIP ({blocked})" if blocked
                          else "phase1: headless refresh grant (claude auth login)",
                          "phase2: SKIP (--no-browser)" if o.no_browser
+                         else (f"phase2: one Authorize click in Dia profile "
+                               f"{info.get('dia_profile')!r}") if o.dia
                          else f"phase2: browser OAuth via {AUTHBROWSER_BIN}"]
         if o.dry_run:
             return emit(state, EXIT_PROVEN, "gate passed; lock probed (taken + released); "
@@ -803,7 +930,8 @@ def run(acct: str, o: argparse.Namespace, state: dict[str, Any]) -> int:
         elif o.no_browser:
             return emit(state, EXIT_HEADLESS_EXHAUSTED,
                         f"phase 1 impossible and --no-browser given — {blocked}", "phase1", as_json)
-        code, detail = phase2(info, float(o.url_timeout))
+        code, detail = (phase2_dia(info, float(o.dia_timeout)) if o.dia
+                        else phase2(info, float(o.url_timeout)))
         if code != EXIT_PROVEN:
             return emit(state, code, detail, "phase2", as_json)
         ok, vdetail, state["after"] = verify(acct, before)

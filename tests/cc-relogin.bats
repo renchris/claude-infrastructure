@@ -47,6 +47,11 @@ setup() {
   export CC_RELOGIN_PS_BIN="$D/stub-ps"
   export CC_RELOGIN_SECURITY_BIN="$D/stub-security"
   export CC_RELOGIN_AUTHBROWSER_BIN="$D/stub-authbrowser"
+  # HERMETICITY: --dia drives the REAL Dia over AppleScript. Every case gets a refusing stub, so a
+  # CLI-level --dia test can never reach the operator's live browser by forgetting to seal it.
+  printf '#!/bin/sh\necho "osascript $*" >> "%s/osascript-calls"\nexit 1\n' "$D" > "$D/stub-osascript"
+  chmod +x "$D/stub-osascript"
+  export CC_RELOGIN_OSASCRIPT_BIN="$D/stub-osascript"
 
   # --- stubs: each serves a per-CALL fixture (foo.1.json, foo.2.json, …) so a "before" and an
   # --- "after" sweep can differ, falling back to foo.json when no per-call file exists.
@@ -800,6 +805,112 @@ url = ccr.await_oauth_url(p, 2.0, FakeChild(None))
 assert url == uri, url
 assert "\x07" not in url and url.count("https://") == 1, url
 PY
+}
+
+# ---- --dia: phase 2 in the account's own Dia profile (2026-09-22) ------------------------------
+# A FakeDia stands in for AppleScript: it tracks the focused profile, so "focus X then read back"
+# is exercised for real and a restore to the operator's original profile is observable.
+dia_prelude() { cat <<'PY'
+import tempfile, time
+ccr.TMP = tempfile.mkdtemp()
+class FakeDia:
+    def __init__(self, active="Personaly", focusable=True, lies=False):
+        self.active, self.focusable, self.lies, self.calls = active, focusable, lies, []
+    def __call__(self, script):
+        self.calls.append(script)
+        if "get name of active profile" in script: return 0, self.active
+        if "focus" in script and self.lies: return 0, ""   # claims success, switches nothing
+        if "focus" in script and self.focusable:
+            self.active = script.split('whose name is "')[1].rsplit('"', 1)[0]; return 0, ""
+        return 1, "refused"
+    def focused(self): return [c.split('"')[3] for c in self.calls if " focus " in c]
+def stub_claude(body):
+    f = os.path.join(ccr.TMP, "claude"); open(f, "w").write("#!/bin/sh\n" + body + "\n")
+    os.chmod(f, 0o755); return f
+def info(**kw):
+    d = {"name": "next3", "dia_profile": "Claude3", "email": "a+claude@x.com",
+         "config_dir": ccr.TMP, "oauth_scopes": "user:profile"}
+    d.update(kw); return d
+PY
+}
+
+@test "--dia: focuses the ACCOUNT's Dia profile, waits for the login, restores the operator's profile" {
+  { dia_prelude; cat <<'PY'; } | pyt
+dia = FakeDia(active="Personaly"); ccr.osa = dia
+ccr.default_https_handler = lambda: ccr.DIA_BUNDLE_ID
+code, detail = ccr.phase2_dia(info(claude_bin=stub_claude("exit 0")), 10)
+assert code == ccr.EXIT_PROVEN, (code, detail)
+# routed to the account's profile FIRST, then handed back — never left on the wrong Space
+assert dia.focused() == ["Claude3", "Personaly"], dia.focused()
+assert dia.active == "Personaly"
+PY
+}
+
+@test "--dia: default browser is not Dia → refuses BEFORE focusing or starting a login" {
+  { dia_prelude; cat <<'PY'; } | pyt
+dia = FakeDia(); ccr.osa = dia
+ccr.default_https_handler = lambda: "com.google.chrome"
+marker = os.path.join(ccr.TMP, "ran")
+code, detail = ccr.phase2_dia(info(claude_bin=stub_claude(f"touch {marker}")), 5)
+assert code == ccr.EXIT_BROWSER_FAILED and "not Dia" in detail, (code, detail)
+assert dia.calls == [], dia.calls                       # Dia untouched
+assert not os.path.exists(marker)                       # no login child ever started
+PY
+}
+
+@test "--dia: no click before the deadline → browser-failed, login child killed, profile restored" {
+  { dia_prelude; cat <<'PY'; } | pyt
+dia = FakeDia(active="Claude2"); ccr.osa = dia
+ccr.default_https_handler = lambda: ccr.DIA_BUNDLE_ID
+t0 = time.monotonic()
+code, detail = ccr.phase2_dia(info(claude_bin=stub_claude("sleep 30")), 0.5)
+assert code == ccr.EXIT_BROWSER_FAILED and "no Authorize click" in detail, (code, detail)
+assert time.monotonic() - t0 < 12, "the 30s child was not killed"
+assert dia.active == "Claude2", dia.active
+PY
+}
+
+@test "--dia: a profile that will not take focus is a refusal, never a login in the wrong Space" {
+  { dia_prelude; cat <<'PY'; } | pyt
+dia = FakeDia(focusable=False); ccr.osa = dia
+ccr.default_https_handler = lambda: ccr.DIA_BUNDLE_ID
+marker = os.path.join(ccr.TMP, "ran")
+code, detail = ccr.phase2_dia(info(claude_bin=stub_claude(f"touch {marker}")), 5)
+assert code == ccr.EXIT_BROWSER_FAILED and "could not focus" in detail, (code, detail)
+assert not os.path.exists(marker)
+PY
+}
+
+@test "--dia: focus that CLAIMS success but did not switch is caught by the read-back" {
+  # The dangerous failure is silent: Dia answers rc 0 while the operator's other profile stays
+  # focused, and the login then authorizes whichever account THAT profile is signed in as.
+  { dia_prelude; cat <<'PY'; } | pyt
+dia = FakeDia(active="Personaly", lies=True); ccr.osa = dia
+ccr.default_https_handler = lambda: ccr.DIA_BUNDLE_ID
+marker = os.path.join(ccr.TMP, "ran")
+code, detail = ccr.phase2_dia(info(claude_bin=stub_claude(f"touch {marker}")), 5)
+assert code == ccr.EXIT_BROWSER_FAILED and "could not focus" in detail, (code, detail)
+assert not os.path.exists(marker), "a login started in the WRONG profile"
+PY
+}
+
+@test "exit 6 names the one-click Dia route for the same account" {
+  pyt <<'PY'
+cdp = FakeCDP(states=["https://claude.ai/login?reauth=1\u0000Log in"])
+code, detail = ccr.drive(cdp, "s", FakeChild(None), 0,
+                         {"name": "next3", "email": "a@x", "mailbox": "a@x"})
+assert code == ccr.EXIT_FALLBACK_REQUIRED, code
+assert "cc-relogin next3 --dia" in detail, detail
+PY
+}
+
+@test "--dia --dry-run: plan names the Dia profile; Dia and the login binary are never touched" {
+  needy
+  run "$C" next3 --dia --dry-run --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -r '.plan[1]' | grep -q "Dia profile 'Claude3'"
+  [ ! -f "$D/osascript-calls" ]
+  [ ! -f "$D/claude-calls" ]
 }
 
 @test "await_oauth_url(): child dies without printing a url → None (no 30s stall)" {
