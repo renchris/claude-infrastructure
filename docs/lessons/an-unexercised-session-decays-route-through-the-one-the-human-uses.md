@@ -43,6 +43,15 @@ the existing effect check proves it. Full automation of that click stays the ope
 needs Dia's `--enable-applescript-javascript` launch flag or its remote-debugging port, both
 browser settings that were off.
 
+## The half-life, measured
+
+Age was the cause, not impossibility, and it has a measured floor. `next`'s dedicated Chrome,
+stale, BOUNCED; signed in fresh (~2026-09-22 20:50 CDT) it read AUTHORIZE PAGE, still did ~90 min
+later, and still did after **18 idle hours** (last use Tue 23:02, probe Wed 17:16). So a private
+copy is usable for at least a day after a human touches it — which is exactly why it needs a human
+touch on a cadence, and why the operator's own browser (`cc-relogin --dia`) stays the fallback.
+The upper bound is unmeasured; each probe visit may reset it, so measure with gaps of days.
+
 ## The generalisation
 
 Ask of any dedicated automation surface: *what keeps this fresh when nobody is looking?* If the

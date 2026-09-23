@@ -101,7 +101,10 @@ flag and its remote-debugging port are both off, and both are the operator's bro
 per account, credential-free (dummy PKCE, never clicks): `AUTHORIZE PAGE` = that login browser can
 finish a relogin with no human; `BOUNCED` = its session is missing or stale, so use `--dia` or
 re-sign that profile. A fresh sign-in measured `AUTHORIZE PAGE` and still held ~90 min later
-(2026-09-22); how long it lasts beyond that is not yet measured.
+(2026-09-22), and still read `AUTHORIZE PAGE` after **18 idle hours** (2026-09-23, last use
+Tue 23:02 → probe Wed 17:16 CDT). So a fresh sign-in makes that account unattended for at least
+most of a day; the upper bound is not yet measured. Every probe visit may itself refresh the
+session, so leave a gap of days between readings when measuring it.
 
 ## The cadence layer — built, staged, NOT running
 
