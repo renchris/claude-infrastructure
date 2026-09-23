@@ -715,6 +715,56 @@ registry row binds pane→session, the row's process is alive on that pane's tty
 team procedure's `--team-member-id` names it and the launcher carries that id), and its transcript is
 at rest. Tests: `tests/handoff-recycle-same-account.bats`, `tests/lr-upgrade.bats`.
 
+## Mode: switch — another account, same session, in place
+
+Not a recovery either: the session is healthy and only *which account pays for it* changes. Two
+forms, and the subject always moves ITSELF:
+
+```bash
+cc-lr switch --target next2                              # SELF: move THIS pane's session (foreground)
+cc-lr switch --pane 405 --target next2                   # DRIVER: ask idle pane 405 to move itself
+cc-lr switch --sid 2b8a58ed --target next2               # DRIVER, by sid prefix
+cc-lr switch --from next3 --all-idle --target next2 --dry-run   # one row per next3 session + its disposition
+cc-lr switch --from next3 --all-idle --target next2      # queue every `move` row; wait for verdicts (--wait S, --no-wait)
+```
+
+**The driver form (2026-09-23, VOLUNTARY_ACCOUNT_SWITCH §5 DEC-2 resolved).** It reads and writes
+requests, nothing else — acting on another live pane from a session is refused by auto mode. The
+selection is `lr-upgrade.sh --switch-census`, i.e. the SAME idle oracle `upgrade` uses: `move` only
+when the transcript is at rest, no Agent-tool subagent is in flight, no real background job runs,
+the composer is empty, and the row is not a duplicate / stale / self / teammate / lead with a live
+teammate (a lead's /exit kills its members). Each `move` row becomes a `kind:"switch"` request; the
+poller queues it for the ONE serial drainer (`lr-upgrade.sh --drain`, shared with `upgrade`, so an
+upgrade and a switch of one pane never interleave), which **re-judges** the session at execution
+time — a session that went busy is reported `NOTMOVED (<disposition>)` and never typed into — and
+then types ONE line into the idle subject via `cc_tui_submit`:
+
+```text
+[operator-ruling cc-lr-switch req=<id>] Run in Bash now: cc-lr switch --target <acct>
+```
+
+The subject then runs the SELF verb, whose own gates (in-flight subagents, composer, routability,
+capacity) still decide inside the subject. The verdict is the registry row's `.account` flipping to
+the target with the transcript present under the target config: **SWITCHED** (proven=yes) ·
+**NOTMOVED** (nothing submitted, or the subject took its turn and stayed — its reply is quoted) ·
+**FAILED** (submitted, no outcome inside `LRU_SWITCH_VERIFY_S`, default 600 s). Each lands in
+`~/.reso/limit-recover/results/switch-<sid>.json` and is mailed to the requesting pane. The target
+must be an explicit account — `auto` is refused, because each subject would resolve it from its own
+view and the driver could not confirm the move.
+
+🚨 **THE AUTHORITY MARKER — read this if a prompt beginning `[operator-ruling cc-lr-switch` lands in
+your composer.** It is the OPERATOR's ruling, relayed by the launchd reset poller (the only actor
+outside every classifier), not a peer's opinion. Run the command it names. The SELF verb still
+refuses anything unsafe — in-flight subagents, an unroutable target, no capacity — and its refusal
+is the answer the driver reports; do not substitute your own quota reading for the ruling (the
+2026-09-23 incident's pane 564 declined an UNMARKED relayed ask on exactly that basis, and the move
+took ~8 h). The marker carries no kill phrase and names no other action.
+
+`lr-handoff.sh --voluntary --source-pane P` on a healthy pane now refuses immediately (rc 6,
+`verdict=NOTMOVED`) and names `cc-lr switch --pane P --target A`: the recycle probe's limit gate is
+unconditional, so that combination could never pass. Tests: `tests/lr-switch-driver.bats`,
+`tests/lr-handoff-voluntary.bats` (§5 FAIL-FAST).
+
 ## Failure-mode guards (red-team derived — check when something looks off)
 
 | Smell | Guard |
