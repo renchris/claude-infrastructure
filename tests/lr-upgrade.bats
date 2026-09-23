@@ -455,3 +455,50 @@ tui_stub() { # composer contents come from $BATS_TEST_TMPDIR/composer-<pane>
   await_file "$BATS_TEST_TMPDIR/drain.log"; i=0; while ! grep -qx -- '--drain' "$BATS_TEST_TMPDIR/drain.log" && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
   grep -qx -- '--drain' "$BATS_TEST_TMPDIR/drain.log" || { cat "$PSTATE/poller.log"; false; }
 }
+
+# ── G. THE PER-SESSION TARGET PIN (2026-09-23) ────────────────────────────────────────────────────
+# A7 pins "Fable keeps Fable" as the DEFAULT. The operator ruled one live Fable session (pane 480)
+# should move to Opus 5.5, and without a per-session override the census called it `current`
+# forever. These cases pin the override and every one of its bounds.
+
+@test "G1 [RED] a pin moves a current Fable session to opus_latest; auto-enqueue then queues it" {
+  S=29292929-0000-4000-8000-000000000001
+  sess 580 "$S" "$NEW --permission-mode auto --model claude-fable-5-1 --effort xhigh"
+  census; [ "$(disp_of 580)" = current ] || { echo "$output"; false; }
+  run bash "$LRU" --pin-target "$S" opus
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  census
+  [ "$(disp_of 580)" = upgrade ] || { echo "$output"; false; }
+  printf '%s\n' "$output" | awk -F'\t' '$1==580 { exit !($5=="claude-opus-5-5" && $6=="xhigh") }' || { echo "$output"; false; }
+  run bash "$LRU" --auto-enqueue
+  [ -f "$LRU_STATE/upgrade-queue/auto-upgrade-$S.json" ] || { echo "$output"; ls -la "$LRU_STATE/upgrade-queue"; false; }
+}
+
+@test "G2 a pin can only name an SSOT target — an arbitrary id is REFUSED and leaves no pin" {
+  S=29292929-0000-4000-8000-000000000002
+  run bash "$LRU" --pin-target "$S" claude-sonnet-5
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [ ! -e "$LRU_STATE/upgrade-target/$S" ] || { echo "a refused pin was left on disk"; false; }
+  run bash "$LRU" --pin-target "not-a-sid;rm" opus
+  [ "$status" -eq 3 ] || { echo "$output"; false; }
+}
+
+@test "G3 an EXPIRED pin is ignored, and 'clear' removes a live one — both fall back to Fable-keeps-Fable" {
+  S=29292929-0000-4000-8000-000000000003
+  sess 582 "$S" "$NEW --permission-mode auto --model claude-fable-5-1 --effort xhigh"
+  run bash "$LRU" --pin-target "$S" opus; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  touch -t 202001010000 "$LRU_STATE/upgrade-target/$S"
+  census; [ "$(disp_of 582)" = current ] || { echo "a stale pin still steered: $output"; false; }
+  run bash "$LRU" --pin-target "$S" opus
+  run bash "$LRU" --pin-target "$S" clear; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  census; [ "$(disp_of 582)" = current ] || { echo "$output"; false; }
+}
+
+@test "G4 a pin is per SID: an unpinned Fable session beside a pinned one keeps Fable" {
+  sess 583 29292929-0000-4000-8000-000000000004 "$NEW --permission-mode auto --model claude-fable-5-1 --effort xhigh"
+  sess 584 29292929-0000-4000-8000-000000000005 "$NEW --permission-mode auto --model claude-fable-5-1 --effort xhigh"
+  run bash "$LRU" --pin-target 29292929-0000-4000-8000-000000000004 opus
+  census
+  [ "$(disp_of 583)" = upgrade ] || { echo "$output"; false; }
+  [ "$(disp_of 584)" = current ] || { echo "$output"; false; }
+}
