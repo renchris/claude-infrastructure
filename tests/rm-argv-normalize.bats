@@ -327,3 +327,43 @@ not_denied_count() {
   # The noisy direction: the mutant convicts a build-artifact delete.
   [ "$(decide_with "$mut/validate-bash.sh" 'rm -rf dist; echo "$HOME"')" = "DENY" ]
 }
+
+# ── A NEWLINE is a separator too ────────────────────────────────────────────────────────────────
+# shlex treats a newline as ordinary whitespace, so every word on the lines after an rm used to
+# read as ITS target. Measured 2026-09-10..22 in validate-bash-decisions.jsonl: 42 manual asks on
+# the "targets" EOF · echo · } · done · if. git_add_force_scan got the same fix on 2026-09-17
+# (docs/lessons/a-clause-splitter-is-a-claim-about-every-separator-the-shell-has.md); this is the
+# rm half, which kept the old lexer.
+
+@test "a newline ENDS the rm — the next line's first word is not a target" {
+  [ "$(decision $'{\n  rm -rf dist\n}')" = "PASS" ]
+  [ "$(decision $'for d in a b; do\n  rm -rf dist\ndone')" = "PASS" ]
+  [ "$(decision $'rm -rf dist\necho hi')" = "PASS" ]
+  [ "$(decision $'bash <<\'EOF\'\nrm -rf dist\nEOF')" = "PASS" ]
+  [ "$(decision $'rm -rf dist\nif [ -d x ]; then echo y; fi')" = "PASS" ]
+}
+
+@test "a newline does not hide or downgrade a catastrophic rm on ANY line" {
+  [ "$(decision $'rm -rf ~\necho hi')" = "DENY" ]
+  [ "$(decision $'echo ok\nrm -rf ~')" = "DENY" ]
+  [ "$(decision $'bash -c \'true\nrm -rf /\'')" = "DENY" ]
+  # A backslash-newline is a CONTINUATION: the target on the next line is still this rm's.
+  [ "$(decision $'rm -rf dist \\\n  ~')" = "DENY" ]
+  [ "$(decision $'rm -rf dist \\\n  node_modules')" = "PASS" ]
+  # A newline INSIDE quotes is text, not a separator — a message describing the rule stays writable.
+  [ "$(decision $'git commit -m "a\nrm -rf ~"')" != "DENY" ]
+}
+
+@test "RED CONTROL: without the line split the newline cases really did ask" {
+  local mut="$BATS_TEST_TMPDIR/mutant-nl"
+  mkdir -p "$mut/lib"
+  cp "$REPO/hooks/validate-bash.sh" "$mut/validate-bash.sh"
+  # Revert ONLY rm_argv_scan's split: the whole source becomes one line again. git_add_force_scan's
+  # own copy has a different body line (`for _line in unquoted_lines(src):` appears in both, so the
+  # sed is scoped to the first occurrence, which is rm_argv_scan's).
+  awk '!done && /^    for _line in unquoted_lines\(src\):$/ { print "    for _line in [src]:"; done=1; next } { print }' \
+      "$REPO/hooks/lib/is-true-flag.sh" > "$mut/lib/is-true-flag.sh"
+  ! cmp -s "$REPO/hooks/lib/is-true-flag.sh" "$mut/lib/is-true-flag.sh" || false
+  [ "$(decide_with "$mut/validate-bash.sh" $'{\n  rm -rf dist\n}')" = "ASK" ]
+  [ "$(decide_with "$mut/validate-bash.sh" $'rm -rf dist\necho hi')" = "ASK" ]
+}

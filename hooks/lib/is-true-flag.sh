@@ -337,10 +337,51 @@ def strip_env_prefix(argv):
     return argv[i:]
 
 
+def unquoted_lines(src):
+    """Split on NEWLINES outside quotes — the same splitter git_add_force_scan uses, for the same reason.
+
+    shlex treats a newline as ordinary whitespace, so a multi-line command read as ONE clause and
+    every word on the lines after an rm became its TARGETS: `for d in a b; do<nl>rm -rf "$d"<nl>done`
+    asked about a target named `done`, and `bash <<'EOF'<nl>rm -rf "$T"<nl>EOF` about one named
+    `EOF`. Measured in validate-bash-decisions.jsonl 2026-09-10..22: 42 asks on the targets EOF ·
+    echo · } · done · if, each one a manual prompt stalling a session over a word that is not a path.
+    A newline inside quotes does not split (it would desync the rest of the scan), and a
+    backslash-newline is a continuation that stays joined; scan_line() then removes it.
+    """
+    out, cur, q, esc = [], [], None, False
+    for ch in src:
+        if esc:
+            cur.append(ch); esc = False; continue
+        if ch == "\\" and q != "'":
+            cur.append(ch); esc = True; continue
+        if q:
+            cur.append(ch)
+            if ch == q:
+                q = None
+            continue
+        if ch in ('"', "'"):
+            q = ch; cur.append(ch); continue
+        if ch == "\n":
+            out.append("".join(cur)); cur = []; continue
+        cur.append(ch)
+    out.append("".join(cur))
+    return [ln for ln in out if ln.strip()]
+
+
 def scan(src, depth=0):
     out = []
     if depth > 3:                          # bounded: `bash -c "bash -c …"` cannot recurse forever
         return out
+    for _line in unquoted_lines(src):
+        out.extend(scan_line(_line, depth))
+    return out
+
+
+def scan_line(src, depth=0):
+    out = []
+    # A backslash-newline is a line continuation, which the shell deletes before word splitting;
+    # left in, posix shlex reads it as an escaped literal newline and reports a target named `?`.
+    src = src.replace("\\\n", "")
     # `shlex.split()` does NOT treat shell control operators as tokens — it is a WORD splitter, so
     # an operator is only ever seen when the writer happened to surround it with whitespace. `&&`
     # and `|` are conventionally spaced and therefore worked; `;` is conventionally GLUED to the
