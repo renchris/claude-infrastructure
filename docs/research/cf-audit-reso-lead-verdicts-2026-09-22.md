@@ -174,3 +174,53 @@ is off in every production tenant — a claim with a shelf life, not a measureme
 Leads **5, 14 and 15 arm the moment it flips on**, and lead **11 closes twice over** if it is off
 everywhere. It is one read per tenant DB against a column that already exists. Close these before
 the flip, not after.
+
+### MEASURED 2026-09-22 (W6 lead): the flag is ON in one live tenant — leads 5, 14, 15 are live, not latent
+
+Read-only, one `SELECT` per active tenant DB, token resolved in-process through
+`lib/provisioning/group-token-ssm.ts` `resolveGroupToken` (never hand-read, never persisted), URL from
+`resolveTenantDbTarget`, flag read the way `getScopingFlag` (`lib/auth/venue-authz.ts:100-112`)
+reads it — an absent row is `false`:
+
+| tenant | status | `tenant_config` rows | `enable_venue_scoping` |
+|---|---|---|---|
+| harbour | active | 1 | 0 |
+| harbourtwo | canary | 0 | (absent ⇒ off) |
+| **key** | **active** | **1** | **1 — ON** |
+| evolve | active | 1 | 0 |
+| envy · gm · apt101 · muin | active | 0 | (absent ⇒ off) |
+| studio60 | active | 1 | 0 |
+| insomniacdenver | active | 1 | 0 |
+
+**Consequences.** (1) `venue-authz.ts:56-62`'s "OFF in every production tenant, flipped at most once
+per rollout and never during live traffic" is false on both counts: it is on in `key` (Heist + The
+Key, multi-venue), and it is a tenant-admin toggle (`VenueSettingsForm.tsx:319`), not a rollout
+switch. (2) Leads **5, 14 and 15 are exploitable today in `key`** — lead 15 is the serious one (a
+venue-scoped manager erases every venue's reservations for a guest via `deleteGuestProfile`). Their
+fixes are W6 units W6-sync (14, 15) and W4a-5 (5); W6-sync was told to land 15 first. (3) **Lead 11
+stays REJECTED, on one leg instead of two.** With the flag on, pull still keys guest-profile
+visibility on the tenant-global `user.role` (`tableServiceActions.ts:272`, `authContext.ts:165`)
+while push resolves the venue role — so the "push and pull agree exactly" leg is gone for `key`. The
+surviving leg is decisive by itself: `guest_profile` is a ratified shared entity
+(`docs/auth-tenancy/README.md:531-535`), venue-FK'd rows are filtered by `accessibleVenueIDs` in
+pull (`pullActions.ts:607-622`), and reso's DO-NOT-FIX list names this exact read ("share-graph
+venue-unscoped reads — intentional, Decision 4"). Residual, stated rather than dropped: a user whose
+global role is lower than one of their venue roles is *under*-served guest profiles in pull
+(availability, not confidentiality).
+
+### MEASURED 2026-09-22 (W6 lead): the deployed AWS key is account ADMIN — lead 7's impact half is the worst case
+
+Read-only (`aws ssm describe-parameters`, `get-parameter` on the key **id** only — the secret
+parameter was never read — then `aws iam get-access-key-last-used` / `list-*-policies`): the
+`AWS_ACCESS_KEY_ID` in SSM `/amplify/djnbdqpvc08g4/main/` belongs to IAM user **`guestlistAdmin`**,
+whose only policy is the AWS-managed **`AdministratorAccess`** (no inline policies, no groups). It is
+also the identity the operator's local CLI uses.
+
+So lead 7 is **CONFIRMED high on both halves**: a cross-tenant `invokeLambdaFunction` runs with
+account-admin credentials, and beyond lead 7, any server-side disclosure of the app's environment
+is a full AWS-account compromise. What the serving app actually calls (source census at reso
+`190a75014`): `lambda:InvokeFunction` on `RegisterProcessor` (`lambdaActions.ts:202`) and DynamoDB
+`GetItem`/`PutItem`/`DeleteItem` on `reso-warm-cache` (`lib/cache/dynamodb-store.ts:29`). Route53 use
+(`scripts/lib/dns-automation.ts`) is provisioning-time, not serving. Re-scoping to a least-privilege
+principal is a live-credential write and is filed to the operator; W4a-3's source fix for lead 7
+lands regardless.
