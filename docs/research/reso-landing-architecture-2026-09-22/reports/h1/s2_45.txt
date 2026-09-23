@@ -1,0 +1,45 @@
+C0 today                         N= 5 Tc=45 pfl=0.10 lands/h=  5.8 | CODE p50=  713 p90= 1894 p95= 2437 | NONCODE p50=  14 p90=  73 | rounds=2.21 P1loss=0.44 slot=0.22 exits/land=0.26 
+C0 today                         N=10 Tc=45 pfl=0.10 lands/h=  7.1 | CODE p50= 3268 p90=14153 p95=19645 | NONCODE p50=  14 p90=  71 | rounds=7.30 P1loss=0.80 slot=0.87 exits/land=1.14 
+C0 today                         N=15 Tc=45 pfl=0.10 lands/h=  2.9 | CODE p50=27296 p90=89272 p95=114602 | NONCODE p50=  14 p90=  71 | rounds=20.94 P1loss=0.93 slot=0.99 exits/land=3.44 
+C0 today                         N=20 Tc=45 pfl=0.10 lands/h=  2.0 | CODE p50=50398 p90=155912 p95=215650 | NONCODE p50=  14 p90=  71 | rounds=25.92 P1loss=0.94 slot=1.00 exits/land=4.96 
+C0 today                         N=25 Tc=45 pfl=0.10 lands/h=  1.6 | CODE p50=88628 p90=263781 p95=327903 | NONCODE p50=  14 p90=  71 | rounds=33.07 P1loss=0.95 slot=1.00 exits/land=6.30 
+C1 token-honoured                N= 5 Tc=45 pfl=0.10 lands/h=  6.4 | CODE p50=  262 p90=  864 p95= 1068 | NONCODE p50=  14 p90=  71 | rounds=1.58 P1loss=0.29 slot=0.17 exits/land=0.11 
+C1 token-honoured                N=10 Tc=45 pfl=0.10 lands/h=  9.5 | CODE p50=  764 p90= 7311 p95=12449 | NONCODE p50=  14 p90=  71 | rounds=4.27 P1loss=0.63 slot=0.67 exits/land=0.50 
+C1 token-honoured                N=15 Tc=45 pfl=0.10 lands/h=  3.0 | CODE p50=26647 p90=86578 p95=107761 | NONCODE p50=  14 p90=  71 | rounds=19.80 P1loss=0.93 slot=0.99 exits/land=2.88 
+C1 token-honoured                N=20 Tc=45 pfl=0.10 lands/h=  2.1 | CODE p50=47904 p90=161225 p95=211733 | NONCODE p50=  14 p90=  71 | rounds=26.19 P1loss=0.95 slot=1.00 exits/land=4.29 
+C1 token-honoured                N=25 Tc=45 pfl=0.10 lands/h=  1.7 | CODE p50=75400 p90=245329 p95=310181 | NONCODE p50=  14 p90=  71 | rounds=30.50 P1loss=0.94 slot=1.00 exits/land=5.43 
+C2 +reflock-race,rmax10          N= 5 Tc=45 pfl=0.10 lands/h=  6.3 | CODE p50=  266 p90=  834 p95= 1065 | NONCODE p50=  14 p90=  71 | rounds=1.61 P1loss=0.30 slot=0.16 exits/land=0.07 
+C2 +reflock-race,rmax10          N=10 Tc=45 pfl=0.10 lands/h=  9.0 | CODE p50= 1012 p90= 9677 p95=15601 | NONCODE p50=  14 p90=  73 | rounds=4.95 P1loss=0.67 slot=0.74 exits/land=0.25 
+C2 +reflock-race,rmax10          N=15 Tc=45 pfl=0.10 lands/h=  2.9 | CODE p50=29937 p90=84319 p95=120596 | NONCODE p50=  14 p90=  71 | rounds=20.93 P1loss=0.92 slot=0.99 exits/land=1.26 
+C2 +reflock-race,rmax10          N=20 Tc=45 pfl=0.10 lands/h=  2.0 | CODE p50=52572 p90=174402 p95=217395 | NONCODE p50=  14 p90=  71 | rounds=27.49 P1loss=0.93 slot=1.00 exits/land=1.77 
+C2 +reflock-race,rmax10          N=25 Tc=45 pfl=0.10 lands/h=  1.7 | CODE p50=78383 p90=259606 p95=328575 | NONCODE p50=  14 p90=  71 | rounds=31.62 P1loss=0.96 slot=1.00 exits/land=2.16 
+C3 +admit-then-fetch             N= 5 Tc=45 pfl=0.10 lands/h=  6.2 | CODE p50=  273 p90=  896 p95= 1199 | NONCODE p50=  14 p90=  71 | rounds=1.57 P1loss=0.29 slot=0.24 exits/land=0.07 
+C3 +admit-then-fetch             N=10 Tc=45 pfl=0.10 lands/h= 11.9 | CODE p50=  595 p90= 2111 p95= 2751 | NONCODE p50=  14 p90=  75 | rounds=2.31 P1loss=0.50 slot=0.64 exits/land=0.11 
+C3 +admit-then-fetch             N=15 Tc=45 pfl=0.10 lands/h= 14.1 | CODE p50= 1928 p90= 5981 p95= 7827 | NONCODE p50=  14 p90=  75 | rounds=2.86 P1loss=0.60 slot=0.96 exits/land=0.14 
+C3 +admit-then-fetch             N=20 Tc=45 pfl=0.10 lands/h= 14.5 | CODE p50= 4292 p90=11515 p95=14797 | NONCODE p50=  14 p90=  75 | rounds=2.95 P1loss=0.62 slot=1.00 exits/land=0.14 
+C3 +admit-then-fetch             N=25 Tc=45 pfl=0.10 lands/h= 14.4 | CODE p50= 6431 p90=17784 p95=22771 | NONCODE p50=  14 p90=  75 | rounds=2.92 P1loss=0.61 slot=1.00 exits/land=0.14 
+C4 +carry(q.42)                  N= 5 Tc=45 pfl=0.10 lands/h=  6.4 | CODE p50=  242 p90=  648 p95=  857 | NONCODE p50=  14 p90=  71 | rounds=1.45 P1loss=0.27 slot=0.18 exits/land=0.06 
+C4 +carry(q.42)                  N=10 Tc=45 pfl=0.10 lands/h= 12.4 | CODE p50=  298 p90=  906 p95= 1268 | NONCODE p50=  14 p90=  75 | rounds=1.83 P1loss=0.53 slot=0.40 exits/land=0.07 
+C4 +carry(q.42)                  N=15 Tc=45 pfl=0.10 lands/h= 18.1 | CODE p50=  423 p90= 1324 p95= 1771 | NONCODE p50=  14 p90=  78 | rounds=2.07 P1loss=0.68 slot=0.61 exits/land=0.06 
+C4 +carry(q.42)                  N=20 Tc=45 pfl=0.10 lands/h= 22.8 | CODE p50=  760 p90= 2312 p95= 3030 | NONCODE p50=  14 p90=  85 | rounds=2.31 P1loss=0.79 slot=0.83 exits/land=0.07 
+C4 +carry(q.42)                  N=25 Tc=45 pfl=0.10 lands/h= 25.5 | CODE p50= 1510 p90= 4073 p95= 5230 | NONCODE p50=  14 p90=  88 | rounds=2.43 P1loss=0.83 slot=0.96 exits/land=0.08 
+C4w +carry(q.72)                 N= 5 Tc=45 pfl=0.10 lands/h=  6.6 | CODE p50=  246 p90=  728 p95=  952 | NONCODE p50=  14 p90=  71 | rounds=1.50 P1loss=0.29 slot=0.20 exits/land=0.06 
+C4w +carry(q.72)                 N=10 Tc=45 pfl=0.10 lands/h= 12.5 | CODE p50=  330 p90= 1059 p95= 1430 | NONCODE p50=  14 p90=  75 | rounds=1.88 P1loss=0.53 slot=0.44 exits/land=0.07 
+C4w +carry(q.72)                 N=15 Tc=45 pfl=0.10 lands/h= 17.6 | CODE p50=  547 p90= 1984 p95= 2570 | NONCODE p50=  14 p90=  76 | rounds=2.26 P1loss=0.68 slot=0.70 exits/land=0.08 
+C4w +carry(q.72)                 N=20 Tc=45 pfl=0.10 lands/h= 21.3 | CODE p50= 1301 p90= 3797 p95= 5024 | NONCODE p50=  14 p90=  85 | rounds=2.52 P1loss=0.77 slot=0.93 exits/land=0.09 
+C4w +carry(q.72)                 N=25 Tc=45 pfl=0.10 lands/h= 21.8 | CODE p50= 2549 p90= 7241 p95= 9143 | NONCODE p50=  14 p90=  83 | rounds=2.60 P1loss=0.78 slot=0.99 exits/land=0.09 
+C6 +tsc-out,slot-thru-push q.42  N= 5 Tc=45 pfl=0.10 lands/h=  6.4 | CODE p50=  230 p90=  552 p95=  728 | NONCODE p50=  14 p90=  75 | rounds=1.29 P1loss=0.15 slot=0.14 exits/land=0.05 
+C6 +tsc-out,slot-thru-push q.42  N=10 Tc=45 pfl=0.10 lands/h= 12.7 | CODE p50=  261 p90=  689 p95=  906 | NONCODE p50=  14 p90=  75 | rounds=1.50 P1loss=0.32 slot=0.29 exits/land=0.06 
+C6 +tsc-out,slot-thru-push q.42  N=15 Tc=45 pfl=0.10 lands/h= 18.5 | CODE p50=  328 p90=  889 p95= 1151 | NONCODE p50=  14 p90=  79 | rounds=1.74 P1loss=0.50 slot=0.46 exits/land=0.06 
+C6 +tsc-out,slot-thru-push q.42  N=20 Tc=45 pfl=0.10 lands/h= 24.5 | CODE p50=  454 p90= 1354 p95= 1807 | NONCODE p50=  14 p90=  84 | rounds=2.00 P1loss=0.64 slot=0.67 exits/land=0.06 
+C6 +tsc-out,slot-thru-push q.42  N=25 Tc=45 pfl=0.10 lands/h= 29.0 | CODE p50=  790 p90= 2192 p95= 2857 | NONCODE p50=  14 p90=  91 | rounds=2.18 P1loss=0.74 slot=0.86 exits/land=0.07 
+C6w same q.72                    N= 5 Tc=45 pfl=0.10 lands/h=  6.4 | CODE p50=  236 p90=  591 p95=  751 | NONCODE p50=  14 p90=  73 | rounds=1.29 P1loss=0.14 slot=0.14 exits/land=0.06 
+C6w same q.72                    N=10 Tc=45 pfl=0.10 lands/h= 12.5 | CODE p50=  269 p90=  742 p95=  960 | NONCODE p50=  14 p90=  75 | rounds=1.51 P1loss=0.33 slot=0.31 exits/land=0.06 
+C6w same q.72                    N=15 Tc=45 pfl=0.10 lands/h= 18.4 | CODE p50=  358 p90= 1057 p95= 1425 | NONCODE p50=  14 p90=  78 | rounds=1.80 P1loss=0.51 slot=0.52 exits/land=0.07 
+C6w same q.72                    N=20 Tc=45 pfl=0.10 lands/h= 23.4 | CODE p50=  619 p90= 1862 p95= 2489 | NONCODE p50=  14 p90=  83 | rounds=2.05 P1loss=0.63 slot=0.76 exits/land=0.07 
+C6w same q.72                    N=25 Tc=45 pfl=0.10 lands/h= 26.0 | CODE p50= 1464 p90= 3889 p95= 4941 | NONCODE p50=  14 p90=  89 | rounds=2.25 P1loss=0.71 slot=0.94 exits/land=0.07 
+Q queue(inv6)                    N= 5 Tc=45 pfl=0.10 lands/h=  6.2 | CODE p50=  235 p90=  563 p95=  769 | NONCODE p50=  19 p90= 155 | rounds=0.00 P1loss=0.00 slot=0.17 exits/land=0.00 batch mean=1.01 p90=1
+Q queue(inv6)                    N=10 Tc=45 pfl=0.10 lands/h= 12.7 | CODE p50=  257 p90=  548 p95=  752 | NONCODE p50=  35 p90= 265 | rounds=0.00 P1loss=0.00 slot=0.34 exits/land=0.00 batch mean=1.11 p90=1
+Q queue(inv6)                    N=15 Tc=45 pfl=0.10 lands/h= 18.6 | CODE p50=  278 p90=  615 p95=  817 | NONCODE p50=  63 p90= 365 | rounds=0.00 P1loss=0.00 slot=0.47 exits/land=0.00 batch mean=1.25 p90=2
+Q queue(inv6)                    N=20 Tc=45 pfl=0.10 lands/h= 24.5 | CODE p50=  296 p90=  617 p95=  827 | NONCODE p50=  92 p90= 403 | rounds=0.00 P1loss=0.00 slot=0.56 exits/land=0.00 batch mean=1.41 p90=3
+Q queue(inv6)                    N=25 Tc=45 pfl=0.10 lands/h= 30.4 | CODE p50=  312 p90=  646 p95=  880 | NONCODE p50= 164 p90= 448 | rounds=0.00 P1loss=0.00 slot=0.65 exits/land=0.00 batch mean=1.66 p90=3

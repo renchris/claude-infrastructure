@@ -1,0 +1,6 @@
+C7 keep-slot q.42                N=15 Tc=30 pfl=0.10 lands/h= 25.0 | CODE p50=  448 p90= 1059 p95= 1329 | NONCODE p50=  14 p90= 100 | mean code=  559 nc=  42 blend= 247 | rounds=1.72 P1loss=0.49 slot=0.65 exits/land=0.06 
+C7 keep-slot q.42                N=20 Tc=30 pfl=0.10 lands/h= 31.4 | CODE p50=  708 p90= 1539 p95= 1976 | NONCODE p50=  15 p90= 103 | mean code=  839 nc=  42 blend= 366 | rounds=1.79 P1loss=0.54 slot=0.85 exits/land=0.06 
+C7w keep-slot q.72               N=15 Tc=30 pfl=0.10 lands/h= 24.8 | CODE p50=  501 p90= 1148 p95= 1419 | NONCODE p50=  14 p90=  92 | mean code=  609 nc=  40 blend= 267 | rounds=1.73 P1loss=0.51 slot=0.69 exits/land=0.06 
+C7w keep-slot q.72               N=20 Tc=30 pfl=0.10 lands/h= 30.4 | CODE p50=  885 p90= 1910 p95= 2414 | NONCODE p50=  14 p90= 107 | mean code= 1034 nc=  43 blend= 446 | rounds=1.81 P1loss=0.55 slot=0.90 exits/land=0.06 
+Q queue(inv6)                    N=15 Tc=30 pfl=0.10 lands/h= 24.5 | CODE p50=  307 p90=  626 p95=  871 | NONCODE p50= 159 p90= 458 | mean code=  367 nc= 206 blend= 270 | rounds=0.00 P1loss=0.00 slot=0.53 exits/land=0.00 batch mean=1.63 p90=3
+Q queue(inv6)                    N=20 Tc=30 pfl=0.10 lands/h= 31.8 | CODE p50=  328 p90=  706 p95=  917 | NONCODE p50= 225 p90= 512 | mean code=  392 nc= 256 blend= 311 | rounds=0.00 P1loss=0.00 slot=0.62 exits/land=0.00 batch mean=2.02 p90=4
