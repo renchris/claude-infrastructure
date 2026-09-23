@@ -158,3 +158,26 @@ not by this condition, whose members are all closed.
      genuinely-broken tree that also retried, so the data can convict and cannot acquit. Turning a
      starved `red` into an eligible `cut` therefore loosens a fail-closed deploy gate on a proxy
      whose other arm is unmeasured, and that is the operator's call, not an implementation detail.
+- **2026-09-23 — the false-red arm (row `37f96d239398`) is REFUTED, both arms now measured; no gate
+  change.** The proposed `red → cut` under `retries >= 5` would have laundered genuine trunk defects.
+  Measured over `~/.claude/autonomy/postland/stamps` from 2026-09-09T12Z (after C29 cross-tree
+  corroboration `d4b07a9ea`, the floor differential `956901be1` and the plan-coverage non-verdict
+  `abee0661d` landed): **26 suites convicted; 16 of them have a fix commit to that very test file
+  landing right after their last red, after which the red stops** — among them `e1ba61b3f` +
+  `3269ddc7c` (install tests seeding the renamed SSOT; red at retries 18), `50e6bb075`
+  (cc-read-twitter's missing import; retries 8), `93f58587a` (jev-predict-land; retries 20),
+  `39d3b336c` (pipefail-sigpipe-lint, 24 reds; retries ≥ 10), `539f35276` (deploy-link-parity),
+  `9a130dc0f` (headless-address — *"trunk was red, not this diff"*). That is the arm the filing said
+  was unmeasurable: genuinely broken trees retry ≥ 5 routinely (every one above did).
+  **Why `retries` can never separate:** it increments once per ladder re-run of every file the
+  corpus flagged (`scripts/postland-verify.sh:1671,1895`), including files later cleared as flakes or
+  pruned by C29, so it scales with how many files said `not ok`, not with starvation — single-file
+  reds sit at 4–22, and 4 of the 6 greens since 09-18 carry 6–12. **Greens resumed 2026-09-18** once
+  the genuine reds were fixed, with `run_s` unchanged (~11,200 s), i.e. under the same load.
+  The separator the row asked for — isolated re-run of the convicted file, cross-window corroboration,
+  a differential against the last-green tree, and truncation-as-non-verdict — is the ladder + C29 +
+  floor + plan-coverage path already on trunk. The 09-04 → 09-09 window predates it, which is why
+  that window's reds looked like contention; the load-sensitive tests in it were themselves fixed
+  (`1ff5c3241`, `e40e8ffcf`, `9221fe208`). A red now denying T2 a commit is the gate working.
+  Re-derive: the per-suite table is `python3` over the stamps (`verdict=="red"`, `ts>=2026-09-09T12`)
+  joined to `git log --since=<last red> -- <suite>`.
