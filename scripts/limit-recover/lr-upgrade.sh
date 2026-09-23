@@ -28,8 +28,12 @@
 #   lr-upgrade.sh --pin-target <sid> <opus|fable|id|clear>  per-session target override (24h TTL)
 #
 # Census columns: pane sid binary model target effort perm cfg cwd pid disposition
-# Dispositions: upgrade · current · self · teammate · duplicate · lead-with-teammate · no-transcript
-#               · mid-turn · background-job · composer-occupied · composer-unknown · stale-row
+# Dispositions: upgrade · upgrade-teammate · upgrade-lead · current · self · duplicate · no-transcript
+#               · mid-turn · subagents-in-flight · background-job · composer-occupied
+#               · composer-unknown · stale-row
+#               team procedure holds: lead-awaits-teammates · lead-no-team-file · teammate-no-team
+#               · teammate-shutdown-pending · teammate-unidentified
+#               (LRU_TEAM_PROC=off: the old blanket `teammate` / `lead-with-teammate` exclusions)
 #
 # bash 3.2 (launchd runs /bin/bash): no associative arrays, no mapfile, no ${x,,}.
 set -uo pipefail
@@ -203,6 +207,141 @@ lru_has_live_teammate() { # $1=snapshot $2=lead sid → 0 when a live CLAUDE pro
   printf '%s\n' "$1" | LRU_PAT="--parent-session-id $2" awk "$LRU_PROC_LINE"' && $8 ~ /(^|\/)claude(\.exe)?$/ && index($0, ENVIRON["LRU_PAT"]) { f = 1 }
     END { exit !f }'
 }
+lru_teammate_argvs() { # $1=snapshot $2=lead sid → "<pid> <argv>" of every live claude naming it as parent
+  printf '%s\n' "$1" | LRU_PAT="--parent-session-id $2" awk "$LRU_PROC_LINE"' && $8 ~ /(^|\/)claude(\.exe)?$/ && index($0, ENVIRON["LRU_PAT"]) {
+      p = $1; $1=$2=$3=$4=$5=$6=$7=""; sub(/^ +/, ""); print p " " $0 }'
+}
+lru_sid_of_pid() { # $1=pid → the session id its registry row records, or nothing
+  local f
+  for f in "$LRU_REG_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    [ "$(jq -r '.pid // empty' "$f" 2>/dev/null)" = "$1" ] && { jq -r '.session_id // empty' "$f" 2>/dev/null; return 0; }
+  done
+  return 0
+}
+
+# ── THE TEAM PROCEDURE (2026-09-23; research: docs/research/team-inplace-upgrade-2026-09-23/) ─────
+# A lead and its pane-backed teammates USED to be excluded outright (`teammate`, `lead-with-teammate`)
+# because a naive relaunch breaks the team three ways, each measured on the 2.1.280 binary and then
+# on a throwaway team by effect:
+#   1. a teammate relaunched WITHOUT its --agent-id/--agent-name/--team-name/... flags and
+#      CLAUDECODE=1 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 comes back as a plain session, outside
+#      the team. WITH them, `--resume <its sid>` rejoins: membership, mailbox and pane are all keyed
+#      on its NAME (probe: the relaunched mate answered its lead's SendMessage on the new binary);
+#   2. every GRACEFUL lead shutdown — /exit (any option of the background-work modal), SIGTERM,
+#      SIGINT, SIGHUP — runs cleanupSessionTeams, which kills every pane member listed in
+#      teams/<team>/config.json and then rm -rf's the team dir (inboxes included). It reads the FILE,
+#      so a team dir moved aside before the exit makes it a no-op (probe: the mate survived);
+#   3. a resumed lead's startup rewrites config.json LEADER-ONLY (initializeSessionTeam, an
+#      unconditional write), after which SendMessage to a prior member fails — unless the process
+#      starts with CLAUDE_INTERNAL_ASSISTANT_TEAM_NAME=<team>, which makes it ADOPT the existing
+#      file (probe: createdAt and both members unchanged, SendMessage delivered).
+# So: TEAMMATES FIRST (the lead waits as `lead-awaits-teammates` until every live teammate is
+# current), then the LEAD with its team dir held aside across the exit — the launcher itself puts it
+# back in the instant before the new process starts, so there is no window where a new lead can see
+# an absent file — and the adopt variable set.
+# KNOWN VENDOR LIMIT, NOT CURED HERE: a resumed lead's in-memory roster holds only itself (the
+# vendor restores in-process teammates only), and its inbox poller runs only when that roster holds
+# someone else — so replies from pane members land UNREAD in teams/<team>/inboxes/team-lead.json.
+# Sending still works. The relaunch prompt tells the lead exactly that and how to read them.
+LRU_TEAM_FLAGS='--agent-id --agent-name --team-name --agent-color --parent-session-id --agent-type'
+LRU_RE_TEAMTOK='[A-Za-z0-9_@.:+-]+'
+lru_team_args() { # $1=teammate argv → its identity flags, in canonical order; rc 1 when incomplete
+  local f v out=""
+  for f in $LRU_TEAM_FLAGS; do
+    v="$(lru_flag "$1" "$f" "$LRU_RE_TEAMTOK")"
+    case "$f" in --agent-color|--agent-type) [ -n "$v" ] || continue ;; esac
+    [ -n "$v" ] || return 1
+    out="$out $f $v"
+  done
+  case " $1 " in *" --plan-mode-required "*) out="$out --plan-mode-required" ;; esac
+  printf '%s' "${out# }"
+}
+lru_team_dir() { # $1=cfg $2=team → path (no existence claim)
+  printf '%s/teams/%s' "${1%/}" "$2"
+}
+# Why a teammate row is NOT fit to relaunch now — empty when it is.
+lru_teammate_block() { # $1=argv $2=cfg → disposition or ""
+  local team name td inbox n
+  lru_team_args "$1" >/dev/null || { printf 'teammate-unidentified'; return 0; }
+  team="$(lru_flag "$1" --team-name "$LRU_RE_TEAMTOK")"; name="$(lru_flag "$1" --agent-name "$LRU_RE_TEAMTOK")"
+  td="$(lru_team_dir "$2" "$team")"
+  # The member row must be in the file: a relaunched teammate re-reads it to find itself, and the
+  # lead's SendMessage resolves the name there. A team whose file is gone has no one to rejoin.
+  if [ ! -f "$td/config.json" ] || ! LRU_N="$name" jq -e '[.members[]? | select(.name == env.LRU_N)] | length > 0' "$td/config.json" >/dev/null 2>&1; then
+    printf 'teammate-no-team'; return 0
+  fi
+  # An UNREAD shutdown_request is acted on the moment the relaunched process polls its inbox: the
+  # upgrade would be a slow way to end the member. Let its lead's decision land first.
+  inbox="$td/inboxes/$name.json"
+  if [ -f "$inbox" ]; then
+    n="$(jq '[.[]? | select((.read // false) | not) | select(((.text // "") | tostring | test("\"type\" *: *\"shutdown_request\"")) or (.type == "shutdown_request"))] | length' "$inbox" 2>/dev/null || echo 0)"
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+    [ "$n" -gt 0 ] && { printf 'teammate-shutdown-pending'; return 0; }
+  fi
+  return 0
+}
+# Why a lead with live teammates is NOT fit to relaunch now — empty when it is.
+lru_lead_block() { # $1=snapshot $2=lead sid $3=cfg $4=target binary → disposition or ""
+  local l p a b m t
+  while IFS= read -r l; do
+    [ -n "$l" ] || continue
+    p="${l%% *}"; a="${l#* }"
+    # The member's OWN target, per-session pin included — the same resolution its census row gets.
+    b="${a%% *}"; m="$(lru_flag "$a" --model "$LRU_RE_MODEL")"; t="$(lru_target_model "$m" "$(lru_sid_of_pid "$p")" || true)"
+    if [ "$b" != "$4" ] || [ -z "$t" ] || [ "$m" != "$t" ]; then printf 'lead-awaits-teammates'; return 0; fi
+  done <<EOF
+$(lru_teammate_argvs "$1" "$2")
+EOF
+  # The file the procedure holds aside and the relaunched lead adopts. Live teammates with no file
+  # is not a state the procedure can preserve anything in, so it does not guess.
+  [ -f "$(lru_team_dir "$3" "session-${2:0:8}")/config.json" ] || { printf 'lead-no-team-file'; return 0; }
+  return 0
+}
+# In-flight Agent-tool subagents, from handoff-fire's OWN predicate (never a copy — Q4): a session
+# the recycle would refuse must read so in the census rather than `upgrade`. Unreadable = 0 with a
+# loud word: the recycle's gate still refuses at the moment of truth.
+lru_live_subagents() { # $1=sid $2=pid → count
+  local out n
+  out="$(bash "${LRU_SA_PROBE:-$LRU_HF_BIN}" --probe-live-subagents --source-session "$1" --source-pid "$2" 2>/dev/null || true)"
+  n="$(printf '%s\n' "$out" | sed -n 's/^live_subagents: *\([0-9][0-9]*\)$/\1/p' | tail -1)"
+  [ -n "$n" ] || { lru_say "subagent probe unreadable for ${1:0:8} - the recycle's own gate still decides"; n=0; }
+  printf '%s' "$n"
+}
+# THE HOLD. The team dir is renamed to a sibling the lead's cleanup does not know (cleanupSessionTeams
+# reads teams/<team>/config.json and rm -rf's teams/<team>), and put back by lru_team_restore — from
+# the launcher in the pane, after the old process has exited and before the new one starts.
+lru_team_hold_path() { # $1=cfg $2=team
+  printf '%s/teams/.%s.lr-upgrade-hold' "${1%/}" "$2"
+}
+lru_team_hold() { # $1=cfg $2=team → 0 held · 1 could not
+  local td hp
+  td="$(lru_team_dir "$1" "$2")"; hp="$(lru_team_hold_path "$1" "$2")"
+  [ -d "$td" ] || return 1
+  [ -e "$hp" ] && return 1                          # a previous hold was never restored: do not stack
+  mv "$td" "$hp" 2>/dev/null
+}
+# Put a held team back. If something recreated the dir meanwhile (a member's message makes the
+# harness mkdir inboxes/), its inbox entries are APPENDED to the held ones — never dropped.
+lru_team_restore() { # $1=cfg $2=team → 0 restored or nothing held · 1 failed
+  local td hp f base tmp
+  td="$(lru_team_dir "$1" "$2")"; hp="$(lru_team_hold_path "$1" "$2")"
+  [ -d "$hp" ] || return 0
+  if [ -d "$td" ]; then
+    for f in "$td"/inboxes/*.json; do
+      [ -f "$f" ] || continue
+      base="${f##*/}"; mkdir -p "$hp/inboxes"
+      if [ -f "$hp/inboxes/$base" ]; then
+        tmp="$hp/inboxes/.$base.$$"
+        jq -s '(.[0] // []) + (.[1] // [])' "$hp/inboxes/$base" "$f" > "$tmp" 2>/dev/null && mv -f "$tmp" "$hp/inboxes/$base"
+      else
+        cp -p "$f" "$hp/inboxes/$base"
+      fi
+    done
+    rm -rf "$td"
+  fi
+  mv "$hp" "$td"
+}
 # THE BACKGROUND-JOB QUESTION HAS THREE ANSWERS, NOT TWO. A child `zsh -c source …shell-snapshots…`
 # of the claude pid is a Bash-tool shell that outlived its turn. Measured 2026-09-22 on the three
 # idle 2.1.260 sessions carrying one (480 495 503): every one was a `cc-await-ping` INBOX WATCHER —
@@ -341,21 +480,33 @@ lru_census() { # [$1=ref: pane id or sid prefix; empty = all] → TSV rows on st
     elif [ "$bin" = "$target_bin" ] && [ "$model" = "$tgt" ]; then disp=current
     elif [ -n "$LRU_SELF_SID" ] && [ "$sid" = "$LRU_SELF_SID" ]; then disp=self
     else
-      case " $args " in *" --agent-id "*|*" --agent-id="*) disp=teammate ;; *) disp="" ;; esac
-      if [ -z "$disp" ]; then
-        case "$dupsids" in *" $sid "*) disp=duplicate ;; esac
+      # ROLE: a teammate (its own argv carries --agent-id) or a lead (a live claude names it as
+      # parent). Both are now UPGRADABLE through the team procedure (LRU_TEAM_PROC=off restores the
+      # old blanket exclusions); each has its own preconditions, checked before the common ones.
+      local role=""
+      disp=""
+      case " $args " in *" --agent-id "*|*" --agent-id="*) role=teammate ;; esac
+      case "$dupsids" in *" $sid "*) disp=duplicate ;; esac
+      if [ -z "$disp" ] && [ "$role" = teammate ]; then
+        if [ "${LRU_TEAM_PROC:-on}" = off ]; then disp=teammate; else disp="$(lru_teammate_block "$args" "$cfg")"; fi
       fi
-      if [ -z "$disp" ] && lru_has_live_teammate "$snap" "$sid"; then disp=lead-with-teammate; fi
+      if [ -z "$disp" ] && [ -z "$role" ] && lru_has_live_teammate "$snap" "$sid"; then
+        role=lead
+        if [ "${LRU_TEAM_PROC:-on}" = off ]; then disp=lead-with-teammate; else disp="$(lru_lead_block "$snap" "$sid" "$cfg" "$target_bin")"; fi
+      fi
       if [ -z "$disp" ]; then
         tx="$(lru_transcript "$cfg" "$sid" || true)"
         if [ -z "$tx" ]; then disp=no-transcript
         elif ! lru_at_rest "$tx"; then disp=mid-turn
         fi
       fi
+      # A background Agent-tool subagent leaves its session AT REST, so the rest check cannot see it;
+      # the recycle's subagent gate would refuse this row, and the census now says so up front.
+      if [ -z "$disp" ] && [ "$(lru_live_subagents "$sid" "$pid")" -gt 0 ]; then disp=subagents-in-flight; fi
       if [ -z "$disp" ] && [ "$(lru_bg_kind "$snap" "$pid")" = work ]; then disp=background-job; fi
       if [ -z "$disp" ]; then
         local crc=0; lru_composer "$pane" || crc=$?
-        case "$crc" in 0|3) disp=upgrade ;; 1) disp=composer-occupied ;; *) disp=composer-unknown ;; esac
+        case "$crc" in 0|3) disp=upgrade${role:+-$role} ;; 1) disp=composer-occupied ;; *) disp=composer-unknown ;; esac
       fi
     fi
     out="$out$pane"$'\t'"$sid"$'\t'"$bin"$'\t'"${model:--}"$'\t'"${tgt:--}"$'\t'"${eff:--}"$'\t'"$perm"$'\t'"$cfg"$'\t'"${cwd:--}"$'\t'"$pid"$'\t'"$disp"$'\n'
@@ -376,19 +527,34 @@ EOF
 lru_ascii_only() { # $1=file → 0 pure ASCII / 1 not
   ! LC_ALL=C grep -q '[^[:print:][:space:]]' "$1" 2>/dev/null
 }
-lru_mint_launcher() { # $1=run dir $2=cfg $3=cwd $4=sid $5=model $6=effort $7=perm $8=admit token → path
-  local d="$1" cfg="$2" cwd="$3" sid="$4" model="$5" eff="$6" perm="$7" tok="${8:-}" L sub prompt
+lru_mint_launcher() { # $1=run dir $2=cfg $3=cwd $4=sid $5=model $6=effort $7=perm $8=admit token [$9=role ${10}=team args ${11}=team] → path
+  local d="$1" cfg="$2" cwd="$3" sid="$4" model="$5" eff="$6" perm="$7" tok="${8:-}" role="${9:-}" targs="${10:-}" team="${11:-}" L sub prompt xargs="" xenv=""
   # THE VALUES FIRST, THEN THE FILE. Checking only the file's bytes is locale-dependent: under
   # LC_ALL=C (launchd, CI) printf %q renders a non-ASCII value as $'\342\200\224' — pure ASCII on
   # disk, non-ASCII again the moment the launcher runs. Found by the off-box gate, 2026-09-23.
-  if printf '%s' "$d$cfg$cwd$sid$model$eff$perm$tok$LRU_FIRE_RESUME" | LC_ALL=C grep -q '[^ -~]'; then
-    lru_say "REFUSED: a launcher value is not pure ASCII (run dir, config dir, cwd, sid, model, effort, mode or token); it would break every sed that reads the launcher"
+  if printf '%s' "$d$cfg$cwd$sid$model$eff$perm$tok$LRU_FIRE_RESUME$targs$team" | LC_ALL=C grep -q '[^ -~]'; then
+    lru_say "REFUSED: a launcher value is not pure ASCII (run dir, config dir, cwd, sid, model, effort, mode, token or team identity); it would break every sed that reads the launcher"
     return 1
   fi
   mkdir -p "$d" || return 1
   L="$d/launch.sh"
   sub="run:${sid:0:8}:upgrade:$(date -u +%Y%m%dT%H%M%SZ)"
   prompt="In-place upgrade: this session was relaunched by cc-lr upgrade on the current Claude Code binary and model $model (same session, same pane, same account, effort $eff). A background cc-await-ping inbox watcher, if you had one, was ended by the relaunch: re-arm it only if no /goal is live. Continue exactly where you left off; if nothing was pending, reply with one line saying so. $sub"
+  case "$role" in
+    teammate)
+      # The member rejoins by its identity flags + the team gate env, and gets NO prompt — the
+      # upgrade must be invisible to the team. Measured on a probe team: a member's turn ends in the
+      # harness's idle notification, which woke its lead, and the lead shut the upgraded member
+      # down; a member idling also arms the house reaper (teammate-auto-shutdown.sh). So no turn,
+      # no submit token, and handoff-fire proves engagement by the live --resume process instead
+      # (HF_ENGAGE_BY_PROCESS, set by lru_drive).
+      [ -n "$targs" ] || { lru_say "REFUSED: a teammate launcher needs its identity flags"; return 1; }
+      xargs="$targs"; xenv="CLAUDECODE=1 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1"; prompt=""; sub="" ;;
+    lead)
+      [ -n "$team" ] || { lru_say "REFUSED: a lead launcher needs its team name"; return 1; }
+      xenv="CLAUDE_INTERNAL_ASSISTANT_TEAM_NAME=$team"
+      prompt="$prompt Your Agent Team $team was preserved across the relaunch: its live members were upgraded in place first and SendMessage to them still works. One vendor limit: a resumed lead does not poll its team inbox, so replies from those members land unread in $cfg/teams/$team/inboxes/team-lead.json - read them with jq when you expect one." ;;
+  esac
   {
     printf '#!/bin/bash\n'
     printf '# cc-lr upgrade launcher for %s - regenerable; typed into the pane by handoff-fire.\n' "$sid"
@@ -398,8 +564,17 @@ lru_mint_launcher() { # $1=run dir $2=cfg $3=cwd $4=sid $5=model $6=effort $7=pe
     printf 'export LR_RUN_DIR=%q\n' "$d"
     printf 'export LR_ADMIT_TOKEN=%q\n' "$tok"
     printf 'export LR_SUBMIT_TOKEN=%q\n' "$sub"
-    printf 'exec bash %q %q %q %q --model %q --effort %q --permission-mode %q --prompt %q\n' \
+    if [ "$role" = lead ]; then
+      # The old process has exited (this line only runs at a shell prompt) and the new one has not
+      # started: the ONE instant the held team dir can go back without either process seeing a gap.
+      printf 'bash %q --team-restore %q %q || echo "!! cc-lr upgrade: team %s could not be restored from its hold - the lead starts without it" >&2\n' \
+        "$LRU_DIR/lr-upgrade.sh" "$cfg" "$team" "$team"
+    fi
+    printf 'exec bash %q %q %q %q --model %q --effort %q --permission-mode %q --prompt %q' \
       "$LRU_FIRE_RESUME" "$cfg" "$cwd" "$sid" "$model" "$eff" "$perm" "$prompt"
+    [ -n "$xargs" ] && printf ' --extra-args %q' "$xargs"
+    [ -n "$xenv" ] && printf ' --extra-env %q' "$xenv"
+    printf '\n'
   } > "$L" || return 1
   chmod +x "$L"
   if ! lru_ascii_only "$L"; then
@@ -491,9 +666,21 @@ lru_drive() { # $1=sid $2=pane $3=requested_by $4=req id → prints the result r
   IFS=$'\t' read -r _ _ bin model tgt eff perm cfg cwd pid disp <<EOF
 $row
 EOF
-  if [ "$disp" != upgrade ]; then
-    lru_result "$sid" "$pane" skipped "$disp" "" "$req" "$by"; return 3
+  local role="" targs="" tm_id="" team="" held=0
+  case "$disp" in
+    upgrade) ;;
+    upgrade-teammate) role=teammate ;;
+    upgrade-lead) role=lead ;;
+    *) lru_result "$sid" "$pane" skipped "$disp" "" "$req" "$by"; return 3 ;;
+  esac
+  if [ "$role" = teammate ]; then
+    local targv; targv="$(lru_snap_args "$(lru_snapshot)" "$pid")"
+    targs="$(lru_team_args "$targv" || true)"; tm_id="$(lru_flag "$targv" --agent-id "$LRU_RE_TEAMTOK")"
+    if [ -z "$targs" ] || [ -z "$tm_id" ]; then
+      lru_result "$sid" "$pane" skipped "teammate identity unreadable from pid $pid at drive time (nothing typed)" "" "$req" "$by"; return 3
+    fi
   fi
+  [ "$role" = lead ] && team="session-${sid:0:8}"
   target_bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
 
   if ! lru_capacity "$sid"; then
@@ -501,7 +688,7 @@ EOF
   fi
   run="$UPG_RUNS/${sid:0:8}-$(date -u +%Y%m%dT%H%M%SZ)"
   [ -n "$eff" ] && [ "$eff" != - ] || eff=high
-  L="$(lru_mint_launcher "$run" "$cfg" "$cwd" "$sid" "$tgt" "$eff" "$perm" "$LRU_TOKEN")" || {
+  L="$(lru_mint_launcher "$run" "$cfg" "$cwd" "$sid" "$tgt" "$eff" "$perm" "$LRU_TOKEN" "$role" "$targs" "$team")" || {
     lru_result "$sid" "$pane" failed "could not mint an ASCII-only launcher in $run (nothing typed)" "" "$req" "$by"; return 1; }
   cmd="cd $(printf %q "$cwd") && bash $(printf %q "$L")"
   hflog="$run/handoff-fire.log"
@@ -516,19 +703,34 @@ EOF
     1) lru_result "$sid" "$pane" skipped "composer-occupied (appeared after the census; nothing typed)" "" "$req" "$by"; return 3 ;;
     *) lru_result "$sid" "$pane" skipped "composer-unknown (unreadable at the last read; nothing typed)" "" "$req" "$by"; return 3 ;;
   esac
+  # THE HOLD (lead only), as late as possible: every check that can still refuse without typing has
+  # run. From here to the launcher's --team-restore the lead has no team dir, so its exit-time
+  # cleanupSessionTeams finds no member to kill and nothing to delete.
+  if [ "$role" = lead ]; then
+    if ! lru_team_hold "$cfg" "$team"; then
+      lru_result "$sid" "$pane" skipped "team $team could not be held aside ($(lru_team_dir "$cfg" "$team") absent, or a previous hold $(lru_team_hold_path "$cfg" "$team") was never restored) - nothing typed" "" "$req" "$by"; return 3
+    fi
+    held=1
+  fi
   t0="$(date -u +%FT%T)"
   # THE RELAUNCH. handoff-fire's remote form, same-account class: it re-proves the binding, the pin,
   # the account, the absence of a tombstone and the transcript at rest, gates the composer, re-reads
   # the transcript immediately before /exit, types /exit, waits for the shell and types the launcher.
-  ( cd "$cwd" 2>/dev/null || cd /; CLAUDE_CONFIG_DIR="$cfg" bash "$LRU_HF_BIN" --recycle --same-account \
+  local engage_proc=0; [ "$role" = teammate ] && engage_proc=1
+  ( cd "$cwd" 2>/dev/null || cd /; HF_ENGAGE_BY_PROCESS="$engage_proc" CLAUDE_CONFIG_DIR="$cfg" bash "$LRU_HF_BIN" --recycle --same-account \
       --source-pane "$pane" --source-session "$sid" --resume-launcher "$L" --resume-cfg "$cfg" \
-      --resume-cwd "$cwd" --await ) > "$hflog" 2>&1 || hrc=$?
+      --resume-cwd "$cwd" ${tm_id:+--team-member-id "$tm_id"} --await ) > "$hflog" 2>&1 || hrc=$?
   binlabel="$(printf '%s\n' "$target_bin" | awk -F/ '{ for (i = 1; i <= NF; i++) if ($i ~ /^\.claude-/) { print $i; exit } ; print $NF }')"
   if [ "$hrc" = 0 ] && lru_resumed_on "$sid" "$target_bin" "$tgt"; then
-    lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff); confirmed by a fresh assistant turn" "" "$req" "$by"; return 0
+    if [ "$role" = teammate ]; then
+      lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff) as teammate $tm_id; confirmed by its live --resume process (no prompt by design: the team is not woken)" "" "$req" "$by"; return 0
+    fi
+    lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff)${role:+ as $role}; confirmed by a fresh assistant turn" "" "$req" "$by"; return 0
   fi
   # NOT ENGAGED. Which side of the /exit are we on? The old process is the discriminator.
   if kill -0 "$pid" 2>/dev/null; then
+    # Refused before the /exit: the lead is alive and must get its team back NOW.
+    [ "$held" = 1 ] && { lru_team_restore "$cfg" "$team" || lru_say "!! team $team hold could not be restored - it is at $(lru_team_hold_path "$cfg" "$team")"; }
     lru_result "$sid" "$pane" skipped "handoff-fire refused before /exit (rc $hrc): $(grep -m1 '^!!' "$hflog" 2>/dev/null | cut -c1-200) - session untouched" "" "$req" "$by"; return 3
   fi
   # The old process is gone. Either the relaunch is up (slow engagement) or the pane is at a bare
@@ -545,12 +747,18 @@ EOF
     lru_resumed_on "$sid" "$target_bin" "$tgt" || sleep "$LRU_RETYPE_GAP_S"
   done
   if ! lru_resumed_on "$sid" "$target_bin" "$tgt"; then
+    # The launcher never ran: put the team back so the manual relaunch below finds it.
+    [ "$held" = 1 ] && { lru_team_restore "$cfg" "$team" || lru_say "!! team $team hold could not be restored - it is at $(lru_team_hold_path "$cfg" "$team")"; }
     lru_result "$sid" "$pane" failed "pane left at a bare shell after $i retype(s) (handoff-fire rc $hrc; log $hflog)" "$cmd" "$req" "$by"; return 1
   fi
   # RELAUNCHED ON THE TARGET — the upgrade is done. Now the confirmation turn, bounded, and cut
   # short the moment lr-fire-resume itself records that its prompt never reached the transcript.
   local waited=0 retyped=""
   [ "$i" -gt 0 ] && retyped="; ${i} retype(s) after handoff-fire's watcher declined to type"
+  # A teammate gets no prompt by design, so there is no confirmation turn to wait for.
+  if [ "$role" = teammate ]; then
+    lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff) as teammate $tm_id; no prompt by design (the team is not woken)$retyped" "" "$req" "$by"; return 0
+  fi
   while :; do
     if command -v lr_engaged_after >/dev/null 2>&1 && lr_engaged_after "$cfg" "$sid" "$t0"; then
       lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff); confirmed by a fresh assistant turn$retyped" "" "$req" "$by"; return 0
@@ -611,7 +819,7 @@ lru_auto_enqueue() { # → prints one line per queued sid; rc 0 always
   census="$(lru_census "" 2>/dev/null)" || return 0
   mkdir -p "$UPG_QUEUE" 2>/dev/null || return 0
   while IFS=$'\t' read -r p s _ _ _ _ _ _ _ _ d; do
-    [ "$d" = upgrade ] || continue
+    case "$d" in upgrade|upgrade-teammate|upgrade-lead) ;; *) continue ;; esac
     req="${s:0:8}-$(date +%s)-auto"
     tmp="$UPG_QUEUE/.auto-$s.$$.tmp"; dest="$UPG_QUEUE/auto-upgrade-$s.json"
     jq -n --arg sid "$s" --arg pane "$p" --arg req "$req" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -658,6 +866,8 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
               lru_say "pinned ${2:0:8} → $_m for ${LRU_PIN_TTL_MIN:-1440} min; the poller's auto-enqueue moves it once idle"; exit 0 ;;
     --drain)  lru_drain; exit $? ;;
     --auto-enqueue) lru_auto_enqueue; exit $? ;;
-    *) lru_say "usage: --census [--all|<ref>] | --drive <sid> <pane> | --pin-target <sid> <model> | --drain | --auto-enqueue"; exit 3 ;;
+    --team-restore) [ $# -ge 3 ] || { lru_say "usage: --team-restore <cfg> <team>"; exit 3; }
+              lru_team_restore "$2" "$3"; exit $? ;;
+    *) lru_say "usage: --census [--all|<ref>] | --drive <sid> <pane> | --pin-target <sid> <model> | --drain | --auto-enqueue | --team-restore <cfg> <team>"; exit 3 ;;
   esac
 fi

@@ -168,6 +168,33 @@ load_rest() {
   [[ "$output" == *"is a TEAMMATE"* ]] || { echo "$output"; false; }
 }
 
+# ── THE TEAM PROCEDURE (2026-09-23): a teammate is relaunched only as ITSELF ────────────────────
+TM_ID="w@session-7b3f9c10"
+teammate_argv() { export PS_ARGS_OUT="/x/claude.exe --agent-id $TM_ID --agent-name w --team-name session-7b3f9c10 --parent-session-id $SESS --model claude-opus-5"; }
+
+@test "[RED] a TEAMMATE is ADMITTED when --team-member-id is its own id and the launcher carries it" {
+  at_rest_tx; row; teammate_argv
+  printf '#!/bin/bash\nexec /bin/echo resume --extra-args --agent-id\\ %s\\ --agent-name\\ w\n' "$TM_ID" > "$LAUNCHER"
+  recycle_sa --team-member-id "$TM_ID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"TEAMMATE $TM_ID admitted by the team procedure"* ]] || { echo "$output"; false; }
+}
+
+@test "REFUSED: --team-member-id names a DIFFERENT member than the pid carries" {
+  at_rest_tx; row; teammate_argv
+  printf '#!/bin/bash\nexec /bin/echo resume --agent-id\\ other@session-7b3f9c10\n' > "$LAUNCHER"
+  recycle_sa --team-member-id "other@session-7b3f9c10"
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"re-join as a DIFFERENT member"* ]] || { echo "$output"; false; }
+}
+
+@test "REFUSED: the teammate's launcher does not carry its --agent-id (it would come back outside the team)" {
+  at_rest_tx; row; teammate_argv
+  recycle_sa --team-member-id "$TM_ID"
+  [ "$status" -eq 2 ] || { echo "$output"; false; }
+  [[ "$output" == *"does not carry that --agent-id"* ]] || { echo "$output"; false; }
+}
+
 @test "REFUSED: no transcript on the account (nothing to resume)" {
   row
   recycle_sa
