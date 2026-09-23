@@ -480,6 +480,9 @@ dirt_predates_session() {
 #       single `run_in_background: true` record anywhere in the transcript ⇒ cannot-tell for the
 #       whole session. That field is the harness's own structured flag for the sanctioned detach
 #       path, so this clause reads a fact rather than matching a spelling.
+#       A detached call the harness later reports `completed`/`failed` is NOT counted: its window
+#       runs to that notification instead of to its tool_result (see `_po_activity`, 2026-09-23,
+#       backlog 87d2a3afd6ac), so its effects DO end with its window and (3) holds for it.
 #
 # ── KNOWN COVERAGE RESIDUE (named, not silently absorbed) ────────────────────────────────────────
 #   · A FOREGROUND command that leaves a surviving child (a double-fork, a `launchctl` load, a
@@ -525,29 +528,66 @@ _po_activity() {
   # needlessly only costs coverage. DETACHED (clause 4) is the harness's own flag on any tool, or
   # `Monitor`, which runs its command in the background by design. `Agent`/`Task` are exempt from the
   # flag: a background subagent's execution is in its own transcript, read above, window by window.
+  #
+  # A BACKGROUNDED CALL IS BOUNDED BY ITS OWN COMPLETION, not by its tool_result (2026-09-23, backlog
+  # 87d2a3afd6ac). Auto mode routes every edit through Bash and every long gate or land through
+  # `run_in_background`, so clause (4) as first written — one detached record ⇒ cannot-tell for the
+  # WHOLE session — voided both proofs for essentially every auto-mode session that ran a gate, and
+  # completion-assert fell back to "authorship UNRESOLVED" over a sibling's dirt it could not have
+  # written. The harness closes that window itself: when the job exits it enqueues a
+  # `<task-notification>` naming the launching `<tool-use-id>` with `<status>completed|failed</status>`
+  # (measured 2026-09-23 on this repo's own transcript, CC 2.1.280: a `queue-operation` record,
+  # stamped ~3 s after a `sleep 3` launch). So a detached call's window is [launch, that notification]
+  # — the notification is stamped after the process exited, so the window can only be WIDER than the
+  # execution, never narrower. Anything else stays exactly as strict as before — its window is
+  # [launch, tool_result] and it counts toward clause (4): `killed` (a stopped wrapper can orphan the
+  # real worker, MEMORY.md kill-the-leaf-not-the-wrapper), no notification yet, or a Monitor.
+  #   Notifications are read ONLY from `queue-operation` records and from user records whose content
+  # is NOT a tool_result: a tool_result can carry any text a command printed — including a grep of a
+  # transcript full of other sessions' notifications — and must never be able to close a window.
   # shellcheck disable=SC2016  # jq filter body — `$r`/`$x` are jq bindings, no shell expansion
   out="$(_po_bounded "${PEER_OWNED_TIMEOUT_S:-5}" jq -rn --arg main "$tp" '
       def ts: if (. // "") == "" then null else (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) end;
+      def ntext: if .type == "queue-operation" then (.content | if type == "string" then . else "" end)
+                 elif .type == "user" then
+                   (.message.content
+                    | if type == "string" then .
+                      elif type == "array" then
+                        (if any(.[]?; .type == "tool_result") then ""
+                         else ([.[]? | select(.type == "text") | .text // ""] | join("\n")) end)
+                      else "" end)
+                 else "" end;
       reduce inputs as $r ({first:null, last:null, u:{}, o:[], bg:0};
           ($r.timestamp | ts) as $t
         | (if $t == null or (input_filename != $main) then .
            else (.first = (if .first == null then $t else .first end)) | (.last = $t) end)
         | if $r.type == "assistant" then
             reduce ($r.message.content[]? | select(.type == "tool_use")) as $x (.;
-                (.bg = .bg + (if ($x.name == "Monitor")
-                                 or (($x.input.run_in_background == true)
-                                     and ($x.name != "Agent") and ($x.name != "Task"))
-                              then 1 else 0 end))
-              | (if ($x.id // "") == "" then (.o = .o + [$t])      # no id ⇒ unpairable ⇒ open window
-                 else (.u[$x.id] = {a: $t, b: null}) end))
-          elif $r.type == "user" then
+                (if $x.name == "Monitor" then "mon"
+                 elif ($x.input.run_in_background == true)
+                      and ($x.name != "Agent") and ($x.name != "Task") then "bg"
+                 else "" end) as $d
+              | if ($x.id // "") == "" then                    # no id ⇒ unpairable ⇒ open window
+                  (.o = .o + [$t]) | (.bg = .bg + (if $d == "" then 0 else 1 end))
+                else (.u[$x.id] = {a: $t, b: null, n: null, d: $d}) end)
+          else . end
+        | if $r.type == "user" then
             reduce ($r.message.content[]? | select(.type == "tool_result")) as $x (.;
               if (.u[$x.tool_use_id // ""] // null) == null then .
               else (.u[$x.tool_use_id].b = $t) end)
-          else . end)
+          else . end
+        | if $t == null then . else
+            reduce ($r | ntext | [match("<task-notification>[\\s\\S]*?</task-notification>"; "g").string][]
+                    | {id: ([capture("<tool-use-id>(?<v>[^<]+)</tool-use-id>").v] | .[0] // ""),
+                       st: ([capture("<status>(?<v>[^<]+)</status>").v] | .[0] // "")}) as $n (.;
+              if (.u[$n.id] // null) == null then .
+              elif .u[$n.id].d != "bg" or .u[$n.id].n != null or ($n.st | test("^(completed|failed)$") | not)
+                   or (.u[$n.id].a == null) or ($t < .u[$n.id].a) then .
+              else (.u[$n.id].n = $t) end)
+          end)
       | . as $s
-      | "META \($s.first // 0) \($s.last // 0) \($s.bg)",
-        ($s.u | to_entries[] | "W \(.value.a // 0) \(.value.b // -1)"),
+      | "META \($s.first // 0) \($s.last // 0) \($s.bg + ([$s.u[] | select(.d != "" and .n == null)] | length))",
+        ($s.u | to_entries[] | "W \(.value.a // 0) \(.value.n // .value.b // -1)"),
         ($s.o[] | "W \(. // 0) -1")
     ' "${srcs[@]}" 2>/dev/null)"; rc=$?
   [ "$rc" -eq 0 ] || return 2
