@@ -1380,6 +1380,42 @@ fi
 [ "$PANIC_SCAN" = "off" ] || panic_scan || true
 [ "$FREEZE_SCAN" = "off" ] || freeze_scan || true
 
+# ── self-restart on changed source ────────────────────────────────────────────────────────────────
+# A land that changes this file reaches nothing until the daemon restarts: bash holds the bytes it
+# started on. Measured over 30 days, the sentinel's source changed 3 times and the next natural
+# restart came ~1h, ~2h and ~22m later — but the gap between restarts has reached 6 days, and the
+# only other remedy on offer was granting the unattended deploy job power to bootout/bootstrap a
+# resident daemon (decision 68d9af489875, migration 0031). lead-supervisor.sh already closes this
+# for itself (self_restart_if_stale): notice the on-disk digest moved, exit 0, and let launchd
+# KeepAlive respawn on the new bytes. Same shape here, with two holds the supervisor does not need:
+#   · never while the freeze ledger is non-empty — install.sh refuses a restart then for the same
+#     reason: a cohort in custody is released by THIS process's tick schedule, and although the
+#     TERM trap would release on exit, an unforced exit mid-custody is exactly the case to avoid;
+#   · never mid-breach (STREAK > 0) or in the cliff regime — a restart drops every rate baseline
+#     for one INTERVAL, and those are the ticks where a blind interval costs the most.
+# The new digest must also be seen on TWO consecutive checks: a checkout rewrites the file in place,
+# and restarting onto a half-written script is a syntax error that burns launchd's throttle window.
+self_sha() { # <path> → sha256 of the on-disk bytes, or NOTHING when unreadable (⇒ abstain)
+  [ -f "$1" ] && [ -r "$1" ] || return 0
+  /usr/bin/shasum -a 256 "$1" 2>/dev/null | awk 'NR==1{print $1}'
+}
+
+self_restart_verdict() { # <running_sha> <disk_sha> <prev_disk_sha> <frozen_db> <streak> <cliff 0|1>
+  # → abstain | same | settling | hold-frozen | hold-breach | restart   (always rc 0)
+  if [ -z "$1" ] || [ -z "$2" ]; then echo abstain; return 0; fi
+  if [ "$1" = "$2" ]; then echo same; return 0; fi
+  if [ "$2" != "$3" ]; then echo settling; return 0; fi
+  if [ -s "$4" ]; then echo hold-frozen; return 0; fi
+  if [ "${5:-0}" -gt 0 ] || [ "${6:-0}" = "1" ]; then echo hold-breach; return 0; fi
+  echo restart
+}
+
+SELF="${BASH_SOURCE[0]}"
+SELF_SHA0="$(self_sha "$SELF")"
+SELF_PREV_DISK="$SELF_SHA0"; SELF_LAST_V=""
+SELFCHK_EVERY="${CC_SENTINEL_SELFCHK_TICKS:-6}"   # every 6th tick — once a minute at the 10 s default
+case "$SELFCHK_EVERY" in ''|0|*[!0-9]*) SELFCHK_EVERY=6 ;; esac
+
 # ── single instance ───────────────────────────────────────────────────────────────────────────────
 # SIX live sentinels were observed minutes after the panic-#5 reboot (kernel-zone axis of the
 # postmortem). Six concurrent actuators over one freeze ledger is six writers racing one TSV and up
@@ -1728,6 +1764,22 @@ while :; do
 
   PREV_T="$NOW"; PREV_SEG="$SEG_EST"; PREV_CBU="$CBU"; PREV_SWAP="$SWAP_B"
   PREV_CMP="$COMPRESSIONS"; PREV_DCMP="$DECOMPRESSIONS"
+
+  # Daemon only: a bounded run (--ticks/--once) is the smoke and the suite, and has no successor.
+  if [ "$TICKS" -eq 0 ] && [ "${CC_SENTINEL_SELF_RESTART:-on}" != "off" ] \
+     && [ $((TICK % SELFCHK_EVERY)) -eq 0 ]; then
+    SELF_DISK="$(self_sha "$SELF")"
+    SELF_V="$(self_restart_verdict "$SELF_SHA0" "$SELF_DISK" "$SELF_PREV_DISK" "$FROZEN_DB" "$STREAK" "${CLIFF:-0}")"
+    [ -n "$SELF_DISK" ] && SELF_PREV_DISK="$SELF_DISK"
+    if [ "$SELF_V" = "restart" ]; then
+      printf '%s compressor-sentinel: SELF-RESTART on-disk sha256 changed (%s -> %s) — exiting 0 for launchd KeepAlive to respawn on the new bytes\n' \
+        "$TS" "${SELF_SHA0:0:12}" "${SELF_DISK:0:12}" >&2
+      cleanup                     # releases nothing (the ledger is empty by the verdict), drops the pidfile, exits 0
+    elif [ "$SELF_V" != "$SELF_LAST_V" ] && [ "${SELF_V%%-*}" = "hold" ]; then
+      printf '%s compressor-sentinel: SELF-RESTART deferred (%s) — source changed, restart waits for a quiet tick\n' "$TS" "$SELF_V" >&2
+    fi
+    SELF_LAST_V="$SELF_V"
+  fi
 
   [ "$TICKS" -gt 0 ] && [ "$TICK" -ge "$TICKS" ] && break
   sleep "$INTERVAL"

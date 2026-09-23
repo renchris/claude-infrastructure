@@ -2198,3 +2198,78 @@ SH
   #    it is the whole safety argument for selecting on anything other than one executable name.
   ! grep -q 'pid=999790 ' "$SNAPLOG" || false
 }
+
+# ══ SELF-RESTART ON CHANGED SOURCE ════════════════════════════════════════════════════════════════
+# The land-to-live gap for this daemon closes itself, the way lead-supervisor's already does, so the
+# deploy job needs no power to restart it (decision 68d9af489875). The verdict is a pure function;
+# the daemon cases below run a COPY of the script so the edit that triggers a restart touches nothing
+# in the tree.
+
+@test "self-restart verdict: restarts only on a settled new digest with nothing in custody and no breach" {
+  : > "$D/empty.tsv"; printf '1\tx\tworker\t0\tnode\n' > "$D/held.tsv"
+  run_fn self_restart_verdict aaa aaa aaa "$D/empty.tsv" 0 0; [ "$output" = "same" ] || false
+  run_fn self_restart_verdict ""  bbb bbb "$D/empty.tsv" 0 0; [ "$output" = "abstain" ] || false
+  run_fn self_restart_verdict aaa ""  aaa "$D/empty.tsv" 0 0; [ "$output" = "abstain" ] || false
+  run_fn self_restart_verdict aaa bbb aaa "$D/empty.tsv" 0 0; [ "$output" = "settling" ] || false
+  run_fn self_restart_verdict aaa bbb bbb "$D/held.tsv"  0 0; [ "$output" = "hold-frozen" ] || false
+  run_fn self_restart_verdict aaa bbb bbb "$D/empty.tsv" 2 0; [ "$output" = "hold-breach" ] || false
+  run_fn self_restart_verdict aaa bbb bbb "$D/empty.tsv" 0 1; [ "$output" = "hold-breach" ] || false
+  run_fn self_restart_verdict aaa bbb bbb "$D/nope.tsv"  0 0; [ "$output" = "restart" ] || false
+  run_fn self_restart_verdict aaa bbb bbb "$D/empty.tsv" 0 0; [ "$output" = "restart" ] || false
+}
+
+sentinel_daemon_bg() { # <script-copy> <errlog> → the DAEMON's pid on stdout; its exit code lands in <errlog>.rc
+  # A wrapper subshell owns the daemon so its rc survives: the caller gets this pid from `$(…)`,
+  # which makes it no child of the test shell, so `wait` there cannot read it.
+  ( env PATH="$STUB:$PATH" CC_SENTINEL_LOG="$LOG" CC_SENTINEL_INTERVAL=1 \
+      CC_SENTINEL_SELFCHK_TICKS=1 CC_PANIC_SCAN=off CC_FREEZE_SCAN=off CC_SENTINEL_ACT=off \
+      bash "$1" 2>"$2" >/dev/null &
+    echo $! > "$2.pid"; wait $!; echo $? > "$2.rc" ) >/dev/null 2>&1 &
+  local i=0
+  while [ ! -s "$2.pid" ] && [ "$i" -lt 40 ]; do sleep 0.05; i=$((i + 1)); done
+  cat "$2.pid"
+}
+
+wait_exit() { # <pid> <max-seconds> → rc 0 once the pid is gone
+  local i=0
+  while kill -0 "$1" 2>/dev/null; do
+    i=$((i + 1)); [ "$i" -le "$(( $2 * 4 ))" ] || return 1
+    sleep 0.25
+  done
+}
+
+@test "self-restart: a daemon whose source changes exits 0 on its own, and says why" {
+  cp "$S" "$D/sentinel-copy.sh"
+  pid="$(sentinel_daemon_bg "$D/sentinel-copy.sh" "$D/err.log")"
+  sleep 3
+  kill -0 "$pid" 2>/dev/null || { cat "$D/err.log" >&2; false; }   # alive before the change
+  printf '\n# a landed change\n' >> "$D/sentinel-copy.sh"
+  wait_exit "$pid" 15 || { kill "$pid" 2>/dev/null; cat "$D/err.log" >&2; false; }
+  i=0; while [ ! -s "$D/err.log.rc" ] && [ "$i" -lt 40 ]; do sleep 0.05; i=$((i + 1)); done
+  [ "$(cat "$D/err.log.rc")" = "0" ] || false
+  grep -q 'SELF-RESTART on-disk sha256 changed' "$D/err.log" || false
+  [ ! -e "${LOG%.jsonl}.pid" ] || false                              # the mutex is released for the successor
+}
+
+@test "self-restart: HELD while the freeze ledger is non-empty — the daemon keeps running" {
+  cp "$S" "$D/sentinel-copy.sh"
+  printf '%s\t%s\tworker\t%s\tnode\n' 999999 "x" "$(date +%s)" > "${LOG%.jsonl}-frozen.tsv"
+  pid="$(sentinel_daemon_bg "$D/sentinel-copy.sh" "$D/err.log")"
+  sleep 2
+  printf '\n# a landed change\n' >> "$D/sentinel-copy.sh"
+  sleep 5
+  alive=0; kill -0 "$pid" 2>/dev/null && alive=1
+  kill "$pid" 2>/dev/null || true
+  [ "$alive" -eq 1 ] || { cat "$D/err.log" >&2; false; }
+  grep -q 'SELF-RESTART deferred (hold-frozen)' "$D/err.log" || false
+}
+
+@test "self-restart: an unchanged daemon does not restart (control)" {
+  cp "$S" "$D/sentinel-copy.sh"
+  pid="$(sentinel_daemon_bg "$D/sentinel-copy.sh" "$D/err.log")"
+  sleep 5
+  alive=0; kill -0 "$pid" 2>/dev/null && alive=1
+  kill "$pid" 2>/dev/null || true
+  [ "$alive" -eq 1 ] || { cat "$D/err.log" >&2; false; }
+  ! grep -q 'SELF-RESTART' "$D/err.log" || false
+}
