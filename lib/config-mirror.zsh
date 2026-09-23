@@ -71,6 +71,28 @@ _cc_linktarget() {   # <path> → sets $_CC_LINK to the raw symlink target ('' i
   fi
 }
 
+# _cc_instructions_variant_target <src> <dst> — the per-account instructions A/B arm.
+#   $src/instruction-variants holds lines "<account-dir-basename> <variant>" (e.g.
+#   ".claude-tertiary slim"); `cc-instructions-variant` is its only writer. For a listed account whose
+#   $src/CLAUDE.<variant>.md exists, sets $_CC_VARIANT_TARGET to that file and returns 0. Anything
+#   else — unlisted, malformed, or a variant file that is missing — returns 1, so the account falls
+#   back to the shared CLAUDE.md and a stale registry line can never leave it without instructions.
+typeset -g _CC_VARIANT_TARGET=''
+_cc_instructions_variant_target() {
+  emulate -L zsh
+  _CC_VARIANT_TARGET=''
+  local reg="$1/instruction-variants" acct="${2:t}" line v
+  [[ -r "$reg" ]] || return 1
+  while IFS= read -r line; do
+    [[ "${line%% *}" == "$acct" ]] || continue
+    v="${${line#* }// /}"
+    [[ "$v" =~ '^[a-z0-9-]+$' && -f "$1/CLAUDE.$v.md" ]] || return 1
+    _CC_VARIANT_TARGET="$1/CLAUDE.$v.md"
+    return 0
+  done < "$reg"
+  return 1
+}
+
 # _cc_sync_config_mirror [--convert] <dst-config-dir>
 #   Default (no --convert): RACE-SAFE. Creates MISSING symlinks + HEALS isolated entries that were
 #   wrongly symlinked to ~/.claude (e.g. the .last-session leak). It NEVER mv's a forked real dir,
@@ -132,6 +154,9 @@ _cc_sync_config_mirror() {
       [[ -L "$dst/$name" ]] && { rm -f "$dst/$name"; print -u2 "config-mirror: un-shared transient '$name' in ${dst:t}"; }
       continue
     fi
+    # An account registered for an instructions A/B arm reads CLAUDE.<variant>.md as its
+    # CLAUDE.md; without this the loop below re-points it at the shared file every session start.
+    [[ "$name" == CLAUDE.md ]] && _cc_instructions_variant_target "$src" "$dst" && e="$_CC_VARIANT_TARGET"
     if [[ -L "$dst/$name" ]]; then
       _cc_linktarget "$dst/$name"
       [[ "$_CC_LINK" == "$e" ]] && continue                               # already the right symlink

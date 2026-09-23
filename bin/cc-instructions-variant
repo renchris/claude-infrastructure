@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# cc-instructions-variant — put an account on an instructions A/B arm, or take it off.
+#
+# WHY. The always-loaded instructions (~/.claude/CLAUDE.md, 40.4k tokens on 2026-09-23) ride in every
+# context on every account — main sessions, subagents, workflow agents, headless runs — so a slimmer
+# variant is the largest single token lever on this box, and also the change most able to alter
+# behaviour. It therefore ships behind this switch. An account listed in ~/.claude/instruction-variants
+# reads ~/.claude/CLAUDE.<variant>.md as its CLAUDE.md; every other account keeps the shared file. The
+# config mirror honours the registry (lib/config-mirror.zsh, _cc_instructions_variant_target), so the
+# arm survives the re-point the mirror performs at every session start. A switch reaches NEW sessions
+# only; running sessions keep what they loaded. Every switch is appended to the log, so a census can
+# split sessions by the arm they started under. Design and test plan:
+# docs/research/token-efficiency-2026-09-23/.
+#
+# Usage:
+#   cc-instructions-variant [status]                each account: arm, CLAUDE.md target, bytes
+#   cc-instructions-variant set <account> <variant> e.g. `set next3 slim` (needs ~/.claude/CLAUDE.slim.md)
+#   cc-instructions-variant reset <account>         back to the shared ~/.claude/CLAUDE.md
+#   cc-instructions-variant log                     the switch log
+# <account> is an accounts.json name (next, next2, next3, next4) or a ~/.claude-* dir basename.
+# Exit: 0 ok · 1 the re-point did not take (read back after the mirror ran) · 2 usage error.
+set -euo pipefail
+
+SRC="$HOME/.claude"
+REG="$SRC/instruction-variants"
+LOG="$SRC/autonomy/instruction-variants.jsonl"
+MIRROR="$SRC/lib/config-mirror.zsh"
+
+die() { printf 'cc-instructions-variant: %s\n' "$*" >&2; exit 2; }
+
+account_dirs() {  # every account config dir: accounts.json first, the glob as a fallback
+  if [ -r "$SRC/accounts.json" ] && command -v jq >/dev/null 2>&1; then
+    jq -r '.accounts[]?.config_dir // empty' "$SRC/accounts.json" 2>/dev/null | sed "s|^~|$HOME|"
+  else
+    for d in "$HOME"/.claude-*; do [ -e "$d/CLAUDE.md" ] && printf '%s\n' "$d"; done
+  fi
+}
+
+account_dir() {  # <account> → its config dir, or die
+  local a="$1" d=""
+  case "$a" in
+    .claude-*) d="$HOME/$a" ;;
+    "$HOME"/.claude-*) d="$a" ;;
+    *) [ -r "$SRC/accounts.json" ] && d="$(jq -r --arg a "$a" \
+         '.accounts[]? | select(.name == $a) | .config_dir // empty' "$SRC/accounts.json" 2>/dev/null | head -1)"
+       d="${d/#\~/$HOME}" ;;
+  esac
+  [ -n "$d" ] && [ -d "$d" ] && [ "$d" != "$SRC" ] \
+    || die "unknown account '$a' (an accounts.json name such as next3, or a ~/.claude-* dir)"
+  printf '%s\n' "$d"
+}
+
+registered() {  # <dir-basename> → its variant, or nothing
+  [ -r "$REG" ] && awk -v a="$1" '$1 == a { print $2; exit }' "$REG" || true
+}
+
+write_reg() {  # <dir-basename> [variant] — replace or drop that account's line, atomically
+  local tmp="$REG.tmp.$$"
+  { [ -r "$REG" ] && awk -v a="$1" '$1 != a' "$REG"; [ -n "${2:-}" ] && printf '%s %s\n' "$1" "$2"; } > "$tmp" || true
+  mv -f "$tmp" "$REG"
+}
+
+log_event() {  # <dir-basename> <variant> <action>
+  mkdir -p "${LOG%/*}"
+  printf '{"ts":"%s","account":"%s","variant":"%s","action":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" >> "$LOG"
+}
+
+resync() {  # re-run the mirror for one account (race-safe mode), then read the link back
+  zsh -fc "source '$MIRROR'; _cc_sync_config_mirror '$1'" >/dev/null 2>&1 || true
+  local want="$2" got
+  got="$(readlink "$1/CLAUDE.md" 2>/dev/null || true)"
+  if [ "$got" != "$want" ]; then
+    printf 'cc-instructions-variant: %s/CLAUDE.md points at %s, expected %s\n' "${1##*/}" "${got:-nothing}" "$want" >&2
+    exit 1
+  fi
+  printf '%s/CLAUDE.md -> %s (%s bytes). New sessions on this account load it.\n' \
+    "${1##*/}" "${want/#$HOME/\~}" "$(wc -c < "$want" | tr -d ' ')"
+}
+
+cmd_status() {
+  local d base arm tgt
+  printf '%-20s %-8s %-28s %s\n' ACCOUNT ARM 'CLAUDE.md ->' BYTES
+  while IFS= read -r d; do
+    [ -e "$d/CLAUDE.md" ] || continue
+    base="${d##*/}"; arm="$(registered "$base")"
+    tgt="$(readlink "$d/CLAUDE.md" 2>/dev/null || printf '(real file)')"
+    printf '%-20s %-8s %-28s %s\n' "$base" "${arm:-shared}" "${tgt/#$HOME/~}" "$(wc -c < "$d/CLAUDE.md" | tr -d ' ')"
+  done < <(account_dirs)
+  printf 'variants available:'
+  local f found=0
+  for f in "$SRC"/CLAUDE.*.md; do
+    [ -f "$f" ] || continue
+    found=1; f="${f##*/CLAUDE.}"; printf ' %s' "${f%.md}"
+  done
+  [ "$found" = 1 ] || printf ' (none deployed)'
+  printf '\n'
+}
+
+cmd_set() {
+  [ $# -eq 2 ] || die "usage: set <account> <variant>"
+  local d v="$2"
+  d="$(account_dir "$1")"
+  [[ "$v" =~ ^[a-z0-9-]+$ ]] || die "variant names are [a-z0-9-]+"
+  [ -f "$SRC/CLAUDE.$v.md" ] || die "no $SRC/CLAUDE.$v.md — deploy it first (install.sh copies CLAUDE.global.$v.md)"
+  write_reg "${d##*/}" "$v"
+  log_event "${d##*/}" "$v" set
+  resync "$d" "$SRC/CLAUDE.$v.md"
+}
+
+cmd_reset() {
+  [ $# -eq 1 ] || die "usage: reset <account>"
+  local d; d="$(account_dir "$1")"
+  write_reg "${d##*/}"
+  log_event "${d##*/}" shared reset
+  resync "$d" "$SRC/CLAUDE.md"
+}
+
+case "${1:-status}" in
+  status) cmd_status ;;
+  set) shift; cmd_set "$@" ;;
+  reset) shift; cmd_reset "$@" ;;
+  log) [ -r "$LOG" ] && cat "$LOG" || printf 'no switches logged\n' ;;
+  -h|--help|help) sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' ;;
+  *) die "unknown command '$1' (status | set | reset | log)" ;;
+esac
