@@ -53,7 +53,7 @@ when the lock is gone, and would otherwise keep calling a live source pane a hus
 CUSTODY/SPLIT leaves the tombstone: that move DID happen, and only the lock is being given up.
 
 Exit: 0 ok · 1 no such lock · 2 REFUSED (nothing changed) · 3 usage.
-Env: LR_STATE_DIR (default ~/.reso/limit-recover) · LR_LOCK_TTL_S (default 3600) ·
+Env: LR_STATE_DIR (default ~/.reso/limit-recover) · LR_LOCK_TTL_S (default 21600) ·
      LR_LOCK_SLACK_S (default 60) · LR_NOW (epoch; tests).
 """
 import glob
@@ -78,11 +78,12 @@ def _int_env(name, default):
         return default
 
 
-# ONE HOUR. The in-flight window this must outlast is admit → confirm, which is bounded by the
-# composer gate (≤180 s, handoff-fire.sh) plus the copy itself; an hour is twenty times that. Nothing
-# CUSTODY-bearing is ever reaped however long the TTL is, so a short one costs nothing but a
-# misclassified in-flight move — which is what the TTL is there to prevent.
-TTL_S = _int_env("LR_LOCK_TTL_S", 3600)
+# SIX HOURS. Two floors, and the longer one sets it. (1) The in-flight window: admit → confirm is
+# bounded by the composer gate (≤180 s, handoff-fire.sh) plus the copy. (2) The supervisor horizon
+# (scripts/reaper-horizon-lint.sh): no reaper may retire evidence faster than 10 × the slowest sweep
+# (600 s) — cc-limited --reaper must get to SEE a stuck claim before it expires. 6 h clears both with
+# room. An operator who cannot wait has the release verb; the TTL is for the moves nobody looks at.
+TTL_S = _int_env("LR_LOCK_TTL_S", 21600)
 # "Written since the move" means an mtime past the lock's `ts` by more than this. `ts` is taken just
 # BEFORE the copy and at one-second resolution, and `cp -p` gives the target the source's mtime at
 # copy time, which a still-appending source can put a second or two after `ts`.
