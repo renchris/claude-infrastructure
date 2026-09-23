@@ -1,0 +1,221 @@
+## Findings
+
+I found 14 defects. Ordered roughly by consequence: things that let a dangerous command through silently, then things that block the wrong command, then reporting gaps.
+
+---
+
+### 1. `rm -r`/`-f` flag variants escape both the deny and the ask entirely
+
+**What** — Both rm clauses hard-code the exact lowercase spellings `-rf`, `-fr`, `-r`, so common equivalents (`-Rf`, `-rfv`, `-r -f`, `--recursive --force`) match neither the deny pattern nor the occurrence extractor, and the command passes the validator with no decision at all.
+
+**Where** — lines 116 and 217:
+```bash
+if echo "$CMD" | grep -qE '(rm[[:space:]]+-rf[[:space:]]+/[^a-zA-Z]|rm[[:space:]]+-rf[[:space:]]+\$HOME|rm[[:space:]]+-rf[[:space:]]+~(/|$|[[:space:]])|sudo[[:space:]]+rm|:\(\)\{[[:space:]]*:\|:&[[:space:]]*\};:)'; then
+```
+```bash
+RM_OCCURRENCES=$(echo "$CMD" | grep -oE 'rm[[:space:]]+-(r|rf|fr)[[:space:]]+[^[:space:];&|]+' || true)
+```
+
+**Why it is wrong** — Input `rm -Rf ~/work` (or `rm -rfv /`, `rm -r -f $HOME`): line 116 needs the literal `-rf` followed by whitespace, and `-Rf`/`-rfv` do not provide it (grep is not `-i`, and `-rfv` puts `v` where a space is required); line 217's extractor rejects the same tokens, so `RM_OCCURRENCES` is empty and the `warn` block at 218 is skipped. The hook emits no JSON and exits 0, so a recursive delete of the home directory is neither denied nor escalated to an ask. The same line-oriented grep also misses a backslash-continued `rm -rf \`⏎`/`.
+
+---
+
+### 2. Stripping the leading `/` makes absolute root paths match the build-artifact safe list
+
+**What** — The target is compared to `SAFE_RM_TARGETS` *after* its leading `/` is removed, so top-level absolute paths whose basename happens to be a build-artifact name are classified as safe and pass with no warning.
+
+**Where** — lines 223–224:
+```bash
+    target_stripped=$(echo "$target" | sed -E 's|^\./||; s|^/||')
+```
+```bash
+    if ! echo "$target_stripped" | grep -qE "^${SAFE_RM_TARGETS}(/|$)"; then
+```
+
+**Why it is wrong** — Input `rm -rf /build` (equally `/out`, `/dist`, `/target`, `/coverage`, `/artifacts`). Line 116's deny needs a non-alphabetic character after the `/`, and `b` is alphabetic, so no deny fires. Line 223 turns `/build` into `build`, line 224 matches it against the safe list, the loop `continue`s, and the script exits 0 — a delete of a root-level directory is treated as a routine build-artifact cleanup and never surfaced to the user.
+
+---
+
+### 3. Only the first target of a multi-target `rm` is examined
+
+**What** — The extractor captures a single non-space token after the flag, so in `rm -rf A B` only `A` is ever tested against the safe list; the remaining targets are invisible to the guard.
+
+**Where** — lines 217 and 220:
+```bash
+RM_OCCURRENCES=$(echo "$CMD" | grep -oE 'rm[[:space:]]+-(r|rf|fr)[[:space:]]+[^[:space:];&|]+' || true)
+```
+```bash
+    target=$(echo "$occurrence" | sed -E 's/^rm[[:space:]]+-(r|rf|fr)[[:space:]]+//')
+```
+
+**Why it is wrong** — Input `rm -rf node_modules ../../src`. `[^[:space:];&|]+` stops at the space after `node_modules`, and `grep -o` finds no second `rm -rf ` prefix to anchor another occurrence, so `RM_OCCURRENCES` is exactly `rm -rf node_modules`. That target is safe, the loop ends without warning, and `../../src` is deleted unflagged. The comment at 213–215 claims per-clause extraction closed the "one clause matched a safe target" hole; it closed it only for `&&`-separated clauses, not for multiple arguments to one `rm`.
+
+---
+
+### 4. Bare `rm -rf /` is not denied, only asked
+
+**What** — The `rm -rf /` alternative requires one character after the slash, so the command with nothing following the `/` does not match and is downgraded from deny to ask.
+
+**Where** — line 116:
+```bash
+if echo "$CMD" | grep -qE '(rm[[:space:]]+-rf[[:space:]]+/[^a-zA-Z]|rm[[:space:]]+-rf[[:space:]]+\$HOME|rm[[:space:]]+-rf[[:space:]]+~(/|$|[[:space:]])|sudo[[:space:]]+rm|:\(\)\{[[:space:]]*:\|:&[[:space:]]*\};:)'; then
+```
+
+**Why it is wrong** — Input `rm -rf /` with no trailing space: grep strips the newline, `[^a-zA-Z]` has no character left to consume, and none of the other alternatives apply. Execution reaches line 217, extracts target `/`, line 223 strips it to the empty string, line 224 finds no safe-list match, and the script emits `permissionDecision: "ask"` — the exact command the deny message names ("rm -rf /") becomes a prompt the user can approve. `rm -rf "$HOME"` (the quoted form) degrades the same way: the `\$HOME` alternative requires `$HOME` immediately after the whitespace, and the `"` blocks it.
+
+---
+
+### 5. `check_real_flag` treats any unexpected helper status as "flag absent"
+
+**What** — Only rc 0 and 2 return "flag present"; every other status — including 127 when `is_true_flag` is not actually defined — falls to `return 1`, silently disabling `--no-verify`, `--no-gpg-sign`, and the `git add` force checks.
+
+**Where** — lines 98–103:
+```bash
+  if [[ "$HAVE_IS_TRUE_FLAG" == "1" ]]; then
+    is_true_flag "$flag" "$CMD"
+    local rc=$?
+    # rc=0 → real flag; rc=1 → substring only; rc=2 → unclear (fail safe = block)
+    [[ "$rc" == "0" || "$rc" == "2" ]] && return 0
+    return 1
+```
+
+**Why it is wrong** — `HAVE_IS_TRUE_FLAG` is set to 1 at line 52 whenever the *file* exists, regardless of whether `source` succeeded or whether the function inside is named `is_true_flag`. If the lib has a syntax error, is truncated, or renames the function, line 99 is an unknown command: bash prints to stderr and sets rc=127, line 102 is false, and line 103 reports "no such flag". `git commit --no-verify -m x` then passes every check and exits 0. This is the same silent self-disabling the jq guard at 21–31 was written to eliminate, and it contradicts the promise at 44–45 of a "fall back silently on a per-call basis" — the legacy regex at 107 is reachable only when the file is missing, never when the helper is present but unusable.
+
+---
+
+### 6. `git clean` is inspected only in its first flag group
+
+**What** — The `-x`/`-X` pattern requires the x-bearing bundle to be the token immediately after `git clean`, so `-x` written as a later argument is not warned about.
+
+**Where** — line 209:
+```bash
+if echo "$CMD" | grep -qE 'git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*[xX]'; then
+```
+
+**Why it is wrong** — Input `git clean -fd -x` (or `git clean --force -x`). The regex anchors `-[a-zA-Z]*[xX]` directly to the whitespace after `clean`; at that position it can only see `-fd`/`--force`, which do not end in `x`, and there is no second `git clean` occurrence for grep to re-anchor on. No warn is emitted and gitignored files — the paid assets the message names — are deleted without a prompt, even though the command is precisely the class the clause claims to cover.
+
+---
+
+### 7. `pkill` inside quotes or behind any wrapper bypasses the whole clause
+
+**What** — The command-position test runs on a copy with every quoted region blanked and requires the clause to *begin* with `pkill`/`killall`, so a kill issued through `sh -c "..."`, `timeout`, `xargs`, or `nohup` is never examined.
+
+**Where** — lines 136–138:
+```bash
+CMD_NOQ=$(printf '%s' "$CMD" | sed -e "s/'[^']*'/''/g" -e 's/"[^"]*"/""/g')
+if printf '%s' "$CMD_NOQ" | sed 's/[&|()]/;/g' | tr ';' '\n' | sed 's/^[[:space:]]*//' \
+     | grep -qE '^(sudo[[:space:]]+)?(pkill|killall)([[:space:]]|$)'; then
+```
+
+**Why it is wrong** — Input `bash -c "pkill -9 -f bats-core/bats"`: line 136 rewrites it to `bash -c ""`, no resulting line starts with `pkill`, and the entire block including the deny at 154 is skipped. `timeout 10 pkill -f bats` fails the same test because `timeout` is the first word and only `sudo` is allowed to precede the program name. Both forms SIGKILL every concurrent session's gate — the behaviour the clause exists to stop.
+
+---
+
+### 8. Quoted *mentions* of pkill are enumerated as occurrences and denied
+
+**What** — The position test is quote-stripped but the occurrence list at line 139 is built from the original text, so once any real `pkill` exists in the command, a `pkill` appearing inside a quoted string is treated as a separate unscoped kill and denied.
+
+**Where** — line 139:
+```bash
+  PK_OCCURRENCES=$(echo "$CMD" | grep -oE '(pkill|killall)[^;&|]*' || true)
+```
+
+**Why it is wrong** — Input `pkill -f "bats $PWD" && echo "next time use pkill -f bats"`. The position test passes on the first clause. Line 139 returns two occurrences: `pkill -f "bats $PWD" ` (scoped, `continue`d at 148) and `pkill -f bats"` — lifted out of the echo's message body. The second targets `bats`, matches no scope expression, and is denied. A correctly scoped kill is blocked because of text in a quoted string, which is the exact failure mode the comment at 131–135 says this design prevents.
+
+---
+
+### 9. The scope test accepts expressions that are not scoped to one worktree
+
+**What** — A bare `.worktrees/` in the pattern, a `-P` with any pid, or the cwd basename appearing anywhere in the occurrence text is taken as proof of single-worktree scoping.
+
+**Where** — lines 147 and 151:
+```bash
+    if echo "$pk" | grep -qE '\$PWD|\$\{PWD|\$\(pwd|`pwd|\$\(basename|(^|[[:space:]])-P[[:space:]]|\.worktrees/|(^|[^a-zA-Z0-9])wt-[a-zA-Z0-9]'; then
+```
+```bash
+    if [[ -n "${PWD##*/}" ]] && echo "$pk" | grep -qF -- "${PWD##*/}"; then
+```
+
+**Why it is wrong** — Input `pkill -f "bats .worktrees/"` matches the literal `\.worktrees/` and is allowed, yet that pattern matches the bats command line of *every* worktree on the box — machine-wide by construction, the condition the deny is for. `pkill -P 1 -f bats` is likewise accepted. Line 151 is a substring test over the whole occurrence, not a test that the pattern is anchored to this worktree: from a directory named `api`, `pkill -f "bats.*api-tests"` contains `api` and is waved through while killing every session's api-test run.
+
+---
+
+### 10. The `git add` force checks correlate nothing
+
+**What** — `check_real_flag` is evaluated over the entire command and merely AND-ed with the presence of the string `git add` somewhere, so a `--force`/`-f` belonging to a different program or subcommand triggers the deny.
+
+**Where** — lines 174 and 177:
+```bash
+if check_real_flag "--force" && echo "$CMD" | grep -qE 'git[[:space:]]+add\b'; then
+```
+```bash
+if check_real_flag "-f" && echo "$CMD" | grep -qE 'git[[:space:]]+add\b'; then
+```
+
+**Why it is wrong** — Input `git add . && git push --force origin HEAD`: `--force` is a real argv token, `git add` is present, and the hook denies with "git add --force blocked — gitignored files are intentionally excluded", a reason that is factually untrue of the command. Same for `git add . && grep -f patterns.txt log`, which is denied as `git add -f`. The user is blocked from a command the rule does not cover and is told a false reason for it.
+
+---
+
+### 11. `git commit -n` misses the bundled short forms
+
+**What** — The regex requires `-n` to be preceded by whitespace and followed by a word boundary, so the bundled spellings git itself accepts are not matched.
+
+**Where** — line 196:
+```bash
+if echo "$CMD" | grep -qE 'git([[:space:]]+-[a-zA-Z]+[[:space:]]+[^[:space:]]+)*[[:space:]]+commit\b[^|&;]*[[:space:]]-n\b'; then
+```
+
+**Why it is wrong** — Input `git commit -an -m "msg"` contains no `-n` substring at all (the characters are `-`, `a`, `n`), so the pattern cannot match. Input `git commit -nm "msg"` has `-n` after whitespace but `m` follows, so `\b` fails. Both forms are parsed by git as `--no-verify` plus the other flag, and both reach the pre-commit hooks unblocked — the bypass this clause exists to stop, per CLAUDE.md critical rule #2.
+
+---
+
+### 12. Raw-text clauses decide on quoted message bodies
+
+**What** — Three deny clauses match against the unmodified command text, so a command that merely *mentions* the forbidden thing inside a quoted `-m` message is blocked.
+
+**Where** — lines 196, 169, and 116:
+```bash
+if echo "$CMD" | grep -qE 'git([[:space:]]+-[a-zA-Z]+[[:space:]]+[^[:space:]]+)*[[:space:]]+commit\b[^|&;]*[[:space:]]-n\b'; then
+```
+```bash
+if echo "$CMD" | grep -qE 'drizzle-kit[[:space:]]+push'; then
+```
+```bash
+if echo "$CMD" | grep -qE '(rm[[:space:]]+-rf[[:space:]]+/[^a-zA-Z]|rm[[:space:]]+-rf[[:space:]]+\$HOME|rm[[:space:]]+-rf[[:space:]]+~(/|$|[[:space:]])|sudo[[:space:]]+rm|:\(\)\{[[:space:]]*:\|:&[[:space:]]*\};:)'; then
+```
+
+**Why it is wrong** — `git commit -m "use grep -n to find it"` matches at 196 (`[^|&;]*` happily spans `-m "use grep`, then ` -n` follows whitespace with a boundary after) and is denied as a `--no-verify` bypass. `git commit -m "stop using drizzle-kit push"` is denied at 169. `git commit -m "docs: never sudo rm -rf"` is denied at 116. In each case a legitimate commit is blocked with a reason describing a command that was never going to run, while `CMD_NOQ` — built at line 136 precisely to strip message bodies — is available and unused by these clauses.
+
+---
+
+### 13. The DDL clause's stated immunity to commit messages does not hold
+
+**What** — The two conditions are independent greps over the whole command, so a commit message that names both a database tool and a DDL keyword satisfies both and is denied.
+
+**Where** — lines 163–164:
+```bash
+if echo "$CMD" | grep -qiE '\b(turso|sqlite3?|psql|mysql|mariadb|libsql|drizzle-kit[[:space:]]+(push|drop|migrate))\b' \
+   && echo "$CMD" | grep -qiE '\b(DROP[[:space:]]+TABLE|DROP[[:space:]]+DATABASE|DROP[[:space:]]+INDEX|ALTER[[:space:]]+TABLE|CREATE[[:space:]]+TABLE|TRUNCATE[[:space:]]+TABLE)\b'; then
+```
+
+**Why it is wrong** — Input `git commit -m "fix: block DROP TABLE in the sqlite migration path"`: the first grep matches `sqlite`, the second matches `DROP TABLE`, and the commit is denied with "all schema changes must go through Drizzle migrations". The comment at 158–160 asserts the conjunction "avoids false positives on commit messages that discuss DDL" — it only does so for messages that discuss DDL without naming a database, which is the uncommon case.
+
+---
+
+### 14. Two silent-non-validation paths remain
+
+**What** — A payload that parses but yields no command produces the identical "validated nothing" outcome the abstain guard was built to make loud, with no abstain line; and every denied or asked command is omitted from the audit log because `deny`/`warn` exit before it.
+
+**Where** — line 40, and lines 77 / 90 versus 243:
+```bash
+if ! CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null); then
+```
+```bash
+  exit 0
+}
+```
+```bash
+echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [$SID] $CMD" >> ~/.claude/logs/bash-commands.log
+```
+
+**Why it is wrong** — First: `// empty` makes jq exit 0 with no output when `.tool_input.command` is absent, null, or renamed by a schema change, so line 40's test passes, `CMD` is empty, every pattern below misses, and the hook exits 0 — the outcome described at 24–26 — without writing to `validate-bash-unclear.log`. Second: `deny` exits at line 77 and `warn` at line 90, both before line 243, so the audit log contains only the commands that were allowed. Every blocked `pkill`, DDL, and `--no-verify` attempt — the events the log exists to reconstruct, per the incident notes at 120–135 — is absent from it.
