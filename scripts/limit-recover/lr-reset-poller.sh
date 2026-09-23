@@ -947,6 +947,23 @@ if [[ "${LR_POLLER_NO_CENSUS:-0}" != 1 && "${LR_UPGRADE_AUTO:-on}" != off && -f 
 fi
 lrp_upgrade_kick
 
+# ── TRANSPLANT-LOCK EXPIRY — the only caller of the TTL (cc-backlog 4f8c73bbdb35) ───────────────
+# lr-transplant.sh's split-brain lock had no TTL and no release verb, so an abandoned move held
+# custody of its session uuid forever. lr-lock.py owns the policy; this tick is what APPLIES it — a TTL
+# nothing enforces is a comment. It expires only what the disk proves carries no custody (ORPHAN,
+# ABANDONED) past LR_LOCK_TTL_S; a lock guarding a live successor is never touched, however old.
+# Kill switch LR_LOCK_REAP=off. One fork, bounded like every other on this tick; a failure is logged
+# and never stops the tick — this daemon's job is recovering sessions, not keeping the lock dir tidy.
+if [[ "${LR_LOCK_REAP:-on}" != off && -f "$LR/lr-lock.py" && -d "$STATE/locks" ]]; then
+  if [[ $DRY -eq 1 ]]; then
+    _lk_out="$(LR_STATE_DIR="$STATE" lrp_bounded python3 "$LR/lr-lock.py" reap --dry-run 2>&1 || true)"
+  else
+    _lk_out="$(LR_STATE_DIR="$STATE" lrp_bounded python3 "$LR/lr-lock.py" reap 2>&1)" \
+      || log "LOCK-REAP rc=$? (logged, tick continues)"
+  fi
+  [[ -z "${_lk_out:-}" ]] || while IFS= read -r _lk_line; do log "LOCK-REAP $_lk_line"; done <<< "$_lk_out"
+fi
+
 # ── the two predicate calls this loop makes, each ONE fork, both through the SSOT ───────────────
 # WHY A FUNCTION AND NOT AN INLINE `grep`. Both of these replace a raw `grep` whose exit 1 meant two
 # different things at once, and the poller read both as "no". The old `head -c 8000 | grep` for the

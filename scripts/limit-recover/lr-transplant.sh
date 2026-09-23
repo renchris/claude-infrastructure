@@ -12,6 +12,8 @@
 #         JSON next to the source transcript, and — only once a caller has
 #         ASSERTED the source is quiesced — the source transcript renamed to
 #         *.jsonl.handed-off.
+#         The lock EXPIRES only through lr-lock.py (TTL + release verb): past
+#         LR_LOCK_TTL_S, and only when the disk proves it guards no successor.
 #
 # TWO PHASES, because a HEALTHY source keeps appending after the copy:
 #   --phase admit    copy + sha-verify + lock + tombstone, and NEVER retire.
@@ -316,7 +318,7 @@ if [[ $FORCE -ne 1 && -e "$LOCK" && $SECOND_HOP -ne 1 ]]; then
     LRT_LOCK_REAL="$LRT_OWNER_REAL"
     LRT_TGT_REAL="$TO_REAL"
     if [[ "$LRT_LOCK_REAL" != "$LRT_TGT_REAL" ]]; then
-      echo "lr-transplant: REFUSED — session $SID is already transplanted to $LRT_LOCK_TO, not to $TO ($LOCK). Two targets for one session uuid is the split brain this lock exists to prevent; recover it at its CURRENT target, or move it ON from there with --from $LRT_LOCK_TO --to $TO, or pass --force if you have established that lock is stale." >&2
+      echo "lr-transplant: REFUSED — session $SID is already transplanted to $LRT_LOCK_TO, not to $TO ($LOCK). Two targets for one session uuid is the split brain this lock exists to prevent; recover it at its CURRENT target, or move it ON from there with --from $LRT_LOCK_TO --to $TO, or — if the move was abandoned — see what the disk says with 'python3 ${BASH_SOURCE[0]%/*}/lr-lock.py status $SID' and release it with 'lr-lock.py release $SID --why …' (--force here stays the override of last resort)." >&2
       exit 2
     fi
   fi
@@ -355,7 +357,9 @@ fi
 # a hop and stopping there leaves the hop refused HERE, which is why both carry the exemption.
 if [[ -e "$LOCK" && $FORCE -ne 1 && $SECOND_HOP -ne 1 ]]; then
   echo "lr-transplant: REFUSED — lock exists ($LOCK):" >&2
-  cat "$LOCK" >&2; exit 2
+  cat "$LOCK" >&2
+  echo "  an abandoned move expires on its own once lr-lock.py can prove it (lr-reset-poller reaps it); to release it now: python3 ${BASH_SOURCE[0]%/*}/lr-lock.py release $SID --why …" >&2
+  exit 2
 fi
 NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # READ-MODIFY-WRITE. The write below is a truncating `>`, so everything the hop must carry forward
