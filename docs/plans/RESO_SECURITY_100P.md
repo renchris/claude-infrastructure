@@ -384,7 +384,7 @@ smallest diff first.
 
 ---
 
-## Wave 7 — lead 9, the realtime publish secret — RULED 2026-09-23, IN FLIGHT
+## Wave 7 — lead 9, the realtime publish secret — RULED 2026-09-23 · Phase 1 DONE · Phase 2 is the operator's
 
 **Operator ruling, 2026-09-23, verbatim:** "Proceed as you recommend for the long-horizon end-game
 100th percentile absolute perfection implementation." Decision packet `bf9093e859b8` (conviction 88%
@@ -404,9 +404,18 @@ code safe to land FIRST.
 
 | Phase | What | Locus | State |
 |---|---|---|---|
-| **1** | send-poke signs with `SOKETI_APP_SECRET_<STEM>`, retries once with `_PREVIOUS` on 401/403 (fallback family too); every other publisher (`scripts/notify-deployment.sh`, qa, load, firedrill, smoke) env-sourced; Oregon `soketi-config.json` templated from SSM; bootstrap guard ALLOWS a non-default key, refuses `app-secret`; `scripts/rotate-soketi-secret.sh <region>` with typed-yes gates, `--dry-run`, re-run safety | S — pane 635, brief `/tmp/fire-sec-lead9-rotation.txt` | ▶ in flight |
-| **2** | Operator runs the script per region, in that region's daytime: SSM → app side (new + `_PREVIOUS`=old, incl. apps whose `_FALLBACK` targets this server) → server side → verify by effect (new 200, old 401) → clear `_PREVIOUS`. **Oregon stops mid-script for one `/deploy`** (Amplify env is baked at build) | operator | waits on Phase 1 |
+| **1** | send-poke signs with `SOKETI_APP_SECRET_<STEM>`, retries once with `_PREVIOUS` on 401/403 (fallback family too); every other publisher (`scripts/notify-deployment.sh`, qa, load, firedrill, smoke) env-sourced; Oregon `soketi-config.json` templated from SSM; bootstrap guard ALLOWS a non-default key, refuses `app-secret`; `scripts/rotate-soketi-secret.sh <region>` with typed-yes gates, `--dry-run`, re-run safety | S — pane 635, brief `/tmp/fire-sec-lead9-rotation.txt` | ✅ **LANDED** reso `36f77a4e0`..`e447e8d79` (34 paths, full unit suite + build green) + follow-up `52d644c97` `b7959d233`: the script reads each server's CURRENT key from the server's own config (Fly `SOKETI_DEFAULT_APP_SECRET` presence + on-machine sha256; Oregon `config.json` sha256 via read-only send-command), never from SSM. Script name is `scripts/rotate-soketi-key.sh` (a user deny rule blocks file tools on `*secret*` paths). Soketi rejects a bad key with HTTP 200 + a `code:401` body — both publishers read the body |
+| **2** | Operator runs the script per region, in that region's daytime: SSM → app side (new + `_PREVIOUS`=old, incl. apps whose `_FALLBACK` targets this server) → server side → verify by effect (new 200, old 401) → clear `_PREVIOUS`. **Oregon stops mid-script for one `/deploy`** (Amplify env is baked at build) | operator | 👤 **filed** `f639c4221741`. Order: dfw → iad → sin (SG daytime) → oregon + lax (start both, ONE `/deploy`, re-run both). Wrapper `bash /tmp/reso-rotate-publish-key.sh <region>` runs trunk's script from a detached worktree. Dry-run 2026-09-23: all 5 NOT ROTATED, every server on the stock key |
 | **3** | Remove the literal fallback on deployed servers (fail loud at send time), bootstrap guard REQUIRES a non-default key, drop `_PREVIOUS` handling if unused | S — fire after Phase 2 reports all 5 regions | waits on Phase 2 |
+
+**Found by the Phase 1 dry runs (2026-09-23), recorded so no one trusts SSM again:** SSM already
+held `SOKETI_APP_SECRET_LOS_ANGELES` (2025-12-20, non-default), `_SINGAPORE` (2026-01-11 — hashes to the
+STOCK key) and `_OREGON_FALLBACK` (2026-03-22, plain String) — written long before this work, never
+matched to a server. The LA value is not what `soketi-lax` runs. The first cut of the script inferred
+state from SSM and would have called LA "rotated", then kept the stale value as `_PREVIOUS` on a
+forced re-run — nudges lost between steps c and d. Fixed in `52d644c97`: the server's own config is the
+truth. Phase 3 inventory (from the Phase 1 session): send-poke's 12 literal fallbacks, notify's
+`LEGACY_STOCK_KEY`, deploy-soketi-config's legacy branch, `caddy-migration.sh:131` (historical).
 
 Found during the ruling's research, recorded so it is not rediscovered: the checkout's `.env.local`
 points Oregon, Los Angeles and Singapore at the PRODUCTION Soketi hosts with the default secret, so a
