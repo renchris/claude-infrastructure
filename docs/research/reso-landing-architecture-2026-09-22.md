@@ -38,33 +38,47 @@ fixes still collapse at N≈10–15 in both independent models built for this do
 design that does reach it:
 
 > **Verify each change once, commit through one short serialized step, and batch that step when it
-> is busy.** Every land takes one FIFO turn to move trunk. Nothing another session does can
-> invalidate a verification in progress, and a lost race stops costing a re-verification. At 15+
+> is busy.** Every land takes one turn to move trunk (non-code lands first, code lands in order).
+> Nothing another session does can invalidate a verification in progress, and a lost race stops
+> costing a re-verification. At 15+
 > high-volume sessions, one elected *combiner* runs that turn for every ready change at once: one
 > verification, one fast-forward push, bisect if red.
 
-Model results at a 30-min per-session land cadence ("high-volume") and wave-peak background load.
-Re-derive: `reso-landing-architecture-2026-09-22/run_model.sh`.
+Model results (landsim v2, after the wave-2 red-team corrected v1). Each cell assumes a 30-min
+per-session land cadence ("high-volume") and wave-peak background load, and applies E's measured
+interference law. Phases 2–4 include Phase 2's keying of the shell-out specs (suites at 0.6×).
+Re-derive: `reso-landing-architecture-2026-09-22/run_model.sh` (`scenarios.py keyed`).
 
-| N concurrent sessions | Today, as shipped | **Phase 2**: serialized lane | **Phase 3**: combiner, full suite per batch | **Phase 4**: + re-check pruning |
+| N concurrent sessions | Today, as shipped | **Phase 2**: serialized lane | **Phase 3**: combiner, full suite on any moved candidate | **Phase 4**: + re-check pruning |
 |---|---|---|---|---|
-| 8 · lands/h · **p95** | 4.9/h · **276 min** | 13.2/h · **13.7 min** | 13.9/h · **11.2 min** | 14.8/h · **6.7 min** |
-| 15 | 2.4/h · **collapsed (21 h)** | 20.1/h · **29.2 min** | 24.9/h · **13.2 min** | 27.1/h · **7.6 min** |
-| 25 | 1.6/h · collapsed | 21.0/h · 59.7 min (at its ceiling) | 39.2/h · **15.0 min** | 43.9/h · **9.9 min** |
-| 40 | 1.3/h · collapsed | 21.4/h · 107 min (at its ceiling) | 59.8/h · **19.1 min** | 64.9/h · **16.9 min** |
-| verification core-min per landed change, N=15 | 162 | 6.1 | 9.2 | 6.3 |
+| 8 · lands/h · **p95** | 3.4/h · **431 min** | 13.8/h · **7.3 min** | 14.3/h · **9.7 min** | 14.8/h · **6.2 min** |
+| 15 | 1.8/h · **collapsed (21 h)** | 25.0/h · **16.6 min** | 25.4/h · **13.4 min** | 26.7/h · **8.3 min** |
+| 25 | 1.2/h · collapsed | 29.2/h · 45.7 min (at its ceiling) | 38.6/h · **18.0 min** | 42.2/h · **13.5 min** |
+| 40 | 1.3/h · collapsed | 29.5/h · 98.9 min (at its ceiling) | 54.6/h · **33.4 min** | 57.3/h · **29.7 min** |
+| non-code lands at N=15 (p50 / p95) | fast, but their sessions sit in collapsed code lands | 1.5 / 3.6 min | 0.4 / 3.9 min | 0.2 / 1.5 min |
+| verification core-min per landed change, N=15 | ~159 | 3.8 | 6.4 | 4.3 |
 
-**Recommendation (conviction 87%):**
+At a 45-min cadence, Phase 2 alone holds N=15 at a **9.8-min** p95. There it beats the unpruned
+combiner (12.0), which pays for Phase A *and* a re-verification whenever trunk moved. N=40 at a
+30-min cadence offers ~80 lands/h, and every design here tops out near 55–58. That is **this Mac's
+verification capacity**: one full suite per code change, ~42–49 clean verifications/h (E). Past it,
+the lever is per-change cost (Phase 5), not coordination.
 
-- **Phase 2 now.** It takes days and needs no new component: one full suite per land instead of
-  two, the pre-push hook honouring it, and every land taking a FIFO turn from before its fetch
-  through its push. It moves today's scale (N≈8) from a 276-minute modelled p95 (48 min measured)
-  to about 14 min. At a 45-min cadence it carries N=15 at a 19-min p95. Its ceiling is ~21 lands/h.
-- **Phase 3 when the peak crosses ~15 lands/h**, which the operator's stated 15+ high-volume target
-  crosses at once. It is the combiner: group commit behind the same turn, which removes the ceiling.
-- **Phase 4 once pruning is proven in shadow mode**, to shrink the turn itself.
+**Recommendation (conviction 86%):**
 
-§8 says what would move the conviction, and lists the **four standing reso rulings** this plan asks
+- **Phase 2 now.** It takes days and needs no daemon:
+  - one full suite per land instead of two, which the pre-push hook honours;
+  - the 23 shell-out specs keyed on their declared inputs;
+  - every land taking a FIFO turn from before its fetch through its push, with non-code lands
+    jumping the queue.
+
+  It moves today's scale (N≈8) from a 48-min measured p95 to about 7 min. It carries N=15 at a
+  45-min cadence. Its ceiling is ~29 lands/h.
+- **Phase 3 when the measured peak passes ~20 lands/h** (the lane at 70% of its ceiling). That is
+  the combiner: group commit behind the same turn, which removes the ceiling.
+- **Phase 4 once pruning is proven in shadow mode**, to cut the combiner's re-verifications.
+
+§8 says what would move the conviction and lists the **four standing reso rulings** this plan asks
 the operator to amend (R1–R4). None blocks Phase 1.
 
 ---
@@ -103,10 +117,10 @@ at N=15.
 
 | # | Bottleneck | Mechanism | Measured price (7 d) | At N=15 |
 |---|---|---|---|---|
-| **B1** | **Verification inside the CAS window** | Every round verifies (tsc `ship-land.sh:632-653`, union suite `:659-669`) and only *then* pushes. The push succeeds only if trunk did not move since the round's fetch (`:889-892` → rc 99, 5 rounds `:43`). A lost round repeats *all* of it. Every one of 75 won rounds had 0 competing lands inside its window, and every one of 25 lost rounds had ≥1 (H1) | 24 lost-race rounds = **3.4 wall-h**; 18 units needed retries (**5.8 wall-h**) | **Collapse.** Model: today's lane lands 2.4/h against ~28/h offered. H1's independent model shows the same between N=10 and N=15 |
+| **B1** | **Verification inside the CAS window** | Every round verifies (tsc `ship-land.sh:632-653`, union suite `:659-669`) and only *then* pushes. The push succeeds only if trunk did not move since the round's fetch (`:889-892` → rc 99, 5 rounds `:43`). A lost round repeats *all* of it. Every one of 75 won rounds had 0 competing lands inside its window, and every one of 25 lost rounds had ≥1 (H1) | 24 lost-race rounds = **3.4 wall-h**; 18 units needed retries (**5.8 wall-h**) | **Collapse.** Model v2: today's lane lands 1.8/h against ~28/h offered. H1's independent model shows the same between N=10 and N=15 |
 | **B2** | **The same tree verified twice, and the second run sits inside `git push`** | `pre-push:130-150` runs the full `pnpm test:unit` on any `src\|lib\|replicache` TS change. The tree token `ship-land.sh:771-811` writes **has no reader**: the hook-side skip (V3 "W3b") was never built. As designed, it honours only a `mode=full` token (reso `docs/infra-deploy/learnings.md:2682`), and 47 of 50 tokens on disk are `union`. Git runs a pre-push hook **after** reading the remote ref and **before** sending the update, and it runs it **even for a push it already knows is doomed** (reproduced, §3.1). The always-run set is 92% of suite time, so the round pays for two nearly full suites | 62 code rounds × mean **179 s** = **3.1 wall-h**; 43% of the median window. 18 non-fast-forward rounds each still paid 114–299 s of hook suite (H2) | Every code land; 0 of 32 code-land pairs with overlapping push windows both landed (H2) |
 | **B3** | **Admission wait sits inside the window** | Reconcile's `git fetch` (`ship-reconcile.sh:78`) runs *before* `run_suite` takes the `reso-land` slot (`ship-land.sh:547-548, 840-845`). Whatever the slot queue costs is window time | **P(round lost \| waited for the slot) = 0.79 vs 0.19 without a wait** (19/24 vs 6/32); 18 of 19 attributed to the slot holder or an overlapping hook suite (H1) | Grows with every added code lander |
-| **B4** | **Admission is split, unordered and partly dead** | `reso-land` K=1 bounds the union suite. The hook's suite is admitted in `general` K=3, so the box runs 1 union + up to 3 full suites at once. No FIFO: a 299-s waiter can lose to a newcomer and exit 10. The memory floor is discarded (`cc-sem.sh:271 … \|\| true`). Much of the box's load is *unadmitted*: `tsc` (2.3 GB each), claude-infrastructure's own land lane (633 lands / 112 gate-hours in the same 7 days), Chrome helpers (H2 row 5; E) | admission wait **0.9 wall-h**, p90 152 s; `reso-land` held **65.6%** of samples in the 05:00–05:10Z burst (B1); 3 exit-10 refusals | Even the recommended design degrades past N=25 at K=1 (p95 36 min) against 10 min at K=2 (§4.4) |
+| **B4** | **Admission is split, unordered and partly dead** | `reso-land` K=1 bounds the union suite. The hook's suite is admitted in `general` K=3, so the box runs 1 union + up to 3 full suites at once. No FIFO: a 299-s waiter can lose to a newcomer and exit 10. The memory floor is discarded (`cc-sem.sh:271 … \|\| true`). Much of the box's load is *unadmitted*: `tsc` (2.3 GB each), claude-infrastructure's own land lane (633 lands / 112 gate-hours in the same 7 days), Chrome helpers (H2 row 5; E) | admission wait **0.9 wall-h**, p90 152 s; `reso-land` held **65.6%** of samples in the 05:00–05:10Z burst (B1); 3 exit-10 refusals | Even the recommended design degrades past N=25 at K=1 (p95 32 min) against 18 min at K=2 (§4.4) |
 | **B5** | **Race misclassification** | GitHub's server-side refusal `cannot lock ref … is at X but expected Y` fell to exit 9 "REJECTED and NOT by a race". **Fixed on trunk during this research** (`c8eed1e25`, verified by ancestry) | 5–6 of 15 exit-9s in the window | Closed |
 | **B6** | **The push's clock is shorter than its hook** | `PUSH_TIMEOUT=120` (`ship-land.sh:45`) wraps a hook suite whose p50 is ~163 s. Exit 12 is TERMINAL (`:901-907`). Sessions survive only by exporting `LAND_PUSH_TIMEOUT=900` because a rules lesson says so (H2 row 2) | 3 exit-12 rows at exactly 120 s, one killed *after* a green hook | Moot once B2 is fixed |
 | **B7** | **Nondeterministic verification** | Every fixed-port and fixed-path hazard is **already fixed** (every socket suite binds port 0; `/tmp` literals are pid-scoped; `tmpdir()` goes through `mkdtemp`). One shared-state touch remains: `postland-verify.test.ts:82,96` omit `POSTLAND_TIP_REF` and fetch the shared `origin/main` ref (C). **What remains is load**: neither `run_suite` nor the push sets `CI=true` or `VITEST_TIMEOUT_FACTOR` (`vitest.config.ts:9,54-55`), so there are no retries and the timeouts are 15 s. The lane maps *any* red to exit 6, with no "timeouts only ⇒ non-verdict" arm (H2 row 4) | 15 verification reds. **5 went green on the identical tree** next attempt; 8 of 9 land-suite reds were `scripts/__tests__` shell-out specs at load 140–266. Of the 6 reds where the union passed and the hook failed: 3 were the old fixed-port bug, 1 looks like a load flake, 2 are unattributable, **none a demonstrated selector miss** (C, D) | A false red costs a whole attempt today. In any batching design it poisons a batch, so the flake rate is a first-class model input (§4.4) |
@@ -142,8 +156,17 @@ per cell.
   change (55% touch code), blocked until it resolves.
 - **Failures.** 5% of code changes carry a real defect, and the author fixes it in Exp(10 min). A
   flaky red occurs at 3% per suite run and re-invokes after 60 s.
-- **Stage laws.** Fitted from land.log: `tsc=28+0.23L`, `union=121+0.27L`, `full=143+0.36L`, where L
-  is background load plus the contribution of running verifications.
+- **Stage laws.** Fitted from land.log: `tsc=28+0.23L`, `union=121+0.27L`, `full=143+0.36L` at
+  background load L. **Plus E's measured interference**: every *other* concurrently running suite
+  adds +45 s to a union suite, +49 s to a full suite and +11 s to tsc. v1 of this model charged
+  concurrency only through load1 (~1 s per suite). The wave-2 red-team showed that flattered the
+  combiner, and v2 corrects it (§4.4).
+- **Phase A runs the full suite** (union ≈ full in cost, D/E). Its verdict is then a `mode=full`
+  record for the exact tree, so a lone ticket landing on the trunk it was verified on needs no
+  second run. v1 let the combiner skip its suite in that case while Phase A had run only the union:
+  a second flattering bug the red-team found.
+- **Non-code lands jump the queue** in the serialized lane and the combiner (§5.4), and code and
+  non-code latencies are reported separately.
 - **Policies:**
 
 | Policy | What it is |
@@ -151,20 +174,20 @@ per cell.
 | **P0** | Today: optimistic CAS, 5 rounds. Each round runs tsc + admitted union suite + the hook's full suite inside the push |
 | **P1 / P1f** | P0 with the waste removed: the hook honours the token, a doomed push is skipped, ref-lock = race. P1f runs one *full* suite in place of union + hook. A lost round still re-verifies |
 | **P2** | P1 plus cheap revalidation of a lost round (incremental tsc, and a partial suite only when the incoming delta intersects the change's tests, probability 1−(1−q)^k) |
-| **PS** | **Phase 2's serialized lane**: every land takes one FIFO turn from before its fetch through its push; code runs tsc + one full suite inside it |
+| **PS** | **Phase 2's serialized lane**: every land takes one turn from before its fetch through its push, and non-code lands are served before waiting code lands. Code runs tsc + one full suite inside it |
 | **P3** | Verify in parallel (Phase A), then commit through one FIFO critical section that revalidates as in P2 |
 | **P4** | The brief's literal hypothesis: enqueue *unverified*, one lander verifies trunk+batch in full, bisect a red batch |
-| **P5 / P5f** | **Recommended**: P3's commit step run by one combiner that group-commits every ready ticket. P5f revalidates with the full suite per batch (no pruning); P5 prunes |
+| **P5 / P5f** | **Recommended**: Phase A (full suite, K=2) in each session, then one combiner that group-commits every ready ticket, non-code first. P5f re-runs the full suite on any candidate that differs from a ticket's verified tree (Phase 3, no pruning); P5 prunes (Phase 4) |
 
 ### 4.2 Validation against the week
 
 Today's lane at the shipped admission (K=1):
 
-- Measured 92% single-round lands at N≈2 (the time-averaged in-flight count). The model gives 91%
-  at N=2.
-- Measured p95 48 min and max 82 min at N≈4–6. The model gives p95 24–64 min and max 72–203 min at
-  N=4–6.
-- The model's throughput already falls between N=6 and N=8 (8.6 → 6.8 lands/h at background 45):
+- Measured 92% single-round lands at N≈2 (the time-averaged in-flight count). The model gives
+  88–89% at N=2.
+- Measured p95 48 min and max 82 min at N≈4–5. The model gives p95 27–38 min and max 83–119 min at
+  N=4.
+- The model's throughput falls between N=6 and N=8 (7.4 → 3.9 lands/h at background 45):
   **today's lane saturates at about 6 concurrent landers**.
 - H1's independent simulation, calibrated at N=5 and a 45-min cadence, reproduced the measured 5.8
   lands/h and first-round loss 0.44 (measured 0.45).
@@ -173,47 +196,59 @@ Today's lane at the shipped admission (K=1):
 
 ### 4.3 Results
 
-The §1 table is the `phases` section of `scenarios.py`. The fuller picture:
+The §1 table is `scenarios.py keyed` at a 30-min cadence. Each cell below gives lands/h · p95
+minutes; "keyed" means Phase 2e's shell-out keying is on (suites at 0.6×).
 
-| cadence | N | PS (Phase 2) lands/h · p95 | P5f (Phase 3) | P5 (Phase 4) |
+| cadence | N | PS (Phase 2) | P5f (Phase 3) | P5 (Phase 4) |
 |---|---|---|---|---|
-| 45 min | 8 / 15 / 25 / 40 | 9.5 · 12.1 / 16.5 · **19.0** / 21.1 · 45.4 / 20.8 · 92.5 | 9.8 · 10.9 / 17.4 · **12.2** / 29.2 · 13.9 / 44.7 · 16.0 | 9.9 · 6.4 / 18.5 · **7.0** / 30.8 · 8.1 / 48.7 · 11.2 |
-| 30 min | 8 / 15 / 25 / 40 | 13.2 · 13.7 / 20.1 · **29.2** / 21.0 · 59.7 / 21.4 · 107 | 13.9 · 11.2 / 24.9 · **13.2** / 39.2 · 15.0 / 59.8 · 19.1 | 14.8 · 6.7 / 27.1 · **7.6** / 43.9 · 9.9 / 64.9 · 16.9 |
-| 15 min | 8 / 15 / 25 / 40 | 19.6 · 20.0 / 21.0 · 42.8 / 20.4 · 82.0 / 20.9 · 120 | 22.6 · 12.7 / 38.1 · **14.4** / 59.9 · 18.2 / 69.9 · 36.3 | 26.4 · 7.2 / 46.3 · **9.4** / 66.5 · 17.6 / 70.9 · 37.5 |
+| 45 min, keyed | 8 / 15 / 25 / 40 | 9.7 · 6.7 / 18.4 · **9.8** / 27.4 · 29.9 / 29.5 · 75.4 | 10.2 · 8.5 / 18.2 · **12.0** / 29.6 · 15.0 / 43.6 · 21.3 | 10.1 · 5.7 / 18.7 · **7.0** / 31.1 · 9.7 / 47.8 · 16.4 |
+| 30 min, keyed | 8 / 15 / 25 / 40 | 13.8 · 7.3 / 25.0 · **16.6** / 29.2 · 45.7 / 29.5 · 98.9 | 14.3 · 9.7 / 25.4 · **13.4** / 38.6 · 18.0 / 54.6 · 33.4 | 14.8 · 6.2 / 26.7 · **8.3** / 42.2 · 13.5 / 57.3 · 29.7 |
+| 30 min, **not** keyed (ruling R2 refused) | 8 / 15 / 25 / 40 | 13.3 · 13.7 / 20.4 · 34.1 / 21.6 · 81.6 / 21.9 · 154 | 13.2 · 15.3 / 22.7 · 22.0 / 33.9 · 29.7 / 40.4 · 60.8 | 14.3 · 9.4 / 25.5 · 14.1 / 37.5 · 25.1 / 42.4 · 57.5 |
 
-- **PS is a large, cheap win with a hard ceiling (~21 lands/h at wave-peak load).** It removes every
-  lost race, so collapse is gone, but one full suite per code land inside one turn caps throughput.
-- **The combiner removes the ceiling** because group commit shares one verification among everything
-  waiting. Its advantage over PS appears from N≈15 at a 30-min cadence, and it is 3–6× by N=25–40.
-- **The literal hypothesis (P4, enqueue unverified)** uses the least CPU (3–5 core-min per land) but
-  is slower everywhere. At N=15 its p95 is 17.7 min against 7.6 min for P5; at N=40 it is 65.2 min
-  against 16.9 min. With 10% flakes at N=25 it is 30.5 min. Unverified tickets poison batches, and a
-  bisect stalls everyone behind it.
+- **PS is a large, cheap win with a hard ceiling:** ~29 lands/h keyed, ~21 not keyed. Serializing
+  every land removes every lost race, so collapse is gone, and each code change is verified exactly
+  once. At a 45-min cadence that makes PS *better* than the unpruned combiner up to N=15.
+- **The combiner removes the ceiling.** Group commit shares one verification among everything
+  waiting, which is worth it where PS's ceiling binds: from N≈15–20 at a 30-min cadence, and 2–3×
+  at N=25–40. Unpruned, it pays for Phase A *and* a re-verification whenever trunk moved, which is
+  why pruning (P5) matters most here.
+- **Near 55–60 lands/h every design meets this Mac's verification capacity.** At N=40 × 30 min
+  (offered ~80/h) the combiner's p95 is 30–33 min however it is tuned.
+- **Keying is the largest single lever after serialization.** Without it, every column roughly
+  doubles its p95 at N≥15.
+- **The literal hypothesis (P4, enqueue unverified)** uses the least CPU but is slower wherever load
+  is real: 19.8 vs 14.1 min (P5, not keyed) at N=15, and 76 vs 58 at N=40. Unverified tickets poison
+  batches, and a bisect stalls everyone behind it (§4.4 flake rows).
 
 ### 4.4 What the verdict rests on
 
-| scenario (background 150) | P2 p95 at N=15 / 25 / 40 | P3 | **P5** |
-|---|---|---|---|
-| q=0.1 (pruning very effective) | 7.3 / 9.6 / 21.0 | 6.8 / 8.9 / 18.1 | **6.9 / 9.1 / 16.9** |
-| q=0.3 (base) | 7.9 / 13.2 / 32.8 | 7.5 / 10.4 / 20.4 | **7.6 / 9.9 / 16.9** |
-| q=1.0 (every rebase needs a partial re-run) | 13.5 / 32.7 / 91.9 | 8.2 / 11.5 / 20.9 | **8.2 / 10.4 / 17.9** |
-| **no pruning at all** (revalidation = full re-verify) | 78.9 / 200 / 367 | 22.1 / 49.8 / 87.6 | **13.1 / 14.7 / 18.8** |
-| flaky tests 10% per suite run, N=15 / 25 | 10.8 / 16.0 | 10.5 / 13.6 | **10.6 / 13.3** (P4: 19.1 / 30.5) |
+All rows are keyed, at a 30-min cadence, background 150.
 
-- **Pruning risk never becomes throughput risk.** P5 is the only design that holds in every row,
-  including "no pruning at all", because group commit amortizes an expensive commit step. So the
-  combiner can be built *before* pruning.
-- **Admission width binds after everything else** (`scenarios.py admission`). At K=1 the combiner's
-  p95 is 13.1 / 35.7 / 77.0 min at N=15 / 25 / 40; at K=2 it is 7.6 / 9.9 / 16.9. E measured the
-  best throughput per unit of latency at ~2 concurrent suites. **Phase A runs at K=2, and the
-  combiner gets its own single slot.**
-- **Keeping the full suite as the gate costs little** (`scenarios.py fullsuite`). With the full suite
-  per batch (the reso ruling C11 honours only a full-suite skip), the combiner holds 13.2 / 15.0 /
-  19.1 min at K=2. The direct lane with one full suite (P1f) still collapses at N=15 at any K.
-- **The load law is conservative in the verdict's favour.** The model charges ~1 s per concurrent
-  suite through load1, while E measured **+45–49 s**. That under-penalizes the *parallel* designs
-  (P0, P1, P2 run many suites at once) and barely touches the serialized ones (PS and the combiner
-  run 1–3). Correcting it widens the gap; it cannot reverse it.
+| scenario | P5 (pruned) p95 at N=15 / 25 / 40 |
+|---|---|
+| q=0.10 (pruning very effective) | 7.0 / 11.2 / 28.1 |
+| **q=0.42** (H1's measured share of land pairs whose closures intersect) | **9.1 / 13.8 / 29.0** |
+| q=0.72 (H1's figure for wave-6's coupled work) | 9.6 / 14.4 / 27.8 |
+| q=1.0 (every rebase needs a partial re-run) | 9.9 / 15.0 / 27.4 |
+| **no pruning at all** (pf = tf = 1) | **13.1 / 17.6 / 30.3** |
+
+| flake rate per suite run, N=15 | PS | P5f | P5 | P4 (enqueue unverified) |
+|---|---|---|---|---|
+| 3% | 16.6 | 13.4 | 8.3 | 10.0 |
+| 10% | 21.5 | 17.3 | 10.4 | 13.2 (non-code p95 11.6) |
+
+- **Pruning risk never becomes throughput risk.** The combiner holds in every q row, including "no
+  pruning at all", because group commit amortizes an expensive commit step. So it can be built
+  *before* pruning.
+- **Admission width binds after everything else** (`scenarios.py admission`, P5f keyed). At K=1,
+  p95 is 15.2 / 32.2 / 71.0 min at N=15 / 25 / 40; K=2 gives 13.4 / 18.0 / 33.4; K=3 gives
+  13.3 / 18.9 / 27.2. E measured the best throughput per unit of latency at ~2 concurrent suites.
+  **Phase A runs at K=2 (K=3 once N>30), and the combiner gets its own single slot.**
+- **The corrected load law penalizes the combiner, not the lane** (`scenarios.py law`). Moving from
+  v1's load1 term to E's measured +45–49 s per concurrent suite leaves PS unchanged: it runs one
+  suite at a time. It raises the unkeyed combiner's p95 from 14.9 to 22.0 at N=15 and from 29.1 to
+  60.8 at N=40. That is why v2's headline rests on keying, and why the Phase 3/4 acceptance targets
+  in §7 are set from v2, not v1.
 
 ### 4.5 A second, independent model, and where it disagrees
 
@@ -232,9 +267,12 @@ It disagrees on non-code lands. H1 keeps them *out* of the serialization (their 
 pays with a verdict carry across disjoint rebases, a new mechanism with a soundness risk. H1's
 queue raised non-code p50/p90 from 14/80 s to 62/348 s at N=15.
 
-**This plan takes the other side on purpose.** Every land takes the turn, so no carry is needed for
-soundness. Non-code lands pay ~1 min at the median until Phase 4's pruning lets a provably disjoint
-non-code change ride the in-flight push. §6 records H1's variant as the principal alternative.
+**This plan takes the other side on purpose, and priority pays most of H1's price back.** Every
+land takes the turn, so no carry is needed for soundness. Non-code lands are served before waiting
+code lands: in the serialized lane at N=15 (30-min cadence, keyed) their p50/p95 is 1.5 / 3.6 min.
+Without priority, a plain FIFO turn made it 9.7 / 25 min (red-team #3). Phase 4's pruning brings it
+to 0.2 / 1.5 min by letting a provably disjoint non-code change ride the in-flight push. §6 records
+H1's variant as the principal alternative.
 
 ---
 
@@ -272,21 +310,25 @@ carries, not its contract.
 | Component | What it is | Invariant |
 |---|---|---|
 | **Verdict record** (exists: `~/.reso/presubmit/<tree>.json`, `ship-land.sh:771-811`) | "This exact tree passed these checks, in this environment." Written only on a real green | **I1: each (tree, env, check) is verified at most once, box-wide.** Every gate consults it, including the pre-push hook, which today does not (B2). The environment signature is **matched on read**; today `:793-795` records it and nothing matches it. claude-infrastructure paid for the unmatched version: a `.shellcheckrc` flip "let a red land green" (F §3 row 9) |
-| **The turn** | A FIFO lease: `mkdir` + `pid+lstart` identity + heartbeat + reap mutex + generation re-check (claude-infrastructure `scripts/land-lock.sh:370-412`). It is never reaped from a live holder at any age, and it has a hard hold bound after which the holder aborts itself | **I2: no on-box land can move trunk under a verification in progress, and correctness never depends on the lease.** Trunk advancement is still decided by GitHub's ref compare-and-swap plus content-verify (`ship-land.sh:14-24`). A false takeover wastes work; it can never lose or double a land. reso's own reap is a bare rename with a documented 3-holder race (F §3 row 6) and is not reused |
-| **Phase A presubmit** (today's round 1 minus the push) | reconcile → tsc → union suite, admitted at K=2, in the session's own worktree | Author defects and most flakes are caught **before** they reach a batch. The P4 → P5 gap in §4.3 is this component |
+| **The turn** | A lease with two queues (non-code served first, then code in FIFO order). Acquisition is claude-infrastructure's `mkdir` + `pid+lstart` identity + reap mutex + generation re-check (`scripts/land-lock.sh:370-412`), reaped **only when the holder's pid is dead**. Three pieces are **new code, not a port**, because that script has no self-abort and treats a live over-budget holder as "needs a human" (`:204-232`; red-team #1):<br>(a) **every network call inside the turn is bounded**: `timeout` on fetch, `ls-remote` and push, plus `ServerAliveInterval` for the SSH remote. Today `ship-reconcile.sh:78` and `ship-land.sh:277,753` fetch unbounded;<br>(b) **a watchdog side process** heartbeats the lease. Past the hard hold bound it kills the holder's own process group, so a hung holder dies and is then reaped as dead. A live holder is never stolen;<br>(c) **a waiter bound**: a session waiting longer than it falls back to today's optimistic lane (with Phase 2's fixes) instead of waiting forever.<br>The turn runs in a **detached child**, never inside the Claude Code Bash call: a waiting land can outlast the tool's 600-s ceiling, and a killed tool call must not orphan a holder mid-push (red-team #3) | **I2: no on-box land can move trunk under a verification in progress; nothing can hold the turn forever; correctness never depends on the lease.** Trunk advancement is still decided by GitHub's ref compare-and-swap plus content-verify (`ship-land.sh:14-24`). A false takeover wastes work; it can never lose or double a land. reso's own reap is a bare rename with a documented 3-holder race (F §3 row 6) and is not reused |
+| **Phase A presubmit** (today's round 1 minus the push) | reconcile → tsc → the **full** suite (keyed as in Phase 2e), admitted at K=2, in the session's own worktree. It writes a `mode=full` verdict record for the exact tree | Author defects and most flakes are caught **before** they reach a batch. A lone ticket that lands on the trunk it was verified on needs no second run. The P4 → P5 gap in §4.3 is this component |
 | **Ticket spool** `~/.reso/landq/tickets/<id>.json` | Written by atomic rename; carries branch, head, tree, verified base, changed files, ship class and owner address. **Local only**: never pushed as a ref, so no Amplify auto-branch risk (B2 table) and no extra Actions runs | **I3: a ticket is data, not a process.** Any process can die and nothing is lost |
-| **Combiner** | An **on-demand detached process**. The first publisher that finds no live lease spawns it; it drains the spool and exits after ~30 s idle. **No launchd agent, no permanent daemon**, in its own persistent worktree (warm `tsconfig.tsbuildinfo`, `node_modules`) where no statusline or sweeper runs `git status` | **I4: a wedged combiner cannot stop the fleet.** A waiter that sees a dead or stale lease spawns a replacement. Past a hard bound, a session degrades to the Phase 2 lane. reso killed a persistent lander daemon twice ("a wedged train blocks all sessions — worst 3am failure", B2 C4) and claude-infrastructure ranked one second for the same reason (F §4); both halves of that failure are designed out |
+| **Combiner** | An **on-demand detached process** that holds the turn while it works. The first publisher that finds no live combiner spawns it; it drains the spool and exits after ~30 s idle. **No launchd agent, no permanent daemon.** It runs in its own persistent worktree (warm `tsconfig.tsbuildinfo`, `node_modules`) where no statusline or sweeper runs `git status`. Its heartbeat comes from the turn's watchdog side process, never from its main loop, so a long suite cannot make it look dead (red-team #4) | **I4: a wedged combiner cannot stop the fleet.** It is replaced only when its pid is dead; a hung one is killed by its own watchdog past the hard bound, then replaced. Past its waiter bound, a session degrades to the direct lane. reso killed a persistent lander daemon twice ("a wedged train blocks all sessions — worst 3am failure", B2 C4) and claude-infrastructure ranked one second for the same reason (F §4); both halves of that failure are designed out |
+| **Write-ahead journal** `~/.reso/landq/journal.jsonl` | Before every push the combiner appends `{candidate tip sha, ticket id → landed commit shas}` and fsyncs | **I10: landedness after a crash is decided by ancestry of the journaled tip, never by content inference.** A ticket whose file a later ticket in the same batch rewrote would otherwise read as "not landed" and be re-picked (red-team #5) |
 | **Group commit** | One push carries every ticket that verified green, as **distinct rebased commits, never squashed** | **I5: per-commit attribution survives.** Patch-ids are preserved for `worktree-gc`'s landedness test and for any future postland bisect (B2 C14) |
-| **Adoption** | On `landed`, the waiting `ship-land.sh` re-verifies by content, then moves the session's branch onto the landed commits (`reset --keep` in the already-clean tree; any post-ticket commits are rebased onto them) | **I6: the session ends with HEAD reachable from trunk.** This is the precondition reso's invariant 4 exists to protect (B2 C1, C14): `wrap-ledger`'s `UNLANDED = AHEAD>0 OR CHERRY` then reads 0 |
+| **Adoption** | On `landed`, the session's branch is moved onto the landed commits (red-team #6), in one of three cases:<br>(i) **the synchronous default**: the tree is clean because ship-land refuses a dirty one and the session is blocked, so `reset --keep <landed head>`;<br>(ii) **commits made after the ticket** (`--async`): `rebase --onto <landed head> <ticket head>`;<br>(iii) **uncommitted edits to a file the batch touched**: adoption is deferred, never forced. The *next* `ship-land.sh` invocation, and `landq adopt` at session close, read the RESULT for this branch and adopt first, so a landed ticket is never re-published as an "already upstream" empty pick | **I6: the session ends with HEAD reachable from trunk.** This is the precondition reso's invariant 4 exists to protect (B2 C1, C14): `wrap-ledger`'s `UNLANDED = AHEAD>0 OR CHERRY` then reads 0 |
 | **Bisect, isolated re-run, known-red** | A red batch splits in halves. A single red ticket re-runs its failing spec files once, in isolation, on the same tree, before conviction (policy R4). A red that reproduces on **bare trunk** opens a trunk-red record rather than convicting a rider (the V3 W4b "known-red exclusion" is designed but unbuilt) | **I7: a flake never convicts an author, and one bad trunk commit cannot stall every land** (B2 C8) |
 | **Direct lane** (Phase 2's serialized lane) | Kept as the fallback. `LAND_QUEUE=off` restores it, the same pattern as `LAND_LANE=v1` (`ship-land.sh:81-85`) | **I8: degrade, never wedge** |
 | **Telemetry v4** | A `unit` id across attempts. Per ticket: Phase A s, turn wait s, turn s, batch size, verification-set size, bisects. `ts_start` is taken in the first process, not after the re-exec (H2 row 10) | **I9: the operator's number is computed by the system** |
 
 ### 5.3 What the combiner verifies
 
-- **Phase 3, no pruning.** tsc plus the **full unit suite** on the candidate, once per batch. The
-  resulting verdict record is `mode=full`, which is exactly what reso's hook-skip ruling honours
-  (C11). Group commit amortizes it: §4.4's "no pruning" row is this configuration.
+- **Phase 3, no pruning.** When the candidate differs from every ticket's verified tree (trunk
+  moved, or the batch holds more than one ticket), the combiner runs incremental tsc plus the
+  **full unit suite** on the candidate, once per batch. The resulting verdict record is `mode=full`,
+  which is exactly what reso's hook-skip ruling honours (C11). A lone ticket on an unmoved trunk
+  already *has* a `mode=full` record from Phase A, and it is pushed as verified. Group commit
+  amortizes the rest: §4.4's "no pruning" row is this configuration.
 - **Phase 4, pruning.** A ticket verified green on `base_i + change_i` lands on `trunk + earlier
   members`. A test whose inputs touch only one side has already passed on identical inputs, and only
   a test whose inputs touch **both** sides has never run on this combination. So the combiner runs:
@@ -307,11 +349,14 @@ carries, not its contract.
 A docs-, scripts- or data-only ticket needs no suite of its own, unless it touches a declared input
 of the shell-out specs.
 
-- The combiner serves the non-code queue first and pushes it in seconds.
-- A non-code ticket that arrives during a code batch's verification waits for that verification:
-  median ~1 min, where today's is ~20 s.
-- Phase 4 removes the wait: a non-code ticket whose files intersect no declared test input rides the
-  in-flight push, sound by the §5.3 argument.
+- The turn serves non-code lands first, in the Phase 2 lane and in the combiner alike, and they push
+  in seconds.
+- A non-code land that arrives while a code land holds the turn waits for that holder only, not for
+  the code queue. Modelled at N=15 (30-min cadence, keyed), p50/p95 is **1.5 / 3.6 min**, where
+  today's p50 is ~20 s. A plain FIFO turn made it 9.7 / 25 min (red-team #3), which is why priority
+  is part of Phase 2, not a tuning option.
+- Phase 4 removes most of the remaining wait: a non-code ticket whose files intersect no declared
+  test input rides the in-flight push, sound by the §5.3 argument (modelled 0.2 / 1.5 min).
 
 ### 5.5 Failure modes
 
@@ -320,8 +365,9 @@ of the shell-out specs.
 | **Poisoned batch** | Bisect by halves; land green halves at once; eject the culprit to its owner with the failing specs | Halves re-derive from the spool |
 | **Flaky test** | One isolated re-run on the identical tree (R4). Green ⇒ recorded in a flake ledger against that spec, and the ticket lands. Red again ⇒ convicted. A spec flaking twice in 7 days goes to quarantine with an owner | A flake costs one re-run, never a batch, and never silently |
 | **Red trunk** | A failure that also reproduces on bare trunk opens a trunk-red record, and batches are judged on "no new reds" until it clears | One bad commit cannot stall every land (B2 C8) |
-| **Combiner crash mid-batch** | The lease holder is dead ⇒ the next waiter reaps it under the reap mutex and spawns a combiner. That combiner first content-checks every spooled ticket against trunk: tickets pushed before the crash are marked `landed`, not re-pushed | The push is one atomic ref update; landedness is decided by content |
-| **Combiner hang** | Heartbeat stale past the bound ⇒ takeover. A zombie that wakes and pushes loses the ref compare-and-swap, or pushes content already landed, which content-verify reveals | Correctness is GitHub's CAS, never the lease (I2) |
+| **Combiner crash mid-batch** | The holder's pid is dead ⇒ the next waiter reaps it under the reap mutex and spawns a combiner. That combiner first reads the journal (I10). If the last journaled candidate tip is an ancestor of `origin/main`, its tickets are marked `landed` with the journaled shas and never re-picked; if it is not, nothing of that batch was pushed and it is re-processed | The push is one atomic ref update, and landedness is decided by the journaled tip's ancestry, not by content inference, which misreads in-batch supersession (red-team #5) |
+| **Holder or combiner hang** (a stuck suite, or a network call despite its timeout) | Never taken over while its pid lives: stealing a live holder is exactly v1's failure (`ship-land.sh:18`). Its own watchdog kills its process group at the hard bound; it then reads as dead and is reaped. Waiters past their bound fall back to the direct lane, so the fleet keeps landing in the meantime | Correctness is GitHub's CAS, never the lease (I2); the worst case is one bounded stall, then degraded-but-moving |
+| **A session's tool call times out while its land waits** (Claude Code's Bash ceiling is 600 s) | Nothing happens to the land: the turn runs in a detached child (I2), and the session re-attaches to its RESULT | The holder is never the tool-call process, so killing the tool call cannot orphan a push or a suite |
 | **Session dies while waiting** | Its ticket still lands and its RESULT persists; a successor adopts it by branch name | Tickets never depended on the session |
 | **Rebase conflict** | Eject that ticket (`conflict`, with paths); the owner resolves it and re-publishes. Rerere runs with `-c rerere.autoupdate=false` in the combiner, so a staged replay cannot masquerade as a clean stop (B1 §2.4) | Same outcome as today's exit 5, minutes sooner |
 | **Outside push** (the operator, a hotfix) | The combiner loses the ref CAS ⇒ re-fetch, re-verify (bounded), retry | CAS is still the arbiter |
@@ -354,8 +400,8 @@ of the shell-out specs.
 |---|---|---|
 | **The brief's four listed fixes only** (hook honours token, ref-lock = race, test band, retuned rounds/backoff) | Both models: collapse between N=10 and N=15 (H1: 2.9 of 18.8 lands/h at N=15). Rounds/backoff: 1 exhaustion all week; a 1–4 s jitter is <1% of the window (H1 fix 4) | Necessary pieces, not a design; folded into Phase 2 |
 | **H1's "C7": serialize only code lands through the slot, keep non-code lands optimistic, carry verdicts across disjoint rebases** | Best blended latency up to its break-even (N=15, 45 min: code p50/p90 319/805 s, non-code 14/80 s); loses to a queue beyond N\*≈12–17 (30 min) or ≈15 (coupled work). Needs the carry, which is a graph-based soundness risk, *in Phase 2* (H1 §e) | **The principal alternative.** Rejected for Phase 2 because it needs the riskiest mechanism first. Its non-code speed returns in Phase 4, once that mechanism is proven in shadow |
-| **Optimistic CAS + cheap revalidation** (P2) | Good at N=15 (7.9 min) but fragile in q: 91.9 min at N=40 when every rebase intersects, 367 min with no pruning | Rejected: its throughput depends on pruning being sound *and* effective |
-| **The literal merge queue: enqueue unverified, one lander, batch + verify-once + bisect** (P4) | Least CPU (3–5 core-min/land), worst latency: 17.7 min at N=15, 65.2 min at N=40; 30.5 min at N=25 with 10% flakes. Batch theory agrees: Dorfman's cost per change `1/b + 1 − (1−p)^b` puts the optimal batch at ≈1/√p, and flakes cut Ericsson's measured savings from 72% to 41% (A §2) | **Corrected, not rejected**: P5 is P4 with Phase A in front and bisect + isolated re-run instead of batch poisoning |
+| **Optimistic CAS + cheap revalidation** (P2) | Model v2 (base grid, unkeyed, background 150): 18.2 min at N=15 but 149 min at N=40, because lost rounds still cost re-verification and concurrent suites slow each other. v1 showed it fragile in q as well (91.9 min at N=40 when every rebase intersects) | Rejected: its throughput depends on pruning being sound *and* effective |
+| **The literal merge queue: enqueue unverified, one lander, batch + verify-once + bisect** (P4) | Least CPU (3.7–5.7 core-min/land), but slower wherever load is real: 19.8 vs 14.1 min for P5 at N=15, 76 vs 58 at N=40 (v2, 30-min cadence, unkeyed); non-code lands wait behind code batches (non-code p95 18 min at N=15). Batch theory agrees: Dorfman's cost per change `1/b + 1 − (1−p)^b` puts the optimal batch at ≈1/√p, and flakes cut Ericsson's measured savings from 72% to 41% (A §2) | **Corrected, not rejected**: P5 is P4 with Phase A in front and bisect + isolated re-run instead of batch poisoning |
 | **GitHub merge queue** | Available only for "public repository owned by an organization, or … private repositories owned by organizations using GitHub Enterprise Cloud" (github/docs `data/reusables/gated-features/merge-queue.md`, A §4). reso is **User-owned and private** (`gh api` → `owner.type: User`). It would also run one CI build per PR on paid minutes and need a PR per agent land (C7) | Rejected |
 | **Speculative stacking** (Zuul/SubmitQueue: verify trunk+c1, trunk+c1+c2 in parallel) | On one machine it multiplies CPU on the saturated resource: vitest already "uses all available parallelism", and speculative throughput is capped by runs of consecutive successes (A §2; SubmitQueue EuroSys'19 §8.3). reso killed speculative rebase chains in 2026-07 (the journal trap, B2 C4) | Rejected on this box |
 | **claude-infrastructure's design** (gate unlocked, a 3-s lock around check-then-push, an in-lock fallback after 3 rounds) | 44% of rounds that reach its lock are stale, rising 0.16 → 0.84 as rounds grow from 2–4 to 15–30 min. Its fallback convoyed to a 184-s p50 hold; land p95 63 min (F §0, §2) | Rejected as the model: it keeps verification inside the race. Its lock *implementation* is adopted for the turn (I2) |
@@ -424,13 +470,18 @@ record it cites.
     `test:unit`, is `mode=full`, is inside its TTL, and has a **matching** env signature. It prints
     a one-line receipt either way. Any mismatch runs the suite: this is fail-safe, and C11's polarity
     is kept.
-- **2b · The turn (U3):**
-  - Every land acquires one FIFO lease **before its fetch** and holds it through push and
-    content-verify, keeping it across a lost push.
-  - Non-code lands hold it only for their push.
+- **2b · The turn (U3), exactly as specified in §5.2:**
+  - Every land acquires the lease **before its fetch** and holds it through push and
+    content-verify, keeping it across a lost push. Non-code lands are served first and hold it only
+    for their push.
+  - Every network call inside it is bounded; a watchdog side process heartbeats it and kills a
+    holder that passes the hard bound; a waiter past its bound falls back to the optimistic lane.
+  - It runs in a **detached child** that the session's `ship-land.sh` waits on and can re-attach
+    to, never inside the Bash tool call.
   - This replaces `cc-sem reso-land`'s unordered polling and 300-s refusal for this path, closes B3,
     and makes the drizzle mutex redundant.
-  - The lease implementation is claude-infrastructure's, never reso's bare-rename reap.
+  - Acquisition and reaping are claude-infrastructure's (never reso's bare-rename reap). The
+    watchdog, the bounds and the fallback are new code.
 - **2c · Band and verdict hygiene (U3):**
   - `run_suite` exports `CI=true` (vitest's retry 2) and a `VITEST_TIMEOUT_FACTOR` the caller
     declares from measured concurrency.
@@ -448,33 +499,44 @@ record it cites.
   - Saves **140–170 s per code land** (D), and it shortens every later phase's turn as well.
 - **Acceptance:**
   - production census (7 days containing a wave of ≥ 6 landers): code-round `push_s` p50 ≤ 10 s
-    (from 167), 0 lost-race rounds between on-box lands, p95 unit latency ≤ 20 min (from 48);
-  - harness stub N=8: p95 ≤ 15 min (model 13.7);
+    (from 167), 0 lost-race rounds between on-box lands, p95 unit latency ≤ 15 min (from 48);
+  - harness stub (v2 laws), keyed: N=8 p95 ≤ 10 min (model 7.3); N=15 at a 45-min cadence
+    p95 ≤ 15 min (model 9.8); non-code p95 ≤ 5 min at N=15 (model 3.6);
+  - fault injection: a holder whose fetch hangs, and a holder whose suite hangs, each release the
+    turn within the hard bound, and waiters past their bound land through the fallback;
   - a planted all-timeouts red is re-run, not convicted.
 
 ### Phase 3 — The combiner (U5, U6, U7, then U8; ruling R3)
 
-- **Trigger, measured and not assumed:** build when the census shows peak Λ > 15 lands/h, or the
-  turn busy > 60% of a peak hour. At the operator's stated 15+ high-volume sessions this holds from
-  the first day. This mirrors how reso deferred its own group-commit train behind telemetry (C3).
-- **U5:** spool and results (atomic rename, local only); the lease reused from 2b, with a heartbeat
-  and takeover; journal rows.
+- **Trigger, measured and not assumed:** build when the census shows peak Λ > 20 lands/h, or the
+  turn busy > 70% of a peak hour. That is the Phase 2 lane at ~70% of its keyed ceiling (~29/h),
+  where its p95 starts to climb (§4.3). At the operator's stated 15+ high-volume sessions and a
+  30-min cadence (~25/h offered), this holds on the first busy day. This mirrors how reso deferred
+  its own group-commit train behind telemetry (C3).
+- **U5:** spool and results (atomic rename, local only); the lease reused from 2b unchanged
+  (watchdog heartbeat, dead-pid-only takeover); the **write-ahead journal** (I10).
 - **U6:**
   - persistent combiner worktree;
   - non-code first, then a code batch (drizzle tickets alone);
   - candidate by cherry-pick with `--empty=drop` onto freshly fetched trunk, ejecting on conflict;
-  - tsc + the **full** suite on the candidate under the combiner's own single admission slot (no
-    priority inversion behind Phase A), producing a `mode=full` record;
-  - one push, content-verify, RESULTs + `cc-notify`;
+  - when the candidate differs from every ticket's verified tree: incremental tsc + the **full**
+    suite (keyed) under the combiner's own single admission slot (no priority inversion behind
+    Phase A), producing a `mode=full` record. A lone ticket on an unmoved trunk is pushed on its
+    Phase A record;
+  - journal, then one push, content-verify, RESULTs + `cc-notify`;
   - bisect, isolated re-run (R4), known-red record.
-- **U7 · crash injection:** kill -9 the combiner at every step boundary (after fetch, after
-  cherry-pick, mid-suite, after push before RESULT, after RESULT). Assert every ticket ends `landed`
-  exactly once or is still pending, and trunk content equals the union of landed tickets.
-- **U8 · integration:** preflight → Phase A (K=2) → publish → wait (default) or `--async` → adopt.
-  Past the bound it falls back to the Phase 2 lane; `LAND_QUEUE=off` restores it.
-- **Acceptance:**
-  - harness stub **N=15 p95 ≤ 15 min and N=40 p95 ≤ 25 min** (model 13.2 / 19.1);
-  - U7: 100% of injected crashes lose nothing and double nothing;
+- **U7 · crash and fault injection:**
+  - kill -9 the combiner at every step boundary: after fetch, after cherry-pick, mid-suite, after
+    the journal write, after push before RESULT, after RESULT;
+  - include the **in-batch supersession** case (ticket B rewrites a file ticket A changed) and a
+    hung suite;
+  - assert that every ticket ends `landed` exactly once or is still pending, that no landed ticket
+    is re-picked, and that trunk content equals the union of landed tickets.
+- **U8 · integration:** preflight → Phase A (K=2) → publish → wait (default) or `--async` → adopt
+  (§5.2's three cases). Past the bound it falls back to the Phase 2 lane; `LAND_QUEUE=off` restores it.
+- **Acceptance:** targets are set from landsim v2, keyed, at a 30-min cadence:
+  - harness stub N=15 p95 ≤ 16 min, N=25 ≤ 22 min, N=40 ≤ 40 min (model 13.4 / 18.0 / 33.4);
+  - U7: 100% of injected crashes and hangs lose nothing and double nothing;
   - production: p95 unit latency ≤ 15 min over 7 days containing a wave of ≥ 10 landers.
 
 ### Phase 4 — Pruning (U9, U10)
@@ -485,22 +547,31 @@ record it cites.
 - **U10:** shadow mode computes the pruned set, still runs the full set, and logs every
   disagreement.
 - **Acceptance:** ≥ 200 batches and ≥ 14 days with **0** pruned-green / full-red disagreements;
-  *then* enable. Harness N=15 p95 ≤ 8 min (model 7.6), turn p50 ≤ 30 s, non-code p50 back ≤ 20 s
-  (they ride the in-flight push, §5.4).
+  *then* enable. Harness keyed at a 30-min cadence: N=15 p95 ≤ 10 min and N=25 ≤ 16 min (model
+  8.3 / 13.5); turn p50 ≤ 30 s; non-code p50 ≤ 20 s (they ride the in-flight push, §5.4).
 
-### Phase 5 — Tune (W5)
+### Phase 5 — Tune, and the box's own ceiling (W5)
 
-- Batch bound: A §2 puts the optimum near 1/√p.
-- Whether Phase A runs only `related(diff)` and leaves the always-run set to the combiner.
-- Flake quarantine thresholds.
-- A migrated-template DB for the 48 fixture specs (117 s, D).
-- A `land-queue-status` view: turn holder, depth, oldest ticket, p95 unit latency over 24 h.
+**Every design meets this Mac's verification capacity near 55–60 lands/h**, i.e. N≈40 at a 30-min
+cadence (§4.3). Past it the levers are per-change cost, not coordination:
+
+- whether Phase A runs only `related(diff)` and leaves the always-run set to the combiner (Phase 1
+  measures the always-run share);
+- a migrated-template DB for the 48 fixture specs (117 s, D);
+- extending declared-input keying beyond the shell-out specs;
+- admission K=3 for Phase A once N>30 (§4.4).
+
+Then:
+
+- batch bound: A §2 puts the optimum near 1/√p;
+- flake quarantine thresholds;
+- a `land-queue-status` view: turn holder, depth, oldest ticket, p95 unit latency over 24 h.
 
 ---
 
 ## 8. Conviction, and the rulings this asks for
 
-**Recommendation conviction: 87%.**
+**Recommendation conviction: 86%.**
 
 **What supports it:**
 
@@ -511,23 +582,36 @@ record it cites.
   (F §0.1).
 - reso's own 2026-07-03 design deferred exactly this train behind triggers that have plausibly fired
   (§5.6 C3).
+- **A wave-2 red-team** (a different model on purpose; `reports/wave2-redteam.md`, verdict
+  SOUND-WITH-FIXES) found six defects in the first draft. All six are fixed above:
+  - #1: the turn could wedge on a live hung holder (§5.2 I2: bounded network, a watchdog, the
+    waiter fallback);
+  - #2: model v1 flattered the combiner (v2: E's interference law, full-suite Phase A; the targets
+    were re-set);
+  - #3: non-code lands waited 9.7 min in a plain FIFO (priority; the detached turn);
+  - #4: heartbeat takeover of a live holder (dead-pid-only);
+  - #5: content-inferred crash recovery (the write-ahead journal);
+  - #6: adoption off the clean path (three cases).
+
+  The structure of the recommendation survived; its numbers moved.
 
 **What would move it above 90%:**
 
-- The Phase 1 harness in stub mode reproducing both models' curves: collapse between N=8 and N=15,
-  and PS's ~20 lands/h ceiling.
+- The Phase 1 harness in stub mode reproducing v2's curves: collapse between N=6 and N=15 on
+  today's lane, the Phase 2 lane's ~29 lands/h keyed ceiling, and the non-code priority figures.
 - The real per-session land cadence measured at 15 concurrent sessions.
+- The keyed suite factor measured (the model assumes 0.6× from D's 53% test-phase share).
 
-If cadence at 15 sessions proves slower than ~45 min, Phase 2 alone carries the target and Phase 3
-waits on its trigger. The design does not change; only its timing does.
+If cadence at 15 sessions proves slower than ~45 min, Phase 2 alone carries the target (p95 9.8 min
+modelled) and Phase 3 waits on its trigger. The design does not change; only its timing does.
 
 **Four rulings, each amending a standing reso decision. None blocks Phase 1:**
 
 | # | Decision | Conviction | Evidence / options |
 |---|---|---|---|
 | **R1** | Make the land-time suite the **full** suite (one run) instead of the union (the 2026-09-14 ruling), so the pre-push hook can skip on a `mode=full` record as W3b was designed | 93% | Union ≈ full in cost (D, E); today both run (B2); the only full-suite check before trunk *is* the hook (B10). Option B: keep union + build W3b as designed; it changes ~6% of lands (B2 §0.3) |
-| **R2** | Let the 23 shell-out specs be keyed on declared inputs, so a verdict record may certify "full minus specs whose inputs this range does not touch" | 85% | 140–170 s per code land (D). Risk: an undeclared input. Guard: a lint, plus a weekly unkeyed full run whose disagreements are logged. Option B: keep them unconditional and pay the time |
-| **R3** | Amend V3 invariant 4 / §8's "no merge queue" to admit an **on-box, synchronous** combiner (Phase 3) | 85% | §4.3–4.5; C3's triggers; I4 answers the daemon objection. Option B: stay on the Phase 2 lane and accept a ~21 lands/h ceiling (p95 29 min at N=15 × 30 min, 60 min at N=25) |
+| **R2** | Let the 23 shell-out specs be keyed on declared inputs, so a verdict record may certify "full minus specs whose inputs this range does not touch" | 85% | 140–170 s per code land (D). In v2 it is the largest lever after serialization: without it, every design's p95 roughly doubles at N≥15 (§4.3). Risk: an undeclared input. Guard: a lint, plus a weekly unkeyed full run whose disagreements are logged. Option B: keep them unconditional and pay the time |
+| **R3** | Amend V3 invariant 4 / §8's "no merge queue" to admit an **on-box, synchronous** combiner (Phase 3) | 85% | §4.3–4.5; C3's triggers; I4 answers the daemon objection. Option B: stay on the Phase 2 lane and accept its ceiling: ~29 lands/h keyed, so p95 46 min at N=25 × 30 min (~21/h and 82 min unkeyed) |
 | **R4** | Flake policy vs invariant 6 ("never re-roll a red until it comes up green", `learnings.md:2567`): one isolated re-run on the identical tree, **every such event recorded** in a flake ledger, and a spec that flakes twice in 7 days is quarantined with an owner | 80% | 5 of 15 reds went green on the identical tree and 14 of 15 were not caused by the diff (H1). Today the *session* re-rolls silently, which is less honest than a recorded single re-run. Option B: eject the whole batch on any red (H1's "honest queue"). Measuring the per-spec flake rate in Phase 1 decides it |
 
 ---
@@ -551,8 +635,10 @@ waits on its trigger. The design does not change; only its timing does.
 ## 10. Method and evidence
 
 - **Census:** `land_census.py` over `~/.reso/land.log`, window pinned (the log is live).
-- **Model:** `landsim.py` (policies P0–P5, PS) + `scenarios.py` (validate, sensitivity, admission,
-  fullsuite, phases); `run_model.sh` re-derives `model_output.txt`.
+- **Model:** `landsim.py` **v2** (policies P0–P5, PS) + `scenarios.py` (validate, phases, keyed,
+  sensitivity, admission, law); `run_model.sh` re-derives `model_output.txt`. v1, which the
+  red-team corrected, is preserved in this directory's first commit, and `scenarios.py law`
+  reproduces the one change that mattered most (v1's load1 term vs E's interference law).
 - **Push-protocol reproduction:** two local repos and a sleeping pre-push hook (§3.1); ~30 lines of
   shell, re-runnable anywhere.
 - **Per-axis reports** in `reports/`, each written by a research subagent from primary sources:
@@ -566,8 +652,9 @@ waits on its trigger. The design does not change; only its timing does.
 | D-suite-cost-profile | full / union / always-run costs, slowest specs, tsc |
 | E-load-capacity | the inflation law, CPU per land, capacity knee |
 | F-claude-infra-contrast | this repo's lane as an empirical control |
-| H1-contrarian-cas-suffices | devil's advocate with an independent simulator; scripts in `reports/h1/` |
+| H1-contrarian-cas-suffices | devil's advocate with an independent simulator; scripts in `reports/h1/`, archived as run (their paths point at the original scratch directory; `graph.py` regenerates the pickled import graph) |
 | H2-hostile-reviewer | 11 ranked blind spots, 15 refuted |
+| wave2-redteam (+ `wave2-redteam-probe.py`) | a red-team of the first draft on a different model; six defects, all fixed (§8) |
 
 - **Not done, deliberately:**
   - No reso unit-test run. The box sat at load 200–270, so a run would have measured the contention
