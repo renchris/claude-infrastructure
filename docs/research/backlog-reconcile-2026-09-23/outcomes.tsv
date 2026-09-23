@@ -1,0 +1,168 @@
+id	project	action	was	subject_or_title
+0f639c5f7f9c	claude-infrastructure	CLOSE_DONE	blocked	migration 0028: add graph-batch to ms365 PreToolUse matcher
+11719755e13d	claude-infrastructure	CLOSE_DONE	blocked	convert ~/.claude-next/hooks forked dir into symlink to ~/.claude/hooks (migration 0013)
+15cd161a1f15	reso-management-app	CLOSE_DONE	blocked	deploy pull timers and re-read warm fast-path stratum
+191dbe7e4c42	reso-management-app	CLOSE_DONE	blocked	motion-plus OAuth for .claude-secondary
+1c4905d6b2ff	claude-infrastructure	CLOSE_DONE	open	Establish whether lr-ingest-verify or the ingest is wrong (A6 never clean)
+1d054a8ed2e8	reso-management-app	CLOSE_DONE	blocked	rank the 6 zacapa-23 draws
+38805d90f667	claude-infrastructure	CLOSE_DONE	blocked	Run the Jev relevance-ranking trial over memory topic files
+3e667b9c16f4	personal	CLOSE_DONE	blocked	Emilia to forward the carpet-cleaning receipt to Connie Tragni
+475b43aacbf2	claude-infrastructure	CLOSE_DONE	blocked	orphaned worktree directories under ~/Development/.worktrees
+50ea872c590c	claude-infrastructure	CLOSE_DONE	blocked	Land the uncommitted config/kitty.conf chord state from the shared working tree
+57b3a6c931bc	claude-infrastructure	CLOSE_DONE	blocked	migration 0025: reinstall + reload com.claude.session-search-backfill
+5bcac9ec5e6c	claude-infrastructure	CLOSE_DONE	blocked	render MCP SSOT into live user-scope configs (~/.claude.json ms365 divergence)
+636d1863721b	reso-management-app	CLOSE_DONE	blocked	deploy + eyeball the CSS-driven floor-plan fit and Soketi openssl fix
+649748653cc5	personal	CLOSE_DONE	blocked	Ask KPMG HR which office (TX vs CA) and relocation policy
+6dce8e236719	claude-infrastructure	CLOSE_DONE	blocked	Post-land red of tests/headless-address-consumers.bats at 08bdf357d1d7 (auto-revert failed)
+7163a6ebe977	claude-infrastructure	CLOSE_DONE	blocked	Replace file-changed.sh with cwd-changed.sh in the CwdChanged hook slot
+731499ac64b4	reso-management-app	CLOSE_DONE	blocked	reconcile the diverged reso primary checkout
+747f2a02641c	personal	CLOSE_DONE	blocked	Ask Vista Real whether a U-Box can sit in the lot during move-out
+762548398684	claude-infrastructure	CLOSE_DONE	blocked	migration 0028: add mcp__ms365__graph-batch to ms365 email-guard matcher
+762df4cd78b5	claude-infrastructure	CLOSE_DONE	blocked	Create a Vercel AI Gateway key for cc-jev
+76c714390f4d	claude-infrastructure	CLOSE_DONE	blocked	Retire the live Claude sessions still on the superseded 2.1.220 binary
+7df2145f51c1	reso-management-app	CLOSE_DONE	blocked	rank titos runs 61-72 (paired-reference draws)
+8636b8f829fe	claude-infrastructure	CLOSE_DONE	blocked	re-authenticate the 'next' Claude Max account
+88ac99840d82	personal	CLOSE_DONE	blocked	Name the Polestar 2's paint colour
+8ad5731d6338	claude-infrastructure	CLOSE_DONE	blocked	live ~/.claude/CLAUDE.md holds untracked rules; land into CLAUDE.global.md
+8c6c8bba09e1	claude-infrastructure	CLOSE_DONE	blocked	live ~/.claude/CLAUDE.md holds untracked rules; land into root CLAUDE.md
+8c7ebcb056b0	sevenrooms-bridge	CLOSE_DONE	blocked	Deploy the Lambda that turns on Mansion's 11 PM note
+9242519a4639	claude-infrastructure	CLOSE_DONE	blocked	Restart the lead-supervisor daemon onto the landed escalation ladder
+95ea18ea9ac0	personal	CLOSE_DONE	blocked	Take an encrypted iPhone 16e backup to close the 2024-12 to 2026-08 message gap
+96f378f98b58	reso-management-app	CLOSE_DONE	blocked	T3 — passkey ceremony completes inside installed iOS web app
+96fe7b1687a0	claude-infrastructure	CLOSE_DONE	blocked	Show one cloud item going create -> execute -> claude/* push -> cloud-reconcile -> land (CLOUD_OBSERVABILITY DoD)
+9a64df6fe7bf	claude-infrastructure	CLOSE_DONE	blocked	migration 0025 session-search-backfill plist live (duplicate of 57b3a6c931bc)
+a0bc4e5ed1cf	claude-infrastructure	CLOSE_DONE	blocked	reconcile ~/.claude/CLAUDE.md with repo CLAUDE.md
+a3d2640f9792	claude-infrastructure	CLOSE_DONE	blocked	next3 cloud control plane 401
+adf1bb6b5406	claude-infrastructure	CLOSE_DONE	blocked	SessionStart accounts board hook merged into all five config dirs' settings.json
+ae3fdca64013	claude-infrastructure	CLOSE_DONE	blocked	trunk RED memory-index-drain.bats case 10 after 5972228d5
+b39007889612	claude-infrastructure	CLOSE_DONE	blocked	migration 0033 — mail-images-auto PostToolUse hook
+b44d4bbb749e	personal	CLOSE_DONE	blocked	Confirm/order Cox StraightUp for move-connectivity before Aug 23
+b44d993ecdc4	sevenrooms-bridge	CLOSE_DONE	open	Add npm test to sevenrooms-bridge CI
+b97c7e92aa03	reso-management-app	CLOSE_DONE	blocked	blind-rank the 9 titos draws
+bd5ea83a47f7	claude-infrastructure	CLOSE_DONE	blocked	23 untracked leftovers in the shared checkout
+c2403968cbf0	claude-infrastructure	CLOSE_DONE	blocked	cc-memory-rotate already-cited veto: no census slot, rc 4 on idempotent re-run
+c6d897731567	sevenrooms-bridge	CLOSE_DONE	open	preflight-golive G2 negative control flakes under a concurrent build
+cf21c910cf9f	personal	CLOSE_DONE	blocked	Turn on Text Message Forwarding so SMS, RCS and 2FA codes reach the Mac
+d21c5ebb0dc4	reso-management-app	CLOSE_DONE	blocked	operator feel check of venue-switcher exit (260ms fade / 450ms dwell)
+d47516537344	claude-infrastructure	CLOSE_DONE	blocked	Add mcp__ms365__graph-batch to the ms365 send guard
+d4f2ad3ca5fb	claude-infrastructure	CLOSE_DONE	blocked	migration 0034: enableArtifact=false in every config dir
+db202fc067e2	claude-infrastructure	CLOSE_DONE	blocked	migration 0016: register StopFailure/PostToolBatch/InstructionsLoaded hooks fleet-wide
+e2386b169d11	personal	CLOSE_DONE	blocked	Allow reading WhatsApp ChatStorage.sqlite for roommate evidence
+e61141117af5	claude-infrastructure	CLOSE_DONE	blocked	wire FileChanged + CwdChanged three-part unit (migration 0017)
+eb8911ec044f	claude-infrastructure	CLOSE_DONE	blocked	next2 cannot create cloud sessions: re-link it
+eda8d1774945	reso-management-app	CLOSE_DONE	blocked	park cyan-shifted moet-nectar-imperial-2.png reference
+eed727ce462b	claude-infrastructure	CLOSE_DONE	blocked	run the launchd autonomy-sweep dispatcher with CC_FIRE_CLOUD=on
+f6cb5d4686d4	claude-infrastructure	CLOSE_DONE	blocked	migration 0016 W3 hook registration (duplicate of db202fc067e2)
+042b5a4dede3	claude-infrastructure	CLOSE_MOOT	blocked	land ladder-default commit 43a0f66fe (frontier-policy CLAUDE.md edit)
+0488b0e1e423	claude-infrastructure	CLOSE_MOOT	blocked	mint setup-token canary on next2
+1a003703bc19	personal	CLOSE_MOOT	blocked	Call Ahmed about renting his vacant bedroom
+255b6ba1fe8e	claude-infrastructure	CLOSE_MOOT	blocked	Clear session 65186f1f's /goal early
+408427e74888	claude-infrastructure	CLOSE_MOOT	blocked	reconcile ~/.claude/CLAUDE.md with repo root CLAUDE.md
+42091c92b93e	claude-infrastructure	CLOSE_MOOT	blocked	Infra MEMORY.md index over the loader cap / may reference- entries yield
+4881a6ce6060	personal	CLOSE_MOOT	blocked	Send household standstill message to Emilia and Jiahao
+4bc192c270d8	personal	CLOSE_MOOT	blocked	Send Connie the rabbit vet documentation
+5081a54622c4	claude-infrastructure	CLOSE_MOOT	blocked	answer cloud session session_013CLaSUq8AwNdYqYuJiwPpW
+6a3bae7a53e8	claude-infrastructure	CLOSE_MOOT	blocked	Decide whether ~/.claude-quaternary/settings.json should carry a divergent "model" key
+74e3a245eb85	claude-infrastructure	CLOSE_MOOT	blocked	~/.zshrc CLAUDE_DEFAULT_EFFORT:-max reported as effort drift
+777886b8905d	personal	CLOSE_MOOT	blocked	Binding car-shipping quotes from Sherpa and Ship a Car Direct for a Sept 7-8 Austin delivery
+79f6ed72437c	personal	CLOSE_MOOT	blocked	Ask Narek for Amazon total and Emilia for Costco salmon receipt
+88913536895d	voiceink	CLOSE_MOOT	blocked	5 orphaned iTerm2 teammate panes (a1-arming-ui, v1-v4 verify)
+9528c91329d8	reso-management-app	CLOSE_MOOT	blocked	Buy M365 Business Standard if Microsoft Support did not reply within a day
+ae20d7a7c1b7	claude-infrastructure	CLOSE_MOOT	blocked	Premise pass cannot fit the sweep tick, so stale blocked rows never self-retract
+bb50743cc1e3	personal	CLOSE_MOOT	blocked	Report what The Pits did when drying the car on 2026-09-08
+d1c7e72b2dca	personal	CLOSE_MOOT	blocked	Book Landing The Goodwin #348 for Sept 7-Oct 7
+d78b1a98e980	claude-infrastructure	CLOSE_MOOT	blocked	Agents cannot land in claude-infrastructure via ship-land
+d923bdafde21	personal	CLOSE_MOOT	blocked	Facebook DYI export to capture the Daniel 1:1 before the Aug 27 FaceTime
+dd7be62e96c6	voiceink	CLOSE_MOOT	blocked	Manually move VoiceInk Code mode off gemini-3.8-flash after its free-tier cap
+e6901a1da802	claude-infrastructure	CLOSE_MOOT	blocked	deploy lane refusing: trunk red all the way down above live layer
+e794e0a5a1f1	sevenrooms-bridge	CLOSE_MOOT	open	Log venueSlug/dateISO on the manager success path so DOOR is computable
+e8d72f4af40f	voiceink	CLOSE_MOOT	blocked	Enable billing on VoiceInk's Google AI key
+f5c809dcda14	claude-infrastructure	CLOSE_MOOT	blocked	hand-test ⌘⌥B + drag pane title bar to reorder in kitty
+f65392a49533	reso-management-app	CLOSE_MOOT	blocked	Keep-or-cut ruling on B1 tile sheen (bottle-menu-b1/_ui/TierTile.tsx)
+f8336c45f069	personal	CLOSE_MOOT	blocked	Book the Fri Aug 28 U-Box load start time
+0645905e3d92	reso-management-app	ESCALATE	blocked	keep or remove the Enso demo venue fixture
+228e30f8adce	claude-infrastructure	ESCALATE	blocked	cc-premise auto-close on sampled runtime probes
+38b79edd0e90	claude-infrastructure	ESCALATE	blocked	Banner composition during the summoning beat
+3b7e5c253f38	claude-infrastructure	ESCALATE	blocked	ship-land re-land recipe discards dead author's uncommitted worktree cure
+46da1266c6f1	claude-infrastructure	ESCALATE	blocked	land-content-verify supersession hatches blind to corrected rewrites
+66be078a3f50	claude-infrastructure	ESCALATE	blocked	May heal() redeem a refresh token while the account has live sessions?
+7b762bcbbe11	claude-infrastructure	ESCALATE	blocked	root per-pid memlimit helper (memorystatus_control)
+84394a44f133	claude-infrastructure	ESCALATE	blocked	Flip CC_INSTALL_RESIDENT_RELOAD default so the unattended deploy restarts stale resident daemons
+a7460321494d	claude-infrastructure	ESCALATE	blocked	Pivot-table library commit identity: deliberate or leak
+b09f54e9e080	claude-infrastructure	ESCALATE	blocked	Ratify the C10 rescope from 'operator runs' to 'operator can revert'
+c0086bef6867	reso-management-app	ESCALATE	blocked	Replicache push 429s under the 153-entry design gate vs 100 req/min per-user limiter
+dca44c98f8ac	reso-management-app	ESCALATE	blocked	Pick a bottle-menu direction B1/B2/B3 (branch variants-b)
+de6819b24be1	personal	ESCALATE	blocked	Add EV charging to the pre-committed Austin housing criteria
+0f2e43d3e53f	claude-infrastructure	MERGE → f8b768eaaebd	blocked	flip com.claude.desk-invariant from staged to run in launchd/fleet.manifest, then load it — measured 2026-09-18: launchctl list shows NOT LOADED, it is absent f
+1da8edcbca24	claude-infrastructure	MERGE → 84394a44f133	blocked	RULE decision packet 4194644aea26 first (cc-decide list --open), then run this to set CC_INSTALL_RESIDENT_RELOAD=1 in the com.claude.deploy-live launchd plist —
+292dc8686c90	reso-management-app	MERGE → ecf9c60083ff	blocked	Wire mailbox-wake-arm.sh on Stop (asyncRewake:true) in ~/.claude-next/settings.json — measured 2026-08-20: it is registered on SessionStart ONLY. Its own docblo
+2a0121060753	claude-infrastructure	MERGE → 296cc04bc3fd	blocked	run staged migration 0014 to register hooks/subagent-stop.sh — the hook is already built; without it a lead holding in-process subagents reads as IDLE-DEAF, i.e
+48e14163e78a	claude-infrastructure	MERGE → b448ceafa0ca	blocked	advance START_LATENCY_ROUTER — `claude1` pin + auto-routed `claude`, at a start cost that cannot regress
+6a428f48fd2e	claude-infrastructure	MERGE → 02e67ee88123	blocked	Hook-set parity: account 1 (.claude-next) configures 69 hook commands vs 74 in accounts 2/3/4 (intersection 69). Account 1 alone lacks cc-unattended-ask-guard.s
+999745402195	claude-infrastructure	MERGE → 0ab3a747f810	blocked	turn the Task tools on fleet-wide (CLAUDE_CODE_ENABLE_TODO_TOOLS=1) and register TaskCreated -> task-created-attrib.sh + StopFailure -> session-beat.sh stop — i
+b0e666f8c5a3	claude-infrastructure	MERGE → 02e67ee88123	blocked	register the 11 hooks that are wired in some fleet config dirs and missing in others — it edits settings.json, which is C10
+b48c3cc84a33	claude-infrastructure	MERGE → 3519269b23f1	blocked	frontier-spawn-gate Bash-matcher (session fire) registration
+dd95e9d5a6c8	reso-management-app	MERGE → c0aa32d26904	blocked	re-run infrastructure/fly-logs-loki-poller/deploy.sh after the Band A A9 commit lands — until then the KNOWN_NAMESPACES entry is inert and the gitSha join key s
+f30fa039f98f	claude-infrastructure	MERGE → 02e67ee88123	blocked	register hooks/coldcompile-admit.sh as a PreToolUse(Bash) hook so cold compiles are admission-serialised — it edits settings.json, which is C10
+f97ff5765db5	claude-infrastructure	MERGE → 0ab3a747f810	blocked	Run migration 0023 — enables the Shared Task List (TaskCreate/TaskList/TaskUpdate) on all five accounts and registers TaskCreated/StopFailure
+02ba4e52389a	claude-infrastructure	RELEASE	blocked	stranded mail-v3 worktree wt-02ba4e52389a (8 unlanded commits)
+13e52feb1472	reso-management-app	RELEASE	blocked	TURSO_AUTH_TOKEN_ASHBURN_GROUP reachable by backup and PITR scripts
+2e8228525c94	claude-infrastructure	RELEASE	blocked	Postland runner fd exhaustion (Errno 24) killing windows
+37f96d239398	claude-infrastructure	RELEASE	blocked	Postland emits false red from starved corpus runs; proposal to emit cut under starvation signature
+3d9943ec9e87	claude-infrastructure	RELEASE	blocked	teach bin/cc-limited the HUSK disposition for lr-fleet --locate
+3e2358f03e23	claude-infrastructure	RELEASE	blocked	Untracked skills in ~/.claude/skills: track+symlink or declare local-only
+5b6d6ad886af	sevenrooms-bridge	RELEASE	blocked	alarms.sh --verify stalls in the sidecar producer check
+7e81da1a7f83	personal	RELEASE	blocked	Check for a delayed bounce on the Wenze LLC cease-and-desist
+87d2a3afd6ac	claude-infrastructure	RELEASE	blocked	completion-assert can't attribute Bash-routed writes in auto mode, so it reports authorship UNRESOLVED
+9a522a8fa6fb	personal	RELEASE	blocked	cc-await-ping watchers stacking on one key: arm-once-if-not-live fix
+9ce3c6350e2f	claude-infrastructure	RELEASE	blocked	reso docs gating the frontier tier on the deleted claude-next eval track
+a5a935d25d96	reso	RELEASE	blocked	Verify Path F sha-derivation fix via Loki deploy-runner lines
+a6e98d0144a9	reso-qa-runner	RELEASE	blocked	qa-nightly --since watermark advances on FAILED runs (lastRunSinceISO)
+baee45d1c27a	reso-management-app	RELEASE	blocked	VRT blind to equal-luminance recolours — low per-pixel threshold for colour-bearing entries
+e09a075539f5	claude-infrastructure	RELEASE	blocked	cc-url-open unreliable because Dia keeps re-showing its CDP consent dialog
+e9b3db78f35d	sevenrooms-bridge	RELEASE	blocked	alarms.sh exits 0 after aborting mid-provision
+01487ffd8417	claude-infrastructure	UPDATE	blocked	Run the E1 concurrent-login probe
+01cbf0842c09	claude-infrastructure	UPDATE	blocked	Realign settings.json effortLevel to the SSOT floor in 4 config dirs
+02e67ee88123	claude-infrastructure	UPDATE	blocked	Operator runs staged c10 migration 0021 to end hook drift across the 5 config dirs
+0a9db99fee41	claude-infrastructure	UPDATE	blocked	local postgresql@14 — keep or stop the service
+0ab3a747f810	claude-infrastructure	UPDATE	blocked	Run migration 0023 (Task tools + TaskCreated/StopFailure hooks)
+1684440567db	reso-management-app	UPDATE	blocked	bottle-service VT choreography branch cc-135842-3950 drop-or-split
+180d38b29912	claude-infrastructure	UPDATE	blocked	DESK_ROUTER_AND_STARTUP_V1 operator decisions D-A/D-B/D-C
+191515032117	reso-management-app	UPDATE	blocked	stale pnpm binaries shadowing the repo-pinned pnpm
+1c20dc1e92db	claude-infrastructure	UPDATE	blocked	Operator decides whether the router may place work on a poll-throttled account using its cached quota
+217241f4dfcb	claude-infrastructure	UPDATE	blocked	kill-switch disarm by machine-authored briefs: policy contradiction + design call
+24299f47405f	doc_classifier	UPDATE	blocked	Compact the doc_classifier MEMORY.md index
+296cc04bc3fd	claude-infrastructure	UPDATE	blocked	register hooks/subagent-stop.sh as a SubagentStop hook so a finished subagent's report leaves a harvest index — it edits settings.json, which is C10
+3519269b23f1	claude-infrastructure	UPDATE	blocked	register hooks/frontier-spawn-gate.sh under the PreToolUse Bash matcher so a frontier SESSION fire (handoff-fire.sh --model fable) is counted against the same p
+3c51c384f885	claude-infrastructure	UPDATE	blocked	worktree isolation step 4: flip ~/.zshrc gate to .worktree-isolate marker
+41cea29bfec3	reso-management-app	UPDATE	blocked	Path F auto-deploys write no releases.jsonl audit row
+49c1f972abc6	sevenrooms-bridge	UPDATE	blocked	Prove the re-login FORM path with device_trust cleared
+4ea097b66d5b	reso-management-app	UPDATE	blocked	QUERY_LOGGING_MODE production window to count round-trips per pull
+590fedde86cc	claude-infrastructure	UPDATE	blocked	Operator decides how deploy-live and install.sh settle 'stale' for copy-class files
+628a3695a61e	claude-infrastructure	UPDATE	blocked	send the MacBook email
+6cb792121863	reso-management-app	UPDATE	blocked	T1 — macOS passkey sheet offers nearby phone/tablet (Safari + Chrome)
+73c2b055319e	reso-management-app	UPDATE	blocked	get the iad Loki shipper running so reso-iad logs reach Loki
+7491c15d1e56	doc_classifier	UPDATE	blocked	Land doc_classifier branch wt-b45a6b831506 (run-scoped §6.1 blind gate fix)
+7d5d083cb7b0	claude-infrastructure	UPDATE	blocked	run CONFIRM=1 cc-permission-audit --prune once
+820e8fb74044	personal	UPDATE	blocked	Set macOS powermode to Low Power (1) via sudo pmset
+91eb4149c3e8	reso-management-app	UPDATE	blocked	passkey one-tap production rollout
+95e69c1a1ec5	reso-management-app	UPDATE	blocked	discriminate checkDBConnection's generic error (auth-surface STOP-ASK)
+a41b1a59fd92	reso	UPDATE	blocked	Multi-venue floor_plan_tier id collision in seed script (key-database, insomniacdenver)
+a8f3c6eaa960	reso-management-app	UPDATE	blocked	Resend the failed ModelArk US-territory reply to ByteDance from chris@reso.gl
+af9e8d21166b	personal	UPDATE	blocked	Book the Keep Clean ATX paint decontamination
+b13ef5862c83	claude-infrastructure	UPDATE	blocked	Apply harvested permission allow rules
+b19974f7ba82	claude-infrastructure	UPDATE	blocked	decide whether to add "$defaults" to autoMode.soft_deny
+b22e519e06cb	claude-infrastructure	UPDATE	blocked	W4 account-facts roster row (closes when its member rows close)
+b448ceafa0ca	claude-infrastructure	UPDATE	blocked	Activate the interactive account router (claude1 pins account 1)
+be2c76c54dd7	personal	UPDATE	blocked	Open the MetLife Legal Plans matter with panel attorney Henry J. Nunez
+c0aa32d26904	reso-management-app	UPDATE	blocked	add reso-iad to POLL_APPS in infrastructure/fly-logs-loki-poller/fly.toml and redeploy — studio60 serves from reso-iad and the poller polls reso-lax,reso-sin on
+c0d748cdd8ac	reso-management-app	UPDATE	blocked	strip direct SNS actions from two RUM failure-rate alarms in live AWS
+c4dee242dacc	reso-management-app	UPDATE	blocked	operator blind-rank of unranked bottle draws (PJ + Moet contract bottles)
+d26bf99b6e9a	claude-infrastructure	UPDATE	blocked	restore autoMode.environment $defaults in fleet settings.json
+d29e0d9dd4cb	reso-management-app	UPDATE	blocked	Ask Turso about group quota overage / AWS group schema DBs
+d44857742d3a	doc_classifier	UPDATE	blocked	Land doc_classifier branch wt-90eed49dd55c (S4 CH-S DI body-identity fix + peer S1 fix)
+e3f988b489c3	claude-infrastructure	UPDATE	blocked	reso soketi image CVE scan red on CVE-2026-59874 (needs base-image bump)
+e4500676528c	reso-management-app	UPDATE	blocked	W19 focus ring visual sign-off on /floor-plan (R-33)
+eb3784e8d035	personal	UPDATE	blocked	Ask for Aug 28-29 camera-roll photos to contest the Vista Real cleaning charges
+ecf9c60083ff	claude-infrastructure	UPDATE	blocked	register hooks/mailbox-wake-arm.sh ALSO on Stop with asyncRewake so an idle session re-arms its inbox watcher at every boundary instead of going deaf when its b
+f8b768eaaebd	claude-infrastructure	UPDATE	blocked	Flip com.claude.desk-invariant from staged to run
