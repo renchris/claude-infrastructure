@@ -70,7 +70,8 @@ _class() { python3 "$LRL" status "$SID" --json | python3 -c 'import json,sys;pri
   _later 18000                               # 5 h: past any admit→confirm, still inside the TTL
   [ "$(_class)" = ABANDONED ]
   _lrl reap
-  [ "$status" -eq 0 ] && [ -z "$output" ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "rc=$status $output"; false; }
+  [ -z "$output" ] || { echo "$output"; false; }
   [ -f "$LOCK" ] || { echo "a lock younger than the TTL was reaped"; false; }
   # and the TTL is a knob, not a constant
   LR_LOCK_TTL_S=300 run python3 "$LRL" reap
@@ -139,7 +140,8 @@ _class() { python3 "$LRL" status "$SID" --json | python3 -c 'import json,sys;pri
   _lrl release "${SID:0:8}" --why "switch aborted after admit"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [ ! -e "$LOCK" ]
-  [ ! -e "$TOMB" ] && [ -f "$TOMB.released" ] || { echo "tombstone not retired"; ls "$T/from/projects/slug"; false; }
+  [ ! -e "$TOMB" ] || { echo "tombstone not retired"; ls "$T/from/projects/slug"; false; }
+  [ -f "$TOMB.released" ] || { echo "no .released tombstone"; ls "$T/from/projects/slug"; false; }
   # with the lock AND the tombstone gone, nothing still reads the live source pane as a husk
   run bash -c ". '$ROOT/scripts/limit-recover/lr-lib.sh' >/dev/null 2>&1; lr_transplant_target '$SID' '$T/from'"
   [ "$status" -eq 1 ] || { echo "still reported as moved: $output"; false; }
@@ -172,9 +174,10 @@ PY
 @test "lr-lock: release demands --why, and names no lock it cannot find" {
   _admit
   _lrl release "$SID"
-  [ "$status" -eq 3 ] && [ -f "$LOCK" ] || { echo "rc=$status"; false; }
+  [ "$status" -eq 3 ] || { echo "rc=$status"; false; }
+  [ -f "$LOCK" ] || { echo "a refused release moved the lock"; false; }
   _lrl release "$SID" --why "   "
-  [ "$status" -eq 3 ] && [ -f "$LOCK" ]
+  [ "$status" -eq 3 ] && [ -f "$LOCK" ] || false
   _lrl release deadbeef --why x
   [ "$status" -eq 1 ] || { echo "rc=$status $output"; false; }
 }
