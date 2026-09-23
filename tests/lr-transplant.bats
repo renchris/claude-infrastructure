@@ -45,6 +45,9 @@ setup() {
   # the fixture and every case here would fail for a reason that is not the subject. The value is
   # the same path the suite has always used, so nothing about these cases changes.
   export LR_STATE_DIR="$HOME/.reso/limit-recover"
+  # PINNED for the same reason: the lock-less hop walks tombstones across LR_CONFIG_DIRS, and an
+  # ambient value would point that walk at the runner's real stores.
+  unset LR_CONFIG_DIRS
   mkdir -p "$HOME/.reso/limit-recover/locks" "$T/from/projects/slug" "$T/to/projects/slug" \
            "$T/other/projects/slug" "$T/third/projects/slug"
   SID=11111111-2222-3333-4444-555555555555
@@ -544,4 +547,58 @@ _c3() { # $1 = the manifest's target_cfg → the clause line the SHIPPED C3 bloc
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == PASS\ C3\ * ]] || { echo "$output"; false; }
   [[ "$output" != *"EARLIER hop"* ]] || { echo "the plain arm was bypassed: $output"; false; }
+}
+
+# ══ A LOCK-LESS SECOND HOP (cc-backlog ac7bdd4b2f9d, VOLUNTARY_ACCOUNT_SWITCH §9) ═══════════════
+# Locks are transient on this box and nothing on the hop path can see a store it never held, so a
+# second hop that arrives with NO lock used to start custody at --from: chain=[B,C], and the A hop
+# was erased. The tombstone A left behind is the durable record; the walk reads it backwards.
+_stores() { export LR_CONFIG_DIRS="$T/from:$T/to:$T/third:$T/other"; }
+
+@test "transplant: RED PROOF — a lock-less second hop keeps the FIRST hop in custody" {
+  _stores
+  _transplant; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  local first_ts; first_ts="$(_lockf ts_first)"
+  rm -f "$LOCK"
+  _hop2; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$(_lockchain)" == *"/from "*"/to "*"/third" ]] \
+    || { echo "the lock-less hop erased the first hop: $(_lockchain)"; false; }
+  [[ "$output" == *'"hop":2'* ]] || { echo "$output"; false; }
+  [ "$(_lockf ts_first)" = "$first_ts" ] || { echo "ts_first $(_lockf ts_first) != origin $first_ts"; false; }
+  [ "$(_lockf custody_from)" = tombstones ] || { echo "a rebuilt chain does not say so"; false; }
+  run _c3 "$T/from"
+  [[ "$output" == PASS\ C3\ * ]] || { echo "the FIRST hop's bundle no longer verifies: $output"; false; }
+}
+
+@test "transplant: a lock-less THIRD hop walks every tombstone back to the origin" {
+  _stores
+  mkdir -p "$T/fourth/projects/slug"; export LR_CONFIG_DIRS="$LR_CONFIG_DIRS:$T/fourth"
+  _transplant; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  rm -f "$LOCK"; _hop2; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  rm -f "$LOCK"
+  run bash "$LRT" --sid "$SID" --from "$T/third" --to "$T/fourth"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$(_lockchain)" == *"/from "*"/to "*"/third "*"/fourth" ]] || { echo "chain: $(_lockchain)"; false; }
+  [[ "$output" == *'"hop":3'* ]] || { echo "$output"; false; }
+}
+
+@test "transplant: a lock-less hop with TWO candidate predecessors invents neither" {
+  # EQUIVALENCE GUARD for the never-invent rule: an ambiguous predecessor stops the walk.
+  _stores
+  _transplant; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  printf '{"handed_off_to":"%s","ts":"2026-01-01T00:00:00Z"}\n' "$T/to" > "$T/other/projects/slug/$SID.HANDOFF.json"
+  rm -f "$LOCK"
+  _hop2; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$(_lockchain)" != *"/from"* && "$(_lockchain)" != *"/other"* ]] || { echo "chain: $(_lockchain)"; false; }
+  [[ "$output" == *'"hop":1'* ]] || { echo "$output"; false; }
+  [[ "$output" != *custody_from* ]] || { echo "$output"; false; }
+}
+
+@test "transplant: an ordinary FIRST hop carries no custody_from — its records are unchanged" {
+  # EQUIVALENCE GUARD — no tombstone points at the origin, so nothing is prepended.
+  _stores
+  _transplant; [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *custody_from* ]] || { echo "$output"; false; }
+  run grep -q custody_from "$LOCK"
+  [ "$status" -eq 1 ] || { echo "the lock carries custody_from on an ordinary move"; false; }
 }
