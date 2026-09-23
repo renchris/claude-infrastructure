@@ -36,7 +36,7 @@ _lock_ts() { python3 -c 'import json,sys,calendar,time;print(calendar.timegm(tim
 _touch_at() { python3 -c 'import os,sys;t=int(sys.argv[2]);os.utime(sys.argv[1],(t,t))' "$1" "$2"; }
 # "written N seconds after the move" — the move's own ts is the only clock these classes read
 _ran() { _touch_at "$1" $(( $(_lock_ts) + ${2:-1800} )); }
-_later() { export LR_NOW=$(( $(_lock_ts) + ${1:-7200} )); }
+_later() { export LR_NOW=$(( $(_lock_ts) + ${1:-30000} )); }
 _lrl() { run python3 "$LRL" "$@"; }
 _class() { python3 "$LRL" status "$SID" --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["class"])'; }
 
@@ -50,7 +50,7 @@ _class() { python3 "$LRL" status "$SID" --json | python3 -c 'import json,sys;pri
   [ "$status" -eq 2 ] || { echo "precondition: the abandoned lock should refuse: $output"; false; }
   [[ "$output" == *"already transplanted"* ]] || { echo "$output"; false; }
 
-  _later 7200
+  _later 30000
   [ "$(_class)" = ABANDONED ] || { echo "class=$(_class)"; false; }
   _lrl reap
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -67,11 +67,11 @@ _class() { python3 "$LRL" status "$SID" --json | python3 -c 'import json,sys;pri
   # the ABANDONED signature. Only the age separates the two, which is the whole job of the TTL.
   _admit
   _ran "$SRC" 120
-  _later 600
+  _later 18000                               # 5 h: past any admit→confirm, still inside the TTL
   [ "$(_class)" = ABANDONED ]
   _lrl reap
   [ "$status" -eq 0 ] && [ -z "$output" ] || { echo "$output"; false; }
-  [ -f "$LOCK" ] || { echo "a 10-minute-old admit was reaped"; false; }
+  [ -f "$LOCK" ] || { echo "a lock younger than the TTL was reaped"; false; }
   # and the TTL is a knob, not a constant
   LR_LOCK_TTL_S=300 run python3 "$LRL" reap
   [ ! -e "$LOCK" ] || { echo "LR_LOCK_TTL_S was ignored"; false; }
@@ -80,7 +80,7 @@ _class() { python3 "$LRL" status "$SID" --json | python3 -c 'import json,sys;pri
 @test "lr-lock: ORPHAN — a lock whose owner holds no transcript expires after the TTL" {
   _admit
   rm -f "$DST"                               # the copy never landed / the successor is gone
-  _later 7200
+  _later 30000
   [ "$(_class)" = ORPHAN ]
   _lrl reap
   [[ "$output" == *"(ORPHAN"* ]] || { echo "$output"; false; }
@@ -148,7 +148,7 @@ _class() { python3 "$LRL" status "$SID" --json | python3 -c 'import json,sys;pri
 @test "lr-lock: release NEVER deletes — it archives out of every reader's glob and records who, why and what" {
   _admit
   _ran "$SRC"
-  _later 7200
+  _later 30000
   orig="$(cat "$LOCK")"
   _lrl release "$SID" --why "abandoned switch"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -193,7 +193,7 @@ PY
 @test "lr-lock: reap --dry-run changes nothing and says what it would expire" {
   _admit
   rm -f "$DST"
-  _later 7200
+  _later 30000
   _lrl reap --dry-run
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"would expire 11111111 (ORPHAN"* ]] || { echo "$output"; false; }
@@ -204,7 +204,7 @@ PY
 @test "lr-lock: list renders every lock with its class and flags the expired ones" {
   _admit
   rm -f "$DST"
-  _later 7200
+  _later 30000
   _lrl list
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == ORPHAN*"11111111"*"EXPIRED"* ]] || { echo "$output"; false; }
