@@ -1,0 +1,217 @@
+{
+ "brief": "T3-frontier-budget",
+ "judge": "J0",
+ "model": "claude-opus-5",
+ "effort": "xhigh",
+ "label_map": {
+  "X": "A",
+  "Y": "B",
+  "Z": "C"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K17",
+     "K18",
+     "K20",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M7",
+     "M9",
+     "M11",
+     "M12"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 34,
+    "citations_bad": [
+     {
+      "cite": "hooks/frontier-spawn-gate.sh:23 \u2014 quoted as banner prose \"knowledge can't: stale routing after the frontier_access window closes.\"",
+      "problem": "Fabricated quote for that line. :23 actually reads `# carrier is the \"gate's surface is not its traffic\" failure, stated in this repo's own rules.`; the quoted text is line 5. The verdict (banner prose, citation stale) is still correct, but the quote is attributed to the wrong line."
+     },
+     {
+      "cite": "docs/plans/NONLIMIT_RESUME_LADDER.md:841 cited as \"its own item 2\"",
+      "problem": "Item 2 begins at :842 (:841 is the tail of item 1, 'operator's single lever.'). Off-by-one; the quoted item-2 text does exist at :842-844."
+     },
+     {
+      "cite": "settings-templates/settings.example.json:151-165 for the Agent matcher group",
+      "problem": "Group object spans :150-164; :165 is the opening brace of the next (AskUserQuestion) group. Trivial over-extension; the load-bearing :160 cite is exact."
+     }
+    ],
+    "wrong_claims": [
+     "`grep -rn \"CC_LADDER\" .` \u2192 'Two hits, both prose'. There are THREE matching lines: CLAUDE.global.md:334, docs/plans/NONLIMIT_RESUME_LADDER.md:840 AND :866 (X quotes :866 elsewhere for a different claim). The conclusion \u2014 zero executable hits \u2014 is correct.",
+     "'grepped the whole hook file for each of those four strings [tracks, source, start, permanent]; none appear anywhere in hooks/frontier-spawn-gate.sh'. `source` does appear, at :26 ('sole-source-of-truth'). The substantive point (the gate reads none of those FIELDS) is correct.",
+     "Project .claude/settings.json described as carrying 'only `permissions`' \u2014 it also carries `disabledMcpjsonServers` (plus two `_why_` keys). The load-bearing half ('no hooks entries at all') is verified true."
+    ],
+    "extra_correct": [
+     "Five stale path:line cross-references into the gate that the key does not list, all opened and verified exact: docs/research/desk-audit-2026-07-18/p15-escalation.md:44 (cites :59-67 for the cap/window exit-2, which is frontier_fire_model today); .../A5-harness.md:357 (cites :37-69 for 'caps ordinary Agent spawns at 6'); .../A6-mechanics.md:245 (cites :26-38 for the match logic); .../A6-mechanics.md:500 (cites :23 for the exit-on-absent-model, really :106); model-config.yaml:545 (cites :30).",
+     "docs/research/opus55-utilization-2026-09-22/census/L1-census.md:62 is not merely stale but factually WRONG: it says the cap-reached refusal 'tells the session --model claude-opus-5', while :138 says `--model opus` and tests/frontier-spawn-gate.bats:155 explicitly asserts the message does NOT contain `--model claude-opus-`. Verified in both source and test. Unique to X.",
+     "A SECOND, independent config artifact corroborating the unregistered Bash arm: config/hook-chains.d/pretooluse-bash:7-8 ('RECONCILED 2026-09-08 against the live settings.json, which registered TEN Bash hooks') listing all ten at :18-27 with frontier-spawn-gate.sh absent. Verified exact; neither Y nor Z found this.",
+     "Correctly notes `sid` is assigned only inside the `command -v jq` guard, so with jq absent it is never set and survives `set -u` only via the `${sid:-nosid}` default at :132.",
+     "Grep-proved there is no other writer of the counter file (`frontier-gate-` appears only at hooks/frontier-spawn-gate.sh:133 and, as a filename, in migrations/0029:4) \u2014 verified reproducible.",
+     "Verified L1-census.md:63 as still ACCURATE, a correctly-adjudicated negative control on the citation audit."
+    ],
+    "score_1_10": 7
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K17",
+     "K18",
+     "K20",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M7",
+     "M8",
+     "M9",
+     "M10",
+     "M11",
+     "M12"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 30,
+    "citations_bad": [
+     {
+      "cite": "model-config.yaml:700 for `fallback: claude-opus-5-5`",
+      "problem": "The value is at :699. :700 is the comment continuation 'with opus_latest (was claude-opus-5). Read only on the'."
+     },
+     {
+      "cite": "model-config.yaml:689-690 for the quote 'slot the gate can't refund'",
+      "problem": "That phrase is entirely on :691. :689-690 read 'tonight [June 30 ~22:00 PT] because Fable is not yet live \u2014 a' / 'premature spawn would API-reject AND burn a per-session spawn-count'."
+     },
+     {
+      "cite": "model-config.yaml:548 for the quoted shape `fable|claude-fable-5*|\"$fmodel\")`",
+      "problem": "That literal is on :549. :548 reads 'grep for `claude-fable-5([^-]|$)` is structurally blind to it. It now reads'."
+     },
+     {
+      "cite": "scripts/handoff-fire.sh:9303-9318 as 'now hf_inflight_key'",
+      "problem": "The function body is :9304-9318; :9303 is the preceding comment. Acceptable range, noted for completeness."
+     },
+     {
+      "cite": "settings-templates/settings.example.json 'the Bash groups at :102 and :203'",
+      "problem": "The :203 Bash group is under PostToolUse, not PreToolUse; presented in a PreToolUse-registration context. The conclusion (gate absent from both) is true \u2014 grep confirms the gate string occurs exactly once in the file, at :160."
+     }
+    ],
+    "wrong_claims": [
+     "\u00a73: 'Both refusal texts also say \"Agent spawns and frontier session FIRES share one budget\" (:138).' FALSE \u2014 only the SESSION text (:138) carries that clause. The Agent text (:140) reads 'per-session frontier-spawn cap reached (\u2026). Do NOT retry: park the remaining hole(s)\u2026' with no shared-budget phrase. Y's own \u00a74 states the difference correctly, so this contradicts itself.",
+     "'The gate does not read permanent, start, source or tracks. None of those appear in the file.' `source` appears at :26 ('sole-source-of-truth'). The substantive claim about FIELDS is correct."
+    ],
+    "extra_correct": [
+     "A literal cap of `0` passes the `''|*[!0-9]*` numeric guard at :121 and therefore refuses every frontier request (cnt 0 -ge cap 0). Verified against the code.",
+     "A cap of 0 on a reserve date RISES to 1: `$((0/2))` = 0, then `[ 0 -lt 1 ] && cap=1` at :127. Verified.",
+     "model-config.yaml:512-514 quotes the gate as `case \"$req_model\" in fable|\"$fmodel\") ;; *) exit 0 ;; esac` \u2014 a shape that no longer exists (:51-55, :110), corrected later at :545-549. Verified exact.",
+     "CLAUDE_NEXT_MODEL as an env-var bypass, grounded in model-config.yaml:553 (`--model \"${CLAUDE_NEXT_MODEL:-claude-opus-5}\"`). Verified exact.",
+     "Precisely separates two doc claims the others merge: skills/frontier-run/SKILL.md:30 ('reads only active + end') is FALSE, while skills/research-subagents/SKILL.md:579 ('checks active + end and reads no track at all') is ACCURATE. Both verified.",
+     "Quoted-`--model` bypass verified empirically here: `handoff-fire.sh --model \"claude-fable-5-1\"` extracts no model and exits 0.",
+     "migrations/0029:11's '24/24' matches exactly 24 @test cases in tests/frontier-spawn-gate.bats. Counted and confirmed.",
+     "Flags the unlocked read-at-:134 / write-at-:144 race, explicitly labelled as an inference rather than a measurement."
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K17",
+     "K18",
+     "K19",
+     "K20",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M7",
+     "M8",
+     "M9",
+     "M10",
+     "M11",
+     "M12"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 32,
+    "citations_bad": [
+     {
+      "cite": "scripts/handoff-fire.sh:9303-9314 as hf_inflight_key()",
+      "problem": "The function spans :9304-9318 (:9303 is the preceding comment, :9315-9318 are still body). Range end is 4 lines short; the identification is correct."
+     }
+    ],
+    "wrong_claims": [
+     "'model-config.yaml:663-667: the gate \"actually resolve[s]\" this key. It does not.' Slight overreach \u2014 the gate DOES resolve frontier_access.model into `$fmodel` at :40 and matches on it at :53. Z's own next clause states this accurately ('uses the key only as an extra exact-match arm'), so the substance is right and only the headline verb is too strong.",
+     "'The gate never reads start, permanent, tracks or source \u2026 The whole file contains none of those tokens.' `source` appears at :26 inside 'sole-source-of-truth'. Same minor overstatement all three make; the field-level claim is correct."
+    ],
+    "extra_correct": [
+     "install.sh merge semantics, verified exact: the template merge is ADDITIVE and 'adds missing EVENTS only \u2014 never clobbers a populated event' (:1201-1204), opt-in via --wire-hooks (:29), auto for a config with no hooks (:1216) \u2014 so even a FRESH install gets only the Agent arm. Unique to Z and material to brief item 7.",
+     "An overcount mismatch running the other way: the gate counts `--model=X` (:75, pinned by tests/frontier-spawn-gate.bats:95-98) while handoff-fire's argv parser has only a `--model)` case (scripts/handoff-fire.sh:8916). Verified \u2014 `grep -- '--model='` over scripts/handoff-fire.sh returns nothing. Unique and material.",
+     "hooks/agent-teams-enforce.sh:367 'Attempts are charged, not admissions' is the OPPOSITE of the frontier gate, which charges admissions only. Verified by reading agent-teams-enforce.sh:423-424 (increment) preceding its refuse branch at :426, against the frontier gate's :136-144 ordering. Unique and material.",
+     "hooks/validate-bash.sh:28-29 and tests/hook-jq-abstain.bats:4-6 list the gate among hooks that correctly guard jq \u2014 true of the agent arm's grep fallback (:104), false of the session arm, which is exactly the silent fail-open that suite exists to prevent, and that suite does not test this gate. Verified (the only mention of the gate in that file is the comment at :6).",
+     "agents/*.md frontmatter holds only `model: opus` (\u00d72) and `model: sonnet` (\u00d72), so the 'agent definition pins Fable in frontmatter' bypass is latent rather than live. Verified exactly.",
+     "`fallback` is read on EVERY frontier-tier call (:114, before the window branch) and only USED on the closed path \u2014 refuting model-config.yaml:700's 'Read only on the window-CLOSED path'. Verified.",
+     "docs/plans/NONLIMIT_RESUME_LADDER.md:585 cites ~/.claude/settings.json:490-503, an off-repo line citation no snapshot reader can check (matches the key's M11 parenthetical, which X and Y both missed), and :66 records 'registration is \ud83d\udc64'. Both verified exact.",
+     "migrations/0029:33 ('5 s matches the Agent-matcher entry'), :41 ('cases 17-19, 9, 9b, 11'), :52-55 ('live sessions run against all of them') and :108-110 ('every sibling is an independent allow/deny and the harness runs them all') all verified exact.",
+     "Test 15's fixture analysis: tests/frontier-spawn-gate.bats:47 sets the fixture `fallback: claude-opus-5`, which is why :175 can assert the full-id form \u2014 so the test pins the very shape the at-cap branch avoids. Verified.",
+     "Supplies a fleet-wide 5-directory version of the registration check, correctly noting that CLAUDE.global.md:334's one-liner inspects only ~/.claude while 0029 writes five dirs (:86)."
+    ],
+    "score_1_10": 9
+   }
+  ],
+  "xy": "Y",
+  "xz": "Z",
+  "yz": "Z",
+  "pair_reasons": "X vs Y \u2014 Y, narrowly. Y states three verified key-floor items X omits entirely: (a) the quoted-`--model` bypass (`handoff-fire.sh --model \\\"claude-fable-5-1\\\"` presents `\\\"` against `[A-Za-z0-9._-]+` at :75, so frontier_fire_model returns 1 and :97 exits 0 \u2014 I reproduced this empirically); (b) the gate's OWN stale self-citation at hooks/frontier-spawn-gate.sh:27 \u2192 scripts/handoff-fire.sh:9303-9311, which is hf_inflight_key() and carries no model logic (the key names this a trap; X's \u00a78 scoped itself to citations INTO the gate and so structurally could not see it); (c) skills/frontier-routing/SKILL.md:41, the doc sentence true of the CODE and false of the LIVE WIRING that brief item 8 asks for by shape \u2014 X answered only half that sub-question (CLAUDE.global.md correctly caveated, the ladder doc false-of-code). X also never cites scripts/handoff-fire.sh at a line at all, missing K19's alias resolution. Against that, X has real unique value Y lacks: four further stale doc citations I opened and confirmed exact (p15-escalation.md:44, A5-harness.md:357, A6-mechanics.md:245/:500), the config/hook-chains.d/pretooluse-bash corroborating artifact, and the sharpest single find in any of the three \u2014 L1-census.md:62 asserting the cap refusal says `--model claude-opus-5` when :138 says `--model opus` and bats:155 forbids exactly that string. Y is dragged down by one flatly false sentence ('Both refusal texts also say \\\"Agent spawns and frontier session FIRES share one budget\\\"' \u2014 :140 has no such clause) and three wrong-line citations (:700 for a value on :699, :689-690 for a phrase on :691, :548 for a literal on :549). X's worst is one fabricated quote (line 5's text attributed to :23, with a correct verdict) plus a miscounted CC_LADDER grep. Net: three missing floor items outweigh one extra sub-item's depth.\\n\\nX vs Z \u2014 Z, clearly. Z has everything Y has over X (M5, M8, M10) plus K19 exactly (scripts/handoff-fire.sh:9493, `fable) MODEL=\\\"$(_ssot_scalar frontier_access model)\\\"` \u2014 the alias and the gate resolving the same SSOT key), plus M11's fuller form (NONLIMIT_RESUME_LADDER.md:585's uncheckable off-repo citation and :66's 'registration is \ud83d\udc64'). Z also carries four verified novel findings X lacks: install.sh's additive merge (:29, :1201-1204, :1216) proving even a fresh install gets only the Agent arm; the `--model=X` overcount (gate counts it at :75, handoff-fire's parser has only `--model)` at :8916, and `grep -- '--model='` over that file returns nothing); agent-teams-enforce.sh:423-426 incrementing BEFORE its refuse branch, making its ':367 Attempts are charged, not admissions' the inverse of the frontier gate's :136-144; and the jq-abstain suite listing the gate at tests/hook-jq-abstain.bats:6 while never testing it, with the session arm being precisely the silent fail-open that suite exists to prevent. X's unique citation audit is genuinely good but is one sub-item against Z's broader, cleaner coverage; Z's only citation defect is a 4-line short range on hf_inflight_key.\\n\\nY vs Z \u2014 Z. Specific verified differences: Z states K19 exactly (handoff-fire.sh:9493) where Y only reaches the FABLE_EFFECTIVE detector at :10146-10147 and never connects the `fable` alias to frontier_access.model; Z covers M11 fully including :585 and :66 where Y cites only :866; and Y carries a flatly wrong claim I checked against the source \u2014 line 140 does NOT contain 'Agent spawns and frontier session FIRES share one budget', so 'Both refusal texts also say' is false, while Z attributes that clause correctly to the session arm alone. Y additionally has three wrong-line citations into model-config.yaml (:700, :689-690, :548) against Z's one short range. Z's unique verified extras (install.sh fresh-install path, the `--model=` overcount, the attempts-vs-admissions inversion, the jq-abstain coverage gap, agents/*.md frontmatter holding only opus\u00d72/sonnet\u00d72) outweigh Y's own good ones (cap=0 semantics, model-config.yaml:512-514's obsolete quoted shape, the CLAUDE_NEXT_MODEL bypass, and the genuinely sharper frontier-run:30-vs-research-subagents:579 distinction, which is the one place Y is more precise than Z)."
+ },
+ "retried": false
+}

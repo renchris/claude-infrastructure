@@ -1,0 +1,185 @@
+{
+ "brief": "T6-choose",
+ "judge": "J0",
+ "model": "claude-opus-5",
+ "effort": "xhigh",
+ "label_map": {
+  "X": "B",
+  "Y": "C",
+  "Z": "A"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "S1",
+     "S2",
+     "S3",
+     "S4",
+     "S5",
+     "S6",
+     "S7",
+     "S8",
+     "S9",
+     "S10",
+     "T1",
+     "T2",
+     "T3",
+     "T4",
+     "T5"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 32,
+    "citations_bad": [
+     {
+      "cite": "hooks/dispatch-assert.sh:220 \u2014 \"the p_count increment is at :220\"",
+      "problem": "Off by one. :219 is `p_count=$((p_count + 1))`; :220 is `printf '%s %s\\n' \"$p_since\" \"$p_count\" > \"$PENDING\"`."
+     },
+     {
+      "cite": "migrations/0027-handoff-claim-registration.sh:44-48 \u2014 \"appends it into the first Stop group\"",
+      "problem": "Imprecise range: the jq append runs :46-52 and the actual append expression is :50. :44 is a comment and :45 is `TMP=\"$(mktemp)\"`. The quoted `.hooks.Stop = (\u2026)` does sit at :47, so the range overlaps but understates/misplaces the append."
+     },
+     {
+      "cite": "hooks/session-continue.sh \u2014 \"The real systemMessage emissions in this file are at :660, :700, :793, :840, :851 and :893\"",
+      "problem": "Incomplete as stated (\"the real \u2026 emissions\"): `grep -n systemMessage` also returns a seventh emitter at :1264 (`jq -nc --arg m \"$capmsg\" '{systemMessage:$m}'`), which the key names. Each listed line is genuine."
+     }
+    ],
+    "wrong_claims": [
+     "Repeats migrations/0027's own stale comment as behaviour \u2014 \"appends it into the first Stop group after completion-assert\". The jq at :50 is an unconditional `+ [{\u2026}]` append to the end of `.hooks.Stop[0].hooks`; only the activation script (:96-101) actually indexes on completion-assert and inserts after it.",
+     "Section-5 window claim (\"No :NNN comment citations appear within 25 lines before or 10 lines after the qualifying emissions in anti-deference-nudge.sh \u2026\") is true of its own stated window but causes it to miss two real stale citations in that file's emission flow: :472 \u2192 :353 and :481 \u2192 memory-nudge.sh:26."
+    ],
+    "extra_correct": [
+     "Function boundaries all byte-verified: anti-deference-nudge.sh `open_packet_B` ends :137; boundary-handoff.sh `bh_live_waves` ends :641; completion-assert.sh `_ca_source_close_shape` ends :630; dispatch-assert.sh `discharged_since` ends :205; session-continue.sh wake_floor :603-895, mechanical_arm :938-1079, ship_floor :1098-1199 \u2014 all confirmed.",
+     "Relay path correct and exact: wake_floor captured at :1213, printed :1215; ship_floor captured :1208, printed :1210 \u2014 confirmed.",
+     "`grep -l 'selftest\\|self_test\\|self-test'` over all six files returns nothing \u2014 confirmed, which is the (a) self-test-fixture clause discharged.",
+     "waiting-recycle event proof triple-sourced and exact: :17 header, :151 (\"Claude Code calls it with NO args + the PostToolUse JSON on stdin \u2192 actuation mode\"), :633 (`# ---- PostToolUse actuation mode`) \u2014 all three verbatim correct.",
+     "Activation-script citations all byte-exact: 11-dispatch-assert-activate.sh:8, :55, :82, :88, :97 \u2014 every one contains what X says.",
+     "migrations/0027:6 is the migration-verify line asserting `.hooks.Stop[].hooks[]? | select(.command == \"~/.claude/hooks/handoff-claim-assert.sh\")` \u2014 this is the exact line the key's T4 quotes, and only X cites it.",
+     "TWO extra stale citations found and both verified: session-continue.sh:944 cites \"ship_floor :969, wake_floor :732-736\" \u2014 :969 is `agent_team_member_confirms \"$_ma_aid\"; _ma_c=$?` inside mechanical_arm (ship_floor starts :1098), and :732-736 is the CC_CUSTODY_BIN test-seam comment, not a kill-switch release. session-continue.sh:952 cites \"ship_floor at :865-869, wake_floor at :587-608\" \u2014 :865-869 is wake_floor's own reason prose (\"Re-arm after every wake\u2026\", \"A /goal is LIVE here\u2026\") and :587-602 is wake_floor's header comment with the function starting at :603. Both confirmed stale.",
+     "Exclusion set verified: plan-agent-teams-default.sh:211 is a PreToolUse additionalContext object; enforce-email-formatting.py's emissions at :741/:748/:1267/:1294 are `hookSpecificOutput` permissionDecision prints; curl-gate.py:174 / model-permission-decider.py:515 / validate-bash.sh:137 / reset-hard-shadow-allow.sh:164 all carry non-block `decision` values."
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "S1",
+     "S2",
+     "S3",
+     "S4",
+     "S5",
+     "S6",
+     "S7",
+     "S8",
+     "S9",
+     "S10",
+     "T1",
+     "T2",
+     "T3",
+     "T4",
+     "T5"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 30,
+    "citations_bad": [],
+    "wrong_claims": [],
+    "extra_correct": [
+     "Every settings-template citation is byte-exact and uniquely so: Stop array opens :445; session-continue.sh :466, anti-deference-nudge.sh :471, completion-assert.sh :476, boundary-handoff.sh :496 \u2014 all four confirmed (Z's four are all wrong; X gives none).",
+     "waiting-recycle's registration pinned exactly: settings-templates/settings.example.json:212 under `\"PostToolUse\"` (:176) with `\"matcher\": \"Bash\"` (:203) \u2014 all three confirmed.",
+     "The grep-count discrimination: `grep -c 'decision:\"block\"' hooks/waiting-recycle.sh` returns 9 and the ninth is the comment at :123 \u2014 verified exactly. Also that its jq begins at :1111 with the JSON literal alone on :1112 \u2014 verified.",
+     "Verified negative: no `*.json` file in the repository registers dispatch-assert.sh or handoff-claim-assert.sh (`grep -rl --include='*.json'` returns nothing) \u2014 this is exactly the key's T3/T4 substance and only Y states it as a searched negative.",
+     "THE 0027 DRIFT \u2014 material and unique: the comment at migrations/0027:44 says \"after completion-assert.sh where present\" but the jq at :50 is `((.[0].hooks // []) + [{type:\"command\",command:$c,timeout:10}])`, an unconditional end-append. Confirmed. X and Z both repeat the comment as fact; only the activation script (:99-101) actually does the indexed insert.",
+     "THREE extra stale citations, every operand byte-checked: (1) session-continue.sh:724 says `$_opane` is \"captured at :197\" \u2014 :197 is a comment about a tests/completion-assert.bats A/B, and the capture `_opane=\"$_ouid\"` is at :425 with its comment block at 421-424. (2) session-continue.sh:643-644 says `cc-pane-headless:124` mints `hdl-<16hex>` and `:197` exports it \u2014 bin/cc-pane-headless:124 is `--name) name=\"${2:-}\"; shift 2 ;;`, :197 is a bare `fi`, the mint is :145 and the export :218. (3) anti-deference-nudge.sh:481's `-mtime +7` GC claims it \"mirrors memory-nudge.sh:26\" \u2014 :26 is prose about the append-time budget, and the real GC is memory-nudge.sh:60-61 using `-mtime +1`. All nine cited locations confirmed verbatim.",
+     "One citation checked and reported as STILL HOLDING: handoff-claim-assert.sh:15 cites anti-deference-nudge.sh:30 \u2014 the sentence does start at :30 and the quoted phrase \"a nagging hook trains the model to route around it\" is on :31. Confirmed; the only output to run a positive control on item 5.",
+     "Activation-script citations exact: HOOK_CMD at :39, step 2 spans :82-103, the indexed insert at :96-101, the C10 staging rationale at :21-22 \u2014 all confirmed.",
+     "Method statement is honest and checkable: the searches for variable-valued `decision` keys and bare `\"block\"` values found nothing more \u2014 confirmed (`grep '\"block\"' hooks/*.py` is empty; no non-literal `decision` construction exists in scope)."
+    ],
+    "score_1_10": 9
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "S1",
+     "S2",
+     "S3",
+     "S4",
+     "S5",
+     "S6",
+     "S7",
+     "S8",
+     "S9",
+     "S10",
+     "T1",
+     "T2",
+     "T3",
+     "T4",
+     "T5"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 26,
+    "citations_bad": [
+     {
+      "cite": "hooks/session-continue.sh:502 \u2014 presented as a verbatim block: \"# transition this hook was preventing, so its teardown marker is written AFTER an idle that never\"",
+      "problem": "MISATTRIBUTED QUOTE. That text is line 498. Line 502 actually reads `#      handoff-fire (self-close), cc-teardown (delegated close) and teammate-auto-shutdown`. This is the load-bearing evidence line of Z's own item-5 finding."
+     },
+     {
+      "cite": "hooks/anti-deference-nudge.sh:353 \u2014 presented as a verbatim block: \"# \u2500\u2500 (P0-4b) Genuine carve-out, SPLIT so ship/land is CONDITIONAL, not blanket (G-P11-2 / I-3:\"",
+      "problem": "MISATTRIBUTED QUOTE. That text is line 356. Line 353 is `  fi`. The accompanying range \"353-360\" is likewise shifted (the P0-4b block runs 356-36x). The underlying finding (that :472's pointer to :353 is stale) survives, but the cited evidence does not."
+     },
+     {
+      "cite": "settings-templates/settings.example.json:461 \u2014 session-continue.sh",
+      "problem": "Wrong line. :461 is `~/.claude/hooks/teammate-checkpoint.sh`; session-continue.sh is at :466."
+     },
+     {
+      "cite": "settings-templates/settings.example.json:466 \u2014 anti-deference-nudge.sh",
+      "problem": "Wrong line. :466 is session-continue.sh; anti-deference-nudge.sh is at :471."
+     },
+     {
+      "cite": "settings-templates/settings.example.json:471 \u2014 completion-assert.sh",
+      "problem": "Wrong line. :471 is anti-deference-nudge.sh; completion-assert.sh is at :476."
+     },
+     {
+      "cite": "settings-templates/settings.example.json:490 \u2014 boundary-handoff.sh",
+      "problem": "Wrong line. :490 is `},` closing obj-1; boundary-handoff.sh is at :496."
+     },
+     {
+      "cite": "settings-templates/settings.example.json:445-497 \u2014 \"the Stop array\"",
+      "problem": "Wrong end. The Stop array closes at :501 (`],`); :497 is the `\"timeout\": 5` of the boundary-handoff entry."
+     },
+     {
+      "cite": "migrations/0027-handoff-claim-registration.sh:36-42 \u2014 \"whose body appends \u2026 to .hooks.Stop[0].hooks\"",
+      "problem": "Wrong range. :36-42 is the jq idempotency check (:37-39) and the backup (:41-42). The append is the jq at :46-52, with the actual `+ [{type:\"command\",\u2026}]` at :50."
+     },
+     {
+      "cite": "docs/activation/pending-activation/11-dispatch-assert-activate.sh \u2014 \"step 2 (lines ~65-90)\"",
+      "problem": "Wrong range. Step 2 is :82-109 (header :82, loop :85-109, insert jq :96-101). Line 65 is `exit 0` inside the dry-run guard."
+     },
+     {
+      "cite": "hooks/session-continue.sh \u2014 \"wake_floor() (defined 603, closes :936)\"",
+      "problem": "Wrong close line. wake_floor's closing `}` is at :895; :936 is top-level code (`_sc_tp=\"$TP_MECH\"; case \u2026`) sitting between mechanical_arm's header comment and its definition at :938."
+     }
+    ],
+    "wrong_claims": [
+     "\"Each is \u2026 immediately followed in every case by `exit 0` / `return 1` that ends the hook run\" \u2014 false for :1332 and :1334, which end in `&& _emitted=1` and fall through to the sentinel-commit code at :1336 onward.",
+     "Repeats migrations/0027's stale comment as code behaviour \u2014 \"appends \u2026 after completion-assert.sh\". The jq at :50 is an unconditional end-append; only the activation script does an indexed insert. Y caught this as drift; Z asserts the false version.",
+     "Calls session-continue.sh:502 \"part of the unrelated `wake_floor()` discussion\" while its own site table says wake_floor is defined at :603 \u2014 internally inconsistent; :502 is header prose above the function."
+    ],
+    "extra_correct": [
+     "The stdout-vs-logfile exclusion analysis is the most thorough of the three and every citation in it is byte-exact: curl-gate.py:174 `\"decision\": decision,` inside a dict written by :191-192 `AUDIT_LOG.open(\"a\", \u2026)` / `f.write(json.dumps(log_record))`; model-permission-decider.py:515 likewise written by :477 `open(STATE_DIR / f\"decisions-\u2026jsonl\", \"a\")`; validate-bash.sh:137 printf redirected `>> \"$_f\"` at :140; reset-hard-shadow-allow.sh:164 printf redirected `>> \"$LOG_FILE\"` at :167; and the real stdout payloads use only `hookSpecificOutput.permissionDecision` (curl-gate.py:217, model-permission-decider.py:465). All eight confirmed.",
+     "\"92 in-scope files\" \u2014 `ls hooks/*.sh hooks/*.py | wc -l` returns exactly 92. Confirmed.",
+     "waiting-recycle corroboration beyond the header: :443 \"it rides PostToolUse:Bash at ~19x the Stop chain's rate\" and :828 \"rides PostToolUse:Bash (~19x the Stop chain's rate) under an explicit fork budget\" \u2014 both confirmed; and the contrast at :12, \"boundary-handoff.sh fires on the **Stop** event\", confirmed verbatim.",
+     "Found the anti-deference-nudge.sh:472 \u2192 :353 stale pointer, which neither X nor Y reports. The pointer is genuinely stale: the suppressed-record material is at :418 and :459-461, not :353. (Its supporting quote is misattributed, see citations_bad.)",
+     "Site-table note for dispatch-assert.sh:258 \u2014 \"the fresh-scan FIRE block, after the `NAME_TELL` match\" \u2014 confirmed: NAME_TELL is defined :236 and gated at :237.",
+     "The `\"Stop\"` array membership list (notify.sh, cache-expiry-tracker.sh, teammate-checkpoint.sh, session-continue.sh, anti-deference-nudge.sh, completion-assert.sh, operator-readout.sh, session-beat.sh stop in obj-1, boundary-handoff.sh in obj-2) is exactly right, and the obj-1/obj-2 labels match the file's own `_comment` fields at :447 and :492."
+    ],
+    "score_1_10": 6
+   }
+  ],
+  "xy": "Y",
+  "xz": "X",
+  "yz": "Y",
+  "pair_reasons": "X vs Y \u2014 Y. Both list the same correct 10 sites, both name waiting-recycle as the (c) failure with all 8 lines, both find the :1327\u2192:502 stale citation, so the key is a tie. The separation is verified precision and coverage on the two items the key treats as traps. (1) Registration: Y cites settings-templates/settings.example.json:466/471/476/496 and I confirmed all four byte-for-byte, plus waiting-recycle at :212 under PostToolUse (:176) / matcher Bash (:203); X cites no line at all for any Stop entry, resting on \\\"a jq read\\\". (2) Y caught a real code-vs-comment drift X repeated as fact: migrations/0027:44 says the insert goes \\\"after completion-assert.sh where present\\\" while the jq at :50 is an unconditional end-append \u2014 I confirmed the code; X asserts the comment's version. (3) Item 5: Y reports three extra stale citations (session-continue.sh:724\u2192:197 vs the real capture at :425; session-continue.sh:643-644\u2192bin/cc-pane-headless:124/:197 vs the real mint at :145 and export at :218; anti-deference-nudge.sh:481\u2192memory-nudge.sh:26 vs the real `-mtime +1` GC at :60-61) and every one of those nine operands checked out exactly; it also runs a positive control (handoff-claim-assert.sh:15\u2192anti-deference-nudge.sh:30, still valid, phrase on :31). X reports two (both also valid, in mechanical_arm) and then states it did not open the intended targets. (4) X has two citation defects I confirmed \u2014 \\\"p_count increment at :220\\\" is at :219, and its \\\"real systemMessage emissions\\\" list omits :1264 \u2014 while I found zero bad citations in Y across 30 checks.\n\nX vs Z \u2014 X. Same 10 sites and same key coverage from both, so the difference is citation integrity, and Z's is materially worse. Z presents two verbatim \\\"what actually sits there\\\" blocks that are the evidence for its own item-5 findings and BOTH quote the wrong line: the text it attributes to session-continue.sh:502 is line 498, and the text it attributes to anti-deference-nudge.sh:353 is line 356. It then misplaces all four settings-template registrations (session-continue at :461 not :466, anti-deference at :466 not :471, completion-assert at :471 not :476, boundary-handoff at :490 not :496), gives the Stop array as 445-497 when it closes at :501, puts 0027's append at :36-42 when it is :46-52, puts the activation script's step 2 at \\\"~65-90\\\" when it is :82-109, and says wake_floor closes at :936 when it closes at :895 (:936 is top-level code). It also asserts every site is \\\"immediately followed by exit 0 / return 1\\\", which is false for :1332/:1334. X's only confirmed defects are one off-by-one (:220 vs :219) and an incomplete systemMessage list, against exact hits on all five activation-script lines, the 0027 migration-verify line :6 that the key itself quotes, and two genuinely new, fully verified stale citations at :944 and :952. Z's better exclusion analysis (the log-file-vs-stdout proof, all eight citations exact, and the 92-file count) does not offset nine wrong citations, two of them fabricated quotes.\n\nY vs Z \u2014 Y. Y's 30 checked citations produced zero errors; Z's produced ten, including two misattributed verbatim quotes that are precisely the evidence its stale-citation findings rest on, four wrong settings-template line numbers, two wrong script ranges, a wrong function close line, and a false \\\"followed by exit 0 in every case\\\" generalisation. On the one place Z adds something Y lacks \u2014 the anti-deference-nudge.sh:472\u2192:353 stale pointer, which is real \u2014 Z's supporting quote is still the wrong line. Y additionally states and I confirmed the searched negative that no *.json in the repo registers either hook (the key's T3/T4 substance), the grep-count-9-vs-8 discrimination on waiting-recycle, and the 0027 comment/code drift that Z gets backwards."
+ },
+ "retried": false
+}

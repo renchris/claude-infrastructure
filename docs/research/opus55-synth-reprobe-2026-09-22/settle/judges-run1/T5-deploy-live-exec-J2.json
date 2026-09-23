@@ -1,0 +1,178 @@
+{
+ "brief": "T5-deploy-live-exec",
+ "judge": "J2",
+ "model": "claude-opus-5",
+ "effort": "xhigh",
+ "label_map": {
+  "X": "B",
+  "Y": "A",
+  "Z": "C"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "S1",
+     "S1r",
+     "S2",
+     "S2a",
+     "S2r",
+     "S3",
+     "S3r",
+     "S4",
+     "S5",
+     "S5r",
+     "N1",
+     "N2",
+     "N3",
+     "M1",
+     "M2",
+     "M3"
+    ],
+    "key_contradicted": [
+     "N4"
+    ],
+    "citations_checked": 34,
+    "citations_bad": [
+     {
+      "cite": "bin/cc-do:358 \u2014 quoted as `else bash \"$1\" </dev/null; rc=$?; fi`",
+      "problem": "Off by one: that text is at bin/cc-do:359 (the key's S5 anchor). :358 is the `CONFIRM=1 bash \"$1\"` arm. X compounds it by calling the CONFIRM arm ':357', which is the `local rc` line. Brief requirement 1 asks specifically for the 1-based line of the invocation."
+     },
+     {
+      "cite": "method note: 'grep -rn deploy-live over hooks/ scripts/ bin/ ... returned 273 lines'",
+      "problem": "Actual count at this snapshot is 316 (verified). Not a path:line, but it is the stated denominator for X's completeness claim; Z reports 316 exactly."
+     }
+    ],
+    "wrong_claims": [
+     "Reports the run_one invocation at bin/cc-do:358 (actual :359) and the CONFIRM=1 branch at :357 (actual :358).",
+     "States the in-scope grep returned 273 lines; the true count is 316.",
+     "Question (c): 'Scheduled entry point: outside the three trees' with site 6 classified as event-triggered ('when a backlog row is claimed'). Misses that launchd com.chrisren.autonomy-sweep (StartInterval 300) \u2192 scripts/autonomy-sweep.sh:1488 \u2192 bin/cc-premise sweep \u2192 cc-premise:1392 is a second, INDIRECT scheduled executor that does live inside scope (verified at autonomy-sweep.sh:1427/:1488 and the plist's StartInterval 300). Shared with Y and Z.",
+     "Characterises scripts/deploy-live.sh:185 as stale because it 'describes deploy-now as deploy-live.sh --force'. The line reads `scripts/deploy-now.sh (\\`deploy-live.sh --force\\`, agent- or desk-fired)` and is describing the typical operator hammer, not asserting deploy-now injects --force; the 'stale citation' framing is over-strong, though X's underlying statement that deploy-now.sh:89 adds no --force is true."
+    ],
+    "extra_correct": [
+     "THE STRONGEST FINDING IN ANY OUTPUT, verified end-to-end by me: scripts/deploy-live.sh:812 files `\"$BACKLOG_BIN\" needs \"$title\" --run \"$run\"` where $run is built at :708/:728/:731/:734/:743/:746 as `bash $DEPLOY_REPO/scripts/deploy-live.sh --dry-run --offline` (etc.); bin/cc-backlog:1890 binds --run and :2254/:2282 emit it as the JSON `run` field; bin/cc-do:415 reads `.run` and bin/cc-do:454 executes it with `bash -c \"$cmd\"`. X is the ONLY output to establish this chain, and it is a stronger emitter than the key's own M2 example (bin/cc-blockers:642, whose recover_cmd Z proved is only rendered as a board cell).",
+     "bin/cc-premise:1776 filing_day_screen is a near-miss that consumes the same stored falsifier but REFUSES script calls at :1791-1794 and never runs the probe \u2014 verified; neither Y nor Z found it.",
+     "bin/cc-backlog:4308 runs `/bin/sh -c \"$probe\"` only on `cc-backlog falsify`'s argv probe \u2014 verified; Z also found it, Y did not.",
+     "cc-backlog's add path records only --falsifier at :1898 and :2275-2279 \u2014 verified.",
+     "scripts/deploy-live.sh's only directly launched child is `/bin/bash \"$PARITY_ASSERT\"` at :1483 \u2014 verified.",
+     "Stale-citation audit: ship-land's 'deploy-live.sh:2543 dies DIVERGED' is stale (the DIVERGED page printf is at :2467, the die at :2472/:2601; :2541 is the UNTRACKED COLLISION printf) \u2014 verified; plist:16's citation of operator-readout.sh:238-246 is stale (that range is the backlog-fold comment; the I11 fallback is :510-518) \u2014 verified; cc-do:152's '\u00a7152-258' mirror claim maps to operator-readout :503-546 \u2014 verified.",
+     "Near-miss list is essentially complete against ground truth, including all 9 non-comment scripts/deploy-parity-assert.sh lines (1081/1366/1368/1382/1435/1456/1459/1497/1504), all permission-gate-lint hits (169/526/535/563/589/637/720-722/745-747/770/782), test-hermeticity-lint 2338/2560, offbox-admission-lint:274, cc-venue:187 and host-suites.manifest \u2014 every one I sampled was accurate."
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "S1",
+     "S1r",
+     "S2",
+     "S2a",
+     "S2r",
+     "S3",
+     "S3r",
+     "S4",
+     "S5",
+     "S5r",
+     "N1",
+     "N2",
+     "N3",
+     "M1"
+    ],
+    "key_contradicted": [
+     "N4",
+     "M2",
+     "M3"
+    ],
+    "citations_checked": 30,
+    "citations_bad": [
+     {
+      "cite": "bin/cc-do:69-71 \u2014 cited as a 'header remark ... that describe[s] com.claude.deploy-live / launchd as the unattended runner'",
+      "problem": "Those lines say nothing about launchd or deploy-live. :69-71 is the activation-marker library resolution comment ('a BRAND-NEW hooks/lib file has no ~/.claude/hooks/lib symlink until install.sh runs, so $0's own symlink into the checkout is tried FIRST. Fails SAFE ...'). Fabricated support for the load-bearing (c) answer."
+     },
+     {
+      "cite": "scripts/deploy-now.sh:68-72 \u2014 cited as the guard that 'prints \"\u2717 ABORT \u2014 deploy-live.sh missing or not executable: $DEPLOY_LIVE\" and exit 1'",
+      "problem": "The quoted echo is at :73 and the `exit 1` at :77. :68-71 is comment text and :72 is the bare `if [ ! -x \"$DEPLOY_LIVE\" ]; then`. The cited range does not contain either quoted string."
+     },
+     {
+      "cite": "bin/cc-do:185-186 \u2014 cited for `emit deploy '\u25b6' \u2026 \"$dscript\"`",
+      "problem": "The emit spans :186-187; :185 is `if [ \"$drc\" -eq 0 ]; then`. Off by one on the line that carries the key's S5r fact."
+     },
+     {
+      "cite": "bin/cc-do '191, 359-ish gate below' \u2014 cited for 'mark \u2298 means run_steps will never execute this row'",
+      "problem": "Two defects: :191 is a COMMENT asserting the behaviour (the brief explicitly forbids grounding a claim in a comment's summary), and the real gate is `[ \"$mark\" = '\u25b6' ] || continue` at :386, not '359-ish'."
+     },
+     {
+      "cite": "scripts/deploy-live.sh:955-958 \u2014 cited as the comment saying $HOME is left unexpanded",
+      "problem": "That comment is at :956-959 (:955 is the `for s in \"$@\"; do [ -n \"$s\" ] || return 1; done` validation loop). Minor, but it is the citation carrying the claim."
+     }
+    ],
+    "wrong_claims": [
+     "'bin/cc-premise contains **no literal reference to \"deploy-live\" anywhere** in its own source \u2014 I grepped the whole scope for the literal string and it never matches this file.' FALSE: bin/cc-premise:1528 and :2544 both contain it (verified). An emphatic, explicitly-asserted grep result that is wrong.",
+     "'confirmed (760-800) these only get printf'd into a .page file, never executed' about scripts/deploy-live.sh:708-746. FALSE: four lines below Y's stated reading window, :811-812 files the SAME $run string as a backlog row via `\"$BACKLOG_BIN\" needs \"$title\" --run \"$run\"`, and bin/cc-do:454 executes such a row's .run with `bash -c`. Y read to :800 and stopped one block short of the refutation.",
+     "Dismisses scripts/deploy-parity-assert.sh en masse as 'plain-comment mentions ... excluded en masse under category 1 and not itemized'. FALSE: that file has 9 NON-comment occurrences (:1081, :1366, :1368, :1382, :1435, :1456, :1459, :1497, :1504 \u2014 all printf/report text). The key's M3 names :1459 by name as a required (b) entry. This is a direct failure of brief part (b) ('list EVERY near-miss you rejected').",
+     "Never adjudicates bin/cc-do:454 (run_backlog_row's `bash -c \"$cmd\"`) \u2014 neither counts nor rejects it \u2014 which is exactly what key M2 calls the incomplete answer. Also omits bin/cc-backlog:4308.",
+     "States the launchd plist is 'the **sole** scheduled caller' and 'the **only** unattended/scheduled entry point'. Contradicts N4's verified correction (com.chrisren.autonomy-sweep \u2192 autonomy-sweep.sh:1488 \u2192 cc-premise:1392 is a second scheduled path, inside scope). Y states this most absolutely of the three.",
+     "'~280 lines matching deploy-live in that scope' \u2014 actual is 316.",
+     "Near-miss table also omits hooks/validate-bash.sh:1425, permission-gate-lint :526/:535/:637/:770/:782, test-hermeticity-lint :2338/:2560, offbox-admission-lint:274, cc-venue:187, group.py:148 and bin/cc-do:194."
+    ],
+    "extra_correct": [
+     "The 300-char truncation of combined stdout+stderr at bin/cc-premise:1401 \u2014 verified.",
+     "FALSIFIER_TIMEOUT_S default 20 from CC_PREMISE_FALSIFIER_TIMEOUT at bin/cc-premise:241, and the `if not FALSIFIER_ENABLED` / empty-cmd guards at :1385-1389 \u2014 verified.",
+     "scripts/deploy-live.sh:1046 and :1261 as the exact --falsifier storage lines (the key's own anchors) and :1040-1042 as the comment explaining probe-time resolution \u2014 verified and more precise than X's ranges.",
+     "The `|| true` at ship-land.sh:1741 guards only the python3 launcher, not the detached grandchild \u2014 verified and correctly reasoned (X says this too).",
+     "Intellectual honesty on scripts/deploy-link-parity.sh:509: Y flags that it did not read fix()'s body rather than asserting. Correct practice, though Z simply verified it (fix() at :159 appends to a display string)."
+    ],
+    "score_1_10": 6
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "S1",
+     "S1r",
+     "S2",
+     "S2a",
+     "S2r",
+     "S3",
+     "S3r",
+     "S4",
+     "S5",
+     "S5r",
+     "N1",
+     "N2",
+     "N3",
+     "M1",
+     "M2",
+     "M3"
+    ],
+    "key_contradicted": [
+     "N4"
+    ],
+    "citations_checked": 38,
+    "citations_bad": [],
+    "wrong_claims": [
+     "'bin/cc-do:454 runs `bash -c \"$cmd\"` for a backlog row's --run. None of the non-comment deploy-live lines in scope passes it as a --run argument.' FALSE, and refuted by a row in Z's OWN near-miss table: scripts/deploy-live.sh:812 passes `--run \"$run\"` where $run is the :708/:728/:731/:734/:743/:746 string Z itself lists. Verified chain: deploy-live.sh:812 \u2192 cc-backlog:1890/:2254/:2282 (`{run:$run}`) \u2192 cc-do:415 (`.run`) \u2192 cc-do:454. The universal negative is exactly the trap the key names for cc-do:359 \u2014 the refuting line (:812) contains no literal 'deploy-live', so a filename grep cannot see it.",
+     "Consequently Z's near-miss row 'scripts/deploy-live.sh:708-746 | run= strings in the escalation/page record' is incomplete for the same reason: those strings also become a backlog row's executable .run field.",
+     "Question (c): 'Scheduled entry point: it lives outside the three trees', with 'Automatic but not scheduled, inside scope: ... the falsifier probe on the claim path (site 6)'. Contradicts N4 \u2014 the falsifier probe is ALSO reached on a schedule via launchd com.chrisren.autonomy-sweep (StartInterval 300) \u2192 scripts/autonomy-sweep.sh:1488 \u2192 bin/cc-premise sweep \u2192 :1392 (verified). Shared with X and Y."
+    ],
+    "extra_correct": [
+     "Exact in-scope grep count: 316 hits \u2014 verified exactly right (X said 273, Y ~280).",
+     "scripts/deploy-live.sh's --falsify-host mode is handled at :337 and ALWAYS exits at :339-408 (the `exit 0` is at :408), before the argument loop at :411 and the deploy body \u2014 verified; unique to Z and materially explains why the cc-premise probe never reaches a deploy.",
+     "The upstream claim chain for site 6: bin/cc-backlog:3046 `pout=\"$(\"$pbin\" check \"$id\" 2>&1)\"` inside cmd_transition (:2480), with $pbin defaulting to the sibling cc-premise at :3579 \u2014 all three verified exactly, with an explicit honest scoping note that it did not trace check \u2192 assess.",
+     "scripts/deploy-link-parity.sh's `fix()` is defined at :159 as `FIXES=\"${FIXES}  \u25b6 $1\"` \u2014 verified; this is precisely the body Y flagged as unverified.",
+     "bin/cc-blockers:642's recover_cmd is rendered only as a board cell at :1299, :1582 and :1596 \u2014 verified; this quietly refutes the key's own M2 example.",
+     "Explicitly states the key's M3/trap distinction: 'The displayed cmd string (bash ~/\u2026) is **not** what runs' \u2014 grounded in cc-do:186-187 and corroborated by the file's own :148-149 comment.",
+     "Most complete (b) list of the three, adding permission-gate-lint.sh:104 (EMBEDDED_SET glob), scripts/deploy-live.sh:2471 (page filename) and bin/cc-do:194 (string stripping) on top of everything X listed \u2014 every one I sampled was byte-accurate.",
+     "Correctly attributes the stale DIVERGED citation to its source line scripts/ship-land.sh:1703, and explicitly abstains on ship-land.sh:1719's citation of deploy-live.sh:180 rather than guessing \u2014 the key confirms :1719 IS accurate, so the abstention was the right call.",
+     "Structural citations all exact: post_release_finish at ship-land.sh:1600, render_block at operator-readout.sh:468, collect() at cc-do:153, the deploy producer at operator-readout :503-547, deploy-now's repo guard at :62 and banner loop at :83-87, cc-premise REPO at :129 and kill switch at :246, plist StartInterval at :41-42 and RunAtLoad at :44-45 \u2014 I checked every one and found no error."
+    ],
+    "score_1_10": 8
+   }
+  ],
+  "xy": "X",
+  "xz": "X",
+  "yz": "Z",
+  "pair_reasons": "X vs Y \u2014 X. Three verified, material differences all favour X. (1) Y carries a fabricated citation on the load-bearing (c) answer: it cites bin/cc-do:69-71 as a header remark naming launchd/com.claude.deploy-live as the unattended runner, but those lines are the activation-marker library resolution comment and mention neither. (2) Y asserts as a grep result that 'bin/cc-premise contains no literal reference to \\\"deploy-live\\\" anywhere in its own source' \u2014 false, it appears at :1528 and :2544. (3) Y fails brief part (b) materially: it dismisses scripts/deploy-parity-assert.sh en masse as plain comments when that file has 9 non-comment occurrences, one of which (:1459) the key names by name as required; Y also never adjudicates bin/cc-do:454 (key M2) while X both counts it and proves it reachable. Y additionally claims, 'confirmed (760-800)', that deploy-live.sh:708-746 only reach a .page file and are 'never executed' \u2014 refuted four lines past where Y stopped reading, at :812. X's only comparable defect is an off-by-one (cc-do:358 for the :359 invocation) plus a wrong grep denominator (273 vs 316), which is a precision error against Y's cluster of wrong facts.\n\nX vs Z \u2014 X, narrowly. Z is the better-cited output by a clear margin: I opened 38 of its citations and found zero bad ones, against X's misreport of the key's S5 anchor line (bin/cc-do:358/:357 for the :359 invocation and :358 CONFIRM arm) and X's wrong in-scope grep count (273 vs the true 316, which Z gives exactly). Z is also more complete on (b) and contributes several verified facts X lacks (the --falsify-host mode exits at :339-408 before the arg loop at :411; the cc-backlog:3046 \u2192 :3579 claim chain; fix() at deploy-link-parity.sh:159; cc-blockers:642 rendered only at :1299/:1582/:1596). X wins anyway on the brief's central question \u2014 whether every execution site was found. Z rejects bin/cc-do:454 with a universal negative, 'None of the non-comment deploy-live lines in scope passes it as a --run argument', which is false and is refuted by a row in Z's own near-miss table: I verified scripts/deploy-live.sh:812 files `--run \\\"$run\\\"` with $run built at :708/:728/:731/:734/:743/:746, cc-backlog:1890/:2254/:2282 stores it as the JSON `run` field, cc-do:415 reads `.run`, and cc-do:454 executes it. X is the only output that establishes that chain, and it is a stronger emitter than the key's own M2 example (cc-blockers:642, whose recover_cmd Z itself proved is display-only). A wrong conclusion about whether a genuine execution path exists outranks a \u00b11 line number on a site both identified, quoted and explained correctly \u2014 hence X, but narrowly.\n\nY vs Z \u2014 Z, decisively. Z has no bad citations in 38 checked; Y has a fabricated one (cc-do:69-71), a false asserted grep (cc-premise has no 'deploy-live' literal \u2014 it has two), a quoted-string-not-in-range citation (deploy-now.sh:68-72 for text at :73/:77), an off-by-one on the S5r emit (:185-186 for :186-187), and a comment cited as evidence for the \u25b6 gate with the wrong line ('359-ish' for :386). On brief part (b) Z is the most complete list produced by any of the three while Y falsely excludes a whole file (deploy-parity-assert.sh) and omits validate-bash:1425, permission-gate-lint :526/:535/:637/:770/:782, test-hermeticity-lint, offbox-admission-lint:274, cc-venue:187 and cc-do:194. Both share the N4 miss and both mishandle cc-do:454, but Z at least adjudicates it explicitly (key M2) whereas Y is silent, and Z verified deploy-link-parity's fix() body that Y expressly could not."
+ },
+ "retried": false
+}

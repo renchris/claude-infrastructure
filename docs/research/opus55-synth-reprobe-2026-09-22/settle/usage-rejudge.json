@@ -1,0 +1,137 @@
+{
+ "rejudge:T3-frontier-budget:J0": {
+  "agentId": "a42a55e189f4d3dc4",
+  "cache_creation": 225783,
+  "cache_read": 2510522,
+  "input": 30,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 12467,
+  "tools": {
+   "Bash": 24,
+   "StructuredOutput": 1
+  },
+  "turns": 15
+ },
+ "rejudge:T3-frontier-budget:J1": {
+  "agentId": "a64a4ccc866441a00",
+  "cache_creation": 209421,
+  "cache_read": 4219260,
+  "input": 48,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 9221,
+  "tools": {
+   "Bash": 25,
+   "StructuredOutput": 1
+  },
+  "turns": 24
+ },
+ "rejudge:T3-frontier-budget:J2": {
+  "agentId": "a364925f36e1b1f4c",
+  "cache_creation": 223467,
+  "cache_read": 3607808,
+  "input": 42,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 5738,
+  "tools": {
+   "Bash": 21,
+   "StructuredOutput": 1
+  },
+  "turns": 21
+ },
+ "rejudge:T4-stop-arms:J0": {
+  "agentId": "aecfb7a905a861636",
+  "cache_creation": 256305,
+  "cache_read": 6813962,
+  "input": 70,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 10219,
+  "tools": {
+   "Bash": 38,
+   "StructuredOutput": 1
+  },
+  "turns": 35
+ },
+ "rejudge:T4-stop-arms:J1": {
+  "agentId": "a6b013c81f3ed718f",
+  "cache_creation": 245176,
+  "cache_read": 7634324,
+  "input": 80,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 10798,
+  "tools": {
+   "Bash": 41,
+   "StructuredOutput": 1
+  },
+  "turns": 40
+ },
+ "rejudge:T4-stop-arms:J2": {
+  "agentId": "a02c06baa3f99971b",
+  "cache_creation": 250374,
+  "cache_read": 7217291,
+  "input": 74,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 8609,
+  "tools": {
+   "Bash": 37,
+   "StructuredOutput": 1
+  },
+  "turns": 37
+ },
+ "rejudge:T5-deploy-live-exec:J0": {
+  "agentId": "a03cda21bb0355d97",
+  "cache_creation": 202183,
+  "cache_read": 4015555,
+  "input": 50,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 5222,
+  "tools": {
+   "Bash": 35,
+   "StructuredOutput": 1
+  },
+  "turns": 25
+ },
+ "rejudge:T5-deploy-live-exec:J1": {
+  "agentId": "aed1375e02c230907",
+  "cache_creation": 208634,
+  "cache_read": 5615749,
+  "input": 66,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 6133,
+  "tools": {
+   "Bash": 39,
+   "StructuredOutput": 1
+  },
+  "turns": 33
+ },
+ "rejudge:T5-deploy-live-exec:J2": {
+  "agentId": "ad86d65c8c454db5f",
+  "cache_creation": 206680,
+  "cache_read": 4377821,
+  "input": 54,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 6021,
+  "tools": {
+   "Bash": 26,
+   "StructuredOutput": 1
+  },
+  "turns": 27
+ }
+}

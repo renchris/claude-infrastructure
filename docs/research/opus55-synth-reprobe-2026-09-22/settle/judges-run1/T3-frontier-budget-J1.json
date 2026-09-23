@@ -1,0 +1,226 @@
+{
+ "brief": "T3-frontier-budget",
+ "judge": "J1",
+ "model": "claude-opus-5",
+ "effort": "xhigh",
+ "label_map": {
+  "X": "A",
+  "Y": "C",
+  "Z": "B"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K17",
+     "K18",
+     "K20",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M7",
+     "M9",
+     "M11",
+     "M12"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 36,
+    "citations_bad": [
+     {
+      "cite": "docs/research/fable51-vs-opus5-routing-2026-09-16/A6-mechanics.md:500 row \u2014 \"`:23` is banner prose (\\\"knowledge can't: stale routing after the frontier_access window closes.\\\")\"",
+      "problem": "Misattributed quote: that string is hooks/frontier-spawn-gate.sh:5, not :23. Line 23 reads `# carrier is the \"gate's surface is not its traffic\" failure, stated in this repo's own rules.` The verdict (citation is stale) is still correct."
+     },
+     {
+      "cite": "hooks/frontier-spawn-gate.sh:133,134,144 offered as the hits of `grep -rn \"frontier-gate-\"`",
+      "problem": "Only :133 contains the literal string `frontier-gate-`; :134 and :144 use `$cnt_file`. Verified: the grep returns :133 only in that file. Substantive conclusion (no refund path) is correct."
+     },
+     {
+      "cite": "CLAUDE.global.md:334 + docs/plans/NONLIMIT_RESUME_LADDER.md:840 \u2014 \"Two hits\" for `grep -rn CC_LADDER .`",
+      "problem": "Three hit LINES across two files: NONLIMIT_RESUME_LADDER.md:866 also carries `Kill-switch: `CC_LADDER=off``. The conclusion (no executable reads it) is correct."
+     },
+     {
+      "cite": "hooks/frontier-spawn-gate.sh \u2014 \"grepped the whole hook file for each of those four strings; none appear anywhere\" (tracks/source/start/permanent)",
+      "problem": "`source` appears at hooks/frontier-spawn-gate.sh:26 (\"sole-source-of-truth\"). The claim that the gate does not READ those config fields is correct; the absence claim as worded is false. (Y and Z make the same error.)"
+     },
+     {
+      "cite": "settings-templates/settings.example.json:151-165 and :102-130",
+      "problem": "Off-by-one group boundaries: the Agent group object is 150-164 and the Bash group 101-129 (:165 is the next group's `{`, :130 is the Write|Edit group's). The load-bearing cite (:160) is exact."
+     }
+    ],
+    "wrong_claims": [
+     "\u00a76 is headed \"Every line that makes the gate not count / not refuse\" \u2014 an exhaustiveness claim that is false. Verified by running the hook: `handoff-fire.sh --model \"claude-fable-5-1\"` (quoted value) exits 0 uncounted because :75's class `[A-Za-z0-9._-]+` excludes `\"`; and the counter file under $TMPDIR can be deleted or zeroed to reset the budget. Neither appears in the table.",
+     "Never grounds any claim in scripts/handoff-fire.sh (only a LADDER grep of it), so the brief's \"alias and full id are the same tier\" mechanism (:9493) and the gate's own stale self-citation to :9303-9311 both go unexamined.",
+     "\"Two hits\" for CC_LADDER (three lines, two files)."
+    ],
+    "extra_correct": [
+     "Six additional stale path:line cross-references into the gate, all verified: docs/research/desk-audit-2026-07-18/p15-escalation.md:44 (:59-67), fable51-vs-opus5-routing-2026-09-16/A5-harness.md:357 (:37-69), A6-mechanics.md:245 (:26-38) and :500 (:23), model-config.yaml:545 (:30), agent-teams-enforce.sh:366 (:52-63).",
+     "Finds a flatly WRONG cross-reference nobody else does: docs/research/opus55-utilization-2026-09-22/census/L1-census.md:62 says the cap-reached refusal tells the session `--model claude-opus-5`; :138 actually says `--model opus`, and tests/frontier-spawn-gate.bats:155 asserts the message must NOT contain `--model claude-opus-`. Verified both.",
+     "Strongest single piece of registration evidence in any output: config/hook-chains.d/pretooluse-bash:7-8 states it was RECONCILED 2026-09-08 against the LIVE settings.json, which registered TEN Bash hooks, and lists them at :18-27 \u2014 frontier-spawn-gate.sh absent. Verified verbatim. This corroborates the inert session arm from the live config, not just from the template.",
+     "Correctly notes the Agent arm survives jq absence (its :104 grep fallback matches the `\"model\":\"fable\"` pair a real Agent payload carries) while the session arm does not \u2014 confirmed by running both payloads on a jq-free PATH.",
+     "Correct that `\" \"` can never contain `\" $today \"`, so the reserve halving is unreachable with reserve_dates empty, and that bats test 14 only reaches it by writing a fixture value."
+    ],
+    "score_1_10": 6
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K17",
+     "K18",
+     "K19",
+     "K20",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6",
+     "M7",
+     "M8",
+     "M9",
+     "M10",
+     "M11",
+     "M12"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 38,
+    "citations_bad": [
+     {
+      "cite": "scripts/handoff-fire.sh:9303-9314 as `hf_inflight_key()`",
+      "problem": "The function is 9304-9318; :9303 is the tail of the preceding comment and :9314 is mid-function. The substance (the gate's own :27 citation lands on in-flight-key hashing, not model logic) is correct."
+     },
+     {
+      "cite": "skills/research-subagents/SKILL.md:579 quoted as \"reads only `active` + `end`\"",
+      "problem": "Lines 579-580 read \"checks `active` + `end` and reads no track at all\" \u2014 no \"only\". Lumping it with skills/frontier-run/SKILL.md:30 (which does say \"only\") makes an accurate sentence look defective. Z grades this one correctly."
+     },
+     {
+      "cite": "hooks/frontier-spawn-gate.sh \u2014 \"The whole file contains none of those tokens\" (start/permanent/tracks/source)",
+      "problem": "`source` appears at :26 (\"sole-source-of-truth\"). The operative claim (the gate never READS those frontier_access fields) is correct."
+     },
+     {
+      "cite": "tests/frontier-spawn-gate.bats:114-135 for cases \"9, 9b, 11\"",
+      "problem": "Case 11 spans :132-136, so the range clips it; and the range also silently contains case 10. Trivial."
+     }
+    ],
+    "wrong_claims": [
+     "\u00a78: \"`model-config.yaml:663-667`: the gate 'actually resolve[s]' this key. It does not.\" False as stated \u2014 the gate resolves frontier_access.model into `$fmodel` at hooks/frontier-spawn-gate.sh:40 and dispatches on it at :53. Y's real point (the prefix arm at :52 means the SSOT key is not the sole predicate, so the comment's \"must move together\" implication is weaker than it reads) is correct, but \"it does not\" is not."
+    ],
+    "extra_correct": [
+     "install.sh analysis nobody else runs, and it closes brief item 7 properly: the template merge is ADDITIVE, \"adds missing EVENTS only \u2014 never clobbers a populated event\" (install.sh:1201-1204), opt-in via `--wire-hooks` (:29) and automatic only for a config with no .hooks (:1216) \u2014 so even a FRESH install gets only the Agent arm. All three lines verified.",
+     "Unique direction-of-error finding, verified: the gate counts the `--model=X` spelling (:75, pinned by bats:95-98) but `scripts/handoff-fire.sh` has only a `--model)` case at :8916 \u2014 `grep -n -- '--model=' scripts/handoff-fire.sh` returns nothing \u2014 so that shape can be charged without handoff-fire ever consuming it.",
+     "Verified: hooks/validate-bash.sh:28-29 and tests/hook-jq-abstain.bats:4-6 both name frontier-spawn-gate.sh as a hook that correctly guards jq, yet `grep -n frontier tests/hook-jq-abstain.bats` returns only that comment line \u2014 the suite does not test this gate, and its session arm is exactly the silent fail-open the suite exists to prevent.",
+     "Exact and verified: `agents/*.md` frontmatter holds opus x2 (deep-research, frontier-derivation) and sonnet x2 (deep-research-sonnet, research-decomposition-critic) \u2014 so the \"Agent call with no tool_input.model\" bypass is latent today.",
+     "Notes the closed-window session refusal resolves to a FULL id (`--model claude-opus-5-5`) today, contradicting the at-cap branch's deliberate use of the alias (bats:154-155; handoff-fire.sh:9497-9502; CLAUDE.global.md:334).",
+     "Points out the documented one-liner checks only ~/.claude while 0029 writes five config dirs (:86), and supplies a fleet-wide loop.",
+     "Flags docs/plans/NONLIMIT_RESUME_LADDER.md:585 as an off-repo `~/.claude/settings.json:490-503` citation no snapshot reader can check (key M11's parenthetical).",
+     "Empirically-confirmed bypass shapes: `bash -c \"claude --model fable\"`, `--model \"fable\"`, `--model $M` all exit 0 uncounted when run against the hook."
+    ],
+    "score_1_10": 9
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K17",
+     "K18",
+     "K20",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6",
+     "M7",
+     "M8",
+     "M9",
+     "M10",
+     "M11",
+     "M12"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 31,
+    "citations_bad": [
+     {
+      "cite": "model-config.yaml:700 for `fallback: claude-opus-5-5`",
+      "problem": "The key/value is at :699; :700 is the comment continuation (\"with opus_latest (was claude-opus-5). Read only on the\"). Z's own later cite of :701-702 for the \"cannot fire while permanent: true holds\" phrase is correct."
+     },
+     {
+      "cite": "model-config.yaml:548 for the quoted pattern `fable|claude-fable-5*|\"$fmodel\")`",
+      "problem": "That literal is at :549; :548 ends with \"It now reads\"."
+     },
+     {
+      "cite": "hooks/frontier-spawn-gate.sh \u2014 \"None of those appear in the file; `grep -c \\\"permanent\u2026\\\"` returns 0\" (permanent/start/source/tracks)",
+      "problem": "`source` appears at :26 (\"sole-source-of-truth\"); the quoted grep is elided and not runnable as written. The operative claim (the gate never reads those frontier_access fields) is correct."
+     }
+    ],
+    "wrong_claims": [
+     "\u00a75 heads the list \"Fields read, all scoped to the `frontier_access` block\" and then includes `today=\"$(date +%F)\"` (:115), which is not a config field at all. Z's own sub-line labels it correctly, so this is sloppy grouping rather than a false claim.",
+     "Does not state the K19 mechanism \u2014 that `handoff-fire.sh` resolves the `--model fable` alias from the same SSOT key the gate reads (scripts/handoff-fire.sh:9493, `fable) MODEL=\"$(_ssot_scalar frontier_access model)\"`). Z cites the adjacent comment at :9506 but never the resolution itself."
+    ],
+    "extra_correct": [
+     "Unique verified finding: model-config.yaml:512-514 quotes the gate as `case \"$req_model\" in fable|\"$fmodel\") ;; *) exit 0 ;; esac` \u2014 a shape that no longer exists (the live predicate is :51-55) \u2014 and Z correctly notes the same document self-corrects at :545-549.",
+     "Verified arithmetic nobody else derives: a literal cap of `0` passes the `''|*[!0-9]*` guard at :121 and refuses every request, while on a reserve date the halving at :127 makes 0 *rise* to 1.",
+     "The `CLAUDE_NEXT_MODEL` env-var path: the launcher expands `--model \"${CLAUDE_NEXT_MODEL:-\u2026}\"` inside its own body (model-config.yaml:553, verified), so the gate never sees a `--model` token in the Bash command string and the fire is uncounted.",
+     "Grades skills/research-subagents/SKILL.md:579 as ACCURATE where Y wrongly lumps it with frontier-run's \"reads only\" claim.",
+     "scripts/handoff-fire.sh:9506 (\"frontier-spawn-gate counts `--model fable` from the command\") added to the true-of-code / false-of-live-wiring list \u2014 verified verbatim.",
+     "Verified \"no Workflow matcher\" in settings-templates/settings.example.json (`grep -n Workflow` returns nothing).",
+     "Empirically-confirmed bypass shapes unique to Z: `\"$R/scripts/handoff-fire.sh\" --model fable` and `bash -c 'handoff-fire.sh --model fable'` both exit 0 uncounted \u2014 the trailing `\"`/`'` defeats the regex's `([[:space:]]|$)` anchor at :67."
+    ],
+    "score_1_10": 8
+   }
+  ],
+  "xy": "Y",
+  "xz": "Z",
+  "yz": "Y",
+  "pair_reasons": "Harness note first: all three outputs were flagged for a \"settings-json\" instruction-shaped pattern. I inspected each \u2014 the matched text is jq expressions over settings.json quoted from migrations/0029 and CLAUDE.global.md, which is exactly what brief item 7 asks for. Nothing directive-shaped to relay.\n\nX vs Y \u2014 Y. Five key items X misses and Y states correctly, each verified: (a) K19, the handoff-fire alias resolution at scripts/handoff-fire.sh:9493 \u2014 X never grounds anything in that file; (b) M5, the quoted-model bypass \u2014 I ran `handoff-fire.sh --model \"claude-fable-5-1\"` through the hook and it exits 0 with no counter written, because :75's class `[A-Za-z0-9._-]+` excludes `\"`, and X's \u00a76 is explicitly headed \"Every line that makes the gate not count\", so this is a false exhaustiveness claim, not an omission; (c) M6, the counter file under $TMPDIR being freely resettable; (d) M8, the gate's OWN stale self-citation at :27 to scripts/handoff-fire.sh:9303-9311, which is `hf_inflight_key()` (9304-9318) \u2014 X scoped its \u00a78 to citations *into* the gate and so structurally could not find it, and the key names it as a trap; (e) M10, skills/frontier-routing/SKILL.md:41 plus the gate's own header line 2, the uncaveated true-of-code/false-of-wiring sentences. X also misattributes a quote: it reports gate `:23` as \"knowledge can't: stale routing after the frontier_access window closes\", which is line 5. X's compensating strength is real \u2014 six verified stale cross-references including a flatly wrong one (L1-census.md:62 claims :138 says `--model claude-opus-5`; :138 says `--model opus` and bats:155 forbids the former), and config/hook-chains.d/pretooluse-bash:7-8/:18-27 as live-settings corroboration of the inert Bash arm, which is the best registration evidence in any output. It does not close a five-item key gap.\n\nX vs Z \u2014 Z. Same reasoning: Z states M5, M6, M8 and M10, all of which X misses, and Z's bypass shapes are empirically right (I confirmed `\"$R/scripts/handoff-fire.sh\" --model fable` and `bash -c 'handoff-fire.sh --model fable'` both exit 0 uncounted \u2014 the trailing quote defeats the `([[:space:]]|$)` anchor at :67). Z misses only K19's substance. Z carries two off-by-one cites (`model-config.yaml:700` for a value at :699; `:548` for a literal at :549), but those are pointer slips, not the false-quote and false-exhaustiveness defects X carries.\n\nY vs Z \u2014 Y, narrowly and on specifics. Y states K19 (`scripts/handoff-fire.sh:9493`, verified verbatim) and Z does not; Z cites only the neighbouring comment at :9506. Y also carries three verified unique findings Z lacks, all of which bear directly on brief items: install.sh:1201-1204/:29/:1216 proves the template merge is additive and opt-in, so even a *fresh* install gets only the Agent arm (Z answers item 7 from the template alone); the gate counts `--model=X` while `grep -n -- '--model=' scripts/handoff-fire.sh` returns nothing and :8916 has only a `--model)` case, an overcount direction nobody else identifies; and validate-bash.sh:28-29 / tests/hook-jq-abstain.bats:4-6 name this gate as a jq-guard exemplar while `grep -n frontier` on that suite shows it never tests it. Y's agents/*.md census is exact (opus x2, sonnet x2 \u2014 verified file by file). Z's offsetting edges are genuine but smaller: the model-config.yaml:512-514 stale quote, the cap=0 arithmetic, the CLAUDE_NEXT_MODEL path, and a more precise grading of research-subagents:579. Defect loads are comparable \u2014 Y has one real false claim (\"the gate 'actually resolve[s]' this key. It does not\" \u2014 it does, at :40 and :53) against Z's two off-by-one cites and one sloppy grouping."
+ },
+ "retried": false
+}

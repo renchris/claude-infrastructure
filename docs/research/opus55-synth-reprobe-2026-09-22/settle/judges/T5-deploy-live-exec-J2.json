@@ -1,0 +1,156 @@
+{
+ "brief": "T5-deploy-live-exec",
+ "judge": "J2",
+ "model": "claude-opus-5",
+ "effort": "xhigh",
+ "label_map": {
+  "X": "B",
+  "Y": "A",
+  "Z": "C"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "S1",
+     "S1r",
+     "S2",
+     "S2a",
+     "S2r",
+     "S3",
+     "S3r",
+     "S4",
+     "S5",
+     "S5r",
+     "N1",
+     "N2",
+     "N3",
+     "M1",
+     "M2",
+     "M3"
+    ],
+    "key_contradicted": [
+     "N4"
+    ],
+    "citations_checked": 50,
+    "citations_bad": [
+     {
+      "cite": "bin/cc-do:358 \u2014 quoted as the invocation line `else bash \"$1\" </dev/null; rc=$?; fi`",
+      "problem": "Wrong line. :358 is the CONFIRM=1 arm (`if [ \"${2#CONFIRM=1 }\" != \"$2\" ]; then CONFIRM=1 bash \"$1\" ...`); the quoted `else bash \"$1\" </dev/null` is at :359. This is the heading line number for the single hardest-to-find execution site (key S5 = :359)."
+     },
+     {
+      "cite": "bin/cc-do:357 \u2014 \"The `CONFIRM=1` branch (:357)\"",
+      "problem": "Wrong line. :357 is `local rc`; the CONFIRM=1 branch is :358."
+     },
+     {
+      "cite": "hooks/operator-readout.sh:533 \u2014 \"is behind its origin (`behind -gt 0`, :533)\"",
+      "problem": "Off by one. The gate `if [ \"$behind\" -gt 0 ]; then` is at :532; :533 is `local dout drc`."
+     }
+    ],
+    "wrong_claims": [
+     "Method self-report: \"`grep -rn deploy-live` over `hooks/ scripts/ bin/` \u2026 returned 273 lines.\" The actual count at this snapshot is 316 (176 for `deploy-live.sh`). Not reproducible by any obvious variant.",
+     "(c): \"Three in-scope sites run without a human, but they are triggered by events rather than by a schedule \u2026 site 6, when a backlog row is claimed.\" cc-premise:1392 is also reached on a SCHEDULE \u2014 launchd com.chrisren.autonomy-sweep (StartInterval 300, plist:26) runs scripts/autonomy-sweep.sh, which at :1487-1490 runs `python3 \"$_premise\" sweep` ($_premise resolved at :1427 to <repo>/bin/cc-premise), and cmd_sweep reaches assess() at :3122 with run_probes defaulting True. This is the key's N4 correction and X misses it."
+    ],
+    "extra_correct": [
+     "Four stale cross-file citations, all verified: ship-land's \"deploy-live.sh:2543 dies DIVERGED\" (the DIVERGED block prints at deploy-live.sh:2467, the die at :2472/:2601; :2541 is the UNTRACKED COLLISION printf); plist comment :16 citing hooks/operator-readout.sh:238-246 (real fallback at :517-518); bin/cc-do:152's \"mirror hooks/operator-readout.sh \u00a7152-258\" (real producer at :503-546); deploy-live.sh:185 describing deploy-now.sh as \"`deploy-live.sh --force`\" while deploy-now.sh:89 forwards only \"$@\".",
+     "Correct producer trace for the 7th site: deploy-live.sh:708/:728/:731/:734/:743/:746 build `run=` strings naming deploy-live.sh, stored at :812 via `\"$BACKLOG_BIN\" needs \"$title\" --run \"$run\"`, read back by cc-do:415 (`.run`) and executed at cc-do:454. Verified end to end.",
+     "Adjudicates two further generic dispatchers neither other output fully covers: bin/cc-backlog:4308 (`/bin/sh -c \"$probe\"`, only the `falsify` verb's argv probe \u2014 verified) and bin/cc-premise:1776 filing_day_screen, which converts a probe to git-grep clauses and returns UNDECIDABLE on a script call (:1791-1794, verified) rather than running it.",
+     "bin/cc-do:497 \u2014 the OTHER run_one call site, in run_stem, with class `activation` and a path from ACT_DIR; correctly rejected. Neither Y nor Z mentions it.",
+     "Full cc-do execution dispatch traced: :525 (`--run` / CC_DO_ASSUME_YES), :535-541 (non-tty \u21d2 exit 3), :543-548 (interactive [Y/n] then run_steps). All verified.",
+     "Honest sensitivity note: under a strict reading of the brief's \"advisory string stored in a work item\" exclusion, sites 6 and 7 drop and the count is 5.",
+     "cc-backlog:1898 and :2275-2279 verified as the `--falsifier` parse/serialise path."
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "S1",
+     "S1r",
+     "S2",
+     "S2a",
+     "S2r",
+     "S3",
+     "S3r",
+     "S4",
+     "S5",
+     "S5r",
+     "N1",
+     "N2",
+     "N3",
+     "M1",
+     "M2",
+     "M3"
+    ],
+    "key_contradicted": [
+     "N4"
+    ],
+    "citations_checked": 45,
+    "citations_bad": [],
+    "wrong_claims": [
+     "(c): \"**The only unattended/scheduled entry point lives outside all three scoped trees.**\" False, and stated with no hedge: launchd com.chrisren.autonomy-sweep (StartInterval 300) \u2192 scripts/autonomy-sweep.sh:1487-1490 \u2192 bin/cc-premise sweep \u2192 cmd_sweep :3122 \u2192 assess \u2192 run_falsifier \u2192 /bin/sh -c at cc-premise:1392 is a scheduled, in-scope executor of deploy-live.sh --falsify-host. Y itself identified cc-premise:1392 as site 6 and never connects it. X and Z make the same substantive miss but both hedge by enumerating in-scope unattended paths; Y's is the flat exclusivity claim.",
+     "Y grounds that exclusivity on a COMMENT \u2014 \"corroborated in-scope by `scripts/deploy-now.sh:69-70`'s own comment\" \u2014 which is exactly the cross-file comment-summary the brief forbids leaning on. (The comment is accurate about deploy-now.sh itself; it says nothing about the falsifier path.)",
+     "Self-declared coverage gap left unresolved: \"run_steps() \u2026 is itself invoked from cc-do's interactive-confirm/`--run` dispatch, which sits past the range read\" \u2014 Y cites the usage doc at cc-do:44-47 instead of the code at :525/:535-541/:543-548, which both other outputs read."
+    ],
+    "extra_correct": [
+     "Raw hit count 316 \u2014 exact (verified: `grep -rn deploy-live hooks scripts bin | wc -l` = 316).",
+     "deploy-live.sh:957-959's own comment naming cc-premise as the downstream `/bin/sh -c` consumer \u2014 verified, and the strongest single piece of producer/consumer evidence for the M1 site.",
+     "cc-blockers:642's recover_cmd verified as render-only, with the three render sites `.recover_cmd | cell(\"?\")` at :1299, :1582, :1596 \u2014 all three verified; the enumerated sibling printf list (:351, :410, :1211, :1252 sampled) is accurate.",
+     "ship-land.sh:1680-1681 and :1716-1718 \u2014 start_new_session called out as MANDATORY against the harness's group SIGKILL, and \"a land that has already content-verified must never be turned red by what happens after it\"; both verified.",
+     "deploy-now.sh:6 (`--force` documented as the hammer, every flag passed through) and :33-35 (no raw-ff fallback, deliberately) \u2014 both verified.",
+     "deploy-link-parity.sh:159 \u2014 `fix()` appends to the $FIXES display string only; verified.",
+     "Correct producer trace for cc-do:454 via deploy-live.sh:811-812 and the `run=` assignments at :708/:728/:731/:734/:743/:746 \u2014 verified end to end.",
+     "Correct gate citations where X is off by one: operator-readout.sh:532 and cc-do:167 for `behind -gt 0`."
+    ],
+    "score_1_10": 7
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "S1",
+     "S1r",
+     "S2",
+     "S2a",
+     "S2r",
+     "S3",
+     "S3r",
+     "S4",
+     "S5",
+     "S5r",
+     "N1",
+     "N2",
+     "N3",
+     "M1",
+     "M3"
+    ],
+    "key_contradicted": [
+     "N4",
+     "M2"
+    ],
+    "citations_checked": 50,
+    "citations_bad": [],
+    "wrong_claims": [
+     "(a): \"`bin/cc-do:454` runs `bash -c \"$cmd\"` for a backlog row's `--run`. None of the non-comment `deploy-live` lines in scope passes it as a `--run` argument.\" VERIFIED FALSE. scripts/deploy-live.sh:812 is `\"$BACKLOG_BIN\" needs \"$title\" --run \"$run\"`, and $run at :708/:728/:731/:734/:743/:746 is `bash $DEPLOY_REPO/scripts/deploy-live.sh --dry-run --offline` (or `--auto` at :734). cc-do:415 reads `.run` and :454 executes it. Z's own near-miss row calls :708-746 \"`run=` strings in the escalation/page record\" and never mentions :812, so the data path is denied rather than traced. This is the sole reason Z's total is 6 rather than 7.",
+     "(c): \"**Automatic but not scheduled, inside scope:** \u2026 the falsifier probe on the claim path (site 6).\" The falsifier probe is ALSO scheduled \u2014 launchd com.chrisren.autonomy-sweep StartInterval 300 \u2192 scripts/autonomy-sweep.sh:1487-1490 \u2192 cc-premise sweep \u2192 :3122 assess \u2192 run_falsifier \u2192 cc-premise:1392. Same N4 miss as X and Y."
+    ],
+    "extra_correct": [
+     "`--falsify-host` structure: handled at deploy-live.sh:337 and ALWAYS exits within :339-408 (exit 2 at :339/:340, exit 1 at :406, exit 0 at :408), before the argument loop at :411-412 and the deploy body. Verified; uniquely precise about why this mode cannot deploy.",
+     "cc-premise seams all verified: cwd=REPO from CC_PREMISE_REPO at :129, FALSIFIER_TIMEOUT_S at :241 (default 20), kill switch CC_PREMISE_FALSIFIER at :246.",
+     "Upstream claim-path trace, verified: bin/cc-backlog:3046 `pout=\"$(\"$pbin\" check \"$id\" 2>&1)\"` inside cmd_transition (:2480), with $pbin defaulting to the sibling cc-premise at :3579 \u2014 plus an explicit disclosure that `check`\u2192`assess` was not traced.",
+     "Three stale cross-file citations, with line numbers: ship-land.sh:1703 (cites deploy-live.sh:2543 as the DIVERGED die; :2543 is the UNTRACKED printf), plist:16 (cites operator-readout.sh:238-246; real code :517-518), cc-do:152 (\"\u00a7152-258\"; real producer :503-547). All verified. Z also names a citation it deliberately did NOT rely on (ship-land.sh:1719 re deploy-live.sh:180) \u2014 which is in fact accurate.",
+     "Sharpest statement of the printed-vs-executed distinction: cc-do's field-4 `cmd` (`bash ~/\u2026`, tildified) is display text and \"is **not** what runs\"; field 6 is the real path. Verified against emit() at :150 and :186-187.",
+     "Most complete (b): uniquely adjudicates operator-readout.sh:541, cc-do:194 and :196-198, deploy-live.sh:419/:1483/:2471, permission-gate-lint.sh:104 (EMBEDDED_SET glob `scripts/deploy-*`), offbox-admission-lint.sh:274, ship-land.sh:4511, host-suites.manifest:1/:7/:156, plus a catch-all row for remaining comment hits. Every one I opened matched its stated reason.",
+     "deploy-now.sh detail neither other output has: the `[ -d \"$REPO\" ]` abort at :62 and the banner suppressed under --auto/--offline at :83-87. Verified.",
+     "Correct gate/dispatch citations throughout (operator-readout :507-509/:532; cc-do :167, :385, :389, :360/:369-372, :379, :525, :535-540, :543-548) \u2014 zero off-by-ones found."
+    ],
+    "score_1_10": 8
+   }
+  ],
+  "xy": "X",
+  "xz": "tie",
+  "yz": "Z",
+  "pair_reasons": "X vs Y \u2014 X wins narrowly. Both find the same 7 execution sites with correct traces, and both are strong on mechanism. The separating material is verified and specific: X reports FOUR stale cross-file citations (ship-land's \"deploy-live.sh:2543 dies DIVERGED\" vs the real block at :2467/die at :2472/:2601; plist:16 \u2192 operator-readout.sh:238-246 vs :517-518; cc-do:152's \"\u00a7152-258\" vs :503-546; deploy-live.sh:185 calling deploy-now \"deploy-live.sh --force\" when :89 forwards only \"$@\") \u2014 I opened all four and all four hold, and the brief explicitly demands this verification. Y reports none, and worse, Y's answer to (c) is grounded ON a comment (\"corroborated in-scope by scripts/deploy-now.sh:69-70's own comment\"), which is the precise practice the brief forbids, and yields the flat false claim that the only unattended entry point is outside the scoped trees. X also adjudicates two further generic dispatchers Y never touches (cc-backlog:4308's `falsify` argv probe; cc-premise:1776 filing_day_screen, which returns UNDECIDABLE on a script call at :1791-1794 rather than running it) and the second run_one call site at cc-do:497, and traces cc-do's execution dispatch (:525/:535-541/:543-548) that Y explicitly says it did not read. Against that, X has three off-by-one citations (cc-do:358 for the line at :359 \u2014 the key's S5 and the hardest site; cc-do:357 for the :358 CONFIRM arm; operator-readout:533 for the :532 gate) and a non-reproducible grep self-report (273 vs the actual 316). Those are precision defects on sites X identifies and quotes verbatim correctly; the material X adds that Y lacks is new verified content. X, narrowly.\n\nX vs Z \u2014 tie. Each has exactly one deliverable-level defect and each holds material the other lacks. X gets the 7th execution site (cc-do:454) with a fully verified producer trace: deploy-live.sh:708/:728/:731/:734/:743/:746 build `run=` strings naming deploy-live.sh, :812 stores them via `cc-backlog needs --run`, cc-do:415 reads `.run`, cc-do:454 runs it. Z rejects that site on a claim I verified FALSE \u2014 \"None of the non-comment deploy-live lines in scope passes it as a --run argument\" \u2014 and never mentions :812 at all, which is why Z lands on 6 instead of 7. Conversely Z has zero bad citations against X's three (including the cc-do:359 site line), the most complete near-miss list of the three (uniquely covering operator-readout:541, cc-do:194/:196-198, deploy-live.sh:419/:1483/:2471, permission-gate-lint:104, offbox-admission-lint:274, ship-land:4511, host-suites.manifest \u2014 all of which I opened and all of which match their stated reasons), and several unique verified mechanism facts X lacks: --falsify-host always exits within :339-408 before the arg loop at :411; cc-premise's seams at :129/:241/:246; the upstream cc-backlog claim path at :3046/:2480/:3579 with an explicit scope disclosure; deploy-now.sh:62 and :83-87. One site missed on a false premise versus three wrong line numbers plus a thinner (b): neither difference dominates.\n\nY vs Z \u2014 Z wins. Y's one advantage is real: it counts cc-do:454 as a site with a correct producer trace, where Z's rejection premise is verifiably false. But Z has three specific, verified, material advantages against it. (1) Z verified and reported three stale cross-file citations with line numbers (ship-land.sh:1703, plist:16, cc-do:152) and additionally named one citation it deliberately did not rely on; Y reports none and instead leans on deploy-now.sh:69-70's comment as evidence for a cross-file fact, producing the flat false exclusivity claim in (c). (2) Z's part (b) is materially more complete against a brief that asks for EVERY rejected near-miss \u2014 I opened roughly a dozen of Z's unique rows and every one matched. (3) Z read cc-do's execution dispatch (:525, :535-540, :543-548) that Y states it did not read, so Y's site 3 is incompletely grounded on the \"when does it run\" axis the brief asks for. Three verified advantages against one."
+ },
+ "retried": false
+}
