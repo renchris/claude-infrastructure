@@ -11,7 +11,8 @@
 # the URL still reaches `open -b company.thebrowser.dia`. A routing miss is a cosmetic
 # regression; a lost click is a broken browser. The CDP leg is deliberately NOT exercised
 # (it needs a live consent-approved Dia); it is pinned by CC_URL_OPEN_NO_CDP, which is the
-# same branch a down port takes in production.
+# same branch a down port takes in production. The AppleScript leg (tried first since
+# 2026-09-23) IS exercised, through an `osascript` stub on PATH that every case inherits.
 
 setup() {
   export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
@@ -27,6 +28,23 @@ printf '%s\n' "$*" >> "$OPEN_LOG"
 EOF
   chmod +x "$D/bin/open"
   export OPEN_LOG="$D/open.log"; : >"$OPEN_LOG"
+
+  # `osascript` stub — the AppleScript leg's seam. Sits on PATH in EVERY case, so no test can
+  # reach the operator's live Dia even if it forgets to configure it; defaults to failing, which
+  # is the branch a Dia without the dictionary takes. argv: -e <script> <url> <profile> <mode>.
+  cat >"$D/bin/osascript" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$3|$4|$5" >> "$OSA_LOG"
+printf '%s\n' "$2" > "$OSA_SCRIPT"
+case "${OSA_MODE:-fail}" in
+  ok)    [ "$5" = probe ] && echo ok || echo routed ;;
+  wrong) echo "something else" ;;
+  hang)  exec sleep 5 ;;
+  *)     echo "execution error: Dia got an error (-1719)" >&2; exit 1 ;;
+esac
+EOF
+  chmod +x "$D/bin/osascript"
+  export OSA_LOG="$D/osa.log" OSA_SCRIPT="$D/osa-script.txt"; : >"$OSA_LOG"
   export PATH="$D/bin:$PATH"
 
   # kitty @ ls fixture: os-window focused, tab focused, window 362 focused.
@@ -177,4 +195,79 @@ EOF
   run "$C" --explain "https://claude.ai.evil.example/x"
   [[ "$output" != *"account="* ]] || false
   [[ "$output" == *"routed=False"* ]]
+}
+
+# ── the AppleScript leg (backlog e09a075539f5) ──────────────────────────────────────────────
+# CDP re-popped Dia's consent modal per connection, so routing worked, then blocked, then
+# worked. Dia's AppleScript `profile` is the Space and needs no port and no modal; these pin
+# that it is tried FIRST, that success is never followed by a second open, and that every way
+# it can fail still hands the link to `open`.
+
+@test "AppleScript routes into the account's Space and the fallback does NOT also fire" {
+  OSA_MODE=ok run "$C" "$ART"
+  [ "$status" -eq 0 ]
+  grep -qxF -- "$ART|Claude3|open" "$OSA_LOG" || false
+  # A second open would put the link in the wrong Space too — the defect this file closes.
+  [ ! -s "$OPEN_LOG" ] || { cat "$OPEN_LOG"; false; }
+}
+
+@test "AppleScript error → fallback still opens the link" {
+  OSA_MODE=fail run "$C" "$ART"
+  [ "$status" -eq 0 ]
+  [ -s "$OSA_LOG" ] || false
+  grep -qF -- "-b company.thebrowser.dia $ART" "$OPEN_LOG"
+}
+
+@test "rc 0 with an unexpected reply is NOT success — fallback opens the link" {
+  OSA_MODE=wrong run "$C" "$ART"
+  [ "$status" -eq 0 ]
+  grep -qF -- "-b company.thebrowser.dia $ART" "$OPEN_LOG"
+}
+
+@test "a hung osascript is bounded by the deadline and falls back" {
+  CC_URL_OPEN_DEADLINE=1 OSA_MODE=hang run "$C" "$ART"
+  [ "$status" -eq 0 ]
+  grep -qF -- "-b company.thebrowser.dia $ART" "$OPEN_LOG"
+}
+
+@test "--explain probes read-only (mode=probe) and opens nothing" {
+  OSA_MODE=ok run "$C" --explain "$ART"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"dia_profile=Claude3"* ]] || false
+  [[ "$output" == *"applescript=ok"* ]] || false
+  [[ "$output" == *"routed=True"* ]] || false
+  grep -qxF -- "$ART|Claude3|probe" "$OSA_LOG" || false
+  [ ! -s "$OPEN_LOG" ]
+}
+
+@test "AppleScript routes even when Local State cannot map the profile to a directory" {
+  # The CDP leg needs the on-disk directory; the AppleScript leg needs only the display name.
+  echo '{"profile":{"info_cache":{"Default":{"name":"Personaly"}}}}' >"$D/userdata/Local State"
+  OSA_MODE=ok run "$C" "$ART"
+  [ "$status" -eq 0 ]
+  grep -qxF -- "$ART|Claude3|open" "$OSA_LOG" || false
+  [ ! -s "$OPEN_LOG" ]
+}
+
+@test "the URL reaches osascript as argv, never spliced into the script source" {
+  local evil='https://claude.ai/x?q="end tell'
+  OSA_MODE=ok run "$C" "$evil"
+  [ "$status" -eq 0 ]
+  grep -qxF -- "$evil|Claude3|open" "$OSA_LOG" || false
+  run grep -qF -- 'claude.ai/x' "$OSA_SCRIPT"
+  [ "$status" -eq 1 ]
+}
+
+@test "CC_URL_OPEN_NO_APPLESCRIPT skips the leg entirely" {
+  CC_URL_OPEN_NO_APPLESCRIPT=1 OSA_MODE=ok run "$C" "$ART"
+  [ "$status" -eq 0 ]
+  [ ! -s "$OSA_LOG" ] || false
+  grep -qF -- "$ART" "$OPEN_LOG"
+}
+
+@test "non-claude.ai URLs never invoke osascript" {
+  OSA_MODE=ok run "$C" "https://github.com/anthropics/claude-code"
+  [ "$status" -eq 0 ]
+  [ ! -s "$OSA_LOG" ] || false
+  grep -qF -- "github.com" "$OPEN_LOG"
 }

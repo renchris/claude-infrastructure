@@ -187,7 +187,11 @@ The supported path: your actual logged-in Dia, every session warm, no launcher.
    flag both sit alive 60 s+ and open nothing (the process-singleton relaunch forward that upstream
    Chromium implements does not work here). Only LaunchServices (`open -b company.thebrowser.dia`)
    reaches the live app, and it takes no profile argument — which is exactly why the profile-correct
-   link router (`bin/cc-url-open`) has to go through CDP.
+   link router (`bin/cc-url-open`) had to go through CDP — until Dia 1.48's AppleScript rail.
+   Since 2026-09-23 it tries `focus profile P of window 1` + `make new tab` FIRST (no port, no
+   modal; measured synchronous on 1.49.1) and keeps this CDP recipe only as its second leg. Do not
+   use `move <tab> to profile` for this: it re-mints the tab id and returns nothing, so the moved
+   tab can no longer be addressed.
 6. **When done: UNCHECK the toggle** (see Security — the PRIMARY-path equivalent of `kill`).
    Verify closure, never assume it: `lsof -nP -iTCP -sTCP:LISTEN | grep -i Dia` — a Dia PID on an
    EPHEMERAL `127.0.0.1` port means it's still ON (re-uncheck until that line is gone). Dia's fixed

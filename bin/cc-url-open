@@ -19,6 +19,24 @@ WHY CDP AND NOT A FLAG (both alternatives measured 2026-08-03, do not re-try the
   What does work: attach to a tab already living in the target Space and have that page
   open the link itself. The tab inherits its opener's profile by construction.
 
+APPLESCRIPT FIRST, CDP SECOND (2026-09-23, backlog e09a075539f5). The CDP leg below worked,
+then blocked 15 min later, then worked, then blocked (measured 2026-08-03): Dia re-pops its
+remote-debugging consent modal per CONNECTION, and this handler opens a fresh one per click. The
+fix that item first proposed — a broker HOLDING one connection — was a persistent CDP client, i.e.
+a daemon against the no-daemonization rule. Dia 1.48 made it moot: its first-party AppleScript
+dictionary (skills/dia-agent § ZERO-PROMPT RAIL) needs no port and no modal, and its `profile` IS
+the Space. Measured live on Dia 1.49.1:
+  · `focus profile P of window 1` is SYNCHRONOUS — `active profile` reads P on the next line —
+    and a `make new tab` straight after lands in P's tabs. That is the whole route.
+  · `move <tab> to profile P` also works but RE-MINTS the tab id and returns nothing, so the
+    moved tab can no longer be addressed (a probe tab leaked that way). Not used.
+  · `exists profile P` is not understood (-1708); membership is `name of profiles contains P`.
+  · AppleScript profile names ARE accounts.json's `dia_profile` values, so this leg needs no
+    Local State hop — it routes even when the on-disk directory cannot be resolved.
+  · kitty (net.kovidgoyal.kitty) already holds the Automation grant for Dia, so no TCC prompt
+    lands in the click path. A denied grant is just an osascript error ⇒ the next leg.
+CDP stays as the second leg for a Dia that predates the dictionary.
+
 OPPORTUNISTIC BY DESIGN (operator decision 2026-08-03). Dia's remote-debugging port is
 unauthenticated and exposes every Space's cookie store, so this NEVER turns it on and
 never asks you to. Port down, no registry row, ambiguous profile, CDP error, deadline
@@ -198,25 +216,34 @@ def account_for_window(win_id):
         return None
 
 
-def profile_dir_for_account(account):
-    """account ('claude-tertiary') → accounts.json dia_profile ('Claude3') → the on-disk
-    profile directory ('Profile 15'). Both hops are SSOT reads: accounts.json owns the
-    identity map, Dia's Local State owns the display-name→directory mapping. Neither is
-    hardcoded here, so adding a 5th account needs no edit to this file."""
+def profile_name_for_account(account):
+    """account ('claude-tertiary') → accounts.json dia_profile ('Claude3') — the Space's
+    display name, which is also what Dia's AppleScript `profile` is called."""
     try:
         accounts = json.load(open(ACCOUNTS)).get("accounts", [])
     except Exception as e:  # noqa: BLE001
         log(f"accounts.json unreadable: {e}")
         return None
-    want = None
     for a in accounts:
         cfg = os.path.basename(os.path.expanduser(a.get("config_dir", ""))).lstrip(".")
         if cfg == str(account).lstrip("."):
-            want = a.get("dia_profile")
-            break
+            return a.get("dia_profile") or None
+    log(f"no dia_profile for account {account}")
+    return None
+
+
+def profile_dir_for_account(account):
+    """account ('claude-tertiary') → accounts.json dia_profile ('Claude3') → the on-disk
+    profile directory ('Profile 15'). Both hops are SSOT reads: accounts.json owns the
+    identity map, Dia's Local State owns the display-name→directory mapping. Neither is
+    hardcoded here, so adding a 5th account needs no edit to this file."""
+    want = profile_name_for_account(account)
     if not want:
-        log(f"no dia_profile for account {account}")
         return None
+    return profile_dir_for_name(want)
+
+
+def profile_dir_for_name(want):
     try:
         cache = json.load(open(os.path.join(DIA_UD, "Local State")))
         info = cache.get("profile", {}).get("info_cache", {})
@@ -228,6 +255,68 @@ def profile_dir_for_account(account):
             return directory
     log(f"no Dia profile directory named {want}")
     return None
+
+
+# ── AppleScript leg: profile name → Space, no port, no modal ───────────────────────────
+# URL and profile arrive as argv, never spliced into the source, so neither can inject.
+# Every step AFTER `make` is non-fatal: once the tab exists this must report success, or the
+# caller's fallback would open the link a second time.
+APPLESCRIPT_ROUTE = """
+on run argv
+  set u to item 1 of argv
+  set p to item 2 of argv
+  set mode to item 3 of argv
+  tell application "Dia"
+    if (count of windows) is 0 then error "no Dia window" number 900
+    if (name of profiles of window 1) does not contain p then error "no profile " & p number 901
+    if mode is "probe" then return "ok"
+    focus profile p of window 1
+    if (name of active profile of window 1) is not p then error "focus did not take" number 902
+    tell window 1
+      set t to make new tab with properties {URL:u}
+    end tell
+    set tid to id of t
+    if (id of tabs of profile p of window 1) does not contain tid then
+      try
+        close t
+      end try
+      error "tab landed outside " & p number 903
+    end if
+    try
+      activate
+    end try
+    return "routed"
+  end tell
+end run
+"""
+
+
+def applescript_route(url, profile, deadline, explain=False):
+    """True iff the tab now exists in `profile`'s Space (or, under --explain, iff it could:
+    the probe mode is read-only). Any error — Dia too old for the dictionary, no window,
+    Automation denied, deadline — is False and the next leg runs."""
+    if os.environ.get("CC_URL_OPEN_NO_APPLESCRIPT"):
+        return False
+    remaining = deadline - time.time()
+    if remaining <= 0:
+        return False
+    osa = os.environ.get("CC_URL_OPEN_OSASCRIPT", "osascript")
+    mode = "probe" if explain else "open"
+    try:
+        r = subprocess.run([osa, "-e", APPLESCRIPT_ROUTE, url, profile, mode],
+                           capture_output=True, text=True, timeout=remaining, check=False)
+    except Exception as e:  # noqa: BLE001 — incl. TimeoutExpired: a fallback, never a hang
+        log(f"applescript leg failed: {e}")
+        if explain:
+            print(f"applescript=error:{type(e).__name__}")
+        return False
+    out = (r.stdout or "").strip()
+    ok = r.returncode == 0 and out == ("ok" if explain else "routed")
+    if explain:
+        print(f"applescript={'ok' if ok else 'fail'}")
+    if not ok:
+        log(f"applescript leg rc={r.returncode} out={out!r} err={(r.stderr or '').strip()!r}")
+    return ok
 
 
 # ── profile ↔ Space (browserContextId) ────────────────────────────────────────────────
@@ -375,9 +464,12 @@ def route(url, deadline, explain=False):
     can't double-open."""
     win = focused_window_id()
     account = account_for_window(win)
-    directory = profile_dir_for_account(account) if account else None
+    name = profile_name_for_account(account) if account else None
+    directory = profile_dir_for_name(name) if name else None
     if explain:
-        print(f"window={win} account={account} profile_dir={directory}")
+        print(f"window={win} account={account} dia_profile={name} profile_dir={directory}")
+    if name and applescript_route(url, name, deadline, explain=explain):
+        return True
     if not directory or os.environ.get("CC_URL_OPEN_NO_CDP"):
         return False
 
