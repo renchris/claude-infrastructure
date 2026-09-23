@@ -886,6 +886,12 @@ roles:
   workflow_synthesis_worker: claude-sonnet-5  # CERTIFIED FREE WIN (2026-07-01, adopt-confirmed) — Workflow-run bulk
                                             # synthesis / breadth-first worker slots ONLY. Spawn:
                                             #   agent(brief, {model: 'claude-sonnet-5', effort: 'max'})
+                                            # ⚠️ RE-PROBE vs Opus 5.5, 2026-09-22 (d5383f12c): INCONCLUSIVE — a tool
+                                            # confound (no Grep/Glob in 2.1.280 Workflow subagents; Sonnet used
+                                            # Bash, Opus 5.5 Read only). Directional: Opus 5.5 @xhigh won 3-1 on
+                                            # judged pairs with ~half the wrong claims. Stays Sonnet until the
+                                            # equal-tools settle run reports (docs/research/opus55-synth-reprobe-
+                                            # 2026-09-22/ § Settle run).
                                             # Ties Opus-4.8@max QUALITY across easy AND hard synthesis briefs (0 reliable
                                             # Opus wins; blind 4-judge default-to-refute panels — probes wf_fe2b1218-297
                                             # / wf_53759023 / wf_18a92ab8) at ~2-3× LIGHTER quota-draw ($3/$15 vs $5/$25

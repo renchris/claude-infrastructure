@@ -64,7 +64,7 @@ anything below 90% is research still owed; the last column says what would move 
 | Computer use / browser driving | Opus 5.5 | **medium** | xhigh | OSWorld 2.0 partial ~58 → 74 → 78 → 81 → 82 over five unlabelled points | 65% | — |
 | Security review of OUR source code | Opus 5.5 (a `teammate_frontier` review-gate slot stays on Fable 5.1 until the sweep) | **xhigh** | — | Vulnerability discovery in source code is allowed. Defensive-traffic flag rate 4.5% (Opus 5 13.9%). Cyber-classifier hits fall back to Opus 4.8 | 75% | — |
 | Codebase retrieval (Explore) | Haiku 4.5, **only if the spawn passes `model: "haiku"`**. An unpinned Explore runs the LEAD's model, capped at opus. Measured 2026-09-22 on 2.1.280 under an Opus 5.5 lead: unpinned → `claude-opus-5-5` on every turn; `model: "haiku"` → `claude-haiku-4-5-20251001`. Both answered an exact file:line lookup correctly | n/a (no effort param) | — | No Haiku-vs-Opus 5.5 quality data beyond that lookup; bounded file:line retrieval is quality-saturated. Haiku 4.5's floor is **2026-10-15**; Haiku 5.5 is announced for "the coming weeks" | 85% | stage Haiku 5.5 on release |
-| Bulk Workflow synthesis worker | Sonnet 5 @max, unchanged for now | — | — | Certified vs **Opus 4.8** only. Every Sonnet 5 capability row in the card sits below Opus 5.5 except Toolathlon Pass@3 (84.3 vs 82.4, p.211), and Sonnet's win needs max, the output-heaviest rung | 75% that Opus 5.5 dominates | freewin re-probe vs Opus 5.5 |
+| Bulk Workflow synthesis worker | Sonnet 5 @max, unchanged for now | — | — | Certified vs **Opus 4.8** only. Every Sonnet 5 capability row in the card sits below Opus 5.5 except Toolathlon Pass@3 (84.3 vs 82.4, p.211), and Sonnet's win needs max, the output-heaviest rung. **Our re-probe, run 1 (confounded by unequal tools):** Opus 5.5 @xhigh beat Sonnet 3–1 on judged pairs, with about half the wrong claims | 65% that Opus 5.5 @xhigh ≥ Sonnet at equal tools | the equal-tools settle run (in flight; Open item 3) |
 | Frontier escalation (ladder, `/frontier-run`) | Fable 5.1 | `fable51_*` | — | See next section | — | — |
 
 ¹ **Slack rung** is what "maximal utilization" means here. Weekly plan quota does not roll over. When
@@ -224,10 +224,20 @@ defaults and never drop research or reasoning to low.
    deliberately not run: it would have written the full id where 2.1.260 leads read it. The team
    brief schema's `model:` comment was the last full-id pin. It now names the alias and the
    allowlist key (reso `d86ac7610`), which leaves `claude-lint-models.sh --all` with nothing to flag.
-3. **Freewin re-probe for the Sonnet 5 synthesis slot**, with Opus 5.5 as the comparator. IN
-   FLIGHT: a dispatched session on branch `feat/opus55-synth-reprobe` is running a judged A/B of
-   Sonnet 5 @max vs Opus 5.5 @high and @xhigh
-   (`docs/research/opus55-synth-reprobe-2026-09-22/`).
+3. **Freewin re-probe for the Sonnet 5 synthesis slot**, with Opus 5.5 as the comparator.
+   - **Run 1 — INCONCLUSIVE** (landed `d5383f12c`,
+     [`../opus55-synth-reprobe-2026-09-22/`](../opus55-synth-reprobe-2026-09-22/README.md)). The
+     cause was a tool confound, not noise. Workflow subagents on 2.1.280 have no Grep or Glob, so
+     Sonnet 5 @max searched with read-only Bash while Opus 5.5 obeyed the brief and used Read only.
+   - What held despite that, on 6 HARD briefs with 3 blind judges:
+     - Opus 5.5 @xhigh beat Sonnet 5 @max 3–1 (1 tie, 1 no majority); Opus 5.5 @high tied 3–3.
+     - Sonnet made about 2× the wrong claims (55 vs 25 at xhigh, 29 at high).
+     - Sonnet's key-recall lead (88.5% vs 83.1%) sits on the find-every-site brief, exactly where
+       grep pays.
+   - Directional conviction: 65% that xhigh ≥ Sonnet at equal tools; 50% for high.
+   - **Settle run IN FLIGHT** on branch `feat/synth-settle-run`. It is the same corpus and judges
+     with one change: every arm gets Read plus read-only Bash.
+   - `roles.workflow_synthesis_worker` stays Sonnet 5 @max until the settle run reports.
 4. **Settings effort drift** (`next`, `next4` at low). It reaches only non-wrapped surfaces (IDE,
    bare `claude -p`), never a teammate on 2.1.280. It is an authority-ceiling surface, realigned by
    the operator via migration.
