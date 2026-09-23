@@ -883,16 +883,27 @@ roles:
                                             # a safe in-process worker (effort there is uncontrollable → could land in
                                             # the rejected band). The ONE exception is EQUAL-MAX effort in a Workflow
                                             # (see workflow_synthesis_worker). (research_retrieval stays Haiku.)
-  workflow_synthesis_worker: claude-sonnet-5  # CERTIFIED FREE WIN (2026-07-01, adopt-confirmed) — Workflow-run bulk
+  workflow_synthesis_worker: claude-opus-5-5  # FLIPPED 2026-09-22 (was claude-sonnet-5) — Workflow-run bulk
                                             # synthesis / breadth-first worker slots ONLY. Spawn:
-                                            #   agent(brief, {model: 'claude-sonnet-5', effort: 'max'})
-                                            # ⚠️ RE-PROBE vs Opus 5.5, 2026-09-22 (d5383f12c): INCONCLUSIVE — a tool
-                                            # confound (no Grep/Glob in 2.1.280 Workflow subagents; Sonnet used
-                                            # Bash, Opus 5.5 Read only). Directional: Opus 5.5 @xhigh won 3-1 on
-                                            # judged pairs with ~half the wrong claims. Stays Sonnet until the
-                                            # equal-tools settle run reports (docs/research/opus55-synth-reprobe-
-                                            # 2026-09-22/ § Settle run).
-                                            # Ties Opus-4.8@max QUALITY across easy AND hard synthesis briefs (0 reliable
+                                            #   agent(brief, {model: 'claude-opus-5-5', effort: 'xhigh'})
+                                            # (the full id is the measured form; a 2.1.260 lead refuses it with
+                                            # a 400 — run synthesis Workflows from a 2.1.280 session). Keep the
+                                            # saturation bound below: it was part of every measured brief.
+                                            # EVIDENCE — equal-tools settle run (docs/research/opus55-synth-
+                                            # reprobe-2026-09-22/ § Settle run — results, landed 4825debb4; 6 HARD
+                                            # synthesis briefs over this repo, 3 blind judges, Read + read-only
+                                            # Bash for every arm): Opus 5.5 @xhigh beat Sonnet 5 @max 5-1 on
+                                            # judged pairs (@high 5-0-1); key recall 98.5% / 95.4% (@high) v
+                                            # 89.2%; wrong claims 18 / 24 v 52; bad cites 5.2% / 11.6% v 12.8%.
+                                            # Tokens (output + cache_creation) @xhigh 1.07M v Sonnet 1.40M, but
+                                            # at list $4/$20 v $2/$10 that is roughly 1.5× the quota — the
+                                            # lexicographic rule adopts it because the quality gain is real.
+                                            # xhigh over high: 4-2 on pairs (3-3 in the sensitivity scoring),
+                                            # better on every quality axis, +8% tokens — ~80% it is genuinely
+                                            # better, ~95% that choosing it is right (it can only cost quota).
+                                            # Run 1 (d5383f12c) was INCONCLUSIVE on a tool confound: 2.1.280
+                                            # Workflow subagents have no Grep/Glob.
+                                            # Sonnet 5 record (2026-07-01 → 2026-09-22), kept: Ties Opus-4.8@max QUALITY across easy AND hard synthesis briefs (0 reliable
                                             # Opus wins; blind 4-judge default-to-refute panels — probes wf_fe2b1218-297
                                             # / wf_53759023 / wf_18a92ab8) at ~2-3× LIGHTER quota-draw ($3/$15 vs $5/$25
                                             # + ~5× lighter/token). TWO HARD REQUIREMENTS (probe-verified):
@@ -904,13 +915,10 @@ roles:
                                             # NOT for in-process /research (effort uncontrollable) or teammates (not
                                             # allowlisted) — those use research_worker (versions.opus_latest). Intro $2/$10 → std
                                             # $3/$15 on 2026-08-31 (win holds at std). SSOT: ~/.claude/model-routing-freewin-probe.md.
-                                            # ⚠️ RE-PROBE OWED 2026-09-22: certified against Opus 4.8, not Opus
-                                            # 5.5. Every Opus 5.5-vs-Sonnet 5 row in the system card favors 5.5
-                                            # (e.g. Chartography with tools: Opus 5.5 @low ~71.5 at ~$0.04 vs
-                                            # Sonnet 5 @max 73.2 at ~$1.65), and Sonnet's win REQUIRES max
-                                            # effort, the output-heaviest rung — so Opus 5.5 @medium/high
-                                            # likely dominates in quota terms. Likely ≠ measured: kept until
-                                            # the freewin probe reruns with Opus 5.5 as the comparator.
+                                            # (The "RE-PROBE OWED" note that stood here predicted Opus 5.5 would
+                                            # dominate "in quota terms"; the settle run found it dominates in
+                                            # QUALITY at ~1.5× the quota — the reason to switch, not the one
+                                            # predicted.)
   research_retrieval: claude-haiku-4-5      # Explore tier (25% slot, codebase/file:line lookups). Its
                                             # retirement floor is 2026-10-15 (see deprecations) and Haiku
                                             # 5.5 is announced for "the coming weeks" — stage it on release.
