@@ -317,7 +317,7 @@ payload_stable() {       # the STABLE launcher's config dir — not in the ordin
 render() { # <payload-producer> <dir> [VAR=VAL ...]
   local p d; p=$("$1"); d="$2"; shift 2
   ( cd "$d" && printf '%s' "$p" \
-      | env -u CLAUDE_INSTANCE_N -u ITERM_SESSION_ID -u KITTY_WINDOW_ID \
+      | env -u CLAUDE_INSTANCE_N -u ITERM_SESSION_ID -u KITTY_WINDOW_ID -u CC_PANE_ID -u CC_MAILBOX_DIR \
             CLAUDE_CONFIG_DIR= TERM_PROGRAM=not-iterm TERM=xterm-256color \
             "$@" bash "$NEW" 2>/dev/null
   ) | sed $'s/\033\[[0-9;]*m//g'
@@ -993,3 +993,52 @@ payload_nowin() {  # the harness emitted NO window — it must be written as NOT
 #   #13's finding ("the ±3 ms band is 15x the effect"), and why the GATE is the fork count above
 #   and this row is a recorded measurement rather than an assertion. Load at measurement: 14.7/core.
 # ══════════════════════════════════════════════════════════════════════════════════════════════
+
+# ── D10 (cross-session mail v3, cc-backlog 02ba4e52389a): the 📬 unread badge ──────────────────────
+# Counts lines not yet SURFACED (lines − .seen) in the two boxes mailbox-drain.sh reads: the
+# session-keyed box and the pane-keyed one (CC_PANE_ID / ITERM_SESSION_ID tail — the drain's own
+# spelling). Every case here uses the fixtured $HOME mailbox; render() unsets CC_PANE_ID and
+# CC_MAILBOX_DIR so the operator's live boxes can never reach a case.
+mbox_seed() { # <key> <lines> [seen]
+  local d="$HOME/.claude/mailbox" i; mkdir -p "$d"; : > "$d/$1.md"
+  for i in $(seq 1 "$2"); do printf '2026-09-23T00:00:00Z [peer] m%s\n' "$i" >> "$d/$1.md"; done
+  [ -z "${3:-}" ] || printf '%s\n' "$3" > "$d/$1.seen"
+}
+
+@test "live D10: unsurfaced mail in the SESSION box renders 📬N in the head, before the context %" {
+  mk_repo "$WORK/live-mail" some-branch
+  mbox_seed aaaa-bbbb-cccc 5 2
+  local head
+  head=$(marker_of "$(render payload_full "$WORK/live-mail" LC_ALL=en_US.UTF-8)" live-mail)
+  [ "$head" = "(3) aaaa-bbb 📬3 47% · " ] || { printf 'head: [%s]\n' "$head" >&2; false; }
+}
+
+@test "live D10: the PANE box is counted too, and a caught-up box renders NOTHING" {
+  mk_repo "$WORK/live-mail2" some-branch
+  mbox_seed aaaa-bbbb-cccc 4 4
+  mbox_seed 117 2
+  local head
+  head=$(marker_of "$(render payload_full "$WORK/live-mail2" CC_PANE_ID=117 LC_ALL=en_US.UTF-8)" live-mail2)
+  [[ "$head" == *"📬2 "* ]] || { printf 'head: [%s]\n' "$head" >&2; false; }
+  # RED ARM: without the pane key only the caught-up session box is read ⇒ no badge at all.
+  head=$(marker_of "$(render payload_full "$WORK/live-mail2" LC_ALL=en_US.UTF-8)" live-mail2)
+  [ "$head" = "(3) aaaa-bbb 47% · " ] || { printf 'head: [%s]\n' "$head" >&2; false; }
+}
+
+@test "live D10: .seen past EOF re-delivers (mailbox_seen's clamp), non-UTF-8 falls back to ASCII, kill switch works" {
+  mk_repo "$WORK/live-mail3" some-branch
+  mbox_seed aaaa-bbbb-cccc 3 99
+  local head
+  head=$(marker_of "$(render payload_full "$WORK/live-mail3" LC_ALL=C)" live-mail3)
+  [ "$head" = "(3) aaaa-bbb mail:3 47% · " ] || { printf 'head: [%s]\n' "$head" >&2; false; }
+  head=$(marker_of "$(render payload_full "$WORK/live-mail3" LC_ALL=C CC_STATUSLINE_MAIL=0)" live-mail3)
+  [ "$head" = "(3) aaaa-bbb 47% · " ] || { printf 'head: [%s]\n' "$head" >&2; false; }
+}
+
+@test "live D10: when the pane key IS the session key the box is counted once, not twice" {
+  mk_repo "$WORK/live-mail4" some-branch
+  mbox_seed aaaa-bbbb-cccc 2
+  local head
+  head=$(marker_of "$(render payload_full "$WORK/live-mail4" CC_PANE_ID=aaaa-bbbb-cccc LC_ALL=en_US.UTF-8)" live-mail4)
+  [[ "$head" == *"📬2 "* ]] || { printf 'head: [%s]\n' "$head" >&2; false; }
+}
