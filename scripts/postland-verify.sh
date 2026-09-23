@@ -978,7 +978,7 @@ file_linked() {
 }
 tree_of() { git -C "$REPO" rev-parse "$1^{tree}" 2>/dev/null; }
 env_fingerprint() { # sets ENV_FP — a verdict is NOT a pure function of the tree (tool bumps happen
-  local b c l                                # constantly), so a stale-env green stamp stays diagnosable
+  local b c l nf fd; local -a fdl            # constantly), so a stale-env green stamp stays diagnosable
   # `bounded` like every other $BATS_BIN call (see THE BOUNDING INVARIANT at BATS_BIN) — this was the
   # file's one real exception until 2026-08-08. It executes no test, so on a healthy box the bound is a
   # formality; it is here because an invariant with a remembered exception is one a census cannot
@@ -988,9 +988,25 @@ env_fingerprint() { # sets ENV_FP — a verdict is NOT a pure function of the tr
   b="$(bounded 20 "$BATS_BIN" --version </dev/null 2>/dev/null | awk '{print $2}')"
   c="${CLAUDE_CODE_EXECPATH:-}"; [ -n "$c" ] && c="$(basename "$c")" || c=unknown
   l="$(load1)"                                                               # 1-min, at run start
+  # THE FD BUDGET THE CORPUS INHERITS (backlog 2e8228525c94). 5 of 14 postland windows convicted
+  # tests/kitty-conf-bindings.bats on a raw `OSError: [Errno 24]` (b743e182), filed as "the runner's
+  # fd budget — raise the ulimit or cut concurrency". Neither half was measured, and the obvious one
+  # is not established: launchd jobs inherit a SOFT nofile of 256 where session shells carry 1048576
+  # (docs/research/mcp-memory-groundup-2026-08-10/06-daemon-multiplex.md), but EMFILE is PER-PROCESS
+  # and bats 1.13.0 hands a `run` child only fds 0-5 — measured under a 256 limit, after 300 files in
+  # one invocation and after a file that opens fds at top level (docs/research/postland-fd-exhaustion
+  # -2026-09-23.md). A fresh interpreter cannot reach 256 from 6 by importing. So the stamp records
+  # both terms instead of guessing between them: `nofile` is the soft limit every child inherits, and
+  # `fds` is the count of fds this shell holds at corpus start — the table every child inherits,
+  # read by globbing /dev/fd in-process (+1 for the directory the glob itself opens). A red window stamped
+  # nofile=256 fds=5 indicts neither term; fds in the hundreds indicts a leak; nofile far under 256
+  # indicts whatever lowered it. `?` when unreadable, never a number the reader would call healthy.
+  nf="$(ulimit -Sn 2>/dev/null)"
+  fdl=(/dev/fd/*); fd="${#fdl[@]}"; [ -e "${fdl[0]}" ] || fd=''   # unexpanded glob ⇒ unread, not 1
   # `?`, never `0`: an unread instrument must not render as a value the reader would call healthy.
   # qos-census's loadavg1 column already answers this way; the stamp now agrees with it.
-  ENV_FP="$(printf '{"bats":"%s","cc":"%s","load":"%s"}' "${b:-unknown}" "${c:-unknown}" "${l:-?}")"
+  ENV_FP="$(printf '{"bats":"%s","cc":"%s","load":"%s","nofile":"%s","fds":"%s"}' \
+    "${b:-unknown}" "${c:-unknown}" "${l:-?}" "${nf:-?}" "${fd:-?}")"
 }
 
 # ════ mutex — {pid,lstart} identity, the same rule land-lock.sh:lock_is_stale uses ════════════════
@@ -4469,7 +4485,7 @@ selftest() {
   [ "$(cat "$d/state/last-green" 2>/dev/null)" = "$green_sha" ] && okp "green: last-green advanced" || badp "green: last-green NOT advanced"
   [ -z "$(find "$d/pages" -name 'postland-red-*.page' 2>/dev/null)" ] && okp "green: no page written" || badp "green: page written on green"
   grep -q '"check":"postland-verify"' "$d/idl.jsonl" 2>/dev/null && okp "green: IDL line appended" || badp "green: no IDL line"
-  grep -qE '"env":\{"bats":"[^"]+","cc":"[^"]*","load":"[^"]*"\}' "$d/state/stamps/$tree.json" 2>/dev/null && okp "green: stamp carries the env fingerprint" || badp "green: stamp missing env fingerprint"
+  grep -qE '"env":\{"bats":"[^"]+","cc":"[^"]*","load":"[^"]*","nofile":"([0-9]+|unlimited|\?)","fds":"([0-9]+|\?)"\}' "$d/state/stamps/$tree.json" 2>/dev/null && okp "green: stamp carries the env fingerprint (incl. the fd budget, 2e8228525c94)" || badp "green: stamp missing env fingerprint"
   # v2 §4.2.5 — the verifier is now the ONLY writer of the full-suite claim, and it writes the COMMIT
   [ "$(cat "$d/src/.git/gate-green" 2>/dev/null)" = "$green_sha" ] \
     && okp "green: gate-green synced to the proven commit" || badp "green: gate-green NOT synced"
