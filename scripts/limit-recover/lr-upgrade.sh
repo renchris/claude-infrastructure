@@ -51,7 +51,7 @@ LRU_NOTIFY_BIN="${LRU_NOTIFY_BIN:-$HOME/.claude/bin/cc-notify}"
 LRU_SELF_SID="${LRU_SELF_SID-${CLAUDE_CODE_SESSION_ID:-}}"
 LRU_RETYPE_MAX="${LRU_RETYPE_MAX:-5}"; case "$LRU_RETYPE_MAX" in ''|*[!0-9]*) LRU_RETYPE_MAX=5 ;; esac
 LRU_RETYPE_GAP_S="${LRU_RETYPE_GAP_S:-20}"; case "$LRU_RETYPE_GAP_S" in ''|*[!0-9]*) LRU_RETYPE_GAP_S=20 ;; esac
-LRU_ENGAGE_S="${LRU_ENGAGE_S:-240}"; case "$LRU_ENGAGE_S" in ''|*[!0-9]*) LRU_ENGAGE_S=240 ;; esac
+LRU_ENGAGE_S="${LRU_ENGAGE_S:-200}"; case "$LRU_ENGAGE_S" in ''|*[!0-9]*) LRU_ENGAGE_S=200 ;; esac
 LRU_GAP_S="${LRU_GAP_S:-10}"; case "$LRU_GAP_S" in ''|*[!0-9]*) LRU_GAP_S=10 ;; esac
 UPG_QUEUE="$LRU_STATE/upgrade-queue"
 UPG_RUNS="$LRU_STATE/upgrade"
@@ -360,20 +360,34 @@ lru_capacity() { # $1=sid → 0 admitted (LRU_TOKEN may be set) / 9 refused (LRU
   return 0
 }
 
-lru_resumed_on() { # $1=sid $2=binary → 0 when a live --resume <sid> leaf runs that binary
+# THE UPGRADE IS THE PROCESS, NOT THE CONVERSATION. Decided by what now runs: a live
+# `--resume <sid>` leaf whose binary is the target and whose --model is the target. Whether the
+# relaunched session then ANSWERS the one-line confirmation prompt is a separate, weaker fact —
+# measured 2026-09-22 on the first field run: 2 of 3 relaunches came up correctly on 2.1.280 and
+# lr-fire-resume's prompt injection reported FAILED:submit in both (~25-column split panes, where
+# the composer read-back is width-dependent — the same class as the cc_tui_submit rc 4 failures
+# earlier that day). Reporting those as "failed" named a completed move a failure.
+lru_resumed_on() { # $1=sid $2=binary $3=model → 0 when a live --resume <sid> leaf runs both
   local p a
   command -v lr_resume_procs >/dev/null 2>&1 || return 1
   for p in $(lr_resume_procs "$1" 2>/dev/null); do
     a="$(ps -o args= -p "$p" 2>/dev/null || true)"
-    [ "${a%% *}" = "$2" ] && return 0
+    [ "${a%% *}" = "$2" ] || continue
+    [ -z "${3:-}" ] || [ "$(lru_flag "$a" --model "$LRU_RE_MODEL")" = "$3" ] || continue
+    return 0
   done
   return 1
+}
+# lr-fire-resume's own last word about the confirmation prompt, from the run's state log.
+lru_submit_state() { # $1=run dir → last state line's state, empty when none
+  [ -f "$1/events.jsonl" ] || return 0
+  jq -r '.state // empty' "$1/events.jsonl" 2>/dev/null | tail -n 1
 }
 
 # ── drive ONE session ────────────────────────────────────────────────────────────────────────────
 lru_drive() { # $1=sid $2=pane $3=requested_by $4=req id → prints the result row; rc 0 upgraded · 1 failed · 3 skipped
   local sid="$1" pane="$2" by="${3:-?}" req="${4:-}" row disp bin model tgt eff perm cfg cwd pid
-  local mutex run L t0 hflog hrc=0 i cmd target_bin sock
+  local mutex run L t0 hflog hrc=0 i cmd target_bin sock binlabel st
   mutex="$UPG_MUTEX_DIR/$sid.active"
   mkdir -p "$UPG_MUTEX_DIR" 2>/dev/null || true
   if ! mkdir "$mutex" 2>/dev/null; then
@@ -412,8 +426,9 @@ EOF
   ( cd "$cwd" 2>/dev/null || cd /; CLAUDE_CONFIG_DIR="$cfg" bash "$LRU_HF_BIN" --recycle --same-account \
       --source-pane "$pane" --source-session "$sid" --resume-launcher "$L" --resume-cfg "$cfg" \
       --resume-cwd "$cwd" --await ) > "$hflog" 2>&1 || hrc=$?
-  if [ "$hrc" = 0 ] && lru_resumed_on "$sid" "$target_bin"; then
-    lru_result "$sid" "$pane" upgraded "now $tgt on $(basename "$(dirname "$(dirname "$(dirname "$target_bin")")")") (effort $eff)" "" "$req" "$by"; return 0
+  binlabel="$(printf '%s\n' "$target_bin" | awk -F/ '{ for (i = 1; i <= NF; i++) if ($i ~ /^\.claude-/) { print $i; exit } ; print $NF }')"
+  if [ "$hrc" = 0 ] && lru_resumed_on "$sid" "$target_bin" "$tgt"; then
+    lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff); confirmed by a fresh assistant turn" "" "$req" "$by"; return 0
   fi
   # NOT ENGAGED. Which side of the /exit are we on? The old process is the discriminator.
   if kill -0 "$pid" 2>/dev/null; then
@@ -423,27 +438,33 @@ EOF
   # shell. NEVER leave it there: retype the launcher, bounded. capacity-admit admits a given resume
   # after 3 refusals on one budget key (this run's dir), so ≤5 tries is enough and cannot loop.
   i=0
-  while ! lru_resumed_on "$sid" "$target_bin"; do
+  while ! lru_resumed_on "$sid" "$target_bin" "$tgt"; do
     [ "$i" -ge "$LRU_RETYPE_MAX" ] && break
     i=$((i + 1))
     sock="$(command -v lr_kitty_socket >/dev/null 2>&1 && lr_kitty_socket 2>/dev/null || true)"
     CC_TERM_KITTY_TO="${sock:-${CC_TERM_KITTY_TO:-}}" "$LRU_IT2_BIN" session run -s "$pane" "cd $(printf %q "$cwd") && nocorrect bash $(printf %q "$L")" >/dev/null 2>&1 || true
     local w=0
-    while [ "$w" -lt 30 ]; do lru_resumed_on "$sid" "$target_bin" && break; sleep 2; w=$((w + 2)); done
-    lru_resumed_on "$sid" "$target_bin" || sleep "$LRU_RETYPE_GAP_S"
+    while [ "$w" -lt 30 ]; do lru_resumed_on "$sid" "$target_bin" "$tgt" && break; sleep 2; w=$((w + 2)); done
+    lru_resumed_on "$sid" "$target_bin" "$tgt" || sleep "$LRU_RETYPE_GAP_S"
   done
-  if ! lru_resumed_on "$sid" "$target_bin"; then
+  if ! lru_resumed_on "$sid" "$target_bin" "$tgt"; then
     lru_result "$sid" "$pane" failed "pane left at a bare shell after $i retype(s) (handoff-fire rc $hrc; log $hflog)" "$cmd" "$req" "$by"; return 1
   fi
-  local waited=0
-  while [ "$waited" -lt "$LRU_ENGAGE_S" ]; do
+  # RELAUNCHED ON THE TARGET — the upgrade is done. Now the confirmation turn, bounded, and cut
+  # short the moment lr-fire-resume itself records that its prompt never reached the transcript.
+  local waited=0 retyped=""
+  [ "$i" -gt 0 ] && retyped="; ${i} retype(s) after handoff-fire's watcher declined to type"
+  while :; do
     if command -v lr_engaged_after >/dev/null 2>&1 && lr_engaged_after "$cfg" "$sid" "$t0"; then
-      lru_result "$sid" "$pane" upgraded "now $tgt (effort $eff)${i:+; $i retype(s) after the gate}" "" "$req" "$by"; return 0
+      lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff); confirmed by a fresh assistant turn$retyped" "" "$req" "$by"; return 0
     fi
+    st="$(lru_submit_state "$run")"
+    case "$st" in FAILED:submit|FAILED*) break ;; esac
+    [ "$waited" -lt "$LRU_ENGAGE_S" ] || break
     sleep 5; waited=$((waited + 5))
   done
-  lru_result "$sid" "$pane" failed "relaunched on the new binary but no assistant turn within ${LRU_ENGAGE_S}s (log $hflog)" "" "$req" "$by"
-  return 1
+  lru_result "$sid" "$pane" upgraded "now $tgt on $binlabel (effort $eff)$retyped; confirmation UNCONFIRMED (lr-fire-resume: ${st:-no state}) - the session is idle on the new binary; if its composer still shows the upgrade prompt, press Enter in pane $pane to confirm or Ctrl-U to discard it" "" "$req" "$by"
+  return 0
 }
 
 # ── the serial drain ─────────────────────────────────────────────────────────────────────────────

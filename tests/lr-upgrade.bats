@@ -345,3 +345,35 @@ teardown() { [ -n "${LIVE_PID:-}" ] && kill "$LIVE_PID" 2>/dev/null; true; }
   # the old process is still alive (the stub typed nothing), so this is a pre-exit refusal: untouched
   [ "$(jq -r .verdict "$LRU_STATE/results/upgrade-24242424-0000-4000-8000-000000000001.json")" = skipped ]
 }
+
+# ── E. THE VERDICT IS THE PROCESS; THE CONFIRMATION TURN IS A SEPARATE, WEAKER FACT ────────────────
+# Field run 2026-09-22 (panes 480, 495): both came up correctly on 2.1.280, and lr-fire-resume's
+# prompt injection recorded FAILED:submit in both (~25-column panes). The first cut of this driver
+# reported them "failed" — naming a completed move a failure. RED: restore the old tail (a
+# `failed` result when no assistant turn arrives) → E1 goes red.
+
+@test "E1 [RED] relaunched on the target with no confirmation turn is UPGRADED, flagged UNCONFIRMED" {
+  gate_env 0
+  export LRU_LR_LIB="$REPO/scripts/limit-recover/lr-lib.sh"
+  SID=25252525-0000-4000-8000-000000000001
+  sleep 300 & LIVE_PID=$!
+  SESS_PID="$LIVE_PID" sess 551 "$SID" "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  # handoff-fire, as the field saw it: the old session exits, a NEW claude comes up on the target
+  # binary + model resuming the same uuid, and lr-fire-resume records that its prompt never landed.
+  cat > "$LRU_HF_BIN" <<STUB
+#!/bin/bash
+L=""; while [ \$# -gt 0 ]; do [ "\$1" = --resume-launcher ] && L="\$2"; shift; done
+kill $LIVE_PID
+( exec -a "$NEW" perl -e 'sleep 300' -- --permission-mode auto --model claude-opus-5-5 --effort high --resume $SID ) &
+echo \$! > "$BATS_TEST_TMPDIR/new.pid"
+printf '{"state":"FAILED:submit","detail":"no record of the prompt in the transcript within 180s"}\n' >> "\$(dirname "\$L")/events.jsonl"
+sleep 1; exit 1
+STUB
+  chmod +x "$LRU_HF_BIN"
+  run bash "$LRU" --drive "$SID" 551
+  NEWPID="$(cat "$BATS_TEST_TMPDIR/new.pid" 2>/dev/null)"; kill "$NEWPID" 2>/dev/null || true
+  r="$LRU_STATE/results/upgrade-$SID.json"
+  [ "$(jq -r .verdict "$r")" = upgraded ] || { cat "$r"; echo "$output"; false; }
+  [[ "$(jq -r .reason "$r")" == *"now claude-opus-5-5 on .claude-280"*"UNCONFIRMED (lr-fire-resume: FAILED:submit)"*"press Enter in pane 551"* ]] || { cat "$r"; false; }
+  [ ! -s "$BATS_TEST_TMPDIR/it2.log" ] || { echo "retyped over a session that was already up"; false; }
+}
