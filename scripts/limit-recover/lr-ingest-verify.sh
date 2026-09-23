@@ -162,9 +162,20 @@ else clause FAIL A3 "delegations open=$_open spawned=$_sp settled=$_se"; fi
 
 # The session must have died on a QUOTA wall, not on a network error or a crash — a transplant is
 # the wrong cure for anything else, and handoff-fire's own precheck refuses those before the move.
+#
+# A VOLUNTARY move (lr-handoff --voluntary, i.e. `cc-lr switch`) is the other legitimate shape: the
+# source was HEALTHY, so it carries no api error at all, and demanding a quota wall failed every
+# operator-ordered switch (measured 2026-09-23, bundle 82542697/20260923T153214Z: 13 of 14 clauses
+# green, A4 red on `ABSENT`). It passes only on that exact pair — trigger "voluntary" AND kind
+# ABSENT. A voluntary move over a network death is still a crash moved by hand and still refuses;
+# an ABSENT trigger stays a limit reading, so fail-closed is unchanged for every other bundle.
 _k="$(aval '.last_api_error.kind // "ABSENT"')"
+_trig="$(mval '.trigger // "ABSENT"')"
 case "$_k" in
   session|weekly|monthly_spend) clause PASS A4 "last_api_error.kind=$_k" "died on a quota wall, not a crash" ;;
+  ABSENT) if [ "$_trig" = voluntary ]; then
+            clause PASS A4 "last_api_error.kind=ABSENT trigger=voluntary" "a healthy source moved by choice, not a crash"
+          else clause FAIL A4 "last_api_error.kind=ABSENT trigger=$_trig (expected session|weekly|monthly_spend, or a voluntary move)"; fi ;;
   *) clause FAIL A4 "last_api_error.kind=$_k (expected session|weekly|monthly_spend)" ;;
 esac
 

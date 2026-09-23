@@ -224,6 +224,30 @@ state_digest() { # $1 = directory → sha of its sorted entry names ("" when abs
   [[ "$output" == *"FAIL A4 — last_api_error.kind=network"* ]] || { echo "$output"; false; }
 }
 
+@test "A4: a VOLUNTARY move of a healthy source (no api error) PASSES" {
+  # cc-lr switch --target <acct>: the source never died, so last_api_error is absent by design.
+  jq 'del(.last_api_error)' "$BUNDLE/audit.json" > "$BUNDLE/a.tmp" && mv "$BUNDLE/a.tmp" "$BUNDLE/audit.json"
+  jq '.trigger = "voluntary"' "$BUNDLE/MANIFEST.json" > "$BUNDLE/m.tmp" && mv "$BUNDLE/m.tmp" "$BUNDLE/MANIFEST.json"
+  run verify --no-clear
+  [[ "$output" == *"PASS A4 — last_api_error.kind=ABSENT trigger=voluntary"* ]] || { echo "$output"; false; }
+}
+
+@test "A4: an absent api error WITHOUT a voluntary trigger still REFUSES (fail closed)" {
+  jq 'del(.last_api_error)' "$BUNDLE/audit.json" > "$BUNDLE/a.tmp" && mv "$BUNDLE/a.tmp" "$BUNDLE/audit.json"
+  jq '.trigger = "limit"' "$BUNDLE/MANIFEST.json" > "$BUNDLE/m.tmp" && mv "$BUNDLE/m.tmp" "$BUNDLE/MANIFEST.json"
+  run verify --no-clear
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"FAIL A4 — last_api_error.kind=ABSENT trigger=limit"* ]] || { echo "$output"; false; }
+}
+
+@test "A4: a voluntary move over a NETWORK death still REFUSES" {
+  jq '.last_api_error.kind = "network"' "$BUNDLE/audit.json" > "$BUNDLE/a.tmp" && mv "$BUNDLE/a.tmp" "$BUNDLE/audit.json"
+  jq '.trigger = "voluntary"' "$BUNDLE/MANIFEST.json" > "$BUNDLE/m.tmp" && mv "$BUNDLE/m.tmp" "$BUNDLE/MANIFEST.json"
+  run verify --no-clear
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"FAIL A4 — last_api_error.kind=network"* ]] || { echo "$output"; false; }
+}
+
 @test "A5: a RUNNING teammate REFUSES, and the teams object is read at its REAL shape" {
   # U12 §6.1 spelled this `.teams[].members[]?`; `.teams` is an OBJECT keyed led/other_team_dirs/
   # wip_refs, so that spelling ERRORS on every bundle on disk. This case pins the corrected path.
