@@ -211,6 +211,10 @@ versions:
 #     subagent's rung, so the "subagents inherit lead effort" rule applies only to unpinned
 #     definitions. The four research agents now run with omitClaudeMd (85,704 fewer first-turn
 #     tokens per spawn). No role or effort key here was changed.
+#     Folded by the policy lead the same night: time budgets are NOT adopted (lost 4–1 on judged
+#     quality for 1.29× speed; see the SLACK RULE note under effort_defaults), and the Workflow
+#     concurrency gate — min(16, max(2, ncpu−2)) = 8 on this 10-core box, per RUN — goes to 12 via
+#     c10 migration 0035 (staged; operator-run, since it writes settings env).
 # ─────────────────────────────────────────────────────────────────────────────
 # § FABLE 5.1 (lateral bump 2026-09-03) — ADOPTED. Binary gate cleared, keying flip landed.
 # Anthropic shipped Claude Fable 5.1 (`claude-fable-5-1`) and Claude Mythos 5.1
@@ -1300,6 +1304,11 @@ effort_defaults:
   # exception (OSWorld keeps rising) and may go to xhigh. When quota BINDS, hold the rungs above and never drop research
   # or reasoning to low. Finishing SOONER is a different lever: a time budget ("elapsed 340s / 1200s")
   # keeps agents parallel without cutting their work (System Card §8.12.2; prompting guide).
+  # NOT ADOPTED HERE (2026-09-22, 75%): our one A/B (6 Opus 5.5 @high Workflow agents per arm, blind
+  # Opus 5.5 @xhigh judge) finished 1.29× sooner under an `elapsed Xs / 20s` line but lost 4–1 (1 tie),
+  # completeness 47 vs 56 of 60 — the agents cut enumeration, not accuracy. Short task, one sample,
+  # and a skewed t0, so a long-task re-probe could still move it; until one does, do not add the line.
+  # docs/research/opus55-feature-adoption-2026-09-22/README.md § Lever 2.
 
 # Upcoming retirement dates (from Anthropic model-deprecations page; re-verified 2026-09-03).
 # Bump this list + re-run claude-lint-models when Anthropic announces changes.
