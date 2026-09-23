@@ -299,6 +299,13 @@ lru_ascii_only() { # $1=file → 0 pure ASCII / 1 not
 }
 lru_mint_launcher() { # $1=run dir $2=cfg $3=cwd $4=sid $5=model $6=effort $7=perm $8=admit token → path
   local d="$1" cfg="$2" cwd="$3" sid="$4" model="$5" eff="$6" perm="$7" tok="${8:-}" L sub prompt
+  # THE VALUES FIRST, THEN THE FILE. Checking only the file's bytes is locale-dependent: under
+  # LC_ALL=C (launchd, CI) printf %q renders a non-ASCII value as $'\342\200\224' — pure ASCII on
+  # disk, non-ASCII again the moment the launcher runs. Found by the off-box gate, 2026-09-23.
+  if printf '%s' "$d$cfg$cwd$sid$model$eff$perm$tok$LRU_FIRE_RESUME" | LC_ALL=C grep -q '[^ -~]'; then
+    lru_say "REFUSED: a launcher value is not pure ASCII (run dir, config dir, cwd, sid, model, effort, mode or token); it would break every sed that reads the launcher"
+    return 1
+  fi
   mkdir -p "$d" || return 1
   L="$d/launch.sh"
   sub="run:${sid:0:8}:upgrade:$(date -u +%Y%m%dT%H%M%SZ)"

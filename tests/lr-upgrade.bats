@@ -204,6 +204,12 @@ mint() { ( . "$LRU"; lru_mint_launcher "$@" ); }
   [[ "$output" == *"not pure ASCII"* ]] || { echo "$output"; false; }
 }
 
+@test "B3 the ASCII refusal holds under LC_ALL=C, where printf %q would hide the byte as an escape" {
+  LC_ALL=C run mint "$BATS_TEST_TMPDIR/run3" "$CFG" "$BATS_TEST_TMPDIR/wt—dash" 17171717-0000-4000-8000-000000000002 claude-opus-5-5 high auto ""
+  [ "$status" -ne 0 ] || { echo "minted under LC_ALL=C: $output"; cat "$BATS_TEST_TMPDIR/run3/launch.sh" 2>/dev/null; false; }
+  [ ! -f "$BATS_TEST_TMPDIR/run3/launch.sh" ] || false
+}
+
 # ── C. REQUEST WRITE / QUEUE / DRAIN ──────────────────────────────────────────────────────────────
 
 cc_lr_env() {
