@@ -8107,6 +8107,10 @@ if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   PRP_KIND="$(printf '%s' "$PRP_ERR" | cut -f3)"
   if [ "$PRP_KIND" != limit ]; then
     echo "limit: NO — the last assistant record is ${PRP_KIND:-not an api error} ($PRP_TX)"
+    # NAME THE VERB THAT DOES MOVE A HEALTHY PEER (2026-09-23). This gate is unconditional, so a
+    # caller that reached it with a healthy pane (lr-handoff --voluntary --source-pane) can never
+    # pass it; a refusal that names no next command is how the incident's driver spent hours.
+    echo "limit: a healthy pane is moved by asking it to move itself — cc-lr switch --pane $PRP_PANE --target <acct>"
     prp_verdict "REFUSED:not-limited" 5
   fi
   echo "limit: kind=limit at $(printf '%s' "$PRP_ERR" | cut -f4)"
