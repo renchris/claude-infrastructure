@@ -558,7 +558,10 @@ their convergence"* — treat as synthesis (use lower cap). The previous "500–
   inherits the **LEAD model, capped at opus** (2.1.198 change), so a heavy
   Explore fan-out draws opus/lead-tier quota — the ~70× discount does NOT hold
   on the eval track. Use for terminal codebase lookups, file:line discovery,
-  doc URL fetches.
+  doc URL fetches. **To get the cheap tier, pass `model: "haiku"` on the spawn**
+  — measured 2026-09-22 on 2.1.280 under an Opus 5.5 lead: unpinned Explore ran
+  `claude-opus-5-5`, `model: "haiku"` ran `claude-haiku-4-5` (both exact on a
+  file:line lookup). That pin is what makes `roles.research_retrieval` bind.
 - `deep-research` (custom, frontier-tier — frontmatter `opus`; lead passes
   `model: "fable"` at call time during the access window): use for
   multi-axis depth research. ⚠️ See § Recursion Regression — the `Agent`
@@ -622,8 +625,9 @@ inline, queued holes batch at wrap-up; capture via `/frontier-hole`. The
 **Type-mix pin for typical complex research wave (model-tier-aware)**:
 
 - 60% `deep-research` (`roles.research_worker`) — multi-axis breadth-first worker  [worker slot; was `deep-research-sonnet`/Sonnet — see override]
-- 25% `Explore` (Haiku 4.5 on stable-114; **inherits lead model, capped opus,
-  on eval ≥2.1.198 — re-price this slice, it is no longer the cheap tier there**)
+- 25% `Explore` (`roles.research_retrieval`, **only when spawned with `model: "haiku"`**;
+  unpinned it inherits the lead model, capped opus, on every binary the fleet runs
+  (≥2.1.198) — so pin it, or price this slice at the lead's tier)
   — codebase lookups, file:line discovery
 - 10% `deep-research` (frontier: `roles.research_adversarial` via `model: "fable"` while
   `frontier_access.active`; otherwise `frontier_access.fallback`) — adversarial /

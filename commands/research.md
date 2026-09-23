@@ -78,7 +78,7 @@ State projected cost band + wall-clock band so the human decides on cost not pla
 | Tier | Allocation | Use |
 |---|---|---|
 | `deep-research` (`roles.research_worker`)² | 60% | Multi-axis breadth-first worker (default) |
-| `Explore` (Haiku 4.5) | 25% | Codebase / file:line lookups |
+| `Explore` (`roles.research_retrieval` — spawn with `model: "haiku"`; unpinned it runs the lead's model) | 25% | Codebase / file:line lookups |
 | `deep-research` (frontier¹) | 10% | Adversarial / red-team briefs |
 | `deep-research` (frontier¹) | 5% | Rare multi-hop depth-coordination |
 

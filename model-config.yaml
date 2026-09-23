@@ -908,6 +908,12 @@ roles:
   research_retrieval: claude-haiku-4-5      # Explore tier (25% slot, codebase/file:line lookups). Its
                                             # retirement floor is 2026-10-15 (see deprecations) and Haiku
                                             # 5.5 is announced for "the coming weeks" — stage it on release.
+                                            # ⚠️ BINDS ONLY WHEN THE SPAWN PASSES `model: "haiku"`. On
+                                            # ≥2.1.198 an unpinned Explore runs the LEAD's model, capped at
+                                            # opus — measured 2026-09-22 on 2.1.280 under an Opus 5.5 lead:
+                                            # unpinned → claude-opus-5-5, `model: "haiku"` →
+                                            # claude-haiku-4-5-20251001. Unpinned, this slot costs what
+                                            # the lead costs.
   research_adversarial: claude-fable-5-1    # adversarial/red-team/judge/depth-coordination slots
                                             # (10-15%); call-time Agent `model: "fable"` override,
                                             # eval track + active window only; else fallback.
