@@ -170,6 +170,17 @@ SHIM
   [ "$output" = 0 ]
 }
 
+@test "[RED] CANCEL (team relaunch): the watcher sends Esc — never a menu index — and types no relaunch" {
+  run env CC_RECYCLE_BGWORK_ANSWER=cancel bash "$HF" __recycle "$STUB_PANE" "$BATS_TEST_TMPDIR/no-such-tty" "$CMDFILE" "$BATS_TEST_TMPDIR"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"recycle HELD"*"sent Esc (Stay)"*"NO relaunch was typed"* ]] || { echo "$output"; false; }
+  run bash -c "grep 'session send' '$H/it2-calls.log' || true"
+  [ "$(printf '%s\n' "$output" | grep -c 'session send')" = 1 ] || { echo "$output"; false; }
+  [[ "$output" == *$'\e'* ]] || { echo "the one key sent was not Esc: $output"; false; }
+  run bash -c "grep -c 'session run' '$H/it2-calls.log' || true"
+  [ "$output" = 0 ] || { echo "a relaunch was typed after the cancel"; false; }
+}
+
 @test "a pane showing NO dialog is never sent a key (the negative arm of the actuator)" {
   printf '%s\n' "❯ ready" "────────────" "" "────────────" > "$SCREEN"
   drive || true
