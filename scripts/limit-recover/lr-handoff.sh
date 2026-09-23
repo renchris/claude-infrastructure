@@ -466,6 +466,34 @@ case "$MODEL" in
 esac
 CFG="${CFG/#\~/$HOME}"
 
+# ── A VOLUNTARY DRIVER MOVE OF A HEALTHY PANE CAN NEVER SUCCEED HERE — SAY SO FIRST (2026-09-23) ──
+# `--voluntary` with a pane that is NOT this process's own (typed --source-pane, or the registry
+# resolved it above) routes through handoff-fire's --probe-recycle-preconditions, whose limit gate is
+# UNCONDITIONAL (`REFUSED:not-limited`, rc 5). So a healthy peer is refused at the precheck, every
+# time — the combination is accepted by argv and then cannot pass. Measured on the incident that
+# motivated `cc-lr switch --pane`: a driver waited hours for a pane to settle before learning that.
+# The pane's own transcript answers the question in one read, so answer it BEFORE anything is
+# planned, and name the verb that does move a healthy peer: it asks the subject to move ITSELF
+# through the poller's prompt lane, so the SELF verb's own gates still run inside the subject.
+# FAIL-OPEN on an unreadable transcript: the probe below still decides, exactly as before.
+# Kill switch: LRH_VOLUNTARY_FAILFAST=off restores the old path byte-for-byte.
+if [[ $VOLUNTARY -eq 1 && -n "$SOURCE_PANE" && "${LRH_VOLUNTARY_FAILFAST:-on}" != off ]] \
+   && command -v lr_last_api_error >/dev/null 2>&1; then
+  _lrh_vtx=""
+  for _lrh_f in "$CFG"/projects/*/"$SID".jsonl; do [[ -f "$_lrh_f" ]] && { _lrh_vtx="$_lrh_f"; break; }; done
+  if [[ -n "$_lrh_vtx" ]]; then
+    # `|| true`: rc 1 IS the healthy answer ("not an api error"), and under set -e + pipefail it
+    # would otherwise end this script silently at rc 1 — the one outcome that names nothing.
+    _lrh_vkind="$(lr_last_api_error "$_lrh_vtx" 2>/dev/null | cut -f3 || true)"
+    if [[ "$_lrh_vkind" != limit ]]; then
+      echo "lr-handoff: REFUSED:not-limited — pane $SOURCE_PANE (session ${SID:0:8}) is not limit-blocked (last api error: ${_lrh_vkind:-none}), and a --voluntary move of ANOTHER pane is refused by the recycle probe's limit gate every time. Nothing was planned, transplanted, locked or waited on." >&2
+      echo "lr-handoff: to move a healthy peer, ask it to move itself: cc-lr switch --pane $SOURCE_PANE --target $TARGET" >&2
+      echo "lr-handoff: verdict=NOTMOVED from=- to=${TARGET:--} proven=no trigger=voluntary — refused before planning: a healthy peer is moved by cc-lr switch --pane, not by lr-handoff --voluntary --source-pane" >&2
+      exit 6
+    fi
+  fi
+fi
+
 # --- account routing --------------------------------------------------------
 # Backed by the accounts.json-generated map (any N accounts) — see lib/account-map.generated.sh.
 # shellcheck source=/dev/null

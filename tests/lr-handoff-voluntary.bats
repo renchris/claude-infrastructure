@@ -302,3 +302,44 @@ count() { printf '%s\n' "$2" | grep -c -e "$1" || true; }
   # and the verdict still reaches a pane, because the self pane is the address
   grep -q '^198 ' "$NOTIFY_LOG" || { cat "$NOTIFY_LOG"; false; }
 }
+
+# ── 5. FAIL-FAST: a --voluntary move of a HEALTHY peer cannot pass the probe, so refuse first ────
+# (2026-09-23 incident: `lr-handoff --voluntary --source-pane P` on a healthy peer was accepted by
+# argv, then refused REFUSED:not-limited at the precheck — after the driver had waited hours.)
+vol_tx() { # $1 = healthy | limit — the pane's transcript under the SOURCE config dir
+  mkdir -p "$HOME/.claude/projects/-fx"
+  case "$1" in
+    healthy) printf '{"type":"assistant","timestamp":"2026-09-23T10:00:00.000Z","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}}\n' ;;
+    limit)   printf '{"type":"assistant","timestamp":"2026-09-23T10:00:00.000Z","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit"}]}}\n' ;;
+  esac > "$HOME/.claude/projects/-fx/$SID.jsonl"
+}
+
+@test "FAIL-FAST: --voluntary --source-pane on a HEALTHY pane refuses before planning and names cc-lr switch --pane" {
+  # RED PROOF: the unfixed subject reaches the transplant (LRH_PRECHECK=off here) and exits 0.
+  vol_tx healthy
+  fire --voluntary
+  [ "$status" -eq 6 ] || { echo "$output"; false; }
+  [[ "$output" == *"cc-lr switch --pane 31 --target next2"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }
+  # nothing was planned: no transplant, no recycle, no bundle
+  [ ! -s "$TX_LOG" ] || { cat "$TX_LOG"; false; }
+  [ ! -s "$HF_LOG" ] || { cat "$HF_LOG"; false; }
+  [ ! -d "$HOME/.reso/limit-recover/$SID" ] || { ls -R "$HOME/.reso/limit-recover/$SID"; false; }
+}
+
+@test "FAIL-FAST is scoped: a LIMIT-blocked pane with --voluntary, and a healthy pane without it, are not refused by it" {
+  # EQUIVALENCE GUARD — kills a fail-fast keyed on --voluntary alone, or on the pane alone.
+  vol_tx limit
+  fire --voluntary
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  vol_tx healthy
+  fire
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"cc-lr switch --pane"* ]] || { echo "$output"; false; }
+}
+
+@test "FAIL-FAST kill switch LRH_VOLUNTARY_FAILFAST=off restores the old path" {
+  vol_tx healthy
+  LRH_VOLUNTARY_FAILFAST=off fire --voluntary
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
