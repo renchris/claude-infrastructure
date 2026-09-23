@@ -404,6 +404,19 @@ three versions after the flip. `frontier_access.model` is `claude-fable-5-1` as 
 model. The `fable51_*` effort keys are STARTING POINTS carried over from Fable 5 and have NOT been probed
 against 5.1 — effort names do not mean the same amount of thinking across models.
 
+**Per-phase effort (implement @high → review @xhigh → back).** Settled 2026-09-22 on 2.1.280
+(`docs/research/opus55-feature-adoption-2026-09-22/README.md` § Lever 1):
+- **Change phase by FIRING or RECYCLING at the phase's rung:** `--effort xhigh` for the review
+  pass, `--recycle --effort high` to return. Both start a new process, so both start a fresh
+  context.
+- **Never type `/effort` into another pane.** Per-turn effort is live for Opus 5.5 and Fable 5.1,
+  and an in-session `/effort` switch keeps the prompt cache (measured). But in an interactive pane
+  it also SAVES `effortLevel` to that account's settings.json, which makes it an unattended
+  settings write. That cache-keeping switch stays an operator keystroke until a session-only path
+  exists.
+- **Inside a pane, pin the rung per subagent definition:** an agent definition's `effort:` pins
+  that subagent's rung whatever the lead runs at.
+
 Mechanics: `--effort`/`--model` are appended AFTER the launcher-injected defaults (last-wins, verified),
 so overrides always stick. The script WARNS (does not block) when `frontier_access.active` != true — the
 hard gate is the API rejection — hence ALWAYS pair Fable with `--probe` (rejection signature: ~600ms,
