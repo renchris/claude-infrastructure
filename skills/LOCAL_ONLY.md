@@ -6,7 +6,7 @@ file is the durable record of that decision, because the declaration each one ca
 *untracked* `SKILL.md` and would not survive a rebuild of `~/.claude`.
 
 Filed against backlog `3e2358f03e23`, which measured 18 live skills with no tracked source at all
-(2026-08-11, re-measured 2026-08-16). 13 were tracked; these 5 were not, and each has a reason.
+(2026-08-11, re-measured 2026-08-16). 13 were tracked; these 5 were not, and each has a reason. A sixth was added on 2026-09-20.
 
 | Skill | Why not tracked |
 |---|---|
@@ -14,9 +14,10 @@ Filed against backlog `3e2358f03e23`, which measured 18 live skills with no trac
 | `react-best-practices` | Vercel Engineering's published React/Next.js performance guidance — third-party text we do not author, refreshed from upstream rather than maintained here. |
 | `vercel-design-guidelines` | Vercel's published design guidelines — same reasoning as above. |
 | `pyramid-principle-full` | An exhaustive derivative of a copyrighted book (*The Minto Pyramid Principle*, Barbara Minto, 2010 ed. — the complete text and all 149 exhibits, with chapter/page citations back to the source scan). Committing it would put a substantial derivative of a commercial work into git history, where it is effectively permanent. |
+| `cafe-wifi-optimization` | Added 2026-09-20, after the re-measure. **This repo is public**, and the skill records where and when the operator sits — named venues with dates, a named home network — which is location history, not something to put in a public git history. Its payload (scripts, runbook, per-sitting records) is already versioned in the private, remote-less `~/Development/personal` repo under `wifi-diagnosis/`; only the `SKILL.md` wrapper is untracked. |
 | `pyramid-principle` | **Not actually sourceless.** Its `SKILL.md` is a symlink to `~/Development/convert-pdf-to-md/pyramid-principle-prompt.md`, which is *tracked in that repo* and has a remote. It already has history and a path back; it simply is not this repo's to hold. See the note below. |
 
-The first four carry a `> **Local-only …**` block under their first heading, so the next editor who
+Every row above except `pyramid-principle` carries a `> **Local-only …**` block under its `SKILL.md`'s first heading, so the next editor who
 opens one is told before editing. That block is also what the row's stored falsifier greps for.
 
 ## The same decision outside `skills/` — and why it is recorded here
@@ -51,10 +52,26 @@ path, invisible to `deploy-parity-assert` — and those are what tracking fixes.
 tracked between the filing and the re-measure, and `pyramid-principle`'s `SKILL.md` is a symlink
 into another repository, not a real file.
 
-## The one item this repo cannot close by itself
+## Where `pyramid-principle`'s note lives, and why not in `SKILL.md`
 
-`pyramid-principle` needs its provenance note written into
-`~/Development/convert-pdf-to-md/pyramid-principle-prompt.md` — a tracked file, on `main`, in a
-repo with a GitHub remote and no `CLAUDE.md` of its own. That is a cross-repo write to another
-project's default branch, so it is not taken unilaterally from here. Until it is, the stored
-falsifier for `3e2358f03e23` reports `n=1` against this skill alone.
+An earlier revision of this file said the provenance note had to be written into
+`~/Development/convert-pdf-to-md/pyramid-principle-prompt.md`, as a cross-repo write. That target
+was wrong: that file IS the prompt (it opens with a `## CONFIG` block for the model it drives), so
+any text added to it changes the prompt in its home repo as well as here. The note went into the
+skill directory's own `README.md` instead (2026-09-23) — a real local file, next to the two
+symlinks, which is what the next editor opens. Nothing needs writing in the other repo.
+
+## Not a skill: `synced/`
+
+`~/.claude/skills/synced/` is Claude Code's own cache of claude.ai-synced skills (the
+`anthropic-skills:*` set — docs, docx, pdf, pptx, xlsx, …), one UUID-named bucket per account, each
+with its own `manifest.json`, rewritten by the harness. It has no top-level `SKILL.md`, it is not
+ours to track, and a marker written into it would be overwritten on the next sync.
+
+## Why the row's stored falsifier still reads `n=2` after the row is closed
+
+`3e2358f03e23`'s probe counts every live skill directory that is untracked AND whose `SKILL.md`
+does not contain `local-only`. Two directories fail that test for reasons it cannot see, and both
+are settled above: `synced/` has no `SKILL.md` at all, and `pyramid-principle`'s `SKILL.md` is the
+prompt in another repo, whose note is in `README.md`. A reading of `n=2` naming exactly those two
+is the resolved state; any OTHER name it counts is a new untriaged skill.
