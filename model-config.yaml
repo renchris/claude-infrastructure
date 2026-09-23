@@ -869,7 +869,11 @@ roles:
                                             # its LEAD's effort (above), where Opus 5.5 @high recalled 8 v
                                             # Fable 5.1 @high's 10 on the review class (1 v 3 discordant), and
                                             # a review gate exists to catch what the Opus 5.5 members miss.
-                                            # Full reasoning under research_adversarial.
+                                            # Full reasoning under research_adversarial. Over 3 samples (review
+                                            # follow-up, b039afa84) the two are near-equal ALONE (mean 9.3 v 9.0),
+                                            # so what holds the gate is the COMPLEMENT: Fable adds 4 items the
+                                            # Opus 5.5 @high members miss. A gate that must be as thorough as
+                                            # possible belongs in a wave fired at xhigh (Opus 5.5 @xhigh 12.7).
   teammate_mechanical: claude-opus-5-5    # same model; effort = the lead's (a medium wave for opus55_coding_scoped)
   teammate_research: claude-opus-5-5      # same model; effort differentiates — opus55_research (high)
   research_worker: claude-opus-5-5        # FLIPPED 2026-09-22 (was Opus 5). IN-PROCESS / teammate synthesis-worker default = GA ceiling.
@@ -943,11 +947,14 @@ roles:
                                             # catch what the Opus 5.5 @high WORKER misses — the same model at the
                                             # same effort is redundancy by construction (T4: this slot is scored
                                             # on NON-OVERLAP, not substitution). Conviction 90% that it stays.
-                                            # OPEN, single-sample: Opus 5 @high adds as many items over the
-                                            # worker as Fable does (+3 each, union 11) at ~1/3 the quota — the
-                                            # repeated-sample follow-up docs/research/review-judge-followup-
-                                            # 2026-09-22/ decides it (a claude-opus-5 slot would need its own
-                                            # agent definition: the Agent tool's model field takes aliases only).
+                                            # ✅ SETTLED (docs/research/review-judge-followup-2026-09-22/, landed
+                                            # b039afa84; 3 samples, two judge panels incl. a mixed-model one):
+                                            # the single-sample "Opus 5 @high complements as well as Fable" did
+                                            # not hold. Against the o55@high worker Fable adds 4 items, Opus 5
+                                            # @high 2 — a SUBSET of Fable's; union 13 v 11 (p 0.50), at ~2.5×
+                                            # the quota. 80% that Fable is the better complement; ~95% that
+                                            # keeping it is right, because keeping it can only cost quota,
+                                            # never quality (lexicographic, freewin-probe § Purpose).
                                             # Card context, kept from the review: Fable leads Opus 5.5 at LOW
                                             # effort (at ~4–25× the cost), on DRACO from medium up by ≤1.8, on
                                             # ArXivMath at medium/high (Opus 5.5 leads from xhigh); the vendor
@@ -959,10 +966,13 @@ roles:
                                             # Opus 5.5 @xhigh 10 = Fable 5.1 @high 10 (3 v 3 discordant) at
                                             # ~0.4× its quota, and the slot leaves the Fable sub-cap (≤50% of
                                             # the weekly bucket, drawn 3.2–3.7× faster per token). Unconditional
-                                            # now: no frontier window to fall back from. Conviction 90%.
-                                            # OPEN: Opus 5 @max was the best arm in two panels (12, 13), judged
-                                            # by Opus 5 only — docs/research/review-judge-followup-2026-09-22/
-                                            # decides whether this slot should be claude-opus-5 @max instead.
+                                            # now: no frontier window to fall back from. Conviction 92%.
+                                            # ✅ SETTLED (review follow-up, b039afa84): over 3 samples Opus 5.5
+                                            # @xhigh is the TOP review arm measured — mean recall 12.7 (Opus-5
+                                            # panel) / 12.0 (mixed panel) v Opus 5 @max 11.7 / 10.3, 12 v 12
+                                            # items (p 1.00 both panels). Opus 5 @max's single-sample 13 was
+                                            # its best draw, and it costs ~1.2× the quota. No own-model judge
+                                            # lean found (all three mixed-panel judges rank arms identically).
                                             # schema: note — the client rule below keys on thinking being
                                             # ACTIVE, and Opus 5.5's tier rejects disabled thinking, so expect
                                             # the same demotion to `auto` (read on 2.1.260, not re-read on
@@ -1233,12 +1243,15 @@ effort_defaults:
                                             # 65.3 · max 63.6. Above medium the extra thinking adds scope, not
                                             # merges. Conviction 85%.
   opus55_capability_sensitive: xhigh        # hard reasoning, security/architecture judgment, verifying a HARD
-                                            # claim, long-horizon knowledge work, and the Workflow judge slots
-                                            # (roles.workflow_judge / eval_judge, moved 2026-09-22). Review-class
-                                            # sweep (docs/research/opus55-effort-sweep-2026-09-22/, recall /36):
-                                            # xhigh 10 = Fable 5.1 @high 10 at ~0.4× its quota; high 8; max 9 and
-                                            # UNFIT (2/9 cells hit the 128K cap after 512K tokens, ~5× xhigh's
-                                            # quota) — never route review to max.
+                                            # claim, long-horizon knowledge work, CODE REVIEW / bug finding, and
+                                            # the Workflow judge slots (roles.workflow_judge / eval_judge, moved
+                                            # 2026-09-22). Review class (docs/research/opus55-effort-sweep-
+                                            # 2026-09-22/ + review-judge-followup-2026-09-22/, recall /36):
+                                            # over 3 samples xhigh beats high — 3 v 0 discordant items, cells
+                                            # 12 v 2 under BOTH judge panels (mean 12.7 v 9.3) — at ~2.5× high's
+                                            # quota: effort buys recall here, so review runs at xhigh, not the
+                                            # opus55_default high. max 9 and UNFIT (2/9 cells hit the 128K cap
+                                            # after 512K tokens, ~5× xhigh's quota) — never route review to max.
                                             # At HIGH, Opus 5.5 is below Fable 5.1 AND Opus 5 on ArXivMath (with
                                             # tools 79.4 vs 87.7 / 88.6); it leads from xhigh (94.7 vs 93.0).
                                             # ArXivMath (no tools) high 73.2 · xhigh 86.0 · max 91.2; GDPval-AA
