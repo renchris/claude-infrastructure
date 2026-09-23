@@ -37,6 +37,7 @@ cites it by absolute path. If the consolidation programme later opens a slot, mo
 | **W4a-7a — de-action the non-auth published modules** | ✅ **DONE, landed** — 6 endpoints removed + the exact-path ratchet | reso `ae0edbf6d` |
 | **W4 — the 2 structural facts** | ⛔ not started; W4b is operator-gated (migration + backfill on a live fleet) | — |
 | **W5 — the 19 uncovered** | ✅ **DONE, landed** | `fa6539057`, `docs/research/cf-audit-reso-uncovered-surfaces-2026-09-22.md` |
+| **W6 — release the held units** | ▶ **NEXT** — the operator ruling is given (2026-09-22, "drive to completion"); 8 units, § Wave 6 | — |
 | **W5 follow-on** | ✅ one confirmed hole from W5's own candidate set CLOSED on trunk: `setGuestSession` is no longer a registered Server Action | reso `sec-w3a-tenantctx` |
 
 **The plan's own Phase 0 was overtaken and that is recorded rather than hidden.** W1 ran as four
@@ -296,6 +297,85 @@ carry orphan grant rows in live tenants.
 **W4b — authorization tables key on `user.username`, a recyclable TEXT handle.** Findings #2 and
 leads 6 and 10 are downstream. Re-key to the immutable `user.id`. This is a schema migration plus a
 data backfill on a live fleet — G2, operator-gated, and it lands only after W1b's migration.
+
+---
+
+## Wave 6 — THE RULING IS GIVEN: release every held unit (added 2026-09-22) — NEXT
+
+**Operator directive, 2026-09-22, verbatim: "How about all the other waves until exhaustive
+completion?" then "drive to completion please".** That is the escalation reso's calibration note 5
+asks for (*"Auth/sync findings → queue + escalate, never silently land mid-sweep"*): the findings
+were queued and escalated, and the operator has now directed them landed. So every unit above that
+reads "waits on the ruling" is RELEASED. Nothing in this directive releases the three things below
+that are not fixes but acts on live infrastructure — see § Still the operator's.
+
+**Execution locus: S, one dispatched session per unit, fired from a lead that holds ≥50% of its
+window.** The W4a table above is the roster; two additions and one ownership split make it
+complete:
+
+| Unit | Owns (single owner) | Carries | Red-proof |
+|---|---|---|---|
+| **W4a-1** | `auth/databaseActions.ts` | validation (14) · lead 8 *defence half*: `sendInvitation` refuses a platform-domain email unless the caller is platform · lead 3 debt: re-test `verification.verified` inside `consumeInvitationAndRegister` · W1b packet Q3: removing an admin revokes that admin's pending invitations | tests red on parent |
+| **W4a-2** | `auth/cookieActions.ts` (+ `lib/auth/login.ts` if a setter moves there) | lead 1: the expected-challenge setters stop being registered actions — `login.ts:135-137` calls the challenge "the SOLE replay defense" · validation of the rest | `audit-server-actions.mjs --assert-absent` both arms + tests |
+| **W4a-3** | `auth/provisionActions.ts` · `auth/domainActions.ts` · `auth/lambdaActions.ts` | lead 7: bind the target `subdomain`/`group` to the sealed tenant unless the caller is platform-authorized for cross-tenant · validation | tests red on parent |
+| **W4a-4** | `notifications/notificationActions.ts` · `notificationHistoryActions.ts` · `lib/…/pushTransport.ts` · `notificationDispatch.ts` · `lib/rate-limit/durable-limiter.ts` | lead 16: lift `api/notifications/subscribe/route.ts:13-40`'s validators into one shared module; at send time strip the trailing dot and refuse a non-443 port · lead 20: per-user subscription cap + a concurrency bound on the fan-out | tests red on parent |
+| **W4a-5** | the seed/read files listed above | lead 5: gate `tonight[].event` and `getTonightEntriesSeed` with `activeVenueInPullScope` · the W5 `deferred` unit `getOperatorShiftDetail` | tests red on parent |
+| **W4a-6** | `tenantConfigActions.ts` · `venueRoleActions.ts` · `auth/accessActions.ts` · `auth/platformActions.ts` · `auth/tenantContext.ts` | lead 8 *core half*: platform authority must not derive from a tenant-writable email — `isPlatformEmail` is a bare `endsWith` after stripping plus-addressing (also closes decision `ef79469fbb12`, "every provisioned tenant's `admin+<sub>@reso.gl` passes the platform gate") · lead 2: the serving guard must also refuse `parent-schema-database-*` · lead 18: `getPlatformDB` off the action surface · lead 19: `LOCAL_TEST_*` refused when `NODE_ENV=production` | `--assert-absent` + tests |
+| **W4a-7b** | `drizzle/db.ts` · `lib/auth/{aaguid,login,register,session,upgrade}.ts` | de-action (20 registered exports) · lead 4's sink: validate `organizationName`/`group` against a strict alphabet before they compose a libsql authority. ⚠️ Do NOT add `import 'server-only'` to anything in the tsx-run `drizzle/` DB-setup graph — plain Node cannot resolve it (`databaseActions.ts:68,:93`) | `--assert-absent` + tests |
+| **W6-sync** *(new)* | `replicache/pushActionsBatch.ts` · `batchPrefetch.ts` · `operationBuilder.ts` · `operationBuilder-shared.ts` | lead 13: persist `Math.min(mutation.id, prevLastMutationID + 1)` at `pushActionsBatch.ts:462` · lead 12: compare-and-set `WHERE last_mutation_id < N` on the UPSERT at `operationBuilder.ts:3439` AND re-assert the watermark inside the transaction · lead 14: `createEvent` checks `tableMapID` existence + venue coherence exactly as `updateEvent` does at `:1381-1393` · lead 15: RAISE the `deleteGuestProfile` gate to match its cross-venue blast radius — never narrow the deletes (no `venue_id` on `guest_profile`; PIPEDA) · lead 17: `return raw` → a generic line, and rewrite the pass-through test whose premise is false | tests red on parent |
+
+**Lead 8 is split across W4a-1 and W4a-6 on purpose** — its two halves live in two files, and
+single-owner-per-file outranks keeping a lead in one unit. W4a-6's half is the fix; W4a-1's is
+defence in depth.
+
+🚨 **Two landmines every W6-sync brief must carry verbatim.** (1) DO-NOT-FIX #1: Replicache
+mutations apply sequentially with `for…of` + `await` — `Promise.all` there is silent data loss.
+(2) lead 12's in-transaction re-assert introduces a new 5xx at the transaction boundary; that is a
+sync-contract change the operator has now directed, so state it in the commit body rather than
+hide it.
+
+**Wave order.** Eight units, disjoint files. Fire in two batches of four against the box's
+active-session ceiling of 8 (`handoff-fire.sh` refuses past it): batch 1 = W4a-6, W4a-1, W6-sync,
+W4a-7b (the critical and high leads); batch 2 = W4a-2, W4a-3, W4a-4, W4a-5. Lands serialized,
+smallest diff first.
+
+**Two reads the lead does inline, read-only, while batch 1 runs:**
+1. `tenant_config.enable_venue_scoping` in every active tenant DB, via the sanctioned in-process
+   bridge `lib/provisioning/group-token-ssm.ts` (a prior session read a tenant DB this way; the
+   secret is never hand-read or persisted). Off everywhere ⇒ lead 11 closes twice over; on anywhere
+   ⇒ leads 5, 14, 15 are live today, not latent.
+2. The IAM policy behind `AWS_ACCESS_KEY_ID`, read-only (`aws iam` get/list only) — lead 7's
+   *impact* half. The source fix in W4a-3 lands regardless.
+
+### What wave 1 taught, carried into every W6 fire
+
+- **Pass `--repo ~/Development/reso-management-app` explicitly.** `handoff-fire.sh` resolves the
+  repo from the FIRING session's cwd, not from its help text's default; a dry-run is what caught it.
+- **A "never engaged" fire verdict was false 2 of 2 times.** Check the worktree for writes and the
+  transcript for growth before any re-fire; the real cost is that no `/goal` armed, so send the DoD
+  by `cc-notify` in its place.
+- **Land with the test band declared: `CI=true VITEST_TIMEOUT_FACTOR=4`.** reso's own
+  `vitest.config.ts:9,55` rule is that the caller declares its band; the land path declares none,
+  so under concurrent lands every unit reddened on a foreign timeout with zero assertion failures.
+  Held for all four W1 units at load ~250.
+- **Verify every land by content** (`git ls-tree` + empty `git diff origin/main`): ship-land
+  rebases, so a pre-land sha is never an ancestor of trunk.
+- **`ship-land.sh:890` misclassifies GitHub's ref-lock CAS rejection** (`cannot lock ref … is at X
+  but expected Y`) as "REJECTED and NOT by a race"; re-running IS the fix. Widen that glob — after
+  the wave, never while units are landing through the script.
+
+### Still the operator's — not released by the directive, and why
+
+- **Lead 9 — rotate the Soketi publish secret.** Rotation is a live-credential write that must set
+  Soketi env/config AND SSM AND the region Fly secrets together, per region; flipping the code half
+  first silently breaks pokes for ~6 of 8 tenants. The code half lands only after the rotation.
+- **W4b — re-key authorization tables from `user.username` to `user.id`.** A table rebuild plus
+  backfill on 8 live tenant DBs, and measured 2026-09-22 on local `sqld 0.24.32`:
+  `PRAGMA foreign_keys` defaults ON and **`=OFF` does not take**, so the 12-step rebuild's own
+  bracket is a no-op once any FK exists. Needs a ruling AND a hosted-Turso measurement first. W1b's
+  packet holds the SQL, backfill and rollback:
+  `docs/research/reso-w1b-route-b-fk-packet-2026-09-22.md`.
+- **`/deploy`.** Every unit lands; none deploys.
 
 ---
 
