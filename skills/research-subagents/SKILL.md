@@ -430,6 +430,23 @@ On the **model** axis it is pinned to `roles.research_worker` ONLY in-process/te
 - **Tier-mix down.** Route every genuinely-retrieval axis to `roles.research_retrieval`; reserve
   `roles.research_adversarial` for the sharp 10–15%; the inferential axes take
   `roles.workflow_synthesis_worker` in Workflows / `roles.research_worker` in-process.
+- **Workflow slot table — pin BOTH fields on every `agent()` call** (settled 2026-09-22 by our own
+  measurements; evidence and convictions in `docs/research/opus55-utilization-2026-09-22/README.md`;
+  the keys in `~/.claude/model-config.yaml` are the source — re-read them, this row set can lag):
+
+  | Workflow slot | `model` | `effort` | SSOT key |
+  |---|---|---|---|
+  | synthesis / inferential worker (repo-grounded) | `claude-opus-5-5` | `xhigh` | `roles.workflow_synthesis_worker` |
+  | breadth web research worker | `claude-opus-5-5` | `high` | `effort_defaults.opus55_research` |
+  | judge / verifier of a hard claim | `claude-opus-5-5` | `xhigh` | `roles.workflow_judge`, `roles.eval_judge` |
+  | code review / bug finding | `claude-opus-5-5` | `xhigh` | `effort_defaults.opus55_capability_sensitive` |
+  | adversarial / red-team (a DIFFERENT model on purpose) | `claude-fable-5-1` | `high` | `roles.research_adversarial`, `effort_defaults.fable51_capability_sensitive` |
+  | retrieval (file:line lookups) | `claude-haiku-4-5` | — (no effort param) | `roles.research_retrieval` |
+
+  Never `max` for review or synthesis (unfit on our corpus: cells hit the output cap). A full
+  `claude-opus-5-5` id is refused by a 2.1.260 lead — run these Workflows from a 2.1.280 session.
+  Why the adversarial slot stays on Fable although Opus 5.5 scores higher alone: it adds the defects
+  the Opus 5.5 worker misses, and a same-model check at the same effort is redundancy.
 - **Prefer Workflows for waves >~10 agents** — the only surface where per-slot model+effort is
   pinnable (in-process subagents inherit lead effort, GH #25591), AND the only surface where the
   `roles.workflow_synthesis_worker` rung above (xhigh) is realizable.
