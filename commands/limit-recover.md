@@ -652,6 +652,17 @@ relaunch prompt says to re-arm it; `LRU_WATCHER_IS_JOB=1` treats watchers as wor
 `composer-occupied` / `composer-unknown` · `duplicate` (two live rows for one sid) · `self` ·
 `no-transcript` · `stale-row` (registry lstart ≠ process lstart).
 
+**Zero-human (operator ruling 2026-09-22).** *The poller runs it by itself:* every tick it calls
+`lr-upgrade.sh --auto-enqueue`, which queues each `upgrade` row whenever the queue is empty and no
+drainer runs — so a model activation converges the fleet as sessions go idle, and a skipped session
+(`lead-with-teammate`, `mid-turn`) is simply re-judged next tick. Kill switches: `LR_UPGRADE_AUTO=off`
+or `touch ~/.reso/limit-recover/upgrade-auto.off`. *The rail's own junk is not a draft:* a composer
+whose space-stripped content starts with a rail marker (`OPUS55-UPGRADE(` — the prototype's unsent
+prompt — or this verb's own relaunch prompt) counts as empty; the drive files a residue receipt
+for that exact text, and handoff-fire's composer gate scrubs it by its read-back-verified Ctrl-U loop
+(`composer_residue_is_ours`). Any other content stays `composer-occupied`. `LRU_SCRUB_RAIL_JUNK=off`
+restores the strict read.
+
 **The same-account evidence class** (`--same-account`, exclusive with `--transplanted-source`): the
 registry row binds pane→session, the row's process is alive on that pane's tty, the row's account IS
 `--resume-cfg`, the session has a transcript there and no tombstone, it is not a teammate, and its
