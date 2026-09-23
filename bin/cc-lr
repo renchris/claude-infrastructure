@@ -133,9 +133,11 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
                              (same pane, uuid, account, effort). --dry-run prints one row per
                              live session and changes nothing; otherwise one request per
                              candidate goes to the poller, which relaunches them ONE AT A TIME
-                             and re-checks each first. Never: a teammate, a lead with a live
-                             teammate, a session mid-turn, a real background job, a non-empty
-                             composer, a duplicate row. Fable stays Fable (binary-only move).
+                             and re-checks each first. An Agent Team moves TEAMMATES FIRST
+                             (identity flags kept), then its lead (team dir held across the
+                             exit, adopted on relaunch). Never: a session mid-turn, in-flight
+                             subagents, a real background job, a non-empty composer, a
+                             duplicate row. Fable stays Fable (binary-only move).
 
 rc 0 ok · 1 no match (upgrade: ≥1 failed) · 2 REFUSED (nothing created) · 3 usage
 USAGE
@@ -921,7 +923,7 @@ EOF
     done
     printf 'target binary: %s · %s to upgrade · DRY RUN: nothing was written or typed\n' \
       "$(cl_short_bin "$("$_CL_BIN/cc-claude-bin" 2>/dev/null || echo '?')")" \
-      "$(printf '%s\n' "$census" | awk -F'\t' '$11 == "upgrade"' | grep -c .)"
+      "$(printf '%s\n' "$census" | awk -F'\t' '$11 ~ /^upgrade(-teammate|-lead)?$/' | grep -c .)"
     return 0
   fi
 
@@ -932,7 +934,7 @@ EOF
   while IFS=$'\t' read -r p s _ _ _ _ _ _ _ _ d; do
     [ -n "$p" ] || continue
     if [ "$d" = current ]; then continue; fi
-    if [ "$d" != upgrade ]; then out="$out$(cl_upgrade_line "$p" "$s" skipped "$d" "")"$'\n'; continue; fi
+    case "$d" in upgrade|upgrade-teammate|upgrade-lead) ;; *) out="$out$(cl_upgrade_line "$p" "$s" skipped "$d" "")"$'\n'; continue ;; esac
     req="${s:0:8}-$(date +%s)-$$"
     tmp="$REQ_DIR/.cc-lr-upgrade-$s.$$.tmp"; dest="$REQ_DIR/cc-lr-upgrade-$s.json"
     if jq -n --arg sid "$s" --arg pane "$p" --arg by "${by:-?}" --arg req "$req" \

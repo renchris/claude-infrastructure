@@ -317,3 +317,30 @@ fire() {
       bash "$HF" self-close --terminal --session-id "$PANE" --dry-run --allow-origin-close
   if echo "$output" | grep -q "self-close REFUSED: 1 Agent-tool subagent"; then echo "refused a finished agent: $output"; false; fi
 }
+
+# ── cc-lr upgrade's team procedure (2026-09-23): the census reads THIS predicate, and a corpse ──────
+# from an earlier process life no longer holds a session hostage (Q4 gap c,
+# docs/research/team-inplace-upgrade-2026-09-23/q4-subagents.md).
+
+@test "15 --probe-live-subagents counts in-flight agents with the gate's own predicate" {
+  mkagent aaaa1111 live "still working"
+  mkagent bbbb2222 "done" "finished"
+  run bash "$HF" --probe-live-subagents --source-session "$SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$output" = "live_subagents: 1" ] || { echo "$output"; false; }
+}
+
+@test "16 [RED] an in-flight agent last written BEFORE its owner process started is a corpse" {
+  mkagent aaaa1111 live "killed by an earlier relaunch"
+  touch -t 202001010000 "$SADIR/agent-aaaa1111.jsonl"
+  # Without the owner's pid the rule cannot apply: judged on its records alone, it reads live.
+  run bash "$HF" --probe-live-subagents --source-session "$SID"
+  [ "$output" = "live_subagents: 1" ] || { echo "no-pid arm: $output"; false; }
+  # With a pid that started after that write (this test's own shell), it is retired.
+  run bash "$HF" --probe-live-subagents --source-session "$SID" --source-pid "$$"
+  [ "$output" = "live_subagents: 0" ] || { echo "the corpse still counts as in flight: $output"; false; }
+  # A FRESH in-flight agent is never retired by the rule.
+  mkagent cccc3333 live "genuinely running"
+  run bash "$HF" --probe-live-subagents --source-session "$SID" --source-pid "$$"
+  [ "$output" = "live_subagents: 1" ] || { echo "the rule retired a live agent: $output"; false; }
+}

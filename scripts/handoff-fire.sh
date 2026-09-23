@@ -502,6 +502,9 @@ RCY_SOURCE_PANE="" RCY_SOURCE_SESSION="" RCY_TRANSPLANTED_SOURCE=0 RCY_REMOTE=0
 # a transcript AT REST — see hf_same_account_evidence. HF_SA_TX is the transcript that proved it,
 # re-read immediately before the /exit.
 RCY_SAME_ACCOUNT=0 HF_SA_TX=""
+# --team-member-id <agent-id>: the team procedure's admission for relaunching a TEAMMATE in place
+# (hf_same_account_evidence). Empty = a teammate row is refused, as it always was.
+HF_TEAM_MEMBER_ID=""
 # --transplant-cause limit|voluntary — WHY the source moved, and the ONLY input that decides whether
 # this recycle may SIGKILL the source's in-flight subagents (D1, VOLUNTARY_ACCOUNT_SWITCH §3). The
 # empty default is the SAFE branch: an ungated caller gets the gate's loud refusal, never a silent
@@ -2353,10 +2356,33 @@ hf_same_account_evidence() { # $1=pane $2=sid $3=resume cfg $4=row pid $5=mode �
     return 2
   done
   args="$(ps -o args= -p "$pid" 2>/dev/null || true)"
+  # A TEAMMATE IS RELAUNCHED ONLY BY THE TEAM PROCEDURE, NEVER BY ACCIDENT (2026-09-23,
+  # docs/research/team-inplace-upgrade-2026-09-23/). Relaunching one WITHOUT its identity flags
+  # detaches it from the team for good, so the old blanket refusal stays the default. The procedure
+  # (--team-member-id <agent-id>, which lr-upgrade passes) is admitted only when (a) the id names
+  # exactly the --agent-id this pid carries, and (b) the resume launcher carries that same id, i.e.
+  # the relaunch re-joins the team as the same member. A teammate is resumable in place because its
+  # membership, mailbox and pane are all keyed on its NAME (measured: a probe teammate relaunched this
+  # way answered its lead's SendMessage on the new binary).
   case " $args " in
     *" --agent-id "*|*" --agent-id="*)
-      echo "!! $mode REFUSED: --same-account, but pid $pid (pane $pane) is a TEAMMATE (--agent-id in its argv) — its lifecycle is its lead's, and relaunching it detaches it from the team. Nothing was typed." >&2
-      return 2 ;;
+      local tm_id
+      tm_id="$(printf '%s\n' "$args" | awk '{ for (i = 1; i < NF; i++) if ($i == "--agent-id" && v == "") v = $(i + 1) } END { print v }')"
+      [ -n "$tm_id" ] || tm_id="$(printf '%s\n' "$args" | sed -n 's/.*--agent-id=\([^ ]*\).*/\1/p')"
+      if [ -z "${HF_TEAM_MEMBER_ID:-}" ]; then
+        echo "!! $mode REFUSED: --same-account, but pid $pid (pane $pane) is a TEAMMATE (--agent-id ${tm_id:-?} in its argv) — its lifecycle is its lead's, and relaunching it without its identity flags detaches it from the team. The team procedure passes --team-member-id <agent-id> with a launcher that carries the same flags. Nothing was typed." >&2
+        return 2
+      fi
+      if [ "$HF_TEAM_MEMBER_ID" != "$tm_id" ]; then
+        echo "!! $mode REFUSED: --team-member-id '$HF_TEAM_MEMBER_ID' but pid $pid (pane $pane) carries --agent-id '${tm_id:-<none>}' — the relaunch would re-join as a DIFFERENT member. Nothing was typed." >&2
+        return 2
+      fi
+      if [ -z "${RESUME_LAUNCHER:-}" ] || ! grep -qF -- "$tm_id" "$RESUME_LAUNCHER" 2>/dev/null; then
+        echo "!! $mode REFUSED: teammate $tm_id, but the resume launcher (${RESUME_LAUNCHER:-<none>}) does not carry that --agent-id — it would come back OUTSIDE the team. Nothing was typed." >&2
+        return 2
+      fi
+      echo "→ same-account: TEAMMATE $tm_id admitted by the team procedure (launcher carries its identity)" >&2
+      ;;
   esac
   hf_transcript_at_rest "$tx" || rc=$?
   if [ "$rc" != 0 ]; then
@@ -5204,15 +5230,26 @@ subagent_stops_of() { # $1=parent transcript → "<task-id>\t<ts>" lines
            }' || true
 }
 
-live_subagents_of() { # $1=transcript dir (…/projects/<slug>/<sid>) → "<id>\t<description>\t<path>"
-  local _d="${1:-}" _m _id _j _stop _desc _stops _nts _ats
+# $2 (optional) = the epoch the OWNING PROCESS started. An agent whose transcript was last written
+# BEFORE that instant ran in an EARLIER process life of this session: in-process subagents die with
+# their process, so it is a corpse, not work in flight — whatever its last record says. Without this
+# a subagent killed by one relaunch reads "in flight" forever and every later recycle of the session
+# is refused (team-inplace-upgrade Q4 gap c, 2026-09-23). This is NOT the mtime-as-liveness signal
+# rejected above: it can only RETIRE an agent that provably predates its process, never admit one.
+live_subagents_of() { # $1=transcript dir (…/projects/<slug>/<sid>) [$2=owner start epoch] → "<id>\t<description>\t<path>"
+  local _d="${1:-}" _born="${2:-}" _m _id _j _stop _desc _stops _nts _ats _mt
   [ -n "$_d" ] && [ -d "$_d/subagents" ] || return 0
+  case "$_born" in ''|*[!0-9]*) _born="" ;; esac
   _stops="$(subagent_stops_of "$_d.jsonl")"
   for _m in "$_d"/subagents/agent-*.meta.json; do
     [ -f "$_m" ] || continue                       # unmatched glob
     _id="${_m##*/agent-}"; _id="${_id%.meta.json}"
     _j="$_d/subagents/agent-$_id.jsonl"
     [ -f "$_j" ] || continue                       # meta with no transcript: nothing to lose or read
+    if [ -n "$_born" ]; then
+      _mt="$(stat -f %m "$_j" 2>/dev/null || stat -c %Y "$_j" 2>/dev/null || true)"
+      case "$_mt" in ''|*[!0-9]*) ;; *) [ "$_mt" -lt "$_born" ] && continue ;; esac
+    fi
     # PRIMARY: the harness recorded a stop, and the agent has written NOTHING since. The latest stop
     # record wins; the agent's LATEST timestamp is taken as a max over every bare one in its file, so
     # a stray nested value can only push it later — toward IN FLIGHT, the safe side.
@@ -5274,8 +5311,18 @@ subagent_dir_for_sid() { # $1=CC session id → echoes the transcript dir, or no
 #   $1=CC session id  $2=allow-flag (0|1)  $3=actuator label (self-close|recycle)
 # → 0 proceed · 4 REFUSE (mirrors the live-teammate gate's exit 4: same class of loss, other door)
 SUBAGENT_INFLIGHT=""
+# The start epoch of a live pid, for live_subagents_of's corpse rule. Empty when unknown — which
+# disables the rule (every agent is judged on its records alone), never admits anything.
+hf_pid_start_epoch() { # $1=pid → epoch seconds, or nothing
+  local _l
+  case "${1:-}" in ''|*[!0-9]*) return 0 ;; esac
+  _l="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//')" || return 0
+  [ -n "$_l" ] || return 0
+  LC_ALL=C TZ=UTC date -j -f '%a %b %d %T %Y' "$_l" +%s 2>/dev/null \
+    || LC_ALL=C TZ=UTC date -d "$_l" +%s 2>/dev/null || true
+}
 subagent_gate() {
-  local _sid="${1:-}" _allow="${2:-0}" _act="${3:-recycle}" _dir _n
+  local _sid="${1:-}" _allow="${2:-0}" _act="${3:-recycle}" _born="${4:-}" _dir _n
   SUBAGENT_INFLIGHT=""
   case "${CC_RECYCLE_SUBAGENT_GATE:-on}" in
     off|0|false|no) emit_gate_admit subagents gate-off "CC_RECYCLE_SUBAGENT_GATE=off — no in-flight check ran ($_act)"; return 0 ;;
@@ -5296,7 +5343,7 @@ subagent_gate() {
     # genuine all-clear, not an unresolved one — so it is silent and carries no admit row.
     return 0
   fi
-  SUBAGENT_INFLIGHT="$(live_subagents_of "$_dir")"
+  SUBAGENT_INFLIGHT="$(live_subagents_of "$_dir" "$_born")"
   [ -n "$SUBAGENT_INFLIGHT" ] || return 0
   _n=$(printf '%s\n' "$SUBAGENT_INFLIGHT" | grep -c .)
   if [ "$_allow" = 0 ]; then
@@ -7429,6 +7476,41 @@ if [ "${1:-}" = "__recycle" ]; then
       exit 0
     fi
     echo "→ relaunch process up in $RSID (claude on tty) — verifying ENGAGEMENT"
+    # ── ENGAGEMENT BY PROCESS (HF_ENGAGE_BY_PROCESS=1; the team procedure, 2026-09-23) ────────────
+    # A relaunch that DELIBERATELY types no prompt — an Agent-Team member moved in place by cc-lr
+    # upgrade — can never produce the assistant turn resume_engaged waits for, and a turn is the one
+    # thing it must not produce: a member's turn ends in the harness's idle notification, which wakes
+    # its LEAD (measured: a probe lead read it and shut its upgraded member down), and it arms the
+    # house idle reaper (measured: a prompt-less-then-idle probe member was reaped). So the proof is
+    # the one this relaunch CAN give: a claude carrying `--resume <sid>` on this pane's tty, alive at
+    # two samples HF_ENGAGE_PROC_HOLD_S apart (it survived boot, resume and every startup gate).
+    # Anything else keeps the ordinary verdicts below.
+    if [ "${HF_ENGAGE_BY_PROCESS:-0}" = 1 ] && [ -n "$RCY_RESUME_SID" ]; then
+      rcy_pp_hold="${HF_ENGAGE_PROC_HOLD_S:-15}"; case "$rcy_pp_hold" in ''|*[!0-9]*) rcy_pp_hold=15 ;; esac
+      # MACHINE-WIDE, not this pane's tty: lr-fire-resume spawns claude under expect(1), which gives
+      # it a NEW pty — measured, a tty-scoped ps saw only expect and failed a relaunch that was up.
+      # The session uuid is unique, so a claude argv carrying `--resume <sid>` can only be this one.
+      rcy_pp_up() {
+        ps -axww -o args= 2>/dev/null \
+          | RCY_PAT="--resume $RCY_RESUME_SID" awk '$1 ~ /(^|\/)claude(\.exe)?$/ && index($0, ENVIRON["RCY_PAT"]) { f = 1 } END { exit !f }'
+      }
+      rcy_pp_t=0
+      while [ "$rcy_pp_t" -lt "${RCY_ENGAGE_TIMEOUT:-180}" ]; do
+        if rcy_pp_up; then
+          sleep "$rcy_pp_hold"; rcy_pp_t=$((rcy_pp_t + rcy_pp_hold))
+          if rcy_pp_up; then
+            echo "→ relaunched + ENGAGEMENT CONFIRMED BY PROCESS in $RSID (--resume ${RCY_RESUME_SID:0:8} alive ${rcy_pp_hold}s past boot; no prompt by design)"
+            emit_recycle_event recycle-engaged 1 "$RSID" "recycled in place; engagement by process (no-prompt relaunch) within ${rcy_pp_t}s" || true
+            exit 0
+          fi
+        fi
+        sleep 3; rcy_pp_t=$((rcy_pp_t + 3))
+      done
+      echo "!! RECYCLE FAILED — the no-prompt relaunch in $RSID never held a live '--resume ${RCY_RESUME_SID:0:8}' claude for ${rcy_pp_hold}s within ${RCY_ENGAGE_TIMEOUT:-180}s. Relaunch manually: $(cat "$CMDFILE")" >&2
+      emit_recycle_event recycle-dead 0 "$RSID" "no-prompt relaunch never held a live --resume process" || true
+      hf_alarm recycle-dead "$RSID" "" "" "HANDOFF-RECYCLE-DEAD: pane $RSID - the no-prompt (team member) relaunch never held a live --resume process. Relaunch: $(cat "$CMDFILE")"
+      exit 1
+    fi
     rcy_t=0
     rcy_submit_ts=""
     while [ "$rcy_t" -lt "$RCY_ENGAGE_TIMEOUT" ]; do
@@ -7922,6 +8004,25 @@ fi
 #                            a pane that is not holding a claude, a binding that does not hold)
 # The in-flight subagent count is RECORDED, never a refusal: the recycle's own subagent_gate owns
 # that decision, and duplicating it here would make one loss refuse at two different bars.
+# --probe-live-subagents: the in-flight Agent-tool subagent COUNT of one session, from the SAME
+# predicate subagent_gate refuses on (live_subagents_of, corpse rule included). Read-only, rc 0
+# whenever it could look. lr-upgrade's census calls it so a session the recycle would refuse reads
+# `subagents-in-flight` in the dry run instead of `upgrade` (team-inplace-upgrade Q4, 2026-09-23).
+if [ "${1:-}" = "--probe-live-subagents" ]; then
+  shift
+  PLS_SESSION="" PLS_PID=""
+  while [ $# -gt 0 ]; do case "$1" in
+    --source-session) PLS_SESSION="${2:?--source-session needs a session uuid}"; shift 2 ;;
+    --source-pid)     PLS_PID="${2:?--source-pid needs a pid}"; shift 2 ;;
+    *) echo "!! unknown --probe-live-subagents arg: $1" >&2; exit 2 ;;
+  esac; done
+  [ -n "$PLS_SESSION" ] || { echo "!! --probe-live-subagents needs --source-session" >&2; exit 2; }
+  PLS_DIR="$(subagent_dir_for_sid "$PLS_SESSION")"
+  PLS_N=0
+  [ -n "$PLS_DIR" ] && PLS_N="$(live_subagents_of "$PLS_DIR" "$(hf_pid_start_epoch "$PLS_PID")" | grep -c . || true)"
+  echo "live_subagents: ${PLS_N:-0}"
+  exit 0
+fi
 if [ "${1:-}" = "--probe-recycle-preconditions" ]; then
   shift
   PRP_PANE="" PRP_SESSION=""
@@ -9028,6 +9129,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --source-session) RCY_SOURCE_SESSION="${2:?--source-session needs a session uuid}"; shift 2 ;;
   --transplanted-source) RCY_TRANSPLANTED_SOURCE=1; shift ;;
   --same-account) RCY_SAME_ACCOUNT=1; shift ;;
+  --team-member-id) HF_TEAM_MEMBER_ID="${2:?--team-member-id needs an agent id}"; shift 2 ;;
   --transplant-cause)
     RCY_TRANSPLANT_CAUSE="${2:?--transplant-cause needs limit|voluntary}"
     case "$RCY_TRANSPLANT_CAUSE" in
@@ -9968,7 +10070,11 @@ if [ "$RECYCLE" = 1 ]; then
     ALLOW_LIVE_SA=1
     echo "→ transplanted-source: in-flight subagents of ${RCY_SUBAGENT_SID:0:8} (if any) are re-audited by the ingest, not protected here" >&2
   fi
-  subagent_gate "$RCY_SUBAGENT_SID" "$ALLOW_LIVE_SA" recycle || exit $?
+  # The source process's start epoch retires subagents from an EARLIER life of this session (the
+  # corpse rule in live_subagents_of). Known only on the remote form, where the row pins the pid.
+  RCY_SA_BORN=""
+  [ -n "${HF_REMOTE_ROW_PID:-}" ] && RCY_SA_BORN="$(hf_pid_start_epoch "$HF_REMOTE_ROW_PID")"
+  subagent_gate "$RCY_SUBAGENT_SID" "$ALLOW_LIVE_SA" recycle "$RCY_SA_BORN" || exit $?
   # Same-dir recycle only: relaunch stays in this pane's dir by definition, so CLAUDE_ISOLATION_SKIP=1
   # must stop the repo-root launcher auto-routing into a fresh worktree. A relocating recycle is
   # landing in an explicit dir and takes the ordinary --worktree/--cwd path (see RECYCLE_RELOC above).
@@ -12819,6 +12925,20 @@ recycle_fire() {
       emit_recycle_event recycle-held-busy "" "$SID" "same-account: transcript not at rest at the last read (rc $rcy_rest_rc): $HF_SA_TX" || true
       echo "!! recycle ABORTED at the last read: session ${RCY_SOURCE_SESSION:0:8} is no longer at rest (rc $rcy_rest_rc — 1 a turn is in flight, 2 unreadable) — nothing typed, watcher disarmed, session untouched. Re-run once it is idle." >&2
       exit 1
+    fi
+    # …AND NO SUBAGENT WAS SPAWNED SINCE THE GATE (Q4 gap b). A background Agent-tool subagent
+    # leaves its lead AT REST, so the re-read above cannot see one launched inside the composer
+    # window; the pre-pass gate ran minutes ago. Same predicate, same corpse rule, same override.
+    if [ "${ALLOW_LIVE_SA:-0}" != 1 ] && [ "${CC_RECYCLE_SUBAGENT_GATE:-on}" != off ]; then
+      rcy_sa_dir="$(subagent_dir_for_sid "${RCY_SUBAGENT_SID:-${RCY_SOURCE_SESSION:-}}")"
+      rcy_sa_live=""
+      [ -n "$rcy_sa_dir" ] && rcy_sa_live="$(live_subagents_of "$rcy_sa_dir" "${RCY_SA_BORN:-}")"
+      if [ -n "$rcy_sa_live" ]; then
+        kill "$WATCHER_PID" 2>/dev/null || true
+        emit_recycle_event recycle-held-subagents "" "$SID" "same-account: $(printf '%s\n' "$rcy_sa_live" | grep -c .) subagent(s) in flight at the last read" || true
+        echo "!! recycle ABORTED at the last read: session ${RCY_SOURCE_SESSION:0:8} has $(printf '%s\n' "$rcy_sa_live" | grep -c .) Agent-tool subagent(s) IN FLIGHT that the earlier gate did not see — nothing typed, watcher disarmed, session untouched. Re-run once they return." >&2
+        exit 1
+      fi
     fi
   fi
   if [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] && [ "${CC_TRANSPLANT_CONFIRM:-on}" != off ]; then

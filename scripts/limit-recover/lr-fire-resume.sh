@@ -24,7 +24,7 @@ set -euo pipefail
 
 ACCT="${1:?account}"; WT="${2:?worktree}"; SID="${3:?session-id}"; shift 3
 BR="" MODEL="" EFFORT="" PROMPT="" REPO="${LR_REPO:-$HOME/Development/reso-management-app}"
-SUMMARY=0 FORCE_SPLIT=0
+SUMMARY=0 FORCE_SPLIT=0 EXTRA_ARGS="" EXTRA_ENV=""
 # --permission-mode: carried from the SOURCE session's argv (LIMIT_RECOVER_100P, 2026-09-09). This
 # used to be hardcoded `auto` in the spawn below, so a `plan` session silently came back as `auto`
 # — the same launch-vs-runtime confusion as the tier, one axis over. The default stays `auto`.
@@ -39,9 +39,26 @@ while [[ $# -gt 0 ]]; do
     --repo) REPO="$2"; shift 2 ;;
     --summary) SUMMARY=1; shift ;;
     --force-split) FORCE_SPLIT=1; shift ;;
+    --extra-args) EXTRA_ARGS="$2"; shift 2 ;;
+    --extra-env) EXTRA_ENV="$2"; shift 2 ;;
     *) echo "lr-fire-resume: unknown arg $1" >&2; exit 2 ;;
   esac
 done
+# --extra-args / --extra-env: identity that must survive the relaunch (cc-lr upgrade's team
+# procedure, 2026-09-23). A TEAMMATE comes back only with its --agent-id/--agent-name/--team-name/...
+# flags and CLAUDECODE=1 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 (without the gate var the team flags
+# are silently ignored); a LEAD comes back to its own team file only with
+# CLAUDE_INTERNAL_ASSISTANT_TEAM_NAME=<team> (else it rewrites that file leader-only). Both are split
+# on spaces inside expect, so every token is held to a strict charset — no quoting can hide in one.
+set -f   # the unquoted expansions below split, and must never glob
+for _lrf_tok in $EXTRA_ARGS; do
+  case "$_lrf_tok" in *[!A-Za-z0-9_@=./:,+-]*|'') echo "lr-fire-resume: --extra-args token '$_lrf_tok' is outside [A-Za-z0-9_@=./:,+-]" >&2; exit 2 ;; esac
+done
+for _lrf_tok in $EXTRA_ENV; do
+  case "$_lrf_tok" in [A-Za-z_]*=*) ;; *) echo "lr-fire-resume: --extra-env token '$_lrf_tok' is not NAME=value" >&2; exit 2 ;; esac
+  case "$_lrf_tok" in *[!A-Za-z0-9_@=./:,+-]*) echo "lr-fire-resume: --extra-env token '$_lrf_tok' is outside [A-Za-z0-9_@=./:,+-]" >&2; exit 2 ;; esac
+done
+set +f
 
 # ══ THE RUN'S STATE, AND THE ONE FACT THE WATCHER CANNOT INFER (W2, 2026-09-19) ════════════════
 # This script runs INSIDE the pane, in a shell the recycle watcher cannot reach. Every way it can
@@ -531,6 +548,7 @@ case "$PERM_MODE" in
   *) echo "lr-fire-resume: --permission-mode must be auto|default|plan|acceptEdits|bypassPermissions|dontAsk (got '$PERM_MODE')" >&2; exit 2 ;;
 esac
 export LR_CFG="$cfg" LR_BIN="$BIN" LR_MODEL="$model" LR_EFFORT="$effort" LR_SID="$SID" LR_PROMPT="$PROMPT" LR_PERM="$PERM_MODE"
+export LR_EXTRA_ARGS="$EXTRA_ARGS" LR_EXTRA_ENV="$EXTRA_ENV"
 # ── CLOSE-ATTRIBUTION WRAPPER ────────────────────────────────────────────────────────────────────
 # A RESUMED SESSION USED TO DIE UNATTRIBUTABLY. Every other launch path interposes
 # bin/cc-close-attrib (see ~/.zshrc's claude-next* launchers); the spawn below did not, so a session
@@ -767,10 +785,13 @@ expect -c '
   # above for why an empty prefix cannot simply be interpolated). The wrapper execs the binary in
   # place, so the spawned pty, the process group and every pattern below are unchanged by it.
   set wrap $env(LR_WRAP)
+  # Identity tokens (validated to a strict charset in bash above), empty for an ordinary session.
+  set xargs [expr {[info exists env(LR_EXTRA_ARGS)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ARGS)] : {}}]
+  set xenv  [expr {[info exists env(LR_EXTRA_ENV)] ? [regexp -all -inline {\S+} $env(LR_EXTRA_ENV)] : {}}]
   if {$wrap ne ""} {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV DISABLE_AUTOUPDATER=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $wrap $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
   } else {
-    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY DISABLE_AUTOUPDATER=1 CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid
+    spawn -noecho env -u CLAUDE_CODE_CHILD_SESSION -u LR_RUN -u LR_RUN_DIR -u LR_ADMIT_TOKEN -u LR_SUBMIT_TOKEN -u LR_LOAD_TERM -u CC_ADMIT_TOKEN -u CC_ADMIT_WANT_SID -u CC_ADMIT_LOAD_TERM -u CC_ADMIT_BUDGET_KEY -u LR_EXTRA_ARGS -u LR_EXTRA_ENV DISABLE_AUTOUPDATER=1 {*}$xenv CLAUDE_CONFIG_DIR=$cfg $bin --permission-mode $perm --model $model --effort $effort --resume $sid {*}$xargs
   }
 
   # Move the selector to option $steps+1 and CONFIRM it landed there before committing. Returns 1

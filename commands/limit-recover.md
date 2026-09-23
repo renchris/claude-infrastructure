@@ -644,18 +644,48 @@ first field run (2026-09-22): 2 of 3 relaunches came up correctly while the prom
 in ~25-column split panes (the composer read-back is width-dependent). An UNCONFIRMED session is idle
 on the new binary; press Enter in its pane if the prompt is still in the composer, or Ctrl-U.
 
-**Excluded, each by name:** `teammate` (its lead's) · `lead-with-teammate` (a live claude whose argv
-names it `--parent-session-id`) · `mid-turn` (last main-thread record is not an assistant `end_turn`
+**Agent Teams move too — teammates first, then the lead (2026-09-23).** Research + probe:
+`docs/research/team-inplace-upgrade-2026-09-23/`. A pane TEAMMATE (`--agent-id` in its argv) reads
+`upgrade-teammate` when its member row is in `teams/<team>/config.json` and no UNREAD
+`shutdown_request` waits in its inbox; it is relaunched with `--resume <its sid>` plus its identity
+flags (`--agent-id --agent-name --team-name --agent-color --parent-session-id --agent-type`) and
+`CLAUDECODE=1 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, with NO prompt — a member's turn ends in an
+idle notification that wakes its lead (a probe lead shut its upgraded member down on reading it) and
+arms the house idle reaper — so handoff-fire proves engagement by the live `--resume` process
+(`HF_ENGAGE_BY_PROCESS=1`) and admits the teammate only when `--team-member-id` equals its own
+`--agent-id` and the launcher carries it. A LEAD (a live claude names it `--parent-session-id`)
+reads `lead-awaits-teammates` until every live teammate is `current`, then `upgrade-lead`. Its
+`teams/session-<sid8>` dir is renamed to `.session-<sid8>.lr-upgrade-hold` just before the relaunch,
+because every graceful lead exit (`/exit` under any modal option, SIGTERM/INT/HUP) runs the vendor's
+`cleanupSessionTeams`, which kills every pane member listed in that file and `rm -rf`s the dir; the
+launcher puts it back (`lr-upgrade.sh --team-restore`, appending any inbox entries a recreated dir
+received) in the instant between the old process's exit and the new one's start, and sets
+`CLAUDE_INTERNAL_ASSISTANT_TEAM_NAME=<team>` so the resumed lead ADOPTS the file instead of rewriting
+it leader-only (after which SendMessage to a prior member fails). A refusal before `/exit` restores the
+hold at once. **Vendor limit, not cured:** a resumed lead's in-memory roster holds only itself and its
+inbox poller runs only when it holds someone else, so replies from pane members land UNREAD in
+`teams/<team>/inboxes/team-lead.json`; sending still works, and the relaunch prompt says where to read
+them. Held states: `teammate-no-team` · `teammate-shutdown-pending` · `teammate-unidentified` ·
+`lead-awaits-teammates` · `lead-no-team-file`. `LRU_TEAM_PROC=off` restores the old blanket exclusions.
+
+**In-flight subagents** read `subagents-in-flight` (from handoff-fire's own `--probe-live-subagents`,
+the predicate its recycle gate refuses on); an agent last written BEFORE its owner process started is
+a corpse from an earlier life and no longer counts, and the gate is re-run at the last read before
+`/exit`. Background Dynamic Workflows are NOT covered by either (their task ids do not map to their
+`subagents/workflows/wf_*` dirs).
+
+**Excluded, each by name:** `mid-turn` (last main-thread record is not an assistant `end_turn`
 — re-read again immediately before `/exit`) · `background-job` (a Bash-tool shell doing real work; a
 lone `cc-await-ping` inbox watcher is NOT work — the relaunch ends it, it mails WAKE-PATH-DOWN, and the
 relaunch prompt says to re-arm it; `LRU_WATCHER_IS_JOB=1` treats watchers as work) ·
 `composer-occupied` / `composer-unknown` · `duplicate` (two live rows for one sid) · `self` ·
-`no-transcript` · `stale-row` (registry lstart ≠ process lstart).
+`no-transcript` · `stale-row` (registry lstart ≠ process lstart) · the team holds above.
 
 **Zero-human (operator ruling 2026-09-22).** *The poller runs it by itself:* every tick it calls
 `lr-upgrade.sh --auto-enqueue`, which queues each `upgrade` row whenever the queue is empty and no
 drainer runs — so a model activation converges the fleet as sessions go idle, and a skipped session
-(`lead-with-teammate`, `mid-turn`) is simply re-judged next tick. Kill switches: `LR_UPGRADE_AUTO=off`
+(`lead-awaits-teammates`, `mid-turn`) is simply re-judged next tick — which is what orders a team:
+its members go on one tick, its lead on a later one. Kill switches: `LR_UPGRADE_AUTO=off`
 or `touch ~/.reso/limit-recover/upgrade-auto.off`. *The rail's own junk is not a draft:* a composer
 whose space-stripped content starts with a rail marker (`OPUS55-UPGRADE(` — the prototype's unsent
 prompt — or this verb's own relaunch prompt) counts as empty; the drive files a residue receipt
@@ -665,8 +695,9 @@ restores the strict read.
 
 **The same-account evidence class** (`--same-account`, exclusive with `--transplanted-source`): the
 registry row binds pane→session, the row's process is alive on that pane's tty, the row's account IS
-`--resume-cfg`, the session has a transcript there and no tombstone, it is not a teammate, and its
-transcript is at rest. Tests: `tests/handoff-recycle-same-account.bats`, `tests/lr-upgrade.bats`.
+`--resume-cfg`, the session has a transcript there and no tombstone, it is not a teammate (unless the
+team procedure's `--team-member-id` names it and the launcher carries that id), and its transcript is
+at rest. Tests: `tests/handoff-recycle-same-account.bats`, `tests/lr-upgrade.bats`.
 
 ## Failure-mode guards (red-team derived — check when something looks off)
 

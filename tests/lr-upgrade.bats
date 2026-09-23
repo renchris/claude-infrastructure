@@ -47,6 +47,14 @@ setup() {
   OLD="/opt/cc/.claude-260/node_modules/.bin/claude"
   printf '#!/bin/bash\necho %s\n' "$NEW" > "$STUBS/cc-claude-bin"; chmod +x "$STUBS/cc-claude-bin"
   export LRU_CLAUDE_BIN_CMD="$STUBS/cc-claude-bin"
+  # The census asks handoff-fire's own subagent predicate (--probe-live-subagents); here it is a stub
+  # whose answer a case sets through $BATS_TEST_TMPDIR/sa-count, so no case reaches the real script
+  # and no hf-stub log (C5, D1) sees a census probe.
+  export LRU_SA_PROBE="$STUBS/sa-probe"
+  printf '#!/bin/bash
+echo "$*" >> %s/sa-probe.log
+echo "live_subagents: $(cat %s/sa-count 2>/dev/null || echo 0)"
+' "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR" > "$LRU_SA_PROBE"; chmod +x "$LRU_SA_PROBE"
   export LRU_MODEL_CONFIG="$BATS_TEST_TMPDIR/model-config.yaml"
   cat > "$LRU_MODEL_CONFIG" <<'Y'
 versions:
@@ -96,10 +104,10 @@ census() { run bash "$LRU" --census --all; }
   printf '%s\n' "$output" | awk -F'\t' '$1==401 { exit !($5=="claude-opus-5-5" && $6=="high" && $7=="auto") }'
 }
 
-@test "A2 a teammate and its lead are both EXCLUDED, each by name" {
+@test "A2 LRU_TEAM_PROC=off restores the blanket exclusions: a teammate and its lead, each by name" {
   sess 410 bbbbbbbb-0000-4000-8000-000000000001 "$OLD --permission-mode auto --model claude-opus-5 --effort high"
   sess 411 bbbbbbbb-0000-4000-8000-000000000002 "/opt/cc/.claude-260/node_modules/@anthropic-ai/claude-code/bin/claude.exe --agent-id w@session-bbbbbbbb --agent-name w --parent-session-id bbbbbbbb-0000-4000-8000-000000000001 --model claude-opus-5"
-  census
+  LRU_TEAM_PROC=off census
   [ "$(disp_of 410)" = lead-with-teammate ] || { echo "$output"; false; }
   [ "$(disp_of 411)" = teammate ] || { echo "$output"; false; }
 }
@@ -526,4 +534,168 @@ tui_stub() { # composer contents come from $BATS_TEST_TMPDIR/composer-<pane>
   census
   [ "$(disp_of 591)" = mid-turn ] || { echo "$output"; false; }
   [ "$(disp_of 592)" = mid-turn ] || { echo "$output"; false; }
+}
+
+# ── T. THE TEAM PROCEDURE (2026-09-23; research docs/research/team-inplace-upgrade-2026-09-23/) ───
+# A lead and its pane teammates are upgradable: TEAMMATES FIRST (their identity flags ride the
+# launcher), then the LEAD, whose team dir is held aside across its exit (the vendor's exit cleanup
+# kills every member it finds in the file and deletes the dir) and put back by the launcher, which
+# also sets CLAUDE_INTERNAL_ASSISTANT_TEAM_NAME so the relaunched lead adopts the file instead of
+# rewriting it leader-only. Each [RED] case fails with the procedure reverted.
+
+LEAD_SID=abcd1234-0000-4000-8000-000000000001
+MATE_SID=abcd1234-0000-4000-8000-000000000002
+MATE_EXE="/opt/cc/.claude-260/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
+mate_argv() { # $1 = binary (default the old exe) $2 = model
+  printf '%s --agent-id m@session-abcd1234 --agent-name m --team-name session-abcd1234 --agent-color cyan --parent-session-id %s --agent-type general-purpose --permission-mode auto --effort high --model %s' \
+    "${1:-$MATE_EXE}" "$LEAD_SID" "${2:-claude-opus-5}"
+}
+team_file() { # the team config on the fixture account, member m present unless $1=nomember
+  local td="$CFG/teams/session-abcd1234"; mkdir -p "$td/inboxes"
+  if [ "${1:-}" = nomember ]; then
+    printf '{"name":"session-abcd1234","leadSessionId":"%s","members":[{"agentId":"team-lead@session-abcd1234","name":"team-lead"}]}\n' "$LEAD_SID" > "$td/config.json"
+  else
+    printf '{"name":"session-abcd1234","leadSessionId":"%s","members":[{"agentId":"team-lead@session-abcd1234","name":"team-lead"},{"agentId":"m@session-abcd1234","name":"m","tmuxPaneId":"702","backendType":"iterm2"}]}\n' "$LEAD_SID" > "$td/config.json"
+  fi
+  printf '[]\n' > "$td/inboxes/m.json"
+}
+
+@test "T1 [RED] a teammate at rest is UPGRADE-TEAMMATE; its lead waits for it (LEAD-AWAITS-TEAMMATES)" {
+  team_file
+  sess 701 "$LEAD_SID" "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  sess 702 "$MATE_SID" "$(mate_argv)"
+  census
+  [ "$(disp_of 702)" = upgrade-teammate ] || { echo "$output"; false; }
+  [ "$(disp_of 701)" = lead-awaits-teammates ] || { echo "$output"; false; }
+}
+
+@test "T2 a teammate is held by name: no team file, an UNREAD shutdown_request, no identity" {
+  sess 701 "$LEAD_SID" "$OLD --model claude-opus-5 --effort high"
+  sess 702 "$MATE_SID" "$(mate_argv)"
+  census
+  [ "$(disp_of 702)" = teammate-no-team ] || { echo "no file: $output"; false; }
+  team_file nomember; census
+  [ "$(disp_of 702)" = teammate-no-team ] || { echo "not a member: $output"; false; }
+  team_file
+  printf '[{"from":"team-lead","read":false,"text":"{\\"type\\":\\"shutdown_request\\",\\"requestId\\":\\"r1\\"}"}]\n' > "$CFG/teams/session-abcd1234/inboxes/m.json"
+  census
+  [ "$(disp_of 702)" = teammate-shutdown-pending ] || { echo "unread shutdown: $output"; false; }
+  printf '[{"from":"team-lead","read":true,"text":"{\\"type\\":\\"shutdown_request\\",\\"requestId\\":\\"r1\\"}"}]\n' > "$CFG/teams/session-abcd1234/inboxes/m.json"
+  census
+  [ "$(disp_of 702)" = upgrade-teammate ] || { echo "a READ request must not hold: $output"; false; }
+  : > "$LRU_PS_SNAPSHOT"; rm -f "$LRU_REG_DIR"/*.json
+  sess 703 abcd1234-0000-4000-8000-000000000003 "$MATE_EXE --agent-id m@session-abcd1234 --agent-name m --model claude-opus-5"
+  census
+  [ "$(disp_of 703)" = teammate-unidentified ] || { echo "no team name: $output"; false; }
+}
+
+@test "T3 [RED] once every live teammate is current the lead is UPGRADE-LEAD; with no team file it is held" {
+  team_file
+  sess 701 "$LEAD_SID" "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  sess 702 "$MATE_SID" "$(mate_argv "$NEW" claude-opus-5-5)"
+  census
+  [ "$(disp_of 702)" = current ] || { echo "$output"; false; }
+  [ "$(disp_of 701)" = upgrade-lead ] || { echo "$output"; false; }
+  rm -rf "$CFG/teams/session-abcd1234"
+  census
+  [ "$(disp_of 701)" = lead-no-team-file ] || { echo "$output"; false; }
+}
+
+@test "T4 [RED] in-flight Agent-tool subagents read SUBAGENTS-IN-FLIGHT, from handoff-fire's own probe" {
+  sess 710 abcd1234-0000-4000-8000-000000000010 "$OLD --model claude-opus-5 --effort high"; P="$LASTPID"
+  echo 2 > "$BATS_TEST_TMPDIR/sa-count"
+  census
+  [ "$(disp_of 710)" = subagents-in-flight ] || { echo "$output"; false; }
+  grep -q -- "--probe-live-subagents --source-session abcd1234-0000-4000-8000-000000000010 --source-pid $P" "$BATS_TEST_TMPDIR/sa-probe.log" \
+    || { cat "$BATS_TEST_TMPDIR/sa-probe.log"; false; }
+  echo 0 > "$BATS_TEST_TMPDIR/sa-count"
+  census
+  [ "$(disp_of 710)" = upgrade ] || { echo "$output"; false; }
+}
+
+@test "T5 [RED] the launchers carry the team identity: a member rejoins as itself, a lead adopts its file" {
+  export LRU_FIRE_RESUME="$STUBS/fire-resume"
+  printf '#!/bin/bash\nfor a in "$@"; do printf "%%s\\n" "$a"; done > %s/fr-$3.argv\nenv > %s/fr-$3.env\n' "$BATS_TEST_TMPDIR" "$BATS_TEST_TMPDIR" > "$LRU_FIRE_RESUME"; chmod +x "$LRU_FIRE_RESUME"
+  # shellcheck disable=SC1090
+  . "$LRU"
+  targs="$(lru_team_args "$(mate_argv)")"
+  [ "$targs" = "--agent-id m@session-abcd1234 --agent-name m --team-name session-abcd1234 --agent-color cyan --parent-session-id $LEAD_SID --agent-type general-purpose" ] || { echo "targs: $targs"; false; }
+  Lm="$(lru_mint_launcher "$BATS_TEST_TMPDIR/runm" "$CFG" "$BATS_TEST_TMPDIR" "$MATE_SID" claude-opus-5-5 high auto "" teammate "$targs" "")"
+  lru_ascii_only "$Lm"
+  bash "$Lm"
+  A="$BATS_TEST_TMPDIR/fr-$MATE_SID.argv"
+  grep -qx -- '--extra-args' "$A" || { cat "$A"; false; }
+  grep -qxF -- "$targs" "$A" || { cat "$A"; false; }
+  grep -qx -- 'CLAUDECODE=1 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1' "$A" || { cat "$A"; false; }
+  awk 'p { exit !($0 == "") } $0 == "--prompt" { p = 1 }' "$A" || { echo "a teammate must get NO prompt"; cat "$A"; false; }
+  grep -qx 'LR_SUBMIT_TOKEN=' "$BATS_TEST_TMPDIR/fr-$MATE_SID.env" || { echo "a teammate must arm no submit token"; false; }
+  # the lead: the held team dir is back BEFORE the relaunch runs, and the adopt variable rides along
+  mkdir -p "$(lru_team_hold_path "$CFG" session-abcd1234)"; echo held > "$(lru_team_hold_path "$CFG" session-abcd1234)/config.json"
+  Ll="$(lru_mint_launcher "$BATS_TEST_TMPDIR/runl" "$CFG" "$BATS_TEST_TMPDIR" "$LEAD_SID" claude-opus-5-5 high auto "" lead "" session-abcd1234)"
+  lru_ascii_only "$Ll"
+  bash "$Ll"
+  [ "$(cat "$CFG/teams/session-abcd1234/config.json")" = held ] || { echo "the launcher did not restore the team"; false; }
+  [ ! -e "$(lru_team_hold_path "$CFG" session-abcd1234)" ] || false
+  grep -qx 'CLAUDE_INTERNAL_ASSISTANT_TEAM_NAME=session-abcd1234' "$BATS_TEST_TMPDIR/fr-$LEAD_SID.argv" || { cat "$BATS_TEST_TMPDIR/fr-$LEAD_SID.argv"; false; }
+  grep -q 'team-lead.json' "$BATS_TEST_TMPDIR/fr-$LEAD_SID.argv" || { echo "the lead is not told where its unread replies land"; false; }
+}
+
+@test "T6 [RED] the lead's team dir is HELD when handoff-fire runs, and restored when it refuses before /exit" {
+  gate_env 0
+  team_file
+  sleep 300 & LIVE_PID=$!
+  SESS_PID="$LIVE_PID" sess 701 "$LEAD_SID" "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  sess 702 "$MATE_SID" "$(mate_argv "$NEW" claude-opus-5-5)"
+  cat > "$LRU_HF_BIN" <<STUB
+#!/bin/bash
+{ [ -d "$CFG/teams/session-abcd1234" ] && echo team=present || echo team=absent
+  [ -d "$CFG/teams/.session-abcd1234.lr-upgrade-hold" ] && echo hold=present || echo hold=absent
+  echo "env=\${HF_ENGAGE_BY_PROCESS:-unset}"; echo "args=\$*"; } > "$BATS_TEST_TMPDIR/hf-state"
+echo "!! recycle REFUSED: composer holds a draft"; exit 2
+STUB
+  chmod +x "$LRU_HF_BIN"
+  run bash "$LRU" --drive "$LEAD_SID" 701
+  kill "$LIVE_PID" 2>/dev/null || true
+  grep -qx team=absent "$BATS_TEST_TMPDIR/hf-state" \
+    || { echo "the lead met its /exit with its team dir in place (the exit cleanup would kill the member):"; cat "$BATS_TEST_TMPDIR/hf-state"; false; }
+  grep -qx hold=present "$BATS_TEST_TMPDIR/hf-state" || { cat "$BATS_TEST_TMPDIR/hf-state"; false; }
+  [ -f "$CFG/teams/session-abcd1234/config.json" ] || { echo "the refused drive did not give the lead its team back: $output"; false; }
+  [ ! -e "$CFG/teams/.session-abcd1234.lr-upgrade-hold" ] || false
+  [ "$(jq -r .verdict "$LRU_STATE/results/upgrade-$LEAD_SID.json")" = skipped ] || false
+}
+
+@test "T7 [RED] a teammate drive passes its own --team-member-id and asks for engagement by process" {
+  gate_env 0
+  team_file
+  sess 701 "$LEAD_SID" "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  sleep 300 & LIVE_PID=$!
+  SESS_PID="$LIVE_PID" sess 702 "$MATE_SID" "$(mate_argv)"
+  cat > "$LRU_HF_BIN" <<STUB
+#!/bin/bash
+{ echo "env=\${HF_ENGAGE_BY_PROCESS:-unset}"; echo "args=\$*"; } > "$BATS_TEST_TMPDIR/hf-state"
+exit 2
+STUB
+  chmod +x "$LRU_HF_BIN"
+  run bash "$LRU" --drive "$MATE_SID" 702
+  kill "$LIVE_PID" 2>/dev/null || true
+  grep -q -- "--team-member-id m@session-abcd1234" "$BATS_TEST_TMPDIR/hf-state" || { cat "$BATS_TEST_TMPDIR/hf-state"; echo "$output"; false; }
+  grep -qx 'env=1' "$BATS_TEST_TMPDIR/hf-state" || { cat "$BATS_TEST_TMPDIR/hf-state"; false; }
+  # the member's identity is on the launcher handoff-fire was given
+  L="$(sed -n 's/.*--resume-launcher \([^ ]*\).*/\1/p' "$BATS_TEST_TMPDIR/hf-state")"
+  grep -qF 'm@session-abcd1234' "$L" || { cat "$L"; false; }
+}
+
+@test "T8 --team-restore APPENDS inbox entries a recreated team dir received; nothing is dropped" {
+  held="$CFG/teams/.session-abcd1234.lr-upgrade-hold"; live="$CFG/teams/session-abcd1234"
+  mkdir -p "$held/inboxes" "$live/inboxes"
+  echo '{"members":[1,2]}' > "$held/config.json"
+  echo '[{"id":"old"}]' > "$held/inboxes/team-lead.json"
+  echo '[{"id":"new"}]' > "$live/inboxes/team-lead.json"
+  echo '[{"id":"only-new"}]' > "$live/inboxes/m.json"
+  run bash "$LRU" --team-restore "$CFG" session-abcd1234
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(jq -c '[.[].id]' "$live/inboxes/team-lead.json")" = '["old","new"]' ] || { cat "$live/inboxes/team-lead.json"; false; }
+  [ "$(jq -c '[.[].id]' "$live/inboxes/m.json")" = '["only-new"]' ] || false
+  [ "$(jq -c .members "$live/config.json")" = '[1,2]' ] || false
+  [ ! -e "$held" ] || false
 }
