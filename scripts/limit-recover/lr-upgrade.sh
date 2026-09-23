@@ -25,6 +25,7 @@
 #   lr-upgrade.sh --drive <sid> <pane> [--requested-by P] [--req-id ID]   one session, synchronous
 #   lr-upgrade.sh --drain                           the serial queue the poller hands requests to
 #   lr-upgrade.sh --auto-enqueue                    the poller's tick: queue every `upgrade` row
+#   lr-upgrade.sh --pin-target <sid> <opus|fable|id|clear>  per-session target override (24h TTL)
 #
 # Census columns: pane sid binary model target effort perm cfg cwd pid disposition
 # Dispositions: upgrade · current · self · teammate · duplicate · lead-with-teammate · no-transcript
@@ -78,7 +79,34 @@ lru_ssot() { # $1=block $2=key → value; rc 1 when absent
   [ -n "$v" ] || return 1
   printf '%s' "$v"
 }
-lru_target_model() { # $1=current model → the model this session should be on
+# ── A PER-SESSION TARGET PIN (2026-09-23) ────────────────────────────────────────────────────────
+# "Fable keeps Fable" is the right DEFAULT — a Fable session is usually a frontier-ladder stage-2
+# lead, and converting every one on the poller's auto-enqueue would break the ladder fleet-wide.
+# It is wrong for ONE session the operator has ruled should move to Opus (2026-09-23: "self-recycle
+# our v2.1.280 Fable 5.1 / Opus 5 sessions into v2.1.280 Opus 5.5 sessions" — pane 480 was the only
+# live Fable one, and the census called it `current` forever). So the override is per SID, a file
+# rather than a flag: the census, the auto-enqueue and the drainer's execution-time re-check all read
+# it through this one function, so no request schema and no drain plumbing changes.
+#   * The value must be one of the SSOT's two targets (opus_latest, frontier model) — a pin can
+#     choose between them, never name an arbitrary id into a launcher.
+#   * It expires after LRU_PIN_TTL_MIN (default 1440): a pin left behind must not drag a session the
+#     operator later put back on Fable onto Opus a week later.
+UPG_PINS="$LRU_STATE/upgrade-target"
+lru_pinned_target() { # $1=sid → the pinned model on stdout; rc 1 when no live, valid pin
+  local f v
+  [ -n "${1:-}" ] || return 1
+  f="$UPG_PINS/$1"
+  [ -f "$f" ] || return 1
+  [ -n "$(find "$f" -mmin -"${LRU_PIN_TTL_MIN:-1440}" 2>/dev/null)" ] || return 1
+  v="$(head -1 "$f" 2>/dev/null | tr -d '[:space:]')"
+  [ -n "$v" ] || return 1
+  if [ "$v" = "$(lru_ssot versions opus_latest)" ] || [ "$v" = "$(lru_ssot frontier_access model)" ]; then
+    printf '%s' "$v"; return 0
+  fi
+  return 1
+}
+lru_target_model() { # $1=current model [$2=sid] → the model this session should be on
+  lru_pinned_target "${2:-}" && return 0
   case "$1" in
     *fable*) lru_ssot frontier_access model ;;      # Fable keeps Fable: a binary-only move
     *)       lru_ssot versions opus_latest ;;       # Opus (and an argv with no --model) → opus_latest
@@ -296,7 +324,7 @@ lru_census() { # [$1=ref: pane id or sid prefix; empty = all] → TSV rows on st
     model="$(lru_flag "$args" --model "$LRU_RE_MODEL")"; eff="$(lru_flag "$args" --effort "$LRU_RE_EFFORT")"
     perm="$(lru_flag "$args" --permission-mode "$LRU_RE_PERM")"
     [ -n "$perm" ] || perm=auto
-    tgt="$(lru_target_model "$model" || true)"
+    tgt="$(lru_target_model "$model" "$sid" || true)"
     cfg="$(lru_cfg_of "$acct")"
     if [ -z "$tgt" ]; then disp="no-target-model"
     elif [ "$bin" = "$target_bin" ] && [ "$model" = "$tgt" ]; then disp=current
@@ -604,8 +632,21 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
                 --req-id) [ $# -ge 2 ] || exit 3; _rq="$2"; shift 2 ;;
                 *) lru_say "unknown arg $1"; exit 3 ;; esac; done
               lru_drive "$_s" "$_p" "$_by" "$_rq"; exit $? ;;
+    --pin-target) # <sid> <model|opus|fable> → write the per-session pin; `--pin-target <sid> clear` removes it
+              [ $# -ge 3 ] || { lru_say "usage: --pin-target <sid> <opus|fable|model id|clear>"; exit 3; }
+              case "$2" in *[!0-9a-f-]*|'') lru_say "--pin-target wants a full session uuid, got '$2'"; exit 3 ;; esac
+              case "$3" in
+                clear) rm -f "$UPG_PINS/$2"; lru_say "pin cleared for ${2:0:8}"; exit 0 ;;
+                opus)  _m="$(lru_ssot versions opus_latest)" ;;
+                fable) _m="$(lru_ssot frontier_access model)" ;;
+                *)     _m="$3" ;;
+              esac
+              mkdir -p "$UPG_PINS" || exit 2
+              printf '%s\n' "$_m" > "$UPG_PINS/$2.tmp" && mv -f "$UPG_PINS/$2.tmp" "$UPG_PINS/$2" || exit 2
+              lru_pinned_target "$2" >/dev/null || { rm -f "$UPG_PINS/$2"; lru_say "REFUSED: '$_m' is neither the SSOT opus_latest nor the frontier model"; exit 2; }
+              lru_say "pinned ${2:0:8} → $_m for ${LRU_PIN_TTL_MIN:-1440} min; the poller's auto-enqueue moves it once idle"; exit 0 ;;
     --drain)  lru_drain; exit $? ;;
     --auto-enqueue) lru_auto_enqueue; exit $? ;;
-    *) lru_say "usage: --census [--all|<ref>] | --drive <sid> <pane> | --drain | --auto-enqueue"; exit 3 ;;
+    *) lru_say "usage: --census [--all|<ref>] | --drive <sid> <pane> | --pin-target <sid> <model> | --drain | --auto-enqueue"; exit 3 ;;
   esac
 fi
