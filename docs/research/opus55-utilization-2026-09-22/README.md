@@ -7,7 +7,7 @@ unpinned it runs the lead's model. The effort rung is not one number, because Op
 effort curve has a different shape per task class:
 - **medium** for scoped coding (its peak);
 - **high** for leads, agentic work and research;
-- **xhigh** for hard reasoning and long-horizon knowledge work;
+- **xhigh** for hard reasoning, code review and long-horizon knowledge work;
 - **low** only for gate-verified bulk work, never for research or reasoning.
 
 **max** buys little over xhigh: usually 1–2 points at up to ~2× the output. The exception is
@@ -55,9 +55,9 @@ anything below 90% is research still owed; the last column says what would move 
 | Scoped coding wave (anchored briefs) | Opus 5.5 | **medium** — fire the wave's session with `--effort medium`; its teammates inherit it | none, medium is the peak | FrontierCode v1.1 (Cognition, run in Claude Code, graded on mergeability incl. scope): Main med 54.6 · high 54.0 · xhigh 51.4 · max 54.4 at ~9× medium's output tokens; Extended med 65.3 · max 63.6. A teammate spawned inside a `high` lead runs at high (54.0, within noise, ~1.4× the output) | 85% | — |
 | Code-writing teammate, ambiguous multi-file | Opus 5.5 | **high** (the lead's) | max, only if measured | CursorBench: med 52.5 → high 56.0 | 80% | — |
 | Mechanical, known-target edit | Opus 5.5 | **medium** (low only behind a gate) | none | FrontierCode low 47.3 vs med 54.6; CursorBench low 43.7 ≈ Opus 5 @medium at ~1/6 the cost | 75% | — |
-| Code review / bug finding | Opus 5.5 (the `teammate_frontier` review-gate slot stays on Fable 5.1: it runs at the lead's effort, where Fable recalled 10 v 8) | **high** | xhigh | **Our review sweep** (recall /36, one sample, no pair distinguishable): low 6 · medium 8 · high 8 · xhigh 10 · max 9, and max is unfit (2/9 cells hit the output cap after 512K tokens). High costs ≈0.4× xhigh's quota. Guide: more bugs, fewer false alarms than Opus 5. Customer (Deloitte): at low, 72% of known bugs vs Opus 5 @high 56% | 80% | the repeated-sample follow-up (in flight) |
-| Bounded verifier ("does p. X say Y") | Opus 5.5 | **high** | xhigh | This fact base: Opus 5.5 @high verifiers re-checked 462 claims at their cited pages, corrected 8 and added 158 missed ones. Its self-preference bias is +0.01 / +0.07 on a 10-pt scale. Our review sweep: xhigh ties Fable 5.1 @high (10 v 10) at ~0.4× its quota | 80% | the repeated-sample follow-up |
-| Judge of HARD reasoning (derivation, architecture, proofs) | Opus 5.5 @xhigh, including the `workflow_judge` / `eval_judge` slots since 2026-09-22. **Fable 5.1 held** in `research_adversarial` and in `cc-route`'s judgment-dense and adversarial wave slots (see "Where Fable 5.1 still fits") | **xhigh** | max for math-like work | ArXivMath no tools: high 73.2 · xhigh 86.0 · max 91.2; with tools: high 79.4 · xhigh 94.7 · max 96.9. At **high** Opus 5.5 is BELOW both comparators here (with tools: Fable 87.7, Opus 5 88.6) and retakes the lead only at xhigh (94.7 vs 93.0). HLE no tools: high 59.6 · xhigh 62.8. **Our review sweep:** xhigh 10 = Fable 5.1 @high 10 (3 v 3 discordant items) at ~0.4× its quota | 85% | the repeated-sample follow-up: Opus 5 @max scored 13 in two panels, both judged by Opus 5 only |
+| Code review / bug finding | Opus 5.5 (the `teammate_frontier` review-gate slot stays on Fable 5.1 for its complement: it adds 4 items the Opus 5.5 members miss) | **xhigh** — fire a review wave with `--effort xhigh` | none (max is unfit) | **Our review follow-up** (recall /36, 3 samples, two judge panels): xhigh beats high, 3 v 0 discordant items, cells 12 v 2 in BOTH panels (mean 12.7 v 9.3) — effort buys recall on this class, which one sample could not show. xhigh is the top review arm measured (Opus 5 @max 11.7, Fable 5.1 @high 9.0). High costs ≈0.4× xhigh's quota. Single-sample sweep: low 6 · medium 8 · high 8 · xhigh 10 · max 9, max unfit (2/9 cells hit the output cap after 512K tokens). Guide: more bugs, fewer false alarms than Opus 5 | 90% | — |
+| Bounded verifier ("does p. X say Y") | Opus 5.5 | **high** | xhigh | This fact base: Opus 5.5 @high verifiers re-checked 462 claims at their cited pages, corrected 8 and added 158 missed ones. Its self-preference bias is +0.01 / +0.07 on a 10-pt scale. Our review follow-up: xhigh beats high on open review (3 v 0 items), but a BOUNDED check is narrower than that corpus, so high stays the default here and xhigh the slack rung | 80% | a bounded-verification probe |
+| Judge of HARD reasoning (derivation, architecture, proofs) | Opus 5.5 @xhigh, including the `workflow_judge` / `eval_judge` slots since 2026-09-22. **Fable 5.1 held** in `research_adversarial` and in `cc-route`'s judgment-dense and adversarial wave slots (see "Where Fable 5.1 still fits") | **xhigh** | max for math-like work | ArXivMath no tools: high 73.2 · xhigh 86.0 · max 91.2; with tools: high 79.4 · xhigh 94.7 · max 96.9. At **high** Opus 5.5 is BELOW both comparators here (with tools: Fable 87.7, Opus 5 88.6) and retakes the lead only at xhigh (94.7 vs 93.0). HLE no tools: high 59.6 · xhigh 62.8. **Our review follow-up (3 samples):** xhigh is the top arm measured, mean 12.7 v Opus 5 @max 11.7 and Fable 5.1 @high 9.0, with no own-model judge lean | 92% | — |
 | Breadth research worker (web) | Opus 5.5 | **high** | xhigh | WANDR (ann., $/attempt): med 62.8 · high 67.3 (≈ Opus 5 @xhigh 67.0 at ~1/3 its cost) · xhigh 71.3 · max 72.3; **low 31.2**. HLE with tools: med 63.0 · high 63.9 · xhigh 66.4 | 85% | — |
 | Deep research / report synthesis | Opus 5.5 | **high** | xhigh | DRACO (n=100): med 83.9 · high 85.0 · xhigh 86.7 · max 87.4 — high→xhigh is +1.7 at ~2.5× the cost. Opus 5 LEADS at every rung from medium up (85.6 · 87.3 · 87.4 · 88.3), and Opus 5 @high (87.3, ~$8.5) beats Opus 5.5 @xhigh (86.7, ~$9) | 65% | a deep-research A/B: Opus 5.5 @high vs Opus 5 @high |
 | Long-horizon knowledge work (analysis, docs, spreadsheets) | Opus 5.5 | **xhigh** | max | GDPval-AA (high from the ann. chart): high 1692 · xhigh 1820 · max 1846 (xhigh ≈ max on ~51% fewer output tokens). AA-Briefcase: high 1705 · xhigh 1780 · max 1822 | 80% | — |
@@ -114,13 +114,19 @@ defaults and never drop research or reasoning to low.
     wave does the hard work itself. Our evals don't cover that class, and the vendor names Fable
     5.1 for "demanding reasoning", so it stays. Conviction that Opus 5.5 @xhigh would match it:
     85%. Only a judgment-dense probe would move that, and the payoff would be quota, not quality.
-  - **Open, and measured on one sample only.**
-    - Opus 5 @max was the best arm in two panels (12, 13). Every panel was Opus 5 judges, so an
-      own-model lean is not excluded.
-    - Opus 5 @high complements the Opus 5.5 worker exactly as much as Fable 5.1 @high does: each
-      adds 3 items, union 11 either way. It does so at roughly a third of the quota.
-    - A repeated-sample follow-up with a mixed-model panel decides both.
-    (`docs/research/review-judge-followup-2026-09-22/`, in flight).
+  - **Settled by the repeated-sample follow-up**
+    ([`../review-judge-followup-2026-09-22/`](../review-judge-followup-2026-09-22/README.md),
+    landed `b039afa84`: 3 samples per arm, the standing Opus-5 panel plus a mixed panel with one
+    judge each of Opus 5, Opus 5.5 and Fable 5.1). Both single-sample leads dissolved.
+    - Opus 5 @max's 13 was its best draw. Over 3 samples it ties Opus 5.5 @xhigh on items found
+      (12 v 12, p 1.00 in both panels) and trails it on mean recall (11.7 v 12.7), at ~1.2× the
+      quota. **The judge slots stay on Opus 5.5 @xhigh (92%).**
+    - Opus 5 @high's complement to the worker is 2 items, both of which Fable also finds; Fable's
+      is 4 (union 13 v 11, p 0.50). **`research_adversarial` stays on Fable 5.1**: 80% that it is
+      the better complement, ~95% that keeping it is right, since keeping it can cost quota but
+      never quality.
+    - No own-model lean: all three mixed-panel judges rank the arms identically, and the two
+      panels agree on 351 of 360 judgments.
 
 ## Multi-agent economics (System Card §8.12)
 
@@ -253,8 +259,6 @@ defaults and never drop research or reasoning to low.
    teammate's effort. The script now warns and names the lever that does work: fire the wave's
    own session at the rung. The two SSOT comments that presented it as the per-member lever carry
    the same dated correction.
-7. **Review-class follow-up** — repeated samples and a mixed-model judge panel, IN FLIGHT on
-   branch `feat/review-judge-followup`. It asks two questions.
-   - Q1: is Opus 5 @max genuinely the best judge config (13 v 10, one sample, Opus-5 judges)?
-   - Q2: is Opus 5 @high a better adversarial complement to the Opus 5.5 worker than Fable 5.1?
-   Either answer can move `workflow_judge` / `eval_judge` / `research_adversarial` again.
+7. ✅ **Review-class follow-up — DONE 2026-09-22** (landed `b039afa84`). The judge slots stay on
+   Opus 5.5 @xhigh, the adversarial slot stays on Fable 5.1, and code review moves from high to
+   xhigh (see "Judge slots" and the table).
