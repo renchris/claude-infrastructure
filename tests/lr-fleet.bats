@@ -924,7 +924,7 @@ husk_successor_turn() { printf '{"type":"assistant","timestamp":"2026-09-09T00:5
   row HUSKP-9x7z "$SID"; husk_lock
   run bash "$FLEET" --locate
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"HUSK"* ]] || { echo "$output"; false; }
+  [[ "$output" == *" HUSK "* ]] || { echo "$output"; false; }
 }
 
 # THE RED-PROOF for wall 1, and the guard on its blast radius. 63 `.handed-off` copies sit on this
@@ -945,6 +945,63 @@ husk_successor_turn() { printf '{"type":"assistant","timestamp":"2026-09-09T00:5
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" != *"HUSK"* ]] || { echo "$output"; false; }
   [[ "$output" != *"52e35019"* ]] || { echo "$output"; false; }
+}
+
+# ── THE SAME HUSK ON THE DEFAULT PATH (backlog 3d9943ec9e87) ─────────────────────────────────────
+# Every case above runs under this suite's LF_SLOW_SCAN=1, so all of them stayed green while the
+# DEFAULT `--locate` — which W3 delegated to bin/cc-limited — printed 0 HUSK rows over two live
+# husks (panes 110/126, 2026-09-20). cc-limited sees the successor's turn after the death and
+# settles the row RE-ENGAGED. These cases run the census path and carry the marker it reads, so a
+# husk has to arrive through lf_husk_arm to be seen at all. The match is ` HUSK ` — the DISPOSITION
+# column — because the fixture's pane id `HUSKP-9x7z` contains `HUSK`, and a bare substring match
+# passed the .handed-off case pre-fix on the PANE column alone (measured on this change's red-proof).
+@test "census: a live pane whose session has MOVED is HUSK on the DEFAULT path too" {
+  blocked_tx "$SEC" "$SID"; mark "$SEC" "$SID" HUSKP-9x7z; husk_successor_turn; row HUSKP-9x7z "$SID"; husk_lock
+  LF_SLOW_SCAN=0 run bash "$FLEET" --locate
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *" HUSK "* ]] || { echo "$output"; false; }
+  [[ "$output" == *"52e35019"* ]] || { echo "$output"; false; }
+}
+
+@test "census: the husk renders identically on both paths" {
+  blocked_tx "$SEC" "$SID"; mark "$SEC" "$SID" HUSKP-9x7z; husk_successor_turn; row HUSKP-9x7z "$SID"; husk_lock
+  parity
+}
+
+@test "census: a .jsonl.handed-off source copy is HUSK on the DEFAULT path, once" {
+  blocked_tx "$SEC" "$SID"; mark "$SEC" "$SID" HUSKP-9x7z
+  mv "$SEC/projects/$SLUG/$SID.jsonl" "$SEC/projects/$SLUG/$SID.jsonl.handed-off"
+  row HUSKP-9x7z "$SID"; husk_lock
+  LF_SLOW_SCAN=0 run bash "$FLEET" --locate
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(printf '%s\n' "$output" | grep -c 52e35019)" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *" HUSK "* ]] || { echo "$output"; false; }
+}
+
+# The arm's candidate set is lock ∪ tombstone; with neither, lr_husk_state's leg (b) cannot answer
+# HUSK, and the census must stay exactly what cc-limited said.
+@test "census CONTROL: the same fixture with NO transplant lock shows no HUSK" {
+  blocked_tx "$SEC" "$SID"; mark "$SEC" "$SID" HUSKP-9x7z; husk_successor_turn; row HUSKP-9x7z "$SID"
+  LF_SLOW_SCAN=0 run bash "$FLEET" --locate
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *" HUSK "* ]] || { echo "$output"; false; }
+}
+
+# The arm narrows candidates with ONE jq pass over the registry, which fails whole on one bad file.
+# A failed read must drop the narrowing, never the husk: trusting its empty set is the silent arm.
+@test "census: a malformed registry file abandons the live-sid pre-filter, never the husk" {
+  blocked_tx "$SEC" "$SID"; mark "$SEC" "$SID" HUSKP-9x7z; husk_successor_turn; row HUSKP-9x7z "$SID"; husk_lock
+  printf '{not json' > "$CC_REGISTRY_DIR/broken.json"
+  LF_SLOW_SCAN=0 run bash "$FLEET" --locate
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *" HUSK "* ]] || { echo "$output"; false; }
+}
+
+@test "census: LR_HUSK_RETIRE=off silences the husk arm on the DEFAULT path too" {
+  blocked_tx "$SEC" "$SID"; mark "$SEC" "$SID" HUSKP-9x7z; husk_successor_turn; row HUSKP-9x7z "$SID"; husk_lock
+  LR_HUSK_RETIRE=off LF_SLOW_SCAN=0 run bash "$FLEET" --locate
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *" HUSK "* ]] || { echo "$output"; false; }
 }
 
 # ── THE ROUTER MUST NOT PICK A TARGET THAT ALREADY HOLDS THE SESSION (2026-09-20) ───────────────

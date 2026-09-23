@@ -199,39 +199,29 @@ try:
     print(int((datetime.now(timezone.utc)-t).total_seconds()))
 except Exception: print("-")'
 }
-lf_locate() { # → TSV rows on stdout
-  local cfg tx sid tail rows pane pid acct cwd tier disp n kind kinds err_age _procs _husk
-  while IFS= read -r cfg; do
-    [ -n "$cfg" ] || continue
-    # ── the HUSK is enumerated from the `.handed-off` copy too (W10, LIMIT_RECOVER_100P § 10) ──
-    # lr-transplant.sh:98 renames the source transcript `<sid>.jsonl.handed-off` the moment it has
-    # copied it, so `*.jsonl` CANNOT match a transplanted session's SOURCE copy. Measured
-    # 2026-09-19 against all three live husks (panes 110/126/150): the only `.jsonl` left anywhere
-    # for those sids was the successor's, under the target store. THAT glob — not the
-    # last-assistant-word filter below — is the first reason `--locate` listed none of them; both
-    # walls are cleared here, and clearing only one would have landed an inert census arm.
-    # A `.handed-off` copy is enumerated for exactly ONE purpose and is dropped again unless it is
-    # a husk, so the 63 historical ones on this box (against 2,631 live transcripts) cost one lock
-    # stat each and change no other row in the census.
-    for tx in "$cfg"/projects/*/*.jsonl "$cfg"/projects/*/*.jsonl.handed-off; do
-      [ -f "$tx" ] || continue
-      sid="$(basename "${tx%.handed-off}" .jsonl)"
-      case "$sid" in agent-*|wf_*) continue ;; esac
-      # HUSK is decided BEFORE the last-assistant-word filter below, so a session that has already
-      # moved cannot drop out of the census the moment its successor takes a real turn. A TEAMMATE
-      # is never a husk: its lead ends it (the teammate close contract), not `--retire-husks`.
-      _husk=0
-      if lr_husk_state "$sid" "$cfg"; then
-        head -c 8000 "$tx" 2>/dev/null | grep '"agentName"' >/dev/null || _husk=1
-      fi
-      case "$tx" in *.handed-off) [ "$_husk" = 1 ] || continue ;; esac
-      tail="$(tail -c 20000 "$tx" 2>/dev/null || true)"
-      printf '%s' "$tail" | grep -E "$BLOCK_RE" | grep -q '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true' || continue
-      IFS=$'\t' read -r kind kinds <<<"$(lf_kinds_of "$tail")"
-      [ -n "$kinds" ] || kinds="$kind"
-      err_age="$(lf_err_age_s "$tail")"; [ -n "$err_age" ] || err_age="-"
-      # the limit must be the LAST assistant word — a session that took a real turn since is not blocked
-      printf '%s' "$tail" | /usr/bin/python3 -c '
+# ONE transcript → at most one 11-field row: the body of lf_locate's walk, lifted out so the census's
+# HUSK arm (lf_husk_arm, below) runs the SAME code over its candidates rather than a second copy of
+# the husk predicate. Two implementations of one state is how the default path lost this row at all.
+lf_locate_tx() { # $1=cfg $2=transcript (.jsonl or .jsonl.handed-off) → TSV row on stdout, rc 0
+  local cfg="$1" tx="$2" sid tail rows pane pid acct cwd tier disp kind kinds err_age _procs _husk _to
+  [ -f "$tx" ] || return 0
+  sid="$(basename "${tx%.handed-off}" .jsonl)"
+  case "$sid" in agent-*|wf_*) return 0 ;; esac
+  # HUSK is decided BEFORE the last-assistant-word filter below, so a session that has already
+  # moved cannot drop out of the census the moment its successor takes a real turn. A TEAMMATE
+  # is never a husk: its lead ends it (the teammate close contract), not `--retire-husks`.
+  _husk=0
+  if lr_husk_state "$sid" "$cfg"; then
+    head -c 8000 "$tx" 2>/dev/null | grep '"agentName"' >/dev/null || _husk=1
+  fi
+  case "$tx" in *.handed-off) [ "$_husk" = 1 ] || return 0 ;; esac
+  tail="$(tail -c 20000 "$tx" 2>/dev/null || true)"
+  printf '%s' "$tail" | grep -E "$BLOCK_RE" | grep -q '"isApiErrorMessage"[[:space:]]*:[[:space:]]*true' || return 0
+  IFS=$'\t' read -r kind kinds <<<"$(lf_kinds_of "$tail")"
+  [ -n "$kinds" ] || kinds="$kind"
+  err_age="$(lf_err_age_s "$tail")"; [ -n "$err_age" ] || err_age="-"
+  # the limit must be the LAST assistant word — a session that took a real turn since is not blocked
+  printf '%s' "$tail" | /usr/bin/python3 -c '
 import json,sys
 last=None
 for l in sys.stdin:
@@ -243,48 +233,65 @@ for l in sys.stdin:
     c=m.get("content"); txt=c if isinstance(c,str) else " ".join(x.get("text","") for x in (c or []) if isinstance(x,dict))
     if txt.strip()=="No response requested.": continue
     last=bool(d.get("isApiErrorMessage"))
-sys.exit(0 if last else 1)' || [ "$_husk" = 1 ] || continue
-      acct="$(lf_acct_of_cfg "$cfg")"
-      if head -c 8000 "$tx" 2>/dev/null | grep '"agentName"' >/dev/null; then disp=TEAMMATE; pane="-"; pid="-"; cwd="-"; tier="-"
-      else
-        pane="-"; pid="-"; cwd="-"; tier="$(lr_tier_from_transcript "$cfg" "$sid" 2>/dev/null | tr ' ' '/' || true)"; [ -n "$tier" ] || tier="-"
-        if rows="$(lr_registry_live_rows "$sid")"; then
-          IFS=$'\t' read -r pane pid _ cwd <<<"$(printf '%s\n' "$rows" | head -1)"
-          # DISTINCT holders, via the one shared predicate — see lr_holder_count in lr-lib.sh.
-          if [ "$(lr_holder_count "$sid")" -gt 1 ]; then disp=DUPLICATE; else disp=RECOVERABLE; fi
-        elif _procs="$(lr_resume_procs "$sid" 2>/dev/null)"; then
-          # D7 — THE REGISTRY HOLE, FILLED FROM THE ARGV LEAF. A session whose SessionStart hook
-          # never wrote a row (or whose row went stale) has no registry pid, and this branch used to
-          # leave pid "-" while asserting RESUMING. Measured 2026-09-09: `lr_registry_live_rows`
-          # returned rc 1 for 52e35019 while pid 77720 held `claude … --resume 52e35019…`, alive
-          # since Sep 8 19:51 — a live process reported with no pid at all. The argv census already
-          # knows that pid; take it.
-          disp=RESUMING; pid="$(printf '%s\n' "$_procs" | head -1)"; [ -n "$pid" ] || pid="-"
-          cwd="$(grep -o '"cwd":"[^"]*"' "$tx" 2>/dev/null | tail -1 | cut -d'"' -f4 || true)"; [ -n "$cwd" ] || cwd="-"
-        else disp=NO-PANE; cwd="$(grep -o '"cwd":"[^"]*"' "$tx" 2>/dev/null | tail -1 | cut -d'"' -f4 || true)"; [ -n "$cwd" ] || cwd="-"
-          # A reaped worktree cannot host a resume. Measured 2026-09-12: a fleet --recover dry-run
-          # offered 9 stale NO-PANE sessions, 3 of whose cwds no longer exist — a spawn there dies
-          # in a missing directory. This is a NAMED gap, never a by-design skip: work may be
-          # stranded and only a human can decide whether the tree is worth recreating.
-          [ "$cwd" = "-" ] || [ -d "$cwd" ] || disp=CWD-GONE
-        fi
-        if _to="$(lr_transplanted_to "$sid" "$cfg")"; then disp="TRANSPLANTED→$(lf_acct_of_cfg "$_to")"; fi
-      fi
-      # A network-blocked session with a live pane is IDLE-AFTER-ERROR, not RECOVERABLE: the
-      # distinction is the whole point of the kind column, and collapsing it is what would send a
-      # transplant at it. RENAMED from RESUME-IN-PLACE (D7): the old name was an INSTRUCTION to the
-      # operator ("resume this in place"), and the machine is now the one that acts — while the state
-      # it actually names is "the process is alive and sitting at its prompt after an error record".
-      # Naming the STATE rather than the remedy is also what stops the row reading as a standing
-      # to-do after the session has already re-engaged, which every measured row did within ~40 min.
-      [ "$kind" = network ] && [ "$disp" = RECOVERABLE ] && disp=IDLE-AFTER-ERROR
-      # HUSK outranks every disposition above it FOR THE SOURCE ROW — TRANSPLANTED→ included. The
-      # pane is live, the session is not here any more, and the only action the row names is
-      # retiring that pane. The TARGET row is untouched: lr_husk_state is rc 1 when it is asked
-      # from the successor's own store, exactly as lr_transplanted_to is.
-      [ "$_husk" = 1 ] && disp=HUSK
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$sid" "$cfg" "$acct" "$pane" "$pid" "$cwd" "$tier" "$disp" "$kind" "$kinds" "$err_age"
+sys.exit(0 if last else 1)' || [ "$_husk" = 1 ] || return 0
+  acct="$(lf_acct_of_cfg "$cfg")"
+  if head -c 8000 "$tx" 2>/dev/null | grep '"agentName"' >/dev/null; then disp=TEAMMATE; pane="-"; pid="-"; cwd="-"; tier="-"
+  else
+    pane="-"; pid="-"; cwd="-"; tier="$(lr_tier_from_transcript "$cfg" "$sid" 2>/dev/null | tr ' ' '/' || true)"; [ -n "$tier" ] || tier="-"
+    if rows="$(lr_registry_live_rows "$sid")"; then
+      IFS=$'\t' read -r pane pid _ cwd <<<"$(printf '%s\n' "$rows" | head -1)"
+      # DISTINCT holders, via the one shared predicate — see lr_holder_count in lr-lib.sh.
+      if [ "$(lr_holder_count "$sid")" -gt 1 ]; then disp=DUPLICATE; else disp=RECOVERABLE; fi
+    elif _procs="$(lr_resume_procs "$sid" 2>/dev/null)"; then
+      # D7 — THE REGISTRY HOLE, FILLED FROM THE ARGV LEAF. A session whose SessionStart hook
+      # never wrote a row (or whose row went stale) has no registry pid, and this branch used to
+      # leave pid "-" while asserting RESUMING. Measured 2026-09-09: `lr_registry_live_rows`
+      # returned rc 1 for 52e35019 while pid 77720 held `claude … --resume 52e35019…`, alive
+      # since Sep 8 19:51 — a live process reported with no pid at all. The argv census already
+      # knows that pid; take it.
+      disp=RESUMING; pid="$(printf '%s\n' "$_procs" | head -1)"; [ -n "$pid" ] || pid="-"
+      cwd="$(grep -o '"cwd":"[^"]*"' "$tx" 2>/dev/null | tail -1 | cut -d'"' -f4 || true)"; [ -n "$cwd" ] || cwd="-"
+    else disp=NO-PANE; cwd="$(grep -o '"cwd":"[^"]*"' "$tx" 2>/dev/null | tail -1 | cut -d'"' -f4 || true)"; [ -n "$cwd" ] || cwd="-"
+      # A reaped worktree cannot host a resume. Measured 2026-09-12: a fleet --recover dry-run
+      # offered 9 stale NO-PANE sessions, 3 of whose cwds no longer exist — a spawn there dies
+      # in a missing directory. This is a NAMED gap, never a by-design skip: work may be
+      # stranded and only a human can decide whether the tree is worth recreating.
+      [ "$cwd" = "-" ] || [ -d "$cwd" ] || disp=CWD-GONE
+    fi
+    if _to="$(lr_transplanted_to "$sid" "$cfg")"; then disp="TRANSPLANTED→$(lf_acct_of_cfg "$_to")"; fi
+  fi
+  # A network-blocked session with a live pane is IDLE-AFTER-ERROR, not RECOVERABLE: the
+  # distinction is the whole point of the kind column, and collapsing it is what would send a
+  # transplant at it. RENAMED from RESUME-IN-PLACE (D7): the old name was an INSTRUCTION to the
+  # operator ("resume this in place"), and the machine is now the one that acts — while the state
+  # it actually names is "the process is alive and sitting at its prompt after an error record".
+  # Naming the STATE rather than the remedy is also what stops the row reading as a standing
+  # to-do after the session has already re-engaged, which every measured row did within ~40 min.
+  [ "$kind" = network ] && [ "$disp" = RECOVERABLE ] && disp=IDLE-AFTER-ERROR
+  # HUSK outranks every disposition above it FOR THE SOURCE ROW — TRANSPLANTED→ included. The
+  # pane is live, the session is not here any more, and the only action the row names is
+  # retiring that pane. The TARGET row is untouched: lr_husk_state is rc 1 when it is asked
+  # from the successor's own store, exactly as lr_transplanted_to is.
+  [ "$_husk" = 1 ] && disp=HUSK
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$sid" "$cfg" "$acct" "$pane" "$pid" "$cwd" "$tier" "$disp" "$kind" "$kinds" "$err_age"
+}
+lf_locate() { # → TSV rows on stdout
+  local cfg tx
+  while IFS= read -r cfg; do
+    [ -n "$cfg" ] || continue
+    # ── the HUSK is enumerated from the `.handed-off` copy too (W10, LIMIT_RECOVER_100P § 10) ──
+    # lr-transplant.sh:98 renames the source transcript `<sid>.jsonl.handed-off` the moment it has
+    # copied it, so `*.jsonl` CANNOT match a transplanted session's SOURCE copy. Measured
+    # 2026-09-19 against all three live husks (panes 110/126/150): the only `.jsonl` left anywhere
+    # for those sids was the successor's, under the target store. THAT glob — not the
+    # last-assistant-word filter in lf_locate_tx — is the first reason `--locate` listed none; both
+    # walls are cleared here, and clearing only one would have landed an inert census arm.
+    # A `.handed-off` copy is enumerated for exactly ONE purpose and is dropped again unless it is
+    # a husk, so the 63 historical ones on this box (against 2,631 live transcripts) cost one lock
+    # stat each and change no other row in the census.
+    for tx in "$cfg"/projects/*/*.jsonl "$cfg"/projects/*/*.jsonl.handed-off; do
+      lf_locate_tx "$cfg" "$tx"
     done
   done <<EOF
 $(lr_config_dirs)
@@ -311,6 +318,54 @@ lf_dedup_mirror() { awk -F'\t' '
     else if (sdisp[sid]=="HUSK") { }
     else if (sacct[sid]==".claude" && acct!=".claude") { seen[sid]=$0; sacct[sid]=acct; sdisp[sid]=disp } }
   END { for (i=1;i<=k;i++) print seen[ord[i]] }' ; }
+
+# ── THE HUSK ARM OF THE DEFAULT CENSUS (backlog 3d9943ec9e87, 2026-09-22) ─────────────────────────
+# `bin/cc-limited` has no HUSK state: it reads the marker, the registry and every copy of the
+# transcript, sees the SUCCESSOR's real turn after the death, and settles the row as RE-ENGAGED —
+# which `render_tsv` drops. So once W3 made `--locate` delegate to it, a husk was invisible on the
+# default path while `lf_locate` and `lr_husk_state` both still answered HUSK. Measured 2026-09-20:
+# panes 110/126 live and enumerable, `lr_husk_state` HUSK for both, `--locate` printed 0 HUSK rows.
+# This arm is UNIONED in rather than taught to cc-limited so there stays ONE husk predicate
+# (lr_husk_state) and ONE row builder (lf_locate_tx) — a Python restatement is a second copy that
+# could agree today and drift tomorrow.
+# COST: leg (b) of lr_husk_state needs a transplant LOCK or TOMBSTONE for the sid, so those are the
+# only sids that can ever answer HUSK — the candidate set is complete by construction, and it is
+# tens of files, not the ~2,600-transcript walk the delegation exists to avoid.
+# …AND THAT WAS STILL 35 s LIVE (2026-09-22): 42 of 65 tombstones pass leg (b), and leg (a)'s
+# lr_registry_live_rows forks jq per registry file, ~0.5 s a sid. So candidates are first narrowed
+# to sids holding a LIVE registry row, read in ONE jq pass. Leg (a) requires such a row, so the
+# filter is strictly weaker than the predicate and can drop no husk; if that one read fails the
+# filter is abandoned, never trusted — an empty live set would silence the arm.
+lf_husk_arm() { # → HUSK rows only, lf_locate's 11-field spelling, on stdout
+  [ "${LR_HUSK_RETIRE:-on}" != off ] || return 0
+  local cfg tx sid lockd="${LR_STATE_DIR:-$HOME/.reso/limit-recover}/locks" sids live="" _s _p _reg
+  _reg="$(jq -r '[(.session_id // .sessionId // ""), (.pid // "" | tostring)] | @tsv' \
+            "${CC_REGISTRY_DIR:-$HOME/.claude/cc-registry}"/*.json 2>/dev/null)" && {
+    while IFS=$'\t' read -r _s _p; do
+      case "$_p" in ''|*[!0-9]*) continue ;; esac
+      [ -n "$_s" ] && kill -0 "$_p" 2>/dev/null && live="$live $_s "
+    done <<EOR
+$_reg
+EOR
+    live="${live:- }"; }
+  while IFS= read -r cfg; do
+    [ -n "$cfg" ] || continue
+    sids="$( { for tx in "$lockd"/*.lock; do [ -f "$tx" ] && basename "$tx" .lock; done
+               for tx in "$cfg"/projects/*/*.HANDOFF.json; do [ -f "$tx" ] && basename "$tx" .HANDOFF.json; done
+             } | sort -u )"
+    while IFS= read -r sid; do
+      [ -n "$sid" ] || continue
+      case "$live" in '') : ;; *" $sid "*) : ;; *) continue ;; esac
+      for tx in "$cfg"/projects/*/"$sid".jsonl "$cfg"/projects/*/"$sid".jsonl.handed-off; do
+        lf_locate_tx "$cfg" "$tx"
+      done
+    done <<EOS
+$sids
+EOS
+  done <<EOF | awk -F'\t' '$8 == "HUSK"'
+$(lr_config_dirs)
+EOF
+}
 
 # ── THE CENSUS, DELEGATED TO ONE PROCESS (LIMIT_DETECT_100P § 3 W3) ──────────────────────────────
 # `bin/cc-limited` answers the same question from the stores that already hold it, so the 35.5 s
@@ -346,7 +401,9 @@ lf_census() { # → the 11-field TSV on stdout; rc 0 ok · 5 instrument unreadab
        echo "lr-fleet: census INSTRUMENT UNREADABLE (cc-limited rc $_rc) — refusing to report an empty fleet" >&2
        return 5 ;;
   esac
-  [ -n "$_rows" ] && printf '%s\n' "$_rows" | lf_census_fill
+  # HUSK wins its sid's slot in lf_dedup_mirror, exactly as it does on the slow scan, so a husk the
+  # census also listed under another disposition renders once, as HUSK.
+  { [ -n "$_rows" ] && printf '%s\n' "$_rows" | lf_census_fill; lf_husk_arm; } | lf_dedup_mirror
   return "$_rc"
 }
 # TWO COLUMNS ARE FILLED HERE, and neither is cosmetic. Measured 2026-09-20 against one fixture
