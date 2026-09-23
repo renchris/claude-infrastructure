@@ -953,6 +953,21 @@ if ! diff -q "$REPO_DIR/CLAUDE.global.md" "$CONFIG_DIR/CLAUDE.md" >/dev/null 2>&
 else
   skipped=$((skipped + 1))
 fi
+# Instructions A/B variants: CLAUDE.global.<variant>.md → ~/.claude/CLAUDE.<variant>.md, copied for the
+# same branch-switch reason as CLAUDE.md. Inert until `cc-instructions-variant set <account> <variant>`
+# points an account's CLAUDE.md at one (docs/research/token-efficiency-2026-09-23/).
+for _variant in "$REPO_DIR"/CLAUDE.global.*.md; do
+  [[ -f "$_variant" ]] || continue
+  _vname="${_variant##*/CLAUDE.global.}"; _vname="${_vname%.md}"
+  [[ "$_vname" =~ ^[a-z0-9-]+$ ]] || continue
+  if ! diff -q "$_variant" "$CONFIG_DIR/CLAUDE.$_vname.md" >/dev/null 2>&1; then
+    run cp "$_variant" "$CONFIG_DIR/CLAUDE.$_vname.md"
+    echo "  ✓ CLAUDE.$_vname.md (instructions variant; inert until an account is switched to it)"
+    installed=$((installed + 1))
+  else
+    skipped=$((skipped + 1))
+  fi
+done
 
 # --- Status line ---
 echo ""
