@@ -637,6 +637,13 @@ account) → runs `handoff-fire.sh --recycle --same-account --source-pane P --so
 drainer retypes the launcher (≤5, 20 s apart; the gate admits a given resume after 3 refusals) so a
 pane is never left at a bare shell without a named command.
 
+**`upgraded` means the PROCESS moved** — a live `--resume <sid>` on the target binary and model. The
+one-line confirmation turn is reported beside it, never instead of it: `confirmed by a fresh
+assistant turn`, or `confirmation UNCONFIRMED (lr-fire-resume: FAILED:submit)`. Measured on the
+first field run (2026-09-22): 2 of 3 relaunches came up correctly while the prompt injection failed
+in ~25-column split panes (the composer read-back is width-dependent). An UNCONFIRMED session is idle
+on the new binary; press Enter in its pane if the prompt is still in the composer, or Ctrl-U.
+
 **Excluded, each by name:** `teammate` (its lead's) · `lead-with-teammate` (a live claude whose argv
 names it `--parent-session-id`) · `mid-turn` (last main-thread record is not an assistant `end_turn`
 — re-read again immediately before `/exit`) · `background-job` (a Bash-tool shell doing real work; a
