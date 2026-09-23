@@ -1,0 +1,3 @@
+# The shared extract is ~1 GB and fully re-derivable: python3 scripts/extract.py (see data/EXTRACT.md).
+data/*.sqlite
+data/*.sqlite-*
