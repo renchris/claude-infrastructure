@@ -28,6 +28,14 @@ question about *the human's consent*. A shell can `DROP TABLE` and `git push --f
   classifier or permission prompt** ⇒ **GATED**. Print the RESOLVED command (account · target ·
   row count), one line on what it cannot undo, and why it was blocked; then require a typed `yes`,
   defaulting to no. Declining skips that step and reports it. Support `--dry-run`.
+- 🚨 **The consent must also be expressible IN THE COMMAND**: `--confirm <target>`, refused unless it
+  names the exact target the run changes (any other target ⇒ exit before a single live read), and
+  refused together with `--dry-run`. The operator runs handed commands through Claude Code's `!`,
+  which has **no keyboard**: a prompt-only gate reads EOF, and a naive `read || answer=""` then
+  reports "declined" for an answer nobody typed. On EOF without `--confirm`, stop and print the
+  exact `--confirm` form — never call it a refusal. The dry run is how they read the resolved
+  commands first; `--confirm` is them consenting to what they read. Measured 2026-09-23 on reso
+  `scripts/rotate-soketi-key.sh` (fixed `b5ccc273a`).
 
 🚨 **Those five are the ONLY gate classes, and the list is EXHAUSTIVE — not a starting set.** If you
 are reaching for a sixth, you are deferring, not gating. The failure has a tell: you invent an axis
