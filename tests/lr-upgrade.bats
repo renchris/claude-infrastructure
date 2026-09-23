@@ -502,3 +502,28 @@ tui_stub() { # composer contents come from $BATS_TEST_TMPDIR/composer-<pane>
   [ "$(disp_of 583)" = upgrade ] || { echo "$output"; false; }
   [ "$(disp_of 584)" = current ] || { echo "$output"; false; }
 }
+
+# ── H. A HARNESS NOTIFICATION IS NOT A TURN (2026-09-23) ───────────────────────────────────────────
+# Pane 480 was resumed onto 2.1.280 with a lost background task; the harness appended a
+# <task-notification> user record and no turn followed. Every at-rest check read it as mid-turn.
+@test "H1 [RED] a stale unanswered <task-notification> is at rest — the session is UPGRADE, not mid-turn" {
+  S=30303030-0000-4000-8000-000000000001
+  sess 590 "$S" "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  printf '%s\n' '{"type":"user","message":{"content":"<task-notification>\n<status>stopped</status>\n</task-notification>"},"timestamp":"2026-09-22T10:00:05Z"}' \
+    >> "$LRU_CFG_ROOT/.claude-t/projects/-x/$S.jsonl"
+  census
+  [ "$(disp_of 590)" = upgrade ] || { echo "$output"; false; }
+}
+
+@test "H2 a FRESH notification, or a stale typed prompt, stays mid-turn" {
+  S=30303030-0000-4000-8000-000000000002; T=30303030-0000-4000-8000-000000000003
+  sess 591 "$S" "$OLD --model claude-opus-5 --effort high"
+  printf '{"type":"user","message":{"content":"<task-notification>x</task-notification>"},"timestamp":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$LRU_CFG_ROOT/.claude-t/projects/-x/$S.jsonl"
+  sess 592 "$T" "$OLD --model claude-opus-5 --effort high"
+  printf '%s\n' '{"type":"user","message":{"content":"please continue"},"timestamp":"2026-09-22T10:00:05Z"}' \
+    >> "$LRU_CFG_ROOT/.claude-t/projects/-x/$T.jsonl"
+  census
+  [ "$(disp_of 591)" = mid-turn ] || { echo "$output"; false; }
+  [ "$(disp_of 592)" = mid-turn ] || { echo "$output"; false; }
+}

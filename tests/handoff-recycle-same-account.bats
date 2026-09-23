@@ -223,6 +223,24 @@ load_rest() {
   [ "$status" -eq 1 ]
 }
 
+@test "at-rest oracle: a harness <task-notification> left unanswered past the window is REST" {
+  load_rest; at_rest_tx
+  rec '{"type":"user","message":{"role":"user","content":"<task-notification>\n<status>stopped</status>\n</task-notification>"},"timestamp":"2026-09-22T10:00:05Z"}'
+  run hf_transcript_at_rest "$TX"
+  [ "$status" -eq 0 ] || { echo "rc=$status"; false; }
+}
+
+@test "at-rest oracle: a FRESH notification, or a stale typed prompt, is still in flight (rc 1)" {
+  load_rest; at_rest_tx
+  rec "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"<task-notification>x</task-notification>\"},\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+  run hf_transcript_at_rest "$TX"
+  [ "$status" -eq 1 ] || { echo "fresh notification read as rest: rc=$status"; false; }
+  at_rest_tx
+  rec '{"type":"user","message":{"role":"user","content":"please continue"},"timestamp":"2026-09-22T10:00:05Z"}'
+  run hf_transcript_at_rest "$TX"
+  [ "$status" -eq 1 ] || { echo "a typed prompt read as rest: rc=$status"; false; }
+}
+
 @test "at-rest oracle: a missing or empty transcript is UNREADABLE (rc 2), never rest" {
   load_rest
   run hf_transcript_at_rest "$BATS_TEST_TMPDIR/absent.jsonl"
