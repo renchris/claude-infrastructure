@@ -3242,8 +3242,15 @@ engagement_seen() { # $1=projects-dir $2=marker $3=registry-dir $4=fired-pane â†
   # that passes "" is left with path (b) alone and its registry dependency.
   if [ -n "$marker" ] && [ -d "$pdir" ]; then
     list="$(mktemp "${TMPDIR:-/tmp}/cc-engage-scan.XXXXXX" 2>/dev/null)" || return 2
+    # `-H` is load-bearing, both here and in (b). Account `next`'s store, ~/.claude-next/projects, is a
+    # SYMLINK to ~/.claude/projects, and the caller hands us exactly that path (PROJ_DIR is built from
+    # config_dir_for_launcher, not the symlink-aware proj_dir). `[ -d ]` follows the link and passes,
+    # but BSD find does not descend a symlinked START path without -H: it enumerated 0 transcripts
+    # where -H finds 77. So every fire to `next` read as "never engaged" â€” the goal went unarmed and
+    # the INC-4 recovery re-typed the brief into a session that had engaged in 3s (measured 2026-09-22,
+    # three fires, three false verdicts). -H follows only the start path, never links met while walking.
     # shellcheck disable=SC2086  # scan_win is an intentional operand PAIR, or empty under the kill switch
-    if find "$pdir" -name '*.jsonl' -type f $scan_win -print > "$list" 2>/dev/null; then
+    if find -H "$pdir" -name '*.jsonl' -type f $scan_win -print > "$list" 2>/dev/null; then
       while IFS= read -r hit; do
         [ -n "$hit" ] || continue
         grep -qF -- "$marker" "$hit" 2>/dev/null; grc=$?
@@ -3274,7 +3281,7 @@ engagement_seen() { # $1=projects-dir $2=marker $3=registry-dir $4=fired-pane â†
     rsid="$(jq -r '.session_id // empty' "$regdir/$pane.json" 2>/dev/null)"
     if [ -n "$rsid" ] && [ -d "$pdir" ]; then
       list="$(mktemp "${TMPDIR:-/tmp}/cc-engage-reg.XXXXXX" 2>/dev/null)" || return 2
-      if find "$pdir" -name "$rsid.jsonl" -type f -print > "$list" 2>/dev/null; then
+      if find -H "$pdir" -name "$rsid.jsonl" -type f -print > "$list" 2>/dev/null; then   # -H: see (a)
         while IFS= read -r hit; do
           [ -n "$hit" ] || continue
           assistant_turn_in "$hit" && { ENGAGE_PROOF="registry:$rsid"; ENGAGE_TRANSCRIPT="$hit"; found=1; break; }
