@@ -24,6 +24,9 @@
 #   lr-upgrade.sh --census [--all | <pane|sid8>]   TSV, one row per live registry row (read-only)
 #   lr-upgrade.sh --drive <sid> <pane> [--requested-by P] [--req-id ID]   one session, synchronous
 #   lr-upgrade.sh --drain                           the serial queue the poller hands requests to
+#                                                   (kind upgrade AND kind switch — one drainer)
+#   lr-upgrade.sh --switch-census [--from A] [--target A] [--pane P|--sid S]   the switch selection
+#   lr-upgrade.sh --switch-drive <sid> <pane> <target> [--requested-by P] [--req-id ID]
 #   lr-upgrade.sh --auto-enqueue                    the poller's tick: queue every `upgrade` row
 #   lr-upgrade.sh --pin-target <sid> <opus|fable|id|clear>  per-session target override (24h TTL)
 #
@@ -444,13 +447,13 @@ lru_file_rail_receipt() { # $1=pane $2=content
 # One row per live registry row. `current` rows are printed too (the dry run is a fleet census).
 # Exclusions are checked in order and the FIRST that applies is the disposition, so every skipped
 # row names exactly one reason.
-lru_census() { # [$1=ref: pane id or sid prefix; empty = all] → TSV rows on stdout; rc 1 none matched
-  local ref="${1:-}" snap target_bin f pane pid sid acct cwd lst args rlst bin model tgt eff perm cfg tx disp rows="" n=0
-  local sids="" dupsids=""
-  snap="$(lru_snapshot)"
-  target_bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
-  [ -n "$target_bin" ] || { lru_say "cannot resolve the current binary ($LRU_CLAUDE_BIN_CMD) — refusing to judge 'current'"; return 2; }
-  # pass 1: live rows (pid in the snapshot, lstart agreeing when the row records one)
+# ── PASS 1, SHARED: which registry rows are LIVE (2026-09-23, factored out for the switch census) ─
+# A row is live when its pid runs in the snapshot; it is STALE when the pid runs but its start
+# instant disagrees with the one the row recorded (a recycled pid). A pid that does not run at all
+# is not a row of the fleet. One line per surviving row, "LIVE|STALE<TAB>regfile<TAB>sid", so both
+# censuses judge exactly the same population and read duplicates off the same pass.
+lru_live_pass() { # $1=snapshot → lines on stdout
+  local snap="$1" f pane pid sid args rlst lst
   for f in "$LRU_REG_DIR"/*.json; do
     [ -f "$f" ] || continue
     pane="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"; pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
@@ -460,14 +463,32 @@ lru_census() { # [$1=ref: pane id or sid prefix; empty = all] → TSV rows on st
     [ -n "$args" ] || continue                                  # not running: not a live row
     rlst="$(jq -r '.lstart // empty' "$f" 2>/dev/null)"
     lst="$(lru_snap_lstart "$snap" "$pid")"
-    if ! lru_lstart_matches "$rlst" "$lst" "$pid"; then
-      rows="$rows$pane"$'\t'"$sid"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"$pid"$'\t'"stale-row"$'\n'
-      continue
-    fi
-    case "$sids" in *" $sid "*) dupsids="$dupsids $sid " ;; esac
-    sids="$sids $sid "
-    rows="$rows$f"$'\t'"LIVE"$'\n'
+    if ! lru_lstart_matches "$rlst" "$lst" "$pid"; then printf 'STALE\t%s\t%s\n' "$f" "$sid"; continue; fi
+    printf 'LIVE\t%s\t%s\n' "$f" "$sid"
   done
+}
+lru_dup_sids() { # $1=live pass → " sid  sid " for every sid held by more than one LIVE row
+  printf '%s\n' "$1" | awk -F'\t' '$1 == "LIVE" { n[$3]++ } END { for (s in n) if (n[s] > 1) printf " %s ", s }'
+}
+
+lru_census() { # [$1=ref: pane id or sid prefix; empty = all] → TSV rows on stdout; rc 1 none matched
+  local ref="${1:-}" snap target_bin f pane pid sid acct cwd args bin model tgt eff perm cfg tx disp rows="" n=0
+  local dupsids="" pass k
+  snap="$(lru_snapshot)"
+  target_bin="$("$LRU_CLAUDE_BIN_CMD" 2>/dev/null || true)"
+  [ -n "$target_bin" ] || { lru_say "cannot resolve the current binary ($LRU_CLAUDE_BIN_CMD) — refusing to judge 'current'"; return 2; }
+  # pass 1: live rows (pid in the snapshot, lstart agreeing when the row records one)
+  pass="$(lru_live_pass "$snap")"
+  dupsids="$(lru_dup_sids "$pass")"
+  while IFS=$'\t' read -r k f sid; do
+    case "$k" in
+      LIVE) rows="$rows$f"$'\t'"LIVE"$'\n' ;;
+      STALE) pane="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"; pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
+             rows="$rows$pane"$'\t'"$sid"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"-"$'\t'"$pid"$'\t'"stale-row"$'\n' ;;
+    esac
+  done <<EOF
+$pass
+EOF
   # pass 2: judge each live row
   local out="" line
   while IFS= read -r line; do
@@ -525,6 +546,210 @@ EOF
   [ -n "$out" ] || return 1
   printf '%s\n' "$out"
 }
+
+# ══ THE DRIVER FORM OF THE VOLUNTARY ACCOUNT SWITCH (2026-09-23) ═══════════════════════════════════
+# `cc-lr switch --pane P --target A` (and `--from F --all-idle`) moves ANOTHER idle session to another
+# account. VOLUNTARY_ACCOUNT_SWITCH §5 DEC-2 deferred this "gated on an idle oracle existing"; the
+# oracle is the one above (lru_at_rest, lru_live_subagents, the team predicates, lru_bg_kind,
+# lru_composer), so this section REUSES it rather than writing a second one.
+#
+# THE SUBJECT STILL MOVES ITSELF. Nothing here transplants or relaunches anything. The drainer types
+# ONE canonical line into the idle subject's composer (cc_tui_submit, from the launchd poller —
+# outside every session and every classifier) telling it to run the SELF verb, `cc-lr switch
+# --target A`. So every gate of the SELF verb (in-flight subagents, composer, routability, capacity)
+# still runs INSIDE the subject, which is DEC-2's core argument kept intact. The line carries the
+# marker `[operator-ruling cc-lr-switch …]`: it is the operator's ruling relayed by the poller, not
+# a peer's opinion (the incident's peer 564 DECLINED a relayed ask on its own quota reading — an
+# unmarked relay carries no authority). commands/limit-recover.md § switch documents the marker.
+#
+# Incident (2026-09-23, "move idle next3 panes to next2 ... zero human in the loop"): five attempts
+# and ~8 h to move two panes, because every sanctioned path refused a healthy idle peer. What
+# finally worked was a hand-written poller prompt request — this section is that, made a verb.
+#
+# Switch census columns: pane sid account cfg cwd pid disposition
+# Dispositions: move · self · on-target · duplicate · stale-row · teammate · lead-with-teammate
+#               · no-transcript · mid-turn · subagents-in-flight · background-job
+#               · composer-occupied · composer-unknown
+# A TEAMMATE never moves (its pane, its account and its close belong to its lead), and a LEAD with a
+# live teammate never moves either: the SELF verb /exits the lead, and every graceful lead exit runs
+# cleanupSessionTeams, which kills the members (see the team procedure above). Neither is "busy" —
+# both are structural, so neither is re-tried.
+LRU_SWITCH_MARK='[operator-ruling cc-lr-switch'
+lru_load_acct_map() {
+  command -v cc_acct_name_for_dir_basename >/dev/null 2>&1 && return 0
+  local m
+  for m in "${LRU_ACCOUNT_MAP:-}" "$LRU_DIR/../../lib/account-map.generated.sh" "$HOME/.claude/lib/account-map.generated.sh"; do
+    # shellcheck disable=SC1090  # runtime-resolved generated map
+    [ -n "$m" ] && [ -f "$m" ] && { . "$m" 2>/dev/null && return 0; }
+  done
+  return 1
+}
+lru_acct_name() { # $1=registry .account (a config-dir basename) → the account NAME (next3), else $1
+  local n=""
+  lru_load_acct_map && n="$(cc_acct_name_for_dir_basename "$1" 2>/dev/null || true)"
+  printf '%s' "${n:-$1}"
+}
+lru_acct_cfg() { # $1=account name → its config dir; rc 1 when the map does not know it
+  lru_load_acct_map || return 1
+  cc_acct_dir_for_name "$1" >/dev/null 2>&1 || return 1
+  [ -n "${CC_ACCT_DIR:-}" ] || return 1
+  printf '%s' "$CC_ACCT_DIR"
+}
+
+# $1=from account NAME ('' = any) $2=target NAME ('' = none) $3=selector: pane:<P> | sid:<prefix> | ''
+# → TSV rows on stdout; rc 1 when nothing matched. The selection happens BEFORE any judging (the
+# subagent probe loads handoff-fire, the composer read is an RPC), but duplicates are still read
+# off the whole fleet's live pass, so a filtered row is never judged against a partial population.
+lru_switch_census() {
+  local from="${1:-}" target="${2:-}" sel="${3:-}" snap pass dups k f sid pane pid acct cwd cfg args tx disp out=""
+  snap="$(lru_snapshot)"
+  pass="$(lru_live_pass "$snap")"
+  dups="$(lru_dup_sids "$pass")"
+  while IFS=$'\t' read -r k f sid; do
+    [ -n "$k" ] || continue
+    pane="$(jq -r '.paneUUID // empty' "$f" 2>/dev/null)"; pid="$(jq -r '.pid // empty' "$f" 2>/dev/null)"
+    case "$sel" in
+      pane:*) [ "$pane" = "${sel#pane:}" ] || continue ;;
+      sid:*)  case "$sid" in "${sel#sid:}"*) ;; *) continue ;; esac ;;
+    esac
+    acct="$(lru_acct_name "$(jq -r '.account // empty' "$f" 2>/dev/null)")"
+    [ -z "$from" ] || [ "$acct" = "$from" ] || continue
+    cwd="$(jq -r '.cwd // empty' "$f" 2>/dev/null)"
+    cfg="$(lru_cfg_of "$(jq -r '.account // empty' "$f" 2>/dev/null)")"
+    disp=""
+    if [ "$k" = STALE ]; then disp=stale-row
+    elif [ -n "$target" ] && [ "$acct" = "$target" ]; then disp=on-target
+    elif [ -n "$LRU_SELF_SID" ] && [ "$sid" = "$LRU_SELF_SID" ]; then disp=self
+    else
+      args="$(lru_snap_args "$snap" "$pid")"
+      case "$dups" in *" $sid "*) disp=duplicate ;; esac
+      if [ -z "$disp" ]; then case " $args " in *" --agent-id "*|*" --agent-id="*) disp=teammate ;; esac; fi
+      if [ -z "$disp" ] && lru_has_live_teammate "$snap" "$sid"; then disp=lead-with-teammate; fi
+      if [ -z "$disp" ]; then
+        tx="$(lru_transcript "$cfg" "$sid" || true)"
+        if [ -z "$tx" ]; then disp=no-transcript
+        elif ! lru_at_rest "$tx"; then disp=mid-turn
+        fi
+      fi
+      if [ -z "$disp" ] && [ "$(lru_live_subagents "$sid" "$pid")" -gt 0 ]; then disp=subagents-in-flight; fi
+      if [ -z "$disp" ] && [ "$(lru_bg_kind "$snap" "$pid")" = work ]; then disp=background-job; fi
+      if [ -z "$disp" ]; then
+        # cc_tui_submit needs an EMPTY composer — it holds (rc 3) on anything else, rail junk
+        # included, and it never scrubs. So only 0 is `move`; 1 and 3 are both occupied.
+        local crc=0; lru_composer "$pane" || crc=$?
+        case "$crc" in 0) disp=move ;; 1|3) disp=composer-occupied ;; *) disp=composer-unknown ;; esac
+      fi
+    fi
+    out="$out$pane"$'\t'"$sid"$'\t'"${acct:--}"$'\t'"$cfg"$'\t'"${cwd:--}"$'\t'"$pid"$'\t'"$disp"$'\n'
+  done <<EOF
+$pass
+EOF
+  out="$(printf '%s' "$out" | awk -F'\t' 'NF' | LC_ALL=C sort -t$'\t' -k1,1n)"
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out"
+}
+
+lru_switch_prompt() { # $1=target $2=req id → the ONE canonical line (ASCII, no kill phrase)
+  printf '%s req=%s] Run in Bash now: cc-lr switch --target %s\n' "$LRU_SWITCH_MARK" "$2" "$1"
+}
+
+# §6 vocabulary, the driver's half: SWITCHED (the flip was observed: proven=yes) · NOTMOVED (nothing
+# was submitted, or the subject took its turn and stayed) · FAILED (submitted, and no outcome could
+# be classified inside the bound). Result file + one mail to the requester, as lr-handoff mails its.
+lru_switch_result() { # $1=sid $2=pane $3=VERDICT $4=from $5=to $6=reason $7=req $8=requested_by
+  local proven=no tmp msg
+  [ "$3" = SWITCHED ] && proven=yes
+  mkdir -p "$UPG_RESULTS" 2>/dev/null || true
+  tmp="$UPG_RESULTS/.switch-$1.$$.tmp"
+  jq -n --arg sid "$1" --arg pane "$2" --arg v "$3" --arg from "$4" --arg to "$5" --arg why "$6" \
+        --arg req "$7" --arg by "$8" --arg proven "$proven" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{kind:"switch", sid:$sid, pane:$pane, verdict:$v, from:$from, to:$to, proven:$proven, reason:$why, req_id:$req, requested_by:$by, ts:$ts}' \
+    > "$tmp" 2>/dev/null && mv -f "$tmp" "$UPG_RESULTS/switch-$1.json"
+  msg="CC-LR-SWITCH pane $2 (${1:0:8}): verdict=$3 from=${4:--} to=${5:--} proven=$proven - $6"
+  printf '%s\t%s\t%s\t%s\n' "$2" "${1:0:8}" "$3" "$6"
+  case "$8" in ''|'?'|-) ;; *)
+    [ -x "$LRU_NOTIFY_BIN" ] && "$LRU_NOTIFY_BIN" "$8" "$msg" >/dev/null 2>&1 || true ;;
+  esac
+}
+
+lru_last_text() { # $1=transcript → the last assistant text, one line, ≤200 chars
+  tail -n 200 "$1" 2>/dev/null | jq -r 'select(.type=="assistant" and ((.isSidechain // false)|not))
+      | (.message.content | if type == "string" then . else ([.[]? | select(.type=="text") | .text] | join(" ")) end)
+      | select(length > 0)' 2>/dev/null | tail -n 1 | tr '\n\r\t' '   ' | cut -c1-200
+}
+
+# ── drive ONE switch ─────────────────────────────────────────────────────────────────────────────
+lru_switch_drive() { # $1=sid $2=pane $3=target $4=requested_by $5=req id → rc 0 SWITCHED · 1 FAILED · 3 NOTMOVED
+  local sid="$1" pane="$2" target="$3" by="${4:-?}" req="${5:-}" mutex row from cfg pid run pf src=0 word
+  local tcfg deadline t0 racct rsid tx calm=0
+  if ! tcfg="$(lru_acct_cfg "$target")"; then
+    lru_switch_result "$sid" "$pane" NOTMOVED - "$target" "target '$target' is not an account this map knows (nothing typed)" "$req" "$by"; return 3
+  fi
+  mutex="$UPG_MUTEX_DIR/$sid.active"
+  mkdir -p "$UPG_MUTEX_DIR" 2>/dev/null || true
+  if ! mkdir "$mutex" 2>/dev/null; then
+    lru_switch_result "$sid" "$pane" NOTMOVED - "$target" "busy: another run holds $mutex (nothing typed)" "$req" "$by"; return 3
+  fi
+  printf '{"sid":"%s","pane":"%s","pid":%d,"by":"lr-upgrade switch"}\n' "$sid" "$pane" "$$" > "$mutex/holder" 2>/dev/null || true
+  # RE-JUDGE AT EXECUTION TIME, with the same predicates the requester's census used. A session that
+  # went busy since is reported and never typed into.
+  row="$(lru_switch_census "" "$target" "pane:$pane" 2>/dev/null | LRU_S="$sid" awk -F'\t' '$2 == ENVIRON["LRU_S"]' | head -1)"
+  if [ -z "$row" ]; then
+    rm -rf "$mutex"; lru_switch_result "$sid" "$pane" NOTMOVED - "$target" "not live: no registry row binds pane $pane to ${sid:0:8} now (nothing typed)" "$req" "$by"; return 3
+  fi
+  IFS=$'\t' read -r _ _ from cfg _ pid word <<EOF
+$row
+EOF
+  if [ "$word" != move ]; then
+    rm -rf "$mutex"; lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "$word (re-judged at drain time; nothing typed - re-run when it is idle)" "$req" "$by"; return 3
+  fi
+  run="$LRU_STATE/switch/${sid:0:8}-$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$run" 2>/dev/null || true
+  pf="$run/prompt.txt"
+  lru_switch_prompt "$target" "$req" > "$pf" 2>/dev/null
+  # RELEASED BEFORE THE SUBMIT, deliberately: the subject's own `cc-lr switch` takes this very
+  # mutex (runs/by-sid/<sid>.active) and would REFUSE while a live pid holds it.
+  rm -rf "$mutex"
+  t0="$(date +%s)"
+  tx="$(lru_transcript "$cfg" "$sid" || true)"
+  if [ ! -f "$LRU_TUI_LIB" ]; then
+    lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "cc-tui.sh unreachable at $LRU_TUI_LIB (nothing typed)" "$req" "$by"; return 3
+  fi
+  # shellcheck disable=SC1090  # sourced in a subshell: a sibling library must not replace our names
+  ( . "$LRU_TUI_LIB" && cc_tui_submit "$pane" "$pf" ) > "$run/submit.log" 2>&1 || src=$?
+  case "$src" in
+    0|5) ;;
+    *) case "$src" in 1) word=no-such-pane ;; 2) word=unreadable-or-modal ;; 3) word=composer-occupied ;; 4) word=paste-not-echoed ;; *) word="rc-$src" ;; esac
+       lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "submit refused ($word, cc_tui_submit rc $src): nothing was submitted" "$req" "$by"; return 3 ;;
+  esac
+  # THE VERDICT IS THE REGISTRY FLIP, AND THE TRANSCRIPT UNDER THE TARGET. The subject's SELF verb
+  # /exits and relaunches in place (same pane, same uuid), and the relaunched process's registry row
+  # names the new account. rc 5 (CR sent, no record yet) is treated as submitted: the flip decides.
+  deadline=$(( t0 + ${LRU_SWITCH_VERIFY_S:-600} ))
+  while :; do
+    racct="$(lru_acct_name "$(jq -r '.account // empty' "$LRU_REG_DIR/$pane.json" 2>/dev/null)")"
+    rsid="$(jq -r '.session_id // empty' "$LRU_REG_DIR/$pane.json" 2>/dev/null)"
+    if [ "$rsid" = "$sid" ] && [ "$racct" = "$target" ] && lru_transcript "$tcfg" "$sid" >/dev/null; then
+      lru_switch_result "$sid" "$pane" SWITCHED "$from" "$target" "registry row for pane $pane names $target and the transcript is under $tcfg" "$req" "$by"; return 0
+    fi
+    # DECLINED / REFUSED INSIDE THE SUBJECT: the old process is still alive, its transcript was
+    # written after the submit and is at rest again — the subject took its turn and stayed. Two
+    # consecutive reads, so a transient at-rest between two tool calls cannot convict.
+    if [ -n "$tx" ] && kill -0 "$pid" 2>/dev/null && [ "$(lru_mtime "$tx")" -gt "$t0" ] && lru_at_rest "$tx"; then
+      calm=$((calm + 1))
+      if [ "$calm" -ge 2 ]; then
+        lru_switch_result "$sid" "$pane" NOTMOVED "$from" "$target" "the subject took its turn and did not move; its last reply: $(lru_last_text "$tx")" "$req" "$by"; return 3
+      fi
+    else
+      calm=0
+    fi
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep "${LRU_SWITCH_POLL_S:-5}"
+  done
+  lru_switch_result "$sid" "$pane" FAILED "$from" "$target" "submitted (cc_tui_submit rc $src) but no flip to $target within ${LRU_SWITCH_VERIFY_S:-600}s and no settled reply - read pane $pane (run $run)" "$req" "$by"
+  return 1
+}
+lru_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
 
 # ── THE LAUNCHER — pure ASCII, or refused ────────────────────────────────────────────────────────
 # Defect 4: a prompt carrying `—` went through printf %q as $'…\342\200\224…' and a later `sed` in
@@ -789,7 +1014,7 @@ EOF
 # ── the serial drain ─────────────────────────────────────────────────────────────────────────────
 # ONE AT A TIME, by construction: a lock dir with a holder pid, stolen only from a dead holder.
 lru_drain() {
-  local q sid pane by req scrub n=0
+  local q sid pane by req scrub kind tgt n=0
   mkdir -p "$UPG_QUEUE" "$UPG_CLAIMED" 2>/dev/null || true
   if ! mkdir "$UPG_LOCK" 2>/dev/null; then
     local hp; hp="$(cat "$UPG_LOCK/pid" 2>/dev/null || true)"
@@ -806,10 +1031,18 @@ lru_drain() {
     sid="$(jq -r '.sid // empty' "$q" 2>/dev/null)"; pane="$(jq -r '.source_pane // empty' "$q" 2>/dev/null)"
     by="$(jq -r '.requested_by // "?"' "$q" 2>/dev/null)"; req="$(jq -r '.req_id // empty' "$q" 2>/dev/null)"
     scrub="$(jq -r '.scrub_composer // empty' "$q" 2>/dev/null)"
+    kind="$(jq -r '.kind // "upgrade"' "$q" 2>/dev/null)"; tgt="$(jq -r '.target // empty' "$q" 2>/dev/null)"
     mv -f "$q" "$UPG_CLAIMED/" 2>/dev/null || rm -f "$q"
     if [ -z "$sid" ] || [ -z "$pane" ]; then lru_say "malformed request $q (no sid/pane) - dropped to claimed/"; continue; fi
     [ "$n" -gt 0 ] && sleep "$LRU_GAP_S"
-    lru_drive "$sid" "$pane" "$by" "$req" "$scrub" || true
+    # ONE serial drainer for every "act on a live pane" request: an upgrade and a switch of the same
+    # pane can never interleave, and a --all-idle batch cannot stampede one target account.
+    case "$kind" in
+      switch)
+        if [ -z "$tgt" ]; then lru_switch_result "$sid" "$pane" NOTMOVED - - "malformed switch request: no .target (nothing typed)" "$req" "$by"
+        else lru_switch_drive "$sid" "$pane" "$tgt" "$by" "$req" || true; fi ;;
+      *) lru_drive "$sid" "$pane" "$by" "$req" "$scrub" || true ;;
+    esac
     n=$((n + 1))
   done
   lru_say "drain done: $n session(s)"
@@ -880,10 +1113,27 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
               printf '%s\n' "$_m" > "$UPG_PINS/$2.tmp" && mv -f "$UPG_PINS/$2.tmp" "$UPG_PINS/$2" || exit 2
               lru_pinned_target "$2" >/dev/null || { rm -f "$UPG_PINS/$2"; lru_say "REFUSED: '$_m' is neither the SSOT opus_latest nor the frontier model"; exit 2; }
               lru_say "pinned ${2:0:8} → $_m for ${LRU_PIN_TTL_MIN:-1440} min; the poller's auto-enqueue moves it once idle"; exit 0 ;;
+    --switch-census) # [--from ACCT] [--target ACCT] [--pane P | --sid S] → the switch selection, read-only
+              shift; _f=""; _t=""; _sel=""
+              while [ $# -gt 0 ]; do case "$1" in
+                --from) [ $# -ge 2 ] || exit 3; _f="$2"; shift 2 ;;
+                --target) [ $# -ge 2 ] || exit 3; _t="$2"; shift 2 ;;
+                --pane) [ $# -ge 2 ] || exit 3; _sel="pane:$2"; shift 2 ;;
+                --sid) [ $# -ge 2 ] || exit 3; _sel="sid:$2"; shift 2 ;;
+                *) lru_say "unknown arg $1"; exit 3 ;; esac; done
+              lru_switch_census "$_f" "$_t" "$_sel"; exit $? ;;
+    --switch-drive) # <sid> <pane> <target> [--requested-by P] [--req-id ID] — one switch, synchronous
+              [ $# -ge 4 ] || { lru_say "usage: --switch-drive <sid> <pane> <target> [--requested-by P] [--req-id ID]"; exit 3; }
+              _s="$2"; _p="$3"; _t="$4"; shift 4; _by="?"; _rq=""
+              while [ $# -gt 0 ]; do case "$1" in
+                --requested-by) [ $# -ge 2 ] || exit 3; _by="$2"; shift 2 ;;
+                --req-id) [ $# -ge 2 ] || exit 3; _rq="$2"; shift 2 ;;
+                *) lru_say "unknown arg $1"; exit 3 ;; esac; done
+              lru_switch_drive "$_s" "$_p" "$_t" "$_by" "$_rq"; exit $? ;;
     --drain)  lru_drain; exit $? ;;
     --auto-enqueue) lru_auto_enqueue; exit $? ;;
     --team-restore) [ $# -ge 3 ] || { lru_say "usage: --team-restore <cfg> <team>"; exit 3; }
               lru_team_restore "$2" "$3"; exit $? ;;
-    *) lru_say "usage: --census [--all|<ref>] | --drive <sid> <pane> | --pin-target <sid> <model> | --drain | --auto-enqueue | --team-restore <cfg> <team>"; exit 3 ;;
+    *) lru_say "usage: --census [--all|<ref>] | --drive <sid> <pane> | --switch-census [--from A] [--target A] [--pane P|--sid S] | --switch-drive <sid> <pane> <target> | --pin-target <sid> <model> | --drain | --auto-enqueue | --team-restore <cfg> <team>"; exit 3 ;;
   esac
 fi

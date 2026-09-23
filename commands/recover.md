@@ -153,6 +153,13 @@ establish that a *peer* is safe to move, while a session establishes it about it
 is the one taking the turn. The driver form is filed as its own decision, gated on an idle oracle
 existing. Do not reach for `--source-pane` or `--detach` here; they are not the verb's shape.
 
+**Superseded 2026-09-23 — the driver form now exists.** The idle oracle the paragraph above waits
+for landed in `scripts/limit-recover/lr-upgrade.sh` (2026-09-22), so `cc-lr switch --pane <P>
+--target <acct>` (or `--from <acct> --all-idle`) moves ANOTHER idle session: it judges idleness with
+that oracle, and the poller types one `[operator-ruling cc-lr-switch …]` line asking the subject to
+run the SELF verb itself — so the reasoning above (the subject is the actor) still holds. Full
+mode: `commands/limit-recover.md` § Mode: switch.
+
 **Which verb, and the test is whether the CONTEXT is worth keeping:**
 
 | | When | Verb |

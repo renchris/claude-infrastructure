@@ -32,6 +32,8 @@
 #   cc-lr recover <ref> [--target A] [--source-pane P]
 #   cc-lr switch [--target A|auto] [--dry-run]
 #                                     move THIS pane's session to another account, in place
+#   cc-lr switch (--pane P | --sid S | --from A --all-idle) --target A [--dry-run] [--wait S|--no-wait]
+#                                     ask ANOTHER idle session to move itself (the driver form)
 #   cc-lr status [ref | --all]
 #   cc-lr repair <bundle|ref> [--mode relaunch|prompt] [--target A] [--source-pane P]
 #   cc-lr upgrade (--all | <pane|sid8>) [--dry-run] [--wait S | --no-wait] · cc-lr upgrade --report
@@ -125,6 +127,13 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
                              soonest-resetting account that is safe on BOTH the 5-hour and
                              weekly limits, never this one; if none is safe it stays put
                              (verdict=NOTMOVED, rc 1).
+  cc-lr switch (--pane P | --sid S | --from A --all-idle) --target A [--dry-run] [--wait S | --no-wait]
+                             the DRIVER form: move ANOTHER idle session. Judged by lr-upgrade's idle
+                             oracle (--dry-run: one row per candidate + disposition); each `move`
+                             row becomes a poller request, re-judged at drain time, and the idle
+                             subject is asked — marked [operator-ruling cc-lr-switch] — to run the
+                             SELF verb itself. Verdict: the registry flip (SWITCHED · NOTMOVED ·
+                             FAILED), also mailed. An explicit --target is required.
   cc-lr status [ref|--all]   one row per run's events.jsonl, with CAUSE / NEXT
   cc-lr repair <bundle|ref> [--mode relaunch|prompt] [--target A] [--source-pane P]
                              write a poller request and kick the daemon — NEVER types
@@ -385,6 +394,9 @@ EOF
 #   subject is $CLAUDE_CODE_SESSION_ID plus cl_this_pane(), never a lookup — which is also the only
 #   honest source, because the question being asked is "who am I".
 #
+#   (2026-09-23: the "driver form" deferred in the next paragraph now EXISTS — cmd_switch_driver
+#   above, `--pane/--sid/--from --all-idle`, on lr-upgrade.sh's idle oracle. The paragraph is kept
+#   as the record of why the SELF verb itself stays foreground and ref-less.)
 #   NO --source-pane AND NO --detach. Moving somebody ELSE's HEALTHY session requires knowing it is
 #   idle, and this subsystem has no idle oracle at all: pane_cc_state answers `cc` for mid-turn,
 #   idle, modal and wedged alike. A session establishes it about ITSELF trivially — it is the one
@@ -487,18 +499,190 @@ cl_switch_auto_target() { # → stdout: account (rc 0) · why (rc 1 none safe, r
   printf '%s' "$best"
 }
 
+# ── switch, THE DRIVER FORM: move ANOTHER idle session (2026-09-23) ─────────────────────────────
+# `cc-lr switch --pane P --target A` · `--sid S --target A` · `--from F --all-idle --target A`.
+# DEC-2 (VOLUNTARY_ACCOUNT_SWITCH §5) deferred this "gated on an idle oracle existing". The oracle
+# now exists — lr-upgrade.sh's selection predicate (at rest, in-flight subagents, background job,
+# composer, teammate/lead, duplicate, stale row, self) — and this form REUSES it through
+# `lr-upgrade.sh --switch-census` rather than writing a second one.
+#
+# THE SAME SHAPE AS `upgrade`, AND FOR ITS REASON: acting on another live session from inside a
+# session is refused by auto mode's classifier (the incident's attempt 3), so this verb only READS
+# and WRITES REQUESTS. The launchd poller queues them for the one serial drainer, which re-judges
+# each session at execution time and types ONE canonical line into the idle subject — marked
+# `[operator-ruling cc-lr-switch …]` — telling it to run the SELF verb. The subject moves itself, so
+# the SELF verb's own gates still run inside the subject (DEC-2's core argument, kept).
+#
+# ONLY AN EXPLICIT TARGET. `auto` is resolved from the SUBJECT's view by the SELF verb, so the
+# driver could not know which account to confirm the flip against, and one --all-idle batch could
+# scatter across accounts. The operator's ask names the account; so must the command.
+cl_switch_line() { # <pane> <sid> <VERDICT> <from> <to> <reason>
+  case "$3" in
+    SWITCHED) printf '✓ %-5s %s  SWITCHED %s → %s — %s\n' "$1" "${2:0:8}" "$4" "$5" "$6" ;;
+    queued)   printf '… %-5s %s  queued %s → %s — %s\n' "$1" "${2:0:8}" "$4" "$5" "$6" ;;
+    skipped)  printf '· %-5s %s  NOTMOVED (%s) %s\n' "$1" "${2:0:8}" "$6" "$4" ;;
+    *)        printf '✗ %-5s %s  %s %s → %s — %s\n' "$1" "${2:0:8}" "$3" "$4" "$5" "$6" ;;
+  esac
+}
+cmd_switch_driver() { # <target> <dry> <pane> <sid> <from> <all> <wait_s>
+  local target="$1" dry="$2" pane="$3" sid="$4" from="$5" all="$6" wait_s="$7" census rc sel=""
+  case "$wait_s" in ''|*[!0-9]*) echo "cc-lr switch: --wait takes whole seconds" >&2; exit 3 ;; esac
+  # EXACTLY ONE SUBJECT. A fleet-wide move by default is the accident this verb must not make easy,
+  # so --all-idle needs --from, and --from alone is not a subject.
+  local nsub=0
+  [ -n "$pane" ] && nsub=$((nsub + 1))
+  [ -n "$sid" ] && nsub=$((nsub + 1))
+  [ "$all" -eq 1 ] && nsub=$((nsub + 1))
+  if [ "$nsub" -ne 1 ] || { [ "$all" -eq 1 ] && [ -z "$from" ]; } || { [ -n "$from" ] && [ "$all" -ne 1 ]; }; then
+    echo "cc-lr switch: name ONE subject — --pane <P>, --sid <S>, or --from <acct> --all-idle (--from alone is not a subject, and --all-idle needs --from)" >&2
+    cl_verdict NOTMOVED "$target" "no single subject named; nothing was read or written"
+    exit 3
+  fi
+  case "$target" in
+    auto) echo "cc-lr switch: REFUSED — the driver form needs an explicit --target <acct>: 'auto' would be resolved by each SUBJECT from its own view, so this driver could not confirm the move against the account it expects. Nothing was read or written." >&2
+          cl_verdict NOTMOVED auto "the driver form needs an explicit account; nothing was written"
+          exit 3 ;;
+    ''|-*|*[!A-Za-z0-9_-]*)
+          echo "cc-lr switch: REFUSED — '$target' cannot be an account name. Nothing was read or written." >&2
+          cl_verdict NOTMOVED "$target" "target is not a well-formed account name; nothing was written"
+          exit 3 ;;
+  esac
+  # THE MAP IS THE ARBITER of which names are accounts (never an enumeration here — it perishes).
+  if command -v cc_acct_dir_for_name >/dev/null 2>&1; then
+    local a
+    for a in "$target" ${from:+"$from"}; do
+      cc_acct_dir_for_name "$a" >/dev/null 2>&1 || {
+        echo "cc-lr switch: REFUSED — '$a' is not an account the account map knows. Nothing was read or written." >&2
+        cl_verdict NOTMOVED "$target" "'$a' is not a known account; nothing was written"
+        exit 3; }
+    done
+  fi
+  [ -n "$from" ] && [ "$from" = "$target" ] && {
+    echo "cc-lr switch: REFUSED — --from and --target are both '$target'; there is nothing to move. Nothing was read or written." >&2; exit 3; }
+  command -v jq >/dev/null 2>&1 || cl_die "jq is not on PATH; nothing was read or written" 2
+  [ -n "$UPGRADE_BIN" ] && [ -f "$UPGRADE_BIN" ] || cl_die "cannot reach lr-upgrade.sh (set CC_LR_UPGRADE_BIN); nothing was read or written" 2
+  [ -n "$pane" ] && sel="--pane"
+  [ -n "$sid" ] && sel="--sid"
+  if [ -n "$sel" ]; then
+    census="$(bash "$UPGRADE_BIN" --switch-census --target "$target" "$sel" "${pane:-$sid}")"; rc=$?
+  else
+    census="$(bash "$UPGRADE_BIN" --switch-census --from "$from" --target "$target")"; rc=$?
+  fi
+  case "$rc" in
+    0) ;;
+    1) echo "cc-lr switch: ${pane:+pane $pane}${sid:+sid $sid}${from:+no live session on $from} matched no live session" >&2
+       cl_verdict NOTMOVED "$target" "no live session matched; nothing was written"
+       return 1 ;;
+    *) cl_die "the switch census failed (rc $rc); nothing was written" 2 ;;
+  esac
+  if [ -n "$sid" ] && [ "$(printf '%s\n' "$census" | grep -c .)" -gt 1 ]; then
+    echo "cc-lr switch: REFUSED — sid '$sid' matched more than one live session; pass the pane id. Nothing was written. Candidates:" >&2
+    printf '%s\n' "$census" | cut -f1,2 >&2
+    return 2
+  fi
+
+  if [ "$dry" -eq 1 ]; then
+    printf '%-5s %-8s  %-18s %s\n' PANE SID 'ACCOUNT → TARGET' DISPOSITION
+    printf '%s\n' "$census" | while IFS=$'\t' read -r p s ac _ _ _ d; do
+      [ -n "$p" ] || continue
+      printf '%-5s %-8s  %-18s %s\n' "$p" "${s:0:8}" "$ac → $target" "$d"
+    done
+    printf '%s to move · DRY RUN: nothing was written or typed\n' \
+      "$(printf '%s\n' "$census" | awk -F'\t' '$7 == "move"' | grep -c .)"
+    return 0
+  fi
+
+  # ── one request per `move` row; every other row is reported NOTMOVED now ─────────────────────
+  local by p s ac d req tmp dest pending="" nq=0 nbad=0
+  by="$(cl_this_pane)"
+  mkdir -p "$REQ_DIR" 2>/dev/null || cl_die "cannot create $REQ_DIR" 2
+  while IFS=$'\t' read -r p s ac _ _ _ d; do
+    [ -n "$p" ] || continue
+    if [ "$d" != move ]; then cl_switch_line "$p" "$s" skipped "$ac" "$target" "$d"; nbad=$((nbad + 1)); continue; fi
+    req="${s:0:8}-$(date +%s)-$$"
+    tmp="$REQ_DIR/.cc-lr-switch-$s.$$.tmp"; dest="$REQ_DIR/cc-lr-switch-$s.json"
+    if jq -n --arg sid "$s" --arg pane "$p" --arg to "$target" --arg from "$ac" --arg by "${by:-?}" --arg req "$req" \
+          --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          '{kind:"switch", sid:$sid, source_pane:$pane, target:$to, from:$from, requested_by:$by, req_id:$req, ts:$ts, origin_class:"cc-lr-switch"}' \
+          > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest" 2>/dev/null; then
+      pending="$pending$s"$'\t'"$req"$'\t'"$p"$'\t'"$ac"$'\n'; nq=$((nq + 1))
+      cl_switch_line "$p" "$s" queued "$ac" "$target" "request $dest"
+    else
+      rm -f "$tmp" 2>/dev/null || true
+      cl_switch_line "$p" "$s" FAILED "$ac" "$target" "could not write the request into $REQ_DIR (nothing typed)"; nbad=$((nbad + 1))
+    fi
+  done <<EOF
+$census
+EOF
+  printf 'cc-lr: %d switch request(s) queued for the poller (requested_by %s); verdicts also arrive as mail\n' "$nq" "${by:-?}"
+  if [ "$nq" -gt 0 ]; then
+    # `kickstart` with NO `-k` — the rule every request writer here follows (see cmd_repair).
+    if command -v launchctl >/dev/null 2>&1; then
+      launchctl kickstart "gui/$(id -u)/$POLLER_LABEL" >/dev/null 2>&1 \
+        || echo "cc-lr: the kick failed — the poller's own interval will drain the queue" >&2
+    fi
+  fi
+
+  # ── wait for the drainer's verdicts, bounded; it runs detached and outlives this process ─────
+  local deadline left f rreq still fv ff ft fr
+  deadline=$(( $(date +%s) + wait_s ))
+  left="$pending"
+  while [ -n "$left" ]; do
+    still=""
+    while IFS=$'\t' read -r s req p ac; do
+      [ -n "$s" ] || continue
+      f="$STATE/results/switch-$s.json"
+      rreq="$(jq -r '.req_id // empty' "$f" 2>/dev/null || true)"
+      if [ -n "$rreq" ] && [ "$rreq" = "$req" ]; then
+        IFS=$'\t' read -r fv ff ft fr <<EOF2
+$(jq -r '[.verdict // "FAILED", .from // "-", .to // "-", .reason // "-"] | @tsv' "$f" 2>/dev/null)
+EOF2
+        cl_switch_line "$p" "$s" "$fv" "$ff" "$ft" "$fr"
+        [ "$fv" = SWITCHED ] || nbad=$((nbad + 1))
+      else
+        still="$still$s"$'\t'"$req"$'\t'"$p"$'\t'"$ac"$'\n'
+      fi
+    done <<EOF3
+$left
+EOF3
+    left="$still"
+    [ -n "$left" ] || break
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep "${CC_LR_SWITCH_POLL_S:-5}"
+  done
+  if [ -n "$left" ]; then
+    printf '%s' "$left" | while IFS=$'\t' read -r s req p ac; do
+      [ -n "$s" ] && printf '… %-5s %s  pending — queued; the drainer is still working (its verdict lands in %s and as mail)\n' "$p" "${s:0:8}" "$STATE/results/switch-$s.json"
+    done
+  fi
+  [ "$nbad" -eq 0 ] || return 1
+  return 0
+}
+
 cmd_switch() {
   local target="auto" dry=0 sid pane cfg rc
+  local drv=0 d_pane="" d_sid="" d_from="" d_all=0 d_wait="${CC_LR_SWITCH_WAIT_S:-900}"
   while [ $# -gt 0 ]; do
     case "$1" in
       --target) [ $# -ge 2 ] || { usage; exit 3; }; target="$2"; shift 2 ;;
       --dry-run) dry=1; shift ;;
+      # THE DRIVER FORM (2026-09-23): any of these names ANOTHER session, and hands the whole verb to
+      # cmd_switch_driver below. Without them nothing on this path changes: plain `cc-lr switch` is
+      # the SELF verb exactly as it was.
+      --pane) [ $# -ge 2 ] || { usage; exit 3; }; d_pane="$2"; drv=1; shift 2 ;;
+      --sid) [ $# -ge 2 ] || { usage; exit 3; }; d_sid="$2"; drv=1; shift 2 ;;
+      --from) [ $# -ge 2 ] || { usage; exit 3; }; d_from="$2"; drv=1; shift 2 ;;
+      --all-idle) d_all=1; drv=1; shift ;;
+      --wait) [ $# -ge 2 ] || { usage; exit 3; }; d_wait="$2"; drv=1; shift 2 ;;
+      --no-wait) d_wait=0; drv=1; shift ;;
       # NAMED REFUSALS, not "unknown option". Both flags are things a reader of `cc-lr recover`
       # would reasonably try here, and a bare usage dump would leave them believing the verb is
       # merely unfinished. Each says what is missing and whose call it is.
       --source-pane)
-        { echo "cc-lr switch: REFUSED — switch is SELF-only and has no --source-pane. Moving somebody else's HEALTHY session needs an idle oracle, and this subsystem has none (pane_cc_state answers 'cc' for mid-turn, idle, modal and wedged alike), so a driver cannot establish that a peer is safe to move; a session establishes it about itself trivially."
-          echo "cc-lr switch:   The driver form is its own decision packet, gated on that oracle existing — VOLUNTARY_ACCOUNT_SWITCH.md §5 DEC-2. Nothing was started."
+        # REWORDED 2026-09-23: this refusal used to say the driver form did not exist because no
+        # idle oracle did. Both are now false (DEC-2 resolved), so the refusal names the flag that
+        # IS the driver form instead of a missing capability.
+        { echo "cc-lr switch: REFUSED — --source-pane is not this verb's spelling. To move ANOTHER idle session, name it with --pane: cc-lr switch --pane <P> --target <acct> (or --from <acct> --all-idle). That form judges idleness with lr-upgrade.sh's idle oracle and asks the subject to move ITSELF through the poller — VOLUNTARY_ACCOUNT_SWITCH.md §5 DEC-2, resolved. Nothing was started."
           echo "cc-lr switch:   To move a session that is LIMIT-BLOCKED (which needs no idle oracle — it cannot take a turn), that is the other verb: cc-lr recover <ref> --source-pane <P>"
         } >&2
         cl_verdict NOTMOVED "$target" "--source-pane is not a flag of this verb; nothing was started"
@@ -511,9 +695,13 @@ cmd_switch() {
         exit 3 ;;
       -h|--help) usage; exit 0 ;;
       --*) echo "cc-lr switch: unknown option $1" >&2; usage; exit 3 ;;
-      *) echo "cc-lr switch: takes no ref — it moves THIS session, and '$1' names another one. For somebody else's limit-blocked session: cc-lr recover $1" >&2; exit 3 ;;
+      *) echo "cc-lr switch: takes no ref — it moves THIS session, and '$1' names another one. For another IDLE session: cc-lr switch --pane <P> --target <acct>; for somebody else's limit-blocked session: cc-lr recover $1" >&2; exit 3 ;;
     esac
   done
+  if [ "$drv" -eq 1 ]; then
+    cmd_switch_driver "$target" "$dry" "$d_pane" "$d_sid" "$d_from" "$d_all" "$d_wait"
+    return $?
+  fi
 
   # THE SHAPE, NOT THE ROSTER. The set of account names is a PERISHABLE fact that lives in
   # lib/account-map.generated.sh and is re-derived from accounts.json; enumerating it here would

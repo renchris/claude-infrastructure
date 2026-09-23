@@ -727,10 +727,12 @@ never_fired() { [ ! -e "$BATS_TEST_TMPDIR/handoff.argv" ]; }
   no_mutex                       # released on the success path too
 }
 
-@test "switch REFUSES --source-pane with rc 3, names the missing idle oracle, and creates no mutex" {
+@test "switch REFUSES --source-pane with rc 3, names the driver flag --pane instead, and creates no mutex" {
+  # 2026-09-23: this refusal used to say the driver form could not exist (no idle oracle). DEC-2 is
+  # resolved and the driver form is `--pane`, so the refusal now names it rather than a missing capability.
   self_run --source-pane 500
   [ "$status" -eq 3 ]
-  [[ "$output" == *"SELF-only"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"cc-lr switch --pane <P> --target <acct>"* ]] || { echo "$output"; false; }
   [[ "$output" == *"idle oracle"* ]] || { echo "$output"; false; }
   [[ "$output" == *"DEC-2"* ]] || { echo "$output"; false; }
   [[ "$output" == *"verdict=NOTMOVED"* ]] || { echo "$output"; false; }

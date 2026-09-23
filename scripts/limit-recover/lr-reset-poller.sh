@@ -679,6 +679,8 @@ nudge_in_place() { # $1=sid $2=cfg $3=registry rows ("pane<TAB>pid<TAB>acct<TAB>
 # ══ THE SCHEMA THIS LOOP READS — fixed HERE, by the CONSUMER (W5-A, 2026-09-20) ═════════════════
 #   .sid          REQUIRED. Absent/unreadable ⇒ parked as `<name>.malformed.json` and NEVER retried.
 #   .kind         ""|"recovery" (default) · "retire-husk" = a BREADCRUMB, filed, never executed
+#                 · "upgrade" / "switch" = QUEUED for the one serial drainer (lr-upgrade.sh --drain);
+#                   a switch carries .target and .source_pane (cc-lr switch --pane/--sid/--all-idle)
 #   .mode         ""|"relaunch" (default) · "prompt" (the C14 repair: re-type into a live composer)
 #   .target       account for lr-fleet --target (default "auto")          [relaunch]
 #   .source_pane  the pane to act in    [relaunch: --source-pane, optional · prompt: REQUIRED]
@@ -790,8 +792,12 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
       log "HUSK-REQUEST $_rq_sid — filed to $HUSK_REQS for lr-fleet --retire-husks; a breadcrumb is not a recovery"
       mv "$_rq" "$HUSK_REQS/$_rq_name" 2>/dev/null || true
       continue ;;
-    upgrade)
+    upgrade|switch)
       # cc-lr upgrade (2026-09-22): move an IDLE session onto the current binary + model, in place.
+      # cc-lr switch --pane/--sid/--all-idle (2026-09-23): ask an IDLE session to move ITSELF to
+      # another account. Same queue, same ONE serial drainer, for the same reasons: the drainer
+      # re-judges the idle predicate at execution time (a session that went busy is reported and
+      # never typed into), and then waits minutes for the registry flip — far longer than a tick.
       # NOT executed inside this tick: an upgrade /exits and relaunches a live pane and can take
       # minutes, and the tick lock must never be held that long (defect 1 above). The request is
       # QUEUED, and one serial drainer (lr-upgrade.sh --drain, kicked below) takes the queue one
@@ -799,7 +805,7 @@ sys.stdout.write("".join(str(d.get(k) or "")+"\0"
       # time, before anything is typed. No run claim here: the drainer takes the per-sid mutex itself.
       mkdir -p "$UPG_QUEUE" 2>/dev/null || true
       if mv "$_rq" "$UPG_QUEUE/$_rq_name" 2>/dev/null; then
-        log "UPGRADE-QUEUED $_rq_sid (pane ${_rq_pane:-?}) for $_rq_by"
+        log "$( [[ "$_rq_kind" == switch ]] && echo SWITCH-QUEUED || echo UPGRADE-QUEUED ) $_rq_sid (pane ${_rq_pane:-?}${_rqf[3]:+ -> ${_rqf[3]}}) for $_rq_by"
       else
         log "UPGRADE-SKIP $_rq_sid — could not move the request into $UPG_QUEUE (left in place)"
       fi
