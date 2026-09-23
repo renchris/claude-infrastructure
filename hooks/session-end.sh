@@ -34,6 +34,59 @@ _se_reason_log=$(printf '%s' "${_se_reason:--}" | tr -cd 'A-Za-z0-9._-' | cut -c
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Session ended sid=${_se_sid_log:--} reason=${_se_reason_log:--}" \
   >> ~/.claude/logs/sessions.log
 
+# ── an Agent-Team MEMBER's pane, when its lead cannot close it (2026-09-23) ───────────────────
+# The lead closes a member's pane when it reads the member's `shutdown_approved`, but a RESUMED lead
+# never polls its inbox (its in-memory roster holds only itself), so the member exits and its pane
+# stays at a bare shell (pane 545, 2026-09-23). The closer this detaches waits out a grace, then
+# closes the pane only if the approval is fresh and still UNREAD, the member is really gone and the
+# pane still exists (scripts/teammate-orphan-pane-close.sh).
+# WHO IS A MEMBER — by PANE IDENTITY, never by argv text: THIS pane (ITERM_SESSION_ID's tail, else
+# KITTY_WINDOW_ID) must be a member's tmuxPaneId in a team under this account's teams/, AND the
+# nearest claude ancestor must carry that member's agentId. Argv alone is forgeable — a session whose
+# brief QUOTES `--agent-id X` reads as member X (measured on the session that wrote this block).
+# Detached (own session) because this process group dies with the member; the terminal verdict is
+# resolved HERE, where ancestry is still true, and handed down as CC_TERM (teammate-auto-shutdown.sh
+# pin_term_verdict carries the measurement). Kill switch: CC_TEAMMATE_ORPHAN_CLOSE=off.
+if [ "${CC_TEAMMATE_ORPHAN_CLOSE:-on}" != off ] && command -v jq >/dev/null 2>&1; then
+  _se_pane="${ITERM_SESSION_ID:-}"; _se_pane="${_se_pane##*:}"; [ -n "$_se_pane" ] || _se_pane="${KITTY_WINDOW_ID:-}"
+  _se_cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  _se_member=""
+  if [ -n "$_se_pane" ] && [ -d "$_se_cfg/teams" ]; then
+    for _se_tc in "$_se_cfg"/teams/*/config.json; do
+      [ -f "$_se_tc" ] || continue
+      _se_member="$(SE_P="$_se_pane" jq -r '[.members[]? | select(.tmuxPaneId == env.SE_P and .name != "team-lead" and (.agentId // "") != "")] | if length == 1 then "\(.[0].agentId)\t\(.[0].name)" else empty end' "$_se_tc" 2>/dev/null)"
+      [ -n "$_se_member" ] && { _se_team="$(basename "$(dirname "$_se_tc")")"; break; }
+    done
+  fi
+  if [ -n "$_se_member" ]; then
+    _se_aid="${_se_member%%$'\t'*}"; _se_name="${_se_member#*$'\t'}"
+    _se_tm_argv="${SE_TEAMMATE_ARGV:-}"
+    if [ -z "$_se_tm_argv" ]; then
+      _se_p=$PPID _se_i=0
+      while [ "$_se_i" -lt 5 ] && [ -n "$_se_p" ] && [ "$_se_p" -gt 1 ] 2>/dev/null; do
+        _se_a="$(ps -o args= -p "$_se_p" 2>/dev/null || true)"
+        case "${_se_a%% *}" in */claude|*/claude.exe|claude|claude.exe) _se_tm_argv="$_se_a"; break ;; esac
+        _se_p="$(ps -o ppid= -p "$_se_p" 2>/dev/null | tr -d ' ')"; _se_i=$((_se_i + 1))
+      done
+    fi
+    _se_closer="${SE_TOPC_BIN:-$HOME/.claude/scripts/teammate-orphan-pane-close.sh}"
+    _se_detach="${SE_DETACH_LIB:-$HOME/.claude/scripts/lib/detach.sh}"
+    case " $_se_tm_argv " in
+      *" --agent-id $_se_aid "*)
+        if [ -f "$_se_closer" ] && [ -f "$_se_detach" ]; then
+          _se_term="${CC_TERM:-}"
+          if [ -z "$_se_term" ] && [ -x "${CC_IN_KITTY_BIN:-$HOME/.claude/bin/cc-in-kitty}" ]; then
+            _se_rc=0; "${CC_IN_KITTY_BIN:-$HOME/.claude/bin/cc-in-kitty}" >/dev/null 2>&1 || _se_rc=$?
+            case "$_se_rc" in 0) _se_term=kitty ;; 1) _se_term=iterm2 ;; esac
+          fi
+          # shellcheck disable=SC1090  # runtime-resolved library
+          ( . "$_se_detach" && detach "${SE_TOPC_LOG:-/dev/null}" env ${_se_term:+CC_TERM="$_se_term"} \
+              bash "$_se_closer" --cfg "$_se_cfg" --team "$_se_team" --name "$_se_name" --agent-id "$_se_aid" ) >/dev/null 2>&1 || true
+        fi ;;
+    esac
+  fi
+fi
+
 # ── clean-exit watchdog + checkpoint cleanup ───────────────────────────────────
 # Remove THIS session's watchdog pid/id + teammate-checkpoint counter on a clean
 # SessionEnd so that:
