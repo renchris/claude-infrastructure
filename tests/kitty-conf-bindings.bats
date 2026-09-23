@@ -485,6 +485,15 @@ band_disarmed()  { grep -q '^# DISARMED-map cmd+' "$CONF"; }
 # seven candidates and it is what shipped. What is pinned now is the proportion, in both
 # directions — the label must OUTRANK the body and must NOT touch its band — because those are the
 # two ways this has actually been wrong, three rounds in one direction and one in the other.
+# The two terms an EMFILE is a statement about, printed on a red so the next Errno 24 window names
+# its cause instead of inviting a guess: the SOFT nofile limit (launchd jobs inherit 256, session
+# shells 1048576) and the fds this process already holds (bats 1.13.0 hands a `run` child 0-5; the
+# glob reads this shell's own table, which is the one a child inherits, +1 for the directory it opens).
+fd_budget() {
+  local -a fdl=(/dev/fd/*)
+  echo "fd budget: nofile=$(ulimit -Sn 2>/dev/null || echo '?') fds=${#fdl[@]}"
+}
+
 pil_python() {
   for c in /usr/local/bin/python3 /opt/homebrew/bin/python3 /usr/bin/python3; do
     [ -x "$c" ] || continue
@@ -509,7 +518,11 @@ pil_python() {
   if [ "$status" -eq 3 ] && echo "$output" | grep -q 'VERDICT UNAVAILABLE'; then
     skip "no font face resolvable in this environment — measure refused, so there is no verdict to judge"
   fi
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # THE FD BUDGET RIDES THE RED (backlog 2e8228525c94). The 5/14 raw Errno 24 windows were filed as
+  # "the runner's fd budget" with no reading of either term — the soft limit, or what this process
+  # holds. Both are read HERE, in the test's own process, because that is the fd table `run`'s child
+  # inherits; the stamp's env carries the same pair at corpus start. See fd_budget().
+  [ "$status" -eq 0 ] || { echo "$output"; fd_budget; false; }
   echo "$output" | grep -q 'VERDICT BREATHING' || { echo "$output"; false; }
   # AIR IN PIXELS, asserted here and not only inside the script that computes it. This was
   # a 0.45-0.68 RATIO for one commit, and a ratio cannot express the choice that is actually
@@ -551,7 +564,7 @@ pil_python() {
   if [ "$status" -eq 3 ] && echo "$output" | grep -q 'VERDICT UNAVAILABLE'; then
     skip "no font face resolvable in this environment — measure refused, so there is no verdict to judge"
   fi
-  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$status" -eq 0 ] || { echo "$output"; fd_budget; false; }
   # measure prints both numbers; the script itself asserts the whole-cell property, and the
   # regex here pins that it is still REPORTING both rather than collapsing back to one.
   echo "$output" | grep -qE 'band [0-9]+ px in a [0-9]+ px placement \([12] whole cell\(s\)\)' \
