@@ -130,6 +130,45 @@ if [ -n "$ID_PANE" ] || [ -n "$PAY_SID" ]; then
     unset _idmark
 fi
 
+# --- 📬 UNREAD BADGE (cross-session mail v3 D10, cc-backlog 02ba4e52389a) ---------------------
+# Mail delivered to this session renders to the MODEL (additionalContext) and, since D11, as a
+# one-shot systemMessage at the drain. Neither says "mail is WAITING": between arrival and the next
+# drain boundary the human had no ambient signal, and an idle session is exactly where mail waits.
+# This counts lines not yet surfaced (lines − .seen, .seen past EOF ⇒ 0 — hooks/lib/mailbox-pending.sh
+# mailbox_seen's clamp) in the two boxes mailbox-drain.sh reads: the session-keyed box and the pane-keyed
+# one it covers. Pane key = the drain's own spelling (CC_PANE_ID, else ITERM_SESSION_ID's tail), NOT
+# the chip's KITTY_WINDOW_ID, so the badge addresses the box the drain will actually empty.
+# COST: zero forks when there is no box; one `grep -c` per EXISTING box (≤2); cursors are read with
+# the `read` builtin. Kill switch CC_STATUSLINE_MAIL=0. Caveat inherited from the statusline itself:
+# it re-renders on UI events, so the count is as fresh as the last render, never a live poll.
+MAIL_SEG=""
+if [ "${CC_STATUSLINE_MAIL:-1}" != 0 ]; then
+    _mdir="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+    _mpane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; _mpane="${_mpane##*:}"
+    _mn=0
+    for _mk in "$PAY_SID" "$_mpane"; do
+        case "$_mk" in ''|.*|*[!A-Za-z0-9._-]*) continue ;; esac
+        [ -f "$_mdir/$_mk.md" ] || continue
+        _ml="$(grep -c '' "$_mdir/$_mk.md" 2>/dev/null)"; _ml="${_ml//[!0-9]/}"
+        _ms=""; [ -f "$_mdir/$_mk.seen" ] && { read -r _ms < "$_mdir/$_mk.seen" || true; }
+        _ms="${_ms//[!0-9]/}"
+        _ml=$((10#${_ml:-0})); _ms=$((10#${_ms:-0}))
+        [ "$_ms" -gt "$_ml" ] && _ms=0
+        _mn=$((_mn + _ml - _ms))
+        [ "$_mpane" = "$PAY_SID" ] && break      # one box, never counted twice
+    done
+    if [ "$_mn" -gt 0 ]; then
+        _mmark='mail:'
+        case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+            *UTF-8*|*utf-8*|*UTF8*|*utf8*) _mmark='📬' ;;
+        esac
+        # Number first and at full brightness (TUI-visibility: never dim the one field that asks
+        # for action); the glyph is the only decoration.
+        MAIL_SEG="${_mmark}${_mn} "
+    fi
+    unset _mdir _mpane _mn _mk _ml _ms _mmark
+fi
+
 # --- Telemetry export (session self-knowledge; SESSION_AUTONOMY_PLAN 2026-07-14) ----
 # Persist the payload's context/identity fields so the SESSION ITSELF (and peers /
 # supervisors / the orchestrator) can read live context % programmatically — /context
@@ -556,4 +595,4 @@ if [ -n "$INPUT" ] && command -v jq &>/dev/null; then
     fi
 fi
 
-echo -e "${GLYPH_PREFIX}${ID_SEG}${PCT_SEG}${OUTPUT}${RESET}"
+echo -e "${GLYPH_PREFIX}${ID_SEG}${MAIL_SEG}${PCT_SEG}${OUTPUT}${RESET}"
