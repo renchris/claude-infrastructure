@@ -81,6 +81,42 @@ mutant() { # <sed-expr> → a broken copy of the migration
   [ -z "$(pbread)" ]
 }
 
+packet() { # <id> <status> [evidence] — any packet, so a supersession chain can be built
+  printf '{"id":"%s","class":"C","status":"%s","evidence":"%s"}\n' "$1" "$2" "${3:-}" > "$CC_DECISIONS_DIR/$1.json"
+}
+
+@test "a SUPERSEDED packet whose successor is OPEN REFUSES — a consolidation closure is not a ruling" {
+  # 2026-09-22: a consolidation closed 4194644aea26 with `cc-decide action --evidence "SUPERSEDED by
+  # <new> …"`, and the pre-fix gate read that `actioned` as a ruling nobody made.
+  packet 4194644aea26 actioned "SUPERSEDED by 68d9af489875 (consolidation-2026-09-22:5688712d): refreshed"
+  packet 68d9af489875 open
+  run bash "$MIG"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"68d9af489875 is still OPEN"* ]] || false
+  [ -z "$(pbread)" ]
+  [ ! -f "$LCLOG" ]
+}
+
+@test "a MOOT or MERGED consolidation closure REFUSES — closed is not ruled" {
+  for ev in "MOOT (verified consolidation): premise gone" "MERGED into 0123456789ab (consolidation): dup"; do
+    packet 4194644aea26 actioned "$ev"
+    run bash "$MIG"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"closed-without-ruling"* ]] || false
+  done
+  [ -z "$(pbread)" ]
+  [ ! -f "$LCLOG" ]
+}
+
+@test "a SUPERSEDED packet whose successor is ACTIONED grants — the ruling is read from the live packet" {
+  packet 4194644aea26 actioned "SUPERSEDED by 68d9af489875 (consolidation-2026-09-22:5688712d): refreshed"
+  packet 68d9af489875 actioned "operator ruled yes"
+  run bash "$MIG"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"packet 68d9af489875 is ruled"* ]] || false
+  [ "$(pbread)" = 1 ]
+}
+
 @test "a MISSING packet REFUSES — no record of the grant means the grant was not made" {
   rm -f "$PACKET"
   run bash "$MIG"

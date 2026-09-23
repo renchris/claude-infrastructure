@@ -79,26 +79,47 @@ if [ -f "$PACKET" ]; then
     printf '0031: REFUSED — jq is required to read decision packet 4194644aea26, and an unverifiable ruling is not a ruling.\n' >&2
     exit 1
   fi
+  RID=4194644aea26
   status="$(jq -r '.status // "unreadable"' "$PACKET" 2>/dev/null || printf 'unreadable')"
+  # `actioned` is NOT always a ruling. A consolidation closes a stale packet with `cc-decide action
+  # --evidence "SUPERSEDED by <new> …"` (or MOOT / MERGED into / NOT YOURS) — measured 2026-09-22:
+  # the consolidation in docs/research/decision-consolidation-2026-09-22.md closed THIS packet that
+  # way, and this gate then read it as "ruled" with no ruling ever made. Follow a supersession to the
+  # packet that carries the live question; refuse every other consolidation closure. Bounded hops.
+  hops=0
+  while [ "$status" = actioned ] && [ "$hops" -lt 5 ]; do
+    ev="$(jq -r '.evidence // ""' "$PACKET" 2>/dev/null || printf '')"
+    case "$ev" in
+      "SUPERSEDED by "*)
+        next="$(printf '%s' "$ev" | sed -n 's/^SUPERSEDED by \([0-9a-f]\{12\}\).*/\1/p')"
+        if [ -z "$next" ] || [ ! -f "$DECISIONS/$next.json" ]; then status="superseded-unresolvable"; break; fi
+        RID="$next"; PACKET="$DECISIONS/$next.json"
+        status="$(jq -r '.status // "unreadable"' "$PACKET" 2>/dev/null || printf 'unreadable')"
+        hops=$((hops + 1)) ;;
+      "MOOT"*|"MERGED into"*|"NOT YOURS"*) status="closed-without-ruling"; break ;;
+      *) break ;;
+    esac
+  done
+  [ "$status" = actioned ] && [ "$hops" -ge 5 ] && status="supersession-chain-too-long"
   case "$status" in
-    actioned) printf '0031: precondition OK — packet 4194644aea26 is ruled (status=actioned)\n' ;;
+    actioned) printf '0031: precondition OK — packet %s is ruled (status=actioned)\n' "$RID" ;;
     open)
-      printf '0031: REFUSED — decision packet 4194644aea26 is still OPEN.\n' >&2
+      printf '0031: REFUSED — decision packet %s is still OPEN.\n' "$RID" >&2
       printf '      It is class C (human-only, no default): it asks whether the unattended deploy\n' >&2
       printf '      job may restart a background daemon by itself. Running this now would answer it\n' >&2
       printf '      by acting, which is the one thing the class forbids.\n' >&2
       printf '      Read it:  cc-decide list --open\n' >&2
-      printf '      Rule it:  cc-decide action 4194644aea26 --evidence "<why>"   (then re-run this)\n' >&2
-      printf '      Kill it:  cc-decide veto   4194644aea26\n' >&2
+      printf '      Rule it:  cc-decide action %s --evidence "<why>"   (then re-run this)\n' "$RID" >&2
+      printf '      Kill it:  cc-decide veto   %s\n' "$RID" >&2
       printf '      NOTE: the packet overstates its population — see this file header. Only\n' >&2
       printf '      compressor-sentinel and caffeinate-floor are affected; lead-supervisor already\n' >&2
       printf '      self-restarts (lead-supervisor.sh:1329).\n' >&2
       exit 1 ;;
     vetoed)
-      printf '0031: REFUSED — packet 4194644aea26 was VETOED. The operator declined this grant; the flag stays off.\n' >&2
+      printf '0031: REFUSED — packet %s was VETOED. The operator declined this grant; the flag stays off.\n' "$RID" >&2
       exit 1 ;;
     *)
-      printf '0031: REFUSED — packet 4194644aea26 status is "%s", which is not a ruling this can act on.\n' "$status" >&2
+      printf '0031: REFUSED — packet %s status is "%s", which is not a ruling this can act on.\n' "$RID" "$status" >&2
       exit 1 ;;
   esac
 else
