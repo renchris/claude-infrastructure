@@ -77,20 +77,28 @@ case "${1:-}" in
     sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
   "")
     # Newest activity first; only inboxes that have ever carried mail.
-    # newest-first without parsing `ls` (SC2012): stat emits an mtime key we sort on
-    find "$MBOX" -maxdepth 1 -name '*.md' -exec stat -f '%m %N' {} + 2>/dev/null |
+    # newest-first without parsing `ls` (SC2012): stat emits an mtime key we sort on.
+    # GNU-first, as hooks/lib/mailbox-pending.sh _mbx_mtime explains: GNU `stat -f` SUCCEEDS as
+    # --file-system (so a BSD-first chain never falls back on Linux), while BSD `stat -c` errors.
+    find "$MBOX" -maxdepth 1 -name '*.md' \
+      -exec sh -c 'stat -c "%Y %n" "$@" 2>/dev/null || stat -f "%m %N" "$@"' _ {} + 2>/dev/null |
       sort -rn | cut -d' ' -f2- | while read -r f; do
       [ "$(_count "$f")" -gt 0 ] 2>/dev/null || continue
       _thread "$(basename "$f" .md)"; echo
     done ;;
   *)
-    # Accept a full uuid, a short prefix, or a friendly name.
+    # Accept a full uuid, a short prefix, or a friendly name — case-insensitively.
+    # `nocasematch`, NOT `${u^^}`: this file's shebang is #!/bin/bash, which on macOS is bash 3.2,
+    # where `^^` is a "bad substitution" — every lookup by argument died before matching anything.
+    # nocasematch exists since bash 3.1 and applies to `case`, so it is the 3.2-safe spelling.
     key="${1##*-}"; hit=""
+    shopt -s nocasematch
     for f in "$MBOX"/*.md; do
       [ -e "$f" ] || continue
       u=$(basename "$f" .md)
-      case "${u^^}" in "${1^^}"*|*"${key^^}"*) hit="$u"; break ;; esac
+      case "$u" in "$1"*|*"$key"*) hit="$u"; break ;; esac
     done
+    shopt -u nocasematch
     [ -n "$hit" ] || { echo "no inbox matching '$1'" >&2; exit 1; }
     _thread "$hit" ;;
 esac
