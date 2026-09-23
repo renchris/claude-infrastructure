@@ -146,7 +146,7 @@ SHIM
   # cc-url-open's own state, all under the fixture $HOME except the cache, whose default is a bare
   # /tmp path and would otherwise be shared with the live handler.
   export CC_URL_OPEN_CACHE="$BATS_TEST_TMPDIR/ctx-cache.json"
-  export CC_URL_OPEN_NO_CDP=1
+  export CC_URL_OPEN_NO_CDP=1 CC_URL_OPEN_NO_APPLESCRIPT=1
   URL="https://claude.ai/code/artifact/abc123"
 
   write_kconf "listen_on unix:$SOCKDIR/kitty-{kitty_pid}"
