@@ -56,7 +56,7 @@ header() { sed -n "s/^# *migration-$1: *//p" "$M" | head -1; }
   n1="$(find "$HOME" -name 'settings.json.bak-0035-*' | wc -l | tr -d ' ')"
   run bash "$M"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"already"* ]]
+  [[ "$output" == *"already"* ]] || false
   n2="$(find "$HOME" -name 'settings.json.bak-0035-*' | wc -l | tr -d ' ')"
   [ "$n1" = "$n2" ] || { echo "backups $n1 -> $n2"; false; }
 }
@@ -73,7 +73,9 @@ header() { sed -n "s/^# *migration-$1: *//p" "$M" | head -1; }
 
 @test "6: the staged value is inside the parser's range and covers the default research wave" {
   val="$(sed -n 's/^VAL="\([0-9]*\)"$/\1/p' "$M")"
-  [ -n "$val" ] && [ "$val" -ge 1 ] && [ "$val" -le 256 ] || { echo "VAL='$val' outside 1..256"; false; }
+  [ -n "$val" ] || { echo "no VAL= line found in $M"; false; }
+  [ "$val" -ge 1 ] || { echo "VAL=$val is below the parser's minimum 1"; false; }
+  [ "$val" -le 256 ] || { echo "VAL=$val is above the parser's maximum 256"; false; }
   # The research-subagents skill's default N; the whole point is that a default wave is one round.
   [ "$val" -ge 10 ] || { echo "VAL=$val is below the default wave N=10"; false; }
 }
