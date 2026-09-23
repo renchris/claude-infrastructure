@@ -35,13 +35,14 @@ cites it by absolute path. If the consolidation programme later opens a slot, mo
 | **W1 — the 6 confirmed** | ✅ **DONE, all six landed on reso trunk** | #1 `88c951bf9` · #2 `1e07c9035` · #3 `6e5465a4e` · #4 `04157d23f` · #5 `4a6457901` · #6 `c8999cbce` |
 | **W2/W3 — the 20 leads** | ✅ **all 20 adjudicated to verdicts** — 13 CONFIRMED · 5 REJECTED · 2 split. Fixes NOT driven, deliberately (below) | `docs/research/cf-audit-reso-lead-verdicts-2026-09-22.md` |
 | **W4a-7a — de-action the non-auth published modules** | ✅ **DONE, landed** — 6 endpoints removed + the exact-path ratchet | reso `ae0edbf6d` |
-| **W4 — the 2 structural facts** | ⛔ not started; W4b is operator-gated (migration + backfill on a live fleet) | — |
+| **W4 — the 2 structural facts** | **W4a ✅ DONE** — every W4a unit landed in W6 (below); the action boundary is validated and de-actioned: **92 → 65 registered Server Actions, 28 → 3 outside `src/app/actions/`** (fresh build census at reso `f12e70559`, positive control ✓). **W4b ⛔ operator-gated** — decision `fa0a110c1592` | § Wave 6 |
 | **W5 — the 19 uncovered** | ✅ **DONE, landed** | `fa6539057`, `docs/research/cf-audit-reso-uncovered-surfaces-2026-09-22.md` |
-| **W6 — release the held units** | ▶ **IN FLIGHT** (lead succession 2, 2026-09-22) — 6 of 8 fired as dispatched sessions: W4a-6 (pane 592) · W4a-1 (593) · W6-sync (595) · W4a-7b (599) · W4a-5 (607) · W4a-3 (608). **W6-sync leads 15 + 17 LANDED** reso `db2d2c0a1`. Unfired: W4a-4 (box at its mid-turn ceiling) · W4a-2 (waits on W4a-7b's land — it builds on W4a-7b's new `src/app/actions/auth/passkeyCeremonyActions.ts`). Briefs: `/tmp/fire-sec-w6-<unit>.txt` | § Wave 6 |
+| **W6 — release the held units** | ✅ **DONE — all 8 units landed on reso trunk, each fix with a regression test red on its parent** (2026-09-23). W6-sync `c38d6b230` `db2d2c0a1` `43de03d9a` `52dee0cfe` `754a4693d` · W4a-1 `d05d243e2` `a9ef80482` `22a2e323c` `490aa1b4d` · W4a-6 `1b5c9f2f6` `217be7a6c` `b86fcd583` `25849ec6f` `c5655be5b` · W4a-5 `eabed52dc` `8430c32e6` `0b1bb2f41` · W4a-3 `c11b6fe20` `ebf055350` `b3d937d09` · W4a-4 `354e4b0d3` `ba51f76d6` `8a7a92a12` · W4a-7b `57df1cc63` `88d570828` · W4a-2 `3a94da90b`. **Final verification on a clean worktree at reso `f12e70559`:** 78 touched paths all present by `git ls-tree`; `CI=true VITEST_TIMEOUT_FACTOR=4 pnpm test:unit` 419 files / 5275 passed / 0 failed; `pnpm build` rc 0; census rc 0. Found and fixed beyond the briefs: an open redirect in `redirectToSubdomain` (W4a-3). No `/deploy`, no schema migration, guest_consent untouched | § Wave 6 |
 | **W6 lead reads** | ✅ both done and landed `6e10e8d72`: **venue scoping is ON in live tenant `key`** (leads 5, 14, 15 live, not latent; lead 11 stays REJECTED on one leg) · **the deployed AWS key is `guestlistAdmin` with `AdministratorAccess`** (lead 7 impact = worst case) | verdict doc § MEASURED 2026-09-22 |
 | **W6 operator filings** | ✅ lead 9 rotation → decision `bf9093e859b8` · W4b re-key → decision `fa0a110c1592` · AWS key re-scope → operator step `436d0883bd2d` | `cc-decide list --open` · `cc-backlog list --blocked` |
 | **W6 grown scope** | W4a-6 owns `lib/auth/platform-email.ts`, `.env.example`, `scripts/setup/bootstrap-region.pure.ts` (its `isPlatformEmail` is now an EXACT allowlist, so `PLATFORM_OPERATOR_EMAILS` must be set before the next `/deploy` — filed on land) · W4a-5 owns `lib/operational-detail.ts` · W4a-7b owns 3 import re-points (`formActions.ts`, `lib/useConditionalPasskeyLogin.ts`, `lib/runPasskeyUpgrade.ts`) | peer mail 2026-09-22 |
-| **ship-land.sh:890 ref-lock fix** | committed on lead branch `sec-w6-lead` (reso `8311a7d5e`, red on parent, 29/29 green) — **lands after the last W6 unit**, per § What wave 1 taught | — |
+| **ship-land.sh:890 ref-lock fix** | ✅ **landed** reso `c8eed1e25` (red on parent, 29/29 green) — it bit twice more during W6, which is its own receipt | — |
+| **W6 lead follow-ons** | ✅ `qa-nightly-probe.test.ts` bound fixed ports and rejected concurrent lands → port 0, reso `0c0b1b37c` · the watermark-race 503 (lead 12) was counted by the push route's permanent-failure canary → transient, reso `f12e70559` · operator step `48717fa6f3ed`: set `PLATFORM_OPERATOR_EMAILS` before the next `/deploy` · operator's landing-congestion question → dedicated research session (pane 621) writing `docs/research/reso-landing-architecture-2026-09-22.md` | — |
 | **W5 follow-on** | ✅ one confirmed hole from W5's own candidate set CLOSED on trunk: `setGuestSession` is no longer a registered Server Action | reso `sec-w3a-tenantctx` |
 
 **The plan's own Phase 0 was overtaken and that is recorded rather than hidden.** W1 ran as four
@@ -304,7 +305,7 @@ data backfill on a live fleet — G2, operator-gated, and it lands only after W1
 
 ---
 
-## Wave 6 — THE RULING IS GIVEN: release every held unit (added 2026-09-22) — NEXT
+## Wave 6 — THE RULING IS GIVEN: release every held unit (added 2026-09-22) — DONE (§ Status)
 
 **Operator directive, 2026-09-22, verbatim: "How about all the other waves until exhaustive
 completion?" then "drive to completion please".** That is the escalation reso's calibration note 5
