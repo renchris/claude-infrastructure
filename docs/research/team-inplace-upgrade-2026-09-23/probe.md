@@ -33,3 +33,16 @@ only in-process teammates are re-added on resume (`resumeInProcessTeammate` → 
   members unchanged; no hold dir left; mate process alive.
 - Upgraded lead SendMessage `ping-e2e` → mate replied `PONG ping-e2e`, which landed `read:false` in the
   lead's inbox (the vendor limit, as predicted).
+
+## Aftermath on the live pair — the pane that did not close (2026-09-23 08:20Z)
+After its upgrade, lead 513 finished its work and sent `refute-reversals` a `shutdown_request`; the
+member approved (`shutdown_approved {paneId:"545", backendType:"iterm2"}`, 08:20:37Z) and exited rc 0,
+and pane 545 stayed at a bare shell. The vendor closes a member's pane from the LEAD's InboxPoller,
+and only when the approval's paneId matches the lead's in-memory roster — which a resumed lead holds
+lead-only, so its poller never runs and the approval stays unread. Probe 2 showed the same symptom
+(pane 618 still listed after probe-mate2's approved shutdown) and it was missed at the time. Fix: the
+member's SessionEnd detaches `scripts/teammate-orphan-pane-close.sh`
+(`tests/teammate-orphan-pane-close.bats`). Two identity traps were hit building it — both the member
+census and the member test first read argv TEXT, and this session's own brief quoted
+`--agent-id refute-reversals@…`, so it read as the live member; both now key on identity (registry pid
++ vendor spawn form; pane id in the team file).

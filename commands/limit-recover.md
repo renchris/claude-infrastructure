@@ -665,7 +665,13 @@ it leader-only (after which SendMessage to a prior member fails). A refusal befo
 hold at once. **Vendor limit, not cured:** a resumed lead's in-memory roster holds only itself and its
 inbox poller runs only when it holds someone else, so replies from pane members land UNREAD in
 `teams/<team>/inboxes/team-lead.json`; sending still works, and the relaunch prompt says where to read
-them. Held states: `teammate-no-team` · `teammate-shutdown-pending` · `teammate-unidentified` ·
+them. **Its consequence, now cured:** the same deaf roster means a resumed lead cannot CLOSE a member's
+pane either (the vendor kills it only for a paneId in that roster), so a member that approves a
+`shutdown_request` exits and leaves its pane at a bare shell (pane 545, 2026-09-23). The member's own
+SessionEnd (`hooks/session-end.sh`) now detaches `scripts/teammate-orphan-pane-close.sh`, which after a
+20 s grace closes the pane only if the member's approval is fresh and still UNREAD, the member is
+gone by identity (the pane's registered pid, the vendor spawn argv — never argv text), and the pane
+is still listed. Kill switch `CC_TEAMMATE_ORPHAN_CLOSE=off`. Held states: `teammate-no-team` · `teammate-shutdown-pending` · `teammate-unidentified` ·
 `lead-awaits-teammates` · `lead-no-team-file`. `LRU_TEAM_PROC=off` restores the old blanket exclusions.
 If a team relaunch's `/exit` raises the background-work dialog, the watcher CANCELS it (Esc = Stay;
 `CC_RECYCLE_BGWORK_ANSWER=cancel`) and types nothing: "Move to background" would hand the
