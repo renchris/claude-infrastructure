@@ -142,10 +142,21 @@ lru_at_rest() { # $1=transcript → 0 at rest · 1 in flight · 2 unreadable
   local tx="${1:-}" last
   [ -n "$tx" ] && [ -f "$tx" ] && command -v jq >/dev/null 2>&1 || return 2
   last="$(tail -n 400 "$tx" 2>/dev/null \
-    | jq -rc 'select((.type=="assistant" or .type=="user") and ((.isSidechain // false)|not))
-              | "\(.type) \(.message.stop_reason // "-")"' 2>/dev/null | tail -n 1)"
+    | jq -rc --argjson win "${LRU_STALE_NOTIF_S:-600}" 'select((.type=="assistant" or .type=="user") and ((.isSidechain // false)|not))
+              | "\(.type) \(.message.stop_reason // "-")\(
+                  if .type == "user" and ((.message.content | type) == "string")
+                     and (.message.content | startswith("<task-notification>"))
+                     and ((now - ((.timestamp // "") | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch now))) > $win)
+                  then " stale-notification" else "" end)"' 2>/dev/null | tail -n 1)"
   [ -n "$last" ] || return 2
   [ "$last" = "assistant end_turn" ] && return 0
+  # A <task-notification> the harness appended with no turn after it, older than the window, is not a
+  # turn in flight: a real turn writes its first assistant record within seconds. Measured 2026-09-23
+  # on pane 480 — resumed onto 2.1.280 at 00:18Z with a lost background task, the harness appended
+  # "Background shell command didn't finish before the previous session ended" and the session sat
+  # idle under it for hours, read as mid-turn by every at-rest check. The same rule lives in
+  # handoff-fire.sh's hf_transcript_at_rest — keep the two in step.
+  [ "$last" = "user - stale-notification" ] && return 0
   return 1
 }
 
