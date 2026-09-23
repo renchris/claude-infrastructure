@@ -362,6 +362,9 @@ NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # is read here, BEFORE it: the first claim's timestamp and the chain of stores already visited.
 LRT_TS_FIRST=""
 LRT_CHAIN=""
+# Present ONLY when custody was rebuilt from tombstones (the lock-less arm below), so every record
+# of an ordinary move stays byte-identical, and a reader can tell a proven chain from a lock-carried one.
+LRT_CUSTODY_JSON=""
 if [[ $SECOND_HOP -eq 1 ]]; then
   LRT_TS_FIRST="$(lrt_lock_str ts_first)"
   [[ -n "$LRT_TS_FIRST" ]] || LRT_TS_FIRST="$(lrt_lock_str ts)"
@@ -372,6 +375,80 @@ if [[ $SECOND_HOP -eq 1 ]]; then
     LRT_PREV_FROM="$(lrt_lock_str from)"
     [[ -z "$LRT_PREV_FROM" ]] || LRT_CHAIN+="$LRT_PREV_FROM"$'\n'
     LRT_CHAIN+="$LRT_OWNER"$'\n'
+  fi
+elif [[ ! -e "$LOCK" ]]; then
+  # ══ A LOCK-LESS HOP (cc-backlog ac7bdd4b2f9d, VOLUNTARY_ACCOUNT_SWITCH §9) ═════════════════════
+  # Nothing reaps a lock on purpose, but locks are measured TRANSIENT on this box (lr-lib.sh:609-612:
+  # one fleet-wide against three tombstoned husks), so the second hop usually arrives with NO lock.
+  # SECOND_HOP is then 0 and the branch above used to start custody at `--from`: A→B, lock gone,
+  # B→C wrote `chain=[B,C]` and the A hop was erased — every bundle cut at A then fails C3.
+  #
+  # The TOMBSTONE is the durable record of each earlier hop: `<store>/projects/*/<sid>.HANDOFF.json`
+  # says `handed_off_to`. Walk it BACKWARDS from --from, one predecessor at a time, and prepend.
+  # Candidate stores are the fleet's config dirs (LR_CONFIG_DIRS, else lr_config_dirs' defaults).
+  #
+  # NEVER INVENT: zero predecessors is an origin, and MORE THAN ONE is ambiguous — the walk stops
+  # there and keeps only what it proved. Stores are compared by `projects/` realpath, so the
+  # `.claude`/`.claude-next` mirror is one store, and a store is visited at most once (a session
+  # that returns to a store it left stops the walk rather than looping). `ts_first` is the ORIGIN
+  # tombstone's `ts` — the time of the first claim, which is what the field means.
+  LRT_CHAIN="$FROM"$'\n'
+  LRT_TOMB_WALK="$(python3 - "$SID" "$FROM" "${LR_CONFIG_DIRS:-$HOME/.claude:$HOME/.claude-next:$HOME/.claude-secondary:$HOME/.claude-tertiary:$HOME/.claude-quaternary}" 2>/dev/null <<'PY' || true
+import glob, json, os, sys
+sid, frm, stores = sys.argv[1], sys.argv[2], [s for s in sys.argv[3].split(":") if s]
+key = lambda s: os.path.realpath(os.path.join(s, "projects"))
+# store key → (spelling, [(to_key, ts), …]); first spelling wins, as in lr_config_dirs
+tombs = {}
+for s in stores:
+    s = os.path.expanduser(s)
+    if not os.path.isdir(os.path.join(s, "projects")):
+        continue
+    k = key(s)
+    if k in tombs:
+        continue
+    rows = []
+    for t in glob.glob(os.path.join(s, "projects", "*", sid + ".HANDOFF.json")):
+        try:
+            with open(t) as fh:
+                d = json.load(fh)
+        except Exception:
+            continue
+        to = d.get("handed_off_to") if isinstance(d, dict) else None
+        if isinstance(to, str) and to:
+            rows.append((key(to), d.get("ts") if isinstance(d.get("ts"), str) else ""))
+    tombs[k] = (s, rows)
+cur = key(frm)
+seen = {cur}
+out = []
+while True:
+    preds = {}
+    for k, (s, rows) in tombs.items():
+        if k in seen:
+            continue
+        for to_k, ts in rows:
+            if to_k == cur:
+                preds[k] = (s, ts)
+    if len(preds) != 1:
+        break
+    (k, (s, ts)), = preds.items()
+    out.insert(0, (s, ts))
+    seen.add(k)
+    cur = k
+for s, ts in out:
+    print("%s\t%s" % (s, ts))
+PY
+)"
+  if [[ -n "$LRT_TOMB_WALK" ]]; then
+    LRT_PRED=""
+    while IFS=$'\t' read -r _s _ts; do
+      [[ -n "$_s" ]] || continue
+      [[ -n "$LRT_TS_FIRST" || -z "$_ts" ]] || LRT_TS_FIRST="$_ts"
+      LRT_PRED+="$_s"$'\n'
+    done <<< "$LRT_TOMB_WALK"
+    if [[ -n "$LRT_PRED" ]]; then
+      LRT_CHAIN="$LRT_PRED$LRT_CHAIN"
+      LRT_CUSTODY_JSON=",\"custody_from\":\"tombstones\""
+    fi
   fi
 else
   LRT_CHAIN="$FROM"$'\n'
@@ -386,9 +463,9 @@ while IFS= read -r _line; do
   LRT_HOPS=$((LRT_HOPS+1))
 done <<< "$LRT_CHAIN"
 LRT_HOPS=$((LRT_HOPS-1))
-printf '{"sid":"%s","from":"%s","to":"%s","ts":"%s","pid":%d,"host":"%s","owner":"%s","ts_first":"%s","chain":[%s]%s}\n' \
+printf '{"sid":"%s","from":"%s","to":"%s","ts":"%s","pid":%d,"host":"%s","owner":"%s","ts_first":"%s","chain":[%s]%s%s}\n' \
   "$SID" "$FROM" "$TO" "$NOW" "$$" "$(hostname -s)" "$TO" "$LRT_TS_FIRST" "$LRT_CHAIN_JSON" \
-  "$LRT_CAUSE_JSON" > "$LOCK"
+  "$LRT_CUSTODY_JSON" "$LRT_CAUSE_JSON" > "$LOCK"
 
 mkdir -p "$DST_DIR"
 cp -p "$SRC" "$DST"
@@ -442,7 +519,7 @@ else
   echo "lr-transplant: the source transcript was NOT retired — nothing has asserted that $SID has stopped writing, and this driver is not that session. The copy, the lock and the tombstone are in place; re-run with --phase confirm once the source is quiesced (that call retires it and is safe to repeat)." >&2
 fi
 
-printf '{"ok":true,"sid":"%s","slug":"%s","target_transcript":"%s","sha256":"%s","session_dir_copied":%s,"tasks_copied":%s,"source_retired":%s,"source_retired_reason":"%s","lock":"%s","tombstone":"%s","hop":%d,"ts_first":"%s","chain":[%s]%s%s}\n' \
+printf '{"ok":true,"sid":"%s","slug":"%s","target_transcript":"%s","sha256":"%s","session_dir_copied":%s,"tasks_copied":%s,"source_retired":%s,"source_retired_reason":"%s","lock":"%s","tombstone":"%s","hop":%d,"ts_first":"%s","chain":[%s]%s%s%s}\n' \
   "$SID" "$SLUG" "$DST" "$SHA_DST" "$SESSION_DIR_COPIED" "$TASKS_COPIED" "$SOURCE_RETIRED" \
   "$SOURCE_RETIRED_REASON" "$LOCK" "$TOMBSTONE" \
-  "$LRT_HOPS" "$LRT_TS_FIRST" "$LRT_CHAIN_JSON" "$LRT_PHASE_JSON" "$LRT_CAUSE_JSON"
+  "$LRT_HOPS" "$LRT_TS_FIRST" "$LRT_CHAIN_JSON" "$LRT_CUSTODY_JSON" "$LRT_PHASE_JSON" "$LRT_CAUSE_JSON"
