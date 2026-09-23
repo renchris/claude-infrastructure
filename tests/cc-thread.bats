@@ -51,7 +51,7 @@ snapshot() { (cd "$CC_MAILBOX_DIR" && find . -type f -exec cksum {} + | sort); }
   box "$U" 1 1 1
   run "$T" ab12cd34;          [ "$status" -eq 0 ]; echo "$output" | grep -qF "[$U]"
   run "$T" 555555555555;      [ "$status" -eq 0 ]; echo "$output" | grep -qF "[$U]"
-  run "$T" "$(echo "$U" | tr 'A-Z' 'a-z')"; [ "$status" -eq 0 ]; echo "$output" | grep -qF "[$U]"
+  run "$T" "$(echo "$U" | tr '[:upper:]' '[:lower:]')"; [ "$status" -eq 0 ]; echo "$output" | grep -qF "[$U]"
   run "$T" nosuchbox
   [ "$status" -eq 1 ]
 }

@@ -505,6 +505,27 @@ comms-alarms on the Operator Blocker Board.
     timestamped fingerprint disables damping while looking correctly wired (pinned by a test).
   - Damp state lives under each pager's own `PAGEDIR/damp`, inheriting existing test-isolation
     seams; a live-tree default would have tests writing real markers.
+- **2026-09-23** — **v3 CLOSE-OUT** (cc-backlog `02ba4e52389a`, off-box cloud session, branch
+  `claude/fire-20260923T040030Z-30454-1`). Adjudicated D1–D13 against trunk FIRST, since the row was
+  64 days old; most of it had landed under other rows:
+  - **Already on trunk:** D1/D2/D3/D4-nudge/D7/D8 (`e542db4`, P1) · D5 PostToolUse mid-turn drain +
+    D11 systemMessage (`3aa1867f`; D11's digest later superseded by the stronger `cc-mail` wording,
+    pinned in `tests/mailbox-midturn.bats`) · D4 rule half (`cc-wait` arm contract in `bin/cc-wait`,
+    CLAUDE.global.md) · D6/D13 lifecycle as the `mailbox` lane of `scripts/cc-gc.sh` (archive, never
+    delete; `.forward` tombstones kept) — the stranded `bin/cc-mailbox-gc` the row cited never landed
+    and is superseded by it · D9's "first-class reader" role taken by `bin/cc-mail` (`bebd9580`).
+  - **Built here:** D12 — `cc-blockers` COMMS family renders cc-inbox-guard's own board rows, release
+    RE-MEASURED from the mailbox cursors each invocation (`tests/cc-blockers-comms.bats`) · D10 —
+    statusline `📬N` over the two boxes the drain reads (`tests/statusline-identity.bats` D10 cases) ·
+    D9 remainder — `cc-thread` lookup-by-argument was DEAD on macOS (`${u^^}` under `#!/bin/bash` 3.2)
+    and it had no suite (`tests/cc-thread.bats`).
+  - **Not built, and why:** the D12 phone arm is operator C10 (`04-page-channel`), unchanged. D9's
+    "filter to UUID-named boxes" is REFUTED by later design: boxes are now session-keyed and
+    name-keyed (`--role`) too, so a UUID filter would hide live mail. Cited paths
+    `scripts/comms-hermetic-lint.sh` / `scripts/comms-sandbox.sh` never landed; D13's hermeticity is
+    carried by `hooks/lib/comms-alarm.sh`'s write chokepoint + `test-hermeticity-lint.sh` instead.
+  - **Residual:** the 📬 badge is as fresh as the last statusline render (UI-event driven, not a
+    poll), the caveat §4 already recorded for D10.
 
 ---
 
