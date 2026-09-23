@@ -10738,7 +10738,14 @@ WANT_SELF_RETIRE=0
 # fired_contract_in_my_brief can never re-derive its status if the stamp is ever lost — the
 # c163f42390a3 repair path is unreachable for a recycled peer without this.
 RCY_INHERIT_PEER=0
-if [ "$RECYCLE" = 1 ] \
+# NOT IN RESUME MODE (cc-lr upgrade defect 6, measured 2026-09-22). A resume-mode recycle has no brief:
+# its payload is the launcher and the continuation prompt travels INSIDE it, which is why the arg
+# check above REFUSES --prompt-file there. A fired peer recycling ITSELF in resume mode inherited the
+# contract anyway, reached the trailer block below with PROMPT_FILE empty, and died on
+# "!! prompt trailer: prompt file not found: " — so every such recycle needed --no-self-retire. The
+# resumed session keeps its fired-peer stamp (same pane, same dir) and its own brief rides --resume,
+# so there is nothing for a trailer to add.
+if [ "$RECYCLE" = 1 ] && [ -z "$RESUME_LAUNCHER" ] \
    && hf_recycle_inherits_peer "$FIRED_DIR" "${SID:-}" "$PWD" "${RCY_REMOTE:-0}"; then
   RCY_INHERIT_PEER=1
 fi
