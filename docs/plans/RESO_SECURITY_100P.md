@@ -37,7 +37,11 @@ cites it by absolute path. If the consolidation programme later opens a slot, mo
 | **W4a-7a — de-action the non-auth published modules** | ✅ **DONE, landed** — 6 endpoints removed + the exact-path ratchet | reso `ae0edbf6d` |
 | **W4 — the 2 structural facts** | ⛔ not started; W4b is operator-gated (migration + backfill on a live fleet) | — |
 | **W5 — the 19 uncovered** | ✅ **DONE, landed** | `fa6539057`, `docs/research/cf-audit-reso-uncovered-surfaces-2026-09-22.md` |
-| **W6 — release the held units** | ▶ **NEXT** — the operator ruling is given (2026-09-22, "drive to completion"); 8 units, § Wave 6 | — |
+| **W6 — release the held units** | ▶ **IN FLIGHT** (lead succession 2, 2026-09-22) — 6 of 8 fired as dispatched sessions: W4a-6 (pane 592) · W4a-1 (593) · W6-sync (595) · W4a-7b (599) · W4a-5 (607) · W4a-3 (608). **W6-sync leads 15 + 17 LANDED** reso `db2d2c0a1`. Unfired: W4a-4 (box at its mid-turn ceiling) · W4a-2 (waits on W4a-7b's land — it builds on W4a-7b's new `src/app/actions/auth/passkeyCeremonyActions.ts`). Briefs: `/tmp/fire-sec-w6-<unit>.txt` | § Wave 6 |
+| **W6 lead reads** | ✅ both done and landed `6e10e8d72`: **venue scoping is ON in live tenant `key`** (leads 5, 14, 15 live, not latent; lead 11 stays REJECTED on one leg) · **the deployed AWS key is `guestlistAdmin` with `AdministratorAccess`** (lead 7 impact = worst case) | verdict doc § MEASURED 2026-09-22 |
+| **W6 operator filings** | ✅ lead 9 rotation → decision `bf9093e859b8` · W4b re-key → decision `fa0a110c1592` · AWS key re-scope → operator step `436d0883bd2d` | `cc-decide list --open` · `cc-backlog list --blocked` |
+| **W6 grown scope** | W4a-6 owns `lib/auth/platform-email.ts`, `.env.example`, `scripts/setup/bootstrap-region.pure.ts` (its `isPlatformEmail` is now an EXACT allowlist, so `PLATFORM_OPERATOR_EMAILS` must be set before the next `/deploy` — filed on land) · W4a-5 owns `lib/operational-detail.ts` · W4a-7b owns 3 import re-points (`formActions.ts`, `lib/useConditionalPasskeyLogin.ts`, `lib/runPasskeyUpgrade.ts`) | peer mail 2026-09-22 |
+| **ship-land.sh:890 ref-lock fix** | committed on lead branch `sec-w6-lead` (reso `8311a7d5e`, red on parent, 29/29 green) — **lands after the last W6 unit**, per § What wave 1 taught | — |
 | **W5 follow-on** | ✅ one confirmed hole from W5's own candidate set CLOSED on trunk: `setGuestSession` is no longer a registered Server Action | reso `sec-w3a-tenantctx` |
 
 **The plan's own Phase 0 was overtaken and that is recorded rather than hidden.** W1 ran as four
