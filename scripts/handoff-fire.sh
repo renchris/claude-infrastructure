@@ -164,6 +164,13 @@
 #                       its split-brain lock still held, and the row's process must be alive with
 #                       P's tty in its ancestry. Needs --resume-launcher; refuses a brief, --account,
 #                       --cwd/--worktree and --session-id.
+#   --source-pane P --source-session S --same-account   (with --recycle) REMOTE IN-PLACE RELAUNCH
+#                       of a session that did NOT move (cc-lr upgrade, 2026-09-22: new binary/model,
+#                       same account, same uuid). The OTHER evidence class, exclusive with
+#                       --transplanted-source: the row binding + tty pin above, PLUS the row's account
+#                       IS --resume-cfg, S has a transcript there and NO tombstone, S is not a
+#                       teammate, and S's transcript is AT REST (last main-thread record = an
+#                       assistant end_turn) — re-read again immediately before /exit.
 #   --transplant-cause limit|voluntary   (with --recycle --transplanted-source) WHY the source
 #                       moved — and the only input that decides whether this recycle may kill the
 #                       source's in-flight Agent-tool subagents. `limit`: the source could not take
@@ -489,6 +496,12 @@ RCY_SUBAGENT_SID=""                              # L1-b: the PREDECESSOR's sid, 
 # into `bash <launcher>` (lr-fire-resume of the SAME uuid on the TARGET account) and the engagement
 # oracle into "a new assistant turn in the target's copy" — same window id, same uuid, new account.
 RCY_SOURCE_PANE="" RCY_SOURCE_SESSION="" RCY_TRANSPLANTED_SOURCE=0 RCY_REMOTE=0
+# --same-account: the OTHER evidence class for the remote form (cc-lr upgrade, 2026-09-22). The
+# session did NOT move; it is relaunched into its OWN uuid on its OWN account (a new binary/model).
+# There is no tombstone to prove anything with, so the evidence is the row, the pin, the account and
+# a transcript AT REST — see hf_same_account_evidence. HF_SA_TX is the transcript that proved it,
+# re-read immediately before the /exit.
+RCY_SAME_ACCOUNT=0 HF_SA_TX=""
 # --transplant-cause limit|voluntary — WHY the source moved, and the ONLY input that decides whether
 # this recycle may SIGKILL the source's in-flight subagents (D1, VOLUNTARY_ACCOUNT_SWITCH §3). The
 # empty default is the SAFE branch: an ungated caller gets the gate's loud refusal, never a silent
@@ -2277,6 +2290,70 @@ hf_remote_source_pin() { # $1=pane $2=row pid $3=mode → 0 the row's process is
   done
   echo "!! $mode REFUSED: pid $pid (registry row for pane $pane) has no ancestor on tty ${ptty##*/}. The row is STALE — kitty reuses window ids across restarts, so pane $pane now belongs to a different session than the one the row records. Nothing was typed." >&2
   return 2
+}
+
+# IS A TRANSCRIPT AT REST — the idle oracle the same-account class needs and this file lacked.
+# At rest = the last main-thread (non-sidechain) user/assistant record is an ASSISTANT record whose
+# stop_reason is end_turn. Anything else — a tool_use awaiting its result, a tool_result awaiting
+# the next assistant record, a user prompt the model has not answered yet — is a turn in flight, and
+# /exit would kill it. THREE return codes, because "busy" and "cannot tell" demand the same action
+# here (do not type) but must not read alike in a refusal: 0 at rest · 1 in flight · 2 unreadable.
+# A bounded tail, never the whole file: transcripts reach hundreds of MB and the answer is at the end.
+# Sidechain records are subagent traffic inside the lead's file on older builds and say nothing
+# about whether the MAIN thread is mid-turn.
+hf_transcript_at_rest() { # $1=transcript → 0 at rest · 1 in flight · 2 unreadable
+  local tx="${1:-}" last
+  [ -n "$tx" ] && [ -f "$tx" ] && command -v jq >/dev/null 2>&1 || return 2
+  last="$(tail -n "${HF_REST_TAIL_LINES:-400}" "$tx" 2>/dev/null \
+    | jq -rc 'select((.type=="assistant" or .type=="user") and ((.isSidechain // false)|not))
+              | "\(.type) \(.message.stop_reason // "-")"' 2>/dev/null | tail -n 1)"
+  [ -n "$last" ] || return 2
+  [ "$last" = "assistant end_turn" ] && return 0
+  return 1
+}
+
+# THE SAME-ACCOUNT EVIDENCE (cc-lr upgrade, 2026-09-22). Called AFTER hf_remote_source_bind (the row
+# names S) and hf_remote_source_pin (the row's pid is alive on P's tty); adds the facts that make a
+# relaunch of S into its OWN uuid on its OWN account the only live copy, and safe to interrupt:
+#   (1) the row's .account IS the --resume-cfg dir (".<account>" basename) — a relaunch on any other
+#       account is a second live copy of S, which only the transplant class may create;
+#   (2) S's transcript exists under that dir — the resume must have something to resume;
+#   (3) S carries NO transplant tombstone there — a moved session is a husk and takes the other class;
+#   (4) the row's process is not a TEAMMATE (--agent-id in its argv) — a teammate is its lead's;
+#   (5) the transcript is AT REST (hf_transcript_at_rest) — re-read again right before the /exit.
+# Every refusal is rc 2 and says what was checked; nothing here types or writes.
+hf_same_account_evidence() { # $1=pane $2=sid $3=resume cfg $4=row pid $5=mode → 0 / 2 · sets HF_SA_TX
+  local pane="${1:-}" sid="${2:-}" cfg="${3:-}" pid="${4:-}" mode="${5:---recycle}" acct base f tx="" args rc=0
+  HF_SA_TX=""
+  acct="$(jq -r '.account // empty' "$REG_DIR/$pane.json" 2>/dev/null || true)"
+  base="${cfg%/}"; base="${base##*/}"; base="${base#.}"
+  if [ -z "$acct" ] || [ "$acct" != "$base" ]; then
+    echo "!! $mode REFUSED: --same-account, but the registry row for pane $pane records account '${acct:-<none>}' and --resume-cfg is '$cfg' (${base}). A relaunch on a different account is a SECOND live copy of ${sid:0:8}; only the transplant class may create one. Nothing was typed." >&2
+    return 2
+  fi
+  for f in "${cfg%/}"/projects/*/"$sid".jsonl; do [ -f "$f" ] && { tx="$f"; break; }; done
+  if [ -z "$tx" ]; then
+    echo "!! $mode REFUSED: --same-account, but session ${sid:0:8} has no transcript under ${cfg%/}/projects — there is nothing on this account to resume. Nothing was typed." >&2
+    return 2
+  fi
+  for f in "${cfg%/}"/projects/*/"$sid".HANDOFF.json; do
+    [ -f "$f" ] || continue
+    echo "!! $mode REFUSED: --same-account, but session ${sid:0:8} carries a transplant tombstone ($f) — it MOVED, so this pane is a husk and the transplant class (--transplanted-source) is the only one that may recycle it. Nothing was typed." >&2
+    return 2
+  done
+  args="$(ps -o args= -p "$pid" 2>/dev/null || true)"
+  case " $args " in
+    *" --agent-id "*|*" --agent-id="*)
+      echo "!! $mode REFUSED: --same-account, but pid $pid (pane $pane) is a TEAMMATE (--agent-id in its argv) — its lifecycle is its lead's, and relaunching it detaches it from the team. Nothing was typed." >&2
+      return 2 ;;
+  esac
+  hf_transcript_at_rest "$tx" || rc=$?
+  if [ "$rc" != 0 ]; then
+    echo "!! $mode REFUSED: --same-account, but session ${sid:0:8} is not at rest (rc $rc — 1 a turn is in flight, 2 its transcript is unreadable): $tx. /exit would interrupt it. Nothing was typed; retry once it is idle." >&2
+    return 2
+  fi
+  HF_SA_TX="$tx"
+  return 0
 }
 
 hf_transplant_evidence() { # $1=sid $2=roots (projects dirs, space-separated) $3=mode label $4=local cfg ("" ⇒ the tombstone's own dir is the source) → 0 / 2 · sets HF_TS_TOMBSTONE HF_TS_TO HF_TS_LOCK HF_TS_CFG
@@ -8939,6 +9016,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --source-pane)    RCY_SOURCE_PANE="${2:?--source-pane needs a pane id}"; shift 2 ;;
   --source-session) RCY_SOURCE_SESSION="${2:?--source-session needs a session uuid}"; shift 2 ;;
   --transplanted-source) RCY_TRANSPLANTED_SOURCE=1; shift ;;
+  --same-account) RCY_SAME_ACCOUNT=1; shift ;;
   --transplant-cause)
     RCY_TRANSPLANT_CAUSE="${2:?--transplant-cause needs limit|voluntary}"
     case "$RCY_TRANSPLANT_CAUSE" in
@@ -8990,11 +9068,17 @@ fi
 # RESUME MODE (LIMIT_RECOVER_100P): the payload is the launcher lr-handoff minted, not a brief — the
 # relaunch is `bash <launcher>`, and the ingest prompt travels inside it. Every recycle-only flag is
 # validated here, before any side effect, so a mis-composed call costs a message and never a /exit.
-if [ -n "$RCY_SOURCE_PANE" ] || [ -n "$RCY_SOURCE_SESSION" ] || [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] \
+if [ -n "$RCY_SOURCE_PANE" ] || [ -n "$RCY_SOURCE_SESSION" ] || [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] || [ "$RCY_SAME_ACCOUNT" = 1 ] \
    || [ -n "$RESUME_LAUNCHER" ] || [ -n "$RESUME_CFG" ] || [ -n "$RESUME_CWD" ] || [ "$RECYCLE_AWAIT" = 1 ]; then
-  [ "$RECYCLE" = 1 ] || { echo "!! --source-pane/--source-session/--transplanted-source/--resume-launcher/--resume-cfg/--resume-cwd/--await are --recycle flags" >&2; exit 2; }
+  [ "$RECYCLE" = 1 ] || { echo "!! --source-pane/--source-session/--transplanted-source/--same-account/--resume-launcher/--resume-cfg/--resume-cwd/--await are --recycle flags" >&2; exit 2; }
 fi
-if { [ -n "$RCY_SOURCE_PANE" ] || [ -n "$RCY_SOURCE_SESSION" ] || [ "$RCY_TRANSPLANTED_SOURCE" = 1 ]; } && [ -z "$RESUME_LAUNCHER" ] && [ -z "$RESUME_CFG" ]; then
+# The two evidence classes of the remote form are EXCLUSIVE: a session either moved (tombstone) or it
+# did not (same account). Accepting both would let whichever check is weaker decide.
+if [ "$RCY_SAME_ACCOUNT" = 1 ]; then
+  [ "$RCY_TRANSPLANTED_SOURCE" = 0 ] || { echo "!! --same-account and --transplanted-source are exclusive: a session either MOVED (tombstone evidence) or it did not (same-account evidence) — never both" >&2; exit 2; }
+  { [ -n "$RCY_SOURCE_PANE" ] && [ -n "$RCY_SOURCE_SESSION" ]; } || { echo "!! --same-account is the REMOTE form: it needs --source-pane and --source-session (a session relaunching ITSELF uses the ordinary --recycle)" >&2; exit 2; }
+fi
+if { [ -n "$RCY_SOURCE_PANE" ] || [ -n "$RCY_SOURCE_SESSION" ] || [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] || [ "$RCY_SAME_ACCOUNT" = 1 ]; } && [ -z "$RESUME_LAUNCHER" ] && [ -z "$RESUME_CFG" ]; then
   echo "!! --recycle REFUSED: the remote form needs --resume-launcher/--resume-cfg — the only thing a transplanted source may be relaunched INTO is its own uuid on the transplant target." >&2; exit 2
 fi
 if [ -n "$RESUME_LAUNCHER" ] || [ -n "$RESUME_CFG" ]; then
@@ -9778,7 +9862,22 @@ if [ "$RECYCLE" = 1 ]; then
     # evidence must ALREADY exist — the tombstone is what makes the session PROVABLY retired at this
     # pane, and it is written before the /exit, never after (plan §3 Q3, operator requirement
     # 2026-09-09). The self-identity gate is REPLACED by that binding, not skipped.
-    [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] || { echo "!! --recycle REFUSED: --source-pane is admissible ONLY with --transplanted-source — recycling a pane that is not the caller's is justified by exactly one fact: its session MOVED, and the transplant tombstone proves it." >&2; exit 2; }
+    if [ "$RCY_SAME_ACCOUNT" = 1 ]; then
+      # THE SAME-ACCOUNT CLASS (cc-lr upgrade). The session did not move, so there is no tombstone;
+      # what makes typing /exit into another session's pane admissible instead is: the row binds the
+      # pane to S, the row's process is alive on that pane's tty, the relaunch target IS the row's
+      # own account (so it resumes the one copy that exists — never a second one), S carries no
+      # tombstone (a husk takes the transplant class), S is not a teammate, and S's transcript is AT
+      # REST. The last is re-read immediately before the /exit (recycle_fire), because /exit
+      # interrupts an in-flight turn and the admission read can be minutes old by then.
+      [ -n "$RESUME_LAUNCHER" ] || { echo "!! --recycle REFUSED: --same-account needs --resume-launcher/--resume-cfg — the relaunch is the session's own uuid on its own account, and the launcher is what says so." >&2; exit 2; }
+      hf_remote_source_bind "$RCY_SOURCE_PANE" "$RCY_SOURCE_SESSION" --recycle || exit 2
+      hf_remote_source_pin  "$RCY_SOURCE_PANE" "$HF_REMOTE_ROW_PID" --recycle || exit 2
+      hf_same_account_evidence "$RCY_SOURCE_PANE" "$RCY_SOURCE_SESSION" "$RESUME_CFG" "$HF_REMOTE_ROW_PID" --recycle || exit 2
+      SID="$RCY_SOURCE_PANE"; RCY_REMOTE=1
+      echo "→ remote in-place SAME-ACCOUNT relaunch: pane $SID is PROVEN to hold session ${RCY_SOURCE_SESSION:0:8} by its registry row (pid $HF_REMOTE_ROW_PID on its tty); it lives on $(basename "$RESUME_CFG"), the account it relaunches on; no tombstone; transcript at rest ($HF_SA_TX) — the self-identity gate is REPLACED by that binding, not skipped" >&2
+    else
+    [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] || { echo "!! --recycle REFUSED: --source-pane is admissible ONLY with --transplanted-source (the session MOVED, and its tombstone proves it) or --same-account (it did not move, and its row, account and at-rest transcript prove it is safe to relaunch)." >&2; exit 2; }
     [ -n "$RESUME_LAUNCHER" ] || { echo "!! --recycle REFUSED: the remote form needs --resume-launcher/--resume-cfg — the only thing a transplanted source may be relaunched INTO is its own uuid on the transplant target." >&2; exit 2; }
     hf_remote_source_bind "$RCY_SOURCE_PANE" "$RCY_SOURCE_SESSION" --recycle || exit 2
     hf_remote_source_pin  "$RCY_SOURCE_PANE" "$HF_REMOTE_ROW_PID" --recycle || exit 2
@@ -9789,6 +9888,7 @@ if [ "$RECYCLE" = 1 ]; then
     fi
     SID="$RCY_SOURCE_PANE"; RCY_REMOTE=1
     echo "→ remote in-place resume: pane $SID is PROVEN to hold session ${RCY_SOURCE_SESSION:0:8} by its registry row (pid $HF_REMOTE_ROW_PID on its tty), and that session was transplanted to $HF_TS_TO (lock $HF_TS_LOCK held) — the self-identity gate is REPLACED by that binding, not skipped" >&2
+    fi
   else
     SID="${SESSION_ID:-$(self_pane_id)}"
     [ -n "$SID" ] || { echo "!! --recycle needs \$ITERM_SESSION_ID, \$KITTY_WINDOW_ID (in a genuine kitty pane) or --session-id" >&2; exit 1; }
@@ -12689,6 +12789,20 @@ recycle_fire() {
   # cannot be proven current is not a snapshot.
   #
   # Kill switch, never an enable flag: CC_TRANSPLANT_CONFIRM=off restores the pre-2026-09-22 path.
+  # ── SAME-ACCOUNT: THE TRANSCRIPT MUST STILL BE AT REST, AT THE LAST MOMENT ─────────────────────
+  # The admission read in the pre-pass can be minutes old here (the composer gate alone may wait
+  # CC_RECYCLE_DRAFT_WAIT), and /exit INTERRUPTS an in-flight turn. A peer message or an operator
+  # prompt that woke the session in between is exactly the turn this must not kill. No kill switch:
+  # the class is new, and a turn killed mid-flight is not a state anyone should be able to opt into.
+  if [ "$RCY_SAME_ACCOUNT" = 1 ]; then
+    rcy_rest_rc=0; hf_transcript_at_rest "$HF_SA_TX" || rcy_rest_rc=$?
+    if [ "$rcy_rest_rc" != 0 ]; then
+      kill "$WATCHER_PID" 2>/dev/null || true
+      emit_recycle_event recycle-held-busy "" "$SID" "same-account: transcript not at rest at the last read (rc $rcy_rest_rc): $HF_SA_TX" || true
+      echo "!! recycle ABORTED at the last read: session ${RCY_SOURCE_SESSION:0:8} is no longer at rest (rc $rcy_rest_rc — 1 a turn is in flight, 2 unreadable) — nothing typed, watcher disarmed, session untouched. Re-run once it is idle." >&2
+      exit 1
+    fi
+  fi
   if [ "$RCY_TRANSPLANTED_SOURCE" = 1 ] && [ "${CC_TRANSPLANT_CONFIRM:-on}" != off ]; then
     rcy_tp="" rcy_tp_rc=0
     # The three operands are globals the pre-pass set on BOTH arms: RCY_TS_SID (the caller's
@@ -12801,7 +12915,11 @@ if [ "$DRY" = 1 ]; then
     echo "surface:  (recycle — this pane: $SID)"
     if [ -n "$RESUME_LAUNCHER" ]; then
       echo "resume:   IN-PLACE RESUME of session ${RCY_SOURCE_SESSION:-<this pane} on $(basename "$RESUME_CFG") — relaunch = bash $RESUME_LAUNCHER (non-exec: the shell survives); engagement = a new assistant turn in $RESUME_CFG's copy; no goal inheritance (an unmet goal rides --resume)"
-      [ "$RCY_REMOTE" = 1 ] && echo "remote:   pane $SID bound to ${RCY_SOURCE_SESSION:0:8} by its registry row (pid $HF_REMOTE_ROW_PID on its tty); tombstone → $HF_TS_TO; lock $HF_TS_LOCK"
+      if [ "$RCY_REMOTE" = 1 ] && [ "$RCY_SAME_ACCOUNT" = 1 ]; then
+        echo "remote:   pane $SID bound to ${RCY_SOURCE_SESSION:0:8} by its registry row (pid $HF_REMOTE_ROW_PID on its tty); SAME ACCOUNT $(basename "$RESUME_CFG"); no tombstone; transcript at rest, re-read immediately before /exit"
+      elif [ "$RCY_REMOTE" = 1 ]; then
+        echo "remote:   pane $SID bound to ${RCY_SOURCE_SESSION:0:8} by its registry row (pid $HF_REMOTE_ROW_PID on its tty); tombstone → $HF_TS_TO; lock $HF_TS_LOCK"
+      fi
     fi
     # L1-b: a dry run that stays silent about a gate the real run enforces "describes a different
     # decision than the real run". Reaching this line already means the gate ADMITTED (a refusal
