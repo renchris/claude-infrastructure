@@ -1071,6 +1071,56 @@ expect -c '
     }
     set timeout 300
   }
+  # >>> lr-reply-drain  (byte-identical in scripts/limit-recover/lr-fire-resume.sh AND bin/reso-resume-one;
+  #     tests/lr-fire-resume-reply-drain.bats extracts it from both by these marker lines and diffs them)
+  # ── DRAIN THE PANE BEFORE interact, AND DROP THE TERMINAL REPORTS IN IT ─────────────────────
+  # Everything above ran for up to minutes WITHOUT reading our own stdin (the pane tty). Meanwhile
+  # the TUI queried the terminal at boot and turned on mouse tracking, so the terminal answers queue
+  # on that tty: the XTVERSION reply (ESC P > | kitty ... ESC backslash), the kitty keyboard reply
+  # (ESC [ ? 5 u), the DA1 reply (ESC [ ? 62 ; 52 ; c), and every mouse motion report
+  # (ESC [ < 35 ; 45 ; 24 M). interact then forwarded that whole backlog into the new pty as TYPED
+  # text, and the resumed composer held it verbatim (measured 2026-09-23, pane 405).
+  # So: read what is already queued, without blocking and within a fixed bound, drop the reports,
+  # and hand everything else (a human keystroke typed during boot) to the session untouched.
+  # The tty goes raw for the read because a cooked tty releases nothing until a newline, and no
+  # report ends in one; it is restored to its exact prior state before interact takes over.
+  proc lr_reply_filter {s} {
+    # string reports: DCS (ESC P), OSC (ESC ]), APC (ESC _), PM (ESC ^), ended by ST or BEL
+    regsub -all {\x1b[P\]_^][^\x1b\x07]*(\x07|\x1b\\)} $s {} s
+    # SGR mouse reports: ESC [ < b ; x ; y M or m
+    regsub -all {\x1b\[<[0-9;]*[Mm]} $s {} s
+    # private-prefix CSI replies: DA1/DA2 (c), kitty keyboard flags (u), DECRPM ($y). A real key
+    # never carries the ? > = prefix, so a kitty-protocol key (ESC [ 97 ; 5 u) passes untouched.
+    regsub -all {\x1b\[[?>=][0-9;:]*[$]?[A-Za-z]} $s {} s
+    # cursor position report: ESC [ row ; col R
+    regsub -all {\x1b\[[0-9]+;[0-9]+R} $s {} s
+    # a report cut in half by the end of the read: drop the unterminated prefix, a lone ESC included
+    regsub {\x1b([P\]_^][^\x1b\x07]*\x1b?|\[[<?>=]?[0-9;:]*[$]?)?$} $s {} s
+    return $s
+  }
+  proc lr_drain_user {} {
+    set tty 0
+    set saved ""
+    if {![catch {exec /bin/stty -g <@ stdin 2>/dev/null} saved]} {
+      set tty 1
+      catch {exec /bin/stty raw -echo <@ stdin 2>/dev/null}
+    }
+    set buf ""
+    catch {
+      fconfigure stdin -blocking 0 -translation binary
+      set idle 0
+      for {set i 0} {$i < 40 && $idle < 3} {incr i} {
+        set chunk [read stdin]
+        if {$chunk eq ""} { incr idle; after 20 } else { set idle 0; append buf $chunk }
+      }
+    }
+    catch {fconfigure stdin -blocking 1}
+    if {$tty} { catch {exec /bin/stty $saved <@ stdin 2>/dev/null} }
+    return [encoding convertfrom utf-8 [lr_reply_filter $buf]]
+  }
+  # <<< lr-reply-drain
+  set lr_keep [lr_drain_user]
+  if {$lr_keep ne ""} { send -- $lr_keep }
   interact
 ' || lr_rc=$?
 # ── FALL THROUGH TO A SHELL, so the pane outlives the session (see the block above the expect) ────
