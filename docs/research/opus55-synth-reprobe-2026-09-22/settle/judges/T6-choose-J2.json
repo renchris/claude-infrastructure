@@ -1,0 +1,161 @@
+{
+ "brief": "T6-choose",
+ "judge": "J2",
+ "model": "claude-fable-5-1",
+ "effort": "high",
+ "label_map": {
+  "X": "C",
+  "Y": "B",
+  "Z": "A"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "S1",
+     "S2",
+     "S3",
+     "S4",
+     "S5",
+     "S6",
+     "S7",
+     "S8",
+     "S9",
+     "S10",
+     "T1",
+     "T2",
+     "T3",
+     "T4",
+     "T5"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 40,
+    "citations_bad": [],
+    "wrong_claims": [],
+    "extra_correct": [
+     "hooks/session-continue.sh:724 cites '$_opane captured at :197' but :197 is a comment about a completion-assert.bats A/B; the real capture is `_opane=\"$_ouid\"` at :425 (verified)",
+     "hooks/session-continue.sh:643-644 cites cc-pane-headless:124 (mint) and :197 (export); actual :124 is `--name) name=...`, :197 is a bare `fi`; the mint is at bin/cc-pane-headless:145 and the export at :218 (verified)",
+     "hooks/anti-deference-nudge.sh:481 cites 'mirrors memory-nudge.sh:26' but :26 is a comment about the append-time budget; the GC is at memory-nudge.sh:60-61 and uses -mtime +1, not +7 (verified)",
+     "migrations/0027: comment at :44 says 'after completion-assert.sh where present' but the jq at :50 unconditionally appends to the end of Stop group 0 (verified drift)",
+     "settings.example.json registration lines are exactly right: session-continue :466, anti-deference :471, completion-assert :476, boundary-handoff :496; waiting-recycle under PostToolUse (:176) matcher Bash (:203) at :212",
+     "Correctly classifies hooks/lib/continue-sentinel.sh:8 and session-writes.sh:158 as comments and out of scope; curl-gate.py:217 / model-permission-decider.py:465 emit permissionDecision only",
+     "hooks/handoff-claim-assert.sh:15 \u2192 anti-deference-nudge.sh:30-31 citation still holds (verified)"
+    ],
+    "score_1_10": 9
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "S1",
+     "S2",
+     "S3",
+     "S4",
+     "S5",
+     "S6",
+     "S7",
+     "S8",
+     "S9",
+     "S10",
+     "T1",
+     "T2",
+     "T3",
+     "T4",
+     "T5"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 40,
+    "citations_bad": [
+     {
+      "cite": "hooks/dispatch-assert.sh:220 (p_count increment)",
+      "problem": "line 220 is the `printf ... > \"$PENDING\"`; the increment `p_count=$((p_count + 1))` is at :219"
+     },
+     {
+      "cite": "hooks/session-continue.sh:588 cites 'the session-continue.sh:33 shape'",
+      "problem": "that citation sits on :587; :588 is the bullet 'only a pane with an inbox identity...'"
+     },
+     {
+      "cite": "migrations/0027-handoff-claim-registration.sh:44-48 'appends it into the first Stop group'",
+      "problem": ":44 is a comment and :45 is `TMP=$(mktemp)`; the jq append runs :46-52 with the actual append at :50 (approximate, off by a few lines)"
+     }
+    ],
+    "wrong_claims": [
+     "Lists the file's 'real systemMessage emissions' as :660, :700, :793, :840, :851 and :893 \u2014 omits the systemMessage-only emitter at :1264 (the key's list) while :893 is a block carrying systemMessage; incomplete rather than false"
+    ],
+    "extra_correct": [
+     "hooks/session-continue.sh:944 cites 'ship_floor :969, wake_floor :732-736' \u2014 :969 is `agent_team_member_confirms` inside mechanical_arm (938-1079), :732-736 is the CC_CUSTODY_BIN test-seam comment (verified stale)",
+     "hooks/session-continue.sh:952 cites 'ship_floor at :865-869, wake_floor at :587-608' \u2014 :865-869 is wake_floor's reason text, :587-602 is wake_floor's header comment (verified stale)",
+     "Function boundaries verified: open_packet_B ends :137, bh_live_waves ends :641, _ca_source_close_shape ends :630, abstain at handoff-claim-assert.sh:39, discharged_since ends dispatch-assert.sh:205",
+     "At most one of session-continue's four sites prints per Stop (floors exit in order at :1206-1215; :1332/:1334 are opposite arms of one if) \u2014 verified",
+     "Correct exclusions with verified lines: goal-inert-watch.sh:113, operator-readout.sh:12, subagent-stop.sh:40, enforce-email-formatting.py:229, reset-hard-shadow-allow.sh:164, validate-bash.sh:137, curl-gate.py:174, model-permission-decider.py:515, plan-agent-teams-default.sh:211 (PreToolUse additionalContext)",
+     "Activation script lines :8, :55, :82, :88, :97 and migration :3, :6, :32, :57 all verified"
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "S1",
+     "S2",
+     "S3",
+     "S4",
+     "S5",
+     "S6",
+     "S7",
+     "S8",
+     "S9",
+     "S10",
+     "T1",
+     "T2",
+     "T3",
+     "T4",
+     "T5"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 30,
+    "citations_bad": [
+     {
+      "cite": "hooks/session-continue.sh wake_floor() 'closes :936'",
+      "problem": "wake_floor closes at :895; :936-938 is the start of mechanical_arm()"
+     },
+     {
+      "cite": "settings-templates/settings.example.json:471 (completion-assert), :490 (boundary-handoff), :466 (anti-deference), :461 (session-continue)",
+      "problem": "all four wrong: actual lines are completion-assert :476, boundary-handoff :496, anti-deference :471, session-continue :466"
+     },
+     {
+      "cite": "migrations/0027-handoff-claim-registration.sh:36-42 'appends ... to .hooks.Stop[0].hooks'",
+      "problem": ":36 is blank, :37-39 is the already-registered early-exit check, :41-42 is the backup; the jq append is :46-52"
+     },
+     {
+      "cite": "docs/activation/pending-activation/11-dispatch-assert-activate.sh 'step 2 (lines ~65-90)'",
+      "problem": "step 2 spans :82-103; the jq insert is :96-102"
+     },
+     {
+      "cite": "hooks/anti-deference-nudge.sh:353 'actually reads: # \u2500\u2500 (P0-4b) Genuine carve-out, SPLIT ...'",
+      "problem": "line 353 is a bare `fi`; the quoted (P0-4b) header is at :356, and the section is :356-362 not :353-360 \u2014 the stale-citation verdict survives (no 'suppressed-record lesson' exists at :353) but the quote is misattributed"
+     },
+     {
+      "cite": "hooks/dispatch-assert.sh:206-227 for the `if [ -f \"$PENDING\" ]` block",
+      "problem": "the if starts at :208; :206 is blank and :207 a comment (minor)"
+     }
+    ],
+    "wrong_claims": [
+     "'immediately followed in every case by exit 0 / return 1' \u2014 :1332/:1334 are followed by `fi` and the mailbox_commit_seen block (:1335-1339), not an immediate exit (minor overstatement)"
+    ],
+    "extra_correct": [
+     "Log-file vs stdout distinction verified: curl-gate.py:174 decision goes into AUDIT_LOG.open at :191-192; model-permission-decider.py:515 into open(STATE_DIR/decisions-*.jsonl) at :477; validate-bash.sh:137 printf redirects `>> \"$_f\"` at :140; reset-hard-shadow-allow.sh:164 redirects `>> \"$LOG_FILE\"` at :167",
+     "hooks/waiting-recycle.sh:443 and :828 both say it 'rides PostToolUse:Bash'; :12 names boundary-handoff.sh as the sibling that fires on Stop (verified)",
+     "92 in-scope files (hooks/*.sh + hooks/*.py) \u2014 verified count",
+     "hooks/anti-deference-nudge.sh:471-472 cites a 'suppressed-record lesson at :353' that does not exist at :353 (verified stale, despite the misquoted line content)",
+     "No selftest/self_test/self-test string in any of the six emitting files (verified)"
+    ],
+    "score_1_10": 6
+   }
+  ],
+  "xy": "X",
+  "xz": "X",
+  "yz": "Y",
+  "pair_reasons": "X vs Y: both hit all 15 key items with the same 10-site list. X's 40 checked citations were all byte-accurate, and its three extra stale-citation findings (:724\u2192:197 vs real :425; :643-644\u2192cc-pane-headless:124/:197 vs real :145/:218; :481\u2192memory-nudge.sh:26 vs real :60-61 with +1 not +7) plus the 0027 comment-vs-jq drift all verified. Y's two extra stale findings (:944, :952) also verified, but Y carries two wrong-line citations (:220 for the p_count increment at :219; :588 for a citation on :587), an approximate :44-48 range, and an incomplete systemMessage-emitter list (omits :1264). X wins on citation accuracy and count of verified extras. X vs Z: same key coverage, but Z has a wrong function-close line (wake_floor ':936', actual :895), all four settings.example.json registration lines off by 5-6, wrong migration lines (:36-42 for an append at :46-52), a wrong activation range, and misattributes the (P0-4b) header text to :353 (it is :356, :353 is `fi`). Z's log-file-vs-stdout analysis is a genuine verified extra, but the citation error rate is far higher. Y vs Z: Y's errors are two off-by-one lines; Z's are a wrong function boundary, four wrong template lines, wrong migration/activation ranges and a misquoted line, so Y wins."
+ },
+ "retried": false
+}

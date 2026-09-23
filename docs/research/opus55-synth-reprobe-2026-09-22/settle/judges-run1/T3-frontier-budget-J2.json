@@ -1,0 +1,173 @@
+{
+ "brief": "T3-frontier-budget",
+ "judge": "J2",
+ "model": "claude-fable-5-1",
+ "effort": "high",
+ "label_map": {
+  "X": "B",
+  "Y": "A",
+  "Z": "C"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K17",
+     "K18",
+     "K20",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M7",
+     "M8",
+     "M9",
+     "M10",
+     "M11",
+     "M12"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 30,
+    "citations_bad": [
+     {
+      "cite": "model-config.yaml:700 (fallback: claude-opus-5-5)",
+      "problem": "off by one \u2014 the fallback key is on line 699; line 700 is the trailing comment"
+     },
+     {
+      "cite": "model-config.yaml:689-690 ('slot the gate can't refund')",
+      "problem": "marginal \u2014 the phrase is on 690-691; 689 is an unrelated history comment line"
+     }
+    ],
+    "wrong_claims": [],
+    "extra_correct": [
+     "A literal cap of 0 passes the [!0-9] guard and refuses every frontier request; a reserve date then lifts it to 1 (verified arithmetic at :121, :127)",
+     "Read at :134 and write at :144 are unlocked, so concurrent calls in one session can undercount (correctly flagged as inference)",
+     "model-config.yaml:512-514 quotes an obsolete predicate shape that :545-548 later corrects (verified)",
+     "Entry-point quoting/glueing bypasses (\"$R/scripts/handoff-fire.sh\", bash -c '...') fail the :67 regex (verified against the character classes)",
+     "CLAUDE_NEXT_MODEL env-var launcher default at model-config.yaml:553 is invisible to the :75 extractor (verified)"
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K17",
+     "K18",
+     "K20",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M7",
+     "M9",
+     "M11",
+     "M12"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 32,
+    "citations_bad": [],
+    "wrong_claims": [
+     "'grep -rn CC_LADDER .' returns two hits \u2014 it returns three lines (CLAUDE.global.md:334, NONLIMIT_RESUME_LADDER.md:840 AND :866); the substance (no executable reads it) holds"
+    ],
+    "extra_correct": [
+     "Four stale docs/research citations into the gate verified: p15-escalation.md:44 (:59-67), A5-harness.md:357 (:37-69), A6-mechanics.md:245 (:26-38), A6-mechanics.md:500 (:23) \u2014 all point at comment/function-header ranges, not the described logic",
+     "L1-census.md:62 is WRONG (claims :138 says --model claude-opus-5; it says --model opus and bats:155 asserts the negative); L1-census.md:63 accurate",
+     "config/hook-chains.d/pretooluse-bash:18-27 independently lists ten Bash hooks without the gate (verified)",
+     "Fallback cap 6 equals the live SSOT value, so a broken parse is indistinguishable from a correct read (verified)",
+     "The agent-arm grep fallback at :104 still works without jq while the session arm goes dead (verified logic)"
+    ],
+    "score_1_10": 7
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K17",
+     "K18",
+     "K19",
+     "K20",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6",
+     "M7",
+     "M8",
+     "M9",
+     "M10",
+     "M11",
+     "M12"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 35,
+    "citations_bad": [],
+    "wrong_claims": [],
+    "extra_correct": [
+     "Overcount direction: the gate counts --model=X (:75, bats:95-98) but scripts/handoff-fire.sh's argv parser has only a '--model)' case (8916) and no '--model=' handling (verified by grep)",
+     "fallback is read on every frontier call (:114) though only used on the closed path, contradicting model-config.yaml:700-702 'read only on the window-CLOSED path' (verified)",
+     "install.sh:29/1203-1204/1216 \u2014 template merge is additive and opt-in via --wire-hooks, so a fresh install also gets only the Agent arm (verified)",
+     "agents/*.md frontmatter holds only opus x2 / sonnet x2, so the no-tool_input.model bypass is latent today (verified)",
+     "tests/hook-jq-abstain.bats names the gate as jq-guarded (line 6) but never tests it; the session arm fails open silently \u2014 the exact class that suite exists to catch (verified)",
+     "hooks/agent-teams-enforce.sh:367 'Attempts are charged, not admissions' is the opposite of the frontier gate, which charges only allowed calls (:136-144) (verified)",
+     "Fleet-wide five-directory form of the registration check, matching the five dirs 0029 writes (:86)"
+    ],
+    "score_1_10": 9
+   }
+  ],
+  "xy": "X",
+  "xz": "Z",
+  "yz": "Z",
+  "pair_reasons": "X vs Y: X covers three key items Y misses \u2014 the quoted-model bypass (M5, :75), the gate's OWN stale citation at :27 to handoff-fire 9303-9311 (M8, a brief-item-8 target Y never checked because its table only walked citations INTO the gate), and an uncaveated true-of-code/false-of-wiring doc sentence (M10, skills/frontier-routing/SKILL.md:41 \u2014 Y's only example is the self-caveated CLAUDE.global.md:334, so Y did not actually answer that half of item 8). Y's genuine extras (four verified stale docs/research citations, the L1-census.md:62 error, hook-chains.d corroboration) are material but do not outweigh those misses; X's one off-by-one citation (model-config.yaml:700 for the :699 fallback) is minor. X wins. X vs Z: Z states K19 (handoff-fire.sh:9493 resolves the fable alias from frontier_access.model) which X omits, names the TMPDIR-pooled/resettable counter more explicitly (M6), and adds several verified insights X lacks \u2014 the --model= overcount against handoff-fire's parser (8916, no '--model=' case), fallback read on every call vs the SSOT comment, install.sh additive merge, the jq-abstain suite gap, and the agent-teams-enforce:367 'attempts not admissions' contradiction. Z had zero bad citations across 35 checked; X had one. Z wins. Y vs Z: Z has K19, M5, M6, M8, M10 that Y lacks, a fuller bypass enumeration, and no bad claims; Y's docs/research stale-citation table is its one material advantage but Y's CC_LADDER hit-count is also slightly wrong (3 lines, not 2). Z wins clearly."
+ },
+ "retried": false
+}

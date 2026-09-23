@@ -1,0 +1,77 @@
+{
+ "rerun:T3-frontier-budget:C": {
+  "agentId": "afe810bd404e8b3d2",
+  "cache_creation": 160472,
+  "cache_read": 2846590,
+  "input": 44,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 17613,
+  "tools": {
+   "Bash": 20,
+   "Read": 1
+  },
+  "turns": 22
+ },
+ "rerun:T4-stop-arms:A": {
+  "agentId": "a54d96ab55d535087",
+  "cache_creation": 243350,
+  "cache_read": 4143782,
+  "input": 46,
+  "models": [
+   "claude-sonnet-5"
+  ],
+  "output": 37550,
+  "tools": {
+   "Bash": 16,
+   "Read": 9
+  },
+  "turns": 23
+ },
+ "rerun:T4-stop-arms:B": {
+  "agentId": "acf8b9923a42711a1",
+  "cache_creation": 168546,
+  "cache_read": 2738713,
+  "input": 40,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 11693,
+  "tools": {
+   "Bash": 19,
+   "Read": 1
+  },
+  "turns": 20
+ },
+ "rerun:T4-stop-arms:C": {
+  "agentId": "a7825bd33cfd472e0",
+  "cache_creation": 177404,
+  "cache_read": 3682661,
+  "input": 50,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 16893,
+  "tools": {
+   "Bash": 23,
+   "Read": 1
+  },
+  "turns": 25
+ },
+ "rerun:T5-deploy-live-exec:A": {
+  "agentId": "a73921d7317240aa8",
+  "cache_creation": 219369,
+  "cache_read": 2215264,
+  "input": 30,
+  "models": [
+   "claude-sonnet-5"
+  ],
+  "output": 32027,
+  "tools": {
+   "Bash": 11,
+   "Read": 14
+  },
+  "turns": 15
+ }
+}

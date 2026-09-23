@@ -1,0 +1,171 @@
+{
+ "brief": "T2-recycle-goal",
+ "judge": "J1",
+ "model": "claude-fable-5-1",
+ "effort": "high",
+ "label_map": {
+  "X": "C",
+  "Y": "A",
+  "Z": "B"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K17",
+     "K18",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6",
+     "M7"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 42,
+    "citations_bad": [],
+    "wrong_claims": [],
+    "extra_correct": [
+     "A07-clean-code-standards.md:170 says `=off` disables the opt-out; :5843 only honours the literal `0` (verified)",
+     "emit_fire_refusal's header (:758) labels the row 'a fire that did NOT happen' while the recycle proceeds goal-less \u2014 the ledger row mislabels the event (verified :758-759, :5852-5854)",
+     "check_goal_arm's refusal messages are worded for a `--goal` flag the operator never passed (:5746, :5755, :5761 verified)",
+     "goal_unreachable is a no-op on empty FIRE_GOAL (:802 verified) and arm_goal returns at once on empty cond (:5867 verified)",
+     "Refusal stderr goes to the foreground recycle_fire (:12354, called :12964), not the watcher log (detach redirects only the watcher, :1696-1697) \u2014 so 're-arm it yourself in the relaunched session' never reaches the successor",
+     "Resume mode blanks even an explicit --goal (:12538) after it was validated at :9015 (verified)",
+     "Self-citations '(:273)'/'(:197)' for set -euo pipefail at :4407/:10697/:11341 are stale; real line is :343 (verified)",
+     "LIVENESS_DETECTOR_FAILNEG.md:208 cites goal_live_for_sid at :3574, which is `1:custody) return 0 ;;` (verified)",
+     "CRITIC.md:62-63/:305 cite :4676-4684 and goal_live_for_sid :4642 (a bare `#`) \u2014 stale (verified)",
+     "A05-recycle-engagement.md:106 cites :12406-12412 \u2192 :5805 \u2014 stale; real branch :12535-12541 (verified)",
+     "recon-wave.md:35 points at tests/handoff-goal-arm.bats:305, which is blank; inheritance tests at :322-398 (verified)",
+     "Complete FIRE_GOAL assignment census (:508, :5847, :5852, :7158, :8950, :12538) matches grep",
+     "goal_armed_for_pane polls every 3s for 45s (:5866, :5905-5912) and requires exact condition match (:5792); goal-arm rows go to handoffs.jsonl via :781/:791 (verified)",
+     "Recycle outcome rows carry goal_requested:false when FIRE_GOAL was blanked (:870 `--argjson gr` verified)",
+     "`:5824` lacks 2>/dev/null while goal-state.sh:71 has it (verified)"
+    ],
+    "score_1_10": 9
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K18",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 34,
+    "citations_bad": [
+     {
+      "cite": "scripts/handoff-fire.sh:4955-4989 (cc_sid_for_pane 'defined 4955-4989')",
+      "problem": "function runs to :4998 (`return 0` at :4997, `}` at :4998); the fallback loop it describes (:4984-4996) extends past the stated end \u2014 minor range error, start line correct"
+     }
+    ],
+    "wrong_claims": [
+     "'$FIRE_GOAL is the 8th argument after `__recycle`' \u2014 it is the 7th after `__recycle` (positional $8 counting `__recycle` as $1); the follow-on '$8' read-back claim is correct",
+     "'a validation failure there exit 1s the whole script before any side effect' \u2014 check_goal_arm calls emit_fire_refusal first, which appends a handoffs.jsonl row (:5748/:5756/:5763 \u2192 :683/:711), so a side effect does precede the exit",
+     "emit_fire_event is 'gated only by CC_FIRE_REFUSAL_LOG' \u2014 it also writes nothing without jq (:686, line stays empty and :711 skips)"
+    ],
+    "extra_correct": [
+     "A07-clean-code-standards.md:170 `=off` claim refuted by :5843 (verified)",
+     "CLAUDE.global.md:223 / SYNTHESIS.md:37 / CRITIC.md range :4676-4684 is actually the head of transcript_for_sid (:4679) \u2014 a different sid\u2192transcript resolver (verified)",
+     "A03-precheck-healthy-source.md:96's `:5805` is inside goal_live_for_sid's header comment, four lines above the real definition at :5809 (verified)",
+     "goal_armed_for_pane (:5774-5799) is a third, separate oracle called only at :5906 for post-paste verification (verified by grep: single call site)",
+     "Same validator is fail-open for inherited (drop+warn, rc 0) and fail-closed for explicit (:9015 exit 1) \u2014 a materially different consequence (verified)",
+     "Resume-mode summary line :12796 prints 'no goal inheritance (an unmet goal rides --resume)' (verified)",
+     "goal_liveness (:104-144) emits a distinct `absent\\t0\\tnone\\t0\\t` value at :120 and its header :100-103 states the absent-vs-unreadable fail direction; _goal_grep header :34-42 cites 375 of 469 mislabelled (verified)",
+     "emit_fire_event (:682-714) row fields: class, engaged:false, refuse_reason, verdict, gate, ts, firing_sid, account, detail, prompt_file (verified :699-710)"
+    ],
+    "score_1_10": 7
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K18",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 38,
+    "citations_bad": [],
+    "wrong_claims": [],
+    "extra_correct": [
+     "The oracle does not use transcript_for_sid (:4679), whose `*/*` sid guard (:4682) the oracle lacks \u2014 :5810-5811 only tests non-empty (verified)",
+     "A second branch skips inheritance: the `shell)` arm at :12441-12446 types the relaunch and returns 0 before :12540 and before any watcher, so neither an inherited nor an explicit --goal is armed (verified)",
+     "`--resume-launcher` is only accepted with `--recycle` (:8942, :8988 verified)",
+     "Self-comment :5706-5708 ('--goal therefore has to be re-passed on every recycle') is superseded by the inheritance at :12540 (verified)",
+     "recon-wave.md:35/:169 cite :3778-3800, a pid_is_cc comment / `ps -o tpgid` line \u2014 stale (verified)",
+     "A07:170 `=off` claim refuted by :5843 (verified)",
+     "RSID (:6939) is the pane id, not a CC session id, despite the `:?` message wording (verified against :12628 `$SID`)",
+     "arm_goal verdict vocabulary set/held/mangled/abstained/unverified (:5889-5916, verified by grep) and it never fails the recycle (always 0, :5864)",
+     "goal_unreachable defined at :801, no-op on empty FIRE_GOAL (:802 verified)",
+     "Refusal readership: stderr belongs to the predecessor's Bash tool, which the typed /exit interrupts (:12509-12511 verified); watcher log carries only watcher output (:1696-1697)",
+     "check_goal_arm's 'Fix: \u2026 --goal' wording (:5747) is misleading for an inherited condition (verified)",
+     "goal-state.sh is sourced by wrap-ledger.sh (:695-698), mailbox-drain.sh (:67-71), session-continue.sh (:412-416) \u2014 verified, though the cited lines are the path assignments just above the `source`"
+    ],
+    "score_1_10": 8
+   }
+  ],
+  "xy": "X",
+  "xz": "X",
+  "yz": "Z",
+  "pair_reasons": "X vs Y: X hits all 25 key items; Y misses K17 (hooks/goal-inert-watch.sh:36's stale :4671-4688) and M7 (NONLIMIT_RESUME_LADDER.md:753's stale :4994-5009, plus A05 and recon-wave) \u2014 both verified present in the snapshot and absent from Y. Y also carries three minor inaccuracies (7th-vs-8th arg after __recycle, cc_sid_for_pane range ending at :4989 instead of :4998, 'before any side effect' when emit_fire_refusal writes a row first) and X carries none I could find. X also verifies more beyond the key (the :758 'fire that did NOT happen' mislabel, the :273/:197 stale set -e self-citations, LIVENESS:208, CRITIC, A05, bats:305). X wins. X vs Z: same two key items (K17, M7) present in X and absent in Z; Z has genuine extras X lacks (the shell-branch skip at :12441-12446, the missing `*/*` guard vs :4682, the superseded :5706-5708 comment), but X's key coverage is strictly greater and both have zero bad citations, so X wins on the verified key gap. Y vs Z: identical key coverage (23/25, same two misses) and zero contradictions. Z has no wrong claims and no bad citations; Y has the three minor inaccuracies and one loose range. Z adds material verified insights Y lacks \u2014 the second skip branch at :12441-12446 (directly on brief item 7), the absent `*/*` sid guard, recon-wave's stale :3778-3800, and the /exit-kills-the-Bash-tool readership point \u2014 while Y's unique extras (:12796 summary line, SYNTHESIS.md:37, goal_armed_for_pane single call site) are smaller. Z wins."
+ },
+ "retried": false
+}

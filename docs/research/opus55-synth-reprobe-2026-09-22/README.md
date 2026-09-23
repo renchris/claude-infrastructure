@@ -161,3 +161,119 @@ Grep each arm transcript for `opus55-synth-reprobe` before scoring it.
   structured verdict.
 - `instruments/`: the three Workflow scripts as run, `settle-run.js`, `usage.py`,
   `usage-per-cell.json` and `tally.txt`.
+
+## Settle run — results
+
+**Verdict: ADOPT C, Opus 5.5 @xhigh, for `roles.workflow_synthesis_worker`.
+Conviction: 85%.** That number is two separate calls:
+
+- **≥95% that A (Sonnet 5 @max) should be replaced.** At equal tools, C beats A 5–1 in the primary
+  scoring and 6–0 in the sensitivity scoring. The Fable seats alone give 6–0. C's key recall is
+  98.5% vs 89.2%, and it makes about a third of A's wrong claims (18 vs 52).
+- **~80% that C beats B (Opus 5.5 @high).** C wins the pairwise 4–2 in the primary scoring and ties
+  3–3 in the sensitivity scoring. But every other quality measure favours C in both scorings:
+  recall, bad-citation rate and mean score.
+
+Under the lexicographic rule, B at lower quality by any margin is a reject. C being cheaper than A
+in tokens makes C a double win over A, not a trade.
+
+**The one change held.** Every arm, Opus included, searched with read-only Bash inside the
+snapshot: 106–129 Bash calls per arm over 6 cells. So the confound that made the first run
+INCONCLUSIVE is gone. This is the production condition of a Workflow synthesis worker on 2.1.280.
+
+### Equal-tools results
+
+Strict majority over 3 blind judges, same briefs, keys, permutations and rule as § Results.
+
+**Primary scoring.** The 13 clean run-1 cells, plus the 5 re-run cells, with T3–T5 re-judged.
+
+| Brief | A vs B | A vs C | B vs C | Majority recall A / B / C |
+|---|---|---|---|---|
+| T1 custody lifecycle | **B** [B,B,B] | **C** [C,C,C] | **B** [B,B,B] | 17 / 21 / 21 of 21 |
+| T2 recycle /goal inheritance | **B** [B,B,B] | **C** [C,C,C] | **C** [C,C,C] | 23 / 23 / 25 of 25 |
+| T3 frontier spawn budget | tie [tie,B,tie] | **C** [C,C,C] | **C** [C,C,C] | 27 / 30 / 32 of 32 |
+| T4 session-continue Stop arms | **B** [B,B,B] | **C** [C,C,C] | **C** [C,C,C] | 18 / 19 / 20 of 20 |
+| T5 deploy-live exec sites | **B** [tie,B,B] | **A** [A,A,C] | **B** [B,B,tie] | 16 / 16 / 15 of 17 |
+| T6 Stop-blocking emissions | **B** [B,B,B] | **C** [C,C,C] | **C** [C,C,C] | 15 / 15 / 15 of 15 |
+| **Tally** | **B 5 · tie 1** | **C 5 · A 1** | **C 4 · B 2** | **116 (89.2%) / 124 (95.4%) / 128 (98.5%) of 130** |
+
+| Arm | Bad citations / checked | Wrong claims | Mean score | Output tokens | cache_creation | **Output + cache_creation** |
+|---|---|---|---|---|---|---|
+| A Sonnet 5 @max | 70 / 546 (12.8%) | 52 | 6.72 | 135,868 | 1,265,293 | **1,401,161 (1.00×)** |
+| B Opus 5.5 @high | 70 / 604 (11.6%) | 24 | 7.89 | 66,517 | 924,452 | **990,969 (0.71×)** |
+| C Opus 5.5 @xhigh | 33 / 632 (5.2%) | 18 | 8.44 | 85,532 | 981,609 | **1,067,141 (0.76×)** |
+
+**Sensitivity scoring.** All 18 run-1 cells, including the 5 string-positive cells, judged by the
+original seats. The lead required this; the tool-level check is the stronger instrument (see
+Deviations).
+
+- Pairwise: A vs B = **B 6**; A vs C = **C 6**; B vs C = **B 3 · C 3**.
+- Recall: 116 (89.2%) / 125 (96.2%) / 128 (98.5%) of 130.
+- Bad citations: 15.4% / 10.6% / 6.8%.
+- Wrong claims: 56 / 21 / 21.
+- Mean score: 6.50 / 8.17 / 8.39.
+- Output + cache_creation: A 1,380,340 · B 1,016,164 (0.74×) · C 1,089,772 (0.79×).
+
+Both scorings agree that C and B beat A. They differ only on B vs C, which is why that half of the
+verdict carries 80% rather than 95%.
+
+**Against the first run.** Search moved the Opus arms, not Sonnet.
+- A's recall is flat: 88.5% → 89.2%.
+- B's recall rose 81.5% → 95.4%, and C's rose 83.1% → 98.5%.
+- The one brief A had won on discovery was T6, the find-every-site brief. With search, A drops from
+  15/15 vs 10/15 to 15/15 across all three arms, and loses T6 to both Opus arms unanimously.
+- A's bad-citation rate there is 27/82.
+- Token use changed too. Without search, C cost 1.23× A's output; with it, C costs 0.63×.
+
+### What it cannot tell
+
+- **Sample size.** It is one sample per cell, over 6 briefs from one repo and one task class:
+  repo-grounding synthesis with path:line citations. It says nothing about open-web research
+  synthesis.
+- **Weekly quota points.** Tokens cannot be converted to quota points, because per-token quota
+  weights for Sonnet 5 and Opus 5.5 are unmeasured here (see § Cost). Sonnet's weight is likely
+  lighter, so A's token-cost disadvantage may shrink or reverse in quota points. That does not
+  change the verdict, because quality decides first.
+- **Judge family.** 15 of 18 primary seats are Opus 5, the same family as arms B and C. The Fable
+  seats alone agree on direction (B and C each beat A 6–0), but that check covers only 6 seats.
+- **Bad-citation rates.** They rose for every arm against the first run (A: 5.1% → 12.8%). The cause
+  was not isolated, so compare the rates only within this run.
+
+### Deviations (recorded, not hidden)
+
+1. **Cwd leak, my harness error.** Workflow agents inherit the session's cwd at spawn. A Bash `cd`
+   left this session sitting in the probe directory, so 5 arm cells were spawned with it as their
+   working directory: T3:C, T4:A, T4:B, T4:C and T5:A. The path `opus55-synth-reprobe` therefore
+   appeared in their injected context, as cwd and as git status. It was also in 0 of the other 13.
+   - Tool-level check: every tool call in all 5 cells targeted the snapshot or the harness's own
+     overflow files. No tool input or result carried key text.
+   - The brief's mechanical rule still applied: all 5 were re-run once from the worktree root with a
+     clean tree (`wf_a8c18432-bb3`). All 5 re-runs are string-clean.
+   - The originals are kept in `settle/arms-string-positive/` and scored only in the sensitivity arm.
+2. **Seat swap.** The re-judges of T3, T4 and T5 needed 3 Fable 5.1 seats. Run 1 had already spent
+   this session's `max_fable_spawns_per_session: 6`. The Workflow tool does not gate on that cap,
+   but that is no licence to exceed it. On the lead's ruling, those 3 seats were filled by
+   `claude-opus-5` @xhigh (`wf_9380a9b0-f89`, `noFable`). Permutations and the other seats are
+   unchanged.
+3. **Budget.** Spend was 7.11M tokens for run 1 (`wf_e43f474d-ad0`), 0.99M for the re-runs and
+   2.09M for the re-judges: 10.19M in total against the ≈9.2M estimate. The overage is the re-run of
+   deviation 1.
+   - 36 + 5 + 9 agents, all completed.
+   - 0 errors, 0 × 429, 0 retries. Every arm transcript's `.message.model` was the requested id.
+
+### Settle files
+
+Everything below is in `settle/`:
+
+- `arms/`: the 18 scored outputs, with provenance in each header.
+- `arms-string-positive/`: the 5 replaced originals.
+- `judges/`: the primary set, run-1 records for T1, T2 and T6 plus the re-judges.
+- `judges-run1/`: all 18 original-seat records, used for the sensitivity scoring.
+- Tallies: `tally-primary.txt` and `tally-sensitivity.txt`.
+- Per-agent usage: `usage-{run1,rerun,rejudge}.json`.
+- Tools:
+  - `tally.py` reproduces § Results exactly when run on `../judges`: 115/106/108, 55/29/25.
+  - `contam.py` is the key-string and outside-snapshot scan.
+  - `extract.py` writes a Workflow's return value out to files.
+  - `settle-rejudge.js` is the re-run/re-judge driver as run, with the kept texts embedded
+    byte-exact. Its prompts are byte-identical to `instruments/settle-run.js`.

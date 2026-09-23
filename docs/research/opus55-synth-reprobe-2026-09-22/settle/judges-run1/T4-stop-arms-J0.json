@@ -1,0 +1,183 @@
+{
+ "brief": "T4-stop-arms",
+ "judge": "J0",
+ "model": "claude-fable-5-1",
+ "effort": "high",
+ "label_map": {
+  "X": "B",
+  "Y": "C",
+  "Z": "A"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6",
+     "k7",
+     "k8",
+     "k9",
+     "k10",
+     "k11",
+     "k12",
+     "k13",
+     "k14",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 34,
+    "citations_bad": [
+     {
+      "cite": "hooks/session-continue.sh:442 says 'The floor (:416)'",
+      "problem": "off by one \u2014 the '(:416)' text is on line 441; 442 is the mailbox-drain.sh (:224) line"
+     },
+     {
+      "cite": "hooks/completion-assert.sh:632-650 as the _ca_exon 'unlanded-not-mine' logic",
+      "problem": "632-652 is the DIRTY-side exoneration block; the `_ca_exon=\"...unlanded-not-mine \"` assignment is at :685"
+     }
+    ],
+    "wrong_claims": [
+     "mailbox_wake_armed described as requiring 'its recorded pid is alive' \u2014 a .watching file with NO pid line returns 0 (armed) at mailbox-pending.sh:299; trivial omission"
+    ],
+    "extra_correct": [
+     "Mechanically-written sentinel is not self-clearing: after the model commits, $f still exists and the next Stop goes straight to the armed path (:1205\u2192:1225-1344), which never re-reads dirt \u2014 verified, no session_dirty_mine/git status in 1225-1344",
+     "wf_teardown_marked (:551-568) does NOT check \"mode\":\"teardown\" while the watchdog reader does (lead-crash-watchdog.sh:258 in retired_by_desk) \u2014 verified; the 'taken verbatim' comment at :544-546 is inaccurate",
+     "ship_floor never reads LANDING, so an in-flight-land \ud83d\udce6 still fires the floor \u2014 verified (no LANDING in :1098-1199)",
+     "SID-BIND on a shared-cwd sibling deletes the other session's sentinel (:1247) and that Stop skips its own floors because :1205 already branched \u2014 verified",
+     "Bare-shell `clear` writes sid `?` (:260) which fails the :1060 same-sid check, so it does not spend a real session's budget \u2014 verified",
+     "MAX (:1255) and mmax (:1053) not numeric-validated; non-numeric mmax makes -ge error \u2192 budget never reads spent \u2014 verified",
+     "Stop chain: session-continue is 4th entry (0-index 3) timeout 5, completion-assert 6th, in settings-templates/settings.example.json \u2014 verified :466/:476",
+     "Seven in-file stale citations verified correct (:1327\u2192:502, :724\u2192:197 real :425, :433\u2192:213 real :467, :944, :952, :974, :965) plus session-writes.sh:405 (completion-assert:398 is now agent_is_assignee), :421 (no pipefail set \u2014 verified no `set -` in file), :423 (:269 now herestring at :354)",
+     "No CLAUDE_CONTINUE_MAX / CC_SHIP_FLOOR_MAX / CC_WAKE_FLOOR_MAX default anywhere else in hooks/scripts/bin; CC_TEARDOWN_DIR identical default at all 8 sites \u2014 verified by grep",
+     "Assignee confirms roots: CC_WF_TEAM_ROOTS else $CLAUDE_CONFIG_DIR/teams + $HOME/.claude*/teams (agent-identity.sh:102-109) \u2014 verified"
+    ],
+    "score_1_10": 9
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6",
+     "k7",
+     "k8",
+     "k9",
+     "k10",
+     "k11",
+     "k12",
+     "k13",
+     "k14",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 33,
+    "citations_bad": [
+     {
+      "cite": "hooks/session-continue.sh:442 cites 'the floor (:416)'",
+      "problem": "off by one \u2014 text is on :441"
+     },
+     {
+      "cite": "hooks/session-continue.sh:1326 cites 'precedent at :502'",
+      "problem": "off by one \u2014 the '(precedent at :502)' text is on :1327"
+     },
+     {
+      "cite": "hooks/lib/session-writes.sh:422 says session-continue.sh sets pipefail",
+      "problem": "the claim spans :420-421 ('and session-continue.sh both do)' is :421); :422 is the SIGPIPE/141 line"
+     },
+     {
+      "cite": "hooks/session-continue.sh:323 'position 4 / position 6'",
+      "problem": "off by one \u2014 the position claim is on :322"
+     }
+    ],
+    "wrong_claims": [],
+    "extra_correct": [
+     "The hook calls agent_assignee_argv + agent_team_member_confirms directly, bypassing agent_is_assignee's *@session-* grammar gate (agent-identity.sh:143-147); a self-consistent argv id not in @session- form returns rc 2 at :95 and is therefore exempted \u2014 verified",
+     "bin/claude-latest:353-355 exports CLAUDE_CODE_STOP_HOOK_BLOCK_CAP=50 when unset \u2014 verified",
+     "hooks/completion-assert.sh:866-867 reads the ${f}.blocked marker \u2014 verified",
+     "Two-dot `git diff --name-only $trunk..HEAD` (session-writes.sh:415) compares trees, so files changed only on trunk can also appear (over-attribution risk) \u2014 correct git semantics",
+     "Mechanically-armed sentinel keeps blocking after the tree goes clean because :1225-1344 never re-checks dirtiness \u2014 verified",
+     "Ship floor ignores LANDING=1 while wrap-ledger.sh:1985-1986 says 'do NOT fire a second /ship' \u2014 verified",
+     "Disable-switch polarity differs: CC_MECH_CONTINUE disables only on literal '0' (:939) while CC_SHIP_FLOOR/CC_WAKE_FLOOR/CC_WAKE_FLOOR_TEARDOWN require literal '1' to stay on \u2014 verified",
+     ".mech and .ship are cwd-keyed with one stored sid, so two sessions stopping alternately in a shared checkout reset each other's budgets (:1060, :1170) \u2014 verified",
+     "Every wake_floor abstain systemMessage is captured into _wf_json and re-emitted at :1218 \u2014 verified",
+     "mailbox_take fallback (:1296-1297) advances .seen before the block is written, unlike the peek/commit path \u2014 verified"
+    ],
+    "score_1_10": 9
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6",
+     "k7",
+     "k8",
+     "k9",
+     "k10",
+     "k11",
+     "k12",
+     "k13",
+     "k14",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 36,
+    "citations_bad": [
+     {
+      "cite": "hooks/mailbox-drain.sh:10-11 'confirm this file's ~/.claude layer is a per-file symlink farm'",
+      "problem": "lines 10-11 say the Stop channel is folded into session-continue.sh; nothing about a symlink farm"
+     },
+     {
+      "cite": "hooks/lib/session-writes.sh:258-361 as session_dirty_mine",
+      "problem": "function is defined at :277; :258-262 is its doc comment (minor)"
+     }
+    ],
+    "wrong_claims": [
+     "'Two non-blocking systemMessage-only JSON objects also exist \u2014 wake-floor budget-exhausted :840 and kill-switch :851' \u2014 undercount: headless (:659), goal-live (:698), assignee/teardown (:791) and the cap (:1264) also emit systemMessage-only objects",
+     "Wake-floor fire gate described as 'any idle with ATTRIBUTABLE open custody' \u2014 cust = cust_mine + cust_unk (:758), so unattributable rows also fire it, and the no-pane/no-jq fallback (:762-764) counts every open row for the cwd; Z omits the fallback entirely (the key's precision-note trap)"
+    ],
+    "extra_correct": [
+     "Ship floor and wake floor print and exit from inside `if [ ! -f \"$f\" ]`, so they never reach kill-switch/SID-BIND/cap \u2014 verified",
+     "CC_WAKE_FLOOR_TEARDOWN=0 disables the wake floor's assignee/teardown ABSTAINS (makes it more aggressive), not the floor \u2014 verified :776",
+     "Stale in-tree citation: :545-546 cites classify_death (:255-278) but classify_death is at lead-crash-watchdog.sh:402; :249-263 is retired_by_desk (mode check :258, marker_owns_sid :259, -mmin -30 :257), :267-277 is close_record_summary \u2014 all verified",
+     "CC_MECH_MAX default history corroborated by design comment :1049-1051 ('At the old default of 3 that was 24 consecutive blocks') \u2014 verified",
+     "Full Stop-group table in settings-templates/settings.example.json (:451,:456,:461,:466,:471,:476,:481,:486,:496) \u2014 every line verified",
+     "hooks/hook-chain.sh is 'deliberately NOT wired into' settings (hook-chain.sh:24) \u2014 verified",
+     "All other listed env vars have identical literal defaults across the tree \u2014 verified by grep (CC_WATCH_FRESH_S:-90 at 4 sites, CC_TEARDOWN_DIR at 8)"
+    ],
+    "score_1_10": 8
+   }
+  ],
+  "xy": "tie",
+  "xz": "X",
+  "yz": "Y",
+  "pair_reasons": "X vs Y: both hit all 20 key items with no contradictions and no material wrong claims. X's citation accuracy is slightly better (one off-by-one plus a mis-located _ca_exon range vs Y's four off-by-ones) and X carries the verified mode:teardown mismatch insight and a fuller stale-cite audit; Y carries the verified agent_is_assignee grammar-gate bypass (:143-147/:95), the STOP_HOOK_BLOCK_CAP=50 fact, and the two-dot-diff over-attribution observation, and its k14 is thinner (no explicit three-flag conjunction). The differences are offsetting and none is decisive \u2014 tie. X vs Z: X wins on two verified defects in Z: the wake-floor fire gate is misdescribed as 'attributable open custody' (cust includes cust_unk at :758 and the :762-764 cwd-count fallback is omitted \u2014 exactly the key's precision-note trap), and the claim that only two systemMessage-only objects exist is wrong (\u22656 sites); Z also has a non-load-bearing bad cite (mailbox-drain.sh:10-11) and lacks X's verified not-self-clearing-sentinel and LANDING-ignored findings, while X has no material error. Y vs Z: same two Z defects (custody imprecision, systemMessage undercount) plus the bad mailbox-drain cite; Y states k10 precisely including the fallback path and adds verified insights (agent_is_assignee bypass, LANDING ignored, not-self-clearing) that Z lacks. Z's genuine extras (settings table, watchdog stale cite, TEARDOWN polarity) are correct but do not offset a wrong statement of a key predicate."
+ },
+ "retried": false
+}

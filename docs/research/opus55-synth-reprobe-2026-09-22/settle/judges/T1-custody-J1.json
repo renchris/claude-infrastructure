@@ -1,0 +1,239 @@
+{
+ "brief": "T1-custody",
+ "judge": "J1",
+ "model": "claude-opus-5",
+ "effort": "xhigh",
+ "label_map": {
+  "X": "A",
+  "Y": "C",
+  "Z": "B"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "M1",
+     "M2",
+     "M3",
+     "M4"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 36,
+    "citations_bad": [
+     {
+      "cite": "hooks/session-continue.sh:~688-705 \u2014 \"A live /goal with no pending mail makes the whole floor abstain before reaching custody\"",
+      "problem": "Inverted condition. :697 reads `if [ -n \"$_wf_goal\" ] && [ \"$pend\" -gt 0 ]` \u2014 the abstain fires only when a goal is live AND mail IS pending. X states the opposite, which reverses when the custody read is reached."
+     },
+     {
+      "cite": "scripts/handoff-fire.sh:8654 \u2014 cited for `_sc_cmk=\"$(jq -r '.marker // \"\"' \"$FIRED_DIR/$SC_SID.json\" ...)\"`",
+      "problem": ":8654 is the comment `# W2 CUSTODY: discharge the originator's open custody row for this fire`. The assignment is at :8657."
+     },
+     {
+      "cite": "hooks/operator-readout.sh:812-818 \u2014 cited as the `wrap-ledger.sh --machine` shell-out",
+      "problem": ":812-818 is comment prose about --session scoping. The shell-out is :820-826 and `lf()` is :829."
+     },
+     {
+      "cite": "scripts/autonomy-sweep.sh:1919-1920 \u2014 cited for `bash \"$_custdw\" --sweep`",
+      "problem": "The invocation is :1917-1918; :1919 is `_custdw_rc=$?`."
+     },
+     {
+      "cite": "scripts/wrap-ledger.sh:1021 \u2014 quoted to refute a citation that actually names :1020",
+      "problem": "custody-deathwatch cites :1020, which is a bare `#`. X quotes :1021 instead. Verdict (stale) is right, the line checked is not the line cited."
+     },
+     {
+      "cite": "scripts/custody-deathwatch.sh:334 \u2014 cited as holding \"wrap-ledger.sh:1020 and hooks/session-continue.sh:655\"",
+      "problem": "Those line numbers are on :333; :334 carries only the trailing half of the sentence."
+     }
+    ],
+    "wrong_claims": [
+     "Inverts the wake-floor /goal abstain: claims it fires with NO pending mail; hooks/session-continue.sh:697 requires `pend > 0`.",
+     "Describes the rungs decided before custody as \"dirty-tree/gate-red/unlanded-commit\" and \"dirty, gate-stale, unlanded\". wrap-ledger's ladder (:1972-1989) is \u26d4 BLOCKED / DIRTY / REMAINDER / UNLANDED \u2014 there is no gate rung, and REMAINDER and BLOCKED are omitted.",
+     "Gives no discharge condition for scripts/cloud-return.sh:979, calling it only the \"normal-completion path\". The brief asks for the condition, and it is `landed_ok -eq 0`; an unverified land deliberately leaves the row OPEN (:978-982). (K8 substance absent.)",
+     "Never states the wake floor's actual re-fire predicate (hooks/session-continue.sh:805), which is K14's load-bearing line.",
+     "Never mentions the ENGAGE_VERIFY gate \u2014 so it misses that a --recycle or dry fire opens no row at all regardless of rc (M5)."
+    ],
+    "extra_correct": [
+     "bin/cc-cloud is NOT a producer despite carrying a --custody flag: verified by grep that the file never invokes cc-custody; the flag only stores the marker on the declaration record (:988, :1069, :1490-1492). Useful decoy elimination neither Y nor Z performs.",
+     "hooks/validate-bash.sh:633 and :713 \u2014 cc-custody is classified as matching no arm of the write-lease gate. Verified verbatim; an extra touchpoint.",
+     "hooks/lead-crash-watchdog.sh:218 and :1050 mention custody only in prose as a precondition of a retired-by-desk classification and never call the binary. Verified.",
+     "scripts/custody-deathwatch.sh:333-334's cross-file citation to wrap-ledger.sh:1020 and session-continue.sh:655 is stale \u2014 the real jq is wrap-ledger:1066-1069 and session-continue:749-752. Verified; this is a key Traps item neither Y nor Z flags.",
+     "docs/research/stop-chain-wave2-2026-09-03/custody.md:53 cites handoff-fire \"10523\u201310526\" and FIRING_SID at \"8916\"; verified stale (real: :13219-13223 and :11279). Only output to audit a doc-level citation.",
+     "docs/research/backlog-drain-audit-2026-09-22/a7-worker-path.md:345 quoted byte-accurately as independent corroboration that discharge requires a manual abandon --stale.",
+     "bin/cc-custody:56, :183, :268 all verified to carry the abandon --stale doc/usage text; tests/cc-custody.bats:139-158 verified as the only other caller.",
+     "scripts/wrap-ledger.sh:2018-2020 \u2014 resident members are ranked beside custody and one step below it. Verified."
+    ],
+    "score_1_10": 6
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6",
+     "M7"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 32,
+    "citations_bad": [
+     {
+      "cite": "scripts/handoff-fire.sh:13245 \u2014 cited as `if [ \"$ENGAGE_VERIFY\" = 1 ]`",
+      "problem": "That branch is at :13239. :13245 is the comment \"# `|| rc=$?` is set -e-safe.\""
+     },
+     {
+      "cite": "hooks/session-continue.sh:302 \u2014 described as \"an `echo \\\"ARMED\u2026\\\"` line\"",
+      "problem": "Line 302 is `else echo \"inactive\"; fi`. Fabricated content, in the middle of an audit of other files' stale citations."
+     },
+     {
+      "cite": "scripts/wrap-ledger.sh:1977 \u2014 cited as the dirty-tree arm",
+      "problem": ":1977 is inside the \u26d4 branch's READOUT. DIRTY is :1979-1980, REMAINDER :1981-1982, UNLANDED :1983-1989 \u2014 the whole cited ladder is ~2 lines low."
+     },
+     {
+      "cite": "bin/cc-offload:745 \u2014 cited for the CC_PANE_ID\u2192ITERM_SESSION_ID originator-pane resolution",
+      "problem": "That expression is at :746."
+     },
+     {
+      "cite": "bin/cc-dispatch:921 \u2014 cited for the desk role-file read",
+      "problem": "`nb=\"$(cat \"$HOME/.claude/cc-roles/desk\" ...)\"` is at :922."
+     },
+     {
+      "cite": "hooks/mailbox-drain.sh:566-567 \u2014 cited for the payload-cwd/$PWD fallback",
+      "problem": "It is :567-568."
+     },
+     {
+      "cite": "scripts/handoff-fire.sh:13212-13214 \u2014 cited for \"0 only for --recycle or a dry run\"",
+      "problem": "That sentence is at :13215; :13213-13214 says only that ENGAGE_VERIFY=0 fires never reach the block."
+     }
+    ],
+    "wrong_claims": [
+     "Claims hooks/session-continue.sh:302 is an `echo \"ARMED\u2026\"` line; it is `else echo \"inactive\"; fi`.",
+     "The wrap-ledger rung-ladder line numbers are systematically ~2 low, so the cited \"dirty tree (:1977)\" points into the \u26d4 branch instead."
+    ],
+    "extra_correct": [
+     "Dry-run defect: SC_DRY is referenced only at :7967, :7985 and :8709, and the custody `return` at :8707 precedes the dry-run branch \u2014 so `self-close --dry-run` appends a real discharge. Verified exactly (grep returns those three lines).",
+     "`_hf_custody` swallows every failure (:4155-4156, always returns 0), yet :13227 prints \"custody debt OPENED anyway\" without checking \u2014 so that message can report a row that was never written. Verified.",
+     "Rows opened on rc 1/4/5 can reach the self-close discharge only through the absent-stamp repair, because mark_fired_peer runs inside the ENGAGE_RC=0 branch and only when WANT_SELF_RETIRE=1 (:13268-13270). Verified; a genuine consequence of the fail-open table.",
+     "FIRE_MARKER is minted only under `if [ \"$ENGAGE_VERIFY\" = 1 ]` at :10781-10786. Verified exactly.",
+     "Header claim at bin/cc-custody:19-20 (\"a crashed writer can never corrupt an existing verdict\") analysed correctly: `[ inputs ]` aborts on the first unparseable line, so list degrades to '[]' (reads as zero open, :240), count dies \"store unreadable\" (:263), and return/abandon no-ops at rc 0 (:216-217, :232). Honestly labelled as read, not run.",
+     "ts can be empty because `_now` ends in `|| true` (:85), so an empty-ts discharge would sort before its own open. Verified premise.",
+     "bin/cc-custody:33-35 omits the deathwatch and session-busy as consumers; :22-24 omits cc-offload and cc-dispatch as producers. Both verified.",
+     "hooks/completion-assert.sh:296-300,302 verified as the --machine read and `lfield` definition; hooks/session-continue.sh:310 verified as the payload-cwd fallback.",
+     "Verified by grep that lines beginning `cd ` do not occur in handoff-fire.sh, supporting that $PWD at :13220 is the firing cwd."
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6",
+     "M7"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 36,
+    "citations_bad": [
+     {
+      "cite": "scripts/handoff-fire.sh:3230 \u2014 \"`:3230` calls `engage_rc_consequence \\\"$rc\\\" goal`\"",
+      "problem": ":3230 is unrelated comment prose about bounding the projects-dir candidate set. The goal call is at :13232 (grep finds only :13219 and :13232)."
+     },
+     {
+      "cite": "scripts/custody-deathwatch.sh:42 \u2014 quoted as \"It NEVER discharges a debt\"",
+      "problem": "That sentence is at :44. :42 is \"2. Ask an oracle that does NOT depend on the peer's cooperation\u2026\". This is the verbatim line for K11."
+     },
+     {
+      "cite": "scripts/custody-deathwatch.sh:62 \u2014 quoted as \"can only ever ADD a notification\"",
+      "problem": "That sentence is at :66. :62 is \"**An oracle outage therefore degrades the WORDS of the report\u2026**\"."
+     },
+     {
+      "cite": "scripts/custody-deathwatch.sh:36-37 \u2014 cited as saying the discharge happens \"from sc_announce_before_retire\"",
+      "problem": "That text is at :28-29. :36-37 is the \"\u2500\u2500 WHAT THIS DOES \u2500\u2500\" heading and its first line."
+     },
+     {
+      "cite": "hooks/operator-readout.sh:931 \u2014 cited as rendering \"N dispatched session(s) NOT returned\"",
+      "problem": "That term is at :929. :931 is the `gate stale on HEAD` term."
+     },
+     {
+      "cite": "scripts/handoff-fire.sh:13230 \u2014 given as the current location of the /goal arm",
+      "problem": "The arm is `if engage_rc_consequence \"$rc\" goal; then` at :13232; :13230 is comment text."
+     },
+     {
+      "cite": "scripts/cloud-return.sh:984 \u2014 cited for \"the row is left open\"",
+      "problem": "The string `left $custody OPEN \u2014 the result is not verified on trunk` is at :982; :984 is `fi`."
+     },
+     {
+      "cite": "scripts/wrap-ledger.sh:1062 \u2014 cited for the raw pane identity expression",
+      "problem": "`pane=\"${CC_PANE_ID:-${ITERM_SESSION_ID:-}}\"; pane=\"${pane##*:}\"` is at :1061; :1062 is the `if [ -n \"$pane\" ]` test."
+     }
+    ],
+    "wrong_claims": [
+     "\"`engage_apply_consequences` is called with its own internal codes, which are not the same numbers as `ENGAGE_RC`\" \u2014 false. All five call sites pass exactly the ENGAGE_RC value: `0 engaged` (:13273), `2 pane-parked` (:13289), `4 pane-wedged` (:13301), `5 engagement-unproven` (:13323), `1 never-engaged` (:13365).",
+     "\"never-engaged, when `ENGAGE_RC=2` (`:13364-13365`)\" \u2014 false. ENGAGE_RC=2 is caught by the `elif [ \"$ENGAGE_RC\" = 2 ]` at :13274 and exits at :13290. The never-engaged branch is the `else` reached when ENGAGE_RC=1. As written the table asserts that ENGAGE_RC=2 both opens and does not open a debt."
+    ],
+    "extra_correct": [
+     "The drain cannot discharge cloud rows: cloud pings are `HANDOFF-PING cloud/$id:` (scripts/cloud-return.sh:844, :1001) while cloud rows carry marker `$sid` and slug `cloud-$sid` (cc-offload:747-748, cc-dispatch:904, :932), so the token matches neither field in the `.marker == $t or .slug == $t` select (bin/cc-custody:216) \u2014 contradicting mailbox-drain:534's \"cloud-return.sh mirrors that shape\". Verified; a real functional gap no other output found.",
+     "scripts/cloud-retire-terminal.sh:180's claim that \"cc-custody refuses a second discharge\" is mechanism-wrong: an unmatched token prints to stderr and exits 0 (bin/cc-custody:229-233). Effect holds, stated mechanism does not. Verified.",
+     "scripts/growth-coverage.conf:211 exempts autonomy/custody from reaping (\"an OPEN debt must never be reaped\"). Verified verbatim.",
+     "commands/are-we-done.md:22-23 is an additional consumer \u2014 `list --open --fresh` and `count --open --stale`, neither passing --cwd, so both are store-wide unlike every hook consumer. Verified; a consumer absent from the key and from X and Y.",
+     "ENGAGE_VERIFY is set to 1 at handoff-fire.sh:10662 iff RECYCLE=0 and DRY=0 (default 0 at :509). Verified \u2014 Y asserted this from a comment and explicitly did not check it.",
+     "The legacy cc-dispatch leg (:904-905) passes neither --notify-back nor --originator-pane, so its rows can never be attributed to a pane. Verified.",
+     "mailbox-drain reads the discharge verdict off STDERR (`2>&1 >/dev/null`), success meaning empty stderr. Verified (:576-579); only output to state it.",
+     "Dry-run defect at handoff-fire.sh:8707 vs the SC_DRY branch at :8709. Verified (shared with Y).",
+     "All four M6 stale citations verified independently: mailbox-drain:523\u2192handoff-fire:8936 (`RCY_TRANSPLANT_CAUSE=`), :533-534\u2192:7100, :544-545\u2192:7087, wrap-ledger:1018\u2192session-continue:608-612; plus handoff-fire:3557\u2192:9064 (real message at :10942) and wrap-ledger:1016\u2192cc-custody:35-38 (real :36-39)."
+    ],
+    "score_1_10": 8
+   }
+  ],
+  "xy": "Y",
+  "xz": "Z",
+  "yz": "Z",
+  "pair_reasons": "X vs Y \u2014 Y wins on four specific verified differences. (1) Y quotes the wake floor's actual re-fire predicate `[ \\\"$cnt\\\" -eq 0 ] || [ \\\"$pend\\\" -gt 0 ] || [ \\\"$cust\\\" -gt 0 ] || return 0` at hooks/session-continue.sh:805 (K14); X never states it and instead inverts the neighbouring /goal abstain, claiming it fires with NO pending mail when :697 requires `pend > 0`. (2) Y gives the condition the brief demands for scripts/cloud-return.sh:979 \u2014 `landed_ok -eq 0`, otherwise the row is deliberately left OPEN (:982, K8); X calls it only \\\"the normal-completion path\\\" and states no condition. (3) Y states the ENGAGE_VERIFY gate, so a --recycle or dry fire opens no row regardless of rc (M5); X omits it entirely. (4) Y flags the stale raw-pane-capture citation (wrap-ledger:1058 \u2192 session-continue:302, real at :420/:425, M7); X does not. X's genuine counter-wins \u2014 verifying that bin/cc-cloud is a decoy producer, the validate-bash and lead-crash-watchdog touchpoints, and the only doc-level citation audit (stop-chain-wave2/custody.md:53, verified byte-exact) \u2014 are real but do not offset five missed key items plus an inverted mechanism claim. Y's own defects are citation-level (:13245 for the ENGAGE_VERIFY branch, and describing :302 as an `echo \\\"ARMED\u2026\\\"` line when it is `else echo \\\"inactive\\\"; fi`).\n\nX vs Z \u2014 Z wins for the same coverage reasons plus more. Z hits all 21 key items to X's 16, including K8's landed_ok condition, K14's :805 predicate, M5's ENGAGE_VERIFY gate and both halves of M7 (wrap-ledger:1059\u2192session-continue:302, which Z describes correctly, and session-continue:724's own \\\":197\\\", real at :425). Z also carries verified findings X lacks: the drain's slug discharge cannot match cloud rows because `HANDOFF-PING cloud/$id` matches neither marker `$sid` nor slug `cloud-$sid`; cloud-retire-terminal:180's \\\"refuses a second discharge\\\" is mechanism-false against cc-custody:229-233; growth-coverage.conf:211's reap exemption; and commands/are-we-done.md:22-23 as a store-wide consumer. Z carries more wrong line numbers than X (eight, including the two verbatim K11 quotes at :42/:62 that belong at :44/:66) and one material mechanism error about ENGAGE_RC, but X's inverted abstain claim plus five key misses is the larger deficit.\n\nY vs Z \u2014 narrow win for Z, on specific verified differences in both directions. For Z: it performs the citation audit the brief explicitly demands across sixteen cited locations and lands all four of M6's stale citations (mailbox-drain:523\u2192handoff-fire:8936, which I confirmed is `RCY_TRANSPLANT_CAUSE=`; :533-534\u2192:7100; :544-545\u2192:7087; wrap-ledger:1018\u2192session-continue:608-612) where Y lands one, and both halves of M7 where Y lands one and mis-describes :302's contents. Z uniquely surfaces two verified defects \u2014 the cloud ping token can never match a cloud custody row, and cc-custody does not in fact refuse a second discharge \u2014 and uniquely verifies the ENGAGE_VERIFY assignment at :10662 that Y explicitly declined to check. Against Z: it asserts that engage_apply_consequences takes \\\"internal codes\u2026 not the same numbers as ENGAGE_RC\\\" and that never-engaged fires at ENGAGE_RC=2, both false (the five call sites at :13273/:13289/:13301/:13323/:13365 pass the ENGAGE_RC value verbatim, and :13274 catches 2 before the else), and it misplaces eight citations to Y's two-plus-drift. Y is the cleaner and more epistemically careful document; Z is the more complete and more discovering one, and on this brief \u2014 which weights exhaustiveness and byte-level citation verification \u2014 the four extra verified stale citations and two unique verified defects outweigh Z's one substantive mechanism error and its looser line numbers."
+ },
+ "retried": false
+}

@@ -1,0 +1,172 @@
+{
+ "brief": "T2-recycle-goal",
+ "judge": "J0",
+ "model": "claude-opus-5",
+ "effort": "xhigh",
+ "label_map": {
+  "X": "B",
+  "Y": "C",
+  "Z": "A"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K18",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 30,
+    "citations_bad": [],
+    "wrong_claims": [],
+    "extra_correct": [
+     "The `shell)` branch at scripts/handoff-fire.sh:12441-12446 types the relaunch and `return 0`s BEFORE the inheritance call at :12540 and before any watcher detach \u2014 verified: :12441 `shell)`, :12443 it2_type_verified, :12446 `return 0 ;;`. Neither Y nor Z found this second skip path.",
+     "scripts/handoff-fire.sh:5706-5708 carries a now-superseded in-file claim ('`--goal` therefore has to be re-passed on every recycle') \u2014 verified verbatim at :5707; a content-level staleness the other two missed.",
+     "The oracle does NOT use the file's own `transcript_for_sid` (:4679), which carries a `*/*` sid guard at :4682 that goal_live_for_sid lacks \u2014 both lines verified.",
+     "goal-state.sh IS sourced elsewhere: scripts/wrap-ledger.sh:695, hooks/mailbox-drain.sh:67, hooks/session-continue.sh:412 \u2014 all three verified (lib-path resolution lines immediately preceding the `.`).",
+     "`--resume-launcher` is a --recycle-only flag (:8942 parse, :8988 refusal) \u2014 verified.",
+     "Correctly answers item 6's readership sub-question: stderr belongs to the foreground recycle process (the predecessor's own Bash tool), which /exit kills (:12509-12511 verified verbatim), and detach redirects only the watcher's own streams (:1696-1697) so the successor never sees it.",
+     "`${2:?\u2026}` at :8950 refuses an empty `--goal \"\"` \u2014 correct shell semantics (`:?` triggers on null as well as unset).",
+     "goal-state.sh's own predicate also collapses absent/unreadable into rc 1 (:68-69), so the _goal_grep hardening matters only for goal_liveness (:104) \u2014 verified and precisely stated."
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K17",
+     "K18",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6",
+     "M7"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 35,
+    "citations_bad": [
+     {
+      "cite": "scripts/handoff-fire.sh:12646 \u2014 cited as where the predecessor 'is /exit-ed next'",
+      "problem": "Line 12646 is the `\u2192 recycle armed for $SID: watcher pid \u2026` echo. The /exit is actually typed at :12725 (`as_write \"$SID\" \"/exit\"`). The companion citation :12508-12515 (the ORDER IS LOAD-BEARING comment) does hold, so the claim is right and only the second pointer is wrong."
+     },
+     {
+      "cite": "tests/handoff-goal-arm.bats:322-398 as 'the inheritance tests'",
+      "problem": "The @test blocks run :331-398; :319-323 is the section comment, not a test. Off by one block, immaterial."
+     }
+    ],
+    "wrong_claims": [],
+    "extra_correct": [
+     "Complete FIRE_GOAL assignment census \u2014 assignments exist only at :508, :5847, :5852, :7158, :8950, :12538 \u2014 verified by grep; this is what makes the 'ambient exported FIRE_GOAL is the only non-flag input' claim provable rather than asserted.",
+     "scripts/handoff-fire.sh:34 documents 'Env equivalent: FIRE_GOAL' \u2014 verified, supports the :508 precedence point.",
+     "Four further stale citations beyond the key's set, all verified: :6942 cites ':5686' (a 'WHAT WAS ACTUALLY MEASURED' comment; real parse is :7153-7158); :12358 cites ':4828, :4844, :4861' (all comments; real emits are :7332/:7368/:7396); docs/plans/LIVENESS_DETECTOR_FAILNEG.md:208 cites `:3574 goal_live_for_sid` (:3574 is `1:custody) return 0 ;;`); A05-recycle-engagement.md:106 cites `:12406-12412` (:12406 is `tty=\"$(as_tty_classified \"$SID\")\"`).",
+     "The file's own `set -euo pipefail` self-citations are stale too \u2014 :4407 says '(:273)', :10697 and :11341 say '(:197)'; the real line is :343. All four verified.",
+     "Correction of CLAUDE.global.md:224's 'a refusal is printed, never silent' \u2014 verified verbatim; it is printed to the stderr of the process about to be exited, and the ledger row is labelled as a fire refusal. Directly answers the brief's readership sub-question and refutes an in-repo claim.",
+     "recon-wave.md:35's test pointer tests/handoff-goal-arm.bats:305 is a blank line \u2014 verified.",
+     "goal_requested:false rides the recycle outcome rows (:870 computes it from FIRE_GOAL; the field is emitted at :876) \u2014 verified.",
+     "tests/handoff-goal-arm.bats:44-45 extracts by sed name-range, so line drift does not break it \u2014 verified; a correct RESOLVES verdict among the STALE ones.",
+     "In resume mode the explicit --goal is blanked at :12538 but was still validated at :9015 first \u2014 correct ordering, verified.",
+     "The twin's one behavioural difference: an unreadable transcript does not end the search (it `continue`s to the next hit/root) whereas the library returns 1 \u2014 correct reading of :5819-5820."
+    ],
+    "score_1_10": 9
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "K1",
+     "K2",
+     "K3",
+     "K4",
+     "K5",
+     "K6",
+     "K7",
+     "K8",
+     "K9",
+     "K10",
+     "K11",
+     "K12",
+     "K13",
+     "K14",
+     "K15",
+     "K16",
+     "K18",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 26,
+    "citations_bad": [
+     {
+      "cite": "scripts/handoff-fire.sh \u2014 'cc_sid_for_pane() (defined 4955-4989)'",
+      "problem": "The function runs :4955-4998 (`return 0` at :4997, `}` at :4998). :4989 is mid-fallback (`_env=$(ps eww \u2026)`), so the cited range truncates the function before the sessionId read at :4994 that Z's own prose describes."
+     },
+     {
+      "cite": "scripts/handoff-fire.sh:5780-5786 offered as the reason goal_live_for_sid uses a recursive find",
+      "problem": "That comment block belongs to goal_armed_for_pane, a different function; goal_live_for_sid's own rationale is at :5804-5805. The content Z quotes is accurate, the attribution is to the neighbouring function."
+     }
+    ],
+    "wrong_claims": [
+     "Item 6 readership: 'this happens in the foreground predecessor process \u2026 so it is visible to whoever is watching that pane at that moment', and later 'the two stderr lines (ephemeral, pane-local)'. On the dominant self-recycle path that stderr is the predecessor session's own Bash-tool stream, and the script's own comment at :12509-12511 says the typed /exit 'INTERRUPTS the in-flight turn \u2026 kills this very Bash tool' \u2014 the same readership failure tests/handoff-goal-arm.bats:400-405 records. Z asserts the favourable reading of the brief's 'who can actually read it' sub-question; X and Y both answer it correctly.",
+     "'$FIRE_GOAL is the 8th argument after __recycle' \u2014 counting the detach line at :12628, FIRE_GOAL is the 7th argument AFTER __recycle ($8 in the re-exec'd argv where $1=__recycle). The read-back citation (:7158, $8) is right, so only the ordinal prose is off; the key uses the same loose phrasing, so this is noted rather than charged."
+    ],
+    "extra_correct": [
+     "scripts/handoff-fire.sh:12796 prints 'no goal inheritance (an unmet goal rides --resume)' for resume mode \u2014 verified verbatim; a code-emitted confirmation of the :12535 skip branch that neither X nor Y cites.",
+     "goal_armed_for_pane (:5774-5799) is a third, separate oracle called only at :5906 \u2014 verified by grep (only definition, two comments, and the :5906 call); a useful disambiguation from goal_live_for_sid.",
+     "The fail-OPEN (inherited, :5851-5854) vs fail-CLOSED (explicit, :9015 `check_goal_arm || exit 1`) contrast for the same validator \u2014 both lines verified; the sharpest framing of that asymmetry among the three.",
+     "Full refusal-row field list (class/refuse_reason/gate/verdict/detail/ts/firing_sid/account/prompt_file) \u2014 verified against :702-710.",
+     "The :5089 and :11070 contexts are described accurately (the FAILURE-DIRECTION subagent-SIGKILL comment block at :5087-5090; the worktree-pool `elif [ \"$POOL_ELIGIBLE\" = 1 ]` claim at :11065-11070).",
+     "Verbatim line quoting throughout makes the citations self-checking; every quoted line I opened matched byte-for-byte."
+    ],
+    "score_1_10": 7
+   }
+  ],
+  "xy": "Y",
+  "xz": "X",
+  "yz": "Y",
+  "pair_reasons": "X vs Y \u2014 Y wins, narrowly but on verified substance. The brief explicitly demands that every in-repo line citation of this machinery be checked; Y found and verified ~14 stale citations against X's ~6, including two the key scores (K17 hooks/goal-inert-watch.sh:36 citing 4671-4688, and M7 docs/plans/NONLIMIT_RESUME_LADDER.md:753 citing :4994-5009) plus four the key does not (handoff-fire.sh:6942\u2192:5686, :12358\u2192:4828/4844/4861, LIVENESS_DETECTOR_FAILNEG.md:208\u2192:3574, A05:106\u2192:12406-12412, and the file's own set -euo pipefail self-citations '(:273)'/'(:197)' against the real :343). I opened all of these and every one resolves as Y describes. Y also refutes CLAUDE.global.md:224's 'a refusal is printed, never silent', which is exactly the brief's item-6 readership question. X is not weak \u2014 it has zero bad citations I could find and three genuine unique finds (the `shell)` early-return at :12441-12446 that skips inheritance entirely and that neither other output noticed; the superseded in-file claim at :5707; the transcript_for_sid `*/*` guard contrast at :4679/:4682) \u2014 but Y's key coverage is 25/25 against X's 23/25 and its only defects are one mis-pointed supporting citation (:12646 for the /exit, which is at :12725) and a one-block-off test range.\n\nX vs Z \u2014 X wins on a specific, verified, material difference: item 6 asks where the refusal is announced and WHO CAN ACTUALLY READ IT. X answers correctly (foreground process's stderr = the predecessor's own Bash tool, which the typed /exit kills \u2014 quoting :12509-12511, and detach at :1696-1697 redirects only the watcher's streams, so neither the watcher log nor the successor ever sees it). Z answers 'visible to whoever is watching that pane at that moment' and calls the lines 'pane-local', which is the optimistic reading the script's own comment and tests/handoff-goal-arm.bats:400-405 contradict. X additionally found the second skip branch at :12441-12446 (verified) that Z missed while both cover the resume branch. Key coverage is tied at 23/25, and Z's unique wins (the :12796 resume summary line, the goal_armed_for_pane disambiguation, the fail-open/fail-closed framing) do not offset a wrong answer to an explicitly asked sub-question plus two loose citation ranges (cc_sid_for_pane 'defined 4955-4989' truncates at :4998; the :5780-5786 rationale belongs to a different function).\n\nY vs Z \u2014 Y wins on both axes. Key coverage 25/25 vs 23/25 (Z misses K17 and M7), Y's stale-citation sweep is roughly triple Z's and every entry I opened holds, and Y answers the readership question correctly where Z asserts the wrong direction. Z's verbatim quoting is genuinely good practice and its :12796 find is real, but Y independently covers the resume skip with the same code-level certainty and adds the FIRE_GOAL assignment census (verified: :508, :5847, :5852, :7158, :8950, :12538 and nothing else) that turns the 'exported FIRE_GOAL is the only other trip' claim from assertion into proof."
+ },
+ "retried": false
+}

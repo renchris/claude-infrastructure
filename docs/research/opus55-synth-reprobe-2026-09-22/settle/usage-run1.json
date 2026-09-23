@@ -1,0 +1,545 @@
+{
+ "arm:T1-custody:A": {
+  "agentId": "aa9a98c0eb0c8205b",
+  "cache_creation": 245973,
+  "cache_read": 1993486,
+  "input": 26,
+  "models": [
+   "claude-sonnet-5"
+  ],
+  "output": 18285,
+  "tools": {
+   "Bash": 21,
+   "Read": 3
+  },
+  "turns": 13
+ },
+ "arm:T1-custody:B": {
+  "agentId": "a21e28cf02a46d446",
+  "cache_creation": 180677,
+  "cache_read": 3037267,
+  "input": 42,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 12501,
+  "tools": {
+   "Bash": 20,
+   "Read": 2
+  },
+  "turns": 21
+ },
+ "arm:T1-custody:C": {
+  "agentId": "a499057077684697b",
+  "cache_creation": 176175,
+  "cache_read": 3591343,
+  "input": 52,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 14659,
+  "tools": {
+   "Bash": 23,
+   "Read": 2
+  },
+  "turns": 26
+ },
+ "arm:T2-recycle-goal:A": {
+  "agentId": "acf7357f811c350d7",
+  "cache_creation": 169740,
+  "cache_read": 3871277,
+  "input": 56,
+  "models": [
+   "claude-sonnet-5"
+  ],
+  "output": 28654,
+  "tools": {
+   "Bash": 16,
+   "Read": 11
+  },
+  "turns": 28
+ },
+ "arm:T2-recycle-goal:B": {
+  "agentId": "a1996d8bb1552a9c4",
+  "cache_creation": 152945,
+  "cache_read": 2769947,
+  "input": 42,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 14862,
+  "tools": {
+   "Bash": 20,
+   "Read": 1
+  },
+  "turns": 21
+ },
+ "arm:T2-recycle-goal:C": {
+  "agentId": "af730fd9f8672eedb",
+  "cache_creation": 164285,
+  "cache_read": 2931246,
+  "input": 44,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 15665,
+  "tools": {
+   "Bash": 21,
+   "Read": 1
+  },
+  "turns": 22
+ },
+ "arm:T3-frontier-budget:A": {
+  "agentId": "a4fb2e5443fae1bc2",
+  "cache_creation": 189777,
+  "cache_read": 3431734,
+  "input": 48,
+  "models": [
+   "claude-sonnet-5"
+  ],
+  "output": 12613,
+  "tools": {
+   "Bash": 21,
+   "Read": 2
+  },
+  "turns": 24
+ },
+ "arm:T3-frontier-budget:B": {
+  "agentId": "a035306e671a9be7d",
+  "cache_creation": 141486,
+  "cache_read": 1427631,
+  "input": 24,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 12484,
+  "tools": {
+   "Bash": 17,
+   "Read": 1
+  },
+  "turns": 12
+ },
+ "arm:T3-frontier-budget:C": {
+  "agentId": "ad63896e9f14c201a",
+  "cache_creation": 161043,
+  "cache_read": 3130057,
+  "input": 48,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 11209,
+  "tools": {
+   "Bash": 24,
+   "Read": 1
+  },
+  "turns": 24
+ },
+ "arm:T4-stop-arms:A": {
+  "agentId": "ae5b710064ad6bb3a",
+  "cache_creation": 263578,
+  "cache_read": 3108661,
+  "input": 34,
+  "models": [
+   "claude-sonnet-5"
+  ],
+  "output": 24761,
+  "tools": {
+   "Bash": 15,
+   "Read": 6
+  },
+  "turns": 17
+ },
+ "arm:T4-stop-arms:B": {
+  "agentId": "a55571316b1c3525b",
+  "cache_creation": 189950,
+  "cache_read": 3236554,
+  "input": 40,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 15484,
+  "tools": {
+   "Bash": 15,
+   "Read": 6
+  },
+  "turns": 20
+ },
+ "arm:T4-stop-arms:C": {
+  "agentId": "a670119478c382e53",
+  "cache_creation": 202033,
+  "cache_read": 3426671,
+  "input": 40,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 20728,
+  "tools": {
+   "Bash": 16,
+   "Read": 5
+  },
+  "turns": 20
+ },
+ "arm:T5-deploy-live-exec:A": {
+  "agentId": "a713af65a76fbff28",
+  "cache_creation": 176934,
+  "cache_read": 5079143,
+  "input": 66,
+  "models": [
+   "claude-sonnet-5"
+  ],
+  "output": 46202,
+  "tools": {
+   "Bash": 30,
+   "Read": 2
+  },
+  "turns": 33
+ },
+ "arm:T5-deploy-live-exec:B": {
+  "agentId": "a2ab47032aeec36be",
+  "cache_creation": 146200,
+  "cache_read": 2528965,
+  "input": 40,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 10491,
+  "tools": {
+   "Bash": 19,
+   "Read": 1
+  },
+  "turns": 20
+ },
+ "arm:T5-deploy-live-exec:C": {
+  "agentId": "a203cf44f15f8d8dd",
+  "cache_creation": 149687,
+  "cache_read": 2941671,
+  "input": 46,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 17569,
+  "tools": {
+   "Bash": 21,
+   "Read": 1
+  },
+  "turns": 23
+ },
+ "arm:T6-choose:A": {
+  "agentId": "a128f8fe1f7868681",
+  "cache_creation": 197084,
+  "cache_read": 3915854,
+  "input": 52,
+  "models": [
+   "claude-sonnet-5"
+  ],
+  "output": 6739,
+  "tools": {
+   "Bash": 21,
+   "Read": 5
+  },
+  "turns": 26
+ },
+ "arm:T6-choose:B": {
+  "agentId": "a46597994840eb84e",
+  "cache_creation": 134598,
+  "cache_read": 2022502,
+  "input": 34,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 4486,
+  "tools": {
+   "Bash": 16,
+   "Read": 1
+  },
+  "turns": 17
+ },
+ "arm:T6-choose:C": {
+  "agentId": "aac07b3da40756cd8",
+  "cache_creation": 153586,
+  "cache_read": 2926340,
+  "input": 46,
+  "models": [
+   "claude-opus-5-5"
+  ],
+  "output": 3133,
+  "tools": {
+   "Bash": 21,
+   "Read": 1
+  },
+  "turns": 23
+ },
+ "judge:T1-custody:J0": {
+  "agentId": "aa858539e6927ab7e",
+  "cache_creation": 187220,
+  "cache_read": 1401885,
+  "input": 290,
+  "models": [
+   "claude-fable-5-1"
+  ],
+  "output": 6347,
+  "tools": {
+   "Bash": 9,
+   "StructuredOutput": 1
+  },
+  "turns": 10
+ },
+ "judge:T1-custody:J1": {
+  "agentId": "a9dbdb110609ee87d",
+  "cache_creation": 249597,
+  "cache_read": 5280528,
+  "input": 56,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 13944,
+  "tools": {
+   "Bash": 42,
+   "StructuredOutput": 1
+  },
+  "turns": 28
+ },
+ "judge:T1-custody:J2": {
+  "agentId": "a230ac7285d0bd3fe",
+  "cache_creation": 241049,
+  "cache_read": 5133516,
+  "input": 54,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 18165,
+  "tools": {
+   "Bash": 40,
+   "StructuredOutput": 1
+  },
+  "turns": 27
+ },
+ "judge:T2-recycle-goal:J0": {
+  "agentId": "ab9915aec4ba2978e",
+  "cache_creation": 216325,
+  "cache_read": 3180314,
+  "input": 38,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 7148,
+  "tools": {
+   "Bash": 25,
+   "StructuredOutput": 1
+  },
+  "turns": 19
+ },
+ "judge:T2-recycle-goal:J1": {
+  "agentId": "a2cc99d9d0b2d4b41",
+  "cache_creation": 163221,
+  "cache_read": 428070,
+  "input": 98,
+  "models": [
+   "claude-fable-5-1"
+  ],
+  "output": 7193,
+  "tools": {
+   "Bash": 4,
+   "Read": 2,
+   "StructuredOutput": 1
+  },
+  "turns": 4
+ },
+ "judge:T2-recycle-goal:J2": {
+  "agentId": "a16d500ab91bf124f",
+  "cache_creation": 194450,
+  "cache_read": 4242002,
+  "input": 52,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 10053,
+  "tools": {
+   "Bash": 26,
+   "StructuredOutput": 1
+  },
+  "turns": 26
+ },
+ "judge:T3-frontier-budget:J0": {
+  "agentId": "a54d58258ddd04432",
+  "cache_creation": 221376,
+  "cache_read": 5071867,
+  "input": 56,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 6466,
+  "tools": {
+   "Bash": 28,
+   "StructuredOutput": 1
+  },
+  "turns": 28
+ },
+ "judge:T3-frontier-budget:J1": {
+  "agentId": "acf23003cc2c11c37",
+  "cache_creation": 224609,
+  "cache_read": 4552561,
+  "input": 50,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 6730,
+  "tools": {
+   "Bash": 28,
+   "StructuredOutput": 1
+  },
+  "turns": 25
+ },
+ "judge:T3-frontier-budget:J2": {
+  "agentId": "a47ba5d08e3ae6028",
+  "cache_creation": 176552,
+  "cache_read": 1609178,
+  "input": 322,
+  "models": [
+   "claude-fable-5-1"
+  ],
+  "output": 9472,
+  "tools": {
+   "Bash": 10,
+   "StructuredOutput": 1
+  },
+  "turns": 11
+ },
+ "judge:T4-stop-arms:J0": {
+  "agentId": "a0d88e97f2855c3c0",
+  "cache_creation": 202684,
+  "cache_read": 1517094,
+  "input": 290,
+  "models": [
+   "claude-fable-5-1"
+  ],
+  "output": 5328,
+  "tools": {
+   "Bash": 8,
+   "Read": 1,
+   "StructuredOutput": 1
+  },
+  "turns": 10
+ },
+ "judge:T4-stop-arms:J1": {
+  "agentId": "ad2280a2e2d522acb",
+  "cache_creation": 263857,
+  "cache_read": 6301281,
+  "input": 62,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 7770,
+  "tools": {
+   "Bash": 36,
+   "StructuredOutput": 1
+  },
+  "turns": 31
+ },
+ "judge:T4-stop-arms:J2": {
+  "agentId": "ab494ceafd6a58038",
+  "cache_creation": 248793,
+  "cache_read": 7673050,
+  "input": 80,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 7151,
+  "tools": {
+   "Bash": 41,
+   "StructuredOutput": 1
+  },
+  "turns": 40
+ },
+ "judge:T5-deploy-live-exec:J0": {
+  "agentId": "abd636545249c12cd",
+  "cache_creation": 198476,
+  "cache_read": 3445029,
+  "input": 42,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 10434,
+  "tools": {
+   "Bash": 31,
+   "StructuredOutput": 1
+  },
+  "turns": 21
+ },
+ "judge:T5-deploy-live-exec:J1": {
+  "agentId": "a07b6bd5c394f0a32",
+  "cache_creation": 164901,
+  "cache_read": 595119,
+  "input": 130,
+  "models": [
+   "claude-fable-5-1"
+  ],
+  "output": 6503,
+  "tools": {
+   "Bash": 10,
+   "Read": 2,
+   "StructuredOutput": 1
+  },
+  "turns": 5
+ },
+ "judge:T5-deploy-live-exec:J2": {
+  "agentId": "ac2311302a230c42b",
+  "cache_creation": 205877,
+  "cache_read": 4242064,
+  "input": 52,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 7032,
+  "tools": {
+   "Bash": 26,
+   "StructuredOutput": 1
+  },
+  "turns": 26
+ },
+ "judge:T6-choose:J0": {
+  "agentId": "a935b802cc6b29816",
+  "cache_creation": 176116,
+  "cache_read": 4552278,
+  "input": 60,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 8474,
+  "tools": {
+   "Bash": 29,
+   "StructuredOutput": 1
+  },
+  "turns": 30
+ },
+ "judge:T6-choose:J1": {
+  "agentId": "af3379c0b8f529d95",
+  "cache_creation": 170886,
+  "cache_read": 5130574,
+  "input": 70,
+  "models": [
+   "claude-opus-5"
+  ],
+  "output": 6560,
+  "tools": {
+   "Bash": 34,
+   "StructuredOutput": 1
+  },
+  "turns": 35
+ },
+ "judge:T6-choose:J2": {
+  "agentId": "a99c07482e29c0352",
+  "cache_creation": 144506,
+  "cache_read": 1222152,
+  "input": 290,
+  "models": [
+   "claude-fable-5-1"
+  ],
+  "output": 4589,
+  "tools": {
+   "Bash": 9,
+   "StructuredOutput": 1
+  },
+  "turns": 10
+ }
+}

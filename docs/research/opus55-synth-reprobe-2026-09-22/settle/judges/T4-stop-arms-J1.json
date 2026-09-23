@@ -1,0 +1,197 @@
+{
+ "brief": "T4-stop-arms",
+ "judge": "J1",
+ "model": "claude-opus-5",
+ "effort": "xhigh",
+ "label_map": {
+  "X": "C",
+  "Y": "A",
+  "Z": "B"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6",
+     "k7",
+     "k8",
+     "k9",
+     "k10",
+     "k11",
+     "k12",
+     "k13",
+     "k14",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 38,
+    "citations_bad": [
+     {
+      "cite": "hooks/lib/goal-state.sh:60-80 for goal_live_condition",
+      "problem": "over-wide range: the function is :60-73; :75-80 is an unrelated 'LIVENESS ORACLE' comment block. Substance of the claim (last goal_status attachment with neither met nor failed) is correct at :66-70."
+     }
+    ],
+    "wrong_claims": [],
+    "extra_correct": [
+     "completion-assert.sh:866-870 reads ${f}.blocked (written by mark_blocked at :1209/:1214/:1329) and sets contra=0, withdrawing its own contradiction block \u2014 verified; X is the only output that found the double-block CONSUMER",
+     "settings-templates/settings.example.json:466-467 \u2014 session-continue.sh is Stop member #4 with \"timeout\":5, completion-assert #6 at :476 \u2014 verified exactly",
+     "Second env divergence beyond CC_MECH_MAX: session-continue.sh:420 uses ${CC_PANE_ID:-${ITERM_SESSION_ID:-}} while hooks/session-register.sh:134 uses ${CC_PANE_ID:-${ITERM_SESSION_ID:-${KITTY_WINDOW_ID:-}}} \u2014 verified; consequence (kitty-only pane has wake floor + mail fold switched off via the :607/:1286 guards) is correct",
+     "SID-BIND is destructive, not merely abstaining: :1245-1251 does `rm -f \"$f\" ...` so a sibling session's Stop DELETES this session's armed sentinel \u2014 verified",
+     "Ledger precedence: BLOCKED>0 yields \u26d4 at wrap-ledger.sh:1972-1973 before the \ud83d\udd27 arm at :1979, so a pending blocking decision suppresses the mechanical arm over this session's own dirty files \u2014 verified",
+     "\ud83d\udce6 subsumes the 'Land IN FLIGHT' readout (wrap-ledger.sh:1985-1986); ship_floor only greps RUNG at :1127-1128 and cannot tell them apart, so it can block mid-land \u2014 verified",
+     "Full \ud83d\ude80 precondition chain in the ledger (custody 0 at :1997-1998, then resident/filed/unconvicted/close-floor, trunk resolved, LIVE_BREACH=1 at :2053-2056) \u2014 verified",
+     "CLAUDE_CONTINUE_MAX (:1255) and CC_MECH_MAX (:1053) are unsanitised while n/mcnt are (:1257, :1058); with no `set -e` anywhere in the file (confirmed by grep and by the file's own :36 note), a non-numeric value makes `[ -ge ]` error, read false, and the bound never fire",
+     "${f}.mech survives both `clear` and the cap (:1206 and :1260 remove only .count/.sid/.cwd); `clear` writes SC_SID from CLAUDE_CODE_SESSION_ID/CLAUDE_SESSION_ID or '?' (:260) while the arm compares against stdin .session_id (:1060), so a bare-shell clear can fail to spend the budget \u2014 verified",
+     "The wake-floor budget file is deleted whenever a live watcher is seen (:614), making it per-unarmed-stretch rather than per-session \u2014 verified",
+     "bin/cc-custody:106-111 \u2014 open set = latest event per key (marker, else slug|targetPane) with kind==open \u2014 verified (Y explicitly did not open this file)",
+     "Legacy fallback `mailbox_take \"$_ouid\" 0` (:1296-1297) consumes before the block is printed, unlike the peek/emit-then-commit path \u2014 verified",
+     "mailbox_window_end is called with max 0 (:1293), so the folded window has no size cap \u2014 verified",
+     "session_unlanded_mine uses a two-dot tree diff (session-writes.sh:415), so files trunk changed since the fork also count \u2014 verified",
+     "session-writes.sh's Bash blind spot: only Write|Edit|MultiEdit|NotebookEdit tool_use records are collected (:180), so files changed via Bash are never attributed \u2014 verified",
+     "FIVE stale in-file citations, all verified byte-for-byte: session-writes.sh:110\u2192wrap-ledger.sh:140 (deploy-live lag budget); session-writes.sh:405\u2192completion-assert.sh:398 (`aid=\"$(agent_is_assignee ...)\" || return 1`); session-continue.sh:519\u2192completion-assert.sh:236 (WRAP_TRANSCRIPT memo); :990\u2192completion-assert.sh:99-105 (--why tier + set -uo pipefail); :455/:643\u2192bin/cc-pane-headless:124 (--name argv case) and :197 (a bare `fi`)",
+     "Env-default audit claim confirmed by my own grep: CC_MECH_MAX is the ONLY name in hooks/scripts/bin with two literal defaults"
+    ],
+    "score_1_10": 9
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6",
+     "k7",
+     "k8",
+     "k9",
+     "k11",
+     "k12",
+     "k13",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [
+     "k10"
+    ],
+    "citations_checked": 24,
+    "citations_bad": [
+     {
+      "cite": "hooks/session-continue.sh:1280-1283 quoted as \"a dup, never a loss\"",
+      "problem": "fabricated quote at that location: :1280-1283 is the EMIT-THEN-COMMIT comment; the phrase 'a dup' appears only at :1338 and 'never a loss' appears nowhere in the file"
+     },
+     {
+      "cite": "hooks/lib/continue-sentinel.sh:23-27 described as sha1sum(...)",
+      "problem": "wrong symbol: :25 uses `shasum`, not `sha1sum`. (The SHA-1 algorithm claim happens to be right, but the named command is not in the file.)"
+     },
+     {
+      "cite": "settings-templates/settings.example.json \u2014 'entry 4 of 9', 'the 9-entry Stop array'",
+      "problem": "hooks.Stop is an array of 2 matcher groups; the group holding these hooks has 8 entries. Positions 4 and 6 within that group are correct, but there is no 9-entry Stop array."
+     },
+     {
+      "cite": "hooks/session-continue.sh:1-2 as 'frames itself as the single source of truth for this loop'",
+      "problem": ":1 is the shebang and :2 is the title line ('\ud83d\udd27 loose-ends continuation loop (agent-set sentinel + Stop-hook actuator)'); nothing there claims SSOT status"
+     }
+    ],
+    "wrong_claims": [
+     "Describes the wake floor's firing term as 'any idle with attributable open dispatched work (cust)' and says unattributable rows are 'counted separately ... never asserted as this session's' \u2014 but :758 is `cust=$(( cust_mine + cust_unk ))`, so unattributable rows DO feed the predicate, and the :762-764 fallback sets cust to the bare cwd count. This is exactly the precision the key's k10 note flags.",
+     "'1 block from this hook, but potentially 2 block messages reaching the model on one Stop overall' \u2014 stated as current behaviour off the file's own 2.5%-double-fire comment, but the shipped guard at completion-assert.sh:866-870 reads ${f}.blocked and sets contra=0 on precisely the arm the comment measured (33/33 false-done). Y states it did not open completion-assert.sh.",
+     "On the CC_MECH_MAX split: 'In that unset case it happens to be non-hazardous ... still satisfies mcnt -ge mmax and correctly fully-spends the budget.' False whenever `clear` runs from a shell with no CLAUDE_CODE_SESSION_ID: :260 stamps '?' and :1060 resets mcnt to 0, so the clear spends nothing. Both other outputs found this.",
+     "Flags ZERO stale in-file citations despite the brief's explicit instruction, in a tree where I verified at least nine (the key's trap list plus five X found and four Z found independently). Y verified two citations that were accurate and stopped."
+    ],
+    "extra_correct": [
+     "ship_floor's block payload (:1197) carries only `reason`, while wake_floor's (:892-893) is the only one setting decision+systemMessage together \u2014 verified",
+     "Correctly identifies :1154 as session_writes_paths (session scope, session-writes.sh:200) and NOT the turn-scoped session_writes_paths_turn (:205) \u2014 verified, a real precision point",
+     "The mail fold sits after the kill-switch (:1228) and CAP (:1258) exits, so a Stop ending on either never surfaces pending mail through this hook \u2014 verified",
+     "_sw_canon's symlink rationale documented at session-writes.sh:269-276 (/tmp\u2192/private/tmp and the symlinked live layer) \u2014 verified exactly",
+     "Enumerates the wake floor's systemMessage-only abstain branches (:659, :699, :792, :840, :851) \u2014 all verified",
+     "CC_WAKE_FLOOR_TEARDOWN=0 disables both sub-abstains and thereby makes the floor MORE aggressive \u2014 verified at :776-798",
+     "RUNG=\ud83d\udd27 in the ledger means DIRTY=1 (:1979) or REMAINDER>0 (:1981), with the custody/resident/filed/unconvicted \ud83d\udd27s gated behind the \u2705-eligible branch \u2014 verified",
+     "The drain lock at :1340 is released whether or not the emit succeeded \u2014 verified"
+    ],
+    "score_1_10": 6
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6",
+     "k7",
+     "k8",
+     "k9",
+     "k10",
+     "k11",
+     "k12",
+     "k13",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 30,
+    "citations_bad": [
+     {
+      "cite": "hooks/mailbox-drain.sh:224 described as 'a mailbox_take_n call'",
+      "problem": "false content claim: :224 is a bare `fi`; the mailbox_take_n call is at :226. (The underlying point \u2014 that session-continue.sh:442's citation is stale \u2014 still holds.)"
+     },
+     {
+      "cite": "hooks/session-continue.sh:349 for KILL_RE",
+      "problem": "off by one: KILL_RE is assigned at :348; :349 is the start of the last_user_msg comment block"
+     },
+     {
+      "cite": "hooks/lib/agent-identity.sh:100 for CC_WF_TEAM_ROOTS",
+      "problem": "wrong line: :100 is a comment; the `${CC_WF_TEAM_ROOTS:-}` read is at :103"
+     },
+     {
+      "cite": "hooks/session-continue.sh:1070-1072 for 'writes the sentinel reason, .sid and .cwd'",
+      "problem": "range too tight: reason :1070 and .sid :1071 are correct, but the .cwd write is at :1075, outside the cited span"
+     },
+     {
+      "cite": "hooks/lib/agent-identity.sh:33-62 for agent_assignee_argv",
+      "problem": "truncated range: the function runs :33-77; the cited span cuts off before the id/name/team consistency check at :70-71 and the exit paths"
+     }
+    ],
+    "wrong_claims": [],
+    "extra_correct": [
+     "The teardown stale-citation refutation, fully verified and unique to Z: session-continue.sh:545-547 claims wf_teardown_marked is 'taken verbatim from lead-crash-watchdog.sh classify_death (:255-278)' with marker_owns_sid at ':112-118' \u2014 in fact classify_death is at :402, the marker reader retired_by_desk is at :249, and marker_owns_sid is at :207-213; and it is NOT verbatim, since the watchdog demands `\"mode\":\"teardown\"` (:258) and `find -mmin -30` (:257) while wf_teardown_marked (:551-568) checks neither",
+     "The \ud83d\udce6 branch additionally requires the ledger's TRUNK= to be non-empty and not 'none' (:1148-1149) \u2014 verified, and named by neither X nor Y",
+     "The headless abstain emits its systemMessage only when pend>0 (:658-661) \u2014 verified",
+     "clear's sid hole: :260 stamps SC_SID from CLAUDE_CODE_SESSION_ID/CLAUDE_SESSION_ID or '?' against the arm's stdin-derived cur_sid at :1060, so a mismatched clear spends nothing \u2014 verified",
+     "CC_WATCH_FRESH_S:-90 is identical at hooks/lib/mailbox-pending.sh:297, bin/cc-notify:1297 and bin/cc-await-ping:385 \u2014 I reproduced this grep exactly",
+     "Machine-authored briefs still count as kill-switch-eligible user records (the isMeta filter at :381 excludes only injected command/skill bodies) \u2014 verified against the file's own measured note at :383-388",
+     "CLAUDE_CONTINUE_MAX (:1255) and CC_MECH_MAX (:1053) are unsanitised, so a non-numeric value fails the bound open \u2014 verified (no `set -e` in the file)",
+     "Four further stale citations verified: :432's 'mailbox-drain.sh ... its :64-68, CC_MBX_SESSION_KEY' points at goal-state sourcing; :433's 'mailbox_promote_acked (:213)' \u2014 :213 is _mbx_write_int, the function is at :560; :441's 'The floor (:416)' \u2014 :416 is a shellcheck directive; :1327's 'precedent at :502' \u2014 :502 is a teardown comment; :317's hook-chain.sh:78 \u2014 the 'EVERY MEMBER ALWAYS RUNS' text is at :77",
+     "Explicit, honest non-verification note: 'I did not read how wrap-ledger.sh computes RUNG, TRUNK, AHEAD or SHAS' \u2014 correctly scopes every rung claim as consumed rather than derived"
+    ],
+    "score_1_10": 8
+   }
+  ],
+  "xy": "X",
+  "xz": "X",
+  "yz": "Z",
+  "pair_reasons": "X vs Y \u2014 X wins on four verified, material differences. (1) Y contradicts the key's k10 precision point: it calls the wake floor's firing term \"attributable open dispatched work\" and says unattributable rows are \"counted separately ... never asserted as this session's\", but hooks/session-continue.sh:758 is `cust=$(( cust_mine + cust_unk ))` and the :762-764 no-pane fallback sets cust to the bare cwd count; X states `cust = mine + unknown (:758)` correctly. (2) Y misses k14 entirely \u2014 it names agent_assignee_argv and agent_team_member_confirms but never describes the ancestry walk, the three-flag conjunction at hooks/lib/agent-identity.sh:53, or the rc trichotomy; X gives all of it and I confirmed every part (:33-77, :53, :70-71, :93-124). (3) The brief explicitly demanded stale citations be flagged; Y flagged none, while X flagged five that I verified byte-for-byte (session-writes.sh:110\u2192wrap-ledger.sh:140; session-writes.sh:405\u2192completion-assert.sh:398; :519\u2192completion-assert.sh:236; :990\u2192completion-assert.sh:99-105; :455/:643\u2192cc-pane-headless:124 and :197, the latter being a bare `fi`). (4) Y carries a fabricated quote (\"a dup, never a loss\" attributed to :1280-1283; the phrase is absent from the file) and a wrong symbol (`sha1sum` where continue-sentinel.sh:25 uses `shasum`), and its \"potentially 2 block messages on one Stop\" is contradicted by completion-assert.sh:866-870 setting contra=0 off the ${f}.blocked marker \u2014 a consumer X found and Y explicitly declined to open.\n\nX vs Z \u2014 closer, but X wins. Z gives only the rc trichotomy for the assignee confirm and never describes agent_assignee_argv's mechanism, so it partially misses k14 where X hits it fully. Z carries one false content claim (hooks/mailbox-drain.sh:224 is a bare `fi`; the mailbox_take_n call is at :226) plus several off-by-a-few citations (KILL_RE at :349 vs the real :348; CC_WF_TEAM_ROOTS at :100 vs :103; the .cwd write placed inside :1070-1072 when it is at :1075), against essentially zero defects in X's ~38 checked locations. Z also declined to read wrap-ledger.sh, so it misses three verified ledger-level facts X delivers: \u26d4 outranks \ud83d\udd27 at wrap-ledger.sh:1972-1973 (a pending blocking decision suppresses the mechanical arm over your own dirty files), \ud83d\udce6 subsumes the \"Land IN FLIGHT\" readout at :1985-1986 which ship_floor's RUNG-only read at :1127-1128 cannot distinguish, and the full \ud83d\ude80 chain at :1997-1998/:2053-2056. X also uniquely found a second genuine env divergence (session-continue.sh:420's two-level pane chain vs session-register.sh:134's three-level chain including KITTY_WINDOW_ID) and the destructive side of SID-BIND (:1245-1251 deletes a sibling's sentinel rather than abstaining). Z's own standouts are real \u2014 the wf_teardown_marked \"not verbatim\" refutation (classify_death is at lead-crash-watchdog.sh:402 not :255-278, marker_owns_sid at :207-213 not :112-118, and the watchdog's `\"mode\":\"teardown\"` at :258 / `-mmin -30` at :257 have no counterpart in :551-568), the \ud83d\udce6 TRUNK gate at :1148-1149, and the CC_WATCH_FRESH_S three-site match I reproduced \u2014 but they do not outweigh the breadth plus citation precision gap.\n\nY vs Z \u2014 Z wins. Z states the k10 precision correctly with the exact citations (:758, :762-764, :881-882) where Y contradicts it; Z gives the assignee confirm's rc trichotomy where Y gives none; Z flags five stale in-file citations (four fully verified, one with a wrong sub-claim) where Y flags none despite the brief's explicit instruction; and Z finds the `clear` sid hole (:260 vs :1060) that Y explicitly declares \"non-hazardous\". Y's citation defects are substantive (a fabricated quote, a nonexistent symbol, a guard-contradicted double-block claim), while Z's are mostly off-by-a-few line numbers with one false content claim."
+ },
+ "retried": false
+}

@@ -1,0 +1,34 @@
+T1-custody A-B:B[B,B,B] A-C:C[C,C,C] B-C:B[B,B,B]
+   A majority-recall 17/21  bad-cites [5, 6, 5] of checked [32, 36, 24]  wrong-claims [4, 5, 3]  scores [6, 6, 6]
+   B majority-recall 21/21  bad-cites [7, 8, 10] of checked [36, 36, 26]  wrong-claims [0, 2, 2]  scores [8, 8, 8]
+   C majority-recall 21/21  bad-cites [6, 7, 7] of checked [35, 32, 26]  wrong-claims [2, 2, 0]  scores [7, 8, 8]
+T2-recycle-goal A-B:B[B,B,B] A-C:C[C,C,C] B-C:C[C,C,C]
+   A majority-recall 23/25  bad-cites [2, 1, 3] of checked [26, 34, 36]  wrong-claims [2, 3, 2]  scores [7, 7, 7]
+   B majority-recall 23/25  bad-cites [0, 0, 1] of checked [30, 38, 38]  wrong-claims [0, 0, 0]  scores [8, 8, 8]
+   C majority-recall 25/25  bad-cites [2, 0, 3] of checked [35, 42, 45]  wrong-claims [0, 0, 1]  scores [9, 9, 9]
+T3-frontier-budget A-B:tie[tie,B,tie] A-C:C[C,C,C] B-C:C[C,C,C]
+   A majority-recall 27/32  bad-cites [2, 4, 3] of checked [32, 28, 21]  wrong-claims [2, 2, 6]  scores [7, 7, 7]
+   B majority-recall 30/32  bad-cites [3, 5, 4] of checked [30, 26, 22]  wrong-claims [1, 2, 4]  scores [7, 8, 7]
+   C majority-recall 32/32  bad-cites [0, 1, 1] of checked [34, 30, 27]  wrong-claims [1, 0, 2]  scores [9, 9, 9]
+T4-stop-arms A-B:B[B,B,B] A-C:C[C,C,C] B-C:C[C,C,C]
+   A majority-recall 18/20  bad-cites [4, 4, 4] of checked [28, 24, 21]  wrong-claims [3, 4, 3]  scores [8, 6, 7]
+   B majority-recall 19/20  bad-cites [5, 5, 5] of checked [35, 30, 22]  wrong-claims [3, 0, 0]  scores [8, 8, 8]
+   C majority-recall 20/20  bad-cites [2, 1, 3] of checked [30, 38, 24]  wrong-claims [1, 0, 1]  scores [9, 9, 9]
+T5-deploy-live-exec A-B:B[tie,B,B] A-C:A[A,A,C] B-C:B[B,B,tie]
+   A majority-recall 16/17  bad-cites [0, 0, 0] of checked [42, 35, 45]  wrong-claims [1, 3, 3]  scores [8, 7, 7]
+   B majority-recall 16/17  bad-cites [2, 3, 3] of checked [45, 35, 50]  wrong-claims [3, 2, 2]  scores [8, 8, 8]
+   C majority-recall 15/17  bad-cites [0, 0, 0] of checked [44, 40, 50]  wrong-claims [3, 3, 2]  scores [7, 6, 8]
+T6-choose A-B:B[B,B,B] A-C:C[C,C,C] B-C:C[C,C,C]
+   A majority-recall 15/15  bad-cites [10, 11, 6] of checked [26, 26, 30]  wrong-claims [3, 2, 1]  scores [6, 6, 6]
+   B majority-recall 15/15  bad-cites [3, 3, 3] of checked [32, 33, 40]  wrong-claims [2, 0, 1]  scores [8, 8, 8]
+   C majority-recall 15/15  bad-cites [0, 0, 0] of checked [30, 30, 40]  wrong-claims [0, 0, 0]  scores [9, 9, 9]
+
+PAIRWISE strict-majority tallies:
+  A vs B: {'B': 5, 'tie': 1}
+  A vs C: {'C': 5, 'A': 1}
+  B vs C: {'B': 2, 'C': 4}
+
+TOTALS
+  A majority-recall 116/130 = 89.2%  bad-cites 70/546 = 12.8%  wrong-claims 52  mean score 6.72
+  B majority-recall 124/130 = 95.4%  bad-cites 70/604 = 11.6%  wrong-claims 24  mean score 7.89
+  C majority-recall 128/130 = 98.5%  bad-cites 33/632 = 5.2%  wrong-claims 18  mean score 8.44

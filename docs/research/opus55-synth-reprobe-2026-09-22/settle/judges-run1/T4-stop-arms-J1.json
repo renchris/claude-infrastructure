@@ -1,0 +1,191 @@
+{
+ "brief": "T4-stop-arms",
+ "judge": "J1",
+ "model": "claude-opus-5",
+ "effort": "xhigh",
+ "label_map": {
+  "X": "C",
+  "Y": "A",
+  "Z": "B"
+ },
+ "verdict": {
+  "outputs": [
+   {
+    "label": "X",
+    "key_hits": [
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6",
+     "k7",
+     "k8",
+     "k9",
+     "k10",
+     "k11",
+     "k12",
+     "k13",
+     "k14",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 36,
+    "citations_bad": [
+     {
+      "cite": "hooks/session-continue.sh:1326 \u2014 \"cites 'precedent at :502'\"",
+      "problem": "off by one: :1326 reads \"decision:block blocks the stop; reason is fed back\u2026\"; the \"precedent at :502\" text is on :1327. Substance (that :502 is a comment) is correct."
+     },
+     {
+      "cite": "hooks/lib/session-writes.sh:422 \u2014 \"says session-continue.sh sets pipefail\"",
+      "problem": "off by one/two: the claim \"(completion-assert.sh and session-continue.sh both do)\" is on :420-421; :422 is the SIGPIPE sentence. The underlying finding (session-continue.sh sets no shell options; verified by grep and by its own :364-366) is correct."
+     }
+    ],
+    "wrong_claims": [
+     "\"No other tunable in the tree has two defaults.\" FALSE, and checkable on the exact question the brief asked: CC_OSA_TIMEOUT_S defaults to 10 at hooks/lib/osa.sh:32 and to 20 at scripts/boot-resume-launch.sh:41; CC_BOARD_STALE_S defaults to 300 at hooks/accounts-board.sh:52 and to 900 at bin/cc-board:30. Both are production files, not fixtures.",
+     "Minor: \"_ouid \u2026 is CC_PANE_ID, else the suffix of ITERM_SESSION_ID\" \u2014 the ${_ouid##*:} suffix strip at :420 is applied to whichever source was chosen, not only to ITERM_SESSION_ID."
+    ],
+    "extra_correct": [
+     "The mechanically-written sentinel is NOT self-clearing: the armed path (:1225-1344) never re-checks dirtiness, so after the model commits the next Stop goes straight to arm A and blocks again on the stale \"Commit\u2026\" step until `clear`, a kill phrase or the cap. The in-file \"SELF-CLEARING\" claim at :922-923 holds only for re-arming. Verified.",
+     "The ship floor ignores LANDING: wrap-ledger still renders \ud83d\udce6 mid-land and says \"do NOT fire a second /ship\" (wrap-ledger.sh:1985-1986) while ship_floor's reason text says \"/ship it\" (:1185). Verified.",
+     "A bare-shell `clear` stamps sid `?` (:260-261), which fails the same-session test at :1060, so it does not spend a real session's mechanical budget. Verified.",
+     "session_unlanded_mine uses the TWO-DOT `git diff --name-only $trunk..HEAD` (session-writes.sh:415), a tree-vs-tree compare, so paths that changed only on trunk also appear \u2014 a real over-attribution channel. Verified; unique to X.",
+     "The hook calls agent_assignee_argv + agent_team_member_confirms directly, bypassing agent_is_assignee's `*@session-*` shape gate (agent-identity.sh:143-147), so a self-consistent argv id not in @session- form returns rc 2 at :95 and is EXEMPTED. Verified; unique to X.",
+     "CLAUDE_CODE_STOP_HOOK_BLOCK_CAP is exported as 50 when unset by bin/claude-latest:353-355. Verified; unique to X.",
+     "The wake floor's budget file is deleted whenever a watcher is found armed (:614), so a compliant agent resets the cap it answers to. Verified.",
+     "The in-file comment at :963-966 claiming wake_floor's assignee semantics differ is FALSE: all three arms exempt on confirms rc 0 or 2 and not on rc 1 (:780-784, :970, :1105). Verified \u2014 and this refutes the key's own trap paragraph.",
+     "Position-4/6 Stop-chain claim at :322-323 checks out against settings-templates/settings.example.json (session-continue 4th at :466, completion-assert 6th at :476); the live settings.json is not in the repo. Verified.",
+     "Bash-only writes (sed -i, heredoc) are invisible because only Write/Edit/MultiEdit/NotebookEdit are selected at session-writes.sh:180. Verified.",
+     "The ${f}.mech and ${f}.ship sidecars are keyed on config-dir+cwd and store ONE sid, so two sessions stopping alternately in a shared checkout reset each other's budgets (:1057-1060, :1166-1170). Verified.",
+     "Each wake_floor abstain's systemMessage is re-emitted by the caller at :1218. Verified."
+    ],
+    "score_1_10": 8
+   },
+   {
+    "label": "Y",
+    "key_hits": [
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6",
+     "k7",
+     "k8",
+     "k9",
+     "k10",
+     "k11",
+     "k12",
+     "k13",
+     "k14",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 31,
+    "citations_bad": [
+     {
+      "cite": "hooks/session-continue.sh:912-919 \u2014 cited for \"this arm owns only the \ud83d\udd27 rung; \ud83d\udce6/\ud83d\udce4/\u26d4/\u2705 are explicitly not its business\"",
+      "problem": ":912-919 is the GATE-STALE / DoD-REMAINDER rejection paragraph. The \ud83d\udce6-is-the-ship-floor's-job statement is at :1000-1002 and :1082. Right header region, wrong lines for that sentence."
+     },
+     {
+      "cite": "hooks/lead-crash-watchdog.sh \"around :421\" for classify_death calling retired_by_desk",
+      "problem": "the call is at :426; :421 is a comment that merely names retired_by_desk. Hedged with \"around\", so borderline."
+     },
+     {
+      "cite": "hooks/lead-crash-watchdog.sh:457-463 \u2014 \"re-implements its own 30-minute/marker check inline\"",
+      "problem": ":457-463 is variable setup plus a set -u comment; the inline `find \"$tdir\" -maxdepth 1 -name \"$sid.json\" -mmin -30` check is at :464-465."
+     },
+     {
+      "cite": "hooks/session-continue.sh:138-304 \u2014 described as the CLI mode covering set/clear/status/--why",
+      "problem": "`--why` is handled earlier, at :105-117, and exits before the :138 case statement is reached."
+     }
+    ],
+    "wrong_claims": [
+     "Wake-floor fire predicate characterised as \"any idle with **attributable** open custody\" (\u00a74 step 9) \u2014 the key's precision note refutes exactly this: :758 sets cust = cust_mine + cust_unk, so rows carrying NEITHER originatorPane nor notifyBack (:753) re-open the floor, and the no-pane-id / no-jq fallback at :762-764 sets cust to the bare `cc-custody count --open --cwd` total. Y never mentions that fallback at all.",
+     "\"Two *non*-blocking systemMessage-only JSON objects also exist \u2014 wake-floor budget-exhausted :840 and wake-floor kill-switch-abstain :851.\" Undercount: the headless abstain (:659), the goal-live abstain (:699), the assignee/teardown abstain (:792) and the cap path (:1264) also emit systemMessage-only objects."
+    ],
+    "extra_correct": [
+     "The Stop matcher-group table with per-hook line numbers \u2014 notify :451, cache-expiry :456, teammate-checkpoint :461, session-continue :466, anti-deference-nudge :471, completion-assert :476, operator-readout :481, session-beat :486, boundary-handoff :496 in a separate group \u2014 verified byte-for-byte against settings-templates/settings.example.json.",
+     "hooks/hook-chain.sh is \"deliberately NOT wired into settings.json\" (its own header, :24) \u2014 verified by grep; a real caveat that both X and Z cite hook-chain.sh:78 without.",
+     "The most precise stale-citation anatomy of the three: session-continue.sh:544-546 cites lead-crash-watchdog classify_death (:255-278), but classify_death is at :402 while :249-263 is retired_by_desk \u2014 with :257 find -mmin -30, :258 grep '\"mode\":\"teardown\"', :259 marker_owns_sid, then close_record_summary at :267-277 and a blank :278. Every one verified exactly as stated.",
+     "CC_WAKE_FLOOR_TEARDOWN polarity: setting it to 0 does NOT disable the floor, it removes the floor's assignee/teardown abstains and makes it MORE aggressive (:776). Verified.",
+     "A correctly BOUNDED negative on the two-defaults question: the 13 named env vars (CC_WATCH_FRESH_S, CC_MAILBOX_DIR, CC_TEARDOWN_DIR, CC_WF_TEARDOWN_FRESH_S, CLAUDE_CONTINUE_MAX, CC_SHIP_FLOOR_MAX, CC_WAKE_FLOOR_MAX, CC_WAKE_FLOOR_TTL_S, CC_WAKE_FLOOR_TIMEOUT_S, CC_MECH_CONTINUE, CC_WAKE_FLOOR, CC_SHIP_FLOOR, CC_WAKE_FLOOR_TEARDOWN) do have identical literal defaults at every site. Verified by grep.",
+     "The :1049-1051 tuning-history comment (\"At the old default of 3 that was 24 consecutive blocks\u2026 2 keeps the escape hatch meaningful\") corroborates the 3\u21922 lowering as the cause of the CC_MECH_MAX divergence. Verified verbatim."
+    ],
+    "score_1_10": 7
+   },
+   {
+    "label": "Z",
+    "key_hits": [
+     "k1",
+     "k2",
+     "k3",
+     "k4",
+     "k5",
+     "k6",
+     "k7",
+     "k8",
+     "k9",
+     "k10",
+     "k11",
+     "k12",
+     "k13",
+     "k14",
+     "M1",
+     "M2",
+     "M3",
+     "M4",
+     "M5",
+     "M6"
+    ],
+    "key_contradicted": [],
+    "citations_checked": 38,
+    "citations_bad": [
+     {
+      "cite": "hooks/completion-assert.sh:632-650 \u2014 given as where \"the `_ca_exon` logic is\" after flagging session-writes.sh:405's stale pointer to :398",
+      "problem": "the `_ca_exon=\"${_ca_exon}unlanded-not-mine \"` assignment is at :685; :632-650 is the `_ca_exon` init plus the DIRTY-branch exonerations. The flagged staleness itself is correct \u2014 completion-assert.sh:398 is `aid=\"$(agent_is_assignee \u2026)\"`."
+     },
+     {
+      "cite": "hooks/session-continue.sh \u2014 \"session_unlanded_mine \\\"$TP_MECH\\\" \\\"$cwd\\\" \\\"$TRUNK\\\"\"",
+      "problem": "the code at :1150 passes the lowercase local `$trunk`; `$TRUNK` is wrap-ledger's variable name. Trivial transcription slip."
+     }
+    ],
+    "wrong_claims": [
+     "\"The one exit 2 is on the CLI verbs when the sentinel lib is missing\" \u2014 there are three exit-2 sites in the file: :116 (the --why FATAL), :130 (the missing-lib CLI arm) and :216 (unknown flag to `clear`). Overclaim on a triviality; the substantive point (every actuation path exits 0) is correct."
+    ],
+    "extra_correct": [
+     "`mmax=\"${CC_MECH_MAX:-2}\"` at :1053 is NOT numeric-validated, unlike maxs (:1162) and maxa (:807) \u2014 so a non-numeric value makes `[ \"$mcnt\" -ge \"$mmax\" ]` exit 2 and the budget never reads as spent. Verified by executing the test (rc=2 \u2192 NOT-SPENT). Unique to Z.",
+     "MAX at :1255 is not validated as numeric while the count n is (:1257). Verified.",
+     "There is no `stop_hook_active` check anywhere in session-continue.sh. Verified by grep; unique to Z.",
+     "Because the sentinel is cwd-keyed, a second live session Stopping in the same cwd DELETES a sibling's armed sentinel via SID-BIND (:1246-1247) and also skips its own floors for that Stop, the :1205 branch having already been decided. Verified.",
+     "If agent-identity.sh fails to source, stubs are defined \u2014 agent_assignee_argv returns 1, agent_team_member_confirms returns 2 (:539-542). Verified.",
+     "The mechanically-written sentinel is not self-clearing; nothing in :1225-1344 re-checks dirt, so the \"SELF-CLEARING\" comment at :922-923 covers re-arming only. Verified.",
+     "A bare-shell `clear` writes sid `?` (:260-261) which fails the same-sid test at :1060, so it does not spend a real session's mechanical budget. Verified.",
+     "ship_floor never reads LANDING, so the \"Land IN FLIGHT\" \ud83d\udce6 (wrap-ledger.sh:1985-1986) still qualifies it. Verified.",
+     "The .wakefloor state file is keyed on the resolved INBOX key, not on cwd like the other sidecars (:610-611). Verified.",
+     "mailbox_drain_claim rc semantics (0 claimed, 1 another live drain holds it \u21d2 nothing delivered) cited to hooks/lib/mailbox-pending.sh:507. Verified.",
+     "cust = cust_mine + cust_unk (:758), unknown rows deliberately count (:726-730), and the no-pane/no-jq fallback uses the bare `cc-custody count --open --cwd` (:759-765) \u2014 the key's precision note, stated exactly.",
+     "The comment at :963-966 claiming wake_floor's assignee semantics differ is refuted in code: all three floors exempt on confirms rc 0 or 2 (:780-783, :970, :1105); the only real difference is the CC_WAKE_FLOOR_TEARDOWN toggle at :776. Verified.",
+     "A POSITIVE CONTROL on the citation audit \u2014 \"these still resolve\": hook-chain.sh:78 (text at :77-78), and the header ranges :3-8 and :64-79 cited from :907 and :947. All three verified to resolve; this is precisely the discipline the brief asked for.",
+     "An additional stale citation neither other output found: session-writes.sh:405 cites completion-assert.sh:398 for `_ca_exon=\"unlanded-not-mine\"`; :398 is now `aid=\"$(agent_is_assignee \u2026)\"`. Verified."
+    ],
+    "score_1_10": 9
+   }
+  ],
+  "xy": "X",
+  "xz": "Z",
+  "yz": "Z",
+  "pair_reasons": "X vs Y \u2014 X wins on verified mechanism findings that change what the code does, where Y's unique wins are documentation-shaped. X establishes (and I confirmed) that the mechanically-armed sentinel is NOT self-clearing: the armed path at :1225-1344 re-checks nothing, so after the model commits the next Stop blocks again on the stale step until `clear`/kill-phrase/cap \u2014 Y asserts the product bound without noticing this. X also has the ship floor ignoring LANDING (wrap-ledger.sh:1985-1986 says \"do NOT fire a second /ship\" while ship_floor:1185 says \"/ship it\"), the two-dot `git diff trunk..HEAD` over-attribution at session-writes.sh:415, the agent_is_assignee shape-gate bypass (agent-identity.sh:143-147 vs :95), and the bare-shell `clear` sid-`?` caveat \u2014 five verified findings Y lacks. Y's compensating advantages are real but narrower: the verified Stop-chain line table, the hook-chain.sh-is-not-wired caveat, the most precise lead-crash-watchdog stale-citation anatomy, and a correctly bounded env-var negative. Y also carries a key-flagged substantive error X avoids \u2014 calling the wake floor's custody term \"attributable\" when :758 adds cust_unk and :762-764 falls back to a bare cwd count \u2014 and undercounts the systemMessage emitters. X's one outright false claim (\"no other tunable in the tree has two defaults\", refuted by CC_OSA_TIMEOUT_S 10/20 and CC_BOARD_STALE_S 300/900) plus two off-by-one cites do not close that gap.\n\nX vs Z \u2014 Z wins narrowly. Z carries every one of X's shared behavioural findings (sentinel not self-clearing, bare-shell `clear` sid `?`, ship floor ignoring LANDING, wake-floor budget deleted on compliance, the :963-966 \"semantics differ\" comment being false in code) and adds verified ones X lacks: `mmax` at :1053 is the one budget constant with no numeric validation, so a non-numeric CC_MECH_MAX makes `-ge` exit 2 and the budget never reads as spent (I executed this: rc 2 \u2192 NOT-SPENT); MAX is unvalidated while n is; there is no `stop_hook_active` check anywhere; the identity-lib stub rc contract at :539-542; and a tenth stale citation neither X nor Y found (session-writes.sh:405 \u2192 completion-assert.sh:398). Decisively, Z's citation audit carries a POSITIVE CONTROL \u2014 \"these still resolve: hook-chain.sh:77-78, :3-8 at :907, :64-79 at :947\", all three verified \u2014 which is exactly the discipline the brief demanded, and Z's corresponding negative on the two-defaults question is correctly bounded (\"no other file in hooks/, scripts/ or bin/ defaults CLAUDE_CONTINUE_MAX, CC_SHIP_FLOOR_MAX or CC_WAKE_FLOOR_MAX\" \u2014 verified) where X asserts a sweeping universal that is false. X's genuinely unique two-dot-diff and shape-gate findings partly offset, but Z's error set (\"the one exit 2\" overclaim; a :632-650 pointer that should be :685) is smaller and less material.\n\nY vs Z \u2014 Z wins clearly. Z states the wake-floor custody term correctly (cust = mine + unk at :758, unknown rows deliberately counted per :726-730, and the :759-765 bare-cwd fallback), the exact point the key singles out and Y gets wrong. Z finds the same wf_teardown_marked citation defect Y does (the `\"mode\":\"teardown\"` check at lead-crash-watchdog.sh:258 that session-continue's copy omits) \u2014 Y states its anatomy more precisely, which is Y's best single contribution \u2014 but Z surrounds it with nine further verified stale citations plus the positive control, where Y flags one. Z additionally has the not-self-clearing sentinel, the bare-shell-clear sid caveat, the LANDING gap, the unvalidated mmax, the absent stop_hook_active check, and the cwd-keyed sibling-clear consequence, none of which Y has. Y's hook-chain-not-wired caveat and settings line table are correct and worth credit, but they do not reach the brief's core question about what actually blocks a Stop."
+ },
+ "retried": false
+}
