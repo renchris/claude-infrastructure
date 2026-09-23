@@ -1,0 +1,49 @@
+C0 today               N= 5 Tc=45 lands/h=  5.8 | code lat p50=  686 p90= 1941 p95= 2383 mean=  925 | rounds=2.24 P(1st loss)=0.45 | suite-slot util=0.22 | exits/land=0.27
+C0 today               N=10 Tc=45 lands/h=  6.9 | code lat p50= 3110 p90=14361 p95=19301 mean= 5712 | rounds=7.30 P(1st loss)=0.82 | suite-slot util=0.87 | exits/land=1.15
+C0 today               N=15 Tc=45 lands/h=  2.8 | code lat p50=26545 p90=89014 p95=110393 mean=37265 | rounds=19.42 P(1st loss)=0.91 | suite-slot util=1.00 | exits/land=3.58
+C0 today               N=20 Tc=45 lands/h=  2.0 | code lat p50=54343 p90=166734 p95=215648 mean=76389 | rounds=27.78 P(1st loss)=0.93 | suite-slot util=1.00 | exits/land=5.02
+C0 today               N=25 Tc=45 lands/h=  1.5 | code lat p50=73290 p90=250219 p95=325599 mean=109542 | rounds=31.03 P(1st loss)=0.96 | suite-slot util=1.00 | exits/land=6.46
+C0 today               N=30 Tc=45 lands/h=  1.3 | code lat p50=100996 p90=323167 p95=389471 mean=137526 | rounds=32.03 P(1st loss)=0.95 | suite-slot util=1.00 | exits/land=7.77
+C1 +token honoured     N= 5 Tc=45 lands/h=  6.2 | code lat p50=  267 p90=  811 p95= 1068 mean=  410 | rounds=1.58 P(1st loss)=0.30 | suite-slot util=0.17 | exits/land=0.12
+C1 +token honoured     N=10 Tc=45 lands/h=  9.1 | code lat p50=  868 p90= 8420 p95=13550 mean= 2910 | rounds=4.58 P(1st loss)=0.66 | suite-slot util=0.69 | exits/land=0.54
+C1 +token honoured     N=15 Tc=45 lands/h=  2.8 | code lat p50=25190 p90=90092 p95=122063 mean=37953 | rounds=19.84 P(1st loss)=0.90 | suite-slot util=0.99 | exits/land=3.07
+C1 +token honoured     N=20 Tc=45 lands/h=  2.1 | code lat p50=50308 p90=167130 p95=219406 mean=73902 | rounds=26.99 P(1st loss)=0.94 | suite-slot util=1.00 | exits/land=4.19
+C1 +token honoured     N=25 Tc=45 lands/h=  1.6 | code lat p50=74003 p90=264454 p95=309377 mean=106494 | rounds=30.24 P(1st loss)=0.94 | suite-slot util=1.00 | exits/land=5.39
+C1 +token honoured     N=30 Tc=45 lands/h=  1.3 | code lat p50=113594 p90=348043 p95=405766 mean=152389 | rounds=35.55 P(1st loss)=0.96 | suite-slot util=1.00 | exits/land=6.68
+C2 +reflock=race       N= 5 Tc=45 lands/h=  6.2 | code lat p50=  266 p90=  834 p95= 1065 mean=  408 | rounds=1.61 P(1st loss)=0.30 | suite-slot util=0.16 | exits/land=0.07
+C2 +reflock=race       N=10 Tc=45 lands/h=  8.8 | code lat p50= 1012 p90= 9677 p95=15601 mean= 3391 | rounds=4.95 P(1st loss)=0.67 | suite-slot util=0.74 | exits/land=0.25
+C2 +reflock=race       N=15 Tc=45 lands/h=  2.8 | code lat p50=29937 p90=84319 p95=120596 mean=40270 | rounds=20.93 P(1st loss)=0.92 | suite-slot util=0.99 | exits/land=1.26
+C2 +reflock=race       N=20 Tc=45 lands/h=  2.0 | code lat p50=52572 p90=174402 p95=217395 mean=75669 | rounds=27.49 P(1st loss)=0.93 | suite-slot util=1.00 | exits/land=1.77
+C2 +reflock=race       N=25 Tc=45 lands/h=  1.7 | code lat p50=78383 p90=259606 p95=328575 mean=111553 | rounds=31.62 P(1st loss)=0.96 | suite-slot util=1.00 | exits/land=2.16
+C2 +reflock=race       N=30 Tc=45 lands/h=  1.4 | code lat p50=94682 p90=325348 p95=414392 mean=139922 | rounds=32.53 P(1st loss)=0.92 | suite-slot util=1.00 | exits/land=2.60
+C3 +admit-then-fetch   N= 5 Tc=45 lands/h=  6.1 | code lat p50=  273 p90=  896 p95= 1199 mean=  431 | rounds=1.57 P(1st loss)=0.29 | suite-slot util=0.17 | exits/land=0.07
+C3 +admit-then-fetch   N=10 Tc=45 lands/h= 11.6 | code lat p50=  595 p90= 2111 p95= 2751 mean=  933 | rounds=2.31 P(1st loss)=0.50 | suite-slot util=0.46 | exits/land=0.11
+C3 +admit-then-fetch   N=15 Tc=45 lands/h= 13.8 | code lat p50= 1928 p90= 5981 p95= 7827 mean= 2751 | rounds=2.86 P(1st loss)=0.60 | suite-slot util=0.69 | exits/land=0.14
+C3 +admit-then-fetch   N=20 Tc=45 lands/h= 14.1 | code lat p50= 4292 p90=11515 p95=14797 mean= 5638 | rounds=2.95 P(1st loss)=0.62 | suite-slot util=0.71 | exits/land=0.14
+C3 +admit-then-fetch   N=25 Tc=45 lands/h= 14.0 | code lat p50= 6431 p90=17784 p95=22771 mean= 8670 | rounds=2.92 P(1st loss)=0.61 | suite-slot util=0.72 | exits/land=0.14
+C3 +admit-then-fetch   N=30 Tc=45 lands/h= 14.3 | code lat p50= 8252 p90=23423 p95=30190 mean=11374 | rounds=2.90 P(1st loss)=0.60 | suite-slot util=0.72 | exits/land=0.14
+C4 +carry q=.42        N= 5 Tc=45 lands/h=  6.1 | code lat p50=  254 p90=  655 p95=  862 mean=  348 | rounds=1.47 P(1st loss)=0.26 | suite-slot util=0.14 | exits/land=0.07
+C4 +carry q=.42        N=10 Tc=45 lands/h= 12.1 | code lat p50=  341 p90= 1000 p95= 1268 mean=  484 | rounds=1.86 P(1st loss)=0.52 | suite-slot util=0.30 | exits/land=0.07
+C4 +carry q=.42        N=15 Tc=45 lands/h= 17.6 | code lat p50=  546 p90= 1637 p95= 2227 mean=  777 | rounds=2.23 P(1st loss)=0.71 | suite-slot util=0.49 | exits/land=0.08
+C4 +carry q=.42        N=20 Tc=45 lands/h= 21.5 | code lat p50=  965 p90= 3007 p95= 4113 mean= 1374 | rounds=2.40 P(1st loss)=0.78 | suite-slot util=0.63 | exits/land=0.08
+C4 +carry q=.42        N=25 Tc=45 lands/h= 23.7 | code lat p50= 1879 p90= 5076 p95= 6473 mean= 2482 | rounds=2.52 P(1st loss)=0.82 | suite-slot util=0.70 | exits/land=0.08
+C4 +carry q=.42        N=30 Tc=45 lands/h= 23.8 | code lat p50= 3109 p90= 8241 p95=10491 mean= 4256 | rounds=2.53 P(1st loss)=0.83 | suite-slot util=0.72 | exits/land=0.08
+C4 +carry q=.72        N= 5 Tc=45 lands/h=  6.2 | code lat p50=  264 p90=  751 p95=  958 mean=  384 | rounds=1.53 P(1st loss)=0.30 | suite-slot util=0.15 | exits/land=0.06
+C4 +carry q=.72        N=10 Tc=45 lands/h= 11.8 | code lat p50=  441 p90= 1412 p95= 1908 mean=  655 | rounds=2.06 P(1st loss)=0.53 | suite-slot util=0.36 | exits/land=0.08
+C4 +carry q=.72        N=15 Tc=45 lands/h= 16.2 | code lat p50=  944 p90= 2953 p95= 3971 mean= 1351 | rounds=2.51 P(1st loss)=0.66 | suite-slot util=0.59 | exits/land=0.09
+C4 +carry q=.72        N=20 Tc=45 lands/h= 17.8 | code lat p50= 2150 p90= 6473 p95= 8314 mean= 3098 | rounds=2.75 P(1st loss)=0.71 | suite-slot util=0.71 | exits/land=0.11
+C4 +carry q=.72        N=25 Tc=45 lands/h= 17.3 | code lat p50= 4303 p90=11431 p95=14499 mean= 5613 | rounds=2.72 P(1st loss)=0.70 | suite-slot util=0.72 | exits/land=0.11
+C4 +carry q=.72        N=30 Tc=45 lands/h= 17.7 | code lat p50= 6029 p90=16077 p95=19917 mean= 7836 | rounds=2.74 P(1st loss)=0.70 | suite-slot util=0.72 | exits/land=0.11
+C5 slot-thru-push      N= 5 Tc=45 lands/h=  6.3 | code lat p50=  246 p90=  591 p95=  762 mean=  320 | rounds=1.34 P(1st loss)=1.00 | suite-slot util=0.12 | exits/land=0.05
+C5 slot-thru-push      N=10 Tc=45 lands/h= 12.4 | code lat p50=  326 p90=  907 p95= 1160 mean=  452 | rounds=1.64 P(1st loss)=1.00 | suite-slot util=0.29 | exits/land=0.06
+C5 slot-thru-push      N=15 Tc=45 lands/h= 18.0 | code lat p50=  486 p90= 1387 p95= 1824 mean=  667 | rounds=1.94 P(1st loss)=1.00 | suite-slot util=0.45 | exits/land=0.07
+C5 slot-thru-push      N=20 Tc=45 lands/h= 21.7 | code lat p50=  895 p90= 2554 p95= 3445 mean= 1210 | rounds=2.16 P(1st loss)=1.00 | suite-slot util=0.59 | exits/land=0.07
+C5 slot-thru-push      N=25 Tc=45 lands/h= 23.5 | code lat p50= 1925 p90= 4999 p95= 6482 mean= 2505 | rounds=2.29 P(1st loss)=1.00 | suite-slot util=0.67 | exits/land=0.08
+C5 slot-thru-push      N=30 Tc=45 lands/h= 24.5 | code lat p50= 3071 p90= 7768 p95= 9651 mean= 4062 | rounds=2.33 P(1st loss)=1.00 | suite-slot util=0.68 | exits/land=0.08
+Q queue B<=10          N= 5 Tc=45 lands/h=  6.1 | code lat p50=  225 p90=  454 p95=  553 mean=  277 | rounds=0.00 P(1st loss)=0.00 | suite-slot util=0.12 | exits/land=0.00
+Q queue B<=10          N=10 Tc=45 lands/h= 12.1 | code lat p50=  257 p90=  494 p95=  594 mean=  299 | rounds=0.00 P(1st loss)=0.00 | suite-slot util=0.22 | exits/land=0.00
+Q queue B<=10          N=15 Tc=45 lands/h= 18.1 | code lat p50=  280 p90=  538 p95=  650 mean=  325 | rounds=0.00 P(1st loss)=0.00 | suite-slot util=0.31 | exits/land=0.00
+Q queue B<=10          N=20 Tc=45 lands/h= 24.1 | code lat p50=  301 p90=  558 p95=  663 mean=  340 | rounds=0.00 P(1st loss)=0.00 | suite-slot util=0.39 | exits/land=0.00
+Q queue B<=10          N=25 Tc=45 lands/h= 29.9 | code lat p50=  319 p90=  600 p95=  733 mean=  364 | rounds=0.00 P(1st loss)=0.00 | suite-slot util=0.45 | exits/land=0.00
+Q queue B<=10          N=30 Tc=45 lands/h= 35.1 | code lat p50=  333 p90=  596 p95=  711 mean=  370 | rounds=0.00 P(1st loss)=0.00 | suite-slot util=0.49 | exits/land=0.00
+done45
