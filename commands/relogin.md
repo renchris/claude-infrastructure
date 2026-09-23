@@ -97,6 +97,12 @@ exercises. Dia cannot be clicked unattended today (its `--enable-applescript-jav
 flag and its remote-debugging port are both off, and both are the operator's browser settings), so
 `--dia` automates everything except the one click.
 
+**Which accounts can go unattended right now?** `bash scripts/relogin-authorize-probe.sh` answers
+per account, credential-free (dummy PKCE, never clicks): `AUTHORIZE PAGE` = that login browser can
+finish a relogin with no human; `BOUNCED` = its session is missing or stale, so use `--dia` or
+re-sign that profile. A fresh sign-in measured `AUTHORIZE PAGE` and still held ~90 min later
+(2026-09-22); how long it lasts beyond that is not yet measured.
+
 ## The cadence layer — built, staged, NOT running
 
 `cc-relogin-poll` is the unattended trigger: one tick per hour, at most ONE account per tick,
