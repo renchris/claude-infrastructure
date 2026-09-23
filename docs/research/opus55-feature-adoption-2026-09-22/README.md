@@ -8,7 +8,7 @@ Companion to [`../opus55-utilization-2026-09-22/README.md`](../opus55-utilizatio
 |---|---|---|---|
 | 4 · Workflow concurrency | **Adopt 12** (default is 8 here) | 85% | c10 migration `0035`, staged for the operator |
 | 3 · `omitClaudeMd` | **Adopt** on the 4 research subagents | 90% | agents + `tests/agents-omit-claudemd.bats` |
-| 1 · per-turn effort | (a) **on**, all 4 accounts · (b) **stopped**, typed `/effort` writes settings · (c) **holds** | 90% / 90% / 90% | recipe docs only; no actuator |
+| 1 · per-turn effort | (a) **on**, all 4 accounts · (b) **stopped**, typed `/effort` writes settings · (c) **holds** by the resolver; the post-switch spawn was not sampled | 90% / 90% / 85% | recipe docs only; no actuator |
 | 2 · time budgets | **Do not adopt**: 1.29× sooner but lost 4–1 (1 tie) on judged quality | 75% | nothing; the A/B record only |
 
 Method warning for whoever re-derives: the binary is a Bun bundle, and `strings | grep` over its
@@ -137,7 +137,12 @@ an unpinned `--agents` probe ran every turn at `high`, and a probe with `effort:
 definition ran at `medium`. So **agent frontmatter `effort:` is a per-spawn effort lever for
 in-process subagents**. That corrects the utilization README's "in-process subagents inherit the
 lead's effort" as a hard rule: they do only when their definition does not pin one.
-<!-- LEVER1C-SWITCH: filled in below once the post-switch arm returns -->
+**The post-switch arm is NOT measured.** Two runs (`013dc628`, `2ff9428c`) switched the lead with
+`/effort low`, and the lead's own next turns ran at `effort=low`. Both times, though, the
+post-switch spawn was refused by `hooks/agent-teams-enforce.sh`'s capacity gate (load 40–83 on 10
+cores), so no subagent spawned after a switch exists to read. "It inherits the new level" rests on
+the resolver above reading LIVE app state at request time, not on a sample. Conviction for (c):
+**85%**; the next quiet-box run of `/tmp/eff-driver.py`'s shape settles it.
 
 ## Lever 2 — time budgets
 

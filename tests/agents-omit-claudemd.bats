@@ -18,6 +18,7 @@
 setup() {
   REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   AGENTS="$REPO_ROOT/agents"
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
 }
 
 # Print the frontmatter block (between the first two `---` lines) of $1.
