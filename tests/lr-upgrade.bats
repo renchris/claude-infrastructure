@@ -332,7 +332,7 @@ EOF
   ! grep -q '^hf ' "$BATS_TEST_TMPDIR/order.log" || { echo "handoff-fire ran despite the refusal"; cat "$BATS_TEST_TMPDIR/order.log"; false; }
 }
 
-teardown() { [ -n "${LIVE_PID:-}" ] && kill "$LIVE_PID" 2>/dev/null; true; }
+teardown() { if [ -n "${LIVE_PID:-}" ]; then kill "$LIVE_PID" 2>/dev/null || true; fi; }
 
 @test "D2 an ADMITTED session: probe first, then the same-account recycle with the token in its launcher" {
   gate_env 0
