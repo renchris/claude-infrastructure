@@ -909,6 +909,12 @@ fi
 # The drainer's own lock (upgrade-drain.lock/pid) makes a second start a no-op, so this check is a
 # fast path, not the guarantee. Detached through scripts/lib/detach.sh (start_new_session) so it
 # outlives this tick; its output goes to upgrade-drain.log, its verdicts to results/upgrade-<sid>.json.
+# The census is bounded like every other fork on this daemon's tick, but by its own (longer) budget:
+# lrp_bounded's 15 s is sized for one AppleEvent. LR_UPGRADE_AUTO_TIMEOUT_S, default 60.
+lrp_bounded_long() {
+  if [ -z "$LRP_TIMEOUT_BIN" ] || [ ! -x "$LRP_TIMEOUT_BIN" ]; then "$@"; return $?; fi
+  "$LRP_TIMEOUT_BIN" -k 5 "${LR_UPGRADE_AUTO_TIMEOUT_S:-60}" "$@"
+}
 lrp_upgrade_kick() {
   local hp det="" d pid
   compgen -G "$UPG_QUEUE/*.json" >/dev/null 2>&1 || return 0
@@ -926,6 +932,19 @@ lrp_upgrade_kick() {
   pid="$( . "$det" && detach "$STATE/upgrade-drain.log" /bin/bash "$UPG_BIN" --drain 2>/dev/null )" || pid=""
   log "UPGRADE-DRAIN started${pid:+ pid $pid} ($UPG_BIN --drain)"
 }
+# +2 THE AUTO-TRIGGER (operator ruling 2026-09-22): every tick, queue every live session whose
+# binary/model differs from the launcher pin + SSOT (lr-upgrade.sh --auto-enqueue — it adds nothing
+# while the queue holds work or a drainer runs, and it owns both kill switches: LR_UPGRADE_AUTO=off
+# and $STATE/upgrade-auto.off). A census, so it is skipped with the census (LR_POLLER_NO_CENSUS).
+# Bounded: the census is one ps snapshot plus a jq per registry row, measured ~6 s on 16 rows.
+if [[ "${LR_POLLER_NO_CENSUS:-0}" != 1 && "${LR_UPGRADE_AUTO:-on}" != off && -f "$UPG_BIN" ]]; then
+  if [[ $DRY -eq 1 ]]; then
+    log "DRY   upgrade auto-trigger would run: $UPG_BIN --auto-enqueue"
+  else
+    _upg_q="$(lrp_bounded_long /bin/bash "$UPG_BIN" --auto-enqueue 2>>"$LOG" || true)"
+    [[ -n "$_upg_q" ]] && log "UPGRADE-AUTO queued: $(printf '%s' "$_upg_q" | awk -F'\t' '{printf "%s%s(%s)", (NR>1?" ":""), $1, substr($2,1,8)}')"
+  fi
+fi
 lrp_upgrade_kick
 
 # ── the two predicate calls this loop makes, each ONE fork, both through the SSOT ───────────────

@@ -13,6 +13,9 @@
 #      already TRANSPLANTED is retired as such, and a driver's REQUEST is drained through lr-fleet.
 
 setup() {
+  # The upgrade auto-trigger (lr-upgrade.sh --auto-enqueue) is its own suite's subject
+  # (tests/lr-upgrade.bats); here it would run a live census and could detach a real drainer.
+  export LR_UPGRADE_AUTO=off
   REPO="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
   POLLER="$REPO/scripts/limit-recover/lr-reset-poller.sh"
   export HOME="$BATS_TEST_TMPDIR/home"

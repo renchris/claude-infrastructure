@@ -24,6 +24,7 @@
 #   lr-upgrade.sh --census [--all | <pane|sid8>]   TSV, one row per live registry row (read-only)
 #   lr-upgrade.sh --drive <sid> <pane> [--requested-by P] [--req-id ID]   one session, synchronous
 #   lr-upgrade.sh --drain                           the serial queue the poller hands requests to
+#   lr-upgrade.sh --auto-enqueue                    the poller's tick: queue every `upgrade` row
 #
 # Census columns: pane sid binary model target effort perm cfg cwd pid disposition
 # Dispositions: upgrade · current · self · teammate · duplicate · lead-with-teammate · no-transcript
@@ -201,18 +202,57 @@ lru_transcript() { # $1=cfg $2=sid → path; rc 1 when none
   return 1
 }
 
-# The composer: read-only kitty RPC through cc-tui.sh. rc 0 empty · 1 occupied · 2 unknown.
+# The composer: read-only kitty RPC through cc-tui.sh.
+#   rc 0 empty · 1 occupied (someone's draft) · 2 unknown · 3 THIS RAIL'S OWN abandoned text
+# The content read is left in LRU_COMPOSER_TEXT (space-stripped, cc_tui_composer's form).
 # LRU_COMPOSER=off skips the read (reported as empty) — for the suite and for a dry run that must
 # not touch the terminal; the drive path re-reads regardless, and handoff-fire's own composer gate
 # is the backstop at the /exit.
+#
+# RAIL JUNK (operator ruling 2026-09-22, "zero-human end to end"): pane 405 sat blocked by nothing
+# but the prototype's own unsent 'OPUS55-UPGRADE (operator request): relaunch THIS session…' prompt —
+# the residue of a cc_tui_submit rc 4. Text a rail typed is not an operator draft. It is recognised
+# by an EXACT PREFIX of the space-stripped composer (the form cc_tui_composer returns), never by a
+# substring, and only for the markers below; anything else stays `composer-occupied`. The drive
+# then files a residue RECEIPT for that exact content, and handoff-fire's composer gate — which
+# already scrubs "this rail's OWN abandoned paste" (composer_residue_is_ours) — clears it with its
+# own read-back-verified Ctrl-U loop. Nothing here types. LRU_SCRUB_RAIL_JUNK=off: every non-empty
+# composer is occupied again.
+LRU_RAIL_MARKERS='OPUS55-UPGRADE(
+In-placeupgrade:thissessionwasrelaunchedbycc-lrupgrade'
+LRU_COMPOSER_TEXT=""
+lru_is_rail_junk() { # $1=space-stripped composer content → 0 when it begins with a rail marker
+  local m
+  [ "${LRU_SCRUB_RAIL_JUNK:-on}" = off ] && return 1
+  [ -n "${1:-}" ] || return 1
+  while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    case "$1" in "$m"*) return 0 ;; esac
+  done <<EOF
+$LRU_RAIL_MARKERS
+EOF
+  return 1
+}
 lru_composer() { # $1=pane
   local c
+  LRU_COMPOSER_TEXT=""
   [ "${LRU_COMPOSER:-on}" = off ] && return 0
   [ -f "$LRU_TUI_LIB" ] || return 2
   # shellcheck disable=SC1090
   c="$( . "$LRU_TUI_LIB" >/dev/null 2>&1; cc_tui_composer "$1" )" || return 2
+  LRU_COMPOSER_TEXT="$c"
   [ -z "$c" ] && return 0
+  lru_is_rail_junk "$c" && return 3
   return 1
+}
+# The receipt handoff-fire's composer gate reads (composer_residue_is_ours): `<ts>\t<content>` in
+# the SAME store cc_tui_residue_record writes, keyed on the pane id. Written only for content
+# lru_is_rail_junk accepted, and immediately before the recycle that consumes it.
+lru_file_rail_receipt() { # $1=pane $2=content
+  local d="${CC_COMPOSER_RESIDUE_DIR:-$HOME/.claude/logs/composer-residue}"
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 1
+  mkdir -p "$d" 2>/dev/null || return 1
+  printf '%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" > "$d/${1//\//_}"
 }
 
 # ── THE SELECTION PREDICATE ──────────────────────────────────────────────────────────────────────
@@ -276,7 +316,7 @@ lru_census() { # [$1=ref: pane id or sid prefix; empty = all] → TSV rows on st
       if [ -z "$disp" ] && [ "$(lru_bg_kind "$snap" "$pid")" = work ]; then disp=background-job; fi
       if [ -z "$disp" ]; then
         local crc=0; lru_composer "$pane" || crc=$?
-        case "$crc" in 0) disp=upgrade ;; 1) disp=composer-occupied ;; *) disp=composer-unknown ;; esac
+        case "$crc" in 0|3) disp=upgrade ;; 1) disp=composer-occupied ;; *) disp=composer-unknown ;; esac
       fi
     fi
     out="$out$pane"$'\t'"$sid"$'\t'"$bin"$'\t'"${model:--}"$'\t'"${tgt:--}"$'\t'"${eff:--}"$'\t'"$perm"$'\t'"$cfg"$'\t'"${cwd:--}"$'\t'"$pid"$'\t'"$disp"$'\n'
@@ -426,6 +466,17 @@ EOF
     lru_result "$sid" "$pane" failed "could not mint an ASCII-only launcher in $run (nothing typed)" "" "$req" "$by"; return 1; }
   cmd="cd $(printf %q "$cwd") && bash $(printf %q "$L")"
   hflog="$run/handoff-fire.log"
+  # +1 RAIL JUNK: re-read the composer NOW (the census read may be minutes old). Rail junk gets a
+  # receipt, so handoff-fire's composer gate scrubs it instead of deferring; anything else that
+  # appeared since the census is somebody's draft and stops this session here, untouched.
+  local jrc=0; lru_composer "$pane" || jrc=$?
+  case "$jrc" in
+    0) ;;
+    3) lru_file_rail_receipt "$pane" "$LRU_COMPOSER_TEXT" \
+         || { lru_result "$sid" "$pane" skipped "composer holds rail junk but its receipt could not be filed (nothing typed)" "" "$req" "$by"; return 3; } ;;
+    1) lru_result "$sid" "$pane" skipped "composer-occupied (appeared after the census; nothing typed)" "" "$req" "$by"; return 3 ;;
+    *) lru_result "$sid" "$pane" skipped "composer-unknown (unreadable at the last read; nothing typed)" "" "$req" "$by"; return 3 ;;
+  esac
   t0="$(date -u +%FT%T)"
   # THE RELAUNCH. handoff-fire's remote form, same-account class: it re-proves the binding, the pin,
   # the account, the absence of a tombstone and the transcript at rest, gates the composer, re-reads
@@ -502,6 +553,38 @@ lru_drain() {
   lru_say "drain done: $n session(s)"
 }
 
+# ── +2 THE AUTO-TRIGGER (operator ruling 2026-09-22: zero-human, end to end) ─────────────────────
+# Called by the reset poller every tick. When a live session's binary or model differs from the
+# launcher pin + SSOT, it is queued like any `cc-lr upgrade` request; the ONE serial drainer then
+# re-judges it, probes capacity and relaunches it — one at a time. A model activation therefore
+# converges the fleet as sessions go idle, with no invocation at all; a session skipped this tick
+# (mid-turn, a lead whose teammate is live) is simply re-judged on the next.
+# QUEUE-EMPTY ONLY: nothing is added while the queue holds work or a drainer runs, so a slow drain
+# can never stack duplicate requests behind itself.
+# KILL SWITCHES (either): LR_UPGRADE_AUTO=off · the file $LRU_STATE/upgrade-auto.off
+lru_auto_enqueue() { # → prints one line per queued sid; rc 0 always
+  local census hp q n=0 p s d req dest tmp
+  [ "${LR_UPGRADE_AUTO:-on}" = off ] && { lru_say "auto: off (LR_UPGRADE_AUTO=off)"; return 0; }
+  [ -e "$LRU_STATE/upgrade-auto.off" ] && { lru_say "auto: off ($LRU_STATE/upgrade-auto.off)"; return 0; }
+  for q in "$UPG_QUEUE"/*.json; do [ -f "$q" ] && { lru_say "auto: queue not empty - nothing added"; return 0; }; done
+  hp="$(cat "$UPG_LOCK/pid" 2>/dev/null || true)"
+  if [ -n "$hp" ] && kill -0 "$hp" 2>/dev/null; then lru_say "auto: drainer running (pid $hp) - nothing added"; return 0; fi
+  census="$(lru_census "" 2>/dev/null)" || return 0
+  mkdir -p "$UPG_QUEUE" 2>/dev/null || return 0
+  while IFS=$'\t' read -r p s _ _ _ _ _ _ _ _ d; do
+    [ "$d" = upgrade ] || continue
+    req="${s:0:8}-$(date +%s)-auto"
+    tmp="$UPG_QUEUE/.auto-$s.$$.tmp"; dest="$UPG_QUEUE/auto-upgrade-$s.json"
+    jq -n --arg sid "$s" --arg pane "$p" --arg req "$req" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{kind:"upgrade", sid:$sid, source_pane:$pane, requested_by:"poller-auto", req_id:$req, ts:$ts, origin_class:"lr-upgrade-auto"}' \
+      > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest" 2>/dev/null && { printf '%s\t%s\n' "$p" "$s"; n=$((n + 1)); }
+  done <<EOF
+$census
+EOF
+  lru_say "auto: $n session(s) queued"
+  return 0
+}
+
 lru_load_libs() {
   # shellcheck disable=SC1090
   [ -f "$LRU_LR_LIB" ] && . "$LRU_LR_LIB" 2>/dev/null
@@ -522,6 +605,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
                 *) lru_say "unknown arg $1"; exit 3 ;; esac; done
               lru_drive "$_s" "$_p" "$_by" "$_rq"; exit $? ;;
     --drain)  lru_drain; exit $? ;;
-    *) lru_say "usage: --census [--all|<ref>] | --drive <sid> <pane> | --drain"; exit 3 ;;
+    --auto-enqueue) lru_auto_enqueue; exit $? ;;
+    *) lru_say "usage: --census [--all|<ref>] | --drive <sid> <pane> | --drain | --auto-enqueue"; exit 3 ;;
   esac
 fi

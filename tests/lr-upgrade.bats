@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# shellcheck disable=SC2030,SC2031  # each @test is its own subshell; per-test exports are the intent
+# shellcheck disable=SC2030,SC2031,SC2016  # stubs are written verbatim; each @test is its own subshell; per-test exports are the intent
 # cc-lr upgrade — move IDLE live sessions onto the current binary + model, in place (2026-09-22).
 # Subjects: scripts/limit-recover/lr-upgrade.sh (census · launcher · drive · drain),
 #           scripts/limit-recover/lr-reset-poller.sh (kind "upgrade" → queue → drainer kick),
@@ -388,4 +388,70 @@ STUB
   [ "$(jq -r .verdict "$r")" = upgraded ] || { cat "$r"; echo "$output"; false; }
   [[ "$(jq -r .reason "$r")" == *"now claude-opus-5-5 on .claude-280"*"UNCONFIRMED (lr-fire-resume: FAILED:submit)"*"press Enter in pane 551"* ]] || { cat "$r"; false; }
   [ ! -s "$BATS_TEST_TMPDIR/it2.log" ] || { echo "retyped over a session that was already up"; false; }
+}
+
+# ── F. ZERO-HUMAN (operator ruling 2026-09-22): the rail's own junk, and the auto-trigger ──────────
+
+tui_stub() { # composer contents come from $BATS_TEST_TMPDIR/composer-<pane>
+  export LRU_COMPOSER=on LRU_TUI_LIB="$BATS_TEST_TMPDIR/tui.sh"
+  printf 'cc_tui_composer() { cat "%s/composer-$1" 2>/dev/null; return 0; }\n' "$BATS_TEST_TMPDIR" > "$LRU_TUI_LIB"
+}
+
+@test "F1 [RED] a composer holding the RAIL's own unsent prompt is not an operator draft; anything else still is" {
+  tui_stub
+  sess 561 26262626-0000-4000-8000-000000000001 "$OLD --model claude-opus-5 --effort high"
+  sess 562 26262626-0000-4000-8000-000000000002 "$OLD --model claude-opus-5 --effort high"
+  sess 563 26262626-0000-4000-8000-000000000003 "$OLD --model claude-opus-5 --effort high"
+  printf 'OPUS55-UPGRADE(operatorrequest):relaunchTHISsessioninplace' > "$BATS_TEST_TMPDIR/composer-561"
+  printf 'pleasefixthelogin' > "$BATS_TEST_TMPDIR/composer-562"
+  printf 'notesOPUS55-UPGRADE(' > "$BATS_TEST_TMPDIR/composer-563"      # the marker must be a PREFIX
+  census
+  [ "$(disp_of 561)" = upgrade ] || { echo "$output"; false; }
+  [ "$(disp_of 562)" = composer-occupied ] || { echo "$output"; false; }
+  [ "$(disp_of 563)" = composer-occupied ] || { echo "$output"; false; }
+  LRU_SCRUB_RAIL_JUNK=off census
+  [ "$(disp_of 561)" = composer-occupied ] || { echo "the kill switch did not restore the strict read: $output"; false; }
+}
+
+@test "F2 the drive files the residue RECEIPT handoff-fire's composer gate scrubs by, then recycles" {
+  gate_env 0; tui_stub
+  export CC_COMPOSER_RESIDUE_DIR="$BATS_TEST_TMPDIR/residue"
+  sleep 300 & LIVE_PID=$!
+  SESS_PID="$LIVE_PID" sess 564 27272727-0000-4000-8000-000000000001 "$OLD --model claude-opus-5 --effort high"
+  printf 'In-placeupgrade:thissessionwasrelaunchedbycc-lrupgradeonthecurrent' > "$BATS_TEST_TMPDIR/composer-564"
+  run bash "$LRU" --drive 27272727-0000-4000-8000-000000000001 564
+  [ -f "$CC_COMPOSER_RESIDUE_DIR/564" ] || { echo "no receipt: $output"; false; }
+  [ "$(cut -f2- "$CC_COMPOSER_RESIDUE_DIR/564")" = "$(cat "$BATS_TEST_TMPDIR/composer-564")" ] || { cat "$CC_COMPOSER_RESIDUE_DIR/564"; false; }
+  grep -q '^hf .*--same-account' "$BATS_TEST_TMPDIR/order.log" || { cat "$BATS_TEST_TMPDIR/order.log"; false; }
+}
+
+@test "F3 auto-enqueue queues each UPGRADE row once — never beside a busy queue, never when switched off" {
+  sess 571 28282828-0000-4000-8000-000000000001 "$OLD --model claude-opus-5 --effort high"
+  sess 572 28282828-0000-4000-8000-000000000002 "$OLD --model claude-opus-5 --effort high" busy
+  touch "$LRU_STATE/upgrade-auto.off"
+  run bash "$LRU" --auto-enqueue
+  [ -z "$(ls -A "$LRU_STATE/upgrade-queue" 2>/dev/null)" ] || { echo "queued while switched off"; false; }
+  rm -f "$LRU_STATE/upgrade-auto.off"
+  run bash "$LRU" --auto-enqueue
+  q="$LRU_STATE/upgrade-queue/auto-upgrade-28282828-0000-4000-8000-000000000001.json"
+  [ -f "$q" ] || { ls -la "$LRU_STATE/upgrade-queue"; echo "$output"; false; }
+  [ "$(jq -r .requested_by "$q")" = poller-auto ] || false
+  [ ! -e "$LRU_STATE/upgrade-queue/auto-upgrade-28282828-0000-4000-8000-000000000002.json" ] || { echo "a mid-turn session was queued"; false; }
+  rm -f "$q"; mkdir -p "$LRU_STATE/upgrade-queue"; echo '{}' > "$LRU_STATE/upgrade-queue/pending.json"
+  run bash "$LRU" --auto-enqueue
+  [ ! -e "$q" ] || { echo "queued beside a non-empty queue"; false; }
+}
+
+@test "F4 [RED] the poller's tick runs the auto-trigger and kicks the drainer; LR_UPGRADE_AUTO=off stops it" {
+  poller_env
+  export LR_POLLER_NO_CENSUS=0
+  printf '#!/bin/bash\necho "$*" >> %s\ncase "$1" in --auto-enqueue) mkdir -p %s/upgrade-queue; echo "{}" > %s/upgrade-queue/auto-x.json; printf "570\\t29292929-0000\\n";; esac\n' \
+    "$BATS_TEST_TMPDIR/drain.log" "$PSTATE" "$PSTATE" > "$LR_UPGRADE_BIN"
+  LR_UPGRADE_AUTO=off LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  ! grep -q -- '--auto-enqueue' "$BATS_TEST_TMPDIR/drain.log" 2>/dev/null || { echo "ran with the switch off"; false; }
+  LR_POLLER_AUTOFIRE=1 run bash "$POLLER" --once
+  grep -q -- '--auto-enqueue' "$BATS_TEST_TMPDIR/drain.log" || { cat "$PSTATE/poller.log"; false; }
+  grep -q 'UPGRADE-AUTO queued: 570(29292929)' "$PSTATE/poller.log" || { cat "$PSTATE/poller.log"; false; }
+  await_file "$BATS_TEST_TMPDIR/drain.log"; i=0; while ! grep -qx -- '--drain' "$BATS_TEST_TMPDIR/drain.log" && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+  grep -qx -- '--drain' "$BATS_TEST_TMPDIR/drain.log" || { cat "$PSTATE/poller.log"; false; }
 }
