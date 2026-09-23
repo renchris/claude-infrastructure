@@ -612,6 +612,44 @@ You are the TARGET session (same uuid, new account). Trust nothing until verifie
    `workflow-scripts/` hold everything needed).
 4. Report per **recover** step 7, prefixed with the ingest verification results.
 
+## Mode: upgrade — same account, new binary + model, in place
+
+Not a recovery: the sessions are healthy. `cc-lr upgrade` moves every IDLE live session onto the
+CURRENT launcher binary (`cc-claude-bin`) and model (SSOT `versions.opus_latest`; a Fable session
+keeps `frontier_access.model`, so its move is binary-only). Same pane, same session uuid, same
+account, same effort and permission mode, all context kept by `--resume`.
+
+```
+cc-lr upgrade --all --dry-run      # one row per live session: pane · sid · binary · model → target · disposition
+cc-lr upgrade --all                # queue every `upgrade` row; wait for the verdicts (--wait S, --no-wait)
+cc-lr upgrade <pane|sid8>          # one session
+cc-lr upgrade --report             # the last 24 h of verdicts: ✓ upgraded · · skipped <reason> · ✗ failed <cause + command>
+```
+
+**It never acts from inside a session.** It reads (one `ps` snapshot, the registry, transcripts) and
+writes `kind:"upgrade"` requests into the poller's request dir, then kicks the poller (`kickstart`,
+never `-k`). The poller queues them and starts ONE detached drainer
+(`scripts/limit-recover/lr-upgrade.sh --drain`), which takes sessions one at a time and for each:
+re-judges the selection at execution time → probes capacity and mints a one-shot admission token
+BEFORE anything is typed → mints a pure-ASCII launcher (`lr-fire-resume` of the same uuid on the same
+account) → runs `handoff-fire.sh --recycle --same-account --source-pane P --source-session S
+--resume-launcher L --resume-cfg CFG --await`. If the gate refuses the relaunch after `/exit`, the
+drainer retypes the launcher (≤5, 20 s apart; the gate admits a given resume after 3 refusals) so a
+pane is never left at a bare shell without a named command.
+
+**Excluded, each by name:** `teammate` (its lead's) · `lead-with-teammate` (a live claude whose argv
+names it `--parent-session-id`) · `mid-turn` (last main-thread record is not an assistant `end_turn`
+— re-read again immediately before `/exit`) · `background-job` (a Bash-tool shell doing real work; a
+lone `cc-await-ping` inbox watcher is NOT work — the relaunch ends it, it mails WAKE-PATH-DOWN, and the
+relaunch prompt says to re-arm it; `LRU_WATCHER_IS_JOB=1` treats watchers as work) ·
+`composer-occupied` / `composer-unknown` · `duplicate` (two live rows for one sid) · `self` ·
+`no-transcript` · `stale-row` (registry lstart ≠ process lstart).
+
+**The same-account evidence class** (`--same-account`, exclusive with `--transplanted-source`): the
+registry row binds pane→session, the row's process is alive on that pane's tty, the row's account IS
+`--resume-cfg`, the session has a transcript there and no tombstone, it is not a teammate, and its
+transcript is at rest. Tests: `tests/handoff-recycle-same-account.bats`, `tests/lr-upgrade.bats`.
+
 ## Failure-mode guards (red-team derived — check when something looks off)
 
 | Smell | Guard |
