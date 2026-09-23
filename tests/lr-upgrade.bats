@@ -144,7 +144,8 @@ census() { run bash "$LRU" --census --all; }
   sess 451 ffffffff-0000-4000-8000-000000000001 "$OLD --model claude-opus-5 --effort high"
   sess 452 ffffffff-0000-4000-8000-000000000003 "$OLD --model claude-opus-5 --effort high"
   LRU_SELF_SID=ffffffff-0000-4000-8000-000000000003 census
-  [ "$(disp_of 450)" = duplicate ] && [ "$(disp_of 451)" = duplicate ] || { echo "$output"; false; }
+  [ "$(disp_of 450)" = duplicate ] || { echo "$output"; false; }
+  [ "$(disp_of 451)" = duplicate ] || { echo "$output"; false; }
   [ "$(disp_of 452)" = self ] || { echo "$output"; false; }
 }
 
@@ -189,7 +190,7 @@ mint() { ( . "$LRU"; lru_mint_launcher "$@" ); }
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   L="$output"; [ -f "$L" ]
   ! LC_ALL=C grep -q '[^[:print:][:space:]]' "$L" || { echo "non-ASCII byte in $L"; false; }
-  grep -q 'lr-fire-resume.sh' "$L" && grep -q -- '--model claude-opus-5-5 --effort high --permission-mode auto' "$L"
+  grep -q 'lr-fire-resume.sh' "$L" && grep -q -- '--model claude-opus-5-5 --effort high --permission-mode auto' "$L" || false
   grep -q '16161616-0000-4000-8000-000000000001' "$L"
   grep -q '^export LR_ADMIT_TOKEN=/tmp/tok$' "$L"
   grep -q '^export LR_SUBMIT_TOKEN=run:16161616:upgrade:' "$L"
@@ -220,7 +221,7 @@ cc_lr_env() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"501   18181818  .claude-260"*"upgrade"* ]] || { echo "$output"; false; }
   [[ "$output" == *"502   18181818  .claude-280"*"current"* ]] || { echo "$output"; false; }
-  [[ "$output" == *"DRY RUN"* ]]
+  [[ "$output" == *"DRY RUN"* ]] || false
   [ -z "$(ls -A "$LRU_STATE/requests" 2>/dev/null)" ] || { echo "a dry run wrote a request"; false; }
   [ ! -s "$BATS_TEST_TMPDIR/launchctl.log" ] || { echo "a dry run kicked the poller"; false; }
 }
@@ -234,12 +235,12 @@ cc_lr_env() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   r="$LRU_STATE/requests/cc-lr-upgrade-19191919-0000-4000-8000-000000000001.json"
   [ -f "$r" ] || { ls -la "$LRU_STATE/requests"; echo "$output"; false; }
-  [ "$(jq -r .kind "$r")" = upgrade ] && [ "$(jq -r .source_pane "$r")" = 511 ] && [ "$(jq -r .requested_by "$r")" = 999 ]
+  [ "$(jq -r .kind "$r")" = upgrade ] && [ "$(jq -r .source_pane "$r")" = 511 ] && [ "$(jq -r .requested_by "$r")" = 999 ] || false
   [ -n "$(jq -r '.req_id // empty' "$r")" ]
   nreq=0; for q in "$LRU_STATE"/requests/*.json; do [ -f "$q" ] && nreq=$((nreq + 1)); done
   [ "$nreq" -eq 1 ] || { ls "$LRU_STATE/requests"; false; }
   [[ "$output" == *"· 512   19191919  skipped mid-turn"* ]] || { echo "$output"; false; }
-  [[ "$output" == *"pending"* ]]
+  [[ "$output" == *"pending"* ]] || false
   grep -q '^kickstart gui/' "$BATS_TEST_TMPDIR/launchctl.log"
   ! grep -q -- '-k' "$BATS_TEST_TMPDIR/launchctl.log" || { echo "the poller was kicked with -k"; false; }
 }
@@ -301,7 +302,7 @@ await_file() { local i=0; while [ ! -s "$1" ] && [ "$i" -lt 50 ]; do sleep 0.1; 
   [ "$(jq -r .verdict "$LRU_STATE/results/upgrade-22222222-0000-4000-8000-000000000001.json")" = skipped ]
   [ "$(jq -r .reason "$LRU_STATE/results/upgrade-22222222-0000-4000-8000-000000000001.json")" = mid-turn ]
   [ "$(jq -r .req_id "$LRU_STATE/results/upgrade-22222222-0000-4000-8000-000000000001.json")" = r1 ]
-  [[ "$(jq -r .reason "$LRU_STATE/results/upgrade-22222222-0000-4000-8000-00000000dead.json")" == "not live"* ]]
+  [[ "$(jq -r .reason "$LRU_STATE/results/upgrade-22222222-0000-4000-8000-00000000dead.json")" == "not live"* ]] || false
   [ ! -s "$BATS_TEST_TMPDIR/hf.log" ] || { echo "handoff-fire was invoked for a session that failed re-judgement"; false; }
   [ -z "$(ls -A "$LRU_STATE/upgrade-queue")" ] && [ -f "$LRU_STATE/claimed/a.json" ] && [ ! -e "$LRU_STATE/upgrade-drain.lock" ]
 }
@@ -325,7 +326,8 @@ EOF
   run bash "$LRU" --drive 23232323-0000-4000-8000-000000000001 541
   [ "$status" -eq 3 ] || { echo "$output"; false; }
   r="$LRU_STATE/results/upgrade-23232323-0000-4000-8000-000000000001.json"
-  [ "$(jq -r .verdict "$r")" = skipped ] && [[ "$(jq -r .reason "$r")" == "capacity: load 9.9/core"* ]] || { cat "$r"; false; }
+  [ "$(jq -r .verdict "$r")" = skipped ] || { cat "$r"; false; }
+  [[ "$(jq -r .reason "$r")" == "capacity: load 9.9/core"* ]] || { cat "$r"; false; }
   grep -q '^probe ' "$BATS_TEST_TMPDIR/order.log"
   ! grep -q '^hf ' "$BATS_TEST_TMPDIR/order.log" || { echo "handoff-fire ran despite the refusal"; cat "$BATS_TEST_TMPDIR/order.log"; false; }
 }
