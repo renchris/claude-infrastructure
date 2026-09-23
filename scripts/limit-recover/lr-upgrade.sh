@@ -400,7 +400,14 @@ LRU_RAIL_MARKERS='OPUS55-UPGRADE(
 In-placeupgrade:thissessionwasrelaunchedbycc-lrupgrade'
 LRU_COMPOSER_TEXT=""
 lru_is_rail_junk() { # $1=space-stripped composer content → 0 when it begins with a rail marker
-  local m
+  local m x
+  # A REQUESTER-NAMED STRAY (cc-lr upgrade <pane> --scrub-composer TEXT): someone read this exact
+  # content off the pane and ruled it an accidental keystroke. EXACT match only, after the same
+  # space-strip, so a composer that has grown since that read is somebody's draft again.
+  if [ -n "${LRU_SCRUB_EXACT:-}" ] && [ -n "${1:-}" ]; then
+    x="$(printf '%s' "$LRU_SCRUB_EXACT" | tr -d '[:space:]')"
+    [ -n "$x" ] && [ "$1" = "$x" ] && return 0
+  fi
   [ "${LRU_SCRUB_RAIL_JUNK:-on}" = off ] && return 1
   [ -n "${1:-}" ] || return 1
   while IFS= read -r m; do
@@ -646,8 +653,9 @@ lru_submit_state() { # $1=run dir → last state line's state, empty when none
 }
 
 # ── drive ONE session ────────────────────────────────────────────────────────────────────────────
-lru_drive() { # $1=sid $2=pane $3=requested_by $4=req id → prints the result row; rc 0 upgraded · 1 failed · 3 skipped
+lru_drive() { # $1=sid $2=pane $3=requested_by $4=req id [$5=scrub-composer text] → prints the result row; rc 0 upgraded · 1 failed · 3 skipped
   local sid="$1" pane="$2" by="${3:-?}" req="${4:-}" row disp bin model tgt eff perm cfg cwd pid
+  local LRU_SCRUB_EXACT="${5:-${LRU_SCRUB_EXACT:-}}"; export LRU_SCRUB_EXACT
   local mutex run L t0 hflog hrc=0 i cmd target_bin sock binlabel st
   mutex="$UPG_MUTEX_DIR/$sid.active"
   mkdir -p "$UPG_MUTEX_DIR" 2>/dev/null || true
@@ -717,7 +725,13 @@ EOF
   # the account, the absence of a tombstone and the transcript at rest, gates the composer, re-reads
   # the transcript immediately before /exit, types /exit, waits for the shell and types the launcher.
   local engage_proc=0; [ "$role" = teammate ] && engage_proc=1
-  ( cd "$cwd" 2>/dev/null || cd /; HF_ENGAGE_BY_PROCESS="$engage_proc" CLAUDE_CONFIG_DIR="$cfg" bash "$LRU_HF_BIN" --recycle --same-account \
+  # THE EXIT DIALOG, FOR A TEAM ROLE: CANCEL, NEVER CHOOSE. If /exit raises "Background work is
+  # running", both exits are wrong here — "Move to background and exit" hands the conversation to a
+  # background worker by session id (a second live copy beside the --resume we are about to type),
+  # and "Exit and stop tasks" aborts tasks BEFORE shutdown commits, which tears down a live
+  # member's pane. Esc (= Stay) leaves the session exactly as it was; the drive reports it skipped.
+  local bgwork_answer="${CC_RECYCLE_BGWORK_ANSWER:-on}"; [ -n "$role" ] && bgwork_answer=cancel
+  ( cd "$cwd" 2>/dev/null || cd /; CC_RECYCLE_BGWORK_ANSWER="$bgwork_answer" HF_ENGAGE_BY_PROCESS="$engage_proc" CLAUDE_CONFIG_DIR="$cfg" bash "$LRU_HF_BIN" --recycle --same-account \
       --source-pane "$pane" --source-session "$sid" --resume-launcher "$L" --resume-cfg "$cfg" \
       --resume-cwd "$cwd" ${tm_id:+--team-member-id "$tm_id"} --await ) > "$hflog" 2>&1 || hrc=$?
   binlabel="$(printf '%s\n' "$target_bin" | awk -F/ '{ for (i = 1; i <= NF; i++) if ($i ~ /^\.claude-/) { print $i; exit } ; print $NF }')"
@@ -775,7 +789,7 @@ EOF
 # ── the serial drain ─────────────────────────────────────────────────────────────────────────────
 # ONE AT A TIME, by construction: a lock dir with a holder pid, stolen only from a dead holder.
 lru_drain() {
-  local q sid pane by req n=0
+  local q sid pane by req scrub n=0
   mkdir -p "$UPG_QUEUE" "$UPG_CLAIMED" 2>/dev/null || true
   if ! mkdir "$UPG_LOCK" 2>/dev/null; then
     local hp; hp="$(cat "$UPG_LOCK/pid" 2>/dev/null || true)"
@@ -791,10 +805,11 @@ lru_drain() {
     [ -n "$q" ] || break
     sid="$(jq -r '.sid // empty' "$q" 2>/dev/null)"; pane="$(jq -r '.source_pane // empty' "$q" 2>/dev/null)"
     by="$(jq -r '.requested_by // "?"' "$q" 2>/dev/null)"; req="$(jq -r '.req_id // empty' "$q" 2>/dev/null)"
+    scrub="$(jq -r '.scrub_composer // empty' "$q" 2>/dev/null)"
     mv -f "$q" "$UPG_CLAIMED/" 2>/dev/null || rm -f "$q"
     if [ -z "$sid" ] || [ -z "$pane" ]; then lru_say "malformed request $q (no sid/pane) - dropped to claimed/"; continue; fi
     [ "$n" -gt 0 ] && sleep "$LRU_GAP_S"
-    lru_drive "$sid" "$pane" "$by" "$req" || true
+    lru_drive "$sid" "$pane" "$by" "$req" "$scrub" || true
     n=$((n + 1))
   done
   lru_say "drain done: $n session(s)"
@@ -845,12 +860,13 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   case "${1:-}" in
     --census) shift; [ "${1:-}" = --all ] && shift; lru_census "${1:-}"; exit $? ;;
     --drive)  [ $# -ge 3 ] || { lru_say "usage: --drive <sid> <pane> [--requested-by P] [--req-id ID]"; exit 3; }
-              _s="$2"; _p="$3"; shift 3; _by="?"; _rq=""
+              _s="$2"; _p="$3"; shift 3; _by="?"; _rq=""; _sc=""
               while [ $# -gt 0 ]; do case "$1" in
+                --scrub-composer) [ $# -ge 2 ] || exit 3; _sc="$2"; shift 2 ;;
                 --requested-by) [ $# -ge 2 ] || exit 3; _by="$2"; shift 2 ;;
                 --req-id) [ $# -ge 2 ] || exit 3; _rq="$2"; shift 2 ;;
                 *) lru_say "unknown arg $1"; exit 3 ;; esac; done
-              lru_drive "$_s" "$_p" "$_by" "$_rq"; exit $? ;;
+              lru_drive "$_s" "$_p" "$_by" "$_rq" "$_sc"; exit $? ;;
     --pin-target) # <sid> <model|opus|fable> → write the per-session pin; `--pin-target <sid> clear` removes it
               [ $# -ge 3 ] || { lru_say "usage: --pin-target <sid> <opus|fable|model id|clear>"; exit 3; }
               case "$2" in *[!0-9a-f-]*|'') lru_say "--pin-target wants a full session uuid, got '$2'"; exit 3 ;; esac

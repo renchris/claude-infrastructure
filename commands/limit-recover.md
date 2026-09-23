@@ -667,6 +667,16 @@ inbox poller runs only when it holds someone else, so replies from pane members 
 `teams/<team>/inboxes/team-lead.json`; sending still works, and the relaunch prompt says where to read
 them. Held states: `teammate-no-team` · `teammate-shutdown-pending` · `teammate-unidentified` ·
 `lead-awaits-teammates` · `lead-no-team-file`. `LRU_TEAM_PROC=off` restores the old blanket exclusions.
+If a team relaunch's `/exit` raises the background-work dialog, the watcher CANCELS it (Esc = Stay;
+`CC_RECYCLE_BGWORK_ANSWER=cancel`) and types nothing: "Move to background" would hand the
+conversation to a background worker beside the `--resume` about to be typed, and "Exit and stop
+tasks" aborts tasks before shutdown commits, taking a live member's pane with it.
+
+**A stray keystroke in a composer** (`composer-occupied` on one character nobody meant to leave) is
+cleared only by name: `cc-lr upgrade <pane> --scrub-composer '<exact text>'` — one pane, never with
+`--all`, and honoured only while the composer still holds exactly that text at census AND at drive
+time; it then rides the same residue receipt as rail junk, so handoff-fire's read-back-verified Ctrl-U
+loop clears it.
 
 **In-flight subagents** read `subagents-in-flight` (from handoff-fire's own `--probe-live-subagents`,
 the predicate its recycle gate refuses on); an agent last written BEFORE its owner process started is

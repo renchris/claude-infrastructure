@@ -7165,6 +7165,18 @@ if [ "${1:-}" = "__recycle" ]; then
     if [ $((waited % rcy_bgwork_every)) -eq 0 ] && [ "$rcy_bgwork_sent" -lt "$rcy_bgwork_max" ]; then
       if bgk="$(pane_bgwork_key "$IT2" "$RSID")" && [ -n "$bgk" ]; then
         rcy_bgwork_seen=1
+        # CANCEL (cc-lr upgrade's team procedure, 2026-09-23): for an Agent-Team lead or member
+        # neither exit is safe — "Move to background" hands the conversation to a background
+        # worker by session id (a second live copy beside the --resume this rail types next), and
+        # "Exit and stop tasks" aborts tasks before shutdown commits (a live member's pane goes
+        # with them). Esc is the dialog's own Stay: the session is left exactly as it was, and
+        # this watcher ends WITHOUT typing a relaunch.
+        if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" = cancel ]; then
+          hf_bounded "$IT2" session send -s "$RSID" $'\e' >/dev/null 2>&1 || true
+          echo "!! recycle HELD at ${waited}s: the /exit raised the background-work dialog and this relaunch may not choose either exit (CC_RECYCLE_BGWORK_ANSWER=cancel) — sent Esc (Stay); the session in $RSID is untouched and NO relaunch was typed. Re-run once its background work has ended." >&2
+          emit_recycle_event recycle-held-bgwork "" "$RSID" "background-work dialog at ${waited}s cancelled with Esc (team relaunch); nothing typed" || true
+          exit 1
+        fi
         if [ "${CC_RECYCLE_BGWORK_ANSWER:-on}" != off ]; then
           hf_bounded "$IT2" session send -s "$RSID" "$bgk" >/dev/null 2>&1 || true
           rcy_bgwork_sent=$((rcy_bgwork_sent + 1))

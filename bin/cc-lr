@@ -128,7 +128,7 @@ cc-lr — find · recover · status · repair, for a limit-blocked session.
   cc-lr status [ref|--all]   one row per run's events.jsonl, with CAUSE / NEXT
   cc-lr repair <bundle|ref> [--mode relaunch|prompt] [--target A] [--source-pane P]
                              write a poller request and kick the daemon — NEVER types
-  cc-lr upgrade (--all | <pane|sid8>) [--dry-run] [--wait S | --no-wait]
+  cc-lr upgrade (--all | <pane|sid8>) [--dry-run] [--wait S | --no-wait] [--scrub-composer TEXT]
   cc-lr upgrade --report     move IDLE live sessions onto the current binary + model, in place
                              (same pane, uuid, account, effort). --dry-run prints one row per
                              live session and changes nothing; otherwise one request per
@@ -867,10 +867,11 @@ cl_upgrade_result() { # <result json> → the fields cl_upgrade_line takes, TAB-
   jq -r '[.pane // "-", .sid // "-", .verdict // "failed", .reason // "-", .command // ""] | @tsv' "$1" 2>/dev/null
 }
 cmd_upgrade() {
-  local all=0 ref="" dry=0 report=0 wait_s="${CC_LR_UPGRADE_WAIT_S:-1800}" census rc by
+  local all=0 ref="" dry=0 report=0 wait_s="${CC_LR_UPGRADE_WAIT_S:-1800}" census rc by scrub=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --all) all=1; shift ;;
+      --scrub-composer) [ $# -ge 2 ] || { usage; exit 3; }; scrub="$2"; shift 2 ;;
       --dry-run) dry=1; shift ;;
       --report) report=1; shift ;;
       --no-wait) wait_s=0; shift ;;
@@ -902,8 +903,15 @@ EOF
   if { [ "$all" -eq 1 ] && [ -n "$ref" ]; } || { [ "$all" -eq 0 ] && [ -z "$ref" ]; }; then
     echo "cc-lr upgrade: name the subject — --all, or ONE pane id / sid8" >&2; usage; exit 3
   fi
+  # --scrub-composer TEXT: the requester has READ the pane's composer and names its exact content as
+  # a stray (an accidental keystroke blocking the move). It is honoured ONLY for one named pane and
+  # ONLY while the composer still holds exactly that text, at census and again at drive time; any
+  # other content is still somebody's draft. Never with --all: a fleet-wide scrub is the accident.
+  if [ -n "$scrub" ] && [ -z "$ref" ]; then
+    echo "cc-lr upgrade: --scrub-composer names ONE pane's exact composer text; it never applies to --all" >&2; exit 3
+  fi
   [ -n "$UPGRADE_BIN" ] && [ -f "$UPGRADE_BIN" ] || cl_die "cannot reach lr-upgrade.sh (set CC_LR_UPGRADE_BIN); nothing was read or written" 2
-  census="$(bash "$UPGRADE_BIN" --census "${ref:---all}")"; rc=$?
+  census="$(LRU_SCRUB_EXACT="$scrub" bash "$UPGRADE_BIN" --census "${ref:---all}")"; rc=$?
   case "$rc" in
     0) ;;
     1) echo "cc-lr: '${ref:-all}' matched no live session" >&2; return 1 ;;
@@ -938,8 +946,8 @@ EOF
     req="${s:0:8}-$(date +%s)-$$"
     tmp="$REQ_DIR/.cc-lr-upgrade-$s.$$.tmp"; dest="$REQ_DIR/cc-lr-upgrade-$s.json"
     if jq -n --arg sid "$s" --arg pane "$p" --arg by "${by:-?}" --arg req "$req" \
-          --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          '{kind:"upgrade", sid:$sid, source_pane:$pane, requested_by:$by, req_id:$req, ts:$ts, origin_class:"cc-lr-upgrade"}' \
+          --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg scrub "$scrub" \
+          '{kind:"upgrade", sid:$sid, source_pane:$pane, requested_by:$by, req_id:$req, ts:$ts, origin_class:"cc-lr-upgrade"} + (if $scrub == "" then {} else {scrub_composer:$scrub} end)' \
           > "$tmp" 2>/dev/null && mv -f "$tmp" "$dest" 2>/dev/null; then
       pending="$pending$s"$'\t'"$req"$'\t'"$p"$'\n'; nq=$((nq + 1))
     else

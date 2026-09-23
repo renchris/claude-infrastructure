@@ -699,3 +699,57 @@ STUB
   [ "$(jq -c .members "$live/config.json")" = '[1,2]' ] || false
   [ ! -e "$held" ] || false
 }
+
+@test "T9 [RED] --scrub-composer: an EXACT named stray is scrubbable; anything more is still a draft" {
+  tui_stub
+  sess 720 abcd1234-0000-4000-8000-000000000020 "$OLD --model claude-opus-5 --effort high"
+  printf 'e' > "$BATS_TEST_TMPDIR/composer-720"
+  census
+  [ "$(disp_of 720)" = composer-occupied ] || { echo "an unnamed stray must hold: $output"; false; }
+  LRU_SCRUB_EXACT=e census
+  [ "$(disp_of 720)" = upgrade ] || { echo "the named stray still held: $output"; false; }
+  printf 'ex' > "$BATS_TEST_TMPDIR/composer-720"
+  LRU_SCRUB_EXACT=e census
+  [ "$(disp_of 720)" = composer-occupied ] || { echo "a GROWN composer was scrubbed: $output"; false; }
+  # cc-lr: the flag reaches the census and rides the request; never with --all
+  cc_lr_env
+  printf 'e' > "$BATS_TEST_TMPDIR/composer-720"
+  run bash "$REPO/bin/cc-lr" upgrade --all --no-wait --scrub-composer e
+  [ "$status" -eq 3 ] || { echo "--all accepted a scrub: $output"; false; }
+  run bash "$REPO/bin/cc-lr" upgrade 720 --no-wait --scrub-composer e
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  r="$LRU_STATE/requests/cc-lr-upgrade-abcd1234-0000-4000-8000-000000000020.json"
+  [ "$(jq -r .scrub_composer "$r")" = e ] || { cat "$r"; false; }
+}
+
+@test "T10 [RED] the drain hands the request's scrub_composer to the drive, which files the receipt for it" {
+  gate_env 0; tui_stub
+  export CC_COMPOSER_RESIDUE_DIR="$BATS_TEST_TMPDIR/residue"
+  sleep 300 & LIVE_PID=$!
+  SESS_PID="$LIVE_PID" sess 721 abcd1234-0000-4000-8000-000000000021 "$OLD --model claude-opus-5 --effort high"
+  printf 'e' > "$BATS_TEST_TMPDIR/composer-721"
+  mkdir -p "$LRU_STATE/upgrade-queue"
+  printf '{"kind":"upgrade","sid":"abcd1234-0000-4000-8000-000000000021","source_pane":"721","req_id":"r9","scrub_composer":"e"}\n' > "$LRU_STATE/upgrade-queue/s.json"
+  run bash "$LRU" --drain
+  kill "$LIVE_PID" 2>/dev/null || true
+  [ "$(cut -f2- "$CC_COMPOSER_RESIDUE_DIR/721" 2>/dev/null)" = e ] || { echo "no receipt for the named stray: $output"; false; }
+  grep -q '^hf .*--same-account' "$BATS_TEST_TMPDIR/order.log" || { cat "$BATS_TEST_TMPDIR/order.log"; false; }
+}
+
+@test "T11 [RED] a team relaunch asks handoff-fire to CANCEL the exit dialog; an ordinary one does not" {
+  gate_env 0
+  team_file
+  sleep 300 & LIVE_PID=$!
+  SESS_PID="$LIVE_PID" sess 702 "$MATE_SID" "$(mate_argv)"
+  sess 701 "$LEAD_SID" "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  printf '#!/bin/bash\necho "bgwork=${CC_RECYCLE_BGWORK_ANSWER:-unset}" >> %s/bg.log\nexit 2\n' "$BATS_TEST_TMPDIR" > "$LRU_HF_BIN"; chmod +x "$LRU_HF_BIN"
+  run bash "$LRU" --drive "$MATE_SID" 702
+  kill "$LIVE_PID" 2>/dev/null || true
+  grep -qx 'bgwork=cancel' "$BATS_TEST_TMPDIR/bg.log" || { cat "$BATS_TEST_TMPDIR/bg.log"; echo "$output"; false; }
+  : > "$BATS_TEST_TMPDIR/bg.log"
+  sleep 300 & LIVE_PID=$!
+  SESS_PID="$LIVE_PID" sess 703 abcd1234-0000-4000-8000-000000000030 "$OLD --permission-mode auto --model claude-opus-5 --effort high"
+  run bash "$LRU" --drive abcd1234-0000-4000-8000-000000000030 703
+  kill "$LIVE_PID" 2>/dev/null || true
+  grep -qx 'bgwork=on' "$BATS_TEST_TMPDIR/bg.log" || { cat "$BATS_TEST_TMPDIR/bg.log"; false; }
+}
