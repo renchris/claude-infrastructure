@@ -1149,7 +1149,7 @@ surface_death() {
 # are all shells — never over a new claude, never over a running command.
 #
 # Seams: CC_PANE_VERDICT=0 (kill switch) · CC_PANE_VERDICT_DEV (stands in for /dev) ·
-# CC_PANE_VERDICT_TTY_PROCS (a file standing in for `ps -t <tty> -o command=`) ·
+# CC_PANE_VERDICT_TTY_PROCS (a file standing in for `ps -t <tty> -o stat=,command=`) ·
 # CC_PANE_VERDICT_SETTLE_S · CC_SESSIONS_LOG · CC_ROLES_DIR · CC_DEATH_OSA_BIN (stands in for
 # osascript) · CC_PANE_VERDICT_{TTY,PANE,CFG,CWD} — the registration-time facts, for the
 # --pane-verdict entrypoint and a one-off repaint of a pane whose daemon predates this arm.
@@ -1173,14 +1173,27 @@ pane_is_desk() { # $1=pane → 0 iff the desk role pointer names this pane
   d=$(head -1 "${CC_ROLES_DIR:-$HOME/.claude/cc-roles}/desk" 2>/dev/null | tr -d ' \n\r')
   [[ -n "${1:-}" && -n "$d" && "$d" == "$1" ]]
 }
-pane_tty_procs() { # $1=tty → the command lines still attached to that tty (one per line)
+pane_tty_procs() { # $1=tty → "<stat> <command>" for every process still attached to that tty
   if [[ -n "${CC_PANE_VERDICT_TTY_PROCS:-}" ]]; then cat "$CC_PANE_VERDICT_TTY_PROCS" 2>/dev/null; return 0; fi
-  lcw_bounded "${LCW_PROBE_TIMEOUT_S:-5}" /bin/ps -t "$1" -o command= 2>/dev/null || true
+  lcw_bounded "${LCW_PROBE_TIMEOUT_S:-5}" /bin/ps -t "$1" -o stat=,command= 2>/dev/null || true
 }
-pane_procs_are_shells() { # stdin = command lines → 0 iff every line is a shell or login (a bare prompt)
-  awk '{ c=$1; sub(/^-/, "", c); n=split(c, p, "/"); c=p[n]
-         if (c !~ /^(zsh|bash|sh|fish|login)$/) bad=1 }
-       END { exit bad ? 1 : 0 }'
+# "Is the pane at a bare prompt?" is a question about the tty's FOREGROUND process group, and the
+# kernel answers it directly: ps marks every member with `+` in STAT. Only those are judged — every
+# foreground process must be a shell. Background residents of the tty are not "something running
+# there": the prompt's own gitstatusd (powerlevel10k / oh-my-zsh, ppid = the shell, or 1 once its
+# shell died) sits on every zsh pane on this machine, and the prior rule — EVERY attached process
+# must be named like a shell — refused 31 of 33 panes that settled at a prompt (2026-09-09..22,
+# lead-crash-watchdog.log), including the incident pane 503 / ttys006 on 2026-09-22. A name
+# allowlist over all residents enumerates examples; the foreground group is the class.
+# No `+` anywhere means the probe could not see the group (it always can on a live tty): judge
+# every line, i.e. the old conservative rule, so a blind probe never reads as a bare prompt.
+pane_procs_are_shells() { # stdin = "<stat> <command>" lines → 0 iff the foreground group is only shells
+  awk '{ st[NR]=$1; c=$2; sub(/^-/, "", c); n=split(c, p, "/"); cmd[NR]=p[n]; if ($1 ~ /\+/) fg=1 }
+       END { if (NR == 0) exit 1
+             for (i = 1; i <= NR; i++) {
+               if (fg && st[i] !~ /\+/) continue
+               if (cmd[i] !~ /^(zsh|bash|sh|fish|login)$/) exit 1 }
+             exit 0 }'
 }
 pane_verdict_settle() { # $1=tty → closed | relaunched | shell | unknown  (waits for the pane to settle)
   local tty="$1" waited=0 procs

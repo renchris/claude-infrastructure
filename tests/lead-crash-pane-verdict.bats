@@ -22,11 +22,12 @@ setup() {
   mkdir -p "$HOME/.claude/bin" "$HOME/.claude/watchdog" "$HOME/.claude/logs" "$T/dev" "$T/roles" "$T/acct/projects/proj" "$T/jetsam" "$T/teardown" "$T/registry"
   export CC_ACCOUNT_BASES="$T/acct" CC_JETSAM_DIRS="$T/jetsam" CC_TEARDOWN_DIR="$T/teardown" CC_REGISTRY_DIR="$T/registry"
   export CC_ROLES_DIR="$T/roles" CC_SESSIONS_LOG="$T/sessions.log"
-  # the pane: a fixture "tty" file stands in for /dev/ttys099; a procs file stands in for `ps -t`
+  # the pane: a fixture "tty" file stands in for /dev/ttys099; a procs file stands in for
+  # `ps -t <tty> -o stat=,command=` (STAT first: `+` marks the tty's foreground process group)
   export CC_PANE_VERDICT_DEV="$T/dev" CC_PANE_VERDICT_TTY=ttys099 CC_PANE_VERDICT_TTY_PROCS="$T/procs"
   export CC_PANE_VERDICT_SETTLE_S=0 CC_PANE_VERDICT_PANE=330 CC_PANE_VERDICT_CFG="/x/.claude-tertiary"
   export CC_PANE_VERDICT_CWD="$T/cwd"
-  : > "$T/dev/ttys099"; printf '/bin/zsh -l\n' > "$T/procs"; printf '999\n' > "$T/roles/desk"
+  : > "$T/dev/ttys099"; printf 'Ss+ /bin/zsh -l\n' > "$T/procs"; printf '999\n' > "$T/roles/desk"
   # the session's cwd: a git repo, dirty by default (an untracked file); tests make it clean as needed
   mkdir -p "$T/cwd"; git -C "$T/cwd" init -q; git -C "$T/cwd" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
   git -C "$T/cwd" update-ref refs/remotes/origin/main HEAD; : > "$T/cwd/scratch.txt"
@@ -88,7 +89,7 @@ painted() { cat "$T/dev/ttys099"; }
 }
 
 @test "a pane where a claude is back on the tty (recycle/resume) is left alone" {
-  printf '/bin/zsh -l\nbash /x/cc-close-attrib /x/.claude-260/node_modules/.bin/claude --permission-mode auto\n/x/.claude-260/node_modules/.bin/claude --permission-mode auto\n' > "$T/procs"
+  printf 'Ss /bin/zsh -l\nS+ bash /x/cc-close-attrib /x/.claude-260/node_modules/.bin/claude --permission-mode auto\nS+ /x/.claude-260/node_modules/.bin/claude --permission-mode auto\n' > "$T/procs"
   run verdict_with "$HOOK" CRASH external-sigterm 143 15
   [ "$status" -eq 0 ]
   [ ! -s "$T/dev/ttys099" ] || { echo "painted over a live claude: $(painted)"; false; }
@@ -102,7 +103,7 @@ painted() { cat "$T/dev/ttys099"; }
 }
 
 @test "a running command on the tty (not a bare prompt) is never written over" {
-  printf '/bin/zsh -l\nvim notes.md\n' > "$T/procs"
+  printf 'Ss /bin/zsh -l\nS+ vim notes.md\n' > "$T/procs"
   run verdict_with "$HOOK" CRASH external-sigterm 143 15
   [ ! -s "$T/dev/ttys099" ] || { echo "painted over a running command"; false; }
 }
@@ -165,4 +166,42 @@ painted() { cat "$T/dev/ttys099"; }
   painted | grep -q 'NOT A CLEAN EXIT'
   painted | grep -q 'last close verdict: -'
   painted | grep -q "claude3 --resume $SID"
+}
+
+# ── the prompt's background residents (2026-09-22, pane 503 / ttys006) ─────────────────────────────
+# A zsh pane here always carries the prompt's gitstatusd on its tty (ppid = the shell, or 1 once
+# its shell died). The prior rule — every attached process must be NAMED like a shell — refused 31
+# of 33 panes that settled at a prompt. "Is something running there" is the foreground process
+# group's question; ps answers it with `+`. These fixtures are the incident tty's real shape.
+GITSTATUSD='/Users/x/.cache/gitstatus/gitstatusd-darwin-arm64 -G v1.5.4 -s -1 -u -1 -d -1 -c -1 -m -1 -v FATAL -t 20'
+
+@test "INCIDENT: a bare prompt whose tty also holds the prompt's background gitstatusd IS painted" {
+  printf 'S+ /bin/zsh -l -i\nS /bin/zsh -l -i\nSs /bin/zsh -l\nS %s\nS %s\n' "$GITSTATUSD" "$GITSTATUSD" > "$T/procs"
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  [ "$status" -eq 0 ]
+  painted | grep -q 'CLOSED CLEANLY' || { echo "not painted over a bare prompt: $(painted)"; false; }
+}
+
+@test "a background resident never masks a FOREGROUND command — that pane is still not written over" {
+  printf 'Ss /bin/zsh -l\nS %s\nS+ vim notes.md\n' "$GITSTATUSD" > "$T/procs"
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  [ ! -s "$T/dev/ttys099" ] || { echo "painted over a foreground vim: $(painted)"; false; }
+}
+
+@test "a probe that shows NO foreground marker falls back to judging every process (a blind probe is not a prompt)" {
+  printf 'Ss /bin/zsh -l\nS %s\n' "$GITSTATUSD" > "$T/procs"
+  run verdict_with "$HOOK" RECYCLE clean-exit 0 ""
+  [ ! -s "$T/dev/ttys099" ] || { echo "painted on a probe that could not see the foreground group: $(painted)"; false; }
+}
+
+@test "RED-PROOF: the pre-fix name-allowlist rule refuses the incident tty (control must FAIL)" {
+  FIXED="$(git -C "$REPO" log --format=%H -S'the foreground group is only shells' -- hooks/lead-crash-watchdog.sh 2>/dev/null | tail -1)"
+  [ -n "$FIXED" ] || skip "cannot locate the commit that introduced the foreground-group rule (uncommitted, or shallow clone)"
+  OLD="$T/old-hook.sh"
+  git -C "$REPO" show "$FIXED^:hooks/lead-crash-watchdog.sh" > "$OLD" 2>/dev/null || skip "no parent revision for $FIXED"
+  ! grep -q 'the foreground group is only shells' "$OLD" || false
+  # the pre-fix probe emitted command-only lines; replay the incident tty in THAT shape
+  printf '/bin/zsh -l -i\n/bin/zsh -l -i\n/bin/zsh -l\n%s\n' "$GITSTATUSD" > "$T/procs"
+  run verdict_with "$OLD" RECYCLE clean-exit 0 ""
+  [ ! -s "$T/dev/ttys099" ] || { echo "pre-fix hook painted — the control proves nothing: $(painted)"; false; }
 }
