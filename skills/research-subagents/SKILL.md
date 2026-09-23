@@ -409,7 +409,14 @@ On the **model** axis it is pinned to `roles.research_worker` ONLY in-process/te
   against *lazy* under-spawning — it is NOT "more is always better." Under a quota, N is a
   cost knob: N = the count of genuinely distinct axes, not a target to fill. (The cheapest
   token is the un-spawned agent — this is the biggest zero-quality-cost saving.)
-- **Workflow bulk synthesis-worker free win (T2 effort grid, CERTIFIED 2026-07-01).** In a
+- **Workflow bulk synthesis worker = `roles.workflow_synthesis_worker` — Opus 5.5 @xhigh since
+  2026-09-22.** In a Workflow, spawn breadth-first synthesis/inferential workers as
+  `agent(brief, {model: 'claude-opus-5-5', effort: 'xhigh'})`, keeping the saturation bound below.
+  The equal-tools settle run (`docs/research/opus55-synth-reprobe-2026-09-22/`) had it beat
+  Sonnet 5 @max 5-1 on judged pairs with 98.5% v 89.2% key recall and a third of the wrong
+  claims, at roughly 1.5× the quota — quality-first pays that. The Sonnet record below is the
+  retired 2026-07-01 free win, kept because it explains why max effort was load-bearing THERE.
+- *(Retired 2026-09-22.)* **Workflow bulk synthesis-worker free win (T2 effort grid, CERTIFIED 2026-07-01).** In a
   Workflow, spawn breadth-first synthesis/inferential workers as
   `agent(brief, {model: 'claude-sonnet-5', effort: 'max'})` — **NOT** Opus-4.8@max. Sonnet-5@max
   ties Opus-4.8@max on quality across easy AND hard synthesis briefs (0 reliable Opus wins, blind
@@ -418,14 +425,14 @@ On the **model** axis it is pinned to `roles.research_worker` ONLY in-process/te
   floor — wrong-file citations on hard grounding), AND the brief MUST carry a saturation bound
   (~15-25 tool calls; unbounded max-effort Sonnet overflowed context once). In-process `/research`
   can't pin effort → those workers stay on `roles.research_worker` (the Workflow slot is
-  `roles.workflow_synthesis_worker`, both in `~/.claude/model-config.yaml`). ⚠️ The free win is
-  certified vs Opus 4.8 only; the re-probe against the current `versions.opus_latest` is pending.
+  `roles.workflow_synthesis_worker`, both in `~/.claude/model-config.yaml`). The free win was
+  certified vs Opus 4.8 only; re-probed against Opus 5.5 on 2026-09-22, it lost on quality.
 - **Tier-mix down.** Route every genuinely-retrieval axis to `roles.research_retrieval`; reserve
   `roles.research_adversarial` for the sharp 10–15%; the inferential axes take
   `roles.workflow_synthesis_worker` in Workflows / `roles.research_worker` in-process.
 - **Prefer Workflows for waves >~10 agents** — the only surface where per-slot model+effort is
   pinnable (in-process subagents inherit lead effort, GH #25591), AND the only surface where the
-  Sonnet-5@max worker free win above is realizable.
+  `roles.workflow_synthesis_worker` rung above (xhigh) is realizable.
 
 **Do NOT put a projected quota/$ number in the 15-second abort manifest** (decided via item-3
 probe wf_b0f4b091-172, 2026-07-01): the manifest can compute *draw* but not *remaining* cap
