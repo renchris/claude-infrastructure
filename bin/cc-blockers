@@ -128,6 +128,13 @@
 # non-executable, failing or garbage-emitting cc-fleet yields NO rows and NO error (R5, fail-OPEN) —
 # and, load-bearing, cannot take the land-pipeline or dispatch rows down with it.
 #
+# ALSO renders the COMMS alarm (cross-session mail v3 D12) — cc-inbox-guard's own board rows:
+#   kind=="comms-undelivered"  UNDELIVERED  an escalated box that STILL holds unconsumed mail now
+#                              (re-measured from the mailbox cursors every invocation, so a drained
+#                              or archived box clears itself) · ENQUEUE-FAIL  a send that never
+#                              persisted. Window CC_BLOCKERS_COMMS_H (24h; 0 = off). RECOVER is
+#                              `cc-thread <key>`, the per-box cursor view.
+#
 # `--plist-parity` is a SEPARATE leg (DAEMON_FLEET_V2 §4.4), deliberately NOT part of the default
 # board: it compares the repo SSOT launchd/com.claude.*.plist against the live
 # ~/Library/LaunchAgents copies and emits kind=="plist-parity" rows in three classes —
@@ -1333,6 +1340,84 @@ fi
 # this line above `fleet_alarm_rows()`, the call hit `command not found`, went straight into the
 # `2>/dev/null`, and the fleet family produced ZERO rows on a board that looked healthy. The
 # fail-open that makes a dead sensor safe is the same one that makes a mis-ordered call silent.
+# ── COMMS alarm (cross-session mail v3 D12, cc-backlog 02ba4e52389a) ─────────────────────────────
+# cc-inbox-guard already writes every escalation onto THIS board file — `undelivered-escalated` and
+# `enqueue-failed-escalated`, actor cc-inbox-guard (bin/cc-inbox-guard idl_rec) — and nothing here
+# read them. The guard's other two legs are a phone push (inert until 04-page-channel is armed, C10)
+# and a durable record under autonomy/comms-alarms that no surface renders. So a peer sitting on
+# undelivered mail was loud to disk and silent to the operator: the U-3 gap in
+# docs/research/cross-session-mail-2026-07-20.md. The guard writes CC_IDL and this file reads
+# CC_REAPER_IDL; both default to ~/.claude/autonomy/idl.jsonl, which is the join.
+#
+# RELEASE IS RE-MEASURED, NEVER INFERRED FROM THE TRIP. An escalation row is append-only and cannot
+# retract itself, so a row that merely relayed it would latch — the stale-relogin defect below, again.
+# An `undelivered` row is therefore rendered only while the box STILL holds unconsumed mail NOW
+# (lines − .acked, with the same clamps as hooks/lib/mailbox-pending.sh: .seen past EOF ⇒ 0, .acked ≤
+# .seen). The owner draining it, cc-gc archiving it, or the box vanishing all clear the row with no
+# write anywhere. That predicate is not the trip negated (the trip is "overdue past a class
+# deadline"); it is a separate, disk-true question — is there still mail nobody has consumed.
+# An `enqueue-failed` row has no box to re-measure (the write never happened), so it is bounded by
+# the window alone.
+#
+# WINDOW: CC_BLOCKERS_COMMS_H hours (24; 0 = kill switch). The guard re-escalates on every change of
+# (acked:lines), so a box still receiving mail keeps refreshing its row; a box that went quiet ages
+# off after a day instead of sitting on the board for the 30 days cc-gc allows before archiving it.
+# Fixture-origin rows (test_origin set) are excluded by FIELD, the store's own contract.
+COMMS_MBX_DIR="${CC_MAILBOX_DIR:-$HOME/.claude/mailbox}"
+COMMS_H="${CC_BLOCKERS_COMMS_H:-24}"
+comms_unacked() { # <key> → lines − acked, clamped exactly as mailbox-pending.sh clamps them
+  local k="$1" f lines seen acked
+  case "$k" in ''|.*|*[!A-Za-z0-9._-]*) echo 0; return 0 ;; esac
+  f="$COMMS_MBX_DIR/$k.md"
+  [ -f "$f" ] || { echo 0; return 0; }
+  lines="$(grep -c '' "$f" 2>/dev/null)"; lines="${lines//[!0-9]/}"
+  seen="$(head -n1 "$COMMS_MBX_DIR/$k.seen" 2>/dev/null | tr -dc '0-9')"
+  acked="$(head -n1 "$COMMS_MBX_DIR/$k.acked" 2>/dev/null | tr -dc '0-9')"
+  lines=$((10#${lines:-0})); seen=$((10#${seen:-0})); acked=$((10#${acked:-0}))
+  [ "$seen" -gt "$lines" ] && seen=0
+  [ "$acked" -gt "$seen" ] && acked="$seen"
+  echo $((lines - acked))
+}
+comms_alarm_rows() { # → one JSON object per line (possibly none)
+  local now cand u n un=''
+  [ -f "$IDL_FILE" ] || return 0
+  case "$COMMS_H" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$COMMS_H" -gt 0 ] || return 0
+  now="$(date +%s 2>/dev/null || true)"
+  case "${now:-}" in ''|*[!0-9]*) return 0 ;; esac
+  cand="$(jq -cRn --argjson since "$((now - COMMS_H * 3600))" '
+      [ inputs | fromjson? | select(type=="object")
+        | select(.actor == "cc-inbox-guard")
+        | select(.kind == "undelivered-escalated" or .kind == "enqueue-failed-escalated")
+        | select((.test_origin // null) == null)
+        | select((.uuid | type) == "string" and (.uuid | test("^[A-Za-z0-9][A-Za-z0-9._-]*$")))
+        | . + {_e: ((.ts // "") | tostring | try fromdateiso8601 catch null)}
+        | select(._e != null and ._e >= $since) ]
+      | group_by(.uuid + "|" + .kind) | map(max_by(._e))' "$IDL_FILE" 2>/dev/null)" || return 0
+  case "$cand" in ''|'[]') return 0 ;; esac
+  # uuid is validated to [A-Za-z0-9._-] above, so it is safe as a literal JSON key here.
+  while read -r u; do
+    [ -n "$u" ] || continue
+    n="$(comms_unacked "$u")"
+    un="$un\"$u\":${n:-0},"
+  done < <(printf '%s' "$cand" | jq -r '.[] | select(.kind == "undelivered-escalated") | .uuid' 2>/dev/null)
+  printf '%s' "$cand" | jq -c --argjson un "{${un%,}}" --argjson now "$now" '
+      def ascii: tostring | gsub("[^ -~]"; "");
+      .[] | (((($now - ._e) / 3600) | floor) | tostring) as $age
+      | if .kind == "undelivered-escalated" then
+          ($un[.uuid] // 0) as $n | select($n > 0)
+          | {kind:"comms-undelivered", state:"UNDELIVERED", subject:.uuid,
+             detail:("\($n) unacked now; escalated \($age)h ago"),
+             reason:(.reason // "" | ascii), unacked:$n,
+             recover_cmd:("cc-thread " + .uuid), ts:$now}
+        else
+          {kind:"comms-undelivered", state:"ENQUEUE-FAIL", subject:.uuid,
+           detail:("send never persisted; \($age)h ago"),
+           reason:(.msg // "" | ascii),
+           recover_cmd:("cc-thread " + .uuid), ts:$now}
+        end' 2>/dev/null || true
+}
+
 # ── LAND-HOLDER alarm (land-architecture-100p §5 P4, defect 5) ──────────────────────────────────
 # H2 — never reap a LIVE holder of the machine-wide landing mutex — is the correct policy and is
 # not touched here. What was missing is its other half: if the machine will never take the lock
@@ -1351,7 +1436,7 @@ land_holder_rows() {
   bash "$ll" --alarms 2>/dev/null || true
 }
 
-ALARMS_JSON="$({ alarm_rows; deploy_stale_rows; land_holder_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; permission_pending_rows; fleet_alarm_rows; teammate_reap_rows; janitor_stale_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
+ALARMS_JSON="$({ alarm_rows; deploy_stale_rows; land_holder_rows; dispatch_alarm_rows; orphan_approver_rows; beacon_alarm_rows; permission_pending_rows; fleet_alarm_rows; teammate_reap_rows; janitor_stale_rows; comms_alarm_rows; } 2>/dev/null | jq -s '.' 2>/dev/null || true)"
 
 [ -n "$ALARMS_JSON" ] || ALARMS_JSON='[]'
 
@@ -1480,6 +1565,10 @@ JANITOR_SEL='select(.kind=="janitor-stale")'
 # alarm that suppresses an existing one is the worst possible version of this change.
 ntr="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $REAP_SEL] | length" 2>/dev/null || echo 0)"
 njs="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $JANITOR_SEL] | length" 2>/dev/null || echo 0)"
+# COMMS — its own family: undelivered cross-session mail has one owner (the comms stack) and one
+# recovery (read the box, re-engage its owner), neither of which is any sibling family's.
+COMMS_SEL='select(.kind=="comms-undelivered")'
+nc="$(printf '%s' "$ALARMS_JSON" | jq "[.[] | $COMMS_SEL] | length" 2>/dev/null || echo 0)"
 # ── the ALL-CLEAR line, and why it carries a SENSOR ROSTER (OPERATOR_SURFACE_V2 §4 M8) ───────────
 # Every sensor family above fails OPEN by design (R5/I6: a board that invents blockers is ignored
 # exactly like one that hides them). The cost is that a ZERO-ROW board means EITHER "everything is
@@ -1568,6 +1657,14 @@ if [ "${njs:-0}" != 0 ]; then
   { [ "${nl:-0}" != 0 ] || [ "${nd:-0}" != 0 ] || [ "${np:-0}" != 0 ] || [ "${nf:-0}" != 0 ] || [ "${ntr:-0}" != 0 ]; } && echo
   echo "JANITOR-STALE — the worktree janitor is breached or not running (run the command for the full read):"
   alarm_table "$JANITOR_SEL" "$ALARMS_JSON" 34
+fi
+
+# COMMS — a peer (or the desk) is sitting on mail nobody consumed. The subject is the box key, shown
+# WHOLE (36 = a pane/session UUID) because it is pasted verbatim into the RECOVER command.
+if [ "${nc:-0}" != 0 ]; then
+  { [ "${nl:-0}" != 0 ] || [ "${nd:-0}" != 0 ] || [ "${np:-0}" != 0 ] || [ "${nf:-0}" != 0 ] || [ "${ntr:-0}" != 0 ] || [ "${njs:-0}" != 0 ]; } && echo
+  echo "COMMS — $nc inbox(es) holding mail nobody consumed (run the RECOVER command to read the thread):"
+  alarm_table "$COMMS_SEL" "$ALARMS_JSON" 36
 fi
 
 if [ "${n:-0}" != 0 ]; then
