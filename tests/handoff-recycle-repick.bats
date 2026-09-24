@@ -385,3 +385,77 @@ _rank_fleet() {
   # No bare numeric comparison against a literal threshold anywhere in the decision block.
   ! grep -vE '^[[:space:]]*#' "$BLOCK" | grep -qE '(>=|-ge)[[:space:]]*[0-9]+(\.[0-9]+)?[[:space:]]*(\)|\]|$)'
 }
+
+# ================================================================================================
+# THE DECISION MUST EXPLAIN ITSELF, AND SURVIVE THE PANE IT MOVES (2026-09-24)
+#
+# Pane 480 recycled at 19:32:48Z and moved next → next3, the account with the FARTHEST weekly reset,
+# and the operator asked why not next2 or next, whose weeks end soonest. The pick was the M7 rule
+# working: replaying the 19:32:03Z sweep through score_general gives next=kmax-concurrency (k_work
+# 13 >= KMAX 8), next4=kmax-concurrency (31), next3 1.68e-05, next2 8.2e-06 (98% of its week used,
+# so headroom/T^2 is small however soon it resets). The defect was that none of it was visible:
+# the RE-PICK line named no ranking, and it was written into a pane that exited before any
+# transcript recorded it. These cases pin the ranking, the full exclusion map and a durable row.
+# ================================================================================================
+
+_incident_fleet() {
+  printf 'next3 0.000017\nnext2 0.000008\n' > "$ROUTE_OUT"
+  printf '%s\n' 'claude-accounts: general excluded — next=kmax-concurrency; next4=kmax-concurrency' \
+    'route-meta: acct=next3 k_eff=5 repick_ratio=4' > "$ROUTE_ERR"
+  printf '0\n' > "$ROUTE_RC"
+}
+
+@test "the 2026-09-24 move explains itself: incumbent's exclusion, the ranking, every exclusion" {
+  _incident_fleet
+  run_repick next
+  [ "$status" -eq 0 ]
+  [ "$output" = "next3" ]
+  grep -qF 'next → next3' "$ERRF"
+  grep -qF 'next is NOT routable (kmax-concurrency)' "$ERRF"
+  grep -qF 'ranked: next3 0.000017 > next2 0.000008' "$ERRF"   # why next2 lost, in numbers
+  grep -qF 'next4=kmax-concurrency' "$ERRF"                    # the whole map, not just ours
+  grep -qF 'hours-to-reset²' "$ERRF"                           # the score's shape, named
+}
+
+@test "a re-pick leaves a recycle-repick row on disk, because its pane is about to exit" {
+  _incident_fleet
+  run_repick next
+  [ "$status" -eq 0 ]
+  LOG="$HOME/.claude/logs/handoffs.jsonl"
+  [ -s "$LOG" ]
+  run jq -r 'select(.class=="recycle-repick") | [.from,.to,.basis,.ranked,.excluded,.repick_ratio] | join("|")' "$LOG"
+  [ "$status" -eq 0 ]
+  [ "$output" = "next|next3|excluded|next3 0.000017 > next2 0.000008|next=kmax-concurrency; next4=kmax-concurrency|4" ]
+}
+
+@test "a dry run explains the move but records nothing" {
+  _incident_fleet
+  export DRY=1
+  run_repick next
+  [ "$output" = "next3" ]
+  grep -qF 'ranked: next3 0.000017 > next2 0.000008' "$ERRF"
+  [ ! -e "$HOME/.claude/logs/handoffs.jsonl" ]
+}
+
+@test "a PRESSURE re-pick never claims the incumbent was unroutable" {
+  # The old line was one template for both halves, so a pressure move printed
+  # "next3 is NOT routable ()" — a false statement with an empty reason.
+  _rank_fleet 4
+  run_repick next3
+  [ "$output" = "next2" ]
+  grep -q 'recycle RE-PICK' "$ERRF"
+  [ "$(grep -c 'NOT routable' "$ERRF")" = 0 ]   # live mid-test, unlike a bare `! grep` under errexit
+  grep -qF 'next3 is routable but outscored' "$ERRF"
+  run jq -r 'select(.class=="recycle-repick") | .basis' "$HOME/.claude/logs/handoffs.jsonl"
+  [ "$output" = "pressure" ]
+}
+
+@test "staying put below the threshold says why, instead of saying nothing" {
+  printf 'next2 0.005000\nnext3 0.004000\n' > "$ROUTE_OUT"
+  printf 'route-meta: acct=next2 repick_ratio=4\n' > "$ROUTE_ERR"
+  run_repick next3
+  [ -z "$output" ]
+  grep -qF 'recycle stays on next3' "$ERRF"
+  grep -qF '4x threshold' "$ERRF"
+  [ ! -e "$HOME/.claude/logs/handoffs.jsonl" ]
+}
