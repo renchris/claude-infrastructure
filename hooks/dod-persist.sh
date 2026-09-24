@@ -127,6 +127,157 @@ persist_dod() {  # $1=file  $2=scope  $3=cwd  $4=source-label  [$5=session-id, "
   printf '## %s (%s)%s\n%s\n\n' "$ts" "$4" "$prov" "$2" >> "$1" 2>/dev/null || true
 }
 
+# ── CC_DOD_LINEAGE_ONLY=1 — inject only this session's own lineage (default 0 = today's frame) ──
+# The toplevel filter (dod_filter_for) separates WORKTREES, not sessions: every session started in one
+# checkout shares its toplevel, and a capture with no provenance is kept rather than guessed at.
+# Measured over 14 days, the injected "THE CURRENT CONTRACT" was one of 43 contracts, the top one shown
+# to 248 sessions, and a hand check found 7 of 8 sampled sessions working on something unrelated
+# (docs/research/token-efficiency-2026-09-23/measure/hooks.md §4 "Frozen DoD", §5 row 8). Under the
+# flag a block is kept only when its header names a session of this LINEAGE (`· session=<sid>`,
+# written by PreCompact and `set`) or names a toplevel that dod_lineage_ancestors lists as a RECORDED
+# PREDECESSOR of this worktree (a fired or recycled-into-a-new-worktree wave inherits its predecessor,
+# as the default filter already allows). The session lineage is this session plus the sessions that
+# held this pane before it, read from the mailbox alias trail (mailbox_alias_trail, which
+# mailbox-drain.sh appends at every boundary). That trail is what carries the /handoff capture
+# (commands/handoff.md T-P4-4): the predecessor's `set` is stamped with ITS session id, and a
+# same-pane recycle successor finds that id on the trail. Own-toplevel captures from other sessions,
+# and captures with no provenance, are left out. When no block survives, the session gets a one-line
+# pointer to the store instead of the text. The files are unchanged, and wrap-ledger and
+# completion-assert read them directly, not this injection.
+#
+# Under the flag the write-side dedup (`set`, PreCompact) compares against this session's OWN
+# captures instead of the worktree-filtered stream. Otherwise a session restating a scope that a
+# sibling session in the same worktree had already captured would write nothing, and the injection
+# above would then have nothing of its own to show after compaction.
+_dod_nl="$(printf '\nx')"; _dod_nl="${_dod_nl%x}"
+_dod_lineage_blocks() {  # $1=lineage session ids  $2=predecessor toplevels (both newline-framed); stdin → kept blocks
+  local keep=0 line rest s top
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      '# Durable frozen DoD'*)
+        # a second file's header, when dod_read_content concatenates two stores: not part of the
+        # block above it
+        keep=0 ;;
+      '## '*)
+        keep=0
+        case "$line" in *' · session='*)
+          rest="${line#*' · session='}"; s="${rest%%' · '*}"
+          if [ -n "$s" ]; then
+            case "$1" in *"${_dod_nl}${s}${_dod_nl}"*) keep=1 ;; esac
+          fi ;;
+        esac
+        if [ "$keep" = 0 ]; then
+          case "$line" in *' · toplevel='*)
+            rest="${line#*' · toplevel='}"; top="${rest%%' · '*}"
+            case "$2" in *"${_dod_nl}${top}${_dod_nl}"*) keep=1 ;; esac ;;
+          esac
+        fi ;;
+    esac
+    if [ "$keep" = 1 ]; then printf '%s\n' "$line"; fi
+  done
+  return 0
+}
+# Lines outside every '## ' block, other than the file headers: a legacy boxes-only checklist or a
+# pre-provenance scope. The lineage filter cannot attribute them, so it leaves them out and says so.
+_dod_unblocked_count() {  # stdin → count
+  awk '/^# Durable frozen DoD/ {inb=0; next}
+       /^## / {inb=1; next}
+       !inb && !/^#/ && NF {n++}
+       END {print n+0}' 2>/dev/null || printf '0\n'
+}
+# This session plus the newest CC_DOD_LINEAGE_PANE_MAX (3) sessions that held this pane before it,
+# newline-framed. Bounded because a pane can be reused for unrelated work over its life; the same
+# bound as the mailbox's own pull-adoption (CC_MBX_ALIAS_MAX_PRED). No pane, no library, or no trail
+# ⇒ this session alone. Prints one id per line; callers add the newline framing, since a command
+# substitution strips the trailing one.
+_dod_lineage_sids() {  # $1=own sid
+  local pane lib max n=0 q
+  [ -n "${1:-}" ] && printf '%s\n' "$1"
+  pane="${CC_PANE_ID:-${ITERM_SESSION_ID:-}}"; pane="${pane##*:}"
+  [ -n "$pane" ] || return 0
+  if ! command -v mailbox_alias_trail >/dev/null 2>&1; then
+    lib="$_dpd/lib/mailbox-pending.sh"
+    [ -f "$lib" ] || lib="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/lib/mailbox-pending.sh"
+    [ -f "$lib" ] || lib="$HOME/.claude/hooks/lib/mailbox-pending.sh"
+    # shellcheck source=lib/mailbox-pending.sh
+    # shellcheck disable=SC1090,SC1091
+    [ -f "$lib" ] && . "$lib" 2>/dev/null
+  fi
+  command -v mailbox_alias_trail >/dev/null 2>&1 || return 0
+  max="${CC_DOD_LINEAGE_PANE_MAX:-3}"; case "$max" in ''|*[!0-9]*) max=3 ;; esac
+  while IFS= read -r q; do
+    [ -n "$q" ] || continue
+    [ "$q" = "${1:-}" ] && continue
+    [ "$n" -ge "$max" ] && break
+    printf '%s\n' "$q"; n=$((n + 1))
+  done <<DODTRAIL
+$(mailbox_alias_trail "$pane" 2>/dev/null || true)
+DODTRAIL
+  return 0
+}
+_dod_lineage_pred() {  # $1=cwd → recorded predecessor toplevels, one per line
+  # strict predecessors only: line 1 of dod_lineage_ancestors is this worktree itself, whose other
+  # sessions are exactly the captures this mode leaves out
+  if command -v dod_lineage_ancestors >/dev/null 2>&1; then
+    dod_lineage_ancestors "$1" | tail -n +2
+  fi
+  return 0
+}
+# The stream the write-side dedup compares against: this session's own captures under the flag (when
+# the session id is known), the worktree-filtered stream otherwise.
+_dod_dedup_stream() {  # $1=cwd  $2=file  $3=own sid
+  if [ "${CC_DOD_LINEAGE_ONLY:-0}" = 1 ] && [ -n "${3:-}" ]; then
+    dod_filter_for "$1" "$2" | _dod_lineage_blocks "${_dod_nl}${3}${_dod_nl}" "${_dod_nl}"
+  else
+    dod_filter_for "$1" "$2"
+  fi
+}
+_dod_inject_lineage_only() {  # $1=cwd  $2=own sid  $3=content (already toplevel-filtered)
+  local pred sids kept cur f files nall ncap nun unote framed _lead
+  pred="${_dod_nl}$(_dod_lineage_pred "$1")${_dod_nl}"
+  sids="${_dod_nl}$(_dod_lineage_sids "$2")${_dod_nl}"
+  kept="$(printf '%s\n' "$3" | _dod_lineage_blocks "$sids" "$pred")"
+  files="$(dod_read_files "$1" | paste -sd' ' - 2>/dev/null)"
+  nall="$(printf '%s\n' "$3" | grep -c '^## ' 2>/dev/null || true)"
+  case "$nall" in ''|*[!0-9]*) nall=0 ;; esac
+  nun="$(printf '%s\n' "$3" | _dod_unblocked_count)"
+  case "$nun" in ''|*[!0-9]*) nun=0 ;; esac
+  unote=""
+  [ "$nun" -gt 0 ] && unote=" ${nun} line(s) outside any capture block (a legacy checklist or pre-provenance scope) are left out too."
+  if [ -z "$kept" ]; then
+    jq -nc --arg c "Durable frozen DoD: no capture in the store belongs to this session, a session that held this pane before it, or a recorded predecessor worktree, so none is injected (CC_DOD_LINEAGE_ONLY=1; ${nall} capture(s) from other sessions of this worktree or with no provenance).${unote} Store: ${files}" \
+      '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null || true
+    return 0
+  fi
+  # newest frozen line, per source with the repo-key store first, as the default frame computes it
+  cur=""
+  while IFS= read -r f; do
+    [ -n "$f" ] && [ -f "$f" ] || continue
+    cur="$(dod_filter_for "$1" "$f" | _dod_lineage_blocks "$sids" "$pred" | last_recorded_scope)"
+    [ -n "$cur" ] && break
+  done <<LOCUREOF
+$(dod_read_files "$1")
+LOCUREOF
+  ncap="$(printf '%s\n' "$kept" | grep -c '^## ' 2>/dev/null || true)"
+  case "$ncap" in ''|*[!0-9]*) ncap=0 ;; esac
+  if [ -n "$cur" ]; then
+    _lead="THE CURRENT CONTRACT — this is what binds you, and every 'Scope (grown): +<item>' line extends it (Follow-On Gate F1-F4 PASS — already authorized, do NOT re-ask). Do NOT narrow it or declare done until ALL of it is met:
+
+    $cur"
+  else
+    _lead="THE CURRENT CONTRACT is not recorded — this session's lineage has no 'Scope (frozen):' line yet. Treat the history below as context only, and freeze a scope before claiming completeness."
+  fi
+  framed="Durable frozen DoD for this session — re-injected across recycle/compaction as the completeness baseline (a19 HOP A).
+
+$_lead
+
+Below: ${ncap} capture(s) written by this session, a session that held this pane before it, or a recorded predecessor worktree, newest last. The other $(( nall - ncap )) capture(s) this worktree would see, from its other sessions or with no provenance, are left out (CC_DOD_LINEAGE_ONLY=1).${unote} Store: ${files}
+
+$kept"
+  jq -nc --arg c "$framed" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}' 2>/dev/null || true
+  return 0
+}
+
 # ── CLI modes ──
 case "${1:-}" in
   set)
@@ -138,7 +289,8 @@ case "${1:-}" in
     # concurrent sibling's identical scope as "unchanged", skip the write, and leave this wave with
     # no capture of its own — which the lineage filter would then correctly show as a BLANK
     # contract. Filtering here is what stops the crosstalk fix from manufacturing that hole.
-    if [ -f "$f" ] && [ "$scope" = "$(dod_filter_for "$PWD" "$f" | last_recorded_scope)" ]; then
+    # Under CC_DOD_LINEAGE_ONLY=1 "my own" narrows to this session's captures (see the block above).
+    if [ -f "$f" ] && [ "$scope" = "$(_dod_dedup_stream "$PWD" "$f" "${CLAUDE_CODE_SESSION_ID:-}" | last_recorded_scope)" ]; then
       printf 'unchanged → %s\n' "$f"; exit 0
     fi
     persist_dod "$f" "$scope" "$PWD" "manual-set" "${CLAUDE_CODE_SESSION_ID:-}"
@@ -186,6 +338,10 @@ case "$event" in
     # foreign wave's, and keeps anything unattributable (see hooks/lib/dod-path.sh § FAIL-OPEN).
     content="$(dod_read_content "$cwd")"
     [ -n "$content" ] || exit 0
+    if [ "${CC_DOD_LINEAGE_ONLY:-0}" = 1 ]; then
+      _dod_inject_lineage_only "$cwd" "$sid" "$content"
+      exit 0
+    fi
     # NEWEST-WINS FRAME (docs/research/dod-crosstalk-2026-08-18.md §2, §5 adjacent finding). This
     # used to declare "Every 'Scope (frozen):' line below is binding … do NOT narrow scope or
     # declare done until ALL of it is met" over the WHOLE file. The store is repo-KEYED, so that
@@ -232,8 +388,9 @@ $content"
     scope="$(extract_scope "$tp")"
     if [ -n "$scope" ]; then
       # filtered, for the same reason `set` is: an identical scope frozen by a CONCURRENT wave must
-      # not read as "already recorded" and leave this wave with no capture of its own
-      if ! { [ -f "$f" ] && [ "$scope" = "$(dod_filter_for "$cwd" "$f" | last_recorded_scope)" ]; }; then
+      # not read as "already recorded" and leave this wave with no capture of its own (narrowed to this
+      # session's captures under CC_DOD_LINEAGE_ONLY=1)
+      if ! { [ -f "$f" ] && [ "$scope" = "$(_dod_dedup_stream "$cwd" "$f" "$sid" | last_recorded_scope)" ]; }; then
         persist_dod "$f" "$scope" "$cwd" "PreCompact:${trigger}" "$sid"
       fi
     fi
@@ -245,7 +402,7 @@ $content"
       # very input it just matched — a dedup that silently re-appends every grown line forever.
       # Caught by tests/dod-persist.bats case 16, which counts the appends.
       if [ -f "$f" ]; then
-        _gseen="$(dod_filter_for "$cwd" "$f" | grep -cF -- "$g" 2>/dev/null || true)"
+        _gseen="$(_dod_dedup_stream "$cwd" "$f" "$sid" | grep -cF -- "$g" 2>/dev/null || true)"
         case "${_gseen:-0}" in ''|*[!0-9]*) _gseen=0 ;; esac
         [ "$_gseen" -gt 0 ] && continue
       fi

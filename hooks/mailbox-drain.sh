@@ -597,9 +597,89 @@ fi
 # Peer mail used to arrive as a bare paragraph, visually identical to every other scrap of
 # context. Render the bodies as a BLOCK behind a left rule so the channel is unmistakable at a
 # glance — and so a model reporting it downstream mirrors that structure instead of inlining it.
-# PRESENTATION ONLY: every body line is reproduced verbatim, and the tokens the suites pin
-# ("as CONTEXT", "no watcher armed") are preserved.
-_block="$(printf '%s\n' "$body" | sed 's/^/  │ /')"
+# PRESENTATION ONLY: every body line is reproduced verbatim (except stale forwards when the flag
+# below is set), and the tokens the suites pin ("as CONTEXT", "no watcher armed") are preserved.
+#
+# ── STALE FORWARDS (CC_DRAIN_STALE_FORWARD_H, default unset = every line verbatim) ────────────────
+# Adoption re-stamps a predecessor's unread mail as "<now> [forwarded:<old>] <origin line>", so a
+# notice can reach a session days after it was sent, and in full: median origin age at SessionStart
+# was 163 h, 293 of 604 messages were over 7 days old, and one 2.5 KB WAKE-PATH-DOWN notice arrived
+# 14 days late (docs/research/token-efficiency-2026-09-23/measure/hooks.md §4, §5 row 10). With the
+# flag set to N hours, a forwarded line whose ORIGIN stamp is older than N hours is rendered as one
+# line — its stamps, sender, the first 100 characters, its age, and a grep that prints the full line
+# from this session's inbox. A stale line that is already shorter than its summary stays verbatim.
+# When more than CC_DRAIN_STALE_FORWARD_MAX (5) lines would be summarised, they collapse into ONE
+# line: count, age range, total size, senders, and the inbox line range holding them. The per-line
+# summary is ~330 chars and adoption can surface 200 lines (CC_MBX_ADOPT_MAX_LINES), which would still
+# be past Claude Code's 10,000-char persistence cap; live forwarded lines measure median 1,240 chars.
+# Applies at every boundary, not only session start: age is read from the ORIGIN stamp, so the
+# coverage fold's fresh forwards at prompt/post-tool boundaries are never stale and pass through.
+# Presentation only: `body` is untouched, so the cursor, the custody discharger above and the sender
+# digest below all still read every line in full. Any parse failure keeps the line.
+_shown="$body"
+case "${CC_DRAIN_STALE_FORWARD_H:-}" in
+  ''|*[!0-9]*) ;;
+  *)
+    if printf '%s\n' "$body" | grep -q '\[forwarded:' && command -v python3 >/dev/null 2>&1; then
+      _sfpy='
+import os, re, shlex, sys
+from collections import Counter
+from datetime import datetime, timezone
+limit_h = int(os.environ["CC_SF_H"]); box = os.environ["CC_SF_BOX"]
+try:
+    max_n = int(os.environ.get("CC_SF_MAX") or 5)
+except ValueError:
+    max_n = 5
+now = datetime.now(timezone.utc)
+pat = re.compile(r"^((?:\S+ \[forwarded:[^\]]*\] )+)(\S+) (\[[^\]]*\] )?(.*)$")
+out = []; stale = []   # stale: (index in out, raw line, sender, age in hours)
+for raw in sys.stdin.read().split("\n"):
+    m = pat.match(raw)
+    line = raw
+    if m:
+        chain, ots, frm, msg = m.group(1), m.group(2), m.group(3) or "", m.group(4)
+        try:
+            dt = datetime.strptime(ots, "%Y-%m-%dT%H:%M:%S%z")
+            age_h = (now - dt).total_seconds() / 3600.0
+        except ValueError:
+            age_h = -1
+        if age_h > limit_h:
+            key = (ots + " " + frm).rstrip()
+            head = msg[:100] + ("…" if len(msg) > 100 else "")
+            summ = "%s%s %s%s [stale forward: %dh old, %d chars; full text: grep -F %s %s]" % (
+                chain, ots, frm, head, int(age_h), len(raw), shlex.quote(key), shlex.quote(box))
+            if len(summ) < len(raw):
+                line = summ
+                stale.append((len(out), raw, frm.strip() or "[?]", age_h))
+    out.append(line)
+if len(stale) > max_n:
+    where = "grep -F %s %s" % (shlex.quote("[forwarded:"), shlex.quote(box))
+    try:
+        with open(box, encoding="utf-8", errors="surrogateescape") as fh:
+            boxl = fh.read().split("\n")
+        last = {}
+        for i, b in enumerate(boxl):
+            last[b] = i + 1
+        nums = [last.get(r) for _, r, _, _ in stale]
+        if all(nums):
+            where = "sed -n %s %s" % (shlex.quote("%d,%dp" % (min(nums), max(nums))), shlex.quote(box))
+    except OSError:
+        pass
+    ages = [a for _, _, _, a in stale]
+    tally = Counter(f for _, _, f, _ in stale).most_common()
+    senders = ", ".join("%s x%d" % (f, c) for f, c in tally[:5]) + (", …" if len(tally) > 5 else "")
+    one = "[stale forwards: %d forwarded messages older than %dh (%dh to %dh old, %d chars) not shown; from %s; full text: %s]" % (
+        len(stale), limit_h, int(min(ages)), int(max(ages)), sum(len(r) for _, r, _, _ in stale), senders, where)
+    drop = set(i for i, _, _, _ in stale[1:])
+    out[stale[0][0]] = one
+    out = [l for i, l in enumerate(out) if i not in drop]
+sys.stdout.write("\n".join(out) + "\n")
+'
+      _sf="$(printf '%s\n' "$body" | CC_SF_H="$CC_DRAIN_STALE_FORWARD_H" CC_SF_MAX="${CC_DRAIN_STALE_FORWARD_MAX:-}" \
+               CC_SF_BOX="$(mailbox_file "$own_uuid")" python3 -c "$_sfpy" 2>/dev/null)" && [ -n "$_sf" ] && _shown="$_sf"
+    fi ;;
+esac
+_block="$(printf '%s\n' "$_shown" | sed 's/^/  │ /')"
 ctx="$(printf '📬 peer mail ◀ %s new %s from other Claude sessions%s\n  ╭─\n%s\n  ╰─ delivered as CONTEXT via the non-keystroke inbox channel — never typed into your input line.\n     Already marked delivered. Triage/act as appropriate; reply to a peer with cc-notify <uuid> "…". This is a message TO you, not something you typed.%s%s%s' \
   "$n" "$plural" "$warn" "$_block" "$rest" "$_cust_note" "$nudge")"
 # ── OPERATOR-VISIBLE LINE (2026-07-26) ──────────────────────────────────────────────────────────

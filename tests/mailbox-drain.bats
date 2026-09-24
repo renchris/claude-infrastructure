@@ -827,3 +827,109 @@ _gi_crumb_setup() {  # $1 = session id
   [[ "$output" != *"YOUR /goal WAS SKIPPED"* ]] || false
   [[ "$output" == *"XX MUTANT XX"* ]] || false
 }
+
+# ── STALE FORWARDS (CC_DRAIN_STALE_FORWARD_H) ─────────────────────────────────────────────────────
+# docs/research/token-efficiency-2026-09-23/measure/hooks.md §4 "Peer mail", §5 row 10: adopted mail
+# arrives days after it was sent, in full (a 2.5 KB WAKE-PATH-DOWN notice 14 days late). With the
+# flag set to N hours, a forwarded line whose ORIGIN stamp is older than N hours renders as one line
+# with a grep that prints the full text from this session's inbox. Default unset = every line verbatim.
+sf_seed() { # own box: an old long forward, a fresh long forward, an old long NON-forwarded line, an old short forward
+  local now pad; now="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+  pad="$(printf 'x%.0s' $(seq 1 400))"
+  OLDFWD="2026-09-23T10:00:00-0500 [forwarded:643] 2026-09-09T12:00:00-0500 [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [643] was TERMINATED ${pad} OLDTAIL"
+  NEWFWD="$now [forwarded:643] $now [peer-a] fresh forwarded report ${pad} NEWTAIL"
+  OLDOWN="2026-09-09T12:00:00-0500 [peer-b] old but never forwarded ${pad} OWNTAIL"
+  OLDSHORT="2026-09-23T10:00:00-0500 [forwarded:643] 2026-09-09T12:00:00-0500 [peer-c] short"
+  seed "$OLDFWD" "$NEWFWD" "$OLDOWN" "$OLDSHORT"
+}
+sf_ctx() { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext'; }
+
+@test "stale forward: flag=24 ⇒ an old forwarded line is one line with a grep to its full text" {
+  sf_seed
+  run bash -c 'echo "{}" | CC_DRAIN_STALE_FORWARD_H=24 "$0" session-start' "$DRAIN"
+  [ "$status" -eq 0 ]
+  local c; c="$(sf_ctx "$output")"
+  printf '%s' "$c" | grep -qF '  │ 2026-09-23T10:00:00-0500 [forwarded:643] 2026-09-09T12:00:00-0500 [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [643] was TERMINATED xxx'
+  printf '%s' "$c" | grep -qF "full text: grep -F '2026-09-09T12:00:00-0500 [cc-await-ping]' $MBOX]"
+  printf '%s' "$c" | grep -qF '[stale forward: '
+  [[ "$c" != *OLDTAIL* ]] || false
+  # the pointer is real: it prints exactly the original line from the inbox
+  [ "$(grep -F '2026-09-09T12:00:00-0500 [cc-await-ping]' "$MBOX")" = "$OLDFWD" ]
+  # everything else is verbatim: a fresh forward, an old non-forwarded line, a stale line already short
+  printf '%s' "$c" | grep -qF "  │ $NEWFWD"
+  printf '%s' "$c" | grep -qF "  │ $OLDOWN"
+  # the summary begins with the same text, so a prefix match would pass either way: the [peer-c]
+  # line must be the whole original line and carry no summary suffix
+  printf '%s\n' "$c" | grep -qxF "  │ $OLDSHORT"
+  [ "$(printf '%s\n' "$c" | grep -F '[peer-c]' | grep -cF '[stale forward:')" -eq 0 ]
+  printf '%s' "$c" | grep -qF '4 new messages'
+  [ "$(cat "$SEEN")" -eq 4 ]     # delivery is committed as usual — the summary is presentation only
+}
+
+@test "stale forward: the threshold is honoured — flag larger than the age keeps the line verbatim" {
+  sf_seed
+  run bash -c 'echo "{}" | CC_DRAIN_STALE_FORWARD_H=100000 "$0" session-start' "$DRAIN"
+  [ "$status" -eq 0 ]
+  local c; c="$(sf_ctx "$output")"
+  printf '%s' "$c" | grep -qF "  │ $OLDFWD"
+  [[ "$c" != *'[stale forward: '* ]] || false
+}
+
+@test "stale forward FLAG OFF: output is byte-identical to the drain without the stale-forward block" {
+  # Reference: the subject with the STALE FORWARDS block cut out and the render reading $body again.
+  # Preconditions asserted, so a moved anchor fails here instead of comparing the subject with itself.
+  local ref="$BATS_TEST_TMPDIR/ref/hooks"; mkdir -p "$ref"
+  ln -sfn "$REPO/hooks/lib" "$ref/lib"
+  [ "$(grep -c '^_shown="\$body"$' "$DRAIN")" -eq 1 ] || false
+  [ "$(grep -c "^_block=\"\$(printf '%s\\\\n' \"\$_shown\"" "$DRAIN")" -eq 1 ] || false
+  awk '/^_shown="\$body"$/ {skip=1} skip && /^esac$/ {skip=0; next} skip {next} {print}' "$DRAIN" \
+    | sed 's/printf '"'"'%s\\n'"'"' "\$_shown"/printf '"'"'%s\\n'"'"' "$body"/' > "$ref/mailbox-drain.sh"
+  [ "$(grep -c '_shown' "$ref/mailbox-drain.sh")" -eq 0 ] || false
+  [ "$(grep -c 'CC_DRAIN_STALE_FORWARD_H:-' "$ref/mailbox-drain.sh")" -eq 0 ] || false
+  local b2="$BATS_TEST_TMPDIR/mbox2"; mkdir -p "$b2"
+  sf_seed; cp "$MBOX" "$b2/$UUID.md"
+  local want got
+  want="$(echo '{}' | env -u CLAUDE_CONFIG_DIR -u CC_DRAIN_STALE_FORWARD_H CC_MAILBOX_DIR="$b2" bash "$ref/mailbox-drain.sh" session-start)"
+  got="$(echo '{}' | env -u CLAUDE_CONFIG_DIR -u CC_DRAIN_STALE_FORWARD_H bash "$DRAIN" session-start)"
+  [ -n "$want" ] || false
+  # the only difference between the two runs is the mailbox dir, which appears in no rendered line
+  [ "$got" = "$want" ] || false
+  # an unparseable flag value is the same as unset
+  cp "$b2/$UUID.md" "$MBOX"; rm -f "$SEEN" "$CC_MAILBOX_DIR/$UUID.acked"
+  got="$(echo '{}' | env -u CLAUDE_CONFIG_DIR CC_DRAIN_STALE_FORWARD_H=abc bash "$DRAIN" session-start)"
+  [ "$got" = "$want" ] || false
+  # power: the flag does change the output on this fixture
+  rm -f "$SEEN" "$CC_MAILBOX_DIR/$UUID.acked"
+  got="$(echo '{}' | env -u CLAUDE_CONFIG_DIR CC_DRAIN_STALE_FORWARD_H=24 bash "$DRAIN" session-start)"
+  [ "$got" != "$want" ] || false
+}
+
+@test "stale forward: more than CC_DRAIN_STALE_FORWARD_MAX stale lines collapse into one line with the inbox range" {
+  # the array is not called `lines`: bats `run` overwrites that one
+  local pad i sl=(); pad="$(printf 'y%.0s' $(seq 1 400))"
+  for i in 1 2 3 4 5 6 7; do
+    sl+=("2026-09-23T10:00:00-0500 [forwarded:643] 2026-09-0${i}T12:00:00-0500 [peer-$(( i % 2 ))] notice $i ${pad} TAIL$i")
+  done
+  local now; now="$(date '+%Y-%m-%dT%H:%M:%S%z')"
+  sl+=("$now [peer-z] fresh direct line")
+  seed "${sl[@]}"
+  run bash -c 'echo "{}" | CC_DRAIN_STALE_FORWARD_H=24 "$0" session-start' "$DRAIN"
+  [ "$status" -eq 0 ]
+  local c; c="$(sf_ctx "$output")"
+  [ "$(printf '%s\n' "$c" | grep -cF '[stale forwards: 7 forwarded messages older than 24h')" -eq 1 ]
+  [ "$(printf '%s\n' "$c" | grep -cF '[stale forward: ')" -eq 0 ]
+  [[ "$c" != *TAIL1* ]] || false
+  printf '%s' "$c" | grep -qF 'from [peer-1] x4, [peer-0] x3;'
+  printf '%s' "$c" | grep -qF "full text: sed -n 1,7p $MBOX]"
+  # the range is real: it prints exactly the seven stale lines
+  sed -n 1,7p "$MBOX" > "$BATS_TEST_TMPDIR/got"; printf '%s\n' "${sl[@]:0:7}" > "$BATS_TEST_TMPDIR/want"
+  cmp -s "$BATS_TEST_TMPDIR/want" "$BATS_TEST_TMPDIR/got"
+  printf '%s' "$c" | grep -qF '  │ '"$now"' [peer-z] fresh direct line'
+  printf '%s' "$c" | grep -qF '8 new messages'
+  # at or under the bound, each stale line keeps its own summary
+  rm -f "$SEEN" "$CC_MAILBOX_DIR/$UUID.acked"
+  run bash -c 'echo "{}" | CC_DRAIN_STALE_FORWARD_H=24 CC_DRAIN_STALE_FORWARD_MAX=7 "$0" session-start' "$DRAIN"
+  c="$(sf_ctx "$output")"
+  [ "$(printf '%s\n' "$c" | grep -cF '[stale forward: ')" -eq 7 ]
+  [[ "$c" != *'[stale forwards: '* ]] || false
+}

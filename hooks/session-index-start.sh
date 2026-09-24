@@ -26,6 +26,19 @@ source "$HELPERS"
 # Generate context via Python (fast, <50ms with warm Python)
 CONTEXT=$(python3 "$HOME/.claude/bin/session-search.py" --context-inject "${CWD:-$HOME}" 2>/dev/null || echo "")
 
+# Say nothing when there is nothing to say. The line is "Session index: N sessions. Recent: [age]
+# <summary> | …", and in practice every recent entry read "(no summary)" — the sample session got
+# "Recent: [today] (no summary) ×3", a line with no information re-read for the whole context
+# (docs/research/token-efficiency-2026-09-23/measure/hooks.md §4 row 3, §5 row 11). Keep the line only
+# when at least one recent entry carries a summary or a tag. The generator lives in the separate
+# claude-session-search repo, so the filter sits here, on the one caller that injects it.
+if [ -n "$CONTEXT" ]; then
+    _recent=$(printf '%s\n' "$CONTEXT" | sed -n 's/^.* Recent: //p' | head -1)
+    _informative=$(printf '%s\n' "$_recent" | tr '|' '\n' | sed 's/^ *//; s/ *$//' \
+        | grep -v '^\[[^]]*\] (no summary)$' | grep -v '^$' || true)
+    [ -n "$_informative" ] || CONTEXT=""
+fi
+
 if [ -n "$CONTEXT" ]; then
     # Escape for JSON
     ESCAPED=$(echo "$CONTEXT" | jq -Rs .)
