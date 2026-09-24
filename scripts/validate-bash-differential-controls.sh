@@ -48,8 +48,10 @@ run_mutant "S03 re-pinned DIVERGENT" "$TMP/m2.tsv"
 run_mutant "S19 row deleted (coverage)" "$TMP/m3.tsv"
 
 # M4 — a pinned pattern no longer matches the hook's line (transcription / hook drift)
-sed -e '/^S26	/s/--hard\\b/--soft\\b/' "$SRC" > "$TMP/m4.tsv"
-run_mutant "S26 pattern drifted" "$TMP/m4.tsv"
+# (S27, not S26: S26 — the lone `git reset --hard` grep — was retired 2026-09-24 when that warn
+# became the bash-native GIT-OWNERSHIP block.)
+sed -e '/^S27	/s/clean/clear/' "$SRC" > "$TMP/m4.tsv"
+run_mutant "S27 pattern drifted" "$TMP/m4.tsv"
 
 # M5 — the baseline itself must PASS, else the mutants prove nothing
 if bash "$ROOT/scripts/validate-bash-differential.sh" >"$TMP/out" 2>&1; then
