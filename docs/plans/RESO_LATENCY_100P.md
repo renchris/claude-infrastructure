@@ -1,5 +1,5 @@
 ---
-status: complete
+status: in-progress
 ---
 
 # RESO_LATENCY_100P — every avoidable database round trip and latency cost in reso, removed
@@ -104,3 +104,17 @@ migration on a live fleet for no measurable gain.
 | **W9 — unblock the Oregon deploy (Scope grown)** | ✅ **LANDED** 2026-09-24: amplify.yml runs `CI=true VITEST_TIMEOUT_FACTOR=4 pnpm test:unit:build` = test:unit minus 8 land-pipeline tooling suites (they run at land time via ship-land); local run 505 files / 5844 passed, 0 failed; no app test excluded. **Premise corrected by W9: not flaky — deterministic `shasum: command not found` on Amplify Linux** (fixed in the suites too: 9682616e0, b3708a399); 1494's lead-alert-outbox failure was a test upper-bound bug already fixed and is KEPT in the gate. Evidence that set the scope: land-status: **DEPLOY FROZEN** — Amplify jobs 1496 (f1f9daebb) and 1494 FAILED in `pnpm test:unit` on the land-pipeline tooling suites (land-turn, ship-land, pre-push-verdict: ~5 s CodeBuild timeouts), while 1495 passed the same suites ⇒ flaky in CodeBuild, not our app code. Every fix in this programme reaches production only through that build | pane 692 |
 | **PROGRAMME** | ✅ **COMPLETE on reso trunk.** Every wave landed and content-verified; ~180 findings each FIXED with a red-on-parent round-trip test or REJECTED with evidence (recorded per wave above). **Nothing is live until the operator's next `/deploy`** (Fly + Amplify; landing is free, deploying spends) — that deploy also carries TURSO_KEEPALIVE on Fly, the cheap poll, and the W1b login-limiter security fix. Headline, measured on W0's ledger: no-op pull 5→2 posts; push 6→2 levels; tonight/home seeds 4→1 levels; shell cold 4 levels/12 posts → 2/5; table drawer 17 posts in a write tx → 1 with no tx; admin gate 3→1 reads; Oregon post-idle first statement 264→63 ms p50. Follow-on track: PERMISSION_PROMPT_CONSOLIDATION (pane 690) for the prompts that stalled W0/W3/W7 | — | — fired 2026-09-24 00:10–00:30 CDT, all goals armed | W1b 676 · W3 677 · W2 678 · W5 681 · W4a (see log) |
 | Ownership rulings | warm route + R20 → W4a; A6-16 register fold → W5 (+ formActions.ts, passkeyCeremonyActions.ts); W5 granted logout route (A6-18) and the three history action files (A6-20) | pings 00:19–00:24 |
+
+### Deploy state and W10 (added 2026-09-24 14:00 CDT)
+
+- `origin/release` = `2bba10b1d` (W8) — deployed outside this session ~13:20. Fly regions follow `release`; **Oregon
+  did NOT converge**: Amplify job 1497 (2bba10b1d) was killed at the 30-min build limit. Its `pnpm test:unit` went silent
+  after ~80 of ~513 files (last line 18:34:38Z) — a HANG, not a failure. Oregon still serves 1495's `9682616e0`.
+- W9 (landed after `2bba10b1d`, so not in that build) excludes the 8 land-tooling suites; they had not started when the
+  build hung, so they are suspects, not the proven cause. The verifier run of the same sha also lost a vitest worker to
+  SIGSEGV in the notificationActions tests.
+- **W10** (pane 696, fired 14:00 CDT): find the hung / crashing tests, fix them at the cause, and bound the test step so
+  a hang fails fast with the file's name. Then a verifier-green sha ⇒ `bash scripts/deploy-release.sh` (the operator's).
+- **Operator note:** `/deploy` is a reso-session slash command; from a shell (`!`) the equivalent is
+  `bash scripts/deploy-release.sh` in the reso checkout (no keyboard prompt; migration drops need
+  `DEPLOY_CONFIRMED_DROP`). My earlier close handed `/deploy` as a shell command, which was wrong.
