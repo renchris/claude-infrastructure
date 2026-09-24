@@ -76,7 +76,8 @@ truth["B03"] = {"sessions": sess, "sessions_with_feedback": with_fb, "feedback_r
 # B04 bats census
 bats = [f for f in subprocess.run(["find", f"{T}/tests", "-name", "*.bats", "-type", "f"], capture_output=True, text=True).stdout.split()]
 ntest = sum(len(re.findall(r"^\s*@test\b", open(b, errors="replace").read(), re.M)) for b in bats)
-truth["B04"] = {"bats_files": len(bats), "test_cases": ntest}
+truth["B04"] = {"bats_files": len(bats), "test_cases": ntest,
+               "test_cases_bats_count": int(subprocess.run(["bash", "-c", f"cd {T}/tests && find . -name '*.bats' -type f -print0 | xargs -0 -P 8 -n 20 bats --count 2>/dev/null | awk '{{s+=$1}} END{{print s}}'"], capture_output=True, text=True).stdout.strip() or 0)}
 # B05 project settings allow list
 allow = json.load(open(f"{T}/.claude/settings.json"))["permissions"]["allow"]
 truth["B05"] = {"allow_entries": len(allow), "cc_entries": sum(1 for a in allow if a.startswith("Bash(cc-"))}

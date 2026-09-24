@@ -38,8 +38,18 @@ printf '%s\n' "$CCD" > "$RUN/out/config_dir"
 touch "$RUN/out/start.stamp"
 
 cd "$FX" || exit 2
+# The 2026-09-24 gate ran with the DRIVER's environment inherited, including the launching pane's
+# identity (ITERM_SESSION_ID, KITTY_WINDOW_ID, CLAUDE_CODE_MESSAGING_SOCKET, the task-list id), so hooks
+# treated every run as that pane (5 of the first ~65 runs armed an inbox watcher keyed to it). Both arms
+# saw the same environment. GATE_SCRUB_PANE_ENV=1 drops those variables for a cleaner re-run; the
+# default reproduces the conditions the recorded gate ran under.
+SCRUB=()
+if [ "${GATE_SCRUB_PANE_ENV:-0}" = 1 ]; then
+  SCRUB=(env -u ITERM_SESSION_ID -u KITTY_WINDOW_ID -u TERM_SESSION_ID -u CLAUDE_CODE_MESSAGING_SOCKET
+         -u CLAUDE_CODE_TASK_LIST_ID -u CC_SPAWN_ROOT -u CC_SPAWN_GEN -u CC_PANE_RUNNER)
+fi
 START=$(date +%s)
-CLAUDE_CONFIG_DIR="$CCD" TMPDIR="$RUN/tmp/" timeout 1500 "$CLAUDE_BIN" -p --output-format json \
+CLAUDE_CONFIG_DIR="$CCD" TMPDIR="$RUN/tmp/" ${SCRUB[@]+"${SCRUB[@]}"} timeout 1500 "$CLAUDE_BIN" -p --output-format json \
   --model claude-opus-5-5 --effort high --permission-mode auto --settings "$SETTINGS" \
   "$(cat "$T/prompt.txt")" > "$RUN/out/result.json" 2> "$RUN/out/stderr.txt"
 RC=$?

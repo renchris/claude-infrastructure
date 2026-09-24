@@ -244,6 +244,53 @@ def status():
     )
 
 
+def stop():
+    """Stop the driver AND every run it started, then re-queue the interrupted cells.
+
+    `timeout` puts each claude run in its OWN process group, so killing the driver's group alone
+    orphans the runs, which then keep working in (or next to) a fixture the next driver rebuilds —
+    measured 2026-09-24, it contaminated three r1 cells. Walk the descendants and kill every group.
+    """
+    pid = int(open(f"{G}/sched.pid").read().strip())
+    ps = subprocess.run(
+        ["ps", "-axo", "pid=,ppid=,pgid="], capture_output=True, text=True
+    ).stdout.split("\n")
+    rows = [tuple(map(int, ln.split())) for ln in ps if ln.strip()]
+    kids, frontier = {pid}, {pid}
+    while frontier:
+        frontier = {p for p, pp, _ in rows if pp in frontier} - kids
+        kids |= frontier
+    groups = sorted({g for p, _, g in rows if p in kids})
+    for g in groups:
+        try:
+            os.killpg(g, 15)
+        except ProcessLookupError:
+            pass
+    cells = json.load(open(SCHED))
+    n = 0
+    for c in cells:
+        if c["state"] == "running":
+            c.update(state="pending", attempts=0, history=[])
+            n += 1
+    save(cells)
+    print(
+        f"stopped {len(kids)} processes in {len(groups)} groups; re-queued {n} running cells"
+    )
+
+
+def requeue(specs):
+    """requeue T01-feature:1 ... — send done cells back to pending (e.g. a contaminated run)."""
+    cells = json.load(open(SCHED))
+    for s in specs:
+        t, r = s.rsplit(":", 1)
+        for c in cells:
+            if c["task"] == t and c["rep"] == int(r):
+                c["history"].append({"requeued": True})
+                c.update(state="pending", attempts=0)
+                print(f"requeued {t} r{r}")
+    save(cells)
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "status"
     args = sys.argv[2:]
@@ -256,5 +303,9 @@ if __name__ == "__main__":
         plan(accts)
     elif cmd == "run":
         run(int(args[args.index("--workers") + 1]) if "--workers" in args else 3)
+    elif cmd == "stop":
+        stop()
+    elif cmd == "requeue":
+        requeue(args)
     else:
         status()
