@@ -1,0 +1,1 @@
+add a phase to PLAN.md for moving the auth checks into middleware

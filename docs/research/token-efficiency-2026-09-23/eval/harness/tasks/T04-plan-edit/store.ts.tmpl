@@ -1,0 +1,119 @@
+// Session store.
+//
+// Sessions are keyed by the opaque `sid` cookie. Today they live in an
+// in-process Map (MemoryStore), which is lost on every deploy and is not
+// shared between the three API nodes. Phase 2 of PLAN.md replaces it with
+// RedisStore behind the same SessionStore interface.
+//
+// Callers (src/auth.ts) depend ONLY on the SessionStore interface and the
+// exported `sessionStore` singleton; neither may change during the
+// migration.
+
+/** A logged-in user's session. */
+export interface Session {
+  /** Stable user id. */
+  userId: string;
+  /** Primary email, cached for display. */
+  email: string;
+  /** Account role; "owner" may delete the account. */
+  role: "owner" | "member";
+  /** Epoch ms after which the session is no longer valid. */
+  expiresAt: number;
+}
+
+/**
+ * Storage backend for sessions. Implementations must be safe to call
+ * concurrently from many requests.
+ */
+export interface SessionStore {
+  /** Look up a session; undefined when absent. Does not check expiry. */
+  get(sid: string): Promise<Session | undefined>;
+  /** Create or replace a session. */
+  set(sid: string, session: Session): Promise<void>;
+  /** Extend the session's idle timeout. No-op when absent. */
+  touch(sid: string): Promise<void>;
+  /** Remove a session. No-op when absent. */
+  destroy(sid: string): Promise<void>;
+}
+
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+export class MemoryStore implements SessionStore {
+  private sessions = new Map<string, Session>();
+
+  async get(sid: string): Promise<Session | undefined> {
+    return this.sessions.get(sid);
+  }
+
+  async set(sid: string, session: Session): Promise<void> {
+    this.sessions.set(sid, session);
+  }
+
+  async touch(sid: string): Promise<void> {
+    const s = this.sessions.get(sid);
+    if (s) s.expiresAt = Date.now() + IDLE_TIMEOUT_MS;
+  }
+
+  async destroy(sid: string): Promise<void> {
+    this.sessions.delete(sid);
+  }
+
+  /** Test helper: number of live sessions. */
+  size(): number {
+    return this.sessions.size;
+  }
+
+  /** Drop sessions whose expiresAt has passed. Called by a 60s interval. */
+  sweep(now: number = Date.now()): number {
+    let removed = 0;
+    for (const [sid, s] of this.sessions) {
+      if (s.expiresAt < now) {
+        this.sessions.delete(sid);
+        removed++;
+      }
+    }
+    return removed;
+  }
+}
+
+// --- Phase 2 scaffold (not wired in yet) -----------------------------------
+//
+// RedisStore will implement SessionStore against the pool in
+// src/session/redis.ts (not yet created). Keys are `sess:<sid>`, values are
+// JSON-encoded Session objects, and the Redis TTL mirrors IDLE_TIMEOUT_MS so
+// expiry is enforced server-side as well.
+
+export interface RedisLike {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string, mode: "PX", ttlMs: number): Promise<unknown>;
+  pexpire(key: string, ttlMs: number): Promise<unknown>;
+  del(key: string): Promise<unknown>;
+}
+
+export class RedisStore implements SessionStore {
+  constructor(private redis: RedisLike, private prefix = "sess:") {}
+
+  private key(sid: string): string {
+    return this.prefix + sid;
+  }
+
+  async get(sid: string): Promise<Session | undefined> {
+    const raw = await this.redis.get(this.key(sid));
+    return raw ? (JSON.parse(raw) as Session) : undefined;
+  }
+
+  async set(sid: string, session: Session): Promise<void> {
+    await this.redis.set(this.key(sid), JSON.stringify(session), "PX", IDLE_TIMEOUT_MS);
+  }
+
+  async touch(sid: string): Promise<void> {
+    // TODO(phase 2): also bump session.expiresAt inside the stored JSON.
+    await this.redis.pexpire(this.key(sid), IDLE_TIMEOUT_MS);
+  }
+
+  async destroy(sid: string): Promise<void> {
+    await this.redis.del(this.key(sid));
+  }
+}
+
+// TODO(phase 2): dual-write wrapper, then switch this export to RedisStore.
+export const sessionStore: SessionStore = new MemoryStore();

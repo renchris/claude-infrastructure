@@ -1,0 +1,1 @@
+add a --verbose flag to count.sh that prints each file as it counts it

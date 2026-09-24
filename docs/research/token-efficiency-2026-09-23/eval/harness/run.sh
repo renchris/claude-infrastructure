@@ -1,0 +1,59 @@
+#!/bin/bash
+# run.sh <arm full|slim> <task-id> <rep> <account-config-dir>
+# One headless F1 run. Builds a fresh fixture (with its own bare origin) under
+# $GATE_ROOT/runs/<task>/r<rep>, loads the arm's instruction files as PROJECT memory,
+# excludes the account's user memory files, gives the run a private TMPDIR, and
+# records result.json / stderr / rc / time. The two arms differ only in memory content.
+set -u
+[ $# -eq 4 ] || { echo "usage: run.sh <full|slim> <task-id> <rep> <config-dir>" >&2; exit 2; }
+ARM=$1; TASK=$2; REP=$3; CCD=$4
+H=$(cd "$(dirname "$0")" && pwd)
+G=${GATE_ROOT:-/tmp/tokeff-gate}
+CLAUDE_BIN=${CLAUDE_BIN:-$HOME/.claude-280/node_modules/.bin/claude}
+case "$ARM" in full|slim) ;; *) echo "bad arm: $ARM" >&2; exit 2;; esac
+T="$H/tasks/$TASK"
+[ -f "$T/prompt.txt" ] && [ -x "$T/fixture.sh" ] || { echo "no task: $TASK" >&2; exit 2; }
+[ -d "$CCD" ] || { echo "no config dir: $CCD" >&2; exit 2; }
+[ -f "$G/arms/$ARM/CLAUDE.md" ] || { echo "arm files missing: $G/arms/$ARM (run build-arms.sh)" >&2; exit 2; }
+
+RUN="$G/runs/$TASK/r$REP"
+case "$RUN" in "$G"/runs/*/r*) ;; *) echo "refusing run dir $RUN" >&2; exit 2;; esac
+rm -rf "${RUN:?}"; mkdir -p "$RUN/out" "$RUN/tmp"
+FX="$RUN/fx"
+"$T/fixture.sh" "$FX" "$RUN/origin.git" > "$RUN/out/fixture.log" 2>&1 || { echo "fixture build failed: $TASK" >&2; exit 3; }
+
+mkdir -p "$FX/.claude/rules"
+cp "$G/arms/$ARM/CLAUDE.md" "$FX/.claude/CLAUDE.md"
+cp "$G/arms/$ARM/rules/"*.md "$FX/.claude/rules/"
+if [ -d "$FX/.git" ]; then
+  mkdir -p "$FX/.git/info"
+  grep -qxF '.claude/' "$FX/.git/info/exclude" 2>/dev/null || echo '.claude/' >> "$FX/.git/info/exclude"
+fi
+
+SETTINGS=$(python3 -c 'import json,sys; print(json.dumps({"claudeMdExcludes": sys.argv[1:]}))' \
+  "$CCD/CLAUDE.md" "$HOME/.claude/CLAUDE.md" "$HOME/.claude/rules/00-mission-board.md" \
+  "$HOME/.claude/rules/agent-operating-lessons.md")
+printf '%s\n' "$ARM" > "$RUN/out/arm"
+printf '%s\n' "$CCD" > "$RUN/out/config_dir"
+touch "$RUN/out/start.stamp"
+
+cd "$FX" || exit 2
+START=$(date +%s)
+CLAUDE_CONFIG_DIR="$CCD" TMPDIR="$RUN/tmp/" timeout 1500 "$CLAUDE_BIN" -p --output-format json \
+  --model claude-opus-5-5 --effort high --permission-mode auto --settings "$SETTINGS" \
+  "$(cat "$T/prompt.txt")" > "$RUN/out/result.json" 2> "$RUN/out/stderr.txt"
+RC=$?
+END=$(date +%s)
+echo "$RC" > "$RUN/out/rc"
+echo "$START $END" > "$RUN/out/time"
+
+# /tmp literal-path leak sweep (T3 lesson): files this task's runs write straight to /tmp
+# are moved into the run dir so the next rep cannot find them. Only files newer than the
+# run's start AND matching this task's own pattern are touched.
+if [ -f "$T/leak-pattern" ]; then
+  mkdir -p "$RUN/out/tmp-leaked"
+  find /tmp/ -maxdepth 1 -type f -newer "$RUN/out/start.stamp" 2>/dev/null | while IFS= read -r f; do
+    grep -qE -f "$T/leak-pattern" "$f" 2>/dev/null && mv "$f" "$RUN/out/tmp-leaked/"
+  done
+fi
+exit "$RC"
