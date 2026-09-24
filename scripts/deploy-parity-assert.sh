@@ -893,6 +893,13 @@ if [ -e "$REPO/.git" ]; then    # a tracked-file listing needs a real checkout; 
       # verb name — and asserts both partitions SUM, so a raw deploy of a new shape cannot land
       # silently in only one of the two files again.
       CLAUDE.global.md)          want=0 ;;
+      # Instructions A/B variants (install.sh's `for _variant in "$REPO_DIR"/CLAUDE.global.*.md`
+      # loop, landed ade130dc7 / b191aa48f). want=0 for CLAUDE.global.md's reason AND the
+      # templates/model-classification.json one: each is COPIED as a real file, and RENAMED on the
+      # way down — CLAUDE.global.<v>.md → $CFG/CLAUDE.<v>.md — so $CFG/<rel> is correct nowhere and
+      # a per-file leg would score a permanent false MISSING. Undeclared, this class reached the
+      # reasonless default below and reddened tests/deploy-parity.bats CLASS COVERAGE on trunk.
+      CLAUDE.global.*.md)        want=0 ;;
       *)                         want=0 ;;
     esac
     [ "$want" = 1 ] || continue
