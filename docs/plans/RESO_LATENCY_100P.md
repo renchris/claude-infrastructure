@@ -86,5 +86,6 @@ migration on a live fleet for no measurable gain.
 | Wave | State | Evidence |
 |---|---|---|
 | R | ✅ DONE — 10 files, ~180 findings | `docs/research/reso-latency-2026-09-23/` |
-| Batch 1 (W1a, W0, W6, W4b, W7) | FIRING 2026-09-23 | — |
+| Batch 1 (W1a, W0, W6, W4b, W7) | RUNNING — fired 2026-09-23 23:40 CDT, all five goals armed+verified | panes W1a 670 · W0 671 · W6 672 · W7 673 · W4b 674 |
+| Hand-over W6 → W2 | W6's C1c/F9c (client session slide) and F6 (poller API) need W2's files; W6 lands the rest and specs them in its close, W2 does server halves then the client wiring after W6 lands | W6 ping 23:43 |
 | Batch 2 (W1b, W2, W3, W4a, W5) | waits on W1a's land | — |
