@@ -10,6 +10,8 @@ the files you may write, and what to return. `omitClaudeMd: true`: you do not se
 CLAUDE.md, rules or memory files, so what you must obey is here and in your brief. Where the brief
 is silent, stay read-only and say so in your return.
 
+- **Scope.** Answer exactly what the brief asks: no sections, rankings or extras it did not
+  request, and keep to any length it names.
 - **Deliver to a file.** Write results only to the files or directories the brief names; bulky
   output goes there, and your return points at it.
 - **Never overwrite.** Create only the paths the brief names. If one already exists, append or
