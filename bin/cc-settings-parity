@@ -1,0 +1,504 @@
+#!/usr/bin/env python3
+"""cc-settings-parity — are all Claude accounts running ONE settings.json? And, for migration 0037,
+converge them onto it.
+
+WHY. Operator ruling 2026-09-23, verbatim: "We use /accounts indiscriminately just for weekly usage.
+There is no functional difference between accounts. We hope there is no disparity between all of them,
+all of our behavior, configuration, should be account agnostic." Measured the same day: every account
+config dir (accounts.json -> config_dir) held its OWN real settings.json, none loaded
+~/.claude/settings.json, and all four were missing hooks the shared file carries (PostToolUseFailure,
+pr-gate, escalation-watch, ...) plus five autoMode.soft_deny rules. The mirror
+(lib/config-mirror.zsh) refuses to replace a forked real file in safe mode, so the fork was the
+steady state and nothing reported what it cost.
+
+THE MECHANISM IS A SYMLINK, AND THAT WAS MEASURED BEFORE IT WAS CHOSEN. A symlink only works if Claude
+Code writes THROUGH it instead of replacing it with a real file. On a throwaway CLAUDE_CONFIG_DIR whose
+settings.json linked to a scratch file, `claude plugin disable … --scope user` (a user-settings write)
+left the link in place and changed the target, on 2.1.183, 2.1.220, 2.1.260 and 2.1.280 alike
+(2026-09-23). So a /effort, /config or permission-accept in ANY account now lands in the one shared
+file, for every account. Our own writers are the residual risk: `mv tmp "$f"` over a symlink path
+replaces the link with a real file, which is why `check` reports a real-file copy as FORKED even when
+its bytes are identical today — identical copies are how every fork in this history started.
+
+Usage:
+  cc-settings-parity [check] [--account-dir DIR] [--brief]
+      PARITY (exit 0) when every account's settings.json is a symlink to the canonical file;
+      otherwise one line per divergent account naming it and the keys that differ (exit 1).
+      --account-dir limits the check to one dir (the SessionStart hook's use); --brief prints at
+      most one line, and nothing at all on parity.
+  cc-settings-parity converge [--dry-run]
+      Migration 0037's engine. Builds the canonical content (shared file + the dispositions below),
+      backs up every file it will change, rewrites the shared file, and replaces each account's
+      settings.json with a symlink to it. --dry-run prints the per-account diff it WOULD apply and
+      writes nothing. Refuses (exit 1, nothing written) on any account-only key or hook command the
+      dispositions below do not name — a divergence nobody has ruled on is not the tool's to drop.
+
+Exit: 0 parity / converged · 1 divergent / refused · 2 usage or unreadable input.
+
+Seams (tests): CC_PARITY_CANONICAL (default $HOME/.claude/settings.json), CC_PARITY_ACCOUNTS_JSON
+(default $HOME/.claude/accounts.json), CC_PARITY_DIRS (colon-separated dirs; overrides accounts.json),
+CC_PARITY_BACKUP_ROOT (default $HOME/.claude/backups).
+"""
+import copy
+import hashlib
+import json
+import os
+import shutil
+import sys
+import time
+
+HOME = os.environ.get("HOME", os.path.expanduser("~"))
+CANONICAL = os.environ.get("CC_PARITY_CANONICAL", os.path.join(HOME, ".claude", "settings.json"))
+ACCOUNTS_JSON = os.environ.get("CC_PARITY_ACCOUNTS_JSON", os.path.join(HOME, ".claude", "accounts.json"))
+BACKUP_ROOT = os.environ.get("CC_PARITY_BACKUP_ROOT", os.path.join(HOME, ".claude", "backups"))
+
+# ── The canonical content: the shared file, plus these rulings (2026-09-23) ──────────────────────────
+# Every key the shared file already carries keeps the SHARED value: it is the file the fleet's
+# migrations were written against, and on 2026-09-23 it was a superset of every account's hooks,
+# allow rules and soft_deny rules. The rows below are the only exceptions, each with its reason.
+#
+# OVERLAY: values written INTO the shared file when converging.
+OVERLAY = {
+    # effortLevel is rewritten by every interactive /effort, so each account held whatever rung was
+    # typed last (backups show low/medium/high churning). Under one file it would be whoever typed
+    # last on ANY account; the start point is the SSOT, model-config.yaml effort_defaults.default:
+    # high (also settings-templates/settings.example.json). Launchers pass --effort explicitly, so
+    # this reaches only sessions started without one. Conviction 90%.
+    "effortLevel": "high",
+    # Three of four accounts carried attribution.sessionUrl=false; the shared file already blanks
+    # commit/pr attribution and sets includeCoAuthoredBy=false, so the session URL is the one
+    # attribution channel still open. Promote. Conviction 92%.
+    "attribution.sessionUrl": False,
+    # tui: "default" was set in every home on 2026-08-04 (docs/research/cc-startup-modals-2026-08-04.md)
+    # to keep panes out of the alternate screen for the kitty get-text tooling; .claude-next alone
+    # kept "fullscreen", set 2026-07-16 and skipped then as an explicit operator choice. OPEN operator
+    # decision (cc-decide b65ff1f855cd, class C, 65%): keep "default" until ruled; a ruling of fullscreen is this
+    # one value, or `/tui fullscreen` from any session once the accounts share the file.
+    "tui": "default",
+}
+# Account-only keys (absent from the shared file). Each is PROMOTED (set in the shared file to the
+# value given) or DROPPED — the ruling allows no third option. A path matches itself or any child.
+DISPOSITIONS = {
+    "attribution.sessionUrl": ("promote", False),
+    # .claude-next only. Pre-approves every server any repo's .mcp.json declares — a supply-chain
+    # surface (cc-startup-modals-2026-08-04.md) and the measured cause of one chrome-devtools chain
+    # per teammate (docs/plans/MCP_MEMORY_100P_IMPLEMENTATION.md). The other three accounts already
+    # run reso without it. Drop. Conviction 92%.
+    "enableAllProjectMcpServers": ("drop", None),
+    # .claude-quaternary only. The bypass-permissions disclaimer; cc-startup-modals-2026-08-04.md
+    # ruled "Currently UNSET — keep it" because without it the binary fails SAFE. Drop. 95%.
+    "skipDangerousModePermissionPrompt": ("drop", None),
+    # modelSettings.claude-fable-5-1.effortLevel = xhigh on three accounts: another /effort echo, and
+    # the SSOT re-sweep of 2026-09-10 moved Fable to high (fable51_default / capability_sensitive).
+    # Dropped, Fable falls back to effortLevel (high). Conviction 90%.
+    "modelSettings": ("drop", None),
+    # .claude-tertiary only, ~80 tokens a session. OPEN operator decision (cc-decide 2766aeca9574, class C, 70%):
+    # drop until ruled; a ruling of "keep" flips this row to ("promote", True).
+    "enabledPlugins.frontend-design@claude-plugins-official": ("drop", None),
+}
+# Arrays merged as a UNION (shared order first, then account-only entries in first-seen order):
+# permission and classifier rule lists, where an entry one account learned is not an error.
+UNION_ARRAYS = (
+    "permissions.allow", "permissions.deny", "permissions.ask", "permissions.additionalDirectories",
+    "autoMode.soft_deny", "autoMode.allow", "autoMode.environment", "enabledMcpjsonServers",
+)
+
+
+def die(msg, code=2):
+    print("cc-settings-parity: %s" % msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def account_dirs():
+    env = os.environ.get("CC_PARITY_DIRS")
+    if env is not None:
+        return [d for d in env.split(":") if d]
+    try:
+        with open(ACCOUNTS_JSON) as fh:
+            accts = json.load(fh).get("accounts", [])
+    except (OSError, ValueError) as e:
+        die("cannot read %s: %s" % (ACCOUNTS_JSON, e))
+    out = []
+    for a in accts:
+        d = a.get("config_dir")
+        if d:
+            out.append(os.path.join(HOME, d[2:]) if d.startswith("~/") else d)
+    return out
+
+
+def load(path):
+    with open(path) as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict):
+        raise ValueError("top level is not an object")
+    return data
+
+
+def flatten(obj, prefix=""):
+    """dict paths -> leaf values; lists are leaves (compared whole)."""
+    out = {}
+    if isinstance(obj, dict) and obj:
+        for k, v in obj.items():
+            out.update(flatten(v, prefix + "." + k if prefix else k))
+    else:
+        out[prefix] = obj
+    return out
+
+
+def get_path(obj, path):
+    for part in path.split("."):
+        if not isinstance(obj, dict) or part not in obj:
+            return None, False
+        obj = obj[part]
+    return obj, True
+
+
+def set_path(obj, path, value):
+    parts = path.split(".")
+    for part in parts[:-1]:
+        if not isinstance(obj.get(part), dict):
+            obj[part] = {}
+        obj = obj[part]
+    obj[parts[-1]] = value
+
+
+def disposition(path):
+    for key, rule in DISPOSITIONS.items():
+        if path == key or path.startswith(key + "."):
+            return key, rule
+    return None, None
+
+
+def short(v, n=48):
+    s = json.dumps(v, sort_keys=True)
+    return s if len(s) <= n else s[: n - 3] + "..."
+
+
+def tilde(p):
+    # Both spellings of HOME: a realpath'd target carries the resolved one (/var -> /private/var).
+    for h in (HOME, os.path.realpath(HOME)):
+        if p.startswith(h + "/"):
+            return "~" + p[len(h):]
+    return p
+
+
+def classify(d, canon_real):
+    """-> (state, path). state: linked | elsewhere | forked | missing | unreadable"""
+    p = os.path.join(d, "settings.json")
+    if not os.path.lexists(p):
+        return "missing", p
+    if os.path.islink(p):
+        try:
+            same = os.path.realpath(p) == canon_real
+        except OSError:
+            same = False
+        return ("linked" if same else "elsewhere"), p
+    return "forked", p
+
+
+def diff_keys(a, b):
+    fa, fb = flatten(a), flatten(b)
+    return sorted(k for k in set(fa) | set(fb) if fa.get(k, KeyError) != fb.get(k, KeyError))
+
+
+# ── check ─────────────────────────────────────────────────────────────────────────────────────────
+def cmd_check(args):
+    only = None
+    brief = "--brief" in args
+    if "--account-dir" in args:
+        i = args.index("--account-dir")
+        if i + 1 >= len(args):
+            die("--account-dir needs a value")
+        only = args[i + 1].rstrip("/")
+    try:
+        canon = load(CANONICAL)
+    except (OSError, ValueError) as e:
+        die("canonical %s unreadable: %s" % (CANONICAL, e))
+    canon_real = os.path.realpath(CANONICAL)
+    dirs = [only] if only is not None else account_dirs()
+    bad = []
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue  # an account not provisioned on this machine
+        state, p = classify(d, canon_real)
+        if state == "linked":
+            continue
+        name = os.path.basename(d.rstrip("/"))
+        if state == "missing":
+            bad.append("%s: NO settings.json — this account runs without the shared settings" % name)
+            continue
+        try:
+            keys = diff_keys(load(p), canon)
+        except (OSError, ValueError) as e:
+            bad.append("%s: settings.json UNREADABLE (%s)" % (name, e))
+            continue
+        what = ("a symlink to %s, not the shared file" % tilde(os.path.realpath(p))
+                if state == "elsewhere" else "a FORKED real file, not a symlink to the shared file")
+        if keys:
+            shown = ", ".join(keys[:8]) + (" (+%d more)" % (len(keys) - 8) if len(keys) > 8 else "")
+            bad.append("%s: %s; %d key(s) differ: %s" % (name, what, len(keys), shown))
+        else:
+            bad.append("%s: %s; identical today, will drift" % (name, what))
+    if not bad:
+        if not brief:
+            print("PARITY — %d account(s) share %s" % (len(dirs), tilde(CANONICAL)))
+        return 0
+    fix = "converge: bash ~/Development/claude-infrastructure/migrations/0037-settings-parity.sh --dry-run"
+    if brief:
+        print("⚠ settings.json DIVERGES from the shared %s — %s — %s" % (tilde(CANONICAL), " · ".join(bad), fix))
+    else:
+        for b in bad:
+            print("DIVERGED " + b)
+        print(fix)
+    return 1
+
+
+# ── converge ──────────────────────────────────────────────────────────────────────────────────────
+def hook_cmds(s):
+    out = set()
+    for ev, groups in (s.get("hooks") or {}).items():
+        for g in groups or []:
+            for h in (g or {}).get("hooks", []) or []:
+                if isinstance(h, dict) and h.get("command"):
+                    out.add((ev, h["command"]))
+    return out
+
+
+def fingerprint(p):
+    st = os.lstat(p)
+    with open(p, "rb") as fh:
+        return (st.st_mtime_ns, st.st_size, hashlib.sha256(fh.read()).hexdigest())
+
+
+def list_entries(path, arr):
+    """Readable, comparable entries of a list value: one per hook command for a hooks.<event>
+    list (matcher + command + timeout), else one per element, cut to a scannable width."""
+    out = []
+    for x in arr:
+        if path.startswith("hooks.") and isinstance(x, dict):
+            for h in x.get("hooks", []) or []:
+                if isinstance(h, dict):
+                    m = x.get("matcher")
+                    t = h.get("timeout")
+                    out.append("%s%s%s" % ("[%s] " % m if m else "", h.get("command", short(h)),
+                                           " (timeout %s)" % t if t is not None else ""))
+        else:
+            out.append(x if isinstance(x, str) else short(x, 90))
+    return [e if len(e) <= 110 else e[:107] + "..." for e in out]
+
+
+def render_diff(old, new):
+    lines = []
+    fo, fn = flatten(old), flatten(new)
+    for k in sorted(set(fo) | set(fn)):
+        a, b = fo.get(k, KeyError), fn.get(k, KeyError)
+        if a == b:
+            continue
+        if a is KeyError and isinstance(b, list):
+            lines.append("    + %s:" % k)
+            lines.extend("        + %s" % x for x in list_entries(k, b))
+        elif b is KeyError and isinstance(a, list):
+            lines.append("    - %s:" % k)
+            lines.extend("        - %s" % x for x in list_entries(k, a))
+        elif a is KeyError:
+            lines.append("    + %s = %s" % (k, short(b)))
+        elif b is KeyError:
+            lines.append("    - %s (was %s)" % (k, short(a)))
+        elif isinstance(a, list) and isinstance(b, list):
+            ea, eb = list_entries(k, a), list_entries(k, b)
+            add = [x for x in eb if x not in ea]
+            rem = [x for x in ea if x not in eb]
+            lines.append("    ~ %s:%s" % (k, "" if (add or rem) else " same entries, different order/grouping"))
+            lines.extend("        + %s" % x for x in add)
+            lines.extend("        - %s" % x for x in rem)
+        else:
+            lines.append("    ~ %s: %s -> %s" % (k, short(a), short(b)))
+    return lines
+
+
+def cmd_converge(args):
+    dry = "--dry-run" in args
+    canon_path = CANONICAL
+    try:
+        canon = load(canon_path)
+    except (OSError, ValueError) as e:
+        die("canonical %s unreadable: %s — refusing" % (canon_path, e), 1)
+    canon_real = os.path.realpath(canon_path)
+    dirs = account_dirs()
+    for d in dirs:
+        if os.path.realpath(d) == os.path.dirname(canon_real):
+            die("account dir %s IS the canonical dir — refusing" % d, 1)
+
+    todo = []  # (dir, path, state, data, fingerprint)
+    refusals = []
+    for d in dirs:
+        if not os.path.isdir(d):
+            print("  %s: no such dir — skipped (not a fleet config here)" % tilde(d))
+            continue
+        state, p = classify(d, canon_real)
+        if state == "linked":
+            continue
+        if state == "missing":
+            todo.append((d, p, state, {}, None))
+            continue
+        try:
+            data = load(p)
+            todo.append((d, p, state, data, fingerprint(p)))
+        except (OSError, ValueError) as e:
+            refusals.append("%s: unreadable (%s)" % (tilde(p), e))
+
+    if not todo and not refusals:
+        print("0037: already converged — every account's settings.json is a symlink to %s" % tilde(canon_path))
+        return 0
+
+    # Build the canonical content.
+    new = copy.deepcopy(canon)
+    for path, value in OVERLAY.items():
+        set_path(new, path, value)
+    fcanon = flatten(canon)
+    canon_hooks = hook_cmds(canon)
+    promoted = {}
+    for d, p, state, data, _ in todo:
+        name = os.path.basename(d)
+        for path in flatten(data):
+            if path in fcanon or path in OVERLAY or any(path == u or path.startswith(u + ".") for u in UNION_ARRAYS):
+                continue
+            if path.split(".")[0] == "hooks":
+                continue  # hooks are judged by command below, never by path
+            # A path whose PARENT the shared file holds as a non-dict leaf is still covered by it.
+            parts = path.split(".")
+            if any(".".join(parts[:i]) in fcanon for i in range(1, len(parts))):
+                continue
+            key, rule = disposition(path)
+            if rule is None:
+                refusals.append("%s: key '%s' exists only in this account and no ruling covers it — "
+                                "add it to the shared file or to DISPOSITIONS in bin/cc-settings-parity"
+                                % (name, path))
+            elif rule[0] == "promote":
+                promoted[key] = rule[1]
+        # Keyed on (event, command): a timeout, matcher or order difference is not a new hook, and
+        # the shared entry wins; a command the shared file never runs at that event is refused.
+        for ev, cmd in sorted(hook_cmds(data) - canon_hooks):
+            refusals.append("%s: hook %s -> '%s' exists only in this account — add it to the shared "
+                            "file or delete it here, then re-run" % (name, ev, cmd))
+    for key, value in promoted.items():
+        set_path(new, key, value)
+    for upath in UNION_ARRAYS:
+        base, ok = get_path(new, upath)
+        merged = list(base) if ok and isinstance(base, list) else []
+        seen = {json.dumps(x, sort_keys=True) for x in merged}
+        grew = False
+        for _, _, _, data, _ in todo:
+            arr, ok2 = get_path(data, upath)
+            if not (ok2 and isinstance(arr, list)):
+                continue
+            for x in arr:
+                j = json.dumps(x, sort_keys=True)
+                if j not in seen:
+                    seen.add(j)
+                    merged.append(x)
+                    grew = True
+        if grew:
+            set_path(new, upath, merged)
+
+    # Report.
+    mode = "DRY-RUN (nothing written)" if dry else "APPLY"
+    print("0037 %s — canonical: %s" % (mode, tilde(canon_path)))
+    shared_lines = render_diff(canon, new)
+    print("  shared %s: %s" % (tilde(canon_path), "unchanged" if not shared_lines else "gains"))
+    for line in shared_lines:
+        print(line)
+    for d, p, state, data, _ in todo:
+        how = {"forked": "real file", "elsewhere": "symlink elsewhere", "missing": "absent"}[state]
+        print("  %s (%s -> symlink to the shared file):" % (tilde(p), how))
+        lines = render_diff(data, new)
+        for line in lines or ["    (content already identical)"]:
+            print(line)
+    if refusals:
+        print("0037: REFUSING — nothing written. Divergence nobody has ruled on:", file=sys.stderr)
+        for r in refusals:
+            print("  " + r, file=sys.stderr)
+        return 1
+    if dry:
+        print("0037: dry-run complete — %d account file(s) would become symlinks." % len(todo))
+        return 0
+
+    # Freshness: a file that changed since it was read was not the file we analysed.
+    for d, p, state, data, fp in todo:
+        if fp is not None and fingerprint(p) != fp:
+            die("%s changed while this ran — nothing written; re-run" % tilde(p), 1)
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    bdir = os.path.join(BACKUP_ROOT, "settings-parity-0037-%s" % stamp)
+    os.makedirs(bdir, exist_ok=True)
+    try:
+        shutil.copy2(canon_real, os.path.join(bdir, "shared.settings.json"))
+        for d, p, state, data, _ in todo:
+            if state != "missing":
+                shutil.copy2(os.path.realpath(p), os.path.join(bdir, "%s.settings.json" % os.path.basename(d).lstrip(".")))
+    except OSError as e:
+        die("backup to %s FAILED (%s) — nothing written" % (bdir, e), 1)
+    print("0037: backups in %s" % tilde(bdir))
+
+    # 1. The shared file, written in place through its real path (it may itself be a link).
+    tmp = canon_real + ".tmp-0037-%d" % os.getpid()
+    with open(tmp, "w") as fh:
+        json.dump(new, fh, indent=2)
+        fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    if load(tmp) != new or not set(canon).issubset(set(load(tmp))):
+        os.unlink(tmp)
+        die("shared-file rewrite did not verify — nothing written", 1)
+    if canon != new:
+        os.replace(tmp, canon_real)
+    else:
+        os.unlink(tmp)
+
+    # 2. Each account: build the link beside the file, then rename it over (one atomic rename(2)).
+    failed = []
+    for d, p, state, data, _ in todo:
+        lnk = os.path.join(d, ".settings.json.0037-%d" % os.getpid())
+        try:
+            if os.path.lexists(lnk):
+                os.unlink(lnk)
+            os.symlink(canon_path, lnk)
+            os.replace(lnk, p)
+        except OSError as e:
+            failed.append("%s (%s)" % (tilde(p), e))
+            continue
+        if not (os.path.islink(p) and os.path.realpath(p) == canon_real):
+            failed.append("%s (link did not read back)" % tilde(p))
+        else:
+            print("0037: %s -> %s" % (tilde(p), tilde(canon_path)))
+    if failed:
+        print("0037: FAILED on: %s. Restore any file with: cp -p %s/<dir>.settings.json <dir>/settings.json"
+              % (", ".join(failed), tilde(bdir)), file=sys.stderr)
+        return 1
+    print("0037: converged — %d account(s) now share %s. Takes effect in NEW sessions (running ones "
+          "re-read the file when it changes)." % (len(todo), tilde(canon_path)))
+    print("0037: revert — for each dir: rm <dir>/settings.json && cp -p %s/<dir>.settings.json "
+          "<dir>/settings.json; and cp -p %s/shared.settings.json %s" % (tilde(bdir), tilde(bdir), tilde(canon_path)))
+    return 0
+
+
+def main(argv):
+    args = argv[1:]
+    if "-h" in args or "--help" in args:
+        print(__doc__)
+        return 0
+    verb = "check"
+    if args and not args[0].startswith("-"):
+        verb, args = args[0], args[1:]
+    if verb in ("-h", "--help", "help"):
+        print(__doc__)
+        return 0
+    if verb == "check":
+        return cmd_check(args)
+    if verb == "converge":
+        return cmd_converge(args)
+    die("unknown verb '%s' (check | converge)" % verb)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

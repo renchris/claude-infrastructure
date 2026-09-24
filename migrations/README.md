@@ -102,6 +102,16 @@ cannot reach a converge undeclared.
    on (`hooks/activation-watch.sh:249`).
 6. `$CC_MIGRATION_REPO` and `$CC_MIGRATION_STATE` are exported into every migration; cwd is the repo
    root.
+7. **Write settings.json ONCE, through its real path — never `mv tmp "$dir/settings.json"` per dir.**
+   Since `0037` (2026-09-23, operator ruling: accounts are interchangeable) every account's
+   `settings.json` is a symlink to `~/.claude/settings.json`, so there is one file to edit, not five.
+   `mv` over a symlink path REPLACES the link with a real file, silently re-forking that account (the
+   state `0037` exists to end). Edit `~/.claude/settings.json` (resolve it with `realpath` if you must
+   loop), and leave the account links alone. The per-dir loops in `0005`–`0036` predate this; they
+   iterate `~/.claude` first and skip a dir whose file already carries the effect, so on a linked
+   fleet their later iterations are no-ops — an ordering accident, not a guarantee.
+   `cc-settings-parity check` names any account that has re-forked, and the SessionStart hook
+   `config-mirror-assert.sh` says so in that account.
 
 ## Operating it
 

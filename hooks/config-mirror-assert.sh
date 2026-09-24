@@ -37,6 +37,18 @@ if [ "${forks:-0}" -gt 0 ] 2>/dev/null; then
   [ "$forks" -gt "$nshown" ] 2>/dev/null && more=" (+$(( forks - nshown )) more)"
   msg="⚠ $forks FORKED real entry(ies) shadow ~/.claude in ${cfg##*/} ($nbak of them *.bak* backups): $shown$more — this account does NOT see updates to them, and safe mode cannot fix it. Full list: zsh -fc 'source ~/.claude/lib/config-mirror.zsh; _cc_sync_account $cfg' 2>&1 | grep FORKED. Converge with all that account's panes closed: zsh -fc 'source ~/.claude/lib/config-mirror.zsh; _cc_sync_account --convert $cfg'"
 fi
+# ── settings parity (migration 0037) ─────────────────────────────────────────────────────────────
+# settings.json is the one FORKED entry that changes BEHAVIOUR — it decides which hooks, permission
+# rules and classifier rules this account runs — so it gets its own line naming WHAT differs from the
+# shared file, instead of sitting anonymously in the count above. Operator ruling 2026-09-23:
+# accounts are interchangeable, so any difference is a defect. Silent once the account's
+# settings.json is a symlink to ~/.claude/settings.json; it speaks again if something re-forks it.
+par="$HOME/.claude/bin/cc-settings-parity"
+if [ -f "$par" ] && command -v python3 >/dev/null 2>&1; then
+  pline="$(python3 "$par" check --account-dir "$cfg" --brief 2>/dev/null || true)"
+  [ -n "$pline" ] && msg="${msg:+$msg  }$pline"
+fi
+
 # ── HOOK_SURFACE_100P §4 registration assertion (migration 0019) ─────────────────────────────────
 # The plan asks for "the expected registration COUNT". A count is the wrong instrument: every
 # legitimate registration change moves it, so it false-alarms until someone edits a magic number,

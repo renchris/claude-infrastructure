@@ -228,6 +228,9 @@ _cc_sync_config_mirror() {
   # (120 / 77 / 59 / 78 diff lines against ~/.claude/settings.json), and not one of them is a
   # symlink. An account-pinning key added to any of those four was therefore invisible here, while
   # the guard went on reporting cleanly about a file that account never reads.
+  # 2026-09-23: migration 0037 (operator-run) ends that steady state — it replaces each account's
+  # settings.json with a symlink to $src/settings.json (operator ruling: accounts are
+  # interchangeable), and bin/cc-settings-parity reports any account that re-forks.
   # $src stays checked because the per-dir loop never visits ~/.claude itself, which account 1 does
   # load; the -ef skip keeps a genuinely shared dst (a symlink to $src) from warning twice over one
   # file. The message names the PATH rather than saying "shared", so the warning cannot again
