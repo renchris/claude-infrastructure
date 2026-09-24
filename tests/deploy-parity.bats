@@ -2123,9 +2123,13 @@ _rawdeploy_extract() {  # $1=install.sh  $2=out TSV: line \t kind \t srcclass \t
   # VARIABLE source: install.sh:776, the vendor DIRECTORY link. `ln -sfn` and not `ln -sf` is
   # load-bearing — install.sh's own comment says a re-run whose target changed would otherwise
   # create the new link INSIDE the existing dir symlink — so the spelling is what identifies it.
-  [ "$DVAR" -eq 1 ]
+  # VARIABLE source #2: the instructions A/B variant copy, `run cp "$_variant"` (ade130dc7). Like
+  # $vsrc it is loop-driven — its for-header is scored by CLASS COVERAGE via the assert's
+  # `CLAUDE.global.*.md)` arm — so it is pinned here by its spelling, not by a declaration.
+  [ "$DVAR" -eq 2 ]
   [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE"{print $1}' "$RAW" \
        | while IFS= read -r n; do sed -n "${n}p" "$MAP"; done | grep -c 'ln -sfn')" -eq 1 ]
+  [ "$(awk -F'\t' '$2=="DEPLOY" && $3=="VARIABLE" && $4=="$_variant"{n++} END{print n+0}' "$RAW")" -eq 1 ]
   # LIVE-PATH source: install.sh:703's ~/bin/restore-file convenience symlink. Its source is
   # $HOME/.claude/..., i.e. the LIVE layer rather than the checkout, so it is unnamable in the units
   # every other arm here uses. Pinned by DESTINATION for that reason.
