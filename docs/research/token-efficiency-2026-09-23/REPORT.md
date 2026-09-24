@@ -173,8 +173,9 @@ script in `eval/raw/`.
 - *Worker type.* `workflow-lean` first request 5.3k vs 70.5k tokens, 69% fewer subagent tokens, 29.5% lower parent
   cost, the same number of responses, correct 6/6 vs 5/6. Post-land check: a Workflow `agent()` slot with
   `agentType: 'workflow-lean'` and a `schema` returned a valid structured result in a fresh session, first request
-  5,149 tokens (a default workflow agent writes ~130k). A session started before the land cannot see the type: agent
-  definitions load at session start.
+  5,149 tokens (a default workflow agent writes ~130k). A session already running when the type lands picks it up
+  with a lag: in this session a Workflow call right after the converge failed with "agent type not found", and the
+  type appeared in the session's agent list some minutes later. Re-check the agent list before relying on it.
 - *Limits.* n = 2 per arm per item: the quality differences are within noise, and the cost difference is a pilot
   estimate. Next is the full offline gate (F1: 20 tasks × ≥5 runs per arm; F2: 10+ briefs), with fixtures that start
   clean, a private TMPDIR per run, and auto-mode push refusals recorded as their own outcome (they hit both arms).
