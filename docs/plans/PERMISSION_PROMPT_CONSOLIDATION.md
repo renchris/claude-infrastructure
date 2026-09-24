@@ -58,7 +58,7 @@ Sources: `~/.claude/autonomy/permission-archive` (the prompt oracle, 2,669 Bash 
 `cc-permission-harvest` proposal. "Stall h" is the archive's `waited_s` joined by session ±15 s; it
 counts time a prompt sat open, including sessions nobody was watching. `cc-permission-audit`'s
 `approved 0 · unknown N` was NOT used: its join key is unpopulated (its own caveat). **Fixed** counts are
-a REPLAY of the same recorded commands through the parent (a7a372d2c) and the new hook, so they are
+a REPLAY of the same recorded commands through the parent (871b87723) and the new hook, so they are
 measured flips, not estimates.
 
 | # | Pattern | Prompts | Sessions | Stall h | Layer | Safe to remove? | Change |
@@ -92,7 +92,17 @@ settings rule; the git-ownership block now asks on them.
 
 ### Landed
 
-(filled at land)
+On origin/main 2026-09-24, content-verified by ship-land (`LANDED 0bf6eaef6`):
+- `b1867c26c` fix(validate-bash): a heredoc body written to a file is not an rm invocation — row 9
+- `03e9a2c6a` fix(curl-gate): judge a URL held in a loop variable, and gate curl after a newline — rows 2-3 + the entry-filter hole
+- `95b482af4` feat(validate-bash): reset --hard, stash drop and restore decided on repo state — rows 5, 6, 12 + `migrations/0038`
+- `8e37f8d16` fix(tests): ff-gate case 11 — a trunk red since e2d8c9816, found running the neighbour suites
+- Red-on-parent controls cite `871b87723` (the landed parent; the pre-rebase `a7a372d2c` is on no branch).
+
+Verification this session: the 23 suites touching the three hook files, 472 cases, 470 green then the
+2 reds fixed (a control that mutated the retired S26, and the stale ff-gate assertion) and re-run 35/35;
+`tests/deploy-migrations.bats` 10/10; `validate-bash-differential-controls.sh` all controls held;
+`/bin/bash -n` (3.2) clean on both shell files.
 
 ### Settings layer — the ONE operator step
 
