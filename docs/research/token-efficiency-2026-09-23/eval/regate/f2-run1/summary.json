@@ -1,0 +1,61 @@
+{
+ "title": "F2 workflow-lean",
+ "verdict": "FAIL",
+ "n": {
+  "lean": 40,
+  "default": 40
+ },
+ "margin_pp": 10.0,
+ "primary": {
+  "t": 0.09830685,
+  "c": 0.665425625,
+  "pct": -85.22647065177267,
+  "p": 0.001953125,
+  "units": 10
+ },
+ "meter": {
+  "t": 14614.45,
+  "c": 115037.1,
+  "pct": -87.29588106793373,
+  "p": 0.001953125,
+  "units": 10
+ },
+ "significant_harms": [
+  {
+   "name": "Tool errors per run",
+   "p": 0.005859375,
+   "worse": true
+  }
+ ],
+ "ci_misses": [],
+ "n_needed_per_arm": {},
+ "success": [
+  {
+   "lean": 40,
+   "default": 40
+  },
+  {
+   "lean": 40,
+   "default": 40
+  }
+ ],
+ "compliance": {
+  "lean": [
+   150,
+   160
+  ],
+  "default": [
+   153,
+   160
+  ]
+ },
+ "ci_success": [
+  -0.08762160119728646,
+  0.08762160119728646
+ ],
+ "ci_compliance": [
+  -0.07236821048577871,
+  0.0333373236322416
+ ],
+ "items_tested": 40
+}

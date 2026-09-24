@@ -13,6 +13,10 @@ REPO=$(git -C "$H" rev-parse --show-toplevel)
 F="$G/f2"
 [ -d "$F/tree" ] && chmod -R u+w "$F/tree"
 rm -rf "${F:?}/tree" "$F/corpus" "$F/review"; mkdir -p "$F/tree" "$F/corpus" "$F/review" "$F/out"
+# Every slot's OUTDIR exists before the workflow starts. The 2026-09-24 gate ran that way (its 80 slot
+# dirs were created 1 s before its start stamp, by a step this script did not record), and the re-gate's
+# first run without them drew 32 extra tool errors, all an `ls` of the slot's own not-yet-created OUTDIR.
+for b in 01 02 03 04 05 06 07 08 09 10; do for r in 1 2 3 4 5 6 7 8; do mkdir -p "$F/out/B$b-r$r"; done; done
 git -C "$REPO" archive "$SHA" | tar -x -C "$F/tree"
 echo "$SHA" > "$F/tree.sha"
 
