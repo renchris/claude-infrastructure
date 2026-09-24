@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1091,SC2016  # sourced lib is resolved at run time; backticks are literal Markdown
 # fixture.sh <fixture-dir> <origin-bare-dir>  (ported from the 2026-09-23 pilot)
 set -euo pipefail
 FX=$1; R=$2

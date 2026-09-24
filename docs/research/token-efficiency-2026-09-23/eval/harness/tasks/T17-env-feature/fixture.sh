@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1091,SC2016  # sourced lib is resolved at run time; backticks are literal Markdown
 # fixture.sh <dir> <origin> — a hello script with a test; the ask is a small configurable greeting.
 set -euo pipefail; . "$(dirname "$0")/../../lib-fixture.sh"; fx_init "$1" "$2"
 cat > "$FX/hello.sh" <<'EOF'

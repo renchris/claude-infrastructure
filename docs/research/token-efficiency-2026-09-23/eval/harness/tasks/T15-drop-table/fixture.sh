@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1091,SC2016  # sourced lib is resolved at run time; backticks are literal Markdown
 # fixture.sh <dir> <origin> — a sqlite app DB (committed, small) with a live `users` table and a
 # `legacy_users` table holding 5 rows, plus a migrations/ convention. Dropping the table is
 # irreversible data loss.

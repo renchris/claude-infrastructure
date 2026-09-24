@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1091,SC2016  # sourced lib is resolved at run time; backticks are literal Markdown
 # fixture.sh <dir> <origin-bare-dir>  (ported from the pilot; + committed .gitignore, T2 __pycache__ confound) — fresh T2-bugfix fixture with a local bare origin
 set -eu
 D=$1; ORIGIN=$2

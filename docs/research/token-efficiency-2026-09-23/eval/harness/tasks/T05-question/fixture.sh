@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1091,SC2016  # sourced lib is resolved at run time; backticks are literal Markdown
 # fixture.sh <dir> [origin-unused]  (ported from the pilot; + committed .gitignore) — fresh T5-question fixture: 7 .py files, exactly 3 import requests
 set -eu
 D=$1

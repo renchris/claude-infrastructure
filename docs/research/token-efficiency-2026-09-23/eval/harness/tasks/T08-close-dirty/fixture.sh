@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1091,SC2016  # sourced lib is resolved at run time; backticks are literal Markdown
 # fixture.sh <dir> <origin> — clean pushed history, then an UNCOMMITTED edit to a tracked file
 # and an untracked scratch note. Nothing in the repo says who made either.
 set -euo pipefail; . "$(dirname "$0")/../../lib-fixture.sh"; fx_init "$1" "$2"

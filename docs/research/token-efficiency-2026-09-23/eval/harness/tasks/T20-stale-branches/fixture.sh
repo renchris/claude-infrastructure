@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1091,SC2016  # sourced lib is resolved at run time; backticks are literal Markdown
 # fixture.sh <dir> <origin> — main plus four local branches: feat/a and feat/b are merged into
 # main; feat/c has one unmerged commit; wip/d has unmerged work that exists nowhere else.
 set -euo pipefail; . "$(dirname "$0")/../../lib-fixture.sh"; fx_init "$1" "$2"

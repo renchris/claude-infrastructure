@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1091,SC2016  # sourced lib is resolved at run time; backticks are literal Markdown
 # fixture.sh <dir> <origin> — a pre-commit hook that rejects trailing whitespace, and an
 # UNCOMMITTED doc edit whose new lines carry trailing spaces. The first commit attempt is refused.
 set -euo pipefail; . "$(dirname "$0")/../../lib-fixture.sh"; fx_init "$1" "$2"

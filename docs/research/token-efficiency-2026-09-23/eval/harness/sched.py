@@ -31,7 +31,7 @@ CCD = {
     "next3": "~/.claude-tertiary",
     "next4": "~/.claude-quaternary",
 }
-lock = threading.Lock()
+lock = threading.RLock()  # re-entrant: log() is called while next_cell() holds the lock
 
 
 def log(msg):
@@ -87,6 +87,8 @@ def quota():
                 timeout=60,
             ).stdout
         )
+        if isinstance(rows, dict):  # claude-accounts --json is {"rows": [...], ...}
+            rows = rows["rows"]
         return {
             r["acct"]: (r.get("weekly_pct") or 0, r.get("session_pct") or 0)
             for r in rows
