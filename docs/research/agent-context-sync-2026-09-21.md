@@ -1,5 +1,7 @@
 # Always-synced agent context: `docs-source` → `docs`, diff-only — the architecture
 
+> Moved: the maintained design, probes and README now live at https://github.com/renchris/agent-context-sync — this file is the research record.
+
 *2026-09-21. Research wave of 14 axes (12 productive, 2 adversarial) plus 10 adversarial verifiers on the load-bearing claims. Per-axis reports and verifier reports are in `agent-context-sync-2026-09-21/`. Everything marked **measured** was run on this Mac or against a live Graph tenant during the wave; everything marked **documented** is quoted from a vendor reference; the rest is reasoning and says so.*
 
 ## The answer in one screen
