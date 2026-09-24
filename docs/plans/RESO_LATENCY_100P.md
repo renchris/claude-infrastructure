@@ -47,8 +47,44 @@ after the waves are fired and custody is recorded.
 | a9 | `a9-client-replicache.md` | useSubscribe patterns, mutators, pull/push cadence |
 | a10 | `a10-measurement.md` | round-trip counter, production signals, budget ratchet |
 
+## Waves — cut from the research by FILE OWNERSHIP (one owner per file)
+
+Research returned ~180 findings across ten files. They are cut into ten implementation waves so that no
+two concurrent sessions share a file. Many findings are one defect seen from several paths; the most
+common one is the per-request revocation SELECT, which is repeated by every `getDB()` inside a request (A1-1/A1-2,
+A6-03, A7-05, A8-2, F2, R22, pull F3). It is fixed once, in W1a.
+
+**Batch 1 — fired now (no dependencies between them):**
+
+| Wave | Owns (summary) | Findings |
+|---|---|---|
+| **W1a** session core + admin fold | `lib/auth/session.ts`, `cookieActions.ts`, `accessActions.ts`, `authQueries.ts`, team page, logout/logs routes | A1-1/2/3/10s/11/12 · A6-03/05/17 · A7-05/06/11 · A8-2 · a2 F2 · R22 · pull F3. **Publishes** the shared revocation predicate + folded row type batch 2 builds on |
+| **W0** round-trip ledger | recorder, roundTripStream, db-logger, db-context, grafana, NEW per-path budget files | M1, M2, M7/M8 (helpers), M10, M11, M12 |
+| **W6** Replicache client | `create-replicache-context.tsx`, `mutators.ts`, subscription call sites | C1c, C2, C3, C5–C12 · pull F6, F11, F9c |
+| **W4b** route seeds | bottle-service seed, guests, list detail, floor-plan, recap, lists, guest QR page | a2 F1/3/4p/5/9/10/12/16 · R6/7/8/9/12/16/18/19/21 · A6-08/09 |
+| **W7** DB transport | `drizzle/db.ts`, `turso-keepalive.ts`, `db-instrumentation.ts`, fly tomls, sweeper, latency-ping | A8-4/5/6/7/9/10/11 · pull F15 · M4 · A7-13/14 |
+
+**Batch 2 — fired after W1a lands (they consume its predicate):**
+
+| Wave | Owns (summary) | Findings |
+|---|---|---|
+| **W1b** pre-session + login | `tenantContext.ts`, `sessionWrite.ts`, `lib/auth/login.ts`, `durable-limiter.ts`, register flow | A1-7 (**security: the S-4 login limiters are probably dark in prod** — a 50 ms timeout around a Platform API call fails open), A1-8, A6-04, A6-16, A7-04/09/10, A8-3/8, a2 F4 (tenant half), R20 |
+| **W2** pull + watermark | pull route, `pullActions.ts`, `authContext.ts`, `recencyWindow.ts`, sync-watermark route, `sync-cursor.ts`, `watermark-poll.ts`, `tableServiceActions.ts` | a4 F1/2/4/5/7/8/10/12/13/14 · A1-4, A1-9 · A7-03 · M5, M9 |
+| **W3** push | push route, `pushActionsBatch.ts`, `sharedActions.ts`, `batchPrefetch.ts`, `notificationDispatch.ts`, `pushTransport.ts`, `venue-id-cache.ts`, `todoActions.ts` | a5 F1–F15 · A1-5 · A7-02c/07/08 · A8-1/13 · M3, M6 · R17 |
+| **W4a** shell + home + nav | `LandingPageOrLoggedInApp.tsx`, `homeStateActions.ts`, `navWarmActions.ts`, `MobileNavBar.tsx`, `venue-resolution.ts`, warm route | a2 F6/7/8/11/13/14/15 · R1–R5, R10, R11, R13–R15, R23 · A1-6 · A6-01/02/06/07 · A7-01 · C4 · M7 wiring |
+| **W5** admin + other actions | `databaseActions.ts`, `tenantConfigActions.ts`, `venueRoleActions.ts`, `notificationActions.ts`, subscribe routes, MissionControl, useLogout | A1-13/14/15 · A6-10–16, 18–21 · A7-12 |
+
+**Rejected at plan level:** A8-12 (indexes) — small tables with sub-millisecond scans, and adding them needs a schema
+migration on a live fleet for no measurable gain.
+
+**Firing:** `handoff-fire.sh --repo ~/Development/reso-management-app --worktree <branch> --notify-back 495
+--prompt-file /tmp/fire-lat-<wave>.txt --goal …`, one session per wave; briefs = `/tmp/fire-lat-<wave>.head` +
+`/tmp/fire-lat-common.md`. Box load was ~178 at fire time, so two batches of five.
+
 ## Status
 
 | Wave | State | Evidence |
 |---|---|---|
-| R | IN PROGRESS — 10 agents fired 2026-09-23 | — |
+| R | ✅ DONE — 10 files, ~180 findings | `docs/research/reso-latency-2026-09-23/` |
+| Batch 1 (W1a, W0, W6, W4b, W7) | FIRING 2026-09-23 | — |
+| Batch 2 (W1b, W2, W3, W4a, W5) | waits on W1a's land | — |
