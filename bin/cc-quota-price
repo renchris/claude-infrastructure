@@ -15,14 +15,34 @@ that corrupted it turned into a tested invariant.
 
 🚨 THE INVARIANT THIS FILE EXISTS TO HOLD — DEDUPE ON `message.id` OR BE WRONG BY 2.4x.
 Claude Code writes a streaming assistant message to the transcript ONCE PER CONTENT BLOCK: same
-`message.id`, same `requestId`, and the identical COMPLETE `usage` object on every one of them.
-A census that sums records therefore counts one billing event 2-3x. Measured in this corpus
-(§2.1): 58.7% repeat records, 98.5% byte-identical usage, 0 records spanning files. Three
+`message.id`, same `requestId`, and an identical input-side `usage` on every one of them (the
+output count is NOT identical; see the next paragraph). A census that sums records therefore counts
+one billing event 2-3x. Measured in this corpus (§2.1): 58.7% repeat records, 98.5% byte-identical
+usage at the time, 0 records spanning files; by 2026-09-23 22% of repeat records differ in
+`output_tokens` (docs/research/token-efficiency-2026-09-23/data/EXTRACT.md L1). Three
 independent derivations of this wave hit the bug; A1's own falsifier #6 NAMED the hazard and was
 not run, and the resulting price list was published 2.1-2.8x too high. `--selftest` case 2
 RED-proves the dedup by running the production extractor with the dedup DISABLED (`CC_QP_DEDUP=0`)
 and asserting the naive count inflates output >=2x — so if anyone deletes the dedup, case 1 goes
 red rather than the number going quietly wrong.
+
+OUTPUT IS THE LAST RECORD'S COUNT, NOT THE FIRST'S. The "identical usage on every record" above
+holds for the input side only. On Claude Code 2.1.x a record written before the stream ends
+carries the `message_start` placeholder `output_tokens` (typically 1-10); only the last record,
+the one with `stop_reason`, carries the final count, and the value never decreases across the
+records of one message (1,000 of 1,000 differing messages in the probe). A first-record dedup
+therefore read output about 46% low: 75.4M against 139.7M final over 2026-09-09..23. Claude
+Code's own `cost-state` confirms the final figure to within the agent shortfall below (final /
+cost-state = 0.887; with the missing agent finals imputed, 0.997; docs/research/
+token-efficiency-2026-09-23/data/EXTRACT.md L1-L2). So the dedup keeps the FIRST record for timestamp and the input classes
+(identical across records) and takes the MAX `output_tokens` over the message's records.
+`--selftest` case 11 pins it, and case 11b RED-proves it through the `CC_QP_OUTPUT=first` seam.
+
+Agent output is still a LOWER BOUND. Agent transcripts on 2.1.280 often never write the final
+record at all: 11.1% of responses in that window (18,041 of 162,406) have none, nearly all of
+them subagent or workflow-agent responses (2,213 of 2,213 subagent responses on 2.1.280), and no
+other store carries the real value. Those responses are counted at their placeholder, so the
+output column under-reads wherever agent traffic is heavy (EXTRACT.md L2 imputes about +21.8M).
 
 METHOD (and it is the plan's own, so the two agree by construction).
   L1 numerator   walk the transcript roots, dedupe on message.id, sum the four token classes.
@@ -71,6 +91,9 @@ Config (all env, test-overridable):
   CC_QP_MAX_GAP_S    a sample gap wider than this breaks a bucket (default 5400)
   CC_QP_DEDUP        TEST SEAM ONLY. 0 disables the message.id dedup so the selftest can
                      RED-prove it. Prints a loud stderr warning; never set it in production.
+  CC_QP_OUTPUT       TEST SEAM ONLY. `first` restores the pre-2026-09-23 first-record output
+                     (the placeholder) so the selftest can RED-prove the final-count read, and so
+                     an old price list can be reproduced for comparison. Warns on stderr.
   CC_NOW             epoch override for "now" (tests)
 
 Exit: 0 verdict · 1 selftest failure · 2 usage · 3 ABSTAIN (no data / no recoverable denominator).
@@ -210,17 +233,31 @@ def census(since=None, acct_filter=None):
     The dedup key is `message.id`, falling back to `requestId` and then to (file, line) so that a
     record which carries NEITHER is counted once rather than dropped — dropping real billed spend
     would bias the fit low, which is the same fabrication as inventing it, in the other direction.
+
+    The first record of a key fixes its timestamp and input classes; `output` is then raised to
+    the max over the key's later records, because only the last one carries the final count (see
+    the module docstring and docs/research/token-efficiency-2026-09-23/data/EXTRACT.md L1).
     """
     dedup = os.environ.get("CC_QP_DEDUP", "1") != "0"
     if not dedup:
         sys.stderr.write(
             f"{PROG}: 🚨 CC_QP_DEDUP=0 — message.id dedup DISABLED. This is a TEST SEAM; the "
             "resulting census over-counts every streamed response 2-3x.\n")
+    out_first = os.environ.get("CC_QP_OUTPUT", "") == "first"
+    if out_first:
+        sys.stderr.write(
+            f"{PROG}: CC_QP_OUTPUT=first — output read from each message's FIRST record, the "
+            "streaming placeholder. This is a TEST SEAM; output reads ~46% low.\n")
 
     seen = set()
+    # key -> index into recs of its counted record, or None when the first record fell outside
+    # the window (then the whole message stays out, as before).
+    counted = {}
+    raised = set()
     recs = []
     meta = {"files": 0, "records": 0, "deduped": 0, "repeats": 0,
-            "unkeyed": 0, "models": {}, "roots": []}
+            "unkeyed": 0, "output_raised": 0, "output_raised_tokens": 0,
+            "models": {}, "roots": []}
 
     seen_files = set()
     for root, acct in transcript_roots():
@@ -266,13 +303,25 @@ def census(since=None, acct_filter=None):
                     if dedup:
                         if key in seen:
                             meta["repeats"] += 1
+                            i = counted.get(key)
+                            if i is not None and not out_first:
+                                o = int(u.get("output_tokens") or 0)
+                                if o > recs[i]["output"]:
+                                    if key not in raised:
+                                        raised.add(key)
+                                        meta["output_raised"] += 1
+                                    meta["output_raised_tokens"] += o - recs[i]["output"]
+                                    recs[i]["output"] = o
                             continue
                         seen.add(key)
+                        counted[key] = None
                     ts = iso_to_epoch(d.get("timestamp"))
                     if ts is None:
                         continue
                     if since is not None and ts < since:
                         continue
+                    if dedup:
+                        counted[key] = len(recs)
                     model = m.get("model") or "unknown"
                     meta["models"][model] = meta["models"].get(model, 0) + 1
                     meta["deduped"] += 1
@@ -574,6 +623,10 @@ def render(d):
             print(f"  dedup: {m['repeats']:,} of {m['records']:,} record(s) were repeats "
                   f"({m['repeats'] / m['records']:.1%}) — summing lines would have "
                   f"over-counted by {m['records'] / max(m['deduped'], 1):.2f}x")
+        if m.get("output_raised"):
+            print(f"  output: {m['output_raised']:,} response(s) raised to their final record's "
+                  f"count (+{m['output_raised_tokens']:,} over the first-record placeholder); "
+                  "agent output stays a lower bound")
         return
 
     b, f = d["buckets"], d["fit"]
@@ -840,6 +893,61 @@ def selftest():
         check("10 ABSTAIN renders a reason and no price table",
               p.returncode == 3 and "ABSTAIN" in p.stdout and "pp / Mtok" not in p.stdout,
               p.stdout[:120])
+
+        # ── case 11: output is the FINAL record's count, not the first record's placeholder ──
+        # Claude Code 2.1.x writes the message_start placeholder (1) on the records written before
+        # the stream ends; only the last carries the final count. Input classes are identical on
+        # every record and must still be counted once. Own root, so no earlier case's totals move.
+        # docs/research/token-efficiency-2026-09-23/data/EXTRACT.md L1.
+        root11 = os.path.join(tmp, "c11", ".claude-secondary", "projects", "proj")
+        os.makedirs(root11)
+        with open(os.path.join(root11, "c.jsonl"), "w") as fh:
+            for o in (1, 1, 2400):
+                fh.write(_tx_line(_iso(T - 3600), "msg_CCC", "claude-opus-5",
+                                  out=o, cc=7000, cr=600000, inp=10))
+        env11 = dict(base_env, CC_QP_ROOTS=os.path.dirname(root11) + "=next2")
+        rc11, d11, _ = _run(["--census", "--json", "--since", "1d"], env11)
+        t11 = (d11 or {}).get("tokens", {})
+        check("11 output is the final record's count (first=1, last=2400 counts 2400)",
+              rc11 == 0 and t11.get("output") == 2400 and t11.get("input") == 10
+              and t11.get("cache_creation") == 7000
+              and t11.get("cache_read") == 600000 and d11["census"]["deduped"] == 1
+              and d11["census"]["output_raised"] == 1,
+              f"rc={rc11} tokens={t11}")
+
+        # ── case 11b: the mutation control for case 11. The CC_QP_OUTPUT=first seam restores the
+        # pre-fix first-record read; the same fixture must then read the placeholder, so case 11
+        # can tell the two extractors apart. If the max were removed, case 11 would read 1.
+        rc11b, d11b, err11b = _run(["--census", "--json", "--since", "1d"],
+                                   dict(env11, CC_QP_OUTPUT="first"))
+        got11b = (d11b or {}).get("tokens", {}).get("output")
+        check("11b RED-PROOF: the first-record extractor reads the placeholder (1), not 2400",
+              rc11b == 0 and got11b == 1 and got11b != 2400, f"rc={rc11b} output={got11b}")
+        check("11c RED-PROOF names its own seam on stderr",
+              "CC_QP_OUTPUT=first" in (err11b or ""), (err11b or "")[:80])
+
+        # ── case 11d: the window edge. A message whose FIRST record is older than --since stays
+        # out whole, so its later in-window records must raise nothing. msg_EEE is written between
+        # them: if the counted index were set before the window check, msg_DDD's repeat would
+        # silently raise msg_EEE's output to 5000 (and, with nothing in between, index past the
+        # end). Expect only msg_EEE: output 300, nothing raised.
+        root11d = os.path.join(tmp, "c11d", ".claude-secondary", "projects", "proj")
+        os.makedirs(root11d)
+        with open(os.path.join(root11d, "d.jsonl"), "w") as fh:
+            fh.write(_tx_line(_iso(T - 3 * 86400), "msg_DDD", "claude-opus-5",
+                              out=1, cc=100, cr=1000, inp=10))
+            fh.write(_tx_line(_iso(T - 3600), "msg_EEE", "claude-opus-5",
+                              out=300, cc=200, cr=2000, inp=10))
+            fh.write(_tx_line(_iso(T - 3500), "msg_DDD", "claude-opus-5",
+                              out=5000, cc=100, cr=1000, inp=10))
+        env11d = dict(base_env, CC_QP_ROOTS=os.path.dirname(root11d) + "=next2")
+        rc11d, d11d, _ = _run(["--census", "--json", "--since", "1d"], env11d)
+        t11d = (d11d or {}).get("tokens", {})
+        c11d = (d11d or {}).get("census", {})
+        check("11d a message whose first record is outside --since raises nothing",
+              rc11d == 0 and t11d.get("output") == 300 and t11d.get("cache_creation") == 200
+              and c11d.get("deduped") == 1 and c11d.get("output_raised") == 0,
+              f"rc={rc11d} tokens={t11d} raised={c11d.get('output_raised')}")
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
