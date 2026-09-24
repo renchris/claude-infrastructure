@@ -5,9 +5,11 @@
 # context on every account — main sessions, subagents, workflow agents, headless runs — so a slimmer
 # variant is the largest single token lever on this box, and also the change most able to alter
 # behaviour. It therefore ships behind this switch. An account listed in ~/.claude/instruction-variants
-# reads ~/.claude/CLAUDE.<variant>.md as its CLAUDE.md; every other account keeps the shared file. The
-# config mirror honours the registry (lib/config-mirror.zsh, _cc_instructions_variant_target), so the
-# arm survives the re-point the mirror performs at every session start. A switch reaches NEW sessions
+# reads ~/.claude/CLAUDE.<variant>.md as its CLAUDE.md and ~/.claude/rules.<variant>/ as its rules/
+# (for slim: the compact mission board, and not the rules essay); every other account keeps the shared
+# entries. The config mirror honours the registry (lib/config-mirror.zsh,
+# _cc_instructions_variant_target), so the arm survives the re-point the mirror performs at every
+# session start. A switch reaches NEW sessions
 # only; running sessions keep what they loaded. Every switch is appended to the log, so a census can
 # split sessions by the arm they started under. Design and test plan:
 # docs/research/token-efficiency-2026-09-23/.
@@ -50,6 +52,10 @@ account_dir() {  # <account> → its config dir, or die
   printf '%s\n' "$d"
 }
 
+sha256_16() {  # <file> → first 16 hex of its sha256
+  { shasum -a 256 "$1" 2>/dev/null || sha256sum "$1"; } | cut -c1-16
+}
+
 registered() {  # <dir-basename> → its variant, or nothing
   [ -r "$REG" ] && awk -v a="$1" '$1 == a { print $2; exit }' "$REG" || true
 }
@@ -66,16 +72,19 @@ log_event() {  # <dir-basename> <variant> <action>
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" >> "$LOG"
 }
 
-resync() {  # re-run the mirror for one account (race-safe mode), then read the link back
+resync() {  # <dir> <want CLAUDE.md> <want rules>: re-run the mirror (race-safe mode), read both links back
   zsh -fc "source '$MIRROR'; _cc_sync_config_mirror '$1'" >/dev/null 2>&1 || true
-  local want="$2" got
-  got="$(readlink "$1/CLAUDE.md" 2>/dev/null || true)"
-  if [ "$got" != "$want" ]; then
-    printf 'cc-instructions-variant: %s/CLAUDE.md points at %s, expected %s\n' "${1##*/}" "${got:-nothing}" "$want" >&2
-    exit 1
-  fi
-  printf '%s/CLAUDE.md -> %s (%s bytes). New sessions on this account load it.\n' \
-    "${1##*/}" "${want/#$HOME/\~}" "$(wc -c < "$want" | tr -d ' ')"
+  local entry want got
+  for entry in "CLAUDE.md=$2" "rules=$3"; do
+    want="${entry#*=}"
+    got="$(readlink "$1/${entry%%=*}" 2>/dev/null || true)"
+    if [ "$got" != "$want" ]; then
+      printf 'cc-instructions-variant: %s/%s points at %s, expected %s\n' "${1##*/}" "${entry%%=*}" "${got:-nothing}" "$want" >&2
+      exit 1
+    fi
+  done
+  printf '%s/CLAUDE.md -> %s (%s bytes); rules/ -> %s. New sessions on this account load them.\n' \
+    "${1##*/}" "${2/#$HOME/\~}" "$(wc -c < "$2" | tr -d ' ')" "${3/#$HOME/\~}"
 }
 
 cmd_status() {
@@ -95,6 +104,22 @@ cmd_status() {
   done
   [ "$found" = 1 ] || printf ' (none deployed)'
   printf '\n'
+  # A variant records which CLAUDE.md it was derived from (an HTML comment, which the loader strips,
+  # so it costs no tokens). An operator edit to the full file after that makes the variant STALE: its
+  # arm silently lacks the new rule until the variant is re-derived.
+  local full_h var_h
+  full_h="$(sha256_16 "$SRC/CLAUDE.md")"
+  for f in "$SRC"/CLAUDE.*.md; do
+    [ -f "$f" ] || continue
+    var_h="$(sed -n 's/.*derived-from CLAUDE\.global\.md sha256:\([0-9a-f]\{16\}\).*/\1/p' "$f" | head -1)"
+    if [ -z "$var_h" ]; then
+      printf '  %s: no derived-from record\n' "${f##*/}"
+    elif [ "$var_h" = "$full_h" ]; then
+      printf '  %s: in sync with CLAUDE.md (%s)\n' "${f##*/}" "$full_h"
+    else
+      printf '  %s: STALE, derived from %s but CLAUDE.md is now %s; re-derive the changed sections\n' "${f##*/}" "$var_h" "$full_h"
+    fi
+  done
 }
 
 cmd_set() {
@@ -103,9 +128,15 @@ cmd_set() {
   d="$(account_dir "$1")"
   [[ "$v" =~ ^[a-z0-9-]+$ ]] || die "variant names are [a-z0-9-]+"
   [ -f "$SRC/CLAUDE.$v.md" ] || die "no $SRC/CLAUDE.$v.md — deploy it first (install.sh copies CLAUDE.global.$v.md)"
+  # The arm's rules/ holds only what `cc-mission render` writes there: the compact mission board.
+  # Render now so a session started before the next SessionStart render still gets a board.
+  mkdir -p "$SRC/rules.$v"
+  [ -x "$SRC/bin/cc-mission" ] && "$SRC/bin/cc-mission" render >/dev/null 2>&1 || true
+  [ -f "$SRC/rules.$v/00-mission-board.md" ] \
+    || printf 'cc-instructions-variant: warning: %s has no mission board yet; the next session start renders it\n' "$SRC/rules.$v" >&2
   write_reg "${d##*/}" "$v"
   log_event "${d##*/}" "$v" set
-  resync "$d" "$SRC/CLAUDE.$v.md"
+  resync "$d" "$SRC/CLAUDE.$v.md" "$SRC/rules.$v"
 }
 
 cmd_reset() {
@@ -113,7 +144,7 @@ cmd_reset() {
   local d; d="$(account_dir "$1")"
   write_reg "${d##*/}"
   log_event "${d##*/}" shared reset
-  resync "$d" "$SRC/CLAUDE.md"
+  resync "$d" "$SRC/CLAUDE.md" "$SRC/rules"
 }
 
 case "${1:-status}" in

@@ -15,11 +15,29 @@ setup() {
   MIRROR="$REPO/lib/config-mirror.zsh"
   printf 'full rules\n' > "$HOME/.claude/CLAUDE.md"
   printf 'slim rules\n' > "$HOME/.claude/CLAUDE.slim.md"
+  mkdir -p "$HOME/.claude/rules" "$HOME/.claude/rules.slim"
   REG="$HOME/.claude/instruction-variants"
 }
 
 sync_acct() { zsh -fc "source '$MIRROR'; _cc_sync_config_mirror '$HOME/$1'" 2>/dev/null; }
 target_of() { readlink "$HOME/$1/CLAUDE.md"; }
+rules_of() { readlink "$HOME/$1/rules"; }
+
+@test "a listed account's rules/ points at rules.<variant>; an unlisted one keeps the shared rules/" {
+  printf '.claude-tertiary slim\n' > "$REG"
+  sync_acct .claude-tertiary
+  sync_acct .claude-quaternary
+  [ "$(rules_of .claude-tertiary)" = "$HOME/.claude/rules.slim" ]
+  [ "$(rules_of .claude-quaternary)" = "$HOME/.claude/rules" ]
+}
+
+@test "a variant with no rules.<variant> dir keeps the shared rules/ (and still gets its CLAUDE.md)" {
+  rmdir "$HOME/.claude/rules.slim"
+  printf '.claude-tertiary slim\n' > "$REG"
+  sync_acct .claude-tertiary
+  [ "$(rules_of .claude-tertiary)" = "$HOME/.claude/rules" ]
+  [ "$(target_of .claude-tertiary)" = "$HOME/.claude/CLAUDE.slim.md" ]
+}
 
 @test "an unlisted account's CLAUDE.md points at the shared file" {
   sync_acct .claude-tertiary
@@ -69,7 +87,7 @@ target_of() { readlink "$HOME/$1/CLAUDE.md"; }
   python3 - "$MIRROR" "$mut" <<'EOF'
 import sys
 src = open(sys.argv[1]).read()
-anchor = '[[ "$name" == CLAUDE.md ]] && _cc_instructions_variant_target'
+anchor = '[[ "$name" == CLAUDE.md || "$name" == rules ]] && _cc_instructions_variant_target'
 assert anchor in src, "anchor moved: re-anchor this control on the variant hook"
 open(sys.argv[2], "w").write(src.replace(anchor, '[[ "$name" == NEVER ]] && _cc_instructions_variant_target'))
 EOF
