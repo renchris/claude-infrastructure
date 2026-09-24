@@ -9810,7 +9810,18 @@ recycle_repick() { # $1 = the pane's CURRENT account → replacement account on 
   # here rather than space-stripped, for that reason.
   new="$(printf '%s\n' "$out" | sed -n '1p' | awk '{print $1}')"
   if [ -z "$new" ]; then rm -f "$errf"; return 0; fi
-  if [ "$new" = "$cur" ]; then rm -f "$errf"; return 0; fi
+  # THE RANKING, rendered once for every line below. Without it the announcement named a winner and
+  # an exclusion and left the operator to reconstruct the rest: on 2026-09-24 pane 480 was moved
+  # next → next3 (the FARTHEST weekly reset) and the question that came back was "why not next2 or
+  # next, which expire soonest?". The router had answered it — next was excluded (13 working
+  # sessions against KMAX 8) and next2 scored half of next3 because only 2% of its week was left —
+  # but none of that was on screen. Here-string, not a pipe, for the pipefail reason given below.
+  local ranked
+  ranked="$(awk 'NR<=4 && NF>=2 {printf "%s%s %s", (NR>1 ? " > " : ""), $1, $2}' <<<"$out")"
+  if [ "$new" = "$cur" ]; then
+    echo "♻ recycle stays on $cur — the router's own top pick (ranked: ${ranked:-?})" >&2
+    rm -f "$errf"; return 0
+  fi
   # `claude-accounts: general excluded — next3=kmax-concurrency; next=5h-cutoff`. The prefix is
   # stripped by SHAPE rather than by the literal separator, so the em-dash never has to survive a
   # round trip through this file to keep the parse working. `sed -n '1p'` and not `head -1`:
@@ -9849,8 +9860,8 @@ recycle_repick() { # $1 = the pane's CURRENT account → replacement account on 
   # a non-numeric score — resolves to no re-pick, because the alternative to a re-pick is not a
   # failure, it is today's byte-identical relaunch. Only an affirmative, measured, above-threshold
   # ratio moves a pane.
+  local rr="$rr_raw" cur_s="" best_s="" why
   if [ -z "$reason" ]; then
-    local rr="$rr_raw" cur_s best_s
     # `off` is the router's kill switch and lands here as a non-numeric, which this guard rejects
     # along with a missing field and a typo. All three mean v1.
     case "$rr" in ''|*[!0-9.]*) return 0 ;; esac
@@ -9872,8 +9883,14 @@ recycle_repick() { # $1 = the pane's CURRENT account → replacement account on 
       BEGIN {
         if (c + 0 <= 0) { exit (b + 0 > 0) ? 0 : 1 }
         exit ((b + 0) / (c + 0) >= r + 0) ? 0 : 1
-      }' || return 0
+      }' || {
+      echo "♻ recycle stays on $cur — routable, and $new ($best_s) does not beat its $cur_s by the router's ${rr}x threshold (ranked: ${ranked:-?})" >&2
+      return 0
+    }
     echo "⚠ recycle re-pick on PRESSURE: $cur scores $cur_s against $new at $best_s (router threshold ${rr}x) — moving this pane" >&2
+    why="$cur is routable but outscored: $cur_s against $new's $best_s, at or over the router's ${rr}x threshold"
+  else
+    why="$cur is NOT routable ($reason)"
   fi
   # SSOT check, not a naming one: launcher_for()/cfg_dir() below will HALT the fire on an account
   # the generated map does not declare (`!! unknown account`), which would turn a routing nicety
@@ -9907,7 +9924,27 @@ recycle_repick() { # $1 = the pane's CURRENT account → replacement account on 
   if [ "${DRY:-0}" = 0 ]; then
     "$bin" --assign "$new" --src recycle-repick >/dev/null 2>&1 || true
   fi
-  echo "♻ recycle RE-PICK: $cur → $new — $cur is NOT routable ($reason); router: claude-accounts --route general (kill switch: CC_RECYCLE_REPICK=off)" >&2
+  # The whole decision on one line: why the incumbent lost, the ranking the winner came from, and
+  # every exclusion — so "why not the soonest-expiring account?" is answered where it is asked.
+  # The score's shape is named because it is the non-obvious part: M7 divides weekly headroom by
+  # hours-to-reset SQUARED, so an account whose week ends soonest still loses when little of that
+  # week is left to burn (next2 at 98% used, 2026-09-24).
+  echo "♻ recycle RE-PICK: $cur → $new — $why · ranked: ${ranked:-?} · excluded: ${exline:-none} · score = weekly headroom ÷ hours-to-reset² × 5h/concurrency factors (router: claude-accounts --rank general; kill switch: CC_RECYCLE_REPICK=off)" >&2
+  # …and ON DISK, because the line above is written into a pane that is about to exit: the recycle
+  # kills the very session whose tool call would have recorded it, so the announcement reached no
+  # transcript and the 2026-09-24 move had to be reconstructed from the utilization series. A dry
+  # run records nothing, as it charges nothing. Advisory, like the --assign above.
+  if [ "${DRY:-0}" = 0 ] && [ "${CC_FIRE_REFUSAL_LOG:-1}" != 0 ] && command -v jq >/dev/null 2>&1 \
+     && mkdir -p "$HOME/.claude/logs" 2>/dev/null; then
+    jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg f "$cur" --arg t "$new" \
+           --arg b "$([ -n "$reason" ] && echo excluded || echo pressure)" --arg w "$why" \
+           --arg rk "$ranked" --arg ex "$exline" --arg rr "$rr" --arg p "${SID:-}" \
+      '{ts:$ts, class:"recycle-repick", gate:"recycle", from:$f, to:$t, basis:$b, why:$w,
+        ranked:$rk, excluded:(if $ex == "" then null else $ex end),
+        repick_ratio:(if $rr == "" then null else $rr end),
+        target_pane:(if $p == "" then null else $p end)}' \
+      >> "$HOME/.claude/logs/handoffs.jsonl" 2>/dev/null || true
+  fi
   printf '%s\n' "$new"
 }
 
