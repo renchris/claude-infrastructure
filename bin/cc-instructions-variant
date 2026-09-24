@@ -44,7 +44,7 @@ account_dir() {  # <account> → its config dir, or die
     .claude-*) d="$HOME/$a" ;;
     "$HOME"/.claude-*) d="$a" ;;
     *) [ -r "$SRC/accounts.json" ] && d="$(jq -r --arg a "$a" \
-         '.accounts[]? | select(.name == $a) | .config_dir // empty' "$SRC/accounts.json" 2>/dev/null | head -1)"
+         '.accounts[]? | select(.name == $a) | .config_dir // empty' "$SRC/accounts.json" 2>/dev/null | awk 'NR<=1')"
        d="${d/#\~/$HOME}" ;;
   esac
   [ -n "$d" ] && [ -d "$d" ] && [ "$d" != "$SRC" ] \
@@ -111,7 +111,7 @@ cmd_status() {
   full_h="$(sha256_16 "$SRC/CLAUDE.md")"
   for f in "$SRC"/CLAUDE.*.md; do
     [ -f "$f" ] || continue
-    var_h="$(sed -n 's/.*derived-from CLAUDE\.global\.md sha256:\([0-9a-f]\{16\}\).*/\1/p' "$f" | head -1)"
+    var_h="$(sed -n 's/.*derived-from CLAUDE\.global\.md sha256:\([0-9a-f]\{16\}\).*/\1/p' "$f" | awk 'NR<=1')"
     if [ -z "$var_h" ]; then
       printf '  %s: no derived-from record\n' "${f##*/}"
     elif [ "$var_h" = "$full_h" ]; then
