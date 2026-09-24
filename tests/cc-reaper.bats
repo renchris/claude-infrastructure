@@ -1602,7 +1602,7 @@ mk_garbage_fixtures() {
   GA="$D/gs_ps_a.txt"; GB="$D/gs_ps_b.txt"; KLOG="$D/gs_kills.log"
   cat > "$D/gs-killer" <<'EOF'
 #!/bin/bash
-printf '%s %s %s\n' "$3" "$1" "$2" >> "$KILL_LOG"
+printf '%s %s %s %s\n' "$3" "$1" "$2" "$4" >> "$KILL_LOG"
 EOF
   chmod +x "$D/gs-killer"
   mkdir -p "$D/gs-wd"
@@ -1745,6 +1745,79 @@ EOF
   # 90201 is whitelisted THROUGH its bound and must survive; 90202 (same shape, unwhitelisted
   # payload) and 90203 (a bare tool) are the controls that prove the arm still collects.
   [ "$got" = "90202 90203 " ]
+}
+
+# ── ARGV-MISS: AN UNREADABLE ARGV IS UNKNOWN, NEVER "MATCHES NO WHITELIST ENTRY" (2026-09-24). The
+# classifier reads comm/ppid/etime from snapshot A and argv from a SEPARATE snapshot B; a pid B does
+# not show had args "", which matches no whitelist entry, so it was TERMed as `orphan-bash` with
+# argv signature `-` — and `-` opted the kill-time argv check out too. Live: 27 of 32 orphan-bash
+# TERMs on 2026-09-24Z logged argv=<->, among them reso's scheduled postland verifier. Each case
+# below is a closed world: PS_A carries the process, PS_B (the snapshot) misses it, and PS_B2 is
+# what the per-pid RE-READ sees — so the re-read never touches the live process table.
+@test "garbage argv-miss: a whitelisted daemon whose argv the snapshot missed is SKIPPED and logged, never TERMed" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90301 1 45:00 bash
+90302 1 45:00 bash
+EOF
+  # snapshot B saw only the control; the whitelisted verifier (90301) is missing from it entirely
+  cat > "$GB" <<'EOF'
+90302 /bin/bash /Users/x/some/unrelated/orphan.sh
+EOF
+  # and the re-read cannot see it either (argv unreadable twice)
+  cp "$GB" "$D/gs_ps_b2.txt"; export CC_REAPER_GARBAGE_PS_B2="$D/gs_ps_b2.txt"
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  # the control fired, so the fixture reaches the actuator; the argv-miss pid did not.
+  [ "$got" = "90302 " ] || { echo "TERM set: <$got> (want 90302 only)"; cat "$D/reaper.log"; return 1; }
+  grep -q 'garbage: SKIP orphan-bash pid=90301 .*argv unreadable' "$D/reaper.log" || {
+    echo "argv-miss pid 90301 was not logged as skipped"; cat "$D/reaper.log"; return 1; }
+}
+
+@test "garbage argv-miss: a pid that raced the snapshot is re-read, and its whitelist entry protects it" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90311 1 45:00 bash
+90312 1 20:00 timeout
+EOF
+  : > "$GB"                                     # the whole-box case: snapshot B came back empty
+  cat > "$D/gs_ps_b2.txt" <<'EOF'
+90311 /bin/bash /Users/x/Development/reso-management-app/scripts/postland-verify.sh --scheduled
+90312 /opt/homebrew/bin/timeout -k 10 900 bash /Users/x/.claude/scripts/postland-verify.sh
+EOF
+  export CC_REAPER_GARBAGE_PS_B2="$D/gs_ps_b2.txt"
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  [ ! -s "$KLOG" ] || { echo "a whitelisted daemon was signalled after its argv was re-read:"; cat "$KLOG"; return 1; }
+  grep -q 'garbage: SKIP orphan-bash pid=90311 .*whitelisted on argv re-read' "$D/reaper.log"
+  grep -q 'garbage: SKIP orphan-tool pid=90312 .*whitelisted on argv re-read' "$D/reaper.log"
+  grep -q 'garbage: argv snapshot EMPTY' "$D/reaper.log"
+}
+
+@test "garbage argv-miss: the reaper keeps its job — readable non-whitelisted orphans still die, and carry their argv" {
+  mk_garbage_fixtures
+  cat > "$GA" <<'EOF'
+90321 1 45:00 bash
+90322 1 45:00 bash
+EOF
+  # 90321: readable in the snapshot, not whitelisted — the ordinary orphan-bash reap.
+  cat > "$GB" <<'EOF'
+90321 /bin/bash /Users/x/some/unrelated/orphan.sh
+EOF
+  # 90322: missed by the snapshot, readable on re-read, not whitelisted — reaped, with its REAL argv.
+  cat > "$D/gs_ps_b2.txt" <<'EOF'
+90321 /bin/bash /Users/x/some/unrelated/orphan.sh
+90322 /bin/bash /Users/x/another/dead/loop.sh
+EOF
+  export CC_REAPER_GARBAGE_PS_B2="$D/gs_ps_b2.txt"
+  run "$R" garbage --reap
+  [ "$status" -eq 0 ]
+  got="$(awk '$1=="TERM"{print $2}' "$KLOG" | sort -n | tr '\n' ' ')"
+  [ "$got" = "90321 90322 " ] || { echo "TERM set: <$got>"; cat "$D/reaper.log"; return 1; }
+  # the actuator received the RE-READ argv as its signature, never the opt-out `-`
+  awk '$1=="TERM" && $2==90322' "$KLOG" | grep -q 'loop.sh'
+  ! grep -q 'argv=<->' "$D/reaper.log"
 }
 
 # ── THE CLOUD LAND PATH WAS THE THIRD SPELLING (2026-09-01). The two fixes above named the land

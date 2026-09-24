@@ -693,11 +693,40 @@ _gs_escalation_alive() { # <pid> — did this pid survive the TERM? rc 0 = still
   fi
   kill -0 "$1" 2>/dev/null
 }
+# ── AN UNREADABLE ARGV IS UNKNOWN, NEVER "MATCHES NO WHITELIST ENTRY" (2026-09-24). The classifier
+# reads comm/ppid/etime from snapshot A and argv from a SEPARATE snapshot B. A pid present in A but
+# absent from B had args = "", and "" matches no whitelist entry — so every launchd-parented bash
+# older than 600 s became `orphan-bash` with argv signature `-`, and `-` then opted the kill-time
+# argv check out. The whitelist was bypassed exactly when it could not be read. Measured in
+# cc-reaper.log: 27 of 32 orphan-bash TERMs on 2026-09-24Z so far, 46 of 111 on 09-23, 98 of 150 on
+# 09-22 logged argv=<->, clustered per sweep (00:52:57Z: 19 candidates, all argv-miss) — the shape of
+# a snapshot B that came back empty or truncated under load, blinding the whitelist for the whole
+# box at once. Victims included reso's first scheduled postland verifier (pid 71173, 00:49:03Z),
+# whose kill then stamped a reso commit RED: a wrong reap corrupts another system's verdict store.
+# The fix is the default, never the list: a candidate whose argv the snapshot missed is re-read ONCE
+# per pid (a pid can race the snapshot); still unreadable ⇒ SKIPPED and logged, readable ⇒ the
+# whitelist is applied to what was read before anything is signalled. `_gs_verify_kill` refuses an
+# unobserved argv as a belt. Pinned in tests/cc-reaper.bats ("argv-miss").
+GARBAGE_WL="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|kitty|tmux|iTerm|launchd"
+_gs_argv_reread() { # <pid> → that pid's argv on stdout, "" when unreadable. Under the fixture seam it
+                    # reads CC_REAPER_GARBAGE_PS_B2 (else PS_B again), never the live process table.
+  local pid="$1" f
+  if [ -n "${CC_REAPER_GARBAGE_PS_A:-}" ] && [ -n "${CC_REAPER_GARBAGE_PS_B:-}" ]; then
+    f="${CC_REAPER_GARBAGE_PS_B2:-$CC_REAPER_GARBAGE_PS_B}"
+    /usr/bin/awk -v p="$pid" '$1==p { a=$2; for(i=3;i<=NF;i++) a=a" "$i; print a; exit }' "$f" 2>/dev/null
+    return 0
+  fi
+  /bin/ps -p "$pid" -o args= 2>/dev/null | sed 's/^ *//;s/ *$//'
+}
 _gs_verify_kill() { # <pid> <ucomm-ere> <TERM|KILL> [<argv-signature>] [<born-by-epoch>] — re-verify
                     # comm, argv AND start time, then signal. rc 0 = signalled.
   local pid="$1" re="$2" sig="$3" argsig="${4:--}" born="${5:--}" c a e s now
   if _gs_is_ancestor "$pid"; then
     log "garbage: REFUSED $sig $pid — this sweep is running inside it (ancestor)"
+    return 1
+  fi
+  if [ "$argsig" = "-" ]; then
+    log "garbage: REFUSED $sig $pid — its argv was never observed, so it cannot be told from a whitelisted daemon"
     return 1
   fi
   if [ -n "${CC_REAPER_GARBAGE_KILL:-}" ]; then "$CC_REAPER_GARBAGE_KILL" "$pid" "$re" "$sig" "$argsig" "$born"; return $?; fi
@@ -795,8 +824,8 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
     return 0
   fi
   _gs_switch_on_clear "${1:-0}"
-  local reap="${1:-0}" snapA snapB list cls pid re age argsig desc pin
-  local nA=0 nkill=0
+  local reap="${1:-0}" snapA snapB list cls pid re age argsig desc pin ra
+  local nA=0 nkill=0 nskip=0
   _GS_T_PID=(); _GS_T_RE=(); _GS_T_SIG=(); _GS_T_PIN=()
   _gs_ancestors_init
   if [ -n "${CC_REAPER_GARBAGE_PS_A:-}" ] && [ -n "${CC_REAPER_GARBAGE_PS_B:-}" ]; then
@@ -809,8 +838,11 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
     snapB="$(_rp_bounded "${CC_REAPER_GARBAGE_PS_TIMEOUT_S:-30}" /bin/ps -Axo pid=,args= 2>/dev/null)" || snapB=""
   fi
   [ -n "$snapA" ] || { log "garbage: snapshot unavailable — arm skipped (fail-open)"; return 0; }
+  # An empty argv snapshot beside a full process snapshot is the whole-box argv-miss: say so, once,
+  # so the per-pid SKIP lines below have a cause on record.
+  [ -n "$snapB" ] || log "garbage: argv snapshot EMPTY — every argv-dependent candidate is re-read per pid, and skipped if still unreadable"
   # One awk, both snapshots: emits `class<TAB>pid<TAB>ucomm-ERE<TAB>age<TAB>desc` per candidate.
-  list="$(printf '%s\n===CUT===\n%s\n' "$snapA" "$snapB" | awk '
+  list="$(printf '%s\n===CUT===\n%s\n' "$snapA" "$snapB" | awk -v wl="$GARBAGE_WL" '
     # asig(pid) — the argv signature the kill-time re-identification checks against (see
     # _gs_verify_kill). Tabs are the field separator, so any in argv are folded to spaces; an
     # unobserved argv yields "-", which opts that candidate out rather than refusing it.
@@ -875,7 +907,8 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
       # killed pages nobody. Pinned as a fixture pair in tests/cc-reaper.bats.
       # NOTE TO A FUTURE EDITOR: this comment block sits INSIDE a single-quoted awk program. No
       # apostrophes, and no single quotes of any kind, may appear below this line in the block.
-      wl="lead-supervisor|cc-dispatch|cc-discover|cc-reaper|qos-census|compressor-sentinel|postland-verify|session-search|devserver-gc|deploy-live|cc-relogin|lr-reset-poller|teammate-reap|capacity-alarm|power-policy|log-rotation|restic|worktree-gc|caffeinate|cc-await-ping|mailbox-wake-arm|ship-land|desk-land|cloud-return|cloud-reconcile|nightly-regression|kitty|tmux|iTerm|launchd"
+      # The whitelist wl arrives via -v from GARBAGE_WL, so the shell can re-apply it to an argv it
+      # re-reads for a candidate this snapshot could not see (the argv-miss gate in the loop below).
       for (p in comm) {
         if (p in above) continue
         if (comm[p]=="claude.exe") continue
@@ -959,6 +992,30 @@ garbage_sweep() { # <reap:0|1> — reap the residue of dead sessions; see block 
     nA=$((nA+1))
     pin="-"
     case "$age:$_GS_SNAP_T" in *[!0-9:]*|:*|*:) : ;; *) pin=$(( _GS_SNAP_T - age )) ;; esac
+    # THE ARGV-MISS GATE (see GARBAGE_WL). `-` means snapshot B never showed this pid an argv, so the
+    # classifier's whitelist test ran against "" and proved nothing. Re-read once; unreadable ⇒ skip.
+    if [ "$argsig" = "-" ]; then
+      case "$cls" in
+        orphan-ps|orphan-tool|orphan-bash)
+          ra="$(_gs_argv_reread "$pid")"
+          if [ -z "$ra" ]; then
+            nskip=$((nskip+1))
+            log "garbage: SKIP $cls pid=$pid age=${age}s — argv unreadable in the snapshot AND on re-read: UNKNOWN, not reaped"
+            [ "$reap" = 1 ] || say "  garbage (SKIPPED — argv unreadable): $cls pid=$pid age=${age}s"
+            continue
+          fi
+          if [ "$cls" != orphan-ps ] && { printf '%s\n' "$ra" | /usr/bin/grep -qE "($GARBAGE_WL)" \
+               || { [ "$cls" = orphan-bash ] && case "$ra" in *lead-crash-watchdog*) true ;; *) false ;; esac; }; }; then
+            nskip=$((nskip+1))
+            log "garbage: SKIP $cls pid=$pid age=${age}s — whitelisted on argv re-read: <$(printf '%s' "$ra" | cut -c1-120)>"
+            [ "$reap" = 1 ] || say "  garbage (SKIPPED — whitelisted on re-read): $cls pid=$pid age=${age}s"
+            continue
+          fi
+          argsig="$(printf '%s' "$ra" | tr '\t' ' ' | cut -c1-120)"
+          [ "$cls" = orphan-bash ] && desc="$(printf '%s' "$ra" | cut -c1-80)"
+          ;;
+      esac
+    fi
     if [ "$reap" = 1 ]; then
       # PER-CANDIDATE, ON THE PATH THAT ACTS. The reap branch used to log only the aggregate
       # (`garbage: N candidates, M TERMed`), so `grep orphan-bash` over 4.4 MB of live reaper log
@@ -992,7 +1049,7 @@ EOF_GS
       i=$((i+1))
     done
   fi
-  log "garbage: $nA candidates, $nkill TERMed ($([ "$reap" = 1 ] && echo REAP || echo DRY-RUN))"
+  log "garbage: $nA candidates, $nkill TERMed, $nskip skipped ($([ "$reap" = 1 ] && echo REAP || echo DRY-RUN))"
   say "garbage arm: $nA candidates, $nkill reaped"
   return 0
 }
