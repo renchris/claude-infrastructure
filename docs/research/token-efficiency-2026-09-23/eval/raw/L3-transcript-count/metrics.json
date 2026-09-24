@@ -1,0 +1,70 @@
+[
+  {
+    "run": 1,
+    "arm": "general-purpose",
+    "rc": 0,
+    "parent_cost_usd": 1.058182,
+    "session_id": "b5415879-48de-4773-bf7f-df84763240bd",
+    "subagent_files": [
+      "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-lean-L3-transcript-count-run-1/b5415879-48de-4773-bf7f-df84763240bd/subagents/agent-ab6c4593345935a06.jsonl"
+    ],
+    "first_prefix": 70620,
+    "input": 10,
+    "cache_creation": 68336,
+    "cache_read": 296374,
+    "output": 1868,
+    "responses": 5,
+    "tool_errors": 0
+  },
+  {
+    "run": 2,
+    "arm": "workflow-lean",
+    "rc": 0,
+    "parent_cost_usd": 0.6891560000000001,
+    "session_id": "d713de0c-e6cb-472a-b2e9-74a73eb466cd",
+    "subagent_files": [
+      "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-lean-L3-transcript-count-run-2/d713de0c-e6cb-472a-b2e9-74a73eb466cd/subagents/agent-ac031abe4109794f5.jsonl"
+    ],
+    "first_prefix": 5241,
+    "input": 8,
+    "cache_creation": 8264,
+    "cache_read": 20463,
+    "output": 1330,
+    "responses": 4,
+    "tool_errors": 1
+  },
+  {
+    "run": 3,
+    "arm": "workflow-lean",
+    "rc": 0,
+    "parent_cost_usd": 0.6715378000000001,
+    "session_id": "e7e04c4f-1528-44ab-a06a-f5f75541017d",
+    "subagent_files": [
+      "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-lean-L3-transcript-count-run-3/e7e04c4f-1528-44ab-a06a-f5f75541017d/subagents/agent-aa509142cbc4e427c.jsonl"
+    ],
+    "first_prefix": 5241,
+    "input": 8,
+    "cache_creation": 3794,
+    "cache_read": 25143,
+    "output": 1476,
+    "responses": 4,
+    "tool_errors": 1
+  },
+  {
+    "run": 4,
+    "arm": "general-purpose",
+    "rc": 0,
+    "parent_cost_usd": 1.0293766000000002,
+    "session_id": "5fd85295-0138-4f7e-95f3-04904db7ee89",
+    "subagent_files": [
+      "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-lean-L3-transcript-count-run-4/5fd85295-0138-4f7e-95f3-04904db7ee89/subagents/agent-a0bab2971dd8ea4dc.jsonl"
+    ],
+    "first_prefix": 70620,
+    "input": 8,
+    "cache_creation": 67819,
+    "cache_read": 222851,
+    "output": 1395,
+    "responses": 4,
+    "tool_errors": 0
+  }
+]

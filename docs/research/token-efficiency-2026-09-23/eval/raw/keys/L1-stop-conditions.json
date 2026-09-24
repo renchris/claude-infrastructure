@@ -1,0 +1,9 @@
+{
+ "item": "L1-stop-conditions",
+ "dossiers": {
+  "dossier-1.md": "general-purpose",
+  "dossier-2.md": "workflow-lean",
+  "dossier-3.md": "workflow-lean",
+  "dossier-4.md": "general-purpose"
+ }
+}

@@ -1,0 +1,9 @@
+{
+  "pilot": "L3-transcript-count",
+  "arms": {
+    "1": "general-purpose",
+    "2": "workflow-lean",
+    "3": "workflow-lean",
+    "4": "general-purpose"
+  }
+}

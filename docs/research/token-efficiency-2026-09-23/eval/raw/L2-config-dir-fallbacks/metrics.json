@@ -1,0 +1,82 @@
+[
+  {
+    "run": 1,
+    "arm": "general-purpose",
+    "rc": 0,
+    "parent_cost_usd": 1.2716387999999996,
+    "session_id": "33481e27-b642-4469-bd2b-73fe14291028",
+    "parent_result": "The answer is at /tmp/tokeff-eval/lean/L2-config-dir-fallbacks/out-1/answer.md.\n\n**Total: 153 expansions of `${CLAUDE_CONFIG_DIR:-\u2026}`, one per line, across 74 files.** 113 are in `hooks/` and 40 are in `bin/`. Every one uses the `:-` form; none use `:=`, `-` or `=`.\n\n| Fallback value | Count |\n|---|---|\n| `$HOME/.claude` | 137 |\n| empty (`${CLAUDE_CONFIG_DIR:-}`) | 7 |\n| `${HOME:-}/.claude` (nested) | 6 |\n| `~/.claude` (literal tilde) | 3 |\n\n- **Nested `${HOME:-}/.claude` (6):** `bin/cc-resume-layout.sh:64,88`, `bin/it2-kitty:102,130`, `bin/it2-wrapper:182`, `bin/kitty-split-launch.sh:85`.\n- **Empty fallback (7):** `hooks/completion-assert.sh:410`, `hooks/config-mirror-assert.sh:9`, `hooks/lib/agent-identity.sh:107`, `hooks/lib/read-before-write-parity.sh:141`, `hooks/lib/session-busy.sh:111`, `hooks/push-critical.sh:28`, `hooks/teammate-auto-shutdown.sh:118`.\n- **`~/.claude` (3):** `hooks/lib/continue-sentinel.sh:7`, `hooks/session-continue.sh:20`, `hooks/session-save-id.sh:3`. A tilde is not expanded if the result is used inside quotes. I didn't check how these three are used.\n\nThe file lists all 153 as file:line with the fallback value. It also lists 5 Python fallbacks separately and leaves them out of the count, since they aren't `${\u2026}` expansions: `os.environ.get(\"CLAUDE_CONFIG_DIR\") or/, \u2026` in `hooks/lib/smart-bash-allowlist.py:434`, `bin/claude-accounts:4253`, `bin/cc-permission-harvest:95`, `bin/kitty-pane-menu:122` and `bin/cc-permission-audit:53`. Comments and plain `CLAUDE_CONFIG_DIR=` assignments are excluded.",
+    "parent_transcript": "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-lean-L2-config-dir-fallbacks-run-1/33481e27-b642-4469-bd2b-73fe14291028.jsonl",
+    "subagent_transcripts": [
+      "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-lean-L2-config-dir-fallbacks-run-1/33481e27-b642-4469-bd2b-73fe14291028/subagents/agent-acc13c8a34b0914e9.jsonl"
+    ],
+    "first_prefix": 70685,
+    "input": 16,
+    "cache_creation": 86196,
+    "cache_read": 567713,
+    "output": 4548,
+    "responses": 8,
+    "tool_errors": 0,
+    "tool_calls": 7
+  },
+  {
+    "run": 2,
+    "arm": "workflow-lean",
+    "rc": 0,
+    "parent_cost_usd": 0.8710116000000001,
+    "session_id": "4df077d2-42af-4b88-83c8-40fe387b9ac1",
+    "parent_result": "The answer is in /tmp/tokeff-eval/lean/L2-config-dir-fallbacks/out-2/answer.md. There are **150** places in shell code under hooks/ and bin/ that expand CLAUDE_CONFIG_DIR with a default fallback. I counted them with a perl scan of every file under both directories that mentions the variable, and each one is on its own file:line.\n\nThe file has a numbered table giving the file:line and fallback value for all 150. By fallback value (counted by the same scan):\n- **`$HOME/.claude`:** 137\n- **`${HOME:-}/.claude`:** 6, in bin/it2-kitty, bin/it2-wrapper, bin/kitty-split-launch.sh and bin/cc-resume-layout.sh\n- **Empty, written `${CLAUDE_CONFIG_DIR:-}`:** 7. These only stop an unset variable from being an error; they don't supply a real default path. Examples are hooks/config-mirror-assert.sh:9 and hooks/push-critical.sh:28.\n\nAll 150 use the `:-` form; the scan found no `-`, `:=` or `=` forms. Some are nested inside another variable's default, for example `${SUBAGENT_STOP_STATE:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/...}`. I counted those. bin/cc-husk-sweep:71 sits inside a quoted string that spans several lines, but it is still a real expansion and is counted.\n\n**Left out of the 150, but listed separately in the file:**\n- **In comments only (3), fallback `~/.claude`:** hooks/session-continue.sh:20, hooks/session-save-id.sh:3 and hooks/lib/continue-sentinel.sh:7. Counting them would make 153.\n- **Python code with the same effect but not the `${...:-...}` form (5):** hooks/lib/smart-bash-allowlist.py:434, bin/cc-permission-harvest:95, bin/cc-permission-audit:53, bin/claude-accounts:4253 and bin/kitty-pane-menu:122. Each defaults to about `~/.claude`.\n- **No default:** bin/cc-agent-harvest:72 reads the variable without one.\n\nI didn't change anything in the repository. The only file I created is answer.md; the scan's working data went to /tmp/ccd.tsv.",
+    "parent_transcript": "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-lean-L2-config-dir-fallbacks-run-2/4df077d2-42af-4b88-83c8-40fe387b9ac1.jsonl",
+    "subagent_transcripts": [
+      "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-lean-L2-config-dir-fallbacks-run-2/4df077d2-42af-4b88-83c8-40fe387b9ac1/subagents/agent-ab9b6a829cb6aba86.jsonl"
+    ],
+    "first_prefix": 5306,
+    "input": 14,
+    "cache_creation": 23303,
+    "cache_read": 133398,
+    "output": 4594,
+    "responses": 7,
+    "tool_errors": 0,
+    "tool_calls": 6
+  },
+  {
+    "run": 3,
+    "arm": "workflow-lean",
+    "rc": 0,
+    "parent_cost_usd": 0.8610089999999999,
+    "session_id": "3c109412-989e-4763-ae33-5630794c1f2c",
+    "parent_result": "The full answer is in /tmp/tokeff-eval/lean/L2-config-dir-fallbacks/out-3/answer.md. It has a table with all 150 file:line entries and the fallback value for each, sorted by path.\n\nTotals (measured with `grep -RnoE '\\$\\{CLAUDE_CONFIG_DIR:?[-=+?]...\\}' hooks bin`, then each hit's line checked for a leading `#`):\n- **143 expansions have a real default, across 69 files.** Both forms below fall back to `~/.claude`:\n  - 137 are `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`\n  - 6 are `${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}`, a form that works under `set -u`. They are in `bin/it2-kitty`, `bin/kitty-split-launch.sh`, `bin/cc-resume-layout.sh` and `bin/it2-wrapper`.\n- **7 are `${CLAUDE_CONFIG_DIR:-}`, with an empty fallback.** These only stop `set -u` from failing and give no real default.\n- **150 in all, across 74 files.** No line has more than one.\n- No `:=`, `:+`, `:?` or colon-less `-` forms appear.\n\nLeft out of the counts, and listed separately in the file:\n- **Comments:** 3 lines only mention `${CLAUDE_CONFIG_DIR:-~/.claude}` in a comment: `hooks/session-save-id.sh:3`, `hooks/session-continue.sh:20` and `hooks/lib/continue-sentinel.sh:7`.\n- **Python:** 3 places give a `~/.claude` fallback in Python rather than with `${...}`: `bin/kitty-pane-menu:122` and `bin/cc-permission-harvest:95`, plus `hooks/lib/smart-bash-allowlist.py:434`, which uses `or`.\n\nI only read the repo. The only thing I wrote is answer.md; I deleted my two temporary working files in out-3 afterwards.",
+    "parent_transcript": "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-lean-L2-config-dir-fallbacks-run-3/3c109412-989e-4763-ae33-5630794c1f2c.jsonl",
+    "subagent_transcripts": [
+      "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-lean-L2-config-dir-fallbacks-run-3/3c109412-989e-4763-ae33-5630794c1f2c/subagents/agent-a4405b0905213dade.jsonl"
+    ],
+    "first_prefix": 5306,
+    "input": 12,
+    "cache_creation": 23521,
+    "cache_read": 108450,
+    "output": 4482,
+    "responses": 6,
+    "tool_errors": 0,
+    "tool_calls": 5
+  },
+  {
+    "run": 4,
+    "arm": "general-purpose",
+    "rc": 0,
+    "parent_cost_usd": 1.0843652,
+    "session_id": "03ebb0a4-d07f-4063-924d-a440bdc9b92a",
+    "parent_result": "The answer is written to /tmp/tokeff-eval/lean/L2-config-dir-fallbacks/out-4/answer.md\n\nThere are 153 shell expansions of `CLAUDE_CONFIG_DIR` with a default fallback, spread across 74 files under `hooks/` and `bin/`. The file lists each one by file:line with its fallback value. If two sit on the same line, each gets its own row.\n\n| Fallback value | Count |\n|---|---|\n| `$HOME/.claude` | 137 |\n| empty (`${CLAUDE_CONFIG_DIR:-}`) | 13 |\n| `~/.claude` | 3 |\n\n- **Python case:** there is also one fallback that isn't shell syntax. `bin/kitty-pane-menu:122` uses `os.environ.get(\"CLAUDE_CONFIG_DIR\", os.path.expanduser(\"~/.claude\"))`. It is listed separately in the file, so the total is 154 if you count it.\n- **Forms checked:** the search covered `:-`, `-` and `:=`. None of the fallbacks contains a nested `${...}`.\n\nNothing was modified.",
+    "parent_transcript": "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-lean-L2-config-dir-fallbacks-run-4/03ebb0a4-d07f-4063-924d-a440bdc9b92a.jsonl",
+    "subagent_transcripts": [
+      "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-lean-L2-config-dir-fallbacks-run-4/03ebb0a4-d07f-4063-924d-a440bdc9b92a/subagents/agent-af298e40bb6097e32.jsonl"
+    ],
+    "first_prefix": 70685,
+    "input": 10,
+    "cache_creation": 69336,
+    "cache_read": 298064,
+    "output": 2704,
+    "responses": 5,
+    "tool_errors": 0,
+    "tool_calls": 4
+  }
+]

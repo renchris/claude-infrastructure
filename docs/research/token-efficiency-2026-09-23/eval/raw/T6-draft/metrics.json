@@ -1,0 +1,94 @@
+{
+  "run-1": {
+    "run": "run-1",
+    "arm": "full",
+    "rc": 0,
+    "cost_usd": 0.5841206,
+    "input": 2,
+    "cache_creation": 72003,
+    "cache_read": 10343,
+    "output": 301,
+    "turns": 1,
+    "duration_ms": 14423,
+    "duration_s": 14.4,
+    "wall_s": 17,
+    "is_error": false,
+    "tool_errors": 0,
+    "hook_blocks": 0,
+    "stop_hook_feedback": 0,
+    "session_id": "6ff8e73a-7e6b-4392-b09f-d56765cfce82",
+    "transcripts": [
+      "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-tasks-T6-draft-fx-1/6ff8e73a-7e6b-4392-b09f-d56765cfce82.jsonl"
+    ],
+    "tool_calls": 0
+  },
+  "run-2": {
+    "run": "run-2",
+    "arm": "slim",
+    "rc": 0,
+    "cost_usd": 0.46630119999999997,
+    "input": 6,
+    "cache_creation": 52541,
+    "cache_read": 123846,
+    "output": 1059,
+    "turns": 4,
+    "duration_ms": 31425,
+    "duration_s": 31.4,
+    "wall_s": 36,
+    "is_error": false,
+    "tool_errors": 0,
+    "hook_blocks": 0,
+    "stop_hook_feedback": 0,
+    "session_id": "89c8506c-6a1f-4127-91a1-7d2350c7f9cd",
+    "transcripts": [
+      "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-tasks-T6-draft-fx-2/89c8506c-6a1f-4127-91a1-7d2350c7f9cd.jsonl"
+    ],
+    "tool_calls": 2
+  },
+  "run-3": {
+    "run": "run-3",
+    "arm": "slim",
+    "rc": 0,
+    "cost_usd": 0.4704566,
+    "input": 6,
+    "cache_creation": 52541,
+    "cache_read": 123823,
+    "output": 1267,
+    "turns": 4,
+    "duration_ms": 32251,
+    "duration_s": 32.3,
+    "wall_s": 36,
+    "is_error": false,
+    "tool_errors": 0,
+    "hook_blocks": 0,
+    "stop_hook_feedback": 0,
+    "session_id": "6f8104d4-de6f-4d85-807b-d4f25474c657",
+    "transcripts": [
+      "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-tasks-T6-draft-fx-3/6f8104d4-de6f-4d85-807b-d4f25474c657.jsonl"
+    ],
+    "tool_calls": 2
+  },
+  "run-4": {
+    "run": "run-4",
+    "arm": "full",
+    "rc": 0,
+    "cost_usd": 0.6579224,
+    "input": 4,
+    "cache_creation": 78191,
+    "cache_read": 92692,
+    "output": 692,
+    "turns": 3,
+    "duration_ms": 19446,
+    "duration_s": 19.4,
+    "wall_s": 25,
+    "is_error": false,
+    "tool_errors": 0,
+    "hook_blocks": 0,
+    "stop_hook_feedback": 0,
+    "session_id": "fcfb7d14-71d4-48c1-808f-16e28f2fda36",
+    "transcripts": [
+      "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-tasks-T6-draft-fx-4/fcfb7d14-71d4-48c1-808f-16e28f2fda36.jsonl"
+    ],
+    "tool_calls": 1
+  }
+}
