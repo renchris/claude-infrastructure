@@ -1,0 +1,90 @@
+{
+ "task": "T2-bugfix",
+ "notes": "hook_blocks = hook_blocking_error attachments; stop_hook_feedback = isMeta 'Stop hook feedback' user messages (same events, paired 1:1 in these runs, do not sum)",
+ "runs": [
+  {
+   "run": "run-1",
+   "arm": "full",
+   "rc": 0,
+   "is_error": false,
+   "cost_usd": 0.7593992,
+   "input": 14,
+   "cache_creation": 77550,
+   "cache_read": 515316,
+   "output": 1794,
+   "turns": 9,
+   "duration_ms": 36829,
+   "duration_s": 43,
+   "tool_errors": 2,
+   "hook_blocks": 0,
+   "stop_hook_feedback": 0,
+   "session_id": "59413db2-efe7-49e8-aae6-a29a8b62b366",
+   "transcripts": [
+    "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-tasks-T2-bugfix-fx-1/59413db2-efe7-49e8-aae6-a29a8b62b366.jsonl"
+   ]
+  },
+  {
+   "run": "run-2",
+   "arm": "slim",
+   "rc": 0,
+   "is_error": false,
+   "cost_usd": 0.7657801999999999,
+   "input": 38,
+   "cache_creation": 54636,
+   "cache_read": 1076601,
+   "output": 5661,
+   "turns": 23,
+   "duration_ms": 117136,
+   "duration_s": 124,
+   "tool_errors": 4,
+   "hook_blocks": 3,
+   "stop_hook_feedback": 3,
+   "session_id": "f336820b-b884-4791-93af-7c4a25610829",
+   "transcripts": [
+    "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-tasks-T2-bugfix-fx-2/f336820b-b884-4791-93af-7c4a25610829.jsonl"
+   ]
+  },
+  {
+   "run": "run-3",
+   "arm": "slim",
+   "rc": 0,
+   "is_error": false,
+   "cost_usd": 0.8191645999999999,
+   "input": 46,
+   "cache_creation": 54874,
+   "cache_read": 1336143,
+   "output": 5638,
+   "turns": 25,
+   "duration_ms": 100368,
+   "duration_s": 108,
+   "tool_errors": 4,
+   "hook_blocks": 2,
+   "stop_hook_feedback": 2,
+   "session_id": "d8aec115-cf21-444f-aa25-59fe800401f1",
+   "transcripts": [
+    "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-tasks-T2-bugfix-fx-3/d8aec115-cf21-444f-aa25-59fe800401f1.jsonl"
+   ]
+  },
+  {
+   "run": "run-4",
+   "arm": "full",
+   "rc": 0,
+   "is_error": false,
+   "cost_usd": 0.6842688,
+   "input": 10,
+   "cache_creation": 73857,
+   "cache_read": 342264,
+   "output": 1246,
+   "turns": 6,
+   "duration_ms": 27250,
+   "duration_s": 33,
+   "tool_errors": 1,
+   "hook_blocks": 0,
+   "stop_hook_feedback": 0,
+   "session_id": "8c28377a-2c18-4996-b046-047d9474b714",
+   "transcripts": [
+    "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-tasks-T2-bugfix-fx-4/8c28377a-2c18-4996-b046-047d9474b714.jsonl"
+   ]
+  }
+ ]
+}

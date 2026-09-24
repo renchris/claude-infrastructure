@@ -1,0 +1,94 @@
+{
+  "run-1": {
+    "run": "run-1",
+    "arm": "full",
+    "rc": 0,
+    "cost_usd": 1.0023724,
+    "input": 24,
+    "cache_creation": 86244,
+    "cache_read": 1005022,
+    "output": 5566,
+    "turns": 16,
+    "duration_ms": 71235,
+    "duration_s": 71.2,
+    "wall_s": 78,
+    "is_error": false,
+    "tool_errors": 4,
+    "hook_blocks": 1,
+    "stop_hook_feedback": 1,
+    "session_id": "8fba37ed-846c-49d5-a799-20043a588df3",
+    "transcripts": [
+      "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-tasks-T4-plan-edit-fx-1/8fba37ed-846c-49d5-a799-20043a588df3.jsonl"
+    ],
+    "tool_calls": 13
+  },
+  "run-2": {
+    "run": "run-2",
+    "arm": "slim",
+    "rc": 0,
+    "cost_usd": 0.7671571999999998,
+    "input": 24,
+    "cache_creation": 61623,
+    "cache_read": 727886,
+    "output": 6425,
+    "turns": 18,
+    "duration_ms": 78723,
+    "duration_s": 78.7,
+    "wall_s": 85,
+    "is_error": false,
+    "tool_errors": 3,
+    "hook_blocks": 0,
+    "stop_hook_feedback": 0,
+    "session_id": "52a76e09-3eda-4fad-98a9-d48c7235bb93",
+    "transcripts": [
+      "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-tasks-T4-plan-edit-fx-2/52a76e09-3eda-4fad-98a9-d48c7235bb93.jsonl"
+    ],
+    "tool_calls": 15
+  },
+  "run-3": {
+    "run": "run-3",
+    "arm": "slim",
+    "rc": 0,
+    "cost_usd": 0.6751954000000001,
+    "input": 18,
+    "cache_creation": 58899,
+    "cache_read": 515257,
+    "output": 5044,
+    "turns": 14,
+    "duration_ms": 78900,
+    "duration_s": 78.9,
+    "wall_s": 85,
+    "is_error": false,
+    "tool_errors": 2,
+    "hook_blocks": 1,
+    "stop_hook_feedback": 1,
+    "session_id": "32e62fe2-0692-4418-b527-43c900987273",
+    "transcripts": [
+      "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-tasks-T4-plan-edit-fx-3/32e62fe2-0692-4418-b527-43c900987273.jsonl"
+    ],
+    "tool_calls": 10
+  },
+  "run-4": {
+    "run": "run-4",
+    "arm": "full",
+    "rc": 0,
+    "cost_usd": 0.9911586000000001,
+    "input": 24,
+    "cache_creation": 85483,
+    "cache_read": 1005693,
+    "output": 5303,
+    "turns": 16,
+    "duration_ms": 77935,
+    "duration_s": 77.9,
+    "wall_s": 83,
+    "is_error": false,
+    "tool_errors": 3,
+    "hook_blocks": 1,
+    "stop_hook_feedback": 1,
+    "session_id": "bdeff5e6-1bf5-486b-8b10-f876167dbd05",
+    "transcripts": [
+      "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-tasks-T4-plan-edit-fx-4/bdeff5e6-1bf5-486b-8b10-f876167dbd05.jsonl"
+    ],
+    "tool_calls": 13
+  }
+}

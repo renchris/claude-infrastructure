@@ -1,0 +1,58 @@
+[
+  {
+    "run": 1,
+    "arm": "general-purpose",
+    "rc": 0,
+    "parent_cost_usd": 1.6940216000000001,
+    "session_id": "3224f3ef-21a3-4b29-af1e-ed957ae0cb38",
+    "first_prefix": 69687,
+    "responses": 6,
+    "tool_errors": 0,
+    "input": 12,
+    "cache_creation": 104765,
+    "cache_read": 450082,
+    "output": 4860
+  },
+  {
+    "run": 2,
+    "arm": "workflow-lean",
+    "rc": 0,
+    "parent_cost_usd": 1.0129946,
+    "session_id": "39c3c9ac-2b96-4a30-bd4c-953e691a2b18",
+    "first_prefix": 5273,
+    "responses": 9,
+    "tool_errors": 0,
+    "input": 18,
+    "cache_creation": 43251,
+    "cache_read": 243501,
+    "output": 5607
+  },
+  {
+    "run": 3,
+    "arm": "workflow-lean",
+    "rc": 0,
+    "parent_cost_usd": 1.1943958,
+    "session_id": "c1e889b7-9c3c-4bf9-80de-fadd05919a36",
+    "first_prefix": 5273,
+    "responses": 5,
+    "tool_errors": 0,
+    "input": 10,
+    "cache_creation": 75430,
+    "cache_read": 192591,
+    "output": 6387
+  },
+  {
+    "run": 4,
+    "arm": "general-purpose",
+    "rc": 0,
+    "parent_cost_usd": 1.3799084000000001,
+    "session_id": "eb381eee-45ee-4163-8318-14492e312a5c",
+    "first_prefix": 70652,
+    "responses": 8,
+    "tool_errors": 0,
+    "input": 16,
+    "cache_creation": 98190,
+    "cache_read": 653001,
+    "output": 6106
+  }
+]

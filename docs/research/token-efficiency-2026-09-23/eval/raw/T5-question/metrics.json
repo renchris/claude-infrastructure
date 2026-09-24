@@ -1,0 +1,90 @@
+{
+ "task": "T5-question",
+ "notes": "hook_blocks = hook_blocking_error attachments; stop_hook_feedback = isMeta 'Stop hook' user messages",
+ "runs": [
+  {
+   "run": "run-1",
+   "arm": "full",
+   "rc": 0,
+   "is_error": false,
+   "cost_usd": 0.6248072,
+   "input": 6,
+   "cache_creation": 72562,
+   "cache_read": 175236,
+   "output": 462,
+   "turns": 3,
+   "duration_ms": 17586,
+   "duration_s": 22,
+   "tool_errors": 0,
+   "hook_blocks": 0,
+   "stop_hook_feedback": 0,
+   "session_id": "c6cdb818-c21a-473f-95b7-3ebc9ba21065",
+   "transcripts": [
+    "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-tasks-T5-question-fx-1/c6cdb818-c21a-473f-95b7-3ebc9ba21065.jsonl"
+   ]
+  },
+  {
+   "run": "run-2",
+   "arm": "slim",
+   "rc": 0,
+   "is_error": false,
+   "cost_usd": 0.38370240000000005,
+   "input": 6,
+   "cache_creation": 43887,
+   "cache_read": 117912,
+   "output": 450,
+   "turns": 3,
+   "duration_ms": 17599,
+   "duration_s": 21,
+   "tool_errors": 0,
+   "hook_blocks": 0,
+   "stop_hook_feedback": 0,
+   "session_id": "979fedb7-4ea0-4572-8ca8-3600eed82557",
+   "transcripts": [
+    "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-tasks-T5-question-fx-2/979fedb7-4ea0-4572-8ca8-3600eed82557.jsonl"
+   ]
+  },
+  {
+   "run": "run-3",
+   "arm": "slim",
+   "rc": 0,
+   "is_error": false,
+   "cost_usd": 0.3839226,
+   "input": 6,
+   "cache_creation": 43892,
+   "cache_read": 117913,
+   "output": 459,
+   "turns": 3,
+   "duration_ms": 18200,
+   "duration_s": 21,
+   "tool_errors": 0,
+   "hook_blocks": 0,
+   "stop_hook_feedback": 0,
+   "session_id": "ca4a6b8b-d51a-4963-89a9-6ce43cef225f",
+   "transcripts": [
+    "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-tasks-T5-question-fx-3/ca4a6b8b-d51a-4963-89a9-6ce43cef225f.jsonl"
+   ]
+  },
+  {
+   "run": "run-4",
+   "arm": "full",
+   "rc": 0,
+   "is_error": false,
+   "cost_usd": 0.6277148,
+   "input": 6,
+   "cache_creation": 72747,
+   "cache_read": 175374,
+   "output": 532,
+   "turns": 3,
+   "duration_ms": 19567,
+   "duration_s": 26,
+   "tool_errors": 0,
+   "hook_blocks": 0,
+   "stop_hook_feedback": 0,
+   "session_id": "3dbf2223-1783-4297-960f-94b92e27fda7",
+   "transcripts": [
+    "/Users/chrisren/.claude-secondary/projects/-private-tmp-tokeff-eval-tasks-T5-question-fx-4/3dbf2223-1783-4297-960f-94b92e27fda7.jsonl"
+   ]
+  }
+ ]
+}
