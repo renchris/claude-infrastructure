@@ -85,6 +85,12 @@ build_scratch() {
 # The deliverable itself: the line must be in the real repo AND the pattern must actually MATCH
 # the path. `check-attr` is the discriminating check — a typo'd path passes a grep and resolves
 # to `unspecified` here, which is the silent-no-op failure this whole file exists to prevent.
+@test "the repo's .gitattributes resolves merge=union for the situational rules file (where appends land)" {
+  run git -C "$REPO" check-attr merge -- .claude/rules/agent-operating-lessons-situational.md
+  [ "$status" -eq 0 ]
+  [[ "$output" == *": merge: union" ]]
+}
+
 @test "the repo's .gitattributes resolves merge=union for the rules file" {
   run git -C "$REPO" check-attr merge -- .claude/rules/agent-operating-lessons.md
   [ "$status" -eq 0 ]

@@ -1,6 +1,6 @@
 ---
 name: compact-memory
-description: Compact the project MEMORY.md index — SAFE-AUTO archive of fully-closed entries (reversible) + PROPOSE-ONLY dedupe/shortening shown as diffs for approval. Use when MEMORY.md passes either loader cap (25,000 CHARS of the stripped, trimmed index, or 200 LINES — see THE UNIT). Hermes Curator analog; human-gated, INTEGRATE-never-overwrite.
+description: Compact the project MEMORY.md index — reversible SAFE-AUTO archive of closed entries, plus human-gated dedupe and shortening proposed as diffs. Use when MEMORY.md passes 25,000 chars of the stripped, trimmed index or 200 lines (see THE UNIT).
 allowed-tools: Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion
 argument-hint: "[--apply-safe to apply the SAFE-AUTO archival; default = dry-run report only]"
 ---
@@ -149,6 +149,16 @@ minus the autonomous fork.
    universal — claude-infrastructure has 2 instruction files and 0 orphans, so E3 legitimately
    measures 0 there. Report E3 hits as *correctly unindexed, reachable via `<citing file>`*, never as
    decay.
+
+   **The situational rules file counts as E3.** Since 2026-09-23 the project rules file is split
+   into `.claude/rules/agent-operating-lessons.md` (resident) and
+   `.claude/rules/agent-operating-lessons-situational.md`, and a per-account `claudeMdExcludes` glob
+   may keep the second out of that account's context. A topic cited only from it is still
+   reachable: the resident file points at it, and sessions grep it for the symptom before
+   diagnosing. The sweep below already covers it, because it greps the whole `.claude/rules`
+   directory; do not narrow that operand to the resident file, or every topic cited only from the
+   situational half comes back as an orphan (47 did under the audit's first design, which moved
+   them out of `.claude/rules/`: `docs/research/token-efficiency-2026-09-23/audit/C7.verify.md` F2).
 
    A genuine orphan is a topic file in NONE of the three: not in the index, not in any demotion
    record, not cited from an always-loaded instruction file. **Run it, do not eyeball it** — every

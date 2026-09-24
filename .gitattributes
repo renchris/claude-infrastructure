@@ -64,4 +64,8 @@ docs/research/venue-foreign-repo-recurrence-2026-08-17.md merge=union
 # KNOWN RESIDUAL, ACCEPTED. Union concatenates, so two sessions appending a BYTE-IDENTICAL line
 # yield it twice. On an append-only lessons file that is benign and visible; dedupe is
 # deliberately not built.
+#
+# Since 2026-09-23 the file is split, and new lessons are appended to the situational half
+# (docs/research/token-efficiency-2026-09-23/); both halves keep the union driver.
 .claude/rules/agent-operating-lessons.md merge=union
+.claude/rules/agent-operating-lessons-situational.md merge=union

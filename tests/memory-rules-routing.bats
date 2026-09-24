@@ -337,6 +337,10 @@ mkover() {
   run env CLAUDE_PROJECT_DIR="$T/envproj" "$SCRIPT" "$d/MEMORY.md"
   [ "$status" -eq 0 ]
   has "$output" 'verdict=rotated'
-  has "$output" "dest=$T/envproj/.claude/rules/agent-operating-lessons.md"
-  grep -qF -- '(a01.md)' "$T/envproj/.claude/rules/agent-operating-lessons.md"
+  has "$output" "dest=$T/envproj/.claude/rules/agent-operating-lessons-situational.md"
+  grep -qF -- '(a01.md)' "$T/envproj/.claude/rules/agent-operating-lessons-situational.md"
+  # the situational half of the 2026-09-23 split, created with its own header; the resident half
+  # is curated and never created or appended to by the rotor
+  [ "$(head -1 "$T/envproj/.claude/rules/agent-operating-lessons-situational.md")" = "# Situational project rules — routed by cc-memory-rotate" ]
+  [ ! -e "$T/envproj/.claude/rules/agent-operating-lessons.md" ]
 }

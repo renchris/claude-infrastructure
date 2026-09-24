@@ -38,10 +38,33 @@
 # Exit: 0 clean · 1 findings · 2 NON-VERDICT (could not run / could not trust its parse). A 2 is
 # never a pass — the caller arms a non-verdict, exactly as the other ratchets do.
 #
+# ── TWO FILES SINCE 2026-09-23 ────────────────────────────────────────────────────────────────
+# The rules file was split into a resident half (same path) and agent-operating-lessons-situational.md,
+# so a per-account claudeMdExcludes glob can drop the situational half
+# (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md). Both load by default and both are
+# hook tiers, so with no --file this lints BOTH, and adds one arm neither per-file scan can see: a
+# body linked from both files, or one bullet line present in both, is one rule loaded twice. A
+# missing situational file is skipped (a project that never split has only the one file); a missing
+# resident file stays a NON-VERDICT.
+#
+# The land calls this once per changed rules file with --file (ship-land.sh, rules_own loop), so
+# --file naming either half also runs the cross-file arm whenever the other half exists. Without
+# that, the arm would never run where it matters: a rebase through `merge=union` can copy the
+# original's tail back into the resident file, and only the cross-file arm sees it
+# (docs/research/token-efficiency-2026-09-23/implement/F4-project-rules-split.review.md, major 1-2).
+#
+# RESIDENT ADDS. Under --own-range, a bullet the range adds to the resident file is refused unless
+# the same range removes that line from one of the two files (a move or a re-indent, as the split
+# itself does). New lessons go to the situational file; copies of the rotor, drain and nudge that
+# predate the split keep appending to the resident file until their sessions end, and this is what
+# stops them. RULES_RESIDENT_ADD_OK=1 turns it advisory for a lesson that really must load in every
+# session.
+#
 # Usage: rules-hook-budget-lint.sh [--file <path>] [--own-range <gitrange>] [--selftest]
 set -u
 
 RULES_REL=".claude/rules/agent-operating-lessons.md"
+SIT_REL=".claude/rules/agent-operating-lessons-situational.md"
 OWN_RANGE="${OWN_RANGE:-}"
 BUDGET="${RULES_HOOK_BUDGET:-420}"
 
@@ -167,5 +190,89 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-[ -n "$FILE" ] || FILE="$RULES_REL"
-scan "$FILE"
+# cross_file <resident> <situational> → 0 clean, 1 findings. Always blocking, like the in-file
+# duplicate arm: a duplicate is a property of the pair, so own-scope cannot say who added it.
+cross_file() {
+  local res="$1" sit="$2" xd xl bad=0
+  _targets() { grep -oE '^- \*{0,2}\[[^]]*\]\([^)]*\)' "$1" 2>/dev/null | sed -E 's/.*\(([^)]*)\)$/\1/' | sort -u; }
+  xd=$( { _targets "$res"; _targets "$sit"; } | grep -v '^\.$' | sort | uniq -d)
+  if [ -n "$xd" ]; then
+    while IFS= read -r _d; do
+      [ -n "$_d" ] || continue
+      bad=$((bad+1))
+      printf '%s + %s: DUPLICATE — both files link %s. One rule, loaded twice. Keep it in one file.\n' \
+        "$res" "$sit" "$_d"
+    done <<< "$xd"
+  fi
+  # Unlinked bullets (rotor `- demoted …` pointers, nested topic lines) have no link target to
+  # compare, so compare the lines themselves, whitespace-trimmed.
+  _lines() { sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' "$1" 2>/dev/null | grep -E '^- ' | grep -vF '](' | sort -u; }
+  xl=$( { _lines "$res"; _lines "$sit"; } | sort | uniq -d)
+  if [ -n "$xl" ]; then
+    while IFS= read -r _l; do
+      [ -n "$_l" ] || continue
+      bad=$((bad+1))
+      printf '%s + %s: DUPLICATE — this line is in both files: %s\n' "$res" "$sit" "$(printf '%s' "$_l" | cut -c1-100)"
+    done <<< "$xl"
+  fi
+  [ "$bad" -eq 0 ] && return 0
+  printf 'rules-hook-budget-lint: %d cross-file duplicate(s) between the resident and situational files\n' "$bad" >&2
+  return 1
+}
+
+# resident_adds <resident> <situational> → 0 clean, 1 findings, 2 non-verdict. Needs OWN_RANGE.
+resident_adds() {
+  local res="$1" sit="$2" d hits
+  d=$(git diff -U0 "$OWN_RANGE" -- "$res" "$sit" 2>/dev/null) || {
+    echo "rules-hook-budget-lint: NON-VERDICT — could not read the diff for $OWN_RANGE -- $res $sit" >&2; return 2; }
+  hits=$(printf '%s\n' "$d" | awk -v resbase="$(basename "$res")" '
+    function norm(x) { sub(/^[ \t]+/, "", x); sub(/[ \t\r]+$/, "", x); return x }
+    /^\+\+\+ / { p = $2; n = split(p, a, "/"); cur = a[n]; next }
+    /^--- / { next }
+    /^-/ { rm[norm(substr($0, 2))] = 1; next }
+    /^\+/ { if (cur == resbase) { l = norm(substr($0, 2)); if (l ~ /^- /) add[++k] = l }; next }
+    END { for (i = 1; i <= k; i++) if (!(add[i] in rm)) print add[i] }')
+  [ -n "$hits" ] || return 0
+  local tag="" rc=1
+  if [ "${RULES_RESIDENT_ADD_OK:-0}" = 1 ]; then tag="advisory: "; rc=0; fi
+  while IFS= read -r _h; do
+    [ -n "$_h" ] || continue
+    printf '%s%s: RESIDENT ADD — this land adds a bullet to the resident file: %s\n' "$tag" "$res" "$(printf '%s' "$_h" | cut -c1-100)"
+  done <<< "$hits"
+  printf '    New lessons go in %s. If this one must load in every session, re-run with RULES_RESIDENT_ADD_OK=1.\n' "$sit"
+  return "$rc"
+}
+
+# pair_of <file> → prints "<resident> <situational>" when <file> is either half, else nothing
+pair_of() {
+  local dir base; dir=$(dirname "$1"); base=$(basename "$1")
+  case "$base" in
+    agent-operating-lessons.md) printf '%s\t%s\n' "$1" "$dir/agent-operating-lessons-situational.md" ;;
+    agent-operating-lessons-situational.md) printf '%s\t%s\n' "$dir/agent-operating-lessons.md" "$1" ;;
+  esac
+}
+
+# The worst verdict wins (2 > 1 > 0).
+worst=0
+_take() { [ "$1" -gt "$worst" ] && worst=$1; return 0; }
+if [ -n "$FILE" ]; then
+  scan "$FILE"; _take $?
+  pair=$(pair_of "$FILE")
+  if [ -n "$pair" ]; then
+    RES=${pair%%$'\t'*}; SIT=${pair#*$'\t'}
+    if [ -f "$RES" ] && [ -f "$SIT" ]; then
+      cross_file "$RES" "$SIT"; _take $?
+      if [ -n "$OWN_RANGE" ] && [ "$FILE" = "$RES" ]; then resident_adds "$RES" "$SIT"; _take $?; fi
+    fi
+  fi
+  exit "$worst"
+fi
+
+# No --file: both halves, then the cross-file arm.
+scan "$RULES_REL"; _take $?
+if [ -f "$SIT_REL" ]; then
+  scan "$SIT_REL"; _take $?
+  cross_file "$RULES_REL" "$SIT_REL"; _take $?
+  if [ -n "$OWN_RANGE" ]; then resident_adds "$RULES_REL" "$SIT_REL"; _take $?; fi
+fi
+exit "$worst"

@@ -209,7 +209,7 @@ ${pfx}${body}x")"
   CLAUDE_PROJECT_DIR=/tmp/proj-xyz run mib_verdict Edit "$idx" \
     "$(edit "$idx" "$long" "${long}MORE")"
   [ "$status" -eq 0 ]
-  has "$output" '/tmp/proj-xyz/.claude/rules/agent-operating-lessons.md'
+  has "$output" '/tmp/proj-xyz/.claude/rules/agent-operating-lessons-situational.md'
   has "$output" '/alpha.md'
 }
 

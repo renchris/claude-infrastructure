@@ -25,6 +25,8 @@
 #
 # 🚨 WHERE THEY GO CHANGED 2026-09-04. A selected line is now ROUTED to the project's
 # always-loaded rules file when route_veto permits, and COLD-recorded only when it does not.
+# (Since 2026-09-23 the default destination is the situational half of the split rules file,
+# `.claude/rules/agent-operating-lessons-situational.md`, which also loads by default.)
 # Cold is a DEMOTION — archive/MEMORY_ARCHIVE_*-COLD.md does not auto-load, so holding the
 # loader cap used to cost the reader the rule. The rules file has no cap of that size and loads
 # unprompted, so a routed line is on a different SURFACE, not a colder one; the reader keeps it.
@@ -517,8 +519,12 @@ resolve_rules_dest() {
   local rbase rdir rdir_p rtgt
   RESOLVE_REASON=""
   if [ -z "$RULES_FILE" ]; then RULES_FILE="${MEMORY_RULES_FILE:-}"; fi
+  # The SITUATIONAL half of the split rules file (2026-09-23): it loads by default like the
+  # resident half, and the resident half is curated, so routed and demoted lines land here
+  # (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md). The already-cited veto and the
+  # citation scan read `.claude/rules/*.md`, so they see both halves either way.
   if [ -z "$RULES_FILE" ] && [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
-    RULES_FILE="$CLAUDE_PROJECT_DIR/.claude/rules/agent-operating-lessons.md"
+    RULES_FILE="$CLAUDE_PROJECT_DIR/.claude/rules/agent-operating-lessons-situational.md"
   fi
   if [ -z "$RULES_FILE" ]; then RESOLVE_REASON='no-rules-destination'; return 1; fi
   rbase="${RULES_FILE##*/}"
@@ -600,6 +606,14 @@ EOF
           topic="${base#scoped-}"
           paths=$(route_paths_of "$topic")
           if ! printf -- '---\npaths: %s\n---\n\n# Scoped project rules — routed by cc-memory-rotate\n' "$paths" >"$dest" 2>/dev/null; then
+            ROUTE_ERR='dest-create-failed'; return 1
+          fi ;;
+        *-situational.md)
+          # Say what the file is: an account with the claudeMdExcludes arm on does not load it, so a
+          # session reaches it only by grepping (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md).
+          if ! printf '%s\n' "# Situational project rules — routed by cc-memory-rotate" \
+               "Lessons that fire on a specific kind of work. Some accounts do not load this file; grep it for the symptom before diagnosing a failure." \
+               "" >"$dest" 2>/dev/null; then
             ROUTE_ERR='dest-create-failed'; return 1
           fi ;;
         *)

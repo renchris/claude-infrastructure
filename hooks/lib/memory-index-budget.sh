@@ -309,13 +309,15 @@ EOFDELTA
     fi
     # Same destination the actuator resolves (bin/cc-memory-rotate route_dest_for / RULES_FILE), in
     # the same precedence, so the remedy this gate prescribes and the file cc-memory-rotate would
-    # drain to are never two different files.
+    # drain to are never two different files. Since 2026-09-23 that is the SITUATIONAL half of the
+    # split rules file (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md): it loads by
+    # default, and the resident half is curated rather than appended to.
     dest="${MEMORY_RULES_FILE:-}"
     if [ -z "$dest" ]; then
       if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
-        dest="$CLAUDE_PROJECT_DIR/.claude/rules/agent-operating-lessons.md"
+        dest="$CLAUDE_PROJECT_DIR/.claude/rules/agent-operating-lessons-situational.md"
       else
-        dest="<project>/.claude/rules/agent-operating-lessons.md"
+        dest="<project>/.claude/rules/agent-operating-lessons-situational.md"
       fi
     fi
     # The rotor's ENTRY_RX, so "the topic file" names the same file both sides would name.
@@ -340,10 +342,10 @@ EOFDELTA
 
   ${eline}
 
-The index is a BUFFER and its lines are POINTERS. A line this long is a RULE being kept on the one surface the loader caps — ${limit} units and ${line_limit} lines, past which it silently drops the NEWEST entries. The rule's own text belongs in its topic file, and its firing one-liner belongs in the always-loaded project rules file, which the loader does not cap at all.
+The index is a BUFFER and its lines are POINTERS. A line this long is a RULE being kept on the one surface the loader caps — ${limit} units and ${line_limit} lines, past which it silently drops the NEWEST entries. The rule's own text belongs in its topic file, and its firing one-liner belongs in the project's situational rules file, which the loader does not cap at all.
 
 SHORTEN THE LINE WITHOUT LOSING A WORD — try these in order:
-  1. WRITE THE RULE TO THE RULES FILE, keep the hook here. Append it to ${dest} (create it if absent) and leave this index line as a short pointer. That surface is always loaded and has NO ${limit}-unit cap, so nothing goes dark by moving there.
+  1. WRITE THE RULE TO THE RULES FILE, keep the hook here. Append it to ${dest} (create it if absent) and leave this index line as a short pointer. That surface loads by default and has NO ${limit}-unit cap, so nothing goes dark by moving there.
   2. SPLIT IT INTO TWO ENTRIES if the line is carrying two rules — each gets its own topic file and its own index line, and each line is then under the cap.
   3. MOVE THE DETAIL INTO THE TOPIC FILE ${efile} and leave the index line naming it. A topic file is read on demand and has no cap either.
 

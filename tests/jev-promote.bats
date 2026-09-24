@@ -77,6 +77,18 @@ runp() {
       CC_JEV_PROMO_GAP=0 "${envs[@]}" "$REPO/bin/cc-jev" promote --mem "$MEMD" "$@"
 }
 
+# The rules file was split on 2026-09-23 (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md).
+# A topic cited only from the situational half is still reachable, so it is not an orphan; without
+# the RULES_SIT branch, the 47 topics cited only there would re-enter the contest as orphans.
+@test "promote: a topic cited only in the situational rules file is not an orphan" {
+  mkcorpus
+  run runp
+  grep -qF "Orphans:  12 reachable" <<<"$output"
+  printf -- '# s\n\n- `orph1.md` — cited from the situational half only.\n' > "$BATS_TEST_TMPDIR/sit.md"
+  run runp CC_JEV_RULES_SIT_FILE="$BATS_TEST_TMPDIR/sit.md"
+  grep -qF "Orphans:  11 reachable" <<<"$output"
+}
+
 @test "promote: refuses without --yes, and sends nothing" {
   mkcorpus
   run runp
