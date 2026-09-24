@@ -1,0 +1,61 @@
+{
+ "title": "F1 slim instructions",
+ "verdict": "FAIL",
+ "n": {
+  "slim": 100,
+  "full": 100
+ },
+ "margin_pp": 5.0,
+ "primary": {
+  "t": 0.506335364,
+  "c": 0.762767374,
+  "pct": -33.6186390164087,
+  "p": 1.9073486328125e-06,
+  "units": 20
+ },
+ "meter": {
+  "t": 50642.45,
+  "c": 78263.84,
+  "pct": -35.292658780862276,
+  "p": 1.9073486328125e-06,
+  "units": 20
+ },
+ "significant_harms": [
+  {
+   "name": "T16-deploy-command item 1",
+   "p": 0.04761904761904762,
+   "worse": true
+  }
+ ],
+ "ci_misses": [],
+ "n_needed_per_arm": {},
+ "success": [
+  {
+   "slim": 97,
+   "full": 95
+  },
+  {
+   "slim": 100,
+   "full": 100
+  }
+ ],
+ "compliance": {
+  "slim": [
+   455,
+   475
+  ],
+  "full": [
+   462,
+   475
+  ]
+ },
+ "ci_success": [
+  -0.041498969737002955,
+  0.08483058130141559
+ ],
+ "ci_compliance": [
+  -0.039500719702263695,
+  0.009189315420180349
+ ],
+ "items_tested": 95
+}
