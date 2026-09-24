@@ -1,6 +1,6 @@
 ---
 name: visual-direction
-description: Produce studio-quality VISUAL design — a committed aesthetic, not markup cleanup. Use whenever building or redesigning UI (a page, screen, component, landing page, dashboard, deck, marketing site), whenever a design "looks generic / templated / AI-made", whenever asked for design options or directions to choose between, and BEFORE reaching for ui.sh's /design guidelines. Orders the two halves of the local design stack — decide the look first, enforce the mechanics second — and routes to the mirrored ui.sh corpus at vendor/uidotsh. NOT for accessibility audits or Tailwind cleanup alone (those are the finishing pass this skill hands off TO).
+description: Studio-quality visual design with a committed aesthetic, for building or redesigning UI (pages, dashboards, decks, landing pages) or when a design looks generic. Decides the look first, then routes to the ui.sh corpus for mechanics.
 ---
 
 # Visual direction — decide the look, then enforce the mechanics

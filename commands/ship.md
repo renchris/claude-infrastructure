@@ -1,3 +1,6 @@
+---
+description: "Land the current work onto the remote trunk: preflight, commit, backup, rebase, gate, push. Typing /ship is the user's authorization to push."
+---
 Land the current work onto the remote trunk, safely. `/ship` is the explicit
 "push / land" action referenced by the Session Close Protocol's 📦 Parked state —
 invoking it IS the authorization to push (that is the whole point of the command).

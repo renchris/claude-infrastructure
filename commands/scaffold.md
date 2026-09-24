@@ -1,3 +1,6 @@
+---
+description: Scaffold a React component, Next.js API route, FastAPI endpoint or database model that follows the project's existing structure and conventions.
+---
 Scaffold a new $ARGUMENTS following project conventions:
 
 For React Components:

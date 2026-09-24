@@ -1,5 +1,5 @@
 ---
-description: Breadth-first multi-axis research via parallel subagents. Renders decomposition table, classifies question-type, audits named entities, fires wave with adversarial sampling. Default N=10. Invokes + applies the research-subagents skill verbatim. Use for "how to improve X", "research the design space of Y", "all angles on Z". For depth-first root-cause debugging, use /investigate instead.
+description: "Breadth-first research via parallel subagents: decomposition table, question-type check, named-entity audit, a wave with adversarial sampling, default N=10, applying research-subagents. For root-cause debugging use /investigate."
 argument-hint: <topic to research>
 ---
 

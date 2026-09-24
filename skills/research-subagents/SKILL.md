@@ -1,7 +1,7 @@
 ---
 name: research-subagents
 description: >-
-  How to fan out read-only research subagents: decomposition table, subagent count (default 10, band 8-12), the 7-field brief with a file-delivery contract, adversarial sampling, stop rule. Load before spawning a research wave ("research X", "all angles on Y", "fan out subagents"). Not for code-writing teammates.
+  Fanning out read-only research subagents: decomposition table, count (default 10, band 8-12), 7-field brief with file delivery, adversarial sampling, stop rule. Load before a research wave ("research X", "fan out subagents"). Not for code-writing.
 ---
 
 # Research Subagent Fan-Out — Anti-Budgeting Discipline

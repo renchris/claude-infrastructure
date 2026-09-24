@@ -27,7 +27,7 @@ The desk-audit left **U2** open: *does the autonomous ship path escape the `git 
 does — but for a reason that pinpoints the real gap. `scripts/ship-land.sh:186` runs
 `git push origin HEAD:<trunk>` as a **subprocess** (a non-Bash-tool path), so the permission system
 never sees it (confirmed by recent `tool:ship-land` lands in `~/.claude/land.log` completing
-`exit 0` unattended). The strand is the **model-issued** land push — `commands/ship.md:43` ("on
+`exit 0` unattended). The strand is the **model-issued** land push — `commands/ship.md:46` ("on
 trunk directly → `git push origin HEAD:<trunk>`", and the rebased-feature-branch fast-forward land) —
 which *does* surface as a Bash tool call and hits the `ask`. This hook covers exactly that call.
 

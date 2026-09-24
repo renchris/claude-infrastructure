@@ -1,6 +1,6 @@
 ---
 name: outlook-cleanup
-description: End-to-end Outlook inbox cleanup via per-message LLM content classification, soft-move quarantine, 7-day soak, and reversible purge. Auto-detects pipeline phase and runs the next step. Re-invokable at any time.
+description: "Outlook inbox cleanup: per-message LLM classification, soft-move quarantine, 7-day soak and reversible purge. Detects the pipeline phase and runs the next step."
 when_to_use: User asks to "clean up inbox", "run outlook cleanup", "delete promo emails", "review quarantine folder", "purge soaked messages", or invokes `/outlook-cleanup` directly. Also when the user mentions catching up on email cleanup or asks "what's next on the email cleanup".
 argument-hint: [phase | --status | --dry-run | --confirm | --folder NAME | --data-dir PATH]
 arguments: [phase, flags]

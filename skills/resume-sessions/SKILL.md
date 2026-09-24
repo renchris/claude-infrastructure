@@ -1,16 +1,6 @@
 ---
 name: resume-sessions
-description: >
-  Recover and autonomously resume all Claude Code sessions across the 4 accounts (next/next2/next3/next4)
-  after a crash or reboot, and un-stick sessions that stalled after /compact. Finds the open sessions,
-  recreates reaped worktrees (in whatever repo owns them), answers the blocking "resume from summary"
-  prompt autonomously by taking the FULL session rather than the summary, clears terminal
-  escape-sequence gibberish, re-engages each session with a continue-prompt (via the reliable it2 keystroke
-  API, not osascript write text), and keeps them working with a keepalive watcher. Also gives a live
-  cross-account quota view + optimal work routing. Use when: the machine crashed/rebooted with sessions
-  open; sessions look "stuck" after resume→/compact (empty input box or ^[[<35;… / ^[[?27 gibberish);
-  the user says "recover my sessions", "resume the crashed sessions", "restart my Claude sessions",
-  "un-stick the sessions", "view usage across accounts", or invokes /resume-sessions.
+description: "Resume every Claude Code session across the 4 accounts after a crash or reboot, or un-stick sessions stuck after /compact: recreate worktrees, take the full session not the summary, clear terminal gibberish, re-engage and keep them alive."
 ---
 
 # Resume Sessions — crash recovery + autonomous restart (100th-percentile runbook)

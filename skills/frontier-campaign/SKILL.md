@@ -1,6 +1,6 @@
 ---
 name: frontier-campaign
-description: Curate and run a long-horizon frontier CAMPAIGN — a generator-class unsolved problem (one solution that dissolves ≥3 named worklist items) or a capability-ceiling build — with Fable 5 as bounded ARCHITECT/JUDGE over default-tier implementer teammates. AGENT-INITIATED for curation/spec under the bounded-autonomy policy; LAUNCH additionally requires the Sonnet red-team gate to pass and the SSOT concurrency cap (max_concurrent_campaigns). Use when a panel or wrap-up emits a campaign candidate, the user says "/frontier-campaign" or "promote C-NNN", or a ledger candidate sits unproven. NOT for bite-sized holes (/frontier-run), routine implementation (Agent Teams directly), or anything already on a worklist with a known path.
+description: "Curate and run a long-horizon frontier campaign: one generator-class problem (a fix that dissolves 3+ worklist items) with Fable as architect and judge over default-tier teammates. Launch needs the red-team gate and the concurrency cap."
 ---
 
 # frontier-campaign — long-horizon frontier work, structured so it survives

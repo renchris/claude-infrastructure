@@ -1,7 +1,6 @@
 ---
 name: plan-conventions
-description: >-
-  Conventions for writing and updating PLAN documents so decisions accumulate losslessly across sessions. Load when creating or editing a plan / design / roadmap doc (the backup-before-write hook also auto-injects an abridged form on plan-file edits; this skill is the full version). Rules: INTEGRATE new content, never overwrite or delete existing sections; COMPLETED sections → compact to key learnings + commit hashes + blockers (drop granular step detail); UPCOMING sections → expand with file paths + line ranges + decision context + trade-offs; the MANDATORY Phase 0 rule — any plan with 2+ code-writing tasks MUST include Phase 0 (Agent Team Orchestration) as the FIRST section, declaring per wave its EXECUTION LOCUS (S = dispatched handoff session, the DEFAULT · T = in-session teammates · L = lead-inline; T and L each need one line of justification, S needs none) plus team roster + roles, task dependency graph with blockedBy, worktree/branch assignments, spawn-wave order, and the LEAD's own context budget + succession point; NEVER delete historical decisions, "Why:" rationale, learnings, or known issues (they compound in value). Triggers: "write a plan", "update the plan", "add a phase", editing a *plan*.md / design doc / .claude-plans/ file, Phase 0 orchestration. Companion to the plan-update skill/command (the mechanical applier) — this skill is the RULESET + rationale, not the editor.
+description: "Rules for writing or updating a plan or design doc: integrate, never overwrite; compact completed sections; expand upcoming ones with file:line detail; mandatory Phase 0 with a per-wave execution locus. Load when editing a *plan*.md."
 ---
 
 ### Plan Document Conventions (CRITICAL — All Agents)

@@ -1,19 +1,6 @@
 ---
 name: autonomous-authenticated-web-access
-description: >-
-  Decide HOW to autonomously read a logged-in web surface (a SaaS dashboard, a
-  merchant console, any auth-walled app) and execute the capture read-only. A
-  3-tier access model — API token > clean-profile CDP (:9222) > warm real-browser
-  CDP (dia://inspect) — plus the trusted-input / shadow-DOM-clipboard /
-  persistent-daemon-IPC / OOM-avoidance techniques that make browser tiers
-  actually work on hardened SPAs. Use when: the user wants an agent to read or
-  capture data from an authenticated web app it has a personal grant to; you must
-  choose between "mint an API token" and "drive the logged-in browser"; a JS
-  `.click()` silently no-ops on a modern SPA; a value lives only inside a custom
-  web component (shadow DOM); or a per-connection consent modal is blocking a CDP
-  attach. Pairs with the `dia-agent` skill (which owns the Dia-launch mechanics)
-  and `agent-browser` (CLI fallback). NOT for anonymous scraping, NOT for
-  credential theft/cookie-decrypt (those are out of scope by policy).
+description: "Choose and run read-only access to a logged-in web app: API token, then clean-profile CDP, then warm Dia CDP; plus trusted-input, shadow-DOM and consent-modal techniques for hardened SPAs. Pairs with dia-agent and agent-browser."
 ---
 
 # autonomous-authenticated-web-access

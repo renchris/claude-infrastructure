@@ -1,12 +1,6 @@
 ---
 name: grok-wiki-custom
-description: >-
-  Use when the user wants a higher-quality custom Grok-Wiki generated from a
-  repository, GitHub URL, or local path by first clarifying the intended
-  audience/outcome, then using `grok-wiki ask` with a local agent to discover
-  what the repo is about, crafting a custom style prompt, and generating the
-  wiki with `grok-wiki generate --style custom`. This composes the
-  grok-wiki-cli workflow and keeps BYOC/BYOK local-agent behavior intact.
+description: "Generate a higher-quality custom Grok-Wiki for a repo: clarify the audience, explore the repo with grok-wiki ask, write a custom style prompt, then run grok-wiki generate --style custom."
 ---
 
 # Grok-Wiki Custom

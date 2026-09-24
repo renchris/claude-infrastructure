@@ -1,6 +1,6 @@
 ---
 name: agent-browser
-description: Automates browser interactions for web testing, form filling, screenshots, and data extraction. Use when the user needs to navigate websites, interact with web pages, fill forms, take screenshots, test web applications, or extract information from web pages. Use this instead of BrowserMCP when MCP tools are unavailable.
+description: "agent-browser CLI for browser automation: navigate, click, fill forms, take screenshots, test web apps and extract page data. The live browser tool; use it when BrowserMCP or other browser MCP tools are unavailable."
 allowed-tools: Bash
 ---
 

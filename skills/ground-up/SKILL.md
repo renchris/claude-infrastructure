@@ -1,6 +1,6 @@
 ---
 name: ground-up
-description: Run a from-first-principles, ground-up-zero rebuild of ONE subsystem — the distilled methodology from the 2026-07-28 landing-pipeline rebuild (9 lands, week-long blockage ended in one session). Use when a subsystem has resisted a week of in-frame fixes, when the user says "/ground-up <topic>", "rebuild X from first principles", "no thought pollution", or when dispatching per-topic rebuild sessions from docs/plans/GROUND_UP_REBUILD_MAP.md. NOT for routine features or identified bugs (normal worklist), and never for more than ONE subsystem per session.
+description: Rebuild ONE subsystem from first principles after a week of in-frame fixes has failed, using the 2026-07-28 landing-pipeline method. Use on "/ground-up <topic>" or "rebuild X from first principles". Never more than one subsystem per session.
 ---
 
 # /ground-up <subsystem> — first-principles rebuild, distilled from the one that worked

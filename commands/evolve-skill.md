@@ -1,6 +1,6 @@
 ---
 name: evolve-skill
-description: SPIKE — GEPA/DSPy-style offline A/B evolution of ONE prompt-only skill's SKILL.md body against a small fixture set, scored by an LLM-judge or a deterministic gate. API-only (~$2-10/run), no GPU. Emits a winning diff for human apply — NEVER hot-swaps. Hermes self-evolution analog (Hermes does not actually run this on its own skills).
+description: "Spike: offline A/B evolution of ONE prompt-only skill's SKILL.md body against fixtures, scored by an LLM judge or a gate. API-only (~$2-10 a run); emits a winning diff for a human to apply, never hot-swaps."
 allowed-tools: Read, Write, Edit, Bash, Glob, AskUserQuestion
 argument-hint: "<skill-slug> [--gate typecheck|qa] — defaults to LLM-judge scoring"
 ---

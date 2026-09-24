@@ -1,6 +1,6 @@
 ---
 name: kpmg-deck
-description: Build genuinely well-designed PowerPoint decks in code, on a corporate brand system, with a render-and-look verification loop. Use when asked to make a .pptx, a slide deck, a client presentation, a board or steerco pack, a section divider or an exhibit; when a deck must match a corporate brand (KPMG ships configured; any brand works via a JSON file); when converting a document, report or markdown into slides; or when an existing deck needs rebuilding to a professional standard. Also use when asked how to avoid the PowerPoint "[Repaired]" dialog, how to stop generated slides overflowing, or how to make python-pptx output look designed rather than templated. NOT for editing an existing .pptx in place, and NOT for Google Slides or Keynote.
+description: Build well-designed PowerPoint (.pptx) decks in code on a corporate brand system (KPMG ships configured; any brand via JSON) with a render-and-look loop; also fixes the "[Repaired]" dialog and overflowing slides. Not for editing a .pptx in place.
 ---
 
 # Building a deck that survives the room it is shown in

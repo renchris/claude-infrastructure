@@ -1,6 +1,6 @@
 ---
 name: deep-research-sonnet
-description: Bulk-fan-out worker for multi-axis breadth-first research. Sonnet 5 tier (NOT frontier) — the canonical worker pattern per Anthropic's own production multi-agent system (Opus orchestrator + Sonnet workers). BENCHED under the QUALITY-FIRST OVERRIDE (2026-06-30): Sonnet 5 measured ≤ Opus 4.8 quality AND ~15% pricier/task at inherited-max (measurement run on Opus 4.8, stated as such, not re-run since), so the breadth-first worker slot reverted to the Opus tier (`deep-research`, versions.opus_latest). This Sonnet-tier worker re-enters service ONLY where a low/medium-effort Workflow run is probe-certified iso-quality-and-cheaper (spec: ~/.claude/model-routing-freewin-probe.md) — never as an in-process default (in-process subagents inherit lead effort, so the low/med lever that could make Sonnet win is unavailable there). Returns signal-dense findings, no fixed token cap.
+description: "Sonnet-tier research worker, benched: Sonnet measured no better than Opus and pricier per task. Use only in a probe-certified low- or medium-effort Workflow (~/.claude/model-routing-freewin-probe.md); otherwise use deep-research."
 model: sonnet
 omitClaudeMd: true
 maxTurns: 100

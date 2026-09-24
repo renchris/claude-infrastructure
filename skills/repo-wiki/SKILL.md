@@ -1,20 +1,6 @@
 ---
 name: repo-wiki
-description: >-
-  Generate a source-grounded README or multi-page technical wiki for a
-  repository — the Grok-Wiki generator distilled into a prompt, with no app, no
-  CLI, and no sidecar. Load when asked to "write a README for this repo",
-  "document this codebase", "generate a wiki", "explain this repository", or to
-  produce onboarding/architecture docs for a repo you did not write. Runs as two
-  passes: a STRUCTURE pass that explores the repo and commits to a page plan
-  before writing any prose, then a PAGE pass that writes each page against its
-  own file list. Carries the decomposition rules (the part that decides whether
-  the output is useful), all 15 of the generator's named styles/lenses
-  (technical · first-30 · mental-model · worth-stealing · hidden-quirks ·
-  debugging-atlas · documentation · …), the beyond-README requirement, the
-  citation contract, and the diagram harness that stops weak Mermaid. One
-  page = a README; N pages = a wiki. NOT for the grok-wiki CLI itself (that is grok-wiki-cli /
-  grok-wiki-custom) and NOT for a defect sweep (that is grok-wiki-audit).
+description: Generate a source-grounded README or multi-page wiki for a repository in two passes (a structure plan, then pages), with citation and diagram rules and 15 named styles. Use to write a README or document a codebase.
 ---
 
 # Repo wiki, from a prompt

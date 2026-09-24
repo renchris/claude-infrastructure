@@ -1,6 +1,6 @@
 ---
 name: harvest-skill
-description: Draft a reusable skill (SKILL.md) from a just-finished session's workflow into a human-review staging area (~/.claude/skills-pending/). Never auto-promotes. Use after a session where you repeated a multi-step workflow worth capturing. Hermes skill-synthesis analog, human-gated.
+description: Draft a reusable skill (SKILL.md) from a just-finished session's repeated workflow into ~/.claude/skills-pending/ for human review. Never auto-promotes; /skill-promote does that.
 allowed-tools: Read, Write, Bash, Glob, Grep
 argument-hint: "[slug or short description of the workflow — optional; auto-detects from the recent session if omitted]"
 ---

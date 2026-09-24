@@ -1,6 +1,6 @@
 ---
 name: model-upgrade
-description: Runbook for moving the toolchain to a new Claude model — or off one when access ends. Use when Anthropic ships a model ("upgrade to Opus 4.9", "Fable 5.1 released"), when a plan-access window opens/closes ("we lost Fable access", "downgrade"), or when claude-lint-models flags stale refs / an expired frontier window. BECAUSE WE PIN CLAUDE CODE, a model release is always ALSO a binary event — Step 0 is the binary gate (does the pinned build even register the id?), and a model that shipped after our pin is a STAGED upgrade, not a sweep. Covers that gate and its escalation to /cc-version-audit + /cc-upgrade-gate, the model-id keying census (detectors vs emitters) that a flip must rewrite, doc/config reference sweeps, the dynamic model ladder, and the binary-pin census. NOT for app-code SDK migrations (reso has no Anthropic SDK; for SDK code use /claude-api migrate).
+description: "Runbook for moving to a new Claude model or off one: the binary gate first (does the pinned Claude Code register the id?), the model-id census, config and doc sweeps, the model ladder. Use when a model ships or frontier access changes."
 allowed-tools: Read, Edit, Write, Bash, AskUserQuestion, Skill
 ---
 

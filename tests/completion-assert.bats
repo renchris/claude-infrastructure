@@ -1904,7 +1904,7 @@ mkfix_user() { # <assistant-close> <last-user-msg> → transcript path
 }
 
 # A `/foo` invocation injects the command or skill FILE'S text as a user record, and those files
-# discuss stopping — commands/ship.md:42 contains "stop here". Once the multi-line reader was fixed
+# discuss stopping — commands/ship.md:45 contains "stop here". Once the multi-line reader was fixed
 # (299e4d563) that body became visible and DISARMED this hook, so typing /ship turned the close gate
 # off on exactly the turn that lands code. Keyed on the harness's own isMeta flag, not on a length or
 # first-line heuristic: measured over 2,566 non-sidechain user records, 124 of the 133 carrying a

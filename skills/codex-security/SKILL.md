@@ -1,7 +1,6 @@
 ---
 name: codex-security
-description: >-
-  Run OpenAI's Codex Security methodology natively inside Claude Code — no Codex CLI, no Codex desktop app, no ChatGPT/Codex subscription, no OpenAI API key. Drives the Apache-2.0 plugin vendored at vendor/codex-security/: repository security scans, PR/commit/branch diff scans, deep multi-pass scans, threat modeling, candidate validation, attack-path analysis and severity calibration, finding triage, fixes, vulnerability write-ups, hardening proposals, and issue tracking — all producing the upstream canonical artifact bundle (findings.json, coverage.json, scan-manifest.json, report.md, SARIF) sealed by the upstream deterministic finalizer. Load when asked to "security scan this repo", "review this PR/diff for security", "threat model this", "triage these findings", "deep security scan", "write up this vulnerability", "propose security hardening", or when a security audit needs evidence-backed findings rather than pattern-matched guesses. NOT a linter or secret-scanner (use dedicated tools), and NOT for running the upstream `codex-security` npm CLI (that path requires Codex and is explicitly out of scope here).
+description: "Run OpenAI's Codex Security methodology natively (vendored plugin; no Codex or OpenAI account): repo and diff security scans, threat models, finding validation and triage, fixes, write-ups and SARIF output."
 ---
 
 # Codex Security in Claude Code

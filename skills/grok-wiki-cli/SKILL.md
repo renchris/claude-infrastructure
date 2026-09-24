@@ -1,14 +1,6 @@
 ---
 name: grok-wiki-cli
-description: >-
-  Use the `grok-wiki` CLI to generate local-agent repository wikis, ask
-  evidence-backed questions about one or more repositories, inspect saved wikis,
-  or run the local Grok-Wiki server/sidecar. Trigger when the user asks for
-  Grok-Wiki CLI usage, wiki generation from GitHub or local repos, multi-repo
-  workspace Ask, local CLI agent selection (Grok, Codex, Claude, Pi,
-  Antigravity), or troubleshooting the local-cli-only wiki/ask flow. Keep the
-  workflow BYOC/BYOK and vendor-agnostic: do not require API-provider keys or
-  assume one model provider unless the user explicitly chooses one local agent.
+description: Use the grok-wiki CLI to generate repository wikis, ask evidence-backed questions across one or more repos, inspect saved wikis, or run the local server, with a local CLI agent (Grok, Codex, Claude, Pi, Antigravity). No API keys needed.
 ---
 
 # Grok-Wiki CLI

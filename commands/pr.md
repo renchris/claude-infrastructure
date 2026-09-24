@@ -1,3 +1,6 @@
+---
+description: "Decide whether a change needs a PR at all (usually not: push to trunk); if it does, open one whose first line is the answer, body under 400 words."
+---
 First decide whether this needs a PR at all. Usually it does not.
 
 A PR's only function is to gate a change on **another human's** review. If you will open it,
