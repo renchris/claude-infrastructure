@@ -1,0 +1,21 @@
+== claude-next-full: | Memory files | 48.2k | 4.8% |
+| Project | <fixture>/.claude/CLAUDE.md | 40.4k |
+| Project | <fixture>/.claude/rules/00-mission-board.md | 5.5k |
+| Project | <fixture>/.claude/rules/agent-operating-lessons.md | 2.4k |
+== claude-next-slim: | Memory files | 19.6k | 2.0% |
+| Project | <fixture>/.claude/CLAUDE.md | 18.6k |
+| Project | <fixture>/.claude/rules/00-mission-board.md | 961 |
+== claude-quaternary-full: | Memory files | 48.2k | 4.8% |
+| Project | <fixture>/.claude/CLAUDE.md | 40.4k |
+| Project | <fixture>/.claude/rules/00-mission-board.md | 5.5k |
+| Project | <fixture>/.claude/rules/agent-operating-lessons.md | 2.4k |
+== claude-quaternary-slim: | Memory files | 19.6k | 2.0% |
+| Project | <fixture>/.claude/CLAUDE.md | 18.6k |
+| Project | <fixture>/.claude/rules/00-mission-board.md | 961 |
+== claude-tertiary-full: | Memory files | 48.2k | 4.8% |
+| Project | <fixture>/.claude/CLAUDE.md | 40.4k |
+| Project | <fixture>/.claude/rules/00-mission-board.md | 5.5k |
+| Project | <fixture>/.claude/rules/agent-operating-lessons.md | 2.4k |
+== claude-tertiary-slim: | Memory files | 19.6k | 2.0% |
+| Project | <fixture>/.claude/CLAUDE.md | 18.6k |
+| Project | <fixture>/.claude/rules/00-mission-board.md | 961 |
