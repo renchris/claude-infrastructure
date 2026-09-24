@@ -367,3 +367,45 @@ not_denied_count() {
   [ "$(decide_with "$mut/validate-bash.sh" $'{\n  rm -rf dist\n}')" = "ASK" ]
   [ "$(decide_with "$mut/validate-bash.sh" $'rm -rf dist\necho hi')" = "ASK" ]
 }
+
+# ── A HEREDOC BODY is data unless a shell runs it ───────────────────────────────────────────────
+# Measured 2026-09-24 (docs/plans/PERMISSION_PROMPT_CONSOLIDATION.md, census): after the newline fix
+# the commonest remaining rm ask was an rm INSIDE a script being written to a file —
+# `cat > "$SP/probe.sh" <<'EOS' … rm -rf "$T" … EOS` — which this command never executes. The body
+# is now scanned only when the line that opens it hands it to a shell.
+
+@test "heredoc body WRITTEN to a file or fed to python is not an rm invocation" {
+  [ "$(decision $'cat > /tmp/x.sh <<\'EOS\'\nT=/tmp/q; rm -rf "$T"\nEOS\necho done')" = "PASS" ]
+  [ "$(decision $'cat > "$SP/dup.sh" <<\'EOS\'\nrm -rf src /etc\nEOS')" = "PASS" ]
+  [ "$(decision $'python3 - <<\'PY\'\nimport os  # rm -rf "$T"\nPY')" = "PASS" ]
+  [ "$(decision $'cat > f <<-EOF\n\trm -rf src\n\tEOF\nrm -rf dist')" = "PASS" ]
+}
+
+@test "DANGEROUS SIBLINGS: a heredoc a shell RUNS is still scanned, and nothing after it hides" {
+  [ "$(decision $'bash <<\'EOF\'\nrm -rf src\nEOF')" = "ASK" ]
+  [ "$(decision $'cat <<\'EOF\' | bash\nrm -rf src\nEOF')" = "ASK" ]
+  [ "$(decision $'ssh host <<\'EOF\'\nrm -rf src\nEOF')" = "ASK" ]
+  [ "$(decision $'timeout 9 sh <<EOF\nrm -rf ~\nEOF')" = "DENY" ]
+  [ "$(decision $'cat > x.sh <<\'EOF\' && bash x.sh\nrm -rf src\nEOF')" = "ASK" ]
+  # The line AFTER the terminator is a command again.
+  [ "$(decision $'cat > x <<EOF\nhi\nEOF\nrm -rf src')" = "ASK" ]
+  [ "$(decision $'cat > x <<EOF\nhi\nEOF\nrm -rf ~')" = "DENY" ]
+  [ "$(decision $'cat > x <<EOF\nhi\nEOF\nrm -rf /etc')" = "ASK" ]
+  [ "$(decision $'cat > x <<EOF\nhi\nEOF\nrm -rf "$HOME"')" = "DENY" ]
+  # A shift is not a heredoc: `1<<n` must not swallow the lines after it as a body.
+  [ "$(decision $'echo $((1<<n))\nrm -rf ~')" = "DENY" ]
+  # An apostrophe in a data body no longer desyncs the quote state for the rest of the command.
+  [ "$(decision $'cat > f <<EOF\ndon\'t\nEOF\nrm -rf ~')" = "DENY" ]
+  # A here-STRING has no body.
+  [ "$(decision $'cat <<< x\nrm -rf src')" = "ASK" ]
+}
+
+@test "RED ON PARENT: the pre-fix scanner asked on an rm inside a data heredoc" {
+  local pre="$BATS_TEST_TMPDIR/parent-hd"
+  mkdir -p "$pre/lib"
+  cp "$REPO/hooks/validate-bash.sh" "$pre/validate-bash.sh"
+  git -C "$REPO" show a7a372d2c:hooks/lib/is-true-flag.sh > "$pre/lib/is-true-flag.sh"
+  ! cmp -s "$REPO/hooks/lib/is-true-flag.sh" "$pre/lib/is-true-flag.sh" || false
+  [ "$(decide_with "$pre/validate-bash.sh" $'cat > /tmp/x.sh <<\'EOS\'\nT=/tmp/q; rm -rf "$T"\nEOS\necho done')" = "ASK" ]
+  [ "$(decide_with "$pre/validate-bash.sh" $'cat > "$SP/dup.sh" <<\'EOS\'\nrm -rf src /etc\nEOS')" = "ASK" ]
+}
