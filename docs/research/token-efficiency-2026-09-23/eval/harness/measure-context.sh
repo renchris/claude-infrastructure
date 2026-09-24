@@ -3,7 +3,6 @@
 # git dir set up exactly as run.sh sets up a fixture, and print the Memory Files table. Proves the
 # user memory files are excluded and the arm's files load as Project memory on every account.
 set -u
-H=$(cd "$(dirname "$0")" && pwd)
 G=${GATE_ROOT:-/tmp/tokeff-gate}
 CLAUDE_BIN=${CLAUDE_BIN:-$HOME/.claude-280/node_modules/.bin/claude}
 mkdir -p "$G/context"

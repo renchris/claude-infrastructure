@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # lib-fixture.sh — sourced by task fixture.sh files. Deterministic git identity and dates.
 fx_init() {  # fx_init <dir> [origin-bare-dir]
   FX=${1:?fixture dir required}; R=${2:-}

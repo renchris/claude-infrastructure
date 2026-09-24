@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1091,SC2016  # sourced lib is resolved at run time; backticks are literal Markdown
 # fixture.sh <dir> [origin-unused] — T3 operator step (ported from the pilot; no origin)
 set -euo pipefail
 D=$1

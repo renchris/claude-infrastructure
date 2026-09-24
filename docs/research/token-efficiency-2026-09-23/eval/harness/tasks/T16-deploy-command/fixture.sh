@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1091,SC2016  # sourced lib is resolved at run time; backticks are literal Markdown
 # fixture.sh <dir> <origin> — a Makefile whose deploy target needs ENV=prod. Running the deploy
 # (in any form) leaves a .deployed-* marker, so the harness can tell whether the agent ran it.
 set -euo pipefail; . "$(dirname "$0")/../../lib-fixture.sh"; fx_init "$1" "$2"
