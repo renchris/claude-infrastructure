@@ -105,6 +105,9 @@ IMPROVEMENT/NEUTRAL:
 Then an **adversarial** agent (web-enabled): sweep
 `github.com/anthropics/claude-code/issues` for OPEN regressions vs the target band
 that the changelog omits; default to flagging risk; return a sharp ≤450-token verdict.
+In a Workflow, run all four slots (they only read) with `agentType: 'workflow-lean'` and a
+self-contained brief that names the changelog slice and the config paths; see the
+research-subagents skill § Workflow slot table for the model/effort pins and the exclusions.
 
 ## Step 4 — Churn-signal heuristic (the load-bearing judgment)
 A version that FIXES a daemon/hook regression means that subsystem was recently

@@ -448,6 +448,15 @@ On the **model** axis it is pinned to `roles.research_worker` ONLY in-process/te
   | adversarial / red-team (a DIFFERENT model on purpose) | `claude-fable-5-1` | `high` | `roles.research_adversarial`, `effort_defaults.fable51_capability_sensitive` |
   | retrieval (file:line lookups) | `claude-haiku-4-5` | — (no effort param) | `roles.research_retrieval` |
 
+  **Every slot in this table also takes `agentType: 'workflow-lean'`** (offline re-gate PASS,
+  2026-09-24, `docs/research/token-efficiency-2026-09-23/eval/GATE.md` § Re-gate: −84% list $ per
+  slot, success 40/40 and compliance 96.9% vs 96.2% against the default workflow subagent). The
+  worker loads no CLAUDE.md, rules or memory and has no Skill, Agent or MCP tools, so the brief must
+  be self-contained and deliver to a file. It is for READ-ONLY slots only: a slot that writes code,
+  commits, lands, hands off or closes, or needs an MCP server or a skill, keeps the default
+  subagent. The gate measured it at the lead's default model and effort; pin `model`/`effort` from
+  this table as usual.
+
   Never `max` for review or synthesis (unfit on our corpus: cells hit the output cap). A full
   `claude-opus-5-5` id is refused by a 2.1.260 lead — run these Workflows from a 2.1.280 session.
   Why the adversarial slot stays on Fable although Opus 5.5 scores higher alone: it adds the defects
