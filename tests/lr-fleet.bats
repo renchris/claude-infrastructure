@@ -715,6 +715,24 @@ SH
 }
 
 
+# Two `--one` runs fired in the same second (cc-lr recover looped over three panes, 2026-09-24:
+# panes 513 and 641 both got fleet/one-20260924T222100Z) shared ONE run dir, and each truncated the
+# other's detached.log and results.tsv. The sid in the name keeps them apart.
+@test "RED PROOF: a --one --detach run dir carries the sid, so same-second runs never share one" {
+  cat > "$LR_HANDOFF_BIN" <<'SH'
+#!/bin/bash
+echo "/bundle/path"
+exit 0
+SH
+  chmod +x "$LR_HANDOFF_BIN"
+  export CC_NOTIFY_BIN=/usr/bin/true
+  blocked_tx "$SEC" "$SID"; row 616 "$SID"
+  run bash "$FLEET" --one "$SID" --target next3 --source-pane 616 --detach
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  rund="$(printf '%s' "$output" | tr ' ' '\n' | sed -n 's/^run=//p' | tail -1)"
+  [[ "$(basename "$rund")" == one-*-"${SID:0:8}" ]] || { echo "run dir has no sid: $rund"; false; }
+}
+
 # ═══ W4 — the resolver stops guessing, and the in-place claim becomes falsifiable ═══════════════
 
 # ONE SESSION, TWO CENSUSES, COUNTED TWICE. lr_resume_procs already collapses the cc-close-attrib

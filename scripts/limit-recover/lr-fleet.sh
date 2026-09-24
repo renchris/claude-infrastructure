@@ -1110,7 +1110,9 @@ EOF
     # there is exactly one copy of the option semantics. Everything expensive — the census, the
     # capacity park, the actuator — happens on the far side of this branch.
     if [ "$DETACH" = 1 ] && [ "${LR_FLEET_DETACHED:-0}" != 1 ]; then
-      RUN="${LR_FLEET_RUN:-one-$(date -u +%Y%m%dT%H%M%SZ)}"; mkdir -p "$FLEET_DIR/$RUN"
+      # The sid rides in the name: two recoveries fired in the same second (a caller looping over
+      # several panes) otherwise share one dir, and each truncates the other's log and results.tsv.
+      RUN="${LR_FLEET_RUN:-one-$(date -u +%Y%m%dT%H%M%SZ)-${SID:0:8}}"; mkdir -p "$FLEET_DIR/$RUN"
       _lf_log="$FLEET_DIR/$RUN/detached.log"; : > "$_lf_log"
       _lf_det=""
       for _d in "$LR/../lib/detach.sh" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/scripts/lib/detach.sh" "$HOME/.claude/scripts/lib/detach.sh"; do
@@ -1143,7 +1145,7 @@ EOF
     elif [ $? -eq 2 ]; then
       echo "lr-fleet: --one $SID is AMBIGUOUS — it names more than one session; pass the full uuid" >&2; exit 2
     fi
-    RUN="${LR_FLEET_RUN:-one-$(date -u +%Y%m%dT%H%M%SZ)}"; mkdir -p "$FLEET_DIR/$RUN"; : > "$FLEET_DIR/$RUN/results.tsv"
+    RUN="${LR_FLEET_RUN:-one-$(date -u +%Y%m%dT%H%M%SZ)-${SID:0:8}}"; mkdir -p "$FLEET_DIR/$RUN"; : > "$FLEET_DIR/$RUN/results.tsv"
     # ── REGISTRY AND STORE FIRST; THE CENSUS IS THE FALLBACK ────────────────────────────────────
     # `--one` is HANDED the sid and then ran the full `lf_locate` census to find it — measured
     # 40.3 / 64.5 / 86.1 s over 2,158 transcripts against a 0.007 s registry read and a 0.012 s
