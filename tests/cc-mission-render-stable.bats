@@ -64,9 +64,9 @@ inode_of() { stat -f '%i' "$1" 2>/dev/null || stat -c '%i' "$1"; }
   python3 - "$CC_MISSION" "$mut" <<'EOF'
 import sys
 src = open(sys.argv[1]).read()
-anchor = "        if BOARD.read_text() == text:\n            return 0"
+anchor = "        if path.read_text() == text:\n            return"
 assert anchor in src, "anchor moved: re-anchor this control on the skip"
-open(sys.argv[2], "w").write(src.replace(anchor, "        if False:\n            return 0"))
+open(sys.argv[2], "w").write(src.replace(anchor, "        if False:\n            return"))
 EOF
   chmod +x "$mut"
   run "$mut" render
@@ -75,4 +75,25 @@ EOF
   run "$mut" render
   [ "$status" -eq 0 ]
   [ "$(inode_of "$BOARD")" != "$ino" ]
+}
+
+@test "slim arm: with ~/.claude/rules.slim present, it gets a compact board and the shared board stays full" {
+  mkdir -p "$HOME/.claude/rules.slim"
+  run env -u CC_MISSION_COMPACT "$CC_MISSION" render
+  [ "$status" -eq 0 ]
+  local slim="$HOME/.claude/rules.slim/00-mission-board.md"
+  [ -f "$slim" ]
+  grep -q '`t1`' "$slim"                      # compact rows carry the row id
+  grep -q 'do the thing' "$BOARD"
+  run grep -q '`t1`' "$BOARD"                   # the shared board is still the full render
+  [ "$status" -ne 0 ]
+  local ino; ino="$(inode_of "$slim")"
+  run env -u CC_MISSION_COMPACT "$CC_MISSION" render
+  [ "$(inode_of "$slim")" = "$ino" ]           # and the slim board obeys the same byte-compare skip
+}
+
+@test "no rules.slim dir: nothing is written there" {
+  run env -u CC_MISSION_COMPACT "$CC_MISSION" render
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.claude/rules.slim" ]
 }
