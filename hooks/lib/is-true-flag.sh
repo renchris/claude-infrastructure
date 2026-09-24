@@ -263,6 +263,7 @@ rm_argv_scan() {
   local out rc
   out=$(CMD="$cmd" python3 - <<'PYEOF' 2>/dev/null
 import os
+import re
 import shlex
 import sys
 
@@ -347,9 +348,19 @@ def unquoted_lines(src):
     echo · } · done · if, each one a manual prompt stalling a session over a word that is not a path.
     A newline inside quotes does not split (it would desync the rest of the scan), and a
     backslash-newline is a continuation that stays joined; scan_line() then removes it.
+
+    A HEREDOC BODY is consumed RAW, and it is scanned only when a shell will RUN it. Measured
+    2026-09-24 (docs/plans/PERMISSION_PROMPT_CONSOLIDATION.md): the commonest remaining ask was an
+    rm inside `cat > "$SP/probe.sh" <<'EOS' … rm -rf "$T" … EOS` — a script being WRITTEN to a
+    file, which this command never executes. That is the mention-is-not-invocation rule the
+    commit-message case already follows, one construct over; running the file later is a separate
+    call, exactly as if the Write tool had written it. The body is also read without quote
+    tracking, as bash reads it, so an apostrophe in prose no longer swallows the lines after it.
     """
     out, cur, q, esc = [], [], None, False
-    for ch in src:
+    i, n = 0, len(src)
+    while i < n:
+        ch = src[i]; i += 1
         if esc:
             cur.append(ch); esc = False; continue
         if ch == "\\" and q != "'":
@@ -362,10 +373,77 @@ def unquoted_lines(src):
         if ch in ('"', "'"):
             q = ch; cur.append(ch); continue
         if ch == "\n":
-            out.append("".join(cur)); cur = []; continue
+            line = "".join(cur); cur = []
+            out.append(line)
+            ops = heredoc_ops(line)
+            if ops:
+                body = []
+                for strip_tabs, delim in ops:
+                    while i < n:
+                        j = src.find("\n", i)
+                        raw = src[i:] if j < 0 else src[i:j]
+                        i = n if j < 0 else j + 1
+                        if (raw.lstrip("\t") if strip_tabs else raw) == delim:
+                            break
+                        body.append(raw)
+                if heredoc_runs_as_shell(line):
+                    out.extend(unquoted_lines("\n".join(body)))
+            continue
         cur.append(ch)
     out.append("".join(cur))
     return [ln for ln in out if ln.strip()]
+
+
+# Words that make a heredoc body SHELL CODE when they appear anywhere on the line that opens it:
+# the interpreters themselves, and everything that hands its stdin or argv to one (`cat <<E | bash`,
+# `ssh host <<E`, `sudo sh <<E`, `timeout 9 bash <<E`). Deliberately broad — a false "code" verdict
+# only restores the incumbent behaviour (scan the body), while a false "data" verdict is the one
+# that could hide an rm, so every doubt resolves toward scanning.
+HEREDOC_SHELLISH = frozenset((
+    "bash", "sh", "zsh", "ksh", "dash", "fish", "ash", "busybox", "source", ".", "eval", "exec",
+    "ssh", "xargs", "sudo", "su", "doas", "env", "nohup", "time", "timeout", "gtimeout", "nice",
+    "command", "builtin", "script", "expect", "tmux", "screen", "docker", "podman", "kubectl",
+    "osascript", "parallel", "watch", "chroot", "unbuffer", "stdbuf", "caffeinate", "taskpolicy",
+    "arch", "launchctl", "at", "batch", "crontab",
+))
+
+
+def heredoc_runs_as_shell(line):
+    words = [w for w in re.split(r"[\s|&;()<>\x60'\x22{}]+", line) if w]
+    return any(os.path.basename(w) in HEREDOC_SHELLISH for w in words)
+
+
+def heredoc_ops(line):
+    """[(strip_tabs, delimiter)] for each heredoc operator on this line, in order.
+
+    Outside quotes only, `<<<` (a here-STRING, no body) excluded, and never inside `((…))` / `$((…))`
+    where `1<<n` is a shift: a shift misread as a heredoc would swallow every later line as body.
+    """
+    ops, q, esc, depth, k = [], None, False, 0, 0
+    while k < len(line):
+        ch = line[k]
+        if esc:
+            esc = False; k += 1; continue
+        if ch == "\\" and q != "'":
+            esc = True; k += 1; continue
+        if q:
+            if ch == q:
+                q = None
+            k += 1; continue
+        if ch in ('"', "'"):
+            q = ch; k += 1; continue
+        if line.startswith("((", k):
+            depth += 1; k += 2; continue
+        if depth and line.startswith("))", k):
+            depth -= 1; k += 2; continue
+        if not depth and line.startswith("<<", k) and not line.startswith("<<<", k) \
+                and (k == 0 or line[k - 1] != "<"):
+            m = re.match(r"<<(-?)[ \t]*\\?(['\"]?)([A-Za-z_][A-Za-z0-9_.-]*)\2", line[k:])
+            if m:
+                ops.append((m.group(1) == "-", m.group(3)))
+                k += m.end(); continue
+        k += 1
+    return ops
 
 
 def scan(src, depth=0):
