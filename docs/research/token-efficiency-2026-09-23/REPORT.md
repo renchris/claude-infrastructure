@@ -39,6 +39,14 @@ session at launch; a change ships to all accounts or none. Migration 0037 conver
   judge 40/40 in both arms), but 14% more turns (p=0.016) and padded answers (26/40 vs 36/40 on the scope item).
   In post-gate probes, a one-line scope clause removed the padding, and restoring the full file's "safe to close is
   an assertion, not a vibe" paragraph fixed one close task but not the other.
+- **Re-gate (2026-09-24, same rule, `eval/GATE.md` § Re-gate): `workflow-lean` PASSES, slim still FAILS.**
+  `workflow-lean` with the scope clause is 84% cheaper per slot (p=0.002) and equally correct (success 40/40 both,
+  compliance 96.9% vs 96.2%), with no guardrail worse. It is now the default `agentType` for read-only Workflow
+  research slots in the research-subagents and cc-version-audit skills. Slim with the restored close contract (the
+  full "✅" paragraph plus one new paragraph: a close question asks about the task's scope, not this session's
+  writes) no longer over-claims (T08 5/5 vs full 2/5, success 98/100 vs 96/100) and is 31.6% cheaper, but takes
+  13.7% more turns (p=0.014) with 25% more tool errors (p=0.002). That excess was already in the gate, hidden
+  because slim then skipped the close work; it sits in the plan-edit, operator-step and revert tasks.
 
 ## 1. Harness map and baseline
 
@@ -83,9 +91,9 @@ Savings are list $ per 14.96 days and % of the $32,517 fleet; **status** is what
 
 | # | Change | Layer | Saving (own, %) | Risk | Category | Status |
 |---:|---|---|---:|---|---|---|
-| 1 | Lean worker type for workflow and research agents (`omitClaudeMd`, no Skill/Agent/MCP tools) | agents | $4,169 (12.8%) | med | FLAG | **built**: `agents/workflow-lean.md`, opt-in per slot · **offline gate FAIL as built 2026-09-24** (padding, +14% turns); re-gate with a scope clause |
+| 1 | Lean worker type for workflow and research agents (`omitClaudeMd`, no Skill/Agent/MCP tools) | agents | $4,169 (12.8%) | med | FLAG | **built**: `agents/workflow-lean.md`, opt-in per slot · **offline gate FAIL as built 2026-09-24** (padding, +14% turns); ~~re-gate with a scope clause~~ **re-gate PASS 2026-09-24** with the scope clause in the agent (−84% per slot, no guardrail worse); default `agentType` for read-only Workflow research slots (research-subagents slot table, cc-version-audit Step 3) |
 | 2 | Cache breakpoint after the setup attachments | CC binary | $890-1,210 (2.7-3.7%) | low | PROPOSE (upstream) | proposed; flag-level workaround described |
-| 3 | Slim global CLAUDE.md (−54% tokens) | memory | $2,036 (6.3%) | med | FLAG | **built**: `CLAUDE.global.slim.md` + ~~per-account switch~~ (withdrawn 2026-09-23: offline gate, then all accounts or none) · **offline gate FAIL 2026-09-24** (false safe-to-close, 8/10 vs 1/10); ships to no account |
+| 3 | Slim global CLAUDE.md (−54% tokens) | memory | $2,036 (6.3%) | med | FLAG | **built**: `CLAUDE.global.slim.md` + ~~per-account switch~~ (withdrawn 2026-09-23: offline gate, then all accounts or none) · **offline gate FAIL 2026-09-24** (false safe-to-close, 8/10 vs 1/10); ships to no account · **re-gate FAIL 2026-09-24**: close contract restored (no over-claim, −31.6% cost), but +13.7% turns and +25% tool errors, from non-close tasks the gate had masked; next, bisect those |
 | 4 | Project rules split: resident core + situational half (−88% resident) | memory | $1,639 (5.0%) | med | FLAG | **built**: default-neutral split + staged migration 0036 |
 | 5 | Prompt suggestion off (forced on by our env) | settings | ≤$745 outside the total | low | PROPOSE (operator set it on purpose) | proposed |
 | 6 | Idle keepalive for main threads | binary | ≥$549 (1.7%) | low | PROPOSE | proposed |
@@ -213,6 +221,25 @@ re-run, with raw data in `eval/gate/`. The pass/fail rule was fixed in `harness/
   A one-line scope clause in the lean brief removed the padding at the same cost.
 - *What this decides.* Under the 2026-09-23 ruling this gate replaces the per-account online A/B. The slim
   instructions ship to no account, and `workflow-lean` stays opt-in and unused by default.
+
+**Re-gate (2026-09-24):** both flags were repaired and re-run under the unchanged rule; detail in `eval/GATE.md`
+§ Re-gate, raw data in `eval/regate/`.
+- *`workflow-lean` (F2), 80 slots. PASS.* The scope clause is now in `agents/workflow-lean.md`. Cost per slot
+  $0.109 vs $0.697 (−84.4%), verifier 28/28 and judge 40/40 in both arms, and padding 35/40 vs 36/40 (the gate had
+  26/40). Turns +19.5% is not significant (p=0.125). A first re-run failed on tool errors, 32 of 33 of them an `ls`
+  of an OUTDIR the gate had pre-created by an unrecorded step. `f2/setup.sh` now records that step, and the second
+  run is the verdict. It is the default `agentType` for read-only Workflow research slots in the research-subagents
+  skill's slot table and cc-version-audit Step 3. Code-writing, landing and closing slots keep the default subagent.
+- *Slim instructions (F1), 200 runs. FAIL.* A bisect found that none of the passages the gate named restores the
+  plan-status task (T10), and that even the whole full file misses it 2 times in 5. The shipped fix is the full "✅ is a
+  safe-to-close assertion" paragraph plus one new paragraph saying a close question asks about the task's scope, not
+  this session's writes. It scored 5/5 on both close tasks in the bisect. In the full re-run the close failure is gone
+  (success 98/100 vs 96/100, compliance 97.1% both) at −31.6% cost. The rule still fails it on turns (+13.7%, p=0.014)
+  and tool errors (+24.6%, p=0.002). That excess sits in non-close tasks (plan edit, operator step, revert) and was
+  already present in the gate, where skipped close work offset it. Next step: bisect those tasks the same way, then
+  re-run F1.
+- *What this decides.* `workflow-lean` is the default for read-only Workflow slots; the slim instructions still ship
+  to no account, so nothing is staged for the operator.
 
 ## 5. Gaps
 
