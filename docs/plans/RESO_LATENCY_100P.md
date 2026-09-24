@@ -118,3 +118,12 @@ migration on a live fleet for no measurable gain.
 - **Operator note:** `/deploy` is a reso-session slash command; from a shell (`!`) the equivalent is
   `bash scripts/deploy-release.sh` in the reso checkout (no keyboard prompt; migration drops need
   `DEPLOY_CONFIRMED_DROP`). My earlier close handed `/deploy` as a shell command, which was wrong.
+- **2026-09-24 14:34 CDT — operator ruled "deploy e94fa15b4 now"** (every verifier gate had passed; the design-gate
+  Playwright runner hung after its last test, so no stamp was written). `DEPLOY_REQUIRE_GREEN=off
+  scripts/deploy-release.sh --sha e94fa15b4` moved `release` 2bba10b1d → e94fa15b4, no migrations. **Amplify job 1498
+  FAILED at the 30-min limit again, but for a different reason:** every test passed (503 files) and `next build`
+  succeeded; the job ran out of time uploading its cache (30m19s). Unit tests took 1150 s in Amplify vs 528 s locally,
+  and **this programme's round-trip/level tests are the slowest files (48–95 s each, ~1,000 of 2,057 test-seconds)** —
+  probably barrier/level detection on timers that W9's `VITEST_TIMEOUT_FACTOR=4` multiplies. Handed to W10 as its top
+  item. Immediate unblock staged for the operator (auto mode refused the agent a production build-config write):
+  `/tmp/reso-oregon-build-timeout.sh --confirm oregon` raises `_BUILD_TIMEOUT` to 60 and re-runs the e94fa15b4 build.
