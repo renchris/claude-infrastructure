@@ -48,6 +48,9 @@ ROOT="$(cd "$(dirname "$SELF")/../.." && pwd)"
 
 MEM="${CC_JEV_MEM_DIR:-$HOME/.claude-secondary/projects/-Users-chrisren-Development-claude-infrastructure/memory}"
 RULES="${CC_JEV_RULES_FILE:-$ROOT/.claude/rules/agent-operating-lessons.md}"
+# The rules file was split on 2026-09-23 into a resident half and a situational half, and a lesson
+# cited from either is reachable (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md).
+RULES_SIT="${CC_JEV_RULES_SIT_FILE:-${RULES%.md}-situational.md}"
 RANKROWS="${CC_JEV_RANK_ROWS:-}"
 CAP="${CC_JEV_PROMO_CAP_B:-1200}"
 SEED="${CC_JEV_PROMO_SEED:-20260921}"
@@ -289,6 +292,7 @@ grep -o '](\([^)]*\.md\))' "$IDX" | sed 's/](//;s/)//' | _basenames > "$INDEXED"
 comm -23 "$ALL" "$INDEXED" | while read -r f; do
   [ -n "$f" ] || continue
   if [ -f "$RULES" ] && grep -qF "$f" "$RULES"; then continue; fi
+  if [ -f "$RULES_SIT" ] && grep -qF "$f" "$RULES_SIT"; then continue; fi
   printf '%s\n' "$f"
 done > "$ORPH"
 N_ALL=$(wc -l < "$ALL" | tr -d ' '); N_IDX=$(wc -l < "$INDEXED" | tr -d ' ')
@@ -372,7 +376,7 @@ mkdir -p "$(dirname "$OUT")" || { printf 'cannot create %s\n' "$(dirname "$OUT")
 : >> "$OUT" || { printf 'cannot write %s\n' "$OUT" >&2; exit 3; }
 
 printf 'Index:    %s  (%s indexed of %s topic files)\n' "$IDX" "$N_IDX" "$N_ALL"
-printf 'Orphans:  %s reachable from NEITHER the index NOR the always-loaded rules file\n' "$N_ORPH"
+printf 'Orphans:  %s reachable from NEITHER the index NOR either rules file\n' "$N_ORPH"
 printf 'Anchors:  %s weak incumbent(s) from %s\n' "$N_ANCH" "$RANKROWS"
 printf 'Plan:     1 preflight + %s heat(s) of 5 + %s head-to-head + %s position-bias = %s call(s)\n' \
        "$HEATS" "$R2" "$BIAS" "$TOTAL"

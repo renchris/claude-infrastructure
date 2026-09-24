@@ -293,12 +293,14 @@ fire() { jq -nc --arg cwd "$1" '{session_id:"s1",cwd:$cwd,tool_name:"Bash",tool_
   ctx="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.additionalContext')"
   has "$ctx" "MEMORY INDEX DRAINED"
   has "$ctx" "big.md"
-  has "$ctx" "$proj/.claude/rules/agent-operating-lessons.md"
+  has "$ctx" "$proj/.claude/rules/agent-operating-lessons-situational.md"
   # same turn: the line is already off the index and on the always-loaded surface
   run grep -c 'big.md' "$memd/MEMORY.md"
   [ "$status" -ne 0 ]
-  run grep -c 'big.md' "$proj/.claude/rules/agent-operating-lessons.md"
+  run grep -c 'big.md' "$proj/.claude/rules/agent-operating-lessons-situational.md"
   [ "$status" -eq 0 ]
+  # the SITUATIONAL half since the 2026-09-23 split; the resident half is never appended to
+  [ ! -e "$proj/.claude/rules/agent-operating-lessons.md" ]
 }
 
 @test "14 hookEventName is PostToolUse and the payload is one JSON object" {
@@ -329,7 +331,7 @@ fire() { jq -nc --arg cwd "$1" '{session_id:"s1",cwd:$cwd,tool_name:"Bash",tool_
   [ "$status" -eq 0 ]
   run diff -q "$T/sib-before.md" "$memd/NOTES.md"
   [ "$status" -eq 0 ]
-  [ ! -e "$proj/.claude/rules/agent-operating-lessons.md" ]
+  [ ! -e "$proj/.claude/rules/agent-operating-lessons-situational.md" ]
 }
 
 @test "16 an unchanged index is not measured and not acted on" {
@@ -410,7 +412,7 @@ fire() { jq -nc --arg cwd "$1" '{session_id:"s1",cwd:$cwd,tool_name:"Bash",tool_
   # halves are kept live: the index must have shrunk AND the moved lines must be somewhere.
   before_lines=41
   [ "$(grep -c '^- \[' "$memd/MEMORY.md")" -lt "$before_lines" ]
-  [ "$(grep -c '^- \[' "$proj/.claude/rules/agent-operating-lessons.md")" -gt 0 ]
+  [ "$(grep -c '^- \[' "$proj/.claude/rules/agent-operating-lessons-situational.md")" -gt 0 ]
 }
 
 @test "20 every failure surface exits 0 and emits nothing" {

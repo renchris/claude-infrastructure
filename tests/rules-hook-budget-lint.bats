@@ -154,3 +154,124 @@ _own_fixture() {  # -> echoes the repo dir
   [[ "$output" == *"duplicate=1"* ]] || false
   [[ "$output" == *"over-budget=0"* ]] || false
 }
+
+# -- two files since the 2026-09-23 split (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md)
+# With no --file the lint judges the resident file AND agent-operating-lessons-situational.md, and
+# flags a body linked from both, which neither per-file scan can see.
+_split_fixture() {  # _split_fixture <situational-body> -> echoes the dir
+  local d="$BATS_TEST_TMPDIR/split"; mkdir -p "$d/.claude/rules"
+  printf '# r\n\n- [A](../../docs/lessons/a.md) — rule a.\n' > "$d/.claude/rules/agent-operating-lessons.md"
+  [ -n "$1" ] && printf '%b' "$1" > "$d/.claude/rules/agent-operating-lessons-situational.md"
+  echo "$d"
+}
+
+@test "no --file lints both files" {
+  d="$(_split_fixture '# s\n\n- [B](../../docs/lessons/b.md) — rule b.\n')"
+  cd "$d"; run "$LINT"
+  [ "$status" -eq 0 ] || false
+  [ "$(printf '%s\n' "$output" | grep -c 'clean — 1 bullet')" -eq 2 ] || false
+}
+
+@test "no --file: a bodyless bullet in the situational file is REFUSED" {
+  d="$(_split_fixture '# s\n\n- [B](.) — pasted whole.\n')"
+  cd "$d"; run "$LINT"
+  [ "$status" -eq 1 ] || false
+  [[ "$output" == *"agent-operating-lessons-situational.md:3: BODYLESS"* ]] || false
+}
+
+@test "no --file: one body linked from both files is a DUPLICATE" {
+  d="$(_split_fixture '# s\n\n- [A2](../../docs/lessons/a.md) — rule a again.\n')"
+  cd "$d"; run "$LINT"
+  [ "$status" -eq 1 ] || false
+  [[ "$output" == *"both files link ../../docs/lessons/a.md"* ]] || false
+}
+
+@test "no --file: a project without the situational file lints the one file" {
+  d="$(_split_fixture '')"
+  cd "$d"; run "$LINT"
+  [ "$status" -eq 0 ] || false
+}
+
+@test "the live situational file still PARSES" {
+  run "$LINT" --file "$REPO/.claude/rules/agent-operating-lessons-situational.md"
+  [ "$status" -ne 2 ] || false
+  [[ "$output" == *"bullet(s)"* ]] || false
+}
+
+# -- the land's own invocation: --file per changed half (ship-land.sh, rules_own loop) ----------
+# The cross-file arm must run there too, or a rebase through `merge=union` that copies the
+# original's tail back into the resident file lands clean
+# (docs/research/token-efficiency-2026-09-23/implement/F4-project-rules-split.review.md, major 1-2).
+@test "--file on the resident half: a body linked from both files is a DUPLICATE" {
+  d="$(_split_fixture '# s\n\n- [A2](../../docs/lessons/a.md) — rule a again.\n')"
+  cd "$d"; run "$LINT" --file .claude/rules/agent-operating-lessons.md
+  [ "$status" -eq 1 ] || false
+  [[ "$output" == *"both files link ../../docs/lessons/a.md"* ]] || false
+}
+
+@test "--file on the situational half: a body linked from both files is a DUPLICATE" {
+  d="$(_split_fixture '# s\n\n- [A2](../../docs/lessons/a.md) — rule a again.\n')"
+  run "$LINT" --file "$d/.claude/rules/agent-operating-lessons-situational.md"
+  [ "$status" -eq 1 ] || false
+  [[ "$output" == *"both files link ../../docs/lessons/a.md"* ]] || false
+}
+
+@test "--file: an unlinked bullet line in both files is a DUPLICATE, indentation ignored" {
+  d="$(_split_fixture '# s\n\n- [B](../../docs/lessons/b.md) — rule b.\n  - demoted pointer x.md — kept.\n')"
+  printf -- '- demoted pointer x.md — kept.\n' >> "$d/.claude/rules/agent-operating-lessons.md"
+  run "$LINT" --file "$d/.claude/rules/agent-operating-lessons.md"
+  [ "$status" -eq 1 ] || false
+  [[ "$output" == *"this line is in both files: - demoted pointer x.md"* ]] || false
+}
+
+@test "--file: distinct halves are clean" {
+  d="$(_split_fixture '# s\n\n- [B](../../docs/lessons/b.md) — rule b.\n')"
+  run "$LINT" --file "$d/.claude/rules/agent-operating-lessons.md"
+  [ "$status" -eq 0 ] || false
+}
+
+# -- resident adds: new lessons go to the situational half ----------------------------------------
+# A real two-commit repo. The base is a split pair; $1 is a shell snippet run in the repo to make
+# the head commit.
+_resident_fixture() {
+  local d="$BATS_TEST_TMPDIR/radd"; mkdir -p "$d/.claude/rules"
+  git -C "$d" init -q
+  printf '# r\n\n- [A](../../docs/lessons/a.md) — rule a.\n' > "$d/.claude/rules/agent-operating-lessons.md"
+  printf '# s\n\n- [B](../../docs/lessons/b.md) — rule b.\n  - `c.md` — nested c.\n' \
+    > "$d/.claude/rules/agent-operating-lessons-situational.md"
+  git -C "$d" add -A; git -C "$d" -c user.email=t@t -c user.name=t commit -qm base
+  (cd "$d" && eval "$1")
+  git -C "$d" add -A; git -C "$d" -c user.email=t@t -c user.name=t commit -qm head
+  echo "$d"
+}
+R_=.claude/rules/agent-operating-lessons.md
+S_=.claude/rules/agent-operating-lessons-situational.md
+
+@test "--own-range: a new bullet added to the resident file is REFUSED" {
+  d="$(_resident_fixture "printf -- '- [N](../../docs/lessons/n.md) — new.\n' >> $R_")"
+  cd "$d"; run "$LINT" --file "$R_" --own-range HEAD~1..HEAD
+  [ "$status" -eq 1 ] || false
+  [[ "$output" == *"RESIDENT ADD"*"- [N](../../docs/lessons/n.md)"* ]] || false
+}
+
+@test "--own-range: RULES_RESIDENT_ADD_OK=1 turns a resident add advisory" {
+  d="$(_resident_fixture "printf -- '- [N](../../docs/lessons/n.md) — new.\n' >> $R_")"
+  cd "$d"; RULES_RESIDENT_ADD_OK=1 run "$LINT" --file "$R_" --own-range HEAD~1..HEAD
+  [ "$status" -eq 0 ] || false
+  [[ "$output" == *"advisory: "*"RESIDENT ADD"* ]] || false
+}
+
+@test "--own-range: a bullet moved or re-indented into the resident file is not an add" {
+  d="$(_resident_fixture "printf '# s\n\n' > $S_; printf -- '- [B](../../docs/lessons/b.md) — rule b.\n- \`c.md\` — nested c.\n' >> $R_")"
+  cd "$d"; run "$LINT" --file "$R_" --own-range HEAD~1..HEAD
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"RESIDENT ADD"* ]] || false
+}
+
+@test "--own-range: a new bullet in the situational file is not a resident add" {
+  d="$(_resident_fixture "printf -- '- [N](../../docs/lessons/n.md) — new.\n' >> $S_")"
+  cd "$d"; run "$LINT" --file "$S_" --own-range HEAD~1..HEAD
+  [ "$status" -eq 0 ] || false
+  cd "$d"; run "$LINT" --file "$R_" --own-range HEAD~1..HEAD
+  [ "$status" -eq 0 ] || false
+}

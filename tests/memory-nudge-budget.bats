@@ -698,3 +698,28 @@ rotate_env() {  # small, hand-countable budgets for the actuation tests
   hasnt "$ctxout" 'IT IS OVER BOTH CAPS'
   hasnt "$ctxout" '🚨 MEMORY INDEX OVER ITS LINE LIMIT'
 }
+
+# The 2026-09-23 split (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md): new lessons
+# go to the situational rules file, never the resident one, and the hint no longer claims
+# ~/.claude/rules is dark under `claude -p` (it loads headless too; audit/C6.rules-essay.md).
+@test "the nudge sends new lessons to the situational rules file" {
+  out=""
+  proj="$BATS_TEST_TMPDIR/proj"; mkdir -p "$proj"
+  for _ in $(seq 1 12); do
+    out="$(CLAUDE_PROJECT_DIR="$proj" fire s-sit "$BATS_TEST_TMPDIR/absent/MEMORY.md" || true)"
+  done
+  c="$(printf '%s' "$out" | ctx)"
+  has "$c" "$proj/.claude/rules/agent-operating-lessons-situational.md"
+  hasnt "$c" "$proj/.claude/rules/agent-operating-lessons.md"
+}
+
+@test "the fallback hint names the situational file and no longer calls ~/.claude/rules dark" {
+  out=""
+  # the fallback hint is the no-project, no-git-root branch: an unreadable cwd falls back to $PWD,
+  # so run from a scratch dir outside any repo
+  unset CLAUDE_PROJECT_DIR; cd "$BATS_TEST_TMPDIR"
+  for _ in $(seq 1 12); do out="$(fire s-fb "$BATS_TEST_TMPDIR/absent/MEMORY.md" || true)"; done
+  c="$(printf '%s' "$out" | ctx)"
+  has "$c" '<project>/.claude/rules/agent-operating-lessons-situational.md'
+  hasnt "$c" 'dark under'
+}

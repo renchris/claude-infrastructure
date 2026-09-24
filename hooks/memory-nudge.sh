@@ -508,21 +508,28 @@ fi
 # That is why the guidance below sends a durable, generalizable RULE to the rules file while
 # MEMORY.md plus its topic file stay correct for everything else.
 #
-# 🚨 PROJECT-level, never USER-level. `~/.claude/rules/*.md` loads in an INTERACTIVE session and
-# does NOT load under `claude -p` — the variable is invocation mode, not the surface — while
-# `<project>/.claude/rules/*.md` loads in both. Naming the wrong one would send rules to a
-# surface that is dark for every headless run.
+# PROJECT-level, never USER-level. Both `~/.claude/rules/*.md` and `<project>/.claude/rules/*.md`
+# load in interactive and `claude -p` sessions (re-measured 2026-09-09; bin/cc-mission:16-21 and
+# docs/research/token-efficiency-2026-09-23/audit/C6.rules-essay.md), but the user-level directory
+# loads in EVERY repo, so a project's lesson written there costs context in unrelated sessions.
+#
+# THE SITUATIONAL FILE (2026-09-23). The project rules file was split into a resident half
+# (agent-operating-lessons.md, the few lessons that fire on any work) and
+# agent-operating-lessons-situational.md, which a per-account claudeMdExcludes glob can drop
+# (docs/research/token-efficiency-2026-09-23/audit/C7.labels.md). New lessons go to the situational
+# file: it loads by default, and admitting a lesson to the resident half is a curated decision, not
+# something a periodic nudge should make on every append.
 #
 # This is PROSE, not enforcement, and it is sited here deliberately with its limits stated: this
 # hook fires at UserPromptSubmit, every Nth prompt, a full turn after any write, and its only
 # channel is additionalContext. It cannot gate a write and does not pretend to. The actuator for
 # a rule that is ALREADY in the index is cc-memory-rotate; this text is only about where the
 # NEXT one is written.
-RULES_HINT="the project's always-loaded rules file at <project>/.claude/rules/agent-operating-lessons.md (PROJECT-level — ~/.claude/rules/ is dark under \`claude -p\`)"
+RULES_HINT="the project's situational rules file at <project>/.claude/rules/agent-operating-lessons-situational.md (PROJECT-level — ~/.claude/rules/ loads in every repo)"
 if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
-  RULES_HINT="$CLAUDE_PROJECT_DIR/.claude/rules/agent-operating-lessons.md (create it if missing)"
+  RULES_HINT="$CLAUDE_PROJECT_DIR/.claude/rules/agent-operating-lessons-situational.md (create it if missing)"
 elif RROOT=$(cd "$CWD" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null); then
-  [ -n "$RROOT" ] && RULES_HINT="$RROOT/.claude/rules/agent-operating-lessons.md (create it if missing)"
+  [ -n "$RROOT" ] && RULES_HINT="$RROOT/.claude/rules/agent-operating-lessons-situational.md (create it if missing)"
 fi
 # ORDER INVERTED 2026-09-03, and the order is load-bearing in two directions. This said "append
 # one index line to MEMORY.md and create the topic file" — index FIRST. But the index write is the
@@ -533,7 +540,7 @@ fi
 # lesson, and the remedy is one-in-one-out on an index whose body already exists. It is also the
 # precondition for any gate that must READ a rule's topic file at the moment its index line is
 # written (routing on durability needs the frontmatter to exist).
-NUDGE="MEMORY CHECK (periodic): if this session surfaced a DURABLE, generalizable rule, a decision (+ its why), a confirmed constraint, or user feedback that is NOT already in MEMORY.md, persist it now — FIRST create the topic file with frontmatter, THEN append its one-line pointer (that order matters: the pointer can be refused when the index is full, and a rule whose body is already on disk survives that refusal); $WHERE. WHERE THE POINTER GOES: a DURABLE, GENERALIZABLE RULE — one that should fire on any work here — belongs in $RULES_HINT, which is always loaded and has no 25,000-char/200-line cap, so it does not compete with the index and cannot be dropped from its tail. It is a HOOK tier, not a body tier, and that is enforced at the land gate (scripts/rules-hook-budget-lint.sh): write the FULL lesson VERBATIM to docs/lessons/<slug>.md — never shortened — and put ONE hook line in the rules file linking ../../docs/lessons/<slug>.md, under 420 chars, stating the rule so a reader can act on it without opening the body. A bullet whose link target is a bare dot has no body and is REFUSED. Everything else — a project fact, a pointer to tooling, session-specific context — keeps the MEMORY.md bullet. SKIP (do not encode as a permanent rule): transient errors, environment/worktree-specific one-offs, lucky paths, negative tool-claims (verify before encoding), anything already indexed. Nothing durable this session? Ignore this."
+NUDGE="MEMORY CHECK (periodic): if this session surfaced a DURABLE, generalizable rule, a decision (+ its why), a confirmed constraint, or user feedback that is NOT already in MEMORY.md, persist it now — FIRST create the topic file with frontmatter, THEN append its one-line pointer (that order matters: the pointer can be refused when the index is full, and a rule whose body is already on disk survives that refusal); $WHERE. WHERE THE POINTER GOES: a DURABLE, GENERALIZABLE RULE — one that should fire on any work here — belongs in $RULES_HINT, which loads by default and has no 25,000-char/200-line cap, so it does not compete with the index and cannot be dropped from its tail (the resident agent-operating-lessons.md beside it holds only the few lessons that fire on any work; do not append there). It is a HOOK tier, not a body tier, and that is enforced at the land gate (scripts/rules-hook-budget-lint.sh): write the FULL lesson VERBATIM to docs/lessons/<slug>.md — never shortened — and put ONE hook line in the rules file linking ../../docs/lessons/<slug>.md, under 420 chars, stating the rule so a reader can act on it without opening the body. A bullet whose link target is a bare dot has no body and is REFUSED. Everything else — a project fact, a pointer to tooling, session-specific context — keeps the MEMORY.md bullet. SKIP (do not encode as a permanent rule): transient errors, environment/worktree-specific one-offs, lucky paths, negative tool-claims (verify before encoding), anything already indexed. Nothing durable this session? Ignore this."
 
 # Build with jq: the message interpolates measured values, and shell quoting is
 # not JSON quoting — a hand-rolled heredoc would be a quoting bug waiting to land.
