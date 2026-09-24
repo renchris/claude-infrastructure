@@ -172,6 +172,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import textwrap
@@ -5947,6 +5948,23 @@ def main():
         # Deliberately NOT --no-heal: cache_read refuses a no-heal payload to a heal-wanting
         # caller whenever any row is BAD_AUTH, so a no-heal producer would poison the cache for
         # every other consumer exactly on the day one account is logged out — the day it matters.
+        # A WALL-CLOCK DEADLINE, enforced by the kernel. launchd never starts a second tick while
+        # one is running, so a producer that wedges holding the single-flight lock blocks routing
+        # machine-wide for as long as it lives: measured 2026-09-24, one tick sat 52 min at 0.43 s
+        # of CPU inside the 3.14 interpreter (_PyThreadState_Attach under an `_strptime` import),
+        # every `--rank` exited 5 after its 240 s wait, and a limit recovery PARKED on "no routable
+        # target". The out-log had 14 ticks over 30 min and 131 over 240 s. SIGALRM is left at
+        # SIG_DFL, so the kill needs no cooperation from a wedged interpreter; the kernel closes
+        # the lock fd, and cache writes are os.replace'd, so a killed tick leaves the previous
+        # cache intact for the next one. Default sits under the readers' 240 s lock wait.
+        # CC_KEEPWARM_DEADLINE_S=0 disables it.
+        try:
+            _kw_deadline = int(os.environ.get("CC_KEEPWARM_DEADLINE_S", "225"))
+        except ValueError:
+            _kw_deadline = 225
+        if _kw_deadline > 0:
+            signal.signal(signal.SIGALRM, signal.SIG_DFL)
+            signal.alarm(_kw_deadline)
         t0 = time.time()
         rows, wj, was_cached, _prev = get_data(cfg, fresh=False, no_heal=no_heal,
                                                max_age=max_age)
