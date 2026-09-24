@@ -54,6 +54,113 @@ fi
 shift
 BIN_ARGV=("$@")   # the real binary's args (for argv[first 3] in the record)
 
+# ── AUTO-MEMORY REAL PATH (2026-09-24). On the symlinked accounts (.claude-next/-secondary/
+#    -tertiary/-quaternary) the session's auto-memory dir is reached through a symlink into
+#    ~/.claude/projects/. CC's write carve-out for auto-memory files matches the path AS SPELLED,
+#    then its symlink landing check sees the REAL target outside the working dirs and raises a
+#    safetyCheck (classifierApprovable:false) — a prompt on every memory write that auto mode cannot
+#    approve. Allow rules, --add-dir and a PreToolUse hook allow were all measured NOT to clear it;
+#    setting `autoMemoryDirectory` to the real path does. It is ONE fixed dir (flag/user/policy
+#    settings only), so it is computed here, per launch, and passed as --settings — merged into an
+#    existing --settings value, never a second flag (CC reads one). Lesson:
+#    docs/lessons/symlinked-auto-memory-dir-prompts-on-every-write.md
+#    Kill switch CC_MEMDIR_REALPATH=off. Fails OPEN: on any doubt the argv is left untouched.
+#    Costs one git call + one `cd -P`; nothing at all when CLAUDE_CONFIG_DIR is unset.
+_memdir_json_str() { # $1 → JSON string body; returns 1 on anything needing more than \ and " escapes
+  local s="$1"
+  case "$s" in *[[:cntrl:]]*) return 1 ;; esac
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"
+  printf '%s' "$s"
+}
+# Merge {"autoMemoryDirectory":<real>} into a JSON-object text. Pure bash: the key is known absent
+# (callers skip when it is present), so prepending it after the opening brace is a valid merge.
+_memdir_merge() { # $1=json object text  $2=escaped real path → merged text; rc 1 if not an object
+  local t="$1" body
+  t="${t#"${t%%[![:space:]]*}"}"
+  [[ "$t" == "{"* ]] || return 1
+  body="${t#\{}"
+  if [[ "${body//[[:space:]]/}" == "}" ]]; then
+    printf '{"autoMemoryDirectory":"%s"}' "$2"
+  else
+    printf '{"autoMemoryDirectory":"%s",%s' "$2" "$body"
+  fi
+}
+_memdir_inject() {
+  [[ -n "${CLAUDE_CONFIG_DIR:-}" && "${CC_MEMDIR_REALPATH:-on}" != off ]] || return 0
+  local cd_root common root slug spelled probe rest="" real real_js
+  # Byte semantics for the ASCII check + sanitizer below; `local` restores the caller's locale on
+  # return, so the real binary's environment is untouched.
+  local LC_ALL=C
+  # slug = CC's canonical checkout root (the MAIN worktree for a linked one), else the cwd.
+  common="$(git -C "$PWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
+  if [[ -n "$common" ]]; then
+    [[ "${common##*/}" == ".git" ]] || return 0   # bare repo / submodule: slug rule unverified ⇒ skip
+    root="${common%/.git}"
+  else
+    root="$PWD"
+  fi
+  # CC sanitizes UTF-16 units; bash would count characters/bytes — identical only for ASCII.
+  [[ "$root" =~ ^[\ -~]+$ ]] || return 0
+  slug="${root//[^a-zA-Z0-9]/-}"
+  [[ ${#slug} -le 200 ]] || return 0              # CC appends a hash past 200 — not reproducible here
+  cd_root="${CLAUDE_CONFIG_DIR%/}"
+  spelled="$cd_root/projects/$slug/memory"
+  # Resolve the deepest EXISTING ancestor (memory/ may not exist yet), then re-append the rest.
+  probe="$spelled"
+  while [[ ! -d "$probe" ]]; do
+    rest="/${probe##*/}$rest"; probe="${probe%/*}"
+    [[ -n "$probe" ]] || return 0
+  done
+  real="$(cd -P "$probe" 2>/dev/null && pwd -P)" || return 0
+  [[ -n "$real" ]] || return 0
+  real="$real$rest"
+  [[ "$real" != "$spelled" ]] || return 0         # no symlink on the path ⇒ nothing to fix
+  real_js="$(_memdir_json_str "$real")" || return 0
+
+  # Locate an existing --settings (either spelling). More than one ⇒ ambiguous ⇒ leave argv alone.
+  local i n=${#BIN_ARGV[@]} at=-1 form="" val="" a
+  for (( i = 0; i < n; i++ )); do
+    a="${BIN_ARGV[i]}"
+    [[ "$a" == "--" ]] && break
+    case "$a" in *autoMemoryDirectory*) return 0 ;; esac
+    if [[ "$a" == "--settings" ]]; then
+      [[ $at -lt 0 && $((i + 1)) -lt $n ]] || return 0
+      at=$i; form=space; val="${BIN_ARGV[i+1]}"; i=$((i + 1))
+      case "$val" in *autoMemoryDirectory*) return 0 ;; esac
+    elif [[ "$a" == --settings=* ]]; then
+      [[ $at -lt 0 ]] || return 0
+      at=$i; form=eq; val="${a#--settings=}"
+    fi
+  done
+
+  local merged
+  if [[ $at -lt 0 ]]; then
+    MEMDIR_ARGV=("--settings={\"autoMemoryDirectory\":\"$real_js\"}" "${BIN_ARGV[@]}")
+    return 0
+  fi
+  local trimmed="${val#"${val%%[![:space:]]*}"}"
+  if [[ "$trimmed" == "{"* ]]; then
+    merged="$(_memdir_merge "$val" "$real_js")" || return 0
+  else
+    [[ -f "$val" && -r "$val" ]] || return 0
+    local content; content="$(<"$val")" || return 0
+    case "$content" in *autoMemoryDirectory*) return 0 ;; esac
+    # Inlined as a literal rather than a second temp file: nothing to clean up, and the value is
+    # frozen at launch (the mcp decision file is per-dir and may be rewritten by a later fire).
+    merged="$(_memdir_merge "$content" "$real_js")" || return 0
+  fi
+  MEMDIR_ARGV=("${BIN_ARGV[@]}")
+  if [[ "$form" == eq ]]; then
+    MEMDIR_ARGV[at]="--settings=$merged"
+  else
+    MEMDIR_ARGV[at+1]="$merged"
+  fi
+  return 0
+}
+MEMDIR_ARGV=()
+_memdir_inject 2>/dev/null || true
+[[ ${#MEMDIR_ARGV[@]} -gt 0 ]] && set -- "${MEMDIR_ARGV[@]}"
+
 RECORDS_DIR="${CC_CLOSE_RECORDS_DIR:-$HOME/.claude/logs/close-records}"
 # Same $HOME-derived path bin/claude-latest writes and lead-crash-watchdog.sh:821 globs.
 STDERR_DIR="${CC_STDERR_LOG_DIR:-$HOME/.claude/logs/stderr}"
