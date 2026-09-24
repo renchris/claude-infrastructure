@@ -259,3 +259,26 @@ run_spawn() {
   ! has "$output" "OVER CAP" || false
   printf '%s' "$output" | jq -e . >/dev/null
 }
+
+# ── CAPACITY REFUSAL: the reason says where this caller stands in the budget ─────────────────────
+# Measured before this case: 114 Agent-tool capacity refusals in 14 days, 13 contexts retrying 3+
+# times (max 12), because the reason said the refusal "releases after CC_ADMIT_BUDGET consecutive
+# refusals" and never which refusal this was. RED on the pre-change hook: it carried the library's
+# "(refusal 1 of 3 …)" buried mid-text, but neither the in-session instruction first nor the attempt
+# that admits. The refusal is forced through the headroom term's override seam; every term that reads
+# the live box is switched off so the verdict cannot depend on the machine running the suite.
+@test "CAPACITY: a refusal leads with the instruction and states refusal K of BUDGET, then admits at BUDGET+1" {
+  export CC_ADMIT_GATE=on CC_ADMIT_HEADROOM_OVERRIDE=0.5 CC_ADMIT_BUDGET=3
+  export CC_ADMIT_SEGMENT_TERM=off CC_ADMIT_ACTIVE_TERM=off CC_ADMIT_RESERVE_TERM=off
+  export CC_ADMIT_STATE_DIR="$BATS_TEST_TMPDIR/admit-state" CC_ADMIT_NOTIFY_BIN=/usr/bin/true
+  for k in 1 2 3; do
+    run run_hook_named "impl-1" "$(brief 10)"
+    [ "$status" -eq 0 ]
+    [ "$(decision "$output")" = deny ]
+    r="$(printf '%s' "$output" | jq -r '.hookSpecificOutput.permissionDecisionReason')"
+    [[ "$r" == "MACHINE CAPACITY — subagent spawn refused. Do this step in-session now instead of retrying. The \`headroom\` term refused: refusal $k of 3 — spawn attempt 4 is admitted (and pages)."* ]] || false
+    [[ "$r" == *"CC_ADMIT_GATE=off"* ]] || false # the override lines survive the reorder
+  done
+  run run_hook_named "impl-1" "$(brief 10)"
+  [ "$(decision "$output")" = allow ]
+}

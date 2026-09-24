@@ -423,6 +423,13 @@ CC_HW_BUDGET_N=0
 CC_ADMIT_REASON=""
 cc_capacity_admit_reason() { printf '%s' "$CC_ADMIT_REASON"; }
 
+# Where the LAST refusal stands in its budget, as `<term> <n> <budget>` — empty unless that evaluation
+# was a budget-charged refusal (a probe, a token refusal and every admit leave it empty). A refused
+# caller that is not told it is at refusal 2 of 3 retries blind: measured 114 Agent-tool refusals in
+# 14 days, 13 contexts retrying 3+ times, max 12. The release is COUNT-based only; there is no clock.
+CC_ADMIT_REFUSAL=""
+cc_capacity_admit_refusal() { printf '%s' "$CC_ADMIT_REFUSAL"; }
+
 # ── record ONE row into the IDL ────────────────────────────────────────────────────────────────
 # The IDL is where cc-dispatch already files its `reason:"capacity"` rows, so `cc-idl` becomes the
 # ONE query surface over admission across every gated path — the coverage question §12.1 could not
@@ -1062,7 +1069,7 @@ cc_capacity_admit() { # $1=caller  $2=what   → 0 admit / 9 refuse
   # The enabled-term list for THIS evaluation, rebuilt every call. See _cc_admit_emit's header: once
   # the gate carries four terms, `basis` (shared with capacity_gate, which has two) can no longer say
   # which were in force, and a ratio computed without that split is the §9.5.1 defect.
-  CC_ADMIT_TERMS=""; CC_ADMIT_BLIND=""
+  CC_ADMIT_TERMS=""; CC_ADMIT_BLIND=""; CC_ADMIT_REFUSAL=""
   [ "${CC_ADMIT_LOAD_TERM:-on}"     = off ] || CC_ADMIT_TERMS="load"
   [ "${CC_ADMIT_HEADROOM_TERM:-on}" = off ] || CC_ADMIT_TERMS="${CC_ADMIT_TERMS:+$CC_ADMIT_TERMS,}headroom"
   [ "${CC_ADMIT_SEGMENT_TERM:-on}"  = off ] || CC_ADMIT_TERMS="${CC_ADMIT_TERMS:+$CC_ADMIT_TERMS,}segments"
@@ -1520,6 +1527,7 @@ _cc_admit_spend() { # $1=caller $2=what $3=budget $4=detail $5=term → 0 admit 
   # The counter write and the reset both live in cc_hw_budget_charge — deliberately NOT repeated here.
   # Two writers over one state file is how a bound starts disagreeing with itself.
   CC_ADMIT_REASON="capacity-admit: REFUSING ${what} — ${detail} (refusal ${n} of ${budget}; once the budget is spent the next evaluation ADMITS and pages)"
+  CC_ADMIT_REFUSAL="${term:-?} ${n} ${budget}"
   # basis stays `measured` — BOTH instruments read fine; it is the box that is over, not the probe.
   # WHICH term refused is a separate field: folding it into `basis` would corrupt the one vocabulary
   # §9.5.1 requires you to split on before believing any ratio computed from these rows.
