@@ -358,3 +358,190 @@ _hist_mark_live() {  # $1 = the injected context
   printf '%s' "$ctx" | grep -q 'THE CURRENT CONTRACT'
   printf '%s' "$ctx" | sed -n "1,/$HIST_MARK/p" | grep -q 'the only scope'
 }
+
+# ── CC_DOD_LINEAGE_ONLY=1 — only this session's lineage is injected ──────────────────────────────
+# docs/research/token-efficiency-2026-09-23/measure/hooks.md §4 "Frozen DoD", §5 row 8: the default
+# frame shows the newest capture of ANY session in this worktree (and every unattributed one) as
+# THE CURRENT CONTRACT; 7 of 8 sampled sessions were working on something unrelated. Under the flag
+# a capture is injected only if it names this session, or a toplevel recorded as this worktree's
+# predecessor in lineage.tsv; otherwise the session gets a one-line pointer to the store.
+lo_setup() {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  lo_pane_env
+  TOP="$(git -C "$CWD" rev-parse --show-toplevel)"
+  STORE="$(dod_path)"; mkdir -p "$(dirname "$STORE")"
+  {
+    printf '# Durable frozen DoD — %s\n\n' "$TOP"
+    printf '## 2026-09-01T00:00:00Z (PreCompact:auto)\nScope (frozen): unattributed contract\n\n'
+    printf '## 2026-09-02T00:00:00Z (PreCompact:auto) · toplevel=/pred/wt · session=PREDSID\nScope (frozen): predecessor contract\n\n'
+    printf '## 2026-09-03T00:00:00Z (manual-set) · toplevel=%s · session=MESID\nScope (frozen): my contract\n\n' "$TOP"
+    printf '## 2026-09-04T00:00:00Z (PreCompact:auto) · toplevel=%s · session=OTHERSID\nScope (frozen): other session contract\n\n' "$TOP"
+  } > "$STORE"
+}
+# The session lineage includes the sessions that held this pane before (mailbox alias trail), so the
+# pane and the mailbox dir are pinned to scratch: the operator's shell exports both.
+lo_pane_env() {
+  unset ITERM_SESSION_ID CC_PANE_ID
+  export CC_MAILBOX_DIR="$BATS_TEST_TMPDIR/mailbox"; mkdir -p "$CC_MAILBOX_DIR/.alias"
+}
+lo_trail() {  # $1=pane  $2...=sessions, OLDEST first (the trail file is append-only)
+  local pane="$1" s; shift
+  for s in "$@"; do printf '2026-09-20T00:00:00+0000 %s\n' "$s" >> "$CC_MAILBOX_DIR/.alias/$pane"; done
+}
+lo_json() { jq -nc --arg c "$CWD" --arg s "$1" '{hook_event_name:"SessionStart",cwd:$c} + (if $s == "" then {} else {session_id:$s} end)'; }
+lo_ctx() { printf '%s' "$1" | jq -r '.hookSpecificOutput.additionalContext'; }
+lo_lacks() { ! printf '%s' "$1" | grep -qF -- "$2"; }
+
+@test "lineage-only: own-session capture is the contract; other sessions and unattributed ones are left out" {
+  lo_setup
+  run bash -c 'printf "%s" "$1" | CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json MESID)"
+  [ "$status" -eq 0 ]
+  local c; c="$(lo_ctx "$output")"
+  printf '%s' "$c" | grep -qF 'THE CURRENT CONTRACT'
+  printf '%s' "$c" | grep -qF '    Scope (frozen): my contract'
+  printf '%s' "$c" | grep -qF '1 capture(s) written by this session, a session that held this pane before it, or a recorded predecessor'
+  printf '%s' "$c" | grep -qF 'The other 2 capture(s) this worktree would see'
+  lo_lacks "$c" 'other session contract'
+  lo_lacks "$c" 'unattributed contract'
+  lo_lacks "$c" 'predecessor contract'
+}
+
+@test "lineage-only: a recorded predecessor worktree's capture is inherited" {
+  lo_setup
+  printf '2026-09-02T12:00:00Z\t/pred/wt\t%s\tfire\n' "$TOP" > "$WRAP_DOD_DIR/lineage.tsv"
+  run bash -c 'printf "%s" "$1" | CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json NEWSID)"
+  [ "$status" -eq 0 ]
+  local c; c="$(lo_ctx "$output")"
+  printf '%s' "$c" | grep -qF '    Scope (frozen): predecessor contract'
+  lo_lacks "$c" 'my contract'
+  lo_lacks "$c" 'other session contract'
+}
+
+@test "lineage-only: no lineage in the store ⇒ a one-line pointer to the store, no contract text" {
+  lo_setup
+  run bash -c 'printf "%s" "$1" | CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json NEWSID)"
+  [ "$status" -eq 0 ]
+  local c; c="$(lo_ctx "$output")"
+  [ "$(printf '%s\n' "$c" | grep -c '')" -eq 1 ]
+  printf '%s' "$c" | grep -qF 'no capture in the store belongs to this session'
+  printf '%s' "$c" | grep -qF '3 capture(s) from other sessions of this worktree or with no provenance'
+  printf '%s' "$c" | grep -qF "Store: $STORE"
+  lo_lacks "$c" 'Scope (frozen)'
+  lo_lacks "$c" 'THE CURRENT CONTRACT'
+}
+
+@test "lineage-only: no session id at all ⇒ the pointer, never another session's contract" {
+  lo_setup
+  run bash -c 'printf "%s" "$1" | env -u CLAUDE_CODE_SESSION_ID CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json '')"
+  [ "$status" -eq 0 ]
+  local c; c="$(lo_ctx "$output")"
+  printf '%s' "$c" | grep -qF 'no capture in the store belongs to this session'
+  lo_lacks "$c" 'Scope (frozen)'
+}
+
+@test "lineage-only: a PreCompact capture comes back to the same session after compaction" {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  lo_pane_env
+  local tx; tx="$(mktx "finish the compaction round trip")"
+  jq -nc --arg c "$CWD" --arg t "$tx" '{hook_event_name:"PreCompact",cwd:$c,transcript_path:$t,trigger:"auto",session_id:"CMPSID"}' \
+    | bash "$HOOK" >/dev/null 2>&1
+  run bash -c 'printf "%s" "$1" | CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json CMPSID)"
+  [ "$status" -eq 0 ]
+  lo_ctx "$output" | grep -qF '    Scope (frozen): finish the compaction round trip'
+}
+
+@test "lineage-only FLAG OFF: output is byte-identical to the hook without the lineage-only branch" {
+  lo_setup
+  # Reference: the subject with its 4-line flag branch removed. Preconditions asserted, so a moved
+  # anchor fails here instead of silently comparing the subject with itself.
+  local ref="$BATS_TEST_TMPDIR/ref/hooks"; mkdir -p "$ref"
+  ln -sfn "$REPO/hooks/lib" "$ref/lib"
+  [ "$(grep -c 'if \[ "${CC_DOD_LINEAGE_ONLY:-0}" = 1 \]; then' "$HOOK")" -eq 1 ]
+  awk '/if \[ "\$\{CC_DOD_LINEAGE_ONLY:-0\}" = 1 \]; then/ {skip=4} skip>0 {skip--; next} {print}' "$HOOK" > "$ref/dod-persist.sh"
+  # the SessionStart branch is gone; the write-side dedup reads the flag too and stays
+  [ "$(grep -c 'CC_DOD_LINEAGE_ONLY:-0' "$ref/dod-persist.sh")" -eq $(( $(grep -c 'CC_DOD_LINEAGE_ONLY:-0' "$HOOK") - 1 )) ]
+  [ "$(grep -c '_dod_inject_lineage_only "\$cwd"' "$ref/dod-persist.sh")" -eq 0 ]
+  local j; j="$(lo_json MESID)"
+  local want got on
+  want="$(printf '%s' "$j" | env -u CC_DOD_LINEAGE_ONLY bash "$ref/dod-persist.sh" 2>/dev/null)"
+  got="$(printf '%s' "$j" | env -u CC_DOD_LINEAGE_ONLY bash "$HOOK" 2>/dev/null)"
+  [ -n "$want" ]
+  [ "$got" = "$want" ]
+  got="$(printf '%s' "$j" | CC_DOD_LINEAGE_ONLY=0 bash "$HOOK" 2>/dev/null)"
+  [ "$got" = "$want" ]
+  # power: the flag does change the output on this store
+  on="$(printf '%s' "$j" | CC_DOD_LINEAGE_ONLY=1 bash "$HOOK" 2>/dev/null)"
+  [ "$on" != "$want" ]
+}
+
+@test "lineage-only: the /handoff carry — a same-pane successor inherits the predecessor's set" {
+  # commands/handoff.md T-P4-4: the predecessor runs `set`, stamped with ITS session id; the recycle
+  # successor is a new session on the same pane. The pane's alias trail links the two.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  lo_pane_env
+  (cd "$CWD" && CLAUDE_CODE_SESSION_ID=SIDA CC_DOD_LINEAGE_ONLY=1 bash "$HOOK" set "Scope (frozen): ship X") >/dev/null
+  lo_trail PANE1 SIDA SIDB
+  run bash -c 'printf "%s" "$1" | CC_PANE_ID=PANE1 CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json SIDB)"
+  [ "$status" -eq 0 ]
+  lo_ctx "$output" | grep -qF '    Scope (frozen): ship X'
+  # control: the same session on a pane whose trail does not hold SIDA gets the pointer
+  run bash -c 'printf "%s" "$1" | CC_PANE_ID=PANE2 CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json SIDB)"
+  [ "$status" -eq 0 ]
+  lo_ctx "$output" | grep -qF 'no capture in the store belongs to this session'
+  lo_lacks "$(lo_ctx "$output")" 'ship X'
+}
+
+@test "lineage-only: a sibling session restating the same scope gets its own capture, and keeps it across compaction" {
+  # Write-side dedup under the flag compares with THIS session's captures. Against the worktree
+  # stream, B's PreCompact would read A's identical line as already recorded and write nothing.
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  lo_pane_env
+  (cd "$CWD" && CLAUDE_CODE_SESSION_ID=SIDA CC_DOD_LINEAGE_ONLY=1 bash "$HOOK" set "Scope (frozen): ship X") >/dev/null
+  local f; f="$(dod_path)"
+  local tx; tx="$(mktx "ship X")"
+  local pc; pc="$(jq -nc --arg c "$CWD" --arg t "$tx" '{hook_event_name:"PreCompact",cwd:$c,transcript_path:$t,trigger:"auto",session_id:"SIDB"}')"
+  # flag off: today's dedup, no capture for B
+  printf '%s' "$pc" | env -u CC_DOD_LINEAGE_ONLY bash "$HOOK" >/dev/null 2>&1
+  [ "$(grep -c 'session=SIDB' "$f")" -eq 0 ]
+  # flag on: B gets its own capture, once
+  printf '%s' "$pc" | CC_DOD_LINEAGE_ONLY=1 bash "$HOOK" >/dev/null 2>&1
+  printf '%s' "$pc" | CC_DOD_LINEAGE_ONLY=1 bash "$HOOK" >/dev/null 2>&1
+  [ "$(grep -c 'session=SIDB' "$f")" -eq 1 ]
+  run bash -c 'printf "%s" "$1" | CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json SIDB)"
+  [ "$status" -eq 0 ]
+  lo_ctx "$output" | grep -qF '    Scope (frozen): ship X'
+  # `set` under the flag dedups the same way: A restating is a no-op, B restating is not
+  run bash -c 'cd "$1" && CLAUDE_CODE_SESSION_ID=SIDA CC_DOD_LINEAGE_ONLY=1 bash "$0" set "Scope (frozen): ship X"' "$HOOK" "$CWD"
+  [[ "$output" == unchanged* ]] || false
+  run bash -c 'cd "$1" && CLAUDE_CODE_SESSION_ID=SIDC CC_DOD_LINEAGE_ONLY=1 bash "$0" set "Scope (frozen): ship X"' "$HOOK" "$CWD"
+  [[ "$output" == captured* ]] || false
+  run bash -c 'cd "$1" && CLAUDE_CODE_SESSION_ID=SIDD bash "$0" set "Scope (frozen): ship X"' "$HOOK" "$CWD"
+  [[ "$output" == unchanged* ]] || false   # flag off: today's worktree-wide dedup
+}
+
+@test "lineage-only: the pane trail is bounded to the newest 3 predecessors" {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  lo_pane_env
+  local f; f="$(dod_path)"; mkdir -p "$(dirname "$f")"
+  local top; top="$(git -C "$CWD" rev-parse --show-toplevel)"
+  printf '## 2026-09-01T00:00:00Z (manual-set) · toplevel=%s · session=OLD1\nScope (frozen): oldest tenant\n\n' "$top" > "$f"
+  lo_trail PANE3 OLD1 P2 P3 P4 ME
+  run bash -c 'printf "%s" "$1" | CC_PANE_ID=PANE3 CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json ME)"
+  lo_ctx "$output" | grep -qF 'no capture in the store belongs to this session'
+  lo_lacks "$(lo_ctx "$output")" 'oldest tenant'
+  run bash -c 'printf "%s" "$1" | CC_PANE_ID=PANE3 CC_DOD_LINEAGE_PANE_MAX=4 CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json ME)"
+  lo_ctx "$output" | grep -qF '    Scope (frozen): oldest tenant'
+}
+
+@test "lineage-only: lines outside any capture block are counted in the pointer, not dropped silently" {
+  export HOME="$BATS_TEST_TMPDIR/home"; mkdir -p "$HOME"
+  lo_pane_env
+  local f; f="$(dod_path)"; mkdir -p "$(dirname "$f")"
+  printf '# Durable frozen DoD — legacy\n\n- [ ] legacy box one\n- [x] legacy box two\n' > "$f"
+  run bash -c 'printf "%s" "$1" | CC_DOD_LINEAGE_ONLY=1 bash "$0" 2>/dev/null' "$HOOK" "$(lo_json NEWSID)"
+  [ "$status" -eq 0 ]
+  local c; c="$(lo_ctx "$output")"
+  printf '%s' "$c" | grep -qF '0 capture(s) from other sessions'
+  printf '%s' "$c" | grep -qF '2 line(s) outside any capture block'
+  lo_lacks "$c" 'legacy box one'
+}
