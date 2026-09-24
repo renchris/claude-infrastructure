@@ -364,6 +364,26 @@ sys.exit(1 if bad else 0)'
     || { echo "the markdown table header changed: $output"; false; }
 }
 
+@test "19b --keepwarm dies at its wall-clock deadline instead of holding the lock forever" {
+  # 2026-09-24: a keepwarm tick wedged 52 min holding the single-flight lock and blocked every
+  # router. The fixture makes the sweep hang; the kernel alarm must end the process on time.
+  export CLAUDE_ACCOUNTS_JSON="$D/acct.json"; mk_cfg
+  run python3 - "$CA_BIN" <<'PY'
+import subprocess, sys, time, os
+src = open(sys.argv[1]).read()
+anchor = "        rows, wj, was_cached, _prev = get_data(cfg, fresh=False, no_heal=no_heal,"
+new = src.replace(anchor, "        time.sleep(30)\n" + anchor, 1)
+assert new != src, "anchor moved"
+env = dict(os.environ, CC_KEEPWARM_DEADLINE_S="2")
+t0 = time.time()
+p = subprocess.run([sys.executable, "-c", new, "--keepwarm"], env=env, capture_output=True, text=True)
+print(f"rc={p.returncode} took={time.time()-t0:.1f}")
+PY
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"rc=-14 "* ]] || { echo "not killed by SIGALRM: $output"; false; }
+  took="${output##*took=}"; [ "${took%%.*}" -lt 10 ] || { echo "outlived its deadline: $output"; false; }
+}
+
 @test "19 --keepwarm writes the board it claims to write" {
   export CLAUDE_ACCOUNTS_JSON="$D/acct.json"; mk_cfg
   export CC_ACCOUNTS_BOARD="$D/produced.txt"; rm -f "$CC_ACCOUNTS_BOARD"
