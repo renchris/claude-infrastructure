@@ -4,6 +4,13 @@ Scope (frozen): token-efficiency pass on this Claude Code harness (the `~/.claud
 map the harness and measure a baseline by source and billing type, rank the opportunities, make the safe direct
 changes, put the rest behind flags or in proposals, and report. Spec: `SPEC.md`.
 
+**Ruling 2026-09-23 (operator): accounts are interchangeable.** *"We use /accounts indiscriminately just for weekly
+usage. There is no functional difference between accounts. … all of our behavior, configuration, should be account
+agnostic."* Every step below that puts one account on an arm is withdrawn (struck through, kept for the record).
+Experiments run offline headless (`claude -p` in scratch repos, as the pilot did) or with the arm assigned per
+session at launch; a change ships to all accounts or none. Migration 0037 converges every account onto one shared
+`settings.json`. Measured numbers are unchanged.
+
 ## Answer first
 
 - **Baseline, 2026-09-09 → 09-23 (14.96 days):** 162,406 API responses in 4,086 contexts and 1,052 tasks cost
@@ -18,11 +25,13 @@ changes, put the rest behind flags or in proposals, and report. Spec: `SPEC.md`.
 - **What changed:** 7 direct changes (live when this lands), 6 flagged changes that ship off, and a per-task cost
   instrument. The direct set is worth about 2-3% of list-weighted spend. With the flags on and validated, the
   estimate is **17-23%** of list-weighted spend (upper bundle 28-30%); the two biggest levers are a lean worker type
-  for workflow and research agents (12.8%) and the slim instructions arm (≈8% per account on the arm).
+  for workflow and research agents (12.8%) and the slim instructions arm (≈8% per account on the arm; since the
+  2026-09-23 ruling it ships to every account or none).
 - **Pilot eval (offline, blind-judged, n = 2 per arm per item):** the slim instructions arm cost **24% less per task**
   ($0.573 vs $0.755; 31% less on the meter proxy) with the same success (12/12 both) and compliance (54/56 both);
   the `workflow-lean` worker started 13× smaller (5.3k vs 70.5k tokens), cost 29.5% less per run and was correct
-  6/6 vs 5/6. Too small to prove parity; the full offline gate in `TEST_PLAN.md` comes before any account switch.
+  6/6 vs 5/6. Too small to prove parity; the full offline gate in `TEST_PLAN.md` comes before ~~any account switch~~ any fleet-wide switch (per-account
+  switching withdrawn 2026-09-23).
 
 ## 1. Harness map and baseline
 
@@ -69,7 +78,7 @@ Savings are list $ per 14.96 days and % of the $32,517 fleet; **status** is what
 |---:|---|---|---:|---|---|---|
 | 1 | Lean worker type for workflow and research agents (`omitClaudeMd`, no Skill/Agent/MCP tools) | agents | $4,169 (12.8%) | med | FLAG | **built**: `agents/workflow-lean.md`, opt-in per slot |
 | 2 | Cache breakpoint after the setup attachments | CC binary | $890-1,210 (2.7-3.7%) | low | PROPOSE (upstream) | proposed; flag-level workaround described |
-| 3 | Slim global CLAUDE.md (−54% tokens) | memory | $2,036 (6.3%) | med | FLAG | **built**: `CLAUDE.global.slim.md` + per-account switch |
+| 3 | Slim global CLAUDE.md (−54% tokens) | memory | $2,036 (6.3%) | med | FLAG | **built**: `CLAUDE.global.slim.md` + ~~per-account switch~~ (withdrawn 2026-09-23: offline gate, then all accounts or none) |
 | 4 | Project rules split: resident core + situational half (−88% resident) | memory | $1,639 (5.0%) | med | FLAG | **built**: default-neutral split + staged migration 0036 |
 | 5 | Prompt suggestion off (forced on by our env) | settings | ≤$745 outside the total | low | PROPOSE (operator set it on purpose) | proposed |
 | 6 | Idle keepalive for main threads | binary | ≥$549 (1.7%) | low | PROPOSE | proposed |
@@ -121,11 +130,11 @@ branch shas). Tests are bats unless noted; every new check carries a mutation or
 
 | Commit | Flag | Off by default because |
 |---|---|---|
-| `feat(instructions): per-account A/B arm for CLAUDE.md variants` + `… the slim arm also swaps rules/ …` | `cc-instructions-variant set <account> slim` | the registry is empty until an account is switched |
-| `feat(instructions): CLAUDE.global.slim.md …` | the slim arm's CLAUDE.md (40,374 → 18,546 tokens) | inert until an account is switched |
+| `feat(instructions): per-account A/B arm for CLAUDE.md variants` + `… the slim arm also swaps rules/ …` | ~~`cc-instructions-variant set <account> slim`~~ (withdrawn 2026-09-23 for production; the tool stays for throwaway/offline config dirs or a fleet-wide switch) | the registry is empty until an account is switched |
+| `feat(instructions): CLAUDE.global.slim.md …` | the slim arm's CLAUDE.md (40,374 → 18,546 tokens) | inert until ~~an account is~~ all accounts are switched |
 | `feat(cc-mission): compact board render behind a flag …` | `~/.claude/autonomy/customer/render-compact` or `CC_MISSION_COMPACT=1`; always compact in `rules.slim/` | byte-identical when off |
 | `feat(agents): workflow-lean …` (+ fixup: operating contract) | `agentType: 'workflow-lean'` per workflow slot / Agent call | nothing passes it yet |
-| project rules split (commit: rules split) | migration `0036-rules-situational-exclude.sh` (c10, operator-run) adds a `claudeMdExcludes` glob for one account | both halves load by default: same lessons as before |
+| project rules split (commit: rules split) | migration `0036-rules-situational-exclude.sh` (c10, operator-run) adds a `claudeMdExcludes` glob ~~for one account~~ (withdrawn 2026-09-23: for all accounts or none; one shared `settings.json` after 0037) | both halves load by default: same lessons as before |
 | hook trims (commit: hook text) | `CC_DRAIN_STALE_FORWARD_H`, `CC_DOD_LINEAGE_ONLY` | unset = today's output (flag-off byte-identity tested) |
 
 ### System prompt diff (keep / rewrite / delete / move for each line)
@@ -153,8 +162,9 @@ The full text stays the SSOT and the on-demand reference; the slim file records 
 
 `TEST_PLAN.md` gives, for every flag: how to turn it on, the primary metric (cost per task on both weightings, from
 `cc-token-ledger`), the guardrails (success signals, re-asks, close-contract failures, turns per task, tool errors,
-hit rate, hook denies, code survival), the stop rule and the rollback, with a crossover design because accounts are
-routed by headroom rather than at random.
+hit rate, hook denies, code survival), the stop rule and the rollback, ~~with a crossover design because accounts are
+routed by headroom rather than at random~~. Withdrawn 2026-09-23: the offline headless gate is the go/no-go, any
+online arm is assigned per session at launch, and the ship flips all accounts at once.
 
 **Pilot (offline, blind-judged):** full detail in `eval/PILOT.md`; keys, metrics, dossiers and the aggregation
 script in `eval/raw/`.
@@ -193,11 +203,12 @@ script in `eval/raw/`.
 - **Time-based microcompact** (server flag) may clear old tool results at request build; if active, re-read costs of
   old tool output are overstated.
 - **Not measured:** latency; the goal evaluator's real cache behaviour; turns per agent under `workflow-lean` at
-  scale; quality under any flag beyond the pilot (the online A/B is the operator's switch).
+  scale; quality under any flag beyond the pilot (the online A/B is the operator's switch; since 2026-09-23 it is
+  per session, never per account).
 - **Earlier price fits used first-record output** (`cc-quota-price` before this pass, and the output weight hardcoded
   in `scripts/meter-experiment/analyse.py`): re-fit when the quota-price fit has positive-delta buckets (it abstains
   today).
 - **Not wired in this pass:** the slim project `.claude/CLAUDE.md` (no per-account mechanism without a settings
-  change), `validate-bash.sh` false-positive narrowing (a guard change with false-negative risk for ~0.2%), the Stop-hook
+  change; after the 2026-09-23 ruling none is wanted — it would be tested offline and shipped to all accounts or none), `validate-bash.sh` false-positive narrowing (a guard change with false-negative risk for ~0.2%), the Stop-hook
   items (13, 17, 20, 26), and every PROPOSE row. The upstream items (setup breakpoint, double Stop reason) need
   Anthropic.
