@@ -5,7 +5,10 @@ export const meta = {
 }
 
 // Frozen population built by f2/setup.sh. Every slot writes ONLY to its own OUTDIR.
-const F = '/tmp/tokeff-gate/f2'
+// args.root (default /tmp/tokeff-gate) lets a re-gate run over a copy of the population without
+// overwriting the recorded gate's slots; collect.py reads the same root from GATE_ROOT.
+const ROOT = (typeof args === 'object' && args && args.root) || '/tmp/tokeff-gate'
+const F = `${ROOT}/f2`
 const T = `${F}/tree`
 const RULES = (out) =>
   `Rules: this is READ-ONLY work. Read anything you need, but create or modify files ONLY inside ${out}/ ` +
