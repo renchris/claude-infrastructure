@@ -1,4 +1,4 @@
-<!-- instructions-variant: slim · derived-from CLAUDE.global.md sha256:d2aa7db28fb850c0 · audit: docs/research/token-efficiency-2026-09-23/audit/ -->
+<!-- instructions-variant: slim · derived-from CLAUDE.global.md sha256:cecd5a0c2fa35792 · audit: docs/research/token-efficiency-2026-09-23/audit/ -->
 This is the slim variant of CLAUDE.global.md, loaded under an A/B test.
 The full text, with the rationale and history for every section, stays at ~/Development/claude-infrastructure/CLAUDE.global.md; read the matching section there when a rule here seems to lack context.
 
@@ -184,6 +184,16 @@ Drive in-scope work to a finished, verified, committed state (landed per the shi
 ### Stop-hook arms
 
 - Close certificate: on a write turn whose ledger is ✅, `operator-readout.sh` prints `✅ SAFE TO CLOSE — nothing of mine is open`, computed from git. Read-only turns and unverifiable states get none.
+- **✅ is a safe-to-close assertion, not a vibe.** Claim it only with: clean tree · landed on trunk,
+  verified BY CONTENT (`git ls-tree` present + `git diff` empty on your paths — a count reads 0
+  after a sibling rebase and proves nothing) · your diff's gates run green *this turn* · frozen-DoD
+  remainder 0 · no operator step this session created left unrun · and — in the repo that IS the
+  live layer's source — the landed sha **observable in the enforcing store**, not merely on trunk
+  (`wrap-ledger.sh` computes `🚀` instead of `✅` for you when the live layer has breached its
+  converge budget). Any one unknown ⇒ not ✅; say which. Where a background verifier owns the full-suite claim (claude-infrastructure v2), *your
+  diff green + content-verified land* is the standard — waiting on a trunk-wide stamp you do not
+  control is not diligence, it is a hang. The "no operator step left unrun" clause is no longer
+  prose discipline: file each one (below) and `wrap-ledger.sh` computes `👤` instead of `✅` for you.
 - Mechanical 🔧: `session-continue.sh` blocks the stop while files this session wrote (per `hooks/lib/session-writes.sh`) are uncommitted, and feeds the work back. If that dirt is deliberately parked or not yours, run `~/.claude/hooks/session-continue.sh clear` and say so in the close.
 - Ship floor: `session-continue.sh` blocks going idle on 📦/🚀 work you wrote, once per HEAD sha and at most `CC_SHIP_FLOOR_MAX`=2 per session. Resolve it by `/ship`, by converging, or by an explicit park (`clear` plus the park named in the close).
 - Custody: a fire with `--notify-back` records a debt in `bin/cc-custody`, discharged by the peer's self-close. Open custody is a 🔧, blocks the ✅ certificate, and contradicts any done-claim. Awaiting it with a wake path armed is a legitimate non-close state; calling it done is not. Collect, land, then `cc-custody return <marker|slug>`; if superseded, `cc-custody abandon <token> --why …`.
@@ -243,7 +253,7 @@ On PASS, append `Scope (grown): +<item>` and execute. On FAIL, drop it with a on
 
 Done this turn, stated without hedging, requires: scope complete against the frozen DoD; statically green (the repo's commit-time gate passed on the closing commit, or "n/a", never a false ✓, for docs/SQL-only commits); behaviorally green (the repo's test, build and visual gates run this turn, and re-run after any rebase, merge or cherry-pick); no pending decision. Otherwise hedge with the clearing verb ("implemented but UNVERIFIED — running tests"; "blocked on your decision: DROP X"), never "probably fine".
 
-✅ additionally requires: clean tree; landed on trunk and verified by content (`git ls-tree` present and `git diff` empty on your paths; a commit count proves nothing after a sibling rebase); no operator step this session created left unrun (file each one so `wrap-ledger.sh` computes 👤); and, in the repo that is the live layer's source, the landed sha present in the live layer (`wrap-ledger.sh` computes 🚀 otherwise). Any unknown means not ✅; say which. Where a background verifier owns the full-suite claim, your diff green plus a content-verified land is the standard; do not wait on a trunk-wide stamp you do not control.
+A close question ("are we done?", "good to close?", "100% complete?") asks about the task, not about what this session wrote. Before answering, find the scope (the `Scope (frozen):` line and the open items in the plan) and diff the repo against it. "This session changed nothing" is never grounds for ✅: an open plan item is open work, so drive it or answer `Good to close: no` and name it. No findable scope is an unknown, not a ✅.
 
 ### The readout
 
