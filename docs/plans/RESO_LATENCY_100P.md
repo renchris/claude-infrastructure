@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete
 ---
 
 # RESO_LATENCY_100P — every avoidable database round trip and latency cost in reso, removed
@@ -153,3 +153,9 @@ migration on a live fleet for no measurable gain.
   shipped file that imports an unshipped one (red on the parent with exactly the runner's TS2307 set; 3/3 green).
   Dallas (`reso-dfw`) is deliberately outside Path F until insomniacdenver launches (`deploy-regions.ts`).
   Next: a green stamp containing `620120294` → `deploy-release.sh` → Path F rebuilds LAX/SIN/IAD.
+- **✅ LIVE EVERYWHERE, 2026-09-24 18:21–18:40 CDT.** `65423dadb` (verifier-green, no migrations) deployed via
+  `scripts/deploy-release.sh`: Amplify job 1500 SUCCEED; Path F `orchestration-success` with `flyctl-deploy-completed
+  exitCode 0` in reso-lax, reso-iad and reso-sin. `deploy-status.sh`: harbour, key, envy, gm, apt101, muin, studio60
+  all serve `65423da`; insomniacdenver stays on `a76ce52` by design (pre-launch, outside Path F). Every wave of this
+  programme — W0–W10, the W1b login-limiter security fix, TURSO_KEEPALIVE on Fly, and the cheap poll — is now what
+  production runs. The staged `/tmp/reso-oregon-build-timeout.sh` was never needed and was not run.
