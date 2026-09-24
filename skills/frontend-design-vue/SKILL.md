@@ -1,6 +1,6 @@
 ---
 name: frontend-design-vue
-description: Redesign Vue 3 applications into modern SaaS-style interfaces — vertical sidebar navigation, design-token CSS architecture, Signal-aesthetic defaults. Use when user asks to "redesign UI", "modernize Vue app", "apply SaaS design", or invokes /frontend-design.
+description: "Redesign a Vue 3 app into a modern SaaS-style interface: vertical sidebar navigation, design-token CSS architecture, Signal-aesthetic defaults. Use for \"redesign UI\", \"modernize Vue app\" or /frontend-design."
 allowed-tools: Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion, Agent
 ---
 

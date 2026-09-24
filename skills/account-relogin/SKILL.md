@@ -1,6 +1,6 @@
 ---
 name: account-relogin
-description: Agentically re-authenticate a logged-out Claude Max account (next/next2/next3/next4) — headless refresh-token path first, then unattended OAuth in the account's own dedicated auth-browser profile, with the outlook email-code fallback. Use when claude-accounts / /accounts reports auth logged-out, token-invalid, or keychain-error; when a launcher greets with "Not logged in · Please run /login"; or when the user says "re-login next3", "fix the logged-out account", "re-auth the account".
+description: "Re-authenticate a logged-out Claude Max account (next/next2/next3/next4): headless refresh grant first, then unattended OAuth in its own auth-browser profile, then the Outlook email-code fallback. Use on logged-out, token-invalid or \"Not logged in\"."
 ---
 
 # account-relogin — re-authenticate one account, most-automated path first

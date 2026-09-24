@@ -1,6 +1,6 @@
 ---
 name: cc-version-audit
-description: Assess whether to advance the Claude Code BINARY version (the eval `claude-next` track and/or the pinned stable `claude`/`cc`) against the latest CHANGELOG, scoped to reso's workflow (Agent Teams, Dynamic Workflows, hooks, launchers). Produces a HOLD/ADVANCE verdict + MANIFEST.jsonl entries that respect the auto-install semantics. Use on "is it safe to move up / upgrade Claude Code", "check our CC version against latest", "should we bump claude-next", or when claude-latest nags about a new version. NOT for Claude MODEL changes (use /model-upgrade) or app-code SDK migrations (use /claude-api migrate).
+description: Decide HOLD or ADVANCE for the Claude Code binary (claude-next or the pinned stable) against the latest CHANGELOG, scoped to our workflows; writes MANIFEST.jsonl entries. Use on "should we upgrade Claude Code". Not for model changes (/model-upgrade).
 allowed-tools: Read, Edit, Write, Bash, WebSearch, WebFetch, Workflow, Agent, AskUserQuestion
 ---
 

@@ -368,7 +368,7 @@ last_user_msg() {
   #
   # ── AND `.isMeta != true`: A COMMAND/SKILL BODY IS NOT OPERATOR PROSE ─────────────────────────
   # A `/foo` invocation injects the command or skill FILE's TEXT as a user record, and those files
-  # discuss stopping: `commands/ship.md:42` contains "stop here". Fixing the reader above is exactly
+  # discuss stopping: `commands/ship.md:45` contains "stop here". Fixing the reader above is exactly
   # what makes that body visible, so without this clause the fix would DISARM the floors whenever the
   # operator typed `/ship` — the same regression 9cab1f800 had to correct in the sibling hook after
   # 299e4d563 shipped it unnamed. Carried in the SAME diff here so this hook never spends a commit

@@ -1,7 +1,6 @@
 ---
 name: agent-teams
-description: >-
-  Full Agent-Teams orchestration + teammate-lifecycle discipline for spawning TEAMMATES that write code — Agent calls WITH name: (NOT team_name, which does not exist on 2.1.220), persisting until shutdown. Load this BEFORE spawning any teammate/assignee and BEFORE planning implementation with 2+ code-writing tasks. Provides runtime detection (classic TeamCreate/TeamDelete on stable 2.1.114 vs the implicit-team Agent({name}) model on 2.1.178+), the task-type decision rule, the 5 mandatory brief-discipline rules (≤150-line briefs, pre-grep line ranges, visual-verify deferral, verbatim stop-on-issue clause, phase checkpoints), the 6-box pre-spawn checklist, sizing guardrails, per-teammate effort + non-session model-pinning mechanism (assignee honors model:; a bare subagent also READS model: but both fall back on allowlist rejection), full lifecycle + graceful-shutdown/checkpoint/pane-close protocol, pull-based liveness detection, and crash recovery. Triggers: "spawn a teammate/assignee", "use agent teams", TeamCreate, Phase 0 orchestration, any implementation task touching 2+ files. NOT for fire-and-forget research/exploration subagents (use research-subagents).
+description: "Orchestrating code-writing teammates (Agent with name:): runtime detection, 150-line brief rules, pre-spawn checklist, model and effort pinning, lifecycle, shutdown and crash recovery. Load before spawning teammates or planning 2+ code tasks."
 ---
 
 # Agent Teams: Cross-Project Orchestration Rules

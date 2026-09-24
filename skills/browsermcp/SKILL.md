@@ -1,7 +1,6 @@
 ---
 name: browsermcp
-description: >-
-  Browser-automation setup + tooling reference — RETIRED SERVER, LIVE DECISION TREE: the BrowserMCP server was eliminated 2026-08-11 and the agent-browser CLI is now the primary path; the mcp__browsermcp__* sections below are history. Load when automating a browser (navigating, clicking, filling forms, taking screenshots, extracting page data) or when BrowserMCP tools fail. Covers the mcp__browsermcp__* tool list and the navigate → snapshot → use-ref → click/type workflow, the wrapper-script + Chrome-extension setup, the .mcp.json project config, and the troubleshooting decision tree (tools unavailable after /compact → start a fresh session; wrapper script fails → remove + re-add the server; extension not connecting → reinstall, pin, connect per tab); the agent-browser CLI commands for when MCP is unavailable; and the react-best-practices / vercel-design-guidelines auto-triggering knowledge skills. Triggers: "automate the browser", "take a screenshot of the page", "fill this form", "navigate to", BrowserMCP tool errors, "No such tool available" for browser tools. This is the MCP-primary path (prefer BrowserMCP over Playwright); NOT the standalone agent-browser skill (the CLI fallback this skill points to when MCP is unavailable).
+description: History of the retired BrowserMCP server plus the browser-automation decision tree; the agent-browser CLI is the live path. Load when browser tools report "No such tool available".
 ---
 
 > 🚨 **BrowserMCP was RETIRED on 2026-08-11.** No `mcp__browsermcp__*` tool exists in any session any

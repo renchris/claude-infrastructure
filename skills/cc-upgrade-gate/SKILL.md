@@ -1,6 +1,6 @@
 ---
 name: cc-upgrade-gate
-description: Empirically verify — with headless, self-evidencing probes — whether a NEW Claude model + binary is safe to activate NOW: do all our ways of working (Agent Teams, Dynamic Workflows, subagents, hooks, launchers, auto-mode, the effort ladder, permissions, resume, MCP) still WORK on the candidate? Produces a per-check PASS/FAIL/SKIP + one overall GREEN/RED verdict; GREEN ⇒ upgrade immediately via the one-command activation, RED ⇒ PARK and name the exact failing way-of-working. Use on "a new Claude model/binary released — is it safe to activate our ways of working?", "run the upgrade gate", "is opus-5 safe to turn on yet". NOT for CHANGELOG / binary-version safety (use cc-version-audit) or model-ref doc sweeps after deciding (use /model-upgrade).
+description: "Headless probes that decide whether a new Claude model and binary are safe to activate: do Agent Teams, Workflows, subagents, hooks, launchers, permissions, resume and MCP still work? GREEN/RED verdict. Not for CHANGELOG review (cc-version-audit)."
 allowed-tools: Read, Bash, Edit, Skill, AskUserQuestion
 ---
 

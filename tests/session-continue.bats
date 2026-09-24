@@ -232,7 +232,7 @@ mkuser_tx_meta() { # <typed-msg> <injected-line1> … → transcript path
 
 @test "(a2) META: an injected /ship-shaped body carrying 'stop here' must NOT disarm the actuator" {
   # A `/foo` invocation injects the command or skill FILE's text as a user record flagged isMeta —
-  # and those files discuss stopping (commands/ship.md:42 literally contains "stop here"). Once the
+  # and those files discuss stopping (commands/ship.md:45 literally contains "stop here"). Once the
   # reader above stops truncating, that body becomes visible and would disarm the actuator, so
   # typing /ship would suppress the continuation on exactly the turn that lands code. The operator's
   # own typed message is the earlier record, and it is benign — so the correct answer is BLOCK.

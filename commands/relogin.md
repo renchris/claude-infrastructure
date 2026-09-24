@@ -1,6 +1,6 @@
 ---
 name: relogin
-description: Re-authenticate one Claude Max account (next/next2/next3/next4) through the automated ladder — headless refresh grant first, then unattended OAuth in that account's own dedicated auth-browser profile — and prove it by effect. Use when /accounts reports login-required / logged-out / token-invalid, when `claude-accounts --login-status` or `--relogin-status` exits non-zero, or when the user says "re-login next3", "fix the logged-out account", "the login expired".
+description: "Re-authenticate one Claude Max account (next/next2/next3/next4): headless refresh grant, then unattended OAuth in its own auth-browser profile, proven by effect. Use when /accounts shows logged-out or token-invalid, or on \"re-login next3\"."
 allowed-tools: Bash, Read, Skill
 argument-hint: "<acct> [--dry-run] [--no-browser]"
 ---

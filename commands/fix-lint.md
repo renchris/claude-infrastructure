@@ -1,3 +1,6 @@
+---
+description: Run the project's linters and type checkers (eslint/tsc, ruff/mypy), apply every auto-fix, and report what was fixed and what needs a manual fix.
+---
 Run linting and type checking, fix all auto-fixable issues:
 
 1. Detect project type (Next.js/Python/both)

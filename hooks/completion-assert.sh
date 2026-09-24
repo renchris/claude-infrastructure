@@ -190,7 +190,7 @@ ca_last_user_msg() {
   # does not, and inherited the bug. session-continue.sh:190-201 still has it (filed separately).
   # ── AND `.isMeta != true`: A COMMAND/SKILL BODY IS NOT OPERATOR PROSE (2026-09-03) ────────────
   # A `/foo` invocation injects the command or skill FILE'S TEXT as a user record, and those files
-  # discuss stopping: `commands/ship.md:42` contains "stop here". Once the reader above was fixed,
+  # discuss stopping: `commands/ship.md:45` contains "stop here". Once the reader above was fixed,
   # that body became visible and DISARMED this hook — so typing `/ship` turned the close gate off on
   # exactly the turn that lands code. Confirmed live against trunk before this fix by replaying a
   # real /ship record: the hook went silent. That regression shipped in 299e4d563 and was not named

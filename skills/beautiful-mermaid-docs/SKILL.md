@@ -1,6 +1,6 @@
 ---
 name: beautiful-mermaid-docs
-description: Pre-render Mermaid diagrams as beautiful-mermaid SVGs (the ELK-based engine behind Cursor's agent panel, MIT by Craft/Luki Labs) for READMEs and human-facing docs, with adaptive dark/light <picture> embeds, an npm render script, and a CI staleness guard. Use when asked to "use beautiful-mermaid", "beautify the README diagrams", "Cursor-style/quality diagrams", "pre-render mermaid", or to add high-quality diagrams to a repo's README/docs that GitHub will display. NOT for app-runtime diagram rendering (just `npm install beautiful-mermaid` and call renderMermaidSVG directly) or terminal output (renderMermaidASCII).
+description: "Pre-render Mermaid diagrams as beautiful-mermaid SVGs (Cursor-style, ELK layout) for READMEs and docs: dark/light <picture> embeds, an npm render script and a CI staleness guard. Use to beautify or pre-render README diagrams."
 ---
 
 # beautiful-mermaid docs pipeline

@@ -1,6 +1,6 @@
 ---
 name: corpus-to-skill
-description: Turn a canonical text (a methodology book, style guide, standard, or spec — typically an OCR'd PDF) into a full-fidelity executable skill whose sessions carry the source's actual rules, limits, and tests. Use when asked to "distill this book/guide/standard into a skill", "make an executable skill from this corpus", or when a compressed/name-drop version of a methodology exists and the user wants the complete method enforced. Proven end-to-end on The Minto Pyramid Principle → pyramid-principle-full (2026-07-09/10).
+description: Distill a canonical text (a methodology book, style guide or spec, often an OCR'd PDF) into a full-fidelity executable skill that carries its actual rules, limits and tests. Proven on pyramid-principle-full.
 ---
 
 # corpus-to-skill — distill a canonical text into an executable skill

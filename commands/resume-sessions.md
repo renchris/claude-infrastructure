@@ -1,6 +1,6 @@
 ---
 name: resume-sessions
-description: Recover and autonomously resume open Claude Code sessions across the 4 accounts after a crash or reboot, and un-stick sessions that stalled after /compact — inventory, shared selector, worktree recreation, non-blocking resume, re-engagement, keepalive. Use when the machine crashed/rebooted with sessions open, when sessions look stuck after resume→/compact (empty input box or ^[[<35;… gibberish), or on "recover my sessions" / "resume the crashed sessions" / /resume-sessions.
+description: "Resume open Claude Code sessions across the 4 accounts after a crash or reboot, or un-stick ones stuck after /compact: inventory, worktree recreation, non-blocking resume, re-engagement, keepalive."
 allowed-tools: Bash, Read, Skill
 argument-hint: "[sid or account to resume just one] [--dry-run — show the triage table and fire nothing]"
 ---

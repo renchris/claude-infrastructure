@@ -1,3 +1,6 @@
+---
+description: Review the current changes for type safety, performance, security, best practices and test coverage, with line-by-line suggested fixes.
+---
 Review the changes for type safety, performance, security, best practices, and test coverage.
 
 1. **Type Safety**: Check for any usage, missing null checks, implicit types

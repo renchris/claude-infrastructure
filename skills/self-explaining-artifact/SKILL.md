@@ -1,18 +1,6 @@
 ---
 name: self-explaining-artifact
-description: >
-    Build a single self-contained HTML page that explains a body of source material while it plays —
-    and measure it instead of asserting it. Use when asked to turn an article, dataset, research
-    finding or mechanism into an interactive or animated explainer; when an explainer has been
-    rejected as "walls of text", "click through all the boxes", "too many abstractions", "I got
-    lost", or "not fun"; or when a visual artifact must pass a hard gate (word count, AA contrast,
-    frame budget) rather than a reviewer's impression. Covers the rejection ladder and what each
-    verdict actually diagnoses, the freeze-keep-and-cut step that stops a rebuild from carrying the
-    payload forward, the four measured gates and the probe that produces them, the render-split
-    decision that must be made before any sequence is authored, and the continuous-sweep review that
-    catches defects living between held frames. NOT for chart/palette design (that is dataviz), NOT
-    for animation library mechanics (that is motion), and NOT for a document that is meant to be
-    read rather than watched.
+description: Build a self-contained animated HTML explainer of an article, dataset or mechanism, and verify it with measured gates (word count, AA contrast, frame budget). Use when an explainer was rejected as walls of text or hard to follow.
 ---
 
 # Building an artifact that explains itself

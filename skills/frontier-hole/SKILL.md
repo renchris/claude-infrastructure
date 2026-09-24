@@ -1,6 +1,6 @@
 ---
 name: frontier-hole
-description: Capture an unknown-unknown candidate (a "frontier hole") for the frontier-tier model (currently Fable 5) WITHOUT burning frontier tokens inline. Use PROACTIVELY — agent-initiated, no user prompt needed — the MOMENT mid-task work hits a qualifying wall — unexplained behavior after real investigation, an adversarial verify that couldn't decide, or a never-derivation-swept seam between subsystems. Also on user phrases "park this for Fable", "log a frontier hole", "that's beyond Opus", /frontier-hole. NOT for ordinary identified bugs or tasks (those go to the normal worklist; default-tier work solves them).
+description: Log an unknown-unknown (a "frontier hole") to FRONTIER_HOLES.md for the frontier model without spending frontier tokens. Use unprompted when real investigation hits an unexplained wall, or on "park this for Fable". Not for ordinary bugs.
 ---
 
 # frontier-hole — park an unknown-unknown for the frontier window

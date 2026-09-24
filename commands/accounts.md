@@ -1,6 +1,6 @@
 ---
 name: accounts
-description: Cross-account Claude Max status — per-account 5-hour / weekly / weekly-Fable limits + resets, auth state, live session counts, and optimal work routing across the 4 accounts (next/next2/next3/next4). Detects logged-out accounts with their email + Dia profile mapping and hands off to the account-relogin skill. Use for "which account should I use", "check the quotas", "view usage across accounts", "is any account logged out", or /accounts.
+description: "Cross-account Claude Max status: 5-hour, weekly and weekly-Fable limits and resets, auth state, live sessions, and which of next/next2/next3/next4 to route work to. Flags logged-out accounts for account-relogin. Use to check the quotas."
 allowed-tools: Bash, Read, Skill
 argument-hint: "[route desk|general|fable — just the routing answer] [relogin <acct> — jump to re-login] [--fresh]"
 ---

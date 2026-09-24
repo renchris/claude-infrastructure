@@ -1,6 +1,6 @@
 ---
 name: desk
-description: Convert THIS already-open session into the machine-wide orchestrator desk, in place — claim the desk role for this pane (desk-register) and adopt the canonical desk brief SSOT. Use for "become the desk", "make this session the desk", "take the desk role", "adopt the desk brief", or /desk. For a FRESH desk in a new pane use the `claude-desk` launcher instead; for an automatic replacement after a desk dies, scripts/desk-invariant.sh already fires one.
+description: "Turn THIS open session into the machine-wide orchestrator desk in place: claim the desk role (desk-register) and adopt the desk brief. For a fresh desk in a new pane use the claude-desk launcher."
 allowed-tools: Bash, Read
 argument-hint: "[--check — report who holds the role, change nothing]"
 ---

@@ -1,6 +1,6 @@
 ---
 name: outbound-drafting
-description: Draft a message the USER will send to a third party — text, iMessage/SMS, email, DM — to a vendor, landlord, carrier, broker, recruiter, contractor, counterparty, friend, or service provider. Load BEFORE writing the first draft, whenever asked to "write a text/email to X", "what should I say to X", "draft a reply", "provide the full text", or when producing any message the user copies and sends under their own name. NOT for the assistant's own chat prose (see CLAUDE.md § Communication Discipline) and NOT for commit messages or docs.
+description: Draft a message the user will send to a third party (text, iMessage, email, DM). Load before the first draft when asked to "write a text/email to X", "draft a reply" or "what should I say". Not for your own chat prose, commits or docs.
 ---
 
 # Drafting messages the operator will actually send

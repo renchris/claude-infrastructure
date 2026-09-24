@@ -1,6 +1,6 @@
 ---
 name: frontier-run
-description: Spend the frontier-model window (currently Fable 5 — SSOT ~/.claude/model-config.yaml frontier_access) on unknown-unknown discovery, via baseline-blind derivation panels over the project's FRONTIER_HOLES ledger or a fresh seam sweep. AGENT-INITIATED under the bounded-autonomy policy (CLAUDE.md § Frontier Tier Routing; the human never model-switches or starts frontier sessions) — invoke YOURSELF when (a) a qualifying wall BLOCKS the current task (inline, ≤2 panelists), or (b) at main-task wrap-up with ≥2 OPEN holes and the window active (batch). Also on user request ("/frontier-run", "run fable on the holes"). Bounds: hook-enforced per-session spawn cap (frontier_discovery_budget); blocked spawn = park, never retry. NOT for routine research (/research), identified bugs (/investigate), or implementation.
+description: "Spend the frontier (Fable) window on unknown-unknown discovery: baseline-blind derivation panels over the FRONTIER_HOLES ledger or a seam sweep. Inline (up to 2 panelists) on a blocking wall, batch at wrap-up with 2+ open holes; hook-capped."
 ---
 
 # frontier-run — spend the frontier window on what the default tier can't see

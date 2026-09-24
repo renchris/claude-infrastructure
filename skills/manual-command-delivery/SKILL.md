@@ -1,7 +1,6 @@
 ---
 name: manual-command-delivery
-description: >-
-  How to hand work back to the USER when something remains that involves them — an interactive login (gcloud auth login, /login), sudo, a classifier- or permission-blocked action, a destructive op they must own, a GUI-only step, or a judgment only they can make. Load the MOMENT you are about to ask the user to do anything. THE RULE: a hand-off is a PROGRAM, not a worksheet — write ONE executable /tmp/<topic>-<purpose>.sh that DRIVES every drivable step, verifies its own work via exit codes (never grep-for-a-phrase), is safe to re-run, and hand it over as one command that RUNS; making the human the runtime is the defect. Sort steps by BLAST RADIUS, not by "could a shell run it": reversible ones are driven silently, while irreversible / production-mutating / money-spending / credential-writing / blocked ones are GATED behind a printed resolved command and a typed yes. NEVER script your own authorization — no permission grants, settings*.json, allowlists or credential writes in a file you hand over; ask in chat, alone. Residue named in the close is only what a shell genuinely cannot do; if what remains is a DECISION there is no script, ask it as the ⛔ rung. Triggers: "you need to run this", "run this yourself", "silver platter", "walk me through", an interactive login, sudo, a classifier refusal, or any step needing their terminal/credentials/eyes. NOT for commands you (the agent) run yourself.
+description: "Load before asking the user to do anything (login, sudo, a blocked or destructive step, a silver platter): write one re-runnable /tmp script that drives every drivable step, gates irreversible ones behind a typed yes, and hand over one command."
 ---
 
 ## Manual-Command Delivery (All Projects)

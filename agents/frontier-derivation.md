@@ -1,6 +1,6 @@
 ---
 name: frontier-derivation
-description: Baseline-blind derivation panelist for /frontier-run unknown-unknown discovery. Derives failure modes from the system model FIRST and reads code only to confirm/refute its own derivations — never an evidence sweep over known findings. READ-ONLY. Frontier-tier slot — frontmatter stays `opus` (track-safe); the lead passes `model: "fable"` at call time while frontier_access.active per ~/.claude/model-config.yaml. Spawned by /frontier-run, one per hole/axis; not for routine research (use deep-research / deep-research-sonnet).
+description: "Read-only, baseline-blind panelist for /frontier-run: derives failure modes from the system model first, then reads code only to confirm or refute them. One per hole or axis; the lead passes model \"fable\" while frontier_access is active. Not for routine research (use deep-research)."
 tools: Read, Glob, Grep, Bash, WebSearch, WebFetch
 model: opus
 omitClaudeMd: true

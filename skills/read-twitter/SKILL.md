@@ -1,6 +1,6 @@
 ---
 name: read-twitter
-description: Read an X/Twitter post — or an entire self-reply thread — with its images, from the URL alone. Use when handed an x.com or twitter.com status link, asked to "read this tweet/thread/X post", to unroll a thread, to summarise or quote what someone posted, to look at a chart or screenshot attached to a post, or to read an X Article. Covers why the built-in WebFetch tool cannot do this (x.com answers it HTTP 402), the three-rung fallback ladder and how each rung is validated by CONTENT rather than status code, how a thread is walked in BOTH directions from any member post, and how an attached image actually gets in front of the model's eyes rather than staying a URL. NOT for posting, replying, liking or any write action, and NOT for reading a protected or logged-in-only account.
+description: "Read an X/Twitter post or a whole self-reply thread, with its images, from the URL alone (WebFetch gets HTTP 402 from x.com): a three-rung fallback ladder, threads walked both ways, X Articles. Read-only; not for protected accounts."
 allowed-tools: Bash, Read
 ---
 

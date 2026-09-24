@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Prepare a stateless /clear continuation bridge — capture current LIVE state, write a disposable pointer to /tmp, open it in Cursor, and emit the paste line. By DEFAULT also fires the continuation autonomously when nothing is left open — new iTerm2 split pane, right account launcher (claude-nextN / claude-fableN), right model+effort, prompt auto-submitted; holds fire (paste-only) when open questions/decisions remain or on "paste only"/"hold fire".
+description: "Build a /clear continuation bridge: capture live state, write a /tmp pointer and emit the paste line; by default also fires the successor in a new split pane on the right account, model and effort. Holds fire on open questions or \"paste only\"."
 allowed-tools: Bash, Read, Write, Grep, Glob
 argument-hint: "[plan path or topic — optional] [paste-only|hold-fire to suppress the default fire; account/model/effort/surface prefs in plain words]"
 ---

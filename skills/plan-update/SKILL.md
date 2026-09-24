@@ -1,6 +1,6 @@
 ---
 name: plan-update
-description: Update plan files with compaction templates, Phase 0 scaffolding, and section organization. Use when working on plan files, compacting completed phases, generating Phase 0 orchestration, or restructuring sections. Also invokable as the slash command `/plan-update [plan-name-or-path]`.
+description: "Apply plan-file edits: compaction templates for completed phases, Phase 0 scaffolding and section reorganization. Also the /plan-update [plan-name-or-path] command; the ruleset is plan-conventions."
 allowed-tools: Read,Edit,Glob,Grep,Bash
 ---
 

@@ -10,7 +10,7 @@
 # strands with no human to approve (page unconfigured / prompt blocks the turn). The infra
 # ship rail's own push escapes this because `scripts/ship-land.sh` runs `git push` as a
 # SUBPROCESS (non-Bash-tool path) — resolving U2: it is already ask-exempt. The strand is the
-# MODEL-ISSUED land push (`commands/ship.md:43` "on trunk directly → git push origin HEAD:<trunk>";
+# MODEL-ISSUED land push (`commands/ship.md:46` "on trunk directly → git push origin HEAD:<trunk>";
 # a rebased feature branch fast-forward-land), which surfaces as a Bash tool call. This hook
 # narrows the `git push:*` ask so exactly that land shape is auto-allowed. It is the COMPLEMENT
 # of hooks/smart-bash-allowlist.sh, which allows `git push origin <feature>` but DELIBERATELY

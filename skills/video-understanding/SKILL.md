@@ -1,6 +1,6 @@
 ---
 name: video-understanding
-description: Ingest and genuinely understand a video — including MOTION, which frame sampling structurally cannot see. Use when asked to watch/analyse/summarise a video or a YouTube link, to critique motion design or an animation's easing/timing, to extract on-screen text or code from a screen recording, or to reverse-engineer how a piece of motion graphics was made. Covers the adaptive two-tier ingestion pipeline (local ASR + coarse contact sheets to LOCATE, full-resolution targeted reads to EXTRACT), the ~1568px downscale budget that governs every sampling decision, and the motion-probe transforms (slit-scan, optical flow, motion trails, easing-curve fitting) that make motion measurable. NOT for GENERATING motion graphics — that is tools/motion-film.
+description: "Understand a video, motion included: two-tier ingestion (ASR and contact sheets to locate, full-resolution reads to extract) plus motion probes (slit-scan, optical flow, easing fits). Use to watch, summarise or critique a video or YouTube link."
 ---
 
 <!-- markdownlint-configure-file {

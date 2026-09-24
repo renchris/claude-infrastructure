@@ -1,19 +1,6 @@
 ---
 name: grok-wiki-audit
-description: >-
-  Run a multi-shard defect sweep over a whole repository with `grok-wiki ask`
-  and a local CLI agent — OUR recipe, not the vendor's. Load before firing any
-  grok-wiki sweep at claude-infrastructure or another repo, and before believing
-  a finding it returns. Carries the two preflight facts that decide whether the
-  tool works at all (a broken `claude` stub on PATH makes EVERY agent
-  undetectable; `~/.codex/config.toml` silently overrides the `--reasoning` flag
-  you pass), the shard design, the measured base rate of a raw finding being
-  real (well under 100% — one of the first round's was retracted after
-  verification), and the adjudicate-against-the-pre-fix-artifact rule that must
-  gate every fix. Also records that the engine is readable prompts, so the
-  behavior survives the app. NOT for generating a wiki (that is the vendor's
-  grok-wiki-cli / grok-wiki-custom skills) and NOT for ordinary single-file
-  debugging.
+description: "Our recipe for a multi-shard defect sweep of a repo with grok-wiki ask: preflight checks (a broken claude stub, the codex config override), shard design, and verifying each finding against the pre-fix artifact before fixing it."
 ---
 
 # Grok-Wiki as a defect sweep

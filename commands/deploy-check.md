@@ -1,3 +1,6 @@
+---
+description: "Pre-deployment check: build, typecheck, tests, dependency audit, env and secret scan, git status; reports GO/NO-GO with any blocking issues."
+---
 Run comprehensive pre-deployment check:
 
 1. **Build Verification**
