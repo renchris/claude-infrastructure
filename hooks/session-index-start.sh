@@ -33,7 +33,7 @@ CONTEXT=$(python3 "$HOME/.claude/bin/session-search.py" --context-inject "${CWD:
 # when at least one recent entry carries a summary or a tag. The generator lives in the separate
 # claude-session-search repo, so the filter sits here, on the one caller that injects it.
 if [ -n "$CONTEXT" ]; then
-    _recent=$(printf '%s\n' "$CONTEXT" | sed -n 's/^.* Recent: //p' | head -1)
+    _recent=$(printf '%s\n' "$CONTEXT" | sed -n 's/^.* Recent: //p' | awk 'NR<=1')
     _informative=$(printf '%s\n' "$_recent" | tr '|' '\n' | sed 's/^ *//; s/ *$//' \
         | grep -v '^\[[^]]*\] (no summary)$' | grep -v '^$' || true)
     [ -n "$_informative" ] || CONTEXT=""
