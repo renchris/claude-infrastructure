@@ -404,7 +404,7 @@ not_denied_count() {
   local pre="$BATS_TEST_TMPDIR/parent-hd"
   mkdir -p "$pre/lib"
   cp "$REPO/hooks/validate-bash.sh" "$pre/validate-bash.sh"
-  git -C "$REPO" show a7a372d2c:hooks/lib/is-true-flag.sh > "$pre/lib/is-true-flag.sh"
+  git -C "$REPO" show 871b87723:hooks/lib/is-true-flag.sh > "$pre/lib/is-true-flag.sh"
   ! cmp -s "$REPO/hooks/lib/is-true-flag.sh" "$pre/lib/is-true-flag.sh" || false
   [ "$(decide_with "$pre/validate-bash.sh" $'cat > /tmp/x.sh <<\'EOS\'\nT=/tmp/q; rm -rf "$T"\nEOS\necho done')" = "ASK" ]
   [ "$(decide_with "$pre/validate-bash.sh" $'cat > "$SP/dup.sh" <<\'EOS\'\nrm -rf src /etc\nEOS')" = "ASK" ]

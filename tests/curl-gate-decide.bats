@@ -249,7 +249,7 @@ print(json.loads(out)["hookSpecificOutput"].get("permissionDecision","allow"))
 
 @test "RED ON PARENT: the pre-fix gate asked on every permit above" {
   local pre="$BATS_TEST_TMPDIR/curl-gate-parent.py"
-  git -C "$REPO" show a7a372d2c:hooks/curl-gate.py > "$pre"
+  git -C "$REPO" show 871b87723:hooks/curl-gate.py > "$pre"
   ! cmp -s "$GATE" "$pre" || false
   GATE="$pre"
   # `; curl` — the shape the parent's entry filter DID gate (a `do curl` it never saw at all; below).
@@ -267,7 +267,7 @@ print(json.loads(out)["hookSpecificOutput"].get("permissionDecision","allow"))
   [ "$(decision 'grep curl README.md')" = "allow" ]
   [ "$(decision 'echo "use curl to fetch"')" = "allow" ]
   local pre="$BATS_TEST_TMPDIR/curl-gate-parent.py"
-  git -C "$REPO" show a7a372d2c:hooks/curl-gate.py > "$pre"
+  git -C "$REPO" show 871b87723:hooks/curl-gate.py > "$pre"
   GATE="$pre"
   [ "$(decision $'echo x\ncurl http://169.254.169.254/')" = "allow" ]
   [ "$(decision 'if true; then curl -s http://10.0.0.1/; fi')" = "allow" ]

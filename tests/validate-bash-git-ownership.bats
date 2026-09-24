@@ -40,7 +40,7 @@ parent_hook() {
   local pre="$BATS_TEST_TMPDIR/parent"
   mkdir -p "$pre"
   ln -sfn "$REPO/hooks/lib" "$pre/lib"
-  git -C "$REPO" show a7a372d2c:hooks/validate-bash.sh > "$pre/validate-bash.sh"
+  git -C "$REPO" show 871b87723:hooks/validate-bash.sh > "$pre/validate-bash.sh"
   printf '%s' "$pre/validate-bash.sh"
 }
 
