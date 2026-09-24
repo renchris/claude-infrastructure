@@ -1,0 +1,75 @@
+{
+ "title": "F1 slim instructions",
+ "verdict": "FAIL",
+ "n": {
+  "slim": 100,
+  "full": 100
+ },
+ "margin_pp": 5.0,
+ "primary": {
+  "t": 0.49313122200000004,
+  "c": 0.763231804,
+  "pct": -35.38906274403627,
+  "p": 1.9073486328125e-06,
+  "units": 20
+ },
+ "meter": {
+  "t": 49178.71,
+  "c": 78045.74,
+  "pct": -36.987323074904545,
+  "p": 1.9073486328125e-06,
+  "units": 20
+ },
+ "significant_harms": [
+  {
+   "name": "T10-status-plan item 1",
+   "p": 0.047619047619047616,
+   "worse": true
+  },
+  {
+   "name": "T10-status-plan item 2",
+   "p": 0.047619047619047616,
+   "worse": true
+  }
+ ],
+ "ci_misses": [
+  {
+   "name": "Success",
+   "lo": -0.10637097842382741,
+   "p1": 0.94,
+   "p0": 0.98
+  }
+ ],
+ "n_needed_per_arm": {
+  "Success": 2920
+ },
+ "success": [
+  {
+   "slim": 94,
+   "full": 98
+  },
+  {
+   "slim": 100,
+   "full": 100
+  }
+ ],
+ "compliance": {
+  "slim": [
+   453,
+   475
+  ],
+  "full": [
+   461,
+   475
+  ]
+ },
+ "ci_success": [
+  -0.10637097842382741,
+  0.01948876382301748
+ ],
+ "ci_compliance": [
+  -0.042542887732542486,
+  0.007999860547185
+ ],
+ "items_tested": 95
+}

@@ -10,7 +10,8 @@ ARM=$1; TASK=$2; REP=$3; CCD=$4
 H=$(cd "$(dirname "$0")" && pwd)
 G=${GATE_ROOT:-/tmp/tokeff-gate}
 CLAUDE_BIN=${CLAUDE_BIN:-$HOME/.claude-280/node_modules/.bin/claude}
-case "$ARM" in full|slim) ;; *) echo "bad arm: $ARM" >&2; exit 2;; esac
+# full|slim are the gate's arms; any other name must be a probe arm already built under $G/arms.
+case "$ARM" in full|slim) ;; *[!a-z0-9-]*|'') echo "bad arm: $ARM" >&2; exit 2;; *) [ -d "$G/arms/$ARM" ] || { echo "bad arm: $ARM" >&2; exit 2; };; esac
 T="$H/tasks/$TASK"
 [ -f "$T/prompt.txt" ] && [ -x "$T/fixture.sh" ] || { echo "no task: $TASK" >&2; exit 2; }
 [ -d "$CCD" ] || { echo "no config dir: $CCD" >&2; exit 2; }
