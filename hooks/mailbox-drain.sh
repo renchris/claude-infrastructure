@@ -367,7 +367,9 @@ _headless=0
 # removes the disagreement by construction: cc-await-ping with no argument derives
 # ${ITERM_SESSION_ID##*:}, which is the SAME expression cc-notify uses to resolve a target, and it
 # then covers that key's whole set (lib → mailbox_keyset). There is no longer an id here to get wrong.
-_armcmd="$HOME/.claude/bin/cc-await-ping --timeout ${CC_DRAIN_ARM_TIMEOUT_S:-14400} --interval 15"
+# 3300 s, not 14400: the timeout wake lands inside the main thread's 1h prompt-cache TTL, so it
+# re-reads the context instead of re-writing it at 2x (bin/cc-await-ping § C5 has the measurement).
+_armcmd="$HOME/.claude/bin/cc-await-ping --timeout ${CC_DRAIN_ARM_TIMEOUT_S:-3300} --interval 15"
 # GOAL-AWARE (2026-08-10, docs/research/goal-in-handoff-2026-08-08.md § RESOLUTION). With a LIVE
 # /goal, the arm this nag used to instruct is the exact act that disables the goal: a parked
 # background Bash makes CC skip /goal evaluation at every Stop, silently. A goal-driven session is

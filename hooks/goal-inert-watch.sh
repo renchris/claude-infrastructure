@@ -40,8 +40,9 @@
 #
 # The `finally` puts it back, so the registry reads CORRECT before the Stop and CORRECT after it,
 # and is wrong only DURING — the one moment nothing can observe. `Tio` fires on any non-terminal
-# `local_bash` task, and this box tells every session to arm `cc-await-ping --timeout 14400` as a
-# background Bash "before you go idle". That watcher is non-terminal for FOUR HOURS, so on this box
+# `local_bash` task, and this box tells every session to arm `cc-await-ping --timeout 14400` (3300
+# since 2026-09-23) as a background Bash "before you go idle". That watcher is non-terminal for its
+# whole term, so on this box
 # an armed goal is inert by default: measured 2h / ~12 turns / 0 evaluations, and no log the
 # operator ever sees. The deferral itself is CC's, is deliberate, and is not ours to fix — judging
 # "is the objective met?" mid-flight would read an incomplete transcript and burn an LLM call per
