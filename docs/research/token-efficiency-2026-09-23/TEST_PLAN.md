@@ -4,6 +4,15 @@ Every flagged change below ships **off**. This file says how to turn each one on
 measure, when to stop, and how to turn it off. Baseline and weights: `BASELINE.md`. Ranked list and
 estimates: `OPPORTUNITIES.md`.
 
+**Ruling 2026-09-23 (operator): accounts are interchangeable.** *"We use /accounts indiscriminately just for weekly
+usage. There is no functional difference between accounts. … all of our behavior, configuration, should be account
+agnostic."* So no arm below is pinned to one account in production. The design is now: (a) the offline headless gate
+(`claude -p` in scratch repos) stays the go/no-go; (b) any online measurement assigns the arm **per session** at
+launch (an env var or flag for a sampled set of sessions, recorded so `cc-token-ledger --by-arm` can split by it),
+never per account; (c) the ship decision flips **all accounts or none**. Migration 0037 converges every account onto
+one shared `settings.json`, so a per-account setting stops being expressible. Withdrawn steps are struck through
+below and kept for the record.
+
 ## Metrics (all flags)
 
 | | Metric | Instrument |
@@ -17,13 +26,15 @@ estimates: `OPPORTUNITIES.md`.
 | Guardrail (code) | Agent-written code that survives: commits later reverted or fixed within 7 days | `git log` on the repos touched |
 
 **Ship rule.** A flag stays on only if the primary metric drops and no guardrail regresses beyond noise. Record
-null and negative results in this directory. Accounts are routed by quota headroom, not at random, so every
+null and negative results in this directory. ~~Accounts are routed by quota headroom, not at random, so every
 online test below uses a crossover (the arm moves to a second account for a second window) rather than one
-fixed treatment account.
+fixed treatment account.~~ WITHDRAWN 2026-09-23 — no account is a treatment account; an online arm is assigned
+per session at launch (see the ruling above), which also removes the headroom-routing confound the crossover
+existed to absorb.
 
 ## F1. Slim instructions arm (rank 3, plus ranks 9 and 11 for the slim arm)
 
-What changes for an account on the arm: `CLAUDE.md` → `~/.claude/CLAUDE.slim.md` (40,374 → 18,546 tokens),
+What changes for a session on the arm (was "for an account"; per session since 2026-09-23): `CLAUDE.md` → `~/.claude/CLAUDE.slim.md` (40,374 → 18,546 tokens),
 and `rules/` → `~/.claude/rules.slim/` (the compact mission board, 5,456 → ~961 tokens, and no rules essay,
 −2,402). Per context on every account: 48,232 → ~19.5k tokens (−59.6%; `audit/README.md`).
 
@@ -35,16 +46,21 @@ and `rules/` → `~/.claude/rules.slim/` (the compact mission board, 5,456 → ~
    variant as project memory, so the arms differ only in content. A blind judge scores each run against the task
    rubric; compare success, rule compliance, tokens and $ per task, turns, tool errors. The pilot results are in
    `eval/` when run. Do not start the online test if success or compliance drops.
-2. **Online A/B**: `cc-instructions-variant set next3 slim`. Window 1: 7 days, next3 on slim, the other accounts
+2. ~~**Online A/B**: `cc-instructions-variant set next3 slim`. Window 1: 7 days, next3 on slim, the other accounts
    on the full file. Window 2: `reset next3`, `set next4 slim`, 7 days. Readout: `cc-token-ledger --by-arm
-   --since 14d` (arms are labelled by the `instructions` attachment content and the switch log).
+   --since 14d` (arms are labelled by the `instructions` attachment content and the switch log).~~
+   WITHDRAWN 2026-09-23 (accounts are interchangeable). Replacement: if the offline gate passes and an online
+   reading is still wanted, assign the slim arm **per session at launch** for a sampled set of sessions on every
+   account, record the assignment per session, and read out with `cc-token-ledger --by-arm --since 14d` (arms are
+   still labelled by the `instructions` attachment content). Then ship the slim file to all accounts or none.
 3. **Watch items** specific to this flag: close-contract compliance (the slim text keeps every hook-matched
    string, but a literal model may weigh a shorter rule differently); `commit as you go` vs the Bash tool's built-in
    "commit only when asked" (unchanged from the full file, but now more prominent); STALE variants: run
    `cc-instructions-variant status` after any edit to `CLAUDE.global.md` and re-derive the changed sections.
 4. **Stop**: any guardrail regression beyond noise, or an operator report of a rule being ignored.
-5. **Roll back**: `cc-instructions-variant reset <account>` (new sessions only; running sessions keep what they
-   loaded).
+5. **Roll back**: ~~`cc-instructions-variant reset <account>`~~ (withdrawn 2026-09-23) — stop assigning the
+   per-session arm; after a fleet-wide ship, revert the shared CLAUDE.md for all accounts at once (new sessions
+   only; running sessions keep what they loaded).
 
 ## F2. Lean worker agent type `workflow-lean` (rank 1)
 
@@ -67,14 +83,17 @@ on the same brief (scratch session).
 
 What changes: `.claude/rules/agent-operating-lessons.md` keeps the header and the resident lessons; the
 situational lessons move verbatim to `.claude/rules/agent-operating-lessons-situational.md`. By default both load,
-so nothing changes. The flag excludes the situational file per account.
+so nothing changes. The flag excludes the situational file ~~per account~~ (fleet-wide since 2026-09-23).
 
-1. **Turn on**: run migration `migrations/0036-*` for one account (class c10, operator-run; it adds a
+1. **Turn on**: ~~run migration `migrations/0036-*` for one account (class c10, operator-run; it adds a
    `claudeMdExcludes` glob to that account's `settings.json`). Crossover as in F1, but only sessions started in
-   claude-infrastructure are in scope.
+   claude-infrastructure are in scope.~~ WITHDRAWN 2026-09-23 — migration 0036 is run for all accounts or none
+   (after 0037 there is one shared `settings.json`). Measure first offline (headless runs in this repo with and
+   without the `claudeMdExcludes` glob via `--settings`), or online per session by passing the glob at launch for a
+   sampled set of sessions; only sessions started in claude-infrastructure are in scope.
 2. **Watch**: repeats of mistakes a situational lesson covers (grep the transcripts for the lesson's symptom); how
    often sessions grep the situational file when they hit a failure (the resident pointer tells them to).
-3. **Roll back**: remove the glob from that `settings.json` (the migration's verify line names it).
+3. **Roll back**: remove the glob from ~~that~~ the shared `settings.json` (the migration's verify line names it).
 
 ## F4. Mission board compact render, all accounts (rank 11)
 
@@ -97,15 +116,17 @@ real prompts (`measure/listings.md` has the usage evidence). Roll back: `git rev
   Watch missed-mail signals (`cc-notify reason=`, `cc-inbox-guard` pages).
 - `CC_DOD_LINEAGE_ONLY=1`: the SessionStart frozen-DoD context carries only this session's own lineage. Watch
   `completion-assert` false-dones and scope complaints after a recycle or handoff.
-Turn each on in the settings env of one account (a settings change: stage it as a migration), compare against the
-others, roll back by removing the env line.
+~~Turn each on in the settings env of one account (a settings change: stage it as a migration), compare against the
+others, roll back by removing the env line.~~ WITHDRAWN 2026-09-23 — test each by setting the env var per session
+at launch for a sampled set of sessions (logged per session), then ship it in the shared settings env for all
+accounts or none (a settings change: stage it as a migration); roll back by removing the env line.
 
 ## Proposals only (no flag built; each needs an operator decision or an upstream change)
 
 | Item | Test when adopted |
 |---|---|
-| Prompt suggestion off (`CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=true` is set on purpose) | one account off for 7 days; side-request $ from `cc-token-ledger --side-requests`; the operator's UX judgment |
-| `bashOutputMaxChars: 16000` | per-account A/B: $ per task, turns, follow-up reads of the persisted file within 3 turns |
+| Prompt suggestion off (`CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=true` is set on purpose) | ~~one account off for 7 days~~ (withdrawn 2026-09-23) per-session arm: off for a sampled set of sessions at launch, 7 days, then all accounts or none; side-request $ from `cc-token-ledger --side-requests`; the operator's UX judgment |
+| `bashOutputMaxChars: 16000` | ~~per-account A/B~~ (withdrawn 2026-09-23) offline headless A/B or a per-session arm, then all accounts or none: $ per task, turns, follow-up reads of the persisted file within 3 turns |
 | session-continue re-block suppression; WAKE FLOOR armed mechanically; Stop reasons ≤200 chars; `/goal` empty-turn notice | per hook: forced turns per context, repeat share; guardrails: sessions idling on 🔧 work, missed peer mail |
 | ms365 scoped out of the user MCP config; Claude Docs connector off | operator ruling first (the email-images rule depends on ms365) |
 | Setup breakpoint after the memory/listing attachments (upstream) or the `--append-subagent-system-prompt-file` workaround | first-request cache-read share of sibling agents (13.2% today) |

@@ -14,6 +14,11 @@
 # split sessions by the arm they started under. Design and test plan:
 # docs/research/token-efficiency-2026-09-23/.
 #
+# RULING 2026-09-23 (operator): accounts are interchangeable ("all of our behavior, configuration,
+# should be account agnostic"), so an arm must NOT be pinned to one account in production. Use this
+# tool only on a throwaway/offline config dir, or for a fleet-wide switch (all accounts or none).
+# Experiments assign the arm per session at launch or run headless offline; see TEST_PLAN.md.
+#
 # Usage:
 #   cc-instructions-variant [status]                each account: arm, CLAUDE.md target, bytes
 #   cc-instructions-variant set <account> <variant> e.g. `set next3 slim` (needs ~/.claude/CLAUDE.slim.md)
