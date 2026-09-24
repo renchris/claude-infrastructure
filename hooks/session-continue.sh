@@ -818,7 +818,9 @@ wake_floor() { # → echoes JSON on stdout when it wants to BLOCK; otherwise sil
   # cc-notify resolves a target with, and cover that key's whole set — reader ⊇ writer by construction
   # rather than by two hooks agreeing. The armed-check above stays keyed on $_ouid and still works:
   # the watcher writes a .watching marker under EVERY key of the set, so either question answers true.
-  armcmd="$HOME/.claude/bin/cc-await-ping --timeout ${CC_WAKE_FLOOR_TIMEOUT_S:-14400} --interval 15"
+  # 3300 s keeps the timeout wake inside the 1h prompt-cache TTL (bin/cc-await-ping § C5); it must
+  # stay equal to mailbox-drain.sh's _armcmd (tests/wake-floor.bats pins the two as identical).
+  armcmd="$HOME/.claude/bin/cc-await-ping --timeout ${CC_WAKE_FLOOR_TIMEOUT_S:-3300} --interval 15"
   # UNDER A LIVE GOAL, a DIFFERENT command (C7). Not a longer sentence about the same one: the bare
   # form is denied at the chokepoint (hooks/validate-bash.sh) under a live goal, so instructing it
   # here would hand the model a command its own guard refuses — the exact loop the E1 notice defect

@@ -7,7 +7,8 @@
 # to DELETE that hook for the duration of any Stop at which the task registry holds non-terminal
 # background work (`Tio`: any local_bash task), restoring it in a `finally` — so the registry reads
 # healthy before and after, and the goal is silently skipped during. A parked
-# `cc-await-ping --timeout 14400` background Bash therefore makes an armed goal inert for hours,
+# `cc-await-ping --timeout 14400` (3300 since 2026-09-23) background Bash therefore makes an armed
+# goal inert for its whole term,
 # and THREE of our own surfaces used to instruct exactly that arm (mailbox-drain's nag,
 # session-continue's WAKE FLOOR block, CLAUDE.md § Agent Teams). Each now consults this predicate
 # first. One lib, one predicate, so the producers cannot drift.

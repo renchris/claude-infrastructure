@@ -18,7 +18,7 @@
 #   --idle-scoped   THE ONE SHAPE THAT IS SAFE UNDER A LIVE /goal (see § IDLE-SCOPED below):
 #                   additionally terminates on any NEW TURN of its own session, so the
 #                   deferral it creates spans exactly the idle window. Defaults --timeout
-#                   3600 and --interval 5 (both still overridable).
+#                   3300 and --interval 5 (both still overridable).
 #   --sid <id>      this session's Claude session id — the key of its turn-boundary beat
 #                   (~/.claude/cc-beats/<sid>.json). Required by --idle-scoped in practice;
 #                   omitted, the mode resolves it by pane and REFUSES if it cannot.
@@ -90,7 +90,7 @@
 #   C3 single-instance   refuse while a live sibling watcher claims any key of the keyset.
 #   C4 refuse-on-pending refuse while mail is already pending — mail waiting means you have work, and
 #                     arming would defer the judgment of state you ALREADY hold.
-#   C5 bounded        --timeout defaults to 3600 here (not 14400): the timeout exit is itself a task
+#   C5 bounded        --timeout defaults to 3300 here: the timeout exit is itself a task
 #                     completion, so it is the "re-look at the world" floor and the in-session
 #                     deadline check for a peer that will never ping.
 # The arm gate additionally refuses when the beat oracle C2 depends on cannot be read (unresolvable
@@ -185,14 +185,18 @@ if [ -n "$ONLY_CLASS" ] && [ -n "$EXCEPT_CLASS" ]; then
   echo "cc-await-ping: --only-class and --except-class are mutually exclusive" >&2; exit 2
 fi
 
-# C5: the mode's own defaults, applied ONLY where the caller did not state one. 3600 rather than the
-# 14400 the bare form is nagged with, because here the timeout is a FEATURE — its exit is a task
-# completion, i.e. a periodic "re-look at the world" and the in-session deadline check for a peer
-# that will never ping. 5s rather than 15s because the added poll is one stat of a small beat file,
-# and the interval is what bounds the known race (a wake turn that ends before the next poll costs
+# C5: the mode's own defaults, applied ONLY where the caller did not state one. The timeout is a
+# FEATURE — its exit is a task completion, i.e. a periodic "re-look at the world" and the in-session
+# deadline check for a peer that will never ping. 3300, not 3600: a main thread's prompt cache lives
+# 1h from its last request, so a wake at 60 min re-writes the whole context at 2x input price while a
+# wake at 55 min only re-reads it at 0.05x. Measured 2026-09-09..23: 116 watcher timeouts woke idle
+# sessions into a full re-write (mean 390k tokens; docs/research/token-efficiency-2026-09-23/). The
+# recommended re-arm term (--timeout 3300 below and in mailbox-drain.sh) stays inside the TTL for
+# the same reason. 5s rather than 15s because the added poll is one stat of a small beat file, and
+# the interval is what bounds the known race (a wake turn that ends before the next poll costs
 # exactly one bounce turn, never a periodic cost).
 if [ "$IDLE_SCOPED" = 1 ]; then
-  [ "$_TIMEOUT_SET" = 1 ]  || TIMEOUT="${CC_AWAIT_IDLE_TIMEOUT_S:-3600}"
+  [ "$_TIMEOUT_SET" = 1 ]  || TIMEOUT="${CC_AWAIT_IDLE_TIMEOUT_S:-3300}"
   [ "$_INTERVAL_SET" = 1 ] || INTERVAL="${CC_AWAIT_IDLE_INTERVAL_S:-5}"
 fi
 if [ "$IDLE_SCOPED" = 0 ] && [ -n "$SID" ]; then
@@ -362,7 +366,7 @@ if [ "$STAND_DOWN" = 1 ]; then
     _p="${_s##*.}"; case "$_p" in ''|*[!0-9]*) continue ;; esac
     kill -0 "$_p" 2>/dev/null || rm -f "$_s" 2>/dev/null || true
   done
-  echo "cc-await-ping: verdict=stood-down n=$_sd_n uuid=${CUR_UUID} — $_sd_n watcher(s) of THIS inbox signalled by pid; no pattern used, no sibling touched. Re-arm before going idle (unless a /goal is live): cc-await-ping --timeout 14400 --interval 15" >&2
+  echo "cc-await-ping: verdict=stood-down n=$_sd_n uuid=${CUR_UUID} — $_sd_n watcher(s) of THIS inbox signalled by pid; no pattern used, no sibling touched. Re-arm before going idle (unless a /goal is live): cc-await-ping --timeout 3300 --interval 15" >&2
   exit 0
 fi
 _claim_live() {   # <key> → print the pid of a LIVE OTHER watcher beating this key; rc 1 = none
@@ -993,7 +997,7 @@ _wake_down_notice() {   # <signame> [<sender clause, already space-prefixed>]
   # applies at all). They were written against each other and neither subsumes the other.
   printf '%s [cc-await-ping] WAKE-PATH-DOWN: the watcher armed for [%s] was TERMINATED from outside (SIG%s; %s budget=%ss — the MEASURED slice of the term it actually held) — it did NOT time out and consumed no ping.%s WHICH REPAIR APPLIES DEPENDS ON YOUR /goal, so check before you act. (a) NO live /goal → you are DEAF: nothing will wake this session on peer mail until you RE-ARM. Do it before you go idle: %s . (b) A /goal IS LIVE → do NOT re-arm. Claude Code skips /goal evaluation at every Stop where a non-terminal background Bash exists, so re-arming would silently disable the goal driving this session — hooks/validate-bash.sh denies that arm for exactly this reason. You are not deaf without it: the goal blocks your stops, so you keep taking turns and hooks/mailbox-drain.sh delivers peer mail at every boundary the goal forces. The goal-safe cross-turn lever is %s/.claude/hooks/session-continue.sh set "<next step>". THE CHECK, if you cannot tell which branch you are in: the drain that delivered this line re-evaluates goal-liveness at that same boundary, so the header above it IS the verdict — "no inbox wake path armed" is branch (a), and a nudge quoting your /goal condition is branch (b). To run the predicate yourself: . %s/.claude/hooks/lib/goal-state.sh && goal_live_condition <your transcript .jsonl> — it FAILS CLOSED, so rc 1 means "no live goal OR could not tell", never a confident no. Detail: docs/research/goal-safe-2way-comms-2026-08-13.md §8 E1; F5 in docs/research/handoff-high-value-capture-2026-08-19.md.%s\n' \
     "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$CUR_UUID" "$1" "$(_elapsed_f)" "$TIMEOUT" "${2:-}" \
-    "$HOME/.claude/bin/cc-await-ping --timeout 14400 --interval 15" "$HOME" "$HOME" "$cls" \
+    "$HOME/.claude/bin/cc-await-ping --timeout 3300 --interval 15" "$HOME" "$HOME" "$cls" \
     >> "$box" 2>/dev/null || true
   return 0
 }

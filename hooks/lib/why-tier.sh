@@ -225,9 +225,11 @@ A PANE session is woken by an armed `cc-await-ping` whose EXIT rides the harness
 notification. A HEADLESS session has no such path at all: it is woken by a write to its STDIN, by
 the spawner, and it has no next turn to drain on — so arming a watcher for it buys nothing and the
 wake floor abstains (`wake-floor-headless`) rather than instructing an arm that cannot work.
-  ~/.claude/bin/cc-await-ping --timeout 14400 --interval 15
-The long timeout is deliberate: the watcher's timeout exit is the expensive one, and a short bound
-converts a healthy wait into a spurious wake.
+  ~/.claude/bin/cc-await-ping --timeout 3300 --interval 15
+The 3300 s term keeps the timeout wake inside the main thread's 1h prompt-cache TTL: that wake
+re-reads the context at 0.05x input, where a wake past the TTL re-writes all of it at 2x. The 4 h
+term this used to recommend made every timeout wake a full re-write (116 of them, mean 390k tokens,
+2026-09-09..23: docs/research/token-efficiency-2026-09-23/measure/cache-writes.md).
 🚨 DO NOT ARM IT UNDER A LIVE /goal. Claude Code deletes the goal's Stop hook at every Stop while a
 non-terminal background Bash exists, so a backgrounded park silently disables the goal that is
 driving the session — hooks/validate-bash.sh DENIES that arm for exactly this reason. You are not

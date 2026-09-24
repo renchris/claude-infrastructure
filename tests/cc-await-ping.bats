@@ -838,14 +838,14 @@ _verdict_elapsed() {   # <stream-file|-> → the integer seconds in the FIRST `e
   [[ "$output" == *"HANDOFF-PING slug: landed"* ]] || false
 }
 
-@test "idle-scoped C5: --timeout defaults to 3600 and --interval to 5, and both stay overridable" {
+@test "idle-scoped C5: --timeout defaults to 3300 and --interval to 5, and both stay overridable" {
   beat 5 prompt
   run "$AWAIT" "$UUID" --idle-scoped --sid "$SID" --timeout 1 --interval 1
   [ "$status" -eq 2 ]
   [[ "$output" == *"timeout 1s, every 1s"* ]] || false     # the override is honoured
   # and the defaults are the MODE's, not the bare form's 1800/15
   run timeout 3 "$AWAIT" "$UUID" --idle-scoped --sid "$SID"
-  [[ "$output" == *"timeout 3600s, every 5s"* ]] || false
+  [[ "$output" == *"timeout 3300s, every 5s"* ]] || false
 }
 
 @test "idle-scoped CONTROL: the bare form's defaults are untouched (1800/15), and rejects --sid" {
@@ -1062,7 +1062,7 @@ stop_attempts() { # <pid|0> <count> → the number of those stops at which the g
   kill -TERM "$watcher" 2>/dev/null || true
   wait "$watcher" 2>/dev/null || true
   grep -q 'NO live /goal' "$MB"
-  grep -qF 'cc-await-ping --timeout 14400 --interval 15' "$MB"
+  grep -qF 'cc-await-ping --timeout 3300 --interval 15' "$MB"
 }
 
 @test "E1: the notice is still ONE mailbox line (a line IS a message on this substrate)" {
