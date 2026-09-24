@@ -143,3 +143,13 @@ migration on a live fleet for no measurable gain.
   (DEPLOY_GATE_BUDGET): convict per-file SILENCE not age, and floor the bound at the caller's declared band (300 s on
   Amplify, ~1,440 s in the verifier). Mine is SUPERSEDED and dropped (local branch `lat-w11-watchdog-optin`, never
   pushed). Deploy now waits on the first green stamp newer than `e94fa15b4`.
+- **17:08–17:23 CDT — `2580b40f8` stamped GREEN and deployed** (`scripts/deploy-release.sh`, verified, no migrations).
+  **Oregon LIVE**: Amplify job 1499 SUCCEED in 13m40s (was 30m+ before W10); harbour + key serve `2580b40`.
+  **Fly LAX/SIN/IAD FAILED**: Path F `flyctl-deploy-failed-after-3-attempts` in all three — `next build` type-checks
+  the image context, and this programme's co-located tests + `vitest.setup.ts` shipped while the `lib/**/__tests__`
+  helpers they import did not (TS2307). The fourth occurrence of that trap (63cfb4c83, 88af9bfe1, dec92dd1b).
+  **W12 (lead-inline) LANDED `620120294`**: `.dockerignore` now excludes the SHAPE (`**/__tests__`, `**/*.test.ts(x)`,
+  `vitest.*`), and `tests/docker-context-imports.test.ts` replays the context statically and fails naming any
+  shipped file that imports an unshipped one (red on the parent with exactly the runner's TS2307 set; 3/3 green).
+  Dallas (`reso-dfw`) is deliberately outside Path F until insomniacdenver launches (`deploy-regions.ts`).
+  Next: a green stamp containing `620120294` → `deploy-release.sh` → Path F rebuilds LAX/SIN/IAD.
