@@ -1,0 +1,25 @@
+{
+ "brief": "B07",
+ "dossiers": {
+  "dossier-1.md": {
+   "agent_type": "workflow-lean",
+   "rep": 9,
+   "agent_id": "a98946afd863cd183"
+  },
+  "dossier-2.md": {
+   "agent_type": "workflow-lean",
+   "rep": 12,
+   "agent_id": "ad2b9e08b80c7d7d4"
+  },
+  "dossier-3.md": {
+   "agent_type": "workflow-lean",
+   "rep": 11,
+   "agent_id": "a98d7ea89b34bf0e4"
+  },
+  "dossier-4.md": {
+   "agent_type": "workflow-lean",
+   "rep": 10,
+   "agent_id": "aa199898c72d1fc10"
+  }
+ }
+}

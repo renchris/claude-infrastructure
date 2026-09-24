@@ -1,0 +1,53 @@
+{
+ "brief": "B05",
+ "dossiers": {
+  "dossier-1.md": {
+   "arm": "lean+scope",
+   "rep": 10
+  },
+  "dossier-2.md": {
+   "arm": "lean+scope",
+   "rep": 12
+  },
+  "dossier-3.md": {
+   "arm": "lean+scope",
+   "rep": 11
+  },
+  "dossier-4.md": {
+   "arm": "workflow-lean",
+   "rep": 6
+  },
+  "dossier-5.md": {
+   "arm": "workflow-subagent",
+   "rep": 1
+  },
+  "dossier-6.md": {
+   "arm": "workflow-lean",
+   "rep": 3
+  },
+  "dossier-7.md": {
+   "arm": "workflow-lean",
+   "rep": 7
+  },
+  "dossier-8.md": {
+   "arm": "workflow-lean",
+   "rep": 2
+  },
+  "dossier-9.md": {
+   "arm": "lean+scope",
+   "rep": 9
+  },
+  "dossier-10.md": {
+   "arm": "workflow-subagent",
+   "rep": 8
+  },
+  "dossier-11.md": {
+   "arm": "workflow-subagent",
+   "rep": 4
+  },
+  "dossier-12.md": {
+   "arm": "workflow-subagent",
+   "rep": 5
+  }
+ }
+}
