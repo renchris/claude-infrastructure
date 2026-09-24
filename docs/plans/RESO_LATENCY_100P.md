@@ -88,4 +88,6 @@ migration on a live fleet for no measurable gain.
 | R | ✅ DONE — 10 files, ~180 findings | `docs/research/reso-latency-2026-09-23/` |
 | Batch 1 (W1a, W0, W6, W4b, W7) | RUNNING — fired 2026-09-23 23:40 CDT, all five goals armed+verified | panes W1a 670 · W0 671 · W6 672 · W7 673 · W4b 674 |
 | Hand-over W6 → W2 | W6's C1c/F9c (client session slide) and F6 (poller API) need W2's files; W6 lands the rest and specs them in its close, W2 does server halves then the client wiring after W6 lands | W6 ping 23:43 |
-| Batch 2 (W1b, W2, W3, W4a, W5) | waits on W1a's land | — |
+| **W1a** | ✅ **LANDED** reso `ffa66dd4e` (13 paths content-verified, 436/436 unit green). One user-row read per request (WeakMap memo on the cookie store); admin gate 3→1, platform-or-admin+getDB 5→1, Team page prefix 10→1, logout 1→0. Published `lib/auth/session-revocation.ts` (`isSessionRevoked`, `SessionUserRow`) + `getSessionUserState`/`getSessionUserRow`. REJECTED: A7-05 TTL memo (it would delay revocation), A7-06 logs unseal-only (trusts a revoked cookie). Speculative overlap (reads ∥ revocation) ruled compliant with Critical Rule 5 by the lead and granted to W4a | pane 670 |
+| Batch 2 (W1b, W2, W3, W4a, W5) | RUNNING — fired 2026-09-24 00:10–00:30 CDT, all goals armed | W1b 676 · W3 677 · W2 678 · W5 681 · W4a (see log) |
+| Ownership rulings | warm route + R20 → W4a; A6-16 register fold → W5 (+ formActions.ts, passkeyCeremonyActions.ts); W5 granted logout route (A6-18) and the three history action files (A6-20) | pings 00:19–00:24 |
