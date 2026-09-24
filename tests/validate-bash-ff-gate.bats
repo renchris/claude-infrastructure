@@ -205,7 +205,7 @@ git pull --ff-only -q origin main 2>&1 | tail -2" "$D"
   [ "$status" -eq 0 ]
   denied "$output"
   reason "$output" | grep -q 'ARITHMETICALLY IMPOSSIBLE' || false
-  reason "$output" | grep -q 'git worktree add' || false     # names the remedy, not just the sin
+  reason "$output" | grep -q 'new-worktree.sh' || false      # names the remedy, not just the sin (e2d8c9816 moved it off `git worktree add`)
 }
 
 @test "(12) CONTROL: the identical spelling in a WORKTREE is ALLOWED — the innocent population" {
