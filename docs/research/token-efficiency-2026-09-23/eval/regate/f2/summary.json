@@ -1,0 +1,55 @@
+{
+ "title": "F2 workflow-lean",
+ "verdict": "PASS",
+ "n": {
+  "lean": 40,
+  "default": 40
+ },
+ "margin_pp": 10.0,
+ "primary": {
+  "t": 0.108721275,
+  "c": 0.6969809,
+  "pct": -84.40111127865914,
+  "p": 0.001953125,
+  "units": 10
+ },
+ "meter": {
+  "t": 15643.0,
+  "c": 117104.575,
+  "pct": -86.64185408640098,
+  "p": 0.001953125,
+  "units": 10
+ },
+ "significant_harms": [],
+ "ci_misses": [],
+ "n_needed_per_arm": {},
+ "success": [
+  {
+   "lean": 40,
+   "default": 40
+  },
+  {
+   "lean": 40,
+   "default": 40
+  }
+ ],
+ "compliance": {
+  "lean": [
+   155,
+   160
+  ],
+  "default": [
+   154,
+   160
+  ]
+ },
+ "ci_success": [
+  -0.08762160119728646,
+  0.08762160119728646
+ ],
+ "ci_compliance": [
+  -0.03839284041852937,
+  0.05177632684987715
+ ],
+ "items_tested": 40
+}
