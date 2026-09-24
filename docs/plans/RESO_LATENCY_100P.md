@@ -137,3 +137,9 @@ migration on a live fleet for no measurable gain.
   watchdog, globalTimeout 40 m. The verifier stamped `e94fa15b4` GREEN once the hung run cleared; `1f9cc09af` RED
   (pre-fix). Next: a green stamp on `e51daae22` → `scripts/deploy-release.sh` (operator-authorized 14:34), which should
   fit inside Amplify's 30-min limit without the staged timeout raise.
+- **W10's watchdog stamped `e51daae22` RED in the verifier** (it SIGKILLed the LIVE ship-land and rotate-soketi-key
+  suites at 300 s, measured from queue time, in the niced full-suite lane). A lead-inline fix (make the bound opt-in,
+  `1f222d1cd`, red-on-parent proven) conflicted at land with a sibling's better fix already on trunk — `1a5dcda31`
+  (DEPLOY_GATE_BUDGET): convict per-file SILENCE not age, and floor the bound at the caller's declared band (300 s on
+  Amplify, ~1,440 s in the verifier). Mine is SUPERSEDED and dropped (local branch `lat-w11-watchdog-optin`, never
+  pushed). Deploy now waits on the first green stamp newer than `e94fa15b4`.
