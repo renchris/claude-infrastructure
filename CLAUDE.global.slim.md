@@ -24,6 +24,7 @@ Safety:
 - Never force-push to main or master. Elsewhere, run a hard reset, a force-push or any other destructive command only when the user explicitly asks.
 - Do not run `git clean -x` or `-X`. Gitignored files include paid generated assets (AI images, API outputs) that cost money and take a cooldown to regenerate. Any other `git clean` needs the user's confirmation.
 - Do not `git add -f` gitignored paths.
+- A permission refusal (a command that needs approval, an auto-mode deny) is an answer for that action. Do not re-issue it split, reworded or through another path such as `git -C`; stop and hand it back as the one command to run.
 
 ## Working rules
 
@@ -47,7 +48,7 @@ Grep MEMORY.md first, and update an existing entry rather than adding a near-dup
 
 ### Plans
 
-Load the plan-conventions skill before you create or edit a plan, design or roadmap doc. It defines the Phase 0 section (Agent Team Orchestration, whose first field is the execution locus per wave) that is mandatory for any plan with 2+ code-writing tasks. The backup-before-write.sh hook injects a short form of these rules on plan-file edits.
+Plan/design/roadmap docs accumulate decisions across sessions → INTEGRATE never overwrite; completed sections compact (learnings + commit hashes + blockers), upcoming sections expand (file:line detail); **MANDATORY Phase 0 (Agent Team Orchestration) as the FIRST section** for any plan with 2+ code-writing tasks — and Phase 0's **first field is the EXECUTION LOCUS PER WAVE**: **S** = dispatched handoff session (the DEFAULT for every implementation wave, no justification needed) · **T** = in-session teammates · **L** = lead-inline (T and L each need one line of why), plus the **lead's own context budget + succession point**; never delete historical decisions / "Why:" rationale / learnings / known issues. Full conventions → the **plan-conventions** skill (the `backup-before-write` hook also auto-injects an abridged form on plan-file edits).
 
 ## Browser automation
 
@@ -179,7 +180,7 @@ On a frontier-model session (`frontier_access.model`), read these rules for inte
 
 ## Session Close Protocol (All Projects)
 
-Drive in-scope work to a finished, verified, committed state (landed per the ship policy) without stopping to ask; surface everything else; end every write turn with one state readout taken from live reads (`scripts/wrap-ledger.sh`, or `/wrap`), not from memory. Stop hooks check facts only, never scope: `completion-assert.sh` blocks a done-claim the live ledger contradicts, and `operator-readout.sh` renders the operator's close block from disk as a `systemMessage`. Before writing or debugging a Stop hook, read the reference `~/Development/claude-infrastructure/CLAUDE.global.md` § Session Close Protocol for which hook output fields reach the model and which extend the turn.
+Drive in-scope work to a finished, verified, committed state (landed per the ship policy) without stopping to ask; surface everything else; end every write turn with one state readout taken from live reads (`~/.claude/scripts/wrap-ledger.sh`, or `/wrap`), not from memory. Stop hooks check facts only, never scope: `completion-assert.sh` blocks a done-claim the live ledger contradicts, and `operator-readout.sh` renders the operator's close block from disk as a `systemMessage`. Before writing or debugging a Stop hook, read the reference `~/Development/claude-infrastructure/CLAUDE.global.md` § Session Close Protocol for which hook output fields reach the model and which extend the turn.
 
 ### Stop-hook arms
 
@@ -199,7 +200,7 @@ Drive in-scope work to a finished, verified, committed state (landed per the shi
 - Custody: a fire with `--notify-back` records a debt in `bin/cc-custody`, discharged by the peer's self-close. Open custody is a 🔧, blocks the ✅ certificate, and contradicts any done-claim. Awaiting it with a wake path armed is a legitimate non-close state; calling it done is not. Collect, land, then `cc-custody return <marker|slug>`; if superseded, `cc-custody abandon <token> --why …`.
 - Origin close contract (`completion-assert.sh` arm D6; template in `hooks/lib/close-shape.sh`, shared with `/wrap`): an origin session (no fired-peer stamp; `hooks/lib/origin-identity.sh`) closing ✅ or 👤 after written work puts the ledger's rung glyph on line 1 (`line-1-rung`) and, on line 2, either `Good to close: yes — nothing of mine is open; follow-on: <filed ids|none>` or `Good to close: no — <what remains + who owns it>`. A hedged both-ways answer fails (arm D3). Assignees and fired peers are exempt; their close is the lead's harvest or the notify-back ping.
 
-Resident teammates: `scripts/wrap-ledger.sh` reports `RESIDENT_MINE`, the members of this session's team whose process is still running, as a 🔧, including their dirty files in a shared cwd; those files are yours to commit, since only the lead can. A teammate ends only when its lead ends it: send each a `shutdown_request` and escalate to `TaskStop` after about 60 s; the rung clears when the process is gone, not when the pane closes. The check kills nothing; to keep a member working, say so in the close as a stated park. Kill switch `WRAP_RESIDENT=off`.
+Resident teammates: `~/.claude/scripts/wrap-ledger.sh` reports `RESIDENT_MINE`, the members of this session's team whose process is still running, as a 🔧, including their dirty files in a shared cwd; those files are yours to commit, since only the lead can. A teammate ends only when its lead ends it: send each a `shutdown_request` and escalate to `TaskStop` after about 60 s; the rung clears when the process is gone, not when the pane closes. The check kills nothing; to keep a member working, say so in the close as a stated park. Kill switch `WRAP_RESIDENT=off`.
 
 Freeze the DoD at intake: the first time a task will write tracked files, restate the ask as one line, `Scope (frozen): …`, in the plan or else inline (`dod-persist.sh` captures it). Close-time completeness is a diff against that line, not a fresh judgment. If the scope cannot be reconstructed, stop and ask.
 
@@ -257,7 +258,7 @@ A close question ("are we done?", "good to close?", "100% complete?") asks about
 
 ### The readout
 
-Emit it at every write-turn close; omit it on read-only turns. It is one line: the worst-open rung by priority ⛔ > 📤 > 🔧 > 📦 > 🚀 > 👤 > ✅, built from `scripts/wrap-ledger.sh --machine` `READOUT` as slot S1 describes. Each rung maps to one disposition row.
+Emit it at every write-turn close; omit it on read-only turns. It is one line: the worst-open rung by priority ⛔ > 📤 > 🔧 > 📦 > 🚀 > 👤 > ✅, built from `~/.claude/scripts/wrap-ledger.sh --machine` `READOUT` as slot S1 describes. Each rung maps to one disposition row.
 
 - ⛔ Blocked: a decision or information is needed. `⛔ Blocked — need your call: <decision>.`
 - 📤 Handoff: context or budget exhausted with work remaining. `📤 Out of context — recycling / handing off.`
@@ -290,7 +291,7 @@ A new worktree or a different account is not a reason to hand off: Recycle carri
 
 ### The close message
 
-The operator reads a close to make one decision. A close relays what the stores already know, plus the few clauses no store holds. Every line is either rendered output reproduced verbatim (`scripts/wrap-ledger.sh` for state, `hooks/operator-readout.sh --render` for the operator's pile) or one of the six slots below.
+The operator reads a close to make one decision. A close relays what the stores already know, plus the few clauses no store holds. Every line is either rendered output reproduced verbatim (`~/.claude/scripts/wrap-ledger.sh` for state, `hooks/operator-readout.sh --render` for the operator's pile) or one of the six slots below.
 
 Admissibility: a line appears only if it fills a slot and carries one fact that either changes what the operator does next or names the store where a dropped fact can be read back. Anything else is deleted, and a deletion is allowed only once the fact is already in a store a named command reads.
 
@@ -311,7 +312,7 @@ Omit a slot that has nothing to say; never pad one.
 
 S1–S3 are the lines the operator scans; S4–S6 are at most three supporting lines. The act marker must fall within the first 3 non-blank, unfenced lines (`CC_ACT_WINDOW`=3), which is why the verdict sits on line 2.
 
-S1. Run `scripts/wrap-ledger.sh --machine` and take `READOUT`, shaped `<rung glyph> <state clause> — <tail>`. Copy the glyph and state clause verbatim and replace the tail with one clause naming what the work was. Where the tail is a count (`22 uncommitted change(s)`, `N step(s) need you`, `N decision(s)`), your clause partitions it along the groups that follow, e.g. `13 runnable now, 207 need your call`. Under `⛔` keep the tail: it is `BLOCKED_WHAT`, the operator's own words.
+S1. Run `~/.claude/scripts/wrap-ledger.sh --machine` and take `READOUT`, shaped `<rung glyph> <state clause> — <tail>`. Copy the glyph and state clause verbatim and replace the tail with one clause naming what the work was. Where the tail is a count (`22 uncommitted change(s)`, `N step(s) need you`, `N decision(s)`), your clause partitions it along the groups that follow, e.g. `13 runnable now, 207 need your call`. Under `⛔` keep the tail: it is `BLOCKED_WHAT`, the operator's own words.
 
 Line 1 carries one rung and states a conclusion, not a category (`12 runnable now, 195 need your call`, not `205 manual steps`). It does not hedge, and nothing later in the close withdraws it. If something is parked or is theirs, that is the rung (`📦` / `👤`); if it is immaterial, it stays out of line 1. A qualification goes in S2's `follow-on:` clause, beside the assertion.
 
@@ -378,7 +379,7 @@ The payload must also run to completion with zero keystrokes, in a regular Termi
 
 Multiple runnable steps collapse to `cc-do`, which prints them, confirms once, and runs them in irreversibility order (`cc-do --list` to look, `cc-do <stem>` for one); show it only as the collapsed `▶ cc-do [N runnable]` row. Judgment items are counted, not itemized. A command under the marker means run it; a command you would tell them to ignore does not appear at all. Reference-only commands stay in inline backticks mid-sentence, never alone on a line and never in the closing block.
 
-`/wrap --full`, or an explicit request, adds the per-field SESSION LEDGER that `scripts/wrap-ledger.sh --full` renders; never include it by default.
+`/wrap --full`, or an explicit request, adds the per-field SESSION LEDGER that `~/.claude/scripts/wrap-ledger.sh --full` renders; never include it by default.
 
 ### Auto-continue actuation (🔧 only)
 
@@ -407,7 +408,7 @@ When work remains that involves the user (an interactive login, `sudo`, a classi
 - Verdicts fail closed: success is an exit code, or a value read back by a different call than the one that made the change, never a grep for a phrase.
 - If what remains is a decision, there is no script; ask it as the `⛔` rung.
 
-The manual-command-delivery skill holds the full rule; load it before asking the user to run anything.
+Full rule → the **manual-command-delivery** skill.
 
 ---
 
