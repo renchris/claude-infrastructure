@@ -1,0 +1,2 @@
+== .claude-tertiary full: | Memory files | 48.7k | 4.9% |
+== .claude-tertiary slim: | Memory files | 20.1k | 2.0% |

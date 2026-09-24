@@ -1,0 +1,66 @@
+{
+ "title": "F1 slim instructions",
+ "verdict": "FAIL",
+ "n": {
+  "slim": 100,
+  "full": 100
+ },
+ "margin_pp": 5.0,
+ "primary": {
+  "t": 0.533247296,
+  "c": 0.780118938,
+  "pct": -31.64538507844813,
+  "p": 1.9073486328125e-06,
+  "units": 20
+ },
+ "meter": {
+  "t": 51424.15,
+  "c": 78885.5,
+  "pct": -34.811657402184174,
+  "p": 1.9073486328125e-06,
+  "units": 20
+ },
+ "significant_harms": [
+  {
+   "name": "Turns",
+   "p": 0.01406813910154235,
+   "worse": true
+  },
+  {
+   "name": "Tool errors per run",
+   "p": 0.0022120908334323872,
+   "worse": true
+  }
+ ],
+ "ci_misses": [],
+ "n_needed_per_arm": {},
+ "success": [
+  {
+   "slim": 98,
+   "full": 96
+  },
+  {
+   "slim": 100,
+   "full": 100
+  }
+ ],
+ "compliance": {
+  "slim": [
+   461,
+   475
+  ],
+  "full": [
+   461,
+   475
+  ]
+ },
+ "ci_success": [
+  -0.035618827607955726,
+  0.08014427021489588
+ ],
+ "ci_compliance": [
+  -0.022714673799987713,
+  0.022714673799987713
+ ],
+ "items_tested": 95
+}
