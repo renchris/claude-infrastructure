@@ -1,0 +1,1099 @@
+#!/usr/bin/env python3
+"""cc-token-ledger — the standing per-task cost instrument (token-efficiency spec, item T2).
+
+WHY. The spec's primary metric is cost per completed task, and until this tool nothing reported it
+on demand: the numbers lived in a one-off research build (docs/research/token-efficiency-2026-09-23/
+scripts/extract.py -> census.py). This is that arithmetic made re-runnable in one streaming pass, with
+the two corrections the research found load-bearing kept as rules:
+
+  * Final-record output. Claude Code writes one transcript record per content block of a message;
+    only the last carries the final output_tokens, earlier ones carry the message_start placeholder.
+    A first-record dedupe read output 46% low (data/EXTRACT.md L1), so output is the MAX over the
+    message's records. Agent transcripts on 2.1.280 often never write the final record (L2); those
+    responses get the research build's stratified imputation (output_est, ESTIMATED, good for totals,
+    useless per response), and the recorded figure is reported beside it.
+  * Transplant filter (xdup). Account transplants and forks copy a session tree into another config
+    dir with the same message ids (8% of responses, L5). A message id keeps only its earliest file
+    (by the file's first in-window timestamp, then path); later copies are dropped from every total.
+
+Dollars are LIST-PRICE WEIGHTS from model-config.yaml pricing_per_mtok (cache write 1.25x for 5m,
+2x for 1h; cache read 0.05x on Opus 5.5, 0.025x on Fable 5.1 / Mythos 5.1, 0.1x otherwise). The fleet
+is billed by subscription quota, not dollars; the weights rank where the tokens go. A model with no
+price row is reported and left out of the dollar totals, never guessed.
+
+Usage:
+  cc-token-ledger [--since 14d|36h|YYYY-MM-DD] [--reprice MODEL] [--json]   fleet summary
+  cc-token-ledger --task <session-id|prefix> [--quick]                        one task tree
+                  (scans the whole window so the tree matches the fleet view; --quick scans only
+                  the tree and reports recorded output, unimputed)
+  cc-token-ledger --by-arm                                  cost per task per instructions arm
+  cc-token-ledger --side-requests                   cost-state minus transcript, per session
+                  (sessions still writing at --until are skipped: cost-state runs to process end)
+  cc-token-ledger --check                   exit 1 if ENABLE_PROMPT_CACHING_1H is set anywhere
+
+Inputs: every $HOME/.claude*/projects/**/*.jsonl (files deduped by realpath, journal.jsonl skipped),
+responses deduped on message.id. Env (tests): CC_NOW (epoch for relative --since), CC_MODEL_CONFIG
+(price file), CC_TOKEN_LEDGER_WORKERS.
+Exit: 0 ok · 1 --check found the flag, or --task matched nothing · 2 usage or config error.
+"""
+
+import argparse
+import glob
+import hashlib
+import json
+import math
+import os
+import re
+import sys
+import time
+from collections import defaultdict
+from datetime import datetime, timezone
+
+HOME = os.path.expanduser("~")
+HERE = os.path.dirname(os.path.realpath(__file__))
+
+CW_5M, CW_1H = 1.25, 2.0
+# Cache-read multiplier of base input. model-config.yaml keeps these in comments, not in the
+# [input, output] arrays (its pricing header: 0.1x standard, 0.025x Fable 5.1 / Mythos 5.1; the
+# claude-opus-5-5 row: 0.05x).
+CR_MULT = {"claude-fable-5-1": 0.025, "claude-mythos-5-1": 0.025, "claude-opus-5-5": 0.05}
+CR_DEFAULT = 0.1
+CLASSES = ("uncached_input", "cache_write_5m", "cache_write_1h", "cache_read", "output")
+CTX_TYPES = ("main", "subagent", "workflow_agent")
+# Write classes (measure/cache-writes.md § 1): INCREMENTAL when the read covers >= 0.9 of the
+# previous prefix; the ratio is bimodal (0 rows in [0.5, 0.9)), so 0.9 is not a tuning choice.
+HIT_FRAC = 0.9
+TS_RE = re.compile(rb'"timestamp":"([0-9T:\-]{19})')
+
+
+# ─────────────────────────────── discovery ───────────────────────────────
+def config_roots():
+    """Every $HOME/.claude*/projects directory, in a stable order."""
+    return sorted(
+        d for d in glob.glob(os.path.join(HOME, ".claude*", "projects")) if os.path.isdir(d)
+    )
+
+
+def classify_path(rp):
+    """-> (ctx_type, config_dir, project_slug, session_id, agent_id, workflow_id) or None."""
+    parts = rp.split("/")
+    try:
+        i = len(parts) - 1 - parts[::-1].index("projects")
+    except ValueError:
+        return None
+    config_dir = parts[i - 1]
+    rest = parts[i + 1:]
+    if len(rest) < 2:
+        return None
+    slug, fn = rest[0], rest[-1]
+    if len(rest) == 2:
+        return ("main", config_dir, slug, fn[:-6], "", "")
+    sid = rest[1]
+    if len(rest) >= 4 and rest[2] == "subagents" and fn.startswith("agent-"):
+        aid = fn[len("agent-"):-6]
+        if len(rest) >= 6 and rest[3] == "workflows":
+            return ("workflow_agent", config_dir, slug, sid, aid, rest[4])
+        if len(rest) == 4:
+            return ("subagent", config_dir, slug, sid, aid, "")
+    return None
+
+
+def discover(since_epoch, sid_filter=None):
+    seen = {}
+    for root in config_roots():
+        for f in glob.iglob(os.path.join(root, "**", "*.jsonl"), recursive=True):
+            if os.path.basename(f) == "journal.jsonl":
+                continue
+            if sid_filter and sid_filter not in f:
+                continue
+            rp = os.path.realpath(f)
+            if rp in seen:
+                continue
+            try:
+                st = os.stat(rp)
+            except OSError:
+                continue
+            if st.st_mtime < since_epoch:  # append-only: cannot hold an in-window record
+                continue
+            c = classify_path(rp)
+            if c is None:
+                continue
+            seen[rp] = (c, st.st_size)
+    return seen
+
+
+# ─────────────────────────────── per-file parse ───────────────────────────────
+def parse_file(args):
+    """One streaming pass over one transcript. Returns a compact dict, or None."""
+    rp, cls, since, until = args
+    ctx_type = cls[0]
+    is_main = ctx_type == "main"
+    resp = {}
+    order = []
+    tools = []  # (tool_use_id, is_error) in window
+    instr = None
+    cost_state = None
+    first_ts = None
+    start_ts = None  # earliest transcript record at any time: the session start, for the arm lookup
+    spans_start = False
+    spans_end = False  # a transcript record at or past --until
+    bounded = until != "9999"
+    seq = -1
+    try:
+        fh = open(rp, "rb")
+    except OSError:
+        return None
+    with fh:
+        for raw in fh:
+            # Byte pre-filter: JSON-parse only the lines a view reads. Top-level keys are serialised
+            # bare, so a wanted line always contains its marker; a false positive only costs a parse.
+            if not (b'"type":"assistant"' in raw
+                    or (b'"tool_result"' in raw and b'"type":"user"' in raw)
+                    or (is_main and instr is None and b'"instructions"' in raw and b'"type":"attachment"' in raw)
+                    or (is_main and b'"cost-state"' in raw)):
+                # Only transcript records (not bookkeeping lines) define the file's first timestamp.
+                if (first_ts is None or start_ts is None or bounded) \
+                        and (b'"type":"user"' in raw or b'"type":"attachment"' in raw):
+                    m = TS_RE.search(raw)
+                    if m:
+                        t = m.group(1).decode()
+                        if start_ts is None or t < start_ts:
+                            start_ts = t
+                        if since <= t < until:
+                            if first_ts is None:
+                                first_ts = t
+                        elif t < since:
+                            spans_start = True
+                        else:
+                            spans_end = True
+                continue
+            try:
+                r = json.loads(raw)
+            except Exception:
+                continue
+            if not isinstance(r, dict):
+                continue
+            t = r.get("type")
+            ts = r.get("timestamp")
+            inwin = isinstance(ts, str) and since <= ts[:19] < until
+            if isinstance(ts, str) and t in ("assistant", "user", "attachment"):
+                if start_ts is None or ts[:19] < start_ts:
+                    start_ts = ts[:19]
+                if inwin:
+                    if first_ts is None or ts[:19] < first_ts:
+                        first_ts = ts[:19]
+                elif ts[:19] < since:
+                    spans_start = True
+                else:
+                    spans_end = True
+            if t == "assistant":
+                m = r.get("message")
+                if not isinstance(m, dict):
+                    continue
+                u = m.get("usage") if isinstance(m.get("usage"), dict) else None
+                mid = m.get("id") or r.get("requestId") or ("nomid:%s:%d" % (rp, len(order)))
+                row = resp.get(mid)
+                if row is None:
+                    seq += 1
+                    cc = (u or {}).get("cache_creation") or {}
+                    o = int((u or {}).get("output_tokens") or 0)
+                    row = [
+                        seq, ts or "", inwin, m.get("model") or "",
+                        int((u or {}).get("input_tokens") or 0),
+                        int(cc.get("ephemeral_5m_input_tokens") or 0),
+                        int(cc.get("ephemeral_1h_input_tokens") or 0),
+                        int((u or {}).get("cache_creation_input_tokens") or 0),
+                        int((u or {}).get("cache_read_input_tokens") or 0),
+                        o, o,  # 9 output max (final), 10 output first
+                        0,  # 11 final record seen
+                        0, 0, 0, 0,  # 12 has_thinking, 13 n_tool_use, 14 visible chars, 15 StructuredOutput
+                        u is not None,  # 16 has usage
+                    ]
+                    resp[mid] = row
+                    order.append(mid)
+                elif u is not None:
+                    o = int(u.get("output_tokens") or 0)
+                    if o > row[9]:
+                        row[9] = o
+                    if not row[16]:
+                        cc = u.get("cache_creation") or {}
+                        row[4] = int(u.get("input_tokens") or 0)
+                        row[5] = int(cc.get("ephemeral_5m_input_tokens") or 0)
+                        row[6] = int(cc.get("ephemeral_1h_input_tokens") or 0)
+                        row[7] = int(u.get("cache_creation_input_tokens") or 0)
+                        row[8] = int(u.get("cache_read_input_tokens") or 0)
+                        row[10] = o
+                        row[16] = True
+                if m.get("stop_reason") or r.get("isApiErrorMessage") or row[3] == "<synthetic>":
+                    row[11] = 1
+                for b in m.get("content") or []:
+                    if not isinstance(b, dict):
+                        continue
+                    bt = b.get("type")
+                    if bt == "text":
+                        row[14] += len(b.get("text") or "")
+                    elif bt in ("thinking", "redacted_thinking"):
+                        row[12] = 1
+                    elif bt in ("tool_use", "server_tool_use"):
+                        row[13] += 1
+                        if b.get("name") == "StructuredOutput":
+                            row[15] = 1
+                        if inwin:
+                            try:
+                                row[14] += len(json.dumps(b.get("input"), ensure_ascii=False))
+                            except Exception:
+                                pass
+            elif t == "user":
+                if not inwin:
+                    continue
+                c = (r.get("message") or {}).get("content")
+                if isinstance(c, list):
+                    for b in c:
+                        if isinstance(b, dict) and b.get("type") == "tool_result":
+                            tools.append((b.get("tool_use_id") or "", 1 if b.get("is_error") else 0))
+            elif t == "attachment":
+                a = r.get("attachment") or {}
+                if a.get("type") != "instructions":
+                    continue
+                instr = instructions_label(a)
+            elif t == "cost-state":
+                cost_state = {"startTime": r.get("startTime"), "modelUsage": r.get("modelUsage") or {},
+                              "totalCostUSD": r.get("totalCostUSD")}
+    rows = [(mid,) + tuple(resp[mid]) for mid in order if resp[mid][2]]
+    if not rows and not tools and cost_state is None:
+        return None
+    return {"path": rp, "cls": cls, "first_ts": first_ts or "", "start_ts": start_ts or "",
+            "spans_start": spans_start, "spans_end": spans_end, "resp": rows, "tools": tools, "instr": instr, "cost_state": cost_state}
+
+
+def instructions_label(a):
+    """The user-level CLAUDE.md an instructions attachment carried: (path, sha16, bytes).
+
+    16 hex characters, the width bin/cc-instructions-variant records. It hashes the CLAUDE.md content
+    only: that tool also swaps rules/, so an arm differing only in rules/ shares this sha."""
+    files = a.get("files") or []
+    pick = None
+    for f in files:
+        if isinstance(f, dict) and os.path.basename(str(f.get("path") or "")) == "CLAUDE.md" \
+                and f.get("type") == "User":
+            pick = f
+            break
+    if pick is None:
+        for f in files:
+            if isinstance(f, dict) and os.path.basename(str(f.get("path") or "")) == "CLAUDE.md":
+                pick = f
+                break
+    if pick is None:
+        return ("(no CLAUDE.md in attachment)", "-", 0)
+    content = pick.get("content") or ""
+    return (str(pick.get("path") or ""), hashlib.sha256(content.encode("utf-8")).hexdigest()[:16],
+            len(content.encode("utf-8")))
+
+
+# Response tuple indexes after parse_file prepends the message id.
+R_MID, R_SEQ, R_TS, R_WIN, R_MODEL, R_IN, R_C5, R_C1, R_CCT, R_CR, R_OUT, R_OUT1, R_FINAL, \
+    R_THINK, R_NTOOL, R_VIS, R_SO, R_HASU = range(18)
+
+
+# ─────────────────────────────── prices ───────────────────────────────
+def find_model_config():
+    env = os.environ.get("CC_MODEL_CONFIG")
+    if env:
+        return env
+    for p in (os.path.join(os.path.dirname(HERE), "model-config.yaml"),
+              os.path.join(HOME, ".claude", "model-config.yaml")):
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def load_prices(path):
+    """pricing_per_mtok: {model: (in, out)} parsed without a YAML library (stdlib only)."""
+    prices = {}
+    if not path or not os.path.isfile(path):
+        return prices
+    inside = False
+    row = re.compile(r"^\s+([A-Za-z0-9._\-]+):\s*\[\s*([0-9.]+)\s*,\s*([0-9.]+)\s*\]")
+    with open(path) as fh:
+        for line in fh:
+            if re.match(r"^pricing_per_mtok:\s*(#.*)?$", line):
+                inside = True
+                continue
+            if inside:
+                if re.match(r"^\S", line):
+                    break
+                m = row.match(line)
+                if m:
+                    prices[m.group(1)] = (float(m.group(2)), float(m.group(3)))
+    return prices
+
+
+def base_model(m):
+    """Normalise a transcript model id to its price-row key: drop '[1m]' and a -YYYYMMDD suffix."""
+    return re.sub(r"-\d{8}$", "", re.sub(r"\[1m\]$", "", m or ""))
+
+
+class Pricer:
+    def __init__(self, prices, reprice):
+        self.p = prices
+        self.reprice = reprice
+        self.unpriced = defaultdict(lambda: [0, 0])  # model -> [responses, tokens]
+        rp = prices.get(base_model(reprice))
+        self.rp = (rp[0], rp[1], CR_MULT.get(base_model(reprice), CR_DEFAULT)) if rp else None
+
+    def rate(self, model):
+        if model == "<synthetic>" or not model:
+            return (0.0, 0.0, 0.0)  # no API call was made
+        b = base_model(model)
+        v = self.p.get(b)
+        if v is None:
+            return None
+        return (v[0], v[1], CR_MULT.get(b, CR_DEFAULT))
+
+    @staticmethod
+    def split(inp, c5, c1, cct, cr, out, rate):
+        """-> $ per billing class. A cache_creation total not split into 5m/1h is billed as 5m."""
+        pin, pout, crm = rate
+        c5x = c5 + max(cct - c5 - c1, 0)
+        return (inp * pin / 1e6, c5x * pin * CW_5M / 1e6, c1 * pin * CW_1H / 1e6,
+                cr * pin * crm / 1e6, out * pout / 1e6)
+
+
+# ─────────────────────────────── output imputation ───────────────────────────────
+# Ported from scripts/extract.py impute_output (data/EXTRACT.md L2): stratified mean over final
+# responses keyed on (main|agent, model, has_thinking, min(n_tool_use,2), log2 visible chars,
+# called StructuredOutput), backing off to coarser strata below n=20; never lowers the recorded value.
+def _key(level, f):
+    agentish, model, thk, nt, vis, so = f
+    tb = min(nt, 2)
+    vb = int(math.log2(vis + 1))
+    return (level,) + (
+        (agentish, model, thk, tb, vb, so),
+        (agentish, thk, tb, vb, so),
+        (agentish, model, thk, tb, so),
+        (agentish, thk, tb, so),
+        (agentish,),
+    )[level]
+
+
+def impute(kept):
+    """kept: [(ctx_type, resp_tuple)] (xdup already removed) -> list of output_est, same order."""
+    acc = {}
+    for ct, r in kept:
+        if r[R_FINAL] and r[R_MODEL] != "<synthetic>":
+            f = (ct != "main", r[R_MODEL], r[R_THINK], r[R_NTOOL], r[R_VIS], r[R_SO])
+            for lv in range(5):
+                k = _key(lv, f)
+                s_, n_ = acc.get(k, (0, 0))
+                acc[k] = (s_ + r[R_OUT], n_ + 1)
+    est = []
+    n_imp = 0
+    for ct, r in kept:
+        o = r[R_OUT]
+        if r[R_FINAL] or r[R_MODEL] == "<synthetic>":
+            est.append(o)
+            continue
+        f = (ct != "main", r[R_MODEL], r[R_THINK], r[R_NTOOL], r[R_VIS], r[R_SO])
+        p = None
+        for lv in range(5):
+            v = acc.get(_key(lv, f))
+            if v and v[1] >= 20:
+                p = v[0] / v[1]
+                break
+        est.append(int(round(max(p, o))) if p is not None else o)
+        n_imp += 1
+    return est, n_imp
+
+
+# ─────────────────────────────── the scan ───────────────────────────────
+def scan(since, until="9999", sid_filter=None, workers=4, impute_output=True):
+    since_epoch = datetime.strptime(since, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+    files = discover(since_epoch, sid_filter)
+    jobs = [(rp, v[0], since, until) for rp, v in sorted(files.items(), key=lambda kv: -kv[1][1])]
+    results = []
+    if workers > 1 and len(jobs) > 1:
+        import multiprocessing as mp
+        try:
+            ctx = mp.get_context("fork")
+        except ValueError:
+            ctx = mp.get_context()
+        with ctx.Pool(workers) as pool:
+            for res in pool.imap_unordered(parse_file, jobs, chunksize=4):
+                if res:
+                    results.append(res)
+    else:
+        for j in jobs:
+            res = parse_file(j)
+            if res:
+                results.append(res)
+    # Transplant filter: a message id (and a tool_use id) keeps only its earliest file.
+    results.sort(key=lambda f: (f["first_ts"] or "~", f["path"]))
+    seen_mid = set()
+    seen_tool = set()
+    n_xdup = 0
+    for f in results:
+        keep = []
+        xd = []
+        for r in f["resp"]:
+            if r[R_MID] in seen_mid:
+                xd.append(r)
+                n_xdup += 1
+            else:
+                seen_mid.add(r[R_MID])
+                keep.append(r)
+        f["kept"] = keep
+        f["n_xdup"] = len(xd)
+        tk = []
+        for tid, err in f["tools"]:
+            if tid and tid in seen_tool:
+                continue
+            seen_tool.add(tid)
+            tk.append(err)
+        f["tool_n"] = len(tk)
+        f["tool_err"] = sum(tk)
+    kept = [(f["cls"][0], r) for f in results for r in f["kept"]]
+    if impute_output:
+        est, n_imp = impute(kept)
+    else:  # --task --quick: one tree cannot fit the strata, so report the recorded output
+        est = [r[R_OUT] for _, r in kept]
+        n_imp = sum(1 for _, r in kept if not r[R_FINAL] and r[R_MODEL] != "<synthetic>")
+    i = 0
+    for f in results:
+        f["est"] = est[i:i + len(f["kept"])]
+        i += len(f["kept"])
+    return results, {"files_scanned": len(jobs), "files_with_rows": len(results),
+                     "responses": len(kept), "responses_xdup_dropped": n_xdup,
+                     "responses_without_final_record": n_imp,
+                     "config_roots": [r.replace(HOME, "~") for r in config_roots()]}
+
+
+# ─────────────────────────────── aggregation ───────────────────────────────
+def pct(xs, p):
+    if not xs:
+        return None
+    xs = sorted(xs)
+    k = (len(xs) - 1) * p
+    f = int(k)
+    c = min(f + 1, len(xs) - 1)
+    return xs[f] + (xs[c] - xs[f]) * (k - f)
+
+
+def dist(xs):
+    xs = list(xs)
+    if not xs:
+        return {"n": 0, "mean": None, "median": None, "p90": None, "sum": 0}
+    return {"n": len(xs), "mean": sum(xs) / len(xs), "median": pct(xs, 0.5), "p90": pct(xs, 0.9),
+            "sum": sum(xs)}
+
+
+class Acc:
+    """Token and dollar accumulator for one group."""
+
+    def __init__(self):
+        self.responses = 0
+        self.tok = dict.fromkeys(CLASSES, 0)
+        self.output_recorded = 0
+        self.usd = dict.fromkeys(CLASSES, 0.0)
+        self.usd_re = dict.fromkeys(CLASSES, 0.0)
+        self.files = set()
+        self.unpriced = 0
+
+    def add(self, f, r, oest, pricer):
+        self.responses += 1
+        self.files.add(f["path"])
+        c5x = r[R_C5] + max(r[R_CCT] - r[R_C5] - r[R_C1], 0)
+        for k, v in zip(CLASSES, (r[R_IN], c5x, r[R_C1], r[R_CR], oest)):
+            self.tok[k] += v
+        self.output_recorded += r[R_OUT]
+        # The re-price needs only the target model's row, so it covers unpriced models too.
+        if pricer.rp and r[R_MODEL] != "<synthetic>":
+            for k, v in zip(CLASSES, Pricer.split(r[R_IN], r[R_C5], r[R_C1], r[R_CCT], r[R_CR], oest, pricer.rp)):
+                self.usd_re[k] += v
+        rate = pricer.rate(r[R_MODEL])
+        if rate is None:
+            self.unpriced += 1
+            u = pricer.unpriced[r[R_MODEL]]
+            u[0] += 1
+            u[1] += r[R_IN] + r[R_CCT] + r[R_CR] + oest
+            return
+        for k, v in zip(CLASSES, Pricer.split(r[R_IN], r[R_C5], r[R_C1], r[R_CCT], r[R_CR], oest, rate)):
+            self.usd[k] += v
+
+    def total(self):
+        return sum(self.usd.values())
+
+    def total_re(self):
+        return sum(self.usd_re.values())
+
+    def hit_rate(self):
+        d = self.tok["uncached_input"] + self.tok["cache_write_5m"] + self.tok["cache_write_1h"] + self.tok["cache_read"]
+        return self.tok["cache_read"] / d if d else None
+
+    def js(self):
+        return {"responses": self.responses, "contexts": len(self.files), "tokens": dict(self.tok),
+                "output_recorded": self.output_recorded, "usd": dict(self.usd), "usd_total": self.total(),
+                "usd_reprice": dict(self.usd_re), "usd_total_reprice": self.total_re(),
+                "cache_hit_rate": self.hit_rate(), "responses_unpriced": self.unpriced}
+
+
+def iter_kept(results):
+    for f in results:
+        for r, o in zip(f["kept"], f["est"]):
+            yield f, r, o
+
+
+def trees(results, pricer):
+    t = defaultdict(lambda: {"acc": Acc(), "worker_usd": 0.0, "files": set(), "tool_n": 0,
+                             "tool_err": 0, "main": None, "has_worker": False})
+    quiet = _Silent(pricer)  # the fleet pass owns the unpriced-model count
+    for f, r, o in iter_kept(results):
+        tr = t[f["cls"][3]]
+        before = tr["acc"].total()
+        tr["acc"].add(f, r, o, quiet)
+        if f["cls"][0] != "main":
+            tr["worker_usd"] += tr["acc"].total() - before
+    for f in results:
+        tr = t[f["cls"][3]]
+        tr["files"].add(f["path"])
+        tr["tool_n"] += f["tool_n"]
+        tr["tool_err"] += f["tool_err"]
+        if f["cls"][0] != "main" and f["kept"]:
+            tr["has_worker"] = True
+        if f["cls"][0] == "main" and (tr["main"] is None or f["first_ts"] < tr["main"]["first_ts"]):
+            tr["main"] = f
+    return {k: v for k, v in t.items() if v["acc"].responses}
+
+
+# ─────────────────────────────── views ───────────────────────────────
+def view_fleet(results, meta, pricer):
+    fleet = Acc()
+    by_ctx = defaultdict(Acc)
+    by_model = defaultdict(Acc)
+    quiet = _Silent(pricer)
+    for f, r, o in iter_kept(results):
+        fleet.add(f, r, o, pricer)
+        by_ctx[f["cls"][0]].add(f, r, o, quiet)
+        by_model[r[R_MODEL]].add(f, r, o, quiet)
+    tr = trees(results, pricer)
+    usd = [v["acc"].total() for v in tr.values()]
+    tot = sum(usd)
+    worker = sum(v["worker_usd"] for v in tr.values())
+    return {
+        "meta": meta,
+        "fleet": fleet.js(),
+        "by_ctx_type": {k: v.js() for k, v in sorted(by_ctx.items())},
+        "by_model": {k: v.js() for k, v in sorted(by_model.items(), key=lambda kv: -kv[1].total())},
+        "per_task": {
+            "n_tasks": len(tr),
+            "usd": dist(usd),
+            "usd_reprice": dist(v["acc"].total_re() for v in tr.values()),
+            "responses": dist(v["acc"].responses for v in tr.values()),
+            "contexts": dist(len(v["acc"].files) for v in tr.values()),
+            "worker_share_fleet": worker / tot if tot else None,
+            "worker_share_per_task": dist(v["worker_usd"] / v["acc"].total() for v in tr.values() if v["acc"].total() > 0),
+            "tasks_with_workers": sum(1 for v in tr.values() if v["has_worker"]),
+            "top": [{"session_id": k, "usd_total": v["acc"].total(), "usd_total_reprice": v["acc"].total_re(),
+                     "responses": v["acc"].responses, "contexts": len(v["acc"].files),
+                     "output": v["acc"].tok["output"]}
+                    for k, v in sorted(tr.items(), key=lambda kv: -kv[1]["acc"].total())[:10]],
+        },
+        "unpriced_models": {m: {"responses": u[0], "tokens": u[1]} for m, u in pricer.unpriced.items()},
+    }
+
+
+class _Silent:
+    """A Pricer proxy whose unpriced counter is discarded (the fleet pass already counts it)."""
+
+    def __init__(self, p):
+        self.p = p
+        self.rp = p.rp
+        self.unpriced = defaultdict(lambda: [0, 0])
+
+    def rate(self, m):
+        return self.p.rate(m)
+
+
+def view_task(results, sid, pricer):
+    ctxs = []
+    for f in sorted(results, key=lambda f: (CTX_TYPES.index(f["cls"][0]), f["first_ts"], f["path"])):
+        if f["cls"][3] != sid:
+            continue
+        acc = Acc()
+        for r, o in zip(f["kept"], f["est"]):
+            acc.add(f, r, o, pricer)
+        wc = walk(f, pricer)
+        first = f["resp"][0] if f["resp"] else None
+        ctxs.append({
+            "ctx_type": f["cls"][0], "config_dir": f["cls"][1], "agent_id": f["cls"][4],
+            "workflow_id": f["cls"][5], "path": f["path"].replace(HOME, "~"),
+            "models": sorted({r[R_MODEL] for r in f["resp"]}),
+            "first_ts": f["first_ts"], "responses_xdup_dropped": f["n_xdup"],
+            "first_request_prefix_tokens": (first[R_IN] + first[R_CCT] + first[R_CR]) if first else None,
+            "first_request_seq": first[R_SEQ] if first else None,
+            # The first in-window response is not the session's first request when the file straddles
+            # --since (spans_start) or its earlier records fell before the window (seq > 0).
+            "first_request_truncated": bool(first) and (f["spans_start"] or first[R_SEQ] != 0),
+            "write_classes": wc, "tool_results": f["tool_n"], "tool_errors": f["tool_err"],
+            **acc.js()})
+    tot = Acc()
+    for f, r, o in iter_kept([f for f in results if f["cls"][3] == sid]):
+        tot.add(f, r, o, _Silent(pricer))
+    return {"session_id": sid, "contexts": ctxs, "tree": tot.js()}
+
+
+def walk(f, pricer):
+    """START / START_TRUNC / INCREMENTAL / REWRITE(sub) per response; write $ per class (xdup=0 rows).
+
+    Ported from scripts/cache_walk.py: the walk runs over every in-window response (copies too) so the
+    prefix sequence stays continuous; responses with a zero prefix never become 'prev'."""
+    kept_ids = {r[R_MID] for r in f["kept"]}
+    out = defaultdict(lambda: {"n": 0, "write_tokens": 0, "usd_write": 0.0})
+    prev = None
+    for r in sorted(f["resp"], key=lambda r: r[R_SEQ]):
+        prefix = r[R_IN] + r[R_CCT] + r[R_CR]
+        if prefix <= 0:
+            continue
+        if prev is None:
+            cls = "START_TRUNC" if f["spans_start"] or r[R_SEQ] != 0 else "START"
+        else:
+            p_prefix, p_ts, p_model = prev
+            if r[R_CR] >= HIT_FRAC * p_prefix:
+                cls = "INCREMENTAL"
+            elif p_model != r[R_MODEL]:
+                cls = "REWRITE model_switch"
+            elif prefix < 0.9 * p_prefix:
+                cls = "REWRITE shrink"
+            else:
+                gap = ts_sec(r[R_TS]) - ts_sec(p_ts)
+                cls = "REWRITE gap>60m" if gap > 3600 else ("REWRITE gap5-60m" if gap > 300 else "REWRITE gap<5m")
+        prev = (prefix, r[R_TS], r[R_MODEL])
+        if r[R_MID] not in kept_ids:
+            continue
+        c = out[cls]
+        c["n"] += 1
+        c["write_tokens"] += r[R_CCT]
+        rate = pricer.rate(r[R_MODEL])
+        if rate:
+            s = Pricer.split(0, r[R_C5], r[R_C1], r[R_CCT], 0, 0, rate)
+            c["usd_write"] += s[1] + s[2]
+    return dict(out)
+
+
+def ts_sec(s):
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
+def load_variant_log():
+    p = os.path.join(HOME, ".claude", "autonomy", "instruction-variants.jsonl")
+    ev = defaultdict(list)
+    if not os.path.isfile(p):
+        return None
+    with open(p) as fh:
+        for line in fh:
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(e, dict) and e.get("account") and e.get("ts"):
+                ev[e["account"]].append((e["ts"], e.get("variant") or "shared"))
+    for v in ev.values():
+        v.sort()
+    return ev
+
+
+def arm_for(log, account, start_ts):
+    if log is None:
+        return "-"
+    arm = "shared"
+    for ts, variant in log.get(account, []):
+        if ts[:19] <= start_ts[:19]:
+            arm = variant
+    return arm
+
+
+def session_start(f):
+    """The process start (cost-state startTime) or else the file's earliest record, in or out of window.
+
+    The arm is looked up here, not at the first in-window record: a session begun before --since and
+    an arm switch in between would otherwise get the later arm beside the earlier CLAUDE.md sha."""
+    st = (f.get("cost_state") or {}).get("startTime")
+    if isinstance(st, (int, float)):
+        return datetime.fromtimestamp(st / 1000 if st > 1e11 else st, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    return f.get("start_ts") or f["first_ts"]
+
+
+def view_by_arm(results, pricer):
+    log = load_variant_log()
+    groups = defaultdict(list)
+    for sid, t in trees(results, pricer).items():
+        m = t["main"]
+        if m is None:
+            continue  # an agent-only tree: its main thread is outside the window
+        path, sha, nbytes = m["instr"] or ("(no instructions attachment)", "-", 0)
+        account = os.path.basename(os.path.dirname(path)) if path.startswith("/") else m["cls"][1]
+        arm = arm_for(log, account, session_start(m))
+        # One row per (arm, content): the same CLAUDE.md bytes on several accounts is one variant.
+        groups[(arm, sha, nbytes)].append((t, account))
+    rows = []
+    for (arm, sha, nbytes), members in sorted(groups.items(), key=lambda kv: (kv[0][0], -len(kv[1]))):
+        ts = [t for t, _ in members]
+        acc = Acc()
+        for t in ts:
+            for k in CLASSES:
+                acc.tok[k] += t["acc"].tok[k]
+        tn = sum(t["tool_n"] for t in ts)
+        te = sum(t["tool_err"] for t in ts)
+        rows.append({
+            "arm": arm, "sha": sha, "bytes": nbytes, "accounts": sorted({a for _, a in members}), "tasks": len(ts),
+            "usd_per_task": dist(t["acc"].total() for t in ts),
+            "usd_reprice_per_task": dist(t["acc"].total_re() for t in ts),
+            "responses_per_task": dist(t["acc"].responses for t in ts),
+            "tool_results": tn, "tool_error_rate": te / tn if tn else None,
+            "cache_hit_rate": acc.hit_rate(),
+        })
+    return {"variant_log": "present" if log is not None else "absent", "arms": rows}
+
+
+SIDE_KEYS = ("input", "cache_write", "cache_read", "output")
+
+
+def side_usd(b, d, pricer):
+    """$ for one model's side-request delta, by the research method (scripts/synth_side_requests.py).
+
+    Haiku never appears in a transcript, so its cost-state usage is priced in full. For every other
+    model only uncached input and cache reads count, each floored at 0: cache-write and output deltas
+    are dominated by lagging snapshots and by the output imputation, not by side requests."""
+    rate = pricer.rate(b)
+    if not rate:
+        return None
+    if b.startswith("claude-haiku"):
+        cw = max(d["cache_write"], 0)
+        return sum(Pricer.split(max(d["input"], 0), cw, 0, cw, max(d["cache_read"], 0), max(d["output"], 0), rate))
+    return sum(Pricer.split(max(d["input"], 0), 0, 0, 0, max(d["cache_read"], 0), 0, rate))
+
+
+def view_side(results, pricer, since, bounded):
+    by_sid = defaultdict(list)
+    for f in results:
+        by_sid[f["cls"][3]].append(f)
+    sessions = []
+    skipped_until = 0
+    agg = defaultdict(lambda: dict.fromkeys(SIDE_KEYS, 0))
+    for sid, fs in by_sid.items():
+        mains = [f for f in fs if f["cls"][0] == "main" and f["cost_state"]]
+        if not mains:
+            continue
+        cs = mains[0]["cost_state"]
+        st = cs.get("startTime")
+        if not isinstance(st, (int, float)):
+            continue
+        st_iso = datetime.fromtimestamp(st / 1000 if st > 1e11 else st, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        if st_iso < since:
+            continue  # the process started before the window: its early transcript usage is not scanned
+        if bounded and any(f["spans_end"] for f in fs):
+            # cost-state is cumulative to the end of the process, so usage after --until would read
+            # as side requests.
+            skipped_until += 1
+            continue
+        tx = defaultdict(lambda: dict.fromkeys(SIDE_KEYS, 0))
+        for f in fs:
+            for r, o in zip(f["kept"], f["est"]):
+                if r[R_TS][:19] < st_iso or r[R_MODEL] == "<synthetic>":
+                    continue
+                d = tx[base_model(r[R_MODEL])]
+                d["input"] += r[R_IN]
+                d["cache_write"] += r[R_CCT]
+                d["cache_read"] += r[R_CR]
+                d["output"] += o
+        # One process can carry a model under two keys ('claude-opus-5' and 'claude-opus-5[1m]'):
+        # sum them onto the base model before subtracting, or the transcript is subtracted twice.
+        csum = defaultdict(lambda: dict.fromkeys(SIDE_KEYS, 0))
+        for m, u in (cs.get("modelUsage") or {}).items():
+            if not isinstance(u, dict):
+                continue
+            c = csum[base_model(m)]
+            c["input"] += u.get("inputTokens") or 0
+            c["cache_write"] += u.get("cacheCreationInputTokens") or 0
+            c["cache_read"] += u.get("cacheReadInputTokens") or 0
+            c["output"] += u.get("outputTokens") or 0
+        delta = {}
+        usd = 0.0
+        for b, c in sorted(csum.items()):
+            t = tx.get(b, dict.fromkeys(SIDE_KEYS, 0))
+            d = {k: c[k] - t[k] for k in SIDE_KEYS}
+            delta[b] = d
+            for k, v in d.items():
+                agg[b][k] += v
+            usd += side_usd(b, d, pricer) or 0.0
+        sessions.append({"session_id": sid, "start": st_iso, "cost_state_usd": cs.get("totalCostUSD"),
+                         "delta_tokens_by_model": delta, "usd_side_estimate": usd})
+    fleet = {}
+    total = 0.0
+    for b, d in sorted(agg.items()):
+        usd = side_usd(b, d, pricer)
+        fleet[b] = {"delta_tokens": d, "usd": usd}
+        total += usd or 0.0
+    sessions.sort(key=lambda s: -s["usd_side_estimate"])
+    return {"sessions_compared": len(sessions), "sessions_skipped_past_until": skipped_until,
+            "by_model": fleet, "usd_side_estimate_total": total,
+            "usd_side_estimate_sum_of_sessions": sum(x["usd_side_estimate"] for x in sessions),
+            "sessions": sessions}
+
+
+def view_check():
+    hits = []
+    seen = set()
+    for p in sorted(glob.glob(os.path.join(HOME, ".claude*", "settings.json"))):
+        rp = os.path.realpath(p)
+        if rp in seen:
+            continue
+        seen.add(rp)
+        try:
+            with open(rp) as fh:
+                env = (json.load(fh) or {}).get("env") or {}
+        except Exception:
+            continue
+        if not isinstance(env, dict) or "ENABLE_PROMPT_CACHING_1H" not in env:
+            continue
+        v = str(env.get("ENABLE_PROMPT_CACHING_1H")).strip().lower()
+        if v not in ("", "0", "false", "no", "off"):
+            hits.append({"settings": p.replace(HOME, "~"), "value": env.get("ENABLE_PROMPT_CACHING_1H")})
+    return {"ok": not hits, "checked": len(seen), "set_in": hits}
+
+
+# ─────────────────────────────── rendering ───────────────────────────────
+def money(x):
+    return "-" if x is None else ("$%.2f" % x if abs(x) < 100 else "${:,.0f}".format(x))
+
+
+def num(x):
+    return "-" if x is None else "{:,}".format(int(round(x)))
+
+
+def pcts(x):
+    return "-" if x is None else "%.1f%%" % (100 * x)
+
+
+def render_fleet(v, reprice):
+    f = v["fleet"]
+    m = v["meta"]
+    out = ["Token ledger since %s (list-price weights; output = final record, agent gaps imputed)" % m["since"],
+           "  %s responses in %s contexts, %s tasks · %s copies dropped · %s without a final record (output imputed)" % (
+               num(f["responses"]), num(f["contexts"]), num(v["per_task"]["n_tasks"]),
+               num(m["responses_xdup_dropped"]), num(m["responses_without_final_record"])),
+           "",
+           "%-16s %16s %12s %14s %8s" % ("billing type", "tokens", "$ own", "$ " + reprice, "share")]
+    for k in CLASSES:
+        out.append("%-16s %16s %12s %14s %8s" % (k, num(f["tokens"][k]), money(f["usd"][k]), money(f["usd_reprice"][k]),
+                                                 pcts(f["usd"][k] / f["usd_total"] if f["usd_total"] else None)))
+    out.append("%-16s %16s %12s %14s" % ("total", "", money(f["usd_total"]), money(f["usd_total_reprice"])))
+    out.append("  output recorded (final record, no imputation): %s tokens · cache hit rate %s" % (
+        num(f["output_recorded"]), pcts(f["cache_hit_rate"])))
+    out += ["", "%-16s %10s %9s %12s %14s %9s" % ("context", "responses", "contexts", "$ own", "$ " + reprice, "hit rate")]
+    for k, a in v["by_ctx_type"].items():
+        out.append("%-16s %10s %9s %12s %14s %9s" % (k, num(a["responses"]), num(a["contexts"]), money(a["usd_total"]),
+                                                     money(a["usd_total_reprice"]), pcts(a["cache_hit_rate"])))
+    out += ["", "%-28s %10s %12s %14s" % ("model", "responses", "$ own", "$ " + reprice)]
+    for k, a in v["by_model"].items():
+        own = "unpriced" if a["responses_unpriced"] == a["responses"] else money(a["usd_total"])
+        out.append("%-28s %10s %12s %14s" % (k, num(a["responses"]), own, money(a["usd_total_reprice"])))
+    t = v["per_task"]
+    out += ["", "per task (a session tree: main + subagents + workflow agents), n=%s" % num(t["n_tasks"]),
+            "%-16s %12s %12s %12s" % ("", "mean", "median", "p90")]
+    for lab, d, fmt in (("$ own", t["usd"], money), ("$ " + reprice, t["usd_reprice"], money),
+                        ("responses", t["responses"], num), ("contexts", t["contexts"], num)):
+        out.append("%-16s %12s %12s %12s" % (lab, fmt(d["mean"]), fmt(d["median"]), fmt(d["p90"])))
+    out.append("worker share of $: %s fleet · %s median per task · %s tasks spawned workers" % (
+        pcts(t["worker_share_fleet"]), pcts(t["worker_share_per_task"]["median"]), num(t["tasks_with_workers"])))
+    if t["top"]:
+        out += ["", "top tasks by $ own (cc-token-ledger --task <id> for the breakdown):"]
+        for x in t["top"][:5]:
+            out.append("  %s  %12s  %14s %s  %s responses  %s contexts" % (
+                x["session_id"], money(x["usd_total"]), money(x["usd_total_reprice"]), reprice,
+                num(x["responses"]), num(x["contexts"])))
+    if v["unpriced_models"]:
+        out.append("")
+        out.append("UNPRICED (no model-config.yaml row, left out of $): " + ", ".join(
+            "%s (%s responses)" % (k, num(u["responses"])) for k, u in v["unpriced_models"].items()))
+    return "\n".join(out)
+
+
+def render_task(v, reprice):
+    out = ["Task %s: %s responses, %s own, %s at %s, hit rate %s" % (
+        v["session_id"], num(v["tree"]["responses"]), money(v["tree"]["usd_total"]),
+        money(v["tree"]["usd_total_reprice"]), reprice, pcts(v["tree"]["cache_hit_rate"])),
+        "  " + v["meta"]["output_basis"]]
+    for c in v["contexts"]:
+        out.append("")
+        if not c["responses"] and c["responses_xdup_dropped"]:
+            out.append("%s %s in %s: a copy, its %s responses are counted in the original file" % (
+                c["ctx_type"], c["agent_id"] or "", c["config_dir"], num(c["responses_xdup_dropped"])))
+            continue
+        first = "first prefix" if not c["first_request_truncated"] else \
+            "first in-window prefix (seq %s, START_TRUNC)" % num(c["first_request_seq"])
+        out.append("%s %s %s %s  %s responses  %s own  %s %s  %s %s tokens  tools %s (%s err)" % (
+            c["ctx_type"], c["agent_id"] or "", c["config_dir"], ",".join(c["models"]), num(c["responses"]),
+            money(c["usd_total"]), money(c["usd_total_reprice"]), reprice, first,
+            num(c["first_request_prefix_tokens"]), num(c["tool_results"]), num(c["tool_errors"])))
+        for k in sorted(c["write_classes"]):
+            w = c["write_classes"][k]
+            out.append("    %-22s %6s writes %14s tokens %10s" % (k, num(w["n"]), num(w["write_tokens"]), money(w["usd_write"])))
+    return "\n".join(out)
+
+
+def render_arms(v, reprice):
+    out = ["Cost per task by instructions arm (variant log %s)" % v["variant_log"],
+           "  arm: instruction-variants.jsonl at the session start. sha: first 16 hex of sha256 of the user",
+           "  CLAUDE.md content in the session's instructions attachment (CLAUDE.md only; rules/ is not hashed).",
+           "%-8s %-17s %8s %6s %10s %10s %10s %9s %8s %8s  %s" % (
+               "arm", "CLAUDE.md sha", "bytes", "tasks", "$ mean", "$ median", "$ p90", "resp/task", "tool err", "hit",
+               "accounts")]
+    for a in v["arms"]:
+        out.append("%-8s %-17s %8s %6s %10s %10s %10s %9s %8s %8s  %s" % (
+            a["arm"], a["sha"], num(a["bytes"]), num(a["tasks"]), money(a["usd_per_task"]["mean"]),
+            money(a["usd_per_task"]["median"]), money(a["usd_per_task"]["p90"]),
+            num(a["responses_per_task"]["mean"]), pcts(a["tool_error_rate"]), pcts(a["cache_hit_rate"]),
+            ",".join(x.replace(".claude-", "") for x in a["accounts"])))
+    return "\n".join(out)
+
+
+def render_side(v):
+    out = ["Side requests: Claude Code cost-state minus transcript usage, %s sessions started in the window" % num(
+        v["sessions_compared"]),
+        "(ESTIMATED, the method of scripts/synth_side_requests.py: Haiku in full; other models count only",
+        " uncached input and cache read, floored at 0. Negative deltas are cost-state snapshots lagging a",
+        " live session.)", "",
+        "%-26s %14s %14s %16s %12s %10s" % ("model", "input", "cache write", "cache read", "output", "$ est")]
+    for m, d in v["by_model"].items():
+        t = d["delta_tokens"]
+        out.append("%-26s %14s %14s %16s %12s %10s" % (m, num(t["input"]), num(t["cache_write"]), num(t["cache_read"]),
+                                                        num(t["output"]), money(d["usd"])))
+    out.append("total side-request estimate: %s (floors each model's sum over sessions)" % money(
+        v["usd_side_estimate_total"]))
+    out.append("sum of the per-session rows: %s (floors each session, so it can exceed the total)" % money(
+        v["usd_side_estimate_sum_of_sessions"]))
+    if v["sessions_skipped_past_until"]:
+        out.append("%s session(s) skipped: still writing at --until, and cost-state counts to the process end" % num(
+            v["sessions_skipped_past_until"]))
+    top = [s for s in v["sessions"][:10] if s["usd_side_estimate"] > 0]
+    if top:
+        out += ["", "top sessions by side-request $:"]
+        for s in top:
+            out.append("  %s  %s  %s" % (s["session_id"], s["start"], money(s["usd_side_estimate"])))
+    return "\n".join(out)
+
+
+# ─────────────────────────────── main ───────────────────────────────
+def parse_since(s, now):
+    m = re.fullmatch(r"(\d+)([dh])", s or "")
+    if m:
+        secs = int(m.group(1)) * (86400 if m.group(2) == "d" else 3600)
+        return datetime.fromtimestamp(now - secs, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2}(?::\d{2})?)Z?)?", s or "")
+    if m:
+        t = m.group(2) or "00:00:00"
+        return m.group(1) + "T" + (t if len(t) == 8 else t + ":00")
+    return None
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(prog="cc-token-ledger", description=__doc__.split("\n\n")[0])
+    ap.add_argument("--since", default="14d")
+    ap.add_argument("--until", default=None, help="exclusive upper bound, same forms as --since")
+    ap.add_argument("--reprice", default="claude-opus-5-5")
+    ap.add_argument("--json", action="store_true")
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--task", metavar="SESSION_ID")
+    g.add_argument("--by-arm", action="store_true")
+    g.add_argument("--side-requests", action="store_true")
+    g.add_argument("--check", action="store_true")
+    ap.add_argument("--quick", action="store_true",
+                    help="with --task: scan only that tree and report recorded output, no imputation")
+    ap.add_argument("--workers", type=int, default=int(os.environ.get("CC_TOKEN_LEDGER_WORKERS") or 4))
+    a = ap.parse_args(argv)
+    if a.quick and not a.task:
+        print("cc-token-ledger: --quick applies to --task only", file=sys.stderr)
+        return 2
+
+    if a.check:
+        v = view_check()
+        if a.json:
+            print(json.dumps(v, indent=1))
+        elif v["ok"]:
+            print("ok: ENABLE_PROMPT_CACHING_1H is not set in %d settings file(s)" % v["checked"])
+        else:
+            for h in v["set_in"]:
+                print("ENABLE_PROMPT_CACHING_1H=%s in %s: it forces 1h-TTL cache writes on every agent "
+                      "(+$1,226 per 14 d at Opus 5.5, docs/research/token-efficiency-2026-09-23/measure/"
+                      "cache-writes.md). Remove it from that env block." % (h["value"], h["settings"]))
+        return 0 if v["ok"] else 1
+
+    now = float(os.environ.get("CC_NOW") or time.time())
+    since = parse_since(a.since, now)
+    if since is None:
+        print("cc-token-ledger: --since wants Nd, Nh or YYYY-MM-DD, got %r" % a.since, file=sys.stderr)
+        return 2
+    until = parse_since(a.until, now) if a.until else "9999"
+    if until is None:
+        print("cc-token-ledger: --until wants Nd, Nh or YYYY-MM-DD, got %r" % a.until, file=sys.stderr)
+        return 2
+    cfg = find_model_config()
+    prices = load_prices(cfg)
+    if not prices:
+        print("cc-token-ledger: no pricing_per_mtok found (looked for %s)" % (cfg or "model-config.yaml"), file=sys.stderr)
+        return 2
+    pricer = Pricer(prices, a.reprice)
+    if pricer.rp is None:
+        print("cc-token-ledger: --reprice %s has no price row in %s" % (a.reprice, cfg), file=sys.stderr)
+        return 2
+    try:
+        os.nice(10)
+    except Exception:
+        pass
+
+    if a.task:
+        # The output imputation and the transplant filter are fitted over the whole window, so the
+        # default scans it all and a tree reads the same here as in the fleet view. One tree alone
+        # read up to 6x the fleet's output (implement/T2-token-ledger.review.md finding 2).
+        if a.quick:
+            results, meta = scan(since, until, sid_filter=a.task, workers=a.workers, impute_output=False)
+        else:
+            results, meta = scan(since, until, workers=a.workers)
+        sids = sorted({f["cls"][3] for f in results if f["cls"][3].startswith(a.task)})
+        if len(sids) != 1:
+            print("cc-token-ledger: --task %s matched %d session(s) since %s%s" % (
+                a.task, len(sids), since, (": " + ", ".join(sids[:5])) if sids else ""), file=sys.stderr)
+            return 1
+        v = view_task(results, sids[0], pricer)
+        v["meta"] = dict(meta, since=since, model_config=cfg, reprice=a.reprice, quick=a.quick,
+                         output_basis=(
+                             "--quick: output as recorded (no imputation); only this tree's files scanned, so "
+                             "messages a fork copied from its parent count here" if a.quick else
+                             "output: final record, agent gaps imputed from strata fitted on the whole window"))
+        print(json.dumps(v, indent=1) if a.json else render_task(v, a.reprice))
+        return 0
+
+    results, meta = scan(since, until, workers=a.workers)
+    meta = dict(meta, since=since, until=a.until and until, model_config=(cfg or "").replace(HOME, "~"), reprice=a.reprice)
+    if a.by_arm:
+        v = view_by_arm(results, pricer)
+        v["meta"] = meta
+        print(json.dumps(v, indent=1) if a.json else render_arms(v, a.reprice))
+    elif a.side_requests:
+        v = view_side(results, pricer, since, bounded=a.until is not None)
+        v["meta"] = meta
+        if a.json:
+            print(json.dumps(v, indent=1))
+        else:
+            print(render_side(v))
+    else:
+        v = view_fleet(results, meta, pricer)
+        print(json.dumps(v, indent=1) if a.json else render_fleet(v, a.reprice))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

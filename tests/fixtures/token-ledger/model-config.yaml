@@ -1,0 +1,10 @@
+# Fixture price list for tests/cc-token-ledger.bats (same shape as the repo's model-config.yaml).
+roles:
+  lead: claude-opus-5-5
+pricing_per_mtok:
+  claude-opus-5-5: [4, 20]   # cache read 0.05x
+  claude-opus-5: [5, 25]
+  claude-haiku-4-5: [1, 5]
+
+auto_mode_allowlist:
+  - x: [1, 2]
