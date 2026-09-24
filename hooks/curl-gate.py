@@ -646,6 +646,17 @@ def host_matches(host: str, hosts_set: set[str], suffixes: tuple) -> bool:
     return False
 
 
+def is_loopback_host(host: str) -> bool:
+    """localhost, any *.localhost (curl pins it to loopback), 127.0.0.0/8, ::1."""
+    h = (host or "").lower().strip("[]")
+    return (
+        h == "localhost"
+        or h.endswith(".localhost")
+        or h == "::1"
+        or re.fullmatch(r"127\.\d{1,3}\.\d{1,3}\.\d{1,3}", h) is not None
+    )
+
+
 def is_localhost_dev(host: str, port: int | None) -> bool:
     """Allow localhost dev-server ports."""
     if host not in ("localhost", "127.0.0.1"):
@@ -861,6 +872,25 @@ def decide(parsed: dict) -> tuple[str, str]:
                         ("allow", f"{method} {host} — read-only, sends no credential")
                     )
                     continue
+                # A credential sent to LOOPBACK leaves the machine for nowhere: exfiltration is the
+                # one harm this arm exists for, and it needs a remote receiver. `*.localhost` counts —
+                # curl resolves it to loopback itself, without DNS (measured, curl 8.7.1:
+                # `curl -v http://x.gn.localhost:9/` → "Trying [::1]:9 … 127.0.0.1:9"). NOT with -L
+                # or --location-trusted, where a 302 can carry the request off the box. Measured
+                # 2026-09-24: 126 asks / 15 sessions / ~50 h stalled on reso's own tenant dev server
+                # (`curl -b jar http://gn.localhost:3000/…`).
+                if (
+                    is_loopback_host(host)
+                    and not parsed.get("has_location")
+                    and not parsed.get("has_location_trusted")
+                ):
+                    decisions.append(
+                        (
+                            "allow",
+                            f"{method} {host} — carries {leak}, but only to loopback",
+                        )
+                    )
+                    continue
                 return (
                     "ask",
                     f"{method} to unvetted host {host} — request carries {leak}",
@@ -1049,6 +1079,135 @@ def redirect_hardening(cmd: str, parsed: dict) -> str | None:
     return cmd[: m.end()] + " " + " ".join(add) + cmd[m.end() :]
 
 
+# ── Same-command variable resolution: the URL is usually in a loop variable ──────────────────────
+#
+# MEASURED 2026-09-24 over ~/.reso/curl-audit.jsonl, 30 days (docs/plans/PERMISSION_PROMPT_CONSOLIDATION.md):
+# 892 of the gate's asks were "No URL parsed", 596 of them (38 sessions, ~52 h of stalled prompts) the
+# research idiom `for u in "https://a/…" "https://b/…"; do curl -sL "$u" …; done`. The argv walk sees
+# the token `$u`, which is not a URL, so the gate asked about a request whose target is written out
+# in full two words earlier. This resolves such a token from the command's own text and hands every
+# candidate value to the UNCHANGED decide() — so a resolved IMDS host still denies, a resolved POST to
+# an unknown host still asks, and the strictest verdict over all candidates wins.
+#
+# DECIDABLE ONLY. A name resolves iff the command binds it exactly ONCE, by a `for NAME in <literal
+# words>` list or a `NAME=<value>` assignment whose value is literal apart from references to other
+# decidable names. Anything that can bind a name out of our sight refuses resolution for the WHOLE
+# command: `read`, `mapfile`, `printf -v`, `eval`, `source`/`.`, `declare`/`local`/`typeset`, `let`,
+# `((…))`, `NAME+=`, `NAME[…]=`, `${NAME:=…}`, `select`, a command substitution or backtick in the
+# binding, a glob or brace in a loop word. An unresolved token stays `$u` and asks exactly as before.
+# The failure direction of every conditional or unexecuted binding is an EMPTY variable at runtime,
+# and curl with an empty URL makes no request — no reading here can turn an ask into a request to a
+# host this code did not see.
+_REF_RE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+_EXPAND_CAP = 32
+_UNSEEN_BINDERS = re.compile(
+    r"(?:^|[\s;&|(`])(?:read|mapfile|readarray|eval|source|declare|typeset|local|let|getopts|select)(?=\s)"
+    r"|(?:^|[\s;&|(])\.\s|printf\s+-v|\(\(|\$\{[A-Za-z_]\w*:?[=?]"
+)
+_ASSIGN_RE = re.compile(
+    r"""(?:^|(?<=[\s;&|(]))([A-Za-z_][A-Za-z0-9_]*)(\+?)(\[?)=((?:"[^"]*"|'[^']*'|[^\s;&|()<>"'])*)"""
+)
+_FOR_RE = re.compile(
+    r"(?:^|(?<=[\s;&|(]))for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([^;\n]*?)\s*(?:;|\n)\s*do\b"
+)
+
+
+def shell_bindings(cmd: str) -> dict:
+    """{NAME: ("for", [words]) | ("assign", raw_value)} for names bound exactly once, decidably."""
+    if _UNSEEN_BINDERS.search(cmd):
+        return {}
+    sites: dict = {}
+    for m in _FOR_RE.finditer(cmd):
+        raw = m.group(2)
+        try:
+            words = shlex.split(raw, posix=True)
+        except ValueError:
+            words = None
+        ok = (
+            words
+            and "$(" not in raw
+            and "`" not in raw
+            and not any(re.search(r"[$*?\[{]", w) for w in words)
+        )
+        sites.setdefault(m.group(1), []).append(("for", words) if ok else None)
+    for m in _ASSIGN_RE.finditer(cmd):
+        name, plus, bracket, raw = m.groups()
+        bad = (
+            plus
+            or bracket
+            or "$(" in raw
+            or "`" in raw
+            or raw.startswith("'")
+            and "$" in raw
+        )
+        sites.setdefault(name, []).append(None if bad else ("assign", raw))
+    return {n: s[0] for n, s in sites.items() if len(s) == 1 and s[0] is not None}
+
+
+def expand_token(tok: str, bindings: dict, depth: int = 0) -> list[str] | None:
+    """Every value `tok` can take, or None when any reference in it is undecidable."""
+    if "$" not in tok:
+        return [tok]
+    if depth > 4:
+        return None
+    m = _REF_RE.search(tok)
+    if not m:
+        return None  # `$1`, `$@`, `${x:-y}` … — a `$` this reader does not model
+    name = m.group(1) or m.group(2)
+    site = bindings.get(name)
+    if site is None:
+        return None
+    if site[0] == "for":
+        values = list(site[1])
+    else:
+        try:
+            deq = shlex.split(site[1], posix=True) if site[1] else [""]
+        except ValueError:
+            return None
+        if len(deq) != 1:
+            return None
+        values = expand_token(deq[0], bindings, depth + 1)
+        if values is None:
+            return None
+    out: list[str] = []
+    for v in values:
+        rest = expand_token(tok[: m.start()] + v + tok[m.end() :], bindings, depth + 1)
+        if rest is None:
+            return None
+        out.extend(rest)
+        if len(out) > _EXPAND_CAP:
+            return None
+    return out
+
+
+def expand_argv(argv: list[str], cmd: str) -> list[list[str]]:
+    """The argv variants the command's own bindings allow; [argv] untouched when undecidable."""
+    if not any("$" in t for t in argv):
+        return [argv]
+    bindings = shell_bindings(cmd)
+    variants: list[list[str]] = [[]]
+    for t in argv:
+        cands = expand_token(t, bindings) or [t]
+        variants = [v + [c] for v in variants for c in cands]
+        if len(variants) > _EXPAND_CAP:
+            return [argv]
+    return variants
+
+
+# `curl --version`, `curl --help all`, and the bare `curl` that `which curl` leaves behind in the
+# segment split: none of them makes a request, so there is nothing for any arm of decide() to judge.
+_INFO_FLAGS = frozenset({"-V", "--version", "-h", "--help", "-M", "--manual"})
+
+
+def info_only(argv: list[str]) -> bool:
+    rest = argv[1:]
+    if not rest:
+        return True
+    return rest[0] in _INFO_FLAGS and (
+        len(rest) == 1 or (rest[0] in ("-h", "--help") and len(rest) == 2)
+    )
+
+
 def decide_command(cmd: str) -> tuple[str, str, dict]:
     """Judge EVERY curl in the command; the strictest verdict wins (deny > ask > allow)."""
     invocations = curl_invocations(cmd)
@@ -1059,7 +1218,15 @@ def decide_command(cmd: str) -> tuple[str, str, dict]:
 
     meta: dict = {"host": None, "method": None}
     verdicts: list[tuple[str, str]] = []
-    for argv in invocations:
+    for argv in [v for a in invocations for v in expand_argv(a, cmd)]:
+        if info_only(argv):
+            verdicts.append(
+                (
+                    "allow",
+                    " ".join(argv) + " — informational, makes no request",
+                )
+            )
+            continue
         parsed = parse_argv(argv, cmd)
         decision, reason = decide(parsed)
         # The rewrite rides in `meta` rather than widening this signature — every caller already
@@ -1083,6 +1250,13 @@ def decide_command(cmd: str) -> tuple[str, str, dict]:
             if decision == want:
                 return decision, reason, meta
     return "allow", "; ".join(r for _, r in verdicts), meta
+
+
+# Words that may precede a statement's command: keywords, grouping, and exec prefixes.
+_STMT_PREFIX_RE = re.compile(
+    r"^(?:(?:do|then|else|elif|if|while|until|\{|!|time|nohup|exec|command|builtin"
+    r"|env|[A-Za-z_][A-Za-z0-9_]*=\S*)\s+)+"
+)
 
 
 def main() -> None:
@@ -1125,9 +1299,15 @@ def main() -> None:
     # statement separated by ; & && || |
     import re
 
-    statements = re.split(r"[;&|]+", cmd_trim)
+    # A NEWLINE, `$(`, a backtick and `(` end a statement too, and a statement may open with a
+    # shell keyword or prefix before its command. The incumbent split was `[;&|]+` alone and tested
+    # `startswith("curl")`, so `echo x⏎curl http://169.254.169.254/` and
+    # `for u in …; do curl "$u"; done` were never gated at all — no IMDS deny, no pipe-to-shell deny
+    # (measured 2026-09-24 while adding loop-variable resolution: the IMDS loop exited 0 unjudged).
+    statements = re.split(r"[;&|\n]+|\$\(|`|\(", cmd_trim)
     is_curl_invocation = any(
-        s.strip().startswith("curl") or s.strip().startswith("xargs curl")
+        _STMT_PREFIX_RE.sub("", s.strip()).startswith(("curl", "xargs curl"))
+        or re.match(r"\S*/curl(\s|$)", _STMT_PREFIX_RE.sub("", s.strip()))
         for s in statements
     )
     if not is_curl_invocation:

