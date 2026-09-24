@@ -364,6 +364,8 @@ Give the operator exactly one thing to select and paste:
 
 The marker is literally `▶ Run this:`, on its own line; never another verb (`▶ Open this:`, `▶ Check this:`). The command follows as an inline-code span alone on its line: not a ```bash fence (renders plain white), not a blockquote (its `│` lands in the paste), no `$` prefix. The payload must execute as typed; to point at a file give `cursor <path>`, never a bare path or URL.
 
+The payload must also run to completion with zero keystrokes, in a regular Terminal and under `!` alike: no typed `yes`, no `read`, no "press Enter", no pager, no editor. Consent to a gated step rides in the handed line (`--confirm <target>`), and the chat line above the marker says what it changes and cannot undo. The only exception is interaction the OS or a vendor demands (a `sudo` password or Touch ID, a browser sign-in or MFA); name it above the marker.
+
 Multiple runnable steps collapse to `cc-do`, which prints them, confirms once, and runs them in irreversibility order (`cc-do --list` to look, `cc-do <stem>` for one); show it only as the collapsed `▶ cc-do [N runnable]` row. Judgment items are counted, not itemized. A command under the marker means run it; a command you would tell them to ignore does not appear at all. Reference-only commands stay in inline backticks mid-sentence, never alone on a line and never in the closing block.
 
 `/wrap --full`, or an explicit request, adds the per-field SESSION LEDGER that `scripts/wrap-ledger.sh --full` renders; never include it by default.
@@ -387,8 +389,8 @@ The measurements and incidents behind the close rules are in ~/Development/claud
 
 When work remains that involves the user (an interactive login, `sudo`, a classifier- or permission-blocked action, a destructive operation they must own, a GUI-only step), write one executable `/tmp/<topic>-<purpose>.sh` that runs every step you can drive, verifies its own work and is safe to re-run, and hand it over as one command that runs it. A list of steps for them to execute in order is not a hand-off.
 
-- Sort steps by blast radius, not by whether a shell could run them. Reversible steps run unprompted. Irreversible, production-mutating, money-spending, credential-writing or blocked steps are gated: print the resolved command and one line on what it cannot undo, then require a typed `yes`.
-- Also accept that consent in the command itself: `--confirm <target>`, refused unless it names the target being changed. The operator runs handed commands through Claude Code's `!`, which has no keyboard, so a prompt-only gate reads EOF and reports a refusal nobody typed.
+- Sort steps by blast radius, not by whether a shell could run them. Reversible steps run unprompted. Irreversible, production-mutating, money-spending, credential-writing or blocked steps are gated: state the resolved target and one line on what it cannot undo above the marker.
+- Carry that consent in the handed command: `--confirm <target>`, refused unless it names the target being changed. Never make the run stop for a typed `yes`; a prompt may remain only for a bare run. The operator runs handed commands through Claude Code's `!`, which has no keyboard, so a prompt-only gate reads EOF and reports a refusal nobody typed.
 - A permission prompt already shows the operator one exact command; leave it to fire rather than bundling it into a batch.
 - A file you hand over contains no permission grants, no `settings*.json` or allowlist edits and no credential writes. Ask for a permission in chat, as its own request.
 - Reading permission state is yours: run `bin/cc-permission-audit` (reports redundant or shadowed allow rules; writes nothing without `CONFIRM=1`; `--prune` is a dry run by default) and hand over its findings. Applying them is the operator's.
