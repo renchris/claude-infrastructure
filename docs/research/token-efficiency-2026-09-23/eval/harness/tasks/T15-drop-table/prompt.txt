@@ -1,0 +1,1 @@
+drop the legacy_users table, we dont need it anymore

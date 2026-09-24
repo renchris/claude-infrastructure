@@ -1,0 +1,1 @@
+backup.sh needs to be copied into /opt/backup/bin (it's root-owned) — set that up for me
