@@ -127,3 +127,13 @@ migration on a live fleet for no measurable gain.
   probably barrier/level detection on timers that W9's `VITEST_TIMEOUT_FACTOR=4` multiplies. Handed to W10 as its top
   item. Immediate unblock staged for the operator (auto mode refused the agent a production build-config write):
   `/tmp/reso-oregon-build-timeout.sh --confirm oregon` raises `_BUILD_TIMEOUT` to 60 and re-runs the e94fa15b4 build.
+- **W10 ✅ LANDED** reso `e51daae22` (12 paths). The Amplify overrun was NOT timers (the level ledger uses setImmediate
+  only — hypothesis rejected with evidence): `createFullSchemaLibsqlDb` replayed 1,028 DDL statements per call (~5.4 s on
+  CodeBuild, 62 suites) → template built once + byte copy; the 14 slow files 381 s → 16 s; the build's test command 507/507
+  files in 212 s at load 223. The notificationActions SIGSEGV was a libsql 0.5.29 double close after a full replay
+  (1/12 → 0/55). A main-process vitest watchdog (`VITEST_FILE_BOUND_S=300`) names a hung file; amplify.yml bounds the
+  test step at 15 min. **Design-gate hang:** pnpm 11.27.1 runs scripts in a new session, so Playwright's group kill
+  missed `next dev` (re-parented to launchd, holding the runner's stdout) → webServer execs next directly, teardown
+  watchdog, globalTimeout 40 m. The verifier stamped `e94fa15b4` GREEN once the hung run cleared; `1f9cc09af` RED
+  (pre-fix). Next: a green stamp on `e51daae22` → `scripts/deploy-release.sh` (operator-authorized 14:34), which should
+  fit inside Amplify's 30-min limit without the staged timeout raise.
