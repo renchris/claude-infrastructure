@@ -1,0 +1,45 @@
+{
+ "brief": "B01",
+ "dossiers": {
+  "dossier-1.md": {
+   "agent_type": "workflow-subagent",
+   "rep": 4,
+   "agent_id": "a9a0682c2f930733a"
+  },
+  "dossier-2.md": {
+   "agent_type": "workflow-lean",
+   "rep": 3,
+   "agent_id": "a183b37c7711d00df"
+  },
+  "dossier-3.md": {
+   "agent_type": "workflow-subagent",
+   "rep": 1,
+   "agent_id": "a645ecf2f21729ef2"
+  },
+  "dossier-4.md": {
+   "agent_type": "workflow-subagent",
+   "rep": 8,
+   "agent_id": "ae14944022b9c2abf"
+  },
+  "dossier-5.md": {
+   "agent_type": "workflow-lean",
+   "rep": 2,
+   "agent_id": "a5101acb47a5af9e0"
+  },
+  "dossier-6.md": {
+   "agent_type": "workflow-lean",
+   "rep": 7,
+   "agent_id": "a7a6b1db4cc1c4968"
+  },
+  "dossier-7.md": {
+   "agent_type": "workflow-subagent",
+   "rep": 5,
+   "agent_id": "a6b26e3de85a0e84c"
+  },
+  "dossier-8.md": {
+   "agent_type": "workflow-lean",
+   "rep": 6,
+   "agent_id": "a10b5448de37b26c3"
+  }
+ }
+}

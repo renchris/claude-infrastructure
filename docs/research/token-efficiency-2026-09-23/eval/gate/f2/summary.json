@@ -1,0 +1,70 @@
+{
+ "title": "F2 workflow-lean",
+ "verdict": "FAIL",
+ "n": {
+  "lean": 40,
+  "default": 40
+ },
+ "margin_pp": 10.0,
+ "primary": {
+  "t": 0.08899169999999999,
+  "c": 0.6751686,
+  "pct": -86.81933668123784,
+  "p": 0.001953125,
+  "units": 10
+ },
+ "meter": {
+  "t": 14066.15,
+  "c": 115789.575,
+  "pct": -87.85197199316087,
+  "p": 0.001953125,
+  "units": 10
+ },
+ "significant_harms": [
+  {
+   "name": "Turns (responses)",
+   "p": 0.015625,
+   "worse": true
+  }
+ ],
+ "ci_misses": [
+  {
+   "name": "Compliance",
+   "lo": -0.10408757133505694,
+   "p1": 0.90625,
+   "p0": 0.95
+  }
+ ],
+ "n_needed_per_arm": {
+  "Compliance": 161
+ },
+ "success": [
+  {
+   "lean": 40,
+   "default": 40
+  },
+  {
+   "lean": 40,
+   "default": 40
+  }
+ ],
+ "compliance": {
+  "lean": [
+   145,
+   160
+  ],
+  "default": [
+   152,
+   160
+  ]
+ },
+ "ci_success": [
+  -0.08762160119728646,
+  0.08762160119728646
+ ],
+ "ci_compliance": [
+  -0.10408757133505694,
+  0.014378889084632522
+ ],
+ "items_tested": 40
+}

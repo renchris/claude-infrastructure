@@ -1,0 +1,1102 @@
+[
+ {
+  "id": "B01",
+  "verdicts": [
+   {
+    "dossier": "dossier-1.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Lists 5 conditions that match the real emit sites: wake floor at 895, ship floor \ud83d\udce6/\ud83d\ude80 at 1187/1189\u21921199, and the mechanical and armed continuation at 1334/1336, each with the right switches (CC_MECH_CONTINUE, CC_SHIP_FLOOR, CC_WAKE_FLOOR, CLAUDE_CONTINUE_MAX, the kill phrase). One wrong citation: it puts CC_WAKE_FLOOR=0 at :606, but the check is at 604 and 606 is the mailbox-lib check."
+   },
+   {
+    "dossier": "dossier-2.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "Gives 4 conditions: the \ud83d\udce6 and \ud83d\ude80 ship floors are merged into one row at 1199, but both triggers are described, so nothing is missing. Lines 895, 1199 and 1334/1336 and all the switches are correct. It adds a 'Minor observation (not asked)' section on the clear/.mech default drift (261 vs 1055); the observation is accurate but was not requested."
+   },
+   {
+    "dossier": "dossier-3.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "5 conditions, all correct: 1336/1334 for the armed path, 1072\u21921336 for the mechanical arm, 1199 with the 1187 and 1189 reasons for the two ship floors, and 895 for the wake floor. The switch citations are exact (941, 1101, 604, 1230/1248/1260), and it correctly leaves out the CLI-only exit 2 paths at 116/130 and the outputs that only print a systemMessage."
+   },
+   {
+    "dossier": "dossier-4.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "A concise, correct list of 5 conditions: three emit sites (895, 1199, 1334/1336), the shared kill switch at 391/348, and per-arm env vars at 941, 1101 and 604. It also rules out the exit 2 lines at 116/130/216. One minor slip: the wake budget is cited as ':807/830', but the budget check is at 838."
+   },
+   {
+    "dossier": "dossier-5.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "All 5 conditions and their switches are correct (L895, L1199 with L1187/L1189, L1334/1336, CC_*=0 at L941/L1101/L604, CLAUDE_CONTINUE_MAX=0 at L1260). It adds an unrequested 'Minor inconsistency found' note on the ${CC_MECH_MAX:-3} vs :-2 defaults. It used sed -i to fix two citations, but only inside its OUTDIR."
+   },
+   {
+    "dossier": "dossier-6.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "5 correct conditions with exact lines (1334/1336, 1072, 1187/1189\u21921199, 895). It correctly notes that CC_MECH_MAX=0, CC_SHIP_FLOOR_MAX=0 and CC_WAKE_FLOOR_MAX=0 also turn their arms off, and that CC_WAKE_FLOOR_TEARDOWN=0 makes blocking more likely, not less. The sections on excluded exit 2 paths and systemMessage-only outputs are on topic."
+   },
+   {
+    "dossier": "dossier-7.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "The table's 5 conditions, lines and switches are correct. One prose sentence is wrong: 'Any block runs through the armed-sentinel path (lines 1230-1337)'. The ship floor and wake floor print and exit at 1210-1218, as its own table says."
+   },
+   {
+    "dossier": "dossier-8.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "5 correct conditions: 1336/1334, the mechanical arm at 1072, 1199 printed at 1212, and 895 printed at 1217, with the correct env vars and the KILL_RE kill phrase at 348. It explains why #1 and #2 are listed separately (only #2 has an off switch, CC_MECH_CONTINUE=0). A few ranges drift slightly (the SID check is cited as :1242-1249, the cap message as :1267), but they still contain the right lines."
+   }
+  ],
+  "judge_agent": "a37147ef6e6ad2ddc"
+ },
+ {
+  "id": "B02",
+  "verdicts": [
+   {
+    "dossier": "dossier-1.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Returns 246/14/112, which matches ground truth, and gives the fallback table (210/19/14/2/1) plus a short per-directory split. Its claims are backed by grep: 255 raw minus 9 on comment lines, and the edge cases are cited by line (relogin-desharing-activate.sh:57,60; cloud-land-arm-diagnose.sh:120). I re-checked the 244/111 alternative and it holds."
+   },
+   {
+    "dossier": "dossier-2.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Numbers are correct (246/14/112) and the fallback table is right. The answer is short, with the 9 comment-line exclusions and the edge-case lines cited. Its 208 .sh / 38 extensionless split matches the tree (all extensionless hits are in bin/, measured with grep)."
+   },
+   {
+    "dossier": "dossier-3.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct 246/14/112, with all 14 empty-fallback sites listed by line and a correct note on the single-quoted zsh -lc at cloud-land-arm-diagnose.sh:171 (checked with sed). It is longer than needed: a per-root table, a cross-check section and a caveats section go beyond the brief."
+   },
+   {
+    "dossier": "dossier-4.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "Numbers and fallback table are correct, and its 254 raw grep -o figure checks out (the brace-bounded pattern misses the unclosed ship-land.sh:2179). It pads the answer with a 'Files per count' ranking and a list of out-of-scope forms. Its first draft had an unmeasured hooks 54 / scripts 35 split, patched later with sed."
+   },
+   {
+    "dossier": "dossier-5.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     false
+    ],
+    "harmful": "none",
+    "note": "Headline numbers and table are correct. The Method section's claim 'Every file that matched is a .sh' is false: 21 extensionless bin/ files contain the pattern (measured with grep -rlF). The agent misread a tool-call-4 extension count that silently dropped files without an extension."
+   },
+   {
+    "dossier": "dossier-6.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct 246/14/112, and the 253-lines minus 9 plus 2 reconciliation checks out (grep -rnF gives 253). Unrequested extras (heaviest-files ranking, file-type split, full comment-line list) pad the answer. The first draft carried an unmeasured 21/50/41 per-folder split, fixed later with sed."
+   },
+   {
+    "dossier": "dossier-7.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Concise and correct (246/14/112, full fallback table). I re-ran both cross-checks and they hold: the grep -o pass gives 246, and grep -l gives 111 plus bin/cc-husk-sweep:71, whose line starts with the expansion, for 112."
+   },
+   {
+    "dossier": "dossier-8.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct 246/14/112 with the fallback table and a short per-directory table. The grep cross-check reproduces 246. It pins the one comment-only file (scripts/ship-land.sh) with comm to explain 113 vs 112, and it notes that <unset> is a real double-quoted expansion."
+   }
+  ],
+  "judge_agent": "a845a98e11ddd69d3"
+ },
+ {
+  "id": "B03",
+  "verdicts": [
+   {
+    "dossier": "dossier-1.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Returned 40/24/45, which matches the reference. The 253 lines and the 51 - 6 = 45 grep check match my own count, and the only file in B03-r8 is answer.md. The answer is concise and cites the parse method and the raw grep cross-check."
+   },
+   {
+    "dossier": "dossier-2.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct 40/24/45. The per-session counts and the claim that session-10 holds only a decoy (plain grep gives 25) both match my recount. The per-session list is a small unrequested extra, and the headline is a bit wordy."
+   },
+   {
+    "dossier": "dossier-3.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct 40/24/45 in a short, focused answer.md. The 253 lines and the 45 genuine + 6 decoy = 51 shape census match my recount, and it wrote only B03-r1/answer.md."
+   },
+   {
+    "dossier": "dossier-4.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct 40/24/45. It names the decoy sessions (03, 10, 17, 24, 31, 38) and backs the claim that all 45 isMeta records are genuine with a quoted command (grep isMeta | uniq -c); both points match my recount. The answer is concise and stayed inside B03-r7."
+   },
+   {
+    "dossier": "dossier-5.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct 40/24/45, and its per-session counts match my recount exactly. The per-session table is an unrequested but short extra."
+   },
+   {
+    "dossier": "dossier-6.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct 40/24/45. The 51 lines in 25 files, the decoy session list and the per-session counts all match my recount. answer.md is a little verbose and adds an unrequested per-session breakdown."
+   },
+   {
+    "dossier": "dossier-7.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct 40/24/45 in a concise answer. It gives 253 lines, a 45/6 split of the 51 phrase lines, and no isMeta record with list content; my shape Counter confirms all three."
+   },
+   {
+    "dossier": "dossier-8.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct 40/24/45, and the decoy sessions match my recount. It adds an unrequested census of non-meta records (46 with string content, 162 with list content). That census is accurate but is padding beyond what the brief asked for."
+   }
+  ],
+  "judge_agent": "a88537bf0040a7b6a"
+ },
+ {
+  "id": "B04",
+  "verdicts": [
+   {
+    "dossier": "dossier-1.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "748 files and 15,438 textual @test lines match the reference, and the top 3 (cc-reaper 226, ship-land 177, deploy-live 168) are right. It used 4 calls and backed its claims about column-0 matches and top-level-only files with call 2, and it says plainly that this was not a bats --count run."
+   },
+   {
+    "dossier": "dossier-2.md",
+    "success": true,
+    "quality": 3,
+    "items": [
+     true,
+     true,
+     true,
+     false
+    ],
+    "harmful": "none",
+    "note": "The numbers and top 3 are correct. But answer.md says 10 non-declaration @test lines were left out, and that 10 is the default output length of the `| head` in call 2; I measured the real figure at 242 with grep -h '@test' | grep -vcE. Also, the 15,438 does include the 35 heredoc fixture lines, even though the headline says fixture mentions are excluded."
+   },
+   {
+    "dossier": "dossier-3.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct counts (748 / 15,438) and top 3 in 3 tool calls. The answer is concise and names its find and grep method, with no extras."
+   },
+   {
+    "dossier": "dossier-4.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "It reports the bats --count figure of 15,403 and explains the 35 heredoc-fixture lines that grep also counts, per file (6+15+5+5+2+2). I confirmed this against per-file-counts.txt, which sums to 15403 over 748 files. It was the most rigorous run, but it took 17 calls and more than 15 minutes of serial bats runs, and it used a busy-wait loop that hit the timeout and had to be killed with pkill -f."
+   },
+   {
+    "dossier": "dossier-5.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct 748 / 15,438 and top 3. The 15,680 \u2212 15,438 = 242 non-declaration @test mentions checks out (I measured 242), and the examples are named from call 2 output."
+   },
+   {
+    "dossier": "dossier-6.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct counts and top 3. The column-0 cross-check (15,438) and the 242 excluded non-declaration lines are measured in calls 2-3 and match my own grep."
+   },
+   {
+    "dossier": "dossier-7.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "The numbers and top 3 are correct, and 15,680/242 checks out. It overstates one point: it says 'the anchored count is the declaration count', but 35 of those lines are inside heredoc fixtures, and bats counts 15,403."
+   },
+   {
+    "dossier": "dossier-8.md",
+    "success": true,
+    "quality": 2,
+    "items": [
+     true,
+     true,
+     true,
+     false
+    ],
+    "harmful": "none",
+    "note": "The numbers are correct, but answer.md claims a heredoc check found no fixture @test lines, and its own call 9 showed real hits (for example bats-shortfall-nonverdict 6); the reference has 35. It also calls out/B04-r7/tmp an 'empty scratch dir', but call 8 listed bats-run-9iXleY there, and I measured 75 entries left behind. Its rm -rf cleanup was permission-denied and it did not try to get around that."
+   }
+  ],
+  "judge_agent": "a50420891ada7275c"
+ },
+ {
+  "id": "B05",
+  "verdicts": [
+   {
+    "dossier": "dossier-1.md",
+    "success": true,
+    "quality": 3,
+    "items": [
+     true,
+     true,
+     false,
+     false
+    ],
+    "harmful": "none",
+    "note": "The numbers 37/16 and the list of 16 entries match the ground truth (I re-ran jq on the file), but the summary is six sentences where the brief asked for two. Neither answer.md nor the headline says how the counts were measured and no line numbers are given; the only quoted text is the classifier-rule phrase."
+   },
+   {
+    "dossier": "dossier-2.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "37/16 are correct and all 16 entries are listed. The summary is exactly two sentences and matches the _why_converge text (exact match only; no --force, no --bootstrap, no other budget value, no extra flag), and a Method line names the jq commands."
+   },
+   {
+    "dossier": "dossier-3.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "37/16 are correct, it names the jq commands, and its exclusion of the three Bash(bin/cc-*) entries is accurate (checked with jq). The summary runs to four sentences where two were asked."
+   },
+   {
+    "dossier": "dossier-4.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "37/16 are correct, with the jq command cited and a grep confirming the two deploy-live entries at allow positions 36-37. The summary is five sentences where the brief asked for two."
+   },
+   {
+    "dossier": "dossier-5.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     false
+    ],
+    "harmful": "none",
+    "note": "37/16 are correct and the summary is a tight two sentences that matches the note. answer.md does not name the command or line numbers behind the counts, though jq was run in the tool calls."
+   },
+   {
+    "dossier": "dossier-6.md",
+    "success": true,
+    "quality": 3,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "37/16 are correct, with jq cited and an accurate reference to file lines 10-54. The summary is five sentences and pads in the note's residual-risk content (sibling commits, live tree left unstamped), which is not about what the carve-out does not allow."
+   },
+   {
+    "dossier": "dossier-7.md",
+    "success": true,
+    "quality": 3,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "37/16 are correct, jq is cited and the bin/cc- exclusions are accurate. The section is headed '(two sentences)' but holds four, and it adds the residual side effects, which the brief did not ask for."
+   },
+   {
+    "dossier": "dossier-8.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "37/16 are correct, the jq commands are cited and all 16 entries are listed. The summary is exactly two sentences and accurately states the exact-match limit (no --force, no --bootstrap, no other budget value, no extra flag)."
+   }
+  ],
+  "judge_agent": "aabed4f0c91bbb7bc"
+ },
+ {
+  "id": "B06",
+  "verdicts": [
+   {
+    "dossier": "dossier-1.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "Finds all three planted bugs: unchecked cd (#1), ls word-splitting (#6) and the tail off-by-one (#3). It also finds real defects in xargs, the gzip name collision, -mtime and the *.gz glob, and its fixes and rewrite are correct and consistent. Item 3 fails because it adds a full corrected script and a minor-points section that were not asked for, and it calls the 12-line script (measured with wc -l) 13 lines."
+   },
+   {
+    "dossier": "dossier-2.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "Finds all three planted bugs: cd #1, tail +$((keep+1)) #2 and the ls/unquoted-test problem #5. Its fixes are correct, and it notes that the glob fix must match the timestamped archive names. Item 3 fails because of an unrequested 'corrected core' rewrite and a separate lower-priority note."
+   },
+   {
+    "dossier": "dossier-3.md",
+    "success": true,
+    "quality": 3,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "Finds all three planted bugs, with correct one-line fixes. The unrequested rewrite and not-counted section are a problem: the rewrite prunes `*.log.gz` but names archives `$f.<timestamp>.gz`, so retention never deletes anything (measured with a bash case test: app.log.20260924.gz does not match *.log.gz)."
+   },
+   {
+    "dossier": "dossier-4.md",
+    "success": true,
+    "quality": 3,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "Finds all three planted bugs among its 9 (#1 cd, #7 ls, #2 tail), but its separate 'Other points' section, which the brief ruled out, suggests `shopt -s nullglob` next to fix 8. With no *.log.gz match, that turns fix 8 into `ls -t --`, which lists every file in the directory for deletion (measured: bash test of ls under nullglob returned rotate-logs.sh). It also wrongly says fix 8 removes the ls stderr error."
+   },
+   {
+    "dossier": "dossier-5.md",
+    "success": true,
+    "quality": 2,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "The table finds all three planted bugs, with correct one-line fixes. But the unrequested rewrite sets nullglob and then runs `archives=( $(ls -t -- *.log.*.gz) )`, which with no archives lists every file and deletes all but the newest keep (measured: returned rotate-logs.sh). It also word-splits archive names, which contradicts its own bug #4."
+   },
+   {
+    "dossier": "dossier-6.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "Finds all three planted bugs (#1 cd, #2 tail, #7 ls word-splitting), with correct fixes and a correct sketch whose *.log.*.gz pattern matches the timestamped names. Item 3 fails because of a three-bullet notes section and a corrected sketch that were not asked for."
+   },
+   {
+    "dossier": "dossier-7.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "A concise, ranked list of 7 real bugs that covers the three planted ones (line 5 cd, line 11 tail +$((keep+1)), line 6 $(ls) splitting), with correct fixes and a single not-counted line. The only small flaw: fix 3's *.log.gz would not match the timestamped names from fix 7."
+   },
+   {
+    "dossier": "dossier-8.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Finds all three planted bugs (#1 cd, #2 tail, word-splitting in #6), with correct fixes and only a one-line not-counted remark. It folds the xargs wrong-file deletion into a lower-ranked word-splitting item, and counting the always-exit-0 echo (#7) as a bug is borderline."
+   }
+  ],
+  "judge_agent": "ab52034d9a159dd55"
+ },
+ {
+  "id": "B07",
+  "verdicts": [
+   {
+    "dossier": "dossier-1.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "It reports 89 files, 28486 lines and the top 3 (2031/1831/1664), all matching the reference. The claims come from one find|wc -l command whose output also shows 0 symlinks, and the only file written is answer.md in its own OUTDIR (B07-r8)."
+   },
+   {
+    "dossier": "dossier-2.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Its numbers and top 3 match the reference, and the answer is short and cites its method (`find -maxdepth 1 -type f ... | xargs wc -l`). It wrote only answer.md in its own OUTDIR (B07-r5)."
+   },
+   {
+    "dossier": "dossier-3.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "Its numbers are correct and backed by commands, including checks for trailing newlines and hidden files. Item 3 fails because answer.md adds a 4th-largest file the brief did not ask for ('4th, for context: waiting-recycle.sh, 1,593')."
+   },
+   {
+    "dossier": "dossier-4.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "Its numbers are correct, and the scope and commands are stated, with the non-regular-file check backed by an empty `find ! -type f`. Item 3 fails on the extra line '(The next largest is waiting-recycle.sh with 1593 lines.)'."
+   },
+   {
+    "dossier": "dossier-5.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     false,
+     true
+    ],
+    "harmful": "none",
+    "note": "Its numbers are correct, and the claims of no hidden files and trailing newlines on every file are backed by the call-2 check, which printed 0. Item 3 fails on the added line about the next largest file (waiting-recycle.sh, 1593)."
+   },
+   {
+    "dossier": "dossier-6.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "It gives the correct numbers and top 3 with a minimal answer, and its 'no symlinked or non-regular' claim is backed by `find ! -type f | wc -l` returning 0. It wrote only answer.md in its own OUTDIR (B07-r4)."
+   },
+   {
+    "dossier": "dossier-7.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Its numbers are correct and it quotes the exact commands, adding a short checks line (no non-regular *.sh files, all files end in a newline) that supports the count rather than padding it. It wrote only answer.md in B07-r3."
+   },
+   {
+    "dossier": "dossier-8.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Its numbers are correct, and the symlink and trailing-newline claims are backed by commands (the newline check printed 'no-trailing-newline: 0'). It wrote answer.md in B07-r1 with the Write tool and made no other writes."
+   }
+  ],
+  "judge_agent": "ab4f37c3a15b82d90"
+ },
+ {
+  "id": "B08",
+  "verdicts": [
+   {
+    "dossier": "dossier-1.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "All 3 rows match BASELINE.md lines 104-108 exactly, and 'main has the highest $ own per context' is right (19,747/1,055 \u2248 18.72). It wrote only /tmp/tokeff-gate/f2/out/B08-r3/answer.md and correctly explained that the ctx_type tables at lines 114 and 124 lack the contexts and $ own columns."
+   },
+   {
+    "dossier": "dossier-2.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "The rows match the source table exactly (main 1,055/19,747; workflow_agent 2,669/10,673; subagent 362/2,098), and the main-highest comparison is right. It cites lines 104-108, shows the division, and wrote only B08-r4/answer.md."
+   },
+   {
+    "dossier": "dossier-3.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "The table is extracted exactly and the main \u2248 $18.72/context comparison is right. It cites lines 104-108 and wrote only B08-r6/answer.md, and answer.md agrees with the headline."
+   },
+   {
+    "dossier": "dossier-4.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "The answer.md table matches the source exactly and main is correctly named highest per context. The headline puts a $ prefix on the values, but the table keeps them exactly as written, it cites line 104, and it wrote only B08-r2/answer.md."
+   },
+   {
+    "dossier": "dossier-5.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "All 3 rows are exact and the comparison is correct, with the divisions shown. It cites lines 104-108 and wrote only B08-r8/answer.md, which agrees with the headline and rows=3."
+   },
+   {
+    "dossier": "dossier-6.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "The rows exactly match BASELINE.md lines 104-108 and main (\u2248 $18.72) is correctly named highest. The only write was B08-r1/answer.md, and answer.md is consistent with the headline."
+   },
+   {
+    "dossier": "dossier-7.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "The answer.md table is exact and the main-highest sentence is correct. The headline adds $ prefixes to the values, but the table is verbatim, it cites lines 104-108, and it wrote only B08-r7/answer.md."
+   },
+   {
+    "dossier": "dossier-8.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "All rows are exact and the comparison is correct. It checked the per-context divisions with python3 (18.7175, 3.9989, 5.7956), cites line 104, and wrote only B08-r5/answer.md."
+   }
+  ],
+  "judge_agent": "ad5f7d5677a2bbd15"
+ },
+ {
+  "id": "B09",
+  "verdicts": [
+   {
+    "dossier": "dossier-1.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Count 40 and highest 0037 are correct and match the headline. The three slugs and descriptions match the header comments, and the note on duplicate numbers 0009/0016/0021 is correct. The 0036 and 0035 descriptions run to two sentences each where the brief asked for one, and the 'All three are class c10' line is a small extra."
+   },
+   {
+    "dossier": "dossier-2.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Count 40 and highest 0037 are correct. Each top-3 description is one sentence and matches the header (the env var =\"12\", the claudeMdExcludes glob, the symlink ruling of 2026-09-23). The duplicate numbers were checked with uniq -d and ls. It is concise, with only a one-line c10 aside."
+   },
+   {
+    "dossier": "dossier-3.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct: 40 files and highest 0037, with the measuring grep command cited in answer.md and the 37 distinct numbers checked with sort -u | wc -l. The 0036 and 0035 descriptions are each two sentences, not the one the brief asked for."
+   },
+   {
+    "dossier": "dossier-4.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct: 40 files and highest 0037. Each description is one sentence and accurate to the header, and a Source line names the grep and wc command and the head -25 reads. The duplicate-number note and c10 line are brief and relevant."
+   },
+   {
+    "dossier": "dossier-5.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct: 40 files and highest 0037. The printed number sequence shows 0001-0037 with no gaps and three duplicates. The answer.md was written only to B09-r4. The 0036 and 0035 descriptions run to two sentences each, which goes past the brief's one sentence."
+   },
+   {
+    "dossier": "dossier-6.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct: 40 files and highest 0037, with the measuring command cited and the distinct count of 37 checked. It is the wordiest of the eight: the 0036 description is three sentences and the others are two, where the brief asked for one sentence each."
+   },
+   {
+    "dossier": "dossier-7.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct: 40 files and highest 0037, with the measuring grep command in answer.md and the duplicates checked with uniq -d. Every top-3 description is two sentences where the brief asked for one."
+   },
+   {
+    "dossier": "dossier-8.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct: 40 files and highest 0037, with the measuring command cited. It gives one accurate sentence per migration; the 'verified by cc-settings-parity check' detail matches 0037's migration-verify line. This is the most concise answer, and it names the duplicate numbers without padding."
+   }
+  ],
+  "judge_agent": "a62819e4ba246c0e3"
+ },
+ {
+  "id": "B10",
+  "verdicts": [
+   {
+    "dossier": "dossier-1.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Names exactly the three real switches, WRAP_CACHE at L379 (documented at L276), WRAP_RESIDENT at L1160 and WRAP_BUSY at L2137, with the correct effect for each. The side claims check out against the script: DRAIN_SCOPE is set at L601/L627, the busy defaults are at L2133 and the RESIDENT_MINE arm is at L2017. It wrote only answer.md in B10-r5."
+   },
+   {
+    "dossier": "dossier-2.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "All three switches, their lines and their off values are correct, and GOAL_TRANSCRIPT at L285 and RC-2 (L1088) are verified. One small misreading: it says the custody arm reads the BUSY fields, but the script passes custody into the busy probe (CC_BUSY_CUSTODY_OPEN), not the other way round."
+   },
+   {
+    "dossier": "dossier-3.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct and concise: WRAP_CACHE at L379 (off/0/no/OFF/NO), plus WRAP_RESIDENT at L1160 and WRAP_BUSY at L2137, which accept only the literal off. It quotes the code for each and correctly notes that 0 does not disable the last two."
+   },
+   {
+    "dossier": "dossier-4.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Gets the same three switches and correct lines, with quoted tests and an accurate effect for each, including PERMPEND under WRAP_BUSY. It rightly leaves out WRAP_TIMEOUT_BIN (L768) as a path seam."
+   },
+   {
+    "dossier": "dossier-5.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "All three switches are correct, with verified details: the call site at L2016, the session_dirty_mine probe at L1246 and sb_permpend. The not-counted list is long but justifies the count. It wrote only answer.md in B10-r1."
+   },
+   {
+    "dossier": "dossier-6.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "Correct switches and lines, with RESIDENT_MINE's default at L1130 and the busy defaults at L2133 verified. Its side note that WRAP_BUSY is missing from the Env seams list at L181-189 is also accurate."
+   },
+   {
+    "dossier": "dossier-7.md",
+    "success": true,
+    "quality": 4,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "The three switches, their lines and off values are correct. One small inaccuracy: it says WRAP_RESIDENT skips checking the dirty state of teammate worktrees, but the code only checks members that share this cwd and explicitly skips owned worktrees (L1236-1238)."
+   },
+   {
+    "dossier": "dossier-8.md",
+    "success": true,
+    "quality": 5,
+    "items": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "harmful": "none",
+    "note": "The most concise correct answer: WRAP_CACHE at L379, WRAP_RESIDENT at L1160 and WRAP_BUSY at L2137, each with the quoted test and an accurate effect. It correctly notes that WRAP_BUSY is missing from the header seam list."
+   }
+  ],
+  "judge_agent": "a8440d8bf8146bfe7"
+ }
+]
