@@ -1,0 +1,12 @@
+WORKFLOW agents: agents=5293 first_req_read==0: 1309 (24.7%)  median_prefix=105723 p90=151336
+   first-request create tokens: 5m=495,393,740 1h=0 read=75,416,984
+   runs with >=2 agents: 310; agents in them with first-req read>5k: 3951/5282
+   mean first-req read among reading agents=18930; median=21165; share of first-req prefix READ=0.132
+   first-request prefix cost re-priced at Opus 5.5 list ($4 in, 1.25x 5m write, $0.20 read): $2,492
+   models: [('claude-opus-5', 4653), ('claude-fable-5-1', 343), ('claude-opus-5-5', 261), ('claude-fable-5', 16), ('claude-sonnet-5', 15)]
+AGENT-TOOL subagents: agents=628 first_req_read==0: 169 (26.9%)  median_prefix=91690 p90=125220
+   first-request create tokens: 5m=47,997,341 1h=0 read=4,748,501
+   runs with >=2 agents: 79; agents in them with first-req read>5k: 345/592
+   mean first-req read among reading agents=10345; median=8970; share of first-req prefix READ=0.090
+   first-request prefix cost re-priced at Opus 5.5 list ($4 in, 1.25x 5m write, $0.20 read): $241
+   models: [('claude-opus-5', 513), ('claude-opus-5-5', 51), ('claude-sonnet-5', 36), ('claude-fable-5-1', 24), ('claude-fable-5', 3)]

@@ -1,0 +1,11 @@
+extract built_at=2026-09-23T23:02:00Z; control window --since 2026-09-09 (UTC midnight = same start)
+control meta: {"deduped": 162408, "files": 5026, "records": 386893, "repeats": 220321, "unkeyed": 0}
+class                                                   extract          control    delta%
+responses (deduped)                                     162,406          162,408    -0.001
+input                                                 1,229,381        1,229,385    -0.000
+cache_creation                                    1,089,871,511    1,089,875,536    -0.000
+cache_read                                       40,952,174,553   40,952,612,691    -0.001
+output, first record (control's method)              75,430,079       75,430,106    -0.000
+output, final record (extract output_tokens)        139,733,415       75,430,106   +85.249
+output_est, final + imputed (ESTIMATED)             161,487,018       75,430,106  +114.088
+per-model response count delta (extract - control): {'claude-opus-5-5': -2}

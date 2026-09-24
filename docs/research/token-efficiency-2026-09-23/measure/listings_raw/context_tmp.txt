@@ -1,0 +1,334 @@
+## Context Usage
+
+**Model:** claude-opus-5-5[1m]  
+**Tokens:** 64.1k / 1m (6%)
+
+### Estimated usage by category
+
+| Category | Tokens | Percentage |
+|----------|--------|------------|
+| System prompt | 2.2k | 0.2% |
+| MCP tools | 629 | 0.1% |
+| MCP tools (deferred) | 367.7k | 36.8% |
+| System tools (deferred) | 14.1k | 1.4% |
+| Custom agents | 1.4k | 0.1% |
+| Memory files | 48.2k | 4.8% |
+| Skills | 10k | 1.0% |
+| Messages | 1.7k | 0.2% |
+| Compact buffer | 3k | 0.3% |
+| Free space | 932.9k | 93.3% |
+
+### MCP Tools
+
+| Tool | Server | Tokens |
+|------|--------|--------|
+| mcp__claude_ai_Claude_Docs__batch | claude_ai_Claude_Docs | 156 |
+| mcp__claude_ai_Claude_Docs__create | claude_ai_Claude_Docs | 242 |
+| mcp__claude_ai_Claude_Docs__delete | claude_ai_Claude_Docs | 325 |
+| mcp__claude_ai_Claude_Docs__export | claude_ai_Claude_Docs | 307 |
+| mcp__claude_ai_Claude_Docs__guide | claude_ai_Claude_Docs | 191 |
+| mcp__claude_ai_Claude_Docs__query | claude_ai_Claude_Docs | 172 |
+| mcp__claude_ai_Claude_Docs__read | claude_ai_Claude_Docs | 307 |
+| mcp__claude_ai_Claude_Docs__update | claude_ai_Claude_Docs | 282 |
+| mcp__claude_ai_uidotsh__uidotsh_fetch | claude_ai_uidotsh | 266 |
+| mcp__motion__search-motion-docs | motion | 641 |
+| mcp__motion-plus__generate-css-easing | motion-plus | 570 |
+| mcp__motion-plus__open-transition-editor | motion-plus | 407 |
+| mcp__motion-plus__save-transition | motion-plus | 334 |
+| mcp__motion-plus__search-motion-source | motion-plus | 357 |
+| mcp__ms365__accept-calendar-event | ms365 | 667 |
+| mcp__ms365__add-excel-table-rows | ms365 | 998 |
+| mcp__ms365__add-mail-attachment | ms365 | 1.1k |
+| mcp__ms365__cancel-calendar-event | ms365 | 934 |
+| mcp__ms365__clear-excel-range | ms365 | 920 |
+| mcp__ms365__copy-drive-item | ms365 | 1.8k |
+| mcp__ms365__copy-mail-message | ms365 | 684 |
+| mcp__ms365__create-calendar | ms365 | 7.7k |
+| mcp__ms365__create-calendar-event | ms365 | 5.8k |
+| mcp__ms365__create-contact-child-folder | ms365 | 3.9k |
+| mcp__ms365__create-contact-folder | ms365 | 3.7k |
+| mcp__ms365__create-contact-in-folder | ms365 | 3k |
+| mcp__ms365__create-draft-email | ms365 | 3.4k |
+| mcp__ms365__create-drive-item-preview | ms365 | 836 |
+| mcp__ms365__create-drive-item-share-link | ms365 | 1.4k |
+| mcp__ms365__create-excel-chart | ms365 | 772 |
+| mcp__ms365__create-excel-table | ms365 | 960 |
+| mcp__ms365__create-focused-inbox-override | ms365 | 872 |
+| mcp__ms365__create-forward-draft | ms365 | 3.6k |
+| mcp__ms365__create-mail-attachment-upload-session | ms365 | 1.3k |
+| mcp__ms365__create-mail-child-folder | ms365 | 8.9k |
+| mcp__ms365__create-mail-folder | ms365 | 8.8k |
+| mcp__ms365__create-mail-rule | ms365 | 4.5k |
+| mcp__ms365__create-my-calendar-permission | ms365 | 1.3k |
+| mcp__ms365__create-onedrive-folder | ms365 | 11.9k |
+| mcp__ms365__create-onenote-notebook | ms365 | 6.4k |
+| mcp__ms365__create-onenote-page | ms365 | 6.5k |
+| mcp__ms365__create-onenote-section | ms365 | 6.3k |
+| mcp__ms365__create-onenote-section-page | ms365 | 6.5k |
+| mcp__ms365__create-outlook-category | ms365 | 880 |
+| mcp__ms365__create-outlook-contact | ms365 | 2.7k |
+| mcp__ms365__create-planner-bucket | ms365 | 4.2k |
+| mcp__ms365__create-planner-task | ms365 | 3.9k |
+| mcp__ms365__create-planner-task-message | ms365 | 2.3k |
+| mcp__ms365__create-reply-all-draft | ms365 | 4k |
+| mcp__ms365__create-reply-draft | ms365 | 4k |
+| mcp__ms365__create-specific-calendar-event | ms365 | 5.8k |
+| mcp__ms365__create-subscription | ms365 | 3.3k |
+| mcp__ms365__create-todo-linked-resource | ms365 | 1.1k |
+| mcp__ms365__create-todo-task | ms365 | 4.9k |
+| mcp__ms365__create-todo-task-list | ms365 | 5.2k |
+| mcp__ms365__create-upload-session | ms365 | 1.7k |
+| mcp__ms365__decline-calendar-event | ms365 | 1k |
+| mcp__ms365__delete-calendar | ms365 | 598 |
+| mcp__ms365__delete-calendar-event | ms365 | 675 |
+| mcp__ms365__delete-contact-folder | ms365 | 668 |
+| mcp__ms365__delete-drive-item-permission | ms365 | 801 |
+| mcp__ms365__delete-excel-range | ms365 | 850 |
+| mcp__ms365__delete-excel-table-row | ms365 | 777 |
+| mcp__ms365__delete-focused-inbox-override | ms365 | 673 |
+| mcp__ms365__delete-mail-attachment | ms365 | 635 |
+| mcp__ms365__delete-mail-folder | ms365 | 654 |
+| mcp__ms365__delete-mail-message | ms365 | 618 |
+| mcp__ms365__delete-mail-rule | ms365 | 696 |
+| mcp__ms365__delete-my-calendar-permission | ms365 | 664 |
+| mcp__ms365__delete-onedrive-file | ms365 | 627 |
+| mcp__ms365__delete-onenote-page | ms365 | 575 |
+| mcp__ms365__delete-outlook-contact | ms365 | 538 |
+| mcp__ms365__delete-planner-bucket | ms365 | 594 |
+| mcp__ms365__delete-planner-task-message | ms365 | 805 |
+| mcp__ms365__delete-specific-calendar-event | ms365 | 681 |
+| mcp__ms365__delete-subscription | ms365 | 676 |
+| mcp__ms365__delete-todo-linked-resource | ms365 | 770 |
+| mcp__ms365__delete-todo-task | ms365 | 640 |
+| mcp__ms365__delete-todo-task-list | ms365 | 633 |
+| mcp__ms365__dismiss-calendar-event-reminder | ms365 | 608 |
+| mcp__ms365__download-bytes | ms365 | 667 |
+| mcp__ms365__download-bytes-to-file | ms365 | 880 |
+| mcp__ms365__format-excel-range | ms365 | 2.5k |
+| mcp__ms365__format-excel-range-border | ms365 | 1k |
+| mcp__ms365__format-excel-range-fill | ms365 | 858 |
+| mcp__ms365__format-excel-range-font | ms365 | 982 |
+| mcp__ms365__forward-calendar-event | ms365 | 988 |
+| mcp__ms365__forward-mail-message | ms365 | 3.9k |
+| mcp__ms365__get-calendar-event | ms365 | 998 |
+| mcp__ms365__get-calendar-view | ms365 | 1.6k |
+| mcp__ms365__get-current-user | ms365 | 909 |
+| mcp__ms365__get-download-url | ms365 | 605 |
+| mcp__ms365__get-drive-delta | ms365 | 1.6k |
+| mcp__ms365__get-drive-item | ms365 | 987 |
+| mcp__ms365__get-drive-root-item | ms365 | 700 |
+| mcp__ms365__get-excel-range | ms365 | 719 |
+| mcp__ms365__get-excel-range-format | ms365 | 1.1k |
+| mcp__ms365__get-excel-table | ms365 | 955 |
+| mcp__ms365__get-excel-used-range | ms365 | 821 |
+| mcp__ms365__get-mail-message | ms365 | 759 |
+| mcp__ms365__get-mail-message-mime | ms365 | 696 |
+| mcp__ms365__get-mail-tips | ms365 | 863 |
+| mcp__ms365__get-mailbox-settings | ms365 | 1.2k |
+| mcp__ms365__get-my-profile | ms365 | 844 |
+| mcp__ms365__get-onenote-page-content | ms365 | 501 |
+| mcp__ms365__get-outlook-contact | ms365 | 750 |
+| mcp__ms365__get-planner-bucket | ms365 | 785 |
+| mcp__ms365__get-planner-plan | ms365 | 723 |
+| mcp__ms365__get-planner-task | ms365 | 778 |
+| mcp__ms365__get-planner-task-details | ms365 | 772 |
+| mcp__ms365__get-specific-calendar-event | ms365 | 1k |
+| mcp__ms365__get-specific-calendar-view | ms365 | 1.7k |
+| mcp__ms365__get-subscription | ms365 | 691 |
+| mcp__ms365__get-todo-task | ms365 | 925 |
+| mcp__ms365__graph-batch | ms365 | 998 |
+| mcp__ms365__insert-excel-range | ms365 | 861 |
+| mcp__ms365__list-accounts | ms365 | 131 |
+| mcp__ms365__list-all-onenote-sections | ms365 | 1k |
+| mcp__ms365__list-calendar-event-instances | ms365 | 1.7k |
+| mcp__ms365__list-calendar-events | ms365 | 1.3k |
+| mcp__ms365__list-calendar-events-delta | ms365 | 1.4k |
+| mcp__ms365__list-calendar-view-delta | ms365 | 1.4k |
+| mcp__ms365__list-calendars | ms365 | 1k |
+| mcp__ms365__list-contact-folder-child-folders | ms365 | 1.2k |
+| mcp__ms365__list-contact-folder-contacts | ms365 | 1.3k |
+| mcp__ms365__list-contact-folders | ms365 | 1.2k |
+| mcp__ms365__list-drive-item-permissions | ms365 | 1.2k |
+| mcp__ms365__list-drive-item-thumbnails | ms365 | 1.3k |
+| mcp__ms365__list-drive-item-versions | ms365 | 1.3k |
+| mcp__ms365__list-drives | ms365 | 992 |
+| mcp__ms365__list-excel-table-rows | ms365 | 1.3k |
+| mcp__ms365__list-excel-tables | ms365 | 1.2k |
+| mcp__ms365__list-excel-worksheets | ms365 | 1.2k |
+| mcp__ms365__list-focused-inbox-overrides | ms365 | 1.2k |
+| mcp__ms365__list-folder-files | ms365 | 1.2k |
+| mcp__ms365__list-mail-attachments | ms365 | 1.2k |
+| mcp__ms365__list-mail-child-folders | ms365 | 1.2k |
+| mcp__ms365__list-mail-folder-messages | ms365 | 1.5k |
+| mcp__ms365__list-mail-folder-messages-delta | ms365 | 1.5k |
+| mcp__ms365__list-mail-folders | ms365 | 1.2k |
+| mcp__ms365__list-mail-messages | ms365 | 1.5k |
+| mcp__ms365__list-mail-rules | ms365 | 1.2k |
+| mcp__ms365__list-my-calendar-permissions | ms365 | 1.2k |
+| mcp__ms365__list-onenote-notebook-sections | ms365 | 1.1k |
+| mcp__ms365__list-onenote-notebooks | ms365 | 979 |
+| mcp__ms365__list-onenote-pages | ms365 | 1.2k |
+| mcp__ms365__list-onenote-section-groups | ms365 | 1.2k |
+| mcp__ms365__list-onenote-section-pages | ms365 | 1.1k |
+| mcp__ms365__list-outlook-categories | ms365 | 1.1k |
+| mcp__ms365__list-outlook-contacts | ms365 | 1.1k |
+| mcp__ms365__list-plan-buckets | ms365 | 1.1k |
+| mcp__ms365__list-plan-tasks | ms365 | 1.1k |
+| mcp__ms365__list-planner-task-messages | ms365 | 1.3k |
+| mcp__ms365__list-planner-tasks | ms365 | 1k |
+| mcp__ms365__list-specific-calendar-events | ms365 | 1.3k |
+| mcp__ms365__list-subscriptions | ms365 | 1.2k |
+| mcp__ms365__list-supported-languages | ms365 | 976 |
+| mcp__ms365__list-supported-time-zones | ms365 | 1.2k |
+| mcp__ms365__list-todo-linked-resources | ms365 | 1.3k |
+| mcp__ms365__list-todo-task-lists | ms365 | 1.1k |
+| mcp__ms365__list-todo-tasks | ms365 | 1.3k |
+| mcp__ms365__login | ms365 | 124 |
+| mcp__ms365__logout | ms365 | 70 |
+| mcp__ms365__merge-excel-range | ms365 | 895 |
+| mcp__ms365__move-mail-message | ms365 | 668 |
+| mcp__ms365__move-rename-onedrive-item | ms365 | 11.9k |
+| mcp__ms365__parse-teams-url | ms365 | 191 |
+| mcp__ms365__reauthorize-subscription | ms365 | 656 |
+| mcp__ms365__remove-account | ms365 | 181 |
+| mcp__ms365__reply-all-mail-message | ms365 | 3.8k |
+| mcp__ms365__reply-mail-message | ms365 | 3.9k |
+| mcp__ms365__search-onedrive-files | ms365 | 1.2k |
+| mcp__ms365__select-account | ms365 | 181 |
+| mcp__ms365__send-draft-message | ms365 | 646 |
+| mcp__ms365__send-mail | ms365 | 3.6k |
+| mcp__ms365__share-drive-item | ms365 | 1.2k |
+| mcp__ms365__snooze-calendar-event-reminder | ms365 | 809 |
+| mcp__ms365__sort-excel-range | ms365 | 777 |
+| mcp__ms365__tentatively-accept-calendar-event | ms365 | 1.1k |
+| mcp__ms365__unmerge-excel-range | ms365 | 805 |
+| mcp__ms365__update-calendar | ms365 | 7.7k |
+| mcp__ms365__update-calendar-event | ms365 | 5.8k |
+| mcp__ms365__update-contact-folder | ms365 | 3.8k |
+| mcp__ms365__update-excel-range | ms365 | 972 |
+| mcp__ms365__update-excel-table-row | ms365 | 836 |
+| mcp__ms365__update-focused-inbox-override | ms365 | 1.1k |
+| mcp__ms365__update-mail-folder | ms365 | 8.8k |
+| mcp__ms365__update-mail-message | ms365 | 3.5k |
+| mcp__ms365__update-mail-rule | ms365 | 4.5k |
+| mcp__ms365__update-mailbox-settings | ms365 | 2.2k |
+| mcp__ms365__update-my-calendar-permission | ms365 | 1.3k |
+| mcp__ms365__update-outlook-contact | ms365 | 2.9k |
+| mcp__ms365__update-planner-bucket | ms365 | 4.3k |
+| mcp__ms365__update-planner-task | ms365 | 4.2k |
+| mcp__ms365__update-planner-task-details | ms365 | 853 |
+| mcp__ms365__update-specific-calendar-event | ms365 | 5.9k |
+| mcp__ms365__update-subscription | ms365 | 3.1k |
+| mcp__ms365__update-todo-task | ms365 | 5k |
+| mcp__ms365__update-todo-task-list | ms365 | 5.2k |
+| mcp__ms365__upload-file-content | ms365 | 780 |
+| mcp__ms365__upload-my-profile-photo | ms365 | 753 |
+| mcp__ms365__verify-login | ms365 | 80 |
+
+### Custom Agents
+
+| Agent Type | Source | Tokens |
+|------------|--------|--------|
+| deep-research | User | 533 |
+| deep-research-sonnet | User | 380 |
+| frontier-derivation | User | 209 |
+| motion-reviewer | User | 75 |
+| research-decomposition-critic | User | 155 |
+
+### Memory Files
+
+| Type | Path | Tokens |
+|------|------|--------|
+| User | /Users/chrisren/.claude-secondary/CLAUDE.md | 40.4k |
+| User | /Users/chrisren/.claude/rules/00-mission-board.md | 5.5k |
+| User | /Users/chrisren/.claude/rules/agent-operating-lessons.md | 2.4k |
+
+### Skills
+
+| Skill | Source | Tokens |
+|-------|--------|--------|
+| account-relogin | User | < 20 |
+| agent-browser | User | ~110 |
+| agent-teams | User | ~400 |
+| autonomous-authenticated-web-access | User | ~340 |
+| beautiful-mermaid-docs | User | ~220 |
+| browsermcp | User | < 20 |
+| cafe-wifi-optimization | User | < 20 |
+| cc-upgrade-gate | User | ~260 |
+| cc-version-audit | User | ~210 |
+| codex-security | User | < 20 |
+| coding-standards | User | < 20 |
+| corpus-to-skill | User | < 20 |
+| demo-recording | User | < 20 |
+| dia-agent | User | ~490 |
+| frontend-design-vue | User | ~90 |
+| frontier-campaign | User | < 20 |
+| frontier-hole | User | < 20 |
+| frontier-routing | User | < 20 |
+| frontier-run | User | ~280 |
+| grok-wiki-audit | User | < 20 |
+| grok-wiki-cli | User | ~200 |
+| grok-wiki-custom | User | ~150 |
+| ground-up | User | ~190 |
+| kpmg-deck | User | ~250 |
+| manual-command-delivery | User | ~480 |
+| model-upgrade | User | ~300 |
+| motion | User | < 20 |
+| outbound-drafting | User | ~190 |
+| outlook-cleanup | User | < 20 |
+| permission-harvest | User | < 20 |
+| plan-conventions | User | ~480 |
+| plan-update | User | ~100 |
+| pyramid-principle | User | < 20 |
+| pyramid-principle-full | User | ~240 |
+| react-best-practices | User | < 20 |
+| read-twitter | User | ~270 |
+| repo-wiki | User | < 20 |
+| research-subagents | User | ~430 |
+| resume-sessions | User | ~330 |
+| self-explaining-artifact | User | ~360 |
+| vercel-design-guidelines | User | ~80 |
+| video-understanding | User | < 20 |
+| visual-direction | User | < 20 |
+| accounts | User | ~150 |
+| are-we-done | User | ~40 |
+| compact-memory | User | ~120 |
+| deploy-check | User | < 20 |
+| desk | User | < 20 |
+| evolve-skill | User | < 20 |
+| fix-lint | User | < 20 |
+| handoff | User | ~150 |
+| harvest-skill | User | ~100 |
+| keep-laptop-alive | User | ~80 |
+| limit-recover | User | ~520 |
+| pr | User | < 20 |
+| recover | User | < 20 |
+| relogin | User | < 20 |
+| research | User | < 20 |
+| review | User | < 20 |
+| scaffold | User | < 20 |
+| ship | User | ~30 |
+| skill-promote | User | ~70 |
+| wrap | User | < 20 |
+| dataviz | Built-in | ~480 |
+| update-config | Built-in | ~240 |
+| keybindings-help | Built-in | ~80 |
+| code-review | Built-in | ~280 |
+| simplify | Built-in | ~60 |
+| fewer-permission-prompts | Built-in | ~60 |
+| loop | Built-in | ~120 |
+| schedule | Built-in | ~130 |
+| claude-api | Built-in | ~360 |
+| workflow-authoring | Built-in | ~80 |
+| run | Built-in | ~120 |
+| init | Built-in | < 20 |
+| security-review | Built-in | < 20 |
+| anthropic-skills:docs | claude.ai sync | < 20 |
+| anthropic-skills:docx | claude.ai sync | < 20 |
+| anthropic-skills:import-memory | claude.ai sync | < 20 |
+| anthropic-skills:morning | claude.ai sync | < 20 |
+| anthropic-skills:pdf | claude.ai sync | < 20 |
+| anthropic-skills:pptx | claude.ai sync | < 20 |
+| anthropic-skills:skill-creator | claude.ai sync | < 20 |
+| anthropic-skills:xlsx | claude.ai sync | < 20 |
+

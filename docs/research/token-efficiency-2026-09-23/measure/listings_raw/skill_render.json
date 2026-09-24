@@ -1,0 +1,2804 @@
+{
+ "listings": {
+  "main": 872,
+  "subagent": 346,
+  "workflow_agent": 2664
+ },
+ "per_skill": {
+  "account-relogin": {
+   "main": {
+    "described": 662,
+    "nameonly": 199,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 289,
+    "nameonly": 57,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 1748,
+    "nameonly": 916,
+    "listings": 2664
+   }
+  },
+  "accounts": {
+   "main": {
+    "described": 851,
+    "nameonly": 10,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 345,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "agent-browser": {
+   "main": {
+    "described": 846,
+    "nameonly": 15,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 345,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "agent-teams": {
+   "main": {
+    "described": 846,
+    "nameonly": 15,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 345,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "amplify-build": {
+   "main": {
+    "described": 71,
+    "nameonly": 45,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 8,
+    "nameonly": 23,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 740,
+    "nameonly": 254,
+    "listings": 2664
+   }
+  },
+  "anthropic-skills:docs": {
+   "main": {
+    "described": 0,
+    "nameonly": 85,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 56,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 341,
+    "listings": 2664
+   }
+  },
+  "anthropic-skills:docx": {
+   "main": {
+    "described": 0,
+    "nameonly": 85,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 56,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 341,
+    "listings": 2664
+   }
+  },
+  "anthropic-skills:import-memory": {
+   "main": {
+    "described": 0,
+    "nameonly": 85,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 56,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 341,
+    "listings": 2664
+   }
+  },
+  "anthropic-skills:morning": {
+   "main": {
+    "described": 0,
+    "nameonly": 85,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 56,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 341,
+    "listings": 2664
+   }
+  },
+  "anthropic-skills:pdf": {
+   "main": {
+    "described": 0,
+    "nameonly": 85,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 56,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 341,
+    "listings": 2664
+   }
+  },
+  "anthropic-skills:pptx": {
+   "main": {
+    "described": 0,
+    "nameonly": 85,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 56,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 341,
+    "listings": 2664
+   }
+  },
+  "anthropic-skills:skill-creator": {
+   "main": {
+    "described": 0,
+    "nameonly": 85,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 56,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 341,
+    "listings": 2664
+   }
+  },
+  "anthropic-skills:xlsx": {
+   "main": {
+    "described": 0,
+    "nameonly": 85,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 56,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 341,
+    "listings": 2664
+   }
+  },
+  "are-we-done": {
+   "main": {
+    "described": 847,
+    "nameonly": 14,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 345,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "artifact-capabilities": {
+   "main": {
+    "described": 662,
+    "nameonly": 0,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 210,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2321,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "artifact-design": {
+   "main": {
+    "described": 663,
+    "nameonly": 0,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 210,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2321,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "artifact-diagramming": {
+   "main": {
+    "described": 663,
+    "nameonly": 0,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 210,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2321,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "autonomous-authenticated-web-access": {
+   "main": {
+    "described": 846,
+    "nameonly": 15,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 345,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "autoreview-remaining-decisions": {
+   "main": {
+    "described": 0,
+    "nameonly": 116,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 31,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 994,
+    "listings": 2664
+   }
+  },
+  "autoreview-sweep": {
+   "main": {
+    "described": 0,
+    "nameonly": 116,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 31,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 994,
+    "listings": 2664
+   }
+  },
+  "beautiful-mermaid-docs": {
+   "main": {
+    "described": 846,
+    "nameonly": 15,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 345,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "bottle-reference-sourcing": {
+   "main": {
+    "described": 15,
+    "nameonly": 89,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 2,
+    "nameonly": 29,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 407,
+    "nameonly": 324,
+    "listings": 2664
+   }
+  },
+  "bottle-sourcing-per-bottle": {
+   "main": {
+    "described": 15,
+    "nameonly": 80,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 2,
+    "nameonly": 29,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 444,
+    "nameonly": 273,
+    "listings": 2664
+   }
+  },
+  "browsermcp": {
+   "main": {
+    "described": 272,
+    "nameonly": 589,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 91,
+    "nameonly": 255,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 836,
+    "nameonly": 1828,
+    "listings": 2664
+   }
+  },
+  "cafe-wifi-optimization": {
+   "main": {
+    "described": 0,
+    "nameonly": 202,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 144,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 386,
+    "listings": 2664
+   }
+  },
+  "cc-upgrade-gate": {
+   "main": {
+    "described": 252,
+    "nameonly": 609,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 65,
+    "nameonly": 281,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 441,
+    "nameonly": 2223,
+    "listings": 2664
+   }
+  },
+  "cc-version-audit": {
+   "main": {
+    "described": 526,
+    "nameonly": 335,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 169,
+    "nameonly": 177,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 1411,
+    "nameonly": 1253,
+    "listings": 2664
+   }
+  },
+  "check-latency": {
+   "main": {
+    "described": 29,
+    "nameonly": 87,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 19,
+    "nameonly": 12,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 361,
+    "nameonly": 633,
+    "listings": 2664
+   }
+  },
+  "chrome-stage1": {
+   "main": {
+    "described": 0,
+    "nameonly": 116,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 31,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 994,
+    "listings": 2664
+   }
+  },
+  "claude-api": {
+   "main": {
+    "described": 872,
+    "nameonly": 0,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 346,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "claude-in-chrome": {
+   "main": {
+    "described": 601,
+    "nameonly": 0,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 325,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2663,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "code-review": {
+   "main": {
+    "described": 801,
+    "nameonly": 71,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 318,
+    "nameonly": 28,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 1942,
+    "nameonly": 722,
+    "listings": 2664
+   }
+  },
+  "codex-security": {
+   "main": {
+    "described": 257,
+    "nameonly": 604,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 97,
+    "nameonly": 249,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 450,
+    "nameonly": 2214,
+    "listings": 2664
+   }
+  },
+  "coding-standards": {
+   "main": {
+    "described": 244,
+    "nameonly": 617,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 94,
+    "nameonly": 252,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 404,
+    "nameonly": 2260,
+    "listings": 2664
+   }
+  },
+  "compact-memory": {
+   "main": {
+    "described": 853,
+    "nameonly": 8,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 345,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "corpus-to-skill": {
+   "main": {
+    "described": 21,
+    "nameonly": 840,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 16,
+    "nameonly": 330,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 2664,
+    "listings": 2664
+   }
+  },
+  "dataviz": {
+   "main": {
+    "described": 872,
+    "nameonly": 0,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 346,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "demo-recording": {
+   "main": {
+    "described": 367,
+    "nameonly": 494,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 210,
+    "nameonly": 136,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 811,
+    "nameonly": 1853,
+    "listings": 2664
+   }
+  },
+  "dep-audit": {
+   "main": {
+    "described": 22,
+    "nameonly": 94,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 10,
+    "nameonly": 21,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 46,
+    "nameonly": 948,
+    "listings": 2664
+   }
+  },
+  "deploy-check": {
+   "main": {
+    "described": 579,
+    "nameonly": 282,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 223,
+    "nameonly": 123,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 1378,
+    "nameonly": 1286,
+    "listings": 2664
+   }
+  },
+  "deploy-status": {
+   "main": {
+    "described": 96,
+    "nameonly": 20,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 25,
+    "nameonly": 6,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 823,
+    "nameonly": 171,
+    "listings": 2664
+   }
+  },
+  "design": {
+   "main": {
+    "described": 496,
+    "nameonly": 0,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 173,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 1864,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "design-page": {
+   "main": {
+    "described": 79,
+    "nameonly": 37,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 18,
+    "nameonly": 13,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 709,
+    "nameonly": 285,
+    "listings": 2664
+   }
+  },
+  "design-page-stage1": {
+   "main": {
+    "described": 0,
+    "nameonly": 116,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 31,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 994,
+    "listings": 2664
+   }
+  },
+  "desk": {
+   "main": {
+    "described": 0,
+    "nameonly": 861,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 346,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 2664,
+    "listings": 2664
+   }
+  },
+  "dia-agent": {
+   "main": {
+    "described": 846,
+    "nameonly": 15,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 345,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "docs": {
+   "main": {
+    "described": 0,
+    "nameonly": 8,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "docx": {
+   "main": {
+    "described": 0,
+    "nameonly": 8,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "drizzle-migrations": {
+   "main": {
+    "described": 0,
+    "nameonly": 116,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 31,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 994,
+    "listings": 2664
+   }
+  },
+  "evolve-skill": {
+   "main": {
+    "described": 0,
+    "nameonly": 861,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 346,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 2664,
+    "listings": 2664
+   }
+  },
+  "exhaust-improvements": {
+   "main": {
+    "described": 40,
+    "nameonly": 76,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 10,
+    "nameonly": 21,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 57,
+    "nameonly": 937,
+    "listings": 2664
+   }
+  },
+  "fewer-permission-prompts": {
+   "main": {
+    "described": 872,
+    "nameonly": 0,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 346,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "fix-lint": {
+   "main": {
+    "described": 379,
+    "nameonly": 482,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 154,
+    "nameonly": 192,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 713,
+    "nameonly": 1951,
+    "listings": 2664
+   }
+  },
+  "frontend-design-vue": {
+   "main": {
+    "described": 107,
+    "nameonly": 754,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 1,
+    "nameonly": 345,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 330,
+    "nameonly": 2334,
+    "listings": 2664
+   }
+  },
+  "frontend-design:frontend-design": {
+   "main": {
+    "described": 251,
+    "nameonly": 7,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 97,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 450,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "frontier-campaign": {
+   "main": {
+    "described": 498,
+    "nameonly": 363,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 228,
+    "nameonly": 118,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 1082,
+    "nameonly": 1582,
+    "listings": 2664
+   }
+  },
+  "frontier-hole": {
+   "main": {
+    "described": 427,
+    "nameonly": 434,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 180,
+    "nameonly": 166,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 912,
+    "nameonly": 1752,
+    "listings": 2664
+   }
+  },
+  "frontier-routing": {
+   "main": {
+    "described": 0,
+    "nameonly": 861,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 346,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 2664,
+    "listings": 2664
+   }
+  },
+  "frontier-run": {
+   "main": {
+    "described": 658,
+    "nameonly": 203,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 259,
+    "nameonly": 87,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 1871,
+    "nameonly": 793,
+    "listings": 2664
+   }
+  },
+  "grok-wiki-audit": {
+   "main": {
+    "described": 0,
+    "nameonly": 341,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 173,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 800,
+    "listings": 2664
+   }
+  },
+  "grok-wiki-cli": {
+   "main": {
+    "described": 360,
+    "nameonly": 501,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 119,
+    "nameonly": 227,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 1583,
+    "nameonly": 1081,
+    "listings": 2664
+   }
+  },
+  "grok-wiki-custom": {
+   "main": {
+    "described": 170,
+    "nameonly": 691,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 31,
+    "nameonly": 315,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 383,
+    "nameonly": 2281,
+    "listings": 2664
+   }
+  },
+  "ground-up": {
+   "main": {
+    "described": 846,
+    "nameonly": 15,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 345,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "handoff": {
+   "main": {
+    "described": 858,
+    "nameonly": 3,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 345,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "harvest-skill": {
+   "main": {
+    "described": 453,
+    "nameonly": 408,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 134,
+    "nameonly": 212,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 1288,
+    "nameonly": 1376,
+    "listings": 2664
+   }
+  },
+  "import-memory": {
+   "main": {
+    "described": 0,
+    "nameonly": 8,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "improve": {
+   "main": {
+    "described": 19,
+    "nameonly": 97,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 6,
+    "nameonly": 25,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 171,
+    "nameonly": 823,
+    "listings": 2664
+   }
+  },
+  "init": {
+   "main": {
+    "described": 11,
+    "nameonly": 861,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 346,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 2664,
+    "listings": 2664
+   }
+  },
+  "investigate": {
+   "main": {
+    "described": 19,
+    "nameonly": 97,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 2,
+    "nameonly": 29,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 468,
+    "nameonly": 526,
+    "listings": 2664
+   }
+  },
+  "keep-laptop-alive": {
+   "main": {
+    "described": 477,
+    "nameonly": 384,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 172,
+    "nameonly": 174,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 1816,
+    "nameonly": 848,
+    "listings": 2664
+   }
+  },
+  "keybindings-help": {
+   "main": {
+    "described": 872,
+    "nameonly": 0,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 346,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "kpmg-deck": {
+   "main": {
+    "described": 358,
+    "nameonly": 503,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 117,
+    "nameonly": 229,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 1176,
+    "nameonly": 1488,
+    "listings": 2664
+   }
+  },
+  "limit-recover": {
+   "main": {
+    "described": 846,
+    "nameonly": 15,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 345,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "live-event": {
+   "main": {
+    "described": 103,
+    "nameonly": 13,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 31,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 994,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "loop": {
+   "main": {
+    "described": 872,
+    "nameonly": 0,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 346,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "manual-command-delivery": {
+   "main": {
+    "described": 833,
+    "nameonly": 28,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 345,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "model-upgrade": {
+   "main": {
+    "described": 183,
+    "nameonly": 678,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 38,
+    "nameonly": 308,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 906,
+    "nameonly": 1758,
+    "listings": 2664
+   }
+  },
+  "monitoring-ops": {
+   "main": {
+    "described": 0,
+    "nameonly": 116,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 31,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 994,
+    "listings": 2664
+   }
+  },
+  "morning": {
+   "main": {
+    "described": 0,
+    "nameonly": 8,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "motion": {
+   "main": {
+    "described": 251,
+    "nameonly": 610,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 97,
+    "nameonly": 249,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 450,
+    "nameonly": 2214,
+    "listings": 2664
+   }
+  },
+  "outbound-drafting": {
+   "main": {
+    "described": 670,
+    "nameonly": 191,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 301,
+    "nameonly": 45,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2391,
+    "nameonly": 273,
+    "listings": 2664
+   }
+  },
+  "outlook-cleanup": {
+   "main": {
+    "described": 0,
+    "nameonly": 861,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 346,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 2664,
+    "listings": 2664
+   }
+  },
+  "pdf": {
+   "main": {
+    "described": 0,
+    "nameonly": 8,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "permission-harvest": {
+   "main": {
+    "described": 0,
+    "nameonly": 636,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 306,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 2319,
+    "listings": 2664
+   }
+  },
+  "plan-conventions": {
+   "main": {
+    "described": 739,
+    "nameonly": 122,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 301,
+    "nameonly": 45,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2486,
+    "nameonly": 178,
+    "listings": 2664
+   }
+  },
+  "plan-update": {
+   "main": {
+    "described": 161,
+    "nameonly": 700,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 31,
+    "nameonly": 315,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 307,
+    "nameonly": 2357,
+    "listings": 2664
+   }
+  },
+  "post-event": {
+   "main": {
+    "described": 0,
+    "nameonly": 116,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 31,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 994,
+    "listings": 2664
+   }
+  },
+  "pptx": {
+   "main": {
+    "described": 0,
+    "nameonly": 8,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "pr": {
+   "main": {
+    "described": 104,
+    "nameonly": 757,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 54,
+    "nameonly": 292,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 277,
+    "nameonly": 2387,
+    "listings": 2664
+   }
+  },
+  "project-pass": {
+   "main": {
+    "described": 0,
+    "nameonly": 116,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 31,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 994,
+    "listings": 2664
+   }
+  },
+  "project-pass-readonly": {
+   "main": {
+    "described": 0,
+    "nameonly": 116,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 31,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 994,
+    "listings": 2664
+   }
+  },
+  "pyramid-principle": {
+   "main": {
+    "described": 855,
+    "nameonly": 6,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 346,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "pyramid-principle-full": {
+   "main": {
+    "described": 846,
+    "nameonly": 15,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 345,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "qa": {
+   "main": {
+    "described": 0,
+    "nameonly": 116,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 31,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 994,
+    "listings": 2664
+   }
+  },
+  "qa-commits": {
+   "main": {
+    "described": 7,
+    "nameonly": 109,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 1,
+    "nameonly": 30,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 994,
+    "listings": 2664
+   }
+  },
+  "react-best-practices": {
+   "main": {
+    "described": 292,
+    "nameonly": 569,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 131,
+    "nameonly": 215,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 884,
+    "nameonly": 1780,
+    "listings": 2664
+   }
+  },
+  "react-doctor": {
+   "main": {
+    "described": 11,
+    "nameonly": 105,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 1,
+    "nameonly": 30,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 157,
+    "nameonly": 837,
+    "listings": 2664
+   }
+  },
+  "read-twitter": {
+   "main": {
+    "described": 107,
+    "nameonly": 607,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 102,
+    "nameonly": 222,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 335,
+    "nameonly": 2194,
+    "listings": 2664
+   }
+  },
+  "recover": {
+   "main": {
+    "described": 0,
+    "nameonly": 617,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 306,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 2280,
+    "listings": 2664
+   }
+  },
+  "relogin": {
+   "main": {
+    "described": 29,
+    "nameonly": 832,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 43,
+    "nameonly": 303,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 13,
+    "nameonly": 2651,
+    "listings": 2664
+   }
+  },
+  "repo-wiki": {
+   "main": {
+    "described": 0,
+    "nameonly": 336,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 173,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 800,
+    "listings": 2664
+   }
+  },
+  "research": {
+   "main": {
+    "described": 619,
+    "nameonly": 242,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 252,
+    "nameonly": 94,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 1595,
+    "nameonly": 1069,
+    "listings": 2664
+   }
+  },
+  "research-subagents": {
+   "main": {
+    "described": 846,
+    "nameonly": 15,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 345,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "resume-sessions": {
+   "main": {
+    "described": 846,
+    "nameonly": 15,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 345,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "review": {
+   "main": {
+    "described": 0,
+    "nameonly": 861,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 346,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 2664,
+    "listings": 2664
+   }
+  },
+  "review-pr": {
+   "main": {
+    "described": 10,
+    "nameonly": 106,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 31,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 34,
+    "nameonly": 960,
+    "listings": 2664
+   }
+  },
+  "run": {
+   "main": {
+    "described": 872,
+    "nameonly": 0,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 346,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "scaffold": {
+   "main": {
+    "described": 77,
+    "nameonly": 784,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 12,
+    "nameonly": 334,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 144,
+    "nameonly": 2520,
+    "listings": 2664
+   }
+  },
+  "schedule": {
+   "main": {
+    "described": 870,
+    "nameonly": 0,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 346,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "security-audit": {
+   "main": {
+    "described": 0,
+    "nameonly": 116,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 31,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 994,
+    "listings": 2664
+   }
+  },
+  "security-review": {
+   "main": {
+    "described": 11,
+    "nameonly": 861,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 346,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 2664,
+    "listings": 2664
+   }
+  },
+  "self-explaining-artifact": {
+   "main": {
+    "described": 595,
+    "nameonly": 266,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 248,
+    "nameonly": 98,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2214,
+    "nameonly": 450,
+    "listings": 2664
+   }
+  },
+  "ship": {
+   "main": {
+    "described": 858,
+    "nameonly": 3,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 345,
+    "nameonly": 1,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "simplify": {
+   "main": {
+    "described": 872,
+    "nameonly": 0,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 346,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "skill-creator": {
+   "main": {
+    "described": 0,
+    "nameonly": 8,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "skill-promote": {
+   "main": {
+    "described": 547,
+    "nameonly": 314,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 143,
+    "nameonly": 203,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 1686,
+    "nameonly": 978,
+    "listings": 2664
+   }
+  },
+  "sync-debugging": {
+   "main": {
+    "described": 0,
+    "nameonly": 116,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 31,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 994,
+    "listings": 2664
+   }
+  },
+  "test-coverage-gap-mapper": {
+   "main": {
+    "described": 0,
+    "nameonly": 116,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 31,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 994,
+    "listings": 2664
+   }
+  },
+  "ui": {
+   "main": {
+    "described": 98,
+    "nameonly": 18,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 18,
+    "nameonly": 13,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 828,
+    "nameonly": 166,
+    "listings": 2664
+   }
+  },
+  "ui-local": {
+   "main": {
+    "described": 18,
+    "nameonly": 98,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 2,
+    "nameonly": 29,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 431,
+    "nameonly": 563,
+    "listings": 2664
+   }
+  },
+  "ui-off": {
+   "main": {
+    "described": 0,
+    "nameonly": 116,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 31,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 994,
+    "listings": 2664
+   }
+  },
+  "update-config": {
+   "main": {
+    "described": 872,
+    "nameonly": 0,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 346,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "venue-research": {
+   "main": {
+    "described": 19,
+    "nameonly": 97,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 6,
+    "nameonly": 25,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 171,
+    "nameonly": 823,
+    "listings": 2664
+   }
+  },
+  "vercel-design-guidelines": {
+   "main": {
+    "described": 179,
+    "nameonly": 682,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 32,
+    "nameonly": 314,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 375,
+    "nameonly": 2289,
+    "listings": 2664
+   }
+  },
+  "video-understanding": {
+   "main": {
+    "described": 258,
+    "nameonly": 603,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 178,
+    "nameonly": 168,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 920,
+    "nameonly": 1744,
+    "listings": 2664
+   }
+  },
+  "visual-direction": {
+   "main": {
+    "described": 0,
+    "nameonly": 202,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 144,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 392,
+    "listings": 2664
+   }
+  },
+  "workflow-authoring": {
+   "main": {
+    "described": 872,
+    "nameonly": 0,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 346,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 2664,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  },
+  "wrap": {
+   "main": {
+    "described": 189,
+    "nameonly": 672,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 86,
+    "nameonly": 260,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 793,
+    "nameonly": 1871,
+    "listings": 2664
+   }
+  },
+  "xlsx": {
+   "main": {
+    "described": 0,
+    "nameonly": 8,
+    "listings": 872
+   },
+   "subagent": {
+    "described": 0,
+    "nameonly": 0,
+    "listings": 346
+   },
+   "workflow_agent": {
+    "described": 0,
+    "nameonly": 0,
+    "listings": 2664
+   }
+  }
+ },
+ "sizes": {
+  "main": {
+   "n": 872,
+   "median_chars": 30080,
+   "p90_chars": 30097,
+   "max_chars": 30103,
+   "median_header": 82,
+   "median_described": 47,
+   "median_nameonly": 31
+  },
+  "subagent": {
+   "n": 346,
+   "median_chars": 30083,
+   "p90_chars": 30096,
+   "max_chars": 30103,
+   "median_header": 82,
+   "median_described": 46,
+   "median_nameonly": 33
+  },
+  "workflow_agent": {
+   "n": 2664,
+   "median_chars": 30088,
+   "p90_chars": 30102,
+   "max_chars": 30103,
+   "median_header": 82,
+   "median_described": 47,
+   "median_nameonly": 36
+  }
+ },
+ "read_errors": 0,
+ "examples": {
+  "main|30k": {
+   "file": "/Users/chrisren/.claude-quaternary/projects/-Users-chrisren-Development--worktrees-cf-vs-codex-ab/7ee5f341-7a3f-41bd-9277-10457d70ddf5.jsonl",
+   "described": [
+    "account-relogin",
+    "agent-browser",
+    "agent-teams",
+    "autonomous-authenticated-web-access",
+    "beautiful-mermaid-docs",
+    "cc-version-audit",
+    "demo-recording",
+    "dia-agent",
+    "frontier-campaign",
+    "frontier-hole",
+    "frontier-run",
+    "ground-up",
+    "manual-command-delivery",
+    "outbound-drafting",
+    "plan-conventions",
+    "pyramid-principle",
+    "pyramid-principle-full",
+    "read-twitter",
+    "research-subagents",
+    "resume-sessions",
+    "self-explaining-artifact",
+    "video-understanding",
+    "accounts",
+    "are-we-done",
+    "compact-memory",
+    "deploy-check",
+    "handoff",
+    "limit-recover",
+    "research",
+    "ship",
+    "skill-promote",
+    "dataviz",
+    "update-config",
+    "keybindings-help",
+    "code-review",
+    "simplify",
+    "fewer-permission-prompts",
+    "loop",
+    "schedule",
+    "claude-api",
+    "workflow-authoring",
+    "claude-in-chrome",
+    "run"
+   ],
+   "nameonly": [
+    "browsermcp",
+    "cafe-wifi-optimization",
+    "cc-upgrade-gate",
+    "codex-security",
+    "coding-standards",
+    "corpus-to-skill",
+    "frontend-design-vue",
+    "frontier-routing",
+    "grok-wiki-audit",
+    "grok-wiki-cli",
+    "grok-wiki-custom",
+    "kpmg-deck",
+    "model-upgrade",
+    "motion",
+    "outlook-cleanup",
+    "permission-harvest",
+    "plan-update",
+    "react-best-practices",
+    "repo-wiki",
+    "vercel-design-guidelines",
+    "visual-direction",
+    "desk",
+    "evolve-skill",
+    "fix-lint",
+    "harvest-skill",
+    "keep-laptop-alive",
+    "pr",
+    "recover",
+    "relogin",
+    "review",
+    "scaffold",
+    "wrap",
+    "init",
+    "security-review"
+   ],
+   "header_chars": 82,
+   "version": "2.1.260"
+  },
+  "subagent|30k": {
+   "file": "/Users/chrisren/.claude-quaternary/projects/-Users-chrisren-Development--worktrees-cf-vs-codex-ab/7ee5f341-7a3f-41bd-9277-10457d70ddf5/subagents/agent-a0474791e2cbb7df5.jsonl",
+   "described": [
+    "account-relogin",
+    "agent-browser",
+    "agent-teams",
+    "autonomous-authenticated-web-access",
+    "beautiful-mermaid-docs",
+    "cc-version-audit",
+    "demo-recording",
+    "dia-agent",
+    "frontier-campaign",
+    "frontier-hole",
+    "frontier-run",
+    "ground-up",
+    "manual-command-delivery",
+    "outbound-drafting",
+    "plan-conventions",
+    "pyramid-principle",
+    "pyramid-principle-full",
+    "read-twitter",
+    "research-subagents",
+    "resume-sessions",
+    "self-explaining-artifact",
+    "video-understanding",
+    "accounts",
+    "are-we-done",
+    "compact-memory",
+    "deploy-check",
+    "handoff",
+    "limit-recover",
+    "research",
+    "ship",
+    "skill-promote",
+    "dataviz",
+    "update-config",
+    "keybindings-help",
+    "code-review",
+    "simplify",
+    "fewer-permission-prompts",
+    "loop",
+    "schedule",
+    "claude-api",
+    "workflow-authoring",
+    "claude-in-chrome",
+    "run"
+   ],
+   "nameonly": [
+    "browsermcp",
+    "cafe-wifi-optimization",
+    "cc-upgrade-gate",
+    "codex-security",
+    "coding-standards",
+    "corpus-to-skill",
+    "frontend-design-vue",
+    "frontier-routing",
+    "grok-wiki-audit",
+    "grok-wiki-cli",
+    "grok-wiki-custom",
+    "kpmg-deck",
+    "model-upgrade",
+    "motion",
+    "outlook-cleanup",
+    "permission-harvest",
+    "plan-update",
+    "react-best-practices",
+    "repo-wiki",
+    "vercel-design-guidelines",
+    "visual-direction",
+    "desk",
+    "evolve-skill",
+    "fix-lint",
+    "harvest-skill",
+    "keep-laptop-alive",
+    "pr",
+    "recover",
+    "relogin",
+    "review",
+    "scaffold",
+    "wrap",
+    "init",
+    "security-review"
+   ],
+   "header_chars": 82,
+   "version": "2.1.260"
+  },
+  "workflow_agent|30k": {
+   "file": "/Users/chrisren/.claude-quaternary/projects/-Users-chrisren-Development--worktrees-wt-cc-140654-64740/52b82738-3304-4345-8e73-a2db313a6e9e/subagents/workflows/wf_396cb000-bdb/agent-a00d5d8f44a18e7a6.jsonl",
+   "described": [
+    "account-relogin",
+    "agent-browser",
+    "agent-teams",
+    "autonomous-authenticated-web-access",
+    "beautiful-mermaid-docs",
+    "demo-recording",
+    "dia-agent",
+    "frontend-design-vue",
+    "frontier-campaign",
+    "frontier-hole",
+    "frontier-run",
+    "ground-up",
+    "manual-command-delivery",
+    "outbound-drafting",
+    "plan-conventions",
+    "pyramid-principle",
+    "pyramid-principle-full",
+    "read-twitter",
+    "research-subagents",
+    "resume-sessions",
+    "self-explaining-artifact",
+    "check-latency",
+    "deploy-status",
+    "live-event",
+    "accounts",
+    "are-we-done",
+    "compact-memory",
+    "handoff",
+    "limit-recover",
+    "research",
+    "ship",
+    "skill-promote",
+    "dataviz",
+    "artifact-design",
+    "artifact-diagramming",
+    "artifact-capabilities",
+    "update-config",
+    "keybindings-help",
+    "simplify",
+    "fewer-permission-prompts",
+    "loop",
+    "schedule",
+    "claude-api",
+    "workflow-authoring",
+    "claude-in-chrome",
+    "run"
+   ],
+   "nameonly": [
+    "browsermcp",
+    "cc-upgrade-gate",
+    "cc-version-audit",
+    "codex-security",
+    "coding-standards",
+    "corpus-to-skill",
+    "frontier-routing",
+    "grok-wiki-audit",
+    "grok-wiki-cli",
+    "grok-wiki-custom",
+    "kpmg-deck",
+    "model-upgrade",
+    "motion",
+    "outlook-cleanup",
+    "permission-harvest",
+    "plan-update",
+    "react-best-practices",
+    "repo-wiki",
+    "vercel-design-guidelines",
+    "video-understanding",
+    "bottle-reference-sourcing",
+    "dep-audit",
+    "design-page",
+    "drizzle-migrations",
+    "improve",
+    "monitoring-ops",
+    "post-event",
+    "security-audit",
+    "sync-debugging",
+    "ui",
+    "venue-research",
+    "amplify-build",
+    "code-review",
+    "deploy-check",
+    "desk",
+    "evolve-skill",
+    "exhaust-improvements",
+    "fix-lint",
+    "harvest-skill",
+    "investigate",
+    "keep-laptop-alive",
+    "pr",
+    "project-pass",
+    "qa",
+    "qa-commits",
+    "react-doctor",
+    "recover",
+    "relogin",
+    "review",
+    "review-pr",
+    "scaffold",
+    "ui-local",
+    "ui-off",
+    "wrap",
+    "autoreview-remaining-decisions",
+    "autoreview-sweep",
+    "bottle-sourcing-per-bottle",
+    "chrome-stage1",
+    "design-page-stage1",
+    "project-pass-readonly",
+    "test-coverage-gap-mapper",
+    "init",
+    "security-review"
+   ],
+   "header_chars": 82,
+   "version": "2.1.260"
+  },
+  "main|8k": {
+   "file": "/Users/chrisren/.claude-quaternary/projects/-private-tmp-claude-501--Users-chrisren-Development--worktrees-wt-pool-3-7193ec2b-880b-4dd2-b9bb-47d3228c3192-scratchpad-leads-research/18227cc7-1b51-4f7c-861d-93efda60251b.jsonl",
+   "described": [
+    "accounts",
+    "handoff",
+    "ship",
+    "dataviz",
+    "update-config",
+    "keybindings-help",
+    "code-review",
+    "simplify",
+    "fewer-permission-prompts",
+    "loop",
+    "schedule",
+    "claude-api",
+    "workflow-authoring",
+    "run"
+   ],
+   "nameonly": [
+    "account-relogin",
+    "agent-browser",
+    "agent-teams",
+    "autonomous-authenticated-web-access",
+    "beautiful-mermaid-docs",
+    "browsermcp",
+    "cc-upgrade-gate",
+    "cc-version-audit",
+    "codex-security",
+    "coding-standards",
+    "corpus-to-skill",
+    "demo-recording",
+    "dia-agent",
+    "frontend-design-vue",
+    "frontier-campaign",
+    "frontier-hole",
+    "frontier-routing",
+    "frontier-run",
+    "grok-wiki-cli",
+    "grok-wiki-custom",
+    "ground-up",
+    "kpmg-deck",
+    "manual-command-delivery",
+    "model-upgrade",
+    "motion",
+    "outbound-drafting",
+    "outlook-cleanup",
+    "plan-conventions",
+    "plan-update",
+    "pyramid-principle",
+    "pyramid-principle-full",
+    "react-best-practices",
+    "read-twitter",
+    "research-subagents",
+    "resume-sessions",
+    "self-explaining-artifact",
+    "vercel-design-guidelines",
+    "video-understanding",
+    "are-we-done",
+    "compact-memory",
+    "deploy-check",
+    "desk",
+    "evolve-skill",
+    "fix-lint",
+    "harvest-skill",
+    "keep-laptop-alive",
+    "limit-recover",
+    "pr",
+    "relogin",
+    "research",
+    "review",
+    "scaffold",
+    "skill-promote",
+    "wrap",
+    "init",
+    "security-review"
+   ],
+   "header_chars": 82,
+   "version": "2.1.260"
+  },
+  "main|6k": {
+   "file": "/Users/chrisren/.claude-quaternary/projects/-private-tmp-ss-multiline-probe/7423b98d-ddd6-48c5-9f82-a10f609ad235.jsonl",
+   "described": [
+    "dataviz",
+    "update-config",
+    "keybindings-help",
+    "code-review",
+    "simplify",
+    "fewer-permission-prompts",
+    "loop",
+    "schedule",
+    "claude-api",
+    "workflow-authoring",
+    "run",
+    "init",
+    "security-review"
+   ],
+   "nameonly": [],
+   "header_chars": 82,
+   "version": "2.1.260"
+  },
+  "main|7k": {
+   "file": "/Users/chrisren/.claude-secondary/projects/-Users-chrisren-Development-claude-infrastructure/083205a9-2a00-48bb-b28e-0525cb1e64a8.jsonl",
+   "described": [
+    "dataviz",
+    "update-config",
+    "keybindings-help",
+    "code-review",
+    "simplify",
+    "fewer-permission-prompts",
+    "loop",
+    "schedule",
+    "claude-api",
+    "workflow-authoring",
+    "run"
+   ],
+   "nameonly": [
+    "account-relogin",
+    "agent-browser",
+    "agent-teams",
+    "autonomous-authenticated-web-access",
+    "beautiful-mermaid-docs",
+    "browsermcp",
+    "cafe-wifi-optimization",
+    "cc-upgrade-gate",
+    "cc-version-audit",
+    "codex-security",
+    "coding-standards",
+    "corpus-to-skill",
+    "demo-recording",
+    "dia-agent",
+    "frontend-design-vue",
+    "frontier-campaign",
+    "frontier-hole",
+    "frontier-routing",
+    "frontier-run",
+    "grok-wiki-audit",
+    "grok-wiki-cli",
+    "grok-wiki-custom",
+    "ground-up",
+    "kpmg-deck",
+    "manual-command-delivery",
+    "model-upgrade",
+    "motion",
+    "outbound-drafting",
+    "outlook-cleanup",
+    "permission-harvest",
+    "plan-conventions",
+    "plan-update",
+    "pyramid-principle",
+    "pyramid-principle-full",
+    "react-best-practices",
+    "read-twitter",
+    "repo-wiki",
+    "research-subagents",
+    "resume-sessions",
+    "self-explaining-artifact",
+    "vercel-design-guidelines",
+    "video-understanding",
+    "visual-direction",
+    "accounts",
+    "are-we-done",
+    "compact-memory",
+    "deploy-check",
+    "desk",
+    "evolve-skill",
+    "fix-lint",
+    "handoff",
+    "harvest-skill",
+    "keep-laptop-alive",
+    "limit-recover",
+    "pr",
+    "recover",
+    "relogin",
+    "research",
+    "review",
+    "scaffold",
+    "ship",
+    "skill-promote",
+    "wrap",
+    "init",
+    "security-review"
+   ],
+   "header_chars": 82,
+   "version": "2.1.260"
+  },
+  "subagent|8k": {
+   "file": "/Users/chrisren/.claude-tertiary/projects/-Users-chrisren-Development-claude-infrastructure/9737d339-6f4d-4c83-8748-4991d079849d/subagents/agent-a567da2401039ca57.jsonl",
+   "described": [
+    "pyramid-principle",
+    "dataviz",
+    "update-config",
+    "keybindings-help",
+    "code-review",
+    "simplify",
+    "fewer-permission-prompts",
+    "loop",
+    "schedule",
+    "claude-api",
+    "workflow-authoring",
+    "claude-in-chrome",
+    "run"
+   ],
+   "nameonly": [
+    "account-relogin",
+    "agent-browser",
+    "agent-teams",
+    "autonomous-authenticated-web-access",
+    "beautiful-mermaid-docs",
+    "browsermcp",
+    "cafe-wifi-optimization",
+    "cc-upgrade-gate",
+    "cc-version-audit",
+    "codex-security",
+    "coding-standards",
+    "corpus-to-skill",
+    "demo-recording",
+    "dia-agent",
+    "frontend-design-vue",
+    "frontier-campaign",
+    "frontier-hole",
+    "frontier-routing",
+    "frontier-run",
+    "grok-wiki-audit",
+    "grok-wiki-cli",
+    "grok-wiki-custom",
+    "ground-up",
+    "kpmg-deck",
+    "manual-command-delivery",
+    "model-upgrade",
+    "motion",
+    "outbound-drafting",
+    "outlook-cleanup",
+    "permission-harvest",
+    "plan-conventions",
+    "plan-update",
+    "pyramid-principle-full",
+    "react-best-practices",
+    "read-twitter",
+    "repo-wiki",
+    "research-subagents",
+    "resume-sessions",
+    "self-explaining-artifact",
+    "vercel-design-guidelines",
+    "video-understanding",
+    "visual-direction",
+    "accounts",
+    "are-we-done",
+    "compact-memory",
+    "deploy-check",
+    "desk",
+    "evolve-skill",
+    "fix-lint",
+    "handoff",
+    "harvest-skill",
+    "keep-laptop-alive",
+    "limit-recover",
+    "pr",
+    "recover",
+    "relogin",
+    "research",
+    "review",
+    "scaffold",
+    "ship",
+    "skill-promote",
+    "wrap",
+    "frontend-design:frontend-design",
+    "init",
+    "security-review",
+    "anthropic-skills:docs",
+    "anthropic-skills:docx",
+    "anthropic-skills:import-memory",
+    "anthropic-skills:morning",
+    "anthropic-skills:pdf",
+    "anthropic-skills:pptx",
+    "anthropic-skills:skill-creator",
+    "anthropic-skills:xlsx"
+   ],
+   "header_chars": 82,
+   "version": "2.1.280"
+  }
+ }
+}

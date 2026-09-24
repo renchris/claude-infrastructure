@@ -1,3 +1,9 @@
 # The shared extract is ~1 GB and fully re-derivable: python3 scripts/extract.py (see data/EXTRACT.md).
 data/*.sqlite
 data/*.sqlite-*
+# Bulky or transcript-derived intermediates: re-derivable from the scripts, and raw samples may quote
+# transcript content. The committed record is the reports, the scripts and the small JSON summaries.
+data/*.jsonl
+data/*samples*
+measure/growth_work/
+*.npz

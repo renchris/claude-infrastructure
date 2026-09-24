@@ -1,0 +1,114 @@
+{
+ "by_ctx": [
+  {
+   "ctx_type": "main",
+   "n": 75953,
+   "chars": 91755977,
+   "usd_own": 2475.874134045814,
+   "usd_o55": 1210.2468699867723,
+   "mean_later_reads": 148.11888276330572
+  },
+  {
+   "ctx_type": "subagent",
+   "n": 15392,
+   "chars": 45363974,
+   "usd_own": 400.656475253415,
+   "usd_o55": 223.8159570736002,
+   "mean_later_reads": 25.190883511536295
+  },
+  {
+   "ctx_type": "workflow_agent",
+   "n": 61031,
+   "chars": 162258948,
+   "usd_own": 1249.1322162847162,
+   "usd_o55": 711.6322662847236,
+   "mean_later_reads": 20.438952338248093
+  }
+ ],
+ "caps": [
+  {
+   "cap": 8000,
+   "subset": "all",
+   "n": 7989,
+   "gross_usd_own": 1070.6195784486597,
+   "gross_usd_o55": 572.0514661965597
+  },
+  {
+   "cap": 8000,
+   "subset": "deliberate_reads",
+   "n": 4387,
+   "gross_usd_own": 618.002976421331,
+   "gross_usd_o55": 328.882716350816
+  },
+  {
+   "cap": 8000,
+   "subset": "other",
+   "n": 3602,
+   "gross_usd_own": 452.6166020273245,
+   "gross_usd_o55": 243.16874984574758
+  },
+  {
+   "cap": 12000,
+   "subset": "all",
+   "n": 3752,
+   "gross_usd_own": 682.8059628029982,
+   "gross_usd_o55": 366.028809695901
+  },
+  {
+   "cap": 12000,
+   "subset": "deliberate_reads",
+   "n": 2178,
+   "gross_usd_own": 411.989778602909,
+   "gross_usd_o55": 219.31833239312468
+  },
+  {
+   "cap": 12000,
+   "subset": "other",
+   "n": 1574,
+   "gross_usd_own": 270.8161842000882,
+   "gross_usd_o55": 146.7104773027766
+  },
+  {
+   "cap": 16000,
+   "subset": "all",
+   "n": 1951,
+   "gross_usd_own": 418.5955123843103,
+   "gross_usd_o55": 226.55117443807887
+  },
+  {
+   "cap": 16000,
+   "subset": "deliberate_reads",
+   "n": 1141,
+   "gross_usd_own": 247.4133491626268,
+   "gross_usd_o55": 133.23771009255188
+  },
+  {
+   "cap": 16000,
+   "subset": "other",
+   "n": 810,
+   "gross_usd_own": 171.18216322168365,
+   "gross_usd_o55": 93.31346434552668
+  },
+  {
+   "cap": 20000,
+   "subset": "all",
+   "n": 999,
+   "gross_usd_own": 251.70797256500688,
+   "gross_usd_o55": 136.60250973997373
+  },
+  {
+   "cap": 20000,
+   "subset": "deliberate_reads",
+   "n": 584,
+   "gross_usd_own": 143.61946203173198,
+   "gross_usd_o55": 78.56450709563687
+  },
+  {
+   "cap": 20000,
+   "subset": "other",
+   "n": 415,
+   "gross_usd_own": 108.0885105332748,
+   "gross_usd_o55": 58.038002644336785
+  }
+ ]
+}

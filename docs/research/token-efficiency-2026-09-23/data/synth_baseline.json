@@ -1,0 +1,419 @@
+{
+ "bash_result_program_share": {
+  "file_read": [
+   0.4080023658567374,
+   0.41013316850569476
+  ],
+  "search_list": [
+   0.1531397994799093,
+   0.15424964436691385
+  ],
+  "other": [
+   0.4388578346633532,
+   0.4356171871273913
+  ]
+ },
+ "first_prompt_brief": {
+  "own": 503.3578007904998,
+  "o55": 282.95967902419966,
+  "by": [
+   {
+    "ctx": "main",
+    "kind": "meta_user",
+    "chars": 1959602,
+    "n": 212,
+    "usd_own": 42.789978846900006,
+    "usd_o55": 21.61045951380002
+   },
+   {
+    "ctx": "main",
+    "kind": "user_prompt",
+    "chars": 3885652,
+    "n": 1119,
+    "usd_own": 104.47139423600012,
+    "usd_o55": 50.98298823200006
+   },
+   {
+    "ctx": "subagent",
+    "kind": "meta_user",
+    "chars": 20064,
+    "n": 66,
+    "usd_own": 0.10555948560000004,
+    "usd_o55": 0.09500413439999998
+   },
+   {
+    "ctx": "subagent",
+    "kind": "user_prompt",
+    "chars": 1105234,
+    "n": 361,
+    "usd_own": 13.05746488199999,
+    "usd_o55": 6.8577678399999975
+   },
+   {
+    "ctx": "workflow_agent",
+    "kind": "user_prompt",
+    "chars": 53678587,
+    "n": 3184,
+    "usd_own": 342.9334033399997,
+    "usd_o55": 203.41345930399962
+   }
+  ]
+ },
+ "billing_reconciliation": {
+  "initial_write_target": 4063.5917165000565,
+  "initial_write_estimated": 3271.800238493298,
+  "moved_read_to_write": 791.7914780067586,
+  "initial_uncached": 3.7334610000039254
+ },
+ "column_sums_own": {
+  "write": 9195.509999999998,
+  "read": 19005.700000000004,
+  "uncached": 6.82,
+  "output": 4309.2699999999995
+ },
+ "census_billing_own": {
+  "write": 9195.51171650006,
+  "read": 19005.82273350016,
+  "uncached": 6.823461000003922,
+  "output": 4309.266599999172
+ },
+ "fleet_own": 32517.424510999874,
+ "fleet_o55": 18318.682968600137,
+ "input_own": 28208.157911,
+ "input_o55": 15088.942608600013,
+ "output_own": 4309.266599999875,
+ "output_o55": 3229.7403600001235,
+ "initial_own": 13418.690837300037,
+ "initial_o55": 7139.899047799993,
+ "growth_own": 14789.4729263,
+ "growth_o55": 7949.048493599997,
+ "static_rows_sum_own": 12975.919999999995,
+ "static_rows_sum_o55": 7121.139999999998,
+ "initial_residual_own": -60.58696349045749,
+ "initial_residual_o55": -264.200631224204,
+ "growth_rows_sum_own": 14789.390000000018,
+ "output_token_shares": {
+  "think": 0.4716692728226588,
+  "text": 0.04633047916269939,
+  "tool": 0.4820002480146418
+ },
+ "table": [
+  {
+   "source": "memory: global CLAUDE.md",
+   "write": 1284.81,
+   "read": 2676.7,
+   "uncached": 0.0,
+   "output": 0.0,
+   "own": 3961.51,
+   "o55": 2223.93,
+   "initial": 3961.51,
+   "growth": 0.0,
+   "share_own": 0.1218,
+   "share_o55": 0.1214
+  },
+  {
+   "source": "memory: project CLAUDE.md + rules",
+   "write": 1122.26,
+   "read": 2390.82,
+   "uncached": 0.0,
+   "output": 0.0,
+   "own": 3513.08,
+   "o55": 1953.0,
+   "initial": 3513.08,
+   "growth": 0.0,
+   "share_own": 0.108,
+   "share_o55": 0.1066
+  },
+  {
+   "source": "file reads",
+   "write": 999.66,
+   "read": 1662.8,
+   "uncached": 0.56,
+   "output": 0.0,
+   "own": 2663.01,
+   "o55": 1456.28,
+   "initial": 0.0,
+   "growth": 2663.01,
+   "share_own": 0.0819,
+   "share_o55": 0.0795
+  },
+  {
+   "source": "assistant re-read: Bash commands",
+   "write": 760.11,
+   "read": 1896.02,
+   "uncached": 0.69,
+   "output": 0.0,
+   "own": 2656.82,
+   "o55": 1372.68,
+   "initial": 0.0,
+   "growth": 2656.82,
+   "share_own": 0.0817,
+   "share_o55": 0.0749
+  },
+  {
+   "source": "assistant re-read: thinking",
+   "write": 937.46,
+   "read": 1609.72,
+   "uncached": 0.72,
+   "output": 0.0,
+   "own": 2547.9,
+   "o55": 1386.8,
+   "initial": 0.0,
+   "growth": 2547.9,
+   "share_own": 0.0784,
+   "share_o55": 0.0757
+  },
+  {
+   "source": "command + other tool output",
+   "write": 768.47,
+   "read": 1435.0,
+   "uncached": 0.5,
+   "output": 0.0,
+   "own": 2203.99,
+   "o55": 1188.97,
+   "initial": 0.0,
+   "growth": 2203.99,
+   "share_own": 0.0678,
+   "share_o55": 0.0649
+  },
+  {
+   "source": "system prompt + tool schemas",
+   "write": 437.72,
+   "read": 1717.58,
+   "uncached": 0.0,
+   "output": 0.0,
+   "own": 2155.3,
+   "o55": 1079.85,
+   "initial": 2155.3,
+   "growth": 0.0,
+   "share_own": 0.0663,
+   "share_o55": 0.0589
+  },
+  {
+   "source": "output generated: tool calls (commands, file writes, briefs)",
+   "write": 0.0,
+   "read": 0.0,
+   "uncached": 0.0,
+   "output": 2077.07,
+   "own": 2077.07,
+   "o55": 1556.74,
+   "initial": 0.0,
+   "growth": 0.0,
+   "generation": 2077.07,
+   "share_own": 0.0639,
+   "share_o55": 0.085
+  },
+  {
+   "source": "output generated: thinking",
+   "write": 0.0,
+   "read": 0.0,
+   "uncached": 0.0,
+   "output": 2032.55,
+   "own": 2032.55,
+   "o55": 1523.37,
+   "initial": 0.0,
+   "growth": 0.0,
+   "generation": 2032.55,
+   "share_own": 0.0625,
+   "share_o55": 0.0832
+  },
+  {
+   "source": "listings: skills / agents / MCP / deferred names",
+   "write": 494.28,
+   "read": 1047.9,
+   "uncached": 0.0,
+   "output": 0.0,
+   "own": 1542.18,
+   "o55": 868.98,
+   "initial": 1542.18,
+   "growth": 0.0,
+   "share_own": 0.0474,
+   "share_o55": 0.0474
+  },
+  {
+   "source": "search + web results",
+   "write": 373.94,
+   "read": 706.79,
+   "uncached": 0.22,
+   "output": 0.0,
+   "own": 1080.96,
+   "o55": 588.01,
+   "initial": 0.0,
+   "growth": 1080.96,
+   "share_own": 0.0332,
+   "share_o55": 0.0321
+  },
+  {
+   "source": "user messages (prompts, commands, peer/teammate mail)",
+   "write": 310.46,
+   "read": 575.94,
+   "uncached": 0.01,
+   "output": 0.0,
+   "own": 886.4,
+   "o55": 485.72,
+   "initial": 503.36,
+   "growth": 383.04,
+   "share_own": 0.0273,
+   "share_o55": 0.0265
+  },
+  {
+   "source": "memory: MEMORY.md (auto-memory)",
+   "write": 237.61,
+   "read": 525.92,
+   "uncached": 0.0,
+   "output": 0.0,
+   "own": 763.53,
+   "o55": 421.77,
+   "initial": 763.53,
+   "growth": 0.0,
+   "share_own": 0.0235,
+   "share_o55": 0.023
+  },
+  {
+   "source": "hook injections",
+   "write": 147.15,
+   "read": 547.72,
+   "uncached": 0.05,
+   "output": 0.0,
+   "own": 694.89,
+   "o55": 349.72,
+   "initial": 258.09,
+   "growth": 436.8,
+   "share_own": 0.0214,
+   "share_o55": 0.0191
+  },
+  {
+   "source": "harness notices (token reminder, edited-file, env, other)",
+   "write": 220.87,
+   "read": 472.08,
+   "uncached": 0.12,
+   "output": 0.0,
+   "own": 693.12,
+   "o55": 373.25,
+   "initial": 135.2,
+   "growth": 557.92,
+   "share_own": 0.0213,
+   "share_o55": 0.0204
+  },
+  {
+   "source": "memory: global rules (mission board, rules essay)",
+   "write": 209.47,
+   "read": 437.56,
+   "uncached": 0.0,
+   "output": 0.0,
+   "own": 647.03,
+   "o55": 359.98,
+   "initial": 647.03,
+   "growth": 0.0,
+   "share_own": 0.0199,
+   "share_o55": 0.0197
+  },
+  {
+   "source": "history carry-over after context shrink",
+   "write": 268.06,
+   "read": 345.79,
+   "uncached": 0.0,
+   "output": 0.0,
+   "own": 613.85,
+   "o55": 337.15,
+   "initial": 0.0,
+   "growth": 613.85,
+   "share_own": 0.0189,
+   "share_o55": 0.0184
+  },
+  {
+   "source": "assistant re-read: other tool inputs + briefs",
+   "write": 240.41,
+   "read": 303.24,
+   "uncached": 0.08,
+   "output": 0.0,
+   "own": 543.74,
+   "o55": 306.66,
+   "initial": 0.0,
+   "growth": 543.74,
+   "share_own": 0.0167,
+   "share_o55": 0.0167
+  },
+  {
+   "source": "assistant re-read: text",
+   "write": 118.09,
+   "read": 296.4,
+   "uncached": 0.09,
+   "output": 0.0,
+   "own": 414.57,
+   "o55": 216.19,
+   "initial": 0.0,
+   "growth": 414.57,
+   "share_own": 0.0127,
+   "share_o55": 0.0118
+  },
+  {
+   "source": "listings re-sent + skill bodies",
+   "write": 126.9,
+   "read": 212.42,
+   "uncached": 0.04,
+   "output": 0.0,
+   "own": 339.35,
+   "o55": 185.78,
+   "initial": 0.0,
+   "growth": 339.35,
+   "share_own": 0.0104,
+   "share_o55": 0.0101
+  },
+  {
+   "source": "output generated: visible text",
+   "write": 0.0,
+   "read": 0.0,
+   "uncached": 0.0,
+   "output": 199.65,
+   "own": 199.65,
+   "o55": 149.64,
+   "initial": 0.0,
+   "growth": 0.0,
+   "generation": 199.65,
+   "share_own": 0.0061,
+   "share_o55": 0.0082
+  },
+  {
+   "source": "memory files re-attached mid-session",
+   "write": 81.87,
+   "read": 101.01,
+   "uncached": 0.0,
+   "output": 0.0,
+   "own": 182.88,
+   "o55": 111.75,
+   "initial": 0.0,
+   "growth": 182.88,
+   "share_own": 0.0056,
+   "share_o55": 0.0061
+  },
+  {
+   "source": "subagent / workflow returns",
+   "write": 40.7,
+   "read": 54.77,
+   "uncached": 0.0,
+   "output": 0.0,
+   "own": 95.5,
+   "o55": 51.8,
+   "initial": 0.0,
+   "growth": 95.5,
+   "share_own": 0.0029,
+   "share_o55": 0.0028
+  },
+  {
+   "source": "reconciliation residual",
+   "write": 15.21,
+   "read": -10.48,
+   "uncached": 3.74,
+   "output": 0.0,
+   "own": 8.56,
+   "o55": -229.37,
+   "initial": -60.59,
+   "growth": 69.14,
+   "share_own": 0.0003,
+   "share_o55": -0.0125
+  }
+ ],
+ "table_sum_own": 32517.439999999995,
+ "table_sum_o55": 18318.649999999998
+}

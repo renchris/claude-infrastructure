@@ -1,0 +1,116 @@
+{
+ "git commit -n blocked": {
+  "n": 8,
+  "only inside quotes/heredoc": 8,
+  "examples": [
+   "cd ~/Development/.worktrees/wt-7a40d116d06c; out=\"$(bats tests/reaper-horizo",
+   "cd ~/security-audit-targets/claude-infrastructure-dc12c8db && grep -n \"Last-",
+   "D=/private/tmp/claude-501/-Users-chrisren-Development-claude-infrastructure/e27fe852-bd67-",
+   "D=/private/tmp/claude-501/-Users-chrisren-Development-claude-infrastructure/e27fe852-bd67-",
+   "cd /private/tmp/claude-501/-Users-chrisren-Development-claude-infrastructure/e27fe852-bd67",
+   "mkdir -p ~/security-audit-skill/claude-infrastructure-hooks-dc12c8db/run-1/a"
+  ]
+ },
+ "--no-verify blocked": {
+  "n": 2,
+  "act present": 1,
+  "only inside quotes/heredoc": 1,
+  "examples": [
+   "cd ~/Development/.worktrees/wt-pool-2 echo \"== open.md 2908-2918 / 2972-2982"
+  ]
+ },
+ "DDL blocked": {
+  "n": 7,
+  "only inside quotes/heredoc": 7,
+  "examples": [
+   "cat > /tmp/fkprobe/probe.mjs <<'EOF' const { createClient } = await import('/Users/chrisre",
+   "cat > /tmp/w1b-commit-msg.txt <<'MSG' fix(auth): deleteUser revokes the departed principal",
+   "python3 - <<'PY' p='/tmp/w1b-route-b-packet.md' s=open(p).read() start=s.index('## 0. The ",
+   "cd ~/Development/.worktrees/wt-permission-harvest && cat > /private/tmp/clau",
+   "cd ~/Development/.worktrees/wt-feat-token-efficiency-2026-09-23/docs/researc",
+   "export PATH=/usr/bin:/bin; echo \"=== init_db creates ===\"; sed -n '/^session_index_init_db"
+  ]
+ },
+ "git add -f blocked": {
+  "n": 14,
+  "act absent": 9,
+  "only inside quotes/heredoc": 4,
+  "act present": 1,
+  "examples": [
+   "rm -f data/part-1.post-cue-restore.json && cat >> PUNCTUATION-PLAN.md <<'MD' ## Resolved 2",
+   "kill 83365 85088 95762 2>/dev/null; sleep 2 pgrep -f bottle-gen-production >/dev/null && e",
+   "cd ~/Development/claude-infrastructure && pgrep -f \"listen-on unix:/tmp/k\" >",
+   "export PATH=\"/opt/homebrew/bin:$PATH\" pgrep -f 'bash scripts/ship-land.sh' >/dev/null && e",
+   "cat > tests/handoff-fire-selfclose-refusal.bats <<'BATS' #!/usr/bin/env bats # handoff-fir",
+   "cd /tmp/wt-g2-converge && cat > tests/ship-land-converge-edge.bats <<'BATS' #!/usr/bin/env"
+  ]
+ },
+ "git add --force blocked": {
+  "n": 1,
+  "act absent": 1,
+  "examples": [
+   "cd ~/Development/-worktrees/accounts-wire-truth && git add tests/pool-floor."
+  ]
+ },
+ "Dangerous command pattern blocked": {
+  "n": 24,
+  "act present": 11,
+  "only inside quotes/heredoc": 13,
+  "examples": [
+   "cd ~/Development/.worktrees/ci-ms365-per-mailbox && L=$(mktemp -d); ln -s \"$PWD/scripts/cc",
+   "cat > /tmp/batch-e2e.sh <<'EOF' set -u cd ~/Development/wt-jev-breadth export HOME=/tmp/je",
+   "cd /tmp/wt-pfd && ls tests/ | grep -E \"cc-cannot|cc-owner\"; echo \"=== behavioural A/B: doe",
+   "cd ~/Development/.worktrees/wt-5a629c6465d1 /usr/bin/python3 - <<'PYEOF' p=\"",
+   "cd ~/Development/.worktrees/lr-detect-w2b-ii cat > /tmp/rows.bats <<'ROWS' #",
+   "mkdir -p ~/Development/.worktrees/exhaustive-drive/docs/research/exhaustive-"
+  ]
+ },
+ "PreToolUse:Bash hook error: [~/.claude/hooks/git-worktree-guard.sh]": {
+  "n": 46,
+  "act present": 33,
+  "act absent": 13,
+  "examples": [
+   "git branch -d land-collapsible-hdr 2>&1 | tail -2 git fetch origin main -q echo \"--- this ",
+   "cd ~/Development/reso-web-app git fetch origin main -q echo \"=== CONTENT VER",
+   "B=~/.reso/limit-recover/lr-research-2026-09-19/wave2/briefs cd ~/Development",
+   "cd ~/Development/.worktrees/voluntary-switch-lead git switch -q --detach ori",
+   "cd ~/Development/.worktrees/readme-pyramid git fetch origin main -q echo \"==",
+   "cd ~/Development/reso-web-app && git fetch origin main -q echo \"=== content verification ("
+  ]
+ },
+ "git identity write": {
+  "n": 25,
+  "act present": 12,
+  "only inside quotes/heredoc": 13,
+  "examples": [
+   "cd ~/Development/_worktrees/jev-integration python3 - <<'PY' p='tests/fixtur",
+   "cd ~/Development/_worktrees/jev-integration cat > tests/jev-anti-deference-a",
+   "cd /tmp/wt-g2-converge && cat > tests/ship-land-converge-edge.bats <<'BATS' #!/usr/bin/env",
+   "cd /tmp/wt-g2-converge && python3 - <<'PY' p='tests/ship-land-converge-edge.bats' s=open(p",
+   "cd ~/wt-rules-tiering && python3 - <<'PY' p='tests/rules-hook-budget-lint.ba",
+   "cd ~/Development/.worktrees/feat/wrap-ledger-resident-members; cat > tests/w"
+  ]
+ },
+ "Pattern kill blocked": {
+  "n": 34,
+  "act present": 19,
+  "act absent": 14,
+  "only inside quotes/heredoc": 1,
+  "examples": [
+   "ps -p 68667 >/dev/null 2>&1 && { echo \"pid 68667 still parked \u2014 killing\"; kill 68667 2>/de",
+   "CTLDIR=/private/tmp/claude-501/-Users-chrisren-Development--worktrees-wt-120e8054eb98/082b",
+   "cd ~/Development/.worktrees/wt-95cbba839b44 kill -TERM 16467 16406 2>/dev/nu",
+   "SL=$(pgrep -P 99806 2>/dev/null | head -1); echo \"ship-land child: ${SL:-none}\" pgrep -P \"",
+   "kill -0 99808 2>/dev/null && echo \"REAL LANDER 99808 ALIVE $(ps -o etime= -p 99808|tr -d '",
+   "bash ~/Development/.worktrees/lr-detect-w4/scripts/land-lock.sh --status 2>/"
+  ]
+ },
+ "curl-gate": {
+  "n": 21,
+  "act present": 20,
+  "only inside quotes/heredoc": 1,
+  "examples": [
+   "mkdir -p /private/tmp/claude-501/-Users-chrisren-Development--worktrees-wt-pool-3/7193ec2b"
+  ]
+ }
+}

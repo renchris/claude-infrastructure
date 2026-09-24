@@ -1,0 +1,32 @@
+fleet $ own=32517 opus55=18319; contexts={'main': 985, 'subagent': 361, 'workflow_agent': 2401}; T0={('main', '2.1.260'): 28534, ('main', '*'): 16135, ('subagent', '2.1.260'): 9262.0, ('subagent', '*'): 9262.0, ('main', '2.1.280'): 14302, ('subagent', '2.1.280'): 9175.5, ('workflow_agent', '2.1.260'): 23278, ('workflow_agent', '*'): 23156, ('workflow_agent', '2.1.280'): 7788.0, ('main', '2.1.114'): 15696, ('main', '2.1.183'): 15750.0}
+source                                                           ctx  medtok    A own    B own    B 5.5  share  by_ct
+global CLAUDE.md                                                3533   35918     3567     3917     2199  12.0%  {'main': 842, 'subagent': 328, 'workflow_agent': 2363}
+system prompt + tool schemas (T0)                               3747   23278        0     2155     1080   6.6%  {'main': 985, 'subagent': 361, 'workflow_agent': 2401}
+project rules agent-operating-lessons.md [infra]                1703   25656     1670     1824     1001   5.6%  {'main': 511, 'subagent': 188, 'workflow_agent': 1004}
+skill listing                                                   3518   11183     1027     1115      627   3.4%  {'main': 771, 'subagent': 346, 'workflow_agent': 2401}
+project CLAUDE.md [infra]                                       1703    2402      539      590      308   1.8%  {'main': 511, 'subagent': 188, 'workflow_agent': 1004}
+MEMORY.md [infra]                                               1756    9448      522      573      314   1.8%  {'main': 514, 'subagent': 188, 'workflow_agent': 1054}
+project rules agent-operating-lessons.md [reso]                  888   16313      323      350      203   1.1%  {'main': 114, 'subagent': 31, 'workflow_agent': 743}
+global rules essay (~/.claude/rules/agent-operating-lessons.md  3533    2379      314      339      184   1.0%  {'main': 842, 'subagent': 328, 'workflow_agent': 2363}
+project CLAUDE.md [reso]                                         888   14496      290      314      180   1.0%  {'main': 114, 'subagent': 31, 'workflow_agent': 743}
+mission board (~/.claude/rules/00-mission-board.md)             3372    3481      280      308      176   0.9%  {'main': 744, 'subagent': 320, 'workflow_agent': 2308}
+deferred tool names                                             3372    3543      241      265      153   0.8%  {'main': 640, 'subagent': 346, 'workflow_agent': 2386}
+SessionStart hook context                                        839    3980      207      238      128   0.7%  {'main': 839}
+project rules bottle-generation-ledger.md [reso]                 330   19287      192      215      138   0.7%  {'main': 85, 'subagent': 24, 'workflow_agent': 221}
+project rules agent-operating-lessons.md [other]                 606    8902      134      142       78   0.4%  {'main': 99, 'subagent': 44, 'workflow_agent': 463}
+agent listing                                                    640    2436      115      131       72   0.4%  {'main': 640}
+MEMORY.md [reso]                                                 888    4320       98      107       62   0.3%  {'main': 114, 'subagent': 31, 'workflow_agent': 743}
+MEMORY.md [other]                                                751    6470       78       84       46   0.3%  {'main': 137, 'subagent': 84, 'workflow_agent': 530}
+project rules agent-teams.md [reso]                              888    3130       62       68       39   0.2%  {'main': 114, 'subagent': 31, 'workflow_agent': 743}
+session_context (gitStatus, userEmail)                          3600     497       57       63       35   0.2%  {'main': 853, 'subagent': 361, 'workflow_agent': 2386}
+small setup attachments (env, model, auto_mode, date, ...)      3602     172       52       58       32   0.2%  {'main': 855, 'subagent': 361, 'workflow_agent': 2386}
+memory-block wrapper text                                       3533     424       41       45       25   0.1%  {'main': 841, 'subagent': 329, 'workflow_agent': 2363}
+MCP server instructions                                          601     814       26       30       17   0.1%  {'main': 601}
+UserPromptSubmit hook context (1st prompt)                       548     389       18       21       11   0.1%  {'main': 548}
+other pre-first-response attachments: edited_text_file            61    2927       12       14        7   0.0%  {'main': 61}
+project CLAUDE.md [other]                                        129    1071        8       10        6   0.0%  {'main': 42, 'subagent': 46, 'workflow_agent': 41}
+global rules other                                                12      22        0        0        0   0.0%  {'main': 12}
+other pre-first-response attachments: ultra_effort_exit            1      46        0        0        0   0.0%  {'main': 1}
+static attachments total (excl system+tools): {'usd_spec_own': 9874, 'usd_spec_opus55': 5157, 'usd_observed_own': 10821, 'usd_observed_opus55': 6041} share own 0.3328 share 5.5 0.3298
+prefix re-write rate (later responses whose static span was >50% written): {'main': {'later_responses': 81169, 'static_mostly_rewritten': 914, 'rate': 0.0113}, 'subagent': {'later_responses': 15085, 'static_mostly_rewritten': 74, 'rate': 0.0049}, 'workflow_agent': {'later_responses': 60372, 'static_mostly_rewritten': 461, 'rate': 0.0076}}
+static attachment tokens per context: {'main': {'median_tokens': 101940, 'p90': 140819}, 'subagent': {'median_tokens': 94192, 'p90': 117255}, 'workflow_agent': {'median_tokens': 94988, 'p90': 124328}}

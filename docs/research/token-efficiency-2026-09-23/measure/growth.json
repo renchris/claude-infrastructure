@@ -1,0 +1,4838 @@
+{
+ "calibration": {
+  "method": "robust OLS of the MEASURED prefix delta D=P(s+1)-P(s) on appended model-visible chars per class (scripts/growth_fit.py); B: D-out(s) on user-side classes, C: out(s) on assistant text/tool-call chars for responses without thinking",
+  "tokens_per_char_all": {
+   "tr_read": 0.4409,
+   "tr_bash": 0.4344,
+   "tr_web": 0.3812,
+   "tr_mcp": 0.5406,
+   "tr_other": 0.3955,
+   "att": 0.3769,
+   "prompt": 0.4399,
+   "meta": 0.393,
+   "n_tr": 32.2444,
+   "n_att": -9.8425,
+   "n_up": 44.1789,
+   "assistant_atext": 0.3642,
+   "assistant_tui": 0.4159,
+   "assistant_n_tui": 64.7215,
+   "assistant_const": 19.7739
+  },
+  "tokens_per_char_sample": {
+   "tr_read": 0.4537,
+   "tr_bash": 0.4369,
+   "tr_web": 0.3921,
+   "tr_mcp": 0.5127,
+   "tr_other": 0.3549,
+   "att": 0.3982,
+   "prompt": 0.5904,
+   "meta": 0.3924,
+   "n_tr": 34.8976,
+   "n_att": -25.437,
+   "n_up": 29.6692,
+   "assistant_atext": 0.3759,
+   "assistant_tui": 0.4248,
+   "assistant_n_tui": 68.7997,
+   "assistant_const": 12.4315
+  },
+  "pairs_all": 136265,
+  "pairs_sample": 9364,
+  "pred_over_obs_all": 0.9893721862194121,
+  "thinking_test": {
+   "A_thinking_test_all": {
+    "n": 136265,
+    "coef_out": 1.0055,
+    "coef_atext": -0.003,
+    "coef_tui": -0.003
+   },
+   "A_thinking_test_think1_prompt_boundary": {
+    "n": 1047,
+    "coef_out": 0.9844,
+    "coef_atext": 0.059,
+    "coef_tui": 0.0363
+   },
+   "A_thinking_test_think1_tool_loop": {
+    "n": 90327,
+    "coef_out": 1.0036,
+    "coef_atext": -0.01,
+    "coef_tui": -0.0024
+   },
+   "A_thinking_test_think0": {
+    "n": 44891,
+    "coef_out": 1.0136,
+    "coef_atext": -0.0135,
+    "coef_tui": -0.0063
+   }
+  },
+  "cross_check": "headless /context counts ~/.claude-secondary/CLAUDE.md at 40.4k tokens for 105,278 chars = 0.384 tok/char; mission board 5.5k/13,884 = 0.396; agent-operating-lessons 2.4k/6,276 = 0.382 (fitted attachment ratio 0.377)",
+  "image_tokens_per_block_median": 1022.0,
+  "image_groups": 3889
+ },
+ "totals": {
+  "main": {
+   "usd_input_side": 17932.411086500026,
+   "usd_initial": 7302.658698450001,
+   "usd_growth": 10629.75238805001,
+   "usd55_input_side": 9301.034955200017,
+   "usd55_initial": 3749.429286400003,
+   "usd55_growth": 5551.6056687999935,
+   "growth_tok": 160101821.0,
+   "files": 1019
+  },
+  "ALL": {
+   "usd_input_side": 28208.157911,
+   "usd_initial": 13418.690837300037,
+   "usd_growth": 14789.4729263,
+   "usd55_input_side": 15088.942608600013,
+   "usd55_initial": 7139.899047799993,
+   "usd55_growth": 7949.048493599997,
+   "growth_tok": 427051288.0,
+   "files": 4298
+  },
+  "subagent": {
+   "usd_input_side": 1665.9768402,
+   "usd_initial": 847.3095773000003,
+   "usd_growth": 818.6705325000001,
+   "usd55_input_side": 921.6439625999997,
+   "usd55_initial": 453.2671802000001,
+   "usd55_growth": 468.38005199999975,
+   "growth_tok": 49513099.0,
+   "files": 409
+  },
+  "workflow_agent": {
+   "usd_input_side": 8609.769984299985,
+   "usd_initial": 5268.722561550009,
+   "usd_growth": 3341.0500057500026,
+   "usd55_input_side": 4866.263690800003,
+   "usd55_initial": 2937.202581200005,
+   "usd55_growth": 1929.0627727999997,
+   "growth_tok": 217436368.0,
+   "files": 2870
+  }
+ },
+ "fleet_total_usd": [
+  32517.424510999874,
+  18318.682968600137
+ ],
+ "growth_total_usd": 14789.437905398416,
+ "growth_total_usd55": 7949.029604059991,
+ "by_source": [
+  {
+   "source": "tool_result:Bash",
+   "items": 169643,
+   "tokens_appended": 154763511,
+   "token_reads": 6938000884,
+   "usd": 4683.91,
+   "usd_write": 1610.28,
+   "usd_read": 3072.55,
+   "usd_uncached": 1.08,
+   "usd55": 2537.06,
+   "share_growth_usd": 0.3167,
+   "chars": 347712183,
+   "tokens_never_reread": 520483
+  },
+  {
+   "source": "tool_use_input:Bash",
+   "items": 169663,
+   "tokens_appended": 59896349,
+   "token_reads": 4041768907,
+   "usd": 2656.82,
+   "usd_write": 760.11,
+   "usd_read": 1896.02,
+   "usd_uncached": 0.69,
+   "usd55": 1372.68,
+   "share_growth_usd": 0.1796,
+   "chars": 119202961,
+   "tokens_never_reread": 449579
+  },
+  {
+   "source": "assistant_thinking",
+   "items": 0,
+   "tokens_appended": 76010341,
+   "token_reads": 3605904032,
+   "usd": 2547.9,
+   "usd_write": 937.46,
+   "usd_read": 1609.72,
+   "usd_uncached": 0.72,
+   "usd55": 1386.8,
+   "share_growth_usd": 0.1723,
+   "chars": 0,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:Read",
+   "items": 8656,
+   "tokens_appended": 32754645,
+   "token_reads": 971952890,
+   "usd": 751.96,
+   "usd_write": 342.66,
+   "usd_read": 409.19,
+   "usd_uncached": 0.12,
+   "usd55": 415.75,
+   "share_growth_usd": 0.0508,
+   "chars": 61596526,
+   "tokens_never_reread": 92524
+  },
+  {
+   "source": "context_rewrite_carryover",
+   "items": 0,
+   "tokens_appended": 16332167,
+   "token_reads": 864019532,
+   "usd": 613.85,
+   "usd_write": 268.06,
+   "usd_read": 345.79,
+   "usd_uncached": 0.0,
+   "usd55": 337.15,
+   "share_growth_usd": 0.0415,
+   "chars": 0,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "assistant_text",
+   "items": 45085,
+   "tokens_appended": 7466239,
+   "token_reads": 629333472,
+   "usd": 414.57,
+   "usd_write": 118.09,
+   "usd_read": 296.4,
+   "usd_uncached": 0.09,
+   "usd55": 216.19,
+   "share_growth_usd": 0.028,
+   "chars": 11648248,
+   "tokens_never_reread": 2488154
+  },
+  {
+   "source": "attachment:total_tokens_reminder",
+   "items": 165080,
+   "tokens_appended": 5716037,
+   "token_reads": 406795937,
+   "usd": 263.4,
+   "usd_write": 72.95,
+   "usd_read": 190.39,
+   "usd_uncached": 0.07,
+   "usd55": 137.5,
+   "share_growth_usd": 0.0178,
+   "chars": 14196880,
+   "tokens_never_reread": 10274
+  },
+  {
+   "source": "tool_result:WebFetch",
+   "items": 4701,
+   "tokens_appended": 10640447,
+   "token_reads": 289051933,
+   "usd": 207.12,
+   "usd_write": 70.31,
+   "usd_read": 136.79,
+   "usd_uncached": 0.02,
+   "usd55": 111.06,
+   "share_growth_usd": 0.014,
+   "chars": 28254828,
+   "tokens_never_reread": 78381
+  },
+  {
+   "source": "attachment:queued_command",
+   "items": 4985,
+   "tokens_appended": 3072163,
+   "token_reads": 319635825,
+   "usd": 199.76,
+   "usd_write": 48.7,
+   "usd_read": 151.06,
+   "usd_uncached": 0.01,
+   "usd55": 99.56,
+   "share_growth_usd": 0.0135,
+   "chars": 8130101,
+   "tokens_never_reread": 21594
+  },
+  {
+   "source": "attachment:edited_text_file",
+   "items": 1490,
+   "tokens_appended": 3648093,
+   "token_reads": 286251945,
+   "usd": 194.74,
+   "usd_write": 66.1,
+   "usd_read": 128.62,
+   "usd_uncached": 0.02,
+   "usd55": 106.55,
+   "share_growth_usd": 0.0132,
+   "chars": 8865971,
+   "tokens_never_reread": 10772
+  },
+  {
+   "source": "meta_user:stop_hook_feedback",
+   "items": 3170,
+   "tokens_appended": 1116176,
+   "token_reads": 302459140,
+   "usd": 167.46,
+   "usd_write": 17.7,
+   "usd_read": 149.75,
+   "usd_uncached": 0.02,
+   "usd55": 74.1,
+   "share_growth_usd": 0.0113,
+   "chars": 2664514,
+   "tokens_never_reread": 3201
+  },
+  {
+   "source": "attachment:instructions",
+   "items": 78,
+   "tokens_appended": 3553291,
+   "token_reads": 227085866,
+   "usd": 165.66,
+   "usd_write": 75.95,
+   "usd_read": 89.71,
+   "usd_uncached": 0.0,
+   "usd55": 101.75,
+   "share_growth_usd": 0.0112,
+   "chars": 10512305,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:Write",
+   "items": 1481,
+   "tokens_appended": 9613227,
+   "token_reads": 166088773,
+   "usd": 155.64,
+   "usd_write": 90.75,
+   "usd_read": 64.86,
+   "usd_uncached": 0.03,
+   "usd55": 96.23,
+   "share_growth_usd": 0.0105,
+   "chars": 23142061,
+   "tokens_never_reread": 246359
+  },
+  {
+   "source": "meta_user:command_body",
+   "items": 236,
+   "tokens_appended": 1918669,
+   "token_reads": 140734394,
+   "usd": 118.88,
+   "usd_write": 56.86,
+   "usd_read": 62.02,
+   "usd_uncached": 0.0,
+   "usd55": 66.8,
+   "share_growth_usd": 0.008,
+   "chars": 4933442,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:Edit",
+   "items": 3527,
+   "tokens_appended": 2514955,
+   "token_reads": 167444926,
+   "usd": 118.81,
+   "usd_write": 45.67,
+   "usd_read": 73.11,
+   "usd_uncached": 0.03,
+   "usd55": 64.8,
+   "share_growth_usd": 0.008,
+   "chars": 5591864,
+   "tokens_never_reread": 2305
+  },
+  {
+   "source": "tool_result:WebSearch",
+   "items": 5546,
+   "tokens_appended": 6546589,
+   "token_reads": 150776051,
+   "usd": 113.53,
+   "usd_write": 43.19,
+   "usd_read": 70.3,
+   "usd_uncached": 0.03,
+   "usd55": 62.54,
+   "share_growth_usd": 0.0077,
+   "chars": 16115196,
+   "tokens_never_reread": 21883
+  },
+  {
+   "source": "attachment:skill_listing",
+   "items": 890,
+   "tokens_appended": 2903070,
+   "token_reads": 151064029,
+   "usd": 113.14,
+   "usd_write": 44.48,
+   "usd_read": 68.66,
+   "usd_uncached": 0.01,
+   "usd55": 64.26,
+   "share_growth_usd": 0.0077,
+   "chars": 7661155,
+   "tokens_never_reread": 1938
+  },
+  {
+   "source": "attachment:hook_additional_context:UserPromptSubmit",
+   "items": 5082,
+   "tokens_appended": 1733754,
+   "token_reads": 160113415,
+   "usd": 105.42,
+   "usd_write": 32.75,
+   "usd_read": 72.66,
+   "usd_uncached": 0.01,
+   "usd55": 56.64,
+   "share_growth_usd": 0.0071,
+   "chars": 4298895,
+   "tokens_never_reread": 2992
+  },
+  {
+   "source": "attachment:hook_blocking_error:Stop",
+   "items": 2329,
+   "tokens_appended": 670194,
+   "token_reads": 160830920,
+   "usd": 90.78,
+   "usd_write": 11.48,
+   "usd_read": 79.3,
+   "usd_uncached": 0.01,
+   "usd55": 40.96,
+   "share_growth_usd": 0.0061,
+   "chars": 1828383,
+   "tokens_never_reread": 3007
+  },
+  {
+   "source": "tool_use_input:Agent",
+   "items": 683,
+   "tokens_appended": 988100,
+   "token_reads": 127821315,
+   "usd": 88.22,
+   "usd_write": 30.64,
+   "usd_read": 57.59,
+   "usd_uncached": 0.0,
+   "usd55": 46.2,
+   "share_growth_usd": 0.006,
+   "chars": 2308294,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:Workflow",
+   "items": 170,
+   "tokens_appended": 1008540,
+   "token_reads": 114426896,
+   "usd": 86.71,
+   "usd_write": 35.96,
+   "usd_read": 50.75,
+   "usd_uncached": 0.0,
+   "usd55": 46.38,
+   "share_growth_usd": 0.0059,
+   "chars": 2419444,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:mcp_instructions_delta",
+   "items": 3749,
+   "tokens_appended": 4261743,
+   "token_reads": 125016952,
+   "usd": 86.01,
+   "usd_write": 30.62,
+   "usd_read": 55.36,
+   "usd_uncached": 0.03,
+   "usd55": 47.83,
+   "share_growth_usd": 0.0058,
+   "chars": 10939075,
+   "tokens_never_reread": 12283
+  },
+  {
+   "source": "tool_result:mcp:ms365",
+   "items": 971,
+   "tokens_appended": 2638381,
+   "token_reads": 90402116,
+   "usd": 76.86,
+   "usd_write": 34.28,
+   "usd_read": 42.57,
+   "usd_uncached": 0.01,
+   "usd55": 43.9,
+   "share_growth_usd": 0.0052,
+   "chars": 4770805,
+   "tokens_never_reread": 249
+  },
+  {
+   "source": "residual_unattributed",
+   "items": 0,
+   "tokens_appended": 1330675,
+   "token_reads": 115297150,
+   "usd": 69.06,
+   "usd_write": 15.21,
+   "usd_read": 53.84,
+   "usd_uncached": 0.01,
+   "usd55": 34.83,
+   "share_growth_usd": 0.0047,
+   "chars": 0,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "meta_user:other",
+   "items": 393,
+   "tokens_appended": 1214857,
+   "token_reads": 93904821,
+   "usd": 66.04,
+   "usd_write": 23.91,
+   "usd_read": 42.13,
+   "usd_uncached": 0.0,
+   "usd55": 36.59,
+   "share_growth_usd": 0.0045,
+   "chars": 3113402,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:deferred_tools_delta",
+   "items": 718,
+   "tokens_appended": 1012159,
+   "token_reads": 95265944,
+   "usd": 61.93,
+   "usd_write": 15.87,
+   "usd_read": 46.06,
+   "usd_uncached": 0.0,
+   "usd55": 30.96,
+   "share_growth_usd": 0.0042,
+   "chars": 2452129,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "meta_user:skill_body",
+   "items": 83,
+   "tokens_appended": 764065,
+   "token_reads": 62632676,
+   "usd": 51.58,
+   "usd_write": 25.6,
+   "usd_read": 25.98,
+   "usd_uncached": 0.0,
+   "usd55": 28.03,
+   "share_growth_usd": 0.0035,
+   "chars": 1941210,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:ToolSearch",
+   "items": 1679,
+   "tokens_appended": 831127,
+   "token_reads": 61434407,
+   "usd": 43.01,
+   "usd_write": 13.83,
+   "usd_read": 29.17,
+   "usd_uncached": 0.0,
+   "usd55": 23.05,
+   "share_growth_usd": 0.0029,
+   "chars": 5085,
+   "tokens_never_reread": 677
+  },
+  {
+   "source": "attachment:hook_additional_context:PostToolUse:Bash",
+   "items": 777,
+   "tokens_appended": 473182,
+   "token_reads": 57729120,
+   "usd": 36.24,
+   "usd_write": 9.33,
+   "usd_read": 26.91,
+   "usd_uncached": 0.01,
+   "usd55": 18.53,
+   "share_growth_usd": 0.0025,
+   "chars": 1194188,
+   "tokens_never_reread": 354
+  },
+  {
+   "source": "user_prompt:task_notification:workflow",
+   "items": 116,
+   "tokens_appended": 463064,
+   "token_reads": 45457783,
+   "usd": 34.53,
+   "usd_write": 14.46,
+   "usd_read": 20.06,
+   "usd_uncached": 0.0,
+   "usd55": 18.33,
+   "share_growth_usd": 0.0023,
+   "chars": 1039665,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:agent_listing_delta",
+   "items": 233,
+   "tokens_appended": 720624,
+   "token_reads": 35014727,
+   "usd": 26.69,
+   "usd_write": 10.33,
+   "usd_read": 16.36,
+   "usd_uncached": 0.0,
+   "usd55": 14.7,
+   "share_growth_usd": 0.0018,
+   "chars": 1881241,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "user_prompt:task_notification:bash",
+   "items": 1569,
+   "tokens_appended": 618772,
+   "token_reads": 34242638,
+   "usd": 26.03,
+   "usd_write": 10.07,
+   "usd_read": 15.96,
+   "usd_uncached": 0.01,
+   "usd55": 14.59,
+   "share_growth_usd": 0.0018,
+   "chars": 803440,
+   "tokens_never_reread": 443
+  },
+  {
+   "source": "tool_use_input:Read",
+   "items": 8656,
+   "tokens_appended": 872692,
+   "token_reads": 35547086,
+   "usd": 25.42,
+   "usd_write": 9.33,
+   "usd_read": 16.08,
+   "usd_uncached": 0.01,
+   "usd55": 13.83,
+   "share_growth_usd": 0.0017,
+   "chars": 999930,
+   "tokens_never_reread": 1496
+  },
+  {
+   "source": "tool_use_input:WebFetch",
+   "items": 4701,
+   "tokens_appended": 1024925,
+   "token_reads": 29047829,
+   "usd": 20.34,
+   "usd_write": 7.08,
+   "usd_read": 13.25,
+   "usd_uncached": 0.01,
+   "usd55": 11.22,
+   "share_growth_usd": 0.0014,
+   "chars": 1774253,
+   "tokens_never_reread": 6313
+  },
+  {
+   "source": "user_prompt:task_notification:subagent",
+   "items": 186,
+   "tokens_appended": 337259,
+   "token_reads": 23545767,
+   "usd": 19.79,
+   "usd_write": 9.32,
+   "usd_read": 10.47,
+   "usd_uncached": 0.0,
+   "usd55": 11.23,
+   "share_growth_usd": 0.0013,
+   "chars": 746007,
+   "tokens_never_reread": 1872
+  },
+  {
+   "source": "user_prompt:peer_message",
+   "items": 90,
+   "tokens_appended": 277216,
+   "token_reads": 26496815,
+   "usd": 19.53,
+   "usd_write": 7.4,
+   "usd_read": 12.13,
+   "usd_uncached": 0.0,
+   "usd55": 11.07,
+   "share_growth_usd": 0.0013,
+   "chars": 646465,
+   "tokens_never_reread": 507
+  },
+  {
+   "source": "attachment:nested_memory",
+   "items": 94,
+   "tokens_appended": 699144,
+   "token_reads": 27072109,
+   "usd": 17.22,
+   "usd_write": 5.92,
+   "usd_read": 11.3,
+   "usd_uncached": 0.0,
+   "usd55": 10.0,
+   "share_growth_usd": 0.0012,
+   "chars": 1767050,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:mcp:claude_ai_uidotsh",
+   "items": 31,
+   "tokens_appended": 123683,
+   "token_reads": 19945604,
+   "usd": 14.98,
+   "usd_write": 5.27,
+   "usd_read": 9.71,
+   "usd_uncached": 0.0,
+   "usd55": 8.1,
+   "share_growth_usd": 0.001,
+   "chars": 328457,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:Edit",
+   "items": 3527,
+   "tokens_appended": 360196,
+   "token_reads": 19968548,
+   "usd": 14.61,
+   "usd_write": 6.03,
+   "usd_read": 8.58,
+   "usd_uncached": 0.01,
+   "usd55": 8.15,
+   "share_growth_usd": 0.001,
+   "chars": 741380,
+   "tokens_never_reread": 481
+  },
+  {
+   "source": "attachment:bash_output_audience_note",
+   "items": 10629,
+   "tokens_appended": 753998,
+   "token_reads": 9985321,
+   "usd": 13.28,
+   "usd_write": 10.92,
+   "usd_read": 2.33,
+   "usd_uncached": 0.03,
+   "usd55": 6.26,
+   "share_growth_usd": 0.0009,
+   "chars": 1966365,
+   "tokens_never_reread": 14153
+  },
+  {
+   "source": "user_prompt:pasted",
+   "items": 83,
+   "tokens_appended": 228592,
+   "token_reads": 18487474,
+   "usd": 13.2,
+   "usd_write": 4.62,
+   "usd_read": 8.57,
+   "usd_uncached": 0.0,
+   "usd55": 7.32,
+   "share_growth_usd": 0.0009,
+   "chars": 6970,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:Agent:inline_return",
+   "items": 331,
+   "tokens_appended": 165244,
+   "token_reads": 16053528,
+   "usd": 12.53,
+   "usd_write": 5.62,
+   "usd_read": 6.91,
+   "usd_uncached": 0.0,
+   "usd55": 6.67,
+   "share_growth_usd": 0.0008,
+   "chars": 394429,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:SendMessage",
+   "items": 327,
+   "tokens_appended": 233771,
+   "token_reads": 13990612,
+   "usd": 11.12,
+   "usd_write": 4.77,
+   "usd_read": 6.35,
+   "usd_uncached": 0.0,
+   "usd55": 6.49,
+   "share_growth_usd": 0.0008,
+   "chars": 544426,
+   "tokens_never_reread": 943
+  },
+  {
+   "source": "tool_result:Agent:async_ack",
+   "items": 352,
+   "tokens_appended": 146763,
+   "token_reads": 16063061,
+   "usd": 10.8,
+   "usd_write": 3.83,
+   "usd_read": 6.97,
+   "usd_uncached": 0.0,
+   "usd55": 5.75,
+   "share_growth_usd": 0.0007,
+   "chars": 381366,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:WebSearch",
+   "items": 5546,
+   "tokens_appended": 590090,
+   "token_reads": 13511333,
+   "usd": 10.18,
+   "usd_write": 3.9,
+   "usd_read": 6.28,
+   "usd_uncached": 0.0,
+   "usd55": 5.62,
+   "share_growth_usd": 0.0007,
+   "chars": 595063,
+   "tokens_never_reread": 2797
+  },
+  {
+   "source": "tool_use_input:mcp:ms365",
+   "items": 971,
+   "tokens_appended": 218226,
+   "token_reads": 10825745,
+   "usd": 10.03,
+   "usd_write": 4.92,
+   "usd_read": 5.11,
+   "usd_uncached": 0.0,
+   "usd55": 5.97,
+   "share_growth_usd": 0.0007,
+   "chars": 376244,
+   "tokens_never_reread": 697
+  },
+  {
+   "source": "attachment:hook_additional_context:PreToolUse:Agent",
+   "items": 494,
+   "tokens_appended": 92629,
+   "token_reads": 12992983,
+   "usd": 8.96,
+   "usd_write": 3.02,
+   "usd_read": 5.94,
+   "usd_uncached": 0.0,
+   "usd55": 4.7,
+   "share_growth_usd": 0.0006,
+   "chars": 260335,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PreToolUse:Edit",
+   "items": 506,
+   "tokens_appended": 200376,
+   "token_reads": 10697865,
+   "usd": 8.69,
+   "usd_write": 3.94,
+   "usd_read": 4.75,
+   "usd_uncached": 0.0,
+   "usd55": 4.89,
+   "share_growth_usd": 0.0006,
+   "chars": 551687,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "user_prompt:bash_mode",
+   "items": 522,
+   "tokens_appended": 195776,
+   "token_reads": 12264226,
+   "usd": 8.67,
+   "usd_write": 3.5,
+   "usd_read": 5.17,
+   "usd_uncached": 0.0,
+   "usd55": 5.18,
+   "share_growth_usd": 0.0006,
+   "chars": 460688,
+   "tokens_never_reread": 721
+  },
+  {
+   "source": "attachment:auto_mode",
+   "items": 3182,
+   "tokens_appended": 507302,
+   "token_reads": 11783694,
+   "usd": 8.23,
+   "usd_write": 3.32,
+   "usd_read": 4.9,
+   "usd_uncached": 0.0,
+   "usd55": 4.86,
+   "share_growth_usd": 0.0006,
+   "chars": 1333165,
+   "tokens_never_reread": 1090
+  },
+  {
+   "source": "tool_result:Workflow:async_ack",
+   "items": 155,
+   "tokens_appended": 97885,
+   "token_reads": 10720325,
+   "usd": 8.02,
+   "usd_write": 3.31,
+   "usd_read": 4.7,
+   "usd_uncached": 0.0,
+   "usd55": 4.27,
+   "share_growth_usd": 0.0005,
+   "chars": 214346,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:SessionStart",
+   "items": 82,
+   "tokens_appended": 173036,
+   "token_reads": 9877945,
+   "usd": 7.88,
+   "usd_write": 3.8,
+   "usd_read": 4.08,
+   "usd_uncached": 0.0,
+   "usd55": 4.58,
+   "share_growth_usd": 0.0005,
+   "chars": 471806,
+   "tokens_never_reread": 2275
+  },
+  {
+   "source": "user_prompt:plain",
+   "items": 948,
+   "tokens_appended": 204081,
+   "token_reads": 9709583,
+   "usd": 7.74,
+   "usd_write": 3.76,
+   "usd_read": 3.98,
+   "usd_uncached": 0.0,
+   "usd55": 4.27,
+   "share_growth_usd": 0.0005,
+   "chars": 1078356,
+   "tokens_never_reread": 6748
+  },
+  {
+   "source": "tool_result:ListAgents",
+   "items": 44,
+   "tokens_appended": 87927,
+   "token_reads": 7663310,
+   "usd": 6.18,
+   "usd_write": 2.58,
+   "usd_read": 3.6,
+   "usd_uncached": 0.0,
+   "usd55": 3.45,
+   "share_growth_usd": 0.0004,
+   "chars": 156848,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:environment",
+   "items": 760,
+   "tokens_appended": 119862,
+   "token_reads": 7778739,
+   "usd": 5.67,
+   "usd_write": 2.08,
+   "usd_read": 3.59,
+   "usd_uncached": 0.0,
+   "usd55": 3.15,
+   "share_growth_usd": 0.0004,
+   "chars": 317882,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:TaskStop",
+   "items": 264,
+   "tokens_appended": 98103,
+   "token_reads": 7444235,
+   "usd": 5.01,
+   "usd_write": 1.6,
+   "usd_read": 3.41,
+   "usd_uncached": 0.0,
+   "usd55": 2.67,
+   "share_growth_usd": 0.0003,
+   "chars": 185168,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:ToolSearch",
+   "items": 1679,
+   "tokens_appended": 145946,
+   "token_reads": 7026907,
+   "usd": 5.01,
+   "usd_write": 1.73,
+   "usd_read": 3.28,
+   "usd_uncached": 0.0,
+   "usd55": 2.71,
+   "share_growth_usd": 0.0003,
+   "chars": 100810,
+   "tokens_never_reread": 1830
+  },
+  {
+   "source": "meta_user:image_meta",
+   "items": 661,
+   "tokens_appended": 111884,
+   "token_reads": 7136120,
+   "usd": 4.82,
+   "usd_write": 1.43,
+   "usd_read": 3.39,
+   "usd_uncached": 0.0,
+   "usd55": 2.54,
+   "share_growth_usd": 0.0003,
+   "chars": 71602,
+   "tokens_never_reread": 171
+  },
+  {
+   "source": "tool_use_input:Monitor",
+   "items": 297,
+   "tokens_appended": 69061,
+   "token_reads": 6707266,
+   "usd": 4.45,
+   "usd_write": 1.38,
+   "usd_read": 3.08,
+   "usd_uncached": 0.0,
+   "usd55": 2.39,
+   "share_growth_usd": 0.0003,
+   "chars": 120092,
+   "tokens_never_reread": 433
+  },
+  {
+   "source": "attachment:hook_additional_context:PreToolUse:mcp__ms365__list-mail-messages",
+   "items": 26,
+   "tokens_appended": 57063,
+   "token_reads": 4888682,
+   "usd": 3.95,
+   "usd_write": 1.63,
+   "usd_read": 2.32,
+   "usd_uncached": 0.0,
+   "usd55": 2.24,
+   "share_growth_usd": 0.0003,
+   "chars": 148599,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:Write",
+   "items": 1480,
+   "tokens_appended": 157660,
+   "token_reads": 4627027,
+   "usd": 3.63,
+   "usd_write": 1.81,
+   "usd_read": 1.82,
+   "usd_uncached": 0.0,
+   "usd55": 2.23,
+   "share_growth_usd": 0.0002,
+   "chars": 302689,
+   "tokens_never_reread": 1745
+  },
+  {
+   "source": "tool_result:SendMessage",
+   "items": 327,
+   "tokens_appended": 41359,
+   "token_reads": 3446385,
+   "usd": 2.6,
+   "usd_write": 1.02,
+   "usd_read": 1.58,
+   "usd_uncached": 0.0,
+   "usd55": 1.47,
+   "share_growth_usd": 0.0002,
+   "chars": 82579,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "user_prompt:command",
+   "items": 264,
+   "tokens_appended": 70220,
+   "token_reads": 2612824,
+   "usd": 2.54,
+   "usd_write": 1.57,
+   "usd_read": 0.97,
+   "usd_uncached": 0.0,
+   "usd55": 1.33,
+   "share_growth_usd": 0.0002,
+   "chars": 35269,
+   "tokens_never_reread": 1385
+  },
+  {
+   "source": "user_prompt:teammate_message",
+   "items": 63,
+   "tokens_appended": 211368,
+   "token_reads": 887164,
+   "usd": 2.46,
+   "usd_write": 2.13,
+   "usd_read": 0.33,
+   "usd_uncached": 0.0,
+   "usd55": 1.84,
+   "share_growth_usd": 0.0002,
+   "chars": 90963,
+   "tokens_never_reread": 25597
+  },
+  {
+   "source": "user_prompt:task_notification:monitor",
+   "items": 137,
+   "tokens_appended": 45432,
+   "token_reads": 3294942,
+   "usd": 2.41,
+   "usd_write": 1.0,
+   "usd_read": 1.41,
+   "usd_uncached": 0.0,
+   "usd55": 1.45,
+   "share_growth_usd": 0.0002,
+   "chars": 55665,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "user_prompt:task_notification:goal_checkin",
+   "items": 39,
+   "tokens_appended": 23738,
+   "token_reads": 3750497,
+   "usd": 2.35,
+   "usd_write": 0.52,
+   "usd_read": 1.83,
+   "usd_uncached": 0.0,
+   "usd55": 1.11,
+   "share_growth_usd": 0.0002,
+   "chars": 46384,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:StructuredOutput",
+   "items": 104,
+   "tokens_appended": 375262,
+   "token_reads": 327861,
+   "usd": 1.96,
+   "usd_write": 1.94,
+   "usd_read": 0.01,
+   "usd_uncached": 0.0,
+   "usd55": 1.54,
+   "share_growth_usd": 0.0001,
+   "chars": 894009,
+   "tokens_never_reread": 12688750
+  },
+  {
+   "source": "tool_result:Monitor",
+   "items": 297,
+   "tokens_appended": 29998,
+   "token_reads": 2690691,
+   "usd": 1.76,
+   "usd_write": 0.57,
+   "usd_read": 1.2,
+   "usd_uncached": 0.0,
+   "usd55": 0.98,
+   "share_growth_usd": 0.0001,
+   "chars": 77299,
+   "tokens_never_reread": 127
+  },
+  {
+   "source": "user_prompt:task_notification:peer_mail",
+   "items": 45,
+   "tokens_appended": 32004,
+   "token_reads": 2194149,
+   "usd": 1.68,
+   "usd_write": 0.75,
+   "usd_read": 0.94,
+   "usd_uncached": 0.0,
+   "usd55": 1.02,
+   "share_growth_usd": 0.0001,
+   "chars": 45758,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:silent_turn_reminder",
+   "items": 753,
+   "tokens_appended": 42096,
+   "token_reads": 2455655,
+   "usd": 1.66,
+   "usd_write": 0.8,
+   "usd_read": 0.85,
+   "usd_uncached": 0.0,
+   "usd55": 1.02,
+   "share_growth_usd": 0.0001,
+   "chars": 100149,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:remote_session_change",
+   "items": 215,
+   "tokens_appended": 30258,
+   "token_reads": 2197094,
+   "usd": 1.55,
+   "usd_write": 0.5,
+   "usd_read": 1.05,
+   "usd_uncached": 0.0,
+   "usd55": 0.81,
+   "share_growth_usd": 0.0001,
+   "chars": 70855,
+   "tokens_never_reread": 68
+  },
+  {
+   "source": "attachment:session_context",
+   "items": 57,
+   "tokens_appended": 28964,
+   "token_reads": 1953146,
+   "usd": 1.52,
+   "usd_write": 0.63,
+   "usd_read": 0.89,
+   "usd_uncached": 0.0,
+   "usd55": 0.82,
+   "share_growth_usd": 0.0001,
+   "chars": 84249,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PreToolUse:Write",
+   "items": 157,
+   "tokens_appended": 50561,
+   "token_reads": 1466488,
+   "usd": 1.45,
+   "usd_write": 0.83,
+   "usd_read": 0.62,
+   "usd_uncached": 0.0,
+   "usd55": 0.84,
+   "share_growth_usd": 0.0001,
+   "chars": 141008,
+   "tokens_never_reread": 3619
+  },
+  {
+   "source": "tool_use_input:Skill",
+   "items": 240,
+   "tokens_appended": 21820,
+   "token_reads": 1705995,
+   "usd": 1.28,
+   "usd_write": 0.54,
+   "usd_read": 0.74,
+   "usd_uncached": 0.0,
+   "usd55": 0.71,
+   "share_growth_usd": 0.0001,
+   "chars": 18342,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PreToolUse:WebSearch",
+   "items": 164,
+   "tokens_appended": 74838,
+   "token_reads": 1401392,
+   "usd": 1.1,
+   "usd_write": 0.44,
+   "usd_read": 0.67,
+   "usd_uncached": 0.0,
+   "usd55": 0.62,
+   "share_growth_usd": 0.0001,
+   "chars": 189584,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "meta_user:local_command_caveat",
+   "items": 52,
+   "tokens_appended": 38867,
+   "token_reads": 1046459,
+   "usd": 1.09,
+   "usd_write": 0.76,
+   "usd_read": 0.33,
+   "usd_uncached": 0.0,
+   "usd55": 0.54,
+   "share_growth_usd": 0.0001,
+   "chars": 12740,
+   "tokens_never_reread": 1124
+  },
+  {
+   "source": "tool_use_input:TaskStop",
+   "items": 264,
+   "tokens_appended": 15673,
+   "token_reads": 1492767,
+   "usd": 1.02,
+   "usd_write": 0.33,
+   "usd_read": 0.69,
+   "usd_uncached": 0.0,
+   "usd55": 0.55,
+   "share_growth_usd": 0.0001,
+   "chars": 6533,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:SendUserFile",
+   "items": 53,
+   "tokens_appended": 16499,
+   "token_reads": 1488451,
+   "usd": 0.97,
+   "usd_write": 0.24,
+   "usd_read": 0.73,
+   "usd_uncached": 0.0,
+   "usd55": 0.48,
+   "share_growth_usd": 0.0001,
+   "chars": 31529,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:model",
+   "items": 243,
+   "tokens_appended": 28975,
+   "token_reads": 993101,
+   "usd": 0.91,
+   "usd_write": 0.51,
+   "usd_read": 0.39,
+   "usd_uncached": 0.0,
+   "usd55": 0.48,
+   "share_growth_usd": 0.0001,
+   "chars": 38157,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:AskUserQuestion",
+   "items": 13,
+   "tokens_appended": 11571,
+   "token_reads": 1136154,
+   "usd": 0.89,
+   "usd_write": 0.35,
+   "usd_read": 0.54,
+   "usd_uncached": 0.0,
+   "usd55": 0.47,
+   "share_growth_usd": 0.0001,
+   "chars": 25798,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:TaskOutput",
+   "items": 51,
+   "tokens_appended": 16959,
+   "token_reads": 911372,
+   "usd": 0.89,
+   "usd_write": 0.45,
+   "usd_read": 0.43,
+   "usd_uncached": 0.0,
+   "usd55": 0.54,
+   "share_growth_usd": 0.0001,
+   "chars": 38509,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PostToolUse:Monitor",
+   "items": 3,
+   "tokens_appended": 4054,
+   "token_reads": 1430722,
+   "usd": 0.78,
+   "usd_write": 0.08,
+   "usd_read": 0.7,
+   "usd_uncached": 0.0,
+   "usd55": 0.34,
+   "share_growth_usd": 0.0001,
+   "chars": 10620,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PostToolUse:Edit",
+   "items": 72,
+   "tokens_appended": 15601,
+   "token_reads": 1103142,
+   "usd": 0.77,
+   "usd_write": 0.29,
+   "usd_read": 0.48,
+   "usd_uncached": 0.0,
+   "usd55": 0.44,
+   "share_growth_usd": 0.0001,
+   "chars": 42977,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:SendUserFile",
+   "items": 53,
+   "tokens_appended": 12849,
+   "token_reads": 1026993,
+   "usd": 0.68,
+   "usd_write": 0.18,
+   "usd_read": 0.5,
+   "usd_uncached": 0.0,
+   "usd55": 0.35,
+   "share_growth_usd": 0.0,
+   "chars": 23254,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PreToolUse:WebFetch",
+   "items": 87,
+   "tokens_appended": 37947,
+   "token_reads": 720124,
+   "usd": 0.61,
+   "usd_write": 0.27,
+   "usd_read": 0.33,
+   "usd_uncached": 0.0,
+   "usd55": 0.35,
+   "share_growth_usd": 0.0,
+   "chars": 100485,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:Skill",
+   "items": 240,
+   "tokens_appended": 10047,
+   "token_reads": 754155,
+   "usd": 0.58,
+   "usd_write": 0.25,
+   "usd_read": 0.33,
+   "usd_uncached": 0.0,
+   "usd55": 0.32,
+   "share_growth_usd": 0.0,
+   "chars": 6460,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PostToolUse:Write",
+   "items": 159,
+   "tokens_appended": 22505,
+   "token_reads": 769567,
+   "usd": 0.54,
+   "usd_write": 0.25,
+   "usd_read": 0.29,
+   "usd_uncached": 0.0,
+   "usd55": 0.33,
+   "share_growth_usd": 0.0,
+   "chars": 64538,
+   "tokens_never_reread": 274
+  },
+  {
+   "source": "tool_result:ListMcpResourcesTool",
+   "items": 3,
+   "tokens_appended": 3655,
+   "token_reads": 738824,
+   "usd": 0.52,
+   "usd_write": 0.16,
+   "usd_read": 0.36,
+   "usd_uncached": 0.0,
+   "usd55": 0.27,
+   "share_growth_usd": 0.0,
+   "chars": 4752,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:date",
+   "items": 172,
+   "tokens_appended": 9665,
+   "token_reads": 636764,
+   "usd": 0.5,
+   "usd_write": 0.2,
+   "usd_read": 0.29,
+   "usd_uncached": 0.0,
+   "usd55": 0.28,
+   "share_growth_usd": 0.0,
+   "chars": 26464,
+   "tokens_never_reread": 59
+  },
+  {
+   "source": "tool_use_input:mcp:claude_ai_uidotsh",
+   "items": 31,
+   "tokens_appended": 4451,
+   "token_reads": 600446,
+   "usd": 0.46,
+   "usd_write": 0.17,
+   "usd_read": 0.29,
+   "usd_uncached": 0.0,
+   "usd55": 0.25,
+   "share_growth_usd": 0.0,
+   "chars": 6020,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PreToolUse:mcp__ms365__create-reply-draft",
+   "items": 3,
+   "tokens_appended": 7632,
+   "token_reads": 582767,
+   "usd": 0.4,
+   "usd_write": 0.11,
+   "usd_read": 0.29,
+   "usd_uncached": 0.0,
+   "usd55": 0.2,
+   "share_growth_usd": 0.0,
+   "chars": 20177,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PostToolUse:AskUserQuestion",
+   "items": 1,
+   "tokens_appended": 1491,
+   "token_reads": 478652,
+   "usd": 0.34,
+   "usd_write": 0.1,
+   "usd_read": 0.23,
+   "usd_uncached": 0.0,
+   "usd55": 0.18,
+   "share_growth_usd": 0.0,
+   "chars": 3599,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:Artifact",
+   "items": 13,
+   "tokens_appended": 4996,
+   "token_reads": 345458,
+   "usd": 0.34,
+   "usd_write": 0.17,
+   "usd_read": 0.16,
+   "usd_uncached": 0.0,
+   "usd55": 0.2,
+   "share_growth_usd": 0.0,
+   "chars": 13686,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:mcp:motion",
+   "items": 9,
+   "tokens_appended": 4207,
+   "token_reads": 454335,
+   "usd": 0.3,
+   "usd_write": 0.07,
+   "usd_read": 0.22,
+   "usd_uncached": 0.0,
+   "usd55": 0.15,
+   "share_growth_usd": 0.0,
+   "chars": 10483,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:TaskOutput",
+   "items": 51,
+   "tokens_appended": 4393,
+   "token_reads": 278283,
+   "usd": 0.29,
+   "usd_write": 0.15,
+   "usd_read": 0.13,
+   "usd_uncached": 0.0,
+   "usd55": 0.18,
+   "share_growth_usd": 0.0,
+   "chars": 2956,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PreToolUse:mcp__ms365__update-mail-message",
+   "items": 8,
+   "tokens_appended": 5634,
+   "token_reads": 312300,
+   "usd": 0.28,
+   "usd_write": 0.13,
+   "usd_read": 0.15,
+   "usd_uncached": 0.0,
+   "usd55": 0.17,
+   "share_growth_usd": 0.0,
+   "chars": 12428,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:read_truncation_notice",
+   "items": 85,
+   "tokens_appended": 13260,
+   "token_reads": 337902,
+   "usd": 0.28,
+   "usd_write": 0.16,
+   "usd_read": 0.11,
+   "usd_uncached": 0.0,
+   "usd55": 0.16,
+   "share_growth_usd": 0.0,
+   "chars": 34655,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:SubagentHandback",
+   "items": 63,
+   "tokens_appended": 35093,
+   "token_reads": 94451,
+   "usd": 0.25,
+   "usd_write": 0.24,
+   "usd_read": 0.01,
+   "usd_uncached": 0.0,
+   "usd55": 0.22,
+   "share_growth_usd": 0.0,
+   "chars": 79616,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_blocking_error:PostToolUse:Write",
+   "items": 42,
+   "tokens_appended": 7356,
+   "token_reads": 247628,
+   "usd": 0.24,
+   "usd_write": 0.14,
+   "usd_read": 0.11,
+   "usd_uncached": 0.0,
+   "usd55": 0.13,
+   "share_growth_usd": 0.0,
+   "chars": 20203,
+   "tokens_never_reread": 729
+  },
+  {
+   "source": "tool_result:AskUserQuestion",
+   "items": 13,
+   "tokens_appended": 3159,
+   "token_reads": 286146,
+   "usd": 0.23,
+   "usd_write": 0.1,
+   "usd_read": 0.14,
+   "usd_uncached": 0.0,
+   "usd55": 0.12,
+   "share_growth_usd": 0.0,
+   "chars": 7054,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PostToolUse:Agent",
+   "items": 4,
+   "tokens_appended": 3186,
+   "token_reads": 331753,
+   "usd": 0.23,
+   "usd_write": 0.08,
+   "usd_read": 0.14,
+   "usd_uncached": 0.0,
+   "usd55": 0.11,
+   "share_growth_usd": 0.0,
+   "chars": 8484,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:ListAgents",
+   "items": 44,
+   "tokens_appended": 2459,
+   "token_reads": 228201,
+   "usd": 0.18,
+   "usd_write": 0.08,
+   "usd_read": 0.11,
+   "usd_uncached": 0.0,
+   "usd55": 0.1,
+   "share_growth_usd": 0.0,
+   "chars": 88,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:mcp:motion-plus",
+   "items": 7,
+   "tokens_appended": 3428,
+   "token_reads": 229200,
+   "usd": 0.16,
+   "usd_write": 0.05,
+   "usd_read": 0.11,
+   "usd_uncached": 0.0,
+   "usd55": 0.08,
+   "share_growth_usd": 0.0,
+   "chars": 7955,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:Artifact",
+   "items": 13,
+   "tokens_appended": 2540,
+   "token_reads": 134390,
+   "usd": 0.15,
+   "usd_write": 0.09,
+   "usd_read": 0.06,
+   "usd_uncached": 0.0,
+   "usd55": 0.1,
+   "share_growth_usd": 0.0,
+   "chars": 4183,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "meta_user:continue",
+   "items": 39,
+   "tokens_appended": 2157,
+   "token_reads": 177807,
+   "usd": 0.14,
+   "usd_write": 0.06,
+   "usd_read": 0.08,
+   "usd_uncached": 0.0,
+   "usd55": 0.08,
+   "share_growth_usd": 0.0,
+   "chars": 1287,
+   "tokens_never_reread": 57
+  },
+  {
+   "source": "tool_result:Workflow:inline_return",
+   "items": 15,
+   "tokens_appended": 2265,
+   "token_reads": 121312,
+   "usd": 0.14,
+   "usd_write": 0.09,
+   "usd_read": 0.05,
+   "usd_uncached": 0.0,
+   "usd55": 0.07,
+   "share_growth_usd": 0.0,
+   "chars": 5024,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:ReadMcpResourceTool",
+   "items": 3,
+   "tokens_appended": 4640,
+   "token_reads": 183853,
+   "usd": 0.14,
+   "usd_write": 0.05,
+   "usd_read": 0.09,
+   "usd_uncached": 0.0,
+   "usd55": 0.08,
+   "share_growth_usd": 0.0,
+   "chars": 10737,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:SendFeedback",
+   "items": 2,
+   "tokens_appended": 1522,
+   "token_reads": 125719,
+   "usd": 0.12,
+   "usd_write": 0.06,
+   "usd_read": 0.06,
+   "usd_uncached": 0.0,
+   "usd55": 0.07,
+   "share_growth_usd": 0.0,
+   "chars": 3347,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_blocking_error:PostToolUse:Bash",
+   "items": 17,
+   "tokens_appended": 3020,
+   "token_reads": 132372,
+   "usd": 0.11,
+   "usd_write": 0.05,
+   "usd_read": 0.06,
+   "usd_uncached": 0.0,
+   "usd55": 0.05,
+   "share_growth_usd": 0.0,
+   "chars": 7898,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "meta_user:command_marker",
+   "items": 14,
+   "tokens_appended": 1217,
+   "token_reads": 149169,
+   "usd": 0.1,
+   "usd_write": 0.04,
+   "usd_read": 0.06,
+   "usd_uncached": 0.0,
+   "usd55": 0.06,
+   "share_growth_usd": 0.0,
+   "chars": 1890,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PostToolUse:Read",
+   "items": 2,
+   "tokens_appended": 2029,
+   "token_reads": 109216,
+   "usd": 0.1,
+   "usd_write": 0.04,
+   "usd_read": 0.05,
+   "usd_uncached": 0.0,
+   "usd55": 0.06,
+   "share_growth_usd": 0.0,
+   "chars": 3975,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_success:SessionStart:resume",
+   "items": 16,
+   "tokens_appended": 4265,
+   "token_reads": 131447,
+   "usd": 0.09,
+   "usd_write": 0.05,
+   "usd_read": 0.04,
+   "usd_uncached": 0.0,
+   "usd55": 0.07,
+   "share_growth_usd": 0.0,
+   "chars": 11155,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PreToolUse:mcp__ms365__get-mail-message",
+   "items": 2,
+   "tokens_appended": 1529,
+   "token_reads": 108544,
+   "usd": 0.09,
+   "usd_write": 0.04,
+   "usd_read": 0.05,
+   "usd_uncached": 0.0,
+   "usd55": 0.05,
+   "share_growth_usd": 0.0,
+   "chars": 4666,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "user_prompt:interrupt",
+   "items": 17,
+   "tokens_appended": 967,
+   "token_reads": 137770,
+   "usd": 0.08,
+   "usd_write": 0.02,
+   "usd_read": 0.06,
+   "usd_uncached": 0.0,
+   "usd55": 0.04,
+   "share_growth_usd": 0.0,
+   "chars": 584,
+   "tokens_never_reread": 7733
+  },
+  {
+   "source": "attachment:hook_stopped_continuation:TeammateIdle",
+   "items": 12,
+   "tokens_appended": 6799,
+   "token_reads": 20201,
+   "usd": 0.08,
+   "usd_write": 0.07,
+   "usd_read": 0.01,
+   "usd_uncached": 0.0,
+   "usd55": 0.06,
+   "share_growth_usd": 0.0,
+   "chars": 2148,
+   "tokens_never_reread": 7690
+  },
+  {
+   "source": "tool_result:StructuredOutput",
+   "items": 104,
+   "tokens_appended": 14797,
+   "token_reads": 15082,
+   "usd": 0.08,
+   "usd_write": 0.08,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.06,
+   "share_growth_usd": 0.0,
+   "chars": 33557,
+   "tokens_never_reread": 116969
+  },
+  {
+   "source": "attachment:workflow_keyword_request",
+   "items": 16,
+   "tokens_appended": 865,
+   "token_reads": 100837,
+   "usd": 0.07,
+   "usd_write": 0.03,
+   "usd_read": 0.04,
+   "usd_uncached": 0.0,
+   "usd55": 0.04,
+   "share_growth_usd": 0.0,
+   "chars": 2800,
+   "tokens_never_reread": 66
+  },
+  {
+   "source": "tool_use_input:CronCreate",
+   "items": 1,
+   "tokens_appended": 710,
+   "token_reads": 43299,
+   "usd": 0.06,
+   "usd_write": 0.04,
+   "usd_read": 0.02,
+   "usd_uncached": 0.0,
+   "usd55": 0.04,
+   "share_growth_usd": 0.0,
+   "chars": 1551,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:mcp:mac-messages",
+   "items": 2,
+   "tokens_appended": 4289,
+   "token_reads": 128318,
+   "usd": 0.06,
+   "usd_write": 0.03,
+   "usd_read": 0.02,
+   "usd_uncached": 0.0,
+   "usd55": 0.06,
+   "share_growth_usd": 0.0,
+   "chars": 8163,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PreToolUse:mcp__ms365__send-draft-message",
+   "items": 7,
+   "tokens_appended": 725,
+   "token_reads": 36681,
+   "usd": 0.04,
+   "usd_write": 0.03,
+   "usd_read": 0.02,
+   "usd_uncached": 0.0,
+   "usd55": 0.03,
+   "share_growth_usd": 0.0,
+   "chars": 2533,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:mcp:motion",
+   "items": 9,
+   "tokens_appended": 826,
+   "token_reads": 58918,
+   "usd": 0.04,
+   "usd_write": 0.01,
+   "usd_read": 0.03,
+   "usd_uncached": 0.0,
+   "usd55": 0.02,
+   "share_growth_usd": 0.0,
+   "chars": 685,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:ultra_effort_enter",
+   "items": 7,
+   "tokens_appended": 744,
+   "token_reads": 62214,
+   "usd": 0.04,
+   "usd_write": 0.02,
+   "usd_read": 0.02,
+   "usd_uncached": 0.0,
+   "usd55": 0.02,
+   "share_growth_usd": 0.0,
+   "chars": 2216,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PostToolUse:mcp__ms365__list-mail-folder-messages",
+   "items": 1,
+   "tokens_appended": 362,
+   "token_reads": 22826,
+   "usd": 0.04,
+   "usd_write": 0.03,
+   "usd_read": 0.01,
+   "usd_uncached": 0.0,
+   "usd55": 0.03,
+   "share_growth_usd": 0.0,
+   "chars": 1036,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:mcp:motion-plus",
+   "items": 7,
+   "tokens_appended": 563,
+   "token_reads": 57004,
+   "usd": 0.04,
+   "usd_write": 0.01,
+   "usd_read": 0.03,
+   "usd_uncached": 0.0,
+   "usd55": 0.02,
+   "share_growth_usd": 0.0,
+   "chars": 367,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PreToolUse:mcp__ms365__create-draft-email",
+   "items": 1,
+   "tokens_appended": 287,
+   "token_reads": 15215,
+   "usd": 0.03,
+   "usd_write": 0.03,
+   "usd_read": 0.01,
+   "usd_uncached": 0.0,
+   "usd55": 0.02,
+   "share_growth_usd": 0.0,
+   "chars": 769,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:ListMcpResourcesTool",
+   "items": 3,
+   "tokens_appended": 221,
+   "token_reads": 41748,
+   "usd": 0.03,
+   "usd_write": 0.01,
+   "usd_read": 0.02,
+   "usd_uncached": 0.0,
+   "usd55": 0.02,
+   "share_growth_usd": 0.0,
+   "chars": 64,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PostToolUse:mcp__ms365__get-mail-message",
+   "items": 1,
+   "tokens_appended": 302,
+   "token_reads": 39798,
+   "usd": 0.03,
+   "usd_write": 0.01,
+   "usd_read": 0.02,
+   "usd_uncached": 0.0,
+   "usd55": 0.02,
+   "share_growth_usd": 0.0,
+   "chars": 1027,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PostToolUse:ListAgents",
+   "items": 1,
+   "tokens_appended": 1434,
+   "token_reads": 8602,
+   "usd": 0.03,
+   "usd_write": 0.03,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.02,
+   "share_growth_usd": 0.0,
+   "chars": 3495,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:ScheduleWakeup",
+   "items": 9,
+   "tokens_appended": 1512,
+   "token_reads": 27276,
+   "usd": 0.02,
+   "usd_write": 0.01,
+   "usd_read": 0.01,
+   "usd_uncached": 0.0,
+   "usd55": 0.02,
+   "share_growth_usd": 0.0,
+   "chars": 2311,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:PushNotification",
+   "items": 2,
+   "tokens_appended": 269,
+   "token_reads": 15609,
+   "usd": 0.02,
+   "usd_write": 0.01,
+   "usd_read": 0.01,
+   "usd_uncached": 0.0,
+   "usd55": 0.01,
+   "share_growth_usd": 0.0,
+   "chars": 385,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:SubagentHandback",
+   "items": 63,
+   "tokens_appended": 3040,
+   "token_reads": 7432,
+   "usd": 0.02,
+   "usd_write": 0.02,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.02,
+   "share_growth_usd": 0.0,
+   "chars": 3843,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:team_context",
+   "items": 3,
+   "tokens_appended": 905,
+   "token_reads": 21547,
+   "usd": 0.02,
+   "usd_write": 0.01,
+   "usd_read": 0.01,
+   "usd_uncached": 0.0,
+   "usd55": 0.01,
+   "share_growth_usd": 0.0,
+   "chars": 2396,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PostToolUse:TaskOutput",
+   "items": 2,
+   "tokens_appended": 1414,
+   "token_reads": 6615,
+   "usd": 0.02,
+   "usd_write": 0.01,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.01,
+   "share_growth_usd": 0.0,
+   "chars": 3819,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PostToolUse:ToolSearch",
+   "items": 1,
+   "tokens_appended": 644,
+   "token_reads": 8373,
+   "usd": 0.01,
+   "usd_write": 0.01,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.01,
+   "share_growth_usd": 0.0,
+   "chars": 1617,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PreToolUse:mcp__ms365__graph-batch",
+   "items": 10,
+   "tokens_appended": 2315,
+   "token_reads": 14882,
+   "usd": 0.01,
+   "usd_write": 0.01,
+   "usd_read": 0.01,
+   "usd_uncached": 0.0,
+   "usd55": 0.01,
+   "share_growth_usd": 0.0,
+   "chars": 6678,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:SendFeedback",
+   "items": 2,
+   "tokens_appended": 163,
+   "token_reads": 10919,
+   "usd": 0.01,
+   "usd_write": 0.01,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.01,
+   "share_growth_usd": 0.0,
+   "chars": 358,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:ScheduleWakeup",
+   "items": 9,
+   "tokens_appended": 679,
+   "token_reads": 11490,
+   "usd": 0.01,
+   "usd_write": 0.01,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.01,
+   "share_growth_usd": 0.0,
+   "chars": 1600,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:Grep",
+   "items": 13,
+   "tokens_appended": 4116,
+   "token_reads": 12854,
+   "usd": 0.01,
+   "usd_write": 0.01,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.02,
+   "share_growth_usd": 0.0,
+   "chars": 8745,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:ReadMcpResourceTool",
+   "items": 3,
+   "tokens_appended": 233,
+   "token_reads": 12566,
+   "usd": 0.01,
+   "usd_write": 0.0,
+   "usd_read": 0.01,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 228,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:PushNotification",
+   "items": 2,
+   "tokens_appended": 86,
+   "token_reads": 4553,
+   "usd": 0.01,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 100,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:CronCreate",
+   "items": 1,
+   "tokens_appended": 66,
+   "token_reads": 4022,
+   "usd": 0.01,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 143,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:DesignSync",
+   "items": 3,
+   "tokens_appended": 233,
+   "token_reads": 6636,
+   "usd": 0.01,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 131,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:ultra_effort_exit",
+   "items": 4,
+   "tokens_appended": 112,
+   "token_reads": 4912,
+   "usd": 0.01,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 444,
+   "tokens_never_reread": 42
+  },
+  {
+   "source": "tool_use_input:Grep",
+   "items": 13,
+   "tokens_appended": 1646,
+   "token_reads": 9564,
+   "usd": 0.01,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.01,
+   "share_growth_usd": 0.0,
+   "chars": 1935,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:DesignSync",
+   "items": 3,
+   "tokens_appended": 206,
+   "token_reads": 6034,
+   "usd": 0.0,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 427,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PostToolUse:Skill",
+   "items": 1,
+   "tokens_appended": 380,
+   "token_reads": 1901,
+   "usd": 0.0,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 1004,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_success:SessionStart:startup",
+   "items": 3,
+   "tokens_appended": 380,
+   "token_reads": 1141,
+   "usd": 0.0,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 1020,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:task_reminder",
+   "items": 2,
+   "tokens_appended": 298,
+   "token_reads": 2332,
+   "usd": 0.0,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 916,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:ReadNotifications",
+   "items": 6,
+   "tokens_appended": 214,
+   "token_reads": 10677,
+   "usd": 0.0,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 12,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:Glob",
+   "items": 14,
+   "tokens_appended": 1300,
+   "token_reads": 7205,
+   "usd": 0.0,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.01,
+   "share_growth_usd": 0.0,
+   "chars": 947,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:Glob",
+   "items": 14,
+   "tokens_appended": 953,
+   "token_reads": 7029,
+   "usd": 0.0,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 1285,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:hook_additional_context:PostToolUse:SendMessage",
+   "items": 1,
+   "tokens_appended": 375,
+   "token_reads": 375,
+   "usd": 0.0,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 1009,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:ms365_list_mail_folders",
+   "items": 1,
+   "tokens_appended": 80,
+   "token_reads": 1992,
+   "usd": 0.0,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 36,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:ReadNotifications",
+   "items": 6,
+   "tokens_appended": 122,
+   "token_reads": 7072,
+   "usd": 0.0,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 144,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:mcp:mac-messages",
+   "items": 2,
+   "tokens_appended": 152,
+   "token_reads": 4066,
+   "usd": 0.0,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 54,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:ms365_list_mail_folders",
+   "items": 1,
+   "tokens_appended": 46,
+   "token_reads": 1161,
+   "usd": 0.0,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 87,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "attachment:plan_mode_exit",
+   "items": 1,
+   "tokens_appended": 57,
+   "token_reads": 3131,
+   "usd": 0.0,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 137,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_use_input:RemoteTrigger",
+   "items": 1,
+   "tokens_appended": 72,
+   "token_reads": 217,
+   "usd": 0.0,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 18,
+   "tokens_never_reread": 0
+  },
+  {
+   "source": "tool_result:RemoteTrigger",
+   "items": 1,
+   "tokens_appended": 47,
+   "token_reads": 141,
+   "usd": 0.0,
+   "usd_write": 0.0,
+   "usd_read": 0.0,
+   "usd_uncached": 0.0,
+   "usd55": 0.0,
+   "share_growth_usd": 0.0,
+   "chars": 37,
+   "tokens_never_reread": 0
+  }
+ ],
+ "by_source_ctx": [
+  {
+   "ctx": "main",
+   "source": "tool_result:Bash",
+   "tokens_appended": 42293062,
+   "usd": 2880.7,
+   "usd55": 1500.47
+  },
+  {
+   "ctx": "main",
+   "source": "tool_use_input:Bash",
+   "tokens_appended": 27404856,
+   "usd": 2168.33,
+   "usd55": 1085.59
+  },
+  {
+   "ctx": "main",
+   "source": "assistant_thinking",
+   "tokens_appended": 28267934,
+   "usd": 1842.08,
+   "usd55": 969.94
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "tool_result:Bash",
+   "tokens_appended": 89341959,
+   "usd": 1395.34,
+   "usd55": 805.28
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "assistant_thinking",
+   "tokens_appended": 39376765,
+   "usd": 584.15,
+   "usd55": 344.93
+  },
+  {
+   "ctx": "main",
+   "source": "context_rewrite_carryover",
+   "tokens_appended": 11956317,
+   "usd": 566.98,
+   "usd55": 308.0
+  },
+  {
+   "ctx": "subagent",
+   "source": "tool_result:Bash",
+   "tokens_appended": 23128491,
+   "usd": 407.87,
+   "usd55": 231.31
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "tool_use_input:Bash",
+   "tokens_appended": 26039659,
+   "usd": 393.44,
+   "usd55": 231.44
+  },
+  {
+   "ctx": "main",
+   "source": "assistant_text",
+   "tokens_appended": 5340774,
+   "usd": 380.07,
+   "usd55": 195.61
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "tool_result:Read",
+   "tokens_appended": 24672314,
+   "usd": 369.64,
+   "usd55": 209.8
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:Read",
+   "tokens_appended": 5359612,
+   "usd": 306.98,
+   "usd55": 166.06
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:total_tokens_reminder",
+   "tokens_appended": 2739210,
+   "usd": 212.35,
+   "usd55": 107.62
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:queued_command",
+   "tokens_appended": 2746482,
+   "usd": 191.58,
+   "usd55": 94.47
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:edited_text_file",
+   "tokens_appended": 3019953,
+   "usd": 182.31,
+   "usd55": 99.12
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "tool_result:WebFetch",
+   "tokens_appended": 8985659,
+   "usd": 177.27,
+   "usd55": 93.73
+  },
+  {
+   "ctx": "main",
+   "source": "meta_user:stop_hook_feedback",
+   "tokens_appended": 1116176,
+   "usd": 167.46,
+   "usd55": 74.1
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "tokens_appended": 3553291,
+   "usd": 165.66,
+   "usd55": 101.75
+  },
+  {
+   "ctx": "subagent",
+   "source": "assistant_thinking",
+   "tokens_appended": 8365642,
+   "usd": 121.67,
+   "usd55": 71.93
+  },
+  {
+   "ctx": "main",
+   "source": "meta_user:command_body",
+   "tokens_appended": 1918669,
+   "usd": 118.88,
+   "usd55": 66.8
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:skill_listing",
+   "tokens_appended": 2833599,
+   "usd": 111.75,
+   "usd55": 63.26
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:hook_additional_context:UserPromptSubmit",
+   "tokens_appended": 1733754,
+   "usd": 105.42,
+   "usd55": 56.64
+  },
+  {
+   "ctx": "main",
+   "source": "tool_use_input:Edit",
+   "tokens_appended": 1737301,
+   "usd": 97.73,
+   "usd55": 53.56
+  },
+  {
+   "ctx": "subagent",
+   "source": "tool_use_input:Bash",
+   "tokens_appended": 6451834,
+   "usd": 95.06,
+   "usd55": 55.65
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:hook_blocking_error:Stop",
+   "tokens_appended": 670194,
+   "usd": 90.78,
+   "usd55": 40.96
+  },
+  {
+   "ctx": "main",
+   "source": "tool_use_input:Agent",
+   "tokens_appended": 986811,
+   "usd": 88.21,
+   "usd55": 46.2
+  },
+  {
+   "ctx": "main",
+   "source": "tool_use_input:Workflow",
+   "tokens_appended": 1008540,
+   "usd": 86.71,
+   "usd55": 46.38
+  },
+  {
+   "ctx": "main",
+   "source": "tool_use_input:Write",
+   "tokens_appended": 2226712,
+   "usd": 86.69,
+   "usd55": 52.51
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "tool_result:WebSearch",
+   "tokens_appended": 5035337,
+   "usd": 81.33,
+   "usd55": 44.03
+  },
+  {
+   "ctx": "subagent",
+   "source": "tool_result:Read",
+   "tokens_appended": 2722719,
+   "usd": 75.34,
+   "usd55": 39.89
+  },
+  {
+   "ctx": "main",
+   "source": "meta_user:other",
+   "tokens_appended": 1191153,
+   "usd": 65.67,
+   "usd55": 36.24
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:deferred_tools_delta",
+   "tokens_appended": 980158,
+   "usd": 61.31,
+   "usd55": 30.63
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:mcp:ms365",
+   "tokens_appended": 644782,
+   "usd": 55.5,
+   "usd55": 32.38
+  },
+  {
+   "ctx": "main",
+   "source": "residual_unattributed",
+   "tokens_appended": 558406,
+   "usd": 55.42,
+   "usd55": 26.39
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "tool_use_input:Write",
+   "tokens_appended": 4931154,
+   "usd": 51.81,
+   "usd55": 31.38
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "attachment:mcp_instructions_delta",
+   "tokens_appended": 3291170,
+   "usd": 49.61,
+   "usd55": 28.69
+  },
+  {
+   "ctx": "main",
+   "source": "meta_user:skill_body",
+   "tokens_appended": 681301,
+   "usd": 49.09,
+   "usd55": 26.82
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "attachment:total_tokens_reminder",
+   "tokens_appended": 2422540,
+   "usd": 41.41,
+   "usd55": 24.27
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:ToolSearch",
+   "tokens_appended": 532548,
+   "usd": 36.11,
+   "usd55": 19.21
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:hook_additional_context:PostToolUse:Bash",
+   "tokens_appended": 448041,
+   "usd": 35.91,
+   "usd55": 18.34
+  },
+  {
+   "ctx": "main",
+   "source": "user_prompt:task_notification:workflow",
+   "tokens_appended": 463064,
+   "usd": 34.53,
+   "usd55": 18.33
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "context_rewrite_carryover",
+   "tokens_appended": 2998513,
+   "usd": 30.54,
+   "usd55": 20.66
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "assistant_text",
+   "tokens_appended": 1723685,
+   "usd": 28.02,
+   "usd55": 16.75
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:mcp_instructions_delta",
+   "tokens_appended": 502722,
+   "usd": 26.25,
+   "usd55": 13.61
+  },
+  {
+   "ctx": "main",
+   "source": "user_prompt:task_notification:bash",
+   "tokens_appended": 618772,
+   "usd": 26.03,
+   "usd55": 14.59
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:agent_listing_delta",
+   "tokens_appended": 665065,
+   "usd": 25.78,
+   "usd55": 14.2
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "tool_result:mcp:ms365",
+   "tokens_appended": 1945404,
+   "usd": 21.0,
+   "usd55": 11.16
+  },
+  {
+   "ctx": "main",
+   "source": "user_prompt:task_notification:subagent",
+   "tokens_appended": 337259,
+   "usd": 19.79,
+   "usd55": 11.23
+  },
+  {
+   "ctx": "main",
+   "source": "user_prompt:peer_message",
+   "tokens_appended": 277216,
+   "usd": 19.53,
+   "usd55": 11.07
+  },
+  {
+   "ctx": "subagent",
+   "source": "tool_result:WebFetch",
+   "tokens_appended": 1249058,
+   "usd": 19.0,
+   "usd55": 10.92
+  },
+  {
+   "ctx": "subagent",
+   "source": "tool_result:WebSearch",
+   "tokens_appended": 1003608,
+   "usd": 18.34,
+   "usd55": 10.15
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "tool_use_input:Edit",
+   "tokens_appended": 549870,
+   "usd": 17.53,
+   "usd55": 9.36
+  },
+  {
+   "ctx": "subagent",
+   "source": "tool_use_input:Write",
+   "tokens_appended": 2455361,
+   "usd": 17.15,
+   "usd55": 12.34
+  },
+  {
+   "ctx": "subagent",
+   "source": "context_rewrite_carryover",
+   "tokens_appended": 1377337,
+   "usd": 16.33,
+   "usd55": 8.48
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "tool_use_input:WebFetch",
+   "tokens_appended": 802918,
+   "usd": 15.87,
+   "usd55": 8.58
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:mcp:claude_ai_uidotsh",
+   "tokens_appended": 123683,
+   "usd": 14.98,
+   "usd55": 8.1
+  },
+  {
+   "ctx": "main",
+   "source": "tool_use_input:Read",
+   "tokens_appended": 229303,
+   "usd": 14.43,
+   "usd55": 7.65
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:WebSearch",
+   "tokens_appended": 507644,
+   "usd": 13.85,
+   "usd55": 8.36
+  },
+  {
+   "ctx": "main",
+   "source": "user_prompt:pasted",
+   "tokens_appended": 228592,
+   "usd": 13.2,
+   "usd55": 7.32
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:nested_memory",
+   "tokens_appended": 234931,
+   "usd": 12.58,
+   "usd55": 7.0
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:Agent:inline_return",
+   "tokens_appended": 165244,
+   "usd": 12.53,
+   "usd55": 6.67
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:Edit",
+   "tokens_appended": 242356,
+   "usd": 12.26,
+   "usd55": 6.85
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "residual_unattributed",
+   "tokens_appended": 660331,
+   "usd": 11.93,
+   "usd55": 7.26
+  },
+  {
+   "ctx": "main",
+   "source": "tool_use_input:SendMessage",
+   "tokens_appended": 233263,
+   "usd": 11.1,
+   "usd55": 6.48
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:WebFetch",
+   "tokens_appended": 405731,
+   "usd": 10.86,
+   "usd55": 6.41
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:Agent:async_ack",
+   "tokens_appended": 146337,
+   "usd": 10.79,
+   "usd55": 5.75
+  },
+  {
+   "ctx": "subagent",
+   "source": "attachment:mcp_instructions_delta",
+   "tokens_appended": 467851,
+   "usd": 10.15,
+   "usd55": 5.53
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "attachment:edited_text_file",
+   "tokens_appended": 484872,
+   "usd": 9.97,
+   "usd55": 6.09
+  },
+  {
+   "ctx": "subagent",
+   "source": "attachment:total_tokens_reminder",
+   "tokens_appended": 554288,
+   "usd": 9.64,
+   "usd55": 5.61
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:hook_additional_context:PreToolUse:Agent",
+   "tokens_appended": 92490,
+   "usd": 8.96,
+   "usd55": 4.69
+  },
+  {
+   "ctx": "main",
+   "source": "user_prompt:bash_mode",
+   "tokens_appended": 195776,
+   "usd": 8.67,
+   "usd55": 5.18
+  },
+  {
+   "ctx": "main",
+   "source": "tool_use_input:mcp:ms365",
+   "tokens_appended": 101235,
+   "usd": 8.5,
+   "usd55": 5.15
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:hook_additional_context:PreToolUse:Edit",
+   "tokens_appended": 170509,
+   "usd": 8.43,
+   "usd55": 4.74
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "tool_use_input:Read",
+   "tokens_appended": 531413,
+   "usd": 8.1,
+   "usd55": 4.68
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:Workflow:async_ack",
+   "tokens_appended": 97885,
+   "usd": 8.02,
+   "usd55": 4.27
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:hook_additional_context:SessionStart",
+   "tokens_appended": 173036,
+   "usd": 7.88,
+   "usd55": 4.58
+  },
+  {
+   "ctx": "main",
+   "source": "user_prompt:plain",
+   "tokens_appended": 204081,
+   "usd": 7.74,
+   "usd55": 4.27
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "attachment:queued_command",
+   "tokens_appended": 293516,
+   "usd": 7.66,
+   "usd55": 4.75
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "tool_use_input:WebSearch",
+   "tokens_appended": 449695,
+   "usd": 7.24,
+   "usd55": 3.93
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:bash_output_audience_note",
+   "tokens_appended": 154969,
+   "usd": 6.88,
+   "usd55": 3.37
+  },
+  {
+   "ctx": "subagent",
+   "source": "assistant_text",
+   "tokens_appended": 401779,
+   "usd": 6.49,
+   "usd55": 3.83
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "tool_result:ToolSearch",
+   "tokens_appended": 271872,
+   "usd": 6.37,
+   "usd55": 3.49
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:ListAgents",
+   "tokens_appended": 86992,
+   "usd": 6.13,
+   "usd55": 3.43
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "attachment:auto_mode",
+   "tokens_appended": 418801,
+   "usd": 6.08,
+   "usd55": 3.6
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "attachment:bash_output_audience_note",
+   "tokens_appended": 557145,
+   "usd": 5.96,
+   "usd55": 2.67
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:environment",
+   "tokens_appended": 119666,
+   "usd": 5.67,
+   "usd55": 3.15
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:TaskStop",
+   "tokens_appended": 77341,
+   "usd": 4.72,
+   "usd55": 2.49
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "attachment:nested_memory",
+   "tokens_appended": 464213,
+   "usd": 4.64,
+   "usd55": 3.0
+  },
+  {
+   "ctx": "main",
+   "source": "meta_user:image_meta",
+   "tokens_appended": 61732,
+   "usd": 4.0,
+   "usd55": 2.07
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:hook_additional_context:PreToolUse:mcp__ms365__list-mail-messages",
+   "tokens_appended": 37901,
+   "usd": 3.76,
+   "usd55": 2.14
+  },
+  {
+   "ctx": "main",
+   "source": "tool_use_input:Monitor",
+   "tokens_appended": 50962,
+   "usd": 3.73,
+   "usd55": 1.96
+  },
+  {
+   "ctx": "subagent",
+   "source": "tool_use_input:Edit",
+   "tokens_appended": 227784,
+   "usd": 3.55,
+   "usd55": 1.87
+  },
+  {
+   "ctx": "main",
+   "source": "tool_use_input:ToolSearch",
+   "tokens_appended": 54876,
+   "usd": 3.32,
+   "usd55": 1.8
+  },
+  {
+   "ctx": "subagent",
+   "source": "tool_use_input:Read",
+   "tokens_appended": 111975,
+   "usd": 2.9,
+   "usd55": 1.5
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:SendMessage",
+   "tokens_appended": 41294,
+   "usd": 2.6,
+   "usd55": 1.47
+  },
+  {
+   "ctx": "subagent",
+   "source": "tool_use_input:WebFetch",
+   "tokens_appended": 156707,
+   "usd": 2.57,
+   "usd55": 1.53
+  },
+  {
+   "ctx": "main",
+   "source": "user_prompt:command",
+   "tokens_appended": 70220,
+   "usd": 2.54,
+   "usd55": 1.33
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:Write",
+   "tokens_appended": 65838,
+   "usd": 2.48,
+   "usd55": 1.52
+  },
+  {
+   "ctx": "subagent",
+   "source": "attachment:edited_text_file",
+   "tokens_appended": 143267,
+   "usd": 2.46,
+   "usd55": 1.35
+  },
+  {
+   "ctx": "main",
+   "source": "user_prompt:teammate_message",
+   "tokens_appended": 211368,
+   "usd": 2.46,
+   "usd55": 1.84
+  },
+  {
+   "ctx": "main",
+   "source": "user_prompt:task_notification:monitor",
+   "tokens_appended": 45432,
+   "usd": 2.41,
+   "usd55": 1.45
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "meta_user:skill_body",
+   "tokens_appended": 77875,
+   "usd": 2.38,
+   "usd55": 1.15
+  },
+  {
+   "ctx": "main",
+   "source": "user_prompt:task_notification:goal_checkin",
+   "tokens_appended": 23738,
+   "usd": 2.35,
+   "usd55": 1.11
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "tool_use_input:StructuredOutput",
+   "tokens_appended": 375262,
+   "usd": 1.96,
+   "usd55": 1.54
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "tool_result:Edit",
+   "tokens_appended": 89364,
+   "usd": 1.94,
+   "usd55": 1.08
+  },
+  {
+   "ctx": "main",
+   "source": "tool_use_input:WebFetch",
+   "tokens_appended": 65301,
+   "usd": 1.89,
+   "usd55": 1.12
+  },
+  {
+   "ctx": "subagent",
+   "source": "residual_unattributed",
+   "tokens_appended": 111938,
+   "usd": 1.71,
+   "usd55": 1.18
+  },
+  {
+   "ctx": "subagent",
+   "source": "tool_use_input:WebSearch",
+   "tokens_appended": 93655,
+   "usd": 1.7,
+   "usd55": 0.94
+  },
+  {
+   "ctx": "main",
+   "source": "user_prompt:task_notification:peer_mail",
+   "tokens_appended": 32004,
+   "usd": 1.68,
+   "usd55": 1.02
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:silent_turn_reminder",
+   "tokens_appended": 42096,
+   "usd": 1.66,
+   "usd55": 1.02
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:remote_session_change",
+   "tokens_appended": 30258,
+   "usd": 1.55,
+   "usd55": 0.81
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:session_context",
+   "tokens_appended": 28964,
+   "usd": 1.52,
+   "usd55": 0.82
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "tool_use_input:mcp:ms365",
+   "tokens_appended": 114975,
+   "usd": 1.52,
+   "usd55": 0.81
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:Monitor",
+   "tokens_appended": 21698,
+   "usd": 1.48,
+   "usd55": 0.8
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "tool_use_input:ToolSearch",
+   "tokens_appended": 78772,
+   "usd": 1.4,
+   "usd55": 0.76
+  },
+  {
+   "ctx": "workflow_agent",
+   "source": "attachment:skill_listing",
+   "tokens_appended": 63847,
+   "usd": 1.33,
+   "usd55": 0.94
+  },
+  {
+   "ctx": "main",
+   "source": "tool_use_input:Skill",
+   "tokens_appended": 21109,
+   "usd": 1.26,
+   "usd55": 0.7
+  },
+  {
+   "ctx": "main",
+   "source": "tool_use_input:WebSearch",
+   "tokens_appended": 46740,
+   "usd": 1.24,
+   "usd55": 0.75
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:hook_additional_context:PreToolUse:Write",
+   "tokens_appended": 18729,
+   "usd": 1.13,
+   "usd55": 0.65
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:auto_mode",
+   "tokens_appended": 28834,
+   "usd": 1.11,
+   "usd55": 0.61
+  },
+  {
+   "ctx": "main",
+   "source": "meta_user:local_command_caveat",
+   "tokens_appended": 38867,
+   "usd": 1.09,
+   "usd55": 0.54
+  },
+  {
+   "ctx": "subagent",
+   "source": "attachment:auto_mode",
+   "tokens_appended": 59667,
+   "usd": 1.04,
+   "usd55": 0.64
+  }
+ ],
+ "sample_share_vs_fleet": [
+  {
+   "source": "tool_result:Bash",
+   "fleet_share": 0.3167,
+   "sample_share": 0.3111
+  },
+  {
+   "source": "tool_use_input:Bash",
+   "fleet_share": 0.1796,
+   "sample_share": 0.2
+  },
+  {
+   "source": "assistant_thinking",
+   "fleet_share": 0.1723,
+   "sample_share": 0.1262
+  },
+  {
+   "source": "tool_result:Read",
+   "fleet_share": 0.0508,
+   "sample_share": 0.0414
+  },
+  {
+   "source": "context_rewrite_carryover",
+   "fleet_share": 0.0415,
+   "sample_share": 0.1416
+  },
+  {
+   "source": "assistant_text",
+   "fleet_share": 0.028,
+   "sample_share": 0.0244
+  },
+  {
+   "source": "attachment:total_tokens_reminder",
+   "fleet_share": 0.0178,
+   "sample_share": 0.0212
+  },
+  {
+   "source": "tool_result:WebFetch",
+   "fleet_share": 0.014,
+   "sample_share": 0.0125
+  },
+  {
+   "source": "attachment:queued_command",
+   "fleet_share": 0.0135,
+   "sample_share": 0.0086
+  },
+  {
+   "source": "attachment:edited_text_file",
+   "fleet_share": 0.0132,
+   "sample_share": 0.0123
+  },
+  {
+   "source": "meta_user:stop_hook_feedback",
+   "fleet_share": 0.0113,
+   "sample_share": 0.0007
+  },
+  {
+   "source": "attachment:instructions",
+   "fleet_share": 0.0112,
+   "sample_share": 0.0072
+  },
+  {
+   "source": "tool_use_input:Write",
+   "fleet_share": 0.0105,
+   "sample_share": 0.0098
+  },
+  {
+   "source": "meta_user:command_body",
+   "fleet_share": 0.008,
+   "sample_share": 0.0036
+  },
+  {
+   "source": "tool_use_input:Edit",
+   "fleet_share": 0.008,
+   "sample_share": 0.0103
+  },
+  {
+   "source": "tool_result:WebSearch",
+   "fleet_share": 0.0077,
+   "sample_share": 0.006
+  },
+  {
+   "source": "attachment:skill_listing",
+   "fleet_share": 0.0077,
+   "sample_share": 0.0041
+  },
+  {
+   "source": "attachment:hook_additional_context:UserPromptSubmit",
+   "fleet_share": 0.0071,
+   "sample_share": 0.0098
+  },
+  {
+   "source": "attachment:hook_blocking_error:Stop",
+   "fleet_share": 0.0061,
+   "sample_share": 0.0007
+  },
+  {
+   "source": "tool_use_input:Agent",
+   "fleet_share": 0.006,
+   "sample_share": 0.0029
+  }
+ ],
+ "extrapolation_check": {
+  "main": {
+   "sample_extrapolated_usd": 11615,
+   "direct_full_population_usd": 10619,
+   "ratio": 1.094,
+   "sample_extrapolated_usd55": 5606,
+   "direct_usd55": 5544
+  },
+  "subagent": {
+   "sample_extrapolated_usd": 712,
+   "direct_full_population_usd": 818,
+   "ratio": 0.87,
+   "sample_extrapolated_usd55": 424,
+   "direct_usd55": 468
+  },
+  "workflow_agent": {
+   "sample_extrapolated_usd": 2968,
+   "direct_full_population_usd": 3336,
+   "ratio": 0.89,
+   "sample_extrapolated_usd55": 1738,
+   "direct_usd55": 1926
+  }
+ },
+ "sample": {
+  "files": 180,
+  "by_ctx": {
+   "main": 60,
+   "subagent": 60,
+   "workflow_agent": 60
+  },
+  "projects": 84,
+  "n_resp_range": [
+   3,
+   1306
+  ]
+ },
+ "read_line_prefix": {
+  "read_results": 8150,
+  "read_chars": 53811903,
+  "numbered_lines": 673502,
+  "prefix_chars": 2579337,
+  "prefix_share_of_read_chars": 0.0479,
+  "prefix_chars_if_every_10th": 262231,
+  "saving_chars": 2317106,
+  "saving_share_of_read_chars": 0.0431,
+  "saving_tokens_est_char_ratio": 1021668,
+  "saving_tokens_est_range_1to2_per_prefix": [
+   606152,
+   1212304
+  ],
+  "read_growth_usd": 752.0,
+  "read_growth_tokens": 32754645,
+  "saving_usd_est": 23.5,
+  "saving_usd55_est": 13.0,
+  "read_result_size_p50_p90_p99": [
+   0,
+   27437,
+   52263
+  ],
+  "system_reminder_blocks_in_read_results": 179,
+  "system_reminder_chars": 17224,
+  "read_results_with_images": 4407
+ },
+ "returns": {
+  "task_notification:workflow": {
+   "n": 107,
+   "chars_total": 984975,
+   "p50": 9748,
+   "p90": 12769,
+   "p99": 36824,
+   "max": 38173,
+   "tokens_est_total": 433325
+  },
+  "task_notification:bash": {
+   "n": 1555,
+   "chars_total": 797456,
+   "p50": 425,
+   "p90": 742,
+   "p99": 784,
+   "max": 1233,
+   "tokens_est_total": 350829
+  },
+  "task_notification:subagent": {
+   "n": 191,
+   "chars_total": 720715,
+   "p50": 3014,
+   "p90": 7538,
+   "p99": 25662,
+   "max": 28501,
+   "tokens_est_total": 317068
+  },
+  "Agent:inline_return": {
+   "n": 331,
+   "chars_total": 394429,
+   "p50": 291,
+   "p90": 2865,
+   "p99": 2908,
+   "max": 2913,
+   "tokens_est_total": 156000
+  },
+  "Agent:async_ack": {
+   "n": 344,
+   "chars_total": 372710,
+   "p50": 1082,
+   "p90": 1091,
+   "p99": 1108,
+   "max": 1108,
+   "tokens_est_total": 147410
+  },
+  "task_notification:peer_mail": {
+   "n": 59,
+   "chars_total": 294229,
+   "p50": 849,
+   "p90": 4117,
+   "p99": 100039,
+   "max": 100039,
+   "tokens_est_total": 129442
+  },
+  "Workflow:async_ack": {
+   "n": 143,
+   "chars_total": 197293,
+   "p50": 1395,
+   "p90": 1475,
+   "p99": 1571,
+   "max": 1583,
+   "tokens_est_total": 78031
+  },
+  "task_notification:monitor": {
+   "n": 137,
+   "chars_total": 55665,
+   "p50": 401,
+   "p90": 465,
+   "p99": 896,
+   "max": 2213,
+   "tokens_est_total": 24489
+  },
+  "task_notification:goal_checkin": {
+   "n": 39,
+   "chars_total": 46384,
+   "p50": 1158,
+   "p90": 1573,
+   "p99": 2136,
+   "max": 2136,
+   "tokens_est_total": 20406
+  },
+  "TaskOutput": {
+   "n": 51,
+   "chars_total": 38509,
+   "p50": 227,
+   "p90": 2517,
+   "p99": 4151,
+   "max": 4151,
+   "tokens_est_total": 15231
+  },
+  "Workflow:inline_return": {
+   "n": 13,
+   "chars_total": 4369,
+   "p50": 359,
+   "p90": 467,
+   "p99": 487,
+   "max": 487,
+   "tokens_est_total": 1728
+  }
+ },
+ "returns_share_of_main_growth": {
+  "main_growth_usd": 10629.7,
+  "main_growth_usd55": 5551.6,
+  "returns_usd": 86.7,
+  "returns_tokens": 1229013,
+  "returns_share": 0.0082,
+  "briefs_usd": 186.0,
+  "briefs_share": 0.0175,
+  "sources": [
+   "tool_result:Agent:async_ack",
+   "user_prompt:task_notification:subagent",
+   "tool_result:Agent:inline_return",
+   "tool_result:TaskOutput",
+   "tool_result:Workflow:async_ack",
+   "user_prompt:task_notification:workflow",
+   "tool_result:Workflow:inline_return"
+  ]
+ },
+ "skill_bodies": [
+  {
+   "skill": "skill:research-subagents",
+   "loads": 13,
+   "chars_mean": 55721,
+   "chars_max": 60291,
+   "tokens_est_mean": 22278,
+   "growth_usd": 21.91
+  },
+  {
+   "skill": "skill:claude-api",
+   "loads": 3,
+   "chars_mean": 106394,
+   "chars_max": 107995,
+   "tokens_est_mean": 41003,
+   "growth_usd": 2.66
+  },
+  {
+   "skill": "skill:outbound-drafting",
+   "loads": 13,
+   "chars_mean": 15339,
+   "chars_max": 16249,
+   "tokens_est_mean": 5729,
+   "growth_usd": 5.0
+  },
+  {
+   "skill": "skill:agent-teams",
+   "loads": 7,
+   "chars_mean": 27980,
+   "chars_max": 33104,
+   "tokens_est_mean": 11243,
+   "growth_usd": 9.53
+  },
+  {
+   "skill": "skill:pyramid-principle-full",
+   "loads": 6,
+   "chars_mean": 14161,
+   "chars_max": 14349,
+   "tokens_est_mean": 5382,
+   "growth_usd": 2.93
+  },
+  {
+   "skill": "skill:plan-conventions",
+   "loads": 9,
+   "chars_mean": 8146,
+   "chars_max": 8147,
+   "tokens_est_mean": 3110,
+   "growth_usd": 1.77
+  },
+  {
+   "skill": "skill:bottle-reference-sourcing",
+   "loads": 1,
+   "chars_mean": 64537,
+   "chars_max": 64537,
+   "tokens_est_mean": 27197,
+   "growth_usd": 1.11
+  },
+  {
+   "skill": "skill:pyramid-principle",
+   "loads": 8,
+   "chars_mean": 7771,
+   "chars_max": 7827,
+   "tokens_est_mean": 3126,
+   "growth_usd": 1.26
+  },
+  {
+   "skill": "skill:resume-sessions (initial)",
+   "loads": 2,
+   "chars_mean": 21268,
+   "chars_max": 21360,
+   "tokens_est_mean": 8359,
+   "growth_usd": 0.0
+  },
+  {
+   "skill": "skill:cc-version-audit",
+   "loads": 2,
+   "chars_mean": 15369,
+   "chars_max": 15370,
+   "tokens_est_mean": 6452,
+   "growth_usd": 0.58
+  },
+  {
+   "skill": "skill:model-upgrade",
+   "loads": 1,
+   "chars_mean": 26619,
+   "chars_max": 26619,
+   "tokens_est_mean": 10780,
+   "growth_usd": 0.56
+  },
+  {
+   "skill": "skill:resume-sessions",
+   "loads": 1,
+   "chars_mean": 21166,
+   "chars_max": 21166,
+   "tokens_est_mean": 8315,
+   "growth_usd": 0.42
+  },
+  {
+   "skill": "skill:beautiful-mermaid-docs",
+   "loads": 2,
+   "chars_mean": 9498,
+   "chars_max": 9521,
+   "tokens_est_mean": 3730,
+   "growth_usd": 0.83
+  },
+  {
+   "skill": "skill:frontend-design",
+   "loads": 2,
+   "chars_mean": 9232,
+   "chars_max": 9232,
+   "tokens_est_mean": 2788,
+   "growth_usd": 0.51
+  },
+  {
+   "skill": "skill:account-relogin",
+   "loads": 2,
+   "chars_mean": 9218,
+   "chars_max": 9285,
+   "tokens_est_mean": 3795,
+   "growth_usd": 0.63
+  },
+  {
+   "skill": "skill:dia-agent",
+   "loads": 1,
+   "chars_mean": 18401,
+   "chars_max": 18401,
+   "tokens_est_mean": 7756,
+   "growth_usd": 0.8
+  },
+  {
+   "skill": "skill:read-twitter (initial)",
+   "loads": 3,
+   "chars_mean": 5577,
+   "chars_max": 5775,
+   "tokens_est_mean": 2192,
+   "growth_usd": 0.0
+  },
+  {
+   "skill": "skill:agent-browser",
+   "loads": 4,
+   "chars_mean": 4075,
+   "chars_max": 4077,
+   "tokens_est_mean": 1600,
+   "growth_usd": 0.15
+  },
+  {
+   "skill": "skill:dep-audit (initial)",
+   "loads": 1,
+   "chars_mean": 12480,
+   "chars_max": 12480,
+   "tokens_est_mean": 4905,
+   "growth_usd": 0.0
+  },
+  {
+   "skill": "skill:read-twitter",
+   "loads": 2,
+   "chars_mean": 5390,
+   "chars_max": 5402,
+   "tokens_est_mean": 2117,
+   "growth_usd": 0.39
+  },
+  {
+   "skill": "skill:cc-upgrade-gate",
+   "loads": 1,
+   "chars_mean": 9340,
+   "chars_max": 9340,
+   "tokens_est_mean": 3910,
+   "growth_usd": 0.11
+  },
+  {
+   "skill": "skill:pyramid-principle (initial)",
+   "loads": 1,
+   "chars_mean": 7856,
+   "chars_max": 7856,
+   "tokens_est_mean": 3088,
+   "growth_usd": 0.0
+  },
+  {
+   "skill": "skill:ground-up",
+   "loads": 1,
+   "chars_mean": 6821,
+   "chars_max": 6821,
+   "tokens_est_mean": 2610,
+   "growth_usd": 0.14
+  },
+  {
+   "skill": "skill:video-understanding",
+   "loads": 1,
+   "chars_mean": 6408,
+   "chars_max": 6408,
+   "tokens_est_mean": 2600,
+   "growth_usd": 0.09
+  },
+  {
+   "skill": "skill:manual-command-delivery",
+   "loads": 1,
+   "chars_mean": 6180,
+   "chars_max": 6180,
+   "tokens_est_mean": 2279,
+   "growth_usd": 0.04
+  },
+  {
+   "skill": "skill:frontier-campaign",
+   "loads": 1,
+   "chars_mean": 4452,
+   "chars_max": 4452,
+   "tokens_est_mean": 1857,
+   "growth_usd": 0.1
+  },
+  {
+   "skill": "skill:motion",
+   "loads": 1,
+   "chars_mean": 4294,
+   "chars_max": 4294,
+   "tokens_est_mean": 1510,
+   "growth_usd": 0.05
+  }
+ ],
+ "skill_body_size_dist_chars": {
+  "n": 90,
+  "p50": 14145,
+  "p90": 55274,
+  "max": 107995
+ },
+ "skill_tool_results": [
+  237,
+  6367,
+  48
+ ],
+ "top_items_by_usd": [
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+   "chars": 181916,
+   "tok": 75712,
+   "readers": 236.0,
+   "usd": 12.53,
+   "usd55": 6.526,
+   "file": "~/.claude-tertiary/projects/-Users-chrisren-Development-claude-infrastructure/12e163a9-a64e-4e60-8029-5803e034ac7e.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+   "chars": 181904,
+   "tok": 71816,
+   "readers": 183.0,
+   "usd": 9.3,
+   "usd55": 4.869,
+   "file": "~/.claude-tertiary/projects/-Users-chrisren-Development-claude-infrastructure/c301b7a5-0133-4482-9f45-c7ce9b888c4d.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+   "chars": 181146,
+   "tok": 70772,
+   "readers": 190.0,
+   "usd": 8.74,
+   "usd55": 4.345,
+   "file": "~/.claude-secondary/projects/-Users-chrisren-Development-claude-infrastructure/26cd14be-a7a4-422f-b568-cfd4609e0806.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+   "chars": 200556,
+   "tok": 75580,
+   "readers": 39.0,
+   "usd": 7.419,
+   "usd55": 4.676,
+   "file": "~/.claude-secondary/projects/-Users-chrisren-Development-claude-infrastructure/2825e1e5-98df-4f46-bfe1-b2eb576e2e10.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+   "chars": 139163,
+   "tok": 56390,
+   "readers": 225.0,
+   "usd": 7.415,
+   "usd55": 3.417,
+   "file": "~/.claude-secondary/projects/-Users-chrisren-Development-personal/22100d17-b2be-4fc2-adde-cb29aadd6f47.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "meta_user:other",
+   "detail": "",
+   "chars": 64812,
+   "tok": 25611,
+   "readers": 461.0,
+   "usd": 7.12,
+   "usd55": 3.36,
+   "file": "~/.claude-tertiary/projects/-Users-chrisren-Development-sevenrooms-bridge/fd7f8ac8-32ea-4d62-9078-102280307e26.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "00-mission-board.md,agent-operating-lessons.md",
+   "chars": 176289,
+   "tok": 67284,
+   "readers": 159.0,
+   "usd": 5.988,
+   "usd55": 2.664,
+   "file": "~/.claude-tertiary/projects/-Users-chrisren-Development--worktrees-kitty-drag-impl/fbcffd60-d590-4f52-9c8a-60cc2cb320fc.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+   "chars": 181162,
+   "tok": 71890,
+   "readers": 124.0,
+   "usd": 5.823,
+   "usd55": 2.904,
+   "file": "~/.claude-secondary/projects/-Users-chrisren-Development--worktrees-impl-subagent-lifecycle-w0/65186f1f-dcb2-4e3d-b53d-38145ba4aaf1.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+   "chars": 200556,
+   "tok": 77577,
+   "readers": 75.0,
+   "usd": 5.469,
+   "usd55": 4.189,
+   "file": "~/.claude-secondary/projects/-Users-chrisren-Development-claude-infrastructure/b6125384-98c4-41ce-98f5-da663d60d2f6.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "CLAUDE.md,00-mission-board.md,MEMORY.md",
+   "chars": 111540,
+   "tok": 39181,
+   "readers": 158.0,
+   "usd": 4.956,
+   "usd55": 2.766,
+   "file": "~/.claude-secondary/projects/-Users-chrisren-Development--worktrees-wt-pool-7/d83af9ce-0678-4154-b7d9-3f6afcade3d6.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:skill_listing",
+   "detail": "skills=77 initial=True",
+   "chars": 30079,
+   "tok": 11587,
+   "readers": 804.0,
+   "usd": 4.768,
+   "usd55": 1.954,
+   "file": "~/.claude-secondary/projects/-Users-chrisren-Development-claude-infrastructure/6e22cc40-3b79-4c3f-8410-a1ba43975a97.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "CLAUDE.md,00-mission-board.md,bottle-generation-ledger.md,MEMORY.md",
+   "chars": 226613,
+   "tok": 91792,
+   "readers": 98.0,
+   "usd": 4.663,
+   "usd55": 4.663,
+   "file": "~/.claude-secondary/projects/-Users-chrisren-Development--worktrees-wt-pool-2/a32de00a-b996-47cf-87a5-e8d542e52768.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "CLAUDE.md,00-mission-board.md,MEMORY.md",
+   "chars": 130060,
+   "tok": 50560,
+   "readers": 107.0,
+   "usd": 4.626,
+   "usd55": 2.659,
+   "file": "~/.claude-secondary/projects/-Users-chrisren-Development-claude-infrastructure/8843bcf3-0fc7-484b-bcaa-628c09a9ebfb.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:Bash",
+   "detail": "ps -axo pid=,etime= -p $(pgrep -f 'ship-land.sh --precheck' | head -1) 2>/dev/null || echo \"precheck finished\"; grep -cE",
+   "chars": 22290,
+   "tok": 11906,
+   "readers": 757.0,
+   "usd": 4.62,
+   "usd55": 1.895,
+   "file": "~/.claude-tertiary/projects/-Users-chrisren-Development--worktrees-wt-120e8054eb98/082b92fc-39ac-4aa2-9a0f-618b9da6ec71.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "meta_user:skill_body",
+   "detail": "",
+   "chars": 55266,
+   "tok": 21740,
+   "readers": 222.0,
+   "usd": 4.478,
+   "usd55": 2.661,
+   "file": "~/.claude/projects/-Users-chrisren-Development-mac-bootstrap/eda3a683-4997-4cdf-a413-b1a8fb140762.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:Read",
+   "detail": "/Users/chrisren/Development/mac-bootstrap/bootstrap.sh",
+   "chars": 48603,
+   "tok": 23570,
+   "readers": 293.0,
+   "usd": 4.349,
+   "usd55": 2.117,
+   "file": "~/.claude/projects/-Users-chrisren-Development-mac-bootstrap/085ee6d8-0b82-47fd-9400-81cea546a5b7.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "meta_user:command_body",
+   "detail": "",
+   "chars": 43338,
+   "tok": 17003,
+   "readers": 373.0,
+   "usd": 4.14,
+   "usd55": 2.064,
+   "file": "~/.claude-tertiary/projects/-Users-chrisren-Development-claude-infrastructure/a4241557-9a02-4b98-b911-25a97887aab7.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+   "chars": 101745,
+   "tok": 38295,
+   "readers": 37.0,
+   "usd": 4.136,
+   "usd55": 1.777,
+   "file": "~/.claude-quaternary/projects/-Users-chrisren-Development-hammerspoon-config/2d71c6d8-c8be-4fd6-a1c9-8ec08a892019.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+   "chars": 202646,
+   "tok": 79918,
+   "readers": 138.0,
+   "usd": 4.076,
+   "usd55": 4.076,
+   "file": "~/.claude-quaternary/projects/-Users-chrisren-Development--worktrees-drain-lane-infra/5688712d-0831-4b21-a48e-f59253df111d.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "tool_use_input:Workflow",
+   "detail": "",
+   "chars": 74040,
+   "tok": 30860,
+   "readers": 150.0,
+   "usd": 4.074,
+   "usd55": 2.37,
+   "file": "~/.claude/projects/-Users-chrisren-Development-claude-infrastructure/309ec82a-4b8f-43c8-8f79-f8492d4f290f.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:Bash",
+   "detail": "cd /Users/chrisren/Development/.worktrees/wt-95cbba839b44\nbin/cc-custody count --open --cwd / 2>&1\necho \"=== related bac",
+   "chars": 26061,
+   "tok": 10451,
+   "readers": 717.0,
+   "usd": 4.045,
+   "usd55": 1.743,
+   "file": "~/.claude/projects/-Users-chrisren-Development--worktrees-wt-95cbba839b44/1728a206-efc0-4336-9570-1963597a096b.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:Bash",
+   "detail": "git show origin/main:hooks/validate-bash.sh | sed -n '330,500p'",
+   "chars": 15164,
+   "tok": 6618,
+   "readers": 1162.0,
+   "usd": 4.033,
+   "usd55": 1.693,
+   "file": "~/.claude-tertiary/projects/-Users-chrisren-Development--worktrees-wt-f5c3cfb86e2e/65e22fd1-f69e-4e42-aa0f-4ad00d2830ae.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "tool_result:mcp:ms365",
+   "detail": "ms365",
+   "chars": 28413,
+   "tok": 18251,
+   "readers": 261.0,
+   "usd": 3.942,
+   "usd55": 2.234,
+   "file": "~/.claude-quaternary/projects/-Users-chrisren-Development-personal/26a195ae-4db4-4b62-add8-a2002fcb5010.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "00-mission-board.md,agent-operating-lessons.md",
+   "chars": 163067,
+   "tok": 61726,
+   "readers": 108.0,
+   "usd": 3.92,
+   "usd55": 1.815,
+   "file": "~/.claude-tertiary/projects/-Users-chrisren-Development--worktrees-kitty-drag-impl/1e0730c9-28ea-4cc1-8157-e9c64a2ebc91.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "meta_user:skill_body",
+   "detail": "",
+   "chars": 55266,
+   "tok": 21896,
+   "readers": 72.0,
+   "usd": 3.854,
+   "usd55": 1.682,
+   "file": "~/.claude-quaternary/projects/-Users-chrisren-Development-hammerspoon-config/2d71c6d8-c8be-4fd6-a1c9-8ec08a892019.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:queued_command",
+   "detail": "",
+   "chars": 78647,
+   "tok": 30388,
+   "readers": 234.0,
+   "usd": 3.844,
+   "usd55": 1.659,
+   "file": "~/.claude-quaternary/projects/-Users-chrisren-Development--worktrees-cf-vs-codex-ab/7ee5f341-7a3f-41bd-9277-10457d70ddf5.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+   "chars": 196032,
+   "tok": 75740,
+   "readers": 82.0,
+   "usd": 3.825,
+   "usd55": 1.833,
+   "file": "~/.claude-secondary/projects/-Users-chrisren-Development--worktrees-kpanic-research/089dda26-5fdc-4366-97a9-b73458b2aca2.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "CLAUDE.md,00-mission-board.md,MEMORY.md",
+   "chars": 110845,
+   "tok": 43128,
+   "readers": 110.0,
+   "usd": 3.741,
+   "usd55": 1.958,
+   "file": "~/.claude-quaternary/projects/-Users-chrisren-Development--worktrees-wt-pool-2/6b8b69c2-bd68-4eb2-bd79-a97db97209ba.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:instructions",
+   "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+   "chars": 111532,
+   "tok": 42633,
+   "readers": 99.0,
+   "usd": 3.73,
+   "usd55": 2.174,
+   "file": "~/.claude-tertiary/projects/-Users-chrisren-Development-reso-web-app/c0f857b6-4965-4db8-816d-02d69b7a108e.jsonl"
+  },
+  {
+   "ctx": "main",
+   "source": "attachment:queued_command",
+   "detail": "",
+   "chars": 75540,
+   "tok": 27154,
+   "readers": 255.0,
+   "usd": 3.72,
+   "usd55": 1.597,
+   "file": "~/.claude-quaternary/projects/-Users-chrisren-Development--worktrees-cf-vs-codex-ab/7ee5f341-7a3f-41bd-9277-10457d70ddf5.jsonl"
+  }
+ ],
+ "hook_signatures_top": [
+  {
+   "signature": "hook_blocking_error:Stop | \"~/.claude/hooks/session-continue.sh\": \ud83d\udd27 Loose ends remain \u2014",
+   "n": 1511,
+   "tokens": 430898,
+   "usd": 74.39
+  },
+  {
+   "signature": "hook_additional_context:PostToolUse:Bash | \ud83d\udcec peer mail \u25c0 # new message from other Claude sessions   \u256d\u2500 ",
+   "n": 398,
+   "tokens": 337288,
+   "usd": 29.06
+  },
+  {
+   "signature": "hook_additional_context:UserPromptSubmit | \ud83d\udd14 No inbox wake path armed. (a /goal is LIVE, so do NOT park",
+   "n": 894,
+   "tokens": 396915,
+   "usd": 27.19
+  },
+  {
+   "signature": "hook_additional_context:UserPromptSubmit | MEMORY INDEX BUDGET (live): #/# chars and #/# li",
+   "n": 329,
+   "tokens": 365825,
+   "usd": 21.95
+  },
+  {
+   "signature": "hook_additional_context:UserPromptSubmit | \ud83d\udd14 No inbox wake path armed. (no watcher armed \u2014 before you g",
+   "n": 1810,
+   "tokens": 257620,
+   "usd": 12.32
+  },
+  {
+   "signature": "hook_additional_context:UserPromptSubmit | HANDOFF-INTENT PARITY (deterministic hook \u2014 verbal intent mu",
+   "n": 309,
+   "tokens": 105144,
+   "usd": 8.28
+  },
+  {
+   "signature": "hook_additional_context:UserPromptSubmit | \ud83d\udea8 A parked watcher is holding your LIVE /goal inert. (pid #",
+   "n": 187,
+   "tokens": 99601,
+   "usd": 8.28
+  },
+  {
+   "signature": "hook_additional_context:UserPromptSubmit | \ud83d\udcec peer mail \u25c0 # new message from other Claude sessions   \u256d\u2500 ",
+   "n": 136,
+   "tokens": 112841,
+   "usd": 5.93
+  },
+  {
+   "signature": "hook_additional_context:UserPromptSubmit | PROMPT CACHE EXPIRED: #m idle vs a #m TTL, so this turn r",
+   "n": 823,
+   "tokens": 147396,
+   "usd": 5.67
+  },
+  {
+   "signature": "hook_additional_context:PreToolUse:Agent | AGENT-TEAMS SKILL: spawning a teammate. If not already loade",
+   "n": 180,
+   "tokens": 48005,
+   "usd": 5.47
+  },
+  {
+   "signature": "hook_blocking_error:Stop | \"~/.claude/hooks/session-continue.sh\": \ud83d\udd14 WAKE FLOOR \u2014 you ar",
+   "n": 150,
+   "tokens": 55918,
+   "usd": 5.35
+  },
+  {
+   "signature": "hook_additional_context:UserPromptSubmit | RESEARCH-INTENT PRE-COGNITION: if this resolves to a breadth",
+   "n": 255,
+   "tokens": 74000,
+   "usd": 5.28
+  },
+  {
+   "signature": "hook_additional_context:UserPromptSubmit | MEMORY INDEX BUDGET (live): #/# chars and #/# lin",
+   "n": 81,
+   "tokens": 93240,
+   "usd": 4.94
+  },
+  {
+   "signature": "hook_additional_context:PreToolUse:Edit | PLAN DEFAULTS: This is a plan file. Include Phase # (Agent T",
+   "n": 256,
+   "tokens": 112174,
+   "usd": 4.82
+  },
+  {
+   "signature": "hook_blocking_error:Stop | \"~/.claude/hooks/completion-assert.sh\": Completion-assert: y",
+   "n": 244,
+   "tokens": 70961,
+   "usd": 4.68
+  },
+  {
+   "signature": "hook_additional_context:PreToolUse:mcp__ms365__list-mail-messages | ms# email recipe (auto-injected \u2014 settled, do not re-deriv",
+   "n": 13,
+   "tokens": 45532,
+   "usd": 3.1
+  },
+  {
+   "signature": "hook_additional_context:PostToolUse:Bash | \ud83d\udcec peer mail \u25c0 # new messages from other Claude sessions   \u256d\u2500",
+   "n": 52,
+   "tokens": 60644,
+   "usd": 3.06
+  },
+  {
+   "signature": "hook_blocking_error:Stop | \"~/.claude/hooks/anti-deference-nudge.sh\": Opaque-identifier",
+   "n": 78,
+   "tokens": 24452,
+   "usd": 2.15
+  },
+  {
+   "signature": "hook_additional_context:PreToolUse:Agent | RESEARCH-SUBAGENTS SKILL: research-oriented subagent spawn. ",
+   "n": 201,
+   "tokens": 27333,
+   "usd": 2.01
+  },
+  {
+   "signature": "hook_additional_context:UserPromptSubmit | MEMORY INDEX BUDGET (live): #/# chars and #/# line",
+   "n": 18,
+   "tokens": 20313,
+   "usd": 1.79
+  },
+  {
+   "signature": "hook_additional_context:PostToolUse:Bash | RELAY VERBATIM \u2014 you just rendered the /accounts table. Past",
+   "n": 147,
+   "tokens": 29243,
+   "usd": 1.61
+  },
+  {
+   "signature": "hook_additional_context:SessionStart | ACTIVATION QUEUE: # un-run (# rotting >#h) \u2014 unchanged sinc",
+   "n": 15,
+   "tokens": 29237,
+   "usd": 1.58
+  },
+  {
+   "signature": "hook_additional_context:UserPromptSubmit | PROMPT CACHE EXPIRED: #m idle vs a #m TTL, so this turn re",
+   "n": 184,
+   "tokens": 29381,
+   "usd": 1.57
+  },
+  {
+   "signature": "hook_additional_context:SessionStart | Plans: #/# open for claude-infrastructure \u00b7 # all. .clau",
+   "n": 16,
+   "tokens": 32026,
+   "usd": 1.51
+  },
+  {
+   "signature": "hook_additional_context:PreToolUse:WebSearch | ENTRYPOINT LADDER (first web call this agent). ROUTING FIRST",
+   "n": 164,
+   "tokens": 74838,
+   "usd": 1.1
+  }
+ ],
+ "checks": {
+  "shrink_events": 49,
+  "groups_final": 151131,
+  "files": 4298,
+  "groups_nonfinal": 20081,
+  "groups_before_first_resp": 28
+ },
+ "by_size_bucket": [
+  {
+   "source": "bash_cd_prefix",
+   "bucket": "all",
+   "n": 53360,
+   "chars": 2755900,
+   "tokens": 1146250,
+   "usd": 41.4,
+   "usd55": 22.2
+  },
+  {
+   "source": "tool_result:Bash",
+   "bucket": "1-5k",
+   "n": 52932,
+   "chars": 127626100,
+   "tokens": 57750231,
+   "usd": 1782.3,
+   "usd55": 968.1
+  },
+  {
+   "source": "tool_result:Bash",
+   "bucket": "20-50k",
+   "n": 1215,
+   "chars": 29407643,
+   "tokens": 12609479,
+   "usd": 307.8,
+   "usd55": 170.7
+  },
+  {
+   "source": "tool_result:Bash",
+   "bucket": "5-20k",
+   "n": 18116,
+   "chars": 159201725,
+   "tokens": 68297849,
+   "usd": 1847.7,
+   "usd55": 1009.9
+  },
+  {
+   "source": "tool_result:Bash",
+   "bucket": "<1k",
+   "n": 97379,
+   "chars": 31410138,
+   "tokens": 16073137,
+   "usd": 745.6,
+   "usd55": 388.1
+  },
+  {
+   "source": "tool_result:Bash",
+   "bucket": ">=50k",
+   "n": 1,
+   "chars": 66577,
+   "tokens": 32814,
+   "usd": 0.4,
+   "usd55": 0.2
+  },
+  {
+   "source": "tool_result:Read",
+   "bucket": "1-5k",
+   "n": 865,
+   "chars": 2392793,
+   "tokens": 1073089,
+   "usd": 35.2,
+   "usd55": 19.9
+  },
+  {
+   "source": "tool_result:Read",
+   "bucket": "20-50k",
+   "n": 1287,
+   "chars": 40529622,
+   "tokens": 17765668,
+   "usd": 363.9,
+   "usd55": 197.8
+  },
+  {
+   "source": "tool_result:Read",
+   "bucket": "5-20k",
+   "n": 1075,
+   "chars": 11597349,
+   "tokens": 5033453,
+   "usd": 129.4,
+   "usd55": 73.9
+  },
+  {
+   "source": "tool_result:Read",
+   "bucket": "<1k",
+   "n": 5309,
+   "chars": 259700,
+   "tokens": 6052227,
+   "usd": 170.7,
+   "usd55": 93.5
+  },
+  {
+   "source": "tool_result:Read",
+   "bucket": ">=50k",
+   "n": 120,
+   "chars": 6817062,
+   "tokens": 2830209,
+   "usd": 52.9,
+   "usd55": 30.6
+  },
+  {
+   "source": "tool_result:WebFetch",
+   "bucket": "1-5k",
+   "n": 1880,
+   "chars": 2973378,
+   "tokens": 1181897,
+   "usd": 23.4,
+   "usd55": 13.1
+  },
+  {
+   "source": "tool_result:WebFetch",
+   "bucket": "20-50k",
+   "n": 489,
+   "chars": 15143913,
+   "tokens": 5585903,
+   "usd": 107.4,
+   "usd55": 57.1
+  },
+  {
+   "source": "tool_result:WebFetch",
+   "bucket": "5-20k",
+   "n": 785,
+   "chars": 9195854,
+   "tokens": 3485661,
+   "usd": 69.1,
+   "usd55": 36.8
+  },
+  {
+   "source": "tool_result:WebFetch",
+   "bucket": "<1k",
+   "n": 1547,
+   "chars": 941683,
+   "tokens": 386986,
+   "usd": 7.3,
+   "usd55": 4.1
+  },
+  {
+   "source": "tool_use_input:Bash",
+   "bucket": "1-5k",
+   "n": 18978,
+   "chars": 36075938,
+   "tokens": 16090191,
+   "usd": 752.2,
+   "usd55": 395.0
+  },
+  {
+   "source": "tool_use_input:Bash",
+   "bucket": "20-50k",
+   "n": 306,
+   "chars": 8904943,
+   "tokens": 3656573,
+   "usd": 52.8,
+   "usd55": 30.6
+  },
+  {
+   "source": "tool_use_input:Bash",
+   "bucket": "5-20k",
+   "n": 1813,
+   "chars": 15871634,
+   "tokens": 6643592,
+   "usd": 316.1,
+   "usd55": 166.4
+  },
+  {
+   "source": "tool_use_input:Bash",
+   "bucket": "<1k",
+   "n": 148536,
+   "chars": 56516012,
+   "tokens": 32778661,
+   "usd": 1529.3,
+   "usd55": 776.5
+  },
+  {
+   "source": "tool_use_input:Bash",
+   "bucket": ">=50k",
+   "n": 30,
+   "chars": 1834434,
+   "tokens": 727332,
+   "usd": 6.4,
+   "usd55": 4.1
+  },
+  {
+   "source": "tool_use_input:Write",
+   "bucket": "1-5k",
+   "n": 456,
+   "chars": 1345574,
+   "tokens": 582804,
+   "usd": 20.8,
+   "usd55": 13.1
+  },
+  {
+   "source": "tool_use_input:Write",
+   "bucket": "20-50k",
+   "n": 419,
+   "chars": 13080600,
+   "tokens": 5402160,
+   "usd": 55.8,
+   "usd55": 36.5
+  },
+  {
+   "source": "tool_use_input:Write",
+   "bucket": "5-20k",
+   "n": 510,
+   "chars": 5711906,
+   "tokens": 2387029,
+   "usd": 63.0,
+   "usd55": 37.2
+  },
+  {
+   "source": "tool_use_input:Write",
+   "bucket": "<1k",
+   "n": 50,
+   "chars": 30553,
+   "tokens": 15868,
+   "usd": 0.6,
+   "usd55": 0.3
+  },
+  {
+   "source": "tool_use_input:Write",
+   "bucket": ">=50k",
+   "n": 46,
+   "chars": 2973428,
+   "tokens": 1225365,
+   "usd": 15.4,
+   "usd55": 9.1
+  }
+ ],
+ "bash_classes": {
+  "main": {
+   "result_chars": 91755977,
+   "input_chars": 54357006,
+   "result_share": {
+    "file_read": 0.2669,
+    "cd\u2026(truncated)": 0.167,
+    "var_assign_then_cmd": 0.1215,
+    "search_list": 0.1046,
+    "other": 0.1002,
+    "echo_printf": 0.0684,
+    "git": 0.0552,
+    "run_script": 0.0309,
+    "heredoc_script": 0.0277,
+    "shell_loop": 0.0215,
+    "script_inline_or_file": 0.0086,
+    "tests": 0.0073,
+    "heredoc_file_write": 0.0069,
+    "data_tools": 0.0055,
+    "network": 0.0046,
+    "heredoc_other": 0.0031
+   },
+   "result_calls": {
+    "git": 5408,
+    "file_read": 10311,
+    "cd\u2026(truncated)": 14083,
+    "other": 10895,
+    "script_inline_or_file": 570,
+    "echo_printf": 3695,
+    "shell_loop": 1678,
+    "var_assign_then_cmd": 10767,
+    "search_list": 6855,
+    "heredoc_script": 2925,
+    "network": 318,
+    "run_script": 5553,
+    "data_tools": 250,
+    "heredoc_file_write": 1048,
+    "tests": 892,
+    "heredoc_other": 705
+   },
+   "input_share": {
+    "cd\u2026(truncated)": 0.2413,
+    "var_assign_then_cmd": 0.1454,
+    "heredoc_script": 0.1117,
+    "other": 0.1052,
+    "heredoc_file_write": 0.0993,
+    "file_read": 0.0603,
+    "git": 0.0511,
+    "run_script": 0.0436,
+    "heredoc_other": 0.039,
+    "search_list": 0.0365,
+    "echo_printf": 0.0363,
+    "shell_loop": 0.0141,
+    "tests": 0.0063,
+    "script_inline_or_file": 0.0057,
+    "network": 0.0026,
+    "data_tools": 0.0016
+   }
+  },
+  "subagent": {
+   "result_chars": 45363974,
+   "input_chars": 11441362,
+   "result_share": {
+    "file_read": 0.2978,
+    "cd\u2026(truncated)": 0.15,
+    "search_list": 0.1202,
+    "var_assign_then_cmd": 0.1119,
+    "git": 0.0658,
+    "other": 0.0625,
+    "echo_printf": 0.0387,
+    "script_inline_or_file": 0.0344,
+    "heredoc_script": 0.034,
+    "shell_loop": 0.0277,
+    "data_tools": 0.0256,
+    "run_script": 0.0185,
+    "network": 0.0076,
+    "heredoc_file_write": 0.0045,
+    "tests": 0.0005,
+    "heredoc_other": 0.0002
+   },
+   "result_calls": {
+    "search_list": 2473,
+    "other": 1457,
+    "file_read": 2499,
+    "cd\u2026(truncated)": 2648,
+    "script_inline_or_file": 410,
+    "shell_loop": 479,
+    "var_assign_then_cmd": 2236,
+    "heredoc_other": 16,
+    "data_tools": 264,
+    "heredoc_script": 657,
+    "heredoc_file_write": 129,
+    "network": 231,
+    "run_script": 360,
+    "echo_printf": 613,
+    "git": 904,
+    "tests": 16
+   },
+   "input_share": {
+    "other": 0.1989,
+    "cd\u2026(truncated)": 0.1762,
+    "var_assign_then_cmd": 0.1531,
+    "file_read": 0.1357,
+    "heredoc_script": 0.0755,
+    "heredoc_file_write": 0.0676,
+    "search_list": 0.0657,
+    "echo_printf": 0.0275,
+    "git": 0.0235,
+    "shell_loop": 0.0214,
+    "script_inline_or_file": 0.0196,
+    "run_script": 0.0137,
+    "network": 0.0085,
+    "data_tools": 0.0075,
+    "heredoc_other": 0.0051,
+    "tests": 0.0004
+   }
+  },
+  "workflow_agent": {
+   "result_chars": 162258948,
+   "input_chars": 42564052,
+   "result_share": {
+    "file_read": 0.3608,
+    "search_list": 0.1336,
+    "cd\u2026(truncated)": 0.1116,
+    "var_assign_then_cmd": 0.0911,
+    "other": 0.0744,
+    "echo_printf": 0.0609,
+    "shell_loop": 0.0303,
+    "git": 0.0281,
+    "heredoc_script": 0.0267,
+    "data_tools": 0.0263,
+    "network": 0.0187,
+    "script_inline_or_file": 0.0148,
+    "run_script": 0.0124,
+    "heredoc_file_write": 0.0072,
+    "tests": 0.0021,
+    "heredoc_other": 0.0008
+   },
+   "result_calls": {
+    "network": 1969,
+    "shell_loop": 2279,
+    "heredoc_file_write": 1109,
+    "echo_printf": 3668,
+    "var_assign_then_cmd": 6945,
+    "other": 8450,
+    "script_inline_or_file": 1079,
+    "search_list": 9498,
+    "heredoc_script": 2404,
+    "cd\u2026(truncated)": 8637,
+    "file_read": 10470,
+    "git": 1981,
+    "run_script": 1095,
+    "data_tools": 998,
+    "tests": 250,
+    "heredoc_other": 199
+   },
+   "input_share": {
+    "other": 0.1791,
+    "cd\u2026(truncated)": 0.1604,
+    "var_assign_then_cmd": 0.1392,
+    "file_read": 0.1152,
+    "heredoc_file_write": 0.0975,
+    "heredoc_script": 0.0754,
+    "search_list": 0.0654,
+    "echo_printf": 0.0454,
+    "shell_loop": 0.0262,
+    "heredoc_other": 0.0234,
+    "network": 0.0226,
+    "git": 0.0181,
+    "script_inline_or_file": 0.0125,
+    "run_script": 0.0105,
+    "data_tools": 0.0066,
+    "tests": 0.0024
+   }
+  },
+  "ALL": {
+   "result_chars": 299378899,
+   "input_chars": 108362420,
+   "result_share": {
+    "file_read": 0.3225,
+    "cd\u2026(truncated)": 0.1344,
+    "search_list": 0.1227,
+    "var_assign_then_cmd": 0.1036,
+    "other": 0.0805,
+    "echo_printf": 0.0599,
+    "git": 0.0421,
+    "heredoc_script": 0.0281,
+    "shell_loop": 0.0272,
+    "data_tools": 0.0198,
+    "run_script": 0.019,
+    "script_inline_or_file": 0.0159,
+    "network": 0.0127,
+    "heredoc_file_write": 0.0067,
+    "tests": 0.0035,
+    "heredoc_other": 0.0014
+   },
+   "result_calls": {
+    "git": 8293,
+    "other": 20802,
+    "cd\u2026(truncated)": 25368,
+    "search_list": 18826,
+    "script_inline_or_file": 2059,
+    "file_read": 23280,
+    "var_assign_then_cmd": 19948,
+    "run_script": 7008,
+    "heredoc_script": 5986,
+    "shell_loop": 4436,
+    "network": 2518,
+    "echo_printf": 7976,
+    "heredoc_file_write": 2286,
+    "heredoc_other": 920,
+    "data_tools": 1512,
+    "tests": 1158
+   },
+   "input_share": {
+    "cd\u2026(truncated)": 0.2027,
+    "other": 0.1441,
+    "var_assign_then_cmd": 0.1438,
+    "heredoc_file_write": 0.0953,
+    "heredoc_script": 0.0936,
+    "file_read": 0.0898,
+    "search_list": 0.051,
+    "echo_printf": 0.0389,
+    "git": 0.0352,
+    "heredoc_other": 0.0293,
+    "run_script": 0.0275,
+    "shell_loop": 0.0196,
+    "network": 0.0111,
+    "script_inline_or_file": 0.0098,
+    "tests": 0.0042,
+    "data_tools": 0.0042
+   }
+  },
+  "largest_items_by_chars": [
+   {
+    "ctx": "main",
+    "kind": "user_prompt",
+    "subkind": "plain",
+    "detail": "",
+    "chars": 813349
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,CLAUDE.md,bottle-generation-ledge",
+    "chars": 333023
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,CLAUDE.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 246819
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,CLAUDE.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 237321
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,bottle-generation-ledger.md,MEMORY.md",
+    "chars": 236783
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,bottle-generation-ledger.md,MEMORY.md",
+    "chars": 226613
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,CLAUDE.md,agent-operating-lessons",
+    "chars": 221470
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,CLAUDE.md,agent-operating-lessons",
+    "chars": 219290
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,CLAUDE.md,agent-operating-lessons",
+    "chars": 219290
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 211961
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 208714
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 203163
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 203161
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 203015
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 202646
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 200556
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 200556
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 200556
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 196448
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 196032
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 196031
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 194270
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 194262
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 181921
+   },
+   {
+    "ctx": "main",
+    "kind": "attachment",
+    "subkind": "instructions",
+    "detail": "CLAUDE.md,00-mission-board.md,agent-operating-lessons.md,MEMORY.md",
+    "chars": 181916
+   }
+  ]
+ }
+}
