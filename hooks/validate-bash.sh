@@ -1662,10 +1662,167 @@ fi
 
 # ── Warn (ask): destructive but sometimes intentional ────────────────
 
-# git reset --hard — can destroy uncommitted work
-if echo "$CMD" | grep -qE 'git[[:space:]]+reset[[:space:]]+--hard\b'; then
-  warn "git reset --hard can destroy uncommitted work. Verify intentional."
+# ── GIT-OWNERSHIP BEGIN ─────────────────────────────────────────────────────────────────────────
+# `git reset --hard`, `git stash drop` and `git restore` are decided HERE, on the repo's live state,
+# rather than by the blanket `permissions.ask` rules `Bash(git reset --hard:*)`,
+# `Bash(git stash drop:*)` and `Bash(git restore:*)` — a static rule cannot see whether anything
+# would be lost, so it asked every time. Measured 2026-09-24 over 30 days of the permission archive
+# (docs/plans/PERMISSION_PROMPT_CONSOLIDATION.md): 64 + 29 + 11 prompts, ~150 h of sessions stalled,
+# the stash drops almost all being the harness's OWN recipe (push -m TAG … drop the entry re-found by
+# TAG). The staged settings migration removes those three rules; until it runs, both layers ask.
+#
+# Each permit is a PROOF of nothing-to-lose, computed from argv plus two read-only git calls, and any
+# doubt asks exactly as before:
+#   reset --hard  the ONE reset statement in the command, on the payload cwd (no cd / -C / GIT_DIR),
+#                 preceded only by read-only statements, onto a literal target, with no tracked
+#                 change in the tree AND no local commit that `git cherry` cannot find in the target.
+#   stash drop    the argument is a variable this command filled from `git stash list … | grep …` —
+#                 an entry selected by its own tag. Bare `drop` (stash@{0}, maybe another session's
+#                 on the shared stack) or a literal `stash@{N}` index asks.
+#   restore       `--staged` without `--worktree`: it unstages, and the working tree is untouched.
+# A mention (a commit message, an echo) is not an invocation and no longer asks; a nested shell,
+# eval, a heredoc, or a wrapper prefix (timeout / env / sudo …) is OPAQUE and asks.
+_git_own_scan() {  # → one line per verb present: RESET <ok|ask> <target> · DROP <ok|ask> · RESTORE <ok|ask>
+  CMD="$CMD" python3 - <<'PYEOF' 2>/dev/null
+import os, re, shlex
+cmd = os.environ.get("CMD", "")
+NEST = {"bash", "sh", "zsh", "ksh", "dash", "eval", "xargs", "sudo", "env", "ssh", "nohup", "timeout",
+        "time", "command", "exec", "builtin", "find", "parallel", "watch", "doas", "su", "script"}
+RO_GIT = {"fetch", "status", "log", "rev-parse", "rev-list", "diff", "show", "describe", "ls-files",
+          "ls-tree", "cherry", "merge-base", "remote", "branch", "stash"}
+RO_HEADS = {"set", "echo", "printf", "true", ":", "test", "[", "[[", "sleep", "date", "pwd", "ls",
+            "cat", "head", "tail", "wc", "grep"}
+def statements():
+    # Unquoted newlines become `;` so the lexer sees them as separators.
+    buf, q, esc = [], None, False
+    for ch in cmd:
+        if esc: buf.append(ch); esc = False; continue
+        if ch == "\\" and q != "'": buf.append(ch); esc = True; continue
+        if q:
+            buf.append(ch); q = None if ch == q else q; continue
+        if ch in "\"'": q = ch; buf.append(ch); continue
+        buf.append(";" if ch == "\n" else ch)
+    lex = shlex.shlex("".join(buf), posix=True, punctuation_chars="();<>|&")
+    lex.whitespace_split = True; lex.commenters = "#"
+    out, cur = [], []
+    for t in lex:
+        if t and all(c in "();|&" for c in t):
+            if cur: out.append(cur)
+            cur = []
+        else:
+            cur.append(t)
+    if cur: out.append(cur)
+    res = []
+    for a in out:
+        i = 0
+        while i < len(a) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", a[i]): i += 1
+        res.append((a[:i], a[i:]))
+    return res
+try:
+    st = statements()
+except ValueError:
+    st = None
+def git_sub(a):  # (subcommand index) or None when git carries a global option
+    if not a or os.path.basename(a[0]) != "git": return None
+    if len(a) > 1 and a[1].startswith("-"): return -1
+    return 1 if len(a) > 1 else None
+opaque = st is None or "<<" in cmd or "`" in cmd or any(
+    a and (os.path.basename(a[0]) in NEST or a[0] in ("cd", "pushd", "popd", ".", "source"))
+    for _, a in (st or [])) or any(
+    any(p.startswith(("GIT_DIR=", "GIT_WORK_TREE=")) for p in pre) for pre, _ in (st or [])) or any(
+    git_sub(a) == -1 for _, a in (st or []))   # `git -C x`, `git -c k=v`, `--git-dir` … re-aim the repo
+out = []
+if re.search(r"\bgit\b[^;&|\n]*\breset\b[^;&|\n]*--hard\b", cmd):
+    v = "ask"; tgt = "-"
+    idx = [k for k, (_, a) in enumerate(st or []) if git_sub(a) == 1 and a[1] == "reset" and "--hard" in a]
+    if not opaque and len(idx) == 1:
+        k = idx[0]; a = st[k][1]
+        rest = [t for t in a[2:] if t not in ("--hard", "-q", "--quiet")]
+        before_ok = all(
+            (b and b[0] in RO_HEADS) or (git_sub(b) == 1 and b[1] in RO_GIT
+                                         and not (b[1] == "stash" and any(x in b for x in ("pop", "apply", "drop", "clear", "push", "save"))))
+            for _, b in st[:k])
+        if before_ok and len(rest) <= 1 and not any(c in "".join(rest) for c in "$`*?{"):
+            v = "ok"; tgt = rest[0] if rest else "HEAD"
+    elif not opaque and not idx:
+        v = "none"   # a mention — a commit message, an echo — is not an invocation
+    out.append("RESET %s %s" % (v, tgt))
+if re.search(r"\bgit\b[^;&|\n]*\bstash\s+drop\b", cmd):
+    v = "ask"
+    idx = [a for _, a in (st or []) if git_sub(a) == 1 and len(a) > 2 and a[1] == "stash" and a[2] == "drop"]
+    if not opaque and idx:
+        good = True
+        for a in idx:
+            args = [t for t in a[3:] if t not in ("-q", "--quiet")]
+            m = re.fullmatch(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", args[0]) if len(args) == 1 else None
+            binds = re.findall(r"(?:^|[\s;&|(])%s=(\"?\$\([^\n]*)" % re.escape(m.group(1)), cmd) if m else []
+            if not (len(binds) == 1 and re.search(r"git\s+stash\s+list\b[^\n]*\|\s*grep\b", binds[0])):
+                good = False
+        v = "ok" if good else "ask"
+    elif not opaque and not idx:
+        v = "none"
+    out.append("DROP " + v)
+if re.search(r"\bgit\b[^;&|\n]*\brestore\b", cmd):
+    v = "ask"
+    idx = [a for _, a in (st or []) if git_sub(a) == 1 and a[1] == "restore"]
+    if not opaque:
+        def staged_only(a):
+            fl = [t for t in a[2:] if t.startswith("-")]
+            staged = any(t in ("--staged", "-S") or (re.fullmatch(r"-[A-Za-z]+", t) and "S" in t) for t in fl)
+            wt = any(t in ("--worktree", "-W") or (re.fullmatch(r"-[A-Za-z]+", t) and "W" in t) for t in fl)
+            return staged and not wt
+        v = ("ok" if all(staged_only(a) for a in idx) else "ask") if idx else "none"
+    out.append("RESTORE " + v)
+print("\n".join(out))
+PYEOF
+}
+
+_git_reset_lossless() {  # <target> — 0 iff the payload cwd's repo would lose nothing to the reset
+  local tgt="$1" cwd n
+  cwd=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+  [[ -n "$cwd" && -d "$cwd" ]] || return 1
+  git -C "$cwd" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  git -C "$cwd" rev-parse --verify -q "${tgt}^{commit}" >/dev/null 2>&1 || return 1
+  # Any tracked change, staged or not. Untracked files survive a reset --hard, so they are not asked about.
+  [[ -z "$(git -C "$cwd" status --porcelain --untracked-files=no 2>/dev/null)" ]] || return 1
+  # A local commit whose patch the target lacks would be orphaned. `+` = absent there (conservative:
+  # a comment-only difference also reads `+`, which only ever costs an ask).
+  n=$(git -C "$cwd" cherry "$tgt" HEAD 2>/dev/null) || return 1
+  case $'\n'"$n" in *$'\n+'*) return 1 ;; esac
+  return 0
+}
+
+# Triggers are deliberately WIDER than the old `git reset --hard` literal: `git -C x reset --hard` and
+# `git reset -q --hard` matched neither it nor the settings rule. The parser above decides.
+_GO_RESET_RE='git[^;&|]*reset[^;&|]*--hard'
+_GO_DROP_RE='git[^;&|]*stash[[:space:]]+drop'
+_GO_RESTORE_RE='git[^;&|]*[[:space:]]restore([[:space:]]|$)'
+# bash-native on purpose: tests/fixtures/validate-bash-sites.tsv polices every grep site, and a
+# `[[ =~ ]]` over the whole command spans lines where grep would not — which only WIDENS the trigger;
+# the parser above is what decides.
+_GO_ANY_RE="$_GO_RESET_RE|$_GO_DROP_RE|$_GO_RESTORE_RE"
+if [[ "$CMD" =~ $_GO_ANY_RE ]]; then
+  _GO_OUT=""
+  command -v python3 >/dev/null 2>&1 && _GO_OUT=$(_git_own_scan)
+  if [[ "$CMD" =~ $_GO_RESET_RE ]]; then
+    _GO_RESET=$(printf '%s\n' "$_GO_OUT" | sed -n 's/^RESET //p')
+    case "$_GO_RESET" in
+      "none "*) ;;
+      "ok "*) _git_reset_lossless "${_GO_RESET#ok }" \
+                || warn "git reset --hard can destroy uncommitted work. Verify intentional." ;;
+      *) warn "git reset --hard can destroy uncommitted work. Verify intentional." ;;
+    esac
+  fi
+  if [[ "$CMD" =~ $_GO_DROP_RE ]]; then
+    [[ "$(printf '%s\n' "$_GO_OUT" | sed -n 's/^DROP //p')" =~ ^(ok|none)$ ]] \
+      || warn "git stash drop on an entry not selected by its own tag — bare drop (stash@{0}) or a stash@{N} index can drop ANOTHER session's stash on the shared stack. Re-find your entry by tag: N=\$(git stash list --format='%gd %gs' | grep <tag> | head -1 | cut -d' ' -f1); git stash drop \"\$N\"."
+  fi
+  if [[ "$CMD" =~ $_GO_RESTORE_RE ]]; then
+    [[ "$(printf '%s\n' "$_GO_OUT" | sed -n 's/^RESTORE //p')" =~ ^(ok|none)$ ]] \
+      || warn "git restore of the WORKING TREE discards uncommitted changes. Verify intentional (--staged alone only unstages and does not ask)."
+  fi
 fi
+# ── GIT-OWNERSHIP END ───────────────────────────────────────────────────────────────────────────
 
 # git clean -x / -X removes gitignored files (may include paid assets).
 # Match any flag bundle containing x or X after `git clean -`.

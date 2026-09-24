@@ -1,5 +1,14 @@
 # Pattern-matching sites in hooks/validate-bash.sh — the population the backlog row 8942f3b1506d
 #
+# 2026-09-24 (PERMISSION_PROMPT_CONSOLIDATION) — ONE SITE RETIRED + LINE SHIFT. The lone
+#   `git reset --hard` warn (S26, a 3-line block at 1665) became the GIT-OWNERSHIP block, which
+#   decides reset --hard / stash drop / restore on argv + live repo state. It adds NO grep site: its
+#   triggers are bash-native `[[ =~ ]]` on purpose (a whole-$CMD `=~` spans lines, which only widens
+#   the trigger; the embedded parser decides). S26 is REMOVED, not re-pointed — its pattern no longer
+#   exists anywhere in the hook. `git diff -U0` reports `@@ -1665,3 +1665,159 @@` and `@@ -1668,0 +1825 @@`,
+#   so every site pinned at line >= 1669 moved exactly +157 (S27-S31, S33) and everything above is
+#   unchanged. Checked by assertion 4, which re-reads each `verify=lit` pattern off its pinned line.
+#
 # 2026-09-17b (peer finding, no row) — LINE SHIFT ONLY, no population change. The
 #   CC_GIT_IDENTITY_* clause at 1086 was one grep line and is now a 50-line block: it kept the
 #   broad whole-$CMD match as a BACKSTOP for indirect execution (eval / sh -c / env / xargs /
@@ -125,10 +134,9 @@ S22	1235	qE	raw	clause	lit	DIVERGENT	git\b.*\bconfig\b.*\buser\.(email|name)\b
 S23	1237	qE	raw	clause	lit	DIVERGENT	\-\-(get|get-all|get-regexp|get-urlmatch|list|unset|unset-all|remove-section|rename-section|global|system|file|blob)\b
 S24	1238	qE	raw	clause	lit	EQUIVALENT	[[:space:]]-(l|e)([[:space:]]|$)
 S25	1240	qE	raw	clause	lit	DIVERGENT	\buser\.(email|name)[[:space:]]+[^[:space:]]
-S26	1666	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+reset[[:space:]]+--hard\b
-S27	1672	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*[xX]
-S28	1978	qE	raw	token	syn	EQUIVALENT	^(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)(/|$)
-S29	1993	oE	nl	whole	lit	DIVERGENT	rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*[^[:space:];&|-][^[:space:];&|]*
-S30	1996	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
-S31	1827	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=[^[:space:];&|]*
-S33	1953	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=("?\$\([^()]*\)"?|[^[:space:];&|]*)
+S27	1829	qE	nl	whole	lit	DIVERGENT	git[[:space:]]+clean[[:space:]]+-[a-zA-Z]*[xX]
+S28	2135	qE	raw	token	syn	EQUIVALENT	^(node_modules|\.next|dist|__pycache__|\.cache|build|\.turbo|coverage|test-results|out|\.vercel|artifacts|\.pytest_cache|target|\.tox|htmlcov|\.ruff_cache|\.mypy_cache)(/|$)
+S29	2150	oE	nl	whole	lit	DIVERGENT	rm[[:space:]]+(-[a-zA-Z-]+[[:space:]]+)*[^[:space:];&|-][^[:space:];&|]*
+S30	2153	qE	raw	line	lit	EQUIVALENT	(^|[[:space:]])-[a-zA-Z]*[rR][a-zA-Z]*([[:space:]]|$)|--recursive([[:space:]=]|$)
+S31	1984	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=[^[:space:];&|]*
+S33	2110	oE	nl	whole	syn	EQUIVALENT	(^|[[:space:];&|(])D=("?\$\([^()]*\)"?|[^[:space:];&|]*)
