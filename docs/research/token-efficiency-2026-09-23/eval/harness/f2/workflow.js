@@ -47,9 +47,13 @@ BRIEFS.forEach((b, i) => {
   order.forEach((arm, r) => slots.push({ brief: b, rep: r + 1, arm }))
 })
 
+// args.only = ["B04:4", ...] re-runs just those slots (a harness-faulted cell, never a re-draw).
+const only = (typeof args === 'object' && args && args.only) || null
+const todo = only ? slots.filter((s) => only.includes(`${s.brief.id}:${s.rep}`)) : slots
+
 phase('Slots')
 const results = await parallel(
-  slots.map((s) => () => {
+  todo.map((s) => () => {
     const out = `${F}/out/${s.brief.id}-r${s.rep}`
     const opts = { label: `f2:${s.brief.id}:r${s.rep}`, phase: 'Slots', schema: SCHEMA }
     if (s.arm === 'workflow-lean') opts.agentType = 'workflow-lean'
