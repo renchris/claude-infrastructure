@@ -13,7 +13,12 @@
 # denominator must name its reason and report no numbers. An instrument that quietly interpolates
 # over an empty join is the `cc-value` failure (§2.7) in a new file.
 #
-# The tool's own `--selftest` carries 13 hermetic cases including a fit against a KNOWN price
+# The third: OUTPUT IS THE FINAL RECORD'S COUNT. On Claude Code 2.1.x the records written before
+# the stream ends carry the message_start placeholder output (1-10); only the last carries the
+# final count, and a first-record dedup read output ~46% low
+# (docs/research/token-efficiency-2026-09-23/data/EXTRACT.md L1). Input classes stay identical.
+#
+# The tool's own `--selftest` carries its hermetic cases, including a fit against a KNOWN price
 # vector; this suite is the gate's entry point to it plus the contract checks a caller depends on.
 
 setup() {
@@ -29,7 +34,7 @@ setup() {
 }
 
 # One transcript line, in the exact shape Claude Code writes.
-_tx() { # $1=iso $2=msgid $3=out $4=cc $5=cr
+_tx() { # $1=iso $2=msgid $3=out $4=cc $5=cr   (every record of a message may differ in out only)
   printf '{"type":"assistant","timestamp":"%s","requestId":"req_%s","message":{"id":"%s","model":"claude-opus-5","usage":{"input_tokens":10,"output_tokens":%s,"cache_creation_input_tokens":%s,"cache_read_input_tokens":%s}}}\n' \
     "$1" "$2" "$2" "$3" "$4" "$5"
 }
@@ -75,7 +80,7 @@ with open(util, "w") as uh, open(tx, "w") as th:
 PY
 }
 
-@test "the tool's own hermetic selftest is green (13 cases, incl. the dedup RED-proof)" {
+@test "the tool's own hermetic selftest is green (incl. the dedup and final-output RED-proofs)" {
   run "$QP" --selftest
   [ "$status" -eq 0 ]
   _has "0 failed" "$output"
@@ -106,6 +111,45 @@ PY
   _tx "$(_iso $((T-3600)))" msgA 1000 5000 900000 > "$ROOT/proj/a.jsonl"
   run env CC_QP_DEDUP=0 bash -c "'$QP' --census --json --since 1d 2>&1 >/dev/null"
   _has "CC_QP_DEDUP=0" "$output"
+  _has "TEST SEAM" "$output"
+}
+
+@test "OUTPUT: a message whose first record says 1 and whose last says 2400 counts 2400" {
+  # The 2.1.x streaming shape: placeholder output on the early records, final count on the last.
+  { _tx "$(_iso $((T-3600)))" msgA 1 5000 900000
+    _tx "$(_iso $((T-3600)))" msgA 1 5000 900000
+    _tx "$(_iso $((T-3600)))" msgA 2400 5000 900000; } > "$ROOT/proj/a.jsonl"
+  run "$QP" --census --json --since 1d
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r '.tokens.output')" -eq 2400 ]
+  # the input side is identical on every record and is still counted once
+  [ "$(echo "$output" | jq -r '.tokens.input')" -eq 10 ]
+  [ "$(echo "$output" | jq -r '.tokens.cache_creation')" -eq 5000 ]
+  [ "$(echo "$output" | jq -r '.census.deduped')" -eq 1 ]
+  [ "$(echo "$output" | jq -r '.census.output_raised')" -eq 1 ]
+}
+
+@test "OUTPUT: a message whose first record is outside --since stays out, and raises nothing" {
+  # msgB sits between msgA's two records, so an index taken before the window check would raise
+  # msgB to 5000 instead of leaving it at 300.
+  { _tx "$(_iso $((T-3*86400)))" msgA 1 100 1000
+    _tx "$(_iso $((T-3600)))" msgB 300 200 2000
+    _tx "$(_iso $((T-3500)))" msgA 5000 100 1000; } > "$ROOT/proj/a.jsonl"
+  run "$QP" --census --json --since 1d
+  [ "$status" -eq 0 ]
+  [ "$(echo "$output" | jq -r '.tokens.output')" -eq 300 ]
+  [ "$(echo "$output" | jq -r '.census.deduped')" -eq 1 ]
+  [ "$(echo "$output" | jq -r '.census.output_raised')" -eq 0 ]
+}
+
+@test "RED-PROOF: the first-record extractor (CC_QP_OUTPUT=first) reads the placeholder" {
+  # Gives the case above its power: the same fixture must read 1 under the pre-fix extractor.
+  { _tx "$(_iso $((T-3600)))" msgA 1 5000 900000
+    _tx "$(_iso $((T-3600)))" msgA 2400 5000 900000; } > "$ROOT/proj/a.jsonl"
+  first="$(CC_QP_OUTPUT=first "$QP" --census --json --since 1d 2>/dev/null | jq -r '.tokens.output')"
+  [ "$first" -eq 1 ]
+  run env CC_QP_OUTPUT=first bash -c "'$QP' --census --json --since 1d 2>&1 >/dev/null"
+  _has "CC_QP_OUTPUT=first" "$output"
   _has "TEST SEAM" "$output"
 }
 
